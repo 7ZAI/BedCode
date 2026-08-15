@@ -278,6 +278,14 @@ export async function httpTaskQueueRemove(sessionId: string, taskId: string) {
   )
 }
 
+/** 取消活动队列项（waiting / executing） */
+export async function httpTaskQueueCancel(sessionId: string, taskId: string) {
+  return request(
+    '/api/plugin/com.bedcode.auto-task/task-queue/cancel',
+    { method: 'POST', body: JSON.stringify({ session_id: sessionId, task_id: taskId }) }
+  )
+}
+
 /** 清空任务队列 */
 export async function httpTaskQueueClear(sessionId: string) {
   return request(
@@ -564,6 +572,7 @@ export function useHttpApi() {
     httpTaskQueueList,
     httpTaskQueueAdd,
     httpTaskQueueRemove,
+    httpTaskQueueCancel,
     httpTaskQueueClear,
     httpTaskQueueUpdate,
     httpTaskQueueReorder,

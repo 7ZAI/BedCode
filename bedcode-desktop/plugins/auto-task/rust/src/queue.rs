@@ -108,6 +108,15 @@ pub fn add_task_with_source(
     prompt: &str,
     source: &str,
 ) -> (String, i64) {
+    // 终态行清理（queue-closure issue 02）：入队时顺带删除该会话的终态行
+    // （done/cancelled/interrupted），防 task_queue 随使用时长无限膨胀。
+    // 终态行只写不读——list_queue 仅查 pending、list_active_task 仅查
+    // waiting/executing，移动端对账依赖队列中**存在** executing 项而非终态行，删除安全。
+    let _ = host.plugin_db_execute_params(
+        "DELETE FROM task_queue WHERE session_id = ?1 AND status IN ('done', 'cancelled', 'interrupted')",
+        &sql_params![session_id],
+    );
+
     // 查询当前最大 position
     let max_pos = get_max_position(host, session_id);
     let position = max_pos + 1;
@@ -143,6 +152,105 @@ pub fn add_task_with_source(
     ));
 
     (id, position)
+}
+
+/// 取消队列中的活动任务（waiting / executing），供用户主动取消长任务
+///
+/// - `waiting`：clear 尚未送达/重试中 → 置 cancelled，广播 cancel（带 task_id，
+///   移动端预设据此落 interrupted），随后继续调度队列中其余 pending 项
+/// - `executing`：已下发未完成 → 置 cancelled + 将对应任务行（task_history 最新行）
+///   标 interrupted（原因 "Cancelled by user"），避免终端内后续输出产生假
+///   in_progress 悬挂；广播 cancel 后继续调度下一项
+/// - 其余状态（pending / done / cancelled / interrupted / 不存在）不可取消，返回 false
+///
+/// 广播语义与 check_waiting_timeouts 的取消路径共用（action="cancel" + status="cancelled"）
+pub fn cancel_task(host: &WasmHost, session_id: &str, task_id: &str) -> bool {
+    let current_status: Option<String> = host
+        .plugin_db_query_params(
+            "SELECT status FROM task_queue WHERE id = ?1 AND session_id = ?2",
+            &sql_params![task_id, session_id],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
+        .and_then(|row| row.get("status").and_then(|v| v.as_str().map(|s| s.to_string())));
+
+    match current_status.as_deref() {
+        Some("waiting") => {
+            // 状态 UPDATE 失败（锁/磁盘）时不得继续广播/调度，否则取消状态
+            // 与实际不符（移动端显示已取消而任务仍在队列）
+            if host
+                .plugin_db_execute_params(
+                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
+                    &sql_params![task_id],
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+            {
+                host.log_info(&format!(
+                    "Task cancelled by user (waiting): id={} session_id={}",
+                    task_id, session_id
+                ));
+            } else {
+                host.log_warn(&format!(
+                    "Cancel task failed (waiting, db update no-op): id={} session_id={}",
+                    task_id, session_id
+                ));
+                return false;
+            }
+        }
+        Some("executing") => {
+            if host
+                .plugin_db_execute_params(
+                    "UPDATE task_queue SET status = 'cancelled', updated_at = datetime('now') WHERE id = ?1",
+                    &sql_params![task_id],
+                )
+                .map(|n| n > 0)
+                .unwrap_or(false)
+            {
+                // 任务行标中断：终端内正在执行的输出不再产生假 in_progress 悬挂
+                mark_latest_task_interrupted(host, session_id, "Cancelled by user");
+                host.log_info(&format!(
+                    "Task cancelled by user (executing): id={} session_id={}",
+                    task_id, session_id
+                ));
+            } else {
+                host.log_warn(&format!(
+                    "Cancel task failed (executing, db update no-op): id={} session_id={}",
+                    task_id, session_id
+                ));
+                return false;
+            }
+        }
+        _ => return false,
+    }
+
+    let remaining = pending_count(host, session_id);
+    broadcast_queue_changed(
+        host,
+        session_id,
+        remaining,
+        "cancel",
+        Some(task_id),
+        Some("cancelled"),
+    );
+
+    // 取消后继续调度：仅当无其他 executing 行时才下发下一项——executing 分支已把
+    // 目标行置 cancelled（try_dispatch_next 的 done 归档 WHERE status='executing'
+    // 不会命中它），但执行期间用户手动输入会创建独立任务行（on_input_submitted
+    // 跳过插件自身投递），该行仍是 executing，若此刻归档会被误标 done 并广播
+    // done，移动端预设误标 completed
+    let has_other_executing = match host.plugin_db_query_params(
+        "SELECT 1 FROM task_queue WHERE session_id = ?1 AND status = 'executing' LIMIT 1",
+        &sql_params![session_id],
+    ) {
+        Ok(Some(v)) => v.as_array().map(|a| !a.is_empty()).unwrap_or(false),
+        _ => false,
+    };
+    if !has_other_executing {
+        try_dispatch_next(host, session_id);
+    }
+    true
 }
 
 /// 从队列删除指定任务，并重排剩余任务的 position
@@ -827,6 +935,7 @@ pub fn handle_queue_http(
         ("POST", "clear") => handle_clear(host, body, query),
         ("POST", "update") => handle_update(host, body, query),
         ("POST", "reorder") => handle_reorder(host, body, query),
+        ("POST", "cancel") => handle_cancel(host, body, query),
         _ => {
             host.log_warn(&format!("Unknown queue endpoint: {} {}", method, path));
             http_response::error(404, &format!("Not found: {} {}", method, path))
@@ -1007,6 +1116,33 @@ fn handle_reorder(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     broadcast_queue_changed(host, session_id, remaining, "reorder", None, None);
 
     http_response::ok()
+}
+
+/// POST task-queue/cancel — 取消活动队列项（waiting / executing）
+///
+/// body: session_id + task_id；仅 waiting / executing 可取消（见 [`cancel_task`]）
+fn handle_cancel(host: &WasmHost, body: &Value, _query: &Value) -> Value {
+    let session_id = body
+        .get("session_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let task_id = body.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+
+    if session_id.is_empty() {
+        return http_response::error(400, "Missing session_id");
+    }
+    if task_id.is_empty() {
+        return http_response::error(400, "Missing task_id");
+    }
+
+    if cancel_task(host, session_id, task_id) {
+        http_response::ok()
+    } else {
+        http_response::error(
+            404,
+            "Task not found or not cancellable (only waiting/executing tasks can be cancelled)",
+        )
+    }
 }
 
 // ==================== Internal Helpers ====================

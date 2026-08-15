@@ -215,57 +215,9 @@ impl ConnectionManager {
 
         // 创建连接断开监控任务
         // 订阅 WsClientEvent，在意外断开时通知前端
-        {
-            let mut event_rx = client.subscribe();
-            let app_clone = app_handle.clone();
-            let manual_flag = self.manual_disconnect.clone();
-            spawn_with_error_boundary("connection_monitor", async move {
-                tracing::debug!("[ConnMonitor] Started monitoring connection");
-                while let Ok(event) = event_rx.recv().await {
-                    match event {
-                        WsClientEvent::Disconnected
-                        | WsClientEvent::Error { .. }
-                        | WsClientEvent::ServerClosed { .. } => {
-                            if !manual_flag.load(Ordering::SeqCst) {
-                                tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
-                                let reason = match &event {
-                                    WsClientEvent::ServerClosed { reason } => reason.clone(),
-                                    WsClientEvent::Error { message } => message.clone(),
-                                    _ => "Connection lost".to_string(),
-                                };
-                                let _ = app_clone.emit("ws_unexpected_disconnect", serde_json::json!({
-                                    "reason": reason
-                                }));
-
-                                // 通知插件连接断开
-                                {
-                                    let pm = crate::state::get_plugin_manager();
-                                    pm.dispatch_lifecycle_event(
-                                        crate::plugin::types::PluginLifecycleEvent::Disconnect {
-                                            reason: reason.clone(),
-                                        }
-                                    ).await;
-                                }
-                            } else {
-                                tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
-                            }
-
-                            // 清理桌面端 peer 记录并推送 online=false（双通道）
-                            // 无论手动/意外断开均执行：对端文件服务已不可达，
-                            // 插件需感知下线以暂停传输/触发重连续传
-                            if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
-                                let fs = crate::state::get_file_service();
-                                fs.registry.remove_peer(&peer_id).await;
-                            }
-
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-                tracing::debug!("[ConnMonitor] Stopped");
-            });
-        }
+        // connect/reconnect 共用（重连后的新连接同样需要监控，见
+        // spawn_connection_monitor）
+        self.spawn_connection_monitor(app_handle.clone(), &client);
 
         // 保存客户端引用
         *self.client.write().await = Some(client);
@@ -314,6 +266,65 @@ impl ConnectionManager {
         tokio::time::sleep(tokio::time::Duration::from_millis(CONNECTION_STABILIZE_DELAY_MS)).await;
 
         Ok(())
+    }
+
+    /// 创建连接断开监控任务（connect / reconnect 共用）
+    ///
+    /// 订阅 WsClientEvent，在意外断开时发射 ws_unexpected_disconnect 通知前端。
+    /// 必须在每次建立连接（含重连）后调用：重连创建的是全新 WsClient，
+    /// 旧监控随旧客户端销毁——若新连接再次断开而没有监控，前端收不到任何
+    /// 事件，连接状态与订阅信念停留在旧值，实时输出静默停止（只能靠用户
+    /// 交互触发 send 失败间接恢复）
+    fn spawn_connection_monitor(&self, app_handle: AppHandle, client: &Arc<WsClient>) {
+        let mut event_rx = client.subscribe();
+        let app_clone = app_handle.clone();
+        let manual_flag = self.manual_disconnect.clone();
+        spawn_with_error_boundary("connection_monitor", async move {
+            tracing::debug!("[ConnMonitor] Started monitoring connection");
+            while let Ok(event) = event_rx.recv().await {
+                match event {
+                    WsClientEvent::Disconnected
+                    | WsClientEvent::Error { .. }
+                    | WsClientEvent::ServerClosed { .. } => {
+                        if !manual_flag.load(Ordering::SeqCst) {
+                            tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
+                            let reason = match &event {
+                                WsClientEvent::ServerClosed { reason } => reason.clone(),
+                                WsClientEvent::Error { message } => message.clone(),
+                                _ => "Connection lost".to_string(),
+                            };
+                            let _ = app_clone.emit("ws_unexpected_disconnect", serde_json::json!({
+                                "reason": reason
+                            }));
+
+                            // 通知插件连接断开
+                            {
+                                let pm = crate::state::get_plugin_manager();
+                                pm.dispatch_lifecycle_event(
+                                    crate::plugin::types::PluginLifecycleEvent::Disconnect {
+                                        reason: reason.clone(),
+                                    }
+                                ).await;
+                            }
+                        } else {
+                            tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
+                        }
+
+                        // 清理桌面端 peer 记录并推送 online=false（双通道）
+                        // 无论手动/意外断开均执行：对端文件服务已不可达，
+                        // 插件需感知下线以暂停传输/触发重连续传
+                        if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
+                            let fs = crate::state::get_file_service();
+                            fs.registry.remove_peer(&peer_id).await;
+                        }
+
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            tracing::debug!("[ConnMonitor] Stopped");
+        });
     }
 
     /// 断开连接
@@ -411,6 +422,11 @@ impl ConnectionManager {
             match client.connect().await {
                 Ok(_) => {
                     tracing::info!("Reconnect attempt {} succeeded", current_retry + 1);
+
+                    // 重连成功后同样挂载断连监控：新客户端是全新 WsClient，
+                    // 没有监控则再次断开时前端完全静默（订阅残留 + 服务端已
+                    // 清理）→ 实时输出停止，只能靠用户交互触发 send 失败恢复
+                    self.spawn_connection_monitor(app_handle.clone(), &client);
 
                     // 保存新客户端
                     *self.client.write().await = Some(client);

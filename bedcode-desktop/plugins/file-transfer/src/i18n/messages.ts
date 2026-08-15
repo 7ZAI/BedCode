@@ -17,6 +17,7 @@ export interface MessageSchema {
   'transfer.peer.notSharing': string
   'transfer.peer.unpaired': string
   'transfer.peer.noSharedRoots': string
+  'transfer.peer.unknown': string
   'transfer.peer.switchTitle': string
 
   // ==================== 顶栏 ====================
@@ -73,6 +74,7 @@ export interface MessageSchema {
   'transfer.batch.rejectAll': string
   'transfer.request.title': string
   'transfer.request.body': string
+  'transfer.request.countdown': string
   'transfer.request.acceptAll': string
   'transfer.request.rejectAll': string
   'transfer.toast.receiving': string

@@ -235,6 +235,11 @@ export async function pluginOpenFile(
   return await invoke<void>('plugin_open_file', { pluginId, path, displayName })
 }
 
+/** 用系统文件管理器打开文件所在目录（历史记录「打开所在文件夹」；需 system:open 权限） */
+export async function pluginOpenFileLocation(pluginId: string, path: string): Promise<void> {
+  return await invoke<void>('plugin_open_file_location', { pluginId, path })
+}
+
 // ==================== SAF 存储访问（SafIo 主 seam） ====================
 
 /** SAF：列出目录树子条目（共享目录 App 内遍历） */

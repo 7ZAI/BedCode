@@ -167,6 +167,7 @@ export interface MessageSchema {
   'transfer.request.body': string
   'transfer.request.acceptAll': string
   'transfer.request.rejectAll': string
+  'transfer.request.countdown': string
   'transfer.toast.receiving': string
   'transfer.error.rejectedByUser': string
   'transfer.error.noResponse': string

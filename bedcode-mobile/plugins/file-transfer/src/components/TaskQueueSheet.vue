@@ -392,7 +392,7 @@ function directionChipClass(): string {
                   </span>
                 </div>
 
-                <!-- 完成且本地有文件：打开所在文件夹（移动复用系统查看器打开文件） -->
+                <!-- 完成且本地有文件：打开所在文件夹（FileProvider 暴露父目录） -->
                 <div v-if="entry.state === 'completed' && entry.localPath" class="px-4 pb-3 pt-1 flex gap-2">
                   <button
                     class="flex-1 ft-task-action-btn ft-btn-accent"

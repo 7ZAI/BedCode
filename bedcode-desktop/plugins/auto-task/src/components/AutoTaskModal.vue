@@ -43,6 +43,8 @@ interface PresetItem {
 
 const visible = autoTaskModalVisible
 const queue = ref<QueueItem[]>([])
+// 当前处理中的队列项（waiting/executing）：活动任务展示 + 取消入口（与移动端面板对齐）
+const activeTask = ref<QueueItem | null>(null)
 const currentTask = ref<HistoryRecord | null>(null)
 // 预设任务（无会话时在侧边栏创建，弹窗内可选入当前会话队列，加入后自动移除）
 const presets = ref<PresetItem[]>([])
@@ -134,6 +136,7 @@ async function loadQueue() {
       session_id: sessionId.value,
     })
     queue.value = (result?.tasks as QueueItem[]) || []
+    activeTask.value = (result?.active_task as QueueItem | null) || null
   } catch (e) {
     console.error('[AutoTaskModal] Failed to load queue:', e)
     showError(t('loadFailed'))
@@ -240,6 +243,22 @@ async function handleRemove(taskId: string) {
   } catch (e) {
     console.error('[AutoTaskModal] Failed to remove task:', e)
     showError(t('removeFailed'), e)
+  }
+}
+
+/** 取消活动队列项（waiting/executing）；预设状态由 cancel 广播经宿主转发落 interrupted */
+async function handleCancelTask(taskId: string) {
+  if (!sessionId.value) return
+  try {
+    await context.commands.execute('auto-task.cancel-task', {
+      session_id: sessionId.value,
+      task_id: taskId,
+    })
+    activeTask.value = null
+    await loadQueue()
+  } catch (e) {
+    console.error('[AutoTaskModal] Failed to cancel task:', e)
+    showError(t('cancelTaskFailed'), e)
   }
 }
 
@@ -554,6 +573,22 @@ onUnmounted(() => {
               </button>
             </div>
           </div>
+        </div>
+
+        <!-- 活动任务（waiting/executing）：可取消，用户中途放弃长任务的唯一入口 -->
+        <div v-if="activeTask" class="at-active-task">
+          <span class="at-active-task-label">{{ t('activeTask') }}</span>
+          <span class="at-active-task-prompt">{{ activeTask.prompt }}</span>
+          <button
+            v-if="['waiting', 'executing'].includes(activeTask.status)"
+            class="at-icon-btn at-icon-btn-danger"
+            :title="t('cancelTask')"
+            @click="handleCancelTask(activeTask.id)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
         </div>
 
         <!-- 队列列表 -->

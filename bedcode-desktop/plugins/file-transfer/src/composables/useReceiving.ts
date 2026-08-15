@@ -132,7 +132,7 @@ export function useReceiving(context: PluginContext) {
       sendNotification({
         title: context.i18n.t('transfer.request.title'),
         body: context.i18n.t('transfer.request.body', {
-          name: batch.peerName || '—',
+          name: batch.peerName || context.i18n.t('transfer.peer.unknown'),
           count: batch.files?.length ?? 1,
           size: formatBytes(batch.totalSize),
         }),

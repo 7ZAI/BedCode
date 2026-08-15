@@ -11,6 +11,7 @@ import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
 import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
+import BatchRequestDialog from './BatchRequestDialog.vue'
 import { useTasks } from '../composables/useTasks'
 import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
@@ -88,21 +89,23 @@ const peerNames = computed<Record<string, string>>(() => {
   return map
 })
 
-/** v2：批卡展示名（对端名 → 占位符） */
-function batchPeerName(batch: { peerId: string; peerName: string }): string {
-  return batch.peerName || peerNames.value[batch.peerId] || '—'
-}
-
-/** v2：批卡总大小 */
-function batchTotalSize(batch: { totalSize: number }): string {
-  return formatBytes(batch.totalSize)
-}
-
 /** v2：历史条目打开所在文件夹（localPath 直接可用） */
 function openHistoryDir(localPath: string): void {
   if (!localPath) return
   void context.system.revealInDir(localPath).catch((err: unknown) => {
     console.error(`[File Transfer] reveal failed for "${localPath}":`, err)
+  })
+}
+
+/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动，失败仅记日志） */
+function handleBatchApprove(batchId: string): void {
+  approveBatch(batchId).catch((e: unknown) => {
+    console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+  })
+}
+function handleBatchReject(batchId: string): void {
+  rejectBatch(batchId).catch((e: unknown) => {
+    console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
   })
 }
 
@@ -197,31 +200,13 @@ onUnmounted(() => {
 
 <template>
   <div class="ft-view">
-    <!-- v2：pending 批横幅（接收端应答：接受全部/拒绝全部；批准后经 batches-changed 消失） -->
-    <Transition name="ft-banner">
-      <div v-if="batches.length > 0" class="ft-batch-banner">
-        <div class="ft-batch-banner-inner">
-          <div class="ft-batch-banner-text">
-            <span class="ft-batch-banner-title">{{ t('transfer.batch.pendingTitle') }}</span>
-            <span class="ft-batch-banner-desc">
-              {{ t('transfer.request.body', {
-                name: batchPeerName(batches[0]),
-                count: batches[0].files.length,
-                size: batchTotalSize(batches[0]),
-              }) }}
-            </span>
-          </div>
-          <div class="ft-batch-banner-actions">
-            <button class="ft-btn ft-btn--primary" @click="approveBatch(batches[0].batchId)">
-              {{ t('transfer.batch.acceptAll') }}
-            </button>
-            <button class="ft-btn" @click="rejectBatch(batches[0].batchId)">
-              {{ t('transfer.batch.rejectAll') }}
-            </button>
-          </div>
-        </div>
-      </div>
-    </Transition>
+    <!-- v2：批量传输请求全局弹窗（排队 + 倒计时超时默认拒绝；批 resolved 自动切换下一批） -->
+    <BatchRequestDialog
+      :batches="batches"
+      :approval-timeout-sec="settings.approvalTimeoutSec"
+      @approve="handleBatchApprove"
+      @reject="handleBatchReject"
+    />
 
     <!-- 顶栏 -->
     <div class="ft-topbar">

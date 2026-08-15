@@ -15,6 +15,7 @@ const en: MessageSchema = {
   'transfer.peer.notSharing': 'Connected · peer not sharing',
   'transfer.peer.unpaired': 'No device connected',
   'transfer.peer.noSharedRoots': "Peer hasn't shared any folders yet",
+  'transfer.peer.unknown': 'Unknown device',
   'transfer.peer.switchTitle': 'Switch device',
 
   // ==================== Top bar ====================
@@ -71,6 +72,7 @@ const en: MessageSchema = {
   'transfer.batch.rejectAll': 'Reject all',
   'transfer.request.title': 'File transfer request',
   'transfer.request.body': '{name} wants to send you {count} files ({size} total)',
+  'transfer.request.countdown': 'Auto-reject in {seconds}s',
   'transfer.request.acceptAll': 'Accept all',
   'transfer.request.rejectAll': 'Reject all',
   'transfer.toast.receiving': '{name} is sending you {count} files',

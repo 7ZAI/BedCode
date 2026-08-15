@@ -95,6 +95,59 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /// 打开文件所在目录（历史记录「打开所在文件夹」）
+    ///
+    /// 目标目录 = path 的父目录，经 FileProvider 暴露后 ACTION_VIEW：
+    /// 首选 resource/folder（Google Files 等主流文件管理器支持打开目录 URI），
+    /// 无查看器时回退 vnd.android.document/directory 再试一次。
+    @Command
+    fun openFileLocation(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenFileLocationArgs::class.java)
+        if (args.path.isEmpty()) {
+            invoke.reject("openFileLocation: path is required")
+            return
+        }
+        try {
+            val dir = File(args.path).parentFile ?: File(args.path)
+            if (!dir.exists() || !dir.isDirectory) {
+                invoke.reject("openFileLocation: directory not found: ${dir.absolutePath}")
+                return
+            }
+            val uri = FileProvider.getUriForFile(
+                activity,
+                "${activity.packageName}.fileprovider",
+                dir,
+            )
+            startFolderView(uri)
+            invoke.resolve(JSObject().apply { put("ok", true) })
+        } catch (e: ActivityNotFoundException) {
+            android.util.Log.e(TAG, "openFileLocation: no folder viewer found: ${e.message}")
+            invoke.reject("openFileLocation: no app can open this folder")
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "openFileLocation failed: ${e.message}")
+            invoke.reject("openFileLocation failed: ${e.message}")
+        }
+    }
+
+    /// 启动目录查看 Intent：resource/folder 优先，ActivityNotFoundException 时
+    /// 回退 vnd.android.document/directory（部分文件管理器只认后者）
+    private fun startFolderView(uri: Uri) {
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION
+        try {
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "resource/folder")
+                addFlags(flags)
+            }
+            activity.startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            val fallback = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "vnd.android.document/directory")
+                addFlags(flags)
+            }
+            activity.startActivity(fallback)
+        }
+    }
+
     /// 解析可分享的 content URI：MediaStore 公共下载（按名查最新）→ FileProvider
     private fun resolveContentUri(path: String, displayName: String): Uri? {
         if (displayName.isNotEmpty()) {
@@ -129,4 +182,9 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
 internal class OpenFileArgs {
     var path: String = ""
     var displayName: String = ""
+}
+
+@InvokeArg
+internal class OpenFileLocationArgs {
+    var path: String = ""
 }

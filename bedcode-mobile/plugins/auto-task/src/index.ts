@@ -24,9 +24,11 @@ import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
 // ==================== Datepicker 主题定制 ====================
 
 // 日期选择器与宿主主题融合：跟随移动端设计 token（--mobile-*），
-// 深色模式由 Datepicker 的 dark prop 切换 .dp__theme_dark，此处覆盖其默认深色变量
+// 深色模式由 Datepicker 的 dark prop 切换 .dp__theme_dark，此处覆盖其默认变量。
+// 弹层整体覆盖为移动端 bottom-sheet（原因见下方「移动端弹层适配」注释）。
 const DATEPICKER_THEME_OVERRIDES = `
-/* 输入框与宿主控件保持一致（高度 44px、圆角 10px，与自绘输入框同规格） */
+/* ==================== 输入框 ==================== */
+/* 与宿主控件保持一致（高度 44px、圆角 10px，与自绘输入框同规格） */
 .dp__main {
   width: 100%;
 }
@@ -51,14 +53,19 @@ const DATEPICKER_THEME_OVERRIDES = `
 .dp__input::placeholder {
   color: var(--mobile-text-disabled);
 }
-.dp__theme_dark {
+
+/* ==================== 主题变量（深浅色统一走 token） ==================== */
+.dp__theme_dark,
+.dp__theme_light {
   --dp-background-color: var(--mobile-bg-card);
   --dp-text-color: var(--mobile-text-primary);
   --dp-hover-color: var(--mobile-bg-tertiary);
   --dp-hover-text-color: var(--mobile-text-primary);
   --dp-hover-icon-color: var(--mobile-text-primary);
   --dp-border-color: var(--mobile-border);
+  --dp-menu-border-color: var(--mobile-border);
   --dp-border-color-hover: var(--mobile-border-hover);
+  --dp-border-color-focus: var(--mobile-accent);
   --dp-primary-color: var(--mobile-accent);
   --dp-primary-disabled-color: var(--mobile-accent);
   /* 底部操作按钮（确认/取消/现在）：文字色跟随主题对比色（深色下为深色文字），
@@ -74,6 +81,76 @@ const DATEPICKER_THEME_OVERRIDES = `
   --dp-font-size: 14px;
   --dp-preview-font-size: 13px;
   --dp-time-picker-height: 200px;
+  /* 触控目标加大：日历格 40px、操作按钮 40px、月年行 44px（Apple 44pt 建议） */
+  --dp-cell-size: 40px;
+  --dp-cell-padding: 6px;
+  --dp-month-year-row-height: 44px;
+  --dp-action-button-height: 40px;
+  --dp-action-buttons-padding: 4px 14px;
+  --dp-time-inc-dec-button-size: 36px;
+}
+
+/* ==================== 移动端弹层适配：bottom-sheet ====================
+   库默认把菜单绝对定位在输入框附近，小屏（视口高度不足 / 输入框贴近屏幕
+   边缘）时菜单会被裁出视口：顶部月历表头（时间切换按钮）或底部操作行
+   （确认/取消）不可达，表现为「无法选择时间 / 点击确定无效」。
+   覆盖为全屏固定遮罩 + 底部卡片：
+   - 永不裁切：菜单高度受限、内部滚动，操作行固定可见
+   - 遮罩空白点击关闭由组件侧 document click 处理器实现
+     （库的 onClickOutside 以遮罩元素为界，点击遮罩本身不会关闭）
+   - 遮罩类 .fixed.inset-0 语义被宿主 swipe 容器识别为弹窗（禁用页面滑动）
+   注意：v9.0.3 中外层容器与菜单元素都带 .dp--menu-wrapper 类，
+   遮罩规则必须限定 .dp__outer_menu_wrap，卡片规则限定 .dp__menu。 */
+.dp__outer_menu_wrap.dp--menu-wrapper {
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: 0 !important;
+  display: flex !important;
+  align-items: flex-end !important;
+  justify-content: center !important;
+  padding: 0 !important;
+  background: var(--mobile-overlay-heavy);
+}
+.dp--menu-wrapper.dp__menu {
+  width: 100% !important;
+  max-width: 30rem;
+  margin: 0 auto;
+  max-height: min(80dvh, 640px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 1.25rem 1.25rem 0 0;
+  border-bottom: none;
+  box-shadow: 0 -8px 32px rgba(0, 0, 0, 0.18);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+/* 内容区（日历/时间列）独立滚动，操作行固定在卡片底部 */
+.dp--menu-wrapper.dp__menu > div {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.dp--menu-wrapper.dp__menu > .dp__action_row {
+  flex: none;
+  flex-shrink: 0;
+}
+.dp__instance_calendar {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+/* 底部卡片不需要定位箭头 */
+.dp__arrow_top,
+.dp__arrow_bottom {
+  display: none !important;
+}
+.dp__action_button {
+  min-width: 4.5rem;
+  border-radius: 0.625rem;
+  font-size: 14px;
 }
 .dp__menu {
   font-size: 14px;

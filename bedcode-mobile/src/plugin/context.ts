@@ -483,6 +483,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requireSystemOpenPermission('system.openFile')
       return pluginCmds.pluginOpenFile(info.id, path, displayName ?? '')
     },
+    async revealInDir(path: string): Promise<void> {
+      requireSystemOpenPermission('system.revealInDir')
+      return pluginCmds.pluginOpenFileLocation(info.id, path)
+    },
   }
 
   // ==================== I18nAPI ====================

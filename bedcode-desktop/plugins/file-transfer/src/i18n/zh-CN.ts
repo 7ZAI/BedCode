@@ -15,6 +15,7 @@ const zhCN: MessageSchema = {
   'transfer.peer.notSharing': '已连接 · 对端未共享',
   'transfer.peer.unpaired': '未连接设备',
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
+  'transfer.peer.unknown': '未知设备',
   'transfer.peer.switchTitle': '切换设备',
 
   // ==================== 顶栏 ====================
@@ -71,6 +72,7 @@ const zhCN: MessageSchema = {
   'transfer.batch.rejectAll': '拒绝全部',
   'transfer.request.title': '文件传输请求',
   'transfer.request.body': '{name} 想向你发送 {count} 个文件（共 {size}）',
+  'transfer.request.countdown': '将在 {seconds} 秒后自动拒绝',
   'transfer.request.acceptAll': '接受全部',
   'transfer.request.rejectAll': '拒绝全部',
   'transfer.toast.receiving': '{name} 正在向你上传 {count} 个文件',

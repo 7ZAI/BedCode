@@ -38,10 +38,14 @@ export interface MessageSchema {
   loadFailed: string
   addFailed: string
   removeFailed: string
+  cancelTask: string
+  cancelTaskFailed: string
+  activeTask: string
   clearFailed: string
   updateFailed: string
   reorderFailed: string
   modeFailed: string
+  sessionFlagFailed: string
   // ==================== 任务历史视图 ====================
   historyTitle: string
   queueTitle: string
@@ -108,6 +112,9 @@ export interface MessageSchema {
   detailExitReason: string
   detailDescription: string
   // ==================== 定时任务 ====================
+  scheduledSectionActive: string
+  scheduledSectionFinished: string
+  scheduledClearFinished: string
   scheduledEmpty: string
   scheduledEmptyHint: string
   scheduledNew: string

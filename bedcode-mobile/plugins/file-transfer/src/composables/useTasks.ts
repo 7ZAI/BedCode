@@ -606,13 +606,17 @@ export function useTasks(context: PluginContext) {
     }
   }
 
-  /** 打开历史条目的本地文件（仅 completed 且带 localPath；复用系统查看器） */
+  /** 打开历史条目的本地文件所在目录（仅 completed 且带 localPath；文件管理器展示） */
   async function openHistoryEntry(entry: HistoryEntry): Promise<void> {
     if (entry.state !== 'completed' || !entry.localPath) return
+    // 与 openTask 一致：.part 临时名还原为最终路径（完成后已 rename）
+    const finalPath = entry.localPath.endsWith('.part')
+      ? entry.localPath.slice(0, -'.part'.length)
+      : entry.localPath
     try {
-      await context.system.openFile(entry.localPath, entry.fileName)
+      await context.system.revealInDir(finalPath)
     } catch (err) {
-      console.error(`[File Transfer] open history file failed for "${entry.localPath}":`, err)
+      console.error(`[File Transfer] reveal failed for "${finalPath}":`, err)
       context.dialogs.showToast(String(err), 'error')
     }
   }
@@ -741,6 +745,13 @@ export function useTasks(context: PluginContext) {
     dispTasks = context.events.on('plugin:file-transfer:tasks-changed', onTasksChanged)
     dispProgress = context.events.on('plugin:transfer:progress', onProgress)
     dispPeer = context.events.on('filesrv:peer_changed', onPeerChanged)
+    // v2 接收端快照事件：pending 批 / 接收任务 / 历史 / toast（桌面端 useReceiving
+    // 同构；漏订阅会导致应答卡、历史、接收中列表在前端永不更新——事件到达插件后
+    // 无人接收，前端只能靠 onMounted 的一次性 refreshV2 拿到空快照）
+    dispBatches = context.events.on('plugin:file-transfer:batches-changed', onBatchesChanged)
+    dispReceiving = context.events.on('plugin:file-transfer:receiving-changed', onReceivingChanged)
+    dispHistory = context.events.on('plugin:file-transfer:history-changed', onHistoryChanged)
+    dispToast = context.events.on('plugin:file-transfer:toast', onToast)
     // WS 控制面连接状态：已连接（含重连成功）/ 断开（含重连中与失败）
     dispConn = [
       context.events.on('ws_connected', () => onConnChanged(true)),

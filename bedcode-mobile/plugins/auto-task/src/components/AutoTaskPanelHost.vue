@@ -50,6 +50,17 @@
               {{ statusLabel[displayTask.status] || displayTask.status }}
             </span>
             <p v-if="displayTask.description" class="atp-status-desc">{{ displayTask.description }}</p>
+            <!-- 活动队列项（waiting/executing）可取消：用户中途放弃长任务的唯一入口 -->
+            <button
+              v-if="activeTask && ['waiting', 'executing'].includes(activeTask.status)"
+              class="atp-action-btn atp-action-btn-danger atp-cancel-task-btn"
+              :title="t('cancelTask')"
+              @click="handleCancelTask(activeTask.id)"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
           </div>
           <div v-else class="atp-status-row atp-status-idle">
             <span class="atp-status-dot" :style="{ background: statusColor.idle }"></span>
@@ -435,6 +446,18 @@ async function handleRemove(taskId: string) {
     await loadQueue()
   } else {
     showError(t('removeFailed'))
+  }
+}
+
+/** 取消活动队列项（waiting/executing）：预设状态由 cancel 广播落 interrupted（见 handleTaskQueueChanged） */
+async function handleCancelTask(taskId: string) {
+  if (!activeSessionId.value) return
+  const result = await mobileApi.httpTaskQueueCancel(activeSessionId.value, taskId)
+  if (result.code === 0) {
+    activeTask.value = null
+    await loadQueue()
+  } else {
+    showError(t('cancelTaskFailed'))
   }
 }
 

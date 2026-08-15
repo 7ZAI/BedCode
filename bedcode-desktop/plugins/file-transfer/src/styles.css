@@ -1097,59 +1097,90 @@
 
 /* ==================== v2 pending 批横幅（接收端应答） ==================== */
 
-.ft-batch-banner {
-  flex-shrink: 0;
-  padding: 10px 14px;
-  background: var(--color-primary-light);
-  border-bottom: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
-}
+/* ==================== v2 批量传输请求弹窗（全局模态，spec 14.4） ==================== */
 
-.ft-batch-banner-inner {
+.ft-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
   display: flex;
   align-items: center;
-  gap: 12px;
-  max-width: 720px;
-  margin: 0 auto;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
 }
 
-.ft-batch-banner-text {
-  flex: 1;
-  min-width: 0;
+.ft-dialog-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 12px;
 }
 
-.ft-batch-banner-title {
-  font-size: 13px;
+.ft-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ft-dialog-title {
+  font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
 }
 
-.ft-batch-banner-desc {
+.ft-dialog-countdown {
   font-size: 12px;
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ft-batch-banner-actions {
-  display: flex;
-  gap: 8px;
   flex-shrink: 0;
+  transition: color 0.2s ease;
 }
 
-/* 横幅滑入/滑出：transform 位移 + 淡入（GPU 合成属性） */
-.ft-banner-enter-active,
-.ft-banner-leave-active {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s;
+.ft-dialog-countdown--urgent {
+  color: var(--color-danger);
+  font-weight: 600;
 }
 
-.ft-banner-enter-from,
-.ft-banner-leave-to {
-  transform: translateY(-8px);
+.ft-dialog-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ft-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 弹窗淡入 + 上浮（GPU 合成属性） */
+.ft-dialog-enter-active,
+.ft-dialog-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.ft-dialog-enter-active .ft-dialog-card,
+.ft-dialog-leave-active .ft-dialog-card {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ft-dialog-enter-from,
+.ft-dialog-leave-to {
   opacity: 0;
+}
+
+.ft-dialog-enter-from .ft-dialog-card,
+.ft-dialog-leave-to .ft-dialog-card {
+  transform: translateY(8px);
 }
 
 /* ==================== v2 接收中 toast ==================== */

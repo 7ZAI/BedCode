@@ -279,6 +279,7 @@ pub fn run() {
             crate::plugin::commands::plugin_filesrv_cancel_receiving,
             crate::plugin::commands::plugin_filesrv_respond_transfer_request,
             crate::plugin::commands::plugin_open_file,
+            crate::plugin::commands::plugin_open_file_location,
             crate::plugin::commands::plugin_pick_directory,
             crate::plugin::commands::plugin_pick_file,
             crate::plugin::commands::open_all_files_settings,

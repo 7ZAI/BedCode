@@ -224,11 +224,15 @@ export interface MobileHostApi {
     session_id: string
     tasks: MobileQueueTaskItem[]
     queue_count: number
+    /** 当前活动任务（waiting/executing 最前一项；无活动任务时为 null） */
+    active_task: (MobileQueueTaskItem & { source?: string }) | null
   }>>
   /** 添加任务到队列 */
   httpTaskQueueAdd(sessionId: string, prompt: string): Promise<MobileHttpResult>
   /** 从队列删除任务 */
   httpTaskQueueRemove(sessionId: string, taskId: string): Promise<MobileHttpResult>
+  /** 取消活动队列项（waiting / executing） */
+  httpTaskQueueCancel(sessionId: string, taskId: string): Promise<MobileHttpResult>
   /** 清空任务队列 */
   httpTaskQueueClear(sessionId: string): Promise<MobileHttpResult>
   /** 更新队列任务内容 */
@@ -612,6 +616,9 @@ export interface FileServiceAPI {
 export interface SystemAPI {
   /** 用系统查看器打开本地文件（传输完成「打开本地文件」；Android ACTION_VIEW） */
   openFile(path: string, displayName?: string): Promise<void>
+  /** 用系统文件管理器打开文件所在目录（历史记录「打开所在文件夹」；
+   * Android FileProvider 暴露父目录 + ACTION_VIEW，需 system:open 权限） */
+  revealInDir(path: string): Promise<void>
 }
 
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================

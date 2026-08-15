@@ -501,6 +501,11 @@
   background: color-mix(in srgb, var(--mobile-error) 10%, transparent);
 }
 
+/* 状态行内的取消任务按钮：靠右对齐，与状态标签分开 */
+.atp-cancel-task-btn {
+  margin-left: auto;
+}
+
 .atp-empty-state {
   text-align: center;
   padding: 2rem 0;

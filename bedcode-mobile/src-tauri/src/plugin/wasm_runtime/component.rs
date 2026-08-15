@@ -357,7 +357,19 @@ impl super::WasmRuntime {
 
         LoadedComponentPlugin::verify_abi(&mut store, &instance)?;
 
-        Ok(LoadedComponentPlugin { instance, store })
+        // 实例创建日志：与 LoadedComponentPlugin::drop 的死亡日志成对，
+        // 构成实例生命周期观测（plugin_id 键控）
+        tracing::info!(
+            plugin_id = %plugin_id,
+            "WASM plugin instance created (component model)"
+        );
+
+        Ok(LoadedComponentPlugin {
+            plugin_id: plugin_id.to_string(),
+            instance,
+            store,
+            created_at: std::time::Instant::now(),
+        })
     }
 }
 
@@ -369,8 +381,24 @@ impl super::WasmRuntime {
 /// （无 (ptr,len) 内存搬运）。Store 必须与 Instance 一起持有，
 /// 否则导出函数无法调用。业务方法（invoke/activate/钩子等）在 03 按需添加。
 pub(crate) struct LoadedComponentPlugin {
+    plugin_id: String,
     instance: wasmtime::component::Instance,
     store: Store<WasmPluginState>,
+    /// 实例创建时刻（Drop 日志计算存活时长）
+    created_at: std::time::Instant,
+}
+
+impl Drop for LoadedComponentPlugin {
+    /// 实例死亡日志：Store 被 drop（停用 / 热重载替换 / 应用退出 / 异常清理）时记录，
+    /// 与创建日志（`instantiate_component`）成对，构成实例生命周期观测。
+    /// Drop 内无锁操作，tracing 安全。
+    fn drop(&mut self) {
+        tracing::info!(
+            plugin_id = %self.plugin_id,
+            lifetime_ms = self.created_at.elapsed().as_millis() as u64,
+            "WASM plugin instance dropped"
+        );
+    }
 }
 
 impl LoadedComponentPlugin {

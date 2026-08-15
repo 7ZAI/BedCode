@@ -27,10 +27,10 @@ import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { useSharedUpload } from '../composables/useSharedUpload'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
-import type { PendingBatch } from '../types'
 import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
 import SharedDirSheet from './SharedDirSheet.vue'
+import BatchRequestDialog from './BatchRequestDialog.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -38,72 +38,31 @@ const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, par
 const tasks = useTasks(context)
 const fs = useRemoteFs(context)
 const settings = useSettings(context)
+// 解构 Ref：模板需直接读 approvalTimeoutSec（settings 对象顶层是 settings Ref）
+const { settings: transferSettings } = settings
 const upload = useSharedUpload(context, tasks, settings)
 
 /** 队列 bottom sheet 是否展开 */
 const queueOpen = ref(false)
 
-// ==================== v2 批量传输请求应答（前台 Material 对话框） ====================
+// ==================== v2 批量传输请求应答（全局弹窗，spec 14.4） ====================
 //
-// spec 14.4：移动端前台 = 应用内对话框（标题 + 正文 + 接受全部/拒绝全部两按钮）；
-// 后台/锁屏 = 系统通知 action 按钮（Kotlin 侧，见 TaskNotificationManager）。
-// 数据源为 batches-changed 事件 + list-batches 初始拉取；应答后批卡经
-// batches-changed 消失（宿主 resolved 事件驱动）。
+// 前台 = BatchRequestDialog（排队 + 倒计时 + 必须明确选择接收/拒绝；超时自动
+// 关闭、默认拒绝由宿主 pending TTL 执行）；后台/锁屏 = 系统通知 action 按钮
+// （Kotlin 侧，见 TaskNotificationManager）。数据源为 batches-changed 事件 +
+// list-batches 初始拉取；应答后批卡经 batches-changed 消失（宿主 resolved 事件驱动）。
 
-/** 已提示过的批 ID（防同一批重复弹框；批 resolved 后从列表消失即视为已处理） */
-const promptedBatches = new Set<string>()
-/** 应答弹框进行中（防并发弹框叠加） */
-let batchDialogOpen = false
-
-/**
- * 弹出批应答对话框（取第一个未提示的 pending 批）
- *
- * confirm = 接受全部；cancel/dismiss = 拒绝全部（批卡消失语义一致）。
- * 多批并发时逐个提示（批独立、各自应答，spec 14.2 边界 4）。
- */
-async function promptNextBatch(batches: PendingBatch[]): Promise<void> {
-  if (batchDialogOpen) return
-  const batch = batches.find(b => !promptedBatches.has(b.batchId))
-  if (!batch) return
-  batchDialogOpen = true
-  promptedBatches.add(batch.batchId)
-  try {
-    const count = batch.files.length
-    const size = formatBytes(batch.totalSize, t)
-    const result = await context.dialogs.showDialog({
-      title: t('transfer.request.title'),
-      message: t('transfer.request.body', {
-        name: batch.peerName || context.i18n.t('transfer.peer.unknown'),
-        count,
-        size,
-      }),
-      variant: 'info',
-      confirmText: t('transfer.request.acceptAll'),
-      cancelText: t('transfer.request.rejectAll'),
-      dismissible: false,
-    })
-    if (result.action === 'confirm') {
-      await tasks.approveBatch(batch.batchId)
-    } else {
-      await tasks.rejectBatch(batch.batchId)
-    }
-  } catch (e) {
-    console.warn('[File Transfer] batch approval dialog failed:', e)
-  } finally {
-    batchDialogOpen = false
-    // 处理完当前批后继续提示下一批（若有）
-    void promptNextBatch(tasks.batches.value)
-  }
+/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动，失败仅记日志） */
+function handleBatchApprove(batchId: string): void {
+  tasks.approveBatch(batchId).catch((e: unknown) => {
+    console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+  })
 }
-
-/** 批快照变化驱动应答弹框（新批到达即提示；resolved 后列表移除自然不再弹） */
-watch(
-  () => tasks.batches.value,
-  (batches) => {
-    if (batches.length > 0) void promptNextBatch(batches)
-  },
-  { deep: true },
-)
+function handleBatchReject(batchId: string): void {
+  tasks.rejectBatch(batchId).catch((e: unknown) => {
+    console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
+  })
+}
 
 // ==================== 下拉刷新（与原生下拉刷新同语义） ====================
 /** 释放触发刷新的阈值（px） */
@@ -415,6 +374,14 @@ onUnmounted(() => {
 
 <template>
   <div class="ft-view h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+    <!-- v2：批量传输请求全局弹窗（排队 + 倒计时超时默认拒绝；批 resolved 自动切换下一批） -->
+    <BatchRequestDialog
+      :batches="tasks.batches.value"
+      :approval-timeout-sec="transferSettings.approvalTimeoutSec"
+      @approve="handleBatchApprove"
+      @reject="handleBatchReject"
+    />
+
     <!-- 顶栏：对端名 + 连接状态 + 右上操作（上传 / 设置） -->
     <div class="flex-shrink-0 flex items-center gap-2 px-4 pt-2.5 pb-2">
       <span class="ft-peer-name min-w-0 max-w-[45%] text-[var(--mobile-text-primary)] truncate">

@@ -41,6 +41,7 @@
         <!-- 触发时间（@vuepic/vue-datepicker，主题已由插件入口注入覆盖） -->
         <label class="att-field-label">{{ t('scheduled.create.triggerAt') }}</label>
         <Datepicker
+          ref="dpRef"
           v-model="props.scheduled.formTriggerAt.value"
           :format="dateFormat"
           :locale="dateLocale"
@@ -50,6 +51,7 @@
           :select-text="dpSelectText"
           :cancel-text="dpCancelText"
           :now-button-label="dpNowLabel"
+          :action-row="{ showNow: true }"
           :teleport="'body'"
           :placeholder="t('scheduled.create.triggerAtPlaceholder')"
         />
@@ -178,7 +180,9 @@ const props = defineProps<{
 const t = (key: string, params?: Record<string, any>): string => props.context.i18n.t(key, params)
 
 // 解构 ref：模板顶层自动解包
-const { jobs, loading, offline } = props.scheduled
+// 注意：formOpen 必须一并解构，模板中裸用 formOpen（v-if 创建表单/空态分支）
+// 依赖此绑定，缺失会导致点击「创建定时任务」无反应（undefined 恒为假）
+const { jobs, loading, offline, formOpen } = props.scheduled
 
 // ==================== 会话配置选择 ====================
 
@@ -215,6 +219,56 @@ const dateLocale = computed(() => getI18n()?.global?.locale?.value ?? 'zh-CN')
 const dpSelectText = computed(() => t('confirm'))
 const dpCancelText = computed(() => t('cancel'))
 const dpNowLabel = computed(() => t('datepickerNow'))
+
+// ==================== 日期选择器 bottom-sheet 联动 ====================
+//
+// 菜单经 teleport 挂到 body，脱离 .mobile-ui 作用域：浅色模式（含自定义调色板）
+// 下拿不到宿主 token，遮罩空白点击也不会关闭（库的 onClickOutside 以遮罩元素为界）。
+// 此处补齐两件事：
+// 1) 菜单出现时把宿主 token 复制到遮罩元素（随主题/调色板即时生效）
+// 2) 遮罩空白（遮罩内、菜单外）点击调用库暴露的 closeMenu 关闭
+
+const dpRef = ref<InstanceType<typeof Datepicker> | null>(null)
+
+/** 弹层引用到的宿主 token（与插件入口 DATEPICKER_THEME_OVERRIDES 引用一致） */
+const SHEET_TOKENS = [
+  '--mobile-bg-card',
+  '--mobile-bg-primary',
+  '--mobile-bg-tertiary',
+  '--mobile-text-primary',
+  '--mobile-text-secondary',
+  '--mobile-text-muted',
+  '--mobile-text-disabled',
+  '--mobile-text-on-accent',
+  '--mobile-border',
+  '--mobile-border-hover',
+  '--mobile-accent',
+  '--mobile-overlay-heavy',
+] as const
+
+let sheetObserver: MutationObserver | null = null
+
+/** 把宿主（.mobile-ui 作用域内）的 token 值复制到弹层遮罩，保证浅色模式取色正确 */
+function syncSheetTokens() {
+  const wrapper = document.querySelector<HTMLElement>('.dp__outer_menu_wrap.dp--menu-wrapper')
+  const source = document.querySelector('.att-root.mobile-ui')
+  if (!wrapper || !source) return
+  const cs = getComputedStyle(source)
+  for (const name of SHEET_TOKENS) {
+    wrapper.style.setProperty(name, cs.getPropertyValue(name))
+  }
+}
+
+/** 遮罩空白点击关闭（库的 onClickOutside 以遮罩为界，点击遮罩本身不会关闭） */
+function onSheetBackdropClick(e: MouseEvent) {
+  const wrapper = document.querySelector('.dp__outer_menu_wrap.dp--menu-wrapper')
+  const menu = document.querySelector('.dp--menu-wrapper.dp__menu')
+  if (!wrapper || !menu) return
+  const target = e.target as Node
+  if (wrapper.contains(target) && !menu.contains(target)) {
+    dpRef.value?.closeMenu()
+  }
+}
 
 // ==================== 状态展示 ====================
 
@@ -317,6 +371,12 @@ onMounted(() => {
     attributes: true,
     attributeFilter: ['class'],
   })
+  // bottom-sheet 联动：菜单挂载时同步宿主 token；遮罩空白点击关闭
+  sheetObserver = new MutationObserver(() => {
+    syncSheetTokens()
+  })
+  sheetObserver.observe(document.body, { childList: true })
+  document.addEventListener('click', onSheetBackdropClick)
 })
 
 onUnmounted(() => {
@@ -327,5 +387,8 @@ onUnmounted(() => {
   window.removeEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
   themeObserver?.disconnect()
   themeObserver = null
+  sheetObserver?.disconnect()
+  sheetObserver = null
+  document.removeEventListener('click', onSheetBackdropClick)
 })
 </script>

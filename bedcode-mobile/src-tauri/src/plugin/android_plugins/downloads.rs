@@ -126,3 +126,33 @@ pub async fn open_download_file(_path: &str, _display_name: &str) -> crate::Resu
         "openFile unavailable on this platform".to_string(),
     ))
 }
+
+/// 打开文件所在目录（历史记录「打开所在文件夹」）
+///
+/// 经 Kotlin DownloadsDirPlugin.openFileLocation（FileProvider 暴露父目录 +
+/// ACTION_VIEW）。需 system:open 权限。非 Android 平台返回错误。
+#[cfg(target_os = "android")]
+pub async fn open_download_file_location(path: &str) -> crate::Result<()> {
+    let handle = DOWNLOADS_DIR_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string())
+    })?;
+    let payload = serde_json::json!({ "path": path });
+    // 显式标注 Ok 类型：run_mobile_plugin_async 的 Ok 在无约束时会退化为
+    // never type fallback（编译错误），与 open_download_file 同模式
+    let _response: serde_json::Value = handle
+        .run_mobile_plugin_async("openFileLocation", payload)
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke openFileLocation: {}", e))
+        })?;
+    Ok(())
+}
+
+/// 非 Android 平台无法经 Kotlin 打开目录
+#[cfg(not(target_os = "android"))]
+pub async fn open_download_file_location(_path: &str) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "openFileLocation unavailable on this platform".to_string(),
+    ))
+}
+

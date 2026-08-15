@@ -177,6 +177,7 @@ export default {
   'transfer.batch.rejectAll': 'Reject all',
   'transfer.request.title': 'File transfer request',
   'transfer.request.body': '{name} wants to send you {count} files ({size} total)',
+  'transfer.request.countdown': 'Auto-reject in {seconds}s',
   'transfer.request.acceptAll': 'Accept all',
   'transfer.request.rejectAll': 'Reject all',
   'transfer.toast.receiving': '{name} is sending you {count} files',

@@ -213,7 +213,14 @@ impl WasmPlugin for AutoTaskPlugin {
             "auto-task.list-task-queue" => {
                 let session_id = args.str_or("session_id", "");
                 let tasks = queue::list_queue(&host, &session_id);
-                Ok(serde_json::json!({ "tasks": tasks, "session_id": session_id }))
+                // active_task（waiting/executing 活动项）供桌面端 modal 展示取消入口，
+                // 与 HTTP task-queue/list 返回结构对齐（移动端已依赖该字段对账）
+                let active_task = queue::list_active_task(&host, &session_id);
+                Ok(serde_json::json!({
+                    "tasks": tasks,
+                    "active_task": active_task,
+                    "session_id": session_id,
+                }))
             }
             "auto-task.list-running-sessions" => {
                 // 运行中的会话（含最新任务摘要），供前端「当前任务」Tab 展示与创建任务下拉选择
@@ -284,6 +291,25 @@ impl WasmPlugin for AutoTaskPlugin {
                 queue::broadcast_queue_changed(&host, &session_id, count_after, "add", None, None);
 
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))
+            }
+            "auto-task.cancel-task" => {
+                let session_id = args.str_or("session_id", "");
+                let task_id = args.str_or("task_id", "");
+
+                if session_id.is_empty() {
+                    return Err(anyhow::anyhow!("cancel-task: missing session_id"));
+                }
+                if task_id.is_empty() {
+                    return Err(anyhow::anyhow!("cancel-task: missing task_id"));
+                }
+
+                if !queue::cancel_task(&host, &session_id, &task_id) {
+                    return Err(anyhow::anyhow!(
+                        "cancel-task: task not found or not cancellable (only waiting/executing)"
+                    ));
+                }
+
+                Ok(serde_json::json!({ "cancelled": true }))
             }
             "auto-task.list-preset-tasks" => {
                 // 预设任务列表（全局，创建时间倒序），供侧边栏「当前任务」Tab 与终端弹窗展示

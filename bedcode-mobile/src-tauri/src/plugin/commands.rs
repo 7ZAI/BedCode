@@ -669,6 +669,19 @@ pub async fn plugin_open_file(
     crate::plugin::android_plugins::open_download_file(&path, &display_name).await
 }
 
+/// 打开文件所在目录（历史记录「打开所在文件夹」；FileProvider + ACTION_VIEW）。
+/// 需 system:open 权限。
+#[tauri::command]
+pub async fn plugin_open_file_location(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+    path: String,
+) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_system_open(&manager, &plugin_id, "plugin_open_file_location").await?;
+    crate::plugin::android_plugins::open_download_file_location(&path).await
+}
+
 /// 弹出系统目录选择对话框（插件设置页选择允许目录用）
 ///
 /// 用户取消返回 null。Android/iOS 无目录选择能力（tauri-plugin-dialog 的
