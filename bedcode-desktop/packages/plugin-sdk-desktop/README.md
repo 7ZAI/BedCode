@@ -4,6 +4,8 @@ BedCode Desktop 插件开发工具包 — 提供插件所需的**类型定义**�
 
 > 完整开发指南见仓库文档 [`docs/plugin-dev-desktop.md`](../../../docs/plugin-dev-desktop.md)。
 
+[English](README_en.md) | 简体中文
+
 ## 安装
 
 ```bash
@@ -137,6 +139,48 @@ export default defineConfig({
 ```
 
 产物文件名必须为 `index.js`（与 `plugin.json` 的 `main` 对应）。
+
+## Rust WASM 后端（`--rust` 插件）
+
+`--rust` 脚手架附带 Rust 侧 SDK crate **`bedcode-plugin-api`**（本包 `rust/` 目录，MIT），用于编写编译为 WASM 组件、在宿主 wasmtime 沙箱内运行的后端逻辑。
+
+### 启用
+
+```toml
+[dependencies]
+bedcode-plugin-api = { path = "<宿主>/packages/plugin-sdk-desktop/rust", features = ["wasm"] }
+```
+
+`wasm` feature 提供：
+
+- `WasmPlugin` trait + `wasm_entry!` 宏 — 生成 WIT 契约（`rust/wit/bedcode.wit`，单一事实来源）定义的全部组件导出
+- `WasmHost` — 宿主 API 绑定（import 后端），经 bindgen 调用宿主能力
+- `#[plugin_api]` 属性宏（由 `rust-macros/` 的 `bedcode-plugin-api-macros` crate 提供）— 插件互调 IDL：trait 定义 → JSON-RPC 分派 + client 生成 + 防漂移比对
+
+### 最小示例
+
+```rust
+use bedcode_plugin_api::{CommandArgs, WasmHost, WasmPlugin};
+
+struct MyPlugin;
+
+impl WasmPlugin for MyPlugin {
+    fn activate() -> anyhow::Result<()> {
+        // 经 WasmHost 访问宿主能力（事件订阅、存储、HTTP 端点等）
+        Ok(())
+    }
+}
+
+bedcode_plugin_api::wasm_entry!(MyPlugin);
+```
+
+### 构建
+
+```bash
+cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --release
+```
+
+产物为 WASM 组件（Component Model），宿主以 wasmtime 沙箱加载运行；插件崩溃不影响宿主。不带 `wasm` feature 时可作为普通 Rust 插件使用（cdylib 动态库 / 静态注册）。
 
 ## 配置声明
 

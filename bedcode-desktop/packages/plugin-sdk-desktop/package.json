@@ -18,6 +18,7 @@
     "template",
     "dev-shell",
     "README.md",
+    "README_en.md",
     "LICENSE"
   ],
   "scripts": {
