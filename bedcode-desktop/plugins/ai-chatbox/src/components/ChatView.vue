@@ -116,6 +116,8 @@
               :error-text="i === messages.length - 1 ? messageErrorText : ''"
               :show-reasoning="showReasoning"
               :code-line-height="pluginConfig.config.value.codeLineHeight"
+              :code-font-size="pluginConfig.config.value.codeFontSize"
+              :code-theme="pluginConfig.config.value.codeTheme"
               :assistant-provider="activeProvider"
               @delete="onDeleteMessage"
             />

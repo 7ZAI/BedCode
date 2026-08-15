@@ -73,6 +73,9 @@ import langClojure from '@shikijs/langs/clojure'
 
 import themeVitesseDark from '@shikijs/themes/vitesse-dark'
 import themeVitesseLight from '@shikijs/themes/vitesse-light'
+import themeGithubLight from '@shikijs/themes/github-light'
+import themeGithubDark from '@shikijs/themes/github-dark'
+import themeDracula from '@shikijs/themes/dracula'
 
 /** 语言模块：@shikijs/langs 子路径默认导出即语言注册数组；联合命名空间形态
  * 仅为兼容构建器 interop（本插件经 vite 打包恒为数组，见 normalizeLangModule） */
@@ -187,7 +190,8 @@ let highlighterPromise: Promise<HighlighterCore> | null = null
 function getHighlighter(): Promise<HighlighterCore> {
   if (!highlighterPromise) {
     highlighterPromise = createHighlighterCore({
-      themes: [themeVitesseDark, themeVitesseLight],
+      // 主题集合与 CodeTheme 选项一一对应（github-light/github-dark/dracula 为具名风格）
+      themes: [themeVitesseDark, themeVitesseLight, themeGithubLight, themeGithubDark, themeDracula],
       langs: Object.values(LANG_MODULES).map(normalizeLangModule),
       engine: createOnigurumaEngine(import('shiki/wasm')),
     })
@@ -267,15 +271,18 @@ function applyHighlight(code: HTMLElement, html: string): void {
 }
 
 /** Shiki 引擎实现：缓存命中同步回填；未命中懒加载 WASM 后异步回填。
- * @param highlight 高亮函数注入点（默认 highlightCode；测试注入可控实现以覆盖 in-flight 去重） */
+ * @param highlight 高亮函数注入点（默认 highlightCode；测试注入可控实现以覆盖 in-flight 去重）
+ * @param getTheme 主题解析器注入点（默认 currentShikiTheme 读 html.dark；
+ * ChatMessage 注入配置感知解析器实现插件级 codeTheme 强制浅/深色） */
 export function createShikiHighlightEngine(
   highlight: typeof highlightCode = highlightCode,
+  getTheme: () => string = currentShikiTheme,
 ): HighlightEngine {
   return {
     highlightElement(code) {
       const content = code.textContent ?? ''
       if (!content.trim()) return
-      const theme = currentShikiTheme()
+      const theme = getTheme()
       const lang = langFromElement(code)
       // 分隔符用不可打印控制符：代码内容可能含任意可见字符，不能用普通分隔符拼接
       const key = theme + '\u0000' + lang + '\u0000' + content

@@ -90,11 +90,27 @@
           "default": true
         },
         "codeLineHeight": {
-          "type": "string",
-          "enum": ["compact", "normal", "relaxed"],
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 2,
           "title": "代码块行距",
-          "description": "compact：紧凑（0.7）；normal：常规（1.6）；relaxed：宽松（1.8）",
-          "default": "compact"
+          "description": "代码块行距（0.5-2.0，默认 1.6）",
+          "default": 1.6
+        },
+        "codeFontSize": {
+          "type": "number",
+          "minimum": 11,
+          "maximum": 18,
+          "title": "代码块字体大小",
+          "description": "代码块字体大小（px，11-18）",
+          "default": 13
+        },
+        "codeTheme": {
+          "type": "string",
+          "enum": ["auto", "light", "dark", "github-light", "github-dark", "dracula"],
+          "title": "代码高亮主题",
+          "description": "auto：跟随宿主深浅色；light/dark：通用浅深色；github-light/github-dark/dracula：具名风格主题",
+          "default": "auto"
         }
       }
     }

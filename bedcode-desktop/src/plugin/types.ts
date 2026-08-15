@@ -53,6 +53,9 @@ export interface ConfigProperty {
   default?: any
   /** 枚举选项（type 为 string 时使用） */
   enum?: string[]
+  /** 数值范围（type 为 number 时使用；带范围时配置页渲染为滑块） */
+  minimum?: number
+  maximum?: number
 }
 
 /** 插件扩展点声明 */

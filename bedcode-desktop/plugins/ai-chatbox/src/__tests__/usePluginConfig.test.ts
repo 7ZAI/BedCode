@@ -16,7 +16,7 @@ function setup() {
 }
 
 describe('usePluginConfig', () => {
-  it('storage 无配置：全部默认值（thinkingMode default / effort high / showReasoning true / codeLineHeight compact）', async () => {
+  it('storage 无配置：全部默认值（thinkingMode default / effort high / showReasoning true / 行距 1.6）', async () => {
     const { pluginConfig } = setup()
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual(DEFAULT_PLUGIN_CONFIG)
@@ -30,24 +30,30 @@ describe('usePluginConfig', () => {
       thinkingMode: 'enabled',
       reasoningEffort: 'high',
       showReasoning: true,
-      codeLineHeight: 'compact',
+      codeLineHeight: 1.6,
+      codeFontSize: 13,
+      codeTheme: 'auto',
     })
   })
 
-  it('全量配置读回：原样生效', async () => {
+  it('全量配置读回：原样生效（旧版行距枚举映射为数字）', async () => {
     const { mock, pluginConfig } = setup()
     mock.storageMap.set('config', {
       thinkingMode: 'disabled',
       reasoningEffort: 'max',
       showReasoning: false,
       codeLineHeight: 'relaxed',
+      codeFontSize: 15,
+      codeTheme: 'github-dark',
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual({
       thinkingMode: 'disabled',
       reasoningEffort: 'max',
       showReasoning: false,
-      codeLineHeight: 'relaxed',
+      codeLineHeight: 1.8,
+      codeFontSize: 15,
+      codeTheme: 'github-dark',
     })
   })
 
@@ -58,9 +64,47 @@ describe('usePluginConfig', () => {
       reasoningEffort: 42,
       showReasoning: 'yes',
       codeLineHeight: 'huge',
+      codeFontSize: 99,
+      codeTheme: 'blue',
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual(DEFAULT_PLUGIN_CONFIG)
+  })
+
+  it('行距数字夹取：超出 [0.5, 2] 范围与多余小数位归一化', async () => {
+    const { mock, pluginConfig } = setup()
+    mock.storageMap.set('config', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      codeLineHeight: 3.2,
+      codeFontSize: 13,
+      codeTheme: 'auto',
+    })
+    await pluginConfig.loadConfig()
+    expect(pluginConfig.config.value.codeLineHeight).toBe(2)
+
+    mock.storageMap.set('config', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      codeLineHeight: 0.2,
+      codeFontSize: 13,
+      codeTheme: 'auto',
+    })
+    await pluginConfig.loadConfig()
+    expect(pluginConfig.config.value.codeLineHeight).toBe(0.5)
+
+    mock.storageMap.set('config', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      codeLineHeight: 1.55,
+      codeFontSize: 13,
+      codeTheme: 'auto',
+    })
+    await pluginConfig.loadConfig()
+    expect(pluginConfig.config.value.codeLineHeight).toBe(1.6)
   })
 
   it('storage 读取抛错：保持默认值不抛错（配置缺失不阻断聊天）', async () => {

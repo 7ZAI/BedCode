@@ -94,6 +94,32 @@
                     type="text"
                     class="w-full max-w-md h-8 px-2.5 wb-mono rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
                   />
+                  <!-- 范围数字：自绘滑块（轨道 + 填充 + thumb，pointer 拖动即改即存） -->
+                  <div
+                    v-else-if="prop.type === 'number' && hasRange(prop)"
+                    class="flex items-center gap-3 w-full max-w-xs select-none"
+                  >
+                    <div
+                      class="relative h-8 flex-1 flex items-center cursor-pointer touch-none"
+                      @pointerdown="onSliderDown($event, key, prop)"
+                      @pointermove="onSliderMove($event, key, prop)"
+                      @pointerup="onSliderEnd"
+                      @pointercancel="onSliderEnd"
+                    >
+                      <div class="absolute left-0 right-0 h-1 rounded-full bg-[var(--border)] pointer-events-none"></div>
+                      <div
+                        class="absolute h-1 rounded-full bg-[var(--color-primary)] pointer-events-none"
+                        :style="{ width: sliderFillPercent(key, prop) }"
+                      ></div>
+                      <div
+                        class="absolute w-4 h-4 rounded-full bg-[var(--color-primary)] border-2 border-[var(--bg-card)] shadow-sm pointer-events-none"
+                        :style="{ left: `calc(${sliderFillPercent(key, prop)} - 8px)` }"
+                      ></div>
+                    </div>
+                    <span class="w-10 flex-shrink-0 text-right wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)] tabular-nums">
+                      {{ sliderDisplayValue(key, prop) }}
+                    </span>
+                  </div>
                   <input
                     v-else-if="prop.type === 'number'"
                     v-model.number="configValues[key]"
@@ -166,6 +192,72 @@ const configSchema = ref<PluginConfiguration | null>(null)
 const configValues = ref<Record<string, any>>({})
 const loading = ref(true)
 const saving = ref(false)
+
+// ==================== 范围数字滑块（自绘：轨道 + 填充 + thumb，pointer 拖动） ====================
+
+/** 滑块拖动中标志（同一时刻仅一个滑块在拖） */
+let sliderDragging = false
+
+/** 是否渲染为滑块：number 且声明了 minimum/maximum */
+function hasRange(prop: ConfigProperty): boolean {
+  return typeof prop.minimum === 'number' && typeof prop.maximum === 'number'
+}
+
+/** 夹取到 [min, max]（拖动过程与读回均保证合法值） */
+function clampNumber(value: number, prop: ConfigProperty): number {
+  return Math.min(Math.max(value, prop.minimum!), prop.maximum!)
+}
+
+/** 滑块精度：范围跨度 >= 5 取整数（如字体大小 11-18），否则 1 位小数（如行距 0.5-2） */
+function sliderPrecision(prop: ConfigProperty): number {
+  return prop.maximum! - prop.minimum! >= 5 ? 0 : 1
+}
+
+/** 当前值（非法/缺省时回退 default → minimum） */
+function sliderCurrent(key: string, prop: ConfigProperty): number {
+  const raw = configValues.value[key]
+  if (typeof raw === 'number' && Number.isFinite(raw)) return clampNumber(raw, prop)
+  return typeof prop.default === 'number' ? clampNumber(prop.default, prop) : prop.minimum!
+}
+
+/** clientX → 值（按轨道宽度比例换算，按精度取整） */
+function sliderValueFromClientX(e: PointerEvent, key: string, prop: ConfigProperty): number {
+  const track = e.currentTarget as HTMLElement
+  const rect = track.getBoundingClientRect()
+  if (rect.width <= 0) return sliderCurrent(key, prop)
+  const ratio = Math.min(Math.max((e.clientX - rect.left) / rect.width, 0), 1)
+  const value = prop.minimum! + ratio * (prop.maximum! - prop.minimum!)
+  const precision = sliderPrecision(prop)
+  return Math.round(value * 10 ** precision) / 10 ** precision
+}
+
+function onSliderDown(e: PointerEvent, key: string, prop: ConfigProperty): void {
+  sliderDragging = true
+  // 捕获指针：拖出轨道范围仍持续更新；松手/取消统一复位
+  ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  configValues.value[key] = sliderValueFromClientX(e, key, prop)
+}
+
+function onSliderMove(e: PointerEvent, key: string, prop: ConfigProperty): void {
+  if (!sliderDragging) return
+  configValues.value[key] = sliderValueFromClientX(e, key, prop)
+}
+
+function onSliderEnd(): void {
+  sliderDragging = false
+}
+
+/** 填充宽度 / thumb 位置百分比 */
+function sliderFillPercent(key: string, prop: ConfigProperty): string {
+  const value = sliderCurrent(key, prop)
+  const ratio = (value - prop.minimum!) / (prop.maximum! - prop.minimum!)
+  return `${Math.min(Math.max(ratio, 0), 1) * 100}%`
+}
+
+/** 数值显示（按精度格式化） */
+function sliderDisplayValue(key: string, prop: ConfigProperty): string {
+  return sliderCurrent(key, prop).toFixed(sliderPrecision(prop))
+}
 
 /** 判断插件是否为激活状态 */
 function isActivatedState(state: PluginState): boolean {

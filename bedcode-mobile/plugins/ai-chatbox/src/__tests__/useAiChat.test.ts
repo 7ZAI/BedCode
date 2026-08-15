@@ -185,7 +185,7 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=enabled + effort 透传到 chat-stream 请求体', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'enabled', reasoningEffort: 'max', showReasoning: true })
+    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'enabled', reasoningEffort: 'max', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')
@@ -200,7 +200,7 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=default 不写 thinking 字段（跟随模型）', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'default', reasoningEffort: 'high', showReasoning: true })
+    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'default', reasoningEffort: 'high', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')

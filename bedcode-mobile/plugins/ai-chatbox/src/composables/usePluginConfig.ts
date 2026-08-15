@@ -10,15 +10,29 @@
  */
 import { ref } from 'vue'
 import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
-import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeLineHeight } from '../types'
-import { DEFAULT_PLUGIN_CONFIG } from '../types'
+import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeTheme } from '../types'
+import {
+  CODE_FONT_SIZE_MAX,
+  CODE_FONT_SIZE_MIN,
+  CODE_LINE_HEIGHT_MAX,
+  CODE_LINE_HEIGHT_MIN,
+  DEFAULT_CODE_LINE_HEIGHT,
+  DEFAULT_PLUGIN_CONFIG,
+} from '../types'
 
 /** 插件配置 storage key（与宿主配置页 pluginStorageGet 共用，见桌面 SDK 约定） */
 const PLUGIN_CONFIG_STORAGE_KEY = 'config'
 
 const THINKING_MODES: ThinkingMode[] = ['default', 'enabled', 'disabled']
 const REASONING_EFFORTS: ReasoningEffort[] = ['low', 'high', 'max']
-const CODE_LINE_HEIGHTS: CodeLineHeight[] = ['compact', 'normal', 'relaxed']
+const CODE_THEMES: CodeTheme[] = ['auto', 'light', 'dark', 'github-light', 'github-dark', 'dracula']
+
+/** 旧版行距枚举 → 数字（v1 历史数据平滑迁移，取桌面端档位观感） */
+const LEGACY_LINE_HEIGHTS: Record<string, number> = {
+  compact: 1.35,
+  normal: 1.6,
+  relaxed: 1.8,
+}
 
 export function usePluginConfig(context: PluginContext) {
   /** 当前生效配置（未加载/加载失败时即默认值，保证请求构建永远拿得到合法值） */
@@ -35,7 +49,9 @@ export function usePluginConfig(context: PluginContext) {
         thinkingMode: normalizeEnum(saved.thinkingMode, THINKING_MODES, DEFAULT_PLUGIN_CONFIG.thinkingMode),
         reasoningEffort: normalizeEnum(saved.reasoningEffort, REASONING_EFFORTS, DEFAULT_PLUGIN_CONFIG.reasoningEffort),
         showReasoning: typeof saved.showReasoning === 'boolean' ? saved.showReasoning : DEFAULT_PLUGIN_CONFIG.showReasoning,
-        codeLineHeight: normalizeEnum(saved.codeLineHeight, CODE_LINE_HEIGHTS, DEFAULT_PLUGIN_CONFIG.codeLineHeight),
+        codeLineHeight: normalizeLineHeight(saved.codeLineHeight),
+        codeFontSize: normalizeFontSize(saved.codeFontSize),
+        codeTheme: normalizeEnum(saved.codeTheme, CODE_THEMES, DEFAULT_PLUGIN_CONFIG.codeTheme),
       }
     } catch (e) {
       // 读取失败保持默认值（配置缺失不阻断聊天），仅记录日志
@@ -45,10 +61,43 @@ export function usePluginConfig(context: PluginContext) {
     }
   }
 
-  return { config, loading, loadConfig }
+  /** 整表保存（移动端配置弹层用；桌面端由宿主配置页 pluginStorageSet 落盘） */
+  async function saveConfig(next: PluginConfig): Promise<void> {
+    config.value = { ...next }
+    try {
+      await context.storage.set(PLUGIN_CONFIG_STORAGE_KEY, { ...next })
+    } catch (e) {
+      // 保存失败不阻断本次会话内生效（仅持久化丢失），记录日志
+      console.error('[AI Chatbox] Failed to save plugin config:', e)
+    }
+  }
+
+  return { config, loading, loadConfig, saveConfig }
 }
 
 /** 枚举值归一化：不在白名单内（含 undefined/类型不符）一律回退默认 */
 function normalizeEnum<T extends string>(value: unknown, whitelist: readonly T[], fallback: T): T {
   return whitelist.includes(value as T) ? (value as T) : fallback
+}
+
+/** 数字归一化：非有限数 / 超出 [MIN, MAX] 范围一律回退默认（桌面配置页可输入任意值） */
+function normalizeFontSize(value: unknown): number {
+  return typeof value === 'number' &&
+    Number.isFinite(value) &&
+    value >= CODE_FONT_SIZE_MIN &&
+    value <= CODE_FONT_SIZE_MAX
+    ? value
+    : DEFAULT_PLUGIN_CONFIG.codeFontSize
+}
+
+/** 行距归一化：旧版枚举字符串映射为数字；数字夹取到 [0.5, 2]（保留一位小数） */
+function normalizeLineHeight(value: unknown): number {
+  if (typeof value === 'string') {
+    const mapped = LEGACY_LINE_HEIGHTS[value]
+    return mapped !== undefined ? mapped : DEFAULT_CODE_LINE_HEIGHT
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
+  }
+  return DEFAULT_CODE_LINE_HEIGHT
 }

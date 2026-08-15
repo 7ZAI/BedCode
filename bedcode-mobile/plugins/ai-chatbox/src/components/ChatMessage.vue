@@ -1,6 +1,6 @@
 <template>
   <!-- user 消息右对齐，assistant 消息左对齐（flex-row-reverse 实现左右分列） -->
-  <div class="flex gap-2.5" :class="isUser ? 'flex-row-reverse' : ''" :style="codeLineHeightStyle">
+  <div class="flex gap-2.5" :class="isUser ? 'flex-row-reverse' : ''" :style="codeStyle">
     <!-- 头像 -->
     <div
       class="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 text-sm mt-0.5"
@@ -127,9 +127,15 @@ import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import type { ChatMessage, CodeLineHeight } from '../types'
+import type { ChatMessage, CodeTheme } from '../types'
 import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
-import { createShikiHighlightEngine, type HighlightEngine } from '../utils/highlight'
+import {
+  SHIKI_DARK_THEME,
+  SHIKI_LIGHT_THEME,
+  createShikiHighlightEngine,
+  currentShikiTheme,
+  type HighlightEngine,
+} from '../utils/highlight'
 
 const props = defineProps<{
   message: ChatMessage
@@ -137,8 +143,12 @@ const props = defineProps<{
   errorText?: string
   /** 插件级 showReasoning 配置（false 时整体不渲染思考块） */
   showReasoning?: boolean
-  /** 插件级代码块行距配置（缺省走默认档） */
-  codeLineHeight?: CodeLineHeight
+  /** 插件级代码块行距配置（0.5-2.0，缺省 1.6） */
+  codeLineHeight?: number
+  /** 插件级代码块字体大小（px，缺省 13） */
+  codeFontSize?: number
+  /** 插件级代码高亮主题（auto 跟随宿主深浅色，缺省 auto） */
+  codeTheme?: CodeTheme
   /** 是否显示重新生成按钮（仅最后一条 assistant 且非流式） */
   showRegenerate?: boolean
 }>()
@@ -147,19 +157,34 @@ defineEmits<{ delete: [message: ChatMessage]; regenerate: [] }>()
 
 const { t } = useI18n()
 
-// 高亮引擎 seam（ADR-0011）：移动端注入 Shiki 异步实现（懒加载单例 + 深浅色双主题）
-const highlightEngine: HighlightEngine = createShikiHighlightEngine()
+// 高亮引擎 seam（ADR-0011）：移动端注入 Shiki 异步实现（懒加载单例 + 多主题包）；
+// 主题解析器注入配置感知实现：具名主题直接锁定，auto 时跟随宿主 html.dark
+const highlightEngine: HighlightEngine = createShikiHighlightEngine(
+  undefined,
+  () => resolveCodeTheme(props.codeTheme ?? 'auto'),
+)
+
+/** 具名主题 → Shiki 主题 id（与 highlight.ts 加载的集合一一对应） */
+const CODE_THEME_NAMES: Record<Exclude<CodeTheme, 'auto'>, string> = {
+  light: SHIKI_LIGHT_THEME,
+  dark: SHIKI_DARK_THEME,
+  'github-light': 'github-light',
+  'github-dark': 'github-dark',
+  dracula: 'dracula',
+}
+
+/** 代码主题解析：具名主题锁定 Shiki 主题包；auto 跟随宿主深浅色 */
+function resolveCodeTheme(theme: CodeTheme): string {
+  if (theme !== 'auto') return CODE_THEME_NAMES[theme]
+  return currentShikiTheme()
+}
 
 const isUser = computed(() => props.message.role === 'user')
 
-/** 代码块行距档位 → line-height（CSS 变量下发，:deep 样式消费） */
-const CODE_LINE_HEIGHTS: Record<CodeLineHeight, string> = {
-  compact: '0.7',
-  normal: '1.6',
-  relaxed: '1.8',
-}
-const codeLineHeightStyle = computed(() => ({
-  '--md-code-lh': CODE_LINE_HEIGHTS[props.codeLineHeight ?? 'compact'],
+/** 代码渲染样式（行距 + 字体大小，CSS 变量下发到 :deep 代码块样式） */
+const codeStyle = computed(() => ({
+  '--md-code-lh': String(props.codeLineHeight ?? 1.6),
+  '--md-code-font-size': `${props.codeFontSize ?? 13}px`,
 }))
 
 /** 思考块展开状态：流式期间默认展开（边生成边可见）；结束后保持用户当前折叠状态 */
@@ -276,6 +301,9 @@ onUnmounted(() => {
   themeObserver?.disconnect()
   themeObserver = null
 })
+// 插件级 codeTheme 配置切换（auto ↔ light/dark）：清除旧主题高亮标记后重扫
+//（高亮缓存按主题分键，强制主题与宿主切换间不互相污染）
+watch(() => props.codeTheme, onThemeChanged)
 // flush: 'post'：等组件 DOM patch 完成后再注入——默认 'pre' 的 watch 会在新 DOM
 // 渲染前执行，注入落在上一帧 DOM 上、随后被 v-html 整段覆盖
 watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
@@ -334,7 +362,8 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
 .md-body :deep(pre code) {
   background: transparent;
   padding: 0;
-  font-size: 0.8125rem;
+  /* 字体大小由插件级配置 codeFontSize 决定（CSS 变量在消息根节点下发） */
+  font-size: var(--md-code-font-size, 0.8125rem);
   /* 行距由插件级配置 codeLineHeight 决定（CSS 变量在消息根节点下发） */
   line-height: var(--md-code-lh, 0.7);
 }
