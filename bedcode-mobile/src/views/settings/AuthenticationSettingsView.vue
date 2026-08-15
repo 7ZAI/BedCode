@@ -37,13 +37,23 @@
               <p class="text-xs text-[var(--mobile-text-muted)] mt-0.5 truncate">{{ $t('settings.authentication.biometricDesc') }}</p>
             </div>
           </div>
+          <!-- 状态徽章（仅短状态：已绑定 / 未绑定；长警告文案走下方独立提示行，避免溢出） -->
           <span
+            v-if="deviceSupported && !statusError"
             class="flex-shrink-0 inline-flex items-center h-6 px-2.5 rounded-tag text-xs font-medium"
             :class="statusClass"
           >
             {{ statusLabel }}
           </span>
         </div>
+
+        <!-- 警告提示：错误/不支持原因文案较长，独立一行完整换行展示 -->
+        <p v-if="statusError" class="text-xs leading-relaxed text-[var(--mobile-error)]">
+          ⚠ {{ $t('settings.authentication.statusError') }}
+        </p>
+        <p v-else-if="!deviceSupported" class="text-xs leading-relaxed text-[var(--mobile-warning)]">
+          ⚠ {{ $t(unsupportedReasonKey) }}
+        </p>
 
         <button
           v-if="deviceSupported"
@@ -136,19 +146,13 @@ const unsupportedReasonKey = computed(() => {
   }
 })
 
-const statusLabel = computed(() => {
-  if (statusError.value) return t('settings.authentication.statusError')
-  if (!deviceSupported.value) return t(unsupportedReasonKey.value)
-  return hasKey.value ? t('settings.authentication.bound') : t('settings.authentication.unbound')
-})
+const statusLabel = computed(() => (hasKey.value ? t('settings.authentication.bound') : t('settings.authentication.unbound')))
 
-const statusClass = computed(() => {
-  if (statusError.value) return 'bg-[color:color-mix(in_srgb,var(--mobile-error)_12%,transparent)] text-[var(--mobile-error)]'
-  if (!deviceSupported.value) return 'bg-[color:color-mix(in_srgb,var(--mobile-warning)_12%,transparent)] text-[var(--mobile-warning)]'
-  return hasKey.value
+const statusClass = computed(() =>
+  hasKey.value
     ? 'bg-[color:color-mix(in_srgb,var(--mobile-success)_12%,transparent)] text-[var(--mobile-success)]'
-    : 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]'
-})
+    : 'bg-[var(--mobile-bg-elevated)] text-[var(--mobile-text-muted)]',
+)
 
 async function refreshStatus() {
   try {

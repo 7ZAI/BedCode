@@ -109,7 +109,7 @@
           <div class="px-5 mt-6 pb-8 space-y-3">
             <!-- 简介 -->
             <CollapseSection :title="$t('mobile.plugin.sectionIntro')" emoji="📄">
-              <p class="px-4 pb-4 text-sm leading-relaxed text-[var(--mobile-text-secondary)]">
+              <p class="px-4 pb-4 text-sm leading-relaxed text-[var(--mobile-text-secondary)] whitespace-pre-line">
                 {{ detailPlugin.description || $t('mobile.plugin.noDescription') }}
               </p>
             </CollapseSection>
@@ -238,7 +238,7 @@
                   <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
                     ⚠ {{ getErrorMessage(plugin.state) }}
                   </p>
-                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
+                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] whitespace-pre-line line-clamp-2">
                     {{ plugin.description || $t('mobile.plugin.noDescription') }}
                   </p>
                 </div>
@@ -290,7 +290,7 @@
                   <p v-if="isErrorState(plugin.state)" class="text-xs mt-1 leading-relaxed text-[var(--mobile-danger-color)]">
                     ⚠ {{ getErrorMessage(plugin.state) }}
                   </p>
-                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] line-clamp-2">
+                  <p v-else class="text-xs mt-1 leading-relaxed text-[var(--mobile-text-secondary)] whitespace-pre-line line-clamp-2">
                     {{ plugin.description || $t('mobile.plugin.noDescription') }}
                   </p>
                 </div>

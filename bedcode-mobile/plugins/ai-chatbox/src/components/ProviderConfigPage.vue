@@ -1,7 +1,7 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
     <!-- 顶栏：标题随视图流转（列表/模板选择/表单） -->
-    <header class="mobile-header-safe flex items-center justify-between px-3 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-card)]">
+    <header class="flex items-center justify-between px-3 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-card)]" :style="{ paddingTop: `${safeAreaTop}px` }">
       <button
         class="h-11 px-2 -ml-2 flex items-center gap-1 text-[var(--font-size-sm)] text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
         @click="goBack"
@@ -123,6 +123,7 @@
  * 预设是只读添加模板，不进列表、不可删除；删除统一走宿主确认弹窗。
  */
 import { ref, computed, inject } from 'vue'
+import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ProviderForm from './ProviderForm.vue'
 import ProviderAvatar from './ProviderAvatar.vue'
@@ -147,6 +148,10 @@ const emit = defineEmits<{
 }>()
 
 const { t } = useI18n()
+
+// 宿主注入的安全区 JS 值（同 ChatView）：CSS env() 在 Android WebView 无效，须用 JS 值避让状态栏
+const safeArea = inject<Ref<{ top: number }>>('safeArea')
+const safeAreaTop = computed(() => safeArea?.value?.top || 0)
 
 // 宿主注入 PluginContext（PluginViewHost provide），删除确认走宿主弹窗
 const context = inject<PluginContext>('pluginContext')!

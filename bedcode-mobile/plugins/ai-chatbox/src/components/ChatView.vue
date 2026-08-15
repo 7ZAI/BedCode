@@ -19,7 +19,7 @@
       <!-- 聊天模式 -->
       <div v-else key="chat" class="flex flex-col w-full h-full min-w-0">
         <!-- 头部工具条：对话列表 + 标题 + 新对话/指令/设置 -->
-      <header class="mobile-header-safe flex items-center justify-between px-2 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl">
+      <header class="flex items-center justify-between px-2 pb-2 pt-1 border-b border-[var(--mobile-border)] bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl" :style="{ paddingTop: `${safeAreaTop}px` }">
         <button
           class="w-11 h-11 -ml-1 flex items-center justify-center text-[var(--mobile-text-secondary)] active:opacity-80 rounded-xl transition-opacity"
           :title="t('mobile.plugin.aiChatbox.conversations')"
@@ -140,8 +140,9 @@
         <Transition name="drawer">
           <div v-if="showConversationDrawer" class="fixed inset-0 z-50">
             <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationDrawer = false"></div>
-            <!-- 抽屉面板贴边全高，但内容须避开状态栏/导航栏：用宿主安全区工具类（--safe-area-top/bottom）加内边距，背景色铺满到屏幕边缘保持一体 -->
-            <div class="drawer-panel mobile-header-safe mobile-nav-safe absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]">
+            <!-- 抽屉面板贴边全高，内容须避开状态栏/导航栏：用宿主 JS 安全区值（inject safeArea）做内边距——
+            Android WebView 不支持 CSS env(safe-area-inset-*)，CSS 变量类在真机无效；背景铺满屏幕边缘保持一体 -->
+            <div class="drawer-panel absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]" :style="drawerPanelStyle">
               <ConversationList
                 :conversations="conversations"
                 :current-id="currentConvId"
@@ -166,6 +167,7 @@
  * AI Chatbox 面板（移动端 navtab）— 消息流 + 输入区 + 对话列表抽屉 + 供应商配置
  */
 import { ref, computed, watch, nextTick, onMounted, inject } from 'vue'
+import type { Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
@@ -224,6 +226,17 @@ const messagesContainer = ref<HTMLElement | null>(null)
 const showConfigPage = ref(false)
 const showConversationDrawer = ref(false)
 const dismissedError = ref('')
+
+// 宿主注入的安全区 JS 值（App.vue useEdgeToEdge provide）：Android WebView 不支持
+// CSS env(safe-area-inset-*)，CSS 变量类（mobile-header-safe 等）在真机拿到 0；
+// dev-shell/桌面无 provide 时为 undefined → 回退 0（桌面无安全区）
+const safeArea = inject<Ref<{ top: number; bottom: number; navigationBar: number }>>('safeArea')
+const safeAreaTop = computed(() => safeArea?.value?.top || 0)
+const safeAreaBottom = computed(() => safeArea?.value?.navigationBar || safeArea?.value?.bottom || 0)
+const drawerPanelStyle = computed(() => ({
+  paddingTop: `${safeAreaTop.value}px`,
+  paddingBottom: `${safeAreaBottom.value}px`,
+}))
 
 /** 当前对话标题（无对话选中时显示面板名；新对话占位显示默认文案） */
 const currentTitle = computed(() => {
