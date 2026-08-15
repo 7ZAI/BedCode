@@ -1,13 +1,13 @@
 #!/bin/sh
 # 分支级文档跟踪助手（doc-tracking）
 #
-# 背景：文档/配置文件（docs/、AGENTS.md、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch issue 文档）
+# 背景：文档/配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch issue 文档）
 # 只在除 uat / master 外的分支入库（dev、feature/* 等全部正常跟踪）。
 # uat / master 不跟踪这些路径——仅从 index 剔除，工作区始终保留（.gitignore 已忽略
 # 这些路径，且 post-checkout 会从 dev 恢复工作区副本），来回切换分支不会冲突，
 # 也不会产生"删除文档"的提交。
 #
-# 注意：README.md / README_en.md 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。
+# 注意：README.md / README_en.md 与 AGENTS.md 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。
 #
 # 用法：
 #   scripts/doc-tracking.sh untrack [hook]  uat/master 从 index 剔除受保护文件
@@ -27,10 +27,10 @@ UNTRACKED_BRANCHES="${DOC_UNTRACKED_BRANCHES:-uat master}"
 TRACKING_SOURCE="${DOC_TRACKING_SOURCE:-dev}"
 
 # 受保护路径，与 .gitignore 的 Documentation / IDE 段落对应。
-# README.md / README_en.md 不在此列（全分支跟踪）。
+# README.md / README_en.md 与 AGENTS.md 不在此列（全分支跟踪）。
 # 注意：.pi 只跟踪配置（agents/extensions/prompts/settings.json），
 # .pi/sessions/ 会话日志始终忽略、不入库（勿执行 git add -f .pi 整目录）。
-PROTECTED_PATHS="docs AGENTS.md CLAUDE.md CONTEXT.md .pi .scratch"
+PROTECTED_PATHS="docs CLAUDE.md CONTEXT.md .pi .scratch"
 
 # ==================== 工具函数 ====================
 
