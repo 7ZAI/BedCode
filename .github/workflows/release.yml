@@ -67,6 +67,9 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target
+          targets: wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -83,10 +86,20 @@ jobs:
           Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
           certutil -decode certificate/tempCert.txt certificate/certificate.pfx
           Remove-Item certificate/tempCert.txt
-          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          $cert = Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          # tauri 按 certificateThumbprint 从当前用户证书库找签名证书；
+          # 动态写入 tauri.conf.json（仅 CI 生效，本地构建不受影响）
+          $thumbprint = $cert.Thumbprint
+          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.bundle.windows=c.bundle.windows||{};c.bundle.windows.certificateThumbprint='$thumbprint';fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n')"
+          echo "certificateThumbprint=$thumbprint"
 
       - name: Install frontend dependencies
         run: npm install
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
+      # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
+      - name: Build plugins (WASM artifacts)
+        run: npm run plugins:build
 
       - name: Verify updater artifacts enabled in config
         shell: bash
@@ -165,7 +178,8 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）
+          targets: aarch64-linux-android, wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
