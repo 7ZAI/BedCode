@@ -3,7 +3,7 @@
  *
  * 与宿主 context.ts 同接口、同语义（事件名 / i18n 前缀 / storage 命名空间），
  * 后端通道替换为浏览器实现：
- * - commands.execute：仅执行前端注册 handler；cdylib/WASM 后端不在浏览器运行
+ * - commands.execute：仅执行前端注册 handler；WASM 后端不在浏览器运行
  * - storage：localStorage 持久化（flush 为空操作）
  * - http.registerEndpoint：仅登记展示（真实宿主由 Rust 服务端挂载，浏览器不可达）
  * - fileService：内存挂载点 + 模拟目录/文件选择（pickFiles 返回数组）

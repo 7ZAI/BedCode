@@ -44,7 +44,7 @@ pub struct PluginManifest {
     /// 插件类型：rust / rust-ts / ts-only
     #[serde(default = "default_plugin_type")]
     pub plugin_type: PluginType,
-    /// cdylib 动态库文件名（不含路径，相对于插件目录）
+    /// WASM 库文件名（不含路径，相对于插件目录）
     /// 仅 rust-ts 类型插件使用，宿主根据平台自动添加后缀
     #[serde(default)]
     pub rust_library: String,

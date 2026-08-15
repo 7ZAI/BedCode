@@ -118,7 +118,7 @@ export async function pluginListRustCommands(): Promise<PluginCommandEntry[]> {
   return await invoke<PluginCommandEntry[]>('plugin_list_rust_commands')
 }
 
-/** 热重载 cdylib 插件（仅开发模式可用） */
+/** 热重载插件（仅开发模式可用） */
 export async function pluginDevReload(pluginId: string): Promise<void> {
   return await invoke('plugin_dev_reload', { pluginId })
 }

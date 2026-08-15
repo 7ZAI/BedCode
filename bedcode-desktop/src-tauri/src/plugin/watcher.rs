@@ -153,7 +153,7 @@ impl PluginDevWatcher {
 /// 从变化文件路径提取插件 ID
 ///
 /// 路径格式：plugins_dir/{plugin-id}/xxx
-/// 例如：resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.dll
+/// 例如：resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.wasm
 ///       → "com.bedcode.ai-chatbox"
 fn extract_plugin_id(path: &std::path::Path, plugins_dir: &std::path::Path) -> Option<String> {
     path.strip_prefix(plugins_dir).ok()?.iter().next()?.to_str().map(String::from)

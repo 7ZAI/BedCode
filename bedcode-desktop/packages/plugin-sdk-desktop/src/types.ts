@@ -27,7 +27,7 @@ export interface PluginManifest {
   main: string
   sandbox: 'inline' | 'isolated'
   pluginType: PluginType
-  /** cdylib 动态库文件名（仅 rust-ts 类型插件使用） */
+  /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
   /** 插件图标：图片路径（相对插件目录）或内联 SVG 标记 */
   icon?: string
@@ -391,7 +391,7 @@ export interface PluginInfo {
   main: string
   sandbox: string
   pluginType: PluginType
-  /** cdylib 动态库文件名（仅 rust-ts 类型插件使用） */
+  /** WASM 库文件名（仅 rust-ts 类型插件使用） */
   rustLibrary?: string
   permissions: string[]
   state: PluginState

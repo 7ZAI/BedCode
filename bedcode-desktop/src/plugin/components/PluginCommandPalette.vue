@@ -85,7 +85,7 @@ async function executeCommand(cmd: CommandEntry) {
     }
   }
 
-  // Rust 插件 / cdylib 插件：通过 pluginInvoke 路由到 PluginHost
+  // Rust 插件（WASM）：通过 pluginInvoke 路由到 PluginHost
   try {
     await pluginInvoke(cmd.plugin_id, cmd.command_id)
   } catch (e: any) {

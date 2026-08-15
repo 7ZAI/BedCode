@@ -211,7 +211,7 @@ class PluginLoaderClass {
   /** 热重载插件（开发模式）
    *
    * 停用旧插件 → 重新加载 TS 入口（带缓存破坏）→ 重新激活。
-   * Rust 端 cdylib 热重载由 PluginHost::reload_cdylib_plugin() 处理，
+   * Rust 端热重载由 PluginHost::reload_wasm_plugin() 处理，
    * 此方法只负责前端 TS 模块的重载。
    */
   async reloadPlugin(pluginId: string): Promise<void> {
