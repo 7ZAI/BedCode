@@ -180,7 +180,7 @@ bedcode_plugin_api::wasm_entry!(MyPlugin);
 cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --release
 ```
 
-产物为 WASM 组件（Component Model），宿主以 wasmtime 沙箱加载运行；插件崩溃不影响宿主。不带 `wasm` feature 时可作为普通 Rust 插件使用（cdylib 动态库 / 静态注册）。
+产物为 WASM 组件（Component Model），宿主以 wasmtime 沙箱加载运行；插件崩溃不影响宿主。不带 `wasm` feature 时可作为普通 Rust crate 使用（静态注册 / 库依赖）。
 
 ## 配置声明
 

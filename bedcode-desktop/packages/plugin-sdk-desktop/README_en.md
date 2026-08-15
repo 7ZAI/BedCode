@@ -180,7 +180,7 @@ bedcode_plugin_api::wasm_entry!(MyPlugin);
 cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --release
 ```
 
-The output is a WASM component (Component Model) loaded by the host inside the wasmtime sandbox — a crashing plugin never affects the host. Without the `wasm` feature it works as a regular Rust plugin (cdylib dynamic library / static registration).
+The output is a WASM component (Component Model) loaded by the host inside the wasmtime sandbox — a crashing plugin never affects the host. Without the `wasm` feature it works as a regular Rust crate (static registration / library dependency).
 
 ## Configuration Declaration
 

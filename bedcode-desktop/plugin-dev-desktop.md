@@ -10,17 +10,17 @@
 
 ```
 ┌──────────────────────────── 插件工程（开发期）────────────────────────────┐
-│  src/index.ts (前端) + rust/src/lib.rs (cdylib 后端，可选) + plugin.json    │
+│  src/index.ts (前端) + rust/src/lib.rs (WASM 后端，可选) + plugin.json    │
 └───────────────┬──────────────────────────────────────┬────────────────────┘
-                │ vite build                            │ cargo build
+                │ vite build                            │ cargo build (wasm32)
                 ▼                                       ▼
-           dist/index.js                            {rustLibrary}.dll/.so
+           dist/index.js                           {rustLibrary}.wasm
                 └──────────────┬───────────────────────┘
                                ▼
                    插件目录（resources/plugins/{id}/ 或安装目录）
 ```
 
-桌面端插件类型：`ts-only`（纯前端）、`rust-ts`（前端 + Rust cdylib 后端）、
+桌面端插件类型：`ts-only`（纯前端）、`rust-ts`（前端 + Rust WASM 后端）、
 `rust`（纯后端）。`plugin.json` 声明权限与扩展点（sandbox / contributes）。
 
 **关键概念**：

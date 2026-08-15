@@ -4,7 +4,7 @@
 
 # BedCode
 
-[![Version](https://img.shields.io/badge/version-1.1.11-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
@@ -27,7 +27,7 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 - **会话管理** — 多个 Agent CLI / 终端会话，SQLite 持久化，xterm.js 实时输出预览
 - **设备配对** — 二维码 + 6 位验证码安全配对，mDNS 服务广播供移动端自动发现
 - **HTTP + WebSocket 服务器** — Actix Web，支持高级网络配置（worker 线程、Keep-Alive、超时、帧大小限制等），独立服务器管理视图与指标仪表盘
-- **插件系统** — WASM（wasmtime 沙箱）+ cdylib 动态加载，宿主 API 桥接、权限控制、hooks 集成
+- **插件系统** — WASM（wasmtime 沙箱），宿主 API 桥接、权限控制、hooks 集成
 - **WSL2 支持** — 在 Windows Subsystem for Linux 中运行会话，可指定发行版
 - **系统托盘** — 快捷操作
 
@@ -59,9 +59,47 @@ vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错�
 
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
+```mermaid
+flowchart LR
+    subgraph DESKTOP["桌面端（主机）· Tauri 2.0"]
+        direction TB
+        D_UI["Vue 3 前端<br/>会话管理 · 终端预览 · 服务器视图 · 插件配置"]
+        D_CORE["Rust 宿主<br/>Tauri 命令 / 事件桥"]
+        D_PTY["PTY 进程管理<br/>命令启动 · WSL · 输出分发"]
+        D_SESS["会话管理器<br/>生命周期 · 事件总线"]
+        D_SRV["Actix Web 服务器<br/>HTTP REST + WebSocket"]
+        D_PLG["插件宿主<br/>wasmtime 沙箱 · 权限 · API 桥接"]
+        D_FS["文件服务<br/>目录挂载 · 传输引擎"]
+        D_MDNS["mDNS 服务广播"]
+        D_DB[("SQLite")]
+        D_UI <--> D_CORE
+        D_CORE --- D_PTY & D_SESS & D_SRV & D_PLG & D_FS & D_MDNS
+        D_SESS --- D_DB
+        D_PLG --- D_SRV
+    end
+
+    subgraph MOBILE["移动端（远程终端）· Tauri 2.0 / Android"]
+        direction TB
+        M_UI["Vue 3 前端<br/>终端视图 · 代码浏览器 · 工具箱 · 预设任务"]
+        M_CORE["Rust 宿主<br/>Tauri 命令 / 事件桥"]
+        M_WS["WS 客户端<br/>心跳 · 重连 · 请求-响应"]
+        M_RT["消息路由<br/>终端 / 同步 / 文件处理器"]
+        M_AUTH["认证<br/>配对 · JWT · 生物凭证"]
+        M_PLG["插件宿主<br/>wasmtime 沙箱"]
+        M_FS["文件服务<br/>SAF · 传输引擎"]
+        M_MDNS["mDNS 发现"]
+        M_UI <--> M_CORE
+        M_CORE --- M_WS & M_RT & M_AUTH & M_PLG & M_FS & M_MDNS
+    end
+
+    D_SRV <--> M_WS
+    D_FS <--> M_FS
+    D_MDNS <--> M_MDNS
+```
+
 | 端 | 前端 (Vue 3) | 后端 (Rust) |
 |----|-------------|-------------|
-| **桌面端** | 会话管理器、终端预览、服务器视图、插件配置 | PTY、Actix Web（HTTP + WS）、会话管理、cdylib 插件系统、mDNS 广播 |
+| **桌面端** | 会话管理器、终端预览、服务器视图、插件配置 | PTY、Actix Web（HTTP + WS）、会话管理、WASM 插件系统、mDNS 广播 |
 | **移动端** | 终端视图、代码浏览器、预设任务、工具箱、设备发现 | WS/HTTP 客户端、远程连接与路由、文件服务、mDNS 发现 |
 
 通信：**WebSocket**（终端双向流）+ **HTTP REST API**（插件 hooks、文件服务）。
@@ -79,14 +117,27 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 | 认证 | JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹 |
 | 加密 | X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS |
 | 设备发现 | mDNS（mdns-sd） |
-| 插件系统 | wasmtime（WASM 组件运行时）+ cdylib 动态加载 |
+| 插件系统 | wasmtime（WASM 组件运行时） |
 | 其他 | shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志 |
+
+## 支持平台
+
+| 平台 | 桌面端 | 移动端 |
+|------|:---:|:---:|
+| Windows | ✔ | — |
+| Android | — | ✔ |
+| macOS / Linux | 预留 | — |
+| iOS | — | 预留 |
+
+当前聚焦 **Windows（桌面端）+ Android（移动端）** 双平台，两端核心能力（终端会话、文件服务、插件系统）均已跑通。跨平台适配工程量较大（系统权限模型、打包分发、平台集成），精力有限暂未覆盖。
+
+> 依托 Tauri 2.0 架构（Rust 后端 + Web 前端），跨平台的可能性与便利性天然保留：核心业务逻辑与 UI 均为跨平台技术，未来扩展 macOS / Linux / iOS 时无需重写业务代码，主要工作是平台适配层（打包、权限、系统 API 对接）。
 
 ## 快速开始
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.94（wasmtime 47 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)）
 
@@ -112,7 +163,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 ## 插件系统
 
-桌面端插件基于 **wasmtime 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行，同时兼容 cdylib 动态库插件。插件可观察和扩展宿主会话行为：
+桌面端插件基于 **wasmtime 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行。插件可观察和扩展宿主会话行为：
 
 - **WASM 沙箱运行时** — 资源受限、内存隔离，插件崩溃不影响宿主
 - **动态加载** — 扫描 `plugins/desktop/{plugin-id}/plugin.json` 运行时加载，无需重编译宿主
@@ -146,6 +197,12 @@ Agent CLI (PTY)
 - **`@bedcode/plugin-sdk-desktop`** / **`@bedcode/plugin-sdk-mobile`**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
 - **开发文档** — `bedcode-desktop/plugin-dev-desktop.md`（桌面端）与 `bedcode-mobile/plugin-dev-mobile.md`（移动端）
+
+### 未来展望
+
+- **本地工具热插拔** — 插件机制已支持运行时加载、启用、停用与卸载：把常用本地工具（终端增强、代码分析、文件处理、快捷命令等）封装为插件，按需安装、即插即用，宿主无需重编译
+- **WASI 演进红利** — 插件运行于 WASM Component Model + wasmtime 沙箱之上，随着 WASI（WebAssembly System Interface）标准化推进（文件系统、网络、时钟、进程等系统能力），插件可在安全沙箱内获得接近原生的系统能力，且跨宿主可移植——同一插件可运行于任何 WASI 兼容环境
+- **个人预言** — 随着 AI 的发展，未来人人都可能构建一套各自领域的本地化应用：用自然语言描述需求，云 vibe coding 生成插件、云构建编译、云算力托管，最终装进宿主即插即用。这套「宿主 + 插件」架构让工具的生产从少数开发者手中解放出来——人人都能直面自己的需求，工具为个人而生
 
 ## 贡献指南
 

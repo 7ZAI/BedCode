@@ -41,7 +41,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
 
 | API | 浏览器行为 |
 |---|---|
-| `commands.execute` | 仅执行插件内 `register` 的前端 handler；**Rust 后端（cdylib/wasm）命令不可用**（记 warn 日志），需真机验证 |
+| `commands.execute` | 仅执行插件内 `register` 的前端 handler；**Rust 后端（WASM）命令不可用**（记 warn 日志），需真机验证 |
 | `terminal` / `session` | 由模拟终端页面驱动，事件名与宿主一致 |
 | `storage` | localStorage 持久化（`bedcode-dev-shell:{pluginId}:{key}`），`flush()` 空操作 |
 | `http.registerEndpoint` | 仅登记展示（真实宿主由 Rust 服务端挂载，浏览器不可达） |
