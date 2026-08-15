@@ -58,6 +58,9 @@ desktop.ini
 logs/
 .dev-logs/
 *.log
+
+# Dev Shell 调试脚本（临时产物，不入库）
+bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/debug-*.mjs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

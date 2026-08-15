@@ -1,12 +1,24 @@
 /** @type {import('tailwindcss').Config} */
 // 语义别名与宿主 bedcode-desktop/tailwind.config.js 保持一致；
 // content 追加 SDK ui 组件（../src）与被调试插件目录（env BEDCODE_DEV_PLUGINS）。
+import { fileURLToPath } from 'node:url'
+import { resolve } from 'node:path'
+
+// 本文件是 ESM（无 __dirname），用 import.meta.url 定位 config 所在目录（dev-shell/ 根）
+const CONFIG_DIR = fileURLToPath(new URL('.', import.meta.url))
+// fast-glob 不支持 `..`（无论相对还是绝对路径），先 resolve 展开为纯绝对路径；
+// glob pattern 分隔符必须是正斜杠（micromatch），Windows 反斜杠需转换
+const SDK_UI_SRC = resolve(CONFIG_DIR, '../src').replace(/\\/g, '/')
+const HOST_SRC = resolve(CONFIG_DIR, '../../../src').replace(/\\/g, '/')
+
 export default {
   content: [
     './index.html',
     './src/**/*.{vue,js,ts,jsx,tsx}',
     // SDK 共享 UI 组件（@bedcode/plugin-sdk-desktop/ui）
-    '../src/**/*.{vue,js,ts,jsx,tsx}',
+    `${SDK_UI_SRC}/**/*.{vue,js,ts,jsx,tsx}`,
+    // 宿主源码（导航条测试页跨项目引用 bedcode-desktop/src 组件）
+    `${HOST_SRC}/**/*.{vue,js,ts,jsx,tsx}`,
     ...(process.env.BEDCODE_DEV_PLUGINS || '')
       .split(',')
       .map((item) => item.trim())

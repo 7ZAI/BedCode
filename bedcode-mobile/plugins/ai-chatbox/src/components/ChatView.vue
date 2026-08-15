@@ -140,7 +140,8 @@
         <Transition name="drawer">
           <div v-if="showConversationDrawer" class="fixed inset-0 z-50">
             <div class="absolute inset-0 bg-[var(--mobile-overlay)]" @click="showConversationDrawer = false"></div>
-            <div class="drawer-panel absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]">
+            <!-- 抽屉面板贴边全高，但内容须避开状态栏/导航栏：用宿主安全区工具类（--safe-area-top/bottom）加内边距，背景色铺满到屏幕边缘保持一体 -->
+            <div class="drawer-panel mobile-header-safe mobile-nav-safe absolute left-0 top-0 bottom-0 w-[82vw] max-w-[320px] flex flex-col overflow-hidden rounded-r-2xl bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)]">
               <ConversationList
                 :conversations="conversations"
                 :current-id="currentConvId"

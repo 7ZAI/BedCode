@@ -24,11 +24,13 @@ import PanelView from './views/PanelView.vue'
 import ToolboxView from './views/ToolboxView.vue'
 import PluginsView from './views/PluginsView.vue'
 import TerminalView from './views/TerminalView.vue'
+// dev-shell 调试视图：TerminalInputRail 组件可视化测试（引用宿主源码）
+import TerminalInputRailDemo from './views/TerminalInputRailDemo.vue'
 import SettingsView from './views/SettingsView.vue'
 import LogPanel from './components/LogPanel.vue'
 import PromptHost from './components/PromptHost.vue'
 
-type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings'
+type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings' | 'rail'
 const activeTab = ref<BaseTab>('toolbox')
 const logOpen = ref(false)
 
@@ -73,6 +75,8 @@ const baseTabs = computed(() => [
   { key: 'toolbox' as const, label: t('devshell.nav.toolbox'), icon: '🧰' },
   { key: 'plugins' as const, label: t('devshell.nav.plugins'), icon: '🧩' },
   { key: 'settings' as const, label: t('devshell.nav.settings'), icon: '⚙️' },
+  // 调试专用：TerminalInputRail 组件测试页
+  { key: 'rail' as const, label: t('devshell.nav.rail'), icon: '📌' },
 ])
 
 const sidebarItems = computed(() => {
@@ -213,6 +217,7 @@ window.addEventListener('beforeunload', () => {
           <Transition name="page" mode="out-in">
             <PanelView v-if="activeView" :key="activeView.pluginId + ':' + activeView.title" @back="backHome" />
             <TerminalView v-else-if="activeTab === 'terminal'" />
+            <TerminalInputRailDemo v-else-if="activeTab === 'rail'" />
             <ToolboxView v-else-if="activeTab === 'toolbox'" />
             <PluginsView v-else-if="activeTab === 'plugins'" />
             <SettingsView v-else />
