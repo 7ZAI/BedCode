@@ -17,6 +17,7 @@ build/
 AGENTS.md
 CLAUDE.md
 CONTEXT.md
+.scratch/
 
 # Tauri / Rust
 **/target/
