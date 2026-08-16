@@ -7,8 +7,10 @@ use rand::Rng;
 use serde::{Deserialize, Serialize, Serializer};
 use std::time::{Duration, Instant};
 
-/// 配对码有效期（秒）
-pub const PAIRING_CODE_TTL_SECS: u64 = 60;
+use crate::system::constants::auth::PAIRING_CODE_DIGITS;
+
+/// 配对码有效期（秒）— re-export 供外部使用
+pub use crate::system::constants::auth::PAIRING_CODE_TTL_SECS;
 
 /// 配对码（6 位数字）
 #[derive(Debug, Clone)]
@@ -27,7 +29,7 @@ impl PairingCode {
     /// 生成新的 6 位数字配对码
     pub fn generate() -> Self {
         let mut rng = rand::thread_rng();
-        let code: String = (0..6).map(|_| rng.gen_range(0..10).to_string()).collect();
+        let code: String = (0..PAIRING_CODE_DIGITS).map(|_| rng.gen_range(0..10).to_string()).collect();
 
         Self {
             code,
@@ -134,5 +136,152 @@ pub struct PendingDevice {
     pub device_fingerprint: String,
     /// 请求时间
     pub requested_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::Value;
+
+    /// 构造 fallback 场景（created_instant=None，模拟反序列化后的对象）
+    fn fallback_code(created_at: DateTime<Utc>) -> PairingCode {
+        PairingCode {
+            code: "123456".to_string(),
+            created_at,
+            expires_in: PAIRING_CODE_TTL_SECS,
+            created_instant: None,
+        }
+    }
+
+    #[test]
+    fn test_generate_creates_six_digit_code() {
+        let code = PairingCode::generate();
+        assert_eq!(code.code.len(), PAIRING_CODE_DIGITS);
+        // 每一位都必须是数字（不能含字母或符号）
+        assert!(code.code.chars().all(|c| c.is_ascii_digit()));
+    }
+
+    #[test]
+    fn test_generate_sets_created_at_expiry_and_instant() {
+        let code = PairingCode::generate();
+        // 创建时间应在当前时刻前后 5 秒内
+        let now = Utc::now();
+        assert!((now - code.created_at).num_seconds().abs() <= 5);
+        assert_eq!(code.expires_in, PAIRING_CODE_TTL_SECS);
+        // 内存态 Instant 必须存在（序列化前走快路径）
+        assert!(code.created_instant.is_some());
+    }
+
+    #[test]
+    fn test_fresh_code_not_expired() {
+        let code = PairingCode::generate();
+        assert!(!code.is_expired());
+        assert!(code.remaining_seconds() > 0);
+        assert!(code.remaining_seconds() <= PAIRING_CODE_TTL_SECS);
+    }
+
+    #[test]
+    fn test_is_expired_fallback_with_old_created_at() {
+        // fallback 分支：created_at 早于 TTL（60s）+ 60s 余量 → 必然过期
+        let past = Utc::now() - chrono::Duration::seconds(120);
+        assert!(fallback_code(past).is_expired());
+    }
+
+    #[test]
+    fn test_is_expired_fallback_with_recent_created_at() {
+        // fallback 分支：created_at 在 1 秒前，远未到 60s TTL
+        let recent = Utc::now() - chrono::Duration::seconds(1);
+        assert!(!fallback_code(recent).is_expired());
+    }
+
+    #[test]
+    fn test_remaining_seconds_uses_backdated_instant() {
+        // created_instant 回拨 10 秒：剩余 = 60 - 10.x 秒，as_secs 截断为 49
+        let code = PairingCode {
+            code: "123456".to_string(),
+            created_at: Utc::now(),
+            expires_in: PAIRING_CODE_TTL_SECS,
+            created_instant: Some(Instant::now() - Duration::from_secs(10)),
+        };
+        assert_eq!(code.remaining_seconds(), 49);
+    }
+
+    #[test]
+    fn test_remaining_seconds_fallback_old_is_zero() {
+        // fallback 分支：过期后剩余时间必须钳制为 0，不能下溢
+        let past = Utc::now() - chrono::Duration::seconds(120);
+        assert_eq!(fallback_code(past).remaining_seconds(), 0);
+    }
+
+    #[test]
+    fn test_remaining_seconds_fallback_recent() {
+        // fallback 分支：5 秒前创建 → 剩余 60 - 5 = 55
+        let recent = Utc::now() - chrono::Duration::seconds(5);
+        assert_eq!(fallback_code(recent).remaining_seconds(), 55);
+    }
+
+    #[test]
+    fn test_verify_accepts_correct_code() {
+        let code = PairingCode::generate();
+        assert!(code.verify(&code.code));
+    }
+
+    #[test]
+    fn test_verify_rejects_wrong_code() {
+        let code = PairingCode::generate();
+        // 生成码与期望值无关，直接写一个不同的字面量
+        let wrong = if code.code == "000000" { "111111" } else { "000000" };
+        assert!(!code.verify(wrong));
+    }
+
+    #[test]
+    fn test_verify_rejects_expired_code() {
+        // fallback 构造过期场景：码正确但已过期 → 校验必须失败
+        let past = Utc::now() - chrono::Duration::seconds(120);
+        let code = fallback_code(past);
+        assert!(!code.verify(&code.code));
+    }
+
+    #[test]
+    fn test_serialize_uses_remaining_time_not_raw_ttl() {
+        // created_instant 回拨 10 秒：序列化 expires_in 应为剩余时间（49），而非原始 TTL 60
+        let code = PairingCode {
+            code: "123456".to_string(),
+            created_at: Utc::now(),
+            expires_in: PAIRING_CODE_TTL_SECS,
+            created_instant: Some(Instant::now() - Duration::from_secs(10)),
+        };
+        let json = serde_json::to_value(&code).unwrap();
+        assert_eq!(json["code"], Value::String("123456".to_string()));
+        assert_eq!(json["expires_in"], Value::from(49));
+    }
+
+    #[test]
+    fn test_deserialize_roundtrip_clears_instant() {
+        let code = PairingCode::generate();
+        let json = serde_json::to_string(&code).unwrap();
+        let decoded: PairingCode = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(decoded.code, code.code);
+        assert_eq!(decoded.created_at, code.created_at);
+        // 反序列化产物只能走 created_at fallback，内存态 Instant 不可恢复
+        assert!(decoded.created_instant.is_none());
+    }
+
+    #[test]
+    fn test_pending_device_roundtrip() {
+        let device = PendingDevice {
+            device_id: "dev-42".to_string(),
+            device_name: "My Phone".to_string(),
+            device_fingerprint: "fp-abc".to_string(),
+            requested_at: Utc::now(),
+        };
+        let json = serde_json::to_string(&device).unwrap();
+        let decoded: PendingDevice = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.device_id, "dev-42");
+        assert_eq!(decoded.device_name, "My Phone");
+        assert_eq!(decoded.device_fingerprint, "fp-abc");
+        assert_eq!(decoded.requested_at, device.requested_at);
+    }
 }
 

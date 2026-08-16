@@ -1,61 +1,54 @@
 <template>
-  <div class="h-full flex flex-col bg-slate-100 dark:bg-dark-900">
+  <div class="h-full flex flex-col bg-[var(--bg-page)]">
     <!-- Header（终端窗口模式下隐藏，由外层统一管理） -->
-    <header v-if="showHeader" class="px-4 py-3 flex items-center justify-between border-b border-slate-200 dark:border-dark-700 bg-white dark:bg-dark-800">
-      <div class="flex items-center gap-3">
-        <div
-          :class="[
-            'w-2 h-2 rounded-full',
-            statusColor
-          ]"
-        ></div>
-        <h3 class="font-medium text-slate-900 dark:text-white">{{ session?.name || $t('desktop.terminal.defaultName') }}</h3>
+    <header
+      v-if="showHeader"
+      class="px-4 py-3 flex items-center justify-between border-b border-[var(--border)] bg-[var(--bg-card)]"
+    >
+      <div class="flex items-center gap-3 min-w-0">
+        <div :class="['w-2 h-2 rounded-full shrink-0', statusColor]"></div>
+        <h3 class="font-medium text-[var(--text-primary)] truncate">
+          {{ session?.name || $t('desktop.terminal.defaultName') }}
+        </h3>
       </div>
 
       <div class="flex items-center gap-2">
-        <!-- Theme Switch -->
-        <select
-          v-model="terminalTheme"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
-          :title="$t('desktop.terminal.theme')"
-        >
-          <option v-for="(name, key) in themeNames" :key="key" :value="key">
-            {{ name }}
-          </option>
-        </select>
-
-        <!-- Font Size -->
-        <select
-          v-model="fontSize"
-          class="bg-slate-100 dark:bg-dark-700 border border-slate-200 dark:border-dark-600 rounded px-2 py-1 text-sm text-slate-700 dark:text-white shadow-xs dark:shadow-none"
-          :title="$t('desktop.terminal.fontSize')"
-        >
-          <option v-for="size in [12, 14, 16, 18, 20]" :key="size" :value="size">
-            {{ size }}px
-          </option>
-        </select>
-
-        <!-- Clear Button -->
+        <Select v-model="terminalTheme" :options="themeSelectOptions" size="sm" :title="$t('desktop.terminal.theme')" />
+        <Select v-model="fontSize" :options="fontSizeSelectOptions" size="sm" :title="$t('desktop.terminal.fontSize')" />
         <Button variant="ghost" size="sm" @click="clearTerminal" :title="$t('desktop.terminal.clearScreen')">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
           </svg>
         </Button>
-
-        <!-- Refresh Format Button -->
         <Button variant="ghost" size="sm" @click="refreshTerminal" :title="$t('desktop.terminal.refreshFormat')">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
           </svg>
         </Button>
-
-        <!-- Plugin Toolbar Extension -->
         <PluginTerminalToolbar />
       </div>
     </header>
 
-    <!-- Terminal Container (xterm.js) -->
-    <div ref="terminalContainerRef" class="flex-1 overflow-hidden relative">
+    <!-- 终端主体：xterm 挂载点（唯一渲染宿主） + 背景图片层 + 滚动到底指示器 -->
+    <div
+      ref="terminalHostRef"
+      class="relative flex-1 min-h-0 overflow-hidden"
+      :style="{ backgroundColor: containerBgColor }"
+    >
+      <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制；
+           铺满容器（cover + center），窗口调整大小时背景自适应缩放 -->
+      <div
+        v-if="bgImageUrl"
+        class="absolute inset-0 z-0 pointer-events-none"
+        :style="{
+          backgroundImage: `url('${bgImageUrl}')`,
+          backgroundSize: 'cover',
+          backgroundPosition: 'center',
+          backgroundRepeat: 'no-repeat',
+          opacity: bgOpacity / 100,
+        }"
+      ></div>
+
       <!-- 滚动到底部指示器：用户向上滚动时显示，点击回到底部 -->
       <transition name="scroll-indicator">
         <button
@@ -69,30 +62,61 @@
           </svg>
         </button>
       </transition>
+
+      <!-- 输入导航条：右侧悬浮，默认透明仅横线，hover 展开列表，点击滚动到对应输入 -->
+      <TerminalInputRail
+        :markers="visibleMarkers"
+        :buffer-length="bufferLength"
+        :is-alt-buffer="isAltBuffer"
+        @navigate="handleNavigate"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
+/**
+ * 终端预览组件 — 桌面端终端渲染内核（xterm.js）
+ *
+ * 设计目标：VS Code 终端体验 — 输出渲染正确无重影、滚动流畅、高吞吐性能。
+ * 分层职责：
+ * - 写入管线：实时输出合并为单次 write（DEC 2026 同步输出包裹），
+ *   渲染器缓存所有变更到下一帧统一绘制，避免逐块绘制的撕裂/重影
+ * - 渲染：WebGL addon（context loss 自动回退），滚动/重绘完全交给
+ *   xterm 渲染循环，不做手动全量 refresh 补丁
+ * - 滚动：onScroll 仅驱动"是否在底部"状态，scrollToBottom 经 rAF 合并，
+ *   同一帧内多次输出只滚动一次
+ * - 尺寸：ResizeObserver + rAF 节流 fit，cols/rows 实际变化才同步 PTY
+ *
+ * 终端窗口模式（TerminalWindowView）下 show-header=false，工具栏由外层
+ * 统一管理；本组件仅通过 defineExpose 暴露主题/字号/清屏/刷新等能力。
+ */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 import type { SessionInfo } from '@/stores/session'
 import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
+import { useToast } from '@/composables/useToast'
 import Button from '@/components/Button.vue'
+import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
-import { usePtyOutput } from '@/composables/usePtyOutput'
-import {
-  useTerminalHistory,
-  initSessionCache,
-  destroySessionCache,
-  resizeHiddenTerminal
-} from '@/composables/useGlobalTerminal'
+import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
+import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
+import TerminalInputRail from '@binblink/plugin-sdk-desktop/ui/terminal-input-rail'
+import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/plugin/events'
+import { invoke } from '@tauri-apps/api/core'
 import '@xterm/xterm/css/xterm.css'
+
+/** Rust 端本地 WS 订阅裁决（服务端基于真源裁决，消费者零猜测） */
+interface SubscribeControl {
+  mode: string
+  minOffset: number
+}
 
 interface Props {
   session?: SessionInfo | null
@@ -106,13 +130,29 @@ const props = withDefaults(defineProps<Props>(), {
   showHeader: true,
 })
 
+const { t } = useI18n()
+const toast = useToast()
+
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
-const terminalContainerRef = ref<HTMLElement | null>(null)
+const terminalHostRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'dracula')
 
-// xterm.js 实例（组件内）
+// 背景图片：设置中存原始文件名（仅用于判断是否启用与回显），
+// 实际图片由本地服务器 /static/terminal-bg 端点提供
+const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
+const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
+const bgImageUrl = ref('')
+
+// DEC Mode 2026 同步输出：包裹一次写入，让 xterm 缓存所有变化到下一帧
+// 统一渲染，避免 WebGL 渲染器逐块绘制产生的视觉撕裂/重影（预编码为字节，
+// 与写入管线统一为 Uint8Array，避免字符串中间态）
+const SYNC_OUTPUT_START = new TextEncoder().encode('\x1b[?2026h')
+const SYNC_OUTPUT_END = new TextEncoder().encode('\x1b[?2026l')
+
+// ==================== xterm 实例 ====================
+
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let webglAddon: WebglAddon | null = null
@@ -122,20 +162,145 @@ let resizeRaf = 0
 // 滚动状态追踪
 const isUserScrolling = ref(false)
 
-// rAF 节流：防止快速连续 scrollToBottom 调用导致 WebGL 重影
-// 多次输出事件在同一帧内触发时，只执行一次 scrollToBottom
+// rAF 节流：同一帧内多次 scrollToBottom 调用只执行一次
 let pendingScrollRaf = 0
+
+// xterm onScroll 取消监听（IDisposable 接口）
+let scrollDisposable: import('@xterm/xterm').IDisposable | null = null
+
+// 选区状态：有选区时 Ctrl+C 应复制而非发送中断（VS Code 终端行为）
+let hasSelection = false
+
+// Ctrl+滚轮缩放监听（passive:false），卸载时移除
+let wheelHandler: ((e: WheelEvent) => void) | null = null
 
 // 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
 let currentLineBuffer = ''
 
+// 输入导航条数据：每次回车提交记录一条输入标记（供右侧 TerminalInputRail 渲染横线）
+const inputMarkers = useTerminalInputMarkers()
+// 模板顶层绑定：ComputedRef 在模板中自动 unwrap
+const { visibleMarkers } = inputMarkers
+// 导航条位置计算依赖的 buffer 总行数 / alternate buffer 状态（输出解析后更新）
+const bufferLength = ref(0)
+const isAltBuffer = ref(false)
+
 const sessionId = computed(() => props.session?.id || '')
 
-// PTY 输出监听（组件内）
-const { output: realtimeOutput, clearOutput } = usePtyOutput(sessionId)
+// ==================== 本地 WS 二进制输出流 ====================
+// 单一通道（历史回放 + 实时推送），字节游标连续性由 composable 守护：
+// - onData：游标校验通过后的原始字节帧，直接入 rAF 写入管线（无去重/无补序）
+// - onReset：服务端裁决 reset（环形头部淘汰/流重建），清屏后回放帧从 minOffset 起重播
+// - onTruncated：min_offset > 0 说明会话开头输出已不可恢复，提示用户
 
-// 终端历史缓存
-const terminalHistory = useTerminalHistory(sessionId.value)
+// ==================== 写入管线 ====================
+// 实时输出合并：同一渲染帧内的多个输出事件合并为一次 write（2026 包裹），
+// 渲染器只刷新一次，高频输出（spinner/进度条/日志洪流）时吞吐显著提升。
+// 为什么用 rAF 而不是 queueMicrotask：Tauri 事件每个都是独立 macrotask，
+// 微任务会在每个事件后立即 flush，无法跨事件合并；rAF 才能把同一帧内
+// 到达的所有事件合为一次 write。窗口最小化时 rAF 暂停，由兜底定时器保证
+// 队列最终被清空。
+
+let writeQueue: Uint8Array[] = []
+let writeQueueBytes = 0
+let flushRaf = 0
+let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+// 单次 write 上限：超过则拆块，让 xterm parser 在块间让出主线程，
+// 避免单帧解析超大字符串导致 UI 卡顿
+const MAX_WRITE_CHUNK = 64 * 1024
+
+function flushWriteQueue() {
+  flushRaf = 0
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  if (!terminal) {
+    // 终端未就绪：丢弃（数据已进全局缓存，可从历史恢复）
+    writeQueue = []
+    writeQueueBytes = 0
+    return
+  }
+  if (writeQueue.length === 0) return
+  const chunks = writeQueue
+  const totalBytes = writeQueueBytes
+  writeQueue = []
+  writeQueueBytes = 0
+
+  // 合并同帧所有事件为单块字节，一次 write
+  const combined = new Uint8Array(totalBytes)
+  let offset = 0
+  for (const chunk of chunks) {
+    combined.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+
+  if (totalBytes <= MAX_WRITE_CHUNK) {
+    terminal.write(wrapSyncOutput(combined))
+    return
+  }
+  // 大块拆分为多次 write（2026 包裹整体）：渲染器仍缓存变更到帧末统一绘制；
+  // subarray 零拷贝切片，避免大块复制
+  terminal.write(SYNC_OUTPUT_START)
+  for (let i = 0; i < combined.length; i += MAX_WRITE_CHUNK) {
+    terminal.write(combined.subarray(i, i + MAX_WRITE_CHUNK))
+  }
+  terminal.write(SYNC_OUTPUT_END)
+}
+
+/** 用 DEC Mode 2026 同步输出序列包裹字节数据 */
+function wrapSyncOutput(data: Uint8Array): Uint8Array {
+  const wrapped = new Uint8Array(SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length)
+  wrapped.set(SYNC_OUTPUT_START, 0)
+  wrapped.set(data, SYNC_OUTPUT_START.length)
+  wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
+  return wrapped
+}
+
+/** 入队输出：合并到下一渲染帧统一写入 */
+function enqueueOutput(data: Uint8Array) {
+  if (data.length === 0) return
+  writeQueue.push(data)
+  writeQueueBytes += data.byteLength
+  if (flushRaf) return
+  // rAF 合并同帧事件；100ms 兜底：窗口最小化（rAF 暂停）时也能及时清空队列
+  flushRaf = requestAnimationFrame(flushWriteQueue)
+  if (!flushTimer) {
+    flushTimer = setTimeout(() => {
+      flushTimer = null
+      if (flushRaf) {
+        cancelAnimationFrame(flushRaf)
+        flushRaf = 0
+      }
+      flushWriteQueue()
+    }, 100)
+  }
+}
+
+// 本地 WS 输出流：
+// - onData 帧已通过字节级连续性校验，与游标无缝衔接，直接写入（无去重）
+// - onReset 时清屏：回放帧随后从 minOffset 流式写入，重建自洽帧
+// - onTruncated 保留原有"历史被截断"提示 UX（触发条件从 minSeq > 0 改为 minOffset > 0）
+const terminalStream = useTerminalOutputStream({
+  onData: ({ data }) => {
+    enqueueOutput(data)
+    if (!isUserScrolling.value) {
+      scrollToBottom()
+    }
+  },
+  onReset: (_control: SubscribeControl) => {
+    if (terminal) {
+      terminal.clear()
+    }
+    // 流重置（清屏重播）：输入位置坐标失效，清除导航条标记
+    inputMarkers.clear()
+  },
+  onTruncated: (minOffset: number) => {
+    console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minOffset=${minOffset}，会话开头输出不可用`)
+    toast.warning(t('desktop.terminal.historyTruncated'))
+  },
+})
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
@@ -307,29 +472,100 @@ const themeNames: Record<string, string> = {
   ubuntu: 'Ubuntu',
 }
 
+// 主题/字号下拉选项：与原生 <option> 一一对应，供共享 Select 使用
+const themeSelectOptions = computed(() =>
+  Object.entries(themeNames).map(([value, label]) => ({ value, label })),
+)
+const fontSizeSelectOptions = computed(() =>
+  [8, 10, 12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+)
+
 function getTheme() {
-  return terminalThemes[terminalTheme.value] || terminalThemes.default
+  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
+  // 背景图片启用时终端背景设为全透明，让图片层透出
+  if (bgImageUrl.value) {
+    return { ...base, background: 'rgba(0, 0, 0, 0)' }
+  }
+  return base
 }
 
-function initWebGL(terminal: Terminal): boolean {
+/** 终端容器底色：背景图片启用时 xterm 背景透明，由容器补上主题背景色 */
+const containerBgColor = computed(() => {
+  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
+  return (base as { background: string }).background
+})
+
+/** 解析背景图片 URL：本地服务器静态端点提供图片（先查实际运行端口，?t= 时间戳防缓存） */
+async function resolveBgImageUrl() {
+  if (!bgImage.value) {
+    bgImageUrl.value = ''
+    return
+  }
+  try {
+    const status = await invoke<{ port: number }>('get_server_status')
+    // 端口为 0 表示服务器尚未启动，回退到配置端口（服务器可能稍后启动）
+    const port = status.port || settingsStore.settings.network.port
+    const url = `http://127.0.0.1:${port}/static/terminal-bg?t=${Date.now()}`
+    // 预加载校验：图片不可达（服务器未启动/404 等）时不启用透明主题，
+    // 避免终端背景已切为全透明、图片却加载不出来，看起来像丢失了背景色
+    await new Promise<void>((resolve, reject) => {
+      const probe = new Image()
+      probe.onload = () => resolve()
+      probe.onerror = () => reject(new Error(`background image not loadable: ${url}`))
+      probe.src = url
+    })
+    bgImageUrl.value = url
+  } catch (e) {
+    console.error('[TerminalPreview] Failed to resolve background image URL:', e)
+    bgImageUrl.value = ''
+  }
+}
+
+// 外部设置变化同步背景图片配置
+watch(() => settingsStore.settings.ui.terminal_bg_image, (v) => {
+  bgImage.value = v || ''
+})
+watch(() => settingsStore.settings.ui.terminal_bg_opacity, (v) => {
+  if (v != null) bgOpacity.value = v
+})
+
+// 背景图片变化：重新解析 URL 并刷新终端主题（透明/不透明切换）
+watch(bgImage, () => {
+  resolveBgImageUrl()
+})
+watch([bgImageUrl, bgOpacity], () => {
+  if (terminal) {
+    terminal.options.theme = getTheme()
+  }
+})
+
+// ==================== 初始化 ====================
+
+/** WebGL 渲染器：加载并处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建） */
+function initWebGL(term: Terminal): boolean {
   try {
     webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
       console.warn('[TerminalPreview] WebGL context lost, attempting recovery')
       webglAddon?.dispose()
       webglAddon = null
+      // 上下文丢失时恢复 DOM 光标
+      term.element?.classList.remove('xterm-hidden-cursor')
       // 延迟 1s 后尝试重新创建 WebGL 渲染器
       setTimeout(() => {
-        if (!terminal || webglAddon) return
+        if (!term || webglAddon) return
         try {
           const newAddon = new WebglAddon()
           newAddon.onContextLoss(() => {
             console.warn('[TerminalPreview] WebGL context lost again')
             newAddon.dispose()
             if (webglAddon === newAddon) webglAddon = null
+            term.element?.classList.remove('xterm-hidden-cursor')
           })
-          terminal.loadAddon(newAddon)
+          term.loadAddon(newAddon)
           webglAddon = newAddon
+          // 恢复后重新隐藏 DOM 光标
+          term.element?.classList.add('xterm-hidden-cursor')
           console.info('[TerminalPreview] WebGL context recovered')
         } catch (e) {
           console.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
@@ -337,7 +573,7 @@ function initWebGL(terminal: Terminal): boolean {
         }
       }, 1000)
     })
-    terminal.loadAddon(webglAddon)
+    term.loadAddon(webglAddon)
     return true
   } catch (e) {
     console.warn('[TerminalPreview] WebGL not supported:', e)
@@ -347,24 +583,44 @@ function initWebGL(terminal: Terminal): boolean {
 }
 
 function initTerminal() {
-  if (!terminalContainerRef.value) return
+  if (!terminalHostRef.value) return
 
   terminal = new Terminal({
+    // 字体与尺寸
     fontSize: fontSize.value,
-    fontFamily: 'Consolas, Monaco, Courier New, monospace',
-    theme: getTheme(),
-    cursorBlink: true,
-    cursorStyle: 'bar',
+    // VS Code 终端默认字体（Windows 11 自带），其后为跨平台回退
+    fontFamily: 'Cascadia Mono, Consolas, Monaco, Courier New, monospace',
+    lineHeight: 1,
+    // 滚动历史行数（与后端事件队列容量对齐）
+    scrollback: TERMINAL_SCROLLBACK,
+    // 即时滚动：关闭平滑滚动，避免 WebGL 滚动动画期间合成器缓存旧帧导致重影
+    smoothScrollDuration: 0,
+    // 光标统一不显示（见下方 DECTCEM 隐藏）；此处配置为 VS Code 风格的
+    // 块光标 + 不闪烁，作为未来恢复光标时的合理默认
+    cursorBlink: false,
+    cursorStyle: 'block',
     cursorWidth: 1,
-    scrollback: 10000,
+    // 交互：与 VS Code 终端一致
+    rightClickSelectsWord: true,
+    altClickMovesCursor: true,
+    drawBoldTextInBrightColors: true,
+    // 主题
+    theme: getTheme(),
+    // 允许背景透明：必须在 open() 前设置，否则渲染器会把 rgba 背景强制转为不透明，
+    // 导致背景图片层被终端背景色遮盖
+    allowTransparency: true,
     allowProposedApi: true,
   })
 
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
-  terminal.open(terminalContainerRef.value)
+  terminal.open(terminalHostRef.value)
   initWebGL(terminal)
+
+  // 移除光标：用 DECTCEM 隐藏序列（\x1b[?25l）在 buffer 层隐藏光标，
+  // WebGL 与 DOM 渲染器均不再绘制（TUI 程序主动发送 \x1b[?25h 时除外）
+  terminal.write('\x1b[?25l')
 
   // WebGL 渲染器激活后，隐藏 DOM 层光标避免双光标问题
   // 只隐藏 DOM 层，保留 WebGL 层光标（WebGL 光标更流畅且不会出现双光标）
@@ -373,71 +629,99 @@ function initTerminal() {
   }
 
   fitAddon.fit()
-
   syncTerminalSize()
 
+  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
       sessionStore.resizeSession(props.session.id, cols, rows)
-      // 同步隐藏终端尺寸，确保行数计算一致
-      resizeHiddenTerminal(props.session.id, cols, rows)
     }
+    // resize 改变 rows → buffer 总行数变化，刷新导航条位置分母
+    bufferLength.value = terminal?.buffer.active.length ?? 0
   })
 
-  // ResizeObserver — 使用 rAF 节流避免快速连续 fit 导致 WebGL 重影
-  let lastCols = 0
-  let lastRows = 0
-  let lastContainerWidth = 0
-  let lastContainerHeight = 0
-  resizeObserver = new ResizeObserver((entries) => {
-    if (!fitAddon || !terminal) return
-
-    const entry = entries[0]
-    if (!entry) return
-
-    const newWidth = Math.round(entry.contentRect.width)
-    const newHeight = Math.round(entry.contentRect.height)
-
-    if (newWidth === lastContainerWidth && newHeight === lastContainerHeight) {
-      return
-    }
-
-    lastContainerWidth = newWidth
-    lastContainerHeight = newHeight
-
-    // 节流：同一帧内多次 resize 只执行一次 fit
-    if (!resizeRaf) {
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = 0
-        if (!fitAddon || !terminal) return
-        fitAddon.fit()
-        const newCols = terminal.cols
-        const newRows = terminal.rows
-
-        const colsChanged = Math.abs(newCols - lastCols) > lastCols * 0.1
-        const rowsChanged = Math.abs(newRows - lastRows) > 5
-
-        if ((colsChanged || rowsChanged) && lastCols > 0 && lastRows > 0) {
-          syncTerminalSize()
-          refreshTerminal()
-        } else {
-          syncTerminalSize()
-        }
-
-        lastCols = newCols
-        lastRows = newRows
-      })
-    }
+  // ResizeObserver — rAF 节流，避免快速连续 fit 导致的重复渲染；
+  // 仅当 cols/rows 实际变化时同步 PTY（xterm 自身负责重绘）
+  resizeObserver = new ResizeObserver(() => {
+    if (resizeRaf) return
+    resizeRaf = requestAnimationFrame(() => {
+      resizeRaf = 0
+      if (!fitAddon || !terminal) return
+      const cols = terminal.cols
+      const rows = terminal.rows
+      fitAddon.fit()
+      if (terminal.cols !== cols || terminal.rows !== rows) {
+        syncTerminalSize()
+      }
+    })
   })
-  resizeObserver.observe(terminalContainerRef.value)
+  resizeObserver.observe(terminalHostRef.value)
+
+  // 滚动状态：xterm onScroll API（比 DOM addEventListener 更可靠，
+  // 不会因 xterm 内部 DOM 重建而丢失监听）；仅更新"是否在底部"状态，
+  // 重绘完全交给 xterm 渲染循环，不做手动 refresh 补丁
+  scrollDisposable = terminal.onScroll(() => {
+    if (!terminal) return
+    const buffer = terminal.buffer.active
+    const viewportBottom = buffer.viewportY + terminal.rows
+    isUserScrolling.value = viewportBottom < buffer.length - 1
+  })
+
+  // buffer 变化（输出解析完成）：刷新导航条的总行数与 alternate buffer 状态；
+  // onWriteParsed 在每次 write 解析完成后触发，覆盖输出/清屏/TUI 切换全部场景
+  terminal.onWriteParsed(() => {
+    if (!terminal) return
+    bufferLength.value = terminal.buffer.active.length
+    isAltBuffer.value = terminal.buffer.active.type === 'alternate'
+  })
+
+  // 选区状态跟踪：有选区时 Ctrl+C 复制（VS Code 终端行为），不发送 SIGINT
+  terminal.onSelectionChange(() => {
+    hasSelection = !!terminal?.getSelection()
+  })
+
+  // Ctrl+滚轮缩放字号（VS Code 终端行为）；passive:false 才能阻止默认滚动
+  wheelHandler = (e: WheelEvent) => {
+    if (!e.ctrlKey) return
+    e.preventDefault()
+    const sizes = [8, 10, 12, 14, 16, 18, 20]
+    const idx = sizes.indexOf(fontSize.value)
+    const next = Math.min(
+      sizes.length - 1,
+      Math.max(0, idx < 0 ? 0 : idx + (e.deltaY < 0 ? 1 : -1)),
+    )
+    fontSize.value = sizes[next]
+  }
+  terminalHostRef.value.addEventListener('wheel', wheelHandler, { passive: false })
 
   // 键盘输入
   terminal.onData((data: string) => {
     if (!props.session) return
+
+    // 有选区时 Ctrl+C 仅复制（VS Code 终端行为），不向 PTY 发送中断
+    if (data === '\x03' && hasSelection) {
+      const sel = terminal?.getSelection()
+      if (sel) {
+        navigator.clipboard?.writeText(sel).catch(() => {})
+      }
+      return
+    }
+
     sessionStore.writeToSession(props.session.id, data)
+
+    // 多行粘贴（一次事件含换行）：每行视为一次独立输入，逐行记录
+    if (data.length > 1 && /[\r\n]/.test(data)) {
+      for (const line of data.split(/\r\n|\r|\n/)) {
+        if (line.length > 0) inputMarkers.record(terminal!, line)
+      }
+      currentLineBuffer = ''
+      return
+    }
 
     // 追踪当前行输入
     if (data === '\r' || data === '\n') {
+      // 回车提交：先记录本次输入（供导航条），再清空追踪
+      inputMarkers.record(terminal!, currentLineBuffer)
       currentLineBuffer = ''
     } else if (data === '\x7f' || data === '\b') {
       currentLineBuffer = currentLineBuffer.slice(0, -1)
@@ -451,6 +735,7 @@ function initTerminal() {
   })
 }
 
+/** 同步当前终端尺寸到后端会话（PTY cols/rows） */
 function syncTerminalSize() {
   if (!terminal || !props.session) return
   const cols = terminal.cols
@@ -460,16 +745,15 @@ function syncTerminalSize() {
   }
 }
 
+/** 刷新格式：重新 fit 终端尺寸并同步到 PTY，不清除内容 */
 function refreshTerminal() {
-  // 刷新格式：重新 fit 终端尺寸并同步到 PTY，不清除内容
   if (!fitAddon || !terminal || !props.session) return
   fitAddon.fit()
   syncTerminalSize()
 }
 
+/** 滚动到底：rAF 合并，同一帧内多次调用只执行一次 */
 function scrollToBottom() {
-  // rAF 节流：同一帧内多次调用只执行一次 scrollToBottom
-  // 避免 WebGL 渲染器双缓冲不同步导致的重影
   if (!pendingScrollRaf) {
     pendingScrollRaf = requestAnimationFrame(() => {
       pendingScrollRaf = 0
@@ -478,50 +762,25 @@ function scrollToBottom() {
   }
 }
 
-function handleScroll() {
-  // 使用 xterm.js buffer 判断是否在底部，比手动计算 scrollTop 更准确
-  if (!terminal) return
-  const buffer = terminal.buffer.active
-  const viewportTop = terminal.buffer.active.viewportY
-  const viewportBottom = viewportTop + terminal.rows
-  const totalLines = buffer.length
-  isUserScrolling.value = viewportBottom < totalLines - 1
-}
-
-/// 用户点击"回到底部"按钮：重置滚动状态并滚到底
+/** 用户点击"回到底部"按钮：重置滚动状态并滚到底 */
 function scrollToBottomManual() {
   isUserScrolling.value = false
   terminal?.scrollToBottom()
 }
 
+/** 导航条点击：滚动终端到指定 buffer 行（触发 onScroll → 自动显示"回到底部"指示器） */
+function handleNavigate(line: number) {
+  terminal?.scrollToLine(line)
+}
+
 function clearTerminal() {
   if (!terminal) return
   terminal.clear()
-  clearOutput()
-  terminalHistory.clear()
+  // 清屏后历史输入位置全部失效，同步清除导航条标记
+  inputMarkers.clear()
 }
 
-// 增量写入计数器
-let lastOutputLength = 0
-
-// 监听 PTY 输出：写入组件 xterm + 同步到全局缓存
-watch(realtimeOutput, (newOutput) => {
-  if (!terminal) return
-
-  const newLength = newOutput.length
-  if (newLength > lastOutputLength) {
-    const newData = newOutput.slice(lastOutputLength)
-    // 写入组件 xterm
-    terminal.write(newData)
-    // 同步到全局缓存
-    terminalHistory.append(newData)
-    lastOutputLength = newLength
-  }
-
-  if (!isUserScrolling.value) {
-    scrollToBottom()
-  }
-}, { deep: true })
+// ==================== 设置同步 ====================
 
 // 字体大小变化
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
@@ -551,69 +810,6 @@ watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
   }
 }, { immediate: true })
 
-// 会话变化
-watch(sessionId, async (newId, oldId) => {
-  if (newId !== oldId) {
-    if (oldId) {
-      clearTerminal()
-      lastOutputLength = 0
-    }
-
-    if (newId) {
-      lastOutputLength = 0
-      await nextTick()
-
-      if (terminal) {
-        syncTerminalSize()
-      }
-
-      if (props.session?.status === 'starting') {
-        await sessionStore.startSession(newId)
-      }
-    }
-  }
-}, { immediate: true })
-
-onMounted(async () => {
-  await nextTick()
-
-  // 确保会话缓存已初始化（如果已存在则跳过）
-  if (sessionId.value) {
-    initSessionCache(sessionId.value)
-  }
-
-  initTerminal()
-
-  // 监听 AI 插件请求当前终端输入
-  pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
-    pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
-  })
-
-  // 显示终端 fit 后，同步隐藏终端尺寸
-  if (terminal && sessionId.value) {
-    resizeHiddenTerminal(sessionId.value, terminal.cols, terminal.rows)
-  }
-
-  // 添加滚动事件监听
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.addEventListener('scroll', handleScroll)
-  }
-
-  // 从全局缓存恢复历史
-  if (terminal && sessionId.value) {
-    const history = terminalHistory.getHistory()
-    if (history) {
-      terminal.write(history)
-      // 更新计数器，避免重复写入
-      lastOutputLength = history.length
-      scrollToBottom()
-    }
-  }
-
-  terminal?.focus()
-})
-
 // 主题变化：更新终端 + 持久化
 let themeSaveTimeout: ReturnType<typeof setTimeout> | null = null
 watch(terminalTheme, (newTheme) => {
@@ -635,9 +831,95 @@ watch(() => settingsStore.settings.ui.terminal_theme, (newTheme) => {
   }
 })
 
+// 会话变化
+// 游标重置（新会话坐标空间独立），断开旧流并连接新流；
+// 历史回放由服务端裁决后以二进制帧流式送达（无需 invoke 拉取）。
+// 首次挂载（terminal 未就绪）只握手不订阅，订阅由 onMounted 触发
+let streamMounted = false
+watch(sessionId, async (newId, oldId) => {
+  if (newId !== oldId) {
+    if (oldId) {
+      clearTerminal()
+    }
+
+    if (newId) {
+      await nextTick()
+
+      if (terminal) {
+        syncTerminalSize()
+      }
+
+      if (props.session?.status === 'starting') {
+        await sessionStore.startSession(newId)
+      }
+
+      terminalStream.start(newId)
+      if (streamMounted) {
+        terminalStream.subscribe()
+      }
+    } else {
+      terminalStream.stop()
+    }
+  }
+}, { immediate: true })
+
+// 会话状态变化：停止/出错时断开输出流；重新运行时恢复订阅
+watch(() => props.session?.status, (status) => {
+  if (!sessionId.value) return
+  if (status === 'stopped' || status === 'error') {
+    terminalStream.stop()
+  } else if (status === 'running') {
+    terminalStream.start(sessionId.value)
+    terminalStream.subscribe()
+  }
+})
+
+onMounted(async () => {
+  await nextTick()
+
+  initTerminal()
+
+  // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
+  // 首次挂载时若已有背景图，通过一次主题刷新生效）
+  await resolveBgImageUrl()
+  if (terminal) {
+    terminal.options.theme = getTheme()
+  }
+
+  // 监听 AI 插件请求当前终端输入
+  pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
+    pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
+  })
+
+  // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
+  terminalStream.start(sessionId.value)
+  terminalStream.subscribe()
+  streamMounted = true
+
+  terminal?.focus()
+})
+
 onUnmounted(() => {
+  // 断开本地 WS 输出流（停止重连）
+  terminalStream.stop()
+
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
+
+  // 清理输入导航条标记（dispose 全部 xterm marker）
+  inputMarkers.clear()
+
+  // 清理 xterm onScroll 监听
+  if (scrollDisposable) {
+    scrollDisposable.dispose()
+    scrollDisposable = null
+  }
+
+  // 清理 Ctrl+滚轮缩放监听
+  if (wheelHandler && terminalHostRef.value) {
+    terminalHostRef.value.removeEventListener('wheel', wheelHandler)
+    wheelHandler = null
+  }
 
   // 清理待处理的滚动 rAF
   if (pendingScrollRaf) {
@@ -645,15 +927,32 @@ onUnmounted(() => {
     pendingScrollRaf = 0
   }
 
+  // 清理写入队列（未 flush 的数据仍存于服务端环形，重开窗口可恢复）
+  if (flushRaf) {
+    cancelAnimationFrame(flushRaf)
+    flushRaf = 0
+  }
+  if (flushTimer) {
+    clearTimeout(flushTimer)
+    flushTimer = null
+  }
+  writeQueue.length = 0
+  writeQueueBytes = 0
+
   // 清理 resize rAF
   if (resizeRaf) {
     cancelAnimationFrame(resizeRaf)
     resizeRaf = 0
   }
 
-  const viewport = terminalContainerRef.value?.querySelector('.xterm-viewport') as HTMLElement
-  if (viewport) {
-    viewport.removeEventListener('scroll', handleScroll)
+  // 清理设置保存定时器
+  if (fontSizeSaveTimeout) {
+    clearTimeout(fontSizeSaveTimeout)
+    fontSizeSaveTimeout = null
+  }
+  if (themeSaveTimeout) {
+    clearTimeout(themeSaveTimeout)
+    themeSaveTimeout = null
   }
 
   if (resizeObserver) {
@@ -683,9 +982,13 @@ defineExpose({
 </script>
 
 <style scoped>
+/* ==================== xterm 渲染层 ==================== */
+
 :deep(.xterm) {
   height: 100%;
-  padding: 8px;
+  /* 保证 xterm 画布位于背景图片层之上 */
+  position: relative;
+  z-index: 1;
 }
 
 :deep(.xterm-viewport) {
@@ -693,50 +996,40 @@ defineExpose({
   overflow-x: hidden;
 }
 
+/* xterm.css 默认为 .xterm-viewport 设置 background-color:#000（不透明黑）。
+   xterm 6 中滚动已由 .xterm-scrollable-element 接管，但该元素仍是覆盖整个
+   终端区域的定位层，位于背景图片层之上、渲染画布之下。置为透明后背景图片
+   才能透出；未设置背景图片时主题背景色由画布/滚动层绘制，此覆盖无副作用。
+   选择器带 .xterm 前缀，优先级高于 xterm.css 的 `.xterm .xterm-viewport`，
+   不依赖样式表加载顺序。 */
+:deep(.xterm .xterm-viewport) {
+  background-color: transparent;
+}
+
+/* xterm 6 中 .xterm-viewport 不承载滚动（内容高度=视口高度，滚动由
+   .xterm-scrollable-element 的 JS 状态驱动），其原生滚动条永远满格且拖不动，
+   会误导用户认为滚动失效。隐藏它，滚动条统一由 xterm 自绘 slider 提供。 */
 :deep(.xterm-viewport)::-webkit-scrollbar {
-  width: 6px;
+  display: none;
 }
 
-:deep(.xterm-viewport)::-webkit-scrollbar-track {
-  background: transparent;
-  margin: 8px 2px;
-  border-radius: 3px;
+/* xterm 自绘滚动条（.xterm-scrollable-element > .scrollbar）默认仅鼠标悬停
+   时显示（VS Code 风格），且 slider 高度可能只有最小保护值，深色主题下几乎
+   不可见。强制常显，让用户能发现并拖动真正的滚动条。 */
+:deep(.xterm .xterm-scrollable-element > .scrollbar.vertical) {
+  opacity: 1 !important;
+  transition: none;
 }
 
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.25);
-  border-radius: 3px;
-  transition: background 0.2s ease, width 0.2s ease;
-}
-
-:deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(128, 128, 128, 0.5);
-}
-
-:deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(128, 128, 128, 0.35);
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.12);
-  border-radius: 3px;
-}
-
-.dark :deep(.xterm-viewport)::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
-}
-
-.dark :deep(.xterm-viewport:hover)::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-}
-
-/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题 */
-/* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
+/* WebGL 模式下隐藏 DOM 层光标（双光标防御）。
+   光标已通过 DECTCEM（\x1b[?25l）在 buffer 层移除，此规则作为渲染层
+   冗余保护：若未来恢复光标显示，WebGL 与 DOM 层不会同时绘制 */
 :deep(.xterm-hidden-cursor .xterm-cursor) {
   display: none !important;
 }
 
-/* 滚动到底部指示器 */
+/* ==================== 滚动到底指示器 ==================== */
+
 .scroll-to-bottom-btn {
   position: absolute;
   bottom: 16px;

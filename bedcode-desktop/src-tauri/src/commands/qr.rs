@@ -1,5 +1,6 @@
 //! QR Token Commands
 
+use crate::system::constants::network::{LOCALHOST_IP, IP_LOOPBACK_PREFIX, IP_LINK_LOCAL_PREFIX};
 use crate::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -54,8 +55,8 @@ pub async fn get_qr_connection_info(
             let host = host.or_else(|| {
                 crate::commands::system::get_local_ip_addresses()
                     .into_iter()
-                    .find(|ip| !ip.starts_with("127.") && !ip.starts_with("169.254."))
-            }).unwrap_or_else(|| "127.0.0.1".to_string());
+                    .find(|ip| !ip.starts_with(IP_LOOPBACK_PREFIX) && !ip.starts_with(IP_LINK_LOCAL_PREFIX))
+            }).unwrap_or_else(|| LOCALHOST_IP.to_string());
 
             let config = crate::system::config::AppConfig::load(
                 &app_handle.path().app_data_dir()

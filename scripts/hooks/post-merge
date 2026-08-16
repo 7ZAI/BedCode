@@ -1,0 +1,5 @@
+#!/bin/sh
+# post-merge：成功合并后（如 dev → uat/master），落在 uat/master 时自动剔除文档文件。
+# 若合并产生 modify/delete 冲突（hook 不会在冲突时运行），手动执行：
+#   sh scripts/doc-tracking.sh untrack && git commit
+sh "$(dirname "$0")/../doc-tracking.sh" untrack post-merge

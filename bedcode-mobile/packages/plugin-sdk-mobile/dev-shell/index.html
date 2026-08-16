@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>BedCode Dev Shell</title>
+    <script>
+      // 首帧无闪烁主题：按持久化偏好 / 系统偏好预置 html.dark（默认深色）
+      ;(function () {
+        try {
+          var t = localStorage.getItem('bedcode-dev-shell:theme')
+          var dark
+          if (t === 'dark' || t === 'light') {
+            dark = t === 'dark'
+          } else {
+            dark = window.matchMedia('(prefers-color-scheme: dark)').matches
+          }
+          document.documentElement.classList.toggle('dark', dark)
+        } catch (e) {}
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

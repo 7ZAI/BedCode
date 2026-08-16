@@ -1,19 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
-import { createRouter, createWebHistory } from 'vue-router'
-import { setActivePinia, createPinia } from 'pinia'
+import { createPinia, setActivePinia } from 'pinia'
+import i18n from '@/locales'
 import SessionsConfigView from '@/views/SessionsConfigView.vue'
+import { useSessionStore } from '@/stores/session'
 
-// Mock Tauri APIs
+// Mock Tauri invoke（视图在 onMounted 中调用 get_startup_time）
 vi.mock('@tauri-apps/api/core', () => ({
-  invoke: vi.fn().mockResolvedValue([]),
+  invoke: vi.fn().mockResolvedValue(100),
 }))
 
-vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(() => Promise.resolve(() => {})),
+// Mock useDesktopCommands（session store 的数据源）
+vi.mock('@/composables/useDesktopCommands', () => ({
+  listSessionConfigs: vi.fn(async () => []),
+  listSessions: vi.fn(async () => []),
+  createSessionNoStart: vi.fn(async () => 'session-1'),
+  startExistingSession: vi.fn(async () => {}),
+  killSession: vi.fn(async () => {}),
+  deleteSession: vi.fn(async () => {}),
+  restartSession: vi.fn(async () => 'session-1'),
+  createSessionConfig: vi.fn(async () => ({})),
+  deleteSessionConfig: vi.fn(async () => {}),
+  updateSessionConfig: vi.fn(async () => {}),
 }))
 
-// Mock composables
 vi.mock('@/composables/useToast', () => ({
   useToast: () => ({
     success: vi.fn(),
@@ -22,22 +32,20 @@ vi.mock('@/composables/useToast', () => ({
   }),
 }))
 
-vi.mock('@/composables/useTauri', () => ({
-  useSessionConfig: () => ({
-    loadConfigs: vi.fn().mockResolvedValue(undefined),
-    configs: { value: [] },
-    createConfig: vi.fn().mockResolvedValue({}),
-    deleteConfig: vi.fn().mockResolvedValue(undefined),
-  }),
-  useSession: () => ({
-    loadSessions: vi.fn().mockResolvedValue(undefined),
-    sessions: { value: [] },
-    startSession: vi.fn().mockResolvedValue('session-1'),
-    killSession: vi.fn().mockResolvedValue(undefined),
+vi.mock('@/composables/useSessionWindows', () => ({
+  useSessionWindows: () => ({
+    closeTerminalWindow: vi.fn(),
   }),
 }))
 
-// Mock components - must match actual file names
+vi.mock('@/composables/useSessionStatusListener', () => ({
+  useSessionStatusListener: () => ({
+    startListening: vi.fn().mockResolvedValue(undefined),
+    stopListening: vi.fn(),
+  }),
+}))
+
+// Mock 子组件
 vi.mock('@/components/Button.vue', () => ({
   default: {
     template: '<button @click="$emit(\'click\')"><slot /><slot name="icon" /></button>',
@@ -47,291 +55,169 @@ vi.mock('@/components/Button.vue', () => ({
 
 vi.mock('@/components/Modal.vue', () => ({
   default: {
-    template: '<div v-if="modelValue" class="modal"><slot /></div>',
+    template: '<div v-if="modelValue" class="modal"><slot /><slot name="footer" /></div>',
     props: ['modelValue', 'title', 'size'],
-  },
-}))
-
-// Mock child components with correct paths
-vi.mock('@/components/SessionCard.vue', () => ({
-  default: {
-    template: '<div class="session-card" @click="$emit(\'start\')"><slot /></div>',
-    props: ['config'],
-    emits: ['start', 'edit', 'delete'],
   },
 }))
 
 vi.mock('@/components/SessionForm.vue', () => ({
   default: {
-    template: '<form @submit.prevent="$emit(\'save\')"><slot /></form>',
+    template: '<form @submit.prevent="$emit(\'save\', { name: \'New\', environment: \'windows\', wslDistro: \'\', workingDir: \'\', command: \'claude\', autoStart: false })"><slot /></form>',
     props: ['config'],
     emits: ['save', 'cancel'],
   },
 }))
 
-// Create mock router
-const mockRouter = createRouter({
-  history: createWebHistory(),
-  routes: [
-    { path: '/', component: { template: '<div />' } },
-    { path: '/desktop/sessions', component: { template: '<div />' } },
-  ],
-})
+vi.mock('@/components/Spinner.vue', () => ({
+  default: {
+    template: '<div class="spinner" />',
+    props: ['size', 'color'],
+  },
+}))
+
+function mountView() {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  const wrapper = mount(SessionsConfigView, {
+    global: {
+      plugins: [pinia, i18n],
+    },
+  })
+  return { wrapper, pinia }
+}
 
 describe('SessionsConfigView', () => {
   beforeEach(() => {
-    setActivePinia(createPinia())
     vi.clearAllMocks()
   })
 
-  it('should render header with title and create button', async () => {
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-      },
-    })
-
+  it('should render header with title', async () => {
+    const { wrapper } = mountView()
     await flushPromises()
 
-    expect(wrapper.find('header').exists()).toBe(true)
-    expect(wrapper.find('h2').text()).toContain('会话管理')
+    expect(wrapper.find('.wb-toolbar').exists()).toBe(true)
+    expect(wrapper.find('h2').text()).toContain('会话')
   })
 
   it('should show empty state when no configs', async () => {
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-      },
-    })
-
+    const { wrapper } = mountView()
     await flushPromises()
 
-    // Should show empty state message
     expect(wrapper.text()).toContain('暂无会话配置')
   })
 
   it('should show create dialog when clicking new button', async () => {
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, createPinia()],
-        stubs: {
-          Button: {
-            template: '<button @click="$emit(\'click\')"><slot /></button>',
-            props: ['variant'],
-          },
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-      },
-    })
-
+    const { wrapper } = mountView()
     await flushPromises()
 
-    // Find the new session button
-    const buttons = wrapper.findAll('button')
-    const newSessionBtn = buttons.find(b => b.text().includes('新建配置'))
+    const newSessionBtn = wrapper.findAll('button').find((b) => b.text().includes('新建配置'))
+    expect(newSessionBtn).toBeDefined()
 
-    if (newSessionBtn) {
-      await newSessionBtn.trigger('click')
-      await flushPromises()
+    await newSessionBtn!.trigger('click')
+    await flushPromises()
 
-      // Should show create dialog
-      expect(wrapper.vm.showCreateDialog).toBe(true)
-    }
+    // Modal stub 渲染，说明对话框已打开
+    expect(wrapper.find('.modal').exists()).toBe(true)
   })
 
-  it('should render session cards when configs exist', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
+  it('should render config cards when configs exist', async () => {
+    const { wrapper, pinia } = mountView()
+    await flushPromises()
 
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: {
-            template: '<div class="session-card">{{ config.name }}</div>',
-            props: ['config'],
-          },
-          SessionForm: true,
-        },
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.configs = [
+      {
+        id: '1',
+        name: 'Test Session',
+        environment: 'windows',
+        wsl_distro: undefined,
+        working_dir: 'C:\\test',
+        command: 'claude',
+        auto_start: false,
       },
-    })
-
-    // Manually set configs in store
-    const sessionStore = wrapper.vm.$pinia.state.value.session
-    if (sessionStore) {
-      sessionStore.configs = [
-        {
-          id: '1',
-          name: 'Test Session',
-          environment: 'windows',
-          workingDir: 'C:\\test',
-          command: 'claude',
-          autoStart: false,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-        },
-      ]
-    }
+    ]
 
     await flushPromises()
     wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    // Check if session card is rendered
-    const cards = wrapper.findAll('.session-card')
-    expect(cards.length).toBeGreaterThanOrEqual(0)
-  })
-
-  it('should show running sessions section when sessions exist', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-      },
-    })
-
-    // Manually set sessions in store
-    const sessionStore = wrapper.vm.$pinia.state.value.session
-    if (sessionStore) {
-      sessionStore.sessions = [
-        {
-          id: 'session-1',
-          configId: '1',
-          name: 'Running Session',
-          status: 'Running',
-          createdAt: new Date().toISOString(),
-          startedAt: new Date().toISOString(),
-        },
-      ]
-    }
-
-    await flushPromises()
-    wrapper.vm.$forceUpdate()
-    await flushPromises()
-
-    // Check if running sessions section is shown
-    const runningSection = wrapper.find('.border-t')
-    if (runningSection.exists()) {
-      expect(runningSection.text()).toContain('运行中的会话')
-    }
+    // 配置卡片展示名称/工作目录/命令（mono 技术值）
+    expect(wrapper.text()).toContain('Test Session')
+    expect(wrapper.text()).toContain('C:\\test')
+    expect(wrapper.text()).toContain('claude')
   })
 
   it('should call store loadConfigs on mount', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const loadConfigsSpy = vi.fn()
-
-    mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-        mocks: {
-          sessionStore: {
-            loadConfigs: loadConfigsSpy,
-            configs: [],
-            sessions: [],
-          },
-        },
-      },
-    })
-
+    const commands = await import('@/composables/useDesktopCommands')
+    mountView()
     await flushPromises()
 
-    // The component should call loadConfigs in onMounted
-    // Since we're using actual store, we can verify through the pinia state
-    expect(true).toBe(true)
+    expect(commands.listSessionConfigs).toHaveBeenCalled()
+    expect(commands.listSessions).toHaveBeenCalled()
   })
 })
 
 describe('SessionsConfigView Integration', () => {
-  it('should handle session lifecycle', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
-
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
-      },
-    })
-
-    await flushPromises()
-
-    // Verify store is accessible
-    expect(wrapper.vm.sessionStore).toBeDefined()
+  beforeEach(() => {
+    vi.clearAllMocks()
   })
 
   it('should handle config editing', async () => {
-    const pinia = createPinia()
-    setActivePinia(pinia)
+    const { wrapper, pinia } = mountView()
+    await flushPromises()
 
-    const wrapper = mount(SessionsConfigView, {
-      global: {
-        plugins: [mockRouter, pinia],
-        stubs: {
-          Button: true,
-          Modal: true,
-          SessionCard: true,
-          SessionForm: true,
-        },
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.configs = [
+      {
+        id: '1',
+        name: 'Test',
+        environment: 'windows',
+        wsl_distro: undefined,
+        working_dir: 'C:\\test',
+        command: 'claude',
+        auto_start: false,
       },
-    })
-
+    ]
+    await flushPromises()
+    wrapper.vm.$forceUpdate()
     await flushPromises()
 
-    // Set editing config
-    const testConfig = {
-      id: '1',
-      name: 'Test',
-      environment: 'windows',
-      workingDir: 'C:\\test',
-      command: 'claude',
-      autoStart: false,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    }
-
-    wrapper.vm.editingConfig = testConfig
-    wrapper.vm.showCreateDialog = true
-
+    // 触发配置卡片上的"编辑"按钮
+    const editBtn = wrapper.findAll('button').find((b) => b.text().includes('编辑'))
+    expect(editBtn).toBeDefined()
+    await editBtn!.trigger('click')
     await flushPromises()
 
-    expect(wrapper.vm.editingConfig).toEqual(testConfig)
-    expect(wrapper.vm.showCreateDialog).toBe(true)
+    // 编辑对话框应打开
+    expect(wrapper.find('.modal').exists()).toBe(true)
+  })
+
+  it('should delete config through confirm dialog', async () => {
+    const { wrapper, pinia } = mountView()
+    await flushPromises()
+
+    const sessionStore = useSessionStore(pinia)
+    sessionStore.configs = [
+      {
+        id: '1',
+        name: 'To Delete',
+        environment: 'windows',
+        wsl_distro: undefined,
+        working_dir: '',
+        command: 'claude',
+        auto_start: false,
+      },
+    ]
+    await flushPromises()
+    wrapper.vm.$forceUpdate()
+    await flushPromises()
+
+    const deleteBtn = wrapper.findAll('button').find((b) => b.text().includes('删除'))
+    expect(deleteBtn).toBeDefined()
+    await deleteBtn!.trigger('click')
+    await flushPromises()
+
+    // 删除确认对话框打开
+    expect(wrapper.find('.modal').exists()).toBe(true)
   })
 })

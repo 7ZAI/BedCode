@@ -8,11 +8,15 @@
 build/
 *.local
 
+# CodeGraph index
+.codegraph/
+
 # Documentation
 **/docs/
 
-AGENTS.md
 CLAUDE.md
+CONTEXT.md
+.scratch/
 
 # Tauri / Rust
 **/target/
@@ -20,16 +24,26 @@ CLAUDE.md
 **/src-tauri/bedcode.db
 **/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
+**/bedcode-desktop/plugins/auto-task/scripts/__pycache__
+
+# 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
+**/src-tauri/resources/plugins/
+**/src-tauri/gen/android/app/src/main/assets/resources/plugins/
 
 # IDE and editors
 .idea/
+.claude/
+.pi/
+.codex/
+.opencode/
+opencode.jsonc
 .vscode/
+.VSCodeCounter/
 *.swp
 *.swo
 *.sublime-workspace
 *.sublime-project
 *.iml
-
 # OS generated files
 .DS_Store
 .DS_Store?
@@ -39,10 +53,15 @@ CLAUDE.md
 ehthumbs.db
 Thumbs.db
 desktop.ini
+*.stackdump
 
 # Logs
 logs/
+.dev-logs/
 *.log
+
+# Dev Shell 调试脚本（临时产物，不入库）
+bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/debug-*.mjs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -83,7 +102,10 @@ temp/
 .claude/settings.json
 .claude/settings.local.json
 .claude/*.log.*
-.claude/bedcode_hook.py
+.claude/auto_task_hook.py
+
+# Pi session files (local, not for commit)
+.pi/sessions/
 
 # Superpowers temporary files (brainstorm state, etc.)
 .superpowers/brainstorm/
@@ -105,3 +127,9 @@ temp/
 *.jks
 key.properties
 release.keystore
+
+# Firecrawl web-scrape cache
+.firecrawl/
+
+# vite config 打包临时产物（崩溃/中断时残留）
+**/vite.config.ts.timestamp-*.mjs

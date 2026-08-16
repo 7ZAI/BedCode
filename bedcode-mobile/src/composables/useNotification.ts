@@ -1,27 +1,61 @@
 /**
  * Notification - 移动端系统通知管理
  *
- * 基于 @tauri-apps/plugin-notification 实现任务状态通知和连接状态通知，
- * 替代原 Kotlin TaskNotificationPlugin。
+ * 基于自定义 Android 插件（TaskNotificationPlugin）实现任务状态通知和连接状态通知，
+ * 支持震动/声音分开控制，与设置页开关一一对应：
+ * - vibrate：所有提醒通知是否震动
+ * - soundOnTaskComplete：任务完成（completed）是否播放提示音
+ * - notifyOnWaiting：手动模式下等待输入（asking）是否提醒
  *
+ * 通知权限（Android 13+）由 TaskNotificationPlugin 原生实现检查与请求；
  * 前台服务通知仍由 Kotlin ForegroundServicePlugin 处理。
  */
-import { sendNotification, isPermissionGranted, requestPermission } from '@tauri-apps/plugin-notification'
+import { invoke } from '@tauri-apps/api/core'
 import i18n from '@/locales'
 import { usePlatform } from '@/composables/usePlatform'
 
-/** 判断任务状态是否需要提醒（震动/声音） */
-function shouldAlertForStatus(
+/** 提醒标志：震动与声音分开控制 */
+interface AlertFlags {
+  vibrate: boolean
+  sound: boolean
+}
+
+/**
+ * 计算任务状态通知的提醒标志
+ *
+ * 提醒状态判定：
+ * - manual 模式：asking 受 notifyOnWaiting 控制；completed 受 soundOnTaskComplete 控制；interrupted 始终提醒
+ * - auto 模式：completed 受 soundOnTaskComplete 控制；interrupted 始终提醒
+ *
+ * 提醒时震动统一受 vibrate 开关控制；声音仅 completed 受 soundOnTaskComplete 控制，
+ * asking/interrupted 为重要中断提示，声音跟随系统通知渠道设置。
+ * 震动与提示音开关都关闭时，所有提醒静默。
+ */
+function getAlertFlags(
   status: string,
   mode: 'manual' | 'auto',
-  notifyOnWaiting: boolean
-): boolean {
+  notifyOnWaiting: boolean,
+  vibrate: boolean,
+  soundOnTaskComplete: boolean
+): AlertFlags {
+  // 震动和提示音都关闭时，始终静默
+  if (!vibrate && !soundOnTaskComplete) return { vibrate: false, sound: false }
+
+  let shouldAlert: boolean
   if (mode === 'manual') {
-    if (status === 'asking') return notifyOnWaiting
-    return ['completed', 'interrupted'].includes(status)
+    if (status === 'asking') shouldAlert = notifyOnWaiting
+    else if (status === 'completed') shouldAlert = soundOnTaskComplete
+    else shouldAlert = status === 'interrupted'
+  } else {
+    if (status === 'completed') shouldAlert = soundOnTaskComplete
+    else shouldAlert = status === 'interrupted'
   }
-  // 自动模式：仅 completed、interrupted
-  return ['completed', 'interrupted'].includes(status)
+
+  if (!shouldAlert) return { vibrate: false, sound: false }
+  return {
+    vibrate,
+    sound: status === 'completed' ? soundOnTaskComplete : true,
+  }
 }
 
 /** 读取移动端设置 */
@@ -72,9 +106,6 @@ function hashCode(str: string): number {
   return hash
 }
 
-// 连接通知固定 ID
-const CONNECTION_NOTIFICATION_ID = 3001
-
 // 模块级状态：缓存会话执行模式
 const sessionModes = new Map<string, 'manual' | 'auto'>()
 
@@ -91,7 +122,8 @@ export function useNotification() {
   /**
    * 确保通知权限已授予
    *
-   * 首次调用时检查权限，未授予则请求。结果缓存到模块级变量。
+   * 首次调用时检查权限，未授予则请求（Android 13+ 弹系统授权框）。
+   * 结果缓存到模块级变量。
    */
   async function ensurePermission(): Promise<boolean> {
     if (!isAndroid()) return false
@@ -100,10 +132,11 @@ export function useNotification() {
     if (permissionGranted === true) return true
 
     try {
-      let granted = await isPermissionGranted()
+      const check = await invoke<{ granted: boolean }>('plugin:task-notification|checkNotificationPermission')
+      let granted = check.granted
       if (!granted) {
-        const result = await requestPermission()
-        granted = result === 'granted'
+        const req = await invoke<{ granted: boolean }>('plugin:task-notification|requestNotificationPermission')
+        granted = req.granted
       }
       permissionGranted = granted
       return granted
@@ -150,25 +183,23 @@ export function useNotification() {
     const hasPermission = await ensurePermission()
     if (!hasPermission) return
 
-    const shouldAlert = shouldAlertForStatus(
+    const { vibrate, sound } = getAlertFlags(
       params.taskStatus,
       mode,
-      settings.notifyOnWaiting ?? true
+      settings.notifyOnWaiting ?? true,
+      settings.vibrate ?? true,
+      settings.soundOnTaskComplete ?? true
     )
 
     const body = buildTaskBody(params.taskStatus, params.taskReason)
 
     try {
-      sendNotification({
-        id: getNotificationId(params.sessionId),
+      await invoke('plugin:task-notification|showTaskNotification', {
+        sessionId: params.sessionId,
         title: params.sessionName,
         body,
-        // 非提醒状态使用 silent 避免频繁打扰
-        silent: !shouldAlert,
-        extra: {
-          type: 'task',
-          sessionId: params.sessionId,
-        },
+        vibrate,
+        sound,
       })
     } catch (e) {
       console.warn('[Notification] showTaskNotification failed:', e)
@@ -177,21 +208,26 @@ export function useNotification() {
 
   /**
    * 取消指定会话的任务通知
-   *
-   * tauri-plugin-notification 不支持按 ID 取消单条通知，
-   * 保留空实现以维持接口兼容
    */
-  async function cancelTaskNotification(_sessionId: string): Promise<void> {
-    // 官方插件无 cancel-by-id API
+  async function cancelTaskNotification(sessionId: string): Promise<void> {
+    if (!isAndroid()) return
+    try {
+      await invoke('plugin:task-notification|cancelTaskNotification', { sessionId })
+    } catch (e) {
+      console.warn('[Notification] cancelTaskNotification failed:', e)
+    }
   }
 
   /**
    * 取消所有任务通知
-   *
-   * 同上，官方插件不支持批量取消
    */
   async function cancelAllTaskNotifications(): Promise<void> {
-    // 保留空实现以维持接口兼容
+    if (!isAndroid()) return
+    try {
+      await invoke('plugin:task-notification|cancelAllTaskNotifications')
+    } catch (e) {
+      console.warn('[Notification] cancelAllTaskNotifications failed:', e)
+    }
   }
 
   /**
@@ -206,6 +242,8 @@ export function useNotification() {
 
     const hasPermission = await ensurePermission()
     if (!hasPermission) return
+
+    const settings = getMobileSettings()
 
     const t = i18n.global.t
     let body: string
@@ -223,13 +261,12 @@ export function useNotification() {
     }
 
     try {
-      sendNotification({
-        id: CONNECTION_NOTIFICATION_ID,
+      await invoke('plugin:task-notification|showConnectionNotification', {
         title: 'BedCode',
         body,
-        extra: {
-          type: 'connection',
-        },
+        // 连接状态为重要事件：震动受 vibrate 开关控制，声音跟随系统渠道
+        vibrate: settings.vibrate ?? true,
+        sound: true,
       })
     } catch (e) {
       console.warn('[Notification] showConnectionNotification failed:', e)
@@ -240,7 +277,12 @@ export function useNotification() {
    * 取消连接状态通知
    */
   async function cancelConnectionNotification(): Promise<void> {
-    // 同 cancelTaskNotification，官方插件不支持按 ID 取消
+    if (!isAndroid()) return
+    try {
+      await invoke('plugin:task-notification|cancelConnectionNotification')
+    } catch (e) {
+      console.warn('[Notification] cancelConnectionNotification failed:', e)
+    }
   }
 
   return {

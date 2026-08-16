@@ -49,3 +49,23 @@
 -keepclasseswithmembernames class * {
     native <methods>;
 }
+
+# ==================== Tauri Kotlin plugins (R8 minification) ====================
+# 自定义 Kotlin 插件（PluginAssetExtractor / ForegroundServicePlugin）由 Rust 端
+# register_android_plugin 经 JNI 反射实例化，@Command 方法也由 PluginHandle
+# 反射分发（indexMethods 读取 @Command 注解）。R8 无法看到这些反射引用，
+# release minification 会把 @Command 方法整体剥离，导致
+# "No command xxx found for plugin ..."。
+# 已为各插件类标注 @TauriPlugin 以命中 Tauri 消费端 keep 规则；此处再按基类
+# 兜底保留所有 Plugin 子类的构造器与成员，新增插件无需额外配置。
+-keep class * extends app.tauri.plugin.Plugin {
+    public <init>(...);
+    *;
+}
+
+# @InvokeArg 参数类经 Jackson 反射反序列化（parseArgs），同样兜底保留。
+# （Tauri 消费端已有 -keep @InvokeArg 规则，此处防御注解丢失的情况）
+-keep class app.tauri.annotation.** { *; }
+-keepclassmembers class * {
+    @app.tauri.annotation.Command <methods>;
+}

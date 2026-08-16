@@ -3,6 +3,7 @@
 //! Tauri commands — 前端 PluginContext 的每个 API 调用通过 Tauri invoke 到达此桥接层
 //! Rust 端做权限校验后执行操作
 
+use crate::plugin::fs_auth::FsAuthChecker;
 use crate::plugin::host::PluginHost;
 use crate::plugin::types::DesktopPluginInfo;
 use std::sync::Arc;
@@ -15,7 +16,10 @@ use tauri::State;
 pub async fn plugin_list_loaded(
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Vec<DesktopPluginInfo>> {
-    Ok(plugin_host.list_plugins().await)
+    tracing::debug!("[API] plugin_list_loaded called");
+    let result = plugin_host.list_plugins().await;
+    tracing::debug!("[API] plugin_list_loaded returning {} plugin(s)", result.len());
+    Ok(result)
 }
 
 /// 获取单个插件信息
@@ -24,25 +28,36 @@ pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<DesktopPluginInfo>> {
+    tracing::debug!("[API] plugin_get_info({})", plugin_id);
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
-/// 激活插件
+/// 激活插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_activate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.activate_plugin(&plugin_id).await
+    tracing::info!("[API] plugin_activate({})", plugin_id);
+    let result = plugin_host.activate_plugin(&plugin_id, true).await;
+    if let Err(ref e) = result {
+        tracing::error!("[API] plugin_activate({}) failed: {}", plugin_id, e);
+    }
+    result
 }
 
-/// 停用插件
+/// 停用插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_deactivate(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    plugin_host.deactivate_plugin(&plugin_id).await
+    tracing::info!("[API] plugin_deactivate({})", plugin_id);
+    let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
+    if let Err(ref e) = result {
+        tracing::error!("[API] plugin_deactivate({}) failed: {}", plugin_id, e);
+    }
+    result
 }
 
 /// 标记插件错误
@@ -54,6 +69,14 @@ pub async fn plugin_mark_error(
 ) -> crate::Result<()> {
     plugin_host.mark_error(&plugin_id, error).await;
     Ok(())
+}
+
+/// 获取插件激活状态映射（plugin_id → is_activated）
+#[tauri::command]
+pub async fn plugin_get_activated_state(
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<std::collections::HashMap<String, bool>> {
+    Ok(plugin_host.get_activated_state().await)
 }
 
 // ==================== Plugin Storage ====================
@@ -195,4 +218,72 @@ pub async fn plugin_list_rust_commands(
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Vec<bedcode_plugin_api::PluginCommandEntry>> {
     Ok(plugin_host.list_rust_commands().await)
+}
+
+// ==================== Dev Mode ====================
+
+/// 热重载 WASM 插件（仅开发模式可用）
+///
+/// 执行完整的卸载-重载-激活循环，用于开发期间快速迭代。
+/// 生产构建中调用此命令返回错误
+#[tauri::command]
+pub async fn plugin_dev_reload(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    #[cfg(debug_assertions)]
+    {
+        plugin_host.reload_wasm_plugin(&plugin_id).await
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        let _ = (plugin_host, plugin_id);
+        Err(crate::AppError::Plugin("Hot reload only available in dev mode".to_string()))
+    }
+}
+
+// ==================== File System Auth ====================
+
+/// 回复文件系统授权请求（由前端弹窗调用）
+#[tauri::command]
+pub async fn plugin_fs_auth_respond(
+    request_id: String,
+    allowed: bool,
+    remember: bool,
+    fs_auth: State<'_, Arc<FsAuthChecker>>,
+) -> crate::Result<()> {
+    tracing::info!(
+        "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
+        request_id, allowed, remember
+    );
+    fs_auth.respond(&request_id, allowed, remember).await;
+    Ok(())
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    //! 本模块（Tauri commands 桥）不可单测的原因：
+    //!
+    //! 1. 所有 command 函数的第一个/最后一个参数均为
+    //!    `State<'_, Arc<PluginHost>>`（或 `State<'_, Arc<FsAuthChecker>>`），
+    //!    Tauri 的 `State` 不实现 `From<T>`，且其 `CommandArg` 实现需要
+    //!    Tauri 运行时上下文（`StateManager`）才能构造 —— 单元测试无法
+    //!    直接调用这些函数。
+    //! 2. 启用 `tauri` 的 `test` feature（`tauri::test::mock_builder`）可
+    //!    模拟运行时，但需要修改 Cargo.toml（本任务约束：只加测试模块），
+    //!    且桥接函数体全部是「权限门禁 + 委托给 PluginHost / FsAuthChecker」
+    //!    的薄封装，无独立纯逻辑可提取。
+    //! 3. 门禁逻辑（`is_activated` / `permission().check`）与委托目标
+    //!    （`list_plugins` / `activate_plugin` / `invoke_rust_command` /
+    //!    `storage()` 等）均已在 `host.rs` 测试中直接覆盖（含错误分支的
+    //!    错误字符串断言），桥接层只是透传。
+    //!
+    //! 结论：不硬造测试；桥接层行为由 host.rs 的宿主测试 + 前端集成测试
+    //! 覆盖。`plugin_terminal_send_input` 的成功路径还依赖
+    //! `AppContext::global()`（未初始化即 panic），同样无法在无头测试构造。
+    //!
+    //! 若未来启用 tauri test feature，可在此处为 `plugin_storage_*` /
+    //! `plugin_terminal_send_input` 的门禁错误分支补测试。
 }

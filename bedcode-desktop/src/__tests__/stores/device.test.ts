@@ -7,27 +7,33 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }))
 
-// Create a mutable devices array that will be managed by the mock
-let mockDevicesValue: any[] = []
-
-vi.mock('@/composables/useTauri', () => ({
-  usePairing: () => ({
-    devices: {
-      get value() { return mockDevicesValue },
-      set value(v) { mockDevicesValue = v }
-    },
-    loadDevices: vi.fn(async () => {}),
-    removeDevice: vi.fn(async (id: string) => {
-      mockDevicesValue = mockDevicesValue.filter(d => d.id !== id)
+// Mock useDesktopCommands（store 的数据源）
+const mocks = vi.hoisted(() => {
+  const mockDevices: any[] = []
+  return {
+    mockDevices,
+    listPairedDevices: vi.fn(async () => [...mockDevices]),
+    removePairedDevice: vi.fn(async (id: string) => {
+      const idx = mockDevices.findIndex((d) => d.id === id)
+      if (idx !== -1) mockDevices.splice(idx, 1)
     }),
-  }),
-}))
+    generatePairingCode: vi.fn(async () => ({
+      code: '123456',
+      expires_in: 60,
+      created_at: new Date().toISOString(),
+    })),
+    verifyPairingCode: vi.fn(async () => true),
+  }
+})
+
+vi.mock('@/composables/useDesktopCommands', () => mocks)
 
 describe('Device Store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+    vi.clearAllMocks()
     // Reset mock devices before each test
-    mockDevicesValue = []
+    mocks.mockDevices.length = 0
   })
 
   it('should initialize with empty state', () => {
@@ -41,8 +47,8 @@ describe('Device Store', () => {
   it('should clear pairing code', () => {
     const store = useDeviceStore()
 
-    store.pairingCode = '123456'
-    store.pairingExpiry = 30
+    store.pairingCode = { code: '123456', expires_in: 60, created_at: new Date().toISOString() }
+    store.pairingExpiry = 60
 
     store.clearPairingCode()
 
@@ -55,36 +61,62 @@ describe('Device Store', () => {
 
     const device = {
       id: 'device-1',
-      device_name: 'My Phone',
-      device_fingerprint: 'fp123',
-      public_key: 'pk123',
-      paired_at: new Date().toISOString(),
-      last_seen: null,
-      is_active: true,
+      deviceName: 'My Phone',
+      deviceFingerprint: 'fp123',
+      address: '192.168.1.5',
+      pairedAt: new Date().toISOString(),
+      lastSeen: undefined,
+      connectCount: 0,
     }
 
     store.pairedDevices.push(device)
 
     expect(store.pairedDevices).toHaveLength(1)
-    expect(store.pairedDevices[0].device_name).toBe('My Phone')
+    expect(store.pairedDevices[0].deviceName).toBe('My Phone')
   })
 
   it('should remove paired device', async () => {
     // Set up mock devices
-    mockDevicesValue = [
+    mocks.mockDevices.push(
       { id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true },
       { id: 'device-2', device_name: 'Phone 2', device_fingerprint: 'fp2', public_key: 'pk2', paired_at: '', last_seen: null, is_active: true },
-    ]
+    )
 
     const store = useDeviceStore()
+    await store.loadPairedDevices()
 
-    // Initialize store's pairedDevices from mock
-    store.pairedDevices = [...mockDevicesValue]
+    expect(store.pairedDevices).toHaveLength(2)
 
     await store.removeDevice('device-1')
 
-    // After removeDevice, the store syncs with mockDevicesValue
+    // 删除后重新拉取列表，device-1 应被移除
     expect(store.pairedDevices).toHaveLength(1)
     expect(store.pairedDevices[0].id).toBe('device-2')
+  })
+
+  it('should load paired devices from backend', async () => {
+    mocks.mockDevices.push(
+      { id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true },
+    )
+
+    const store = useDeviceStore()
+    await store.loadPairedDevices()
+
+    expect(mocks.listPairedDevices).toHaveBeenCalled()
+    expect(store.pairedDevices).toHaveLength(1)
+  })
+
+  it('should start pairing and generate code', async () => {
+    vi.useFakeTimers()
+    const store = useDeviceStore()
+    await store.startPairing()
+
+    expect(mocks.generatePairingCode).toHaveBeenCalled()
+    expect(store.pairingCode?.code).toBe('123456')
+    expect(store.pairingExpiry).toBe(60)
+
+    // 推进倒计时使其归零，让内部 interval 自我清理，避免测试挂起
+    vi.advanceTimersByTime(61000)
+    vi.useRealTimers()
   })
 })

@@ -57,12 +57,12 @@ impl MessageHandler for ClientDefaultMessageHandler {
         _client_id: Option<&str>,
         _sender: Option<mpsc::Sender<WsMsg>>,
     ) {
-        tracing::info!("[ClientDefaultMessageHandler] handle() called");
+        tracing::debug!("[ClientDefaultMessageHandler] handle() called");
 
         // 使用 codec 解码消息
         let message = match self.codec.decode(raw_message) {
             Ok(Some(msg)) => {
-                tracing::info!("[ClientDefaultMessageHandler] Decoded message: type={:?}", msg.message_type());
+                tracing::debug!("[ClientDefaultMessageHandler] Decoded message: type={:?}", msg.message_type());
                 msg
             }
             Ok(None) => {
@@ -77,7 +77,7 @@ impl MessageHandler for ClientDefaultMessageHandler {
 
         // 委托给 router 处理
         if let Some(router) = &self.router {
-            tracing::info!("[ClientDefaultMessageHandler] Calling router.route()");
+            tracing::debug!("[ClientDefaultMessageHandler] Calling router.route()");
             let router = router.clone();
             tokio::spawn(async move {
                 if let Err(e) = router.route(message).await {

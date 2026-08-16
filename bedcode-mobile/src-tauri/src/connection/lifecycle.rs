@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::{broadcast, RwLock};
 
+use crate::system::constants::connection::BROADCAST_CHANNEL_CAPACITY;
+
 /// 连接状态
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnectionStatus {
@@ -62,7 +64,7 @@ pub struct LifecycleManager {
 impl LifecycleManager {
     /// 创建新的生命周期管理器
     pub fn new() -> Arc<Self> {
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
         Arc::new(Self {
             status: RwLock::new(ConnectionStatus::Disconnected),
             event_tx,
@@ -151,7 +153,7 @@ impl Default for LifecycleManager {
     fn default() -> Self {
         Self {
             status: RwLock::new(ConnectionStatus::Disconnected),
-            event_tx: broadcast::channel(1024).0,
+            event_tx: broadcast::channel(BROADCAST_CHANNEL_CAPACITY).0,
             client_id: RwLock::new(None),
         }
     }

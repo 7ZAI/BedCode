@@ -3,6 +3,7 @@ package com.bedcode.mobile
 import android.app.Activity
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
+import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.JSObject
 import app.tauri.plugin.Invoke
 import app.tauri.plugin.Plugin
@@ -19,6 +20,7 @@ internal class ForegroundServiceArgs {
     var content: String = "后台运行中"
 }
 
+@TauriPlugin
 class ForegroundServicePlugin(private val activity: Activity) : Plugin(activity) {
 
     @Command

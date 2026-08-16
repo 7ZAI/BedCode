@@ -147,7 +147,7 @@ pub async fn handle_control(
             }
 
             let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(256);
-            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None).await;
+            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None, None).await;
 
             match subscribe_result {
                 Some(response) => {
@@ -324,6 +324,8 @@ struct OutputBuffer {
     data: Vec<u8>,
     start_index: u64,
     end_index: u64,
+    start_offset: u64,
+    end_offset: u64,
     last_is_waiting: bool,
 }
 
@@ -333,6 +335,8 @@ impl OutputBuffer {
             data: Vec::new(),
             start_index: 0,
             end_index: 0,
+            start_offset: 0,
+            end_offset: 0,
             last_is_waiting: false,
         }
     }
@@ -340,8 +344,10 @@ impl OutputBuffer {
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
+            self.start_offset = event.start_offset;
         }
         self.end_index = event.index;
+        self.end_offset = event.end_offset;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
@@ -367,6 +373,8 @@ impl OutputBuffer {
             self.last_is_waiting,
             self.start_index as usize,
             end_index,
+            Some(self.start_offset),
+            Some(self.end_offset),
         );
         self.data.clear();
         message.to_json().unwrap_or_default()

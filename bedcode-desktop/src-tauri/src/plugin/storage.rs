@@ -2,11 +2,18 @@
 //!
 //! 插件持久化存储 — SQLite plugin_storage 表
 //! 按 plugin_id 隔离，插件只能读写自己的空间
+//! 同时存储系统级数据（如插件激活状态）
 
 use crate::db::Database;
 use chrono::Utc;
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+/// 系统级 plugin_id，用于存储非插件私有的全局数据
+const SYSTEM_PLUGIN_ID: &str = "__system__";
+/// 插件激活状态持久化 key
+const ACTIVATION_STATE_KEY: &str = "activation_state";
 
 /// 插件存储管理器
 pub struct PluginStorage {
@@ -75,6 +82,33 @@ impl PluginStorage {
             rusqlite::params![plugin_id],
         )?;
         Ok(())
+    }
+
+    // ==================== System-level: Activation State ====================
+
+    /// 保存插件激活状态映射（plugin_id → is_activated）
+    ///
+    /// 使用系统级 plugin_id `__system__` 隔离，不与任何插件数据冲突
+    pub async fn save_activated_plugins(&self, activated: &HashMap<String, bool>) -> crate::Result<()> {
+        let value = serde_json::to_value(activated)?;
+        self.set(SYSTEM_PLUGIN_ID, ACTIVATION_STATE_KEY, value).await
+    }
+
+    /// 加载插件激活状态映射
+    ///
+    /// 首次启动或数据损坏时返回空 HashMap
+    pub async fn load_activated_plugins(&self) -> crate::Result<HashMap<String, bool>> {
+        match self.get(SYSTEM_PLUGIN_ID, ACTIVATION_STATE_KEY).await? {
+            Some(value) => {
+                let map: HashMap<String, bool> = serde_json::from_value(value)
+                    .map_err(|e| {
+                        tracing::warn!("Failed to parse activation state, resetting: {}", e);
+                        crate::AppError::Plugin(format!("Invalid activation state: {}", e))
+                    })?;
+                Ok(map)
+            }
+            None => Ok(HashMap::new()),
+        }
     }
 }
 

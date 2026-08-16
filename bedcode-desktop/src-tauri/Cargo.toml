@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-desktop"
-version = "1.1.11"
+version = "2.0.0"
 description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
 authors = ["binblink"]
 edition = "2021"
@@ -22,7 +22,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 # Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -30,6 +30,22 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 # Security
 rand = "0.8"
 jsonwebtoken = "9"
+# 生物凭证验签（EC P-256 / ECDSA-SHA256，与移动端 Keystore 生成的密钥配套）
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+# 通用加密/解密工具（HTTP 加密、非对称加密、文件加密传输）
+# aes-gcm：对称 AEAD（AES-256-GCM），用于 HTTP 报文与文件分块加密
+aes-gcm = "0.10"
+# chacha20poly1305：备选对称 AEAD，性能不依赖 AES-NI
+chacha20poly1305 = "0.10"
+# x25519-dalek：椭圆曲线 Diffie-Hellman 密钥协商（端到端加密 ECDH）；
+# static_secrets 启用可复用的长期密钥对（StaticSecret），便于持久化私钥
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+# rsa：常规非对称加密（RSA-OAEP / PSS 签名；pem 启用 PKCS#8/#1 编解码）
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+# sha2：SHA-256 摘要
+sha2 = "0.10"
+# hkdf：密钥派生（HKDF-SHA256）
+hkdf = "0.12"
 
 # Encoding
 encoding_rs = "0.8"
@@ -55,6 +71,8 @@ tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 tracing-log = "0.2"
+# ANSI 样式（控制台日志格式化器使用；与 tracing-subscriber 传递依赖同版本）
+nu-ansi-term = "0.50"
 
 # File watching
 notify = "6"
@@ -62,8 +80,12 @@ notify = "6"
 # Regex for parsing
 regex = "1"
 
-# Dynamic library loading for cdylib plugins
-libloading = "0.8"
+# WASM runtime for plugin system
+# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
+wasmtime = "47"
+
+# HTTP client (WASM plugin HTTP proxy)
+reqwest = { version = "0.12", features = ["stream"] }
 
 # mDNS service discovery
 mdns-sd = "0.20"
@@ -75,7 +97,7 @@ local-ip-address = "0.6"
 sysinfo = "0.33"
 
 # Plugin API
-bedcode-plugin-api = { path = "bedcode-plugin-api" }
+bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)
@@ -87,6 +109,8 @@ async-trait = "0.1"
 # WebSocket
 tokio-tungstenite = "0.24"
 futures-util = "0.3"
+# 传输引擎：CancellationToken 取消语义 + ReaderStream 文件流式上传
+tokio-util = { version = "0.7", features = ["io"] }
 dirs = "6.0.0"
 
 # Actix Web (HTTP + WS server)
@@ -95,17 +119,31 @@ actix = "0.13"
 actix-web-actors = "4"
 actix-rt = "2"
 actix-cors = "0.7"
+# 插件文件服务下载端点（NamedFile 提供原生 Range/206/HEAD 支持）
+actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
 
+# Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
+# + 文件定位 COM API（SHOpenFolderAndSelectItems / ShellExecuteExW，见 commands/opener.rs）
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry"] }
+
 [dev-dependencies]
 tempfile = "3"
+# 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
+# （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
+wit-component = "=0.256.0"
 
 [profile.release]
-panic = "abort"
-codegen-units = 1
-lto = true
+# unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
+# 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
+panic = "unwind"
+# fat LTO + 单 codegen unit 会在最终链接阶段合并全部 bitcode，峰值内存 8GB+（含 wasmtime/cranelift 时更甚），
+# 在 16GB 内存机器上触发 OOM；改用 thin LTO + 并行 codegen，性能损失 ~2-5%，峰值内存大幅下降
+codegen-units = 16
+lto = "thin"
 opt-level = "s"
 strip = true
 

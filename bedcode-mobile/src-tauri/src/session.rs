@@ -13,6 +13,7 @@ use crate::Result;
 use crate::connection::request::{SessionRequest, ResponseParser, timeouts};
 
 use crate::connection::manager::ConnectionManager;
+use crate::system::constants::terminal::SESSION_NAME_ID_PREFIX_LEN;
 
 /// 会话信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,7 +75,7 @@ impl SessionManager {
             let name = session_name
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| {
-                    let short_id = if session_id.len() > 8 { &session_id[..8] } else { &session_id };
+                    let short_id = if session_id.len() > SESSION_NAME_ID_PREFIX_LEN { &session_id[..SESSION_NAME_ID_PREFIX_LEN] } else { &session_id };
                     format!("Session-{}", short_id)
                 });
             let session = SessionInfo {
@@ -88,6 +89,17 @@ impl SessionManager {
             *self.active_session.write().await = Some(session.clone());
             self.sessions.write().await.push(session.clone());
             tracing::info!("[start_session] Session added to local list, total sessions: {}", self.sessions.read().await.len());
+
+            // 通知插件会话创建
+            {
+                let pm = crate::state::get_plugin_manager();
+                pm.dispatch_lifecycle_event(
+                    crate::plugin::types::PluginLifecycleEvent::SessionCreated {
+                        session_id: session_id.clone(),
+                    }
+                ).await;
+            }
+
             return Ok(session_id);
         }
 
@@ -125,6 +137,17 @@ impl SessionManager {
         }
 
         tracing::info!("[stop_session] Session stopped: {}", session_id);
+
+        // 通知插件会话停止
+        {
+            let pm = crate::state::get_plugin_manager();
+            pm.dispatch_lifecycle_event(
+                crate::plugin::types::PluginLifecycleEvent::SessionStopped {
+                    session_id: session_id.to_string(),
+                }
+            ).await;
+        }
+
         Ok(())
     }
 
@@ -191,11 +214,5 @@ impl SessionManager {
         } else {
             Err(crate::AppError::NotFound("No active session".to_string()))
         }
-    }
-
-    /// 设置输入发送器
-    pub fn set_input_sender(&self, sender: tokio::sync::mpsc::Sender<String>) {
-        let mut guard = self.input_tx.blocking_write();
-        *guard = Some(sender);
     }
 }

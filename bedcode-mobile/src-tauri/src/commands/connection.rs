@@ -33,7 +33,7 @@ pub async fn ws_connect(
         let auth = get_auth_manager();
         let app_data_dir = app_handle.path().app_data_dir()
             .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?;
-        auth.init_identity(app_data_dir).await;
+        auth.init_identity(&app_handle, app_data_dir).await;
     }
 
     // 发射连接开始事件
@@ -137,9 +137,16 @@ pub fn ws_get_token() -> String {
     get_global_token()
 }
 
-/// 清除全局 Token（登出时调用）
+/// 清除全局 Token（登出/解配时调用）
+///
+/// 同时关停文件服务并吊销 Bearer Token（规格 4.5：配对解除即失效）；
+/// 连接已断时 shutdown 内部不发 Withdraw
 #[tauri::command]
 pub fn ws_clear_token() -> Result<()> {
     clear_global_token();
+    // 同步 command 无 await 上下文，关停交给全局运行时
+    tauri::async_runtime::spawn(async {
+        crate::state::get_file_service().shutdown().await;
+    });
     Ok(())
 }

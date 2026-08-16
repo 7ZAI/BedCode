@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed z-[999]" :style="floatingStyle">
+  <div class="fixed z-30" :style="floatingStyle">
     <!-- 悬浮球 -->
     <button
       ref="btnRef"
@@ -44,7 +44,7 @@
   <Teleport to="body">
     <div v-if="showInput" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui" @click.self="showInput = false">
       <div class="absolute inset-0 bg-[var(--mobile-overlay-light)]" @click="showInput = false"></div>
-      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-md p-4 shadow-xl">
+      <div class="relative bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl w-full max-w-[clamp(280px,448px,520px)] p-4 shadow-xl">
         <div class="text-sm font-medium mb-3 text-[var(--mobile-text-primary)]">{{ t('mobile.input.commandTitle') }}</div>
         <textarea
           ref="inputRef"
@@ -56,7 +56,7 @@
           <button class="px-4 py-2 text-sm text-[var(--mobile-text-secondary)]" @click="showInput = false">{{ t('common.button.cancel') }}</button>
           <div class="flex gap-2">
             <button class="px-4 py-2 text-sm bg-[var(--mobile-input-bg)] rounded-lg" :disabled="!inputText.trim()" @click="onSubmit">{{ t('common.button.send') }}</button>
-            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-white rounded-lg" :disabled="!inputText.trim()" @click="onExecute">{{ t('common.button.execute') }}</button>
+            <button class="px-4 py-2 text-sm bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] rounded-lg" :disabled="!inputText.trim()" @click="onExecute">{{ t('common.button.execute') }}</button>
           </div>
         </div>
       </div>
@@ -98,8 +98,13 @@ const ptr = { downX: 0, downY: 0, downTime: 0, moved: false, dragging: false, mo
 
 // ---------- computed styles ----------
 const S = 48 // button size
-const R = 60 // menu radius
-const B = 42 // menu button size
+
+function clampNum(min: number, val: number, max: number) {
+  return Math.max(min, Math.min(val, max))
+}
+
+const R = computed(() => Math.round(clampNum(45, 60 * window.innerWidth / 400, 75)))
+const B = computed(() => Math.round(clampNum(32, 42 * window.innerWidth / 400, 52)))
 
 const btnStyle = computed(() => ({
   width: `${store.settings.size}px`,
@@ -121,12 +126,14 @@ const floatingStyle = computed(() => {
 
 function radialStyle(i: number) {
   // 5 个按钮均匀分布在 120° 上半圆弧 (150°→30°)
+  const r = R.value
+  const b = B.value
   const angle = (150 - 30 * i) * Math.PI / 180
   return {
-    left: `${R * Math.cos(angle) + 70 - B / 2}px`,
-    top:  `${R * Math.sin(angle) + 70 - B / 2}px`,
-    width:  `${B}px`,
-    height: `${B}px`,
+    left: `${r * Math.cos(angle) + 70 - b / 2}px`,
+    top:  `${r * Math.sin(angle) + 70 - b / 2}px`,
+    width:  `${b}px`,
+    height: `${b}px`,
   }
 }
 
@@ -304,7 +311,8 @@ onUnmounted(() => window.removeEventListener('resize', onResize))
 /* radial menu container */
 .radial-container {
   position: absolute;
-  width: 140px; height: 140px;
+  width: clamp(100px, 140px, 180px);
+  height: clamp(100px, 140px, 180px);
   left: 50%; top: 50%;
   transform: translate(-50%, -50%);
   pointer-events: none;

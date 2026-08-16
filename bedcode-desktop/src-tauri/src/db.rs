@@ -7,4 +7,4 @@ mod models;
 mod operations;
 
 pub use database::Database;
-pub use models::{Pairing, QuickAction, SessionConfig, Setting};
+pub use models::{Pairing, QuickAction, SessionConfig, Setting, ConnectionHistory, connection_method, connection_result, CONNECTION_HISTORY_MAX_PER_DEVICE};

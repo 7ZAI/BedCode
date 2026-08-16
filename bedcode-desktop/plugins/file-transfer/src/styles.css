@@ -1,0 +1,1307 @@
+/**
+ * File Transfer 插件样式
+ *
+ * 宿主 Vite 构建只扫描 src/（tailwind content），不会为插件 SFC 里的
+ * Tailwind 类生成样式，且插件 lib 构建产出的独立 CSS 文件不被宿主加载
+ * （build.js 仅拷贝 index.js）。因此本文件经 `?inline` 内联并在插件
+ * activate 时注入 style 标签，全部引用宿主 CSS 变量（bg / text / color
+ * 三组 token），跟随宿主明暗主题，不写死颜色。类名统一 `ft-` 前缀避免与宿主冲突。
+ */
+
+/* 系统减弱动态效果时默认降级为瞬时（优先级最低：位于文件顶部且无 !important，
+   文件后续定义的显式过渡类会覆盖它，保证面板滑出/收回等状态过渡动画始终保留） */
+@media (prefers-reduced-motion: reduce) {
+  .ft-view *,
+  .ft-view *::before,
+  .ft-view *::after {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+    animation-iteration-count: 1;
+  }
+}
+
+.ft-view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  position: relative;
+}
+
+/* ==================== 顶栏 ==================== */
+
+.ft-topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  height: 46px;
+  flex-shrink: 0;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.ft-peer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 12px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  font-size: 12px;
+  color: var(--text-primary);
+  max-width: 200px;
+  min-width: 0;
+  /* 长设备名时内部不溢出 pill（dot/name/meta 的收缩由子项 min-width 控制） */
+  overflow: hidden;
+  /* 与紧随的设备切换按钮紧凑衔接，避免视觉”分家” */
+  margin-right: 2px;
+}
+
+/* 设备名：min-width: 0 允许在 pill 宽度约束下收缩，触发省略号
+   （flex 子项默认 min-width:auto，长 nowrap 文本会撑破容器） */
+.ft-peer-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-peer-meta {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.ft-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.ft-dot--online {
+  background: var(--color-success);
+}
+
+/* 已连接但对端未共享（partial） */
+.ft-dot--partial {
+  background: var(--color-warning);
+}
+
+.ft-dot--offline {
+  background: var(--text-tertiary);
+}
+
+.ft-spacer {
+  flex: 1;
+}
+
+/* 设备切换入口（多对端场景）与下拉菜单（自绘，禁原生 select） */
+.ft-peer-switch-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.ft-peer-switch-btn--open {
+  border-color: var(--color-primary);
+}
+
+/* 传输队列开关展开态：与对端切换按钮同语言（描边高亮） */
+.ft-btn--queue-open {
+  border-color: var(--color-primary);
+}
+
+.ft-peer-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 180px;
+  max-width: 280px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+
+.ft-peer-menu-title {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ft-peer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  color: var(--text-primary);
+  border: none;
+  border-radius: var(--radius-tag);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.ft-peer-menu-item:hover,
+.ft-peer-menu-item--active {
+  background: var(--bg-hover);
+}
+
+/* 激活项：底色向主色偏（选中语义明确，非 hover 同色） */
+.ft-peer-menu-item--active {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ft-peer-menu-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ft-peer-menu-check {
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+/* 下拉淡入 + 轻微位移（200ms 内，避免拖沓） */
+.ft-drop-enter-active,
+.ft-drop-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+
+.ft-drop-enter-from,
+.ft-drop-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+.ft-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, background-color 0.2s ease, opacity 0.2s ease;
+}
+
+.ft-btn:hover {
+  border-color: var(--color-primary);
+  background: var(--bg-card);
+}
+
+/* 禁用态：次级灰而非半透明，避免“看起来可点但点不动” */
+.ft-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  background: var(--bg-hover);
+  border-color: var(--border);
+}
+
+.ft-btn--primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.ft-btn--primary:hover {
+  background: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+
+.ft-btn-text {
+  margin-left: 2px;
+}
+
+/* 窄窗口：顶栏按钮只留图标，保证对端 pill 与操作按钮不互相挤压溢出 */
+@media (max-width: 720px) {
+  .ft-topbar {
+    gap: 4px;
+    padding: 0 8px;
+  }
+
+  .ft-btn {
+    padding: 5px 8px;
+  }
+
+  .ft-btn-text {
+    display: none;
+  }
+
+  .ft-peer-pill {
+    max-width: 150px;
+  }
+}
+
+/* 按钮内 SVG 图标统一样式（1.5 描边，随按钮字号） */
+.ft-ico-btn {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+/* ==================== 双栏主体 ==================== */
+
+/* 队列列宽注册为可插值属性：展开/收起时网格列宽可平滑过渡（Chromium/WebKit 支持；
+   不支持的引擎回退为瞬时切换，功能不受影响） */
+@property --ft-queue-w {
+  syntax: '<length>';
+  inherits: false;
+  initial-value: 0px;
+}
+
+.ft-main {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  /* 默认单栏（队列收起，文件表格全宽）；展开队列时第二列由 --ft-queue-w 展开到 360px */
+  grid-template-columns: minmax(0, 1fr) var(--ft-queue-w);
+  transition: --ft-queue-w 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ft-main--queue {
+  --ft-queue-w: 360px;
+}
+
+.ft-browse {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.ft-queue {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-card);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* ==================== 面包屑 ==================== */
+
+.ft-crumbbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+}
+
+.ft-crumb {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-nav);
+  white-space: nowrap;
+}
+
+.ft-crumb:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.ft-crumb--current {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.ft-crumb-sep {
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+/* ==================== 目录表格 ==================== */
+
+.ft-table-wrap {
+  flex: 1;
+  overflow: auto;
+  /* 滚动条占位稳定，避免粘性表头横向滚动时错位 */
+  scrollbar-gutter: stable;
+}
+
+.ft-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ft-table th {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  text-align: left;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 11px;
+  padding: 8px 12px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+}
+
+.ft-table td {
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.ft-table tbody tr {
+  cursor: default;
+}
+
+.ft-table tbody tr:hover td {
+  background: var(--bg-hover);
+}
+
+.ft-table tbody tr.ft-row--sel td {
+  background: var(--color-primary-light);
+}
+
+.ft-fname {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ft-fname-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-ico {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ft-ico svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ft-dim {
+  color: var(--text-tertiary);
+}
+
+.ft-checkbox {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+/* 原生 checkbox 仅作交互内核：绝对定位覆盖整个容器并透明，点击/键盘焦点都落在它上面，
+   自绘视觉层由兄弟选择器驱动，change/indeterminate 语义与原生一致 */
+.ft-checkbox-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.ft-checkbox--disabled {
+  opacity: 0;
+}
+
+/* 视觉层：16px 圆角 4px；未选 = 输入框底色 + 描边，选中/半选 = 主色底 + 对比色图标 */
+.ft-checkbox-box {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--border-input);
+  background: var(--bg-input);
+  color: var(--color-primary-contrast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  transition: background-color 200ms, border-color 200ms, color 200ms;
+}
+
+.ft-checkbox:hover .ft-checkbox-box {
+  border-color: var(--color-primary);
+}
+
+.ft-checkbox-input:checked + .ft-checkbox-box,
+.ft-checkbox-input:indeterminate + .ft-checkbox-box {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+}
+
+.ft-checkbox-input:checked + .ft-checkbox-box .ft-checkbox-mark,
+.ft-checkbox-input:indeterminate + .ft-checkbox-box .ft-checkbox-indet {
+  opacity: 1;
+}
+
+/* 键盘可达性：Tab 聚焦时显示主色描边 */
+.ft-checkbox-input:focus-visible + .ft-checkbox-box {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+}
+
+.ft-checkbox-mark {
+  width: 12px;
+  height: 12px;
+  opacity: 0;
+  transition: opacity 200ms;
+}
+
+.ft-checkbox-indet {
+  width: 8px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-primary-contrast);
+  opacity: 0;
+}
+
+/* 空态：图标容器（柔和底色 + 描边）+ 主/副文案分层 + 主色引导按钮 */
+.ft-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 32px 16px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.ft-empty-ico {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 18px;
+  background: var(--color-primary-light);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  /* 内阴影微强化存在感（远观不“飘”） */
+  box-shadow: inset 0 1px 2px rgba(38, 35, 27, 0.05);
+}
+
+.ft-empty-ico svg {
+  width: 30px;
+  height: 30px;
+}
+
+.ft-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-empty-desc {
+  max-width: 340px;
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-tertiary);
+}
+
+.ft-empty-action {
+  margin-top: 14px;
+  padding: 6px 16px;
+}
+
+/* ==================== 队列面板 ==================== */
+
+/* 面板头：队列名 + 任务数角标（常驻入口标识） */
+.ft-queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft-queue-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-queue-count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  color: var(--color-primary);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.ft-queue-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.ft-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ft-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+}
+
+/* 四色体系（spec §9.3）：传输中/已暂停/失败/同名被拒 + 排队灰 */
+.ft-chip--active {
+  background: color-mix(in srgb, var(--color-success) 15%, transparent);
+  color: var(--color-success);
+}
+
+.ft-chip--queued {
+  background: color-mix(in srgb, var(--text-secondary) 15%, transparent);
+  color: var(--text-secondary);
+}
+
+.ft-chip--pause {
+  background: color-mix(in srgb, var(--color-warning) 15%, transparent);
+  color: var(--color-warning);
+}
+
+.ft-chip--fail {
+  background: color-mix(in srgb, var(--color-danger) 15%, transparent);
+  color: var(--color-danger);
+}
+
+.ft-chip--reject {
+  /* 宿主无独立 token：用 danger+primary 派生深酒红（非 AI 紫），与失败(纯红)语义区分 */
+  --ft-reject: color-mix(in srgb, var(--color-danger) 72%, var(--color-primary) 28%);
+  background: color-mix(in srgb, var(--ft-reject) 15%, transparent);
+  color: var(--ft-reject);
+}
+
+.ft-resume-all {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.ft-summary-speed {
+  font-size: 11px;
+  color: var(--color-success);
+  flex-shrink: 0;
+}
+
+.ft-task-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ft-task {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 10px 12px;
+}
+
+.ft-task-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.ft-task-dir {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.ft-task-dir svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ft-task-dir--up {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+
+.ft-task-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.ft-mini-btn {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  padding: 4px;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  flex-shrink: 0;
+  transition: color 0.2s ease, background-color 0.2s ease;
+}
+
+.ft-mini-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.ft-mini-btn:hover {
+  background: var(--bg-input);
+  color: var(--text-primary);
+}
+
+/* ghost 变体：破坏性操作默认弱化，hover 才显现（设置面板路径移除） */
+.ft-mini-btn--ghost {
+  opacity: 0.35;
+}
+
+.ft-mini-btn--ghost:hover {
+  opacity: 1;
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.ft-pbar {
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-card);
+  overflow: hidden;
+}
+
+.ft-pbar-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+.ft-pbar-fill--pause {
+  background: var(--color-warning);
+}
+
+.ft-task-meta {
+  display: flex;
+  gap: 12px;
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.ft-task-reason {
+  margin-top: 5px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* ==================== 过渡动画 ==================== */
+
+/* 页面状态切换（空态 ↔ 工作台）：淡入 + 轻微上移，out-in 交叉过渡避免闪烁 */
+.ft-page-enter-active,
+.ft-page-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  will-change: transform, opacity;
+}
+
+.ft-page-leave-active {
+  transition-duration: 0.15s;
+}
+
+.ft-page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
+.ft-page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* 传输队列面板：内容淡入 + 自右滑入，与网格列宽动画（280ms）同步 */
+.ft-queue-panel-enter-active,
+.ft-queue-panel-leave-active {
+  transition: opacity 0.2s ease, transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform, opacity;
+}
+
+.ft-queue-panel-enter-from,
+.ft-queue-panel-leave-to {
+  opacity: 0;
+  transform: translateX(24px);
+}
+
+/* 设置覆盖层：淡入 + 上滑 */
+.ft-settings-enter-active,
+.ft-settings-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  will-change: transform, opacity;
+}
+
+.ft-settings-enter-from,
+.ft-settings-leave-to {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+/* 通用淡入淡出（如对端存储权限提示条） */
+.ft-fade-enter-active,
+.ft-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.ft-fade-enter-from,
+.ft-fade-leave-to {
+  opacity: 0;
+}
+
+/* 文件表格内部状态切换（加载/错误/空态/表格）：短时交叉淡入，避免目录跳转闪烁 */
+.ft-swap-enter-active,
+.ft-swap-leave-active {
+  transition: opacity 0.12s ease;
+}
+
+.ft-swap-enter-from,
+.ft-swap-leave-to {
+  opacity: 0;
+}
+
+/* 任务卡进入/移除：淡入上移；顺序变化（FLIP）平滑位移，移除时脱离文档流不挤占 */
+.ft-task-enter-active,
+.ft-task-leave-active,
+.ft-task-move {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.ft-task-enter-from,
+.ft-task-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
+
+.ft-task-leave-active {
+  position: absolute;
+}
+
+/* 面板/队列/页面/任务卡过渡保持全时长（曾用 prefers-reduced-motion 压成 0.01ms 导致动画失效） */
+
+/* ==================== 设置面板（覆盖层） ==================== */
+
+.ft-settings-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  background: color-mix(in srgb, var(--bg-page) 70%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.ft-settings {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-page);
+  overflow: hidden;
+}
+
+.ft-settings-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+}
+
+.ft-settings-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-settings-row--push {
+  margin-top: 8px;
+}
+
+.ft-settings-row--right {
+  justify-content: flex-end;
+}
+
+.ft-settings-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.ft-settings-section {
+  display: flex;
+  flex-direction: column;
+}
+
+.ft-settings-helper {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.ft-settings-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft-root-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ft-root-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-input);
+  font-size: 12px;
+}
+
+.ft-root-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: Consolas, Monaco, monospace;
+  color: var(--text-primary);
+}
+
+.ft-dir-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-primary);
+}
+
+.ft-dir-value--empty {
+  color: var(--text-tertiary);
+}
+
+/* 空值占位：虚线放置区，既是视觉锚点也是下一步的引导（可点击区域） */
+.ft-dir-value--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-input);
+  background: var(--bg-card);
+  font-size: 12px;
+}
+
+.ft-warning {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  background: var(--color-warning-light);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, transparent);
+  border-radius: var(--radius-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.ft-warning-ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  margin-top: 1px;
+  color: var(--color-warning);
+}
+
+.ft-loading {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+/* ==================== v2 队列 4 tab（自绘分段，禁原生 select） ==================== */
+
+.ft-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 6px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  flex-shrink: 0;
+}
+
+.ft-tab {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px;
+  border: none;
+  border-radius: calc(var(--radius-btn) - 3px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ft-tab:hover {
+  color: var(--text-primary);
+}
+
+.ft-tab--active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+/* ==================== v2 传输历史 ==================== */
+
+.ft-history {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+}
+
+.ft-history-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-card);
+  transition: background-color 0.15s;
+}
+
+.ft-history-item:hover {
+  background: var(--bg-hover);
+}
+
+.ft-history-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.ft-history-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ft-history-meta {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  color: var(--text-tertiary);
+  font-size: 11px;
+}
+
+.ft-history-clear {
+  margin: 8px auto 4px;
+  flex-shrink: 0;
+}
+
+/* ==================== v2 pending 批横幅（接收端应答） ==================== */
+
+/* ==================== v2 批量传输请求弹窗（全局模态，spec 14.4） ==================== */
+
+.ft-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.ft-dialog-card {
+  width: min(420px, 100%);
+  padding: 20px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ft-dialog-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ft-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ft-dialog-countdown {
+  font-size: 12px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  transition: color 0.2s ease;
+}
+
+.ft-dialog-countdown--urgent {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
+.ft-dialog-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+.ft-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 弹窗淡入 + 上浮（GPU 合成属性） */
+.ft-dialog-enter-active,
+.ft-dialog-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.ft-dialog-enter-active .ft-dialog-card,
+.ft-dialog-leave-active .ft-dialog-card {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.ft-dialog-enter-from,
+.ft-dialog-leave-to {
+  opacity: 0;
+}
+
+.ft-dialog-enter-from .ft-dialog-card,
+.ft-dialog-leave-to .ft-dialog-card {
+  transform: translateY(8px);
+}
+
+/* ==================== v2 接收中 toast ==================== */
+
+.ft-toasts {
+  position: fixed;
+  top: 54px;
+  right: 16px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 340px;
+}
+
+.ft-toast {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  color: var(--text-primary);
+  font-size: 12px;
+  pointer-events: auto;
+  max-width: 100%;
+}
+
+.ft-toast-ico {
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: var(--color-primary);
+}
+
+.ft-toast-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ft-toast-close {
+  flex-shrink: 0;
+}
+
+/* toast 进出：位移 + 淡入（GPU 合成属性） */
+.ft-toast-enter-active,
+.ft-toast-leave-active {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s;
+}
+
+.ft-toast-enter-from,
+.ft-toast-leave-to {
+  transform: translateX(16px);
+  opacity: 0;
+}
+
+.ft-toast-move {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==================== v2 设置：接收策略分段控件 + 超时输入 ==================== */
+
+.ft-segmented {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  width: fit-content;
+}
+
+.ft-segmented-item {
+  padding: 5px 12px;
+  border: none;
+  border-radius: calc(var(--radius-btn) - 3px);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.ft-segmented-item:hover {
+  color: var(--text-primary);
+}
+
+.ft-segmented-item--active {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-card);
+}
+
+.ft-settings-timeout {
+  margin-top: 8px;
+}
+
+.ft-timeout-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+/* 完全自绘外观的数字输入（宿主 Input 风格：token-bound、无系统观感） */
+.ft-timeout-input {
+  width: 88px;
+  padding: 5px 8px;
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  color: var(--text-primary);
+  font-size: 12px;
+  transition: border-color 0.15s;
+}
+
+.ft-timeout-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}

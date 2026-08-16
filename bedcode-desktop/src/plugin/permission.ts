@@ -9,28 +9,48 @@
 const VALID_PERMISSIONS = new Set([
   'terminal:input',
   'terminal:output',
+  'terminal:observe',
   'session:read',
   'session:write',
   'ui:sidebar',
   'ui:toolbox',
   'ui:statusbar',
+  'ui:pageToolbar',
   'ui:input',
+  'ui:fileHandler',
   'network:http',
   'storage',
+  'broadcast',
+  'fileservice',
+  'transfer',
 ])
 
 /** 权限到 API 方法的映射 */
 const PERMISSION_API_MAP: Record<string, string[]> = {
   'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
+  'terminal:observe': ['terminal.onInputSubmitted'],
   'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
   'session:write': ['session.create', 'session.stop'],
   'ui:sidebar': ['ui.registerSidebarPanel'],
   'ui:toolbox': ['ui.registerToolboxPage'],
   'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
+  'ui:pageToolbar': ['ui.registerPageToolbarItem'],
   'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
+  'ui:fileHandler': ['ui.registerFileHandler'],
   'network:http': ['http.registerEndpoint'],
   'storage': ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
+  'fileservice': [
+    'fileService.mount',
+    'fileService.unmount',
+    'fileService.updateRoots',
+    'fileService.getPeer',
+    'fileService.pickDirectory',
+    'fileService.pickFiles',
+  ],
+  'system:open': ['system.revealInDir'],
+  // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
+  'transfer': [],
 }
 
 /** 检查权限是否合法 */

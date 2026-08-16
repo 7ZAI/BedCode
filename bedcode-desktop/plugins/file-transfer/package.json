@@ -1,0 +1,24 @@
+{
+  "name": "@bedcode/plugin-file-transfer",
+  "version": "1.0.0-beta",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:frontend": "vite build",
+    "build:rust": "cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release",
+    "build": "node scripts/build.js",
+    "dev": "node scripts/build.js --watch"
+  },
+  "dependencies": {
+    "@binblink/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
+  },
+  "devDependencies": {
+    "@tauri-apps/plugin-notification": "^2.0.0",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.0.0",
+    "vue": "^3.4.0",
+    "vue-i18n": "^9.0.0",
+    "typescript": "^5.0.0",
+    "terser": "^5.0.0"
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "bedcode_plugin_auto_task"
+version = "1.0.0-beta"
+edition = "2021"
+
+[dependencies]
+bedcode-plugin-api-mobile = { path = "../../../packages/plugin-sdk-mobile/rust" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[features]
+default = []
+wasm = ["bedcode-plugin-api-mobile/wasm"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]

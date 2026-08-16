@@ -8,12 +8,10 @@
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
+    "core:app:default",
     "core:window:default",
     "core:webview:default",
     "dialog:default",
-    "os:default",
-    "shell:allow-open",
-    "notification:default",
     "os:default",
     {
       "identifier": "http:default",
@@ -27,6 +25,7 @@
     "edge-to-edge:allow-get-safe-area-insets",
     "edge-to-edge:allow-get-keyboard-info",
     "edge-to-edge:allow-show-keyboard",
-    "edge-to-edge:allow-hide-keyboard"
+    "edge-to-edge:allow-hide-keyboard",
+    "machine-uid:default"
   ]
 }

@@ -245,7 +245,15 @@ export function useCodeHighlight() {
     }
   }
 
-  async function highlightDiff(lines: FileDiffLine[], lang: string, theme?: string): Promise<void> {
+  /**
+   * 高亮 diff 视图：将完整文件内容与 diff 行合并，显示全部行
+   *
+   * @param lines - git diff 返回的修改行（含 context/added/removed）
+   * @param fullContent - 文件完整内容（用于填充 diff 中未出现的行）
+   * @param lang - Shiki 语言 ID
+   * @param theme - Shiki 主题 ID
+   */
+  async function highlightDiff(lines: FileDiffLine[], lang: string, theme?: string, fullContent?: string): Promise<void> {
     isLoading.value = true
     error.value = null
 
@@ -258,8 +266,16 @@ export function useCodeHighlight() {
 
       const resolvedTheme = theme || THEME
 
+      // 将 diff 行按 newLineNo 索引，构建完整文件的行级 diff 信息
+      let mergedLines: FileDiffLine[]
+      if (fullContent) {
+        mergedLines = buildFullDiffLines(lines, fullContent)
+      } else {
+        mergedLines = lines
+      }
+
       // 将所有行内容拼接为完整代码段，整体高亮以保留语法上下文
-      const fullCode = lines.map(l => l.content).join('\n')
+      const fullCode = mergedLines.map(l => l.content).join('\n')
       const html = highlighter.codeToHtml(fullCode, {
         lang,
         theme: resolvedTheme,
@@ -272,10 +288,10 @@ export function useCodeHighlight() {
       const codeEl = doc.querySelector('code')
       const highlightedLines = codeEl
         ? Array.from(codeEl.querySelectorAll('.line')).map(el => el.innerHTML)
-        : lines.map(l => escapeHtml(l.content))
+        : mergedLines.map(l => escapeHtml(l.content))
 
       // 构建 diff HTML
-      const diffHtml = lines.map((line, i) => {
+      const diffHtml = mergedLines.map((line, i) => {
         const highlighted = highlightedLines[i] || escapeHtml(line.content)
         const oldNo = line.oldLineNo != null ? String(line.oldLineNo) : ''
         const newNo = line.newLineNo != null ? String(line.newLineNo) : ''
@@ -298,4 +314,78 @@ export function useCodeHighlight() {
   }
 
   return { highlightedHtml, isLoading, error, highlight, highlightDiff }
+}
+
+/**
+ * 将 git diff 行与文件完整内容合并，生成包含所有行的 diff 行列表
+ *
+ * diff 中的 context/added/removed 行保留原始类型，
+ * diff 中未出现的行（git diff 默认只显示修改前后各 3 行上下文）填充为 context 类型
+ */
+function buildFullDiffLines(diffLines: FileDiffLine[], fullContent: string): FileDiffLine[] {
+  const fileLines = fullContent.split('\n')
+  // 去掉末尾空行（split 会在末尾 \n 后产生空元素）
+  if (fileLines.length > 0 && fileLines[fileLines.length - 1] === '') {
+    fileLines.pop()
+  }
+
+  // 以 newLineNo 为 key 索引 diff 行（added 和 context 行有 newLineNo）
+  const diffByNewLine = new Map<number, FileDiffLine>()
+  // removed 行只有 oldLineNo，单独索引
+  const removedByOldLine = new Map<number, FileDiffLine>()
+  for (const line of diffLines) {
+    if (line.type === 'removed' && line.oldLineNo != null) {
+      removedByOldLine.set(line.oldLineNo, line)
+    } else if (line.newLineNo != null) {
+      diffByNewLine.set(line.newLineNo, line)
+    }
+  }
+
+  const result: FileDiffLine[] = []
+  // 记录已输出的 oldLineNo，用于在对应位置插入 removed 行
+  let lastOldLineNo = 0
+
+  for (let i = 0; i < fileLines.length; i++) {
+    const newLineNo = i + 1
+
+    // 先插入 oldLineNo 在 (lastOldLineNo, newLineNo] 范围内的 removed 行
+    // removed 行的 oldLineNo 对应的是修改前的行号，应出现在对应 newLineNo 位置之前
+    for (let oldNo = lastOldLineNo + 1; oldNo <= newLineNo; oldNo++) {
+      const removed = removedByOldLine.get(oldNo)
+      if (removed) {
+        result.push(removed)
+        lastOldLineNo = oldNo
+      }
+    }
+
+    const diffLine = diffByNewLine.get(newLineNo)
+    if (diffLine) {
+      result.push(diffLine)
+      // 更新 oldLineNo 跟踪：context 行和 added 行中 context 行有 oldLineNo
+      if (diffLine.oldLineNo != null) {
+        lastOldLineNo = diffLine.oldLineNo
+      }
+    } else {
+      // diff 中未出现的行，填充为 context
+      result.push({
+        type: 'context',
+        content: fileLines[i],
+        oldLineNo: newLineNo,
+        newLineNo: newLineNo,
+      })
+      lastOldLineNo = newLineNo
+    }
+  }
+
+  // 处理尾部可能存在的 removed 行
+  for (let oldNo = lastOldLineNo + 1; ; oldNo++) {
+    const removed = removedByOldLine.get(oldNo)
+    if (removed) {
+      result.push(removed)
+    } else {
+      break
+    }
+  }
+
+  return result
 }

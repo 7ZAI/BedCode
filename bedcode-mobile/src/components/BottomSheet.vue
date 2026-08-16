@@ -57,7 +57,7 @@
               {{ t('common.button.cancel') }}
             </button>
             <button
-              class="flex-1 bg-[var(--mobile-accent)] text-white py-3 rounded-xl font-medium active:opacity-80"
+              class="flex-1 bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] py-3 rounded-xl font-medium active:opacity-80"
               :class="{ 'opacity-50': !inputValue }"
               :disabled="!inputValue"
               @click="submit"

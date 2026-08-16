@@ -8,6 +8,8 @@ use crate::Result;
 use crate::connection::request::{TerminalRequest, SessionRequest};
 use crate::state::get_connection_manager;
 
+use crate::system::constants::terminal::{DEFAULT_COLS, DEFAULT_ROWS, INPUT_TIMEOUT_SECS};
+
 /// 发送输入到会话（带确认模式）
 /// 等待桌面端确认收到输入后再返回，确保消息已被处理
 #[tauri::command]
@@ -32,9 +34,19 @@ pub async fn ws_send_input_async(
     let message = TerminalRequest::input(&session_id, &trimmed_data, special_key_enum);
 
     // 使用带断开处理的 send_and_wait
-    // 设置 5 秒超时，终端输入应该快速响应
-    let timeout = std::time::Duration::from_secs(5);
+    let timeout = std::time::Duration::from_secs(INPUT_TIMEOUT_SECS);
     conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeout).await?;
+
+    // 通知插件终端输入（只读通知）
+    {
+        let pm = crate::state::get_plugin_manager();
+        pm.dispatch_lifecycle_event(
+            crate::plugin::types::PluginLifecycleEvent::TerminalInput {
+                session_id: session_id.clone(),
+                data: trimmed_data.clone(),
+            }
+        ).await;
+    }
 
     Ok(())
 }
@@ -66,7 +78,7 @@ pub async fn ws_send_and_wait(
     timeout_secs: Option<u64>,
 ) -> Result<serde_json::Value> {
     let conn = get_connection_manager();
-    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(30));
+    let timeout = std::time::Duration::from_secs(timeout_secs.unwrap_or(crate::connection::request::timeouts::DEFAULT.as_secs()));
 
     // 尝试将 payload 转换为对应的 Message 类型
     let message = match convert_json_to_message(&message_type, payload) {
@@ -129,11 +141,11 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                     let cols = payload.get("action")
                         .and_then(|a| a.get("cols"))
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(80) as u16;
+                        .unwrap_or(DEFAULT_COLS as u64) as u16;
                     let rows = payload.get("action")
                         .and_then(|a| a.get("rows"))
                         .and_then(|v| v.as_u64())
-                        .unwrap_or(24) as u16;
+                        .unwrap_or(DEFAULT_ROWS as u64) as u16;
                     SessionControlAction::ResizeSession { session_id, cols, rows }
                 }
                 _ => return None,

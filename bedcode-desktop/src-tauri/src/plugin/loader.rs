@@ -2,12 +2,13 @@
 //!
 //! 扫描插件目录，解析所有 plugin.json
 //! 验证必填字段和权限合法性，返回已加载的插件列表
-//! 仅处理文件扫描加载，Rust+TS cdylib 插件由 PluginHost 通过 CdylibLoader 加载
+//! 仅处理文件扫描加载，Rust+TS WASM 插件由 PluginHost 通过 WasmRuntime 加载
 
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
-use std::collections::HashMap;
+use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -20,36 +21,75 @@ impl PluginLoader {
     /// 目录约定：`plugins/desktop/{plugin-id}/plugin.json`
     /// 解析失败的插件跳过并记录警告，不影响其他插件
     pub fn load_all(plugins_dir: &Path, permission_mgr: &PermissionManager) -> HashMap<String, LoadedPlugin> {
+        tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
+
         if !plugins_dir.exists() {
-            tracing::info!("Plugin directory does not exist: {:?}", plugins_dir);
+            tracing::warn!("[PluginLoader] Plugin directory does not exist: {:?}", plugins_dir);
             return HashMap::new();
         }
 
         let mut plugins = HashMap::new();
+        // 已加载 id 集合：重复 id 先到先得，后出现的目录拒绝加载，
+        // 防止冒名插件顶替已加载插件（HashMap insert 覆盖语义是漏洞本体）
+        let mut seen_ids: HashSet<String> = HashSet::new();
         let entries = match fs::read_dir(plugins_dir) {
             Ok(entries) => entries,
             Err(e) => {
-                tracing::warn!("Failed to read plugin directory: {}", e);
+                tracing::error!("[PluginLoader] Failed to read plugin directory: {}", e);
                 return HashMap::new();
             }
         };
 
+        let mut dir_count = 0;
         for entry in entries.flatten() {
             let path = entry.path();
             if !path.is_dir() {
                 continue;
             }
+            dir_count += 1;
 
             let manifest_path = path.join("plugin.json");
             if !manifest_path.exists() {
-                tracing::debug!("Skipping {:?}: no plugin.json", path);
+                tracing::debug!("[PluginLoader] Skipping {:?}: no plugin.json", path);
                 continue;
             }
 
             match Self::load_manifest(&manifest_path) {
                 Ok(manifest) => {
+                    let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
                     let plugin_id = manifest.id.clone();
-                    let extension_path = path.to_string_lossy().to_string();
+
+                    // ==================== 身份校验（防冒名顶替） ====================
+                    // 1. id 必须为反向域名格式（拒绝大写/下划线/单段等非约定格式）
+                    if !validate_plugin_id(&plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
+                            dir_name, plugin_id
+                        );
+                        continue;
+                    }
+                    // 2. 目录名必须与 manifest id 一致
+                    //    （watcher 热重载/卸载/文件服务路径全部依赖「目录名 = id」约定，
+                    //    不一致说明目录被复制改名或 manifest 被替换，直接拒绝）
+                    if !validate_dir_binding(&dir_name, &plugin_id) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting plugin {:?} from {:?}: dir name does not match manifest id (possible impersonation)",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
+                    // 3. 重复 id：先到先得，后到目录拒绝（防静默覆盖已加载插件）
+                    if !seen_ids.insert(plugin_id.clone()) {
+                        tracing::error!(
+                            "[PluginLoader] Rejecting duplicate plugin id {:?} from {:?}: already loaded from another directory",
+                            plugin_id, dir_name
+                        );
+                        continue;
+                    }
+                    // Windows read_dir 返回带 \\?\ verbatim 前缀的路径，该形式不允许
+                    // 正斜杠拼接（插件用 "{resource_dir}/{file}" 拼接会触发
+                    // ERROR_INVALID_NAME os error 123），统一剥离为常规路径
+                    let extension_path = strip_verbatim_prefix(&path.to_string_lossy());
 
                     // TS-only 插件强制设置 plugin_type
                     let manifest = manifest;
@@ -63,12 +103,17 @@ impl PluginLoader {
                         &manifest.permissions,
                     );
 
-                    // 根据 rust_library 字段判断来源：有 cdylib 则为 Cdylib，否则为 FileScan
+                    // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan
                     let source = if !manifest.rust_library.is_empty() {
-                        PluginSource::Cdylib
+                        PluginSource::Wasm
                     } else {
                         PluginSource::FileScan
                     };
+
+                    tracing::info!(
+                        "[PluginLoader] Plugin loaded: {} v{} (type={:?}, source={:?}, path={})",
+                        manifest.id, manifest.version, manifest.plugin_type, source, extension_path
+                    );
 
                     let loaded = LoadedPlugin {
                         manifest,
@@ -79,17 +124,16 @@ impl PluginLoader {
                         source,
                     };
 
-                    tracing::info!("Plugin loaded: {} v{}", loaded.manifest.id, loaded.manifest.version);
                     plugins.insert(plugin_id, loaded);
                 }
                 Err(e) => {
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    tracing::warn!("Failed to load plugin from {:?}: {}", dir_name, e);
+                    tracing::error!("[PluginLoader] Failed to load plugin from {:?}: {}", dir_name, e);
                 }
             }
         }
 
-        tracing::info!("Loaded {} file-based plugin(s)", plugins.len());
+        tracing::info!("[PluginLoader] Scanned {} dir(s), loaded {} plugin(s)", dir_count, plugins.len());
         plugins
     }
 
@@ -130,6 +174,17 @@ impl PluginLoader {
     }
 }
 
+/// 剥离 Windows verbatim 路径前缀（`\\?\`）
+///
+/// Windows `read_dir` 返回带 `\\?\` 前缀的路径。该形式严格要求反斜杠分隔，
+/// 插件侧用 `format!("{}/{}", resource_dir, file)` 拼接正斜杠会触发
+/// `ERROR_INVALID_NAME`（os error 123）。统一剥离为常规路径后，
+/// 正斜杠/反斜杠均可正常使用。非 Windows 平台原样返回。
+///
+/// 唯一实现；`PluginHost` 注入 `resource_dir` 时复用（见 host.rs）。
+pub(crate) fn strip_verbatim_prefix(path: &str) -> String {
+    path.strip_prefix(r"\\?\").unwrap_or(path).to_string()
+}
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -1,0 +1,154 @@
+{
+  "id": "com.bedcode.auto-task",
+  "name": "Auto Task",
+  "version": "1.0.0-beta",
+  "description": "Agent 任务队列与自动授权：同步 Claude Code / pi / opencode / Codex 任务状态，支持任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行。\n使用：Claude Code 会话创建时自动安装项目 hooks 同步任务状态；终端工具栏按钮打开任务队列弹窗，侧边栏「任务历史」查看执行记录与统计。",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_auto_task",
+  "icon": "icon.svg",
+  "permissions": [
+    "broadcast",
+    "fs:read",
+    "fs:write",
+    "session:read",
+    "session:write",
+    "storage",
+    "terminal:input",
+    "terminal:observe",
+    "terminal:output",
+    "timer:schedule",
+    "ui:input",
+    "ui:sidebar"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "auto-task.cleanup-project-hooks",
+        "title": "Cleanup Project Hooks"
+      },
+      {
+        "id": "auto-task.get-task-status",
+        "title": "Get Task Status"
+      },
+      {
+        "id": "auto-task.list-task-history",
+        "title": "List Task History"
+      },
+      {
+        "id": "auto-task.task-history-stats",
+        "title": "Task History Statistics"
+      },
+      {
+        "id": "auto-task.list-task-queue",
+        "title": "List Task Queue by Session"
+      },
+      {
+        "id": "auto-task.list-running-sessions",
+        "title": "List Running Sessions"
+      },
+      {
+        "id": "auto-task.set-platform",
+        "title": "Set Host Platform"
+      },
+      {
+        "id": "auto-task.set-auto-mode",
+        "title": "Set Auto Mode"
+      },
+      {
+        "id": "auto-task.get-session-settings",
+        "title": "Get Session Settings"
+      },
+      {
+        "id": "auto-task.add-task",
+        "title": "Add Task to Queue"
+      },
+      {
+        "id": "auto-task.list-preset-tasks",
+        "title": "List Preset Tasks"
+      },
+      {
+        "id": "auto-task.create-preset-task",
+        "title": "Create Preset Task"
+      },
+      {
+        "id": "auto-task.delete-preset-task",
+        "title": "Delete Preset Task"
+      },
+      {
+        "id": "auto-task.update-preset-task",
+        "title": "Update Preset Task"
+      },
+      {
+        "id": "auto-task.add-preset-to-queue",
+        "title": "Add Preset Task to Queue"
+      },
+      {
+        "id": "auto-task.remove-task",
+        "title": "Remove Task from Queue"
+      },
+      {
+        "id": "auto-task.clear-queue",
+        "title": "Clear Task Queue"
+      },
+      {
+        "id": "auto-task.update-task",
+        "title": "Update Task Prompt"
+      },
+      {
+        "id": "auto-task.reorder-queue",
+        "title": "Reorder Task Queue"
+      },
+      {
+        "id": "auto-task.list-session-configs",
+        "title": "List Session Configs"
+      },
+      {
+        "id": "auto-task.list-supported-agents",
+        "title": "auto-task.list-supported-agents"
+      },
+      {
+        "id": "auto-task.list-scheduled-jobs",
+        "title": "List Scheduled Jobs"
+      },
+      {
+        "id": "auto-task.create-scheduled-job",
+        "title": "Create Scheduled Job"
+      },
+      {
+        "id": "auto-task.delete-scheduled-job",
+        "title": "Delete Scheduled Job"
+      },
+      {
+        "id": "auto-task.reset-scheduled-job",
+        "title": "Reset Scheduled Job"
+      },
+      {
+        "id": "auto-task.scheduler-tick",
+        "title": "Scheduler Tick"
+      }
+    ],
+    "views": [
+      {
+        "id": "auto-task.history",
+        "type": "sidebar",
+        "title": "任务历史",
+        "component": "TaskHistoryView",
+        "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"
+      }
+    ],
+    "lifecycle": {
+      "onStartup": true,
+      "onShutdown": true
+    },
+    "provides": [
+      "task:status-changed",
+      "session:mode-changed",
+      "task:queue-changed",
+      "task:scheduled-changed",
+      "task:preset-changed"
+    ]
+  }
+}

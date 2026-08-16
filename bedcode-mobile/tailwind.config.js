@@ -3,6 +3,11 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{vue,js,ts,jsx,tsx}",
+    // 内置插件前端源码：插件 SFC 使用宿主 Tailwind 工具类，运行时注入宿主 CSS，
+    // 需纳入扫描否则类缺失（插件 dist 不携带编译后的 Tailwind）
+    "./plugins/**/src/**/*.{vue,js,ts,jsx,tsx}",
+    // 共享 SDK 组件：宿主/插件共用（@binblink/plugin-sdk-mobile/ui）
+    "./packages/plugin-sdk-mobile/src/**/*.{vue,js,ts,jsx,tsx}",
   ],
   darkMode: 'class',
   theme: {

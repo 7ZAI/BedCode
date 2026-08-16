@@ -1,6 +1,7 @@
 //! Database operations
 
-use super::{Database, Pairing, QuickAction, SessionConfig, Setting};
+use super::{ConnectionHistory, Database, Pairing, QuickAction, SessionConfig, Setting};
+use super::CONNECTION_HISTORY_MAX_PER_DEVICE;
 use crate::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -53,12 +54,16 @@ impl Database {
     }
 
     /// 更新已配对设备的 last_seen 和 connect_count（JWT 重连时调用）
-    pub fn update_pairing_last_seen(&self, fingerprint: &str) -> Result<()> {
+    ///
+    /// `device_name` 为 Some 时同步更新展示名（重连时设备上报了新的真实设备名），
+    /// None 时保留原值
+    pub fn update_pairing_last_seen(&self, fingerprint: &str, device_name: Option<&str>) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn().execute(
-            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1
-             WHERE device_fingerprint = ?2 AND is_active = 1",
-            rusqlite::params![now, fingerprint],
+            "UPDATE pairings SET last_seen = ?1, connect_count = connect_count + 1,
+             device_name = COALESCE(?2, device_name)
+             WHERE device_fingerprint = ?3 AND is_active = 1",
+            rusqlite::params![now, device_name, fingerprint],
         )?;
         Ok(())
     }
@@ -109,6 +114,8 @@ impl Database {
             "UPDATE pairings SET is_active = 0 WHERE id = ?1",
             rusqlite::params![id],
         )?;
+        // 移除设备连带删除连接历史（无审计需求）
+        self.delete_connection_history(id)?;
         Ok(())
     }
 
@@ -119,6 +126,137 @@ impl Database {
             |row| row.get(0),
         )?;
         Ok(count > 0)
+    }
+
+    // ==================== Connection History Operations ====================
+
+    /// 根据指纹查找活跃配对记录 id（设备 ID）
+    pub fn find_pairing_id_by_fingerprint(&self, fingerprint: &str) -> Result<Option<String>> {
+        let result = self.conn().query_row(
+            "SELECT id FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1",
+            rusqlite::params![fingerprint],
+            |row| row.get::<_, String>(0),
+        );
+        match result {
+            Ok(id) => Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// 根据指纹获取活跃配对记录（含公钥，用于生物认证验签）
+    pub fn get_pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<Pairing>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, connect_count, is_active
+             FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1"
+        )?;
+
+        let pairing = stmt.query_row(rusqlite::params![fingerprint], |row| {
+            Ok(Pairing {
+                id: row.get(0)?,
+                device_name: row.get(1)?,
+                device_fingerprint: row.get(2)?,
+                public_key: row.get(3)?,
+                address: row.get(4)?,
+                session_token: row.get(5)?,
+                paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
+                last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
+                connect_count: row.get(8)?,
+                is_active: row.get::<_, i32>(9)? == 1,
+            })
+        }).ok();
+
+        Ok(pairing)
+    }
+
+    /// 更新配对记录的公钥（生物凭证绑定/解绑）
+    pub fn update_pairing_public_key(&self, pairing_id: &str, public_key: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE pairings SET public_key = ?1 WHERE id = ?2 AND is_active = 1",
+            rusqlite::params![public_key, pairing_id],
+        )?;
+        Ok(())
+    }
+
+    /// 记录连接事件（按设备 ID），插入后清理超限的旧记录
+    pub fn record_connection_event(&self, device_id: &str, auth_method: &str, result: &str, address: Option<&str>) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        self.conn().execute(
+            "INSERT INTO connection_history (device_id, auth_method, result, address, connected_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            rusqlite::params![device_id, auth_method, result, address, now],
+        )?;
+        self.prune_connection_history(device_id)?;
+        Ok(())
+    }
+
+    /// 记录连接事件（按设备指纹解析设备 ID，未配对/未激活则忽略）
+    pub fn record_connection_event_by_fingerprint(&self, fingerprint: &str, auth_method: &str, result: &str, address: Option<&str>) -> Result<()> {
+        if let Some(device_id) = self.find_pairing_id_by_fingerprint(fingerprint)? {
+            self.record_connection_event(&device_id, auth_method, result, address)?;
+        }
+        Ok(())
+    }
+
+    /// 回填最近一条未关闭连接的断开时间
+    pub fn close_open_connection_event(&self, device_id: &str) -> Result<()> {
+        let now = Utc::now().to_rfc3339();
+        let id: Option<i64> = self.conn().query_row(
+            "SELECT id FROM connection_history WHERE device_id = ?1 AND disconnected_at IS NULL
+             ORDER BY connected_at DESC LIMIT 1",
+            rusqlite::params![device_id],
+            |row| row.get(0),
+        ).ok();
+        if let Some(id) = id {
+            self.conn().execute(
+                "UPDATE connection_history SET disconnected_at = ?1 WHERE id = ?2",
+                rusqlite::params![now, id],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// 获取设备连接历史（按时间倒序）
+    pub fn get_connection_history(&self, device_id: &str) -> Result<Vec<ConnectionHistory>> {
+        let mut stmt = self.conn().prepare(
+            "SELECT id, device_id, auth_method, result, address, connected_at, disconnected_at
+             FROM connection_history WHERE device_id = ?1 ORDER BY connected_at DESC"
+        )?;
+
+        let rows = stmt.query_map(rusqlite::params![device_id], |row| {
+            Ok(ConnectionHistory {
+                id: row.get(0)?,
+                device_id: row.get(1)?,
+                auth_method: row.get(2)?,
+                result: row.get(3)?,
+                address: row.get(4)?,
+                connected_at: parse_datetime_sql(&row.get::<_, String>(5)?, "connected_at")?,
+                disconnected_at: parse_optional_datetime_sql(row.get::<_, Option<String>>(6)?, "disconnected_at")?,
+            })
+        })?;
+
+        rows.collect::<std::result::Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
+    /// 删除设备连接历史（移除配对时级联清理）
+    pub fn delete_connection_history(&self, device_id: &str) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM connection_history WHERE device_id = ?1",
+            rusqlite::params![device_id],
+        )?;
+        Ok(())
+    }
+
+    /// 每设备最多保留 MAX 条，超限删除最旧的
+    fn prune_connection_history(&self, device_id: &str) -> Result<()> {
+        self.conn().execute(
+            "DELETE FROM connection_history WHERE device_id = ?1 AND id NOT IN (
+                SELECT id FROM connection_history WHERE device_id = ?1
+                ORDER BY connected_at DESC LIMIT ?2
+            )",
+            rusqlite::params![device_id, CONNECTION_HISTORY_MAX_PER_DEVICE],
+        )?;
+        Ok(())
     }
 
     // ==================== Session Config Operations ====================

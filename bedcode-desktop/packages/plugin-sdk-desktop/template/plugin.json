@@ -1,0 +1,13 @@
+{
+  "id": "{{ID}}",
+  "name": "{{NAME}}",
+  "version": "0.1.0",
+  "description": "",
+  "author": "{{AUTHOR}}",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "{{PLUGIN_TYPE}}",
+{{RUST_LIBRARY_LINE}}  "icon": "",
+  "permissions": ["storage"],
+  "contributes": {}
+}

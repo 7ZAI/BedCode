@@ -67,6 +67,9 @@ jobs:
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target
+          targets: wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -83,10 +86,47 @@ jobs:
           Set-Content -Path certificate/tempCert.txt -Value $env:WINDOWS_CERTIFICATE
           certutil -decode certificate/tempCert.txt certificate/certificate.pfx
           Remove-Item certificate/tempCert.txt
-          Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          $cert = Import-PfxCertificate -FilePath certificate/certificate.pfx -CertStoreLocation Cert:\CurrentUser\My -Password (ConvertTo-SecureString -String $env:WINDOWS_CERTIFICATE_PASSWORD -Force -AsPlainText)
+          # tauri 按 certificateThumbprint 从当前用户证书库找签名证书；
+          # 动态写入 tauri.conf.json（仅 CI 生效，本地构建不受影响）
+          $thumbprint = $cert.Thumbprint
+          node -e "const fs=require('fs');const p='src-tauri/tauri.conf.json';const c=JSON.parse(fs.readFileSync(p,'utf8'));c.bundle.windows=c.bundle.windows||{};c.bundle.windows.certificateThumbprint='$thumbprint';fs.writeFileSync(p,JSON.stringify(c,null,2)+'\n')"
+          echo "certificateThumbprint=$thumbprint"
 
       - name: Install frontend dependencies
         run: npm install
+
+      # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
+      # 必须先本地构建 @binblink/plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      - name: Build SDK (plugin-sdk-desktop dist)
+        run: npm run build -w @binblink/plugin-sdk-desktop
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
+      # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
+      - name: Build plugins (WASM artifacts)
+        run: npm run plugins:build
+
+      - name: Verify updater artifacts enabled in config
+        shell: bash
+        run: |
+          # createUpdaterArtifacts=false 时 tauri-cli 会静默跳过签名，导致 latest.json 缺失且 CI 不报错
+          VALUE=$(node -p "require('./src-tauri/tauri.conf.json').bundle.createUpdaterArtifacts")
+          if [ "$VALUE" != "true" ]; then
+            echo "::error::bundle.createUpdaterArtifacts 必须为 true，否则不会生成升级产物（.sig / latest.json）"
+            exit 1
+          fi
+          echo "createUpdaterArtifacts=true ✓"
+
+      - name: Verify signing key configured
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret 未配置，无法生成签名升级包"
+            exit 1
+          fi
+          echo "签名密钥已配置 ✓"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
@@ -102,6 +142,23 @@ jobs:
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
+
+      - name: Verify latest.json uploaded
+        shell: bash
+        run: |
+          # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
+          # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本
+          for i in $(seq 1 10); do
+            BODY=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ needs.prepare-release.outputs.version }}")
+            if echo "$BODY" | grep -q '"name": "latest.json"'; then
+              echo "latest.json 已上传 ✓"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置"
+          exit 1
 
       - name: Clean up certificate
         if: always()
@@ -128,7 +185,8 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
+          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）
+          targets: aarch64-linux-android, wasm32-unknown-unknown
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -159,6 +217,24 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
+      # bedcode-plugin CLI 运行时加载 SDK 的 dist/index.js (file: 引用不含 dist)，
+      # 必须先构建 @binblink/plugin-sdk-mobile 再跑 beforeBuildCommand 的 plugins:build
+      - name: Build SDK (plugin-sdk-mobile dist)
+        run: npm run build --prefix packages/plugin-sdk-mobile
+
+      # mobile 插件是独立目录（无 workspaces），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
+      - name: Install plugin dependencies
+        run: |
+          for p in ai-chatbox auto-task file-transfer ocr; do
+            if [ ! -d "plugins/$p" ]; then
+              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
+              continue
+            fi
+            echo "== installing plugins/$p =="
+            (cd plugins/$p && npm ci) || exit 1
+          done
+
       - name: Build Android APK
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -169,6 +245,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.prepare-release.outputs.version }}
+          # 始终先入草稿（与 tauri-action 的 releaseDraft 一致），
+          # 正式发布仅由 publish-release 完成（且仅允许 master tag）
+          draft: true
           files: |
             bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk
             bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/universal/release/*.apk.sig
@@ -181,6 +260,22 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
+      - uses: actions/checkout@v4
+        with:
+          # 祖先校验需要完整历史（默认 fetch-depth=1 只有当前提交）
+          fetch-depth: 0
+
+      # 正式发布门禁：tag 指向的提交必须是 master 祖先，否则拒绝发布。
+      # 防止从 dev/feature 等分支误推 v* tag 触发正式 release。
+      - name: Gate - release 仅允许 master 的 tag
+        run: |
+          git fetch origin master --quiet
+          if ! git merge-base --is-ancestor HEAD origin/master; then
+            echo "::error::正式发布仅允许 master 分支的 tag 触发（当前 tag 不在 master 上），已拒绝发布"
+            exit 1
+          fi
+          echo "tag 位于 master ✓ 允许发布"
+
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:

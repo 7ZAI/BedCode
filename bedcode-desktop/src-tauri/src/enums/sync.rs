@@ -72,4 +72,57 @@ pub enum SyncPayload {
         session_id: String,
         auto_approve: bool,
     },
+
+    // === 任务队列同步 ===
+    /// 会话任务队列变更
+    TaskQueueChanged {
+        session_id: String,
+        /// 变更后的待执行任务数量
+        queue_count: i64,
+        /// 触发动作：add / remove / clear / dequeue / done / update / reorder / cancel
+        action: String,
+        /// 关联的队列项 ID（done 广播携带）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        task_id: Option<String>,
+        /// 队列项状态（done 广播为 "done"）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+    },
+
+    // === 定时自动任务同步（v6，ADR 0003） ===
+    /// 定时自动任务变更（与移动端 enums/sync.rs 同名变体保持同构）
+    TaskScheduledChanged {
+        job_id: String,
+        /// 变更后的状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
+        action: String,
+    },
+
+    // === 文件服务同步（桌面 → 移动，内网文件传输插件规格阶段 2） ===
+    /// 桌面侧插件挂载点可用性变更（mount/unmount/update_roots 后由宿主自动发出）
+    ///
+    /// 与移动端 `enums/sync.rs` 同名变体保持同构
+    FileServiceChanged {
+        plugin_id: String,
+        mount_path: String,
+        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
+        available: bool,
+        /// 挂载支持的操作集合（unmount 时为空）
+        operations: Vec<bedcode_plugin_api::FileOperation>,
+    },
+
+    // === 传输批应答同步（v2，桌面 → 移动） ===
+    /// 桌面端（接收端宿主）对传输批的应答推送：批准/拒绝/超时 → 移动端发送方
+    ///
+    /// 与移动端 `enums/sync.rs` 同名变体保持同构；移动端收到后
+    /// 经注册表双通道发布 `filesrv:transfer_approval` 供发送方插件订阅
+    TransferApproval {
+        /// 批 ID
+        batch_id: String,
+        /// "approved" | "rejected"
+        decision: String,
+        /// "" | "user-rejected" | "timeout"
+        reason: String,
+    },
 }

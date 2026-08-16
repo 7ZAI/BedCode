@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod control;
+pub mod file_service;
 pub mod plugin;
 pub mod pty_status;
 pub mod session;
@@ -14,7 +15,8 @@ pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
-pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload};
+pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload, SubscribeMode};
+pub use file_service::{FileServicePayload, MountAnnouncement};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
 pub use session::{SessionStatus, SessionType, TaskStatus};

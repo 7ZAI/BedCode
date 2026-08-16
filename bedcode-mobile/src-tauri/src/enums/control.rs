@@ -98,6 +98,12 @@ pub enum TerminalAction {
         /// 合并消息的结束索引，用于精确去重（合并多条事件时 index..=end_index）
         #[serde(skip_serializing_if = "Option::is_none")]
         end_index: Option<usize>,
+        /// 合并消息的起始字节偏移（会话流坐标），供字节级游标续传
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start_offset: Option<u64>,
+        /// 合并消息的结束字节偏移（会话流坐标）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end_offset: Option<u64>,
     },
 
     /// 输入消息 (客户端 → 服务端)
@@ -126,6 +132,15 @@ pub enum TerminalAction {
         max_seq: u64,
         /// 历史消息数量
         history_count: usize,
+        /// 订阅裁决：incremental = 从游标续传；reset = 清屏全量重播（旧版服务端不发送）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<SubscribeMode>,
+        /// 环形保留区间最小字节偏移（旧版服务端不发送）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        min_offset: Option<u64>,
+        /// 环形保留区间最大字节偏移（旧版服务端不发送）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        max_offset: Option<u64>,
     },
 
     /// 取消订阅 (客户端 → 服务端)
@@ -134,3 +149,14 @@ pub enum TerminalAction {
     /// 取消订阅响应 (服务端 → 客户端)
     UnsubscribeResponse,
 }
+
+/// 订阅模式 — 服务端基于真源（输出队列保留区间）裁决，消费者零猜测
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscribeMode {
+    /// 游标在保留区间内：从游标字节级裁剪续传
+    Incremental,
+    /// 游标已失效（早于 min_offset / 晚于 max_offset / 首次订阅）：清屏全量重播
+    Reset,
+}
+

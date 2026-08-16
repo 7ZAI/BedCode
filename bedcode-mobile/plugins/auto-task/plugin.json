@@ -1,0 +1,63 @@
+{
+  "id": "com.bedcode.auto-task",
+  "name": "Auto Task",
+  "version": "1.0.0-beta",
+  "description": "自动任务队列：把任务排队交给 Claude Code 依次自动执行\n· 任务队列：添加 / 移除 / 清空，执行中可取消\n· 自动执行：开启后队列任务自动调度到当前会话\n· 自动应答：Agent 提问时按预设内容自动回复\n· 预设任务：常用任务一键预存，随时入队\n· 定时任务：按时间点自动触发，错过可重设\n· 任务历史：状态统计、筛选、失败任务重试\n使用：在终端会话打开「自动任务」面板，选目标会话后创建任务入队，开启自动执行即按队列顺序调度。",
+  "author": "BedCode",
+  "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4",
+  "main": "index.js",
+  "pluginType": "wasm",
+  "rustLibrary": "bedcode_plugin_auto_task",
+  "permissions": [
+    "session:read",
+    "storage",
+    "ui:input",
+    "ui:toolbox"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "auto-task.list-queue",
+        "title": "List Task Queue"
+      },
+      {
+        "id": "auto-task.add-task",
+        "title": "Add Task to Queue"
+      },
+      {
+        "id": "auto-task.remove-task",
+        "title": "Remove Task from Queue"
+      },
+      {
+        "id": "auto-task.clear-queue",
+        "title": "Clear Task Queue"
+      }
+    ],
+    "terminal": {
+      "inputHandlers": [],
+      "outputParsers": [],
+      "toolbarItems": [
+        {
+          "id": "auto-task-toolbar",
+          "title": "Auto Task",
+          "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4"
+        }
+      ]
+    },
+    "lifecycle": {
+      "onAuthSuccess": true,
+      "onDisconnect": true,
+      "onSessionCreated": true,
+      "onSessionStopped": true
+    },
+    "views": [
+      {
+        "type": "toolbox",
+        "id": "auto-task.toolbox",
+        "title": "自动任务",
+        "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 7l2 2 4-4",
+        "component": "AutoTaskToolboxView"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "bedcode-plugin-api-macros"
+version = "0.1.0"
+description = "BedCode Plugin API proc macros — #[plugin_api] trait 生成 JSON-RPC 分派/客户端 + 构建期 manifest 防漂移比对"
+authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
+edition = "2021"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2", features = ["full", "visit"] }
+quote = "1"
+proc-macro2 = "1"
+serde_json = "1"

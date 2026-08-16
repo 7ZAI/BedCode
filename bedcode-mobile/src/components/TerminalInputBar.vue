@@ -1,8 +1,13 @@
 <template>
   <div
-    class="terminal-input-bar z-40"
+    class="terminal-input-bar z-10"
     :style="inputBarStyle"
   >
+    <!-- 快捷键面板遮罩 - 点击终端区域关闭面板 -->
+    <transition name="shortcuts-overlay">
+      <div v-if="showShortcutsPanel && !props.isLandscape" class="shortcuts-overlay" @touchstart.prevent="closeShortcutsPanel" @mousedown.prevent="closeShortcutsPanel"></div>
+    </transition>
+
     <!-- 快捷键面板 - 覆盖层，不影响终端高度 -->
     <transition name="shortcuts-slide">
       <div v-if="showShortcutsPanel && !props.isLandscape" ref="shortcutsPanelRef" class="shortcuts-panel" @mousedown.prevent>
@@ -21,7 +26,7 @@
             <div class="custom-commands-layout">
               <div class="custom-commands-grid">
                 <button
-                  v-for="cmd in customCommands"
+                  v-for="cmd in displayCommands"
                   :key="'clone-end-' + cmd.id"
                   class="custom-cmd-btn"
                   :class="{ 'editing': isEditingCommands }"
@@ -30,7 +35,7 @@
                   <span class="cmd-label">{{ cmd.command }}</span>
                   <transition name="delete-badge">
                     <button
-                      v-if="isEditingCommands"
+                      v-if="isEditingCommands && !cmd.builtin"
                       class="cmd-delete-btn"
                       @click.stop="deleteCustomCommand(cmd.id)"
                     >
@@ -149,7 +154,7 @@
             <div class="custom-commands-layout">
               <div class="custom-commands-grid">
                 <button
-                  v-for="cmd in customCommands"
+                  v-for="cmd in displayCommands"
                   :key="cmd.id"
                   class="custom-cmd-btn"
                   :class="{ 'editing': isEditingCommands }"
@@ -158,7 +163,7 @@
                   <span class="cmd-label">{{ cmd.command }}</span>
                   <transition name="delete-badge">
                     <button
-                      v-if="isEditingCommands"
+                      v-if="isEditingCommands && !cmd.builtin"
                       class="cmd-delete-btn"
                       @click.stop="deleteCustomCommand(cmd.id)"
                     >
@@ -324,6 +329,19 @@
 
     <!-- 输入区域 -->
     <div class="input-area">
+      <!-- `/` 命令补全弹层：输入框上方，点选即填充输入框（复用 agentPresets 本地数据，零延迟） -->
+      <transition name="completion-fade">
+        <div v-if="showCompletion" class="completion-panel" @mousedown.prevent>
+          <button
+            v-for="cmd in completionItems"
+            :key="cmd"
+            class="completion-item"
+            @click="applyCompletion(cmd)"
+          >
+            <span class="completion-cmd">{{ cmd }}</span>
+          </button>
+        </div>
+      </transition>
       <div class="input-box" :class="{ 'input-box--expanded': isInputFocused }">
         <!-- 输入框：占满整行宽度 -->
         <textarea
@@ -358,8 +376,9 @@
             :disabled="!canSubmit"
             @click="handleSubmit"
           >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 15l7-7 7 7" />
+            <!-- 实体上箭头：发送语义，填充图标 + 放大尺寸提升辨识度 -->
+            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M12 4l8 9h-4.5v7h-7v-7H4z" />
             </svg>
           </button>
 
@@ -383,30 +402,31 @@ import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
-import { useInputAssistantStore } from '@/stores/inputAssistant'
+import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssistant'
 import type { QuickBarItem } from '@/stores/inputAssistant'
+import { filterPresetCommands, getAllPresetCommandTexts } from '@/config/agentPresets'
+import { useToast } from '@/composables/useToast'
 
 // ==================== Types ====================
 
-interface CustomCommand {
-  id: string
-  command: string
-}
+/** 面板命令项：用户自定义命令 + 命令预设（builtin）的并集 */
+type PanelCommand = QuickCommand
 
 // ==================== Props ====================
 
 const props = withDefaults(defineProps<{
   disabled?: boolean
   isConnected?: boolean
-  showShortcuts?: boolean
   placeholder?: string
   isLandscape?: boolean
+  /** 侧栏「插入引用」待填入的路径（消费后 emit ref-consumed） */
+  pendingRef?: string | null
 }>(), {
   disabled: false,
   isConnected: false,
-  showShortcuts: false,
   placeholder: '',
   isLandscape: false,
+  pendingRef: null,
 })
 
 // ==================== Emits ====================
@@ -417,6 +437,8 @@ const emit = defineEmits<{
   specialKey: [key: string]
   /** 快捷键面板展开/收起时通知终端，传入面板高度用于偏移 */
   shortcutsPanelToggle: [height: number]
+  /** pendingRef 已被填入输入框，通知父组件复位 */
+  refConsumed: []
 }>()
 
 // ==================== Safe Area ====================
@@ -433,6 +455,7 @@ const inputBarStyle = computed(() => {
 // ==================== State ====================
 
 const assistStore = useInputAssistantStore()
+const toast = useToast()
 const { t } = useI18n()
 const inputRef = ref<HTMLTextAreaElement | null>(null)
 const shortcutsPanelRef = ref<HTMLElement | null>(null)
@@ -467,18 +490,79 @@ const trackStyle = computed(() => ({
   transition: isSwiping.value || isLooping.value ? 'none' : 'transform 0.3s ease',
 }))
 
+// ==================== `/` 命令补全 ====================
+// 与 agent 内部补全同构（前缀匹配），但数据来自本地预设（agentPresets），零延迟；
+// 候选为四套 Agent CLI 预设命令的合集（去重），generic 会话同样可用
+
+const completionItems = computed(() => {
+  if (!inputText.value.startsWith('/')) return []
+  return filterPresetCommands(getAllPresetCommandTexts(), inputText.value)
+})
+
+/** 点选后关闭弹层（对齐 agent 内部补全行为）；下次输入时自动恢复 */
+const completionDismissed = ref(false)
+
+// flush:sync —— applyCompletion 写入后同步复位标记，保证点选必然关闭弹层
+watch(inputText, () => {
+  completionDismissed.value = false
+  // 用户开始打字时收起快捷键面板，避免补全弹层与面板重叠遮挡
+  if (showShortcutsPanel.value) {
+    showShortcutsPanel.value = false
+    emit('shortcutsPanelToggle', 0)
+  }
+}, { flush: 'sync' })
+
+const showCompletion = computed(() =>
+  isInputFocused.value && !completionDismissed.value && completionItems.value.length > 0
+)
+
+/** 点选补全项：整体填充输入框并保持焦点，由用户决定补全/发送 */
+function applyCompletion(command: string) {
+  inputText.value = command
+  // 覆盖 sync watcher 的复位：点选后弹层关闭，等下一次真实输入再出现
+  completionDismissed.value = true
+  nextTick(() => {
+    adjustTextareaHeight()
+    inputRef.value?.focus()
+  })
+}
+
+// ==================== Pending Ref ====================
+
+// 侧栏「插入引用」：把 @路径 填入输入框（已有内容时补空格分隔）并聚焦，便于继续输入
+watch(() => props.pendingRef, (path) => {
+  if (!path) return
+  const refText = `@${path}`
+  const text = inputText.value
+  inputText.value = text && !text.endsWith(' ') ? `${text} ${refText}` : `${text}${refText}`
+  emit('refConsumed')
+  nextTick(() => {
+    adjustTextareaHeight()
+    inputRef.value?.focus()
+  })
+})
+
 // ==================== Custom Commands ====================
 
-const customCommands = ref<CustomCommand[]>([])
+const customCommands = ref<QuickCommand[]>([])
 const isEditingCommands = ref(false)
 
-// 从 Tauri settings 持久化加载自定义命令
+/** 面板命令 = 命令预设（builtin，在前） + 用户自定义命令 */
+const displayCommands = computed(() => [...assistStore.presetCommands, ...customCommands.value])
+
+// 从 Tauri settings（JSON 文件）持久化加载自定义命令
 async function loadCustomCommands() {
   try {
     const settings = await invoke<{ key: string; value: string }[]>('get_all_db_settings_mobile')
     const found = settings?.find(s => s.key === 'custom_commands')
     if (found?.value) {
-      customCommands.value = JSON.parse(found.value)
+      customCommands.value = (JSON.parse(found.value) as Partial<QuickCommand>[]).map(c => ({
+        id: c.id || Date.now().toString(),
+        command: c.command || '',
+        // 旧数据无 mode/builtin：默认执行模式、非内置
+        mode: c.mode || 'execute',
+        builtin: c.builtin ?? false,
+      }))
     }
   } catch {
     // 首次加载或非移动端环境，使用空列表
@@ -504,17 +588,24 @@ function addCustomCommand() {
   customCommands.value.push({
     id: Date.now().toString(),
     command: cmd,
+    mode: 'execute',
+    builtin: false,
   })
   saveCustomCommands()
   newCommand.value = ''
   showAddDialog.value = false
 }
 
-function handleCustomCommandClick(cmd: CustomCommand) {
+function handleCustomCommandClick(cmd: PanelCommand) {
   // 编辑模式下点击不执行命令
   if (isEditingCommands.value) return
   assistStore.recordCustomCommand(cmd.id)
-  emit('execute', cmd.command)
+  // 发送模式（skills 类补全场景）：文本不带回车发到终端输入行；否则执行（文本 + Enter）
+  if (cmd.mode === 'send') {
+    emit('submit', cmd.command)
+  } else {
+    emit('execute', cmd.command)
+  }
 }
 
 function deleteCustomCommand(id: string) {
@@ -625,20 +716,33 @@ const canSubmit = computed(() => {
 // ==================== Methods ====================
 
 function toggleShortcuts() {
+  // 横屏高度有限，面板不渲染：提示用户而非静默无响应
+  if (props.isLandscape) {
+    toast.warning(t('mobile.input.shortcutsLandscapeUnavailable'))
+    return
+  }
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
+    // 面板渲染前确认命令列表构成（预设 + 自定义），排查第二页缺失问题
+    console.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
+      '（预设', assistStore.presetCommands.length, '+ 自定义', customCommands.value.length, '）',
+      displayCommands.value.slice(0, 3).map(c => c.command))
     // 面板渲染后测量高度并通知终端，同时计算左侧网格列数
     nextTick(() => {
       const h = shortcutsPanelRef.value?.offsetHeight || 0
       emit('shortcutsPanelToggle', h)
     })
   } else {
-    // 延迟通知终端收起，与面板 leave 动画同步（0.25s），
-    // 避免终端提前跳回而面板还在滑出
-    setTimeout(() => {
-      emit('shortcutsPanelToggle', 0)
-    }, 250)
+    // 立即通知终端收起，xterm 的 transition 会与面板 leave 动画同步
+    // 两者都是 0.25s cubic-bezier(0.4, 0, 0.2, 1)，视觉上同步下落
+    emit('shortcutsPanelToggle', 0)
   }
+}
+
+function closeShortcutsPanel() {
+  if (!showShortcutsPanel.value) return
+  showShortcutsPanel.value = false
+  emit('shortcutsPanelToggle', 0)
 }
 
 function handleSubmit() {
@@ -668,8 +772,8 @@ function handleShortcutClick(code: string) {
 
 // ==================== Quick Bar ====================
 
-/// 快捷键条项目：合并快捷键和自定义命令，按使用频次排序
-const quickBarItems = computed(() => assistStore.getQuickBarItems(customCommands.value))
+/// 快捷键条项目：合并快捷键和快捷命令，按使用频次排序
+const quickBarItems = computed(() => assistStore.getQuickBarItems(displayCommands.value))
 
 /// 快捷键条按钮点击处理
 function handleQuickBarClick(item: QuickBarItem) {
@@ -677,11 +781,15 @@ function handleQuickBarClick(item: QuickBarItem) {
     assistStore.recordShortcut(item.key)
     emit('specialKey', item.key)
   } else {
-    // 自定义命令：找到对应命令文本，执行（文本+Enter）
-    const cmd = customCommands.value.find(c => c.id === item.key)
+    // 快捷命令：找到对应命令项，按模式分发（发送 = 不带回车，执行 = 文本 + Enter）
+    const cmd = displayCommands.value.find(c => c.id === item.key)
     if (cmd) {
       assistStore.recordCustomCommand(cmd.id)
-      emit('execute', cmd.command)
+      if (cmd.mode === 'send') {
+        emit('submit', cmd.command)
+      } else {
+        emit('execute', cmd.command)
+      }
     }
   }
 }
@@ -905,29 +1013,31 @@ onMounted(() => {
   flex: 1;
 }
 
-/* 操作按钮：统一 2.25rem 圆形，保证移动端触摸目标 ≥ 36px */
+/* 操作按钮：圆角矩形 + clamp 流式尺寸，与快捷键面板按钮同风格（触控目标 ≥ 44px） */
 .inline-btn {
-  width: 2.25rem;
-  height: 2.25rem;
+  width: clamp(2.75rem, 9vw, 3rem);
+  height: clamp(2.75rem, 9vw, 3rem);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
+  /* 圆形按钮：宽高相等 + 50% 圆角 */
+  border-radius: 50%;
   border: 1px solid;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
   flex-shrink: 0;
+  padding: 0;
 }
 
 .toggle-btn {
   background: var(--mobile-bg-elevated);
   border-color: var(--mobile-border);
   color: var(--mobile-text-muted);
-  padding: 0;
 }
 
 .toggle-btn:active {
-  transform: scale(0.9);
+  transform: scale(0.93);
+  background: var(--mobile-bg-secondary);
 }
 
 .toggle-active {
@@ -946,7 +1056,7 @@ onMounted(() => {
   border: none;
   outline: none;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-family: inherit;
   resize: none;
   line-height: 1.5;
@@ -980,7 +1090,7 @@ onMounted(() => {
 }
 
 .send-btn:active:not(:disabled) {
-  transform: scale(0.9);
+  transform: scale(0.93);
   background: var(--mobile-send-active-bg);
 }
 
@@ -990,21 +1100,85 @@ onMounted(() => {
 }
 
 .execute-btn {
-  width: 2.5rem;
-  height: 2.5rem;
-  background: var(--mobile-execute-bg);
-  border-color: var(--mobile-execute-border);
-  color: var(--mobile-execute-color);
+  /* 黑底白图标：终端「执行」语义（用户指定，跨主题稳定） */
+  background: #0a0a0f;
+  border-color: #0a0a0f;
+  color: #ffffff;
 }
 
 .execute-btn:active:not(:disabled) {
-  transform: scale(0.9);
-  background: var(--mobile-execute-active-bg);
+  transform: scale(0.93);
+  background: #0a0a0f;
+  filter: brightness(1.3);
 }
 
 .execute-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+/* ==================== `/` Command Completion ==================== */
+
+.completion-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  z-index: 50;
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.875rem;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
+  overflow-y: auto;
+  /* 紧凑布局：面板内边距 + 圆角块式项（分隔线已移除） */
+  padding: 0.25rem;
+  max-height: clamp(7rem, 26vh, 12rem);
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.completion-panel::-webkit-scrollbar {
+  display: none;
+  width: 0;
+}
+
+.completion-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  /* 触控下限保持 44px，上限收紧让列表更紧凑 */
+  height: clamp(2.75rem, 8vw, 2.875rem);
+  padding: 0 0.75rem;
+  background: transparent;
+  border: none;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.completion-item:active {
+  background: var(--mobile-accent-muted);
+}
+
+.completion-cmd {
+  font-family: 'Courier New', monospace;
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.completion-fade-enter-active,
+.completion-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.completion-fade-enter-from,
+.completion-fade-leave-to {
+  opacity: 0;
 }
 
 /* ==================== Carousel ==================== */
@@ -1032,6 +1206,23 @@ onMounted(() => {
   height: var(--panel-h);
   min-height: var(--panel-h);
   max-height: var(--panel-h);
+}
+
+/* 快捷键面板遮罩 - 覆盖终端区域，点击关闭面板 */
+.shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+}
+
+.shortcuts-overlay-enter-active,
+.shortcuts-overlay-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.shortcuts-overlay-enter-from,
+.shortcuts-overlay-leave-to {
+  opacity: 0;
 }
 
 /* 快捷键面板滑动动画 - 从下往上展开/收起 */
@@ -1395,11 +1586,11 @@ onMounted(() => {
   border-radius: 1rem;
   padding: 1.25rem;
   width: 100%;
-  max-width: 20rem;
+  max-width: clamp(16rem, 20rem, 24rem);
 }
 
 .dialog-title {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin-bottom: 1rem;
@@ -1413,7 +1604,7 @@ onMounted(() => {
   border-radius: 0.75rem;
   padding: 0.625rem 0.875rem;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   outline: none;
   transition: border-color 0.2s ease;
   font-family: 'Courier New', monospace;
@@ -1436,10 +1627,10 @@ onMounted(() => {
 
 .dialog-btn {
   flex: 1;
-  height: 2.25rem;
+  height: clamp(2rem, 2.25rem, 2.75rem);
   border-radius: 0.75rem;
   border: 1px solid;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;

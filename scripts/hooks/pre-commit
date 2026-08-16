@@ -1,0 +1,3 @@
+#!/bin/sh
+# pre-commit：uat/master 提交前自动剔除文档文件（仅 index，工作区保留），防止入库
+sh "$(dirname "$0")/../doc-tracking.sh" untrack pre-commit

@@ -51,7 +51,7 @@ describe('Input Component', () => {
       })
 
       expect(wrapper.find('label').text()).toContain('*')
-      expect(wrapper.find('.text-red-400').exists()).toBe(true)
+      expect(wrapper.find('.text-red-500').exists()).toBe(true)
     })
   })
 
@@ -208,8 +208,8 @@ describe('Input Component', () => {
         },
       })
 
-      expect(wrapper.find('.text-red-400').exists()).toBe(true)
-      expect(wrapper.find('.text-red-400').text()).toBe('This field is required')
+      expect(wrapper.find('.text-red-500').exists()).toBe(true)
+      expect(wrapper.find('.text-red-500').text()).toBe('This field is required')
     })
 
     it('should apply error border styling', () => {
@@ -232,7 +232,7 @@ describe('Input Component', () => {
       })
 
       const input = wrapper.find('input')
-      expect(input.classes()).toContain('border-dark-600')
+      expect(input.classes()).toContain('border-[var(--border-input)]')
     })
   })
 
@@ -245,8 +245,9 @@ describe('Input Component', () => {
         },
       })
 
-      expect(wrapper.find('.text-dark-500').exists()).toBe(true)
-      expect(wrapper.find('.text-dark-500').text()).toBe('Enter a valid email address')
+      // 帮助文本使用 CSS 变量类名（text-[var(--text-tertiary)]），无法用类选择器定位，改用文本匹配
+      const helpEl = wrapper.findAll('p').find(p => p.text() === 'Enter a valid email address')
+      expect(helpEl).toBeDefined()
     })
 
     it('should not show help text when error is present', () => {
@@ -258,8 +259,9 @@ describe('Input Component', () => {
         },
       })
 
-      expect(wrapper.find('.text-dark-500').exists()).toBe(false)
-      expect(wrapper.find('.text-red-400').text()).toBe('Invalid email')
+      const helpEls = wrapper.findAll('p').filter(p => p.text() === 'Enter a valid email address')
+      expect(helpEls).toHaveLength(0)
+      expect(wrapper.find('.text-red-500').text()).toBe('Invalid email')
     })
   })
 
@@ -357,9 +359,8 @@ describe('Input Component', () => {
       })
 
       const input = wrapper.find('input')
-      expect(input.classes()).toContain('focus:border-primary-500')
-      expect(input.classes()).toContain('focus:ring-1')
-      expect(input.classes()).toContain('focus:ring-primary-500')
+      expect(input.classes()).toContain('focus:border-brand')
+      expect(input.classes()).toContain('focus:shadow-input-focus')
     })
   })
 })

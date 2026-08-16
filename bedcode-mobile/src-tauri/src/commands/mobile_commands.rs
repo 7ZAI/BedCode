@@ -20,7 +20,7 @@ static SESSION_CONFIGS: std::sync::LazyLock<Arc<RwLock<Vec<SessionConfig>>>> =
 /// 获取所有设置 (移动端 JSON 文件存储)
 #[tauri::command]
 pub async fn get_all_db_settings_mobile(
-    settings_manager: State<'_, SettingsManager>,
+    settings_manager: State<'_, Arc<SettingsManager>>,
 ) -> Result<Vec<Setting>> {
     let settings = settings_manager.get_all().await?;
     let now = Utc::now();
@@ -37,7 +37,7 @@ pub async fn get_all_db_settings_mobile(
 /// 设置配置项 (移动端 JSON 文件存储)
 #[tauri::command]
 pub async fn set_db_setting_mobile(
-    settings_manager: State<'_, SettingsManager>,
+    settings_manager: State<'_, Arc<SettingsManager>>,
     key: String,
     value: String,
 ) -> Result<()> {

@@ -127,6 +127,41 @@ export async function wsAuthenticateWithQr(token: string): Promise<AuthCredentia
   return await invoke('ws_authenticate_with_qr', { token })
 }
 
+/**
+ * 生物认证登录（挑战-应答握手，弹系统生物识别）
+ */
+export async function wsAuthenticateWithBiometric(): Promise<AuthCredentials | null> {
+  return await invoke('ws_authenticate_with_biometric')
+}
+
+/**
+ * 绑定生物凭证：本地生成密钥对并注册公钥到桌面端（需已认证连接）
+ */
+export async function wsBindBiometricCredential(): Promise<boolean> {
+  return await invoke('ws_bind_biometric_credential')
+}
+
+/**
+ * 解绑生物凭证：删除本地密钥并通知桌面端清空公钥（需已认证连接）
+ */
+export async function wsUnbindBiometricCredential(): Promise<boolean> {
+  return await invoke('ws_unbind_biometric_credential')
+}
+
+/**
+ * 生物认证密钥状态（设备支持 + 本地密钥已生成）
+ */
+export interface BiometricKeyStatus {
+  deviceSupported: boolean
+  /** BiometricManager 结果码：0=SUCCESS 1=HW_UNAVAILABLE 11=NONE_ENROLLED 12=NO_HARDWARE；-1=未知/插件异常 */
+  deviceReason: number
+  hasKey: boolean
+}
+
+export async function wsGetBiometricKeyStatus(): Promise<BiometricKeyStatus> {
+  return await invoke('ws_get_biometric_key_status')
+}
+
 // ==================== Session Commands ====================
 
 /**
@@ -140,10 +175,17 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
  * 订阅会话，开始接收该会话的输出
  *
  * @param sessionId - 会话 ID
- * @param startSeq - 起始序号，不指定则从头补完所有历史；用于断线重连从断点继续
- * @returns 订阅响应信息，包含 minSeq/maxSeq/historyCount
+ * @param startSeq - 起始字节游标，不指定则全量重播；用于断线重连从断点继续
+ * @returns 订阅响应信息，含服务端裁决 mode（incremental 续传 / reset 全量重播）
  */
-export async function wsJoinSession(sessionId: string, startSeq?: number): Promise<{ minSeq: number; maxSeq: number; historyCount: number }> {
+export async function wsJoinSession(sessionId: string, startSeq?: number): Promise<{
+  minSeq: number
+  maxSeq: number
+  historyCount: number
+  mode: 'incremental' | 'reset'
+  minOffset: number
+  maxOffset: number
+}> {
   console.log('[wsJoinSession] sessionId=' + sessionId + ', startSeq=' + startSeq)
   return await invoke('ws_subscribe_session', { sessionId, startSeq: startSeq ?? null })
 }
@@ -303,6 +345,7 @@ let unlistenSyncConfigCreated: UnlistenFn | null = null
 let unlistenSyncConfigUpdated: UnlistenFn | null = null
 let unlistenSyncConfigRemoved: UnlistenFn | null = null
 let unlistenSyncTaskStatusChanged: UnlistenFn | null = null
+let unlistenSyncTaskQueueChanged: UnlistenFn | null = null
 
 /**
  * 同步事件回调接口
@@ -438,6 +481,14 @@ export async function initMobileEventListeners(callbacks: {
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }
+
+  // 任务队列变更转发：无条件监听并转发为 window CustomEvent，供插件（auto-task 面板）
+  // 订阅完成广播（action='done' + task_id）更新预设任务执行状态。插件不直接依赖
+  // @tauri-apps/api，经宿主转发保持插件/宿主边界（dev-shell 可手动 dispatch 模拟）
+  unlistenSyncTaskQueueChanged = await listen<{ session_id: string; queue_count: number; action: string; task_id?: string | null; status?: string | null }>('ws_sync_task_queue_changed', (event) => {
+    console.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
+    window.dispatchEvent(new CustomEvent('bedcode:task_queue_changed', { detail: event.payload }))
+  })
 }
 
 /**
@@ -465,6 +516,7 @@ export function cleanupMobileEventListeners() {
   unlistenSyncConfigUpdated?.()
   unlistenSyncConfigRemoved?.()
   unlistenSyncTaskStatusChanged?.()
+  unlistenSyncTaskQueueChanged?.()
 }
 
 // ==================== Mobile Commands Composable ====================

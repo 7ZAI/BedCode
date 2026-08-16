@@ -75,10 +75,10 @@
     />
 
     <!-- Auto Start -->
-    <Toggle
+    <!-- <Toggle
       v-model="form.autoStart"
       :label="$t('desktop.form.autoStart')"
-    />
+    /> -->
   </form>
 </template>
 
@@ -92,7 +92,7 @@ import { ref, computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SessionConfig } from '@/stores/session'
 import Input from '@/components/Input.vue'
-import Select from '@/components/Select.vue'
+import { Select } from '@/components'
 import Toggle from '@/components/Toggle.vue'
 import Spinner from '@/components/Spinner.vue'
 import { useWslStore } from '@/stores/wsl'

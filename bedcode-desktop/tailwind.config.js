@@ -3,6 +3,12 @@ export default {
   content: [
     "./index.html",
     "./src/**/*.{vue,js,ts,jsx,tsx}",
+    // 内置插件前端源码：插件 SFC 使用宿主 Tailwind 工具类，运行时注入宿主 CSS，
+    // 需纳入扫描否则类缺失（插件 dist 不携带编译后的 Tailwind）
+    "./plugins/**/src/**/*.{vue,js,ts,jsx,tsx}",
+    // 共享 SDK 组件：宿主/插件共用（@binblink/plugin-sdk-desktop/ui 的 Select 等），
+    // 不含此路径则组件的 fixed/max-h 等布局类缺失，面板定位异常
+    "./packages/plugin-sdk-desktop/src/**/*.{vue,js,ts,jsx,tsx}",
   ],
   darkMode: 'class',
   theme: {
@@ -44,6 +50,16 @@ export default {
           DEFAULT: 'var(--color-primary)',
           light: 'var(--color-primary-light)',
         },
+      },
+      /* 字号统一走 --ui-scale 等比缩放（默认像素值与 Tailwind 原生一致，scale=1 时外观不变） */
+      fontSize: {
+        xs: 'calc(12px * var(--ui-scale))',
+        sm: 'calc(14px * var(--ui-scale))',
+        base: 'calc(16px * var(--ui-scale))',
+        lg: 'calc(18px * var(--ui-scale))',
+        xl: 'calc(20px * var(--ui-scale))',
+        '2xl': 'calc(24px * var(--ui-scale))',
+        '3xl': 'calc(30px * var(--ui-scale))',
       },
       fontFamily: {
         sans: ['Inter', 'system-ui', 'sans-serif'],

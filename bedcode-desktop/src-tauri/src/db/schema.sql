@@ -46,12 +46,26 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 
+-- Device connection history table
+-- 按设备（pairings.id）记录每次连接事件：认证方式、结果、起止时间
+-- 每次认证成功/失败插入一条；断开时回填 disconnected_at
+CREATE TABLE IF NOT EXISTS connection_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    auth_method TEXT NOT NULL,
+    result TEXT NOT NULL,
+    address TEXT,
+    connected_at TEXT NOT NULL,
+    disconnected_at TEXT
+);
+
 -- Create indexes
 CREATE INDEX IF NOT EXISTS idx_pairings_fingerprint ON pairings(device_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_pairings_active ON pairings(is_active);
 CREATE INDEX IF NOT EXISTS idx_session_configs_name ON session_configs(name);
 CREATE INDEX IF NOT EXISTS idx_quick_actions_order ON quick_actions(sort_order);
 CREATE INDEX IF NOT EXISTS idx_quick_actions_category ON quick_actions(category);
+CREATE INDEX IF NOT EXISTS idx_connection_history_device ON connection_history(device_id, connected_at DESC);
 
 -- Plugin key-value storage (per-plugin isolation)
 CREATE TABLE IF NOT EXISTS plugin_storage (

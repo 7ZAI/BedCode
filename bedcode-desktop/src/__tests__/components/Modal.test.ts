@@ -160,7 +160,7 @@ describe('Modal Component', () => {
     await wrapper.vm.$nextTick()
 
     // Check if footer is rendered in body
-    const modalContent = document.querySelector('.relative.bg-dark-800')
+    const modalContent = document.querySelector('.relative.bg-card')
     expect(modalContent?.innerHTML).toContain('<button>Confirm</button>')
 
     wrapper.unmount()
@@ -180,7 +180,7 @@ describe('Modal Component', () => {
     await wrapper.vm.$nextTick()
 
     // Check if size class is applied
-    const modalContent = document.querySelector('.relative.bg-dark-800')
+    const modalContent = document.querySelector('.relative.bg-card')
     expect(modalContent?.classList.contains('max-w-lg')).toBe(true)
 
     wrapper.unmount()

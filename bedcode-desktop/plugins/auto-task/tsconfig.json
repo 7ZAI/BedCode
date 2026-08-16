@@ -1,0 +1,21 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "paths": {
+      "@binblink/plugin-sdk-desktop": ["../../packages/plugin-sdk-desktop/src/index.ts"],
+      "@binblink/plugin-sdk-desktop/vite": ["../../packages/plugin-sdk-desktop/src/vite-plugin.ts"],
+      "@binblink/plugin-sdk-desktop/types": ["../../packages/plugin-sdk-desktop/src/types.ts"]
+    }
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "rust"]
+}

@@ -34,11 +34,10 @@
 
 /* 可移动区域：终端内容 + 输入栏
  * 键盘弹出时通过 transform 整体上移，GPU 合成不触发布局重排
- * 同时限制 maxHeight 为键盘上方可见区域，让 main-content 自然缩小
  * Header 不在此区域内，保持固定位置
  * 父容器 .movable-clip 裁剪超出部分，防止突破安全区
- * 不使用 will-change: transform，持续开启会导致 xterm 滚动重影
- * will-change 由 JS 在键盘动画期间临时添加 */
+ * transition 由 JS 在键盘偏移稳定后临时启用（250ms，与快捷键面板动画一致），
+ * 动画结束立即移除，避免 movable-area 长期保持合成层 */
 .movable-area {
   display: flex;
   flex-direction: column;
@@ -46,8 +45,7 @@
   overflow: hidden;
   /* height: 100% 确保裁剪容器能正确裁剪 transform 后的内容 */
   height: 100%;
-  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
-              max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* transition 由 JS 在键盘偏移稳定后临时添加（动画结束移除） */
 }
 
 /* Loading Overlay */
@@ -77,7 +75,7 @@
 }
 
 .loading-text {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   color: var(--mobile-text-muted);
   margin: 0;
 }
@@ -180,6 +178,11 @@
 }
 
 /* xterm 核心样式 */
+/* 调试验证：隐藏 xterm 6 自定义 slider 滚动条，验证右侧遮挡是否与其相关 */
+.xterm .xterm-scrollable-element > .scrollbar {
+  display: none;
+}
+
 .xterm {
   touch-action: none;
   user-select: none;
@@ -242,7 +245,7 @@
   background: var(--mobile-accent);
   border: none;
   color: var(--mobile-text-on-accent);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -271,6 +274,47 @@
   transform: translateY(8px);
 }
 
+/* 滚动到底部按钮 */
+.scroll-to-bottom-btn {
+  position: absolute;
+  bottom: 16px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+  transition: background 0.2s ease, opacity 0.15s ease;
+}
+
+.scroll-to-bottom-btn:active {
+  opacity: 0.7;
+}
+
+.scroll-to-bottom-icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* 滚动指示器过渡 */
+.scroll-indicator-enter-active,
+.scroll-indicator-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.scroll-indicator-enter-from,
+.scroll-indicator-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
+}
+
 /* 禁用 xterm-viewport 原生滚动 */
 .xterm-viewport {
   overflow-y: hidden !important;
@@ -284,6 +328,19 @@
   width: 0 !important;
 }
 
+/* 禁用 xterm-scrollable-element 原生滚动和滚动条
+ * xterm 新版本使用 SmoothScrollableElement 管理 viewport 滚动，
+ * 在移动端由自定义触摸滚动接管，必须禁用 xterm 内部的滚动条和触摸 */
+.xterm-scrollable-element {
+  overflow: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
+}
+
+.xterm-scrollable-element .scrollbar {
+  display: none !important;
+}
+
 /* 禁用 xterm-scroll-area 滚动条 */
 .xterm-scroll-area {
   scrollbar-width: none;
@@ -292,4 +349,18 @@
 .xterm-scroll-area::-webkit-scrollbar {
   display: none;
   width: 0;
+}
+
+/* WebGL 模式下隐藏 DOM 层光标，避免双光标问题（USE_WEBGL_RENDERER 开启时生效） */
+/* 只隐藏 DOM 光标元素，不隐藏 cursor-layer（WebGL 渲染器有自己的光标实现） */
+:deep(.xterm-hidden-cursor .xterm-cursor) {
+  display: none !important;
+}
+
+/* 防止渲染器滚动时出现重影：
+ * 1. 禁止 xterm-screen 使用 GPU 合成层（will-change），持续开启会导致
+ *    scrollToLine 时新旧帧同时可见
+ * 2. 确保 xterm 渲染层不创建独立的合成层 */
+.xterm-screen {
+  will-change: auto !important;
 }

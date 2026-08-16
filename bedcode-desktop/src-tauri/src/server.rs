@@ -7,6 +7,7 @@ pub mod client_info;
 pub mod connection_types;
 pub mod controllers;
 pub mod dtos;
+pub mod local_token;
 pub mod message;
 pub mod metrics;
 pub mod middleware;
