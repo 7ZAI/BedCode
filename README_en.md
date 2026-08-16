@@ -62,6 +62,7 @@ Full vue-i18n support (zh-CN / en) with persistent language switcher in settings
 Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 60, "rankSpacing": 80}}}%%
 flowchart LR
     subgraph DESKTOP["Desktop (Host) · Tauri 2.0"]
         direction TB
@@ -99,37 +100,37 @@ flowchart LR
     D_MDNS <--> M_MDNS
 ```
 
-| End | Frontend (Vue 3) | Backend (Rust) |
-|-----|------------------|----------------|
-| **Desktop** | Session manager, terminal preview, server view, plugin config | PTY, Actix Web (HTTP + WS), session management, WASM plugin system, mDNS advertisement |
-| **Mobile** | Terminal view, code explorer, preset tasks, toolbox, device discovery | WS/HTTP client, remote connection & routing, file service, mDNS discovery |
+| End         | Frontend (Vue 3)                                                      | Backend (Rust)                                                                         |
+| ---------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Desktop** | Session manager, terminal preview, server view, plugin config         | PTY, Actix Web (HTTP + WS), session management, WASM plugin system, mDNS advertisement |
+| **Mobile**  | Terminal view, code explorer, preset tasks, toolbox, device discovery | WS/HTTP client, remote connection & routing, file service, mDNS discovery              |
 
 Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API** (plugin hooks, file service).
 
 ## Tech Stack
 
-| Category | Technology |
-|----------|------------|
-| Framework | Tauri 2.0 (Windows desktop / Android mobile) |
-| Frontend | Vue 3 + TypeScript + Vite |
-| Styling | TailwindCSS, state management with Pinia + vue-router |
-| Backend | Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite |
-| Database | SQLite (rusqlite) |
-| Terminal | @xterm/xterm + addon-fit / web-links / webgl |
-| Auth | JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint |
-| Crypto | X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS |
-| Discovery | mDNS (mdns-sd) |
-| Plugin System | wasmtime (WASM component runtime) |
-| Other | shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging |
+| Category      | Technology                                                                                                   |
+| ------------ | ----------------------------------------------------------------------------------------------------------- |
+| Framework     | Tauri 2.0 (Windows desktop / Android mobile)                                                                 |
+| Frontend      | Vue 3 + TypeScript + Vite                                                                                    |
+| Styling       | TailwindCSS, state management with Pinia + vue-router                                                        |
+| Backend       | Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite                                                  |
+| Database      | SQLite (rusqlite)                                                                                            |
+| Terminal      | @xterm/xterm + addon-fit / web-links / webgl                                                                 |
+| Auth          | JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint                             |
+| Crypto        | X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS                                            |
+| Discovery     | mDNS (mdns-sd)                                                                                               |
+| Plugin System | wasmtime (WASM component runtime)                                                                            |
+| Other         | shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging |
 
 ## Supported Platforms
 
-| Platform | Desktop | Mobile |
-|----------|:---:|:---:|
-| Windows | ✔ | — |
-| Android | — | ✔ |
-| macOS / Linux | Planned | — |
-| iOS | — | Planned |
+| Platform      | Desktop | Mobile  |
+| ------------ | :-----: | :-----: |
+| Windows       |    ✔    |    —    |
+| Android       |    —    |    ✔    |
+| macOS / Linux | Planned |    —    |
+| iOS           |    —    | Planned |
 
 Currently focused on **Windows (Desktop) + Android (Mobile)**, with both ends' core capabilities (terminal sessions, file service, plugin system) fully working. Cross-platform adaptation is a large effort (system permission models, packaging & distribution, platform integration), so it is not covered yet due to limited bandwidth.
 
@@ -188,11 +189,11 @@ Agent CLI (PTY)
 
 ### Official Plugins
 
-| Plugin | Version | Description |
-|--------|---------|-------------|
-| **AI Chatbox** | 1.0.0-beta | LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk |
-| **Auto Task** | 1.0.0-beta | Agent task queue & auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset & scheduled tasks, history statistics; auto-approves agent permission requests |
-| **File Transfer** | 1.0.0-beta | LAN file transfer: online peer discovery & switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers |
+| Plugin            | Version     | Description                                                                                                                                                                                               |
+| ---------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **AI Chatbox**    | 1.0.0-beta  | LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk                              |
+| **Auto Task**     | 1.0.0-beta  | Agent task queue & auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset & scheduled tasks, history statistics; auto-approves agent permission requests |
+| **File Transfer** | 1.0.0-beta  | LAN file transfer: online peer discovery & switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers                            |
 
 ### Plugin Development SDK
 

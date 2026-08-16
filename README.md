@@ -60,6 +60,7 @@ vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错�
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
 ```mermaid
+%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 60, "rankSpacing": 80}}}%%
 flowchart LR
     subgraph DESKTOP["桌面端（主机）· Tauri 2.0"]
         direction TB
@@ -97,37 +98,37 @@ flowchart LR
     D_MDNS <--> M_MDNS
 ```
 
-| 端 | 前端 (Vue 3) | 后端 (Rust) |
-|----|-------------|-------------|
-| **桌面端** | 会话管理器、终端预览、服务器视图、插件配置 | PTY、Actix Web（HTTP + WS）、会话管理、WASM 插件系统、mDNS 广播 |
-| **移动端** | 终端视图、代码浏览器、预设任务、工具箱、设备发现 | WS/HTTP 客户端、远程连接与路由、文件服务、mDNS 发现 |
+| 端         | 前端 (Vue 3)                                     | 后端 (Rust)                                                     |
+| --------- | ----------------------------------------------- | -------------------------------------------------------------- |
+| **桌面端** | 会话管理器、终端预览、服务器视图、插件配置       | PTY、Actix Web（HTTP + WS）、会话管理、WASM 插件系统、mDNS 广播 |
+| **移动端** | 终端视图、代码浏览器、预设任务、工具箱、设备发现 | WS/HTTP 客户端、远程连接与路由、文件服务、mDNS 发现             |
 
 通信：**WebSocket**（终端双向流）+ **HTTP REST API**（插件 hooks、文件服务）。
 
 ## 技术栈
 
-| 分类 | 技术 |
-|------|------|
-| 框架 | Tauri 2.0（桌面端 Windows / 移动端 Android） |
-| 前端 | Vue 3 + TypeScript + Vite |
-| 样式 | TailwindCSS，状态管理 Pinia + vue-router |
-| 后端 | Rust（Tokio 异步运行时），Actix Web 4 + tokio-tungstenite |
-| 数据库 | SQLite（rusqlite） |
-| 终端 | @xterm/xterm + addon-fit / web-links / webgl |
-| 认证 | JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹 |
-| 加密 | X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS |
-| 设备发现 | mDNS（mdns-sd） |
-| 插件系统 | wasmtime（WASM 组件运行时） |
-| 其他 | shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志 |
+| 分类     | 技术                                                                                      |
+| ------- | ---------------------------------------------------------------------------------------- |
+| 框架     | Tauri 2.0（桌面端 Windows / 移动端 Android）                                              |
+| 前端     | Vue 3 + TypeScript + Vite                                                                 |
+| 样式     | TailwindCSS，状态管理 Pinia + vue-router                                                  |
+| 后端     | Rust（Tokio 异步运行时），Actix Web 4 + tokio-tungstenite                                 |
+| 数据库   | SQLite（rusqlite）                                                                        |
+| 终端     | @xterm/xterm + addon-fit / web-links / webgl                                              |
+| 认证     | JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹                               |
+| 加密     | X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS                   |
+| 设备发现 | mDNS（mdns-sd）                                                                           |
+| 插件系统 | wasmtime（WASM 组件运行时）                                                               |
+| 其他     | shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志 |
 
 ## 支持平台
 
-| 平台 | 桌面端 | 移动端 |
-|------|:---:|:---:|
-| Windows | ✔ | — |
-| Android | — | ✔ |
-| macOS / Linux | 预留 | — |
-| iOS | — | 预留 |
+| 平台          | 桌面端 | 移动端 |
+| ------------ | :----: | :----: |
+| Windows       |   ✔    |   —    |
+| Android       |   —    |   ✔    |
+| macOS / Linux |  预留  |   —    |
+| iOS           |   —    |  预留  |
 
 当前聚焦 **Windows（桌面端）+ Android（移动端）** 双平台，两端核心能力（终端会话、文件服务、插件系统）均已跑通。跨平台适配工程量较大（系统权限模型、打包分发、平台集成），精力有限暂未覆盖。
 
@@ -186,11 +187,11 @@ Agent CLI (PTY)
 
 ### 官方插件
 
-| 插件 | 版本 | 说明 |
-|------|------|------|
-| **AI Chatbox** | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘 |
-| **Auto Task** | 1.0.0-beta | Agent 任务队列与自动授权：同步 Claude Code / pi / opencode / Codex 任务状态，任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行 |
-| **File Transfer** | 1.0.0-beta | 内网文件传输：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问 |
+| 插件              | 版本       | 说明                                                                                                                                              |
+| ---------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **AI Chatbox**    | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘                   |
+| **Auto Task**     | 1.0.0-beta | Agent 任务队列与自动授权：同步 Claude Code / pi / opencode / Codex 任务状态，任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行 |
+| **File Transfer** | 1.0.0-beta | 内网文件传输：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问                   |
 
 ### 插件开发 SDK
 

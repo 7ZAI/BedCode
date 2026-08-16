@@ -16,10 +16,16 @@
     "src",
     "bin",
     "template",
-    "dev-shell",
     "README.md",
     "README_en.md",
-    "LICENSE"
+    "LICENSE",
+    "dev-shell/src",
+    "dev-shell/index.html",
+    "dev-shell/package.json",
+    "dev-shell/vite.config.ts",
+    "dev-shell/tailwind.config.js",
+    "dev-shell/postcss.config.js",
+    "dev-shell/README.md"
   ],
   "scripts": {
     "build": "tsup src/index.ts src/vite-plugin.ts src/types.ts --format esm --dts --clean",
