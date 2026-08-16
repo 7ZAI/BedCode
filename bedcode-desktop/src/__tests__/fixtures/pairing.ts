@@ -5,13 +5,16 @@
  * - PairingCodeInfo ← src-tauri/src/utils/auth/pairing.rs（手工 Serialize impl：
  *   code / created_at / expires_in 三个字段，expires_in 序列化为「剩余秒数」而非原始 TTL）
  * - Pairing         ← src-tauri/src/db/models.rs（list_paired_devices 返回 Vec<db::Pairing>，
- *   serde 默认 snake_case；address / session_token / last_seen 为 Option，None 序列化为 null）
+ *   **#[serde(rename_all = "camelCase")]**：deviceName / deviceFingerprint / pairedAt /
+ *   lastSeen / connectCount / isActive 等均为 camelCase 线协议；address / sessionToken /
+ *   lastSeen 为 Option，None 序列化为 null）
  * - QrConnectionInfo ← src-tauri/src/commands/qr.rs（get_qr_connection_info 返回，
  *   snake_case；前端 model.ts 的 QrConnectionInfo 多出 url 字段为前端自建，不在线协议上）
  * - PendingDevice   ← src-tauri/src/utils/auth/pairing.rs（pairing_service 的
  *   get_pending_devices 返回；前端暂无消费方，fixture 供对齐回归使用）
  *
- * 命名规则：serde 默认 snake_case；DateTime<Utc> 序列化为 RFC3339 字符串。
+ * 命名规则：Pairing 为 camelCase（Rust rename_all），其余默认 snake_case；
+ * DateTime<Utc> 序列化为 RFC3339 字符串。
  * 对齐机制：DTO_FIELDS 清单 + 工厂内 assertDtoFields 运行时断言 + 类型级 Equals。
  */
 
@@ -42,48 +45,48 @@ export function makePairingCodeInfo(overrides: Partial<PairingCodeInfoFixture> =
   return fixture
 }
 
-// ==================== Pairing（已配对设备，db::Pairing） ====================
+// ==================== Pairing（已配对设备，db::Pairing，camelCase） ====================
 
 export interface PairingFixture {
   id: string
-  device_name: string
-  device_fingerprint: string
-  public_key: string
+  deviceName: string
+  deviceFingerprint: string
+  publicKey: string
   address: string | null
-  session_token: string | null
+  sessionToken: string | null
   /** RFC3339 */
-  paired_at: string
-  last_seen: string | null
-  connect_count: number
-  is_active: boolean
+  pairedAt: string
+  lastSeen: string | null
+  connectCount: number
+  isActive: boolean
 }
 
-/** 与 db/models.rs Pairing 字段一一对应（address/session_token/last_seen None→null） */
+/** 与 db/models.rs Pairing（#[serde(rename_all = "camelCase")]）字段一一对应 */
 export const PAIRING_DTO_FIELDS = [
   'id',
-  'device_name',
-  'device_fingerprint',
-  'public_key',
+  'deviceName',
+  'deviceFingerprint',
+  'publicKey',
   'address',
-  'session_token',
-  'paired_at',
-  'last_seen',
-  'connect_count',
-  'is_active',
+  'sessionToken',
+  'pairedAt',
+  'lastSeen',
+  'connectCount',
+  'isActive',
 ] as const
 
 export function makePairing(overrides: Partial<PairingFixture> = {}): PairingFixture {
   const fixture: PairingFixture = {
     id: 'device-1',
-    device_name: 'Phone 1',
-    device_fingerprint: 'fp-1',
-    public_key: 'pk-1',
+    deviceName: 'Phone 1',
+    deviceFingerprint: 'fp-1',
+    publicKey: 'pk-1',
     address: null,
-    session_token: null,
-    paired_at: '2025-01-01T00:00:00Z',
-    last_seen: null,
-    connect_count: 0,
-    is_active: true,
+    sessionToken: null,
+    pairedAt: '2025-01-01T00:00:00Z',
+    lastSeen: null,
+    connectCount: 0,
+    isActive: true,
     ...overrides,
   }
   assertDtoFields(fixture, PAIRING_DTO_FIELDS, 'Pairing')

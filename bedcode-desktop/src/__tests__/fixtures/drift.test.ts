@@ -16,6 +16,7 @@ import { makePairingCodeInfo, makePairing, makeQrConnectionInfo, makePendingDevi
 import { makeSessionInfo, makeSessionConfig, makeWslDistro, makeDeviceConnectionInfo, makePtyOutputEvent, SESSION_INFO_DTO_FIELDS, SESSION_CONFIG_DTO_FIELDS, WSL_DISTRO_DTO_FIELDS, DEVICE_CONNECTION_INFO_DTO_FIELDS, PTY_OUTPUT_EVENT_DTO_FIELDS } from './session'
 import { PENDING_DEVICE_DTO_FIELDS } from './pairing'
 import { makePluginInfo, makePluginContributes, PLUGIN_INFO_DTO_FIELDS, CONTRIBUTES_DTO_FIELDS } from './plugin'
+import { makeAppConfig, APP_CONFIG_DTO_FIELDS } from './settings'
 
 /** 全部 DTO 工厂注册表：drift 回归的单一清单（新增 fixture 必须在此登记） */
 const DTO_REGISTRY = [
@@ -33,6 +34,7 @@ const DTO_REGISTRY = [
   { label: 'PtyOutputEvent', fields: PTY_OUTPUT_EVENT_DTO_FIELDS, build: () => makePtyOutputEvent() },
   { label: 'PluginInfo', fields: PLUGIN_INFO_DTO_FIELDS, build: () => makePluginInfo() },
   { label: 'PluginContributes', fields: CONTRIBUTES_DTO_FIELDS, build: () => makePluginContributes() },
+  { label: 'AppConfig', fields: APP_CONFIG_DTO_FIELDS, build: () => makeAppConfig() },
 ] as const
 
 describe('fixtures DTO 对齐', () => {

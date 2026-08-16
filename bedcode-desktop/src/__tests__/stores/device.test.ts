@@ -78,8 +78,8 @@ describe('Device Store', () => {
   it('should remove paired device', async () => {
     // Set up mock devices（取数自 fixtures 工厂，对齐 db/models.rs Pairing 线协议）
     mocks.mockDevices.push(
-      makePairing({ id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true }),
-      makePairing({ id: 'device-2', device_name: 'Phone 2', device_fingerprint: 'fp2', public_key: 'pk2', paired_at: '', last_seen: null, is_active: true }),
+      makePairing({ id: 'device-1', deviceName: 'Phone 1', deviceFingerprint: 'fp1', publicKey: 'pk1', pairedAt: '', lastSeen: null, isActive: true }),
+      makePairing({ id: 'device-2', deviceName: 'Phone 2', deviceFingerprint: 'fp2', publicKey: 'pk2', pairedAt: '', lastSeen: null, isActive: true }),
     )
 
     const store = useDeviceStore()
@@ -96,7 +96,7 @@ describe('Device Store', () => {
 
   it('should load paired devices from backend', async () => {
     mocks.mockDevices.push(
-      makePairing({ id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true }),
+      makePairing({ id: 'device-1', deviceName: 'Phone 1', deviceFingerprint: 'fp1', publicKey: 'pk1', pairedAt: '', lastSeen: null, isActive: true }),
     )
 
     const store = useDeviceStore()
