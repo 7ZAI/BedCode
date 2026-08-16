@@ -33,8 +33,17 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # 提取当前版本的 changelog 内容（从 ## [version] 到下一个 ## 之间的内容）
-          CHANGELOG=$(awk "/^## \\[${VERSION}\\]/,/^## \\[|^## \\[Unreleased/" CHANGELOG.md | head -n -1 | tail -n +2)
+          # 提取当前版本的 changelog 内容（从 ## [version] 下一行到下一个版本头之间的内容）。
+          # 注意：旧写法用范围模式 /^## \[ver\]/,/^## \[/，结束模式 ^## \[ 会匹配起始行自身
+          # （## [ver] 同样以 ## [ 开头），导致永远只取到版本头 1 行、提取为空。
+          # 这里改为状态机：命中版本头后跳过该行，遇到下一个版本头即停止；
+          # index() 按字面匹配，避免版本号中的 . 被当作正则通配符；过滤段落间的 --- 分隔线。
+          CHANGELOG=$(awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found && !started && $0 == "" { next }
+            found && $0 != "---" { started = 1; print }
+          ' CHANGELOG.md)
           # 如果没找到对应版本，使用完整 CHANGELOG
           if [ -z "$CHANGELOG" ]; then
             CHANGELOG=$(cat CHANGELOG.md)
@@ -142,6 +151,40 @@ jobs:
           releaseDraft: true
           prerelease: false
           updaterJsonPreferNsis: true
+
+      # tauri-action 只在创建 release 时写入 body；若 draft 已存在（重跑、手动预建等），
+      # 其源码仅对非 draft 调 updateRelease（避免 updateRelease 改变 draft 的 tag 产生重复 release），
+      # 因此已存在 draft 的 body 不会被更新（v2.0.0 发布即因此为空白 body）。
+      # 这里显式 PATCH 兜底，保证 body 始终等于提取的 changelog（新建/复用 draft 均覆盖）。
+      - name: Sync release body with changelog
+        shell: bash
+        run: |
+          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位
+          for i in $(seq 1 10); do
+            RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
+              jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+            if [ -n "$RID" ]; then
+              # prepare-release 是独立 job，/tmp 不跨 job 共享，这里用表达式重建 changelog 文件
+              cat > /tmp/changelog.txt <<'CHANGELOG_EOF'
+          ${{ needs.prepare-release.outputs.changelog }}
+          CHANGELOG_EOF
+              BODY_JSON=$(jq -n --rawfile body /tmp/changelog.txt '{body: $body}')
+              STATUS=$(curl -sS -o /tmp/patch-resp.json -w "%{http_code}" -X PATCH \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$RID" \
+                --data "$BODY_JSON")
+              if [ "$STATUS" = "200" ]; then
+                echo "release body 已同步 ✓"
+                exit 0
+              fi
+              echo "::warning::release body PATCH 失败 HTTP $STATUS: $(jq -r .message /tmp/patch-resp.json)"
+            fi
+            sleep 3
+          done
+          echo "::error::release body 同步失败（未定位到 release 或 PATCH 报错）"
+          exit 1
 
       - name: Verify latest.json uploaded
         shell: bash
