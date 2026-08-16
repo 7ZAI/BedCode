@@ -110,6 +110,8 @@ p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 # api-20 显式锁低版本 C API：AAR 用 1.20.0，默认 api-27 会在 dlopen 时拒绝旧 .so。
 [target.'cfg(target_os = "android")'.dependencies]
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "api-20"] }
+# ndarray 显式声明（ort 的 ndarray feature 为其传递依赖；ppocr 张量构建直接使用）
+ndarray = "0.17"
 
 [dev-dependencies]
 tempfile = "3"

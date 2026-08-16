@@ -12,9 +12,42 @@ pub mod models;
 pub mod ppocr;
 pub mod preprocess;
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// OcrImageSource 序列化为 camelCase 契约（前端直接消费）
+    #[test]
+    fn image_source_serializes_camel_case() {
+        let src = OcrImageSource {
+            path: "/cache/ocr/ocr_1.rgba".to_string(),
+            width: 1000,
+            height: 750,
+        };
+        let v = serde_json::to_value(&src).unwrap();
+        assert_eq!(v["path"], "/cache/ocr/ocr_1.rgba");
+        assert_eq!(v["width"], 1000);
+        assert_eq!(v["height"], 750);
+    }
+}
+
 use serde::{Deserialize, Serialize};
 
 // ==================== 命令契约类型（spec §4.2）====================
+
+/// Kotlin 桥取图解码产物（相册选图/拍照 → RGBA8 临时文件，spec §4.4/§5）
+///
+/// `plugin_pick_image` / `plugin_camera_capture` 返回；前端直接将其
+/// 作为 `plugin_ocr_recognize` 的 `image.rgbaPath` 参数——全程不经 WASM。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrImageSource {
+    /// RGBA8 纯像素文件绝对路径（app cache ocr/ 目录，识别完成后宿主删除）
+    pub path: String,
+    /// 降采样 + EXIF 旋转后的实际宽（识别坐标系）
+    pub width: u32,
+    pub height: u32,
+}
 
 /// `plugin_ocr_recognize` 请求中的图片（Kotlin 桥已解码降采样，见 §4.4）
 #[derive(Debug, Clone, Deserialize)]

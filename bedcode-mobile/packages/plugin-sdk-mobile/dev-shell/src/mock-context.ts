@@ -18,6 +18,9 @@ import type {
   LifecycleAPI,
   LoggerAPI,
   NotificationAPI,
+  OcrApi,
+  OcrEngineStatus,
+  OcrLine,
   PluginContext,
   StatusAPI,
   UIRegistry,
@@ -470,6 +473,67 @@ export function createMockContext(pluginId: string): PluginContext {
     },
   }
 
+  // ==================== OcrAPI（dev-shell mock） ====================
+
+  /** mock 引擎状态：模型在位、引擎常驻（dev-shell 恒就绪） */
+  const mockEngineStatus: OcrEngineStatus = {
+    available: true,
+    modelsPresent: true,
+    modelsBytes: 17_417_728,
+    engineLoaded: true,
+    supportedEngines: ['offline'],
+  }
+
+  /** 默认示例识别结果（devMock.ocrLinesSeed 缺省时使用；空数组可演示空结果空态） */
+  const defaultOcrLines: OcrLine[] = [
+    { text: 'Hello, BedCode OCR', confidence: 0.98, bbox: { x: 24, y: 40, w: 420, h: 36 } },
+    { text: '离线文字识别（PP-OCRv4）', confidence: 0.95, bbox: { x: 24, y: 92, w: 380, h: 40 } },
+    { text: '低置信度示例行（点击可复制）', confidence: 0.52, bbox: { x: 24, y: 148, w: 300, h: 36 } },
+  ]
+
+  const ocr: OcrApi = {
+    async recognize(_input) {
+      const seed = getDevMock(pluginId)?.ocrLinesSeed
+      pushLog(
+        'info',
+        pluginId,
+        `ocr.recognize (mock) 返回 ${seed ? seed.length : defaultOcrLines.length} 行`,
+      )
+      return {
+        engine: 'offline',
+        durationMs: 86,
+        lines: seed ?? defaultOcrLines,
+      }
+    },
+    async engineStatus() {
+      pushLog('info', pluginId, 'ocr.engineStatus (mock) 引擎就绪')
+      return mockEngineStatus
+    },
+    async deleteModels() {
+      // 内存态：删除后 modelsPresent=false，演示「模型缺失引导恢复」链路
+      mockEngineStatus.modelsPresent = false
+      mockEngineStatus.modelsBytes = 0
+      mockEngineStatus.engineLoaded = false
+      pushLog('info', pluginId, 'ocr.deleteModels (mock) 已删除')
+      return { deleted: true, freedBytes: 17_417_728 }
+    },
+    async restoreModels() {
+      mockEngineStatus.modelsPresent = true
+      mockEngineStatus.modelsBytes = 17_417_728
+      mockEngineStatus.engineLoaded = true
+      pushLog('info', pluginId, 'ocr.restoreModels (mock) 已恢复')
+      return { restored: true }
+    },
+    async pickImage() {
+      pushLog('info', pluginId, 'ocr.pickImage (mock) 模拟相册选图')
+      return { path: '/mock/cache/ocr/ocr_mock_pick.rgba', width: 1000, height: 750 }
+    },
+    async cameraCapture() {
+      pushLog('info', pluginId, 'ocr.cameraCapture (mock) 模拟拍照（权限已授予）')
+      return { path: '/mock/cache/ocr/ocr_mock_camera.rgba', width: 1200, height: 900 }
+    },
+  }
+
   return {
     id: pluginId,
     commands,
@@ -479,6 +543,7 @@ export function createMockContext(pluginId: string): PluginContext {
     events,
     storage,
     fileService,
+    ocr,
     i18n,
     lifecycle,
     logger,

@@ -63,6 +63,15 @@ impl RgbaImage {
         })
     }
 
+    /// RGB 视图（去 alpha）：每像素取前 3 通道，供 OCR 流水线（模型输入按 BGR 序取通道）
+    pub fn to_rgb(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.pixels.len() / 4 * 3);
+        for p in self.pixels.chunks_exact(4) {
+            out.extend_from_slice(&p[..3]);
+        }
+        out
+    }
+
     /// 灰度化（BT.601 加权平均，alpha 忽略）
     pub fn to_gray(&self) -> Vec<u8> {
         self.pixels
@@ -190,6 +199,14 @@ mod tests {
         assert_eq!(norm[0], 0.0);
         assert!((norm[1] - 128.0 / 255.0).abs() < 1e-6);
         assert_eq!(norm[2], 1.0);
+    }
+
+    /// RGB 视图去 alpha：4 通道 → 3 通道
+    #[test]
+    fn to_rgb_drops_alpha() {
+        let path = temp_file("rgb", &[255, 0, 0, 9, 0, 255, 0, 8, 0, 0, 255, 7]);
+        let img = RgbaImage::load_from_file(&path, 3, 1).unwrap();
+        assert_eq!(img.to_rgb(), vec![255, 0, 0, 0, 255, 0, 0, 0, 255]);
     }
 
     /// 降采样：8x4 → 长边 4 → 4x2，RGBA 布局不变

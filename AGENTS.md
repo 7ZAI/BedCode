@@ -221,7 +221,7 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、OcrModelExtractorPlugin.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt）、AndroidManifest.xml、key.properties、keystore、drawable 资源；jniLibs 的 `libonnxruntime.so`（OCR 插件运行时 dlopen）重建后执行 `sh bedcode-mobile/scripts/fetch-ort-android.sh` 恢复（离线可从已构建 APK 的 lib/<abi>/ 提取）
+- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、OcrModelExtractorPlugin.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、CameraPlugin.kt、OcrImageDecoder.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、key.properties、keystore、drawable 资源；jniLibs 的 `libonnxruntime.so`（OCR 插件运行时 dlopen）重建后执行 `sh bedcode-mobile/scripts/fetch-ort-android.sh` 恢复（离线可从已构建 APK 的 lib/<abi>/ 提取）
 
 ---
 

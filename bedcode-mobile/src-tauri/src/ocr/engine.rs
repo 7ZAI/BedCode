@@ -2,12 +2,14 @@
 //!
 //! v2 在线适配器实现同一 trait，engine 字段形如 `online:<provider>`；
 //! v1 仅 "offline" 可路由，其他值返回明确错误。
+//! 识别全程（RGBA 校验 + 引擎推理）在 `spawn_blocking` 后台线程（spec §4.3：
+//! ort 推理是阻塞调用，禁止占 async executor）。
 
 use super::models;
 use super::preprocess::RgbaImage;
 use super::{OcrEngineStatus, OcrOutput, OcrRecognizeInput};
 use crate::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 use tauri::Manager;
 
@@ -20,10 +22,20 @@ pub trait OcrEngine: std::fmt::Debug {
     fn recognize(&self, image: &RgbaImage, max_side: Option<u32>) -> Result<OcrOutput>;
 }
 
-/// engine 字段 → 引擎路由；不支持的 engine 值返回明确错误（接缝已就位，v1 拒绝在线）
-pub fn route_engine(engine: &str) -> Result<Box<dyn OcrEngine + Send + Sync>> {
+/// engine 字段 → 引擎路由；offline 引擎携带运行上下文（模型目录 + onnxruntime .so）；
+/// 不支持的 engine 值返回明确错误（接缝已就位，v1 拒绝在线）
+pub fn route_engine(
+    engine: &str,
+    data_dir: PathBuf,
+    onnxruntime_so: Option<PathBuf>,
+) -> Result<Box<dyn OcrEngine + Send + Sync>> {
     match engine {
-        "offline" => Ok(Box::new(super::ppocr::PpOcrEngine)),
+        "offline" => Ok(Box::new(super::ppocr::PpOcrEngine::new(
+            super::ppocr::PpOcrContext {
+                data_dir,
+                onnxruntime_so,
+            },
+        ))),
         _ => Err(crate::AppError::InvalidInput(format!(
             "plugin_ocr_recognize: unsupported engine '{}' (supported: offline)",
             engine
@@ -31,37 +43,44 @@ pub fn route_engine(engine: &str) -> Result<Box<dyn OcrEngine + Send + Sync>> {
     }
 }
 
-/// `plugin_ocr_recognize` 命令体：路由 → RGBA 校验 → 模型存在性（offline）→ 推理计时
+/// `plugin_ocr_recognize` 命令体：路由 → spawn_blocking 全流程（RGBA 校验 + 模型存在性 + 推理）→ 计时
 pub async fn recognize(app_handle: &tauri::AppHandle, input: &OcrRecognizeInput) -> Result<OcrOutput> {
     let engine_name = input.engine.clone().unwrap_or_else(|| "offline".to_string());
-    let engine = route_engine(&engine_name)?;
+    let data_dir = app_handle.path().app_data_dir()?;
+    let onnx_so = probe_onnxruntime_so(app_handle).await;
+    let engine = route_engine(&engine_name, data_dir.clone(), onnx_so)?;
+    let is_offline = engine_name == "offline";
+    let input = input.clone();
 
-    // 图片校验（文件存在、字节数与尺寸匹配、像素数上限）
-    let image = RgbaImage::load_from_file(
-        Path::new(&input.image.rgba_path),
-        input.image.width,
-        input.image.height,
-    )?;
-
-    // offline 语义：模型未解压 → 明确错误，UI 引导恢复（spec §4.2）
-    if engine_name == "offline" {
-        let data_dir = app_handle.path().app_data_dir()?;
-        if !models::models_present(&data_dir) {
+    let started = Instant::now();
+    let output = tokio::task::spawn_blocking(move || -> Result<OcrOutput> {
+        // 图片校验（文件存在、字节数与尺寸匹配、像素数上限）
+        let image = RgbaImage::load_from_file(
+            Path::new(&input.image.rgba_path),
+            input.image.width,
+            input.image.height,
+        )?;
+        // offline 语义：模型未解压 → 明确错误，UI 引导恢复（spec §4.2）
+        if is_offline && !models::models_present(&data_dir) {
             return Err(crate::AppError::Plugin(format!(
                 "plugin_ocr_recognize: models not extracted (restore via plugin_ocr_restore_models, data dir {})",
                 data_dir.display()
             )));
         }
-    }
+        engine.recognize(&image, input.max_side)
+    })
+    .await
+    .map_err(|e| {
+        crate::AppError::Internal(format!("plugin_ocr_recognize: blocking task failed: {e}"))
+    })??;
 
-    let started = Instant::now();
-    let mut output = engine.recognize(&image, input.max_side)?;
+    let mut output = output;
     output.duration_ms = started.elapsed().as_millis() as u64;
     Ok(output)
 }
 
 /// `plugin_ocr_engine_status` 命令体：available 由 onnxruntime .so 存在性决定
-/// （非 Android dev 无此文件 → None 恒可用兑底）；engine_loaded 待 07 常驻引擎后真实化
+/// （非 Android dev 无此文件 → None 恒可用兑底）；engine_loaded 反映常驻引擎真实状态
 pub async fn engine_status(data_dir: &Path, onnxruntime_so: Option<&Path>) -> OcrEngineStatus {
     let available = match onnxruntime_so {
         Some(so) => so.is_file(),
@@ -71,7 +90,7 @@ pub async fn engine_status(data_dir: &Path, onnxruntime_so: Option<&Path>) -> Oc
         available,
         models_present: models::models_present(data_dir),
         models_bytes: models::models_bytes(data_dir),
-        engine_loaded: false,
+        engine_loaded: super::ppocr::resident_loaded(),
         supported_engines: vec!["offline".to_string()],
     }
 }
@@ -81,14 +100,35 @@ pub fn onnxruntime_so_path(native_lib_dir: &str) -> std::path::PathBuf {
     Path::new(native_lib_dir).join("libonnxruntime.so")
 }
 
+/// 探测 onnxruntime .so 完整路径：Android 经 Kotlin 桥拿 nativeLibraryDir；
+/// 其他平台（桌面 dev）None → 恒可用兑底
+pub async fn probe_onnxruntime_so(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        let _ = app_handle;
+        match crate::plugin::android_plugins::native_library_dir().await {
+            Ok(dir) => Some(onnxruntime_so_path(&dir)),
+            Err(e) => {
+                tracing::warn!("probe onnxruntime .so: native_library_dir failed: {}", e);
+                None
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app_handle;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 支持的引擎路由到 offline 实现
+    /// 支持的引擎路由到 offline 实现（带上下文）
     #[test]
     fn route_supports_offline() {
-        let engine = route_engine("offline").expect("offline must route");
+        let engine = route_engine("offline", PathBuf::new(), None).expect("offline must route");
         assert_eq!(engine.engine_id(), "offline");
     }
 
@@ -96,23 +136,12 @@ mod tests {
     #[test]
     fn route_rejects_unknown_engines() {
         for name in ["online:aws", "tesseract", ""] {
-            let err = route_engine(name).unwrap_err().to_string();
+            let err = route_engine(name, PathBuf::new(), None)
+                .unwrap_err()
+                .to_string();
             assert!(err.contains("unsupported engine"), "got: {}", err);
             assert!(err.contains(name), "got: {}", err);
         }
-    }
-
-    /// 骨架引擎（07 前）：模型就位后仍返回明确未实现错误
-    #[test]
-    fn offline_engine_is_skeleton_until_ticket_07() {
-        let engine = route_engine("offline").unwrap();
-        let image = RgbaImage {
-            pixels: vec![0u8; 4],
-            width: 1,
-            height: 1,
-        };
-        let err = engine.recognize(&image, None).unwrap_err().to_string();
-        assert!(err.contains("not implemented"), "got: {}", err);
     }
 
     /// engine_status：.so 存在 → available；缺失 → false；None（非 Android dev）→ 恒 true

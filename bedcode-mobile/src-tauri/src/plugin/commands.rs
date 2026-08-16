@@ -1159,7 +1159,37 @@ pub async fn plugin_ocr_recognize(
 ) -> Result<crate::ocr::OcrOutput> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_ocr(&manager, &plugin_id, "plugin_ocr_recognize").await?;
-    crate::ocr::engine::recognize(&app_handle, &input).await
+    let result = crate::ocr::engine::recognize(&app_handle, &input).await;
+    // spec §4.4：识别完成后宿主清理 Kotlin 桥产出的临时 RGBA 文件（成败均清理）
+    cleanup_ocr_temp_rgba(&app_handle, &input.image.rgba_path);
+    result
+}
+
+/// 识别完成后清理 Kotlin 桥产出的 RGBA 临时文件（spec §4.4）
+///
+/// 仅清理 app cache/ocr 目录下的文件（防误删用户指定路径）；失败仅告警不阻断。
+fn cleanup_ocr_temp_rgba(app_handle: &tauri::AppHandle, rgba_path: &str) {
+    let Ok(cache_dir) = app_handle.path().app_cache_dir() else {
+        return;
+    };
+    if !is_ocr_temp_path(&cache_dir, rgba_path) {
+        return;
+    }
+    let path = std::path::Path::new(rgba_path);
+    if let Err(e) = std::fs::remove_file(path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                "plugin_ocr_recognize: failed to remove temp RGBA {}: {}",
+                rgba_path,
+                e
+            );
+        }
+    }
+}
+
+/// RGBA 临时文件判定：位于 app cache/ocr 目录下（组件级路径比较，防 ocr2 误命中）
+fn is_ocr_temp_path(cache_dir: &std::path::Path, rgba_path: &str) -> bool {
+    std::path::Path::new(rgba_path).starts_with(cache_dir.join("ocr"))
 }
 
 /// 引擎状态：模型是否就位/占用字节/引擎加载态/支持引擎列表
@@ -1172,31 +1202,11 @@ pub async fn plugin_ocr_engine_status(
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_ocr(&manager, &plugin_id, "plugin_ocr_engine_status").await?;
     let data_dir = app_handle.path().app_data_dir()?;
-    let onnx_so = ocr_onnxruntime_so_path(&app_handle).await;
+    let onnx_so = crate::ocr::engine::probe_onnxruntime_so(&app_handle).await;
     Ok(crate::ocr::engine::engine_status(&data_dir, onnx_so.as_deref()).await)
 }
 
-/// onnxruntime .so 路径探测：Android 经 Kotlin 桥拿 nativeLibraryDir；
-/// 其他平台（桌面 dev）None → 恒可用兑底
-async fn ocr_onnxruntime_so_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
-    #[cfg(target_os = "android")]
-    {
-        match crate::plugin::android_plugins::native_library_dir().await {
-            Ok(dir) => Some(crate::ocr::engine::onnxruntime_so_path(&dir)),
-            Err(e) => {
-                tracing::warn!("plugin_ocr_engine_status: native_library_dir failed: {}", e);
-                None
-            }
-        }
-    }
-    #[cfg(not(target_os = "android"))]
-    {
-        let _ = app_handle;
-        None
-    }
-}
-
-/// 删除已解压模型（释放空间；引擎加载后先释放 session 再删，见 spec §4.2）
+/// 删除已解压模型（释放空间；先释放常驻引擎 session 再删，见 spec §4.2/§4.3）
 #[tauri::command]
 pub async fn plugin_ocr_delete_models(
     app_handle: tauri::AppHandle,
@@ -1204,6 +1214,8 @@ pub async fn plugin_ocr_delete_models(
 ) -> Result<crate::ocr::OcrDeleteModelsOutput> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_ocr(&manager, &plugin_id, "plugin_ocr_delete_models").await?;
+    // 先释放引擎（session 持有模型文件句柄），再删目录
+    crate::ocr::ppocr::reset_resident();
     let data_dir = app_handle.path().app_data_dir()?;
     crate::ocr::models::delete_models(&data_dir)
         .map(|(deleted, freed_bytes)| crate::ocr::OcrDeleteModelsOutput { deleted, freed_bytes })
@@ -1222,6 +1234,30 @@ pub async fn plugin_ocr_restore_models(
     crate::ocr::models::restore_models(&data_dir, &app_version)
         .await
         .map(|restored| crate::ocr::OcrRestoreModelsOutput { restored })
+}
+
+/// 相册选图：SAF image/*（零权限）→ Kotlin 解码降采样 → RGBA8 临时文件
+/// （spec §4.4/§5.1）；返回 None 表示用户取消。
+#[tauri::command]
+pub async fn plugin_pick_image(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<Option<crate::ocr::OcrImageSource>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_pick_image").await?;
+    crate::plugin::android_plugins::pick_image_android().await
+}
+
+/// 拍照：ACTION_IMAGE_CAPTURE + CAMERA 运行时权限（拒绝返回明确错误）→
+/// 同一解码链路 → RGBA8 临时文件（spec §4.4/§5.2）；返回 None 表示用户取消。
+#[tauri::command]
+pub async fn plugin_camera_capture(
+    app_handle: tauri::AppHandle,
+    plugin_id: String,
+) -> Result<Option<crate::ocr::OcrImageSource>> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    require_ocr(&manager, &plugin_id, "plugin_camera_capture").await?;
+    crate::plugin::android_plugins::camera_capture_android().await
 }
 
 // ==================== Plugin Command Invoke ====================
@@ -1453,5 +1489,29 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("plugin_saf_write_media_downloads"));
         assert!(err.to_string().contains("/data/downloads/a.txt"));
+    }
+
+    /// RGBA 临时文件清理守卫：仅命中 app cache/ocr 目录（组件级，ocr2 不误命中）
+    #[test]
+    fn ocr_temp_cleanup_guard_matches_only_cache_ocr() {
+        let cache = std::path::Path::new("/data/user/0/com.bedcode.mobile/cache");
+        assert!(is_ocr_temp_path(
+            cache,
+            "/data/user/0/com.bedcode.mobile/cache/ocr/ocr_1.rgba"
+        ));
+        // 同名前缀目录不误命中（组件级比较）
+        assert!(!is_ocr_temp_path(
+            cache,
+            "/data/user/0/com.bedcode.mobile/cache/ocr2/x.rgba"
+        ));
+        // cache 之外的路径不清理（防误删用户指定文件）
+        assert!(!is_ocr_temp_path(
+            cache,
+            "/data/user/0/com.bedcode.mobile/files/ocr/ocr_1.rgba"
+        ));
+        assert!(!is_ocr_temp_path(
+            cache,
+            "/data/user/0/com.bedcode.mobile/cache/other/x.rgba"
+        ));
     }
 }

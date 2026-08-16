@@ -61,6 +61,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::device_info_plugin())
         .plugin(crate::plugin::android_plugins::saf_picker_plugin())
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
+        .plugin(crate::plugin::android_plugins::camera_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
@@ -299,6 +300,8 @@ pub fn run() {
             crate::plugin::commands::plugin_ocr_engine_status,
             crate::plugin::commands::plugin_ocr_delete_models,
             crate::plugin::commands::plugin_ocr_restore_models,
+            crate::plugin::commands::plugin_pick_image,
+            crate::plugin::commands::plugin_camera_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

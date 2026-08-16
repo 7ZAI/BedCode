@@ -446,6 +446,7 @@ export default {
       approveFailed: '批准失败: {error}',
       noPermissions: '无权限请求',
       noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
+      noOcrPermission: '插件 {plugin} 缺少 ocr 权限',
       noSystemOpenPermission: '插件 {plugin} 缺少 system:open 权限',
       fsAuthTitle: '文件访问授权',
       fsAuthRead: '读取',

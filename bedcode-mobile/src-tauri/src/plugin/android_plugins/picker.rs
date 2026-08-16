@@ -1,5 +1,7 @@
 //! SAF 目录/文件选择（SafPickerPlugin + SafTransferPlugin）
 //!
+//! 另含 OCR 取图入口一 pickImage（spec §5.1：同插件新增方法，解码在 Kotlin 完成）。
+//!
 //! 从 android_plugins.rs 拆分。
 
 use std::sync::OnceLock;
@@ -106,6 +108,34 @@ pub async fn pick_directory_android() -> crate::Result<Option<String>> {
 pub async fn pick_file_android() -> crate::Result<Option<String>> {
     Err(crate::AppError::Plugin(
         "SAF picker unavailable on this platform".to_string(),
+    ))
+}
+
+
+/// 弹系统图片选择器并直接解码为 RGBA8 临时文件（spec §4.4/§5.1，OCR 取图入口一）
+///
+/// SAF ACTION_OPEN_DOCUMENT + image/*，零权限；Kotlin 侧选中后即完成
+/// BitmapFactory 解码降采样（长边 ≤1600）+ EXIF 旋转，返回 {path,width,height}，
+/// 前端直接作为 plugin_ocr_recognize 的 image.rgbaPath 参数——不经 Rust 路径解析。
+/// 用户取消返回 Ok(None)。
+#[cfg(target_os = "android")]
+pub async fn pick_image_android() -> crate::Result<Option<crate::ocr::OcrImageSource>> {
+    let handle = SAF_PICKER_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("SafPickerPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("pickImage", serde_json::json!({}))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke pickImage: {}", e)))?;
+    super::ocr::parse_ocr_image_response(&response)
+}
+
+
+/// 非 Android 平台无 SAF 图片选择器
+#[cfg(not(target_os = "android"))]
+pub async fn pick_image_android() -> crate::Result<Option<crate::ocr::OcrImageSource>> {
+    Err(crate::AppError::Plugin(
+        "SAF image picker unavailable on this platform".to_string(),
     ))
 }
 

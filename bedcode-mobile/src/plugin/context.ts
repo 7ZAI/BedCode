@@ -31,6 +31,7 @@ import type {
   SafCopyHandle,
   SafCopyStatus,
   PickedSharedDirectory,
+  OcrApi,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
@@ -577,6 +578,47 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
+  // ==================== OcrAPI ====================
+
+  /** 检查 ocr 权限，失败时抛 i18n 文案错误（仿 requireFileservicePermission） */
+  function requireOcrPermission(apiMethod: string): void {
+    if (!hasPermissionForApi(permissions, apiMethod)) {
+      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
+      const message = hostI18n
+        ? hostI18n.global.t('mobile.plugin.noOcrPermission', { plugin: info.id })
+        : 'mobile.plugin.noOcrPermission'
+      throw new Error(message)
+    }
+  }
+
+  // 识别数据不经 WASM：宿主命令直供（spec §4.2/§6）
+  const ocr: OcrApi = {
+    async recognize(input) {
+      requireOcrPermission('ocr.recognize')
+      return pluginCmds.pluginOcrRecognize(info.id, input)
+    },
+    async engineStatus() {
+      requireOcrPermission('ocr.engineStatus')
+      return pluginCmds.pluginOcrEngineStatus(info.id)
+    },
+    async deleteModels() {
+      requireOcrPermission('ocr.deleteModels')
+      return pluginCmds.pluginOcrDeleteModels(info.id)
+    },
+    async restoreModels() {
+      requireOcrPermission('ocr.restoreModels')
+      return pluginCmds.pluginOcrRestoreModels(info.id)
+    },
+    async pickImage() {
+      requireOcrPermission('ocr.pickImage')
+      return pluginCmds.pluginPickImage(info.id)
+    },
+    async cameraCapture() {
+      requireOcrPermission('ocr.cameraCapture')
+      return pluginCmds.pluginCameraCapture(info.id)
+    },
+  }
+
   // ==================== NotificationAPI ====================
   const notifications: NotificationAPI = {
     async notify(title, body) {
@@ -613,6 +655,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     events,
     storage,
     fileService,
+    ocr,
     i18n,
     lifecycle,
     logger,

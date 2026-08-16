@@ -430,6 +430,71 @@ export interface StorageAPI {
   delete(key: string): Promise<void>
 }
 
+// ==================== OCR API Types ====================
+
+/** 文本行包围盒（原图坐标系，Kotlin 解码尺寸） */
+export interface OcrBBox {
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** 单行识别结果 */
+export interface OcrLine {
+  text: string
+  /** rec 模型逐行置信度（0~1），低置信度行 UI 可弱化 */
+  confidence: number
+  bbox: OcrBBox
+}
+
+/** `ocr.recognize` 响应 */
+export interface OcrResult {
+  engine: string
+  durationMs: number
+  lines: OcrLine[]
+}
+
+/** `ocr.engineStatus` 响应 */
+export interface OcrEngineStatus {
+  /** 当前 ABI 是否含 onnxruntime + 引擎编译可用 */
+  available: boolean
+  modelsPresent: boolean
+  modelsBytes: number
+  /** 识别引擎是否已加载常驻 */
+  engineLoaded: boolean
+  /** v1 恒 ["offline"] */
+  supportedEngines: string[]
+}
+
+/** 取图解码产物（pickImage / cameraCapture 返回；用户取消 = null） */
+export interface OcrImageSource {
+  /** RGBA8 纯像素文件路径（app cache；识别完成后宿主自动清理） */
+  path: string
+  width: number
+  height: number
+}
+
+/** OCR API（需 ocr 权限；识别数据不经 WASM，宿主命令直供，见 .scratch/ocr-plugin/spec.md §4.2） */
+export interface OcrApi {
+  /** 识别图片：RGBA 由 Kotlin 桥产出，engine 缺省 "offline" */
+  recognize(input: {
+    engine?: string
+    image: { rgbaPath: string; width: number; height: number }
+    maxSide?: number
+  }): Promise<OcrResult>
+  /** 引擎状态：模型是否就位/占用字节/引擎加载态/支持引擎列表 */
+  engineStatus(): Promise<OcrEngineStatus>
+  /** 删除已解压模型（释放空间；先释放常驻引擎 session） */
+  deleteModels(): Promise<{ deleted: boolean; freedBytes: number }>
+  /** 从 APK assets 恢复模型（幂等） */
+  restoreModels(): Promise<{ restored: boolean }>
+  /** 相册选图（SAF image/*，零权限）→ RGBA8 临时文件；取消返回 null；非 Android 平台 reject */
+  pickImage(): Promise<OcrImageSource | null>
+  /** 拍照（CAMERA 运行时权限；拒绝 reject 明确错误）→ RGBA8 临时文件；取消返回 null；非 Android 平台 reject */
+  cameraCapture(): Promise<OcrImageSource | null>
+}
+
 // ==================== File Service API Types ====================
 
 /** 上传策略钩子元信息（宿主 → 插件，与 SDK Rust UploadRequestMeta camelCase 对应） */
@@ -638,6 +703,9 @@ export interface SafTreeEntry {
 /** 免授权真实路径目录浏览条目种子（dev-shell listDir 用；uri/documentId 由 mock 宿主拼装） */
 export type SafEntrySeed = Omit<SafEntry, 'uri' | 'documentId'>
 
+/** OCR 识别结果种子（dev-shell ocr.recognize 用；缺省时 mock 宿主返回内置示例行） */
+export type OcrLinesSeed = OcrLine[]
+
 /**
  * 插件开发期领域数据：dev-shell mock 宿主按 pluginId 合并（仅浏览器 dev 环境消费）
  *
@@ -653,6 +721,8 @@ export interface PluginDevMock {
   listDirEntries?: SafEntrySeed[]
   /** SAF 目录树（file-transfer：documentId → 条目，saf.listTree 遍历用） */
   safTree?: Record<string, SafTreeEntry[]>
+  /** OCR 识别结果种子（ocr：ocr.recognize 的 mock 返回；空数组演示空结果空态） */
+  ocrLinesSeed?: OcrLinesSeed
 }
 
 /** 国际化 API */
@@ -684,6 +754,8 @@ export interface PluginContext {
   readonly storage: StorageAPI
   /** 文件服务 API（需 fileservice 权限） */
   readonly fileService: FileServiceAPI
+  /** OCR 引擎 API（需 ocr 权限；识别数据不经 WASM） */
+  readonly ocr: OcrApi
   readonly i18n: I18nAPI
   readonly lifecycle: LifecycleAPI
   readonly logger: LoggerAPI
