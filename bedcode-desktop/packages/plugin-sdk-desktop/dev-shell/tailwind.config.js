@@ -15,7 +15,7 @@ export default {
   content: [
     './index.html',
     './src/**/*.{vue,js,ts,jsx,tsx}',
-    // SDK 共享 UI 组件（@bedcode/plugin-sdk-desktop/ui）
+    // SDK 共享 UI 组件（@binblink/plugin-sdk-desktop/ui）
     `${SDK_UI_SRC}/**/*.{vue,js,ts,jsx,tsx}`,
     // 宿主源码（导航条测试页跨项目引用 bedcode-desktop/src 组件）
     `${HOST_SRC}/**/*.{vue,js,ts,jsx,tsx}`,

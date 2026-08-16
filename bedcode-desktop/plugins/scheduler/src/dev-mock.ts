@@ -9,7 +9,7 @@
  * - URL `?mock=1` 时填充多状态示例任务（评审实态：启用/停用、各状态徽标、
  *   有/无输出文件、退出码等）
  */
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 /** 端点响应信封（与 useSchedulerApi 中 EndpointEnvelope 同形） */
 interface Envelope<T> {

@@ -51,7 +51,7 @@ app.use(createPinia())
 app.use(router)
 app.use(i18n)
 
-// 初始化共享模块运行时（供插件通过 @bedcode/plugin-sdk-desktop 访问）
+// 初始化共享模块运行时（供插件通过 @binblink/plugin-sdk-desktop 访问）
 setupSharedRuntime(i18n, router)
 
 // 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存

@@ -25,7 +25,7 @@
 
 **验证**：插件 vitest 21/21；vue-tsc 0 error；`npm run build` 全链（vite+cargo wasm32+componentize）通过；宿主 vitest 179 通过；dev-shell 构建通过 + **headless Chrome 实机冒烟**（`.scratch/ocr-plugin/devshell-smoke.mjs` + 截图 devshell-result.png）：激活 → 入口点击 → 主页「引擎已就绪」→ 相册选图（mock）→ 结果页 3 行 + 低置信度 chip + 复制全文按钮，断言全绿
 
-**踩坑（#lesson）**：插件 i18n 必须用**扁平 key 且含域前缀**（`'ocr.toolbox.title'`）——嵌套对象（`toolbox: {title}`）经 registerMessages 顶层加 `{pluginId}.` 前缀后路径错位，渲染出原始 key（dev-shell 首轮冒烟即现形）；vite/client 不声明 `*.vue` 模块，插件类型检查用 vue-tsc（tsc 对 .vue 导入报错属正常）；`bedcode-plugin create` 模板 tsconfig 缺 paths/types 映射，需补 `@bedcode/plugin-sdk-mobile` paths（参照 file-transfer）
+**踩坑（#lesson）**：插件 i18n 必须用**扁平 key 且含域前缀**（`'ocr.toolbox.title'`）——嵌套对象（`toolbox: {title}`）经 registerMessages 顶层加 `{pluginId}.` 前缀后路径错位，渲染出原始 key（dev-shell 首轮冒烟即现形）；vite/client 不声明 `*.vue` 模块，插件类型检查用 vue-tsc（tsc 对 .vue 导入报错属正常）；`bedcode-plugin create` 模板 tsconfig 缺 paths/types 映射，需补 `@binblink/plugin-sdk-mobile` paths（参照 file-transfer）
 
 **08 遗留修复（本会话顺手）**：CameraPlugin 权限回调原为「重入 capture」，拒绝时若再次请求会**无限循环弹窗**；改为独立 `@PermissionCallback onCameraPermission` 回调——授权→launch，拒绝→reject 明确错误（tauri 2.11.1 源码确认 permissionCallbackMethods 注册机制）；`./gradlew compileUniversalDebugKotlin` 通过
 

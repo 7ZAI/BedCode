@@ -19,7 +19,7 @@ import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
 import { platform } from '@tauri-apps/plugin-os'
 import { autoTaskModalVisible } from './state'
 import { messages } from './i18n'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 // ==================== Datepicker 主题定制 ====================
 

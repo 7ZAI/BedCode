@@ -4,7 +4,7 @@
  * Rust+TS 双层架构：Rust WASM 提供调度引擎与 HTTP 端点，TS 提供只读面板。
  * 侧边栏面板（registerSidebarPanel）→ SchedulerPanelView：任务列表 + 最近执行 + 日志路径。
  */
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import SchedulerPanelView from './components/SchedulerPanelView.vue'
 import { messages } from './i18n'
 // 仅 dev-shell 生效：浏览器无 Rust 后端，注册命令 mock 展示完整 UI（生产构建自动排除）

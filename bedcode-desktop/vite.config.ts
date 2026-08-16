@@ -37,7 +37,7 @@ export default defineConfig({
     fs: {
       allow: [
         resolve(__dirname, 'src'),
-        // 插件 SDK 源码（@bedcode/plugin-sdk-desktop 经 file: symlink 解析为真实路径，
+        // 插件 SDK 源码（@binblink/plugin-sdk-desktop 经 file: symlink 解析为真实路径，
         // 共享 UI 组件如 Select.vue 在 packages/ 下，dev server 需显式放行）
         resolve(__dirname, 'packages'),
         resolve(__dirname, 'index.html'),

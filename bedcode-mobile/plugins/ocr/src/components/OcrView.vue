@@ -10,7 +10,7 @@
  * 成功后跳转结果页；失败 Toast 映射错误。
  */
 import { computed, inject, onMounted, ref } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import { useOcr, mapRecognizeError, RESULT_ROUTE_ID } from '../composables/useOcr'
 
 const context = inject<PluginContext>('pluginContext')!

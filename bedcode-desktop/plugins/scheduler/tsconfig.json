@@ -12,9 +12,9 @@
     "noEmit": true,
     "types": ["vitest/globals"],
     "paths": {
-      "@bedcode/plugin-sdk-desktop": ["../../packages/plugin-sdk-desktop/src/index.ts"],
-      "@bedcode/plugin-sdk-desktop/vite": ["../../packages/plugin-sdk-desktop/src/vite-plugin.ts"],
-      "@bedcode/plugin-sdk-desktop/types": ["../../packages/plugin-sdk-desktop/src/types.ts"]
+      "@binblink/plugin-sdk-desktop": ["../../packages/plugin-sdk-desktop/src/index.ts"],
+      "@binblink/plugin-sdk-desktop/vite": ["../../packages/plugin-sdk-desktop/src/vite-plugin.ts"],
+      "@binblink/plugin-sdk-desktop/types": ["../../packages/plugin-sdk-desktop/src/types.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],

@@ -131,7 +131,7 @@ import { useI18n } from 'vue-i18n'
 import ModelListEditor from './ModelListEditor.vue'
 import { generateId } from '../types'
 import type { ApiProvider, ProviderPreset } from '../types'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 
 const props = defineProps<{
   mode: 'add' | 'edit'

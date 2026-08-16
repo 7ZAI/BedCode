@@ -10,7 +10,7 @@
  * 识别数据不经 WASM：context.ocr.* 直通宿主命令（spec §6）。
  */
 import { computed, ref } from 'vue'
-import type { PluginContext, OcrEngineStatus, OcrLine } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, OcrEngineStatus, OcrLine } from '@binblink/plugin-sdk-mobile'
 
 /** 引擎阶段（由 engineStatus 派生） */
 export type EnginePhase = 'unknown' | 'loading' | 'ready' | 'missing' | 'unavailable'

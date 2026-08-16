@@ -12,9 +12,9 @@
     "skipLibCheck": true,
     "noEmit": true,
     "paths": {
-      "@bedcode/plugin-sdk-mobile": ["../../packages/plugin-sdk-mobile/src/index.ts"],
-      "@bedcode/plugin-sdk-mobile/vite": ["../../packages/plugin-sdk-mobile/src/vite-plugin.ts"],
-      "@bedcode/plugin-sdk-mobile/types": ["../../packages/plugin-sdk-mobile/src/types.ts"]
+      "@binblink/plugin-sdk-mobile": ["../../packages/plugin-sdk-mobile/src/index.ts"],
+      "@binblink/plugin-sdk-mobile/vite": ["../../packages/plugin-sdk-mobile/src/vite-plugin.ts"],
+      "@binblink/plugin-sdk-mobile/types": ["../../packages/plugin-sdk-mobile/src/types.ts"]
     }
   },
   "include": ["src/**/*.ts", "src/**/*.vue"],

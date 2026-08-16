@@ -12,7 +12,7 @@
  */
 import { watch, computed } from 'vue'
 import { inject } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { SharedRoot } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import type { useSharedUpload } from '../composables/useSharedUpload'

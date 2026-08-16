@@ -10,7 +10,7 @@
  * 语义分层：`connOnline`（WS 控制面连接）≠ `peer.online`（对端已公告共享）。
  */
 import { computed, ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
 
 /** 在线对端（设备）条目 */
 export interface PeerItem {

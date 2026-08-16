@@ -16,7 +16,7 @@ import SettingsSection from './components/SettingsSection.vue'
 import SettingsPage from './components/SettingsPage.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
-import type { PluginContext, PluginDevMock } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, PluginDevMock } from '@binblink/plugin-sdk-mobile'
 
 const STYLE_ID = 'file-transfer-plugin-style'
 

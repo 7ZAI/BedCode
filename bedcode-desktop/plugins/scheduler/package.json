@@ -10,7 +10,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@bedcode/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
+    "@binblink/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
     "vue": "^3.4.0"
   },
   "devDependencies": {

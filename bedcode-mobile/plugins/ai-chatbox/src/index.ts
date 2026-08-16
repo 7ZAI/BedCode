@@ -7,8 +7,8 @@
 import ChatView from './components/ChatView.vue'
 import { messages } from './i18n'
 import { watch } from 'vue'
-import { getI18n } from '@bedcode/plugin-sdk-mobile'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import { getI18n } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 // 仅 dev-shell 生效：浏览器无 WASM 后端，注册命令 mock 展示完整 UI（生产构建自动排除）
 import { registerDevMock, disposeDevMock } from './dev-mock'
 

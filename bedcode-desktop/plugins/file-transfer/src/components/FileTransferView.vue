@@ -7,7 +7,7 @@
  * 对端上/下线（filesrv:peer_changed）驱动目录自动加载与清空。
  */
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'

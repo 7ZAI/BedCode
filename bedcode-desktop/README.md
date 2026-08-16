@@ -128,7 +128,7 @@ cd src-tauri && cargo test  # Rust 测试
 | **File Transfer** | 1.0.0-beta | 内网文件传输：对端发现、远程目录浏览、多任务并发传输（断点续传 / 失败重试） |
 | **Scheduler** | 1.0.0-beta | 通用调度框架：cron 表达式触发 shell 脚本 / 内联命令，执行记录可审计 |
 
-开发自己的插件：使用 [`@bedcode/plugin-sdk-desktop`](packages/plugin-sdk-desktop/README.md)（TS SDK + Rust `bedcode-plugin-api` crate），完整指南见 [plugin-dev-desktop.md](plugin-dev-desktop.md)。
+开发自己的插件：使用 [`@binblink/plugin-sdk-desktop`](packages/plugin-sdk-desktop/README.md)（TS SDK + Rust `bedcode-plugin-api` crate），完整指南见 [plugin-dev-desktop.md](plugin-dev-desktop.md)。
 
 ## 相关文档
 

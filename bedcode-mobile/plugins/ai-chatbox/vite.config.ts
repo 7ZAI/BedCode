@@ -1,7 +1,7 @@
 import { defineConfig, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
-import { bedcodePlugin } from '@bedcode/plugin-sdk-mobile/vite'
+import { bedcodePlugin } from '@binblink/plugin-sdk-mobile/vite'
 
 /**
  * 库模式构建下 Vite 不会把提取出的 CSS 注入 JS：产物中的 style.css 无人引用，

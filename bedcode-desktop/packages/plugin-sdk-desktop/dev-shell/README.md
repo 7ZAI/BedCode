@@ -55,7 +55,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
   动态扫描插件源码，新加类名自动生效。
 - **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `bedcode-plugin-desktop dev`
   或 dev-shell 的 main.ts 启动。
-- **SDK 报找不到模块**：插件工程的 `@bedcode/plugin-sdk-desktop` 依赖指向
+- **SDK 报找不到模块**：插件工程的 `@binblink/plugin-sdk-desktop` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（先构建一次 SDK）。
 - **真机专属能力**（Rust 命令、真实 HTTP 端点、系统文件选择）无法在浏览器
   模拟，发布前需在真实宿主验证。

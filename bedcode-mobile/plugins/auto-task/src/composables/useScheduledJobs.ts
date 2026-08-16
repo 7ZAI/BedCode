@@ -10,8 +10,8 @@
  * prompts 列表来自 SQLite TEXT 列（JSON 字符串），展示前 JSON.parse 兜底。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext, MobileHostApi } from '@bedcode/plugin-sdk-mobile'
-import { getMobileApi } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/plugin-sdk-mobile'
 
 /** 定时任务条目（与桌面端 scheduled_jobs 表字段一一对应） */
 export interface ScheduledJob {

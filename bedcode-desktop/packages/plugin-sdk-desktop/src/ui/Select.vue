@@ -78,7 +78,7 @@
  * Select - 宿主共享自定义下拉选择组件
  *
  * 替代原生 <select>，hover 样式完全由 CSS token 控制，适配深色/浅色主题。
- * 同时提供给插件 SDK（@bedcode/plugin-sdk-desktop/ui）供插件引用。
+ * 同时提供给插件 SDK（@binblink/plugin-sdk-desktop/ui）供插件引用。
  *
  * - size="sm"：插件紧凑布局（32px/12px）；默认 md 与宿主表单一致（--input-height）
  * - open 事件：下拉展开时触发（插件可借此静默刷新选项，无原生组件禁用打断问题）

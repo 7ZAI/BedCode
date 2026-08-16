@@ -1,5 +1,5 @@
 /**
- * @bedcode/plugin-sdk-mobile
+ * @binblink/plugin-sdk-mobile
  *
  * BedCode 移动端插件开发工具包
  */

@@ -18,7 +18,7 @@ import ResultPage from './components/ResultPage.vue'
 import { messages } from './i18n'
 import './styles.css'
 import { devMock } from './mock'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 
 export { devMock }
 

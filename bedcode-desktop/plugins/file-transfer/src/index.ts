@@ -8,7 +8,7 @@ import FileTransferView from './components/FileTransferView.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 

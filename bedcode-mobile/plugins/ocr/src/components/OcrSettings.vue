@@ -8,7 +8,7 @@
  * - 全程 busy 防重入；结果 Toast 反馈；与主页共享 enginePhase 状态源
  */
 import { inject, onMounted } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import { useOcr } from '../composables/useOcr'
 
 const context = inject<PluginContext>('pluginContext')!

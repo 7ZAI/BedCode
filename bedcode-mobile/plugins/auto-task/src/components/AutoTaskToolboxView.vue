@@ -30,8 +30,8 @@
  * 本组件只做：页签切换 + 两页联动（事件去抖重拉 + 断线重连重拉）。
  */
 import { inject, ref, watch, onMounted, onUnmounted } from 'vue'
-import type { PluginContext, MobileHostApi } from '@bedcode/plugin-sdk-mobile'
-import { getMobileApi } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/plugin-sdk-mobile'
 import TaskHistoryTab from './TaskHistoryTab.vue'
 import ScheduledJobsTab from './ScheduledJobsTab.vue'
 import { useTaskHistory } from '../composables/useTaskHistory'

@@ -1,5 +1,5 @@
 {
-  "name": "@bedcode/plugin-sdk-mobile",
+  "name": "@binblink/plugin-sdk-mobile",
   "version": "0.1.0",
   "license": "MIT",
   "publishConfig": {

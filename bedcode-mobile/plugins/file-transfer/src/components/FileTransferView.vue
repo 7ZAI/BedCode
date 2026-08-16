@@ -21,7 +21,7 @@
  * 经宿主 PluginViewHost 渲染（provide pluginContext），故此处直接断言非空。
  */
 import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import type { PluginContext, Disposable } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, Disposable } from '@binblink/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'

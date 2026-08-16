@@ -5,7 +5,7 @@
  * 多选勾选发生在当前目录内（RemoteEntry.name 在目录内唯一），切换目录时清空。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { RemoteEntry } from '../types'
 import { MOCK_ENABLED, MOCK_FS_TREE } from '../mock'
 

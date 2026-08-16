@@ -10,7 +10,7 @@
  * 只更新计数不重复弹（spec §14.4）。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
 import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
 import type { HistoryEntry, PendingBatch, ReceivingTask } from '../types'
 import { formatBytes } from '../utils/format'

@@ -1,5 +1,5 @@
 /**
- * @bedcode/plugin-sdk-desktop 运行时代理
+ * @binblink/plugin-sdk-desktop 运行时代理
  *
  * 插件通过这些函数访问宿主共享模块，避免直接依赖 window 全局变量
  */

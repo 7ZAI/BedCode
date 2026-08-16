@@ -10,7 +10,7 @@
  * 结果数据经 useOcr 的 module 级共享状态（OcrView 写入），不经路由参数。
  */
 import { inject, onUnmounted } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import { useOcr, clearOcrResult, LOW_CONFIDENCE_THRESHOLD } from '../composables/useOcr'
 
 const context = inject<PluginContext>('pluginContext')!

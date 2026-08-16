@@ -15,8 +15,8 @@ import { ref, onMounted, onUnmounted, inject, computed, watch, nextTick } from '
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local，样式随宿主主题定制）
 import Datepicker from '@vuepic/vue-datepicker'
 // 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
-import Select from '@bedcode/plugin-sdk-desktop/ui'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import Select from '@binblink/plugin-sdk-desktop/ui'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 const context = inject<PluginContext>('pluginContext')!
 // i18n：与 AutoTaskModal 一致，经 context.i18n 自动加插件 ID 前缀

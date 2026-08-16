@@ -10,7 +10,7 @@
  * 在此归一化为 camelCase 内部模型。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Settings } from '../types'
 
 export function useSettings(context: PluginContext) {

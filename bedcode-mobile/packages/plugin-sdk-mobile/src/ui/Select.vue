@@ -86,7 +86,7 @@
  * Select - 移动端共享自定义下拉选择组件
  *
  * 替代原生 <select>，外观完全由 --mobile-* token 控制，适配深浅主题。
- * 宿主与插件共享（@bedcode/plugin-sdk-mobile/ui）。
+ * 宿主与插件共享（@binblink/plugin-sdk-mobile/ui）。
  *
  * - 默认 md：触发器与选项行 44px 触摸目标、字号 14px；面板空间不足时自动向上展开
  * - size="sm"：插件紧凑布局（36px/12px，如聊天头部工具条）

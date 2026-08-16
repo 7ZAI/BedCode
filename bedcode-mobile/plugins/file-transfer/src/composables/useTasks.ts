@@ -14,8 +14,8 @@
  * 「无法上传」对话框；队列全部完成/失败 → context.notifications 通知。
  */
 import { ref, computed } from 'vue'
-import type { Disposable, PluginContext } from '@bedcode/plugin-sdk-mobile'
-import { getMobileApi } from '@bedcode/plugin-sdk-mobile'
+import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/plugin-sdk-mobile'
 import type {
   Task,
   TaskStateName,

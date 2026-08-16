@@ -8,7 +8,7 @@
  *
  * 仅只读查询：CRUD 全部走 CLI（bedtask），本模块不暴露写操作。
  */
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 /** 调度任务（scheduled_jobs 行 + list 端点附带的最近执行摘要列） */
 export interface JobDef {

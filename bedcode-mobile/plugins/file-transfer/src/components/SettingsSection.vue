@@ -18,7 +18,7 @@
  * 提示与安全告知统一使用黄色提醒框（ft-warning-box）。
  */
 import { ref, inject } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
 import type { SharedRoot } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'

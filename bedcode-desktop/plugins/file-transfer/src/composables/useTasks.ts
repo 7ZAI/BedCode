@@ -10,7 +10,7 @@
  * 作为快照差分速率的上限补充（任务级进度以 tasks-changed 快照为准）。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Task, TaskStateName, TransferProgress } from '../types'
 
 /** 快照差分缓存（任务 id → 上一次 offset + 时间戳），用于推导逐任务速率 */

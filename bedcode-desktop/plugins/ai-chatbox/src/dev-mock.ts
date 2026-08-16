@@ -7,7 +7,7 @@
  * 的完整形态，便于 UI 评审与样式调试；生产构建（vite build）时 DEV=false，
  * 本模块代码不参与打包。
  */
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 // ==================== 宿主 i18n key 补齐（dev-shell 无宿主 locale，运行时由宿主注入） ====================
 // 与 bedcode-desktop/src/locales/{zh-CN,en}/desktop.ts 的 desktop.plugin.aiChatbox 段同步

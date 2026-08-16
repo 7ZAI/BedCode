@@ -14,7 +14,7 @@
  * （succeeded/failed/timeout/missed/waiting/running，色系与 auto-task 面板一致）。
  */
 import { ref, onMounted, onUnmounted, inject } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import { useSchedulerApi, type JobDef, type ExecutionRecord } from '../composables/useSchedulerApi'
 
 const context = inject<PluginContext>('pluginContext')!

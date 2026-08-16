@@ -1,4 +1,4 @@
-# @bedcode/plugin-sdk-mobile
+# @binblink/plugin-sdk-mobile
 
 The BedCode Mobile plugin development kit — provides **type definitions**, **runtime proxies**, a **Vite build plugin**, and **shared UI components**. Compared to the desktop SDK, it additionally wraps mobile-only capabilities: SAF storage access, dialogs / system notifications, dynamic routing, lifecycle hooks, and the dev-shell mock data protocol.
 
@@ -9,7 +9,7 @@ English | [简体中文](README.md)
 ## Install
 
 ```bash
-npm install --save-dev @bedcode/plugin-sdk-mobile
+npm install --save-dev @binblink/plugin-sdk-mobile
 ```
 
 Peer dependencies (provided by the host at runtime; installed in the plugin for building & type-checking):
@@ -69,7 +69,7 @@ A minimal plugin needs just two files:
 **`src/index.ts`** — plugin entry (must export `activate`):
 
 ```ts
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 
 export async function activate(context: PluginContext): Promise<void> {
   // Register a terminal toolbar button
@@ -154,7 +154,7 @@ context.lifecycle.onTerminalOutput((sessionId, data) => { /* live terminal outpu
 `getMobileApi()` provides reactive connection state plus the peer REST APIs (task queue, session auto mode, task history, scheduled jobs, ...):
 
 ```ts
-import { getMobileApi } from '@bedcode/plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/plugin-sdk-mobile'
 
 const api = getMobileApi()
 console.log(api.isConnected.value, api.activeSessionId.value)
@@ -185,7 +185,7 @@ export const devMock: PluginDevMock = {
 During plugin builds, `vue` / `vue-i18n` / `pinia` are externalized and read at runtime from the host global `window.__BEDCODE_SHARED__`. **Always access them via the SDK proxy functions — never touch the global directly**:
 
 ```ts
-import { getVue, getPinia, getRouter, getPresetTasks, getMobileApi, getPluginContext } from '@bedcode/plugin-sdk-mobile'
+import { getVue, getPinia, getRouter, getPresetTasks, getMobileApi, getPluginContext } from '@binblink/plugin-sdk-mobile'
 
 const { ref, computed } = getVue()      // Host Vue instance (components can import vue directly — externalized at build time)
 const presetTasks = getPresetTasks()    // Host preset-tasks composable
@@ -199,7 +199,7 @@ Add `bedcodePlugin()` to the plugin's `vite.config.ts`; it marks shared modules 
 ```ts
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { bedcodePlugin } from '@bedcode/plugin-sdk-mobile/vite'
+import { bedcodePlugin } from '@binblink/plugin-sdk-mobile/vite'
 
 export default defineConfig({
   plugins: [vue(), bedcodePlugin()],
@@ -264,7 +264,7 @@ Components exported via the `./ui` subpath follow the host design tokens so plug
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import Select from '@bedcode/plugin-sdk-mobile/ui'
+import Select from '@binblink/plugin-sdk-mobile/ui'
 
 const value = ref('a')
 const options = [
@@ -284,10 +284,10 @@ Currently provided: `Select` (dropdown, supports `update:modelValue` / `open` ev
 
 | Subpath | Contents |
 |---------|----------|
-| `@bedcode/plugin-sdk-mobile` | Main API: types + runtime proxies |
-| `@bedcode/plugin-sdk-mobile/vite` | `bedcodePlugin()` Vite build plugin |
-| `@bedcode/plugin-sdk-mobile/types` | Pure types (types only, no runtime) |
-| `@bedcode/plugin-sdk-mobile/ui` | Shared Vue components |
+| `@binblink/plugin-sdk-mobile` | Main API: types + runtime proxies |
+| `@binblink/plugin-sdk-mobile/vite` | `bedcodePlugin()` Vite build plugin |
+| `@binblink/plugin-sdk-mobile/types` | Pure types (types only, no runtime) |
+| `@binblink/plugin-sdk-mobile/ui` | Shared Vue components |
 
 ## Developing this SDK
 

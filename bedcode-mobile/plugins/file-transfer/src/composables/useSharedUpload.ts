@@ -13,7 +13,7 @@
  * 同路径入队（引擎按 local_path 前缀分流）。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { SharedRoot, SharedEntry } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import type { useTasks } from './useTasks'

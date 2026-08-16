@@ -5,7 +5,7 @@
  * 缺省时 mock 宿主返回内置示例行；空数组可演示「未识别到文字」空态。
  * 真实宿主忽略此导出（对 activate 无影响）。
  */
-import type { PluginDevMock, OcrLinesSeed } from '@bedcode/plugin-sdk-mobile'
+import type { PluginDevMock, OcrLinesSeed } from '@binblink/plugin-sdk-mobile'
 
 /** 示例识别结果（中英混排 + 低置信度行演示弱化） */
 export const defaultOcrLinesSeed: OcrLinesSeed = [

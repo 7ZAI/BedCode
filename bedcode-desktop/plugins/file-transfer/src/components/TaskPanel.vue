@@ -11,7 +11,7 @@
  * 纯展示组件，动作经 emit 交给父级 composable。
  */
 import { computed, inject, ref } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { HistoryEntry, ReceivingTask, Task, TaskStateName } from '../types'
 import { TASK_STATE_KEYS } from '../composables/useTasks'
 import { formatBytes, formatEta, displayName, formatClock } from '../utils/format'

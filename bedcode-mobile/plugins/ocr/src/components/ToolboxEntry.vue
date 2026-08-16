@@ -8,7 +8,7 @@
  * 引擎/模型状态在主页展示，入口卡保持静态（v1 无实时状态，spec 未要求角标）。
  */
 import { inject } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)

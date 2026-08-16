@@ -241,8 +241,8 @@
  *   DOM 事件），面板整体上移避开系统输入法
  */
 import { ref, computed, watch, nextTick, inject, onMounted, onUnmounted } from 'vue'
-import { getMobileApi, getPresetTasks } from '@bedcode/plugin-sdk-mobile'
-import type { PluginContext, MobileHostApi } from '@bedcode/plugin-sdk-mobile'
+import { getMobileApi, getPresetTasks } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
 import { autoTaskPanelVisible } from '../state'
 
 const context = inject<PluginContext>('pluginContext')!

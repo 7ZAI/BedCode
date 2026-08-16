@@ -99,7 +99,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
   新加类名会自动生效（无需重启）。
 - **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `bedcode-plugin dev` 或
   dev-shell 的 main.ts 启动，且未在入口前直接 import 插件模块。
-- **SDK 报找不到模块**：插件工程的 `@bedcode/plugin-sdk-mobile` 依赖指向
+- **SDK 报找不到模块**：插件工程的 `@binblink/plugin-sdk-mobile` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（`npm run build` 一次）。
 - **真机专属能力**（WASM 命令、真实 WS、SAF 文件选择、系统通知）无法在
   浏览器模拟，发布前仍按 `../../../plugin-dev-mobile.md` 验证清单过真机。

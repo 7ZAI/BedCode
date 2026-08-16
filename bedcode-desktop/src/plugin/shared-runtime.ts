@@ -1,7 +1,7 @@
 /**
  * 插件共享模块运行时
  *
- * 统一初始化 window.__BEDCODE_SHARED__，供插件通过 @bedcode/plugin-sdk-desktop/runtime 访问
+ * 统一初始化 window.__BEDCODE_SHARED__，供插件通过 @binblink/plugin-sdk-desktop/runtime 访问
  * 必须在 app.mount() 之前调用
  */
 import * as Vue from 'vue'

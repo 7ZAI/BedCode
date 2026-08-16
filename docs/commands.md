@@ -93,7 +93,7 @@ node scripts/build.js --rust-only      # 仅 Rust 并复制产物
 
 # 浏览器开发环境（SDK Dev Shell，前端 HMR 实时预览，无需打包）
 # 需先构建 SDK：cd bedcode-desktop/packages/plugin-sdk-desktop && npm run build
-npx bedcode-plugin-desktop dev   # 或 npm i -D @bedcode/plugin-sdk-desktop 后在插件目录运行
+npx bedcode-plugin-desktop dev   # 或 npm i -D @binblink/plugin-sdk-desktop 后在插件目录运行
 # 首次运行自动安装 dev-shell 依赖，浏览器打开 http://localhost:5173
 # 详见 ../bedcode-desktop/plugin-dev-desktop.md
 ```

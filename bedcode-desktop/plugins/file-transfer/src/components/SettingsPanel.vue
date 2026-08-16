@@ -7,9 +7,9 @@
  * 纯展示组件，写操作经 emit 交给父级 composable。
  */
 import { inject } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 // 宿主共享下拉组件（替代原生 <select>，经 SDK 引用，样式随宿主主题 token）
-import Select from '@bedcode/plugin-sdk-desktop/ui'
+import Select from '@binblink/plugin-sdk-desktop/ui'
 import type { Settings } from '../types'
 
 const context = inject<PluginContext>('pluginContext')!

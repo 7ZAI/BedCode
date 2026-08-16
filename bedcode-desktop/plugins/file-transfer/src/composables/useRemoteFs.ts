@@ -9,7 +9,7 @@
  * 目录整体递归下载不在 WASM 命令契约内。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 
 /** 面包屑节点：显示名 + 累积路径（根节点 path 为空串） */

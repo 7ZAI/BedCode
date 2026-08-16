@@ -4,7 +4,7 @@
  * dev-shell mock-context 思路的轻量版：命令按名 stub、事件可手动触发、
  * storage 内存 map，供 composables 单测（接缝 4）。
  */
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 
 export interface MockContext {
   context: PluginContext

@@ -8,7 +8,7 @@
  * 下载目录为只读展示（下载固定落系统 AppDownloadsDir）。
  */
 import { ref } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { Settings, SharedRoot } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import { MOCK_ENABLED } from '../mock'

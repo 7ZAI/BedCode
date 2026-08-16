@@ -11,7 +11,7 @@
  * - 后台/锁屏场景仍走系统通知（Kotlin TaskNotificationManager），本组件仅前台应答
  */
 import { computed, inject, onUnmounted, ref, watch } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { PendingBatch } from '../types'
 import { formatBytes } from '../utils/format'
 

@@ -1,6 +1,6 @@
 # BedCode Mobile 插件开发指南
 
-本文档说明如何为 BedCode Mobile 开发、构建、打包插件，以及插件在移动端的加载与生命周期。开发工具包为 `@bedcode/plugin-sdk-mobile`（SDK），通过 `bedcode-plugin` 命令行提供脚手架与构建能力。
+本文档说明如何为 BedCode Mobile 开发、构建、打包插件，以及插件在移动端的加载与生命周期。开发工具包为 `@binblink/plugin-sdk-mobile`（SDK），通过 `bedcode-plugin` 命令行提供脚手架与构建能力。
 
 ---
 

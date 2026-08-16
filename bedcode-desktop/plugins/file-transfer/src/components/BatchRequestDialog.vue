@@ -10,7 +10,7 @@
  * - 批被 resolved（用户从系统通知等处应答 / 宿主超时）→ 自动关闭当前弹窗并提示下一批
  */
 import { computed, inject, onUnmounted, ref, watch } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { PendingBatch } from '../types'
 import { formatBytes } from '../utils/format'
 

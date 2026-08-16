@@ -11,7 +11,7 @@
  * 返回按钮经 context.ui.goBack() 回到浏览页。
  */
 import { inject, onMounted } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import { useSettings } from '../composables/useSettings'
 import SettingsSection from './SettingsSection.vue'
 

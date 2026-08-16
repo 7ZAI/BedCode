@@ -1,5 +1,5 @@
 {
-  "name": "@bedcode/plugin-sdk-mobile-dev-shell",
+  "name": "@binblink/plugin-sdk-mobile-dev-shell",
   "version": "0.1.0",
   "private": true,
   "type": "module",

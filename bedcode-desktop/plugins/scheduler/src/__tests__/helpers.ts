@@ -6,7 +6,7 @@
  * - i18n.t：直接解析插件 zh-CN 消息（与宿主合并前缀前的 key 形状一致）
  */
 import { vi, type Mock } from 'vitest'
-import type { PluginContext } from '@bedcode/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import zhCN from '../i18n/zh-CN'
 
 /** 端点成功信封（http_response.ok_with_data 形状） */

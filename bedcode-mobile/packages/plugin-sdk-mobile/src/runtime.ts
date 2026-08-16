@@ -1,5 +1,5 @@
 /**
- * @bedcode/plugin-sdk-mobile 运行时代理
+ * @binblink/plugin-sdk-mobile 运行时代理
  */
 import type { PluginContext } from './types'
 

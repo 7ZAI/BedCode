@@ -10,7 +10,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
+    "@binblink/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",

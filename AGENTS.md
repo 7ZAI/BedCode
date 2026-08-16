@@ -160,7 +160,7 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 正确做法（按优先级）：
 
 1. 宿主/SDK 共享组件：宿主内部用 `src/components/`；插件用 SDK 子路径（桌面端
-   `@bedcode/plugin-sdk-desktop/ui`、移动端移动 SDK 的 `./ui`），禁止插件自实现一套
+   `@binblink/plugin-sdk-desktop/ui`、移动端移动 SDK 的 `./ui`），禁止插件自实现一套
 2. 成熟开源 Vue 组件（如 `@vuepic/vue-datepicker`），并用主题 token
    （`var(--bg-*)` / `var(--mobile-*)`）适配深浅色主题，禁止裸用默认样式
 3. 自实现小型组件（自绘外观 + 原生交互内核），放入共享组件库（宿主或 SDK）供复用

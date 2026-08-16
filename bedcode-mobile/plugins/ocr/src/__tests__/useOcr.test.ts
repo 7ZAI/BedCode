@@ -6,7 +6,7 @@
  * 共享结果写入与清空。
  */
 import { beforeEach, describe, it, expect, vi } from 'vitest'
-import type { PluginContext, OcrApi, OcrLine } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext, OcrApi, OcrLine } from '@binblink/plugin-sdk-mobile'
 import {
   useOcr,
   clearOcrResult,

@@ -60,8 +60,8 @@ jobs:
         working-directory: bedcode-desktop
         run: |
           npm ci
-          npm run build -w @bedcode/plugin-sdk-desktop
-          npm run test:run -w @bedcode/plugin-sdk-desktop
+          npm run build -w @binblink/plugin-sdk-desktop
+          npm run test:run -w @binblink/plugin-sdk-desktop
 
       - name: Build & test mobile SDK
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
@@ -104,13 +104,13 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       # desktop SDK 是 npm workspace 成员，用 -w 发布；prepublishOnly 会先 build + test
-      - name: Publish @bedcode/plugin-sdk-desktop
+      - name: Publish @binblink/plugin-sdk-desktop
         working-directory: bedcode-desktop
-        run: npm publish -w @bedcode/plugin-sdk-desktop --access public
+        run: npm publish -w @binblink/plugin-sdk-desktop --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish @bedcode/plugin-sdk-mobile
+      - name: Publish @binblink/plugin-sdk-mobile
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: npm publish --access public
         env:

@@ -70,7 +70,7 @@ interface InputMarker {
 | `packages/plugin-sdk-desktop/src/ui/TerminalInputRail.vue` | 纯 UI 组件（SDK 共享）：接收 markers + bufferLength + 导航回调，渲染默认态/展开态；`InputMarker` 类型内置于组件导出（宿主 composable 产出同构对象） |
 | `bedcode-desktop/src/composables/useTerminalInputMarkers.ts` | 数据逻辑：接收 terminal 引用，记录输入、FIFO 淘汰、淘汰过滤、buffer 类型检测 |
 
-> 宿主引用：`import TerminalInputRail from '@bedcode/plugin-sdk-desktop/ui/terminal-input-rail'`（SDK `exports` 子路径）
+> 宿主引用：`import TerminalInputRail from '@binblink/plugin-sdk-desktop/ui/terminal-input-rail'`（SDK `exports` 子路径）
 
 ### 4.2 组件 Props / Emits
 
@@ -128,7 +128,7 @@ top% = clamp( marker.line / max(bufferLength - 1, 1) * 100, 0, 100 )
 />
 ```
 
-> 组件来自 SDK：`import TerminalInputRail from '@bedcode/plugin-sdk-desktop/ui/terminal-input-rail'`
+> 组件来自 SDK：`import TerminalInputRail from '@binblink/plugin-sdk-desktop/ui/terminal-input-rail'`
 
 - `visibleMarkers`：computed，过滤 `marker.line >= 0`，按时间正序，截取最近 `maxMarkers` 条
 - `handleNavigate(line)`：`terminal.scrollToLine(line)`（xterm API 语义已确认：参数为 buffer 绝对行号，`scrollAmount = line - ydisp`），滚动触发现有 `onScroll` → 自动出现"滚动到底"指示器

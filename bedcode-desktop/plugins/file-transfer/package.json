@@ -10,7 +10,7 @@
     "dev": "node scripts/build.js --watch"
   },
   "dependencies": {
-    "@bedcode/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
+    "@binblink/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
   },
   "devDependencies": {
     "@tauri-apps/plugin-notification": "^2.0.0",

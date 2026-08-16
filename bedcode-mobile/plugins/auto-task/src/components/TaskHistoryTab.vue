@@ -107,7 +107,7 @@
  * 状态筛选 chips / 分页加载更多 / 下拉刷新均只调用其暴露的 action。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@bedcode/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { TaskHistoryComposable, HistoryStatusFilter } from '../composables/useTaskHistory'
 import { utcToLocalDisplay, formatDuration } from '../composables/useTaskHistory'
 
