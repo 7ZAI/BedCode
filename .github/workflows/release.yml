@@ -220,6 +220,14 @@ jobs:
       - name: Build SDK (plugin-sdk-mobile dist)
         run: npm run build --prefix packages/plugin-sdk-mobile
 
+      # mobile 插件是独立目录（无 workspaces），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      - name: Install plugin dependencies
+        run: |
+          for p in ai-chatbox auto-task file-transfer ocr; do
+            echo "== installing plugins/$p =="
+            (cd plugins/$p && npm ci) || exit 1
+          done
+
       - name: Build Android APK
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
