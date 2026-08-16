@@ -6,7 +6,7 @@
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]"></div>
 
         <!-- Panel - 居中显示，使用自带数字键盘 -->
-        <div class="relative w-full max-w-sm bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 my-4">
+        <div class="pairing-panel">
           <!-- Close button -->
           <button
             class="absolute top-4 right-4 p-2 text-[var(--mobile-text-muted)] hover:text-[var(--mobile-accent)] transition-colors"
@@ -24,44 +24,44 @@
           </p>
 
           <!-- Code input display -->
-          <div class="flex justify-center gap-2 mb-6">
+          <div class="code-cells">
             <div
               v-for="i in 6"
               :key="i"
-              class="w-12 h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-lg flex items-center justify-center text-2xl font-bold"
-              :class="code[i-1] ? 'text-[var(--mobile-accent)] border-[var(--mobile-accent)] shadow-[0_0_10px_var(--mobile-accent-muted)]' : 'text-[var(--mobile-text-disabled)]'"
+              class="code-cell"
+              :class="code[i-1] ? 'code-cell--filled' : 'code-cell--empty'"
             >
               {{ code[i-1] || '-' }}
             </div>
           </div>
 
           <!-- Numeric keypad - 自带键盘，不会被输入法遮挡 -->
-          <div class="grid grid-cols-3 gap-3 mb-4">
+          <div class="keypad">
             <button
               v-for="n in 9"
               :key="n"
-              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-xl font-medium text-[var(--mobile-text-primary)] hover:border-[var(--mobile-accent)] transition-colors"
+              class="key-btn"
               @click="pressKey(n.toString())"
             >
               {{ n }}
             </button>
             <button
-              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-sm text-[var(--mobile-text-secondary)] hover:border-[var(--mobile-accent)] transition-colors"
+              class="key-btn key-btn--small-text"
               @click="clearCode"
             >
               {{ t('mobile.pairing.clear') }}
             </button>
             <button
-              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl text-xl font-medium text-[var(--mobile-text-primary)] hover:border-[var(--mobile-accent)] transition-colors"
+              class="key-btn"
               @click="pressKey('0')"
             >
               0
             </button>
             <button
-              class="h-14 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border)] rounded-xl hover:border-[var(--mobile-accent)] transition-colors"
+              class="key-btn key-btn--icon"
               @click="backspace"
             >
-              <svg class="w-6 h-6 mx-auto text-[var(--mobile-text-secondary)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg class="key-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 12l6.414 6.414a2 2 0 001.414.586H19a2 2 0 002-2V7a2 2 0 00-2-2h-8.172a2 2 0 00-1.414.586L3 12z" />
               </svg>
             </button>
@@ -74,13 +74,25 @@
 
           <!-- Submit button -->
           <button
-            class="w-full bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)] text-[var(--mobile-accent)] py-3 rounded-xl font-medium hover:opacity-80 transition-colors"
+            class="submit-btn"
             :class="{ 'opacity-50': code.length !== 6 || loading }"
             :disabled="code.length !== 6 || loading"
             @click="submit"
           >
             {{ loading ? t('mobile.pairing.verifying') : t('mobile.pairing.confirm') }}
           </button>
+
+          <!-- 切换认证方式：生物认证是便捷方式，可随时切过去（未绑定时父组件提示） -->
+          <div class="text-center mt-4">
+            <button
+              class="text-sm transition-colors active:opacity-80"
+              style="color: var(--mobile-accent)"
+              :disabled="loading"
+              @click="emit('switch')"
+            >
+              {{ t('mobile.connection.switchToBiometric') }}
+            </button>
+          </div>
         </div>
       </div>
     </Transition>
@@ -102,6 +114,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   'update:modelValue': [value: boolean]
   submit: [code: string]
+  /** 用户手动关闭弹窗（点击 X） */
+  close: []
+  /** 请求切换到生物认证 */
+  switch: []
 }>()
 
 const code = ref('')
@@ -130,6 +146,7 @@ function clearCode() {
 function close() {
   code.value = ''
   emit('update:modelValue', false)
+  emit('close')
 }
 
 function submit() {
@@ -140,6 +157,110 @@ function submit() {
 </script>
 
 <style scoped>
+.pairing-panel {
+  --cell-w: clamp(2.5rem, 3rem, 3.5rem);
+  --cell-h: clamp(2.75rem, 3.5rem, 4rem);
+  --cell-font: clamp(1.25rem, 1.5rem, 1.75rem);
+  --key-h: clamp(2.75rem, 3.5rem, 4rem);
+  --key-font: clamp(1rem, 1.25rem, 1.5rem);
+  --key-gap: clamp(0.5rem, 0.75rem, 1rem);
+
+  position: relative;
+  width: 100%;
+  max-width: clamp(280px, 384px, 440px);
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  border-radius: 1rem;
+  padding: clamp(1rem, 1.5rem, 2rem);
+  margin: 1rem 0;
+}
+
+.code-cells {
+  display: flex;
+  justify-content: center;
+  gap: var(--key-gap);
+  margin-bottom: 1.5rem;
+}
+
+.code-cell {
+  width: var(--cell-w);
+  height: var(--cell-h);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--cell-font);
+  font-weight: 700;
+}
+
+.code-cell--filled {
+  color: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+  box-shadow: 0 0 10px var(--mobile-accent-muted);
+}
+
+.code-cell--empty {
+  color: var(--mobile-text-disabled);
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--key-gap);
+  margin-bottom: 1rem;
+}
+
+.key-btn {
+  height: var(--key-h);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  font-size: var(--key-font);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.key-btn:hover {
+  border-color: var(--mobile-accent);
+}
+
+.key-btn--small-text {
+  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
+  color: var(--mobile-text-secondary);
+}
+
+.key-btn--icon {
+  color: var(--mobile-text-secondary);
+}
+
+.key-icon {
+  width: clamp(1.25rem, 1.5rem, 1.75rem);
+  height: clamp(1.25rem, 1.5rem, 1.75rem);
+}
+
+.submit-btn {
+  width: 100%;
+  background: var(--mobile-accent-muted);
+  border: 1px solid var(--mobile-accent);
+  color: var(--mobile-accent);
+  padding: clamp(0.625rem, 0.75rem, 1rem) 0;
+  border-radius: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.submit-btn:hover {
+  opacity: 0.8;
+}
+
 .fade-enter-active,
 .fade-leave-active {
   transition: opacity 0.2s ease;

@@ -1,204 +1,83 @@
 //! Plugin Controller
 //!
 //! Routes:
-//! - POST /api/plugin/task-status — 接收 Claude Code 插件推送的任务状态（plugin token 认证）
-//! - POST /api/plugin/session-mode — 设置会话自动授权模式（plugin token 或 JWT 认证）
-//! - GET /api/plugin/session-mode — 查询会话自动授权模式（plugin token 认证）
+//! - ANY /api/plugin/{plugin_id}/{path:.*} — 插件动态 HTTP 端点代理
 
 use actix_web::{web, HttpRequest, HttpResponse};
+use std::collections::HashMap;
 
 use crate::system::app_context::AppContext;
-use crate::utils::auth::jwt::JwtService;
 use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
-use crate::server::dtos::plugin_dto::{SessionModeRequest, TaskStatusRequest};
-use crate::enums::TaskStatus;
-use crate::system::config::AppConfig;
 
-/// POST /api/plugin/task-status
+// ==================== 插件动态 HTTP 端点代理 ====================
+
+/// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
-/// 接收 Claude Code 插件推送的任务状态变更
-/// 仅 plugin token 认证
-pub async fn update_task_status(body: web::Json<TaskStatusRequest>) -> HttpResponse {
-    tracing::debug!(
-        "POST /api/plugin/task-status: session_id={}, status={}",
-        body.session_id,
-        body.status
-    );
+/// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
+/// 仅支持已激活的 Rust / WASM 插件，TS-only 插件的 HTTP 端点通过前端 Tauri event 桥接。
+///
+/// 认证：JWT 由网关中间件统一校验；无 JWT 的本地调用方（如 hook 脚本）由中间件放行，
+/// 此 handler 仅校验插件激活状态
+pub async fn plugin_http_endpoint(
+    req: HttpRequest,
+    path: web::Path<(String, String)>,
+    body: Option<web::Json<serde_json::Value>>,
+    query: web::Query<HashMap<String, String>>,
+) -> HttpResponse {
+    let (plugin_id, endpoint_path) = path.into_inner();
 
-    // 验证 plugin token
-    let config = AppConfig::global();
-    if config.plugin.token.is_empty() || body.token != config.plugin.token {
-        tracing::warn!(
-            "Plugin task-status auth failed: session_id={}, token_empty={}",
-            body.session_id,
-            config.plugin.token.is_empty()
-        );
+    // 认证由网关中间件统一处理：
+    // - JWT 请求：中间件校验通过后 claims 已注入 extensions
+    // - 无 JWT 的请求（如 hook 脚本）：中间件对 /api/plugin/* 路径放行；
+    //   本 handler 不校验任何凭证（历史 BEDCODE_TOKEN 凭证从未被宿主校验，已移除），
+    //   仅校验插件激活状态。服务监听 0.0.0.0，插件端点对局域网可达
+
+    // 检查插件是否已激活
+    let ctx = AppContext::global();
+    let plugin_host = ctx.plugin_host();
+    if !plugin_host.is_activated(&plugin_id).await {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
             CODE_PLUGIN_AUTH_FAILED,
-            "Invalid plugin token",
+            &format!("Plugin {} is not activated", plugin_id),
         ));
     }
 
-    // 反序列化 status 字符串为 TaskStatus 枚举
-    let task_status: TaskStatus = match serde_json::from_value(serde_json::Value::String(body.status.clone())) {
-        Ok(s) => s,
-        Err(_) => {
-            tracing::warn!(
-                "Invalid task status value: session_id={}, status={}",
-                body.session_id,
-                body.status
+    // 构造请求参数：包含 method、path、body、query
+    let method = req.method().as_str();
+    let request_args = serde_json::json!({
+        "method": method,
+        "path": endpoint_path,
+        "body": body.map(|b| b.into_inner()).unwrap_or(serde_json::Value::Null),
+        "query": query.into_inner(),
+    });
+
+    // 通过 plugin_invoke 路由到插件的 _http_endpoint command
+    let result = plugin_host
+        .invoke_rust_command(&plugin_id, "_http_endpoint", request_args)
+        .await;
+
+    match result {
+        Ok(response) => {
+            // 插件返回格式：{ status: number, body: any }
+            let status = response.get("status")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(200) as u16;
+            let response_body = response.get("body")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            HttpResponse::build(actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK))
+                .json(response_body)
+        }
+        Err(e) => {
+            tracing::error!(
+                "Plugin HTTP endpoint error: plugin_id={}, path={}, error={}",
+                plugin_id, endpoint_path, e
             );
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
                 CODE_INVALID_REQUEST,
-                &format!("Invalid task status: {}. Must be one of: idle, in_progress, asking, completed, interrupted", body.status),
-            ));
+                &format!("Plugin endpoint error: {}", e),
+            ))
         }
-    };
-
-    let ctx = AppContext::global();
-    let plugin_manager = ctx.plugin_manager();
-
-    // 如果携带 bedcode_session_id，注册 Claude Code session → BedCode PTY session 映射
-    if let Some(ref bedcode_sid) = body.bedcode_session_id {
-        plugin_manager
-            .register_session_mapping(&body.session_id, bedcode_sid)
-            .await;
     }
-
-    // 优先使用 bedcode_session_id 作为存储 key，
-    // 这样前端可以通过 BedCode PTY session ID 查询到对应的任务状态
-    let storage_key = body.bedcode_session_id.as_deref().unwrap_or(&body.session_id);
-
-    // 更新任务状态并广播
-    plugin_manager
-        .update_task_status(storage_key, task_status, body.reason.clone(), body.questions.clone())
-        .await
-        .ok();
-
-    tracing::info!(
-        "Plugin task status updated: claude_sid={} bedcode_sid={} status={}",
-        body.session_id,
-        body.bedcode_session_id.as_deref().unwrap_or("N/A"),
-        body.status
-    );
-    HttpResponse::Ok().json(ApiResponse::ok())
-}
-
-/// POST /api/plugin/session-mode
-///
-/// 设置会话自动授权模式（移动端切换自动/手动模式时调用）
-/// 双认证：plugin token 或 JWT Authorization header 均可
-pub async fn set_session_mode(req: HttpRequest, body: web::Json<SessionModeRequest>) -> HttpResponse {
-    tracing::debug!(
-        "POST /api/plugin/session-mode: session_id={}, auto_approve={}",
-        body.session_id,
-        body.auto_approve
-    );
-
-    // 双认证：plugin token 或 JWT
-    let config = AppConfig::global();
-    let plugin_token_valid = !config.plugin.token.is_empty() && body.token == config.plugin.token;
-
-    let jwt_valid = validate_jwt_from_request(&req);
-
-    if !plugin_token_valid && !jwt_valid {
-        tracing::warn!(
-            "Plugin session-mode auth failed: session_id={}, plugin_token_valid={}, jwt_valid={}",
-            body.session_id,
-            plugin_token_valid,
-            jwt_valid
-        );
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            CODE_PLUGIN_AUTH_FAILED,
-            "Invalid plugin token or JWT authentication",
-        ));
-    }
-
-    let ctx = AppContext::global();
-    let plugin_manager = ctx.plugin_manager();
-
-    plugin_manager.set_auto_mode(&body.session_id, body.auto_approve).await;
-
-    tracing::info!(
-        "Plugin session mode set: session_id={}, auto_approve={}, auth_by={}",
-        body.session_id,
-        body.auto_approve,
-        if jwt_valid { "jwt" } else { "plugin_token" }
-    );
-    HttpResponse::Ok().json(ApiResponse::ok())
-}
-
-/// GET /api/plugin/session-mode?session_id=xxx
-///
-/// 查询会话自动授权模式（Python PreToolUse hook 调用）
-/// 仅 plugin token 认证
-pub async fn get_session_mode(query: web::Query<SessionModeQuery>) -> HttpResponse {
-    tracing::debug!(
-        "GET /api/plugin/session-mode: session_id={}",
-        query.session_id
-    );
-
-    // 验证 plugin token
-    let config = AppConfig::global();
-    if config.plugin.token.is_empty() || query.token != config.plugin.token {
-        tracing::warn!(
-            "Plugin session-mode query auth failed: session_id={}, token_empty={}",
-            query.session_id,
-            config.plugin.token.is_empty()
-        );
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            CODE_PLUGIN_AUTH_FAILED,
-            "Invalid plugin token",
-        ));
-    }
-
-    let ctx = AppContext::global();
-    let plugin_manager = ctx.plugin_manager();
-
-    // Python hook 传入的是 Claude Code session_id，需解析为 BedCode PTY session_id
-    let resolved_id = plugin_manager.resolve_session_id(&query.session_id).await;
-    let auto_approve = plugin_manager.get_auto_mode(&resolved_id).await;
-
-    tracing::debug!(
-        "Plugin session mode queried: claude_sid={} resolved_sid={} auto_approve={}",
-        query.session_id,
-        resolved_id,
-        auto_approve
-    );
-
-    HttpResponse::Ok().json(ApiResponse::ok_with_data(serde_json::json!({
-        "session_id": query.session_id,
-        "auto_approve": auto_approve,
-    })))
-}
-
-/// 从 HTTP 请求中验证 JWT Authorization header
-fn validate_jwt_from_request(req: &HttpRequest) -> bool {
-    let auth_header = req
-        .headers()
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok());
-
-    match auth_header {
-        Some(header) => {
-            let token = header.strip_prefix("Bearer ");
-            match token {
-                Some(t) => {
-                    let jwt_service = JwtService::new();
-                    jwt_service.verify_token_with_expiry(t).is_ok()
-                }
-                None => false,
-            }
-        }
-        None => false,
-    }
-}
-
-/// GET /api/plugin/session-mode 查询参数
-#[derive(Debug, Clone, serde::Deserialize)]
-pub struct SessionModeQuery {
-    /// Claude Code 会话 ID
-    pub session_id: String,
-    /// 认证 token
-    pub token: String,
 }

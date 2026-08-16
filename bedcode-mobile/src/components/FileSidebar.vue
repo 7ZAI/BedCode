@@ -101,6 +101,16 @@
               <span class="toggle-knob"></span>
             </button>
           </div>
+          <div class="settings-panel-row">
+            <span class="settings-panel-label">{{ t('mobile.file.lazyLoad') }}</span>
+            <button
+              class="toggle-switch"
+              :class="{ active: tempLazyLoad }"
+              @click="tempLazyLoad = !tempLazyLoad"
+            >
+              <span class="toggle-knob"></span>
+            </button>
+          </div>
         </div>
         <div class="settings-panel-section">
           <div class="settings-panel-row">
@@ -129,12 +139,14 @@
           </div>
         </div>
         <div class="settings-panel-section">
-          <label class="settings-panel-label">{{ t('mobile.file.filterDirs') }}</label>
-          <input
+          <textarea
             v-model="tempFilterText"
-            class="settings-panel-input"
+            class="settings-panel-input settings-panel-textarea"
             placeholder="node_modules, target, .git"
-          />
+            rows="2"
+            @focus="onSettingsInputFocus"
+            @blur="onSettingsInputBlur"
+          ></textarea>
         </div>
         <div class="settings-panel-actions">
           <button class="settings-panel-btn cancel" @click="cancelSettingsPanel">{{ t('common.button.cancel') }}</button>
@@ -159,7 +171,14 @@
       <!-- 错误状态 -->
       <div v-else-if="error" class="sidebar-state error-state">
         <span class="state-text">{{ error }}</span>
-        <button class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
+        <!-- 未设置 base URL（未连接）时重试无意义，引导去连接设置 -->
+        <template v-if="isBaseUrlError">
+          <button class="go-settings-btn" @click="$emit('navigate-settings')">
+            {{ t('mobile.codeViewer.goToSettings') }}
+          </button>
+          <button class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
+        </template>
+        <button v-else class="retry-btn" @click="handleRefresh">{{ t('mobile.file.retry') }}</button>
       </div>
 
       <!-- 空状态 -->
@@ -177,6 +196,7 @@
           :font-size="settings.fontSize"
           @file-click="handleFileClick"
           @long-press="handleLongPress"
+          @load-children="loadChildren"
         />
       </template>
     </div>
@@ -223,22 +243,34 @@ const props = withDefaults(defineProps<{
   sessionId: string
   mode?: 'standalone' | 'emit'
   resizeSide?: 'left' | 'right'
+  /** 终端侧栏引用模式：点按打开文件查看，长按复制路径并自动填入输入框 */
+  refInsert?: boolean
 }>(), {
   mode: 'standalone',
   resizeSide: 'left',
+  refInsert: false,
 })
 
 const emit = defineEmits<{
   'file-select': [name: string, path: string, isDiff: boolean]
+  'settings-input-focus': [focused: boolean]
+  /** 未连接（base URL 缺失）时由宿主引导去连接设置 */
+  'navigate-settings': []
+  /** 长按文件（非引用模式）：交给父组件处理（无输入框页面自行决定行为） */
+  'long-press': [name: string, path: string]
+  /** 引用模式：把文件路径作为 @引用 交给宿主填入输入框 */
+  'insert-ref': [path: string]
 }>()
-
 const { t } = useI18n()
 const { isLandscape } = useOrientation()
 const toast = useToast()
-const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
+const { tree, loading, error, isDiffMode, expandAll, collapseAll, refresh, toggleDiffMode, loadChildren, settings, updateSettings } = useFileTree(toRef(props, 'sessionId'))
 
 const isRefreshing = ref(false)
 const showSettingsPanel = ref(false)
+
+/** 是否因未连接（base URL 缺失）导致加载失败：重试无意义，引导去连接设置 */
+const isBaseUrlError = computed(() => /no base url|not connected/i.test(error.value || ''))
 const showFileViewer = ref(false)
 const selectedFile = ref('')
 const selectedFilePath = ref('')
@@ -267,6 +299,7 @@ const sidebarWidth = ref<number | null>(null)
 const tempDefaultExpanded = ref(false)
 const tempFilterText = ref('')
 const tempFontSize = ref(FONT_SIZE_MIN)
+const tempLazyLoad = ref(false)
 
 // 滑块拖动
 const sliderTrackRef = ref<HTMLElement | null>(null)
@@ -328,8 +361,11 @@ const sidebarStyle = computed(() => {
   if (sidebarWidth.value !== null) {
     return { width: `${sidebarWidth.value}px` }
   }
-  const widthPercent = isLandscape.value ? '30%' : '40%'
-  return { width: widthPercent }
+  // 自适应默认宽度：手机保底 11rem，平板按视口比例放大但封顶，避免文件名过度截断
+  const widthClamp = isLandscape.value
+    ? 'clamp(11rem, 30vw, 18rem)'
+    : 'clamp(11rem, 45vw, 20rem)'
+  return { width: widthClamp }
 })
 
 async function handleRefresh() {
@@ -434,12 +470,21 @@ async function handleDiff() {
   }
 }
 
+function onSettingsInputFocus() {
+  emit('settings-input-focus', true)
+}
+
+function onSettingsInputBlur() {
+  emit('settings-input-focus', false)
+}
+
 function toggleSettings() {
   if (showSettingsPanel.value) {
     cancelSettingsPanel()
   } else {
     // 用当前设置初始化临时状态
     tempDefaultExpanded.value = settings.value.defaultExpanded
+    tempLazyLoad.value = settings.value.lazyLoad
     tempFilterText.value = settings.value.filterPatterns.join(', ')
     tempFontSize.value = settings.value.fontSize
     showSettingsPanel.value = true
@@ -447,9 +492,9 @@ function toggleSettings() {
 }
 
 function cancelSettingsPanel() {
+  emit('settings-input-focus', false)
   showSettingsPanel.value = false
 }
-
 function confirmSettingsPanel() {
   const newSettings: SidebarSettings = {
     defaultExpanded: tempDefaultExpanded.value,
@@ -458,10 +503,13 @@ function confirmSettingsPanel() {
       .map(s => s.trim())
       .filter(Boolean),
     fontSize: tempFontSize.value,
+    lazyLoad: tempLazyLoad.value,
   }
+  emit('settings-input-focus', false)
   updateSettings(newSettings)
   showSettingsPanel.value = false
 }
+
 
 async function handleFileClick(name: string, path: string) {
   if (props.mode === 'emit') {
@@ -469,6 +517,17 @@ async function handleFileClick(name: string, path: string) {
     return
   }
 
+  // 终端引用模式：点按打开文件查看（长按才是复制路径并填入输入框）
+  if (props.refInsert) {
+    openFileViewer(name, path)
+    return
+  }
+
+  openFileViewer(name, path)
+}
+
+/** 打开文件查看弹窗（standalone 模式共享：点击与长按面板共用） */
+async function openFileViewer(name: string, path: string) {
   // standalone 模式
   selectedFile.value = name
   selectedFilePath.value = path
@@ -479,12 +538,17 @@ async function handleFileClick(name: string, path: string) {
   fileLoading.value = true
   try {
     if (isDiffMode.value) {
-      const { httpGetFileDiff } = useHttpApi()
-      const result = await httpGetFileDiff(props.sessionId, path)
-      if (result.code !== 0 || !result.data) {
-        throw new Error(result.message || t('mobile.file.fetchDiffFailed'))
+      const { httpGetFileDiff, httpGetFileContent } = useHttpApi()
+      // 同时获取 diff 和完整文件内容，以便显示全部行
+      const [diffResult, contentResult] = await Promise.all([
+        httpGetFileDiff(props.sessionId, path),
+        httpGetFileContent(props.sessionId, path),
+      ])
+      if (diffResult.code !== 0 || !diffResult.data) {
+        throw new Error(diffResult.message || t('mobile.file.fetchDiffFailed'))
       }
-      diffLines.value = result.data.lines
+      diffLines.value = diffResult.data.lines
+      fileContent.value = (contentResult.code === 0 && contentResult.data) ? contentResult.data.content : ''
     } else {
       const { httpGetFileContent } = useHttpApi()
       const result = await httpGetFileContent(props.sessionId, path)
@@ -535,9 +599,20 @@ function onResizePointerDown(e: PointerEvent) {
   document.addEventListener('pointerup', onUp)
 }
 
-// ==================== Long Press Copy Path ====================
+// ==================== Long Press: Copy Path / Insert Ref ====================
 
 async function handleLongPress(name: string, path: string) {
+  // 终端引用模式（有输入框）：长按直接复制路径 + 填入输入框（不弹面板）
+  if (props.refInsert) {
+    await copyPath(path)
+    emit('insert-ref', path)
+    return
+  }
+  // 其他页面（无输入框）：交给父组件处理（如 FileExplorer 复制路径并通知上层）
+  emit('long-press', name, path)
+}
+
+async function copyPath(path: string) {
   try {
     await writeClipboardText(path)
     toast.success(t('mobile.file.copied', { path }))
@@ -645,7 +720,7 @@ onUnmounted(() => {
 }
 
 .branch-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-text-secondary);
   white-space: nowrap;
@@ -699,7 +774,7 @@ onUnmounted(() => {
 
 .branch-dropdown-title {
   padding: 0.5rem 0.75rem;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-text-muted);
   text-transform: uppercase;
@@ -722,7 +797,7 @@ onUnmounted(() => {
   background: none;
   border: none;
   color: var(--mobile-text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   text-align: left;
   transition: background-color 0.15s ease;
@@ -816,7 +891,7 @@ onUnmounted(() => {
 }
 
 .settings-panel-label {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-secondary);
 }
 
@@ -860,7 +935,7 @@ onUnmounted(() => {
   background: var(--mobile-bg-primary);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   outline: none;
   transition: border-color 0.2s ease;
 }
@@ -873,9 +948,19 @@ onUnmounted(() => {
   color: var(--mobile-text-disabled);
 }
 
+.settings-panel-textarea {
+  resize: none;
+  line-height: 1.4;
+  min-height: 3rem;
+  font-family: inherit;
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+
 /* Font Size Slider */
 .font-size-value {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-accent);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
@@ -960,7 +1045,7 @@ onUnmounted(() => {
   display: flex;
   justify-content: space-between;
   margin-top: 0.25rem;
-  font-size: 0.6875rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-disabled);
 }
 
@@ -973,7 +1058,7 @@ onUnmounted(() => {
   flex: 1;
   padding: 0.5rem;
   border-radius: 0.375rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -1023,7 +1108,7 @@ onUnmounted(() => {
   overflow-y: auto;
   overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
-  padding: 0.25rem 0;
+  padding: 0.25rem 0 max(0.75rem, env(safe-area-inset-bottom));
 
   /* Firefox */
   scrollbar-width: thin;
@@ -1059,7 +1144,7 @@ onUnmounted(() => {
 }
 
 .state-text {
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 
@@ -1074,7 +1159,17 @@ onUnmounted(() => {
 }
 
 .error-state .state-text {
-  color: var(--error, #ef4444);
+  color: var(--mobile-error);
+}
+
+.go-settings-btn {
+  margin-top: 0.5rem;
+  padding: 0.5rem 1rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+  font-size: 0.75rem;
+  font-weight: 500;
 }
 
 .retry-btn {
@@ -1083,7 +1178,7 @@ onUnmounted(() => {
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-secondary);
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   cursor: pointer;
   transition: all 0.2s ease;
 }

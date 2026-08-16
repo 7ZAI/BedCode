@@ -21,7 +21,6 @@ export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, AnsiRen
 // 重新导出桌面端 composables
 export { useWsl } from '@/composables/useWsl'
 export { useWslStore } from '@/stores/wsl'
-export { usePtyOutput } from '@/composables/usePtyOutput'
 export { usePairing } from '@/composables/usePairing'
 export { useNetwork } from '@/composables/useNetwork'
 export { useConnectedDevices } from '@/composables/useConnectedDevices'

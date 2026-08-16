@@ -12,10 +12,12 @@
 
 pub mod session_config;
 pub mod session_event;
+pub mod session_lifecycle;
 mod session_manager;
 mod storage;
 
 mod event_bus;
+mod input_line;
 mod session_components;
 mod session_output;
 
@@ -39,10 +41,15 @@ pub use event_bus::{DefaultSessionEventBus, SessionEventBus, SessionEvent};
 // 从 session_output 重导出
 pub use session_output::{
     DefaultOutputCache, OutputCache,
-    OutputEvent, UnifiedOutputQueue,
+    OutputEvent, OutputHistoryResponse, UnifiedOutputQueue,
     SessionOutputManager, SubscriberState, SubscribeResponse,
     GlobalOutputManager,
 };
 
+pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
+
+// 从 input_line 重导出（提交输入行观察扩展点，见 ADR 0001）
+pub use input_line::{SessionInputListener, SubmittedLineTracker};
+
 // Re-export from enums
-pub use crate::enums::{SessionStatus, SessionType};
+pub use crate::enums::{SessionStatus, SessionType, SubscribeMode};

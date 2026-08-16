@@ -94,6 +94,16 @@ pub fn get_app_version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// 获取系统基本信息（OS / 设备名称 / IP 地址，启动时采集一次）
+///
+/// 采集在 setup 的异步 spawn 中完成，前端过早 invoke 时返回兜底实例而非 panic
+#[tauri::command]
+pub fn get_system_info() -> crate::system::info::SystemInfo {
+    crate::state::try_get_system_info()
+        .map(|i| i.as_ref().clone())
+        .unwrap_or_else(crate::system::info::SystemInfo::fallback)
+}
+
 /// 获取自应用启动以来的耗时（毫秒）
 #[tauri::command]
 pub fn get_startup_time(start_time: State<'_, crate::AppStartTime>) -> u64 {

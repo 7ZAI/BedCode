@@ -9,6 +9,7 @@ export interface FileTreeNode {
   path?: string // 相对于工作目录的路径
   children?: FileTreeNode[]
   expanded?: boolean // folder only
+  loading?: boolean // 文件夹子节点加载中标记（懒加载模式）
 }
 
 // ==================== Settings ====================
@@ -17,6 +18,7 @@ export interface SidebarSettings {
   defaultExpanded: boolean
   filterPatterns: string[]
   fontSize: number // 文件树字体大小 (px)，范围 10-20
+  lazyLoad: boolean // 懒加载模式，默认关闭
 }
 
 const SETTINGS_KEY = 'bedcode:sidebar-settings'
@@ -30,6 +32,7 @@ const DEFAULT_SETTINGS: SidebarSettings = {
   defaultExpanded: false,
   filterPatterns: ['node_modules', 'target', '.git', 'dist', 'build'],
   fontSize: FONT_SIZE_DEFAULT,
+  lazyLoad: false,
 }
 
 function loadSettings(): SidebarSettings {
@@ -109,8 +112,8 @@ export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
     const id = sessionId.value
     if (!id) return
 
-    // 有缓存则使用缓存（非 diff 模式）
-    if (!isDiffMode.value) {
+    // 非懒加载 + 非 diff 模式：有缓存则使用缓存
+    if (!settings.value.lazyLoad && !isDiffMode.value) {
       const cached = treeCache.get(id)
       if (cached) {
         const filtered = filterTree(cached.tree, settings.value.filterPatterns)
@@ -126,9 +129,10 @@ export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
     error.value = null
 
     try {
-      const { httpGetFileTree, httpGetDiffTree } = useHttpApi()
+      const { httpGetFileTree, httpGetDiffTree, httpGetFileTreeChildren } = useHttpApi()
 
       if (isDiffMode.value) {
+        // diff 模式始终全量加载
         const result = await httpGetDiffTree(id, settings.value.filterPatterns)
         if (result.code !== 0 || !result.data) {
           throw new Error(result.message || 'mobile.file.fetchDiffTreeFailed')
@@ -138,7 +142,16 @@ export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
           setAllExpanded(transformed, true)
         }
         tree.value = transformed
+      } else if (settings.value.lazyLoad) {
+        // 懒加载模式：只获取根目录一层
+        const result = await httpGetFileTreeChildren(id, '', settings.value.filterPatterns)
+        if (result.code !== 0 || !result.data) {
+          throw new Error(result.message || 'mobile.file.fetchTreeFailed')
+        }
+        const transformed = result.data.children.map(transformApiNode)
+        tree.value = transformed
       } else {
+        // 全量加载模式
         const result = await httpGetFileTree(id, settings.value.filterPatterns)
         if (result.code !== 0 || !result.data) {
           throw new Error(result.message || 'mobile.file.fetchTreeFailed')
@@ -163,26 +176,103 @@ export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
     }
   }
 
+  /** 懒加载：展开文件夹时加载其子节点 */
+  async function loadChildren(node: FileTreeNode) {
+    if (node.type !== 'folder' || node.loading || node.children !== undefined) return
+
+    node.loading = true
+
+    try {
+      const { httpGetFileTreeChildren } = useHttpApi()
+      const result = await httpGetFileTreeChildren(
+        sessionId.value,
+        node.path || '',
+        settings.value.filterPatterns,
+      )
+      if (result.code !== 0 || !result.data) {
+        throw new Error(result.message || 'mobile.file.loadChildrenFailed')
+      }
+      const transformed = result.data.children.map(transformApiNode)
+      node.children = transformed
+    } catch (e: any) {
+      // 加载失败时设置 children 为空数组，避免无限重试
+      node.children = []
+      error.value = e?.toString() || 'mobile.file.loadChildrenFailed'
+    } finally {
+      node.loading = false
+    }
+  }
+
   async function refresh() {
     const id = sessionId.value
     if (id) {
       treeCache.delete(id)
     }
-    await fetchTree()
+    if (settings.value.lazyLoad && !isDiffMode.value) {
+      // 懒加载模式：用 noCache 绕过 HTTP 缓存重新获取根目录
+      loading.value = true
+      error.value = null
+      try {
+        const { httpGetFileTreeChildren } = useHttpApi()
+        const result = await httpGetFileTreeChildren(id, '', settings.value.filterPatterns, true)
+        if (result.code !== 0 || !result.data) {
+          throw new Error(result.message || 'mobile.file.fetchTreeFailed')
+        }
+        const transformed = result.data.children.map(transformApiNode)
+        tree.value = transformed
+      } catch (e: any) {
+        error.value = e?.toString() || 'mobile.file.fetchTreeFailed'
+        tree.value = []
+      } finally {
+        loading.value = false
+      }
+    } else {
+      await fetchTree()
+    }
   }
 
   function expandAll() {
-    setAllExpanded(tree.value, true)
+    if (settings.value.lazyLoad) {
+      // 懒加载模式：递归加载所有层级
+      expandAllLazy(tree.value)
+    } else {
+      setAllExpanded(tree.value, true)
+    }
   }
 
   function collapseAll() {
     setAllExpanded(tree.value, false)
   }
 
+  /** 懒加载模式下递归展开所有层级 */
+  async function expandAllLazy(nodes: FileTreeNode[]) {
+    const foldersToLoad = nodes.filter(
+      n => n.type === 'folder' && n.children === undefined && !n.loading
+    )
+    if (foldersToLoad.length === 0) {
+      // 所有文件夹已加载，直接展开
+      setAllExpanded(nodes, true)
+      return
+    }
+
+    // 并行加载所有未加载的文件夹
+    await Promise.all(foldersToLoad.map(folder => loadChildren(folder)))
+
+    // 递归处理新加载的子节点
+    for (const folder of foldersToLoad) {
+      if (folder.children && folder.children.length > 0) {
+        await expandAllLazy(folder.children)
+      }
+    }
+
+    // 全部加载完成后统一展开
+    setAllExpanded(nodes, true)
+  }
+
   function updateSettings(newSettings: SidebarSettings) {
     settings.value = newSettings
     saveSettings(newSettings)
-    // 设置变更后清除缓存重新获取（过滤规则可能变了）
+    // 设置变更后清除缓存重新获取（过滤规则或懒加载模式可能变了）
     const id = sessionId.value
     if (id) {
       treeCache.delete(id)
@@ -211,6 +301,7 @@ export function useFileTree(sessionId: Ref<string>, baseUrl?: Ref<string>) {
     collapseAll,
     refresh,
     toggleDiffMode,
+    loadChildren,
     settings,
     updateSettings,
   }

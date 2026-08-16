@@ -10,6 +10,7 @@ use crate::server::message::Message as BusinessMessage;
 use crate::server::ws::registry::WsSessionRegistry;
 use crate::session::GlobalOutputManager;
 use crate::system::error::AppError;
+use crate::system::constants::server::WS_EVENT_BROADCAST_CAPACITY;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -40,7 +41,7 @@ struct WsManagerInner {
 
 impl WsManagerInner {
     fn new() -> Self {
-        let (event_tx, _) = tokio::sync::broadcast::channel(16);
+        let (event_tx, _) = tokio::sync::broadcast::channel(WS_EVENT_BROADCAST_CAPACITY);
         Self {
             port: RwLock::new(None),
             initialized: RwLock::new(false),
@@ -204,8 +205,9 @@ impl WebSocketManager {
             *port_lock = None;
         }
 
-        // 广播服务器停止事件
-        let _ = self.inner.event_tx.send(ServerEvent::Stopped);
+        // 正常停止不广播 ServerEvent::Stopped：该事件仅由 Actix 线程异常退出 monitor 发送
+        // （语义为"崩溃"），supervisor 的 crash monitor 依赖此区分正常停止与崩溃；
+        // 正常停止的状态更新由调用方（ServerSupervisor::stop）自行处理
 
         tracing::info!("WebSocketManager stopped");
         Ok(())

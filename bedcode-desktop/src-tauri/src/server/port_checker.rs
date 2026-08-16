@@ -4,6 +4,7 @@
 //! 被占用时弹窗提示用户选择新端口
 
 use crate::system::config::AppConfig;
+use crate::system::constants::server::{BIND_ADDRESS, MAX_PORT, PORT_SEARCH_MAX_ATTEMPTS};
 use crate::Result;
 use std::net::TcpListener;
 use tauri::{AppHandle, Manager};
@@ -11,7 +12,7 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogBuilder}
 
 /// 检查端口是否可用（未被其他程序占用）
 fn is_port_available(port: u16) -> bool {
-    TcpListener::bind(format!("0.0.0.0:{}", port))
+    TcpListener::bind(format!("{}:{}", BIND_ADDRESS, port))
         .map(|listener| {
             // 立即释放端口
             drop(listener);
@@ -26,7 +27,7 @@ fn is_port_available(port: u16) -> bool {
 fn find_next_available_port(start_port: u16, max_attempts: u16) -> Option<u16> {
     for offset in 1..=max_attempts {
         let port = start_port + offset;
-        if port > 65535 {
+        if port > MAX_PORT as u16 {
             break;
         }
         if is_port_available(port) {
@@ -65,7 +66,7 @@ pub fn check_and_resolve_port(app_handle: &AppHandle, preferred_port: u16) -> Re
     tracing::warn!("Port {} is already in use", preferred_port);
 
     // 尝试找到下一个可用端口
-    let suggested_port = find_next_available_port(preferred_port, 10);
+    let suggested_port = find_next_available_port(preferred_port, PORT_SEARCH_MAX_ATTEMPTS);
 
     // 构建提示消息
     let message = if let Some(suggested) = suggested_port {

@@ -20,6 +20,47 @@ pub struct Pairing {
     pub is_active: bool,
 }
 
+/// 设备连接历史事件
+///
+/// 每次认证成功/失败记录一条；认证方式取值见 `auth_method` 常量
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionHistory {
+    pub id: i64,
+    /// 关联 pairings.id（设备 ID）
+    pub device_id: String,
+    /// 认证方式：pairing_code / qr / biometric / jwt
+    pub auth_method: String,
+    /// 结果：success / failed
+    pub result: String,
+    pub address: Option<String>,
+    pub connected_at: DateTime<Utc>,
+    pub disconnected_at: Option<DateTime<Utc>>,
+}
+
+/// 连接历史的认证方式取值
+pub mod connection_method {
+    /// 配对码
+    pub const PAIRING_CODE: &str = "pairing_code";
+    /// QR 令牌
+    pub const QR: &str = "qr";
+    /// 生物认证
+    pub const BIOMETRIC: &str = "biometric";
+    /// JWT 会话令牌（重连）
+    pub const JWT: &str = "jwt";
+}
+
+/// 连接历史的结果取值
+pub mod connection_result {
+    /// 认证成功
+    pub const SUCCESS: &str = "success";
+    /// 认证失败
+    pub const FAILED: &str = "failed";
+}
+
+/// 每设备保留的最大历史条数
+pub const CONNECTION_HISTORY_MAX_PER_DEVICE: i64 = 100;
+
 /// Session configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

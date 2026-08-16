@@ -7,8 +7,8 @@ use crate::enums::{PtySessionStatus, SessionLaunchConfig};
 use crate::pty::PtyOutputEvent;
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
-use crate::pty::PtyOutputListener;
 use crate::system::config::AppConfig;
+use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
 use crate::process::create_command;
 use crate::Result;
 
@@ -38,10 +38,9 @@ pub struct PtySessionState {
     pub pair: Option<PtyPair>,
     /// 写入器
     pub writer: Option<Box<dyn Write + Send>>,
-    /// 输出事件监听器列表（观察者模式）
-    /// 使用 Mutex 保护，允许跨线程访问
-    /// 支持存储异步 PtyOutputListener (AsyncPtyOutputListener 实现了该 trait)
-    output_listeners: Arc<Mutex<Vec<Arc<dyn PtyOutputListener>>>>,
+    /// 输出事件广播器（观察者模式）
+    /// 使用 broadcast channel 替代 Mutex<Vec>，避免 PtyReader 同步线程中 try_lock 失败丢数据
+    output_broadcast: broadcast::Sender<PtyOutputEvent>,
     /// 生命周期事件发送器（进程退出、错误等）
     pub lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 读取线程句柄
@@ -92,6 +91,7 @@ impl PtySession {
         let writer = pair.master.take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
         let (lifecycle_tx, _) = broadcast::channel(AppConfig::global().channels.lifecycle_capacity);
+        let (output_broadcast, _) = broadcast::channel(AppConfig::global().channels.output_broadcast_capacity);
 
         let running = Arc::new(AtomicBool::new(true));
 
@@ -102,7 +102,7 @@ impl PtySession {
             pair: Some(pair),
             writer: Some(writer),
             running: running.clone(),
-            output_listeners: Arc::new(Mutex::new(Vec::new())),
+            output_broadcast,
             lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
@@ -135,7 +135,7 @@ impl PtySession {
 
             // 注入 BedCode session ID 到进程环境变量，
             // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
-            cmd.env("BEDCODE_SESSION_ID", &self.id);
+            cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
 
             // 从 state 中取出 pair
             let pair = state.pair.take()
@@ -233,36 +233,13 @@ impl PtySession {
         Ok(())
     }
 
-    /// 添加输出事件监听器（观察者模式）
+    /// 订阅输出事件（观察者模式，broadcast channel）
     ///
-    /// 外部实现 PtyOutputListener trait 来接收输出事件
-    pub fn add_output_listener(&self, listener: Arc<dyn PtyOutputListener>) {
-        if let Ok(mut state) = self.state.try_lock() {
-            if let Ok(mut listeners) = state.output_listeners.try_lock() {
-                listeners.push(listener);
-            }
-        }
-    }
-
-    /// 通知所有监听器（内部方法，在输出产生时调用）
-    fn notify_listeners(&self, event: PtyOutputEvent) {
-        let listeners = {
-            if let Ok(state) = self.state.try_lock() {
-                if let Ok(listeners) = state.output_listeners.try_lock() {
-                    Some(listeners.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
-        if let Some(listeners) = listeners {
-            for listener in listeners {
-                listener.on_output(event.clone());
-            }
-        }
+    /// 返回 broadcast::Receiver，调用方在独立 task 中 recv 循环消费
+    /// 替代旧的 add_output_listener + try_lock 模式，避免 PtyReader 同步线程中锁竞争丢数据
+    pub async fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
+        let state = self.state.lock().await;
+        state.output_broadcast.subscribe()
     }
 
     /// 订阅生命周期事件（进程退出、错误等）
@@ -330,15 +307,15 @@ impl PtySession {
                 .map_err(|e| crate::AppError::Pty(e.to_string()))?
         };
 
-        // 使用 PtyReader（观察者模式）
-        let output_listeners = {
-            let state: tokio::sync::MutexGuard<'_, PtySessionState> = self.state.lock().await;
-            state.output_listeners.clone()
+        // 使用 broadcast sender 替代 output_listeners，PtyReader 中直接 send 无需加锁
+        let output_broadcast = {
+            let state = self.state.lock().await;
+            state.output_broadcast.clone()
         };
 
         let pty_reader = PtyReader::start(
             reader,
-            output_listeners,
+            output_broadcast,
             self.lifecycle_tx.clone(),
             self.id.clone(),
             self.running.clone(),

@@ -6,17 +6,15 @@
       :class="{ dragging: isDragging }"
       :style="trackStyle"
     >
-      <div class="swipe-page">
-        <DevicesView />
-      </div>
-      <div class="swipe-page">
-        <SessionsView />
-      </div>
-      <div class="swipe-page">
-        <ToolboxView />
-      </div>
-      <div class="swipe-page">
-        <SettingsView />
+      <div
+        v-for="(page, index) in pages"
+        :key="page.name"
+        class="swipe-page"
+      >
+        <component
+          :is="page.pluginId ? PluginNavTabHost : page.component"
+          v-bind="page.pluginId ? { pluginId: page.pluginId, component: page.component } : {}"
+        />
       </div>
     </div>
   </div>
@@ -36,6 +34,8 @@ import DevicesView from '@/views/DevicesView.vue'
 import SessionsView from '@/views/SessionsView.vue'
 import ToolboxView from '@/views/ToolboxView.vue'
 import SettingsView from '@/views/SettingsView.vue'
+import { getPluginRegistry } from '@/plugin/registry'
+import PluginNavTabHost from '@/plugin/components/PluginNavTabHost.vue'
 
 defineOptions({
   name: 'MobileSwipeContainer'
@@ -46,13 +46,38 @@ const router = useRouter()
 const containerRef = ref<HTMLElement | null>(null)
 const trackRef = ref<HTMLElement | null>(null)
 
-// 页面配置
-const pages = [
-  { name: 'mobile-devices', component: DevicesView },
-  { name: 'mobile-sessions', component: SessionsView },
-  { name: 'mobile-toolbox', component: ToolboxView },
-  { name: 'mobile-settings', component: SettingsView }
-]
+// 插件注册表
+const pluginRegistry = getPluginRegistry()
+
+/** 页面配置类型 */
+interface PageConfig {
+  name: string
+  component: any
+  pluginId?: string
+  /** 排序值，与 MobileNav 的内置插槽约定一致（0/100/200/300 + 插件插入值） */
+  order: number
+}
+
+// 页面配置（内置 + 插件导航 Tab，响应式；按 order 排序与导航栏顺序一致）
+const pages = computed<PageConfig[]>(() => {
+  const builtin: PageConfig[] = [
+    { name: 'mobile-devices', component: DevicesView, order: 0 },
+    { name: 'mobile-sessions', component: SessionsView, order: 100 },
+    { name: 'mobile-toolbox', component: ToolboxView, order: 200 },
+    { name: 'mobile-settings', component: SettingsView, order: 300 },
+  ]
+
+  const pluginPages: PageConfig[] = pluginRegistry.navTabs.value.map(tab => ({
+    // name 同时充当 v-for key，拼入 pluginId 保证跨插件唯一（避免两个插件 tab.id 相同导致
+    // Vue 复用 DOM 节点/组件实例，引发 provide 的 PluginContext 错乱）
+    name: `plugin-nav-${tab.pluginId}-${tab.id}`,
+    component: tab.component,
+    pluginId: tab.pluginId,
+    order: tab.order,
+  }))
+
+  return [...builtin, ...pluginPages].sort((a, b) => a.order - b.order)
+})
 
 // 状态
 const currentPage = ref(0)
@@ -91,7 +116,7 @@ function initPage() {
   const queryPage = route.query.page
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
-    if (!isNaN(page) && page >= 0 && page <= 3) {
+    if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1) {
       currentPage.value = page
       translateX.value = -page * window.innerWidth
       return
@@ -99,7 +124,7 @@ function initPage() {
   }
 
   const name = route.name as string
-  const pageIndex = pages.findIndex(p => p.name === name)
+  const pageIndex = pages.value.findIndex(p => p.name === name)
   if (pageIndex !== -1) {
     currentPage.value = pageIndex
     translateX.value = -pageIndex * window.innerWidth
@@ -113,7 +138,7 @@ function syncRoute(page: number) {
 
 // 切换到指定页面
 function goToPage(page: number, animate = true) {
-  if (page < 0 || page > 3 || page === currentPage.value) return
+  if (page < 0 || page > pages.value.length - 1 || page === currentPage.value) return
 
   isAnimating.value = animate
   currentPage.value = page
@@ -194,7 +219,7 @@ function onTouchMove(e: TouchEvent) {
     // 边界弹性处理
     if (currentPage.value === 0 && deltaX > 0) {
       newTranslate = baseTranslate + deltaX * 0.3
-    } else if (currentPage.value === 3 && deltaX < 0) {
+    } else if (currentPage.value === pages.value.length - 1 && deltaX < 0) {
       newTranslate = baseTranslate + deltaX * 0.3
     }
 
@@ -218,7 +243,7 @@ function onTouchEnd(e: TouchEvent) {
   const shouldSwipe = Math.abs(deltaX) > CONFIG.swipeThreshold || velocity > CONFIG.velocityThreshold
 
   if (shouldSwipe) {
-    if (deltaX < 0 && currentPage.value < 3) {
+    if (deltaX < 0 && currentPage.value < pages.value.length - 1) {
       goToPage(currentPage.value + 1)
     } else if (deltaX > 0 && currentPage.value > 0) {
       goToPage(currentPage.value - 1)
@@ -251,8 +276,9 @@ function checkModalsOpen() {
   // Teleport 弹窗使用 v-if 控制显隐，存在即表示弹窗打开
   // 排除 .mobile-loading-overlay（加载遮罩不应阻止滑动）
   // .confirm-modal-overlay 匹配 SettingsView 等自定义弹窗
+  // .dp--menu-wrapper 匹配插件日期选择器的 bottom-sheet 遮罩（选择期间禁滑动）
   const overlays = document.body.querySelectorAll(
-    '.fixed.inset-0:not(.mobile-loading-overlay), .confirm-modal-overlay'
+    '.fixed.inset-0:not(.mobile-loading-overlay), .confirm-modal-overlay, .dp--menu-wrapper'
   )
   isModalOpen.value = overlays.length > 0
 }
@@ -280,7 +306,7 @@ function setupModalObserver() {
 watch(() => route.query.page, (queryPage) => {
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
-    if (!isNaN(page) && page >= 0 && page <= 3 && page !== currentPage.value) {
+    if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1 && page !== currentPage.value) {
       goToPage(page, false)
     }
   }

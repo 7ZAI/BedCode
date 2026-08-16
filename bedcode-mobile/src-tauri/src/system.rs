@@ -4,8 +4,10 @@
 
 pub mod commands;
 pub mod config;
+pub mod constants;
 pub mod error;
 pub mod error_boundary;
+pub mod info;
 pub mod settings;
 
 pub use config::AppConfig;

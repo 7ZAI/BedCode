@@ -1,61 +1,80 @@
 <template>
-  <div class="h-full flex flex-col bg-[var(--mobile-bg-primary)]">
+  <div class="h-full flex flex-col" style="background: var(--mobile-bg-primary)">
     <!-- Header -->
-    <header class="flex-shrink-0 bg-[var(--mobile-bg-secondary)]/90 backdrop-blur-xl border-b border-[var(--mobile-border)] px-4 pb-3 pt-3 flex items-center justify-between gap-2">
-      <h1 class="text-lg font-semibold text-[var(--mobile-text-primary)] tracking-wide">{{ t('mobile.session.title') }}</h1>
-      <!-- Mock Terminal Toggle (DEV only) -->
-      <button
-        v-if="mockTerminal.isDev"
-        class="p-2 rounded-lg transition-colors"
-        :class="mockTerminal.enabled.value ? 'bg-[var(--mobile-accent-muted)] text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)] hover:bg-[var(--mobile-border)]'"
-        @click="mockTerminal.toggle()"
-        :title="t('mobile.session.mockToggle')"
-      >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-        </svg>
-      </button>
-      <button
-        v-if="isConnected"
-        class="p-2 rounded-lg hover:bg-[var(--mobile-border)] transition-colors"
-        @click="refreshSessions"
-        :title="t('mobile.session.refresh')"
-      >
-        <svg
-          class="w-5 h-5 text-[var(--mobile-accent)]"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-        </svg>
-      </button>
-    </header>
+    <div class="page-header flex-shrink-0">
+      <div class="page-header-row">
+        <div class="min-w-0 flex-1">
+          <h1 class="page-title">{{ t('mobile.session.title') }}</h1>
+        </div>
+        <div class="flex items-center gap-2">
+          <button
+            v-if="mockTerminal.isDev"
+            class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
+            :class="mockTerminal.enabled.value ? 'chip-cyan' : ''"
+            style="color: var(--mobile-text-muted)"
+            @click="mockTerminal.toggle()"
+            :title="t('mobile.session.mockToggle')"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+          </button>
+          <button
+            v-if="isConnected"
+            class="w-11 h-11 flex items-center justify-center rounded-lg transition-colors active:opacity-80"
+            style="color: var(--mobile-accent)"
+            @click="refreshSessions"
+            :title="t('mobile.session.refresh')"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+        </div>
+      </div>
+    </div>
 
     <!-- Content -->
-    <div class="flex-1 overflow-auto">
-      <!-- Sessions list -->
-      <div class="p-4 space-y-3">
-        <!-- 未连接提示 -->
-        <div v-if="!isConnected" class="text-center text-[var(--mobile-text-muted)] py-4 mb-4 border-b border-[var(--mobile-border)]">
-          <p class="text-sm">{{ t('mobile.session.notConnected') }}</p>
+    <div class="flex-1 overflow-auto px-4 pb-8">
+      <!-- 未连接提示（图标 + 引导） -->
+      <div v-if="!isConnected" class="min-h-[45vh] flex flex-col items-center justify-center text-center">
+        <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+        <p class="group-row-sub">{{ t('mobile.session.notConnected') }}</p>
+        <p class="text-sm mt-1" style="color: var(--mobile-text-disabled)">{{ t('mobile.session.notConnectedHint') }}</p>
+        <button
+          class="mt-5 h-11 px-6 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+          style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+          @click="router.push({ name: 'mobile-home', query: { page: '0' } })"
+        >
+          {{ t('mobile.connection.scanConnect') }}
+        </button>
+      </div>
+
+      <template v-else>
+        <!-- Mock Terminal Session (DEV only) -->
+        <div v-if="mockTerminal.isDev && mockTerminal.enabled.value" class="mb-4">
+          <div class="group-card">
+            <SessionCard
+              :session="mockSession"
+              @click="handleMockSessionClick"
+              @stop=""
+              @delete=""
+            />
+          </div>
         </div>
 
-        <!-- Mock Terminal Session (DEV only) -->
-        <SessionCard
-          v-if="mockTerminal.isDev && mockTerminal.enabled.value"
-          :session="mockSession"
-          @click="handleMockSessionClick"
-          @stop=""
-          @delete=""
-        />
+        <!-- 真实会话列表空态 -->
+        <div v-if="realSessions.length === 0" class="min-h-[40vh] flex flex-col items-center justify-center text-center">
+          <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+          </svg>
+          <p class="group-row-sub">{{ t('mobile.session.noSessions') }}</p>
+          <p class="text-sm mt-1" style="color: var(--mobile-text-disabled)">{{ t('mobile.session.noSessionsHint') }}</p>
+        </div>
 
-        <!-- 真实会话列表 -->
-        <template v-if="isConnected">
-          <div v-if="realSessions.length === 0" class="text-center text-[var(--mobile-text-muted)] py-4">
-            {{ t('mobile.session.noSessions') }}
-          </div>
-
+        <div v-else class="group-card">
           <SessionCard
             v-for="session in realSessions"
             :key="session.id"
@@ -64,26 +83,16 @@
             @stop="handleStopSession(session)"
             @delete="handleDeleteSession(session)"
           />
-        </template>
-      </div>
+        </div>
+      </template>
     </div>
 
-    <!-- Connection info -->
-    <div v-if="isConnected" class="px-4 py-2 bg-[var(--mobile-bg-secondary)] border-t border-[var(--mobile-border)]">
-      <span class="text-[var(--mobile-text-muted)] text-xs font-medium">{{ t('mobile.session.sessionCount', { name: currentDeviceName, count: realSessions.length }) }}</span>
-    </div>
-
-    <!-- Loading Overlay: 跳转终端期间显示 -->
-    <transition name="mobile-loading-fade">
-      <div v-if="isNavigating" class="mobile-loading-overlay">
-        <div class="mobile-loading-spinner"></div>
-        <p class="mobile-loading-text">{{ t('mobile.terminal.preparing') }}</p>
-      </div>
-    </transition>
+    <!-- Loading Dialog: 终端准备中（弹窗遮罩，会话页面保持可见；就绪后才跳转） -->
+    <LoadingDialog :visible="isNavigating" :message="t('mobile.terminal.preparing')" />
 
     <!-- Stop Confirmation Modal -->
     <Modal v-model="showStopConfirm" :title="t('mobile.session.confirmStop')" size="sm">
-      <p class="text-[var(--mobile-text-secondary)]">
+      <p style="color: var(--mobile-text-secondary)">
         {{ t('mobile.session.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
@@ -96,7 +105,7 @@
 
     <!-- Delete Confirmation Modal -->
     <Modal v-model="showDeleteConfirm" :title="t('mobile.session.confirmDelete')" size="sm">
-      <p class="text-[var(--mobile-text-secondary)]">
+      <p style="color: var(--mobile-text-secondary)">
         {{ t('mobile.session.confirmDeleteMsg', { name: pendingSession?.name || pendingSession?.id }) }}
       </p>
       <template #footer>
@@ -114,15 +123,18 @@ import { computed, ref, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
+import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import { httpStopSession, httpRemoveSession } from '@/composables/useHttpApi'
 import { useToast } from '@/composables/useToast'
 import { useMockTerminal, MOCK_SESSION_ID } from '@/composables/useMockTerminal'
 import SessionCard from '@/components/SessionCard.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
+import LoadingDialog from '@/components/LoadingDialog.vue'
 
 const router = useRouter()
 const connection = useMobileConnection()
+const { prepareSession } = useTerminalBuffer()
 const toast = useToast()
 const { t } = useI18n()
 
@@ -131,9 +143,6 @@ const mockTerminal = useMockTerminal()
 
 // 连接状态
 const isConnected = computed(() => connection.connectionStatus.value === 'connected' || connection.connectionStatus.value === 'paired')
-
-// 当前设备名称
-const currentDeviceName = computed(() => connection.currentDevice.value?.name || t('mobile.session.connected'))
 
 const mockSession = computed(() => ({
   id: MOCK_SESSION_ID,
@@ -167,10 +176,18 @@ function handleMockSessionClick() {
 // 真实会话处理函数
 const isNavigating = ref(false)
 
-function handleSessionClick(session: any) {
+async function handleSessionClick(session: any) {
   if (isNavigating.value) return
   isNavigating.value = true
   connection.activeSessionId.value = session.id
+
+  // 终端准备：订阅输出（回放帧缓冲在 store），就绪后才跳转 —— loading 以
+  // 弹窗形式展示在本页，终端页挂载即渲染历史；失败/超时不阻塞跳转，由
+  // 终端页走原有 forceReplay + 订阅重试路径
+  if (session.status === 'running' || session.status === 'waiting_input') {
+    await prepareSession(session.id)
+  }
+
   router.push({
     name: 'mobile-terminal',
     params: { id: session.id },

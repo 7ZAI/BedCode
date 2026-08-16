@@ -47,7 +47,7 @@
           <!-- Actions -->
           <div class="flex gap-3 px-6 py-5">
             <button
-              class="flex-1 h-11 bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] rounded-xl font-medium active:opacity-80 transition-colors duration-200"
+              class="flex-1 bg-[var(--mobile-input-bg)] text-[var(--mobile-text-secondary)] rounded-xl font-medium active:opacity-80 transition-colors duration-200 confirm-btn-height"
               :disabled="loading"
               @click="handleCancel"
             >
@@ -55,10 +55,10 @@
             </button>
             <button
               :class="[
-                'flex-1 h-11 rounded-xl font-medium active:opacity-80 transition-colors duration-200',
+                'flex-1 rounded-xl font-medium active:opacity-80 transition-colors duration-200 confirm-btn-height',
                 loading ? 'opacity-50 pointer-events-none' : '',
                 variant === 'danger'
-                  ? 'bg-[var(--mobile-danger-solid-bg)] text-white'
+                  ? 'bg-[var(--mobile-danger-solid-bg)] text-[var(--mobile-text-on-accent)]'
                   : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'
               ]"
               :disabled="loading"
@@ -128,3 +128,9 @@ function handleBackdropClick() {
   }
 }
 </script>
+
+<style scoped>
+.confirm-btn-height {
+  height: clamp(2.5rem, 2.75rem, 3rem);
+}
+</style>

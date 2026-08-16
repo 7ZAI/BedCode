@@ -1,0 +1,161 @@
+name: SDK Publish
+
+# 触发方式：
+#   1. 推送 tag `sdk-v<version>`（如 sdk-v0.1.0）→ 校验后发布 npm + crates.io
+#   2. workflow_dispatch 手动触发（校验 + dry-run，不实际发布）
+#
+# 发布前置条件（仓库 Secrets）：
+#   NPM_TOKEN                — npmjs.com Access Token（Automation 类型，免 2FA）
+#   CARGO_REGISTRY_TOKEN     — crates.io API token（cargo login 生成）
+#
+# 约定：tag 版本必须与两个 SDK 的 package.json / Cargo.toml 版本一致，
+#       verify job 会强制校验，不一致直接失败。
+
+on:
+  push:
+    tags:
+      - 'sdk-v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ==================== 校验：版本一致性 + 构建 + 测试 + dry-run ====================
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: |
+            bedcode-desktop/package-lock.json
+            bedcode-mobile/packages/plugin-sdk-mobile/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Check tag version matches package versions
+        if: startsWith(github.ref, 'refs/tags/sdk-v')
+        run: |
+          TAG_VERSION="${GITHUB_REF#refs/tags/sdk-v}"
+          DESKTOP_NPM=$(node -p "require('./bedcode-desktop/packages/plugin-sdk-desktop/package.json').version")
+          MOBILE_NPM=$(node -p "require('./bedcode-mobile/packages/plugin-sdk-mobile/package.json').version")
+          echo "tag=$TAG_VERSION desktop-npm=$DESKTOP_NPM mobile-npm=$MOBILE_NPM"
+          [ "$TAG_VERSION" = "$DESKTOP_NPM" ] || { echo "::error::tag 版本与 desktop SDK 版本不一致"; exit 1; }
+          [ "$TAG_VERSION" = "$MOBILE_NPM" ] || { echo "::error::tag 版本与 mobile SDK 版本不一致"; exit 1; }
+
+      - name: Check npm/cargo version consistency
+        run: |
+          DESKTOP_CARGO=$(grep '^version' bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml | head -1 | cut -d'"' -f2)
+          MOBILE_CARGO=$(grep '^version' bedcode-mobile/packages/plugin-sdk-mobile/rust/Cargo.toml | head -1 | cut -d'"' -f2)
+          DESKTOP_NPM=$(node -p "require('./bedcode-desktop/packages/plugin-sdk-desktop/package.json').version")
+          MOBILE_NPM=$(node -p "require('./bedcode-mobile/packages/plugin-sdk-mobile/package.json').version")
+          [ "$DESKTOP_NPM" = "$DESKTOP_CARGO" ] || { echo "::error::desktop 版本不一致: npm=$DESKTOP_NPM cargo=$DESKTOP_CARGO"; exit 1; }
+          [ "$MOBILE_NPM" = "$MOBILE_CARGO" ] || { echo "::error::mobile 版本不一致: npm=$MOBILE_NPM cargo=$MOBILE_CARGO"; exit 1; }
+
+      - name: Build & test desktop SDK
+        working-directory: bedcode-desktop
+        run: |
+          npm ci
+          npm run build -w @bedcode/plugin-sdk-desktop
+          npm run test:run -w @bedcode/plugin-sdk-desktop
+
+      - name: Build & test mobile SDK
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: |
+          npm ci
+          npm run build
+          npm run test:run
+
+      - name: Dry-run npm pack (smoke check)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: npm pack --dry-run
+
+      - name: Dry-run npm pack (mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: npm pack --dry-run
+
+      - name: Build desktop SDK rust (verify compile)
+        # cargo package dry-run 会校验 path 依赖（bedcode-plugin-api-macros）已在 crates.io，
+        # 首次发布前该 crate 不存在会导致 verify 死锁；改用 cargo check 验证编译，
+        # 真实打包校验由 publish-crates 的 cargo publish 承担（macros 先发布后依赖可解析）
+        run: cargo check --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
+
+      - name: Dry-run cargo package (mobile)
+        run: cargo package --manifest-path bedcode-mobile/packages/plugin-sdk-mobile/rust/Cargo.toml --no-verify
+
+      - name: Verify wasm32 target compiles (cdylib 产物)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo check --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml --features wasm --target wasm32-unknown-unknown
+      - run: cargo check --manifest-path bedcode-mobile/packages/plugin-sdk-mobile/rust/Cargo.toml --features wasm --target wasm32-unknown-unknown
+
+  # ==================== npm 发布 ====================
+  publish-npm:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          registry-url: https://registry.npmjs.org
+
+      # prepublishOnly 会执行 build（tsup）与 test，必须先在对应目录安装依赖
+      - name: Install desktop SDK deps
+        working-directory: bedcode-desktop
+        run: npm ci
+
+      # desktop SDK 是 npm workspace 成员，用 -w 发布；prepublishOnly 会先 build + test
+      - name: Publish @bedcode/plugin-sdk-desktop
+        working-directory: bedcode-desktop
+        run: npm publish -w @bedcode/plugin-sdk-desktop --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Install mobile SDK deps
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: npm ci
+
+      - name: Publish @bedcode/plugin-sdk-mobile
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  # ==================== crates.io 发布 ====================
+  publish-crates:
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/sdk-v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Dry-run publish (macros / mobile resolvable)
+        # desktop 的 dry-run 需 macros 已发布（cargo publish 解析 crates.io 依赖），
+        # 故只对无外部待发布依赖的 macros 与 mobile 做 dry-run；desktop 由后续真实 publish 校验
+        run: |
+          cargo publish --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust-macros/Cargo.toml --dry-run
+          cargo publish --manifest-path bedcode-mobile/packages/plugin-sdk-mobile/rust/Cargo.toml --dry-run
+
+      - name: Publish bedcode-plugin-api-macros
+        # bedcode-plugin-api 依赖此宏 crate，必须先发布（crates.io 无 path 依赖）
+        run: cargo publish --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust-macros/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish bedcode-plugin-api
+        run: cargo publish --manifest-path bedcode-desktop/packages/plugin-sdk-desktop/rust/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish bedcode-plugin-api-mobile
+        run: cargo publish --manifest-path bedcode-mobile/packages/plugin-sdk-mobile/rust/Cargo.toml
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

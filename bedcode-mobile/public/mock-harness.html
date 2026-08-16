@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>BedCode Mobile Mock Harness</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #1a1a1f; font-family: 'Segoe UI', system-ui, sans-serif; }
+    #toolbar {
+      display: flex; align-items: center; gap: 6px;
+      padding: 8px 10px; overflow-x: auto; white-space: nowrap;
+      border-bottom: 1px solid #333; position: sticky; top: 0; z-index: 10;
+    }
+    #toolbar button {
+      flex-shrink: 0; border: 1px solid #444; background: #2a2a30;
+      color: #ccc; border-radius: 6px; padding: 4px 10px;
+      font-size: 12px; cursor: pointer;
+    }
+    #toolbar button.active { background: #00d4ff; color: #111; border-color: #00d4ff; }
+    #toolbar .sep { width: 1px; height: 20px; background: #444; flex-shrink: 0; }
+    #toolbar .title { color: #888; font-size: 12px; margin-right: 4px; flex-shrink: 0; }
+    #frame-wrap { position: fixed; inset: 44px 0 0 0; display: flex; justify-content: flex-start; }
+    iframe { width: 390px; height: 100%; border: none; flex-shrink: 0; }
+  </style>
+</head>
+<body>
+  <div id="toolbar"></div>
+  <div id="frame-wrap"><iframe id="f" src="/mobile/devices"></iframe></div>
+
+  <script>
+    // ==================== Mock Data ====================
+    // 预填 localStorage（同源，iframe 加载应用时可直接读取）
+    localStorage.setItem('connection_history', JSON.stringify([
+      { address: '192.168.1.100:8765', name: 'DESKTOP-7ZAI', lastConnected: new Date(Date.now() - 2 * 3600e3).toISOString() },
+      { address: '192.168.1.42:8765', name: 'WORK-LAPTOP', lastConnected: new Date(Date.now() - 26 * 3600e3).toISOString() },
+      { address: '10.0.0.8:8765', name: 'HOME-SERVER', lastConnected: new Date(Date.now() - 3 * 86400e3).toISOString() },
+      { address: '172.16.5.12:8765', name: 'LAB-MAC', lastConnected: new Date(Date.now() - 7 * 86400e3).toISOString() },
+      { address: '192.168.1.200:8765', name: 'OLD-PC', lastConnected: new Date(Date.now() - 30 * 86400e3).toISOString() },
+    ]))
+    localStorage.setItem('preset-tasks', JSON.stringify([
+      { id: 't1', content: 'git pull && npm run build', createdAt: new Date(Date.now() - 3 * 86400e3).toISOString(), updatedAt: new Date(Date.now() - 3 * 86400e3).toISOString(), repeatable: true, status: 'unused' },
+      { id: 't2', content: 'cargo test --all && cargo clippy -- -D warnings', createdAt: new Date(Date.now() - 6 * 86400e3).toISOString(), updatedAt: new Date(Date.now() - 6 * 86400e3).toISOString(), repeatable: false, status: 'unused' },
+      { id: 't3', content: 'tail -f /var/log/syslog', createdAt: new Date(Date.now() - 12 * 86400e3).toISOString(), updatedAt: new Date(Date.now() - 12 * 86400e3).toISOString(), repeatable: true, status: 'unused' },
+    ]))
+    localStorage.setItem('mock_terminal_enabled', 'true')
+    localStorage.setItem('mock-terminal-speed', 'fast')
+
+    // 已连接态开关：URL 参数 ?connected=0 覆盖（审查未连接态 UI 用）
+    const qConnected = new URLSearchParams(location.search).get('connected')
+    if (qConnected === '0') {
+      localStorage.removeItem('mock_connected')
+    } else {
+      localStorage.setItem('mock_connected', '1')
+    }
+
+    // ==================== Routes ====================
+    const routes = [
+      { path: '/mobile/devices', label: '连接首页' },
+      { path: '/mobile/sessions', label: '会话列表' },
+      { path: '/mobile/terminal/__mock_terminal__', label: '终端(mock)' },
+      { path: '/mobile/toolbox', label: '工具箱' },
+      { path: '/mobile/toolbox/preset-tasks', label: '预设任务' },
+      { path: '/mobile/files/__mock__', label: '文件浏览' },
+      { path: '/mobile/plugins', label: '插件页' },
+      { path: '/mobile/discover', label: '发现页' },
+      { path: '/mobile/scan', label: '扫码页' },
+      { path: '/mobile/settings', label: '设置' },
+      { path: '/mobile/settings/connection', label: '设置·连接' },
+      { path: '/mobile/settings/notifications', label: '设置·通知' },
+      { path: '/mobile/settings/authentication', label: '设置·认证' },
+      { path: '/mobile/settings/appearance', label: '设置·外观' },
+      { path: '/mobile/settings/about', label: '设置·关于' },
+    ]
+
+    // ==================== Toolbar ====================
+    const params = new URLSearchParams(location.search)
+    const qRoute = params.get('route')
+    const qTheme = params.get('theme')
+
+    // 截图模式：隐藏工具条，iframe 铺满视口
+    if (params.get('hidebar') === '1') {
+      document.getElementById('toolbar').style.display = 'none'
+      document.getElementById('frame-wrap').style.top = '0'
+    }
+
+    const toolbar = document.getElementById('toolbar')
+    const frame = document.getElementById('f')
+
+    // URL 参数指定路由时直接跳转
+    if (qRoute) {
+      const found = routes.find((r) => r.path === qRoute)
+      if (found) frame.src = qRoute
+    }
+
+    const title = document.createElement('span')
+    title.className = 'title'
+    title.textContent = 'Mock Harness'
+    toolbar.appendChild(title)
+
+    let activeBtn = null
+    function addBtn(label, onClick, isActive) {
+      const b = document.createElement('button')
+      b.textContent = label
+      if (isActive) { b.classList.add('active'); activeBtn = b }
+      b.onclick = () => {
+        if (activeBtn) activeBtn.classList.remove('active')
+        b.classList.add('active')
+        activeBtn = b
+        onClick()
+      }
+      toolbar.appendChild(b)
+    }
+
+    // 主题切换
+    addBtn('🌙 深色', () => toggleDark(true))
+    addBtn('☀️ 浅色', () => toggleDark(false))
+    const sep = document.createElement('span'); sep.className = 'sep'; toolbar.appendChild(sep)
+
+    function toggleDark(dark) {
+      const doc = frame.contentDocument
+      if (!doc) return
+      doc.documentElement.classList.toggle('dark', dark)
+      // 触发主题响应（useTheme 监听 settings 变化，直接改 html.dark 也生效）
+    }
+
+    routes.forEach((r, i) => {
+      addBtn(r.label, () => { frame.src = r.path }, i === 0)
+    })
+
+    // 首次加载后应用主题：URL 参数 > 系统深色默认
+    // 延迟应用：等应用自身 setupTheme/loadSettings 异步初始化完成后再覆盖，否则会被覆盖回深色
+    frame.onload = () => {
+      setTimeout(() => {
+        const doc = frame.contentDocument
+        if (!doc) return
+        try {
+          const dark = qTheme ? qTheme === 'dark' : (localStorage.getItem('bedcode-dev-shell:theme') || 'dark') === 'dark'
+          doc.documentElement.classList.toggle('dark', dark)
+        } catch (e) {}
+      }, 1000)
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+{
+  "name": "@bedcode/plugin-sdk-mobile",
+  "version": "0.1.0",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bedcode-plugin": "./bin/cli.js"
+  },
+  "files": [
+    "dist",
+    "src",
+    "bin",
+    "template",
+    "dev-shell",
+    "README.md",
+    "README_en.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsup src/index.ts src/vite-plugin.ts src/types.ts --format esm --dts --clean",
+    "test": "vitest",
+    "test:run": "vitest run --passWithNoTests",
+    "prepublishOnly": "npm run build && npm run test:run"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./vite": {
+      "types": "./dist/vite-plugin.d.ts",
+      "import": "./dist/vite-plugin.js"
+    },
+    "./ui": {
+      "types": "./src/ui/Select.d.ts",
+      "import": "./src/ui/Select.vue"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "magic-string": "^0.30.21"
+  },
+  "peerDependencies": {
+    "vite": "^5.0.0",
+    "vue": "^3.4.0"
+  },
+  "devDependencies": {
+    "autoprefixer": "^10.4.20",
+    "tailwindcss": "^3.4.1",
+    "tsup": "^8.5.1",
+    "typescript": "^5.3.3",
+    "vitest": "^1.6.1"
+  }
+}

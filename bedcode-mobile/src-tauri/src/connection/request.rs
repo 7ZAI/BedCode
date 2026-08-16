@@ -121,6 +121,73 @@ impl AuthRequest {
             },
         })
     }
+
+    /// 构建生物认证请求消息
+    ///
+    /// 移动端发起生物认证流程，桌面端返回挑战值
+    pub fn biometric_request(device_id: &str, device_name: &str, fingerprint: &str) -> Message {
+        with_token(Message::Auth {
+            message_id: uuid::Uuid::new_v4().to_string(),
+            expect_response: true,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            session_id: None,
+            token: String::new(),
+            payload: AuthPayload {
+                stage: AuthStage::BiometricRequest,
+                device_id: Some(device_id.to_string()),
+                device_name: Some(device_name.to_string()),
+                device_fingerprint: Some(fingerprint.to_string()),
+                ..Default::default()
+            },
+        })
+    }
+
+    /// 构建生物认证签名回传消息
+    ///
+    /// 生物认证通过后对挑战值签名，回传桌面端验签
+    pub fn biometric_verify(
+        device_id: &str,
+        device_name: &str,
+        fingerprint: &str,
+        nonce: &str,
+        signature: &str,
+    ) -> Message {
+        with_token(Message::Auth {
+            message_id: uuid::Uuid::new_v4().to_string(),
+            expect_response: true,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            session_id: None,
+            token: String::new(),
+            payload: AuthPayload {
+                stage: AuthStage::BiometricVerify,
+                device_id: Some(device_id.to_string()),
+                device_name: Some(device_name.to_string()),
+                device_fingerprint: Some(fingerprint.to_string()),
+                challenge_nonce: Some(nonce.to_string()),
+                signature: Some(signature.to_string()),
+                ..Default::default()
+            },
+        })
+    }
+
+    /// 构建生物凭证绑定/解绑消息
+    ///
+    /// 在已认证连接上注册公钥（绑定）或清空公钥（解绑，public_key 传空串）
+    pub fn exchange_biometric_credential(fingerprint: &str, public_key: &str) -> Message {
+        with_token(Message::Auth {
+            message_id: uuid::Uuid::new_v4().to_string(),
+            expect_response: true,
+            timestamp: chrono::Utc::now().timestamp_millis(),
+            session_id: None,
+            token: String::new(),
+            payload: AuthPayload {
+                stage: AuthStage::ExchangeCertificate,
+                device_fingerprint: Some(fingerprint.to_string()),
+                public_key: Some(public_key.to_string()),
+                ..Default::default()
+            },
+        })
+    }
 }
 
 // ==================== Session Control Requests ====================
@@ -282,6 +349,18 @@ impl ResponseParser {
         }
     }
 
+    /// 解析认证错误响应
+    ///
+    /// 桌面端拒绝认证时返回 `Message::Error`（如 CREDENTIAL_NOT_BOUND / NOT_PAIRED），
+    /// 返回 (错误码, 错误消息) 供调用方透传给用户；非错误消息返回 None。
+    pub fn parse_auth_error(response: &Message) -> Option<(String, String)> {
+        if let Message::Error { code, message, .. } = response {
+            Some((code.clone(), message.clone()))
+        } else {
+            None
+        }
+    }
+
     /// 解析启动会话响应
     ///
     /// 从 SessionControl 响应中提取 session_id
@@ -303,6 +382,8 @@ pub mod timeouts {
 
     /// 认证请求超时
     pub const AUTH: Duration = Duration::from_secs(30);
+    /// 生物认证请求超时（含系统生物识别弹窗，需更长等待）
+    pub const BIO_AUTH: Duration = Duration::from_secs(120);
     /// 会话控制请求超时
     pub const SESSION_CONTROL: Duration = Duration::from_secs(15);
     /// 终端订阅超时

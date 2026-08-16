@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
     <Transition name="center-modal">
-      <div v-if="visible" class="fixed inset-0 z-[110] flex items-center justify-center p-4 mobile-ui">
+      <div v-if="visible" class="fixed inset-0 z-[100] flex items-center justify-center p-4 mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="emit('close')"></div>
         <div class="relative w-full max-w-lg bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-6 shadow-xl max-h-[85vh] flex flex-col modal-panel">
           <div class="flex items-center justify-between mb-4 flex-shrink-0">
@@ -23,7 +23,7 @@
               <!-- 可选目录：下拉菜单 -->
               <div v-else class="relative">
                 <button
-                  class="flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-xs hover:border-[var(--mobile-border-active)] active:opacity-80 transition-colors max-w-[120px]"
+                  class="flex items-center gap-1 px-2 py-1 rounded-lg bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] text-xs hover:border-[var(--mobile-border-active)] active:opacity-80 transition-colors max-w-[clamp(100px,120px,160px)]"
                   @click="showDirDropdown = !showDirDropdown"
                 >
                   <svg class="w-3 h-3 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -35,7 +35,7 @@
                   </svg>
                 </button>
                 <Transition name="dropdown">
-                  <div v-if="showDirDropdown" class="absolute top-full right-0 mt-1 min-w-[180px] max-h-[180px] overflow-y-auto bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-30" @click.stop>
+                  <div v-if="showDirDropdown" class="absolute top-full right-0 mt-1 min-w-[clamp(140px,180px,220px)] max-h-[180px] overflow-y-auto bg-[var(--mobile-bg-tertiary)] border border-[var(--mobile-border)] rounded-lg shadow-[0_8px_24px_rgba(0,0,0,0.4)] z-30" @click.stop>
                     <button
                       v-for="dir in projectDirs"
                       :key="dir"
@@ -55,7 +55,7 @@
                 </Transition>
               </div>
               <button
-                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150 flex-shrink-0"
+                class="p-1.5 rounded-lg bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-[background-color,transform] duration-150 flex-shrink-0"
                 :disabled="!fileExplorerSessionId"
                 @click="showFileExplorer = true"
               >
@@ -68,23 +68,14 @@
           </div>
 
           <div class="space-y-4 flex-1 overflow-y-auto min-h-0">
-            <div>
-              <label class="text-[var(--mobile-text-muted)] text-sm mb-1 block">{{ t('mobile.toolbox.taskTitle') }}</label>
-              <input
-                ref="titleInput"
-                v-model="form.title"
-                type="text"
-                :placeholder="t('mobile.toolbox.taskTitlePlaceholder')"
-                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors"
-              />
-            </div>
-
+            <!-- 可重复/不可重复属性（创建时设置；编辑时可改，改属性不重置执行状态） -->
+            <RepeatableToggle v-model="form.repeatable" />
             <div class="flex-1 min-h-0 flex flex-col">
               <div class="flex items-center justify-between mb-1">
                 <label class="text-[var(--mobile-text-muted)] text-sm">{{ t('mobile.toolbox.taskContent') }}</label>
                 <button
                   v-if="!hasAiTemplate"
-                  class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] active:scale-[0.95] transition-all duration-150"
+                  class="flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-medium bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] active:scale-[0.95] transition-transform duration-150"
                   @click="insertAiTemplate"
                 >
                   <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -94,25 +85,26 @@
                 </button>
               </div>
               <textarea
+                ref="contentTextarea"
                 v-model="form.content"
                 :placeholder="t('mobile.toolbox.taskContentPlaceholder')"
                 rows="8"
-                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[var(--mobile-accent)]/50 transition-colors resize-none flex-1 min-h-[160px]"
+                class="w-full bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] rounded-lg px-3 py-2.5 text-[var(--mobile-text-primary)] placeholder-[var(--mobile-text-disabled)] focus:outline-none focus:border-[color:color-mix(in_srgb,var(--mobile-accent)_50%,transparent)] transition-colors resize-none flex-1 min-h-[160px]"
               ></textarea>
             </div>
           </div>
 
           <div class="flex gap-3 mt-6 flex-shrink-0">
             <button
-              class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[var(--mobile-accent)]/40 active:opacity-80 transition-colors"
+              class="flex-1 bg-[var(--mobile-bg-primary)] border border-[var(--mobile-border-hover)] text-[var(--mobile-text-secondary)] py-2.5 rounded-xl font-medium hover:border-[color:color-mix(in_srgb,var(--mobile-accent)_40%,transparent)] active:opacity-80 transition-colors"
               @click="emit('close')"
             >
               {{ t('common.button.cancel') }}
             </button>
             <button
-              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[var(--mobile-accent)]/30 active:scale-[0.98] transition-all duration-150"
-              :class="{ 'opacity-50': !form.title || !form.content }"
-              :disabled="!form.title || !form.content"
+              class="flex-1 bg-[var(--mobile-accent-secondary)] border border-[var(--mobile-border-active)] text-[var(--mobile-accent)] py-2.5 rounded-xl font-medium hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_30%,transparent)] active:scale-[0.98] transition-transform duration-150"
+              :class="{ 'opacity-50': !form.content }"
+              :disabled="!form.content"
               @click="handleSave"
             >
               {{ t('common.button.save') }}
@@ -126,7 +118,7 @@
   <!-- File Explorer Dialog (层级高于 Edit Dialog) -->
   <Teleport to="body">
     <Transition name="center-modal">
-      <div v-if="showFileExplorer && fileExplorerSessionId" class="fixed inset-0 z-[120] flex items-center justify-center p-[10%] mobile-ui">
+      <div v-if="showFileExplorer && fileExplorerSessionId" class="fixed inset-0 z-[100] flex items-center justify-center p-[10%] mobile-ui">
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="showFileExplorer = false"></div>
         <div class="relative w-full h-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl shadow-xl overflow-hidden flex flex-col modal-panel">
           <FileExplorer
@@ -155,6 +147,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
 import FileExplorer from '@/components/FileExplorer.vue'
+import RepeatableToggle from '@/components/RepeatableToggle.vue'
 import type { PresetTask } from '@/composables/model'
 
 const props = defineProps<{
@@ -181,8 +174,8 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  /** 保存：新增时传 { title, content }，编辑时传完整 PresetTask */
-  save: [data: PresetTask | { title: string; content: string }]
+  /** 保存：新增时传 { content, repeatable }，编辑时传完整 PresetTask */
+  save: [data: PresetTask | { content: string; repeatable: boolean }]
   close: []
 }>()
 
@@ -208,8 +201,8 @@ function insertAiTemplate() {
 
 // ==================== 表单状态 ====================
 
-const titleInput = ref<HTMLInputElement | null>(null)
-const form = ref({ title: '', content: '' })
+const contentTextarea = ref<HTMLTextAreaElement | null>(null)
+const form = ref({ content: '', repeatable: true })
 const showDirDropdown = ref(false)
 const selectedDir = ref<string | null>(null)
 const showFileExplorer = ref(false)
@@ -221,12 +214,14 @@ const effectiveDir = computed(() => props.lockedDir || selectedDir.value)
 const effectiveProjectDir = computed(() => !!props.lockedDir || props.projectDirs.length > 0)
 
 // 弹窗打开时初始化表单
+// immediate：父组件可能通过 v-if 在 visible=true 时挂载本组件（懒加载场景），
+// 此时 watch 不会因 visible 变化触发，需在挂载时立即初始化
 watch(() => props.visible, (val) => {
   if (val) {
     if (props.task) {
-      form.value = { title: props.task.title, content: props.task.content }
+      form.value = { content: props.task.content, repeatable: props.task.repeatable }
     } else {
-      form.value = { title: '', content: '' }
+      form.value = { content: '', repeatable: true }
     }
     // 非锁定模式才重置用户选择
     if (!props.lockedDir) {
@@ -234,10 +229,10 @@ watch(() => props.visible, (val) => {
     }
     showDirDropdown.value = false
     showFileExplorer.value = false
-    // 自动聚焦标题输入框
-    nextTick(() => titleInput.value?.focus())
+    // 自动聚焦任务内容输入框
+    nextTick(() => contentTextarea.value?.focus())
   }
-})
+}, { immediate: true })
 
 // ==================== 目录选择 ====================
 
@@ -264,28 +259,29 @@ const fileExplorerSessionId = computed(() => {
     return props.activeSessionId
   }
   const matchedConfig = props.sessionConfigs.find((c: any) => c.working_dir === dir)
-  if (!matchedConfig) return ''
+  if (!matchedConfig) return props.activeSessionId
   const session = props.activeSessions.find(
     (s: any) => s.config_id === matchedConfig.id || s.configId === matchedConfig.id
   )
-  return session?.id || ''
+  // 优先使用活跃会话 id；无可运行会话时回退到 config_id，桌面端文件 API 支持直接用 config_id 浏览
+  return session?.id || matchedConfig.id
 })
 
 // ==================== 保存 ====================
 
 function handleSave() {
-  if (!form.value.title || !form.value.content) return
+  if (!form.value.content.trim()) return
 
   if (props.task) {
     // 编辑模式：返回更新后的完整 PresetTask
     emit('save', {
       ...props.task,
-      title: form.value.title,
       content: form.value.content,
+      repeatable: form.value.repeatable,
     } as PresetTask)
   } else {
-    // 新增模式：返回表单数据
-    emit('save', { title: form.value.title, content: form.value.content })
+    // 新增模式：返回表单数据（含可重复属性）
+    emit('save', { content: form.value.content, repeatable: form.value.repeatable })
   }
 }
 </script>

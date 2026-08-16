@@ -1,0 +1,120 @@
+{
+  "id": "com.bedcode.ai-chatbox",
+  "name": "AI Chatbox",
+  "version": "1.0.0-beta",
+  "description": "AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘。\n使用：打开侧边栏「AI 对话」→ 在供应商设置中填入 API 地址 / 密钥并选择模型 → 新建对话开始提问；对话自动保存，可在会话列表切换 / 删除。",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_ai_chatbox",
+  "icon": "icon.svg",
+  "permissions": [
+    "broadcast",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "storage",
+    "ui:sidebar"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "ai-chatbox.chat-stream",
+        "title": "Chat Stream"
+      },
+      {
+        "id": "ai-chatbox.chat-complete",
+        "title": "Chat Complete"
+      },
+      {
+        "id": "ai-chatbox.fetch-models",
+        "title": "Fetch Models"
+      },
+      {
+        "id": "ai-chatbox.list-conversations",
+        "title": "List Conversations"
+      },
+      {
+        "id": "ai-chatbox.get-messages",
+        "title": "Get Messages"
+      },
+      {
+        "id": "ai-chatbox.save-conversation",
+        "title": "Save Conversation"
+      },
+      {
+        "id": "ai-chatbox.save-message",
+        "title": "Save Message"
+      },
+      {
+        "id": "ai-chatbox.delete-conversation",
+        "title": "Delete Conversation"
+      }
+    ],
+    "views": [
+      {
+        "id": "ai-chatbox.sidebar",
+        "type": "sidebar",
+        "title": "AI聊天",
+        "component": "ChatView"
+      }
+    ],
+    "configuration": {
+      "title": "AI Chatbox 设置",
+      "properties": {
+        "thinkingMode": {
+          "type": "string",
+          "enum": [
+            "default",
+            "enabled",
+            "disabled"
+          ],
+          "title": "思考模式",
+          "description": "default：跟随模型自身默认行为，不传思考参数；enabled：强制开启思考；disabled：强制关闭思考",
+          "default": "default"
+        },
+        "reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "high",
+            "max"
+          ],
+          "title": "推理强度",
+          "description": "仅思考模式为「强制开启」时生效（low / high / max）",
+          "default": "high"
+        },
+        "showReasoning": {
+          "type": "boolean",
+          "title": "显示思考过程",
+          "description": "关闭后聊天界面不展示思考过程块（思考内容仍随对话日志落盘）",
+          "default": true
+        },
+        "codeLineHeight": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 2,
+          "title": "代码块行距",
+          "description": "代码块行距（0.5-2.0，默认 1.6）",
+          "default": 1.6
+        },
+        "codeFontSize": {
+          "type": "number",
+          "minimum": 11,
+          "maximum": 18,
+          "title": "代码块字体大小",
+          "description": "代码块字体大小（px，11-18）",
+          "default": 13
+        },
+        "codeTheme": {
+          "type": "string",
+          "enum": ["auto", "light", "dark", "github-light", "github-dark", "dracula"],
+          "title": "代码高亮主题",
+          "description": "auto：跟随宿主深浅色；light/dark：通用浅深色；github-light/github-dark/dracula：具名风格主题",
+          "default": "auto"
+        }
+      }
+    }
+  }
+}

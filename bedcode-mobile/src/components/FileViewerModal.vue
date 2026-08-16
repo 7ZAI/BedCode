@@ -140,19 +140,27 @@ const renderedMarkdown = computed(() => {
 
 const displayLang = computed(() => getLangByFilename(props.filename))
 
-const codeStyle = computed(() => ({
-  '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
-  '--code-line-height': codeViewerStore.settings.lineHeight,
-  '--code-tab-size': codeViewerStore.settings.tabSize,
-  '--code-bg': codeBgColor.value,
-}))
-
 const lineCount = computed(() => {
   if (props.diffLines?.length) return props.diffLines.length
   const content = props.code ?? ''
   if (!content) return 0
   return content.split('\n').length
 })
+
+/** 行号列宽度：根据总行数自适应，确保行号完整展示 */
+const gutterWidth = computed(() => {
+  const digits = String(lineCount.value).length
+  // 每位数字约 0.6em + 右侧 padding 0.6em + 左右留白 0.4em
+  return `${digits * 0.6 + 1.0}em`
+})
+
+const codeStyle = computed(() => ({
+  '--code-font-size': `${codeViewerStore.settings.fontSize}px`,
+  '--code-line-height': codeViewerStore.settings.lineHeight,
+  '--code-tab-size': codeViewerStore.settings.tabSize,
+  '--code-bg': codeBgColor.value,
+  '--code-gutter-width': gutterWidth.value,
+}))
 
 const modalStyle = computed(() => {
   if (isFullscreen.value) {
@@ -179,7 +187,7 @@ async function doHighlight() {
   const lang = getLangByFilename(props.filename)
   const theme = resolvedTheme.value
   if (props.diffLines && props.diffLines.length > 0) {
-    await highlightDiff(props.diffLines, lang, theme)
+    await highlightDiff(props.diffLines, lang, theme, props.code)
   } else if (props.code) {
     await highlight(props.code, lang, theme)
   }
@@ -220,7 +228,7 @@ watch(
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 90%;
-  max-width: 700px;
+  max-width: clamp(280px, 700px, 900px);
   height: 80vh;
   display: flex;
   flex-direction: column;
@@ -252,7 +260,7 @@ watch(
 }
 
 .viewer-filename {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--mobile-text-primary);
   white-space: nowrap;
@@ -261,7 +269,7 @@ watch(
 }
 
 .viewer-lang-badge {
-  font-size: 0.625rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
@@ -278,7 +286,7 @@ watch(
 }
 
 .viewer-action-btn {
-  padding: 0.375rem;
+  padding: clamp(0.25rem, 0.375rem, 0.5rem);
   border-radius: 0.375rem;
   background: none;
   border: none;
@@ -365,7 +373,7 @@ watch(
 .viewer-code :deep(.line) {
   display: block;
   position: relative;
-  padding-left: 2.8em;
+  padding-left: var(--code-gutter-width, 2.8em);
   white-space: pre;
 }
 
@@ -375,7 +383,7 @@ watch(
   position: absolute;
   left: 0;
   top: 0;
-  width: 2.8em;
+  width: var(--code-gutter-width, 2.8em);
   padding-right: 0.6em;
   box-sizing: border-box;
   display: flex;
@@ -410,7 +418,7 @@ watch(
 }
 
 .viewer-code :deep(.diff-line-no) {
-  width: 2.8em;
+  width: var(--code-gutter-width, 2.8em);
   padding: 0 0.6em;
   text-align: right;
   font-size: 0.85em;
@@ -434,7 +442,7 @@ watch(
 .viewer-code :deep(.diff-new-no) {
   color: rgba(63, 185, 80, 0.6);
   position: sticky;
-  left: 2.8em;
+  left: var(--code-gutter-width, 2.8em);
 }
 
 .viewer-code :deep(.diff-marker) {
@@ -447,7 +455,7 @@ watch(
   align-items: center;
   justify-content: center;
   position: sticky;
-  left: 5.6em;
+  left: calc(var(--code-gutter-width, 2.8em) * 2);
   z-index: 1;
 }
 
@@ -501,7 +509,7 @@ watch(
   justify-content: center;
   height: 100%;
   color: var(--mobile-text-muted);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
 }
 
 .viewer-error {
@@ -519,7 +527,7 @@ watch(
 
 .viewer-md-preview {
   padding: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   line-height: 1.7;
   color: var(--mobile-text-primary);
   overflow-y: auto;
@@ -528,7 +536,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h1) {
-  font-size: 1.375rem;
+  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 840 * 2, 1.5rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin: 0 0 0.75rem;
@@ -537,7 +545,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h2) {
-  font-size: 1.125rem;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   color: var(--mobile-accent);
   margin: 1.25rem 0 0.5rem;
@@ -546,7 +554,7 @@ watch(
 }
 
 .viewer-md-preview :deep(h3) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 1rem 0 0.375rem;
@@ -561,7 +569,7 @@ watch(
   width: 100%;
   border-collapse: collapse;
   margin: 0.5rem 0 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -573,7 +581,7 @@ watch(
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-primary);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 2px solid var(--mobile-border);
@@ -592,7 +600,7 @@ watch(
 
 .viewer-md-preview :deep(code) {
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   padding: 0.125rem 0.375rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
@@ -615,7 +623,7 @@ watch(
   background: none;
   border: none;
   border-radius: 0;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-primary);
 }
 
@@ -674,13 +682,13 @@ watch(
 }
 
 .viewer-lang-label {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
   text-transform: capitalize;
 }
 
 .viewer-line-count {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 </style>

@@ -4,6 +4,9 @@
  * 基于 Tauri event 系统的插件间通信
  * 事件命名规范：{domain}:{action}
  * 插件只能监听自己声明了权限域的事件
+ *
+ * 同时桥接 Tauri `listen()` 事件到内存总线，
+ * 使 Rust 侧 `app_handle.emit()` 发送的事件能到达前端 handler
  */
 
 import type { Disposable } from './types'
@@ -18,8 +21,8 @@ type EventHandler = (...args: any[]) => void
  */
 const handlers = new Map<string, Map<string, Set<EventHandler>>>()
 
-/** 监听事件 */
-export function on(pluginId: string, event: string, handler: EventHandler): Disposable {
+/** 在内存总线中注册 handler */
+function registerInMemory(pluginId: string, event: string, handler: EventHandler): Disposable {
   let pluginMap = handlers.get(pluginId)
   if (!pluginMap) {
     pluginMap = new Map()
@@ -35,6 +38,32 @@ export function on(pluginId: string, event: string, handler: EventHandler): Disp
   return {
     dispose() {
       handlers.get(pluginId)?.get(event)?.delete(handler)
+    },
+  }
+}
+
+/** 监听事件 — 同时注册内存总线和 Tauri listen */
+export function on(pluginId: string, event: string, handler: EventHandler): Disposable {
+  // 1. 注册内存总线（前端 → 前端事件）
+  const memDisposable = registerInMemory(pluginId, event, handler)
+
+  // 2. 同时注册 Tauri listen（桥接 Rust → 前端事件）
+  // Rust 侧 app_handle.emit() 发送的事件通过 Tauri 事件系统到达前端
+  let tauriUnlisten: (() => void) | null = null
+  import('@tauri-apps/api/event').then(({ listen }) => {
+    listen(event, (tauriEvent: any) => {
+      handler(tauriEvent.payload)
+    }).then(unlisten => {
+      tauriUnlisten = unlisten
+    })
+  }).catch(() => {
+    // Tauri API 不可用时静默忽略（如测试环境）
+  })
+
+  return {
+    dispose() {
+      memDisposable.dispose()
+      tauriUnlisten?.()
     },
   }
 }

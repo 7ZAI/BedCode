@@ -1,0 +1,6 @@
+# ==================== 链接加速（仅 Windows MSVC 目标） ====================
+# 默认 MSVC link.exe 链接 Tauri 全量依赖（wasmtime/actix 等上千 crate）非常慢，
+# LLD 通常快 2~5 倍。优先使用 rustup 自带 rust-lld（零外部依赖，所有机器/CI 可用）。
+# 若本机装有独立 LLVM 并已把 <LLVM>\bin 加入 PATH，可把 linker 改为 "lld-link" 使用最新版。
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"

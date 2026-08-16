@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-mobile"
-version = "1.1.11"
+version = "2.0.0"
 description = "BedCode Mobile - Remote terminal for Claude Code"
 authors = ["binblink"]
 edition = "2021"
@@ -13,16 +13,19 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset"] }
-tauri-plugin-shell = "2"
-tauri-plugin-notification = "2"
+tauri = { version = "2", features = ["protocol-asset", "test"] }
+tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-os = "2"
 tauri-plugin-edge-to-edge = "0.3.3"
 tauri-plugin-http = "2"
+# 设备 ID（Android ANDROID_ID / iOS identifierForVendor）
+tauri-plugin-machine-uid = "0.1.3"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process"] }
+# reqwest body 流类型（与 tokio-util ReaderStream 配对；SAF 流直传的 Box<dyn Stream> 标注用）
+bytes = "1"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -64,17 +67,52 @@ tokio-tungstenite = "0.24"
 mdns-sd = "0.20"
 flume = "0.12"
 
+# Network utilities
+local-ip-address = "0.6"
+# Hostname（非 Android 平台设备名回退）
+hostname = "0.4"
+
 futures-util = "0.3"
+
+# WASM runtime for plugin system
+# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
+wasmtime = "47"
+
+# HTTP client (WASM plugin HTTP proxy + remote download)
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+
+# 传输引擎工具（CancellationToken 取消 + ReaderStream 文件流，与桌面端 transfer 同语义）
+tokio-util = { version = "0.7", features = ["io"] }
+
+# 独立 HTTP 文件服务（插件 fileservice 能力，仅 HTTP 明文，无 TLS/compression 需求）
+actix-web = { version = "4", default-features = false }
+
+# Regex for SQL table name extraction
+regex = "1"
+
+# SHA256 hash (plugin download verification)
+sha2 = "0.10"
+
+# ZIP archive (plugin package install)
+zip = "4.6"
 
 # Android logging
 log = "0.4"
 android_logger = "0.14"
 
+# Plugin SDK (Mobile)
+bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
+
 [dev-dependencies]
 tempfile = "3"
+# 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
+wit-component = "=0.256.0"
 
 [profile.release]
-panic = "abort"
+# unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
+# 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
+panic = "unwind"
 codegen-units = 1
 lto = true
 opt-level = "s"

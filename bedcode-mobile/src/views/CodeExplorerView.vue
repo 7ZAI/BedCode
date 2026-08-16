@@ -6,6 +6,7 @@
       :default-show-sidebar="true"
       :title="configName"
       @close="handleBack"
+      @navigate-settings="handleNavigateSettings"
     >
       <template #header-left>
         <button class="back-btn" @click="handleBack">
@@ -73,6 +74,11 @@ const explorerStyle = computed(() => ({
 
 function handleBack() {
   router.back()
+}
+
+/** 未连接（base URL 缺失）→ 引导去连接设置页 */
+function handleNavigateSettings() {
+  router.push({ name: 'mobile-settings-connection' })
 }
 
 function onSettingsConfirm() {

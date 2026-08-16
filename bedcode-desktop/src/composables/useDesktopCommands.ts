@@ -105,13 +105,6 @@ export async function resizeSession(sessionId: string, cols: number, rows: numbe
 }
 
 /**
- * 获取会话的历史输出（用于回放）
- */
-export async function getSessionOutputHistory(sessionId: string): Promise<PtyOutputEvent[]> {
-  return await invoke('get_session_output_history', { sessionId })
-}
-
-/**
  * 发送输入到会话
  */
 export async function writeToSession(sessionId: string, data: string): Promise<void> {
@@ -256,6 +249,35 @@ export async function removePairedDevice(deviceId: string): Promise<void> {
   return await invoke('remove_paired_device', { id: deviceId })
 }
 
+// ==================== Connection History Commands ====================
+
+/**
+ * 获取设备连接历史
+ */
+export async function listConnectionHistory(deviceId: string): Promise<ConnectionHistoryEntry[]> {
+  return await invoke('list_connection_history', { deviceId })
+}
+
+/**
+ * 删除设备连接历史
+ */
+export async function deleteConnectionHistory(deviceId: string): Promise<void> {
+  return await invoke('delete_connection_history', { deviceId })
+}
+
+/**
+ * 设备连接历史条目（与后端 ConnectionHistory 序列化字段对应）
+ */
+export interface ConnectionHistoryEntry {
+  id: number
+  deviceId: string
+  authMethod: string
+  result: string
+  address: string | null
+  connectedAt: string
+  disconnectedAt: string | null
+}
+
 // ==================== QR Commands ====================
 
 /**
@@ -387,7 +409,6 @@ export async function getLocalIpAddresses(): Promise<string[]> {
 
 let unlistenDeviceConnected: UnlistenFn | null = null
 let unlistenDeviceDisconnected: UnlistenFn | null = null
-let unlistenPtyOutput: UnlistenFn | null = null
 
 /**
  * 监听设备连接事件
@@ -406,22 +427,11 @@ export async function onDeviceDisconnected(callback: (event: any) => void): Prom
 }
 
 /**
- * 监听 PTY 输出事件
- */
-export async function onPtyOutput(callback: (event: any) => void): Promise<() => void> {
-  unlistenPtyOutput = await listen('pty-output', (event) => {
-    callback(event.payload);
-  });
-  return unlistenPtyOutput;
-}
-
-/**
  * 清理所有事件监听
  */
 export function cleanupEventListeners() {
   unlistenDeviceConnected?.()
   unlistenDeviceDisconnected?.()
-  unlistenPtyOutput?.()
 }
 
 // ==================== Desktop Commands Composable ====================
@@ -446,7 +456,6 @@ export function useDesktopCommands() {
     deleteSession,
     restartSession,
     resizeSession,
-    getSessionOutputHistory,
     writeToSession,
     sendSpecialKey,
 
@@ -467,6 +476,10 @@ export function useDesktopCommands() {
     clearPairingCode,
     listPairedDevices,
     removePairedDevice,
+
+    // Connection History
+    listConnectionHistory,
+    deleteConnectionHistory,
 
     // QR
     generateQrCode,
@@ -496,7 +509,6 @@ export function useDesktopCommands() {
     // Events
     onDeviceConnected,
     onDeviceDisconnected,
-    onPtyOutput,
     cleanupEventListeners,
   }
 }

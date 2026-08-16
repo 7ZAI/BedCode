@@ -36,6 +36,10 @@ pub enum MobileEvent {
         index: u64,
         /// 合并消息的结束索引，None 表示单条事件
         end_index: Option<u64>,
+        /// 起始字节偏移（会话流坐标），供字节级游标续传（旧版服务端不发送）
+        start_offset: Option<u64>,
+        /// 结束字节偏移（会话流坐标）
+        end_offset: Option<u64>,
     },
 
     // === 认证事件 ===
@@ -124,6 +128,39 @@ pub enum MobileEvent {
         session_id: String,
         auto_approve: bool,
     },
+
+    // === 任务队列同步事件 ===
+    /// 会话任务队列变更
+    SyncTaskQueueChanged {
+        session_id: String,
+        /// 变更后的待执行任务数量
+        queue_count: i64,
+        /// 触发动作：add / remove / clear / dequeue / done / update / reorder / cancel
+        action: String,
+        /// 关联的队列项 ID（done 广播携带，供预设任务完成匹配）
+        task_id: Option<String>,
+        /// 队列项状态（done 广播为 "done"）
+        status: Option<String>,
+    },
+
+    // === 定时自动任务同步事件（v6，ADR 0003） ===
+    /// 定时自动任务变更
+    SyncTaskScheduledChanged {
+        job_id: String,
+        /// 变更后的状态：pending / creating / executed / failed / missed
+        status: String,
+        /// 触发动作：create / delete / trigger / missed / failed
+        action: String,
+    },
+
+    // === 文件服务同步事件（桌面 → 移动，内网文件传输插件规格阶段 2） ===
+    /// 桌面侧插件挂载点可用性变更
+    SyncFileServiceChanged {
+        plugin_id: String,
+        mount_path: String,
+        available: bool,
+        operations: Vec<bedcode_plugin_api_mobile::FileOperation>,
+    },
 }
 
 // ==================== Event Forwarding ====================
@@ -178,15 +215,34 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
         // 终端输出事件：直接传递 Base64 到前端，由前端解码
         // 避免在 Rust 层做 Base64 解码 + UTF-8 lossy 转换的双重开销
         // 前端用 atob() 解码为 Uint8Array 传给 xterm.write()，比 string 更高效且无损
-        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index } => {
+        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index, start_offset, end_offset } => {
             if let Err(e) = app.emit("ws_output", serde_json::json!({
                 "session_id": session_id,
                 "data_base64": data,
                 "is_waiting": is_waiting,
                 "index": global_index,
                 "end_index": end_index,
+                "start_offset": start_offset,
+                "end_offset": end_offset,
             })) {
                 tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
+            }
+
+            // 通知插件终端输出（只读通知，仅传递 session_id 避免大量数据拷贝）。
+            // 必须异步分发（不 await）：插件 WASM 回调串行执行，若在此 await，
+            // 输出转发循环被插件回调阻塞 → broadcast 通道积压溢出 → 静默丢帧 →
+            // 移动端游标连续性破坏（violation 风暴）
+            {
+                let pm = crate::state::get_plugin_manager();
+                // 用 error boundary 包装：插件 WASM 回调 panic 时记录日志而非静默吞掉
+                spawn_with_error_boundary("plugin_terminal_output_notify", async move {
+                    pm.dispatch_lifecycle_event(
+                        crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
+                            session_id,
+                            data: String::new(),
+                        }
+                    ).await;
+                });
             }
         }
 
@@ -284,6 +340,51 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
                 "session_id": session_id,
                 "auto_approve": auto_approve,
             }));
+        }
+
+        MobileEvent::SyncTaskQueueChanged { session_id, queue_count, action, task_id, status } => {
+            tracing::info!(
+                "[EventForwarder] SyncTaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}",
+                session_id, queue_count, action, task_id, status
+            );
+            let _ = app.emit("ws_sync_task_queue_changed", serde_json::json!({
+                "session_id": session_id,
+                "queue_count": queue_count,
+                "action": action,
+                "task_id": task_id,
+                "status": status,
+            }));
+        }
+
+        MobileEvent::SyncTaskScheduledChanged { job_id, status, action } => {
+            tracing::info!(
+                "[EventForwarder] SyncTaskScheduledChanged: job_id={}, status={}, action={}",
+                job_id, status, action
+            );
+            let _ = app.emit("ws_sync_task_scheduled_changed", serde_json::json!({
+                "job_id": job_id,
+                "status": status,
+                "action": action,
+            }));
+        }
+
+        // 文件服务同步事件：前端事件 + 插件消息总线双通道
+        // （插件阶段 4 经 bus topic `sync:file_service` 订阅对端挂载可用性）
+        MobileEvent::SyncFileServiceChanged { plugin_id, mount_path, available, operations } => {
+            tracing::info!(
+                "[EventForwarder] SyncFileServiceChanged: plugin_id={}, mount={}, available={}",
+                plugin_id, mount_path, available
+            );
+            let payload = serde_json::json!({
+                "plugin_id": plugin_id,
+                "mount_path": mount_path,
+                "available": available,
+                "operations": operations,
+            });
+            let _ = app.emit("ws_sync_file_service_changed", payload.clone());
+            crate::state::get_plugin_manager()
+                .message_bus()
+                .publish("sync:file_service", "host", payload);
         }
 
         // 其他事件不转发

@@ -91,7 +91,7 @@ function openEditDialog(task: PresetTask) {
 }
 
 /** TaskEditDialog 保存回调 */
-async function handleEditSave(data: PresetTask | { title: string; content: string }) {
+async function handleEditSave(data: PresetTask | { content: string }) {
   if ('id' in data) {
     await updateTask(data)
   } else {
@@ -134,7 +134,6 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
             >
               <div class="task-item-main">
                 <div class="task-info" @click="toggleExpand(task.id)">
-                  <span class="task-title">{{ task.title }}</span>
                   <span class="task-content-preview">{{ task.content }}</span>
                 </div>
                 <!-- 发送按钮 -->
@@ -197,8 +196,12 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 }
 
 .modal-content {
+  --edit-btn: clamp(1.5rem, 1.75rem, 2rem);
+  --row-px: clamp(0.5rem, 0.75rem, 1rem);
+  --row-py: clamp(0.375rem, 0.625rem, 0.75rem);
+
   width: 100%;
-  max-width: 380px;
+  max-width: clamp(280px, 380px, 440px);
   max-height: 75vh;
   display: flex;
   flex-direction: column;
@@ -211,13 +214,13 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 14px 16px;
+  padding: clamp(0.625rem, 0.875rem, 1rem) clamp(0.75rem, 1rem, 1.25rem);
   border-bottom: 1px solid var(--mobile-border);
 }
 
 .modal-header h3 {
   margin: 0;
-  font-size: 16px;
+  font-size: clamp(0.875rem, 1rem, 1.125rem);
   color: var(--mobile-text-primary);
 }
 
@@ -228,8 +231,8 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 }
 
 .add-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 8px;
   border: none;
   background: var(--mobile-accent-muted);
@@ -250,7 +253,7 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   background: none;
   border: none;
   color: var(--mobile-text-muted);
-  font-size: 24px;
+  font-size: clamp(1.25rem, 1.5rem, 1.75rem);
   cursor: pointer;
   padding: 0 4px;
   line-height: 1;
@@ -263,24 +266,24 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 .modal-body {
   flex: 1;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: clamp(0.5rem, 0.75rem, 1rem) clamp(0.75rem, 1rem, 1.25rem);
 }
 
 .empty-hint {
   text-align: center;
   color: var(--mobile-text-muted);
   padding: 24px 0;
-  font-size: 14px;
+  font-size: clamp(0.75rem, 0.875rem, 1rem);
 }
 
 .empty-add-btn {
   margin-top: 12px;
-  padding: 8px 20px;
+  padding: clamp(0.375rem, 0.5rem, 0.625rem) clamp(0.75rem, 1.25rem, 1.5rem);
   border-radius: 8px;
   border: 1px dashed var(--mobile-accent);
   background: transparent;
   color: var(--mobile-accent);
-  font-size: 14px;
+  font-size: clamp(0.75rem, 0.875rem, 1rem);
   cursor: pointer;
   transition: background 0.15s;
 }
@@ -309,7 +312,7 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 10px 12px;
+  padding: var(--row-py) var(--row-px);
 }
 
 .task-info {
@@ -326,25 +329,17 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   opacity: 0.8;
 }
 
-.task-title {
-  font-size: 14px;
+.task-content-preview {
+  font-size: clamp(0.8125rem, 0.875rem, 1rem);
   color: var(--mobile-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.task-content-preview {
-  font-size: 12px;
-  color: var(--mobile-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .send-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 6px;
   border: none;
   background: var(--mobile-bg-secondary);
@@ -363,8 +358,8 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 }
 
 .exec-btn {
-  width: 32px;
-  height: 32px;
+  width: var(--mobile-touch-target-min);
+  height: var(--mobile-touch-target-min);
   border-radius: 6px;
   border: none;
   background: var(--mobile-accent-muted);
@@ -383,8 +378,8 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 }
 
 .edit-btn {
-  width: 28px;
-  height: 28px;
+  width: var(--edit-btn);
+  height: var(--edit-btn);
   border-radius: 6px;
   border: none;
   background: transparent;
@@ -403,7 +398,7 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
 }
 
 .task-content-full {
-  padding: 0 12px 10px;
+  padding: 0 var(--row-px) clamp(0.375rem, 0.625rem, 0.75rem);
 }
 
 .task-content-text {
@@ -412,7 +407,7 @@ async function handleEditSave(data: PresetTask | { title: string; content: strin
   border-radius: 6px;
   background: var(--mobile-bg-secondary);
   color: var(--mobile-text-secondary);
-  font-size: 12px;
+  font-size: clamp(0.6875rem, 0.75rem, 0.875rem);
   font-family: 'Courier New', Courier, monospace;
   white-space: pre-wrap;
   word-break: break-all;

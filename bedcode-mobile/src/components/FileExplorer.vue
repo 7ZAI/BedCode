@@ -55,6 +55,7 @@
           resize-side="right"
           @file-select="handleFileSelect"
           @long-press="handleLongPress"
+          @navigate-settings="$emit('navigate-settings')"
         />
       </transition>
 
@@ -79,6 +80,12 @@
         <!-- 错误 -->
         <div v-else-if="fileError" class="code-state">
           <p class="text-red-400 text-sm">{{ fileError }}</p>
+          <!-- 未设置 base URL（未连接）时重试无意义，引导去连接设置 -->
+          <template v-if="isBaseUrlError">
+            <button class="h-11 px-4 mt-3 rounded-lg text-xs font-medium transition-colors active:opacity-80" style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)" @click="$emit('navigate-settings')">
+              {{ t('mobile.codeViewer.goToSettings') }}
+            </button>
+          </template>
           <button class="text-xs text-[var(--mobile-accent)] mt-2" @click="retryLoadFile">{{ t('mobile.codeViewer.retry') }}</button>
         </div>
 
@@ -158,6 +165,8 @@ const emit = defineEmits<{
   fileSelect: [name: string, path: string, isDiff: boolean]
   longPress: [name: string, path: string]
   close: []
+  /** 未连接（base URL 缺失）时由宿主引导去连接设置 */
+  'navigate-settings': []
 }>()
 
 const { t } = useI18n()
@@ -209,6 +218,11 @@ const selectedFilePath = ref('')
 const fileContent = ref('')
 const fileLoading = ref(false)
 const fileError = ref<string | null>(null)
+
+/** 是否因未连接（base URL 缺失）导致加载失败：重试无意义，引导去连接设置 */
+const isBaseUrlError = computed(() =>
+  /no base url|not connected/i.test(fileError.value || '')
+)
 
 const displayLang = computed(() => getLangByFilename(selectedFile.value))
 
@@ -313,6 +327,11 @@ watch(
 </script>
 
 <style scoped>
+/* 文件浏览器可嵌入会话/任务面板，以自身宽度为容器进行流式缩放 */
+:root {
+  container-type: inline-size;
+}
+
 /* ==================== Header ==================== */
 
 .explorer-header {
@@ -355,7 +374,7 @@ watch(
 }
 
 .header-filename {
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 600;
   color: var(--mobile-text-primary);
   white-space: nowrap;
@@ -364,7 +383,7 @@ watch(
 }
 
 .header-lang-badge {
-  font-size: 0.625rem;
+  font-size: var(--font-size-sm);
   font-weight: 600;
   color: var(--mobile-accent);
   background: var(--mobile-accent-muted);
@@ -382,21 +401,22 @@ watch(
 }
 
 .header-line-count {
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-muted);
 }
 
 /* ==================== Sidebar Layout ==================== */
 
 .explorer-sidebar {
-  width: 35%;
+  /* 兜底宽度（内联 sidebarStyle 优先）：与 FileSidebar 默认 clamp 自适应保持一致 */
+  width: clamp(11rem, 45vw, 20rem);
   border-right: 1px solid var(--mobile-border);
   border-left: none;
   flex-shrink: 0;
 }
 
 .explorer-sidebar.landscape-sidebar {
-  width: 25%;
+  width: clamp(11rem, 30vw, 18rem);
 }
 
 /* ==================== Code Area ==================== */
@@ -439,6 +459,7 @@ watch(
   justify-content: center;
   height: 100%;
   padding: 2rem;
+  text-align: center;
 }
 
 /* ==================== VS Code 风格代码区 ==================== */
@@ -609,7 +630,7 @@ watch(
 
 .code-md-preview {
   padding: 1rem;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   line-height: 1.7;
   color: var(--mobile-text-primary);
   overflow-y: auto;
@@ -618,7 +639,7 @@ watch(
 }
 
 .code-md-preview :deep(h1) {
-  font-size: 1.375rem;
+  font-size: clamp(1.25rem, 1.375rem + (100cqw - 360px) / 840 * 2, 1.5rem);
   font-weight: 700;
   color: var(--mobile-text-primary);
   margin: 0 0 0.75rem;
@@ -627,7 +648,7 @@ watch(
 }
 
 .code-md-preview :deep(h2) {
-  font-size: 1.125rem;
+  font-size: var(--font-size-xl);
   font-weight: 600;
   color: var(--mobile-accent);
   margin: 1.25rem 0 0.5rem;
@@ -636,7 +657,7 @@ watch(
 }
 
 .code-md-preview :deep(h3) {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 1rem 0 0.375rem;
@@ -651,7 +672,7 @@ watch(
   width: 100%;
   border-collapse: collapse;
   margin: 0.5rem 0 1rem;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   display: block;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -663,7 +684,7 @@ watch(
   background: var(--mobile-bg-elevated);
   color: var(--mobile-text-primary);
   font-weight: 600;
-  font-size: 0.75rem;
+  font-size: var(--font-size-sm);
   text-transform: uppercase;
   letter-spacing: 0.05em;
   border-bottom: 2px solid var(--mobile-border);
@@ -682,7 +703,7 @@ watch(
 
 .code-md-preview :deep(code) {
   font-family: 'Fira Code', 'JetBrains Mono', 'Cascadia Code', 'Consolas', monospace;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   padding: 0.125rem 0.375rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
@@ -705,7 +726,7 @@ watch(
   background: none;
   border: none;
   border-radius: 0;
-  font-size: 0.8125rem;
+  font-size: var(--font-size-sm);
   color: var(--mobile-text-primary);
 }
 

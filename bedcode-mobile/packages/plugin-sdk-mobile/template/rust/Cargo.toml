@@ -1,0 +1,18 @@
+[package]
+name = "{{CRATE}}"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bedcode-plugin-api-mobile = {{SDK_RUST}}
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[features]
+default = []
+# WASM 插件必开：启用 WasmPlugin trait / wasm_entry! 宏 / WasmHost 绑定
+wasm = ["bedcode-plugin-api-mobile/wasm"]
+
+[lib]
+crate-type = ["cdylib", "rlib"]

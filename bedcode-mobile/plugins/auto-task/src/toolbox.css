@@ -1,0 +1,612 @@
+/**
+ * Auto Task 工具箱页样式（插件侧）
+ *
+ * 经 index.ts 以 `?inline` 导入并注入 document.head（宿主不加载插件 dist/style.css）。
+ * 类名统一 .att- 前缀，避免与宿主全局样式冲突；设计变量复用宿主 --mobile-* token。
+ * 覆盖：页签容器 / 任务记录列表 / 定时任务列表与创建表单 / 下拉刷新指示器 / 配置选择弹层。
+ */
+
+/* ==================== 页签容器 ==================== */
+
+.att-root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--mobile-bg-primary);
+}
+
+.att-tabs {
+  display: flex;
+  flex-shrink: 0;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-primary);
+}
+
+.att-tab {
+  position: relative;
+  flex: 1;
+  padding: 0.875rem 0;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--mobile-text-secondary);
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: color 0.15s ease;
+}
+
+/* 激活页签：品牌色 + 底部指示条 */
+.att-tab-active {
+  color: var(--mobile-accent);
+}
+
+.att-tab-active::after {
+  content: '';
+  position: absolute;
+  left: 25%;
+  right: 25%;
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--mobile-accent);
+}
+
+.att-tab-panel {
+  flex: 1;
+  min-height: 0;
+}
+
+.att-tab-body {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 滚动容器：全高滚动 + 禁用下拉回弹（自绘下拉刷新接管手势） */
+.att-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  overscroll-behavior: none;
+}
+
+/* ==================== 下拉刷新 ==================== */
+/* 指示器：贴滚动容器顶部，高度随下拉位移露出（内容整体下移，与原生下拉同语义） */
+
+.att-pull {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  color: var(--mobile-text-secondary);
+}
+
+/* 回弹过渡：仅在不跟手（手指抬起后 / 刷新结束）时启用 */
+.att-pull-anim {
+  transition: height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.att-pull-arrow {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+/* 达阈值：箭头翻转提示「释放立即刷新」 */
+.att-pull-arrow--ready {
+  transform: rotate(180deg);
+  color: var(--mobile-accent);
+}
+
+.att-pull-text {
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+}
+
+/* 刷新中小号 spinner */
+.att-spinner {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  border-radius: 9999px;
+  border: 2px solid var(--mobile-border-hover);
+  border-top-color: var(--mobile-accent);
+  animation: att-spin 0.8s linear infinite;
+}
+
+@keyframes att-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==================== 内容布局与状态 ==================== */
+
+/* 滚动容器内层：空态/加载态在可视区内垂直居中，列表态顶部对齐 */
+.att-scroll-inner {
+  padding: 0 1rem 1.5rem;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 空态 / 加载态 / 未连接 */
+.att-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 3rem 1rem;
+  color: var(--mobile-text-muted);
+  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
+  text-align: center;
+}
+
+.att-state-icon {
+  width: 2.5rem;
+  height: 2.5rem;
+  color: var(--mobile-text-disabled);
+}
+
+/* ==================== 状态筛选 chips ==================== */
+
+.att-chips {
+  display: flex;
+  gap: 0.5rem;
+  overflow-x: auto;
+  padding: 0.75rem 0;
+  flex-shrink: 0;
+}
+
+.att-chip {
+  flex-shrink: 0;
+  padding: 0.375rem 0.875rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  color: var(--mobile-text-secondary);
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  cursor: pointer;
+  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-chip:active {
+  opacity: 0.8;
+}
+
+/* 选中：accent 10% tint + 品牌色文字（与徽标同款扁平风格） */
+.att-chip-active {
+  color: var(--mobile-accent);
+  background: color-mix(in srgb, var(--mobile-accent) 10%, transparent);
+  border-color: color-mix(in srgb, var(--mobile-accent) 30%, transparent);
+}
+
+/* ==================== 列表行 ==================== */
+
+.att-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  padding-top: 0.375rem;
+}
+
+.att-row {
+  padding: 0.75rem 0.875rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+}
+
+.att-row-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.att-row-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  line-height: 1.4;
+  /* 长描述截断：最多 3 行 */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-all;
+}
+
+.att-badge {
+  flex-shrink: 0;
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  font-size: 0.6875rem;
+  font-weight: 500;
+}
+
+.att-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.att-meta-item {
+  font-size: 0.75rem;
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 定时任务：prompts 预览 chips */
+.att-row-prompts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+  margin-top: 0.5rem;
+}
+
+.att-prompt-chip {
+  max-width: 100%;
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--mobile-text-secondary);
+  background: var(--mobile-bg-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 定时任务：失败错误信息 */
+.att-row-error {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--mobile-error);
+  word-break: break-all;
+}
+
+/* ==================== 加载更多 ==================== */
+
+.att-footer {
+  display: flex;
+  justify-content: center;
+  padding: 1rem 0 0.25rem;
+}
+
+.att-load-more {
+  padding: 0.5rem 1.25rem;
+  border-radius: 9999px;
+  font-size: 0.8125rem;
+  color: var(--mobile-accent);
+  background: color-mix(in srgb, var(--mobile-accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mobile-accent) 25%, transparent);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-load-more:disabled {
+  opacity: 0.6;
+}
+
+.att-load-more:active {
+  opacity: 0.8;
+}
+
+.att-no-more {
+  font-size: 0.75rem;
+  color: var(--mobile-text-disabled);
+}
+
+/* ==================== 定时任务：创建入口与表单 ==================== */
+
+.att-create-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border-radius: 0.75rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--mobile-accent);
+  background: color-mix(in srgb, var(--mobile-accent) 10%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--mobile-accent) 35%, transparent);
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-create-btn:active {
+  opacity: 0.8;
+}
+
+.att-create-icon {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.att-form {
+  margin-top: 0.75rem;
+  padding: 0.875rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  /* 键盘避让：translateY 由组件按键盘高度计算 */
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.att-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.75rem;
+}
+
+.att-form-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+  margin: 0;
+}
+
+.att-form-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0.25rem;
+  color: var(--mobile-text-muted);
+  background: none;
+  border: none;
+  border-radius: 0.375rem;
+  cursor: pointer;
+}
+
+.att-form-close:active {
+  color: var(--mobile-text-primary);
+}
+
+.att-field-label {
+  display: block;
+  margin: 0.75rem 0 0.375rem;
+  font-size: 0.75rem;
+  color: var(--mobile-text-secondary);
+}
+
+/* 自绘输入框（外观 100% token 定制） */
+.att-input {
+  width: 100%;
+  height: 2.75rem;
+  padding: 0 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  color: var(--mobile-text-primary);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.att-input::placeholder {
+  color: var(--mobile-text-disabled);
+}
+
+.att-input:focus {
+  border-color: var(--mobile-accent);
+}
+
+/* 会话配置选择按钮（自绘，点击弹层选择） */
+.att-picker-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  height: 2.75rem;
+  padding: 0 0.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  text-align: left;
+  color: var(--mobile-text-primary);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-picker-btn:active {
+  border-color: var(--mobile-accent);
+}
+
+.att-picker-btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-picker-empty {
+  color: var(--mobile-text-disabled);
+}
+
+/* UTC 预览提示 */
+.att-utc-hint {
+  margin-top: 0.375rem;
+  font-size: 0.6875rem;
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* prompts 行：输入框 + 删除按钮 */
+.att-prompt-row {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.att-prompt-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.att-prompt-remove {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 2.75rem;
+  border-radius: 0.625rem;
+  color: var(--mobile-error);
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mobile-error) 20%, transparent);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-prompt-remove:active {
+  opacity: 0.8;
+}
+
+.att-add-prompt {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.375rem 0;
+  font-size: 0.8125rem;
+  color: var(--mobile-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-add-prompt:active {
+  opacity: 0.8;
+}
+
+.att-form-actions {
+  display: flex;
+  gap: 0.625rem;
+  margin-top: 1rem;
+}
+
+.att-form-cancel,
+.att-form-submit {
+  flex: 1;
+  height: 2.75rem;
+  border-radius: 0.625rem;
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-form-cancel {
+  color: var(--mobile-text-secondary);
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+}
+
+.att-form-submit {
+  color: var(--mobile-text-on-accent);
+  background: var(--mobile-accent);
+  border: 1px solid var(--mobile-accent);
+}
+
+.att-form-cancel:disabled,
+.att-form-submit:disabled {
+  opacity: 0.6;
+}
+
+/* ==================== 会话配置选择弹层 ==================== */
+
+.att-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--mobile-overlay-heavy);
+}
+
+.att-picker-sheet {
+  width: 100%;
+  max-width: 30rem;
+  max-height: 70vh;
+  display: flex;
+  flex-direction: column;
+  padding: 1rem 1.25rem 1.5rem;
+  border-radius: 1.25rem 1.25rem 0 0;
+  background: var(--mobile-bg-secondary);
+  border-top: 1px solid var(--mobile-border);
+}
+
+.att-picker-title {
+  margin: 0 0 0.75rem;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+}
+
+.att-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.att-picker-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+  padding: 0.75rem 0.875rem;
+  border-radius: 0.625rem;
+  text-align: left;
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  cursor: pointer;
+  transition: border-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.att-picker-item:active {
+  border-color: var(--mobile-accent);
+}
+
+.att-picker-item-active {
+  border-color: var(--mobile-accent);
+}
+
+.att-picker-item-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+}
+
+.att-picker-item-sub {
+  font-size: 0.6875rem;
+  color: var(--mobile-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.att-picker-empty-state {
+  padding: 2rem 0;
+  text-align: center;
+  font-size: 0.8125rem;
+  color: var(--mobile-text-muted);
+}

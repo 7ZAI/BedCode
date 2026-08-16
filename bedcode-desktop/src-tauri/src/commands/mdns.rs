@@ -7,6 +7,7 @@ use tokio::sync::RwLock;
 use tauri::{AppHandle, Manager};
 
 use crate::mdns::advertiser::MdnsAdvertiser;
+use crate::system::constants::mdns;
 use crate::Result;
 
 /// 获取全局 MdnsAdvertiser 实例
@@ -24,9 +25,9 @@ pub async fn mdns_start_advertise(
     tracing::info!("[mdns_start_advertise] Starting advertise: {} on port {}", device_name, port);
     let advertiser = get_advertiser(&app_handle);
     let mut txt_records = std::collections::HashMap::new();
-    txt_records.insert("platform".to_string(), "desktop".to_string());
-    txt_records.insert("device_name".to_string(), device_name.clone());
-    txt_records.insert("version".to_string(), env!("CARGO_PKG_VERSION").to_string());
+    txt_records.insert(mdns::TXT_KEY_PLATFORM.to_string(), mdns::TXT_VALUE_PLATFORM.to_string());
+    txt_records.insert(mdns::TXT_KEY_DEVICE_NAME.to_string(), device_name.clone());
+    txt_records.insert(mdns::TXT_KEY_VERSION.to_string(), env!("CARGO_PKG_VERSION").to_string());
 
     let config = crate::mdns::types::AdvertiseConfig {
         service_name: device_name,

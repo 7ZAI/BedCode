@@ -38,7 +38,7 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // 验证组件接收�?visible prop
+    // 验证组件接收�?visible prop
     expect(wrapper.props('visible')).toBe(true)
   })
 
@@ -126,7 +126,7 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // 检�?Spinner 组件是否存在
+    // 检�?Spinner 组件是否存在
     const spinnerComponent = wrapper.findComponent({ name: 'Spinner' })
     expect(spinnerComponent.exists()).toBe(true)
   })
@@ -165,10 +165,10 @@ describe('SplashLoading Component', () => {
       attachTo: document.body
     })
 
-    // �?body 中查找渲染的内容
+    // �?body 中查找渲染的内容
     const overlay = document.querySelector('.fixed.inset-0')
     expect(overlay).toBeTruthy()
-    expect(overlay?.classList.contains('z-[100]')).toBe(true)
+    expect(overlay?.classList.contains('z-50')).toBe(true)
   })
 
   it('should have bg-dark-900 background class', () => {

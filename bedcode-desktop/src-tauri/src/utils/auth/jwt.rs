@@ -6,6 +6,8 @@ use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, 
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::system::constants::auth::JWT_ISSUER;
+
 /// 默认 JWT 过期时间（7 天）
 pub const DEFAULT_TOKEN_EXPIRY_SECS: u64 = 7 * 24 * 60 * 60;
 
@@ -49,7 +51,7 @@ impl JwtClaims {
 
         Self {
             sub: subject,
-            iss: "BedCode".to_string(),
+            iss: JWT_ISSUER.to_string(),
             iat: now,
             exp: now + expires_in_secs,
             device_name,
@@ -245,9 +247,13 @@ mod tests {
             .generate_token("device-123".to_string(), None, None)
             .unwrap();
 
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        // exp 以秒级截断（exp = 签发秒 + 1），1500ms 睡眠可能未跨秒导致 flaky；
+        // 睡 2.1s 确保越过 exp 边界（`exp < now` 需 now ≥ exp + 1s）
+        std::thread::sleep(std::time::Duration::from_millis(2100));
 
-        let result = service.verify_token(&token);
+        // 用严格过期检查 API：verify_token 走 jsonwebtoken 默认 Validation（leeway=60s），
+        // 过期 60 秒内的 token 仍会通过，无法表达本测试的意图
+        let result = service.verify_token_with_expiry(&token);
         assert!(matches!(result, Err(JwtError::TokenExpired)));
     }
 }

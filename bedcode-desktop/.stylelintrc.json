@@ -1,0 +1,70 @@
+{
+  "extends": [
+    "stylelint-config-standard",
+    "stylelint-config-recommended-vue"
+  ],
+  "customSyntax": "postcss-html",
+  "overrides": [
+    {
+      "files": ["**/*.vue"],
+      "customSyntax": "postcss-html"
+    }
+  ],
+  "rules": {
+    "at-rule-no-unknown": [
+      true,
+      {
+        "ignoreAtRules": [
+          "tailwind",
+          "apply",
+          "layer",
+          "property",
+          "screen",
+          "variants",
+          "responsive"
+        ]
+      }
+    ],
+
+    "color-no-hex": [true, { "severity": "warning" }],
+    "color-named": [true, { "severity": "warning" }],
+
+    "color-function-alias-notation": [null, { "severity": "warning" }],
+    "color-function-notation": [null, { "severity": "warning" }],
+    "declaration-property-value-allowed-list": [{}, { "severity": "warning" }],
+
+    "custom-property-pattern": [
+      "^(bg|text|border|color|radius|shadow|font-size|leading|spacing|mobile|ui|toggle)-[a-z0-9-]+$",
+      {
+        "severity": "warning",
+        "message": "Token 命名必须遵循规范：^(bg|text|border|color|radius|shadow|font-size|leading|spacing|mobile|ui|toggle)-[a-z0-9-]+$"
+      }
+    ],
+
+    "selector-class-pattern": null,
+    "no-descending-specificity": null,
+
+    "comment-empty-line-before": null,
+    "declaration-empty-line-before": null,
+    "rule-empty-line-before": null,
+
+    "no-duplicate-selectors": true,
+
+    "media-feature-range-notation": "prefix",
+
+    "alpha-value-notation": "number",
+    "font-weight-notation": "numeric",
+    "hue-degree-notation": "number",
+    "length-zero-no-unit": true,
+    "shorthand-property-no-redundant-values": true
+  },
+  "ignoreFiles": [
+    "node_modules/**",
+    "dist/**",
+    "src-tauri/**",
+    "**/*.d.ts",
+    "**/auto-imports.d.ts",
+    "src/style.css",
+    "src/**/*.css"
+  ]
+}

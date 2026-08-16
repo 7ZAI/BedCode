@@ -67,8 +67,8 @@ describe('Toggle Component', () => {
         },
       })
 
-      const toggle = wrapper.find('.w-10.h-6')
-      expect(toggle.classes()).toContain('bg-primary-600')
+      const toggle = wrapper.find('.w-10.h-5')
+      expect(toggle.classes()).toContain('bg-[var(--color-primary)]')
     })
 
     it('should apply inactive background class when unchecked', () => {
@@ -78,8 +78,8 @@ describe('Toggle Component', () => {
         },
       })
 
-      const toggle = wrapper.find('.w-10.h-6')
-      expect(toggle.classes()).toContain('bg-dark-600')
+      const toggle = wrapper.find('.w-10.h-5')
+      expect(toggle.classes()).toContain('bg-[var(--bg-page)]')
     })
 
     it('should position toggle correctly when checked', () => {
@@ -89,8 +89,8 @@ describe('Toggle Component', () => {
         },
       })
 
-      const knob = wrapper.find('.absolute.top-1')
-      expect(knob.classes()).toContain('translate-x-5')
+      const knob = wrapper.find('div.absolute')
+      expect(knob.classes()).toContain('left-[22px]')
     })
 
     it('should position toggle correctly when unchecked', () => {
@@ -100,8 +100,8 @@ describe('Toggle Component', () => {
         },
       })
 
-      const knob = wrapper.find('.absolute.top-1')
-      expect(knob.classes()).toContain('translate-x-0')
+      const knob = wrapper.find('div.absolute')
+      expect(knob.classes()).toContain('left-[3px]')
     })
   })
 
@@ -137,7 +137,7 @@ describe('Toggle Component', () => {
         },
       })
 
-      const toggle = wrapper.find('.w-10.h-6')
+      const toggle = wrapper.find('.w-10.h-5')
       expect(toggle.classes()).toContain('opacity-50')
       expect(toggle.classes()).toContain('cursor-not-allowed')
     })

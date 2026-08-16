@@ -21,6 +21,9 @@ export default {
       retry: '重试',
       clear: '清除',
       copy: '复制',
+      loading: '加载中...',
+      decrease: '减少',
+      increase: '增加',
     },
     status: {
       connected: '已连接',

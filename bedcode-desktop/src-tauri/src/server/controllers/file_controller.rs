@@ -10,12 +10,14 @@ use crate::system::app_context::AppContext;
 use crate::server::dtos::ApiResponse;
 use crate::server::dtos::file_dto::*;
 use crate::process::create_command;
+use crate::system::constants::file::{FILE_TREE_MAX_DEPTH, FILE_CONTENT_MAX_SIZE_BYTES, FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS};
 use std::path::PathBuf;
 use std::collections::HashSet;
 
-const MAX_DEPTH: usize = 20;
-/// 文件内容读取上限 2MB，防止传输过大文件
-const MAX_FILE_SIZE: u64 = 2 * 1024 * 1024;
+/// 文件树最大递归深度
+const MAX_DEPTH: usize = FILE_TREE_MAX_DEPTH;
+/// 文件内容读取上限，防止传输过大文件
+const MAX_FILE_SIZE: u64 = FILE_CONTENT_MAX_SIZE_BYTES;
 
 /// 解析 working_dir：id 可以是 session_id 或 config_id
 ///
@@ -82,6 +84,110 @@ pub async fn get_file_tree(body: web::Json<FileTreeRequest>) -> HttpResponse {
     }
 }
 
+/// GET /api/file-tree-children
+///
+/// 只扫描指定目录的一层子节点，不递归。
+/// 文件夹节点的 children 为 None（表示未加载，非空文件夹）。
+/// 响应带 Cache-Control: private, max-age=30，支持 HTTP 缓存。
+pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) -> HttpResponse {
+    let ctx = AppContext::global();
+
+    let working_dir = match resolve_working_dir(&query.session_id, ctx).await {
+        Ok(dir) => dir,
+        Err(e) => {
+            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
+        }
+    };
+
+    // 解析 dir_path：空/None/"." 表示根目录
+    let dir_path_str = query.dir_path.as_deref().unwrap_or("").trim();
+    let target_dir = if dir_path_str.is_empty() || dir_path_str == "." {
+        PathBuf::from(&working_dir)
+    } else {
+        let relative = PathBuf::from(dir_path_str);
+        if relative.is_absolute() {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                400,
+                "dir_path must be relative to working directory",
+            ));
+        }
+        PathBuf::from(&working_dir).join(&relative)
+    };
+
+    // 安全检查：目标目录必须在 working_dir 下
+    let canonical_working = match PathBuf::from(&working_dir).canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Failed to resolve working dir: {}", e),
+            ));
+        }
+    };
+
+    if !target_dir.exists() || !target_dir.is_dir() {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            404,
+            &format!("Directory not found: {}", dir_path_str),
+        ));
+    }
+
+    let canonical_target = match target_dir.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                500,
+                &format!("Failed to resolve dir path: {}", e),
+            ));
+        }
+    };
+
+    if !canonical_target.starts_with(&canonical_working) {
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            403,
+            "Access denied: directory is outside working directory",
+        ));
+    }
+
+    // 解析 exclude_dirs（逗号分隔）
+    let exclude_dirs: Vec<String> = query
+        .exclude_dirs
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let filters = build_exclude_filters(&exclude_dirs);
+    let root = canonical_working;
+    let dir = canonical_target;
+    let filters_clone = filters.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        scan_dir_single_level(&root, &dir, &filters_clone)
+    })
+    .await;
+
+    match result {
+        Ok(Ok(children)) => {
+            let data = FileTreeChildrenResponseData { children };
+            HttpResponse::Ok()
+                .insert_header((
+                    "Cache-Control",
+                    format!("private, max-age={}", FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS),
+                ))
+                .json(ApiResponse::ok_with_data(data))
+        }
+        Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(
+            500,
+            &format!("File tree children scan failed: {}", e),
+        )),
+    }
+}
+
 #[derive(Clone)]
 enum ExcludeFilter {
     Name(String),
@@ -144,6 +250,70 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
                 node_type: "folder".to_string(),
                 path: Some(node_path),
                 children: Some(children),
+            });
+        } else if file_type.is_file() {
+            let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
+            // 统一使用 / 作为路径分隔符，避免 Windows 上 to_string_lossy 产生 \ 导致混合分隔符
+            let normalized_relative = relative.replace('\\', "/");
+            let node_path = if normalized_relative.is_empty() {
+                file_name.clone()
+            } else {
+                format!("{}/{}", normalized_relative, file_name)
+            };
+            files.push(FileTreeNode {
+                name: file_name,
+                node_type: "file".to_string(),
+                path: Some(node_path),
+                children: None,
+            });
+        }
+    }
+
+    folders.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    files.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let mut entries = folders;
+    entries.extend(files);
+    Ok(entries)
+}
+
+/// 扫描目录的一层子节点（不递归）
+///
+/// 与 scan_dir 不同，此函数只读取 dir 的直系子项，
+/// 文件夹节点的 children 为 None（表示未加载）。
+fn scan_dir_single_level(
+    root: &PathBuf,
+    dir: &PathBuf,
+    filters: &[ExcludeFilter],
+) -> crate::Result<Vec<FileTreeNode>> {
+    let mut folders: Vec<FileTreeNode> = Vec::new();
+    let mut files: Vec<FileTreeNode> = Vec::new();
+
+    let read_dir = std::fs::read_dir(dir).map_err(|e| {
+        crate::AppError::Internal(format!("Failed to read dir {}: {}", dir.display(), e))
+    })?;
+
+    for entry in read_dir {
+        let entry = entry.map_err(|e| crate::AppError::Internal(format!("Failed to read entry: {}", e)))?;
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry.file_type().map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
+
+        if file_type.is_dir() {
+            let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
+            if should_exclude(&relative.replace('\\', "/"), &file_name, filters) {
+                continue;
+            }
+            // 统一使用 / 作为路径分隔符，避免 Windows 上 to_string_lossy 产生 \ 导致混合分隔符
+            let normalized_relative = relative.replace('\\', "/");
+            let node_path = if normalized_relative.is_empty() {
+                file_name.clone()
+            } else {
+                format!("{}/{}", normalized_relative, file_name)
+            };
+            folders.push(FileTreeNode {
+                name: file_name,
+                node_type: "folder".to_string(),
+                path: Some(node_path),
+                children: None, // 未加载，非空文件夹
             });
         } else if file_type.is_file() {
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();

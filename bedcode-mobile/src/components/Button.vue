@@ -3,7 +3,7 @@
     :type="type"
     :disabled="disabled || loading"
     :title="title"
-    class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-dark-900"
+    class="inline-flex items-center justify-center gap-2 font-medium rounded-lg transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2"
     :class="[variantClass, sizeClass, { 'opacity-50 cursor-not-allowed': disabled || loading }]"
     @click="$emit('click', $event)"
   >
@@ -52,15 +52,15 @@ defineEmits(['click'])
 const variantClass = computed(() => {
   switch (props.variant) {
     case 'primary':
-      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
+      return 'bg-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_80%,transparent)] text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
     case 'secondary':
-      return 'bg-[var(--mobile-bg-elevated)] hover:bg-[var(--mobile-bg-secondary)] text-[var(--mobile-text-secondary)] border border-[var(--mobile-border)] focus:ring-[var(--mobile-border)]'
+      return 'bg-[var(--mobile-bg-elevated)] hover:bg-[var(--mobile-bg-secondary)] text-[var(--mobile-text-secondary)] border border-[var(--mobile-border)] focus:ring-[var(--mobile-border)] active:opacity-80'
     case 'danger':
-      return 'bg-[var(--mobile-error)] hover:bg-[var(--mobile-error)]/80 text-white focus:ring-[var(--mobile-error)]'
+      return 'bg-[var(--mobile-error)] hover:bg-[color:color-mix(in_srgb,var(--mobile-error)_80%,transparent)] text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-error)]'
     case 'ghost':
-      return 'bg-transparent hover:bg-[var(--mobile-accent-muted)] text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] focus:ring-[var(--mobile-border)]'
+      return 'bg-transparent hover:bg-[var(--mobile-accent-muted)] text-[var(--mobile-text-secondary)] hover:text-[var(--mobile-accent)] focus:ring-[var(--mobile-border)] active:opacity-80'
     default:
-      return 'bg-[var(--mobile-accent)] hover:bg-[var(--mobile-accent)]/80 text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
+      return 'bg-[var(--mobile-accent)] hover:bg-[color:color-mix(in_srgb,var(--mobile-accent)_80%,transparent)] text-[var(--mobile-text-on-accent)] focus:ring-[var(--mobile-accent)]'
   }
 })
 

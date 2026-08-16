@@ -4,7 +4,13 @@
 
 /* ==================== Design Tokens ==================== */
 
-/* 浅色模式 */
+/*
+ * 色板机制：亮度（light/dark/system）由 :root.dark 切换；色板（warm/cool...）由
+ * :root[data-palette='xxx'] 切换（useTheme 设置）。默认色板 warm（暖调工作台）。
+ * 新增色板 = 加一组 [data-palette='xxx'] 变量覆盖 + 设置页选项，无需改其他代码。
+ */
+
+/* 浅色模式 · 默认色板 warm（暖调工作台） */
 :root {
   color-scheme: light;
 
@@ -27,94 +33,367 @@
   --keyboard-height: 0px;
   --keyboard-visible: 0;
 
-  /* 动态字体大小（由 useFontSize composable 通过 JS 动态更新） */
-  --font-size-xs: 10px;
-  --font-size-sm: 12px;
-  --font-size-base: 14px;
-  --font-size-lg: 16px;
-  --font-size-xl: 18px;
+  /* 界面文字缩放比例（由 useFontSize composable 动态更新，1 = "正常"档位，12px 基准） */
+  --ui-scale: 1;
+
+  /* 动态字体大小：各档以"正常"档位实际像素为基准，随 --ui-scale 等比缩放 */
+  --font-size-xs: calc(9px * var(--ui-scale));
+  --font-size-sm: calc(10px * var(--ui-scale));
+  --font-size-base: calc(12px * var(--ui-scale));
+  --font-size-lg: calc(14px * var(--ui-scale));
+  --font-size-xl: calc(16px * var(--ui-scale));
 
   /* Backgrounds */
-  --bg-page: #E8E9EE;
-  --bg-sidebar: #F4F5F8;
-  --bg-card: #FFFFFF;
-  --bg-hover: #F3F4F6;
-  --bg-input: #FFFFFF;
+  --bg-page: #F5F4F0;
+  --bg-sidebar: #EFEDE7;
+  --bg-card: #FDFCFA;
+  --bg-hover: #E7E4DC;
+  --bg-input: #FDFCFA;
 
   /* Text */
-  --text-primary: #111827;
-  --text-secondary: #6B7280;
-  --text-tertiary: #9CA3AF;
+  --text-primary: #26231B;
+  --text-secondary: #7C7565;
+  --text-tertiary: #ABA492;
 
   /* Border */
-  --border: #E5E7EB;
-  --border-input: #94A3B8;
+  --border: #E4E1D8;
+  --border-strong: #D6D2C4;
+  --border-input: #D6D2C4;
 
-  /* Brand Colors */
-  --color-primary: #3B82F6;
-  --color-primary-hover: #2563EB;
-  --color-primary-light: #EFF6FF;
+  /* Brand Colors（强调色只用于主按钮/选中态/链接） */
+  --color-primary: #1D1A14;
+  --color-primary-hover: #0F0D09;
+  --color-primary-light: #EFEDE5;
+  --color-primary-contrast: #FDFCFA;
   --color-success: #22C55E;
-  --color-success-light: #DCFCE7;
+  --color-success-light: rgba(34, 197, 94, 0.14);
   --color-warning: #F59E0B;
-  --color-warning-light: #FEF3C7;
+  --color-warning-light: rgba(245, 158, 11, 0.16);
   --color-danger: #EF4444;
-  --color-danger-light: #FEE2E2;
+  --color-danger-light: rgba(239, 68, 68, 0.12);
 
   /* Radius */
-  --radius-card: 14px;
-  --radius-button: 10px;
-  --radius-input: 10px;
-  --radius-tag: 999px;
-  --radius-nav: 10px;
+  --radius-card: 10px;
+  --radius-button: 8px;
+  --radius-input: 8px;
+  --radius-tag: 6px;
+  --radius-nav: 8px;
 
-  /* Shadow */
-  --shadow-card: 0 4px 20px rgba(15, 23, 42, 0.06);
-  --shadow-card-hover: 0 8px 30px rgba(15, 23, 42, 0.10);
-  --shadow-input-focus: 0 0 0 3px rgba(59, 130, 246, 0.1);
+  /* Shadow（卡片无阴影，最多 hover 微阴影） */
+  --shadow-card: 0 1px 2px rgba(38, 35, 27, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(38, 35, 27, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(29, 26, 20, 0.08);
 
   /* Layout */
   --sidebar-width: 240px;
-  --header-height: 56px;
-  --page-padding-x: 32px;
+  --header-height: 48px;
+  --page-padding-x: 24px;
   --page-padding-y: 24px;
 
   /* Typography */
-  --font-size-title: 18px;
-  --font-size-card-title: 16px;
-  --font-size-body: 14px;
-  --font-size-label: 12px;
-  --font-size-tag: 12px;
+  --font-size-title: calc(14px * var(--ui-scale));
+  --font-size-card-title: calc(14px * var(--ui-scale));
+  --font-size-body: calc(13px * var(--ui-scale));
+  --font-size-label: calc(12px * var(--ui-scale));
+  --font-size-tag: calc(11px * var(--ui-scale));
 
   /* Component Sizes */
-  --input-height: 44px;
-  --button-height: 40px;
-  --tag-height: 28px;
-  --nav-item-height: 44px;
-  --action-button-size: 36px;
+  --input-height: 36px;
+  --button-height: 32px;
+  --tag-height: 24px;
+  --nav-item-height: 40px;
+  --action-button-size: 32px;
 }
 
-/* 深色模式 */
+/* 深色模式 · 默认色板 warm */
 :root.dark {
   color-scheme: dark;
 
-  --bg-page: #080E1A;
-  --bg-sidebar: #15202E;
-  --bg-card: #1E293B;
-  --bg-hover: #334155;
-  --bg-input: #1E293B;
-  --text-primary: #F1F5F9;
-  --text-secondary: #94A3B8;
-  --text-tertiary: #64748B;
-  --border: #334155;
-  --border-input: #475569;
-  --color-primary-light: rgba(59, 130, 246, 0.15);
+  --bg-page: #15130F;
+  --bg-sidebar: #191712;
+  --bg-card: #1D1A15;
+  --bg-hover: #2A261E;
+  --bg-input: #1D1A15;
+  --text-primary: #ECE8DC;
+  --text-secondary: #9C9482;
+  --text-tertiary: #6B6455;
+  --border: #2E2A22;
+  --border-strong: #3C372B;
+  --border-input: #3C372B;
+  --color-primary: #ECE8DC;
+  --color-primary-hover: #F5F2EA;
+  --color-primary-light: rgba(236, 232, 220, 0.12);
+  --color-primary-contrast: #15130F;
   --color-success-light: rgba(34, 197, 94, 0.15);
   --color-warning-light: rgba(245, 158, 11, 0.15);
   --color-danger-light: rgba(239, 68, 68, 0.15);
-  --shadow-card: 0 4px 20px rgba(0, 0, 0, 0.2);
-  --shadow-card-hover: 0 8px 30px rgba(0, 0, 0, 0.3);
-  --shadow-input-focus: 0 0 0 3px rgba(59, 130, 246, 0.2);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-input-focus: 0 0 0 3px rgba(236, 232, 220, 0.12);
+}
+
+/* ==================== 色板：cool（冷灰调） ==================== */
+/* 新增色板 = 在此加一组 [data-palette='xxx'] 变量覆盖 + 设置页调色台选项 */
+
+:root[data-palette='cool'] {
+  --bg-page: #F3F5F7;
+  --bg-sidebar: #ECEEF2;
+  --bg-card: #FBFCFD;
+  --bg-hover: #E4E8EE;
+  --bg-input: #FBFCFD;
+
+  --text-primary: #1F2937;
+  --text-secondary: #6B7280;
+  --text-tertiary: #9CA3AF;
+
+  --border: #E2E6EC;
+  --border-strong: #C9D1DC;
+  --border-input: #C9D1DC;
+
+  --color-primary: #2563EB;
+  --color-primary-hover: #1D4ED8;
+  --color-primary-light: rgba(37, 99, 235, 0.1);
+  --color-primary-contrast: #FFFFFF;
+
+  --shadow-card: 0 1px 2px rgba(31, 41, 55, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(31, 41, 55, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+:root.dark[data-palette='cool'] {
+  --bg-page: #0F172A;
+  --bg-sidebar: #131C2E;
+  --bg-card: #1A2438;
+  --bg-hover: #26334D;
+  --bg-input: #1A2438;
+
+  --text-primary: #E2E8F0;
+  --text-secondary: #94A3B8;
+  --text-tertiary: #64748B;
+
+  --border: #283548;
+  --border-strong: #3B4A63;
+  --border-input: #3B4A63;
+
+  --color-primary: #93C5FD;
+  --color-primary-hover: #BFDBFE;
+  --color-primary-light: rgba(147, 197, 253, 0.12);
+  --color-primary-contrast: #0F172A;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(147, 197, 253, 0.15);
+}
+
+/* 默认色板 warm 已直接写入 :root / :root.dark，无需重复块 */
+
+/* ==================== 色板：forest（森野绿 · 自然沉稳） ==================== */
+/* 注意：色板变量组与 dev-shell 的 styles/style.css 镜像同步（改色需双端同改） */
+
+:root[data-palette='forest'] {
+  --bg-page: #F6F5EF;
+  --bg-sidebar: #EFEEE6;
+  --bg-card: #FDFCF7;
+  --bg-hover: #E8E6DB;
+  --bg-input: #FDFCF7;
+
+  --text-primary: #23281F;
+  --text-secondary: #6E7367;
+  --text-tertiary: #9CA092;
+
+  --border: #E2E1D6;
+  --border-strong: #CFD0C0;
+  --border-input: #CFD0C0;
+
+  --color-primary: #3E6B4F;
+  --color-primary-hover: #32583F;
+  --color-primary-light: rgba(62, 107, 79, 0.1);
+  --color-primary-contrast: #FDFCF7;
+
+  --shadow-card: 0 1px 2px rgba(35, 40, 31, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(35, 40, 31, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(62, 107, 79, 0.12);
+}
+
+:root.dark[data-palette='forest'] {
+  --bg-page: #101713;
+  --bg-sidebar: #141D18;
+  --bg-card: #1A241F;
+  --bg-hover: #243128;
+  --bg-input: #1A241F;
+
+  --text-primary: #E6EDE4;
+  --text-secondary: #93A29A;
+  --text-tertiary: #66756D;
+
+  --border: #27332C;
+  --border-strong: #37463D;
+  --border-input: #37463D;
+
+  --color-primary: #86C49B;
+  --color-primary-hover: #A3D6B4;
+  --color-primary-light: rgba(134, 196, 155, 0.12);
+  --color-primary-contrast: #101713;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(134, 196, 155, 0.15);
+}
+
+/* ==================== 色板：ocean（海洋青 · 清爽通透） ==================== */
+
+:root[data-palette='ocean'] {
+  --bg-page: #F2F7F9;
+  --bg-sidebar: #E9F0F4;
+  --bg-card: #FAFCFD;
+  --bg-hover: #DFEAEF;
+  --bg-input: #FAFCFD;
+
+  --text-primary: #1B2B33;
+  --text-secondary: #5E747F;
+  --text-tertiary: #8FA2AC;
+
+  --border: #DDE6EB;
+  --border-strong: #C4D3DB;
+  --border-input: #C4D3DB;
+
+  --color-primary: #0E7490;
+  --color-primary-hover: #0B5E75;
+  --color-primary-light: rgba(14, 116, 144, 0.1);
+  --color-primary-contrast: #FFFFFF;
+
+  --shadow-card: 0 1px 2px rgba(27, 43, 51, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(27, 43, 51, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(14, 116, 144, 0.12);
+}
+
+:root.dark[data-palette='ocean'] {
+  --bg-page: #0B1620;
+  --bg-sidebar: #0F1D29;
+  --bg-card: #152430;
+  --bg-hover: #1E303F;
+  --bg-input: #152430;
+
+  --text-primary: #E2EEF4;
+  --text-secondary: #8FA7B5;
+  --text-tertiary: #5E7686;
+
+  --border: #1F323F;
+  --border-strong: #2E4556;
+  --border-input: #2E4556;
+
+  --color-primary: #5FD0E8;
+  --color-primary-hover: #8ADFF0;
+  --color-primary-light: rgba(95, 208, 232, 0.12);
+  --color-primary-contrast: #0B1620;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(95, 208, 232, 0.15);
+}
+
+/* ==================== 色板：sunset（落日晚霞 · 温暖活力） ==================== */
+
+:root[data-palette='sunset'] {
+  --bg-page: #FBF5EF;
+  --bg-sidebar: #F6ECE2;
+  --bg-card: #FEFAF5;
+  --bg-hover: #F0E2D4;
+  --bg-input: #FEFAF5;
+
+  --text-primary: #33281F;
+  --text-secondary: #8A7565;
+  --text-tertiary: #B3A08D;
+
+  --border: #EDE2D6;
+  --border-strong: #DFCBB8;
+  --border-input: #DFCBB8;
+
+  --color-primary: #D9532A;
+  --color-primary-hover: #BC4520;
+  --color-primary-light: rgba(217, 83, 42, 0.1);
+  --color-primary-contrast: #FEFAF5;
+
+  --shadow-card: 0 1px 2px rgba(51, 40, 31, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(51, 40, 31, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(217, 83, 42, 0.12);
+}
+
+:root.dark[data-palette='sunset'] {
+  --bg-page: #1B1210;
+  --bg-sidebar: #211613;
+  --bg-card: #2A1D18;
+  --bg-hover: #382722;
+  --bg-input: #2A1D18;
+
+  --text-primary: #F5E9E2;
+  --text-secondary: #B0958A;
+  --text-tertiary: #7D6458;
+
+  --border: #3A2B26;
+  --border-strong: #4E3A32;
+  --border-input: #4E3A32;
+
+  --color-primary: #F5A383;
+  --color-primary-hover: #F8BBA2;
+  --color-primary-light: rgba(245, 163, 131, 0.12);
+  --color-primary-contrast: #1B1210;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(245, 163, 131, 0.15);
+}
+
+/* ==================== 色板：violet（星空紫 · 静谧优雅） ==================== */
+
+:root[data-palette='violet'] {
+  --bg-page: #F7F5FB;
+  --bg-sidebar: #F0EDF7;
+  --bg-card: #FCFBFE;
+  --bg-hover: #E9E4F4;
+  --bg-input: #FCFBFE;
+
+  --text-primary: #2A2533;
+  --text-secondary: #6F687D;
+  --text-tertiary: #A29AB2;
+
+  --border: #E5E0EE;
+  --border-strong: #D3CCE2;
+  --border-input: #D3CCE2;
+
+  --color-primary: #6D4FC6;
+  --color-primary-hover: #5B3FAE;
+  --color-primary-light: rgba(109, 79, 198, 0.1);
+  --color-primary-contrast: #FCFBFE;
+
+  --shadow-card: 0 1px 2px rgba(42, 37, 51, 0.04);
+  --shadow-card-hover: 0 4px 16px rgba(42, 37, 51, 0.08);
+  --shadow-input-focus: 0 0 0 3px rgba(109, 79, 198, 0.12);
+}
+
+:root.dark[data-palette='violet'] {
+  --bg-page: #141020;
+  --bg-sidebar: #19132A;
+  --bg-card: #201936;
+  --bg-hover: #2C2247;
+  --bg-input: #201936;
+
+  --text-primary: #ECE8F6;
+  --text-secondary: #A69BC2;
+  --text-tertiary: #756B8F;
+
+  --border: #2E2647;
+  --border-strong: #3E3560;
+  --border-input: #3E3560;
+
+  --color-primary: #B9A6F7;
+  --color-primary-hover: #CDBFFA;
+  --color-primary-light: rgba(185, 166, 247, 0.12);
+  --color-primary-contrast: #141020;
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
+  --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
+  --shadow-input-focus: 0 0 0 3px rgba(185, 166, 247, 0.15);
 }
 
 /* ==================== 桌面端字体大小 ==================== */
@@ -253,6 +532,94 @@ body {
   word-break: break-word;
 }
 
+/* ==================== Warm Workbench 通用样式 ==================== */
+
+/* 页面工具栏页头：48px，左标题右操作，底部 1px 实线 */
+.wb-toolbar {
+  height: var(--header-height);
+  padding: 0 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-card);
+  flex-shrink: 0;
+}
+
+/* 小号全大写 section 标题（ENABLED · 2 等） */
+.wb-section-title {
+  font-size: calc(11px * var(--ui-scale));
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+/* 侧边栏分组标签（Navigation / Plugins / Status） */
+.wb-sidebar-section {
+  font-size: calc(10px * var(--ui-scale));
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* 次要操作按钮（ghost） */
+.wb-btn-ghost {
+  height: 28px;
+  padding: 0 12px;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 500;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: background 150ms ease, opacity 150ms ease;
+}
+
+.wb-btn-ghost:hover {
+  background: var(--bg-hover);
+}
+
+.wb-btn-ghost:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 主操作按钮（近黑/近白实底） */
+.wb-btn-primary {
+  height: 28px;
+  padding: 0 14px;
+  font-size: calc(12px * var(--ui-scale));
+  font-weight: 500;
+  border-radius: 6px;
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  transition: opacity 150ms ease;
+}
+
+.wb-btn-primary:hover {
+  opacity: 0.9;
+}
+
+.wb-btn-primary:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 技术值（端口/地址/路径/命令）等宽字 */
+.wb-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+  font-size: calc(12.5px * var(--ui-scale));
+}
+
 /* ==================== Animation ==================== */
 
 @keyframes pulse-slow {
@@ -298,4 +665,63 @@ body {
 
 .animate-fade-slide-up {
   animation: fade-slide-up 0.3s ease both;
+}
+
+/* ==================== Toast 等级配色（vue-sonner richColors 变量覆盖） ====================
+ * 覆盖 sonner 默认 HSL 色板，改用主题语义 token：
+ * 成功绿 --color-success / 警告黄 --color-warning / 错误红 --color-danger / info 用 --color-primary。
+ * 背景取 -light 淡色、边框用 color-mix 淡化语义色、浅色模式文字加深 35% 保证对比度；
+ * 深色模式文字直接用亮色语义色。default/loading 类通知保持卡片统一风格。 */
+[data-sonner-toaster][data-sonner-theme='light'] {
+  --success-bg: var(--color-success-light) !important;
+  --success-border: color-mix(in srgb, var(--color-success) 35%, transparent) !important;
+  --success-text: color-mix(in srgb, var(--color-success) 65%, black) !important;
+
+  --warning-bg: var(--color-warning-light) !important;
+  --warning-border: color-mix(in srgb, var(--color-warning) 35%, transparent) !important;
+  --warning-text: color-mix(in srgb, var(--color-warning) 65%, black) !important;
+
+  --error-bg: var(--color-danger-light) !important;
+  --error-border: color-mix(in srgb, var(--color-danger) 35%, transparent) !important;
+  --error-text: color-mix(in srgb, var(--color-danger) 65%, black) !important;
+
+  --info-bg: var(--color-primary-light) !important;
+  --info-border: color-mix(in srgb, var(--color-primary) 30%, transparent) !important;
+  --info-text: color-mix(in srgb, var(--color-primary) 65%, black) !important;
+}
+
+[data-sonner-toaster][data-sonner-theme='dark'] {
+  --success-bg: var(--color-success-light) !important;
+  --success-border: color-mix(in srgb, var(--color-success) 25%, transparent) !important;
+  --success-text: var(--color-success) !important;
+
+  --warning-bg: var(--color-warning-light) !important;
+  --warning-border: color-mix(in srgb, var(--color-warning) 25%, transparent) !important;
+  --warning-text: var(--color-warning) !important;
+
+  --error-bg: var(--color-danger-light) !important;
+  --error-border: color-mix(in srgb, var(--color-danger) 25%, transparent) !important;
+  --error-text: var(--color-danger) !important;
+
+  --info-bg: var(--color-primary-light) !important;
+  --info-border: color-mix(in srgb, var(--color-primary) 20%, transparent) !important;
+  --info-text: var(--color-primary) !important;
+}
+
+/* default/loading 类通知：卡片统一风格，随主题 token（bg-card / border / text）联动 */
+[data-sonner-toaster] {
+  --normal-bg: var(--bg-card) !important;
+  --normal-border: var(--border) !important;
+  --normal-text: var(--text-primary) !important;
+  --normal-bg-hover: var(--bg-hover) !important;
+  --normal-border-hover: var(--border-strong) !important;
+}
+
+/* 覆盖 vue-sonner 自带的 prefers-reduced-motion 禁用规则：保留 toast 进出场过渡
+   （滑入淡入/滑出淡出），系统减弱动态效果不影响通知的可见性反馈 */
+@media (prefers-reduced-motion: reduce) {
+  [data-sonner-toast],
+  [data-sonner-toast] > * {
+    transition: transform 400ms, opacity 400ms, height 400ms, box-shadow 200ms !important;
+  }
 }

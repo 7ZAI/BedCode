@@ -18,7 +18,7 @@
         <ul class="max-h-64 overflow-y-auto">
           <li
             v-for="cmd in filteredCommands"
-            :key="cmd.command_id"
+            :key="`${cmd.plugin_id}:${cmd.command_id}`"
             class="px-4 py-2 cursor-pointer hover:bg-[var(--bg-hover)] text-sm text-[var(--text-secondary)]"
             @click="executeCommand(cmd)"
           >
@@ -38,7 +38,8 @@
  * PluginCommandPalette — 插件命令面板 (Ctrl+Shift+P)
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { pluginListCommands, type CommandEntry } from '../commands'
+import { pluginListCommands, pluginInvoke, type CommandEntry } from '../commands'
+import { pluginLoader } from '../loader'
 
 const visible = ref(false)
 const query = ref('')
@@ -70,9 +71,26 @@ async function loadCommands() {
   }
 }
 
-function executeCommand(_cmd: CommandEntry) {
-  // 后续实现：通过 PluginLoader 查找已激活插件的命令处理器并执行
+async function executeCommand(cmd: CommandEntry) {
   close()
+
+  // 前端 TS 插件：从 PluginLoader 查找本地 commandHandlers
+  const activePlugin = pluginLoader.getActivePlugin(cmd.plugin_id)
+  if (activePlugin) {
+    try {
+      await activePlugin.context.commands.execute(cmd.command_id)
+      return
+    } catch {
+      // 前端未找到 handler，尝试 Rust 端
+    }
+  }
+
+  // Rust 插件（WASM）：通过 pluginInvoke 路由到 PluginHost
+  try {
+    await pluginInvoke(cmd.plugin_id, cmd.command_id)
+  } catch (e: any) {
+    console.error(`[PluginCommandPalette] Failed to execute ${cmd.command_id}:`, e)
+  }
 }
 
 function handleKeydown(e: KeyboardEvent) {

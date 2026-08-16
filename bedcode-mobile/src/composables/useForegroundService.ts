@@ -36,13 +36,13 @@ export function useForegroundService() {
     const content = buildNotificationContent()
 
     try {
-      await invoke('startForegroundService', {
+      await invoke('plugin:foreground-service|startForegroundService', {
         title: 'BedCode',
         content,
       })
     } catch (e) {
-      // Android 原生插件命令可能未注册（Tauri 2.0 自定义插件需额外注册步骤）
-      console.warn('[ForegroundService] startService failed (plugin may not be registered):', e)
+      // Android 原生插件命令（Tauri 2.0 插件命令需 plugin:名称|命令 格式）
+      console.warn('[ForegroundService] startService failed:', e)
     }
   }
 
@@ -55,9 +55,9 @@ export function useForegroundService() {
     }
 
     try {
-      await invoke('stopForegroundService')
+      await invoke('plugin:foreground-service|stopForegroundService')
     } catch (e) {
-      console.warn('[ForegroundService] stopService failed (plugin may not be registered):', e)
+      console.warn('[ForegroundService] stopService failed:', e)
     }
   }
 
@@ -72,12 +72,12 @@ export function useForegroundService() {
     const content = buildNotificationContent()
 
     try {
-      await invoke('updateForegroundNotification', {
+      await invoke('plugin:foreground-service|updateForegroundNotification', {
         title: 'BedCode',
         content,
       })
     } catch (e) {
-      console.warn('[ForegroundService] updateNotification failed (plugin may not be registered):', e)
+      console.warn('[ForegroundService] updateNotification failed:', e)
     }
   }
 

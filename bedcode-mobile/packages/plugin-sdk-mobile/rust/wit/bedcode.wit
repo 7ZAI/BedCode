@@ -1,0 +1,157 @@
+// 移动端插件契约（Plugin Contract）——单一事实来源
+//
+// 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
+// - import 接口 11 组（无 session/api-call/timer/process/app/plugin-database）
+// - host-fs 含移动端特有 SAF/下载目录能力（write-media-downloads / save-to-document）
+// - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
+//
+// 命名空间约定与桌面端一致：宿主能力 import 前缀 `host-`，插件导出为普通名；
+// serde_json 载荷一律用 `string` 承载；错误一律 `result<T, string>`。
+package bedcode:plugin;
+
+// ==================== 宿主能力 import ====================
+
+interface host-storage {
+    get: func(key: string) -> result<option<string>, string>;
+    set: func(key: string, value: string) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+}
+
+/// 主数据库（rusqlite 直连；无 params 变体、无插件独立库——移动端现状）
+interface host-database {
+    execute: func(sql: string) -> result<u32, string>;
+    query: func(sql: string) -> result<option<string>, string>;
+}
+
+interface host-terminal {
+    send: func(session-id: string, data: string) -> result<_, string>;
+}
+
+/// 事件 / 系统通知（SDK `HostEvents` trait 现状即 emit+notify 同组，如实映射）
+interface host-events {
+    emit: func(event-name: string, payload-json: string);
+    notify: func(title: string, body: string) -> result<_, string>;
+}
+
+interface host-http {
+    fetch: func(request-json: string) -> result<option<string>, string>;
+}
+
+interface host-fs {
+    read: func(path: string) -> result<option<string>, string>;
+    write: func(path: string, data: string) -> result<_, string>;
+    copy: func(src: string, dst: string) -> result<_, string>;
+    delete: func(path: string) -> result<_, string>;
+    exists: func(path: string) -> result<bool, string>;
+    request-auth: func(paths-json: string) -> result<bool, string>;
+    /// 移动端特有：把已授权文件拷入系统媒体下载目录（SAF/MediaStore；
+    /// 参数与 core ABI 一致：源文件路径 + 显示名 + MIME）
+    write-media-downloads: func(src-path: string, display-name: string, mime-type: string) -> result<_, string>;
+    /// 移动端特有：弹系统保存对话框把已授权文件存入用户选择的位置
+    save-to-document: func(src-path: string, display-name: string, mime-type: string) -> result<_, string>;
+}
+
+interface host-config {
+    get: func(key: string) -> result<option<string>, string>;
+}
+
+interface host-log {
+    info: func(message: string);
+    debug: func(message: string);
+    warn: func(message: string);
+    error: func(message: string);
+    /// 插件生命周期失败上报（原 host_mark_plugin_error，对齐桌面 host-log）
+    mark-plugin-error: func(error: string);
+}
+
+interface host-bus {
+    publish: func(topic: string, payload-json: string) -> result<_, string>;
+    subscribe: func(topic: string) -> result<_, string>;
+    unsubscribe: func(topic: string) -> result<_, string>;
+}
+
+/// 文件服务注册表（与桌面 host-file-service 同名函数集，全量一致）
+interface host-file-service {
+    mount: func(options-json: string) -> result<string, string>;
+    unmount: func(mount-path: string) -> result<_, string>;
+    update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
+    get-peer: func(peer-id: string) -> result<option<string>, string>;
+    query-peer: func(peer-id: string) -> result<_, string>;
+    approve-transfer: func(batch-id: string) -> result<_, string>;
+    reject-transfer: func(batch-id: string) -> result<_, string>;
+    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
+    cancel-receiving: func(session-id: string) -> result<_, string>;
+}
+
+interface host-transfer {
+    start: func(request-json: string) -> result<string, string>;
+    cancel: func(task-id: string) -> result<_, string>;
+}
+
+// ==================== 插件导出 ====================
+
+interface command {
+    invoke: func(name: string, args-json: string) -> string;
+}
+
+interface lifecycle {
+    activate: func() -> result<_, string>;
+    deactivate: func() -> result<_, string>;
+    on-startup: func();
+    on-shutdown: func();
+}
+
+/// 事件回调（移动端子集：保留 auth/disconnect/session 生命周期事件）
+interface events {
+    on-bus-message: func(topic: string, payload-json: string) -> result<_, string>;
+    on-auth-success: func() -> result<_, string>;
+    on-disconnect: func(reason: string) -> result<_, string>;
+    on-session-created: func(session-id: string) -> result<_, string>;
+    on-session-stopped: func(session-id: string) -> result<_, string>;
+}
+
+interface terminal-hooks {
+    on-terminal-input: func(session-id: string, text: string) -> option<string>;
+    on-terminal-output: func(session-id: string, data: string) -> option<string>;
+}
+
+interface upload-hook {
+    on-upload-request: func(meta-json: string) -> string;
+}
+
+interface transfer-request-hook {
+    on-transfer-request: func(meta-json: string) -> string;
+}
+
+interface manifest {
+    get: func() -> string;
+}
+
+/// ABI 版本协商（无 form 字段：项目未发布、一次性切割，不存在 core 形态共存；
+/// 将来若需兼容旧产物，按桌面端模式补 form=0/1 即可）
+interface abi {
+    version: func() -> u32;
+}
+
+world plugin {
+    import host-storage;
+    import host-database;
+    import host-terminal;
+    import host-events;
+    import host-http;
+    import host-fs;
+    import host-config;
+    import host-log;
+    import host-bus;
+    import host-file-service;
+    import host-transfer;
+
+    export command;
+    export lifecycle;
+    export events;
+    export terminal-hooks;
+    export upload-hook;
+    export transfer-request-hook;
+    export manifest;
+    export abi;
+}

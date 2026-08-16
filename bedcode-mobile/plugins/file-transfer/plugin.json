@@ -1,0 +1,157 @@
+{
+  "id": "com.bedcode.file-transfer",
+  "name": "File Transfer",
+  "version": "1.0.0-beta",
+  "description": "内网文件传输：浏览桌面端共享目录，双向传输文件\n· 浏览对端共享目录，多选批量下载到手机\n· 手机文件经共享目录上传到桌面端\n· 传输队列：暂停 / 恢复 / 取消 / 重试，失败原因明示\n· 接收策略：逐批批准 / 自动接受 / 自动拒绝，可设批准超时\n· 长按文件「保存到…」：系统对话框自选保存位置\n· 历史记录：打开所在文件夹、清空记录\n使用：两端连接后先在桌面端开启共享目录，即可在文件传输页浏览、下载或上传；队列面板分「全部 / 发送 / 接收 / 历史」查看进度与记录。",
+  "author": "BedCode",
+  "icon": "📁",
+  "main": "index.js",
+  "pluginType": "wasm",
+  "rustLibrary": "bedcode_plugin_file_transfer",
+  "permissions": [
+    "broadcast",
+    "bus",
+    "fileservice",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "storage",
+    "system:open",
+    "transfer",
+    "ui:back",
+    "ui:route",
+    "ui:settings",
+    "ui:toolbox"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "file-transfer.list-tasks",
+        "title": "List Tasks"
+      },
+      {
+        "id": "file-transfer.query-peer",
+        "title": "Query Peer Status"
+      },
+      {
+        "id": "file-transfer.list-peers",
+        "title": "List Peers"
+      },
+      {
+        "id": "file-transfer.set-active-peer",
+        "title": "Set Active Peer"
+      },
+      {
+        "id": "file-transfer.list-remote",
+        "title": "List Remote Files"
+      },
+      {
+        "id": "file-transfer.enqueue",
+        "title": "Enqueue Transfer"
+      },
+      {
+        "id": "file-transfer.pause",
+        "title": "Pause Transfer"
+      },
+      {
+        "id": "file-transfer.resume",
+        "title": "Resume Transfer"
+      },
+      {
+        "id": "file-transfer.cancel",
+        "title": "Cancel Transfer"
+      },
+      {
+        "id": "file-transfer.remove-task",
+        "title": "Remove Task"
+      },
+      {
+        "id": "file-transfer.resume-all",
+        "title": "Resume All Transfers"
+      },
+      {
+        "id": "file-transfer.retry",
+        "title": "Retry Transfer"
+      },
+      {
+        "id": "file-transfer.set-concurrency",
+        "title": "Set Concurrency"
+      },
+      {
+        "id": "file-transfer.list-batches",
+        "title": "List Pending Transfer Batches"
+      },
+      {
+        "id": "file-transfer.approve-batch",
+        "title": "Approve Transfer Batch"
+      },
+      {
+        "id": "file-transfer.reject-batch",
+        "title": "Reject Transfer Batch"
+      },
+      {
+        "id": "file-transfer.list-receiving",
+        "title": "List Receiving Tasks"
+      },
+      {
+        "id": "file-transfer.cancel-receiving",
+        "title": "Cancel Receiving Session"
+      },
+      {
+        "id": "file-transfer.list-history",
+        "title": "List Transfer History"
+      },
+      {
+        "id": "file-transfer.clear-history",
+        "title": "Clear Transfer History"
+      },
+      {
+        "id": "file-transfer.get-settings",
+        "title": "Get Settings"
+      },
+      {
+        "id": "file-transfer.set-settings",
+        "title": "Set Settings"
+      },
+      {
+        "id": "file-transfer.pick-download-dir",
+        "title": "Pick Download Directory"
+      },
+      {
+        "id": "file-transfer.mount-local",
+        "title": "Mount Local Directory"
+      },
+      {
+        "id": "file-transfer.update-roots",
+        "title": "Update Mount Roots"
+      }
+    ],
+    "views": [
+      {
+        "type": "toolbox",
+        "id": "file-transfer.toolbox",
+        "title": "文件传输",
+        "component": "FileTransferView",
+        "icon": "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4",
+        "entry": "ToolboxEntry"
+      }
+    ],
+    "configuration": {
+      "title": "File Transfer Settings",
+      "properties": {}
+    },
+    "settings": {
+      "id": "file-transfer.settings",
+      "section": "file-transfer",
+      "component": "SettingsSection"
+    },
+    "routes": [
+      {
+        "id": "settings",
+        "title": "文件传输设置",
+        "component": "SettingsPage",
+        "header": false
+      }
+    ]
+  }
+}

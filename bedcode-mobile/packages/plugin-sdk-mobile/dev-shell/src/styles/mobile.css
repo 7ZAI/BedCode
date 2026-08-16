@@ -1,0 +1,683 @@
+/* ============================================
+   移动端主题变量
+   ============================================ */
+
+/* 深色模式（默认） - 主色与桌面端 warm 色板同源（墨纸体系：#ECE8DC 纸张色） */
+:root {
+  /* 背景色 */
+  --mobile-bg-primary: #0a0a0f;
+  --mobile-bg-secondary: #12121a;
+  --mobile-bg-tertiary: #1a1a2e;
+  --mobile-bg-card: #12121a;
+  --mobile-bg-elevated: #1f2937;
+
+  /* 卡片阴影 */
+  --mobile-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
+  --mobile-card-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
+  --mobile-card-shadow-connected: 0 2px 12px rgba(16, 185, 129, 0.15), 0 1px 3px rgba(0, 0, 0, 0.2);
+
+  /* 文字色 */
+  --mobile-text-primary: #ffffff;
+  --mobile-text-secondary: #9ca3af;
+  --mobile-text-muted: #6b7280;
+  --mobile-text-disabled: #4b5563;
+
+  /* 强调色上的文字 */
+  --mobile-text-on-accent: #15130F;
+  --mobile-border: rgba(236, 232, 220, 0.1);
+  --mobile-border-hover: rgba(236, 232, 220, 0.2);
+  --mobile-border-active: rgba(236, 232, 220, 0.3);
+
+  /* 强调色 - 与桌面端 warm 色板 primary 同源 */
+  --mobile-accent: #ECE8DC;
+  --mobile-accent-muted: rgba(236, 232, 220, 0.12);
+  --mobile-accent-secondary: rgba(236, 232, 220, 0.2);
+
+  /* 状态色 */
+  --mobile-success: #10b981;
+  --mobile-success-muted: rgba(16, 185, 129, 0.1);
+  --mobile-success-connected-bg: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 95, 70, 0.18));
+  --mobile-success-connected-border: rgba(16, 185, 129, 0.2);
+  --mobile-warning: #f59e0b;
+  --mobile-warning-muted: rgba(245, 158, 11, 0.1);
+  --mobile-error: #ef4444;
+  --mobile-error-muted: rgba(239, 68, 68, 0.1);
+
+  /* 弹窗遮罩 */
+  --mobile-overlay: rgba(0, 0, 0, 0.6);
+  --mobile-overlay-heavy: rgba(0, 0, 0, 0.8);
+  --mobile-overlay-light: rgba(0, 0, 0, 0.4);
+
+  /* 终端色 */
+  --mobile-terminal-bg: #0a0a0f;
+  --mobile-terminal-header: rgba(18, 18, 26, 0.9);
+
+  /* 导航栏 */
+  --mobile-nav-bg: rgba(10, 10, 15, 0.9);
+  --mobile-nav-border: rgba(236, 232, 220, 0.2);
+  --mobile-nav-active: #ECE8DC;
+  --mobile-nav-inactive: #6b7280;
+
+  /* 输入框 - 终端输入区专属配色，比终端输出区稍亮 */
+  --mobile-input-bg: #16161e;
+  --mobile-input-border: rgba(139, 233, 253, 0.25);
+  --mobile-input-focus: rgba(139, 233, 253, 0.45);
+  --mobile-input-placeholder: #5c5c6d;
+
+  /* 触控目标最小尺寸（恒常值，不随屏幕缩放） */
+  --mobile-input-height: 44px;
+  --mobile-nav-item-height: 44px;
+  --mobile-touch-target-min: 44px;
+
+  /* 代码查看器 */
+  --mobile-code-gutter-bg: rgba(255, 255, 255, 0.04);
+  --mobile-code-gutter-border: rgba(100, 100, 120, 0.12);
+  --mobile-code-gutter-color: rgba(100, 100, 120, 0.45);
+
+  /* 快捷键面板功能色 */
+  --mobile-shortcut-color: #bd93f9;
+  --mobile-shortcut-bg: linear-gradient(135deg, rgba(189, 147, 249, 0.12), rgba(189, 147, 249, 0.06));
+  --mobile-shortcut-border: rgba(189, 147, 249, 0.35);
+  --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(189, 147, 249, 0.28), rgba(189, 147, 249, 0.16));
+
+  --mobile-custom-cmd-color: #50fa7b;
+  --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.12), rgba(80, 250, 123, 0.06));
+  --mobile-custom-cmd-border: rgba(80, 250, 123, 0.35);
+  --mobile-custom-cmd-active-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.28), rgba(80, 250, 123, 0.16));
+  --mobile-arrow-color: #f1fa8c;
+  --mobile-arrow-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.12), rgba(241, 250, 140, 0.06));
+  --mobile-arrow-border: rgba(241, 250, 140, 0.35);
+  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.28), rgba(241, 250, 140, 0.16));
+  --mobile-send-color: #ECE8DC;
+  --mobile-send-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.12), rgba(236, 232, 220, 0.06));
+  --mobile-send-border: rgba(236, 232, 220, 0.3);
+  --mobile-send-active-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.28), rgba(236, 232, 220, 0.16));
+  --mobile-execute-color: #ffb86c;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
+  --mobile-execute-border: rgba(255, 184, 108, 0.35);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
+  --mobile-add-cmd-color: #ECE8DC;
+  --mobile-add-cmd-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.12), rgba(236, 232, 220, 0.06));
+  --mobile-add-cmd-border: rgba(236, 232, 220, 0.5);
+  --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.28), rgba(236, 232, 220, 0.16));
+  --mobile-edit-cmd-color: #ffb86c;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
+  --mobile-edit-cmd-border: rgba(255, 184, 108, 0.35);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
+  --mobile-danger-color: #ff5555;
+  --mobile-danger-bg: linear-gradient(135deg, rgba(255, 85, 85, 0.12), rgba(255, 85, 85, 0.06));
+  --mobile-danger-border: rgba(255, 85, 85, 0.5);
+  --mobile-danger-solid-bg: rgba(255, 85, 85, 0.9);
+  --mobile-confirm-color: #50fa7b;
+  --mobile-confirm-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.2), rgba(80, 250, 123, 0.1));
+  --mobile-confirm-border: rgba(80, 250, 123, 0.5);
+
+  /* 输入助手悬浮球 */
+  --mobile-input-assist-bg: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
+
+  /* 分组卡片 */
+  --mobile-group-bg: #131318;
+  --mobile-group-border: rgba(255, 255, 255, 0.055);
+  --mobile-group-divider: rgba(255, 255, 255, 0.045);
+  --mobile-group-row-active: rgba(255, 255, 255, 0.03);
+
+  /* 分组标题 */
+  --mobile-section-title-color: #63636e;
+
+  /* 图标 chip 色调 (12% 透明底) */
+  --mobile-chip-cyan: #ECE8DC;
+  --mobile-chip-cyan-bg: rgba(236, 232, 220, 0.12);
+  --mobile-chip-emerald: #34d399;
+  --mobile-chip-emerald-bg: rgba(52, 211, 153, 0.12);
+  --mobile-chip-amber: #fbbf24;
+  --mobile-chip-amber-bg: rgba(251, 191, 36, 0.12);
+  --mobile-chip-violet: #a78bfa;
+  --mobile-chip-violet-bg: rgba(167, 139, 250, 0.12);
+  --mobile-chip-red: #f87171;
+  --mobile-chip-red-bg: rgba(248, 113, 113, 0.12);
+  --mobile-chip-zinc: #a1a1aa;
+  --mobile-chip-zinc-bg: rgba(255, 255, 255, 0.06);
+
+  /* badge 状态 */
+  --mobile-badge-zinc-color: #8e8e99;
+  --mobile-badge-zinc-bg: rgba(255, 255, 255, 0.06);
+
+  /* 行文字 */
+  --mobile-row-title: #f4f4f5;
+  --mobile-row-sub: #71717a;
+  --mobile-row-value: #a1a1aa;
+
+  /* 滚动条 */
+  --scrollbar-track-bg: #1e293b;
+  --scrollbar-thumb-bg: #475569;
+  --scrollbar-thumb-hover-bg: #64748b;
+}
+
+/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */
+html:not(.dark) .mobile-ui,
+html:not(.dark) .mobile-app {
+  /* 背景色 - 拉开层次，避免白茫茫 */
+  --mobile-bg-primary: #f5f7fa;
+  --mobile-bg-secondary: #eef1f5;
+  --mobile-bg-tertiary: #e4e8ee;
+  --mobile-bg-card: #ffffff;
+  --mobile-bg-elevated: #f8f9fb;
+
+  /* 卡片阴影 - 浅色模式阴影更明显以增强层次 */
+  --mobile-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
+  --mobile-card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.08);
+  --mobile-card-shadow-connected: 0 2px 8px rgba(5, 150, 105, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
+
+  /* 文字色 - 优化对比度以满足 WCAG AA 标准 */
+  --mobile-text-primary: #1e293b;    /* slate-800, 对比度 10.7:1 */
+  --mobile-text-secondary: #475569;  /* slate-600, 对比度 7.1:1 */
+  --mobile-text-muted: #64748b;      /* slate-500, 对比度 4.5:1 */
+  --mobile-text-disabled: #94a3b8;   /* slate-400, 禁用状态语义色 */
+
+  /* 强调色上的文字 - 与桌面端 warm 色板 primary-contrast 同源 */
+  --mobile-text-on-accent: #FDFCFA;
+
+  /* 边框色 - 提高可见度 */
+  --mobile-border: rgba(15, 23, 42, 0.12);
+  --mobile-border-hover: rgba(15, 23, 42, 0.2);
+  --mobile-border-active: rgba(29, 26, 20, 0.4);
+
+  /* 强调色 - 与桌面端 warm 色板 primary 同源（墨色） */
+  --mobile-accent: #1D1A14;
+  --mobile-accent-muted: rgba(29, 26, 20, 0.08);
+  --mobile-accent-secondary: rgba(29, 26, 20, 0.16);
+
+  /* 状态色 */
+  --mobile-success: #059669;
+  --mobile-success-muted: rgba(5, 150, 105, 0.1);
+  --mobile-success-connected-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.12), rgba(6, 95, 70, 0.16));
+  --mobile-success-connected-border: rgba(5, 150, 105, 0.25);
+  --mobile-warning: #d97706;
+  --mobile-warning-muted: rgba(217, 119, 6, 0.1);
+  --mobile-error: #dc2626;
+  --mobile-error-muted: rgba(220, 38, 38, 0.1);
+
+  /* 弹窗遮罩 */
+  --mobile-overlay: rgba(0, 0, 0, 0.4);
+  --mobile-overlay-heavy: rgba(0, 0, 0, 0.6);
+  --mobile-overlay-light: rgba(0, 0, 0, 0.2);
+
+  /* 终端色 */
+  --mobile-terminal-bg: #fafafa;
+  --mobile-terminal-header: rgba(238, 241, 245, 0.95);
+
+  /* 导航栏 */
+  --mobile-nav-bg: rgba(255, 255, 255, 0.9);
+  --mobile-nav-border: rgba(15, 23, 42, 0.1);
+  --mobile-nav-active: #1D1A14;
+  --mobile-nav-inactive: #94a3b8;
+
+  /* 输入框 */
+  --mobile-input-bg: #f0f2f5;
+  --mobile-input-border: rgba(15, 23, 42, 0.18);
+  --mobile-input-focus: rgba(8, 145, 178, 0.5);
+  --mobile-input-placeholder: #94a3b8;
+
+  /* 代码查看器 */
+  --mobile-code-gutter-bg: rgba(0, 0, 0, 0.04);
+  --mobile-code-gutter-border: rgba(0, 0, 0, 0.08);
+  --mobile-code-gutter-color: rgba(100, 116, 139, 0.5);
+
+  /* 快捷键面板功能色 - 浅色模式使用饱和度适中的配色 */
+  --mobile-shortcut-color: #7c3aed;
+  --mobile-shortcut-bg: linear-gradient(135deg, rgba(124, 58, 237, 0.1), rgba(124, 58, 237, 0.05));
+  --mobile-shortcut-border: rgba(124, 58, 237, 0.3);
+  --mobile-shortcut-active-bg: linear-gradient(135deg, rgba(124, 58, 237, 0.2), rgba(124, 58, 237, 0.12));
+
+  --mobile-custom-cmd-color: #059669;
+  --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.1), rgba(5, 150, 105, 0.05));
+  --mobile-custom-cmd-border: rgba(5, 150, 105, 0.3);
+  --mobile-custom-cmd-active-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.2), rgba(5, 150, 105, 0.12));
+  --mobile-arrow-color: #a16207;
+  --mobile-arrow-bg: linear-gradient(135deg, rgba(161, 98, 7, 0.1), rgba(161, 98, 7, 0.05));
+  --mobile-arrow-border: rgba(161, 98, 7, 0.3);
+  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(161, 98, 7, 0.2), rgba(161, 98, 7, 0.12));
+  --mobile-send-color: #1D1A14;
+  --mobile-send-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.08), rgba(29, 26, 20, 0.04));
+  --mobile-send-border: rgba(29, 26, 20, 0.3);
+  --mobile-send-active-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.16), rgba(29, 26, 20, 0.1));
+  --mobile-execute-color: #c2410c;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(194, 65, 12, 0.05));
+  --mobile-execute-border: rgba(194, 65, 12, 0.3);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(194, 65, 12, 0.12));
+  --mobile-add-cmd-color: #1D1A14;
+  --mobile-add-cmd-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.08), rgba(29, 26, 20, 0.04));
+  --mobile-add-cmd-border: rgba(29, 26, 20, 0.4);
+  --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.16), rgba(29, 26, 20, 0.1));
+  --mobile-edit-cmd-color: #c2410c;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(194, 65, 12, 0.05));
+  --mobile-edit-cmd-border: rgba(194, 65, 12, 0.3);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(194, 65, 12, 0.12));
+  --mobile-danger-color: #dc2626;
+  --mobile-danger-bg: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(220, 38, 38, 0.05));
+  --mobile-danger-border: rgba(220, 38, 38, 0.4);
+  --mobile-danger-solid-bg: rgba(220, 38, 38, 0.85);
+  --mobile-confirm-color: #059669;
+  --mobile-confirm-bg: linear-gradient(135deg, rgba(5, 150, 105, 0.15), rgba(5, 150, 105, 0.08));
+  --mobile-confirm-border: rgba(5, 150, 105, 0.4);
+
+  /* 分组卡片 - 浅色模式 */
+  --mobile-group-bg: #ffffff;
+  --mobile-group-border: rgba(15, 23, 42, 0.08);
+  --mobile-group-divider: rgba(15, 23, 42, 0.06);
+  --mobile-group-row-active: rgba(15, 23, 42, 0.04);
+
+  /* 分组标题 */
+  --mobile-section-title-color: #94a3b8;
+
+  /* 图标 chip 色调 - 浅色模式（加深前景色，提高饱和度） */
+  --mobile-chip-cyan: #1D1A14;
+  --mobile-chip-cyan-bg: rgba(29, 26, 20, 0.1);
+  --mobile-chip-emerald: #059669;
+  --mobile-chip-emerald-bg: rgba(5, 150, 105, 0.1);
+  --mobile-chip-amber: #d97706;
+  --mobile-chip-amber-bg: rgba(217, 119, 6, 0.1);
+  --mobile-chip-violet: #7c3aed;
+  --mobile-chip-violet-bg: rgba(124, 58, 237, 0.1);
+  --mobile-chip-red: #dc2626;
+  --mobile-chip-red-bg: rgba(220, 38, 38, 0.1);
+  --mobile-chip-zinc: #64748b;
+  --mobile-chip-zinc-bg: rgba(15, 23, 42, 0.06);
+
+  /* badge 状态 */
+  --mobile-badge-zinc-color: #64748b;
+  --mobile-badge-zinc-bg: rgba(15, 23, 42, 0.06);
+
+  /* 行文字 */
+  --mobile-row-title: #1e293b;
+  --mobile-row-sub: #64748b;
+  --mobile-row-value: #475569;
+
+  /* 输入助手悬浮球 */
+  --mobile-input-assist-bg: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
+
+  /* 滚动条 */
+  --scrollbar-track-bg: #f1f5f9;
+  --scrollbar-thumb-bg: #94a3b8;
+  --scrollbar-thumb-hover-bg: #64748b;
+}
+
+/* 主题切换过渡动画 */
+.mobile-ui,
+.mobile-app {
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+
+/* ==================== 流式字号（自适应文字大小） ==================== */
+/* 所有移动端文字随视口宽度在 320px(小屏) → 1200px(平板) 之间等比缩放：
+   360px 处等于原有固定字号（xs=10 / sm=12 / base=14 / lg=16 / xl=18 / 2xl=24），
+   更窄窗口继续缩小，平板自动放大。style.css 中 .mobile-ui 下的
+   h1/p/button/text-* 等规则均引用这些变量，因此全端文字一次生效。 */
+
+.mobile-ui,
+.mobile-app {
+  /* --mobile-font-scale：外观设置字体大小档位驱动（normal=1 / large=1.125 / xlarge=1.25），
+     useMobileSettings 在 html 上写入 inline 值，未设置时回退 1 */
+  --font-size-xs: calc(clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) * var(--mobile-font-scale, 1));      /* 9 / 10 / 12px */
+  --font-size-sm: calc(clamp(0.6875rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem) * var(--mobile-font-scale, 1));      /* 11 / 12 / 14px */
+  --font-size-base: calc(clamp(0.8125rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem) * var(--mobile-font-scale, 1));       /* 13 / 14 / 16px */
+  --font-size-lg: calc(clamp(0.9375rem, 1rem + (100vw - 360px) / 840 * 2, 1.125rem) * var(--mobile-font-scale, 1));         /* 15 / 16 / 18px */
+  --font-size-xl: calc(clamp(1.0625rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem) * var(--mobile-font-scale, 1));      /* 17 / 18 / 20px */
+  --font-size-2xl: calc(clamp(1.375rem, 1.5rem + (100vw - 360px) / 840 * 2, 1.625rem) * var(--mobile-font-scale, 1));       /* 22 / 24 / 26px */
+}
+
+/* text-2xl：style.css 未映射，补充一条流式规则（用于 emoji 图标等大字号） */
+.mobile-ui .text-2xl {
+  font-size: var(--font-size-2xl);
+  line-height: 1.3;
+}
+
+/* ============================================
+   xterm 终端滚动 - 全局禁用 viewport 原生滚动
+   移动端使用外层伪滚动容器 + scrollToLine 方案
+   xterm-viewport 的滚动由外层容器接管
+   ============================================ */
+
+.xterm-viewport {
+  overflow-y: hidden !important;
+  touch-action: none !important;
+  pointer-events: none !important;
+  /* 强制隐藏任何残留滚动条 */
+  scrollbar-width: none !important;
+}
+
+.xterm-viewport::-webkit-scrollbar {
+  display: none !important;
+  width: 0 !important;
+}
+
+/* ============================================
+   Shared Loading Overlay
+   多个视图共享的加载遮罩样式
+   ============================================ */
+
+.mobile-loading-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: var(--mobile-bg-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+}
+
+.mobile-loading-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid var(--mobile-border);
+  border-top-color: var(--mobile-accent);
+  border-radius: 50%;
+  animation: mobile-spin 0.8s linear infinite;
+}
+
+@keyframes mobile-spin {
+  to { transform: rotate(360deg); }
+}
+
+.mobile-loading-text {
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
+  color: var(--mobile-text-muted);
+  margin: 0;
+}
+
+/* Loading fade transition */
+.mobile-loading-fade-enter-active,
+.mobile-loading-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.mobile-loading-fade-enter-from,
+.mobile-loading-fade-leave-to {
+  opacity: 0;
+}
+
+/* ==================== 分组卡片通用语言 ==================== */
+
+.group-section-title {
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mobile-section-title-color);
+  padding-left: 0.375rem;
+  margin-bottom: 0.5rem;
+}
+
+.group-card {
+  background: var(--mobile-group-bg);
+  border: 1px solid var(--mobile-group-border);
+  border-radius: 1rem;
+  overflow: hidden;
+}
+
+.group-card > .group-row + .group-row {
+  border-top: 1px solid var(--mobile-group-divider);
+}
+
+.group-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.8125rem 1rem;
+  min-height: 3.5rem;
+}
+
+button.group-row,
+.group-row-btn {
+  width: 100%;
+  cursor: pointer;
+  /* button 默认 text-align:center 会被后代标题继承，导致行内文字居中；统一左对齐 */
+  text-align: left;
+  transition: background-color 0.15s ease;
+}
+
+button.group-row:active,
+.group-row-btn:active {
+  background: var(--mobile-group-row-active);
+}
+
+.group-row-title {
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  font-weight: 500;
+  color: var(--mobile-row-title);
+}
+
+.group-row-label {
+  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
+  color: var(--mobile-row-title);
+}
+
+.group-row-sub {
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  color: var(--mobile-row-sub);
+}
+
+.group-row-value {
+  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
+  color: var(--mobile-row-value);
+}
+
+/* ==================== 图标 chip ==================== */
+
+.icon-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  height: clamp(2rem, 2.25rem + (100vw - 360px) / 800 * 4, 2.5rem);
+  border-radius: 0.625rem;
+  flex-shrink: 0;
+}
+
+.chip-cyan { color: var(--mobile-chip-cyan); background: var(--mobile-chip-cyan-bg); }
+.chip-emerald { color: var(--mobile-chip-emerald); background: var(--mobile-chip-emerald-bg); }
+.chip-amber { color: var(--mobile-chip-amber); background: var(--mobile-chip-amber-bg); }
+.chip-violet { color: var(--mobile-chip-violet); background: var(--mobile-chip-violet-bg); }
+.chip-red { color: var(--mobile-chip-red); background: var(--mobile-chip-red-bg); }
+.chip-zinc { color: var(--mobile-chip-zinc); background: var(--mobile-chip-zinc-bg); }
+
+/* ==================== 状态 badge ==================== */
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  flex-shrink: 0;
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
+  font-weight: 600;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+}
+
+.badge-emerald { color: var(--mobile-chip-emerald); background: var(--mobile-chip-emerald-bg); }
+.badge-amber { color: var(--mobile-chip-amber); background: var(--mobile-chip-amber-bg); }
+.badge-cyan { color: var(--mobile-chip-cyan); background: var(--mobile-chip-cyan-bg); }
+.badge-zinc { color: var(--mobile-badge-zinc-color); background: var(--mobile-badge-zinc-bg); }
+
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+}
+
+.dot-emerald {
+  background: var(--mobile-chip-emerald);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--mobile-chip-emerald) 80%, transparent);
+}
+
+/* ==================== 页面标题 ==================== */
+
+.page-title {
+  font-size: clamp(1.25rem, 1.375rem + (100vw - 360px) / 800 * 2, 1.5rem);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  color: var(--mobile-text-primary);
+}
+
+.page-subtitle {
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  color: var(--mobile-text-muted);
+  margin-top: 0.125rem;
+}
+
+/* ==================== 页面 header ==================== */
+
+.page-header {
+  padding: 1.5rem 1.25rem 1rem;
+}
+
+.page-header-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+/* ==================== 设置二级页面 ==================== */
+
+/* 分组标题 */
+.settings-section-title {
+  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 840, 0.75rem);
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mobile-text-muted);
+  padding-left: 0.25rem;
+  margin: 0;
+}
+
+/* 设置项分组卡片：行与行之间用分隔线 */
+.settings-group {
+  background: var(--mobile-bg-card);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+  overflow: hidden;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 3.25rem;
+  padding: 0.75rem 1rem;
+}
+
+.settings-row + .settings-row {
+  border-top: 1px solid var(--mobile-border);
+}
+
+button.settings-row {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+button.settings-row:active {
+  background: var(--mobile-bg-elevated);
+}
+
+.settings-label {
+  font-size: clamp(0.8125rem, 0.9375rem + (100vw - 360px) / 840, 1rem);
+  color: var(--mobile-text-primary);
+}
+
+.settings-desc {
+  /* 说明文字：比 settings-label 小一号，手机上 10px 起、平板 11px 封顶 */
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
+  color: var(--mobile-text-muted);
+  margin-top: 0.125rem;
+}
+
+.settings-value {
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
+  color: var(--mobile-text-secondary);
+}
+
+/* 下拉选择器：隐藏原生箭头，用统一的 chevron */
+.settings-select {
+  appearance: none;
+  -webkit-appearance: none;
+  min-width: 7.5rem;
+  padding: 0.4375rem 2rem 0.4375rem 0.75rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
+  color: var(--mobile-text-primary);
+  background-color: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
+  border-radius: 0.625rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%239ca3af' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.5rem center;
+  background-size: 1rem;
+  transition: border-color 0.15s ease;
+}
+
+.settings-select:focus {
+  outline: none;
+  border-color: var(--mobile-accent);
+}
+
+/* 数字输入框 */
+.settings-number-input {
+  width: 4.5rem;
+  padding: 0.4375rem 0.5rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840, 0.9375rem);
+  text-align: center;
+  color: var(--mobile-text-primary);
+  background: var(--mobile-input-bg);
+  border: 1px solid var(--mobile-input-border);
+  border-radius: 0.625rem;
+  transition: border-color 0.15s ease;
+}
+
+.settings-number-input:focus {
+  outline: none;
+  border-color: var(--mobile-accent);
+}
+
+/* ==================== Modal Transitions ==================== */
+
+/* Center Modal: scale + fade */
+.center-modal-enter-active,
+.center-modal-leave-active {
+  transition: opacity 280ms ease;
+}
+.center-modal-enter-active .modal-panel,
+.center-modal-leave-active .modal-panel {
+  transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1),
+              opacity 280ms ease;
+}
+.center-modal-enter-from,
+.center-modal-leave-to {
+  opacity: 0;
+}
+.center-modal-enter-from .modal-panel,
+.center-modal-leave-to .modal-panel {
+  transform: scale(0.92);
+  opacity: 0;
+}
+
+/* Bottom Sheet: slide up */
+.bottom-sheet-enter-active,
+.bottom-sheet-leave-active {
+  transition: opacity 280ms ease;
+}
+.bottom-sheet-enter-active .modal-panel,
+.bottom-sheet-leave-active .modal-panel {
+  transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.bottom-sheet-enter-from,
+.bottom-sheet-leave-to {
+  opacity: 0;
+}
+.bottom-sheet-enter-from .modal-panel,
+.bottom-sheet-leave-to .modal-panel {
+  transform: translateY(100%);
+}

@@ -1,0 +1,18 @@
+[package]
+name = "bedcode-plugin-component-test"
+version = "0.1.0"
+description = "BedCode 组件形态测试插件 — Component Model 绑定验证与连通性测试（仅供宿主测试套件使用）"
+authors = ["binblink"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "0.41", features = ["macros"] }
+serde_json = "1"
+
+[profile.release]
+# 与 plugin-test 对齐：wasm 产物尺寸优先（宿主测试加载）
+opt-level = "s"
+lto = true

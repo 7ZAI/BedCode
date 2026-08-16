@@ -3,15 +3,15 @@
 
 export { default as Button } from './Button.vue'
 export { default as Input } from './Input.vue'
-export { default as Select } from './Select.vue'
+// Select 单源化：宿主与插件共用 SDK 组件，宿主不再维护副本
+export { default as Select } from '@bedcode/plugin-sdk-desktop/ui'
 export { default as Toggle } from './Toggle.vue'
 export { default as Modal } from './Modal.vue'
-export { default as Toast } from './Toast.vue'
 
 // 新增组件
 export { default as Spinner } from './Spinner.vue'
 export { default as SplashLoading } from './SplashLoading.vue'
+export { default as LoadingOverlay } from './LoadingOverlay.vue'
 export { default as Tooltip } from './Tooltip.vue'
 export { default as NotificationBadge } from './NotificationBadge.vue'
-export { default as Skeleton } from './Skeleton.vue'
-export { default as EmptyState } from './EmptyState.vue'
+export { default as TerminalInputRail } from '@bedcode/plugin-sdk-desktop/ui/terminal-input-rail'

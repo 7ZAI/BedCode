@@ -1,0 +1,29 @@
+{
+  "name": "@bedcode/plugin-ai-chatbox-mobile",
+  "version": "1.0.0-beta",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "bedcode-plugin build",
+    "package": "bedcode-plugin package",
+    "dev": "bedcode-plugin dev",
+    "test:run": "vitest run"
+  },
+  "dependencies": {
+    "@bedcode/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
+  },
+  "devDependencies": {
+    "@shikijs/langs": "^4.2.0",
+    "@shikijs/themes": "^4.2.0",
+    "@vitejs/plugin-vue": "^5.0.0",
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9",
+    "shiki": "^4.2.0",
+    "terser": "^5.0.0",
+    "typescript": "^5.0.0",
+    "vite": "^5.0.0",
+    "vitest": "^1.6.1",
+    "vue": "^3.4.0",
+    "vue-i18n": "^9.0.0"
+  }
+}

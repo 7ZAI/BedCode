@@ -65,6 +65,18 @@ impl SyncEventHandler {
             DesktopSyncEvent::SessionModeChanged { session_id, auto_approve } => {
                 self.handle_session_mode_changed(&session_id, auto_approve).await;
             }
+            DesktopSyncEvent::TaskQueueChanged { session_id, queue_count, action, task_id, status } => {
+                self.handle_task_queue_changed(&session_id, queue_count, &action, task_id.as_deref(), status.as_deref()).await;
+            }
+            DesktopSyncEvent::TaskScheduledChanged { job_id, status, action } => {
+                self.handle_task_scheduled_changed(&job_id, &status, &action).await;
+            }
+            DesktopSyncEvent::FileServiceChanged { plugin_id, mount_path, available, operations } => {
+                self.handle_file_service_changed(&plugin_id, &mount_path, available, operations).await;
+            }
+            DesktopSyncEvent::TransferApproval { batch_id, decision, reason } => {
+                self.handle_transfer_approval(&batch_id, &decision, &reason).await;
+            }
         }
     }
 
@@ -259,6 +271,69 @@ impl SyncEventHandler {
         };
 
         // 模式变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理任务队列变更事件
+    async fn handle_task_queue_changed(
+        &self,
+        session_id: &str,
+        queue_count: i64,
+        action: &str,
+        task_id: Option<&str>,
+        status: Option<&str>,
+    ) {
+        let payload = SyncPayload::TaskQueueChanged {
+            session_id: session_id.to_string(),
+            queue_count,
+            action: action.to_string(),
+            task_id: task_id.map(|s| s.to_string()),
+            status: status.map(|s| s.to_string()),
+        };
+
+        // 队列变更广播给所有客户端
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理定时自动任务变更事件（广播给所有客户端，供移动端刷新列表）
+    async fn handle_task_scheduled_changed(&self, job_id: &str, status: &str, action: &str) {
+        let payload = SyncPayload::TaskScheduledChanged {
+            job_id: job_id.to_string(),
+            status: status.to_string(),
+            action: action.to_string(),
+        };
+
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理文件服务挂载可用性变更事件（桌面宿主自动发出，不经插件）
+    async fn handle_file_service_changed(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        available: bool,
+        operations: Vec<bedcode_plugin_api::FileOperation>,
+    ) {
+        let payload = SyncPayload::FileServiceChanged {
+            plugin_id: plugin_id.to_string(),
+            mount_path: mount_path.to_string(),
+            available,
+            operations,
+        };
+
+        // 挂载可用性广播给所有客户端（移动端插件经 sync:file_service 订阅）
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理传输批应答事件（桌面接收端宿主 → 移动端发送方，v2）
+    async fn handle_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
+        let payload = SyncPayload::TransferApproval {
+            batch_id: batch_id.to_string(),
+            decision: decision.to_string(),
+            reason: reason.to_string(),
+        };
+
+        // 广播给所有客户端（移动端发送方插件经 sync:file_service 订阅后转 MessageBus）
         self.broadcast_sync_data(payload, None).await;
     }
 

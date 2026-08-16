@@ -17,12 +17,33 @@ export const MOCK_SESSION_ID = '__mock_terminal__'
 /** localStorage 开关键 */
 const STORAGE_KEY = 'mock_terminal_enabled'
 
-/** 输出间隔（毫秒） */
-const OUTPUT_INTERVAL_MS = 5000
+/** 输出间隔 localStorage 键（毫秒），供 mock harness / 审查截图加快输出用 */
+const SPEED_KEY = 'mock-terminal-speed'
+
+/** 默认输出间隔（毫秒） */
+const DEFAULT_OUTPUT_INTERVAL_MS = 1500
+
+/** 输出间隔（毫秒）：支持 localStorage mock-terminal-speed 覆盖，便于截图/审查 */
+const OUTPUT_INTERVAL_MS = (() => {
+  try {
+    const v = Number(localStorage.getItem(SPEED_KEY))
+    return Number.isFinite(v) && v >= 200 ? v : DEFAULT_OUTPUT_INTERVAL_MS
+  } catch {
+    return DEFAULT_OUTPUT_INTERVAL_MS
+  }
+})()
+
+/** 首次输出延迟（毫秒），比间隔更短，进入页面即有内容 */
+const FIRST_OUTPUT_DELAY_MS = 800
 
 /** 每次输出行数范围 */
 const MIN_LINES = 4
 const MAX_LINES = 8
+
+// DEC Mode 2026 同步输出序列：包裹写入让 xterm 缓存到下一帧统一渲染，
+// 避免 WebGL 渲染器逐块绘制产生的视觉撕裂/重影（xterm 6.0+ 支持）
+const SYNC_OUTPUT_START = '\x1b[?2026h'
+const SYNC_OUTPUT_END = '\x1b[?2026l'
 
 // ==================== Random Content ====================
 
@@ -125,8 +146,9 @@ let terminalInstance: Terminal | null = null
 
 // ==================== Functions ====================
 
-/** 检查是否为模拟会话 ID */
+/** 检查是否为模拟会话 ID（生产构建恒 false，DEV 分支被常量折叠消除） */
 export function isMockSession(sessionId: string): boolean {
+  if (!import.meta.env.DEV) return false
   return sessionId === MOCK_SESSION_ID
 }
 
@@ -163,20 +185,20 @@ function writeRandomOutput(): void {
   for (let i = 0; i < lineCount; i++) {
     output += generateRandomLine() + '\r\n'
   }
-  terminalInstance.write(output)
+  terminalInstance.write(SYNC_OUTPUT_START + output + SYNC_OUTPUT_END)
 }
 
 /** 绑定终端实例并启动定时输出 */
 function startOutput(term: Terminal): void {
   terminalInstance = term
-  term.write('\x1b[1;36m--- Mock Terminal (DEV) ---\x1b[0m\r\n')
-  term.write('\x1b[90mSimulated terminal output for style testing.\x1b[0m\r\n')
-  term.write('\x1b[90mOutput every 5s, 4~8 lines each.\x1b[0m\r\n\r\n')
+  term.write(SYNC_OUTPUT_START + '\x1b[1;36m--- Mock Terminal (DEV) ---\x1b[0m\r\n' + SYNC_OUTPUT_END)
+  term.write(SYNC_OUTPUT_START + `\x1b[90mSimulated terminal output for style testing.\x1b[0m\r\n` + SYNC_OUTPUT_END)
+  term.write(SYNC_OUTPUT_START + `\x1b[90mOutput every ${OUTPUT_INTERVAL_MS}ms, 4~8 lines each.\x1b[0m\r\n\r\n` + SYNC_OUTPUT_END)
 
   if (outputTimer) clearInterval(outputTimer)
   outputTimer = setInterval(writeRandomOutput, OUTPUT_INTERVAL_MS)
 
-  setTimeout(writeRandomOutput, 2000)
+  setTimeout(writeRandomOutput, FIRST_OUTPUT_DELAY_MS)
 }
 
 /** 停止定时输出并解绑 */

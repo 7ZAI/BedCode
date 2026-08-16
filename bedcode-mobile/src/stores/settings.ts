@@ -26,6 +26,8 @@ export interface Settings {
     max_cached_terminals?: number
     // 是否在后台时发送通知
     notify_in_background?: boolean
+    // 主色色板（与桌面端同名色板同源；default = Dracula 象牙白）
+    palette?: string
   }
 }
 
@@ -48,6 +50,7 @@ const defaultSettings: Settings = {
     language: 'zh-CN',
     max_cached_terminals: 10,
     notify_in_background: true,
+    palette: 'default',
   },
 }
 

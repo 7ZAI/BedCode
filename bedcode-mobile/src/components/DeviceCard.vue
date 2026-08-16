@@ -1,13 +1,13 @@
 <template>
   <div
-    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-all duration-300 cursor-pointer group"
+    class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 flex items-center gap-3 shadow-[var(--mobile-card-shadow)] hover:border-[var(--mobile-border-hover)] hover:shadow-[var(--mobile-card-shadow-hover)] transition-[border-color,box-shadow] duration-300 cursor-pointer group active:opacity-90"
     @click="$emit('click')"
   >
     <!-- Icon -->
     <div
       :class="[
         'w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition-colors',
-        device.isOnline || isDiscovered ? 'bg-[var(--mobile-accent-muted)] border border-[var(--mobile-accent)]/20' : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)]'
+        device.isOnline || isDiscovered ? 'bg-[var(--mobile-accent-muted)] border border-[color:color-mix(in_srgb,var(--mobile-accent)_20%,transparent)]' : 'bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)]'
       ]"
     >
       <svg class="w-6 h-6" :class="device.isOnline || isDiscovered ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -17,7 +17,7 @@
 
     <!-- Info -->
     <div class="flex-1 min-w-0">
-      <p class="font-medium text-[var(--mobile-text-primary)] truncate">{{ device.name }}</p>
+      <p class="font-medium text-base text-[var(--mobile-text-primary)] truncate">{{ device.name }}</p>
       <p class="text-[var(--mobile-text-muted)] text-sm truncate">
         <template v-if="isDiscovered">
           {{ device.address }}:{{ device.port }}

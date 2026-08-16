@@ -1,0 +1,537 @@
+/**
+ * Auto Task 面板样式（插件侧）
+ *
+ * 经 index.ts 以 `?inline` 导入并注入 document.head（宿主不加载插件 dist/style.css）。
+ * 类名统一 .atp- 前缀，避免与宿主全局样式冲突；设计变量复用宿主 --mobile-* token。
+ */
+
+.atp-panel {
+  position: relative;
+  width: 100%;
+  max-height: 80vh;
+  background: var(--mobile-bg-secondary);
+  border-top-left-radius: 1.25rem;
+  border-top-right-radius: 1.25rem;
+  border-top: 1px solid var(--mobile-border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* 键盘避让：translateY/max-height 随键盘高度变化，0.25s 与终端输入一致 */
+  transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+              max-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.atp-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.atp-panel-header-left {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.atp-panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.atp-panel-title {
+  font-size: clamp(0.9375rem, 1.0625rem + (100vw - 360px) / 840 * 2, 1.1875rem);
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+  margin: 0;
+}
+
+.atp-queue-badge {
+  padding: 0.0625rem 0.375rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-accent);
+  color: #fff;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  min-width: 1.125rem;
+  text-align: center;
+}
+
+.atp-clear-btn {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.5rem;
+  background: color-mix(in srgb, var(--mobile-error) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mobile-error) 20%, transparent);
+  color: var(--mobile-error);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.atp-clear-btn:hover {
+  background: color-mix(in srgb, var(--mobile-error) 20%, transparent);
+}
+
+.atp-close-btn {
+  padding: 0.375rem;
+  color: var(--mobile-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.15s ease;
+}
+
+.atp-close-btn:hover {
+  color: var(--mobile-text-primary);
+}
+
+/* 确认条 */
+.atp-confirm-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.25rem;
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  border-top: 1px solid color-mix(in srgb, var(--mobile-error) 15%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--mobile-error) 15%, transparent);
+}
+
+.atp-confirm-text {
+  font-size: var(--font-size-sm);
+  color: var(--mobile-error);
+}
+
+.atp-confirm-actions {
+  display: flex;
+  gap: 0.375rem;
+}
+
+.atp-confirm-btn {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.375rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.atp-confirm-btn-danger {
+  background: var(--mobile-error);
+  border-color: var(--mobile-error);
+  color: #fff;
+}
+
+/* 错误条 */
+.atp-error-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1.25rem;
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--mobile-error) 15%, transparent);
+}
+
+.atp-error-text {
+  font-size: var(--font-size-sm);
+  color: var(--mobile-error);
+}
+
+.atp-error-close {
+  padding: 0.25rem;
+  color: var(--mobile-error);
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+}
+
+/* 当前任务状态 */
+.atp-status-section {
+  padding: 0.75rem 1.25rem;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.atp-status-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.atp-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.atp-status-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+}
+
+.atp-status-desc {
+  width: 100%;
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-muted);
+  margin: 0.25rem 0 0 1rem;
+  line-height: 1.4;
+}
+
+/* 开关 */
+.atp-toggle-section {
+  padding: 0.75rem 1.25rem;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.atp-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.atp-toggle-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.atp-toggle-label {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  margin: 0;
+}
+
+.atp-toggle-hint {
+  font-size: var(--font-size-xs);
+  color: var(--mobile-text-muted);
+  margin: 0.125rem 0 0;
+}
+
+.atp-toggle-switch {
+  position: relative;
+  width: 2.75rem;
+  height: 1.5rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border-hover);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  flex-shrink: 0;
+  padding: 0;
+}
+
+.atp-toggle-switch.on {
+  background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+}
+
+.atp-toggle-dot {
+  position: absolute;
+  top: 0.125rem;
+  left: 0.125rem;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+.atp-toggle-switch.on .atp-toggle-dot {
+  transform: translateX(1.25rem);
+}
+
+/* 预设任务 */
+.atp-preset-section {
+  padding: 0.75rem 1.25rem;
+  flex-shrink: 0;
+}
+
+.atp-section-label {
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  color: var(--mobile-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 0.5rem;
+}
+
+.atp-preset-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+.atp-preset-chip {
+  padding: 0.25rem 0.625rem;
+  border-radius: 0.5rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.atp-preset-chip:hover {
+  border-color: rgba(0, 212, 255, 0.3);
+  color: var(--mobile-accent);
+}
+
+.atp-preset-chip:active {
+  transform: scale(0.95);
+}
+
+.atp-preset-chip:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.atp-preset-chip:disabled:hover {
+  border-color: var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+/* 预设 chip 内部布局：内容 + 状态标签 */
+.atp-preset-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 12rem;
+}
+
+.atp-preset-chip-status {
+  font-size: 0.625rem;
+  flex-shrink: 0;
+  margin-left: 0.375rem;
+  opacity: 0.9;
+}
+
+/* 输入 */
+.atp-input-section {
+  padding: 0 1.25rem 0.75rem;
+  flex-shrink: 0;
+}
+
+.atp-input-row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.atp-manual-input {
+  flex: 1;
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border-hover);
+  border-radius: 0.625rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--mobile-text-primary);
+  font-size: var(--font-size-sm);
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.atp-manual-input:focus {
+  border-color: var(--mobile-accent);
+}
+
+.atp-manual-input::placeholder {
+  color: var(--mobile-text-disabled);
+}
+
+.atp-manual-input:disabled {
+  opacity: 0.4;
+}
+
+.atp-add-btn {
+  flex-shrink: 0;
+  padding: 0.5rem;
+  border-radius: 0.625rem;
+  background: var(--mobile-accent-secondary);
+  border: 1px solid var(--mobile-border-active);
+  color: var(--mobile-accent);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.atp-add-btn:hover {
+  background: color-mix(in srgb, var(--mobile-accent) 30%, transparent);
+}
+
+.atp-add-btn:active {
+  transform: scale(0.95);
+}
+
+.atp-add-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* 队列 */
+.atp-queue-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 1.25rem 1.25rem;
+  min-height: 0;
+}
+
+.atp-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.atp-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.625rem;
+  transition: all 0.15s ease;
+}
+
+.atp-queue-item-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.atp-queue-item-position {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--mobile-accent);
+  background: color-mix(in srgb, var(--mobile-accent) 15%, transparent);
+  border-radius: 0.25rem;
+  margin-top: 0.0625rem;
+}
+
+.atp-queue-item-prompt {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-primary);
+  line-height: 1.4;
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.atp-edit-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--mobile-bg-secondary);
+  border: 1px solid var(--mobile-accent);
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  color: var(--mobile-text-primary);
+  font-size: var(--font-size-sm);
+  outline: none;
+}
+
+.atp-queue-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+
+.atp-action-btn {
+  padding: 0.25rem;
+  color: var(--mobile-text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  border-radius: 0.375rem;
+  transition: all 0.15s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.atp-action-btn:hover {
+  color: var(--mobile-text-primary);
+  background: var(--mobile-bg-hover);
+}
+
+.atp-action-btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.atp-action-btn-primary:hover {
+  color: var(--mobile-accent);
+}
+
+.atp-action-btn-danger:hover {
+  color: var(--mobile-error);
+  background: color-mix(in srgb, var(--mobile-error) 10%, transparent);
+}
+
+/* 状态行内的取消任务按钮：靠右对齐，与状态标签分开 */
+.atp-cancel-task-btn {
+  margin-left: auto;
+}
+
+.atp-empty-state {
+  text-align: center;
+  padding: 2rem 0;
+}
+
+.atp-empty-text {
+  color: var(--mobile-text-disabled);
+  font-size: var(--font-size-base);
+  margin: 0;
+}
+
+.atp-empty-hint {
+  color: var(--mobile-text-disabled);
+  font-size: var(--font-size-sm);
+  margin: 0.25rem 0 0 0;
+  opacity: 0.7;
+}
+
+/* Bottom sheet transition */
+.atp-sheet-enter-active,
+.atp-sheet-leave-active {
+  transition: transform 0.3s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.2s ease;
+}
+
+.atp-sheet-enter-from,
+.atp-sheet-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
+}

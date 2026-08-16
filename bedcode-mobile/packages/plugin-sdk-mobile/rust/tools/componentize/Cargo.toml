@@ -1,0 +1,14 @@
+[package]
+name = "bedcode-componentize"
+version = "0.1.0"
+edition = "2021"
+description = "BedCode 插件组件化工具（移动端）— 将 wit-bindgen 产出的 core module 编码为 Component Model 组件（等价 wasm-tools component new）"
+
+[[bin]]
+name = "componentize"
+path = "src/main.rs"
+
+[dependencies]
+# 与宿主 src-tauri dev-dep 同版本（spike 实证 0.256 编码产物 00 61 73 6d 0d 00 01 00），
+# 保证编码行为一致；与 wit-bindgen 版本无锁（独立演进，见迁移 spec §4 S2）
+wit-component = "=0.256.0"

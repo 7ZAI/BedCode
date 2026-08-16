@@ -1,0 +1,271 @@
+/// BedCode 插件 Component Model 契约
+///
+/// 对应 docs/knowledge/wasmtime-component-migration.md 阶段 B/C 的目标形态：
+//! 将自研 ABI（`__bedcode_*` 导出 + `bedcode` 命名空间 host function）迁移为
+//! WIT 接口 + wit-bindgen 绑定。本文件是单一事实来源，宿主侧
+/// （`src-tauri/src/plugin/wasm_runtime/component.rs`）与插件侧（SDK，阶段 B）
+/// 都基于它生成绑定，接口漂移在编译期即暴露。
+///
+/// 迁移约定（与阶段 B 第 4 点一致）：
+/// - `serde_json` 载荷保留：结构化参数/结果一律用 `string` 承载 JSON
+///   （WIT 的 `string` 到 wasm 侧是 UTF-8 字节，等价于现有 (ptr,len) 传递）
+/// - 命令层（`CommandArgs` / `serde_json::Value`）不动，只有传输层换皮
+/// - 错误一律 `result<T, string>`，错误内容为宿主侧可读的 UTF-8 消息
+///
+/// ## 命名空间约定
+///
+/// 宿主能力 import 接口前缀 `host-`，插件导出接口为普通名字：
+/// - import：`host-storage` / `host-database` / ... （13 组，对应 host_functions/*）
+/// - export：`command` / `lifecycle` / `events` / `terminal-hooks` /
+///   `upload-hook` / `manifest` / `abi`
+///
+/// ## ABI 版本协商（阶段 A）
+///
+/// `abi` 接口承载原 `__bedcode_abi_version` 的职责，并新增 `form` 形态字段：
+/// - `version()`：与 `abi::ABI_VERSION`（当前 v6）比对，语义不变
+/// - `form()`：0 = core module（自研 ABI），1 = component。宿主据此区分产物形态，
+///   不 bump ABI 大版本
+package bedcode:plugin;
+
+// ==================== 宿主能力 import（原 host_functions/* 13 组） ====================
+
+/// 插件 KV 存储（原 storage.rs：storage_get/set/delete）
+interface host-storage {
+    get: func(key: string) -> result<option<string>, string>;
+    set: func(key: string, value: string) -> result<_, string>;
+    delete: func(key: string) -> result<_, string>;
+}
+
+/// 终端发送（原 terminal.rs：terminal_send）
+interface host-terminal {
+    send: func(session-id: string, data: string) -> result<_, string>;
+}
+
+/// 事件 / 广播 / 通知（原 events.rs：emit_event/broadcast_sync/notify）
+interface host-events {
+    emit: func(event-name: string, payload-json: string);
+    broadcast-sync: func(event-json: string);
+    notify: func(title: string, body: string) -> result<_, string>;
+}
+
+/// 消息总线（原 bus.rs：bus_publish/subscribe/unsubscribe）
+interface host-bus {
+    publish: func(topic: string, payload-json: string) -> result<_, string>;
+    subscribe: func(topic: string) -> result<_, string>;
+    unsubscribe: func(topic: string) -> result<_, string>;
+}
+
+/// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
+interface host-api-call {
+    /// 发布请求到 request-topic（宿主按 `bedcode.api.*` 门禁校验目标 api
+    /// 已被某激活插件声明，未声明拒绝），并按调用方插件 ID + 请求载荷中的
+    /// 字符串 `id` 构造响应 topic（`bedcode.api.reply.<caller-id>.<request-id>`），
+    /// 宿主侧注册静态回复订阅 + 阻塞等待（调用方 wasm 实例阻塞期间无法接收
+    /// on_message，回复必须宿主侧消费，见 SDK api_call 模块注释）。
+    /// 返回回复 JSON 字符串（result | error 对象）；超时/门禁拒绝返回错误。
+    call: func(request-topic: string, payload-json: string, timeout-ms: u64) -> result<string, string>;
+}
+
+/// HTTP 代理（原 http.rs：http_fetch）
+interface host-http {
+    fetch: func(request-json: string) -> result<option<string>, string>;
+}
+
+/// 宿主周期定时器（原 timer.rs：timer_register，ABI v6）
+interface host-timer {
+    register: func(interval-secs: u64, command: string) -> result<_, string>;
+}
+
+/// 进程执行（v8：host-process）——调度框架等插件需要执行外部命令/脚本
+///
+/// 异步执行：`run` 立即返回 run-id，进程结束后宿主经 `events.on-process-done`
+/// 回调插件（携带 exit_code / 超时标记）；`kill` 用于超时/取消。
+interface host-process {
+    run: func(request-json: string) -> result<string, string>;
+    kill: func(run-id: string) -> result<_, string>;
+}
+
+/// 插件随包 CLI 生命周期（v8：host-app）——安装/卸载到用户 bin 目录并注册 PATH
+///
+/// WASM 插件无注册表/文件系统写权限的直接通道，PATH 操作由宿主侧实现：
+/// 插件在 activate 时安装自身随包的 cli/ 产物（如 bedtask），停用时卸载。
+/// 幂等：重复安装不产生重复条目，升级覆盖；卸载仅移除本插件条目。
+interface host-app {
+    /// 安装 CLI（幂等）：源 = 插件包目录 `cli/<file-name>`（Windows 自动补 .exe），
+    /// 复制到用户 bin 目录并注册 PATH；`bin-dir` 为空用平台默认
+    /// （Windows `%LOCALAPPDATA%/com.bedcode.app/bin`；unix `~/.bedcode/bin`）。
+    /// 返回安装后的 bin 目录绝对路径。
+    install-cli: func(payload-json: string) -> result<string, string>;
+    /// 卸载 CLI（幂等）：删除文件 + 移除仅本插件添加的 PATH 条目
+    /// （保留用户原有项）；应用关闭流程中调用时自动跳过（CLI 随下次激活重建）
+    uninstall-cli: func(payload-json: string) -> result<_, string>;
+}
+
+/// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists）
+interface host-fs {
+    read: func(path: string) -> result<option<string>, string>;
+    write: func(path: string, data: string) -> result<_, string>;
+    copy: func(src: string, dst: string) -> result<_, string>;
+    delete: func(path: string) -> result<_, string>;
+    exists: func(path: string) -> result<bool, string>;
+    /// 批量请求目录授权：未授权路径合并为一次用户弹窗，阻塞等待答复
+    /// （paths-json 为 JSON 字符串数组；返回是否全部同意）
+    request-auth: func(paths-json: string) -> result<bool, string>;
+}
+
+/// 文件传输引擎（原 transfer.rs：transfer_start/cancel，ABI v5）
+interface host-transfer {
+    start: func(request-json: string) -> result<string, string>;
+    cancel: func(task-id: string) -> result<_, string>;
+}
+
+/// 宿主日志与插件状态上报（原 log.rs + status.rs）
+interface host-log {
+    info: func(message: string);
+    debug: func(message: string);
+    warn: func(message: string);
+    error: func(message: string);
+    mark-plugin-error: func(error: string);
+}
+
+/// 宿主配置读取（原 config.rs：config_get，key 为 ConfigKey::as_str 的字符串）
+interface host-config {
+    get: func(key: string) -> result<option<string>, string>;
+}
+
+/// 会话能力（原 session.rs：session_list/get/config_list/create + lifecycle.rs 注册）
+///
+/// 注：WIT 中 `list` 是类型关键字，列表函数命名为 `list-sessions`
+interface host-session {
+    list-sessions: func() -> result<option<string>, string>;
+    get: func(session-id: string) -> result<option<string>, string>;
+    config-list: func() -> result<option<string>, string>;
+    lifecycle-register: func() -> result<_, string>;
+    input-register: func() -> result<_, string>;
+    create: func(config-id: string) -> result<string, string>;
+    /// 关闭（终止）会话（v7）：停止 PTY 并置 Stopped，会话记录保留
+    /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
+    /// 供插件在定时自动任务执行完后清理自己创建的会话。
+    close: func(session-id: string) -> result<_, string>;
+}
+
+/// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）
+interface host-database {
+    execute: func(sql: string) -> result<u32, string>;
+    query: func(sql: string) -> result<option<string>, string>;
+    execute-params: func(sql: string, params-json: string) -> result<u32, string>;
+    query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+}
+
+/// 插件独立数据库（原 database.rs：plugin_db_*）
+interface host-plugin-database {
+    execute: func(sql: string) -> result<u32, string>;
+    query: func(sql: string) -> result<option<string>, string>;
+    execute-params: func(sql: string, params-json: string) -> result<u32, string>;
+    query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+}
+
+/// 文件服务注册表（原 file_service.rs：filesrv_mount/unmount/update_roots/get_peer/query_peer）
+interface host-file-service {
+    mount: func(options-json: string) -> result<string, string>;
+    unmount: func(mount-path: string) -> result<_, string>;
+    update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
+    get-peer: func(peer-id: string) -> result<option<string>, string>;
+    query-peer: func(peer-id: string) -> result<_, string>;
+    /// v2：批准传输批（接收端用户应答「接受全部」）
+    approve-transfer: func(batch-id: string) -> result<_, string>;
+    /// v2：拒绝传输批（接收端用户应答「拒绝全部」）
+    reject-transfer: func(batch-id: string) -> result<_, string>;
+    /// v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
+    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
+    /// v2：取消接收中的上传会话（接收端本地取消，session 级）
+    cancel-receiving: func(session-id: string) -> result<_, string>;
+}
+
+// ==================== 插件导出（原 __bedcode_* 导出函数） ====================
+
+/// 命令入口（原 invoke_command，JSON 载荷保留）
+interface command {
+    invoke: func(name: string, args-json: string) -> string;
+}
+
+/// 生命周期（原 activate/deactivate/on_startup/on_shutdown）
+interface lifecycle {
+    activate: func() -> result<_, string>;
+    deactivate: func() -> result<_, string>;
+    on-startup: func();
+    on-shutdown: func();
+}
+
+/// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）
+interface events {
+    on-message: func(topic: string, sender: string, payload-json: string) -> result<_, string>;
+    on-session-lifecycle: func(payload-json: string) -> result<_, string>;
+    on-input-submitted: func(payload-json: string) -> result<_, string>;
+    /// 进程执行完成回调（v8）：host-process run 的进程结束时触发
+    /// （正常退出 / 非零退出 / 超时 kill），payload-json 为
+    /// `{ run_id, exit_code, timed_out }`
+    on-process-done: func(payload-json: string) -> result<_, string>;
+}
+
+/// 终端输入/输出钩子（原 on_terminal_input/on_terminal_output）
+interface terminal-hooks {
+    on-terminal-input: func(session-id: string, text: string) -> option<string>;
+    on-terminal-output: func(session-id: string, data: string) -> option<string>;
+}
+
+/// 上传策略钩子（原 on_upload_request，fail-closed 语义由宿主保持）
+interface upload-hook {
+    on-upload-request: func(meta-json: string) -> string;
+}
+
+/// 批量传输请求钩子（v2：POST /transfer-request 时调用一次，fail-closed 同上传钩子）
+interface transfer-request-hook {
+    on-transfer-request: func(meta-json: string) -> string;
+}
+
+/// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
+interface manifest {
+    get: func() -> string;
+}
+
+/// ABI 版本协商（原 __bedcode_abi_version + 阶段 A 新增 form 形态字段）
+interface abi {
+    version: func() -> u32;
+    form: func() -> u32;
+}
+
+// ==================== World ====================
+
+/// 插件世界：宿主能力全部为 import，插件行为全部为 export
+///
+/// 阶段 A 收尾后宿主已全部接线（13 组 import），完整 world 可直接实例化；
+/// 阶段 B SDK 构建脚本以本 world 生成 guest 绑定。
+world plugin {
+    import host-storage;
+    import host-database;
+    import host-plugin-database;
+    import host-terminal;
+    import host-session;
+    import host-events;
+    import host-http;
+    import host-fs;
+    import host-config;
+    import host-log;
+    import host-bus;
+    import host-api-call;
+    import host-file-service;
+    import host-transfer;
+    import host-timer;
+    import host-process;
+    import host-app;
+
+    export command;
+    export lifecycle;
+    export events;
+    export terminal-hooks;
+    export upload-hook;
+    export transfer-request-hook;
+    export manifest;
+    export abi;
+}

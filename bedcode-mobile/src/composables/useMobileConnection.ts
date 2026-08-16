@@ -13,9 +13,10 @@ import {
   wsIsConnected,
   wsReconnect,
   wsAuthenticate,
+  wsAuthenticateWithBiometric,
   wsRequestPairing,
   wsVerifyPairingCode,
-  wsJoinSession,
+  wsSetToken,
   initMobileEventListeners,
   cleanupMobileEventListeners,
   saveAuthCredentials,
@@ -132,8 +133,34 @@ async function init() {
     authCredentials.value = savedCreds
   }
 
+  // 恢复 Rust 侧全局 token（GLOBAL_TOKEN 为内存态，进程重启后为空）：
+  // 插件对桌面端文件服务（/api/plugins/*）的 HTTP 调用依赖它作为 JWT；
+  // JWT 重连响应经 RequestResponseManager 消费不会触发 AuthHandler 补写，
+  // 只能在此显式恢复，否则文件服务请求永远无 Authorization 头（桌面端 401）
+  if (savedCreds?.sessionToken) {
+    try {
+      await wsSetToken(savedCreds.sessionToken)
+    } catch (e) {
+      console.error('[MobileConnection] wsSetToken failed:', e)
+    }
+  }
+
   // 加载已配对设备列表
   loadPairedDevices()
+
+  // DEV 模式 UI 审查 mock：localStorage 开关 mock_connected=1 时注入已连接状态，
+  // 配合 public/mock-harness.html 纯前端审查使用；生产构建 DEV=false 自动移除
+  if (import.meta.env.DEV && localStorage.getItem('mock_connected') === '1') {
+    currentDevice.value = {
+      id: 'mock-device',
+      name: 'DESKTOP-7ZAI',
+      address: '192.168.1.100',
+      port: 8765,
+      isPaired: true,
+      fingerprint: 'mock-fingerprint',
+    }
+    connectionStatus.value = 'connected'
+  }
 
   // 初始化通知
   const { showTaskNotification, cancelTaskNotification, cancelAllTaskNotifications, showConnectionNotification } = useNotification()
@@ -155,7 +182,9 @@ async function init() {
       // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
       // 因为桌面端要求先认证才能订阅会话输出）
       const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener()
+      bufferStore.startGlobalListener().catch((e) => {
+        console.warn('[MobileConnection] Global listener start failed:', e)
+      })
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -164,7 +193,7 @@ async function init() {
       console.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
 
-      // 标记所有 buffer 未订阅 + hasGap
+      // 标记所有 buffer 未订阅（重连后按字节游标重新订阅）
       const bufferStore = useTerminalBufferStore()
       bufferStore.markAllUnsubscribed()
     },
@@ -195,37 +224,18 @@ async function init() {
       // 认证成功后重新订阅所有后台会话的终端输出
       // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
       const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener()
+      bufferStore.startGlobalListener().catch((e) => {
+        console.warn('[MobileConnection] Global listener start failed:', e)
+      })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        if (!buffer.sessionStopped && !buffer.subscribed) {
-          // 先标记 subscribed 防止 watch(isConnected) 和此处竞态导致双重订阅
-          bufferStore.markSubscribed(sid)
-          const startSeq = buffer.lastEndIndex >= 0 ? buffer.lastEndIndex + 1 : undefined
-          wsJoinSession(sid, startSeq)
-            .then((result) => {
-              if (startSeq !== undefined && result && result.minSeq > startSeq) {
-                // 增量同步回退 — 清空 buffer，标记 hasGap，通知 xterm 清空
-                const buf = bufferStore.getBuffer(sid)
-                if (buf) {
-                  buf.chunks = []
-                  buf.totalBytes = 0
-                  buf.lastIndex = -1
-                  buf.lastEndIndex = -1
-                  buf.hasGap = true
-                }
-                // 通知已注册的 realtimeHandler 清空 xterm，避免全量回放后内容重复
-                const handler = bufferStore.realtimeHandlers.get(sid)
-                if (handler?.onClear) {
-                  handler.onClear()
-                }
-              }
-            })
-            .catch((e) => {
-              console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
-              // 订阅失败时回退 subscribed 状态，允许后续重试
-              bufferStore.markUnsubscribed(sid)
-            })
-        }
+        // 无条件重订阅（仅跳过已停止会话）：服务端订阅随连接关闭清理，
+        // subscribed 只是前端信念且可能残留（意外断开路径已由
+        // markAllUnsubscribed 兜底，但重订阅本身幂等——桌面端按
+        // (client_id, session_id) 替换订阅者，cursor 续传无重复帧）
+        if (buffer.sessionStopped) continue
+        bufferStore.subscribeSession(sid).catch((e) => {
+          console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+        })
       }
     },
     onAuthSuccess: () => {
@@ -322,6 +332,12 @@ async function init() {
       if (index !== -1) {
         activeSessions.value[index].status = data.new_status
       }
+      // 会话重新运行：复位 buffer 的 sessionStopped（停止→重启同 id 场景，
+      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）
+      if (data.new_status === 'running') {
+        const bufferStore = useTerminalBufferStore()
+        bufferStore.markSessionRunning(data.session_id)
+      }
     },
     onSyncSessionStopped: (data) => {
       console.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
@@ -372,6 +388,12 @@ async function init() {
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
     clearConnectionTimeout()
+
+    // 与 ws_disconnected 路径（onDisconnected）对齐：断连即清理订阅信念——
+    // 服务端订阅已随连接关闭清理，若这里不清，重连后的 onPaired 重订阅会
+    // 被 subscribed=true 跳过，桌面端新连接无订阅 → 终端只有历史没有实时
+    const bufferStore = useTerminalBufferStore()
+    bufferStore.markAllUnsubscribed()
 
     // 弹出 Toast 通知（手动断开不会触发此事件）
     const toast = useToast()
@@ -787,6 +809,21 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
 }
 
 /**
+ * 生物认证登录（挑战-应答握手），成功后保存凭据
+ *
+ * 失败时抛出错误（透传桌面端拒绝原因如 CREDENTIAL_NOT_BOUND），
+ * 由调用方决定展示具体文案；不再吞掉错误以免用户只看到笼统提示。
+ */
+export async function authenticateWithBiometric(): Promise<boolean> {
+  const creds = await wsAuthenticateWithBiometric()
+  if (creds) {
+    saveCredentials(creds)
+    return true
+  }
+  return false
+}
+
+/**
  * 加载会话配置列表
  */
 export async function loadSessionConfigs(): Promise<any[]> {
@@ -1096,6 +1133,7 @@ export function useMobileConnection() {
     cancelConnection,
     disconnect,
     authenticate,
+    authenticateWithBiometric,
     requestPairing,
     verifyPairingCode,
     loadSessionConfigs,

@@ -1,0 +1,32 @@
+[package]
+name = "bedcode-plugin-api"
+version = "0.1.0"
+description = "BedCode Plugin API — trait definitions and shared types for BedCode plugins"
+authors = ["binblink"]
+license = "MIT"
+repository = "https://github.com/7ZAI/BedCode"
+edition = "2021"
+
+[lib]
+# rlib：宿主与插件以依赖方式链接；
+# cdylib：test-plugin feature 编译到 wasm32 时生成 .wasm 产物（供宿主 ABI 测试加载）
+crate-type = ["lib", "cdylib"]
+
+[features]
+default = []
+# 启用 WasmPlugin trait / wasm_entry! 宏 / WasmHost 绑定（WASM 插件必开）
+# wasm feature 同时启用 wit-bindgen：WIT 契约（wit/bedcode.wit，单一事实来源）
+# 生成 guest 绑定 —— 组件形态（Component Model）的导入/导出；
+# 以及 #[plugin_api] 属性宏（插件互调 IDL，rust-macros 提供）
+wasm = ["dep:wit-bindgen", "dep:bedcode-plugin-api-macros"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+inventory = "0.3"
+# WIT 契约绑定（迁移阶段 B：wasm_entry! 生成组件导出，WasmHost 经 bindgen import 调用宿主）
+# 版本锁定 =0.60.0（与移动端 SDK 对齐，2025-08；移动端 spike 实证 0.60 产物 × wasmtime 47 兼容）
+wit-bindgen = { version = "=0.60.0", features = ["macros"], optional = true }
+# #[plugin_api] 属性宏（插件互调 IDL：trait → JSON-RPC 分派 + client + 防漂移比对）
+bedcode-plugin-api-macros = { path = "../rust-macros", version = "0.1.0", optional = true }

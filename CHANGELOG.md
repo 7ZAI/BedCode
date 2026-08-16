@@ -5,30 +5,75 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.1.11] - 2026-07-07
+## [2.0.0] - 2026-08-16
 
 ### Added
 
+#### Plugin System — WASM Platform
+- Migrated plugin runtime to WASM Component Model (wasmtime); cdylib dynamic loading removed, Component form is the only supported form
+- ABI evolution v2 → v6: typed host API, param-bound SQL, memory reclaim, out_ptr, signature verification, plugin status reporting, InputSubmitted observation extension point
+- Runtime hardening: epoch interruption + resource limits, fuel watchdog, trap auto-reload recovery, AOT cache, wasmtime 47
+- Security: plugin identity verification and permission approval (anti-spoofing)
+- Toolchain: bedcode-plugin CLI (create / build / dev / validate / doctor / manifest), Dev Shell browser dev environment (both platforms, `--host` for phone access), manifest-gen
+- Lifecycle: dynamic activate/deactivate with state persistence, hot reload, install/uninstall, loading overlays
+- Capabilities: per-plugin independent SQLite database, message bus for inter-plugin communication, host_notify, fs_auth batch directory authorization, file service mount/transfer, WSL filesystem bridge
+- Shared UI component library in SDK (Rust + TS, both platforms)
+
+#### auto-task Plugin
+- Multi-agent support: Claude Code / pi / opencode / Codex (registry-driven agent adaptation architecture)
+- Task queue with scheduling, auto-execution, auto-answer, preset tasks (one-shot), scheduled jobs state machine, task history with stats, filtering and retry
+- Mobile toolbox: task history / scheduled jobs panels
+- TUI-agent first-dispatch fallback (15s grace) and per-agent terminal hooks
+
+#### file-transfer Plugin
+- LAN file transfer plugin (WASM core + desktop/mobile UI + bundled distribution)
+- Bidirectional transfer: send to phone (upload direction), receive with policy approval, async batch approval, transfer history, resume re-queue, dedicated downloads_dir
+- Android SAF streaming: shared directories, SAF picker with pfd strong reference, full-file-access authorization guidance
+
+#### ai-chatbox Plugin
+- Pure AI chat rewrite (both platforms): multi-vendor providers, streaming SSE parsing, thinking mode, Shiki highlighting, code rendering config, JSONL persistence
+
 #### Mobile
-- AI 提示词标准 4 要素模板插入按钮（目标/上下文/约束/完成条件）
-- 快捷栏 RTL 布局，最常用项渲染在右侧方便拇指操作
-- 快捷键排序改为频次降序，配合 RTL 布局
-- 测试终端会话（DEV 模式）用于开发调试
+- Plugin system enabled: dynamic routes, plugin management page, toolbox entries, plugin nav tabs
+- Android SAF file/directory pickers (startActivityForResult)
+- Biometric authentication: keys, auth settings page, challenge-response, device identity persistence
+- Terminal: session preload, cursor-based output subscription, TUI scroll compatibility (SGR), Agent CLI command presets, 16-key default shortcuts
+- Accent color palette (shared source with desktop)
+
+#### Desktop
+- Terminal PTY replay and history playback (Rust-side recovery of output lost while window closed)
+- Byte-stream PTY output pipeline: byte offset contract, cursor incremental re-subscription
+- Four theme palettes (forest / ocean / sunset / violet)
+- Biometric challenge-response and connection history
+- SystemInfo collection and device name broadcast, generic crypto utility module
 
 ### Changed
 
-- 项目描述从强调 Claude Code 远程控制调整为本地远程终端应用
-- 插件页面入口、路由、组件初始化均已注释（暂未上线）
-- Token 校验/生成逻辑已禁用（ensure_token 直接跳过，不再弹出 toast）
-- 项目 hooks 配置不再比对 token 一致性
+- Plugin backend is now fully WASM-based (cdylib removed); Rust MSRV raised to 1.94 (wasmtime 47)
+- Toast migrated to vue-sonner (both platforms)
+- Desktop UI rebuilt on Warm Workbench design; mobile UI unified to group-card style; font-size tokenized
+- Terminal size control is remote-first with mobile pause/resume subscription
+- Output pipeline migrated to local WS single channel (desktop), cursor-based subscription replaces 2MB frontend ring buffer (mobile)
+- Build: rust-lld linker, thin LTO, version bump script, installer release-suffix rename, CI builds plugin artifacts with wasm32 target + Windows signature thumbprint injection
+- Skills unified under `.agents/skills/` for pi / OpenCode / Codex / Claude Code sharing
 
 ### Fixed
 
-- 键盘避让与认证后订阅失败问题
-- 连接状态不一致导致重连失败
-- 终端键盘避让空白
-- 工具栏 i18n 缺失
-- 快捷键面板布局与自适应能力优化
+- Terminal: output continuity (replay storms fixed by cursor incremental re-subscription), long-run page crash, frame loss (async plugin callbacks, drain/reset), reconnection size sync
+- File transfer: name conflicts (409 + rejection reason), notification storms, task races, Windows path separators, explorer reveal, .part residue cleanup
+- Plugins: multi-plugin PluginContext corruption breaking i18n, WASM trap recovery, fuel exhaustion traps, loader handle release, WSL subprocess timeout
+- Mobile: heartbeat blocking_write panic, Activity-recreation picker failure (EBADF), subscription leaks, reconnect state inconsistency
+- Desktop: settings save loop (content snapshot compare), port input, session naming regression after delete
+
+### Security
+
+- Plugin identity verification and permission approval (anti-spoofing)
+- Biometric auth chain hardening: IPC serialization, DER parsing, binding guard self-check
+- JWT gateway with local bypass for agent hooks (token removed from hook scripts)
+
+### Tests
+
+- Frontend +175, desktop Rust +204, mobile +116, SDK contract tests (desktop 5→85, mobile 2→79), file-transfer host unit tests
 
 ---
 
@@ -243,7 +288,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 1.1.11 | 2026-07-07 | 移动端 AI 模板与快捷栏优化，插件入口注释，token 校验禁用 |
+| 2.0.0 | 2026-08-16 | WASM Component Model plugin platform, auto-task / file-transfer / ai-chatbox plugins, mobile plugin system, biometric auth, UI redesign |
 | 1.1.0 | 2026-07-05 | Plugin system, mobile terminal refactor, i18n, Actix Web server |
 | 1.0.0 | 2026-06-30 | Multi-project monorepo, stable desktop + mobile release |
 | 0.1.0 | 2026-04-30 | Initial release with core features |

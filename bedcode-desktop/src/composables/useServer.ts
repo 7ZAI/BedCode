@@ -33,6 +33,8 @@ export interface NetworkConfig {
   shutdown_timeout_secs: number
   ws_max_frame_size_kb: number
   ws_max_message_size_mb: number
+  /** 服务器性能监控采集总开关（默认关闭） */
+  metrics_enabled: boolean
 }
 
 /** 服务器性能指标 */
@@ -58,8 +60,10 @@ export interface TimestampedMetrics {
 
 const MAX_HISTORY = 60
 
+/** 服务器状态单例 — 所有 useServer() 调用者共享，确保 Sidebar / ServerView 等组件状态同步 */
+const status = ref<ServerStatus>('stopped')
+
 export function useServer() {
-  const status = ref<ServerStatus>('stopped')
   const port = ref(8765)
   const autoStart = ref(true)
   const localIps = ref<string[]>([])

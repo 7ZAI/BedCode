@@ -4,6 +4,7 @@
 //! 注意：PTY 输出事件由 FrontendOutputHandler 直接发送 pty-output，不在此转发
 
 use crate::session::SessionManager;
+use crate::system::constants::event;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
@@ -35,8 +36,8 @@ impl EventForwarder {
         let mut rx = self.session_manager.subscribe_status();
         tauri::async_runtime::spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if let Err(e) = app_handle.emit("session-status-changed", &event) {
-                    tracing::error!("Failed to emit session-status-changed event: {}", e);
+                if let Err(e) = app_handle.emit(event::SESSION_STATUS_CHANGED, &event) {
+                    tracing::error!("Failed to emit {} event: {}", event::SESSION_STATUS_CHANGED, e);
                 }
             }
         });
@@ -48,8 +49,8 @@ impl EventForwarder {
         let mut rx = self.session_manager.subscribe_restart();
         tauri::async_runtime::spawn(async move {
             while let Ok(event) = rx.recv().await {
-                if let Err(e) = app_handle.emit("session-restarted", &event) {
-                    tracing::error!("Failed to emit session-restarted event: {}", e);
+                if let Err(e) = app_handle.emit(event::SESSION_RESTARTED, &event) {
+                    tracing::error!("Failed to emit {} event: {}", event::SESSION_RESTARTED, e);
                 }
             }
         });

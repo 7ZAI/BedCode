@@ -17,6 +17,12 @@ use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, error, info, warn};
 
+use crate::system::constants::connection::{
+    BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS,
+    EVENT_FORWARDER_POLL_INTERVAL_MS, LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR,
+    RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
+};
+
 /// WebSocket 客户端
 pub struct WsClient {
     config: WsClientConfig,
@@ -56,7 +62,7 @@ impl WsClient {
         let reconnect = ReconnectManager::from_client_config(config.heartbeat_interval_secs);
         let request_manager = RequestResponseManager::new();
 
-        let (event_tx, _) = broadcast::channel(1024);
+        let (event_tx, _) = broadcast::channel(BROADCAST_CHANNEL_CAPACITY);
 
         Arc::new(Self {
             config: config.clone(),
@@ -152,15 +158,19 @@ impl WsClient {
 
         // 获取 handler 和 request_manager
         let handler = self.handler.read().await.clone();
-        tracing::info!("[WsClient] Handler status: is_some={}", handler.is_some());
+        tracing::debug!("[WsClient] Handler status: is_some={}", handler.is_some());
         let request_manager = self.request_manager.clone();
         let event_tx = self.event_tx.clone();
         let heartbeat = self.heartbeat.clone();
 
         let (write, read) = stream.split();
+        // write（SplitSink）仅由 sender 任务独占访问：receiver 的 Ping/Pong 回复
+        // 经 ws_sender channel 转发，避免两个任务竞争同一把锁并在 send().await
+        // 期间持有它（对端停止读时背压会让另一任务无限等锁）
         let write = Arc::new(Mutex::new(write));
 
-        let write_for_receiver = write.clone();
+        // receiver 任务经此 channel 回 Pong（与公开 send 同队列，串行写）
+        let ws_sender = self.ws_sender.read().await.clone();
         let receiver_handle = {
             let running = running.clone();
 
@@ -179,21 +189,31 @@ impl WsClient {
                         msg = rx.next() => {
                             match msg {
                                 Some(Ok(WsMsg::Text(text))) => {
-                                    info!("[WsClient] <<< RECV: {}...", &text[..text.len().min(1000)]);
+                                    debug!("[WsClient] <<< RECV: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
 
                                     // 1. 尝试匹配 pending 请求
                                     match request_manager.try_match(WsMsg::Text(text.clone())).await {
                                         Some(_) => {
                                             // 未匹配，是推送消息，交给 handler 处理
-                                            info!("[WsClient] Push message, handler is_some: {}", handler.is_some());
-                                            let _ = event_tx.send(WsClientEvent::PushMessage {
+                                            debug!("[WsClient] Push message, handler is_some: {}", handler.is_some());
+                                            if let Err(e) = event_tx.send(WsClientEvent::PushMessage {
                                                 content: text.clone(),
-                                            });
+                                            }) {
+                                                // 广播满时静默丢弃会丢帧（移动端游标连续性破坏）——必须可观测
+                                                let dropped = match e.0 {
+                                                    WsClientEvent::PushMessage { content } => content,
+                                                    _ => String::new(),
+                                                };
+                                                error!(
+                                                    "[WsClient] Push message dropped (broadcast full): {}...",
+                                                    &dropped[..dropped.len().min(LOG_PREVIEW_MAX_LEN)]
+                                                );
+                                            }
 
                                             if let Some(h) = &handler {
                                                 h.handle(
                                                     WsMsg::Text(text),
-                                                    "0.0.0.0:0".parse().unwrap(),
+                                                    PLACEHOLDER_CLIENT_ADDR.parse().unwrap(),
                                                     None,
                                                     None,
                                                 );
@@ -230,15 +250,16 @@ impl WsClient {
                                     break;
                                 }
                                 Some(Ok(WsMsg::Ping(data))) => {
-                                    let mut write = write_for_receiver.lock().await;
-                                    if let Err(e) = write.send(WsMsg::Pong(data)).await {
+                                    // 经发送 channel 回复 Pong（write 由 sender 任务独占）
+                                    let Some(sender) = ws_sender.as_ref() else { break };
+                                    if let Err(e) = sender.send(WsMsg::Pong(data)).await {
                                         error!("[WsClient] Failed to send pong: {}", e);
                                         break;
                                     }
                                 }
                                 Some(Ok(WsMsg::Pong(_))) => {
                                     debug!("[WsClient] Received pong");
-                                    heartbeat.on_pong_received();
+                                    heartbeat.on_pong_received().await;
                                     let _ = event_tx.send(WsClientEvent::HeartbeatResponse);
                                 }
                                 Some(Err(e)) => {
@@ -254,7 +275,7 @@ impl WsClient {
                                 _ => {}
                             }
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(RECEIVER_POLL_INTERVAL_MS)) => {}
                     }
                 }
             })
@@ -268,15 +289,11 @@ impl WsClient {
                 let mut rx = rx;
 
                 loop {
-                    if !running.load(std::sync::atomic::Ordering::SeqCst) {
-                        break;
-                    }
-
                     tokio::select! {
                         msg = rx.recv() => {
                             match msg {
                                 Some(WsMsg::Text(text)) => {
-                                    info!("[WsClient] >>> SEND: {}...", &text[..text.len().min(500)]);
+                                    debug!("[WsClient] >>> SEND: {}...", &text[..text.len().min(LOG_PREVIEW_MAX_LEN)]);
                                     let mut write = write_for_sender.lock().await;
                                     if let Err(e) = write.send(WsMsg::Text(text)).await {
                                         error!("[WsClient] Send error: {}", e);
@@ -293,11 +310,18 @@ impl WsClient {
                                 Some(WsMsg::Close(_)) => {
                                     break;
                                 }
+                                // 所有发送方已关闭：队列排空完毕，优雅退出
                                 None => break,
                                 _ => {}
                             }
                         }
-                        _ = tokio::time::sleep(std::time::Duration::from_millis(10)) => {}
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(SENDER_POLL_INTERVAL_MS)) => {
+                            // 停止标记后（disconnect）继续排空队列；
+                            // 队列为空且不再收新消息时才退出，避免丢弃已确认入队的消息
+                            if !running.load(std::sync::atomic::Ordering::SeqCst) && rx.is_empty() {
+                                break;
+                            }
+                        }
                     }
                 }
             })
@@ -341,7 +365,7 @@ impl WsClient {
                             _ => {}
                         }
                     }
-                    _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                    _ = tokio::time::sleep(std::time::Duration::from_millis(EVENT_FORWARDER_POLL_INTERVAL_MS)) => {}
                 }
             }
         });
@@ -431,10 +455,14 @@ impl WsClient {
         self.heartbeat.stop().await;
         *self.ws_sender.write().await = None;
 
+        // 复位底层连接运行标记，允许同实例再次 connect（否则 reconnect 必报
+        // "Already connected or connecting"）
+        self.connection.reset_running();
+
         // 通知所有 pending 请求
         self.request_manager.on_error("Disconnected").await;
 
-        self.await_tasks(3).await;
+        self.await_tasks(DISCONNECT_TASK_TIMEOUT_SECS).await;
 
         self.lifecycle.set_status(ConnectionStatus::Disconnected).await;
 
@@ -450,15 +478,15 @@ impl WsClient {
 
     /// 发送消息（不等待响应）
     pub async fn send(&self, message: &Message) -> Result<()> {
-        tracing::info!("[WsClient] send() called, checking ws_sender...");
+        tracing::debug!("[WsClient] send() called, checking ws_sender...");
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
-            tracing::info!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(500)]);
+            tracing::debug!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]);
             sender
                 .send(WsMsg::Text(json))
                 .await
                 .map_err(|e| crate::AppError::WebSocket(format!("Failed to send: {}", e)))?;
-            tracing::info!("[WsClient] send() completed - message queued");
+            tracing::debug!("[WsClient] send() completed - message queued");
             Ok(())
         } else {
             tracing::error!("[WsClient] send() failed - ws_sender is None!");
@@ -543,5 +571,178 @@ impl WsClient {
         } else {
             Err(crate::AppError::WebSocket("Reconnect abandoned".to_string()))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::accept_async;
+    use tokio_tungstenite::tungstenite::protocol::Message as ServerMsg;
+    use std::time::{Duration, Instant};
+
+    /// 本地 WS 服务端：accept 一次连接，收集文本消息直到连接关闭，Ping 回 Pong
+    async fn spawn_local_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut ws = accept_async(stream).await.unwrap();
+            let mut received = Vec::new();
+            loop {
+                match ws.next().await {
+                    Some(Ok(ServerMsg::Text(t))) => received.push(t.to_string()),
+                    Some(Ok(ServerMsg::Ping(d))) => {
+                        let _ = ws.send(ServerMsg::Pong(d)).await;
+                    }
+                    Some(Ok(ServerMsg::Close(_))) | None => break,
+                    _ => {}
+                }
+            }
+            received
+        });
+        (addr, handle)
+    }
+
+    fn test_config(addr: std::net::SocketAddr) -> WsClientConfig {
+        WsClientConfig::new("127.0.0.1", addr.port())
+    }
+
+    /// 高频发送不丢不乱：2000 条消息顺序与服务端收到顺序一致
+    #[tokio::test]
+    async fn send_high_frequency_preserves_order() {
+        let (addr, server) = spawn_local_server().await;
+        let client = WsClient::new(test_config(addr));
+        client.connect().await.unwrap();
+
+        const N: usize = 2000;
+        for i in 0..N {
+            client.send_text(&format!("msg-{i}")).await.unwrap();
+        }
+
+        // disconnect 触发连接关闭，服务端收满后返回
+        client.disconnect().await;
+        let received = tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .expect("server should finish")
+            .unwrap();
+
+        assert_eq!(received.len(), N, "all messages must arrive");
+        for (i, msg) in received.iter().enumerate() {
+            assert_eq!(msg, &format!("msg-{i}"), "order must be preserved at index {}", i);
+        }
+    }
+
+    /// 对端关闭后 send 快速失败（channel 关闭），不永久挂起
+    #[tokio::test]
+    async fn send_fails_fast_after_peer_close() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 服务端完成握手后（通知主测试）再关闭连接
+        let (handshake_done_tx, mut handshake_done_rx) = tokio::sync::mpsc::channel::<()>(1);
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let _ws = accept_async(stream).await.unwrap();
+            let _ = handshake_done_tx.send(()).await;
+            // 等主测试确认已连接后 drop：模拟对端掉线
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        });
+
+        let client = WsClient::new(test_config(addr));
+        client.connect().await.unwrap();
+        // 确认服务端握手完成，随后服务端关闭连接
+        let _ = tokio::time::timeout(Duration::from_secs(3), handshake_done_rx.recv())
+            .await
+            .expect("server handshake must complete");
+        server.await.unwrap();
+
+        // 等待 receiver/sender task 感知连接关闭
+        tokio::time::sleep(Duration::from_millis(300)).await;
+
+        // 发送应最终失败且不挂起（单条 3s 硬超时兜底断言）
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut last_result = Ok(());
+        while Instant::now() < deadline {
+            last_result = client.send_text("after-close").await;
+            if last_result.is_err() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            last_result.is_err(),
+            "send must fail after peer close, got: {:?}",
+            last_result
+        );
+    }
+
+    /// disconnect 后 send 返回错误（ws_sender 已清空），不静默成功
+    #[tokio::test]
+    async fn send_after_disconnect_returns_error() {
+        let (addr, _server) = spawn_local_server().await;
+        let client = WsClient::new(test_config(addr));
+        client.connect().await.unwrap();
+        client.disconnect().await;
+
+        let result = client.send_text("after-disconnect").await;
+        assert!(result.is_err(), "send after disconnect must fail, got: {:?}", result);
+    }
+
+    /// 重连重建通道：disconnect 后再次 connect，新 channel 可正常收发
+    #[tokio::test]
+    async fn disconnect_then_reconnect_rebuilds_channel() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        // 服务端接受两次连接，分别收集各自的消息
+        let server = tokio::spawn(async move {
+            let mut rounds: Vec<Vec<String>> = Vec::new();
+            for _ in 0..2 {
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut ws = accept_async(stream).await.unwrap();
+                let mut received = Vec::new();
+                loop {
+                    match ws.next().await {
+                        Some(Ok(ServerMsg::Text(t))) => received.push(t.to_string()),
+                        Some(Ok(ServerMsg::Ping(d))) => {
+                            let _ = ws.send(ServerMsg::Pong(d)).await;
+                        }
+                        Some(Ok(ServerMsg::Close(_))) | None => break,
+                        _ => {}
+                    }
+                }
+                rounds.push(received);
+            }
+            rounds
+        });
+
+        let client = WsClient::new(test_config(addr));
+        client.connect().await.unwrap();
+        client.send_text("round-1").await.unwrap();
+        client.disconnect().await;
+
+        // 直接再次 connect：应成功（而非 "Already connected"）
+        let reconnect_result = tokio::time::timeout(Duration::from_secs(5), client.connect()).await;
+        assert!(
+            reconnect_result.is_ok(),
+            "reconnect must not hang, got: {:?}",
+            reconnect_result
+        );
+        assert!(
+            reconnect_result.unwrap().is_ok(),
+            "reconnect must succeed, running flag should be reset by disconnect"
+        );
+
+        client.send_text("round-2").await.unwrap();
+        client.disconnect().await;
+
+        let rounds = tokio::time::timeout(Duration::from_secs(10), server)
+            .await
+            .expect("server should finish")
+            .unwrap();
+        assert_eq!(rounds.len(), 2, "server must see two connections");
+        assert_eq!(rounds[0], vec!["round-1".to_string()]);
+        assert_eq!(rounds[1], vec!["round-2".to_string()]);
     }
 }

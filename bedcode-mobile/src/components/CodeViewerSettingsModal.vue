@@ -171,10 +171,16 @@ function handleConfirm() {
 }
 
 .settings-modal {
+  --size-btn: clamp(2rem, 2.5rem, 3rem);
+  --footer-btn-py: clamp(0.625rem, 0.75rem, 1rem);
+  --thumb-size: clamp(1.25rem, 1.5rem, 1.75rem); /* 默认 24px，满足手指滑动触摸目标 */
+  --toggle-w: clamp(2.25rem, 2.75rem, 3.25rem);
+  --toggle-h: clamp(1.25rem, 1.5rem, 1.75rem);
+
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 100%;
-  max-width: 360px;
+  max-width: clamp(280px, 360px, 420px);
   max-height: 80vh;
   overflow-y: auto;
 }
@@ -188,7 +194,7 @@ function handleConfirm() {
 }
 
 .settings-header h2 {
-  font-size: 1rem;
+  font-size: var(--font-size-lg);
   font-weight: 600;
   color: var(--mobile-text-primary);
   margin: 0;
@@ -203,6 +209,7 @@ function handleConfirm() {
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: color 0.2s ease;
 }
 
 .close-btn:hover {
@@ -223,7 +230,7 @@ function handleConfirm() {
 
 .settings-label {
   display: block;
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-weight: 500;
   color: var(--mobile-text-muted);
   margin-bottom: 0.75rem;
@@ -237,13 +244,13 @@ function handleConfirm() {
 }
 
 .size-btn {
-  width: 40px;
-  height: 40px;
+  width: var(--size-btn);
+  height: var(--size-btn);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: 1.25rem;
+  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 2, 1.375rem);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -260,7 +267,7 @@ function handleConfirm() {
 .size-value {
   flex: 1;
   text-align: center;
-  font-size: 1.125rem;
+  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -269,7 +276,7 @@ function handleConfirm() {
 .theme-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 0.5rem;
+  gap: clamp(0.375rem, 0.5rem, 0.75rem);
 }
 
 .theme-btn {
@@ -277,7 +284,7 @@ function handleConfirm() {
   flex-direction: column;
   align-items: center;
   gap: 0.375rem;
-  padding: 0.75rem 0.5rem;
+  padding: clamp(0.5rem, 0.75rem, 1rem) clamp(0.375rem, 0.5rem, 0.75rem);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
@@ -300,13 +307,13 @@ function handleConfirm() {
   padding: 0.5rem;
   border-radius: 0.375rem;
   text-align: center;
-  font-size: 0.875rem;
+  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 600;
   font-family: 'Fira Code', 'JetBrains Mono', monospace;
 }
 
 .theme-name {
-  font-size: 0.75rem;
+  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
   color: var(--mobile-text-muted);
 }
 
@@ -318,17 +325,17 @@ function handleConfirm() {
 /* Tab 缩进按钮组 */
 .tab-size-group {
   display: flex;
-  gap: 0.5rem;
+  gap: clamp(0.375rem, 0.5rem, 0.75rem);
 }
 
 .tab-size-btn {
   flex: 1;
-  padding: 0.625rem;
+  padding: clamp(0.5rem, 0.625rem, 0.75rem);
   border-radius: 0.5rem;
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
   color: var(--mobile-text-secondary);
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -360,7 +367,7 @@ function handleConfirm() {
 }
 
 .slider-value {
-  font-size: 1.125rem;
+  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -369,7 +376,7 @@ function handleConfirm() {
   -webkit-appearance: none;
   appearance: none;
   width: 100%;
-  height: 6px;
+  height: clamp(4px, 6px, 8px);
   border-radius: 3px;
   background: var(--mobile-bg-elevated);
   outline: none;
@@ -379,8 +386,8 @@ function handleConfirm() {
 .slider-track::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 22px;
-  height: 22px;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
   border-radius: 50%;
   background: var(--mobile-accent);
   border: none;
@@ -394,8 +401,8 @@ function handleConfirm() {
 }
 
 .slider-track::-moz-range-thumb {
-  width: 22px;
-  height: 22px;
+  width: var(--thumb-size);
+  height: var(--thumb-size);
   border-radius: 50%;
   background: var(--mobile-accent);
   border: none;
@@ -410,15 +417,15 @@ function handleConfirm() {
 }
 
 .slider-range-label {
-  font-size: 0.75rem;
+  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
   color: var(--mobile-text-muted);
   text-align: right;
 }
 
 .toggle-btn {
-  width: 2.75rem;
-  height: 1.5rem;
-  border-radius: 0.75rem;
+  width: var(--toggle-w);
+  height: var(--toggle-h);
+  border-radius: calc(var(--toggle-h) / 2);
   background: var(--mobile-bg-elevated);
   border: none;
   cursor: pointer;
@@ -435,8 +442,8 @@ function handleConfirm() {
   position: absolute;
   top: 0.125rem;
   left: 0.125rem;
-  width: 1.25rem;
-  height: 1.25rem;
+  width: calc(var(--toggle-h) - 0.25rem);
+  height: calc(var(--toggle-h) - 0.25rem);
   border-radius: 50%;
   background: var(--mobile-text-primary);
   box-shadow: 0 1px 3px var(--mobile-overlay-light);
@@ -444,7 +451,7 @@ function handleConfirm() {
 }
 
 .toggle-thumb.on {
-  transform: translateX(1.25rem);
+  transform: translateX(calc(var(--toggle-w) - var(--toggle-h)));
 }
 
 /* Footer */
@@ -457,9 +464,9 @@ function handleConfirm() {
 
 .settings-footer-btn {
   flex: 1;
-  padding: 0.75rem;
+  padding: var(--footer-btn-py);
   border-radius: 0.5rem;
-  font-size: 0.875rem;
+  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

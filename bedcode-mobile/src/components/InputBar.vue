@@ -51,7 +51,7 @@
         :disabled="!canSubmit"
         @click="submitText"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
         </svg>
       </button>
@@ -62,7 +62,7 @@
         :disabled="!canSubmit"
         @click="executeText"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
         </svg>
       </button>
@@ -228,7 +228,7 @@ defineExpose({ focus })
   border: none;
   outline: none;
   color: var(--mobile-text-primary);
-  font-size: 0.875rem;
+  font-size: var(--font-size-base);
   font-family: inherit;
   resize: none;
   max-height: 120px;
@@ -246,16 +246,17 @@ defineExpose({ focus })
 }
 
 .action-btn {
-  width: 2.5rem;
-  height: 2.5rem;
+  width: clamp(2.75rem, 9vw, 3rem);
+  height: clamp(2.75rem, 9vw, 3rem);
   display: flex;
   align-items: center;
   justify-content: center;
-  border-radius: 9999px;
+  border-radius: 0.5rem;
   border: 1px solid;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all 0.15s ease;
   flex-shrink: 0;
+  padding: 0;
 }
 
 .send-btn {
@@ -264,8 +265,10 @@ defineExpose({ focus })
   color: var(--mobile-send-color);
 }
 
-.send-btn:hover:not(:disabled) {
+.send-btn:hover:not(:disabled),
+.send-btn:active:not(:disabled) {
   background: var(--mobile-send-active-bg);
+  transform: scale(0.93);
 }
 
 .send-btn:disabled {
@@ -279,8 +282,10 @@ defineExpose({ focus })
   color: var(--mobile-execute-color);
 }
 
-.execute-btn:hover:not(:disabled) {
+.execute-btn:hover:not(:disabled),
+.execute-btn:active:not(:disabled) {
   background: var(--mobile-execute-active-bg);
+  transform: scale(0.93);
 }
 
 .execute-btn:disabled {

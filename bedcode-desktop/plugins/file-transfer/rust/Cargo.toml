@@ -1,0 +1,21 @@
+[package]
+name = "bedcode-plugin-file-transfer"
+version = "1.0.0-beta"
+description = "File Transfer Plugin — 内网文件传输"
+authors = ["BedCode"]
+edition = "2021"
+
+[features]
+default = ["native"]
+native = []
+wasm = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../../../packages/plugin-sdk-desktop/rust", features = ["wasm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"
