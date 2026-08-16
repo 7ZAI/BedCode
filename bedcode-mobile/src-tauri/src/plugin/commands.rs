@@ -1163,6 +1163,7 @@ pub async fn plugin_ocr_recognize(
 }
 
 /// 引擎状态：模型是否就位/占用字节/引擎加载态/支持引擎列表
+/// available = onnxruntime .so 打包在位（Android 经 Kotlin 桥探测）
 #[tauri::command]
 pub async fn plugin_ocr_engine_status(
     app_handle: tauri::AppHandle,
@@ -1171,7 +1172,28 @@ pub async fn plugin_ocr_engine_status(
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_ocr(&manager, &plugin_id, "plugin_ocr_engine_status").await?;
     let data_dir = app_handle.path().app_data_dir()?;
-    Ok(crate::ocr::engine::engine_status(&data_dir).await)
+    let onnx_so = ocr_onnxruntime_so_path(&app_handle).await;
+    Ok(crate::ocr::engine::engine_status(&data_dir, onnx_so.as_deref()).await)
+}
+
+/// onnxruntime .so 路径探测：Android 经 Kotlin 桥拿 nativeLibraryDir；
+/// 其他平台（桌面 dev）None → 恒可用兑底
+async fn ocr_onnxruntime_so_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "android")]
+    {
+        match crate::plugin::android_plugins::native_library_dir().await {
+            Ok(dir) => Some(crate::ocr::engine::onnxruntime_so_path(&dir)),
+            Err(e) => {
+                tracing::warn!("plugin_ocr_engine_status: native_library_dir failed: {}", e);
+                None
+            }
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = app_handle;
+        None
+    }
 }
 
 /// 删除已解压模型（释放空间；引擎加载后先释放 session 再删，见 spec §4.2）
@@ -1187,7 +1209,7 @@ pub async fn plugin_ocr_delete_models(
         .map(|(deleted, freed_bytes)| crate::ocr::OcrDeleteModelsOutput { deleted, freed_bytes })
 }
 
-/// 从 APK assets 恢复模型（幂等；解压在票据 06 填充）
+/// 从 APK assets 恢复模型（幂等；Android 经 Kotlin 桥惰性解压，见 spec §4.5）
 #[tauri::command]
 pub async fn plugin_ocr_restore_models(
     app_handle: tauri::AppHandle,
@@ -1196,7 +1218,9 @@ pub async fn plugin_ocr_restore_models(
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_ocr(&manager, &plugin_id, "plugin_ocr_restore_models").await?;
     let data_dir = app_handle.path().app_data_dir()?;
-    crate::ocr::models::restore_models(&data_dir)
+    let app_version = app_handle.package_info().version.to_string();
+    crate::ocr::models::restore_models(&data_dir, &app_version)
+        .await
         .map(|restored| crate::ocr::OcrRestoreModelsOutput { restored })
 }
 

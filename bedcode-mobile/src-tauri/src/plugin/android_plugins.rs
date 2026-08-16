@@ -20,6 +20,7 @@ mod downloads;
 mod file_delete;
 mod foreground;
 mod notifications;
+mod ocr_models;
 mod picker;
 mod saf;
 
@@ -33,5 +34,6 @@ pub use downloads::*;
 pub use file_delete::*;
 pub use foreground::*;
 pub use notifications::*;
+pub use ocr_models::*;
 pub use picker::*;
 pub use saf::*;

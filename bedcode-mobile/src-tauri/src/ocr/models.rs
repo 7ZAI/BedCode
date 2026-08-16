@@ -69,16 +69,38 @@ pub fn delete_models(data_dir: &Path) -> Result<(bool, u64)> {
     Ok((true, freed))
 }
 
-/// 从 APK assets 恢复模型（幂等：已就位则跳过）。
-/// 05 阶段缺失时返回明确未实现错误；assets 解压在票据 06 填充。
-pub fn restore_models(data_dir: &Path) -> Result<bool> {
+/// 从 APK assets 恢复模型（惰性解压 + 版本标记；幂等：已就位则跳过）。
+/// Android：经 OcrModelExtractorPlugin 解压；其他平台（桌面 dev）无 APK assets，
+/// 已就位则跳过，否则明确报错（真机/模拟器之外无法恢复）。
+pub async fn restore_models(data_dir: &Path, app_version: &str) -> Result<bool> {
     if models_present(data_dir) {
         return Ok(true);
     }
-    Err(crate::AppError::Internal(
-        "plugin_ocr_restore_models: extraction from APK assets not implemented yet (ticket 06)"
-            .into(),
-    ))
+    #[cfg(target_os = "android")]
+    {
+        let count = crate::plugin::android_plugins::extract_ocr_models(app_version).await?;
+        if count == 0 {
+            return Err(crate::AppError::Plugin(
+                "plugin_ocr_restore_models: no model assets in APK (resources/ocr_models)"
+                    .into(),
+            ));
+        }
+        if !models_present(data_dir) {
+            return Err(crate::AppError::Internal(format!(
+                "plugin_ocr_restore_models: extraction reported {} model(s) but ocr_models/ is still absent in {}",
+                count,
+                data_dir.display()
+            )));
+        }
+        Ok(true)
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        Err(crate::AppError::Internal(
+            "plugin_ocr_restore_models: no APK assets on this platform (models extract on Android)"
+                .into(),
+        ))
+    }
 }
 
 #[cfg(test)]
@@ -146,16 +168,16 @@ mod tests {
         assert_eq!(freed, 0);
     }
 
-    /// 恢复：已就位幂等跳过；缺失 → 明确未实现错误（06 前不解压）
-    #[test]
-    fn restore_skips_when_present_and_rejects_when_absent() {
+    /// 恢复：已就位幂等跳过；缺失 → 非 Android 平台明确报错（真机才有 APK assets）
+    #[tokio::test]
+    async fn restore_skips_when_present_and_rejects_when_absent() {
         let dir = temp_dir("restore");
         std::fs::create_dir_all(models_dir(&dir)).unwrap();
         std::fs::write(models_dir(&dir).join("a.onnx"), vec![0u8; 8]).unwrap();
-        assert!(restore_models(&dir).unwrap());
+        assert!(restore_models(&dir, "2.0.0").await.unwrap());
 
         std::fs::remove_dir_all(models_dir(&dir)).unwrap();
-        let err = restore_models(&dir).unwrap_err().to_string();
-        assert!(err.contains("ticket 06"), "got: {}", err);
+        let err = restore_models(&dir, "2.0.0").await.unwrap_err().to_string();
+        assert!(err.contains("no APK assets"), "got: {}", err);
     }
 }

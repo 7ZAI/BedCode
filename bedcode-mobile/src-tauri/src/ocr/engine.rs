@@ -60,15 +60,25 @@ pub async fn recognize(app_handle: &tauri::AppHandle, input: &OcrRecognizeInput)
     Ok(output)
 }
 
-/// `plugin_ocr_engine_status` 命令体：v1 恒 available；engine_loaded 待 07 常驻引擎后真实化
-pub async fn engine_status(data_dir: &Path) -> OcrEngineStatus {
+/// `plugin_ocr_engine_status` 命令体：available 由 onnxruntime .so 存在性决定
+/// （非 Android dev 无此文件 → None 恒可用兑底）；engine_loaded 待 07 常驻引擎后真实化
+pub async fn engine_status(data_dir: &Path, onnxruntime_so: Option<&Path>) -> OcrEngineStatus {
+    let available = match onnxruntime_so {
+        Some(so) => so.is_file(),
+        None => true,
+    };
     OcrEngineStatus {
-        available: true,
+        available,
         models_present: models::models_present(data_dir),
         models_bytes: models::models_bytes(data_dir),
         engine_loaded: false,
         supported_engines: vec!["offline".to_string()],
     }
+}
+
+/// onnxruntime .so 完整路径（nativeLibraryDir + 文件名；官方 Android AAR 命名）
+pub fn onnxruntime_so_path(native_lib_dir: &str) -> std::path::PathBuf {
+    Path::new(native_lib_dir).join("libonnxruntime.so")
 }
 
 #[cfg(test)]
@@ -103,5 +113,43 @@ mod tests {
         };
         let err = engine.recognize(&image, None).unwrap_err().to_string();
         assert!(err.contains("not implemented"), "got: {}", err);
+    }
+
+    /// engine_status：.so 存在 → available；缺失 → false；None（非 Android dev）→ 恒 true
+    #[tokio::test]
+    async fn status_available_reflects_onnxruntime_so() {
+        let dir = std::env::temp_dir().join(format!(
+            "bedcode-ocr-status-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let so = dir.join("libonnxruntime.so");
+
+        // .so 未打包：available=false
+        let status = engine_status(&dir, Some(&so)).await;
+        assert!(!status.available);
+
+        // .so 就位：available=true
+        std::fs::write(&so, vec![0u8; 16]).unwrap();
+        let status = engine_status(&dir, Some(&so)).await;
+        assert!(status.available);
+
+        // 非 Android dev 环境（None）：恒可用兜底
+        let status = engine_status(&dir, None).await;
+        assert!(status.available);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// onnxruntime_so_path 拼接 nativeLibraryDir
+    #[test]
+    fn onnx_so_path_joins_lib_dir() {
+        let p = onnxruntime_so_path("/data/app/xx/lib/arm64");
+        assert_eq!(p.file_name().unwrap().to_str().unwrap(), "libonnxruntime.so");
+        assert_eq!(
+            p.parent().unwrap().to_str().unwrap(),
+            "/data/app/xx/lib/arm64"
+        );
     }
 }

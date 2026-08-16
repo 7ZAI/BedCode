@@ -52,6 +52,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
+        .plugin(crate::plugin::android_plugins::ocr_model_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
         .plugin(crate::plugin::android_plugins::task_notification_plugin())
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())

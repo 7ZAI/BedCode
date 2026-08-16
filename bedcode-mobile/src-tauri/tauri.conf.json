@@ -38,7 +38,8 @@
     "targets": "all",
     "resources": [
       "resources/config.json",
-      "resources/plugins/**/*"
+      "resources/plugins/**/*",
+      "resources/ocr_models/*"
     ],
     "icon": [
       "icons/32x32.png",

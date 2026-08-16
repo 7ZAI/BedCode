@@ -29,6 +29,8 @@ CONTEXT.md
 # 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
 **/src-tauri/resources/plugins/
 **/src-tauri/gen/android/app/src/main/assets/resources/plugins/
+# OCR 模型在 gen/android assets 的拷贝（tauri build 产物；真源在 src-tauri/resources/ocr_models/ 入库）
+**/src-tauri/gen/android/app/src/main/assets/resources/ocr_models/
 
 # IDE and editors
 .idea/
