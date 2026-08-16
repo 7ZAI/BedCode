@@ -41,7 +41,11 @@ pub struct AppContext {
     /// mDNS 广播管理器
     mdns_advertiser: Arc<tokio::sync::RwLock<MdnsAdvertiser>>,
     /// Tauri AppHandle
-    app_handle: Arc<AppHandle>,
+    ///
+    /// Option 化：无头/测试上下文（`tauri::test::mock_app()` 只能产出
+    /// MockRuntime 句柄，与 Wry 类型不兼容）允许 None，依赖前端事件的
+    /// 能力在调用处降级（emit 跳过），业务链路不受影响
+    app_handle: Option<Arc<AppHandle>>,
     /// 同步事件发送器
     sync_tx: broadcast::Sender<crate::events::DesktopSyncEvent>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
@@ -112,7 +116,7 @@ impl AppContext {
         &self.mdns_advertiser
     }
 
-    pub fn app_handle(&self) -> &Arc<AppHandle> {
+    pub fn app_handle(&self) -> &Option<Arc<AppHandle>> {
         &self.app_handle
     }
 
@@ -205,8 +209,8 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn app_handle(mut self, ah: Arc<AppHandle>) -> Self {
-        self.app_handle = Some(ah);
+    pub fn app_handle(mut self, ah: Option<Arc<AppHandle>>) -> Self {
+        self.app_handle = ah;
         self
     }
 
@@ -237,7 +241,8 @@ impl AppContextBuilder {
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
             biometric_challenges: self.biometric_challenges.unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
-            app_handle: self.app_handle.expect("AppContext: app_handle is required"),
+            // app_handle 允许 None（无头/测试上下文），其余字段仍必填
+            app_handle: self.app_handle,
             sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
             system_info: self.system_info.expect("AppContext: system_info is required"),

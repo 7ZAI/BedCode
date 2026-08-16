@@ -97,7 +97,9 @@ impl PluginHost {
         plugins_dir: &Path,
         session_manager: Arc<SessionManager>,
         config_manager: Arc<SessionConfigManager>,
-        app_handle: Arc<tauri::AppHandle>,
+        // Option 化：无头/测试上下文无 AppHandle（与 WasmRuntime/WasmHostContext 同策略），
+        // 依赖前端事件的宿主能力在调用处降级
+        app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
         tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
 
@@ -107,7 +109,7 @@ impl PluginHost {
 
         // 构建 WASM 运行时和宿主上下文
         let wasm_runtime = Arc::new(
-            WasmRuntime::new(storage.clone(), Some(app_handle.clone()))
+            WasmRuntime::new(storage.clone(), app_handle.clone())
                 .expect("Failed to initialize WASM runtime"),
         );
 
@@ -119,7 +121,7 @@ impl PluginHost {
         // Arc 化后经 set_plugin_host 两阶段注入
         let file_service = crate::plugin::file_service::FileServiceRegistry::new(
             wasm_runtime.fs_auth().clone(),
-            Some(app_handle.clone()),
+            app_handle.clone(),
         );
 
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
@@ -128,7 +130,7 @@ impl PluginHost {
             storage.clone(),
             session_manager,
             config_manager,
-            Some(app_handle),
+            app_handle,
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
@@ -424,7 +426,9 @@ impl PluginHost {
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
-        let _ = ctx.app_handle().emit(event::LIFECYCLE_STARTUP, serde_json::json!({}));
+        if let Some(handle) = ctx.app_handle() {
+            let _ = handle.emit(event::LIFECYCLE_STARTUP, serde_json::json!({}));
+        }
 
         tracing::info!("PluginHost notify_startup completed");
     }
@@ -451,7 +455,9 @@ impl PluginHost {
 
         // TS-only 插件：通过 Tauri 事件通知
         let ctx = crate::system::app_context::AppContext::global();
-        let _ = ctx.app_handle().emit(event::LIFECYCLE_SHUTDOWN, serde_json::json!({}));
+        if let Some(handle) = ctx.app_handle() {
+            let _ = handle.emit(event::LIFECYCLE_SHUTDOWN, serde_json::json!({}));
+        }
 
         tracing::info!("PluginHost notify_shutdown completed");
     }
@@ -934,7 +940,10 @@ impl PluginHost {
         let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
             return;
         };
-        if let Err(e) = ctx.app_handle().emit(
+        let Some(handle) = ctx.app_handle() else {
+            return;
+        };
+        if let Err(e) = handle.emit(
             crate::system::constants::event::PLUGIN_RUNTIME_ERROR,
             serde_json::json!({
                 "plugin_id": plugin_id,
@@ -1082,9 +1091,9 @@ mod tests {
 
     /// 本模块测试的不可测面说明：
     ///
-    /// - `PluginHost::new`：依赖真实 `tauri::AppHandle`（WASM 运行时数据目录、
-    ///   FsAuthChecker 等）与 inventory 静态注册表，测试环境无法构造；
-    ///   本模块通过结构体字面量直接构造（tests 位于 host.rs 内部，可访问私有字段），
+    /// - `PluginHost::new`：依赖 inventory 静态注册表与真实插件目录；app_handle 已
+    ///   Option 化（None = 无头测试上下文），但集成测试在 crate 外无法访问私有字段，
+    ///   仍需通过结构体字面量直接构造（tests 位于 host.rs 内部，可访问私有字段），
     ///   覆盖 new() 之后的全部宿主行为。
     /// - `notify_startup` / `notify_shutdown` / `PluginServices::mark_plugin_error`：
     ///   依赖 `AppContext::global()`（未初始化即 panic）+ `app_handle().emit`，

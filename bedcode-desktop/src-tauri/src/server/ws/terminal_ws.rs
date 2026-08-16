@@ -194,16 +194,19 @@ impl Actor for TerminalWs {
         // 通知前端设备下线（与 DEVICE_CONNECTED 对称；仅已认证连接有 device_id）
         if let Some(device_id) = self.session.device_id.clone() {
             let app_ctx = crate::system::app_context::AppContext::global();
-            let _ = app_ctx.app_handle().emit(
-                crate::system::constants::event::DEVICE_DISCONNECTED,
-                &crate::server::connection_types::DeviceConnectionEvent {
-                    addr: self.session.addr.to_string(),
-                    device_id,
-                    device_name: self.session.device_name.clone(),
-                    fingerprint: self.session.fingerprint.clone(),
-                    event: "disconnected".to_string(),
-                },
-            );
+            // 无头/测试上下文无 AppHandle：跳过前端事件（保持 let _ 丢弃错误语义）
+            if let Some(handle) = app_ctx.app_handle() {
+                let _ = handle.emit(
+                    crate::system::constants::event::DEVICE_DISCONNECTED,
+                    &crate::server::connection_types::DeviceConnectionEvent {
+                        addr: self.session.addr.to_string(),
+                        device_id,
+                        device_name: self.session.device_name.clone(),
+                        fingerprint: self.session.fingerprint.clone(),
+                        event: "disconnected".to_string(),
+                    },
+                );
+            }
         }
 
         // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录
@@ -486,7 +489,8 @@ impl TerminalWs {
             let app_ctx = AppContext::global();
             let pairing_service = app_ctx.pairing_service().clone();
             let qr_manager = app_ctx.qr_manager().clone();
-            let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = Some(app_ctx.app_handle().clone());
+            // 无头/测试上下文可能无 AppHandle：handle_auth 签名本身就是 Option，直接透传
+            let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = app_ctx.app_handle().clone();
             let ws_manager = crate::server::ws::WebSocketManager::global();
             let jwt_service = JwtService::new();
             let db = app_ctx.db().clone();
@@ -610,15 +614,17 @@ impl TerminalWs {
                     }
                 });
 
-                // 通知桌面端
+                // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
                 let app_ctx = AppContext::global();
-                let _ = app_ctx.app_handle().emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                    addr: self.session.addr.to_string(),
-                    device_id: claims.sub,
-                    device_name: self.session.device_name.clone(),
-                    fingerprint: self.session.fingerprint.clone(),
-                    event: "authenticated".to_string(),
-                });
+                if let Some(handle) = app_ctx.app_handle() {
+                    let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
+                        addr: self.session.addr.to_string(),
+                        device_id: claims.sub,
+                        device_name: self.session.device_name.clone(),
+                        fingerprint: self.session.fingerprint.clone(),
+                        event: "authenticated".to_string(),
+                    });
+                }
 
                 let response = Message::Auth {
                     message_id,
@@ -896,6 +902,7 @@ impl TerminalWs {
         let addr = self.session.addr;
         let device_name = self.session.device_name.clone();
         let actor_addr = ctx.address();
+        // 无头/测试上下文可能无 AppHandle：handle_control_message 签名本身就是 Option，直接透传
         let app_handle = AppContext::global().app_handle().clone();
 
         actix::spawn(async move {
@@ -910,7 +917,7 @@ impl TerminalWs {
                 &session_manager,
                 addr,
                 device_name,
-                Some(app_handle),
+                app_handle,
             ).await;
 
             match result {

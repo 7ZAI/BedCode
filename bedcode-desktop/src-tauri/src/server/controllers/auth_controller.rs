@@ -25,17 +25,18 @@ pub async fn request_pairing(
 ) -> HttpResponse {
     let ctx = AppContext::global();
     let pairing_service = ctx.pairing_service();
-    let app_handle = ctx.app_handle();
 
     let code = pairing_service.generate_code().await;
 
-    // 通知桌面端前端显示配对码
-    if let Err(e) = app_handle.emit("pairing-code-generated", &crate::server::connection_types::PairingCodeGeneratedEvent {
-        code: code.code.clone(),
-        expires_in: code.remaining_seconds(),
-        device_name: Some(body.device_name.clone()),
-    }) {
-        tracing::error!(error = %e, "Failed to emit pairing code event");
+    // 通知桌面端前端显示配对码（无头/测试上下文无 AppHandle：跳过）
+    if let Some(handle) = ctx.app_handle() {
+        if let Err(e) = handle.emit("pairing-code-generated", &crate::server::connection_types::PairingCodeGeneratedEvent {
+            code: code.code.clone(),
+            expires_in: code.remaining_seconds(),
+            device_name: Some(body.device_name.clone()),
+        }) {
+            tracing::error!(error = %e, "Failed to emit pairing code event");
+        }
     }
 
     let data = PairingResponseData {
@@ -117,15 +118,16 @@ pub async fn verify_pairing_code(
         }
     }
 
-    // 通知桌面端有设备连接
-    let app_handle = ctx.app_handle();
-    let _ = app_handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-        addr: body.address.clone(),
-        device_id: body.device_id.clone(),
-        device_name: Some(body.device_name.clone()),
-        fingerprint: Some(body.fingerprint.clone()),
-        event: "authenticated".to_string(),
-    });
+    // 通知桌面端有设备连接（无头/测试上下文无 AppHandle：跳过）
+    if let Some(handle) = ctx.app_handle() {
+        let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
+            addr: body.address.clone(),
+            device_id: body.device_id.clone(),
+            device_name: Some(body.device_name.clone()),
+            fingerprint: Some(body.fingerprint.clone()),
+            event: "authenticated".to_string(),
+        });
+    }
 
     let data = AuthTokenResponseData {
         expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
@@ -145,8 +147,10 @@ pub async fn qr_connect(
 
     match qr_manager.verify(&body.qr_token).await {
         Ok(()) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("qr-token-consumed", ());
+            // 无头/测试上下文无 AppHandle：跳过前端事件
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit("qr-token-consumed", ());
+            }
 
             let device_id = body.device_id.clone();
             let device_name = body.device_name.clone();
@@ -190,13 +194,16 @@ pub async fn qr_connect(
                 }
             }
 
-            let _ = app_handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                addr: address,
-                device_id,
-                device_name: Some(device_name),
-                fingerprint: Some(fingerprint),
-                event: "authenticated".to_string(),
-            });
+            // 无头/测试上下文无 AppHandle：跳过前端事件
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
+                    addr: address,
+                    device_id,
+                    device_name: Some(device_name),
+                    fingerprint: Some(fingerprint),
+                    event: "authenticated".to_string(),
+                });
+            }
 
             let data = AuthTokenResponseData {
                 expires_in: DEFAULT_TOKEN_EXPIRY_SECS,

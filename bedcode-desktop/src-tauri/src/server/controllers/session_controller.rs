@@ -64,11 +64,13 @@ pub async fn start_session(
 
     match session_manager.create_session_with_source(&body.config_id, device_name).await {
         Ok(session_id) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit("sessions-refresh", serde_json::json!({
+                    "refreshType": "sessions",
+                    "source": source,
+                }));
+            }
 
             let data = StartSessionResponseData {
                 session_id,
@@ -98,11 +100,13 @@ pub async fn stop_session(
 
     match session_manager.kill_session_with_source(&session_id, device_name).await {
         Ok(()) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit("sessions-refresh", serde_json::json!({
+                    "refreshType": "sessions",
+                    "source": source,
+                }));
+            }
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {
@@ -144,11 +148,13 @@ pub async fn remove_session(
 
     match session_manager.remove_session_with_source(&session_id, device_name).await {
         Ok(()) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit("sessions-refresh", serde_json::json!({
+                    "refreshType": "sessions",
+                    "source": source,
+                }));
+            }
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {

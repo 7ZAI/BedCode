@@ -124,9 +124,10 @@ impl PluginDevWatcher {
                         );
 
                         let ctx = crate::system::app_context::AppContext::global();
-                        let _ = ctx.app_handle().emit(event::PLUGIN_DEV_RELOAD, serde_json::json!({
-                            "pluginId": plugin_id
-                        }));
+                        // 无头/测试上下文无 AppHandle：跳过前端重载通知
+                        if let Some(handle) = ctx.app_handle() {
+                            let _ = handle.emit(event::PLUGIN_DEV_RELOAD, serde_json::json!({ "pluginId": plugin_id }));
+                        }
                     }
                     _ => {}
                 }

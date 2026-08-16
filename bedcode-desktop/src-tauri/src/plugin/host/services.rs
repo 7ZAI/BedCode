@@ -122,15 +122,17 @@ impl PluginServices for PluginHost {
             // hooks 安装失败等自检错误属可恢复/局部问题，不应因此禁用整个插件。
             tracing::error!("[PluginHost] Plugin {} self-check failed: {}", plugin_id, error);
 
-            let _ = crate::system::app_context::AppContext::global()
-                .app_handle()
-                .emit(
+            // 无头/测试上下文无 AppHandle：跳过前端弹窗
+            let ctx = crate::system::app_context::AppContext::global();
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(
                     crate::system::constants::event::PLUGIN_ERROR,
                     serde_json::json!({
                         "plugin_id": plugin_id,
                         "error": error,
                     }),
                 );
+            }
         });
     }
 

@@ -293,7 +293,7 @@ pub fn run() {
             let app_handle_arc = Arc::new(app_handle.clone());
             let plugin_host = Arc::new(
                 tauri::async_runtime::block_on(
-                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), config_manager.clone(), app_handle_arc.clone())
+                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), config_manager.clone(), Some(app_handle_arc.clone()))
                 )
             );
             // 注入消息总线 dispatcher（两阶段初始化）
@@ -339,7 +339,7 @@ pub fn run() {
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
-                .app_handle(app_handle_arc.clone())
+                .app_handle(Some(app_handle_arc.clone()))
                 .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
                 .system_info(system_info.clone())

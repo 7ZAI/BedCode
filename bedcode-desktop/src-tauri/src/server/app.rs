@@ -107,16 +107,16 @@ async fn terminal_bg_image() -> HttpResponse {
     use crate::system::constants::terminal::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FILE_PREFIX};
     use tauri::Manager;
 
-    let data_dir = match crate::system::app_context::AppContext::global()
-        .app_handle()
-        .path()
-        .app_data_dir()
-    {
-        Ok(dir) => dir,
-        Err(e) => {
-            tracing::error!("解析应用数据目录失败: {e}");
-            return HttpResponse::InternalServerError().finish();
-        }
+    let data_dir = match crate::system::app_context::AppContext::global().app_handle() {
+        // 无头/测试上下文无 AppHandle：没有应用数据目录，视为未设置背景图
+        Some(handle) => match handle.path().app_data_dir() {
+            Ok(dir) => dir,
+            Err(e) => {
+                tracing::error!("解析应用数据目录失败: {e}");
+                return HttpResponse::InternalServerError().finish();
+            }
+        },
+        None => return HttpResponse::NotFound().finish(),
     };
 
     // 扫描目录找到当前背景图片（扩展名在选图时可能变化，不能写死）
