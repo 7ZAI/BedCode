@@ -16,6 +16,8 @@ export interface ServerStatusInfo {
   port: number
   auto_start: boolean
   local_ips: string[]
+  /** 运行时长（秒）；服务器从未启动时为 null（Rust Option<u64> 恒序列化） */
+  uptime_secs: number | null
 }
 
 /** 网络配置 — Actix Web + WebSocket 参数 */

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useDeviceStore } from '@/stores/device'
+import { makePairingCodeInfo, makePairing } from '@/__tests__/fixtures/pairing'
 
 // Mock Tauri invoke
 vi.mock('@tauri-apps/api/core', () => ({
@@ -17,11 +18,10 @@ const mocks = vi.hoisted(() => {
       const idx = mockDevices.findIndex((d) => d.id === id)
       if (idx !== -1) mockDevices.splice(idx, 1)
     }),
-    generatePairingCode: vi.fn(async () => ({
-      code: '123456',
-      expires_in: 60,
-      created_at: new Date().toISOString(),
-    })),
+    // 取数自 fixtures 工厂（对齐 pairing.rs 的 code/created_at/expires_in）
+    generatePairingCode: vi.fn(async () =>
+      makePairingCodeInfo({ created_at: new Date().toISOString() }),
+    ),
     verifyPairingCode: vi.fn(async () => true),
   }
 })
@@ -76,10 +76,10 @@ describe('Device Store', () => {
   })
 
   it('should remove paired device', async () => {
-    // Set up mock devices
+    // Set up mock devices（取数自 fixtures 工厂，对齐 db/models.rs Pairing 线协议）
     mocks.mockDevices.push(
-      { id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true },
-      { id: 'device-2', device_name: 'Phone 2', device_fingerprint: 'fp2', public_key: 'pk2', paired_at: '', last_seen: null, is_active: true },
+      makePairing({ id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true }),
+      makePairing({ id: 'device-2', device_name: 'Phone 2', device_fingerprint: 'fp2', public_key: 'pk2', paired_at: '', last_seen: null, is_active: true }),
     )
 
     const store = useDeviceStore()
@@ -96,7 +96,7 @@ describe('Device Store', () => {
 
   it('should load paired devices from backend', async () => {
     mocks.mockDevices.push(
-      { id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true },
+      makePairing({ id: 'device-1', device_name: 'Phone 1', device_fingerprint: 'fp1', public_key: 'pk1', paired_at: '', last_seen: null, is_active: true }),
     )
 
     const store = useDeviceStore()

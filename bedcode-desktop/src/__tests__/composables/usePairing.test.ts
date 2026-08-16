@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { usePairing } from '@/composables/usePairing'
-import type { PairingCodeInfo } from '@/composables/useDesktopCommands'
+import { makePairingCodeInfo } from '@/__tests__/fixtures/pairing'
 
 // Mock 配对码相关命令
 const mocks = vi.hoisted(() => ({
@@ -10,11 +10,8 @@ const mocks = vi.hoisted(() => ({
 }))
 vi.mock('@/composables/useDesktopCommands', () => mocks)
 
-const validCode: PairingCodeInfo = {
-  code: '123456',
-  created_at: '2025-01-01T00:00:00Z',
-  expires_in: 60,
-}
+// 取数自 fixtures 工厂（对齐 pairing.rs 手工 Serialize 的 code/created_at/expires_in）
+const validCode = makePairingCodeInfo()
 
 describe('usePairing', () => {
   beforeEach(() => {

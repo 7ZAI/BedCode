@@ -15,11 +15,12 @@ vi.mock('@tauri-apps/api/core', () => ({
 
 import { invoke } from '@tauri-apps/api/core'
 import { useTerminalOutputStream, type OutputStreamFrame } from '@/composables/useTerminalOutputStream'
+import { makeServerStatusInfo } from '@/__tests__/fixtures/server'
 
 /** mock invoke 分发：get_server_status → 端口；get_local_ws_token → 令牌 */
 function mockInvoke() {
   ;(invoke as unknown as ReturnType<typeof vi.fn>).mockImplementation((cmd: string) => {
-    if (cmd === 'get_server_status') return Promise.resolve({ status: 'ok', port: 8765 })
+    if (cmd === 'get_server_status') return Promise.resolve(makeServerStatusInfo({ port: 8765 }))
     if (cmd === 'get_local_ws_token') return Promise.resolve('test-token-abc')
     return Promise.resolve({})
   })

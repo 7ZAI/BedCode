@@ -10,7 +10,8 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { useServer, type ServerStatusInfo, type NetworkConfig, type ServerMetrics } from '@/composables/useServer'
+import { useServer } from '@/composables/useServer'
+import { makeServerStatusInfo, makeNetworkConfig, makeServerMetrics } from '@/__tests__/fixtures/server'
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn()
@@ -18,42 +19,10 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
 }))
 
-const statusInfo: ServerStatusInfo = {
-  status: 'running',
-  port: 9000,
-  auto_start: false,
-  local_ips: ['192.168.1.5', '127.0.0.1'],
-}
-
-const networkConfig: NetworkConfig = {
-  port: 9000,
-  auto_start: false,
-  prevent_sleep: true,
-  workers: 4,
-  keep_alive_secs: 30,
-  client_request_timeout_secs: 30,
-  client_disconnect_timeout_secs: 30,
-  max_connections: 100,
-  backlog: 1024,
-  tcp_nodelay: true,
-  shutdown_timeout_secs: 10,
-  ws_max_frame_size_kb: 64,
-  ws_max_message_size_mb: 16,
-  metrics_enabled: false,
-}
-
-const metrics: ServerMetrics = {
-  uptime_secs: 120,
-  connections: 3,
-  total_http_requests: 1000,
-  http_requests_per_sec: 5,
-  ws_messages_sent: 500,
-  ws_messages_received: 400,
-  ws_sent_rate: 1.5,
-  ws_recv_rate: 2.5,
-  cpu_usage_percent: 10,
-  memory_usage_bytes: 1024,
-}
+// 取数自 fixtures 工厂（与 Rust DTO 字段对齐，见 fixtures/server.ts 文件头）
+const statusInfo = makeServerStatusInfo()
+const networkConfig = makeNetworkConfig()
+const metrics = makeServerMetrics()
 
 let consoleWarnSpy: ReturnType<typeof vi.spyOn>
 let consoleErrorSpy: ReturnType<typeof vi.spyOn>

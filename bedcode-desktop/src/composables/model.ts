@@ -2,7 +2,11 @@
 
 export interface WslDistro {
   name: string
+  /** 是否为默认发行版（Rust pty/wsl.rs 恒序列化） */
+  is_default: boolean
   state: string
+  /** WSL 版本（1/2） */
+  version: number
 }
 
 export interface SessionInfo {

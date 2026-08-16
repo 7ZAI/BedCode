@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { useWsl } from '@/composables/useWsl'
+import { makeWslDistro } from '@/__tests__/fixtures/session'
 
 // Mock WSL 探测命令
 const mocks = vi.hoisted(() => ({
@@ -22,9 +23,10 @@ describe('useWsl', () => {
 
   describe('loadDistros', () => {
     it('should load distributions when WSL is available', async () => {
+      // 取数自 fixtures 工厂（对齐 pty/wsl.rs 的 name/is_default/state/version）
       const distros = [
-        { name: 'Ubuntu', state: 'Running' },
-        { name: 'Kali', state: 'Stopped' },
+        makeWslDistro({ name: 'Ubuntu', state: 'Running', is_default: true }),
+        makeWslDistro({ name: 'Kali', state: 'Stopped' }),
       ]
       mocks.isWslAvailable.mockResolvedValueOnce(true)
       mocks.listWslDistributions.mockResolvedValueOnce(distros)
@@ -51,7 +53,7 @@ describe('useWsl', () => {
     it('should keep previous distros when reloading as unavailable', async () => {
       // 实际契约：重新探测为不可用时不清空旧 distros，消费方以 isAvailable 为门控
       mocks.isWslAvailable.mockResolvedValueOnce(true)
-      mocks.listWslDistributions.mockResolvedValueOnce([{ name: 'Ubuntu', state: 'Running' }])
+      mocks.listWslDistributions.mockResolvedValueOnce([makeWslDistro({ name: 'Ubuntu', state: 'Running' })])
 
       const wsl = useWsl()
       await wsl.loadDistros()

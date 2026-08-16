@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { useWslStore } from '@/stores/wsl'
+import { makeWslDistro } from '@/__tests__/fixtures/session'
 
 // Mock useDesktopCommands（WSL 命令的数据源）
 const mocks = vi.hoisted(() => ({
@@ -28,9 +29,10 @@ describe('WSL Store', () => {
 
   describe('loadWslInfo', () => {
     it('should load distributions when WSL is available', async () => {
+      // 取数自 fixtures 工厂（对齐 pty/wsl.rs 的 name/is_default/state/version）
       const distros = [
-        { name: 'Ubuntu', state: 'Running' },
-        { name: 'Debian', state: 'Stopped' },
+        makeWslDistro({ name: 'Ubuntu', state: 'Running', is_default: true }),
+        makeWslDistro({ name: 'Debian', state: 'Stopped' }),
       ]
       mocks.isWslAvailable.mockResolvedValueOnce(true)
       mocks.listWslDistributions.mockResolvedValueOnce(distros)
@@ -83,7 +85,7 @@ describe('WSL Store', () => {
 
       // 第二次加载成功：error 应被清空
       mocks.isWslAvailable.mockResolvedValueOnce(true)
-      mocks.listWslDistributions.mockResolvedValueOnce([{ name: 'Ubuntu', state: 'Running' }])
+      mocks.listWslDistributions.mockResolvedValueOnce([makeWslDistro({ name: 'Ubuntu', state: 'Running' })])
       await store.loadWslInfo()
 
       expect(store.error).toBeNull()
