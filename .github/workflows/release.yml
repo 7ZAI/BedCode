@@ -147,13 +147,20 @@ jobs:
         shell: bash
         run: |
           # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
-          # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本
+          # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本。
+          # 注意：draft release 是 untagged，releases/tags/:tag 端点返回 404，
+          # 必须从 releases 列表（含 draft）按 tag_name 定位再查 assets
           for i in $(seq 1 10); do
-            BODY=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/tags/v${{ needs.prepare-release.outputs.version }}")
-            if echo "$BODY" | grep -q '"name": "latest.json"'; then
-              echo "latest.json 已上传 ✓"
-              exit 0
+            RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
+              jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+            if [ -n "$RID" ]; then
+              if curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" | \
+                jq -r '.[].name' | grep -q '^latest.json$'; then
+                echo "latest.json 已上传 ✓"
+                exit 0
+              fi
             fi
             sleep 3
           done
