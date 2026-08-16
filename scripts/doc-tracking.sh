@@ -30,7 +30,7 @@ TRACKING_SOURCE="${DOC_TRACKING_SOURCE:-dev}"
 # README.md / README_en.md 与 AGENTS.md 不在此列（全分支跟踪）。
 # 注意：.pi 只跟踪配置（agents/extensions/prompts/settings.json），
 # .pi/sessions/ 会话日志始终忽略、不入库（勿执行 git add -f .pi 整目录）。
-PROTECTED_PATHS="docs CLAUDE.md CONTEXT.md .pi .scratch"
+PROTECTED_PATHS="docs CLAUDE.md CONTEXT.md .pi .scratch bedcode-desktop/docs bedcode-mobile/docs"
 
 # ==================== 工具函数 ====================
 
