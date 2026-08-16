@@ -224,6 +224,10 @@ jobs:
       - name: Install plugin dependencies
         run: |
           for p in ai-chatbox auto-task file-transfer ocr; do
+            if [ ! -d "plugins/$p" ]; then
+              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
+              continue
+            fi
             echo "== installing plugins/$p =="
             (cd plugins/$p && npm ci) || exit 1
           done
