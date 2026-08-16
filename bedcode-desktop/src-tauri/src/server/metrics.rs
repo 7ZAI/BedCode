@@ -172,3 +172,57 @@ impl MetricsCollector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MetricsCollector 是全局单例且无私有构造器，全部断言收敛在
+    /// 单个测试函数内，避免并行测试互相污染计数器
+    #[test]
+    fn reset_and_sample_report_totals_and_sliding_window_rates() {
+        let collector = MetricsCollector::global();
+        collector.reset();
+
+        // 等待足够时间，让窗口速率可被观测（Instant 精度下限）
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        collector.inc_http_request();
+        collector.inc_http_request();
+        collector.inc_http_request();
+        collector.inc_ws_sent();
+        collector.inc_ws_received();
+
+        let m = collector.sample(2, 33.5, 4096);
+        assert_eq!(m.total_http_requests, 3);
+        assert_eq!(m.ws_messages_sent, 1);
+        assert_eq!(m.ws_messages_received, 1);
+        assert_eq!(m.connections, 2);
+        assert_eq!(m.cpu_usage_percent, 33.5);
+        assert_eq!(m.memory_usage_bytes, 4096);
+        // 3 次请求 / ~50ms → 速率应显著大于 0
+        assert!(
+            m.http_requests_per_sec > 0.0,
+            "expected positive http rate, got {}",
+            m.http_requests_per_sec
+        );
+
+        // 第二次采样：仅累计新增量，速率基于两次采样间的差值
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        collector.inc_http_request();
+        let m2 = collector.sample(3, 50.0, 8192);
+        assert_eq!(m2.total_http_requests, 4);
+        assert_eq!(m2.connections, 3);
+        assert_eq!(m2.cpu_usage_percent, 50.0);
+        assert_eq!(m2.memory_usage_bytes, 8192);
+
+        // reset 后所有计数器归零
+        collector.reset();
+        let m3 = collector.sample(0, 0.0, 0);
+        assert_eq!(m3.total_http_requests, 0);
+        assert_eq!(m3.ws_messages_sent, 0);
+        assert_eq!(m3.ws_messages_received, 0);
+        assert_eq!(m3.http_requests_per_sec, 0.0);
+        assert_eq!(m3.ws_sent_rate, 0.0);
+    }
+}

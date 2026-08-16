@@ -44,3 +44,41 @@ impl PtyOutputEvent {
         ).ok()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    #[test]
+    fn from_bytes_base64_encodes_known_value() {
+        let ts = Utc::now();
+        let event = PtyOutputEvent::from_bytes("s1".to_string(), b"hello", ts, true, 42);
+        // base64("hello") 的已知字面量，独立于实现计算
+        assert_eq!(event.data, "aGVsbG8=");
+        assert_eq!(event.session_id, "s1");
+        assert_eq!(event.is_waiting, true);
+        assert_eq!(event.index, 42);
+        assert_eq!(event.timestamp, ts);
+    }
+
+    #[test]
+    fn decode_data_round_trips_original_bytes() {
+        // 包含非 UTF-8 与边界字节，验证二进制安全
+        let bytes: Vec<u8> = vec![0u8, 1, 2, 255, 254, 128, 65, 0];
+        let event = PtyOutputEvent::from_bytes("s1".to_string(), &bytes, Utc::now(), false, 0);
+        assert_eq!(event.decode_data(), Some(bytes));
+    }
+
+    #[test]
+    fn decode_data_returns_none_for_invalid_base64() {
+        let event = PtyOutputEvent {
+            session_id: "s1".to_string(),
+            data: "!!!not-base64!!!".to_string(),
+            timestamp: Utc::now(),
+            is_waiting: false,
+            index: 0,
+        };
+        assert!(event.decode_data().is_none());
+    }
+}

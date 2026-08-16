@@ -116,3 +116,107 @@ impl PtyReader {
         self.handle.expect(" PtyReader handle is None")
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enums::PtySessionStatus;
+    use std::io::Read;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+
+    /// 内存 Reader：一次性吐出数据后 EOF（模拟 PTY 主设备读取）
+    struct MemoryReader {
+        data: std::io::Cursor<Vec<u8>>,
+    }
+
+    impl Read for MemoryReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.data.read(buf)
+        }
+    }
+
+    /// 收集 channel 中已就绪的全部事件
+    /// （PtyReader 线程在 wait() 返回前已完成所有 send，同步 try_recv 即可取到）
+    fn drain_events(rx: &mut broadcast::Receiver<PtyOutputEvent>) -> Vec<PtyOutputEvent> {
+        let mut events = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(ev) => events.push(ev),
+                Err(_) => break,
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn reads_output_broadcasts_events_and_reports_stopped_on_eof() {
+        let (output_tx, mut output_rx) = broadcast::channel(64);
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(true));
+
+        // 负载超过默认 read_buffer_size（4096）→ 强制分多次 read → 多个事件
+        let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
+        let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+            data: std::io::Cursor::new(payload.clone()),
+        });
+
+        let pty_reader = PtyReader::start(
+            reader,
+            output_tx,
+            lifecycle_tx,
+            "test-session".to_string(),
+            running,
+        );
+        pty_reader.wait(); // EOF 后线程自行退出，join 返回
+
+        // 生命周期：EOF → Stopped
+        let status = lifecycle_rx
+            .try_recv()
+            .expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Stopped);
+
+        // 输出事件：拼接后必须还原原始字节，且 index 严格递增
+        let events = drain_events(&mut output_rx);
+        assert!(!events.is_empty(), "expected at least one output event");
+        let mut reconstructed = Vec::new();
+        let mut last_index: Option<usize> = None;
+        for ev in &events {
+            assert_eq!(ev.session_id, "test-session");
+            assert!(!ev.is_waiting);
+            if let Some(prev) = last_index {
+                assert!(ev.index > prev, "index must be strictly increasing");
+            }
+            last_index = Some(ev.index);
+            reconstructed.extend_from_slice(&ev.decode_data().expect("valid base64"));
+        }
+        assert_eq!(reconstructed, payload);
+    }
+
+    #[test]
+    fn empty_input_exits_with_stopped_lifecycle_without_events() {
+        let (output_tx, mut output_rx) = broadcast::channel(64);
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(true));
+
+        let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+            data: std::io::Cursor::new(Vec::new()),
+        });
+
+        let pty_reader = PtyReader::start(
+            reader,
+            output_tx,
+            lifecycle_tx,
+            "empty".to_string(),
+            running,
+        );
+        pty_reader.wait();
+
+        let status = lifecycle_rx
+            .try_recv()
+            .expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Stopped);
+        assert!(drain_events(&mut output_rx).is_empty());
+    }
+}

@@ -17,7 +17,9 @@ pub struct FrontendOutputHandler;
 
 impl FrontendOutputHandler {
     /// 启动输出转发 task
-    pub fn spawn(app_handle: AppHandle, mut rx: broadcast::Receiver<PtyOutputEvent>) {
+    ///
+    /// 泛型 Runtime：生产环境为 Wry，测试环境可用 MockRuntime
+    pub fn spawn<R: tauri::Runtime>(app_handle: AppHandle<R>, mut rx: broadcast::Receiver<PtyOutputEvent>) {
         spawn_with_error_boundary("frontend_output_handler", async move {
             loop {
                 match rx.recv().await {
@@ -37,5 +39,64 @@ impl FrontendOutputHandler {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+    use tauri::Listener;
+    use tokio::sync::broadcast;
+
+    /// 异步轮询等待条件满足（sleep 期间让出，runtime 才能轮询转发 task）
+    async fn wait_until<F: Fn() -> bool>(mut cond: F) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while std::time::Instant::now() < deadline {
+            if cond() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            tokio::task::yield_now().await;
+        }
+        cond()
+    }
+
+    #[tokio::test]
+    async fn emits_events_to_session_scoped_channel_and_exits_on_close() {
+        let app = tauri::test::mock_app();
+        let handle = app.handle().clone();
+
+        // 事件名契约：pty-output-{session_id}（前端按会话订阅）
+        let received = Arc::new(AtomicUsize::new(0));
+        let received_clone = received.clone();
+        app.listen("pty-output-test-session", move |_| {
+            received_clone.fetch_add(1, Ordering::SeqCst);
+        });
+
+        let (tx, rx) = broadcast::channel(16);
+        FrontendOutputHandler::spawn(handle, rx);
+
+        let event = PtyOutputEvent {
+            session_id: "test-session".to_string(),
+            data: "aGVsbG8=".to_string(),
+            timestamp: Utc::now(),
+            is_waiting: false,
+            index: 0,
+        };
+        tx.send(event).unwrap();
+
+        assert!(
+            wait_until(|| received.load(Ordering::SeqCst) > 0).await,
+            "event should be emitted to frontend"
+        );
+        assert_eq!(received.load(Ordering::SeqCst), 1);
+
+        // 发送方关闭 → 循环应正常退出（无 panic 即通过）
+        drop(tx);
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }

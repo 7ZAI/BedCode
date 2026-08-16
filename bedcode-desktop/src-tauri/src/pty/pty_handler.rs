@@ -54,3 +54,26 @@ impl PtyHandler for PtySessionHandler {
         PtySession::with_id(id, config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn running_flag_toggles_lifecycle() {
+        let handler = PtySessionHandler::new();
+        assert!(handler.is_running());
+
+        handler.set_running(false);
+        assert!(!handler.is_running());
+
+        handler.set_running(true);
+        assert!(handler.is_running());
+    }
+
+    #[test]
+    fn default_equals_new() {
+        let handler = PtySessionHandler::default();
+        assert!(handler.is_running());
+    }
+}

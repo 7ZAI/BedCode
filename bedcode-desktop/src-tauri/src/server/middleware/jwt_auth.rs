@@ -45,3 +45,36 @@ pub fn is_public_path(path: &str) -> bool {
 pub fn is_plugin_path(path: &str) -> bool {
     path.starts_with("/api/plugin/")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn public_paths_do_not_require_auth() {
+        assert!(is_public_path("/api/auth/pairing"));
+        assert!(is_public_path("/api/auth/verify"));
+        assert!(is_public_path("/api/health"));
+        assert!(is_public_path("/health"));
+    }
+
+    #[test]
+    fn non_public_paths_require_auth() {
+        assert!(!is_public_path("/api/sessions"));
+        assert!(!is_public_path("/api/settings"));
+        assert!(!is_public_path("/"));
+        // 前缀相似但路径不同，不应误放行
+        assert!(!is_public_path("/api/authx"));
+        assert!(!is_public_path("/api/healthz"));
+    }
+
+    #[test]
+    fn plugin_paths_are_recognized() {
+        assert!(is_plugin_path("/api/plugin/auto-task/execute"));
+        assert!(is_plugin_path("/api/plugin/"));
+        // 非插件路径与仅前缀（无尾斜杠）不匹配
+        assert!(!is_plugin_path("/api/sessions"));
+        assert!(!is_plugin_path("/api/plugin"));
+        assert!(!is_plugin_path("/api/plugin2/"));
+    }
+}

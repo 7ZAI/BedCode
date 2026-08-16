@@ -369,3 +369,51 @@ impl Drop for PtySession {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enums::{ExecutionEnvironment, WindowsShell};
+    use std::collections::HashMap;
+
+    /// 最小启动配置（不 start，仅验证创建/属性/订阅/终止路径）
+    fn config() -> SessionLaunchConfig {
+        SessionLaunchConfig {
+            name: "test-session".to_string(),
+            environment: ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
+            working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            command: "echo hello".to_string(),
+            env_vars: HashMap::new(),
+            cols: 80,
+            rows: 24,
+        }
+    }
+
+    #[tokio::test]
+    async fn with_id_creates_session_with_properties_and_kill_stops_it() {
+        let session = PtySession::with_id("sess-1".to_string(), config())
+            .expect("openpty should succeed on this platform");
+
+        assert_eq!(session.id(), "sess-1");
+        assert_eq!(session.name().await, "test-session");
+        assert!(session.is_running());
+
+        // 输出/生命周期订阅通道可用
+        let _output_rx = session.subscribe_output().await;
+        let _lifecycle_rx = session.subscribe_lifecycle();
+
+        // kill 在未启动进程时仅翻转标志（无 process_id，跳过 taskkill）
+        session.kill().await.expect("kill should succeed");
+        assert!(!session.is_running());
+    }
+
+    #[tokio::test]
+    async fn new_generates_unique_session_ids() {
+        let a = PtySession::new(config()).expect("openpty should succeed");
+        let b = PtySession::new(config()).expect("openpty should succeed");
+        assert_ne!(a.id(), b.id());
+        assert!(a.is_running());
+    }
+}
