@@ -38,6 +38,7 @@ CONTEXT.md
 .pi/
 .codex/
 .opencode/
+opencode.jsonc
 .vscode/
 .VSCodeCounter/
 *.swp
