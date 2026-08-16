@@ -24,3 +24,12 @@
 - 现象: `error[E0599]: the method clone exists for struct MutexGuard<'_, Vec<CapturedEvent>>, but its trait bounds were not satisfied` —— CapturedEvent 未派生 Clone，Vec<CapturedEvent>::clone() 无法编译；导致整个 lib test 二进制编译失败，所有模块测试（含 host.rs 新增测试）无法运行
 - 期望: CapturedEvent 派生 Clone（或 capture() 改用其他取回方式）
 - 说明: 工作区未提交改动引入（git status 显示 log.rs +151 行），与本次 host.rs / api_bridge.rs 测试新增无关；为验证 host.rs 测试，已临时 git stash 该文件（验证后已恢复原状），遗留给主 agent 处理
+
+## [未修复] [桌面] server/services/auth_service.rs - VerifyCode 配对成功的 Authenticated 响应缺 device_name，广播排除语义失效
+- 状态: **未修复**（ticket 04 集成测试发现，按 spec 约定记台账统一修）
+- 文件: server/services/auth_service.rs:150-158（VerifyCode 分支的 `Message::Auth` 响应体）
+- 测试: tests/broadcast_shutdown.rs（场景 1 排除语义首跑失败现形）
+- 现象: 配对码认证成功返回的 `Message::Auth{stage: Authenticated}` 只带 device_id/device_fingerprint/session_token，`..Default::default()` 使 device_name=None。actor 的 AuthResponse handler 据此把 `self.session.device_name` 置 None，且 `registry.set_authenticated(client_id, None, fp)` 把 auth_service 早前 `ws_manager.set_device_name` 写入的注册表名字**覆盖为 None**。后果：(1) `handle_control` 的 source_device 变 None → SessionRemoved/SessionStopped 等广播退化为全员广播，发送端也收到自己的操作广播（排除语义失效）；(2) registry 设备名丢失
+- 期望: 与 QrConnect 分支（同文件 :299-316）一致，VerifyCode 成功的 Authenticated 响应携带 `device_name: Some(device_name.clone())`
+- 修复建议: 参照 QrConnect 分支补齐 device_name 字段；注意 WS 协议层不变，移动端字段名对齐
+- 影响面: 移动端首次配对连接（非 JWT 重连）触发会话控制类操作时，广播排除不生效；JWT 重连路径（handle_auth_jwt 从 claims 取 device_name）不受影响
