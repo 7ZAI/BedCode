@@ -176,6 +176,13 @@ async function init() {
       clearConnectionTimeout()
       connectionStatus.value = 'connected'
       connectionError.value = null
+      // 连接成功建立：复位重连取消标记与计数。connect()/disconnect() 置位的
+      // aborted 只用于取消「进行中」的重连等待（等待间隔内用户手动操作）；
+      // 不复位则连接稳定后再次意外断开会被 handleUnexpectedDisconnect 的
+      // aborted 检查永久拦截，前端重连路径（ws_reconnect）不可达，
+      // 自动重连退化为仅依赖 Rust 端自身循环（2026-08-16 集成测试发现）
+      autoReconnectAborted = false
+      autoReconnectAttemptCount = 0
       console.log('[MobileConnection] Connected')
       autoStartForegroundService()
 

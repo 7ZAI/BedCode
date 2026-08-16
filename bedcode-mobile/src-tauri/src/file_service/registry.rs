@@ -242,8 +242,9 @@ impl FileServiceRegistry {
         *self.relay_dir.write().await = Some(dir);
     }
 
-    /// 测试辅助：直接注入挂载条目（绕过 fs_auth / plugin manager 依赖）
-    #[cfg(test)]
+    /// 测试辅助：直接注入挂载条目（绕过 fs_auth / plugin manager 依赖）。
+    /// 公开供 tests/ 集成测试使用（`#[cfg(test)]` 对集成测试二进制不可见）；
+    /// 生产路径一律走 [`mount`](Self::mount)
     pub async fn insert_entry_for_test(&self, entry: MountEntry) {
         let key = (entry.plugin_id.clone(), entry.mount_path.clone());
         self.mounts.write().await.insert(key, entry);

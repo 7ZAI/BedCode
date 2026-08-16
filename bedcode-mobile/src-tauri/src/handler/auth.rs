@@ -27,9 +27,9 @@ impl ClientRouteHandler for AuthHandler {
                             session_token,
                         });
 
-                        // 通知插件认证成功
-                        {
-                            let pm = crate::state::get_plugin_manager();
+                        // 通知插件认证成功（插件管理器未初始化时跳过——
+                        // 集成测试等无插件环境路径，语义同无插件运行）
+                        if let Some(pm) = crate::state::try_get_plugin_manager() {
                             pm.dispatch_lifecycle_event(
                                 crate::plugin::types::PluginLifecycleEvent::AuthSuccess
                             ).await;
