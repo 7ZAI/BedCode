@@ -225,6 +225,10 @@ pub fn run() {
             // 同步 PowerManager 开关状态到配置值
             crate::system::power::power_manager().set_enabled(app_config.network.prevent_sleep);
 
+            // 启动电源唤醒监听：Windows 显示器长时间熄灭/锁屏后，WebView2 可能黑屏且不自愈，
+            // 系统唤醒时强制窗口重绘（详见 system::power_wake 模块文档）
+            crate::system::power_wake::spawn_wake_monitor(app_handle.clone());
+
             // 保存 resource_dir 供后续会话创建时使用
             let resource_dir = app_handle
                 .path()
