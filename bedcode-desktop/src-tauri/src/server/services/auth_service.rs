@@ -149,6 +149,7 @@ pub async fn handle_auth(
                     payload: AuthPayload {
                         stage: AuthStage::Authenticated,
                         device_id: Some(device_id),
+                        device_name: Some(device_name),
                         device_fingerprint: Some(fingerprint),
                         session_token: Some(session_token),
                         error: None,
