@@ -11,14 +11,14 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use crate::server::ws::session::WsSession;
-use crate::server::ws::registry::ChannelType;
+use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::message::Message;
 use crate::system::app_context::AppContext;
 use crate::session::GlobalOutputManager;
 use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, TerminalPayload};
 use crate::system::config::AppConfig;
-use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS};
+use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::system::constants::event;
 
 /// 心跳间隔
@@ -138,6 +138,16 @@ impl TerminalWs {
         ws
     }
 
+    /// 事件通道构造：设备在线判定基准 + 同步广播接收方
+    ///
+    /// channel_type 在注册时定死（Event），广播过滤与 stopping() 的离线
+    /// 判定都依赖它；事件通道不承载终端 I/O，其余构造体保持默认
+    pub fn new_event(addr: SocketAddr) -> Self {
+        let mut ws = Self::new(addr);
+        ws.channel_type = ChannelType::Event;
+        ws
+    }
+
     /// 心跳检测
     ///
     /// 本地环回通道（桌面 WebView）保持 10s 超时；远程通道（移动端）放宽到
@@ -166,6 +176,21 @@ impl Actor for TerminalWs {
     fn started(&mut self, ctx: &mut Self::Context) {
         tracing::info!("Terminal WS connected: {}", self.session.addr);
         self.start_heartbeat(ctx);
+
+        // 首消息认证超时：连接建立后 10s 内未完成认证（JWT 或配对流程）→
+        // 服务端主动关闭（spec §4.3「10s 未完成首消息认证」）。local 通道
+        // 构造时已标记 authenticated，此闭包自动 no-op，无需特判
+        let auth_timeout = Duration::from_secs(WS_AUTH_TIMEOUT_SECS);
+        ctx.run_later(auth_timeout, |act, ctx| {
+            if !act.session.authenticated {
+                tracing::warn!(
+                    addr = %act.session.addr,
+                    "WS auth timeout: no first-message auth within {}s",
+                    WS_AUTH_TIMEOUT_SECS
+                );
+                ctx.stop();
+            }
+        });
 
         // 注册到 WsSessionRegistry（携带通道类型：广播过滤与在线判定依据）
         let client_id = self.session.addr.to_string();
@@ -196,50 +221,78 @@ impl Actor for TerminalWs {
             gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
 
-        // 通知前端设备下线（与 DEVICE_CONNECTED 对称；仅已认证连接有 device_id）
-        if let Some(device_id) = self.session.device_id.clone() {
-            let app_ctx = crate::system::app_context::AppContext::global();
-            // 无头/测试上下文无 AppHandle：跳过前端事件（保持 let _ 丢弃错误语义）
-            if let Some(handle) = app_ctx.app_handle() {
-                let _ = handle.emit(
-                    crate::system::constants::event::DEVICE_DISCONNECTED,
-                    &crate::server::connection_types::DeviceConnectionEvent {
-                        addr: self.session.addr.to_string(),
-                        device_id,
-                        device_name: self.session.device_name.clone(),
-                        fingerprint: self.session.fingerprint.clone(),
-                        event: "disconnected".to_string(),
-                    },
-                );
-            }
-        }
-
-        // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录
+        // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录。
+        // 离线判定（DEVICE_DISCONNECTED + 连接历史回填）迁入 async 块：
+        // 需要先 unregister 再按「断开后剩余连接数」判定，见注入逻辑
         let client_id = self.session.addr.to_string();
         let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();
-        // 断连清理：移除该设备公告的文件服务（避免插件访问已不可达的端点）
         let device_id = self.session.device_id.clone();
-        // 断连清理：清除该连接的生物认证挑战值 + 回填连接历史断开时间
-        let socket_addr = self.session.addr;
+        let fingerprint = self.session.fingerprint.clone();
+        let channel_type = self.channel_type;
+        let addr = self.session.addr.to_string();
+        let device_name = self.session.device_name.clone();
         actix::spawn(async move {
             let app_ctx = crate::system::app_context::AppContext::global();
-            app_ctx.biometric_challenges().clear(&socket_addr.to_string()).await;
-            if let Some(device_id) = device_id.clone() {
-                let db_guard = app_ctx.db().lock().await;
-                if let Err(e) = db_guard.close_open_connection_event(&device_id) {
-                    tracing::warn!(device_id = %device_id, error = %e, "Failed to close connection history");
-                }
-            }
-
-            use crate::server::ws::registry::WsSessionRegistry;
             let registry = WsSessionRegistry::global();
+            // 先注销本连接：后续计数判定基于「断开后」的剩余连接，本连接不再计入
             registry.unregister(&client_id).await;
 
+            // spec §4.2 在线语义（指纹键控）：设备在线 ⇔ 至少一条已认证事件 WS 存活。
+            // 最后一条事件通道断开 → DEVICE_DISCONNECTED + 连接历史回填。
+            // R1 回退（旧 v2.0.0 客户端无事件通道）：终端通道断开时，仅当该设备
+            // 「事件连接与终端连接均为零」才判定离线——纯终端形态的设备也正确下线
+            let is_offline = match (&device_id, fingerprint.as_deref()) {
+                (Some(device_id), Some(fp)) => {
+                    let event_count = registry.event_connection_count(fp).await;
+                    let terminal_count = registry.terminal_connection_count(fp).await;
+                    let offline = match channel_type {
+                        ChannelType::Event => event_count == 0,
+                        ChannelType::Terminal => event_count == 0 && terminal_count == 0,
+                    };
+                    if offline {
+                        // 通知前端设备下线（与 DEVICE_CONNECTED 对称）；无头/测试
+                        // 上下文无 AppHandle：跳过（保持 let _ 丢弃错误语义）
+                        if let Some(handle) = app_ctx.app_handle() {
+                            let _ = handle.emit(
+                                crate::system::constants::event::DEVICE_DISCONNECTED,
+                                &crate::server::connection_types::DeviceConnectionEvent {
+                                    addr: addr.clone(),
+                                    device_id: device_id.clone(),
+                                    device_name,
+                                    fingerprint: Some(fp.to_string()),
+                                    event: "disconnected".to_string(),
+                                },
+                            );
+                        }
+                        // 回填连接历史断开时间
+                        let db_guard = app_ctx.db().lock().await;
+                        if let Err(e) = db_guard.close_open_connection_event(device_id) {
+                            tracing::warn!(device_id = %device_id, error = %e, "Failed to close connection history");
+                        }
+                    }
+                    offline
+                }
+                // 未认证连接（如被拒后关闭）从未在线：不触发离线语义
+                _ => false,
+            };
+            tracing::debug!(
+                addr = %addr, channel = ?channel_type, offline = is_offline,
+                "WS disconnect online-state decision"
+            );
+
+            // 断连清理：清除该连接的生物认证挑战值（ticket 01 起按键为
+            // fingerprint；addr 键已是空操作，改用指纹键精确清理）
+            if let Some(fp) = fingerprint {
+                app_ctx.biometric_challenges().clear(&fp).await;
+            }
+
+            // 取消所有订阅
             let global_manager = GlobalOutputManager::global();
             for session_id in sessions {
                 global_manager.unsubscribe(&session_id, &client_id).await;
             }
 
+            // 断连清理：移除该设备公告的文件服务（避免插件访问已不可达的端点）
             if let Some(device_id) = device_id {
                 app_ctx
                     .file_service()
@@ -314,6 +367,8 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    ctx.stop();
                     return;
                 }
                 self.handle_terminal(session_id, payload, message_id, expect_response, ctx);
@@ -325,6 +380,8 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    ctx.stop();
                     return;
                 }
                 self.handle_session_control(payload, message_id, expect_response, ctx);
@@ -338,11 +395,25 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    ctx.stop();
                     return;
                 }
                 self.handle_file_service(payload);
             }
             _ => {
+                if !self.session.authenticated {
+                    // 未认证连接首条消息必须走 Auth 分派；其他消息类型（SessionConfig
+                    // 等）一律拒绝并关闭。无 message_id 的通知类消息用 Message::error
+                    // （无 id），spec §4.3 拒绝对称
+                    let error = Message::error("AUTH_REQUIRED", "Please authenticate first");
+                    if let Ok(json) = error.to_json() {
+                        metrics.inc_ws_sent();
+                        ctx.text(json);
+                    }
+                    ctx.stop();
+                    return;
+                }
                 tracing::debug!("Unsupported WS message type from {}", self.session.addr);
             }
         }
@@ -457,6 +528,7 @@ impl TerminalWs {
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         match payload.stage {
+            // ==================== compat：旧 v2.0.0 客户端 WS 认证路径（spec §7 D2，保留不删） ====================
             // 配对/生物认证流程：需要异步调用 auth_service（涉及 PairingService、QrTokenManager 等）
             crate::enums::AuthStage::RequestPairing
             | crate::enums::AuthStage::VerifyCode
@@ -466,6 +538,7 @@ impl TerminalWs {
             | crate::enums::AuthStage::BiometricVerify => {
                 self.handle_auth_pairing(payload, message_id, ctx);
             }
+            // ==================== JWT 主路径（新客户端 / 重连快速路径） ====================
             // JWT 重新认证：同步路径，直接验证 JWT token
             crate::enums::AuthStage::Authenticated
             | crate::enums::AuthStage::Reauthenticate => {
@@ -478,8 +551,10 @@ impl TerminalWs {
         }
     }
 
-    /// 处理配对认证（RequestPairing / VerifyCode / QrConnect）
+    /// 处理配对认证（RequestPairing / VerifyCode / QrConnect / ExchangeCertificate /
+    /// BiometricRequest / BiometricVerify）
     ///
+    /// ==================== compat：旧 v2.0.0 客户端 WS 认证路径（spec §7 D2，保留不删） ====================
     /// 通过 actix::spawn 桥接异步 auth_service::handle_auth 调用
     fn handle_auth_pairing(
         &mut self,
@@ -578,6 +653,8 @@ impl TerminalWs {
                     metrics.inc_ws_sent();
                     ctx.text(json);
                 }
+                // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
+                ctx.stop();
                 return;
             }
         };
@@ -665,6 +742,8 @@ impl TerminalWs {
                     metrics.inc_ws_sent();
                     ctx.text(json);
                 }
+                // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接
+                ctx.stop();
             }
         }
     }

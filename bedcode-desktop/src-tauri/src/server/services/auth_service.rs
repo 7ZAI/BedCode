@@ -144,6 +144,7 @@ pub async fn handle_auth(
 ) -> Result<Option<Message>> {
     tracing::info!("handle_auth called with stage: {:?}", payload.stage);
     match payload.stage {
+        // ==================== compat：旧 v2.0.0 客户端 WS 认证路径（spec §7 D2，保留不删） ====================
         AuthStage::RequestPairing => {
             // 每次配对请求都生成新的配对码，不复用现有的
             // 原因：确保用户有足够时间输入，避免复用过期码导致混乱
@@ -277,6 +278,7 @@ pub async fn handle_auth(
             }
         }
 
+        // ==================== JWT 主路径（新客户端重连快速路径，WS 内联 verify 之外的服务端全量处理） ====================
         AuthStage::Authenticated | AuthStage::Reauthenticate => {
             let device_id = payload.device_id.unwrap_or_default();
             let fingerprint = payload.device_fingerprint.clone().unwrap_or_default();

@@ -184,6 +184,28 @@ where
     }
 }
 
+/// 等待 WS 流被服务端关闭（跳过控制帧/业务帧），超时返回 false
+///
+/// spec §4.3 拒绝对称：服务端回错误后调用 ctx.stop() 发 Close 帧；
+/// 客户端读到 None/Err/Close 均视为关闭，期间到达的控制帧一律跳过
+async fn wait_for_close(stream: &mut WsRecv, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let frame = tokio::time::timeout(remaining, stream.next()).await;
+        match frame {
+            Ok(Some(Ok(WsMsg::Ping(_))) | Some(Ok(WsMsg::Pong(_)))) => continue,
+            Ok(Some(Ok(WsMsg::Close(_)))) => return true,
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(_))) => return true,
+            Ok(None) | Err(_) => return true,
+        }
+    }
+}
+
 /// 从注册表查找客户端条目
 async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::ws::registry::ClientSummary> {
     WsSessionRegistry::global()
@@ -352,24 +374,16 @@ async fn ws_pairing_auth_flow() {
         other => panic!("expected Error(AUTH_REQUIRED) response, got: {other:?}"),
     }
 
-    // 3b. 该客户端不出现在已认证集合中（连接即注册，但 authenticated 必须为 false）
-    let entry_b = registry_entry(&client_id_b)
-        .await
-        .expect("unauthenticated client must still be registered (connection-level)");
+    // 3b. 拒绝对称 + 清理：spec §4.3 下未认证连接发业务消息 → AUTH_REQUIRED + 服务端
+    // 主动关闭（旧行为「拒绝但保留连接」已收敛为「拒绝即关闭」）。连接关闭后
+    // stopping() 注销注册表——最终该客户端条目被清理，已认证集合中更不可能出现
     assert!(
-        !entry_b.authenticated,
-        "unauthenticated client must not be marked authenticated"
+        wait_for_close(&mut stream_b, Duration::from_secs(3)).await,
+        "connection must be closed after AUTH_REQUIRED (reject-then-close)"
     );
-    let authenticated_ids: Vec<String> = WsSessionRegistry::global()
-        .list_clients()
-        .await
-        .into_iter()
-        .filter(|c| c.authenticated)
-        .map(|c| c.client_id)
-        .collect();
     assert!(
-        !authenticated_ids.contains(&client_id_b),
-        "unauthenticated client must not appear in authenticated client list"
+        wait_until(|| async { registry_entry(&client_id_b).await.is_none() }).await,
+        "rejected-and-closed client must be unregistered after stopping() cleanup"
     );
 
     // ==================== 场景 4：错误配对码被拒 ====================

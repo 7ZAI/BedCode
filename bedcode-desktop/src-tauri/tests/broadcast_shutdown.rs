@@ -1,10 +1,9 @@
 //! 多客户端广播与停机集成测试（spec L1 场景 7–8，ticket 04）
 //!
-//! 广播送达语义（ticket 01 起为过渡期临时语义）：`WsSessionRegistry::broadcast`
-//! 只投递到 Event 通道（见 registry.rs ChannelType）。本测试两个客户端都是
-//! Terminal 通道（当前唯一真实路由 /ws/terminal），故旧版「B 收到 SyncData 广播」
-//! 的正面断言已反转为「收不到」——这是 ticket 01→04 事件通道就位前计划内接
-//! 受的过渡性回归；ticket 02 的 /ws/event 路由落地后，应恢复正面接收断言。
+//! 广播送达语义：`WsSessionRegistry::broadcast` 只投递到 Event 通道（见
+//! registry.rs ChannelType）。ticket 02 的 /ws/event 已落地，接收方 B 使用事件
+//! 通道断言**收到** SyncData 广播；发送方 A 留在 /ws/terminal（终端通道不设
+//! 广播投递），排除语义与 channel 过滤在此处全链路验证。
 //!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 两个真实
 //! tokio-tungstenite 客户端完成配对认证 → 一端发 WS 会话控制消息触发
@@ -184,12 +183,14 @@ async fn init_test_app_context() {
 
 /// 建立 WS 连接：先建 TCP（记录本地地址 = 服务端看到的 peer addr，即
 /// registry 的 client_id），再升级为 WebSocket
-async fn connect_ws(port: u16) -> (WsSend, WsRecv, std::net::SocketAddr) {
+///
+/// `path` 指定路由：/ws/terminal（终端 I/O）或 /ws/event（事件通道，广播接收方）
+async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketAddr) {
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("tcp connect to test server failed");
     let local_addr = tcp.local_addr().expect("read local addr failed");
-    let url = format!("ws://127.0.0.1:{port}/ws/terminal");
+    let url = format!("ws://127.0.0.1:{port}{path}");
     let (ws, _resp) = tokio_tungstenite::client_async(&url, tcp)
         .await
         .expect("ws handshake failed");
@@ -301,7 +302,7 @@ async fn pair_and_get_token(
     fingerprint: &str,
     message_tag: &str,
 ) -> String {
-    let (mut sink, mut stream, _addr) = connect_ws(port).await;
+    let (mut sink, mut stream, _addr) = connect_ws(port, "/ws/terminal").await;
     request_pairing_and_expect_verify_code(
         &mut sink,
         &mut stream,
@@ -416,8 +417,7 @@ async fn authenticate_with_jwt(
 /// 认证成功后服务端还会补发文件服务快照（push_file_service_snapshot，
 /// 无插件时为 FileService(Withdraw)），必须先于 echo 到达客户端——
 /// 等待目标消息时必须跳过这些无关推送，不能假设下一帧就是响应
-async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {
-    let deadline = Instant::now() + Duration::from_secs(5);
+async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {    let deadline = Instant::now() + Duration::from_secs(5);
     let mut is_match = is_match;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -470,6 +470,15 @@ async fn assert_no_sync_data(stream: &mut WsRecv, window: Duration, ctx: &str) {
     }
 }
 
+/// 轮询等待流中出现 SyncData 广播（5s 超时）
+///
+/// 广播经 SyncEventHandler 的 tokio::spawn 异步执行，必须轮询而非假定时序
+async fn wait_for_sync_data(stream: &mut WsRecv, ctx: &str) -> Message {
+    let msg = wait_for_message(stream, |m| matches!(m, Message::SyncData { .. })).await;
+    assert!(matches!(msg, Message::SyncData { .. }), "{ctx}: expected SyncData");
+    msg
+}
+
 /// 显式关闭 WS 连接（Close 帧让服务端 actor 走 stopping() 注销注册表）
 async fn close_ws(sink: &mut WsSend, stream: &mut WsRecv) {
     let _ = sink.send(WsMsg::Close(None)).await;
@@ -505,12 +514,13 @@ async fn broadcast_and_shutdown_flow() {
     // SyncData(SessionRemoved)，A 只收 echo 不收广播
 
     let token_a = pair_and_get_token(port, "itest-device-a-04", "ITest A-04", "fp-itest-a-04", "a-04").await;
-    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port).await;
+    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, "/ws/terminal").await;
     let client_id_a = addr_a.to_string();
     authenticate_with_jwt(&mut sink_a, &mut stream_a, &token_a, "ITest A-04", "fp-itest-a-04", "a-04").await;
 
     let token_b = pair_and_get_token(port, "itest-device-b-04", "ITest B-04", "fp-itest-b-04", "b-04").await;
-    let (mut sink_b, mut stream_b, addr_b) = connect_ws(port).await;
+    // B 连接事件通道（/ws/event）：广播接收方必须是 Event 通道（ticket 02 语义）
+    let (mut sink_b, mut stream_b, addr_b) = connect_ws(port, "/ws/event").await;
     let client_id_b = addr_b.to_string();
     authenticate_with_jwt(&mut sink_b, &mut stream_b, &token_b, "ITest B-04", "fp-itest-b-04", "b-04").await;
 
@@ -557,14 +567,21 @@ async fn broadcast_and_shutdown_flow() {
         other => panic!("expected SessionControl echo, got: {other:?}"),
     }
 
-    // 1c. 过渡期临时语义（ticket 01 起）：广播只投递 Event 通道，B 是
-    // Terminal 通道 → 收不到（旧版断言收到，见文件头注释；ticket 02 的
-    // /ws/event 落地后改由 Event 客户端正面断言接收）
-    assert_no_sync_data(
-        &mut stream_b,
-        Duration::from_millis(500),
-        "terminal channel must not receive sync broadcast (Event-only transitional)",
-    ).await;
+    // 1c. B 经事件通道收到 SyncData 广播（ticket 02 正式语义：广播只投递
+    // Event 通道；接收方 B 连接 /ws/event，与过渡期断言反转的对应恢复）
+    let sync = wait_for_sync_data(&mut stream_b, "event channel must receive sync broadcast").await;
+    match sync {
+        Message::SyncData { payload, .. } => match payload {
+            SyncPayload::SessionRemoved { session_id, .. } => {
+                assert_eq!(
+                    session_id, ghost_session_1,
+                    "broadcast must carry removed session id"
+                );
+            }
+            other => panic!("expected SessionRemoved sync payload, got: {other:?}"),
+        },
+        other => panic!("expected SyncData, got: {other:?}"),
+    }
 
     // 1d. 排除语义：A（发送端）在广播发出后不应收到 SyncData
     assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "sender exclusion").await;
@@ -608,9 +625,9 @@ async fn broadcast_and_shutdown_flow() {
     assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "no broadcast target").await;
 
     // 2c. 全员广播（WebSocketManager::broadcast）同样只达 Event 通道：A 是
-    // Terminal 通道，过渡期收不到（与 1c 同因）。ticket 02 的 /ws/event 落地后，
-    // 此处置换为 Event 客户端做「管道存活」对照；管道健康另由场景 4 的
-    // ERROR 级日志零计数兜底（广播空跑不产生 error）
+    // Terminal 通道 → 收不到（B 已在场景 2 断开，无事件接收方）。此为正式
+    // 语义而非过渡期：终端通道对同步/通知类广播不设投递，管道健康另由
+    // 场景 4 的 ERROR 级日志零计数兜底（广播空跑不产生 error）
     let ctrl = Message::sync_data(SyncPayload::SessionModeChanged {
         session_id: "itest-ctrl-04".to_string(),
         auto_approve: true,
@@ -622,7 +639,7 @@ async fn broadcast_and_shutdown_flow() {
     assert_no_sync_data(
         &mut stream_a,
         Duration::from_millis(500),
-        "terminal channel must not receive full broadcast (Event-only transitional)",
+        "terminal channel must not receive full broadcast (Event-only by design)",
     ).await;
 
     // ==================== 场景 3：停机后新连接被拒 + 端口释放 ====================

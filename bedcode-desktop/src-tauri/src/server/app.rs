@@ -15,22 +15,28 @@ use crate::server::controllers::{
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
-    WS_TERMINAL_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
+    WS_TERMINAL_PATH, WS_EVENT_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
     CORS_MAX_AGE_SECS, BIND_ADDRESS,
 };
+
+/// WS 帧/消息大小上限（字节）
+///
+/// max_size 同时限制 frame 和 message 大小，取两者中较大的值；
+/// 三条 WS 路由（terminal / local / event）共用同一计算
+fn ws_frame_limit() -> usize {
+    let config = crate::system::config::AppConfig::global();
+    std::cmp::max(
+        config.network.ws_max_frame_size_kb * 1024,
+        config.network.ws_max_message_size_mb * 1024 * 1024,
+    )
+}
 
 /// WS 握手端点 — 升级为 WebSocket 连接处理终端 I/O
 async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let ws_actor = TerminalWs::new(addr);
-    let config = crate::system::config::AppConfig::global();
-    // max_size 同时限制 frame 和 message 大小，取两者中较大的值
-    let max_size = std::cmp::max(
-        config.network.ws_max_frame_size_kb * 1024,
-        config.network.ws_max_message_size_mb * 1024 * 1024,
-    );
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(max_size)
+        .frame_size(ws_frame_limit())
         .start()
 }
 
@@ -63,13 +69,20 @@ async fn local_terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<Htt
     }
 
     let ws_actor = TerminalWs::new_local(addr);
-    let config = crate::system::config::AppConfig::global();
-    let max_size = std::cmp::max(
-        config.network.ws_max_frame_size_kb * 1024,
-        config.network.ws_max_message_size_mb * 1024 * 1024,
-    );
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(max_size)
+        .frame_size(ws_frame_limit())
+        .start()
+}
+
+/// WS 事件通道握手端点 — 常驻事件通道（设备在线判定基准 + 同步广播接收方）
+///
+/// 认证同样在 WS 首消息完成（JWT 重连或配对流程），与 /ws/terminal 一致；
+/// 路由在 /api scope 外，不经 HTTP JWT 中间件
+async fn event_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
+    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let ws_actor = TerminalWs::new_event(addr);
+    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+        .frame_size(ws_frame_limit())
         .start()
 }
 
@@ -165,6 +178,9 @@ async fn terminal_bg_image() -> HttpResponse {
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
     cfg.route(WS_TERMINAL_PATH, web::get().to(terminal_ws));
+
+    // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
+    cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
 
     // 本地 WebSocket 终端端点（桌面端 WebView 直连，环回校验 + 免 JWT + 二进制帧）
     cfg.route(LOCAL_WS_TERMINAL_PATH, web::get().to(local_terminal_ws));

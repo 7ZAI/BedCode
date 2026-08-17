@@ -312,6 +312,23 @@ impl WsSessionRegistry {
             .count()
     }
 
+    /// 设备的在线终端连接数（已认证 Terminal 通道数量）
+    ///
+    /// 旧 v2.0.0 客户端没有事件通道，仅靠 /ws/terminal 单通道维持会话：
+    /// 其离线判定回退为「既无事件连接、终端连接也归零」才触发（决策 R1，
+    /// 见 stopping() 注释），本方法供该判定取终端计数
+    pub async fn terminal_connection_count(&self, fingerprint: &str) -> usize {
+        let sessions = self.sessions.read().await;
+        sessions
+            .values()
+            .filter(|e| {
+                e.authenticated
+                    && e.channel_type == ChannelType::Terminal
+                    && e.fingerprint.as_deref() == Some(fingerprint)
+            })
+            .count()
+    }
+
     /// 清空所有注册信息（服务器停机时调用）
     pub async fn clear_all(&self) {
         let count = {
@@ -523,6 +540,23 @@ mod tests {
 
         assert_eq!(registry.event_connection_count("fp-multi").await, 2);
         assert!(registry.is_device_online("fp-multi").await);
+        // 终端计数：1 条已认证 Terminal 连接），场景 3 的 R1 回退判定依赖
+        assert_eq!(registry.terminal_connection_count("fp-multi").await, 1);
+
+        registry.clear_all().await;
+
+        // 场景 3：纯终端设备（旧 v2.0.0 客户端形态，无 Event 通道）——
+        // 终端计数存在但事件计数为 0，is_device_online 仍为 false（在线判定
+        // 只认事件通道）；stopping() 的 Terminal 回退分支用两个计数联合判定
+        for (cid, e) in [
+            entry("term-legacy", ChannelType::Terminal, true, Some("Phone"), Some("fp-legacy")),
+        ] {
+            registry.sessions.write().await.insert(cid, e);
+        }
+
+        assert_eq!(registry.terminal_connection_count("fp-legacy").await, 1);
+        assert_eq!(registry.event_connection_count("fp-legacy").await, 0);
+        assert!(!registry.is_device_online("fp-legacy").await, "纯终端通道不算在线");
 
         registry.clear_all().await;
     }
