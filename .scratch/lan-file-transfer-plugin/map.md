@@ -5,6 +5,8 @@ Label: wayfinder:map
 > ✅ **已到达目的地**：全部 6 张决策票据已关闭，最终规格见 **[spec.md](spec.md)**，可直接交给实现会话。
 >
 > 🔄 **v2 增补**（grilling 补充需求，已定案）：接收策略（每次询问/直接接收/直接拒绝）+ 异步批量批准协议 + 「正在发送/正在接收」队列分类 + 传输历史。票据 [10](issues/10-接收策略与批量批准协议.md)、[11](issues/11-传输历史与队列分类.md)，架构决策见 `docs/adr/0016`，spec 增补见 [spec.md](spec.md) 第 14 节。
+>
+> 🔺 **v2.1 架构修正（已定案）· 移动端文件服务归零**：推翻共识 2 的传输实现形态——移动端不再运行 HTTP 服务端，大文件数据流全部由手机侧作为 HTTP client 发起，桌面端为唯一 HTTP server；WS 控制面承担意图通知/进度/取消协调（桌面端「发起」= WS 发 intent 指令手机执行对应语意动作，业务上传/下载语义保留）。协议不变（HTTP/1.1 + Range + upload session），断点续传/并发模型不受影响。详见 `docs/adr/0021-mobile-file-server-zero-transfer.md`，可行性/速度/落地范围评审见票据 [13](issues/13-服务器归零方案评审.md)。
 
 ## Destination
 
