@@ -10,14 +10,14 @@
 
 **Blocked by:** 03
 
-**Status:** ready-for-agent
+**Status:** done（9b6bb1cb）
 
-- [ ] ws_client 改造为常驻事件连接：首消息 JWT 认证 + 认证失败退避重试
-- [ ] 常驻生命周期：认证成功后建立，app 存活期间不主动关闭；意外断开按现有规则重连（成功重连 → 重发认证）
-- [ ] token 失效处理：reauth 换发 → 重连（与 03 的 auth/manager 刷新逻辑联动）
-- [ ] 事件路由（router/event.rs）仅保留通知/同步事件处理；终端输出消息不再走此连接
-- [ ] 与 terminal 连接（ticket 06/10）并存：广播去重（01 的 channel_type）、互不干扰
-- [ ] 测试：常驻重连（断开恢复、认证重发、token 过期换发）、事件收发、双连接并存
+- [x] ws_client 改造为常驻事件连接：首消息 JWT 认证 + 认证失败退避重试
+- [x] 常驻生命周期：认证成功后建立，app 存活期间不主动关闭；意外断开按现有规则重连（成功重连 → 重发认证）
+- [x] token 失效处理：reauth 换发 → 重连（与 03 的 auth/manager 刷新逻辑联动）
+- [x] 事件路由（router/event.rs）仅保留通知/同步事件处理；终端输出消息不再走此连接
+- [x] 与 terminal 连接（ticket 06/10）并存：广播去重（01 的 channel_type）、互不干扰
+- [x] 测试：常驻重连（断开恢复、认证重发、token 过期换发）、事件收发、双连接并存
 
 ## Comments
 
