@@ -12,14 +12,17 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
+use bedcode_lib::auth::AuthCredentials;
+use bedcode_lib::connection::event_ws::run_supervisor;
 use bedcode_lib::connection::manager::ConnectionManager;
 use bedcode_lib::connection::request::AuthRequest;
 use bedcode_lib::connection::ConnectionStatus;
 use bedcode_lib::enums::control::SessionControlAction;
+use bedcode_lib::enums::SyncPayload;
 use bedcode_lib::model::message::Message;
 use bedcode_lib::router::MobileEvent;
-use bedcode_lib::state::{clear_global_token, get_global_token};
-use tokio::sync::broadcast;
+use bedcode_lib::state::{clear_global_token, get_auth_manager, get_global_token};
+use tokio::sync::{broadcast, oneshot};
 
 use common::{MockDesktopServer, MOCK_SESSION_TOKEN, TEST_DEVICE_ID, TEST_DEVICE_NAME};
 
@@ -307,4 +310,264 @@ async fn send_when_disconnected_rejected() {
         "错误信息应说明未连接，实际: {}",
         msg
     );
+}
+
+// ==================== 04 事件 WS：建连 + 首消息 JWT + SyncData 收广播 ====================
+
+/// 事件 WS 首消息必须是 reauthenticate（JWT 认证）；mock 回 Authenticated 后
+/// 经 AuthHandler 产出 AuthSuccess 事件（验收点：首消息 JWT）
+#[tokio::test]
+async fn event_ws_first_message_is_jwt_auth() {
+    let server = MockDesktopServer::start().await;
+    clear_global_token();
+    let manager = ConnectionManager::new();
+    let mut events = manager.subscribe();
+
+    manager
+        .set_target("127.0.0.1".to_string(), server.addr.port(), None)
+        .await;
+    manager
+        .establish_event_ws(None)
+        .await
+        .expect("establish event ws should succeed");
+
+    // 事件 WS 首消息必须是 JWT 认证（reauthenticate stage）
+    let msgs = server
+        .wait_for_received(
+            |v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate",
+            EVENT_TIMEOUT,
+        )
+        .await;
+    assert!(!msgs.is_empty(), "事件 WS 首消息应为 reauthenticate");
+
+    // mock 回 Authenticated → AuthHandler → AuthSuccess 事件
+    let ev = wait_event(&mut events, |ev| matches!(ev, MobileEvent::AuthSuccess { .. })).await;
+    match ev {
+        MobileEvent::AuthSuccess { session_token } => {
+            assert_eq!(
+                session_token, MOCK_SESSION_TOKEN,
+                "AuthSuccess 应携带签发的 token"
+            );
+        }
+        other => panic!("expected AuthSuccess event, got {:?}", other),
+    }
+
+    manager.disconnect().await;
+    clear_global_token();
+}
+
+/// 事件 WS 是 SyncData 收信道：桌面端向 Event 通道广播同步数据 → SyncHandler
+/// → MobileEvent（路由层不区分连接来源，与终端 WS 同一链路，验收点 4）
+#[tokio::test]
+async fn event_ws_forwards_sync_data() {
+    let server = MockDesktopServer::start().await;
+    clear_global_token();
+    let manager = ConnectionManager::new();
+    let mut events = manager.subscribe();
+
+    manager
+        .set_target("127.0.0.1".to_string(), server.addr.port(), None)
+        .await;
+    manager
+        .establish_event_ws(None)
+        .await
+        .expect("establish event ws should succeed");
+    server
+        .wait_for_received(
+            |v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate",
+            EVENT_TIMEOUT,
+        )
+        .await;
+
+    // 桌面端广播定时自动任务变更
+    server
+        .send_message(&Message::sync_data(SyncPayload::TaskScheduledChanged {
+            job_id: "job-1".to_string(),
+            status: "executed".to_string(),
+            action: "trigger".to_string(),
+        }))
+        .await;
+
+    let ev = wait_event(
+        &mut events,
+        |ev| matches!(ev, MobileEvent::SyncTaskScheduledChanged { .. }),
+    )
+    .await;
+    match ev {
+        MobileEvent::SyncTaskScheduledChanged { job_id, status, action } => {
+            assert_eq!(job_id, "job-1");
+            assert_eq!(status, "executed");
+            assert_eq!(action, "trigger");
+        }
+        other => panic!("expected SyncTaskScheduledChanged event, got {:?}", other),
+    }
+
+    manager.disconnect().await;
+    clear_global_token();
+}
+
+// ==================== 04 监督任务：AuthSuccess 驱动建连 / 防回声双连 / 断开自愈 ====================
+
+/// 注入 AuthSuccess → 监督任务建立事件 WS 并发首消息 JWT，连接计数为 1
+#[tokio::test]
+async fn supervisor_establishes_on_auth_success() {
+    let server = MockDesktopServer::start().await;
+    let manager = ConnectionManager::new();
+    manager
+        .set_target("127.0.0.1".to_string(), server.addr.port(), None)
+        .await;
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let supervisor = tokio::spawn(run_supervisor(manager.clone(), None, Some(ready_tx)));
+    ready_rx.await.expect("supervisor should subscribe");
+
+    // 注入认证成功契口 → 监督任务应自动建连并发 JWT 首消息
+    manager
+        .event_tx()
+        .send(MobileEvent::AuthSuccess {
+            session_token: MOCK_SESSION_TOKEN.to_string(),
+        })
+        .unwrap();
+
+    let msgs = server
+        .wait_for_received(
+            |v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate",
+            EVENT_TIMEOUT,
+        )
+        .await;
+    assert!(!msgs.is_empty(), "事件 WS 首消息应为 reauthenticate");
+    // 给足建连 + 首消息认证的落定时间，确认没有多余连接
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.connection_count(), 1, "首次认证应恰好建立一条连接");
+
+    manager.disconnect().await;
+    supervisor.abort();
+}
+
+/// AuthHandler 对 Authenticated 回复的回吐（重复 AuthSuccess 回声）不应造成双连
+#[tokio::test]
+async fn supervisor_no_dup_connection_on_auth_echo() {
+    let server = MockDesktopServer::start().await;
+    let manager = ConnectionManager::new();
+    manager
+        .set_target("127.0.0.1".to_string(), server.addr.port(), None)
+        .await;
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let supervisor = tokio::spawn(run_supervisor(manager.clone(), None, Some(ready_tx)));
+    ready_rx.await.expect("supervisor should subscribe");
+
+    manager
+        .event_tx()
+        .send(MobileEvent::AuthSuccess {
+            session_token: MOCK_SESSION_TOKEN.to_string(),
+        })
+        .unwrap();
+
+    // 等首条 reauthenticate 到达（建连完成）→ mock 回 Authenticated → AuthHandler
+    // 回吐 AuthSuccess 回声——监督任务的连接守卫应拦截，不产生第二个连接
+    server
+        .wait_for_received(
+            |v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate",
+            EVENT_TIMEOUT,
+        )
+        .await;
+
+    // 给足回声处理与守卫判断的窗口
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(
+        server.connection_count(),
+        1,
+        "AuthHandler 回吐的 AuthSuccess 不应造成重复连接"
+    );
+
+    manager.disconnect().await;
+    supervisor.abort();
+}
+
+/// 事件 WS 意外断开 → 监督任务自愈（空凭据快速失败，不触 HTTP）→ 重建连接
+///
+/// HTTP reauth 成功段由 03 的 `http_auth_flow::reauth_refreshes_token` 覆盖，
+/// 二者拼成「断开 → 自动重认证 → 重发 JWT 首消息」完整闭环。
+#[tokio::test]
+async fn supervisor_recovers_after_disconnect() {
+    let server = MockDesktopServer::start().await;
+    let manager = ConnectionManager::new();
+    manager
+        .set_target("127.0.0.1".to_string(), server.addr.port(), None)
+        .await;
+
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let supervisor = tokio::spawn(run_supervisor(manager.clone(), None, Some(ready_tx)));
+    ready_rx.await.expect("supervisor should subscribe");
+
+    manager
+        .event_tx()
+        .send(MobileEvent::AuthSuccess {
+            session_token: MOCK_SESSION_TOKEN.to_string(),
+        })
+        .unwrap();
+    server
+        .wait_for_received(
+            |v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate",
+            EVENT_TIMEOUT,
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.connection_count(), 1);
+
+    // 清空凭据（无 clear_credentials setter，置空 session_token 等效）：断开后的
+    // reconnect 走空 token 快速失败路径（不触 HTTP，规避对 WS 端口发 HTTP）
+    let auth_mgr = get_auth_manager();
+    auth_mgr
+        .set_credentials(AuthCredentials {
+            pairing_id: TEST_DEVICE_ID.to_string(),
+            fingerprint: "fp-test".to_string(),
+            session_token: String::new(),
+        })
+        .await;
+    clear_global_token();
+
+    // 协议级优雅关闭事件 WS → 监督任务感知断开 → 自愈（快速失败）→ 重建
+    server.graceful_close("testing disconnect").await;
+
+    // 断开→重建主链路：等第二条 reauthenticate。触发源可能是断开前排队的
+    // 回声 AuthSuccess，也可能是 1s 后的兜底注入——两种时序收敛到同一终点
+    let start = std::time::Instant::now();
+    let deadline = start + Duration::from_secs(5);
+    let mut injected = false;
+    loop {
+        let auth_count = {
+            let guard = server.received.lock().await;
+            guard
+                .iter()
+                .filter(|v| {
+                    v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate"
+                })
+                .count()
+        };
+        if auth_count >= 2 {
+            break;
+        }
+        // 回声若迟迟未处理（链路慢），1s 后兜底注入一次 AuthSuccess 驱动重建
+        if !injected && start.elapsed() >= Duration::from_secs(1) {
+            manager
+                .event_tx()
+                .send(MobileEvent::AuthSuccess {
+                    session_token: String::new(),
+                })
+                .unwrap();
+            injected = true;
+        }
+        if std::time::Instant::now() > deadline {
+            panic!("timed out waiting for event WS re-establish");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(server.connection_count(), 2, "断开后应重建一条新连接");
+
+    manager.disconnect().await;
+    supervisor.abort();
 }

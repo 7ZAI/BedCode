@@ -4,6 +4,7 @@
 
 pub mod codec;
 pub mod default_handler;
+pub mod event_ws;
 pub mod heartbeat;
 pub mod io;
 pub mod lifecycle;

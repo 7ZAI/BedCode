@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 use tracing;
 
 use crate::connection::{WsClient, WsClientConfig, WsClientEvent, ClientDefaultMessageHandler};
+use crate::connection::request::AuthRequest;
 use crate::model::message::Message;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::state::get_global_token;
@@ -23,7 +24,7 @@ use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler, Fi
 
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN,
-    WS_TERMINAL_PATH,
+    WS_EVENT_PATH, WS_TERMINAL_PATH,
 };
 use crate::system::constants::reconnect::DEFAULT_RETRY_DELAYS_MS;
 
@@ -67,7 +68,7 @@ fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusine
 }
 
 /// 目标设备信息
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetDevice {
     pub address: String,
     pub port: u16,
@@ -122,6 +123,21 @@ impl ConnectionManager {
         self.target.read().await.clone()
     }
 
+    /// 保存目标设备（HTTP 认证与事件 WS 的地址真源）并复位手动断开标记
+    ///
+    /// 新目标视为新的连接意图：意外断开应走断连通知/自愈，而不是被旧的
+    /// `manual_disconnect` 标记静默吞掉。connect / connect_without_emit /
+    /// 监督任务建立事件 WS 前共用（04）。
+    pub async fn set_target(&self, address: String, port: u16, name: Option<String>) {
+        self.manual_disconnect.store(false, Ordering::SeqCst);
+        *self.target.write().await = Some(TargetDevice {
+            address,
+            port,
+            name,
+        });
+        tracing::debug!("Target device saved");
+    }
+
     /// 订阅事件
     pub fn subscribe(&self) -> broadcast::Receiver<MobileEvent> {
         self.event_tx.subscribe()
@@ -162,8 +178,8 @@ impl ConnectionManager {
             }
         }
 
-        // 重置手动断开标记（新连接）
-        self.manual_disconnect.store(false, Ordering::SeqCst);
+        // 重置手动断开标记（新连接）与保存目标设备——set_target 一并完成
+        self.set_target(address.clone(), port, name.clone()).await;
 
         // 发射连接开始事件
         let _ = app_handle.emit("ws_connecting", serde_json::json!({
@@ -178,14 +194,6 @@ impl ConnectionManager {
             tracing::debug!("Disconnecting previous client before creating new one");
             let _ = old_client.disconnect().await;
         }
-
-        // 保存目标设备（HTTP 认证与 04 事件 WS 的地址真源）
-        *self.target.write().await = Some(TargetDevice {
-            address: address.clone(),
-            port,
-            name: name.clone(),
-        });
-        tracing::debug!("Target device saved");
 
         // 状态推进：Connecting → Connected（HTTP 认证成功后由
         // set_authed() 转 Authed；04 事件 WS 落地后此状态语义恢复完整）
@@ -216,12 +224,8 @@ impl ConnectionManager {
             return Ok(());
         }
 
-        // 保存目标设备
-        *self.target.write().await = Some(TargetDevice {
-            address: address.clone(),
-            port,
-            name,
-        });
+        // 保存目标设备（set_target 一并复位手动断开标记）
+        self.set_target(address.clone(), port, name).await;
 
         *self.status.write().await = ConnectionStatus::Connecting;
         self.establish_ws_client(&address, port, WS_TERMINAL_PATH, None).await?;
@@ -264,6 +268,47 @@ impl ConnectionManager {
 
         // 保存客户端引用
         *self.client.write().await = Some(client.clone());
+
+        Ok(client)
+    }
+
+    /// 建立常驻事件 WS（04 契口③）：事件路径建连 + WS 首消息 JWT 认证
+    ///
+    /// 返回的 client 已存入 `self.client`——认证成功后该连接天然成为
+    /// SyncData 收信道，且会话/配置/文件请求的 send/send_and_wait 恢复可用
+    /// （消除 03 过渡期「Not connected」回归）。`app_handle=Some` 时自动挂
+    /// 断连监控（意外断开 → ws_unexpected_disconnect + 桌面 peer 清理）。
+    /// 目标未保存（未 connect）时拒绝建连。
+    pub async fn establish_event_ws(&self, app_handle: Option<AppHandle>) -> Result<Arc<WsClient>> {
+        // 目标不存在说明尚未 connect，无建连地址
+        let target = self
+            .target
+            .read()
+            .await
+            .clone()
+            .ok_or_else(|| crate::AppError::WebSocket("No target device".to_string()))?;
+
+        let client = self
+            .establish_ws_client(&target.address, target.port, WS_EVENT_PATH, app_handle)
+            .await?;
+
+        // WS 首消息 JWT 认证：凭据对（pairing_id/fingerprint/session_token）
+        // 由 HTTP 认证写入；缺失时以空串发送，让桌面端拒绝（可观测而非静默）
+        let creds = crate::state::get_auth_manager()
+            .get_credentials()
+            .await
+            .unwrap_or(crate::auth::AuthCredentials {
+                pairing_id: String::new(),
+                fingerprint: String::new(),
+                session_token: String::new(),
+            });
+        client
+            .send(&AuthRequest::reauthenticate(
+                &creds.pairing_id,
+                &creds.fingerprint,
+                &creds.session_token,
+            ))
+            .await?;
 
         Ok(client)
     }
@@ -358,7 +403,9 @@ impl ConnectionManager {
     /// 认证已 HTTP 化：重连 = 用已持有 JWT（凭据优先，前端传入兜底）反复
     /// 调 `/api/auth/reauth`，成功即恢复 Authed。事件契约（reconnecting /
     /// reconnected / reconnect_failed）与退避节奏保持原样，前端零改动。
-    pub async fn reconnect(&self, app_handle: AppHandle, token: Option<String>) -> Result<()> {
+    /// `app_handle` 可为 `None`：04 监督任务自愈重连在无窗口上下文中可测
+    /// （仅跳过前端事件发射，HTTP 语义不变），command 层传 `Some`。
+    pub async fn reconnect(&self, app_handle: Option<AppHandle>, token: Option<String>) -> Result<()> {
         let max_retry = DEFAULT_RETRY_DELAYS_MS.len() as u32;
         let mut current_retry: u32 = 0;
 
@@ -379,11 +426,13 @@ impl ConnectionManager {
             self.is_reconnecting.store(true, Ordering::SeqCst);
             self.retry_count.store(current_retry, Ordering::SeqCst);
 
-            // 发射重连开始事件
-            let _ = app_handle.emit("ws_reconnecting", serde_json::json!({
-                "retry": current_retry + 1,
-                "max_retry": max_retry
-            }));
+            // 发射重连开始事件（无 AppHandle 时跳过：纯后台自愈路径）
+            if let Some(ah) = &app_handle {
+                let _ = ah.emit("ws_reconnecting", serde_json::json!({
+                    "retry": current_retry + 1,
+                    "max_retry": max_retry
+                }));
+            }
             tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, max_retry);
 
             // 等待指数退避间隔（首次不等待）
@@ -431,7 +480,9 @@ impl ConnectionManager {
                     self.is_reconnecting.store(false, Ordering::SeqCst);
                     self.retry_count.store(0, Ordering::SeqCst);
 
-                    let _ = app_handle.emit("ws_reconnected", ());
+                    if let Some(ah) = &app_handle {
+                        let _ = ah.emit("ws_reconnected", ());
+                    }
                     tracing::info!("Reconnect successful!");
                     return Ok(());
                 }
@@ -448,9 +499,11 @@ impl ConnectionManager {
 
         // 重连失败
         self.is_reconnecting.store(false, Ordering::SeqCst);
-        let _ = app_handle.emit("ws_reconnect_failed", serde_json::json!({
-            "reason": "Max retries exceeded"
-        }));
+        if let Some(ah) = &app_handle {
+            let _ = ah.emit("ws_reconnect_failed", serde_json::json!({
+                "reason": "Max retries exceeded"
+            }));
+        }
         tracing::error!("Reconnect failed after {} attempts", max_retry);
 
         Err(crate::AppError::WebSocket("Reconnect failed".to_string()))

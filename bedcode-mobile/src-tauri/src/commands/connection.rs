@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use crate::Result;
+use crate::connection::event_ws;
 use crate::router::event;
 use crate::state::{get_connection_manager, get_session_manager, get_auth_manager, set_global_token, get_global_token, clear_global_token};
 
@@ -41,6 +42,10 @@ pub async fn ws_connect(
 
     // 启动事件转发任务（仅一次）
     event::start_event_forwarding(app_handle.clone());
+
+    // 启动常驻事件 WS 监督任务（HTTP 认证成功后自动建连/自愈，单例）；
+    // 先订阅再等首次认证，不漏 AuthSuccess
+    event_ws::start_event_ws_supervisor(Some(app_handle.clone()));
 
     let conn = get_connection_manager();
     tracing::info!("Calling conn.connect()...");
@@ -118,8 +123,8 @@ pub async fn ws_reconnect(
         return Ok(());
     }
 
-    // 调用重连
-    manager.reconnect(app_handle, session_token).await
+    // 调用重连（command 层始终带 AppHandle：前端需收到 reconnecting / reconnected / reconnect_failed 事件）
+    manager.reconnect(Some(app_handle), session_token).await
 }
 
 /// 获取当前持有的 JWT
