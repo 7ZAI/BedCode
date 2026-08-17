@@ -43,7 +43,8 @@ impl BiometricChallenge {
 
 /// 挑战值管理器
 ///
-/// 以连接地址为键，保证挑战值只对该 WS 连接有效；单次使用、可过期
+/// 以设备指纹为键：同一设备的多条 WS/HTTP 通道共享一次挑战（旧版曾按
+/// 连接地址管理，断连即失效；指纹键控后由 TTL 60s 兜底过期）；单次使用、可过期
 pub struct BiometricChallengeManager {
     challenges: Arc<Mutex<HashMap<String, BiometricChallenge>>>,
 }
@@ -55,23 +56,23 @@ impl BiometricChallengeManager {
         }
     }
 
-    /// 为指定连接生成新挑战值（替换旧的）
-    pub async fn generate(&self, addr: &str) -> String {
+    /// 为指定设备生成新挑战值（替换旧的）
+    pub async fn generate(&self, fingerprint: &str) -> String {
         let challenge = BiometricChallenge::new();
         let nonce = challenge.nonce.clone();
-        self.challenges.lock().await.insert(addr.to_string(), challenge);
-        tracing::debug!(addr = %addr, "Biometric challenge issued");
+        self.challenges.lock().await.insert(fingerprint.to_string(), challenge);
+        tracing::debug!(fingerprint = %fingerprint, "Biometric challenge issued");
         nonce
     }
 
     /// 验证并消费挑战值：存在、未过期、未使用、匹配
-    pub async fn verify_and_consume(&self, addr: &str, nonce: &str) -> Result<()> {
+    pub async fn verify_and_consume(&self, fingerprint: &str, nonce: &str) -> Result<()> {
         let mut guard = self.challenges.lock().await;
-        match guard.get_mut(addr) {
+        match guard.get_mut(fingerprint) {
             None => Err(crate::AppError::Auth("No active biometric challenge".to_string())),
             Some(challenge) => {
                 if challenge.is_expired() {
-                    guard.remove(addr);
+                    guard.remove(fingerprint);
                     Err(crate::AppError::Auth("Biometric challenge expired".to_string()))
                 } else if challenge.used {
                     Err(crate::AppError::Auth("Biometric challenge already used".to_string()))
@@ -79,16 +80,16 @@ impl BiometricChallengeManager {
                     Err(crate::AppError::Auth("Biometric challenge mismatch".to_string()))
                 } else {
                     challenge.used = true;
-                    tracing::debug!(addr = %addr, "Biometric challenge consumed");
+                    tracing::debug!(fingerprint = %fingerprint, "Biometric challenge consumed");
                     Ok(())
                 }
             }
         }
     }
 
-    /// 清除指定连接的挑战值（断连时调用）
-    pub async fn clear(&self, addr: &str) {
-        self.challenges.lock().await.remove(addr);
+    /// 清除指定设备的挑战值（设备完全离线时调用）
+    pub async fn clear(&self, fingerprint: &str) {
+        self.challenges.lock().await.remove(fingerprint);
     }
 }
 

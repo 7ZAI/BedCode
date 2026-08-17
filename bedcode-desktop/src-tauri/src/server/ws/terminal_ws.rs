@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use crate::server::ws::session::WsSession;
-use crate::server::ws::registry::WsSessionRegistry;
+use crate::server::ws::registry::ChannelType;
 use crate::server::message::Message;
 use crate::system::app_context::AppContext;
 use crate::session::GlobalOutputManager;
@@ -111,6 +111,8 @@ pub struct TerminalWs {
     /// 的帧）直接丢弃——与 abort 互补，杜绝旧流帧注入新订阅通道（移动端
     /// 字节游标错位 → 连续性违反 → 重订阅风暴的根源）
     stream_generations: std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// 通道类型（注册时定死）：终端 I/O 路由 → Terminal；事件路由（ticket 02）→ Event
+    channel_type: ChannelType,
 }
 
 impl TerminalWs {
@@ -122,12 +124,14 @@ impl TerminalWs {
             output_forwarders: std::collections::HashMap::new(),
             subscribe_tasks: std::collections::HashMap::new(),
             stream_generations: std::collections::HashMap::new(),
+            channel_type: ChannelType::Terminal,
         }
     }
 
     /// 本地环回通道：直接标记已认证，跳过配对/JWT 流程
     /// （路由层已校验 peer 为环回地址，见 server/app.rs local_terminal_ws）
     pub fn new_local(addr: SocketAddr) -> Self {
+        // 本地环回也承载终端 I/O，通道类型保持 Terminal（new() 默认值）
         let mut ws = Self::new(addr);
         ws.session.authenticated = true;
         ws.local = true;
@@ -163,14 +167,15 @@ impl Actor for TerminalWs {
         tracing::info!("Terminal WS connected: {}", self.session.addr);
         self.start_heartbeat(ctx);
 
-        // 注册到 WsSessionRegistry
+        // 注册到 WsSessionRegistry（携带通道类型：广播过滤与在线判定依据）
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
         let socket_addr = self.session.addr;
+        let channel_type = self.channel_type;
         actix::spawn(async move {
             use crate::server::ws::registry::WsSessionRegistry;
             let registry = WsSessionRegistry::global();
-            registry.register(client_id, socket_addr, addr).await;
+            registry.register(client_id, socket_addr, addr, channel_type).await;
         });
     }
 

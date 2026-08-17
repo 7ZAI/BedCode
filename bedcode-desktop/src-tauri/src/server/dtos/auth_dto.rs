@@ -57,3 +57,29 @@ pub struct ReauthRequest {
     pub fingerprint: String,
     pub session_token: String,
 }
+
+/// POST /api/auth/biometric-challenge request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricChallengeRequest {
+    pub device_id: String,
+    pub device_fingerprint: String,
+}
+
+/// POST /api/auth/biometric-challenge response data
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricChallengeResponseData {
+    pub challenge_nonce: String,
+    pub expires_in: u64,
+}
+
+/// POST /api/auth/biometric-verify request
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricVerifyRequest {
+    pub device_id: String,
+    pub device_fingerprint: String,
+    pub challenge_nonce: String,
+    pub signature: String,
+}

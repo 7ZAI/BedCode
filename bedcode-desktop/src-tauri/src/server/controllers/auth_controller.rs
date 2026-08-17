@@ -6,6 +6,8 @@
 //! - POST /api/auth/verify
 //! - POST /api/auth/qr-connect
 //! - POST /api/auth/reauth
+//! - POST /api/auth/biometric-challenge
+//! - POST /api/auth/biometric-verify
 
 use actix_web::{web, HttpResponse};
 use tauri::Emitter;
@@ -14,8 +16,11 @@ use crate::server::dtos::ApiResponse;
 use crate::server::dtos::auth_dto::*;
 use crate::utils::auth::jwt::JwtService;
 use crate::utils::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
-use crate::server::services::auth_service::format_device_display_name;
+use crate::server::services::auth_service::{
+    format_device_display_name, issue_biometric_challenge, verify_biometric_challenge, BiometricAuthError,
+};
 use crate::system::constants::event;
+use crate::utils::auth::biometric::BIO_CHALLENGE_TTL_SECS;
 
 /// POST /api/auth/pairing
 ///
@@ -316,6 +321,147 @@ pub async fn reauthenticate(
                 _ => "Invalid token",
             };
             HttpResponse::Ok().json(ApiResponse::<()>::error(1001, msg))
+        }
+    }
+}
+
+/// POST /api/auth/biometric-challenge
+///
+/// 生物认证挑战值下发：设备须已配对且绑定生物凭证公钥，返回一次性、
+/// 60s 有效的挑战值（防重放）。失败返回 1008（不撞既有 1001/1005/1006/1007）。
+/// 挑战以设备指纹为键——同一设备多条通道共享一次挑战，单次消费后作废
+pub async fn biometric_challenge(
+    body: web::Json<BiometricChallengeRequest>,
+) -> HttpResponse {
+    let ctx = AppContext::global();
+    let fingerprint = body.device_fingerprint.clone();
+
+    match issue_biometric_challenge(&fingerprint).await {
+        Ok(nonce) => {
+            let data = BiometricChallengeResponseData {
+                challenge_nonce: nonce,
+                expires_in: BIO_CHALLENGE_TTL_SECS,
+            };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
+        }
+        Err(e) => {
+            tracing::warn!(fingerprint = %fingerprint, error = ?e, "Biometric challenge issuance failed");
+            // 记录连接历史（挑战签发失败 = 认证尝试失败；未配对指纹不落库）
+            {
+                let db_guard = ctx.db().lock().await;
+                if let Err(err) = db_guard.record_connection_event_by_fingerprint(
+                    &fingerprint,
+                    crate::db::connection_method::BIOMETRIC,
+                    crate::db::connection_result::FAILED,
+                    // HTTP 端无客户端地址上下文（移动端地址由 WS 握手获得），
+                    // 连接历史不记地址，展示与 WS 路径互补
+                    None,
+                ) {
+                    tracing::warn!(error = %err, "Failed to record connection history");
+                }
+            }
+            let msg = match e {
+                // DB 故障也是挑战不可签发，归 1008 并携带原因便于排查
+                BiometricAuthError::Database(err) => err,
+                _ => "Biometric credential not bound".to_string(),
+            };
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1008, &msg))
+        }
+    }
+}
+
+/// POST /api/auth/biometric-verify
+///
+/// 生物认证验签：一次性消费挑战值 + 绑定公钥验签，通过后签发 JWT。
+/// 失败返回 1009。⚠️ add_pairing 必须保留 public_key——既有 verify/qr 端点
+/// 传空串会把生物凭证清空，这里传 pairing.public_key 防覆盖
+pub async fn biometric_verify(
+    body: web::Json<BiometricVerifyRequest>,
+) -> HttpResponse {
+    let ctx = AppContext::global();
+    let fingerprint = body.device_fingerprint.clone();
+
+    match verify_biometric_challenge(&fingerprint, &body.challenge_nonce, &body.signature).await {
+        Ok(pairing) => {
+            // 设备名取配对记录（HTTP 端点无自报名称，与 WS 路径的
+            // payload.device_name.unwrap_or(pairing.device_name) 对齐）
+            let device_name = pairing.device_name.clone();
+            let jwt_service = JwtService::new();
+            let token = match jwt_service.generate_token(
+                pairing.id.clone(),
+                Some(device_name.clone()),
+                Some(fingerprint.clone()),
+            ) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::error!(error = %e, "JWT generation failed");
+                    return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, "Failed to generate token"));
+                }
+            };
+
+            // 刷新配对记录（connect_count / last_seen）——必须保留公钥防覆盖
+            {
+                let db_guard = ctx.db().lock().await;
+                if let Err(e) = db_guard.add_pairing(&device_name, &fingerprint, &pairing.public_key, None) {
+                    tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
+                }
+            }
+
+            // 记录连接历史（生物认证成功）
+            {
+                let db_guard = ctx.db().lock().await;
+                if let Err(e) = db_guard.record_connection_event_by_fingerprint(
+                    &fingerprint,
+                    crate::db::connection_method::BIOMETRIC,
+                    crate::db::connection_result::SUCCESS,
+                    None,
+                ) {
+                    tracing::warn!(error = %e, "Failed to record connection history");
+                }
+            }
+
+            // 通知桌面端有设备连接（无头/测试上下文无 AppHandle：跳过）；
+            // HTTP 端无客户端地址，addr 留空（与挑战/verify 的无地址语义一致）
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
+                    addr: String::new(),
+                    device_id: pairing.id.clone(),
+                    device_name: Some(device_name.clone()),
+                    fingerprint: Some(fingerprint.clone()),
+                    event: "authenticated".to_string(),
+                });
+            }
+
+            tracing::info!(pairing_id = %pairing.id, fingerprint = %fingerprint, "Device authenticated via biometric (HTTP)");
+
+            let data = AuthTokenResponseData {
+                expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
+                token,
+            };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
+        }
+        Err(e) => {
+            tracing::warn!(fingerprint = %fingerprint, error = ?e, "Biometric verify failed");
+            // 记录连接历史（验证失败）
+            {
+                let db_guard = ctx.db().lock().await;
+                if let Err(err) = db_guard.record_connection_event_by_fingerprint(
+                    &fingerprint,
+                    crate::db::connection_method::BIOMETRIC,
+                    crate::db::connection_result::FAILED,
+                    None,
+                ) {
+                    tracing::warn!(error = %err, "Failed to record connection history");
+                }
+            }
+            let msg = match e {
+                BiometricAuthError::ChallengeInvalid(_) => "Biometric challenge invalid or expired".to_string(),
+                BiometricAuthError::NotPaired => "Device not paired".to_string(),
+                BiometricAuthError::CredentialNotBound => "Biometric credential not bound".to_string(),
+                BiometricAuthError::SignatureInvalid(_) => "Biometric signature verification failed".to_string(),
+                BiometricAuthError::Database(err) => err,
+            };
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1009, &msg))
         }
     }
 }

@@ -221,6 +221,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/auth/verify", web::post().to(auth_controller::verify_pairing_code))
             .route("/auth/qr-connect", web::post().to(auth_controller::qr_connect))
             .route("/auth/reauth", web::post().to(auth_controller::reauthenticate))
+            // 生物认证端点同样落在 /api/auth/ 前缀下，中间件 is_public_path 自动放行
+            .route("/auth/biometric-challenge", web::post().to(auth_controller::biometric_challenge))
+            .route("/auth/biometric-verify", web::post().to(auth_controller::biometric_verify))
             // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))

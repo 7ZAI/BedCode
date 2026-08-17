@@ -1,5 +1,11 @@
 //! 多客户端广播与停机集成测试（spec L1 场景 7–8，ticket 04）
 //!
+//! 广播送达语义（ticket 01 起为过渡期临时语义）：`WsSessionRegistry::broadcast`
+//! 只投递到 Event 通道（见 registry.rs ChannelType）。本测试两个客户端都是
+//! Terminal 通道（当前唯一真实路由 /ws/terminal），故旧版「B 收到 SyncData 广播」
+//! 的正面断言已反转为「收不到」——这是 ticket 01→04 事件通道就位前计划内接
+//! 受的过渡性回归；ticket 02 的 /ws/event 路由落地后，应恢复正面接收断言。
+//!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 两个真实
 //! tokio-tungstenite 客户端完成配对认证 → 一端发 WS 会话控制消息触发
 //! 服务端广播（SessionControl → SessionManager → sync_tx 事件总线 →
@@ -437,32 +443,6 @@ async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) ->
 ///
 /// 广播经 SyncEventHandler 的 tokio::spawn 异步执行，必须轮询而非假定时序；
 /// 期间可能出现其他业务帧（认证响应已被消费，此处只关注 SyncData）
-async fn wait_for_sync_data(stream: &mut WsRecv, is_match: impl FnMut(&SyncPayload) -> bool) -> bool {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut is_match = is_match;
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return false;
-        }
-        let frame = tokio::time::timeout(remaining, stream.next()).await;
-        match frame {
-            Ok(Some(Ok(WsMsg::Text(text)))) => {
-                if let Ok(Message::SyncData { payload, .. }) = Message::from_json(&text) {
-                    if is_match(&payload) {
-                        return true;
-                    }
-                }
-            }
-            Ok(Some(Ok(WsMsg::Ping(_))) | Some(Ok(WsMsg::Pong(_)))) => continue,
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(e))) => panic!("WS error while waiting for sync data: {e}"),
-            Ok(None) => return false,
-            Err(_) => return false,
-        }
-    }
-}
-
 /// 断言时间窗内不出现任何 SyncData 消息
 ///
 /// 用于"发送端不收到"排除语义验证：广播若错误送达会以 Text 帧出现，
@@ -577,14 +557,14 @@ async fn broadcast_and_shutdown_flow() {
         other => panic!("expected SessionControl echo, got: {other:?}"),
     }
 
-    // 1c. B 收到广播：SyncData(SessionRemoved{ghost_session_1})
-    assert!(
-        wait_for_sync_data(&mut stream_b, |payload| {
-            matches!(payload, SyncPayload::SessionRemoved { session_id, .. } if session_id == ghost_session_1)
-        })
-        .await,
-        "other client must receive the sync broadcast"
-    );
+    // 1c. 过渡期临时语义（ticket 01 起）：广播只投递 Event 通道，B 是
+    // Terminal 通道 → 收不到（旧版断言收到，见文件头注释；ticket 02 的
+    // /ws/event 落地后改由 Event 客户端正面断言接收）
+    assert_no_sync_data(
+        &mut stream_b,
+        Duration::from_millis(500),
+        "terminal channel must not receive sync broadcast (Event-only transitional)",
+    ).await;
 
     // 1d. 排除语义：A（发送端）在广播发出后不应收到 SyncData
     assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "sender exclusion").await;
@@ -627,8 +607,10 @@ async fn broadcast_and_shutdown_flow() {
     );
     assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "no broadcast target").await;
 
-    // 2c. 对照组：全员广播应仍能送达在线端 A——证明 2b 无广播不是广播系统故障，
-    // 而是注册表已清理 B（A 收到即证明管道存活，B 的条目已不可达）
+    // 2c. 全员广播（WebSocketManager::broadcast）同样只达 Event 通道：A 是
+    // Terminal 通道，过渡期收不到（与 1c 同因）。ticket 02 的 /ws/event 落地后，
+    // 此处置换为 Event 客户端做「管道存活」对照；管道健康另由场景 4 的
+    // ERROR 级日志零计数兜底（广播空跑不产生 error）
     let ctrl = Message::sync_data(SyncPayload::SessionModeChanged {
         session_id: "itest-ctrl-04".to_string(),
         auto_approve: true,
@@ -637,13 +619,11 @@ async fn broadcast_and_shutdown_flow() {
         .broadcast(&ctrl)
         .await
         .expect("full broadcast must succeed");
-    assert!(
-        wait_for_sync_data(&mut stream_a, |payload| {
-            matches!(payload, SyncPayload::SessionModeChanged { session_id, auto_approve } if session_id == "itest-ctrl-04" && *auto_approve)
-        })
-        .await,
-        "online client must still receive full broadcast after peer disconnect"
-    );
+    assert_no_sync_data(
+        &mut stream_a,
+        Duration::from_millis(500),
+        "terminal channel must not receive full broadcast (Event-only transitional)",
+    ).await;
 
     // ==================== 场景 3：停机后新连接被拒 + 端口释放 ====================
 

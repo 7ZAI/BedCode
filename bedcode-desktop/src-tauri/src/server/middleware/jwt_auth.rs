@@ -54,6 +54,9 @@ mod tests {
     fn public_paths_do_not_require_auth() {
         assert!(is_public_path("/api/auth/pairing"));
         assert!(is_public_path("/api/auth/verify"));
+        // ticket 01 新增的生物认证端点同样落在 /api/auth/ 前缀下
+        assert!(is_public_path("/api/auth/biometric-challenge"));
+        assert!(is_public_path("/api/auth/biometric-verify"));
         assert!(is_public_path("/api/health"));
         assert!(is_public_path("/health"));
     }
@@ -65,6 +68,9 @@ mod tests {
         assert!(!is_public_path("/"));
         // 前缀相似但路径不同，不应误放行
         assert!(!is_public_path("/api/authx"));
+        // 生物认证端点前缀以下仍受保护：/api/auth/biometric 本身是公开前缀的
+        // 成员（starts_with 语义正确），但拼写错误/其他路径不能钻前缀漏洞
+        assert!(!is_public_path("/api/authbiometric"));
         assert!(!is_public_path("/api/healthz"));
     }
 
