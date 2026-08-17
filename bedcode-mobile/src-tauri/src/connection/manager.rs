@@ -1,6 +1,9 @@
 //! Connection Manager
 //!
-//! 业务层连接管理 - 使用 WsClient 实现连接/断开/重连
+//! 业务层连接管理。认证已 HTTP 化（spec §4.5）后，ConnectionManager 持有
+//! 自己的连接状态（`status` 字段），不再委托 `WsClient.lifecycle`——
+//! WS 层在 04（常驻事件 WS）之前不存在，「已认证」语义（Authed）由设备级
+//! status 承载。WS 建连路径（`establish_ws_client`）保留给集成测试与 04 复用。
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
@@ -9,10 +12,7 @@ use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
 use tracing;
 
-use crate::connection::{
-    ConnectionStatus as WsConnStatus, WsClient, WsClientConfig, WsClientEvent,
-    ClientDefaultMessageHandler,
-};
+use crate::connection::{WsClient, WsClientConfig, WsClientEvent, ClientDefaultMessageHandler};
 use crate::model::message::Message;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::state::get_global_token;
@@ -76,13 +76,16 @@ pub struct TargetDevice {
 
 /// 连接管理器
 ///
-/// 职责：作为业务层代理，直接使用 WsClient 的状态
-/// 不再维护独立的 ConnectionStatus 和 running 状态，避免重复
+/// 职责：作为业务层代理，持有设备级连接状态（HTTP 认证语义），
+/// WS 客户端（04 事件 WS）与目标信息按需维护
 pub struct ConnectionManager {
     /// 目标设备
     target: Arc<RwLock<Option<TargetDevice>>>,
-    /// WebSocket 客户端
+    /// WebSocket 客户端（03 过渡期无；04 事件 WS 恢复）
     client: Arc<RwLock<Option<Arc<WsClient>>>>,
+    /// 设备级连接状态（认证 HTTP 化后不能委托 WsClient.lifecycle——
+    /// 「WS 层不再持有连接状态语义」，spec §4.5）
+    status: Arc<RwLock<ConnectionStatus>>,
     /// 事件发送器（用于内部业务逻辑监听）
     event_tx: broadcast::Sender<MobileEvent>,
     /// 手动断开标记，用于区分意外断开（true=用户主动断开，不弹通知）
@@ -101,6 +104,7 @@ impl ConnectionManager {
         Arc::new(Self {
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
+            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
             event_tx,
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
@@ -108,13 +112,9 @@ impl ConnectionManager {
         })
     }
 
-    /// 获取当前连接状态（从 WsClient 获取）
-    pub async fn get_status(&self) -> WsConnStatus {
-        if let Some(client) = self.client.read().await.as_ref() {
-            client.get_status().await
-        } else {
-            WsConnStatus::Disconnected
-        }
+    /// 获取当前连接状态（设备级 status）
+    pub async fn get_status(&self) -> ConnectionStatus {
+        self.status.read().await.clone()
     }
 
     /// 获取目标设备
@@ -127,17 +127,24 @@ impl ConnectionManager {
         self.event_tx.subscribe()
     }
 
+    /// 事件发送器
+    ///
+    /// HTTP 认证成功契口经此广播 `MobileEvent::AuthSuccess`（04 事件 WS
+    /// 订阅触发建连）；事件转发层（event.rs）也订阅同一通道。
+    pub fn event_tx(&self) -> broadcast::Sender<MobileEvent> {
+        self.event_tx.clone()
+    }
+
     /// 连接到目标设备
     ///
-    /// 简化逻辑：
-    /// 1. 检查当前状态
-    /// 2. 创建 WsClient 并直接 await 连接
-    /// 3. WsClient 内部已经 spawn 了 sender_task 和 receiver_task
+    /// 03 过渡语义：认证走 HTTP，WS 尚不存在（04）——connect 只做
+    /// 「保存目标 + 状态 Connecting→Connected + 发射事件」，真正的 WS 建连
+    /// 由 04 的事件 WS 复用 `establish_ws_client`。
     pub async fn connect(&self, app_handle: AppHandle, address: String, port: u16, name: Option<String>) -> Result<()> {
-        // 检查当前状态（从 WsClient 获取）
+        // 检查当前状态（自有 status）
         {
             let status = self.get_status().await;
-            if status == WsConnStatus::Connecting {
+            if status == ConnectionStatus::Connecting {
                 let _ = app_handle.emit("ws_connecting", serde_json::json!({
                     "address": address,
                     "port": port,
@@ -146,11 +153,9 @@ impl ConnectionManager {
                 tracing::info!("Already connecting");
                 return Ok(());
             }
-            // 已认证的连接（Paired）才视为真正可用，直接复用
-            // Connected 表示 WebSocket 已建立但未认证，可能是残留的旧连接
-            // （如自动重连成功但 JWT 认证失败后前端以为断开了），
-            // 此时需要断开旧连接并重建，否则前端认证/配对请求会全部失败
-            if status == WsConnStatus::Paired {
+            // 已认证（Authed）直接复用；Connected 表示目标已保存但未认证，
+            // 需要重连（HTTP reauth）而非重复保存目标
+            if status == ConnectionStatus::Authed {
                 let _ = app_handle.emit("ws_connected", ());
                 tracing::info!("Already connected and authenticated");
                 return Ok(());
@@ -165,17 +170,16 @@ impl ConnectionManager {
             "address": address,
             "port": port,
         }));
-        tracing::info!("WebSocket connecting to {}:{}", address, port);
+        tracing::info!("Connecting to {}:{} (HTTP auth)", address, port);
 
         // 清除上一次连接的客户端（如果有）
-        // 先断开旧客户端，确保其 IO 任务停止，避免与新建连接冲突
+        // 03 过渡期 connect 不建 WS，此块恒为空；保留以防 04 复用此函数
         if let Some(old_client) = self.client.write().await.take() {
             tracing::debug!("Disconnecting previous client before creating new one");
             let _ = old_client.disconnect().await;
         }
 
-        // 保存目标设备
-        tracing::debug!("Saving target device...");
+        // 保存目标设备（HTTP 认证与 04 事件 WS 的地址真源）
         *self.target.write().await = Some(TargetDevice {
             address: address.clone(),
             port,
@@ -183,60 +187,32 @@ impl ConnectionManager {
         });
         tracing::debug!("Target device saved");
 
-        // 创建配置和客户端
-        tracing::debug!("Creating WsClientConfig with address: {}, port: {}", address, port);
-        let config = WsClientConfig::new(&address, port).with_path(WS_TERMINAL_PATH);
-        tracing::debug!("WsClientConfig created, url: {}", config.url());
+        // 状态推进：Connecting → Connected（HTTP 认证成功后由
+        // set_authed() 转 Authed；04 事件 WS 落地后此状态语义恢复完整）
+        *self.status.write().await = ConnectionStatus::Connecting;
+        *self.status.write().await = ConnectionStatus::Connected;
 
-        tracing::debug!("Creating WsClient...");
-        let client = WsClient::new(config);
-        tracing::debug!("WsClient created");
-
-        // 构建路由器
-        let router = build_router(self.event_tx.clone())?;
-
-        // 设置 handler
-        client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
-
-        tracing::debug!("Handler set, now calling client.connect()...");
-        tracing::info!("About to call client.connect(), this should show Connection log...");
-        match client.connect().await {
-            Ok(_) => {
-                tracing::info!("client.connect() succeeded");
-            }
-            Err(e) => {
-                tracing::error!("client.connect() failed: {}", e);
-                let _ = app_handle.emit("ws_error", serde_json::json!({
-                    "message": format!("Connection failed: {}", e)
-                }));
-                return Err(e);
-            }
-        }
-
-        // 创建连接断开监控任务
-        // 订阅 WsClientEvent，在意外断开时通知前端
-        // connect/reconnect 共用（重连后的新连接同样需要监控，见
-        // spawn_connection_monitor）
-        self.spawn_connection_monitor(app_handle.clone(), &client);
-
-        // 保存客户端引用
-        *self.client.write().await = Some(client);
-
-        // 短暂等待连接稳定
+        // 短暂等待，保证目标写入落定（与旧建连路径的稳定等待对齐）
         tokio::time::sleep(tokio::time::Duration::from_millis(CONNECTION_STABILIZE_DELAY_MS)).await;
 
         // 发射连接成功事件
         let _ = app_handle.emit("ws_connected", ());
-        tracing::info!("Connection established");
+        tracing::info!("Connection established (HTTP auth target saved)");
 
         Ok(())
     }
 
     /// 连接（不带 AppHandle，用于测试）
+    ///
+    /// 保留 WS 建连路径：集成测试需要真实 WsClient→router→handler 链路
+    /// （WS 首消息 JWT 认证、事件路由），与生产路径解耦。
     pub async fn connect_without_emit(&self, address: String, port: u16, name: Option<String>) -> Result<()> {
-        // 检查当前状态
+        // 检查当前状态（自有 status）
         let status = self.get_status().await;
-        if status == WsConnStatus::Connected || status == WsConnStatus::Paired {
+        if status == ConnectionStatus::Connected
+            || status == ConnectionStatus::Paired
+            || status == ConnectionStatus::Authed
+        {
             return Ok(());
         }
 
@@ -247,20 +223,9 @@ impl ConnectionManager {
             name,
         });
 
-        // 创建配置和客户端
-        let config = WsClientConfig::new(&address, port).with_path(WS_TERMINAL_PATH);
-        let client = WsClient::new(config);
-
-        // 构建路由器
-        let router = build_router(self.event_tx.clone())?;
-
-        client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
-
-        // 直接 await 连接
-        client.connect().await?;
-
-        // 保存客户端引用
-        *self.client.write().await = Some(client);
+        *self.status.write().await = ConnectionStatus::Connecting;
+        self.establish_ws_client(&address, port, WS_TERMINAL_PATH, None).await?;
+        *self.status.write().await = ConnectionStatus::Connected;
 
         // 短暂等待连接稳定
         tokio::time::sleep(tokio::time::Duration::from_millis(CONNECTION_STABILIZE_DELAY_MS)).await;
@@ -268,13 +233,46 @@ impl ConnectionManager {
         Ok(())
     }
 
-    /// 创建连接断开监控任务（connect / reconnect 共用）
+    /// 建立 WS 客户端（测试路径与 04 事件 WS 共用）
+    ///
+    /// 归拢 client 构建 + build_router + 断连监控三件事：04 复用同一 helper
+    /// 建常驻事件 WS（`WS_EVENT_PATH`），WS 首消息 JWT 认证语义由桌面端
+    /// 02 保证（裸连 10s 被关，故生产路径 04 前不建无认证 WS）。
+    async fn establish_ws_client(
+        &self,
+        address: &str,
+        port: u16,
+        path: &str,
+        app_handle: Option<AppHandle>,
+    ) -> Result<Arc<WsClient>> {
+        let config = WsClientConfig::new(address, port).with_path(path);
+        let client = WsClient::new(config);
+
+        // 构建路由器
+        let router = build_router(self.event_tx.clone())?;
+
+        client
+            .set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router))))
+            .await;
+
+        // 直接 await 连接
+        client.connect().await?;
+
+        if let Some(ah) = app_handle {
+            self.spawn_connection_monitor(ah, &client);
+        }
+
+        // 保存客户端引用
+        *self.client.write().await = Some(client.clone());
+
+        Ok(client)
+    }
+
+    /// 创建连接断开监控任务（WS client 建连后调用）
     ///
     /// 订阅 WsClientEvent，在意外断开时发射 ws_unexpected_disconnect 通知前端。
-    /// 必须在每次建立连接（含重连）后调用：重连创建的是全新 WsClient，
-    /// 旧监控随旧客户端销毁——若新连接再次断开而没有监控，前端收不到任何
-    /// 事件，连接状态与订阅信念停留在旧值，实时输出静默停止（只能靠用户
-    /// 交互触发 send 失败间接恢复）
+    /// 重连创建的是全新 WsClient，旧监控随旧客户端销毁——新连接再次断开时
+    /// 无监控则前端收不到事件，实时输出静默停止。
     fn spawn_connection_monitor(&self, app_handle: AppHandle, client: &Arc<WsClient>) {
         let mut event_rx = client.subscribe();
         let app_clone = app_handle.clone();
@@ -311,8 +309,6 @@ impl ConnectionManager {
                         }
 
                         // 清理桌面端 peer 记录并推送 online=false（双通道）
-                        // 无论手动/意外断开均执行：对端文件服务已不可达，
-                        // 插件需感知下线以暂停传输/触发重连续传
                         if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
                             let fs = crate::state::get_file_service();
                             fs.registry.remove_peer(&peer_id).await;
@@ -337,13 +333,12 @@ impl ConnectionManager {
 
         // 在清除 target 之前主动移除桌面 peer 记录并推送 online=false
         // （remove_peer 幂等：monitor 循环后续再调一次无害）
-        // 必须先于 target 清除执行，否则 desktop_peer_id() 读不到地址
         if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
             let fs = crate::state::get_file_service();
             fs.registry.remove_peer(&peer_id).await;
         }
 
-        // 断开 WebSocket
+        // 断开 WebSocket（04 前恒为空）
         if let Some(client) = self.client.read().await.as_ref() {
             let _ = client.disconnect().await;
         }
@@ -353,10 +348,17 @@ impl ConnectionManager {
 
         // 清除目标
         *self.target.write().await = None;
+
+        // 复位设备级状态
+        *self.status.write().await = ConnectionStatus::Disconnected;
     }
 
-    /// 尝试重连（指数退避，使用 ReconnectManager 配置）
-    pub async fn reconnect(&self, app_handle: AppHandle, _token: Option<String>) -> Result<()> {
+    /// 尝试重连（HTTP reauth 退避循环）
+    ///
+    /// 认证已 HTTP 化：重连 = 用已持有 JWT（凭据优先，前端传入兜底）反复
+    /// 调 `/api/auth/reauth`，成功即恢复 Authed。事件契约（reconnecting /
+    /// reconnected / reconnect_failed）与退避节奏保持原样，前端零改动。
+    pub async fn reconnect(&self, app_handle: AppHandle, token: Option<String>) -> Result<()> {
         let max_retry = DEFAULT_RETRY_DELAYS_MS.len() as u32;
         let mut current_retry: u32 = 0;
 
@@ -397,47 +399,45 @@ impl ConnectionManager {
                 }
             }
 
-            // 获取目标设备信息
+            // 目标设备：HTTP reauth 的地址真源
             let target = self.target.read().await.clone();
-            let Some(target) = target else {
+            if target.is_none() {
                 tracing::error!("No target device for reconnect");
                 break;
-            };
-
-            // 断开并清除旧客户端
-            if let Some(old_client) = self.client.write().await.take() {
-                tracing::debug!("Disconnecting old client before reconnect attempt");
-                let _ = old_client.disconnect().await;
             }
 
-            // 创建新客户端
-            let config = WsClientConfig::new(&target.address, target.port).with_path(WS_TERMINAL_PATH);
-            let client = WsClient::new(config);
+            // 取已持有 JWT：Rust 凭据优先（D3），前端传入 token 兜底
+            let auth_mgr = crate::state::get_auth_manager();
+            let creds_token = auth_mgr
+                .get_credentials()
+                .await
+                .map(|c| c.session_token)
+                .unwrap_or_default();
+            let session_token = if !creds_token.is_empty() {
+                creds_token
+            } else {
+                token.clone().unwrap_or_default()
+            };
+            if session_token.is_empty() {
+                tracing::warn!("No session token for HTTP reauth, aborting reconnect");
+                break;
+            }
 
-            // 构建路由器
-            let router = build_router(self.event_tx.clone())?;
-
-            client.set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router)))).await;
-
-            match client.connect().await {
-                Ok(_) => {
-                    tracing::info!("Reconnect attempt {} succeeded", current_retry + 1);
-
-                    // 重连成功后同样挂载断连监控：新客户端是全新 WsClient，
-                    // 没有监控则再次断开时前端完全静默（订阅残留 + 服务端已
-                    // 清理）→ 实时输出停止，只能靠用户交互触发 send 失败恢复
-                    self.spawn_connection_monitor(app_handle.clone(), &client);
-
-                    // 保存新客户端
-                    *self.client.write().await = Some(client);
-
-                    // 重连成功，重置状态
+            // HTTP reauth：成功（含 AuthSuccess 契口广播）即恢复；拒绝/网络
+            // 故障都继续退避（业务码 1001 等属于永久性拒绝，退避到上限自然退出）
+            match auth_mgr.authenticate_with_token(&session_token).await {
+                Ok(true) => {
+                    tracing::info!("Reconnect attempt {} succeeded (HTTP reauth)", current_retry + 1);
                     self.is_reconnecting.store(false, Ordering::SeqCst);
                     self.retry_count.store(0, Ordering::SeqCst);
 
                     let _ = app_handle.emit("ws_reconnected", ());
                     tracing::info!("Reconnect successful!");
                     return Ok(());
+                }
+                Ok(false) => {
+                    tracing::warn!("Reconnect attempt {} rejected", current_retry + 1);
+                    current_retry += 1;
                 }
                 Err(e) => {
                     tracing::warn!("Reconnect attempt {} failed: {}", current_retry + 1, e);
@@ -554,19 +554,22 @@ impl ConnectionManager {
         result
     }
 
-    /// 检查是否已连接
+    /// 检查是否已连接（Connected / Authed / Paired）
     pub async fn is_connected(&self) -> bool {
         let status = self.get_status().await;
-        matches!(status, WsConnStatus::Connected | WsConnStatus::Paired)
+        matches!(
+            status,
+            ConnectionStatus::Connected | ConnectionStatus::Authed | ConnectionStatus::Paired
+        )
     }
 
-    /// 设置为已配对状态
-    pub async fn set_paired(&self) {
-        if let Some(client) = self.client.read().await.as_ref() {
-            client.set_status(WsConnStatus::Paired).await;
-        }
+    /// 设置为已认证（设备级 HTTP 认证成功）
+    ///
+    /// 04 事件 WS 认证成功后同样维持 Authed——在线语义由桌面端
+    /// WsSessionRegistry 判定（D8），本状态只表达设备级认证结论。
+    pub async fn set_authed(&self) {
+        *self.status.write().await = ConnectionStatus::Authed;
     }
-
 }
 
 impl Default for ConnectionManager {
@@ -576,6 +579,7 @@ impl Default for ConnectionManager {
         Self {
             target: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
+            status: Arc::new(RwLock::new(ConnectionStatus::Disconnected)),
             event_tx,
             manual_disconnect: Arc::new(AtomicBool::new(false)),
             retry_count: Arc::new(AtomicU32::new(0)),
@@ -589,6 +593,7 @@ impl Clone for ConnectionManager {
         Self {
             target: self.target.clone(),
             client: self.client.clone(),
+            status: self.status.clone(),
             event_tx: self.event_tx.clone(),
             manual_disconnect: self.manual_disconnect.clone(),
             retry_count: self.retry_count.clone(),

@@ -78,8 +78,8 @@ futures-util = "0.3"
 # 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
 wasmtime = "47"
 
-# HTTP client (WASM plugin HTTP proxy + remote download)
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+# HTTP client (WASM plugin HTTP proxy + remote download + 认证端点 .json() 解析)
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 
 # 传输引擎工具（CancellationToken 取消 + ReaderStream 文件流，与桌面端 transfer 同语义）
 tokio-util = { version = "0.7", features = ["io"] }

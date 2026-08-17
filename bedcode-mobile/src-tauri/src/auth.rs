@@ -2,6 +2,7 @@
 //!
 //! 认证和配对 - 包含认证管理器、配对数据结构和认证状态
 
+pub mod http;
 pub mod manager;
 pub mod pairing;
 

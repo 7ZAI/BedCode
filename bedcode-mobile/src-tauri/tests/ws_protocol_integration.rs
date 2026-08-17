@@ -2,8 +2,8 @@
 //!
 //! 驱动真实客户端链路（WsClient → ClientDefaultMessageHandler → 业务 router →
 //! 真实 handler → MobileEvent 事件流）连接协议级 mock 桌面端服务器，验证
-//! 单测抓不到的跨模块集成行为：配对握手 → 认证 → 终端输出 → 请求-响应 →
-//! 断线感知 → 未连接拒绝。
+//! 单测抓不到的跨模块集成行为：WS 连接 → 首消息 JWT 认证 → 终端输出 →
+//! 请求-响应 → 断线感知 → 未连接拒绝。
 //!
 //! 协议对称保证：mock 服务器应答用移动端 `Message` 枚举构造（见 tests/common）。
 
@@ -21,9 +21,7 @@ use bedcode_lib::router::MobileEvent;
 use bedcode_lib::state::{clear_global_token, get_global_token};
 use tokio::sync::broadcast;
 
-use common::{
-    MockDesktopServer, MOCK_PAIRING_CODE, MOCK_SESSION_TOKEN, TEST_DEVICE_ID, TEST_DEVICE_NAME,
-};
+use common::{MockDesktopServer, MOCK_SESSION_TOKEN, TEST_DEVICE_ID, TEST_DEVICE_NAME};
 
 const EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -47,7 +45,10 @@ async fn wait_event(
     }
 }
 
-/// 连接 mock 桌面端并完成配对 → 认证，返回 (manager, 事件订阅)
+/// 连接 mock 桌面端并完成认证（WS 首消息 JWT），返回 (manager, 事件订阅)
+///
+/// 认证已 HTTP 化后，移动端正常路径不再经 WS 握手；本测试路径保留真实
+/// WsClient→router→handler 链路，驱动 04 事件 WS 的首消息 JWT 认证语义
 async fn connect_and_pair(
     server: &MockDesktopServer,
 ) -> (Arc<ConnectionManager>, broadcast::Receiver<MobileEvent>) {
@@ -60,23 +61,11 @@ async fn connect_and_pair(
         .await
         .expect("connect should succeed");
 
-    // 配对：请求配对码
+    // 认证：直接发 JWT 首消息（reauthenticate stage，mock 回 Authenticated）
     manager
-        .send(&AuthRequest::request_pairing(TEST_DEVICE_ID, TEST_DEVICE_NAME, "fp-test"))
+        .send(&AuthRequest::reauthenticate(TEST_DEVICE_ID, "fp-test", MOCK_SESSION_TOKEN))
         .await
-        .expect("send pairing request");
-    wait_event(&mut events, |ev| matches!(ev, MobileEvent::PairingVerified)).await;
-
-    // 认证：验证配对码
-    manager
-        .send(&AuthRequest::verify_pairing_code(
-            TEST_DEVICE_ID,
-            TEST_DEVICE_NAME,
-            "fp-test",
-            MOCK_PAIRING_CODE,
-        ))
-        .await
-        .expect("send verify code");
+        .expect("send jwt reauthenticate");
     wait_event(&mut events, |ev| matches!(ev, MobileEvent::AuthSuccess { .. })).await;
 
     (manager, events)
@@ -106,10 +95,10 @@ async fn connect_handshake() {
     assert_eq!(manager.get_status().await, ConnectionStatus::Disconnected);
 }
 
-// ==================== 场景 2：配对全链路 ====================
+// ==================== 场景 2：认证全链路 ====================
 
 #[tokio::test]
-async fn pairing_full_flow() {
+async fn auth_full_flow() {
     let server = MockDesktopServer::start().await;
     let (manager, events) = connect_and_pair(&server).await;
 
@@ -135,8 +124,7 @@ async fn pairing_full_flow() {
         .expect("token field");
     assert_eq!(token, MOCK_SESSION_TOKEN, "认证后消息应自动携带 token");
 
-    // 事件流完整性：配对过程中还应有 Paired 或 Output 之外的业务事件可消费——
-    // 至少 PairingVerified / AuthSuccess 已在上层断言，这里验证无意外 Error 事件
+    // 事件流完整性：至少 AuthSuccess 已在上层断言，这里验证无意外 Error 事件
     manager.disconnect().await;
     clear_global_token();
     let _ = events;

@@ -27,6 +27,11 @@ impl ClientRouteHandler for AuthHandler {
                             session_token,
                         });
 
+                        // 同步设备级连接状态（WS 回复路径）：HTTP 认证路径经
+                        // manager::apply_auth_success 置位，WS 路径（04 事件 WS /
+                        // 集成测试）由这里补齐，两路最终都落在 Authed
+                        crate::state::get_connection_manager().set_authed().await;
+
                         // 通知插件认证成功（插件管理器未初始化时跳过——
                         // 集成测试等无插件环境路径，语义同无插件运行）
                         if let Some(pm) = crate::state::try_get_plugin_manager() {
@@ -39,14 +44,6 @@ impl ClientRouteHandler for AuthHandler {
                         // 已随 WS 断连清理清空，不重发对端将永远看不到服务）
                         crate::state::get_file_service().resend_if_active().await;
                     }
-                }
-                AuthStage::VerifyCode => {
-                    tracing::info!("[AuthHandler] PairingVerified");
-                    ctx.emit(MobileEvent::PairingVerified);
-
-                    // 配对成功 = 对端可达：补发文件服务公告（挂载早于连接的
-                    // 场景下首次 announce 因连接未建立被跳过，不重发对端将永远看不到服务）
-                    crate::state::get_file_service().resend_if_active().await;
                 }
                 AuthStage::Failed => {
                     let reason = payload.error.unwrap_or_else(|| "Authentication failed".to_string());

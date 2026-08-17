@@ -30,81 +30,11 @@ fn with_token(message: Message) -> Message {
 pub struct AuthRequest;
 
 impl AuthRequest {
-    /// 构建配对请求消息
+    /// 构建 JWT Token 重新认证消息（WS 首消息 JWT 认证）
     ///
-    /// 移动端发起配对流程，桌面端返回配对码
-    pub fn request_pairing(device_id: &str, device_name: &str, fingerprint: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::RequestPairing,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建配对码验证消息
-    ///
-    /// 用户输入配对码后发送，桌面端验证后返回认证凭据
-    pub fn verify_pairing_code(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        code: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::VerifyCode,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                pairing_code: Some(code.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建 QR 码认证消息
-    ///
-    /// 扫描桌面端 QR 码后发送 token 进行认证
-    pub fn authenticate_with_qr(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        qr_token: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::QrConnect,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                qr_token: Some(qr_token.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建 JWT Token 重新认证消息
-    ///
-    /// 断线重连时使用已保存的 session_token 重新认证
+    /// 认证已 HTTP 化后，移动端正常路径不再经 WS 握手——本构造器服务：
+    /// ① 04 常驻事件 WS 建连后的首消息 JWT 认证；
+    /// ② 集成测试驱动真实 WsClient→router→handler 链路。
     pub fn reauthenticate(device_id: &str, fingerprint: &str, session_token: &str) -> Message {
         with_token(Message::Auth {
             message_id: uuid::Uuid::new_v4().to_string(),
@@ -122,57 +52,11 @@ impl AuthRequest {
         })
     }
 
-    /// 构建生物认证请求消息
-    ///
-    /// 移动端发起生物认证流程，桌面端返回挑战值
-    pub fn biometric_request(device_id: &str, device_name: &str, fingerprint: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::BiometricRequest,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建生物认证签名回传消息
-    ///
-    /// 生物认证通过后对挑战值签名，回传桌面端验签
-    pub fn biometric_verify(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        nonce: &str,
-        signature: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::BiometricVerify,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                challenge_nonce: Some(nonce.to_string()),
-                signature: Some(signature.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
     /// 构建生物凭证绑定/解绑消息
     ///
-    /// 在已认证连接上注册公钥（绑定）或清空公钥（解绑，public_key 传空串）
+    /// 在已认证连接上注册公钥（绑定）或清空公钥（解绑，public_key 传空串）。
+    /// ExchangeCertificate 无 HTTP 端点，绑定需已认证持久 WS（04 事件 WS 落地
+    /// 后接线；此前的绑定调用报 Not connected 属预期过渡回归）。
     pub fn exchange_biometric_credential(fingerprint: &str, public_key: &str) -> Message {
         with_token(Message::Auth {
             message_id: uuid::Uuid::new_v4().to_string(),
@@ -349,18 +233,6 @@ impl ResponseParser {
         }
     }
 
-    /// 解析认证错误响应
-    ///
-    /// 桌面端拒绝认证时返回 `Message::Error`（如 CREDENTIAL_NOT_BOUND / NOT_PAIRED），
-    /// 返回 (错误码, 错误消息) 供调用方透传给用户；非错误消息返回 None。
-    pub fn parse_auth_error(response: &Message) -> Option<(String, String)> {
-        if let Message::Error { code, message, .. } = response {
-            Some((code.clone(), message.clone()))
-        } else {
-            None
-        }
-    }
-
     /// 解析启动会话响应
     ///
     /// 从 SessionControl 响应中提取 session_id
@@ -397,17 +269,6 @@ pub mod timeouts {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_auth_request_pairing() {
-        let msg = AuthRequest::request_pairing("device-1", "Mobile", "fp-123");
-        if let Message::Auth { payload, .. } = &msg {
-            assert_eq!(payload.stage, AuthStage::RequestPairing);
-            assert_eq!(payload.device_id, Some("device-1".to_string()));
-        } else {
-            panic!("Expected Auth message");
-        }
-    }
 
     #[test]
     fn test_session_request_list() {

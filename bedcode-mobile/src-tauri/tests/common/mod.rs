@@ -7,7 +7,7 @@
 //!
 //! 职责：
 //! - 绑定 127.0.0.1:0（OS 分配端口，避免与真实桌面端实例冲突）
-//! - 自动应答配对/认证状态机：RequestPairing → VerifyCode，VerifyCode → Authenticated
+//! - 自动应答 JWT 首消息认证：`reauthenticate`（stage）→ `Authenticated`（附 mock token）
 //! - 其余消息记录到 `received` 供断言；测试用 `send_message` / `force_close` 主动驱动
 
 use std::net::SocketAddr;
@@ -23,8 +23,6 @@ use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tokio_tungstenite::{accept_async, WebSocketStream};
 
-/// mock 桌面端签发的配对码
-pub const MOCK_PAIRING_CODE: &str = "123456";
 /// mock 桌面端签发的会话令牌
 pub const MOCK_SESSION_TOKEN: &str = "test-jwt-token";
 /// 测试设备 ID
@@ -151,10 +149,12 @@ impl Drop for MockDesktopServer {
     }
 }
 
-/// 自动应答配对/认证状态机（服务端视角）
+/// 自动应答 JWT 首消息认证（服务端视角）
 ///
-/// 应答形状：`Message::auth`（带请求 message_id 回填 + token 透传），
-/// 与桌面端 auth_controller 的响应语义一致。
+/// 认证已 HTTP 化，WS 上的认证语义收敛为「首消息 JWT」：收到
+/// `reauthenticate`（WS 首消息 stage，见桌面端 terminal_ws.rs::handle_auth）
+/// 回 `Authenticated` 并附会话 token。应答形状：`Message::auth`（带请求
+/// message_id 回填 + token 透传），与桌面端 auth 响应语义一致。
 async fn respond_auth_if_needed(parsed: &serde_json::Value, sink: &Arc<Mutex<Option<MockSink>>>) {
     if parsed["type"] != "auth" {
         return;
@@ -169,23 +169,7 @@ async fn respond_auth_if_needed(parsed: &serde_json::Value, sink: &Arc<Mutex<Opt
     let token = parsed["payload"]["token"].as_str().unwrap_or("");
 
     let response = match stage {
-        "request_pairing" => Some(Message::auth(
-            None,
-            AuthPayload {
-                stage: AuthStage::VerifyCode,
-                pairing_code: Some(MOCK_PAIRING_CODE.to_string()),
-                ..Default::default()
-            },
-        )),
-        // VerifyCode 成功后签发会话令牌（Authenticated）
-        "verify_code" => Some(Message::auth(
-            None,
-            AuthPayload {
-                stage: AuthStage::Authenticated,
-                session_token: Some(MOCK_SESSION_TOKEN.to_string()),
-                ..Default::default()
-            },
-        )),
+        // WS 首消息 JWT 认证成功：签发会话令牌
         "reauthenticate" => Some(Message::auth(
             None,
             AuthPayload {

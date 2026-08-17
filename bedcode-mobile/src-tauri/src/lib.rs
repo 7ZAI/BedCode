@@ -190,6 +190,8 @@ pub fn run() {
             commands::connection::ws_get_status,
             commands::connection::ws_is_connected,
             commands::connection::ws_reconnect,
+            commands::connection::get_ws_token,
+            commands::connection::get_ws_url,
             // Auth Commands
             commands::auth::ws_get_auth_status,
             commands::auth::ws_authenticate,

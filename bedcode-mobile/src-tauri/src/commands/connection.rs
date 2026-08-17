@@ -122,6 +122,33 @@ pub async fn ws_reconnect(
     manager.reconnect(app_handle, session_token).await
 }
 
+/// 获取当前持有的 JWT
+///
+/// D3：JWT 由 Rust 持有，前端经此 invoke 获取；禁止落前端存储。
+/// 04 事件 WS 建连时前端需分批请求 token 与 URL 后再建连。
+#[tauri::command]
+pub async fn get_ws_token() -> Result<String> {
+    Ok(get_global_token())
+}
+
+/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/event`）
+///
+/// 04 事件 WS 建连地址：目标设备未保存（未 connect）时报错。
+#[tauri::command]
+pub async fn get_ws_url() -> Result<String> {
+    let conn = get_connection_manager();
+    let target = conn
+        .get_target()
+        .await
+        .ok_or_else(|| crate::AppError::Auth("No target device".to_string()))?;
+    Ok(format!(
+        "ws://{}:{}{}",
+        target.address,
+        target.port,
+        crate::system::constants::connection::WS_EVENT_PATH
+    ))
+}
+
 // ==================== Token Commands ====================
 
 /// 设置全局 Token（前端启动时从 localStorage 读取并调用）

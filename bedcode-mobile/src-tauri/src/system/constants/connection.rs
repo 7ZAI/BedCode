@@ -50,3 +50,6 @@ pub const WS_DEFAULT_PATH: &str = "/";
 
 /// 移动端连接桌面端的 WebSocket 路径
 pub const WS_TERMINAL_PATH: &str = "/ws/terminal";
+
+/// 常驻事件 WebSocket 路径（04 事件 WS 建连地址；桌面端 02 已建路由）
+pub const WS_EVENT_PATH: &str = "/ws/event";
