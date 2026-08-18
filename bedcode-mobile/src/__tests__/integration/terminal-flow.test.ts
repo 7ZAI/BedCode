@@ -1,17 +1,17 @@
 /**
- * 终端流组合集成测试（L2 场景 3）
+ * 终端流组合集成测试（L2 场景 3，10 号票重写）
  *
- * 协作实体：terminalBuffer store（ws_output 全局监听 + 字节游标） +
+ * 协作实体：terminalBuffer store（终端 WS 状态机 + lastRenderedSeq） +
  * useTerminalBuffer（实时 handler 注册） + writeCoalescer（直写管线） +
  * xterm Terminal（stub，遵循 writeCoalescer.test.ts 的项目惯例） +
  * useMobileConnection.sendInput（HTTP 输入回传 + JWT 注入）。
  *
- * 测试 seam：mock invoke（ws_subscribe_session 裁决）+ 脚本化 ws_output
- * 事件（data_base64 载荷，Rust forward_event 形状）驱动 store 全局监听器。
+ * 测试 seam：mock createTerminalSocket（fake socket 捕获 handlers 回调）+
+ * 手动驱动 onSubscribed/onFrame/onHistoryEnd，模拟桌面端新路由帧流。
  *
- * 覆盖：ws_output 事件 → base64 解码 → handler → terminal.write 全链路 +
- * 游标推进；订阅裁决 incremental → 确认前回放帧缓冲 → 排空写入；输入回传
- * （HTTP URL/body 构造 + Authorization JWT 注入协作）。
+ * 覆盖：TB v2 帧 → handler → terminal.write 全链路 + lastRenderedSeq 推进；
+ * 历史段实时帧缓冲 → history_end FLUSH；输入回传（HTTP URL/body 构造 +
+ * Authorization JWT 注入协作）。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
@@ -20,7 +20,7 @@ import type { Terminal } from '@xterm/xterm'
 import type { RemoteDevice } from '@/composables/model'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
-import { makeOutputEvent, makeSubscribeResult, makeAuthCredentials } from '@/__tests__/fixtures/index'
+import { makeAuthCredentials } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -35,12 +35,25 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
 })
 const mockFetch = vi.fn()
 
+// fake 终端 socket：捕获 handlers，测试手动驱动
+let capturedHandlers: Record<string, any> | null = null
+let fakeSocket: {
+  start: ReturnType<typeof vi.fn>
+  subscribe: ReturnType<typeof vi.fn>
+  sendInput: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+  reconnect: ReturnType<typeof vi.fn>
+  isOpen: ReturnType<typeof vi.fn>
+}
+const createTerminalSocketMock = vi.fn()
+
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => p,
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
+  emit: vi.fn().mockResolvedValue(undefined),
 }))
 vi.mock('@tauri-apps/plugin-http', () => ({
   fetch: (...args: any[]) => mockFetch(...args),
@@ -49,6 +62,16 @@ vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
 }))
 vi.mock('@tauri-apps/plugin-os', () => ({}))
+vi.mock('@/composables/useTerminalSocket', () => ({
+  createTerminalSocket: (...args: any[]) => createTerminalSocketMock(...args),
+}))
+vi.mock('@/composables/useMobileCommands', async (importOriginal) => {
+  const mod = await importOriginal<typeof import('@/composables/useMobileCommands')>()
+  return {
+    ...mod,
+    getTerminalWsInfo: vi.fn().mockResolvedValue({ url: 'ws://192.168.1.100:8765/ws/terminal/session/s1', token: 'jwt' }),
+  }
+})
 
 // ==================== 测试基建 ====================
 
@@ -62,16 +85,6 @@ const DEVICE: RemoteDevice = {
 
 type ConnectionModule = typeof import('@/composables/useMobileConnection')
 
-async function emit(name: string, payload?: unknown): Promise<void> {
-  for (const handler of eventHandlers[name] || []) {
-    await handler({ payload })
-  }
-}
-
-function invokeCalls(cmd: string): unknown[][] {
-  return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
-}
-
 /** stub xterm（项目惯例：writeCoalescer.test.ts 同款；writeBytes 守卫 element） */
 function makeMockTerminal() {
   return {
@@ -81,12 +94,37 @@ function makeMockTerminal() {
   } as unknown as Terminal
 }
 
-/** 默认 invoke 分发 */
+/** 构造 TB v2 帧对象（store 消费的解析结果） */
+function frame(seq: number, eventCount = 1, data?: string) {
+  return {
+    data: new TextEncoder().encode(data ?? `data-${seq}`),
+    seq,
+    eventCount,
+    lastSeq: seq + eventCount - 1,
+    isWaiting: false,
+  }
+}
+
+function setupSocket() {
+  fakeSocket = {
+    start: vi.fn(),
+    subscribe: vi.fn(),
+    sendInput: vi.fn(),
+    stop: vi.fn(),
+    reconnect: vi.fn(),
+    isOpen: vi.fn(() => false),
+  }
+  capturedHandlers = null
+  createTerminalSocketMock.mockImplementation((handlers: unknown) => {
+    capturedHandlers = handlers as Record<string, any>
+    return fakeSocket
+  })
+  return fakeSocket
+}
+
 function installInvokeMock() {
   mockInvoke.mockImplementation((cmd: string) => {
     switch (cmd) {
-      case 'ws_subscribe_session':
-        return Promise.resolve(makeSubscribeResult({ mode: 'incremental' }))
       case 'ws_connect':
         return Promise.resolve({ address: DEVICE.address, port: DEVICE.port, status: 'connected' })
       default:
@@ -110,6 +148,7 @@ beforeEach(async () => {
   vi.clearAllMocks()
   installInvokeMock()
   setActivePinia(createPinia())
+  setupSocket()
   await freshConnection()
 })
 
@@ -118,61 +157,48 @@ afterEach(() => {
 })
 
 describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输入回传', () => {
-  it('ws_output 事件全链路：base64 解码 → 实时 handler → terminal.write + 游标推进', async () => {
+  it('socket 帧全链路：TB v2 帧 → 实时 handler → terminal.write + lastRenderedSeq 推进', async () => {
     const store = useTerminalBufferStore()
     const terminal = makeMockTerminal()
-
-    // 订阅前先注册实时 handler（页面进入会话的路径）
-    store.ensureBuffer('s1')
-    store.markSubscribed('s1')
     const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
     const term = useTerminalBuffer()
     term.registerRealtimeHandler('s1', terminal)
 
-    // 启动全局 ws_output 监听（连接建立时 onConnected 自动执行的真实路径）
-    await store.startGlobalListener()
-    await flushAsync()
-    expect(eventHandlers['ws_output']).toBeDefined()
+    // 订阅：fake socket 建连 + 订阅帧
+    await store.subscribeSession('s1')
+    expect(fakeSocket.start).toHaveBeenCalledWith('s1')
 
-    // 后端推送输出（Rust forward_event 形状：data_base64 + 字节偏移）
-    await emit('ws_output', makeOutputEvent('hello', { session_id: 's1', start_offset: 0, end_offset: 5 }))
+    // 桌面端帧流：subscribe_ok → 历史帧 → history_end → 实时帧
+    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    capturedHandlers!.onFrame(frame(1, 1, 'hello'))
+    capturedHandlers!.onHistoryEnd(10)
     await flushAsync()
 
     // 直写管线（ENABLE_RAF_COALESCE=false）：事件回调内立即写入
-    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([104, 101, 108, 108, 111]))
-    // 字节游标推进（会话流坐标）
-    expect(store.getBuffer('s1')!.cursor).toBe(5)
+    expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('hello'))
+    // lastRenderedSeq 推进
+    expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(1)
   })
 
-  it('订阅裁决 incremental：确认前回放帧缓冲 → 确认后排空写入 terminal', async () => {
+  it('历史段实时帧缓冲 → history_end FLUSH 写入 terminal（快照拼接无缝隙）', async () => {
     const store = useTerminalBufferStore()
     const terminal = makeMockTerminal()
-    store.ensureBuffer('s1')
     const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
     const term = useTerminalBuffer()
     term.registerRealtimeHandler('s1', terminal)
 
-    // 先显式启动全局监听器（doSubscribe 内部也会启动，但那是异步 await 链，
-    // 不先启动则 emit 可能落在 listen 注册前——事件无监听者被丢弃的竞态）
-    await store.startGlobalListener()
-    await flushAsync()
-    expect(eventHandlers['ws_output']).toBeDefined()
+    await store.subscribeSession('s1')
+    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    capturedHandlers!.onFrame(frame(1, 10, 'his')) // 历史帧覆盖到 snapshot 边界（1-10）
+    // 历史段内实时帧（> snapshot_seq）：缓冲不写入
+    capturedHandlers!.onFrame(frame(11, 1, 'live'))
+    expect(terminal.write).toHaveBeenCalledTimes(1)
 
-    // 发起订阅（invoke 在途，裁决未返回）
-    const subscribePromise = store.subscribeSession('s1')
-
-    // 裁决消息与历史帧乱序：确认前回放帧到达 → 缓冲不写入（订阅仍在途）
-    await emit('ws_output', makeOutputEvent('hi', { session_id: 's1', start_offset: 0, end_offset: 2 }))
-    expect(terminal.write).not.toHaveBeenCalled()
-
-    // 订阅确认（incremental，游标 0 在保留区间内）→ 排空缓冲写入
+    // history_end：FLUSH 实时缓冲
+    capturedHandlers!.onHistoryEnd(10)
     await flushAsync()
-    const result = await subscribePromise
-    await flushAsync()
-    expect(result?.mode).toBe('incremental')
-    expect(store.getBuffer('s1')!.subscribed).toBe(true)
-    expect(terminal.write).toHaveBeenCalledWith(new Uint8Array([104, 105]))
-    expect(store.getBuffer('s1')!.cursor).toBe(2)
+    expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('live'))
+    expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(11)
   })
 
   it('输入回传：sendInput → HTTP POST 参数构造 + JWT 注入协作', async () => {
@@ -209,3 +235,7 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     expect(invokeCalls('ws_send_input_async')).toHaveLength(0)
   })
 })
+
+function invokeCalls(cmd: string): unknown[][] {
+  return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
+}

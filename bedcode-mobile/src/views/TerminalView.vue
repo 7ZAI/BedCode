@@ -179,7 +179,7 @@ import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
-import { httpSendSessionInput, httpResizeSession } from '@/composables/useHttpApi'
+import { httpResizeSession } from '@/composables/useHttpApi'
 import { useOrientation } from '@/composables/useOrientation'
 import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
@@ -215,7 +215,7 @@ const mockTerminal = useMockTerminal()
 const toast = useToast()
 const { isLandscape } = useOrientation()
 const { isSystemDark } = useTheme()
-const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, forceReplay, handleDisconnect, handleSessionStopped, markSessionRunning } = useTerminalBuffer()
+const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, forceReplay, handleDisconnect, handleSessionStopped, markSessionRunning, sendInput } = useTerminalBuffer()
 const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
@@ -518,18 +518,16 @@ const selectionBarStyle = computed(() => {
 
 // ==================== Input Handlers ====================
 // 输入统一由 TerminalInputBar 承担（xterm 原生输入已禁用），
-// 命令经 HTTP 发送到主机会话，特殊键以转义序列形式发送
+// 命令经终端 WS input 帧发送到主机会话（10 号票：替代旧 HTTP 输入路径），
+// 特殊键以按键组合名形式发送
 
 function handleInputSubmit(text: string) {
   if (!terminalRef.value) return
   if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
-    httpSendSessionInput(sessionId.value, text).then(result => {
-      if (result.code !== 0) {
-        console.error('[TerminalView] Send input failed:', result.message)
-        toast.error(t('mobile.connection.connectFailed'))
-      }
-    })
+    if (!sendInput(sessionId.value, text)) {
+      toast.error(t('mobile.connection.connectFailed'))
+    }
   }
 }
 
@@ -537,9 +535,7 @@ async function handleInputExecute(text: string) {
   if (!terminalRef.value) return
   if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
-    const result = await httpSendSessionInput(sessionId.value, text, 'enter')
-    if (result.code !== 0) {
-      console.error('[TerminalView] Send input failed:', result.message)
+    if (!sendInput(sessionId.value, text, 'enter')) {
       toast.error(t('mobile.connection.connectFailed'))
     }
   }
@@ -548,12 +544,9 @@ async function handleInputExecute(text: string) {
 function handleSpecialKey(key: string) {
   if (isMockSession(sessionId.value)) return
   if (isConnected.value && isSessionActive.value) {
-    httpSendSessionInput(sessionId.value, '', key).then(result => {
-      if (result.code !== 0) {
-        console.error('[TerminalView] Send special key failed:', result.message)
-        toast.error(t('mobile.connection.connectFailed'))
-      }
-    })
+    if (!sendInput(sessionId.value, '', key)) {
+      toast.error(t('mobile.connection.connectFailed'))
+    }
   }
 }
 

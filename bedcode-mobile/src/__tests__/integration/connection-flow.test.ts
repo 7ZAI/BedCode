@@ -168,8 +168,8 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     await flushAsync()
     expect(conn.connectionStatus.value).toBe('connected')
     expect(conn.isConnected.value).toBe(true)
-    // 连接建立 → 全局输出监听器启动（listen('ws_output') 被捕获）
-    expect(eventHandlers['ws_output']).toBeDefined()
+    // 连接建立 → 10 后输出经终端 socket 直连，不再注册全局 ws_output 监听
+    expect(eventHandlers['ws_output']).toBeUndefined()
 
     // paired：已配对设备持久化（onPaired 需要 authCredentials + currentDevice 齐备）
     await emit('ws_paired')
