@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::session::{OutputEvent, OutputFrame};
+use crate::session::OutputFrame;
 use crate::server::message::Message;
 
 // ==================== Output Buffer ====================
@@ -18,6 +18,9 @@ pub(super) enum ForwardOutput {
     Text(String),
     Binary(Vec<u8>),
     /// 历史边界标记（05 快照协议）：旧路由无可编码帧，消费侧吞掉；06 新路由编码 JSON 控制帧
+    /// min_seq/history_count 为 05 透传元数据（wire 上由 subscribe_ok 携带），
+    /// 保留以备未来 wire 需要（如历史截断提示）
+    #[allow(dead_code)]
     HistoryEnd {
         snapshot_seq: u64,
         min_seq: u64,
@@ -25,13 +28,27 @@ pub(super) enum ForwardOutput {
     },
 }
 
+/// 转发输出形态（三种通道格式，见 `OutputFormat`）
+///
+/// - LocalV1：本地环回通道（桌面 WebView），TB v1 20B 帧头 + 订阅内合成字节游标
+/// - RemoteLegacy：旧 /ws/terminal 远程通道（移动端 compat），base64 JSON 文本帧
+/// - RemoteV2：新 /ws/terminal/session/{id} 远程通道，TB v2 16B 帧头（spec §5.3）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OutputFormat {
+    LocalV1,
+    RemoteLegacy,
+    RemoteV2,
+}
+
+// ==================== TB v1（本地通道，07 迁移 TB v2 后删除） ====================
+
 /// 二进制帧头：magic(2) + version(1) + flags(1) + start_offset(8 LE) + end_offset(8 LE) = 20 字节
 const BINARY_FRAME_HEADER_LEN: usize = 20;
 const BINARY_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
 const BINARY_FRAME_VERSION: u8 = 1;
 const BINARY_FRAME_FLAG_WAITING: u8 = 0x01;
 
-/// 编码输出二进制帧（客户端据此做字节级连续性校验）
+/// 编码 TB v1 输出帧（客户端据此做订阅内字节级连续性校验）
 fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, data: &[u8]) -> Vec<u8> {
     let mut frame = Vec::with_capacity(BINARY_FRAME_HEADER_LEN + data.len());
     frame.extend_from_slice(&BINARY_FRAME_MAGIC);
@@ -43,6 +60,43 @@ fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, dat
     frame
 }
 
+// ==================== TB v2（spec §5.3，新远程通道） ====================
+
+/// TB v2 帧头：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE) = 16 字节
+const V2_FRAME_HEADER_LEN: usize = 16;
+const V2_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
+const V2_FRAME_VERSION: u8 = 2;
+/// flags bit0 = is_waiting（spec §5.3）
+const V2_FRAME_FLAG_WAITING: u8 = 0x01;
+/// flags 高 7 位编码「帧内事件数 - 1」：
+///
+/// 16B 帧头只有单条 seq（8B）+ len（4B）。合并帧含多条事件，消费端若无法
+/// 得知帧内事件数，则无法推导帧末 seq——seq 缺口检测（丢帧自愈）与重播
+/// 去重（跳过 ≤ last_rendered_seq 的帧）都会因合并批次边界误判。
+/// 约定：`seq` = 帧内首事件 index，帧内事件数 = `(flags >> 1) + 1`，
+/// 帧末 seq = `seq + count - 1`。单事件帧高 7 位 = 0，帧头与 spec 原义逐字节一致。
+const V2_FRAME_FLAG_COUNT_SHIFT: u8 = 1;
+/// 单帧事件数上限：flags 高 7 位 = count - 1，最大 128；超出拆分 flush
+const V2_FRAME_MAX_EVENTS: usize = 128;
+
+/// 编码 TB v2 输出帧（spec §5.3：`magic "TB" + version=2 + flags + seq(8 LE) + len(4 LE) + data`）
+///
+/// `seq` = 帧内首事件 index；`event_count` = 帧内事件数（1..=128）；
+/// `len` = data 字节数（与 WS 帧边界一致，供解析器快速定位 data 长度）
+fn encode_output_frame_v2(seq: u64, event_count: usize, is_waiting: bool, data: &[u8]) -> Vec<u8> {
+    debug_assert!((1..=V2_FRAME_MAX_EVENTS).contains(&event_count));
+    let flags = ((event_count - 1) as u8) << V2_FRAME_FLAG_COUNT_SHIFT
+        | if is_waiting { V2_FRAME_FLAG_WAITING } else { 0 };
+    let mut frame = Vec::with_capacity(V2_FRAME_HEADER_LEN + data.len());
+    frame.extend_from_slice(&V2_FRAME_MAGIC);
+    frame.push(V2_FRAME_VERSION);
+    frame.push(flags);
+    frame.extend_from_slice(&seq.to_le_bytes());
+    frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    frame.extend_from_slice(data);
+    frame
+}
+
 /// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
 ///
 /// 05 seq 化后事件不再携带字节偏移，`offset_cursor` 在订阅内从 0 起按字节
@@ -50,18 +104,21 @@ fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, dat
 /// 移动端）按订阅内连续流做连续性校验，语义降级但自洽（07/09 新路由消除）
 struct OutputBuffer {
     data: Vec<u8>,
+    /// 帧内首事件 index（TB v2 帧头 seq 来源）
     start_index: u64,
     end_index: u64,
+    /// 本地 v1 合成游标：订阅内从 0 起按字节累加（07 迁移后删除）
     start_offset: u64,
     end_offset: u64,
     offset_cursor: u64,
     last_is_waiting: bool,
-    /// true = 二进制帧输出（本地通道）；false = base64 JSON（移动端通道）
-    binary: bool,
+    /// 帧内事件数（TB v2 帧头 flags 高 7 位来源）
+    event_count: usize,
+    format: OutputFormat,
 }
 
 impl OutputBuffer {
-    fn new(binary: bool) -> Self {
+    fn new(format: OutputFormat) -> Self {
         Self {
             data: Vec::new(),
             start_index: 0,
@@ -70,14 +127,15 @@ impl OutputBuffer {
             end_offset: 0,
             offset_cursor: 0,
             last_is_waiting: false,
-            binary,
+            event_count: 0,
+            format,
         }
     }
 
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
-            // 本批起始 = 订阅内累计字节位置（合成游标）
+            // 本批起始 = 订阅内累计字节位置（合成游标，仅 v1 本地通道使用）
             self.start_offset = self.offset_cursor;
         }
         // 始终更新 end_index 为最新事件的 index
@@ -86,50 +144,81 @@ impl OutputBuffer {
         self.end_offset = self.offset_cursor;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
+        self.event_count += 1;
     }
 
     fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
+    /// 合并帧事件数是否已达 TB v2 单帧上限（128）
+    fn at_max_events(&self) -> bool {
+        self.event_count >= V2_FRAME_MAX_EVENTS
+    }
+
     /// Flush 缓冲区为转发输出
     ///
-    /// 文本形态：合并多条事件时，index 为起始索引，end_index 为结束索引，
-    /// 前端可用 end_index 精确更新去重游标，支持增量同步
-    /// 二进制形态：帧携带 [start_offset, end_offset)，客户端校验连续性
+    /// 文本形态（RemoteLegacy）：合并多条事件时，index 为起始索引，
+    /// end_index 为结束索引，前端可用 end_index 精确更新去重游标
+    /// 二进制形态（LocalV1）：帧携带 [start_offset, end_offset)，客户端校验连续性
+    /// 二进制形态（RemoteV2）：帧头 seq = 首事件 index + flags 编码事件数（spec §5.3）
     fn flush(&mut self, session_id: &str) -> ForwardOutput {
-        if self.binary {
-            let frame = encode_output_frame(
-                self.start_offset,
-                self.end_offset,
-                self.last_is_waiting,
-                &self.data,
-            );
-            self.data.clear();
-            ForwardOutput::Binary(frame)
-        } else {
-            let data_base64 = base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &self.data,
-            );
-            // 仅在合并了多条事件（end_index > start_index）时附带 end_index
-            let end_index = if self.end_index > self.start_index {
-                Some(self.end_index as usize)
-            } else {
-                None
-            };
-            let message = Message::output_from_base64(
-                session_id,
-                &data_base64,
-                self.last_is_waiting,
-                self.start_index as usize,
-                end_index,
-                Some(self.start_offset),
-                Some(self.end_offset),
-            );
-            self.data.clear();
-            ForwardOutput::Text(message.to_json().unwrap_or_default())
+        match self.format {
+            OutputFormat::LocalV1 => {
+                let frame = encode_output_frame(
+                    self.start_offset,
+                    self.end_offset,
+                    self.last_is_waiting,
+                    &self.data,
+                );
+                self.clear();
+                ForwardOutput::Binary(frame)
+            }
+            OutputFormat::RemoteV2 => {
+                let frame = encode_output_frame_v2(
+                    self.start_index,
+                    self.event_count,
+                    self.last_is_waiting,
+                    &self.data,
+                );
+                self.clear();
+                ForwardOutput::Binary(frame)
+            }
+            OutputFormat::RemoteLegacy => {
+                let data_base64 = base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &self.data,
+                );
+                // 仅在合并了多条事件（end_index > start_index）时附带 end_index
+                let end_index = if self.end_index > self.start_index {
+                    Some(self.end_index as usize)
+                } else {
+                    None
+                };
+                let message = Message::output_from_base64(
+                    session_id,
+                    &data_base64,
+                    self.last_is_waiting,
+                    self.start_index as usize,
+                    end_index,
+                    Some(self.start_offset),
+                    Some(self.end_offset),
+                );
+                self.clear();
+                ForwardOutput::Text(message.to_json().unwrap_or_default())
+            }
         }
+    }
+
+    /// 清空缓冲（重置批次元数据）
+    fn clear(&mut self) {
+        self.data.clear();
+        self.start_index = 0;
+        self.end_index = 0;
+        self.start_offset = 0;
+        self.end_offset = 0;
+        self.offset_cursor = 0;
+        self.event_count = 0;
     }
 }
 
@@ -153,12 +242,12 @@ pub(super) async fn forward_loop(
     out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
     flush_interval: Duration,
     max_buffer_size: usize,
-    binary: bool,
+    format: OutputFormat,
     session_id: String,
     stream_generation: Arc<AtomicU64>,
     my_gen: u64,
 ) {
-    let mut buffer = OutputBuffer::new(binary);
+    let mut buffer = OutputBuffer::new(format);
 
     if flush_interval.is_zero() {
         // 零缓冲直通：每条事件立即转发，不等待
@@ -209,6 +298,7 @@ pub(super) async fn forward_loop(
                     OutputFrame::Output(event) => {
                         buffer.append(&event);
                         if buffer.data.len() >= max_buffer_size
+                            || buffer.at_max_events()
                             || last_flush.elapsed() >= flush_interval
                         {
                             if out_tx.send(buffer.flush(&session_id)).await.is_err() {
@@ -303,7 +393,7 @@ mod tests {
     /// 二进制形态：合并多条事件为一个帧，偏移取订阅内合成游标 [0, 总字节)
     #[test]
     fn test_output_buffer_binary_flush_merges_with_offsets() {
-        let mut buf = OutputBuffer::new(true);
+        let mut buf = OutputBuffer::new(OutputFormat::LocalV1);
         buf.append(&event("s", b"ab", 0));
         buf.append(&event("s", b"cd", 1));
         buf.append(&event("s", b"ef", 2));
@@ -321,7 +411,7 @@ mod tests {
     /// 文本形态（移动端兼容）：base64 JSON 携带合成 offset 与 end_index
     #[test]
     fn test_output_buffer_text_flush_carries_offsets() {
-        let mut buf = OutputBuffer::new(false);
+        let mut buf = OutputBuffer::new(OutputFormat::RemoteLegacy);
         buf.append(&event("s", b"ab", 3));
         buf.append(&event("s", b"cd", 4));
 
@@ -348,7 +438,7 @@ mod tests {
     /// 单事件 flush：end_index 为 None，偏移取合成游标 [0, 单事件字节)
     #[test]
     fn test_output_buffer_single_event_flush() {
-        let mut buf = OutputBuffer::new(false);
+        let mut buf = OutputBuffer::new(OutputFormat::RemoteLegacy);
         buf.append(&event("s", b"single", 7));
 
         let out = buf.flush("s");
@@ -374,7 +464,7 @@ mod tests {
     fn spawn_forward(
         flush_interval: Duration,
         max_buffer_size: usize,
-        binary: bool,
+        format: OutputFormat,
     ) -> (
         tokio::sync::mpsc::Sender<OutputFrame>,
         tokio::sync::mpsc::Receiver<ForwardOutput>,
@@ -389,7 +479,7 @@ mod tests {
             out_tx,
             flush_interval,
             max_buffer_size,
-            binary,
+            format,
             "s".into(),
             generation.clone(),
             0,
@@ -404,7 +494,7 @@ mod tests {
     /// 记录的是消息实际发出的时刻而非测试开始接收的时刻
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_sustained_output_bounded_delay_and_merging() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(20), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(20), 64 * 1024, OutputFormat::RemoteLegacy);
 
         let start = tokio::time::Instant::now();
         let (res_tx, mut res_rx) = tokio::sync::mpsc::channel::<(usize, Option<Duration>)>(4);
@@ -448,7 +538,7 @@ mod tests {
     /// 字节窗：单条大事件 ≥ max_buffer_size 时立即 flush，不等待时间窗
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_byte_window_flushes_immediately() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8, OutputFormat::RemoteLegacy);
 
         let start = tokio::time::Instant::now();
         tx.send(OutputFrame::Output(event("s", b"0123456789", 0))).await.unwrap(); // 10 字节 > 8
@@ -483,7 +573,7 @@ mod tests {
     /// 而非空闲超时路径
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_idle_flush_within_interval() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(30), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(30), 64 * 1024, OutputFormat::RemoteLegacy);
 
         let start = tokio::time::Instant::now();
         tx.send(OutputFrame::Output(event("s", b"hi", 0))).await.unwrap();
@@ -507,7 +597,7 @@ mod tests {
     /// 零间隔（直通模式）：每条事件立即转发，消息数 = 事件数，无合并
     #[tokio::test]
     async fn test_forward_loop_zero_interval_passthrough() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, OutputFormat::RemoteLegacy);
 
         for i in 0..5u64 {
             tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
@@ -528,7 +618,7 @@ mod tests {
     /// 通道关闭：未达时间窗/字节窗的残留缓冲最终 flush（合并语义收尾）
     #[tokio::test]
     async fn test_forward_loop_final_flush_on_channel_close() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, OutputFormat::RemoteLegacy);
 
         tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
         tx.send(OutputFrame::Output(event("s", b"cd", 1))).await.unwrap();
@@ -574,7 +664,7 @@ mod tests {
     #[tokio::test]
     async fn test_forward_loop_generation_gate_drops_stale_frames() {
         let (tx, mut out_rx, fwd, generation) =
-            spawn_forward(Duration::from_millis(20), 64 * 1024, false);
+            spawn_forward(Duration::from_millis(20), 64 * 1024, OutputFormat::RemoteLegacy);
 
         // 订阅被替换：代数递增，旧 forward_loop 立即失效
         generation.fetch_add(1, Ordering::SeqCst);
@@ -596,7 +686,7 @@ mod tests {
     /// 代数未变：正常转发不受影响（门控仅在替换/取消订阅时生效）
     #[tokio::test]
     async fn test_forward_loop_generation_gate_passthrough_when_current() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, OutputFormat::RemoteLegacy);
 
         tx.send(OutputFrame::Output(event("s", b"live", 0))).await.unwrap();
         drop(tx);
@@ -613,7 +703,7 @@ mod tests {
     #[tokio::test]
     async fn test_forward_loop_history_end_flushes_and_orders() {
         let (tx, mut out_rx, fwd, _gen) =
-            spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
+            spawn_forward(Duration::from_millis(60_000), 64 * 1024, OutputFormat::RemoteLegacy);
 
         // 两条历史事件未达时间窗/字节窗，残留于缓冲
         tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
@@ -666,6 +756,104 @@ mod tests {
         }
 
         // 标记后无更多帧（通道已关闭）
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
+            Ok(None)
+        ));
+        let _ = fwd.await;
+    }
+
+    // ==================== TB v2（spec §5.3，新远程通道） ====================
+
+    /// 帧头布局：magic(2) + version(1)=2 + flags(1) + seq(8 LE) + len(4 LE) + payload
+    #[test]
+    fn test_encode_output_frame_v2_header() {
+        let frame = encode_output_frame_v2(100, 1, true, b"hello");
+
+        assert_eq!(&frame[0..2], b"TB");
+        assert_eq!(frame[2], 2); // version
+        assert_eq!(frame[3], V2_FRAME_FLAG_WAITING); // 单事件帧：is_waiting
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 100);
+        assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 5); // len
+        assert_eq!(&frame[16..], b"hello");
+        assert_eq!(frame.len(), V2_FRAME_HEADER_LEN + 5);
+    }
+
+    /// 合并帧 flags 高 7 位编码事件数 - 1（帧末 seq = seq + count - 1）
+    #[test]
+    fn test_encode_output_frame_v2_event_count_flags() {
+        let frame = encode_output_frame_v2(5, 4, false, b"abcd");
+        // 4 事件 → (4-1) << 1 = 0b110 = 6；非等待 → bit0 = 0
+        assert_eq!(frame[3], 6);
+        let frame = encode_output_frame_v2(5, 128, true, b"x");
+        // 128 事件 → (128-1) << 1 = 254；等待 → bit0 = 1 → 255
+        assert_eq!(frame[3], 255);
+    }
+
+    /// TB v2 合并 flush：seq = 首事件 index，flags 编码事件数，data 为拼接字节
+    #[test]
+    fn test_output_buffer_v2_flush_merges_with_seq() {
+        let mut buf = OutputBuffer::new(OutputFormat::RemoteV2);
+        buf.append(&event("s", b"ab", 7));
+        buf.append(&event("s", b"cd", 8));
+        buf.append(&event("s", b"ef", 9));
+
+        let out = buf.flush("s");
+        let ForwardOutput::Binary(frame) = out else {
+            panic!("expected binary frame");
+        };
+        assert_eq!(frame[2], 2);
+        // 3 事件 → (3-1) << 1 = 4
+        assert_eq!(frame[3], 4);
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 6);
+        assert_eq!(&frame[16..], b"abcdef");
+        assert!(buf.is_empty()); // flush 后清空
+    }
+
+    /// TB v2 单事件帧：flags 仅 is_waiting（与 spec 原义逐字节一致）
+    #[test]
+    fn test_output_buffer_v2_single_event_flush() {
+        let mut buf = OutputBuffer::new(OutputFormat::RemoteV2);
+        buf.append(&event("s", b"single", 3));
+
+        let out = buf.flush("s");
+        let ForwardOutput::Binary(frame) = out else {
+            panic!("expected binary frame");
+        };
+        assert_eq!(frame[2], 2);
+        assert_eq!(frame[3], 0); // 单事件、非等待
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 3);
+        assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 6);
+        assert_eq!(&frame[16..], b"single");
+    }
+
+    /// 事件数上限：合并批次达到 128 条立即 flush（即使未达字节/时间窗）
+    #[tokio::test(start_paused = true)]
+    async fn test_forward_loop_v2_event_count_cap_flushes() {
+        let (tx, mut out_rx, fwd, _gen) =
+            spawn_forward(Duration::from_millis(60_000), 64 * 1024, OutputFormat::RemoteV2);
+
+        // 连续发送 128 条小事件（时间窗 60s 未到、字节窗 64KB 未到）
+        for i in 0..128u64 {
+            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
+        }
+        drop(tx);
+
+        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
+            .await
+            .expect("event count cap must flush immediately")
+            .expect("forward_loop exited");
+        let ForwardOutput::Binary(frame) = out else {
+            panic!("expected binary frame");
+        };
+        // 128 事件 → flags 高 7 位 = 127（0b1111111 << 1 = 254）
+        assert_eq!(frame[3], 254);
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 0);
+        assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 128);
+        assert_eq!(&frame[16..], vec![b'x'; 128].as_slice());
+
+        // 事件数清零：批次后通道关闭 → 无残留帧，forward_loop 退出
         assert!(matches!(
             tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
             Ok(None)

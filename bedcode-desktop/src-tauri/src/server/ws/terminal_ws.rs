@@ -13,13 +13,16 @@ use std::time::{Duration, Instant};
 use crate::server::ws::session::WsSession;
 use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::message::Message;
+use control_frame::ServerFrame;
 use crate::system::app_context::AppContext;
-use crate::session::{GlobalOutputManager, OutputFrame};
+use crate::session::{GlobalOutputManager, OutputFrame, SessionStatus};
 use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
 use crate::system::config::AppConfig;
 use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::system::constants::event;
+
+mod control_frame;
 
 /// 心跳间隔
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(HEARTBEAT_INTERVAL_SECS);
@@ -34,6 +37,24 @@ struct SubscribeResult {
     /// 原始请求的 message_id，用于匹配客户端的 pending 请求
     request_id: String,
     result: Option<crate::session::SubscribeResponse>,
+}
+
+/// 新路由（/ws/terminal/session/{id}）订阅结果：连接绑定单会话，
+/// 无需 message_id（控制帧协议无请求-响应机制，spec §5.3）
+#[derive(Message)]
+#[rtype(result = "()")]
+struct SessionSubscribeOutcome {
+    session_id: String,
+    result: Option<crate::session::SubscribeResponse>,
+}
+
+/// 新路由认证结果：认证通过后校验绑定会话是否存在（spec §5.1：
+/// 不存在的会话 → 认证通过后 error(SESSION_NOT_FOUND) + 关闭）
+#[derive(Message)]
+#[rtype(result = "()")]
+struct SessionAuthOutcome {
+    session_id: String,
+    exists: bool,
 }
 
 /// 取消订阅结果消息
@@ -90,6 +111,11 @@ pub struct TerminalWs {
     hb: Instant,
     /// 是否为本地环回通道（桌面端 WebView 直连，免 JWT、输出走二进制帧）
     local: bool,
+    /// 绑定会话（新路由 /ws/terminal/session/{id}）：连接创建即绑定，
+    /// 订阅即连接、无多路复用；None = 旧路由 /ws/terminal（多会话订阅）
+    bound_session: Option<String>,
+    /// 会话停止监听任务（新路由）：bound 会话 Stopped 时推送 session_stopped 帧
+    session_stopped_watcher: Option<tokio::task::JoinHandle<()>>,
     /// 输出转发任务表（key = `client_id:session_id` → forward_loop JoinHandle）
     ///
     /// 订阅者被替换 / 取消订阅 / 连接断开时 abort：旧订阅者的 send_queue 被替换
@@ -121,11 +147,22 @@ impl TerminalWs {
             session: WsSession::new(addr),
             hb: Instant::now(),
             local: false,
+            bound_session: None,
+            session_stopped_watcher: None,
             output_forwarders: std::collections::HashMap::new(),
             subscribe_tasks: std::collections::HashMap::new(),
             stream_generations: std::collections::HashMap::new(),
             channel_type: ChannelType::Terminal,
         }
+    }
+
+    /// 每会话终端路由构造（spec §5.1）：连接创建即绑定 session_id，
+    /// 订阅即连接（无 subscribed_sessions 多路复用），控制帧走简化
+    /// JSON 协议（无 message_id/expect_response），输出帧为 TB v2 二进制
+    pub fn new_for_session(addr: SocketAddr, session_id: String) -> Self {
+        let mut ws = Self::new(addr);
+        ws.bound_session = Some(session_id);
+        ws
     }
 
     /// 本地环回通道：直接标记已认证，跳过配对/JWT 流程
@@ -202,10 +239,39 @@ impl Actor for TerminalWs {
             let registry = WsSessionRegistry::global();
             registry.register(client_id, socket_addr, addr, channel_type).await;
         });
+
+        // 新路由：监听绑定会话的停止事件，主动推送 session_stopped 帧
+        // （会话停止后不再有输出，前端据此提示并断开，避免悬挂等待）
+        if let Some(session_id) = self.bound_session.clone() {
+            let addr = ctx.address();
+            let handle = tokio::spawn(async move {
+                let app_ctx = AppContext::global();
+                let session_manager = app_ctx.session_manager();
+                let mut rx = session_manager.subscribe_status();
+                while let Ok(event) = rx.recv().await {
+                    if event.session_id == session_id
+                        && matches!(event.new_status, SessionStatus::Stopped)
+                    {
+                        let frame = ServerFrame::SessionStopped {
+                            session_id: session_id.clone(),
+                        };
+                        if addr.send(SendTextMessage { text: frame.to_json() }).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            });
+            self.session_stopped_watcher = Some(handle);
+        }
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
         tracing::info!("Terminal WS disconnected: {}", self.session.addr);
+
+        // 中止会话停止监听任务：连接已断开，通知不再需要
+        if let Some(handle) = self.session_stopped_watcher.take() {
+            handle.abort();
+        }
 
         // 中止所有输出转发任务：连接已断开，残留缓冲帧不再需要投递
         for (_, handle) in self.output_forwarders.drain() {
@@ -226,6 +292,9 @@ impl Actor for TerminalWs {
         // 需要先 unregister 再按「断开后剩余连接数」判定，见注入逻辑
         let client_id = self.session.addr.to_string();
         let sessions: Vec<String> = self.session.subscribed_sessions.iter().cloned().collect();
+        // 新路由：绑定单会话、无 subscribed_sessions 集合，但 subscribe 时
+        // 已按 client_id 注册占位订阅者——断连必须整体清理，否则泄漏
+        let bound_session = self.bound_session.is_some();
         let device_id = self.session.device_id.clone();
         let fingerprint = self.session.fingerprint.clone();
         let channel_type = self.channel_type;
@@ -291,6 +360,9 @@ impl Actor for TerminalWs {
             for session_id in sessions {
                 global_manager.unsubscribe(&session_id, &client_id).await;
             }
+            if bound_session {
+                global_manager.unsubscribe_all_for_client(&client_id).await;
+            }
 
             // 断连清理：移除该设备公告的文件服务（避免插件访问已不可达的端点）
             if let Some(device_id) = device_id {
@@ -342,6 +414,13 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
 impl TerminalWs {
     /// 处理文本消息（JSON 格式的 Message）
     fn handle_text_message(&mut self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
+        // 新路由（绑定单会话）：简化 JSON 控制帧协议（spec §5.3），
+        // 无 message_id/expect_response——与旧路由的 Message 枚举互不相干
+        if self.bound_session.is_some() {
+            self.handle_session_control_frame(text, ctx);
+            return;
+        }
+
         let metrics = crate::server::metrics::MetricsCollector::global();
         let message = match Message::from_json(&text) {
             Ok(m) => m,
@@ -417,6 +496,326 @@ impl TerminalWs {
                 tracing::debug!("Unsupported WS message type from {}", self.session.addr);
             }
         }
+    }
+
+    /// 处理新路由控制帧（/ws/terminal/session/{id}，spec §5.3）
+    ///
+    /// 连接级状态机：auth（首消息 JWT，未认证前拒绝一切业务帧并关闭）→
+    /// subscribe（无参快照订阅）→ 输出流；input 直通 PTY。
+    /// 拒绝对称（spec §4.3）：未认证发业务帧 → error(AUTH_REQUIRED) + 关闭
+    fn handle_session_control_frame(
+        &mut self,
+        text: String,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        let metrics = crate::server::metrics::MetricsCollector::global();
+        let frame = match control_frame::parse_client_frame(&text) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::warn!(addr = %self.session.addr, error = %e, "Failed to parse session control frame");
+                let error = ServerFrame::Error {
+                    code: "PARSE_ERROR".to_string(),
+                    message: e,
+                };
+                metrics.inc_ws_sent();
+                ctx.text(error.to_json());
+                return;
+            }
+        };
+
+        match frame {
+            control_frame::ClientFrame::Auth { token } => {
+                // 幂等：已认证连接重复发 auth 直接忽略
+                if self.session.authenticated {
+                    return;
+                }
+                self.handle_session_auth(token, ctx);
+            }
+            control_frame::ClientFrame::Subscribe => {
+                if !self.require_session_auth(ctx) {
+                    return;
+                }
+                self.handle_session_subscribe(ctx);
+            }
+            control_frame::ClientFrame::Input { data, special_key } => {
+                if !self.require_session_auth(ctx) {
+                    return;
+                }
+                self.handle_session_input(data, special_key, ctx);
+            }
+        }
+    }
+
+    /// 新路由认证守卫：未认证 → error(AUTH_REQUIRED) + 关闭连接（spec §4.3 拒绝对称）
+    ///
+    /// 返回 false 表示连接已被关闭，调用方应立即返回
+    fn require_session_auth(&mut self, ctx: &mut ws::WebsocketContext<Self>) -> bool {
+        if self.session.authenticated {
+            return true;
+        }
+        let metrics = crate::server::metrics::MetricsCollector::global();
+        let error = ServerFrame::Error {
+            code: "AUTH_REQUIRED".to_string(),
+            message: "Please authenticate first".to_string(),
+        };
+        metrics.inc_ws_sent();
+        ctx.text(error.to_json());
+        ctx.stop();
+        false
+    }
+
+    /// 新路由认证：JWT 验证（与旧路由共享 `authenticate_jwt` 核心）→
+    /// 认证通过后校验绑定会话存在（spec §5.1：不存在 → error(SESSION_NOT_FOUND) + 关闭）
+    fn handle_session_auth(&mut self, token: String, ctx: &mut ws::WebsocketContext<Self>) {
+        let metrics = crate::server::metrics::MetricsCollector::global();
+        if token.is_empty() {
+            let error = ServerFrame::Error {
+                code: "NO_TOKEN".to_string(),
+                message: "No JWT token provided".to_string(),
+            };
+            metrics.inc_ws_sent();
+            ctx.text(error.to_json());
+            // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
+            ctx.stop();
+            return;
+        }
+
+        match self.authenticate_jwt(&token) {
+            Ok(_) => {
+                // 会话存在性校验放异步块：has_session 需持 GlobalOutputManager 锁
+                let session_id = self.bound_session.clone().unwrap();
+                let actor_addr = ctx.address();
+                actix::spawn(async move {
+                    let exists = GlobalOutputManager::global().has_session(&session_id).await;
+                    let _ = actor_addr
+                        .send(SessionAuthOutcome { session_id, exists })
+                        .await;
+                });
+            }
+            Err((code, message)) => {
+                let error = ServerFrame::Error { code, message };
+                metrics.inc_ws_sent();
+                ctx.text(error.to_json());
+                // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接
+                ctx.stop();
+            }
+        }
+    }
+
+    /// 新路由订阅：绑定单会话直接订阅，无多路复用（spec §5.1「订阅即连接」）
+    ///
+    /// - 每会话 mpsc 容量 32768（spec §5.4 D7：远程通道背压余量，旧路由保持 8192）
+    /// - subscribe_ok 经 oneshot 前置返回（05 模式：不被历史发送背压阻塞）
+    /// - forward_loop 输出 TB v2 二进制帧（spec §5.3），合并策略 30ms/64KB
+    /// - 重订阅（前端 seq 缺口自愈）abort 旧 forwarder + 流代数递增，防双流
+    fn handle_session_subscribe(&mut self, ctx: &mut ws::WebsocketContext<Self>) {
+        let session_id = self.bound_session.clone().unwrap();
+        let global_manager = GlobalOutputManager::global();
+        let client_id = self.session.addr.to_string();
+        let addr = ctx.address();
+
+        // 替换订阅者前先中止旧转发任务（残留帧会与新生订阅流交错，
+        // 前端 seq 游标错位 → 重订阅风暴自持循环），语义与旧路由一致
+        let fwd_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.output_forwarders.remove(&fwd_key) {
+            tracing::debug!("[TerminalWs] Aborting previous output forwarder: {}", fwd_key);
+            prev.abort();
+        }
+        let sub_key = format!("{}:{}", client_id, session_id);
+        if let Some(prev) = self.subscribe_tasks.remove(&sub_key) {
+            tracing::debug!("[TerminalWs] Aborting previous subscribe task: {}", sub_key);
+            prev.abort();
+        }
+        let generation = self
+            .stream_generations
+            .entry(fwd_key.clone())
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)))
+            .clone();
+        let my_gen = generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+
+        // 每会话独立输出通道（spec §5.4）：容量 32768，大历史重播 + 实时
+        // 并发到达时留足缓冲余量；on_output 保持 try_send 背压丢弃
+        let (output_tx, output_rx) = tokio::sync::mpsc::channel::<OutputFrame>(32768);
+
+        let session_id_for_sub = session_id.clone();
+        let (resp_tx, resp_rx) = tokio::sync::oneshot::channel();
+        let addr_for_resp = addr.clone();
+        let session_id_for_resp = session_id.clone();
+
+        // subscribe() 在历史入队前经 oneshot 前置返回响应（不被历史背压
+        // 阻塞）；仅当会话不存在（已从认证时的快照移除）时走 None 分支
+        let subscribe_handle = tokio::spawn(async move {
+            let result = global_manager
+                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx))
+                .await;
+            if result.is_none() {
+                let _ = addr.send(SessionSubscribeOutcome {
+                    session_id: session_id_for_sub,
+                    result: None,
+                })
+                .await;
+            }
+        });
+        self.subscribe_tasks.insert(sub_key, subscribe_handle);
+
+        // 响应转发任务：订阅建立后立即把 subscribe_ok 送回客户端
+        actix::spawn(async move {
+            if let Ok(response) = resp_rx.await {
+                let _ = addr_for_resp
+                    .send(SessionSubscribeOutcome {
+                        session_id: session_id_for_resp,
+                        result: Some(response),
+                    })
+                    .await;
+            }
+        });
+
+        // 输出转发任务：OutputEvent 流 → TB v2 二进制帧（spec §5.3），
+        // 远程通道按 merge_output 开关决定合并/直通（语义与旧路由一致）
+        let addr = ctx.address();
+        let config = AppConfig::global();
+        let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
+        let max_buffer_size = config.terminal.max_buffer_size;
+        let merge_output = config.terminal.merge_output;
+        let interval = if merge_output {
+            flush_interval
+        } else {
+            Duration::ZERO
+        };
+        let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
+        let session_id_for_fwd = session_id.clone();
+        let fwd_handle = tokio::spawn(forward::forward_loop(
+            output_rx,
+            out_tx,
+            interval,
+            max_buffer_size,
+            forward::OutputFormat::RemoteV2,
+            session_id_for_fwd,
+            generation,
+            my_gen,
+        ));
+        self.output_forwarders.insert(fwd_key, fwd_handle);
+
+        // 消费循环：二进制帧经 actor 直发；HistoryEnd 编码 JSON 控制帧
+        // （05 注释的落点：新路由在此编码，旧路由消费侧仍吞掉）
+        actix::spawn(async move {
+            while let Some(out) = out_rx.recv().await {
+                match out {
+                    forward::ForwardOutput::Binary(data) => {
+                        if addr.send(TerminalOutputBinary { data }).await.is_err() {
+                            tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                            break;
+                        }
+                    }
+                    forward::ForwardOutput::HistoryEnd { snapshot_seq, .. } => {
+                        let frame = ServerFrame::HistoryEnd { snapshot_seq };
+                        if addr.send(SendTextMessage { text: frame.to_json() }).await.is_err() {
+                            tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
+                            break;
+                        }
+                    }
+                    // RemoteV2 恒二进制/HistoryEnd，文本形态仅防御（不应出现）
+                    forward::ForwardOutput::Text(_) => {}
+                }
+            }
+        });
+    }
+
+    /// 新路由输入：控制帧 input → PTY（data 为 Base64，与旧路由 wire 一致）
+    fn handle_session_input(
+        &mut self,
+        data: String,
+        special_key: Option<crate::enums::special_key::KeyCombo>,
+        _ctx: &mut ws::WebsocketContext<Self>,
+    ) {
+        let session_id = self.bound_session.clone().unwrap();
+        let app_ctx = AppContext::global();
+        let sm = app_ctx.session_manager().clone();
+        actix::spawn(async move {
+            let payload = TerminalPayload {
+                action: crate::enums::TerminalAction::Input { data, special_key },
+            };
+            if let Err(e) = crate::server::services::terminal_service::handle_input(
+                &session_id,
+                payload,
+                &Some(sm),
+            )
+            .await
+            {
+                tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
+            }
+        });
+    }
+
+    /// JWT 认证共享核心（旧路由 handle_auth_jwt 与新路由 handle_session_auth 共用）
+    ///
+    /// 验证 token → 设置会话认证状态 → 注册到 WsSessionRegistry + 更新
+    /// 配对 last_seen + 通知前端设备上线。成功返回 claims（调用方各自
+    /// 构造响应帧：旧路由 Message::Auth JSON，新路由 auth_ok 控制帧）
+    fn authenticate_jwt(
+        &mut self,
+        token: &str,
+    ) -> Result<crate::utils::auth::jwt::JwtClaims, (String, String)> {
+        let jwt_service = JwtService::new();
+        let claims = match jwt_service.verify_token_with_expiry(token) {
+            Ok(c) => c,
+            Err(e) => {
+                let msg = match e {
+                    crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
+                    _ => "Invalid token",
+                };
+                return Err(("AUTH_FAILED".to_string(), msg.to_string()));
+            }
+        };
+
+        self.session.authenticated = true;
+        self.session.device_id = Some(claims.sub.clone());
+        self.session.device_name = claims.device_name.clone();
+        self.session.fingerprint = claims.fingerprint.clone();
+
+        // 注册认证状态到 WsSessionRegistry
+        let client_id = self.session.addr.to_string();
+        let device_name = claims.device_name.clone();
+        let fp = claims.fingerprint.clone();
+        actix::spawn(async move {
+            use crate::server::ws::registry::WsSessionRegistry;
+            let registry = WsSessionRegistry::global();
+            registry.set_authenticated(&client_id, device_name, fp).await;
+        });
+
+        // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
+        // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
+        let fingerprint = claims.fingerprint.clone();
+        let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
+            crate::server::services::auth_service::format_device_display_name(
+                n,
+                &self.session.addr.to_string(),
+            )
+        });
+        actix::spawn(async move {
+            if let Some(fp) = fingerprint {
+                let app_ctx = AppContext::global();
+                let db = app_ctx.db().clone();
+                let db_guard = db.lock().await;
+                if let Err(e) = db_guard.update_pairing_last_seen(&fp, display_name.as_deref()) {
+                    tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
+                }
+            }
+        });
+
+        // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
+        let app_ctx = AppContext::global();
+        if let Some(handle) = app_ctx.app_handle() {
+            let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
+                addr: self.session.addr.to_string(),
+                device_id: claims.sub.clone(),
+                device_name: self.session.device_name.clone(),
+                fingerprint: self.session.fingerprint.clone(),
+                event: "authenticated".to_string(),
+            });
+        }
+
+        Ok(claims)
     }
 
     /// 处理文件服务控制面消息（仅已认证连接可调用）
@@ -644,7 +1043,6 @@ impl TerminalWs {
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         let metrics = crate::server::metrics::MetricsCollector::global();
-        let jwt_service = JwtService::new();
         let token = match &payload.session_token {
             Some(t) if !t.is_empty() => t.clone(),
             _ => {
@@ -659,55 +1057,8 @@ impl TerminalWs {
             }
         };
 
-        match jwt_service.verify_token_with_expiry(&token) {
+        match self.authenticate_jwt(&token) {
             Ok(claims) => {
-                self.session.authenticated = true;
-                self.session.device_id = Some(claims.sub.clone());
-                self.session.device_name = claims.device_name.clone();
-                self.session.fingerprint = claims.fingerprint.clone();
-
-                // 注册认证状态到 WsSessionRegistry
-                let client_id = self.session.addr.to_string();
-                let device_name = claims.device_name.clone();
-                let fp = claims.fingerprint.clone();
-                actix::spawn(async move {
-                    use crate::server::ws::registry::WsSessionRegistry;
-                    let registry = WsSessionRegistry::global();
-                    registry.set_authenticated(&client_id, device_name, fp).await;
-                });
-
-                // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
-                // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
-                let fingerprint = claims.fingerprint.clone();
-                let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
-                    crate::server::services::auth_service::format_device_display_name(
-                        n,
-                        &self.session.addr.to_string(),
-                    )
-                });
-                actix::spawn(async move {
-                    if let Some(fp) = fingerprint {
-                        let app_ctx = AppContext::global();
-                        let db = app_ctx.db().clone();
-                        let db_guard = db.lock().await;
-                        if let Err(e) = db_guard.update_pairing_last_seen(&fp, display_name.as_deref()) {
-                            tracing::warn!(fingerprint = %fp, error = %e, "Failed to update pairing last_seen");
-                        }
-                    }
-                });
-
-                // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
-                let app_ctx = AppContext::global();
-                if let Some(handle) = app_ctx.app_handle() {
-                    let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                        addr: self.session.addr.to_string(),
-                        device_id: claims.sub,
-                        device_name: self.session.device_name.clone(),
-                        fingerprint: self.session.fingerprint.clone(),
-                        event: "authenticated".to_string(),
-                    });
-                }
-
                 let response = Message::Auth {
                     message_id,
                     expect_response: false,
@@ -732,12 +1083,8 @@ impl TerminalWs {
                 // 补发文件服务挂载快照（JWT 重认证成功：修复先挂载后连接的广播丢失）
                 self.push_file_service_snapshot(ctx);
             }
-            Err(e) => {
-                let msg = match e {
-                    crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
-                    _ => "Invalid token",
-                };
-                let error = Message::error_with_id(&message_id, "AUTH_FAILED", msg);
+            Err((code, message)) => {
+                let error = Message::error_with_id(&message_id, &code, &message);
                 if let Ok(json) = error.to_json() {
                     metrics.inc_ws_sent();
                     ctx.text(json);
@@ -894,6 +1241,12 @@ impl TerminalWs {
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
+        // 通道输出格式：本地环回 TB v1 20B 帧头（07 迁移 TB v2）；远程 base64 JSON（compat）
+        let format = if self.local {
+            forward::OutputFormat::LocalV1
+        } else {
+            forward::OutputFormat::RemoteLegacy
+        };
         let local = self.local;
         let merge_output = config.terminal.merge_output;
 
@@ -912,7 +1265,7 @@ impl TerminalWs {
             out_tx,
             interval,
             max_buffer_size,
-            local,
+            format,
             session_id_for_fwd,
             generation,
             my_gen,
@@ -1052,7 +1405,7 @@ impl Handler<SubscribeResult> for TerminalWs {
                 self.session.subscribed_sessions.insert(msg.session_id.clone());
                 // 05 快照协议恒全量重播：mode 恒 Reset、offsets 恒 0，
                 // 合成常量保旧客户端（本地终端/移动端）wire 解析兼容；
-                // 06 新路由删除这些 wire 字段
+                // 06 新路由不走此路径（控制帧 subscribe_ok 无这些字段）
                 let ws_msg = Message::subscribe_response_with_request_id(
                     &msg.session_id,
                     response.min_seq,
@@ -1075,6 +1428,65 @@ impl Handler<SubscribeResult> for TerminalWs {
                     ctx.text(json);
                 }
             }
+        }
+    }
+}
+
+/// 处理新路由订阅结果（/ws/terminal/session/{id}）
+///
+/// subscribe_ok 控制帧携带快照元数据（spec §5.3）；响应经 oneshot 前置
+/// 返回，保证先于历史帧到达（前端据此进入 HISTORY 分发模式）
+impl Handler<SessionSubscribeOutcome> for TerminalWs {
+    type Result = ();
+
+    fn handle(&mut self, msg: SessionSubscribeOutcome, ctx: &mut Self::Context) {
+        match msg.result {
+            Some(response) => {
+                let frame = ServerFrame::SubscribeOk {
+                    snapshot_seq: response.snapshot_seq,
+                    min_seq: response.min_seq,
+                    history_count: response.history_count,
+                };
+                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                ctx.text(frame.to_json());
+            }
+            None => {
+                // 会话在认证后被移除（罕见竞态）：与认证时一致的错误流
+                let frame = ServerFrame::Error {
+                    code: "SESSION_NOT_FOUND".to_string(),
+                    message: format!("Session {} not found", msg.session_id),
+                };
+                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                ctx.text(frame.to_json());
+                ctx.stop();
+            }
+        }
+    }
+}
+
+/// 处理新路由认证结果：会话存在 → auth_ok；不存在 → error(SESSION_NOT_FOUND) + 关闭
+impl Handler<SessionAuthOutcome> for TerminalWs {
+    type Result = ();
+
+    fn handle(&mut self, msg: SessionAuthOutcome, ctx: &mut Self::Context) {
+        let metrics = crate::server::metrics::MetricsCollector::global();
+        if msg.exists {
+            metrics.inc_ws_sent();
+            ctx.text(ServerFrame::AuthOk.to_json());
+        } else {
+            tracing::warn!(
+                addr = %self.session.addr,
+                session_id = %msg.session_id,
+                "Session WS rejected: session not found after auth"
+            );
+            let frame = ServerFrame::Error {
+                code: "SESSION_NOT_FOUND".to_string(),
+                message: format!("Session {} not found", msg.session_id),
+            };
+            metrics.inc_ws_sent();
+            ctx.text(frame.to_json());
+            // spec §5.1：会话不存在 → 认证通过后 error + 关闭
+            ctx.stop();
         }
     }
 }

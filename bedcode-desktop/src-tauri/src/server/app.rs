@@ -40,6 +40,23 @@ async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpRespo
         .start()
 }
 
+/// 每会话终端 WS 握手端点 — 连接创建即绑定 session_id（spec §5.1）
+///
+/// 移动端前端直连（P2）：首消息 JWT 认证（§4.3 规则），输出帧为 TB v2
+/// 二进制（§5.3），订阅即连接（无多路复用）。会话不存在 → 认证通过后
+/// error(SESSION_NOT_FOUND) 并关闭。旧 /ws/terminal 路由保持不动（§7 D2）
+async fn session_terminal_ws(
+    path: web::Path<String>,
+    req: HttpRequest,
+    stream: web::Payload,
+) -> Result<HttpResponse, Error> {
+    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let ws_actor = TerminalWs::new_for_session(addr, path.into_inner());
+    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+        .frame_size(ws_frame_limit())
+        .start()
+}
+
 /// 本地 WS 握手端点 — 仅供桌面端 WebView 直连
 ///
 /// 双重防线：
@@ -178,6 +195,12 @@ async fn terminal_bg_image() -> HttpResponse {
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 终端端点
     cfg.route(WS_TERMINAL_PATH, web::get().to(terminal_ws));
+
+    // 每会话终端端点（spec §5.1）：连接创建即绑定 session_id，订阅即连接
+    cfg.route(
+        "/ws/terminal/session/{session_id}",
+        web::get().to(session_terminal_ws),
+    );
 
     // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
     cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
