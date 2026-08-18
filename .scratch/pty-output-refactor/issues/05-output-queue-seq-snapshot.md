@@ -6,11 +6,11 @@
 
 **Blocked by:**
 
-**Status:** done（待提交 ticket 05 时一并入库）
+**Status:** done（已提交 6269e520）
 
-- [ ] OutputEvent/输出队列 offset→seq 全量替换（含 forward.rs 引用）
-- [ ] `subscribe()` 快照协议（占位→历史→history_end→排空→激活）
-- [ ] SubscribeMode/start_seq/裁决逻辑删除；`history_start_mode` 配置项
-- [ ] 测试：快照顺序严格 `[历史][history_end][实时]`（含占位期 on_output 竞态）、seq 范围正确性、无重复无遗漏、空历史场景
+- [x] OutputEvent/输出队列 offset→seq 全量替换（含 forward.rs 引用）
+- [x] `subscribe()` 快照协议（占位→历史→history_end→排空→激活）
+- [x] SubscribeMode/start_seq/裁决逻辑删除；`history_start_mode` 配置项
+- [x] 测试：快照顺序严格 `[历史][history_end][实时]`（含占位期 on_output 竞态）、seq 范围正确性、无重复无遗漏、空历史场景
 
 ## Comments

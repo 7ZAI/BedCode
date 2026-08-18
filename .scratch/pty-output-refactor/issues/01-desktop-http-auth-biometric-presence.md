@@ -6,15 +6,15 @@
 
 **Blocked by:**
 
-**Status:** ready-for-agent
+**Status:** done（已提交 7112f2b1）
 
-- [ ] `auth_controller.rs` 新增 biometric-challenge / biometric-verify 两端点
-- [ ] `auth_service.rs` 抽取 `issue_biometric_challenge` / `verify_biometric_signature`（含 WS 旧路径复用或删除）
-- [ ] `AppContext::biometric_challenges()` 键控改 fingerprint + 清理时机（事件 WS 断开/设备移除）
-- [ ] `WsSessionEntry.channel_type` + broadcast 过滤（仅 Event）+ 按 fingerprint 去重 + 注册点补类型
-- [ ] 设备在线查询（fingerprint 维）+ DEVICE_DISCONNECTED/连接历史回填触发逻辑（依赖 02 的 stopping() 按类型区分）
-- [ ] HTTP 路由 JWT 校验中间件
-- [ ] 测试：biometric challenge 单次有效、广播仅事件通道/去重、在线判定（事件 WS 断开→离线、终端断开→仍在线）、HTTP JWT 中间件
+- [x] `auth_controller.rs` 新增 biometric-challenge / biometric-verify 两端点
+- [x] `auth_service.rs` 抽取 `issue_biometric_challenge` / `verify_biometric_signature`（含 WS 旧路径复用或删除）
+- [x] `AppContext::biometric_challenges()` 键控改 fingerprint + 清理时机（事件 WS 断开/设备移除）
+- [x] `WsSessionEntry.channel_type` + broadcast 过滤（仅 Event）+ 按 fingerprint 去重 + 注册点补类型
+- [x] 设备在线查询（fingerprint 维）+ DEVICE_DISCONNECTED/连接历史回填触发逻辑（依赖 02 的 stopping() 按类型区分）
+- [x] HTTP 路由 JWT 校验中间件
+- [x] 测试：biometric challenge 单次有效、广播仅事件通道/去重、在线判定（事件 WS 断开→离线、终端断开→仍在线）、HTTP JWT 中间件
 
 ## Comments
 
