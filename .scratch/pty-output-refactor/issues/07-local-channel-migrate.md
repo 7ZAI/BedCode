@@ -6,11 +6,11 @@
 
 **Blocked by:** 06
 
-**Status:** ready-for-agent
+**Status:** done（已提交 4aa0a0b4）
 
-- [ ] TB v2 帧解析 + 连续性校验改 seq
-- [ ] 快照重订阅路径（跳过已渲染、截断提示语义）
-- [ ] TerminalPreview 接线调整
-- [ ] 测试：useTerminalOutputStream 单元（帧解析/缺口/重订阅/截断）+ 桌面终端回归
+- [x] TB v2 帧解析 + 连续性校验改 seq
+- [x] 快照重订阅路径（跳过已渲染、截断提示语义）
+- [x] TerminalPreview 接线调整
+- [x] 测试：useTerminalOutputStream 单元（帧解析/缺口/重订阅/截断）+ 桌面终端回归
 
 ## Comments
