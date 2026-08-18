@@ -6,7 +6,7 @@
 
 **Blocked by:** 02, 05
 
-**Status:** done（commit `FIXME`）
+**Status:** done（commit `3e62d6b4`）
 
 - [x] 新路由注册 + per-session actor + 会话不存在错误流
 - [x] 订阅/认证控制帧协议（JSON）+ 二进制输出帧编码（forward.rs）
