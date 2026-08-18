@@ -272,8 +272,6 @@ impl PluginHost {
     // ==================== Terminal Handler Pipeline ====================
 
     /// 是否有已注册的 Rust terminal handler
-    ///
-    /// 输出管道在无 handler 时直接透传，跳过解码与字符串转换（见 FrontendOutputHandler）
     pub async fn has_terminal_handlers(&self) -> bool {
         !self.rust_terminal_handlers.read().await.is_empty()
     }

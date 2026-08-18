@@ -6,10 +6,7 @@
 use crate::events::DesktopSyncEvent;
 use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::session::session_lifecycle::SessionLifecycleEvent;
-use crate::pty::{
-    PtyOutputEvent, PtySessionHandler, PtyHandler,
-    FrontendOutputHandler,
-};
+use crate::pty::{PtySessionHandler, PtyHandler};
 use crate::session::{
     session_components::{
         ConfigMapper, DefaultConfigMapper,
@@ -31,7 +28,6 @@ use chrono::Utc;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::AppHandle;
 use tokio::sync::{broadcast, RwLock};
 
 /// Session Manager
@@ -57,8 +53,6 @@ pub struct SessionManager {
     storage: Arc<SessionStorage>,
     /// 运行标志
     running: Arc<AtomicBool>,
-    /// AppHandle（用于为每个会话启动 FrontendOutputHandler）
-    app_handle: Arc<RwLock<Option<AppHandle>>>,
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
@@ -72,19 +66,6 @@ pub struct SessionManager {
 }
 
 impl SessionManager {
-    /// 设置 AppHandle（用于为每个会话启动 FrontendOutputHandler）
-    ///
-    /// 在启动会话前设置，每个新会话创建后会自动 subscribe_output 并 spawn handler
-    pub async fn set_app_handle(&self, app_handle: AppHandle) {
-        let mut handle = self.app_handle.write().await;
-        *handle = Some(app_handle);
-    }
-
-    /// 获取输出广播发送器
-    pub fn output_tx(&self) -> broadcast::Sender<PtyOutputEvent> {
-        self.event_bus.output_sender()
-    }
-
     /// 获取会话状态变化广播发送器
     pub fn status_tx(&self) -> broadcast::Sender<SessionStatusEvent> {
         self.event_bus.status_sender()
@@ -135,7 +116,6 @@ impl SessionManager {
             pty_handler,
             storage,
             running,
-            app_handle: Arc::new(RwLock::new(None)),
             sync_tx: RwLock::new(None),
             resource_dir,
             lifecycle_listeners,
@@ -330,13 +310,6 @@ impl SessionManager {
         };
         let session_id = pty_session.id().to_string();
 
-        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
-        let app_handle = self.app_handle.read().await.clone();
-        if let Some(app_handle) = app_handle {
-            let rx = pty_session.subscribe_output().await;
-            FrontendOutputHandler::spawn(app_handle, rx);
-        }
-
         // 启动 PTY 会话
         pty_session.start().await?;
 
@@ -414,13 +387,6 @@ impl SessionManager {
         // 创建 PTY 会话
         let pty_session = self.pty_handler.create_session(launch_config.clone())?;
         let session_id = pty_session.id().to_string();
-
-        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
-        let app_handle = self.app_handle.read().await.clone();
-        if let Some(app_handle) = app_handle {
-            let rx = pty_session.subscribe_output().await;
-            FrontendOutputHandler::spawn(app_handle, rx);
-        }
 
         // 不启动 PTY，只保存会话信息
         // pty_session.start().await?; // 这里不启动
@@ -582,13 +548,6 @@ impl SessionManager {
         let pty_session = self
             .pty_handler
             .create_session_with_id(session_id.to_string(), launch_config.clone())?;
-
-        // 订阅 PTY 输出并启动前端转发 task（如果 AppHandle 已设置）
-        let app_handle = self.app_handle.read().await.clone();
-        if let Some(app_handle) = app_handle {
-            let rx = pty_session.subscribe_output().await;
-            FrontendOutputHandler::spawn(app_handle, rx);
-        }
 
         // 启动生命周期处理器
         self.start_lifecycle_handler(session_id).await;
@@ -815,11 +774,6 @@ impl SessionManager {
 
         tracing::info!("Session removed: {} ({})", session_id, session_name);
         Ok(())
-    }
-
-    /// 订阅全局输出
-    pub fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
-        self.event_bus.output_sender().subscribe()
     }
 
     /// 订阅会话状态变化

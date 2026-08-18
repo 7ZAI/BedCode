@@ -38,7 +38,6 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.language", "语言偏好（zh-CN / en）"),
     ("ui.terminal_bg_image", "终端背景图片文件名（位于应用数据目录，留空表示不启用）"),
     ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
-    ("channels.output_broadcast_capacity", "PTY 输出事件广播容量 - 用于转发终端输出到前端"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
     ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
     ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
@@ -98,7 +97,6 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "ui.terminal_bg_opacity",
     ]),
     ("Channel 容量配置", &[
-        "channels.output_broadcast_capacity",
         "channels.status_broadcast_capacity",
         "channels.restart_broadcast_capacity",
         "channels.event_broadcast_capacity",
@@ -343,8 +341,6 @@ pub enum HistoryStartMode {
 /// 影响高负载场景下的消息处理能力和内存占用
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ChannelsConfig {
-    /// PTY 输出事件广播容量 - 用于转发终端输出到前端
-    pub output_broadcast_capacity: usize,
     /// 会话状态变更广播容量 - 用于通知状态更新
     pub status_broadcast_capacity: usize,
     /// 会话重启事件广播容量 - 用于通知会话重启
@@ -368,7 +364,6 @@ pub struct ChannelsConfig {
 impl Default for ChannelsConfig {
     fn default() -> Self {
         Self {
-            output_broadcast_capacity: 2048,
             status_broadcast_capacity: 64,
             restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
@@ -559,7 +554,6 @@ impl AppConfig {
                 terminal_bg_opacity: parse_value(props, "ui.terminal_bg_opacity", default_terminal_bg_opacity()),
             },
             channels: ChannelsConfig {
-                output_broadcast_capacity: parse_value(props, "channels.output_broadcast_capacity", 2048),
                 status_broadcast_capacity: parse_value(props, "channels.status_broadcast_capacity", 64),
                 restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
@@ -652,7 +646,6 @@ impl AppConfig {
         map.insert("ui.language".to_string(), self.ui.language.clone());
         map.insert("ui.terminal_bg_image".to_string(), self.ui.terminal_bg_image.clone().unwrap_or_default());
         map.insert("ui.terminal_bg_opacity".to_string(), self.ui.terminal_bg_opacity.to_string());
-        map.insert("channels.output_broadcast_capacity".to_string(), self.channels.output_broadcast_capacity.to_string());
         map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
         map.insert("channels.restart_broadcast_capacity".to_string(), self.channels.restart_broadcast_capacity.to_string());
         map.insert("channels.event_broadcast_capacity".to_string(), self.channels.event_broadcast_capacity.to_string());
@@ -734,11 +727,11 @@ mod tests {
 network.port=8765
 
 # 另一个注释
-channels.output_broadcast_capacity=2048
+channels.status_broadcast_capacity=64
 "#;
         let props = parse_properties(content);
         assert_eq!(props.get("network.port").unwrap(), "8765");
-        assert_eq!(props.get("channels.output_broadcast_capacity").unwrap(), "2048");
+        assert_eq!(props.get("channels.status_broadcast_capacity").unwrap(), "64");
     }
 
     #[test]
@@ -797,7 +790,7 @@ channels.output_broadcast_capacity=2048
         assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
         assert_eq!(config.ui.terminal_bg_image, config2.ui.terminal_bg_image);
         assert_eq!(config.ui.terminal_bg_opacity, config2.ui.terminal_bg_opacity);
-        assert_eq!(config.channels.output_broadcast_capacity, config2.channels.output_broadcast_capacity);
+        assert_eq!(config.channels.status_broadcast_capacity, config2.channels.status_broadcast_capacity);
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
     }
 
@@ -812,7 +805,7 @@ channels.output_broadcast_capacity=2048
         let loaded = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, loaded.network.port);
         assert_eq!(config.network.auto_start, loaded.network.auto_start);
-        assert_eq!(config.channels.output_broadcast_capacity, loaded.channels.output_broadcast_capacity);
+        assert_eq!(config.channels.status_broadcast_capacity, loaded.channels.status_broadcast_capacity);
         // 色板与输出合并开关必须写入 properties 文件并能往返（曾遗漏导致重启后色板重置 / merge_output 写空）
         assert_eq!(config.ui.theme_palette, loaded.ui.theme_palette);
         assert_eq!(config.terminal.merge_output, loaded.terminal.merge_output);

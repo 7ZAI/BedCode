@@ -8,8 +8,8 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
-export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
+import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo } from './model'
+export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo }
 
 // ==================== Pairing Types ====================
 

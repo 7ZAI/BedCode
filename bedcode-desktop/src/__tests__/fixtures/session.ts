@@ -13,9 +13,6 @@
  * - WslDistro            ← src-tauri/src/pty/wsl.rs（name/is_default/state/version；
  *   前端 model.ts 仅声明 name/state 子集视图，is_default/version 已同步补齐）
  * - DeviceConnectionInfo ← src-tauri/src/server/connection_types.rs（addr/device_id/fingerprint/session_count）
- * - PtyOutputEvent       ← src-tauri/src/pty/pty_output.rs（snake_case；
- *   前端 model.ts 的 PtyOutputEvent 为 camelCase 旧类型且已无消费方——本地 WS 二进制流
- *   替代了 Tauri 事件通道，fixture 以 Rust 线协议为准）
  *
  * 命名规则：默认 snake_case，SessionConfig 例外为 camelCase（Rust rename_all）。
  * 对齐机制：DTO_FIELDS 清单 + 工厂内 assertDtoFields 运行时断言；
@@ -173,34 +170,5 @@ export function makeDeviceConnectionInfo(overrides: Partial<DeviceConnectionInfo
     ...overrides,
   }
   assertDtoFields(fixture, DEVICE_CONNECTION_INFO_DTO_FIELDS, 'DeviceConnectionInfo')
-  return fixture
-}
-
-// ==================== PtyOutputEvent（snake_case 线协议） ====================
-
-export interface PtyOutputEventFixture {
-  session_id: string
-  /** Base64 编码的 PTY 输出字节 */
-  data: string
-  /** RFC3339 */
-  timestamp: string
-  is_waiting: boolean
-  /** 全局递增序号（桌面端 + 移动端统一计数） */
-  index: number
-}
-
-/** 与 pty_output.rs PtyOutputEvent 字段一一对应 */
-export const PTY_OUTPUT_EVENT_DTO_FIELDS = ['session_id', 'data', 'timestamp', 'is_waiting', 'index'] as const
-
-export function makePtyOutputEvent(overrides: Partial<PtyOutputEventFixture> = {}): PtyOutputEventFixture {
-  const fixture: PtyOutputEventFixture = {
-    session_id: 'session-1',
-    data: 'aGVsbG8=',
-    timestamp: '2025-01-01T00:00:00Z',
-    is_waiting: false,
-    index: 0,
-    ...overrides,
-  }
-  assertDtoFields(fixture, PTY_OUTPUT_EVENT_DTO_FIELDS, 'PtyOutputEvent')
   return fixture
 }

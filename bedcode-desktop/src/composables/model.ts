@@ -48,14 +48,6 @@ export interface DeviceConnectionInfo {
   session_count: number
 }
 
-export interface PtyOutputEvent {
-  sessionId: string
-  data: string
-  timestamp: string
-  isWaiting: boolean
-  index: number
-}
-
 // ==================== Shared Types ====================
 
 // ANSI Renderer

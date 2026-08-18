@@ -100,7 +100,6 @@ export const APP_CONFIG_UI_DTO_FIELDS = [
 ] as const
 
 export interface AppConfigChannelsFixture {
-  output_broadcast_capacity: number
   status_broadcast_capacity: number
   restart_broadcast_capacity: number
   event_broadcast_capacity: number
@@ -113,7 +112,6 @@ export interface AppConfigChannelsFixture {
 
 /** 与 config.rs ChannelsConfig 字段一一对应 */
 export const APP_CONFIG_CHANNELS_DTO_FIELDS = [
-  'output_broadcast_capacity',
   'status_broadcast_capacity',
   'restart_broadcast_capacity',
   'event_broadcast_capacity',
@@ -217,7 +215,6 @@ export function makeAppConfig(overrides: Partial<AppConfigFixture> = {}): AppCon
       terminal_bg_opacity: 30,
     },
     channels: {
-      output_broadcast_capacity: 2048,
       status_broadcast_capacity: 64,
       restart_broadcast_capacity: 64,
       event_broadcast_capacity: 256,

@@ -4,7 +4,6 @@
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
 use crate::enums::{PtySessionStatus, SessionLaunchConfig};
-use crate::pty::PtyOutputEvent;
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
@@ -38,9 +37,6 @@ pub struct PtySessionState {
     pub pair: Option<PtyPair>,
     /// 写入器
     pub writer: Option<Box<dyn Write + Send>>,
-    /// 输出事件广播器（观察者模式）
-    /// 使用 broadcast channel 替代 Mutex<Vec>，避免 PtyReader 同步线程中 try_lock 失败丢数据
-    output_broadcast: broadcast::Sender<PtyOutputEvent>,
     /// 生命周期事件发送器（进程退出、错误等）
     pub lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 读取线程句柄
@@ -91,7 +87,6 @@ impl PtySession {
         let writer = pair.master.take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
         let (lifecycle_tx, _) = broadcast::channel(AppConfig::global().channels.lifecycle_capacity);
-        let (output_broadcast, _) = broadcast::channel(AppConfig::global().channels.output_broadcast_capacity);
 
         let running = Arc::new(AtomicBool::new(true));
 
@@ -102,7 +97,6 @@ impl PtySession {
             pair: Some(pair),
             writer: Some(writer),
             running: running.clone(),
-            output_broadcast,
             lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
@@ -233,15 +227,6 @@ impl PtySession {
         Ok(())
     }
 
-    /// 订阅输出事件（观察者模式，broadcast channel）
-    ///
-    /// 返回 broadcast::Receiver，调用方在独立 task 中 recv 循环消费
-    /// 替代旧的 add_output_listener + try_lock 模式，避免 PtyReader 同步线程中锁竞争丢数据
-    pub async fn subscribe_output(&self) -> broadcast::Receiver<PtyOutputEvent> {
-        let state = self.state.lock().await;
-        state.output_broadcast.subscribe()
-    }
-
     /// 订阅生命周期事件（进程退出、错误等）
     pub fn subscribe_lifecycle(&self) -> broadcast::Receiver<PtySessionStatus> {
         self.lifecycle_tx.subscribe()
@@ -307,15 +292,8 @@ impl PtySession {
                 .map_err(|e| crate::AppError::Pty(e.to_string()))?
         };
 
-        // 使用 broadcast sender 替代 output_listeners，PtyReader 中直接 send 无需加锁
-        let output_broadcast = {
-            let state = self.state.lock().await;
-            state.output_broadcast.clone()
-        };
-
         let pty_reader = PtyReader::start(
             reader,
-            output_broadcast,
             self.lifecycle_tx.clone(),
             self.id.clone(),
             self.running.clone(),
@@ -400,8 +378,7 @@ mod tests {
         assert_eq!(session.name().await, "test-session");
         assert!(session.is_running());
 
-        // 输出/生命周期订阅通道可用
-        let _output_rx = session.subscribe_output().await;
+        // 生命周期订阅通道可用
         let _lifecycle_rx = session.subscribe_lifecycle();
 
         // kill 在未启动进程时仅翻转标志（无 process_id，跳过 taskkill）

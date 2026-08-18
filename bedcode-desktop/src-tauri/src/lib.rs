@@ -324,14 +324,6 @@ pub fn run() {
                 config_manager.set_sync_tx(sync_tx.clone()).await;
             });
 
-            // 设置 AppHandle 到 SessionManager
-            // 会话创建时通过 subscribe_output() + FrontendOutputHandler::spawn() 转发输出
-            // 替代旧的 AsyncPtyOutputListener + try_lock 模式，避免 PtyReader 同步线程中锁竞争丢数据
-            tauri::async_runtime::block_on(async {
-                session_manager.set_app_handle(app_handle.clone()).await;
-            });
-            tracing::info!("SessionManager app_handle configured for output forwarding");
-
             // ==================== 注册到 AppContext 全局容器 ====================
 
             let ctx = system::app_context::AppContextBuilder::new()
@@ -539,7 +531,6 @@ pub fn run() {
             commands::session::delete_session,
             commands::session::restart_session,
             commands::session::resize_session,
-            commands::session::get_session_output_history,
             // PTY Input
             commands::pty_input::write_to_session,
             commands::pty_input::send_special_key,

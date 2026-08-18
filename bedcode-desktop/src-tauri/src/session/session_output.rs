@@ -1,11 +1,8 @@
 //! Session Output
 //!
-//! PTY 输出相关的组件：输出缓存、统一输出队列、会话输出管理、全局输出管理
-//! OutputCache trait 已内联到此文件（只有一个实现）
+//! PTY 输出相关的组件：统一输出队列、会话输出管理、全局输出管理
 
-use crate::pty::PtyOutputEvent;
 use crate::system::config::AppConfig;
-use chrono::{TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,89 +26,6 @@ pub enum OutputFrame {
         /// 历史事件数量
         history_count: usize,
     },
-}
-
-// ==================== Output Cache ====================
-
-/// PTY 输出缓存 - 为移动端订阅提供历史输出
-pub trait OutputCache: Send + Sync {
-    async fn cache(&self, event: PtyOutputEvent);
-    async fn get(&self, session_id: &str) -> Vec<PtyOutputEvent>;
-    async fn clear(&self, session_id: &str);
-    async fn clear_all(&self);
-    async fn len(&self) -> usize;
-}
-
-pub struct DefaultOutputCache {
-    cache: Arc<RwLock<HashMap<String, Vec<PtyOutputEvent>>>>,
-    max_size: usize,
-}
-
-impl DefaultOutputCache {
-    pub fn new(max_size: usize) -> Self {
-        Self {
-            cache: Arc::new(RwLock::new(HashMap::new())),
-            max_size,
-        }
-    }
-}
-
-impl OutputCache for DefaultOutputCache {
-    async fn cache(&self, event: PtyOutputEvent) {
-        let mut cache = self.cache.write().await;
-        let entries = cache.entry(event.session_id.clone()).or_insert_with(Vec::new);
-
-        if entries.len() >= self.max_size {
-            entries.remove(0);
-        }
-        entries.push(event.clone());
-    }
-
-    async fn get(&self, session_id: &str) -> Vec<PtyOutputEvent> {
-        let cache = self.cache.read().await;
-        cache.get(session_id).cloned().unwrap_or_default()
-    }
-
-    async fn clear(&self, session_id: &str) {
-        let mut cache = self.cache.write().await;
-        cache.remove(session_id);
-    }
-
-    async fn clear_all(&self) {
-        let mut cache = self.cache.write().await;
-        cache.clear();
-    }
-
-    async fn len(&self) -> usize {
-        let cache = self.cache.read().await;
-        cache.values().map(Vec::len).sum()
-    }
-}
-
-// ==================== Output History Response ====================
-
-/// 历史回放响应（供桌面端终端窗口恢复使用，无前端消费者）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct OutputHistoryResponse {
-    /// 队列中最早事件的序号
-    pub min_seq: u64,
-    /// 队列中最新事件的序号
-    pub max_seq: u64,
-    /// 历史事件列表（data 为 Base64 编码）
-    pub events: Vec<PtyOutputEvent>,
-}
-
-impl From<OutputEvent> for PtyOutputEvent {
-    fn from(e: OutputEvent) -> Self {
-        PtyOutputEvent::from_bytes(
-            e.session_id,
-            &e.data,
-            Utc.timestamp_millis_opt(e.timestamp).single().unwrap_or_default(),
-            e.is_waiting,
-            e.index as usize,
-        )
-    }
 }
 
 // ==================== Unified Output Queue ====================
@@ -618,28 +532,6 @@ impl SessionOutputManager {
             .filter(|s| s.is_active())
             .count()
     }
-
-    /// 获取历史输出（供桌面端回放使用）
-    ///
-    /// 读取队列存续事件：start_seq = Some(N) 时过滤 index >= N（调用方想要断点承接），
-    /// None 则取全部；min_offset/max_offset 为旧 wire 兼容常量 0（无会话级偏移）
-    pub async fn get_history(&self, start_seq: Option<u64>) -> OutputHistoryResponse {
-        let queue = self.output_queue.read().await;
-        let min_seq = queue.min_seq();
-        let max_seq = queue.max_seq();
-        let all = queue.get_events();
-        // 仅按 index 下限过滤（语义退化），不做任何范围算术/裁剪
-        let events: Vec<OutputEvent> = match start_seq {
-            Some(n) => all.into_iter().filter(|e| e.index >= n).collect(),
-            None => all,
-        };
-
-        OutputHistoryResponse {
-            min_seq,
-            max_seq,
-            events: events.into_iter().map(|e| e.into()).collect(),
-        }
-    }
 }
 
 // ==================== Global Output Manager ====================
@@ -744,20 +636,6 @@ impl GlobalOutputManager {
             "[GlobalOutputManager] Cleaned up subscriptions for client {} across {} sessions",
             client_id, sessions.len()
         );
-    }
-
-    /// 获取会话历史输出（供桌面端终端窗口回放使用）
-    pub async fn get_history(
-        &self,
-        session_id: &str,
-        start_seq: Option<u64>,
-    ) -> Option<OutputHistoryResponse> {
-        let sessions = self.sessions.read().await;
-        if let Some(manager) = sessions.get(session_id) {
-            Some(manager.get_history(start_seq).await)
-        } else {
-            None
-        }
     }
 }
 

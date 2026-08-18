@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest'
 import { assertDtoFields } from './drift'
 import { makeServerStatusInfo, makeNetworkConfig, makeServerMetrics, SERVER_STATUS_INFO_DTO_FIELDS, NETWORK_CONFIG_DTO_FIELDS, SERVER_METRICS_DTO_FIELDS } from './server'
 import { makePairingCodeInfo, makePairing, makeQrConnectionInfo, makePendingDevice, PAIRING_CODE_INFO_DTO_FIELDS, PAIRING_DTO_FIELDS, QR_CONNECTION_INFO_DTO_FIELDS } from './pairing'
-import { makeSessionInfo, makeSessionConfig, makeWslDistro, makeDeviceConnectionInfo, makePtyOutputEvent, SESSION_INFO_DTO_FIELDS, SESSION_CONFIG_DTO_FIELDS, WSL_DISTRO_DTO_FIELDS, DEVICE_CONNECTION_INFO_DTO_FIELDS, PTY_OUTPUT_EVENT_DTO_FIELDS } from './session'
+import { makeSessionInfo, makeSessionConfig, makeWslDistro, makeDeviceConnectionInfo, SESSION_INFO_DTO_FIELDS, SESSION_CONFIG_DTO_FIELDS, WSL_DISTRO_DTO_FIELDS, DEVICE_CONNECTION_INFO_DTO_FIELDS } from './session'
 import { PENDING_DEVICE_DTO_FIELDS } from './pairing'
 import { makePluginInfo, makePluginContributes, PLUGIN_INFO_DTO_FIELDS, CONTRIBUTES_DTO_FIELDS } from './plugin'
 import { makeAppConfig, APP_CONFIG_DTO_FIELDS } from './settings'
@@ -31,7 +31,6 @@ const DTO_REGISTRY = [
   { label: 'SessionConfig', fields: SESSION_CONFIG_DTO_FIELDS, build: () => makeSessionConfig() },
   { label: 'WslDistro', fields: WSL_DISTRO_DTO_FIELDS, build: () => makeWslDistro() },
   { label: 'DeviceConnectionInfo', fields: DEVICE_CONNECTION_INFO_DTO_FIELDS, build: () => makeDeviceConnectionInfo() },
-  { label: 'PtyOutputEvent', fields: PTY_OUTPUT_EVENT_DTO_FIELDS, build: () => makePtyOutputEvent() },
   { label: 'PluginInfo', fields: PLUGIN_INFO_DTO_FIELDS, build: () => makePluginInfo() },
   { label: 'PluginContributes', fields: CONTRIBUTES_DTO_FIELDS, build: () => makePluginContributes() },
   { label: 'AppConfig', fields: APP_CONFIG_DTO_FIELDS, build: () => makeAppConfig() },
