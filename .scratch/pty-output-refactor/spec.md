@@ -1,7 +1,9 @@
 # Spec: 认证机制重构（P0）+ PTY 输出链路改造（P1-P3）
 
-> 状态：待评审 · 关联：`.scratch/pty-output-refactor/proposal.md`（思考过程）、`docs/knowledge/pty-output-pipeline.md`（现状文档）
+> 状态：**已实施（P0/P1/P2/P3 全部完工，2026-08-19 归档）** · 关联：`.scratch/pty-output-refactor/proposal.md`（思考过程）、`docs/knowledge/pty-output-pipeline.md`（已按新架构重写）
 > 范围：bedcode-desktop（主机）+ bedcode-mobile（远程终端），双端同发
+> **实施记录**：ticket 01~11 全部 done（见 issues/）；提交 7112f2b1 / 6269e520 / 3e62d6b4 / 4aa0a0b4（桌面 P1）/ e1e28256（桌面 P3 死代码清理）/ 853ca8fd（移动 Rust 拆除）/ ticket10（移动前端直连）。双端全量测试绿：桌面 cargo 549 lib + 8 集成、vitest 46 文件 415；移动 cargo 373 lib + 30 集成、vitest 20 文件 203。
+> 遗留项：真机弱网回归清单（spec §10）、旧路由 compat 拆除（观察期后）、移动端 wsGetTerminalIncremental 死代码清理。
 > 本文档为实现规范：协议、状态机、验收标准以本文为准。
 
 ---
