@@ -166,33 +166,6 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
             // 使用 _with_response 版本确保 expect_response: true
             Some(Message::session_config_with_response(action, None))
         }
-        "input" => {
-            let session_id = payload.get("session_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let data = payload.get("payload")
-                .and_then(|p| p.get("data"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            // input 不需要响应，保持原样
-            Some(Message::input(session_id, data, None))
-        }
-        "subscribe" => {
-            let session_id = payload.get("session_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let start_seq = payload.get("start_seq")
-                .and_then(|v| v.as_u64());
-            // 使用 _with_response 版本确保 expect_response: true
-            Some(Message::subscribe_with_response(session_id, start_seq))
-        }
-        "unsubscribe" => {
-            let session_id = payload.get("session_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            // 使用 _with_response 版本确保 expect_response: true
-            Some(Message::unsubscribe_with_response(session_id))
-        }
         _ => None,
     }
 }

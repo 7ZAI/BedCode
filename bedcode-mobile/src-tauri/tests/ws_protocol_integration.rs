@@ -133,50 +133,6 @@ async fn auth_full_flow() {
     let _ = events;
 }
 
-// ==================== 场景 3：终端输出推送 ====================
-
-#[tokio::test]
-async fn terminal_output_push() {
-    let server = MockDesktopServer::start().await;
-    let (manager, mut events) = connect_and_pair(&server).await;
-
-    // mock 桌面端推送终端输出
-    let session_id = "session-1";
-    let payload = b"hello from host\n";
-    server
-        .send_message(&Message::output(session_id, payload, false, 42))
-        .await;
-
-    let ev = wait_event(&mut events, |ev| matches!(ev, MobileEvent::Output { .. })).await;
-    match ev {
-        MobileEvent::Output {
-            session_id: sid,
-            data,
-            is_waiting,
-            index,
-            ..
-        } => {
-            assert_eq!(sid, session_id);
-            // 协议中输出数据 base64 编码传输（与 output_from_base64 对称）
-            use base64::Engine;
-            let decoded = base64::engine::general_purpose::STANDARD
-                .decode(&data)
-                .expect("data 应为合法 base64");
-            assert_eq!(
-                String::from_utf8(decoded).unwrap(),
-                String::from_utf8(payload.to_vec()).unwrap(),
-                "base64 解码后应与推送内容一致"
-            );
-            assert!(!is_waiting);
-            assert_eq!(index, 42);
-        }
-        other => panic!("expected Output event, got {:?}", other),
-    }
-
-    manager.disconnect().await;
-    clear_global_token();
-}
-
 // ==================== 场景 4：请求-响应匹配 ====================
 
 #[tokio::test]

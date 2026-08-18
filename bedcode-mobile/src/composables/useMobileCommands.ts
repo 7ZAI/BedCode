@@ -199,6 +199,15 @@ export async function wsLeaveSession(sessionId: string): Promise<void> {
 }
 
 /**
+ * 获取终端 WS 直连信息（09：前端直连桌面端终端会话路由）
+ *
+ * 返回完整 URL 与 JWT；token 仅供建连使用，禁止持久化
+ */
+export async function getTerminalWsInfo(sessionId: string): Promise<{ url: string; token: string }> {
+  return await invoke('get_terminal_ws_info', { sessionId })
+}
+
+/**
  * 启动会话，返回会话 ID 和会话信息
  */
 export async function wsStartSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {

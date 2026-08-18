@@ -69,6 +69,10 @@ pub fn run() {
 
             let app_handle = app.handle();
 
+            // 监听前端 terminal_output_activity（前端直连终端 WS 收到输出帧时触发
+            // 插件 TerminalOutput 通知；输出不再经 Rust 中转，见 ticket 09）
+            crate::router::event::init_terminal_output_listener(app_handle);
+
             // 窗口焦点监听（后台/锁屏判定：批量传输请求系统通知用）
             crate::file_service::notify::attach_focus_listener(app_handle);
 
@@ -205,8 +209,7 @@ pub fn run() {
             // Session Commands
             commands::session::ws_load_sessions,
             commands::session::ws_join_session,
-            commands::session::ws_leave_session,
-            commands::session::ws_subscribe_session,
+            commands::session::get_terminal_ws_info,
             commands::session::ws_start_session,
             commands::session::ws_stop_session,
             commands::session::ws_remove_session,

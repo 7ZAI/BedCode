@@ -19,7 +19,7 @@ pub use auth::{
     ws_get_auth_status, ws_authenticate, ws_request_pairing, ws_verify_pairing_code, ws_authenticate_with_qr,
 };
 pub use session::{
-    ws_load_sessions, ws_join_session, ws_leave_session, ws_subscribe_session,
+    ws_load_sessions, ws_join_session, get_terminal_ws_info,
     ws_start_session, ws_stop_session, ws_remove_session, ws_load_session_configs,
 };
 pub use terminal::{

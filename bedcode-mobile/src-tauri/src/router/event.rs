@@ -3,7 +3,6 @@
 //! 将 MobileEvent 转发为 Tauri 前端事件
 //!
 //! 事件类型：
-//! - ws_output: 终端输出
 //! - ws_connecting: 连接开始
 //! - ws_disconnected: 断开连接
 //! - ws_error: 错误
@@ -12,7 +11,7 @@
 //! - ws_sync_*: 会话同步事件
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Listener};
 use tracing;
 use serde::{Deserialize, Serialize};
 
@@ -27,21 +26,6 @@ use crate::state::get_connection_manager;
 /// 最终由 event.rs 转换为 Tauri 前端事件
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum MobileEvent {
-    // === 终端事件 ===
-    /// 终端输出事件
-    Output {
-        session_id: String,
-        data: String,
-        is_waiting: bool,
-        index: u64,
-        /// 合并消息的结束索引，None 表示单条事件
-        end_index: Option<u64>,
-        /// 起始字节偏移（会话流坐标），供字节级游标续传（旧版服务端不发送）
-        start_offset: Option<u64>,
-        /// 结束字节偏移（会话流坐标）
-        end_offset: Option<u64>,
-    },
-
     // === 认证事件 ===
     /// 认证成功
     AuthSuccess {
@@ -171,7 +155,6 @@ static OUTPUT_FORWARDING_STARTED: AtomicBool = AtomicBool::new(false);
 /// 启动事件转发任务
 ///
 /// 将 MobileEvent 转发为 Tauri 前端事件：
-/// - Output → ws_output（终端输出）
 /// - SyncSessionCreated → ws_sync_session_created
 /// - SyncSessionStatusChanged → ws_sync_session_status_changed
 /// - SyncSessionStopped → ws_sync_session_stopped
@@ -212,40 +195,6 @@ pub fn start_event_forwarding(app_handle: AppHandle) {
 /// 转发单个事件到前端
 async fn forward_event(app: &AppHandle, event: MobileEvent) {
     match event.clone() {
-        // 终端输出事件：直接传递 Base64 到前端，由前端解码
-        // 避免在 Rust 层做 Base64 解码 + UTF-8 lossy 转换的双重开销
-        // 前端用 atob() 解码为 Uint8Array 传给 xterm.write()，比 string 更高效且无损
-        MobileEvent::Output { session_id, data, is_waiting, index: global_index, end_index, start_offset, end_offset } => {
-            if let Err(e) = app.emit("ws_output", serde_json::json!({
-                "session_id": session_id,
-                "data_base64": data,
-                "is_waiting": is_waiting,
-                "index": global_index,
-                "end_index": end_index,
-                "start_offset": start_offset,
-                "end_offset": end_offset,
-            })) {
-                tracing::error!("[EventForwarder] Failed to emit ws_output: {}", e);
-            }
-
-            // 通知插件终端输出（只读通知，仅传递 session_id 避免大量数据拷贝）。
-            // 必须异步分发（不 await）：插件 WASM 回调串行执行，若在此 await，
-            // 输出转发循环被插件回调阻塞 → broadcast 通道积压溢出 → 静默丢帧 →
-            // 移动端游标连续性破坏（violation 风暴）
-            {
-                let pm = crate::state::get_plugin_manager();
-                // 用 error boundary 包装：插件 WASM 回调 panic 时记录日志而非静默吞掉
-                spawn_with_error_boundary("plugin_terminal_output_notify", async move {
-                    pm.dispatch_lifecycle_event(
-                        crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
-                            session_id,
-                            data: String::new(),
-                        }
-                    ).await;
-                });
-            }
-        }
-
         // 会话同步事件
         MobileEvent::SyncSessionCreated { session, source_device } => {
             tracing::info!(
@@ -390,6 +339,42 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
         // 其他事件不转发
         _ => {}
     }
+}
+
+// ==================== Terminal Output Activity ====================
+
+/// 监听前端 `terminal_output_activity` 事件（前端终端 WS 收到输出帧时发出）
+///
+/// 09 迁移后终端输出不再经 Rust 中转，插件 TerminalOutput 通知改由
+/// 前端 socket 路径在此触发（保持仅传 session_id 语义，D6）。
+/// 异步分发不 await：插件 WASM 回调串行执行，阻塞会拖慢事件处理
+static TERMINAL_OUTPUT_LISTENER_STARTED: AtomicBool = AtomicBool::new(false);
+
+pub fn init_terminal_output_listener(app: &AppHandle) {
+    if TERMINAL_OUTPUT_LISTENER_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let pm = crate::state::get_plugin_manager();
+    let _ = app.listen("terminal_output_activity", move |event| {
+        // Tauri 事件 payload 为 JSON 字符串，解析出 session_id（仅传 session_id 语义）
+        let session_id = serde_json::from_str::<serde_json::Value>(event.payload())
+            .ok()
+            .and_then(|v| v.get("session_id").and_then(|s| s.as_str()).map(str::to_string))
+            .unwrap_or_default();
+        if session_id.is_empty() {
+            return;
+        }
+        let pm = pm.clone();
+        spawn_with_error_boundary("plugin_terminal_output_notify", async move {
+            pm.dispatch_lifecycle_event(
+                crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
+                    session_id,
+                    data: String::new(),
+                },
+            )
+            .await;
+        });
+    });
 }
 
 // ==================== Event Helpers ====================
