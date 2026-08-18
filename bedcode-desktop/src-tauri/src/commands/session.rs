@@ -116,7 +116,7 @@ pub async fn resize_session(
 ///
 /// # Arguments
 /// * `session_id` - 会话 ID
-/// * `start_seq` - 起始序号，None 或 0 表示从头获取
+/// * `start_seq` - 起始序号，None 或 0 表示从头获取（仅按 index 下限过滤）
 #[tauri::command]
 pub async fn get_session_output_history(
     session_id: String,
@@ -128,8 +128,6 @@ pub async fn get_session_output_history(
         None => Ok(OutputHistoryResponse {
             min_seq: 0,
             max_seq: 0,
-            min_offset: 0,
-            max_offset: 0,
             events: vec![],
         }),
     }

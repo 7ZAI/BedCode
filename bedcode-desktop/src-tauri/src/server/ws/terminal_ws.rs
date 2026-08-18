@@ -14,9 +14,9 @@ use crate::server::ws::session::WsSession;
 use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::message::Message;
 use crate::system::app_context::AppContext;
-use crate::session::GlobalOutputManager;
+use crate::session::{GlobalOutputManager, OutputFrame};
 use crate::utils::auth::jwt::JwtService;
-use crate::enums::{SessionControlPayload, TerminalPayload};
+use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
 use crate::system::config::AppConfig;
 use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::system::constants::event;
@@ -792,8 +792,7 @@ impl TerminalWs {
 
     /// 订阅会话输出 — 使用 actix::spawn 桥接异步调用
     ///
-    /// - `start_seq = None` 或 `0`：从头补完所有历史
-    /// - `start_seq = N (N > 0)`：从断点继续（用于断线重连）
+    /// 05 快照协议：wire start_seq 仅作兼容保留（恒忽略），历史全量重播
     fn handle_subscribe(
         &mut self,
         session_id: String,
@@ -801,6 +800,14 @@ impl TerminalWs {
         message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
+        // 05 快照协议忽略 wire start_seq（恒全量重播），留日志便于排查
+        if start_seq.is_some() {
+            tracing::debug!(
+                "[TerminalWs] 05 snapshot protocol ignores wire start_seq={:?}",
+                start_seq
+            );
+        }
+
         let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
@@ -838,9 +845,8 @@ impl TerminalWs {
         // 容量 8192：历史回放 + 实时输出并发到达时，subscribe() 的历史发送
         // 会被 send_queue 背压阻塞（历史发不完 → subscribe_response 不回 →
         // 客户端 send_and_wait 超时误判断开）。大容量显著降低背压概率；
-        // 连续违反重订阅（客户端增量续传）期间也给实时输出留足缓冲余量
-        let (output_tx, output_rx) =
-            tokio::sync::mpsc::channel::<crate::session::OutputEvent>(8192);
+        // 重订阅全量重播期间也给实时输出留足缓冲余量
+        let (output_tx, output_rx) = tokio::sync::mpsc::channel::<OutputFrame>(8192);
 
         let session_id_for_sub = session_id.clone();
         let request_id = message_id.clone();
@@ -858,7 +864,7 @@ impl TerminalWs {
         // 防止旧历史注入新订阅者通道造成客户端重复字节）
         let subscribe_handle = tokio::spawn(async move {
             let result = global_manager
-                .subscribe(&session_id_for_sub, &client_id, output_tx, start_seq, Some(resp_tx))
+                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx))
                 .await;
             // 响应已通过 resp_tx 前置返回；此处仅处理会话不存在（resp_tx 已丢弃）
             if result.is_none() {
@@ -930,6 +936,9 @@ impl TerminalWs {
                             break;
                         }
                     }
+                    // 旧路由无可编码的 history_end 帧（客户端不识别），直接吞掉；
+                    // 06 新路由在此编码 JSON 控制帧
+                    forward::ForwardOutput::HistoryEnd { .. } => {}
                 }
             }
         });
@@ -1041,14 +1050,17 @@ impl Handler<SubscribeResult> for TerminalWs {
         match msg.result {
             Some(response) => {
                 self.session.subscribed_sessions.insert(msg.session_id.clone());
+                // 05 快照协议恒全量重播：mode 恒 Reset、offsets 恒 0，
+                // 合成常量保旧客户端（本地终端/移动端）wire 解析兼容；
+                // 06 新路由删除这些 wire 字段
                 let ws_msg = Message::subscribe_response_with_request_id(
                     &msg.session_id,
                     response.min_seq,
-                    response.max_seq,
+                    response.snapshot_seq,
                     response.history_count,
-                    response.mode,
-                    response.min_offset,
-                    response.max_offset,
+                    SubscribeMode::Reset,
+                    0,
+                    0,
                     &msg.request_id,
                 );
                 if let Ok(json) = ws_msg.to_json() {

@@ -45,6 +45,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("channels.pty_subscription_capacity", "PTY 订阅广播容量 - 用于移动端订阅输出"),
     ("channels.global_queue_capacity", "全局输出队列容量 - 存储历史输出供移动端回放"),
     ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件"),
+    ("channels.history_start_mode", "历史回放起点模式（min=严格从队首 / snapshot=最近清屏快照点，默认 min；snapshot 模式待实现）"),
     ("channels.ws_event_capacity", "WebSocket 事件广播容量 - 业务层事件分发"),
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
     ("terminal.default_cols", "默认终端列数"),
@@ -104,6 +105,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "channels.pty_subscription_capacity",
         "channels.global_queue_capacity",
         "channels.global_queue_max_bytes",
+        "channels.history_start_mode",
         "channels.ws_event_capacity",
         "channels.lifecycle_capacity",
     ]),
@@ -322,6 +324,19 @@ impl Default for UiConfig {
     }
 }
 
+/// 历史回放起点模式
+///
+/// 控制新订阅者订阅时刻的历史回放起点：
+/// - `Min`：严格从队首（min_seq）起播全部保留事件（默认，行为确定）
+/// - `Snapshot`：从最近一次清屏快照点起播（减少全屏 TUI 清屏前的重复重绘）
+///   该模式尚未实现，配置后回退为 Min 行为（见 subscribe 内 warn 日志）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryStartMode {
+    Min,
+    Snapshot,
+}
+
 /// Channel 容量配置
 ///
 /// 控制 Tokio broadcast/mpsc channel 的缓冲区大小，
@@ -342,6 +357,8 @@ pub struct ChannelsConfig {
     pub global_queue_capacity: usize,
     /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件
     pub global_queue_max_bytes: u64,
+    /// 历史回放起点模式（min = 严格从队首；snapshot = 最近清屏快照点，待实现）
+    pub history_start_mode: HistoryStartMode,
     /// WebSocket 事件广播容量 - 业务层事件分发
     pub ws_event_capacity: usize,
     /// 生命周期事件广播容量 - PTY 进程状态变更
@@ -358,6 +375,7 @@ impl Default for ChannelsConfig {
             pty_subscription_capacity: 1024,
             global_queue_capacity: 25000,
             global_queue_max_bytes: 128 * 1024 * 1024, // 128MB
+            history_start_mode: HistoryStartMode::Min,
             ws_event_capacity: 1024,
             lifecycle_capacity: 16,
         }
@@ -548,6 +566,17 @@ impl AppConfig {
                 pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
                 global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 25000),
                 global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 128 * 1024 * 1024),
+                // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
+                history_start_mode: match parse_value::<String>(
+                    props,
+                    "channels.history_start_mode",
+                    "min".to_string(),
+                )
+                .as_str()
+                {
+                    "snapshot" => HistoryStartMode::Snapshot,
+                    _ => HistoryStartMode::Min,
+                },
                 ws_event_capacity: parse_value(props, "channels.ws_event_capacity", 1024),
                 lifecycle_capacity: parse_value(props, "channels.lifecycle_capacity", 16),
             },
@@ -630,6 +659,13 @@ impl AppConfig {
         map.insert("channels.pty_subscription_capacity".to_string(), self.channels.pty_subscription_capacity.to_string());
         map.insert("channels.global_queue_capacity".to_string(), self.channels.global_queue_capacity.to_string());
         map.insert("channels.global_queue_max_bytes".to_string(), self.channels.global_queue_max_bytes.to_string());
+        map.insert(
+            "channels.history_start_mode".to_string(),
+            match self.channels.history_start_mode {
+                HistoryStartMode::Min => "min".to_string(),
+                HistoryStartMode::Snapshot => "snapshot".to_string(),
+            },
+        );
         map.insert("channels.ws_event_capacity".to_string(), self.channels.ws_event_capacity.to_string());
         map.insert("channels.lifecycle_capacity".to_string(), self.channels.lifecycle_capacity.to_string());
         map.insert("terminal.default_cols".to_string(), self.terminal.default_cols.to_string());
@@ -789,6 +825,32 @@ channels.output_broadcast_capacity=2048
         let path = PathBuf::from("/nonexistent/config.properties");
         let config = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, 8765);
+    }
+
+    /// history_start_mode 默认值、解析与 properties 往返
+    #[test]
+    fn test_history_start_mode_roundtrip() {
+        // 默认 min
+        let config = AppConfig::default();
+        assert_eq!(config.channels.history_start_mode, HistoryStartMode::Min);
+
+        // 解析 snapshot
+        let mut props = HashMap::new();
+        props.insert("channels.history_start_mode".to_string(), "snapshot".to_string());
+        let config2 = AppConfig::from_properties(&props);
+        assert_eq!(config2.channels.history_start_mode, HistoryStartMode::Snapshot);
+
+        // 非法值回退 min（不 panic）
+        let mut props = HashMap::new();
+        props.insert("channels.history_start_mode".to_string(), "bogus".to_string());
+        let config3 = AppConfig::from_properties(&props);
+        assert_eq!(config3.channels.history_start_mode, HistoryStartMode::Min);
+
+        // 写入 properties 文件并能往返（默认 min 写入、snapshot 还原）
+        let content = config.to_properties_string();
+        assert!(content.contains("channels.history_start_mode=min"));
+        let config4 = AppConfig::from_properties(&parse_properties(&content));
+        assert_eq!(config4.channels.history_start_mode, HistoryStartMode::Min);
     }
 
     #[test]

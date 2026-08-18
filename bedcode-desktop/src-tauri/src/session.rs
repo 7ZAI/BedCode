@@ -41,7 +41,7 @@ pub use event_bus::{DefaultSessionEventBus, SessionEventBus, SessionEvent};
 // 从 session_output 重导出
 pub use session_output::{
     DefaultOutputCache, OutputCache,
-    OutputEvent, OutputHistoryResponse, UnifiedOutputQueue,
+    OutputEvent, OutputFrame, OutputHistoryResponse, UnifiedOutputQueue,
     SessionOutputManager, SubscriberState, SubscribeResponse,
     GlobalOutputManager,
 };

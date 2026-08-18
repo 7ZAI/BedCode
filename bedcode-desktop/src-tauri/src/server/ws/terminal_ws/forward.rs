@@ -7,16 +7,22 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::session::OutputEvent;
+use crate::session::{OutputEvent, OutputFrame};
 use crate::server::message::Message;
 
 // ==================== Output Buffer ====================
 
-/// 转发输出形态：文本 JSON（移动端 WS）或二进制帧（桌面端本地 WS）
+/// 转发输出形态：文本 JSON（移动端 WS）、二进制帧（桌面端本地 WS）或历史标记
 #[derive(Debug)]
 pub(super) enum ForwardOutput {
     Text(String),
     Binary(Vec<u8>),
+    /// 历史边界标记（05 快照协议）：旧路由无可编码帧，消费侧吞掉；06 新路由编码 JSON 控制帧
+    HistoryEnd {
+        snapshot_seq: u64,
+        min_seq: u64,
+        history_count: usize,
+    },
 }
 
 /// 二进制帧头：magic(2) + version(1) + flags(1) + start_offset(8 LE) + end_offset(8 LE) = 20 字节
@@ -38,12 +44,17 @@ fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, dat
 }
 
 /// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
+///
+/// 05 seq 化后事件不再携带字节偏移，`offset_cursor` 在订阅内从 0 起按字节
+/// 累加合成 `[start,end)` 游标：每条订阅=一条连续字节流，旧客户端（本地终端/
+/// 移动端）按订阅内连续流做连续性校验，语义降级但自洽（07/09 新路由消除）
 struct OutputBuffer {
     data: Vec<u8>,
     start_index: u64,
     end_index: u64,
     start_offset: u64,
     end_offset: u64,
+    offset_cursor: u64,
     last_is_waiting: bool,
     /// true = 二进制帧输出（本地通道）；false = base64 JSON（移动端通道）
     binary: bool,
@@ -57,6 +68,7 @@ impl OutputBuffer {
             end_index: 0,
             start_offset: 0,
             end_offset: 0,
+            offset_cursor: 0,
             last_is_waiting: false,
             binary,
         }
@@ -65,11 +77,13 @@ impl OutputBuffer {
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
-            self.start_offset = event.start_offset;
+            // 本批起始 = 订阅内累计字节位置（合成游标）
+            self.start_offset = self.offset_cursor;
         }
         // 始终更新 end_index 为最新事件的 index
         self.end_index = event.index;
-        self.end_offset = event.end_offset;
+        self.offset_cursor += event.data.len() as u64;
+        self.end_offset = self.offset_cursor;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
@@ -135,7 +149,7 @@ impl OutputBuffer {
 /// 每次转发前校验代数：订阅/取消订阅时代数递增，旧代 forward_loop 的残留帧
 /// 直接丢弃，从根源杜绝旧流帧注入新订阅通道
 pub(super) async fn forward_loop(
-    mut output_rx: tokio::sync::mpsc::Receiver<crate::session::OutputEvent>,
+    mut output_rx: tokio::sync::mpsc::Receiver<OutputFrame>,
     out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
     flush_interval: Duration,
     max_buffer_size: usize,
@@ -148,13 +162,35 @@ pub(super) async fn forward_loop(
 
     if flush_interval.is_zero() {
         // 零缓冲直通：每条事件立即转发，不等待
-        while let Some(event) = output_rx.recv().await {
+        while let Some(frame) = output_rx.recv().await {
             if stream_generation.load(Ordering::SeqCst) != my_gen {
                 break;
             }
-            buffer.append(&event);
-            if out_tx.send(buffer.flush(&session_id)).await.is_err() {
-                break;
+            match frame {
+                OutputFrame::Output(event) => {
+                    buffer.append(&event);
+                    if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                        break;
+                    }
+                }
+                OutputFrame::HistoryEnd { snapshot_seq, min_seq, history_count } => {
+                    // 历史边界：先 flush 残留缓冲（保证历史字节完整落盘），
+                    // 再透传标记——标记必须严格保持在历史帧之后（快照协议顺序）
+                    if !buffer.is_empty() && out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                        break;
+                    }
+                    if out_tx
+                        .send(ForwardOutput::HistoryEnd {
+                            snapshot_seq,
+                            min_seq,
+                            history_count,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
             }
         }
         return;
@@ -164,19 +200,43 @@ pub(super) async fn forward_loop(
     let mut last_flush = tokio::time::Instant::now();
     loop {
         match tokio::time::timeout(flush_interval, output_rx.recv()).await {
-            Ok(Some(event)) => {
+            Ok(Some(frame)) => {
                 // 流代数失效（订阅被替换/取消）：残留帧直接丢弃，不转发
                 if stream_generation.load(Ordering::SeqCst) != my_gen {
                     break;
                 }
-                buffer.append(&event);
-                if buffer.data.len() >= max_buffer_size
-                    || last_flush.elapsed() >= flush_interval
-                {
-                    if out_tx.send(buffer.flush(&session_id)).await.is_err() {
-                        break;
+                match frame {
+                    OutputFrame::Output(event) => {
+                        buffer.append(&event);
+                        if buffer.data.len() >= max_buffer_size
+                            || last_flush.elapsed() >= flush_interval
+                        {
+                            if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                                break;
+                            }
+                            last_flush = tokio::time::Instant::now();
+                        }
                     }
-                    last_flush = tokio::time::Instant::now();
+                    OutputFrame::HistoryEnd { snapshot_seq, min_seq, history_count } => {
+                        // 历史结束标记：先 flush 残留缓冲，再透传标记（顺序严格）
+                        if !buffer.is_empty() {
+                            if out_tx.send(buffer.flush(&session_id)).await.is_err() {
+                                break;
+                            }
+                            last_flush = tokio::time::Instant::now();
+                        }
+                        if out_tx
+                            .send(ForwardOutput::HistoryEnd {
+                                snapshot_seq,
+                                min_seq,
+                                history_count,
+                            })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
             }
             Ok(None) => {
@@ -210,13 +270,11 @@ pub(super) async fn forward_loop(
 mod tests {
     use super::*;
 
-    fn event(session_id: &str, data: &[u8], index: u64, start_offset: u64, end_offset: u64) -> crate::session::OutputEvent {
+    fn event(session_id: &str, data: &[u8], index: u64) -> crate::session::OutputEvent {
         crate::session::OutputEvent {
             session_id: session_id.to_string(),
             data: data.to_vec(),
             index,
-            start_offset,
-            end_offset,
             timestamp: 0,
             is_waiting: false,
         }
@@ -242,30 +300,30 @@ mod tests {
         assert_eq!(frame[3], 0);
     }
 
-    /// 二进制形态：合并多条事件为一个帧，偏移取首事件 start / 尾事件 end
+    /// 二进制形态：合并多条事件为一个帧，偏移取订阅内合成游标 [0, 总字节)
     #[test]
     fn test_output_buffer_binary_flush_merges_with_offsets() {
         let mut buf = OutputBuffer::new(true);
-        buf.append(&event("s", b"ab", 0, 10, 12));
-        buf.append(&event("s", b"cd", 1, 12, 14));
-        buf.append(&event("s", b"ef", 2, 14, 16));
+        buf.append(&event("s", b"ab", 0));
+        buf.append(&event("s", b"cd", 1));
+        buf.append(&event("s", b"ef", 2));
 
         let out = buf.flush("s");
         let ForwardOutput::Binary(frame) = out else {
             panic!("expected binary frame");
         };
-        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 10);
-        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 16);
+        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 0);
+        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 6);
         assert_eq!(&frame[20..], b"abcdef");
         assert!(buf.is_empty()); // flush 后清空
     }
 
-    /// 文本形态（移动端兼容）：base64 JSON 携带 start_offset/end_offset 与 end_index
+    /// 文本形态（移动端兼容）：base64 JSON 携带合成 offset 与 end_index
     #[test]
     fn test_output_buffer_text_flush_carries_offsets() {
         let mut buf = OutputBuffer::new(false);
-        buf.append(&event("s", b"ab", 3, 40, 42));
-        buf.append(&event("s", b"cd", 4, 42, 44));
+        buf.append(&event("s", b"ab", 3));
+        buf.append(&event("s", b"cd", 4));
 
         let out = buf.flush("s");
         let ForwardOutput::Text(json) = out else {
@@ -280,18 +338,18 @@ mod tests {
         };
         assert_eq!(index, 3);
         assert_eq!(end_index, Some(4));
-        assert_eq!(start_offset, Some(40));
-        assert_eq!(end_offset, Some(44));
+        assert_eq!(start_offset, Some(0));
+        assert_eq!(end_offset, Some(4));
         // 解码 base64 校验数据
         let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
         assert_eq!(decoded, b"abcd");
     }
 
-    /// 单事件 flush：end_index 为 None，偏移取事件自身
+    /// 单事件 flush：end_index 为 None，偏移取合成游标 [0, 单事件字节)
     #[test]
     fn test_output_buffer_single_event_flush() {
         let mut buf = OutputBuffer::new(false);
-        buf.append(&event("s", b"single", 7, 100, 106));
+        buf.append(&event("s", b"single", 7));
 
         let out = buf.flush("s");
         let ForwardOutput::Text(json) = out else {
@@ -306,8 +364,8 @@ mod tests {
         };
         assert_eq!(index, 7);
         assert_eq!(end_index, None);
-        assert_eq!(start_offset, Some(100));
-        assert_eq!(end_offset, Some(106));
+        assert_eq!(start_offset, Some(0));
+        assert_eq!(end_offset, Some(6));
     }
 
     // ==================== forward_loop 转发循环（合并时序语义） ====================
@@ -318,12 +376,12 @@ mod tests {
         max_buffer_size: usize,
         binary: bool,
     ) -> (
-        tokio::sync::mpsc::Sender<crate::session::OutputEvent>,
+        tokio::sync::mpsc::Sender<OutputFrame>,
         tokio::sync::mpsc::Receiver<ForwardOutput>,
         tokio::task::JoinHandle<()>,
         Arc<AtomicU64>,
     ) {
-        let (tx, rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(128);
+        let (tx, rx) = tokio::sync::mpsc::channel::<OutputFrame>(128);
         let (out_tx, out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(128);
         let generation = Arc::new(AtomicU64::new(0));
         let fwd = tokio::spawn(forward_loop(
@@ -368,7 +426,7 @@ mod tests {
 
         // 每 5ms 一条小事件，共 30 条（持续 150ms，间隔远小于 20ms 时间窗）
         for i in 0..30u64 {
-            tx.send(event("s", b"x", i, i, i + 1)).await.unwrap();
+            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
         drop(tx);
@@ -393,7 +451,7 @@ mod tests {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8, false);
 
         let start = tokio::time::Instant::now();
-        tx.send(event("s", b"0123456789", 0, 0, 10)).await.unwrap(); // 10 字节 > 8
+        tx.send(OutputFrame::Output(event("s", b"0123456789", 0))).await.unwrap(); // 10 字节 > 8
         drop(tx);
 
         let out = tokio::time::timeout(Duration::from_millis(50), out_rx.recv())
@@ -428,7 +486,7 @@ mod tests {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(30), 64 * 1024, false);
 
         let start = tokio::time::Instant::now();
-        tx.send(event("s", b"hi", 0, 0, 2)).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"hi", 0))).await.unwrap();
 
         let out = tokio::time::timeout(Duration::from_millis(80), out_rx.recv())
             .await
@@ -452,7 +510,7 @@ mod tests {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
 
         for i in 0..5u64 {
-            tx.send(event("s", b"x", i, i, i + 1)).await.unwrap();
+            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
         }
         drop(tx);
 
@@ -472,8 +530,8 @@ mod tests {
     async fn test_forward_loop_final_flush_on_channel_close() {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
 
-        tx.send(event("s", b"ab", 0, 0, 2)).await.unwrap();
-        tx.send(event("s", b"cd", 1, 2, 4)).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"cd", 1))).await.unwrap();
         drop(tx); // 未达时间窗/字节窗 → 关闭时合并两条最终发出
 
         let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
@@ -492,6 +550,7 @@ mod tests {
         };
         assert_eq!(index, 0);
         assert_eq!(end_index, Some(1), "merged two events");
+        // 合成游标：订阅内从 0 起 [0, 4)（两条 2 字节事件）
         assert_eq!(start_offset, Some(0));
         assert_eq!(end_offset, Some(4));
         let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
@@ -520,7 +579,7 @@ mod tests {
         // 订阅被替换：代数递增，旧 forward_loop 立即失效
         generation.fetch_add(1, Ordering::SeqCst);
 
-        tx.send(event("s", b"stale", 0, 0, 5)).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"stale", 0))).await.unwrap();
         drop(tx);
 
         // 旧代 forward_loop 应丢弃残留帧并退出：无任何消息发出
@@ -539,7 +598,7 @@ mod tests {
     async fn test_forward_loop_generation_gate_passthrough_when_current() {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024, false);
 
-        tx.send(event("s", b"live", 0, 0, 4)).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"live", 0))).await.unwrap();
         drop(tx);
 
         let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
@@ -547,6 +606,70 @@ mod tests {
             .expect("current generation must forward")
             .expect("forward_loop exited");
         assert!(matches!(out, ForwardOutput::Text(_)));
+        let _ = fwd.await;
+    }
+
+    /// HistoryEnd 到达时先 flush 残留缓冲，标记严格保持在历史帧之后（快照协议顺序）
+    #[tokio::test]
+    async fn test_forward_loop_history_end_flushes_and_orders() {
+        let (tx, mut out_rx, fwd, _gen) =
+            spawn_forward(Duration::from_millis(60_000), 64 * 1024, false);
+
+        // 两条历史事件未达时间窗/字节窗，残留于缓冲
+        tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
+        tx.send(OutputFrame::Output(event("s", b"cd", 1))).await.unwrap();
+        tx.send(OutputFrame::HistoryEnd {
+            snapshot_seq: 1,
+            min_seq: 0,
+            history_count: 2,
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        // 第一条 = 残留历史帧（ab+cd 合并，合成游标 [0,4)）
+        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
+            .await
+            .expect("history must flush before marker")
+            .expect("forward_loop exited");
+        let ForwardOutput::Text(json) = out else {
+            panic!("expected text output");
+        };
+        let msg: Message = Message::from_json(&json).unwrap();
+        let Message::Terminal { payload, .. } = msg else {
+            panic!("expected terminal message");
+        };
+        let crate::enums::TerminalAction::Output { data, start_offset, end_offset, .. } = payload.action else {
+            panic!("expected output action");
+        };
+        let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data).unwrap();
+        assert_eq!(decoded, b"abcd");
+        assert_eq!(start_offset, Some(0));
+        assert_eq!(end_offset, Some(4));
+
+        // 第二条 = HistoryEnd 标记，严格在历史帧后且携带正确元数据
+        let marker = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
+            .await
+            .expect("history end marker")
+            .expect("forward_loop exited");
+        match marker {
+            ForwardOutput::HistoryEnd {
+                snapshot_seq,
+                min_seq,
+                history_count,
+            } => {
+                assert_eq!(snapshot_seq, 1);
+                assert_eq!(min_seq, 0);
+                assert_eq!(history_count, 2);
+            }
+            _ => panic!("expected HistoryEnd marker"),
+        }
+
+        // 标记后无更多帧（通道已关闭）
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
+            Ok(None)
+        ));
         let _ = fwd.await;
     }
 }

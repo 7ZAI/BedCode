@@ -146,8 +146,8 @@ pub async fn handle_control(
                 return Ok(Some(Message::error_with_id(&request_message_id, "SESSION_NOT_FOUND", &format!("Session {} output not available", session_id))));
             }
 
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputEvent>(256);
-            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None, None).await;
+            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputFrame>(256);
+            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None).await;
 
             match subscribe_result {
                 Some(response) => {
@@ -170,15 +170,31 @@ pub async fn handle_control(
 
                         loop {
                             match tokio::time::timeout(flush_interval, output_rx.recv()).await {
-                                Ok(Some(event)) => {
-                                    buffer.append(&event);
-                                    if buffer.data.len() >= max_buffer_size {
-                                        let text = buffer.flush(&session_id_for_fwd);
-                                        let message = match crate::server::ws::message::Message::from_json(&text) {
-                                            Ok(m) => m,
-                                            Err(_) => break,
-                                        };
-                                        let _ = ws_manager.send_to_client(&client_id, &message).await;
+                                Ok(Some(frame)) => {
+                                    match frame {
+                                        crate::session::OutputFrame::Output(event) => {
+                                            buffer.append(&event);
+                                            if buffer.data.len() >= max_buffer_size {
+                                                let text = buffer.flush(&session_id_for_fwd);
+                                                let message = match crate::server::ws::message::Message::from_json(&text) {
+                                                    Ok(m) => m,
+                                                    Err(_) => break,
+                                                };
+                                                let _ = ws_manager.send_to_client(&client_id, &message).await;
+                                            }
+                                        }
+                                        // 历史结束标记：先 flush 残留缓冲，再吞掉
+                                        // （旧路由 SessionControl 客户端无此信号；06 新路由编码控制帧）
+                                        crate::session::OutputFrame::HistoryEnd { .. } => {
+                                            if !buffer.is_empty() {
+                                                let text = buffer.flush(&session_id_for_fwd);
+                                                let message = match crate::server::ws::message::Message::from_json(&text) {
+                                                    Ok(m) => m,
+                                                    Err(_) => break,
+                                                };
+                                                let _ = ws_manager.send_to_client(&client_id, &message).await;
+                                            }
+                                        }
                                     }
                                 }
                                 Ok(None) => {
@@ -320,12 +336,15 @@ pub async fn handle_control_message(
 // ==================== Output Buffer ====================
 
 /// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
+///
+/// 05 seq 化后事件不再携带字节偏移，用订阅内合成游标生成连续 [start,end)
 struct OutputBuffer {
     data: Vec<u8>,
     start_index: u64,
     end_index: u64,
     start_offset: u64,
     end_offset: u64,
+    offset_cursor: u64,
     last_is_waiting: bool,
 }
 
@@ -337,6 +356,7 @@ impl OutputBuffer {
             end_index: 0,
             start_offset: 0,
             end_offset: 0,
+            offset_cursor: 0,
             last_is_waiting: false,
         }
     }
@@ -344,10 +364,12 @@ impl OutputBuffer {
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
-            self.start_offset = event.start_offset;
+            // 本批起始 = 订阅内累计字节位置（合成游标）
+            self.start_offset = self.offset_cursor;
         }
         self.end_index = event.index;
-        self.end_offset = event.end_offset;
+        self.offset_cursor += event.data.len() as u64;
+        self.end_offset = self.offset_cursor;
         self.data.extend_from_slice(&event.data);
         self.last_is_waiting = event.is_waiting;
     }
