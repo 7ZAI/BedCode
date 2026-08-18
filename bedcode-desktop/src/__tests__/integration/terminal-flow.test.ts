@@ -26,7 +26,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { Terminal } from '@xterm/xterm'
-import { useTerminalOutputStream, type OutputStreamFrame, type StreamSubscribeResult } from '@/composables/useTerminalOutputStream'
+import { useTerminalOutputStream, type OutputStreamFrame } from '@/composables/useTerminalOutputStream'
 import { useSessionStore } from '@/stores/session'
 import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
 import { makeServerStatusInfo, makeSessionInfo } from '@/__tests__/fixtures/index'
@@ -75,21 +75,24 @@ class MockWebSocket {
     this.onmessage?.({ data: raw })
   }
 
-  binary(bytes: number[], startOffset = 0, endOffset = bytes.length, isWaiting = false) {
-    const buf = new ArrayBuffer(20 + bytes.length)
+  /** TB v2 帧：seq = 首事件 index；flags 高 7 位 = 事件数 - 1 */
+  binary(bytes: number[], seq = 0, eventCount = 1, isWaiting = false) {
+    const buf = new ArrayBuffer(16 + bytes.length)
     const view = new DataView(buf)
     view.setUint8(0, 0x54)
     view.setUint8(1, 0x42)
-    view.setUint8(2, 1)
-    view.setUint8(3, isWaiting ? 1 : 0)
-    view.setBigUint64(4, BigInt(startOffset), true)
-    view.setBigUint64(12, BigInt(endOffset), true)
-    new Uint8Array(buf, 20).set(bytes)
+    view.setUint8(2, 2)
+    view.setUint8(3, ((eventCount - 1) << 1) | (isWaiting ? 1 : 0))
+    view.setBigUint64(4, BigInt(seq), true)
+    view.setUint32(12, bytes.length, true)
+    new Uint8Array(buf, 16).set(bytes)
     this.onmessage?.({ data: buf })
   }
+
 }
 
-function subscribeResponse(mode: 'incremental' | 'reset', minOffset = 0, maxOffset = 0) {
+/** 快照订阅响应：min_seq / max_seq(=snapshot_seq) / history_count */
+function subscribeResponse(minSeq: number, snapshotSeq: number, historyCount: number) {
   return JSON.stringify({
     type: 'terminal',
     payload: {
@@ -101,12 +104,12 @@ function subscribeResponse(mode: 'incremental' | 'reset', minOffset = 0, maxOffs
       payload: {
         action: {
           type: 'subscribe_response',
-          min_seq: 0,
-          max_seq: 5,
-          history_count: 3,
-          mode,
-          min_offset: minOffset,
-          max_offset: maxOffset,
+          min_seq: minSeq,
+          max_seq: snapshotSeq,
+          history_count: historyCount,
+          mode: 'reset',
+          min_offset: 0,
+          max_offset: 0,
         },
       },
     },
@@ -246,26 +249,26 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     // 本地环回端点 + 一次性令牌
     expect(ws.url).toBe('ws://127.0.0.1:8765/ws/terminal/local?token=test-token-abc')
 
-    // 订阅消息参数构造：相邻标记结构 + 空 token（本地通道免 JWT）+ 首次全量（start_seq null）
+    // 订阅消息参数构造：相邻标记结构 + 空 token（本地通道免 JWT）+ 无参快照订阅
     stream.subscribe()
     ws.open()
     const subscribe = JSON.parse(ws.sent[0])
     expect(subscribe.type).toBe('terminal')
     expect(subscribe.payload.session_id).toBe('session-1')
     expect(subscribe.payload.token).toBe('')
-    expect(subscribe.payload.payload.action).toEqual({ type: 'subscribe', start_seq: null })
+    expect(subscribe.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 服务端订阅确认（incremental 续传）
-    ws.text(subscribeResponse('incremental'))
+    // 服务端订阅确认（快照元数据：min 0 ≤ 无游标，直接全量）
+    ws.text(subscribeResponse(0, 5, 3))
 
-    // 首帧 [start=0, end=3) → 渲染到 buffer 第 0 行（\n 换行：xterm 中 \r 仅回车不换行）
-    ws.binary([104, 105, 10], 0, 3) // "hi\n"
+    // 事件 seq=0 "hi\n" → 渲染到 buffer 第 0 行（\n 换行：xterm 中 \r 仅回车不换行）
+    ws.binary([104, 105, 10], 0)
     await flushAsync()
     expect(frames).toHaveLength(1)
     expect(bufferLineText(term, 0)).toBe('hi')
 
-    // 续传帧 [start=3, end=6) → 游标连续，渲染到第 1 行
-    ws.binary([98, 121, 101], 3, 6) // "bye"
+    // 后续事件 seq=1 "bye" → seq 无缝衔接（1 = lastRendered 0 + 1），渲染到第 1 行
+    ws.binary([98, 121, 101], 1)
     await flushAsync()
     expect(frames).toHaveLength(2)
     expect(bufferLineText(term, 1)).toBe('bye')
@@ -273,13 +276,13 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     stream.stop()
   })
 
-  it('连续性不变量：缺口帧触发保留游标重订阅（start_seq=游标，不置 null）', async () => {
+  it('seq 缺口：缺口帧触发快照重订阅（无参订阅 + 重播跳过已渲染）', async () => {
     const term = createTerminal()
-    const resets: StreamSubscribeResult[] = []
+    const resets: unknown[] = []
     const stream = useTerminalOutputStream({
       onData: ({ data }) => term.write(data),
-      onReset: (r) => {
-        resets.push(r)
+      onReset: () => {
+        resets.push(true)
         term.clear()
       },
     })
@@ -289,47 +292,52 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('incremental'))
-    // 推进游标到 6（首帧无换行 → 'bye' 写在同一行，末尾 \n 使游标到第 2 行行首）
-    ws.binary([104, 105], 0, 2)
-    ws.binary([98, 121, 101, 10], 2, 6)
-    await flushAsync()
-    expect(bufferLineText(term, 0)).toBe('hibye')
+    ws.text(subscribeResponse(0, 5, 3))
 
-    // 缺口帧：start=99 ≠ 游标 6 → 连续性违反 → 重订阅
+    // seq 0 "hi\n"、seq 1 "bye\n" → 各自换行渲染，lastRenderedSeq = 1
+    ws.binary([104, 105, 10], 0)
+    ws.binary([98, 121, 101, 10], 1)
+    await flushAsync()
+    expect(bufferLineText(term, 0)).toBe('hi')
+    expect(bufferLineText(term, 1)).toBe('bye')
+
+    // 缺口帧：seq=99 ≠ lastRendered(1)+1 → 连续性违反 → 快照重订阅
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    ws.binary([120], 99, 100)
+    ws.binary([120], 99)
     await flushAsync()
     errorSpy.mockRestore()
 
-    // 重订阅保留游标（增量语义）：不置 null 避免服务端裁决全量重播
+    // 重订阅为无参快照订阅（无 start_seq——服务端恒全量重播，前端按 seq 跳过）
     const ws2 = MockWebSocket.instances[1]
     expect(ws2).toBeTruthy()
     ws2.open()
     const resubscribe = JSON.parse(ws2.sent[0])
-    expect(resubscribe.payload.payload.action).toEqual({ type: 'subscribe', start_seq: 6 })
+    expect(resubscribe.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 服务端从游标补缺口：incremental 确认 + 从 6 续传（游标在第 1 行行首）
-    ws2.text(subscribeResponse('incremental', 6, 8))
-    ws2.binary([121, 101, 115], 6, 9) // "yes"
+    // 快照确认（min_seq=0 ≤ lastRendered+1：未截断，不清屏）+ 重播帧 seq=2
+    ws2.text(subscribeResponse(0, 100, 3))
+    ws2.binary([121, 101, 115, 10], 2) // "yes\n"
     await flushAsync()
-    expect(bufferLineText(term, 1)).toBe('yes')
-    expect(resets).toHaveLength(0)
+    expect(bufferLineText(term, 2)).toBe('yes')
+    expect(resets).toHaveLength(0) // 未截断，不清屏
 
     stream.stop()
   })
 
-  it('reset 裁决：onReset 清屏回调 → 回放帧从 minOffset 重渲染', async () => {
+  it('历史截断：min_seq > last_rendered_seq + 1 → 清屏全量重播 + onTruncated 提示', async () => {
     const term = createTerminal()
-    const resets: StreamSubscribeResult[] = []
+    // happy-dom 下 xterm.clear() 会触发渲染器内存爆炸（worker OOM，实测稳定复现）；
+    // 清屏属 xterm 自身行为而非被测逻辑，用 spy 拦截真实清屏，仅验证回调联动
+    const clearSpy = vi.spyOn(term, 'clear').mockImplementation(() => {})
+    const resets: unknown[] = []
     const truncated: number[] = []
     const stream = useTerminalOutputStream({
       onData: ({ data }) => term.write(data),
-      onReset: (r) => {
-        resets.push(r)
+      onReset: () => {
+        resets.push(true)
         term.clear()
       },
-      onTruncated: (minOffset) => truncated.push(minOffset),
+      onTruncated: (minSeq) => truncated.push(minSeq),
     })
 
     stream.start('session-1')
@@ -337,15 +345,27 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    // 服务端裁决 reset：游标失效，清屏后全量重播
-    ws.text(subscribeResponse('reset', 0, 10))
-    ws.binary([104, 105, 13], 0, 3)
+    ws.text(subscribeResponse(0, 5, 3))
+
+    // 已渲染 seq 0、1（lastRenderedSeq = 1）
+    ws.binary([104, 105, 10], 0)
+    ws.binary([98, 121, 101, 10], 1)
     await flushAsync()
 
-    expect(resets).toHaveLength(1)
-    expect(resets[0].mode).toBe('reset')
+    // 重订阅后的快照响应（同连接再次下发 subscribe_response 模拟：截断判定
+    // 在任何订阅响应时执行；重连路径已由「seq 缺口」用例覆盖）
+    // min_seq=200 > lastRendered(1)+1 → 已渲染区域被环形淘汰 → 清屏全量重播
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ws.text(subscribeResponse(200, 300, 3))
+    warnSpy.mockRestore()
+
+    expect(resets).toHaveLength(1) // 截断 → 清屏
+    expect(truncated).toEqual([200])
+
+    // 清屏后全量重播：min_seq=200 起
+    ws.binary([104, 105, 13], 200) // "hi\r"
+    await flushAsync()
     expect(bufferLineText(term, 0)).toBe('hi')
-    expect(truncated).toEqual([])
 
     stream.stop()
   })

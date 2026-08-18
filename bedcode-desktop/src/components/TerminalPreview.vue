@@ -112,11 +112,7 @@ import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from 
 import { invoke } from '@tauri-apps/api/core'
 import '@xterm/xterm/css/xterm.css'
 
-/** Rust 端本地 WS 订阅裁决（服务端基于真源裁决，消费者零猜测） */
-interface SubscribeControl {
-  mode: string
-  minOffset: number
-}
+/** XP 会话本地 WS 订阅（快照模型，07）：min_seq/max_seq/history_count 元数据 + TB v2 帧 */
 
 interface Props {
   session?: SessionInfo | null
@@ -188,10 +184,11 @@ const isAltBuffer = ref(false)
 const sessionId = computed(() => props.session?.id || '')
 
 // ==================== 本地 WS 二进制输出流 ====================
-// 单一通道（历史回放 + 实时推送），字节游标连续性由 composable 守护：
-// - onData：游标校验通过后的原始字节帧，直接入 rAF 写入管线（无去重/无补序）
-// - onReset：服务端裁决 reset（环形头部淘汰/流重建），清屏后回放帧从 minOffset 起重播
-// - onTruncated：min_offset > 0 说明会话开头输出已不可恢复，提示用户
+// 单一通道（历史回放 + 实时推送），seq 级连续性由 composable 守护：
+// - onData：去重/连续性校验通过后的原始字节帧，直接入 rAF 写入管线
+// - onReset：快照重订阅遇到历史截断（min_seq > last_rendered_seq + 1）时清屏，
+//   重播帧随后全量流式写入
+// - onTruncated:min_seq > 0 说明会话开头输出已不可恢复，提示用户
 
 // ==================== 写入管线 ====================
 // 实时输出合并：同一渲染帧内的多个输出事件合并为一次 write（2026 包裹），
@@ -278,10 +275,10 @@ function enqueueOutput(data: Uint8Array) {
   }
 }
 
-// 本地 WS 输出流：
-// - onData 帧已通过字节级连续性校验，与游标无缝衔接，直接写入（无去重）
-// - onReset 时清屏：回放帧随后从 minOffset 流式写入，重建自洽帧
-// - onTruncated 保留原有"历史被截断"提示 UX（触发条件从 minSeq > 0 改为 minOffset > 0）
+// 本地 WS 输出流（快照模型）:
+// - onData 帧已通过 seq 连续性校验/重播去重，直接写入（无去重/无补序）
+// - onReset 时清屏：快照重订阅遇到历史截断（已渲染区被环形淘汰）后全量重播
+// - onTruncated 保留原有"历史被截断"提示 UX（触发条件 min_seq > 0，参数即 min_seq）
 const terminalStream = useTerminalOutputStream({
   onData: ({ data }) => {
     enqueueOutput(data)
@@ -289,15 +286,15 @@ const terminalStream = useTerminalOutputStream({
       scrollToBottom()
     }
   },
-  onReset: (_control: SubscribeControl) => {
+  onReset: () => {
     if (terminal) {
       terminal.clear()
     }
     // 流重置（清屏重播）：输入位置坐标失效，清除导航条标记
     inputMarkers.clear()
   },
-  onTruncated: (minOffset: number) => {
-    console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：minOffset=${minOffset}，会话开头输出不可用`)
+  onTruncated: (minSeq: number) => {
+    console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：min_seq=${minSeq}，会话开头输出不可用`)
     toast.warning(t('desktop.terminal.historyTruncated'))
   },
 })

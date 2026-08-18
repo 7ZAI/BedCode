@@ -28,39 +28,17 @@ pub(super) enum ForwardOutput {
     },
 }
 
-/// 转发输出形态（三种通道格式，见 `OutputFormat`）
+/// 转发输出形态（两种通道格式，见 `OutputFormat`）
 ///
-/// - LocalV1：本地环回通道（桌面 WebView），TB v1 20B 帧头 + 订阅内合成字节游标
 /// - RemoteLegacy：旧 /ws/terminal 远程通道（移动端 compat），base64 JSON 文本帧
-/// - RemoteV2：新 /ws/terminal/session/{id} 远程通道，TB v2 16B 帧头（spec §5.3）
+/// - RemoteV2：本地环回通道（桌面 WebView）与 /ws/terminal/session/{id} 远程通道，TB v2 16B 帧头（spec §5.3）
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OutputFormat {
-    LocalV1,
     RemoteLegacy,
     RemoteV2,
 }
 
-// ==================== TB v1（本地通道，07 迁移 TB v2 后删除） ====================
-
-/// 二进制帧头：magic(2) + version(1) + flags(1) + start_offset(8 LE) + end_offset(8 LE) = 20 字节
-const BINARY_FRAME_HEADER_LEN: usize = 20;
-const BINARY_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
-const BINARY_FRAME_VERSION: u8 = 1;
-const BINARY_FRAME_FLAG_WAITING: u8 = 0x01;
-
-/// 编码 TB v1 输出帧（客户端据此做订阅内字节级连续性校验）
-fn encode_output_frame(start_offset: u64, end_offset: u64, is_waiting: bool, data: &[u8]) -> Vec<u8> {
-    let mut frame = Vec::with_capacity(BINARY_FRAME_HEADER_LEN + data.len());
-    frame.extend_from_slice(&BINARY_FRAME_MAGIC);
-    frame.push(BINARY_FRAME_VERSION);
-    frame.push(if is_waiting { BINARY_FRAME_FLAG_WAITING } else { 0 });
-    frame.extend_from_slice(&start_offset.to_le_bytes());
-    frame.extend_from_slice(&end_offset.to_le_bytes());
-    frame.extend_from_slice(data);
-    frame
-}
-
-// ==================== TB v2（spec §5.3，新远程通道） ====================
+// ==================== TB v2（spec §5.3，本地环回 + 新远程通道） ====================
 
 /// TB v2 帧头：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE) = 16 字节
 const V2_FRAME_HEADER_LEN: usize = 16;
@@ -97,17 +75,13 @@ fn encode_output_frame_v2(seq: u64, event_count: usize, is_waiting: bool, data: 
     frame
 }
 
-/// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
-///
-/// 05 seq 化后事件不再携带字节偏移，`offset_cursor` 在订阅内从 0 起按字节
-/// 累加合成 `[start,end)` 游标：每条订阅=一条连续字节流，旧客户端（本地终端/
-/// 移动端）按订阅内连续流做连续性校验，语义降级但自洽（07/09 新路由消除）
 struct OutputBuffer {
     data: Vec<u8>,
     /// 帧内首事件 index（TB v2 帧头 seq 来源）
     start_index: u64,
     end_index: u64,
-    /// 本地 v1 合成游标：订阅内从 0 起按字节累加（07 迁移后删除）
+    /// 合成字节游标：订阅内从 0 起按字节累加（仅 RemoteLegacy base64 JSON 的
+    /// offset 兼容字段使用；07 后本地/新远程均已撤销，待 09 旧移动端下线后删除）
     start_offset: u64,
     end_offset: u64,
     offset_cursor: u64,
@@ -135,7 +109,7 @@ impl OutputBuffer {
     fn append(&mut self, event: &crate::session::OutputEvent) {
         if self.data.is_empty() {
             self.start_index = event.index;
-            // 本批起始 = 订阅内累计字节位置（合成游标，仅 v1 本地通道使用）
+            // 本批起始 = 订阅内累计字节位置（合成游标，仅 RemoteLegacy 使用）
             self.start_offset = self.offset_cursor;
         }
         // 始终更新 end_index 为最新事件的 index
@@ -159,21 +133,11 @@ impl OutputBuffer {
     /// Flush 缓冲区为转发输出
     ///
     /// 文本形态（RemoteLegacy）：合并多条事件时，index 为起始索引，
-    /// end_index 为结束索引，前端可用 end_index 精确更新去重游标
-    /// 二进制形态（LocalV1）：帧携带 [start_offset, end_offset)，客户端校验连续性
+    /// end_index 为结束索引，前端可用 end_index 精确更新去重游标；
+    /// offset 走订阅内合成游标（旧移动端 compat，09 下线后删除）
     /// 二进制形态（RemoteV2）：帧头 seq = 首事件 index + flags 编码事件数（spec §5.3）
     fn flush(&mut self, session_id: &str) -> ForwardOutput {
         match self.format {
-            OutputFormat::LocalV1 => {
-                let frame = encode_output_frame(
-                    self.start_offset,
-                    self.end_offset,
-                    self.last_is_waiting,
-                    &self.data,
-                );
-                self.clear();
-                ForwardOutput::Binary(frame)
-            }
             OutputFormat::RemoteV2 => {
                 let frame = encode_output_frame_v2(
                     self.start_index,
@@ -368,44 +332,6 @@ mod tests {
             timestamp: 0,
             is_waiting: false,
         }
-    }
-
-    /// 帧头布局：magic(2) + version(1) + flags(1) + start(8 LE) + end(8 LE) + payload
-    #[test]
-    fn test_encode_output_frame_header() {
-        let frame = encode_output_frame(100, 106, true, b"hello");
-
-        assert_eq!(&frame[0..2], b"TB");
-        assert_eq!(frame[2], 1); // version
-        assert_eq!(frame[3], BINARY_FRAME_FLAG_WAITING); // is_waiting
-        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 100);
-        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 106);
-        assert_eq!(&frame[20..], b"hello");
-        assert_eq!(frame.len(), BINARY_FRAME_HEADER_LEN + 5);
-    }
-
-    #[test]
-    fn test_encode_output_frame_non_waiting_flag() {
-        let frame = encode_output_frame(0, 1, false, b"x");
-        assert_eq!(frame[3], 0);
-    }
-
-    /// 二进制形态：合并多条事件为一个帧，偏移取订阅内合成游标 [0, 总字节)
-    #[test]
-    fn test_output_buffer_binary_flush_merges_with_offsets() {
-        let mut buf = OutputBuffer::new(OutputFormat::LocalV1);
-        buf.append(&event("s", b"ab", 0));
-        buf.append(&event("s", b"cd", 1));
-        buf.append(&event("s", b"ef", 2));
-
-        let out = buf.flush("s");
-        let ForwardOutput::Binary(frame) = out else {
-            panic!("expected binary frame");
-        };
-        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 0);
-        assert_eq!(u64::from_le_bytes(frame[12..20].try_into().unwrap()), 6);
-        assert_eq!(&frame[20..], b"abcdef");
-        assert!(buf.is_empty()); // flush 后清空
     }
 
     /// 文本形态（移动端兼容）：base64 JSON 携带合成 offset 与 end_index

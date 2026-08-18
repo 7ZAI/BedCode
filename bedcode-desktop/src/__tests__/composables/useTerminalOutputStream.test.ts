@@ -1,8 +1,9 @@
 /**
- * useTerminalOutputStream 单元测试
+ * useTerminalOutputStream 单元测试（07 快照模型）
  *
- * 覆盖核心契约：连接/订阅消息构造、字节游标推进、连续性校验（不变量守护）、
- * reset 裁决清屏回调、订阅确认前的帧缓冲、断线重连自动恢复订阅。
+ * 覆盖核心契约：连接/订阅消息构造、TB v2 帧解析（seq/事件数/len）、
+ * last_rendered_seq 游标推进、seq 缺口检测（快照重订阅）、历史截断清屏
+ * 判定（min_seq > last_rendered_seq + 1）、订阅确认前的帧缓冲、断线重连。
  * WebSocket 与 Tauri invoke 均以 mock 替身模拟。
  */
 
@@ -62,16 +63,17 @@ class MockWebSocket {
     this.onmessage?.({ data: raw })
   }
 
-  binary(bytes: number[], startOffset = 0, endOffset = bytes.length, isWaiting = false) {
-    const buf = new ArrayBuffer(20 + bytes.length)
+  /** TB v2 帧：seq = 帧内首事件 index；flags 高 7 位 = 事件数 - 1；len = 字节数 */
+  binary(bytes: number[], seq = 0, eventCount = 1, isWaiting = false) {
+    const buf = new ArrayBuffer(16 + bytes.length)
     const view = new DataView(buf)
     view.setUint8(0, 0x54)
     view.setUint8(1, 0x42)
-    view.setUint8(2, 1)
-    view.setUint8(3, isWaiting ? 1 : 0)
-    view.setBigUint64(4, BigInt(startOffset), true)
-    view.setBigUint64(12, BigInt(endOffset), true)
-    new Uint8Array(buf, 20).set(bytes)
+    view.setUint8(2, 2)
+    view.setUint8(3, ((eventCount - 1) << 1) | (isWaiting ? 1 : 0))
+    view.setBigUint64(4, BigInt(seq), true)
+    view.setUint32(12, bytes.length, true)
+    new Uint8Array(buf, 16).set(bytes)
     this.onmessage?.({ data: buf })
   }
 
@@ -81,7 +83,8 @@ class MockWebSocket {
   }
 }
 
-function subscribeResponse(mode: 'incremental' | 'reset', minOffset = 0, maxOffset = 0) {
+/** 快照订阅响应：min_seq / max_seq(=snapshot_seq) / history_count */
+function subscribeResponse(minSeq: number, snapshotSeq: number, historyCount: number) {
   return JSON.stringify({
     type: 'terminal',
     payload: {
@@ -93,12 +96,12 @@ function subscribeResponse(mode: 'incremental' | 'reset', minOffset = 0, maxOffs
       payload: {
         action: {
           type: 'subscribe_response',
-          min_seq: 0,
-          max_seq: 5,
-          history_count: 3,
-          mode,
-          min_offset: minOffset,
-          max_offset: maxOffset,
+          min_seq: minSeq,
+          max_seq: snapshotSeq,
+          history_count: historyCount,
+          mode: 'reset',
+          min_offset: 0,
+          max_offset: 0,
         },
       },
     },
@@ -113,7 +116,7 @@ async function flushAsync() {
 
 describe('useTerminalOutputStream', () => {
   let frames: OutputStreamFrame[]
-  let resets: Array<{ mode: string; minOffset: number }>
+  let resets: number
   let truncated: number[]
   let stream: ReturnType<typeof useTerminalOutputStream>
 
@@ -125,18 +128,18 @@ describe('useTerminalOutputStream', () => {
   beforeEach(() => {
     MockWebSocket.instances = []
     frames = []
-    resets = []
+    resets = 0
     truncated = []
     vi.clearAllMocks()
     mockInvoke()
     stream = useTerminalOutputStream({
       onData: (f) => frames.push(f),
-      onReset: (r) => resets.push(r),
+      onReset: () => resets++,
       onTruncated: (m) => truncated.push(m),
     })
   })
 
-  it('连接本地环回端点并以 null 游标订阅（首次全量）', async () => {
+  it('连接本地环回端点并以无参快照订阅（首次全量）', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
@@ -154,51 +157,53 @@ describe('useTerminalOutputStream', () => {
     expect(msg.payload.session_id).toBe('s1')
     expect(msg.payload.token).toBe('')
     expect(msg.payload.timestamp).toEqual(expect.any(Number))
-    expect(msg.payload.payload.action.type).toBe('subscribe')
-    expect(msg.payload.payload.action.start_seq).toBeNull()
+    expect(msg.payload.payload.action).toEqual({ type: 'subscribe' })
   })
 
-  it('incremental 订阅：帧推进游标并逐帧回调', async () => {
+  it('快照订阅：帧推进 last_rendered_seq 并逐帧回调', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('incremental', 0, 100))
+    ws.text(subscribeResponse(0, 5, 3))
 
-    ws.binary([1, 2, 3], 0, 3)
-    ws.binary([4, 5], 3, 5)
-    expect(frames.map((f) => [f.startOffset, f.endOffset, [...f.data]])).toEqual([
-      [0, 3, [1, 2, 3]],
-      [3, 5, [4, 5]],
+    ws.binary([1, 2, 3], 0)
+    ws.binary([4, 5], 1)
+    expect(frames.map((f) => [f.seq, f.lastSeq, [...f.data]])).toEqual([
+      [0, 0, [1, 2, 3]],
+      [1, 1, [4, 5]],
     ])
   })
 
-  it('reset 订阅：触发 onReset 清屏回调，游标重置后从 minOffset 开始回放', async () => {
+  it('TB v2 帧解析：seq / 事件数 / len 字段', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('reset', 40, 100))
+    ws.text(subscribeResponse(0, 5, 3))
 
-    expect(resets).toHaveLength(1)
-    expect(resets[0].minOffset).toBe(40)
-
-    ws.binary([7, 8], 40, 42)
+    // 合并帧：3 事件 seq 7..9 → lastSeq = 9
+    ws.binary([97, 98, 99], 7, 3, true)
     expect(frames).toHaveLength(1)
-    expect(frames[0].startOffset).toBe(40)
+    expect(frames[0].seq).toBe(7)
+    expect(frames[0].eventCount).toBe(3)
+    expect(frames[0].lastSeq).toBe(9)
+    expect(frames[0].isWaiting).toBe(true)
+    expect([...frames[0].data]).toEqual([97, 98, 99])
   })
 
-  it('min_offset > 0 时触发 onTruncated（历史头部被环形淘汰）', async () => {
+  it('min_seq > 0 时触发 onTruncated（历史头部被环形淘汰）', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('reset', 128, 200))
+    ws.text(subscribeResponse(128, 200, 3))
 
     expect(truncated).toEqual([128])
+    expect(resets).toBe(0) // 未截断（128 ≤ null+1），不清屏
   })
 
   it('订阅确认前的回放帧先缓冲，确认后按序交付', async () => {
@@ -209,66 +214,62 @@ describe('useTerminalOutputStream', () => {
     ws.open()
 
     // 帧先于控制消息到达（服务端两条消息路径的竞态）
-    ws.binary([9, 9, 9], 0, 3)
-    ws.binary([8, 8], 3, 5)
+    ws.binary([9, 9, 9], 0)
+    ws.binary([8, 8], 1)
     expect(frames).toHaveLength(0) // 未确认，缓冲
 
-    ws.text(subscribeResponse('incremental', 0, 100))
-    expect(frames.map((f) => [f.startOffset, [...f.data]])).toEqual([
+    ws.text(subscribeResponse(0, 100, 3))
+    expect(frames.map((f) => [f.seq, [...f.data]])).toEqual([
       [0, [9, 9, 9]],
-      [3, [8, 8]],
+      [1, [8, 8]],
     ])
   })
 
-  it('连续性不变量破坏：保留游标按增量重订阅（避免全量重播风暴）', async () => {
+  it('seq 缺口：保留 last_rendered_seq 快照重订阅（无参订阅，重播跳过已渲染）', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('incremental', 0, 100))
+    ws.text(subscribeResponse(0, 100, 3))
 
-    // 正常推进到 5
-    ws.binary([1], 0, 1)
-    ws.binary([2], 1, 2)
-    ws.binary([3], 2, 3)
-    ws.binary([4], 3, 4)
-    ws.binary([5], 4, 5)
+    // 正常推进到 last_rendered_seq=4
+    for (let i = 0; i < 5; i++) {
+      ws.binary([i], i)
+    }
     expect(frames).toHaveLength(5)
 
-    // 违反：帧起点 6 而非 5（服务端背压丢事件 → 字节缺口）
+    // 缺口：帧首 seq 6 ≠ lastRendered(4)+1（事件 5 丢失）→ 快照重订阅
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    ws.binary([9], 6, 7)
+    ws.binary([9], 6)
     expect(errorSpy).toHaveBeenCalled()
     errorSpy.mockRestore()
 
-    // 强制重连：旧连接关闭，新连接建立后自动重新订阅
-    // 游标必须保留（start_seq=5）→ 服务端裁决 incremental，只补缺口；
-    // 置 null 会导致全量重播（mode=Reset），大历史会话下反复重播形成自持风暴
+    // 强制重连：旧连接关闭，新连接建立后自动重新订阅（无参——服务端恒全量重播）
     await flushAsync()
     expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2)
     const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]
     ws2.open()
     expect(ws2.sent).toHaveLength(1)
     const msg = JSON.parse(ws2.sent[0])
-    expect(msg.payload.payload.action.start_seq).toBe(5)
+    expect(msg.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 服务端以 incremental 续传：缺口帧从游标处无缝衔接
-    ws2.text(subscribeResponse('incremental', 0, 100))
-    ws2.binary([6, 7, 8], 5, 8)
-    expect(frames.map((f) => f.endOffset)).toEqual([1, 2, 3, 4, 5, 8])
+    // 快照重播：已渲染部分（seq ≤ 4）跳过，缺口从 seq 5 无缝衔接
+    ws2.text(subscribeResponse(0, 100, 3))
+    ws2.binary([5, 6, 7], 5, 3)
+    expect(frames.map((f) => f.lastSeq)).toEqual([0, 1, 2, 3, 4, 7])
   })
 
-  it('断线自动重连：保留游标并从断点续传', async () => {
+  it('断线自动重连：保留 last_rendered_seq，重播跳过已渲染部分', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
     stream.subscribe()
     ws.open()
-    ws.text(subscribeResponse('incremental', 0, 100))
+    ws.text(subscribeResponse(0, 100, 3))
 
-    ws.binary([1, 2], 0, 2)
-    ws.binary([3], 2, 3)
+    ws.binary([1, 2], 0)
+    ws.binary([3], 1)
 
     // 服务端断线（重连退避 500ms）
     ws.closeFromServer()
@@ -278,15 +279,43 @@ describe('useTerminalOutputStream', () => {
     const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]
     ws2.open()
 
-    // 重连后自动恢复订阅，游标保留为 3
+    // 重连后自动恢复订阅（无参）
     expect(ws2.sent).toHaveLength(1)
     const msg = JSON.parse(ws2.sent[0])
-    expect(msg.payload.payload.action.start_seq).toBe(3)
+    expect(msg.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 续传帧与游标无缝衔接
-    ws2.text(subscribeResponse('incremental', 0, 100))
-    ws2.binary([4, 5], 3, 5)
-    expect(frames.map((f) => f.endOffset)).toEqual([2, 3, 5])
+    // 重播帧 seq 0/1（≤ lastRendered 1）被跳过，seq 2 起继续渲染
+    ws2.text(subscribeResponse(0, 100, 3))
+    ws2.binary([0], 0)
+    ws2.binary([1], 1)
+    ws2.binary([4, 5], 2)
+    expect(frames.map((f) => f.lastSeq)).toEqual([0, 1, 2])
+  })
+
+  it('历史截断：min_seq > last_rendered_seq + 1 → 清屏 + 全量重播', async () => {
+    stream.start('s1')
+    await flushAsync()
+    const ws = MockWebSocket.instances[0]
+    stream.subscribe()
+    ws.open()
+    ws.text(subscribeResponse(0, 100, 3))
+
+    // 已渲染 seq 0、1（lastRenderedSeq = 1）
+    ws.binary([1], 0)
+    ws.binary([2], 1)
+    expect(frames).toHaveLength(2)
+
+    // 重订阅响应 min_seq=200：已渲染区被环形淘汰 → 截断 → 清屏全量重播
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    ws.text(subscribeResponse(200, 300, 3))
+    warnSpy.mockRestore()
+
+    expect(resets).toBe(1) // onReset 清屏
+    expect(truncated).toEqual([200])
+
+    // 重播帧从 min_seq 起：全量渲染（无跳过—— lastRenderedSeq 已重置）
+    ws.binary([200], 200)
+    expect(frames.map((f) => f.lastSeq)).toEqual([0, 1, 200])
   })
 
   it('stop 后不再重连', async () => {

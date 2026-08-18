@@ -199,6 +199,7 @@ impl TerminalWs {
         ctx.run_interval(HEARTBEAT_INTERVAL, move |act, ctx| {
             if Instant::now().duration_since(act.hb) > timeout {
                 tracing::warn!("WebSocket heartbeat timeout for {}", act.session.addr);
+                ctx.close(None);
                 ctx.stop();
                 return;
             }
@@ -384,6 +385,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
             Ok(msg) => msg,
             Err(e) => {
                 tracing::error!(error = %e, "WS protocol error, closing connection");
+                ctx.close(None);
                 ctx.stop();
                 return;
             }
@@ -446,7 +448,9 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
-                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接。
+                    // 显式 close：仅 stop() 时 socket 要等下一个 heartbeat tick 才关闭
+                    ctx.close(None);
                     ctx.stop();
                     return;
                 }
@@ -459,7 +463,9 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
-                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接。
+                    // 显式 close：仅 stop() 时 socket 要等下一个 heartbeat tick 才关闭
+                    ctx.close(None);
                     ctx.stop();
                     return;
                 }
@@ -474,7 +480,9 @@ impl TerminalWs {
                         metrics.inc_ws_sent();
                         ctx.text(json);
                     }
-                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接
+                    // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接。
+                    // 显式 close：仅 stop() 时 socket 要等下一个 heartbeat tick 才关闭
+                    ctx.close(None);
                     ctx.stop();
                     return;
                 }
@@ -560,6 +568,7 @@ impl TerminalWs {
         };
         metrics.inc_ws_sent();
         ctx.text(error.to_json());
+        ctx.close(None);
         ctx.stop();
         false
     }
@@ -576,6 +585,7 @@ impl TerminalWs {
             metrics.inc_ws_sent();
             ctx.text(error.to_json());
             // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
+            ctx.close(None);
             ctx.stop();
             return;
         }
@@ -596,7 +606,10 @@ impl TerminalWs {
                 let error = ServerFrame::Error { code, message };
                 metrics.inc_ws_sent();
                 ctx.text(error.to_json());
-                // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接
+                // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接。
+                // 显式 close：仅 ctx.stop() 时 socket 要等下一个 heartbeat tick 才关闭
+                // （测试实测延迟 5s，偶发更久），close 立即发 Close 帧并关闭 TCP
+                ctx.close(None);
                 ctx.stop();
             }
         }
@@ -1052,6 +1065,7 @@ impl TerminalWs {
                     ctx.text(json);
                 }
                 // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
+                ctx.close(None);
                 ctx.stop();
                 return;
             }
@@ -1090,6 +1104,7 @@ impl TerminalWs {
                     ctx.text(json);
                 }
                 // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接
+                ctx.close(None);
                 ctx.stop();
             }
         }
@@ -1236,14 +1251,15 @@ impl TerminalWs {
         });
 
         // 启动输出转发任务：将 OutputEvent 转为 WS 消息发到 actor
-        // 本地通道 → 二进制帧（桌面端原始字节直通）；远程通道 → base64 JSON（移动端兼容）
+        // 本地通道（桌面 WebView）→ TB v2 二进制帧（07 迁移）；远程旧通道 → base64 JSON（兼容）
         let addr = ctx.address();
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
-        // 通道输出格式：本地环回 TB v1 20B 帧头（07 迁移 TB v2）；远程 base64 JSON（compat）
+        // 通道输出格式：本地环回与 /ws/terminal/session/{id} 同用 TB v2；
+        // 旧 /ws/terminal 远程通道保持 base64 JSON（移动端 compat，P2 迁移后删除）
         let format = if self.local {
-            forward::OutputFormat::LocalV1
+            forward::OutputFormat::RemoteV2
         } else {
             forward::OutputFormat::RemoteLegacy
         };
@@ -1458,6 +1474,7 @@ impl Handler<SessionSubscribeOutcome> for TerminalWs {
                 };
                 crate::server::metrics::MetricsCollector::global().inc_ws_sent();
                 ctx.text(frame.to_json());
+                ctx.close(None);
                 ctx.stop();
             }
         }
@@ -1486,6 +1503,7 @@ impl Handler<SessionAuthOutcome> for TerminalWs {
             metrics.inc_ws_sent();
             ctx.text(frame.to_json());
             // spec §5.1：会话不存在 → 认证通过后 error + 关闭
+            ctx.close(None);
             ctx.stop();
         }
     }

@@ -150,8 +150,8 @@ async fn recv_text_json(recv: &mut WsRecv, what: &str) -> serde_json::Value {
     }
 }
 
-/// 等待连接关闭（服务端 ctx.stop() 后客户端可能收到 Close 帧或流直接结束；
-/// 并行测试负载下时序不保证，两种形态都视为关闭）
+/// 等待连接关闭（服务端 ctx.close+ctx.stop 后客户端收到 Close 帧或流直接结束；
+/// 两种形态都视为关闭）
 async fn expect_ws_close(recv: &mut WsRecv, what: &str) {
     match tokio::time::timeout(Duration::from_secs(5), recv.next()).await {
         Ok(Some(Ok(WsMsg::Close(_)))) => {}
@@ -193,6 +193,7 @@ fn make_test_token(device_id: &str) -> String {
 /// 4. 会话停止 → session_stopped 帧推送
 #[tokio::test]
 async fn session_terminal_route_full_flow() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let port = pick_free_port();
     init_test_app_context().await;
     let (_server_handle, _server_task) = spawn_test_server(port)
