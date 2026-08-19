@@ -30,3 +30,28 @@
 6. 内存稳定性：全程宿主+插件内存增长 ≤ 100MB
 
 不达标时启用文件内分片并发升级路径（HTTP/1.1 内）。
+
+---
+
+# v2.1 服务器归零（全手机发起传输）— 遗留项（2026-08-20，主 agent review 后）
+
+> spec-zero-transfer.md + v2.1-zero-transfer-implementation-plan.md（施工图）已实现阶段①-④ + list 迁移，双轴 code-review（Standards/Spec）已逐条修复。以下为修复后剩余项。
+
+## 待办（按优先级）
+
+### P1 — 代码重构（v2.1 完成后遗留，不阻塞联调）
+- [ ] **desktop 插件 handshake.rs 直连死代码清理**：`list_remote`/`fingerprint*`/`request_transfer`/`create_session`/`query_session` 等手机做 server 时代的 HTTP 直连 helper 已全部移出活跃路径（list 走 WS `filesrv_list_remote`、任务走 intent 驱动）；`commands.rs` 的 `upload_session_id` 旧兼容兜底（约 510/522/1366 行 `handshake::cancel_session/complete_session`，guard 条件保证 v2.1 新任务不触发）与 handshake.rs 需要**独立重构文档**：整体删除直连 helper + 移除 `PeerStore.base_and_auth_for` 残留用法。改动面含插件测试，建议单独工时。
+- [ ] **wire 决策/状态魔法串枚举化**：`direction`（"pull"/"push"）、`decision`（"accepted"/"rejected"）、`state`（"running"/"completed"/...）、`reason`（"duplicate-name"/...）贯穿两端为裸 String + 字面量 switch。wire JSON 层保持 String 是两端契约**正确形态**（勿改为数字），但可做 Rust 内部小枚举 + `#[serde(rename)]` 序列化保持 JSON 形状不变。改动面大（两端 enums + commands + responder + wire 测试），建议独立重构任务。
+- [ ] **default_true / FileTransferIntent / ListEntryDto 双写发散护栏**：两端独立 crate 无法共享定义，属架构必然；若表单字段再次扩展，review 时重点 diff 双端逐字一致性（本已双写 wire 测试）。
+
+### P2 — 真机联调验收（需真机双端，spec §8.3 ↔ §12 性能基准）
+- [ ] **阶段① 手机自主下载/上传**：10GB 级吞吐 ≥ 80% × min(T, D)；30%/60%/90% 中断续传哈希一致（upload 续传已修 Network 分支 session 保留）。
+- [ ] **阶段②③ 审批四场景**：手机自主上传→桌面临时批卡接受/拒绝/超时；桌面 push→手机 ask 确认（accept/reject 策略自动应答走 `filesrv:intent_received` 订阅）/拒绝；pull 免审批信息性通知 + 桌面调批上下文自批准不 403。
+- [ ] **阶段③ 协调者**：传输中手机退后台 30s → 桌面卡「对端离线」；重连后续传不重复字节（download 断点 = 手机本地游标 HEAD size+mtime 双因子；upload 断点 = 桌面 session received）。进度不超 100%（upload 断点历史仅补报一次 + append 内部累计）。
+- [ ] **阶段④ 回归 + APK 对比**：删除 server.rs/actix 后两端 v2 全场景（四 tab/历史/通知 action/duplicate-name/peers）无回归；APK 体积前后对比记录到 map.md。
+- [ ] **list 浏览闭环**：桌面浏览手机共享目录（`filesrv_list_remote` WS 往返 5s 超时）在真机多设备场景验证；手机 announce（port=0/纯挂载公告）后桌面 UI 正常显示共享目录。
+
+### P3 — 已知限制 / 边界
+- 传输层加密 MVP 明文直通（`PassthroughCipher`），密钥协商未实现——未来 AES-GCM 两端同源、方向无关（spec「传输层加密」Out of Scope）。
+- AP 客户端隔离（同网设备不可达）场景 v2.1 整体失效，需回退全 WS 数据面（ADR 0021 已知边界）。
+- 评审 13 的「目录浏览 list」已由本会话补 `FileListRequest/Response` wire 迁移（施工图原未安排，用户拍板）。
