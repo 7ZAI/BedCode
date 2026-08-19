@@ -69,10 +69,6 @@ pub fn run() {
 
             let app_handle = app.handle();
 
-            // 监听前端 terminal_output_activity（前端直连终端 WS 收到输出帧时触发
-            // 插件 TerminalOutput 通知；输出不再经 Rust 中转，见 ticket 09）
-            crate::router::event::init_terminal_output_listener(app_handle);
-
             // 窗口焦点监听（后台/锁屏判定：批量传输请求系统通知用）
             crate::file_service::notify::attach_focus_listener(app_handle);
 
@@ -107,6 +103,12 @@ pub fn run() {
             );
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
+
+            // 监听前端 terminal_output_activity（前端直连终端 WS 收到输出帧时触发
+            // 插件 TerminalOutput 通知；输出不再经 Rust 中转，见 ticket 09）
+            // 必须在 init_plugin_manager 之后注册：内部会取全局插件管理器，
+            // 早于初始化调用会触发 OnceLock panic（PluginManager not initialized）
+            crate::router::event::init_terminal_output_listener(app_handle);
 
             // 异步：解压内置插件 → 初始化 WASM 运行时 → 扫描加载 → 自动激活
             // 使用 tauri::async_runtime::spawn 而非 tokio::spawn，
