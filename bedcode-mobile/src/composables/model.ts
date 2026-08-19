@@ -90,24 +90,6 @@ export interface RemoteSession {
   taskReason?: string
 }
 
-// ==================== Terminal Types ====================
-
-/** 终端输出事件 */
-export interface TerminalOutputEvent {
-  session_id: string
-  data: string
-  is_waiting: boolean
-  index: number
-  timestamp: number
-}
-
-/** 终端增量输出 */
-export interface TerminalIncrementalOutput {
-  events: TerminalOutputEvent[]
-  current_index: number
-  is_initial: boolean
-}
-
 // ==================== Preset Task Types ====================
 
 /** 预设任务执行状态（见 presetTaskState） */

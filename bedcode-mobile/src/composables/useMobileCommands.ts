@@ -15,9 +15,8 @@ import type {
   AuthState,
   SessionInfo,
   RemoteSession,
-  TerminalOutputEvent,
-  TerminalIncrementalOutput,
 } from './model'
+
 export type {
   ConnectionStatus,
   RemoteDevice,
@@ -26,8 +25,6 @@ export type {
   AuthState,
   SessionInfo,
   RemoteSession,
-  TerminalOutputEvent,
-  TerminalIncrementalOutput,
 }
 
 // ==================== WebSocket Connection Commands ====================
@@ -172,33 +169,6 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
 }
 
 /**
- * 订阅会话，开始接收该会话的输出
- *
- * @param sessionId - 会话 ID
- * @param startSeq - 起始字节游标，不指定则全量重播；用于断线重连从断点继续
- * @returns 订阅响应信息，含服务端裁决 mode（incremental 续传 / reset 全量重播）
- */
-export async function wsJoinSession(sessionId: string, startSeq?: number): Promise<{
-  minSeq: number
-  maxSeq: number
-  historyCount: number
-  mode: 'incremental' | 'reset'
-  minOffset: number
-  maxOffset: number
-}> {
-  console.log('[wsJoinSession] sessionId=' + sessionId + ', startSeq=' + startSeq)
-  return await invoke('ws_subscribe_session', { sessionId, startSeq: startSeq ?? null })
-}
-
-/**
- * 取消订阅会话，停止接收该会话的输出
- */
-export async function wsLeaveSession(sessionId: string): Promise<void> {
-  console.log('[wsLeaveSession] sessionId=' + sessionId)
-  return await invoke('ws_leave_session', { sessionId })
-}
-
-/**
  * 获取终端 WS 直连信息（09：前端直连桌面端终端会话路由）
  *
  * 返回完整 URL 与 JWT；token 仅供建连使用，禁止持久化
@@ -286,50 +256,6 @@ export async function keepScreenAwake(enabled: boolean): Promise<void> {
   return await invoke('keep_screen_awake', { enabled })
 }
 
-// ==================== Terminal Commands ====================
-
-/**
- * 订阅终端（记录当前索引位置，用于增量获取）
- */
-export async function wsSubscribeTerminal(sessionId: string): Promise<number> {
-  return await invoke('ws_subscribe_terminal', { sessionId })
-}
-
-/**
- * 取消订阅终端
- */
-export async function wsUnsubscribeTerminal(sessionId: string): Promise<void> {
-  return await invoke('ws_unsubscribe_terminal', { sessionId })
-}
-
-/**
- * 获取增量输出（自上次获取之后的新数据）
- */
-export async function wsGetTerminalIncremental(sessionId: string): Promise<TerminalIncrementalOutput | null> {
-  return await invoke('ws_get_terminal_incremental', { sessionId })
-}
-
-/**
- * 更新订阅者的索引位置（在增量数据消费后调用）
- */
-export async function wsUpdateTerminalIndex(sessionId: string, index: number): Promise<void> {
-  return await invoke('ws_update_terminal_index', { sessionId, index })
-}
-
-/**
- * 清空终端缓冲区
- */
-export async function wsClearTerminalBuffer(sessionId: string): Promise<void> {
-  return await invoke('ws_clear_terminal_buffer', { sessionId })
-}
-
-/**
- * 清除所有终端缓冲区（断开连接时调用）
- */
-export async function wsClearAllTerminalBuffers(): Promise<void> {
-  return await invoke('ws_clear_all_terminal_buffers')
-}
-
 // ==================== Event Listeners ====================
 
 let unlistenConnecting: UnlistenFn | null = null
@@ -343,7 +269,6 @@ let unlistenPairingVerified: UnlistenFn | null = null
 let unlistenError: UnlistenFn | null = null
 let unlistenServerClosed: UnlistenFn | null = null
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
-let unlistenOutput: UnlistenFn | null = null
 
 // 同步事件监听器
 let unlistenSyncSessionCreated: UnlistenFn | null = null
@@ -385,7 +310,6 @@ export async function initMobileEventListeners(callbacks: {
   onError?: (message: string) => void
   onServerClosed?: (reason: string) => void
   onUnexpectedDisconnect?: (reason: string) => void
-  onOutput?: (data: any) => void
   // 同步事件回调
   onSyncSessionCreated?: (data: { session: any; source_device: string }) => void
   onSyncSessionStatusChanged?: (data: { session_id: string; old_status: string; new_status: string; session_name: string }) => void
@@ -436,9 +360,6 @@ export async function initMobileEventListeners(callbacks: {
     unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
       callbacks.onUnexpectedDisconnect?.(event.payload.reason)
     })
-  }
-  if (callbacks.onOutput) {
-    unlistenOutput = await listen('ws_output', callbacks.onOutput)
   }
 
   // 初始化同步事件监听
@@ -515,7 +436,6 @@ export function cleanupMobileEventListeners() {
   unlistenError?.()
   unlistenServerClosed?.()
   unlistenUnexpectedDisconnect?.()
-  unlistenOutput?.()
   // 清理同步事件监听
   unlistenSyncSessionCreated?.()
   unlistenSyncSessionStatusChanged?.()
@@ -565,14 +485,6 @@ export function useMobileCommands() {
     // Message
     wsSendMessage,
     wsSendAndWait,
-
-    // Terminal (Rust-managed buffer)
-    wsSubscribeTerminal,
-    wsUnsubscribeTerminal,
-    wsGetTerminalIncremental,
-    wsUpdateTerminalIndex,
-    wsClearTerminalBuffer,
-    wsClearAllTerminalBuffers,
 
     // Android-specific
     setScreenOrientation,

@@ -6,7 +6,6 @@
  */
 
 export * from './auth'
-export * from './terminal'
 export * from './session'
 export * from './sync'
 export * from './file_service'
