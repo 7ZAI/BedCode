@@ -152,12 +152,12 @@ function onBeforeUnload() {
       <button
         v-for="tab in baseTabs"
         :key="tab.key"
-        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
+        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-[var(--font-size-sm)] transition-colors duration-200"
         :class="isBaseTabActive(tab.key) ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'"
         @click="switchTab(tab.key)"
       >
-        <span v-if="isSvgIcon(tab.icon)" class="w-5 h-5 flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+        <span v-if="isSvgIcon(tab.icon)" class="w-6 h-6 flex items-center justify-center">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6">
             <path :d="tab.icon" />
           </svg>
         </span>
@@ -171,12 +171,12 @@ function onBeforeUnload() {
       <button
         v-for="entry in navTabs"
         :key="entry.pluginId + entry.tab.id"
-        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors duration-200"
+        class="relative flex-1 min-w-0 flex flex-col items-center justify-center gap-1 pt-2.5 pb-2 text-[var(--font-size-sm)] transition-colors duration-200"
         :class="isNavTabActive(entry.pluginId, entry.tab.id) ? 'text-[var(--mobile-accent)]' : 'text-[var(--mobile-text-muted)]'"
         @click="openNavTab(entry.pluginId, entry.tab.id)"
       >
-        <span v-if="isSvgIcon(entry.tab.icon)" class="w-5 h-5 flex items-center justify-center">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-5 h-5">
+        <span v-if="isSvgIcon(entry.tab.icon)" class="w-6 h-6 flex items-center justify-center">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-6 h-6">
             <path :d="entry.tab.icon" />
           </svg>
         </span>

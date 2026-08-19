@@ -8,7 +8,7 @@
       <button
         v-for="item in navItems"
         :key="item.pageIndex"
-        class="flex flex-col items-center gap-0.5 px-4 pt-1.5 pb-1 rounded-xl transition-colors relative"
+        class="flex flex-col items-center gap-1 px-4 pt-2.5 pb-2 rounded-xl transition-colors relative min-h-[var(--mobile-nav-item-height)]"
         :class="[
           currentPage === item.pageIndex
             ? 'text-[var(--mobile-nav-active)]'
@@ -20,11 +20,11 @@
         <!-- 激活态顶部指示条：与图标严格等宽同轴（left/right 锚定 + margin auto，不依赖 transform 精度） -->
         <span
           v-if="currentPage === item.pageIndex"
-          class="absolute top-0 left-0 right-0 mx-auto w-[22px] h-[2px] rounded-full"
+          class="absolute top-0 left-0 right-0 mx-auto w-6 h-[2px] rounded-full"
           style="background: var(--mobile-nav-active)"
         ></span>
         <span class="relative flex-shrink-0">
-          <component :is="item.icon" class="w-[22px] h-[22px]" />
+          <component :is="item.icon" class="w-6 h-6" />
           <!-- 插件 tab 绿点：锚定图标右上角（随图标，不随 label 宽度漂移） -->
           <span
             v-if="item.isPlugin"
@@ -32,7 +32,7 @@
             style="background: var(--mobile-chip-emerald)"
           ></span>
         </span>
-        <span class="text-xs" :class="currentPage === item.pageIndex ? 'font-semibold' : 'font-medium'">{{ item.label }}</span>
+        <span class="text-[var(--font-size-sm)]" :class="currentPage === item.pageIndex ? 'font-semibold' : 'font-medium'">{{ item.label }}</span>
       </button>
     </div>
   </nav>
