@@ -222,6 +222,7 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
 - `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、OcrModelExtractorPlugin.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、CameraPlugin.kt、OcrImageDecoder.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、key.properties、keystore、drawable 资源；jniLibs 的 `libonnxruntime.so`（OCR 插件运行时 dlopen）重建后执行 `sh bedcode-mobile/scripts/fetch-ort-android.sh` 恢复（离线可从已构建 APK 的 lib/<abi>/ 提取）
+- **Android 签名唯一真源**：仓库根 `bedcode.keystore`（alias `bedcode`，密码 `bedcode123`，证书 SHA-256 `A8:5E:2F:1B:C5:...` = GitHub release 与 ANDROID_KEY_BASE64 secret 所用）。`gen/android/` 与 `android-backup/` 下的 `bedcode-keystore.jks` / `bedcode.keystore` 必须是该证书的副本（历史上曾混入两套错误证书，导致本地打包与已安装版「签名不一致」无法覆盖升级）；*勿用其他 keystore 文件签名发布版*——更换签名证书会让所有已安装用户只能卸载重装。验证：`keytool -list -v -keystore <file> -storepass bedcode123 | grep SHA256` 须为 `A8:5E:2F:1B...`
 
 ---
 
@@ -266,6 +267,10 @@ sh scripts/doc-tracking.sh untrack && git commit
 ## Git Rules
 
 **禁止在 commit message 中添加 `Co-Authored-By: Claude ...` 行。**
+
+**禁止将 `dev` 分支推送到远程仓库（`git push origin dev` / `git push -u origin dev`）。**
+
+远程仓库仅维护发布线：master（发布）与 uat（预发布）等。dev / feature 分支仅存在于本地，用于日常开发与合并，**绝不上推**。需要把某改动发布到远程时：先确认该改动属于任务范围，再按需合并到 master（或 uat）并只推送该发布分支。若本地存在 `origin/dev` 之类的远程 dev 分支残留（如历史遗留或误推），不得继续在该分支上 push，先与用户确认处理方式。
 
 ### 文件回滚规范（强制）
 

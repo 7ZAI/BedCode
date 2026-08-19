@@ -60,18 +60,18 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>AI Chatbox</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>AI&nbsp;Chatbox</strong></td>
+<td>1.0.0-beta</td>
 <td>AI 大模型对话：接入任意 OpenAI 兼容供应商（OpenAI / Anthropic / DeepSeek / 通义千问），流式对话、多会话管理、JSONL 对话日志落盘</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>Auto Task</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>Auto&nbsp;Task</strong></td>
+<td>1.0.0-beta</td>
 <td>Agent 任务队列与自动化执行：适配 Claude Code / pi / opencode / Codex；提供任务状态、任务队列调度、预设任务、定时任务与历史统计；agent 请求授权时自动放行等功能</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>File Transfer</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>File&nbsp;Transfer</strong></td>
+<td>1.0.0-beta</td>
 <td>内网文件传输：在线对端发现与切换、远程目录浏览、多任务并发传输（暂停 / 恢复 / 断点续传 / 失败重试），支持本地目录挂载供对端访问</td>
 </tr>
 </tbody>
@@ -134,12 +134,12 @@ flowchart LR
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>桌面端</strong></td>
+<td><strong>桌面端</strong></td>
 <td>会话管理器、终端预览、服务器视图、插件配置</td>
 <td>PTY、Actix Web（HTTP + WS）、会话管理、WASM 插件系统、mDNS 广播</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>移动端</strong></td>
+<td><strong>移动端</strong></td>
 <td>终端视图、代码浏览器、预设任务、工具箱、设备发现</td>
 <td>WS/HTTP 客户端、远程连接与路由、文件服务、mDNS 发现</td>
 </tr>
@@ -155,17 +155,17 @@ flowchart LR
 <tr><th align="left">分类</th><th align="left">技术</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">框架</td><td>Tauri 2.0（桌面端 Windows / 移动端 Android）</td></tr>
-<tr><td style="white-space:nowrap">前端</td><td>Vue 3 + TypeScript + Vite</td></tr>
-<tr><td style="white-space:nowrap">样式</td><td>TailwindCSS，状态管理 Pinia + vue-router</td></tr>
-<tr><td style="white-space:nowrap">后端</td><td>Rust（Tokio 异步运行时），Actix Web 4 + tokio-tungstenite</td></tr>
-<tr><td style="white-space:nowrap">数据库</td><td>SQLite（rusqlite）</td></tr>
-<tr><td style="white-space:nowrap">终端</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
-<tr><td style="white-space:nowrap">认证</td><td>JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹</td></tr>
-<tr><td style="white-space:nowrap">加密</td><td>X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS</td></tr>
-<tr><td style="white-space:nowrap">设备发现</td><td>mDNS（mdns-sd）</td></tr>
-<tr><td style="white-space:nowrap">插件系统</td><td>wasmtime（WASM 组件运行时）</td></tr>
-<tr><td style="white-space:nowrap">其他</td><td>shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志</td></tr>
+<tr><td>框架</td><td>Tauri 2.0（桌面端 Windows / 移动端 Android）</td></tr>
+<tr><td>前端</td><td>Vue 3 + TypeScript + Vite</td></tr>
+<tr><td>样式</td><td>TailwindCSS，状态管理 Pinia + vue-router</td></tr>
+<tr><td>后端</td><td>Rust（Tokio 异步运行时），Actix Web 4 + tokio-tungstenite</td></tr>
+<tr><td>数据库</td><td>SQLite（rusqlite）</td></tr>
+<tr><td>终端</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
+<tr><td>认证</td><td>JWT（jsonwebtoken HS256）、ECDSA 生物凭证（p256）、设备指纹</td></tr>
+<tr><td>加密</td><td>X25519 ECDH + AES-256-GCM（HKDF 派生）、ChaCha20-Poly1305、RSA-OAEP/PSS</td></tr>
+<tr><td>设备发现</td><td>mDNS（mdns-sd）</td></tr>
+<tr><td>插件系统</td><td>wasmtime（WASM 组件运行时）</td></tr>
+<tr><td>其他</td><td>shiki（代码高亮）、ECharts（指标仪表盘）、qrcode / html5-qrcode、vue-i18n@9、tracing 日志</td></tr>
 </tbody>
 </table>
 
@@ -184,10 +184,10 @@ flowchart LR
 <tr><th align="left">平台</th><th align="center">桌面端</th><th align="center">移动端</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">Windows</td><td align="center">✔</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">Android</td><td align="center">—</td><td align="center">✔</td></tr>
-<tr><td style="white-space:nowrap">macOS / Linux</td><td align="center">预留</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">iOS</td><td align="center">—</td><td align="center">预留</td></tr>
+<tr><td>Windows</td><td align="center">✔</td><td align="center">—</td></tr>
+<tr><td>Android</td><td align="center">—</td><td align="center">✔</td></tr>
+<tr><td>macOS&nbsp;/&nbsp;Linux</td><td align="center">预留</td><td align="center">—</td></tr>
+<tr><td>iOS</td><td align="center">—</td><td align="center">预留</td></tr>
 </tbody>
 </table>
 

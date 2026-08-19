@@ -59,18 +59,18 @@ The mobile app connects to the desktop host:
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>AI Chatbox</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>AI&nbsp;Chatbox</strong></td>
+<td>1.0.0-beta</td>
 <td>LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>Auto Task</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>Auto&nbsp;Task</strong></td>
+<td>1.0.0-beta</td>
 <td>Agent task queue &amp; auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset &amp; scheduled tasks, history statistics; auto-approves agent permission requests</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>File Transfer</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>File&nbsp;Transfer</strong></td>
+<td>1.0.0-beta</td>
 <td>LAN file transfer: online peer discovery &amp; switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers</td>
 </tr>
 </tbody>
@@ -129,12 +129,12 @@ flowchart LR
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>Desktop</strong></td>
+<td><strong>Desktop</strong></td>
 <td>Session manager, terminal preview, server view, plugin config</td>
 <td>PTY, Actix Web (HTTP + WS), session management, WASM plugin system, mDNS advertisement</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>Mobile</strong></td>
+<td><strong>Mobile</strong></td>
 <td>Terminal view, code explorer, preset tasks, toolbox, device discovery</td>
 <td>WS/HTTP client, remote connection &amp; routing, file service, mDNS discovery</td>
 </tr>
@@ -150,17 +150,17 @@ Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API**
 <tr><th align="left">Category</th><th align="left">Technology</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">Framework</td><td>Tauri 2.0 (Windows desktop / Android mobile)</td></tr>
-<tr><td style="white-space:nowrap">Frontend</td><td>Vue 3 + TypeScript + Vite</td></tr>
-<tr><td style="white-space:nowrap">Styling</td><td>TailwindCSS, state management with Pinia + vue-router</td></tr>
-<tr><td style="white-space:nowrap">Backend</td><td>Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite</td></tr>
-<tr><td style="white-space:nowrap">Database</td><td>SQLite (rusqlite)</td></tr>
-<tr><td style="white-space:nowrap">Terminal</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
-<tr><td style="white-space:nowrap">Auth</td><td>JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint</td></tr>
-<tr><td style="white-space:nowrap">Crypto</td><td>X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS</td></tr>
-<tr><td style="white-space:nowrap">Discovery</td><td>mDNS (mdns-sd)</td></tr>
-<tr><td style="white-space:nowrap">Plugin System</td><td>wasmtime (WASM component runtime)</td></tr>
-<tr><td style="white-space:nowrap">Other</td><td>shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging</td></tr>
+<tr><td>Framework</td><td>Tauri 2.0 (Windows desktop / Android mobile)</td></tr>
+<tr><td>Frontend</td><td>Vue 3 + TypeScript + Vite</td></tr>
+<tr><td>Styling</td><td>TailwindCSS, state management with Pinia + vue-router</td></tr>
+<tr><td>Backend</td><td>Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite</td></tr>
+<tr><td>Database</td><td>SQLite (rusqlite)</td></tr>
+<tr><td>Terminal</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
+<tr><td>Auth</td><td>JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint</td></tr>
+<tr><td>Crypto</td><td>X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS</td></tr>
+<tr><td>Discovery</td><td>mDNS (mdns-sd)</td></tr>
+<tr><td>Plugin System</td><td>wasmtime (WASM component runtime)</td></tr>
+<tr><td>Other</td><td>shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging</td></tr>
 </tbody>
 </table>
 
@@ -177,10 +177,10 @@ Get the latest installer from the GitHub release page, then install it.
 <tr><th align="left">Platform</th><th align="center">Desktop</th><th align="center">Mobile</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">Windows</td><td align="center">✔</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">Android</td><td align="center">—</td><td align="center">✔</td></tr>
-<tr><td style="white-space:nowrap">macOS / Linux</td><td align="center">Planned</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">iOS</td><td align="center">—</td><td align="center">Planned</td></tr>
+<tr><td>Windows</td><td align="center">✔</td><td align="center">—</td></tr>
+<tr><td>Android</td><td align="center">—</td><td align="center">✔</td></tr>
+<tr><td>macOS&nbsp;/&nbsp;Linux</td><td align="center">Planned</td><td align="center">—</td></tr>
+<tr><td>iOS</td><td align="center">—</td><td align="center">Planned</td></tr>
 </tbody>
 </table>
 
