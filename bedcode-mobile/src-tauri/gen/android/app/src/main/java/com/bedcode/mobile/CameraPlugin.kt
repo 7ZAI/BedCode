@@ -24,7 +24,8 @@ import java.io.File
  *
  * ACTION_IMAGE_CAPTURE + FileProvider 输出 URI（app cache ocr/camera_<ts>.jpg；
  * authority = <package>.fileprovider，AndroidManifest 已声明且 file_paths.xml
- * 含 cache-path 覆盖）。CAMERA 运行时权限用 Tauri @Permission 机制：
+ * 含 cache-path 覆盖）。CAMERA 运行时权限用 Tauri 内嵌声明（@TauriPlugin(permissions =
+ * [@Permission(...)])，getPermissionState 只扫描该参数）：
  * 未授权时 requestPermissionForAlias 弹系统权限框，经 @PermissionCallback
  * 回调 onCameraPermission 判定；拒绝 → reject 明确错误（前端可提示去设置，
  * 不重复弹窗）。
@@ -38,8 +39,18 @@ import java.io.File
  * 名作 HashMap key，同名互相覆盖，见 android_plugins.rs 模块注释与 spec §5.3）。
  * gen/android 重建恢复清单：本文件须恢复（参见 AGENTS.md「Android」节）。
  */
-@Permission(strings = [Manifest.permission.CAMERA], alias = "camera")
-@TauriPlugin
+// 权限必须以 @TauriPlugin(permissions = [...]) 内嵌声明，tauri 运行时只读
+// @TauriPlugin 注解的 permissions 参数（getPermissionStates 遍历 annotation.permissions）；
+// 类上独立标注的 @Permission 不会被扫描 → getPermissionState(alias) 返回 null、
+// requestPermissionForAlias 静默失败（invoke 永不 resolve），写法参照 TaskNotificationPlugin。
+@TauriPlugin(
+    permissions = [
+        Permission(
+            strings = [Manifest.permission.CAMERA],
+            alias = "camera",
+        ),
+    ],
+)
 class CameraPlugin(private val activity: Activity) : Plugin(activity) {
 
     companion object {

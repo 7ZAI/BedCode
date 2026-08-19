@@ -100,17 +100,25 @@ pub fn onnxruntime_so_path(native_lib_dir: &str) -> std::path::PathBuf {
     Path::new(native_lib_dir).join("libonnxruntime.so")
 }
 
-/// 探测 onnxruntime .so 完整路径：Android 经 Kotlin 桥拿 nativeLibraryDir；
-/// 其他平台（桌面 dev）None → 恒可用兑底
+/// 探测 onnxruntime .so 完整路径：Android 优先经 Kotlin 桥从 APK 提取副本到 dataDir
+/// （extractNativeLibs=false 时 nativeLibraryDir 无真实文件，dlopen 需要文件系统路径），
+/// 提取失败则兑底 nativeLibraryDir 路径；其他平台（桌面 dev）None → 恒可用兑底
 pub async fn probe_onnxruntime_so(app_handle: &tauri::AppHandle) -> Option<PathBuf> {
     #[cfg(target_os = "android")]
     {
         let _ = app_handle;
-        match crate::plugin::android_plugins::native_library_dir().await {
-            Ok(dir) => Some(onnxruntime_so_path(&dir)),
+        match crate::plugin::android_plugins::ensure_native_lib().await {
+            Ok(path) => Some(path),
             Err(e) => {
-                tracing::warn!("probe onnxruntime .so: native_library_dir failed: {}", e);
-                None
+                tracing::warn!("probe onnxruntime .so: ensure_native_lib failed: {}", e);
+                // 兑底：系统解压场景（旧安装包/extractNativeLibs=true）直查 nativeLibraryDir
+                match crate::plugin::android_plugins::native_library_dir().await {
+                    Ok(dir) => Some(onnxruntime_so_path(&dir)),
+                    Err(e) => {
+                        tracing::warn!("probe onnxruntime .so: native_library_dir failed: {}", e);
+                        None
+                    }
+                }
             }
         }
     }

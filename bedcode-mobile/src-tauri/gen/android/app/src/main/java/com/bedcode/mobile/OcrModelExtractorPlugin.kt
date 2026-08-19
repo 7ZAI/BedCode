@@ -1,6 +1,7 @@
 package com.bedcode.mobile
 
 import android.app.Activity
+import android.os.Build
 import android.util.Log
 import app.tauri.annotation.Command
 import app.tauri.annotation.InvokeArg
@@ -11,6 +12,7 @@ import app.tauri.plugin.Plugin
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.util.zip.ZipFile
 
 /**
  * OCR 模型惰性解压（PP-OCRv4 ONNX → dataDir/ocr_models/）
@@ -58,6 +60,45 @@ class OcrModelExtractorPlugin(private val activity: Activity) : Plugin(activity)
     }
 
     /**
+     * 确保 libonnxruntime.so 在文件系统上可 dlopen：从 APK 提取到 dataDir（幂等）。
+     *
+     * 现代 Android（targetSdk 31+，64 位 app）默认 extractNativeLibs=false，APK 内 .so
+     * 为 uncompressed（Stored），安装时**不会**解压到 nativeLibraryDir，而 Rust 侧的
+     * ort::init_from 走原生 dlopen，必须拿到真实文件路径。故从 APK（sourceDir 的 ZipFile）
+     * 提取一份到 dataDir 根目录，与 OCR 模型解压同思路；幂等：目标存在且大小一致则跳过。
+     * 返回最终可用路径（所有 ABI 均无该条目时回退 nativeLibraryDir 路径）。
+     */
+    @Command
+    fun ensureNativeLib(invoke: Invoke) {
+        val result = JSObject()
+        try {
+            result.put("path", extractNativeLib())
+        } catch (e: Exception) {
+            Log.e(TAG, "ensureNativeLib failed", e)
+            result.put("error", e.message ?: "Unknown error")
+        }
+        invoke.resolve(result)
+    }
+
+    /** 从 APK 提取 lib/<abi>/<NATIVE_LIB_NAME> 到 dataDir；幂等跳过，返回最终路径 */
+    private fun extractNativeLib(): String {
+        val dest = File(activity.dataDir, NATIVE_LIB_NAME)
+        val apkPath = activity.applicationInfo.sourceDir
+        ZipFile(apkPath).use { zip ->
+            for (abi in Build.SUPPORTED_ABIS) {
+                val entry = zip.getEntry("lib/$abi/$NATIVE_LIB_NAME") ?: continue
+                if (dest.isFile && dest.length() == entry.size) return dest.absolutePath
+                zip.getInputStream(entry).use { ins ->
+                    FileOutputStream(dest).use { out -> ins.copyTo(out) }
+                }
+                Log.i(TAG, "Extracted native lib $NATIVE_LIB_NAME ($abi) -> ${dest.absolutePath}")
+                return dest.absolutePath
+            }
+        }
+        return File(activity.applicationInfo.nativeLibraryDir, NATIVE_LIB_NAME).absolutePath
+    }
+
+    /**
      * 解压三模型；幂等：版本标记匹配且全部 .onnx 在目标目录时跳过。
      * 惰性语义在 Rust 侧（models_present 才调用），此处再做文件级校验兜底。
      */
@@ -98,5 +139,8 @@ class OcrModelExtractorPlugin(private val activity: Activity) : Plugin(activity)
 
         /** 模型数据目录名（与 Rust ocr::models::MODELS_DIR_NAME 一致，位于 app_data_dir 下） */
         const val MODELS_DIR_NAME = "ocr_models"
+
+        /** onnxruntime 动态库文件名（与 Rust ocr::engine::onnxruntime_so_path 一致） */
+        const val NATIVE_LIB_NAME = "libonnxruntime.so"
     }
 }

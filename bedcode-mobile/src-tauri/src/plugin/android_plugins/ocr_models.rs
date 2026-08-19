@@ -73,6 +73,37 @@ pub async fn extract_ocr_models(_app_version: &str) -> crate::Result<u32> {
     Ok(0)
 }
 
+/// 确保 libonnxruntime.so 在文件系统上可 dlopen：调 Kotlin 从 APK 提取副本到 dataDir。
+///
+/// extractNativeLibs=false（targetSdk 31+ 默认）时 nativeLibraryDir 下没有解压文件，
+/// 而 Rust 侧 ort::init_from 走原生 dlopen 需要真实路径；提取幂等，返回最终可用路径。
+#[cfg(target_os = "android")]
+pub async fn ensure_native_lib() -> crate::Result<std::path::PathBuf> {
+    let handle = PLUGIN_HANDLE.get().ok_or_else(|| {
+        crate::AppError::Plugin("OcrModelExtractorPlugin not registered".to_string())
+    })?;
+    let response: serde_json::Value = handle
+        .run_mobile_plugin_async("ensureNativeLib", serde_json::json!({}))
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke ensureNativeLib: {}", e))
+        })?;
+    response
+        .get("path")
+        .and_then(|p| p.as_str())
+        .map(std::path::PathBuf::from)
+        .ok_or_else(|| {
+            crate::AppError::Plugin("ensureNativeLib: missing 'path' in response".to_string())
+        })
+}
+
+#[cfg(not(target_os = "android"))]
+pub async fn ensure_native_lib() -> crate::Result<std::path::PathBuf> {
+    Err(crate::AppError::Plugin(
+        "ensure_native_lib is android-only".to_string(),
+    ))
+}
+
 #[cfg(not(target_os = "android"))]
 pub async fn native_library_dir() -> crate::Result<String> {
     Err(crate::AppError::Plugin(
