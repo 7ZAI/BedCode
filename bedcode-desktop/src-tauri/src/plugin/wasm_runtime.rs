@@ -46,6 +46,15 @@ const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 /// 单插件表元素上限
 const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
 
+/// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
+pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_string())
+}
+
 // ==================== Async Blocking Helper ====================
 
 /// 在同步上下文中执行 async 闭包，兼容多线程和 current_thread 运行时
@@ -71,6 +80,18 @@ thread_local! {
     /// 当前线程是否已处于 block_in_place 让出后的阻塞上下文
     static IN_BLOCK_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
+
+/// 无当前 runtime handle 的线程（spawn_blocking / 纯 std 线程）执行 block_on 时
+/// 的全局收益运行时：与 wasmtime-wasi 的 ambient runtime 同策略，供宿主函数在
+/// 无 handle 线程上仍可阻塞执行（WASI 预打开模式下插件调用跑在阻塞线程上）
+static AMBIENT_RT: std::sync::LazyLock<tokio::runtime::Runtime> =
+    std::sync::LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .worker_threads(4)
+            .build()
+            .expect("create ambient tokio runtime")
+    });
 
 /// 重入标志的 RAII 守卫：作用域退出（含 block_in_place panic 穿透）时复位标志，
 /// 避免线程残留 `true` 导致后续调用恒走新线程路径（正确但多一次线程切换）
@@ -98,7 +119,14 @@ where
     F: std::future::Future<Output = R> + Send,
     R: Send + 'static,
 {
-    let handle = tokio::runtime::Handle::current();
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        // 无当前 runtime 上下文（spawn_blocking 阻塞线程 / 纯 std 线程）：
+        // 在全局 ambient multi-thread 运行时上阻塞执行。
+        // 与 wasmtime-wasi 的 ambient runtime 同策略——这是 WASI 预打开模式的关键：
+        // 插件调用被搬到无 handle 线程后，wasi 同步绑定（in_tokio）走其自身 ambient
+        // runtime，宿主函数经此 ambient runtime 阻塞执行，两者互不冲突。
+        return AMBIENT_RT.block_on(fut);
+    };
     match handle.runtime_flavor() {
         tokio::runtime::RuntimeFlavor::MultiThread => {
             if let Some(_guard) = BlockInPlaceGuard::enter() {
@@ -128,7 +156,19 @@ where
     }
 }
 
-/// WASM 插件运行时（全局共享）
+/// 在全局 ambient runtime 上同步阻塞驱动 future（供无 handle 的阻塞线程使用）
+///
+/// 与 [`block_on_async`] 的 ambient 兜底同 runtime，但**不要求** future/
+/// 输出满足 `'static`——仅同步驱动当前 future 并返回结果，不把 future
+/// 交给其它执行器接管。`run_guest_call` 在 `spawn_blocking` 线程驱动 tokio
+/// Mutex 锁获取用（借用闭包内 Arc，无法满足 `'static` 约束）。
+pub(crate) fn block_on_ambient<F>(fut: F) -> F::Output
+where
+    F: std::future::Future + Send,
+{
+    AMBIENT_RT.block_on(fut)
+}
+
 ///
 /// Engine 和 Linker 是线程安全的可复用结构：
 /// - Engine: WASM 编译器，全局单例
@@ -160,6 +200,38 @@ pub struct WasmPluginState {
     plugin_id: String,
     /// 宿主上下文（注入宿主能力）
     host_ctx: Arc<WasmHostContext>,
+    /// WASI preview2 上下文（预打开目录见 component.rs `resolve_preopen_dir`；
+    /// 未开启自身文件访问的插件为空上下文，不干扰现有 host_fs 路径）
+    wasi_ctx: wasmtime_wasi::WasiCtx,
+    /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）
+    wasi_table: wasmtime::component::ResourceTable,
+}
+
+impl WasmPluginState {
+    /// 构建插件状态（wasi_ctx 由调用方按插件配置构建，见 component.rs）
+    pub(crate) fn new(
+        plugin_id: String,
+        host_ctx: Arc<WasmHostContext>,
+        wasi_ctx: wasmtime_wasi::WasiCtx,
+    ) -> Self {
+        Self {
+            plugin_id,
+            host_ctx,
+            wasi_ctx,
+            wasi_table: wasmtime::component::ResourceTable::new(),
+        }
+    }
+}
+
+/// WASI preview2 视图：`p2::add_to_linker_sync` 通过此 trait 访问每个
+/// 插件实例的 WasiCtx + ResourceTable（linker 共享、ctx 每实例）
+impl wasmtime_wasi::WasiView for WasmPluginState {
+    fn ctx(&mut self) -> wasmtime_wasi::WasiCtxView<'_> {
+        wasmtime_wasi::WasiCtxView {
+            ctx: &mut self.wasi_ctx,
+            table: &mut self.wasi_table,
+        }
+    }
 }
 
 /// 插件实例资源限制器
@@ -1083,6 +1155,196 @@ mod tests {
             &std::fs::read(&module_path)
                 .expect("Failed to read SDK test component after build"),
         )
+    }
+
+    /// 构建 wasm32-wasip2 测试组件（WASI preopen E2E 用）
+    ///
+    /// 与其它测试组件不同：目标为 WASI preview2（std::fs 直连预打开目录），
+    /// 依赖宿主当前机器已安装 wasm32-wasip2 target（rustup target add）。
+    /// 预装的其它测试组件不依赖该 target，互不干扰。
+    fn build_wasi_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-wasi-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-wasip2/release");
+        let module_path = output_dir.join("bedcode_plugin_wasi_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return std::fs::read(&module_path)
+                    .expect("Failed to read WASI test component module");
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-wasip2",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for WASI test component");
+        assert!(status.success(), "WASI test component WASM build failed");
+
+        // wasm32-wasip2 目标（Rust 1.85+）已内嵌 wasm-component-ld：产物直接是
+        // 组件（magic  asm 0d），无需再经 encode_component 编码
+        std::fs::read(&module_path).expect("Failed to read WASI test component after build")
+    }
+
+    // ==================== WASI preopen E2E ====================
+
+    /// WASI 预打开端到端：wasip2 插件经 std::fs 直写宿主预打开目录
+    ///
+    /// 验证链路：插件配置 useSelfFileAccess + fileAccessDir（已授权）→
+    /// 实例化时宿主 preopen /data → 插件 std::fs::write("/data/demo.txt") →
+    /// 宿主侧校验文件落盘 + 读回 + 沙箱边界（根外路径不可达）。
+    #[test]
+    fn test_wasi_preopen_std_fs_e2e() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_wasi_test_component())
+            .expect("compile wasi test component");
+        let pid = "com.bedcode.wasi-test";
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // 阶段 1（runtime 上下文）：宿主侧准备——授权 + storage seed + 实例化。
+        // 实例化需当前 handle（resolve_preopen_dir 读 storage 并校验授权）；
+        // 组件 ctor 不触发 wasi 文件访问，故此时有 handle 仍安全。
+        let (mut plugin, dir) = rt
+            .block_on(async {
+                // 授权插件（storage 权限用于写入配置）与数据目录
+                host_ctx
+                    .permission
+                    .grant_permissions(pid, &["storage".to_string()]);
+                let dir = tempfile::tempdir().expect("tempdir");
+                crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+                    &host_ctx,
+                    pid,
+                    "fs_granted_paths",
+                    serde_json::json!([dir.path().to_string_lossy()]),
+                )
+                .expect("seed granted path");
+                crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+                    &host_ctx,
+                    pid,
+                    "config",
+                    serde_json::json!({
+                        "useSelfFileAccess": true,
+                        "fileAccessDir": dir.path().to_string_lossy(),
+                    }),
+                )
+                .expect("seed wasi config");
+
+                // 实例化：组件导入 wasi 接口，宿主按配置 preopen /data
+                let plugin = wasm_runtime
+                    .instantiate_component(&component, pid, host_ctx.clone())
+                    .expect("instantiate wasi test component");
+                (plugin, dir)
+            });
+
+        // 阶段 2（无 handle 阻塞线程）：guest 经 std::fs 访问 preopen 目录。
+        // 与生产 run_guest_call 对齐——wasi 同步绑定（in_tokio）要求调用线程
+        // 不处于任何 tokio runtime 内，否则 "Cannot start a runtime..." panic。
+        std::thread::spawn(move || {
+            // 1. 插件经 std::fs 直写 /data/demo.txt → 宿主侧落盘校验
+            let r = plugin
+                .invoke_command("wasi-test.write-file", "{}")
+                .expect("write command");
+            assert!(serde_json::from_str::<serde_json::Value>(&r)
+                .unwrap()
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false));
+            let host_file = dir.path().join("demo.txt");
+            assert_eq!(
+                std::fs::read_to_string(&host_file).expect("host must see the file"),
+                "hello-from-wasi"
+            );
+
+            // 2. 读回（guest 内同路径）
+            let r = plugin
+                .invoke_command("wasi-test.read-file", "{}")
+                .expect("read command");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&r)
+                    .unwrap()
+                    .get("content")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(""),
+                "hello-from-wasi"
+            );
+
+            // 3. 列举 preopen 根目录，demo.txt 可见
+            let r = plugin
+                .invoke_command("wasi-test.list", "{}")
+                .expect("list command");
+            let entries = serde_json::from_str::<serde_json::Value>(&r)
+                .unwrap()
+                .get("entries")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                entries.iter().any(|e| e.as_str() == Some("demo.txt")),
+                "preopen dir entries must include demo.txt, got {:?}",
+                entries
+            );
+
+            // 4. 沙箱边界：preopen 根外路径不可达（WASI 能力沙箱）
+            let r = plugin
+                .invoke_command("wasi-test.outside-root", "{}")
+                .expect("outside command");
+            let leaked = serde_json::from_str::<serde_json::Value>(&r)
+                .unwrap()
+                .get("leaked")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(true);
+            assert!(!leaked, "WASI sandbox must block access outside preopen root");
+        })
+        .join()
+        .expect("guest call thread panicked");
+    }
+
+    /// 回归保护：加载真实构建产物（resources 下 wasip2 版 ai-chatbox）
+    /// 组件导入接口必须与宿主 linker 全部匹配（实例化成功即证明）；
+    /// 产物缺失（未跑插件构建）时跳过——插件装配由真实构建 + 运行覆盖。
+    #[test]
+    fn test_ai_chatbox_wasip2_artifact_loads() {
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.wasm");
+        if !wasm_path.exists() {
+            eprintln!("[skip] ai-chatbox wasip2 artifact not built");
+            return;
+        }
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let mut plugin = wasm_runtime
+            .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx)
+            .expect("load wasip2 ai-chatbox: all imports must resolve");
+        // manifest 往返（无副作用导出，验证 bindgen 接口工作）
+        let manifest: serde_json::Value =
+            serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+        assert_eq!(manifest["id"], "com.bedcode.ai-chatbox");
     }
 
     /// SDK 组件插件完整往返：真实 SDK（wasm_entry! 宏 + WasmHost）产物的组件

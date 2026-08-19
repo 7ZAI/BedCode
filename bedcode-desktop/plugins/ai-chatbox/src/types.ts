@@ -100,6 +100,12 @@ export interface PluginConfig {
   codeFontSize: number
   /** 代码块高亮主题 */
   codeTheme: CodeTheme
+  /** 是否由插件自身实现文件访问（WASI 预打开目录模式；宿主未接线 WASI 时仅预授权目录） */
+  useSelfFileAccess: boolean
+  /** 自身文件访问目录（WASI 预打开路径；useSelfFileAccess 开启时生效，绝对路径） */
+  fileAccessDir: string
+  /** 对话数据默认目录（绝对路径；空 = 默认 {home}/.bedcode/ai-chatbox） */
+  defaultDir: string
 }
 
 /** 配置默认值（与 plugin.json configuration 的 default 字段保持一致） */
@@ -110,6 +116,9 @@ export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
   codeLineHeight: DEFAULT_CODE_LINE_HEIGHT,
   codeFontSize: 13,
   codeTheme: 'auto',
+  useSelfFileAccess: false,
+  fileAccessDir: '',
+  defaultDir: '',
 }
 
 /** 生成简短 ID（时间戳 + 随机段，对话/供应商/流共用） */

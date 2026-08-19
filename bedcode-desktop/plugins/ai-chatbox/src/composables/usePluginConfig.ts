@@ -48,6 +48,9 @@ export function usePluginConfig(context: PluginContext) {
         codeLineHeight: normalizeLineHeight(saved.codeLineHeight),
         codeFontSize: normalizeFontSize(saved.codeFontSize),
         codeTheme: normalizeEnum(saved.codeTheme, CODE_THEMES, DEFAULT_PLUGIN_CONFIG.codeTheme),
+        useSelfFileAccess: typeof saved.useSelfFileAccess === 'boolean' ? saved.useSelfFileAccess : DEFAULT_PLUGIN_CONFIG.useSelfFileAccess,
+        fileAccessDir: normalizeDirPath(saved.fileAccessDir),
+        defaultDir: normalizeDirPath(saved.defaultDir),
       }
     } catch (e) {
       // 读取失败保持默认值（配置缺失不阻断聊天），仅记录日志
@@ -85,4 +88,9 @@ function normalizeLineHeight(value: unknown): number {
     return Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
   }
   return DEFAULT_CODE_LINE_HEIGHT
+}
+
+/** 目录路径归一化：非字符串 / 空串一律回退空串（空 = 未配置，用默认目录） */
+function normalizeDirPath(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : ''
 }

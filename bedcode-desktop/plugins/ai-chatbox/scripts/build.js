@@ -31,13 +31,11 @@ function buildFrontend() {
 
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
-  run('cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
-  // 迁移阶段 B：将 wit-bindgen 产出的 core module 编码为 Component Model 组件
-  // （等价 wasm-tools component new；工具幂等——产物已是组件时直接复制）
-  console.log('\n[build] ====== Componentizing WASM (Component Model) ======')
-  const componentizeManifest = resolve(ROOT, '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml')
-  const wasmPath = resolve(ROOT, 'rust/target/wasm32-unknown-unknown/release', `${RUST_LIB_NAME}.wasm`)
-  run(`cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`)
+  // WASI preview2 目标（rustup target add wasm32-wasip2）：
+  // - 产物直接是 Component Model 组件（wasm-component-ld 内嵌，无需再经 componentize 编码）
+  // - 插件 std::fs 映射到 WASI（宿主 WASI preopen /data 后可直接读写，见 useSelfFileAccess）
+  // 既有宿主接口（host_fs/host_db/...）在 wasip2 下同样可用，行为不变
+  run('cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
 }
 
 function copyArtifacts() {
@@ -59,7 +57,7 @@ function copyArtifacts() {
   // 复制 WASM 模块
   const wasmPath = resolve(
     ROOT,
-    'rust/target/wasm32-unknown-unknown/release',
+    'rust/target/wasm32-wasip2/release',
     `${RUST_LIB_NAME}.wasm`
   )
 
@@ -67,7 +65,7 @@ function copyArtifacts() {
     // 尝试 debug 构建
     const debugWasmPath = resolve(
       ROOT,
-      'rust/target/wasm32-unknown-unknown/debug',
+      'rust/target/wasm32-wasip2/debug',
       `${RUST_LIB_NAME}.wasm`
     )
     if (!existsSync(debugWasmPath)) {
@@ -100,7 +98,7 @@ if (watchMode) {
   startPluginWatch({
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
-    wasmFile: `rust/target/wasm32-unknown-unknown/release/${RUST_LIB_NAME}.wasm`,
+    wasmFile: `rust/target/wasm32-wasip2/release/${RUST_LIB_NAME}.wasm`,
   })
 } else if (frontendOnly) {
   buildFrontend()

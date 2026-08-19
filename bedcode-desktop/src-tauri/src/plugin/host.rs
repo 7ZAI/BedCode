@@ -550,33 +550,50 @@ impl PluginHost {
                 )));
             };
 
-            let mut wasm_plugin = wasm_plugin.lock().await;
-            match wasm_plugin.activate() {
-                Ok(0) => {
+            // WASI 需要无 handle 线程执行 guest 导出（见 run_guest_call）
+            match self.run_guest_call(wasm_plugin.clone(), |p| p.activate()).await {
+                Ok(Ok(0)) => {
                     tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
                 }
-                Ok(code) => {
+                Ok(Ok(code)) => {
                     tracing::error!("[PluginHost] Plugin '{}' activate() returned error code {}", plugin_id, code);
                     self.mark_error(plugin_id, format!("activate() returned error code {}", code)).await;
                     return Err(crate::AppError::Plugin(format!(
                         "Plugin {} activate() returned error code {}", plugin_id, code
                     )));
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     tracing::error!("[PluginHost] Plugin '{}' activate() failed: {}", plugin_id, e);
                     self.mark_error(plugin_id, format!("activate() failed: {}", e)).await;
                     return Err(crate::AppError::Plugin(format!(
                         "Plugin {} activate() failed: {}", plugin_id, e
                     )));
                 }
+                Err(panic) => {
+                    let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
+                    self.mark_error(plugin_id, format!("activate() panicked: {}", msg)).await;
+                    return Err(crate::AppError::Plugin(format!(
+                        "Plugin {} activate() panicked: {}", plugin_id, msg
+                    )));
+                }
             }
 
             // 激活成功后自动调用 on_startup
             tracing::info!("[PluginHost] Calling on_startup for plugin '{}'", plugin_id);
-            if let Err(e) = wasm_plugin.on_startup() {
-                tracing::warn!("[PluginHost] Plugin '{}' on_startup failed: {}", plugin_id, e);
-            } else {
-                tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
+            match self
+                .run_guest_call(wasm_plugin, |p| p.on_startup())
+                .await
+            {
+                Ok(Ok(_)) => {
+                    tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!("[PluginHost] Plugin '{}' on_startup failed: {}", plugin_id, e);
+                }
+                Err(panic) => {
+                    let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
+                    tracing::warn!("[PluginHost] Plugin '{}' on_startup panicked: {}", plugin_id, msg);
+                }
             }
         }
 
@@ -643,24 +660,34 @@ impl PluginHost {
                     let wasm_plugins = self.wasm_plugins.read().await;
                     if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
                         drop(wasm_plugins);
-                        let mut wasm_plugin = wasm_plugin.lock().await;
-                        // 停用前先调用 on_shutdown
+                        // 停用前先调用 on_shutdown（WASI 需无 handle 线程，见 run_guest_call）
                         tracing::info!("[PluginHost] Calling on_shutdown for plugin '{}'", plugin_id);
-                        if let Err(e) = wasm_plugin.on_shutdown() {
-                            tracing::warn!("[PluginHost] Plugin '{}' on_shutdown failed: {}", plugin_id, e);
-                        } else {
-                            tracing::info!("[PluginHost] Plugin '{}' on_shutdown completed", plugin_id);
+                        match self.run_guest_call(wasm_plugin.clone(), |p| p.on_shutdown()).await {
+                            Ok(Ok(_)) => {
+                                tracing::info!("[PluginHost] Plugin '{}' on_shutdown completed", plugin_id);
+                            }
+                            Ok(Err(e)) => {
+                                tracing::warn!("[PluginHost] Plugin '{}' on_shutdown failed: {}", plugin_id, e);
+                            }
+                            Err(panic) => {
+                                let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
+                                tracing::warn!("[PluginHost] Plugin '{}' on_shutdown panicked: {}", plugin_id, msg);
+                            }
                         }
 
-                        match wasm_plugin.deactivate() {
-                            Ok(0) => {
+                        match self.run_guest_call(wasm_plugin, |p| p.deactivate()).await {
+                            Ok(Ok(0)) => {
                                 tracing::info!("[PluginHost] Plugin '{}' deactivated", plugin_id);
                             }
-                            Ok(code) => {
+                            Ok(Ok(code)) => {
                                 tracing::warn!("[PluginHost] Plugin '{}' deactivate() returned error code {}", plugin_id, code);
                             }
-                            Err(e) => {
+                            Ok(Err(e)) => {
                                 tracing::error!("[PluginHost] Plugin '{}' deactivate() failed: {}", plugin_id, e);
+                            }
+                            Err(panic) => {
+                                let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
+                                tracing::error!("[PluginHost] Plugin '{}' deactivate() panicked: {}", plugin_id, msg);
                             }
                         }
                     }
@@ -733,8 +760,9 @@ impl PluginHost {
         }
 
         // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        let meta_json = meta_json.to_string();
         match self
-            .with_wasm_plugin_call(plugin_id, |plugin| plugin.on_upload_request(meta_json))
+            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.on_upload_request(&meta_json))
             .await
         {
             Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
@@ -782,8 +810,9 @@ impl PluginHost {
         }
 
         // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        let meta_json = meta_json.to_string();
         match self
-            .with_wasm_plugin_call(plugin_id, |plugin| plugin.on_transfer_request(meta_json))
+            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.on_transfer_request(&meta_json))
             .await
         {
             Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {

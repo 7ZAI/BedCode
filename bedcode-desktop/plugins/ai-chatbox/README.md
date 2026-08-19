@@ -18,6 +18,7 @@
 - **Rust WASM 层**：JSONL 对话日志落盘（`client.rs` / `store.rs`）、数据目录集中授权（宿主 `fs_auth` 弹窗）、命令路由
 - **TS 前端**：协议适配层 `src/adapters/`（openai / anthropic / gemini / custom 方言的请求构建与 SSE 解析）、对话 UI 与设置页
 - **激活流程**：激活时宿主弹出目录授权 → 同意后初始化数据目录 → 激活成功；拒绝/超时 → 激活失败（Error 状态），重新启用可重试
+- **数据目录**：由插件配置 `defaultDir` 指定（绝对路径；空 = 默认 `{home}/.bedcode/ai-chatbox`），修改后需停用再启用生效；`useSelfFileAccess` 开启时激活授权弹窗一并授权 WASI 预打开目录（`fileAccessDir`），宿主已接线 WASI，插件可经预打开目录获得该目录的 std::fs 直读直写能力（未开启时仍走宿主 fs_* 函数）
 
 ## 目录结构
 

@@ -315,6 +315,56 @@ fn strip_last_assistant_line(content: &str) -> String {
     out
 }
 
+/// 插件文件访问配置（activate 时从 storage key `config` 解析；字段与
+/// plugin.json `contributes.configuration` 及前端 types.ts PluginConfig 对齐）
+#[derive(Debug, Default, PartialEq)]
+pub struct FileAccessConfig {
+    /// 是否由插件自身实现文件访问（WASI 预打开目录模式）
+    pub use_self_file_access: bool,
+    /// 自身文件访问目录（WASI 预打开路径；开启自身访问时生效）
+    pub file_access_dir: Option<String>,
+    /// 对话数据默认目录（None = 回退默认 {home}/.bedcode/ai-chatbox）
+    pub default_dir: Option<String>,
+}
+
+/// 解析 storage `config` 中的文件访问字段
+///
+/// 配置缺失 / 字段缺失 / 类型不符一律回退默认（不阻断激活）；路径取 trim 后非空值。
+pub fn parse_file_access_config(config: Option<&serde_json::Value>) -> FileAccessConfig {
+    let mut out = FileAccessConfig::default();
+    let Some(config) = config.and_then(|v| v.as_object()) else {
+        return out;
+    };
+    out.use_self_file_access = config
+        .get("useSelfFileAccess")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    out.file_access_dir = config
+        .get("fileAccessDir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    out.default_dir = config
+        .get("defaultDir")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string());
+    out
+}
+
+/// 数据目录解析：配置了 defaultDir 用配置值，否则默认 {home}/.bedcode/ai-chatbox
+pub fn resolve_data_dir(home_dir: &str, default_dir: Option<&str>) -> String {
+    match default_dir {
+        Some(dir) if !dir.trim().is_empty() => dir.trim().to_string(),
+        _ => format!(
+            "{}/.bedcode/ai-chatbox",
+            home_dir.trim_end_matches(['/', '\\'])
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -576,5 +626,69 @@ mod tests {
         let messages = get_messages(&host, "/data", "c-new").unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "first");
+    }
+
+    // ==================== 文件访问配置解析 ====================
+
+    #[test]
+    fn parse_file_access_config_missing_returns_defaults() {
+        // 无配置 / 非对象：全部默认（不阻断激活，宿主 fs 路径不变）
+        assert_eq!(parse_file_access_config(None), FileAccessConfig::default());
+        assert_eq!(
+            parse_file_access_config(Some(&serde_json::json!([1, 2]))),
+            FileAccessConfig::default()
+        );
+        assert!(!parse_file_access_config(None).use_self_file_access);
+    }
+
+    #[test]
+    fn parse_file_access_config_full_values() {
+        let json = serde_json::json!({
+            "useSelfFileAccess": true,
+            "fileAccessDir": "  D:/chat-logs  ",
+            "defaultDir": "D:/ai-chatbox-data",
+            "thinkingMode": "enabled"
+        });
+        let cfg = parse_file_access_config(Some(&json));
+        assert!(cfg.use_self_file_access);
+        assert_eq!(cfg.file_access_dir.as_deref(), Some("D:/chat-logs"));
+        assert_eq!(cfg.default_dir.as_deref(), Some("D:/ai-chatbox-data"));
+    }
+
+    #[test]
+    fn parse_file_access_config_type_mismatch_falls_back() {
+        // 布尔传字符串 / 路径传数字 / 空串：一律回退默认
+        let json = serde_json::json!({
+            "useSelfFileAccess": "yes",
+            "fileAccessDir": 42,
+            "defaultDir": "   "
+        });
+        assert_eq!(
+            parse_file_access_config(Some(&json)),
+            FileAccessConfig::default()
+        );
+    }
+
+    #[test]
+    fn resolve_data_dir_uses_configured_or_default() {
+        // 配置了 defaultDir：优先使用（trim 后）
+        assert_eq!(
+            resolve_data_dir("C:\\Users\\u", Some("D:/custom")),
+            "D:/custom"
+        );
+        // 未配置：默认 {home}/.bedcode/ai-chatbox，home 尾斜杠不产生双斜杠
+        assert_eq!(
+            resolve_data_dir("C:\\Users\\u", None),
+            "C:\\Users\\u/.bedcode/ai-chatbox"
+        );
+        assert_eq!(
+            resolve_data_dir("/home/u/", None),
+            "/home/u/.bedcode/ai-chatbox"
+        );
+        // 空白 defaultDir 视为未配置
+        assert_eq!(
+            resolve_data_dir("/home/u", Some("   ")),
+            "/home/u/.bedcode/ai-chatbox"
+        );
     }
 }

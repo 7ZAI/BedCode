@@ -124,6 +124,7 @@ actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
+wasmtime-wasi = "47"
 
 # Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
 # + 文件定位 COM API（SHOpenFolderAndSelectItems / ShellExecuteExW，见 commands/opener.rs）

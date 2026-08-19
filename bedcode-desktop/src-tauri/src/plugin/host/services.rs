@@ -27,7 +27,7 @@ impl PluginHost {
         let payload = payload.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             if let Err(e) = host
-                .with_wasm_plugin_call(&plugin_id, |plugin| plugin.on_session_lifecycle(&payload))
+                .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_session_lifecycle(&payload))
                 .await
             {
                 tracing::error!(
@@ -64,7 +64,7 @@ impl PluginHost {
         let payload = payload.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             if let Err(e) = host
-                .with_wasm_plugin_call(&plugin_id, |plugin| plugin.on_input_submitted(&payload))
+                .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_input_submitted(&payload))
                 .await
             {
                 tracing::error!(
@@ -211,7 +211,7 @@ impl PluginServices for PluginHost {
         let pid = plugin_id.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             match host
-                .with_wasm_plugin_call(&pid, |plugin| plugin.on_process_done(&event_str))
+                .with_wasm_plugin_call(&pid, move |plugin| plugin.on_process_done(&event_str))
                 .await
             {
                 Ok(_) => {}
@@ -365,7 +365,8 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
         let msg = msg.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
-            host.with_wasm_plugin_call(&plugin_id, |plugin| {
+            let msg = msg.clone();
+            host.with_wasm_plugin_call(&plugin_id, move |plugin| {
                 plugin.on_message(&msg.topic, &msg.sender, &msg.payload)
             })
             .await

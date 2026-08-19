@@ -135,6 +135,42 @@ impl PluginHost {
         });
     }
 
+    /// 在无当前 runtime handle 的阻塞线程上执行 guest 导出调用
+    ///
+    /// WASI 预打开模式下，wasi 同步绑定（`in_tokio`）要求调用线程没有进入
+    /// 任何 tokio runtime——否则其内部 `handle.block_on` 会 panic
+    /// （"Cannot start a runtime from within a runtime"）。故所有 guest 调用
+    /// 统一搬到 `spawn_blocking` 阻塞线程执行：该线程无当前 handle，wasi 走
+    /// 其自身 ambient runtime；宿主函数经 [`block_on_async`] 的 ambient 兜底
+    /// 同样可阻塞执行。非 WASI 插件不受影响（未见 wasi 导入就不触发）。
+    ///
+    /// 返回 `Result<crate::Result<T>, panic 载荷>`：guest 的 `crate::Result<T>`
+    /// 保留在内层（`Ok(Ok(v))`=值 / `Ok(Err(e))`=guest 错误），panic 走外层
+    /// `Err(panic)`（不跨 spawn_blocking 传播为 JoinError）。
+    pub(super) async fn run_guest_call<T>(
+        &self,
+        wasm_plugin: Arc<Mutex<LoadedWasmPlugin>>,
+        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
+    ) -> std::result::Result<crate::Result<T>, Box<dyn std::any::Any + Send>>
+    where
+        T: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            // 阻塞线程无当前 tokio handle，符合 wasi 同步绑定（in_tokio）要求；
+            // 在 ambient runtime 上驱动 tokio 锁（借用闭包内 Arc，见 block_on_ambient），
+            // guest 调用在无 handle 线程执行，锁在 catch_unwind 后由 drop 释放
+            let mut guard = crate::plugin::wasm_runtime::block_on_ambient(wasm_plugin.lock());
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
+        })
+        .await
+        // spawn_blocking 任务自身 panic（理论上 guard move 前的一切异常）→
+        // 视为 panic 载荷，与 catch_unwind 语义对齐（外层 Result 的 Err 槽位
+        // = panic 载荷），调用方统一走重载恢复
+        .unwrap_or_else(|join| {
+            Err(Box::new(join.to_string()) as Box<dyn std::any::Any + Send>)
+        })
+    }
+
     /// 持锁调用 WASM 插件导出并统一处理失败恢复
     ///
     /// 调用失败（trap / 导出绑定失败 / store 中毒）或 panic（宿主函数内
@@ -145,18 +181,19 @@ impl PluginHost {
     pub(super) async fn with_wasm_plugin_call<T>(
         &self,
         plugin_id: &str,
-        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T>,
-    ) -> crate::Result<T> {
+        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
+    ) -> crate::Result<T>
+    where
+        T: Send + 'static,
+    {
         let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
             return Err(crate::AppError::Plugin(format!(
                 "WASM plugin {} not found in loaded instances",
                 plugin_id
             )));
         };
-        let result = {
-            let mut guard = wasm_plugin.lock().await;
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
-        };
+        // 在无 handle 阻塞线程上执行（WASI 需要），结果 catch_unwind 已在此
+        let result = self.run_guest_call(wasm_plugin, call).await;
         match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => {
@@ -170,11 +207,7 @@ impl PluginHost {
             Err(panic) => {
                 // panic：unwind 已释放实例锁，但 wasmtime Store 被污染，
                 // 必须重载才能恢复插件
-                let msg = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic".to_string());
+                let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
                 tracing::error!(
                     plugin_id = %plugin_id,
                     panic = %msg,
@@ -221,9 +254,10 @@ impl PluginHost {
             )))?;
 
         // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        let command_name = command_name.to_string();
         let result_str = self
-            .with_wasm_plugin_call(plugin_id, |plugin| {
-                plugin.invoke_command(command_name, &args_str)
+            .with_wasm_plugin_call(plugin_id, move |plugin| {
+                plugin.invoke_command(&command_name, &args_str)
             })
             .await?;
 

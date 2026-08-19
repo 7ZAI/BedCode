@@ -63,6 +63,24 @@
     "configuration": {
       "title": "AI Chatbox 设置",
       "properties": {
+        "useSelfFileAccess": {
+          "type": "boolean",
+          "title": "自身实现文件访问（WASI）",
+          "description": "开启后插件经 WASI 预打开目录读写文件（std::fs 直连，仅限 fileAccessDir 预打开目录）；关闭（默认）时仍走宿主 fs_* 函数。修改后需停用再启用生效（激活时重新授权与 preopen）"
+          "default": false
+        },
+        "fileAccessDir": {
+          "type": "string",
+          "title": "文件访问目录（WASI 预打开）",
+          "description": "WASI 预打开目录的绝对路径；useSelfFileAccess 开启时在激活授权弹窗中一并授权，WASI 接线后宿主按此路径 preopen",
+          "default": ""
+        },
+        "defaultDir": {
+          "type": "string",
+          "title": "对话数据默认目录",
+          "description": "对话 JSONL 数据目录（绝对路径）；空 = 默认 {home}/.bedcode/ai-chatbox。修改后需停用再启用插件生效（激活时重新授权并初始化）",
+          "default": ""
+        },
         "thinkingMode": {
           "type": "string",
           "enum": [

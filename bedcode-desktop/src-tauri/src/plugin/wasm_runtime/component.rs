@@ -24,12 +24,13 @@ use super::host_impl::{
     api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process,
     session, status, storage, terminal, timer, transfer,
 };
-use super::{WasmHostContext, WasmPluginState, FUEL_PER_CALL};
+use super::{block_on_async, WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
 use wasmtime::component::{bindgen, Component, Instance, Linker};
 use wasmtime::{ResourceLimiter, Store};
+use wasmtime_wasi::{p2, DirPerms, FilePerms, WasiCtxBuilder};
 
 bindgen!({
     path: "../packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
@@ -341,6 +342,13 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
             AppError::Plugin(format!("Failed to register component host interface: {}", e))
         })?;
     }
+    // WASI preview2（wasm32-wasip2 插件经 std::fs 直接访问文件所需的全部接口：
+    // clock/random/cli/filesystem/io/sockets）。
+    // 未导入 wasi 的既有插件（wasm32-unknown-unknown 产物）不受影响——
+    // linker 中无对应 import 的注册是惰性的。
+    p2::add_to_linker_sync(linker).map_err(|e| {
+        AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e))
+    })?;
     Ok(())
 }
 
@@ -384,10 +392,10 @@ impl LoadedWasmPlugin {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
     ) -> crate::Result<Self> {
-        let state = WasmPluginState {
-            plugin_id: plugin_id.to_string(),
-            host_ctx,
-        };
+        // WASI 上下文：按插件配置（useSelfFileAccess + fileAccessDir）构建预打开
+        // 目录 /data；未开启/未授权时为空上下文（插件仍走 host_fs 路径）
+        let wasi_ctx = build_wasi_ctx(&host_ctx, plugin_id);
+        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
@@ -654,9 +662,63 @@ impl LoadedWasmPlugin {
     }
 }
 
-// ==================== 产物形态检测 ====================
-//
-// 阶段 C 已删除：产物仅剩组件形态，无需按魔法字节分派加载路径。
+// ==================== WASI 预打开 ====================
+
+/// 构建插件实例的 WASI 上下文
+///
+/// 预打开目录 = 插件配置 `config` 声明的 fileAccessDir（useSelfFileAccess 开启时），
+/// 且必须已通过授权（fs_granted_paths 持久化 / 白名单 / 受信任插件，无弹窗）。
+/// 预打开失败（目录不存在/不可读）仅告警，不阻断加载（插件降级走 host_fs）。
+fn build_wasi_ctx(host_ctx: &WasmHostContext, plugin_id: &str) -> wasmtime_wasi::WasiCtx {
+    let mut builder = WasiCtxBuilder::new();
+    if let Some(dir) = resolve_preopen_dir(host_ctx, plugin_id) {
+        match builder.preopened_dir(&dir, "/data", DirPerms::all(), FilePerms::all()) {
+            Ok(_) => {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    dir = %dir,
+                    "WASI preopened dir at /data (plugin self file access)"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    dir = %dir,
+                    error = %e,
+                    "WASI preopen failed, plugin falls back to host_fs"
+                );
+            }
+        }
+    }
+    builder.build()
+}
+
+/// 解析插件配置声明的 WASI 预打开目录（storage key `config` 的
+/// useSelfFileAccess + fileAccessDir），并校验该目录已被授权
+///
+/// 读取/校验失败一律返回 None（不阻断加载）；无 tokio 运行时上下文
+/// （无头/测试）时跳过 storage 读取。
+fn resolve_preopen_dir(host_ctx: &WasmHostContext, plugin_id: &str) -> Option<String> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return None;
+    }
+    let config = match super::host_impl::storage::storage_get(host_ctx, plugin_id, "config") {
+        Ok(Some(v)) => v,
+        _ => return None,
+    };
+    let obj = config.as_object()?;
+    if !obj.get("useSelfFileAccess")?.as_bool()? {
+        return None;
+    }
+    let dir = obj.get("fileAccessDir")?.as_str()?.trim().trim_matches(['/', '\\']).trim();
+    if dir.is_empty() {
+        return None;
+    }
+    let dir = dir.to_string();
+    // 仅对已授权目录建立预打开：config 可由插件自身写入，不能借此绕过授权弹窗
+    let granted = block_on_async(host_ctx.fs_auth.is_granted(plugin_id, &dir));
+    granted.then_some(dir)
+}
 
 // ==================== 测试 ====================
 
@@ -856,5 +918,143 @@ mod tests {
 
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
         });
+    }
+
+    // ==================== WASI 预打开目录解析 ====================
+
+    /// 预打开解析测试基建：enabled 文件访问配置 + 授权目录
+    ///
+    /// 返回 (host_ctx, 已授权目录)。目录真实存在（canonicalize 需要），
+    /// 测试结束时由 TempDir 自动清理。
+    async fn preopen_ctx(plugin_id: &str) -> (Arc<WasmHostContext>, tempfile::TempDir) {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, plugin_id, &["storage"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // 模拟激活时 fs_request_auth 同意后的持久化授权（storage key fs_granted_paths）
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            plugin_id,
+            "fs_granted_paths",
+            serde_json::json!([dir.path().to_string_lossy()]),
+        )
+        .expect("seed granted path");
+        (ctx, dir)
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dir_requires_self_access_config() {
+        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+        let preopen = dir.path().to_string_lossy().to_string();
+        let pid = "com.bedcode.test";
+
+        // 无配置 → None（默认宿主 fs 路径）
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+
+        // useSelfFileAccess=false → None（即使配置了目录）
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({
+                "useSelfFileAccess": false,
+                "fileAccessDir": preopen,
+            }),
+        )
+        .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+
+        // 开启自身访问但目录已授权 → 解析成功（路径去头尾空白/斜杠）
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({
+                "useSelfFileAccess": true,
+                "fileAccessDir": format!(" {} /", preopen),
+            }),
+        )
+        .expect("storage_set ok");
+        assert_eq!(
+            resolve_preopen_dir(&ctx, pid).as_deref(),
+            Some(preopen.as_str())
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dir_requires_granted_dir() {
+        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        // 开启自身访问，但 fileAccessDir 指向未授权目录 → None（不绕过授权弹窗）
+        let rogue = std::env::temp_dir().join("wasi-rogue-not-authorized");
+        std::fs::create_dir_all(&rogue).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({
+                "useSelfFileAccess": true,
+                "fileAccessDir": rogue.to_string_lossy(),
+            }),
+        )
+        .expect("storage_set ok");
+        assert!(
+            resolve_preopen_dir(&ctx, pid).is_none(),
+            "未授权目录不得建立预打开"
+        );
+
+        // 目录名指向授权根之外的不存在路径（canonicalize 回退父目录+名，
+        // 不在授权前缀下）同样 None
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({
+                "useSelfFileAccess": true,
+                "fileAccessDir": rogue.join("missing-deep").to_string_lossy(),
+                "defaultDir": "ignored",
+            }),
+        )
+        .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dir_rejects_bad_config_shapes() {
+        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        let preopen = dir.path().to_string_lossy().to_string();
+
+        // 非对象 config / 字段类型错 / 空白路径 → 一律 None
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(&ctx, pid, "config", serde_json::json!([1, 2]))
+            .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({ "useSelfFileAccess": "yes", "fileAccessDir": 42 }),
+        )
+        .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({ "useSelfFileAccess": true, "fileAccessDir": "   " }),
+        )
+        .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+
+        // 已授权目录 + 合法配置 → 解析成功（对照基线）
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "config",
+            serde_json::json!({ "useSelfFileAccess": true, "fileAccessDir": preopen }),
+        )
+        .expect("storage_set ok");
+        assert!(resolve_preopen_dir(&ctx, pid).is_some());
     }
 }
