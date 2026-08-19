@@ -154,3 +154,145 @@ fn format_bytes_rough(bytes: u64) -> String {
         format!("{} B", bytes)
     }
 }
+
+// ==================== v2.1 intent 通知（push 审批 / pull 信息性） ====================
+
+/// push 审批通知（后台/锁屏带「接受 / 拒绝」action；前台由插件对话框应答不打扰）
+///
+/// intent 到达且 App 在后台时，宿主发通知，action 点击经 Kotlin 路由回
+/// `plugin_filesrv_respond_intent`（kind=intent）。
+pub async fn show_intent_ask_notification(
+    intent: &crate::enums::sync::FileTransferIntent,
+) {
+    // 前台由插件前端对话框应答（responder 已 emit filesrv:intent_received）
+    if is_app_focused() {
+        return;
+    }
+    #[cfg(target_os = "android")]
+    {
+        use crate::plugin::android_plugins::notification_plugin_handle;
+        let Some(handle) = notification_plugin_handle() else {
+            tracing::warn!(intent_id = %intent.intent_id, "show_intent_ask_notification: plugin not registered");
+            return;
+        };
+        let (title, body, accept, reject) = localized_intent_ask_texts(&intent.device_name, &intent.relative_path, intent.size);
+        let payload = serde_json::json!({
+            "intentId": intent.intent_id,
+            "title": title,
+            "body": body,
+            "acceptLabel": accept,
+            "rejectLabel": reject,
+        });
+        if let Err(e) = handle
+            .run_mobile_plugin_async::<serde_json::Value>("showIntentAskNotification", payload)
+            .await
+        {
+            tracing::warn!(intent_id = %intent.intent_id, error = %e, "showIntentAskNotification failed");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = intent;
+    }
+}
+
+/// 取消 push 审批通知（用户已应答处于后台时调用）
+pub async fn cancel_intent_notification(intent_id: &str) {
+    #[cfg(target_os = "android")]
+    {
+        use crate::plugin::android_plugins::notification_plugin_handle;
+        let Some(handle) = notification_plugin_handle() else {
+            return;
+        };
+        let payload = serde_json::json!({ "intentId": intent_id });
+        if let Err(e) = handle
+            .run_mobile_plugin_async::<serde_json::Value>("cancelIntentNotification", payload)
+            .await
+        {
+            tracing::warn!(intent_id = %intent_id, error = %e, "cancelIntentNotification failed");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = intent_id;
+    }
+}
+
+/// pull 信息性通知（桌面拉取本机文件：无 action 按钮、不阻塞、不作为审批门）
+pub async fn show_pull_notice(
+    intent: &crate::enums::sync::FileTransferIntent,
+) {
+    #[cfg(target_os = "android")]
+    {
+        use crate::plugin::android_plugins::notification_plugin_handle;
+        let Some(handle) = notification_plugin_handle() else {
+            tracing::warn!(intent_id = %intent.intent_id, "show_pull_notice: plugin not registered");
+            return;
+        };
+        let (title, body) = localized_pull_texts(&intent.device_name, &intent.relative_path);
+        let payload = serde_json::json!({
+            "intentId": intent.intent_id,
+            "title": title,
+            "body": body,
+        });
+        if let Err(e) = handle
+            .run_mobile_plugin_async::<serde_json::Value>("showPullNotice", payload)
+            .await
+        {
+            tracing::warn!(intent_id = %intent.intent_id, error = %e, "showPullNotice failed");
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        let _ = intent;
+    }
+}
+
+/// push 审批通知文案（zh-CN/en，按宿主语言偏好）
+fn localized_intent_ask_texts(
+    device_name: &str,
+    relative_path: &str,
+    size: u64,
+) -> (String, String, String, String) {
+    let en = crate::system::config::AppConfig::global().ui.language == "en";
+    let file = std::path::Path::new(relative_path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| relative_path.to_string());
+    let size_label = if size > 0 {
+        format!(" ({})", format_bytes_rough(size))
+    } else {
+        String::new()
+    };
+    if en {
+        (
+            "Incoming file".to_string(),
+            format!("{} wants to send you {}{}", device_name, file, size_label),
+            "Accept".to_string(),
+            "Reject".to_string(),
+        )
+    } else {
+        (
+            "收到文件请求".to_string(),
+            format!("{} 想向你发送 {}{}", device_name, file, size_label),
+            "接受".to_string(),
+            "拒绝".to_string(),
+        )
+    }
+}
+
+/// pull 信息性通知文案（zh-CN/en）
+fn localized_pull_texts(device_name: &str, relative_path: &str) -> (String, String) {
+    let en = crate::system::config::AppConfig::global().ui.language == "en";
+    if en {
+        (
+            "File transfer".to_string(),
+            format!("{} is pulling a file from this device ({})", device_name, relative_path),
+        )
+    } else {
+        (
+            "文件传输".to_string(),
+            format!("{} 正在从本机拉取文件（{}）", device_name, relative_path),
+        )
+    }
+}

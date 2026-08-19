@@ -81,6 +81,15 @@ interface host-file-service {
     reject-transfer: func(batch-id: string) -> result<_, string>;
     set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
     cancel-receiving: func(session-id: string) -> result<_, string>;
+    /// v2.1（服务器归零）：手机自主发起 HTTP 下载（GET+Range 落 SAF/下载目录）。
+    /// request-json 为 FileTransferRequest（camelCase），返回 task_id（宿主后台执行，
+    /// 进度经 `plugin:transfer:progress` / `transfer:{task_id}` 通道回报）
+    download: func(request-json: string) -> result<string, string>;
+    /// v2.1（服务器归零）：手机自主发起 HTTP 上传（POST/PUT session 编排）。
+    /// request-json 为 FileTransferRequest（camelCase），返回 task_id
+    upload: func(request-json: string) -> result<string, string>;
+    /// v2.1：intent 应答（push 场景用户审批；decision = "accepted" | "rejected"）
+    respond-intent: func(intent-id: string, decision: string) -> result<_, string>;
 }
 
 interface host-transfer {

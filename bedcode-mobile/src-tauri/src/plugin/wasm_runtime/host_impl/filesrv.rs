@@ -2,6 +2,7 @@
 
 use super::super::WasmPluginState;
 use super::support::guarded_host_call;
+use std::sync::Arc;
 
 /// 逻辑层：标记插件为错误状态（WIT host-log.mark-plugin-error）
 ///
@@ -400,3 +401,362 @@ pub(crate) fn filesrv_cancel_receiving(state: &WasmPluginState, session_id: &str
     Ok(())
 }
 
+// ==================== v2.1 服务器归零：手机自主 HTTP 传输（client 栈） ====================
+
+/// 逻辑层：手机自主发起下载（v2.1 client 栈，GET+Range 落本地/SAF 下载目录）
+///
+/// 返回 task_id；宿主后台执行下载（HEAD 指纹比对 + 断点续传 + 连续 3 次网络
+/// 失败转移失败终态），进度/终态经 `plugin:transfer:progress` + `transfer:{task_id}`
+/// 双通道回报插件（与 host_transfer_start 同一通道，task_id 命名空间一致）。
+pub(crate) fn filesrv_download(
+    state: &WasmPluginState,
+    req_json: &str,
+) -> Result<String, String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE)
+    {
+        return Err("permission denied: fileservice".to_string());
+    }
+
+    let req: bedcode_plugin_api_mobile::FileTransferRequest = serde_json::from_str(req_json)
+        .map_err(|e| format!("invalid FileTransferRequest JSON: {}", e))?;
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let app_handle = state
+        .host_ctx
+        .app_handle
+        .clone()
+        .ok_or_else(|| "app_handle unavailable, rejected".to_string())?;
+    let bus = state.host_ctx.message_bus.clone();
+
+    // 同步解析（端点 + 落点），后台执行实际字节流
+    let (base, auth, dest_path) = guarded_host_call(
+        &state.plugin_id,
+        "host_filesrv_download",
+        Err(format!("host_filesrv_download panicked for {}", task_id)),
+        || {
+            tokio::task::block_in_place(|| {
+                state.runtime_handle.block_on(async {
+                    let (base, auth) =
+                        crate::file_service::client::desktop_http_endpoint().await?;
+                    // 下载落点：显式 dest_path 或 app 下载目录按文件名
+                    let fs = crate::state::get_file_service();
+                    let dest = match req.dest_path.clone() {
+                        Some(p) => std::path::PathBuf::from(p),
+                        None => {
+                            let dir = fs.registry.downloads_dir().await.ok_or_else(|| {
+                                "file service client: downloads dir unavailable".to_string()
+                            })?;
+                            let fname = std::path::Path::new(&req.relative_path)
+                                .file_name()
+                                .map(|n| n.to_string_lossy().into_owned())
+                                .unwrap_or_else(|| "download".to_string());
+                            dir.join(fname)
+                        }
+                    };
+                    Ok::<_, String>((base, auth, dest))
+                })
+            })
+        },
+    )?;
+
+    let url = crate::file_service::client::endpoint(
+        &base,
+        &req.plugin_id,
+        &req.mount_path,
+        &format!(
+            "file?path={}",
+            crate::file_service::client::urlencode_path(&req.relative_path)
+        ),
+    );
+    let part_path = std::path::PathBuf::from(format!("{}.part", dest_path.display()));
+    let dreq = crate::file_service::client::download::DownloadRequest {
+        url,
+        auth,
+        dest_path: part_path,
+        final_path: dest_path,
+        total: req.size,
+        media: None,
+    };
+
+    let handle = crate::file_service::client::TransferHandle::new(task_id.clone());
+    crate::plugin::transfer::register_cancel_token(&task_id, handle.token());
+    let store = crate::file_service::client::client_cursor_store();
+    let app_for_task = app_handle.clone();
+    let bus_for_task = bus.clone();
+    let task_id_for_task = task_id.clone();
+
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "filesrv_host_download",
+        async move {
+            let client = crate::file_service::client::DownloadClient::new();
+            // 进度 reporter：每 500ms 推送 Running（含瞬时速率）
+            let reporter_stop = handle.token().child_token();
+            {
+                let app = app_for_task.clone();
+                let bus = bus_for_task.clone();
+                let handle_cl = handle.clone();
+                let task_id_inner = task_id_for_task.clone();
+                spawn_report_progress(app, bus, handle_cl, task_id_inner, reporter_stop.clone());
+            }
+
+            let result = crate::file_service::client::download_with_retry(
+                &client, &dreq, store, &handle, 3,
+            )
+            .await;
+            reporter_stop.cancel();
+            crate::plugin::transfer::unregister_cancel_token(&task_id_for_task);
+            let (transferred, total) = handle.progress();
+            let state = match result {
+                Ok(_) => bedcode_plugin_api_mobile::TransferState::Completed,
+                Err(_) if handle.is_cancelled() => {
+                    bedcode_plugin_api_mobile::TransferState::Cancelled
+                }
+                Err(e) => bedcode_plugin_api_mobile::TransferState::Failed(e.to_string()),
+            };
+            crate::plugin::transfer::emit_progress(
+                &app_for_task,
+                &bus_for_task,
+                &task_id_for_task,
+                transferred,
+                total,
+                0,
+                state,
+            );
+        },
+    );
+
+    tracing::info!(
+        plugin_id = %state.plugin_id,
+        task_id = %task_id,
+        path = %req.relative_path,
+        "host_filesrv_download spawned"
+    );
+    Ok(task_id)
+}
+
+/// 逻辑层：手机自主发起上传（v2.1 client 栈，POST/PUT session 编排）
+///
+/// 返回 task_id；断点真源 = 服务端 session received（重查 + 404 重建）。
+/// 上传源 source_path 缺省取 relative_path（插件提供的本地路径）。
+pub(crate) fn filesrv_upload(
+    state: &WasmPluginState,
+    req_json: &str,
+) -> Result<String, String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE)
+    {
+        return Err("permission denied: fileservice".to_string());
+    }
+
+    let req: bedcode_plugin_api_mobile::FileTransferRequest = serde_json::from_str(req_json)
+        .map_err(|e| format!("invalid FileTransferRequest JSON: {}", e))?;
+
+    let task_id = uuid::Uuid::new_v4().to_string();
+    let app_handle = state
+        .host_ctx
+        .app_handle
+        .clone()
+        .ok_or_else(|| "app_handle unavailable, rejected".to_string())?;
+    let bus = state.host_ctx.message_bus.clone();
+
+    let (base, auth) = guarded_host_call(
+        &state.plugin_id,
+        "host_filesrv_upload",
+        Err(format!("host_filesrv_upload panicked for {}", task_id)),
+        || {
+            tokio::task::block_in_place(|| {
+                state
+                    .runtime_handle
+                    .block_on(crate::file_service::client::desktop_http_endpoint())
+            })
+        },
+    )?;
+
+    let create = crate::file_service::client::CreateUploadRequest {
+        relative_path: req.relative_path.clone(),
+        size: req.size,
+        batch_id: req.batch_id.clone(),
+    };
+    let source_path = req
+        .source_path
+        .clone()
+        .unwrap_or_else(|| req.relative_path.clone());
+
+    let handle = crate::file_service::client::TransferHandle::new(task_id.clone());
+    crate::plugin::transfer::register_cancel_token(&task_id, handle.token());
+    let saf = guarded_host_call(
+        &state.plugin_id,
+        "host_filesrv_upload",
+        None,
+        || {
+            tokio::task::block_in_place(|| {
+                state.runtime_handle.block_on(async {
+                    let fs = crate::state::get_file_service();
+                    fs.registry.saf_io().await
+                })
+            })
+        },
+    );
+    let app_for_task = app_handle.clone();
+    let bus_for_task = bus.clone();
+    let task_id_for_task = task_id.clone();
+
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "filesrv_host_upload",
+        async move {
+            let reporter_stop = handle.token().child_token();
+            {
+                let app = app_for_task.clone();
+                let bus = bus_for_task.clone();
+                let handle_cl = handle.clone();
+                let task_id_inner = task_id_for_task.clone();
+                spawn_report_progress(app, bus, handle_cl, task_id_inner, reporter_stop.clone());
+            }
+
+            let client = crate::file_service::client::UploadClient::new();
+            let result = client
+                .upload_file(
+                    &base,
+                    &req.plugin_id,
+                    &req.mount_path,
+                    &create,
+                    &auth,
+                    &source_path,
+                    saf,
+                    &handle,
+                )
+                .await;
+            reporter_stop.cancel();
+            crate::plugin::transfer::unregister_cancel_token(&task_id_for_task);
+            let (transferred, total) = handle.progress();
+            let state = match &result {
+                Ok(_) => bedcode_plugin_api_mobile::TransferState::Completed,
+                Err(_) if handle.is_cancelled() => {
+                    bedcode_plugin_api_mobile::TransferState::Cancelled
+                }
+                Err(e) => bedcode_plugin_api_mobile::TransferState::Failed(e.to_string()),
+            };
+            crate::plugin::transfer::emit_progress(
+                &app_for_task,
+                &bus_for_task,
+                &task_id_for_task,
+                transferred,
+                total,
+                0,
+                state,
+            );
+        },
+    );
+
+    tracing::info!(
+        plugin_id = %state.plugin_id,
+        task_id = %task_id,
+        path = %req.relative_path,
+        "host_filesrv_upload spawned"
+    );
+    Ok(task_id)
+}
+
+/// 进度 reporter（复用插件传输通道：`plugin:transfer:progress` + bus topic）
+fn spawn_report_progress(
+    app: Arc<tauri::AppHandle>,
+    bus: Arc<crate::plugin::message_bus::MessageBus>,
+    handle: crate::file_service::client::TransferHandle,
+    task_id: String,
+    stop: tokio_util::sync::CancellationToken,
+) {
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "filesrv_host_progress",
+        async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(500));
+            interval.tick().await; // 首个 tick 立即完成，跳过避免启动即推
+            let mut last_bytes = 0u64;
+            let mut last_tick = tokio::time::Instant::now();
+            loop {
+                tokio::select! {
+                    _ = stop.cancelled() => break,
+                    _ = interval.tick() => {}
+                }
+                let now = tokio::time::Instant::now();
+                let (current, total) = handle.progress();
+                let elapsed = now.duration_since(last_tick).as_secs_f64();
+                let bps = if elapsed > 0.0 {
+                    (current.saturating_sub(last_bytes) as f64 / elapsed) as u64
+                } else {
+                    0
+                };
+                last_bytes = current;
+                last_tick = now;
+                crate::plugin::transfer::emit_progress(
+                    &app,
+                    &bus,
+                    &task_id,
+                    current,
+                    total,
+                    bps,
+                    bedcode_plugin_api_mobile::TransferState::Running,
+                );
+            }
+        },
+    );
+}
+
+
+
+
+/// 逻辑层：intent 应答（v2.1 push 审批门；decision = "accepted" | "rejected"）
+///
+/// 经响应器放行/拒绝 push intent：accepted → 手机回 IntentAck{accepted} 并执行
+/// 下载；rejected → 回 IntentAck{rejected} 且不执行（防未授权数据流入本机）
+pub(crate) fn filesrv_respond_intent(
+    state: &WasmPluginState,
+    intent_id: &str,
+    decision: &str,
+) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE)
+    {
+        return Err("permission denied: fileservice".to_string());
+    }
+
+    let responder = crate::file_service::get_responder();
+    match decision {
+        "accepted" => guarded_host_call(
+            &state.plugin_id,
+            "host_filesrv_respond_intent",
+            Err("host_filesrv_respond_intent panicked".to_string()),
+            || {
+                tokio::task::block_in_place(|| {
+                    responder
+                        .approve_intent(intent_id)
+                        .map_err(|e| e.to_string())
+                })
+            },
+        ),
+        "rejected" => guarded_host_call(
+            &state.plugin_id,
+            "host_filesrv_respond_intent",
+            Err("host_filesrv_respond_intent panicked".to_string()),
+            || {
+                tokio::task::block_in_place(|| {
+                    responder
+                        .reject_intent(intent_id)
+                        .map_err(|e| e.to_string())
+                })
+            },
+        ),
+        other => Err(format!("invalid intent decision: {}", other)),
+    }?;
+
+    tracing::info!(
+        plugin_id = %state.plugin_id,
+        intent_id = %intent_id,
+        decision = %decision,
+        "intent responded"
+    );
+    Ok(())
+}

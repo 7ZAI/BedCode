@@ -64,6 +64,27 @@ internal class CancelTaskNotificationArgs {
     var sessionId: String = ""
 }
 
+@InvokeArg
+internal class ShowIntentAskNotificationArgs {
+    var intentId: String = ""
+    var title: String = ""
+    var body: String = ""
+    var acceptLabel: String = ""
+    var rejectLabel: String = ""
+}
+
+@InvokeArg
+internal class ShowPullNoticeArgs {
+    var intentId: String = ""
+    var title: String = ""
+    var body: String = ""
+}
+
+@InvokeArg
+internal class CancelIntentNotificationArgs {
+    var intentId: String = ""
+}
+
 @TauriPlugin(
     permissions = [
         Permission(strings = [Manifest.permission.POST_NOTIFICATIONS], alias = "permissionState")
@@ -222,6 +243,72 @@ class TaskNotificationPlugin(private val activity: Activity) : Plugin(activity) 
 
         try {
             manager.cancelTransferRequestNotification(args.batchId)
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /**
+     * 显示 push 审批通知（v2.1 后台/锁屏，带接受/拒绝 action）
+     *
+     * 由宿主 Rust（file_service/notify.rs）在 intent push 且 App 后台时调用；
+     * action 点击经 PendingIntent(kind=intent) → MainActivity →
+     * `plugin_filesrv_respond_intent`（accepted → 手机执行下载）。
+     */
+    @Command
+    fun showIntentAskNotification(invoke: Invoke) {
+        val args = invoke.parseArgs(ShowIntentAskNotificationArgs::class.java)
+
+        try {
+            manager.showIntentAskNotification(
+                intentId = args.intentId,
+                title = args.title,
+                body = args.body,
+                acceptLabel = args.acceptLabel,
+                rejectLabel = args.rejectLabel
+            )
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /** 显示 pull 信息性通知（v2.1 桌面拉取本机文件，无 action 按钮） */
+    @Command
+    fun showPullNotice(invoke: Invoke) {
+        val args = invoke.parseArgs(ShowPullNoticeArgs::class.java)
+
+        try {
+            manager.showPullNotice(args.intentId, args.title, args.body)
+            val result = JSObject()
+            result.put("success", true)
+            invoke.resolve(result)
+        } catch (e: Exception) {
+            val result = JSObject()
+            result.put("success", false)
+            result.put("error", e.message)
+            invoke.resolve(result)
+        }
+    }
+
+    /** 取消 intent 审批通知（应答后由宿主 Rust 调用） */
+    @Command
+    fun cancelIntentNotification(invoke: Invoke) {
+        val args = invoke.parseArgs(CancelIntentNotificationArgs::class.java)
+
+        try {
+            manager.cancelIntentNotification(args.intentId)
             val result = JSObject()
             result.put("success", true)
             invoke.resolve(result)

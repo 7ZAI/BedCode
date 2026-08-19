@@ -84,9 +84,6 @@ reqwest = { version = "0.12", default-features = false, features = ["stream", "r
 # 传输引擎工具（CancellationToken 取消 + ReaderStream 文件流，与桌面端 transfer 同语义）
 tokio-util = { version = "0.7", features = ["io"] }
 
-# 独立 HTTP 文件服务（插件 fileservice 能力，仅 HTTP 明文，无 TLS/compression 需求）
-actix-web = { version = "4", default-features = false }
-
 # Regex for SQL table name extraction
 regex = "1"
 
@@ -117,6 +114,9 @@ ndarray = "0.17"
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"
+# 仅测试用 mock server（http_auth_flow 起 mock 桌面端 HTTP 端点；生产依赖已删，
+# 不进 APK——服务器归零，手机端无任何 HTTP server 依赖）
+actix-web = { version = "4", default-features = false }
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

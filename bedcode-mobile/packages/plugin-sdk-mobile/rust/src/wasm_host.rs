@@ -17,7 +17,7 @@ use crate::host::{
     ConfigKey, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService, HostFs,
     HostHttp, HostLog, HostStorage, HostTerminal, HostTransfer,
 };
-use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest};
+use crate::types::{FileTransferRequest, MountOptions, MountResult, PeerFileService, TransferRequest};
 use crate::wasm::bedcode::plugin::{
     host_bus, host_config, host_database, host_events, host_file_service, host_fs, host_http,
     host_log, host_storage, host_terminal, host_transfer,
@@ -302,6 +302,27 @@ impl HostFileService for WasmHost {
     fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError> {
         host_file_service::cancel_receiving(session_id)
             .map_err(|e| host_err("filesrv_cancel_receiving", e))
+    }
+
+    fn filesrv_download(&self, req: &FileTransferRequest) -> Result<String, HostError> {
+        let req_str = serde_json::to_string(req).map_err(|e| {
+            HostError::custom(-1, format!("filesrv_download: serialize request failed: {}", e))
+        })?;
+        host_file_service::download(&req_str)
+            .map_err(|e| host_err("filesrv_download", e))
+    }
+
+    fn filesrv_upload(&self, req: &FileTransferRequest) -> Result<String, HostError> {
+        let req_str = serde_json::to_string(req).map_err(|e| {
+            HostError::custom(-1, format!("filesrv_upload: serialize request failed: {}", e))
+        })?;
+        host_file_service::upload(&req_str)
+            .map_err(|e| host_err("filesrv_upload", e))
+    }
+
+    fn filesrv_respond_intent(&self, intent_id: &str, decision: &str) -> Result<(), HostError> {
+        host_file_service::respond_intent(intent_id, decision)
+            .map_err(|e| host_err("filesrv_respond_intent", e))
     }
 }
 

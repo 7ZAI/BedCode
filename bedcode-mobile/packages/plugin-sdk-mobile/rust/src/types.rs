@@ -418,6 +418,33 @@ pub struct TransferProgress {
     pub state: TransferState,
 }
 
+/// 文件传输宿主请求（v2.1 服务器归零：手机自主发起 HTTP 下载/上传）
+///
+/// 路径语义在发起方侧解析：relative_path 下载 = 桌面挂载内路径，上传 = 桌面
+/// 目标路径；source_path（上传源）/ dest_path（下载落点）为手机本地路径或
+/// content://。宿主据此解析桌面端点（ConnectionManager target + JWT）并执行。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileTransferRequest {
+    /// 对端挂载插件 ID（filesrv_get_peer 拿到；下载/上传定位桌面端点用）
+    pub plugin_id: String,
+    /// 对端挂载点名称
+    pub mount_path: String,
+    /// 相对路径（下载 = 桌面挂载内路径；上传 = 桌面目标路径）
+    pub relative_path: String,
+    /// 文件总大小（字节，进度展示 + 断点预期）
+    pub size: u64,
+    /// v2：所属传输批 ID（pull 场景桌面已自批准随 intent 下发；自主上传可选）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub batch_id: Option<String>,
+    /// 下载落点（本地路径；缺省 = app 下载目录按文件名自动命名）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dest_path: Option<String>,
+    /// 上传源（本地路径或 content://；缺省 = relative_path 同路径）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+}
+
 /// 对端挂载点信息（控制面公告的单个挂载）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

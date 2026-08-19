@@ -33,9 +33,11 @@ impl ClientRouteHandler for FileServiceHandler {
                     }
                 }
                 FileServicePayload::Query {} => {
-                    // 主动探测：回复自身文件服务状态（无挂载/服务未运行 → Withdraw）
+                    // 主动探测：回复自身文件服务状态（无挂载 → Withdraw）。
+                    // v2.1 手机不再运行 HTTP server：Announce 仅携带挂载清单
+                    //（port=0/token=""），desktop 据此重建可浏览/可拉取目录
                     let fs = crate::state::get_file_service();
-                    if fs.registry.mount_count().await > 0 && fs.server.is_running().await {
+                    if fs.registry.mount_count().await > 0 {
                         tracing::info!("file service query received, replying announce");
                         // 强制推送当前记录（Query = 显式刷新请求，绕过 set_peer
                         // 去重：插件 activate 后主动探测时信息未变会被吞掉推送）
@@ -44,11 +46,61 @@ impl ClientRouteHandler for FileServiceHandler {
                                 fs.registry.push_peer(&peer_id, info).await;
                             }
                         }
-                        crate::file_service::announce::announce(&fs.registry, &fs.server).await;
+                        crate::file_service::announce::announce(&fs.registry).await;
                     } else {
                         tracing::info!("file service query received, replying withdraw");
                         crate::file_service::announce::withdraw().await;
                     }
+                }
+                FileServicePayload::FileListRequest {
+                    list_id,
+                    plugin_id,
+                    mount_path,
+                    path,
+                } => {
+                    // v2.1 list 迁移：桌面浏览手机共享目录 → 本机列举 → 回 FileListResponse
+                    let fs = crate::state::get_file_service();
+                    let registry = fs.registry.clone();
+                    let response = match crate::file_service::list::list_entries(
+                        &registry,
+                        &plugin_id,
+                        &mount_path,
+                        &path,
+                    )
+                    .await
+                    {
+                        Ok(outcome) => FileServicePayload::FileListResponse {
+                            list_id,
+                            plugin_id,
+                            mount_path,
+                            path,
+                            entries: outcome.entries,
+                            notice: outcome.notice,
+                            ok: true,
+                            error: None,
+                        },
+                        Err(e) => {
+                            tracing::warn!(
+                                list_id = %list_id,
+                                plugin_id = %plugin_id,
+                                mount_path = %mount_path,
+                                path = %path,
+                                error = %e,
+                                "file list request failed"
+                            );
+                            FileServicePayload::FileListResponse {
+                                list_id,
+                                plugin_id,
+                                mount_path,
+                                path,
+                                entries: Vec::new(),
+                                notice: None,
+                                ok: false,
+                                error: Some(e.to_string()),
+                            }
+                        }
+                    };
+                    crate::file_service::announce::send(response).await;
                 }
                 FileServicePayload::TransferApproval {
                     batch_id,
@@ -67,6 +119,24 @@ impl ClientRouteHandler for FileServiceHandler {
                         .registry
                         .publish_transfer_approval(&batch_id, &decision, &reason)
                         .await;
+                }
+                // === v2.1 以下变体为 手机 → 桌面 方向（响应器发送），桌面不应回推 ===
+                // 兜底：旧/异常对端回推时仅记录，不阻塞路由
+                FileServicePayload::IntentAck { intent_id, decision, .. } => {
+                    tracing::warn!(intent_id = %intent_id, decision = %decision, "unexpected inbound IntentAck (M→D variant received)");
+                }
+                FileServicePayload::TransferProgress { intent_id, .. } => {
+                    tracing::warn!(intent_id = ?intent_id, "unexpected inbound TransferProgress (M→D variant received)");
+                }
+                FileServicePayload::TransferHeartbeat { intent_id } => {
+                    tracing::warn!(intent_id = %intent_id, "unexpected inbound TransferHeartbeat (M→D variant received)");
+                }
+                FileServicePayload::IntentFail { intent_id, offset, .. } => {
+                    tracing::warn!(intent_id = %intent_id, offset, "unexpected inbound IntentFail (M→D variant received)");
+                }
+                FileServicePayload::FileListResponse { list_id, .. } => {
+                    // M→D 方向变体，桌面不应回推；收到属异常/旧端残留，仅记录
+                    tracing::warn!(list_id = %list_id, "unexpected inbound FileListResponse (M→D variant received)");
                 }
             }
         }

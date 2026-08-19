@@ -6,7 +6,7 @@
 //! 与桌面端 SDK `host/file_service.rs` 同构（移动端无 /api 前缀）。
 
 use super::HostError;
-use crate::types::{MountOptions, MountResult, PeerFileService};
+use crate::types::{FileTransferRequest, MountOptions, MountResult, PeerFileService};
 
 /// 插件文件服务宿主能力
 ///
@@ -56,4 +56,20 @@ pub trait HostFileService {
     ///
     /// 宿主删除 .part 临时文件并发出 `filesrv:receiving_done`(cancelled)。
     fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError>;
+
+    /// 手机自主发起下载（v2.1 服务器归零：GET+Range 落 SAF/下载目录）
+    ///
+    /// 经宿主 client 栈执行（断点续传 + HEAD 指纹比对），返回 task_id；
+    /// 进度经 `transfer:{task_id}` 通道 / `plugin:transfer:progress` 事件回报
+    fn filesrv_download(&self, req: &FileTransferRequest) -> Result<String, HostError>;
+
+    /// 手机自主发起上传（v2.1 服务器归零：POST/PUT session 编排）
+    ///
+    /// 经宿主 client 栈执行（断点重查 + 404 重建），返回 task_id
+    fn filesrv_upload(&self, req: &FileTransferRequest) -> Result<String, HostError>;
+
+    /// intent 应答（v2.1 push 审批门）：
+    /// decision = "accepted" → 用户确认，手机回 IntentAck{accepted} 并执行下载；
+    /// decision = "rejected" → 用户拒绝，手机回 IntentAck{rejected} 且不执行
+    fn filesrv_respond_intent(&self, intent_id: &str, decision: &str) -> Result<(), HostError>;
 }

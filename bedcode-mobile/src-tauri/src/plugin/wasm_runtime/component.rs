@@ -192,6 +192,18 @@ impl bedcode::plugin::host_file_service::Host for WasmPluginState {
     fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
         super::host_impl::filesrv_cancel_receiving(self, &session_id)
     }
+
+    fn download(&mut self, request_json: String) -> Result<String, String> {
+        super::host_impl::filesrv_download(self, &request_json)
+    }
+
+    fn upload(&mut self, request_json: String) -> Result<String, String> {
+        super::host_impl::filesrv_upload(self, &request_json)
+    }
+
+    fn respond_intent(&mut self, intent_id: String, decision: String) -> Result<(), String> {
+        super::host_impl::filesrv_respond_intent(self, &intent_id, &decision)
+    }
 }
 
 impl bedcode::plugin::host_transfer::Host for WasmPluginState {

@@ -288,6 +288,7 @@ pub fn run() {
             crate::plugin::commands::plugin_filesrv_set_approval_timeout,
             crate::plugin::commands::plugin_filesrv_cancel_receiving,
             crate::plugin::commands::plugin_filesrv_respond_transfer_request,
+            crate::plugin::commands::plugin_filesrv_respond_intent,
             crate::plugin::commands::plugin_open_file,
             crate::plugin::commands::plugin_open_file_location,
             crate::plugin::commands::plugin_pick_directory,

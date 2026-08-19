@@ -153,6 +153,25 @@ pub async fn cancel_transfer(task_id: &str) -> bool {
     }
 }
 
+/// 注册取消令牌（v2.1 宿主 client 传输复用 `transfer_cancel` 的取消语义）
+///
+/// filesrv_download/filesrv_upload 启动宿主 client 栈任务时注册其取消令牌，
+/// 插件可经既有 `transfer_cancel` host fn 中止（task_id 同一命名空间）
+pub fn register_cancel_token(task_id: &str, token: CancellationToken) {
+    tasks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(task_id.to_string(), token);
+}
+
+/// 注销取消令牌（任务终态清理）
+pub fn unregister_cancel_token(task_id: &str) {
+    tasks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(task_id);
+}
+
 // ==================== Transfer Task ====================
 
 /// 传输任务终局
@@ -588,7 +607,7 @@ async fn upload(
 /// 双通道推送进度：Tauri 事件 + 消息总线
 ///
 /// 事件发送失败不影响传输本身（前端 UI 丢进度由总线兜底）
-fn emit_progress(
+pub(crate) fn emit_progress(
     app_handle: &tauri::AppHandle,
     bus: &MessageBus,
     task_id: &str,

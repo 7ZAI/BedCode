@@ -110,6 +110,8 @@ impl WasmPlugin for FileTransferPlugin {
         let _ = host.bus_subscribe("filesrv:receiving_started");
         let _ = host.bus_subscribe("filesrv:receiving_done");
         let _ = host.bus_subscribe("filesrv:transfer_approval");
+        // v2.1 push 接收策略（accept/reject 自动应答见 on_bus_message）
+        let _ = host.bus_subscribe("filesrv:intent_received");
 
         // 6. 主动探测对端（修复插件激活晚于认证导致的总线事件丢失：
         //    activate 完成即发 Query，对端回复后宿主推送 peer_changed）
@@ -162,6 +164,7 @@ impl WasmPlugin for FileTransferPlugin {
         let _ = host.bus_unsubscribe("filesrv:receiving_started");
         let _ = host.bus_unsubscribe("filesrv:receiving_done");
         let _ = host.bus_unsubscribe("filesrv:transfer_approval");
+        let _ = host.bus_unsubscribe("filesrv:intent_received");
 
         // v2 接收状态清空：WASM 静态 state 跨 deactivate/activate 存活，残留
         // 批卡/接收任务会在下次激活时陈旧复现（spec §9.5：接收状态不跨生命周期）
@@ -373,6 +376,36 @@ impl WasmPlugin for FileTransferPlugin {
         if msg.topic == "filesrv:transfer_approval" {
             let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
             commands::handle_transfer_approval_event(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+
+        // v2.1 push 接收策略：accept/reject 自动应答（ask 走通知确认门，不自动）。
+        // 事件在 responder Approved 门注册后广播（dispatch_intent），自动应答必中门
+        if msg.topic == "filesrv:intent_received" {
+            let intent_id = msg
+                .payload
+                .get("intentId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if !intent_id.is_empty() {
+                let policy = {
+                    let s = state().lock().unwrap_or_else(|e| e.into_inner());
+                    s.settings.receiving_policy.clone()
+                };
+                let decision = match policy.as_str() {
+                    commands::POLICY_ACCEPT => Some("accepted"),
+                    commands::POLICY_REJECT => Some("rejected"),
+                    _ => None, // ask：等用户经通知 action 应答
+                };
+                if let Some(decision) = decision {
+                    if let Err(e) = host.filesrv_respond_intent(&intent_id, decision) {
+                        host.log_warn(&format!(
+                            "auto respond intent {} ({}) failed: {}",
+                            intent_id, decision, e
+                        ));
+                    }
+                }
+            }
             return Ok(());
         }
 

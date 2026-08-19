@@ -576,6 +576,24 @@ export interface PeerFileServiceInfo {
   mounts: PeerMountAnnouncement[]
 }
 
+/** v2.1：手机自主发起 HTTP 传输（服务器归零，与 SDK Rust FileTransferRequest 对应） */
+export interface FileTransferRequest {
+  /** 对端挂载插件 ID（filesrv_get_peer 拿到；下载/上传定位桌面端点用） */
+  pluginId: string
+  /** 对端挂载点名称 */
+  mountPath: string
+  /** 相对路径（下载 = 桌面挂载内路径；上传 = 桌面目标路径） */
+  relativePath: string
+  /** 文件总大小（字节，进度展示 + 断点预期） */
+  size: number
+  /** v2：所属传输批 ID（pull 场景桌面已自批准随 intent 下发；自主上传可选） */
+  batchId?: string | null
+  /** 下载落点（本地路径；缺省 = app 下载目录按文件名自动命名） */
+  destPath?: string | null
+  /** 上传源（本地路径或 content://；缺省 = relativePath 同路径） */
+  sourcePath?: string | null
+}
+
 /** SAF 目录树条目（listTree 返回；真实路径条目列表复用，uri 承载绝对路径） */
 export interface SafEntry {
   name: string
@@ -655,6 +673,10 @@ export interface FileServiceAPI {
   setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
   /** v2：取消接收中的上传会话（本地取消） */
   cancelReceivingSession(sessionId: string): Promise<void>
+  /** v2.1：手机自主发起下载（宿主 client 栈 GET+Range 落 SAF/下载目录），返回 task_id */
+  download(req: FileTransferRequest): Promise<string>
+  /** v2.1：手机自主发起上传（宿主 client 栈 POST/PUT session 编排），返回 task_id */
+  upload(req: FileTransferRequest): Promise<string>
   /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null）。
    * Android 使用 SAF 目录树选择器并解析为真实路径；不支持的 provider
    * （云盘/SD 卡等）或 iOS 会 reject，插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */

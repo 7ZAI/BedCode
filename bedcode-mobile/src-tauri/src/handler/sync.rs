@@ -137,6 +137,47 @@ impl ClientRouteHandler for SyncHandler {
                         .registry
                         .publish_transfer_approval(&batch_id, &decision, &reason)
                         .await;
+                }                
+                SyncPayload::FileTransferIntent {
+                    intent_id,
+                    direction,
+                    semantics,
+                    batch_id,
+                    relative_path,
+                    size,
+                    device_name,
+                    expect_response,
+                } => {
+                    // 文件传输意图（v2.1 服务器归零）：桌面发起 → 手机 responder
+                    // 按 direction 执行（pull 免审批 / push 经 Approved 门）
+                    tracing::info!(
+                        "[SyncHandler] FileTransferIntent: intent_id={}, direction={}, semantics={}, path={}, size={}",
+                        intent_id,
+                        direction,
+                        semantics,
+                        relative_path,
+                        size
+                    );
+                    // 构造强类型意图（wire 内联字段投影）
+                    let intent = crate::enums::sync::FileTransferIntent {
+                        intent_id,
+                        direction,
+                        semantics,
+                        batch_id,
+                        relative_path,
+                        size,
+                        device_name,
+                        expect_response,
+                    };
+                    crate::file_service::get_responder().dispatch_intent(intent).await;
+                }
+                SyncPayload::FileTransferCancel { intent_id } => {
+                    // 文件传输取消（v2.1）：中止对应 HTTP 会话（已写字节保留）
+                    tracing::info!(
+                        "[SyncHandler] FileTransferCancel: intent_id={}",
+                        intent_id
+                    );
+                    crate::file_service::get_responder().cancel_intent(&intent_id);
                 }
             }
         }

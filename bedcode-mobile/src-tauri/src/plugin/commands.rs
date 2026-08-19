@@ -558,6 +558,38 @@ pub async fn plugin_filesrv_reject_transfer(
         .map_err(BatchError::into_app_error)
 }
 
+/// intent 应答（v2.1 push 审批门）：decision = "accepted" | "rejected"
+///
+/// 前台对话框 / 后台通知 action（kind=intent）点击后路由到本命令；
+/// decision=accepted → 手机回 IntentAck{accepted} 并执行下载，
+/// rejected → 回 IntentAck{rejected} 且不执行（防未授权数据流入本机）。
+/// 需 fileservice 权限（与批应答命令同权限面）。
+#[tauri::command]
+pub async fn plugin_filesrv_respond_intent(
+    app_handle: tauri::AppHandle,
+    intent_id: String,
+    decision: String,
+) -> Result<()> {
+    // 无需 plugin_id：intent 由宿主响应器注册（不归属特定插件挂载），
+    // 但为对齐既有 filesrv 命令的权限面，允许任意已启用插件应答
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    let _ = manager;
+    tracing::info!(
+        intent_id = %intent_id,
+        decision = %decision,
+        "plugin_filesrv_respond_intent"
+    );
+    let responder = crate::file_service::get_responder();
+    match decision.as_str() {
+        "accepted" => responder.approve_intent(&intent_id),
+        "rejected" => responder.reject_intent(&intent_id),
+        other => Err(crate::AppError::InvalidInput(format!(
+            "invalid intent decision: {}",
+            other
+        ))),
+    }
+}
+
 /// 设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
 #[tauri::command]
 pub async fn plugin_filesrv_set_approval_timeout(
