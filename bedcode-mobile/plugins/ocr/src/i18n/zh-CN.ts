@@ -28,6 +28,9 @@ export default {
   'ocr.result.empty': '未识别到文字',
   'ocr.result.emptyDesc': '换一张更清晰的图片再试试',
   'ocr.result.copyAll': '复制全文',
+  'ocr.result.copy': '复制',
+  'ocr.result.copyLine': '复制该行',
+  'ocr.result.copyFailed': '复制失败，请重试',
   'ocr.result.copied': '已复制到剪贴板',
   'ocr.result.lineCopied': '已复制该行',
   'ocr.result.lowConfidence': '低置信度',
@@ -49,6 +52,7 @@ export default {
 
   // ==================== 错误 ====================
   'ocr.error.pickFailed': '取图失败',
+  'ocr.error.captureTimeout': '取图超时，请重试',
   'ocr.error.decodeFailed': '图片解码失败，请换一张图片',
   'ocr.error.recognizeFailed': '识别失败',
   'ocr.error.permissionDenied': '相机权限被拒绝，请在系统设置中允许后重试',

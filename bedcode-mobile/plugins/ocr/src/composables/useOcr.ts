@@ -21,6 +21,30 @@ export const LOW_CONFIDENCE_THRESHOLD = 0.6
 /** 模型缺失错误特征串（Rust 侧 plugin_ocr_recognize 的错误文案） */
 const MODELS_MISSING_MARKERS = ['models not extracted', '模型未解压', '模型缺失']
 
+/** 取图超时（ms）：相机/相册 invoke 静默挂起（如权限请求失败）时兜底复位，
+ *  避免 UI 永久停留「识别中」。需覆盖正常拍照/选图等待，仅兜底异常路径（spec §6.2 防重入）。 */
+export const PICK_TIMEOUT_MS = 120_000
+
+/** 带超时等待：超时 rejected（错误串含 timed out，供 mapRecognizeError 映射）；
+ *  promise 先 settle 时清理定时器，避免悬空计时器。 */
+export function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`${what} timed out after ${ms}ms`))
+    }, ms)
+    promise.then(
+      (v) => {
+        clearTimeout(timer)
+        resolve(v)
+      },
+      (e) => {
+        clearTimeout(timer)
+        reject(e)
+      },
+    )
+  })
+}
+
 // ==================== module 级共享状态（OcrView 写入，ResultPage 读取） ====================
 
 /** 最近一次识别结果（null = 未识别 / 已清空） */
@@ -75,7 +99,8 @@ export function useOcr(context: PluginContext) {
     if (recognizing.value) return false
     recognizing.value = true
     try {
-      const image = await source()
+      // 取图带超时兜底：宿主命令静默挂起（权限请求失败等）时不至于永久卡「识别中」
+      const image = await withTimeout(source(), PICK_TIMEOUT_MS, 'ocr image source')
       if (!image) return false // 用户取消
       // 取图产物 {path} → 识别入参 {rgbaPath}（spec §4.4 调用路径）
       const result = await context.ocr.recognize({
@@ -154,6 +179,9 @@ export function useOcr(context: PluginContext) {
 export function mapRecognizeError(err: unknown): { key: string; params?: Record<string, any> } {
   const message = err instanceof Error ? err.message : String(err)
   const lower = message.toLowerCase()
+  if (lower.includes('timed out')) {
+    return { key: 'ocr.error.captureTimeout' }
+  }
   if (MODELS_MISSING_MARKERS.some((m) => lower.includes(m.toLowerCase()))) {
     return { key: 'ocr.home.modelsMissing' }
   }

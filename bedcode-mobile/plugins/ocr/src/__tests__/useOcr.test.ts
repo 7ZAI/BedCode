@@ -13,6 +13,7 @@ import {
   mapRecognizeError,
   LOW_CONFIDENCE_THRESHOLD,
   RESULT_ROUTE_ID,
+  PICK_TIMEOUT_MS,
 } from '../composables/useOcr'
 
 /** 构造带可注入 ocr API 的假 PluginContext（useOcr 仅消费 ocr + logger） */
@@ -191,6 +192,28 @@ describe('识别流', () => {
     ocr.recognize = vi.fn(async () => ({ engine: 'offline', durationMs: 1, lines: [] }))
     expect(await o.recognizeFromAlbum()).toBe(true)
   })
+
+  it('取图 invoke 静默挂起 → 超时上抛且复位 recognizing（防永久“识别中”）', async () => {
+    vi.useFakeTimers()
+    try {
+      // pickImage 永不 resolve：模拟宿主命令静默挂起（如权限请求失败）
+      const pickImage = vi.fn(() => new Promise<never>(() => {}))
+      const o = useOcr(makeContext({ pickImage, recognize: vi.fn() }).context)
+
+      const p = o.recognizeFromAlbum()
+      // 先附加 rejection handler，再推进 fake timer（避免 timer 触发时产生 unhandled rejection）
+      const assertion = expect(p).rejects.toThrow(/timed out/)
+      await vi.advanceTimersByTimeAsync(PICK_TIMEOUT_MS)
+      await assertion
+      expect(o.recognizing.value).toBe(false)
+      // 复位后可重试（不被防重入拦截）
+      const { context } = makeContext()
+      const again = useOcr(context)
+      expect(await again.recognizeFromAlbum()).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('错误映射（错误串 → i18n key）', () => {
@@ -216,6 +239,12 @@ describe('错误映射（错误串 → i18n key）', () => {
   it('解码失败 → decodeFailed', () => {
     expect(mapRecognizeError(new Error('Failed to decode image: unsupported or corrupted image')).key).toBe(
       'ocr.error.decodeFailed',
+    )
+  })
+
+  it('取图超时 → captureTimeout', () => {
+    expect(mapRecognizeError(new Error('ocr image source timed out after 120000ms')).key).toBe(
+      'ocr.error.captureTimeout',
     )
   })
 

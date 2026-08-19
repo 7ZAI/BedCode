@@ -18,14 +18,39 @@ const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, par
 
 const ocr = useOcr(context)
 
-/** 复制文本并 Toast 反馈（navigator.clipboard 为既有插件模式；失败静默） */
-async function copyText(text: string, toastKey: string): Promise<void> {
+/** 复制文本：优先 Clipboard API，失败/不可用降级传统 execCommand('copy')（Android WebView
+ *  部分场景 clipboard API 不可用）；最终失败 Toast 错误——避免静默降级导致「点复制无反应」
+ *  被误认为没有复制功能。 */
+async function copyText(text: string, successKey: string): Promise<void> {
   try {
-    await navigator.clipboard.writeText(text)
-    context.dialogs.showToast(t(toastKey), 'success')
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      context.dialogs.showToast(t(successKey), 'success')
+      return
+    }
+    legacyCopy(text)
+    context.dialogs.showToast(t(successKey), 'success')
   } catch {
-    // WebView 剪贴板不可用时静默降级（不打扰用户）
+    try {
+      legacyCopy(text)
+      context.dialogs.showToast(t(successKey), 'success')
+    } catch {
+      context.dialogs.showToast(t('ocr.result.copyFailed'), 'error')
+    }
   }
+}
+
+/** 传统剪贴板复制：隐藏 textarea + execCommand('copy')；失败抛错供上层反馈 */
+function legacyCopy(text: string): void {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.select()
+  const ok = document.execCommand('copy')
+  ta.remove()
+  if (!ok) throw new Error('execCommand copy failed')
 }
 
 /** 点击某行：复制该行文本 */
@@ -81,16 +106,16 @@ onUnmounted(() => {
       </div>
 
       <div class="flex flex-col gap-2">
-        <button
+        <div
           v-for="(line, idx) in ocr.lines.value"
           :key="idx"
-          class="ocr-line-card group text-left rounded-xl px-3.5 py-3 bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)] transition-[color,background-color,transform] duration-200 active:scale-[0.98]"
+          class="ocr-line-card group text-left rounded-xl px-3.5 py-2 bg-[var(--mobile-bg-card)] shadow-[var(--mobile-card-shadow)] cursor-pointer transition-[color,background-color,transform] duration-200 active:scale-[0.98]"
           :class="{ 'ocr-line-card--weak': line.confidence < LOW_CONFIDENCE_THRESHOLD }"
           @click="handleCopyLine(line.text)"
         >
-          <div class="flex items-start gap-2">
+          <div class="flex items-center gap-2">
             <span
-              class="ocr-line-no flex-shrink-0 mt-0.5 text-[var(--font-size-xs)] text-[var(--mobile-text-muted)] tabular-nums"
+              class="ocr-line-no flex-shrink-0 text-[var(--font-size-xs)] text-[var(--mobile-text-muted)] tabular-nums"
             >
               {{ idx + 1 }}
             </span>
@@ -101,12 +126,31 @@ onUnmounted(() => {
             </span>
             <span
               v-if="line.confidence < LOW_CONFIDENCE_THRESHOLD"
-              class="ocr-low-chip flex-shrink-0 mt-0.5"
+              class="ocr-low-chip flex-shrink-0"
             >
               {{ t('ocr.result.lowConfidence') }}
             </span>
+            <!-- 显式复制入口（touch target ≥44px；点击行本身同样复制该行） -->
+            <button
+              class="ocr-copy-btn flex-shrink-0 inline-flex items-center gap-1 px-2.5 min-h-[44px] rounded-lg text-[var(--font-size-xs)] font-medium text-[var(--mobile-accent)] transition-colors duration-200 active:bg-[color-mix(in_srgb,var(--mobile-accent)_12%,transparent)]"
+              :aria-label="t('ocr.result.copyLine')"
+              @click.stop="handleCopyLine(line.text)"
+            >
+              <svg
+                class="w-3.5 h-3.5 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <rect x="9" y="9" width="11" height="11" rx="2" />
+                <path d="M5 15V5a2 2 0 0 1 2-2h10" />
+              </svg>
+              <span>{{ t('ocr.result.copy') }}</span>
+            </button>
           </div>
-        </button>
+        </div>
       </div>
     </template>
 

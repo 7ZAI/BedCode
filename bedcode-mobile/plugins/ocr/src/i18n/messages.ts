@@ -26,6 +26,9 @@ export interface MessageSchema {
   'ocr.result.empty': string
   'ocr.result.emptyDesc': string
   'ocr.result.copyAll': string
+  'ocr.result.copy': string
+  'ocr.result.copyLine': string
+  'ocr.result.copyFailed': string
   'ocr.result.copied': string
   'ocr.result.lineCopied': string
   'ocr.result.lowConfidence': string
@@ -43,6 +46,7 @@ export interface MessageSchema {
   'ocr.settings.restoreFailed': string
   'ocr.settings.deleteFailed': string
   'ocr.error.pickFailed': string
+  'ocr.error.captureTimeout': string
   'ocr.error.decodeFailed': string
   'ocr.error.recognizeFailed': string
   'ocr.error.permissionDenied': string

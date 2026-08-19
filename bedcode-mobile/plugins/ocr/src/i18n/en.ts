@@ -30,6 +30,9 @@ export default {
   'ocr.result.empty': 'No text detected',
   'ocr.result.emptyDesc': 'Try a clearer image',
   'ocr.result.copyAll': 'Copy All',
+  'ocr.result.copy': 'Copy',
+  'ocr.result.copyLine': 'Copy this line',
+  'ocr.result.copyFailed': 'Copy failed, please retry',
   'ocr.result.copied': 'Copied to clipboard',
   'ocr.result.lineCopied': 'Line copied',
   'ocr.result.lowConfidence': 'Low confidence',
@@ -51,6 +54,7 @@ export default {
 
   // ==================== Errors ====================
   'ocr.error.pickFailed': 'Failed to pick image',
+  'ocr.error.captureTimeout': 'Image capture timed out, please retry',
   'ocr.error.decodeFailed': 'Failed to decode image, try another one',
   'ocr.error.recognizeFailed': 'Recognition failed',
   'ocr.error.permissionDenied': 'Camera permission denied. Allow it in system settings and retry.',
