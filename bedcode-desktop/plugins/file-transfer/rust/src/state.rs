@@ -15,6 +15,13 @@ pub enum TaskState {
     /// v2：等待对方同意（仅 ask 模式上传任务，批上下文内）
     #[serde(rename = "waiting-approval")]
     WaitingApproval,
+    /// v2.1：intent 已发送（等待手机回执）瞬时态
+    ///
+    /// 服务器归零后桌面不再直连手机：发 intent → 收 ACK → 收 progress 三步，
+    /// ACK 到达即转 Transferring/Rejected。任务五态（v2）不变，此为瞬时态，
+    /// 不持久化（TaskStore::load 过滤规则不保留，重启等价于未发）
+    #[serde(rename = "waiting-reply")]
+    WaitingReply,
     /// 传输进行中
     Transferring,
     /// 用户手动暂停
@@ -61,11 +68,20 @@ impl TaskState {
 pub fn validate_transition(from: TaskState, to: TaskState) -> Result<(), &'static str> {
     match (from, to) {
         // queued → transferring（槽位空出）/ cancelled / resumable（对端下线）/
-        // waiting-approval（v2：ask 批等待同意）
+        // waiting-approval（v2：ask 批等待同意）/ waiting-reply（v2.1：intent 已发待回执）
         (TaskState::Queued, TaskState::Transferring) => Ok(()),
         (TaskState::Queued, TaskState::Cancelled) => Ok(()),
         (TaskState::Queued, TaskState::Resumable) => Ok(()),
         (TaskState::Queued, TaskState::WaitingApproval) => Ok(()),
+        (TaskState::Queued, TaskState::WaitingReply) => Ok(()),
+
+        // waiting-reply（v2.1）：ACK accepted → transferring / rejected → rejected；
+        // 用户取消 → cancelled；心跳超时/对端下线 → resumable（暂停-待续传）
+        (TaskState::WaitingReply, TaskState::Transferring) => Ok(()),
+        (TaskState::WaitingReply, TaskState::Rejected) => Ok(()),
+        (TaskState::WaitingReply, TaskState::Cancelled) => Ok(()),
+        (TaskState::WaitingReply, TaskState::Resumable) => Ok(()),
+        (TaskState::WaitingReply, TaskState::Failed) => Ok(()),
 
         // waiting-approval（v2）：批准 → queued 重新调度；拒绝/超时 → rejected；
         // 用户取消 → cancelled；对端下线兜底 → resumable（实际采用 rejected(timeout)）
@@ -191,6 +207,12 @@ pub struct Task {
     /// 上次持久化时间戳（毫秒，用于 1s 节流）
     #[serde(skip)]
     pub last_flush: u64,
+    /// v2.1：intent 驱动任务的意图 ID（关联 ACK/进度/心跳/取消）
+    #[serde(skip)]
+    pub intent_id: Option<String>,
+    /// v2.1：intent 驱动任务最近一次活跃时间（毫秒，30s 无回传判失联）
+    #[serde(skip)]
+    pub last_activity: u64,
 }
 
 impl Task {
@@ -484,6 +506,14 @@ mod tests {
         assert!(validate_transition(TaskState::WaitingApproval, TaskState::Rejected).is_ok());
         assert!(validate_transition(TaskState::WaitingApproval, TaskState::Cancelled).is_ok());
         assert!(validate_transition(TaskState::WaitingApproval, TaskState::Resumable).is_ok());
+        // v2.1：queued → waiting-reply（intent 已发待回执）；
+        // waiting-reply → transferring/rejected/cancelled/resumable/failed
+        assert!(validate_transition(TaskState::Queued, TaskState::WaitingReply).is_ok());
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Transferring).is_ok());
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Rejected).is_ok());
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Cancelled).is_ok());
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Resumable).is_ok());
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Failed).is_ok());
         // transferring → all valid targets
         assert!(validate_transition(TaskState::Transferring, TaskState::Paused).is_ok());
         assert!(validate_transition(TaskState::Transferring, TaskState::Resumable).is_ok());
@@ -512,6 +542,8 @@ mod tests {
         assert!(validate_transition(TaskState::Cancelled, TaskState::Queued).is_err());
         // v2：waiting-approval 不可直接转入 transferring（必须经 queued 重新调度）
         assert!(validate_transition(TaskState::WaitingApproval, TaskState::Transferring).is_err());
+        // v2.1：waiting-reply 不可直接入 queued（重发 intent 经 resumable→queued 路径）
+        assert!(validate_transition(TaskState::WaitingReply, TaskState::Queued).is_err());
         // 非法迁移
         assert!(validate_transition(TaskState::Queued, TaskState::Paused).is_err());
         assert!(validate_transition(TaskState::Paused, TaskState::Completed).is_err());
@@ -532,6 +564,10 @@ mod tests {
         assert!(!TaskState::Paused.is_terminal());
         assert!(!TaskState::Resumable.is_terminal());
         assert!(!TaskState::WaitingApproval.is_terminal());
+        assert!(!TaskState::WaitingReply.is_terminal());
+
+        // v2.1：waiting-reply 是瞬时态，不参与调度
+        assert!(!TaskState::WaitingReply.is_schedulable());
     }
 
     #[test]
@@ -555,12 +591,25 @@ mod tests {
             host_task_id: None,
             auto_resumable: false,
             last_flush: 0,
+            intent_id: None,
+            last_activity: 0,
         };
         assert!(task.transition(TaskState::Transferring).is_ok());
         assert_eq!(task.state, TaskState::Transferring);
         // 非法迁移保持原状态
         assert!(task.transition(TaskState::Queued).is_err());
         assert_eq!(task.state, TaskState::Transferring);
+    }
+
+    #[test]
+    fn test_waiting_reply_wire_name() {
+        // wire lowercase：前端按字面量展示「等待回执」；与 v2 waiting-approval 同风格
+        assert_eq!(
+            serde_json::to_value(TaskState::WaitingReply).unwrap(),
+            serde_json::json!("waiting-reply")
+        );
+        let back: TaskState = serde_json::from_value(serde_json::json!("waiting-reply")).unwrap();
+        assert_eq!(back, TaskState::WaitingReply);
     }
 
     #[test]

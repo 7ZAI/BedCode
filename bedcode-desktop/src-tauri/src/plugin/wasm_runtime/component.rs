@@ -299,6 +299,27 @@ impl bedcode::plugin::host_file_service::Host for WasmPluginState {
     fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
         file_service::filesrv_cancel_receiving(&self.host_ctx, &self.plugin_id, &session_id)
     }
+
+    fn self_approve_batch(
+        &mut self,
+        mount_path: String,
+        batch_id: String,
+        files_json: String,
+        total_size: u64,
+    ) -> Result<(), String> {
+        file_service::filesrv_self_approve_batch(
+            &self.host_ctx,
+            &self.plugin_id,
+            &mount_path,
+            &batch_id,
+            &files_json,
+            total_size,
+        )
+    }
+
+    fn list_remote(&mut self, mount_path: String, path: String) -> Result<String, String> {
+        file_service::filesrv_list_remote(&self.host_ctx, &self.plugin_id, &mount_path, &path)
+    }
 }
 
 impl bedcode::plugin::host_transfer::Host for WasmPluginState {

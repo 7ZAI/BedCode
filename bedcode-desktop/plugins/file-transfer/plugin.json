@@ -18,6 +18,7 @@
     "network:http",
     "storage",
     "system:open",
+    "timer:schedule",
     "transfer",
     "ui:sidebar"
   ],
@@ -122,6 +123,10 @@
       {
         "id": "file-transfer.clear-history",
         "title": "Clear Transfer History"
+      },
+      {
+        "id": "file-transfer.sweep-intents",
+        "title": "Sweep Stale Transfer Intents"
       }
     ],
     "views": [

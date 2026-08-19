@@ -58,6 +58,10 @@ export interface MessageSchema {
   'transfer.task.receiving': string
   'transfer.task.openDir': string
 
+  // ==================== intent 驱动（v2.1） ====================
+  'transfer.task.waitingReply': string
+  'transfer.task.peerOffline': string
+
   // ==================== 队列面板 ====================
   'transfer.queue.title': string
   'transfer.queue.count': string

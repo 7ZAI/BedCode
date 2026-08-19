@@ -9,7 +9,7 @@ mod peer;
 mod queue;
 mod state;
 
-use bedcode_plugin_api::host::{HostBus, HostFileService, HostLog, HostTransfer};
+use bedcode_plugin_api::host::{HostBus, HostFileService, HostLog, HostTimer, HostTransfer};
 use bedcode_plugin_api::types::{
     PluginManifest, TransferRequestMeta, UploadHookDecision,
     UploadRequestMeta,
@@ -79,13 +79,28 @@ impl WasmPlugin for FileTransferPlugin {
         //    base 无 /api/plugins 前缀；对端列表由 peer_changed 事件驱动增删）
         s.peer = PeerStore::new(false);
 
-        // 5. 订阅总线 topics（v2 新增接收端 4 topic + 发送端应答 topic）
+        // 5. 订阅总线 topics（v2 新增接收端 4 topic + 发送端应答 topic +
+        //    v2.1 intent 驱动 3 topic：回执/进度/心跳）
         let _ = host.bus_subscribe("filesrv:peer_changed");
         let _ = host.bus_subscribe("filesrv:transfer_request");
         let _ = host.bus_subscribe("filesrv:transfer_resolved");
         let _ = host.bus_subscribe("filesrv:receiving_started");
         let _ = host.bus_subscribe("filesrv:receiving_done");
         let _ = host.bus_subscribe("filesrv:transfer_approval");
+        let _ = host.bus_subscribe("filesrv:intent_ack");
+        let _ = host.bus_subscribe("filesrv:transfer_progress");
+        let _ = host.bus_subscribe("filesrv:transfer_heartbeat");
+        let _ = host.bus_subscribe("filesrv:intent_fail");
+
+        // v2.1：注册失联清扫定时器（10s 周期调用 `file-transfer.sweep-intents`：
+        // 30s 无回传的 intent 任务转「暂停-待续传」）。失败仅告警（定时清扫是
+        // 兜底，peer_changed 离线路径已覆盖大多数失联场景）
+        if let Err(e) = host.timer_register(10, "file-transfer.sweep-intents") {
+            host.log_warn(&format!(
+                "timer_register sweep-intents FAILED (will fall back to peer_changed only): {}",
+                e
+            ));
+        }
 
         // 6. 主动探测对端（修复插件激活晚于认证导致的总线事件丢失：
         //    activate 完成即广播 Query，对端回复后宿主推送 peer_changed）
@@ -137,6 +152,10 @@ impl WasmPlugin for FileTransferPlugin {
         let _ = host.bus_unsubscribe("filesrv:receiving_started");
         let _ = host.bus_unsubscribe("filesrv:receiving_done");
         let _ = host.bus_unsubscribe("filesrv:transfer_approval");
+        let _ = host.bus_unsubscribe("filesrv:intent_ack");
+        let _ = host.bus_unsubscribe("filesrv:transfer_progress");
+        let _ = host.bus_unsubscribe("filesrv:transfer_heartbeat");
+        let _ = host.bus_unsubscribe("filesrv:intent_fail");
 
         // v2 接收状态清空：WASM 静态 state 跨 deactivate/activate 存活，残留
         // 批卡/接收任务会在下次激活时陈旧复现（spec §9.5：接收状态不跨生命周期）
@@ -286,6 +305,13 @@ impl WasmPlugin for FileTransferPlugin {
 
             "file-transfer.clear-history" => commands::clear_history(&mut s, &host),
 
+            "file-transfer.sweep-intents" => {
+                // v2.1：定时器调用的失联清扫（30s 无回传 → 暂停-待续传）；
+                // 幂等，多次触发无害
+                commands::sweep_stale_intents(&mut s, &host);
+                Ok(serde_json::json!({ "ok": true }))
+            }
+
             "file-transfer.pick-download-dir" => commands::pick_download_dir(),
 
             "file-transfer.mount-local" => commands::mount_local(&mut s, &host, &args),
@@ -353,6 +379,28 @@ impl WasmPlugin for FileTransferPlugin {
             let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
             commands::handle_transfer_approval(&mut s, &host, &msg.payload);
             commands::schedule_and_start(&mut s, &host);
+            return Ok(());
+        }
+
+        // v2.1 intent 驱动：手机回执 / 进度 / 心跳（推进任务、乐观更新、失联判定）
+        if msg.topic == "filesrv:intent_ack" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_intent_ack(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        if msg.topic == "filesrv:transfer_progress" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_transfer_progress_intent(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        if msg.topic == "filesrv:transfer_heartbeat" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_transfer_heartbeat(&mut s, &host, &msg.payload);
+            return Ok(());
+        }
+        if msg.topic == "filesrv:intent_fail" {
+            let mut s = state().lock().unwrap_or_else(|e| e.into_inner());
+            commands::handle_intent_fail(&mut s, &host, &msg.payload);
             return Ok(());
         }
 

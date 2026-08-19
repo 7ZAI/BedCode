@@ -160,6 +160,42 @@ pub enum SyncEvent {
         /// 触发动作：create / delete / trigger / missed / failed
         action: String,
     },
+    /// 文件传输意图（v2.1：服务器归零，桌面发给手机让其执行对应语意动作）
+    ///
+    /// 经 `HostEvents::broadcast_sync` 广播后，宿主映射为
+    /// `SyncPayload::FileTransferIntent` 经 WS 推到移动端。
+    /// 字段与 wire `SyncPayload::FileTransferIntent` 逐字一致（snake_case）
+    FileTransferIntent {
+        /// 意图 ID（uuid，ACK/进度/取消全程携带）
+        intent_id: String,
+        /// "pull" | "push"（见 wire 定义）
+        direction: String,
+        /// "download" | "upload"（业务语义）
+        semantics: String,
+        /// 批 ID（pull 时桌面已自批准的批；push 时空）
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        batch_id: Option<String>,
+        /// 挂载相对路径
+        relative_path: String,
+        /// 字节大小
+        size: u64,
+        /// 对端设备名（通知展示）
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        device_name: String,
+        /// 期望回执（ADR 0021：intent 必须 expect_response ACK）
+        #[serde(default = "default_true")]
+        expect_response: bool,
+    },
+    /// 取消文件传输意图（v2.1）：桌面中止某次 intent 对应的传输
+    FileTransferCancel {
+        /// 意图 ID
+        intent_id: String,
+    },
+}
+
+/// `expect_response` 默认值（v2.1：intent 必须要求回执）
+fn default_true() -> bool {
+    true
 }
 
 /// 插件推送的问题结构（任务询问，随 TaskStatusChanged 同步到移动端）
@@ -450,6 +486,75 @@ mod tests {
                 assert!(task_questions.is_none());
             }
             other => panic!("expected TaskStatusChanged, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_sync_file_transfer_intent_wire_format() {
+        // v2.1：intent 经 HostEvents::broadcast_sync 发布，宿主按同一 JSON 解析；
+        // 全字段序列化（batch_id 非空、expect_response 默认 true 也显式输出）
+        let event = SyncEvent::FileTransferIntent {
+            intent_id: "9f1c".into(),
+            direction: "pull".into(),
+            semantics: "download".into(),
+            batch_id: Some("b17".into()),
+            relative_path: "DCIM/IMG.jpg".into(),
+            size: 4096,
+            device_name: "MyDesktop".into(),
+            expect_response: true,
+        };
+        let v = serde_json::to_value(&event).unwrap();
+        assert_eq!(v["type"], serde_json::json!("FileTransferIntent"));
+        assert_eq!(v["intent_id"], serde_json::json!("9f1c"));
+        assert_eq!(v["direction"], serde_json::json!("pull"));
+        assert_eq!(v["semantics"], serde_json::json!("download"));
+        assert_eq!(v["batch_id"], serde_json::json!("b17"));
+        assert_eq!(v["relative_path"], serde_json::json!("DCIM/IMG.jpg"));
+        assert_eq!(v["size"], serde_json::json!(4096));
+        assert_eq!(v["device_name"], serde_json::json!("MyDesktop"));
+        assert!(v["expect_response"].as_bool().unwrap());
+    }
+
+    #[test]
+    fn test_sync_file_transfer_intent_defaults() {
+        // 缺省字段（batch_id/device_name/expect_response）反序列化成功；
+        // expect_response 缺省 = true（ADR 0021 可靠性默认要求回执）
+        let json = serde_json::json!({
+            "type": "FileTransferIntent",
+            "intent_id": "i1",
+            "direction": "push",
+            "semantics": "upload",
+            "relative_path": "a.mp4",
+            "size": 10
+        });
+        match serde_json::from_value::<SyncEvent>(json).unwrap() {
+            SyncEvent::FileTransferIntent {
+                intent_id,
+                batch_id,
+                device_name,
+                expect_response,
+                ..
+            } => {
+                assert_eq!(intent_id, "i1");
+                assert_eq!(batch_id, None);
+                assert_eq!(device_name, "");
+                assert!(expect_response, "expect_response 缺省必须为 true");
+            }
+            other => panic!("expected FileTransferIntent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_sync_file_transfer_cancel_wire_format() {
+        let event = SyncEvent::FileTransferCancel {
+            intent_id: "9f1c".into(),
+        };
+        let v = serde_json::to_value(&event).unwrap();
+        assert_eq!(v["type"], serde_json::json!("FileTransferCancel"));
+        assert_eq!(v["intent_id"], serde_json::json!("9f1c"));
+        match serde_json::from_value::<SyncEvent>(v).unwrap() {
+            SyncEvent::FileTransferCancel { intent_id } => assert_eq!(intent_id, "9f1c"),
+            other => panic!("expected FileTransferCancel, got {:?}", other),
         }
     }
 

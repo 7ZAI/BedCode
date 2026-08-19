@@ -13,6 +13,7 @@
 //! `#[cfg(test)] mod tests`），故本文件不设测试模块。
 
 pub mod cipher;
+pub mod list_pending;
 pub mod registry;
 pub mod sandbox;
 pub mod transfer;

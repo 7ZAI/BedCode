@@ -55,6 +55,9 @@ const zhCN: MessageSchema = {
   'transfer.task.receivingEmpty': '暂无接收任务',
   'transfer.task.waitingApproval': '等待对方同意',
   'transfer.task.receiving': '正在接收',
+  // ==================== intent 驱动（v2.1） ====================
+  'transfer.task.waitingReply': '等待对方确认',
+  'transfer.task.peerOffline': '对端离线，任务挂起',
 
   // ==================== 队列面板 ====================
   'transfer.queue.title': '传输队列',

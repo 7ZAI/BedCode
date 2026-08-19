@@ -57,6 +57,7 @@ const activeTab = ref<QueueTab>('all')
 const CHIP_CLASS: Record<TaskStateName, string> = {
   queued: 'ft-chip--queued',
   'waiting-approval': 'ft-chip--queued',
+  'waiting-reply': 'ft-chip--queued',
   transferring: 'ft-chip--active',
   paused: 'ft-chip--pause',
   resumable: 'ft-chip--pause',
@@ -72,6 +73,17 @@ function stateLabel(state: TaskStateName): string {
 
 function chipClass(state: TaskStateName): string {
   return CHIP_CLASS[state] ?? 'ft-chip--queued'
+}
+
+/**
+ * 任务卡 chip 文案：resumable + reason=peer-offline（对端离线自动暂停）
+ * 时显示「对端离线，任务挂起」（v2.1 状态文案），其余按状态默认 key。
+ */
+function taskStateText(task: Task): string {
+  if (task.state === 'resumable' && task.reason === 'peer-offline') {
+    return t('transfer.task.peerOffline')
+  }
+  return stateLabel(task.state)
 }
 
 /** 是否暂停类状态（进度条/动作按钮按琥珀色呈现） */
@@ -384,7 +396,7 @@ function historyReason(entry: HistoryEntry): string {
                     </svg>
                   </span>
                   <span class="ft-task-name" :title="task.remotePath">{{ displayName(task.remotePath) }}</span>
-                  <span class="ft-chip" :class="chipClass(task.state)">{{ stateLabel(task.state) }}</span>
+                  <span class="ft-chip" :class="chipClass(task.state)">{{ taskStateText(task) }}</span>
                   <button v-if="canPause(task)" class="ft-mini-btn" :title="t('transfer.task.pause')" @click="emit('pause', task.id)">
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M9 4h2v16H9zM15 4h2v16h-2z" /></svg>
                   </button>

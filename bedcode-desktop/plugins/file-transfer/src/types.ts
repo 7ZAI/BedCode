@@ -9,10 +9,12 @@
 /** 任务方向（与 WASM TaskState::Direction serde lowercase 对应） */
 export type TaskDirection = 'download' | 'upload'
 
-/** 任务状态（与 WASM TaskState serde lowercase 对应；v2 含 waiting-approval） */
+/** 任务状态（与 WASM TaskState serde lowercase 对应；v2 含 waiting-approval，
+ *  v2.1 含 waiting-reply = intent 已发送待回执） */
 export type TaskStateName =
   | 'queued'
   | 'waiting-approval'
+  | 'waiting-reply'
   | 'transferring'
   | 'paused'
   | 'resumable'

@@ -9,6 +9,7 @@ use crate::plugin::file_service::HookTarget;
 use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 use bedcode_plugin_api::permission::PERMISSION_FILESERVICE;
 use bedcode_plugin_api::{MountOptions, MountResult};
+use crate::enums::FileServicePayload;
 
 /// 获取文件服务注册表（经宿主上下文注入，激活期始终可用）
 fn file_service_registry(
@@ -198,6 +199,119 @@ pub(crate) fn filesrv_cancel_receiving(
         .map_err(|e| format!("file service error: cancel receiving failed: {}", e))
 }
 
+/// v2.1：内部自批准创建 approved 批（pull 批上下文自批准，权限 + 注册表自建批）
+///
+/// 桌面发 intent{pull} 前调用：手机 POST upload 携带该 batchId 到桌面上传引擎时
+/// gating 通过（避免 ask 策略下无已批准批 ID 的 session 创建 403）
+pub(crate) fn filesrv_self_approve_batch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+    batch_id: &str,
+    files_json: &str,
+    total_size: u64,
+) -> Result<(), String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_self_approve_batch",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let files: Vec<bedcode_plugin_api::UploadRequestMeta> = serde_json::from_str(files_json)
+        .map_err(|e| format!("file service error: invalid files JSON: {}", e))?;
+    let registry = file_service_registry(host_ctx);
+    block_on_async(registry.self_approve_batch(plugin_id, mount_path, batch_id, files, total_size))
+        .map_err(|e| format!("file service error: self-approve batch failed: {}", e))
+}
+
+/// v2.1：列举对端（手机）目录（WS list 迁移，同步等待响应）
+///
+/// 服务器归零后桌面不再直连手机 `/list` 端点：发 `FileListRequest`（FileService
+/// 通道，同 Query 机制）→ 在 [`list_pending`] 登记等待 → 等 `FileListResponse`
+/// （5s 超时兜底）→ 返回 `{"entries":[...],"notice":...}`（camelCase 条目，
+/// 形状与旧 handshake::list_remote 一致，前端零改动）。手机挂载清单经
+/// Announce(port=0 + mounts) 已在注册表，无需预先查询。
+pub(crate) fn filesrv_list_remote(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    mount_path: &str,
+    path: &str,
+) -> Result<String, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_FILESERVICE,
+        "host_filesrv_list_remote",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let list_id = uuid::Uuid::new_v4().to_string();
+    let payload = crate::enums::FileServicePayload::FileListRequest {
+        list_id: list_id.clone(),
+        plugin_id: plugin_id.to_string(),
+        mount_path: mount_path.to_string(),
+        path: path.to_string(),
+    };
+
+    // 登记等待方（terminal_ws 收到 FileListResponse 时 resolve）
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    crate::plugin::file_service::list_pending::register(list_id.clone(), tx);
+
+    let json = crate::server::ws::message::Message::file_service(payload)
+        .to_json()
+        .map_err(|e| format!("file service error: serialize list request failed: {}", e))?;
+    let registry = crate::server::ws::registry::WsSessionRegistry::global();
+    block_on_async(registry.broadcast(json, None));
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        mount_path = %mount_path,
+        path = %path,
+        list_id = %list_id,
+        "file service list request broadcast"
+    );
+
+    let result = block_on_async(async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), rx).await
+    });
+    // 无论成败都清除 pending（响应已拿或超时，防泄漏）
+    crate::plugin::file_service::list_pending::drop_pending(&list_id);
+
+    match result {
+        Ok(Ok(FileServicePayload::FileListResponse {
+            entries,
+            notice,
+            ok,
+            error,
+            ..
+        })) => {
+            if ok {
+                let entries_value = serde_json::to_value(&entries)
+                    .map_err(|e| format!("file service error: serialize list entries failed: {}", e))?;
+                let mut out = serde_json::json!({ "entries": entries_value });
+                if let Some(n) = notice {
+                    out["notice"] = serde_json::Value::String(n);
+                }
+                Ok(out.to_string())
+            } else {
+                Err(format!(
+                    "file service list failed: {}",
+                    error.unwrap_or_else(|| "unknown error".to_string())
+                ))
+            }
+        }
+        Ok(Ok(other)) => Err(format!(
+            "file service list response mismatch: {:?}",
+            std::mem::discriminant(&other)
+        )),
+        Ok(Err(_)) => Err("file service list request cancelled".to_string()),
+        Err(_) => Err(
+            "file service list request timed out (no response from peer)".to_string(),
+        ),
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -307,6 +421,14 @@ mod tests {
     fn filesrv_cancel_receiving_permission_denied() {
         let ctx = build_host_ctx();
         let err = filesrv_cancel_receiving(&ctx, PLUGIN, "s1").unwrap_err();
+        assert_eq!(err, "permission denied");
+    }
+
+    /// 无 fileservice 权限：内部自批准批被拒绝
+    #[test]
+    fn filesrv_self_approve_batch_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = filesrv_self_approve_batch(&ctx, PLUGIN, "m", "b1", "[]", 0).unwrap_err();
         assert_eq!(err, "permission denied");
     }
 

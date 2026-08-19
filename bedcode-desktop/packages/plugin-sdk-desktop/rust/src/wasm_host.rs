@@ -19,7 +19,7 @@ use crate::host::{
     HostFs, HostHttp, HostLog, HostPluginDatabase, HostProcess, HostSession, HostStorage,
     HostTerminal, HostTransfer,
 };
-use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest};
+use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest, UploadRequestMeta};
 use crate::wasm::bedcode::plugin::{
     host_app, host_bus, host_config, host_database, host_events, host_file_service, host_fs,
     host_http, host_log, host_plugin_database, host_process, host_session, host_storage,
@@ -430,6 +430,25 @@ impl HostFileService for WasmHost {
     fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError> {
         host_file_service::cancel_receiving(session_id)
             .map_err(|e| host_err("filesrv_cancel_receiving", e))
+    }
+
+    fn filesrv_self_approve_batch(
+        &self,
+        mount_path: &str,
+        batch_id: &str,
+        files: &[UploadRequestMeta],
+        total_size: u64,
+    ) -> Result<(), HostError> {
+        let files_str = serde_json::to_string(files).map_err(|e| {
+            HostError::custom(-1, format!("filesrv_self_approve_batch: serialize files failed: {}", e))
+        })?;
+        host_file_service::self_approve_batch(mount_path, batch_id, &files_str, total_size)
+            .map_err(|e| host_err("filesrv_self_approve_batch", e))
+    }
+
+    fn filesrv_list_remote(&self, mount_path: &str, path: &str) -> Result<String, HostError> {
+        host_file_service::list_remote(mount_path, path)
+            .map_err(|e| host_err("filesrv_list_remote", e))
     }
 }
 

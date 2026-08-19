@@ -56,6 +56,10 @@ const en: MessageSchema = {
   'transfer.task.waitingApproval': 'Waiting for approval',
   'transfer.task.receiving': 'Receiving',
 
+  // ==================== Intent-driven (v2.1) ====================
+  'transfer.task.waitingReply': 'Waiting for reply',
+  'transfer.task.peerOffline': 'Peer offline, task paused',
+
   // ==================== Queue panel ====================
   'transfer.queue.title': 'Transfer queue',
   'transfer.queue.count': '{count} tasks',

@@ -180,6 +180,20 @@ interface host-file-service {
     set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
     /// v2：取消接收中的上传会话（接收端本地取消，session 级）
     cancel-receiving: func(session-id: string) -> result<_, string>;
+    /// v2.1：内部自批准创建 approved 批（pull 批上下文自批准）
+    ///
+    /// pull 数据流 = 手机 POST 桌面上传引擎，会撞桌面 ask 策略的
+    /// 「无已批准批 ID 的 session 创建 403」；桌面发 intent{pull} 前调用
+    /// 此函数在本插件挂载名下自建 approved 批（审批人即桌面用户本人，
+    /// 零用户交互），batchId 随 intent 下发，手机 POST 时携带 → 宿主 gating 通过。
+    /// files-json 为 `UploadRequestMeta` 数组的 JSON。
+    self-approve-batch: func(mount-path: string, batch-id: string, files-json: string, total-size: u64) -> result<_, string>;
+    /// v2.1：列举对端（手机）目录（WS list 迁移，同步等待响应）
+    ///
+    /// 服务器归零后桌面不再直连手机 `/list` 端点：发 FileListRequest → 等
+    /// FileListResponse（5s 超时兜底）→ 返回 `{"entries":[...],"notice":...}`
+    /// （camelCase 条目；形状与旧直连 /list 响应一致，前端零改动）。
+    list-remote: func(mount-path: string, path: string) -> result<string, string>;
 }
 
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================

@@ -5,7 +5,7 @@
 //! 宿主强制目录沙箱与上传策略钩子，插件无法绕过。
 
 use super::HostError;
-use crate::types::{MountOptions, MountResult, PeerFileService};
+use crate::types::{MountOptions, MountResult, PeerFileService, UploadRequestMeta};
 
 /// 插件文件服务宿主能力
 ///
@@ -52,4 +52,24 @@ pub trait HostFileService {
     /// 清理 .part 并推送 `filesrv:receiving_done(cancelled)`；
     /// 发送方 session 丢失后自动重建从头传（v1 语义兜底）。
     fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError>;
+
+    /// v2.1：内部自批准创建 approved 批（pull 批上下文自批准，零用户交互）
+    ///
+    /// 桌面发 intent{pull} 前调用：在本插件挂载名下建 approved 批（审批人即
+    /// 桌面用户本人），batchId 随 intent 下发，手机 POST upload 携带后
+    /// 宿主 gating 通过——保持 v2 防绕过语义（session 创建必须带已批准批）
+    /// 又不引入冗余交互。已存在同 ID 批时覆盖为 Approved（重发 intent 幂等）。
+    fn filesrv_self_approve_batch(
+        &self,
+        mount_path: &str,
+        batch_id: &str,
+        files: &[UploadRequestMeta],
+        total_size: u64,
+    ) -> Result<(), HostError>;
+
+    /// v2.1：列举对端（手机）目录（WS list 迁移，同步等待响应）
+    ///
+    /// 返回 `{"entries":[...],"notice":...}` JSON（camelCase 条目；形状与旧
+    /// 直连 /list 响应一致，前端零改动）；手机无响应时 5s 超时报错。
+    fn filesrv_list_remote(&self, mount_path: &str, path: &str) -> Result<String, HostError>;
 }

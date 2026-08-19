@@ -127,6 +127,35 @@ pub enum DesktopSyncEvent {
         /// "" | "user-rejected" | "timeout"
         reason: String,
     },
+
+    // === 文件传输意图（v2.1：服务器归零，桌面经 WS 指挥手机执行） ===
+    /// 桌面文件传输意图：由插件经 `HostEvents::broadcast_sync` 发起，
+    /// SyncEventHandler 映射为 `SyncPayload::FileTransferIntent` 广播到 WS
+    ///
+    /// 方向：桌面（协调者）→ 移动端（执行方）
+    FileTransferIntent {
+        /// 意图 ID（uuid）
+        intent_id: String,
+        /// "pull" | "push"
+        direction: String,
+        /// "download" | "upload"（业务语义）
+        semantics: String,
+        /// 批 ID（pull：桌面已自批准的批，随 intent 下发；push：None）
+        batch_id: Option<String>,
+        /// 挂载相对路径
+        relative_path: String,
+        /// 字节大小
+        size: u64,
+        /// 对端设备名（通知展示）
+        device_name: String,
+        /// 期望回执
+        expect_response: bool,
+    },
+    /// 取消文件传输意图
+    FileTransferCancel {
+        /// 意图 ID
+        intent_id: String,
+    },
 }
 
 impl AppEvent for DesktopSyncEvent {}
@@ -178,6 +207,28 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
                 status,
                 action,
             },
+            SyncEvent::FileTransferIntent {
+                intent_id,
+                direction,
+                semantics,
+                batch_id,
+                relative_path,
+                size,
+                device_name,
+                expect_response,
+            } => DesktopSyncEvent::FileTransferIntent {
+                intent_id,
+                direction,
+                semantics,
+                batch_id,
+                relative_path,
+                size,
+                device_name,
+                expect_response,
+            },
+            SyncEvent::FileTransferCancel { intent_id } => {
+                DesktopSyncEvent::FileTransferCancel { intent_id }
+            }
         }
     }
 }

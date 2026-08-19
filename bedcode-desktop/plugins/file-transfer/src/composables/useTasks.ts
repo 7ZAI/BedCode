@@ -43,10 +43,12 @@ function mapWireTask(raw: any): Task {
   }
 }
 
-/** 状态 → 展示文案 key（错误类额外附原因，见 TaskPanel） */
+/** 状态 → 展示文案 key（错误类额外附原因，见 TaskPanel）
+ *  v2.1：waiting-reply = intent 已发送，等待对方回执（push ask 时为等待对方确认） */
 export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
   queued: 'transfer.task.state.queued',
   'waiting-approval': 'transfer.task.waitingApproval',
+  'waiting-reply': 'transfer.task.waitingReply',
   transferring: 'transfer.task.state.transferring',
   paused: 'transfer.task.state.paused',
   resumable: 'transfer.task.state.resumable',
@@ -258,7 +260,8 @@ export function useTasks(context: PluginContext) {
       switch (t.state) {
         case 'transferring': active++; break
         case 'queued':
-        case 'waiting-approval': queued++; break
+        case 'waiting-approval':
+        case 'waiting-reply': queued++; break
         case 'failed': failed++; break
         case 'rejected': rejected++; break
         case 'resumable': resumable++; break

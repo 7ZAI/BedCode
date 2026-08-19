@@ -914,6 +914,153 @@ impl TerminalWs {
                     },
                 );
             }
+            FileServicePayload::IntentAck {
+                intent_id,
+                decision,
+                offset,
+                session_id,
+            } => {
+                // v2.1：手机 responder 回执 → 桌面协调者：经注册表双通道发布
+                // `filesrv:intent_ack`，发送方插件据此推进任务（accepted → 传输中
+                // / rejected → 终态）。spawn 统一经 error boundary 包装防 panic 泄漏
+                tracing::info!(
+                    device_id = %device_id,
+                    intent_id = %intent_id,
+                    decision = %decision,
+                    offset = offset,
+                    session_id = %session_id,
+                    "file transfer intent ack received from peer"
+                );
+                crate::system::error_boundary::spawn_with_error_boundary(
+                    "file_service_intent_ack_publish",
+                    async move {
+                        file_service
+                            .publish_intent_ack(&intent_id, &decision, offset, &session_id)
+                            .await;
+                    },
+                );
+            }
+            FileServicePayload::TransferProgress {
+                intent_id,
+                task_id,
+                transferred,
+                total,
+                bytes_per_sec,
+                state,
+            } => {
+                // v2.1：手机执行方进度回推 → 桌面协调者：双通道发布
+                // `filesrv:transfer_progress`，插件据此乐观更新 + 实时进度
+                tracing::debug!(
+                    intent_id = ?intent_id,
+                    task_id = %task_id,
+                    transferred = transferred,
+                    total = total,
+                    state = %state,
+                    "file transfer progress received from peer"
+                );
+                crate::system::error_boundary::spawn_with_error_boundary(
+                    "file_service_transfer_progress_publish",
+                    async move {
+                        file_service
+                            .publish_transfer_progress(
+                                intent_id.as_deref(),
+                                &task_id,
+                                transferred,
+                                total,
+                                bytes_per_sec,
+                                &state,
+                            )
+                            .await;
+                    },
+                );
+            }
+            FileServicePayload::TransferHeartbeat { intent_id } => {
+                // v2.1：手机执行中心跳（10s 静默心跳）→ 桌面协调者：刷新存活
+                // 窗口，桌面 30s 无任何回传判定对端失联 → 任务转「暂停-待续传」
+                tracing::debug!(intent_id = %intent_id, "file transfer heartbeat received");
+                crate::system::error_boundary::spawn_with_error_boundary(
+                    "file_service_transfer_heartbeat_publish",
+                    async move {
+                        file_service.publish_transfer_heartbeat(&intent_id).await;
+                    },
+                );
+            }
+            FileServicePayload::IntentFail { intent_id, offset, .. } => {
+                // v2.1：手机中途失败偏移上报（接收端即断点真源）→ 桌面协调者：
+                // 双通道发布 `filesrv:intent_fail`，插件置任务 failed 并保留断点
+                //（重试 = 桌面重发 intent，手机从 offset 续传）
+                tracing::info!(
+                    intent_id = %intent_id,
+                    offset = offset,
+                    "file transfer intent fail received from peer"
+                );
+                crate::system::error_boundary::spawn_with_error_boundary(
+                    "file_service_intent_fail_publish",
+                    async move {
+                        file_service.publish_intent_fail(&intent_id, offset).await;
+                    },
+                );
+            }
+            FileServicePayload::FileListResponse {
+                list_id,
+                plugin_id,
+                mount_path,
+                path,
+                entries,
+                notice,
+                ok,
+                error,
+            } => {
+                // v2.1 list 迁移：手机目录列举响应 → 桌面 `filesrv_list_remote`
+                // 等待方（list_pending，host fn 内 5s 超时兜底）。取到则 resolve 返回
+                // 给插件；已超时清除则仅记 debug（正常路径：慢手机/超时竞态）
+                tracing::debug!(
+                    device_id = %device_id,
+                    list_id = %list_id,
+                    plugin_id = %plugin_id,
+                    mount_path = %mount_path,
+                    entries = entries.len(),
+                    ok = ok,
+                    "file list response received from peer"
+                );
+                if let Some(tx) =
+                    crate::plugin::file_service::list_pending::take(&list_id)
+                {
+                    if tx
+                        .send(FileServicePayload::FileListResponse {
+                            list_id,
+                            plugin_id,
+                            mount_path,
+                            path,
+                            entries,
+                            notice,
+                            ok,
+                            error,
+                        })
+                        .is_err()
+                    {
+                        // 等待方（filesrv_list_remote）已因超时丢弃：仅记 debug
+                        //（list_id 已随响应移入 send，此处不再引用）
+                        tracing::debug!(
+                            "file list response: waiting side already dropped (timeout)"
+                        );
+                    }
+                } else {
+                    tracing::debug!(
+                        list_id = %list_id,
+                        "file list response: no pending request (timeout/expired)"
+                    );
+                }
+            }
+            FileServicePayload::FileListRequest { list_id, .. } => {
+                // D→M 方向变体（桌面宿主发出给手机），桌面端不应收到；
+                // 旧/异常对端回推时仅记录，不阻塞路由
+                tracing::warn!(
+                    device_id = %device_id,
+                    list_id = %list_id,
+                    "unexpected inbound FileListRequest (D→M variant received)"
+                );
+            }
         }
     }
 

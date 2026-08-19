@@ -885,6 +885,147 @@ impl FileServiceRegistry {
         }
     }
 
+    /// 内部自批准创建 approved 批（v2.1：pull 批上下文自批准）
+    ///
+    /// pull 数据流 = 手机 POST 桌面上传引擎，会撞桌面 ask 策略的
+    /// 「无已批准批 ID 的 session 创建 403」；桌面发 intent{pull} 前在此
+    /// 自建 approved 批（审批人即桌面用户本人，零用户交互），batchId 随
+    /// intent 下发，手机 POST upload 时携带 → 此处 gating 通过。
+    /// 保持 v2 防绕过语义（session 创建必须带已批准批）又不引入冗余交互。
+    /// 已存在同 ID 批时覆盖为 Approved（重发 intent 续传是幂等操作）。
+    pub async fn self_approve_batch(
+        &self,
+        plugin_id: &str,
+        mount_path: &str,
+        batch_id: &str,
+        files: Vec<UploadRequestMeta>,
+        total_size: u64,
+    ) -> crate::Result<()> {
+        if batch_id.is_empty() || batch_id.len() > 128 {
+            return Err(crate::AppError::InvalidInput(format!(
+                "self-approve batch: invalid batch id '{:?}'",
+                batch_id
+            )));
+        }
+        let timeout = {
+            let timeouts = self.approval_timeouts.read().await;
+            timeouts
+                .get(&(plugin_id.to_string(), mount_path.to_string()))
+                .copied()
+                .unwrap_or_else(|| Duration::from_secs(DEFAULT_APPROVAL_TIMEOUT_SECS))
+        };
+        let batch = TransferBatch {
+            batch_id: batch_id.to_string(),
+            plugin_id: plugin_id.to_string(),
+            mount_path: mount_path.to_string(),
+            files,
+            total_size,
+            state: BatchState::Approved,
+            created_at: Instant::now(),
+            last_active: Instant::now(),
+            approval_timeout: timeout,
+        };
+        self.batches.write().await.insert(batch_id.to_string(), batch);
+        tracing::info!(
+            batch_id = %batch_id,
+            plugin_id = %plugin_id,
+            mount = %mount_path,
+            "pull batch self-approved internally (zero user interaction)"
+        );
+        Ok(())
+    }
+
+    /// 跨端收到的意图回执（移动 responder → 桌面协调者，经 WS file_service 消息）：
+    /// 双通道发布 `filesrv:intent_ack`（发送方插件订阅，推进任务）
+    pub async fn publish_intent_ack(
+        &self,
+        intent_id: &str,
+        decision: &str,
+        offset: u64,
+        session_id: &str,
+    ) {
+        self.emit_filesrv_event(
+            "filesrv:intent_ack",
+            serde_json::json!({
+                "intentId": intent_id,
+                "decision": decision,
+                "offset": offset,
+                "sessionId": session_id,
+            }),
+        )
+        .await;
+        tracing::info!(
+            intent_id = %intent_id,
+            decision = %decision,
+            offset = offset,
+            session_id = %session_id,
+            "intent ack received from peer, published"
+        );
+    }
+
+    /// 跨端收到的传输进度（移动执行方 → 桌面协调者，经 WS file_service 消息）：
+    /// 双通道发布 `filesrv:transfer_progress`（发送方插件乐观更新校正）
+    ///
+    /// intent_id 可能为 None（v1 载荷：非 intent 驱动的传统进度回推），
+    /// 此时仅当载荷携带 intentId 才发布（否则插件无法按 intent 关联任务）
+    pub async fn publish_transfer_progress(
+        &self,
+        intent_id: Option<&str>,
+        task_id: &str,
+        transferred: u64,
+        total: u64,
+        bytes_per_sec: u64,
+        state: &str,
+    ) {
+        let Some(intent_id) = intent_id else {
+            tracing::debug!(
+                task_id = %task_id,
+                "transfer progress without intent_id (legacy payload), skipped publish"
+            );
+            return;
+        };
+        self.emit_filesrv_event(
+            "filesrv:transfer_progress",
+            serde_json::json!({
+                "intentId": intent_id,
+                "taskId": task_id,
+                "transferred": transferred,
+                "total": total,
+                "bytesPerSec": bytes_per_sec,
+                "state": state,
+            }),
+        )
+        .await;
+    }
+
+    /// 跨端收到的传输失败偏移上报（移动执行方 → 桌面协调者，经 WS file_service 消息）：
+    /// 双通道发布 `filesrv:intent_fail`（发送方插件据此置任务 failed 并保留断点）
+    pub async fn publish_intent_fail(&self, intent_id: &str, offset: u64) {
+        self.emit_filesrv_event(
+            "filesrv:intent_fail",
+            serde_json::json!({
+                "intentId": intent_id,
+                "offset": offset,
+            }),
+        )
+        .await;
+        tracing::info!(
+            intent_id = %intent_id,
+            offset = offset,
+            "intent fail received from peer, published"
+        );
+    }
+
+    /// 跨端收到的执行心跳（移动执行方 → 桌面协调者）：
+    /// 双通道发布 `filesrv:transfer_heartbeat`（桌面 30s 无回传判定失联）
+    pub async fn publish_transfer_heartbeat(&self, intent_id: &str) {
+        self.emit_filesrv_event(
+            "filesrv:transfer_heartbeat",
+            serde_json::json!({ "intentId": intent_id }),
+        )
+        .await;
+    }
+
     /// 跨端收到的批应答（移动 → 桌面，经 WS file_service 消息）：
     /// 双通道发布 `filesrv:transfer_approval`（发送方插件订阅）
     pub async fn publish_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
@@ -1481,6 +1622,42 @@ mod tests {
         );
     }
 
+    /// self_approve_batch（v2.1 pull 自批准）：直接建 Approved 批 → gating 通过；
+    /// 重发 intent 时重复自批准幂等覆盖；非法批 ID 拒绝
+    #[tokio::test]
+    async fn self_approve_batch_creates_approved_and_is_idempotent() {
+        let registry = make_registry();
+        let files = vec![UploadRequestMeta {
+            relative_path: "DCIM/IMG.jpg".into(),
+            size: 4096,
+        }];
+        registry
+            .self_approve_batch("p1", "files", "b-pull", files.clone(), 4096)
+            .await
+            .expect("self approve ok");
+        // 自批准的批必须是 Approved，且 check_batch 通过（手机 POST upload 免 gating 403）
+        let batch = registry
+            .check_batch("p1", "files", "b-pull")
+            .await
+            .expect("check_batch gating passes for self-approved batch");
+        assert!(batch.state == BatchState::Approved);
+        assert_eq!(batch.files.len(), 1);
+        // 重发 intent 续传：重复自批准幂等（覆盖为 Approved，不影响后续 gating）
+        registry
+            .self_approve_batch("p1", "files", "b-pull", files.clone(), 4096)
+            .await
+            .expect("re-approve ok");
+        assert!(registry
+            .check_batch("p1", "files", "b-pull")
+            .await
+            .is_ok());
+        // 空/超长批 ID 拒绝（信任边界）
+        assert!(registry
+            .self_approve_batch("p1", "files", "", vec![], 0)
+            .await
+            .is_err());
+    }
+
     /// set_approval_timeout 边界：9/10/600/601（10–600 校验）
     #[tokio::test]
     async fn set_approval_timeout_boundaries() {
@@ -1517,24 +1694,31 @@ mod tests {
             .insert_batch("p1", "files", &make_req("b1"), BatchState::Pending)
             .await;
         // approved 批：last_active 回溯 25h（超 24h TTL）
-        registry
-            .batches
-            .write()
-            .await
-            .insert(
-                "b2".to_string(),
-                TransferBatch {
-                    batch_id: "b2".into(),
-                    plugin_id: "p1".into(),
-                    mount_path: "files".into(),
-                    files: Vec::new(),
-                    total_size: 0,
-                    state: BatchState::Approved,
-                    created_at: Instant::now() - Duration::from_secs(25 * 3600),
-                    last_active: Instant::now() - Duration::from_secs(25 * 3600),
-                    approval_timeout: Duration::from_secs(60),
-                },
-            );
+        // 注意：Windows 上 Instant 自开机时起算，开机不足 25h 时 `now - 25h`
+        // 会溢出 panic（std::time::Instant checked_sub 为 None）。本测试在低
+        // uptime 机器（重启后 < 25h）上必挂，属环境相关而非业务缺陷；仅当
+        // 可回溯时插入 b2 校准用例，否则跳过（b2 未插入，下方 contains_key
+        // 断言真空成立，pending 超时校验 b1/b3 不受影响）
+        if let Some(past) = Instant::now().checked_sub(Duration::from_secs(25 * 3600)) {
+            registry
+                .batches
+                .write()
+                .await
+                .insert(
+                    "b2".to_string(),
+                    TransferBatch {
+                        batch_id: "b2".into(),
+                        plugin_id: "p1".into(),
+                        mount_path: "files".into(),
+                        files: Vec::new(),
+                        total_size: 0,
+                        state: BatchState::Approved,
+                        created_at: past,
+                        last_active: past,
+                        approval_timeout: Duration::from_secs(60),
+                    },
+                );
+        }
         // 未超时 pending 批（对照）：60s 超时不会过期（直接写内部表，
         // 避免与 b1 共享 1ms 的 per-mount 超时配置）
         registry

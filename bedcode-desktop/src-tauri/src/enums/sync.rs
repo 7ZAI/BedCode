@@ -7,6 +7,11 @@ use serde::{Deserialize, Serialize};
 use super::summary::{SessionConfigSummary, SessionSummary};
 use super::plugin::PluginQuestion;
 
+/// `expect_response` 默认值（v2.1：intent 必须要求回执，ADR 0021 可靠性要求）
+fn default_true() -> bool {
+    true
+}
+
 /// 同步载荷 - 支持多种数据类型的增量同步
 ///
 /// 用于 WebSocket 消息，向客户端推送增量数据变更
@@ -125,4 +130,137 @@ pub enum SyncPayload {
         /// "" | "user-rejected" | "timeout"
         reason: String,
     },
+
+    // === 文件传输意图（v2.1：服务器归零，桌面经 WS 指挥手机执行） ===
+    /// 桌面发起文件传输意图（Desk→Mob，服务器归零后桌面不再直连手机，
+    /// 改由手机按语意动作自行执行字节流）
+    ///
+    /// 与移动端 `enums/sync.rs` 同名变体保持同构（两端逐字双写）；
+    /// JSON action（snake_case variant）= `file_transfer_intent`
+    FileTransferIntent {
+        /// 意图 ID（uuid，ACK/进度/取消全程携带）
+        intent_id: String,
+        /// "pull"（桌面下载手机文件→手机把本地/SAF 文件 POST 给桌面）
+        /// "push"（桌面推文件给手机→手机 GET 桌面挂载文件并落盘）
+        direction: String,
+        /// 业务语义（手机侧通知与任务记录）：
+        /// "download"（桌面下载手机文件）| "upload"（桌面推文件给手机）
+        semantics: String,
+        /// 批 ID（与 v2 批审批联动；pull 时桌面已自批准，手机 POST 携带免 gating 403）
+        #[serde(default)]
+        batch_id: Option<String>,
+        /// 挂载相对路径（push：桌面挂载内路径；pull：手机本地/SAF 路径）
+        relative_path: String,
+        /// 字节大小（通知展示 + 断点预期）
+        size: u64,
+        /// 对端设备名（通知展示）
+        #[serde(default)]
+        device_name: String,
+        /// 期望回执（ADR 0021 可靠性要求：intent 必须 expect_response ACK）
+        #[serde(default = "default_true")]
+        expect_response: bool,
+    },
+    /// 桌面取消文件传输意图（Desk→Mob）：手机中止对应 HTTP 会话；
+    /// 已写字节保留，重试 = 桌面重发 intent 从断点续传
+    ///
+    /// JSON action（snake_case variant）= `file_transfer_cancel`
+    FileTransferCancel {
+        /// 意图 ID
+        intent_id: String,
+    },
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_file_transfer_intent_wire_format() {
+        // 全字段序列化：snake_case 变体名即 action（`file_transfer_intent`），
+        // 字段按枚举级 rename_all=snake_case 序列化
+        let payload = SyncPayload::FileTransferIntent {
+            intent_id: "9f1c".into(),
+            direction: "push".into(),
+            semantics: "upload".into(),
+            batch_id: Some("b17".into()),
+            relative_path: "movies/a.mp4".into(),
+            size: 1234567890,
+            device_name: "MyDesktop".into(),
+            expect_response: true,
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"type\":\"file_transfer_intent\""));
+        assert!(json.contains("\"intent_id\":\"9f1c\""));
+        assert!(json.contains("\"direction\":\"push\""));
+        assert!(json.contains("\"semantics\":\"upload\""));
+        assert!(json.contains("\"batch_id\":\"b17\""));
+        assert!(json.contains("\"relative_path\":\"movies/a.mp4\""));
+        assert!(json.contains("\"size\":1234567890"));
+        assert!(json.contains("\"device_name\":\"MyDesktop\""));
+        assert!(json.contains("\"expect_response\":true"));
+        match serde_json::from_str::<SyncPayload>(&json).unwrap() {
+            SyncPayload::FileTransferIntent {
+                intent_id,
+                direction,
+                semantics,
+                batch_id,
+                relative_path,
+                size,
+                device_name,
+                expect_response,
+            } => {
+                assert_eq!(intent_id, "9f1c");
+                assert_eq!(direction, "push");
+                assert_eq!(semantics, "upload");
+                assert_eq!(batch_id.as_deref(), Some("b17"));
+                assert_eq!(relative_path, "movies/a.mp4");
+                assert_eq!(size, 1234567890);
+                assert_eq!(device_name, "MyDesktop");
+                assert!(expect_response);
+            }
+            _ => panic!("expected FileTransferIntent"),
+        }
+    }
+
+    #[test]
+    fn test_file_transfer_intent_defaults_accepted() {
+        // 缺省字段（batch_id/device_name/expect_response）反序列化成功：
+        // 旧端/精简载荷兼容；expect_response 缺省 = true（可靠性默认要求回执）
+        let json = r#"{"type":"file_transfer_intent","data":{"intent_id":"i1","direction":"pull","semantics":"download","relative_path":"a.mp4","size":10}}"#;
+        match serde_json::from_str::<SyncPayload>(json).unwrap() {
+            SyncPayload::FileTransferIntent {
+                intent_id,
+                direction,
+                batch_id,
+                relative_path,
+                device_name,
+                expect_response,
+                ..
+            } => {
+                assert_eq!(intent_id, "i1");
+                assert_eq!(direction, "pull");
+                assert_eq!(batch_id, None);
+                assert_eq!(relative_path, "a.mp4");
+                assert_eq!(device_name, "");
+                assert!(expect_response, "expect_response 缺省必须为 true");
+            }
+            _ => panic!("expected FileTransferIntent"),
+        }
+    }
+
+    #[test]
+    fn test_file_transfer_cancel_wire_format() {
+        let payload = SyncPayload::FileTransferCancel {
+            intent_id: "9f1c".into(),
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        assert!(json.contains("\"type\":\"file_transfer_cancel\""));
+        assert!(json.contains("\"intent_id\":\"9f1c\""));
+        match serde_json::from_str::<SyncPayload>(&json).unwrap() {
+            SyncPayload::FileTransferCancel { intent_id } => assert_eq!(intent_id, "9f1c"),
+            _ => panic!("expected FileTransferCancel"),
+        }
+    }
 }

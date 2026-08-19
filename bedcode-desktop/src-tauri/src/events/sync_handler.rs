@@ -77,6 +77,12 @@ impl SyncEventHandler {
             DesktopSyncEvent::TransferApproval { batch_id, decision, reason } => {
                 self.handle_transfer_approval(&batch_id, &decision, &reason).await;
             }
+            DesktopSyncEvent::FileTransferIntent { .. } => {
+                self.handle_file_transfer_intent(event).await;
+            }
+            DesktopSyncEvent::FileTransferCancel { intent_id } => {
+                self.handle_file_transfer_cancel(&intent_id).await;
+            }
         }
     }
 
@@ -322,6 +328,51 @@ impl SyncEventHandler {
         };
 
         // 挂载可用性广播给所有客户端（移动端插件经 sync:file_service 订阅）
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理文件传输意图事件（桌面协调者 → 移动端执行方，v2.1）
+    ///
+    /// 由插件经 `HostEvents::broadcast_sync` 发起；映射为
+    /// `SyncPayload::FileTransferIntent` 广播（多对端场景全部可达，
+    /// 移动端按自身对端身份消费）。pull 的批上下文已由桌面内部自批准，
+    /// batchId 随载荷透传，移动端 POST upload 时携带免 gating 403
+    /// 处理文件传输意图事件（桌面协调者 → 移动端执行方，v2.1）
+    ///
+    /// 直接消费事件对象（字段名即 wire 契约，避免 8 个松散参数散布与漂移）
+    async fn handle_file_transfer_intent(&self, ev: DesktopSyncEvent) {
+        let DesktopSyncEvent::FileTransferIntent {
+            intent_id,
+            direction,
+            semantics,
+            batch_id,
+            relative_path,
+            size,
+            device_name,
+            expect_response,
+        } = ev
+        else {
+            return;
+        };
+        let payload = SyncPayload::FileTransferIntent {
+            intent_id,
+            direction,
+            semantics,
+            batch_id,
+            relative_path,
+            size,
+            device_name,
+            expect_response,
+        };
+        // intent 面向移动端广播（桌面本地不自消费），与其余 sync 事件同通道
+        self.broadcast_sync_data(payload, None).await;
+    }
+
+    /// 处理文件传输意图取消事件（桌面协调者 → 移动端执行方，v2.1）
+    async fn handle_file_transfer_cancel(&self, intent_id: &str) {
+        let payload = SyncPayload::FileTransferCancel {
+            intent_id: intent_id.to_string(),
+        };
         self.broadcast_sync_data(payload, None).await;
     }
 
