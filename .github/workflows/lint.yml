@@ -1,0 +1,39 @@
+name: Lint (Desktop Frontend)
+
+on:
+  push:
+    paths:
+      - 'bedcode-desktop/**'
+      - '.github/workflows/lint.yml'
+  pull_request:
+    paths:
+      - 'bedcode-desktop/**'
+      - '.github/workflows/lint.yml'
+
+# 仅校验桌面端前端（ESLint）。
+# 当前状态：eslint . 0 error（warning 暂不计入，逐步收紧）。
+# CI 用 `npx eslint .`（不带 --fix），纯校验；失败即阻断合并，锁住 0-error 基准。
+permissions:
+  contents: read
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bedcode-desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: bedcode-desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: ESLint (fail on errors)
+        run: npx eslint .
