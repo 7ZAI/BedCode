@@ -40,7 +40,8 @@
 ## 待办（按优先级）
 
 ### P1 — 代码重构（v2.1 完成后遗留，不阻塞联调）
-- [ ] **desktop 插件 handshake.rs 直连死代码清理**：`list_remote`/`fingerprint*`/`request_transfer`/`create_session`/`query_session` 等手机做 server 时代的 HTTP 直连 helper 已全部移出活跃路径（list 走 WS `filesrv_list_remote`、任务走 intent 驱动）；`commands.rs` 的 `upload_session_id` 旧兼容兜底（约 510/522/1366 行 `handshake::cancel_session/complete_session`，guard 条件保证 v2.1 新任务不触发）与 handshake.rs 需要**独立重构文档**：整体删除直连 helper + 移除 `PeerStore.base_and_auth_for` 残留用法。改动面含插件测试，建议单独工时。
+- [x] **desktop 插件 handshake.rs 直连死代码清理**（2026-08-20 完成）：整删 `handshake.rs`（445 行，list_remote/fingerprint/request_transfer/create_session/query_session/complete_session/cancel_session 及私有 helper）；删除 `commands.rs` 3 处旧兼容调用（cancel 两条 cancel_session + transfer_progress 的 complete_session，v2.1 guard 下本就不可达/必然失败）；`PeerStore` 瘦身（删 `base_and_auth`/`base_and_auth_for`/`base_url`/`has_file_transfer_mount`/`file_transfer_operations`/`is_peer_desktop`，`new()` 去参），`start_single_task`/`resume` 改用 `endpoint()` 保留 fail-fast。验证：插件 cargo check（host+wasm32）+ 11 测试全绿。
+  **遗留观察**：Task.`upload_session_id` 现只写不读（曾仅被 handshake cancel/complete 消费），字段保留但断点续传不再依赖它；pull 取消时桌面本地接收 session 现由宿主 TTL 兜底（旧直连 cancel 在服务器归零后本就必然失败）。
 - [ ] **wire 决策/状态魔法串枚举化**：`direction`（"pull"/"push"）、`decision`（"accepted"/"rejected"）、`state`（"running"/"completed"/...）、`reason`（"duplicate-name"/...）贯穿两端为裸 String + 字面量 switch。wire JSON 层保持 String 是两端契约**正确形态**（勿改为数字），但可做 Rust 内部小枚举 + `#[serde(rename)]` 序列化保持 JSON 形状不变。改动面大（两端 enums + commands + responder + wire 测试），建议独立重构任务。
 - [ ] **default_true / FileTransferIntent / ListEntryDto 双写发散护栏**：两端独立 crate 无法共享定义，属架构必然；若表单字段再次扩展，review 时重点 diff 双端逐字一致性（本已双写 wire 测试）。
 

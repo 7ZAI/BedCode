@@ -6,7 +6,6 @@
 //! 宿主调用（transfer_start 等）在释放状态锁后执行，
 //! 避免 on_message 回调死锁。
 
-use crate::handshake::{self};
 use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
 use crate::state::{Direction, HistoryEntry, HistoryStore, PeerInfo, Task, TaskState, TaskStore};
@@ -174,7 +173,7 @@ impl PluginState {
             tasks: TaskStore::new(),
             queue: Queue::new(DEFAULT_CONCURRENCY),
             settings: Settings::default(),
-            peer: PeerStore::new(false),
+            peer: PeerStore::new(),
             mounted: false,
             batches: HashMap::new(),
             pending_batches: HashMap::new(),
@@ -426,9 +425,9 @@ pub fn resume(
         state.tasks.get(task_id).map(|t| t.state),
         state.tasks.get(task_id).map(|t| t.offset).unwrap_or(0),
         state.tasks.get(task_id).map(|t| t.peer.device_id.clone()).unwrap_or_default(),
-        state.peer.base_and_auth_for(
+        state.peer.endpoint(
             &state.tasks.get(task_id).map(|t| t.peer.device_id.clone()).unwrap_or_default()
-        ).is_ok(),
+        ).is_some(),
     ));
     let task = state.tasks.get(task_id)
         .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
@@ -454,7 +453,7 @@ pub fn cancel(
     host: &(impl HostTransfer + HostFs + HostHttp + HostStorage + HostEvents + HostLog + HostConfig),
     task_id: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let (host_task_id, direction, upload_session_id, local_path, peer_id, intent_id) = {
+    let (host_task_id, direction, local_path, intent_id) = {
         let task = state.tasks.get_mut(task_id)
             .ok_or_else(|| anyhow::anyhow!("task not found: {}", task_id))?;
         if task.state.is_terminal() {
@@ -467,9 +466,7 @@ pub fn cancel(
         (
             task.host_task_id.clone(),
             task.direction,
-            task.upload_session_id.clone(),
             task.local_path.clone(),
-            task.peer.device_id.clone(),
             iid,
         )
     };
@@ -499,36 +496,10 @@ pub fn cancel(
     state.tasks.save(host);
     emit_tasks_changed(host, &state.tasks);
 
-    // v2.1：远端 session 取消语义按 intent 驱动区分——
-    // - push（Upload，intent 驱动）：upload_session_id 是手机本地游标 id，
-    //   经 WS send_intent_cancel 已让手机中止会话，不能再直连手机端点取消（服务器
-    //   归零后手机无监听）；旧版直连流程（intent_id 为空）保留 cancel_session
-    // - pull（Download，intent 驱动）：upload_session_id 是桌面接收 session，
-    //   取消它让手机 POST 随即失败，字节保留待续传
-    if direction == Direction::Upload && intent_id.is_none() {
-        if let Some(ref sid) = upload_session_id {
-            if let Ok((base, auth)) = state.peer.base_and_auth_for(&peer_id) {
-                if let Err(e) = handshake::cancel_session(host, &base, &auth, sid) {
-                    host.log_error(&format!(
-                        "upload cancel_session failed for task {}: {}",
-                        task_id, e
-                    ));
-                }
-            }
-        }
-    }
-    if direction == Direction::Download && intent_id.is_some() {
-        if let Some(ref sid) = upload_session_id {
-            if let Ok((base, auth)) = state.peer.base_and_auth_for(&peer_id) {
-                if let Err(e) = handshake::cancel_session(host, &base, &auth, sid) {
-                    host.log_error(&format!(
-                        "pull cancel receiving session failed for task {}: {}",
-                        task_id, e
-                    ));
-                }
-            }
-        }
-    }
+    // v2.1：远端会话取消已由上方 send_intent_cancel 经 WS 完成（手机端中止对应
+    // HTTP 会话）；旧直连端点 cancel_session（手机做 server 时代对 /upload/{sid}
+    // 的 HTTP DELETE）已随服务器归零删除——手机不再监听端口，直连必然失败。
+    // pull 方向桌面本地接收 session 由宿主上传会话 TTL 兜底清理。
 
     Ok(serde_json::json!({"ok": true}))
 }
@@ -894,12 +865,17 @@ fn start_single_task(
 ) -> Result<(), String> {
     host.log_info(&format!("start_single_task: enter task_id={}", task_id));
     let task = state.tasks.get(task_id).ok_or("task not found")?;
-    // 任务从入队起绑定对端：调度用任务自己的 endpoint，切换激活对端不影响排队任务
-    let (base, auth) = state.peer.base_and_auth_for(&task.peer.device_id)?;
+    // 任务从入队起绑定对端：调度用任务自己的 endpoint，切换激活对端不影响排队任务。
+    // v2.1 服务器归零后不再直连对端端点（传输走 intent/WS 协调），仅需确认该对端在
+    // peer 表（已公告）即可调度；不在则 fail-fast（对端未在线）
+    let peer_online = state.peer.endpoint(&task.peer.device_id).is_some();
     host.log_info(&format!(
-        "start_single_task: task_id={} base={} auth_present={} offset={} direction={:?}",
-        task_id, base, !auth.is_empty(), task.offset, task.direction
+        "start_single_task: task_id={} peer_id={} peer_online={} offset={} direction={:?}",
+        task_id, task.peer.device_id, peer_online, task.offset, task.direction
     ));
+    if !peer_online {
+        return Err(format!("peer not online: {}", task.peer.device_id));
+    }
     let direction = task.direction;
 
     match direction {
@@ -1366,20 +1342,6 @@ pub fn handle_transfer_progress(
             task.state = TaskState::Completed;
             task.offset = task.size;
             state.queue.release(&task_id);
-
-            // 上传完成：通知远端 complete（失败记日志，不阻塞终态）
-            if task.direction == Direction::Upload {
-                if let Some(ref sid) = task.upload_session_id.clone() {
-                    if let Ok((base, auth)) = state.peer.base_and_auth_for(&task.peer.device_id) {
-                        if let Err(e) = handshake::complete_session(host, &base, &auth, sid) {
-                            host.log_error(&format!(
-                                "upload complete_session failed for task {}: {}",
-                                task_id, e
-                            ));
-                        }
-                    }
-                }
-            }
         }
         TransferState::Failed(reason) => {
             // 用户已取消（cancel() 先置 Cancelled）：取消竞态中宿主回报的

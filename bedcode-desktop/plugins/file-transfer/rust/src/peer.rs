@@ -1,14 +1,14 @@
-//! 对端缓存与 URL 构造
+//! 对端缓存
 //!
 //! 多对端场景（桌面端）：维护在线对端映射 + 激活对端，切换激活对端不影响
-//! 传输中任务（任务启动时已捕获 endpoint）。单对端场景（移动端）同构，
+//! 传输中任务（任务按 device_id 查询自绑定对端）。单对端场景（移动端）同构，
 //! 同一时刻只有 0/1 个对端记录。
 //!
-//! activate 时构造（is_peer_desktop 固定为平台值）；订阅
-//! `filesrv:peer_changed` 后增删/刷新。对端不在线时命令返回明确错误。
+//! v2.1 服务器归零后桌面不再直连对端端点（传输走 intent/WS 协调），对端信息
+//! 仅用于在线判定与展示；activate 时构造，订阅 `filesrv:peer_changed` 增删/刷新。
 
 use bedcode_plugin_api::host::HostFileService;
-use bedcode_plugin_api::types::{FileOperation, PeerMountAnnouncement};
+use bedcode_plugin_api::types::PeerMountAnnouncement;
 use std::collections::BTreeMap;
 
 /// 插件 ID（文件传输插件）
@@ -29,45 +29,6 @@ pub struct PeerEndpoint {
     pub mounts: Vec<PeerMountAnnouncement>,
 }
 
-impl PeerEndpoint {
-    /// 构造基础 URL（含协议+host+port+路径前缀）
-    ///
-    /// 桌面端对端 base: `http://{ip}:{port}/api/plugins/{pluginId}/{mountPath}`
-    /// 移动端对端 base: `http://{ip}:{port}/{pluginId}/{mountPath}`
-    ///
-    /// 实际使用哪种格式取决于**对端**是桌面还是移动。
-    /// 通过 mounts 中是否包含 com.bedcode.file-transfer 的挂载来判断可用性。
-    pub fn base_url(&self, is_peer_desktop: bool) -> String {
-        if is_peer_desktop {
-            format!(
-                "http://{}:{}/api/plugins/{}/{}",
-                self.ip, self.port, PLUGIN_ID, MOUNT_PATH
-            )
-        } else {
-            format!(
-                "http://{}:{}/{}/{}",
-                self.ip, self.port, PLUGIN_ID, MOUNT_PATH
-            )
-        }
-    }
-
-    /// 检查对端是否挂载了文件传输插件
-    pub fn has_file_transfer_mount(&self) -> bool {
-        self.mounts.iter().any(|m| {
-            m.plugin_id == PLUGIN_ID && m.mount_path == MOUNT_PATH
-        })
-    }
-
-    /// 获取文件传输挂载点的支持操作列表
-    pub fn file_transfer_operations(&self) -> Vec<FileOperation> {
-        self.mounts
-            .iter()
-            .find(|m| m.plugin_id == PLUGIN_ID && m.mount_path == MOUNT_PATH)
-            .map(|m| m.operations.clone())
-            .unwrap_or_default()
-    }
-}
-
 /// 对端存储（多对端 + 激活）
 ///
 /// - 在线对端：已公告文件服务的设备（BTreeMap 保证列表顺序稳定，UI 展示一致）
@@ -78,16 +39,13 @@ pub struct PeerStore {
     peers: BTreeMap<String, PeerEndpoint>,
     /// 激活对端 ID（None = 无可用对端）
     active: Option<String>,
-    /// 对端是否为桌面端（影响 base URL 格式，activate 时固定）
-    is_peer_desktop: bool,
 }
 
 impl PeerStore {
-    pub fn new(is_peer_desktop: bool) -> Self {
+    pub fn new() -> Self {
         Self {
             peers: BTreeMap::new(),
             active: None,
-            is_peer_desktop,
         }
     }
 
@@ -161,25 +119,6 @@ impl PeerStore {
     /// 指定对端的连接信息（任务绑定查询，不依赖激活状态）
     pub fn endpoint(&self, peer_id: &str) -> Option<&PeerEndpoint> {
         self.peers.get(peer_id)
-    }
-
-    /// 激活对端的 base URL + auth token（便捷方法）
-    ///
-    /// 无激活对端时返回 Err
-    pub fn base_and_auth(&self) -> Result<(String, String), String> {
-        let ep = self
-            .active()
-            .ok_or_else(|| "peer not online".to_string())?;
-        Ok((ep.base_url(self.is_peer_desktop), ep.token.clone()))
-    }
-
-    /// 指定对端的 base URL + auth token（任务启动/取消/完成通知使用，
-    /// 与激活状态解耦：任务从入队起绑定对端）
-    pub fn base_and_auth_for(&self, peer_id: &str) -> Result<(String, String), String> {
-        let ep = self
-            .endpoint(peer_id)
-            .ok_or_else(|| format!("peer not online: {}", peer_id))?;
-        Ok((ep.base_url(self.is_peer_desktop), ep.token.clone()))
     }
 }
 

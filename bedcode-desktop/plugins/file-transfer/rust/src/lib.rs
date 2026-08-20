@@ -4,7 +4,6 @@
 //! 下载方向全链路打通；上传方向依赖对端 JWT（另一 worker 补全中）。
 
 mod commands;
-mod handshake;
 mod peer;
 mod queue;
 mod state;
@@ -75,9 +74,8 @@ impl WasmPlugin for FileTransferPlugin {
         s.tasks.load(&host);
         s.history.load(&host);
 
-        // 4. 初始化对端存储（is_peer_desktop=false：桌面插件的对端是移动端，
-        //    base 无 /api/plugins 前缀；对端列表由 peer_changed 事件驱动增删）
-        s.peer = PeerStore::new(false);
+        // 4. 初始化对端存储（对端列表由 peer_changed 事件驱动增删）
+        s.peer = PeerStore::new();
 
         // 5. 订阅总线 topics（v2 新增接收端 4 topic + 发送端应答 topic +
         //    v2.1 intent 驱动 3 topic：回执/进度/心跳）
