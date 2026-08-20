@@ -38,6 +38,7 @@ class MockWebSocket {
   readyState = 0
   binaryType = ''
   sent: string[] = []
+  sentBinary: ArrayBuffer[] = []
   onopen: ((ev: unknown) => void) | null = null
   onmessage: ((ev: { data: unknown }) => void) | null = null
   onclose: ((ev: unknown) => void) | null = null
@@ -48,8 +49,12 @@ class MockWebSocket {
     MockWebSocket.instances.push(this)
   }
 
-  send(data: string) {
-    this.sent.push(data)
+  send(data: string | ArrayBuffer) {
+    if (typeof data === 'string') {
+      this.sent.push(data)
+    } else {
+      this.sentBinary.push(data)
+    }
   }
 
   close() {
@@ -67,7 +72,7 @@ class MockWebSocket {
   }
 
   /** TB v2 帧：seq = 帧内首事件 index；flags 高 7 位 = 事件数 - 1；len = 字节数 */
-  binary(bytes: number[], seq = 0, eventCount = 1, isWaiting = false) {
+  binary(bytes: Uint8Array | number[], seq = 0, eventCount = 1, isWaiting = false) {
     const buf = new ArrayBuffer(16 + bytes.length)
     const view = new DataView(buf)
     view.setUint8(0, 0x54)
@@ -115,6 +120,19 @@ function subscribeResponse(minSeq: number, snapshotSeq: number, historyCount: nu
 async function flushAsync() {
   await new Promise((r) => setTimeout(r, 0))
   await new Promise((r) => setTimeout(r, 0))
+}
+
+/** 解码背压 ack 帧（TB v2 头 + ACK 标志位 0x02 + acked_seq(8 LE) + session_id UTF-8 负载） */
+function decodeAck(ab: ArrayBuffer): { ackedSeq: number; sessionId: string } {
+  const view = new DataView(ab)
+  expect(view.getUint8(0)).toBe(0x54)
+  expect(view.getUint8(1)).toBe(0x42)
+  expect(view.getUint8(2)).toBe(2)
+  expect(view.getUint8(3)).toBe(0x02)
+  const ackedSeq = Number(view.getBigUint64(4, true))
+  const len = view.getUint32(12, true)
+  const sessionId = new TextDecoder().decode(new Uint8Array(ab, 16, len))
+  return { ackedSeq, sessionId }
 }
 
 describe('useTerminalOutputStream', () => {
@@ -390,5 +408,89 @@ describe('useTerminalOutputStream', () => {
     // 仍会重连（错误类型不触发停止）
     expect(MockWebSocket.instances.length).toBe(2)
     errorSpy.mockRestore()
+  })
+
+  describe('背压 ack（04-06：写作解析完成 confirmWriteParsed 回发）', () => {
+    async function setupAck() {
+      stream.start('s1')
+      await flushAsync()
+      const ws = MockWebSocket.instances[0]
+      stream.subscribe()
+      ws.open()
+      ws.text(subscribeResponse(0, 1000, 3))
+      return ws
+    }
+
+    it('写解析完成后回发 ack 帧：携已渲染到的 last_rendered_seq 与 session_id', async () => {
+      const ws = await setupAck()
+      // 交付若干帧，游标推进到 lastSeq=2；尚未写解析 → 无 ack
+      ws.binary([1, 2, 3], 0)
+      ws.binary([4, 5], 1)
+      ws.binary([6], 2)
+      expect(ws.sentBinary).toHaveLength(0)
+
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(1)
+      expect(decodeAck(ws.sentBinary[0])).toEqual({ ackedSeq: 2, sessionId: 's1' })
+    })
+
+    it('ack 节流：达 64KB 阈值才回发，且携最新推进水位', async () => {
+      const ws = await setupAck()
+      // 首帧建立 ack 基线（无条件立即回发）
+      ws.binary([1, 2, 3], 0)
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(1)
+      expect(decodeAck(ws.sentBinary[0]).ackedSeq).toBe(0)
+
+      // 66KB 帧（> 64KB 阈值）+ 1B 帧：累计 66KB+1 > 阈值 → 立即回发最新水位
+      ws.binary(new Uint8Array(66 * 1024), 1)
+      ws.binary([9], 2)
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(2)
+      expect(decodeAck(ws.sentBinary[1]).ackedSeq).toBe(2)
+    })
+
+    it('节流窗口内未达阈值不逐帧回发（空闲兜底 timer 挂起）', async () => {
+      const ws = await setupAck()
+      ws.binary([1], 0)
+      ws.binary([2], 1)
+      ws.binary([3], 2)
+      stream.confirmWriteParsed() // 首 ack 基线
+      expect(ws.sentBinary).toHaveLength(1)
+
+      // 后续小批累计 11B << 64KB：挂起兜底 timer，不立即回发
+      for (let i = 3; i < 14; i++) ws.binary([i], i)
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(1)
+      stream.stop() // 清理兜底 timer，避免测试尾部遗留下定时器
+    })
+
+    it('新会话 start 后 ack 水位重置（新坐标空间），ack 基线立即回发', async () => {
+      const ws = await setupAck()
+      ws.binary([1, 2, 3], 0)
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(1)
+
+      stream.start('s2')
+      await flushAsync()
+      const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]
+      stream.subscribe()
+      ws2.open()
+      ws2.text(subscribeResponse(0, 100, 3))
+
+      // 新会话首帧：ack 基线立即回发（旧 ack 水位不干扰）
+      ws2.binary([7], 0)
+      stream.confirmWriteParsed()
+      expect(ws2.sentBinary).toHaveLength(1)
+      expect(decodeAck(ws2.sentBinary[0])).toEqual({ ackedSeq: 0, sessionId: 's2' })
+    })
+
+    it('stop 后 confirmWriteParsed 不再回发 ack', async () => {
+      const ws = await setupAck()
+      ws.binary([1], 0)
+      stream.stop()
+      stream.confirmWriteParsed()
+      expect(ws.sentBinary).toHaveLength(0)
+    })
   })
 })
