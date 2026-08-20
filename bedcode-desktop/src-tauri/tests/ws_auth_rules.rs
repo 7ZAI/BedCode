@@ -4,12 +4,12 @@
 //! 1. 未认证连接的首条消息必须走 Auth 分派——发业务消息（SessionControl）→
 //!    回 `AUTH_REQUIRED` 错误后服务端关闭连接（拒绝对称）
 //! 2. JWT 首消息认证失败（无效 token）→ 回 `AUTH_FAILED` 后关闭连接
-//! 3. 有效 token 认证后，业务消息不再校验 token（compat 配对拿 token →
+//! 3. 有效 token 认证后，业务消息不再校验 token（HTTP 配对拿 token →
 //!    /ws/event JWT 认证 → 免 token 发 SessionControl 收 echo）
 //! 4. 连接建立后 10s 内未完成认证 → 服务端主动关闭（spec §4.3 超时窗口）
 //!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 真实
-//! tokio-tungstenite 客户端（路径 /ws/terminal 与 /ws/event 双通道）→
+//! tokio-tungstenite 客户端（/ws/event 单事件通道 + HTTP /api/auth/* 配对）→
 //! 首条消息直接验证服务端 gate 行为。
 //!
 //! 串行化：本文件只含一个 `#[tokio::test]`（场景 1–4 严格串行，且共享全局
@@ -213,110 +213,72 @@ async fn wait_for_close(stream: &mut WsRecv, timeout: Duration) -> bool {
     }
 }
 
-/// 发送 RequestPairing 并断言收到 VerifyCode 响应（配对请求半程，供认证复用）
-async fn request_pairing_and_expect_verify_code(
-    sink: &mut WsSend,
-    stream: &mut WsRecv,
-    message_id: &str,
+/// HTTP 配对换取 JWT session_token（POST /api/auth/pairing → verify）
+///
+/// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
+/// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
+async fn http_pair_and_get_token(
+    port: u16,
     device_id: &str,
     device_name: &str,
-) {
-    let request = Message::Auth {
-        message_id: message_id.to_string(),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::RequestPairing,
-            device_id: Some(device_id.to_string()),
-            device_name: Some(device_name.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize request failed").into()))
-        .await
-        .expect("send request_pairing failed");
+    fingerprint: &str,
+) -> String {
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
 
-    let resp = recv_message(stream).await;
-    match resp {
-        Message::Auth { payload, message_id: resp_id, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::VerifyCode,
-                "server must respond with verify_code stage"
-            );
-            assert_eq!(resp_id, message_id, "response must echo request message_id");
-        }
-        other => panic!("expected Auth(VerifyCode) response, got: {other:?}"),
-    }
+    // 1) 请求配对码（HTTP DTO 为 camelCase，见 dtos/auth_dto.rs `rename_all`）
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/pairing"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+        }))
+        .send()
+        .await
+        .expect("pairing request failed")
+        .json()
+        .await
+        .expect("pairing response parse failed");
+    let pairing_code = resp["data"]["pairingCode"]
+        .as_str()
+        .expect("pairingCode missing in response")
+        .to_string();
+    assert!(!pairing_code.is_empty(), "pairing code must be non-empty");
+
+    // 2) 验证配对码 → JWT session_token
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/verify"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+            "pairingCode": pairing_code,
+            "address": format!("127.0.0.1:{port}"),
+        }))
+        .send()
+        .await
+        .expect("verify request failed")
+        .json()
+        .await
+        .expect("verify response parse failed");
+    let token = resp["data"]["token"]
+        .as_str()
+        .expect("token missing in response")
+        .to_string();
+    assert!(!token.is_empty(), "session_token must be non-empty");
+    token
 }
 
-/// 完整配对一个客户端：RequestPairing → 读当前配对码 → VerifyCode → Authenticated，
-/// 返回 JWT session_token（配对连接使命完成即断开）
+/// 完整配对一个客户端（HTTP 配对）：获取 JWT session_token 供 WS 首消息认证
 async fn pair_and_get_token(
     port: u16,
     device_id: &str,
     device_name: &str,
     fingerprint: &str,
-    message_tag: &str,
+    _message_tag: &str,
 ) -> String {
-    let (mut sink, mut stream, _addr) = connect_ws(port, "/ws/terminal").await;
-    request_pairing_and_expect_verify_code(
-        &mut sink,
-        &mut stream,
-        &format!("itest-pair-{message_tag}"),
-        device_id,
-        device_name,
-    )
-    .await;
-
-    let code = bedcode_lib::AppContext::global()
-        .pairing_service()
-        .get_current_code()
-        .await
-        .expect("pairing code must exist after request_pairing")
-        .code;
-    assert!(!code.is_empty(), "pairing code must be non-empty");
-
-    let verify = Message::Auth {
-        message_id: format!("itest-verify-{message_tag}"),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::VerifyCode,
-            pairing_code: Some(code),
-            device_id: Some(device_id.to_string()),
-            device_name: Some(device_name.to_string()),
-            device_fingerprint: Some(fingerprint.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(verify.to_json().expect("serialize verify failed").into()))
-        .await
-        .expect("send verify_code failed");
-
-    let resp = recv_message(&mut stream).await;
-    let session_token = match resp {
-        Message::Auth { payload, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::Authenticated,
-                "valid pairing code must yield Authenticated"
-            );
-            payload.session_token.expect("authenticated response must carry session_token")
-        }
-        other => panic!("expected Auth(Authenticated) response, got: {other:?}"),
-    };
-    assert!(!session_token.is_empty(), "session_token must be non-empty");
-
-    // 配对连接使命完成，断开（registry 经 stopping() 注销）
-    let _ = sink.send(WsMsg::Close(None)).await;
-    let _ = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
-    let _ = sink.close().await;
-    session_token
+    http_pair_and_get_token(port, device_id, device_name, fingerprint).await
 }
 
 /// 以 JWT session_token 重连认证（AuthStage::Authenticated 快速路径）
@@ -408,7 +370,8 @@ async fn ws_auth_gate_rules() {
     drop(stream1);
 
     // ==================== 场景 2：无效 JWT token → AUTH_FAILED + 关闭 ====================
-    let (mut sink2, mut stream2, _addr2) = connect_ws(port, "/ws/terminal").await;
+    // 认证门禁在 /ws/event（共享文本线）上验证：旧 /ws/terminal 已删除
+    let (mut sink2, mut stream2, _addr2) = connect_ws(port, "/ws/event").await;
 
     let bad_auth = Message::Auth {
         message_id: "itest-bad-token".to_string(),
@@ -447,9 +410,9 @@ async fn ws_auth_gate_rules() {
     drop(sink2);
     drop(stream2);
 
-    // ==================== 场景 3：compat 配对拿 token → JWT 认证 → 免 token 业务 ====================
-    // 旧客户端配对首消息是 RequestPairing（compat 放行，不被 gate 拒绝）；
-    // 拿到 token 后在 /ws/event 上 JWT 首消息认证，认证后的业务消息不再校验 token
+    // ==================== 场景 3：HTTP 配对拿 token → JWT 认证 → 免 token 业务 ====================
+    // 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，配对统一走
+    // HTTP /api/auth/*；拿到 token 后在 /ws/event 上 JWT 首消息认证，认证后的业务消息不再校验 token
     let token = pair_and_get_token(port, "itest-device-rules-3", "ITest R3", "fp-auth-rules-3", "rules-3").await;
     let (mut sink3, mut stream3, _addr3) = connect_ws(port, "/ws/event").await;
 

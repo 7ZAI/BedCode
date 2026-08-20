@@ -134,6 +134,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 
 [dev-dependencies]
 tempfile = "3"
+# 集成测试 HTTP 配对（POST /api/auth/* 换取 JWT）：已为运行依赖，dev 复用同版本
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
 # （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
 wit-component = "=0.256.0"

@@ -35,7 +35,7 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
 use bedcode_lib::server::message::{
-    AuthPayload, AuthStage, Message, SessionControlAction, SessionControlPayload, TerminalAction,
+    AuthPayload, AuthStage, Message, SessionControlAction, SessionControlPayload,
 };
 use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
@@ -156,13 +156,14 @@ async fn init_test_app_context() -> String {
 }
 
 /// 建立 WS 连接：先建 TCP（记录本地地址 = 服务端看到的 peer addr，即
-/// registry 的 client_id），再升级为 WebSocket
-async fn connect_ws(port: u16) -> (WsSend, WsRecv, std::net::SocketAddr) {
+/// registry 的 client_id），再升级为 WebSocket；`path` 指定路由（/ws/event
+/// 控制通道或 /ws/terminal/session/{id} 终端通道）
+async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketAddr) {
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("tcp connect to test server failed");
     let local_addr = tcp.local_addr().expect("read local addr failed");
-    let url = format!("ws://127.0.0.1:{port}/ws/terminal");
+    let url = format!("ws://127.0.0.1:{port}{path}");
     let (ws, _resp) = tokio_tungstenite::client_async(&url, tcp)
         .await
         .expect("ws handshake failed");
@@ -214,89 +215,84 @@ where
     }
 }
 
-/// 发送 RequestPairing 并断言收到 VerifyCode 响应（配对请求半程，供认证复用）
-async fn request_pairing_and_expect_verify_code(
-    sink: &mut WsSend,
-    stream: &mut WsRecv,
-    message_id: &str,
-    device_id: &str,
-    device_name: &str,
-) {
-    let request = Message::Auth {
-        message_id: message_id.to_string(),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::RequestPairing,
-            device_id: Some(device_id.to_string()),
-            device_name: Some(device_name.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize request failed").into()))
-        .await
-        .expect("send request_pairing failed");
-
-    let resp = recv_message(stream).await;
-    match resp {
-        Message::Auth { payload, message_id: resp_id, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::VerifyCode,
-                "server must respond with verify_code stage"
-            );
-            assert_eq!(resp_id, message_id, "response must echo request message_id");
-        }
-        other => panic!("expected Auth(VerifyCode) response, got: {other:?}"),
-    }
-}
-
-/// 完成「配对 → 配对码验证 → 认证」全流程，返回 session_token
+/// HTTP 配对换取 JWT session_token（POST /api/auth/pairing → verify）
 ///
-/// 与 02 场景 1 相同：配对码在无头模式下不经过前端事件投递，直接从
-/// PairingService 单例读取（与 WS handler 经 AppContext 共享同一实例）
-async fn pair_and_authenticate(sink: &mut WsSend, stream: &mut WsRecv, tag: &str) -> String {
+/// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
+/// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
+async fn http_pair_and_get_token(port: u16, tag: &str) -> String {
+    let base = format!("http://127.0.0.1:{port}");
     let device_id = format!("itest-device-{tag}");
     let device_name = format!("ITest {tag}");
     let fingerprint = format!("fp-{tag}");
+    let client = reqwest::Client::new();
 
-    request_pairing_and_expect_verify_code(
-        sink,
-        stream,
-        &format!("itest-pair-{tag}"),
-        &device_id,
-        &device_name,
-    )
-    .await;
-
-    let code = bedcode_lib::AppContext::global()
-        .pairing_service()
-        .get_current_code()
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/pairing"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+        }))
+        .send()
         .await
-        .expect("pairing code must exist after request_pairing")
-        .code;
-    assert!(!code.is_empty(), "pairing code must be non-empty");
+        .expect("pairing request failed")
+        .json()
+        .await
+        .expect("pairing response parse failed");
+    let pairing_code = resp["data"]["pairingCode"]
+        .as_str()
+        .expect("pairing code must be present")
+        .to_string();
+    assert!(!pairing_code.is_empty(), "pairing code must be non-empty");
 
-    let verify = Message::Auth {
-        message_id: format!("itest-verify-{tag}"),
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/verify"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+            "pairingCode": pairing_code,
+            "address": format!("127.0.0.1:{port}"),
+        }))
+        .send()
+        .await
+        .expect("verify request failed")
+        .json()
+        .await
+        .expect("verify response parse failed");
+    let token = resp["data"]["token"]
+        .as_str()
+        .expect("session_token must be present")
+        .to_string();
+    assert!(!token.is_empty(), "session_token must be non-empty");
+    token
+}
+
+/// 以 JWT session_token 认证 /ws/event 控制通道（Message::Auth 快速路径）
+async fn authenticate_with_jwt(
+    sink: &mut WsSend,
+    stream: &mut WsRecv,
+    session_token: &str,
+    tag: &str,
+) {
+    let request = Message::Auth {
+        message_id: format!("itest-jwt-{tag}"),
         expect_response: false,
         timestamp: 0,
         session_id: None,
         token: String::new(),
         payload: AuthPayload {
-            stage: AuthStage::VerifyCode,
-            pairing_code: Some(code),
-            device_id: Some(device_id),
-            device_name: Some(device_name),
-            device_fingerprint: Some(fingerprint),
+            stage: AuthStage::Authenticated,
+            device_id: None,
+            device_name: Some(format!("ITest {tag}")),
+            device_fingerprint: Some(format!("fp-{tag}")),
+            session_token: Some(session_token.to_string()),
             ..Default::default()
         },
     };
-    sink.send(WsMsg::Text(verify.to_json().expect("serialize verify failed").into()))
+    sink.send(WsMsg::Text(request.to_json().expect("serialize jwt auth failed").into()))
         .await
-        .expect("send verify_code failed");
+        .expect("send jwt auth failed");
 
     let resp = recv_message(stream).await;
     match resp {
@@ -304,11 +300,10 @@ async fn pair_and_authenticate(sink: &mut WsSend, stream: &mut WsRecv, tag: &str
             assert_eq!(
                 payload.stage,
                 AuthStage::Authenticated,
-                "valid pairing code must yield Authenticated"
+                "JWT re-auth must succeed"
             );
-            payload.session_token.expect("authenticated response must carry session_token")
         }
-        other => panic!("expected Auth(Authenticated) response, got: {other:?}"),
+        other => panic!("expected Auth(Authenticated) from JWT re-auth, got: {other:?}"),
     }
 }
 
@@ -332,38 +327,61 @@ async fn send_control_and_wait(
     .await
 }
 
-/// 轮询收集指定会话的终端输出（累积解码后的文本），直到出现 marker 或超时
+/// 读取下一条 JSON 控制帧（新路由控制帧协议，跳过二进制输出帧与 Ping/Pong），
+/// 5s 超时后 panic；返回解析后的 JSON
+async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
+    loop {
+        let frame = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("timed out waiting for control frame")
+            .expect("WS stream closed unexpectedly")
+            .expect("WS frame error");
+        match frame {
+            WsMsg::Text(text) => {
+                return serde_json::from_str(&text).expect("control frame must be valid JSON");
+            }
+            WsMsg::Ping(_) | WsMsg::Pong(_) | WsMsg::Binary(_) | _ => continue,
+        }
+    }
+}
+
+/// 轮询收集新路由（/ws/terminal/session/{id}）终端输出（累积解码后的文本），
+/// 直到出现 marker 或超时
 ///
-/// 输出事件是 `Message::Terminal { action: Output, data: base64 }`（移动端
-/// WS 通道形态，经 forward_loop 合并/直通编码），其余消息帧（心跳、
-/// SubscribeResponse、文件服务推送等）跳过。PTY 输出时序非确定（PowerShell
-/// 启动、chcp、回显均无保证），因此是「轮询到超时」而非「等 N 条帧」。
-/// 返回已收集文本：断言失败时可借启动 marker 判断链路断在哪一段
-async fn collect_output_until(
+/// 输出为 TB v2 二进制帧（16B 帧头：magic"TB"+version+flags+seq(8LE)+len(4LE)
+/// + payload），JSON 控制帧（auth_ok/subscribe_ok/history_end）与 Ping/Pong 跳过。
+/// PTY 输出时序非确定（PowerShell 启动、chcp、回显均无保证），因此是
+/// 「轮询到超时」而非「等 N 条帧」。返回已收集文本：断言失败时可借启动
+/// marker 判断链路断在哪一段
+async fn collect_terminal_output_until(
     stream: &mut WsRecv,
-    session_id: &str,
     marker: &str,
     timeout: Duration,
 ) -> String {
     let deadline = Instant::now() + timeout;
     let mut text = String::new();
     while Instant::now() < deadline {
-        let Some(msg) = recv_message_timeout(stream, Duration::from_millis(300)).await else {
-            continue;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let frame = match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(frame))) => frame,
+            _ => break, // 超时 / 流关闭
         };
-        match msg {
-            Message::Terminal { session_id: sid, payload, .. } if sid == session_id => {
-                if let TerminalAction::Output { data, .. } = payload.action {
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(&data)
-                        .unwrap_or_else(|e| panic!("output base64 decode failed: {e}"));
-                    text.push_str(&String::from_utf8_lossy(&bytes));
-                    if text.contains(marker) {
-                        break;
-                    }
+        match frame {
+            WsMsg::Binary(bytes) => {
+                // TB v2 帧头：len 在第 12..16 字节（u32 LE）
+                if bytes.len() < 16 {
+                    continue;
+                }
+                let len = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+                if bytes.len() < 16 + len {
+                    continue;
+                }
+                text.push_str(&String::from_utf8_lossy(&bytes[16..16 + len]));
+                if text.contains(marker) {
+                    break;
                 }
             }
-            _ => {}
+            WsMsg::Text(_) | WsMsg::Ping(_) | WsMsg::Pong(_) | WsMsg::Close(_) | _ => continue,
         }
     }
     text
@@ -387,8 +405,10 @@ async fn pty_session_chain_flow() {
 
     // ==================== 场景 1：已认证客户端创建会话 ====================
 
-    let (mut sink_a, mut stream_a, _addr_a) = connect_ws(port).await;
-    let _token = pair_and_authenticate(&mut sink_a, &mut stream_a, "pty-001").await;
+    // HTTP 配对拿 JWT，/ws/event 控制通道 JWT 首消息认证（旧 WS 配对已删除）
+    let token = http_pair_and_get_token(port, "pty-001").await;
+    let (mut sink_a, mut stream_a, _addr_a) = connect_ws(port, "/ws/event").await;
+    authenticate_with_jwt(&mut sink_a, &mut stream_a, &token, "pty-001").await;
 
     // 1a. StartSession → 返回会话标识（真实往返：WS → session_control service
     // → SessionManager → openpty + powershell spawn）
@@ -439,29 +459,50 @@ async fn pty_session_chain_flow() {
         other => panic!("expected SessionControl(SessionList) response, got: {other:?}"),
     }
 
-    // ==================== 场景 2：写入 echo → 收到包含预期输出的输出事件 ====================
+    // ==================== 场景 2：新路由订阅输出 + 写入 echo → 收到输出 ====================
+    // 终端 I/O 走新路由 /ws/terminal/session/{id}（简化控制帧：auth → subscribe →
+    // input，输出为 TB v2 二进制帧）。旧多会话 /ws/terminal 自订阅通道已删除
+    let (mut sink_t, mut stream_t, _addr_t) =
+        connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
 
-    // 订阅输出（GlobalOutputManager 订阅者通道 + forward_loop → WS 帧；
-    // start_seq=None → 全量重播，先于订阅到达的启动输出也会回放）
-    let sub = Message::subscribe(&session_id, None);
-    sink_a.send(WsMsg::Text(sub.to_json().expect("serialize subscribe failed").into()))
+    // 2a. 首消息 JWT 认证 → auth_ok
+    sink_t
+        .send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
         .await
-        .expect("send subscribe failed");
+        .expect("send auth frame failed");
+    let auth_ok = recv_frame_json(&mut stream_t).await;
+    assert_eq!(auth_ok["type"], "auth_ok", "session route must auth with JWT");
 
-    // 写入简单命令：marker 带会话 ID 后缀保证本测试进程内唯一
+    // 2b. subscribe → subscribe_ok（订阅即连接：快照回放 + 实时推送）
+    sink_t
+        .send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
+        .await
+        .expect("send subscribe frame failed");
+    let sub_ok = recv_frame_json(&mut stream_t).await;
+    assert_eq!(sub_ok["type"], "subscribe_ok", "session route must subscribe");
+
+    // 2c. 写入 echo 命令（input data 为 UTF-8 → base64，与 handle_session_input 编码约定一致）
     let marker = format!("BEDCODE_PTY_ECHO_{session_id}");
-    let input = Message::input(&session_id, &format!("echo {marker}\r\n"), None);
-    sink_a.send(WsMsg::Text(input.to_json().expect("serialize input failed").into()))
+    let input_b64 = base64::engine::general_purpose::STANDARD
+        .encode(format!("echo {marker}\r\n").as_bytes());
+    sink_t
+        .send(WsMsg::Text(format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into()))
         .await
-        .expect("send input failed");
+        .expect("send input frame failed");
 
-    // 轮询 + 宽容超时：PowerShell 启动与回显时序非确定，断言「最终包含」而非即时到达
-    let collected = collect_output_until(&mut stream_a, &session_id, &marker, Duration::from_secs(20)).await;
+    // 2d. 轮询 + 宽容超时：PowerShell 启动与回显时序非确定，断言「最终包含」而非即时到达
+    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(20)).await;
     assert!(
         collected.contains(&marker),
         "PTY echo output not observed within 20s; collected so far: {collected:?} \
          （空输出 = 环境问题（powershell 未启动/未读到输出）；有启动输出无 echo = 输入链路缺陷）"
     );
+
+    // 终端通道使命完成，断开
+    let _ = sink_t.send(WsMsg::Close(None)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), stream_t.next()).await;
+    drop(sink_t);
+    drop(stream_t);
 
     // ==================== 场景 3：关闭会话 → 状态一致 ====================
 
@@ -516,7 +557,7 @@ async fn pty_session_chain_flow() {
 
     // ==================== 场景 4：未认证客户端创建会话被拒 ====================
 
-    let (mut sink_b, mut stream_b, _addr_b) = connect_ws(port).await;
+    let (mut sink_b, mut stream_b, _addr_b) = connect_ws(port, "/ws/event").await;
 
     // 与 02 场景 3a 的拒绝行为衔接：业务消息在 actor 状态机层被拦（authenticated=false）
     let control = Message::session_control_with_response(

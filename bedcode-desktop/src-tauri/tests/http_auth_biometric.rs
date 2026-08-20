@@ -1,7 +1,7 @@
 //! 生物认证 HTTP 端点集成测试（ticket 01：/api/auth/biometric-challenge + /api/auth/biometric-verify）
 //!
-//! 独立测试二进制（tests/ 下每个文件是独立编译产物），与 ws_pairing_auth /
-//! server_integration 的全局单例（AppContext / WsSessionRegistry）互相隔离。
+//! 独立测试二进制（tests/ 下每个文件是独立编译产物），与 server_integration
+//! 的全局单例（AppContext / WsSessionRegistry）互相隔离。
 //! 真实启动 Actix 服务器 + reqwest 客户端走完整链路：中间件公开前缀放行 →
 //! 路由 → controller → auth_service 抽取函数 → DB / 挑战管理器。
 //!

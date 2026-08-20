@@ -1,9 +1,9 @@
 //! 多客户端广播与停机集成测试（spec L1 场景 7–8，ticket 04）
 //!
 //! 广播送达语义：`WsSessionRegistry::broadcast` 只投递到 Event 通道（见
-//! registry.rs ChannelType）。ticket 02 的 /ws/event 已落地，接收方 B 使用事件
-//! 通道断言**收到** SyncData 广播；发送方 A 留在 /ws/terminal（终端通道不设
-//! 广播投递），排除语义与 channel 过滤在此处全链路验证。
+//! registry.rs ChannelType）。ticket 02 的 /ws/event 已落地，发送方 A 与接收方 B
+//! 均走事件通道（旧 /ws/terminal 终端通道已随兼容路由删除），发送端由来源地址排除，
+//! 排除语义与 channel 过滤在此处全链路验证。
 //!
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 两个真实
 //! tokio-tungstenite 客户端完成配对认证 → 一端发 WS 会话控制消息触发
@@ -184,7 +184,7 @@ async fn init_test_app_context() {
 /// 建立 WS 连接：先建 TCP（记录本地地址 = 服务端看到的 peer addr，即
 /// registry 的 client_id），再升级为 WebSocket
 ///
-/// `path` 指定路由：/ws/terminal（终端 I/O）或 /ws/event（事件通道，广播接收方）
+/// `path` 指定路由：/ws/event（事件通道，广播接收方）。旧终端通道 /ws/terminal 已删除
 async fn connect_ws(port: u16, path: &str) -> (WsSend, WsRecv, std::net::SocketAddr) {
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
@@ -246,121 +246,77 @@ async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::ws::regi
         .find(|c| c.client_id == client_id)
 }
 
-/// 发送 RequestPairing 并断言收到 VerifyCode 响应（配对请求半程，供认证复用）
-async fn request_pairing_and_expect_verify_code(
-    sink: &mut WsSend,
-    stream: &mut WsRecv,
-    message_id: &str,
+/// HTTP 配对换取 JWT session_token（POST /api/auth/pairing → verify）
+///
+/// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
+/// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
+async fn http_pair_and_get_token(
+    port: u16,
     device_id: &str,
     device_name: &str,
-) {
-    let request = Message::Auth {
-        message_id: message_id.to_string(),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::RequestPairing,
-            device_id: Some(device_id.to_string()),
-            device_name: Some(device_name.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize request failed").into()))
-        .await
-        .expect("send request_pairing failed");
+    fingerprint: &str,
+) -> String {
+    let base = format!("http://127.0.0.1:{port}");
+    let client = reqwest::Client::new();
 
-    let resp = recv_message(stream).await;
-    match resp {
-        Message::Auth { payload, message_id: resp_id, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::VerifyCode,
-                "server must respond with verify_code stage"
-            );
-            assert_eq!(resp_id, message_id, "response must echo request message_id");
-        }
-        other => panic!("expected Auth(VerifyCode) response, got: {other:?}"),
-    }
+    // 1) 请求配对码（HTTP DTO 为 camelCase，见 dtos/auth_dto.rs `rename_all`）
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/pairing"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+        }))
+        .send()
+        .await
+        .expect("pairing request failed")
+        .json()
+        .await
+        .expect("pairing response parse failed");
+    let pairing_code = resp["data"]["pairingCode"]
+        .as_str()
+        .expect("pairingCode missing in response")
+        .to_string();
+    assert!(!pairing_code.is_empty(), "pairing code must be non-empty");
+
+    // 2) 验证配对码 → JWT session_token
+    let resp: serde_json::Value = client
+        .post(format!("{base}/api/auth/verify"))
+        .json(&serde_json::json!({
+            "deviceId": device_id,
+            "deviceName": device_name,
+            "fingerprint": fingerprint,
+            "pairingCode": pairing_code,
+            "address": format!("127.0.0.1:{port}"),
+        }))
+        .send()
+        .await
+        .expect("verify request failed")
+        .json()
+        .await
+        .expect("verify response parse failed");
+    let token = resp["data"]["token"]
+        .as_str()
+        .expect("token missing in response")
+        .to_string();
+    assert!(!token.is_empty(), "session_token must be non-empty");
+
+    // 注意：JWT 重连路径从 token claims 恢复 device_name（HTTP verify 签发），
+    // 与移动端重连行为一致；广播排除语义依赖 device_name 正确携带
+    token
 }
 
-/// 完整认证一个客户端：RequestPairing → 读当前配对码 → VerifyCode → Authenticated
+/// 完整认证一个客户端（HTTP 配对 + JWT）：返回 session_token 供 WS 首消息认证
 ///
-/// 配对码经 PairingService 单例读取（无头模式无前端事件投递，与 02 同策略）；
 /// 客户端串行认证（每次请求配对都会轮换当前码，两个客户端必须先后完成）
-///
-/// 返回 JWT session_token；注意配对完成后必须断开，再用 token 以 JWT 重连
-/// 方式认证——配对路径（VerifyCode）签发的 Authenticated 响应不含 device_name
-/// （auth_service.rs bug，见 .scratch/test-coverage-bugs.md），actor 会话与
-/// registry 的 device_name 均为 None，广播排除语义会失效；JWT 重连路径从
-/// token claims 恢复 device_name，与移动端重连行为一致
 async fn pair_and_get_token(
     port: u16,
     device_id: &str,
     device_name: &str,
     fingerprint: &str,
-    message_tag: &str,
+    _message_tag: &str,
 ) -> String {
-    let (mut sink, mut stream, _addr) = connect_ws(port, "/ws/terminal").await;
-    request_pairing_and_expect_verify_code(
-        &mut sink,
-        &mut stream,
-        &format!("itest-pair-{message_tag}"),
-        device_id,
-        device_name,
-    )
-    .await;
-
-    let code = bedcode_lib::AppContext::global()
-        .pairing_service()
-        .get_current_code()
-        .await
-        .expect("pairing code must exist after request_pairing")
-        .code;
-    assert!(!code.is_empty(), "pairing code must be non-empty");
-
-    let verify = Message::Auth {
-        message_id: format!("itest-verify-{message_tag}"),
-        expect_response: false,
-        timestamp: 0,
-        session_id: None,
-        token: String::new(),
-        payload: AuthPayload {
-            stage: AuthStage::VerifyCode,
-            pairing_code: Some(code),
-            device_id: Some(device_id.to_string()),
-            device_name: Some(device_name.to_string()),
-            device_fingerprint: Some(fingerprint.to_string()),
-            ..Default::default()
-        },
-    };
-    sink.send(WsMsg::Text(verify.to_json().expect("serialize verify failed").into()))
-        .await
-        .expect("send verify_code failed");
-
-    let resp = recv_message(&mut stream).await;
-    let session_token = match resp {
-        Message::Auth { payload, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::Authenticated,
-                "valid pairing code must yield Authenticated"
-            );
-            assert_eq!(
-                payload.device_fingerprint.as_deref(),
-                Some(fingerprint),
-                "authenticated response must carry device fingerprint"
-            );
-            payload.session_token.expect("authenticated response must carry session_token")
-        }
-        other => panic!("expected Auth(Authenticated) response, got: {other:?}"),
-    };
-    assert!(!session_token.is_empty(), "session_token must be non-empty");
-
-    // 配对连接使命完成，断开（registry 经 stopping() 注销），token 用于 JWT 重连
-    close_ws(&mut sink, &mut stream).await;
-    session_token
+    http_pair_and_get_token(port, device_id, device_name, fingerprint).await
 }
 
 /// 以 JWT session_token 重连认证（AuthStage::Authenticated 快速路径）
@@ -514,7 +470,9 @@ async fn broadcast_and_shutdown_flow() {
     // SyncData(SessionRemoved)，A 只收 echo 不收广播
 
     let token_a = pair_and_get_token(port, "itest-device-a-04", "ITest A-04", "fp-itest-a-04", "a-04").await;
-    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, "/ws/terminal").await;
+    // A 现也走事件通道（旧 /ws/terminal 终端通道已删除）；发送端排除语义
+    // 由源地址判定，与通道类型无关
+    let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, "/ws/event").await;
     let client_id_a = addr_a.to_string();
     authenticate_with_jwt(&mut sink_a, &mut stream_a, &token_a, "ITest A-04", "fp-itest-a-04", "a-04").await;
 
@@ -624,10 +582,9 @@ async fn broadcast_and_shutdown_flow() {
     );
     assert_no_sync_data(&mut stream_a, Duration::from_millis(500), "no broadcast target").await;
 
-    // 2c. 全员广播（WebSocketManager::broadcast）同样只达 Event 通道：A 是
-    // Terminal 通道 → 收不到（B 已在场景 2 断开，无事件接收方）。此为正式
-    // 语义而非过渡期：终端通道对同步/通知类广播不设投递，管道健康另由
-    // 场景 4 的 ERROR 级日志零计数兜底（广播空跑不产生 error）
+    // 2c. 全员广播（WebSocketManager::broadcast）到达全部事件通道：A 现为
+    // /ws/event 通道（旧 /ws/terminal 已删除，终端通道不再存在）→ A 应收到。
+    // 旧“终端通道对广播不设投递”语义随兼容路由下线而废弃
     let ctrl = Message::sync_data(SyncPayload::SessionModeChanged {
         session_id: "itest-ctrl-04".to_string(),
         auto_approve: true,
@@ -636,11 +593,14 @@ async fn broadcast_and_shutdown_flow() {
         .broadcast(&ctrl)
         .await
         .expect("full broadcast must succeed");
-    assert_no_sync_data(
-        &mut stream_a,
-        Duration::from_millis(500),
-        "terminal channel must not receive full broadcast (Event-only by design)",
-    ).await;
+    let sync = wait_for_sync_data(&mut stream_a, "event channel must receive full broadcast").await;
+    assert!(
+        matches!(
+            sync,
+            Message::SyncData { payload: SyncPayload::SessionModeChanged { session_id, .. }, .. } if session_id == "itest-ctrl-04"
+        ),
+        "full broadcast must reach the remaining event client (A)"
+    );
 
     // ==================== 场景 3：停机后新连接被拒 + 端口释放 ====================
 
