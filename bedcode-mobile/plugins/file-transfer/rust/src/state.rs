@@ -50,6 +50,157 @@ impl TaskState {
     }
 }
 
+/// 任务终态原因（wire JSON 保持字符串形状不变，经 `#[serde(from/into = "String")]`）
+///
+/// 枚举化收益：已知原因编译期拼写检查 + 匹配；动态透传（宿主错误信息、
+/// 对端任意 reason 字符串）经 `Other` 兜底保留原文。与桌面端定义逐字一致。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum TaskReason {
+    /// 目标同名（对端拒绝 / complete 409）
+    DuplicateName,
+    /// 用户拒绝
+    UserRejected,
+    /// 审批超时未决
+    Timeout,
+    /// 策略拒绝（auto-reject）
+    PolicyDenied,
+    /// 对端离线自动挂起
+    PeerOffline,
+    /// 一般性传输失败
+    TransferFailed,
+    /// 对端中止（非用户取消路径）
+    CancelledByPeer,
+    /// 远端文件变化（指纹不符）
+    RemoteChanged,
+    /// 续传重建超限
+    ResumeLimitExceeded,
+    /// 其他/动态透传原因（错误信息原文、对端自定义字符串）
+    Other(String),
+}
+
+impl TaskReason {
+    /// wire 字符串值（与 `From<TaskReason> for String` 一致）
+    pub fn as_str(&self) -> &str {
+        match self {
+            TaskReason::DuplicateName => "duplicate-name",
+            TaskReason::UserRejected => "user-rejected",
+            TaskReason::Timeout => "timeout",
+            TaskReason::PolicyDenied => "policy-denied",
+            TaskReason::PeerOffline => "peer-offline",
+            TaskReason::TransferFailed => "transfer-failed",
+            TaskReason::CancelledByPeer => "cancelled by peer",
+            TaskReason::RemoteChanged => "remote-changed",
+            TaskReason::ResumeLimitExceeded => "resume-limit-exceeded",
+            TaskReason::Other(s) => s,
+        }
+    }
+
+    /// 从 wire 字符串构造（未识别的值原样保留为 `Other`）
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "duplicate-name" => TaskReason::DuplicateName,
+            "user-rejected" => TaskReason::UserRejected,
+            "timeout" => TaskReason::Timeout,
+            "policy-denied" => TaskReason::PolicyDenied,
+            "peer-offline" => TaskReason::PeerOffline,
+            "transfer-failed" => TaskReason::TransferFailed,
+            "cancelled by peer" => TaskReason::CancelledByPeer,
+            "remote-changed" => TaskReason::RemoteChanged,
+            "resume-limit-exceeded" => TaskReason::ResumeLimitExceeded,
+            _ => TaskReason::Other(s.to_string()),
+        }
+    }
+}
+
+impl From<String> for TaskReason {
+    fn from(s: String) -> Self {
+        TaskReason::from_str(&s)
+    }
+}
+
+impl From<TaskReason> for String {
+    fn from(r: TaskReason) -> Self {
+        r.as_str().to_string()
+    }
+}
+
+/// 传输决策（wire JSON 保持字符串形状，经 `#[serde(from/into = "String")]`）
+///
+/// 与桌面端定义逐字一致：intent ACK 用 "accepted"/"rejected"，transfer
+/// approval/resolved 用 "approved"/"rejected"——同一枚举双值映射。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum TransferDecision {
+    /// 同意（wire "accepted"：intent ACK）
+    Accepted,
+    /// 同意（wire "approved"：transfer approval / resolved）
+    Approved,
+    /// 拒绝（wire "rejected"）
+    Rejected,
+}
+
+impl TransferDecision {
+    /// wire 字符串值
+    pub fn as_str(&self) -> &str {
+        match self {
+            TransferDecision::Accepted => "accepted",
+            TransferDecision::Approved => "approved",
+            TransferDecision::Rejected => "rejected",
+        }
+    }
+
+    /// 从 wire 字符串构造（未识别的值 None）
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "accepted" => Some(TransferDecision::Accepted),
+            "approved" => Some(TransferDecision::Approved),
+            "rejected" => Some(TransferDecision::Rejected),
+            _ => None,
+        }
+    }
+}
+
+impl From<String> for TransferDecision {
+    fn from(s: String) -> Self {
+        TransferDecision::from_str(&s).unwrap_or(TransferDecision::Rejected)
+    }
+}
+
+impl From<TransferDecision> for String {
+    fn from(d: TransferDecision) -> Self {
+        d.as_str().to_string()
+    }
+}
+
+/// 意图方向（wire JSON 保持字符串："pull"/"push"）；与桌面端定义逐字一致。
+///
+/// 服务器归零后桌面为协调者，intent 恒由桌面发出：pull = 手机作为 HTTP 客户端
+/// 向桌面拉取，push = 桌面推文件给手机。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntentDirection {
+    /// 拉取（wire "pull"）
+    Pull,
+    /// 推送（wire "push"）
+    Push,
+}
+
+impl IntentDirection {
+    /// wire 字符串值
+    pub fn as_str(&self) -> &str {
+        match self {
+            IntentDirection::Pull => "pull",
+            IntentDirection::Push => "push",
+        }
+    }
+}
+
+impl From<IntentDirection> for String {
+    fn from(d: IntentDirection) -> Self {
+        d.as_str().to_string()
+    }
+}
+
 /// 校验状态迁移合法性（spec §7.1）
 ///
 /// 返回 `Ok(())` 表示迁移合法，`Err(reason)` 表示非法迁移。
@@ -154,8 +305,8 @@ pub struct Task {
     pub fingerprint: Option<Fingerprint>,
     /// 当前状态
     pub state: TaskState,
-    /// 失败/拒绝原因
-    pub reason: Option<String>,
+    /// 失败/拒绝原因（wire 字符串形状不变，见 TaskReason）
+    pub reason: Option<TaskReason>,
     /// v2 发起方（wire snake_case，队列分类依据）：本插件任务恒为 "me"
     #[serde(default = "default_initiator")]
     pub initiator: String,
@@ -377,7 +528,7 @@ pub struct HistoryEntry {
     pub state: String,
     /// 终态原因（如 duplicate-name / user-rejected / timeout / policy-denied）
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub reason: Option<TaskReason>,
     /// 对端名
     pub peer_name: String,
     /// 本地路径（仅 completed 且本地有文件时非空，供打开所在文件夹；
@@ -613,5 +764,64 @@ mod tests {
         task.initiator = String::new();
         let back: Task = serde_json::from_value(json).unwrap();
         assert_eq!(back.initiator, "me");
+    }
+
+    #[test]
+    fn task_reason_keeps_wire_string_shape() {
+        // 枚举化不得改变 wire JSON 形状：Task / HistoryEntry 的 reason 必须是字符串
+        let json = serde_json::json!("duplicate-name");
+        let r: TaskReason = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(r, TaskReason::DuplicateName);
+        assert_eq!(serde_json::to_value(r).unwrap(), json);
+        // 未知字符串 → Other 原样保留，往返形状不变
+        let unknown = serde_json::json!("custom-wire-reason");
+        let r2: TaskReason = serde_json::from_value(unknown.clone()).unwrap();
+        assert_eq!(r2, TaskReason::Other("custom-wire-reason".into()));
+        assert_eq!(serde_json::to_value(r2).unwrap(), unknown);
+        // 历史条目整体序列化（批内字段名 camelCase，reason 保持字符串）
+        let entry = HistoryEntry {
+            id: "s1".into(),
+            direction: "download".into(),
+            initiator: "me".into(),
+            file_name: "a.bin".into(),
+            size: 10,
+            state: "completed".into(),
+            reason: Some(TaskReason::DuplicateName),
+            peer_name: "desktop".into(),
+            local_path: None,
+            created_at: 1,
+            updated_at: 2,
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["state"], "completed");
+        assert_eq!(v["reason"], "duplicate-name");
+    }
+
+    #[test]
+    fn transfer_decision_wire_shape() {
+        assert_eq!(
+            serde_json::to_string(&TransferDecision::Accepted).unwrap(),
+            "\"accepted\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransferDecision::Approved).unwrap(),
+            "\"approved\""
+        );
+        assert_eq!(
+            serde_json::to_string(&TransferDecision::Rejected).unwrap(),
+            "\"rejected\""
+        );
+        assert!(TransferDecision::from_str("accepted") == Some(TransferDecision::Accepted));
+        assert!(TransferDecision::from_str("rejected") == Some(TransferDecision::Rejected));
+        assert!(TransferDecision::from_str("approved") == Some(TransferDecision::Approved));
+        assert!(TransferDecision::from_str("unknown") == None);
+    }
+
+    #[test]
+    fn intent_direction_wire_shape() {
+        assert_eq!(IntentDirection::Pull.as_str(), "pull");
+        assert_eq!(IntentDirection::Push.as_str(), "push");
+        let s: String = IntentDirection::Pull.into();
+        assert_eq!(s, "pull");
     }
 }

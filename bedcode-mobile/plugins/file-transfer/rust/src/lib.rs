@@ -13,6 +13,7 @@ mod queue;
 mod shared;
 mod state;
 
+use crate::state::TransferDecision;
 use bedcode_plugin_api_mobile::host::{HostBus, HostFileService, HostLog, HostTransfer};
 use bedcode_plugin_api_mobile::types::{
     FileOperation, MountOptions, PluginManifest, TransferRequestMeta, UploadHookDecision,
@@ -393,15 +394,15 @@ impl WasmPlugin for FileTransferPlugin {
                     s.settings.receiving_policy.clone()
                 };
                 let decision = match policy.as_str() {
-                    commands::POLICY_ACCEPT => Some("accepted"),
-                    commands::POLICY_REJECT => Some("rejected"),
+                    commands::POLICY_ACCEPT => Some(TransferDecision::Accepted),
+                    commands::POLICY_REJECT => Some(TransferDecision::Rejected),
                     _ => None, // ask：等用户经通知 action 应答
                 };
                 if let Some(decision) = decision {
-                    if let Err(e) = host.filesrv_respond_intent(&intent_id, decision) {
+                    if let Err(e) = host.filesrv_respond_intent(&intent_id, decision.as_str()) {
                         host.log_warn(&format!(
                             "auto respond intent {} ({}) failed: {}",
-                            intent_id, decision, e
+                            intent_id, decision.as_str(), e
                         ));
                     }
                 }

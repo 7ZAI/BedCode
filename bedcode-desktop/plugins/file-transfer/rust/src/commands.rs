@@ -8,7 +8,10 @@
 
 use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
-use crate::state::{Direction, HistoryEntry, HistoryStore, PeerInfo, Task, TaskState, TaskStore};
+use crate::state::{
+    Direction, HistoryEntry, HistoryStore, IntentDirection, PeerInfo, Task, TaskReason, TaskState,
+    TaskStore, TransferDecision,
+};
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
     ConfigKey, HostBus, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog,
@@ -136,7 +139,7 @@ pub struct ReceivingTask {
     pub state: TaskState,
     /// 失败/拒绝原因
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub reason: Option<TaskReason>,
     /// 发送方设备 ID
     pub peer_id: String,
     /// 创建时间（Unix 毫秒）
@@ -310,7 +313,7 @@ fn enqueue_download(
             now_ms(host),
         );
         task.state = TaskState::Rejected;
-        task.reason = Some("duplicate-name".to_string());
+        task.reason = Some(TaskReason::DuplicateName);
         let task_json = serde_json::to_value(&task)?;
         let task_id = task.id.clone();
         // v2：终态即归档（本地同名预检的 rejected 也进历史，不在当前队列留痕）
@@ -597,7 +600,7 @@ pub fn retry(
     // duplicate-name（下载）：清理本地目标文件与残留 .part，使重试可成功；
     // 上传方向远端文件不可删（spec 禁止删除远端），重试前需用户在对端处理
     if direction == Direction::Download
-        && reason.as_deref() == Some("duplicate-name")
+        && reason == Some(TaskReason::DuplicateName)
         && !local_path.is_empty()
     {
         // 目标文件 = .part 路径去掉后缀（enqueue 预检与 rename 冲突均源于目标存在）
@@ -626,8 +629,8 @@ pub fn retry(
     // 与移动端行为逐字一致。duplicate-name 保留批上下文（批已批准，重试免问直接传）
     if batch_id.is_some() {
         if matches!(
-            reason.as_deref(),
-            Some("user-rejected" | "timeout" | "policy-denied")
+            reason.as_ref(),
+            Some(TaskReason::UserRejected | TaskReason::Timeout | TaskReason::PolicyDenied)
         ) {
             task.batch_id = Some(format!("b-{}", generate_id(now_ms(host))));
         }
@@ -842,7 +845,7 @@ pub fn schedule_and_start(
             host.log_error(&format!("start task {} failed: {}", task_id, e));
             if let Some(task) = state.tasks.get_mut(&task_id) {
                 task.state = TaskState::Failed;
-                task.reason = Some(e);
+                task.reason = Some(TaskReason::Other(e));
             }
             state.queue.release(&task_id);
             // v2：启动即终态（失败）→ 归档历史并从当前队列移除
@@ -915,7 +918,14 @@ fn start_single_task(
             }
             // intent 发送即置 0%（乐观更新起点）→ ACK offset 校正 → progress 覆盖
             send_intent(
-                state, host, task_id, "pull", "download", &rel_phone, size, Some(&batch_id),
+                state,
+                host,
+                task_id,
+                IntentDirection::Pull,
+                Direction::Download,
+                &rel_phone,
+                size,
+                Some(&batch_id),
             )?;
         }
         Direction::Upload => {
@@ -929,7 +939,16 @@ fn start_single_task(
             let size = task.size;
             let src = task.local_path.clone();
             let share_rel = share_relative_path(state, &src)?;
-            send_intent(state, host, task_id, "push", "upload", &share_rel, size, None)?;
+            send_intent(
+                state,
+                host,
+                task_id,
+                IntentDirection::Push,
+                Direction::Upload,
+                &share_rel,
+                size,
+                None,
+            )?;
         }
     }
 
@@ -949,8 +968,8 @@ fn send_intent(
     state: &mut PluginState,
     host: &(impl HostEvents + HostLog + HostConfig),
     task_id: &str,
-    direction: &str,
-    semantics: &str,
+    direction: IntentDirection,
+    semantics: Direction,
     relative_path: &str,
     size: u64,
     batch_id: Option<&str>,
@@ -963,12 +982,18 @@ fn send_intent(
         .unwrap_or_default();
     host.log_info(&format!(
         "send_intent: task_id={} intent_id={} direction={} semantics={} rel={} size={} batch={:?}",
-        task_id, intent_id, direction, semantics, relative_path, size, batch_id
+        task_id,
+        intent_id,
+        direction.as_str(),
+        semantics.as_str(),
+        relative_path,
+        size,
+        batch_id
     ));
     host.broadcast_sync(&SyncEvent::FileTransferIntent {
         intent_id: intent_id.clone(),
-        direction: direction.to_string(),
-        semantics: semantics.to_string(),
+        direction: direction.as_str().to_string(),
+        semantics: semantics.as_str().to_string(),
         batch_id: batch_id.map(|s| s.to_string()),
         relative_path: relative_path.to_string(),
         size,
@@ -1050,7 +1075,7 @@ pub fn handle_intent_ack(
     let decision = payload
         .get("decision")
         .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .and_then(TransferDecision::from_str);
     let offset = payload.get("offset").and_then(|v| v.as_u64()).unwrap_or(0);
     let session_id = payload.get("sessionId").and_then(|v| v.as_str()).unwrap_or("");
     if intent_id.is_empty() {
@@ -1076,7 +1101,7 @@ pub fn handle_intent_ack(
             task.last_activity = now;
             task.updated_at = now;
             match decision {
-                "accepted" => {
+                Some(TransferDecision::Accepted) => {
                     // ACK offset 校正：断点真源 = 手机已写字节（pull = 桌面 session
                     // 已收偏移 / push = 手机本地游标），桌面据此纠正乐观进度
                     task.offset = offset;
@@ -1090,19 +1115,26 @@ pub fn handle_intent_ack(
                         ));
                     }
                 }
-                "rejected" => {
+                Some(TransferDecision::Rejected) => {
                     task.state = TaskState::Rejected;
-                    task.reason = Some("user-rejected".to_string());
+                    task.reason = Some(TaskReason::UserRejected);
                 }
-                _ => {
+                Some(TransferDecision::Approved) => {
+                    // ACK 通道只会出现 accepted/rejected（approved 属 approval 事件），防御性忽略
                     host.log_warn(&format!(
-                        "intent ack: unknown decision '{}' for intent {}",
-                        decision, intent_id
+                        "intent ack: unexpected approved decision for intent {}",
+                        intent_id
+                    ));
+                }
+                None => {
+                    host.log_warn(&format!(
+                        "intent ack: unknown decision for intent {}",
+                        intent_id
                     ));
                 }
             }
         }
-        if decision == "rejected" {
+        if decision == Some(TransferDecision::Rejected) {
             archive_task_if_terminal(state, host, id);
         }
     }
@@ -1166,14 +1198,14 @@ pub fn handle_transfer_progress_intent(
                 // 失败：置终态 + 把已到进度校正到 transferred（保留断点信息）；
                 // 具体原因由对端 IntentFail/断点 offset 上报补充
                 task.state = TaskState::Failed;
-                task.reason = Some("transfer-failed".to_string());
+                task.reason = Some(TaskReason::TransferFailed);
                 task.offset = transferred;
             }
             "cancelled" => {
                 // 用户取消（cancel() 先置 Cancelled）→ 保持终态；否则视为对端中止
                 if task.state != TaskState::Cancelled {
                     task.state = TaskState::Failed;
-                    task.reason = Some("cancelled by peer".to_string());
+                    task.reason = Some(TaskReason::CancelledByPeer);
                 }
             }
             _ => {}
@@ -1222,9 +1254,9 @@ pub fn handle_intent_fail(
         }
         task.state = TaskState::Failed;
         task.reason = Some(if fail_reason == "duplicate-name" {
-            "duplicate-name".to_string()
+            TaskReason::DuplicateName
         } else {
-            "transfer-failed".to_string()
+            TaskReason::TransferFailed
         });
         task.offset = offset;
         archive_task_if_terminal(state, host, &id);
@@ -1296,7 +1328,7 @@ pub fn sweep_stale_intents(
             let _ = task.transition(TaskState::Resumable);
             task.auto_resumable = true;
             // 前端据此展示「对端离线，任务挂起」（transfer.task.peerOffline）
-            task.reason = Some("peer-offline".to_string());
+            task.reason = Some(TaskReason::PeerOffline);
         }
         // 释放队列槽位（防御：早前路径可能未释放）
         state.queue.release(id);
@@ -1356,10 +1388,10 @@ pub fn handle_transfer_progress(
                 // 保持 resumable，不进入终态
             } else if reason == "duplicate-name" {
                 task.state = TaskState::Rejected;
-                task.reason = Some("duplicate-name".to_string());
+                task.reason = Some(TaskReason::DuplicateName);
             } else {
                 task.state = TaskState::Failed;
-                task.reason = Some(reason.clone());
+                task.reason = Some(TaskReason::from_str(reason));
                 // 失败终态：清除断线自动续传标记，防止后续事件路径再复活
                 task.auto_resumable = false;
             }
@@ -1514,7 +1546,7 @@ pub fn handle_peer_changed(
         for id in &waiting_ids {
             if let Some(task) = state.tasks.get_mut(&id) {
                 task.state = TaskState::Rejected;
-                task.reason = Some("timeout".to_string());
+                task.reason = Some(TaskReason::Timeout);
             }
             archive_task_if_terminal(state, host, &id);
         }
@@ -1601,11 +1633,14 @@ pub fn handle_transfer_resolved(
     payload: &serde_json::Value,
 ) {
     let batch_id = payload.get("batchId").and_then(|v| v.as_str()).unwrap_or("");
-    let decision = payload.get("decision").and_then(|v| v.as_str()).unwrap_or("");
+    let decision = payload
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .and_then(TransferDecision::from_str);
     let removed = state.pending_batches.remove(batch_id);
     if let Some(batch) = removed {
         emit_batches_changed(host, state);
-        if decision == "approved" {
+        if decision == Some(TransferDecision::Approved) {
             // 批准后批级一条 toast（spec §9.3 / §12.4：mode=batch 立即弹）
             host.emit_event(
                 "plugin:file-transfer:toast",
@@ -1697,10 +1732,10 @@ pub fn handle_receiving_done(
         ("completed", _) => (TaskState::Completed, None),
         ("cancelled", _) => (TaskState::Cancelled, None),
         ("failed", Some("duplicate-name")) => {
-            (TaskState::Rejected, Some("duplicate-name".to_string()))
+            (TaskState::Rejected, Some(TaskReason::DuplicateName))
         }
-        ("failed", r) => (TaskState::Failed, r.map(|s| s.to_string())),
-        _ => (TaskState::Failed, reason.clone()),
+        ("failed", r) => (TaskState::Failed, r.map(TaskReason::from_str)),
+        _ => (TaskState::Failed, reason.as_deref().map(TaskReason::from_str)),
     };
     task.state = state_kind;
     task.reason = final_reason.clone();
@@ -1743,14 +1778,17 @@ pub fn handle_transfer_approval(
     payload: &serde_json::Value,
 ) {
     let batch_id = payload.get("batchId").and_then(|v| v.as_str()).unwrap_or("");
-    let decision = payload.get("decision").and_then(|v| v.as_str()).unwrap_or("");
+    let decision = payload
+        .get("decision")
+        .and_then(|v| v.as_str())
+        .and_then(TransferDecision::from_str);
     let reason = payload.get("reason").and_then(|v| v.as_str()).unwrap_or("");
     if batch_id.is_empty() {
         return;
     }
 
     match decision {
-        "approved" => {
+        Some(TransferDecision::Approved) => {
             if let Some(rec) = state.batches.get_mut(batch_id) {
                 rec.state = BatchRecordState::Approved;
             }
@@ -1776,7 +1814,7 @@ pub fn handle_transfer_approval(
                 emit_tasks_changed(host, &state.tasks);
             }
         }
-        "rejected" => {
+        Some(TransferDecision::Rejected) => {
             let reason_owned = reason.to_string();
             if let Some(rec) = state.batches.get_mut(batch_id) {
                 rec.state = BatchRecordState::Rejected {
@@ -1800,7 +1838,7 @@ pub fn handle_transfer_approval(
             for id in &task_ids {
                 if let Some(task) = state.tasks.get_mut(&id) {
                     task.state = TaskState::Rejected;
-                    task.reason = Some(reason_owned.clone());
+                    task.reason = Some(TaskReason::from_str(&reason_owned));
                 }
                 archive_task_if_terminal(state, host, &id);
             }
@@ -1811,7 +1849,7 @@ pub fn handle_transfer_approval(
         }
         _ => {
             host.log_warn(&format!(
-                "transfer approval: unknown decision '{}' for batch {}",
+                "transfer approval: unknown decision '{:?}' for batch {}",
                 decision, batch_id
             ));
         }

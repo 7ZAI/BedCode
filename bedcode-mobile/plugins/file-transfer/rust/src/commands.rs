@@ -11,7 +11,8 @@ use crate::peer::{PeerStore, MOUNT_PATH};
 use crate::queue::{Queue, DEFAULT_CONCURRENCY};
 use crate::shared::{self, SharedRoot};
 use crate::state::{
-    Direction, Fingerprint, HistoryEntry, HistoryStore, PeerInfo, Task, TaskState, TaskStore,
+    Direction, Fingerprint, HistoryEntry, HistoryStore, PeerInfo, Task, TaskReason, TaskState,
+    TaskStore,
 };
 use bedcode_plugin_api_mobile::host::{
     ConfigKey, HostBus, HostConfig, HostEvents, HostFileService, HostFs, HostHttp, HostLog,
@@ -137,7 +138,7 @@ pub struct ReceivingTask {
     pub state: String,
     /// 终态原因（如 duplicate-name）
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
+    pub reason: Option<TaskReason>,
     /// 对端 ID
     pub peer_id: String,
     /// 创建时间（Unix 毫秒）
@@ -325,7 +326,7 @@ fn enqueue_download(
                 now_ms(host),
             );
             task.state = TaskState::Rejected;
-            task.reason = Some("duplicate-name".to_string());
+            task.reason = Some(TaskReason::DuplicateName);
             let task_json = serde_json::to_value(&task)?;
             state.tasks.insert(task);
             state.tasks.save(host);
@@ -615,7 +616,7 @@ pub fn retry(
     // duplicate-name（下载）：清理本地目标文件与残留 .part，使重试可成功；
     // 上传方向远端文件不可删（spec 禁止删除远端），重试前需用户在对端处理
     if direction == Direction::Download
-        && reason.as_deref() == Some("duplicate-name")
+        && reason == Some(TaskReason::DuplicateName)
         && !local_path.is_empty()
     {
         // 目标文件 = .part 路径去掉后缀（enqueue 预检与 rename 冲突均源于目标存在）
@@ -637,8 +638,8 @@ pub fn retry(
     // 批上下文（批已批准，重试免问直接传）
     if direction == Direction::Upload && task.batch_id.is_some() {
         if matches!(
-            reason.as_deref(),
-            Some("user-rejected" | "timeout" | "policy-denied")
+            reason.as_ref(),
+            Some(TaskReason::UserRejected | TaskReason::Timeout | TaskReason::PolicyDenied)
         ) {
             if let Some(bid) = task.batch_id.clone() {
                 state.batches.remove(&bid);
@@ -916,7 +917,7 @@ pub fn schedule_and_start(
             host.log_error(&format!("start task {} failed: {}", task_id, e));
             if let Some(task) = state.tasks.get_mut(&task_id) {
                 task.state = TaskState::Failed;
-                task.reason = Some(e);
+                task.reason = Some(TaskReason::Other(e));
             }
             state.queue.release(&task_id);
         }
@@ -952,7 +953,7 @@ fn start_single_task(
                     // 远端文件变化 → failed
                     if let Some(task) = state.tasks.get_mut(task_id) {
                         task.state = TaskState::Failed;
-                        task.reason = Some("remote-changed".to_string());
+                        task.reason = Some(TaskReason::RemoteChanged);
                     }
                     state.queue.release(task_id);
                     return Err("remote-changed".to_string());
@@ -1050,7 +1051,7 @@ fn start_single_task(
                     Err(CreateSessionError::DuplicateName) => {
                         if let Some(task) = state.tasks.get_mut(task_id) {
                             task.state = TaskState::Rejected;
-                            task.reason = Some("duplicate-name".to_string());
+                            task.reason = Some(TaskReason::DuplicateName);
                         }
                         state.queue.release(task_id);
                         return Err("duplicate-name".to_string());
@@ -1161,7 +1162,7 @@ pub fn handle_transfer_progress(
                                 // 接收端目标已存在同名：引擎已完成字节流，但落位被拒——
                                 // 覆写为 rejected(duplicate-name)（v1 同名即拒语义）
                                 task.state = TaskState::Rejected;
-                                task.reason = Some("duplicate-name".to_string());
+                                task.reason = Some(TaskReason::DuplicateName);
                                 host.log_warn(&format!(
                                     "upload complete rejected (duplicate-name) for task {}",
                                     task_id
@@ -1209,7 +1210,7 @@ pub fn handle_transfer_progress(
                 // 保持 resumable，不进入终态
             } else if reason == "duplicate-name" {
                 task.state = TaskState::Rejected;
-                task.reason = Some("duplicate-name".to_string());
+                task.reason = Some(TaskReason::DuplicateName);
             } else if reason == "not-seekable-resume" {
                 // M3 SAF pipe 流（不可 seek）跨任务续传：宿主只能从头打开
                 // （effective_offset=0 ≠ 请求 offset）→ 重建 session 全量重传
@@ -1220,7 +1221,7 @@ pub fn handle_transfer_progress(
                     // 连续多次重建仍失败 → 宿主异常/对端持续不可用，落终态
                     // 终止循环（否则每次重建失败都触发一次前端失败通知）
                     task.state = TaskState::Failed;
-                    task.reason = Some("resume-limit-exceeded".to_string());
+                    task.reason = Some(TaskReason::ResumeLimitExceeded);
                     task.auto_resumable = false;
                 } else {
                     task.state = TaskState::Queued;
@@ -1233,7 +1234,7 @@ pub fn handle_transfer_progress(
                 }
             } else {
                 task.state = TaskState::Failed;
-                task.reason = Some(reason.clone());
+                task.reason = Some(TaskReason::from_str(reason));
                 // 失败终态：清除断线自动续传标记，防止后续事件路径再复活
                 task.auto_resumable = false;
             }
@@ -1477,7 +1478,7 @@ pub fn handle_peer_changed(
         for id in &approval_ids {
             if let Some(task) = state.tasks.get_mut(id) {
                 let _ = task.transition(TaskState::Rejected);
-                task.reason = Some("timeout".to_string());
+                task.reason = Some(TaskReason::Timeout);
                 task.auto_resumable = false;
             }
             state.queue.release(id);
@@ -1813,7 +1814,7 @@ fn to_rejected(
 ) {
     if let Some(task) = state.tasks.get_mut(task_id) {
         let _ = task.transition(TaskState::Rejected);
-        task.reason = Some(reason.to_string());
+        task.reason = Some(TaskReason::from_str(reason));
     }
     state.queue.release(task_id);
     archive_terminal_task(state, host, task_id);
@@ -1828,7 +1829,7 @@ fn to_failed(
 ) {
     if let Some(task) = state.tasks.get_mut(task_id) {
         let _ = task.transition(TaskState::Failed);
-        task.reason = Some(reason.to_string());
+        task.reason = Some(TaskReason::from_str(reason));
         task.auto_resumable = false;
     }
     state.queue.release(task_id);
@@ -2182,9 +2183,9 @@ pub fn handle_receiving_done_event(
     // 409 竞态（complete duplicate-name）→ rejected（接收端历史记 rejected）
     let (state_name, state_reason) =
         if wire_state == "failed" && reason.as_deref() == Some("duplicate-name") {
-            ("rejected".to_string(), reason)
+            ("rejected".to_string(), reason.map(|_| TaskReason::DuplicateName))
         } else {
-            (wire_state.to_string(), reason)
+            (wire_state.to_string(), reason.as_deref().map(TaskReason::from_str))
         };
     task.state = state_name.clone();
     task.reason = state_reason.clone();
@@ -2304,7 +2305,7 @@ pub fn handle_transfer_approval_event(
         for id in &reject_ids {
             if let Some(task) = state.tasks.get_mut(&id) {
                 let _ = task.transition(TaskState::Rejected);
-                task.reason = Some(reason.to_string());
+                task.reason = Some(TaskReason::from_str(&reason));
                 task.auto_resumable = false;
             }
             state.queue.release(&id);
