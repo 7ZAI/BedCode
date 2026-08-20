@@ -165,7 +165,7 @@ async function stepTimeout(delta: number): Promise<void> {
       </div>
       <div v-else class="settings-group">
         <div
-          v-for="(root, idx) in settingsApi?.settings.value.roots ?? []"
+          v-for="root in settingsApi?.settings.value.roots ?? []"
           :key="root.id"
           class="settings-row"
           :class="{ 'ft-row-invalid': !root.authorized }"

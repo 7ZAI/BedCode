@@ -470,7 +470,7 @@ async function init() {
           console.warn('[MobileConnection] Re-auth failed, need to pair again')
           // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
           // 后续用户点击历史连接时 conn.connect() 会误判 "Already connected" 拒绝新建
-          try { await wsDisconnect() } catch (_) {}
+          try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
           isConnecting.value = false
           connectionStatus.value = 'disconnected'
           connectionError.value = 'mobile.connection.reauthFailed'
@@ -479,7 +479,7 @@ async function init() {
       } catch (e) {
         console.error('[MobileConnection] Re-auth error:', e)
         // 认证异常（超时/网络错误），同样断开 WebSocket 保持前后端状态一致
-        try { await wsDisconnect() } catch (_) {}
+        try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
         isConnecting.value = false
         connectionStatus.value = 'disconnected'
         connectionError.value = 'mobile.connection.reauthError'
@@ -487,7 +487,7 @@ async function init() {
     } else {
       console.log('[MobileConnection] No credentials stored, need manual pairing')
       // 无凭据，断开 WebSocket，用户需要手动发起连接
-      try { await wsDisconnect() } catch (_) {}
+      try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
       isConnecting.value = false
       connectionStatus.value = 'disconnected'
       connectionError.value = 'mobile.connection.noCredentials'

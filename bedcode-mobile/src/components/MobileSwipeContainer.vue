@@ -7,7 +7,7 @@
       :style="trackStyle"
     >
       <div
-        v-for="(page, index) in pages"
+        v-for="page in pages"
         :key="page.name"
         class="swipe-page"
       >

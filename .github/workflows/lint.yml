@@ -1,17 +1,25 @@
-name: Lint (Desktop Frontend)
+name: Lint (Desktop + Mobile Frontend)
 
 on:
   push:
     paths:
       - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.editorconfig'
       - '.github/workflows/lint.yml'
   pull_request:
     paths:
       - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.editorconfig'
       - '.github/workflows/lint.yml'
 
-# 仅校验桌面端前端（ESLint）。
-# 当前状态：eslint . 0 error（warning 暂不计入，逐步收紧）。
+# 全局单根 ESLint 配置（eslint.config.js），同时校验桌面端与移动端前端。
+# 当前状态：npx eslint . 0 error（warning 暂不计入，逐步收紧）。
 # CI 用 `npx eslint .`（不带 --fix），纯校验；失败即阻断合并，锁住 0-error 基准。
 permissions:
   contents: read
@@ -19,9 +27,6 @@ permissions:
 jobs:
   eslint:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: bedcode-desktop
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +35,7 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
-          cache-dependency-path: bedcode-desktop/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Install dependencies
         run: npm install

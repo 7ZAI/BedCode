@@ -230,6 +230,8 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 
 开发过程文档与配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch 等，见下）只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。README 与 AGENTS.md 不受此限（全分支跟踪）。实现在 `scripts/doc-tracking.sh`，由 husky 在 `.husky/` 下挂载 `pre-commit` / `post-checkout` / `post-merge` 钩子调用（钩子运行器 `.husky/_` 由 `husky` / `npm install` 重新生成，已加入 `.gitignore`）。
 
+ESLint / Prettier 为**全局单根配置**，同时覆盖 `bedcode-desktop` 与 `bedcode-mobile`：仓库根的 `eslint.config.js`（ESLint 9 flat config）、`.prettierrc.json`、`.editorconfig`、`.prettierignore`。`pre-commit` 钩子与 CI `lint.yml` 均从根目录运行 `eslint .` 校验两端前端（仅因 error 阻断）。子项目 `lint` / `format` 脚本通过 `../node_modules/.bin/` 调用根依赖。
+
 ### 启用（clone 后每人执行一次）
 
 ```bash

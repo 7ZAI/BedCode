@@ -8,10 +8,10 @@ sh "$(git rev-parse --show-toplevel)/scripts/doc-tracking.sh" untrack pre-commit
 # 只因 error 阻断提交（warning 不卡，逐步收紧，与 CI `npx eslint .` 的 0-error 基准一致）。
 # node_modules 缺失（如未 npm install 的干净 clone）时跳过，不阻断提交。
 STAGED=$(git diff --cached --name-only --diff-filter=ACMR \
-  | grep -E '^bedcode-desktop/(src|packages|plugins)/.*\.(vue|js|jsx|cjs|mjs|ts|tsx|cts|mts)$' || true)
+  | grep -E '^bedcode-(desktop|mobile)/(src|packages|plugins)/.*\.(vue|js|jsx|cjs|mjs|ts|tsx|cts|mts)$' || true)
 
 if [ -n "$STAGED" ]; then
-  ESLINT="$(git rev-parse --show-toplevel)/bedcode-desktop/node_modules/.bin/eslint"
+  ESLINT="$(git rev-parse --show-toplevel)/node_modules/.bin/eslint"
   if [ ! -x "$ESLINT" ]; then
     echo "ESLint 未安装（bedcode-desktop/node_modules 缺失），跳过前端门禁。"
     exit 0

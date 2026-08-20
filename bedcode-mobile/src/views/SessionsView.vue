@@ -59,8 +59,6 @@
             <SessionCard
               :session="mockSession"
               @click="handleMockSessionClick"
-              @stop=""
-              @delete=""
             />
           </div>
         </div>

@@ -111,7 +111,7 @@ const emit = defineEmits<{
 }>()
 
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
-const { highlightedHtml, isLoading, error, highlight, highlightDiff } = useCodeHighlight()
+const { highlightedHtml, isLoading, highlight, highlightDiff } = useCodeHighlight()
 
 const isFullscreen = ref(false)
 const codeViewerStore = useCodeViewerStore()

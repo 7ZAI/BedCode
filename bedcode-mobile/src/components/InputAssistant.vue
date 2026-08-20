@@ -156,7 +156,7 @@ function onPointerMove(e: PointerEvent) {
 }
 
 function onPointerUp(e: PointerEvent) {
-  try { (e.target as HTMLElement)?.releasePointerCapture?.(e.pointerId) } catch {}
+  try { (e.target as HTMLElement)?.releasePointerCapture?.(e.pointerId) } catch { /* 忽略释放失败 */ }
   const dt = Date.now() - ptr.downTime
 
   if (ptr.dragging) return                                          // drag → just repositioned
