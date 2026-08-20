@@ -6,7 +6,8 @@ export default {
       defaultPort: 'Default Port',
       defaultPortDesc: 'The port used when the server starts; takes effect after restart',
       preventSleep: 'Prevent System Sleep',
-      preventSleepDesc: 'Prevent the system from sleeping while the server is running (display sleep allowed)',
+      preventSleepDesc:
+        'Prevent the system from sleeping while the server is running (display sleep allowed)',
     },
     session: {
       title: 'Session Defaults',
@@ -42,6 +43,8 @@ export default {
       fontLarge: 'Large',
       fontXl: 'Extra Large',
       terminalCacheCount: 'Terminal Cache Count',
+      animations: 'Animations',
+      animationsDesc: 'Turn off to disable all page transitions and interaction animations',
     },
     connection: {
       title: 'Connection Settings',

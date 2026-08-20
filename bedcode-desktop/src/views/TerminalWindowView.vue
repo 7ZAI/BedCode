@@ -11,11 +11,21 @@
     >
       <div class="flex items-center gap-3 min-w-0" data-tauri-drag-region>
         <div class="flex items-center gap-2 min-w-0 shrink-0" data-tauri-drag-region>
-          <span :class="['w-2 h-2 rounded-full shrink-0', statusColor]" data-tauri-drag-region></span>
-          <span class="wb-mono text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate" data-tauri-drag-region>
+          <span
+            :class="['w-2 h-2 rounded-full shrink-0', statusColor]"
+            data-tauri-drag-region
+          ></span>
+          <span
+            class="wb-mono text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
+            data-tauri-drag-region
+          >
             {{ sessionName }}
           </span>
-          <span class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase shrink-0" :class="statusLabelClass" data-tauri-drag-region>
+          <span
+            class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase shrink-0"
+            :class="statusLabelClass"
+            data-tauri-drag-region
+          >
             {{ statusText }}
           </span>
         </div>
@@ -26,7 +36,9 @@
           class="hidden sm:flex items-center gap-2 min-w-0 wb-mono text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
           data-tauri-drag-region
         >
-          <span v-if="workingDir" class="truncate max-w-64" :title="workingDir">{{ workingDir }}</span>
+          <span v-if="workingDir" class="truncate max-w-64" :title="workingDir">{{
+            workingDir
+          }}</span>
           <span v-if="workingDir && command" class="text-[var(--text-tertiary)]">·</span>
           <span v-if="command" class="truncate max-w-48" :title="command">{{ command }}</span>
         </div>
@@ -44,29 +56,57 @@
 
         <!-- 设置 -->
         <button
-          @click.stop="isSettingsOpen = !isSettingsOpen"
           class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
           :class="{ 'bg-[var(--bg-hover)]': isSettingsOpen }"
           :title="t('desktop.terminal.settings')"
+          @click.stop="isSettingsOpen = !isSettingsOpen"
           @mousedown.stop
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"
+            />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+            />
           </svg>
         </button>
 
         <!-- 清屏 -->
-        <button @click="terminalPreviewRef?.clearTerminal()" class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" :title="t('desktop.terminal.clearScreen')">
+        <button
+          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          :title="t('desktop.terminal.clearScreen')"
+          @click="terminalPreviewRef?.clearTerminal()"
+        >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
           </svg>
         </button>
 
         <!-- 刷新格式 -->
-        <button @click="terminalPreviewRef?.refreshTerminal()" class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" :title="t('desktop.terminal.refreshFormat')">
+        <button
+          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          :title="t('desktop.terminal.refreshFormat')"
+          @click="terminalPreviewRef?.refreshTerminal()"
+        >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
           </svg>
         </button>
 
@@ -78,20 +118,49 @@
         <div class="w-px h-4 bg-[var(--border)] mx-0.5"></div>
 
         <!-- 窗口控制 -->
-        <button @click="minimizeWindow" class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" :title="t('desktop.terminal.minimize')">
+        <button
+          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          :title="t('desktop.terminal.minimize')"
+          @click="minimizeWindow"
+        >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M20 12H4" />
           </svg>
         </button>
-        <button @click="toggleMaximize" class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors" :title="t('desktop.terminal.maximize')">
+        <button
+          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
+          :title="t('desktop.terminal.maximize')"
+          @click="toggleMaximize"
+        >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path v-if="!isMaximized" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h4" />
-            <path v-else stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5 5m5-5l5-5m-5 5v-4.5m0 4.5h4.5" />
+            <path
+              v-if="!isMaximized"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h4"
+            />
+            <path
+              v-else
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M9 9V4.5M9 9H4.5M9 9L3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5 5m5-5l5-5m-5 5v-4.5m0 4.5h4.5"
+            />
           </svg>
         </button>
-        <button @click="closeWindow" class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--color-danger)] hover:text-white transition-colors" :title="t('desktop.terminal.close')">
+        <button
+          class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--color-danger)] hover:text-white transition-colors"
+          :title="t('desktop.terminal.close')"
+          @click="closeWindow"
+        >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
@@ -99,20 +168,40 @@
 
     <!-- 加载态 -->
     <div v-if="isLoading" class="flex-1 flex items-center justify-center">
-      <p class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.terminal.loadingSession') }}</p>
+      <p class="wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">
+        {{ t('desktop.terminal.loadingSession') }}
+      </p>
     </div>
 
     <!-- 终端区：flex-1 占据剩余空间，min-h-0 防止内容撑开容器 -->
-    <TerminalPreview v-else ref="terminalPreviewRef" class="flex-1 min-h-0" :session="session" :show-input="true" :show-header="false" />
+    <TerminalPreview
+      v-else
+      ref="terminalPreviewRef"
+      class="flex-1 min-h-0"
+      :session="session"
+      :show-input="true"
+      :show-header="false"
+    />
 
     <!-- 24px 状态条 -->
-    <footer class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)]">
+    <footer
+      class="h-6 shrink-0 flex items-center justify-between px-3 border-t border-[var(--border)] bg-[var(--bg-card)]"
+    >
       <div class="flex items-center gap-2">
         <span :class="['w-1.5 h-1.5 rounded-full', statusColor]"></span>
-        <span class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase" :class="statusLabelClass">{{ statusText }}</span>
+        <span
+          class="text-[calc(10.5px*var(--ui-scale))] font-semibold tracking-[0.08em] uppercase"
+          :class="statusLabelClass"
+          >{{ statusText }}</span
+        >
       </div>
-      <div class="flex items-center gap-1.5 wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)]">
-        <span class="text-[calc(10.5px*var(--ui-scale))] tracking-[0.08em] text-[var(--text-tertiary)]">{{ t('desktop.server.uptime').toUpperCase() }}</span>
+      <div
+        class="flex items-center gap-1.5 wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)]"
+      >
+        <span
+          class="text-[calc(10.5px*var(--ui-scale))] tracking-[0.08em] text-[var(--text-tertiary)]"
+          >{{ t('desktop.server.uptime').toUpperCase() }}</span
+        >
         <span class="text-[var(--text-primary)]">{{ uptimeText }}</span>
       </div>
     </footer>
@@ -132,15 +221,25 @@
         v-if="isSettingsOpen"
         class="absolute top-10 right-0 bottom-0 z-30 w-64 flex flex-col bg-[var(--bg-card)] border-l border-[var(--border)] shadow-xl"
       >
-        <div class="h-10 shrink-0 px-4 flex items-center justify-between border-b border-[var(--border)]">
-          <span class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.terminal.settings') }}</span>
+        <div
+          class="h-10 shrink-0 px-4 flex items-center justify-between border-b border-[var(--border)]"
+        >
+          <span
+            class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+            >{{ t('desktop.terminal.settings') }}</span
+          >
           <button
             class="w-6 h-6 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] transition-colors"
             :title="t('desktop.terminal.close')"
             @click="isSettingsOpen = false"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M6 18L18 6M6 6l12 12" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>
@@ -168,19 +267,18 @@
 
           <!-- 背景图片 -->
           <div>
-            <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{ t('desktop.terminal.bgImage') }}</label>
+            <label class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">{{
+              t('desktop.terminal.bgImage')
+            }}</label>
             <div class="flex items-center gap-1.5">
-              <button
-                @click.stop="pickBgImage"
-                class="wb-btn-ghost !h-7 flex-1 justify-center"
-              >
+              <button class="wb-btn-ghost !h-7 flex-1 justify-center" @click.stop="pickBgImage">
                 {{ t('desktop.terminal.bgImageSelect') }}
               </button>
               <button
                 v-if="hasBgImage"
-                @click.stop="removeBgImage"
                 class="wb-btn-ghost !h-7 !text-red-600 dark:!text-red-400"
                 :title="t('desktop.terminal.bgImageRemove')"
+                @click.stop="removeBgImage"
               >
                 {{ t('desktop.terminal.bgImageRemove') }}
               </button>
@@ -197,16 +295,18 @@
 
             <!-- 图片不透明度：实时预览，防抖持久化 -->
             <div v-if="hasBgImage" class="mt-2">
-              <div class="flex items-center justify-between text-xs text-[var(--text-secondary)] mb-1">
+              <div
+                class="flex items-center justify-between text-xs text-[var(--text-secondary)] mb-1"
+              >
                 <span>{{ t('desktop.terminal.bgImageOpacity') }}</span>
                 <span class="wb-mono">{{ settingsBgOpacity }}%</span>
               </div>
               <input
+                v-model.number="settingsBgOpacity"
                 type="range"
                 min="0"
                 max="100"
                 step="1"
-                v-model.number="settingsBgOpacity"
                 class="w-full h-1 appearance-none bg-[var(--border-strong)] cursor-pointer accent-[var(--color-primary)]"
                 @click.stop
               />
@@ -248,7 +348,7 @@ const settingsStore = useSettingsStore()
 const sessionStore = useSessionStore()
 const toast = useToast()
 
-const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
+const SNAP_THRESHOLD = 15 // 贴靠阈值（像素）
 
 const route = useRoute()
 const sessionId = ref(route.params.id as string)
@@ -257,10 +357,10 @@ const session = ref<SessionInfo | null>(null)
 const config = ref<SessionConfig | null>(null)
 const isMaximized = ref(false)
 const isLoading = ref(true)
-const isShown = ref(false)  // 是否已允许显示（由主窗口在内容就绪后通知）
-const revealDone = ref(false)  // 进入动画是否已结束（结束后移除残留 transform）
-const isSnapped = ref(false)  // 是否已贴靠
-const snapDirection = ref<'left' | 'right' | null>(null)  // 贴靠方向
+const isShown = ref(false) // 是否已允许显示（由主窗口在内容就绪后通知）
+const revealDone = ref(false) // 进入动画是否已结束（结束后移除残留 transform）
+const isSnapped = ref(false) // 是否已贴靠
+const snapDirection = ref<'left' | 'right' | null>(null) // 贴靠方向
 const nowTick = ref(Date.now())
 let uptimeTimer: ReturnType<typeof setInterval> | null = null
 
@@ -294,9 +394,13 @@ const themeOptions = computed(() => terminalPreviewRef.value?.themeNames ?? {})
 const themeSelectOptions = computed(() =>
   Object.entries(themeOptions.value).map(([value, label]) => ({ value, label })),
 )
-const fontSizeSelectOptions = computed(() =>
-  [8, 10, 12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
-)
+const fontSizeSelectOptions = computed(() => {
+  const sizes: number[] = []
+  for (let size = 8; size <= 20; size++) {
+    sizes.push(size)
+  }
+  return sizes.map((size) => ({ value: size, label: `${size}px` }))
+})
 
 // ==================== 状态展示 ====================
 
@@ -308,33 +412,50 @@ const isLive = computed(() => {
 const statusColor = computed(() => {
   if (!session.value) return 'bg-[var(--text-tertiary)]'
   switch (session.value.status) {
-    case 'running': return 'bg-green-500'
-    case 'waitingInput': return 'bg-yellow-500 animate-pulse'
-    case 'error': return 'bg-red-500'
-    case 'stopped': return 'bg-[var(--text-tertiary)]'
-    case 'starting': return 'bg-blue-500 animate-pulse'
-    default: return 'bg-[var(--text-tertiary)]'
+    case 'running':
+      return 'bg-green-500'
+    case 'waitingInput':
+      return 'bg-yellow-500 animate-pulse'
+    case 'error':
+      return 'bg-red-500'
+    case 'stopped':
+      return 'bg-[var(--text-tertiary)]'
+    case 'starting':
+      return 'bg-blue-500 animate-pulse'
+    default:
+      return 'bg-[var(--text-tertiary)]'
   }
 })
 
 const statusText = computed(() => {
   switch (session.value?.status) {
-    case 'starting': return t('common.status.starting')
-    case 'running': return t('common.status.running')
-    case 'waitingInput': return t('common.status.asking')
-    case 'error': return t('common.status.error')
-    case 'stopped': return t('common.status.stopped')
-    default: return t('common.status.unknown')
+    case 'starting':
+      return t('common.status.starting')
+    case 'running':
+      return t('common.status.running')
+    case 'waitingInput':
+      return t('common.status.asking')
+    case 'error':
+      return t('common.status.error')
+    case 'stopped':
+      return t('common.status.stopped')
+    default:
+      return t('common.status.unknown')
   }
 })
 
 const statusLabelClass = computed(() => {
   switch (session.value?.status) {
-    case 'running': return 'text-green-600 dark:text-green-400'
-    case 'waitingInput': return 'text-yellow-600 dark:text-yellow-400'
-    case 'error': return 'text-red-600 dark:text-red-400'
-    case 'starting': return 'text-blue-500 dark:text-blue-400'
-    default: return 'text-[var(--text-tertiary)]'
+    case 'running':
+      return 'text-green-600 dark:text-green-400'
+    case 'waitingInput':
+      return 'text-yellow-600 dark:text-yellow-400'
+    case 'error':
+      return 'text-red-600 dark:text-red-400'
+    case 'starting':
+      return 'text-blue-500 dark:text-blue-400'
+    default:
+      return 'text-[var(--text-tertiary)]'
   }
 })
 
@@ -468,13 +589,13 @@ async function initWindowPosition() {
   // 监听主窗口移动
   unlistenMainMoved = await listen<{ x: number; y: number; width: number; height: number }>(
     'main-window-moved',
-    handleMainWindowMoved
+    handleMainWindowMoved,
   )
 
   // 监听主窗口大小变化
   unlistenMainResized = await listen<{ width: number; height: number }>(
     'main-window-resized',
-    handleMainWindowResized
+    handleMainWindowResized,
   )
 
   // 监听贴靠状态变化（从主窗口发出）
@@ -485,12 +606,14 @@ async function initWindowPosition() {
         isSnapped.value = true
         snapDirection.value = event.payload.direction
       }
-    }
+    },
   )
 }
 
 /** 处理主窗口移动 - 贴靠时同步移动 */
-async function handleMainWindowMoved(event: { payload: { x: number; y: number; width: number; height: number } }) {
+async function handleMainWindowMoved(event: {
+  payload: { x: number; y: number; width: number; height: number }
+}) {
   const mainPos = event.payload
 
   // 更新本窗口记录的位置
@@ -557,7 +680,7 @@ async function checkAndSnap(mainPos: { x: number; y: number; width: number; heig
   const terminalSize = await win.outerSize()
 
   // 检测右侧贴靠
-  const rightDistance = Math.abs((mainPos.x + mainPos.width) - terminalPos.x)
+  const rightDistance = Math.abs(mainPos.x + mainPos.width - terminalPos.x)
   if (rightDistance < SNAP_THRESHOLD) {
     isSnapped.value = true
     snapDirection.value = 'right'
@@ -652,7 +775,9 @@ onMounted(async () => {
   })
 
   // 运行时长每秒刷新
-  uptimeTimer = setInterval(() => { nowTick.value = Date.now() }, 1000)
+  uptimeTimer = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
 
   loadSessionInfo()
 })

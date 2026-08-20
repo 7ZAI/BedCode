@@ -38,6 +38,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("ui.language", "语言偏好（zh-CN / en）"),
     ("ui.terminal_bg_image", "终端背景图片文件名（位于应用数据目录，留空表示不启用）"),
     ("ui.terminal_bg_opacity", "终端背景图片不透明度（0-100，越小图片越淡）"),
+    ("ui.animations_enabled", "全局动画效果总开关（true/false，关闭后禁用所有页面过渡/动画，默认开启）"),
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
     ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
     ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
@@ -95,6 +96,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         "ui.language",
         "ui.terminal_bg_image",
         "ui.terminal_bg_opacity",
+        "ui.animations_enabled",
     ]),
     ("Channel 容量配置", &[
         "channels.status_broadcast_capacity",
@@ -283,6 +285,9 @@ pub struct UiConfig {
     /// 终端背景图片不透明度（0-100，越小图片越淡）
     #[serde(default = "default_terminal_bg_opacity")]
     pub terminal_bg_opacity: u8,
+    /// 全局动画效果总开关（关闭时禁用所有页面过渡/动画），默认开启
+    #[serde(default = "default_animations_enabled")]
+    pub animations_enabled: bool,
 }
 
 fn default_terminal_theme() -> String {
@@ -305,6 +310,10 @@ fn default_terminal_bg_opacity() -> u8 {
     30
 }
 
+fn default_animations_enabled() -> bool {
+    true
+}
+
 impl Default for UiConfig {
     fn default() -> Self {
         Self {
@@ -318,6 +327,7 @@ impl Default for UiConfig {
             language: default_language(),
             terminal_bg_image: None,
             terminal_bg_opacity: default_terminal_bg_opacity(),
+            animations_enabled: default_animations_enabled(),
         }
     }
 }
@@ -552,6 +562,7 @@ impl AppConfig {
                 language: parse_value(props, "ui.language", default_language()),
                 terminal_bg_image: parse_optional(props, "ui.terminal_bg_image"),
                 terminal_bg_opacity: parse_value(props, "ui.terminal_bg_opacity", default_terminal_bg_opacity()),
+                animations_enabled: parse_value(props, "ui.animations_enabled", default_animations_enabled()),
             },
             channels: ChannelsConfig {
                 status_broadcast_capacity: parse_value(props, "channels.status_broadcast_capacity", 64),
@@ -646,6 +657,7 @@ impl AppConfig {
         map.insert("ui.language".to_string(), self.ui.language.clone());
         map.insert("ui.terminal_bg_image".to_string(), self.ui.terminal_bg_image.clone().unwrap_or_default());
         map.insert("ui.terminal_bg_opacity".to_string(), self.ui.terminal_bg_opacity.to_string());
+        map.insert("ui.animations_enabled".to_string(), self.ui.animations_enabled.to_string());
         map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
         map.insert("channels.restart_broadcast_capacity".to_string(), self.channels.restart_broadcast_capacity.to_string());
         map.insert("channels.event_broadcast_capacity".to_string(), self.channels.event_broadcast_capacity.to_string());

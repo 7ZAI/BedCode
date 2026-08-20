@@ -42,6 +42,8 @@ export default {
       fontLarge: '大',
       fontXl: '超大',
       terminalCacheCount: '终端缓存数量',
+      animations: '动画效果',
+      animationsDesc: '关闭后全局禁用页面切换与交互过渡动画',
     },
     connection: {
       title: '连接设置',

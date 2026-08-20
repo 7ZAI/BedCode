@@ -139,6 +139,9 @@
           </div>
         </div>
         <div class="settings-panel-section">
+          <div class="settings-panel-row">
+            <span class="settings-panel-label">{{ t('mobile.file.filterDirs') }}</span>
+          </div>
           <textarea
             v-model="tempFilterText"
             class="settings-panel-input settings-panel-textarea"
