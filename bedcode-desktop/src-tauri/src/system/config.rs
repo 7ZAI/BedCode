@@ -416,7 +416,7 @@ impl Default for ChannelsConfig {
             restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
             pty_subscription_capacity: 1024,
-            global_queue_capacity: 25000,
+            global_queue_capacity: 50000,
             global_queue_max_bytes: 128 * 1024 * 1024, // 128MB
             history_start_mode: HistoryStartMode::Min,
             ws_event_capacity: 1024,
@@ -634,7 +634,7 @@ impl AppConfig {
                 restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
                 pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
-                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 25000),
+                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 50000),
                 global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 128 * 1024 * 1024),
                 // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
                 history_start_mode: match parse_value::<String>(props, "channels.history_start_mode", "min".to_string())
