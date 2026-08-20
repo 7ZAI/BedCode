@@ -343,12 +343,18 @@ impl Actor for TerminalWs {
                 global_manager.unsubscribe_all_for_client(&client_id).await;
             }
 
-            // 断连清理：移除该设备公告的文件服务（避免插件访问已不可达的端点）
-            if let Some(device_id) = device_id {
-                app_ctx
-                    .file_service()
-                    .remove_peer(&device_id)
-                    .await;
+            // 断连清理：仅当设备整体离线时才移除其公告的文件服务，与上方
+            // is_offline 判定对齐。设备 WS 重连（新连接顶替旧连接）或仅终端
+            // 通道抖动而事件通道仍存活时，旧连接关闭不代表设备离线，贸然
+            // remove_peer 会让桌面误显示「未连接」；新连接认证成功后由对端
+            // resend announce 自然刷新 peer 记录
+            if is_offline {
+                if let Some(device_id) = device_id {
+                    app_ctx
+                        .file_service()
+                        .remove_peer(&device_id)
+                        .await;
+                }
             }
         });
 

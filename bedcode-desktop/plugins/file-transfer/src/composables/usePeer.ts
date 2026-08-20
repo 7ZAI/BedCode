@@ -71,6 +71,10 @@ export function usePeer(context: PluginContext) {
       // 激活对端以插件为准（插件保证激活必然在线；列表里查不到则清空）
       const active: string = data?.activePeerId ?? ''
       activePeerId.value = next.some((p) => p.id === active) ? active : ''
+      // 控制面连接态纠正：peer 表来自宿主经已认证 WS 公告的权威状态，非空即
+      // 至少一台对端在线——弥补 device-connected / filesrv:peer_changed 一次性
+      // 事件在视图挂载后才发射（Tauri 事件不重放）导致的 connOnline 停滞
+      if (next.length > 0) connOnline.value = true
     } catch (e) {
       console.error('[File Transfer] list-peers failed:', e)
     }
