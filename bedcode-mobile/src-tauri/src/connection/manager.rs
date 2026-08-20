@@ -23,10 +23,11 @@ use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler, FileServiceHandler};
 
 use crate::system::constants::connection::{
-    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN,
-    WS_EVENT_PATH, WS_TERMINAL_PATH,
+    BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_EVENT_PATH,
 };
-use crate::system::constants::reconnect::DEFAULT_RETRY_DELAYS_MS;
+use crate::system::constants::reconnect::{
+    DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS,
+};
 
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
@@ -228,7 +229,8 @@ impl ConnectionManager {
         self.set_target(address.clone(), port, name).await;
 
         *self.status.write().await = ConnectionStatus::Connecting;
-        self.establish_ws_client(&address, port, WS_TERMINAL_PATH, None).await?;
+        // 旧 WS 配对/终端路由已下线，测试辅助路径指向事件 WS（mock 不按 path 分发）
+        self.establish_ws_client(&address, port, WS_EVENT_PATH, None).await?;
         *self.status.write().await = ConnectionStatus::Connected;
 
         // 短暂等待连接稳定
@@ -406,24 +408,28 @@ impl ConnectionManager {
     /// `app_handle` 可为 `None`：04 监督任务自愈重连在无窗口上下文中可测
     /// （仅跳过前端事件发射，HTTP 语义不变），command 层传 `Some`。
     pub async fn reconnect(&self, app_handle: Option<AppHandle>, token: Option<String>) -> Result<()> {
-        let max_retry = DEFAULT_RETRY_DELAYS_MS.len() as u32;
+        let max_retry = DEFAULT_MAX_RETRIES;
         let mut current_retry: u32 = 0;
 
+        // 并发互斥：多个重连入口（前端命令 / supervisor 自愈）只允许一个真正
+        // 持有重连循环，已在重连则跳过。flag 由本函数自持，**循环内不再复检**——
+        // 否则第一轮失败后 current_retry += 1 续跑会命中自己置的 true 提前 return，
+        // 重连永远到不了 max_retry、不发射 ws_reconnect_failed → 前端永久停在
+        // 「正在连接」（2026-08-20 真机日志：Already reconnecting, skip）
+        if self.is_reconnecting.load(Ordering::SeqCst) {
+            tracing::info!("Already reconnecting, skip");
+            return Ok(());
+        }
+        self.is_reconnecting.store(true, Ordering::SeqCst);
+        self.retry_count.store(0, Ordering::SeqCst);
+
         while current_retry < max_retry {
-            // 用户主动断开，停止重连循环
+            // 用户主动断开，停止重连循环（统一出口复位 flag）
             if self.manual_disconnect.load(Ordering::SeqCst) {
                 tracing::info!("Manual disconnect detected, aborting reconnect");
-                self.is_reconnecting.store(false, Ordering::SeqCst);
-                return Ok(());
+                break;
             }
 
-            // 检查是否已经在重连
-            if self.is_reconnecting.load(Ordering::SeqCst) {
-                tracing::info!("Already reconnecting, skip");
-                return Ok(());
-            }
-
-            self.is_reconnecting.store(true, Ordering::SeqCst);
             self.retry_count.store(current_retry, Ordering::SeqCst);
 
             // 发射重连开始事件（无 AppHandle 时跳过：纯后台自愈路径）
@@ -440,11 +446,10 @@ impl ConnectionManager {
                 let delay = DEFAULT_RETRY_DELAYS_MS[(current_retry - 1) as usize];
                 tracing::info!("Waiting {}ms before retry...", delay);
                 tokio::time::sleep(tokio::time::Duration::from_millis(delay)).await;
-                // 等待期间用户可能已断开，再次检查
+                // 等待期间用户可能已断开（统一出口复位 flag）
                 if self.manual_disconnect.load(Ordering::SeqCst) {
                     tracing::info!("Manual disconnect during reconnect delay, aborting");
-                    self.is_reconnecting.store(false, Ordering::SeqCst);
-                    return Ok(());
+                    break;
                 }
             }
 
@@ -497,8 +502,13 @@ impl ConnectionManager {
             }
         }
 
-        // 重连失败
+        // 重连结束统一出口：先复位互斥 flag；手动断开（aborted）不算失败、
+        // 不发射失败事件；否则重试耗尽 → ws_reconnect_failed 通知前端终止「正在连接」
         self.is_reconnecting.store(false, Ordering::SeqCst);
+        if self.manual_disconnect.load(Ordering::SeqCst) {
+            tracing::info!("Reconnect loop aborted after {} attempts", current_retry);
+            return Ok(());
+        }
         if let Some(ah) = &app_handle {
             let _ = ah.emit("ws_reconnect_failed", serde_json::json!({
                 "reason": "Max retries exceeded"

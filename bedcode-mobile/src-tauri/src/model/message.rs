@@ -1228,12 +1228,12 @@ mod tests {
 
     #[test]
     fn test_auth_constructor() {
-        // 配对码验证阶段，携带设备信息
+        // JWT 重认证阶段，携带设备信息与 session_token（旧 WS 配对 stage 已删）
         let payload = AuthPayload {
-            stage: AuthStage::VerifyCode,
+            stage: AuthStage::Reauthenticate,
             device_id: Some("dev-1".to_string()),
             device_name: Some("phone".to_string()),
-            pairing_code: Some("123456".to_string()),
+            session_token: Some("jwt-1".to_string()),
             ..Default::default()
         };
         let msg = Message::auth(Some("s1".to_string()), payload.clone());
@@ -1243,10 +1243,10 @@ mod tests {
         match msg {
             Message::Auth { session_id, payload: got, .. } => {
                 assert_eq!(session_id.as_deref(), Some("s1"));
-                assert_eq!(got.stage, AuthStage::VerifyCode);
+                assert_eq!(got.stage, AuthStage::Reauthenticate);
                 assert_eq!(got.device_id.as_deref(), Some("dev-1"));
                 assert_eq!(got.device_name.as_deref(), Some("phone"));
-                assert_eq!(got.pairing_code.as_deref(), Some("123456"));
+                assert_eq!(got.session_token.as_deref(), Some("jwt-1"));
             }
             _ => panic!(),
         }
@@ -1645,8 +1645,8 @@ mod tests {
 
     #[test]
     fn test_to_json_auth_exact() {
-        // AuthPayload::default() 的 stage 为 request_pairing，可选字段全部省略；
-        // session_id 为 None 时无 skip 属性 → 序列化为 null
+        // AuthPayload::default() 的 stage 为 failed（占位，旧 request_pairing 已删），
+        // 可选字段全部省略；session_id 为 None 时无 skip 属性 → 序列化为 null
         let msg = Message::Auth {
             message_id: "m-002".to_string(),
             expect_response: false,
@@ -1657,7 +1657,7 @@ mod tests {
         };
         assert_eq!(
             msg.to_json().unwrap(),
-            "{\"type\":\"auth\",\"payload\":{\"message_id\":\"m-002\",\"expect_response\":false,\"timestamp\":1700000000000,\"session_id\":null,\"token\":\"\",\"payload\":{\"stage\":\"request_pairing\"}}}"
+            "{\"type\":\"auth\",\"payload\":{\"message_id\":\"m-002\",\"expect_response\":false,\"timestamp\":1700000000000,\"session_id\":null,\"token\":\"\",\"payload\":{\"stage\":\"failed\"}}}"
         );
     }
 
@@ -1786,8 +1786,8 @@ mod tests {
                 session_id: Some("s1".into()),
                 token: "tk".into(),
                 payload: AuthPayload {
-                    stage: AuthStage::VerifyCode,
-                    pairing_code: Some("123456".into()),
+                    stage: AuthStage::Reauthenticate,
+                    session_token: Some("jwt-1".into()),
                     ..Default::default()
                 },
             },
