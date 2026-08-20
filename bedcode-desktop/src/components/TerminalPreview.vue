@@ -113,7 +113,8 @@
  *   xterm 渲染循环，不做手动全量 refresh 补丁
  * - 滚动：onScroll 仅驱动"是否在底部"状态，scrollToBottom 经 rAF 合并，
  *   同一帧内多次输出只滚动一次
- * - 尺寸：ResizeObserver + rAF 节流 fit，cols/rows 实际变化才同步 PTY
+ * - 尺寸：ResizeObserver + 分层防抖 fit（垂直立即 / 水平 100ms 合并）+
+ *   DPR 感知行列计算，cols/rows 实际变化才全量重绘与同步 PTY
  *
  * 终端窗口模式（TerminalWindowView）下 show-header=false，工具栏由外层
  * 统一管理；本组件仅通过 defineExpose 暴露主题/字号/清屏/刷新等能力。
@@ -129,10 +130,13 @@ import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
+import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
+import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
+import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/plugin/events'
 import { invoke } from '@tauri-apps/api/core'
 import '@xterm/xterm/css/xterm.css'
@@ -166,19 +170,17 @@ const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
 const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
 const bgImageUrl = ref('')
 
-// DEC Mode 2026 同步输出：包裹一次写入，让 xterm 缓存所有变化到下一帧
-// 统一渲染，避免 WebGL 渲染器逐块绘制产生的视觉撕裂/重影（预编码为字节，
-// 与写入管线统一为 Uint8Array，避免字符串中间态）
-const SYNC_OUTPUT_START = new TextEncoder().encode('\x1b[?2026h')
-const SYNC_OUTPUT_END = new TextEncoder().encode('\x1b[?2026l')
-
 // ==================== xterm 实例 ====================
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
 let webglAddon: WebglAddon | null = null
 let resizeObserver: ResizeObserver | null = null
-let resizeRaf = 0
+// resize 分层防抖：垂直立即 / 水平 100ms 合并（对齐 VS Code TerminalResizeDebouncer）
+let resizeDebouncer: TerminalResizeDebouncer | null = null
+// DPR 变化监听（跨屏拖动 / 系统缩放变化）：matchMedia 递归注册，卸载时移除
+let dprMediaQuery: MediaQueryList | null = null
+let dprChangeHandler: ((e: MediaQueryListEvent) => void) | null = null
 
 // 滚动状态追踪
 const isUserScrolling = ref(false)
@@ -224,54 +226,99 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null
 // 避免单帧解析超大字符串导致 UI 卡顿
 const MAX_WRITE_CHUNK = 64 * 1024
 
-function flushWriteQueue() {
+// ==================== 临时调试：终端侧输出字节 dump（已注释禁用，恢复排查时取消注释） ====================
+// 仅用于排查「PTY 源头输出 vs 终端显示」字节不一致问题。
+// [已注释禁用] 恢复时取消下方 /* */ 注释，并恢复后端命令 append_terminal_output_dump 注册。
+/*
+// 本项目 tsconfig 未引入 vite/client 类型，此处强转桥接避免 TS2339（不必为临时调试改配置）
+const TERMINAL_OUTPUT_DUMP_ENABLED = Boolean(
+  (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV,
+)
+
+// 记录上一次 dump 所属会话：新 PTY 会话（sessionId 变化）时第一个 flush 前重置终端侧
+// 文件（覆盖旧数据），与源头 pty dump 每次会话 truncate 对齐；同会话内重连/重订阅不重置
+let dumpLastSessionId = ''
+
+// 追加待写入终端的字节到 dump 文件（临时调试；失败仅告警，不阻塞写入管线）
+function dumpTerminalOutput(data: Uint8Array, sessionId: string) {
+  if (!TERMINAL_OUTPUT_DUMP_ENABLED || data.length === 0) return
+  const reset = sessionId !== dumpLastSessionId
+  dumpLastSessionId = sessionId
+  // 只记录真实输出负载，便于与源头逐字节对比；async 调用不阻塞 flush
+  invoke('append_terminal_output_dump', { data: Array.from(data), reset }).catch((e) => {
+    console.warn('[debug-dump] 终端输出 dump 写入失败:', e)
+  })
+}
+*/
+
+// 写入策略：rAF 合并同帧事件为一次 write（对齐 VS Code 行为，xterm.js 内部再统一调度渲染）；
+// 大块（> MAX_WRITE_CHUNK）经 writeInChunks 分片，每 WRITE_YIELD_THRESHOLD 让出主线程一次。
+
+let flushing = false
+// 写入水线阈值（对齐 VS Code high-water 思想）：单次 flush 累计写入达到该值即让出
+// 主线程一次（宏任务），使渲染/输入能在历史回放或输出风暴期间插入，避免 UI 冻结。
+// 仅控制"写节奏"，不限制总量——积压数据仍在 writeQueue，下个 while 轮次继续写。
+const WRITE_YIELD_THRESHOLD = 256 * 1024
+
+async function flushWriteQueue() {
+  // 避免重入：已有 flush 在跑（其 while 轮次会消费新入队数据），直接返回
+  if (flushing) return
+  flushing = true
+  // 清掉 rAF / timer 标记（本次 flush 接管调度）
   flushRaf = 0
   if (flushTimer) {
     clearTimeout(flushTimer)
     flushTimer = null
   }
-  if (!terminal) {
-    // 终端未就绪：丢弃（数据已进全局缓存，可从历史恢复）
-    writeQueue = []
-    writeQueueBytes = 0
-    return
-  }
-  if (writeQueue.length === 0) return
-  const chunks = writeQueue
-  const totalBytes = writeQueueBytes
-  writeQueue = []
-  writeQueueBytes = 0
+  try {
+    while (writeQueue.length > 0) {
+      if (!terminal) {
+        // 终端未就绪：丢弃（数据已进全局缓存，可从历史恢复）
+        writeQueue = []
+        writeQueueBytes = 0
+        return
+      }
+      const chunks = writeQueue
+      const totalBytes = writeQueueBytes
+      writeQueue = []
+      writeQueueBytes = 0
 
-  // 合并同帧所有事件为单块字节，一次 write
-  const combined = new Uint8Array(totalBytes)
-  let offset = 0
-  for (const chunk of chunks) {
-    combined.set(chunk, offset)
-    offset += chunk.byteLength
-  }
+      // 合并同帧所有事件为单块字节，一次 write
+      const combined = new Uint8Array(totalBytes)
+      let offset = 0
+      for (const chunk of chunks) {
+        combined.set(chunk, offset)
+        offset += chunk.byteLength
+      }
 
-  if (totalBytes <= MAX_WRITE_CHUNK) {
-    terminal.write(wrapSyncOutput(combined))
-    return
+      // [已注释禁用] 临时调试 dump：terminal.write 前记录待写字节（恢复排查时取消注释）
+      // dumpTerminalOutput(combined, sessionId.value)
+
+      if (totalBytes <= MAX_WRITE_CHUNK) {
+        terminal.write(combined)
+      } else {
+        await writeInChunks(combined)
+      }
+    }
+  } finally {
+    flushing = false
   }
-  // 大块拆分为多次 write（2026 包裹整体）：渲染器仍缓存变更到帧末统一绘制；
-  // subarray 零拷贝切片，避免大块复制
-  terminal.write(SYNC_OUTPUT_START)
-  for (let i = 0; i < combined.length; i += MAX_WRITE_CHUNK) {
-    terminal.write(combined.subarray(i, i + MAX_WRITE_CHUNK))
-  }
-  terminal.write(SYNC_OUTPUT_END)
 }
 
-/** 用 DEC Mode 2026 同步输出序列包裹字节数据 */
-function wrapSyncOutput(data: Uint8Array): Uint8Array {
-  const wrapped = new Uint8Array(
-    SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length,
-  )
-  wrapped.set(SYNC_OUTPUT_START, 0)
-  wrapped.set(data, SYNC_OUTPUT_START.length)
-  wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
-  return wrapped
+/** 分片写入：按 MAX_WRITE_CHUNK 拆块写，每累积 WRITE_YIELD_THRESHOLD 让出主线程一次 */
+async function writeInChunks(buf: Uint8Array) {
+  // 防御：调用方 flushWriteQueue 已保证 terminal 非空，此处收窄类型（并发 agent 新增函数）
+  if (!terminal) return
+  let written = 0
+  for (let i = 0; i < buf.length; i += MAX_WRITE_CHUNK) {
+    terminal.write(buf.subarray(i, i + MAX_WRITE_CHUNK))
+    written += MAX_WRITE_CHUNK
+    if (written >= WRITE_YIELD_THRESHOLD) {
+      written = 0
+      // 宏任务让出：风暴期间允许渲染/输入插入，防 UI 冻结
+      await new Promise((r) => setTimeout(r, 0))
+    }
+  }
 }
 
 /** 入队输出：合并到下一渲染帧统一写入 */
@@ -289,7 +336,7 @@ function enqueueOutput(data: Uint8Array) {
         cancelAnimationFrame(flushRaf)
         flushRaf = 0
       }
-      flushWriteQueue()
+      void flushWriteQueue()
     }, 100)
   }
 }
@@ -569,6 +616,10 @@ watch(bgImage, () => {
 watch([bgImageUrl, bgOpacity], () => {
   if (terminal) {
     terminal.options.theme = getTheme()
+    // 仅背景图启用时透明（让图片透出）；其余场景关闭透明，避免 WebGL 透明
+    // 帧缓冲滚动不清帧导致的残影/行入侵。切换后强制重绘一次清除旧模式残留帧
+    terminal.options.allowTransparency = !!bgImageUrl.value
+    terminal.refresh(0, terminal.rows - 1)
   }
 })
 
@@ -626,8 +677,16 @@ function initTerminal() {
     lineHeight: 1,
     // 滚动历史行数（与后端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
-    // 即时滚动：关闭平滑滚动，避免 WebGL 滚动动画期间合成器缓存旧帧导致重影
+    // 即时滚动：维持关闭。重影根因（07 调查结论）= 无条件 allowTransparency 使 WebGL
+    // 启用 alpha 帧缓冲 + 复制帧缓冲滚动优化，旧行像素不清 → 残影/行入侵；已改为按
+    // 背景图条件开启透明（见下方 allowTransparency），不透明默认场景重影消失。平滑滚动
+    // 属观感新动画，需物理滚轮分类器（issue 08）且真机验证后再引入，当前保守维持 0
     smoothScrollDuration: 0,
+    // WebGL custom glyphs：unicode/box-drawing（╔═╗║╚╝、Powerline 等）由渲染器
+    // 内置字形直接 GPU 光栅化，不依赖字体 canvas 采样，渲染一致且开销更低。
+    // 0.19 版 addon-webgl 无构造参数（仅 preserveDrawingBuffer），开关走 xterm
+    // Terminal 选项（TextureAtlas 读 config.customGlyphs）；此处显式声明防默认值漂移
+    customGlyphs: true,
     // 光标统一不显示（见下方 DECTCEM 隐藏）；此处配置为 VS Code 风格的
     // 块光标 + 不闪烁，作为未来恢复光标时的合理默认
     cursorBlink: false,
@@ -639,15 +698,25 @@ function initTerminal() {
     drawBoldTextInBrightColors: true,
     // 主题
     theme: getTheme(),
-    // 允许背景透明：必须在 open() 前设置，否则渲染器会把 rgba 背景强制转为不透明，
-    // 导致背景图片层被终端背景色遮盖
-    allowTransparency: true,
+    // 仅在启用背景图片时允许透明（让背景图透出）；其余场景关闭透明。
+    // 透明模式会迫使 WebGL 使用 alpha 帧缓冲并启用"复制帧缓冲区域"滚动优化，
+    // 旧行像素不被清除 → 滚动/刷新时出现残影与"行入侵"；不透明时 WebGL 每帧
+    // 正常清帧，残影消失。background 透明主题由 getTheme() 在 bgImageUrl 时返回
+    allowTransparency: !!bgImageUrl.value,
     allowProposedApi: true,
   })
 
   fitAddon = new FitAddon()
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
+
+  // Unicode 11 字符宽度计算：启用后 emoji / box-drawing（╔═╗║╚╝）等
+  // 列宽按 Unicode 11 表计算，避免默认 Unicode 5 宽度表导致的光标漂移与重影
+  // （TUI 应用如 opencode / vim 边框尤其明显）。移动端已加载，桌面端对齐。
+  const unicode11 = new Unicode11Addon()
+  terminal.loadAddon(unicode11)
+  terminal.unicode.activeVersion = '11'
+
   terminal.open(terminalHostRef.value)
   initWebGL(terminal)
 
@@ -661,7 +730,7 @@ function initTerminal() {
     terminal.element?.classList.add('xterm-hidden-cursor')
   }
 
-  fitAddon.fit()
+  applyDprFit()
   syncTerminalSize()
 
   // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话
@@ -671,22 +740,18 @@ function initTerminal() {
     }
   })
 
-  // ResizeObserver — rAF 节流，避免快速连续 fit 导致的重复渲染；
-  // 仅当 cols/rows 实际变化时同步 PTY（xterm 自身负责重绘）
-  resizeObserver = new ResizeObserver(() => {
-    if (resizeRaf) return
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0
-      if (!fitAddon || !terminal) return
-      const cols = terminal.cols
-      const rows = terminal.rows
-      fitAddon.fit()
-      if (terminal.cols !== cols || terminal.rows !== rows) {
-        syncTerminalSize()
-      }
-    })
+  // ResizeObserver — 分层防抖（垂直立即 / 水平 100ms 合并，flush 保证最终尺寸必达），
+  // 避免拖窗时每帧整屏 reflow；仅当 cols/rows 实际变化时同步 PTY（见 applyResize）
+  resizeDebouncer = new TerminalResizeDebouncer({ onApply: applyResize })
+  resizeObserver = new ResizeObserver((entries) => {
+    const rect = entries[0]?.contentRect
+    if (rect) resizeDebouncer?.resize(rect.width, rect.height)
   })
   resizeObserver.observe(terminalHostRef.value)
+
+  // DPR 动态变化监听（跨屏拖动 / 系统缩放变化时窗口尺寸可能不变，
+  // ResizeObserver 不触发）：matchMedia 只能匹配固定 dppx 值，变化后需按新值递归注册
+  watchDprChanges()
 
   // 滚动状态：xterm onScroll API（比 DOM addEventListener 更可靠，
   // 不会因 xterm 内部 DOM 重建而丢失监听）；仅更新"是否在底部"状态，
@@ -770,10 +835,93 @@ function syncTerminalSize() {
   }
 }
 
+/**
+ * resize 实际应用（防抖器 onApply 接线）：DPR 感知 fit + 仅 cols/rows
+ * 实际变化才全量重绘 + PTY 同步。subpixel 抖动（容器尺寸微调但行列不变）
+ * 不触发多余重绘，避免拖动窗口时每帧全量重绘的浪费
+ */
+function applyResize() {
+  if (!terminal) return
+  const cols = terminal.cols
+  const rows = terminal.rows
+  applyDprFit()
+  if (terminal.cols !== cols || terminal.rows !== rows) {
+    terminal.refresh(0, terminal.rows - 1)
+    syncTerminalSize()
+  }
+}
+
+/** 读取 xterm 实测 cell CSS 尺寸（DPR 感知计算的输入）；不可用时返回 null */
+function measureCellSize(): { width: number; height: number } | null {
+  if (!terminal) return null
+  // addon-fit 0.11 内部即此访问路径（FitAddon.proposeDimensions）；
+  // 私有 API 无类型声明，逐级防御，任一环节缺失即回退 fitAddon.fit()
+  const core = (terminal as unknown as { _core?: unknown })._core as
+    | { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } }
+    | undefined
+  const cell = core?._renderService?.dimensions?.css?.cell
+  if (!cell || cell.width <= 0 || cell.height <= 0) return null
+  return { width: cell.width, height: cell.height }
+}
+
+/**
+ * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算设备像素后计算 cols/rows
+ * （行高 ceil、列宽 floor），替换 fitAddon.fit() 的裸 DPR 不感知计算。
+ * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸
+ */
+function applyDprFit() {
+  if (!terminal || !fitAddon) return
+  const host = terminalHostRef.value
+  const cell = measureCellSize()
+  if (!host || host.clientWidth <= 0 || host.clientHeight <= 0 || !cell) {
+    fitAddon.fit()
+    return
+  }
+  const { cols, rows } = getXtermScaledDimensions({
+    containerWidthCss: host.clientWidth,
+    containerHeightCss: host.clientHeight,
+    cellWidthCss: cell.width,
+    cellHeightCss: cell.height,
+    devicePixelRatio: window.devicePixelRatio,
+  })
+  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），变化才 resize
+  if (terminal.cols !== cols || terminal.rows !== rows) {
+    terminal.resize(cols, rows)
+  }
+}
+
+/**
+ * 监听 DPR 变化并应用新尺寸：matchMedia 只匹配固定 dppx 值，
+ * 每次命中后按新 DPR 重新注册（递归），直到组件卸载
+ */
+function watchDprChanges() {
+  if (dprMediaQuery && dprChangeHandler) {
+    dprMediaQuery.removeEventListener('change', dprChangeHandler)
+  }
+  dprChangeHandler = () => {
+    // DPI 变化后重新 fit + 条件重绘/同步（窗口尺寸可能未变，ResizeObserver 不触发）
+    applyResize()
+    watchDprChanges()
+  }
+  dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+  dprMediaQuery.addEventListener('change', dprChangeHandler)
+}
+
+/**
+ * fit 后强制全量重绘：WebGL 渲染器在容器尺寸变化（全屏/滚动触发布局微变/
+ * 刷新）后不会自动重绘可见区域，旧纹理残留导致字符错位与格式错乱，故 fit
+ * 后立即 refresh 整屏修正。覆盖 resize / 刷新 / 字号变化三类重绘场景。
+ */
+function fitAndRefresh() {
+  if (!fitAddon || !terminal) return
+  applyDprFit()
+  terminal.refresh(0, terminal.rows - 1)
+}
+
 /** 刷新格式：重新 fit 终端尺寸并同步到 PTY，不清除内容 */
 function refreshTerminal() {
   if (!fitAddon || !terminal || !props.session) return
-  fitAddon.fit()
+  fitAndRefresh()
   syncTerminalSize()
 }
 
@@ -806,7 +954,7 @@ watch(fontSize, (newSize) => {
   if (!terminal) return
   terminal.options.fontSize = newSize
   if (fitAddon) {
-    fitAddon.fit()
+    fitAndRefresh()
   }
   nextTick(() => syncTerminalSize())
   if (fontSizeSaveTimeout) clearTimeout(fontSizeSaveTimeout)
@@ -824,7 +972,7 @@ watch(
       fontSize.value = newSize
       if (terminal) {
         terminal.options.fontSize = newSize
-        if (fitAddon) fitAddon.fit()
+        if (fitAddon) fitAndRefresh()
         nextTick(() => syncTerminalSize())
       }
     }
@@ -974,10 +1122,17 @@ onUnmounted(() => {
   writeQueue.length = 0
   writeQueueBytes = 0
 
-  // 清理 resize rAF
-  if (resizeRaf) {
-    cancelAnimationFrame(resizeRaf)
-    resizeRaf = 0
+  // 清理 resize 防抖器（挂起的水平防抖直接丢弃：组件已卸载无需应用）
+  if (resizeDebouncer) {
+    resizeDebouncer.dispose()
+    resizeDebouncer = null
+  }
+
+  // 清理 DPR 变化监听
+  if (dprMediaQuery && dprChangeHandler) {
+    dprMediaQuery.removeEventListener('change', dprChangeHandler)
+    dprMediaQuery = null
+    dprChangeHandler = null
   }
 
   // 清理设置保存定时器
