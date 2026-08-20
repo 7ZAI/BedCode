@@ -16,7 +16,7 @@
 #   scripts/doc-tracking.sh restore         uat/master 上从 dev 恢复缺失的工作区文件
 #                                           （供本地查阅，不入库）
 #
-# 由 scripts/hooks/ 下的 pre-commit / post-checkout / post-merge 自动调用，
+# 由 .husky/ 下的 pre-commit / post-checkout / post-merge 钩子自动调用，
 # 也可手动运行（如合并冲突后运行 untrack 再提交）。
 #
 # 环境变量：

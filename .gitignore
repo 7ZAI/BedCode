@@ -3,6 +3,9 @@
 .pnpm-store/
 .playwright-cli
 
+# Husky v9 生成的钩子运行器（由 `husky` / `npm install` 重新生成，不入库）
+.husky/_/
+
 # Build outputs
 **/dist/
 build/

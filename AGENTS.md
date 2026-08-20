@@ -228,13 +228,18 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 
 ## Git Hooks：分支级文档跟踪
 
-开发过程文档与配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch 等，见下）只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。README 与 AGENTS.md 不受此限（全分支跟踪）。实现在 `scripts/doc-tracking.sh` + `scripts/hooks/`，通过 `core.hooksPath` 生效。
+开发过程文档与配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch 等，见下）只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。README 与 AGENTS.md 不受此限（全分支跟踪）。实现在 `scripts/doc-tracking.sh`，由 husky 在 `.husky/` 下挂载 `pre-commit` / `post-checkout` / `post-merge` 钩子调用（钩子运行器 `.husky/_` 由 `husky` / `npm install` 重新生成，已加入 `.gitignore`）。
 
 ### 启用（clone 后每人执行一次）
 
 ```bash
-git config core.hooksPath scripts/hooks
+# 仓库根目录：安装 husky 并触发 prepare 脚本，自动设置 core.hooksPath=.husky/_
+npm install
+# 若仅需初始化钩子（不装依赖），可执行：
+npx husky install
 ```
+
+> 钩子依赖 `bedcode-desktop/node_modules/.bin/eslint` 做提交前前端门禁；未安装时自动跳过，不阻断提交。
 
 ### 受保护路径
 
