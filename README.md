@@ -222,7 +222,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 ## 插件系统
 
-桌面端插件基于 **wasmtime 运行时（WASM Component Model）**：插件由 Rust / TypeScript 编译为 WASM 组件，在宿主内沙箱加载运行。插件可观察和扩展宿主会话行为：
+桌面端插件基于 **wasmtime 运行时（WASM Component Model）**：插件由 Rust  编译为 WASM 组件，TypeScript 前端独立构建编译产物和wasm一起放入宿主resource下 ,在宿主内沙箱加载运行。插件可观察和扩展宿主会话行为：
 
 - **WASM 沙箱运行时** — 资源受限、内存隔离，插件崩溃不影响宿主
 
@@ -254,7 +254,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 **规划中**
 
 - **加密接口实现** — 宿主已具备完整加密工具链：对称 AEAD（AES-256-GCM / ChaCha20-Poly1305）+ HKDF 会话密钥派生、X25519 ECDH 密钥协商、RSA-OAEP/PSS、混合加密（非对称封装会话密钥 + 对称加密载荷），当前用于 HTTP 报文加密与文件加密传输。规划将其开放为插件 SDK 加密接口（插件可加解密 / 签名验签 / 密钥协商），并为终端与文件传输链路提供端到端加密选项
-- **内网穿透扩展支持** — 桌面端以插件形式实现内网穿透（需求已确认，待排期，见 `.scratch/remote-tunnel/` 与 `docs/adr/0017`）：经用户自购云服务器（中继，LE 证书 TLS 终止）让外网移动端像在内网一样使用（终端 WS + 文件服务 HTTP + 插件 HTTP 端点全穿透，协议无关透明管道）；含安全加固：JWT 密钥随机化、双层限速、128-bit 隧道 ID 即凭据、首次配对仅限局域网、暴露控制 kill switch + 默认 8h 自动关闭 + 并发设备上限。采用可信中继 TLS 模型，不做端到端加密
+- **内网穿透扩展支持** — 桌面端以插件形式实现内网穿透：经用户自购云服务器（中继，LE 证书 TLS 终止）让外网移动端像在内网一样使用（终端 WS + 文件服务 HTTP + 插件 HTTP 端点全穿透，协议无关透明管道）；含安全加固：JWT 密钥随机化、双层限速、128-bit 隧道 ID 即凭据、首次配对仅限局域网、暴露控制 kill switch + 默认 8h 自动关闭 + 并发设备上限。采用可信中继 TLS 模型，不做端到端加密
 
 **架构演进**
 
