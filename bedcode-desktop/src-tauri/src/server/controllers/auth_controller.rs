@@ -9,25 +9,23 @@
 //! - POST /api/auth/biometric-challenge
 //! - POST /api/auth/biometric-verify
 
-use actix_web::{web, HttpResponse};
-use tauri::Emitter;
-use crate::system::app_context::AppContext;
-use crate::server::dtos::ApiResponse;
 use crate::server::dtos::auth_dto::*;
-use crate::utils::auth::jwt::JwtService;
-use crate::utils::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
+use crate::server::dtos::ApiResponse;
 use crate::server::services::auth_service::{
     format_device_display_name, issue_biometric_challenge, verify_biometric_challenge, BiometricAuthError,
 };
+use crate::system::app_context::AppContext;
 use crate::system::constants::event;
 use crate::utils::auth::biometric::BIO_CHALLENGE_TTL_SECS;
+use crate::utils::auth::jwt::JwtService;
+use crate::utils::auth::jwt::DEFAULT_TOKEN_EXPIRY_SECS;
+use actix_web::{web, HttpResponse};
+use tauri::Emitter;
 
 /// POST /api/auth/pairing
 ///
 /// 请求配对码，桌面端弹出配对码供移动端输入
-pub async fn request_pairing(
-    body: web::Json<PairingRequest>,
-) -> HttpResponse {
+pub async fn request_pairing(body: web::Json<PairingRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let pairing_service = ctx.pairing_service();
 
@@ -35,11 +33,14 @@ pub async fn request_pairing(
 
     // 通知桌面端前端显示配对码（无头/测试上下文无 AppHandle：跳过）
     if let Some(handle) = ctx.app_handle() {
-        if let Err(e) = handle.emit("pairing-code-generated", &crate::server::connection_types::PairingCodeGeneratedEvent {
-            code: code.code.clone(),
-            expires_in: code.remaining_seconds(),
-            device_name: Some(body.device_name.clone()),
-        }) {
+        if let Err(e) = handle.emit(
+            "pairing-code-generated",
+            &crate::server::connection_types::PairingCodeGeneratedEvent {
+                code: code.code.clone(),
+                expires_in: code.remaining_seconds(),
+                device_name: Some(body.device_name.clone()),
+            },
+        ) {
             tracing::error!(error = %e, "Failed to emit pairing code event");
         }
     }
@@ -54,9 +55,7 @@ pub async fn request_pairing(
 /// POST /api/auth/verify
 ///
 /// 验证配对码，成功返回 JWT token
-pub async fn verify_pairing_code(
-    body: web::Json<VerifyPairingRequest>,
-) -> HttpResponse {
+pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let pairing_service = ctx.pairing_service();
 
@@ -125,13 +124,16 @@ pub async fn verify_pairing_code(
 
     // 通知桌面端有设备连接（无头/测试上下文无 AppHandle：跳过）
     if let Some(handle) = ctx.app_handle() {
-        let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-            addr: body.address.clone(),
-            device_id: body.device_id.clone(),
-            device_name: Some(body.device_name.clone()),
-            fingerprint: Some(body.fingerprint.clone()),
-            event: "authenticated".to_string(),
-        });
+        let _ = handle.emit(
+            event::DEVICE_CONNECTED,
+            &crate::server::connection_types::DeviceConnectionEvent {
+                addr: body.address.clone(),
+                device_id: body.device_id.clone(),
+                device_name: Some(body.device_name.clone()),
+                fingerprint: Some(body.fingerprint.clone()),
+                event: "authenticated".to_string(),
+            },
+        );
     }
 
     let data = AuthTokenResponseData {
@@ -144,9 +146,7 @@ pub async fn verify_pairing_code(
 /// POST /api/auth/qr-connect
 ///
 /// QR 码认证，成功返回 JWT token
-pub async fn qr_connect(
-    body: web::Json<QrConnectRequest>,
-) -> HttpResponse {
+pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let qr_manager = ctx.qr_manager();
 
@@ -201,13 +201,16 @@ pub async fn qr_connect(
 
             // 无头/测试上下文无 AppHandle：跳过前端事件
             if let Some(handle) = ctx.app_handle() {
-                let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                    addr: address,
-                    device_id,
-                    device_name: Some(device_name),
-                    fingerprint: Some(fingerprint),
-                    event: "authenticated".to_string(),
-                });
+                let _ = handle.emit(
+                    event::DEVICE_CONNECTED,
+                    &crate::server::connection_types::DeviceConnectionEvent {
+                        addr: address,
+                        device_id,
+                        device_name: Some(device_name),
+                        fingerprint: Some(fingerprint),
+                        event: "authenticated".to_string(),
+                    },
+                );
             }
 
             let data = AuthTokenResponseData {
@@ -249,9 +252,7 @@ pub async fn qr_connect(
 /// POST /api/auth/reauth
 ///
 /// 使用已有 JWT token 重新认证
-pub async fn reauthenticate(
-    body: web::Json<ReauthRequest>,
-) -> HttpResponse {
+pub async fn reauthenticate(body: web::Json<ReauthRequest>) -> HttpResponse {
     let jwt_service = JwtService::new();
 
     match jwt_service.verify_token_with_expiry(&body.session_token) {
@@ -330,9 +331,7 @@ pub async fn reauthenticate(
 /// 生物认证挑战值下发：设备须已配对且绑定生物凭证公钥，返回一次性、
 /// 60s 有效的挑战值（防重放）。失败返回 1008（不撞既有 1001/1005/1006/1007）。
 /// 挑战以设备指纹为键——同一设备多条通道共享一次挑战，单次消费后作废
-pub async fn biometric_challenge(
-    body: web::Json<BiometricChallengeRequest>,
-) -> HttpResponse {
+pub async fn biometric_challenge(body: web::Json<BiometricChallengeRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let fingerprint = body.device_fingerprint.clone();
 
@@ -375,9 +374,7 @@ pub async fn biometric_challenge(
 /// 生物认证验签：一次性消费挑战值 + 绑定公钥验签，通过后签发 JWT。
 /// 失败返回 1009。⚠️ add_pairing 必须保留 public_key——既有 verify/qr 端点
 /// 传空串会把生物凭证清空，这里传 pairing.public_key 防覆盖
-pub async fn biometric_verify(
-    body: web::Json<BiometricVerifyRequest>,
-) -> HttpResponse {
+pub async fn biometric_verify(body: web::Json<BiometricVerifyRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let fingerprint = body.device_fingerprint.clone();
 
@@ -423,13 +420,16 @@ pub async fn biometric_verify(
             // 通知桌面端有设备连接（无头/测试上下文无 AppHandle：跳过）；
             // HTTP 端无客户端地址，addr 留空（与挑战/verify 的无地址语义一致）
             if let Some(handle) = ctx.app_handle() {
-                let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                    addr: String::new(),
-                    device_id: pairing.id.clone(),
-                    device_name: Some(device_name.clone()),
-                    fingerprint: Some(fingerprint.clone()),
-                    event: "authenticated".to_string(),
-                });
+                let _ = handle.emit(
+                    event::DEVICE_CONNECTED,
+                    &crate::server::connection_types::DeviceConnectionEvent {
+                        addr: String::new(),
+                        device_id: pairing.id.clone(),
+                        device_name: Some(device_name.clone()),
+                        fingerprint: Some(fingerprint.clone()),
+                        event: "authenticated".to_string(),
+                    },
+                );
             }
 
             tracing::info!(pairing_id = %pairing.id, fingerprint = %fingerprint, "Device authenticated via biometric (HTTP)");

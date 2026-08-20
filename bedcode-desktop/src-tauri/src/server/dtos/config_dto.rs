@@ -3,7 +3,7 @@
 use serde::Serialize;
 
 // Re-export file tree types
-pub use crate::server::dtos::file_dto::{FileTreeRequest, FileTreeNode, FileTreeResponseData};
+pub use crate::server::dtos::file_dto::{FileTreeNode, FileTreeRequest, FileTreeResponseData};
 
 /// GET /api/configs response data
 #[derive(Debug, Clone, Serialize)]

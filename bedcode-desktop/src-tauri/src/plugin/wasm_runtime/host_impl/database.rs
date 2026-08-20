@@ -13,16 +13,11 @@ fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String
     if params_json.is_empty() {
         return Ok(Vec::new());
     }
-    serde_json::from_str(params_json)
-        .map_err(|e| format!("invalid params JSON array: {}", e))
+    serde_json::from_str(params_json).map_err(|e| format!("invalid params JSON array: {}", e))
 }
 
 /// 主库执行 SQL（权限 + 表名前缀校验），返回受影响行数
-pub(crate) fn db_execute(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    sql: &str,
-) -> Result<u32, String> {
+pub(crate) fn db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<u32, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute") {
         return Err("permission denied".to_string());
     }
@@ -37,11 +32,7 @@ pub(crate) fn db_execute(
 }
 
 /// 主库查询（权限 + 表名前缀校验），返回行数组 JSON 字符串
-pub(crate) fn db_query(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    sql: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn db_query(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query") {
         return Err("permission denied".to_string());
     }
@@ -58,16 +49,15 @@ pub(crate) fn db_query(
 }
 
 /// 插件独立库执行 SQL（权限校验，无表名前缀校验）
-pub(crate) fn plugin_db_execute(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    sql: &str,
-) -> Result<u32, String> {
+pub(crate) fn plugin_db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<u32, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
         return Err("permission denied".to_string());
     }
     block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db_arc = host_ctx
+            .get_or_create_plugin_db(plugin_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
         db.conn().execute(sql, []).map(|n| n as u32).map_err(|e| e.to_string())
     })
@@ -84,7 +74,10 @@ pub(crate) fn plugin_db_query(
         return Err("permission denied".to_string());
     }
     let value = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db_arc = host_ctx
+            .get_or_create_plugin_db(plugin_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
         query_to_json(db.conn(), sql)
     })
@@ -150,7 +143,10 @@ pub(crate) fn plugin_db_execute_params(
     }
     let params = parse_params_json(params_json)?;
     block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db_arc = host_ctx
+            .get_or_create_plugin_db(plugin_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
         execute_with_params(db.conn(), sql, &params).map(|n| n as u32)
     })
@@ -169,7 +165,10 @@ pub(crate) fn plugin_db_query_params(
     }
     let params = parse_params_json(params_json)?;
     let value = block_on_async(async {
-        let db_arc = host_ctx.get_or_create_plugin_db(plugin_id).await.map_err(|e| e.to_string())?;
+        let db_arc = host_ctx
+            .get_or_create_plugin_db(plugin_id)
+            .await
+            .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
         query_with_params_to_json(db.conn(), sql, &params)
     })
@@ -182,10 +181,7 @@ pub(crate) fn plugin_db_query_params(
 // ==================== 参数绑定辅助 ====================
 
 /// 将 JSON 参数绑定到预编译语句（1-based 索引，rusqlite 真绑定，防注入）
-fn bind_json_params(
-    stmt: &mut rusqlite::Statement<'_>,
-    params: &[serde_json::Value],
-) -> rusqlite::Result<()> {
+fn bind_json_params(stmt: &mut rusqlite::Statement<'_>, params: &[serde_json::Value]) -> rusqlite::Result<()> {
     for (i, p) in params.iter().enumerate() {
         let idx = i + 1;
         match p {
@@ -208,11 +204,7 @@ fn bind_json_params(
 }
 
 /// 执行参数绑定 SQL，返回受影响行数
-fn execute_with_params(
-    conn: &rusqlite::Connection,
-    sql: &str,
-    params: &[serde_json::Value],
-) -> Result<usize, String> {
+fn execute_with_params(conn: &rusqlite::Connection, sql: &str, params: &[serde_json::Value]) -> Result<usize, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
     bind_json_params(&mut stmt, params).map_err(|e| format!("bind: {}", e))?;
     stmt.raw_execute().map_err(|e| format!("execute: {}", e))
@@ -252,13 +244,8 @@ fn query_with_params_to_json(
 /// 执行查询并将结果集转换为 JSON 行数组
 ///
 /// 主库与插件库查询共用，消除原先两份重复的列名提取 + query_map 逻辑
-fn query_to_json(
-    conn: &rusqlite::Connection,
-    sql: &str,
-) -> Result<serde_json::Value, String> {
-    let mut stmt = conn
-        .prepare(sql)
-        .map_err(|e| format!("prepare: {}", e))?;
+fn query_to_json(conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::Value, String> {
+    let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
 
     let column_count = stmt.column_count();
     let column_names: Vec<String> = (0..column_count)
@@ -283,9 +270,7 @@ fn query_to_json(
         .collect();
 
     Ok(serde_json::Value::Array(
-        rows.into_iter()
-            .map(serde_json::Value::Object)
-            .collect(),
+        rows.into_iter().map(serde_json::Value::Object).collect(),
     ))
 }
 
@@ -375,9 +360,7 @@ fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::Valu
     }
     // 尝试浮点数
     if let Ok(v) = row.get::<_, f64>(col_index) {
-        return serde_json::Value::Number(
-            serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-        );
+        return serde_json::Value::Number(serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)));
     }
     // 尝试字符串
     if let Ok(v) = row.get::<_, String>(col_index) {
@@ -423,10 +406,7 @@ mod tests {
 
     #[test]
     fn test_validate_sql_table_prefix_invalid() {
-        let result = validate_sql_table_prefix(
-            "com.example.my-plugin",
-            "INSERT INTO sessions (id) VALUES ('abc')",
-        );
+        let result = validate_sql_table_prefix("com.example.my-plugin", "INSERT INTO sessions (id) VALUES ('abc')");
         assert!(result.is_err());
     }
 
@@ -450,10 +430,7 @@ mod tests {
 
     #[test]
     fn test_validate_sql_table_prefix_drop_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "DROP TABLE IF EXISTS plugin_my_plugin_cache",
-        );
+        let result = validate_sql_table_prefix("my-plugin", "DROP TABLE IF EXISTS plugin_my_plugin_cache");
         assert!(result.is_ok());
     }
 
@@ -468,9 +445,7 @@ mod tests {
 
     #[test]
     fn test_extract_table_names() {
-        let tables = extract_table_names(
-            "INSERT INTO users (id) VALUES (1); SELECT * FROM orders",
-        );
+        let tables = extract_table_names("INSERT INTO users (id) VALUES (1); SELECT * FROM orders");
         assert!(tables.contains(&"users".to_string()));
         assert!(tables.contains(&"orders".to_string()));
     }

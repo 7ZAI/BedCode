@@ -178,20 +178,20 @@ mod tests {
     #[test]
     fn test_valid_transitions() {
         // pending → approved（用户接受）
-        assert!(validate_batch_transition(
-            &BatchState::Pending,
-            &BatchState::Approved
-        )
-        .is_ok());
+        assert!(validate_batch_transition(&BatchState::Pending, &BatchState::Approved).is_ok());
         // pending → rejected（用户拒绝 / 超时）
         assert!(validate_batch_transition(
             &BatchState::Pending,
-            &BatchState::Rejected { reason: RejectReason::UserRejected }
+            &BatchState::Rejected {
+                reason: RejectReason::UserRejected
+            }
         )
         .is_ok());
         assert!(validate_batch_transition(
             &BatchState::Pending,
-            &BatchState::Rejected { reason: RejectReason::Timeout }
+            &BatchState::Rejected {
+                reason: RejectReason::Timeout
+            }
         )
         .is_ok());
     }
@@ -201,7 +201,9 @@ mod tests {
         // 终态不可迁出
         assert!(validate_batch_transition(&BatchState::Approved, &BatchState::Pending).is_err());
         assert!(validate_batch_transition(
-            &BatchState::Rejected { reason: RejectReason::UserRejected },
+            &BatchState::Rejected {
+                reason: RejectReason::UserRejected
+            },
             &BatchState::Approved
         )
         .is_err());
@@ -233,8 +235,7 @@ mod tests {
             serde_json::to_value(RejectReason::Timeout).unwrap(),
             serde_json::json!("timeout")
         );
-        let back: RejectReason =
-            serde_json::from_value(serde_json::json!("user-rejected")).unwrap();
+        let back: RejectReason = serde_json::from_value(serde_json::json!("user-rejected")).unwrap();
         assert_eq!(back, RejectReason::UserRejected);
     }
 }

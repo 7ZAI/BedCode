@@ -3,15 +3,15 @@
 //! 全局单实例容器，集中管理桌面端所有全局服务的引用
 //! 在 lib.rs 的 run() 中一次性创建，后续通过 AppContext::global() 获取
 
-use crate::plugin::PluginHost;
+use crate::db::Database;
+use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::plugin::file_service::FileServiceRegistry;
+use crate::plugin::PluginHost;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
-use crate::utils::auth::QrTokenManager;
 use crate::utils::auth::biometric::BiometricChallengeManager;
-use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::db::Database;
+use crate::utils::auth::QrTokenManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -60,7 +60,9 @@ static APP_CONTEXT: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new()
 impl AppContext {
     /// 获取全局单例引用
     pub fn global() -> &'static Self {
-        APP_CONTEXT.get().expect("AppContext not initialized, call AppContext::init() first")
+        APP_CONTEXT
+            .get()
+            .expect("AppContext not initialized, call AppContext::init() first")
     }
 
     /// 尝试获取全局单例引用（未初始化返回 None）
@@ -239,7 +241,9 @@ impl AppContextBuilder {
             file_service: self.file_service.expect("AppContext: file_service is required"),
             pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
-            biometric_challenges: self.biometric_challenges.unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
+            biometric_challenges: self
+                .biometric_challenges
+                .unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
             // app_handle 允许 None（无头/测试上下文），其余字段仍必填
             app_handle: self.app_handle,
@@ -256,4 +260,3 @@ impl Default for AppContextBuilder {
         Self::new()
     }
 }
-

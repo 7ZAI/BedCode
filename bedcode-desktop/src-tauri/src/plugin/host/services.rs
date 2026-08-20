@@ -11,9 +11,9 @@ use tauri::Emitter;
 
 use super::listeners::{PluginInputListener, PluginLifecycleListener};
 use super::PluginHost;
-use bedcode_plugin_api::PluginState;
 use crate::plugin::wasm_runtime::PluginServices;
 use crate::session::SessionManager;
+use bedcode_plugin_api::PluginState;
 
 impl PluginHost {
     /// 将会话生命周期事件分发给指定插件的 on_session_lifecycle 回调
@@ -30,10 +30,7 @@ impl PluginHost {
                 .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_session_lifecycle(&payload))
                 .await
             {
-                tracing::error!(
-                    "SessionLifecycle: dispatch to plugin '{}' failed: {}",
-                    plugin_id, e
-                );
+                tracing::error!("SessionLifecycle: dispatch to plugin '{}' failed: {}", plugin_id, e);
             }
         });
     }
@@ -67,10 +64,7 @@ impl PluginHost {
                 .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_input_submitted(&payload))
                 .await
             {
-                tracing::error!(
-                    "InputSubmitted: dispatch to plugin '{}' failed: {}",
-                    plugin_id, e
-                );
+                tracing::error!("InputSubmitted: dispatch to plugin '{}' failed: {}", plugin_id, e);
             }
         });
     }
@@ -80,40 +74,28 @@ impl PluginHost {
         let plugins = self.plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             let plugins = plugins.read().await;
-            plugins.get(plugin_id)
+            plugins
+                .get(plugin_id)
                 .map(|p| matches!(p.state, PluginState::Activated))
                 .unwrap_or(false)
         })
     }
 }
 
-
 // ==================== PluginServices Implementation ====================
 // ==================== PluginServices Implementation ====================
 
 impl PluginServices for PluginHost {
-    fn register_session_lifecycle_listener(
-        &self,
-        plugin_id: String,
-        session_manager: Arc<SessionManager>,
-    ) {
+    fn register_session_lifecycle_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
         // host function 处于同步上下文，通过 block_on_async 完成异步注册
         let listener = PluginLifecycleListener::new(plugin_id, self.clone());
-        crate::plugin::wasm_runtime::block_on_async(
-            session_manager.register_lifecycle_listener(Arc::new(listener)),
-        );
+        crate::plugin::wasm_runtime::block_on_async(session_manager.register_lifecycle_listener(Arc::new(listener)));
     }
 
-    fn register_session_input_listener(
-        &self,
-        plugin_id: String,
-        session_manager: Arc<SessionManager>,
-    ) {
+    fn register_session_input_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
         // host function 处于同步上下文，通过 block_on_async 完成异步注册
         let listener = PluginInputListener::new(plugin_id, self.clone());
-        crate::plugin::wasm_runtime::block_on_async(
-            session_manager.register_input_listener(Arc::new(listener)),
-        );
+        crate::plugin::wasm_runtime::block_on_async(session_manager.register_input_listener(Arc::new(listener)));
     }
 
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
@@ -139,10 +121,7 @@ impl PluginServices for PluginHost {
     fn register_plugin_timer(&self, plugin_id: String, interval_secs: u64, command: String) {
         // 重复注册替换旧定时器：先中止旧任务再插入新句柄，
         // 同一插件仅保留一个定时器实例
-        let mut timers = self
-            .plugin_timers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let mut timers = self.plugin_timers.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(old) = timers.remove(&plugin_id) {
             old.abort();
         }
@@ -189,7 +168,9 @@ impl PluginServices for PluginHost {
 
         tracing::info!(
             "[PluginHost] Timer started for '{}': interval={}s command={}",
-            plugin_id, interval_secs, command
+            plugin_id,
+            interval_secs,
+            command
         );
     }
 
@@ -244,10 +225,7 @@ impl PluginServices for PluginHost {
             let exe = super::app_cli::exe_name(&file_name);
             let src = std::path::Path::new(&extension_path).join("cli").join(&exe);
             if !src.exists() {
-                return Err(format!(
-                    "install_cli: CLI artifact not found: {}",
-                    src.display()
-                ));
+                return Err(format!("install_cli: CLI artifact not found: {}", src.display()));
             }
 
             let bin_dir = if bin_dir.is_empty() {
@@ -255,17 +233,10 @@ impl PluginServices for PluginHost {
             } else {
                 std::path::PathBuf::from(&bin_dir)
             };
-            std::fs::create_dir_all(&bin_dir)
-                .map_err(|e| format!("install_cli: create bin dir failed: {}", e))?;
+            std::fs::create_dir_all(&bin_dir).map_err(|e| format!("install_cli: create bin dir failed: {}", e))?;
             let dst = bin_dir.join(&exe);
-            std::fs::copy(&src, &dst).map_err(|e| {
-                format!(
-                    "install_cli: copy {} -> {} failed: {}",
-                    src.display(),
-                    dst.display(),
-                    e
-                )
-            })?;
+            std::fs::copy(&src, &dst)
+                .map_err(|e| format!("install_cli: copy {} -> {} failed: {}", src.display(), dst.display(), e))?;
 
             // PATH 注册（幂等）
             #[cfg(target_os = "windows")]
@@ -291,10 +262,7 @@ impl PluginServices for PluginHost {
     ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
         Box::pin(async move {
             // 应用关闭流程（deactivate_all 置位）：保留随包 CLI，下次激活幂等重装
-            if self
-                .shutting_down
-                .load(std::sync::atomic::Ordering::SeqCst)
-            {
+            if self.shutting_down.load(std::sync::atomic::Ordering::SeqCst) {
                 tracing::debug!(
                     "[PluginHost] uninstall_cli skipped for '{}': app shutting down",
                     plugin_id
@@ -312,9 +280,8 @@ impl PluginServices for PluginHost {
             // 删除文件（不存在视为已卸载，幂等）
             let file = bin_dir.join(&exe);
             if file.exists() {
-                std::fs::remove_file(&file).map_err(|e| {
-                    format!("uninstall_cli: remove {} failed: {}", file.display(), e)
-                })?;
+                std::fs::remove_file(&file)
+                    .map_err(|e| format!("uninstall_cli: remove {} failed: {}", file.display(), e))?;
             }
 
             // PATH 条目移除（仅本插件条目，保留用户原有项）
@@ -323,11 +290,7 @@ impl PluginServices for PluginHost {
             #[cfg(not(target_os = "windows"))]
             super::app_cli::unregister_path_unix(&bin_dir, &exe)?;
 
-            tracing::info!(
-                "[PluginHost] CLI uninstalled for '{}': {}",
-                plugin_id,
-                file.display()
-            );
+            tracing::info!("[PluginHost] CLI uninstalled for '{}': {}", plugin_id, file.display());
             Ok(())
         })
     }
@@ -378,7 +341,8 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
         let plugins = self.plugins.clone();
         crate::plugin::wasm_runtime::block_on_async(async move {
             let plugins = plugins.read().await;
-            plugins.get(plugin_id)
+            plugins
+                .get(plugin_id)
                 .map(|p| matches!(p.state, PluginState::Activated))
                 .unwrap_or(false)
         })
@@ -386,4 +350,3 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginHost {
 }
 
 // ==================== Tests ====================
-

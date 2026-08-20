@@ -20,7 +20,7 @@ use crate::system::error::{AppError, Result};
 use crate::utils::crypto::aes_gcm::{self, NONCE_LEN};
 use crate::utils::crypto::kdf::derive_aes_key;
 use crate::utils::crypto::x25519::{
-    X25519KeyPair, KEY_LEN as X25519_KEY_LEN, X25519PublicKeyEnvelope, x25519_diffie_hellman,
+    x25519_diffie_hellman, X25519KeyPair, X25519PublicKeyEnvelope, KEY_LEN as X25519_KEY_LEN,
 };
 
 /// 加密用途上下文（绑定 HKDF info），防止会话密钥跨场景复用
@@ -86,8 +86,8 @@ impl HybridCiphertext {
         let b64 = base64::engine::general_purpose::STANDARD;
         let ephemeral_public = decode_fixed(&env.ephemeral_public_b64)
             .map_err(|e| AppError::InvalidInput(format!("临时公钥 base64 解码失败: {e}")))?;
-        let nonce = decode_fixed(&env.nonce_b64)
-            .map_err(|e| AppError::InvalidInput(format!("nonce base64 解码失败: {e}")))?;
+        let nonce =
+            decode_fixed(&env.nonce_b64).map_err(|e| AppError::InvalidInput(format!("nonce base64 解码失败: {e}")))?;
         let ciphertext = b64
             .decode(&env.ciphertext_b64)
             .map_err(|e| AppError::InvalidInput(format!("密文 base64 解码失败: {e}")))?;
@@ -133,10 +133,7 @@ pub fn x25519_encrypt(
 /// 使用接收方 X25519 私钥解密
 ///
 /// `recipient_key_pair` 为接收方长期密钥对，`env` 为对端发来的信封。
-pub fn x25519_decrypt(
-    recipient_key_pair: &X25519KeyPair,
-    env: &HybridEnvelope,
-) -> Result<Vec<u8>> {
+pub fn x25519_decrypt(recipient_key_pair: &X25519KeyPair, env: &HybridEnvelope) -> Result<Vec<u8>> {
     let ct = HybridCiphertext::from_envelope(env)?;
     let shared = x25519_diffie_hellman(recipient_key_pair, &ct.ephemeral_public)?;
     let session_key = derive_aes_key(shared.as_bytes(), env.purpose.info())?;

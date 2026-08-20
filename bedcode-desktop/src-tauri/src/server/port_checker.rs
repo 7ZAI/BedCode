@@ -8,7 +8,7 @@ use crate::system::constants::server::{BIND_ADDRESS, MAX_PORT, PORT_SEARCH_MAX_A
 use crate::Result;
 use std::net::TcpListener;
 use tauri::{AppHandle, Manager};
-use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogBuilder};
+use tauri_plugin_dialog::{DialogExt, MessageDialogBuilder, MessageDialogButtons};
 
 /// 检查端口是否可用（未被其他程序占用）
 fn is_port_available(port: u16) -> bool {
@@ -82,11 +82,7 @@ pub fn check_and_resolve_port(app_handle: &AppHandle, preferred_port: u16) -> Re
     };
 
     // 弹出对话框询问用户
-    let confirmed = MessageDialogBuilder::new(
-        app_handle.dialog().clone(),
-        "端口被占用",
-        message,
-    )
+    let confirmed = MessageDialogBuilder::new(app_handle.dialog().clone(), "端口被占用", message)
         .buttons(MessageDialogButtons::OkCancel)
         .blocking_show();
 

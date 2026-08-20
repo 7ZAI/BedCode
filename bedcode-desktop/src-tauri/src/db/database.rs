@@ -34,19 +34,15 @@ impl Database {
 
         for col in &["address", "session_token", "last_seen"] {
             if !existing_columns.iter().any(|c| c == col) {
-                self.conn.execute(
-                    &format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"),
-                    [],
-                )?;
+                self.conn
+                    .execute(&format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"), [])?;
             }
         }
 
         // connect_count 列迁移（默认 1，表示至少配对过一次）
         if !existing_columns.iter().any(|c| c == "connect_count") {
-            self.conn.execute(
-                "ALTER TABLE pairings ADD COLUMN connect_count INTEGER DEFAULT 1",
-                [],
-            )?;
+            self.conn
+                .execute("ALTER TABLE pairings ADD COLUMN connect_count INTEGER DEFAULT 1", [])?;
         }
 
         Ok(())

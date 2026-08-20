@@ -145,10 +145,7 @@ impl AnsiParser {
             return;
         }
 
-        let codes: Vec<u16> = params
-            .split(';')
-            .filter_map(|s| s.parse().ok())
-            .collect();
+        let codes: Vec<u16> = params.split(';').filter_map(|s| s.parse().ok()).collect();
 
         for code in codes {
             match code {

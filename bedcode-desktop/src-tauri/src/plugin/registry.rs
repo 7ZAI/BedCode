@@ -3,9 +3,7 @@
 //! 扩展点注册表 — 管理 commands/views/terminal/http/file_handlers 的注册与查询
 //! 前端 PluginContext 的注册调用通过 Tauri invoke 到达此注册表
 
-use bedcode_plugin_api::{
-    CommandContribution, FileHandlerContribution, ToolProviderContribution, ViewContribution,
-};
+use bedcode_plugin_api::{CommandContribution, FileHandlerContribution, ToolProviderContribution, ViewContribution};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -193,7 +191,11 @@ impl PluginRegistry {
     pub async fn register_tool_providers(&self, plugin_id: &str, providers: &[ToolProviderContribution]) {
         let mut map = self.http_endpoints.write().await;
         for provider in providers {
-            let full_path = format!("/api/plugin/{}/{}", plugin_id, provider.endpoint.trim_start_matches('/'));
+            let full_path = format!(
+                "/api/plugin/{}/{}",
+                plugin_id,
+                provider.endpoint.trim_start_matches('/')
+            );
             map.insert(
                 full_path.clone(),
                 HttpEndpointEntry {
@@ -334,9 +336,17 @@ mod tests {
     async fn test_register_commands_and_query_by_plugin() {
         let registry = PluginRegistry::new();
         registry
-            .register_commands("plugin-a", &[cmd("cmd-1", "Command One", Some("icon1")), cmd("cmd-2", "Command Two", None)])
+            .register_commands(
+                "plugin-a",
+                &[
+                    cmd("cmd-1", "Command One", Some("icon1")),
+                    cmd("cmd-2", "Command Two", None),
+                ],
+            )
             .await;
-        registry.register_commands("plugin-b", &[cmd("cmd-3", "Command Three", None)]).await;
+        registry
+            .register_commands("plugin-b", &[cmd("cmd-3", "Command Three", None)])
+            .await;
 
         assert_eq!(registry.list_commands().await.len(), 3);
         let plugin_a_cmds = registry.get_plugin_commands("plugin-a").await;
@@ -352,8 +362,12 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_register_commands_same_id_overwrites() {
         let registry = PluginRegistry::new();
-        registry.register_commands("plugin-a", &[cmd("dup", "First Title", None)]).await;
-        registry.register_commands("plugin-b", &[cmd("dup", "Second Title", None)]).await;
+        registry
+            .register_commands("plugin-a", &[cmd("dup", "First Title", None)])
+            .await;
+        registry
+            .register_commands("plugin-b", &[cmd("dup", "Second Title", None)])
+            .await;
 
         let entries = registry.list_commands().await;
         assert_eq!(entries.len(), 1);
@@ -369,10 +383,15 @@ mod tests {
         registry
             .register_views(
                 "plugin-a",
-                &[view("v-side", "sidebar", "Side View"), view("v-tool", "toolbox", "Tool View")],
+                &[
+                    view("v-side", "sidebar", "Side View"),
+                    view("v-tool", "toolbox", "Tool View"),
+                ],
             )
             .await;
-        registry.register_views("plugin-b", &[view("v-status", "statusbar", "Status View")]).await;
+        registry
+            .register_views("plugin-b", &[view("v-status", "statusbar", "Status View")])
+            .await;
 
         let sidebars = registry.get_views_by_type("sidebar").await;
         assert_eq!(sidebars.len(), 1);
@@ -394,7 +413,9 @@ mod tests {
         registry
             .register_terminal_handlers("plugin-a", &["h1".to_string(), "h2".to_string()], &[])
             .await;
-        registry.register_terminal_handlers("plugin-b", &[], &["p9".to_string()]).await;
+        registry
+            .register_terminal_handlers("plugin-b", &[], &["p9".to_string()])
+            .await;
 
         let all = registry.list_terminal_handlers().await;
         assert_eq!(all.len(), 2);
@@ -420,12 +441,22 @@ mod tests {
     async fn test_tool_providers_register_with_prefixed_path() {
         let registry = PluginRegistry::new();
         // endpoint 带前导斜杠与不带两种写法应归一为同一路径
-        registry.register_tool_providers("plugin-a", &[tool_provider("tp-1", "/chat")]).await;
-        registry.register_tool_providers("plugin-b", &[tool_provider("tp-2", "mcp")]).await;
+        registry
+            .register_tool_providers("plugin-a", &[tool_provider("tp-1", "/chat")])
+            .await;
+        registry
+            .register_tool_providers("plugin-b", &[tool_provider("tp-2", "mcp")])
+            .await;
 
-        let a = registry.find_http_endpoint("/api/plugin/plugin-a/chat").await.expect("应找到 tool provider 端点");
+        let a = registry
+            .find_http_endpoint("/api/plugin/plugin-a/chat")
+            .await
+            .expect("应找到 tool provider 端点");
         assert_eq!(a.plugin_id, "plugin-a");
-        let b = registry.find_http_endpoint("/api/plugin/plugin-b/mcp").await.expect("应找到 tool provider 端点");
+        let b = registry
+            .find_http_endpoint("/api/plugin/plugin-b/mcp")
+            .await
+            .expect("应找到 tool provider 端点");
         assert_eq!(b.plugin_id, "plugin-b");
         // 未归一化的原始路径不应命中
         assert!(registry.find_http_endpoint("/chat").await.is_none());
@@ -436,7 +467,10 @@ mod tests {
     async fn test_file_handlers_find_by_extension_and_missing() {
         let registry = PluginRegistry::new();
         registry
-            .register_file_handlers("plugin-a", &[file_handler("md-viewer", &["md", "markdown"], "MarkdownPreview")])
+            .register_file_handlers(
+                "plugin-a",
+                &[file_handler("md-viewer", &["md", "markdown"], "MarkdownPreview")],
+            )
             .await;
         registry
             .register_file_handlers("plugin-b", &[file_handler("json-viewer", &["json"], "JsonView")])
@@ -447,7 +481,14 @@ mod tests {
         assert_eq!(md.handler_id, "md-viewer");
         assert_eq!(md.viewer, "MarkdownPreview");
         assert_eq!(md.extensions, vec!["md", "markdown"]);
-        assert_eq!(registry.find_file_handler("json").await.expect("json 应命中").handler_id, "json-viewer");
+        assert_eq!(
+            registry
+                .find_file_handler("json")
+                .await
+                .expect("json 应命中")
+                .handler_id,
+            "json-viewer"
+        );
         assert!(registry.find_file_handler("rs").await.is_none());
         assert_eq!(registry.list_file_handlers().await.len(), 2);
     }
@@ -458,10 +499,16 @@ mod tests {
         let registry = PluginRegistry::new();
         registry.register_commands("plugin-a", &[cmd("a1", "A1", None)]).await;
         registry.register_commands("plugin-b", &[cmd("b1", "B1", None)]).await;
-        registry.register_views("plugin-a", &[view("va", "sidebar", "VA")]).await;
-        registry.register_terminal_handlers("plugin-a", &["h".to_string()], &[]).await;
+        registry
+            .register_views("plugin-a", &[view("va", "sidebar", "VA")])
+            .await;
+        registry
+            .register_terminal_handlers("plugin-a", &["h".to_string()], &[])
+            .await;
         registry.register_http_endpoint("plugin-a", "/api/a").await;
-        registry.register_file_handlers("plugin-a", &[file_handler("fa", &["a"], "A")]).await;
+        registry
+            .register_file_handlers("plugin-a", &[file_handler("fa", &["a"], "A")])
+            .await;
 
         registry.unregister_plugin("plugin-a").await;
 
@@ -479,7 +526,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_command_entry_serializes_camel_case() {
         let registry = PluginRegistry::new();
-        registry.register_commands("plugin-a", &[cmd("c1", "T", Some("i")), cmd("c2", "T2", None)]).await;
+        registry
+            .register_commands("plugin-a", &[cmd("c1", "T", Some("i")), cmd("c2", "T2", None)])
+            .await;
         let json = serde_json::to_value(registry.list_commands().await).unwrap();
         let arr = json.as_array().expect("应为数组");
         assert_eq!(arr.len(), 2);

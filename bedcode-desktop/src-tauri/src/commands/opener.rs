@@ -10,21 +10,14 @@ use std::sync::Arc;
 use tauri::State;
 
 /// 校验插件身份与 system:open 权限
-async fn require_system_open(
-    plugin_host: &PluginHost,
-    plugin_id: &str,
-    op: &str,
-) -> crate::Result<()> {
+async fn require_system_open(plugin_host: &PluginHost, plugin_id: &str, op: &str) -> crate::Result<()> {
     if !plugin_host.is_activated(plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' is not activated",
             op, plugin_id
         )));
     }
-    if !plugin_host
-        .permission()
-        .check(plugin_id, PERMISSION_SYSTEM_OPEN)
-    {
+    if !plugin_host.permission().check(plugin_id, PERMISSION_SYSTEM_OPEN) {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' has no system:open permission",
             op, plugin_id
@@ -82,11 +75,7 @@ fn reveal_in_dir_platform(path: &std::path::Path) -> std::io::Result<()> {
     use windows_sys::Win32::{
         Foundation::ERROR_FILE_NOT_FOUND,
         System::Com::CoInitialize,
-        UI::{
-            Shell::{
-                Common::ITEMIDLIST, ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems,
-            },
-        },
+        UI::Shell::{Common::ITEMIDLIST, ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems},
     };
 
     // 目录输入：直接打开目录视图（explore verb），无选中语义
@@ -150,9 +139,7 @@ fn shell_execute_explore(dir: &std::path::Path) -> std::io::Result<()> {
     };
 
     let dir_wide = to_wide(dir);
-    let verb: [u16; 8] = [
-        0x65, 0x78, 0x70, 0x6c, 0x6f, 0x72, 0x65, 0,
-    ]; // "explore\0"
+    let verb: [u16; 8] = [0x65, 0x78, 0x70, 0x6c, 0x6f, 0x72, 0x65, 0]; // "explore\0"
     let mut info = SHELLEXECUTEINFOW {
         cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
         fMask: 0,
@@ -191,7 +178,11 @@ fn to_wide(p: &std::path::Path) -> Vec<u16> {
 /// macOS：Finder 定位选中（`open -R`）
 #[cfg(target_os = "macos")]
 fn reveal_in_dir_platform(path: &std::path::Path) -> std::io::Result<()> {
-    std::process::Command::new("open").arg("-R").arg(path).spawn().map(|_| ())
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
 }
 
 /// Linux：打开所在目录（xdg-open 无 reveal 语义）

@@ -5,14 +5,16 @@
 //! - POST /api/file-content
 //! - POST /api/diff-tree
 
-use actix_web::{web, HttpResponse};
-use crate::system::app_context::AppContext;
-use crate::server::dtos::ApiResponse;
-use crate::server::dtos::file_dto::*;
 use crate::process::create_command;
-use crate::system::constants::file::{FILE_TREE_MAX_DEPTH, FILE_CONTENT_MAX_SIZE_BYTES, FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS};
-use std::path::PathBuf;
+use crate::server::dtos::file_dto::*;
+use crate::server::dtos::ApiResponse;
+use crate::system::app_context::AppContext;
+use crate::system::constants::file::{
+    FILE_CONTENT_MAX_SIZE_BYTES, FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS, FILE_TREE_MAX_DEPTH,
+};
+use actix_web::{web, HttpResponse};
 use std::collections::HashSet;
+use std::path::PathBuf;
 
 /// 文件树最大递归深度
 const MAX_DEPTH: usize = FILE_TREE_MAX_DEPTH;
@@ -37,9 +39,7 @@ pub async fn resolve_working_dir(id: &str, ctx: &AppContext) -> crate::Result<St
                 .get_config(id)
                 .await?
                 .map(|config| config.working_dir)
-                .ok_or_else(|| crate::AppError::NotFound(format!(
-                    "Session/Config not found: {}", id
-                )))
+                .ok_or_else(|| crate::AppError::NotFound(format!("Session/Config not found: {}", id)))
         }
     }
 }
@@ -52,35 +52,36 @@ pub async fn get_file_tree(body: web::Json<FileTreeRequest>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
 
     let root = PathBuf::from(&working_dir);
     if !root.is_dir() {
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(400, &format!("Working dir is not a directory: {}", working_dir)));
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(
+            400,
+            &format!("Working dir is not a directory: {}", working_dir),
+        ));
     }
 
     let filters = build_exclude_filters(&body.exclude_dirs);
     let root_clone = root.clone();
     let filters_clone = filters.clone();
 
-    let tree_result = tokio::task::spawn_blocking(move || {
-        scan_dir(&root_clone, &root_clone, &filters_clone, 0)
-    }).await;
+    let tree_result = tokio::task::spawn_blocking(move || scan_dir(&root_clone, &root_clone, &filters_clone, 0)).await;
 
     match tree_result {
         Ok(Ok(tree)) => {
             let data = FileTreeResponseData { tree };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
-        Ok(Err(e)) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
-        }
-        Err(e) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("File tree scan failed: {}", e)))
-        }
+        Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("File tree scan failed: {}", e))),
     }
 }
 
@@ -95,7 +96,11 @@ pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) ->
     let working_dir = match resolve_working_dir(&query.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -165,10 +170,7 @@ pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) ->
     let dir = canonical_target;
     let filters_clone = filters.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        scan_dir_single_level(&root, &dir, &filters_clone)
-    })
-    .await;
+    let result = tokio::task::spawn_blocking(move || scan_dir_single_level(&root, &dir, &filters_clone)).await;
 
     match result {
         Ok(Ok(children)) => {
@@ -195,47 +197,66 @@ enum ExcludeFilter {
 }
 
 fn build_exclude_filters(exclude_dirs: &[String]) -> Vec<ExcludeFilter> {
-    exclude_dirs.iter().map(|pattern| {
-        if let Some(slash_pos) = pattern.rfind('/') {
-            ExcludeFilter::Path {
-                parent: pattern[..slash_pos].to_string(),
-                name: pattern[slash_pos + 1..].to_string(),
+    exclude_dirs
+        .iter()
+        .map(|pattern| {
+            if let Some(slash_pos) = pattern.rfind('/') {
+                ExcludeFilter::Path {
+                    parent: pattern[..slash_pos].to_string(),
+                    name: pattern[slash_pos + 1..].to_string(),
+                }
+            } else {
+                ExcludeFilter::Name(pattern.clone())
             }
-        } else {
-            ExcludeFilter::Name(pattern.clone())
-        }
-    }).collect()
+        })
+        .collect()
 }
 
 fn should_exclude(relative_path: &str, dir_name: &str, filters: &[ExcludeFilter]) -> bool {
     for f in filters {
         match f {
-            ExcludeFilter::Name(name) => { if dir_name == name { return true; } }
+            ExcludeFilter::Name(name) => {
+                if dir_name == name {
+                    return true;
+                }
+            }
             ExcludeFilter::Path { parent, name } => {
-                if dir_name == name && relative_path == parent { return true; }
+                if dir_name == name && relative_path == parent {
+                    return true;
+                }
             }
         }
     }
     false
 }
 
-fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usize) -> crate::Result<Vec<FileTreeNode>> {
-    if depth > MAX_DEPTH { return Ok(Vec::new()); }
+fn scan_dir(
+    root: &PathBuf,
+    dir: &PathBuf,
+    filters: &[ExcludeFilter],
+    depth: usize,
+) -> crate::Result<Vec<FileTreeNode>> {
+    if depth > MAX_DEPTH {
+        return Ok(Vec::new());
+    }
     let mut folders: Vec<FileTreeNode> = Vec::new();
     let mut files: Vec<FileTreeNode> = Vec::new();
 
-    let read_dir = std::fs::read_dir(dir).map_err(|e| {
-        crate::AppError::Internal(format!("Failed to read dir {}: {}", dir.display(), e))
-    })?;
+    let read_dir = std::fs::read_dir(dir)
+        .map_err(|e| crate::AppError::Internal(format!("Failed to read dir {}: {}", dir.display(), e)))?;
 
     for entry in read_dir {
         let entry = entry.map_err(|e| crate::AppError::Internal(format!("Failed to read entry: {}", e)))?;
         let file_name = entry.file_name().to_string_lossy().to_string();
-        let file_type = entry.file_type().map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
 
         if file_type.is_dir() {
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
-            if should_exclude(&relative, &file_name, filters) { continue; }
+            if should_exclude(&relative, &file_name, filters) {
+                continue;
+            }
             let child_dir = dir.join(&file_name);
             // 统一使用 / 作为路径分隔符，避免 Windows 上 to_string_lossy 产生 \ 导致混合分隔符
             let normalized_relative = relative.replace('\\', "/");
@@ -280,22 +301,19 @@ fn scan_dir(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter], depth: usi
 ///
 /// 与 scan_dir 不同，此函数只读取 dir 的直系子项，
 /// 文件夹节点的 children 为 None（表示未加载）。
-fn scan_dir_single_level(
-    root: &PathBuf,
-    dir: &PathBuf,
-    filters: &[ExcludeFilter],
-) -> crate::Result<Vec<FileTreeNode>> {
+fn scan_dir_single_level(root: &PathBuf, dir: &PathBuf, filters: &[ExcludeFilter]) -> crate::Result<Vec<FileTreeNode>> {
     let mut folders: Vec<FileTreeNode> = Vec::new();
     let mut files: Vec<FileTreeNode> = Vec::new();
 
-    let read_dir = std::fs::read_dir(dir).map_err(|e| {
-        crate::AppError::Internal(format!("Failed to read dir {}: {}", dir.display(), e))
-    })?;
+    let read_dir = std::fs::read_dir(dir)
+        .map_err(|e| crate::AppError::Internal(format!("Failed to read dir {}: {}", dir.display(), e)))?;
 
     for entry in read_dir {
         let entry = entry.map_err(|e| crate::AppError::Internal(format!("Failed to read entry: {}", e)))?;
         let file_name = entry.file_name().to_string_lossy().to_string();
-        let file_type = entry.file_type().map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|e| crate::AppError::Internal(format!("Failed to get file type: {}", e)))?;
 
         if file_type.is_dir() {
             let relative = dir.strip_prefix(root).unwrap_or(dir).to_string_lossy().to_string();
@@ -351,7 +369,11 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
     let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -401,10 +423,7 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
     }
 
     if !canonical_path.is_file() {
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            400,
-            "Path is not a file",
-        ));
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(400, "Path is not a file"));
     }
 
     // 检查文件大小
@@ -427,9 +446,7 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
 
     // 读取文件内容
     let path_for_read = canonical_path.clone();
-    let read_result = tokio::task::spawn_blocking(move || {
-        std::fs::read_to_string(&path_for_read)
-    }).await;
+    let read_result = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path_for_read)).await;
 
     match read_result {
         Ok(Ok(content)) => {
@@ -447,12 +464,7 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
                 &format!("Failed to read file (possibly binary): {}", e),
             ))
         }
-        Err(e) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("File read task failed: {}", e),
-            ))
-        }
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("File read task failed: {}", e))),
     }
 }
 
@@ -466,7 +478,11 @@ pub async fn get_diff_tree(body: web::Json<DiffTreeRequest>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -482,34 +498,22 @@ pub async fn get_diff_tree(body: web::Json<DiffTreeRequest>) -> HttpResponse {
     // 检查是否为 git 仓库
     let git_dir = root.join(".git");
     if !git_dir.exists() {
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            400,
-            "Not a git repository",
-        ));
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(400, "Not a git repository"));
     }
 
     let filters = build_exclude_filters(&body.exclude_dirs);
     let working_dir_clone = working_dir.clone();
     let filters_clone = filters.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        get_diff_file_tree(&working_dir_clone, &filters_clone)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || get_diff_file_tree(&working_dir_clone, &filters_clone)).await;
 
     match result {
         Ok(Ok(tree)) => {
             let data = FileTreeResponseData { tree };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
-        Ok(Err(e)) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
-        }
-        Err(e) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("Diff tree task failed: {}", e),
-            ))
-        }
+        Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("Diff tree task failed: {}", e))),
     }
 }
 
@@ -651,14 +655,8 @@ fn build_tree_from_paths(paths: &[String]) -> Vec<FileTreeNode> {
             }
         }
         // 文件夹在前，文件在后
-        let mut folders: Vec<FileTreeNode> = nodes.iter()
-            .filter(|n| n.node_type == "folder")
-            .cloned()
-            .collect();
-        let files: Vec<FileTreeNode> = nodes.iter()
-            .filter(|n| n.node_type == "file")
-            .cloned()
-            .collect();
+        let mut folders: Vec<FileTreeNode> = nodes.iter().filter(|n| n.node_type == "folder").cloned().collect();
+        let files: Vec<FileTreeNode> = nodes.iter().filter(|n| n.node_type == "file").cloned().collect();
         folders.extend(files);
         folders
     }
@@ -676,7 +674,11 @@ pub async fn get_file_diff(body: web::Json<FileDiffRequest>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -692,33 +694,21 @@ pub async fn get_file_diff(body: web::Json<FileDiffRequest>) -> HttpResponse {
     // 检查是否为 git 仓库
     let git_dir = root.join(".git");
     if !git_dir.exists() {
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            400,
-            "Not a git repository",
-        ));
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(400, "Not a git repository"));
     }
 
     let file_path = body.file_path.clone();
     let working_dir_clone = working_dir.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        parse_git_diff(&working_dir_clone, &file_path)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || parse_git_diff(&working_dir_clone, &file_path)).await;
 
     match result {
         Ok(Ok((file_name, lines))) => {
             let data = FileDiffResponseData { file_name, lines };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
-        Ok(Err(e)) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string()))
-        }
-        Err(e) => {
-            HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("File diff task failed: {}", e),
-            ))
-        }
+        Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("File diff task failed: {}", e))),
     }
 }
 
@@ -832,19 +822,9 @@ fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
         return None;
     }
 
-    let old_start: u32 = parts[0]
-        .trim_start_matches('-')
-        .split(',')
-        .next()?
-        .parse()
-        .ok()?;
+    let old_start: u32 = parts[0].trim_start_matches('-').split(',').next()?.parse().ok()?;
 
-    let new_start: u32 = parts[1]
-        .trim_start_matches('+')
-        .split(',')
-        .next()?
-        .parse()
-        .ok()?;
+    let new_start: u32 = parts[1].trim_start_matches('+').split(',').next()?.parse().ok()?;
 
     Some((old_start, new_start))
 }

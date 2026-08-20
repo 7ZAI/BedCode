@@ -16,7 +16,7 @@ pub mod services;
 pub mod supervisor;
 pub mod ws;
 
-pub use message::*;
+pub use crate::enums::control::SessionControlAction;
 pub use client_info::ClientInfo;
 pub use connection_types::*;
-pub use crate::enums::control::SessionControlAction;
+pub use message::*;

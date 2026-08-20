@@ -3,26 +3,23 @@
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
+use crate::enums::{SessionStatus, SessionType};
 use crate::events::DesktopSyncEvent;
-use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
+use crate::pty::{PtyHandler, PtySessionHandler};
 use crate::session::session_lifecycle::SessionLifecycleEvent;
-use crate::pty::{PtySessionHandler, PtyHandler};
 use crate::session::{
-    session_components::{
-        ConfigMapper, DefaultConfigMapper,
-        DefaultNamingService, NamingService,
-        DefaultPtyRegistry, PtyRegistry,
-        DefaultSessionInfoRegistry, SessionInfoRegistry,
-        DefaultStatusDetector, StatusDetector,
-    },
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
+    session_components::{
+        ConfigMapper, DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry,
+        DefaultStatusDetector, NamingService, PtyRegistry, SessionInfoRegistry, StatusDetector,
+    },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
+use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
 use crate::system::error_boundary::spawn_with_error_boundary;
-use crate::enums::{SessionStatus, SessionType};
 use crate::Result;
 use chrono::Utc;
 use std::path::PathBuf;
@@ -166,9 +163,8 @@ impl SessionManager {
     /// 可能反向获取其他锁（如 wasm_plugins），与 activate_plugin 的锁序相反，
     /// 持读锁调用会形成 ABBA 死锁
     async fn dispatch_lifecycle_event(&self, event: SessionLifecycleEvent) {
-        let listeners: Vec<Arc<dyn SessionLifecycleListener>> = {
-            self.lifecycle_listeners.read().await.iter().cloned().collect()
-        };
+        let listeners: Vec<Arc<dyn SessionLifecycleListener>> =
+            { self.lifecycle_listeners.read().await.iter().cloned().collect() };
         for listener in &listeners {
             listener.on_session_lifecycle(&event);
         }
@@ -205,9 +201,8 @@ impl SessionManager {
     async fn dispatch_input_submitted(&self, session_id: String, text: String) {
         // 快照后立即释放读锁：回调可能反向获取其他锁，持锁分发有 ABBA 死锁风险
         // （与 dispatch_lifecycle_event 同理）
-        let listeners: Vec<Arc<dyn SessionInputListener>> = {
-            self.input_listeners.read().await.iter().cloned().collect()
-        };
+        let listeners: Vec<Arc<dyn SessionInputListener>> =
+            { self.input_listeners.read().await.iter().cloned().collect() };
         tracing::debug!(
             "dispatch_input_submitted session_id={}, text_len={}, input_listeners={}",
             session_id,
@@ -293,7 +288,8 @@ impl SessionManager {
             command: config.command.clone(),
             working_dir: config.working_dir.clone(),
             source_device: source_device.clone(),
-        }).await;
+        })
+        .await;
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -348,13 +344,15 @@ impl SessionManager {
             config_id: config_id.to_string(),
             name: session_name.clone(),
             working_dir: config.working_dir.clone(),
-        }).await;
+        })
+        .await;
 
         // 发布同步事件：会话创建
         self.publish_sync_event(DesktopSyncEvent::SessionCreated {
             session_id: session_id.clone(),
             source_device,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session created: {} ({})", session_name, session_id);
         Ok(session_id)
@@ -376,7 +374,8 @@ impl SessionManager {
             command: config.command.clone(),
             working_dir: config.working_dir.clone(),
             source_device: None,
-        }).await;
+        })
+        .await;
 
         // 获取现有会话列表用于生成唯一名称
         let sessions = self.session_info.list().await;
@@ -421,7 +420,8 @@ impl SessionManager {
         self.publish_sync_event(DesktopSyncEvent::SessionCreated {
             session_id: session_id.clone(),
             source_device: None,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session created (not started): {} ({})", session_name, session_id);
         Ok(session_id)
@@ -437,7 +437,10 @@ impl SessionManager {
             .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))?;
 
         // 获取 PTY 会话
-        let pty_session = self.pty_registry.get(session_id).await
+        let pty_session = self
+            .pty_registry
+            .get(session_id)
+            .await
             .ok_or_else(|| crate::AppError::NotFound(format!("PTY session not found: {}", session_id)))?;
 
         // 注册到全局输出管理器（启用移动端订阅功能）
@@ -460,12 +463,12 @@ impl SessionManager {
             session_id: session_id.to_string(),
             old_status,
             new_status: SessionStatus::Running,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session started: {} ({})", session_name, session_id);
         Ok(())
     }
-
 
     /// 启动生命周期处理器
     async fn start_lifecycle_handler(&self, session_id: &str) {
@@ -490,11 +493,7 @@ impl SessionManager {
                     session_info.update_status_with_time(&sid, session_status.clone()).await;
 
                     // 获取会话名称
-                    let session_name = session_info
-                        .get(&sid)
-                        .await
-                        .map(|i| i.name)
-                        .unwrap_or_default();
+                    let session_name = session_info.get(&sid).await.map(|i| i.name).unwrap_or_default();
 
                     // 发送状态变化事件
                     if status_tx.receiver_count() > 0 {
@@ -538,7 +537,8 @@ impl SessionManager {
             command: config.command.clone(),
             working_dir: config.working_dir.clone(),
             source_device: None,
-        }).await;
+        })
+        .await;
 
         // 构建启动配置（复用配置映射服务）
         let mut launch_config = self.config_mapper.to_launch_config(&config)?;
@@ -575,9 +575,7 @@ impl SessionManager {
         };
 
         // 保存到各服务
-        self.pty_registry
-            .insert(session_id.to_string(), pty_session)
-            .await;
+        self.pty_registry.insert(session_id.to_string(), pty_session).await;
         self.session_info.insert(info).await;
 
         tracing::info!("Session restarted: {} ({})", old_name_for_event, session_id);
@@ -588,7 +586,8 @@ impl SessionManager {
             config_id: config_id.clone(),
             name: old_name_for_event.clone(),
             working_dir: config.working_dir.clone(),
-        }).await;
+        })
+        .await;
 
         // 发送重启事件
         let _ = self.event_bus.restart_sender().send(SessionRestartEvent {
@@ -607,7 +606,9 @@ impl SessionManager {
 
     /// 获取会话信息，未找到时返回错误
     pub async fn get_session_info(&self, session_id: &str) -> Result<SessionInfo> {
-        self.session_info.get(session_id).await
+        self.session_info
+            .get(session_id)
+            .await
             .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))
     }
 
@@ -703,7 +704,8 @@ impl SessionManager {
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopping {
             session_id: session_id.to_string(),
             source_device: source_device.clone(),
-        }).await;
+        })
+        .await;
 
         // 使用 PTY 注册表终止会话
         if let Err(e) = self.pty_registry.kill(session_id).await {
@@ -737,13 +739,15 @@ impl SessionManager {
         self.publish_sync_event(DesktopSyncEvent::SessionStopped {
             session_id: session_id.to_string(),
             source_device: source_device.clone(),
-        }).await;
+        })
+        .await;
 
         // 分发 Stopped 事件（异步通知）
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopped {
             session_id: session_id.to_string(),
             source_device,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session killed: {}", session_id);
         Ok(())
@@ -783,7 +787,8 @@ impl SessionManager {
         self.publish_sync_event(DesktopSyncEvent::SessionRemoved {
             session_id: session_id.to_string(),
             source_device,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session removed: {} ({})", session_id, session_name);
         Ok(())
@@ -853,8 +858,7 @@ impl SessionManager {
 
 impl Default for SessionManager {
     fn default() -> Self {
-        let db = crate::db::Database::new(std::path::Path::new(":memory:"))
-            .expect("Failed to create memory database");
+        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("Failed to create memory database");
         db.init_schema().expect("Failed to init schema");
 
         let db = Arc::new(tokio::sync::Mutex::new(db));

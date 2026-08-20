@@ -2,9 +2,9 @@
 //!
 //! 处理终端相关消息（输入、输出等）
 
-use crate::session::SessionManager;
-use crate::server::message::Message;
 use crate::enums::{TerminalAction, TerminalPayload};
+use crate::server::message::Message;
+use crate::session::SessionManager;
 use crate::Result;
 use std::sync::Arc;
 
@@ -47,10 +47,7 @@ pub async fn handle_input(
                     }
                 }
                 None => {
-                    tracing::warn!(
-                        "[TerminalService] unsupported key combo: {}",
-                        key_combo.to_str()
-                    );
+                    tracing::warn!("[TerminalService] unsupported key combo: {}", key_combo.to_str());
                 }
             }
         }

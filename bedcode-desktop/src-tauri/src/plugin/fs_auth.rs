@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 /// 文件操作类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,10 +60,7 @@ impl FsAuthChecker {
     /// 创建文件访问校验器
     ///
     /// `app_handle` 为 None 时（无头/测试上下文）弹窗授权层不可用，直接拒绝
-    pub fn new(
-        storage: Arc<PluginStorage>,
-        app_handle: Option<Arc<tauri::AppHandle>>,
-    ) -> Self {
+    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
         // 路径白名单：.claude/ 子目录（Claude Code 配置目录）
         // 不在此处硬编码绝对路径，运行时动态匹配路径后缀
         let path_whitelist = Vec::new();
@@ -207,12 +204,7 @@ impl FsAuthChecker {
     }
 
     /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
-    async fn request_user_auth_batch(
-        &self,
-        plugin_id: &str,
-        paths: &[String],
-        operation: FsOp,
-    ) -> bool {
+    async fn request_user_auth_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -375,12 +367,7 @@ impl FsAuthChecker {
         }
 
         // 等待用户回复（超时 30 秒自动拒绝）
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            reply_rx,
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx).await {
             Ok(Ok(allowed)) => {
                 tracing::info!(
                     plugin_id = %plugin_id,
@@ -405,11 +392,7 @@ impl FsAuthChecker {
     }
 
     /// 持久化授权路径前缀
-    async fn save_granted_path(
-        &self,
-        plugin_id: &str,
-        path: &str,
-    ) -> anyhow::Result<()> {
+    async fn save_granted_path(&self, plugin_id: &str, path: &str) -> anyhow::Result<()> {
         let storage_key = "fs_granted_paths".to_string();
 
         let mut granted: Vec<serde_json::Value> = match self.storage.get(plugin_id, &storage_key).await {
@@ -580,15 +563,14 @@ mod tests {
     async fn is_granted_matches_whitelist_and_trusted_plugin() {
         let checker = headless_checker().await;
         // .claude/ 白名单目录段 → 直接放行（不经弹窗，无需授权记录）
-        let whitelisted = std::env::temp_dir()
-            .join(".claude")
-            .to_string_lossy()
-            .to_string();
+        let whitelisted = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
         assert!(checker.is_granted("com.bedcode.test", &whitelisted).await);
         // 受信任插件白名单 → 任意路径放行
-        assert!(checker
-            .is_granted("com.bedcode.auto-task", &std::env::temp_dir().to_string_lossy())
-            .await);
+        assert!(
+            checker
+                .is_granted("com.bedcode.auto-task", &std::env::temp_dir().to_string_lossy())
+                .await
+        );
     }
 
     #[tokio::test]

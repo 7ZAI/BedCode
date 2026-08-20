@@ -37,7 +37,10 @@ pub enum SessionControlAction {
     /// 离开会话，停止接收输出
     LeaveSession { session_id: String },
     /// 会话变更通知 (created/stopped/removed)
-    SessionChanged { change_type: String, session: SessionSummary },
+    SessionChanged {
+        change_type: String,
+        session: SessionSummary,
+    },
 }
 
 // ==================== Session Config ====================
@@ -156,4 +159,3 @@ pub enum SubscribeMode {
     /// 游标已失效（早于 min_offset / 晚于 max_offset / 首次订阅）：清屏全量重播
     Reset,
 }
-

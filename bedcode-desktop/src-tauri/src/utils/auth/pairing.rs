@@ -34,7 +34,9 @@ impl PairingCode {
     /// 生成新的 6 位数字配对码，指定有效期（秒）
     pub fn generate_with_ttl(ttl_secs: u64) -> Self {
         let mut rng = rand::thread_rng();
-        let code: String = (0..PAIRING_CODE_DIGITS).map(|_| rng.gen_range(0..10).to_string()).collect();
+        let code: String = (0..PAIRING_CODE_DIGITS)
+            .map(|_| rng.gen_range(0..10).to_string())
+            .collect();
 
         Self {
             code,
@@ -289,4 +291,3 @@ mod tests {
         assert_eq!(decoded.requested_at, device.requested_at);
     }
 }
-

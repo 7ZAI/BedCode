@@ -2,10 +2,10 @@
 //!
 //! 配对业务服务 - 包含设备配对的管理逻辑
 
+use crate::system::constants::auth::PAIRING_CODE_TTL_SECS;
+use crate::utils::auth::pairing::{PairingCode, PendingDevice};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::utils::auth::pairing::{PairingCode, PendingDevice};
-use crate::system::constants::auth::PAIRING_CODE_TTL_SECS;
 
 /// 配对服务 - 业务层实现
 /// 负责配对码的生成、验证和待配对设备的管理

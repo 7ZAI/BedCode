@@ -4,11 +4,11 @@
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
 use crate::enums::{PtySessionStatus, SessionLaunchConfig};
+use crate::process::create_command;
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
 use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
-use crate::process::create_command;
 use crate::Result;
 
 use portable_pty::{native_pty_system, PtyPair, PtySize};
@@ -18,8 +18,6 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
-
-
 
 /// PTY 会话内部状态
 ///
@@ -84,7 +82,9 @@ impl PtySession {
             })
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
 
-        let writer = pair.master.take_writer()
+        let writer = pair
+            .master
+            .take_writer()
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
         let (lifecycle_tx, _) = broadcast::channel(AppConfig::global().channels.lifecycle_capacity);
 
@@ -132,13 +132,16 @@ impl PtySession {
             cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
 
             // 从 state 中取出 pair
-            let pair = state.pair.take()
+            let pair = state
+                .pair
+                .take()
                 .ok_or_else(|| crate::AppError::Pty("PTY pair already used".to_string()))?;
 
             (cmd, pair)
         };
 
-        let child = pair.slave
+        let child = pair
+            .slave
             .spawn_command(cmd)
             .map_err(|e| crate::AppError::Pty(e.to_string()))?;
 
@@ -166,11 +169,10 @@ impl PtySession {
 
         if data.len() <= CHUNK_SIZE {
             let mut state = self.state.lock().await;
-            let writer = state.writer.as_mut()
-                .ok_or_else(|| {
-                    tracing::error!("[PtyProcess] write: writer not available");
-                    crate::AppError::Pty("Writer not available".to_string())
-                })?;
+            let writer = state.writer.as_mut().ok_or_else(|| {
+                tracing::error!("[PtyProcess] write: writer not available");
+                crate::AppError::Pty("Writer not available".to_string())
+            })?;
             writer.write_all(data)?;
             writer.flush()?;
             return Ok(());
@@ -179,11 +181,10 @@ impl PtySession {
         // 分块写入：每块之间短暂 yield，让 PTY 有时间消费缓冲区
         for chunk in data.chunks(CHUNK_SIZE) {
             let mut state = self.state.lock().await;
-            let writer = state.writer.as_mut()
-                .ok_or_else(|| {
-                    tracing::error!("[PtyProcess] write: writer not available");
-                    crate::AppError::Pty("Writer not available".to_string())
-                })?;
+            let writer = state.writer.as_mut().ok_or_else(|| {
+                tracing::error!("[PtyProcess] write: writer not available");
+                crate::AppError::Pty("Writer not available".to_string())
+            })?;
             writer.write_all(chunk)?;
             writer.flush()?;
             drop(state);
@@ -204,7 +205,8 @@ impl PtySession {
         let combo = crate::enums::KeyCombo::parse(key)
             .ok_or_else(|| crate::AppError::InvalidInput(format!("Unknown special key: {}", key)))?;
 
-        let bytes = combo.to_pty_bytes()
+        let bytes = combo
+            .to_pty_bytes()
             .ok_or_else(|| crate::AppError::InvalidInput(format!("Unsupported key combo: {}", key)))?;
 
         self.write(&bytes).await
@@ -213,16 +215,19 @@ impl PtySession {
     /// 调整终端大小
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         let mut state = self.state.lock().await;
-        let pair = state.pair.as_mut()
+        let pair = state
+            .pair
+            .as_mut()
             .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
 
-        pair.master.resize(PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .map_err(|e| crate::AppError::Pty(e.to_string()))?;
+        pair.master
+            .resize(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .map_err(|e| crate::AppError::Pty(e.to_string()))?;
 
         Ok(())
     }
@@ -231,7 +236,6 @@ impl PtySession {
     pub fn subscribe_lifecycle(&self) -> broadcast::Receiver<PtySessionStatus> {
         self.lifecycle_tx.subscribe()
     }
-
 
     /// 获取会话状态
     pub fn is_running(&self) -> bool {
@@ -285,19 +289,17 @@ impl PtySession {
     async fn start_output_reader(&self) -> Result<()> {
         let reader = {
             let mut state = self.state.lock().await;
-            let pair = state.pair.as_mut()
+            let pair = state
+                .pair
+                .as_mut()
                 .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
 
-            pair.master.try_clone_reader()
+            pair.master
+                .try_clone_reader()
                 .map_err(|e| crate::AppError::Pty(e.to_string()))?
         };
 
-        let pty_reader = PtyReader::start(
-            reader,
-            self.lifecycle_tx.clone(),
-            self.id.clone(),
-            self.running.clone(),
-        );
+        let pty_reader = PtyReader::start(reader, self.lifecycle_tx.clone(), self.id.clone(), self.running.clone());
 
         // 保存线程句柄
         {
@@ -371,8 +373,8 @@ mod tests {
 
     #[tokio::test]
     async fn with_id_creates_session_with_properties_and_kill_stops_it() {
-        let session = PtySession::with_id("sess-1".to_string(), config())
-            .expect("openpty should succeed on this platform");
+        let session =
+            PtySession::with_id("sess-1".to_string(), config()).expect("openpty should succeed on this platform");
 
         assert_eq!(session.id(), "sess-1");
         assert_eq!(session.name().await, "test-session");

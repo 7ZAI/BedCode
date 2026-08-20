@@ -14,8 +14,7 @@ use tokio::sync::oneshot;
 
 use crate::enums::FileServicePayload;
 
-static PENDING: OnceLock<Mutex<HashMap<String, oneshot::Sender<FileServicePayload>>>> =
-    OnceLock::new();
+static PENDING: OnceLock<Mutex<HashMap<String, oneshot::Sender<FileServicePayload>>>> = OnceLock::new();
 
 fn pending() -> &'static Mutex<HashMap<String, oneshot::Sender<FileServicePayload>>> {
     PENDING.get_or_init(|| Mutex::new(HashMap::new()))

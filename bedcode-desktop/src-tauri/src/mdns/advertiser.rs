@@ -2,9 +2,9 @@
 //!
 //! 广播本设备的 _bedcode._tcp.local. 服务，供移动端发现
 
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 use super::types::{AdvertiseConfig, SERVICE_TYPE};
 
@@ -43,10 +43,7 @@ impl MdnsAdvertiser {
         let instance_name = &config.service_name;
 
         // TXT 记录的 key 在 mdns-sd 中自动转小写
-        let properties: Vec<(String, String)> = config
-            .txt_records
-            .into_iter()
-            .collect();
+        let properties: Vec<(String, String)> = config.txt_records.into_iter().collect();
 
         let service_info = ServiceInfo::new(
             service_type,

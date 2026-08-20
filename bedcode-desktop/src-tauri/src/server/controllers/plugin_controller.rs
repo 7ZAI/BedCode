@@ -6,8 +6,8 @@
 use actix_web::{web, HttpRequest, HttpResponse};
 use std::collections::HashMap;
 
-use crate::system::app_context::AppContext;
 use crate::server::dtos::{ApiResponse, CODE_INVALID_REQUEST, CODE_PLUGIN_AUTH_FAILED};
+use crate::system::app_context::AppContext;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
 
@@ -59,20 +59,20 @@ pub async fn plugin_http_endpoint(
     match result {
         Ok(response) => {
             // 插件返回格式：{ status: number, body: any }
-            let status = response.get("status")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(200) as u16;
-            let response_body = response.get("body")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let status = response.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
+            let response_body = response.get("body").cloned().unwrap_or(serde_json::Value::Null);
 
-            HttpResponse::build(actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK))
-                .json(response_body)
+            HttpResponse::build(
+                actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK),
+            )
+            .json(response_body)
         }
         Err(e) => {
             tracing::error!(
                 "Plugin HTTP endpoint error: plugin_id={}, path={}, error={}",
-                plugin_id, endpoint_path, e
+                plugin_id,
+                endpoint_path,
+                e
             );
             HttpResponse::Ok().json(ApiResponse::<()>::error(
                 CODE_INVALID_REQUEST,

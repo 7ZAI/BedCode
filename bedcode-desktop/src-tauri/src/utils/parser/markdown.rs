@@ -39,15 +39,15 @@ impl MarkdownParser {
     /// Detect if output contains Markdown
     pub fn detect_markdown(text: &str) -> bool {
         let indicators = [
-            "```",  // Code block
-            "#",    // Heading (will match #, ##, ###, etc.)
-            "**",   // Bold
-            "__",   // Bold
-            "- ",   // List
-            "* ",   // List
-            "1. ",  // Numbered list
-            "[",    // Link
-            "> ",   // Blockquote
+            "```", // Code block
+            "#",   // Heading (will match #, ##, ###, etc.)
+            "**",  // Bold
+            "__",  // Bold
+            "- ",  // List
+            "* ",  // List
+            "1. ", // Numbered list
+            "[",   // Link
+            "> ",  // Blockquote
         ];
 
         for indicator in indicators {
@@ -135,7 +135,8 @@ impl MarkdownParser {
             // Check for list
             if let Some(cap) = self.list_regex.captures(line) {
                 self.flush_paragraph(&mut current_paragraph, &mut blocks);
-                let item = cap.get(2)
+                let item = cap
+                    .get(2)
                     .or_else(|| cap.get(5))
                     .map(|m| m.as_str().to_string())
                     .unwrap_or_default();

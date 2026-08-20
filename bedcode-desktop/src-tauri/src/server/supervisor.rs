@@ -6,16 +6,15 @@
 //! 服务器启动时自动启动 mDNS 广播，停止时自动停止
 
 use std::collections::VecDeque;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::system::error::AppError;
-use crate::system::constants::server::{
-    DEFAULT_SERVER_PORT, METRICS_HISTORY_CAPACITY, METRICS_SAMPLING_INTERVAL_SECS,
-    SERVER_RESTART_DELAY_MS,
-};
 use crate::system::constants::mdns;
+use crate::system::constants::server::{
+    DEFAULT_SERVER_PORT, METRICS_HISTORY_CAPACITY, METRICS_SAMPLING_INTERVAL_SECS, SERVER_RESTART_DELAY_MS,
+};
+use crate::system::error::AppError;
 use crate::Result;
 
 use super::metrics::{MetricsCollector, ServerMetrics};
@@ -88,19 +87,18 @@ pub struct ServerSupervisor {
 impl ServerSupervisor {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<ServerSupervisor> =
-            std::sync::LazyLock::new(|| ServerSupervisor {
-                inner: Arc::new(RwLock::new(SupervisorInner {
-                    status: ServerStatus::Stopped,
-                    metrics: ServerMetrics::default(),
-                    metrics_history: VecDeque::with_capacity(METRICS_HISTORY_CAPACITY),
-                    port: DEFAULT_SERVER_PORT,
-                    auto_start: true,
-                    start_time: None,
-                    sys: Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
-                    metrics_task_cancel: Arc::new(AtomicBool::new(false)),
-                })),
-            });
+        static INSTANCE: std::sync::LazyLock<ServerSupervisor> = std::sync::LazyLock::new(|| ServerSupervisor {
+            inner: Arc::new(RwLock::new(SupervisorInner {
+                status: ServerStatus::Stopped,
+                metrics: ServerMetrics::default(),
+                metrics_history: VecDeque::with_capacity(METRICS_HISTORY_CAPACITY),
+                port: DEFAULT_SERVER_PORT,
+                auto_start: true,
+                start_time: None,
+                sys: Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
+                metrics_task_cancel: Arc::new(AtomicBool::new(false)),
+            })),
+        });
         &INSTANCE
     }
 
@@ -184,9 +182,7 @@ impl ServerSupervisor {
                                 let mut inner = inner_for_monitor.write().await;
                                 // 仅在 Running 状态下处理（避免与正常 stop 冲突）
                                 if inner.status == ServerStatus::Running {
-                                    tracing::error!(
-                                        "Server crashed unexpectedly, updating supervisor state"
-                                    );
+                                    tracing::error!("Server crashed unexpectedly, updating supervisor state");
                                     inner.status = ServerStatus::Stopped;
                                     inner.start_time = None;
                                     inner.metrics_task_cancel.store(true, Ordering::Relaxed);
@@ -345,10 +341,7 @@ fn collect_process_metrics(sys: &mut sysinfo::System) -> (f64, u64) {
 ///
 /// 首次循环做预热刷新（sysinfo 需要两次 refresh 才能获得准确 CPU 值），
 /// 第二次循环开始才有有效数据
-async fn metrics_sampling_task(
-    inner: Arc<RwLock<SupervisorInner>>,
-    cancel: Arc<AtomicBool>,
-) {
+async fn metrics_sampling_task(inner: Arc<RwLock<SupervisorInner>>, cancel: Arc<AtomicBool>) {
     // 预热：首次 refresh 建立基线
     {
         let inner_guard = inner.read().await;

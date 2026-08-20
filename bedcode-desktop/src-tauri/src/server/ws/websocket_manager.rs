@@ -9,8 +9,8 @@
 use crate::server::message::Message as BusinessMessage;
 use crate::server::ws::registry::WsSessionRegistry;
 use crate::session::GlobalOutputManager;
-use crate::system::error::AppError;
 use crate::system::constants::server::WS_EVENT_BROADCAST_CAPACITY;
+use crate::system::error::AppError;
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -58,10 +58,9 @@ pub struct WebSocketManager {
 
 impl WebSocketManager {
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<WebSocketManager> =
-            std::sync::LazyLock::new(|| WebSocketManager {
-                inner: Arc::new(WsManagerInner::new()),
-            });
+        static INSTANCE: std::sync::LazyLock<WebSocketManager> = std::sync::LazyLock::new(|| WebSocketManager {
+            inner: Arc::new(WsManagerInner::new()),
+        });
         &INSTANCE
     }
 
@@ -132,7 +131,8 @@ impl WebSocketManager {
         });
 
         // 等待 Actix 服务器启动并获取 handle
-        let handle = handle_rx.await
+        let handle = handle_rx
+            .await
             .map_err(|_| AppError::WebSocket("Actix server task panicked before returning handle".to_string()))?
             .map_err(|e| AppError::WebSocket(format!("Failed to start Actix server: {}", e)))?;
 
@@ -192,7 +192,10 @@ impl WebSocketManager {
         let registry = WsSessionRegistry::global();
         let clients = registry.list_clients().await;
         if !clients.is_empty() {
-            tracing::warn!("[WebSocketManager] {} orphaned clients found after server stop, cleaning up", clients.len());
+            tracing::warn!(
+                "[WebSocketManager] {} orphaned clients found after server stop, cleaning up",
+                clients.len()
+            );
             for client in &clients {
                 let global_manager = GlobalOutputManager::global();
                 global_manager.unsubscribe_all_for_client(&client.client_id).await;
@@ -227,19 +230,26 @@ impl WebSocketManager {
     pub async fn list_clients(&self) -> Vec<ClientSummary> {
         let registry = WsSessionRegistry::global();
         let summaries = registry.list_clients().await;
-        summaries.into_iter().map(|s| ClientSummary {
-            client_id: s.client_id,
-            device_name: s.device_name,
-            fingerprint: s.fingerprint,
-            addr: s.addr,
-            authenticated: s.authenticated,
-            connected_at: s.connected_at,
-        }).collect()
+        summaries
+            .into_iter()
+            .map(|s| ClientSummary {
+                client_id: s.client_id,
+                device_name: s.device_name,
+                fingerprint: s.fingerprint,
+                addr: s.addr,
+                authenticated: s.authenticated,
+                connected_at: s.connected_at,
+            })
+            .collect()
     }
 
     /// 获取已认证客户端列表
     pub async fn list_authenticated_clients(&self) -> Vec<ClientSummary> {
-        self.list_clients().await.into_iter().filter(|c| c.authenticated).collect()
+        self.list_clients()
+            .await
+            .into_iter()
+            .filter(|c| c.authenticated)
+            .collect()
     }
 
     /// 获取指定客户端信息（通过 client_id）
@@ -315,11 +325,7 @@ impl WebSocketManager {
     }
 
     /// 向除指定客户端外的所有客户端广播
-    pub async fn broadcast_to_others(
-        &self,
-        exclude_client_id: &str,
-        message: &BusinessMessage,
-    ) -> Result<()> {
+    pub async fn broadcast_to_others(&self, exclude_client_id: &str, message: &BusinessMessage) -> Result<()> {
         let json = message.to_json()?;
         let registry = WsSessionRegistry::global();
         let device_name = registry.get_device_name(exclude_client_id).await;
@@ -340,13 +346,11 @@ impl WebSocketManager {
     }
 
     /// 向除指定设备外的所有已认证客户端广播（基于设备名称）
-    pub async fn broadcast_sync_to_others(
-        &self,
-        exclude_device_name: &str,
-        message: &BusinessMessage,
-    ) -> Result<()> {
+    pub async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &BusinessMessage) -> Result<()> {
         let json = message.to_json()?;
-        WsSessionRegistry::global().broadcast(json, Some(exclude_device_name)).await;
+        WsSessionRegistry::global()
+            .broadcast(json, Some(exclude_device_name))
+            .await;
         Ok(())
     }
 
@@ -397,7 +401,10 @@ impl WebSocketManager {
         if let Some(client_id) = registry.unregister_by_addr(&addr).await {
             let global_manager = GlobalOutputManager::global();
             global_manager.unsubscribe_all_for_client(&client_id).await;
-            tracing::info!("[WebSocketManager] Cleaned up all subscriptions for client {}", client_id);
+            tracing::info!(
+                "[WebSocketManager] Cleaned up all subscriptions for client {}",
+                client_id
+            );
         }
     }
 }

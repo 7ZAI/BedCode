@@ -52,8 +52,8 @@ const V2_FRAME_MAX_EVENTS: usize = 128;
 /// `len` = data 字节数（与 WS 帧边界一致，供解析器快速定位 data 长度）
 fn encode_output_frame_v2(seq: u64, event_count: usize, is_waiting: bool, data: &[u8]) -> Vec<u8> {
     debug_assert!((1..=V2_FRAME_MAX_EVENTS).contains(&event_count));
-    let flags = ((event_count - 1) as u8) << V2_FRAME_FLAG_COUNT_SHIFT
-        | if is_waiting { V2_FRAME_FLAG_WAITING } else { 0 };
+    let flags =
+        ((event_count - 1) as u8) << V2_FRAME_FLAG_COUNT_SHIFT | if is_waiting { V2_FRAME_FLAG_WAITING } else { 0 };
     let mut frame = Vec::with_capacity(V2_FRAME_HEADER_LEN + data.len());
     frame.extend_from_slice(&V2_FRAME_MAGIC);
     frame.push(V2_FRAME_VERSION);
@@ -109,12 +109,7 @@ impl OutputBuffer {
     ///
     /// 二进制形态（RemoteV2）：帧头 seq = 首事件 index + flags 编码事件数（spec §5.3）
     fn flush(&mut self) -> ForwardOutput {
-        let frame = encode_output_frame_v2(
-            self.start_index,
-            self.event_count,
-            self.last_is_waiting,
-            &self.data,
-        );
+        let frame = encode_output_frame_v2(self.start_index, self.event_count, self.last_is_waiting, &self.data);
         self.clear();
         ForwardOutput::Binary(frame)
     }
@@ -166,7 +161,11 @@ pub(super) async fn forward_loop(
                         break;
                     }
                 }
-                OutputFrame::HistoryEnd { snapshot_seq, min_seq, history_count } => {
+                OutputFrame::HistoryEnd {
+                    snapshot_seq,
+                    min_seq,
+                    history_count,
+                } => {
                     // 历史边界：先 flush 残留缓冲（保证历史字节完整落盘），
                     // 再透传标记——标记必须严格保持在历史帧之后（快照协议顺序）
                     if !buffer.is_empty() && out_tx.send(buffer.flush()).await.is_err() {
@@ -211,7 +210,11 @@ pub(super) async fn forward_loop(
                             last_flush = tokio::time::Instant::now();
                         }
                     }
-                    OutputFrame::HistoryEnd { snapshot_seq, min_seq, history_count } => {
+                    OutputFrame::HistoryEnd {
+                        snapshot_seq,
+                        min_seq,
+                        history_count,
+                    } => {
                         // 历史结束标记：先 flush 残留缓冲，再透传标记（顺序严格）
                         if !buffer.is_empty() {
                             if out_tx.send(buffer.flush()).await.is_err() {
@@ -397,7 +400,9 @@ mod tests {
         let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8);
 
         let start = tokio::time::Instant::now();
-        tx.send(OutputFrame::Output(event("s", b"0123456789", 0))).await.unwrap(); // 10 字节 > 8
+        tx.send(OutputFrame::Output(event("s", b"0123456789", 0)))
+            .await
+            .unwrap(); // 10 字节 > 8
         drop(tx);
 
         let out = tokio::time::timeout(Duration::from_millis(50), out_rx.recv())
@@ -506,8 +511,7 @@ mod tests {
     /// 违反风暴的根源）
     #[tokio::test]
     async fn test_forward_loop_generation_gate_drops_stale_frames() {
-        let (tx, mut out_rx, fwd, generation) =
-            spawn_forward(Duration::from_millis(20), 64 * 1024);
+        let (tx, mut out_rx, fwd, generation) = spawn_forward(Duration::from_millis(20), 64 * 1024);
 
         // 订阅被替换：代数递增，旧 forward_loop 立即失效
         generation.fetch_add(1, Ordering::SeqCst);
@@ -545,8 +549,7 @@ mod tests {
     /// HistoryEnd 到达时先 flush 残留缓冲，标记严格保持在历史帧之后（快照协议顺序）
     #[tokio::test]
     async fn test_forward_loop_history_end_flushes_and_orders() {
-        let (tx, mut out_rx, fwd, _gen) =
-            spawn_forward(Duration::from_millis(60_000), 64 * 1024);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024);
 
         // 两条历史事件未达时间窗/字节窗，残留于缓冲
         tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
@@ -667,8 +670,7 @@ mod tests {
     /// 事件数上限：合并批次达到 128 条立即 flush（即使未达字节/时间窗）
     #[tokio::test(start_paused = true)]
     async fn test_forward_loop_v2_event_count_cap_flushes() {
-        let (tx, mut out_rx, fwd, _gen) =
-            spawn_forward(Duration::from_millis(60_000), 64 * 1024);
+        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024);
 
         // 连续发送 128 条小事件（时间窗 60s 未到、字节窗 64KB 未到）
         for i in 0..128u64 {

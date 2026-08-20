@@ -127,10 +127,7 @@ fn error_response(status: actix_web::http::StatusCode, code: u16, message: &str)
 }
 
 /// 获取挂载条目（不存在 → 404）
-async fn get_mount(
-    plugin_id: &str,
-    mount: &str,
-) -> Result<MountEntry, HttpResponse> {
+async fn get_mount(plugin_id: &str, mount: &str) -> Result<MountEntry, HttpResponse> {
     let Some(registry) = registry() else {
         return Err(error_response(
             actix_web::http::StatusCode::SERVICE_UNAVAILABLE,
@@ -138,13 +135,10 @@ async fn get_mount(
             "file service not initialized",
         ));
     };
-    registry.get_entry(plugin_id, mount).await.map_err(|e| {
-        error_response(
-            actix_web::http::StatusCode::NOT_FOUND,
-            404,
-            &e.to_string(),
-        )
-    })
+    registry
+        .get_entry(plugin_id, mount)
+        .await
+        .map_err(|e| error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()))
 }
 
 /// 校验挂载声明了指定操作（未声明 → 403）
@@ -155,10 +149,7 @@ fn require_op(entry: &MountEntry, op: FileOperation) -> Result<(), HttpResponse>
         Err(error_response(
             actix_web::http::StatusCode::FORBIDDEN,
             403,
-            &format!(
-                "operation '{:?}' not allowed for mount '{}'",
-                op, entry.mount_path
-            ),
+            &format!("operation '{:?}' not allowed for mount '{}'", op, entry.mount_path),
         ))
     }
 }
@@ -192,13 +183,8 @@ fn read_dir_entries(dir: &Path) -> crate::Result<Vec<FileEntryDto>> {
 
     let mut entries = Vec::new();
     for entry in read_dir {
-        let entry = entry.map_err(|e| {
-            crate::AppError::Internal(format!(
-                "failed to read entry in '{}': {}",
-                dir.display(),
-                e
-            ))
-        })?;
+        let entry = entry
+            .map_err(|e| crate::AppError::Internal(format!("failed to read entry in '{}': {}", dir.display(), e)))?;
         let name = entry.file_name().to_string_lossy().to_string();
         // 过滤上传临时文件（*.part），不向对端暴露
         if crate::plugin::file_service::upload::is_filtered_listing_name(&name) {
@@ -229,10 +215,7 @@ fn read_dir_entries(dir: &Path) -> crate::Result<Vec<FileEntryDto>> {
 ///
 /// path 为空时列举挂载根（多 root 时每个 root 作为顶层条目，
 /// 名称取 root 最后一段；失效的 root 跳过并告警）
-pub async fn list_dir(
-    params: web::Path<(String, String)>,
-    query: web::Query<PathOnlyQuery>,
-) -> HttpResponse {
+pub async fn list_dir(params: web::Path<(String, String)>, query: web::Query<PathOnlyQuery>) -> HttpResponse {
     let (plugin_id, mount) = params.into_inner();
 
     let entry = match get_mount(&plugin_id, &mount).await {
@@ -292,20 +275,11 @@ pub async fn list_dir(
 
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
         Ok(p) => p,
-        Err(e) => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                &e.to_string(),
-            )
-        }
+        Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
     };
 
     match tokio::task::spawn_blocking(move || read_dir_entries(&target)).await {
-        Ok(Ok(entries)) => HttpResponse::Ok().json(ApiResponse::ok_with_data(ListResponse {
-            path: rel,
-            entries,
-        })),
+        Ok(Ok(entries)) => HttpResponse::Ok().json(ApiResponse::ok_with_data(ListResponse { path: rel, entries })),
         Ok(Err(e)) => {
             let code = if matches!(e, crate::AppError::NotFound(_)) {
                 404
@@ -313,7 +287,8 @@ pub async fn list_dir(
                 500
             };
             error_response(
-                actix_web::http::StatusCode::from_u16(code).unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
+                actix_web::http::StatusCode::from_u16(code)
+                    .unwrap_or(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR),
                 code,
                 &e.to_string(),
             )
@@ -356,20 +331,10 @@ pub async fn download_file(
 
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
         Ok(p) => p,
-        Err(e) => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                &e.to_string(),
-            )
-        }
+        Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
     };
     if !target.is_file() {
-        return error_response(
-            actix_web::http::StatusCode::NOT_FOUND,
-            404,
-            "not a file",
-        );
+        return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, "not a file");
     }
 
     match actix_files::NamedFile::open(&target) {
@@ -383,10 +348,7 @@ pub async fn download_file(
 }
 
 /// HEAD {mount}/file?path= — 返回 size+mtime 指纹（续传有效性比对，规格 7.4）
-pub async fn head_file(
-    params: web::Path<(String, String)>,
-    query: web::Query<PathOnlyQuery>,
-) -> HttpResponse {
+pub async fn head_file(params: web::Path<(String, String)>, query: web::Query<PathOnlyQuery>) -> HttpResponse {
     let (plugin_id, mount) = params.into_inner();
 
     let entry = match get_mount(&plugin_id, &mount).await {
@@ -408,24 +370,12 @@ pub async fn head_file(
 
     let target = match registry.resolve_sandboxed(&plugin_id, &mount, &rel).await {
         Ok(p) => p,
-        Err(e) => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                &e.to_string(),
-            )
-        }
+        Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
     };
 
     let meta = match std::fs::metadata(&target) {
         Ok(m) if m.is_file() => m,
-        _ => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                "not a file",
-            )
-        }
+        _ => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, "not a file"),
     };
 
     HttpResponse::Ok()
@@ -439,10 +389,7 @@ pub async fn head_file(
 ///
 /// 流程（规格 4.2/4.4）：沙箱解析目标 → 策略钩子（2s fail-closed，
 /// 拒绝发生在写任何字节前）→ 创建 session 返回 {sessionId, received:0}
-pub async fn create_upload(
-    params: web::Path<(String, String)>,
-    body: web::Json<CreateUploadRequest>,
-) -> HttpResponse {
+pub async fn create_upload(params: web::Path<(String, String)>, body: web::Json<CreateUploadRequest>) -> HttpResponse {
     let (plugin_id, mount) = params.into_inner();
 
     let entry = match get_mount(&plugin_id, &mount).await {
@@ -479,11 +426,7 @@ pub async fn create_upload(
                 return error_response(
                     actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
                     500,
-                    &format!(
-                        "downloads_dir '{}' not accessible: {}",
-                        downloads_dir.display(),
-                        e
-                    ),
+                    &format!("downloads_dir '{}' not accessible: {}", downloads_dir.display(), e),
                 )
             }
         };
@@ -496,24 +439,12 @@ pub async fn create_upload(
         }
         match sandbox::resolve_upload_target_within_roots(&[canonical_dir], &rel) {
             Ok(p) => p,
-            Err(e) => {
-                return error_response(
-                    actix_web::http::StatusCode::BAD_REQUEST,
-                    400,
-                    &e.to_string(),
-                )
-            }
+            Err(e) => return error_response(actix_web::http::StatusCode::BAD_REQUEST, 400, &e.to_string()),
         }
     } else {
         match sandbox::resolve_upload_target_within_roots(&entry.roots, &rel) {
             Ok(p) => p,
-            Err(e) => {
-                return error_response(
-                    actix_web::http::StatusCode::BAD_REQUEST,
-                    400,
-                    &e.to_string(),
-                )
-            }
+            Err(e) => return error_response(actix_web::http::StatusCode::BAD_REQUEST, 400, &e.to_string()),
         }
     };
 
@@ -545,15 +476,9 @@ pub async fn create_upload(
         if !decision.allow {
             // v2：ask 模式下无批上下文的上传一律拒绝（防绕过 /upload）
             if decision.ask {
-                return error_response(
-                    actix_web::http::StatusCode::FORBIDDEN,
-                    403,
-                    "batch-context-required",
-                );
+                return error_response(actix_web::http::StatusCode::FORBIDDEN, 403, "batch-context-required");
             }
-            let reason = decision
-                .reason
-                .unwrap_or_else(|| "rejected by upload hook".to_string());
+            let reason = decision.reason.unwrap_or_else(|| "rejected by upload hook".to_string());
             tracing::info!(
                 plugin_id = %plugin_id,
                 mount = %mount,
@@ -594,11 +519,7 @@ pub async fn create_upload(
                 received: 0,
             }))
         }
-        Err(e) => error_response(
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-            500,
-            &e.to_string(),
-        ),
+        Err(e) => error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, &e.to_string()),
     }
 }
 
@@ -636,10 +557,7 @@ pub async fn transfer_request(
         files: body.files.clone(),
         total_size: body.total_size,
     };
-    match registry
-        .create_transfer_request(&plugin_id, &mount, &dto)
-        .await
-    {
+    match registry.create_transfer_request(&plugin_id, &mount, &dto).await {
         Ok(crate::plugin::file_service::transfer::BatchDecision::Approved) => {
             HttpResponse::Ok().json(ApiResponse::ok_with_data(TransferRequestResponse {
                 batch_id: dto.batch_id,
@@ -673,10 +591,7 @@ pub async fn transfer_request(
 ///
 /// 不走 Json extractor（无大小上限）；按 512KB 缓冲累积后写入，
 /// offset 与服务端已收不一致时返回 409（客户端应先 GET 查询续传点）
-pub async fn append_upload(
-    params: web::Path<(String, String, String)>,
-    mut payload: web::Payload,
-) -> HttpResponse {
+pub async fn append_upload(params: web::Path<(String, String, String)>, mut payload: web::Payload) -> HttpResponse {
     let (plugin_id, mount, sid) = params.into_inner();
 
     let Some(registry) = registry() else {
@@ -691,25 +606,13 @@ pub async fn append_upload(
     // 归属校验 + 初始偏移（续传握手依赖此值）
     let mut offset = match sessions.get(&sid, &plugin_id, &mount).await {
         Some(session) => session.received,
-        None => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                "upload session not found",
-            )
-        }
+        None => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, "upload session not found"),
     };
 
     // 加密缝：网络字节经挂载点 cipher 解密后落盘（MVP 直通）
     let entry = match registry.get_entry(&plugin_id, &mount).await {
         Ok(e) => e,
-        Err(e) => {
-            return error_response(
-                actix_web::http::StatusCode::NOT_FOUND,
-                404,
-                &e.to_string(),
-            )
-        }
+        Err(e) => return error_response(actix_web::http::StatusCode::NOT_FOUND, 404, &e.to_string()),
     };
 
     let mut buffer: Vec<u8> = Vec::with_capacity(APPEND_FLUSH_THRESHOLD);
@@ -745,18 +648,17 @@ pub async fn append_upload(
         Err(UploadSessionError::OffsetMismatch { expected, got }) => error_response(
             actix_web::http::StatusCode::CONFLICT,
             409,
-            &format!("offset mismatch: server has {} bytes, client sent offset {}", expected, got),
+            &format!(
+                "offset mismatch: server has {} bytes, client sent offset {}",
+                expected, got
+            ),
         ),
         Err(UploadSessionError::NotFound(id)) => error_response(
             actix_web::http::StatusCode::NOT_FOUND,
             404,
             &format!("upload session not found: {}", id),
         ),
-        Err(e) => error_response(
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-            500,
-            &e.to_string(),
-        ),
+        Err(e) => error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, &e.to_string()),
     }
 }
 
@@ -776,11 +678,7 @@ pub async fn query_upload(params: web::Path<(String, String, String)>) -> HttpRe
             session_id: session.id,
             received: session.received,
         })),
-        None => error_response(
-            actix_web::http::StatusCode::NOT_FOUND,
-            404,
-            "upload session not found",
-        ),
+        None => error_response(actix_web::http::StatusCode::NOT_FOUND, 404, "upload session not found"),
     }
 }
 
@@ -797,11 +695,7 @@ pub async fn complete_upload(params: web::Path<(String, String, String)>) -> Htt
         );
     };
 
-    match registry
-        .upload_sessions()
-        .complete(&sid, &plugin_id, &mount)
-        .await
-    {
+    match registry.upload_sessions().complete(&sid, &plugin_id, &mount).await {
         Ok(target) => {
             tracing::info!(
                 plugin_id = %plugin_id,
@@ -842,11 +736,7 @@ pub async fn complete_upload(params: web::Path<(String, String, String)>) -> Htt
             404,
             &format!("upload session not found: {}", id),
         ),
-        Err(e) => error_response(
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-            500,
-            &e.to_string(),
-        ),
+        Err(e) => error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, &e.to_string()),
     }
 }
 
@@ -861,11 +751,7 @@ pub async fn cancel_upload(params: web::Path<(String, String, String)>) -> HttpR
         );
     };
 
-    match registry
-        .upload_sessions()
-        .cancel(&sid, &plugin_id, &mount)
-        .await
-    {
+    match registry.upload_sessions().cancel(&sid, &plugin_id, &mount).await {
         Ok(()) => {
             // v2：接收端任务终态（取消：用户 / 发送方 DELETE 均走此端点）
             registry
@@ -885,10 +771,6 @@ pub async fn cancel_upload(params: web::Path<(String, String, String)>) -> HttpR
             404,
             &format!("upload session not found: {}", id),
         ),
-        Err(e) => error_response(
-            actix_web::http::StatusCode::INTERNAL_SERVER_ERROR,
-            500,
-            &e.to_string(),
-        ),
+        Err(e) => error_response(actix_web::http::StatusCode::INTERNAL_SERVER_ERROR, 500, &e.to_string()),
     }
 }

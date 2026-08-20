@@ -9,8 +9,8 @@ pub(crate) fn bus_publish(
     topic: &str,
     payload_json: &str,
 ) -> Result<(), String> {
-    let payload: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
 
     // 互调门禁（ADR-0017 层 1）：`bedcode.api.<api>` 请求 topic 的目标 api
     // 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
@@ -41,11 +41,7 @@ pub(crate) fn bus_publish(
 /// 异步投递订阅请求，避免在 wasm 调用栈内同步等待 subscribers 写锁：
 /// bus 派发路径持 subscribers 读锁执行插件回调（on_message / on_session_lifecycle 等），
 /// 若插件在这些回调中订阅/退订，同步等待写锁会与派发任务形成同任务重入死锁。
-pub(crate) fn bus_subscribe(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
+pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
     let bus = host_ctx.message_bus.clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe: no runtime context, subscription dropped");
@@ -60,11 +56,7 @@ pub(crate) fn bus_subscribe(
 }
 
 /// 取消订阅（与 subscribe 同因异步投递）
-pub(crate) fn bus_unsubscribe(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    topic: &str,
-) -> Result<(), String> {
+pub(crate) fn bus_unsubscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
     let bus = host_ctx.message_bus.clone();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_unsubscribe: no runtime context, unsubscribe dropped");
@@ -124,9 +116,7 @@ mod tests {
     #[tokio::test]
     async fn bus_publish_delivers_to_subscriber() {
         let ctx = build_host_ctx();
-        ctx.message_bus
-            .set_dispatcher(Arc::new(NoopDispatcher))
-            .await;
+        ctx.message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         ctx.message_bus
             .subscribe_static("plugin-b", "greeting", Box::new(ChannelHandler(tx)))
@@ -161,13 +151,7 @@ mod tests {
     #[test]
     fn gate_rejects_undeclared_api() {
         let ctx = build_host_ctx();
-        let err = bus_publish(
-            &ctx,
-            "plugin-a",
-            "bedcode.api.com.bedcode.scheduler.remove",
-            "{}",
-        )
-        .unwrap_err();
+        let err = bus_publish(&ctx, "plugin-a", "bedcode.api.com.bedcode.scheduler.remove", "{}").unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
         assert!(err.contains("com.bedcode.scheduler.remove"), "got: {}", err);
     }
@@ -179,13 +163,7 @@ mod tests {
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.add".to_string()]);
         ctx.api_registry().unregister("com.bedcode.scheduler");
-        let err = bus_publish(
-            &ctx,
-            "plugin-a",
-            "bedcode.api.com.bedcode.scheduler.add",
-            "{}",
-        )
-        .unwrap_err();
+        let err = bus_publish(&ctx, "plugin-a", "bedcode.api.com.bedcode.scheduler.add", "{}").unwrap_err();
         assert!(err.contains("not declared"), "got: {}", err);
     }
 
@@ -206,8 +184,7 @@ mod tests {
     #[test]
     fn gate_ignores_regular_topics() {
         let ctx = build_host_ctx();
-        bus_publish(&ctx, "plugin-a", "filesrv:peer_changed", "{}")
-            .expect("regular topics must bypass gate");
+        bus_publish(&ctx, "plugin-a", "filesrv:peer_changed", "{}").expect("regular topics must bypass gate");
     }
 
     /// 门禁只校验目标（层 1）：任意已激活插件声明的 api 均可调，不校验调用方身份
@@ -216,22 +193,15 @@ mod tests {
         let ctx = build_host_ctx();
         ctx.api_registry()
             .register("com.bedcode.scheduler", &["com.bedcode.scheduler.list".to_string()]);
-        bus_publish(
-            &ctx,
-            "any-plugin",
-            "bedcode.api.com.bedcode.scheduler.list",
-            "{}",
-        )
-        .expect("layer 1 gate checks target declaration only");
+        bus_publish(&ctx, "any-plugin", "bedcode.api.com.bedcode.scheduler.list", "{}")
+            .expect("layer 1 gate checks target declaration only");
     }
 
     /// 总线语义：不投递给发送者自己（同一插件发布+订阅同一 topic）
     #[tokio::test]
     async fn bus_publish_skips_sender() {
         let ctx = build_host_ctx();
-        ctx.message_bus
-            .set_dispatcher(Arc::new(NoopDispatcher))
-            .await;
+        ctx.message_bus.set_dispatcher(Arc::new(NoopDispatcher)).await;
         let (tx, mut rx) = mpsc::unbounded_channel();
         ctx.message_bus
             .subscribe_static("plugin-a", "echo", Box::new(ChannelHandler(tx)))

@@ -2,18 +2,15 @@
 //!
 //! Tauri commands for server lifecycle management and metrics query
 
-use crate::server::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::server::metrics::ServerMetrics;
+use crate::server::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::Result;
 use tauri::Manager;
 
 /// 启动服务器
 #[tauri::command]
-pub async fn server_start(
-    app_handle: tauri::AppHandle,
-    port: u16,
-) -> Result<()> {
+pub async fn server_start(app_handle: tauri::AppHandle, port: u16) -> Result<()> {
     let supervisor = ServerSupervisor::global();
     supervisor.start(port).await?;
 
@@ -87,10 +84,7 @@ pub async fn get_server_metrics() -> Result<ServerMetrics> {
 
 /// 更新服务器端口配置
 #[tauri::command]
-pub async fn update_server_port(
-    app_handle: tauri::AppHandle,
-    port: u16,
-) -> Result<()> {
+pub async fn update_server_port(app_handle: tauri::AppHandle, port: u16) -> Result<()> {
     // 保存到配置文件
     let config_path = app_handle
         .path()
@@ -112,10 +106,7 @@ pub async fn update_server_port(
 
 /// 更新自启动配置
 #[tauri::command]
-pub async fn update_server_auto_start(
-    app_handle: tauri::AppHandle,
-    auto_start: bool,
-) -> Result<()> {
+pub async fn update_server_auto_start(app_handle: tauri::AppHandle, auto_start: bool) -> Result<()> {
     let config_path = app_handle
         .path()
         .app_data_dir()
@@ -137,10 +128,7 @@ pub async fn update_server_auto_start(
 ///
 /// 仅更新配置文件，需重启服务器生效
 #[tauri::command]
-pub async fn update_server_network_config(
-    app_handle: tauri::AppHandle,
-    network_config: NetworkConfig,
-) -> Result<()> {
+pub async fn update_server_network_config(app_handle: tauri::AppHandle, network_config: NetworkConfig) -> Result<()> {
     let config_path = app_handle
         .path()
         .app_data_dir()
@@ -166,9 +154,7 @@ pub async fn update_server_network_config(
 ///
 /// 仅更新配置文件，需重启服务器生效
 #[tauri::command]
-pub async fn reset_server_network_config(
-    app_handle: tauri::AppHandle,
-) -> Result<NetworkConfig> {
+pub async fn reset_server_network_config(app_handle: tauri::AppHandle) -> Result<NetworkConfig> {
     let config_path = app_handle
         .path()
         .app_data_dir()

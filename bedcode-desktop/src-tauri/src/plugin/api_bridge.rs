@@ -13,9 +13,7 @@ use tauri::State;
 
 /// 获取所有已加载插件列表
 #[tauri::command]
-pub async fn plugin_list_loaded(
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Vec<DesktopPluginInfo>> {
+pub async fn plugin_list_loaded(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<Vec<DesktopPluginInfo>> {
     tracing::debug!("[API] plugin_list_loaded called");
     let result = plugin_host.list_plugins().await;
     tracing::debug!("[API] plugin_list_loaded returning {} plugin(s)", result.len());
@@ -34,10 +32,7 @@ pub async fn plugin_get_info(
 
 /// 激活插件（用户操作，持久化状态）
 #[tauri::command]
-pub async fn plugin_activate(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_activate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!("[API] plugin_activate({})", plugin_id);
     let result = plugin_host.activate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
@@ -48,10 +43,7 @@ pub async fn plugin_activate(
 
 /// 停用插件（用户操作，持久化状态）
 #[tauri::command]
-pub async fn plugin_deactivate(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!("[API] plugin_deactivate({})", plugin_id);
     let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
@@ -92,12 +84,14 @@ pub async fn plugin_storage_get(
 ) -> crate::Result<Option<serde_json::Value>> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().get(&plugin_id, &key).await
@@ -113,12 +107,14 @@ pub async fn plugin_storage_set(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().set(&plugin_id, &key, value).await
@@ -133,12 +129,14 @@ pub async fn plugin_storage_delete(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().delete(&plugin_id, &key).await
@@ -156,12 +154,14 @@ pub async fn plugin_terminal_send_input(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "terminal:input") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no terminal:input permission", plugin_id
+            "Plugin {} has no terminal:input permission",
+            plugin_id
         )));
     }
     let ctx = crate::system::app_context::AppContext::global();
@@ -227,10 +227,7 @@ pub async fn plugin_list_rust_commands(
 /// 执行完整的卸载-重载-激活循环，用于开发期间快速迭代。
 /// 生产构建中调用此命令返回错误
 #[tauri::command]
-pub async fn plugin_dev_reload(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     {
         plugin_host.reload_wasm_plugin(&plugin_id).await
@@ -238,7 +235,9 @@ pub async fn plugin_dev_reload(
     #[cfg(not(debug_assertions))]
     {
         let _ = (plugin_host, plugin_id);
-        Err(crate::AppError::Plugin("Hot reload only available in dev mode".to_string()))
+        Err(crate::AppError::Plugin(
+            "Hot reload only available in dev mode".to_string(),
+        ))
     }
 }
 
@@ -254,7 +253,9 @@ pub async fn plugin_fs_auth_respond(
 ) -> crate::Result<()> {
     tracing::info!(
         "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
-        request_id, allowed, remember
+        request_id,
+        allowed,
+        remember
     );
     fs_auth.respond(&request_id, allowed, remember).await;
     Ok(())

@@ -10,11 +10,10 @@ use tokio::sync::Mutex;
 
 use bedcode_plugin_api::PluginCommandEntry;
 
-use super::{LoadedWasmPlugin, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS, PluginHost};
+use super::{LoadedWasmPlugin, PluginHost, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS};
 use crate::plugin::types::PluginSource;
 
 impl PluginHost {
-
     // ==================== Rust Command Dispatch ====================
 
     /// 执行 Rust 插件的 command handler
@@ -30,38 +29,32 @@ impl PluginHost {
     ) -> crate::Result<serde_json::Value> {
         if !self.is_activated(plugin_id).await {
             return Err(crate::AppError::Plugin(format!(
-                "Plugin {} is not activated", plugin_id
+                "Plugin {} is not activated",
+                plugin_id
             )));
         }
 
         let source = {
             let plugins = self.plugins.read().await;
-            plugins.get(plugin_id)
+            plugins
+                .get(plugin_id)
                 .map(|p| p.source.clone())
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?
         };
 
         match source {
-            PluginSource::Wasm => {
-                self.invoke_wasm_command(plugin_id, command_name, args).await
-            }
-            PluginSource::StaticRegistry => {
-                self.invoke_static_command(plugin_id, command_name, args).await
-            }
-            PluginSource::FileScan => {
-                Err(crate::AppError::Plugin(format!(
-                    "Plugin {} is TS-only, cannot invoke Rust command", plugin_id
-                )))
-            }
+            PluginSource::Wasm => self.invoke_wasm_command(plugin_id, command_name, args).await,
+            PluginSource::StaticRegistry => self.invoke_static_command(plugin_id, command_name, args).await,
+            PluginSource::FileScan => Err(crate::AppError::Plugin(format!(
+                "Plugin {} is TS-only, cannot invoke Rust command",
+                plugin_id
+            ))),
         }
     }
 
     /// 获取 WASM 插件实例句柄（map 读锁仅在取 Arc 期间持有，随即释放，
     /// 实例串行化由各插件自己的 Mutex 承担，插件间互不阻塞）
-    pub(super) async fn get_wasm_plugin(
-        &self,
-        plugin_id: &str,
-    ) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
+    pub(super) async fn get_wasm_plugin(&self, plugin_id: &str) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
         let wasm_plugins = self.wasm_plugins.read().await;
         wasm_plugins.get(plugin_id).cloned()
     }
@@ -79,14 +72,9 @@ impl PluginHost {
 
         // 限频：距上次自动重载不足最小间隔则跳过（已在上次恢复或仍属持久性故障）
         {
-            let mut throttle = self
-                .wasm_reload_throttle
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut throttle = self.wasm_reload_throttle.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(last) = throttle.get(&plugin_id) {
-                if last.elapsed()
-                    < std::time::Duration::from_secs(PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS)
-                {
+                if last.elapsed() < std::time::Duration::from_secs(PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS) {
                     tracing::warn!(
                         plugin_id = %plugin_id,
                         "plugin trap recovery throttled (recent reload), keeping error state"
@@ -125,11 +113,8 @@ impl PluginHost {
                     host.notify_plugin_runtime_error(&plugin_id, "recovery_failed", &e.to_string())
                         .await;
                     // 置 Error 态：UI 可见原因，且 is_activated 门禁停止后续分发
-                    host.mark_error(
-                        &plugin_id,
-                        format!("auto reload after trap failed: {}", e),
-                    )
-                    .await;
+                    host.mark_error(&plugin_id, format!("auto reload after trap failed: {}", e))
+                        .await;
                 }
             }
         });
@@ -166,9 +151,7 @@ impl PluginHost {
         // spawn_blocking 任务自身 panic（理论上 guard move 前的一切异常）→
         // 视为 panic 载荷，与 catch_unwind 语义对齐（外层 Result 的 Err 槽位
         // = panic 载荷），调用方统一走重载恢复
-        .unwrap_or_else(|join| {
-            Err(Box::new(join.to_string()) as Box<dyn std::any::Any + Send>)
-        })
+        .unwrap_or_else(|join| Err(Box::new(join.to_string()) as Box<dyn std::any::Any + Send>))
     }
 
     /// 持锁调用 WASM 插件导出并统一处理失败恢复
@@ -240,31 +223,27 @@ impl PluginHost {
                 enriched_args.as_object_mut().map(|obj| {
                     obj.insert(
                         "resource_dir".to_string(),
-                        serde_json::Value::String(crate::plugin::loader::strip_verbatim_prefix(
-                            &loaded.extension_path,
-                        )),
+                        serde_json::Value::String(crate::plugin::loader::strip_verbatim_prefix(&loaded.extension_path)),
                     );
                 });
             }
         }
 
         let args_str = serde_json::to_string(&enriched_args)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "Failed to serialize command args: {}", e
-            )))?;
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to serialize command args: {}", e)))?;
 
         // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
         let command_name = command_name.to_string();
         let result_str = self
-            .with_wasm_plugin_call(plugin_id, move |plugin| {
-                plugin.invoke_command(&command_name, &args_str)
-            })
+            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.invoke_command(&command_name, &args_str))
             .await?;
 
-        let value: serde_json::Value = serde_json::from_str(&result_str)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "WASM plugin {} invoke_command() returned invalid JSON: {}", plugin_id, e
-            )))?;
+        let value: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "WASM plugin {} invoke_command() returned invalid JSON: {}",
+                plugin_id, e
+            ))
+        })?;
 
         Ok(value)
     }
@@ -278,11 +257,12 @@ impl PluginHost {
     ) -> crate::Result<serde_json::Value> {
         let handlers = self.rust_command_handlers.read().await;
         let full_name = format!("{}::{}", plugin_id, command_name);
-        let cmd = handlers.get(&full_name).ok_or_else(|| {
-            crate::AppError::Plugin(format!("Command not found: {}", full_name))
-        })?;
+        let cmd = handlers
+            .get(&full_name)
+            .ok_or_else(|| crate::AppError::Plugin(format!("Command not found: {}", full_name)))?;
 
-        let result = (cmd.handler)(args).await
+        let result = (cmd.handler)(args)
+            .await
             .map_err(|e| crate::AppError::Plugin(format!("Command execution error: {}", e)))?;
 
         Ok(result)
@@ -291,16 +271,19 @@ impl PluginHost {
     /// 获取所有 Rust 插件的 command 列表
     pub async fn list_rust_commands(&self) -> Vec<PluginCommandEntry> {
         let handlers = self.rust_command_handlers.read().await;
-        handlers.iter().map(|(full_name, cmd)| {
-            let parts: Vec<&str> = full_name.splitn(2, "::").collect();
-            let plugin_id = parts.first().map(|s| s.to_string()).unwrap_or_default();
-            let command_name = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-            PluginCommandEntry {
-                plugin_id,
-                command_name,
-                title: cmd.title.clone(),
-            }
-        }).collect()
+        handlers
+            .iter()
+            .map(|(full_name, cmd)| {
+                let parts: Vec<&str> = full_name.splitn(2, "::").collect();
+                let plugin_id = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                let command_name = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
+                PluginCommandEntry {
+                    plugin_id,
+                    command_name,
+                    title: cmd.title.clone(),
+                }
+            })
+            .collect()
     }
 
     // ==================== Terminal Handler Pipeline ====================
@@ -318,7 +301,9 @@ impl PluginHost {
             if let Some(modified) = handler.on_input(session_id, &result) {
                 tracing::debug!(
                     "Terminal input modified by plugin handler: session_id={}, original_len={}, modified_len={}",
-                    session_id, result.len(), modified.len()
+                    session_id,
+                    result.len(),
+                    modified.len()
                 );
                 result = modified;
             }
@@ -334,7 +319,9 @@ impl PluginHost {
             if let Some(modified) = handler.on_output(session_id, &result) {
                 tracing::debug!(
                     "Terminal output modified by plugin handler: session_id={}, original_len={}, modified_len={}",
-                    session_id, result.len(), modified.len()
+                    session_id,
+                    result.len(),
+                    modified.len()
                 );
                 result = modified;
             }

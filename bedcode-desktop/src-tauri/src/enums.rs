@@ -15,12 +15,15 @@ pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
-pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload, SubscribeMode};
+pub use control::{
+    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
+    TerminalAction, TerminalPayload,
+};
 pub use file_service::{FileServicePayload, MountAnnouncement};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
 pub use session::{SessionStatus, SessionType, TaskStatus};
 pub use shell::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
-pub use special_key::{KeyCombo, KeyCode};
+pub use special_key::{KeyCode, KeyCombo};
 pub use summary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 pub use sync::SyncPayload;

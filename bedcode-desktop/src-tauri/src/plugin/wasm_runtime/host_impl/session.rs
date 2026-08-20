@@ -6,10 +6,7 @@ use crate::system::error_boundary::spawn_with_error_boundary;
 use uuid::Uuid;
 
 /// 列出所有会话（权限 + SessionManager 查询），返回 JSON 数组字符串
-pub(crate) fn session_list(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn session_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_READ, "host_session_list") {
         return Err("permission denied".to_string());
     }
@@ -39,26 +36,25 @@ pub(crate) fn session_get(
 }
 
 /// 列出会话配置精简列表（id/name/workingDir/command）
-pub(crate) fn session_config_list(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn session_config_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_READ, "host_session_config_list") {
         return Err("permission denied".to_string());
     }
     let cm = host_ctx.config_manager.clone();
-    let configs = block_on_async(cm.list_configs())
-        .map_err(|e| format!("session error: {}", e))?;
+    let configs = block_on_async(cm.list_configs()).map_err(|e| format!("session error: {}", e))?;
     // 精简输出：仅包含插件需要的字段，避免传输不必要的数据
     // （name 供插件 UI 展示会话配置选择列表，如定时任务选配置）
-    let simplified: Vec<serde_json::Value> = configs.iter().map(|c| {
-        serde_json::json!({
-            "id": c.id,
-            "name": c.name,
-            "workingDir": c.working_dir,
-            "command": c.command,
+    let simplified: Vec<serde_json::Value> = configs
+        .iter()
+        .map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "name": c.name,
+                "workingDir": c.working_dir,
+                "command": c.command,
+            })
         })
-    }).collect();
+        .collect();
     serde_json::to_string(&simplified)
         .map(Some)
         .map_err(|e| format!("session error: JSON serialization failed: {}", e))
@@ -72,11 +68,7 @@ pub(crate) fn session_config_list(
 /// 不可重入），且 wasmtime Store 不可重入。因此此处预生成会话 ID 立即返回，
 /// 实际创建在宿主上下文异步执行：事件分发发生在 wasm 调用返回（锁释放）后，
 /// hooks 仍先于 PTY 启动就位。
-pub(crate) fn session_create(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    config_id: &str,
-) -> Result<String, String> {
+pub(crate) fn session_create(host_ctx: &WasmHostContext, plugin_id: &str, config_id: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_create") {
         return Err("permission denied".to_string());
     }
@@ -125,11 +117,7 @@ pub(crate) fn session_create(
 /// 生命周期事件，事件回灌同一插件实例需要重新获取 `wasm_plugins` 写锁
 /// （tokio RwLock 不可重入）——与 `session_create` 同理，此处 spawn 异步执行，
 /// wasm 调用立即返回。
-pub(crate) fn session_close(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    session_id: &str,
-) -> Result<(), String> {
+pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_close") {
         return Err("permission denied".to_string());
     }

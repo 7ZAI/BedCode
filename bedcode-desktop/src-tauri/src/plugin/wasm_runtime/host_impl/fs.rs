@@ -32,16 +32,12 @@ fn write_text_file(path: &str, content: &str) -> std::io::Result<()> {
 /// 批量请求目录授权（权限 + fs_auth 批量弹窗校验）
 ///
 /// paths-json 为 JSON 字符串数组；返回是否全部同意（拒绝/超时均为 false）
-pub(crate) fn fs_request_auth(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    paths_json: &str,
-) -> Result<bool, String> {
+pub(crate) fn fs_request_auth(host_ctx: &WasmHostContext, plugin_id: &str, paths_json: &str) -> Result<bool, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_request_auth") {
         return Err("permission denied".to_string());
     }
-    let paths: Vec<String> = serde_json::from_str(paths_json)
-        .map_err(|e| format!("fs error: invalid paths json: {}", e))?;
+    let paths: Vec<String> =
+        serde_json::from_str(paths_json).map_err(|e| format!("fs error: invalid paths json: {}", e))?;
     if paths.is_empty() {
         return Ok(true);
     }
@@ -106,11 +102,7 @@ fn delete_file(path: &str) -> std::io::Result<()> {
 }
 
 /// 读取文本文件（权限 + 三层访问校验）
-pub(crate) fn fs_read(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    path: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn fs_read(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_read") {
         return Err("permission denied".to_string());
     }
@@ -131,12 +123,7 @@ pub(crate) fn fs_read(
 }
 
 /// 写入文本文件（权限 + 三层访问校验）
-pub(crate) fn fs_write(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    path: &str,
-    data: &str,
-) -> Result<(), String> {
+pub(crate) fn fs_write(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, data: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_write") {
         return Err("permission denied".to_string());
     }
@@ -150,12 +137,7 @@ pub(crate) fn fs_write(
 }
 
 /// 复制文件（读源 + 写目标双授权）
-pub(crate) fn fs_copy(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    src: &str,
-    dst: &str,
-) -> Result<(), String> {
+pub(crate) fn fs_copy(host_ctx: &WasmHostContext, plugin_id: &str, src: &str, dst: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_copy") {
         return Err("permission denied".to_string());
     }
@@ -179,11 +161,7 @@ pub(crate) fn fs_copy(
 }
 
 /// 删除文件（权限 + 三层访问校验；文件不存在视为成功，幂等）
-pub(crate) fn fs_delete(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    path: &str,
-) -> Result<(), String> {
+pub(crate) fn fs_delete(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_delete") {
         return Err("permission denied".to_string());
     }
@@ -197,11 +175,7 @@ pub(crate) fn fs_delete(
 }
 
 /// 检查文件是否存在（权限 + 三层访问校验，支持 WSL UNC 路径）
-pub(crate) fn fs_exists(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    path: &str,
-) -> Result<bool, String> {
+pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<bool, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_exists") {
         return Err("permission denied".to_string());
     }
@@ -213,8 +187,7 @@ pub(crate) fn fs_exists(
     }
     // 支持 WSL UNC 路径
     if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {
-        return wsl_fs::exists_via_wsl(&distro, &wsl_path)
-            .map_err(|e| format!("fs error: WSL check failed: {}", e));
+        return wsl_fs::exists_via_wsl(&distro, &wsl_path).map_err(|e| format!("fs error: WSL check failed: {}", e));
     }
     Ok(std::path::Path::new(path).exists())
 }
@@ -384,7 +357,9 @@ mod tests {
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
         let (_dir, root) = claude_temp_root("e2e-missing");
         let path = root.join("missing.txt");
-        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap()).expect("read ok").is_none());
+        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+            .expect("read ok")
+            .is_none());
     }
 
     /// 存在性检查：写入后 true，删除后 false

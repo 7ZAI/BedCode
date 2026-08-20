@@ -3,9 +3,9 @@
 //! 桌面端数据变更事件，用于内部事件总线
 //! 触发向客户端的增量数据广播
 
-use crate::enums::SessionStatus;
 use super::app_event::AppEvent;
 use crate::enums::PluginQuestion;
+use crate::enums::SessionStatus;
 
 /// 桌面端数据变更事件
 ///
@@ -72,10 +72,7 @@ pub enum DesktopSyncEvent {
 
     // === 会话模式相关 ===
     /// 会话自动授权模式变更
-    SessionModeChanged {
-        session_id: String,
-        auto_approve: bool,
-    },
+    SessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列相关 ===
     /// 会话任务队列变更（由 auto-task 插件发布）
@@ -198,15 +195,9 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
                 task_id,
                 status,
             },
-            SyncEvent::TaskScheduledChanged {
-                job_id,
-                status,
-                action,
-            } => DesktopSyncEvent::TaskScheduledChanged {
-                job_id,
-                status,
-                action,
-            },
+            SyncEvent::TaskScheduledChanged { job_id, status, action } => {
+                DesktopSyncEvent::TaskScheduledChanged { job_id, status, action }
+            }
             SyncEvent::FileTransferIntent {
                 intent_id,
                 direction,
@@ -226,9 +217,7 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
                 device_name,
                 expect_response,
             },
-            SyncEvent::FileTransferCancel { intent_id } => {
-                DesktopSyncEvent::FileTransferCancel { intent_id }
-            }
+            SyncEvent::FileTransferCancel { intent_id } => DesktopSyncEvent::FileTransferCancel { intent_id },
         }
     }
 }

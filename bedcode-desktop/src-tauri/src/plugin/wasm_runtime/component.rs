@@ -21,8 +21,8 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process,
-    session, status, storage, terminal, timer, transfer,
+    api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process, session, status, storage,
+    terminal, timer, transfer,
 };
 use super::{block_on_async, WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
@@ -45,13 +45,12 @@ bindgen!({
 
 impl bedcode::plugin::host_storage::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(&self.host_ctx, &self.plugin_id, &key)
-            .map(|opt| opt.map(|v| v.to_string()))
+        storage::storage_get(&self.host_ctx, &self.plugin_id, &key).map(|opt| opt.map(|v| v.to_string()))
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
-        let json_value: serde_json::Value = serde_json::from_str(&value)
-            .map_err(|e| format!("invalid JSON value: {}", e))?;
+        let json_value: serde_json::Value =
+            serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
         storage::storage_set(&self.host_ctx, &self.plugin_id, &key, json_value)
     }
 
@@ -359,17 +358,15 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
     ] {
-        iface(linker, |s| s).map_err(|e| {
-            AppError::Plugin(format!("Failed to register component host interface: {}", e))
-        })?;
+        iface(linker, |s| s)
+            .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
     }
     // WASI preview2（wasm32-wasip2 插件经 std::fs 直接访问文件所需的全部接口：
     // clock/random/cli/filesystem/io/sockets）。
     // 未导入 wasi 的既有插件（wasm32-unknown-unknown 产物）不受影响——
     // linker 中无对应 import 的注册是惰性的。
-    p2::add_to_linker_sync(linker).map_err(|e| {
-        AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e))
-    })?;
+    p2::add_to_linker_sync(linker)
+        .map_err(|e| AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e)))?;
     Ok(())
 }
 
@@ -420,9 +417,9 @@ impl LoadedWasmPlugin {
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
-        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e))
-        })?;
+        store
+            .set_fuel(FUEL_PER_CALL)
+            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
             AppError::Plugin(format!(
@@ -445,25 +442,21 @@ impl LoadedWasmPlugin {
     ///
     /// - `abi.version()` 语义与 `abi::ABI_VERSION` 完全一致
     /// - `abi.form()` 必须为 1（component 形态）；0 是 core 形态的自研 ABI
-    fn verify_abi(
-        store: &mut Store<WasmPluginState>,
-        instance: &Instance,
-    ) -> crate::Result<()> {
+    fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
-        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e))
-        })?;
-        let exports = Plugin::new(&mut *store, instance).map_err(|e| {
-            AppError::Plugin(format!("WASM component missing required exports: {}", e))
-        })?;
+        store
+            .set_fuel(FUEL_PER_CALL)
+            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
+        let exports = Plugin::new(&mut *store, instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
         let abi_guest = exports.bedcode_plugin_abi();
 
-        let version = abi_guest.call_version(&mut *store).map_err(|e| {
-            AppError::Plugin(format!("WASM component abi.version() call failed: {}", e))
-        })?;
-        let form = abi_guest.call_form(&mut *store).map_err(|e| {
-            AppError::Plugin(format!("WASM component abi.form() call failed: {}", e))
-        })?;
+        let version = abi_guest
+            .call_version(&mut *store)
+            .map_err(|e| AppError::Plugin(format!("WASM component abi.version() call failed: {}", e)))?;
+        let form = abi_guest
+            .call_form(&mut *store)
+            .map_err(|e| AppError::Plugin(format!("WASM component abi.form() call failed: {}", e)))?;
 
         if form != abi::FORM_COMPONENT {
             return Err(AppError::Plugin(format!(
@@ -475,7 +468,8 @@ impl LoadedWasmPlugin {
         if version > abi::ABI_VERSION {
             return Err(AppError::Plugin(format!(
                 "Plugin requires ABI v{} but host supports v{} — please upgrade BedCode",
-                version, abi::ABI_VERSION
+                version,
+                abi::ABI_VERSION
             )));
         }
         Ok(())
@@ -486,12 +480,11 @@ impl LoadedWasmPlugin {
     /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
     /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
     fn exports(&mut self) -> crate::Result<Plugin> {
-        self.store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("WASM fuel refill failed: {}", e))
-        })?;
-        Plugin::new(&mut self.store, &self.instance).map_err(|e| {
-            AppError::Plugin(format!("WASM component exports access failed: {}", e))
-        })
+        self.store
+            .set_fuel(FUEL_PER_CALL)
+            .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
+        Plugin::new(&mut self.store, &self.instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
     }
 
     /// 调用插件的 activate 导出
@@ -517,69 +510,51 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的 invoke_command 导出（JSON 载荷保留，语义与 core 路径 1:1）
-    pub(crate) fn invoke_command(
-        &mut self,
-        command_name: &str,
-        args_json: &str,
-    ) -> crate::Result<String> {
+    pub(crate) fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
         let exports = self.exports()?;
         let cmd = exports.bedcode_plugin_command();
-        cmd.call_invoke(&mut self.store, command_name, args_json).map_err(|e| {
-            AppError::Plugin(format!("WASM invoke_command() call failed: {}", e))
-        })
+        cmd.call_invoke(&mut self.store, command_name, args_json)
+            .map_err(|e| AppError::Plugin(format!("WASM invoke_command() call failed: {}", e)))
     }
 
     /// 调用插件的 on_terminal_input 导出
-    pub(crate) fn on_terminal_input(
-        &mut self,
-        session_id: &str,
-        text: &str,
-    ) -> crate::Result<Option<String>> {
+    pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks.call_on_terminal_input(&mut self.store, session_id, text).map_err(|e| {
-            AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e))
-        })
+        hooks
+            .call_on_terminal_input(&mut self.store, session_id, text)
+            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
     }
 
     /// 调用插件的 on_terminal_output 导出
-    pub(crate) fn on_terminal_output(
-        &mut self,
-        session_id: &str,
-        data: &str,
-    ) -> crate::Result<Option<String>> {
+    pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks.call_on_terminal_output(&mut self.store, session_id, data).map_err(|e| {
-            AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e))
-        })
+        hooks
+            .call_on_terminal_output(&mut self.store, session_id, data)
+            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
     }
 
     /// 调用插件的 on_startup 导出
     pub(crate) fn on_startup(&mut self) -> crate::Result<()> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle.call_on_startup(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM on_startup() call failed: {}", e))
-        })
+        lifecycle
+            .call_on_startup(&mut self.store)
+            .map_err(|e| AppError::Plugin(format!("WASM on_startup() call failed: {}", e)))
     }
 
     /// 调用插件的 on_shutdown 导出
     pub(crate) fn on_shutdown(&mut self) -> crate::Result<()> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle.call_on_shutdown(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e))
-        })
+        lifecycle
+            .call_on_shutdown(&mut self.store)
+            .map_err(|e| AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e)))
     }
 
     /// 调用插件的消息总线消息接收导出
-    pub(crate) fn on_message(
-        &mut self,
-        topic: &str,
-        sender: &str,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -594,10 +569,7 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的会话生命周期事件导出
-    pub(crate) fn on_session_lifecycle(
-        &mut self,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_session_lifecycle(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -607,17 +579,15 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_session_lifecycle() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => {
-                Err(AppError::Plugin(format!("WASM on_session_lifecycle() call failed: {}", e)))
-            }
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM on_session_lifecycle() call failed: {}",
+                e
+            ))),
         }
     }
 
     /// 调用插件的提交输入行事件导出（纯观察通知，失败仅记录日志）
-    pub(crate) fn on_input_submitted(
-        &mut self,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_input_submitted(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -627,9 +597,10 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_input_submitted() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => {
-                Err(AppError::Plugin(format!("WASM on_input_submitted() call failed: {}", e)))
-            }
+            Err(e) => Err(AppError::Plugin(format!(
+                "WASM on_input_submitted() call failed: {}",
+                e
+            ))),
         }
     }
 
@@ -643,9 +614,7 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_process_done() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => {
-                Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e)))
-            }
+            Err(e) => Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e))),
         }
     }
 
@@ -653,27 +622,27 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_upload_request(&mut self, meta_json: &str) -> crate::Result<String> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_upload_hook();
-        hooks.call_on_upload_request(&mut self.store, meta_json).map_err(|e| {
-            AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
-        })
+        hooks
+            .call_on_upload_request(&mut self.store, meta_json)
+            .map_err(|e| AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e)))
     }
 
     /// 调用插件的批量传输请求钩子导出（v2，fail-closed 语义由调用方保持）
     pub(crate) fn on_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_transfer_request_hook();
-        hooks.call_on_transfer_request(&mut self.store, meta_json).map_err(|e| {
-            AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e))
-        })
+        hooks
+            .call_on_transfer_request(&mut self.store, meta_json)
+            .map_err(|e| AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e)))
     }
 
     /// 获取插件的 manifest JSON
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
-        manifest.call_get(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM manifest() call failed: {}", e))
-        })
+        manifest
+            .call_get(&mut self.store)
+            .map_err(|e| AppError::Plugin(format!("WASM manifest() call failed: {}", e)))
     }
 
     /// 测试访问器：直接获取 Store/Instance（燃料断言与耗尽 trap 测试用）
@@ -731,7 +700,12 @@ fn resolve_preopen_dir(host_ctx: &WasmHostContext, plugin_id: &str) -> Option<St
     if !obj.get("useSelfFileAccess")?.as_bool()? {
         return None;
     }
-    let dir = obj.get("fileAccessDir")?.as_str()?.trim().trim_matches(['/', '\\']).trim();
+    let dir = obj
+        .get("fileAccessDir")?
+        .as_str()?
+        .trim()
+        .trim_matches(['/', '\\'])
+        .trim();
     if dir.is_empty() {
         return None;
     }
@@ -806,9 +780,7 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return encode_component(
-                    &std::fs::read(&module_path).expect("Failed to read test component module"),
-                );
+                return encode_component(&std::fs::read(&module_path).expect("Failed to read test component module"));
             }
         }
 
@@ -826,9 +798,7 @@ mod tests {
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        encode_component(
-            &std::fs::read(&module_path).expect("Failed to read test component after build"),
-        )
+        encode_component(&std::fs::read(&module_path).expect("Failed to read test component after build"))
     }
 
     /// 14 组 import 接口全部注册成功（add_to_linker 是纯接线代码，
@@ -865,8 +835,7 @@ mod tests {
     #[test]
     fn test_loaded_plugin_component_roundtrip() {
         let engine = test_engine();
-        let component = Component::from_binary(&engine, &build_test_component())
-            .expect("compile test component");
+        let component = Component::from_binary(&engine, &build_test_component()).expect("compile test component");
         let mut linker = Linker::new(&engine);
         add_to_linker(&mut linker).expect("register host interfaces");
 
@@ -894,14 +863,8 @@ mod tests {
                 .await
                 .expect("preset storage key");
 
-            let mut plugin = LoadedWasmPlugin::new(
-                &engine,
-                &linker,
-                &component,
-                TEST_PLUGIN_ID,
-                host_ctx,
-            )
-            .expect("instantiate component");
+            let mut plugin = LoadedWasmPlugin::new(&engine, &linker, &component, TEST_PLUGIN_ID, host_ctx)
+                .expect("instantiate component");
 
             // 生命周期（new 内已隐式通过 verify_abi：form=1 且 version<=ABI_VERSION）
             assert_eq!(plugin.activate().expect("activate"), 0);
@@ -919,8 +882,7 @@ mod tests {
             }
 
             // manifest（guest 静态导出）
-            let manifest: serde_json::Value =
-                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
 
             // 命令调用：guest 内 host_storage.get 读回预写值（跨边界往返）
@@ -995,10 +957,7 @@ mod tests {
             }),
         )
         .expect("storage_set ok");
-        assert_eq!(
-            resolve_preopen_dir(&ctx, pid).as_deref(),
-            Some(preopen.as_str())
-        );
+        assert_eq!(resolve_preopen_dir(&ctx, pid).as_deref(), Some(preopen.as_str()));
     }
 
     #[tokio::test]
@@ -1018,10 +977,7 @@ mod tests {
             }),
         )
         .expect("storage_set ok");
-        assert!(
-            resolve_preopen_dir(&ctx, pid).is_none(),
-            "未授权目录不得建立预打开"
-        );
+        assert!(resolve_preopen_dir(&ctx, pid).is_none(), "未授权目录不得建立预打开");
 
         // 目录名指向授权根之外的不存在路径（canonicalize 回退父目录+名，
         // 不在授权前缀下）同样 None

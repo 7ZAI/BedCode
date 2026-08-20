@@ -12,15 +12,15 @@
 
 use base64::Engine;
 use rand::rngs::OsRng;
+use rsa::signature::SignatureEncoding;
 use rsa::{
-    Oaep, RsaPrivateKey, RsaPublicKey as RawRsaPublicKey,
     pkcs1::DecodeRsaPrivateKey,
     pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey},
     pss::{Signature, SigningKey, VerifyingKey},
     signature::{RandomizedSigner, Verifier},
+    Oaep, RsaPrivateKey, RsaPublicKey as RawRsaPublicKey,
 };
 use serde::{Deserialize, Serialize};
-use rsa::signature::SignatureEncoding;
 use sha2::Sha256;
 
 use crate::system::error::{AppError, Result};
@@ -144,8 +144,7 @@ pub fn rsa_sign(key_pair: &RsaKeyPair, data: &[u8]) -> Result<Vec<u8>> {
 pub fn rsa_verify_public(public: &RsaPublicKey, data: &[u8], signature: &[u8]) -> Result<()> {
     let pub_key = public.inner()?;
     let verifying = VerifyingKey::<Sha256>::new(pub_key);
-    let sig = Signature::try_from(signature)
-        .map_err(|e| AppError::InvalidInput(format!("RSA 签名格式无效: {e}")))?;
+    let sig = Signature::try_from(signature).map_err(|e| AppError::InvalidInput(format!("RSA 签名格式无效: {e}")))?;
     verifying
         .verify(data, &sig)
         .map_err(|e| AppError::Internal(format!("RSA-PSS 验签失败: {e}")))

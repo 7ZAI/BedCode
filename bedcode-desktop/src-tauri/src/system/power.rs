@@ -120,8 +120,7 @@ impl PowerManager {
 }
 
 /// 全局单实例
-static POWER_MANAGER: std::sync::LazyLock<PowerManager> =
-    std::sync::LazyLock::new(PowerManager::new);
+static POWER_MANAGER: std::sync::LazyLock<PowerManager> = std::sync::LazyLock::new(PowerManager::new);
 
 /// 获取全局 PowerManager 实例
 pub fn power_manager() -> &'static PowerManager {

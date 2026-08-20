@@ -3,8 +3,8 @@
 //! 会话配置管理模块 - 负责会话配置的创建、查询、修改、删除等操作
 //! 提供配置的业务逻辑封装，与数据库层解耦
 
-use crate::events::DesktopSyncEvent;
 use crate::db::{Database, SessionConfig};
+use crate::events::DesktopSyncEvent;
 use crate::Result;
 use chrono::Utc;
 use std::sync::Arc;
@@ -28,7 +28,10 @@ pub struct SessionConfigManager {
 impl SessionConfigManager {
     /// 创建新的配置管理器
     pub fn new(db: Arc<Mutex<Database>>) -> Self {
-        Self { db, sync_tx: RwLock::new(None) }
+        Self {
+            db,
+            sync_tx: RwLock::new(None),
+        }
     }
 
     /// 从 Database 创建（兼容旧 API）
@@ -58,7 +61,8 @@ impl SessionConfigManager {
         working_dir: String,
         command: String,
     ) -> Result<SessionConfig> {
-        self.create_config_with_source(name, environment, None, working_dir, command, false, None).await
+        self.create_config_with_source(name, environment, None, working_dir, command, false, None)
+            .await
     }
 
     /// 创建新配置（带来源设备）
@@ -72,20 +76,16 @@ impl SessionConfigManager {
         auto_start: bool,
         source_device: Option<String>,
     ) -> Result<SessionConfig> {
-        let config = self.create_config_full_internal(
-            name,
-            environment,
-            wsl_distro,
-            working_dir,
-            command,
-            auto_start,
-        ).await?;
+        let config = self
+            .create_config_full_internal(name, environment, wsl_distro, working_dir, command, auto_start)
+            .await?;
 
         // 发布同步事件：配置创建
         self.publish_sync_event(DesktopSyncEvent::ConfigCreated {
             config_id: config.id.clone(),
             source_device,
-        }).await;
+        })
+        .await;
 
         Ok(config)
     }
@@ -127,7 +127,8 @@ impl SessionConfigManager {
         command: String,
         auto_start: bool,
     ) -> Result<SessionConfig> {
-        self.create_config_with_source(name, environment, wsl_distro, working_dir, command, auto_start, None).await
+        self.create_config_with_source(name, environment, wsl_distro, working_dir, command, auto_start, None)
+            .await
     }
 
     /// 获取配置
@@ -166,7 +167,17 @@ impl SessionConfigManager {
         command: Option<String>,
         auto_start: Option<bool>,
     ) -> Result<SessionConfig> {
-        self.update_config_with_source(config_id, name, environment, wsl_distro, working_dir, command, auto_start, None).await
+        self.update_config_with_source(
+            config_id,
+            name,
+            environment,
+            wsl_distro,
+            working_dir,
+            command,
+            auto_start,
+            None,
+        )
+        .await
     }
 
     /// 更新配置（带来源设备）
@@ -182,7 +193,9 @@ impl SessionConfigManager {
         source_device: Option<String>,
     ) -> Result<SessionConfig> {
         // 先获取现有配置
-        let existing = self.get_config(config_id).await?
+        let existing = self
+            .get_config(config_id)
+            .await?
             .ok_or_else(|| crate::AppError::NotFound(format!("Config not found: {}", config_id)))?;
 
         let updated = SessionConfig {
@@ -212,7 +225,8 @@ impl SessionConfigManager {
         self.publish_sync_event(DesktopSyncEvent::ConfigUpdated {
             config_id: config_id_owned,
             source_device,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session config updated: {} ({})", updated_for_log, config_id);
         Ok(updated)
@@ -226,9 +240,7 @@ impl SessionConfigManager {
     /// 删除配置（带来源设备）
     pub async fn delete_config_with_source(&self, config_id: &str, source_device: Option<String>) -> Result<()> {
         // 在删除前获取配置名称（用于同步通知）
-        let config_name = self.get_config(config_id).await?
-            .map(|c| c.name)
-            .unwrap_or_default();
+        let config_name = self.get_config(config_id).await?.map(|c| c.name).unwrap_or_default();
 
         let db = self.db.clone();
         let config_id_owned = config_id.to_string();
@@ -245,7 +257,8 @@ impl SessionConfigManager {
             config_id: config_id.to_string(),
             config_name,
             source_device,
-        }).await;
+        })
+        .await;
 
         tracing::info!("Session config deleted: {}", config_id);
         Ok(())
@@ -261,19 +274,16 @@ impl SessionConfigManager {
         session_manager: &crate::session::SessionManager,
     ) -> Result<SessionConfig> {
         let info = session_manager.get_session_info(session_id).await?;
-        self.get_config(&info.config_id).await?
-            .ok_or_else(|| crate::AppError::NotFound(format!(
-                "Config not found: {} (session: {})", info.config_id, session_id
-            )))
+        self.get_config(&info.config_id).await?.ok_or_else(|| {
+            crate::AppError::NotFound(format!(
+                "Config not found: {} (session: {})",
+                info.config_id, session_id
+            ))
+        })
     }
 
     /// 验证配置参数
-    pub fn validate_config(
-        name: &str,
-        environment: &str,
-        _working_dir: &str,
-        _command: &str,
-    ) -> Result<()> {
+    pub fn validate_config(name: &str, environment: &str, _working_dir: &str, _command: &str) -> Result<()> {
         if name.trim().is_empty() {
             return Err(crate::AppError::InvalidInput("Name cannot be empty".to_string()));
         }

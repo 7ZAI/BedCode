@@ -3,10 +3,10 @@
 //! 会话管理器的内部组件：注册表、命名服务、配置映射、状态检测
 //! 这些组件各自只有一个实现，trait 已内联到此文件
 
-use crate::session::SessionInfo;
-use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
 use crate::db::SessionConfig;
 use crate::enums::SessionStatus;
+use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
+use crate::session::SessionInfo;
 use crate::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -206,10 +206,7 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
 
     async fn filter_by_config(&self, config_id: &str) -> Vec<SessionInfo> {
         let map = self.info.read().await;
-        map.values()
-            .filter(|s| s.config_id == config_id)
-            .cloned()
-            .collect()
+        map.values().filter(|s| s.config_id == config_id).cloned().collect()
     }
 
     async fn filter_active_by_config(&self, config_id: &str) -> Vec<SessionInfo> {
@@ -225,12 +222,7 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
 
 /// 会话命名服务 - 生成唯一的会话名称
 pub trait NamingService: Send + Sync {
-    fn generate_unique_name(
-        &self,
-        config_id: &str,
-        base_name: &str,
-        sessions: &[SessionInfo],
-    ) -> String;
+    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String;
 }
 
 pub struct DefaultNamingService;
@@ -248,12 +240,7 @@ impl Default for DefaultNamingService {
 }
 
 impl NamingService for DefaultNamingService {
-    fn generate_unique_name(
-        &self,
-        config_id: &str,
-        base_name: &str,
-        sessions: &[SessionInfo],
-    ) -> String {
+    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String {
         // 从同配置的活跃会话名称中提取最大编号，避免删除后编号回退导致重名
         let max_index = sessions
             .iter()

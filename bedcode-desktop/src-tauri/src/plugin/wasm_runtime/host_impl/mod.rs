@@ -11,8 +11,8 @@
 //! 历史：阶段 A/B 时本目录名为 `host_functions`，包含 core module 胶水层
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
 
-pub(super) mod app;
 pub(super) mod api;
+pub(super) mod app;
 pub(super) mod bus;
 pub(super) mod config;
 pub(super) mod database;
@@ -39,12 +39,7 @@ use crate::plugin::wasm_runtime::WasmHostContext;
 ///
 /// 校验通过返回 true；拒绝时记录结构化错误日志并返回 false，
 /// 调用方据此返回 Err。替换原先约 30 处重复的 check/log 三连。
-pub(super) fn check_permission(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    permission: &str,
-    api: &str,
-) -> bool {
+pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, permission: &str, api: &str) -> bool {
     if host_ctx.permission.check(plugin_id, permission) {
         true
     } else {
@@ -83,13 +78,11 @@ pub(super) mod tests {
             Database::new(&Path::new(":memory:")).expect("in-memory db"),
             Arc::new(std::path::PathBuf::from(".")),
         ));
-        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
-            {
-                let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
-                db.init_schema().expect("init schema");
-                db
-            }
-        ))));
+        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new({
+            let db = Database::new(&Path::new(":memory:")).expect("in-memory db");
+            db.init_schema().expect("init schema");
+            db
+        }))));
         let permission = Arc::new(PermissionManager::new());
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let message_bus = Arc::new(MessageBus::new());

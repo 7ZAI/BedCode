@@ -32,8 +32,7 @@ const IO_BUFFER_SIZE: usize = 512 * 1024;
 ///
 /// 任务完成/失败/取消后自行移除条目；cancel 查不到条目视为已完成。
 /// tokio Mutex/HashMap::new 非 const fn，经 OnceLock 惰性初始化
-static TASKS: std::sync::OnceLock<Mutex<HashMap<String, CancellationToken>>> =
-    std::sync::OnceLock::new();
+static TASKS: std::sync::OnceLock<Mutex<HashMap<String, CancellationToken>>> = std::sync::OnceLock::new();
 
 fn tasks() -> &'static Mutex<HashMap<String, CancellationToken>> {
     TASKS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -116,11 +115,7 @@ pub(crate) fn transfer_start(
 }
 
 /// 取消传输任务（权限 + 查任务表），任务不存在视为幂等成功
-pub(crate) fn transfer_cancel(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    task_id: &str,
-) -> Result<(), String> {
+pub(crate) fn transfer_cancel(host_ctx: &WasmHostContext, plugin_id: &str, task_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_TRANSFER, "host_transfer_cancel") {
         return Err("permission denied".to_string());
     }
@@ -265,10 +260,7 @@ async fn download(
         builder = builder.header(key.as_str(), value.as_str());
     }
     if request.offset > 0 {
-        builder = builder.header(
-            reqwest::header::RANGE,
-            format!("bytes={}-", request.offset),
-        );
+        builder = builder.header(reqwest::header::RANGE, format!("bytes={}-", request.offset));
     }
 
     let response = builder
@@ -278,11 +270,7 @@ async fn download(
 
     let status = response.status();
     if !(status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT) {
-        return Err(format!(
-            "GET {} returned HTTP {}",
-            request.url,
-            status.as_u16()
-        ));
+        return Err(format!("GET {} returned HTTP {}", request.url, status.as_u16()));
     }
 
     // offset=0 全新写入（truncate 清理残留）；offset>0 保留已传进度，seek 后续写
@@ -318,10 +306,7 @@ async fn download(
 
     // .part 临时文件下载完成后原子 rename 到最终路径（规格 7.4）
     if let Some(ref final_path) = request.final_path {
-        if tokio::fs::try_exists(final_path)
-            .await
-            .unwrap_or(false)
-        {
+        if tokio::fs::try_exists(final_path).await.unwrap_or(false) {
             // 目标名已被占用 → 保留 .part 供用户决定，回报 duplicate-name
             tracing::warn!(
                 part_path = %request.local_path,
@@ -332,12 +317,7 @@ async fn download(
         }
         tokio::fs::rename(&request.local_path, final_path)
             .await
-            .map_err(|e| {
-                format!(
-                    "rename '{}' -> '{}' failed: {}",
-                    request.local_path, final_path, e
-                )
-            })?;
+            .map_err(|e| format!("rename '{}' -> '{}' failed: {}", request.local_path, final_path, e))?;
         tracing::debug!(
             part_path = %request.local_path,
             final_path = %final_path,
@@ -365,13 +345,11 @@ async fn upload(request: &TransferRequest, transferred: Arc<AtomicU64>) -> Resul
     }
 
     // ReaderStream 按 IO_BUFFER_SIZE 读块；inspect 中累计已传字节（进度 reporter 读取）
-    let stream = tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(
-        move |item| {
-            item.inspect(|bytes| {
-                transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
-            })
-        },
-    );
+    let stream = tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(move |item| {
+        item.inspect(|bytes| {
+            transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
+        })
+    });
 
     let client = reqwest::Client::new();
     let mut builder = client.put(&request.url);
@@ -430,8 +408,8 @@ fn emit_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use bedcode_plugin_api::BusMessage;
     use crate::plugin::message_bus::{BusMessageHandler, MessageDispatcher};
+    use bedcode_plugin_api::BusMessage;
     use std::collections::HashMap;
     use std::net::SocketAddr;
     use tempfile::tempdir;
@@ -468,26 +446,34 @@ mod tests {
 
     impl MockResponse {
         fn ok(body: impl Into<Vec<u8>>) -> Self {
-            Self { status: 200, body: body.into() }
+            Self {
+                status: 200,
+                body: body.into(),
+            }
         }
 
         fn with_status(status: u16, body: impl Into<Vec<u8>>) -> Self {
-            Self { status, body: body.into() }
+            Self {
+                status,
+                body: body.into(),
+            }
         }
     }
 
     /// 启动 mock HTTP 服务器（每连接独立任务，响应后关闭连接）
-    async fn spawn_mock_server(
-        handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>,
-    ) -> SocketAddr {
+    async fn spawn_mock_server(handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { break };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
                 let handler = handler.clone();
                 tokio::spawn(async move {
-                    let Some(req) = read_request(&mut sock).await else { return };
+                    let Some(req) = read_request(&mut sock).await else {
+                        return;
+                    };
                     let resp = handler(req);
                     let reason = match resp.status {
                         200 => "OK",
@@ -551,7 +537,11 @@ mod tests {
         }
         let mut body = buf.split_off(header_end + 4);
         // wrap_stream 上传体无固定长度 → reqwest 使用 chunked encoding
-        if headers.get("transfer-encoding").map(|v| v.to_ascii_lowercase() == "chunked").unwrap_or(false) {
+        if headers
+            .get("transfer-encoding")
+            .map(|v| v.to_ascii_lowercase() == "chunked")
+            .unwrap_or(false)
+        {
             body = read_chunked_body(sock, body).await?;
         } else {
             while body.len() < content_length {
@@ -567,10 +557,7 @@ mod tests {
     }
 
     /// 读取 chunked 编码的请求体（`{hex-size}\r\n{data}\r\n` 直到 size=0）
-    async fn read_chunked_body(
-        sock: &mut tokio::net::TcpStream,
-        mut buf: Vec<u8>,
-    ) -> Option<Vec<u8>> {
+    async fn read_chunked_body(sock: &mut tokio::net::TcpStream, mut buf: Vec<u8>) -> Option<Vec<u8>> {
         let mut tmp = [0u8; 4096];
         let mut body = Vec::new();
         loop {
@@ -588,8 +575,7 @@ mod tests {
             let line = String::from_utf8_lossy(&buf[..line_end]).to_string();
             buf.drain(..line_end + 2);
             // 支持 `size` 与 `size;ext=...` 两种 chunk 头
-            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
-                .ok()?;
+            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).ok()?;
             if size == 0 {
                 return Some(body); // 结束 chunk，忽略 trailer
             }
@@ -737,9 +723,7 @@ mod tests {
         );
         req.final_path = Some(final_path.to_str().unwrap().to_string());
 
-        let err = download(&req, counter(), CancellationToken::new())
-            .await
-            .unwrap_err();
+        let err = download(&req, counter(), CancellationToken::new()).await.unwrap_err();
 
         assert_eq!(err, "duplicate-name");
         assert!(part.exists(), "duplicate-name 时 .part 应保留供用户决定");

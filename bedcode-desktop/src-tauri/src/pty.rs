@@ -12,17 +12,14 @@ pub use pty_handler::{PtyHandler, PtySessionHandler};
 pub use pty_process::PtySession;
 
 // Re-export from enums
-pub use crate::enums::{
-    ExecutionEnvironment, PtySessionStatus, SessionLaunchConfig, WindowsShell,
-};
+pub use crate::enums::{ExecutionEnvironment, PtySessionStatus, SessionLaunchConfig, WindowsShell};
 
 // Re-export from submodules
-pub use wsl::{
-    get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path,
-    wsl_to_windows_path, WslDistro,
-};
 pub use command::build_command;
 pub use pty_reader::PtyReader;
+pub use wsl::{
+    get_default_distro, is_wsl_available, list_distributions, windows_to_wsl_path, wsl_to_windows_path, WslDistro,
+};
 
 /// 全局 PTY 输出索引计数器（跨所有会话）
 ///

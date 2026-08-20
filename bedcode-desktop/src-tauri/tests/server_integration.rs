@@ -49,10 +49,7 @@ async fn spawn_test_server(port: u16) -> io::Result<(ServerHandle, tokio::task::
 ///
 /// `#[tokio::test]` 是 current_thread runtime：等待异步事件必须用
 /// `tokio::time::sleep + yield_now`，禁止 `std::thread::sleep` 阻塞轮询
-async fn send_until(
-    request: reqwest::RequestBuilder,
-    timeout: Duration,
-) -> reqwest::Result<reqwest::Response> {
+async fn send_until(request: reqwest::RequestBuilder, timeout: Duration) -> reqwest::Result<reqwest::Response> {
     let deadline = Instant::now() + timeout;
     loop {
         match request.try_clone().expect("request must be cloneable").send().await {
@@ -80,9 +77,7 @@ async fn http_contract_and_server_lifecycle() {
     }
 
     let port = pick_free_port();
-    let (handle, server_task) = spawn_test_server(port)
-        .await
-        .expect("test server must start");
+    let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
     let base = format!("http://127.0.0.1:{port}");
 
     let client = reqwest::Client::builder()
@@ -92,12 +87,9 @@ async fn http_contract_and_server_lifecycle() {
 
     // ==================== 场景 1：健康检查（公开端点） ====================
 
-    let resp = send_until(
-        client.get(format!("{base}/api/health")),
-        Duration::from_secs(5),
-    )
-    .await
-    .expect("health request must reach server");
+    let resp = send_until(client.get(format!("{base}/api/health")), Duration::from_secs(5))
+        .await
+        .expect("health request must reach server");
     assert_eq!(resp.status(), 200, "health check must return 200");
     let body = body_json(resp).await;
     assert_eq!(body["status"], "ok", "health body must report status ok");
@@ -163,19 +155,16 @@ async fn http_contract_and_server_lifecycle() {
     // 2d. 合法 token（JwtService 同密钥签发，即生产签发路径）→ 放行
     // 断言 404 而非 401：请求已通过中间件进入路由，只是该路径未注册
     let valid_token = JwtService::new()
-        .generate_token(
-            "test-device".to_string(),
-            Some("Integration Test".to_string()),
-            None,
-        )
+        .generate_token("test-device".to_string(), Some("Integration Test".to_string()), None)
         .expect("mint valid token failed");
-    let resp = send_until(
-        client.get(&protected).bearer_auth(&valid_token),
-        Duration::from_secs(5),
-    )
-    .await
-    .expect("request with valid token must reach server");
-    assert_eq!(resp.status(), 404, "valid token passes middleware, unmatched route must 404 (not 401)");
+    let resp = send_until(client.get(&protected).bearer_auth(&valid_token), Duration::from_secs(5))
+        .await
+        .expect("request with valid token must reach server");
+    assert_eq!(
+        resp.status(),
+        404,
+        "valid token passes middleware, unmatched route must 404 (not 401)"
+    );
 
     // ==================== 场景 3：优雅停机 + 端口复用 ====================
 
@@ -202,12 +191,9 @@ async fn http_contract_and_server_lifecycle() {
         .timeout(Duration::from_secs(5))
         .build()
         .expect("build second reqwest client failed");
-    let resp = send_until(
-        client2.get(format!("{base}/api/health")),
-        Duration::from_secs(5),
-    )
-    .await
-    .expect("restarted server must answer health request");
+    let resp = send_until(client2.get(format!("{base}/api/health")), Duration::from_secs(5))
+        .await
+        .expect("restarted server must answer health request");
     assert_eq!(resp.status(), 200, "restarted server must serve health check");
 
     // 收尾：第二个服务器同样优雅停机，保证测试进程退出干净

@@ -8,4 +8,4 @@ pub mod session;
 pub mod terminal_ws;
 pub mod websocket_manager;
 
-pub use websocket_manager::{WebSocketManager, ClientSummary, ServerEvent};
+pub use websocket_manager::{ClientSummary, ServerEvent, WebSocketManager};

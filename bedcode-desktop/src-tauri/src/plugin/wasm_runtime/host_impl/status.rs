@@ -9,13 +9,15 @@ use crate::plugin::wasm_runtime::block_on_async;
 /// 标记插件为错误状态
 ///
 /// 宿主仅 emit `plugin:error` 事件通知前端弹窗提示，不改变插件激活状态。
-pub(crate) fn mark_plugin_error(host_ctx: &crate::plugin::wasm_runtime::WasmHostContext, plugin_id: String, error: String) {
+pub(crate) fn mark_plugin_error(
+    host_ctx: &crate::plugin::wasm_runtime::WasmHostContext,
+    plugin_id: String,
+    error: String,
+) {
     block_on_async(async move {
         match host_ctx.services().await {
             Some(services) => services.mark_plugin_error(plugin_id, error),
-            None => tracing::error!(
-                "[PluginHost] mark_plugin_error: plugin services not initialized"
-            ),
+            None => tracing::error!("[PluginHost] mark_plugin_error: plugin services not initialized"),
         }
     });
 }

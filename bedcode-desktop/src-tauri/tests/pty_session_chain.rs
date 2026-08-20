@@ -34,9 +34,7 @@ use bedcode_lib::events::DesktopSyncEvent;
 use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
-use bedcode_lib::server::message::{
-    AuthPayload, AuthStage, Message, SessionControlAction, SessionControlPayload,
-};
+use bedcode_lib::server::message::{AuthPayload, AuthStage, Message, SessionControlAction, SessionControlPayload};
 use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
 use bedcode_lib::system::app_context::AppContextBuilder;
@@ -108,12 +106,11 @@ async fn init_test_app_context() -> String {
             "echo BEDCODE_PTY_STARTUP_MARKER".to_string(),
         );
         let config_id = config.id.clone();
-        session_db.create_session_config(&config).expect("insert session config failed");
+        session_db
+            .create_session_config(&config)
+            .expect("insert session config failed");
 
-        let session_manager = Arc::new(SessionManager::from_database(
-            session_db,
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
@@ -269,12 +266,7 @@ async fn http_pair_and_get_token(port: u16, tag: &str) -> String {
 }
 
 /// 以 JWT session_token 认证 /ws/event 控制通道（Message::Auth 快速路径）
-async fn authenticate_with_jwt(
-    sink: &mut WsSend,
-    stream: &mut WsRecv,
-    session_token: &str,
-    tag: &str,
-) {
+async fn authenticate_with_jwt(sink: &mut WsSend, stream: &mut WsRecv, session_token: &str, tag: &str) {
     let request = Message::Auth {
         message_id: format!("itest-jwt-{tag}"),
         expect_response: false,
@@ -290,18 +282,16 @@ async fn authenticate_with_jwt(
             ..Default::default()
         },
     };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize jwt auth failed").into()))
-        .await
-        .expect("send jwt auth failed");
+    sink.send(WsMsg::Text(
+        request.to_json().expect("serialize jwt auth failed").into(),
+    ))
+    .await
+    .expect("send jwt auth failed");
 
     let resp = recv_message(stream).await;
     match resp {
         Message::Auth { payload, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::Authenticated,
-                "JWT re-auth must succeed"
-            );
+            assert_eq!(payload.stage, AuthStage::Authenticated, "JWT re-auth must succeed");
         }
         other => panic!("expected Auth(Authenticated) from JWT re-auth, got: {other:?}"),
     }
@@ -315,7 +305,10 @@ async fn send_control_and_wait(
     session_id: Option<&str>,
 ) -> Message {
     let msg = Message::session_control_with_response(action, session_id);
-    let request_id = msg.message_id().expect("control message must have message_id").to_string();
+    let request_id = msg
+        .message_id()
+        .expect("control message must have message_id")
+        .to_string();
     sink.send(WsMsg::Text(msg.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control failed");
@@ -353,11 +346,7 @@ async fn recv_frame_json(stream: &mut WsRecv) -> serde_json::Value {
 /// PTY 输出时序非确定（PowerShell 启动、chcp、回显均无保证），因此是
 /// 「轮询到超时」而非「等 N 条帧」。返回已收集文本：断言失败时可借启动
 /// marker 判断链路断在哪一段
-async fn collect_terminal_output_until(
-    stream: &mut WsRecv,
-    marker: &str,
-    timeout: Duration,
-) -> String {
+async fn collect_terminal_output_until(stream: &mut WsRecv, marker: &str, timeout: Duration) -> String {
     let deadline = Instant::now() + timeout;
     let mut text = String::new();
     while Instant::now() < deadline {
@@ -399,9 +388,7 @@ async fn pty_session_chain_flow() {
     let config_id = init_test_app_context().await;
 
     let port = pick_free_port();
-    let (handle, server_task) = spawn_test_server(port)
-        .await
-        .expect("test server must start");
+    let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
 
     // ==================== 场景 1：已认证客户端创建会话 ====================
 
@@ -415,14 +402,19 @@ async fn pty_session_chain_flow() {
     let resp = send_control_and_wait(
         &mut sink_a,
         &mut stream_a,
-        SessionControlAction::StartSession { config_id: config_id.clone() },
+        SessionControlAction::StartSession {
+            config_id: config_id.clone(),
+        },
         None,
     )
     .await;
     let session_id = match resp {
         Message::SessionControl {
             session_id: Some(sid),
-            payload: SessionControlPayload { action: SessionControlAction::StartSession { config_id: cfg } },
+            payload:
+                SessionControlPayload {
+                    action: SessionControlAction::StartSession { config_id: cfg },
+                },
             ..
         } => {
             assert_eq!(cfg, config_id, "response must echo requested config_id");
@@ -434,19 +426,19 @@ async fn pty_session_chain_flow() {
         ),
         other => panic!("expected SessionControl(StartSession) response, got: {other:?}"),
     };
-    assert!(!session_id.is_empty(), "created session must carry non-empty session_id");
+    assert!(
+        !session_id.is_empty(),
+        "created session must carry non-empty session_id"
+    );
 
     // 1b. ListSessions 确认会话已注册且状态 running（会话标识与注册表一致）
-    let resp = send_control_and_wait(
-        &mut sink_a,
-        &mut stream_a,
-        SessionControlAction::ListSessions,
-        None,
-    )
-    .await;
+    let resp = send_control_and_wait(&mut sink_a, &mut stream_a, SessionControlAction::ListSessions, None).await;
     match resp {
         Message::SessionControl {
-            payload: SessionControlPayload { action: SessionControlAction::SessionList { sessions } },
+            payload:
+                SessionControlPayload {
+                    action: SessionControlAction::SessionList { sessions },
+                },
             ..
         } => {
             let entry = sessions
@@ -462,8 +454,7 @@ async fn pty_session_chain_flow() {
     // ==================== 场景 2：新路由订阅输出 + 写入 echo → 收到输出 ====================
     // 终端 I/O 走新路由 /ws/terminal/session/{id}（简化控制帧：auth → subscribe →
     // input，输出为 TB v2 二进制帧）。旧多会话 /ws/terminal 自订阅通道已删除
-    let (mut sink_t, mut stream_t, _addr_t) =
-        connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
+    let (mut sink_t, mut stream_t, _addr_t) = connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
 
     // 2a. 首消息 JWT 认证 → auth_ok
     sink_t
@@ -483,10 +474,11 @@ async fn pty_session_chain_flow() {
 
     // 2c. 写入 echo 命令（input data 为 UTF-8 → base64，与 handle_session_input 编码约定一致）
     let marker = format!("BEDCODE_PTY_ECHO_{session_id}");
-    let input_b64 = base64::engine::general_purpose::STANDARD
-        .encode(format!("echo {marker}\r\n").as_bytes());
+    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker}\r\n").as_bytes());
     sink_t
-        .send(WsMsg::Text(format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into()))
+        .send(WsMsg::Text(
+            format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into(),
+        ))
         .await
         .expect("send input frame failed");
 
@@ -510,14 +502,19 @@ async fn pty_session_chain_flow() {
     let resp = send_control_and_wait(
         &mut sink_a,
         &mut stream_a,
-        SessionControlAction::StopSession { session_id: session_id.clone() },
+        SessionControlAction::StopSession {
+            session_id: session_id.clone(),
+        },
         Some(&session_id),
     )
     .await;
     match resp {
         Message::SessionControl {
             session_id: Some(sid),
-            payload: SessionControlPayload { action: SessionControlAction::StopSession { session_id: act_sid } },
+            payload:
+                SessionControlPayload {
+                    action: SessionControlAction::StopSession { session_id: act_sid },
+                },
             ..
         } => {
             assert_eq!(sid, session_id, "stop response must echo session_id");
@@ -530,16 +527,13 @@ async fn pty_session_chain_flow() {
     }
 
     // 3b. 后续操作状态一致：ListSessions 中该会话报告 stopped（而非消失或仍 running）
-    let resp = send_control_and_wait(
-        &mut sink_a,
-        &mut stream_a,
-        SessionControlAction::ListSessions,
-        None,
-    )
-    .await;
+    let resp = send_control_and_wait(&mut sink_a, &mut stream_a, SessionControlAction::ListSessions, None).await;
     match resp {
         Message::SessionControl {
-            payload: SessionControlPayload { action: SessionControlAction::SessionList { sessions } },
+            payload:
+                SessionControlPayload {
+                    action: SessionControlAction::SessionList { sessions },
+                },
             ..
         } => {
             let entry = sessions
@@ -561,10 +555,13 @@ async fn pty_session_chain_flow() {
 
     // 与 02 场景 3a 的拒绝行为衔接：业务消息在 actor 状态机层被拦（authenticated=false）
     let control = Message::session_control_with_response(
-        SessionControlAction::StartSession { config_id: config_id.clone() },
+        SessionControlAction::StartSession {
+            config_id: config_id.clone(),
+        },
         None,
     );
-    sink_b.send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+    sink_b
+        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control failed");
 

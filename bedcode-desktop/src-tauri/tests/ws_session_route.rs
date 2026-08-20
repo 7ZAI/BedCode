@@ -73,10 +73,7 @@ async fn init_test_app_context() {
 
         let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
         session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(
-            session_db,
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
@@ -117,10 +114,7 @@ async fn init_test_app_context() {
 // PairingService 类型别名（与 ws_pairing_auth.rs 相同组装，避免直接依赖）
 
 /// 建立新路由 WS 连接：TCP（记录本地地址 = 服务端看到的 peer addr）→ 升级
-async fn connect_session_ws(
-    port: u16,
-    session_id: &str,
-) -> (WsSend, WsRecv, std::net::SocketAddr) {
+async fn connect_session_ws(port: u16, session_id: &str) -> (WsSend, WsRecv, std::net::SocketAddr) {
     let tcp = TcpStream::connect(("127.0.0.1", port))
         .await
         .expect("tcp connect to test server failed");
@@ -179,7 +173,11 @@ fn check_tb_v2_frame<'a>(frame: &'a [u8], what: &str) -> (u64, usize, bool, &'a 
 /// 签发测试 JWT（JwtService 内部固定密钥，验证端同一把密钥）
 fn make_test_token(device_id: &str) -> String {
     JwtService::new()
-        .generate_token(device_id.to_string(), Some("test-device".to_string()), Some("fp-test-1".to_string()))
+        .generate_token(
+            device_id.to_string(),
+            Some("test-device".to_string()),
+            Some("fp-test-1".to_string()),
+        )
         .expect("generate test token failed")
 }
 
@@ -196,9 +194,7 @@ async fn session_terminal_route_full_flow() {
     let _ = tracing_subscriber::fmt().with_test_writer().try_init();
     let port = pick_free_port();
     init_test_app_context().await;
-    let (_server_handle, _server_task) = spawn_test_server(port)
-        .await
-        .expect("start test server failed");
+    let (_server_handle, _server_task) = spawn_test_server(port).await.expect("start test server failed");
 
     // 会话存在性：直接注册假会话（不启动真实 PTY，聚焦路由/协议行为）
     let global_manager = GlobalOutputManager::global();
@@ -233,7 +229,10 @@ async fn session_terminal_route_full_flow() {
         assert_eq!(msg["type"], "error");
         assert_eq!(msg["code"], "SESSION_NOT_FOUND");
         assert!(
-            msg["message"].as_str().unwrap_or_default().contains("itest-no-such-session"),
+            msg["message"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("itest-no-such-session"),
             "error message should carry session id"
         );
 

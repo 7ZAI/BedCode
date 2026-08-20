@@ -24,12 +24,12 @@ use bedcode_lib::mdns::advertiser::MdnsAdvertiser;
 use bedcode_lib::plugin::PluginHost;
 use bedcode_lib::server::app::start_http_server;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
+use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
 use bedcode_lib::utils::auth::jwt::JwtService;
 use bedcode_lib::utils::auth::QrTokenManager;
-use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::AppConfig;
 use p256::ecdsa::signature::Signer;
 use p256::ecdsa::SigningKey;
@@ -82,10 +82,7 @@ async fn init_test_app_context() {
 
         let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
         session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(
-            session_db,
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
@@ -124,10 +121,7 @@ async fn init_test_app_context() {
 }
 
 /// 发起请求，连接失败（服务器 worker 尚未就绪）时按 25ms 间隔重试直至超时
-async fn send_until(
-    request: reqwest::RequestBuilder,
-    timeout: Duration,
-) -> reqwest::Result<reqwest::Response> {
+async fn send_until(request: reqwest::RequestBuilder, timeout: Duration) -> reqwest::Result<reqwest::Response> {
     let deadline = Instant::now() + timeout;
     loop {
         match request.try_clone().expect("request must be cloneable").send().await {
@@ -177,9 +171,7 @@ async fn http_biometric_auth_contract() {
     init_test_app_context().await;
 
     let port = pick_free_port();
-    let (handle, server_task) = spawn_test_server(port)
-        .await
-        .expect("test server must start");
+    let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
     let base = format!("http://127.0.0.1:{port}");
 
     let client = reqwest::Client::builder()
@@ -203,10 +195,14 @@ async fn http_biometric_auth_contract() {
     // ==================== T1：未配对指纹调 challenge → 1008 ====================
 
     let resp = send_until(
-        post_json(&client, &challenge_url, &serde_json::json!({
+        post_json(
+            &client,
+            &challenge_url,
+            &serde_json::json!({
                 "deviceId": "unpaired-dev",
                 "deviceFingerprint": "fp-never-paired",
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -214,14 +210,14 @@ async fn http_biometric_auth_contract() {
     // handler 返回 HTTP 200 + 业务码（与既有 verify/qr 端点一致）
     let body = body_json(resp).await;
     assert_eq!(body["code"], 1008, "未配对设备挑战签发必须返回 1008");
-    assert!(
-        body["data"].is_null(),
-        "失败响应的 data 字段必须缺省"
-    );
+    assert!(body["data"].is_null(), "失败响应的 data 字段必须缺省");
     // 未配对指纹不落连接历史（find_pairing_id_by_fingerprint 为 None → no-op）
     let db_guard = AppContext::global().db().lock().await;
     assert!(
-        db_guard.get_connection_history("unpaired-dev").expect("query history").is_empty(),
+        db_guard
+            .get_connection_history("unpaired-dev")
+            .expect("query history")
+            .is_empty(),
         "未配对指纹不应产生连接历史"
     );
     drop(db_guard);
@@ -229,10 +225,14 @@ async fn http_biometric_auth_contract() {
     // ==================== T2：已配对设备 challenge → 200 + nonce ====================
 
     let resp = send_until(
-        post_json(&client, &challenge_url, &serde_json::json!({
+        post_json(
+            &client,
+            &challenge_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -254,12 +254,16 @@ async fn http_biometric_auth_contract() {
 
     let signature = sign_message(&signing_key, &nonce);
     let resp = send_until(
-        post_json(&client, &verify_url, &serde_json::json!({
+        post_json(
+            &client,
+            &verify_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
                 "challengeNonce": nonce,
                 "signature": signature,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -277,11 +281,7 @@ async fn http_biometric_auth_contract() {
         .verify_token_with_expiry(&token)
         .expect("returned token must be verifiable");
     assert_eq!(claims.sub, pairing_id, "JWT sub 必须等于配对记录 id");
-    assert_eq!(
-        claims.fingerprint.as_deref(),
-        Some(fingerprint),
-        "JWT 必须携带设备指纹"
-    );
+    assert_eq!(claims.fingerprint.as_deref(), Some(fingerprint), "JWT 必须携带设备指纹");
 
     // add_pairing 必须保留 public_key（新的 verify 端点传 pairing.public_key，
     // 既有的 verify/qr 端点传空串会清空生物凭证——此处必须防覆盖）
@@ -300,7 +300,9 @@ async fn http_biometric_auth_contract() {
         let db_guard = AppContext::global().db().lock().await;
         let history = db_guard.get_connection_history(&pairing_id).expect("query history");
         assert!(
-            history.iter().any(|h| h.auth_method == "biometric" && h.result == "success"),
+            history
+                .iter()
+                .any(|h| h.auth_method == "biometric" && h.result == "success"),
             "验证成功必须记录 biometric/success 连接历史"
         );
     }
@@ -308,12 +310,16 @@ async fn http_biometric_auth_contract() {
     // ==================== T4：同一 nonce 二次 verify → 1009（单次有效） ====================
 
     let resp = send_until(
-        post_json(&client, &verify_url, &serde_json::json!({
+        post_json(
+            &client,
+            &verify_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
                 "challengeNonce": nonce,
                 "signature": signature,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -329,10 +335,14 @@ async fn http_biometric_auth_contract() {
 
     // 新挑战（旧 nonce 已消费）
     let resp = send_until(
-        post_json(&client, &challenge_url, &serde_json::json!({
+        post_json(
+            &client,
+            &challenge_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -347,12 +357,16 @@ async fn http_biometric_auth_contract() {
     let (_, other_key) = make_keypair();
     let wrong_signature = sign_message(&other_key, &nonce_t5);
     let resp = send_until(
-        post_json(&client, &verify_url, &serde_json::json!({
+        post_json(
+            &client,
+            &verify_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
                 "challengeNonce": nonce_t5,
                 "signature": wrong_signature,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -367,10 +381,14 @@ async fn http_biometric_auth_contract() {
     // ==================== T6：篡改 nonce verify → 1009（challenge mismatch 分支） ====================
 
     let resp = send_until(
-        post_json(&client, &challenge_url, &serde_json::json!({
+        post_json(
+            &client,
+            &challenge_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await
@@ -388,12 +406,16 @@ async fn http_biometric_auth_contract() {
     };
     let tampered_sig = sign_message(&signing_key, &tampered);
     let resp = send_until(
-        post_json(&client, &verify_url, &serde_json::json!({
+        post_json(
+            &client,
+            &verify_url,
+            &serde_json::json!({
                 "deviceId": pairing_id,
                 "deviceFingerprint": fingerprint,
                 "challengeNonce": tampered,
                 "signature": tampered_sig,
-            })),
+            }),
+        ),
         Duration::from_secs(5),
     )
     .await

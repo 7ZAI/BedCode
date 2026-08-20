@@ -5,11 +5,11 @@
 //! 不依赖 AppContext 全局单例（其初始化晚于插件激活，激活期挂载会失败）。
 //! 挂载的上传策略钩子目标记为 Wasm（WASM 插件导出 on_upload_request）
 
+use crate::enums::FileServicePayload;
 use crate::plugin::file_service::HookTarget;
 use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 use bedcode_plugin_api::permission::PERMISSION_FILESERVICE;
 use bedcode_plugin_api::{MountOptions, MountResult};
-use crate::enums::FileServicePayload;
 
 /// 获取文件服务注册表（经宿主上下文注入，激活期始终可用）
 fn file_service_registry(
@@ -19,11 +19,7 @@ fn file_service_registry(
 }
 
 /// 挂载（权限 + 注册表 mount），返回 MountResult JSON
-pub(crate) fn filesrv_mount(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    options_json: &str,
-) -> Result<String, String> {
+pub(crate) fn filesrv_mount(host_ctx: &WasmHostContext, plugin_id: &str, options_json: &str) -> Result<String, String> {
     // 测试钩子：模拟慢宿主调用（燃料看门狗回归测试用——宿主阻塞不得计入
     // guest 燃料消耗，生产环境不设置该变量）
     if let Ok(ms) = std::env::var("BEDCODE_TEST_MOUNT_DELAY_MS") {
@@ -43,19 +39,14 @@ pub(crate) fn filesrv_mount(
                 mount_path: entry.mount_path.clone(),
                 base_path: format!("/api/plugins/{}/{}", plugin_id, entry.mount_path),
             };
-            serde_json::to_string(&result)
-                .map_err(|e| format!("file service error: serialize result failed: {}", e))
+            serde_json::to_string(&result).map_err(|e| format!("file service error: serialize result failed: {}", e))
         }
         Err(e) => Err(format!("file service error: mount failed: {}", e)),
     }
 }
 
 /// 卸载挂载点（权限 + 注册表 unmount）
-pub(crate) fn filesrv_unmount(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    mount_path: &str,
-) -> Result<(), String> {
+pub(crate) fn filesrv_unmount(host_ctx: &WasmHostContext, plugin_id: &str, mount_path: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_unmount") {
         return Err("permission denied".to_string());
     }
@@ -71,8 +62,8 @@ pub(crate) fn filesrv_update_roots(
     mount_path: &str,
     roots_json: &str,
 ) -> Result<(), String> {
-    let roots: Vec<String> = serde_json::from_str(roots_json)
-        .map_err(|e| format!("file service error: invalid roots JSON: {}", e))?;
+    let roots: Vec<String> =
+        serde_json::from_str(roots_json).map_err(|e| format!("file service error: invalid roots JSON: {}", e))?;
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_update_roots") {
         return Err("permission denied".to_string());
     }
@@ -86,11 +77,7 @@ pub(crate) fn filesrv_update_roots(
 /// peer_id 为空广播给全部已认证客户端（多设备场景幂等；定向发送暂不支持，
 /// WsSessionRegistry 无 device_id 索引）；对端回复 Announce/Withdraw 后
 /// 由注册表推送 `filesrv:peer_changed`。
-pub(crate) fn filesrv_query_peer(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    peer_id: &str,
-) -> Result<(), String> {
+pub(crate) fn filesrv_query_peer(host_ctx: &WasmHostContext, plugin_id: &str, peer_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_query_peer") {
         return Err("permission denied".to_string());
     }
@@ -219,8 +206,8 @@ pub(crate) fn filesrv_self_approve_batch(
     ) {
         return Err("permission denied".to_string());
     }
-    let files: Vec<bedcode_plugin_api::UploadRequestMeta> = serde_json::from_str(files_json)
-        .map_err(|e| format!("file service error: invalid files JSON: {}", e))?;
+    let files: Vec<bedcode_plugin_api::UploadRequestMeta> =
+        serde_json::from_str(files_json).map_err(|e| format!("file service error: invalid files JSON: {}", e))?;
     let registry = file_service_registry(host_ctx);
     block_on_async(registry.self_approve_batch(plugin_id, mount_path, batch_id, files, total_size))
         .map_err(|e| format!("file service error: self-approve batch failed: {}", e))
@@ -239,12 +226,7 @@ pub(crate) fn filesrv_list_remote(
     mount_path: &str,
     path: &str,
 ) -> Result<String, String> {
-    if !super::check_permission(
-        host_ctx,
-        plugin_id,
-        PERMISSION_FILESERVICE,
-        "host_filesrv_list_remote",
-    ) {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FILESERVICE, "host_filesrv_list_remote") {
         return Err("permission denied".to_string());
     }
     let list_id = uuid::Uuid::new_v4().to_string();
@@ -272,9 +254,7 @@ pub(crate) fn filesrv_list_remote(
         "file service list request broadcast"
     );
 
-    let result = block_on_async(async {
-        tokio::time::timeout(std::time::Duration::from_secs(5), rx).await
-    });
+    let result = block_on_async(async { tokio::time::timeout(std::time::Duration::from_secs(5), rx).await });
     // 无论成败都清除 pending（响应已拿或超时，防泄漏）
     crate::plugin::file_service::list_pending::drop_pending(&list_id);
 
@@ -306,9 +286,7 @@ pub(crate) fn filesrv_list_remote(
             std::mem::discriminant(&other)
         )),
         Ok(Err(_)) => Err("file service list request cancelled".to_string()),
-        Err(_) => Err(
-            "file service list request timed out (no response from peer)".to_string(),
-        ),
+        Err(_) => Err("file service list request timed out (no response from peer)".to_string()),
     }
 }
 
@@ -468,12 +446,7 @@ mod tests {
         let root = dir.path().join(".claude");
         std::fs::create_dir_all(&root).unwrap();
 
-        let err = filesrv_mount(
-            &ctx,
-            PLUGIN,
-            &mount_options_json("Bad-Path", &[root.to_str().unwrap()]),
-        )
-        .unwrap_err();
+        let err = filesrv_mount(&ctx, PLUGIN, &mount_options_json("Bad-Path", &[root.to_str().unwrap()])).unwrap_err();
         assert!(err.contains("mount failed"), "got: {}", err);
     }
 

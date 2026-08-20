@@ -19,5 +19,5 @@ pub mod wasm_runtime;
 #[cfg(debug_assertions)]
 pub mod watcher;
 
-pub use host::PluginHost;
 pub use fs_auth::FsAuthChecker;
+pub use host::PluginHost;

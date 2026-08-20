@@ -2,9 +2,9 @@
 //!
 //! 处理设备配对和认证逻辑
 
-use crate::utils::auth::biometric::verify_biometric_signature;
-use crate::system::app_context::AppContext;
 use crate::db::Pairing;
+use crate::system::app_context::AppContext;
+use crate::utils::auth::biometric::verify_biometric_signature;
 
 // ==================== 生物认证（WS 与 HTTP 共用） ====================
 
@@ -28,9 +28,7 @@ pub enum BiometricAuthError {
 /// 设备必须已配对且绑定生物凭证公钥，否则拒绝下发（与 WS 旧路径语义一致：
 /// 未配对与无凭证统一归为 CredentialNotBound）。挑战以设备指纹为键：
 /// 同一设备的多条通道共享一次挑战，单次有效、60s 过期
-pub async fn issue_biometric_challenge(
-    fingerprint: &str,
-) -> std::result::Result<String, BiometricAuthError> {
+pub async fn issue_biometric_challenge(fingerprint: &str) -> std::result::Result<String, BiometricAuthError> {
     if fingerprint.is_empty() {
         return Err(BiometricAuthError::CredentialNotBound);
     }
@@ -41,18 +39,12 @@ pub async fn issue_biometric_challenge(
     }
     .map_err(|e| BiometricAuthError::Database(e.to_string()))?;
 
-    let binding_ready = pairing
-        .as_ref()
-        .map(|p| !p.public_key.is_empty())
-        .unwrap_or(false);
+    let binding_ready = pairing.as_ref().map(|p| !p.public_key.is_empty()).unwrap_or(false);
     if !binding_ready {
         return Err(BiometricAuthError::CredentialNotBound);
     }
 
-    let nonce = AppContext::global()
-        .biometric_challenges()
-        .generate(fingerprint)
-        .await;
+    let nonce = AppContext::global().biometric_challenges().generate(fingerprint).await;
     Ok(nonce)
 }
 
@@ -131,11 +123,6 @@ mod tests {
 
     #[test]
     fn test_display_name_without_port_keeps_address() {
-        assert_eq!(
-            format_device_display_name("Phone", "myhost"),
-            "Phone (myhost)"
-        );
+        assert_eq!(format_device_display_name("Phone", "myhost"), "Phone (myhost)");
     }
-
 }
-

@@ -3,8 +3,8 @@
 //! 处理会话启动/停止/缩放等控制逻辑
 //! JoinSession/LeaveSession 通过 GlobalOutputManager 管理输出订阅
 
+use crate::server::message::{Message, SessionControlAction, SessionSummary};
 use crate::session::{GlobalOutputManager, SessionManager};
-use crate::server::message::{SessionControlAction, Message, SessionSummary};
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -65,7 +65,9 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StartSession { config_id } => {
-            let session_id = session_manager.create_session_with_source(&config_id, device_name.clone()).await?;
+            let session_id = session_manager
+                .create_session_with_source(&config_id, device_name.clone())
+                .await?;
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,
                 expect_response: false,
@@ -79,7 +81,9 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StopSession { session_id } => {
-            session_manager.kill_session_with_source(&session_id, device_name.clone()).await?;
+            session_manager
+                .kill_session_with_source(&session_id, device_name.clone())
+                .await?;
 
             // 取消该客户端对此会话的输出订阅
             let global_manager = GlobalOutputManager::global();
@@ -98,7 +102,9 @@ pub async fn handle_control(
         }
 
         SessionControlAction::RemoveSession { session_id } => {
-            session_manager.remove_session_with_source(&session_id, device_name.clone()).await?;
+            session_manager
+                .remove_session_with_source(&session_id, device_name.clone())
+                .await?;
 
             // 取消该客户端对此会话的输出订阅
             let global_manager = GlobalOutputManager::global();
@@ -133,7 +139,11 @@ pub async fn handle_control(
             // 检查会话是否存在
             let sessions = session_manager.list_sessions().await;
             if !sessions.iter().any(|s| s.id == session_id) {
-                return Ok(Some(Message::error_with_id(&request_message_id, "SESSION_NOT_FOUND", &format!("Session not found: {}", session_id))));
+                return Ok(Some(Message::error_with_id(
+                    &request_message_id,
+                    "SESSION_NOT_FOUND",
+                    &format!("Session not found: {}", session_id),
+                )));
             }
 
             // 通过 GlobalOutputManager 订阅会话输出
@@ -143,7 +153,11 @@ pub async fn handle_control(
 
             if !global_manager.has_session(&session_id).await {
                 tracing::warn!(session_id = %session_id, addr = %addr, "JoinSession: session not registered in GlobalOutputManager");
-                return Ok(Some(Message::error_with_id(&request_message_id, "SESSION_NOT_FOUND", &format!("Session {} output not available", session_id))));
+                return Ok(Some(Message::error_with_id(
+                    &request_message_id,
+                    "SESSION_NOT_FOUND",
+                    &format!("Session {} output not available", session_id),
+                )));
             }
 
             let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputFrame>(256);
@@ -176,10 +190,11 @@ pub async fn handle_control(
                                             buffer.append(&event);
                                             if buffer.data.len() >= max_buffer_size {
                                                 let text = buffer.flush(&session_id_for_fwd);
-                                                let message = match crate::server::ws::message::Message::from_json(&text) {
-                                                    Ok(m) => m,
-                                                    Err(_) => break,
-                                                };
+                                                let message =
+                                                    match crate::server::ws::message::Message::from_json(&text) {
+                                                        Ok(m) => m,
+                                                        Err(_) => break,
+                                                    };
                                                 let _ = ws_manager.send_to_client(&client_id, &message).await;
                                             }
                                         }
@@ -188,10 +203,11 @@ pub async fn handle_control(
                                         crate::session::OutputFrame::HistoryEnd { .. } => {
                                             if !buffer.is_empty() {
                                                 let text = buffer.flush(&session_id_for_fwd);
-                                                let message = match crate::server::ws::message::Message::from_json(&text) {
-                                                    Ok(m) => m,
-                                                    Err(_) => break,
-                                                };
+                                                let message =
+                                                    match crate::server::ws::message::Message::from_json(&text) {
+                                                        Ok(m) => m,
+                                                        Err(_) => break,
+                                                    };
                                                 let _ = ws_manager.send_to_client(&client_id, &message).await;
                                             }
                                         }
@@ -237,7 +253,11 @@ pub async fn handle_control(
                 }
                 None => {
                     tracing::warn!(session_id = %session_id, addr = %addr, "JoinSession: GlobalOutputManager.subscribe returned None");
-                    Ok(Some(Message::error_with_id(&request_message_id, "SESSION_NOT_FOUND", &format!("Session {} not found", session_id))))
+                    Ok(Some(Message::error_with_id(
+                        &request_message_id,
+                        "SESSION_NOT_FOUND",
+                        &format!("Session {} not found", session_id),
+                    )))
                 }
             }
         }
@@ -285,33 +305,32 @@ pub async fn handle_control_message(
         | SessionControlAction::LeaveSession { .. }
         | SessionControlAction::RemoveSession { .. } => {
             if let Some(sm) = session_manager {
-                let result = handle_control(
-                    action.clone(),
-                    message_id,
-                    sm,
-                    addr,
-                    device_name.clone(),
-                ).await?;
+                let result = handle_control(action.clone(), message_id, sm, addr, device_name.clone()).await?;
 
                 // 移动端操作成功后，发送刷新事件通知桌面端前端
                 if let Some(handle) = app_handle {
                     let source = device_name.unwrap_or_else(|| "mobile".to_string());
                     match &action {
-                        SessionControlAction::StopSession { .. }
-                        | SessionControlAction::RemoveSession { .. } => {
-                            if let Err(e) = handle.emit("sessions-refresh", RefreshEvent {
-                                refresh_type: "sessions".to_string(),
-                                source: source.clone(),
-                            }) {
+                        SessionControlAction::StopSession { .. } | SessionControlAction::RemoveSession { .. } => {
+                            if let Err(e) = handle.emit(
+                                "sessions-refresh",
+                                RefreshEvent {
+                                    refresh_type: "sessions".to_string(),
+                                    source: source.clone(),
+                                },
+                            ) {
                                 tracing::error!(error = %e, "Failed to emit sessions-refresh event");
                             }
                             tracing::info!(source = %source, "[SessionControl] Emitted sessions-refresh event");
                         }
                         SessionControlAction::StartSession { .. } => {
-                            if let Err(e) = handle.emit("sessions-refresh", RefreshEvent {
-                                refresh_type: "sessions".to_string(),
-                                source: source.clone(),
-                            }) {
+                            if let Err(e) = handle.emit(
+                                "sessions-refresh",
+                                RefreshEvent {
+                                    refresh_type: "sessions".to_string(),
+                                    source: source.clone(),
+                                },
+                            ) {
                                 tracing::error!(error = %e, "Failed to emit sessions-refresh event");
                             }
                             tracing::info!("[SessionControl] Emitted sessions-refresh event from {}", source);
@@ -380,10 +399,7 @@ impl OutputBuffer {
 
     /// Flush 缓冲区为 WS 消息 JSON
     fn flush(&mut self, session_id: &str) -> String {
-        let data_base64 = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &self.data,
-        );
+        let data_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data);
         let end_index = if self.end_index > self.start_index {
             Some(self.end_index as usize)
         } else {

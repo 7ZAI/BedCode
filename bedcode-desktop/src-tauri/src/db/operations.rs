@@ -1,31 +1,35 @@
 //! Database operations
 
-use super::{ConnectionHistory, Database, Pairing, QuickAction, SessionConfig, Setting};
 use super::CONNECTION_HISTORY_MAX_PER_DEVICE;
+use super::{ConnectionHistory, Database, Pairing, QuickAction, SessionConfig, Setting};
 use crate::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 /// Helper function to parse datetime from string, with proper error handling for rusqlite
 fn parse_datetime_sql(s: &str, field_name: &str) -> std::result::Result<DateTime<Utc>, rusqlite::Error> {
-    s.parse().map_err(|e| {
-        rusqlite::Error::InvalidParameterName(format!(
-            "Invalid datetime for {}: {}",
-            field_name, e
-        ))
-    })
+    s.parse()
+        .map_err(|e| rusqlite::Error::InvalidParameterName(format!("Invalid datetime for {}: {}", field_name, e)))
 }
 
 /// Helper function to parse optional datetime from string for rusqlite
-fn parse_optional_datetime_sql(s: Option<String>, field_name: &str) -> std::result::Result<Option<DateTime<Utc>>, rusqlite::Error> {
-    s.map(|dt| parse_datetime_sql(&dt, field_name))
-        .transpose()
+fn parse_optional_datetime_sql(
+    s: Option<String>,
+    field_name: &str,
+) -> std::result::Result<Option<DateTime<Utc>>, rusqlite::Error> {
+    s.map(|dt| parse_datetime_sql(&dt, field_name)).transpose()
 }
 
 impl Database {
     // ==================== Pairing Operations ====================
 
-    pub fn add_pairing(&self, device_name: &str, fingerprint: &str, public_key: &str, address: Option<&str>) -> Result<String> {
+    pub fn add_pairing(
+        &self,
+        device_name: &str,
+        fingerprint: &str,
+        public_key: &str,
+        address: Option<&str>,
+    ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
@@ -44,11 +48,14 @@ impl Database {
         )?;
 
         // 返回实际记录 id（冲突时取已有 id）
-        let existing_id: String = self.conn().query_row(
-            "SELECT id FROM pairings WHERE device_fingerprint = ?1",
-            rusqlite::params![fingerprint],
-            |row| row.get(0),
-        ).unwrap_or(id);
+        let existing_id: String = self
+            .conn()
+            .query_row(
+                "SELECT id FROM pairings WHERE device_fingerprint = ?1",
+                rusqlite::params![fingerprint],
+                |row| row.get(0),
+            )
+            .unwrap_or(id);
 
         Ok(existing_id)
     }
@@ -91,29 +98,29 @@ impl Database {
              FROM pairings WHERE is_active = 1 ORDER BY paired_at DESC"
         )?;
 
-        let pairings = stmt.query_map([], |row| {
-            Ok(Pairing {
-                id: row.get(0)?,
-                device_name: row.get(1)?,
-                device_fingerprint: row.get(2)?,
-                public_key: row.get(3)?,
-                address: row.get(4)?,
-                session_token: row.get(5)?,
-                paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
-                last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
-                connect_count: row.get(8)?,
-                is_active: row.get::<_, i32>(9)? == 1,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let pairings = stmt
+            .query_map([], |row| {
+                Ok(Pairing {
+                    id: row.get(0)?,
+                    device_name: row.get(1)?,
+                    device_fingerprint: row.get(2)?,
+                    public_key: row.get(3)?,
+                    address: row.get(4)?,
+                    session_token: row.get(5)?,
+                    paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
+                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
+                    connect_count: row.get(8)?,
+                    is_active: row.get::<_, i32>(9)? == 1,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(pairings)
     }
 
     pub fn remove_pairing(&self, id: &str) -> Result<()> {
-        self.conn().execute(
-            "UPDATE pairings SET is_active = 0 WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
+        self.conn()
+            .execute("UPDATE pairings SET is_active = 0 WHERE id = ?1", rusqlite::params![id])?;
         // 移除设备连带删除连接历史（无审计需求）
         self.delete_connection_history(id)?;
         Ok(())
@@ -151,20 +158,22 @@ impl Database {
              FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1"
         )?;
 
-        let pairing = stmt.query_row(rusqlite::params![fingerprint], |row| {
-            Ok(Pairing {
-                id: row.get(0)?,
-                device_name: row.get(1)?,
-                device_fingerprint: row.get(2)?,
-                public_key: row.get(3)?,
-                address: row.get(4)?,
-                session_token: row.get(5)?,
-                paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
-                last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
-                connect_count: row.get(8)?,
-                is_active: row.get::<_, i32>(9)? == 1,
+        let pairing = stmt
+            .query_row(rusqlite::params![fingerprint], |row| {
+                Ok(Pairing {
+                    id: row.get(0)?,
+                    device_name: row.get(1)?,
+                    device_fingerprint: row.get(2)?,
+                    public_key: row.get(3)?,
+                    address: row.get(4)?,
+                    session_token: row.get(5)?,
+                    paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
+                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
+                    connect_count: row.get(8)?,
+                    is_active: row.get::<_, i32>(9)? == 1,
+                })
             })
-        }).ok();
+            .ok();
 
         Ok(pairing)
     }
@@ -179,7 +188,13 @@ impl Database {
     }
 
     /// 记录连接事件（按设备 ID），插入后清理超限的旧记录
-    pub fn record_connection_event(&self, device_id: &str, auth_method: &str, result: &str, address: Option<&str>) -> Result<()> {
+    pub fn record_connection_event(
+        &self,
+        device_id: &str,
+        auth_method: &str,
+        result: &str,
+        address: Option<&str>,
+    ) -> Result<()> {
         let now = Utc::now().to_rfc3339();
         self.conn().execute(
             "INSERT INTO connection_history (device_id, auth_method, result, address, connected_at)
@@ -191,7 +206,13 @@ impl Database {
     }
 
     /// 记录连接事件（按设备指纹解析设备 ID，未配对/未激活则忽略）
-    pub fn record_connection_event_by_fingerprint(&self, fingerprint: &str, auth_method: &str, result: &str, address: Option<&str>) -> Result<()> {
+    pub fn record_connection_event_by_fingerprint(
+        &self,
+        fingerprint: &str,
+        auth_method: &str,
+        result: &str,
+        address: Option<&str>,
+    ) -> Result<()> {
         if let Some(device_id) = self.find_pairing_id_by_fingerprint(fingerprint)? {
             self.record_connection_event(&device_id, auth_method, result, address)?;
         }
@@ -201,12 +222,15 @@ impl Database {
     /// 回填最近一条未关闭连接的断开时间
     pub fn close_open_connection_event(&self, device_id: &str) -> Result<()> {
         let now = Utc::now().to_rfc3339();
-        let id: Option<i64> = self.conn().query_row(
-            "SELECT id FROM connection_history WHERE device_id = ?1 AND disconnected_at IS NULL
+        let id: Option<i64> = self
+            .conn()
+            .query_row(
+                "SELECT id FROM connection_history WHERE device_id = ?1 AND disconnected_at IS NULL
              ORDER BY connected_at DESC LIMIT 1",
-            rusqlite::params![device_id],
-            |row| row.get(0),
-        ).ok();
+                rusqlite::params![device_id],
+                |row| row.get(0),
+            )
+            .ok();
         if let Some(id) = id {
             self.conn().execute(
                 "UPDATE connection_history SET disconnected_at = ?1 WHERE id = ?2",
@@ -220,7 +244,7 @@ impl Database {
     pub fn get_connection_history(&self, device_id: &str) -> Result<Vec<ConnectionHistory>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, device_id, auth_method, result, address, connected_at, disconnected_at
-             FROM connection_history WHERE device_id = ?1 ORDER BY connected_at DESC"
+             FROM connection_history WHERE device_id = ?1 ORDER BY connected_at DESC",
         )?;
 
         let rows = stmt.query_map(rusqlite::params![device_id], |row| {
@@ -283,22 +307,24 @@ impl Database {
     pub fn get_session_configs(&self) -> Result<Vec<SessionConfig>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
-             FROM session_configs ORDER BY name"
+             FROM session_configs ORDER BY name",
         )?;
 
-        let configs = stmt.query_map([], |row| {
-            Ok(SessionConfig {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                environment: row.get(2)?,
-                wsl_distro: row.get(3)?,
-                working_dir: row.get(4)?,
-                command: row.get(5)?,
-                auto_start: row.get::<_, i32>(6)? == 1,
-                created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
-                updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let configs = stmt
+            .query_map([], |row| {
+                Ok(SessionConfig {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    environment: row.get(2)?,
+                    wsl_distro: row.get(3)?,
+                    working_dir: row.get(4)?,
+                    command: row.get(5)?,
+                    auto_start: row.get::<_, i32>(6)? == 1,
+                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                    updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(configs)
     }
@@ -306,31 +332,31 @@ impl Database {
     pub fn get_session_config(&self, id: &str) -> Result<Option<SessionConfig>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
-             FROM session_configs WHERE id = ?1"
+             FROM session_configs WHERE id = ?1",
         )?;
 
-        let config = stmt.query_row(rusqlite::params![id], |row| {
-            Ok(SessionConfig {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                environment: row.get(2)?,
-                wsl_distro: row.get(3)?,
-                working_dir: row.get(4)?,
-                command: row.get(5)?,
-                auto_start: row.get::<_, i32>(6)? == 1,
-                created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
-                updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
+        let config = stmt
+            .query_row(rusqlite::params![id], |row| {
+                Ok(SessionConfig {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    environment: row.get(2)?,
+                    wsl_distro: row.get(3)?,
+                    working_dir: row.get(4)?,
+                    command: row.get(5)?,
+                    auto_start: row.get::<_, i32>(6)? == 1,
+                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                    updated_at: parse_datetime_sql(&row.get::<_, String>(8)?, "updated_at")?,
+                })
             })
-        }).ok();
+            .ok();
 
         Ok(config)
     }
 
     pub fn delete_session_config(&self, id: &str) -> Result<()> {
-        self.conn().execute(
-            "DELETE FROM session_configs WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
+        self.conn()
+            .execute("DELETE FROM session_configs WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 
@@ -365,21 +391,23 @@ impl Database {
     pub fn get_quick_actions(&self) -> Result<Vec<QuickAction>> {
         let mut stmt = self.conn().prepare(
             "SELECT id, name, content, icon, color, category, sort_order, created_at
-             FROM quick_actions ORDER BY sort_order"
+             FROM quick_actions ORDER BY sort_order",
         )?;
 
-        let actions = stmt.query_map([], |row| {
-            Ok(QuickAction {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                content: row.get(2)?,
-                icon: row.get(3)?,
-                color: row.get(4)?,
-                category: row.get(5)?,
-                sort_order: row.get(6)?,
-                created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let actions = stmt
+            .query_map([], |row| {
+                Ok(QuickAction {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    content: row.get(2)?,
+                    icon: row.get(3)?,
+                    color: row.get(4)?,
+                    category: row.get(5)?,
+                    sort_order: row.get(6)?,
+                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(actions)
     }
@@ -420,21 +448,22 @@ impl Database {
     }
 
     pub fn delete_quick_action(&self, id: &str) -> Result<()> {
-        self.conn().execute(
-            "DELETE FROM quick_actions WHERE id = ?1",
-            rusqlite::params![id],
-        )?;
+        self.conn()
+            .execute("DELETE FROM quick_actions WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 
     // ==================== Settings ====================
 
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
-        let value = self.conn().query_row(
-            "SELECT value FROM settings WHERE key = ?1",
-            rusqlite::params![key],
-            |row| row.get(0),
-        ).ok();
+        let value = self
+            .conn()
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                rusqlite::params![key],
+                |row| row.get(0),
+            )
+            .ok();
         Ok(value)
     }
 
@@ -448,17 +477,19 @@ impl Database {
     }
 
     pub fn get_all_settings(&self) -> Result<Vec<Setting>> {
-        let mut stmt = self.conn().prepare(
-            "SELECT key, value, updated_at FROM settings ORDER BY key"
-        )?;
+        let mut stmt = self
+            .conn()
+            .prepare("SELECT key, value, updated_at FROM settings ORDER BY key")?;
 
-        let settings = stmt.query_map([], |row| {
-            Ok(Setting {
-                key: row.get(0)?,
-                value: row.get(1)?,
-                updated_at: parse_datetime_sql(&row.get::<_, String>(2)?, "updated_at")?,
-            })
-        })?.collect::<std::result::Result<Vec<_>, _>>()?;
+        let settings = stmt
+            .query_map([], |row| {
+                Ok(Setting {
+                    key: row.get(0)?,
+                    value: row.get(1)?,
+                    updated_at: parse_datetime_sql(&row.get::<_, String>(2)?, "updated_at")?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(settings)
     }

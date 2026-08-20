@@ -104,11 +104,7 @@ impl Default for BiometricChallengeManager {
 /// - `public_key_spki_b64`: 绑定公钥（SPKI X.509 DER，base64）
 /// - `message`: 被签名的消息（挑战值 hex 字符串的 UTF-8 字节）
 /// - `signature_b64`: 签名（原始 r||s 格式，base64）
-pub fn verify_biometric_signature(
-    public_key_spki_b64: &str,
-    message: &str,
-    signature_b64: &str,
-) -> Result<()> {
+pub fn verify_biometric_signature(public_key_spki_b64: &str, message: &str, signature_b64: &str) -> Result<()> {
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -125,8 +121,8 @@ pub fn verify_biometric_signature(
         .decode(signature_b64)
         .map_err(|e| crate::AppError::Auth(format!("Invalid signature encoding: {}", e)))?;
 
-    let signature = Signature::from_slice(&raw_sig)
-        .map_err(|e| crate::AppError::Auth(format!("Invalid signature: {}", e)))?;
+    let signature =
+        Signature::from_slice(&raw_sig).map_err(|e| crate::AppError::Auth(format!("Invalid signature: {}", e)))?;
 
     verifying_key
         .verify(message.as_bytes(), &signature)

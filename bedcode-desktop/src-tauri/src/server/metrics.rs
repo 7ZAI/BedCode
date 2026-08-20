@@ -77,25 +77,26 @@ struct MetricsInner {
 impl MetricsCollector {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<MetricsCollector> =
-            std::sync::LazyLock::new(|| MetricsCollector {
-                inner: std::sync::Arc::new(MetricsInner {
-                    start_time: std::sync::Mutex::new(std::time::Instant::now()),
-                    http_requests: std::sync::atomic::AtomicU64::new(0),
-                    ws_sent: std::sync::atomic::AtomicU64::new(0),
-                    ws_received: std::sync::atomic::AtomicU64::new(0),
-                    last_http_requests: std::sync::atomic::AtomicU64::new(0),
-                    last_ws_sent: std::sync::atomic::AtomicU64::new(0),
-                    last_ws_received: std::sync::atomic::AtomicU64::new(0),
-                    last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
-                }),
-            });
+        static INSTANCE: std::sync::LazyLock<MetricsCollector> = std::sync::LazyLock::new(|| MetricsCollector {
+            inner: std::sync::Arc::new(MetricsInner {
+                start_time: std::sync::Mutex::new(std::time::Instant::now()),
+                http_requests: std::sync::atomic::AtomicU64::new(0),
+                ws_sent: std::sync::atomic::AtomicU64::new(0),
+                ws_received: std::sync::atomic::AtomicU64::new(0),
+                last_http_requests: std::sync::atomic::AtomicU64::new(0),
+                last_ws_sent: std::sync::atomic::AtomicU64::new(0),
+                last_ws_received: std::sync::atomic::AtomicU64::new(0),
+                last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
+            }),
+        });
         &INSTANCE
     }
 
     /// 递增 HTTP 请求计数
     pub fn inc_http_request(&self) {
-        self.inner.http_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .http_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 递增 WS 发送计数
@@ -105,7 +106,9 @@ impl MetricsCollector {
 
     /// 递增 WS 接收计数
     pub fn inc_ws_received(&self) {
-        self.inner.ws_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .ws_received
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 重置所有计数器和计时器（服务器重启时调用）
@@ -116,9 +119,13 @@ impl MetricsCollector {
         self.inner.http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.inner.last_http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .last_http_requests
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.last_ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.inner.last_ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .last_ws_received
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut last_time) = self.inner.last_sample_time.lock() {
             *last_time = std::time::Instant::now();
         }
@@ -152,9 +159,15 @@ impl MetricsCollector {
             }
 
             // 更新采样基准
-            self.inner.last_http_requests.store(http_total, std::sync::atomic::Ordering::Relaxed);
-            self.inner.last_ws_sent.store(ws_sent_total, std::sync::atomic::Ordering::Relaxed);
-            self.inner.last_ws_received.store(ws_recv_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_http_requests
+                .store(http_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_ws_sent
+                .store(ws_sent_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_ws_received
+                .store(ws_recv_total, std::sync::atomic::Ordering::Relaxed);
             *last_time = now;
         }
 

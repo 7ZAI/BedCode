@@ -83,10 +83,7 @@ async fn init_test_app_context() {
 
         let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
         session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(
-            session_db,
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
@@ -217,12 +214,7 @@ async fn wait_for_close(stream: &mut WsRecv, timeout: Duration) -> bool {
 ///
 /// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
 /// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
-async fn http_pair_and_get_token(
-    port: u16,
-    device_id: &str,
-    device_name: &str,
-    fingerprint: &str,
-) -> String {
+async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, fingerprint: &str) -> String {
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::new();
 
@@ -305,18 +297,16 @@ async fn authenticate_with_jwt(
             ..Default::default()
         },
     };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize jwt auth failed").into()))
-        .await
-        .expect("send jwt auth failed");
+    sink.send(WsMsg::Text(
+        request.to_json().expect("serialize jwt auth failed").into(),
+    ))
+    .await
+    .expect("send jwt auth failed");
 
     let resp = recv_message(stream).await;
     match resp {
         Message::Auth { payload, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::Authenticated,
-                "JWT re-auth must succeed"
-            );
+            assert_eq!(payload.stage, AuthStage::Authenticated, "JWT re-auth must succeed");
             assert_eq!(
                 payload.device_name.as_deref(),
                 Some(device_name),
@@ -332,18 +322,19 @@ async fn ws_auth_gate_rules() {
     init_test_app_context().await;
 
     let port = pick_free_port();
-    let (handle, server_task) = spawn_test_server(port)
-        .await
-        .expect("test server must start");
+    let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
 
     // ==================== 场景 1：首条非 auth 消息被拒 + 关闭（spec §4.3 拒绝对称） ====================
     let (mut sink1, mut stream1, _addr1) = connect_ws(port, "/ws/event").await;
 
     let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession { session_id: "ghost-auth-rules-1".to_string() },
+        SessionControlAction::RemoveSession {
+            session_id: "ghost-auth-rules-1".to_string(),
+        },
         None,
     );
-    sink1.send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+    sink1
+        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control failed");
 
@@ -387,17 +378,15 @@ async fn ws_auth_gate_rules() {
             ..Default::default()
         },
     };
-    sink2.send(WsMsg::Text(bad_auth.to_json().expect("serialize auth failed").into()))
+    sink2
+        .send(WsMsg::Text(bad_auth.to_json().expect("serialize auth failed").into()))
         .await
         .expect("send bad-token auth failed");
 
     // 2a. 无效 token → AUTH_FAILED 错误（错误码/文案保持既有语义）
     let resp = recv_message(&mut stream2).await;
     match resp {
-        Message::Error { code, .. } => assert_eq!(
-            code, "AUTH_FAILED",
-            "invalid JWT token must yield AUTH_FAILED"
-        ),
+        Message::Error { code, .. } => assert_eq!(code, "AUTH_FAILED", "invalid JWT token must yield AUTH_FAILED"),
         other => panic!("expected Error(AUTH_FAILED), got: {other:?}"),
     }
 
@@ -417,15 +406,26 @@ async fn ws_auth_gate_rules() {
     let (mut sink3, mut stream3, _addr3) = connect_ws(port, "/ws/event").await;
 
     // 3a. 首消息 JWT 认证 → Authenticated 回复
-    authenticate_with_jwt(&mut sink3, &mut stream3, &token, "ITest R3", "fp-auth-rules-3", "rules-3").await;
+    authenticate_with_jwt(
+        &mut sink3,
+        &mut stream3,
+        &token,
+        "ITest R3",
+        "fp-auth-rules-3",
+        "rules-3",
+    )
+    .await;
 
     // 3b. 认证后发 SessionControl（不带 token 字段，与移动端原生消息形态一致）→
     // 收到 echo，证明业务消息放行不依赖 token（首消息认证即凭证）
     let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession { session_id: "ghost-auth-rules-3".to_string() },
+        SessionControlAction::RemoveSession {
+            session_id: "ghost-auth-rules-3".to_string(),
+        },
         None,
     );
-    sink3.send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+    sink3
+        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control (tokenless) failed");
 
@@ -433,10 +433,7 @@ async fn ws_auth_gate_rules() {
     match resp {
         Message::SessionControl { payload, .. } => match payload.action {
             SessionControlAction::RemoveSession { session_id } => {
-                assert_eq!(
-                    session_id, "ghost-auth-rules-3",
-                    "echo must carry removed session id"
-                );
+                assert_eq!(session_id, "ghost-auth-rules-3", "echo must carry removed session id");
             }
             other => panic!("expected RemoveSession echo, got: {other:?}"),
         },
@@ -458,7 +455,10 @@ async fn ws_auth_gate_rules() {
     let started = Instant::now();
     let closed = wait_for_close(&mut stream4, Duration::from_secs(14)).await;
     let elapsed = started.elapsed();
-    assert!(closed, "idle unauthenticated connection must be closed by server auth timeout");
+    assert!(
+        closed,
+        "idle unauthenticated connection must be closed by server auth timeout"
+    );
     assert!(
         elapsed >= Duration::from_secs(9),
         "server must not close before the 10s auth window elapses, closed at {elapsed:?}"

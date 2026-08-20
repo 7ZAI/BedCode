@@ -3,20 +3,19 @@
 //! 配置路由、中间件和服务器启动
 //! HTTP REST API + WebSocket 终端在同一端口上运行
 
-use actix_web::{web, App, HttpServer, HttpRequest, HttpResponse, Error, dev::Service, http::KeepAlive};
 use actix_cors::Cors;
+use actix_web::{dev::Service, http::KeepAlive, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws as actix_ws;
 use serde_json::json;
 use std::time::Duration;
 
 use crate::server::controllers::{
-    auth_controller, session_controller, config_controller, file_controller,
-    file_service_controller, plugin_controller, git_controller,
+    auth_controller, config_controller, file_controller, file_service_controller, git_controller, plugin_controller,
+    session_controller,
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
-    WS_EVENT_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
-    CORS_MAX_AGE_SECS, BIND_ADDRESS,
+    API_HEALTH_PATH, BIND_ADDRESS, CORS_MAX_AGE_SECS, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH,
 };
 
 /// WS 帧/消息大小上限（字节）
@@ -42,7 +41,9 @@ async fn session_terminal_ws(
     req: HttpRequest,
     stream: web::Payload,
 ) -> Result<HttpResponse, Error> {
-    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let addr = req
+        .peer_addr()
+        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let ws_actor = TerminalWs::new_for_session(addr, path.into_inner());
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(ws_frame_limit())
@@ -55,7 +56,9 @@ async fn session_terminal_ws(
 /// 1. 环回地址校验：服务器绑定 0.0.0.0 供移动端访问，本地通道必须显式限定环回
 /// 2. 短期一次性令牌校验（?token=）：防止本机其他进程（恶意网页/脚本）连本地端口
 async fn local_terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let addr = req
+        .peer_addr()
+        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     if !addr.ip().is_loopback() {
         tracing::warn!(addr = %addr, "Local WS rejected: peer is not loopback");
         return Ok(HttpResponse::Forbidden().finish());
@@ -88,7 +91,9 @@ async fn local_terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<Htt
 /// 认证同样在 WS 首消息完成（JWT 重连或配对流程），与 /ws/terminal 一致；
 /// 路由在 /api scope 外，不经 HTTP JWT 中间件
 async fn event_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let addr = req
+        .peer_addr()
+        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let ws_actor = TerminalWs::new_event(addr);
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(ws_frame_limit())
@@ -188,10 +193,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 每会话终端端点（spec §5.1）：连接创建即绑定 session_id，订阅即连接。
     // 旧 /ws/terminal 兼容路由（多会话订阅 + base64 JSON 文本帧 + 旧 WS 配对认证）
     // 已随旧 v2.0.0 客户端下线删除
-    cfg.route(
-        "/ws/terminal/session/{session_id}",
-        web::get().to(session_terminal_ws),
-    );
+    cfg.route("/ws/terminal/session/{session_id}", web::get().to(session_terminal_ws));
 
     // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
     cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
@@ -212,9 +214,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api")
             .wrap_fn(|req, srv| {
-                use crate::server::middleware::jwt_auth::{
-                    is_public_path, is_plugin_path, extract_and_verify_jwt,
-                };
+                use crate::server::middleware::jwt_auth::{extract_and_verify_jwt, is_plugin_path, is_public_path};
                 use actix_web::HttpMessage;
 
                 let path = req.path().to_string();
@@ -238,11 +238,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
                 // 其余受保护路由：无有效 JWT → 返回 401
                 let (req, _payload) = req.into_parts();
-                let response = actix_web::HttpResponse::Unauthorized()
-                    .json(json!({
-                        "code": 1007,
-                        "message": "Authentication required"
-                    }));
+                let response = actix_web::HttpResponse::Unauthorized().json(json!({
+                    "code": 1007,
+                    "message": "Authentication required"
+                }));
                 let srv_response = actix_web::dev::ServiceResponse::new(req, response);
                 Box::pin(std::future::ready(Ok(srv_response)))
             })
@@ -252,19 +251,37 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route("/auth/qr-connect", web::post().to(auth_controller::qr_connect))
             .route("/auth/reauth", web::post().to(auth_controller::reauthenticate))
             // 生物认证端点同样落在 /api/auth/ 前缀下，中间件 is_public_path 自动放行
-            .route("/auth/biometric-challenge", web::post().to(auth_controller::biometric_challenge))
-            .route("/auth/biometric-verify", web::post().to(auth_controller::biometric_verify))
+            .route(
+                "/auth/biometric-challenge",
+                web::post().to(auth_controller::biometric_challenge),
+            )
+            .route(
+                "/auth/biometric-verify",
+                web::post().to(auth_controller::biometric_verify),
+            )
             // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))
             .route("/sessions/{id}/stop", web::post().to(session_controller::stop_session))
-            .route("/sessions/{id}/resize", web::post().to(session_controller::resize_session))
-            .route("/sessions/{id}/input", web::post().to(session_controller::send_session_input))
-            .route("/sessions/{id}/remove", web::delete().to(session_controller::remove_session))
+            .route(
+                "/sessions/{id}/resize",
+                web::post().to(session_controller::resize_session),
+            )
+            .route(
+                "/sessions/{id}/input",
+                web::post().to(session_controller::send_session_input),
+            )
+            .route(
+                "/sessions/{id}/remove",
+                web::delete().to(session_controller::remove_session),
+            )
             .route("/configs", web::get().to(config_controller::list_configs))
             .route("/quick-actions", web::get().to(config_controller::list_quick_actions))
             .route("/file-tree", web::post().to(file_controller::get_file_tree))
-            .route("/file-tree-children", web::get().to(file_controller::get_file_tree_children))
+            .route(
+                "/file-tree-children",
+                web::get().to(file_controller::get_file_tree_children),
+            )
             .route("/file-content", web::post().to(file_controller::get_file_content))
             .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
             .route("/file-diff", web::post().to(file_controller::get_file_diff))
@@ -278,15 +295,36 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                     .route("/{mount}/list", web::get().to(file_service_controller::list_dir))
                     .route("/{mount}/file", web::get().to(file_service_controller::download_file))
                     .route("/{mount}/file", web::head().to(file_service_controller::head_file))
-                    .route("/{mount}/upload", web::post().to(file_service_controller::create_upload))
-                    .route("/{mount}/transfer-request", web::post().to(file_service_controller::transfer_request))
-                    .route("/{mount}/upload/{sid}", web::put().to(file_service_controller::append_upload))
-                    .route("/{mount}/upload/{sid}", web::get().to(file_service_controller::query_upload))
-                    .route("/{mount}/upload/{sid}", web::delete().to(file_service_controller::cancel_upload))
-                    .route("/{mount}/upload/{sid}/complete", web::post().to(file_service_controller::complete_upload)),
+                    .route(
+                        "/{mount}/upload",
+                        web::post().to(file_service_controller::create_upload),
+                    )
+                    .route(
+                        "/{mount}/transfer-request",
+                        web::post().to(file_service_controller::transfer_request),
+                    )
+                    .route(
+                        "/{mount}/upload/{sid}",
+                        web::put().to(file_service_controller::append_upload),
+                    )
+                    .route(
+                        "/{mount}/upload/{sid}",
+                        web::get().to(file_service_controller::query_upload),
+                    )
+                    .route(
+                        "/{mount}/upload/{sid}",
+                        web::delete().to(file_service_controller::cancel_upload),
+                    )
+                    .route(
+                        "/{mount}/upload/{sid}/complete",
+                        web::post().to(file_service_controller::complete_upload),
+                    ),
             )
             // 插件动态 HTTP 端点代理 — 中间件允许 JWT 或 plugin token
-            .route("/plugin/{plugin_id}/{path:.*}", web::route().to(plugin_controller::plugin_http_endpoint))
+            .route(
+                "/plugin/{plugin_id}/{path:.*}",
+                web::route().to(plugin_controller::plugin_http_endpoint),
+            ),
     );
 }
 
@@ -297,7 +335,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 pub async fn start_http_server(
     port: u16,
     config: &crate::system::config::NetworkConfig,
-) -> std::io::Result<(actix_web::dev::ServerHandle, impl std::future::Future<Output = std::io::Result<()>>)> {
+) -> std::io::Result<(
+    actix_web::dev::ServerHandle,
+    impl std::future::Future<Output = std::io::Result<()>>,
+)> {
     tracing::info!("Starting Actix Web server (HTTP + WS) on port {}", port);
 
     let keep_alive = if config.keep_alive_secs == 0 {

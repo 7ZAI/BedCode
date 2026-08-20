@@ -103,12 +103,7 @@ pub fn path_remove(path: &str, entry: &str) -> (String, bool) {
         .filter(|p| !eq(p, entry))
         .map(str::to_string)
         .collect();
-    let changed = kept.len()
-        != path
-            .split(';')
-            .map(|p| p.trim())
-            .filter(|p| !p.is_empty())
-            .count();
+    let changed = kept.len() != path.split(';').map(|p| p.trim()).filter(|p| !p.is_empty()).count();
     (kept.join(";"), changed)
 }
 
@@ -123,10 +118,7 @@ async fn reg_query_path() -> Result<Option<(String, bool)>, String> {
     {
         cmd.creation_flags(0x0800_0000);
     }
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("reg query failed: {}", e))?;
+    let output = cmd.output().await.map_err(|e| format!("reg query failed: {}", e))?;
     if !output.status.success() {
         // 值不存在（首次安装）：reg 返回非零且输出 ERROR 提示
         return Ok(None);
@@ -170,10 +162,7 @@ async fn reg_write_path(value: &str, is_expand_sz: bool) -> Result<(), String> {
     {
         cmd.creation_flags(0x0800_0000);
     }
-    let output = cmd
-        .output()
-        .await
-        .map_err(|e| format!("reg add failed: {}", e))?;
+    let output = cmd.output().await.map_err(|e| format!("reg add failed: {}", e))?;
     if !output.status.success() {
         return Err(format!(
             "reg add failed: {}",
@@ -189,10 +178,7 @@ fn broadcast_setting_change() {
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         SendMessageTimeoutW, HWND_BROADCAST, SMTO_ABORTIFHUNG, WM_SETTINGCHANGE,
     };
-    let env: Vec<u16> = "Environment"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
+    let env: Vec<u16> = "Environment".encode_utf16().chain(std::iter::once(0)).collect();
     // 失败仅记日志：注册表已写入，新终端从注册表读取仍会生效
     let mut result: usize = 0;
     let _ = unsafe {
@@ -248,21 +234,17 @@ pub async fn unregister_path_windows(bin_dir: &Path) -> Result<(), String> {
 pub fn register_path_unix(bin_dir: &Path, exe: &str) -> Result<(), String> {
     use std::os::unix::fs::symlink;
     let link_dir = user_local_bin();
-    std::fs::create_dir_all(&link_dir)
-        .map_err(|e| format!("create {} failed: {}", link_dir.display(), e))?;
+    std::fs::create_dir_all(&link_dir).map_err(|e| format!("create {} failed: {}", link_dir.display(), e))?;
     let link = link_dir.join(exe);
     let target = bin_dir.join(exe);
     // 覆盖式创建：先删旧链（已存在则直接建会失败）
     let _ = std::fs::remove_file(&link);
-    symlink(&target, &link).map_err(|e| {
-        format!(
-            "symlink {} -> {} failed: {}",
-            link.display(),
-            target.display(),
-            e
-        )
-    })?;
-    tracing::info!("[AppCli] symlink registered: {} -> {}", link.display(), target.display());
+    symlink(&target, &link).map_err(|e| format!("symlink {} -> {} failed: {}", link.display(), target.display(), e))?;
+    tracing::info!(
+        "[AppCli] symlink registered: {} -> {}",
+        link.display(),
+        target.display()
+    );
     Ok(())
 }
 
@@ -276,7 +258,10 @@ pub fn unregister_path_unix(bin_dir: &Path, exe: &str) -> Result<(), String> {
     };
     if !meta.file_type().is_symlink() {
         // 同名但非本插件创建的链接：不动，仅记日志
-        tracing::warn!("[AppCli] {} exists but is not a symlink, left untouched", link.display());
+        tracing::warn!(
+            "[AppCli] {} exists but is not a symlink, left untouched",
+            link.display()
+        );
         return Ok(());
     }
     // 校验指向本 bin 目录（避免误删用户自建链接）
@@ -292,8 +277,7 @@ pub fn unregister_path_unix(bin_dir: &Path, exe: &str) -> Result<(), String> {
             return Ok(());
         }
     }
-    std::fs::remove_file(&link)
-        .map_err(|e| format!("remove symlink {} failed: {}", link.display(), e))?;
+    std::fs::remove_file(&link).map_err(|e| format!("remove symlink {} failed: {}", link.display(), e))?;
     tracing::info!("[AppCli] symlink removed: {}", link.display());
     Ok(())
 }

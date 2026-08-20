@@ -6,10 +6,7 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub async fn start_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    config_id: String,
-) -> Result<String> {
+pub async fn start_session(session_manager: State<'_, Arc<SessionManager>>, config_id: String) -> Result<String> {
     tracing::info!("start_session called with config_id: {}", config_id);
     let result = session_manager.create_session(&config_id).await;
     match result {
@@ -44,10 +41,7 @@ pub async fn create_session_no_start(
 }
 
 #[tauri::command]
-pub async fn start_existing_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
+pub async fn start_existing_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
     tracing::info!("start_existing_session called with session_id: {}", session_id);
     let result = session_manager.start_existing_session(&session_id).await;
     match result {
@@ -78,26 +72,17 @@ pub async fn get_session(
 }
 
 #[tauri::command]
-pub async fn kill_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
+pub async fn kill_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
     session_manager.kill_session(&session_id).await
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
+pub async fn delete_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
     session_manager.remove_session(&session_id).await
 }
 
 #[tauri::command]
-pub async fn restart_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<String> {
+pub async fn restart_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<String> {
     session_manager.restart_session(&session_id).await
 }
 

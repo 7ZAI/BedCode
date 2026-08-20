@@ -21,21 +21,14 @@ use tauri::State;
 ///
 /// 插件必须处于 Activated 状态且已声明 fileservice 权限，
 /// 否则拒绝（与 api_bridge 中 storage/terminal 命令同模式）
-async fn require_fileservice(
-    plugin_host: &PluginHost,
-    plugin_id: &str,
-    op: &str,
-) -> crate::Result<()> {
+async fn require_fileservice(plugin_host: &PluginHost, plugin_id: &str, op: &str) -> crate::Result<()> {
     if !plugin_host.is_activated(plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' is not activated",
             op, plugin_id
         )));
     }
-    if !plugin_host
-        .permission()
-        .check(plugin_id, PERMISSION_FILESERVICE)
-    {
+    if !plugin_host.permission().check(plugin_id, PERMISSION_FILESERVICE) {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' has no fileservice permission",
             op, plugin_id
@@ -112,10 +105,7 @@ pub async fn plugin_filesrv_dispose(
         mount = %mount_path,
         "plugin_filesrv_dispose (TS channel)"
     );
-    plugin_host
-        .file_service()
-        .unmount(&plugin_id, &mount_path)
-        .await
+    plugin_host.file_service().unmount(&plugin_id, &mount_path).await
 }
 
 // ==================== 上传策略钩子 ====================

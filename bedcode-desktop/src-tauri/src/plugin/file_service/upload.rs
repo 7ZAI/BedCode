@@ -92,10 +92,7 @@ impl UploadSessionManager {
     ) -> Result<UploadSession, UploadSessionError> {
         let id = uuid::Uuid::new_v4().to_string();
         let tmp = match target.parent() {
-            Some(parent) => parent.join(format!(
-                "{}{}{}",
-                UPLOAD_PART_PREFIX, id, UPLOAD_PART_SUFFIX
-            )),
+            Some(parent) => parent.join(format!("{}{}{}", UPLOAD_PART_PREFIX, id, UPLOAD_PART_SUFFIX)),
             None => {
                 return Err(UploadSessionError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
@@ -184,12 +181,7 @@ impl UploadSessionManager {
     ///
     /// 目标已存在 → DuplicateName（保留 .part，由发起方决定重试或放弃）。
     /// rename 成功后移除 session
-    pub async fn complete(
-        &self,
-        sid: &str,
-        plugin_id: &str,
-        mount_path: &str,
-    ) -> Result<PathBuf, UploadSessionError> {
+    pub async fn complete(&self, sid: &str, plugin_id: &str, mount_path: &str) -> Result<PathBuf, UploadSessionError> {
         let mut sessions = self.sessions.lock().await;
         let session = sessions
             .get(sid)
@@ -200,10 +192,7 @@ impl UploadSessionManager {
             return Err(UploadSessionError::DuplicateName(session.target.clone()));
         }
         if !session.tmp.exists() {
-            return Err(UploadSessionError::NotFound(format!(
-                "{} (temp file missing)",
-                sid
-            )));
+            return Err(UploadSessionError::NotFound(format!("{} (temp file missing)", sid)));
         }
 
         let target = session.target.clone();
@@ -276,10 +265,7 @@ impl UploadSessionManager {
                 .filter(|(_, s)| now.duration_since(s.last_active) > SESSION_TTL)
                 .map(|(id, _)| id.clone())
                 .collect();
-            expired_ids
-                .into_iter()
-                .filter_map(|id| sessions.remove(&id))
-                .collect()
+            expired_ids.into_iter().filter_map(|id| sessions.remove(&id)).collect()
         };
 
         let count = expired.len();
@@ -301,24 +287,18 @@ impl UploadSessionManager {
     ///
     /// 必须在 tokio runtime 上下文内调用
     pub fn spawn_sweeper(manager: Arc<UploadSessionManager>) {
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "upload_session_sweeper",
-            async move {
-                let mut interval = tokio::time::interval(SWEEP_INTERVAL);
-                // 首个 tick 立即完成，跳过以对齐"每小时一次"语义
+        crate::system::error_boundary::spawn_with_error_boundary("upload_session_sweeper", async move {
+            let mut interval = tokio::time::interval(SWEEP_INTERVAL);
+            // 首个 tick 立即完成，跳过以对齐"每小时一次"语义
+            interval.tick().await;
+            loop {
                 interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    let removed = manager.sweep_expired().await;
-                    if removed > 0 {
-                        tracing::info!(
-                            "upload session sweeper removed {} expired session(s)",
-                            removed
-                        );
-                    }
+                let removed = manager.sweep_expired().await;
+                if removed > 0 {
+                    tracing::info!("upload session sweeper removed {} expired session(s)", removed);
                 }
-            },
-        );
+            }
+        });
     }
 
     /// 当前活跃会话数（测试/诊断用）
@@ -463,7 +443,12 @@ mod tests {
                 .await
                 .unwrap();
             assert_eq!(session.received, 0);
-            assert!(session.tmp.file_name().unwrap().to_string_lossy().starts_with(UPLOAD_PART_PREFIX));
+            assert!(session
+                .tmp
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(UPLOAD_PART_PREFIX));
 
             // append 从头开始
             let received = manager
@@ -490,10 +475,7 @@ mod tests {
             assert_eq!(received, 10);
 
             // complete → 原子 rename
-            let final_path = manager
-                .complete(&session.id, "com.test.plugin", "files")
-                .await
-                .unwrap();
+            let final_path = manager.complete(&session.id, "com.test.plugin", "files").await.unwrap();
             assert_eq!(final_path, target);
             assert!(target.exists());
             assert!(!session.tmp.exists());
@@ -514,10 +496,7 @@ mod tests {
             let target = target_in(base.path(), "dup.txt");
             std::fs::write(&target, b"existing").unwrap();
 
-            let session = manager
-                .create("p", "m", target.clone(), 4)
-                .await
-                .unwrap();
+            let session = manager.create("p", "m", target.clone(), 4).await.unwrap();
             manager.append(&session.id, "p", "m", 0, b"data").await.unwrap();
 
             let err = manager.complete(&session.id, "p", "m").await.unwrap_err();
@@ -569,10 +548,7 @@ mod tests {
             // 其他插件/挂载点无法访问该 session
             assert!(manager.get(&session.id, "plugin-b", "files").await.is_none());
             assert!(manager.get(&session.id, "plugin-a", "other").await.is_none());
-            assert!(manager
-                .append(&session.id, "plugin-b", "files", 0, b"z")
-                .await
-                .is_err());
+            assert!(manager.append(&session.id, "plugin-b", "files", 0, b"z").await.is_err());
         });
     }
 

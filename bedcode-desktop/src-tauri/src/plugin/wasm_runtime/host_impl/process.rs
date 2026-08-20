@@ -52,16 +52,12 @@ fn default_timeout_ms() -> u64 {
 ///
 /// 异步执行模式与 `session_create` 相同：wasm 调用栈内同步等待子进程会
 /// 阻塞 Store；此处 spawn 后台任务执行，wasm 调用立即返回。
-pub(crate) fn process_run(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    request_json: &str,
-) -> Result<String, String> {
+pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_json: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run") {
         return Err("permission denied".to_string());
     }
-    let request: ProcessRequest = serde_json::from_str(request_json)
-        .map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    let request: ProcessRequest =
+        serde_json::from_str(request_json).map_err(|e| format!("process error: invalid request JSON: {}", e))?;
     if request.command.trim().is_empty() {
         return Err("process error: empty command".to_string());
     }
@@ -76,13 +72,8 @@ pub(crate) fn process_run(
     // 安全上无新增面：拥有 process:run 的插件本就可执行任意命令
     if let Some(parent) = std::path::Path::new(&request.output_path).parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "process error: create output dir '{}' failed: {}",
-                    parent.display(),
-                    e
-                )
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("process error: create output dir '{}' failed: {}", parent.display(), e))?;
         }
     }
     let output_file = std::fs::File::create(&request.output_path).map_err(|e| {
@@ -119,12 +110,9 @@ pub(crate) fn process_run(
         cmd.creation_flags(0x0000_0200 | 0x0800_0000);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        format!(
-            "process error: spawn '{}' failed: {}",
-            request.command, e
-        )
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("process error: spawn '{}' failed: {}", request.command, e))?;
     // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）
     let pid = child.id().unwrap_or(0);
     let run_id = Uuid::new_v4().to_string();
@@ -197,11 +185,7 @@ pub(crate) fn process_run(
 ///
 /// 尽力而为：进程可能已结束/未被找到（SDK 契约约定此时返回 Ok）。
 /// kill 成功后执行任务侧的 `wait` 随即返回，完成事件照常分发。
-pub(crate) fn process_kill(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    run_id: &str,
-) -> Result<(), String> {
+pub(crate) fn process_kill(host_ctx: &WasmHostContext, plugin_id: &str, run_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
         return Err("permission denied".to_string());
     }
@@ -309,8 +293,7 @@ mod tests {
         } else {
             ("sh", vec!["-c", "echo hello-from-process"])
         };
-        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-            .expect("run ok");
+        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
         assert_eq!(run_id.len(), 36);
 
         // 等待后台任务完成（输出落盘 + 注册表移除）
@@ -343,8 +326,7 @@ mod tests {
             // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
             ("sh", vec!["-c", "sleep 60"])
         };
-        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-            .expect("run ok");
+        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
 
         // 等待注册完成，确认进程在跑
         let registry = ctx.process_registry().clone();

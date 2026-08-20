@@ -63,67 +63,85 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
 
 /// 配置 key 的分组顺序，控制写入文件时的排列
 static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
-    ("网络配置", &[
-        "network.port",
-        "network.auto_start",
-        "network.prevent_sleep",
-        "network.workers",
-        "network.keep_alive_secs",
-        "network.client_request_timeout_secs",
-        "network.client_disconnect_timeout_secs",
-        "network.max_connections",
-        "network.backlog",
-        "network.tcp_nodelay",
-        "network.shutdown_timeout_secs",
-        "network.ws_max_frame_size_kb",
-        "network.ws_max_message_size_mb",
-    ]),
-    ("会话默认配置", &[
-        "session.default_environment",
-        "session.default_wsl_distro",
-        "session.default_working_dir",
-        "session.default_command",
-        "session.session_timeout",
-    ]),
-    ("UI 界面配置", &[
-        "ui.theme",
-        "ui.theme_palette",
-        "ui.font_size",
-        "ui.terminal_font_size",
-        "ui.terminal_font_family",
-        "ui.terminal_theme",
-        "ui.show_preview",
-        "ui.language",
-        "ui.terminal_bg_image",
-        "ui.terminal_bg_opacity",
-        "ui.animations_enabled",
-    ]),
-    ("Channel 容量配置", &[
-        "channels.status_broadcast_capacity",
-        "channels.restart_broadcast_capacity",
-        "channels.event_broadcast_capacity",
-        "channels.pty_subscription_capacity",
-        "channels.global_queue_capacity",
-        "channels.global_queue_max_bytes",
-        "channels.history_start_mode",
-        "channels.ws_event_capacity",
-        "channels.lifecycle_capacity",
-    ]),
-    ("终端配置", &[
-        "terminal.default_cols",
-        "terminal.default_rows",
-        "terminal.flush_interval_ms",
-        "terminal.merge_output",
-        "terminal.max_buffer_size",
-        "terminal.read_buffer_size",
-    ]),
-    ("日志配置", &[
-        "log.file_level",
-        "log.console_filter",
-        "log.rotation",
-        "log.max_files",
-        "log.console_in_release",
-    ]),
+    (
+        "网络配置",
+        &[
+            "network.port",
+            "network.auto_start",
+            "network.prevent_sleep",
+            "network.workers",
+            "network.keep_alive_secs",
+            "network.client_request_timeout_secs",
+            "network.client_disconnect_timeout_secs",
+            "network.max_connections",
+            "network.backlog",
+            "network.tcp_nodelay",
+            "network.shutdown_timeout_secs",
+            "network.ws_max_frame_size_kb",
+            "network.ws_max_message_size_mb",
+        ],
+    ),
+    (
+        "会话默认配置",
+        &[
+            "session.default_environment",
+            "session.default_wsl_distro",
+            "session.default_working_dir",
+            "session.default_command",
+            "session.session_timeout",
+        ],
+    ),
+    (
+        "UI 界面配置",
+        &[
+            "ui.theme",
+            "ui.theme_palette",
+            "ui.font_size",
+            "ui.terminal_font_size",
+            "ui.terminal_font_family",
+            "ui.terminal_theme",
+            "ui.show_preview",
+            "ui.language",
+            "ui.terminal_bg_image",
+            "ui.terminal_bg_opacity",
+            "ui.animations_enabled",
+        ],
+    ),
+    (
+        "Channel 容量配置",
+        &[
+            "channels.status_broadcast_capacity",
+            "channels.restart_broadcast_capacity",
+            "channels.event_broadcast_capacity",
+            "channels.pty_subscription_capacity",
+            "channels.global_queue_capacity",
+            "channels.global_queue_max_bytes",
+            "channels.history_start_mode",
+            "channels.ws_event_capacity",
+            "channels.lifecycle_capacity",
+        ],
+    ),
+    (
+        "终端配置",
+        &[
+            "terminal.default_cols",
+            "terminal.default_rows",
+            "terminal.flush_interval_ms",
+            "terminal.merge_output",
+            "terminal.max_buffer_size",
+            "terminal.read_buffer_size",
+        ],
+    ),
+    (
+        "日志配置",
+        &[
+            "log.file_level",
+            "log.console_filter",
+            "log.rotation",
+            "log.max_files",
+            "log.console_in_release",
+        ],
+    ),
 ];
 
 /// 应用配置
@@ -197,16 +215,36 @@ fn default_prevent_sleep() -> bool {
     true
 }
 
-fn default_keep_alive_secs() -> u64 { 5 }
-fn default_client_request_timeout_secs() -> u64 { 5 }
-fn default_client_disconnect_timeout_secs() -> u64 { 5 }
-fn default_max_connections() -> usize { 25000 }
-fn default_backlog() -> u32 { 2048 }
-fn default_tcp_nodelay() -> bool { true }
-fn default_shutdown_timeout_secs() -> u64 { 30 }
-fn default_ws_max_frame_size_kb() -> usize { 64 }
-fn default_ws_max_message_size_mb() -> usize { 16 }
-fn default_metrics_enabled() -> bool { false }
+fn default_keep_alive_secs() -> u64 {
+    5
+}
+fn default_client_request_timeout_secs() -> u64 {
+    5
+}
+fn default_client_disconnect_timeout_secs() -> u64 {
+    5
+}
+fn default_max_connections() -> usize {
+    25000
+}
+fn default_backlog() -> u32 {
+    2048
+}
+fn default_tcp_nodelay() -> bool {
+    true
+}
+fn default_shutdown_timeout_secs() -> u64 {
+    30
+}
+fn default_ws_max_frame_size_kb() -> usize {
+    64
+}
+fn default_ws_max_message_size_mb() -> usize {
+    16
+}
+fn default_metrics_enabled() -> bool {
+    false
+}
 
 impl Default for NetworkConfig {
     fn default() -> Self {
@@ -445,10 +483,18 @@ pub struct LogConfig {
     pub console_in_release: bool,
 }
 
-fn default_log_file_level() -> String { "info".to_string() }
-fn default_log_console_filter() -> String { "bedcode_lib=debug,actix_web=info,actix_http=info".to_string() }
-fn default_log_rotation() -> String { "daily".to_string() }
-fn default_log_max_files() -> usize { 7 }
+fn default_log_file_level() -> String {
+    "info".to_string()
+}
+fn default_log_console_filter() -> String {
+    "bedcode_lib=debug,actix_web=info,actix_http=info".to_string()
+}
+fn default_log_rotation() -> String {
+    "daily".to_string()
+}
+fn default_log_max_files() -> usize {
+    7
+}
 
 impl Default for LogConfig {
     fn default() -> Self {
@@ -516,8 +562,7 @@ impl AppConfig {
     ///
     /// 如果未初始化，返回默认配置
     pub fn global() -> &'static AppConfig {
-        static DEFAULT: std::sync::LazyLock<AppConfig> =
-            std::sync::LazyLock::new(AppConfig::default);
+        static DEFAULT: std::sync::LazyLock<AppConfig> = std::sync::LazyLock::new(AppConfig::default);
         CONFIG_INSTANCE.get().unwrap_or(&DEFAULT)
     }
 
@@ -530,14 +575,34 @@ impl AppConfig {
                 prevent_sleep: parse_value(props, "network.prevent_sleep", true),
                 workers: parse_value(props, "network.workers", 0),
                 keep_alive_secs: parse_value(props, "network.keep_alive_secs", default_keep_alive_secs()),
-                client_request_timeout_secs: parse_value(props, "network.client_request_timeout_secs", default_client_request_timeout_secs()),
-                client_disconnect_timeout_secs: parse_value(props, "network.client_disconnect_timeout_secs", default_client_disconnect_timeout_secs()),
+                client_request_timeout_secs: parse_value(
+                    props,
+                    "network.client_request_timeout_secs",
+                    default_client_request_timeout_secs(),
+                ),
+                client_disconnect_timeout_secs: parse_value(
+                    props,
+                    "network.client_disconnect_timeout_secs",
+                    default_client_disconnect_timeout_secs(),
+                ),
                 max_connections: parse_value(props, "network.max_connections", default_max_connections()),
                 backlog: parse_value(props, "network.backlog", default_backlog()),
                 tcp_nodelay: parse_value(props, "network.tcp_nodelay", default_tcp_nodelay()),
-                shutdown_timeout_secs: parse_value(props, "network.shutdown_timeout_secs", default_shutdown_timeout_secs()),
-                ws_max_frame_size_kb: parse_value(props, "network.ws_max_frame_size_kb", default_ws_max_frame_size_kb()),
-                ws_max_message_size_mb: parse_value(props, "network.ws_max_message_size_mb", default_ws_max_message_size_mb()),
+                shutdown_timeout_secs: parse_value(
+                    props,
+                    "network.shutdown_timeout_secs",
+                    default_shutdown_timeout_secs(),
+                ),
+                ws_max_frame_size_kb: parse_value(
+                    props,
+                    "network.ws_max_frame_size_kb",
+                    default_ws_max_frame_size_kb(),
+                ),
+                ws_max_message_size_mb: parse_value(
+                    props,
+                    "network.ws_max_message_size_mb",
+                    default_ws_max_message_size_mb(),
+                ),
                 metrics_enabled: parse_value(props, "network.metrics_enabled", default_metrics_enabled()),
             },
             session: SessionConfig {
@@ -572,12 +637,8 @@ impl AppConfig {
                 global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 25000),
                 global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 128 * 1024 * 1024),
                 // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
-                history_start_mode: match parse_value::<String>(
-                    props,
-                    "channels.history_start_mode",
-                    "min".to_string(),
-                )
-                .as_str()
+                history_start_mode: match parse_value::<String>(props, "channels.history_start_mode", "min".to_string())
+                    .as_str()
                 {
                     "snapshot" => HistoryStartMode::Snapshot,
                     _ => HistoryStartMode::Min,
@@ -630,40 +691,115 @@ impl AppConfig {
         let mut map = HashMap::new();
         map.insert("network.port".to_string(), self.network.port.to_string());
         map.insert("network.auto_start".to_string(), self.network.auto_start.to_string());
-        map.insert("network.prevent_sleep".to_string(), self.network.prevent_sleep.to_string());
+        map.insert(
+            "network.prevent_sleep".to_string(),
+            self.network.prevent_sleep.to_string(),
+        );
         map.insert("network.workers".to_string(), self.network.workers.to_string());
-        map.insert("network.keep_alive_secs".to_string(), self.network.keep_alive_secs.to_string());
-        map.insert("network.client_request_timeout_secs".to_string(), self.network.client_request_timeout_secs.to_string());
-        map.insert("network.client_disconnect_timeout_secs".to_string(), self.network.client_disconnect_timeout_secs.to_string());
-        map.insert("network.max_connections".to_string(), self.network.max_connections.to_string());
+        map.insert(
+            "network.keep_alive_secs".to_string(),
+            self.network.keep_alive_secs.to_string(),
+        );
+        map.insert(
+            "network.client_request_timeout_secs".to_string(),
+            self.network.client_request_timeout_secs.to_string(),
+        );
+        map.insert(
+            "network.client_disconnect_timeout_secs".to_string(),
+            self.network.client_disconnect_timeout_secs.to_string(),
+        );
+        map.insert(
+            "network.max_connections".to_string(),
+            self.network.max_connections.to_string(),
+        );
         map.insert("network.backlog".to_string(), self.network.backlog.to_string());
         map.insert("network.tcp_nodelay".to_string(), self.network.tcp_nodelay.to_string());
-        map.insert("network.shutdown_timeout_secs".to_string(), self.network.shutdown_timeout_secs.to_string());
-        map.insert("network.ws_max_frame_size_kb".to_string(), self.network.ws_max_frame_size_kb.to_string());
-        map.insert("network.ws_max_message_size_mb".to_string(), self.network.ws_max_message_size_mb.to_string());
-        map.insert("network.metrics_enabled".to_string(), self.network.metrics_enabled.to_string());
-        map.insert("session.default_environment".to_string(), self.session.default_environment.clone());
-        map.insert("session.default_wsl_distro".to_string(), self.session.default_wsl_distro.clone().unwrap_or_default());
-        map.insert("session.default_working_dir".to_string(), self.session.default_working_dir.clone().unwrap_or_default());
-        map.insert("session.default_command".to_string(), self.session.default_command.clone().unwrap_or_default());
-        map.insert("session.session_timeout".to_string(), self.session.session_timeout.to_string());
+        map.insert(
+            "network.shutdown_timeout_secs".to_string(),
+            self.network.shutdown_timeout_secs.to_string(),
+        );
+        map.insert(
+            "network.ws_max_frame_size_kb".to_string(),
+            self.network.ws_max_frame_size_kb.to_string(),
+        );
+        map.insert(
+            "network.ws_max_message_size_mb".to_string(),
+            self.network.ws_max_message_size_mb.to_string(),
+        );
+        map.insert(
+            "network.metrics_enabled".to_string(),
+            self.network.metrics_enabled.to_string(),
+        );
+        map.insert(
+            "session.default_environment".to_string(),
+            self.session.default_environment.clone(),
+        );
+        map.insert(
+            "session.default_wsl_distro".to_string(),
+            self.session.default_wsl_distro.clone().unwrap_or_default(),
+        );
+        map.insert(
+            "session.default_working_dir".to_string(),
+            self.session.default_working_dir.clone().unwrap_or_default(),
+        );
+        map.insert(
+            "session.default_command".to_string(),
+            self.session.default_command.clone().unwrap_or_default(),
+        );
+        map.insert(
+            "session.session_timeout".to_string(),
+            self.session.session_timeout.to_string(),
+        );
         map.insert("ui.theme".to_string(), self.ui.theme.clone());
         map.insert("ui.theme_palette".to_string(), self.ui.theme_palette.clone());
         map.insert("ui.font_size".to_string(), self.ui.font_size.to_string());
-        map.insert("ui.terminal_font_size".to_string(), self.ui.terminal_font_size.to_string());
-        map.insert("ui.terminal_font_family".to_string(), self.ui.terminal_font_family.clone());
+        map.insert(
+            "ui.terminal_font_size".to_string(),
+            self.ui.terminal_font_size.to_string(),
+        );
+        map.insert(
+            "ui.terminal_font_family".to_string(),
+            self.ui.terminal_font_family.clone(),
+        );
         map.insert("ui.terminal_theme".to_string(), self.ui.terminal_theme.clone());
         map.insert("ui.show_preview".to_string(), self.ui.show_preview.to_string());
         map.insert("ui.language".to_string(), self.ui.language.clone());
-        map.insert("ui.terminal_bg_image".to_string(), self.ui.terminal_bg_image.clone().unwrap_or_default());
-        map.insert("ui.terminal_bg_opacity".to_string(), self.ui.terminal_bg_opacity.to_string());
-        map.insert("ui.animations_enabled".to_string(), self.ui.animations_enabled.to_string());
-        map.insert("channels.status_broadcast_capacity".to_string(), self.channels.status_broadcast_capacity.to_string());
-        map.insert("channels.restart_broadcast_capacity".to_string(), self.channels.restart_broadcast_capacity.to_string());
-        map.insert("channels.event_broadcast_capacity".to_string(), self.channels.event_broadcast_capacity.to_string());
-        map.insert("channels.pty_subscription_capacity".to_string(), self.channels.pty_subscription_capacity.to_string());
-        map.insert("channels.global_queue_capacity".to_string(), self.channels.global_queue_capacity.to_string());
-        map.insert("channels.global_queue_max_bytes".to_string(), self.channels.global_queue_max_bytes.to_string());
+        map.insert(
+            "ui.terminal_bg_image".to_string(),
+            self.ui.terminal_bg_image.clone().unwrap_or_default(),
+        );
+        map.insert(
+            "ui.terminal_bg_opacity".to_string(),
+            self.ui.terminal_bg_opacity.to_string(),
+        );
+        map.insert(
+            "ui.animations_enabled".to_string(),
+            self.ui.animations_enabled.to_string(),
+        );
+        map.insert(
+            "channels.status_broadcast_capacity".to_string(),
+            self.channels.status_broadcast_capacity.to_string(),
+        );
+        map.insert(
+            "channels.restart_broadcast_capacity".to_string(),
+            self.channels.restart_broadcast_capacity.to_string(),
+        );
+        map.insert(
+            "channels.event_broadcast_capacity".to_string(),
+            self.channels.event_broadcast_capacity.to_string(),
+        );
+        map.insert(
+            "channels.pty_subscription_capacity".to_string(),
+            self.channels.pty_subscription_capacity.to_string(),
+        );
+        map.insert(
+            "channels.global_queue_capacity".to_string(),
+            self.channels.global_queue_capacity.to_string(),
+        );
+        map.insert(
+            "channels.global_queue_max_bytes".to_string(),
+            self.channels.global_queue_max_bytes.to_string(),
+        );
         map.insert(
             "channels.history_start_mode".to_string(),
             match self.channels.history_start_mode {
@@ -671,19 +807,46 @@ impl AppConfig {
                 HistoryStartMode::Snapshot => "snapshot".to_string(),
             },
         );
-        map.insert("channels.ws_event_capacity".to_string(), self.channels.ws_event_capacity.to_string());
-        map.insert("channels.lifecycle_capacity".to_string(), self.channels.lifecycle_capacity.to_string());
-        map.insert("terminal.default_cols".to_string(), self.terminal.default_cols.to_string());
-        map.insert("terminal.default_rows".to_string(), self.terminal.default_rows.to_string());
-        map.insert("terminal.flush_interval_ms".to_string(), self.terminal.flush_interval_ms.to_string());
-        map.insert("terminal.merge_output".to_string(), self.terminal.merge_output.to_string());
-        map.insert("terminal.max_buffer_size".to_string(), self.terminal.max_buffer_size.to_string());
-        map.insert("terminal.read_buffer_size".to_string(), self.terminal.read_buffer_size.to_string());
+        map.insert(
+            "channels.ws_event_capacity".to_string(),
+            self.channels.ws_event_capacity.to_string(),
+        );
+        map.insert(
+            "channels.lifecycle_capacity".to_string(),
+            self.channels.lifecycle_capacity.to_string(),
+        );
+        map.insert(
+            "terminal.default_cols".to_string(),
+            self.terminal.default_cols.to_string(),
+        );
+        map.insert(
+            "terminal.default_rows".to_string(),
+            self.terminal.default_rows.to_string(),
+        );
+        map.insert(
+            "terminal.flush_interval_ms".to_string(),
+            self.terminal.flush_interval_ms.to_string(),
+        );
+        map.insert(
+            "terminal.merge_output".to_string(),
+            self.terminal.merge_output.to_string(),
+        );
+        map.insert(
+            "terminal.max_buffer_size".to_string(),
+            self.terminal.max_buffer_size.to_string(),
+        );
+        map.insert(
+            "terminal.read_buffer_size".to_string(),
+            self.terminal.read_buffer_size.to_string(),
+        );
         map.insert("log.file_level".to_string(), self.log.file_level.clone());
         map.insert("log.console_filter".to_string(), self.log.console_filter.clone());
         map.insert("log.rotation".to_string(), self.log.rotation.clone());
         map.insert("log.max_files".to_string(), self.log.max_files.to_string());
-        map.insert("log.console_in_release".to_string(), self.log.console_in_release.to_string());
+        map.insert(
+            "log.console_in_release".to_string(),
+            self.log.console_in_release.to_string(),
+        );
         map
     }
 }
@@ -719,13 +882,9 @@ fn parse_value<T: std::str::FromStr>(props: &HashMap<String, String>, key: &str,
 
 /// 从 properties map 中解析可选值，空字符串返回 None
 fn parse_optional<T: std::str::FromStr>(props: &HashMap<String, String>, key: &str) -> Option<T> {
-    props.get(key).and_then(|v| {
-        if v.is_empty() {
-            None
-        } else {
-            v.parse().ok()
-        }
-    })
+    props
+        .get(key)
+        .and_then(|v| if v.is_empty() { None } else { v.parse().ok() })
 }
 
 #[cfg(test)]
@@ -802,7 +961,10 @@ channels.status_broadcast_capacity=64
         assert_eq!(config.ui.terminal_theme, config2.ui.terminal_theme);
         assert_eq!(config.ui.terminal_bg_image, config2.ui.terminal_bg_image);
         assert_eq!(config.ui.terminal_bg_opacity, config2.ui.terminal_bg_opacity);
-        assert_eq!(config.channels.status_broadcast_capacity, config2.channels.status_broadcast_capacity);
+        assert_eq!(
+            config.channels.status_broadcast_capacity,
+            config2.channels.status_broadcast_capacity
+        );
         assert_eq!(config.terminal.default_cols, config2.terminal.default_cols);
     }
 
@@ -817,12 +979,19 @@ channels.status_broadcast_capacity=64
         let loaded = AppConfig::load(&path).unwrap();
         assert_eq!(config.network.port, loaded.network.port);
         assert_eq!(config.network.auto_start, loaded.network.auto_start);
-        assert_eq!(config.channels.status_broadcast_capacity, loaded.channels.status_broadcast_capacity);
+        assert_eq!(
+            config.channels.status_broadcast_capacity,
+            loaded.channels.status_broadcast_capacity
+        );
         // 色板与输出合并开关必须写入 properties 文件并能往返（曾遗漏导致重启后色板重置 / merge_output 写空）
         assert_eq!(config.ui.theme_palette, loaded.ui.theme_palette);
         assert_eq!(config.terminal.merge_output, loaded.terminal.merge_output);
-        assert!(std::fs::read_to_string(&path).unwrap().contains("ui.theme_palette=warm"));
-        assert!(std::fs::read_to_string(&path).unwrap().contains("terminal.merge_output=true"));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("ui.theme_palette=warm"));
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("terminal.merge_output=true"));
     }
 
     #[test]
@@ -913,7 +1082,10 @@ channels.status_broadcast_capacity=64
     fn test_log_config_defaults() {
         let config = LogConfig::default();
         assert_eq!(config.file_level, "info");
-        assert_eq!(config.console_filter, "bedcode_lib=debug,actix_web=info,actix_http=info");
+        assert_eq!(
+            config.console_filter,
+            "bedcode_lib=debug,actix_web=info,actix_http=info"
+        );
         assert_eq!(config.rotation, "daily");
         assert_eq!(config.max_files, 7);
         assert!(!config.console_in_release);

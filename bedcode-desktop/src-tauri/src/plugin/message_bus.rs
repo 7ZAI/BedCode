@@ -125,18 +125,11 @@ impl MessageBus {
                             continue;
                         };
                         if !dispatcher.is_activated(plugin_id) {
-                            tracing::warn!(
-                                "MessageBus: subscriber '{}' not  activated, skipping",
-                                plugin_id
-                            );
+                            tracing::warn!("MessageBus: subscriber '{}' not  activated, skipping", plugin_id);
                             continue;
                         }
                         if let Err(e) = dispatcher.dispatch_to_wasm(plugin_id, &msg) {
-                            tracing::error!(
-                                "MessageBus: dispatch to WASM plugin '{}' failed: {}",
-                                plugin_id,
-                                e
-                            );
+                            tracing::error!("MessageBus: dispatch to WASM plugin '{}' failed: {}", plugin_id, e);
                         } else {
                             delivered += 1;
                         }
@@ -146,11 +139,7 @@ impl MessageBus {
                             continue;
                         }
                         if let Err(e) = handler.on_message(&msg) {
-                            tracing::error!(
-                                "MessageBus: handler for static plugin '{}' failed: {}",
-                                plugin_id,
-                                e
-                            );
+                            tracing::error!("MessageBus: handler for static plugin '{}' failed: {}", plugin_id, e);
                         } else {
                             delivered += 1;
                         }
@@ -173,7 +162,10 @@ impl MessageBus {
         let mut subscribers = self.subscribers.write().await;
         let subs = subscribers.entry(topic.to_string()).or_default();
         // 避免重复订阅
-        if subs.iter().any(|s| matches!(s, BusSubscriber::Wasm { plugin_id: pid } if pid == plugin_id)) {
+        if subs
+            .iter()
+            .any(|s| matches!(s, BusSubscriber::Wasm { plugin_id: pid } if pid == plugin_id))
+        {
             tracing::debug!("MessageBus: plugin '{}' already subscribed to '{}'", plugin_id, topic);
             return;
         }
@@ -184,12 +176,7 @@ impl MessageBus {
     }
 
     /// 订阅 topic（静态注册插件）
-    pub async fn subscribe_static(
-        &self,
-        plugin_id: &str,
-        topic: &str,
-        handler: Box<dyn BusMessageHandler>,
-    ) {
+    pub async fn subscribe_static(&self, plugin_id: &str, topic: &str, handler: Box<dyn BusMessageHandler>) {
         let mut subscribers = self.subscribers.write().await;
         let subs = subscribers.entry(topic.to_string()).or_default();
         subs.push(BusSubscriber::Static {
@@ -209,11 +196,7 @@ impl MessageBus {
                 BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
             });
             if subs.len() < before {
-                tracing::info!(
-                    "MessageBus: plugin '{}' unsubscribed from '{}'",
-                    plugin_id,
-                    topic
-                );
+                tracing::info!("MessageBus: plugin '{}' unsubscribed from '{}'", plugin_id, topic);
             }
         }
     }
@@ -228,11 +211,7 @@ impl MessageBus {
                 BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
             });
             if subs.len() < before {
-                tracing::debug!(
-                    "MessageBus: removed plugin '{}' from topic '{}'",
-                    plugin_id,
-                    topic
-                );
+                tracing::debug!("MessageBus: removed plugin '{}' from topic '{}'", plugin_id, topic);
             }
         }
         // 清理空 topic
@@ -307,10 +286,7 @@ mod tests {
     }
 
     /// 等待投递结果，超时视为未投递
-    fn wait_delivery<T>(
-        rx: &Receiver<T>,
-        timeout: Duration,
-    ) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
+    fn wait_delivery<T>(rx: &Receiver<T>, timeout: Duration) -> Result<T, std::sync::mpsc::RecvTimeoutError> {
         rx.recv_timeout(timeout)
     }
 
@@ -355,8 +331,7 @@ mod tests {
         let payload = serde_json::json!({"taskId": "t-1", "status": "running"});
         bus.publish("task:status-changed", "plugin-a", payload.clone());
 
-        let (plugin_id, msg) = wait_delivery(&rx, Duration::from_secs(2))
-            .expect("WASM 订阅者应收到消息");
+        let (plugin_id, msg) = wait_delivery(&rx, Duration::from_secs(2)).expect("WASM 订阅者应收到消息");
         assert_eq!(plugin_id, "plugin-b");
         assert_eq!(msg.topic, "task:status-changed");
         assert_eq!(msg.sender, "plugin-a");
@@ -441,8 +416,8 @@ mod tests {
 
         bus.publish("topic:multi", "plugin-a", serde_json::json!(1));
 
-        let (plugin_id, _) = wait_delivery(&rx, Duration::from_secs(2))
-            .expect("plugin-c 应收到（plugin-b 的失败不影响它）");
+        let (plugin_id, _) =
+            wait_delivery(&rx, Duration::from_secs(2)).expect("plugin-c 应收到（plugin-b 的失败不影响它）");
         assert_eq!(plugin_id, "plugin-c");
     }
 
@@ -478,8 +453,8 @@ mod tests {
 
         bus.publish("topic:static", "plugin-a", serde_json::json!(1));
 
-        let msg = wait_delivery(&rx, Duration::from_secs(1))
-            .expect("静态订阅者走 Rust callback，不应依赖 WASM dispatcher");
+        let msg =
+            wait_delivery(&rx, Duration::from_secs(1)).expect("静态订阅者走 Rust callback，不应依赖 WASM dispatcher");
         assert_eq!(msg.sender, "plugin-a");
     }
 

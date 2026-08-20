@@ -24,13 +24,9 @@ impl Default for WindowsShell {
 #[serde(tag = "type")]
 pub enum ExecutionEnvironment {
     /// Windows 原生环境
-    Windows {
-        shell: WindowsShell,
-    },
+    Windows { shell: WindowsShell },
     /// WSL2 环境
-    Wsl2 {
-        distro: String,
-    },
+    Wsl2 { distro: String },
 }
 
 impl Default for ExecutionEnvironment {

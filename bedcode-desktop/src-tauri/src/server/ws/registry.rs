@@ -52,11 +52,10 @@ pub struct WsSessionRegistry {
 impl WsSessionRegistry {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<WsSessionRegistry> =
-            std::sync::LazyLock::new(|| WsSessionRegistry {
-                sessions: RwLock::new(HashMap::new()),
-                addr_to_client_id: RwLock::new(HashMap::new()),
-            });
+        static INSTANCE: std::sync::LazyLock<WsSessionRegistry> = std::sync::LazyLock::new(|| WsSessionRegistry {
+            sessions: RwLock::new(HashMap::new()),
+            addr_to_client_id: RwLock::new(HashMap::new()),
+        });
         &INSTANCE
     }
 
@@ -75,22 +74,29 @@ impl WsSessionRegistry {
 
         {
             let mut sessions = self.sessions.write().await;
-            sessions.insert(client_id.clone(), WsSessionEntry {
-                actor_addr,
-                socket_addr,
-                device_name: None,
-                fingerprint: None,
-                authenticated: false,
-                connected_at,
-                channel_type,
-            });
+            sessions.insert(
+                client_id.clone(),
+                WsSessionEntry {
+                    actor_addr,
+                    socket_addr,
+                    device_name: None,
+                    fingerprint: None,
+                    authenticated: false,
+                    connected_at,
+                    channel_type,
+                },
+            );
         }
         {
             let mut addr_map = self.addr_to_client_id.write().await;
             addr_map.insert(socket_addr, client_id.clone());
         }
 
-        tracing::debug!("[WsSessionRegistry] Registered client {} from {}", client_id, socket_addr);
+        tracing::debug!(
+            "[WsSessionRegistry] Registered client {} from {}",
+            client_id,
+            socket_addr
+        );
     }
 
     /// 注销 WS 连接
@@ -101,7 +107,11 @@ impl WsSessionRegistry {
         } {
             let mut addr_map = self.addr_to_client_id.write().await;
             addr_map.remove(&entry.socket_addr);
-            tracing::debug!("[WsSessionRegistry] Unregistered client {} from {}", client_id, entry.socket_addr);
+            tracing::debug!(
+                "[WsSessionRegistry] Unregistered client {} from {}",
+                client_id,
+                entry.socket_addr
+            );
         }
     }
 
@@ -143,7 +153,8 @@ impl WsSessionRegistry {
     pub async fn send_to_client(&self, client_id: &str, text: String) -> Result<(), String> {
         let sessions = self.sessions.read().await;
         if let Some(entry) = sessions.get(client_id) {
-            entry.actor_addr
+            entry
+                .actor_addr
                 .send(SendTextMessage { text })
                 .await
                 .map_err(|e| format!("Failed to send to client {}: {}", client_id, e))
@@ -290,9 +301,7 @@ impl WsSessionRegistry {
     pub async fn is_device_online(&self, fingerprint: &str) -> bool {
         let sessions = self.sessions.read().await;
         sessions.values().any(|e| {
-            e.authenticated
-                && e.channel_type == ChannelType::Event
-                && e.fingerprint.as_deref() == Some(fingerprint)
+            e.authenticated && e.channel_type == ChannelType::Event && e.fingerprint.as_deref() == Some(fingerprint)
         })
     }
 
@@ -305,9 +314,7 @@ impl WsSessionRegistry {
         sessions
             .values()
             .filter(|e| {
-                e.authenticated
-                    && e.channel_type == ChannelType::Event
-                    && e.fingerprint.as_deref() == Some(fingerprint)
+                e.authenticated && e.channel_type == ChannelType::Event && e.fingerprint.as_deref() == Some(fingerprint)
             })
             .count()
     }
@@ -354,10 +361,7 @@ impl WsSessionRegistry {
 /// - exclude_device_name 命中的设备跳过（保留既有排除语义）
 /// - 同 fingerprint 的多条 Event 连接只保留一条（防重复通知）；fingerprint
 ///   为 None 的匿名条目不去重、逐条保留（避免丢失匿名连接）
-fn broadcast_targets(
-    entries: &HashMap<String, WsSessionEntry>,
-    exclude_device_name: Option<&str>,
-) -> Vec<String> {
+fn broadcast_targets(entries: &HashMap<String, WsSessionEntry>, exclude_device_name: Option<&str>) -> Vec<String> {
     let mut seen_fingerprints = std::collections::HashSet::new();
     let mut targets = Vec::new();
 
@@ -416,9 +420,7 @@ mod tests {
         device_name: Option<&str>,
         fingerprint: Option<&str>,
     ) -> (String, WsSessionEntry) {
-        let port = 20000u16
-            + (client_id.bytes().fold(0usize, |acc, b| acc.wrapping_add(b as usize)) % 10000)
-                as u16;
+        let port = 20000u16 + (client_id.bytes().fold(0usize, |acc, b| acc.wrapping_add(b as usize)) % 10000) as u16;
         let addr: SocketAddr = format!("127.0.0.1:{}", port).parse().unwrap();
 
         let req = actix_web::test::TestRequest::default()
@@ -429,13 +431,9 @@ mod tests {
             .to_http_request();
         // 空 payload 流：握手需要流参数，测试不驱动 actor future，空流即可
         let payload: actix_web::dev::Payload = actix_web::dev::Payload::None;
-        let (actor_addr, _resp) = actix_web_actors::ws::WsResponseBuilder::new(
-            TerminalWs::new(addr),
-            &req,
-            payload,
-        )
-        .start_with_addr()
-        .expect("fake ws handshake must succeed");
+        let (actor_addr, _resp) = actix_web_actors::ws::WsResponseBuilder::new(TerminalWs::new(addr), &req, payload)
+            .start_with_addr()
+            .expect("fake ws handshake must succeed");
 
         (
             client_id.to_string(),
@@ -514,7 +512,13 @@ mod tests {
         // 场景 1：Event 已认证（在线）/ Terminal 已认证（不算在线）/ Event 未认证（不算）
         for (cid, e) in [
             entry("ev-online", ChannelType::Event, true, Some("Phone"), Some("fp-dev-a")),
-            entry("term-only", ChannelType::Terminal, true, Some("Phone"), Some("fp-dev-a")),
+            entry(
+                "term-only",
+                ChannelType::Terminal,
+                true,
+                Some("Phone"),
+                Some("fp-dev-a"),
+            ),
             entry("ev-unauthed", ChannelType::Event, false, None, Some("fp-dev-a")),
         ] {
             registry.sessions.write().await.insert(cid, e);
@@ -548,9 +552,13 @@ mod tests {
         // 场景 3：纯终端设备（旧 v2.0.0 客户端形态，无 Event 通道）——
         // 终端计数存在但事件计数为 0，is_device_online 仍为 false（在线判定
         // 只认事件通道）；stopping() 的 Terminal 回退分支用两个计数联合判定
-        for (cid, e) in [
-            entry("term-legacy", ChannelType::Terminal, true, Some("Phone"), Some("fp-legacy")),
-        ] {
+        for (cid, e) in [entry(
+            "term-legacy",
+            ChannelType::Terminal,
+            true,
+            Some("Phone"),
+            Some("fp-legacy"),
+        )] {
             registry.sessions.write().await.insert(cid, e);
         }
 

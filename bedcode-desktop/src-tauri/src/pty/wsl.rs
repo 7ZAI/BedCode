@@ -2,8 +2,8 @@
 //!
 //! 提供 WSL2 环境下的命令执行和路径转换功能
 
-use crate::Result;
 use crate::process::create_command;
+use crate::Result;
 use encoding_rs::UTF_16LE;
 
 /// WSL 发行版信息
@@ -36,7 +36,7 @@ pub fn list_distributions() -> Result<Vec<WslDistro>> {
             } else {
                 s
             }
-        },
+        }
         Err(_) => {
             // 先尝试 UTF-16LE（Windows 原生编码）
             let (decoded, _, had_errors) = UTF_16LE.decode(&output.stdout);
@@ -81,11 +81,7 @@ pub fn list_distributions() -> Result<Vec<WslDistro>> {
 }
 
 /// 在 WSL 中执行命令
-pub fn execute_command(
-    distro: &str,
-    command: &str,
-    working_dir: Option<&str>,
-) -> Result<std::process::Output> {
+pub fn execute_command(distro: &str, command: &str, working_dir: Option<&str>) -> Result<std::process::Output> {
     let mut args: Vec<String> = vec!["-d".to_string(), distro.to_string()];
 
     if let Some(dir) = working_dir {
@@ -118,7 +114,10 @@ pub fn windows_to_wsl_path(path: &str) -> String {
     if path.starts_with("\\\\wsl.localhost\\") || path.starts_with("//wsl.localhost/") {
         // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user
         let path = path.trim_start_matches('\\').trim_start_matches('/');
-        let path = path.trim_start_matches("wsl.localhost").trim_start_matches('\\').trim_start_matches('/');
+        let path = path
+            .trim_start_matches("wsl.localhost")
+            .trim_start_matches('\\')
+            .trim_start_matches('/');
         let parts: Vec<&str> = path.splitn(2, '\\').collect();
         if parts.len() >= 2 {
             return format!("/{}", parts[1].replace('\\', "/"));
@@ -187,18 +186,9 @@ mod tests {
 
     #[test]
     fn test_windows_to_wsl_path() {
-        assert_eq!(
-            windows_to_wsl_path("C:\\Users\\test"),
-            "/mnt/c/Users/test"
-        );
-        assert_eq!(
-            windows_to_wsl_path("D:\\Projects\\my-app"),
-            "/mnt/d/Projects/my-app"
-        );
-        assert_eq!(
-            windows_to_wsl_path("\\\\wsl$\\Ubuntu\\home\\user"),
-            "/home/user"
-        );
+        assert_eq!(windows_to_wsl_path("C:\\Users\\test"), "/mnt/c/Users/test");
+        assert_eq!(windows_to_wsl_path("D:\\Projects\\my-app"), "/mnt/d/Projects/my-app");
+        assert_eq!(windows_to_wsl_path("\\\\wsl$\\Ubuntu\\home\\user"), "/home/user");
         // WSL2 新格式: \\wsl.localhost\Ubuntu\home\user
         assert_eq!(
             windows_to_wsl_path("\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink"),
@@ -208,10 +198,7 @@ mod tests {
 
     #[test]
     fn test_wsl_to_windows_path() {
-        assert_eq!(
-            wsl_to_windows_path("/mnt/c/Users/test", None),
-            "C:\\Users\\test"
-        );
+        assert_eq!(wsl_to_windows_path("/mnt/c/Users/test", None), "C:\\Users\\test");
         assert_eq!(
             wsl_to_windows_path("/home/user", Some("Ubuntu")),
             "\\\\wsl$\\Ubuntu\\home\\user"

@@ -21,7 +21,11 @@ impl LocalTokenManager {
     pub fn global() -> Arc<Self> {
         static INSTANCE: OnceLock<Arc<LocalTokenManager>> = OnceLock::new();
         INSTANCE
-            .get_or_init(|| Arc::new(Self { tokens: Mutex::new(HashMap::new()) }))
+            .get_or_init(|| {
+                Arc::new(Self {
+                    tokens: Mutex::new(HashMap::new()),
+                })
+            })
             .clone()
     }
 

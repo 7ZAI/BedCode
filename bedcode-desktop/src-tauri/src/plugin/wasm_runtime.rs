@@ -84,14 +84,13 @@ thread_local! {
 /// 无当前 runtime handle 的线程（spawn_blocking / 纯 std 线程）执行 block_on 时
 /// 的全局收益运行时：与 wasmtime-wasi 的 ambient runtime 同策略，供宿主函数在
 /// 无 handle 线程上仍可阻塞执行（WASI 预打开模式下插件调用跑在阻塞线程上）
-static AMBIENT_RT: std::sync::LazyLock<tokio::runtime::Runtime> =
-    std::sync::LazyLock::new(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .worker_threads(4)
-            .build()
-            .expect("create ambient tokio runtime")
-    });
+static AMBIENT_RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(4)
+        .build()
+        .expect("create ambient tokio runtime")
+});
 
 /// 重入标志的 RAII 守卫：作用域退出（含 block_in_place panic 穿透）时复位标志，
 /// 避免线程残留 `true` 导致后续调用恒走新线程路径（正确但多一次线程切换）
@@ -209,11 +208,7 @@ pub struct WasmPluginState {
 
 impl WasmPluginState {
     /// 构建插件状态（wasi_ctx 由调用方按插件配置构建，见 component.rs）
-    pub(crate) fn new(
-        plugin_id: String,
-        host_ctx: Arc<WasmHostContext>,
-        wasi_ctx: wasmtime_wasi::WasiCtx,
-    ) -> Self {
+    pub(crate) fn new(plugin_id: String, host_ctx: Arc<WasmHostContext>, wasi_ctx: wasmtime_wasi::WasiCtx) -> Self {
         Self {
             plugin_id,
             host_ctx,
@@ -239,12 +234,7 @@ impl wasmtime_wasi::WasiView for WasmPluginState {
 /// 直接借用 Store 状态（`Store::limiter` 的闭包返回本状态的可变引用），
 /// 限制单插件线性内存与表大小，防止失控/恶意插件耗尽宿主内存。
 impl ResourceLimiter for WasmPluginState {
-    fn memory_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> wasmtime::Result<bool> {
+    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
         if desired > MAX_PLUGIN_MEMORY_BYTES {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
@@ -258,12 +248,7 @@ impl ResourceLimiter for WasmPluginState {
         }
     }
 
-    fn table_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> wasmtime::Result<bool> {
+    fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
         if desired > MAX_PLUGIN_TABLE_ENTRIES {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
@@ -285,18 +270,10 @@ impl ResourceLimiter for WasmPluginState {
 /// 本模块只依赖此 trait，`PluginHost` 在 `plugin::host` 模块中实现它
 pub trait PluginServices: Send + Sync + 'static {
     /// 为指定插件创建并注册会话生命周期监听器到 SessionManager
-    fn register_session_lifecycle_listener(
-        &self,
-        plugin_id: String,
-        session_manager: Arc<SessionManager>,
-    );
+    fn register_session_lifecycle_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>);
 
     /// 为指定插件创建并注册提交输入行监听器到 SessionManager（见 ADR 0001）
-    fn register_session_input_listener(
-        &self,
-        plugin_id: String,
-        session_manager: Arc<SessionManager>,
-    );
+    fn register_session_input_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>);
 
     /// 标记插件为错误状态
     ///
@@ -408,10 +385,7 @@ impl ProcessRegistry {
     /// 同步锁：临界区仅 map 操作（无 await），wasm host 调用栈内直接可用
     pub fn register(&self, run_id: String, plugin_id: String, pid: u32) {
         let mut runs = self.runs.write().unwrap_or_else(|e| e.into_inner());
-        runs.insert(
-            run_id,
-            RunningProcess { plugin_id, pid },
-        );
+        runs.insert(run_id, RunningProcess { plugin_id, pid });
     }
 
     /// 移除并返回进程的发起插件 ID（进程结束/kill 后调用）
@@ -456,8 +430,7 @@ pub(crate) async fn kill_process_group(pid: u32) -> bool {
         cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
         // CREATE_NO_WINDOW：taskkill 为控制台程序，避免超时杀进程时黑窗闪烁
         cmd.creation_flags(0x0800_0000);
-        match cmd.output().await
-        {
+        match cmd.output().await {
             Ok(o) if o.status.success() => true,
             Ok(o) => {
                 tracing::warn!(
@@ -525,10 +498,7 @@ impl WasmRuntime {
     /// 宿主能力（db / session / permission 等）不在本结构持有，
     /// 而是通过 [`WasmHostContext`] 注入到每个插件实例的 Store state 中。
     /// `app_handle` 为 None 时（无头/测试上下文）依赖前端事件的宿主能力降级
-    pub fn new(
-        storage: Arc<PluginStorage>,
-        app_handle: Option<Arc<tauri::AppHandle>>,
-    ) -> crate::Result<Self> {
+    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> crate::Result<Self> {
         let mut config = Config::new();
         // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
         config.consume_fuel(true);
@@ -541,9 +511,8 @@ impl WasmRuntime {
                 tracing::warn!(error = %e, "WASM compile cache disabled");
             }
         }
-        let engine = Engine::new(&config).map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e))
-        })?;
+        let engine = Engine::new(&config)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
         let mut linker = wasmtime::component::Linker::new(&engine);
 
         // 注册已接线的 Component import 接口（实现见 host_impl + component）
@@ -567,14 +536,18 @@ impl WasmRuntime {
 
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), app_handle));
 
-        Ok(Self { engine, linker, fs_auth, aot_cache_dir })
+        Ok(Self {
+            engine,
+            linker,
+            fs_auth,
+            aot_cache_dir,
+        })
     }
 
     /// 从字节流编译 WASM 组件（Component Model，迁移阶段 A）
     pub fn compile_component(&self, bytes: &[u8]) -> crate::Result<wasmtime::component::Component> {
-        wasmtime::component::Component::from_binary(&self.engine, bytes).map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to compile WASM component: {}", e))
-        })
+        wasmtime::component::Component::from_binary(&self.engine, bytes)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to compile WASM component: {}", e)))
     }
 
     /// 从文件编译 WASM 组件（带 AOT 缓存，与 core 路径同构）
@@ -605,11 +578,7 @@ impl WasmRuntime {
 
         let cache_fresh = wasm_md
             .and_then(|w| w.modified().ok())
-            .zip(
-                std::fs::metadata(&cache_path)
-                    .ok()
-                    .and_then(|c| c.modified().ok()),
-            )
+            .zip(std::fs::metadata(&cache_path).ok().and_then(|c| c.modified().ok()))
             .map(|(wm, cm)| cm >= wm)
             .unwrap_or(false);
 
@@ -648,8 +617,8 @@ impl WasmRuntime {
                     return Ok(component);
                 }
                 let tmp_path = cache_path.with_extension("cwasm.tmp");
-                let write_result = std::fs::write(&tmp_path, &bytes)
-                    .and_then(|_| std::fs::rename(&tmp_path, &cache_path));
+                let write_result =
+                    std::fs::write(&tmp_path, &bytes).and_then(|_| std::fs::rename(&tmp_path, &cache_path));
                 if let Err(e) = write_result {
                     tracing::warn!(
                         path = %cache_path.display(),
@@ -674,11 +643,7 @@ impl WasmRuntime {
         host_ctx: Arc<WasmHostContext>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let bytes = std::fs::read(path).map_err(|e| {
-            crate::AppError::Plugin(format!(
-                "Failed to read WASM artifact '{}': {}",
-                path.display(),
-                e
-            ))
+            crate::AppError::Plugin(format!("Failed to read WASM artifact '{}': {}", path.display(), e))
         })?;
         let component = self.compile_component(&bytes)?;
         self.instantiate_component(&component, plugin_id, host_ctx)
@@ -694,13 +659,7 @@ impl WasmRuntime {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
     ) -> crate::Result<LoadedWasmPlugin> {
-        let plugin = component::LoadedWasmPlugin::new(
-            &self.engine,
-            &self.linker,
-            component,
-            plugin_id,
-            host_ctx,
-        )?;
+        let plugin = component::LoadedWasmPlugin::new(&self.engine, &self.linker, component, plugin_id, host_ctx)?;
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
         // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
         tracing::info!(
@@ -803,21 +762,23 @@ impl WasmHostContext {
 
         // 慢路径：创建数据库
         let app_handle = self.app_handle.as_ref().ok_or_else(|| {
-            crate::AppError::Plugin(
-                "plugin database unavailable in headless context (no app_handle)".to_string(),
-            )
+            crate::AppError::Plugin("plugin database unavailable in headless context (no app_handle)".to_string())
         })?;
-        let app_data_dir = app_handle.path().app_data_dir()
+        let app_data_dir = app_handle
+            .path()
+            .app_data_dir()
             .map_err(|e| crate::AppError::Plugin(format!("Failed to get app data dir: {}", e)))?;
         let plugin_dir = app_data_dir.join("plugins").join(plugin_id);
 
         // 创建插件数据目录
         if !plugin_dir.exists() {
-            std::fs::create_dir_all(&plugin_dir)
-                .map_err(|e| crate::AppError::Plugin(format!(
+            std::fs::create_dir_all(&plugin_dir).map_err(|e| {
+                crate::AppError::Plugin(format!(
                     "Failed to create plugin data dir '{}': {}",
-                    plugin_dir.display(), e
-                )))?;
+                    plugin_dir.display(),
+                    e
+                ))
+            })?;
         }
 
         let db_path = plugin_dir.join("plugin.db");
@@ -872,8 +833,14 @@ mod tests {
         });
 
         let all_permissions: &[&str] = &[
-            "storage", "broadcast", "terminal:input", "terminal:output",
-            "session:read", "fs:read", "fs:write", "ui:sidebar",
+            "storage",
+            "broadcast",
+            "terminal:input",
+            "terminal:output",
+            "session:read",
+            "fs:read",
+            "fs:write",
+            "ui:sidebar",
         ];
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -885,30 +852,27 @@ mod tests {
             let storage = Arc::new(PluginStorage::new(db.clone()));
 
             let resource_dir = Arc::new(std::path::PathBuf::from("."));
-            let session_manager = Arc::new(
-                SessionManager::from_database(
-                    Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
-                    resource_dir.clone(),
-                )
-            );
+            let session_manager = Arc::new(SessionManager::from_database(
+                Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+                resource_dir.clone(),
+            ));
 
-            let config_manager = Arc::new(
-                SessionConfigManager::new(Arc::new(Mutex::new(
-                    Database::new(&std::path::PathBuf::from(":memory:")).unwrap()
-                )))
-            );
+            let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
+                Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+            ))));
 
             let permission = Arc::new(PermissionManager::new());
-            permission.grant_permissions(TEST_PLUGIN_ID, &all_permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+            permission.grant_permissions(
+                TEST_PLUGIN_ID,
+                &all_permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            );
 
             let message_bus = Arc::new(MessageBus::new());
 
             // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
             let mut wasm_runtime = WasmRuntime::new(storage.clone(), None).unwrap();
             // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
-            wasm_runtime.aot_cache_dir = Some(
-                std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())),
-            );
+            wasm_runtime.aot_cache_dir = Some(std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())));
 
             // 文件服务注册表与宿主上下文同步构造（headless：无 AppHandle）
             let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
@@ -975,9 +939,7 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return encode_component(
-                    &std::fs::read(&module_path).expect("Failed to read test component module"),
-                );
+                return encode_component(&std::fs::read(&module_path).expect("Failed to read test component module"));
             }
         }
 
@@ -995,9 +957,7 @@ mod tests {
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        encode_component(
-            &std::fs::read(&module_path).expect("Failed to read test component after build"),
-        )
+        encode_component(&std::fs::read(&module_path).expect("Failed to read test component after build"))
     }
 
     /// 组件完整往返：实例化、ABI 协商、生命周期、命令（guest 内 import 往返）、
@@ -1029,8 +989,7 @@ mod tests {
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
 
             // manifest
-            let manifest: serde_json::Value =
-                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
 
             // 命令调用：guest 内 host_storage.get 往返
@@ -1052,11 +1011,7 @@ mod tests {
             let pdb_err = result_json["pdbQueryError"]
                 .as_str()
                 .expect("pdbQueryError should be present");
-            assert!(
-                pdb_err.contains("headless"),
-                "unexpected pdbQueryError: {}",
-                pdb_err
-            );
+            assert!(pdb_err.contains("headless"), "unexpected pdbQueryError: {}", pdb_err);
 
             // 会话列表（权限 session:read，空列表）
             assert_eq!(result_json["sessions"], serde_json::json!([]));
@@ -1131,8 +1086,7 @@ mod tests {
 
             if !needs_rebuild {
                 return encode_component(
-                    &std::fs::read(&module_path)
-                        .expect("Failed to read SDK test component module"),
+                    &std::fs::read(&module_path).expect("Failed to read SDK test component module"),
                 );
             }
         }
@@ -1151,10 +1105,7 @@ mod tests {
             .expect("Failed to run cargo build for SDK test component");
         assert!(status.success(), "SDK test component WASM build failed");
 
-        encode_component(
-            &std::fs::read(&module_path)
-                .expect("Failed to read SDK test component after build"),
-        )
+        encode_component(&std::fs::read(&module_path).expect("Failed to read SDK test component after build"))
     }
 
     /// 构建 wasm32-wasip2 测试组件（WASI preopen E2E 用）
@@ -1188,8 +1139,7 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return std::fs::read(&module_path)
-                    .expect("Failed to read WASI test component module");
+                return std::fs::read(&module_path).expect("Failed to read WASI test component module");
             }
         }
 
@@ -1231,37 +1181,34 @@ mod tests {
         // 阶段 1（runtime 上下文）：宿主侧准备——授权 + storage seed + 实例化。
         // 实例化需当前 handle（resolve_preopen_dir 读 storage 并校验授权）；
         // 组件 ctor 不触发 wasi 文件访问，故此时有 handle 仍安全。
-        let (mut plugin, dir) = rt
-            .block_on(async {
-                // 授权插件（storage 权限用于写入配置）与数据目录
-                host_ctx
-                    .permission
-                    .grant_permissions(pid, &["storage".to_string()]);
-                let dir = tempfile::tempdir().expect("tempdir");
-                crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-                    &host_ctx,
-                    pid,
-                    "fs_granted_paths",
-                    serde_json::json!([dir.path().to_string_lossy()]),
-                )
-                .expect("seed granted path");
-                crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-                    &host_ctx,
-                    pid,
-                    "config",
-                    serde_json::json!({
-                        "useSelfFileAccess": true,
-                        "fileAccessDir": dir.path().to_string_lossy(),
-                    }),
-                )
-                .expect("seed wasi config");
+        let (mut plugin, dir) = rt.block_on(async {
+            // 授权插件（storage 权限用于写入配置）与数据目录
+            host_ctx.permission.grant_permissions(pid, &["storage".to_string()]);
+            let dir = tempfile::tempdir().expect("tempdir");
+            crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+                &host_ctx,
+                pid,
+                "fs_granted_paths",
+                serde_json::json!([dir.path().to_string_lossy()]),
+            )
+            .expect("seed granted path");
+            crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+                &host_ctx,
+                pid,
+                "config",
+                serde_json::json!({
+                    "useSelfFileAccess": true,
+                    "fileAccessDir": dir.path().to_string_lossy(),
+                }),
+            )
+            .expect("seed wasi config");
 
-                // 实例化：组件导入 wasi 接口，宿主按配置 preopen /data
-                let plugin = wasm_runtime
-                    .instantiate_component(&component, pid, host_ctx.clone())
-                    .expect("instantiate wasi test component");
-                (plugin, dir)
-            });
+            // 实例化：组件导入 wasi 接口，宿主按配置 preopen /data
+            let plugin = wasm_runtime
+                .instantiate_component(&component, pid, host_ctx.clone())
+                .expect("instantiate wasi test component");
+            (plugin, dir)
+        });
 
         // 阶段 2（无 handle 阻塞线程）：guest 经 std::fs 访问 preopen 目录。
         // 与生产 run_guest_call 对齐——wasi 同步绑定（in_tokio）要求调用线程
@@ -1296,9 +1243,7 @@ mod tests {
             );
 
             // 3. 列举 preopen 根目录，demo.txt 可见
-            let r = plugin
-                .invoke_command("wasi-test.list", "{}")
-                .expect("list command");
+            let r = plugin.invoke_command("wasi-test.list", "{}").expect("list command");
             let entries = serde_json::from_str::<serde_json::Value>(&r)
                 .unwrap()
                 .get("entries")
@@ -1342,8 +1287,7 @@ mod tests {
             .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx)
             .expect("load wasip2 ai-chatbox: all imports must resolve");
         // manifest 往返（无副作用导出，验证 bindgen 接口工作）
-        let manifest: serde_json::Value =
-            serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
         assert_eq!(manifest["id"], "com.bedcode.ai-chatbox");
     }
 
@@ -1367,8 +1311,7 @@ mod tests {
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
 
             // manifest（宏生成的 manifest::Guest）
-            let manifest: serde_json::Value =
-                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.sdk-test");
 
             // storage 往返（WasmHost::storage_set/get 经组件 import）
@@ -1445,19 +1388,15 @@ mod tests {
     }
 
     impl crate::plugin::message_bus::MessageDispatcher for TestInstanceDispatcher {
-        fn dispatch_to_wasm(
-            &self,
-            plugin_id: &str,
-            msg: &bedcode_plugin_api::BusMessage,
-        ) -> anyhow::Result<()> {
+        fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
             let instances = self.instances.clone();
             let plugin_id = plugin_id.to_string();
             let msg = msg.clone();
             block_on_async(async move {
                 let instances = instances.read().await;
-                let plugin = instances.get(&plugin_id).ok_or_else(|| {
-                    anyhow::anyhow!("TestInstanceDispatcher: no instance '{}'", plugin_id)
-                })?;
+                let plugin = instances
+                    .get(&plugin_id)
+                    .ok_or_else(|| anyhow::anyhow!("TestInstanceDispatcher: no instance '{}'", plugin_id))?;
                 let mut plugin = plugin.lock().await;
                 plugin
                     .on_message(&msg.topic, &msg.sender, &msg.payload)
@@ -1490,7 +1429,10 @@ mod tests {
         // 登记目标插件声明的 api（等价 PluginHost::activate_plugin 的登记）
         host_ctx.api_registry().register(
             TARGET_ID,
-            &["com.bedcode.sdk-test.echo".to_string(), "com.bedcode.sdk-test.fail".to_string()],
+            &[
+                "com.bedcode.sdk-test.echo".to_string(),
+                "com.bedcode.sdk-test.fail".to_string(),
+            ],
         );
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1557,10 +1499,9 @@ mod tests {
 
             // 超时：目标声明并订阅了 no-response topic（模拟构建期不可能出现的
             // 声明未实现场景），分派器不处理 → 不回复 → 调用方 800ms 超时
-            host_ctx.api_registry().register(
-                TARGET_ID,
-                &["com.bedcode.sdk-test.no-response".to_string()],
-            );
+            host_ctx
+                .api_registry()
+                .register(TARGET_ID, &["com.bedcode.sdk-test.no-response".to_string()]);
             host_ctx
                 .message_bus
                 .subscribe_wasm(TARGET_ID, "bedcode.api.com.bedcode.sdk-test.no-response")
@@ -1599,8 +1540,7 @@ mod tests {
     #[test]
     fn test_load_plugin_from_file() {
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-        let temp_dir = std::env::temp_dir()
-            .join(format!("bedcode_component_test_{}", std::process::id()));
+        let temp_dir = std::env::temp_dir().join(format!("bedcode_component_test_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let wasm_path = temp_dir.join("plugin.wasm");
         std::fs::write(&wasm_path, build_test_component()).unwrap();
@@ -1610,8 +1550,7 @@ mod tests {
             .expect("load_plugin_from_file should load component");
         // 加载成功即可调用：激活 + manifest 往返验证组件路径
         assert_eq!(plugin.activate().expect("activate"), 0);
-        let manifest: serde_json::Value =
-            serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
         assert_eq!(manifest["id"], "com.bedcode.component-test");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1630,10 +1569,7 @@ mod tests {
     fn test_compile_component_from_file_aot_cache() {
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "bedcode_component_aot_{}",
-            std::process::id()
-        ));
+        let temp_dir = std::env::temp_dir().join(format!("bedcode_component_aot_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let wasm_path = temp_dir.join("test_component.wasm");
         // 组件缓存文件名带 c 前缀（与 core module 产物区分）
@@ -1679,10 +1615,7 @@ mod tests {
     fn test_compile_component_from_file_recompiles_on_stale() {
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "bedcode_component_aot_stale_{}",
-            std::process::id()
-        ));
+        let temp_dir = std::env::temp_dir().join(format!("bedcode_component_aot_stale_{}", std::process::id()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         let wasm_path = temp_dir.join("test_component.wasm");
         let cache_path = std::env::temp_dir()
@@ -1740,10 +1673,7 @@ mod tests {
         );
 
         // 预置插件设置：roots 非空才会走到挂载路径（空 roots 直接跳过）
-        let root_dir = std::env::temp_dir().join(format!(
-            "bedcode_ft_epoch_test_{}",
-            std::process::id()
-        ));
+        let root_dir = std::env::temp_dir().join(format!("bedcode_ft_epoch_test_{}", std::process::id()));
         std::fs::create_dir_all(&root_dir).unwrap();
         let settings = serde_json::json!({
             "roots": [root_dir.to_string_lossy()],
@@ -1783,9 +1713,7 @@ mod tests {
         // 宿主调用需 tokio 运行时上下文（block_on_async 依赖）
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            plugin
-                .activate()
-                .expect("real file-transfer activate should succeed");
+            plugin.activate().expect("real file-transfer activate should succeed");
         });
 
         let _ = std::fs::remove_dir_all(&root_dir);
@@ -1811,9 +1739,7 @@ mod tests {
             Some(v) => std::env::set_var("BEDCODE_TEST_MOUNT_DELAY_MS", v),
             None => std::env::remove_var("BEDCODE_TEST_MOUNT_DELAY_MS"),
         }
-        result.expect(
-            "activate must survive slow host calls (fuel counts guest instructions only)",
-        );
+        result.expect("activate must survive slow host calls (fuel counts guest instructions only)");
 
         let _ = std::fs::remove_dir_all(&root_dir);
     }
@@ -1829,8 +1755,7 @@ mod tests {
         const SCHED_PLUGIN_ID: &str = "com.bedcode.scheduler";
 
         // 授予与插件 manifest 一致的权限（activate 的 timer_register/cli_install 路径）
-        let permissions: &[&str] =
-            &["app:cli", "broadcast", "process:run", "storage", "timer:schedule"];
+        let permissions: &[&str] = &["app:cli", "broadcast", "process:run", "storage", "timer:schedule"];
         host_ctx.permission.grant_permissions(
             SCHED_PLUGIN_ID,
             &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
@@ -1851,9 +1776,7 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            plugin
-                .activate()
-                .expect("real scheduler activate should succeed");
+            plugin.activate().expect("real scheduler activate should succeed");
             // tick 命令路由：now_local 参数透传，宿主 DB 缺失时插件侧降级不 panic
             let result = plugin
                 .invoke_command(

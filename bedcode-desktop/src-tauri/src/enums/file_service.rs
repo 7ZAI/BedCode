@@ -374,8 +374,7 @@ mod tests {
     #[test]
     fn test_intent_fail_reason_wire_format() {
         // v2.1：complete 409 duplicate-name 分类随 fail 上报（桌面据此置任务终态 reason）
-        let json =
-            r#"{"action":"intent_fail","data":{"intent_id":"i9","offset":5,"reason":"duplicate-name"}}"#;
+        let json = r#"{"action":"intent_fail","data":{"intent_id":"i9","offset":5,"reason":"duplicate-name"}}"#;
         match serde_json::from_str::<FileServicePayload>(json).unwrap() {
             FileServicePayload::IntentFail {
                 intent_id,
@@ -484,10 +483,7 @@ mod tests {
         assert!(!json.contains("\"error\""));
         match serde_json::from_str::<FileServicePayload>(&json).unwrap() {
             FileServicePayload::FileListResponse {
-                list_id,
-                entries,
-                ok,
-                ..
+                list_id, entries, ok, ..
             } => {
                 assert_eq!(list_id, "li-1");
                 assert_eq!(entries.len(), 1);

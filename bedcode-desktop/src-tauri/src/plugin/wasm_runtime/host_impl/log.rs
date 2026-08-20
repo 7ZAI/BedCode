@@ -49,26 +49,21 @@ static PLUGIN_LOG_META_CACHE: OnceLock<Mutex<HashMap<(String, u32, Level), &'sta
 fn plugin_log_metadata(level: Level, file: &str, line: u32) -> &'static Metadata<'static> {
     let cache = PLUGIN_LOG_META_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache.lock().unwrap_or_else(|e| e.into_inner());
-    cache
-        .entry((file.to_string(), line, level))
-        .or_insert_with(|| {
-            // 泄漏转 'static：同一调用点后续命中缓存，仅首次泄漏
-            let file: &'static str = Box::leak(file.to_string().into_boxed_str());
-            let fields = field::FieldSet::new(
-                &["message"],
-                callsite::Identifier(&PLUGIN_LOG_CALLSITE),
-            );
-            Box::leak(Box::new(Metadata::new(
-                "bedcode_lib::plugin::plugin_log",
-                "bedcode_lib::plugin::plugin_log",
-                level,
-                Some(file),
-                Some(line),
-                Some("bedcode_lib::plugin::plugin_log"),
-                fields,
-                Kind::EVENT,
-            )))
-        })
+    cache.entry((file.to_string(), line, level)).or_insert_with(|| {
+        // 泄漏转 'static：同一调用点后续命中缓存，仅首次泄漏
+        let file: &'static str = Box::leak(file.to_string().into_boxed_str());
+        let fields = field::FieldSet::new(&["message"], callsite::Identifier(&PLUGIN_LOG_CALLSITE));
+        Box::leak(Box::new(Metadata::new(
+            "bedcode_lib::plugin::plugin_log",
+            "bedcode_lib::plugin::plugin_log",
+            level,
+            Some(file),
+            Some(line),
+            Some("bedcode_lib::plugin::plugin_log"),
+            fields,
+            Kind::EVENT,
+        )))
+    })
 }
 
 /// 以插件调用点位置发出 tracing 事件（消息带 `[plugin:xxx]` 前缀，保持旧格式）

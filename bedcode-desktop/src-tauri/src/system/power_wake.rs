@@ -149,8 +149,8 @@ mod imp {
     use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, CW_USEDEFAULT, DefWindowProcW, DispatchMessageW, GetMessageW, MSG,
-        RegisterClassW, TranslateMessage, UnregisterClassW, WNDCLASSW, WS_OVERLAPPED,
+        CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW, TranslateMessage,
+        UnregisterClassW, CW_USEDEFAULT, MSG, WNDCLASSW, WS_OVERLAPPED,
     };
 
     use super::recovery::recover_after_resume;
@@ -164,12 +164,7 @@ mod imp {
     static RECOVERING: AtomicBool = AtomicBool::new(false);
 
     /// 窗口过程：本窗口不处理任何消息，全部交给系统默认处理
-    unsafe extern "system" fn wnd_proc(
-        hwnd: HWND,
-        msg: u32,
-        wparam: WPARAM,
-        lparam: LPARAM,
-    ) -> LRESULT {
+    unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         DefWindowProcW(hwnd, msg, wparam, lparam)
     }
 
@@ -232,10 +227,7 @@ mod imp {
                 break;
             }
             if ret == -1 {
-                tracing::warn!(
-                    "[power_wake] GetMessageW failed: {}",
-                    std::io::Error::last_os_error()
-                );
+                tracing::warn!("[power_wake] GetMessageW failed: {}", std::io::Error::last_os_error());
                 break;
             }
             TranslateMessage(&msg);

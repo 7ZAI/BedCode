@@ -31,8 +31,7 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
                     // 构建完整的 CMD 命令
                     let full_command = format!(
                         "@chcp 65001 > nul && cd /d \"{}\" && echo Working directory: %cd% && {}",
-                        config.working_dir,
-                        config.command
+                        config.working_dir, config.command
                     );
 
                     let mut cmd = CommandBuilder::new("cmd.exe");
@@ -51,11 +50,7 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
             cmd.arg("-lic");
 
             let wsl_path = windows_to_wsl_path(&config.working_dir);
-            let wsl_command = format!(
-                "cd '{}' && pwd && {}",
-                wsl_path,
-                config.command
-            );
+            let wsl_command = format!("cd '{}' && pwd && {}", wsl_path, config.command);
             cmd.arg(wsl_command);
             cmd
         }
@@ -104,7 +99,9 @@ mod tests {
     #[test]
     fn powershell_builds_utf8_codepage_command_with_cwd() {
         let cmd = build_command(&config(
-            ExecutionEnvironment::Windows { shell: WindowsShell::PowerShell },
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
             "echo hi",
         ))
         .unwrap();
@@ -130,7 +127,9 @@ mod tests {
     #[test]
     fn cmd_shell_builds_cmd_commands() {
         let cmd = build_command(&config(
-            ExecutionEnvironment::Windows { shell: WindowsShell::Cmd },
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::Cmd,
+            },
             "dir",
         ))
         .unwrap();
@@ -152,8 +151,13 @@ mod tests {
 
     #[test]
     fn wsl2_uses_distro_and_converts_windows_path() {
-        let cmd = build_command(&config(ExecutionEnvironment::Wsl2 { distro: "Ubuntu".to_string() }, "pwd"))
-            .unwrap();
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            "pwd",
+        ))
+        .unwrap();
 
         let argv = argv(&cmd);
         assert_eq!(argv[0], "wsl.exe");
@@ -173,7 +177,13 @@ mod tests {
     #[test]
     fn wsl_path_passthrough_for_unix_style_paths() {
         // 已是非 /mnt 的类 Unix 路径应原样透传
-        let cmd = build_command(&config(ExecutionEnvironment::Wsl2 { distro: "Ubuntu".to_string() }, "ls")).unwrap();
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            "ls",
+        ))
+        .unwrap();
         let _ = argv(&cmd);
         // 路径转换行为由 wsl::windows_to_wsl_path 保证，此处验证 WSL 分支不 panic
         assert!(cmd.get_cwd().is_none());

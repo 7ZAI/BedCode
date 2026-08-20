@@ -3,8 +3,8 @@
 //! Tauri 命令 — 桌面端 mDNS 广播控制
 
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tauri::{AppHandle, Manager};
+use tokio::sync::RwLock;
 
 use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::system::constants::mdns;
@@ -17,12 +17,12 @@ fn get_advertiser(app: &AppHandle) -> Arc<RwLock<MdnsAdvertiser>> {
 
 /// 启动 mDNS 服务广播
 #[tauri::command]
-pub async fn mdns_start_advertise(
-    app_handle: AppHandle,
-    port: u16,
-    device_name: String,
-) -> Result<()> {
-    tracing::info!("[mdns_start_advertise] Starting advertise: {} on port {}", device_name, port);
+pub async fn mdns_start_advertise(app_handle: AppHandle, port: u16, device_name: String) -> Result<()> {
+    tracing::info!(
+        "[mdns_start_advertise] Starting advertise: {} on port {}",
+        device_name,
+        port
+    );
     let advertiser = get_advertiser(&app_handle);
     let mut txt_records = std::collections::HashMap::new();
     txt_records.insert(mdns::TXT_KEY_PLATFORM.to_string(), mdns::TXT_VALUE_PLATFORM.to_string());

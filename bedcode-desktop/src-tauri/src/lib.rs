@@ -17,9 +17,9 @@ pub mod utils;
 
 // ==================== Re-exports ====================
 
-pub use system::{AppError, Result, AppConfig, AppContext};
-use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use commands::system::RunningSessionInfo;
+use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
 
@@ -44,11 +44,7 @@ fn reset_today_logs(log_dir: &std::path::Path) {
         if path.exists() {
             match std::fs::remove_file(&path) {
                 Ok(()) => eprintln!("[logging] dev reset: replaced today's log {}", path.display()),
-                Err(e) => eprintln!(
-                    "[logging] dev reset: failed to replace {}: {}",
-                    path.display(),
-                    e
-                ),
+                Err(e) => eprintln!("[logging] dev reset: failed to replace {}: {}", path.display(), e),
             }
         }
     }
@@ -58,10 +54,7 @@ fn reset_today_logs(log_dir: &std::path::Path) {
 ///
 /// 接受 LogConfig 参数，所有日志行为均可通过配置文件控制
 fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogConfig) -> Result<()> {
-    let log_dir = app_handle
-        .path()
-        .app_log_dir()
-        .expect("Failed to get log directory");
+    let log_dir = app_handle.path().app_log_dir().expect("Failed to get log directory");
 
     std::fs::create_dir_all(&log_dir)?;
 
@@ -134,8 +127,8 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
 
     if should_add_console {
         // RUST_LOG 环境变量优先级最高，其次使用配置值
-        let console_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter));
+        let console_filter =
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter));
         let console_layer = tracing_subscriber::fmt::layer()
             .with_writer(std::io::stdout)
             .with_ansi(true)
@@ -160,13 +153,15 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
     tracing::info!(
         "Log config: file_level={}, rotation={}, max_files={}, console_in_release={}",
-        log_config.file_level, log_config.rotation, log_config.max_files, log_config.console_in_release,
+        log_config.file_level,
+        log_config.rotation,
+        log_config.max_files,
+        log_config.console_in_release,
     );
     tracing::info!("BedCode Desktop v{} starting...", env!("CARGO_PKG_VERSION"));
 
     Ok(())
 }
-
 
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
@@ -233,10 +228,7 @@ pub fn run() {
             crate::system::power_wake::spawn_wake_monitor(app_handle.clone());
 
             // 保存 resource_dir 供后续会话创建时使用
-            let resource_dir = app_handle
-                .path()
-                .resource_dir()
-                .expect("Failed to get resource dir");
+            let resource_dir = app_handle.path().resource_dir().expect("Failed to get resource dir");
 
             // 解析桌面端插件目录
             // dev 模式下 resolve 指向 target/debug/resources/...（Tauri 不自动复制资源）
@@ -251,11 +243,15 @@ pub fn run() {
                     resolved
                 } else {
                     // dev 模式 fallback：使用源码目录
-                    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-                        .expect("CARGO_MANIFEST_DIR not set");
+                    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
                     let fallback = std::path::PathBuf::from(manifest_dir)
-                        .join("resources").join("plugins").join("desktop");
-                    tracing::info!("Plugin resolved path not found, falling back to source dir: {:?}", fallback);
+                        .join("resources")
+                        .join("plugins")
+                        .join("desktop");
+                    tracing::info!(
+                        "Plugin resolved path not found, falling back to source dir: {:?}",
+                        fallback
+                    );
                     fallback
                 }
             };
@@ -283,7 +279,6 @@ pub fn run() {
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
-           
 
             let db = Arc::new(Mutex::new(db));
 
@@ -298,20 +293,19 @@ pub fn run() {
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
-            let plugin_host = Arc::new(
-                tauri::async_runtime::block_on(
-                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), config_manager.clone(), Some(app_handle_arc.clone()))
-                )
-            );
+            let plugin_host = Arc::new(tauri::async_runtime::block_on(plugin::PluginHost::new(
+                db.clone(),
+                &plugins_dir,
+                session_manager.clone(),
+                config_manager.clone(),
+                Some(app_handle_arc.clone()),
+            )));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
             // 文件服务注册表已在 PluginHost::new() 内创建（早于插件 auto-activate，
             // 激活时挂载可用）；此处注入宿主引用并启动后台 sweeper（两阶段收尾）
             tauri::async_runtime::block_on(async {
-                plugin_host
-                    .file_service()
-                    .set_plugin_host(plugin_host.clone())
-                    .await;
+                plugin_host.file_service().set_plugin_host(plugin_host.clone()).await;
                 plugin_host.file_service().start_background_tasks();
             });
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
@@ -319,7 +313,8 @@ pub fn run() {
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
             // 创建同步事件通道
-            let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+            let (sync_tx, _) =
+                tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
             // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
             tauri::async_runtime::block_on(async {
@@ -361,9 +356,7 @@ pub fn run() {
             // setup 闭包不在 Tokio runtime 上下文中，需通过 block_on 获取 Handle
             #[cfg(debug_assertions)]
             {
-                let runtime_handle = tauri::async_runtime::block_on(async {
-                    tokio::runtime::Handle::current()
-                });
+                let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
                 let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
@@ -389,7 +382,9 @@ pub fn run() {
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
-                global_matcher().register_source::<DesktopSyncEvent>(ctx.sync_tx().clone()).await;
+                global_matcher()
+                    .register_source::<DesktopSyncEvent>(ctx.sync_tx().clone())
+                    .await;
 
                 // 注册处理器
                 let sync_handler = Arc::new(SyncEventHandler::new(
@@ -434,15 +429,14 @@ pub fn run() {
             });
 
             // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = events::EventForwarder::new(
-                app_handle.clone(),
-                session_manager.clone(),
-            );
+            let event_forwarder = events::EventForwarder::new(app_handle.clone(), session_manager.clone());
             event_forwarder.start();
 
             setup_tray(app_handle)?;
 
-            let window = app_handle.get_webview_window("main").expect("Failed to get main window");
+            let window = app_handle
+                .get_webview_window("main")
+                .expect("Failed to get main window");
             let close_window = window.clone();
             let close_app_handle = app_handle.clone();
             window.on_window_event(move |event| {
@@ -455,9 +449,7 @@ pub fn run() {
                     let win = close_window.clone();
                     let ah = close_app_handle.clone();
                     tauri::async_runtime::spawn(async move {
-                        let should_close = system::lifecycle::lifecycle_registry()
-                            .run_window_close_hooks()
-                            .await;
+                        let should_close = system::lifecycle::lifecycle_registry().run_window_close_hooks().await;
 
                         if should_close {
                             // 无运行中会话，直接关闭
@@ -471,12 +463,14 @@ pub fn run() {
                             let sessions = sm.list_sessions().await;
                             let running: Vec<_> = sessions
                                 .iter()
-                                .filter(|s| matches!(
-                                    s.status,
-                                    enums::SessionStatus::Running
-                                    | enums::SessionStatus::Starting
-                                    | enums::SessionStatus::WaitingInput
-                                ))
+                                .filter(|s| {
+                                    matches!(
+                                        s.status,
+                                        enums::SessionStatus::Running
+                                            | enums::SessionStatus::Starting
+                                            | enums::SessionStatus::WaitingInput
+                                    )
+                                })
                                 .map(|s| RunningSessionInfo {
                                     id: s.id.clone(),
                                     name: s.name.clone(),
@@ -489,10 +483,7 @@ pub fn run() {
                                 running.len()
                             );
 
-                            if let Err(e) = ah.emit(
-                                system::constants::event::WINDOW_CLOSE_REQUESTED,
-                                &running,
-                            ) {
+                            if let Err(e) = ah.emit(system::constants::event::WINDOW_CLOSE_REQUESTED, &running) {
                                 tracing::error!("Failed to emit window-close-requested: {}", e);
                             }
                         }
@@ -501,7 +492,11 @@ pub fn run() {
             });
 
             let init_elapsed = start.elapsed();
-            tracing::info!("BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
+            tracing::info!(
+                "BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)",
+                ws_port,
+                init_elapsed.as_millis()
+            );
 
             // 注册核心模块的生命周期钩子（Shutdown/WindowClose）
             system::lifecycle::register_core_lifecycle_hooks();
@@ -554,7 +549,6 @@ pub fn run() {
             commands::qr::get_qr_connection_info,
             commands::qr::get_qr_token_ttl,
             commands::qr::set_qr_token_ttl,
-
             commands::settings::get_all_db_settings,
             commands::settings::set_db_setting,
             // Settings
@@ -625,21 +619,17 @@ pub fn run() {
 
     // 使用 .build() + .run() 替代 .run()，以接入 Tauri RunEvent 循环
     // RunEvent::ExitRequested 是执行优雅关闭的最后时机
-    app.run(move |_app_handle, event| {
-        match event {
-            tauri::RunEvent::ExitRequested { .. } => {
-                tracing::info!("BedCode Desktop exit requested, running shutdown hooks...");
-                tauri::async_runtime::block_on(async {
-                    system::lifecycle::lifecycle_registry()
-                        .run_shutdown_hooks()
-                        .await;
-                });
-            }
-            tauri::RunEvent::Exit { .. } => {
-                tracing::info!("BedCode Desktop exited");
-            }
-            _ => {}
+    app.run(move |_app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            tracing::info!("BedCode Desktop exit requested, running shutdown hooks...");
+            tauri::async_runtime::block_on(async {
+                system::lifecycle::lifecycle_registry().run_shutdown_hooks().await;
+            });
         }
+        tauri::RunEvent::Exit { .. } => {
+            tracing::info!("BedCode Desktop exited");
+        }
+        _ => {}
     });
 }
 

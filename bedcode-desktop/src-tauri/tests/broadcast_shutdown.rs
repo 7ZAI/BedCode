@@ -29,8 +29,8 @@
 //! （current_thread runtime 禁止 std::thread::sleep），每处 await 有 timeout。
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use actix_web::dev::ServerHandle;
@@ -126,10 +126,7 @@ async fn init_test_app_context() {
         // 会话管理器用独立内存库（会话持久化与配对记录互不相干，避免共用连接）
         let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
         session_db.init_schema().expect("init session db schema failed");
-        let session_manager = Arc::new(SessionManager::from_database(
-            session_db,
-            Arc::new(PathBuf::from(".")),
-        ));
+        let session_manager = Arc::new(SessionManager::from_database(session_db, Arc::new(PathBuf::from("."))));
         let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
         let plugin_host = Arc::new(
             PluginHost::new(
@@ -172,7 +169,9 @@ async fn init_test_app_context() {
         // 与生产同款：注册同步事件处理器（broadcast 消费侧）
         let ws_manager = WebSocketManager::global();
         ws_manager.init().await.expect("init WebSocketManager failed");
-        global_matcher().register_source::<DesktopSyncEvent>(sync_tx.clone()).await;
+        global_matcher()
+            .register_source::<DesktopSyncEvent>(sync_tx.clone())
+            .await;
         let sync_handler: Arc<dyn bedcode_lib::events::EventHandler<DesktopSyncEvent>> = Arc::new(
             SyncEventHandler::new(session_manager.clone(), config_manager.clone(), ws_manager),
         );
@@ -250,12 +249,7 @@ async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::ws::regi
 ///
 /// 旧 WS 配对（RequestPairing/VerifyCode）已随 /ws/terminal 兼容路由删除，
 /// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
-async fn http_pair_and_get_token(
-    port: u16,
-    device_id: &str,
-    device_name: &str,
-    fingerprint: &str,
-) -> String {
+async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, fingerprint: &str) -> String {
     let base = format!("http://127.0.0.1:{port}");
     let client = reqwest::Client::new();
 
@@ -346,18 +340,16 @@ async fn authenticate_with_jwt(
             ..Default::default()
         },
     };
-    sink.send(WsMsg::Text(request.to_json().expect("serialize jwt auth failed").into()))
-        .await
-        .expect("send jwt auth failed");
+    sink.send(WsMsg::Text(
+        request.to_json().expect("serialize jwt auth failed").into(),
+    ))
+    .await
+    .expect("send jwt auth failed");
 
     let resp = recv_message(stream).await;
     match resp {
         Message::Auth { payload, .. } => {
-            assert_eq!(
-                payload.stage,
-                AuthStage::Authenticated,
-                "JWT re-auth must succeed"
-            );
+            assert_eq!(payload.stage, AuthStage::Authenticated, "JWT re-auth must succeed");
             assert_eq!(
                 payload.device_name.as_deref(),
                 Some(device_name),
@@ -373,7 +365,8 @@ async fn authenticate_with_jwt(
 /// 认证成功后服务端还会补发文件服务快照（push_file_service_snapshot，
 /// 无插件时为 FileService(Withdraw)），必须先于 echo 到达客户端——
 /// 等待目标消息时必须跳过这些无关推送，不能假设下一帧就是响应
-async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {    let deadline = Instant::now() + Duration::from_secs(5);
+async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {
+    let deadline = Instant::now() + Duration::from_secs(5);
     let mut is_match = is_match;
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -459,9 +452,7 @@ async fn broadcast_and_shutdown_flow() {
     init_test_app_context().await;
 
     let port = pick_free_port();
-    let (handle, server_task) = spawn_test_server(port)
-        .await
-        .expect("test server must start");
+    let (handle, server_task) = spawn_test_server(port).await.expect("test server must start");
 
     // ==================== 场景 1：两客户端认证 + WS 驱动广播 + 排除发送者 ====================
     // A（发送端）与 B（接收端）先配对拿 token，再 JWT 重连认证（重连路径
@@ -474,13 +465,29 @@ async fn broadcast_and_shutdown_flow() {
     // 由源地址判定，与通道类型无关
     let (mut sink_a, mut stream_a, addr_a) = connect_ws(port, "/ws/event").await;
     let client_id_a = addr_a.to_string();
-    authenticate_with_jwt(&mut sink_a, &mut stream_a, &token_a, "ITest A-04", "fp-itest-a-04", "a-04").await;
+    authenticate_with_jwt(
+        &mut sink_a,
+        &mut stream_a,
+        &token_a,
+        "ITest A-04",
+        "fp-itest-a-04",
+        "a-04",
+    )
+    .await;
 
     let token_b = pair_and_get_token(port, "itest-device-b-04", "ITest B-04", "fp-itest-b-04", "b-04").await;
     // B 连接事件通道（/ws/event）：广播接收方必须是 Event 通道（ticket 02 语义）
     let (mut sink_b, mut stream_b, addr_b) = connect_ws(port, "/ws/event").await;
     let client_id_b = addr_b.to_string();
-    authenticate_with_jwt(&mut sink_b, &mut stream_b, &token_b, "ITest B-04", "fp-itest-b-04", "b-04").await;
+    authenticate_with_jwt(
+        &mut sink_b,
+        &mut stream_b,
+        &token_b,
+        "ITest B-04",
+        "fp-itest-b-04",
+        "b-04",
+    )
+    .await;
 
     // registry 更新经 actix::spawn 异步落地，轮询等待两个客户端都就位
     assert!(
@@ -501,11 +508,14 @@ async fn broadcast_and_shutdown_flow() {
     // 1a. A 发送 RemoveSession（对不存在会话无副作用，仅触发广播链路）
     let ghost_session_1 = "itest-ghost-04-1";
     let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession { session_id: ghost_session_1.to_string() },
+        SessionControlAction::RemoveSession {
+            session_id: ghost_session_1.to_string(),
+        },
         None,
     );
     let control_id = control.message_id().expect("control message must carry id").to_string();
-    sink_a.send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+    sink_a
+        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control failed");
 
@@ -513,7 +523,9 @@ async fn broadcast_and_shutdown_flow() {
     // 跳过认证后补发的文件服务快照等无关推送
     let resp = wait_for_message(&mut stream_a, |m| matches!(m, Message::SessionControl { .. })).await;
     match resp {
-        Message::SessionControl { message_id, payload, .. } => {
+        Message::SessionControl {
+            message_id, payload, ..
+        } => {
             assert_eq!(message_id, control_id, "echo must carry original message_id");
             match payload.action {
                 SessionControlAction::RemoveSession { session_id } => {
@@ -531,10 +543,7 @@ async fn broadcast_and_shutdown_flow() {
     match sync {
         Message::SyncData { payload, .. } => match payload {
             SyncPayload::SessionRemoved { session_id, .. } => {
-                assert_eq!(
-                    session_id, ghost_session_1,
-                    "broadcast must carry removed session id"
-                );
+                assert_eq!(session_id, ghost_session_1, "broadcast must carry removed session id");
             }
             other => panic!("expected SessionRemoved sync payload, got: {other:?}"),
         },
@@ -568,11 +577,14 @@ async fn broadcast_and_shutdown_flow() {
     // 2b. A 再次触发排除语义广播（此时除 A 外无其他已认证客户端 → 无送达目标）
     let ghost_session_2 = "itest-ghost-04-2";
     let control = Message::session_control_with_response(
-        SessionControlAction::RemoveSession { session_id: ghost_session_2.to_string() },
+        SessionControlAction::RemoveSession {
+            session_id: ghost_session_2.to_string(),
+        },
         None,
     );
     let control_id = control.message_id().expect("control message must carry id").to_string();
-    sink_a.send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
+    sink_a
+        .send(WsMsg::Text(control.to_json().expect("serialize control failed").into()))
         .await
         .expect("send session_control failed");
     let resp = wait_for_message(&mut stream_a, |m| matches!(m, Message::SessionControl { .. })).await;

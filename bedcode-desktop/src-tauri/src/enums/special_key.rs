@@ -182,7 +182,10 @@ impl KeyCombo {
                 return None;
             }
             let key = KeyCode::from_str(rest)?;
-            return Some(KeyCombo { modifiers: MOD_CTRL, key });
+            return Some(KeyCombo {
+                modifiers: MOD_CTRL,
+                key,
+            });
         }
 
         // 无修饰键
@@ -213,9 +216,7 @@ impl KeyCombo {
     pub fn to_pty_bytes(&self) -> Option<Vec<u8>> {
         match &self.key {
             // ==================== Ctrl + 字母/数字 ====================
-            KeyCode::Char(c) if self.ctrl() && !self.shift() && !self.alt() => {
-                self.ctrl_char_bytes(*c)
-            }
+            KeyCode::Char(c) if self.ctrl() && !self.shift() && !self.alt() => self.ctrl_char_bytes(*c),
 
             // ==================== Alt + 字母 ====================
             KeyCode::Char(c) if self.alt() && !self.ctrl() && !self.shift() => {
@@ -234,9 +235,7 @@ impl KeyCombo {
             }
 
             // ==================== 方向键（动态修饰键） ====================
-            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => {
-                self.arrow_key_bytes()
-            }
+            KeyCode::Up | KeyCode::Down | KeyCode::Left | KeyCode::Right => self.arrow_key_bytes(),
 
             // ==================== 功能键 F1~F12（动态修饰键） ====================
             KeyCode::F(n) => self.function_key_bytes(*n),
@@ -246,8 +245,9 @@ impl KeyCombo {
 
             // ==================== CSI 编辑键（动态修饰键） ====================
             // Delete/Insert/PageUp/PageDown/Home/End 统一走 csi_edit_key_bytes
-            KeyCode::Delete | KeyCode::Insert | KeyCode::PageUp | KeyCode::PageDown
-            | KeyCode::Home | KeyCode::End => self.csi_edit_key_bytes(),
+            KeyCode::Delete | KeyCode::Insert | KeyCode::PageUp | KeyCode::PageDown | KeyCode::Home | KeyCode::End => {
+                self.csi_edit_key_bytes()
+            }
 
             // ==================== ASCII 控制字符编辑键 ====================
             KeyCode::Enter if !self.ctrl() && !self.shift() && !self.alt() => {
@@ -261,12 +261,8 @@ impl KeyCombo {
             }
 
             // ==================== 无修饰字母/数字（直接输入字符） ====================
-            KeyCode::Char(c) if !self.ctrl() && !self.alt() && !self.shift() => {
-                Some(vec![*c as u8])
-            }
-            KeyCode::Char(c) if !self.ctrl() && !self.alt() && self.shift() => {
-                Some(vec![c.to_ascii_uppercase() as u8])
-            }
+            KeyCode::Char(c) if !self.ctrl() && !self.alt() && !self.shift() => Some(vec![*c as u8]),
+            KeyCode::Char(c) if !self.ctrl() && !self.alt() && self.shift() => Some(vec![c.to_ascii_uppercase() as u8]),
 
             // 其他不支持的组合
             _ => None,
@@ -467,12 +463,9 @@ impl Serialize for KeyCombo {
 impl<'de> Deserialize<'de> for KeyCombo {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
-        KeyCombo::parse(&s).ok_or_else(|| {
-            serde::de::Error::custom(format!("invalid key combo: {}", s))
-        })
+        KeyCombo::parse(&s).ok_or_else(|| serde::de::Error::custom(format!("invalid key combo: {}", s)))
     }
 }
-
 
 // ==================== 单元测试 ====================
 
@@ -700,10 +693,22 @@ mod tests {
 
     #[test]
     fn test_arrow_keys() {
-        assert_eq!(KeyCombo::parse("up").unwrap().to_pty_bytes(), Some("\x1b[A".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("down").unwrap().to_pty_bytes(), Some("\x1b[B".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("right").unwrap().to_pty_bytes(), Some("\x1b[C".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("left").unwrap().to_pty_bytes(), Some("\x1b[D".as_bytes().to_vec()));
+        assert_eq!(
+            KeyCombo::parse("up").unwrap().to_pty_bytes(),
+            Some("\x1b[A".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("down").unwrap().to_pty_bytes(),
+            Some("\x1b[B".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("right").unwrap().to_pty_bytes(),
+            Some("\x1b[C".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("left").unwrap().to_pty_bytes(),
+            Some("\x1b[D".as_bytes().to_vec())
+        );
     }
 
     #[test]
@@ -728,18 +733,27 @@ mod tests {
     #[test]
     fn test_alt_letter() {
         // Alt+F = ESC + 'f'
-        assert_eq!(
-            KeyCombo::parse("alt+f").unwrap().to_pty_bytes(),
-            Some(vec![0x1b, b'f'])
-        );
+        assert_eq!(KeyCombo::parse("alt+f").unwrap().to_pty_bytes(), Some(vec![0x1b, b'f']));
     }
 
     #[test]
     fn test_function_keys() {
-        assert_eq!(KeyCombo::parse("f1").unwrap().to_pty_bytes(), Some("\x1bOP".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("f4").unwrap().to_pty_bytes(), Some("\x1bOS".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("f5").unwrap().to_pty_bytes(), Some("\x1b[15~".as_bytes().to_vec()));
-        assert_eq!(KeyCombo::parse("f12").unwrap().to_pty_bytes(), Some("\x1b[24~".as_bytes().to_vec()));
+        assert_eq!(
+            KeyCombo::parse("f1").unwrap().to_pty_bytes(),
+            Some("\x1bOP".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("f4").unwrap().to_pty_bytes(),
+            Some("\x1bOS".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("f5").unwrap().to_pty_bytes(),
+            Some("\x1b[15~".as_bytes().to_vec())
+        );
+        assert_eq!(
+            KeyCombo::parse("f12").unwrap().to_pty_bytes(),
+            Some("\x1b[24~".as_bytes().to_vec())
+        );
     }
 
     #[test]
@@ -787,7 +801,10 @@ mod tests {
     fn test_to_str() {
         assert_eq!(KeyCombo::parse("ctrl+a").unwrap().to_str(), "ctrl+a");
         assert_eq!(KeyCombo::parse("shift+up").unwrap().to_str(), "shift+up");
-        assert_eq!(KeyCombo::parse("ctrl+shift+right").unwrap().to_str(), "ctrl+shift+right");
+        assert_eq!(
+            KeyCombo::parse("ctrl+shift+right").unwrap().to_str(),
+            "ctrl+shift+right"
+        );
         assert_eq!(KeyCombo::parse("enter").unwrap().to_str(), "enter");
         assert_eq!(KeyCombo::parse("f5").unwrap().to_str(), "f5");
     }

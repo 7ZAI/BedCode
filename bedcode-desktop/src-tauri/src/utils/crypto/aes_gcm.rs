@@ -12,8 +12,8 @@
 //! - 高层封装见 [`crate::utils::crypto::hybrid`]，调用方无需手动管理 nonce。
 
 use aes_gcm::{
-    Aes256Gcm, Key, Nonce,
     aead::{Aead, KeyInit, Payload},
+    Aes256Gcm, Key, Nonce,
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -47,12 +47,7 @@ pub fn generate_nonce() -> [u8; NONCE_LEN] {
 /// - `aad`：可选的关联数据（不加密但参与认证），如协议头、文件元数据
 ///
 /// 返回值包含密文与 GCM 认证标签（标签附在密文末尾，长度 = 明文长度 + 16 字节）。
-pub fn encrypt(
-    key: &[u8; KEY_LEN],
-    nonce: &[u8; NONCE_LEN],
-    plaintext: &[u8],
-    aad: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+pub fn encrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let payload = Payload {
         msg: plaintext,
@@ -67,12 +62,7 @@ pub fn encrypt(
 ///
 /// 参数与 [`encrypt`] 对应；若密文或 aad 被篡改，返回 `AppError::Internal`，
 /// 调用方应将其视为完整性校验失败而非普通错误。
-pub fn decrypt(
-    key: &[u8; KEY_LEN],
-    nonce: &[u8; NONCE_LEN],
-    ciphertext: &[u8],
-    aad: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+pub fn decrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let payload = Payload {
         msg: ciphertext,

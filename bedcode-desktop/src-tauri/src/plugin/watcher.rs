@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
-use crate::system::constants::plugin::PLUGIN_RELOAD_DEBOUNCE_MS;
 use crate::system::constants::event;
+use crate::system::constants::plugin::PLUGIN_RELOAD_DEBOUNCE_MS;
 
 /// 插件开发文件监听器
 ///
@@ -82,10 +82,7 @@ impl PluginDevWatcher {
                                     if prev_id == &plugin_id_clone
                                         && prev_time.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
                                     {
-                                        tracing::debug!(
-                                            "Plugin watcher: debounced reload for '{}'",
-                                            plugin_id_clone
-                                        );
+                                        tracing::debug!("Plugin watcher: debounced reload for '{}'", plugin_id_clone);
                                         return;
                                     }
                                 }
@@ -100,10 +97,7 @@ impl PluginDevWatcher {
                             let ph = ctx.plugin_host().clone();
                             match ph.reload_wasm_plugin(&plugin_id_clone).await {
                                 Ok(()) => {
-                                    tracing::info!(
-                                        "Plugin watcher: WASM hot-reloaded '{}'",
-                                        plugin_id_clone
-                                    );
+                                    tracing::info!("Plugin watcher: WASM hot-reloaded '{}'", plugin_id_clone);
                                 }
                                 Err(e) => {
                                     tracing::error!(
@@ -140,10 +134,7 @@ impl PluginDevWatcher {
             .watch(&plugins_dir, RecursiveMode::Recursive)
             .expect("Failed to start watching plugin directory");
 
-        tracing::info!(
-            "Plugin dev watcher started: watching '{}'",
-            plugins_dir.display()
-        );
+        tracing::info!("Plugin dev watcher started: watching '{}'", plugins_dir.display());
 
         Self {
             _watcher: Box::new(watcher),
@@ -157,7 +148,12 @@ impl PluginDevWatcher {
 /// 例如：resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.wasm
 ///       → "com.bedcode.ai-chatbox"
 fn extract_plugin_id(path: &std::path::Path, plugins_dir: &std::path::Path) -> Option<String> {
-    path.strip_prefix(plugins_dir).ok()?.iter().next()?.to_str().map(String::from)
+    path.strip_prefix(plugins_dir)
+        .ok()?
+        .iter()
+        .next()?
+        .to_str()
+        .map(String::from)
 }
 
 // ==================== Tests ====================
@@ -179,8 +175,13 @@ mod tests {
     #[test]
     fn test_extract_plugin_id_from_nested_file() {
         let dir = plugins_dir();
-        let path = dir.join("com.bedcode.ai-chatbox").join("bedcode_plugin_ai_chatbox.wasm");
-        assert_eq!(extract_plugin_id(&path, &dir), Some("com.bedcode.ai-chatbox".to_string()));
+        let path = dir
+            .join("com.bedcode.ai-chatbox")
+            .join("bedcode_plugin_ai_chatbox.wasm");
+        assert_eq!(
+            extract_plugin_id(&path, &dir),
+            Some("com.bedcode.ai-chatbox".to_string())
+        );
     }
 
     /// 路径不在 plugins_dir 下 → None（例如其他目录的产物）

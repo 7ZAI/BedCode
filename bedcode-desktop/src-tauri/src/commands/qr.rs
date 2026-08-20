@@ -1,6 +1,6 @@
 //! QR Token Commands
 
-use crate::system::constants::network::{LOCALHOST_IP, IP_LOOPBACK_PREFIX, IP_LINK_LOCAL_PREFIX};
+use crate::system::constants::network::{IP_LINK_LOCAL_PREFIX, IP_LOOPBACK_PREFIX, LOCALHOST_IP};
 use crate::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
@@ -34,9 +34,7 @@ pub async fn generate_qr_code(
 }
 
 #[tauri::command]
-pub async fn clear_qr_code(
-    qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
-) -> Result<()> {
+pub async fn clear_qr_code(qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>) -> Result<()> {
     qr_manager.clear().await;
     tracing::info!("QR code cleared");
     Ok(())
@@ -52,28 +50,36 @@ pub async fn get_qr_connection_info(
     match active {
         None => Ok(None),
         Some((token, _ttl, remaining)) => {
-            let host = host.or_else(|| {
-                crate::commands::system::get_local_ip_addresses()
-                    .into_iter()
-                    .find(|ip| !ip.starts_with(IP_LOOPBACK_PREFIX) && !ip.starts_with(IP_LINK_LOCAL_PREFIX))
-            }).unwrap_or_else(|| LOCALHOST_IP.to_string());
+            let host = host
+                .or_else(|| {
+                    crate::commands::system::get_local_ip_addresses()
+                        .into_iter()
+                        .find(|ip| !ip.starts_with(IP_LOOPBACK_PREFIX) && !ip.starts_with(IP_LINK_LOCAL_PREFIX))
+                })
+                .unwrap_or_else(|| LOCALHOST_IP.to_string());
 
             let config = crate::system::config::AppConfig::load(
-                &app_handle.path().app_data_dir()
+                &app_handle
+                    .path()
+                    .app_data_dir()
                     .unwrap_or_default()
-                    .join("config.properties")
-            ).unwrap_or_default();
+                    .join("config.properties"),
+            )
+            .unwrap_or_default();
             let port = config.network.port;
 
-            Ok(Some(QrConnectionInfo { token, host, port, remaining_secs: remaining }))
+            Ok(Some(QrConnectionInfo {
+                token,
+                host,
+                port,
+                remaining_secs: remaining,
+            }))
         }
     }
 }
 
 #[tauri::command]
-pub async fn get_qr_token_ttl(
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
-) -> Result<u64> {
+pub async fn get_qr_token_ttl(db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>) -> Result<u64> {
     let db = db.lock().await;
     match db.get_setting("qr_token_ttl") {
         Ok(Some(value)) => value.parse::<u64>().map_err(|e| crate::AppError::Config(e.to_string())),
@@ -82,10 +88,7 @@ pub async fn get_qr_token_ttl(
 }
 
 #[tauri::command]
-pub async fn set_qr_token_ttl(
-    db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
-    ttl: u64,
-) -> Result<()> {
+pub async fn set_qr_token_ttl(db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>, ttl: u64) -> Result<()> {
     let db = db.lock().await;
     db.set_setting("qr_token_ttl", &ttl.to_string())
         .map_err(|e| crate::AppError::Config(e.to_string()))

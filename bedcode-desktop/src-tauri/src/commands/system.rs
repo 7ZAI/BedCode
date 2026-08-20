@@ -5,18 +5,18 @@
 //! 桌面端专用命令在 desktop/commands.rs
 //! 移动端专用命令在 mobile/commands/mobile_commands.rs
 
-use crate::utils::auth::PairingCode;
 use crate::db::Database;
+use crate::utils::auth::PairingCode;
 use crate::Result;
 use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
 
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
-use crate::server::services::pairing_service::PairingService;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::mobile::remote::PairingService;
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+use crate::server::services::pairing_service::PairingService;
 
 /// 运行中会话摘要信息，用于窗口关闭确认弹窗
 #[derive(Debug, Clone, Serialize)]
@@ -50,9 +50,7 @@ pub async fn generate_pairing_code(
 
 /// 获取配对码有效期（秒）
 #[tauri::command]
-pub async fn get_pairing_code_ttl(
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<u64> {
+pub async fn get_pairing_code_ttl(db: State<'_, Arc<Mutex<Database>>>) -> Result<u64> {
     let db = db.lock().await;
     match db.get_setting("pairing_code_ttl") {
         Ok(Some(value)) => value.parse::<u64>().map_err(|e| crate::AppError::Config(e.to_string())),
@@ -62,10 +60,7 @@ pub async fn get_pairing_code_ttl(
 
 /// 设置配对码有效期（秒）
 #[tauri::command]
-pub async fn set_pairing_code_ttl(
-    db: State<'_, Arc<Mutex<Database>>>,
-    ttl: u64,
-) -> Result<()> {
+pub async fn set_pairing_code_ttl(db: State<'_, Arc<Mutex<Database>>>, ttl: u64) -> Result<()> {
     let db = db.lock().await;
     db.set_setting("pairing_code_ttl", &ttl.to_string())
         .map_err(|e| crate::AppError::Config(e.to_string()))
@@ -73,45 +68,33 @@ pub async fn set_pairing_code_ttl(
 
 /// 获取当前配对码
 #[tauri::command]
-pub async fn get_current_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<Option<PairingCode>> {
+pub async fn get_current_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<Option<PairingCode>> {
     Ok(pairing_service.get_current_code().await)
 }
 
 /// 验证配对码
 #[tauri::command]
-pub async fn verify_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-    code: String,
-) -> Result<bool> {
+pub async fn verify_pairing_code(pairing_service: State<'_, Arc<PairingService>>, code: String) -> Result<bool> {
     Ok(pairing_service.verify_and_consume_code(&code).await)
 }
 
 /// 清除当前配对码
 #[tauri::command]
-pub async fn clear_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<()> {
+pub async fn clear_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<()> {
     pairing_service.clear_code().await;
     Ok(())
 }
 
 /// 获取已配对设备
 #[tauri::command]
-pub async fn list_paired_devices(
-    db: State<'_, Arc<Mutex<Database>>>,
-) -> Result<Vec<crate::db::Pairing>> {
+pub async fn list_paired_devices(db: State<'_, Arc<Mutex<Database>>>) -> Result<Vec<crate::db::Pairing>> {
     let db = db.lock().await;
     db.get_pairings()
 }
 
 /// 移除配对设备
 #[tauri::command]
-pub async fn remove_paired_device(
-    db: State<'_, Arc<Mutex<Database>>>,
-    id: String,
-) -> Result<()> {
+pub async fn remove_paired_device(db: State<'_, Arc<Mutex<Database>>>, id: String) -> Result<()> {
     let db = db.lock().await;
     db.remove_pairing(&id)
 }
@@ -128,10 +111,7 @@ pub async fn list_connection_history(
 
 /// 删除设备连接历史
 #[tauri::command]
-pub async fn delete_connection_history(
-    db: State<'_, Arc<Mutex<Database>>>,
-    device_id: String,
-) -> Result<()> {
+pub async fn delete_connection_history(db: State<'_, Arc<Mutex<Database>>>, device_id: String) -> Result<()> {
     let db = db.lock().await;
     db.delete_connection_history(&device_id)
 }
@@ -140,17 +120,14 @@ pub async fn delete_connection_history(
 
 /// 获取应用设置
 #[tauri::command]
-pub async fn get_app_settings(
-    app_handle: tauri::AppHandle,
-) -> crate::Result<crate::system::config::AppConfig> {
+pub async fn get_app_settings(app_handle: tauri::AppHandle) -> crate::Result<crate::system::config::AppConfig> {
     let config_path = app_handle
         .path()
         .app_data_dir()
         .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
-    crate::system::config::AppConfig::load(&config_path)
-        .map_err(|e| crate::AppError::Config(e.to_string()))
+    crate::system::config::AppConfig::load(&config_path).map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
 /// 保存应用设置
@@ -184,10 +161,7 @@ use crate::system::constants::terminal::{TERMINAL_BG_EXTENSIONS, TERMINAL_BG_FIL
 /// 传入 `None` 时移除已有背景图片文件。选择复制而非直接引用源路径，
 /// 避免用户移动/删除原图后背景失效。
 #[tauri::command]
-pub fn set_terminal_bg_image(
-    app_handle: tauri::AppHandle,
-    source_path: Option<String>,
-) -> Result<Option<String>> {
+pub fn set_terminal_bg_image(app_handle: tauri::AppHandle, source_path: Option<String>) -> Result<Option<String>> {
     let data_dir = app_handle
         .path()
         .app_data_dir()
@@ -226,8 +200,8 @@ pub fn set_terminal_bg_image(
     }
 
     // 限制文件大小，避免超大图片占用过多存储
-    let metadata = std::fs::metadata(src)
-        .map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
+    let metadata =
+        std::fs::metadata(src).map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
     if metadata.len() > TERMINAL_BG_MAX_BYTES {
         return Err(crate::AppError::InvalidInput(format!(
             "图片文件过大（{} 字节），上限 {} 字节",
@@ -275,13 +249,9 @@ pub fn get_local_ip_addresses() -> Vec<String> {
         .map(|interfaces| {
             interfaces
                 .into_iter()
-                .filter(|(_, ip)| {
-                    match ip {
-                        std::net::IpAddr::V4(ipv4) => {
-                            !ipv4.is_loopback() && !ipv4.is_link_local()
-                        }
-                        std::net::IpAddr::V6(_) => false,
-                    }
+                .filter(|(_, ip)| match ip {
+                    std::net::IpAddr::V4(ipv4) => !ipv4.is_loopback() && !ipv4.is_link_local(),
+                    std::net::IpAddr::V6(_) => false,
                 })
                 .map(|(_, ip)| ip.to_string())
                 .collect()
