@@ -66,7 +66,7 @@
         "useSelfFileAccess": {
           "type": "boolean",
           "title": "自身实现文件访问（WASI）",
-          "description": "开启后插件经 WASI 预打开目录读写文件（std::fs 直连，仅限 fileAccessDir 预打开目录）；关闭（默认）时仍走宿主 fs_* 函数。修改后需停用再启用生效（激活时重新授权与 preopen）"
+          "description": "开启后插件经 WASI 预打开目录读写文件（std::fs 直连，仅限 fileAccessDir 预打开目录）；关闭（默认）时仍走宿主 fs_* 函数。修改后需停用再启用生效（激活时重新授权与 preopen）",
           "default": false
         },
         "fileAccessDir": {
