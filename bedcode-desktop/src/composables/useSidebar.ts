@@ -11,6 +11,12 @@ const collapsed = ref(false)
 const COLLAPSE_THRESHOLD = 120
 const EXPANDED_WIDTH = 240
 const COLLAPSED_WIDTH = 56
+/** 展开态可拖拽的宽度上下限 */
+const MIN_WIDTH = 160
+const MAX_WIDTH = 360
+
+/** 持久化的展开宽度 —— 拖拽结果会被记住，松手后不再弹回 */
+const sidebarWidth = ref(EXPANDED_WIDTH)
 
 /** 切换折叠/展开 */
 export function toggleSidebar() {
@@ -30,7 +36,8 @@ export function expandSidebar() {
 /**
  * 侧边栏拖拽 resize composable
  *
- * 在侧边栏右边缘拖拽可调整宽度，拖到阈值以下自动折叠
+ * 在侧边栏右边缘拖拽可调整宽度，拖到阈值以下自动折叠；
+ * 否则将最终宽度持久化到 sidebarWidth，松手后保留，不再弹回默认宽度
  */
 export function useSidebarResize() {
   const isResizing = ref(false)
@@ -40,7 +47,7 @@ export function useSidebarResize() {
     // 只响应左键
     if (e.button !== 0) return
     isResizing.value = true
-    dragWidth.value = collapsed.value ? COLLAPSED_WIDTH : EXPANDED_WIDTH
+    dragWidth.value = collapsed.value ? COLLAPSED_WIDTH : sidebarWidth.value
 
     const startX = e.clientX
     const startWidth = dragWidth.value
@@ -48,7 +55,8 @@ export function useSidebarResize() {
     function onMouseMove(ev: MouseEvent) {
       const delta = ev.clientX - startX
       const newWidth = startWidth + delta
-      dragWidth.value = Math.max(COLLAPSED_WIDTH, Math.min(newWidth, 400))
+      // 下限放宽到 COLLAPSED_WIDTH，保证可拖到阈值以下触发折叠
+      dragWidth.value = Math.max(COLLAPSED_WIDTH, Math.min(newWidth, MAX_WIDTH))
     }
 
     function onMouseUp() {
@@ -59,10 +67,10 @@ export function useSidebarResize() {
       // 根据最终宽度决定折叠/展开
       if (dragWidth.value < COLLAPSE_THRESHOLD) {
         collapsed.value = true
-        dragWidth.value = COLLAPSED_WIDTH
       } else {
         collapsed.value = false
-        dragWidth.value = EXPANDED_WIDTH
+        // 持久化拖拽结果（夹在展开态宽度区间内），不再写回常量
+        sidebarWidth.value = Math.max(MIN_WIDTH, Math.min(dragWidth.value, MAX_WIDTH))
       }
     }
 
@@ -73,4 +81,4 @@ export function useSidebarResize() {
   return { isResizing, dragWidth, onResizeStart }
 }
 
-export { collapsed, COLLAPSED_WIDTH, EXPANDED_WIDTH }
+export { collapsed, sidebarWidth, COLLAPSED_WIDTH, EXPANDED_WIDTH, MIN_WIDTH, MAX_WIDTH }

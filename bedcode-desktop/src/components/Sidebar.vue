@@ -6,7 +6,7 @@
         ? `${dragWidth}px`
         : collapsed
           ? `${COLLAPSED_WIDTH}px`
-          : `${EXPANDED_WIDTH}px`,
+          : `${sidebarWidth}px`,
     }"
     :class="!isResizing && 'transition-[width] duration-200 ease'"
   >
@@ -118,8 +118,8 @@ import {
   collapsed,
   toggleSidebar,
   useSidebarResize,
+  sidebarWidth,
   COLLAPSED_WIDTH,
-  EXPANDED_WIDTH,
 } from '@/composables/useSidebar'
 import { useServer } from '@/composables/useServer'
 
