@@ -11,7 +11,11 @@
  */
 import { ref, type Ref } from 'vue'
 import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification'
 import type { HistoryEntry, PendingBatch, ReceivingTask } from '../types'
 import { formatBytes } from '../utils/format'
 
@@ -88,14 +92,14 @@ export function useReceiving(context: PluginContext) {
   /** per-file 合并窗口内的 toast id（窗口内只更新计数） */
   let perFileToastId: number | null = null
   let toastSeq = 0
-  let dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
+  const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
   function applyBatches(list: any[]): void {
     batches.value = (Array.isArray(list) ? list : []).map(mapPendingBatch)
     // 最小化/后台时新 pending 批 → 系统通知「打开应用」（spec §12.3：桌面最小化
     // 不提供通知内应答，仅提示；点击通知聚焦窗口）。前台横幅已足够，不发通知。
     // 同批只通知一次；批消失后从集合移除，允许重新请求时再次提示
-    const ids = new Set(batches.value.map(b => b.batchId))
+    const ids = new Set(batches.value.map((b) => b.batchId))
     for (const id of [...notifiedBatches]) {
       if (!ids.has(id)) notifiedBatches.delete(id)
     }
@@ -110,7 +114,7 @@ export function useReceiving(context: PluginContext) {
 
   /** 移除 toast（自动消失或手动关闭） */
   function dismissToast(id: number): void {
-    toasts.value = toasts.value.filter(t => t.id !== id)
+    toasts.value = toasts.value.filter((t) => t.id !== id)
     dismissTimers.delete(id)
   }
 
@@ -152,7 +156,7 @@ export function useReceiving(context: PluginContext) {
 
     if (mode === 'per-file' && perFileToastId !== null) {
       // 窗口内：只更新计数，不重复弹（spec §14.4 3s 窗口合并）
-      const existing = toasts.value.find(t => t.id === perFileToastId)
+      const existing = toasts.value.find((t) => t.id === perFileToastId)
       if (existing) {
         existing.count += count
         return
@@ -165,10 +169,13 @@ export function useReceiving(context: PluginContext) {
     toasts.value = [...toasts.value, toast]
     if (mode === 'per-file') perFileToastId = id
     // 自动消失：5s（batch）/ 3s（per-file）
-    const timer = setTimeout(() => {
-      dismissToast(id)
-      if (perFileToastId === id) perFileToastId = null
-    }, mode === 'batch' ? 5000 : 3000)
+    const timer = setTimeout(
+      () => {
+        dismissToast(id)
+        if (perFileToastId === id) perFileToastId = null
+      },
+      mode === 'batch' ? 5000 : 3000,
+    )
     dismissTimers.set(id, timer)
   }
 

@@ -42,13 +42,27 @@ export function usePluginConfig(context: PluginContext) {
       const saved = await context.storage.get<Partial<PluginConfig>>(PLUGIN_CONFIG_STORAGE_KEY)
       if (!saved || typeof saved !== 'object') return
       config.value = {
-        thinkingMode: normalizeEnum(saved.thinkingMode, THINKING_MODES, DEFAULT_PLUGIN_CONFIG.thinkingMode),
-        reasoningEffort: normalizeEnum(saved.reasoningEffort, REASONING_EFFORTS, DEFAULT_PLUGIN_CONFIG.reasoningEffort),
-        showReasoning: typeof saved.showReasoning === 'boolean' ? saved.showReasoning : DEFAULT_PLUGIN_CONFIG.showReasoning,
+        thinkingMode: normalizeEnum(
+          saved.thinkingMode,
+          THINKING_MODES,
+          DEFAULT_PLUGIN_CONFIG.thinkingMode,
+        ),
+        reasoningEffort: normalizeEnum(
+          saved.reasoningEffort,
+          REASONING_EFFORTS,
+          DEFAULT_PLUGIN_CONFIG.reasoningEffort,
+        ),
+        showReasoning:
+          typeof saved.showReasoning === 'boolean'
+            ? saved.showReasoning
+            : DEFAULT_PLUGIN_CONFIG.showReasoning,
         codeLineHeight: normalizeLineHeight(saved.codeLineHeight),
         codeFontSize: normalizeFontSize(saved.codeFontSize),
         codeTheme: normalizeEnum(saved.codeTheme, CODE_THEMES, DEFAULT_PLUGIN_CONFIG.codeTheme),
-        useSelfFileAccess: typeof saved.useSelfFileAccess === 'boolean' ? saved.useSelfFileAccess : DEFAULT_PLUGIN_CONFIG.useSelfFileAccess,
+        useSelfFileAccess:
+          typeof saved.useSelfFileAccess === 'boolean'
+            ? saved.useSelfFileAccess
+            : DEFAULT_PLUGIN_CONFIG.useSelfFileAccess,
         fileAccessDir: normalizeDirPath(saved.fileAccessDir),
         defaultDir: normalizeDirPath(saved.defaultDir),
       }
@@ -85,7 +99,9 @@ function normalizeLineHeight(value: unknown): number {
     return mapped !== undefined ? mapped : DEFAULT_CODE_LINE_HEIGHT
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
+    return (
+      Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
+    )
   }
   return DEFAULT_CODE_LINE_HEIGHT
 }

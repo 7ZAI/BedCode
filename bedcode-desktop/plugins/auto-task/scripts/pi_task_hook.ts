@@ -30,15 +30,15 @@
  * 首次启动需用户在终端确认信任。
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
 // 部署时由宿主按当前端口改写（hooks.rs replace_pi_extension_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
 // @bedcode-template-version 2
 
-const PLUGIN_ID = "com.bedcode.auto-task"
-const HOST = "127.0.0.1"
+const PLUGIN_ID = 'com.bedcode.auto-task'
+const HOST = '127.0.0.1'
 const HTTP_TIMEOUT_MS = 3000
 // 终态推送（completed/interrupted）丢失会中断队列调度链，必须重试保证送达
 const HTTP_RETRY_ATTEMPTS = 3
@@ -47,8 +47,8 @@ const HTTP_RETRY_DELAY_MS = 500
 /** 事件发生时刻（UTC，毫秒精度、固定宽度）：与宿主 SQLite strftime 格式一致 */
 function eventTime(): string {
   const now = new Date()
-  const ms = String(now.getMilliseconds()).padStart(3, "0")
-  return `${now.toISOString().slice(0, 19).replace("T", " ")}.${ms}`
+  const ms = String(now.getMilliseconds()).padStart(3, '0')
+  return `${now.toISOString().slice(0, 19).replace('T', ' ')}.${ms}`
 }
 
 /**
@@ -58,7 +58,7 @@ function eventTime(): string {
  * 会把主任务状态污染（subagent 结束时 completed+interrupted 毫秒级连推，
  * 提前落终态且误标中断），故子进程中本扩展整体静默。
  */
-const IS_SUBAGENT_PROCESS = process.argv.includes("--no-session")
+const IS_SUBAGENT_PROCESS = process.argv.includes('--no-session')
 
 /**
  * 推送任务状态到 BedCode 桌面端 HTTP API
@@ -77,7 +77,7 @@ async function push(status: string, reason: string): Promise<void> {
   const payload = {
     session_id: bedcodeSessionId,
     status,
-    reason: reason || "",
+    reason: reason || '',
     event_time: eventTime(),
     bedcode_session_id: bedcodeSessionId,
   }
@@ -87,8 +87,8 @@ async function push(status: string, reason: string): Promise<void> {
       const resp = await fetch(
         `http://${HOST}:${BEDCODE_PORT}/api/plugin/${PLUGIN_ID}/task-status`,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
         },
@@ -115,29 +115,29 @@ function promptPreview(prompt: string): string {
 export default function (pi: ExtensionAPI) {
   // 会话启动 / 重建（/new 后 pi 重新加载扩展并再次触发 session_start）：
   // 推送 idle，宿主驱动 waiting 态队列任务放行
-  pi.on("session_start", () => {
-    void push("idle", "Session started")
+  pi.on('session_start', () => {
+    void push('idle', 'Session started')
   })
 
   // 用户提交 prompt（含队列自动投递）→ 任务进入执行状态
-  pi.on("before_agent_start", (event) => {
-    void push("in_progress", `User submitted: ${promptPreview(event.prompt)}`)
+  pi.on('before_agent_start', (event) => {
+    void push('in_progress', `User submitted: ${promptPreview(event.prompt)}`)
   })
 
   // 工具执行结束（成功/失败均视为任务进行中，与 PostToolUse 语义一致）
-  pi.on("tool_execution_end", (event) => {
-    void push("in_progress", `Tool ${event.toolName} completed`)
+  pi.on('tool_execution_end', (event) => {
+    void push('in_progress', `Tool ${event.toolName} completed`)
   })
 
   // run 完全收敛（自动重试/压缩/排队续跑均结束）→ 正常完成
-  pi.on("agent_settled", () => {
-    void push("completed", "Task completed")
+  pi.on('agent_settled', () => {
+    void push('completed', 'Task completed')
   })
 
   // 退出 pi → 会话中断；new/fork/resume 仅切换会话（pi 仍运行），不推送
-  pi.on("session_shutdown", (event) => {
-    if (event.reason === "quit") {
-      void push("interrupted", "Session ended: quit")
+  pi.on('session_shutdown', (event) => {
+    if (event.reason === 'quit') {
+      void push('interrupted', 'Session ended: quit')
     }
   })
 }

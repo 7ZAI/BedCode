@@ -39,9 +39,6 @@ export async function invokeWithTimeout<T>(
 /**
  * 不带超时的 invoke（直接透传，用于对响应时间不敏感的简单查询）
  */
-export async function invoke<T>(
-  cmd: string,
-  args?: Record<string, unknown>,
-): Promise<T> {
+export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   return tauriInvoke<T>(cmd, args)
 }

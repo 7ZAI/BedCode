@@ -212,7 +212,15 @@ export interface TitleBarItemDescriptor {
 /** 页面工具栏项描述符 — 注入到指定页面的工具栏页头右操作区 */
 export interface PageToolbarItemDescriptor {
   /** 目标页面标识：sessions / devices / history / plugins / plugin-config / server / settings / terminal */
-  target: 'sessions' | 'devices' | 'history' | 'plugins' | 'plugin-config' | 'server' | 'settings' | 'terminal'
+  target:
+    | 'sessions'
+    | 'devices'
+    | 'history'
+    | 'plugins'
+    | 'plugin-config'
+    | 'server'
+    | 'settings'
+    | 'terminal'
   id: string
   label: string
   icon?: string

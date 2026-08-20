@@ -83,7 +83,12 @@ interface RegisteredFileHandler {
 interface RegisteredHttpEndpoint {
   pluginId: string
   path: string
-  handler: (req: { method: string; path: string; body: any; headers: Record<string, string> }) => Promise<{ status: number; body: any }>
+  handler: (req: {
+    method: string
+    path: string
+    body: any
+    headers: Record<string, string>
+  }) => Promise<{ status: number; body: any }>
 }
 
 /** 前端插件注册表 */
@@ -109,7 +114,11 @@ class PluginRegistryClass {
   readonly pageToolbarItems: Ref<RegisteredPageToolbarItem[]> = ref([])
 
   /** 注册视图 */
-  registerView(pluginId: string, viewType: string, panel: { id: string; title: string; icon?: string; order?: number; component: any }): Disposable {
+  registerView(
+    pluginId: string,
+    viewType: string,
+    panel: { id: string; title: string; icon?: string; order?: number; component: any },
+  ): Disposable {
     const key = `${pluginId}:${panel.id}`
     const entry: RegisteredView = {
       pluginId,
@@ -136,7 +145,10 @@ class PluginRegistryClass {
   }
 
   /** 注册状态栏项 */
-  registerStatusBarItem(pluginId: string, item: { id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+  registerStatusBarItem(
+    pluginId: string,
+    item: { id: string; label: string; icon?: string; onClick?: () => void },
+  ): Disposable {
     const key = `${pluginId}:${item.id}`
     const entry: RegisteredStatusBarItem = {
       pluginId,
@@ -156,7 +168,10 @@ class PluginRegistryClass {
   }
 
   /** 注册输入扩展 */
-  registerInputExtension(pluginId: string, ext: { id: string; label: string; icon?: string; onActivate?: () => void }): Disposable {
+  registerInputExtension(
+    pluginId: string,
+    ext: { id: string; label: string; icon?: string; onActivate?: () => void },
+  ): Disposable {
     const key = `${pluginId}:${ext.id}`
     const entry: RegisteredInputExtension = {
       pluginId,
@@ -176,7 +191,10 @@ class PluginRegistryClass {
   }
 
   /** 注册终端工具栏项 */
-  registerTerminalToolbarItem(pluginId: string, item: { id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+  registerTerminalToolbarItem(
+    pluginId: string,
+    item: { id: string; label: string; icon?: string; onClick?: () => void },
+  ): Disposable {
     const key = `${pluginId}:${item.id}`
     const entry: RegisteredTerminalToolbarItem = {
       pluginId,
@@ -196,7 +214,10 @@ class PluginRegistryClass {
   }
 
   /** 注册标题栏项 */
-  registerTitleBarItem(pluginId: string, item: { id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+  registerTitleBarItem(
+    pluginId: string,
+    item: { id: string; label: string; icon?: string; onClick?: () => void },
+  ): Disposable {
     const key = `${pluginId}:${item.id}`
     const entry: RegisteredTitleBarItem = {
       pluginId,
@@ -216,7 +237,10 @@ class PluginRegistryClass {
   }
 
   /** 注册页面工具栏项 */
-  registerPageToolbarItem(pluginId: string, item: { target: string; id: string; label: string; icon?: string; onClick?: () => void }): Disposable {
+  registerPageToolbarItem(
+    pluginId: string,
+    item: { target: string; id: string; label: string; icon?: string; onClick?: () => void },
+  ): Disposable {
     const key = `${item.target}:${pluginId}:${item.id}`
     const entry: RegisteredPageToolbarItem = {
       pluginId,
@@ -237,7 +261,10 @@ class PluginRegistryClass {
   }
 
   /** 注册文件处理器 */
-  registerFileHandler(pluginId: string, handler: { id: string; extensions: string[]; component: any }): Disposable {
+  registerFileHandler(
+    pluginId: string,
+    handler: { id: string; extensions: string[]; component: any },
+  ): Disposable {
     const key = `${pluginId}:${handler.id}`
     const entry: RegisteredFileHandler = {
       pluginId,
@@ -264,7 +291,11 @@ class PluginRegistryClass {
   }
 
   /** 注册 HTTP 端点 handler */
-  registerHttpEndpoint(pluginId: string, path: string, handler: RegisteredHttpEndpoint['handler']): Disposable {
+  registerHttpEndpoint(
+    pluginId: string,
+    path: string,
+    handler: RegisteredHttpEndpoint['handler'],
+  ): Disposable {
     const key = `${pluginId}:${path}`
     this.httpEndpoints.set(key, { pluginId, path, handler })
     return {
@@ -352,8 +383,8 @@ class PluginRegistryClass {
     const views = [...this.views.values()]
     // 按 order 升序排序（sort 为稳定排序，同 order 保持注册先后）
     views.sort((a, b) => a.order - b.order)
-    this.sidebarViews.value = views.filter(v => v.viewType === 'sidebar')
-    this.toolboxViews.value = views.filter(v => v.viewType === 'toolbox')
+    this.sidebarViews.value = views.filter((v) => v.viewType === 'sidebar')
+    this.toolboxViews.value = views.filter((v) => v.viewType === 'toolbox')
   }
 
   private updateReactiveStatusBar() {

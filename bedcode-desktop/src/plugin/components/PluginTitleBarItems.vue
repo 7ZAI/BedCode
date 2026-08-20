@@ -1,5 +1,9 @@
 <template>
-  <div v-if="items.length > 0" class="flex items-center gap-2 px-2" style="-webkit-app-region: no-drag;">
+  <div
+    v-if="items.length > 0"
+    class="flex items-center gap-2 px-2"
+    style="-webkit-app-region: no-drag"
+  >
     <button
       v-for="item in items"
       :key="`${item.pluginId}:${item.id}`"

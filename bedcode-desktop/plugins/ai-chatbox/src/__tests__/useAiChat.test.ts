@@ -22,7 +22,7 @@ function makeRafStub() {
       },
       cancelAnimationFrame(id: number) {
         cancelled.push(id)
-        const i = pending.findIndex(p => p.id === id)
+        const i = pending.findIndex((p) => p.id === id)
         if (i !== -1) pending.splice(i, 1)
       },
     },
@@ -57,15 +57,22 @@ function sse(payload: unknown): string {
 
 /** 取出最近一次 chat-stream 调用的 streamId 与事件名 */
 function streamEventOf(mock: ReturnType<typeof createMockContext>): string {
-  const streamCall = mock.calls.filter(c => c.command === 'ai-chatbox.chat-stream').pop()!
+  const streamCall = mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream').pop()!
   return `ai-chatbox:stream:${streamCall.args.streamId}`
 }
 
 /** 模拟一条完整流：正文 chunk + usage 尾块 + [DONE] + 宿主 done 兜底 */
-function emitFullStream(mock: ReturnType<typeof createMockContext>, eventName: string, content: string) {
+function emitFullStream(
+  mock: ReturnType<typeof createMockContext>,
+  eventName: string,
+  content: string,
+) {
   mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content } }] }) })
   mock.emitStream(eventName, {
-    chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+    chunk: sse({
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+    }),
   })
   mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
   mock.emitStream(eventName, { done: true })
@@ -80,17 +87,18 @@ describe('useAiChat', () => {
     await chat.sendMessage('你好')
 
     // 自动创建对话
-    const convCalls = mock.calls.filter(c => c.command === 'ai-chatbox.save-conversation')
+    const convCalls = mock.calls.filter((c) => c.command === 'ai-chatbox.save-conversation')
     expect(convCalls.length).toBeGreaterThanOrEqual(1)
 
     // 用户消息落盘
-    const userSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'user')!
+    const userSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'user',
+    )!
     expect(userSave).toBeTruthy()
     expect(userSave.args.content).toBe('你好')
 
     // chat-stream 载荷：{ streamId, request }（适配层构建，raw 模式）
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     expect(streamCall).toBeTruthy()
     expect(streamCall.args.streamId).toBeTruthy()
     expect(streamCall.args.provider).toBeUndefined()
@@ -139,16 +147,21 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思' } }] }) })
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '考' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '思' } }] }),
+    })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '考' } }] }),
+    })
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '正文' } }] }) })
     mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
 
     const last = chat.messages.value[chat.messages.value.length - 1]
     expect(last.reasoning).toBe('思考')
     // save-message 携带 reasoning（P3 落盘：历史重开可见）
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.reasoning).toBe('思考')
     expect(assistantSave.args.content).toBe('正文')
   })
@@ -173,8 +186,9 @@ describe('useAiChat', () => {
     })
     mock.emitStream(secondEvent, { chunk: 'data: [DONE]\n\n' })
 
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(2)
     // 第二轮落盘：replaceLast 覆盖 + 新正文 + 新思考（旧思考不残留）
     expect(assistantSaves[1].args.replaceLastAssistant).toBe(true)
@@ -185,14 +199,21 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=enabled + effort 透传到 chat-stream 请求体', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'enabled', reasoningEffort: 'max', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
+    const pluginConfig = ref<PluginConfig>({
+      thinkingMode: 'enabled',
+      reasoningEffort: 'max',
+      showReasoning: true,
+      codeLineHeight: 1.6,
+      codeFontSize: 13,
+      codeTheme: 'auto',
+    })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')
 
     await chat.sendMessage('hi')
 
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     const body = JSON.parse(streamCall.args.request.body)
     expect(body.thinking).toEqual({ type: 'enabled', reasoning_effort: 'max' })
   })
@@ -200,14 +221,21 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=default 不写 thinking 字段（跟随模型）', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'default', reasoningEffort: 'high', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
+    const pluginConfig = ref<PluginConfig>({
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      codeLineHeight: 1.6,
+      codeFontSize: 13,
+      codeTheme: 'auto',
+    })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')
 
     await chat.sendMessage('hi')
 
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     expect(JSON.parse(streamCall.args.request.body).thinking).toBeUndefined()
   })
 
@@ -217,12 +245,15 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '部分思考' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '部分思考' } }] }),
+    })
     chat.stopGeneration()
 
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('')
     expect(assistantSave.args.reasoning).toBe('部分思考')
   })
@@ -234,7 +265,9 @@ describe('useAiChat', () => {
 
     // 正文未到达、仅 reasoning chunk（deepseek-reasoner 思考期典型形态）
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思考中' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '思考中' } }] }),
+    })
 
     expect(chat.isStreaming.value).toBe(true)
     expect(chat.streamingContent.value).toBe('')
@@ -249,7 +282,10 @@ describe('useAiChat', () => {
     const eventName = streamEventOf(mock)
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
     mock.emitStream(eventName, {
-      chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+      chunk: sse({
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+      }),
     })
 
     // 未终结前不落盘
@@ -259,8 +295,9 @@ describe('useAiChat', () => {
 
     expect(chat.sending.value).toBe(false)
     expect(chat.streamingContent.value).toBe('')
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave).toBeTruthy()
     expect(assistantSave.args.content).toBe('回复')
     expect(assistantSave.args.usage).toEqual({
@@ -278,8 +315,9 @@ describe('useAiChat', () => {
     emitFullStream(mock, streamEventOf(mock), '回复')
 
     expect(chat.sending.value).toBe(false)
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(1)
   })
 
@@ -300,8 +338,9 @@ describe('useAiChat', () => {
     const last = chat.messages.value[chat.messages.value.length - 1]
     expect(last.content).toBe('回复')
     // 残余事件不产生第二次落盘
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(1)
     expect(assistantSaves[0].args.content).toBe('回复')
   })
@@ -324,8 +363,9 @@ describe('useAiChat', () => {
     })
     mock.emitStream(eventName, { chunk: sse({ type: 'message_stop' }) })
 
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.usage).toEqual({
       promptTokens: 25,
       completionTokens: 15,
@@ -339,7 +379,10 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { error: 'This model maximum context length is 8192 tokens', done: true })
+    mock.emitStream(eventName, {
+      error: 'This model maximum context length is 8192 tokens',
+      done: true,
+    })
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.contextLimitExceeded')
   })
@@ -369,7 +412,7 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.apiKeyRequired')
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.chat-stream')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.chat-stream')).toBe(false)
   })
 
   it('发送前校验：baseUrl 非法 → baseUrlInvalid 提示，不发请求', async () => {
@@ -380,7 +423,7 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.baseUrlInvalid')
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.chat-stream')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.chat-stream')).toBe(false)
   })
 
   it('停止生成：保存已接收内容并复位', async () => {
@@ -394,8 +437,9 @@ describe('useAiChat', () => {
     chat.stopGeneration()
 
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分内容')
   })
 
@@ -427,7 +471,7 @@ describe('useAiChat', () => {
     expect(last.content).toBe('')
 
     // 落盘走 replaceLastAssistant（覆盖旧回复行）
-    const streamCalls = mock.calls.filter(c => c.command === 'ai-chatbox.chat-stream')
+    const streamCalls = mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream')
     expect(streamCalls.length).toBe(2)
     const body = JSON.parse(streamCalls[1].args.request.body)
     expect(body.messages[0]).toEqual({ role: 'user', content: '问题一' })
@@ -446,7 +490,7 @@ describe('useAiChat', () => {
     expect(chat.currentConversation.value?.title).toBe('新标题')
 
     await chat.deleteConversation(convId)
-    expect(chat.conversations.value.find(c => c.id === convId)).toBeUndefined()
+    expect(chat.conversations.value.find((c) => c.id === convId)).toBeUndefined()
     expect(chat.currentConvId.value).toBe('')
   })
 })
@@ -518,7 +562,10 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
     mock.emitStream(eventName, {
-      chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+      chunk: sse({
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+      }),
     })
     // 不触发帧回调，直接 [DONE] 终结：待决 rAF 应被取消并立即 flush
     mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
@@ -526,8 +573,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     expect(stub.cancelled.length).toBe(1)
     expect(stub.pending.length).toBe(0)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分回复')
     expect(assistantSave.args.usage).toEqual({
       promptTokens: 12,
@@ -545,8 +593,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
 
     expect(stub.cancelled.length).toBe(1)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 
@@ -558,8 +607,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     mock.emitStream(eventName, { error: 'boom', done: true })
 
     expect(stub.cancelled.length).toBe(1)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 
@@ -601,8 +651,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     expect(stub.cancelled.length).toBe(1)
     expect(stub.pending.length).toBe(0)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 

@@ -33,7 +33,7 @@ export const PLUGIN_CONFIG_STORAGE_KEY = 'config'
  */
 export function defineConfiguration(
   title: string,
-  properties: Record<string, Omit<ConfigProperty, 'title'> & { title?: string }>
+  properties: Record<string, Omit<ConfigProperty, 'title'> & { title?: string }>,
 ): PluginConfiguration {
   const props: Record<string, ConfigProperty> = {}
   for (const [key, value] of Object.entries(properties)) {

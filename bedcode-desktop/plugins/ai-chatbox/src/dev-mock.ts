@@ -391,13 +391,17 @@ function registerCommands(context: PluginContext): void {
 
   context.commands.register('ai-chatbox.chat-complete', () => ({
     status: 200,
-    body: JSON.stringify({ choices: [{ message: { content: 'mock 测试连接回复：网络链路正常 ✅' } }] }),
+    body: JSON.stringify({
+      choices: [{ message: { content: 'mock 测试连接回复：网络链路正常 ✅' } }],
+    }),
   }))
 
   context.commands.register('ai-chatbox.fetch-models', () => ({
     status: 200,
     body: JSON.stringify({
-      data: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'].map((id) => ({ id })),
+      data: ['deepseek-chat', 'deepseek-reasoner', 'deepseek-v3', 'deepseek-r1'].map((id) => ({
+        id,
+      })),
     }),
   }))
 }

@@ -12,7 +12,12 @@ describe('useSidebarMenu', () => {
   const disposables: { dispose: () => void }[] = []
 
   /** 注册一个插件视图（sidebar 或 toolbox），返回其菜单项 id */
-  function registerPluginView(pluginId: string, viewId: string, viewType: string, order?: number): string {
+  function registerPluginView(
+    pluginId: string,
+    viewId: string,
+    viewType: string,
+    order?: number,
+  ): string {
     const d = registry.registerView(pluginId, viewType, {
       id: viewId,
       title: `${pluginId} ${viewId}`,
@@ -50,7 +55,14 @@ describe('useSidebarMenu', () => {
     const { menuItems } = useSidebarMenu()
     const ids = menuItems.value.map((m) => m.id)
     // 插件默认 order 600：位于内置业务菜单（sessions 200）之后，但始终排在插件管理(9998)/设置(9999)之前
-    expect(ids).toEqual(['devices', 'sessions', 'plugin-p1-v1', 'plugin-p2-v2', 'plugins', 'settings'])
+    expect(ids).toEqual([
+      'devices',
+      'sessions',
+      'plugin-p1-v1',
+      'plugin-p2-v2',
+      'plugins',
+      'settings',
+    ])
   })
 
   it('插件可通过 order 插入到任意内置菜单项之间', () => {
@@ -85,11 +97,22 @@ describe('useSidebarMenu', () => {
   })
 
   it('registerSidebarItem 扩展点可按 order 插入菜单，dispose 后移除', () => {
-    const custom = registerSidebarItem({ id: 'custom', path: '/custom', labelKey: 'Custom', order: 250 })
+    const custom = registerSidebarItem({
+      id: 'custom',
+      path: '/custom',
+      labelKey: 'Custom',
+      order: 250,
+    })
     disposables.push(custom)
 
     const { menuItems } = useSidebarMenu()
-    expect(menuItems.value.map((m) => m.id)).toEqual(['devices', 'sessions', 'custom', 'plugins', 'settings'])
+    expect(menuItems.value.map((m) => m.id)).toEqual([
+      'devices',
+      'sessions',
+      'custom',
+      'plugins',
+      'settings',
+    ])
 
     // dispose 后菜单项移除
     custom.dispose()
@@ -97,7 +120,13 @@ describe('useSidebarMenu', () => {
   })
 
   it('自定义项支持 i18n key 与纯文本标题标记', () => {
-    const custom = registerSidebarItem({ id: 'i18n-item', path: '/x', labelKey: 'desktop.sidebar.session', isI18nKey: true, order: 1 })
+    const custom = registerSidebarItem({
+      id: 'i18n-item',
+      path: '/x',
+      labelKey: 'desktop.sidebar.session',
+      isI18nKey: true,
+      order: 1,
+    })
     disposables.push(custom)
 
     const { menuItems } = useSidebarMenu()
@@ -108,7 +137,12 @@ describe('useSidebarMenu', () => {
 
   it('同 order 时保持 内置 → 自定义 → 插件 的稳定顺序', () => {
     registerPluginView('p1', 'v1', 'sidebar', 100)
-    const custom = registerSidebarItem({ id: 'custom', path: '/custom', labelKey: 'Custom', order: 100 })
+    const custom = registerSidebarItem({
+      id: 'custom',
+      path: '/custom',
+      labelKey: 'Custom',
+      order: 100,
+    })
     disposables.push(custom)
 
     const { menuItems } = useSidebarMenu()

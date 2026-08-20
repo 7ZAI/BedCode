@@ -15,7 +15,10 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
-import { useTerminalOutputStream, type OutputStreamFrame } from '@/composables/useTerminalOutputStream'
+import {
+  useTerminalOutputStream,
+  type OutputStreamFrame,
+} from '@/composables/useTerminalOutputStream'
 import { makeServerStatusInfo } from '@/__tests__/fixtures/server'
 
 /** mock invoke 分发：get_server_status → 端口；get_local_ws_token → 令牌 */
@@ -379,7 +382,7 @@ describe('useTerminalOutputStream', () => {
 
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     MockWebSocket.instances[0].text(
-      JSON.stringify({ type: 'error', payload: { code: 'INTERNAL', message: 'boom' } })
+      JSON.stringify({ type: 'error', payload: { code: 'INTERNAL', message: 'boom' } }),
     )
     await new Promise((r) => setTimeout(r, 600))
     await flushAsync()

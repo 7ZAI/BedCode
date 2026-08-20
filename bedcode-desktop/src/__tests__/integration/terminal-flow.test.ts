@@ -26,7 +26,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { Terminal } from '@xterm/xterm'
-import { useTerminalOutputStream, type OutputStreamFrame } from '@/composables/useTerminalOutputStream'
+import {
+  useTerminalOutputStream,
+  type OutputStreamFrame,
+} from '@/composables/useTerminalOutputStream'
 import { useSessionStore } from '@/stores/session'
 import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
 import { makeServerStatusInfo, makeSessionInfo } from '@/__tests__/fixtures/index'
@@ -88,7 +91,6 @@ class MockWebSocket {
     new Uint8Array(buf, 16).set(bytes)
     this.onmessage?.({ data: buf })
   }
-
 }
 
 /** 快照订阅响应：min_seq / max_seq(=snapshot_seq) / history_count */
@@ -417,6 +419,8 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
 
     // PTY 尺寸同步参数构造（TerminalPreview onResize 的 store 路径）
     await sessionStore.resizeSession('session-1', 80, 24)
-    expect(invokeCalls('resize_session')).toEqual([[{ sessionId: 'session-1', cols: 80, rows: 24 }]])
+    expect(invokeCalls('resize_session')).toEqual([
+      [{ sessionId: 'session-1', cols: 80, rows: 24 }],
+    ])
   })
 })

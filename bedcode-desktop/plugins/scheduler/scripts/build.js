@@ -31,12 +31,23 @@ function buildFrontend() {
 
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
-  run('cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
+  run(
+    'cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release',
+  )
   // 将 wit-bindgen 产出的 core module 编码为 Component Model 组件
   console.log('\n[build] ====== Componentizing WASM (Component Model) ======')
-  const componentizeManifest = resolve(ROOT, '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml')
-  const wasmPath = resolve(ROOT, 'rust/target/wasm32-unknown-unknown/release', `${RUST_LIB_NAME}.wasm`)
-  run(`cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`)
+  const componentizeManifest = resolve(
+    ROOT,
+    '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml',
+  )
+  const wasmPath = resolve(
+    ROOT,
+    'rust/target/wasm32-unknown-unknown/release',
+    `${RUST_LIB_NAME}.wasm`,
+  )
+  run(
+    `cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`,
+  )
 }
 
 function buildCli() {
@@ -58,14 +69,20 @@ function copyArtifacts() {
   // 复制前端产物（manifest.main 指向 index.js）
   const distJs = resolve(ROOT, 'dist/index.js')
   if (!existsSync(distJs)) {
-    console.error(`[build] ERROR: frontend dist not found at ${distJs}（先跑 npm install && npm run build:frontend）`)
+    console.error(
+      `[build] ERROR: frontend dist not found at ${distJs}（先跑 npm install && npm run build:frontend）`,
+    )
     process.exit(1)
   }
   cpSync(distJs, resolve(RESOURCES_DIR, 'index.js'))
   console.log('[build] Copied frontend: index.js')
 
   // 复制 WASM 模块
-  const wasmPath = resolve(ROOT, 'rust/target/wasm32-unknown-unknown/release', `${RUST_LIB_NAME}.wasm`)
+  const wasmPath = resolve(
+    ROOT,
+    'rust/target/wasm32-unknown-unknown/release',
+    `${RUST_LIB_NAME}.wasm`,
+  )
   if (!existsSync(wasmPath)) {
     console.error(`[build] ERROR: WASM file not found at ${wasmPath}`)
     process.exit(1)

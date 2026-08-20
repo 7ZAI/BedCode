@@ -14,8 +14,8 @@ describe('Spinner Component', () => {
   it('should apply size class', () => {
     const wrapper = mount(Spinner, {
       props: {
-        size: 'lg'
-      }
+        size: 'lg',
+      },
     })
 
     // lg 尺寸对应 w-6 h-6
@@ -26,8 +26,8 @@ describe('Spinner Component', () => {
   it('should apply color class for circle variant', () => {
     const wrapper = mount(Spinner, {
       props: {
-        color: 'white'
-      }
+        color: 'white',
+      },
     })
 
     expect(wrapper.find('svg').classes()).toContain('text-white')
@@ -36,8 +36,8 @@ describe('Spinner Component', () => {
   it('should render dots variant', () => {
     const wrapper = mount(Spinner, {
       props: {
-        variant: 'dots'
-      }
+        variant: 'dots',
+      },
     })
 
     // dots variant 应该渲染 3 个圆�?    expect(wrapper.find('svg').exists()).toBe(false)
@@ -47,8 +47,8 @@ describe('Spinner Component', () => {
   it('should render pulse variant', () => {
     const wrapper = mount(Spinner, {
       props: {
-        variant: 'pulse'
-      }
+        variant: 'pulse',
+      },
     })
 
     // pulse variant 应该渲染 ping 动画
@@ -60,13 +60,13 @@ describe('Spinner Component', () => {
     const wrapper = mount(Spinner, {
       props: {
         variant: 'dots',
-        size: 'xl'
-      }
+        size: 'xl',
+      },
     })
 
     // xl 尺寸�?dots 应该�?w-3 h-3
     const dots = wrapper.findAll('.animate-bounce')
-    dots.forEach(dot => {
+    dots.forEach((dot) => {
       expect(dot.classes()).toContain('w-3')
       expect(dot.classes()).toContain('h-3')
     })
@@ -76,8 +76,8 @@ describe('Spinner Component', () => {
     const wrapper = mount(Spinner, {
       props: {
         variant: 'dots',
-        color: 'danger'
-      }
+        color: 'danger',
+      },
     })
 
     // danger 颜色应该使用 text-red-500
@@ -88,8 +88,8 @@ describe('Spinner Component', () => {
   it('should apply success color', () => {
     const wrapper = mount(Spinner, {
       props: {
-        color: 'success'
-      }
+        color: 'success',
+      },
     })
 
     expect(wrapper.find('svg').classes()).toContain('text-green-500')
@@ -98,8 +98,8 @@ describe('Spinner Component', () => {
   it('should apply warning color', () => {
     const wrapper = mount(Spinner, {
       props: {
-        color: 'warning'
-      }
+        color: 'warning',
+      },
     })
 
     expect(wrapper.find('svg').classes()).toContain('text-yellow-500')
@@ -109,8 +109,8 @@ describe('Spinner Component', () => {
     const wrapper = mount(Spinner, {
       props: {
         variant: 'pulse',
-        color: 'dark'
-      }
+        color: 'dark',
+      },
     })
 
     expect(wrapper.find('span.animate-ping').classes()).toContain('text-gray-400')
@@ -119,8 +119,8 @@ describe('Spinner Component', () => {
   it('should have staggered animation delay for dots', () => {
     const wrapper = mount(Spinner, {
       props: {
-        variant: 'dots'
-      }
+        variant: 'dots',
+      },
     })
 
     const dots = wrapper.findAll('.animate-bounce')
@@ -134,8 +134,8 @@ describe('Spinner Component', () => {
   it('should render sm size correctly', () => {
     const wrapper = mount(Spinner, {
       props: {
-        size: 'sm'
-      }
+        size: 'sm',
+      },
     })
 
     expect(wrapper.find('.inline-flex').classes()).toContain('w-4')
@@ -145,8 +145,8 @@ describe('Spinner Component', () => {
   it('should render xl size correctly', () => {
     const wrapper = mount(Spinner, {
       props: {
-        size: 'xl'
-      }
+        size: 'xl',
+      },
     })
 
     expect(wrapper.find('.inline-flex').classes()).toContain('w-8')

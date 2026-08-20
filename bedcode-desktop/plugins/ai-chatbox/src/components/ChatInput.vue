@@ -35,14 +35,22 @@
       <button
         v-else
         class="w-8 h-8 flex-shrink-0 rounded-full flex items-center justify-center transition-colors disabled:pointer-events-none"
-        :class="canSend
-          ? 'bg-brand text-[var(--color-primary-contrast)] hover:opacity-90'
-          : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'"
+        :class="
+          canSend
+            ? 'bg-brand text-[var(--color-primary-contrast)] hover:opacity-90'
+            : 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'
+        "
         :title="t('desktop.plugin.aiChatbox.send')"
         :disabled="disabled || !canSend"
         @click="send"
       >
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2.5">
+        <svg
+          class="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+          stroke-width="2.5"
+        >
           <path stroke-linecap="round" stroke-linejoin="round" d="M7 17L17 7M17 7H8M17 7v9" />
         </svg>
       </button>

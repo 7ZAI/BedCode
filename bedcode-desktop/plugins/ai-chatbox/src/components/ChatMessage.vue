@@ -8,12 +8,19 @@
     <!-- 头像：user 人形图标；assistant 受支持供应商显示品牌 logo，其余 bot 图标 -->
     <div
       class="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-sm mt-0.5"
-      :class="isUser
-        ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
-        : 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'"
+      :class="
+        isUser
+          ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
+          : 'bg-[var(--bg-hover)] text-[var(--text-secondary)]'
+      "
     >
       <svg v-if="isUser" class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z" />
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          stroke-width="2"
+          d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+        />
       </svg>
       <ProviderAvatar
         v-else-if="assistantProvider?.presetId"
@@ -21,27 +28,40 @@
         :name="assistantProvider.name"
         :size="32"
       />
-      <svg v-else class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z" />
+      <svg
+        v-else
+        class="w-4 h-4"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+        stroke-width="2"
+      >
+        <path
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z"
+        />
       </svg>
     </div>
 
     <div class="flex-1 min-w-0 space-y-1" :class="isUser ? 'text-right' : ''">
       <!-- 元信息行（user 反向排列；身份由头像 logo/图标表明，不再重复文字） -->
-      <div class="flex items-center gap-2 text-xs text-[var(--text-tertiary)]" :class="isUser ? 'flex-row-reverse' : ''">
+      <div
+        class="flex items-center gap-2 text-xs text-[var(--text-tertiary)]"
+        :class="isUser ? 'flex-row-reverse' : ''"
+      >
         <span v-if="message.model" class="font-mono">{{ message.model }}</span>
         <!-- token 用量 -->
         <span v-if="message.usage" class="font-mono rounded-tag bg-[var(--bg-hover)] px-1.5 py-0.5">
-          ↑{{ message.usage.promptTokens }} ↓{{ message.usage.completionTokens }} Σ{{ message.usage.totalTokens }}
+          ↑{{ message.usage.promptTokens }} ↓{{ message.usage.completionTokens }} Σ{{
+            message.usage.totalTokens
+          }}
         </span>
       </div>
 
       <!-- 思考过程块（assistant 专属，P3）：可折叠次级样式；流式期间默认展开；
            showReasoning=false 时不渲染；reasoning 取自消息字段（历史重开可见） -->
-      <div
-        v-if="!isUser && showReasoning !== false && message.reasoning"
-        class="thinking-block"
-      >
+      <div v-if="!isUser && showReasoning !== false && message.reasoning" class="thinking-block">
         <button
           class="thinking-toggle"
           :aria-expanded="reasoningExpanded"
@@ -55,7 +75,12 @@
             stroke="currentColor"
             viewBox="0 0 24 24"
           >
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M9 5l7 7-7 7"
+            />
           </svg>
           <span class="truncate">{{ t('desktop.plugin.aiChatbox.thinkingProcess') }}</span>
         </button>
@@ -70,24 +95,38 @@
         class="md-body inline-block max-w-[85%] text-left rounded-input px-3.5 py-2.5 border border-[var(--border-input)] bg-[var(--bg-input)]"
         v-html="rendered"
       />
-      <div v-else ref="contentRef" class="text-sm leading-relaxed text-[var(--text-primary)] md-body" v-html="rendered" />
+      <div
+        v-else
+        ref="contentRef"
+        class="text-sm leading-relaxed text-[var(--text-primary)] md-body"
+        v-html="rendered"
+      />
 
       <!-- 错误提示（assistant 无内容且带错误时） -->
       <div
         v-if="!isUser && !message.content && errorText"
         class="text-xs text-[var(--color-danger)]"
-      >{{ errorText }}</div>
+      >
+        {{ errorText }}
+      </div>
 
       <!-- 底部操作行（悬停显示；复制/删除置于消息末尾，主流布局） -->
       <div class="flex justify-end">
-        <div class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 px-1 py-0.5 rounded-btn bg-[var(--bg-card)] border border-[var(--border)] shadow-sm">
+        <div
+          class="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 px-1 py-0.5 rounded-btn bg-[var(--bg-card)] border border-[var(--border)] shadow-sm"
+        >
           <button
             class="p-1 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] rounded transition-colors"
             :title="t('desktop.plugin.aiChatbox.copyMessage')"
             @click="copyContent"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3"
+              />
             </svg>
           </button>
           <button
@@ -96,7 +135,12 @@
             @click="$emit('delete', message)"
           >
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+              />
             </svg>
           </button>
         </div>
@@ -236,7 +280,7 @@ function enhanceCodeBlocks(): void {
     // 含标点的语言被 \w 正则截断（原有反解只显示前缀）
     const lang =
       Array.from(code?.classList ?? [])
-        .find(c => c.startsWith('language-'))
+        .find((c) => c.startsWith('language-'))
         ?.slice('language-'.length) ?? ''
     const header = document.createElement('div')
     header.className = 'md-code-header'
@@ -283,18 +327,32 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
   font-style: italic;
 }
 .md-body :deep(.hljs-keyword),
-.md-body :deep(.hljs-selector-tag) { color: var(--hl-keyword, #8a3b2e); }
+.md-body :deep(.hljs-selector-tag) {
+  color: var(--hl-keyword, #8a3b2e);
+}
 .md-body :deep(.hljs-type),
-.md-body :deep(.hljs-class) { color: var(--hl-type, #2f6f6a); }
+.md-body :deep(.hljs-class) {
+  color: var(--hl-type, #2f6f6a);
+}
 .md-body :deep(.hljs-string),
 .md-body :deep(.hljs-attr),
-.md-body :deep(.hljs-template-variable) { color: var(--hl-string, #5a7a2f); }
+.md-body :deep(.hljs-template-variable) {
+  color: var(--hl-string, #5a7a2f);
+}
 .md-body :deep(.hljs-number),
-.md-body :deep(.hljs-literal) { color: var(--hl-number, #a05a2c); }
+.md-body :deep(.hljs-literal) {
+  color: var(--hl-number, #a05a2c);
+}
 .md-body :deep(.hljs-title),
-.md-body :deep(.hljs-function) { color: var(--hl-title, #8a5a1d); }
-.md-body :deep(.hljs-built_in) { color: var(--hl-builtin, #7a4a6b); }
-.md-body :deep(.hljs-meta) { color: var(--hl-meta, #4b5563); }
+.md-body :deep(.hljs-function) {
+  color: var(--hl-title, #8a5a1d);
+}
+.md-body :deep(.hljs-built_in) {
+  color: var(--hl-builtin, #7a4a6b);
+}
+.md-body :deep(.hljs-meta) {
+  color: var(--hl-meta, #4b5563);
+}
 
 /* 主题变量组：通用浅/深色 + GitHub 双套 + Dracula（背景/边框/头部随主题）。
  * 深色通用主题采用 One Dark / DeepSeek 深色观感：柔和深灰背景（非纯黑）+
@@ -383,17 +441,27 @@ watch(() => props.message.content, enhanceCodeBlocks, { flush: 'post' })
   margin: 0.75em 0 0.375em;
   line-height: 1.3;
 }
-.md-body :deep(h1) { font-size: 1.25em; }
-.md-body :deep(h2) { font-size: 1.125em; }
-.md-body :deep(h3) { font-size: 1em; }
-.md-body :deep(p) { margin: 0.375em 0; }
+.md-body :deep(h1) {
+  font-size: 1.25em;
+}
+.md-body :deep(h2) {
+  font-size: 1.125em;
+}
+.md-body :deep(h3) {
+  font-size: 1em;
+}
+.md-body :deep(p) {
+  margin: 0.375em 0;
+}
 .md-body :deep(ul),
 .md-body :deep(ol) {
   margin: 0.375em 0;
   padding-left: 1.5em;
   list-style: revert;
 }
-.md-body :deep(li) { margin: 0.125em 0; }
+.md-body :deep(li) {
+  margin: 0.125em 0;
+}
 .md-body :deep(a) {
   color: var(--color-primary);
   text-decoration: underline;

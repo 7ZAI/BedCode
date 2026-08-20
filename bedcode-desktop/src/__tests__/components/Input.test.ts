@@ -246,7 +246,7 @@ describe('Input Component', () => {
       })
 
       // 帮助文本使用 CSS 变量类名（text-[var(--text-tertiary)]），无法用类选择器定位，改用文本匹配
-      const helpEl = wrapper.findAll('p').find(p => p.text() === 'Enter a valid email address')
+      const helpEl = wrapper.findAll('p').find((p) => p.text() === 'Enter a valid email address')
       expect(helpEl).toBeDefined()
     })
 
@@ -259,7 +259,7 @@ describe('Input Component', () => {
         },
       })
 
-      const helpEls = wrapper.findAll('p').filter(p => p.text() === 'Enter a valid email address')
+      const helpEls = wrapper.findAll('p').filter((p) => p.text() === 'Enter a valid email address')
       expect(helpEls).toHaveLength(0)
       expect(wrapper.find('.text-red-500').text()).toBe('Invalid email')
     })

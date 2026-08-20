@@ -35,7 +35,9 @@ class PluginLoaderClass {
     console.log(`[PluginLoader] Found ${manifests.length} plugin(s) from backend`)
 
     for (const manifest of manifests) {
-      console.log(`[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state}, sandbox=${manifest.sandbox})`)
+      console.log(
+        `[PluginLoader] Processing plugin: ${manifest.id} (type=${manifest.pluginType}, state=${manifest.state.state}, sandbox=${manifest.sandbox})`,
+      )
 
       // Rust-only 插件：Rust 端已通过静态注册激活，前端无需加载
       if (manifest.pluginType === 'rust') {
@@ -44,7 +46,9 @@ class PluginLoaderClass {
       }
 
       if (manifest.sandbox !== 'inline') {
-        console.warn(`[PluginLoader] Skipping ${manifest.id}: unsupported sandbox mode "${manifest.sandbox}"`)
+        console.warn(
+          `[PluginLoader] Skipping ${manifest.id}: unsupported sandbox mode "${manifest.sandbox}"`,
+        )
         continue
       }
 
@@ -53,7 +57,9 @@ class PluginLoaderClass {
       const isActivated = manifest.state.state === 'Activated'
 
       if (!isActivated) {
-        console.log(`[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping frontend load`)
+        console.log(
+          `[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping frontend load`,
+        )
         continue
       }
 
@@ -63,12 +69,16 @@ class PluginLoaderClass {
         await this.loadFrontendOnly(manifest)
       } else {
         // TS-only 插件：Rust 端已激活（自动激活），前端加载入口但不重复调用 pluginActivate
-        console.log(`[PluginLoader] Loading TS-only plugin frontend (already activated): ${manifest.id}`)
+        console.log(
+          `[PluginLoader] Loading TS-only plugin frontend (already activated): ${manifest.id}`,
+        )
         await this.loadFrontendForAlreadyActivated(manifest)
       }
     }
 
-    console.log(`[PluginLoader] loadAll() complete, ${this.plugins.size} plugin(s) with frontend modules loaded`)
+    console.log(
+      `[PluginLoader] loadAll() complete, ${this.plugins.size} plugin(s) with frontend modules loaded`,
+    )
   }
 
   /** 加载 Rust+TS 插件的前端部分（不触发后端 activate，Rust 端已激活） */
@@ -139,7 +149,9 @@ class PluginLoaderClass {
       return
     }
 
-    console.log(`[PluginLoader] Plugin ${pluginId} info: type=${info.pluginType}, state=${info.state.state}`)
+    console.log(
+      `[PluginLoader] Plugin ${pluginId} info: type=${info.pluginType}, state=${info.state.state}`,
+    )
     await this.loadInline(info)
   }
 
@@ -149,12 +161,14 @@ class PluginLoaderClass {
 
     const plugin = this.plugins.get(pluginId)
     if (!plugin) {
-      console.warn(`[PluginLoader] Plugin ${pluginId} has no frontend module loaded, nothing to deactivate`)
+      console.warn(
+        `[PluginLoader] Plugin ${pluginId} has no frontend module loaded, nothing to deactivate`,
+      )
       return
     }
 
     // 清理所有 Disposable
-    plugin.context._disposables.forEach(d => {
+    plugin.context._disposables.forEach((d) => {
       try {
         d.dispose()
       } catch (e) {
@@ -224,18 +238,28 @@ class PluginLoaderClass {
     // 兜底语义（deactivate 挂起也保证注册表干净）。错误均记录不中断，
     // 热重载失败时残留痕迹可查
     if (plugin) {
-      plugin.context._disposables.forEach(d => {
-        try { d.dispose() } catch { /* ignore */ }
+      plugin.context._disposables.forEach((d) => {
+        try {
+          d.dispose()
+        } catch {
+          /* ignore */
+        }
       })
-      try { clearPluginEvents(pluginId) } catch (e) {
+      try {
+        clearPluginEvents(pluginId)
+      } catch (e) {
         console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
       }
-      try { getPluginRegistry().clearPlugin(pluginId) } catch (e) {
+      try {
+        getPluginRegistry().clearPlugin(pluginId)
+      } catch (e) {
         console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
       }
 
       if (plugin.module.deactivate) {
-        try { await plugin.module.deactivate() } catch (e) {
+        try {
+          await plugin.module.deactivate()
+        } catch (e) {
           console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
         }
       }
@@ -250,8 +274,7 @@ class PluginLoaderClass {
     }
 
     // 3. 重新加载 TS 入口（添加时间戳破坏浏览器缓存）
-    const entryUrl = this.convertFileUrl(info.extensionPath, info.main)
-      + '?t=' + Date.now()
+    const entryUrl = this.convertFileUrl(info.extensionPath, info.main) + '?t=' + Date.now()
 
     try {
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)

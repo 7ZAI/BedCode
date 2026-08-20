@@ -1,5 +1,5 @@
 <template>
-  <form @submit.prevent="handleSubmit" class="space-y-5">
+  <form class="space-y-5" @submit.prevent="handleSubmit">
     <!-- Name -->
     <Input
       v-model="form.name"
@@ -33,7 +33,9 @@
           {{ $t('desktop.form.wslDistro') }}
           <span class="text-red-500">*</span>
         </label>
-        <div class="flex items-center gap-2 border rounded-input px-4 py-2 border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-tertiary)]">
+        <div
+          class="flex items-center gap-2 border rounded-input px-4 py-2 border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-tertiary)]"
+        >
           <Spinner size="sm" color="primary" />
           <span class="text-sm">{{ $t('desktop.form.wslInitializing') }}</span>
         </div>
@@ -57,8 +59,8 @@
       <template #suffix>
         <button
           type="button"
-          @click="browseDir"
           class="text-brand hover:text-[var(--color-primary-hover)]"
+          @click="browseDir"
         >
           {{ $t('common.button.browse') }}
         </button>
@@ -66,9 +68,17 @@
     </Input>
 
     <!-- Command -->
-    <Input
-      v-model="form.command"
+    <Select
+      v-model="form.commandPreset"
       :label="$t('desktop.form.command')"
+      :options="commandPresetOptions"
+      :placeholder="$t('desktop.form.commandPlaceholder')"
+      required
+    />
+    <Input
+      v-if="form.commandPreset === 'custom'"
+      v-model="form.command"
+      :label="$t('desktop.form.customCommand')"
       placeholder="claude"
       required
       :help="$t('desktop.form.commandHelp')"
@@ -113,6 +123,7 @@ interface SessionFormData {
   wslDistro: string
   workingDir: string
   command: string
+  commandPreset: string
   autoStart: boolean
 }
 
@@ -120,12 +131,20 @@ const wslStore = useWslStore()
 const settingsStore = useSettingsStore()
 const { t } = useI18n()
 
+const presetCommandMap: Record<string, string> = {
+  claude: 'claude',
+  codex: 'codex',
+  pi: 'pi',
+  opencode: 'opencode',
+}
+
 const form = ref<SessionFormData>({
   name: '',
   environment: 'windows',
   wslDistro: '',
   workingDir: '',
   command: 'claude',
+  commandPreset: 'claude',
   autoStart: false,
 })
 
@@ -134,34 +153,65 @@ const environmentOptions = computed(() => [
   { value: 'wsl2', label: 'WSL2' },
 ])
 
+const commandPresetOptions = computed(() => [
+  { value: 'claude', label: t('desktop.form.commandPreset.claude') },
+  { value: 'codex', label: t('desktop.form.commandPreset.codex') },
+  { value: 'pi', label: t('desktop.form.commandPreset.pi') },
+  { value: 'opencode', label: t('desktop.form.commandPreset.opencode') },
+  { value: 'custom', label: t('desktop.form.commandPreset.custom') },
+])
+
+function presetForCommand(cmd: string): string {
+  const entry = Object.entries(presetCommandMap).find(([, c]) => c === cmd)
+  return entry ? entry[0] : 'custom'
+}
+
 const wslDistroOptions = computed(() =>
-  wslStore.distros.map(d => ({
+  wslStore.distros.map((d) => ({
     value: d.name,
     label: d.name,
-  }))
+  })),
 )
 
-watch(() => props.config, (config) => {
-  if (config) {
-    form.value = {
-      name: config.name,
-      environment: config.environment,
-      wslDistro: config.wslDistro || config.wsl_distro || '',
-      workingDir: config.workingDir || config.working_dir || '',
-      command: config.command || '',
-      autoStart: config.autoStart ?? config.auto_start ?? false,
+watch(
+  () => props.config,
+  (config) => {
+    if (config) {
+      const command = config.command || ''
+      form.value = {
+        name: config.name,
+        environment: config.environment,
+        wslDistro: config.wslDistro || config.wsl_distro || '',
+        workingDir: config.workingDir || config.working_dir || '',
+        command,
+        commandPreset: presetForCommand(command),
+        autoStart: config.autoStart ?? config.auto_start ?? false,
+      }
+    } else {
+      const command = settingsStore.settings.session.default_command || 'claude'
+      form.value = {
+        name: '',
+        environment: settingsStore.settings.session.default_environment || 'windows',
+        wslDistro: settingsStore.settings.session.default_wsl_distro || '',
+        workingDir: settingsStore.settings.session.default_working_dir || '',
+        command,
+        commandPreset: presetForCommand(command),
+        autoStart: false,
+      }
     }
-  } else {
-    form.value = {
-      name: '',
-      environment: settingsStore.settings.session.default_environment || 'windows',
-      wslDistro: settingsStore.settings.session.default_wsl_distro || '',
-      workingDir: settingsStore.settings.session.default_working_dir || '',
-      command: settingsStore.settings.session.default_command || 'claude',
-      autoStart: false,
+  },
+  { immediate: true },
+)
+
+// 选择预设命令时同步填充 command 字段
+watch(
+  () => form.value.commandPreset,
+  (preset) => {
+    if (preset !== 'custom') {
+      form.value.command = presetCommandMap[preset] ?? ''
     }
-  }
-}, { immediate: true })
+  },
+)
 
 async function browseDir() {
   try {
@@ -187,6 +237,6 @@ defineExpose({
   form,
   validate: () => {
     return !!form.value.name && !!form.value.workingDir && !!form.value.command
-  }
+  },
 })
 </script>

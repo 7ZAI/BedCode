@@ -7,14 +7,21 @@
         :key="i"
         class="flex items-center gap-2 px-3 h-[36px] bg-[var(--bg-input)] border border-[var(--border-input)] rounded-input"
       >
-        <span class="flex-1 min-w-0 truncate text-sm text-[var(--text-primary)] font-mono">{{ m }}</span>
+        <span class="flex-1 min-w-0 truncate text-sm text-[var(--text-primary)] font-mono">{{
+          m
+        }}</span>
         <button
           class="p-1 text-[var(--text-tertiary)] hover:text-[var(--color-danger)] rounded transition-colors flex-shrink-0"
           :title="t('desktop.plugin.aiChatbox.removeModel')"
           @click="removeModel(i)"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M6 18L18 6M6 6l12 12"
+            />
           </svg>
         </button>
       </div>
@@ -65,6 +72,9 @@ function addModel(): void {
 }
 
 function removeModel(idx: number): void {
-  emit('update:models', props.models.filter((_, i) => i !== idx))
+  emit(
+    'update:models',
+    props.models.filter((_, i) => i !== idx),
+  )
 }
 </script>

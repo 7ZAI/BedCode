@@ -85,7 +85,7 @@ export function useSettings(context: PluginContext) {
   async function removeRoot(dir: string): Promise<void> {
     settings.value = {
       ...settings.value,
-      roots: settings.value.roots.filter(r => r !== dir),
+      roots: settings.value.roots.filter((r) => r !== dir),
     }
     await save()
   }

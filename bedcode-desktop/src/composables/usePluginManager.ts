@@ -35,7 +35,7 @@ export function usePluginManager() {
   /** 当前正在切换的插件信息（供遮罩弹窗显示名称） */
   const togglingPluginInfo = computed(() => {
     if (!togglingId.value) return null
-    const p = plugins.value.find(p => p.id === togglingId.value)
+    const p = plugins.value.find((p) => p.id === togglingId.value)
     if (!p) return null
     const key = togglingDirection.value
       ? 'desktop.plugin.togglingEnable'
@@ -86,7 +86,7 @@ export function usePluginManager() {
       await Promise.race([op, timeout])
       // 重新加载列表以获取最新状态
       await loadPlugins()
-      const name = plugins.value.find(p => p.id === id)?.name || id
+      const name = plugins.value.find((p) => p.id === id)?.name || id
       const key = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
       toast.success(t(key, { name }))
       console.log(`[PluginManager] togglePlugin(${id}) succeeded`)

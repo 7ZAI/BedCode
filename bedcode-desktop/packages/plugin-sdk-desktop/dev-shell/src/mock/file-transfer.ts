@@ -40,13 +40,16 @@ const peers: MockPeer[] = [
 let activePeerId = 'phone-xiaomi'
 
 const settings = {
-  roots: ['C:\Users\binblink\Desktop\共享文件夹', 'E:\媒体库\相机导入'],
+  roots: ['C:Users\binblinkDesktop共享文件夹', 'E:媒体库相机导入'],
   download_dir: 'C:\\Users\\binblink\\Downloads\\BedCode',
   concurrency: 3,
 }
 
 // 远端文件树（peerId + path → entries）
-const remoteFs: Record<string, Array<{ name: string; size: number; mtime: number; isDir: boolean }>> = {
+const remoteFs: Record<
+  string,
+  Array<{ name: string; size: number; mtime: number; isDir: boolean }>
+> = {
   'phone-xiaomi::': [
     { name: 'DCIM', size: 0, mtime: 1754688000, isDir: true },
     { name: 'Download', size: 0, mtime: 1754712000, isDir: true },
@@ -88,7 +91,7 @@ const remoteFs: Record<string, Array<{ name: string; size: number; mtime: number
 
 function fsEntries(peerId: string, path: string): any[] {
   const key = `${peerId}::${path}`
-  return remoteFs[key] ?? (path === '' ? [] : remoteFs[`${peerId}::`] ?? [])
+  return remoteFs[key] ?? (path === '' ? [] : (remoteFs[`${peerId}::`] ?? []))
 }
 
 // 任务快照（含全部 8 态，覆盖四色体系）
@@ -272,7 +275,10 @@ function registerCommands(context: PluginContext): void {
 // ==================== 事件推送 ====================
 
 function pushSnapshot(): void {
-  emitDevEvent('plugin:file-transfer:tasks-changed', tasks.map((t) => ({ ...t })))
+  emitDevEvent(
+    'plugin:file-transfer:tasks-changed',
+    tasks.map((t) => ({ ...t })),
+  )
 }
 
 /** 模拟传输中任务进度推进（每 900ms 推一次快照 + progress 事件） */

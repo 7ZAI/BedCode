@@ -1,5 +1,5 @@
 <template>
-  <div class="relative inline-block" ref="triggerRef" @mouseenter="show" @mouseleave="hide">
+  <div ref="triggerRef" class="relative inline-block" @mouseenter="show" @mouseleave="hide">
     <!-- Trigger Element -->
     <slot></slot>
 

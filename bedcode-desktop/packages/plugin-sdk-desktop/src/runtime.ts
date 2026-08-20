@@ -46,6 +46,9 @@ export function getRouter(): any {
 export function getPluginContext(): PluginContext {
   const vue = getVue()
   const context = vue.inject('pluginContext')
-  if (!context) throw new Error('[PluginSDK] PluginContext not available — ensure component is rendered inside PluginViewHost')
+  if (!context)
+    throw new Error(
+      '[PluginSDK] PluginContext not available — ensure component is rendered inside PluginViewHost',
+    )
   return context
 }

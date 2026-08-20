@@ -9,15 +9,26 @@
          恒为黑色，深色主题下不可见，故必须内联 -->
     <span
       v-if="icon"
-      v-html="icon"
       class="w-full h-full brand-icon"
       :style="iconColorStyle"
       aria-hidden="true"
+      v-html="icon"
     ></span>
     <span v-else-if="initial" class="text-white font-medium">{{ initial }}</span>
     <!-- 名称为空时的极简兜底：通用 bot 图标 -->
-    <svg v-else class="w-1/2 h-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z" />
+    <svg
+      v-else
+      class="w-1/2 h-1/2"
+      fill="none"
+      stroke="currentColor"
+      viewBox="0 0 24 24"
+      stroke-width="2"
+    >
+      <path
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        d="M9 17v2a2 2 0 002 2h2a2 2 0 002-2v-2M9 4h6M5 12h14a1 1 0 011 1v4a1 1 0 01-1 1H5a1 1 0 01-1-1v-4a1 1 0 011-1z"
+      />
     </svg>
   </span>
 </template>

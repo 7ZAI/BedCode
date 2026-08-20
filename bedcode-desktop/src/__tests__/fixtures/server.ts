@@ -12,7 +12,12 @@
  * 对齐机制：DTO_FIELDS 清单 + 工厂内 assertDtoFields 运行时断言 + 类型级 Equals。
  */
 
-import type { ServerStatusInfo, NetworkConfig, ServerMetrics, ServerStatus } from '@/composables/useServer'
+import type {
+  ServerStatusInfo,
+  NetworkConfig,
+  ServerMetrics,
+  ServerStatus,
+} from '@/composables/useServer'
 import { assertDtoFields, type Equals, type Expect } from './drift'
 
 // ==================== ServerStatusInfo ====================
@@ -35,7 +40,9 @@ export const SERVER_STATUS_INFO_DTO_FIELDS = [
   'uptime_secs',
 ] as const
 
-export function makeServerStatusInfo(overrides: Partial<ServerStatusInfoFixture> = {}): ServerStatusInfoFixture {
+export function makeServerStatusInfo(
+  overrides: Partial<ServerStatusInfoFixture> = {},
+): ServerStatusInfoFixture {
   const fixture: ServerStatusInfoFixture = {
     status: 'running',
     port: 9000,
@@ -85,7 +92,9 @@ export const NETWORK_CONFIG_DTO_FIELDS = [
   'metrics_enabled',
 ] as const
 
-export function makeNetworkConfig(overrides: Partial<NetworkConfigFixture> = {}): NetworkConfigFixture {
+export function makeNetworkConfig(
+  overrides: Partial<NetworkConfigFixture> = {},
+): NetworkConfigFixture {
   const fixture: NetworkConfigFixture = {
     port: 9000,
     auto_start: false,
@@ -136,7 +145,9 @@ export const SERVER_METRICS_DTO_FIELDS = [
   'memory_usage_bytes',
 ] as const
 
-export function makeServerMetrics(overrides: Partial<ServerMetricsFixture> = {}): ServerMetricsFixture {
+export function makeServerMetrics(
+  overrides: Partial<ServerMetricsFixture> = {},
+): ServerMetricsFixture {
   const fixture: ServerMetricsFixture = {
     uptime_secs: 120,
     connections: 3,

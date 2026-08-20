@@ -95,7 +95,7 @@ function patchInlineCode(line: string): string {
   if (!line.includes('`')) return line
   // 收集行内反引号 run（长度 + 结束下标，end 为开区间）
   const runs: { len: number; end: number }[] = []
-  for (let i = 0; i < line.length; ) {
+  for (let i = 0; i < line.length;) {
     if (line[i] !== '`') {
       i++
       continue

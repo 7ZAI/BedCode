@@ -6,8 +6,8 @@ describe('Button Component', () => {
   it('should render with default props', () => {
     const wrapper = mount(Button, {
       slots: {
-        default: 'Click me'
-      }
+        default: 'Click me',
+      },
     })
 
     expect(wrapper.text()).toContain('Click me')
@@ -17,8 +17,8 @@ describe('Button Component', () => {
   it('should emit click event', async () => {
     const wrapper = mount(Button, {
       slots: {
-        default: 'Click me'
-      }
+        default: 'Click me',
+      },
     })
 
     await wrapper.find('button').trigger('click')
@@ -30,11 +30,11 @@ describe('Button Component', () => {
   it('should apply variant class', () => {
     const wrapper = mount(Button, {
       props: {
-        variant: 'primary'
+        variant: 'primary',
       },
       slots: {
-        default: 'Primary Button'
-      }
+        default: 'Primary Button',
+      },
     })
 
     expect(wrapper.classes()).toContain('bg-brand')
@@ -43,11 +43,11 @@ describe('Button Component', () => {
   it('should be disabled when disabled prop is true', () => {
     const wrapper = mount(Button, {
       props: {
-        disabled: true
+        disabled: true,
       },
       slots: {
-        default: 'Disabled Button'
-      }
+        default: 'Disabled Button',
+      },
     })
 
     expect(wrapper.find('button').element.disabled).toBe(true)
@@ -56,11 +56,11 @@ describe('Button Component', () => {
   it('should not emit click when disabled', async () => {
     const wrapper = mount(Button, {
       props: {
-        disabled: true
+        disabled: true,
       },
       slots: {
-        default: 'Disabled Button'
-      }
+        default: 'Disabled Button',
+      },
     })
 
     await wrapper.find('button').trigger('click')
@@ -71,11 +71,11 @@ describe('Button Component', () => {
   it('should apply size class', () => {
     const wrapper = mount(Button, {
       props: {
-        size: 'lg'
+        size: 'lg',
       },
       slots: {
-        default: 'Large Button'
-      }
+        default: 'Large Button',
+      },
     })
 
     expect(wrapper.classes()).toContain('px-6')
@@ -85,8 +85,8 @@ describe('Button Component', () => {
     const wrapper = mount(Button, {
       slots: {
         default: 'With Icon',
-        icon: '<span class="icon">🔍</span>'
-      }
+        icon: '<span class="icon">🔍</span>',
+      },
     })
 
     expect(wrapper.html()).toContain('🔍')

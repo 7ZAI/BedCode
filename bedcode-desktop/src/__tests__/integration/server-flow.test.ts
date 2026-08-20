@@ -63,7 +63,9 @@ function installInvokeMock() {
   mockInvoke.mockImplementation((cmd: string) => {
     switch (cmd) {
       case 'get_app_settings':
-        return Promise.resolve(makeAppConfig({ network: { ...makeAppConfig().network, port: backendStatus.port } }))
+        return Promise.resolve(
+          makeAppConfig({ network: { ...makeAppConfig().network, port: backendStatus.port } }),
+        )
       case 'get_server_status':
         return Promise.resolve(backendStatus)
       case 'get_server_network_config':
@@ -135,9 +137,7 @@ async function mountView() {
 
 /** 按按钮文案查找（wb-btn 工具栏区） */
 function buttonByText(text: string) {
-  return wrapper!
-    .findAll('button')
-    .find((b) => b.text().trim() === text)!
+  return wrapper!.findAll('button').find((b) => b.text().trim() === text)!
 }
 
 /** 端口输入框（NETWORK 分区第一个 number 输入，DOM 顺序先于高级配置） */

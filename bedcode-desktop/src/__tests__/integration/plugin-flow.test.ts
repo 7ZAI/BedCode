@@ -134,8 +134,16 @@ async function mountView() {
 describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
   it('清单加载：plugin_list_loaded → 已启用/未启用分区渲染', async () => {
     backendPlugins = [
-      makePluginInfo({ id: 'com.bedcode.demo', name: 'Demo Plugin', state: { state: 'Activated' } }),
-      makePluginInfo({ id: 'com.bedcode.other', name: 'Other Plugin', state: { state: 'Deactivated' } }),
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Activated' },
+      }),
+      makePluginInfo({
+        id: 'com.bedcode.other',
+        name: 'Other Plugin',
+        state: { state: 'Deactivated' },
+      }),
     ]
     await mountView()
 
@@ -155,13 +163,21 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
   it('停用联动：toggle → loader 停用 → 列表重载 → 行从已启用迁到未启用', async () => {
     vi.useFakeTimers()
     backendPlugins = [
-      makePluginInfo({ id: 'com.bedcode.demo', name: 'Demo Plugin', state: { state: 'Activated' } }),
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Activated' },
+      }),
     ]
     await mountView()
 
     // 模拟后端状态变化：停用成功后后端持久化为 Deactivated
     backendPlugins = [
-      makePluginInfo({ id: 'com.bedcode.demo', name: 'Demo Plugin', state: { state: 'Deactivated' } }),
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Deactivated' },
+      }),
     ]
 
     await wrapper!.find('[aria-label="停用"]').trigger('click')
@@ -188,7 +204,11 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
   it('启用联动：toggle → 后端激活通知 + 前端加载失败恢复（mark_error + 列表重载）', async () => {
     vi.useFakeTimers()
     backendPlugins = [
-      makePluginInfo({ id: 'com.bedcode.other', name: 'Other Plugin', state: { state: 'Deactivated' } }),
+      makePluginInfo({
+        id: 'com.bedcode.other',
+        name: 'Other Plugin',
+        state: { state: 'Deactivated' },
+      }),
     ]
     await mountView()
 

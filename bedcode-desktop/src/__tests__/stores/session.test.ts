@@ -64,7 +64,7 @@ describe('Session Store', () => {
       { id: 'session-2', config_id: 'config-2', status: 'running', started_at: Date.now() },
     ]
 
-    store.sessions = store.sessions.filter(s => s.id !== 'session-1')
+    store.sessions = store.sessions.filter((s) => s.id !== 'session-1')
 
     expect(store.sessions).toHaveLength(1)
     expect(store.sessions[0].id).toBe('session-2')

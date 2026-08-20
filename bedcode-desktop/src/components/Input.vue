@@ -1,13 +1,20 @@
 <template>
   <div class="form-group" :class="$attrs.class">
-    <label v-if="label" :for="id" class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
+    <label
+      v-if="label"
+      :for="id"
+      class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]"
+    >
       {{ label }}
       <span v-if="required" class="text-red-500">*</span>
     </label>
 
     <div class="relative">
       <!-- Prefix Icon -->
-      <div v-if="$slots.prefix" class="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
+      <div
+        v-if="$slots.prefix"
+        class="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
+      >
         <slot name="prefix"></slot>
       </div>
 
@@ -25,14 +32,17 @@
           error ? 'border-red-500' : 'border-[var(--border-input)]',
           { 'pl-10': $slots.prefix },
           { 'pr-10': $slots.suffix },
-          { 'opacity-50 cursor-not-allowed': disabled }
+          { 'opacity-50 cursor-not-allowed': disabled },
         ]"
         @input="handleInput"
         @blur="emit('blur', $event)"
       />
 
       <!-- Suffix Icon -->
-      <div v-if="$slots.suffix" class="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]">
+      <div
+        v-if="$slots.suffix"
+        class="absolute right-3 top-1/2 -translate-y-1/2 text-[var(--text-tertiary)]"
+      >
         <slot name="suffix"></slot>
       </div>
     </div>
@@ -74,7 +84,7 @@ const props = withDefaults(defineProps<Props>(), {
 
 const emit = defineEmits<{
   'update:modelValue': [value: string | number]
-  'blur': [event: FocusEvent]
+  blur: [event: FocusEvent]
 }>()
 
 const id = uuidv4()

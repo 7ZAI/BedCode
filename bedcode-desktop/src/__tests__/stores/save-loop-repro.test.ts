@@ -48,9 +48,14 @@ describe('settings save loop regression', () => {
       network: { port: 8765, prevent_sleep: true },
       session: { default_environment: 'windows', session_timeout: 3600 },
       ui: {
-        theme: 'dark', font_size: 12, terminal_font_size: 12,
-        terminal_font_family: 'Consolas', terminal_theme: 'oneDark',
-        show_preview: true, language: 'zh-CN', terminal_bg_opacity: 30,
+        theme: 'dark',
+        font_size: 12,
+        terminal_font_size: 12,
+        terminal_font_family: 'Consolas',
+        terminal_theme: 'oneDark',
+        show_preview: true,
+        language: 'zh-CN',
+        terminal_bg_opacity: 30,
       },
     }
     mockInvoke.mockImplementation(async (cmd: string, args: any) => {

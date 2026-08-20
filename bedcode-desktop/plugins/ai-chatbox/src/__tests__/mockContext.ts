@@ -35,9 +35,9 @@ const DEFAULT_COMMANDS: Record<string, (args: any) => any> = {
   }),
 }
 
-export function createMockContext(
-  overrides?: { commands?: Record<string, (args: any) => any> },
-): MockContext {
+export function createMockContext(overrides?: {
+  commands?: Record<string, (args: any) => any>
+}): MockContext {
   const storageMap = new Map<string, any>()
   const listeners: Record<string, (payload: any) => void> = {}
   const calls: { command: string; args: any }[] = []
@@ -58,7 +58,11 @@ export function createMockContext(
     events: {
       on(event: string, handler: (payload: any) => void): { dispose(): void } {
         listeners[event] = handler
-        return { dispose: () => { delete listeners[event] } }
+        return {
+          dispose: () => {
+            delete listeners[event]
+          },
+        }
       },
       emit(event: string, ...args: any[]): void {
         listeners[event]?.(args[0])

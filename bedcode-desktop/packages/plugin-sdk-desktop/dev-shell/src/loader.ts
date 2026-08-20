@@ -7,12 +7,7 @@
 import { reactive, ref } from 'vue'
 import type { PluginContext, PluginModule } from '../../src/types'
 import { createMockContext } from './mock-context'
-import {
-  getPluginRecord,
-  plugins,
-  pushLog,
-  type DevPluginRecord,
-} from './registry'
+import { getPluginRecord, plugins, pushLog, type DevPluginRecord } from './registry'
 
 // dev-shell 专用 mock：浏览器中 WASM 后端不可用，为特定插件注入模拟命令与事件
 import { registerFileTransferMock, disposeFileTransferMock } from './mock/file-transfer'

@@ -59,7 +59,9 @@ export const CONTRIBUTES_DTO_FIELDS = [
   'subscribes',
 ] as const
 
-export function makePluginContributes(overrides: Partial<FixturePluginContributes> = {}): FixturePluginContributes {
+export function makePluginContributes(
+  overrides: Partial<FixturePluginContributes> = {},
+): FixturePluginContributes {
   const fixture: FixturePluginContributes = {
     commands: [],
     views: [],
@@ -151,10 +153,26 @@ export function makePluginInfo(overrides: Partial<PluginInfoFixture> = {}): Plug
 // contributes 因线协议保留 null（前端为可选子集视图），仅运行时断言其键集合。
 
 type PluginScalarKeys =
-  | 'id' | 'name' | 'version' | 'description' | 'author' | 'main' | 'sandbox'
-  | 'pluginType' | 'rustLibrary' | 'permissions' | 'state' | 'extensionPath'
-  | 'icon' | 'source' | 'sizeBytes' | 'installedAt'
+  | 'id'
+  | 'name'
+  | 'version'
+  | 'description'
+  | 'author'
+  | 'main'
+  | 'sandbox'
+  | 'pluginType'
+  | 'rustLibrary'
+  | 'permissions'
+  | 'state'
+  | 'extensionPath'
+  | 'icon'
+  | 'source'
+  | 'sizeBytes'
+  | 'installedAt'
 
 type _PluginScalarEq = Expect<
-  Equals<Required<Pick<PluginInfoFixture, PluginScalarKeys>>, Required<Pick<PluginInfo, PluginScalarKeys>>>
+  Equals<
+    Required<Pick<PluginInfoFixture, PluginScalarKeys>>,
+    Required<Pick<PluginInfo, PluginScalarKeys>>
+  >
 >

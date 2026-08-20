@@ -34,7 +34,7 @@ describe('Input Assistant Store', () => {
         swipeRight: true,
       })
       expect(store.shortcutConfig).toHaveLength(BUILTIN_COUNT)
-      expect(store.shortcutConfig.every(s => s.builtin && s.visible)).toBe(true)
+      expect(store.shortcutConfig.every((s) => s.builtin && s.visible)).toBe(true)
       expect(store.position).toEqual({ x: -1, y: -1 })
       expect(store.isExpanded).toBe(false)
       expect(store.shortcutStats).toEqual({})
@@ -120,7 +120,7 @@ describe('Input Assistant Store', () => {
         builtin: false,
       })
       const persisted = JSON.parse(localStorage.getItem(KEY_SHORTCUT_CONFIG) || '[]')
-      expect(persisted.some(s => s.code === 'f1' && !s.builtin)).toBe(true)
+      expect(persisted.some((s) => s.code === 'f1' && !s.builtin)).toBe(true)
     })
 
     it('addShortcut should ignore duplicate codes', () => {
@@ -152,12 +152,12 @@ describe('Input Assistant Store', () => {
 
       store.toggleShortcutVisibility('tab')
 
-      expect(store.shortcutConfig.find(s => s.code === 'tab')?.visible).toBe(false)
+      expect(store.shortcutConfig.find((s) => s.code === 'tab')?.visible).toBe(false)
       const persisted = JSON.parse(localStorage.getItem(KEY_SHORTCUT_CONFIG) || '[]')
-      expect(persisted.find(s => s.code === 'tab').visible).toBe(false)
+      expect(persisted.find((s) => s.code === 'tab').visible).toBe(false)
 
       store.toggleShortcutVisibility('tab')
-      expect(store.shortcutConfig.find(s => s.code === 'tab')?.visible).toBe(true)
+      expect(store.shortcutConfig.find((s) => s.code === 'tab')?.visible).toBe(true)
     })
 
     it('resetShortcutConfig should restore all builtin shortcuts as visible', () => {
@@ -168,7 +168,7 @@ describe('Input Assistant Store', () => {
       store.resetShortcutConfig()
 
       expect(store.shortcutConfig).toHaveLength(BUILTIN_COUNT)
-      expect(store.shortcutConfig.every(s => s.builtin && s.visible)).toBe(true)
+      expect(store.shortcutConfig.every((s) => s.builtin && s.visible)).toBe(true)
     })
 
     it('visiblePanelShortcuts should exclude hidden, enter and backspace', () => {
@@ -178,9 +178,9 @@ describe('Input Assistant Store', () => {
       const visible = store.visiblePanelShortcuts
 
       expect(visible).toHaveLength(BUILTIN_COUNT - 3) // tab 隐藏 + enter + backspace
-      expect(visible.some(s => s.code === 'tab')).toBe(false)
-      expect(visible.some(s => s.code === 'enter')).toBe(false)
-      expect(visible.some(s => s.code === 'backspace')).toBe(false)
+      expect(visible.some((s) => s.code === 'tab')).toBe(false)
+      expect(visible.some((s) => s.code === 'enter')).toBe(false)
+      expect(visible.some((s) => s.code === 'backspace')).toBe(false)
     })
   })
 
@@ -192,7 +192,7 @@ describe('Input Assistant Store', () => {
 
       const items = store.getQuickBarItems([{ id: 'cmd-1', command: 'ls -la' }])
 
-      expect(items.map(i => i.key)).toEqual(['tab', 'cmd-1', 'ctrl_c'])
+      expect(items.map((i) => i.key)).toEqual(['tab', 'cmd-1', 'ctrl_c'])
       expect(items[1]).toEqual({ type: 'custom', key: 'cmd-1', label: 'ls -la', count: 3 })
       expect(items[2]).toEqual({ type: 'shortcut', key: 'ctrl_c', label: 'Ctrl+C', count: 5 })
     })
@@ -203,8 +203,15 @@ describe('Input Assistant Store', () => {
       const items = store.getQuickBarItems([])
 
       // DEFAULT_QUICK_KEYS 前 6 个反序（最常用的在最右）
-      expect(items.map(i => i.key)).toEqual(['arrow_up', 'ctrl_z', 'ctrl_c', 'escape', 'enter', 'tab'])
-      expect(items.every(i => i.count === 0 && i.type === 'shortcut')).toBe(true)
+      expect(items.map((i) => i.key)).toEqual([
+        'arrow_up',
+        'ctrl_z',
+        'ctrl_c',
+        'escape',
+        'enter',
+        'tab',
+      ])
+      expect(items.every((i) => i.count === 0 && i.type === 'shortcut')).toBe(true)
     })
 
     it('should clamp quickBarCount to [3, 10]', () => {
@@ -218,13 +225,21 @@ describe('Input Assistant Store', () => {
 
     it('should keep only top-N items when stats exist', () => {
       const store = useInputAssistantStore()
-      store.shortcutStats = { tab: 1, enter: 2, escape: 3, ctrl_c: 4, ctrl_d: 5, ctrl_z: 6, ctrl_l: 7 }
+      store.shortcutStats = {
+        tab: 1,
+        enter: 2,
+        escape: 3,
+        ctrl_c: 4,
+        ctrl_d: 5,
+        ctrl_z: 6,
+        ctrl_l: 7,
+      }
       store.saveSettings({ quickBarCount: 4 })
 
       const items = store.getQuickBarItems([])
 
       // 频次最高的 4 个，升序排列
-      expect(items.map(i => i.key)).toEqual(['ctrl_c', 'ctrl_d', 'ctrl_z', 'ctrl_l'])
+      expect(items.map((i) => i.key)).toEqual(['ctrl_c', 'ctrl_d', 'ctrl_z', 'ctrl_l'])
     })
   })
 
@@ -249,9 +264,10 @@ describe('Input Assistant Store', () => {
       localStorage.setItem(KEY_STATS, JSON.stringify({ tab: 7 }))
       localStorage.setItem(KEY_CMD_STATS, JSON.stringify({ 'cmd-9': 4 }))
       localStorage.setItem(KEY_SETTINGS, JSON.stringify({ floatingBall: true, quickBarCount: 9 }))
-      localStorage.setItem(KEY_SHORTCUT_CONFIG, JSON.stringify([
-        { code: 'custom-a', label: 'Custom A', visible: false, builtin: false },
-      ]))
+      localStorage.setItem(
+        KEY_SHORTCUT_CONFIG,
+        JSON.stringify([{ code: 'custom-a', label: 'Custom A', visible: false, builtin: false }]),
+      )
 
       // 重新创建 store 实例触发 loadFromStorage
       setActivePinia(createPinia())
@@ -265,13 +281,13 @@ describe('Input Assistant Store', () => {
       expect(store.settings.size).toBe(48) // 未持久化字段回退默认
       // 自定义快捷键保留，且缺失的内置快捷键被合并补齐
       expect(store.shortcutConfig).toHaveLength(BUILTIN_COUNT + 1)
-      expect(store.shortcutConfig.find(s => s.code === 'custom-a')).toEqual({
+      expect(store.shortcutConfig.find((s) => s.code === 'custom-a')).toEqual({
         code: 'custom-a',
         label: 'Custom A',
         visible: false,
         builtin: false,
       })
-      expect(store.shortcutConfig.filter(s => s.code === 'tab')).toHaveLength(1)
+      expect(store.shortcutConfig.filter((s) => s.code === 'tab')).toHaveLength(1)
     })
 
     it('should fall back to defaults when saved shortcut config is corrupted', () => {
@@ -281,7 +297,7 @@ describe('Input Assistant Store', () => {
       const store = useInputAssistantStore()
 
       expect(store.shortcutConfig).toHaveLength(BUILTIN_COUNT)
-      expect(store.shortcutConfig.every(s => s.builtin)).toBe(true)
+      expect(store.shortcutConfig.every((s) => s.builtin)).toBe(true)
     })
 
     it('should keep existing state when no saved data exists', () => {

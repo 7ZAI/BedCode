@@ -20,7 +20,12 @@ export async function activate(context: PluginContext): Promise<void> {
     order: 600,
     component: defineComponent({
       name: '{{STRUCT}}Panel',
-      render: () => h('div', { style: 'padding: 16px; color: var(--text-secondary); font-size: 13px' }, '{{NAME}} 面板内容 — 在这里编写你的插件 UI'),
+      render: () =>
+        h(
+          'div',
+          { style: 'padding: 16px; color: var(--text-secondary); font-size: 13px' },
+          '{{NAME}} 面板内容 — 在这里编写你的插件 UI',
+        ),
     }),
   })
 

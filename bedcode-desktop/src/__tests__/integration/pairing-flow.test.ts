@@ -78,11 +78,19 @@ function installInvokeMock() {
         // 空 IP 列表 → 视图不触发 qr_host 自动补写保存，保持链路最小
         return Promise.resolve([])
       case 'get_app_settings':
-        return Promise.resolve(makeAppConfig({ network: { ...makeAppConfig().network, port: 9000 } }))
+        return Promise.resolve(
+          makeAppConfig({ network: { ...makeAppConfig().network, port: 9000 } }),
+        )
       case 'list_paired_devices':
         return Promise.resolve([...pairedDevices])
       case 'get_connected_devices':
-        return Promise.resolve([makeDeviceConnectionInfo({ device_id: 'device-1', addr: '192.168.1.50', fingerprint: 'fp-1' })])
+        return Promise.resolve([
+          makeDeviceConnectionInfo({
+            device_id: 'device-1',
+            addr: '192.168.1.50',
+            fingerprint: 'fp-1',
+          }),
+        ])
       case 'get_current_pairing_code':
         return Promise.resolve(null)
       case 'get_qr_connection_info':
@@ -132,7 +140,14 @@ beforeEach(() => {
   // 就是视图内部消费的同一 store 实例（否则断言的是另一份状态）
   pinia = createPinia()
   setActivePinia(pinia)
-  pairedDevices = [makePairing({ id: 'device-1', deviceName: 'Phone 1', deviceFingerprint: 'fp-1', address: '192.168.1.50' })]
+  pairedDevices = [
+    makePairing({
+      id: 'device-1',
+      deviceName: 'Phone 1',
+      deviceFingerprint: 'fp-1',
+      address: '192.168.1.50',
+    }),
+  ]
   generatedCode = makePairingCodeInfo({ code: '654321', expires_in: 60 })
   installInvokeMock()
 })
@@ -200,7 +215,8 @@ describe('配对流：usePairing × useDeviceStore × DevicesView', () => {
     expect(invokeCalls('generate_pairing_code')).toHaveLength(1)
     // usePairing（composable）与视图 ref 双向一致：pairingCode 为每实例 ref，
     // 经视图实例（wrapper.vm 的 setup 绑定）读取视图内同一 composable 实例
-    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> }).pairing
+    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> })
+      .pairing
     expect(viewPairing.pairingCode.value?.code).toBe('654321')
     // 界面展示：大字配对码 + 倒计时徽标
     expect(wrapper!.text()).toContain('654321')
@@ -210,7 +226,8 @@ describe('配对流：usePairing × useDeviceStore × DevicesView', () => {
   it('移动端接入（device-connected 事件）→ 配对码自动清除 + 设备列表刷新联动', async () => {
     await mountView()
     const deviceStore = useDeviceStore()
-    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> }).pairing
+    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> })
+      .pairing
 
     // 先配对成功展示码
     await pairingCardButton().trigger('click')
@@ -220,11 +237,28 @@ describe('配对流：usePairing × useDeviceStore × DevicesView', () => {
 
     // 后端推送 device-connected：模拟第二台设备完成配对
     pairedDevices = [
-      makePairing({ id: 'device-1', deviceName: 'Phone 1', deviceFingerprint: 'fp-1', address: '192.168.1.50' }),
-      makePairing({ id: 'device-2', deviceName: 'Phone 2', deviceFingerprint: 'fp-2', address: '192.168.1.51' }),
+      makePairing({
+        id: 'device-1',
+        deviceName: 'Phone 1',
+        deviceFingerprint: 'fp-1',
+        address: '192.168.1.50',
+      }),
+      makePairing({
+        id: 'device-2',
+        deviceName: 'Phone 2',
+        deviceFingerprint: 'fp-2',
+        address: '192.168.1.51',
+      }),
     ]
     for (const handler of eventHandlers['device-connected'] || []) {
-      await handler({ payload: { fingerprint: 'fp-1', device_id: 'device-1', addr: '192.168.1.50', session_count: 1 } })
+      await handler({
+        payload: {
+          fingerprint: 'fp-1',
+          device_id: 'device-1',
+          addr: '192.168.1.50',
+          session_count: 1,
+        },
+      })
     }
     await flushAsync()
 
@@ -254,7 +288,8 @@ describe('配对流：usePairing × useDeviceStore × DevicesView', () => {
     await mountView()
 
     // 正向断言先行：生成后视图内实例与界面均已展示配对码（防恒真断言）
-    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> }).pairing
+    const viewPairing = (wrapper!.vm as unknown as { pairing: ReturnType<typeof usePairing> })
+      .pairing
     await pairingCardButton().trigger('click')
     await flushAsync() // fake timers 下推进 invoke 异步链，generate 完成后 pairingCode 才落地
     expect(viewPairing.pairingCode.value).not.toBeNull()

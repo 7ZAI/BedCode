@@ -3,8 +3,8 @@
   <Teleport to="body">
     <Transition name="confirm-fade" appear>
       <div class="fixed inset-0 z-[9999] flex items-center justify-center p-6">
-      <!-- 半透明遮罩：mousedown 遮罩关闭（弹窗主体是 sibling 且层级更高，点击不触达遮罩） -->
-      <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @mousedown="onCancel"></div>
+        <!-- 半透明遮罩：mousedown 遮罩关闭（弹窗主体是 sibling 且层级更高，点击不触达遮罩） -->
+        <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @mousedown="onCancel"></div>
 
         <!-- 弹窗主体 -->
         <div
@@ -13,7 +13,9 @@
           class="relative w-full max-w-xs bg-[var(--bg-card)] border border-[var(--border)] rounded-card shadow-card p-5"
         >
           <h4 class="text-sm font-medium text-[var(--text-primary)] mb-2">{{ title }}</h4>
-          <p class="text-xs text-[var(--text-secondary)] leading-relaxed break-words mb-5">{{ body }}</p>
+          <p class="text-xs text-[var(--text-secondary)] leading-relaxed break-words mb-5">
+            {{ body }}
+          </p>
           <div class="flex justify-end gap-2">
             <button
               class="h-[34px] px-4 text-sm rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors"

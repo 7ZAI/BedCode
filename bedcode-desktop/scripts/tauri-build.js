@@ -57,7 +57,8 @@ function resolveSigningEnv() {
   }
 
   const fromFile = loadSigningEnvFromFile()
-  const keyFile = process.env.TAURI_SIGNING_PRIVATE_KEY_FILE || fromFile.TAURI_SIGNING_PRIVATE_KEY_FILE
+  const keyFile =
+    process.env.TAURI_SIGNING_PRIVATE_KEY_FILE || fromFile.TAURI_SIGNING_PRIVATE_KEY_FILE
   if (keyFile) {
     if (!existsSync(keyFile)) {
       console.error(`[tauri-build] TAURI_SIGNING_PRIVATE_KEY_FILE 指向的文件不存在: ${keyFile}`)
@@ -80,8 +81,12 @@ const extraArgs = []
 if (signingEnv) {
   console.log('[tauri-build] 已检测到 updater 签名密钥，构建将生成签名的升级包')
 } else {
-  console.warn('[tauri-build] 未检测到 updater 签名密钥（TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_FILE / .env）')
-  console.warn('[tauri-build] 本次构建禁用升级包生成（createUpdaterArtifacts=false），产物不含自动更新签名')
+  console.warn(
+    '[tauri-build] 未检测到 updater 签名密钥（TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_FILE / .env）',
+  )
+  console.warn(
+    '[tauri-build] 本次构建禁用升级包生成（createUpdaterArtifacts=false），产物不含自动更新签名',
+  )
   extraArgs.push('--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }))
 }
 
@@ -116,7 +121,9 @@ function renameInstallerWithReleaseSuffix() {
   const nsisDir = join(projectRoot, 'src-tauri/target/release/bundle/nsis')
   if (!existsSync(nsisDir)) return
 
-  const pattern = new RegExp(`^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)-setup\\.exe$`)
+  const pattern = new RegExp(
+    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)-setup\\.exe$`,
+  )
   for (const file of readdirSync(nsisDir)) {
     const match = file.match(pattern)
     if (!match) continue

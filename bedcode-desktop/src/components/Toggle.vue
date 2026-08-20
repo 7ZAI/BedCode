@@ -14,7 +14,7 @@
           modelValue
             ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
             : 'bg-[var(--bg-page)] border-[var(--border-strong)]',
-          { 'opacity-50 cursor-not-allowed': disabled }
+          { 'opacity-50 cursor-not-allowed': disabled },
         ]"
       ></div>
       <div
@@ -22,7 +22,7 @@
         :class="[
           modelValue
             ? 'left-[22px] bg-[var(--color-primary-contrast)]'
-            : 'left-[3px] bg-[var(--border-strong)]'
+            : 'left-[3px] bg-[var(--border-strong)]',
         ]"
       ></div>
     </div>

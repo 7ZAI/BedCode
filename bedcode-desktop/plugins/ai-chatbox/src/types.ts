@@ -61,10 +61,30 @@ export interface ProviderPreset {
 
 /** 内置供应商预设（全部走 OpenAI 兼容协议；Anthropic 官方 OpenAI 兼容端点） */
 export const PROVIDER_PRESETS: ProviderPreset[] = [
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', models: ['deepseek-chat', 'deepseek-reasoner'] },
-  { id: 'qwen', name: '通义千问 (Qwen)', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-turbo', 'qwen-plus', 'qwen-max'] },
-  { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'] },
-  { id: 'anthropic', name: 'Anthropic', baseUrl: 'https://api.anthropic.com/v1', models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'] },
+  {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    baseUrl: 'https://api.deepseek.com/v1',
+    models: ['deepseek-chat', 'deepseek-reasoner'],
+  },
+  {
+    id: 'qwen',
+    name: '通义千问 (Qwen)',
+    baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+    models: ['qwen-turbo', 'qwen-plus', 'qwen-max'],
+  },
+  {
+    id: 'openai',
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    models: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo'],
+  },
+  {
+    id: 'anthropic',
+    name: 'Anthropic',
+    baseUrl: 'https://api.anthropic.com/v1',
+    models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'],
+  },
 ]
 
 /** 思考模式（插件级全局配置：default=不传参跟随模型；enabled/disabled 强制开/关） */

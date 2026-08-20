@@ -3,12 +3,22 @@
     <!-- ==================== 工具栏页头：左标题+计数，右刷新 ==================== -->
     <div class="wb-toolbar">
       <div class="flex items-center gap-2.5">
-        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ $t('desktop.plugin.title') }}</h1>
-        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ enabledPlugins.length }}/{{ plugins.length }} {{ $t('desktop.plugin.enabledSection') }}</span>
+        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
+          {{ $t('desktop.plugin.title') }}
+        </h1>
+        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
+          >{{ enabledPlugins.length }}/{{ plugins.length }}
+          {{ $t('desktop.plugin.enabledSection') }}</span
+        >
       </div>
       <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
         <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.75"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
         </svg>
         {{ $t('desktop.plugin.refresh') }}
       </button>
@@ -21,29 +31,38 @@
         <div v-if="loading && plugins.length === 0" class="space-y-6">
           <div v-for="i in 2" :key="i">
             <div class="h-3 w-32 rounded animate-pulse bg-[var(--bg-hover)] mb-2"></div>
-            <div class="h-16 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"></div>
+            <div
+              class="h-16 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"
+            ></div>
           </div>
         </div>
 
         <!-- ==================== 空态 ==================== -->
         <div v-else-if="!loading && plugins.length === 0" class="py-16 text-center">
-          <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ $t('desktop.plugin.noPlugins') }}</p>
-          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-1">{{ $t('desktop.plugin.noPluginsHint') }}</p>
+          <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">
+            {{ $t('desktop.plugin.noPlugins') }}
+          </p>
+          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-1">
+            {{ $t('desktop.plugin.noPluginsHint') }}
+          </p>
         </div>
 
         <!-- ==================== ENABLED / DISABLED 分区 ==================== -->
         <template v-else>
           <!-- ENABLED 分区 -->
           <section v-if="enabledPlugins.length > 0" class="mb-6">
-            <h2 class="wb-section-title">{{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}</h2>
-            <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
-              <div
-                v-for="plugin in enabledPlugins"
-                :key="plugin.id"
-                class="plugin-row"
-              >
+            <h2 class="wb-section-title">
+              {{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}
+            </h2>
+            <div
+              class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden"
+            >
+              <div v-for="plugin in enabledPlugins" :key="plugin.id" class="plugin-row">
                 <!-- 主体：图标 + 信息 + 操作 -->
-                <div class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--bg-hover)]" @click="goDetail(plugin.id)">
+                <div
+                  class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+                  @click="goDetail(plugin.id)"
+                >
                   <PluginIcon
                     :icon="plugin.icon"
                     :name="plugin.name"
@@ -52,8 +71,13 @@
                   />
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
-                      <span class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate">{{ plugin.name }}</span>
-                      <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
+                      <span
+                        class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate"
+                        >{{ plugin.name }}</span
+                      >
+                      <span class="wb-mono text-[var(--text-tertiary)] shrink-0"
+                        >v{{ plugin.version }}</span
+                      >
                       <!-- 扩展点 chips -->
                       <span
                         v-for="chip in getContributionChips(plugin)"
@@ -87,7 +111,12 @@
                       stroke="currentColor"
                       viewBox="0 0 24 24"
                     >
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M9 5l7 7-7 7"
+                      />
                     </svg>
                   </button>
                   <!-- 配置入口（仅激活 + 有配置时可点） -->
@@ -99,7 +128,11 @@
                   >
                     {{ $t('desktop.plugin.goConfig') }}
                   </router-link>
-                  <span v-else class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
+                  <span
+                    v-else
+                    class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center"
+                    >{{ $t('desktop.plugin.config') }}</span
+                  >
                   <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
@@ -115,7 +148,11 @@
                   >
                     <span class="plugin-toggle__knob" />
                   </button>
-                  <span v-else class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">{{ $t('desktop.plugin.alwaysOn') }}</span>
+                  <span
+                    v-else
+                    class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0"
+                    >{{ $t('desktop.plugin.alwaysOn') }}</span
+                  >
                 </div>
               </div>
             </div>
@@ -123,14 +160,17 @@
 
           <!-- DISABLED 分区 -->
           <section v-if="disabledPlugins.length > 0">
-            <h2 class="wb-section-title">{{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}</h2>
-            <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden">
-              <div
-                v-for="plugin in disabledPlugins"
-                :key="plugin.id"
-                class="plugin-row"
-              >
-                <div class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--bg-hover)]" @click="goDetail(plugin.id)">
+            <h2 class="wb-section-title">
+              {{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}
+            </h2>
+            <div
+              class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden"
+            >
+              <div v-for="plugin in disabledPlugins" :key="plugin.id" class="plugin-row">
+                <div
+                  class="flex items-center gap-3 px-4 py-3 cursor-pointer transition-colors hover:bg-[var(--bg-hover)]"
+                  @click="goDetail(plugin.id)"
+                >
                   <PluginIcon
                     :icon="plugin.icon"
                     :name="plugin.name"
@@ -139,10 +179,26 @@
                   />
                   <div class="flex-1 min-w-0">
                     <div class="flex items-center gap-2">
-                      <span class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate">{{ plugin.name }}</span>
-                      <span class="wb-mono text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
-                      <span class="wb-mono text-[calc(11px*var(--ui-scale))] shrink-0" :class="isErrorState(plugin.state) ? 'text-red-600 dark:text-red-400' : 'text-[var(--text-tertiary)]'">
-                        {{ isErrorState(plugin.state) ? getErrorMessage(plugin.state) : $t(getStateKey(plugin.state)) }}
+                      <span
+                        class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)] truncate"
+                        >{{ plugin.name }}</span
+                      >
+                      <span class="wb-mono text-[var(--text-tertiary)] shrink-0"
+                        >v{{ plugin.version }}</span
+                      >
+                      <span
+                        class="wb-mono text-[calc(11px*var(--ui-scale))] shrink-0"
+                        :class="
+                          isErrorState(plugin.state)
+                            ? 'text-red-600 dark:text-red-400'
+                            : 'text-[var(--text-tertiary)]'
+                        "
+                      >
+                        {{
+                          isErrorState(plugin.state)
+                            ? getErrorMessage(plugin.state)
+                            : $t(getStateKey(plugin.state))
+                        }}
                       </span>
                     </div>
                     <div class="mt-0.5">
@@ -150,10 +206,16 @@
                         class="text-[calc(12px*var(--ui-scale))] transition-all duration-200"
                         :class="[
                           descExpanded[plugin.id] ? 'whitespace-pre-wrap' : 'truncate',
-                          isErrorState(plugin.state) ? 'text-red-600/70 dark:text-red-400/70' : 'text-[var(--text-secondary)]'
+                          isErrorState(plugin.state)
+                            ? 'text-red-600/70 dark:text-red-400/70'
+                            : 'text-[var(--text-secondary)]',
                         ]"
                       >
-                        {{ isErrorState(plugin.state) ? ('⚠ ' + getErrorMessage(plugin.state)) : (plugin.description || $t('desktop.plugin.noDescription')) }}
+                        {{
+                          isErrorState(plugin.state)
+                            ? '⚠ ' + getErrorMessage(plugin.state)
+                            : plugin.description || $t('desktop.plugin.noDescription')
+                        }}
                       </div>
                     </div>
                   </div>
@@ -170,11 +232,19 @@
                       stroke="currentColor"
                       viewBox="0 0 24 24"
                     >
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M9 5l7 7-7 7"
+                      />
                     </svg>
                   </button>
                   <!-- 配置入口不可用 -->
-                  <span class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.config') }}</span>
+                  <span
+                    class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center"
+                    >{{ $t('desktop.plugin.config') }}</span
+                  >
                   <!-- 启停开关（v-bind 改造：同一组件，状态由 CSS 变量驱动） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
@@ -190,7 +260,11 @@
                   >
                     <span class="plugin-toggle__knob" />
                   </button>
-                  <span v-else class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center">{{ $t('desktop.plugin.alwaysOn') }}</span>
+                  <span
+                    v-else
+                    class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center"
+                    >{{ $t('desktop.plugin.alwaysOn') }}</span
+                  >
                 </div>
               </div>
             </div>
@@ -228,21 +302,15 @@ import {
 } from '@/plugin/contributionKinds'
 
 const router = useRouter()
-const {
-  plugins,
-  loading,
-  togglingId,
-  togglingPluginInfo,
-  loadPlugins,
-  togglePlugin,
-} = usePluginManager()
+const { plugins, loading, togglingId, togglingPluginInfo, loadPlugins, togglePlugin } =
+  usePluginManager()
 
 /** 简介折叠状态（每个插件独立控制） */
 const descExpanded = reactive<Record<string, boolean>>({})
 
 /** 已激活 → ENABLED 分区；其余 → DISABLED 分区 */
-const enabledPlugins = computed(() => plugins.value.filter(p => isActivated(p.state)))
-const disabledPlugins = computed(() => plugins.value.filter(p => !isActivated(p.state)))
+const enabledPlugins = computed(() => plugins.value.filter((p) => isActivated(p.state)))
+const disabledPlugins = computed(() => plugins.value.filter((p) => !isActivated(p.state)))
 
 /** 跳转到插件详情页 */
 function goDetail(pluginId: string): void {
@@ -283,7 +351,7 @@ onMounted(() => {
   /* 数值由父组件 :style 注入；这里给默认值保 SSR/初次渲染正确 */
   --toggle-on: 0;
   --toggle-locked: 0;
-  --toggle-shift: 19;       /* 圆点位移：按钮 40 - 圆点 12 - 左右内边距 3*2 - 边框 1*2 = 19px */
+  --toggle-shift: 19; /* 圆点位移：按钮 40 - 圆点 12 - 左右内边距 3*2 - 边框 1*2 = 19px */
 
   position: relative;
   width: 2.5rem;
@@ -292,7 +360,10 @@ onMounted(() => {
   border: 1px solid;
   flex-shrink: 0;
   cursor: pointer;
-  transition: background-color 0.2s, border-color 0.2s, opacity 0.2s;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    opacity 0.2s;
 
   background: var(--color-primary);
   border-color: var(--color-primary);
@@ -301,7 +372,7 @@ onMounted(() => {
 }
 
 /* 关闭态：覆盖 background / border */
-.plugin-toggle[style*="--toggle-on: 0"] {
+.plugin-toggle[style*='--toggle-on: 0'] {
   background: var(--bg-page);
   border-color: var(--border-strong);
 }
@@ -314,12 +385,14 @@ onMounted(() => {
   height: 0.75rem;
   border-radius: 2px;
   background: var(--color-primary-contrast);
-  transition: transform 0.2s, background-color 0.2s;
+  transition:
+    transform 0.2s,
+    background-color 0.2s;
   /* calc 直接用 --toggle-on（数字），不用字符串 */
   transform: translateX(calc(var(--toggle-on) * var(--toggle-shift) * 1px));
 }
 
-.plugin-toggle[style*="--toggle-on: 0"] .plugin-toggle__knob {
+.plugin-toggle[style*='--toggle-on: 0'] .plugin-toggle__knob {
   background: var(--border-strong);
 }
 </style>

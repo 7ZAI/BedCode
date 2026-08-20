@@ -9,10 +9,7 @@ import type { SessionInfo } from '@/composables/useDesktopCommands'
 import type { TerminalWindowState } from './model'
 export type { TerminalWindowState }
 
-
-const SNAP_THRESHOLD = 15  // 贴靠阈值（像素）
-
-
+const SNAP_THRESHOLD = 15 // 贴靠阈值（像素）
 
 // ==================== 单例模式 ====================
 // 模块级别的状态，确保所有组件共享同一个实例
@@ -42,7 +39,7 @@ async function initMainWindowListeners() {
       x: mainPos.x,
       y: mainPos.y,
       width: 0, // PhysicalPosition 没有 width/height
-      height: 0
+      height: 0,
     })
   })
 
@@ -51,7 +48,7 @@ async function initMainWindowListeners() {
     const mainSize = event.payload
     await emit('main-window-resized', {
       width: mainSize.width,
-      height: mainSize.height
+      height: mainSize.height,
     })
   })
 
@@ -108,7 +105,12 @@ export function useSessionWindows() {
     const terminalWidth = Math.floor(mainInnerSize.width * 0.6)
     const terminalHeight = mainInnerSize.height
 
-    console.log('[useSessionWindows] Terminal window size - width:', terminalWidth, 'height:', terminalHeight)
+    console.log(
+      '[useSessionWindows] Terminal window size - width:',
+      terminalWidth,
+      'height:',
+      terminalHeight,
+    )
 
     // 计算新窗口位置，确保不超过屏幕边界（window.screen 为逻辑像素）
     let terminalX = mainPosition.x + mainSize.width
@@ -224,7 +226,7 @@ export function useSessionWindows() {
       window: terminalWindow,
       isSnapped: false,
       snapDirection: null,
-      lastPosition: { x: terminalX, y: mainPosition.y }
+      lastPosition: { x: terminalX, y: mainPosition.y },
     })
     console.log('[useSessionWindows] Window stored, keys:', Array.from(windows.value.keys()))
 
@@ -314,7 +316,11 @@ export function useSessionWindows() {
   /**
    * 更新终端窗口的贴靠状态
    */
-  async function updateWindowSnapState(sessionId: string, isSnapped: boolean, snapDirection: 'left' | 'right' | null) {
+  async function updateWindowSnapState(
+    sessionId: string,
+    isSnapped: boolean,
+    snapDirection: 'left' | 'right' | null,
+  ) {
     const state = windows.value.get(sessionId)
     if (state) {
       state.isSnapped = isSnapped
@@ -325,7 +331,9 @@ export function useSessionWindows() {
   /**
    * 获取终端窗口的当前位置
    */
-  async function getTerminalWindowPosition(sessionId: string): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  async function getTerminalWindowPosition(
+    sessionId: string,
+  ): Promise<{ x: number; y: number; width: number; height: number } | null> {
     const state = windows.value.get(sessionId)
     if (!state) return null
 
@@ -336,7 +344,7 @@ export function useSessionWindows() {
         x: position.x,
         y: position.y,
         width: size.width,
-        height: size.height
+        height: size.height,
       }
     } catch (e) {
       return null

@@ -85,7 +85,9 @@ describe('WSL Store', () => {
 
       // 第二次加载成功：error 应被清空
       mocks.isWslAvailable.mockResolvedValueOnce(true)
-      mocks.listWslDistributions.mockResolvedValueOnce([makeWslDistro({ name: 'Ubuntu', state: 'Running' })])
+      mocks.listWslDistributions.mockResolvedValueOnce([
+        makeWslDistro({ name: 'Ubuntu', state: 'Running' }),
+      ])
       await store.loadWslInfo()
 
       expect(store.error).toBeNull()

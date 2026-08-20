@@ -62,14 +62,19 @@ function onTimeoutBlur(e: Event): void {
       <div class="ft-topbar">
         <h2 class="ft-settings-title">{{ t('transfer.topbar.settings') }}</h2>
         <div class="ft-spacer"></div>
-        <button class="ft-btn" @click="emit('close')">{{ t('transfer.topbar.closeSettings') }}</button>
+        <button class="ft-btn" @click="emit('close')">
+          {{ t('transfer.topbar.closeSettings') }}
+        </button>
       </div>
 
       <div class="ft-settings-body">
         <!-- 共享目录 -->
         <section class="ft-settings-section">
           <h3 class="ft-settings-section-title">{{ t('transfer.settings.sharedRoots') }}</h3>
-          <div v-if="settings.roots.length === 0" class="ft-dir-value ft-dir-value--empty ft-dir-value--placeholder">
+          <div
+            v-if="settings.roots.length === 0"
+            class="ft-dir-value ft-dir-value--empty ft-dir-value--placeholder"
+          >
             {{ t('transfer.settings.noRoots') }}
           </div>
           <div v-else class="ft-root-list">
@@ -80,7 +85,14 @@ function onTimeoutBlur(e: Event): void {
                 :title="t('transfer.settings.removeRoot')"
                 @click="emit('removeRoot', root)"
               >
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M18 6L6 18M6 6l12 12"
+                  />
+                </svg>
               </button>
             </div>
           </div>
@@ -136,7 +148,10 @@ function onTimeoutBlur(e: Event): void {
             </button>
           </div>
           <p class="ft-settings-helper">{{ t('transfer.settings.receivingPolicyHint') }}</p>
-          <div v-if="settings.receivingPolicy === 'ask'" class="ft-settings-row ft-settings-timeout">
+          <div
+            v-if="settings.receivingPolicy === 'ask'"
+            class="ft-settings-row ft-settings-timeout"
+          >
             <label class="ft-timeout-label" for="ft-approval-timeout">
               {{ t('transfer.settings.approvalTimeout') }}
             </label>
@@ -156,7 +171,12 @@ function onTimeoutBlur(e: Event): void {
         <!-- 安全告知（spec §10 常驻） -->
         <div class="ft-warning">
           <svg class="ft-warning-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4M12 17h.01"
+            />
           </svg>
           <span>{{ t('transfer.settings.plainWarning') }}</span>
         </div>

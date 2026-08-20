@@ -3,7 +3,7 @@ import {
   generatePairingCode,
   clearPairingCode,
   getCurrentPairingCode,
-  type PairingCodeInfo
+  type PairingCodeInfo,
 } from '@/composables/useDesktopCommands'
 
 export function usePairing() {

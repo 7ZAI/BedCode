@@ -7,7 +7,7 @@ describe('MobileSwipeContainer', () => {
       swipeThreshold: 80,
       velocityThreshold: 0.3,
       maxOvershoot: 50,
-      animationDuration: 300
+      animationDuration: 300,
     }
 
     expect(CONFIG.directionThreshold).toBe(20)
@@ -21,7 +21,7 @@ describe('MobileSwipeContainer', () => {
       { name: 'mobile-devices', component: 'DevicesView' },
       { name: 'mobile-sessions', component: 'SessionsView' },
       { name: 'mobile-toolbox', component: 'ToolboxView' },
-      { name: 'mobile-settings', component: 'SettingsView' }
+      { name: 'mobile-settings', component: 'SettingsView' },
     ]
 
     expect(pages).toHaveLength(4)

@@ -16,7 +16,7 @@ import {
   deleteSessionConfig,
   updateSessionConfig,
   type SessionConfig,
-  type SessionInfo
+  type SessionInfo,
 } from '@/composables/useDesktopCommands'
 
 export { type SessionConfig, type SessionInfo }
@@ -32,7 +32,10 @@ export const useSessionStore = defineStore('session', () => {
 
   async function loadSessions() {
     sessions.value = await listSessions()
-    console.log('loadSessions completed, sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
+    console.log(
+      'loadSessions completed, sessions:',
+      sessions.value.map((s) => ({ id: s.id, status: s.status })),
+    )
   }
 
   async function createSession(configId: string) {
@@ -51,7 +54,7 @@ export const useSessionStore = defineStore('session', () => {
     console.log('startSession completed, sessionId:', sessionId)
 
     // 更新 activeSession
-    const session = sessions.value.find(s => s.id === sessionId)
+    const session = sessions.value.find((s) => s.id === sessionId)
     if (session) {
       activeSession.value = session
     }
@@ -61,7 +64,10 @@ export const useSessionStore = defineStore('session', () => {
     console.log('killSession called with sessionId:', sessionId)
     await killSession(sessionId)
     sessions.value = await listSessions()
-    console.log('killSession completed, sessions:', sessions.value.map(s => ({ id: s.id, status: s.status })))
+    console.log(
+      'killSession completed, sessions:',
+      sessions.value.map((s) => ({ id: s.id, status: s.status })),
+    )
 
     if (activeSession.value?.id === sessionId) {
       activeSession.value = null
@@ -84,7 +90,10 @@ export const useSessionStore = defineStore('session', () => {
     sessions.value = await listSessions()
 
     // Find the restarted session (should have same name but new id)
-    const session = sessions.value.find(s => s.id === sessionId || s.name === sessions.value.find(s2 => s2.id === sessionId)?.name)
+    const session = sessions.value.find(
+      (s) =>
+        s.id === sessionId || s.name === sessions.value.find((s2) => s2.id === sessionId)?.name,
+    )
     if (session) {
       activeSession.value = session
     }
@@ -97,7 +106,7 @@ export const useSessionStore = defineStore('session', () => {
     environment: string,
     workingDir: string,
     command: string,
-    wslDistro?: string
+    wslDistro?: string,
   ) {
     console.log('[session store] createConfig called:', { name, environment, workingDir, command })
     try {
@@ -131,7 +140,7 @@ export const useSessionStore = defineStore('session', () => {
     workingDir: string,
     command: string,
     wslDistro?: string,
-    autoStart?: boolean
+    autoStart?: boolean,
   ) {
     await updateSessionConfig({
       id,

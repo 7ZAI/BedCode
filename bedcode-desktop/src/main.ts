@@ -59,11 +59,7 @@ setupSharedRuntime(i18n, router)
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const wslStore = useWslStore()
-Promise.all([
-  initPlatform(),
-  settingsStore.loadSettings(),
-  wslStore.loadWslInfo(),
-]).then(() => {
+Promise.all([initPlatform(), settingsStore.loadSettings(), wslStore.loadWslInfo()]).then(() => {
   // 设置加载完成后初始化语言偏好
   i18nStore.initLanguage()
   console.log('[Init] Platform, settings and WSL info pre-loaded')
@@ -109,6 +105,6 @@ app.mount('#app')
 
 // 初始化插件系统（非阻塞，失败不影响主应用）
 import { pluginLoader } from '@/plugin/loader'
-pluginLoader.loadAll().catch(e => {
+pluginLoader.loadAll().catch((e) => {
   console.error('[PluginSystem] Failed to initialize:', e)
 })

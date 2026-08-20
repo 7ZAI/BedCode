@@ -31,9 +31,50 @@ const {
   start: startPeer,
   stop: stopPeer,
 } = usePeer(context)
-const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, removeTask, openInDir, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
-const { batches, receiving, history, toasts, approveBatch, rejectBatch, cancelReceiving, clearHistory, dismissToast, start: startReceiving, stop: stopReceiving } = useReceiving(context)
-const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency, setReceivingPolicy, setApprovalTimeoutSec } = useSettings(context)
+const {
+  tasks,
+  speedMap,
+  summary,
+  resumableCount,
+  totalSpeed,
+  enqueueDownload,
+  enqueueUpload,
+  queryPeer,
+  refresh: refreshTasks,
+  pause,
+  resume,
+  cancel,
+  retry,
+  removeTask,
+  openInDir,
+  resumeAll,
+  start: startTasks,
+  stop: stopTasks,
+} = useTasks(context)
+const {
+  batches,
+  receiving,
+  history,
+  toasts,
+  approveBatch,
+  rejectBatch,
+  cancelReceiving,
+  clearHistory,
+  dismissToast,
+  start: startReceiving,
+  stop: stopReceiving,
+} = useReceiving(context)
+const {
+  settings,
+  hasRoots,
+  load: loadSettings,
+  addRoot,
+  removeRoot,
+  pickDownloadDir,
+  setConcurrency,
+  setReceivingPolicy,
+  setApprovalTimeoutSec,
+} = useSettings(context)
 const {
   entries,
   loading,
@@ -64,7 +105,7 @@ const queueVisible = ref(false)
  */
 const peerDisplayName = computed(() => {
   if (peer.value.name) return peer.value.name
-  const withName = tasks.value.find(x => x.peer?.name)
+  const withName = tasks.value.find((x) => x.peer?.name)
   if (withName?.peer?.name) return withName.peer.name
   // 无设备名时 IP 比原始 peerId 更可辨识（内网传输场景），再退到 peerId
   if (peer.value.ip || peer.value.id) return peer.value.ip || peer.value.id
@@ -95,9 +136,7 @@ const peerNames = computed<Record<string, string>>(() => {
 function openHistoryDir(localPath: string): void {
   if (!localPath) return
   // 与 openInDir 相同的 .part 剥离（历史库可能存旧 .part 路径，见 wasm 归档逻辑）
-  const finalPath = localPath.endsWith('.part')
-    ? localPath.slice(0, -'.part'.length)
-    : localPath
+  const finalPath = localPath.endsWith('.part') ? localPath.slice(0, -'.part'.length) : localPath
   // 诊断：点击历史「打开所在文件夹」时打印实际解析出的定位路径
   console.log(`[File Transfer] openHistoryDir raw=${localPath} -> ${finalPath}`)
   void context.system.revealInDir(finalPath).catch((err: unknown) => {
@@ -141,7 +180,7 @@ const noPeerLabel = computed(() =>
 async function handleDownload(): Promise<void> {
   if (!canDownload.value) return
   const base = currentPath.value
-  const paths = selectedEntries.value.map(e => (base ? `${base}/${e.name}` : e.name))
+  const paths = selectedEntries.value.map((e) => (base ? `${base}/${e.name}` : e.name))
   const ok = await enqueueDownload(paths, { id: peer.value.id, name: peerDisplayName.value })
   clearSelection()
   if (ok > 0) queueVisible.value = true
@@ -222,11 +261,7 @@ onUnmounted(() => {
         <span
           class="ft-dot"
           :class="
-            connOnline
-              ? peer.online
-                ? 'ft-dot--online'
-                : 'ft-dot--partial'
-              : 'ft-dot--offline'
+            connOnline ? (peer.online ? 'ft-dot--online' : 'ft-dot--partial') : 'ft-dot--offline'
           "
         ></span>
         <span class="ft-peer-name">{{ peerDisplayName }}</span>
@@ -243,8 +278,18 @@ onUnmounted(() => {
           :title="t('transfer.peer.switchTitle')"
           @click="peerMenuOpen = !peerMenuOpen"
         >
-          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+          <svg
+            class="w-3.5 h-3.5 flex-shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+            />
           </svg>
           <span class="ft-btn-text">{{ peers.length }}</span>
         </button>
@@ -264,7 +309,12 @@ onUnmounted(() => {
               <span class="ft-peer-menu-name">{{ p.name || p.ip || p.id }}</span>
               <span v-if="p.id === activePeerId" class="ft-peer-menu-check">
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="3"
+                    d="M5 13l4 4L19 7"
+                  />
                 </svg>
               </span>
             </button>
@@ -272,22 +322,54 @@ onUnmounted(() => {
         </Transition>
       </div>
       <div class="ft-spacer"></div>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleUpload" :title="t('transfer.topbar.sendToPhone')">
+      <button
+        class="ft-btn"
+        :disabled="!peer.online"
+        :title="t('transfer.topbar.sendToPhone')"
+        @click="handleUpload"
+      >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.sendToPhone') }}</span>
       </button>
       <button class="ft-btn ft-btn--primary" :disabled="!canDownload" @click="handleDownload">
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+          />
         </svg>
-        <span class="ft-btn-text">{{ t('transfer.topbar.downloadSelected', { count: selectedCount }) }}</span>
+        <span class="ft-btn-text">{{
+          t('transfer.topbar.downloadSelected', { count: selectedCount })
+        }}</span>
       </button>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleRefresh" :title="t('transfer.topbar.refresh')">
+      <button
+        class="ft-btn"
+        :disabled="!peer.online"
+        :title="t('transfer.topbar.refresh')"
+        @click="handleRefresh"
+      >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M23 4v6h-6M1 20v-6h6" />
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M23 4v6h-6M1 20v-6h6"
+          />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.refresh') }}</span>
       </button>
@@ -299,7 +381,12 @@ onUnmounted(() => {
         @click="queueVisible = !queueVisible"
       >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 7h16M4 12h16M4 17h10"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.queue.title') }}</span>
         <span
@@ -310,9 +397,14 @@ onUnmounted(() => {
           {{ tasks.length }}
         </span>
       </button>
-      <button class="ft-btn" @click="showSettings = true" :title="t('transfer.topbar.settings')">
+      <button class="ft-btn" :title="t('transfer.topbar.settings')" @click="showSettings = true">
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.settings') }}</span>
       </button>
@@ -324,43 +416,58 @@ onUnmounted(() => {
       <Transition name="ft-page" mode="out-in">
         <!-- 空态：未配置共享目录 -->
         <div v-if="showNoRoots" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-          </svg>
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
+          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+            {{ t('transfer.topbar.settings') }}
+          </button>
         </div>
-        <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
-        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-          {{ t('transfer.topbar.settings') }}
-        </button>
-      </div>
 
-      <!-- 空态：对端未连接 / 已连接但未共享 -->
-      <div v-else-if="showNoPeer" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 18h2" />
-          </svg>
+        <!-- 空态：对端未连接 / 已连接但未共享 -->
+        <div v-else-if="showNoPeer" class="ft-empty">
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M11 18h2"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ noPeerLabel }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
         </div>
-        <div class="ft-empty-title">{{ noPeerLabel }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
-      </div>
 
-      <!-- 空态：未设置下载目录 -->
-      <div v-else-if="settings.downloadDir === ''" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v12M5 12l7 7 7-7" />
-          </svg>
+        <!-- 空态：未设置下载目录 -->
+        <div v-else-if="settings.downloadDir === ''" class="ft-empty">
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M12 3v12M5 12l7 7 7-7"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
+          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+            {{ t('transfer.topbar.settings') }}
+          </button>
         </div>
-        <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
-        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-          {{ t('transfer.topbar.settings') }}
-        </button>
-      </div>
 
         <!-- 工作态：远端文件表格（含对端存储权限提示） -->
         <div v-else class="ft-browse">
@@ -416,13 +523,29 @@ onUnmounted(() => {
       <TransitionGroup name="ft-toast" tag="div" class="ft-toasts">
         <div v-for="toast in toasts" :key="toast.id" class="ft-toast">
           <svg class="ft-toast-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 19V5M5 12l7-7 7 7"
+            />
           </svg>
           <span class="ft-toast-text">
             {{ t('transfer.toast.receiving', { name: toast.name || '—', count: toast.count }) }}
           </span>
-          <button class="ft-mini-btn ft-toast-close" :title="t('transfer.task.cancel')" @click="dismissToast(toast.id)">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+          <button
+            class="ft-mini-btn ft-toast-close"
+            :title="t('transfer.task.cancel')"
+            @click="dismissToast(toast.id)"
+          >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M18 6L6 18M6 6l12 12"
+              />
+            </svg>
           </button>
         </div>
       </TransitionGroup>

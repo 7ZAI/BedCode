@@ -38,7 +38,7 @@ let timer: ReturnType<typeof setInterval> | null = null
 /** 取第一个未提示的 pending 批（按创建时间升序 = 先到先弹） */
 function nextUnprompted(): PendingBatch | null {
   const candidates = props.batches
-    .filter(b => !promptedBatches.has(b.batchId))
+    .filter((b) => !promptedBatches.has(b.batchId))
     .sort((a, b) => a.createdAt - b.createdAt)
   return candidates[0] ?? null
 }
@@ -103,7 +103,7 @@ watch(
   () => props.batches,
   (batches) => {
     const currentId = current.value?.batchId
-    if (currentId && !batches.some(b => b.batchId === currentId)) {
+    if (currentId && !batches.some((b) => b.batchId === currentId)) {
       stopTimer()
       advance()
     } else if (!current.value) {

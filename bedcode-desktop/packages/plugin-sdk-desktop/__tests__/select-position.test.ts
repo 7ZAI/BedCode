@@ -5,7 +5,11 @@
  * 水平 clamp 各象限。纯函数无 DOM，直接按规则断言。
  */
 import { describe, it, expect } from 'vitest'
-import { computeSelectPosition, SELECT_GAP, SELECT_MAX_PANEL_HEIGHT } from '../src/ui/select-position'
+import {
+  computeSelectPosition,
+  SELECT_GAP,
+  SELECT_MAX_PANEL_HEIGHT,
+} from '../src/ui/select-position'
 
 // 典型面板：设计高度 240；触发器宽 200、高 32，位于页面中部
 const TRIGGER = { top: 400, bottom: 432, left: 100, width: 200 }

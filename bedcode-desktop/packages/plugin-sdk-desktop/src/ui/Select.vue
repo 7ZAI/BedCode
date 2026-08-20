@@ -1,6 +1,10 @@
 <template>
   <div class="form-group">
-    <label v-if="label" :for="id" class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
+    <label
+      v-if="label"
+      :for="id"
+      class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]"
+    >
       {{ label }}
       <span v-if="required" class="text-red-500">*</span>
     </label>
@@ -15,7 +19,7 @@
         :class="[
           triggerSizeCls,
           error ? 'border-red-500' : 'border-[var(--border-input)]',
-          { 'opacity-50 cursor-not-allowed': disabled }
+          { 'opacity-50 cursor-not-allowed': disabled },
         ]"
         @click="toggle"
         @keydown.down.prevent="open"
@@ -25,8 +29,19 @@
         <span :class="{ 'text-[var(--text-tertiary)]': !selectedLabel }">
           {{ selectedLabel || placeholder || '' }}
         </span>
-        <svg class="w-5 h-5 flex-shrink-0 text-[var(--text-tertiary)] transition-transform duration-200" :class="{ 'rotate-180': isOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        <svg
+          class="w-5 h-5 flex-shrink-0 text-[var(--text-tertiary)] transition-transform duration-200"
+          :class="{ 'rotate-180': isOpen }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M19 9l-7 7-7-7"
+          />
         </svg>
       </button>
 
@@ -55,7 +70,7 @@
                 'cursor-pointer select-none transition-colors duration-150',
                 hoveredIndex === index
                   ? 'bg-[var(--color-primary-light)] text-brand font-medium'
-                  : 'text-[var(--text-primary)]'
+                  : 'text-[var(--text-primary)]',
               ]"
               @mouseenter="hoveredIndex = index"
               @mouseleave="hoveredIndex = -1"
@@ -120,7 +135,7 @@ const panelStyle = ref<Record<string, string>>({})
 const panelListStyle = ref<Record<string, string>>({})
 
 const selectedLabel = computed(() => {
-  const opt = props.options.find(o => o.value === props.modelValue)
+  const opt = props.options.find((o) => o.value === props.modelValue)
   return opt?.label ?? ''
 })
 
@@ -179,11 +194,7 @@ function select(value: string | number) {
 
 function onClickOutside(e: MouseEvent) {
   const target = e.target as HTMLElement
-  if (
-    isOpen.value &&
-    !triggerRef.value?.contains(target) &&
-    !panelRef.value?.contains(target)
-  ) {
+  if (isOpen.value && !triggerRef.value?.contains(target) && !panelRef.value?.contains(target)) {
     close()
   }
 }

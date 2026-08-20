@@ -53,7 +53,9 @@ describe('useWsl', () => {
     it('should keep previous distros when reloading as unavailable', async () => {
       // 实际契约：重新探测为不可用时不清空旧 distros，消费方以 isAvailable 为门控
       mocks.isWslAvailable.mockResolvedValueOnce(true)
-      mocks.listWslDistributions.mockResolvedValueOnce([makeWslDistro({ name: 'Ubuntu', state: 'Running' })])
+      mocks.listWslDistributions.mockResolvedValueOnce([
+        makeWslDistro({ name: 'Ubuntu', state: 'Running' }),
+      ])
 
       const wsl = useWsl()
       await wsl.loadDistros()

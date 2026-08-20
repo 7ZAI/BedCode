@@ -26,7 +26,7 @@ const props = withDefaults(
     /** 图标尺寸 */
     size?: 'md' | 'lg'
   }>(),
-  { size: 'md' }
+  { size: 'md' },
 )
 
 /** 预设渐变配色（桌面端 Workbench 风格，与 --color-primary 系协调） */

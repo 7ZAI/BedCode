@@ -35,25 +35,37 @@ const levelColor: Record<string, string> = {
           <span class="text-xs font-semibold">{{ t('devshell.logs.title') }}</span>
           <div class="flex items-center gap-1 ml-2">
             <button
-              v-for="f in (['all', 'warn', 'error'] as const)"
+              v-for="f in ['all', 'warn', 'error'] as const"
               :key="f"
               class="px-2 py-0.5 rounded-tag text-[11px] transition-colors duration-200"
-              :class="filter === f ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]' : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'"
+              :class="
+                filter === f
+                  ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
+                  : 'text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]'
+              "
               @click="filter = f"
             >
               {{ f }}
             </button>
           </div>
           <span class="flex-1" />
-          <button class="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors duration-200" @click="clearLogs()">
+          <button
+            class="text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors duration-200"
+            @click="clearLogs()"
+          >
             {{ t('devshell.logs.clear') }}
           </button>
-          <button class="w-6 h-6 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors duration-200" @click="open = false">
+          <button
+            class="w-6 h-6 flex items-center justify-center text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors duration-200"
+            @click="open = false"
+          >
             ×
           </button>
         </div>
         <div class="flex-1 min-h-0 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed">
-          <p v-if="visibleLogs.length === 0" class="text-[var(--text-tertiary)] px-2">{{ t('devshell.logs.empty') }}</p>
+          <p v-if="visibleLogs.length === 0" class="text-[var(--text-tertiary)] px-2">
+            {{ t('devshell.logs.empty') }}
+          </p>
           <p v-for="log in visibleLogs" :key="log.id" class="px-2 py-0.5 break-all">
             <span class="text-[var(--text-tertiary)]">{{ log.ts }}</span>
             <span class="text-[var(--color-primary)]"> [{{ log.pluginId }}]</span>

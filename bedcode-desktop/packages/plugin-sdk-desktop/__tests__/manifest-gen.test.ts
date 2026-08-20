@@ -32,7 +32,7 @@ const BASE_MANIFEST = JSON.stringify(
     contributes: {},
   },
   null,
-  2
+  2,
 )
 
 beforeEach(() => {
@@ -165,7 +165,7 @@ describe('Rust 扫描', () => {
           },
         },
         null,
-        2
+        2,
       ),
       'rust/src/lib.rs': `impl WasmPlugin for TestPlugin {
   fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
@@ -213,7 +213,7 @@ describe('Rust 扫描', () => {
     generateManifest(cwd)
     const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
     expect(manifest.permissions).toEqual(
-      expect.arrayContaining(['storage', 'network:http', 'fs:read', 'fs:write'])
+      expect.arrayContaining(['storage', 'network:http', 'fs:read', 'fs:write']),
     )
   })
 })
@@ -229,7 +229,7 @@ describe('合并策略', () => {
           permissions: ['ui:sidebar', 'storage'],
         },
         null,
-        2
+        2,
       ),
       'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
@@ -245,7 +245,10 @@ describe('合并策略', () => {
     const withExtra = JSON.parse(BASE_MANIFEST)
     withExtra.icon = 'icon.svg'
     withExtra.contributes = {
-      configuration: { title: 'Settings', properties: { apiKey: { type: 'string', title: 'Key' } } },
+      configuration: {
+        title: 'Settings',
+        properties: { apiKey: { type: 'string', title: 'Key' } },
+      },
       lifecycle: { onStartup: true },
     }
     scaffoldPlugin({
@@ -270,7 +273,7 @@ describe('合并策略', () => {
           },
         },
         null,
-        2
+        2,
       ),
       'src/index.ts': `export async function activate() {}`,
     })

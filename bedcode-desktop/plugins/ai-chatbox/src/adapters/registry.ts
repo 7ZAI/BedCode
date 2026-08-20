@@ -62,9 +62,6 @@ export function parseStreamEvent(
 }
 
 /** 解析模型列表响应体（按方言分派：openai/anthropic `data[].id`、gemini `models[].name`；形状不符抛错） */
-export function parseModelsResponse(
-  apiStyle: ApiStyle | undefined | null,
-  body: string,
-): string[] {
+export function parseModelsResponse(apiStyle: ApiStyle | undefined | null, body: string): string[] {
   return getAdapter(apiStyle).parseModelsResponse(body)
 }

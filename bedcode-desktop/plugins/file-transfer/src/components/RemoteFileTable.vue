@@ -34,14 +34,14 @@ const emit = defineEmits<{
 
 /** 是否全部文件已被选中（表头全选框状态） */
 const allSelected = computed(() => {
-  const fileNames = props.entries.filter(e => !e.isDir)
-  return fileNames.length > 0 && fileNames.every(e => props.selectedNames.includes(e.name))
+  const fileNames = props.entries.filter((e) => !e.isDir)
+  return fileNames.length > 0 && fileNames.every((e) => props.selectedNames.includes(e.name))
 })
 
 /** 部分文件被选中（表头半选态：驱动原生 checkbox 的 indeterminate 属性） */
 const someSelected = computed(() => {
-  const fileNames = props.entries.filter(e => !e.isDir)
-  const selectedCount = fileNames.filter(e => props.selectedNames.includes(e.name)).length
+  const fileNames = props.entries.filter((e) => !e.isDir)
+  const selectedCount = fileNames.filter((e) => props.selectedNames.includes(e.name)).length
   return selectedCount > 0 && !allSelected.value
 })
 
@@ -95,7 +95,15 @@ function onRowDblClick(entry: RemoteEntry): void {
                     @change="emit('toggleAll')"
                   />
                   <span class="ft-checkbox-box" aria-hidden="true">
-                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      class="ft-checkbox-mark"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M5 13l4 4L19 7" />
                     </svg>
                     <span class="ft-checkbox-indet"></span>
@@ -115,10 +123,7 @@ function onRowDblClick(entry: RemoteEntry): void {
               @dblclick="onRowDblClick(entry)"
             >
               <td>
-                <label
-                  class="ft-checkbox"
-                  :class="{ 'ft-checkbox--disabled': entry.isDir }"
-                >
+                <label class="ft-checkbox" :class="{ 'ft-checkbox--disabled': entry.isDir }">
                   <!-- 原生 checkbox 仅作交互内核；目录行隐藏（与目录不可勾选语义一致） -->
                   <input
                     type="checkbox"
@@ -128,7 +133,15 @@ function onRowDblClick(entry: RemoteEntry): void {
                     @change="emit('toggle', entry.name)"
                   />
                   <span class="ft-checkbox-box" aria-hidden="true">
-                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      class="ft-checkbox-mark"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M5 13l4 4L19 7" />
                     </svg>
                   </span>

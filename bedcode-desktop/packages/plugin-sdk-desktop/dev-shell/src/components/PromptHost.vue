@@ -33,9 +33,14 @@ watch(
       class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4"
       @click.self="cancel()"
     >
-      <div class="w-full max-w-sm bg-card border border-[var(--border)] rounded-card shadow-card-hover p-5">
+      <div
+        class="w-full max-w-sm bg-card border border-[var(--border)] rounded-card shadow-card-hover p-5"
+      >
         <h3 class="text-sm font-semibold mb-1">{{ dialogService.queue.value[0]?.title }}</h3>
-        <p v-if="dialogService.queue.value[0]?.message" class="text-xs text-[var(--text-secondary)] mb-4 leading-relaxed">
+        <p
+          v-if="dialogService.queue.value[0]?.message"
+          class="text-xs text-[var(--text-secondary)] mb-4 leading-relaxed"
+        >
           {{ dialogService.queue.value[0]?.message }}
         </p>
         <input

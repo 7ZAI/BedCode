@@ -230,11 +230,11 @@ export function useTasks(context: PluginContext) {
     const path = task.localPath.replace(/^\\\\\\?\\/, '')
     // 下载方向 local_path 为 .part 临时名，完成后已 rename 到最终路径（去后缀，
     // 与 wasm 侧 strip_suffix 一致只剥一次，避免 `x.part.part` 类文件名错位）
-    const finalPath = path.endsWith('.part')
-      ? path.slice(0, -'.part'.length)
-      : path
+    const finalPath = path.endsWith('.part') ? path.slice(0, -'.part'.length) : path
     // 诊断：点击「打开目录」时打印实际解析出的定位路径
-    console.log(`[File Transfer] openInDir task=${task.id} dir=${task.direction} raw=${task.localPath} -> ${finalPath}`)
+    console.log(
+      `[File Transfer] openInDir task=${task.id} dir=${task.direction} raw=${task.localPath} -> ${finalPath}`,
+    )
     try {
       await context.system.revealInDir(finalPath)
     } catch (err) {
@@ -258,15 +258,28 @@ export function useTasks(context: PluginContext) {
     let paused = 0
     for (const t of tasks.value) {
       switch (t.state) {
-        case 'transferring': active++; break
+        case 'transferring':
+          active++
+          break
         case 'queued':
         case 'waiting-approval':
-        case 'waiting-reply': queued++; break
-        case 'failed': failed++; break
-        case 'rejected': rejected++; break
-        case 'resumable': resumable++; break
-        case 'paused': paused++; break
-        default: break
+        case 'waiting-reply':
+          queued++
+          break
+        case 'failed':
+          failed++
+          break
+        case 'rejected':
+          rejected++
+          break
+        case 'resumable':
+          resumable++
+          break
+        case 'paused':
+          paused++
+          break
+        default:
+          break
       }
     }
     return { active, queued, failed, rejected, resumable, paused }

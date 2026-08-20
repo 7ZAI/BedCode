@@ -35,7 +35,9 @@ function buildRust() {
   // - 产物直接是 Component Model 组件（wasm-component-ld 内嵌，无需再经 componentize 编码）
   // - 插件 std::fs 映射到 WASI（宿主 WASI preopen /data 后可直接读写，见 useSelfFileAccess）
   // 既有宿主接口（host_fs/host_db/...）在 wasip2 下同样可用，行为不变
-  run('cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
+  run(
+    'cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml --release',
+  )
 }
 
 function copyArtifacts() {
@@ -55,19 +57,11 @@ function copyArtifacts() {
   cpSync(resolve(ROOT, 'plugin.json'), resolve(RESOURCES_DIR, 'plugin.json'))
 
   // 复制 WASM 模块
-  const wasmPath = resolve(
-    ROOT,
-    'rust/target/wasm32-wasip2/release',
-    `${RUST_LIB_NAME}.wasm`
-  )
+  const wasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/release', `${RUST_LIB_NAME}.wasm`)
 
   if (!existsSync(wasmPath)) {
     // 尝试 debug 构建
-    const debugWasmPath = resolve(
-      ROOT,
-      'rust/target/wasm32-wasip2/debug',
-      `${RUST_LIB_NAME}.wasm`
-    )
+    const debugWasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/debug', `${RUST_LIB_NAME}.wasm`)
     if (!existsSync(debugWasmPath)) {
       console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${debugWasmPath}`)
       process.exit(1)

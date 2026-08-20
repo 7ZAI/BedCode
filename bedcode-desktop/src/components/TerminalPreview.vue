@@ -13,16 +13,46 @@
       </div>
 
       <div class="flex items-center gap-2">
-        <Select v-model="terminalTheme" :options="themeSelectOptions" size="sm" :title="$t('desktop.terminal.theme')" />
-        <Select v-model="fontSize" :options="fontSizeSelectOptions" size="sm" :title="$t('desktop.terminal.fontSize')" />
-        <Button variant="ghost" size="sm" @click="clearTerminal" :title="$t('desktop.terminal.clearScreen')">
+        <Select
+          v-model="terminalTheme"
+          :options="themeSelectOptions"
+          size="sm"
+          :title="$t('desktop.terminal.theme')"
+        />
+        <Select
+          v-model="fontSize"
+          :options="fontSizeSelectOptions"
+          size="sm"
+          :title="$t('desktop.terminal.fontSize')"
+        />
+        <Button
+          variant="ghost"
+          size="sm"
+          :title="$t('desktop.terminal.clearScreen')"
+          @click="clearTerminal"
+        >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+            />
           </svg>
         </Button>
-        <Button variant="ghost" size="sm" @click="refreshTerminal" :title="$t('desktop.terminal.refreshFormat')">
+        <Button
+          variant="ghost"
+          size="sm"
+          :title="$t('desktop.terminal.refreshFormat')"
+          @click="refreshTerminal"
+        >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
           </svg>
         </Button>
         <PluginTerminalToolbar />
@@ -54,11 +84,16 @@
         <button
           v-if="isUserScrolling"
           class="scroll-to-bottom-btn"
-          @click="scrollToBottomManual"
           :title="$t('desktop.terminal.scrollToBottom')"
+          @click="scrollToBottomManual"
         >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M19 14l-7 7m0 0l-7-7m7 7V3"
+            />
           </svg>
         </button>
       </transition>
@@ -248,7 +283,9 @@ function flushWriteQueue() {
 
 /** 用 DEC Mode 2026 同步输出序列包裹字节数据 */
 function wrapSyncOutput(data: Uint8Array): Uint8Array {
-  const wrapped = new Uint8Array(SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length)
+  const wrapped = new Uint8Array(
+    SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length,
+  )
   wrapped.set(SYNC_OUTPUT_START, 0)
   wrapped.set(data, SYNC_OUTPUT_START.length)
   wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
@@ -294,7 +331,9 @@ const terminalStream = useTerminalOutputStream({
     inputMarkers.clear()
   },
   onTruncated: (minSeq: number) => {
-    console.warn(`[TerminalPreview] 终端历史已被环形缓冲截断：min_seq=${minSeq}，会话开头输出不可用`)
+    console.warn(
+      `[TerminalPreview] 终端历史已被环形缓冲截断：min_seq=${minSeq}，会话开头输出不可用`,
+    )
     toast.warning(t('desktop.terminal.historyTruncated'))
   },
 })
@@ -474,7 +513,7 @@ const themeSelectOptions = computed(() =>
   Object.entries(themeNames).map(([value, label]) => ({ value, label })),
 )
 const fontSizeSelectOptions = computed(() =>
-  [8, 10, 12, 14, 16, 18, 20].map(size => ({ value: size, label: `${size}px` })),
+  [8, 10, 12, 14, 16, 18, 20].map((size) => ({ value: size, label: `${size}px` })),
 )
 
 function getTheme() {
@@ -519,12 +558,18 @@ async function resolveBgImageUrl() {
 }
 
 // 外部设置变化同步背景图片配置
-watch(() => settingsStore.settings.ui.terminal_bg_image, (v) => {
-  bgImage.value = v || ''
-})
-watch(() => settingsStore.settings.ui.terminal_bg_opacity, (v) => {
-  if (v != null) bgOpacity.value = v
-})
+watch(
+  () => settingsStore.settings.ui.terminal_bg_image,
+  (v) => {
+    bgImage.value = v || ''
+  },
+)
+watch(
+  () => settingsStore.settings.ui.terminal_bg_opacity,
+  (v) => {
+    if (v != null) bgOpacity.value = v
+  },
+)
 
 // 背景图片变化：重新解析 URL 并刷新终端主题（透明/不透明切换）
 watch(bgImage, () => {
@@ -791,21 +836,25 @@ watch(fontSize, (newSize) => {
   if (fontSizeSaveTimeout) clearTimeout(fontSizeSaveTimeout)
   fontSizeSaveTimeout = setTimeout(() => {
     settingsStore.saveSettings({
-      ui: { ...settingsStore.settings.ui, terminal_font_size: newSize }
+      ui: { ...settingsStore.settings.ui, terminal_font_size: newSize },
     })
   }, 300)
 })
 
-watch(() => settingsStore.settings.ui.terminal_font_size, (newSize) => {
-  if (fontSize.value !== newSize) {
-    fontSize.value = newSize
-    if (terminal) {
-      terminal.options.fontSize = newSize
-      if (fitAddon) fitAddon.fit()
-      nextTick(() => syncTerminalSize())
+watch(
+  () => settingsStore.settings.ui.terminal_font_size,
+  (newSize) => {
+    if (fontSize.value !== newSize) {
+      fontSize.value = newSize
+      if (terminal) {
+        terminal.options.fontSize = newSize
+        if (fitAddon) fitAddon.fit()
+        nextTick(() => syncTerminalSize())
+      }
     }
-  }
-}, { immediate: true })
+  },
+  { immediate: true },
+)
 
 // 主题变化：更新终端 + 持久化
 let themeSaveTimeout: ReturnType<typeof setTimeout> | null = null
@@ -816,60 +865,70 @@ watch(terminalTheme, (newTheme) => {
   if (themeSaveTimeout) clearTimeout(themeSaveTimeout)
   themeSaveTimeout = setTimeout(() => {
     settingsStore.saveSettings({
-      ui: { ...settingsStore.settings.ui, terminal_theme: newTheme }
+      ui: { ...settingsStore.settings.ui, terminal_theme: newTheme },
     })
   }, 300)
 })
 
 // 外部设置变化同步主题
-watch(() => settingsStore.settings.ui.terminal_theme, (newTheme) => {
-  if (newTheme && terminalTheme.value !== newTheme) {
-    terminalTheme.value = newTheme
-  }
-})
+watch(
+  () => settingsStore.settings.ui.terminal_theme,
+  (newTheme) => {
+    if (newTheme && terminalTheme.value !== newTheme) {
+      terminalTheme.value = newTheme
+    }
+  },
+)
 
 // 会话变化
 // 游标重置（新会话坐标空间独立），断开旧流并连接新流；
 // 历史回放由服务端裁决后以二进制帧流式送达（无需 invoke 拉取）。
 // 首次挂载（terminal 未就绪）只握手不订阅，订阅由 onMounted 触发
 let streamMounted = false
-watch(sessionId, async (newId, oldId) => {
-  if (newId !== oldId) {
-    if (oldId) {
-      clearTerminal()
+watch(
+  sessionId,
+  async (newId, oldId) => {
+    if (newId !== oldId) {
+      if (oldId) {
+        clearTerminal()
+      }
+
+      if (newId) {
+        await nextTick()
+
+        if (terminal) {
+          syncTerminalSize()
+        }
+
+        if (props.session?.status === 'starting') {
+          await sessionStore.startSession(newId)
+        }
+
+        terminalStream.start(newId)
+        if (streamMounted) {
+          terminalStream.subscribe()
+        }
+      } else {
+        terminalStream.stop()
+      }
     }
-
-    if (newId) {
-      await nextTick()
-
-      if (terminal) {
-        syncTerminalSize()
-      }
-
-      if (props.session?.status === 'starting') {
-        await sessionStore.startSession(newId)
-      }
-
-      terminalStream.start(newId)
-      if (streamMounted) {
-        terminalStream.subscribe()
-      }
-    } else {
-      terminalStream.stop()
-    }
-  }
-}, { immediate: true })
+  },
+  { immediate: true },
+)
 
 // 会话状态变化：停止/出错时断开输出流；重新运行时恢复订阅
-watch(() => props.session?.status, (status) => {
-  if (!sessionId.value) return
-  if (status === 'stopped' || status === 'error') {
-    terminalStream.stop()
-  } else if (status === 'running') {
-    terminalStream.start(sessionId.value)
-    terminalStream.subscribe()
-  }
-})
+watch(
+  () => props.session?.status,
+  (status) => {
+    if (!sessionId.value) return
+    if (status === 'stopped' || status === 'error') {
+      terminalStream.stop()
+    } else if (status === 'running') {
+      terminalStream.start(sessionId.value)
+      terminalStream.subscribe()
+    }
+  },
+)
 
 onMounted(async () => {
   await nextTick()
@@ -885,7 +944,10 @@ onMounted(async () => {
 
   // 监听 AI 插件请求当前终端输入
   pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
-    pluginEventEmit('ai-chatbox:currentInput', { sessionId: sessionId.value, text: currentLineBuffer })
+    pluginEventEmit('ai-chatbox:currentInput', {
+      sessionId: sessionId.value,
+      text: currentLineBuffer,
+    })
   })
 
   // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
@@ -1062,7 +1124,9 @@ defineExpose({
 /* 滚动指示器过渡 */
 .scroll-indicator-enter-active,
 .scroll-indicator-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .scroll-indicator-enter-from,

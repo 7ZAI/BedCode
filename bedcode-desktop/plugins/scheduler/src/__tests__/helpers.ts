@@ -65,8 +65,7 @@ export function makeContext(): MockContext {
 /** 端点调用断言辅助：execute 是否以指定 method/path 调用过 _http_endpoint */
 export function expectEndpoint(execute: Mock, method: string, path: string): void {
   const call = execute.mock.calls.find(
-    ([cmd, args]) =>
-      cmd === '_http_endpoint' && args?.method === method && args?.path === path,
+    ([cmd, args]) => cmd === '_http_endpoint' && args?.method === method && args?.path === path,
   )
   expect(call).toBeTruthy()
 }

@@ -94,7 +94,12 @@ export function usePeer(context: PluginContext) {
   }
 
   /** 对端上/下线事件（宿主通道，先于插件总线投递；重拉列表兜底） */
-  function handlePeerChanged(payload: { peerId?: string; online?: boolean; deviceName?: string; ip?: string }): void {
+  function handlePeerChanged(payload: {
+    peerId?: string
+    online?: boolean
+    deviceName?: string
+    ip?: string
+  }): void {
     if (payload?.online && payload.peerId) {
       connOnline.value = true
       // 宿主公告携带真实设备名/IP（filesrv:peer_changed 载荷），直接富化缓存

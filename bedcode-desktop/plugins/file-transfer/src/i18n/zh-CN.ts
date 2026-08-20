@@ -132,7 +132,8 @@ const zhCN: MessageSchema = {
   'transfer.empty.noDownloadDirHint': '选择接收文件的保存位置，之后就能从对端下载文件到本机',
 
   // ==================== 对端存储权限提示 ====================
-  'transfer.notice.storageAccess': '对端共享的可能是 Android 顶层目录，而手机上未授予「所有文件访问权限」——在手机系统设置 → 应用 → BedCode → 允许访问所有文件 中授权后刷新即可看到内容',
+  'transfer.notice.storageAccess':
+    '对端共享的可能是 Android 顶层目录，而手机上未授予「所有文件访问权限」——在手机系统设置 → 应用 → BedCode → 允许访问所有文件 中授权后刷新即可看到内容',
 
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': '剩 {count} 秒',

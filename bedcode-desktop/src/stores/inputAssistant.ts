@@ -106,7 +106,18 @@ const SHORTCUT_LABELS: Record<string, string> = {
 }
 
 /** 无统计数据时的默认快捷键（按常用程度排序） */
-const DEFAULT_QUICK_KEYS = ['tab', 'enter', 'escape', 'ctrl_c', 'ctrl_z', 'arrow_up', 'ctrl_d', 'ctrl_l', 'ctrl_a', 'ctrl_e']
+const DEFAULT_QUICK_KEYS = [
+  'tab',
+  'enter',
+  'escape',
+  'ctrl_c',
+  'ctrl_z',
+  'arrow_up',
+  'ctrl_d',
+  'ctrl_l',
+  'ctrl_a',
+  'ctrl_e',
+]
 
 export const useInputAssistantStore = defineStore('inputAssistant', () => {
   // 悬浮球位置
@@ -125,7 +136,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
   const settings = ref<InputAssistantSettings>({ ...DEFAULT_SETTINGS })
 
   // 快捷键配置
-  const shortcutConfig = ref<ShortcutItem[]>(DEFAULT_SHORTCUTS.map(s => ({ ...s })))
+  const shortcutConfig = ref<ShortcutItem[]>(DEFAULT_SHORTCUTS.map((s) => ({ ...s })))
 
   // 从 localStorage 加载数据
   function loadFromStorage() {
@@ -202,7 +213,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       try {
         const parsed: ShortcutItem[] = JSON.parse(saved)
         // 合并策略：保留用户的 visible 设置和自定义快捷键，补充新增的默认快捷键
-        const existingCodes = new Set(parsed.map(s => s.code))
+        const existingCodes = new Set(parsed.map((s) => s.code))
         const merged = [...parsed]
         for (const def of DEFAULT_SHORTCUTS) {
           if (!existingCodes.has(def.code)) {
@@ -211,7 +222,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
         }
         shortcutConfig.value = merged
       } catch {
-        shortcutConfig.value = DEFAULT_SHORTCUTS.map(s => ({ ...s }))
+        shortcutConfig.value = DEFAULT_SHORTCUTS.map((s) => ({ ...s }))
       }
     }
   }
@@ -223,14 +234,14 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
 
   /** 添加自定义快捷键 */
   function addShortcut(code: string, label: string) {
-    if (shortcutConfig.value.some(s => s.code === code)) return
+    if (shortcutConfig.value.some((s) => s.code === code)) return
     shortcutConfig.value.push({ code, label, visible: true, builtin: false })
     saveShortcutConfig()
   }
 
   /** 删除自定义快捷键（builtin 不可删除） */
   function removeShortcut(code: string) {
-    const idx = shortcutConfig.value.findIndex(s => s.code === code)
+    const idx = shortcutConfig.value.findIndex((s) => s.code === code)
     if (idx === -1 || shortcutConfig.value[idx].builtin) return
     shortcutConfig.value.splice(idx, 1)
     saveShortcutConfig()
@@ -238,7 +249,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
 
   /** 切换快捷键显示/隐藏 */
   function toggleShortcutVisibility(code: string) {
-    const item = shortcutConfig.value.find(s => s.code === code)
+    const item = shortcutConfig.value.find((s) => s.code === code)
     if (item) {
       item.visible = !item.visible
       saveShortcutConfig()
@@ -247,12 +258,12 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
 
   /** 获取面板中可见的快捷键（不含 Enter/Del，它们由中间区域独立渲染） */
   const visiblePanelShortcuts = computed(() =>
-    shortcutConfig.value.filter(s => s.visible && s.code !== 'enter' && s.code !== 'backspace')
+    shortcutConfig.value.filter((s) => s.visible && s.code !== 'enter' && s.code !== 'backspace'),
   )
 
   /** 重置快捷键配置为默认 */
   function resetShortcutConfig() {
-    shortcutConfig.value = DEFAULT_SHORTCUTS.map(s => ({ ...s }))
+    shortcutConfig.value = DEFAULT_SHORTCUTS.map((s) => ({ ...s }))
     saveShortcutConfig()
   }
 
@@ -274,39 +285,38 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
     const count = Math.max(3, Math.min(10, settings.value.quickBarCount))
 
     // 收集快捷键项
-    const shortcutItems: QuickBarItem[] = Object.entries(shortcutStats.value)
-      .map(([key, cnt]) => ({
-        type: 'shortcut' as const,
-        key,
-        label: SHORTCUT_LABELS[key] || key,
-        count: cnt,
-      }))
+    const shortcutItems: QuickBarItem[] = Object.entries(shortcutStats.value).map(([key, cnt]) => ({
+      type: 'shortcut' as const,
+      key,
+      label: SHORTCUT_LABELS[key] || key,
+      count: cnt,
+    }))
 
     // 收集自定义命令项
-    const cmdItems: QuickBarItem[] = customCommands
-      .map(cmd => ({
-        type: 'custom' as const,
-        key: cmd.id,
-        label: cmd.command,
-        count: customCommandStats.value[cmd.id] || 0,
-      }))
+    const cmdItems: QuickBarItem[] = customCommands.map((cmd) => ({
+      type: 'custom' as const,
+      key: cmd.id,
+      label: cmd.command,
+      count: customCommandStats.value[cmd.id] || 0,
+    }))
 
     // 合并排序：按频次升序，最常用的排在末尾（右侧），方便拇指操作
-    const all = [...shortcutItems, ...cmdItems]
-      .sort((a, b) => a.count - b.count)
+    const all = [...shortcutItems, ...cmdItems].sort((a, b) => a.count - b.count)
 
     // 有统计数据时取 top N
-    if (all.some(item => item.count > 0)) {
+    if (all.some((item) => item.count > 0)) {
       return all.slice(-count)
     }
 
     // 无统计数据时返回默认快捷键（升序：最常用的在右）
-    return DEFAULT_QUICK_KEYS.slice(0, count).reverse().map(key => ({
-      type: 'shortcut' as const,
-      key,
-      label: SHORTCUT_LABELS[key] || key,
-      count: 0,
-    }))
+    return DEFAULT_QUICK_KEYS.slice(0, count)
+      .reverse()
+      .map((key) => ({
+        type: 'shortcut' as const,
+        key,
+        label: SHORTCUT_LABELS[key] || key,
+        count: 0,
+      }))
   }
 
   // 切换展开状态

@@ -10,7 +10,7 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, statSync } from 'fs'
+import { existsSync } from 'fs'
 import { join } from 'path'
 
 // 配置
@@ -43,7 +43,7 @@ function getDirectorySize(dirPath) {
     // Windows: 使用 PowerShell
     const output = execSync(
       `powershell -Command "(Get-ChildItem -Path '${dirPath}' -Recurse | Measure-Object -Property Length -Sum).Sum"`,
-      { encoding: 'utf-8' }
+      { encoding: 'utf-8' },
     )
     return parseInt(output.trim(), 10)
   } catch (error) {

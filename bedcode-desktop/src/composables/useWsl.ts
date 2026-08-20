@@ -6,7 +6,11 @@
  */
 
 import { ref } from 'vue'
-import { listWslDistributions, isWslAvailable, type WslDistro } from '@/composables/useDesktopCommands'
+import {
+  listWslDistributions,
+  isWslAvailable,
+  type WslDistro,
+} from '@/composables/useDesktopCommands'
 
 export function useWsl() {
   const distros = ref<WslDistro[]>([])

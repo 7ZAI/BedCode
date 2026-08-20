@@ -108,8 +108,8 @@ export function useAiChat(
 
   let streamDisposable: { dispose(): void } | null = null
 
-  const currentConversation = computed(() =>
-    conversations.value.find(c => c.id === currentConvId.value) || null
+  const currentConversation = computed(
+    () => conversations.value.find((c) => c.id === currentConvId.value) || null,
   )
 
   // 推理-only 阶段（deepseek-reasoner 思考期可达数十秒）正文为空但思考流已在写入：
@@ -209,7 +209,7 @@ export function useAiChat(
   }
 
   async function renameConversation(convId: string, title: string): Promise<void> {
-    const conv = conversations.value.find(c => c.id === convId)
+    const conv = conversations.value.find((c) => c.id === convId)
     if (!conv || !title.trim()) return
     conv.title = title.trim()
     conv.updatedAt = nowIso()
@@ -222,7 +222,7 @@ export function useAiChat(
     } catch (e) {
       console.error('[AI Chatbox] Failed to delete conversation:', e)
     }
-    conversations.value = conversations.value.filter(c => c.id !== convId)
+    conversations.value = conversations.value.filter((c) => c.id !== convId)
     if (currentConvId.value === convId) {
       currentConvId.value = ''
       messages.value = []

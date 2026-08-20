@@ -45,7 +45,9 @@ function simulate() {
 <template>
   <div class="h-full flex flex-col min-h-0">
     <!-- 插件终端工具栏项 + 输入扩展 -->
-    <div class="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-sidebar/60 overflow-x-auto flex-shrink-0">
+    <div
+      class="flex items-center gap-2 px-4 py-2 border-b border-[var(--border)] bg-sidebar/60 overflow-x-auto flex-shrink-0"
+    >
       <button
         v-for="entry in terminalToolbarItems"
         :key="entry.pluginId + entry.item.id"
@@ -53,7 +55,13 @@ function simulate() {
         @click="entry.item.onClick?.()"
       >
         <span v-if="isSvgIcon(entry.item.icon)" class="w-3.5 h-3.5">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-3.5 h-3.5">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            class="w-3.5 h-3.5"
+          >
             <path :d="entry.item.icon" />
           </svg>
         </span>
@@ -72,7 +80,9 @@ function simulate() {
 
     <div class="flex-1 min-h-0 flex">
       <!-- 会话列表 -->
-      <div class="w-44 flex-shrink-0 border-r border-[var(--border)] p-2 flex flex-col gap-1.5 overflow-y-auto">
+      <div
+        class="w-44 flex-shrink-0 border-r border-[var(--border)] p-2 flex flex-col gap-1.5 overflow-y-auto"
+      >
         <button
           v-for="s in sessions"
           :key="s.id"
@@ -86,7 +96,9 @@ function simulate() {
         >
           <span
             class="w-2 h-2 rounded-full flex-shrink-0"
-            :class="s.status === 'running' ? 'bg-[var(--color-primary)]' : 'bg-[var(--text-tertiary)]'"
+            :class="
+              s.status === 'running' ? 'bg-[var(--color-primary)]' : 'bg-[var(--text-tertiary)]'
+            "
           />
           <span class="truncate min-w-0">{{ s.id }}</span>
         </button>
@@ -94,26 +106,48 @@ function simulate() {
 
       <!-- 输出 + 控制 -->
       <div class="flex-1 min-h-0 flex flex-col">
-        <div class="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs leading-relaxed text-[var(--text-secondary)]">
-          <p v-for="(line, i) in activeOutputs" :key="'o' + i" class="terminal-output">{{ line }}</p>
-          <p v-for="(line, i) in activeInputs" :key="'i' + i" class="terminal-output text-[var(--color-primary)]">
+        <div
+          class="flex-1 min-h-0 overflow-y-auto p-4 font-mono text-xs leading-relaxed text-[var(--text-secondary)]"
+        >
+          <p v-for="(line, i) in activeOutputs" :key="'o' + i" class="terminal-output">
+            {{ line }}
+          </p>
+          <p
+            v-for="(line, i) in activeInputs"
+            :key="'i' + i"
+            class="terminal-output text-[var(--color-primary)]"
+          >
             $ {{ line }}
           </p>
         </div>
 
-        <div class="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-t border-[var(--border)]">
+        <div
+          class="flex-shrink-0 flex flex-wrap items-center gap-2 px-4 py-2 border-t border-[var(--border)]"
+        >
           <span
             class="text-[11px] px-2 py-0.5 rounded-tag"
-            :class="connected ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]' : 'bg-[var(--text-tertiary)]/20 text-[var(--text-tertiary)]'"
+            :class="
+              connected
+                ? 'bg-[var(--color-primary)]/10 text-[var(--color-primary)]'
+                : 'bg-[var(--text-tertiary)]/20 text-[var(--text-tertiary)]'
+            "
           >
             {{ connected ? t('devshell.terminal.connected') : t('devshell.terminal.disconnected') }}
           </span>
-          <button class="chip" @click="createSession()">{{ t('devshell.terminal.createSession') }}</button>
-          <button class="chip" :disabled="!activeSession" @click="stopSession(activeSessionId)">{{ t('devshell.terminal.stopSession') }}</button>
-          <button class="chip" @click="setConnected(!connected)">{{ connected ? t('devshell.terminal.disconnect') : t('devshell.terminal.connect') }}</button>
+          <button class="chip" @click="createSession()">
+            {{ t('devshell.terminal.createSession') }}
+          </button>
+          <button class="chip" :disabled="!activeSession" @click="stopSession(activeSessionId)">
+            {{ t('devshell.terminal.stopSession') }}
+          </button>
+          <button class="chip" @click="setConnected(!connected)">
+            {{ connected ? t('devshell.terminal.disconnect') : t('devshell.terminal.connect') }}
+          </button>
         </div>
 
-        <div class="flex-shrink-0 flex items-center gap-2 px-4 py-2 border-t border-[var(--border)]">
+        <div
+          class="flex-shrink-0 flex items-center gap-2 px-4 py-2 border-t border-[var(--border)]"
+        >
           <input
             v-model="inputText"
             class="flex-1 min-w-0 bg-[var(--bg-input)] border border-[var(--border-input)] rounded-input px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--color-primary)] outline-none transition-colors duration-200"
@@ -128,14 +162,18 @@ function simulate() {
           </button>
         </div>
 
-        <div class="flex-shrink-0 flex items-center gap-2 px-4 py-2 border-t border-[var(--border)]">
+        <div
+          class="flex-shrink-0 flex items-center gap-2 px-4 py-2 border-t border-[var(--border)]"
+        >
           <input
             v-model="simulateText"
             class="flex-1 min-w-0 bg-[var(--bg-input)] border border-[var(--border-input)] rounded-input px-3 py-2 text-xs text-[var(--text-primary)] focus:border-[var(--color-primary)] outline-none transition-colors duration-200"
             placeholder="output"
             @keydown.enter="simulate()"
           />
-          <button class="chip" @click="simulate()">{{ t('devshell.terminal.simulateOutput') }}</button>
+          <button class="chip" @click="simulate()">
+            {{ t('devshell.terminal.simulateOutput') }}
+          </button>
         </div>
       </div>
     </div>

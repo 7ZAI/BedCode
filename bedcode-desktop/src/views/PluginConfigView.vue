@@ -9,15 +9,29 @@
           @click="goBack"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M15 19l-7-7 7-7"
+            />
           </svg>
         </button>
-        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate">
+        <h1
+          class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
+        >
           {{ pluginInfo ? pluginInfo.name : '...' }}
         </h1>
-        <span v-if="pluginInfo" class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">v{{ pluginInfo.version }}</span>
+        <span
+          v-if="pluginInfo"
+          class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0"
+          >v{{ pluginInfo.version }}</span
+        >
       </div>
-      <div v-if="configSchema && pluginInfo && isActivatedState(pluginInfo.state)" class="flex items-center gap-2">
+      <div
+        v-if="configSchema && pluginInfo && isActivatedState(pluginInfo.state)"
+        class="flex items-center gap-2"
+      >
         <PluginPageToolbar target="plugin-config" />
         <button class="wb-btn-ghost" @click="resetConfig">
           {{ $t('desktop.plugin.reset') }}
@@ -34,12 +48,17 @@
         <div v-if="loading" class="space-y-6">
           <div v-for="i in 2" :key="i">
             <div class="h-3 w-40 rounded animate-pulse bg-[var(--bg-hover)] mb-2"></div>
-            <div class="h-24 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"></div>
+            <div
+              class="h-24 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"
+            ></div>
           </div>
         </div>
 
         <!-- ==================== 未激活 ==================== -->
-        <div v-else-if="!pluginInfo || !isActivatedState(pluginInfo.state)" class="py-16 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]">
+        <div
+          v-else-if="!pluginInfo || !isActivatedState(pluginInfo.state)"
+          class="py-16 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
+        >
           {{ $t('desktop.plugin.pluginNotActivated') }}
         </div>
 
@@ -47,29 +66,49 @@
           <!-- ---------- SECTION: CONFIGURATION ---------- -->
           <section v-if="configSchema" class="mb-6">
             <h2 class="wb-section-title">{{ $t('desktop.plugin.config').toUpperCase() }}</h2>
-            <div v-if="Object.keys(configSchema.properties).length === 0" class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 py-6 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]">
+            <div
+              v-if="Object.keys(configSchema.properties).length === 0"
+              class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 py-6 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
+            >
               {{ pluginInfo.name }} — {{ $t('desktop.plugin.noConfigAvailable') }}
             </div>
-            <div v-else class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
-              <div
-                v-for="(prop, key) in configSchema.properties"
-                :key="key"
-                class="px-4 py-3"
-              >
+            <div
+              v-else
+              class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
+            >
+              <div v-for="(prop, key) in configSchema.properties" :key="key" class="px-4 py-3">
                 <!-- boolean：行内开关 -->
-                <div v-if="prop.type === 'boolean'" class="flex items-center justify-between min-h-9">
+                <div
+                  v-if="prop.type === 'boolean'"
+                  class="flex items-center justify-between min-h-9"
+                >
                   <div>
-                    <div class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ prop.title }}</div>
-                    <div v-if="prop.description" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-0.5">{{ prop.description }}</div>
+                    <div class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">
+                      {{ prop.title }}
+                    </div>
+                    <div
+                      v-if="prop.description"
+                      class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-0.5"
+                    >
+                      {{ prop.description }}
+                    </div>
                   </div>
                   <button
                     class="relative w-10 h-5 rounded-[4px] border transition-colors shrink-0"
-                    :class="configValues[key] ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
+                    :class="
+                      configValues[key]
+                        ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
+                        : 'bg-[var(--bg-page)] border-[var(--border-strong)]'
+                    "
                     @click="configValues[key] = !configValues[key]"
                   >
                     <span
                       class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
-                      :class="configValues[key] ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
+                      :class="
+                        configValues[key]
+                          ? 'left-[22px] bg-[var(--color-primary-contrast)]'
+                          : 'left-[3px] bg-[var(--border-strong)]'
+                      "
                     ></span>
                   </button>
                 </div>
@@ -77,8 +116,14 @@
                 <!-- 其余类型：label 上 / 控件下 -->
                 <template v-else>
                   <div class="flex items-baseline gap-2 mb-1.5">
-                    <span class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ prop.title }}</span>
-                    <span v-if="prop.description" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ prop.description }}</span>
+                    <span class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{
+                      prop.title
+                    }}</span>
+                    <span
+                      v-if="prop.description"
+                      class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                      >{{ prop.description }}</span
+                    >
                   </div>
                   <!-- 包装层还原原 select 的 max-w-xs + wb-mono 外观 -->
                   <div v-if="prop.type === 'string' && prop.enum" class="max-w-xs wb-mono">
@@ -106,7 +151,9 @@
                       @pointerup="onSliderEnd"
                       @pointercancel="onSliderEnd"
                     >
-                      <div class="absolute left-0 right-0 h-1 rounded-full bg-[var(--border)] pointer-events-none"></div>
+                      <div
+                        class="absolute left-0 right-0 h-1 rounded-full bg-[var(--border)] pointer-events-none"
+                      ></div>
                       <div
                         class="absolute h-1 rounded-full bg-[var(--color-primary)] pointer-events-none"
                         :style="{ width: sliderFillPercent(key, prop) }"
@@ -116,7 +163,9 @@
                         :style="{ left: `calc(${sliderFillPercent(key, prop)} - 8px)` }"
                       ></div>
                     </div>
-                    <span class="w-10 flex-shrink-0 text-right wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)] tabular-nums">
+                    <span
+                      class="w-10 flex-shrink-0 text-right wb-mono text-[calc(12px*var(--ui-scale))] text-[var(--text-primary)] tabular-nums"
+                    >
                       {{ sliderDisplayValue(key, prop) }}
                     </span>
                   </div>
@@ -131,26 +180,42 @@
             </div>
           </section>
 
-          <div v-else class="mb-6 bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 py-6 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]">
+          <div
+            v-else
+            class="mb-6 bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 py-6 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
+          >
             {{ pluginInfo.name }} — {{ $t('desktop.plugin.noConfigAvailable') }}
           </div>
 
           <!-- ---------- SECTION: INFO（技术值 mono） ---------- -->
           <section>
             <h2 class="wb-section-title">INFO</h2>
-            <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]">
+            <div
+              class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
+            >
               <div class="flex items-center justify-between px-4 h-10">
-                <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">ID</span>
+                <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]"
+                  >ID</span
+                >
                 <span class="wb-mono text-[var(--text-primary)]">{{ pluginInfo.id }}</span>
               </div>
               <div v-if="pluginInfo.author" class="flex items-center justify-between px-4 h-10">
-                <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">Author</span>
-                <span class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{ pluginInfo.author }}</span>
+                <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]"
+                  >Author</span
+                >
+                <span class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-primary)]">{{
+                  pluginInfo.author
+                }}</span>
               </div>
               <div class="flex items-center justify-between px-4 min-h-10 py-2 gap-4">
-                <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] shrink-0">{{ $t('desktop.plugin.copyPath') }}</span>
+                <span
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] shrink-0"
+                  >{{ $t('desktop.plugin.copyPath') }}</span
+                >
                 <div class="flex items-center gap-2 min-w-0">
-                  <span class="wb-mono text-[var(--text-primary)] truncate">{{ pluginInfo.extensionPath }}</span>
+                  <span class="wb-mono text-[var(--text-primary)] truncate">{{
+                    pluginInfo.extensionPath
+                  }}</span>
                   <button
                     class="text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:text-[var(--text-primary)] underline-offset-2 hover:underline shrink-0"
                     @click="copyPath(pluginInfo.extensionPath)"
@@ -275,10 +340,14 @@ function buildDefaults(schema: PluginConfiguration): Record<string, any> {
 
 function getEmptyDefault(prop: ConfigProperty): any {
   switch (prop.type) {
-    case 'string': return ''
-    case 'number': return 0
-    case 'boolean': return false
-    default: return null
+    case 'string':
+      return ''
+    case 'number':
+      return 0
+    case 'boolean':
+      return false
+    default:
+      return null
   }
 }
 

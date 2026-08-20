@@ -1,12 +1,20 @@
 <template>
   <aside
     class="bg-[var(--bg-sidebar)] flex flex-col border-r border-[var(--border)] flex-shrink-0 relative"
-    :style="{ width: isResizing ? `${dragWidth}px` : (collapsed ? `${COLLAPSED_WIDTH}px` : `${EXPANDED_WIDTH}px`) }"
+    :style="{
+      width: isResizing
+        ? `${dragWidth}px`
+        : collapsed
+          ? `${COLLAPSED_WIDTH}px`
+          : `${EXPANDED_WIDTH}px`,
+    }"
     :class="!isResizing && 'transition-[width] duration-200 ease'"
   >
     <nav class="flex-1 py-4 overflow-y-auto overflow-x-hidden px-3">
       <!-- ==================== SECTION: NAVIGATION（内置 + 插件统一排序） ==================== -->
-      <h4 v-if="!collapsed" class="wb-sidebar-section px-2 mb-2">{{ $t('desktop.sidebar.navigation') }}</h4>
+      <h4 v-if="!collapsed" class="wb-sidebar-section px-2 mb-2">
+        {{ $t('desktop.sidebar.navigation') }}
+      </h4>
       <ul class="space-y-0.5" :class="collapsed && 'mt-1'">
         <li v-for="item in menuItems" :key="item.id">
           <router-link
@@ -16,14 +24,26 @@
               isActive(item)
                 ? 'bg-[var(--bg-card)] font-medium text-[var(--text-primary)] shadow-sm'
                 : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]',
-              collapsed ? 'justify-center px-0' : 'px-2.5'
+              collapsed ? 'justify-center px-0' : 'px-2.5',
             ]"
             :title="collapsed ? itemLabel(item) : undefined"
           >
-            <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" :d="item.icon" />
+            <svg
+              class="w-4 h-4 flex-shrink-0"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.75"
+                :d="item.icon"
+              />
             </svg>
-            <span v-if="!collapsed" class="text-[calc(13px*var(--ui-scale))] whitespace-nowrap">{{ itemLabel(item) }}</span>
+            <span v-if="!collapsed" class="text-[calc(13px*var(--ui-scale))] whitespace-nowrap">{{
+              itemLabel(item)
+            }}</span>
           </router-link>
         </li>
       </ul>
@@ -40,14 +60,21 @@
           class="w-2 h-2 rounded-full flex-shrink-0 transition-colors duration-200"
           :class="statusDotClass"
         ></span>
-        <span class="flex-1 min-w-0 text-xs font-medium text-[var(--text-secondary)] truncate">{{ statusText }}</span>
+        <span class="flex-1 min-w-0 text-xs font-medium text-[var(--text-secondary)] truncate">{{
+          statusText
+        }}</span>
         <button
           class="w-7 h-7 flex items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
           :title="$t('desktop.sidebar.collapse')"
           @click="toggleSidebar()"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M15 19l-7-7 7-7"
+            />
           </svg>
         </button>
       </div>
@@ -59,7 +86,12 @@
           @click="toggleSidebar()"
         >
           <svg class="w-3.5 h-3.5 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M15 19l-7-7 7-7"
+            />
           </svg>
         </button>
       </div>
@@ -82,7 +114,13 @@ import { onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useSidebarMenu, type SidebarMenuItem } from '@/composables/useSidebarMenu'
-import { collapsed, toggleSidebar, useSidebarResize, COLLAPSED_WIDTH, EXPANDED_WIDTH } from '@/composables/useSidebar'
+import {
+  collapsed,
+  toggleSidebar,
+  useSidebarResize,
+  COLLAPSED_WIDTH,
+  EXPANDED_WIDTH,
+} from '@/composables/useSidebar'
 import { useServer } from '@/composables/useServer'
 
 const route = useRoute()
@@ -101,7 +139,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (statusTimer) { clearInterval(statusTimer); statusTimer = null }
+  if (statusTimer) {
+    clearInterval(statusTimer)
+    statusTimer = null
+  }
 })
 
 function isActive(item: SidebarMenuItem) {
@@ -116,18 +157,24 @@ function itemLabel(item: SidebarMenuItem) {
 /** 状态指示圆点颜色 */
 const statusDotClass = computed(() => {
   switch (status.value) {
-    case 'running': return 'bg-green-500'
-    case 'starting': return 'bg-yellow-500'
-    default: return 'bg-gray-400'
+    case 'running':
+      return 'bg-green-500'
+    case 'starting':
+      return 'bg-yellow-500'
+    default:
+      return 'bg-gray-400'
   }
 })
 
 /** 状态文本（i18n） */
 const statusText = computed(() => {
   switch (status.value) {
-    case 'running': return t('desktop.sidebar.serviceRunning')
-    case 'starting': return t('desktop.sidebar.serviceStarting')
-    default: return t('desktop.sidebar.serviceStopped')
+    case 'running':
+      return t('desktop.sidebar.serviceRunning')
+    case 'starting':
+      return t('desktop.sidebar.serviceStarting')
+    default:
+      return t('desktop.sidebar.serviceStopped')
   }
 })
 </script>

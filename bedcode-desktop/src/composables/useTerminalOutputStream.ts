@@ -163,7 +163,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     // 连续性内幕：首帧必须无缝衔接（直通模式帧末 + 1 = 下帧首 seq）
     if (lastRenderedSeq !== null && frame.seq > lastRenderedSeq + 1) {
       console.error(
-        `[useTerminalOutputStream] seq gap: frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}. Re-subscribing for snapshot`
+        `[useTerminalOutputStream] seq gap: frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}. Re-subscribing for snapshot`,
       )
       resubscribe()
       return
@@ -204,7 +204,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       // 历史头部被环形淘汰：已渲染区域不可恢复 → 清屏全量重播
       if (lastRenderedSeq !== null && snapshot.minSeq > lastRenderedSeq + 1) {
         console.warn(
-          `[useTerminalOutputStream] history truncated: min_seq=${snapshot.minSeq} > last_rendered=${lastRenderedSeq}+1, full replay`
+          `[useTerminalOutputStream] history truncated: min_seq=${snapshot.minSeq} > last_rendered=${lastRenderedSeq}+1, full replay`,
         )
         lastRenderedSeq = null
         options.onReset()
@@ -229,7 +229,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
         sessionMissingStrikes += 1
         if (sessionMissingStrikes >= MAX_SESSION_MISSING_STRIKES) {
           console.warn(
-            `[useTerminalOutputStream] session ${currentSession} not found after ${MAX_SESSION_MISSING_STRIKES} attempts, stopping`
+            `[useTerminalOutputStream] session ${currentSession} not found after ${MAX_SESSION_MISSING_STRIKES} attempts, stopping`,
           )
           stop()
           return
@@ -254,7 +254,9 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       if (stopped) return // await 期间被 stop
       const port = status.port || 8765
       // 令牌为一次性（服务端消费后即失效），每次连接重新签发
-      const socket = new WebSocket(`ws://127.0.0.1:${port}/ws/terminal/local?token=${encodeURIComponent(token)}`)
+      const socket = new WebSocket(
+        `ws://127.0.0.1:${port}/ws/terminal/local?token=${encodeURIComponent(token)}`,
+      )
       socket.binaryType = 'arraybuffer'
       ws = socket
       subscribed = false

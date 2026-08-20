@@ -46,7 +46,11 @@ export const useDeviceStore = defineStore('device', () => {
     }, 1000)
   }
 
-  async function verifyPairing(code: string, _deviceAddress?: string, _devicePort?: number): Promise<boolean> {
+  async function verifyPairing(
+    code: string,
+    _deviceAddress?: string,
+    _devicePort?: number,
+  ): Promise<boolean> {
     try {
       const result = await verifyPairingCode(code)
       return result

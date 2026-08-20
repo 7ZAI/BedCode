@@ -23,7 +23,14 @@ const props = defineProps<{
   tasks: Task[]
   /** 逐任务速率（字节/秒，来自快照差分） */
   speedMap: Record<string, number>
-  summary: { active: number; queued: number; failed: number; rejected: number; resumable: number; paused: number }
+  summary: {
+    active: number
+    queued: number
+    failed: number
+    rejected: number
+    resumable: number
+    paused: number
+  }
   /** 可恢复任务数（resume-all 按钮条件） */
   resumableCount: number
   /** 传输中任务总速率 */
@@ -134,17 +141,23 @@ function showMeta(task: Task): boolean {
 /** 拒绝原因映射（v2：user-rejected / timeout / policy-denied 三文案） */
 function rejectReasonText(reason: string | null | undefined): string {
   switch (reason) {
-    case 'user-rejected': return t('transfer.error.rejectedByUser')
-    case 'timeout': return t('transfer.error.noResponse')
-    case 'policy-denied': return t('transfer.error.policyDenied')
-    case 'duplicate-name': return t('transfer.error.duplicateName')
-    default: return ''
+    case 'user-rejected':
+      return t('transfer.error.rejectedByUser')
+    case 'timeout':
+      return t('transfer.error.noResponse')
+    case 'policy-denied':
+      return t('transfer.error.policyDenied')
+    case 'duplicate-name':
+      return t('transfer.error.duplicateName')
+    default:
+      return ''
   }
 }
 
 /** 失败/拒绝原因文案（复用 spec §10 + v2 错误 key） */
 function reasonText(task: Task): string {
-  if (task.state === 'rejected') return rejectReasonText(task.reason) || t('transfer.task.state.rejected')
+  if (task.state === 'rejected')
+    return rejectReasonText(task.reason) || t('transfer.task.state.rejected')
   if (task.state === 'failed' && task.reason === 'duplicate-name') {
     return t('transfer.error.duplicateName')
   }
@@ -169,14 +182,14 @@ function receivingPeerName(task: ReceivingTask): string {
 const tabItems = computed(() => {
   if (activeTab.value === 'sending') {
     return props.tasks
-      .filter(t => t.direction === 'upload')
+      .filter((t) => t.direction === 'upload')
       .slice()
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map(t => ({ id: t.id, kind: 'task' as const }))
+      .map((t) => ({ id: t.id, kind: 'task' as const }))
   }
   const items: Array<{ id: string; kind: 'task' | 'receiving'; createdAt: number }> = [
-    ...props.tasks.map(t => ({ id: t.id, kind: 'task' as const, createdAt: t.createdAt })),
-    ...props.receiving.map(r => ({
+    ...props.tasks.map((t) => ({ id: t.id, kind: 'task' as const, createdAt: t.createdAt })),
+    ...props.receiving.map((r) => ({
       id: r.sessionId,
       kind: 'receiving' as const,
       createdAt: r.createdAt,
@@ -193,8 +206,10 @@ function historyResult(entry: HistoryEntry): string {
 
 /** 历史条目原因文案（仅失败/拒绝时显示） */
 function historyReason(entry: HistoryEntry): string {
-  if (entry.state === 'failed' && entry.reason) return rejectReasonText(entry.reason) || entry.reason
-  if (entry.state === 'rejected') return rejectReasonText(entry.reason) || t('transfer.task.state.rejected')
+  if (entry.state === 'failed' && entry.reason)
+    return rejectReasonText(entry.reason) || entry.reason
+  if (entry.state === 'rejected')
+    return rejectReasonText(entry.reason) || t('transfer.task.state.rejected')
   return ''
 }
 </script>
@@ -228,11 +243,7 @@ function historyReason(entry: HistoryEntry): string {
         <span v-if="summary.rejected > 0" class="ft-chip ft-chip--reject">
           {{ t('transfer.summary.rejected', { count: summary.rejected }) }}
         </span>
-        <button
-          v-if="resumableCount > 0"
-          class="ft-btn ft-resume-all"
-          @click="emit('resumeAll')"
-        >
+        <button v-if="resumableCount > 0" class="ft-btn ft-resume-all" @click="emit('resumeAll')">
           {{ t('transfer.task.resumeAll') }}
         </button>
       </div>
@@ -245,7 +256,7 @@ function historyReason(entry: HistoryEntry): string {
       <!-- 队列 4 tab（自绘分段，禁原生 select） -->
       <div class="ft-tabs" role="tablist">
         <button
-          v-for="tab in (['all', 'sending', 'receiving', 'history'] as QueueTab[])"
+          v-for="tab in ['all', 'sending', 'receiving', 'history'] as QueueTab[]"
           :key="tab"
           class="ft-tab"
           :class="{ 'ft-tab--active': activeTab === tab }"
@@ -264,7 +275,10 @@ function historyReason(entry: HistoryEntry): string {
         </div>
         <TransitionGroup v-else tag="div" name="ft-task" class="ft-task-list">
           <div v-for="entry in history" :key="entry.id" class="ft-history-item">
-            <span class="ft-task-dir" :class="entry.direction === 'upload' ? 'ft-task-dir--up' : ''">
+            <span
+              class="ft-task-dir"
+              :class="entry.direction === 'upload' ? 'ft-task-dir--up' : ''"
+            >
               <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
                   v-if="entry.direction === 'download'"
@@ -284,15 +298,21 @@ function historyReason(entry: HistoryEntry): string {
             </span>
             <div class="ft-history-main">
               <div class="ft-history-line">
-                <span class="ft-task-name" :title="entry.fileName">{{ displayName(entry.fileName) }}</span>
-                <span class="ft-chip" :class="chipClass(entry.state)">{{ historyResult(entry) }}</span>
+                <span class="ft-task-name" :title="entry.fileName">{{
+                  displayName(entry.fileName)
+                }}</span>
+                <span class="ft-chip" :class="chipClass(entry.state)">{{
+                  historyResult(entry)
+                }}</span>
               </div>
               <div class="ft-history-meta">
                 <span>{{ formatClock(entry.updatedAt) }}</span>
                 <span>{{ formatBytes(entry.size) }}</span>
                 <span v-if="entry.peerName">{{ entry.peerName }}</span>
               </div>
-              <div v-if="historyReason(entry)" class="ft-task-reason">{{ historyReason(entry) }}</div>
+              <div v-if="historyReason(entry)" class="ft-task-reason">
+                {{ historyReason(entry) }}
+              </div>
             </div>
             <!-- 打开所在文件夹：仅完成且有本地文件 -->
             <button
@@ -301,7 +321,14 @@ function historyReason(entry: HistoryEntry): string {
               :title="t('transfer.history.openFolder')"
               @click="emit('openHistoryDir', entry.localPath)"
             >
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" /></svg>
+              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"
+                />
+              </svg>
             </button>
           </div>
         </TransitionGroup>
@@ -324,14 +351,34 @@ function historyReason(entry: HistoryEntry): string {
             <div class="ft-task-head">
               <span class="ft-task-dir ft-task-dir--up">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M12 19V5M5 12l7-7 7 7"
+                  />
                 </svg>
               </span>
-              <span class="ft-task-name" :title="r.remotePath">{{ displayName(r.remotePath) }}</span>
-              <span class="ft-chip" :class="chipClass(r.state)">{{ stateLabel(r.state === 'transferring' ? 'transferring' : r.state) }}</span>
+              <span class="ft-task-name" :title="r.remotePath">{{
+                displayName(r.remotePath)
+              }}</span>
+              <span class="ft-chip" :class="chipClass(r.state)">{{
+                stateLabel(r.state === 'transferring' ? 'transferring' : r.state)
+              }}</span>
               <!-- 接收任务只可取消（spec §14.3：暂停/恢复仅限发起方） -->
-              <button class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancelReceiving', r.sessionId)">
-                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+              <button
+                class="ft-mini-btn"
+                :title="t('transfer.task.cancel')"
+                @click="emit('cancelReceiving', r.sessionId)"
+              >
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M18 6L6 18M6 6l12 12"
+                  />
+                </svg>
               </button>
             </div>
             <div class="ft-task-meta">
@@ -357,27 +404,53 @@ function historyReason(entry: HistoryEntry): string {
               <div class="ft-task-head">
                 <span class="ft-task-dir ft-task-dir--up">
                   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M12 19V5M5 12l7-7 7 7"
+                    />
                   </svg>
                 </span>
-                <span class="ft-task-name" :title="receiving.find(r => r.sessionId === item.id)?.remotePath ?? ''">
-                  {{ displayName(receiving.find(r => r.sessionId === item.id)?.remotePath ?? '') }}
+                <span
+                  class="ft-task-name"
+                  :title="receiving.find((r) => r.sessionId === item.id)?.remotePath ?? ''"
+                >
+                  {{
+                    displayName(receiving.find((r) => r.sessionId === item.id)?.remotePath ?? '')
+                  }}
                 </span>
                 <span class="ft-chip ft-chip--active">{{ t('transfer.task.receiving') }}</span>
-                <button class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancelReceiving', item.id)">
-                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+                <button
+                  class="ft-mini-btn"
+                  :title="t('transfer.task.cancel')"
+                  @click="emit('cancelReceiving', item.id)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M18 6L6 18M6 6l12 12"
+                    />
+                  </svg>
                 </button>
               </div>
               <div class="ft-task-meta">
-                <span>{{ formatBytes(receiving.find(r => r.sessionId === item.id)?.size ?? 0) }}</span>
+                <span>{{
+                  formatBytes(receiving.find((r) => r.sessionId === item.id)?.size ?? 0)
+                }}</span>
               </div>
             </div>
 
             <!-- 本端任务卡 -->
-            <div v-else-if="tasks.find(tk => tk.id === item.id)" class="ft-task">
-              <template v-for="task in tasks.filter(tk => tk.id === item.id)" :key="task.id">
+            <div v-else-if="tasks.find((tk) => tk.id === item.id)" class="ft-task">
+              <template v-for="task in tasks.filter((tk) => tk.id === item.id)" :key="task.id">
                 <div class="ft-task-head">
-                  <span class="ft-task-dir" :class="task.direction === 'upload' ? 'ft-task-dir--up' : ''">
+                  <span
+                    class="ft-task-dir"
+                    :class="task.direction === 'upload' ? 'ft-task-dir--up' : ''"
+                  >
                     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path
                         v-if="task.direction === 'download'"
@@ -395,26 +468,100 @@ function historyReason(entry: HistoryEntry): string {
                       />
                     </svg>
                   </span>
-                  <span class="ft-task-name" :title="task.remotePath">{{ displayName(task.remotePath) }}</span>
-                  <span class="ft-chip" :class="chipClass(task.state)">{{ taskStateText(task) }}</span>
-                  <button v-if="canPause(task)" class="ft-mini-btn" :title="t('transfer.task.pause')" @click="emit('pause', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-width="2" d="M9 4h2v16H9zM15 4h2v16h-2z" /></svg>
+                  <span class="ft-task-name" :title="task.remotePath">{{
+                    displayName(task.remotePath)
+                  }}</span>
+                  <span class="ft-chip" :class="chipClass(task.state)">{{
+                    taskStateText(task)
+                  }}</span>
+                  <button
+                    v-if="canPause(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.pause')"
+                    @click="emit('pause', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-width="2"
+                        d="M9 4h2v16H9zM15 4h2v16h-2z"
+                      />
+                    </svg>
                   </button>
-                  <button v-if="canResume(task)" class="ft-mini-btn" :title="t('transfer.task.resume')" @click="emit('resume', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 4l13 8-13 8V4z" /></svg>
+                  <button
+                    v-if="canResume(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.resume')"
+                    @click="emit('resume', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M7 4l13 8-13 8V4z"
+                      />
+                    </svg>
                   </button>
-                  <button v-if="canRetry(task)" class="ft-mini-btn" :title="t('transfer.task.retry')" @click="emit('retry', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M1 4v6h6M3.51 15a9 9 0 102.13-9.36L1 10" /></svg>
+                  <button
+                    v-if="canRetry(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.retry')"
+                    @click="emit('retry', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M1 4v6h6M3.51 15a9 9 0 102.13-9.36L1 10"
+                      />
+                    </svg>
                   </button>
-                  <button v-if="canCancel(task)" class="ft-mini-btn" :title="t('transfer.task.cancel')" @click="emit('cancel', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+                  <button
+                    v-if="canCancel(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.cancel')"
+                    @click="emit('cancel', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M18 6L6 18M6 6l12 12"
+                      />
+                    </svg>
                   </button>
-                  <button class="ft-mini-btn" :title="t('transfer.task.remove')" @click="emit('remove', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  <button
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.remove')"
+                    @click="emit('remove', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                      />
+                    </svg>
                   </button>
                   <!-- 打开本地目录：仅已完成任务（文件已落盘） -->
-                  <button v-if="task.state === 'completed'" class="ft-mini-btn" :title="t('transfer.task.openDir')" @click="emit('openDir', task.id)">
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" /></svg>
+                  <button
+                    v-if="task.state === 'completed'"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.openDir')"
+                    @click="emit('openDir', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"
+                      />
+                    </svg>
                   </button>
                 </div>
 

@@ -21,7 +21,10 @@
         <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" fill="var(--logo-fg)" />
         <path d="M 51 60 L 84 62 L 53 65 Z" fill="var(--logo-fg)" />
       </svg>
-      <span class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)]">BedCode</span>
+      <span
+        class="text-[calc(13px*var(--ui-scale))] font-semibold tracking-tight text-[var(--text-primary)]"
+        >BedCode</span
+      >
     </div>
 
     <!-- 插件标题栏扩展点 -->
@@ -33,26 +36,65 @@
     <div class="flex items-center pr-1">
       <div class="flex items-center titlebar-buttons">
         <button
-          @click="minimize"
           class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
           :title="t('desktop.terminal.minimize')"
+          @click="minimize"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M20 12H4" /></svg>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+          >
+            <path stroke-linecap="round" d="M20 12H4" />
+          </svg>
         </button>
         <button
-          @click="toggleMaximize"
           class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors"
           :title="t('desktop.terminal.maximize')"
+          @click="toggleMaximize"
         >
-          <svg v-if="!isMaximized" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="4" y="4" width="16" height="16" rx="1" /></svg>
-          <svg v-else width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><rect x="2" y="6" width="14" height="14" rx="1" /><path d="M6 6V4a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1h-2" /></svg>
+          <svg
+            v-if="!isMaximized"
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+          >
+            <rect x="4" y="4" width="16" height="16" rx="1" />
+          </svg>
+          <svg
+            v-else
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+          >
+            <rect x="2" y="6" width="14" height="14" rx="1" />
+            <path d="M6 6V4a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1h-2" />
+          </svg>
         </button>
         <button
-          @click="close"
           class="w-8 h-7 rounded-[6px] flex items-center justify-center text-[var(--text-secondary)] hover:bg-[#B42318] hover:text-white transition-colors"
           :title="t('desktop.terminal.close')"
+          @click="close"
         >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" /></svg>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+          >
+            <path stroke-linecap="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
         </button>
       </div>
     </div>

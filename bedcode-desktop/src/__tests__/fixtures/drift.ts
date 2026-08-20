@@ -17,15 +17,11 @@
  * 每个 fixture 工厂在产出时调用；漂移时抛出带上下文说明的错误，
  * 让测试失败点直接指向缺失/多余的字段。
  */
-export function assertDtoFields(
-  obj: object,
-  rustFields: readonly string[],
-  label: string,
-): void {
+export function assertDtoFields(obj: object, rustFields: readonly string[], label: string): void {
   const actual = Object.keys(obj).sort()
   const expected = [...rustFields].sort()
-  const missing = expected.filter(f => !actual.includes(f))
-  const extra = actual.filter(f => !expected.includes(f))
+  const missing = expected.filter((f) => !actual.includes(f))
+  const extra = actual.filter((f) => !expected.includes(f))
   if (missing.length > 0 || extra.length > 0) {
     throw new Error(
       `[fixtures] ${label} 与 Rust DTO 字段清单漂移：` +

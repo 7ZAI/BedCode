@@ -19,7 +19,9 @@
       <span v-if="emoji" class="text-sm flex-shrink-0">{{ emoji }}</span>
 
       <!-- 标题 -->
-      <span class="flex-1 text-[calc(12px*var(--ui-scale))] font-semibold uppercase tracking-[0.06em] text-[var(--text-secondary)]">
+      <span
+        class="flex-1 text-[calc(12px*var(--ui-scale))] font-semibold uppercase tracking-[0.06em] text-[var(--text-secondary)]"
+      >
         {{ title }}
       </span>
 
@@ -64,7 +66,7 @@ const props = withDefaults(
     /** 默认是否展开 */
     defaultOpen?: boolean
   }>(),
-  { emoji: '', defaultOpen: true }
+  { emoji: '', defaultOpen: true },
 )
 
 const open = ref(props.defaultOpen)
@@ -85,7 +87,9 @@ const open = ref(props.defaultOpen)
 
 .collapse-enter-active,
 .collapse-leave-active {
-  transition: opacity 0.15s ease, max-height 0.2s ease;
+  transition:
+    opacity 0.15s ease,
+    max-height 0.2s ease;
   max-height: 2000px;
 }
 

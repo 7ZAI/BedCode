@@ -8,7 +8,7 @@ import i18n from '@/locales'
  */
 export function useRunTime(
   startTime: () => string | undefined,
-  isRunning: Ref<boolean> | ComputedRef<boolean> | (() => boolean)
+  isRunning: Ref<boolean> | ComputedRef<boolean> | (() => boolean),
 ) {
   const runTime = ref('')
   let intervalId: ReturnType<typeof setInterval> | null = null
@@ -50,7 +50,8 @@ export function useRunTime(
 
   onMounted(() => {
     // 支持 Ref、ComputedRef 或普通函数
-    const running = 'value' in isRunning ? (isRunning as Ref<boolean>).value : (isRunning as () => boolean)()
+    const running =
+      'value' in isRunning ? (isRunning as Ref<boolean>).value : (isRunning as () => boolean)()
     if (running) {
       startTimer()
     } else {

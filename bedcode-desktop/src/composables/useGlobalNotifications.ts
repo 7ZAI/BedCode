@@ -12,8 +12,6 @@ let unlistenDeviceDisconnected: (() => void) | null = null
 let unlistenSessionCreated: (() => void) | null = null
 let unlistenSessionStopped: (() => void) | null = null
 
-
-
 /**
  * 全局通知监听
  *
@@ -35,36 +33,53 @@ export function useGlobalNotifications() {
 
     // 设备断开事件
     if (!unlistenDeviceDisconnected) {
-      unlistenDeviceDisconnected = await listen<DeviceEventPayload>('device-disconnected', (event) => {
-        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
-        toast.warning(i18n.global.t('common.notification.deviceDisconnected', { name: deviceName }))
-      })
+      unlistenDeviceDisconnected = await listen<DeviceEventPayload>(
+        'device-disconnected',
+        (event) => {
+          const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
+          toast.warning(
+            i18n.global.t('common.notification.deviceDisconnected', { name: deviceName }),
+          )
+        },
+      )
     }
 
     // 移动端创建的会话
     if (!unlistenSessionCreated) {
-      unlistenSessionCreated = await listen<SessionEventPayload>('session-created-from-mobile', (event) => {
-        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
-        const sessionName = event.payload.session?.name || ''
-        const msg = sessionName
-          ? i18n.global.t('common.notification.sessionCreated', { device: deviceName, name: sessionName })
-          : i18n.global.t('common.notification.sessionCreatedNoName', { device: deviceName })
-        toast.success(msg)
-        sessionStore.loadSessions()
-      })
+      unlistenSessionCreated = await listen<SessionEventPayload>(
+        'session-created-from-mobile',
+        (event) => {
+          const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
+          const sessionName = event.payload.session?.name || ''
+          const msg = sessionName
+            ? i18n.global.t('common.notification.sessionCreated', {
+                device: deviceName,
+                name: sessionName,
+              })
+            : i18n.global.t('common.notification.sessionCreatedNoName', { device: deviceName })
+          toast.success(msg)
+          sessionStore.loadSessions()
+        },
+      )
     }
 
     // 移动端停止的会话
     if (!unlistenSessionStopped) {
-      unlistenSessionStopped = await listen<SessionEventPayload>('session-stopped-from-mobile', (event) => {
-        const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
-        const sessionName = event.payload.session?.name || ''
-        const msg = sessionName
-          ? i18n.global.t('common.notification.sessionStoppedByDevice', { device: deviceName, name: sessionName })
-          : i18n.global.t('common.notification.sessionStoppedNoName', { device: deviceName })
-        toast.info(msg)
-        sessionStore.loadSessions()
-      })
+      unlistenSessionStopped = await listen<SessionEventPayload>(
+        'session-stopped-from-mobile',
+        (event) => {
+          const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileClient')
+          const sessionName = event.payload.session?.name || ''
+          const msg = sessionName
+            ? i18n.global.t('common.notification.sessionStoppedByDevice', {
+                device: deviceName,
+                name: sessionName,
+              })
+            : i18n.global.t('common.notification.sessionStoppedNoName', { device: deviceName })
+          toast.info(msg)
+          sessionStore.loadSessions()
+        },
+      )
     }
   }
 

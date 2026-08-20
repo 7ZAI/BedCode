@@ -38,17 +38,17 @@ const CONTRIBUTION_KINDS: Record<string, ContributionKind> = {
   sidebar: {
     emoji: '📋',
     labelKey: 'desktop.plugin.chip.sidebar',
-    count: (p) => p.contributes.views?.filter(v => v.type === 'sidebar').length ?? 0,
+    count: (p) => p.contributes.views?.filter((v) => v.type === 'sidebar').length ?? 0,
   },
   toolbox: {
     emoji: '🧰',
     labelKey: 'desktop.plugin.chip.toolbox',
-    count: (p) => p.contributes.views?.filter(v => v.type === 'toolbox').length ?? 0,
+    count: (p) => p.contributes.views?.filter((v) => v.type === 'toolbox').length ?? 0,
   },
   statusbar: {
     emoji: '📊',
     labelKey: 'desktop.plugin.chip.statusbar',
-    count: (p) => p.contributes.views?.filter(v => v.type === 'statusbar').length ?? 0,
+    count: (p) => p.contributes.views?.filter((v) => v.type === 'statusbar').length ?? 0,
   },
   commands: {
     emoji: '🔧',
@@ -59,7 +59,7 @@ const CONTRIBUTION_KINDS: Record<string, ContributionKind> = {
   terminal: {
     emoji: '⌨️',
     labelKey: 'desktop.plugin.chip.terminal',
-    count: (p) => p.contributes.terminal ? 1 : 0,
+    count: (p) => (p.contributes.terminal ? 1 : 0),
   },
   toolProviders: {
     emoji: '🛠️',
@@ -76,12 +76,12 @@ const CONTRIBUTION_KINDS: Record<string, ContributionKind> = {
   configuration: {
     emoji: '🎛️',
     labelKey: 'desktop.plugin.chip.configuration',
-    count: (p) => p.contributes.configuration ? 1 : 0,
+    count: (p) => (p.contributes.configuration ? 1 : 0),
   },
   lifecycle: {
     emoji: '🔄',
     labelKey: 'desktop.plugin.chip.lifecycle',
-    count: (p) => p.contributes.lifecycle ? 1 : 0,
+    count: (p) => (p.contributes.lifecycle ? 1 : 0),
   },
 }
 
@@ -96,20 +96,76 @@ export interface PermissionMeta {
 
 /** 14 项桌面端权限元数据注册表 */
 const PERMISSION_META: Record<string, PermissionMeta> = {
-  storage: { emoji: '💾', titleKey: 'desktop.plugin.perm.storage.title', descKey: 'desktop.plugin.perm.storage.desc' },
-  'terminal:input': { emoji: '⌨️', titleKey: 'desktop.plugin.perm.terminal:input.title', descKey: 'desktop.plugin.perm.terminal:input.desc' },
-  'terminal:output': { emoji: '📺', titleKey: 'desktop.plugin.perm.terminal:output.title', descKey: 'desktop.plugin.perm.terminal:output.desc' },
-  'terminal:observe': { emoji: '👁️', titleKey: 'desktop.plugin.perm.terminal:observe.title', descKey: 'desktop.plugin.perm.terminal:observe.desc' },
-  'session:read': { emoji: '📄', titleKey: 'desktop.plugin.perm.session:read.title', descKey: 'desktop.plugin.perm.session:read.desc' },
-  'session:write': { emoji: '✏️', titleKey: 'desktop.plugin.perm.session:write.title', descKey: 'desktop.plugin.perm.session:write.desc' },
-  'ui:sidebar': { emoji: '📋', titleKey: 'desktop.plugin.perm.ui:sidebar.title', descKey: 'desktop.plugin.perm.ui:sidebar.desc' },
-  'ui:input': { emoji: '🔤', titleKey: 'desktop.plugin.perm.ui:input.title', descKey: 'desktop.plugin.perm.ui:input.desc' },
-  'ui:toolbox': { emoji: '🧰', titleKey: 'desktop.plugin.perm.ui:toolbox.title', descKey: 'desktop.plugin.perm.ui:toolbox.desc' },
-  'network:http': { emoji: '🌐', titleKey: 'desktop.plugin.perm.network:http.title', descKey: 'desktop.plugin.perm.network:http.desc' },
-  'fs:read': { emoji: '📂', titleKey: 'desktop.plugin.perm.fs:read.title', descKey: 'desktop.plugin.perm.fs:read.desc' },
-  'fs:write': { emoji: '📝', titleKey: 'desktop.plugin.perm.fs:write.title', descKey: 'desktop.plugin.perm.fs:write.desc' },
-  fileservice: { emoji: '🗂️', titleKey: 'desktop.plugin.perm.fileservice.title', descKey: 'desktop.plugin.perm.fileservice.desc' },
-  broadcast: { emoji: '📩', titleKey: 'desktop.plugin.perm.broadcast.title', descKey: 'desktop.plugin.perm.broadcast.desc' },
+  storage: {
+    emoji: '💾',
+    titleKey: 'desktop.plugin.perm.storage.title',
+    descKey: 'desktop.plugin.perm.storage.desc',
+  },
+  'terminal:input': {
+    emoji: '⌨️',
+    titleKey: 'desktop.plugin.perm.terminal:input.title',
+    descKey: 'desktop.plugin.perm.terminal:input.desc',
+  },
+  'terminal:output': {
+    emoji: '📺',
+    titleKey: 'desktop.plugin.perm.terminal:output.title',
+    descKey: 'desktop.plugin.perm.terminal:output.desc',
+  },
+  'terminal:observe': {
+    emoji: '👁️',
+    titleKey: 'desktop.plugin.perm.terminal:observe.title',
+    descKey: 'desktop.plugin.perm.terminal:observe.desc',
+  },
+  'session:read': {
+    emoji: '📄',
+    titleKey: 'desktop.plugin.perm.session:read.title',
+    descKey: 'desktop.plugin.perm.session:read.desc',
+  },
+  'session:write': {
+    emoji: '✏️',
+    titleKey: 'desktop.plugin.perm.session:write.title',
+    descKey: 'desktop.plugin.perm.session:write.desc',
+  },
+  'ui:sidebar': {
+    emoji: '📋',
+    titleKey: 'desktop.plugin.perm.ui:sidebar.title',
+    descKey: 'desktop.plugin.perm.ui:sidebar.desc',
+  },
+  'ui:input': {
+    emoji: '🔤',
+    titleKey: 'desktop.plugin.perm.ui:input.title',
+    descKey: 'desktop.plugin.perm.ui:input.desc',
+  },
+  'ui:toolbox': {
+    emoji: '🧰',
+    titleKey: 'desktop.plugin.perm.ui:toolbox.title',
+    descKey: 'desktop.plugin.perm.ui:toolbox.desc',
+  },
+  'network:http': {
+    emoji: '🌐',
+    titleKey: 'desktop.plugin.perm.network:http.title',
+    descKey: 'desktop.plugin.perm.network:http.desc',
+  },
+  'fs:read': {
+    emoji: '📂',
+    titleKey: 'desktop.plugin.perm.fs:read.title',
+    descKey: 'desktop.plugin.perm.fs:read.desc',
+  },
+  'fs:write': {
+    emoji: '📝',
+    titleKey: 'desktop.plugin.perm.fs:write.title',
+    descKey: 'desktop.plugin.perm.fs:write.desc',
+  },
+  fileservice: {
+    emoji: '🗂️',
+    titleKey: 'desktop.plugin.perm.fileservice.title',
+    descKey: 'desktop.plugin.perm.fileservice.desc',
+  },
+  broadcast: {
+    emoji: '📩',
+    titleKey: 'desktop.plugin.perm.broadcast.title',
+    descKey: 'desktop.plugin.perm.broadcast.desc',
+  },
 }
 
 // ==================== 展示辅助函数 ====================
@@ -142,15 +198,30 @@ export function getPermissionMeta(perm: string): { emoji: string; title: string;
 }
 
 /** 详细信息行（详情页"详细信息"折叠区使用） */
-export function getDetailRows(plugin: PluginInfo): { key: string; label: string; value: string; mono?: boolean }[] {
+export function getDetailRows(
+  plugin: PluginInfo,
+): { key: string; label: string; value: string; mono?: boolean }[] {
   const t = i18n.global.t
   return [
     { key: 'id', label: t('desktop.plugin.detail.id'), value: plugin.id, mono: true },
-    { key: 'source', label: t('desktop.plugin.detail.source'), value: t(`desktop.plugin.source.${plugin.source}`) || plugin.source },
+    {
+      key: 'source',
+      label: t('desktop.plugin.detail.source'),
+      value: t(`desktop.plugin.source.${plugin.source}`) || plugin.source,
+    },
     { key: 'type', label: t('desktop.plugin.detail.type'), value: plugin.pluginType },
-    { key: 'entry', label: t('desktop.plugin.detail.entry'), value: plugin.main || '—', mono: true },
+    {
+      key: 'entry',
+      label: t('desktop.plugin.detail.entry'),
+      value: plugin.main || '—',
+      mono: true,
+    },
     { key: 'size', label: t('desktop.plugin.detail.size'), value: formatBytes(plugin.sizeBytes) },
-    { key: 'installedAt', label: t('desktop.plugin.detail.installedAt'), value: formatTime(plugin.installedAt) },
+    {
+      key: 'installedAt',
+      label: t('desktop.plugin.detail.installedAt'),
+      value: formatTime(plugin.installedAt),
+    },
   ]
 }
 

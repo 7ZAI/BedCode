@@ -43,7 +43,10 @@ export async function pluginListLoaded(): Promise<PluginInfo[]> {
 export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null> {
   console.log(`[PluginCmd] pluginGetInfo(${pluginId}) invoking...`)
   const result = await invoke<PluginInfo | null>('plugin_get_info', { pluginId })
-  console.log(`[PluginCmd] pluginGetInfo(${pluginId}) returned:`, result ? `state=${result.state.state}` : 'null')
+  console.log(
+    `[PluginCmd] pluginGetInfo(${pluginId}) returned:`,
+    result ? `state=${result.state.state}` : 'null',
+  )
   return result
 }
 
@@ -82,7 +85,11 @@ export async function pluginStorageDelete(pluginId: string, key: string): Promis
 }
 
 /** 插件终端：发送输入 */
-export async function pluginTerminalSendInput(pluginId: string, sessionId: string, text: string): Promise<void> {
+export async function pluginTerminalSendInput(
+  pluginId: string,
+  sessionId: string,
+  text: string,
+): Promise<void> {
   return await invoke('plugin_terminal_send_input', { pluginId, sessionId, text })
 }
 
@@ -109,7 +116,11 @@ export interface PluginCommandEntry {
 }
 
 /** 调用 Rust 插件的自定义 command */
-export async function pluginInvoke(pluginId: string, command: string, args?: unknown): Promise<unknown> {
+export async function pluginInvoke(
+  pluginId: string,
+  command: string,
+  args?: unknown,
+): Promise<unknown> {
   return await invoke('plugin_invoke', { pluginId, command, args: args ?? null })
 }
 

@@ -2,12 +2,17 @@
   <div class="max-w-xl space-y-5">
     <div class="flex items-center justify-between">
       <h4 class="text-base font-medium text-[var(--text-primary)]">
-        {{ mode === 'edit' ? t('desktop.plugin.aiChatbox.editProvider') : t('desktop.plugin.aiChatbox.addProvider') }}
+        {{
+          mode === 'edit'
+            ? t('desktop.plugin.aiChatbox.editProvider')
+            : t('desktop.plugin.aiChatbox.addProvider')
+        }}
       </h4>
       <span
         v-if="mode === 'edit'"
         class="text-xs px-2 py-1 rounded-full bg-[var(--bg-hover)] text-[var(--text-tertiary)]"
-      >{{ initialValues?.name }}</span>
+        >{{ initialValues?.name }}</span
+      >
     </div>
 
     <!-- 名称 -->
@@ -66,24 +71,32 @@
         :disabled="fetching || !form.baseUrl || !form.apiKey"
         @click="onFetchModels"
       >
-        {{ fetching ? t('desktop.plugin.aiChatbox.fetchingModels') : t('desktop.plugin.aiChatbox.fetchModels') }}
+        {{
+          fetching
+            ? t('desktop.plugin.aiChatbox.fetchingModels')
+            : t('desktop.plugin.aiChatbox.fetchModels')
+        }}
       </button>
       <button
         class="h-[36px] px-4 text-sm rounded-btn bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors disabled:opacity-50"
         :disabled="testing || !form.baseUrl || !form.apiKey"
         @click="onTestConnection"
       >
-        {{ testing ? t('desktop.plugin.aiChatbox.testing') : t('desktop.plugin.aiChatbox.testConnection') }}
+        {{
+          testing
+            ? t('desktop.plugin.aiChatbox.testing')
+            : t('desktop.plugin.aiChatbox.testConnection')
+        }}
       </button>
-      <span
-        v-if="fetchError"
-        class="text-xs text-[var(--color-danger)] flex-1 break-words"
-      >{{ fetchError }}</span>
+      <span v-if="fetchError" class="text-xs text-[var(--color-danger)] flex-1 break-words">{{
+        fetchError
+      }}</span>
       <span
         v-else-if="testResult !== null"
         class="text-xs flex-1 break-words"
         :class="testOk ? 'text-[var(--color-primary)]' : 'text-[var(--color-danger)]'"
-      >{{ testOk ? t('desktop.plugin.aiChatbox.testOk') : testResult }}</span>
+        >{{ testOk ? t('desktop.plugin.aiChatbox.testOk') : testResult }}</span
+      >
     </div>
 
     <!-- 模型列表 -->
@@ -164,7 +177,7 @@ const { t } = useI18n()
 
 /** 回填来源：编辑取已有数据，添加取预设模板（自定义模板为 null → 全空） */
 const source = computed(() =>
-  props.mode === 'edit' ? props.initialValues : props.preset ?? null,
+  props.mode === 'edit' ? props.initialValues : (props.preset ?? null),
 )
 
 const form = reactive<ApiProvider>({
@@ -189,8 +202,8 @@ const testResult = ref<string | null>(null)
 const testOk = ref(false)
 const askDelete = ref(false)
 
-const canSave = computed(() =>
-  form.name.trim() !== '' && form.baseUrl.trim() !== '' && form.apiKey.trim() !== ''
+const canSave = computed(
+  () => form.name.trim() !== '' && form.baseUrl.trim() !== '' && form.apiKey.trim() !== '',
 )
 
 /** 拉取模型列表：成功替换 models；失败提示并保留现有列表 */

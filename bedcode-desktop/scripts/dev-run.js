@@ -60,8 +60,12 @@ async function precheckDevPort() {
   })
   if (!inUse) return
 
-  console.error(`[dev-run] ⚠ 端口 ${port}（${devUrl}，宿主 beforeDevCommand vite dev server）已被占用`)
-  console.error('[dev-run]   通常是上次 dev 会话残留的 vite 进程，宿主启动必失败。请先结束占用进程：')
+  console.error(
+    `[dev-run] ⚠ 端口 ${port}（${devUrl}，宿主 beforeDevCommand vite dev server）已被占用`,
+  )
+  console.error(
+    '[dev-run]   通常是上次 dev 会话残留的 vite 进程，宿主启动必失败。请先结束占用进程：',
+  )
   console.error(`[dev-run]   netstat -ano | findstr :${port}   然后   taskkill /F /PID <pid>`)
   process.exit(1)
 }
@@ -86,10 +90,16 @@ async function precheckHmrPort() {
   })
   if (!inUse) return
 
-  console.warn(`[dev-run] ⚠ 检测到 TAURI_DEV_HOST=${process.env.TAURI_DEV_HOST}（局域网模式），但 HMR 端口 ${port} 已被占用`)
-  console.warn('[dev-run]   页面可正常加载但热更新会失效（改代码不刷新）。占用者通常是残留 dev 会话：')
+  console.warn(
+    `[dev-run] ⚠ 检测到 TAURI_DEV_HOST=${process.env.TAURI_DEV_HOST}（局域网模式），但 HMR 端口 ${port} 已被占用`,
+  )
+  console.warn(
+    '[dev-run]   页面可正常加载但热更新会失效（改代码不刷新）。占用者通常是残留 dev 会话：',
+  )
   console.warn(`[dev-run]   netstat -ano | findstr :${port}   然后   taskkill /F /PID <pid>`)
-  console.warn('[dev-run]   若不再需要局域网调试，删除环境变量后重启 dev 即回到本机模式（HMR 同端口 1420）')
+  console.warn(
+    '[dev-run]   若不再需要局域网调试，删除环境变量后重启 dev 即回到本机模式（HMR 同端口 1420）',
+  )
 }
 
 // npm-cli.js 绝对路径：优先取 npm 注入的 npm_execpath（任何安装布局下都正确），
@@ -97,8 +107,7 @@ async function precheckHmrPort() {
 // Linux/macOS 的 npm 在系统目录（/usr/lib/node_modules/npm 等），与 node 二进制
 // 不同目录，故不能只用回退路径
 const NPM_CLI =
-  process.env.npm_execpath ??
-  resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
+  process.env.npm_execpath ?? resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
 
 // ==================== 平台配置 ====================
 

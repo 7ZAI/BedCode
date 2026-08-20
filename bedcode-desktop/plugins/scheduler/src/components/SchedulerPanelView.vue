@@ -206,11 +206,13 @@ onUnmounted(() => {
       </div>
 
       <!-- 空态 -->
-      <div
-        v-else-if="jobs.length === 0"
-        class="flex flex-col items-center justify-center py-12"
-      >
-        <svg class="w-12 h-12 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <div v-else-if="jobs.length === 0" class="flex flex-col items-center justify-center py-12">
+        <svg
+          class="w-12 h-12 text-[var(--text-tertiary)] mb-3"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
           <path
             stroke-linecap="round"
             stroke-linejoin="round"
@@ -251,7 +253,11 @@ onUnmounted(() => {
             >
               {{ job.enabled ? t('panel.enabled') : t('panel.disabled') }}
             </span>
-            <span v-if="job.last_status" class="flex-shrink-0" :class="statusBadge(job.last_status)">
+            <span
+              v-if="job.last_status"
+              class="flex-shrink-0"
+              :class="statusBadge(job.last_status)"
+            >
               {{ statusLabel[job.last_status] || job.last_status }}
             </span>
             <svg
@@ -261,16 +267,25 @@ onUnmounted(() => {
               stroke="currentColor"
               viewBox="0 0 24 24"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M9 5l7 7-7 7"
+              />
             </svg>
           </div>
 
           <!-- cron 表达式 + 元信息 -->
           <div class="px-2.5 pb-2.5 -mt-0.5">
-            <p class="text-xs text-[var(--text-secondary)] font-mono truncate">{{ job.schedule }}</p>
+            <p class="text-xs text-[var(--text-secondary)] font-mono truncate">
+              {{ job.schedule }}
+            </p>
 
             <div class="flex items-center gap-3 mt-1 text-xs text-[var(--text-tertiary)] min-w-0">
-              <span class="truncate min-w-0">{{ t('panel.nextAt') }}: {{ job.next_at || '-' }}</span>
+              <span class="truncate min-w-0"
+                >{{ t('panel.nextAt') }}: {{ job.next_at || '-' }}</span
+              >
               <span class="truncate min-w-0 flex-shrink-0">
                 {{ t('panel.lastRun') }}: {{ job.last_finished_at || t('panel.neverRun') }}
               </span>
@@ -302,13 +317,17 @@ onUnmounted(() => {
               >
                 <!-- 行首：触发方式 + 状态 + 时间 -->
                 <div class="flex items-center gap-2 min-w-0">
-                  <span class="inline-flex items-center h-5 px-2 rounded-full bg-[var(--bg-card)] text-[var(--text-secondary)] text-[calc(11px*var(--ui-scale))] font-medium flex-shrink-0">
+                  <span
+                    class="inline-flex items-center h-5 px-2 rounded-full bg-[var(--bg-card)] text-[var(--text-secondary)] text-[calc(11px*var(--ui-scale))] font-medium flex-shrink-0"
+                  >
                     {{ triggerLabel[ex.trigger] || ex.trigger }}
                   </span>
                   <span class="flex-shrink-0" :class="statusBadge(ex.status)">
                     {{ statusLabel[ex.status] || ex.status }}
                   </span>
-                  <span class="text-xs text-[var(--text-tertiary)] truncate min-w-0 flex-1 text-right">
+                  <span
+                    class="text-xs text-[var(--text-tertiary)] truncate min-w-0 flex-1 text-right"
+                  >
                     {{ ex.finished_at || ex.started_at || '-' }}
                   </span>
                 </div>
@@ -356,7 +375,10 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <p v-if="!selectedId" class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] pt-1">
+        <p
+          v-if="!selectedId"
+          class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] pt-1"
+        >
           {{ t('panel.selectHint') }}
         </p>
       </div>

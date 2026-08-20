@@ -297,7 +297,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
                     'hook-error',
                   )
                 } catch (respondErr) {
-                  console.debug('[FileService] respond after hook-error failed (likely timed out):', respondErr)
+                  console.debug(
+                    '[FileService] respond after hook-error failed (likely timed out):',
+                    respondErr,
+                  )
                 }
               }
             },
@@ -348,7 +351,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
                     reason: 'hook-error',
                   })
                 } catch (respondErr) {
-                  console.debug('[FileService] respond after transfer-hook error failed (likely timed out):', respondErr)
+                  console.debug(
+                    '[FileService] respond after transfer-hook error failed (likely timed out):',
+                    respondErr,
+                  )
                 }
               }
             },

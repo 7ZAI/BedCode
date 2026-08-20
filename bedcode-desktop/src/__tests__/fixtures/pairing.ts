@@ -34,7 +34,9 @@ export interface PairingCodeInfoFixture {
 /** 与 pairing.rs 手工 Serialize 的三个字段一一对应 */
 export const PAIRING_CODE_INFO_DTO_FIELDS = ['code', 'created_at', 'expires_in'] as const
 
-export function makePairingCodeInfo(overrides: Partial<PairingCodeInfoFixture> = {}): PairingCodeInfoFixture {
+export function makePairingCodeInfo(
+  overrides: Partial<PairingCodeInfoFixture> = {},
+): PairingCodeInfoFixture {
   const fixture: PairingCodeInfoFixture = {
     code: '123456',
     created_at: '2025-01-01T00:00:00Z',
@@ -106,7 +108,9 @@ export interface QrConnectionInfoFixture {
 /** 与 qr.rs QrConnectionInfo 字段一一对应（前端 model.ts 的 url 为前端自建，不在 DTO 内） */
 export const QR_CONNECTION_INFO_DTO_FIELDS = ['token', 'host', 'port', 'remaining_secs'] as const
 
-export function makeQrConnectionInfo(overrides: Partial<QrConnectionInfoFixture> = {}): QrConnectionInfoFixture {
+export function makeQrConnectionInfo(
+  overrides: Partial<QrConnectionInfoFixture> = {},
+): QrConnectionInfoFixture {
   const fixture: QrConnectionInfoFixture = {
     token: 'qr-token-abc',
     host: '192.168.1.5',
@@ -129,9 +133,16 @@ export interface PendingDeviceFixture {
 }
 
 /** 与 pairing.rs PendingDevice 四字段一一对应 */
-export const PENDING_DEVICE_DTO_FIELDS = ['device_id', 'device_name', 'device_fingerprint', 'requested_at'] as const
+export const PENDING_DEVICE_DTO_FIELDS = [
+  'device_id',
+  'device_name',
+  'device_fingerprint',
+  'requested_at',
+] as const
 
-export function makePendingDevice(overrides: Partial<PendingDeviceFixture> = {}): PendingDeviceFixture {
+export function makePendingDevice(
+  overrides: Partial<PendingDeviceFixture> = {},
+): PendingDeviceFixture {
   const fixture: PendingDeviceFixture = {
     device_id: 'pending-device-1',
     device_name: 'New Phone',

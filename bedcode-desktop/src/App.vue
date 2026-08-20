@@ -16,10 +16,7 @@
     <FsAuthDialog />
 
     <!-- Exit Confirm Dialog -->
-    <ExitConfirmModal
-      v-model:visible="showExitConfirm"
-      :sessions="runningSessions"
-    />
+    <ExitConfirmModal v-model:visible="showExitConfirm" :sessions="runningSessions" />
   </div>
 </template>
 
@@ -65,12 +62,14 @@ const toastOptions: ToasterProps['toastOptions'] = {
     description: '!text-[var(--text-secondary)]',
     actionButton: '!bg-[var(--color-primary)]',
     cancelButton: '!bg-[var(--bg-hover)]',
-    closeButton: '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
+    closeButton:
+      '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
   },
 }
 
 // 全局通知监听
-const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } = useGlobalNotifications()
+const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } =
+  useGlobalNotifications()
 
 // 键盘快捷键
 useKeyboardShortcuts([

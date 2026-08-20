@@ -201,7 +201,10 @@ export async function registerDevMock(context: PluginContext): Promise<void> {
       const executions = withSeed ? sampleExecutions.filter((e) => e.job_id === jobId) : []
       return ok({ executions })
     }
-    return { status: 404, body: { code: 404, message: `scheduler mock: unknown endpoint ${method} ${path}` } }
+    return {
+      status: 404,
+      body: { code: 404, message: `scheduler mock: unknown endpoint ${method} ${path}` },
+    }
   })
 
   console.log(

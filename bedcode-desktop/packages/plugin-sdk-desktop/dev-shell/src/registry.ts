@@ -33,11 +33,7 @@ const logs = ref<DevLogEntry[]>([])
 let nextLogId = 0
 const MAX_LOGS = 500
 
-export function pushLog(
-  level: DevLogEntry['level'],
-  pluginId: string,
-  message: string,
-): void {
+export function pushLog(level: DevLogEntry['level'], pluginId: string, message: string): void {
   const entry: DevLogEntry = {
     id: ++nextLogId,
     ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
@@ -162,14 +158,20 @@ export function registerStatusBarItem(pluginId: string, item: StatusBarItemDescr
   return makeDisposable(statusBarItems, entry)
 }
 
-export function registerInputExtension(pluginId: string, ext: InputExtensionDescriptor): Disposable {
+export function registerInputExtension(
+  pluginId: string,
+  ext: InputExtensionDescriptor,
+): Disposable {
   const entry: InputExtensionEntry = { pluginId, ext }
   inputExtensions.value.push(entry)
   pushLog('debug', pluginId, `注册输入扩展: ${ext.label}`)
   return makeDisposable(inputExtensions, entry)
 }
 
-export function registerTerminalToolbarItem(pluginId: string, item: TerminalToolbarItemDescriptor): Disposable {
+export function registerTerminalToolbarItem(
+  pluginId: string,
+  item: TerminalToolbarItemDescriptor,
+): Disposable {
   const entry: TerminalToolbarEntry = { pluginId, item }
   terminalToolbarItems.value.push(entry)
   pushLog('debug', pluginId, `注册终端工具栏项: ${item.label}`)
@@ -183,7 +185,10 @@ export function registerTitleBarItem(pluginId: string, item: TitleBarItemDescrip
   return makeDisposable(titleBarItems, entry)
 }
 
-export function registerPageToolbarItem(pluginId: string, item: PageToolbarItemDescriptor): Disposable {
+export function registerPageToolbarItem(
+  pluginId: string,
+  item: PageToolbarItemDescriptor,
+): Disposable {
   const entry: PageToolbarEntry = { pluginId, item }
   pageToolbarItems.value.push(entry)
   pushLog('debug', pluginId, `注册页面工具栏项: ${item.label} -> ${item.target}`)

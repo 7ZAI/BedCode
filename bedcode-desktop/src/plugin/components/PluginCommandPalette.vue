@@ -5,7 +5,9 @@
       class="fixed inset-0 z-50 flex items-start justify-center pt-[20vh]"
       @click.self="close"
     >
-      <div class="bg-card rounded-card shadow-2xl border border-[var(--border)] w-full max-w-md overflow-hidden">
+      <div
+        class="bg-card rounded-card shadow-2xl border border-[var(--border)] w-full max-w-md overflow-hidden"
+      >
         <div class="p-3 border-b border-[var(--border)]">
           <input
             ref="searchInput"
@@ -24,7 +26,10 @@
           >
             {{ cmd.title }}
           </li>
-          <li v-if="filteredCommands.length === 0" class="px-4 py-3 text-sm text-[var(--text-tertiary)] text-center">
+          <li
+            v-if="filteredCommands.length === 0"
+            class="px-4 py-3 text-sm text-[var(--text-tertiary)] text-center"
+          >
             {{ $t('desktop.plugin.noCommands') }}
           </li>
         </ul>
@@ -49,7 +54,7 @@ const searchInput = ref<HTMLInputElement | null>(null)
 const filteredCommands = computed(() => {
   if (!query.value) return commands.value
   const q = query.value.toLowerCase()
-  return commands.value.filter(c => c.title.toLowerCase().includes(q))
+  return commands.value.filter((c) => c.title.toLowerCase().includes(q))
 })
 
 function open() {

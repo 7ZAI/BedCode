@@ -620,6 +620,21 @@ body {
   font-size: calc(12.5px * var(--ui-scale));
 }
 
+/* ==================== 全局动画总开关 ==================== */
+/* 设置页「动画效果」关闭时 <html> 带 anim-disabled，瞬时禁用所有过渡/动画
+   （含组件 scoped 样式与 .desktop-ui 全局交互），仅保留布局无位移跳动。
+   优先级 !important 覆盖一切 transition/animation 设定。 */
+html.anim-disabled *,
+html.anim-disabled *::before,
+html.anim-disabled *::after {
+  animation-duration: 0.001ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  transition-delay: 0ms !important;
+  scroll-behavior: auto !important;
+}
+
 /* ==================== Animation ==================== */
 
 @keyframes pulse-slow {

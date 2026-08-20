@@ -6,8 +6,8 @@ describe('NotificationBadge Component', () => {
   it('should render trigger element', () => {
     const wrapper = mount(NotificationBadge, {
       slots: {
-        default: '<button>Notification</button>'
-      }
+        default: '<button>Notification</button>',
+      },
     })
 
     expect(wrapper.find('button').exists()).toBe(true)
@@ -18,11 +18,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 0,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     expect(wrapper.find('span.absolute').exists()).toBe(false)
@@ -32,11 +32,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 5,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     expect(wrapper.find('span.absolute').exists()).toBe(true)
@@ -47,11 +47,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 0,
-        variant: 'dot'
+        variant: 'dot',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     expect(wrapper.find('span.absolute').exists()).toBe(true)
@@ -62,11 +62,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 150,
         max: 99,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     expect(wrapper.text()).toContain('99+')
@@ -77,11 +77,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 99,
         max: 99,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     expect(wrapper.text()).toContain('99')
@@ -92,11 +92,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 5,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -109,11 +109,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 5,
         variant: 'count',
-        color: 'primary'
+        color: 'primary',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -125,11 +125,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 5,
         variant: 'count',
-        color: 'warning'
+        color: 'warning',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -142,11 +142,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 5,
         variant: 'count',
-        color: 'success'
+        color: 'success',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -156,11 +156,11 @@ describe('NotificationBadge Component', () => {
   it('should apply top-right position by default', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
-        count: 5
+        count: 5,
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -172,11 +172,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 5,
-        position: 'top-left'
+        position: 'top-left',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -188,11 +188,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 5,
-        position: 'bottom-right'
+        position: 'bottom-right',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -204,11 +204,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         count: 5,
-        variant: 'count'
+        variant: 'count',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -221,11 +221,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 5,
         variant: 'count',
-        size: 'sm'
+        size: 'sm',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -238,11 +238,11 @@ describe('NotificationBadge Component', () => {
       props: {
         count: 5,
         variant: 'count',
-        size: 'lg'
+        size: 'lg',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')
@@ -254,11 +254,11 @@ describe('NotificationBadge Component', () => {
     const wrapper = mount(NotificationBadge, {
       props: {
         variant: 'dot',
-        size: 'lg'
+        size: 'lg',
       },
       slots: {
-        default: '<span>Icon</span>'
-      }
+        default: '<span>Icon</span>',
+      },
     })
 
     const badge = wrapper.find('span.absolute')

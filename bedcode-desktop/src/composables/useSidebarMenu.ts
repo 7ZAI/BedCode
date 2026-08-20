@@ -175,7 +175,9 @@ export function useSidebarMenu(): { menuItems: ComputedRef<SidebarMenuItem[]> } 
   const registry = getPluginRegistry()
 
   const menuItems = computed<SidebarMenuItem[]>(() => {
-    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(toMenuItem)
+    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(
+      toMenuItem,
+    )
     const all = [...builtinMenuItems, ...customItemsRef.value, ...pluginItems]
     all.sort((a, b) => a.order - b.order)
     return all

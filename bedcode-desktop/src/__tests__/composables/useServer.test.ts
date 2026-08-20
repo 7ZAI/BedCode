@@ -11,7 +11,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useServer } from '@/composables/useServer'
-import { makeServerStatusInfo, makeNetworkConfig, makeServerMetrics } from '@/__tests__/fixtures/server'
+import {
+  makeServerStatusInfo,
+  makeNetworkConfig,
+  makeServerMetrics,
+} from '@/__tests__/fixtures/server'
 
 // Mock Tauri invoke
 const mockInvoke = vi.fn()
@@ -83,7 +87,10 @@ describe('useServer', () => {
 
       expect(server.status.value).toBe('starting')
       expect(server.port.value).toBe(8765)
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to load server status:', expect.any(Error))
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to load server status:',
+        expect.any(Error),
+      )
     })
   })
 
@@ -102,7 +109,11 @@ describe('useServer', () => {
 
     it('startServer should hold loading flag while request is in flight', async () => {
       let resolveFn: () => void
-      mockInvoke.mockReturnValueOnce(new Promise<void>(resolve => { resolveFn = resolve }))
+      mockInvoke.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveFn = resolve
+        }),
+      )
 
       const server = useServer()
       const pending = server.startServer()
@@ -184,7 +195,10 @@ describe('useServer', () => {
       await server.loadNetworkConfig()
 
       expect(server.networkConfig.value).toBeNull()
-      expect(consoleErrorSpy).toHaveBeenCalledWith('Failed to load network config:', expect.any(Error))
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        'Failed to load network config:',
+        expect.any(Error),
+      )
     })
 
     it('updateNetworkConfig should pass config and update state with a copy', async () => {
@@ -194,7 +208,9 @@ describe('useServer', () => {
       const updated = { ...networkConfig, port: 8080 }
       await server.updateNetworkConfig(updated)
 
-      expect(mockInvoke).toHaveBeenCalledWith('update_server_network_config', { networkConfig: updated })
+      expect(mockInvoke).toHaveBeenCalledWith('update_server_network_config', {
+        networkConfig: updated,
+      })
       expect(server.networkConfig.value).toEqual(updated)
       expect(server.networkConfig.value).not.toBe(updated) // 存副本，防止外部改动穿透
       expect(server.port.value).toBe(8080)
@@ -241,11 +257,13 @@ describe('useServer', () => {
 
       expect(mockInvoke).toHaveBeenCalledWith('get_server_metrics')
       expect(server.metrics.value).toEqual(metrics)
-      expect(server.metricsHistory.value).toEqual([{
-        timestamp_secs: 120,
-        ws_sent_rate: 1.5,
-        ws_recv_rate: 2.5,
-      }])
+      expect(server.metricsHistory.value).toEqual([
+        {
+          timestamp_secs: 120,
+          ws_sent_rate: 1.5,
+          ws_recv_rate: 2.5,
+        },
+      ])
       server.stopPolling()
     })
 

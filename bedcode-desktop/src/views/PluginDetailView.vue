@@ -9,13 +9,24 @@
           @click="goBack"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M15 19l-7-7 7-7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M15 19l-7-7 7-7"
+            />
           </svg>
         </button>
-        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate">
+        <h1
+          class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
+        >
           {{ plugin ? plugin.name : '...' }}
         </h1>
-        <span v-if="plugin" class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">v{{ plugin.version }}</span>
+        <span
+          v-if="plugin"
+          class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0"
+          >v{{ plugin.version }}</span
+        >
       </div>
     </div>
 
@@ -24,14 +35,21 @@
       <div class="max-w-3xl mx-auto">
         <!-- 加载态 -->
         <div v-if="loading" class="py-16 text-center">
-          <div class="w-8 h-8 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
+          <div
+            class="w-8 h-8 border-2 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin mx-auto mb-3"
+          ></div>
           <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">Loading...</p>
         </div>
 
         <!-- 插件未找到 -->
         <div v-else-if="!plugin" class="py-16 text-center">
-          <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-secondary)]">Plugin not found</p>
-          <button class="mt-3 text-[calc(12px*var(--ui-scale))] text-[var(--color-primary)] hover:underline" @click="goBack">
+          <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-secondary)]">
+            Plugin not found
+          </p>
+          <button
+            class="mt-3 text-[calc(12px*var(--ui-scale))] text-[var(--color-primary)] hover:underline"
+            @click="goBack"
+          >
             {{ $t('desktop.plugin.backToList') }}
           </button>
         </div>
@@ -47,7 +65,11 @@
               size="lg"
             />
             <div class="flex-1 min-w-0">
-              <h2 class="text-[calc(16px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate">{{ plugin.name }}</h2>
+              <h2
+                class="text-[calc(16px*var(--ui-scale))] font-semibold text-[var(--text-primary)] truncate"
+              >
+                {{ plugin.name }}
+              </h2>
               <p class="text-[calc(12px*var(--ui-scale))] mt-0.5 text-[var(--text-secondary)]">
                 {{ plugin.author || '—' }} · v{{ plugin.version }}
               </p>
@@ -55,7 +77,10 @@
                 class="inline-flex items-center gap-1.5 mt-2 px-2 py-0.5 rounded-md text-[calc(11px*var(--ui-scale))] font-medium"
                 :class="stateBadgeClass(plugin.state)"
               >
-                <span v-if="isActivated(plugin.state)" class="w-1.5 h-1.5 rounded-full bg-green-500"></span>
+                <span
+                  v-if="isActivated(plugin.state)"
+                  class="w-1.5 h-1.5 rounded-full bg-green-500"
+                ></span>
                 {{ $t(getStateKey(plugin.state)) }}
               </span>
             </div>
@@ -65,15 +90,24 @@
               <button
                 v-if="plugin.pluginType !== 'rust'"
                 class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors flex items-center justify-center"
-                :class="isActivated(plugin.state)
-                  ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20'
-                  : 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'"
+                :class="
+                  isActivated(plugin.state)
+                    ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20'
+                    : 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
+                "
                 :disabled="!!togglingId"
                 @click="handleToggle(plugin.id, !isActivated(plugin.state))"
               >
-                {{ isActivated(plugin.state) ? $t('desktop.plugin.disable') : $t('desktop.plugin.enabled') }}
+                {{
+                  isActivated(plugin.state)
+                    ? $t('desktop.plugin.disable')
+                    : $t('desktop.plugin.enabled')
+                }}
               </button>
-              <span v-else class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] bg-[var(--bg-hover)] flex items-center justify-center">
+              <span
+                v-else
+                class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] bg-[var(--bg-hover)] flex items-center justify-center"
+              >
                 {{ $t('desktop.plugin.alwaysOn') }}
               </span>
 
@@ -85,7 +119,10 @@
               >
                 {{ $t('desktop.plugin.goConfig') }}
               </router-link>
-              <span v-else class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] flex items-center justify-center cursor-not-allowed">
+              <span
+                v-else
+                class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] flex items-center justify-center cursor-not-allowed"
+              >
                 {{ $t('desktop.plugin.goConfig') }}
               </span>
             </div>
@@ -94,30 +131,61 @@
           <!-- ==================== 统计条 ==================== -->
           <div class="grid grid-cols-3 gap-0 border-b border-[var(--border)]">
             <div class="py-3 text-center border-r border-[var(--border)]">
-              <div class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ getContributionChips(plugin).length }}</div>
-              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">{{ $t('desktop.plugin.stat.extensions') }}</div>
+              <div
+                class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ getContributionChips(plugin).length }}
+              </div>
+              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">
+                {{ $t('desktop.plugin.stat.extensions') }}
+              </div>
             </div>
             <div class="py-3 text-center border-r border-[var(--border)]">
-              <div class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ plugin.permissions.length }}</div>
-              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">{{ $t('desktop.plugin.stat.permissions') }}</div>
+              <div
+                class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ plugin.permissions.length }}
+              </div>
+              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">
+                {{ $t('desktop.plugin.stat.permissions') }}
+              </div>
             </div>
             <div class="py-3 text-center">
-              <div class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ formatBytes(plugin.sizeBytes) }}</div>
-              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">{{ $t('desktop.plugin.stat.size') }}</div>
+              <div
+                class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ formatBytes(plugin.sizeBytes) }}
+              </div>
+              <div class="text-[calc(11px*var(--ui-scale))] mt-0.5 text-[var(--text-tertiary)]">
+                {{ $t('desktop.plugin.stat.size') }}
+              </div>
             </div>
           </div>
 
           <!-- ==================== 折叠区域 ==================== -->
-          <div class="mt-4 bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 divide-y-0">
+          <div
+            class="mt-4 bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4 divide-y-0"
+          >
             <!-- 简介（默认展开） -->
-            <CollapseSection :title="$t('desktop.plugin.section.intro')" emoji="📄" :default-open="true">
-              <p class="px-1 pb-4 text-[calc(12px*var(--ui-scale))] leading-relaxed text-[var(--text-secondary)]">
+            <CollapseSection
+              :title="$t('desktop.plugin.section.intro')"
+              emoji="📄"
+              :default-open="true"
+            >
+              <p
+                class="px-1 pb-4 text-[calc(12px*var(--ui-scale))] leading-relaxed text-[var(--text-secondary)]"
+              >
                 {{ plugin.description || $t('desktop.plugin.noDescription') }}
               </p>
             </CollapseSection>
 
             <!-- 扩展点（默认折叠） -->
-            <CollapseSection :title="$t('desktop.plugin.section.contributes')" emoji="🧩" :badge="getContributionChips(plugin).length" :default-open="false">
+            <CollapseSection
+              :title="$t('desktop.plugin.section.contributes')"
+              emoji="🧩"
+              :badge="getContributionChips(plugin).length"
+              :default-open="false"
+            >
               <div class="px-1 pb-4 flex flex-wrap gap-2">
                 <span
                   v-for="chip in getContributionChips(plugin)"
@@ -126,27 +194,60 @@
                 >
                   {{ chip.emoji }} {{ $t(chip.labelKey, chip.params ?? {}) }}
                 </span>
-                <span v-if="getContributionChips(plugin).length === 0" class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">—</span>
+                <span
+                  v-if="getContributionChips(plugin).length === 0"
+                  class="text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                  >—</span
+                >
               </div>
             </CollapseSection>
 
             <!-- 权限（默认折叠） -->
-            <CollapseSection :title="$t('desktop.plugin.section.permissions')" emoji="🛡️" :badge="plugin.permissions.length" :default-open="false">
+            <CollapseSection
+              :title="$t('desktop.plugin.section.permissions')"
+              emoji="🛡️"
+              :badge="plugin.permissions.length"
+              :default-open="false"
+            >
               <div class="px-1 pb-3 divide-y divide-[var(--border)]">
-                <div v-for="perm in plugin.permissions" :key="perm" class="flex items-center gap-3 py-2.5">
-                  <span class="w-4 h-4 flex items-center justify-center text-xs shrink-0">{{ getPermissionMeta(perm).emoji }}</span>
+                <div
+                  v-for="perm in plugin.permissions"
+                  :key="perm"
+                  class="flex items-center gap-3 py-2.5"
+                >
+                  <span class="w-4 h-4 flex items-center justify-center text-xs shrink-0">{{
+                    getPermissionMeta(perm).emoji
+                  }}</span>
                   <div class="flex-1 min-w-0">
-                    <div class="text-[calc(12px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ getPermissionMeta(perm).title }}</div>
-                    <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ getPermissionMeta(perm).desc }}</div>
+                    <div
+                      class="text-[calc(12px*var(--ui-scale))] font-medium text-[var(--text-primary)]"
+                    >
+                      {{ getPermissionMeta(perm).title }}
+                    </div>
+                    <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">
+                      {{ getPermissionMeta(perm).desc }}
+                    </div>
                   </div>
-                  <span class="wb-mono text-[calc(10px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0">{{ perm }}</span>
+                  <span
+                    class="wb-mono text-[calc(10px*var(--ui-scale))] text-[var(--text-tertiary)] shrink-0"
+                    >{{ perm }}</span
+                  >
                 </div>
-                <div v-if="plugin.permissions.length === 0" class="py-2.5 text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]">—</div>
+                <div
+                  v-if="plugin.permissions.length === 0"
+                  class="py-2.5 text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                >
+                  —
+                </div>
               </div>
             </CollapseSection>
 
             <!-- 详细信息（默认折叠） -->
-            <CollapseSection :title="$t('desktop.plugin.section.details')" emoji="ℹ️" :default-open="false">
+            <CollapseSection
+              :title="$t('desktop.plugin.section.details')"
+              emoji="ℹ️"
+              :default-open="false"
+            >
               <div class="px-1 pb-3 text-[calc(12px*var(--ui-scale))]">
                 <div
                   v-for="row in getDetailRows(plugin)"
@@ -154,13 +255,22 @@
                   class="grid grid-cols-[80px_1fr] py-2 border-b border-[var(--border)] last:border-b-0"
                 >
                   <span class="text-[var(--text-tertiary)]">{{ row.label }}</span>
-                  <span class="break-all text-[var(--text-secondary)]" :class="row.mono ? 'wb-mono' : ''">{{ row.value }}</span>
+                  <span
+                    class="break-all text-[var(--text-secondary)]"
+                    :class="row.mono ? 'wb-mono' : ''"
+                    >{{ row.value }}</span
+                  >
                 </div>
                 <!-- 扩展路径 + 复制 -->
                 <div class="grid grid-cols-[80px_1fr] py-2">
-                  <span class="text-[var(--text-tertiary)]">{{ $t('desktop.plugin.copyPath') }}</span>
+                  <span class="text-[var(--text-tertiary)]">{{
+                    $t('desktop.plugin.copyPath')
+                  }}</span>
                   <div class="flex items-center gap-2 min-w-0">
-                    <code class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] bg-[var(--bg-hover)] px-2 py-1 rounded-[4px] truncate">{{ plugin.extensionPath }}</code>
+                    <code
+                      class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] bg-[var(--bg-hover)] px-2 py-1 rounded-[4px] truncate"
+                      >{{ plugin.extensionPath }}</code
+                    >
                     <button
                       class="text-[calc(11px*var(--ui-scale))] text-[var(--color-primary)] hover:underline shrink-0"
                       @click="copyPath(plugin.extensionPath)"
@@ -183,9 +293,15 @@
           v-if="togglingPluginInfo"
           class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
         >
-          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-8 py-6 shadow-xl flex flex-col items-center gap-4">
-            <div class="w-8 h-8 border-3 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin"></div>
-            <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ togglingPluginInfo.message }}</p>
+          <div
+            class="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-8 py-6 shadow-xl flex flex-col items-center gap-4"
+          >
+            <div
+              class="w-8 h-8 border-3 border-[var(--color-primary)] border-t-transparent rounded-full animate-spin"
+            ></div>
+            <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">
+              {{ togglingPluginInfo.message }}
+            </p>
           </div>
         </div>
       </Transition>
@@ -239,7 +355,7 @@ async function loadPlugin(): Promise<void> {
   try {
     const pluginId = route.params.id as string
     const list = await pluginListLoaded()
-    const found = list.find(p => p.id === pluginId)
+    const found = list.find((p) => p.id === pluginId)
     if (!found) {
       plugin.value = null
     } else {
@@ -261,7 +377,8 @@ function goBack(): void {
 /** 状态徽章样式 */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) return 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
-  if (isActivated(state)) return 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400'
+  if (isActivated(state))
+    return 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400'
   return 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'
 }
 
@@ -277,7 +394,10 @@ async function handleToggle(id: string, enable: boolean): Promise<void> {
   try {
     const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(t('desktop.plugin.toggleTimeout'))), TOGGLE_TIMEOUT_MS)
+      timer = setTimeout(
+        () => reject(new Error(t('desktop.plugin.toggleTimeout'))),
+        TOGGLE_TIMEOUT_MS,
+      )
     })
     await Promise.race([op, timeout])
     await loadPlugin()
@@ -303,10 +423,17 @@ async function copyPath(path: string): Promise<void> {
   }
 }
 
-onMounted(() => { loadPlugin() })
+onMounted(() => {
+  loadPlugin()
+})
 
 // 路由参数变化时重新加载（同路由不同 params）
-watch(() => route.params.id, () => { loadPlugin() })
+watch(
+  () => route.params.id,
+  () => {
+    loadPlugin()
+  },
+)
 </script>
 
 <style scoped>

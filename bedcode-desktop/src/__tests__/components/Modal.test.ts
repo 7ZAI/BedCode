@@ -24,11 +24,11 @@ describe('Modal Component', () => {
     const wrapper = mountModal({
       props: {
         modelValue: false,
-        title: 'Test Modal'
+        title: 'Test Modal',
       },
       slots: {
-        default: 'Modal Content'
-      }
+        default: 'Modal Content',
+      },
     })
 
     // When modelValue is false, the modal content should not be visible
@@ -41,11 +41,11 @@ describe('Modal Component', () => {
     const wrapper = mountModal({
       props: {
         modelValue: true,
-        title: 'Test Modal'
+        title: 'Test Modal',
       },
       slots: {
-        default: 'Modal Content'
-      }
+        default: 'Modal Content',
+      },
     })
 
     // Wait for teleport to render
@@ -66,11 +66,11 @@ describe('Modal Component', () => {
     const wrapper = mountModal({
       props: {
         modelValue: true,
-        title: 'Test Modal'
+        title: 'Test Modal',
       },
       slots: {
-        default: 'Modal Content'
-      }
+        default: 'Modal Content',
+      },
     })
 
     await wrapper.vm.$nextTick()
@@ -94,11 +94,11 @@ describe('Modal Component', () => {
     const wrapper = mountModal({
       props: {
         modelValue: true,
-        title: 'Test Modal'
+        title: 'Test Modal',
       },
       slots: {
-        default: 'Modal Content'
-      }
+        default: 'Modal Content',
+      },
     })
 
     await wrapper.vm.$nextTick()
@@ -123,11 +123,11 @@ describe('Modal Component', () => {
       props: {
         modelValue: true,
         title: 'Test Modal',
-        closeOnBackdrop: false
+        closeOnBackdrop: false,
       },
       slots: {
-        default: 'Modal Content'
-      }
+        default: 'Modal Content',
+      },
     })
 
     await wrapper.vm.$nextTick()
@@ -149,12 +149,12 @@ describe('Modal Component', () => {
     const wrapper = mountModal({
       props: {
         modelValue: true,
-        title: 'Test Modal'
+        title: 'Test Modal',
       },
       slots: {
         default: 'Modal Content',
-        footer: '<button>Confirm</button>'
-      }
+        footer: '<button>Confirm</button>',
+      },
     })
 
     await wrapper.vm.$nextTick()
@@ -173,8 +173,8 @@ describe('Modal Component', () => {
       props: {
         modelValue: true,
         title: 'Test Modal',
-        size: 'lg'
-      }
+        size: 'lg',
+      },
     })
 
     await wrapper.vm.$nextTick()

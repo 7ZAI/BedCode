@@ -33,7 +33,7 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
 
   const currentPath = computed(() => breadcrumb.value[breadcrumb.value.length - 1].path)
   const selectedEntries = computed(() =>
-    entries.value.filter(e => selectedNames.value.includes(e.name)),
+    entries.value.filter((e) => selectedNames.value.includes(e.name)),
   )
   const hasSelection = computed(() => selectedNames.value.length > 0)
 
@@ -67,9 +67,11 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
         isDir: !!e.isDir,
       }))
       // 目录内容变化后仅保留仍存在的选中项
-      const alive = new Set(entries.value.map(e => e.name))
-      selectedNames.value = selectedNames.value.filter(n => alive.has(n))
-      console.log(`[File Transfer] list-remote OK: path='${target}' entries=${entries.value.length}`)
+      const alive = new Set(entries.value.map((e) => e.name))
+      selectedNames.value = selectedNames.value.filter((n) => alive.has(n))
+      console.log(
+        `[File Transfer] list-remote OK: path='${target}' entries=${entries.value.length}`,
+      )
     } catch (e) {
       if (seq !== busySeq) return
       entries.value = []
@@ -102,17 +104,17 @@ export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
   /** 切换单文件选中 */
   function toggleSelect(name: string): void {
     selectedNames.value = selectedNames.value.includes(name)
-      ? selectedNames.value.filter(n => n !== name)
+      ? selectedNames.value.filter((n) => n !== name)
       : [...selectedNames.value, name]
   }
 
   /** 表头全选：仅作用于文件（目录不可下载） */
   function toggleAll(): void {
-    const fileNames = entries.value.filter(e => !e.isDir).map(e => e.name)
+    const fileNames = entries.value.filter((e) => !e.isDir).map((e) => e.name)
     const allSelected =
-      fileNames.length > 0 && fileNames.every(n => selectedNames.value.includes(n))
+      fileNames.length > 0 && fileNames.every((n) => selectedNames.value.includes(n))
     selectedNames.value = allSelected
-      ? selectedNames.value.filter(n => !fileNames.includes(n))
+      ? selectedNames.value.filter((n) => !fileNames.includes(n))
       : Array.from(new Set([...selectedNames.value, ...fileNames]))
   }
 

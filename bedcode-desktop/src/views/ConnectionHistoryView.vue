@@ -8,7 +8,12 @@
           @click="router.push('/devices')"
         >
           <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M15 19l-7-7 7-7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.5"
+              d="M15 19l-7-7 7-7"
+            />
           </svg>
           {{ t('desktop.device.historyBack') }}
         </button>
@@ -17,38 +22,66 @@
           {{ deviceName || t('desktop.device.historyTitle') }}
         </h2>
         <!-- 统计计数 -->
-        <span v-if="!isLoading && history.length > 0" class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] whitespace-nowrap">
-          {{ history.length }} total · <span class="text-green-700 dark:text-green-400">{{ successCount }} ok</span> · <span class="text-red-700 dark:text-red-400">{{ failCount }} fail</span>
+        <span
+          v-if="!isLoading && history.length > 0"
+          class="wb-mono text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] whitespace-nowrap"
+        >
+          {{ history.length }} total ·
+          <span class="text-green-700 dark:text-green-400">{{ successCount }} ok</span> ·
+          <span class="text-red-700 dark:text-red-400">{{ failCount }} fail</span>
         </span>
       </div>
       <div class="flex items-center gap-2">
         <PluginPageToolbar target="history" />
-        <button
-          v-if="history.length > 0"
-          class="wb-btn-ghost"
-        @click="showClearDialog = true"
-      >
-        {{ t('desktop.device.historyClear') }}
-      </button>
+        <button v-if="history.length > 0" class="wb-btn-ghost" @click="showClearDialog = true">
+          {{ t('desktop.device.historyClear') }}
+        </button>
       </div>
     </div>
 
     <div class="flex-1 overflow-auto px-6 py-6">
       <!-- 加载态 -->
       <div v-if="isLoading" class="flex flex-col items-center justify-center py-20">
-        <svg class="w-5 h-5 animate-spin text-[var(--text-secondary)] mb-3" fill="none" viewBox="0 0 24 24">
-          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="2"></circle>
-          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"></path>
+        <svg
+          class="w-5 h-5 animate-spin text-[var(--text-secondary)] mb-3"
+          fill="none"
+          viewBox="0 0 24 24"
+        >
+          <circle
+            class="opacity-25"
+            cx="12"
+            cy="12"
+            r="10"
+            stroke="currentColor"
+            stroke-width="2"
+          ></circle>
+          <path
+            class="opacity-75"
+            fill="currentColor"
+            d="M4 12a8 8 0 018-8v2a6 6 0 00-6 6H4z"
+          ></path>
         </svg>
         <p class="wb-mono text-xs text-[var(--text-secondary)]">{{ t('common.status.loading') }}</p>
       </div>
 
       <!-- 空态 -->
       <div v-else-if="history.length === 0" class="flex flex-col items-center justify-center py-20">
-        <svg class="w-7 h-7 text-[var(--text-tertiary)] mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        <svg
+          class="w-7 h-7 text-[var(--text-tertiary)] mb-3"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.5"
+            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
         </svg>
-        <p class="wb-mono text-xs text-[var(--text-secondary)]">{{ t('desktop.device.historyEmpty') }}</p>
+        <p class="wb-mono text-xs text-[var(--text-secondary)]">
+          {{ t('desktop.device.historyEmpty') }}
+        </p>
       </div>
 
       <!-- 按日期分组的 section -->
@@ -58,7 +91,9 @@
           <h3 class="wb-section-title font-mono tracking-[0.12em]">
             {{ group.date }} · {{ group.entries.length }}
           </h3>
-          <div class="border border-[var(--border)] rounded-[10px] bg-[var(--bg-card)] divide-y divide-[var(--border)] overflow-hidden">
+          <div
+            class="border border-[var(--border)] rounded-[10px] bg-[var(--bg-card)] divide-y divide-[var(--border)] overflow-hidden"
+          >
             <div
               v-for="entry in group.entries"
               :key="entry.id"
@@ -67,20 +102,27 @@
               <span
                 :class="[
                   'w-2 h-2 rounded-full shrink-0',
-                  entry.result === 'success' ? 'bg-green-500' : 'bg-red-400'
+                  entry.result === 'success' ? 'bg-green-500' : 'bg-red-400',
                 ]"
               ></span>
-              <span class="text-xs font-medium text-[var(--text-primary)] w-16 shrink-0">{{ methodLabel(entry.authMethod) }}</span>
+              <span class="text-xs font-medium text-[var(--text-primary)] w-16 shrink-0">{{
+                methodLabel(entry.authMethod)
+              }}</span>
               <span class="wb-mono text-[var(--text-secondary)] truncate flex-1 min-w-0">
                 {{ entry.address ?? '—' }}
               </span>
               <span class="wb-mono text-[var(--text-tertiary)] tabular-nums whitespace-nowrap">
-                {{ clockTime(entry.connectedAt) }}<template v-if="entry.disconnectedAt"> → {{ clockTime(entry.disconnectedAt) }}</template>
+                {{ clockTime(entry.connectedAt)
+                }}<template v-if="entry.disconnectedAt">
+                  → {{ clockTime(entry.disconnectedAt) }}</template
+                >
               </span>
               <span
                 :class="[
                   'wb-mono text-[calc(11px*var(--ui-scale))] w-12 text-right shrink-0',
-                  entry.result === 'success' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'
+                  entry.result === 'success'
+                    ? 'text-green-700 dark:text-green-400'
+                    : 'text-red-700 dark:text-red-400',
                 ]"
               >
                 {{ resultLabel(entry.result) }}
@@ -93,11 +135,21 @@
 
     <!-- 清空确认对话框 -->
     <Modal v-model="showClearDialog" :title="t('desktop.device.historyClear')" size="sm">
-      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">{{ t('desktop.device.historyClearConfirm') }}</p>
+      <p class="text-[var(--text-primary)] text-[calc(13px*var(--ui-scale))]">
+        {{ t('desktop.device.historyClearConfirm') }}
+      </p>
       <template #footer>
         <div class="flex justify-end gap-3">
-          <button class="wb-btn-ghost" @click="showClearDialog = false">{{ t('common.button.cancel') }}</button>
-          <button class="wb-btn-primary" :class="{ 'bg-[var(--color-danger)]': true }" @click="confirmClearHistory">{{ t('common.button.clear') }}</button>
+          <button class="wb-btn-ghost" @click="showClearDialog = false">
+            {{ t('common.button.cancel') }}
+          </button>
+          <button
+            class="wb-btn-primary"
+            :class="{ 'bg-[var(--color-danger)]': true }"
+            @click="confirmClearHistory"
+          >
+            {{ t('common.button.clear') }}
+          </button>
         </div>
       </template>
     </Modal>
@@ -127,7 +179,7 @@ const toast = useToast()
 
 const deviceId = computed(() => route.params.id as string)
 const deviceName = computed(() => {
-  const device = deviceStore.pairedDevices.find(d => d.id === deviceId.value)
+  const device = deviceStore.pairedDevices.find((d) => d.id === deviceId.value)
   return device?.deviceName ?? ''
 })
 
@@ -135,7 +187,7 @@ const history = ref<ConnectionHistoryEntry[]>([])
 const isLoading = ref(false)
 const showClearDialog = ref(false)
 
-const successCount = computed(() => history.value.filter(e => e.result === 'success').length)
+const successCount = computed(() => history.value.filter((e) => e.result === 'success').length)
 const failCount = computed(() => history.value.length - successCount.value)
 
 /** 按连接日期分组，保持原列表顺序（后端已按时间倒序） */

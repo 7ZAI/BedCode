@@ -55,7 +55,9 @@ export function startPluginWatch({ root, resourcesDir, extraFiles = [], wasmFile
   const distMain = resolve(distDir, 'index.js')
 
   if (!viteBin) {
-    console.error(`[watch] vite 未找到（自 ${root} 向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 npm install`)
+    console.error(
+      `[watch] vite 未找到（自 ${root} 向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 npm install`,
+    )
     process.exit(1)
   }
 

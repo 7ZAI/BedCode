@@ -50,15 +50,17 @@ export function on(pluginId: string, event: string, handler: EventHandler): Disp
   // 2. 同时注册 Tauri listen（桥接 Rust → 前端事件）
   // Rust 侧 app_handle.emit() 发送的事件通过 Tauri 事件系统到达前端
   let tauriUnlisten: (() => void) | null = null
-  import('@tauri-apps/api/event').then(({ listen }) => {
-    listen(event, (tauriEvent: any) => {
-      handler(tauriEvent.payload)
-    }).then(unlisten => {
-      tauriUnlisten = unlisten
+  import('@tauri-apps/api/event')
+    .then(({ listen }) => {
+      listen(event, (tauriEvent: any) => {
+        handler(tauriEvent.payload)
+      }).then((unlisten) => {
+        tauriUnlisten = unlisten
+      })
     })
-  }).catch(() => {
-    // Tauri API 不可用时静默忽略（如测试环境）
-  })
+    .catch(() => {
+      // Tauri API 不可用时静默忽略（如测试环境）
+    })
 
   return {
     dispose() {
@@ -73,7 +75,7 @@ export function emit(event: string, ...args: any[]): void {
   for (const pluginMap of handlers.values()) {
     const handlerSet = pluginMap.get(event)
     if (handlerSet) {
-      handlerSet.forEach(h => {
+      handlerSet.forEach((h) => {
         try {
           h(...args)
         } catch (e) {

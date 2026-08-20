@@ -103,9 +103,7 @@ function buildContentsBody(
   provider: ApiProvider,
   messages: { role: string; content: string }[],
 ): Record<string, unknown> {
-  const systemTexts = messages
-    .filter((m) => m.role === 'system')
-    .map((m) => m.content)
+  const systemTexts = messages.filter((m) => m.role === 'system').map((m) => m.content)
   const contents = messages
     .filter((m) => m.role !== 'system')
     .map((m) => ({

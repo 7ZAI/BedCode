@@ -22,10 +22,7 @@
           </div>
 
           <!-- Body -->
-          <div
-            class="flex flex-col overflow-hidden"
-            :class="bodyMaxHeightClass"
-          >
+          <div class="flex flex-col overflow-hidden" :class="bodyMaxHeightClass">
             <div class="flex-1 overflow-y-auto p-6">
               <slot></slot>
             </div>
@@ -39,11 +36,16 @@
           <!-- Close Button -->
           <button
             v-if="closable"
-            @click="close()"
             class="absolute top-4 right-4 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+            @click="close()"
           >
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M6 18L18 6M6 6l12 12"
+              />
             </svg>
           </button>
         </div>

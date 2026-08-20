@@ -62,7 +62,8 @@ vi.mock('@/components/Modal.vue', () => ({
 
 vi.mock('@/components/SessionForm.vue', () => ({
   default: {
-    template: '<form @submit.prevent="$emit(\'save\', { name: \'New\', environment: \'windows\', wslDistro: \'\', workingDir: \'\', command: \'claude\', autoStart: false })"><slot /></form>',
+    template:
+      "<form @submit.prevent=\"$emit('save', { name: 'New', environment: 'windows', wslDistro: '', workingDir: '', command: 'claude', autoStart: false })\"><slot /></form>",
     props: ['config'],
     emits: ['save', 'cancel'],
   },

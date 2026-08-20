@@ -16,6 +16,6 @@ export function mergeUsage(current: Usage | undefined, next: PartialUsage): Usag
     // 无显式总量时按已齐的两项求和（anthropic 场景）
     (promptTokens || completionTokens
       ? promptTokens + completionTokens
-      : current?.totalTokens ?? 0)
+      : (current?.totalTokens ?? 0))
   return { promptTokens, completionTokens, totalTokens }
 }

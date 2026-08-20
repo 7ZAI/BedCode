@@ -17,13 +17,7 @@ import type {
   PluginContext,
   UIRegistry,
 } from '../../src/types'
-import {
-  emitDevEvent,
-  onDevEvent,
-  sendInputToSession,
-  sendOutput,
-  sessions,
-} from './mock/session'
+import { emitDevEvent, onDevEvent, sendInputToSession, sendOutput, sessions } from './mock/session'
 import { dialogService } from './mock/dialog-service'
 import {
   pushLog,
@@ -83,7 +77,9 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
       sendInputToSession(sessionId, text)
     },
     onOutput(handler: (sessionId: string, data: string) => void): Disposable {
-      return track(onDevEvent('terminal:output', (payload: any) => handler(payload.sessionId, payload.data)))
+      return track(
+        onDevEvent('terminal:output', (payload: any) => handler(payload.sessionId, payload.data)),
+      )
     },
     onInput(handler: (sessionId: string, text: string) => string | null): Disposable {
       return track(
@@ -186,12 +182,7 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
   // ==================== FileServiceAPI ====================
   const fileService: FileServiceAPI = {
     async mount(options) {
-      const handle = registerMount(
-        pluginId,
-        options.mountPath,
-        options.roots,
-        options.operations,
-      )
+      const handle = registerMount(pluginId, options.mountPath, options.roots, options.operations)
       pushLog(
         'info',
         pluginId,
@@ -201,7 +192,11 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
         mountPath: options.mountPath,
         async updateRoots(roots: string[]) {
           handle.updateRoots(roots)
-          pushLog('info', pluginId, `fileService.updateRoots "${options.mountPath}" -> [${roots.join(', ')}]`)
+          pushLog(
+            'info',
+            pluginId,
+            `fileService.updateRoots "${options.mountPath}" -> [${roots.join(', ')}]`,
+          )
         },
         async dispose() {
           handle.dispose()

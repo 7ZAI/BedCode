@@ -106,7 +106,9 @@ export const SESSION_CONFIG_DTO_FIELDS = [
   'updatedAt',
 ] as const
 
-export function makeSessionConfig(overrides: Partial<SessionConfigFixture> = {}): SessionConfigFixture {
+export function makeSessionConfig(
+  overrides: Partial<SessionConfigFixture> = {},
+): SessionConfigFixture {
   const fixture: SessionConfigFixture = {
     id: 'config-1',
     name: 'Default',
@@ -159,9 +161,16 @@ export interface DeviceConnectionInfoFixture {
 }
 
 /** 与 connection_types.rs DeviceConnectionInfo 字段一一对应 */
-export const DEVICE_CONNECTION_INFO_DTO_FIELDS = ['addr', 'device_id', 'fingerprint', 'session_count'] as const
+export const DEVICE_CONNECTION_INFO_DTO_FIELDS = [
+  'addr',
+  'device_id',
+  'fingerprint',
+  'session_count',
+] as const
 
-export function makeDeviceConnectionInfo(overrides: Partial<DeviceConnectionInfoFixture> = {}): DeviceConnectionInfoFixture {
+export function makeDeviceConnectionInfo(
+  overrides: Partial<DeviceConnectionInfoFixture> = {},
+): DeviceConnectionInfoFixture {
   const fixture: DeviceConnectionInfoFixture = {
     addr: '192.168.1.50',
     device_id: 'device-1',

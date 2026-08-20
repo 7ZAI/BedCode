@@ -43,7 +43,8 @@ const toastOptions: ToasterProps['toastOptions'] = {
     toast: '!rounded-[10px] !shadow-lg',
     title: '!text-[13px] !font-medium',
     description: '!text-[var(--text-secondary)]',
-    closeButton: '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
+    closeButton:
+      '!bg-transparent !border-transparent !text-[var(--text-secondary)] hover:!text-[var(--text-primary)]',
   },
 }
 
@@ -80,7 +81,10 @@ const baseTabs = computed(() => [
 ])
 
 const sidebarItems = computed(() => {
-  const builtin = baseTabs.value.map((tab) => ({ ...tab, order: 100 + baseTabs.value.indexOf(tab) }))
+  const builtin = baseTabs.value.map((tab) => ({
+    ...tab,
+    order: 100 + baseTabs.value.indexOf(tab),
+  }))
   const panels = sidebarPanels.value.map((entry) => ({
     key: `panel:${entry.pluginId}:${entry.panel.id}`,
     label: entry.panel.title,
@@ -95,10 +99,7 @@ function isActive(item: { key: string }): boolean {
   if (item.key.startsWith('panel:')) {
     const v = activeView.value
     // key = panel:{pluginId}:{panel.id}，与打开面板时存入的 _panelId 比对
-    return (
-      v?.kind === 'sidebar' &&
-      `${v.pluginId}:${(v as any)._panelId}` === item.key.slice(6)
-    )
+    return v?.kind === 'sidebar' && `${v.pluginId}:${(v as any)._panelId}` === item.key.slice(6)
   }
   return activeTab.value === item.key
 }
@@ -141,7 +142,9 @@ window.addEventListener('beforeunload', () => {
       class="h-12 flex-shrink-0 flex items-center gap-3 px-4 border-b border-[var(--border)] bg-sidebar"
     >
       <span class="w-3 h-3 rounded-full bg-brand flex-shrink-0" />
-      <span class="text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">{{ t('devshell.brand') }}</span>
+      <span class="text-sm font-semibold text-[var(--text-primary)] whitespace-nowrap">{{
+        t('devshell.brand')
+      }}</span>
       <span v-if="plugins.length" class="text-xs text-[var(--text-tertiary)] truncate min-w-0">
         {{ pluginSummary }}
       </span>
@@ -201,7 +204,13 @@ window.addEventListener('beforeunload', () => {
           @click="selectSidebar(item)"
         >
           <span v-if="isSvgIcon(item.icon)" class="w-4 h-4 flex-shrink-0">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="w-4 h-4">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              class="w-4 h-4"
+            >
               <path :d="item.icon" />
             </svg>
           </span>
@@ -215,7 +224,11 @@ window.addEventListener('beforeunload', () => {
         <div class="flex-1 min-h-0 overflow-y-auto">
           <!-- 页面切换过渡（.page-* 类定义于 styles/style.css）：面板/页面跳转淡入淡出 -->
           <Transition name="page" mode="out-in">
-            <PanelView v-if="activeView" :key="activeView.pluginId + ':' + activeView.title" @back="backHome" />
+            <PanelView
+              v-if="activeView"
+              :key="activeView.pluginId + ':' + activeView.title"
+              @back="backHome"
+            />
             <TerminalView v-else-if="activeTab === 'terminal'" />
             <TerminalInputRailDemo v-else-if="activeTab === 'rail'" />
             <ToolboxView v-else-if="activeTab === 'toolbox'" />
@@ -232,7 +245,9 @@ window.addEventListener('beforeunload', () => {
             class="w-2 h-2 rounded-full flex-shrink-0"
             :class="connected ? 'bg-[var(--color-primary)]' : 'bg-[var(--text-tertiary)]'"
           />
-          <span class="whitespace-nowrap">{{ connected ? t('devshell.terminal.connected') : t('devshell.terminal.disconnected') }}</span>
+          <span class="whitespace-nowrap">{{
+            connected ? t('devshell.terminal.connected') : t('devshell.terminal.disconnected')
+          }}</span>
           <span class="text-[var(--text-tertiary)] whitespace-nowrap">mock-session-1</span>
           <span class="flex-1" />
           <button

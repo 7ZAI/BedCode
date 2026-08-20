@@ -39,8 +39,8 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
   'ui:fileHandler': ['ui.registerFileHandler'],
   'network:http': ['http.registerEndpoint'],
-  'storage': ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
-  'fileservice': [
+  storage: ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
+  fileservice: [
     'fileService.mount',
     'fileService.unmount',
     'fileService.updateRoots',
@@ -50,7 +50,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   ],
   'system:open': ['system.revealInDir'],
   // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
-  'transfer': [],
+  transfer: [],
 }
 
 /** 检查权限是否合法 */

@@ -97,8 +97,10 @@ const en: MessageSchema = {
   'transfer.settings.noDownloadDir': 'Not set',
   'transfer.settings.chooseDir': 'Choose folder',
   'transfer.settings.concurrency': 'Concurrency',
-  'transfer.settings.concurrencyHint': 'Number of simultaneous transfers; increasing it may use more bandwidth',
-  'transfer.settings.plainWarning': 'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
+  'transfer.settings.concurrencyHint':
+    'Number of simultaneous transfers; increasing it may use more bandwidth',
+  'transfer.settings.plainWarning':
+    'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
   'transfer.settings.receivingPolicy': 'Receiving policy',
   'transfer.settings.receivingPolicyAsk': 'Ask every time',
   'transfer.settings.receivingPolicyAccept': 'Accept automatically',
@@ -107,8 +109,10 @@ const en: MessageSchema = {
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
 
   // ==================== Errors (spec §10 + v2 reject reasons) ====================
-  'transfer.error.duplicateName': 'Upload failed: a file with the same name already exists in the target folder',
-  'transfer.error.remoteChanged': "The remote file has changed and can't be resumed. Please start over.",
+  'transfer.error.duplicateName':
+    'Upload failed: a file with the same name already exists in the target folder',
+  'transfer.error.remoteChanged':
+    "The remote file has changed and can't be resumed. Please start over.",
   'transfer.error.dirUnavailable': 'This folder is currently unavailable',
   'transfer.error.rejectedByUser': 'The transfer was rejected by the peer',
   'transfer.error.noResponse': 'No response from the peer; the request timed out',
@@ -126,14 +130,18 @@ const en: MessageSchema = {
 
   // ==================== Empty states ====================
   'transfer.empty.noRoots': 'Configure shared folders in Settings first',
-  'transfer.empty.noRootsHint': 'Add a local folder as a shared root so your peer can browse and download files from it',
+  'transfer.empty.noRootsHint':
+    'Add a local folder as a shared root so your peer can browse and download files from it',
   'transfer.empty.noPeer': 'No paired device detected',
-  'transfer.empty.noPeerHint': 'Make sure your phone and computer are on the same network and the phone is paired with sharing enabled',
+  'transfer.empty.noPeerHint':
+    'Make sure your phone and computer are on the same network and the phone is paired with sharing enabled',
   'transfer.empty.noDownloadDir': 'Configure a download folder in Settings first',
-  'transfer.empty.noDownloadDirHint': 'Choose where received files are saved, then you can download files from your peer to this device',
+  'transfer.empty.noDownloadDirHint':
+    'Choose where received files are saved, then you can download files from your peer to this device',
 
   // ==================== Peer storage permission notice ====================
-  'transfer.notice.storageAccess': 'The peer may share an Android top-level folder, but "All files access" is not granted on the phone. Grant it in System settings → Apps → BedCode → Allow all files, then refresh to see the contents',
+  'transfer.notice.storageAccess':
+    'The peer may share an Android top-level folder, but "All files access" is not granted on the phone. Grant it in System settings → Apps → BedCode → Allow all files, then refresh to see the contents',
 
   // ==================== ETA ====================
   'transfer.eta.seconds': '{count}s left',

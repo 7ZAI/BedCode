@@ -10,7 +10,9 @@
         <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
 
         <!-- Dialog -->
-        <div class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]">
+        <div
+          class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]"
+        >
           <!-- Header -->
           <div class="px-5 py-4 border-b border-[var(--border)]">
             <h3 class="text-base font-semibold text-[var(--text-primary)]">

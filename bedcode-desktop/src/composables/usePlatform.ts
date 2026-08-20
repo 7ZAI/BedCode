@@ -48,10 +48,8 @@ async function detectFromTauri(): Promise<PlatformInfo | null> {
     const versionResult = version()
     const typeResult = type()
 
-    const isDesktop = platformResult !== null &&
-      !['android', 'ios'].includes(platformResult)
-    const isMobile = platformResult !== null &&
-      ['android', 'ios'].includes(platformResult)
+    const isDesktop = platformResult !== null && !['android', 'ios'].includes(platformResult)
+    const isMobile = platformResult !== null && ['android', 'ios'].includes(platformResult)
 
     return {
       platform: platformResult as Platform | null,
@@ -83,7 +81,7 @@ function simulateForBrowser(): PlatformInfo {
   console.log(
     '[Platform] Browser simulation mode:',
     simulatedPlatform,
-    '- Use ?platform=mobile or localStorage to switch'
+    '- Use ?platform=mobile or localStorage to switch',
   )
 
   return {
