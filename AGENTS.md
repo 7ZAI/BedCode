@@ -191,7 +191,7 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 - TypeScript：文件头 `/** */`，export 项 JSDoc，Vue 组件 `<script setup>` 顶部加说明
 - 分隔注释：`// ==================== Section ====================`
 - 注释语言：中文，技术术语保留英文
-- 禁止注释掉的代码，禁止冗余注释
+- 注释掉的代码（`/* … */` / `// …`）：允许保留，但必须标注意图与恢复方式（如 `/* 临时调试：排查 X，恢复时取消注释 */`）；禁止保留无说明、无用途的陈腐注释代码（冗余注释）
 
 ---
 
@@ -299,7 +299,7 @@ sh scripts/doc-tracking.sh untrack && git commit
 - 禁止屏幕宽度检测平台
 - 禁止系统原生 UI 控件外观（select/checkbox/radio/date/range 等；文件选择、系统通知、授权弹窗等系统强关联场景除外）
 - 禁止 composable 中文硬编码字符串
-- 禁止注释掉的代码
+- 禁止无说明、无用途的陈腐注释代码（合理标注的临时调试代码允许保留，见 Code Comments）
 - 禁止 commit 中 AI 协作者标记
 - 禁止 panic hook 中调用 `tracing::error!`
 - 禁止无上下文的裸字符串错误
