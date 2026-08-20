@@ -2,8 +2,8 @@
 
 use async_trait::async_trait;
 
-use crate::model::message::Message;
 use crate::enums::TerminalAction;
+use crate::model::message::Message;
 use crate::Result;
 
 use crate::router::{ClientRouteContext, ClientRouteHandler};
@@ -14,12 +14,23 @@ pub struct TerminalHandler;
 #[async_trait]
 impl ClientRouteHandler for TerminalHandler {
     async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
-        if let Message::Terminal { session_id, payload, .. } = message {
+        if let Message::Terminal {
+            session_id, payload, ..
+        } = message
+        {
             match payload.action {
-                TerminalAction::SubscribeResponse { min_seq, max_seq, history_count, .. } => {
+                TerminalAction::SubscribeResponse {
+                    min_seq,
+                    max_seq,
+                    history_count,
+                    ..
+                } => {
                     tracing::info!(
                         "[TerminalHandler] SubscribeResponse: session_id={}, seq_range={}-{}, history={}",
-                        session_id, min_seq, max_seq, history_count
+                        session_id,
+                        min_seq,
+                        max_seq,
+                        history_count
                     );
                     // SubscribeResponse 不转发到前端，仅记录日志
                 }

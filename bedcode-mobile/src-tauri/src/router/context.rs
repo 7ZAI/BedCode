@@ -75,14 +75,8 @@ mod tests {
             request_id: "r1".to_string(),
         });
 
-        assert!(matches!(
-            rx.recv().await,
-            Ok(MobileEvent::AuthSuccess { .. })
-        ));
-        assert!(matches!(
-            rx.recv().await,
-            Ok(MobileEvent::ServerClosed { .. })
-        ));
+        assert!(matches!(rx.recv().await, Ok(MobileEvent::AuthSuccess { .. })));
+        assert!(matches!(rx.recv().await, Ok(MobileEvent::ServerClosed { .. })));
         assert!(matches!(rx.recv().await, Ok(MobileEvent::Ack { .. })));
     }
 

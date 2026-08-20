@@ -1,9 +1,9 @@
 //! host_http_fetch — HTTP 请求（逻辑层）
 
-use crate::plugin::wasm_host;
-use tauri::Emitter;
 use super::super::WasmPluginState;
 use super::support::guarded_host_call;
+use crate::plugin::wasm_host;
+use tauri::Emitter;
 
 /// 逻辑层：发起 HTTP 请求（request 为 JSON；stream=true 走流式分支）
 ///
@@ -17,8 +17,8 @@ pub(crate) fn http_fetch(state: &WasmPluginState, request_json: &str) -> Result<
         return Err("permission denied: network:http".to_string());
     }
 
-    let request: serde_json::Value = serde_json::from_str(request_json)
-        .map_err(|e| format!("invalid request JSON: {}", e))?;
+    let request: serde_json::Value =
+        serde_json::from_str(request_json).map_err(|e| format!("invalid request JSON: {}", e))?;
 
     let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -38,13 +38,8 @@ pub(crate) fn http_fetch(state: &WasmPluginState, request_json: &str) -> Result<
         let stream_event_clone = stream_event.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = wasm_host::execute_streaming_http(
-                &request,
-                &app_handle,
-                &stream_event_clone,
-                &plugin_id,
-            )
-            .await
+            if let Err(e) =
+                wasm_host::execute_streaming_http(&request, &app_handle, &stream_event_clone, &plugin_id).await
             {
                 tracing::error!(
                     error = %e,
@@ -71,11 +66,7 @@ pub(crate) fn http_fetch(state: &WasmPluginState, request_json: &str) -> Result<
         &state.plugin_id,
         "host_http_fetch",
         Err(anyhow::anyhow!("host_http_fetch panicked")),
-        || {
-            tokio::task::block_in_place(|| {
-                state.runtime_handle.block_on(wasm_host::execute_http_request(&request))
-            })
-        },
+        || tokio::task::block_in_place(|| state.runtime_handle.block_on(wasm_host::execute_http_request(&request))),
     )
     .map_err(|e| format!("HTTP request failed: {}", e))?;
 

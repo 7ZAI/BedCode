@@ -166,19 +166,19 @@ mod tests {
     #[test]
     fn test_batch_transition_valid() {
         // pending → approved（用户接受）与 pending → rejected（用户拒绝/超时）合法
+        assert!(validate_batch_transition(&BatchState::Pending, &BatchState::Approved).is_ok());
         assert!(validate_batch_transition(
             &BatchState::Pending,
-            &BatchState::Approved
+            &BatchState::Rejected {
+                reason: RejectReason::UserRejected
+            }
         )
         .is_ok());
         assert!(validate_batch_transition(
             &BatchState::Pending,
-            &BatchState::Rejected { reason: RejectReason::UserRejected }
-        )
-        .is_ok());
-        assert!(validate_batch_transition(
-            &BatchState::Pending,
-            &BatchState::Rejected { reason: RejectReason::Timeout }
+            &BatchState::Rejected {
+                reason: RejectReason::Timeout
+            }
         )
         .is_ok());
     }
@@ -188,11 +188,15 @@ mod tests {
         // 已终态不可再迁移（重复应答 / 已拒绝后批准）
         assert!(validate_batch_transition(
             &BatchState::Approved,
-            &BatchState::Rejected { reason: RejectReason::UserRejected }
+            &BatchState::Rejected {
+                reason: RejectReason::UserRejected
+            }
         )
         .is_err());
         assert!(validate_batch_transition(
-            &BatchState::Rejected { reason: RejectReason::Timeout },
+            &BatchState::Rejected {
+                reason: RejectReason::Timeout
+            },
             &BatchState::Approved
         )
         .is_err());
@@ -207,10 +211,7 @@ mod tests {
             serde_json::to_string(&RejectReason::UserRejected).unwrap(),
             "\"user-rejected\""
         );
-        assert_eq!(
-            serde_json::to_string(&RejectReason::Timeout).unwrap(),
-            "\"timeout\""
-        );
+        assert_eq!(serde_json::to_string(&RejectReason::Timeout).unwrap(), "\"timeout\"");
         assert_eq!(
             serde_json::from_str::<RejectReason>("\"user-rejected\"").unwrap(),
             RejectReason::UserRejected
@@ -258,7 +259,9 @@ mod tests {
 
         // 终态永不过期（sweeper 不动已拒绝批）
         let mut rejected = pending_batch();
-        rejected.state = BatchState::Rejected { reason: RejectReason::UserRejected };
+        rejected.state = BatchState::Rejected {
+            reason: RejectReason::UserRejected,
+        };
         rejected.last_active = Instant::now()
             .checked_sub(Duration::from_secs(3600 * 48))
             .unwrap_or_else(Instant::now);
@@ -269,7 +272,10 @@ mod tests {
     fn test_transfer_request_dto_wire_format() {
         let dto = TransferRequestDto {
             batch_id: "b1".to_string(),
-            files: vec![UploadRequestMeta { relative_path: "dir/a.mp4".into(), size: 123456 }],
+            files: vec![UploadRequestMeta {
+                relative_path: "dir/a.mp4".into(),
+                size: 123456,
+            }],
             total_size: 123456,
         };
         assert_eq!(
@@ -282,8 +288,7 @@ mod tests {
         );
         // 缺省字段不携带时按默认值解析（serde default）
         let back: TransferRequestDto =
-            serde_json::from_value(serde_json::json!({ "batchId": "b2", "files": [], "totalSize": 0 }))
-                .unwrap();
+            serde_json::from_value(serde_json::json!({ "batchId": "b2", "files": [], "totalSize": 0 })).unwrap();
         assert_eq!(back.batch_id, "b2");
     }
 }

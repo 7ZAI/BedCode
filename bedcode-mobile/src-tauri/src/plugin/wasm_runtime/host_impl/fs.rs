@@ -56,8 +56,7 @@ pub(crate) fn fs_write(state: &WasmPluginState, path: &str, data: &str) -> Resul
     // 自动创建父目录
     if let Some(parent) = std::path::Path::new(path).parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create parent directory: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("failed to create parent directory: {}", e))?;
         }
     }
 
@@ -104,12 +103,13 @@ pub(crate) fn fs_copy(state: &WasmPluginState, src: &str, dst: &str) -> Result<(
     // 自动创建目标父目录
     if let Some(parent) = std::path::Path::new(dst).parent() {
         if !parent.exists() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create parent directory: {}", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| format!("failed to create parent directory: {}", e))?;
         }
     }
 
-    std::fs::copy(src, dst).map(|_| ()).map_err(|e| format!("file copy failed: {}", e))
+    std::fs::copy(src, dst)
+        .map(|_| ())
+        .map_err(|e| format!("file copy failed: {}", e))
 }
 
 /// 逻辑层：检查文件是否存在
@@ -149,8 +149,7 @@ pub(crate) fn fs_request_auth(state: &WasmPluginState, paths_json: &str) -> Resu
         return Err("permission denied: fs:read".to_string());
     }
 
-    let paths: Vec<String> = serde_json::from_str(paths_json)
-        .map_err(|e| format!("invalid paths json: {}", e))?;
+    let paths: Vec<String> = serde_json::from_str(paths_json).map_err(|e| format!("invalid paths json: {}", e))?;
 
     if paths.is_empty() {
         return Ok(true);
@@ -161,9 +160,11 @@ pub(crate) fn fs_request_auth(state: &WasmPluginState, paths_json: &str) -> Resu
     let fs_auth = state.host_ctx.fs_auth.clone();
     let allowed = guarded_host_call(&state.plugin_id, "host_fs_request_auth", false, || {
         tokio::task::block_in_place(|| {
-            state.runtime_handle.block_on(
-                fs_auth.check_batch(&state.plugin_id, &paths, crate::plugin::fs_auth::FsOp::Read),
-            )
+            state.runtime_handle.block_on(fs_auth.check_batch(
+                &state.plugin_id,
+                &paths,
+                crate::plugin::fs_auth::FsOp::Read,
+            ))
         })
     });
     Ok(allowed)
@@ -201,12 +202,14 @@ pub(crate) fn fs_delete(state: &WasmPluginState, path: &str) -> Result<(), Strin
         guarded_host_call(
             &state.plugin_id,
             "host_fs_delete(android)",
-            Err(crate::AppError::Internal("host_fs_delete(android) panicked".to_string())),
+            Err(crate::AppError::Internal(
+                "host_fs_delete(android) panicked".to_string(),
+            )),
             || {
                 tokio::task::block_in_place(|| {
-                    state.runtime_handle.block_on(
-                        crate::plugin::android_plugins::delete_file(&path_clone),
-                    )
+                    state
+                        .runtime_handle
+                        .block_on(crate::plugin::android_plugins::delete_file(&path_clone))
                 })
             },
         )
@@ -241,9 +244,11 @@ pub(crate) fn fs_write_media_downloads(
     };
     let allowed = guarded_host_call(&state.plugin_id, "host_fs_write_media_downloads", false, || {
         tokio::task::block_in_place(|| {
-            state.runtime_handle.block_on(
-                crate::plugin::android_plugins::is_within_app_downloads_dir(app, src_path),
-            )
+            state
+                .runtime_handle
+                .block_on(crate::plugin::android_plugins::is_within_app_downloads_dir(
+                    app, src_path,
+                ))
         })
     });
     if !allowed {
@@ -306,9 +311,11 @@ pub(crate) fn fs_save_to_document(
     };
     let allowed = guarded_host_call(&state.plugin_id, "host_fs_save_to_document", false, || {
         tokio::task::block_in_place(|| {
-            state.runtime_handle.block_on(
-                crate::plugin::android_plugins::is_within_app_downloads_dir(app, src_path),
-            )
+            state
+                .runtime_handle
+                .block_on(crate::plugin::android_plugins::is_within_app_downloads_dir(
+                    app, src_path,
+                ))
         })
     });
     if !allowed {
@@ -349,4 +356,3 @@ pub(crate) fn fs_save_to_document(
         }
     }
 }
-

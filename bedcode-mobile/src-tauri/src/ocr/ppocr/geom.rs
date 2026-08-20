@@ -154,7 +154,8 @@ pub fn find_border_pixel_sets(mask: &[u8], w: usize, h: usize) -> Vec<Vec<Pt>> {
                         let ny = y as i64 + dy;
                         let outside = nx < 0 || ny < 0 || nx >= w as i64 || ny >= h as i64;
                         if outside
-                            || (!outside && mask[(ny as usize) * w + nx as usize] == 0
+                            || (!outside
+                                && mask[(ny as usize) * w + nx as usize] == 0
                                 && ext_bg[(ny as usize) * w + nx as usize])
                         {
                             on_outer = true;
@@ -317,10 +318,7 @@ pub fn min_area_rect(points: &[Pt]) -> Option<(Quad, f64)> {
     let mut quad = [Pt::new(0.0, 0.0); 4];
     let signs = [(1.0, 1.0), (1.0, -1.0), (-1.0, -1.0), (-1.0, 1.0)];
     for (k, (s1, s2)) in signs.iter().enumerate() {
-        quad[k] = Pt::new(
-            cx + s1 * hw * ux + s2 * hh * vx,
-            cy + s1 * hw * uy + s2 * hh * vy,
-        );
+        quad[k] = Pt::new(cx + s1 * hw * ux + s2 * hh * vx, cy + s1 * hw * uy + s2 * hh * vy);
     }
     Some((quad, (xmax - xmin).min(ymax - ymin)))
 }
@@ -336,7 +334,7 @@ pub fn polygon_offset(poly: &[Pt], dist: f64) -> Vec<Pt> {
     }
     let n = poly.len();
     let cw = signed_area(poly) > 0.0; // y 向下：面积>0 = 顺时针
-    // 外法线（归一化）：顺时针多边形外侧在边右侧（图像坐标系）
+                                      // 外法线（归一化）：顺时针多边形外侧在边右侧（图像坐标系）
     let outer_normal = |d: (f64, f64)| -> (f64, f64) {
         let l = (d.0 * d.0 + d.1 * d.1).sqrt();
         if l < 1e-12 {
@@ -382,10 +380,7 @@ pub fn polygon_offset(poly: &[Pt], dist: f64) -> Vec<Pt> {
             // 外角弧 = 包含 miter 方向的那条弧。判据：短弧中点若在多边形内，
             // 说明短弧是内角弧，需取补弧（反向旋转到 a1）。
             let mid_ang = a0 + d_ang / 2.0;
-            let mid_pt = Pt::new(
-                v.x + dist * mid_ang.cos(),
-                v.y + dist * mid_ang.sin(),
-            );
+            let mid_pt = Pt::new(v.x + dist * mid_ang.cos(), v.y + dist * mid_ang.sin());
             if point_in_polygon(&mid_pt, poly) {
                 d_ang = if d_ang >= 0.0 {
                     d_ang - 2.0 * std::f64::consts::PI
@@ -445,9 +440,17 @@ pub fn polygon_mean(bitmap: &[f32], bw: usize, bh: usize, box_: &[Pt]) -> f64 {
         return 0.0;
     }
     let xmin = box_.iter().map(|p| p.x.floor() as i64).fold(i64::MAX, i64::min).max(0);
-    let xmax = box_.iter().map(|p| p.x.ceil() as i64).fold(i64::MIN, i64::max).min(bw as i64 - 1);
+    let xmax = box_
+        .iter()
+        .map(|p| p.x.ceil() as i64)
+        .fold(i64::MIN, i64::max)
+        .min(bw as i64 - 1);
     let ymin = box_.iter().map(|p| p.y.floor() as i64).fold(i64::MAX, i64::min).max(0);
-    let ymax = box_.iter().map(|p| p.y.ceil() as i64).fold(i64::MIN, i64::max).min(bh as i64 - 1);
+    let ymax = box_
+        .iter()
+        .map(|p| p.y.ceil() as i64)
+        .fold(i64::MIN, i64::max)
+        .min(bh as i64 - 1);
     if xmin > xmax || ymin > ymax {
         return 0.0;
     }
@@ -530,8 +533,12 @@ mod tests {
         // 角点集合（任意序）应覆盖原矩形角点
         let mut corners: Vec<(f64, f64)> = quad.iter().map(|p| (p.x, p.y)).collect();
         corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        assert!(corners.iter().all(|(x, y)| (x - 1.0).abs() < 1e-6 || (x - 9.0).abs() < 1e-6));
-        assert!(corners.iter().all(|(x, y)| (y - 2.0).abs() < 1e-6 || (y - 6.0).abs() < 1e-6));
+        assert!(corners
+            .iter()
+            .all(|(x, y)| (x - 1.0).abs() < 1e-6 || (x - 9.0).abs() < 1e-6));
+        assert!(corners
+            .iter()
+            .all(|(x, y)| (y - 2.0).abs() < 1e-6 || (y - 6.0).abs() < 1e-6));
     }
 
     #[test]
@@ -570,7 +577,10 @@ mod tests {
         let _ = rect;
         // 所有点应在原矩形外
         for p in &out {
-            assert!(p.x < -1.9 || p.x > 11.9 || p.y < -1.9 || p.y > 11.9, "point inside: {p:?}");
+            assert!(
+                p.x < -1.9 || p.x > 11.9 || p.y < -1.9 || p.y > 11.9,
+                "point inside: {p:?}"
+            );
         }
     }
 
@@ -673,7 +683,9 @@ mod tests {
         // 洞边界 8 像素（2x2 洞）
         assert_eq!(borders[1].len(), 8, "hole border pixels: {}", borders[1].len());
         // 洞边界点都在洞周围
-        assert!(borders[1].iter().all(|p| p.x >= 1.0 && p.x <= 4.0 && p.y >= 1.0 && p.y <= 4.0));
+        assert!(borders[1]
+            .iter()
+            .all(|p| p.x >= 1.0 && p.x <= 4.0 && p.y >= 1.0 && p.y <= 4.0));
     }
 
     #[test]

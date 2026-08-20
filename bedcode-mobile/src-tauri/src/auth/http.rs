@@ -83,17 +83,14 @@ pub async fn resolve_base_url(conn: &ConnectionManager) -> Result<String> {
 ///   （1001/1005/1006/1007/1008/1009），与桌面 `ApiResponse::error` 语义一致
 /// - 非法 JSON：`AppError::Parse`
 pub fn parse_envelope<T: DeserializeOwned>(body: &str) -> Result<T> {
-    let envelope: ApiEnvelope<T> = serde_json::from_str(body)
-        .map_err(|e| AppError::Parse(format!("Invalid API response JSON: {}", e)))?;
+    let envelope: ApiEnvelope<T> =
+        serde_json::from_str(body).map_err(|e| AppError::Parse(format!("Invalid API response JSON: {}", e)))?;
     if envelope.code == 0 {
-        envelope.data.ok_or_else(|| {
-            AppError::Parse(format!("API response code=0 but data missing: {}", body))
-        })
+        envelope
+            .data
+            .ok_or_else(|| AppError::Parse(format!("API response code=0 but data missing: {}", body)))
     } else {
-        Err(AppError::Auth(format!(
-            "code {}: {}",
-            envelope.code, envelope.message
-        )))
+        Err(AppError::Auth(format!("code {}: {}", envelope.code, envelope.message)))
     }
 }
 
@@ -296,7 +293,11 @@ mod tests {
         match err {
             AppError::Auth(msg) => {
                 assert!(msg.contains("1005"), "err 应携带业务码: {}", msg);
-                assert!(msg.contains("Invalid or expired pairing code"), "err 应透传消息: {}", msg);
+                assert!(
+                    msg.contains("Invalid or expired pairing code"),
+                    "err 应透传消息: {}",
+                    msg
+                );
             }
             other => panic!("expected AppError::Auth, got {:?}", other),
         }

@@ -13,16 +13,14 @@
 //!   Tauri command 挂载时走 Webview 事件桥（与桌面端 call_webview_hook 同构）
 
 use crate::file_service::cipher::{PassthroughCipher, TransportCipher};
-use crate::file_service::sandbox;
 use crate::file_service::saf_tree;
+use crate::file_service::sandbox;
 use crate::file_service::transfer::{
-    is_batch_expired, validate_approval_timeout, validate_batch_transition, BatchDecision,
-    BatchState, RejectReason, TransferBatch, TransferRequestDto, DEFAULT_APPROVAL_TIMEOUT_SECS,
+    is_batch_expired, validate_approval_timeout, validate_batch_transition, BatchDecision, BatchState, RejectReason,
+    TransferBatch, TransferRequestDto, DEFAULT_APPROVAL_TIMEOUT_SECS,
 };
 use crate::file_service::upload::UploadSessionManager;
-use bedcode_plugin_api_mobile::{
-    FileOperation, MountOptions, PeerFileService, UploadHookDecision, UploadRequestMeta,
-};
+use bedcode_plugin_api_mobile::{FileOperation, MountOptions, PeerFileService, UploadHookDecision, UploadRequestMeta};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -267,35 +265,32 @@ impl FileServiceRegistry {
     /// 超时批由本任务执行 resolved 事件 + 跨端推送（与命令路径同一入口
     /// publish_batch_resolved，保证应答与超时两条路径的端侧语义一致）
     fn spawn_batch_sweeper(registry: Arc<FileServiceRegistry>) {
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "transfer_batch_sweeper",
-            async move {
-                let mut interval = tokio::time::interval(Duration::from_secs(1));
-                // 首个 tick 立即完成，跳过以对齐"每秒一次"语义（仿上传会话 sweeper）
+        crate::system::error_boundary::spawn_with_error_boundary("transfer_batch_sweeper", async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(1));
+            // 首个 tick 立即完成，跳过以对齐"每秒一次"语义（仿上传会话 sweeper）
+            interval.tick().await;
+            loop {
                 interval.tick().await;
-                loop {
-                    interval.tick().await;
-                    let expired = registry.sweep_batches().await;
-                    for e in expired {
-                        if e.decision == "rejected" {
-                            tracing::info!(
-                                batch_id = %e.batch_id,
-                                reason = %e.reason,
-                                "transfer batch expired, rejected"
-                            );
-                            registry
-                                .publish_batch_resolved(&e.batch_id, &e.decision, &e.reason)
-                                .await;
-                        } else {
-                            tracing::info!(
-                                batch_id = %e.batch_id,
-                                "transfer batch cleaned (TTL without activity)"
-                            );
-                        }
+                let expired = registry.sweep_batches().await;
+                for e in expired {
+                    if e.decision == "rejected" {
+                        tracing::info!(
+                            batch_id = %e.batch_id,
+                            reason = %e.reason,
+                            "transfer batch expired, rejected"
+                        );
+                        registry
+                            .publish_batch_resolved(&e.batch_id, &e.decision, &e.reason)
+                            .await;
+                    } else {
+                        tracing::info!(
+                            batch_id = %e.batch_id,
+                            "transfer batch cleaned (TTL without activity)"
+                        );
                     }
                 }
-            },
-        );
+            }
+        });
     }
 
     /// 上传会话管理器引用（server 使用）
@@ -314,12 +309,7 @@ impl FileServiceRegistry {
     /// 4. 同插件同 mount_path 重复挂载拒绝
     ///
     /// 挂载成功后扫描 roots 清理孤儿 `.bedcode-upload-*.part`
-    pub async fn mount(
-        &self,
-        plugin_id: &str,
-        options: MountOptions,
-        hook: HookTarget,
-    ) -> crate::Result<MountEntry> {
+    pub async fn mount(&self, plugin_id: &str, options: MountOptions, hook: HookTarget) -> crate::Result<MountEntry> {
         validate_mount_path(&options.mount_path)?;
 
         if options.roots.is_empty() {
@@ -367,10 +357,7 @@ impl FileServiceRegistry {
             Vec::new()
         } else {
             sandbox::normalize_roots(&real_roots).map_err(|e| {
-                crate::AppError::InvalidInput(format!(
-                    "mount '{}': invalid roots: {}",
-                    options.mount_path, e
-                ))
+                crate::AppError::InvalidInput(format!("mount '{}': invalid roots: {}", options.mount_path, e))
             })?
         };
 
@@ -415,12 +402,7 @@ impl FileServiceRegistry {
     }
 
     /// 更新挂载点的允许目录根（目录变更即时生效，校验规则同 mount）
-    pub async fn update_roots(
-        &self,
-        plugin_id: &str,
-        mount_path: &str,
-        roots: Vec<String>,
-    ) -> crate::Result<()> {
+    pub async fn update_roots(&self, plugin_id: &str, mount_path: &str, roots: Vec<String>) -> crate::Result<()> {
         if roots.is_empty() {
             return Err(crate::AppError::InvalidInput(format!(
                 "update_roots for mount '{}': roots must not be empty",
@@ -433,10 +415,7 @@ impl FileServiceRegistry {
             let entry = mounts
                 .get(&(plugin_id.to_string(), mount_path.to_string()))
                 .ok_or_else(|| {
-                    crate::AppError::NotFound(format!(
-                        "mount '{}' not found for plugin '{}'",
-                        mount_path, plugin_id
-                    ))
+                    crate::AppError::NotFound(format!("mount '{}' not found for plugin '{}'", mount_path, plugin_id))
                 })?;
             if entry.operations.contains(&FileOperation::Upload) {
                 crate::plugin::fs_auth::FsOp::Write
@@ -446,11 +425,7 @@ impl FileServiceRegistry {
         };
 
         // 根分流同 mount：SAF 树根免 fs_auth / normalize，真实路径根保持现有校验
-        let saf_roots: Vec<String> = roots
-            .iter()
-            .filter(|r| saf_tree::is_saf_tree_uri(r))
-            .cloned()
-            .collect();
+        let saf_roots: Vec<String> = roots.iter().filter(|r| saf_tree::is_saf_tree_uri(r)).cloned().collect();
         let real_roots: Vec<PathBuf> = roots
             .iter()
             .filter(|r| !saf_tree::is_saf_tree_uri(r))
@@ -472,10 +447,7 @@ impl FileServiceRegistry {
             Vec::new()
         } else {
             sandbox::normalize_roots(&real_roots).map_err(|e| {
-                crate::AppError::InvalidInput(format!(
-                    "update_roots for mount '{}': invalid roots: {}",
-                    mount_path, e
-                ))
+                crate::AppError::InvalidInput(format!("update_roots for mount '{}': invalid roots: {}", mount_path, e))
             })?
         };
 
@@ -483,10 +455,7 @@ impl FileServiceRegistry {
         let entry = mounts
             .get_mut(&(plugin_id.to_string(), mount_path.to_string()))
             .ok_or_else(|| {
-                crate::AppError::NotFound(format!(
-                    "mount '{}' not found for plugin '{}'",
-                    mount_path, plugin_id
-                ))
+                crate::AppError::NotFound(format!("mount '{}' not found for plugin '{}'", mount_path, plugin_id))
             })?;
         entry.roots = normalized;
         entry.saf_roots = saf_roots;
@@ -514,14 +483,12 @@ impl FileServiceRegistry {
             )));
         }
 
-        let cancelled = self
-            .upload_sessions
-            .cancel_for_mount(plugin_id, mount_path)
-            .await;
+        let cancelled = self.upload_sessions.cancel_for_mount(plugin_id, mount_path).await;
         // 清理该挂载的传输批（挂载摘除 = 接收能力消失，pending/approved 批自然失效）
-        self.batches.write().await.retain(|_, b| {
-            b.plugin_id != plugin_id || b.mount_path != mount_path
-        });
+        self.batches
+            .write()
+            .await
+            .retain(|_, b| b.plugin_id != plugin_id || b.mount_path != mount_path);
         tracing::info!(
             plugin_id = %plugin_id,
             mount = %mount_path,
@@ -535,25 +502,14 @@ impl FileServiceRegistry {
     pub async fn unmount_plugin(&self, plugin_id: &str) {
         let removed: Vec<String> = {
             let mut mounts = self.mounts.write().await;
-            let keys: Vec<(String, String)> = mounts
-                .keys()
-                .filter(|(pid, _)| pid == plugin_id)
-                .cloned()
-                .collect();
+            let keys: Vec<(String, String)> = mounts.keys().filter(|(pid, _)| pid == plugin_id).cloned().collect();
             keys.iter()
-                .filter_map(|(_, mp)| {
-                    mounts
-                        .remove(&(plugin_id.to_string(), mp.clone()))
-                        .map(|_| mp.clone())
-                })
+                .filter_map(|(_, mp)| mounts.remove(&(plugin_id.to_string(), mp.clone())).map(|_| mp.clone()))
                 .collect()
         };
 
         for mount_path in &removed {
-            let cancelled = self
-                .upload_sessions
-                .cancel_for_mount(plugin_id, mount_path)
-                .await;
+            let cancelled = self.upload_sessions.cancel_for_mount(plugin_id, mount_path).await;
             tracing::info!(
                 plugin_id = %plugin_id,
                 mount = %mount_path,
@@ -572,10 +528,7 @@ impl FileServiceRegistry {
             .get(&(plugin_id.to_string(), mount_path.to_string()))
             .cloned()
             .ok_or_else(|| {
-                crate::AppError::NotFound(format!(
-                    "mount '{}' not found for plugin '{}'",
-                    mount_path, plugin_id
-                ))
+                crate::AppError::NotFound(format!("mount '{}' not found for plugin '{}'", mount_path, plugin_id))
             })
     }
 
@@ -585,9 +538,7 @@ impl FileServiceRegistry {
     }
 
     /// 当前全部挂载的公告信息（announce.rs 使用）
-    pub async fn mount_announcements(
-        &self,
-    ) -> Vec<crate::enums::file_service::MountAnnouncement> {
+    pub async fn mount_announcements(&self) -> Vec<crate::enums::file_service::MountAnnouncement> {
         let mounts = self.mounts.read().await;
         mounts
             .values()
@@ -602,16 +553,10 @@ impl FileServiceRegistry {
     /// 沙箱解析：挂载点相对路径 → 沙箱内绝对路径（目标必须已存在）
     ///
     /// server 的 /list 与 /file 端点共用此校验
-    pub async fn resolve_sandboxed(
-        &self,
-        plugin_id: &str,
-        mount_path: &str,
-        rel: &str,
-    ) -> crate::Result<PathBuf> {
+    pub async fn resolve_sandboxed(&self, plugin_id: &str, mount_path: &str, rel: &str) -> crate::Result<PathBuf> {
         let entry = self.get_entry(plugin_id, mount_path).await?;
-        sandbox::resolve_within_roots(&entry.roots, rel).map_err(|e| {
-            crate::AppError::NotFound(format!("mount '{}/{}': {}", plugin_id, mount_path, e))
-        })
+        sandbox::resolve_within_roots(&entry.roots, rel)
+            .map_err(|e| crate::AppError::NotFound(format!("mount '{}/{}': {}", plugin_id, mount_path, e)))
     }
 
     // ==================== Upload Hook ====================
@@ -645,22 +590,12 @@ impl FileServiceRegistry {
     }
 
     /// WASM 钩子：经 PluginManager 的 WASM 实例调用导出 `on_upload_request`
-    async fn call_wasm_hook(
-        &self,
-        plugin_id: &str,
-        mount_path: &str,
-        meta: &UploadRequestMeta,
-    ) -> UploadHookDecision {
+    async fn call_wasm_hook(&self, plugin_id: &str, mount_path: &str, meta: &UploadRequestMeta) -> UploadHookDecision {
         let meta_json = serde_json::to_string(meta).unwrap_or_default();
         let manager = crate::state::get_plugin_manager();
         let plugin_id = plugin_id.to_string();
 
-        match tokio::time::timeout(
-            UPLOAD_HOOK_TIMEOUT,
-            manager.call_upload_hook(&plugin_id, &meta_json),
-        )
-        .await
-        {
+        match tokio::time::timeout(UPLOAD_HOOK_TIMEOUT, manager.call_upload_hook(&plugin_id, &meta_json)).await {
             Ok(Some(decision_json)) => {
                 // 插件返回决定 JSON；解析失败一律 fail-closed
                 match serde_json::from_str::<UploadHookDecision>(&decision_json) {
@@ -801,15 +736,9 @@ impl FileServiceRegistry {
         };
 
         let decision = match hook {
-            HookTarget::None => {
-                return Err(BatchError::Denied("mount has no upload hook".to_string()))
-            }
-            HookTarget::Wasm => {
-                self.call_wasm_batch_hook(plugin_id, mount_path, req).await
-            }
-            HookTarget::Webview => {
-                self.call_webview_batch_hook(plugin_id, mount_path, req).await
-            }
+            HookTarget::None => return Err(BatchError::Denied("mount has no upload hook".to_string())),
+            HookTarget::Wasm => self.call_wasm_batch_hook(plugin_id, mount_path, req).await,
+            HookTarget::Webview => self.call_webview_batch_hook(plugin_id, mount_path, req).await,
         };
 
         if decision.allow {
@@ -846,9 +775,7 @@ impl FileServiceRegistry {
             }
             Ok(BatchDecision::Pending)
         } else {
-            let reason = decision
-                .reason
-                .unwrap_or_else(|| "policy-denied".to_string());
+            let reason = decision.reason.unwrap_or_else(|| "policy-denied".to_string());
             tracing::info!(
                 plugin_id = %plugin_id,
                 mount = %mount_path,
@@ -884,27 +811,19 @@ impl FileServiceRegistry {
     /// 批准传输批（接收端用户应答「接受全部」）：pending → approved
     ///
     /// 迁移成功后发 resolved 事件 + 跨端推送（发送方据此调度批内任务）
-    pub async fn approve_transfer(
-        &self,
-        plugin_id: &str,
-        batch_id: &str,
-    ) -> Result<(), BatchError> {
+    pub async fn approve_transfer(&self, plugin_id: &str, batch_id: &str) -> Result<(), BatchError> {
         let (batch_id, plugin_id) = (batch_id.to_string(), plugin_id.to_string());
         {
             let mut batches = self.batches.write().await;
-            let batch = batches.get_mut(&batch_id).ok_or_else(|| {
-                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
-            })?;
+            let batch = batches
+                .get_mut(&batch_id)
+                .ok_or_else(|| BatchError::NotFound(format!("transfer batch not found: {}", batch_id)))?;
             // 归属校验：其他插件应答 → NotFound（不泄露存在性）
             if batch.plugin_id != plugin_id {
-                return Err(BatchError::NotFound(format!(
-                    "transfer batch not found: {}",
-                    batch_id
-                )));
+                return Err(BatchError::NotFound(format!("transfer batch not found: {}", batch_id)));
             }
-            validate_batch_transition(&batch.state, &BatchState::Approved).map_err(|_| {
-                BatchError::NotPending(format!("transfer batch {} not pending", batch_id))
-            })?;
+            validate_batch_transition(&batch.state, &BatchState::Approved)
+                .map_err(|_| BatchError::NotPending(format!("transfer batch {} not pending", batch_id)))?;
             batch.state = BatchState::Approved;
             batch.last_active = Instant::now();
         }
@@ -913,22 +832,15 @@ impl FileServiceRegistry {
     }
 
     /// 拒绝传输批（接收端用户应答「拒绝全部」）：pending → rejected(user-rejected)
-    pub async fn reject_transfer(
-        &self,
-        plugin_id: &str,
-        batch_id: &str,
-    ) -> Result<(), BatchError> {
+    pub async fn reject_transfer(&self, plugin_id: &str, batch_id: &str) -> Result<(), BatchError> {
         let (batch_id, plugin_id) = (batch_id.to_string(), plugin_id.to_string());
         {
             let mut batches = self.batches.write().await;
-            let batch = batches.get_mut(&batch_id).ok_or_else(|| {
-                BatchError::NotFound(format!("transfer batch not found: {}", batch_id))
-            })?;
+            let batch = batches
+                .get_mut(&batch_id)
+                .ok_or_else(|| BatchError::NotFound(format!("transfer batch not found: {}", batch_id)))?;
             if batch.plugin_id != plugin_id {
-                return Err(BatchError::NotFound(format!(
-                    "transfer batch not found: {}",
-                    batch_id
-                )));
+                return Err(BatchError::NotFound(format!("transfer batch not found: {}", batch_id)));
             }
             validate_batch_transition(
                 &batch.state,
@@ -936,9 +848,7 @@ impl FileServiceRegistry {
                     reason: RejectReason::UserRejected,
                 },
             )
-            .map_err(|_| {
-                BatchError::NotPending(format!("transfer batch {} not pending", batch_id))
-            })?;
+            .map_err(|_| BatchError::NotPending(format!("transfer batch {} not pending", batch_id)))?;
             batch.state = BatchState::Rejected {
                 reason: RejectReason::UserRejected,
             };
@@ -981,12 +891,7 @@ impl FileServiceRegistry {
     }
 
     /// 设置 per-mount 批准超时（10–600 秒校验；已存在的 pending 批同步生效）
-    pub async fn set_approval_timeout(
-        &self,
-        plugin_id: &str,
-        mount_path: &str,
-        secs: u64,
-    ) -> Result<(), BatchError> {
+    pub async fn set_approval_timeout(&self, plugin_id: &str, mount_path: &str, secs: u64) -> Result<(), BatchError> {
         let secs = validate_approval_timeout(secs)
             .map_err(|e| BatchError::InvalidInput(format!("set_approval_timeout: {}", e)))?;
         let timeout = Duration::from_secs(secs);
@@ -997,10 +902,7 @@ impl FileServiceRegistry {
         // 已存在 pending 批同步新超时（设置变更即时生效，无需等新批）
         let mut batches = self.batches.write().await;
         for batch in batches.values_mut() {
-            if batch.plugin_id == plugin_id
-                && batch.mount_path == mount_path
-                && batch.state == BatchState::Pending
-            {
+            if batch.plugin_id == plugin_id && batch.mount_path == mount_path && batch.state == BatchState::Pending {
                 batch.approval_timeout = timeout;
             }
         }
@@ -1064,20 +966,11 @@ impl FileServiceRegistry {
     /// 取消接收中的上传会话（接收端本地取消，session 级）
     ///
     /// 取消后删除 .part 临时文件并发出 `filesrv:receiving_done`(cancelled)
-    pub async fn cancel_receiving_session(
-        &self,
-        plugin_id: &str,
-        session_id: &str,
-    ) -> Result<(), BatchError> {
+    pub async fn cancel_receiving_session(&self, plugin_id: &str, session_id: &str) -> Result<(), BatchError> {
         self.upload_sessions
             .cancel_for_plugin(session_id, plugin_id)
             .await
-            .map_err(|e| {
-                BatchError::NotFound(format!(
-                    "upload session not found: {} (plugin: {})",
-                    e, plugin_id
-                ))
-            })?;
+            .map_err(|e| BatchError::NotFound(format!("upload session not found: {} (plugin: {})", e, plugin_id)))?;
         self.emit_filesrv_event(
             "filesrv:receiving_done",
             serde_json::json!({ "sessionId": session_id, "state": "cancelled" }),
@@ -1302,16 +1195,8 @@ impl FileServiceRegistry {
     }
 
     /// 回填 Webview 批钩子决定（Tauri command 调用；request 不存在/已超时返回 false）
-    pub async fn respond_transfer_hook(
-        &self,
-        request_id: &str,
-        decision: UploadHookDecision,
-    ) -> bool {
-        let tx = self
-            .pending_transfer_hook_replies
-            .lock()
-            .await
-            .remove(request_id);
+    pub async fn respond_transfer_hook(&self, request_id: &str, decision: UploadHookDecision) -> bool {
+        let tx = self.pending_transfer_hook_replies.lock().await.remove(request_id);
         match tx {
             Some(tx) => tx.send(decision).is_ok(),
             None => false,
@@ -1412,8 +1297,7 @@ impl FileServiceRegistry {
         // 与桌面端 plugin_host 检查对齐：管理器未初始化（setup 未完成）时跳过，
         // 避免 panic；激活晚于事件的场景由插件 activate 主动 Query 兜底
         if let Some(pm) = crate::state::try_get_plugin_manager() {
-            pm.message_bus()
-                .publish("filesrv:peer_changed", "host", payload);
+            pm.message_bus().publish("filesrv:peer_changed", "host", payload);
         } else {
             tracing::debug!(
                 peer_id = %peer_id,
@@ -1441,10 +1325,7 @@ fn peer_info_changed(old: &PeerFileService, new: &PeerFileService) -> bool {
     old_mounts.sort_by(|a, b| (&a.plugin_id, &a.mount_path).cmp(&(&b.plugin_id, &b.mount_path)));
     new_mounts.sort_by(|a, b| (&a.plugin_id, &a.mount_path).cmp(&(&b.plugin_id, &b.mount_path)));
     for (o, n) in old_mounts.iter().zip(new_mounts.iter()) {
-        if o.plugin_id != n.plugin_id
-            || o.mount_path != n.mount_path
-            || o.operations != n.operations
-        {
+        if o.plugin_id != n.plugin_id || o.mount_path != n.mount_path || o.operations != n.operations {
             return true;
         }
     }
@@ -1455,10 +1336,7 @@ fn peer_info_changed(old: &PeerFileService, new: &PeerFileService) -> bool {
 ///
 /// 无运行时上下文时（理论上不会发生：mount 必在异步上下文调用）回退同步执行
 fn spawn_orphan_cleanup(plugin_id: &str, mount_path: &str, roots: Vec<PathBuf>, downloads_dir: Option<PathBuf>) {
-    let dirs: Vec<PathBuf> = roots
-        .into_iter()
-        .chain(downloads_dir)
-        .collect();
+    let dirs: Vec<PathBuf> = roots.into_iter().chain(downloads_dir).collect();
     let Ok(handle) = tokio::runtime::Handle::try_current() else {
         let cleaned = crate::file_service::upload::clean_orphan_parts(&dirs);
         if cleaned > 0 {
@@ -1513,9 +1391,7 @@ fn validate_mount_path(mount_path: &str) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::file_service::transfer::{
-        RejectReason, TransferBatch, TransferRequestDto, APPROVED_BATCH_TTL,
-    };
+    use crate::file_service::transfer::{RejectReason, TransferBatch, TransferRequestDto, APPROVED_BATCH_TTL};
     use std::sync::Arc;
 
     #[test]
@@ -1686,22 +1562,10 @@ mod tests {
     async fn test_set_approval_timeout_bounds() {
         let registry = test_registry();
         // 9 / 601 越界 → InvalidInput；10 / 600 合法
-        assert!(registry
-            .set_approval_timeout("p1", "files", 9)
-            .await
-            .is_err());
-        assert!(registry
-            .set_approval_timeout("p1", "files", 601)
-            .await
-            .is_err());
-        assert!(registry
-            .set_approval_timeout("p1", "files", 10)
-            .await
-            .is_ok());
-        assert!(registry
-            .set_approval_timeout("p1", "files", 600)
-            .await
-            .is_ok());
+        assert!(registry.set_approval_timeout("p1", "files", 9).await.is_err());
+        assert!(registry.set_approval_timeout("p1", "files", 601).await.is_err());
+        assert!(registry.set_approval_timeout("p1", "files", 10).await.is_ok());
+        assert!(registry.set_approval_timeout("p1", "files", 600).await.is_ok());
         // pending 批同步新超时（设置变更即时生效）
         let mut batch = test_batch("b1", "p1", BatchState::Pending);
         batch.approval_timeout = Duration::from_secs(DEFAULT_APPROVAL_TIMEOUT_SECS);

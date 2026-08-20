@@ -122,10 +122,7 @@ pub async fn list_entries(
             Ok(ListOutcome { entries, notice })
         }
         Ok(Err(e)) => Err(e),
-        Err(e) => Err(crate::AppError::Internal(format!(
-            "list task failed: {}",
-            e
-        ))),
+        Err(e) => Err(crate::AppError::Internal(format!("list task failed: {}", e))),
     }
 }
 
@@ -139,17 +136,15 @@ async fn list_saf_dir(
     parts: &[String],
     rel: &str,
 ) -> crate::Result<ListOutcome> {
-    let saf = registry.saf_io().await.ok_or_else(|| {
-        crate::AppError::Internal("SAF storage unavailable on this platform".to_string())
-    })?;
+    let saf = registry
+        .saf_io()
+        .await
+        .ok_or_else(|| crate::AppError::Internal("SAF storage unavailable on this platform".to_string()))?;
     let root_doc = saf_tree::tree_document_id(tree_uri)
         .ok_or_else(|| crate::AppError::InvalidInput(format!("invalid SAF root: {}", tree_uri)))?;
     let target = saf_tree::walk_to_entry(saf.as_ref(), tree_uri, &root_doc, parts).await?;
     if !target.is_dir {
-        return Err(crate::AppError::NotFound(format!(
-            "'{}' is not a directory",
-            rel
-        )));
+        return Err(crate::AppError::NotFound(format!("'{}' is not a directory", rel)));
     }
     let children = saf.list_tree(tree_uri, &target.document_id)?;
     let mut entries: Vec<ListEntryDto> = children
@@ -165,10 +160,7 @@ async fn list_saf_dir(
         .collect();
     // 目录优先，按名称排序，保证两端 UI 展示一致
     entries.sort_by(|a, b| b.is_dir.cmp(&a.is_dir).then(a.name.cmp(&b.name)));
-    Ok(ListOutcome {
-        entries,
-        notice: None,
-    })
+    Ok(ListOutcome { entries, notice: None })
 }
 
 /// 文件修改时间（Unix 秒，读取失败为 0）
@@ -200,13 +192,8 @@ fn read_dir_entries(dir: &Path) -> crate::Result<Vec<ListEntryDto>> {
 
     let mut entries = Vec::new();
     for entry in read_dir {
-        let entry = entry.map_err(|e| {
-            crate::AppError::Internal(format!(
-                "failed to read entry in '{}': {}",
-                dir.display(),
-                e
-            ))
-        })?;
+        let entry = entry
+            .map_err(|e| crate::AppError::Internal(format!("failed to read entry in '{}': {}", dir.display(), e)))?;
         let name = entry.file_name().to_string_lossy().to_string();
         // 过滤上传临时文件（*.part），不向对端暴露
         if is_filtered_listing_name(&name) {
@@ -273,18 +260,24 @@ mod tests {
     #[test]
     fn test_mtime_unix_secs_missing_meta_is_zero() {
         // 不存在的文件 metadata 不可得，不 panic（由调用方负责错误路径）
-        assert!(mtime_unix_secs(&std::fs::metadata("no-such-file").unwrap_or_else(|e| {
-            // 构造一个有效 metadata：临时文件
-            let dir = std::env::temp_dir();
-            std::fs::metadata(dir).unwrap()
-        })) > 0);
+        assert!(
+            mtime_unix_secs(&std::fs::metadata("no-such-file").unwrap_or_else(|e| {
+                // 构造一个有效 metadata：临时文件
+                let dir = std::env::temp_dir();
+                std::fs::metadata(dir).unwrap()
+            })) > 0
+        );
     }
 
     #[test]
     fn test_needs_all_files_access() {
-        assert!(!needs_all_files_access(Path::new("/data/user/0/com.bedcode.mobile/files")));
+        assert!(!needs_all_files_access(Path::new(
+            "/data/user/0/com.bedcode.mobile/files"
+        )));
         assert!(needs_all_files_access(Path::new("/storage/emulated/0/DCIM/Camera")));
-        assert!(!needs_all_files_access(Path::new("/storage/emulated/0/android/data/pkg")));
+        assert!(!needs_all_files_access(Path::new(
+            "/storage/emulated/0/android/data/pkg"
+        )));
         assert!(!needs_all_files_access(Path::new("/sdcard0/Download")));
     }
 }

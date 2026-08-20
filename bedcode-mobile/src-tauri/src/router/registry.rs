@@ -2,9 +2,9 @@
 //!
 //! 负责注册和管理消息类型到处理器的映射
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 use crate::model::message::Message;
 use crate::Result;
@@ -97,11 +97,7 @@ mod tests {
 
     #[async_trait]
     impl ClientRouteHandler for RecordingHandler {
-        async fn handle(
-            &self,
-            message: Message,
-            _ctx: &ClientRouteContext,
-        ) -> Result<Option<Message>> {
+        async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
             self.calls.lock().unwrap().push(message_type_key(&message));
             Ok(None)
         }

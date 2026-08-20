@@ -62,8 +62,7 @@ impl MockDesktopServer {
         let received = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
         let sinks: Arc<Mutex<Vec<SharedSink>>> = Arc::new(Mutex::new(Vec::new()));
         let connections = Arc::new(AtomicU32::new(0));
-        let connection_tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>> =
-            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let connection_tasks: Arc<std::sync::Mutex<Vec<JoinHandle<()>>>> = Arc::new(std::sync::Mutex::new(Vec::new()));
 
         let listener_received = received.clone();
         let listener_sinks = sinks.clone();
@@ -71,7 +70,9 @@ impl MockDesktopServer {
         let listener_tasks = connection_tasks.clone();
         let task = tokio::spawn(async move {
             loop {
-                let Ok((stream, _)) = listener.accept().await else { break };
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
                 let received = listener_received.clone();
                 let sinks = listener_sinks.clone();
                 let connections = listener_connections.clone();

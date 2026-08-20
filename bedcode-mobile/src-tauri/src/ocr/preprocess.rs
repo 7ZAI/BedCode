@@ -76,9 +76,7 @@ impl RgbaImage {
     pub fn to_gray(&self) -> Vec<u8> {
         self.pixels
             .chunks_exact(4)
-            .map(|p| {
-                (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32).round() as u8
-            })
+            .map(|p| (0.299 * p[0] as f32 + 0.587 * p[1] as f32 + 0.114 * p[2] as f32).round() as u8)
             .collect()
     }
 
@@ -159,31 +157,22 @@ mod tests {
     fn load_rejects_huge_pixel_count() {
         let path = temp_file("huge", &[]);
         // 文件不会真读：先触发像素数校验（9_000_000 x 9 = 81MP > 40MP）
-        let err = RgbaImage::load_from_file(&path, 9_000_000, 9)
-            .unwrap_err()
-            .to_string();
+        let err = RgbaImage::load_from_file(&path, 9_000_000, 9).unwrap_err().to_string();
         assert!(err.contains("too large"), "got: {}", err);
     }
 
     #[test]
     fn load_rejects_missing_file() {
-        let err = RgbaImage::load_from_file(
-            Path::new("/nonexistent/bedcode-ocr-xyz.rgba"),
-            1,
-            1,
-        )
-        .unwrap_err()
-        .to_string();
+        let err = RgbaImage::load_from_file(Path::new("/nonexistent/bedcode-ocr-xyz.rgba"), 1, 1)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("failed to read"), "got: {}", err);
     }
 
     /// BT.601 灰度：纯红 → 76（0.299*255≈76.245 取整），白/黑 → 255/0
     #[test]
     fn gray_uses_weighted_average() {
-        let path = temp_file(
-            "gray",
-            &[255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255],
-        );
+        let path = temp_file("gray", &[255, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
         let img = RgbaImage::load_from_file(&path, 3, 1).unwrap();
         let gray = img.to_gray();
         assert_eq!(gray, vec![76, 255, 0]);

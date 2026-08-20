@@ -23,7 +23,6 @@ use bedcode_lib::state::clear_global_token;
 use bedcode_lib::AppError;
 use serde_json::{json, Value};
 
-
 // 复用 WS 协议 mock（resolve_base_url happy path 需真实建连保存 target）
 mod common;
 
@@ -87,10 +86,7 @@ impl MockState {
     }
 
     fn record(&self, path: &str, body: &Value) {
-        self.received
-            .lock()
-            .unwrap()
-            .push((path.to_string(), body.clone()));
+        self.received.lock().unwrap().push((path.to_string(), body.clone()));
     }
 
     /// 取指定 path 的最后一次请求体（测试断言请求字段）
@@ -133,10 +129,7 @@ impl MockDesktop {
                     "/api/auth/biometric-challenge",
                     web::post().to(mock_biometric_challenge),
                 )
-                .route(
-                    "/api/auth/biometric-verify",
-                    web::post().to(mock_biometric_verify),
-                )
+                .route("/api/auth/biometric-verify", web::post().to(mock_biometric_verify))
         })
         .bind(("127.0.0.1", 0))
         .expect("bind mock auth server");
@@ -203,32 +196,18 @@ async fn mock_reauth(body: web::Json<Value>, state: web::Data<MockState>) -> Htt
     if state.mode() == MockMode::ReauthRejected {
         return envelope(1001, "Failed to generate token", None::<Value>);
     }
-    envelope(
-        0,
-        "ok",
-        Some(json!({ "token": MOCK_REAUTH_TOKEN, "expiresIn": 3600 })),
-    )
+    envelope(0, "ok", Some(json!({ "token": MOCK_REAUTH_TOKEN, "expiresIn": 3600 })))
 }
 
-async fn mock_biometric_challenge(
-    body: web::Json<Value>,
-    state: web::Data<MockState>,
-) -> HttpResponse {
+async fn mock_biometric_challenge(body: web::Json<Value>, state: web::Data<MockState>) -> HttpResponse {
     state.record("/api/auth/biometric-challenge", &body);
     if state.mode() == MockMode::ChallengeRejected {
         return envelope(1008, "Biometric credential not bound", None::<Value>);
     }
-    envelope(
-        0,
-        "ok",
-        Some(json!({ "challengeNonce": MOCK_NONCE, "expiresIn": 60 })),
-    )
+    envelope(0, "ok", Some(json!({ "challengeNonce": MOCK_NONCE, "expiresIn": 60 })))
 }
 
-async fn mock_biometric_verify(
-    body: web::Json<Value>,
-    state: web::Data<MockState>,
-) -> HttpResponse {
+async fn mock_biometric_verify(body: web::Json<Value>, state: web::Data<MockState>) -> HttpResponse {
     state.record("/api/auth/biometric-verify", &body);
     if state.mode() == MockMode::BiometricVerifyRejected {
         return envelope(1009, "Biometric signature verification failed", None::<Value>);
@@ -260,7 +239,14 @@ async fn pairing_full_flow_via_http() {
 
     // 2. 验证配对码：签发 JWT
     let token = client
-        .verify_pairing_code(&base, "device-1", "test-phone", "fp-1", MOCK_PAIRING_CODE, "192.168.1.5")
+        .verify_pairing_code(
+            &base,
+            "device-1",
+            "test-phone",
+            "fp-1",
+            MOCK_PAIRING_CODE,
+            "192.168.1.5",
+        )
         .await
         .expect("verify should succeed");
     assert_eq!(token.token, MOCK_TOKEN);
@@ -335,7 +321,11 @@ async fn business_error_codes_map_to_auth_error() {
     match &err {
         AppError::Auth(msg) => {
             assert!(msg.contains("1005"), "err 应携带业务码: {}", msg);
-            assert!(msg.contains("Invalid or expired pairing code"), "err 应透传桌面消息: {}", msg);
+            assert!(
+                msg.contains("Invalid or expired pairing code"),
+                "err 应透传桌面消息: {}",
+                msg
+            );
         }
         other => panic!("expected AppError::Auth, got {:?}", other),
     }
@@ -409,9 +399,7 @@ async fn reauth_rejection_1001() {
 
 #[tokio::test]
 async fn connection_refused_is_internal_error() {
-    let client = AuthHttpClient::with_client(
-        reqwest::Client::builder().no_proxy().build().expect("build client"),
-    );
+    let client = AuthHttpClient::with_client(reqwest::Client::builder().no_proxy().build().expect("build client"));
 
     // 连回环保留端口 1：无监听者，连接立即拒绝。
     // （「bind :0 再释放」在并行测试下有端口抢占竞态；固定不可用端口无竞态）
@@ -480,10 +468,7 @@ async fn resolve_base_url_happy_path_with_target() {
         .expect("ws connect should succeed");
 
     let base = resolve_base_url(&manager).await.expect("target present");
-    assert_eq!(
-        base,
-        format!("http://127.0.0.1:{}", ws_server.addr.port())
-    );
+    assert_eq!(base, format!("http://127.0.0.1:{}", ws_server.addr.port()));
 
     manager.disconnect().await;
     clear_global_token();

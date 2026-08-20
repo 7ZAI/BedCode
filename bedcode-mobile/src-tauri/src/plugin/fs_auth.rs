@@ -13,7 +13,7 @@ use crate::plugin::storage::PluginStorage;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 /// 文件操作类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,10 +62,7 @@ const AUTH_TIMEOUT_SECS: u64 = 30;
 
 impl FsAuthChecker {
     /// 创建文件访问校验器
-    pub fn new(
-        storage: Arc<PluginStorage>,
-        app_handle: Option<Arc<tauri::AppHandle>>,
-    ) -> Self {
+    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
         Self {
             storage,
             pending_requests: Arc::new(Mutex::new(Vec::new())),
@@ -164,12 +161,7 @@ impl FsAuthChecker {
     }
 
     /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
-    async fn request_user_auth_batch(
-        &self,
-        plugin_id: &str,
-        paths: &[String],
-        operation: FsOp,
-    ) -> bool {
+    async fn request_user_auth_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -207,12 +199,7 @@ impl FsAuthChecker {
             return false;
         }
 
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(AUTH_TIMEOUT_SECS),
-            reply_rx,
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(AUTH_TIMEOUT_SECS), reply_rx).await {
             Ok(Ok(allowed)) => {
                 tracing::info!(plugin_id = %plugin_id, paths = ?paths, allowed = allowed, "fs_auth: user responded (batch)");
                 allowed
@@ -230,30 +217,36 @@ impl FsAuthChecker {
 
     /// 添加路径白名单
     pub async fn add_path_whitelist(&self, path: &str) -> anyhow::Result<()> {
-        let canonical = Self::canonicalize_path(path)
-            .unwrap_or_else(|| PathBuf::from(path));
+        let canonical = Self::canonicalize_path(path).unwrap_or_else(|| PathBuf::from(path));
         let canonical_str = canonical.to_string_lossy().to_string();
         let mut list = self.get_path_whitelist().await.unwrap_or_default();
         if list.contains(&canonical_str) {
             return Ok(());
         }
         list.push(canonical_str);
-        self.storage.set(SYSTEM_PLUGIN_ID, STORAGE_KEY_PATH_WHITELIST, serde_json::Value::Array(
-            list.into_iter().map(serde_json::Value::String).collect()
-        )).await?;
+        self.storage
+            .set(
+                SYSTEM_PLUGIN_ID,
+                STORAGE_KEY_PATH_WHITELIST,
+                serde_json::Value::Array(list.into_iter().map(serde_json::Value::String).collect()),
+            )
+            .await?;
         Ok(())
     }
 
     /// 移除路径白名单
     pub async fn remove_path_whitelist(&self, path: &str) -> anyhow::Result<()> {
-        let canonical = Self::canonicalize_path(path)
-            .unwrap_or_else(|| PathBuf::from(path));
+        let canonical = Self::canonicalize_path(path).unwrap_or_else(|| PathBuf::from(path));
         let canonical_str = canonical.to_string_lossy().to_string();
         let mut list = self.get_path_whitelist().await.unwrap_or_default();
         list.retain(|p| p != &canonical_str);
-        self.storage.set(SYSTEM_PLUGIN_ID, STORAGE_KEY_PATH_WHITELIST, serde_json::Value::Array(
-            list.into_iter().map(serde_json::Value::String).collect()
-        )).await?;
+        self.storage
+            .set(
+                SYSTEM_PLUGIN_ID,
+                STORAGE_KEY_PATH_WHITELIST,
+                serde_json::Value::Array(list.into_iter().map(serde_json::Value::String).collect()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -276,9 +269,13 @@ impl FsAuthChecker {
             return Ok(());
         }
         list.push(plugin_id.to_string());
-        self.storage.set(SYSTEM_PLUGIN_ID, STORAGE_KEY_PLUGIN_WHITELIST, serde_json::Value::Array(
-            list.into_iter().map(serde_json::Value::String).collect()
-        )).await?;
+        self.storage
+            .set(
+                SYSTEM_PLUGIN_ID,
+                STORAGE_KEY_PLUGIN_WHITELIST,
+                serde_json::Value::Array(list.into_iter().map(serde_json::Value::String).collect()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -286,9 +283,13 @@ impl FsAuthChecker {
     pub async fn remove_plugin_whitelist(&self, plugin_id: &str) -> anyhow::Result<()> {
         let mut list = self.get_plugin_whitelist().await.unwrap_or_default();
         list.retain(|p| p != plugin_id);
-        self.storage.set(SYSTEM_PLUGIN_ID, STORAGE_KEY_PLUGIN_WHITELIST, serde_json::Value::Array(
-            list.into_iter().map(serde_json::Value::String).collect()
-        )).await?;
+        self.storage
+            .set(
+                SYSTEM_PLUGIN_ID,
+                STORAGE_KEY_PLUGIN_WHITELIST,
+                serde_json::Value::Array(list.into_iter().map(serde_json::Value::String).collect()),
+            )
+            .await?;
         Ok(())
     }
 
@@ -385,12 +386,7 @@ impl FsAuthChecker {
             return false;
         }
 
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(AUTH_TIMEOUT_SECS),
-            reply_rx,
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(AUTH_TIMEOUT_SECS), reply_rx).await {
             Ok(Ok(allowed)) => {
                 tracing::info!(plugin_id = %plugin_id, path = %path, allowed = allowed, "fs_auth: user responded");
                 allowed
@@ -423,7 +419,9 @@ impl FsAuthChecker {
         if !prefix.is_empty() {
             granted.push(serde_json::Value::String(prefix));
         }
-        self.storage.set(plugin_id, &storage_key, serde_json::Value::Array(granted)).await?;
+        self.storage
+            .set(plugin_id, &storage_key, serde_json::Value::Array(granted))
+            .await?;
         Ok(())
     }
 

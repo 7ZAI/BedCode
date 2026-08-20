@@ -8,7 +8,6 @@ use tauri::plugin::{Builder, PluginHandle};
 /// 已注册的 AllFilesAccessPlugin 句柄（仅 Android 平台使用）
 static ALL_FILES_ACCESS_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
-
 /// 注册 AllFilesAccessPlugin（「所有文件访问权限」一键引导跳转）
 ///
 /// Android 11+ 分区存储下该权限无运行时弹窗，只能经系统设置页手动开启；
@@ -28,22 +27,18 @@ pub fn all_files_access_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-
 /// 查询「所有文件访问权限」状态；未授权时跳转系统授权页，返回跳转前是否已授权
 #[cfg(target_os = "android")]
 pub async fn open_all_files_settings_android() -> crate::Result<bool> {
-    let handle = ALL_FILES_ACCESS_HANDLE.get().ok_or_else(|| {
-        crate::AppError::Plugin("AllFilesAccessPlugin not registered".to_string())
-    })?;
+    let handle = ALL_FILES_ACCESS_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("AllFilesAccessPlugin not registered".to_string()))?;
     let response: serde_json::Value = handle
         .run_mobile_plugin_async("openAllFilesAccessSettings", serde_json::json!({}))
         .await
-        .map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to invoke openAllFilesAccessSettings: {}", e))
-        })?;
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke openAllFilesAccessSettings: {}", e)))?;
     Ok(response.get("granted").and_then(|v| v.as_bool()).unwrap_or(false))
 }
-
 
 /// 非 Android 平台（桌面 dev 窗口 / iOS）：无「所有文件访问权限」概念
 #[cfg(not(target_os = "android"))]

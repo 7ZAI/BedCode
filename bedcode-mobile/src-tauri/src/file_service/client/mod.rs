@@ -21,9 +21,7 @@ pub mod upload;
 
 pub use cursor::{Cursor, CursorError, CursorStore, StoredCursor};
 pub use download::{download_with_retry, DownloadClient, DownloadError, DownloadRequest};
-pub use upload::{
-    CompleteError, CreateUploadRequest, UploadClient, UploadError, UploadSessionInfo,
-};
+pub use upload::{CompleteError, CreateUploadRequest, UploadClient, UploadError, UploadSessionInfo};
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -45,10 +43,7 @@ pub(crate) async fn desktop_http_endpoint() -> Result<(String, String), String> 
     if token.is_empty() {
         return Err("file service client: no session token (reconnect required)".to_string());
     }
-    Ok((
-        format!("http://{}:{}", target.address, target.port),
-        token,
-    ))
+    Ok((format!("http://{}:{}", target.address, target.port), token))
 }
 
 /// 并发上限常量（沿用 01 选型：默认 3，可配置 1–8）
@@ -90,9 +85,7 @@ pub fn urlencode_path(path: &str) -> String {
     let mut out = String::with_capacity(path.len());
     for b in path.bytes() {
         match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => {
-                out.push(b as char)
-            }
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b'/' => out.push(b as char),
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -179,7 +172,12 @@ mod tests {
     #[test]
     fn endpoint_builds_plugin_mount_url() {
         assert_eq!(
-            endpoint("http://192.168.1.5:4455", "com.bedcode.file-transfer", "files", "file?path=movies%2Fa.mp4"),
+            endpoint(
+                "http://192.168.1.5:4455",
+                "com.bedcode.file-transfer",
+                "files",
+                "file?path=movies%2Fa.mp4"
+            ),
             "http://192.168.1.5:4455/api/plugins/com.bedcode.file-transfer/files/file?path=movies%2Fa.mp4"
         );
         // base 尾部斜杠容忍

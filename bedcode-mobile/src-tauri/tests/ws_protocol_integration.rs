@@ -52,21 +52,27 @@ async fn wait_event(
 ///
 /// 认证已 HTTP 化后，移动端正常路径不再经 WS 握手；本测试路径保留真实
 /// WsClient→router→handler 链路，驱动 04 事件 WS 的首消息 JWT 认证语义
-async fn connect_and_pair(
-    server: &MockDesktopServer,
-) -> (Arc<ConnectionManager>, broadcast::Receiver<MobileEvent>) {
+async fn connect_and_pair(server: &MockDesktopServer) -> (Arc<ConnectionManager>, broadcast::Receiver<MobileEvent>) {
     clear_global_token();
     let manager = ConnectionManager::new();
     let mut events = manager.subscribe();
 
     manager
-        .connect_without_emit("127.0.0.1".to_string(), server.addr.port(), Some(TEST_DEVICE_NAME.to_string()))
+        .connect_without_emit(
+            "127.0.0.1".to_string(),
+            server.addr.port(),
+            Some(TEST_DEVICE_NAME.to_string()),
+        )
         .await
         .expect("connect should succeed");
 
     // 认证：直接发 JWT 首消息（reauthenticate stage，mock 回 Authenticated）
     manager
-        .send(&AuthRequest::reauthenticate(TEST_DEVICE_ID, "fp-test", MOCK_SESSION_TOKEN))
+        .send(&AuthRequest::reauthenticate(
+            TEST_DEVICE_ID,
+            "fp-test",
+            MOCK_SESSION_TOKEN,
+        ))
         .await
         .expect("send jwt reauthenticate");
     wait_event(&mut events, |ev| matches!(ev, MobileEvent::AuthSuccess { .. })).await;
@@ -83,7 +89,11 @@ async fn connect_handshake() {
     let manager = ConnectionManager::new();
 
     manager
-        .connect_without_emit("127.0.0.1".to_string(), server.addr.port(), Some(TEST_DEVICE_NAME.to_string()))
+        .connect_without_emit(
+            "127.0.0.1".to_string(),
+            server.addr.port(),
+            Some(TEST_DEVICE_NAME.to_string()),
+        )
         .await
         .expect("connect should succeed");
 
@@ -120,11 +130,7 @@ async fn auth_full_flow() {
     let msgs = server
         .wait_for_received(|v| v["type"] == "session_control", EVENT_TIMEOUT)
         .await;
-    let token = msgs
-        .last()
-        .unwrap()["payload"]["token"]
-        .as_str()
-        .expect("token field");
+    let token = msgs.last().unwrap()["payload"]["token"].as_str().expect("token field");
     assert_eq!(token, MOCK_SESSION_TOKEN, "认证后消息应自动携带 token");
 
     // 事件流完整性：至少 AuthSuccess 已在上层断言，这里验证无意外 Error 事件
@@ -163,9 +169,7 @@ async fn send_and_wait_ack_matching() {
     let msgs = server
         .wait_for_received(|v| v["type"] == "session_control", EVENT_TIMEOUT)
         .await;
-    let req_id = msgs
-        .last()
-        .unwrap()["payload"]["message_id"]
+    let req_id = msgs.last().unwrap()["payload"]["message_id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -218,9 +222,10 @@ async fn tcp_close_emits_client_event() {
     // connection_monitor 消费 WsClientEvent 通知前端），TCP 断开本身的
     // 感知契约在 WsClient 事件层——这里直接驱动 WsClient 验证
     let server = MockDesktopServer::start().await;
-    let client = bedcode_lib::connection::WsClient::new(
-        bedcode_lib::connection::WsClientConfig::new("127.0.0.1", server.addr.port()),
-    );
+    let client = bedcode_lib::connection::WsClient::new(bedcode_lib::connection::WsClientConfig::new(
+        "127.0.0.1",
+        server.addr.port(),
+    ));
     let mut events = client.subscribe();
     client.connect().await.expect("connect should succeed");
 
@@ -261,11 +266,7 @@ async fn send_when_disconnected_rejected() {
         .await
         .expect_err("未连接时 send 必须失败");
     let msg = err.to_string();
-    assert!(
-        msg.contains("Not connected"),
-        "错误信息应说明未连接，实际: {}",
-        msg
-    );
+    assert!(msg.contains("Not connected"), "错误信息应说明未连接，实际: {}", msg);
 }
 
 // ==================== 04 事件 WS：建连 + 首消息 JWT + SyncData 收广播 ====================
@@ -300,10 +301,7 @@ async fn event_ws_first_message_is_jwt_auth() {
     let ev = wait_event(&mut events, |ev| matches!(ev, MobileEvent::AuthSuccess { .. })).await;
     match ev {
         MobileEvent::AuthSuccess { session_token } => {
-            assert_eq!(
-                session_token, MOCK_SESSION_TOKEN,
-                "AuthSuccess 应携带签发的 token"
-            );
+            assert_eq!(session_token, MOCK_SESSION_TOKEN, "AuthSuccess 应携带签发的 token");
         }
         other => panic!("expected AuthSuccess event, got {:?}", other),
     }
@@ -344,10 +342,9 @@ async fn event_ws_forwards_sync_data() {
         }))
         .await;
 
-    let ev = wait_event(
-        &mut events,
-        |ev| matches!(ev, MobileEvent::SyncTaskScheduledChanged { .. }),
-    )
+    let ev = wait_event(&mut events, |ev| {
+        matches!(ev, MobileEvent::SyncTaskScheduledChanged { .. })
+    })
     .await;
     match ev {
         MobileEvent::SyncTaskScheduledChanged { job_id, status, action } => {
@@ -497,9 +494,7 @@ async fn supervisor_recovers_after_disconnect() {
             let guard = server.received.lock().await;
             guard
                 .iter()
-                .filter(|v| {
-                    v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate"
-                })
+                .filter(|v| v["type"] == "auth" && v["payload"]["payload"]["stage"] == "reauthenticate")
                 .count()
         };
         if auth_count >= 2 {

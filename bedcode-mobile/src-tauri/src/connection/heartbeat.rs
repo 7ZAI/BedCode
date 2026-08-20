@@ -50,13 +50,9 @@ pub enum HeartbeatEvent {
     /// 发送了 Ping
     PingSent,
     /// 收到 Pong 响应
-    PongReceived {
-        latency_ms: u64,
-    },
+    PongReceived { latency_ms: u64 },
     /// 心跳超时
-    Timeout {
-        consecutive: u32,
-    },
+    Timeout { consecutive: u32 },
     /// 心跳停止
     Stopped,
 }
@@ -119,9 +115,7 @@ impl HeartbeatManager {
         // 重置连续超时计数
         *self.consecutive_timeouts.write().await = 0;
 
-        let _ = self.event_tx.send(HeartbeatEvent::PongReceived {
-            latency_ms: 0,
-        });
+        let _ = self.event_tx.send(HeartbeatEvent::PongReceived { latency_ms: 0 });
 
         debug!("[HeartbeatManager] Pong received");
     }
@@ -159,7 +153,6 @@ impl HeartbeatManager {
         *count += 1;
         *count
     }
-
 }
 
 impl Default for HeartbeatManager {

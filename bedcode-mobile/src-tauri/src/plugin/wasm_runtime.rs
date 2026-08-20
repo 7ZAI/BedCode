@@ -97,12 +97,7 @@ pub struct WasmPluginState {
 /// 直接借用 Store 状态（`Store::limiter` 的闭包返回本状态的可变引用），
 /// 限制单插件线性内存与表大小，防止失控/恶意插件耗尽宿主内存。
 impl ResourceLimiter for WasmPluginState {
-    fn memory_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> wasmtime::Result<bool> {
+    fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
         if desired > MAX_PLUGIN_MEMORY_BYTES {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
@@ -116,12 +111,7 @@ impl ResourceLimiter for WasmPluginState {
         }
     }
 
-    fn table_growing(
-        &mut self,
-        _current: usize,
-        desired: usize,
-        _maximum: Option<usize>,
-    ) -> wasmtime::Result<bool> {
+    fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
         if desired > MAX_PLUGIN_TABLE_ENTRIES {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
@@ -196,13 +186,17 @@ impl WasmRuntime {
                 tracing::warn!(error = %e, "WASM compile cache disabled");
             }
         }
-        let engine = Engine::new(&config).map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e))
-        })?;
+        let engine = Engine::new(&config)
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to initialize WASM engine: {}", e)))?;
 
         let linker = component::build_component_linker(&engine)?;
 
-        Ok(Self { engine, linker, runtime_handle, aot_cache_dir })
+        Ok(Self {
+            engine,
+            linker,
+            runtime_handle,
+            aot_cache_dir,
+        })
     }
 
     /// 测试访问器：Engine 引用（组件编译与实例化必须同一 Engine 实例，

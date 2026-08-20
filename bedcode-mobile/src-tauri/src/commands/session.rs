@@ -5,10 +5,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::Result;
+use crate::connection::request::{timeouts, ConfigRequest, ResponseParser, SessionRequest, TerminalRequest};
 use crate::session::SessionInfo;
-use crate::connection::request::{SessionRequest, ResponseParser, timeouts, TerminalRequest, ConfigRequest};
-use crate::state::{get_connection_manager, get_session_manager, get_global_token};
+use crate::state::{get_connection_manager, get_global_token, get_session_manager};
+use crate::Result;
 
 /// 启动会话响应
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,14 +25,15 @@ pub async fn ws_load_sessions(app_handle: AppHandle) -> Result<Vec<serde_json::V
     let conn = get_connection_manager();
 
     let message = SessionRequest::list_sessions();
-    let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::SESSION_CONTROL).await?;
+    let response = conn
+        .send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::SESSION_CONTROL)
+        .await?;
 
     // 解析响应中的会话列表
-    let list = ResponseParser::parse_session_list(&response)
-        .unwrap_or_else(|| {
-            tracing::warn!("[ws_load_sessions] Failed to parse response, returning empty");
-            Vec::new()
-        });
+    let list = ResponseParser::parse_session_list(&response).unwrap_or_else(|| {
+        tracing::warn!("[ws_load_sessions] Failed to parse response, returning empty");
+        Vec::new()
+    });
 
     tracing::info!("[ws_load_sessions] Response OK, {} sessions", list.len());
     Ok(list)
@@ -46,7 +47,8 @@ pub async fn ws_join_session(app_handle: AppHandle, session_id: String) -> Resul
     let conn = get_connection_manager();
 
     let message = TerminalRequest::subscribe(&session_id, None);
-    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE).await?;
+    conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::TERMINAL_SUBSCRIBE)
+        .await?;
     tracing::info!("[ws_join_session] Subscribed to session successfully: {}", session_id);
     Ok(())
 }
@@ -92,10 +94,7 @@ pub async fn ws_start_session(config_id: String, session_name: Option<String>) -
     // 获取刚创建的会话信息
     let session = session_mgr.get_session_by_id(&session_id).await;
 
-    Ok(StartSessionResponse {
-        session_id,
-        session,
-    })
+    Ok(StartSessionResponse { session_id, session })
 }
 
 /// 停止会话
@@ -111,7 +110,10 @@ pub async fn ws_remove_session(session_id: String) -> Result<()> {
     tracing::info!("[ws_remove_session] Entry: session_id={}", session_id);
     let session_mgr = get_session_manager();
     session_mgr.remove_session(&session_id).await?;
-    tracing::info!("[ws_remove_session] Exit: returning Ok(()) for session_id={}", session_id);
+    tracing::info!(
+        "[ws_remove_session] Exit: returning Ok(()) for session_id={}",
+        session_id
+    );
     Ok(())
 }
 
@@ -122,14 +124,15 @@ pub async fn ws_load_session_configs(app_handle: AppHandle) -> Result<Vec<serde_
     let conn = get_connection_manager();
 
     let message = ConfigRequest::list_session_configs();
-    let response = conn.send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::CONFIG).await?;
+    let response = conn
+        .send_and_wait_with_disconnect_handling(&app_handle, &message, timeouts::CONFIG)
+        .await?;
 
     // 从响应中提取会话配置列表
-    let configs = ResponseParser::parse_config_list(&response)
-        .unwrap_or_else(|| {
-            tracing::warn!("[ws_load_session_configs] Failed to parse response, returning empty");
-            Vec::new()
-        });
+    let configs = ResponseParser::parse_config_list(&response).unwrap_or_else(|| {
+        tracing::warn!("[ws_load_session_configs] Failed to parse response, returning empty");
+        Vec::new()
+    });
 
     tracing::info!("[ws_load_session_configs] Response OK, {} configs", configs.len());
     Ok(configs)

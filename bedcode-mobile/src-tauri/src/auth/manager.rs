@@ -6,16 +6,16 @@
 //! 认证已从 WS 握手迁移到 HTTP（spec §4.5 六端点）：所有方法经
 //! `AuthHttpClient` 直连桌面端 `/api/auth/*`，不再依赖 WS 通道。
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
 
-use crate::AppError;
 use crate::auth::http::{format_base_url, AuthHttpClient};
 use crate::connection::manager::ConnectionManager;
 use crate::router::MobileEvent;
 use crate::system::constants::auth::DEFAULT_DEVICE_NAME;
+use crate::AppError;
 use crate::Result;
 
 use super::{AuthCredentials, AuthStatus};
@@ -99,7 +99,10 @@ impl AuthManager {
         // 文件不存在或读取失败：优先用设备唯一 ID 派生稳定身份
         if let Some(uid) = self.stable_device_uid(app) {
             let (device_id, fingerprint) = derive_identity_from_uid(&uid);
-            tracing::info!("Derived device identity from stable device UID: device_id={}", device_id);
+            tracing::info!(
+                "Derived device identity from stable device UID: device_id={}",
+                device_id
+            );
             *self.device_id.write().await = device_id;
             *self.device_fingerprint.write().await = fingerprint;
             self.save_identity().await;
@@ -362,11 +365,7 @@ impl AuthManager {
 
         // 1. 请求挑战值
         // 桌面端拒绝（未绑定凭证/未配对等）：透传真实原因，前端可提示用户改用配对码
-        let challenge = match self
-            .http
-            .biometric_challenge(&base_url, &device_id, &fingerprint)
-            .await
-        {
+        let challenge = match self.http.biometric_challenge(&base_url, &device_id, &fingerprint).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!("[authenticate_with_biometric] Challenge rejected: {}", e);
@@ -376,20 +375,15 @@ impl AuthManager {
         };
 
         // 2. 生物认证解锁私钥并签名挑战值
-        let signature = match crate::plugin::android_plugins::biometric_sign(
-            &fingerprint,
-            &challenge.challenge_nonce,
-        )
-        .await
-        {
-            Ok(sig) => sig,
-            Err(e) => {
-                tracing::warn!("[authenticate_with_biometric] Biometric sign failed: {}", e);
-                *self.status.write().await =
-                    AuthStatus::Failed(format!("Biometric authentication failed: {}", e));
-                return Ok(false);
-            }
-        };
+        let signature =
+            match crate::plugin::android_plugins::biometric_sign(&fingerprint, &challenge.challenge_nonce).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::warn!("[authenticate_with_biometric] Biometric sign failed: {}", e);
+                    *self.status.write().await = AuthStatus::Failed(format!("Biometric authentication failed: {}", e));
+                    return Ok(false);
+                }
+            };
 
         // 3. 回传签名验证（挑战过期/验签失败 → 1009）
         match self
@@ -453,14 +447,20 @@ impl AuthManager {
             let signature = match crate::plugin::android_plugins::biometric_sign(&fingerprint, &nonce).await {
                 Ok(sig) => sig,
                 Err(e) => {
-                    tracing::warn!("[bind_biometric_credential] Biometric self-check cancelled/failed: {}", e);
+                    tracing::warn!(
+                        "[bind_biometric_credential] Biometric self-check cancelled/failed: {}",
+                        e
+                    );
                     let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
                     return Err(e);
                 }
             };
 
             if let Err(e) = verify_biometric_signature(&public_key, &nonce, &signature) {
-                tracing::error!("[bind_biometric_credential] Biometric self-check signature invalid: {}", e);
+                tracing::error!(
+                    "[bind_biometric_credential] Biometric self-check signature invalid: {}",
+                    e
+                );
                 let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
                 return Err(AppError::Auth("Biometric self-check failed".to_string()));
             }
@@ -469,7 +469,11 @@ impl AuthManager {
 
         // 3. 通过已认证连接把公钥注册到桌面端
         let message = crate::connection::request::AuthRequest::exchange_biometric_credential(&fingerprint, &public_key);
-        let response = match self.connection.send_and_wait(&message, crate::connection::request::timeouts::AUTH).await {
+        let response = match self
+            .connection
+            .send_and_wait(&message, crate::connection::request::timeouts::AUTH)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 // 注册失败时清理本地密钥，避免留下孤儿公钥/私钥
@@ -507,7 +511,11 @@ impl AuthManager {
 
         // 1. 通知桌面端清空公钥
         let message = crate::connection::request::AuthRequest::exchange_biometric_credential(&fingerprint, "");
-        let response = match self.connection.send_and_wait(&message, crate::connection::request::timeouts::AUTH).await {
+        let response = match self
+            .connection
+            .send_and_wait(&message, crate::connection::request::timeouts::AUTH)
+            .await
+        {
             Ok(r) => Some(r),
             Err(e) => {
                 tracing::warn!("[unbind_biometric_credential] Desktop notification failed: {}", e);
@@ -522,7 +530,9 @@ impl AuthManager {
         }
 
         match response {
-            Some(crate::model::message::Message::Auth { payload, .. }) if payload.stage == crate::enums::auth::AuthStage::Authenticated => {
+            Some(crate::model::message::Message::Auth { payload, .. })
+                if payload.stage == crate::enums::auth::AuthStage::Authenticated =>
+            {
                 tracing::info!("[unbind_biometric_credential] Credential unbound");
                 Ok(true)
             }
@@ -564,11 +574,7 @@ fn derive_identity_from_uid(uid: &str) -> (String, String) {
 /// - `public_key_spki_b64`: 绑定公钥（SPKI X.509 DER，base64）
 /// - `message`: 被签名的消息（挑战值 hex 字符串的 UTF-8 字节）
 /// - `signature_b64`: 签名（原始 r||s 格式，base64）
-fn verify_biometric_signature(
-    public_key_spki_b64: &str,
-    message: &str,
-    signature_b64: &str,
-) -> Result<()> {
+fn verify_biometric_signature(public_key_spki_b64: &str, message: &str, signature_b64: &str) -> Result<()> {
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -585,8 +591,7 @@ fn verify_biometric_signature(
         .decode(signature_b64)
         .map_err(|e| AppError::Auth(format!("Invalid signature encoding: {}", e)))?;
 
-    let signature = Signature::from_slice(&raw_sig)
-        .map_err(|e| AppError::Auth(format!("Invalid signature: {}", e)))?;
+    let signature = Signature::from_slice(&raw_sig).map_err(|e| AppError::Auth(format!("Invalid signature: {}", e)))?;
 
     verifying_key
         .verify(message.as_bytes(), &signature)

@@ -7,7 +7,10 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::enums::auth::AuthPayload;
-use crate::enums::control::{SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction, TerminalPayload};
+use crate::enums::control::{
+    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction,
+    TerminalPayload,
+};
 use crate::enums::file_service::FileServicePayload;
 use crate::enums::special_key::KeyCombo;
 use crate::enums::sumary::SessionSummary;
@@ -60,7 +63,6 @@ fn default_token() -> String {
 #[serde(tag = "type", content = "payload")]
 pub enum Message {
     // ==================== 业务消息类型 ====================
-
     /// 终端消息 (双向)
     /// 统一的终端操作类型：输出、输入、订阅、取消订阅等
     #[serde(rename = "terminal")]
@@ -266,7 +268,13 @@ impl Message {
     /// 创建终端输出消息（使用已编码的 Base64 数据）
     /// 用于数据已经经过 Base64 编码的场景（如从 PTY 输出缓冲区转发）
     /// end_index 在合并多条事件时提供结束索引，前端可用其精确更新去重游标
-    pub fn output_from_base64(session_id: &str, data_base64: &str, is_waiting: bool, index: usize, end_index: Option<usize>) -> Self {
+    pub fn output_from_base64(
+        session_id: &str,
+        data_base64: &str,
+        is_waiting: bool,
+        index: usize,
+        end_index: Option<usize>,
+    ) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -357,7 +365,13 @@ impl Message {
     /// 创建终端订阅响应消息（携带原始 request_id）
     ///
     /// 用于回复 `expect_response=true` 的订阅请求，使客户端能匹配 pending 请求
-    pub fn subscribe_response_with_request_id(session_id: &str, min_seq: u64, max_seq: u64, history_count: usize, request_id: &str) -> Self {
+    pub fn subscribe_response_with_request_id(
+        session_id: &str,
+        min_seq: u64,
+        max_seq: u64,
+        history_count: usize,
+        request_id: &str,
+    ) -> Self {
         Message::Terminal {
             message_id: request_id.to_string(),
             expect_response: false,
@@ -653,56 +667,81 @@ impl Message {
     /// 仅对支持响应关联的消息类型有效
     pub fn with_request_id(self, request_id: &str) -> Self {
         match self {
-            Message::Terminal { message_id, expect_response, timestamp, session_id, token, payload } => {
-                Message::Terminal {
-                    message_id: request_id.to_string(),
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token,
-                    payload,
-                }
-            }
-            Message::Auth { message_id, expect_response, timestamp, session_id, token, payload } => {
-                Message::Auth {
-                    message_id: request_id.to_string(),
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token,
-                    payload,
-                }
-            }
-            Message::SessionControl { message_id, expect_response, timestamp, session_id, token, payload } => {
-                Message::SessionControl {
-                    message_id: request_id.to_string(),
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token,
-                    payload,
-                }
-            }
-            Message::SessionConfig { message_id, expect_response, timestamp, session_id, token, payload } => {
-                Message::SessionConfig {
-                    message_id: request_id.to_string(),
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token,
-                    payload,
-                }
-            }
-            Message::Error { message_id, expect_response, timestamp, token, code, message } => {
-                Message::Error {
-                    message_id: Some(request_id.to_string()),
-                    expect_response,
-                    timestamp,
-                    token,
-                    code,
-                    message,
-                }
-            }
+            Message::Terminal {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            } => Message::Terminal {
+                message_id: request_id.to_string(),
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            },
+            Message::Auth {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            } => Message::Auth {
+                message_id: request_id.to_string(),
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            },
+            Message::SessionControl {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            } => Message::SessionControl {
+                message_id: request_id.to_string(),
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            },
+            Message::SessionConfig {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            } => Message::SessionConfig {
+                message_id: request_id.to_string(),
+                expect_response,
+                timestamp,
+                session_id,
+                token,
+                payload,
+            },
+            Message::Error {
+                message_id,
+                expect_response,
+                timestamp,
+                token,
+                code,
+                message,
+            } => Message::Error {
+                message_id: Some(request_id.to_string()),
+                expect_response,
+                timestamp,
+                token,
+                code,
+                message,
+            },
             // 其他类型不支持设置 request_id，直接返回
             other => other,
         }
@@ -711,103 +750,137 @@ impl Message {
     /// 设置 token
     pub fn with_token(self, token: &str) -> Self {
         match self {
-            Message::Terminal { message_id, expect_response, timestamp, session_id, payload, .. } => {
-                Message::Terminal {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token: token.to_string(),
-                    payload,
-                }
-            }
-            Message::Auth { message_id, expect_response, timestamp, session_id, payload, .. } => {
-                Message::Auth {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token: token.to_string(),
-                    payload,
-                }
-            }
-            Message::SessionControl { message_id, expect_response, timestamp, session_id, payload, .. } => {
-                Message::SessionControl {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token: token.to_string(),
-                    payload,
-                }
-            }
-            Message::SessionConfig { message_id, expect_response, timestamp, session_id, payload, .. } => {
-                Message::SessionConfig {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    session_id,
-                    token: token.to_string(),
-                    payload,
-                }
-            }
-            Message::Error { message_id, expect_response, timestamp, code, message, .. } => {
-                Message::Error {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    token: token.to_string(),
-                    code,
-                    message,
-                }
-            }
-            Message::ServerClosed { reason, will_reconnect, .. } => {
-                Message::ServerClosed {
-                    reason,
-                    will_reconnect,
-                    token: token.to_string(),
-                }
-            }
-            Message::ClientDisconnected { device_name, reason, .. } => {
-                Message::ClientDisconnected {
-                    device_name,
-                    reason,
-                    token: token.to_string(),
-                }
-            }
-            Message::SessionEvent { event_type, session, device_name, .. } => {
-                Message::SessionEvent {
-                    event_type,
-                    session,
-                    device_name,
-                    token: token.to_string(),
-                }
-            }
-            Message::Ack { request_id, timestamp, code, message, .. } => {
-                Message::Ack {
-                    request_id,
-                    timestamp,
-                    code,
-                    message,
-                    token: token.to_string(),
-                }
-            }
-            Message::SyncData { timestamp, payload, .. } => {
-                Message::SyncData {
-                    timestamp,
-                    payload,
-                    token: token.to_string(),
-                }
-            }
-            Message::FileService { message_id, expect_response, timestamp, payload, .. } => {
-                Message::FileService {
-                    message_id,
-                    expect_response,
-                    timestamp,
-                    token: token.to_string(),
-                    payload,
-                }
-            }
+            Message::Terminal {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                payload,
+                ..
+            } => Message::Terminal {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token: token.to_string(),
+                payload,
+            },
+            Message::Auth {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                payload,
+                ..
+            } => Message::Auth {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token: token.to_string(),
+                payload,
+            },
+            Message::SessionControl {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                payload,
+                ..
+            } => Message::SessionControl {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token: token.to_string(),
+                payload,
+            },
+            Message::SessionConfig {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                payload,
+                ..
+            } => Message::SessionConfig {
+                message_id,
+                expect_response,
+                timestamp,
+                session_id,
+                token: token.to_string(),
+                payload,
+            },
+            Message::Error {
+                message_id,
+                expect_response,
+                timestamp,
+                code,
+                message,
+                ..
+            } => Message::Error {
+                message_id,
+                expect_response,
+                timestamp,
+                token: token.to_string(),
+                code,
+                message,
+            },
+            Message::ServerClosed {
+                reason, will_reconnect, ..
+            } => Message::ServerClosed {
+                reason,
+                will_reconnect,
+                token: token.to_string(),
+            },
+            Message::ClientDisconnected {
+                device_name, reason, ..
+            } => Message::ClientDisconnected {
+                device_name,
+                reason,
+                token: token.to_string(),
+            },
+            Message::SessionEvent {
+                event_type,
+                session,
+                device_name,
+                ..
+            } => Message::SessionEvent {
+                event_type,
+                session,
+                device_name,
+                token: token.to_string(),
+            },
+            Message::Ack {
+                request_id,
+                timestamp,
+                code,
+                message,
+                ..
+            } => Message::Ack {
+                request_id,
+                timestamp,
+                code,
+                message,
+                token: token.to_string(),
+            },
+            Message::SyncData { timestamp, payload, .. } => Message::SyncData {
+                timestamp,
+                payload,
+                token: token.to_string(),
+            },
+            Message::FileService {
+                message_id,
+                expect_response,
+                timestamp,
+                payload,
+                ..
+            } => Message::FileService {
+                message_id,
+                expect_response,
+                timestamp,
+                token: token.to_string(),
+                payload,
+            },
         }
     }
 
@@ -828,13 +901,9 @@ impl Message {
     }
 
     /// 从 WebSocket 原生消息转换
-    pub fn from_ws_message(
-        msg: tokio_tungstenite::tungstenite::Message,
-    ) -> crate::Result<Option<Self>> {
+    pub fn from_ws_message(msg: tokio_tungstenite::tungstenite::Message) -> crate::Result<Option<Self>> {
         match msg {
-            tokio_tungstenite::tungstenite::Message::Text(text) => {
-                Ok(Some(serde_json::from_str(&text)?))
-            }
+            tokio_tungstenite::tungstenite::Message::Text(text) => Ok(Some(serde_json::from_str(&text)?)),
             tokio_tungstenite::tungstenite::Message::Binary(data) => {
                 let text = String::from_utf8_lossy(&data);
                 Ok(Some(serde_json::from_str(&text)?))
@@ -844,7 +913,10 @@ impl Message {
             tokio_tungstenite::tungstenite::Message::Close(reason) => {
                 // 注意：tungstenite 的 CloseFrame Display 会追加关闭码（"reason (code)"），
                 // 这里只取 reason 字段，避免关闭码混入错误消息
-                Ok(Some(Message::error("close", &reason.map(|r| r.reason.to_string()).unwrap_or_default())))
+                Ok(Some(Message::error(
+                    "close",
+                    &reason.map(|r| r.reason.to_string()).unwrap_or_default(),
+                )))
             }
             tokio_tungstenite::tungstenite::Message::Frame(_) => Ok(None),
         }
@@ -914,7 +986,15 @@ mod tests {
                 session_id,
                 payload:
                     TerminalPayload {
-                        action: TerminalAction::Output { data, is_waiting, index, end_index, start_offset, end_offset },
+                        action:
+                            TerminalAction::Output {
+                                data,
+                                is_waiting,
+                                index,
+                                end_index,
+                                start_offset,
+                                end_offset,
+                            },
                     },
                 ..
             } => {
@@ -937,7 +1017,10 @@ mod tests {
         let msg = Message::output("s", b"hello world", false, 0);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Output { data, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Output { data, .. },
+                    },
                 ..
             } => assert_eq!(data, "aGVsbG8gd29ybGQ="),
             _ => panic!(),
@@ -947,7 +1030,10 @@ mod tests {
         let msg = Message::output("s", b"", false, 0);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Output { data, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Output { data, .. },
+                    },
                 ..
             } => assert_eq!(data, ""),
             _ => panic!(),
@@ -957,7 +1043,10 @@ mod tests {
         let msg = Message::output("s", &[0x00, 0x01, 0x02, 0xff], false, 0);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Output { data, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Output { data, .. },
+                    },
                 ..
             } => assert_eq!(data, "AAEC/w=="),
             _ => panic!(),
@@ -972,7 +1061,15 @@ mod tests {
             Message::Terminal {
                 payload:
                     TerminalPayload {
-                        action: TerminalAction::Output { data, is_waiting, index, end_index, start_offset, end_offset },
+                        action:
+                            TerminalAction::Output {
+                                data,
+                                is_waiting,
+                                index,
+                                end_index,
+                                start_offset,
+                                end_offset,
+                            },
                     },
                 ..
             } => {
@@ -990,7 +1087,10 @@ mod tests {
         let msg = Message::output_from_base64("s", "QUJDRA==", true, 1, None);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Output { end_index, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Output { end_index, .. },
+                    },
                 ..
             } => assert_eq!(end_index, None),
             _ => panic!(),
@@ -1007,7 +1107,10 @@ mod tests {
         match msg {
             Message::Terminal {
                 session_id,
-                payload: TerminalPayload { action: TerminalAction::Input { data, special_key } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Input { data, special_key },
+                    },
                 ..
             } => {
                 assert_eq!(session_id, "sess-1");
@@ -1021,7 +1124,10 @@ mod tests {
         let msg = Message::input("sess-1", "echo hi", None);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Input { special_key, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Input { special_key, .. },
+                    },
                 ..
             } => assert_eq!(special_key, None),
             _ => panic!(),
@@ -1035,7 +1141,10 @@ mod tests {
         assert!(msg.expect_response());
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Input { data, .. } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Input { data, .. },
+                    },
                 ..
             } => assert_eq!(data, "y"),
             _ => panic!(),
@@ -1049,7 +1158,10 @@ mod tests {
         assert!(!msg.expect_response());
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Subscribe { start_seq } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Subscribe { start_seq },
+                    },
                 ..
             } => assert_eq!(start_seq, Some(100)),
             _ => panic!(),
@@ -1059,7 +1171,10 @@ mod tests {
         let msg = Message::subscribe("s", None);
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Subscribe { start_seq } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Subscribe { start_seq },
+                    },
                 ..
             } => assert_eq!(start_seq, None),
             _ => panic!(),
@@ -1072,7 +1187,10 @@ mod tests {
         assert!(msg.expect_response());
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Subscribe { start_seq } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Subscribe { start_seq },
+                    },
                 ..
             } => assert_eq!(start_seq, Some(5)),
             _ => panic!(),
@@ -1087,7 +1205,18 @@ mod tests {
         assert!(!msg.expect_response());
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::SubscribeResponse { min_seq, max_seq, history_count, mode, min_offset, max_offset } },
+                payload:
+                    TerminalPayload {
+                        action:
+                            TerminalAction::SubscribeResponse {
+                                min_seq,
+                                max_seq,
+                                history_count,
+                                mode,
+                                min_offset,
+                                max_offset,
+                            },
+                    },
                 ..
             } => {
                 assert_eq!(min_seq, 10);
@@ -1109,7 +1238,16 @@ mod tests {
         assert!(msg.message_id().is_some_and(|id| !id.is_empty()));
         match msg {
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::SubscribeResponse { min_seq, max_seq, history_count, .. } },
+                payload:
+                    TerminalPayload {
+                        action:
+                            TerminalAction::SubscribeResponse {
+                                min_seq,
+                                max_seq,
+                                history_count,
+                                ..
+                            },
+                    },
                 ..
             } => {
                 assert_eq!(min_seq, 1);
@@ -1128,7 +1266,9 @@ mod tests {
         assert!(matches!(
             msg,
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Unsubscribe },
+                payload: TerminalPayload {
+                    action: TerminalAction::Unsubscribe
+                },
                 ..
             }
         ));
@@ -1139,7 +1279,9 @@ mod tests {
         assert!(matches!(
             msg,
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::Unsubscribe },
+                payload: TerminalPayload {
+                    action: TerminalAction::Unsubscribe
+                },
                 ..
             }
         ));
@@ -1151,7 +1293,9 @@ mod tests {
         assert!(matches!(
             msg,
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::UnsubscribeResponse },
+                payload: TerminalPayload {
+                    action: TerminalAction::UnsubscribeResponse
+                },
                 ..
             }
         ));
@@ -1162,7 +1306,9 @@ mod tests {
         assert!(matches!(
             msg,
             Message::Terminal {
-                payload: TerminalPayload { action: TerminalAction::UnsubscribeResponse },
+                payload: TerminalPayload {
+                    action: TerminalAction::UnsubscribeResponse
+                },
                 ..
             }
         ));
@@ -1187,7 +1333,12 @@ mod tests {
         }
 
         // 无 session_id
-        let msg = Message::session_control(SessionControlAction::StopSession { session_id: "s9".into() }, None);
+        let msg = Message::session_control(
+            SessionControlAction::StopSession {
+                session_id: "s9".into(),
+            },
+            None,
+        );
         match msg {
             Message::SessionControl { session_id, .. } => assert_eq!(session_id, None),
             _ => panic!(),
@@ -1241,7 +1392,11 @@ mod tests {
         assert!(!msg.expect_response());
         assert!(msg.message_id().is_some_and(|id| !id.is_empty()));
         match msg {
-            Message::Auth { session_id, payload: got, .. } => {
+            Message::Auth {
+                session_id,
+                payload: got,
+                ..
+            } => {
                 assert_eq!(session_id.as_deref(), Some("s1"));
                 assert_eq!(got.stage, AuthStage::Reauthenticate);
                 assert_eq!(got.device_id.as_deref(), Some("dev-1"));
@@ -1293,7 +1448,11 @@ mod tests {
         assert_eq!(msg.message_id(), None);
         assert!(!msg.expect_response());
         match msg {
-            Message::ServerClosed { reason, will_reconnect, token } => {
+            Message::ServerClosed {
+                reason,
+                will_reconnect,
+                token,
+            } => {
                 assert_eq!(reason, "host exiting");
                 assert!(will_reconnect);
                 assert_eq!(token, "");
@@ -1309,7 +1468,9 @@ mod tests {
         assert_eq!(msg.message_id(), None);
         assert!(!msg.expect_response());
         match msg {
-            Message::ClientDisconnected { device_name, reason, .. } => {
+            Message::ClientDisconnected {
+                device_name, reason, ..
+            } => {
                 assert_eq!(device_name, "phone");
                 assert_eq!(reason, "user quit");
             }
@@ -1325,7 +1486,12 @@ mod tests {
         assert_eq!(msg.message_id(), None);
         assert!(!msg.expect_response());
         match msg {
-            Message::SessionEvent { event_type, session: got, device_name, .. } => {
+            Message::SessionEvent {
+                event_type,
+                session: got,
+                device_name,
+                ..
+            } => {
                 assert_eq!(event_type, "created");
                 assert_eq!(got.id, "s1");
                 assert_eq!(got.name, "dev");
@@ -1344,7 +1510,12 @@ mod tests {
         assert_eq!(msg.message_id(), None);
         assert!(!msg.expect_response());
         match msg {
-            Message::Ack { request_id, code, message, .. } => {
+            Message::Ack {
+                request_id,
+                code,
+                message,
+                ..
+            } => {
                 assert_eq!(request_id, "req-1");
                 assert_eq!(code, ACK_CODE_SUCCESS);
                 assert_eq!(message, None);
@@ -1355,7 +1526,12 @@ mod tests {
         // 失败：非 0 code 且带错误信息
         let msg = Message::ack_failure("req-1", ACK_CODE_TIMEOUT, "timed out");
         match msg {
-            Message::Ack { request_id, code, message, .. } => {
+            Message::Ack {
+                request_id,
+                code,
+                message,
+                ..
+            } => {
                 assert_eq!(request_id, "req-1");
                 assert_eq!(code, ACK_CODE_TIMEOUT);
                 assert_eq!(message.as_deref(), Some("timed out"));
@@ -1387,7 +1563,10 @@ mod tests {
         assert!(!msg.expect_response());
         match msg {
             Message::SyncData { payload: got, .. } => match got {
-                SyncPayload::SessionRemoved { session_id, session_name } => {
+                SyncPayload::SessionRemoved {
+                    session_id,
+                    session_name,
+                } => {
                     assert_eq!(session_id, "s9");
                     assert_eq!(session_name, "dev");
                 }
@@ -1411,7 +1590,12 @@ mod tests {
         assert!(!msg.expect_response());
         match msg {
             Message::FileService { payload: got, .. } => match got {
-                FileServicePayload::Announce { port, token, device_name, mounts } => {
+                FileServicePayload::Announce {
+                    port,
+                    token,
+                    device_name,
+                    mounts,
+                } => {
                     assert_eq!(port, 41234);
                     assert_eq!(token, "file-tok");
                     assert_eq!(device_name, "phone");
@@ -1448,7 +1632,9 @@ mod tests {
                     timestamp: FIXED_TS,
                     session_id: None,
                     token: String::new(),
-                    payload: SessionControlPayload { action: SessionControlAction::ListSessions },
+                    payload: SessionControlPayload {
+                        action: SessionControlAction::ListSessions,
+                    },
                 },
                 Some("session_control"),
             ),
@@ -1459,7 +1645,9 @@ mod tests {
                     timestamp: FIXED_TS,
                     session_id: None,
                     token: String::new(),
-                    payload: SessionConfigPayload { action: SessionConfigAction::ListSessionConfigs },
+                    payload: SessionConfigPayload {
+                        action: SessionConfigAction::ListSessionConfigs,
+                    },
                 },
                 Some("session_config"),
             ),
@@ -1476,7 +1664,10 @@ mod tests {
             ),
             (Message::server_closed("r", false), Some("server_closed")),
             (Message::client_disconnected("d", "r"), Some("client_disconnected")),
-            (Message::session_event("created", sample_session_summary(), "d"), Some("session_event")),
+            (
+                Message::session_event("created", sample_session_summary(), "d"),
+                Some("session_event"),
+            ),
             (Message::ack("r"), Some("ack")),
             (
                 Message::sync_data(SyncPayload::SessionRemoved {
@@ -1485,7 +1676,10 @@ mod tests {
                 }),
                 Some("sync_data"),
             ),
-            (Message::file_service(FileServicePayload::Withdraw {}), Some("file_service")),
+            (
+                Message::file_service(FileServicePayload::Withdraw {}),
+                Some("file_service"),
+            ),
         ];
         for (msg, expected) in cases {
             assert_eq!(msg.message_type(), expected);
@@ -1497,7 +1691,10 @@ mod tests {
         // 无消息 ID 语义的变体（通知/响应类）必须返回 None
         assert_eq!(Message::server_closed("r", false).message_id(), None);
         assert_eq!(Message::client_disconnected("d", "r").message_id(), None);
-        assert_eq!(Message::session_event("created", sample_session_summary(), "d").message_id(), None);
+        assert_eq!(
+            Message::session_event("created", sample_session_summary(), "d").message_id(),
+            None
+        );
         assert_eq!(Message::ack("r").message_id(), None);
         assert_eq!(
             Message::sync_data(SyncPayload::SessionRemoved {
@@ -1560,11 +1757,14 @@ mod tests {
         assert_eq!(msg.token(), "tok-3");
 
         // 未设置时为空字符串
-        assert_eq!(Message::sync_data(SyncPayload::SessionRemoved {
-            session_id: "s".into(),
-            session_name: "n".into(),
-        })
-        .token(), "");
+        assert_eq!(
+            Message::sync_data(SyncPayload::SessionRemoved {
+                session_id: "s".into(),
+                session_name: "n".into(),
+            })
+            .token(),
+            ""
+        );
     }
 
     #[test]
@@ -1610,8 +1810,14 @@ mod tests {
             _ => panic!(),
         }
         // 订阅响应 / 错误响应同样回填请求 ID
-        assert_eq!(Message::subscribe_response_with_request_id("s", 0, 1, 0, "req-abc").message_id(), Some("req-abc"));
-        assert_eq!(Message::error_with_id("req-abc", "E", "m").message_id(), Some("req-abc"));
+        assert_eq!(
+            Message::subscribe_response_with_request_id("s", 0, 1, 0, "req-abc").message_id(),
+            Some("req-abc")
+        );
+        assert_eq!(
+            Message::error_with_id("req-abc", "E", "m").message_id(),
+            Some("req-abc")
+        );
     }
 
     // ==================== 序列化测试 ====================
@@ -1797,7 +2003,9 @@ mod tests {
                 timestamp: FIXED_TS,
                 session_id: None,
                 token: "".into(),
-                payload: SessionControlPayload { action: SessionControlAction::ListSessions },
+                payload: SessionControlPayload {
+                    action: SessionControlAction::ListSessions,
+                },
             },
             Message::SessionConfig {
                 message_id: "m4".into(),
@@ -1805,7 +2013,9 @@ mod tests {
                 timestamp: FIXED_TS,
                 session_id: None,
                 token: "".into(),
-                payload: SessionConfigPayload { action: SessionConfigAction::ListQuickActions },
+                payload: SessionConfigPayload {
+                    action: SessionConfigAction::ListQuickActions,
+                },
             },
             Message::Error {
                 message_id: Some("m5".into()),
@@ -1869,11 +2079,14 @@ mod tests {
             Message::input("s", "echo hi", Some(KeyCombo::parse("ctrl+shift+up").unwrap())),
             Message::subscribe("s", Some(42)),
             Message::subscribe_response_with_request_id("s", 0, 100, 10, "req-7"),
-            Message::session_control(SessionControlAction::ResizeSession {
-                session_id: "s1".into(),
-                cols: 80,
-                rows: 24,
-            }, Some("s1")),
+            Message::session_control(
+                SessionControlAction::ResizeSession {
+                    session_id: "s1".into(),
+                    cols: 80,
+                    rows: 24,
+                },
+                Some("s1"),
+            ),
             Message::auth(
                 None,
                 AuthPayload {
@@ -1905,21 +2118,33 @@ mod tests {
         let json = Message::server_closed("host exiting", false).to_json().unwrap();
 
         // Text 帧解析
-        let parsed = Message::from_ws_message(WsMessage::Text(json.clone())).unwrap().unwrap();
+        let parsed = Message::from_ws_message(WsMessage::Text(json.clone()))
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.message_type(), Some("server_closed"));
         assert_eq!(parsed.to_json().unwrap(), json);
 
         // Binary 帧按 UTF-8 解析
-        let parsed = Message::from_ws_message(WsMessage::Binary(json.clone().into_bytes())).unwrap().unwrap();
+        let parsed = Message::from_ws_message(WsMessage::Binary(json.clone().into_bytes()))
+            .unwrap()
+            .unwrap();
         assert_eq!(parsed.to_json().unwrap(), json);
     }
 
     #[test]
     fn test_from_ws_message_control_frames_return_none() {
         // 心跳/帧等协议控制帧不应产生业务消息
-        assert!(Message::from_ws_message(WsMessage::Ping(vec![].into())).unwrap().is_none());
-        assert!(Message::from_ws_message(WsMessage::Pong(vec![].into())).unwrap().is_none());
-        assert!(Message::from_ws_message(WsMessage::Frame(tokio_tungstenite::tungstenite::protocol::frame::Frame::ping(vec![]))).unwrap().is_none());
+        assert!(Message::from_ws_message(WsMessage::Ping(vec![].into()))
+            .unwrap()
+            .is_none());
+        assert!(Message::from_ws_message(WsMessage::Pong(vec![].into()))
+            .unwrap()
+            .is_none());
+        assert!(Message::from_ws_message(WsMessage::Frame(
+            tokio_tungstenite::tungstenite::protocol::frame::Frame::ping(vec![])
+        ))
+        .unwrap()
+        .is_none());
     }
 
     #[test]
@@ -1929,7 +2154,9 @@ mod tests {
             code: CloseCode::Normal,
             reason: Cow::Owned("going away".into()),
         };
-        let msg = Message::from_ws_message(WsMessage::Close(Some(frame))).unwrap().unwrap();
+        let msg = Message::from_ws_message(WsMessage::Close(Some(frame)))
+            .unwrap()
+            .unwrap();
         assert_eq!(msg.message_type(), Some("error"));
         match msg {
             Message::Error { code, message, .. } => {

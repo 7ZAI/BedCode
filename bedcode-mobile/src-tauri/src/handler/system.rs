@@ -7,7 +7,7 @@ use async_trait::async_trait;
 use crate::model::message::Message;
 use crate::Result;
 
-use crate::router::{ClientRouteContext, MobileEvent, ClientRouteHandler};
+use crate::router::{ClientRouteContext, ClientRouteHandler, MobileEvent};
 
 /// 系统消息处理器
 pub struct SystemHandler;

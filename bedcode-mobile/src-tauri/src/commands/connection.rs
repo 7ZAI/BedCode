@@ -5,10 +5,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::Result;
 use crate::connection::event_ws;
 use crate::router::event;
-use crate::state::{get_connection_manager, get_session_manager, get_auth_manager, set_global_token, get_global_token, clear_global_token};
+use crate::state::{
+    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, get_session_manager,
+    set_global_token,
+};
+use crate::Result;
 
 /// 连接信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,13 +29,18 @@ pub async fn ws_connect(
     port: u16,
     name: Option<String>,
 ) -> Result<ConnectionInfo> {
-    eprintln!("[ws_connect] START - address={}, port={}, name={:?}", address, port, name);
+    eprintln!(
+        "[ws_connect] START - address={}, port={}, name={:?}",
+        address, port, name
+    );
     tracing::info!("WebSocket connecting to {}:{}", address, port);
 
     // 初始化设备身份（首次调用时从文件加载或生成新身份）
     {
         let auth = get_auth_manager();
-        let app_data_dir = app_handle.path().app_data_dir()
+        let app_data_dir = app_handle
+            .path()
+            .app_data_dir()
             .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?;
         auth.init_identity(&app_handle, app_data_dir).await;
     }
@@ -109,11 +117,11 @@ pub async fn ws_is_connected() -> Result<bool> {
 
 /// 重新连接（断线重连）
 #[tauri::command]
-pub async fn ws_reconnect(
-    app_handle: AppHandle,
-    session_token: Option<String>,
-) -> Result<()> {
-    tracing::info!("[ws_reconnect] session_token: {:?}", session_token.as_ref().map(|t| format!("len={}", t.len())));
+pub async fn ws_reconnect(app_handle: AppHandle, session_token: Option<String>) -> Result<()> {
+    tracing::info!(
+        "[ws_reconnect] session_token: {:?}",
+        session_token.as_ref().map(|t| format!("len={}", t.len()))
+    );
 
     let manager = get_connection_manager();
 

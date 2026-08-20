@@ -5,10 +5,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::Result;
 use crate::auth::{AuthCredentials, AuthStatus};
 use crate::router::event;
 use crate::state::get_auth_manager;
+use crate::Result;
 
 /// 认证状态
 #[derive(Debug, Clone, Serialize, Deserialize)]

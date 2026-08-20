@@ -11,8 +11,8 @@ use super::super::WasmPluginState;
 pub(crate) fn notify(state: &WasmPluginState, title: &str, body: &str) -> Result<(), String> {
     #[cfg(target_os = "android")]
     {
-        use crate::plugin::android_plugins::notification_plugin_handle;
         use super::support::guarded_host_call;
+        use crate::plugin::android_plugins::notification_plugin_handle;
 
         let Some(handle) = notification_plugin_handle() else {
             return Err("TaskNotificationPlugin not registered".to_string());

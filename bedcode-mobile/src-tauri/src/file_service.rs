@@ -93,9 +93,7 @@ static FILE_SERVICE: std::sync::OnceLock<Arc<FileService>> = std::sync::OnceLock
 
 /// 获取文件服务单例（首次调用时创建；必须在 tokio runtime 上下文内）
 pub fn get_file_service() -> Arc<FileService> {
-    FILE_SERVICE
-        .get_or_init(FileService::new)
-        .clone()
+    FILE_SERVICE.get_or_init(FileService::new).clone()
 }
 
 /// 获取 intent 传输响应器全局单例

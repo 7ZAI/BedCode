@@ -62,7 +62,10 @@ impl MessageHandler for ClientDefaultMessageHandler {
         // 使用 codec 解码消息
         let message = match self.codec.decode(raw_message) {
             Ok(Some(msg)) => {
-                tracing::debug!("[ClientDefaultMessageHandler] Decoded message: type={:?}", msg.message_type());
+                tracing::debug!(
+                    "[ClientDefaultMessageHandler] Decoded message: type={:?}",
+                    msg.message_type()
+                );
                 msg
             }
             Ok(None) => {

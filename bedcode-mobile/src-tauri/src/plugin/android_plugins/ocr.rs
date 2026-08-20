@@ -35,14 +35,8 @@ pub fn camera_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 /// 解析 Kotlin 取图响应：cancelled → Ok(None)；否则校验 path/width/height
 ///
 /// 两种图源（pickImage / capture）共用；缺字段或尺寸非法返回带上下文的明确错误。
-pub fn parse_ocr_image_response(
-    response: &serde_json::Value,
-) -> crate::Result<Option<crate::ocr::OcrImageSource>> {
-    if response
-        .get("cancelled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-    {
+pub fn parse_ocr_image_response(response: &serde_json::Value) -> crate::Result<Option<crate::ocr::OcrImageSource>> {
+    if response.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Ok(None);
     }
     let path = response.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -70,9 +64,9 @@ pub fn parse_ocr_image_response(
 /// 成功后解码降采样为 RGBA8 临时文件返回；用户取消返回 Ok(None)。
 #[cfg(target_os = "android")]
 pub async fn camera_capture_android() -> crate::Result<Option<crate::ocr::OcrImageSource>> {
-    let handle = CAMERA_HANDLE.get().ok_or_else(|| {
-        crate::AppError::Plugin("CameraPlugin not registered".to_string())
-    })?;
+    let handle = CAMERA_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("CameraPlugin not registered".to_string()))?;
     let response: serde_json::Value = handle
         .run_mobile_plugin_async("capture", serde_json::json!({}))
         .await

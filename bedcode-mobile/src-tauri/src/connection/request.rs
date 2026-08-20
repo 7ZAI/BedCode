@@ -8,10 +8,10 @@
 
 use std::time::Duration;
 
-use crate::model::message::Message;
 use crate::enums::auth::{AuthPayload, AuthStage};
-use crate::enums::control::{SessionControlAction, SessionConfigAction};
+use crate::enums::control::{SessionConfigAction, SessionControlAction};
 use crate::enums::special_key::KeyCombo;
+use crate::model::message::Message;
 use crate::state::get_global_token;
 
 /// 获取当前全局 Token 并应用到消息
@@ -85,7 +85,10 @@ impl SessionRequest {
 
     /// 构建获取会话列表消息
     pub fn list_sessions() -> Message {
-        with_token(Message::session_control_with_response(SessionControlAction::ListSessions, None))
+        with_token(Message::session_control_with_response(
+            SessionControlAction::ListSessions,
+            None,
+        ))
     }
 
     /// 构建启动会话消息
@@ -181,12 +184,18 @@ impl ConfigRequest {
 
     /// 构建获取会话配置列表消息
     pub fn list_session_configs() -> Message {
-        with_token(Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None))
+        with_token(Message::session_config_with_response(
+            SessionConfigAction::ListSessionConfigs,
+            None,
+        ))
     }
 
     /// 构建获取快捷操作列表消息
     pub fn list_quick_actions() -> Message {
-        with_token(Message::session_config_with_response(SessionConfigAction::ListQuickActions, None))
+        with_token(Message::session_config_with_response(
+            SessionConfigAction::ListQuickActions,
+            None,
+        ))
     }
 }
 
@@ -237,7 +246,10 @@ impl ResponseParser {
     ///
     /// 从 SessionControl 响应中提取 session_id
     pub fn parse_start_session_response(response: &Message) -> Option<String> {
-        if let Message::SessionControl { session_id, payload, .. } = response {
+        if let Message::SessionControl {
+            session_id, payload, ..
+        } = response
+        {
             if matches!(payload.action, SessionControlAction::StartSession { .. }) {
                 return session_id.clone();
             }

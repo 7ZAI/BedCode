@@ -2,9 +2,9 @@
 //!
 //! 移动端配对服务 - 简化版，使用内存存储
 
+use crate::auth::pairing::{PairingCode, PendingDevice};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use crate::auth::pairing::{PairingCode, PendingDevice};
 
 /// 配对服务 - 移动端简化实现
 /// 移动端只需要基本的配对码生成和验证功能

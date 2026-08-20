@@ -79,11 +79,7 @@ impl DownloadClient {
     }
 
     /// HEAD 指纹（size+mtime；404 → Http 错误）
-    pub async fn head_fingerprint(
-        &self,
-        url: &str,
-        auth: &str,
-    ) -> Result<FileFingerprint, DownloadError> {
+    pub async fn head_fingerprint(&self, url: &str, auth: &str) -> Result<FileFingerprint, DownloadError> {
         let resp = self
             .client
             .head(url)
@@ -173,10 +169,10 @@ impl DownloadClient {
         );
 
         // 2. GET + Range（offset>0 → 期望 206）
-        let mut builder = self.client.get(&req.url).header(
-            reqwest::header::AUTHORIZATION,
-            req.auth.as_str(),
-        );
+        let mut builder = self
+            .client
+            .get(&req.url)
+            .header(reqwest::header::AUTHORIZATION, req.auth.as_str());
         if offset > 0 {
             builder = builder.header(reqwest::header::RANGE, format!("bytes={}-", offset));
         }
@@ -187,8 +183,7 @@ impl DownloadClient {
         let status = resp.status();
         let expect_partial = offset > 0;
         let ok = if expect_partial {
-            status == reqwest::StatusCode::PARTIAL_CONTENT
-                || status == reqwest::StatusCode::OK
+            status == reqwest::StatusCode::PARTIAL_CONTENT || status == reqwest::StatusCode::OK
         } else {
             status.is_success()
         };
@@ -218,8 +213,7 @@ impl DownloadClient {
             if token.is_cancelled() {
                 return Err(DownloadError::Cancelled);
             }
-            let chunk = chunk_result
-                .map_err(|e| DownloadError::Network(format!("download stream error: {}", e)))?;
+            let chunk = chunk_result.map_err(|e| DownloadError::Network(format!("download stream error: {}", e)))?;
             file.write_all(&chunk).await?;
             let new_pos = handle.add_transferred(chunk.len() as u64);
             store.upsert(
@@ -235,9 +229,7 @@ impl DownloadClient {
 
         // 4. 游标已满或对端返回完整 → 落位（fingerprint 与游标在成功时清）
         if req.final_path.exists() {
-            return Err(DownloadError::DuplicateName(
-                req.final_path.display().to_string(),
-            ));
+            return Err(DownloadError::DuplicateName(req.final_path.display().to_string()));
         }
         std::fs::rename(&req.dest_path, &req.final_path)?;
         store.remove(&handle.task_id);
@@ -361,9 +353,7 @@ mod tests {
     }
 
     /// 启动 mock HTTP 服务器：解析请求行 + 头，读完整 body 后按头响应
-    async fn spawn_mock_server(
-        handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>,
-    ) -> SocketAddr {
+    async fn spawn_mock_server(handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -430,10 +420,7 @@ mod tests {
     }
 
     fn tmp_dl_paths(dir: &std::path::Path, name: &str) -> (PathBuf, PathBuf) {
-        (
-            dir.join(format!("{}.part", name)),
-            dir.join(name),
-        )
+        (dir.join(format!("{}.part", name)), dir.join(name))
     }
 
     /// 构造默认指纹（size=5, mtime=100）
@@ -469,7 +456,13 @@ mod tests {
                 .head_fingerprint(&format!("http://{}/file", addr), "Bearer tok")
                 .await
                 .unwrap();
-            assert_eq!(f, FileFingerprint { size: 12345, mtime: 1700000000 });
+            assert_eq!(
+                f,
+                FileFingerprint {
+                    size: 12345,
+                    mtime: 1700000000
+                }
+            );
         });
     }
 
@@ -493,19 +486,13 @@ mod tests {
         disable_proxy_for_loopback();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let addr = spawn_mock_server(Arc::new(|_| {
-                MockResponse::with_status(404, "not found")
-            }))
-            .await;
+            let addr = spawn_mock_server(Arc::new(|_| MockResponse::with_status(404, "not found"))).await;
             let client = DownloadClient::new();
             let err = client
                 .head_fingerprint(&format!("http://{}/file", addr), "")
                 .await
                 .unwrap_err();
-            assert!(matches!(
-                err,
-                DownloadError::Http { status: 404, .. }
-            ));
+            assert!(matches!(err, DownloadError::Http { status: 404, .. }));
         });
     }
 
@@ -539,10 +526,7 @@ mod tests {
                 total: body.len() as u64,
                 media: None,
             };
-            DownloadClient::new()
-                .download(&req, &store, &handle)
-                .await
-                .unwrap();
+            DownloadClient::new().download(&req, &store, &handle).await.unwrap();
             assert_eq!(std::fs::read(&final_path).unwrap(), body);
             assert!(!part.exists(), ".part 应已 rename");
             assert!(store.get("t1").is_none(), "成功后游标应清理");
@@ -581,10 +565,7 @@ mod tests {
                 total: 5,
                 media: None,
             };
-            DownloadClient::new()
-                .download(&req, &store, &handle)
-                .await
-                .unwrap();
+            DownloadClient::new().download(&req, &store, &handle).await.unwrap();
             assert_eq!(std::fs::read(&final_path).unwrap(), b"hello");
         });
     }
@@ -628,10 +609,7 @@ mod tests {
                 total: 10,
                 media: None,
             };
-            DownloadClient::new()
-                .download(&req, &store, &handle)
-                .await
-                .unwrap();
+            DownloadClient::new().download(&req, &store, &handle).await.unwrap();
             // 从零下载完整新文件（旧字节 "hel" 被截断覆盖）
             assert_eq!(std::fs::read(&final_path).unwrap(), b"hello-world");
             assert!(store.get("t1").is_none());
@@ -657,10 +635,7 @@ mod tests {
                 total: 5,
                 media: None,
             };
-            let err = DownloadClient::new()
-                .download(&req, &store, &handle)
-                .await
-                .unwrap_err();
+            let err = DownloadClient::new().download(&req, &store, &handle).await.unwrap_err();
             assert!(matches!(err, DownloadError::DuplicateName(_)));
         });
     }
@@ -670,10 +645,7 @@ mod tests {
         disable_proxy_for_loopback();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            let addr = spawn_mock_server(Arc::new(|_| {
-                MockResponse::ok(vec![0u8; 64 * 1024])
-            }))
-            .await;
+            let addr = spawn_mock_server(Arc::new(|_| MockResponse::ok(vec![0u8; 64 * 1024]))).await;
             let dir = tempfile::tempdir().unwrap();
             let (part, final_path) = tmp_dl_paths(dir.path(), "cancel.bin");
             let store = CursorStore::new();
@@ -687,10 +659,7 @@ mod tests {
                 total: 64 * 1024,
                 media: None,
             };
-            let err = DownloadClient::new()
-                .download(&req, &store, &handle)
-                .await
-                .unwrap_err();
+            let err = DownloadClient::new().download(&req, &store, &handle).await.unwrap_err();
             assert!(matches!(err, DownloadError::Cancelled));
         });
     }

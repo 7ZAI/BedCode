@@ -7,11 +7,7 @@ use super::super::WasmPluginState;
 use super::support::guarded_host_call;
 
 /// 逻辑层：发布消息
-pub(crate) fn bus_publish(
-    state: &WasmPluginState,
-    topic: &str,
-    payload_str: &str,
-) -> Result<(), String> {
+pub(crate) fn bus_publish(state: &WasmPluginState, topic: &str, payload_str: &str) -> Result<(), String> {
     if !state
         .granted_permissions
         .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
@@ -41,9 +37,9 @@ pub(crate) fn bus_subscribe(state: &WasmPluginState, topic: &str) -> Result<(), 
     }
     guarded_host_call(&state.plugin_id, "host_bus_subscribe", (), || {
         tokio::task::block_in_place(|| {
-            state.runtime_handle.block_on(
-                state.host_ctx.message_bus.subscribe_wasm(&state.plugin_id, topic),
-            )
+            state
+                .runtime_handle
+                .block_on(state.host_ctx.message_bus.subscribe_wasm(&state.plugin_id, topic))
         })
     });
     Ok(())

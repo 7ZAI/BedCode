@@ -3,13 +3,13 @@
 //! 整合所有子模块的主客户端，提供统一的 API
 //! 使用 RequestResponseManager 实现请求-响应模式
 
+use crate::connection::MessageHandler;
 use crate::connection::{
-    ws_connection::WsConnectionManager, heartbeat::HeartbeatManager, io::IoManager,
-    lifecycle::LifecycleManager, reconnect::ReconnectManager,
-    ConnectionStatus, IoEvent, WsClientConfig, WsClientEvent, RequestResponseManager,
+    heartbeat::HeartbeatManager, io::IoManager, lifecycle::LifecycleManager, reconnect::ReconnectManager,
+    ws_connection::WsConnectionManager, ConnectionStatus, IoEvent, RequestResponseManager, WsClientConfig,
+    WsClientEvent,
 };
 use crate::model::message::Message;
-use crate::connection::MessageHandler;
 use crate::Result;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -18,9 +18,8 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, error, info, warn};
 
 use crate::system::constants::connection::{
-    BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS,
-    EVENT_FORWARDER_POLL_INTERVAL_MS, LOG_PREVIEW_MAX_LEN, PLACEHOLDER_CLIENT_ADDR,
-    RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
+    BROADCAST_CHANNEL_CAPACITY, DISCONNECT_TASK_TIMEOUT_SECS, EVENT_FORWARDER_POLL_INTERVAL_MS, LOG_PREVIEW_MAX_LEN,
+    PLACEHOLDER_CLIENT_ADDR, RECEIVER_POLL_INTERVAL_MS, SENDER_POLL_INTERVAL_MS,
 };
 
 /// WebSocket 客户端
@@ -481,7 +480,10 @@ impl WsClient {
         tracing::debug!("[WsClient] send() called, checking ws_sender...");
         if let Some(sender) = self.ws_sender.read().await.as_ref() {
             let json = message.to_json()?;
-            tracing::debug!("[WsClient] >>> SEND to mpsc queue: {}...", &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]);
+            tracing::debug!(
+                "[WsClient] >>> SEND to mpsc queue: {}...",
+                &json[..json.len().min(LOG_PREVIEW_MAX_LEN)]
+            );
             sender
                 .send(WsMsg::Text(json))
                 .await
@@ -514,12 +516,9 @@ impl WsClient {
     /// 1. 发送消息前注册 pending 请求
     /// 2. 收到响应时根据 message_id 匹配
     /// 3. 通过 oneshot 通道通知等待者
-    pub async fn send_and_wait(
-        &self,
-        message: &Message,
-        timeout: std::time::Duration,
-    ) -> Result<Message> {
-        let message_id = message.message_id()
+    pub async fn send_and_wait(&self, message: &Message, timeout: std::time::Duration) -> Result<Message> {
+        let message_id = message
+            .message_id()
             .ok_or_else(|| crate::AppError::WebSocket("Message has no message_id".to_string()))?
             .to_string();
 
@@ -578,10 +577,10 @@ impl WsClient {
 mod tests {
     use super::*;
     use futures_util::{SinkExt, StreamExt};
+    use std::time::{Duration, Instant};
     use tokio::net::TcpListener;
     use tokio_tungstenite::accept_async;
     use tokio_tungstenite::tungstenite::protocol::Message as ServerMsg;
-    use std::time::{Duration, Instant};
 
     /// 本地 WS 服务端：accept 一次连接，收集文本消息直到连接关闭，Ping 回 Pong
     async fn spawn_local_server() -> (std::net::SocketAddr, tokio::task::JoinHandle<Vec<String>>) {

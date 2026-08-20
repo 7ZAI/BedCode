@@ -5,11 +5,11 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::connection::manager::ConnectionManager;
 use crate::auth::AuthManager;
-use crate::session::SessionManager;
-use crate::plugin::manager::PluginManager;
+use crate::connection::manager::ConnectionManager;
 use crate::file_service::FileService;
+use crate::plugin::manager::PluginManager;
+use crate::session::SessionManager;
 use crate::system::info::SystemInfo;
 
 // ==================== Global Token ====================
@@ -57,18 +57,22 @@ pub fn get_connection_manager() -> Arc<ConnectionManager> {
 
 /// 获取认证管理器
 pub fn get_auth_manager() -> Arc<AuthManager> {
-    AUTH_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        AuthManager::new(conn)
-    }).clone()
+    AUTH_MANAGER
+        .get_or_init(|| {
+            let conn = get_connection_manager();
+            AuthManager::new(conn)
+        })
+        .clone()
 }
 
 /// 获取会话管理器
 pub fn get_session_manager() -> Arc<SessionManager> {
-    SESSION_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        SessionManager::new(conn)
-    }).clone()
+    SESSION_MANAGER
+        .get_or_init(|| {
+            let conn = get_connection_manager();
+            SessionManager::new(conn)
+        })
+        .clone()
 }
 
 // ==================== System Info ====================

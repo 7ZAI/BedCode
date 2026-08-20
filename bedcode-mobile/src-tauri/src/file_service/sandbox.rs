@@ -80,10 +80,7 @@ pub fn normalize_roots(roots: &[PathBuf]) -> Result<Vec<PathBuf>, SandboxError> 
 /// - `\` 统一按 `/` 处理（移动端客户端一律发正斜杠）
 fn clean_relative_parts(rel: &str) -> Result<Vec<String>, SandboxError> {
     if rel.starts_with('/') || rel.starts_with('\\') {
-        return Err(SandboxError::Traversal(format!(
-            "absolute path rejected: {}",
-            rel
-        )));
+        return Err(SandboxError::Traversal(format!("absolute path rejected: {}", rel)));
     }
 
     let mut parts = Vec::new();
@@ -92,10 +89,7 @@ fn clean_relative_parts(rel: &str) -> Result<Vec<String>, SandboxError> {
             continue;
         }
         if part == ".." {
-            return Err(SandboxError::Traversal(format!(
-                "'..' component rejected in: {}",
-                rel
-            )));
+            return Err(SandboxError::Traversal(format!("'..' component rejected in: {}", rel)));
         }
         if part.contains(':') {
             return Err(SandboxError::Traversal(format!(
@@ -150,11 +144,7 @@ pub fn resolve_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, San
                 break;
             }
             let canonical = candidate.canonicalize().map_err(|e| {
-                SandboxError::OutsideRoots(format!(
-                    "canonicalize failed for '{}': {}",
-                    candidate.display(),
-                    e
-                ))
+                SandboxError::OutsideRoots(format!("canonicalize failed for '{}': {}", candidate.display(), e))
             })?;
             if canonical.starts_with(root) {
                 return Ok(canonical);
@@ -175,11 +165,7 @@ pub fn resolve_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, San
         }
 
         let canonical = candidate.canonicalize().map_err(|e| {
-            SandboxError::OutsideRoots(format!(
-                "canonicalize failed for '{}': {}",
-                candidate.display(),
-                e
-            ))
+            SandboxError::OutsideRoots(format!("canonicalize failed for '{}': {}", candidate.display(), e))
         })?;
 
         if canonical.starts_with(root) {
@@ -208,10 +194,7 @@ pub fn resolve_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, San
 /// 用于上传 session 创建：新文件本身尚不存在无法 canonicalize，
 /// 因此 canonicalize 其父目录并校验仍在 root 内，再拼回文件名。
 /// 拒绝以根目录本身为上传目标
-pub fn resolve_upload_target_within_roots(
-    roots: &[PathBuf],
-    rel: &str,
-) -> Result<PathBuf, SandboxError> {
+pub fn resolve_upload_target_within_roots(roots: &[PathBuf], rel: &str) -> Result<PathBuf, SandboxError> {
     let parts = clean_relative_parts(rel)?;
     if parts.is_empty() {
         return Err(SandboxError::Traversal(
@@ -254,11 +237,7 @@ pub fn resolve_upload_target_within_roots(
             }
 
             let canonical_parent = parent.canonicalize().map_err(|e| {
-                SandboxError::OutsideRoots(format!(
-                    "canonicalize failed for parent '{}': {}",
-                    parent.display(),
-                    e
-                ))
+                SandboxError::OutsideRoots(format!("canonicalize failed for parent '{}': {}", parent.display(), e))
             })?;
 
             if canonical_parent.starts_with(root) {
@@ -286,11 +265,7 @@ pub fn resolve_upload_target_within_roots(
         }
 
         let canonical_parent = parent.canonicalize().map_err(|e| {
-            SandboxError::OutsideRoots(format!(
-                "canonicalize failed for parent '{}': {}",
-                parent.display(),
-                e
-            ))
+            SandboxError::OutsideRoots(format!("canonicalize failed for parent '{}': {}", parent.display(), e))
         })?;
 
         if canonical_parent.starts_with(root) {
@@ -364,10 +339,7 @@ mod tests {
             normalize_roots(&[nested.join("file.txt")]),
             Err(SandboxError::InvalidRoot { .. })
         ));
-        assert!(matches!(
-            normalize_roots(&[]),
-            Err(SandboxError::NoRoots)
-        ));
+        assert!(matches!(normalize_roots(&[]), Err(SandboxError::NoRoots)));
     }
 
     #[test]
@@ -424,10 +396,7 @@ mod tests {
 
         for evil in ["..", "../b", "nested/../../b", "a/../a/../../etc"] {
             assert!(
-                matches!(
-                    resolve_within_roots(&roots, evil),
-                    Err(SandboxError::Traversal(_))
-                ),
+                matches!(resolve_within_roots(&roots, evil), Err(SandboxError::Traversal(_))),
                 "should reject: {}",
                 evil
             );
@@ -474,10 +443,7 @@ mod tests {
         }
 
         assert!(
-            matches!(
-                resolve_within_roots(&roots, "link"),
-                Err(SandboxError::OutsideRoots(_))
-            ),
+            matches!(resolve_within_roots(&roots, "link"), Err(SandboxError::OutsideRoots(_))),
             "symlink escaping root must be rejected"
         );
     }

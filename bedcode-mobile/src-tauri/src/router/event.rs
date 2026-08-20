@@ -10,13 +10,13 @@
 //! - ws_pairing_request / ws_pairing_verified / ws_paired: 配对流程
 //! - ws_sync_*: 会话同步事件
 
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Listener};
 use tracing;
-use serde::{Deserialize, Serialize};
 
-use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::state::get_connection_manager;
+use crate::system::error_boundary::spawn_with_error_boundary;
 
 // ==================== MobileEvent Definition ====================
 
@@ -28,13 +28,9 @@ use crate::state::get_connection_manager;
 pub enum MobileEvent {
     // === 认证事件 ===
     /// 认证成功
-    AuthSuccess {
-        session_token: String,
-    },
+    AuthSuccess { session_token: String },
     /// 认证失败
-    AuthFailed {
-        reason: String,
-    },
+    AuthFailed { reason: String },
     /// 配对请求（桌面端显示配对码）
     PairingRequest,
     /// 配对验证成功
@@ -44,17 +40,11 @@ pub enum MobileEvent {
 
     // === 系统事件 ===
     /// 服务器关闭
-    ServerClosed {
-        reason: String,
-    },
+    ServerClosed { reason: String },
     /// 错误事件
-    Error {
-        message: String,
-    },
+    Error { message: String },
     /// ACK 响应
-    Ack {
-        request_id: String,
-    },
+    Ack { request_id: String },
 
     // === 会话同步事件 ===
     /// 会话创建
@@ -70,15 +60,9 @@ pub enum MobileEvent {
         session_name: String,
     },
     /// 会话停止
-    SyncSessionStopped {
-        session_id: String,
-        session_name: String,
-    },
+    SyncSessionStopped { session_id: String, session_name: String },
     /// 会话删除
-    SyncSessionRemoved {
-        session_id: String,
-        session_name: String,
-    },
+    SyncSessionRemoved { session_id: String, session_name: String },
 
     // === 配置同步事件 ===
     /// 配置创建
@@ -92,10 +76,7 @@ pub enum MobileEvent {
         source_device: String,
     },
     /// 配置删除
-    SyncConfigRemoved {
-        config_id: String,
-        config_name: String,
-    },
+    SyncConfigRemoved { config_id: String, config_name: String },
 
     // === 任务状态同步事件 ===
     /// 任务状态变更
@@ -108,10 +89,7 @@ pub enum MobileEvent {
 
     // === 会话模式同步事件 ===
     /// 会话自动授权模式变更
-    SyncSessionModeChanged {
-        session_id: String,
-        auto_approve: bool,
-    },
+    SyncSessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列同步事件 ===
     /// 会话任务队列变更
@@ -199,130 +177,208 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
         MobileEvent::SyncSessionCreated { session, source_device } => {
             tracing::info!(
                 "[EventForwarder] SyncSessionCreated: session_id={}, source={}",
-                session.id, source_device
+                session.id,
+                source_device
             );
-            let _ = app.emit("ws_sync_session_created", serde_json::json!({
-                "session": session,
-                "source_device": source_device,
-            }));
+            let _ = app.emit(
+                "ws_sync_session_created",
+                serde_json::json!({
+                    "session": session,
+                    "source_device": source_device,
+                }),
+            );
         }
 
-        MobileEvent::SyncSessionStatusChanged { session_id, old_status, new_status, session_name } => {
+        MobileEvent::SyncSessionStatusChanged {
+            session_id,
+            old_status,
+            new_status,
+            session_name,
+        } => {
             tracing::info!(
                 "[EventForwarder] SyncSessionStatusChanged: session_id={}, {} -> {}",
-                session_id, old_status, new_status
+                session_id,
+                old_status,
+                new_status
             );
-            let _ = app.emit("ws_sync_session_status_changed", serde_json::json!({
-                "session_id": session_id,
-                "old_status": old_status,
-                "new_status": new_status,
-                "session_name": session_name,
-            }));
+            let _ = app.emit(
+                "ws_sync_session_status_changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "old_status": old_status,
+                    "new_status": new_status,
+                    "session_name": session_name,
+                }),
+            );
         }
 
-        MobileEvent::SyncSessionStopped { session_id, session_name } => {
+        MobileEvent::SyncSessionStopped {
+            session_id,
+            session_name,
+        } => {
             tracing::info!("[EventForwarder] SyncSessionStopped: session_id={}", session_id);
-            let _ = app.emit("ws_sync_session_stopped", serde_json::json!({
-                "session_id": session_id,
-                "session_name": session_name,
-            }));
+            let _ = app.emit(
+                "ws_sync_session_stopped",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "session_name": session_name,
+                }),
+            );
         }
 
-        MobileEvent::SyncSessionRemoved { session_id, session_name } => {
+        MobileEvent::SyncSessionRemoved {
+            session_id,
+            session_name,
+        } => {
             tracing::info!("[EventForwarder] SyncSessionRemoved: session_id={}", session_id);
-            let _ = app.emit("ws_sync_session_removed", serde_json::json!({
-                "session_id": session_id,
-                "session_name": session_name,
-            }));
+            let _ = app.emit(
+                "ws_sync_session_removed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "session_name": session_name,
+                }),
+            );
         }
 
         // 配置同步事件
         MobileEvent::SyncConfigCreated { config, source_device } => {
             tracing::info!(
                 "[EventForwarder] SyncConfigCreated: config_id={}, source={}",
-                config.id, source_device
+                config.id,
+                source_device
             );
-            let _ = app.emit("ws_sync_config_created", serde_json::json!({
-                "config": config,
-                "source_device": source_device,
-            }));
+            let _ = app.emit(
+                "ws_sync_config_created",
+                serde_json::json!({
+                    "config": config,
+                    "source_device": source_device,
+                }),
+            );
         }
 
         MobileEvent::SyncConfigUpdated { config, source_device } => {
             tracing::info!(
                 "[EventForwarder] SyncConfigUpdated: config_id={}, source={}",
-                config.id, source_device
+                config.id,
+                source_device
             );
-            let _ = app.emit("ws_sync_config_updated", serde_json::json!({
-                "config": config,
-                "source_device": source_device,
-            }));
+            let _ = app.emit(
+                "ws_sync_config_updated",
+                serde_json::json!({
+                    "config": config,
+                    "source_device": source_device,
+                }),
+            );
         }
 
         MobileEvent::SyncConfigRemoved { config_id, config_name } => {
             tracing::info!("[EventForwarder] SyncConfigRemoved: config_id={}", config_id);
-            let _ = app.emit("ws_sync_config_removed", serde_json::json!({
-                "config_id": config_id,
-                "config_name": config_name,
-            }));
+            let _ = app.emit(
+                "ws_sync_config_removed",
+                serde_json::json!({
+                    "config_id": config_id,
+                    "config_name": config_name,
+                }),
+            );
         }
 
-        MobileEvent::SyncTaskStatusChanged { session_id, task_status, task_reason, task_questions } => {
+        MobileEvent::SyncTaskStatusChanged {
+            session_id,
+            task_status,
+            task_reason,
+            task_questions,
+        } => {
             tracing::info!(
                 "[EventForwarder] SyncTaskStatusChanged: session_id={}, status={}",
-                session_id, task_status
+                session_id,
+                task_status
             );
-            let _ = app.emit("ws_sync_task_status_changed", serde_json::json!({
-                "session_id": session_id,
-                "task_status": task_status,
-                "task_reason": task_reason,
-                "task_questions": task_questions,
-            }));
+            let _ = app.emit(
+                "ws_sync_task_status_changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "task_status": task_status,
+                    "task_reason": task_reason,
+                    "task_questions": task_questions,
+                }),
+            );
         }
 
-        MobileEvent::SyncSessionModeChanged { session_id, auto_approve } => {
+        MobileEvent::SyncSessionModeChanged {
+            session_id,
+            auto_approve,
+        } => {
             tracing::info!(
                 "[EventForwarder] SyncSessionModeChanged: session_id={}, auto_approve={}",
-                session_id, auto_approve
+                session_id,
+                auto_approve
             );
-            let _ = app.emit("ws_sync_session_mode_changed", serde_json::json!({
-                "session_id": session_id,
-                "auto_approve": auto_approve,
-            }));
+            let _ = app.emit(
+                "ws_sync_session_mode_changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "auto_approve": auto_approve,
+                }),
+            );
         }
 
-        MobileEvent::SyncTaskQueueChanged { session_id, queue_count, action, task_id, status } => {
+        MobileEvent::SyncTaskQueueChanged {
+            session_id,
+            queue_count,
+            action,
+            task_id,
+            status,
+        } => {
             tracing::info!(
                 "[EventForwarder] SyncTaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}",
-                session_id, queue_count, action, task_id, status
+                session_id,
+                queue_count,
+                action,
+                task_id,
+                status
             );
-            let _ = app.emit("ws_sync_task_queue_changed", serde_json::json!({
-                "session_id": session_id,
-                "queue_count": queue_count,
-                "action": action,
-                "task_id": task_id,
-                "status": status,
-            }));
+            let _ = app.emit(
+                "ws_sync_task_queue_changed",
+                serde_json::json!({
+                    "session_id": session_id,
+                    "queue_count": queue_count,
+                    "action": action,
+                    "task_id": task_id,
+                    "status": status,
+                }),
+            );
         }
 
         MobileEvent::SyncTaskScheduledChanged { job_id, status, action } => {
             tracing::info!(
                 "[EventForwarder] SyncTaskScheduledChanged: job_id={}, status={}, action={}",
-                job_id, status, action
+                job_id,
+                status,
+                action
             );
-            let _ = app.emit("ws_sync_task_scheduled_changed", serde_json::json!({
-                "job_id": job_id,
-                "status": status,
-                "action": action,
-            }));
+            let _ = app.emit(
+                "ws_sync_task_scheduled_changed",
+                serde_json::json!({
+                    "job_id": job_id,
+                    "status": status,
+                    "action": action,
+                }),
+            );
         }
 
         // 文件服务同步事件：前端事件 + 插件消息总线双通道
         // （插件阶段 4 经 bus topic `sync:file_service` 订阅对端挂载可用性）
-        MobileEvent::SyncFileServiceChanged { plugin_id, mount_path, available, operations } => {
+        MobileEvent::SyncFileServiceChanged {
+            plugin_id,
+            mount_path,
+            available,
+            operations,
+        } => {
             tracing::info!(
                 "[EventForwarder] SyncFileServiceChanged: plugin_id={}, mount={}, available={}",
-                plugin_id, mount_path, available
+                plugin_id,
+                mount_path,
+                available
             );
             let payload = serde_json::json!({
                 "plugin_id": plugin_id,
@@ -366,12 +422,10 @@ pub fn init_terminal_output_listener(app: &AppHandle) {
         }
         let pm = pm.clone();
         spawn_with_error_boundary("plugin_terminal_output_notify", async move {
-            pm.dispatch_lifecycle_event(
-                crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
-                    session_id,
-                    data: String::new(),
-                },
-            )
+            pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::TerminalOutput {
+                session_id,
+                data: String::new(),
+            })
             .await;
         });
     });
@@ -382,26 +436,35 @@ pub fn init_terminal_output_listener(app: &AppHandle) {
 /// 发射连接开始事件
 pub fn emit_connecting(app: &AppHandle, address: &str, port: u16) {
     tracing::debug!("[EventHelper] Emitting ws_connecting");
-    let _ = app.emit("ws_connecting", serde_json::json!({
-        "address": address,
-        "port": port,
-    }));
+    let _ = app.emit(
+        "ws_connecting",
+        serde_json::json!({
+            "address": address,
+            "port": port,
+        }),
+    );
 }
 
 /// 发射断开连接事件
 pub fn emit_disconnected(app: &AppHandle, reason: &str) {
     tracing::info!("[EventHelper] Emitting ws_disconnected: {}", reason);
-    let _ = app.emit("ws_disconnected", serde_json::json!({
-        "reason": reason,
-    }));
+    let _ = app.emit(
+        "ws_disconnected",
+        serde_json::json!({
+            "reason": reason,
+        }),
+    );
 }
 
 /// 发射错误事件
 pub fn emit_error(app: &AppHandle, message: &str) {
     tracing::error!("[EventHelper] Emitting ws_error: {}", message);
-    let _ = app.emit("ws_error", serde_json::json!({
-        "message": message,
-    }));
+    let _ = app.emit(
+        "ws_error",
+        serde_json::json!({
+            "message": message,
+        }),
+    );
 }
 
 /// 发射认证成功事件
@@ -431,7 +494,10 @@ pub fn emit_pairing_verified(app: &AppHandle) {
 /// 发射认证失败事件
 pub fn emit_auth_failed(app: &AppHandle, reason: &str) {
     tracing::error!("[EventHelper] Emitting ws_auth_failed: {}", reason);
-    let _ = app.emit("ws_auth_failed", serde_json::json!({
-        "reason": reason,
-    }));
+    let _ = app.emit(
+        "ws_auth_failed",
+        serde_json::json!({
+            "reason": reason,
+        }),
+    );
 }

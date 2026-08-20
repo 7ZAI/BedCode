@@ -121,12 +121,7 @@ macro_rules! saf_unavailable_impl {
         fn check_authorized(&self, _tree_uri: &str) -> Result<bool> {
             Err(crate::AppError::Plugin($err.to_string()))
         }
-        fn write_media_downloads(
-            &self,
-            _src_path: &str,
-            _display_name: &str,
-            _mime_type: &str,
-        ) -> Result<()> {
+        fn write_media_downloads(&self, _src_path: &str, _display_name: &str, _mime_type: &str) -> Result<()> {
             Err(crate::AppError::Plugin($err.to_string()))
         }
         fn open_stream(&self, _uri: &str, _offset: u64) -> Result<SafStreamHandle> {
@@ -144,12 +139,7 @@ macro_rules! saf_unavailable_impl {
         fn stream_seekable(&self, _uri: &str) -> Result<bool> {
             Err(crate::AppError::Plugin($err.to_string()))
         }
-        fn save_to_document(
-            &self,
-            _src_path: &str,
-            _suggested_name: &str,
-            _mime_type: &str,
-        ) -> Result<()> {
+        fn save_to_document(&self, _src_path: &str, _suggested_name: &str, _mime_type: &str) -> Result<()> {
             Err(crate::AppError::Plugin($err.to_string()))
         }
     };
@@ -179,12 +169,7 @@ pub trait SafIo: Send + Sync {
     /// src_path 为 app 私有下载目录中的最终文件；流拷贝到公共 Download 目录
     /// （API 29+ 零权限）。失败（含 API<29 设备不支持）由调用方回退私有目录
     /// （调用方保留 src_path 副本即完成回退）。
-    fn write_media_downloads(
-        &self,
-        src_path: &str,
-        display_name: &str,
-        mime_type: &str,
-    ) -> Result<()>;
+    fn write_media_downloads(&self, src_path: &str, display_name: &str, mime_type: &str) -> Result<()>;
 
     /// 打开 SAF 源为可流读句柄（M3 上传流直传）
     ///
@@ -213,12 +198,7 @@ pub trait SafIo: Send + Sync {
     ///
     /// 用户取消对话框视为失败（保留私有副本回退）；suggested_name 为
     /// 对话框默认文件名（远端文件名），mime_type 为空串时按扩展名推断。
-    fn save_to_document(
-        &self,
-        src_path: &str,
-        suggested_name: &str,
-        mime_type: &str,
-    ) -> Result<()>;
+    fn save_to_document(&self, src_path: &str, suggested_name: &str, mime_type: &str) -> Result<()>;
 }
 
 /// Tauri 托管状态（命令经 `app_handle.state::<SafIoState>()` 取实现；
@@ -281,17 +261,8 @@ impl SafIo for KotlinSafIo {
         block_on_plugin(|| crate::plugin::android_plugins::saf_check_authorized(tree_uri))
     }
 
-    fn write_media_downloads(
-        &self,
-        src_path: &str,
-        display_name: &str,
-        mime_type: &str,
-    ) -> Result<()> {
-        block_on_plugin(|| {
-            crate::plugin::android_plugins::saf_write_media_downloads(
-                src_path, display_name, mime_type,
-            )
-        })
+    fn write_media_downloads(&self, src_path: &str, display_name: &str, mime_type: &str) -> Result<()> {
+        block_on_plugin(|| crate::plugin::android_plugins::saf_write_media_downloads(src_path, display_name, mime_type))
     }
 
     fn open_stream(&self, uri: &str, offset: u64) -> Result<SafStreamHandle> {
@@ -314,17 +285,8 @@ impl SafIo for KotlinSafIo {
         block_on_plugin(|| crate::plugin::android_plugins::saf_stream_seekable(uri))
     }
 
-    fn save_to_document(
-        &self,
-        src_path: &str,
-        suggested_name: &str,
-        mime_type: &str,
-    ) -> Result<()> {
-        block_on_plugin(|| {
-            crate::plugin::android_plugins::saf_save_to_document(
-                src_path, suggested_name, mime_type,
-            )
-        })
+    fn save_to_document(&self, src_path: &str, suggested_name: &str, mime_type: &str) -> Result<()> {
+        block_on_plugin(|| crate::plugin::android_plugins::saf_save_to_document(src_path, suggested_name, mime_type))
     }
 }
 
@@ -353,9 +315,7 @@ where
     std::thread::scope(|scope| {
         let (tx, rx) = std::sync::mpsc::channel();
         scope.spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                tauri::async_runtime::block_on(f())
-            }));
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| tauri::async_runtime::block_on(f())));
             // None = 驱动线程 panic（连接接缝 fail-soft）
             let _ = tx.send(result.ok());
         });
@@ -393,9 +353,7 @@ pub fn parse_saf_entries(value: &serde_json::Value) -> Result<Vec<SafEntry>> {
     let arr = value
         .get("entries")
         .and_then(|v| v.as_array())
-        .ok_or_else(|| {
-            crate::AppError::Plugin("saf_list_tree: missing 'entries' array in response".to_string())
-        })?;
+        .ok_or_else(|| crate::AppError::Plugin("saf_list_tree: missing 'entries' array in response".to_string()))?;
     arr.iter()
         .map(|e| {
             Ok(SafEntry {
@@ -404,11 +362,7 @@ pub fn parse_saf_entries(value: &serde_json::Value) -> Result<Vec<SafEntry>> {
                 size: e.get("size").and_then(|v| v.as_i64()).unwrap_or(0),
                 mime: e.get("mime").and_then(|v| v.as_str()).unwrap_or("").to_string(),
                 uri: e.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                document_id: e
-                    .get("documentId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string(),
+                document_id: e.get("documentId").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             })
         })
         .collect()
@@ -416,16 +370,8 @@ pub fn parse_saf_entries(value: &serde_json::Value) -> Result<Vec<SafEntry>> {
 
 /// 解析 Kotlin safToCache 响应（copyId/destPath）
 pub fn parse_saf_copy_handle(value: &serde_json::Value) -> Result<SafCopyHandle> {
-    let copy_id = value
-        .get("copyId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
-    let dest_path = value
-        .get("destPath")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let copy_id = value.get("copyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let dest_path = value.get("destPath").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if copy_id.is_empty() || dest_path.is_empty() {
         return Err(crate::AppError::Plugin(format!(
             "saf_copy_start: invalid response (copyId={}, destPath={})",
@@ -437,11 +383,7 @@ pub fn parse_saf_copy_handle(value: &serde_json::Value) -> Result<SafCopyHandle>
 
 /// 解析 Kotlin copyProgress 响应
 pub fn parse_saf_copy_status(value: &serde_json::Value) -> Result<SafCopyStatus> {
-    let copy_id = value
-        .get("copyId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let copy_id = value.get("copyId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if copy_id.is_empty() {
         return Err(crate::AppError::Plugin(
             "saf_copy_status: missing copyId in response".to_string(),
@@ -461,11 +403,7 @@ pub fn parse_saf_copy_status(value: &serde_json::Value) -> Result<SafCopyStatus>
         finished: value.get("finished").and_then(|v| v.as_bool()).unwrap_or(false),
         cancelled: value.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false),
         error: value.get("error").and_then(|v| v.as_str()).map(String::from),
-        dest_path: value
-            .get("destPath")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
+        dest_path: value.get("destPath").and_then(|v| v.as_str()).unwrap_or("").to_string(),
     })
 }
 
@@ -474,10 +412,7 @@ pub fn parse_media_write_response(value: &serde_json::Value) -> Result<()> {
     if value.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
         Ok(())
     } else {
-        let err = value
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
+        let err = value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
         Err(crate::AppError::Plugin(format!(
             "saf_write_media_downloads failed: {}",
             err
@@ -487,11 +422,7 @@ pub fn parse_media_write_response(value: &serde_json::Value) -> Result<()> {
 
 /// 解析 Kotlin safOpen 响应（handleId/effectiveOffset/seekable）
 pub fn parse_saf_stream_handle(value: &serde_json::Value) -> Result<SafStreamHandle> {
-    let handle_id = value
-        .get("handleId")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let handle_id = value.get("handleId").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if handle_id.is_empty() {
         return Err(crate::AppError::Plugin(
             "saf_stream_open: missing handleId in response".to_string(),
@@ -511,11 +442,7 @@ pub fn parse_saf_stream_handle(value: &serde_json::Value) -> Result<SafStreamHan
 /// 均劣于 base64（4/3 字符、无填充换行），选 base64 为跨桥最省空间格式。
 pub fn parse_saf_read_response(value: &serde_json::Value) -> Result<Vec<u8>> {
     use base64::Engine as _;
-    let data = value
-        .get("data")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_string();
+    let data = value.get("data").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if data.is_empty() {
         // 空串 = EOF 或空块（read 返回 0 不可能：请求 len≥1 且 Kotlin 侧
         // read 阻塞直到有数据或 EOF）
@@ -523,12 +450,7 @@ pub fn parse_saf_read_response(value: &serde_json::Value) -> Result<Vec<u8>> {
     }
     base64::engine::general_purpose::STANDARD
         .decode(&data)
-        .map_err(|e| {
-            crate::AppError::Plugin(format!(
-                "saf_stream_read: invalid base64 payload from Kotlin: {}",
-                e
-            ))
-        })
+        .map_err(|e| crate::AppError::Plugin(format!("saf_stream_read: invalid base64 payload from Kotlin: {}", e)))
 }
 
 /// 解析 Kotlin safSeekable 响应（{seekable: bool}）
@@ -548,14 +470,8 @@ pub fn parse_save_to_document_response(value: &serde_json::Value) -> Result<()> 
             "saf_save_to_document cancelled by user".to_string(),
         ))
     } else {
-        let err = value
-            .get("error")
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown error");
-        Err(crate::AppError::Plugin(format!(
-            "saf_save_to_document failed: {}",
-            err
-        )))
+        let err = value.get("error").and_then(|v| v.as_str()).unwrap_or("unknown error");
+        Err(crate::AppError::Plugin(format!("saf_save_to_document failed: {}", err)))
     }
 }
 
@@ -627,12 +543,7 @@ mod tests {
             Ok(self.authorized)
         }
 
-        fn write_media_downloads(
-            &self,
-            src_path: &str,
-            display_name: &str,
-            mime_type: &str,
-        ) -> Result<()> {
+        fn write_media_downloads(&self, src_path: &str, display_name: &str, mime_type: &str) -> Result<()> {
             assert_eq!(src_path, "/data/downloads/a.txt");
             assert_eq!(display_name, "a.txt");
             assert_eq!(mime_type, "");
@@ -671,12 +582,7 @@ mod tests {
             Ok(true)
         }
 
-        fn save_to_document(
-            &self,
-            src_path: &str,
-            suggested_name: &str,
-            mime_type: &str,
-        ) -> Result<()> {
+        fn save_to_document(&self, src_path: &str, suggested_name: &str, mime_type: &str) -> Result<()> {
             assert_eq!(src_path, "/data/downloads/a.txt");
             assert_eq!(suggested_name, "a.txt");
             assert_eq!(mime_type, "");
@@ -817,15 +723,17 @@ mod tests {
         fake.cancel_copy("copy-1").expect("cancel should succeed");
         assert_eq!(fake.cancelled.lock().unwrap().as_slice(), &["copy-1".to_string()]);
 
-        let authorized = fake.check_authorized("content://tree/root").expect("check should succeed");
+        let authorized = fake
+            .check_authorized("content://tree/root")
+            .expect("check should succeed");
         assert!(authorized);
     }
 
     #[test]
     fn parse_media_write_response_ok_and_error() {
         assert!(parse_media_write_response(&serde_json::json!({ "ok": true })).is_ok());
-        let err = parse_media_write_response(&serde_json::json!({ "ok": false, "error": "requires API 29+" }))
-            .unwrap_err();
+        let err =
+            parse_media_write_response(&serde_json::json!({ "ok": false, "error": "requires API 29+" })).unwrap_err();
         assert!(err.to_string().contains("requires API 29+"));
         let err2 = parse_media_write_response(&serde_json::json!({})).unwrap_err();
         assert!(err2.to_string().contains("unknown error"));
@@ -857,16 +765,14 @@ mod tests {
         use base64::Engine as _;
         let payload = b"\x00\x01\x02saf-data".to_vec();
         let b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
-        let decoded = parse_saf_read_response(&serde_json::json!({ "data": b64 }))
-            .expect("base64 should decode");
+        let decoded = parse_saf_read_response(&serde_json::json!({ "data": b64 })).expect("base64 should decode");
         assert_eq!(decoded, payload);
         // 空串 = EOF
         assert!(parse_saf_read_response(&serde_json::json!({ "data": "" }))
             .expect("eof should parse")
             .is_empty());
         // 非法 base64 必须显式报错（数据损坏不能静默吞掉）
-        let err = parse_saf_read_response(&serde_json::json!({ "data": "!!!not-base64!!!" }))
-            .unwrap_err();
+        let err = parse_saf_read_response(&serde_json::json!({ "data": "!!!not-base64!!!" })).unwrap_err();
         assert!(err.to_string().contains("base64"));
     }
 
@@ -876,11 +782,10 @@ mod tests {
         assert!(!parse_saf_seekable_response(&serde_json::json!({ "seekable": false })).expect("ok"));
 
         assert!(parse_save_to_document_response(&serde_json::json!({ "ok": true })).is_ok());
-        let cancelled = parse_save_to_document_response(&serde_json::json!({ "ok": false, "cancelled": true }))
-            .unwrap_err();
+        let cancelled =
+            parse_save_to_document_response(&serde_json::json!({ "ok": false, "cancelled": true })).unwrap_err();
         assert!(cancelled.to_string().contains("cancelled by user"));
-        let err = parse_save_to_document_response(&serde_json::json!({ "ok": false, "error": "EACCES" }))
-            .unwrap_err();
+        let err = parse_save_to_document_response(&serde_json::json!({ "ok": false, "error": "EACCES" })).unwrap_err();
         assert!(err.to_string().contains("EACCES"));
     }
 
@@ -908,10 +813,7 @@ mod tests {
             .open_stream("content://tree/root/document/f1", 0)
             .expect("open should succeed");
         assert_eq!(handle.handle_id, "stream-1");
-        assert_eq!(
-            fake.read_stream("stream-1", 1024).expect("read should succeed"),
-            b"abc"
-        );
+        assert_eq!(fake.read_stream("stream-1", 1024).expect("read should succeed"), b"abc");
         fake.seek_stream("stream-1", 0).expect("seek should succeed");
         fake.close_stream("stream-1").expect("close should succeed");
         assert!(fake

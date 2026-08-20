@@ -1,7 +1,7 @@
 //! host_db_* — 插件 SQLite 访问（逻辑层）
 
-use crate::plugin::wasm_host;
 use super::super::WasmPluginState;
+use crate::plugin::wasm_host;
 
 /// 逻辑层：执行 SQL（表名前缀校验不变量保留）
 pub(crate) fn db_execute(state: &WasmPluginState, sql: &str) -> Result<u32, String> {
@@ -43,9 +43,7 @@ pub(crate) fn db_query(state: &WasmPluginState, sql: &str) -> Result<Option<Stri
         // poison 容忍：host fn 内 panic 被截获后锁会中毒，不能连锁 panic
         let conn = db.lock().unwrap_or_else(|e| e.into_inner());
 
-        let mut stmt = conn
-            .prepare(sql)
-            .map_err(|e| format!("prepare: {}", e))?;
+        let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
 
         let column_count = stmt.column_count();
         let column_names: Vec<String> = (0..column_count)
@@ -70,14 +68,11 @@ pub(crate) fn db_query(state: &WasmPluginState, sql: &str) -> Result<Option<Stri
             .collect();
 
         Ok(serde_json::Value::Array(
-            rows.into_iter()
-                .map(serde_json::Value::Object)
-                .collect(),
+            rows.into_iter().map(serde_json::Value::Object).collect(),
         ))
     })();
 
-    query_result.map(|value| {
-        serde_json::to_string(&value).map_err(|e| format!("JSON serialization failed: {}", e))
-    })?
-    .map(Some)
+    query_result
+        .map(|value| serde_json::to_string(&value).map_err(|e| format!("JSON serialization failed: {}", e)))?
+        .map(Some)
 }

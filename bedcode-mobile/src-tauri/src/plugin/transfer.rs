@@ -13,9 +13,7 @@
 use crate::plugin::fs_auth::FsOp;
 use crate::plugin::message_bus::MessageBus;
 use crate::system::error_boundary::spawn_with_error_boundary;
-use bedcode_plugin_api_mobile::{
-    TransferDirection, TransferProgress, TransferRequest, TransferState,
-};
+use bedcode_plugin_api_mobile::{TransferDirection, TransferProgress, TransferRequest, TransferState};
 use futures_util::{FutureExt as _, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -35,8 +33,7 @@ const IO_BUFFER_SIZE: usize = 512 * 1024;
 /// 临界区均为同步短操作（insert/get/remove），用 std Mutex：
 /// 同步 host fn（start_transfer）可直接取锁，无需 block_in_place + block_on。
 /// HashMap::new 非 const fn，经 OnceLock 惰性初始化
-static TASKS: std::sync::OnceLock<Mutex<HashMap<String, CancellationToken>>> =
-    std::sync::OnceLock::new();
+static TASKS: std::sync::OnceLock<Mutex<HashMap<String, CancellationToken>>> = std::sync::OnceLock::new();
 
 fn tasks() -> &'static Mutex<HashMap<String, CancellationToken>> {
     TASKS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -45,10 +42,7 @@ fn tasks() -> &'static Mutex<HashMap<String, CancellationToken>> {
 /// 校验本地路径 fs 授权（下载 = 写授权，上传 = 读授权）
 ///
 /// host_transfer_start 在启动任务前调用；未授权拒绝启动（规格安全模型）
-pub async fn check_local_path_authorized(
-    plugin_id: &str,
-    request: &TransferRequest,
-) -> bool {
+pub async fn check_local_path_authorized(plugin_id: &str, request: &TransferRequest) -> bool {
     let fs_op = match request.direction {
         TransferDirection::Download => FsOp::Write,
         TransferDirection::Upload => FsOp::Read,
@@ -76,11 +70,7 @@ pub async fn check_local_path_authorized(
 /// 启动传输任务（调用前必须已通过 [`check_local_path_authorized`]）
 ///
 /// 返回宿主生成的 task_id；任务后台异步执行，进度/终局经双通道推送
-pub fn spawn_transfer(
-    request: TransferRequest,
-    app_handle: Arc<tauri::AppHandle>,
-    bus: Arc<MessageBus>,
-) -> String {
+pub fn spawn_transfer(request: TransferRequest, app_handle: Arc<tauri::AppHandle>, bus: Arc<MessageBus>) -> String {
     // 用插件预生成的 task_id（bus topic `transfer:{task_id}` 与 Tauri 事件
     // taskId 均以它为准），不再自生成 UUID —— 插件先订阅后启动，进度零丢失
     let task_id = request.task_id.clone();
@@ -90,7 +80,10 @@ pub fn spawn_transfer(
     // （poison 容忍：传输任务 panic 被下方 catch_unwind 截获后锁会中毒，不能连锁 panic）
     let task_id_for_map = task_id.clone();
     let token_for_map = token.clone();
-    tasks().lock().unwrap_or_else(|e| e.into_inner()).insert(task_id_for_map, token_for_map);
+    tasks()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(task_id_for_map, token_for_map);
 
     let task_id_for_spawn = task_id.clone();
     let panic_task_id = task_id.clone();
@@ -102,15 +95,9 @@ pub fn spawn_transfer(
         // 任务会永久停在 transferring（宿主无终态回报、插件收不到失败）。
         // 此处额外清理任务表/停 reporter，并推送 Failed 终态——插件任务转失败，
         // 前端任务列表显示失败原因，而不是整个应用崩溃。
-        let result = std::panic::AssertUnwindSafe(run_transfer(
-            task_id_for_spawn,
-            request,
-            app_handle,
-            bus,
-            token,
-        ))
-        .catch_unwind()
-        .await;
+        let result = std::panic::AssertUnwindSafe(run_transfer(task_id_for_spawn, request, app_handle, bus, token))
+            .catch_unwind()
+            .await;
 
         if let Err(panic_err) = result {
             panic_token.cancel();
@@ -166,10 +153,7 @@ pub fn register_cancel_token(task_id: &str, token: CancellationToken) {
 
 /// 注销取消令牌（任务终态清理）
 pub fn unregister_cancel_token(task_id: &str) {
-    tasks()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(task_id);
+    tasks().lock().unwrap_or_else(|e| e.into_inner()).remove(task_id);
 }
 
 // ==================== Transfer Task ====================
@@ -325,10 +309,7 @@ async fn download(
         builder = builder.header(key.as_str(), value.as_str());
     }
     if request.offset > 0 {
-        builder = builder.header(
-            reqwest::header::RANGE,
-            format!("bytes={}-", request.offset),
-        );
+        builder = builder.header(reqwest::header::RANGE, format!("bytes={}-", request.offset));
     }
 
     let response = builder
@@ -338,11 +319,7 @@ async fn download(
 
     let status = response.status();
     if !(status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT) {
-        return Err(format!(
-            "GET {} returned HTTP {}",
-            request.url,
-            status.as_u16()
-        ));
+        return Err(format!("GET {} returned HTTP {}", request.url, status.as_u16()));
     }
 
     // offset=0 全新写入（truncate 清理残留）；offset>0 保留已传进度，seek 后续写
@@ -378,10 +355,7 @@ async fn download(
 
     // .part 临时文件下载完成后原子 rename 到最终路径（规格 7.4）
     if let Some(ref final_path) = request.final_path {
-        if tokio::fs::try_exists(final_path)
-            .await
-            .unwrap_or(false)
-        {
+        if tokio::fs::try_exists(final_path).await.unwrap_or(false) {
             // 目标名已被占用 → 保留 .part 供用户决定，回报 duplicate-name
             tracing::warn!(
                 part_path = %request.local_path,
@@ -392,12 +366,7 @@ async fn download(
         }
         tokio::fs::rename(&request.local_path, final_path)
             .await
-            .map_err(|e| {
-                format!(
-                    "rename '{}' -> '{}' failed: {}",
-                    request.local_path, final_path, e
-                )
-            })?;
+            .map_err(|e| format!("rename '{}' -> '{}' failed: {}", request.local_path, final_path, e))?;
         tracing::debug!(
             part_path = %request.local_path,
             final_path = %final_path,
@@ -445,10 +414,7 @@ impl tokio::io::AsyncRead for SafStreamReader {
         let this = &mut *self;
         // 取消优先：被取消后立即中断流（reqwest 据此中止 PUT），不等桥读返回
         if this.token.is_cancelled() {
-            return std::task::Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "cancelled",
-            )));
+            return std::task::Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Interrupted, "cancelled")));
         }
         if this.eof {
             return std::task::Poll::Ready(Ok(()));
@@ -556,24 +522,22 @@ async fn upload(
     // 统一为 Box<dyn Stream>：File（tokio 异步）与 SafStreamReader（同步桥）
     // 均为 AsyncRead，ReaderStream 包装后 Item 类型一致
     let body_stream: Box<
-        dyn futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>>
-            + Send
-            + Unpin,
+        dyn futures_util::Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> + Send + Unpin,
     > = match source {
-        UploadSource::File(file) => Box::new(
-            tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(move |item| {
+        UploadSource::File(file) => Box::new(tokio_util::io::ReaderStream::with_capacity(file, IO_BUFFER_SIZE).map(
+            move |item| {
                 item.inspect(|bytes| {
                     transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 })
-            }),
-        ),
-        UploadSource::Saf(reader) => Box::new(
-            tokio_util::io::ReaderStream::with_capacity(reader, IO_BUFFER_SIZE).map(move |item| {
+            },
+        )),
+        UploadSource::Saf(reader) => Box::new(tokio_util::io::ReaderStream::with_capacity(reader, IO_BUFFER_SIZE).map(
+            move |item| {
                 item.inspect(|bytes| {
                     transferred.fetch_add(bytes.len() as u64, Ordering::Relaxed);
                 })
-            }),
-        ),
+            },
+        )),
     };
 
     let response = builder
@@ -671,26 +635,34 @@ mod tests {
 
     impl MockResponse {
         fn ok(body: impl Into<Vec<u8>>) -> Self {
-            Self { status: 200, body: body.into() }
+            Self {
+                status: 200,
+                body: body.into(),
+            }
         }
 
         fn with_status(status: u16, body: impl Into<Vec<u8>>) -> Self {
-            Self { status, body: body.into() }
+            Self {
+                status,
+                body: body.into(),
+            }
         }
     }
 
     /// 启动 mock HTTP 服务器（每连接独立任务，响应后关闭连接）
-    async fn spawn_mock_server(
-        handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>,
-    ) -> SocketAddr {
+    async fn spawn_mock_server(handler: Arc<dyn Fn(MockRequest) -> MockResponse + Send + Sync>) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
             loop {
-                let Ok((mut sock, _)) = listener.accept().await else { break };
+                let Ok((mut sock, _)) = listener.accept().await else {
+                    break;
+                };
                 let handler = handler.clone();
                 tokio::spawn(async move {
-                    let Some(req) = read_request(&mut sock).await else { return };
+                    let Some(req) = read_request(&mut sock).await else {
+                        return;
+                    };
                     let resp = handler(req);
                     let reason = match resp.status {
                         200 => "OK",
@@ -754,7 +726,11 @@ mod tests {
         }
         let mut body = buf.split_off(header_end + 4);
         // wrap_stream 上传体无固定长度 → reqwest 使用 chunked encoding
-        if headers.get("transfer-encoding").map(|v| v.to_ascii_lowercase() == "chunked").unwrap_or(false) {
+        if headers
+            .get("transfer-encoding")
+            .map(|v| v.to_ascii_lowercase() == "chunked")
+            .unwrap_or(false)
+        {
             body = read_chunked_body(sock, body).await?;
         } else {
             while body.len() < content_length {
@@ -770,10 +746,7 @@ mod tests {
     }
 
     /// 读取 chunked 编码的请求体（`{hex-size}\r\n{data}\r\n` 直到 size=0）
-    async fn read_chunked_body(
-        sock: &mut tokio::net::TcpStream,
-        mut buf: Vec<u8>,
-    ) -> Option<Vec<u8>> {
+    async fn read_chunked_body(sock: &mut tokio::net::TcpStream, mut buf: Vec<u8>) -> Option<Vec<u8>> {
         let mut tmp = [0u8; 4096];
         let mut body = Vec::new();
         loop {
@@ -791,8 +764,7 @@ mod tests {
             let line = String::from_utf8_lossy(&buf[..line_end]).to_string();
             buf.drain(..line_end + 2);
             // 支持 `size` 与 `size;ext=...` 两种 chunk 头
-            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16)
-                .ok()?;
+            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).ok()?;
             if size == 0 {
                 return Some(body); // 结束 chunk，忽略 trailer
             }
@@ -945,9 +917,7 @@ mod tests {
         );
         req.final_path = Some(final_path.to_str().unwrap().to_string());
 
-        let err = download(&req, counter(), CancellationToken::new())
-            .await
-            .unwrap_err();
+        let err = download(&req, counter(), CancellationToken::new()).await.unwrap_err();
 
         assert_eq!(err, "duplicate-name");
         assert!(part.exists(), "duplicate-name 时 .part 应保留供用户决定");
@@ -1196,11 +1166,7 @@ mod tests {
         fn write_media_downloads(&self, _s: &str, _d: &str, _m: &str) -> crate::Result<()> {
             Ok(())
         }
-        fn open_stream(
-            &self,
-            uri: &str,
-            offset: u64,
-        ) -> crate::Result<crate::plugin::saf_io::SafStreamHandle> {
+        fn open_stream(&self, uri: &str, offset: u64) -> crate::Result<crate::plugin::saf_io::SafStreamHandle> {
             self.opened.lock().unwrap().push((uri.to_string(), offset));
             let effective = self.effective_offset.lock().unwrap().unwrap_or(offset);
             // 模拟 Kotlin Os.lseek：可 seek 时句柄游标定位到 effective_offset
@@ -1460,4 +1426,3 @@ mod tests {
         assert_eq!(std::fs::read(&dl).unwrap(), b"downloaded");
     }
 }
-

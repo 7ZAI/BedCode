@@ -3,8 +3,8 @@
 //! 从 bedcode-plugin-api-mobile re-export 共享类型
 //! 仅保留宿主运行时内部类型
 
-pub use bedcode_plugin_api_mobile::types::*;
 pub use bedcode_plugin_api_mobile::types::PluginManifest;
+pub use bedcode_plugin_api_mobile::types::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;

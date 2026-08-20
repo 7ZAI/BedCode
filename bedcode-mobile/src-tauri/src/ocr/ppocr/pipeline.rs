@@ -10,7 +10,9 @@
 //! 最终：text_score 0.5 过滤（空行 conf=0 自然剔除）。
 
 use super::dict::CH_DICT;
-use super::geom::{min_area_rect, order_points_clockwise, perimeter, polygon_area, polygon_mean, polygon_offset, Pt, Quad};
+use super::geom::{
+    min_area_rect, order_points_clockwise, perimeter, polygon_area, polygon_mean, polygon_offset, Pt, Quad,
+};
 use super::imgops::{resize_bilinear, rot180, rot90_ccw, warp_perspective, ImgBuf};
 use crate::ocr::OcrBBox;
 
@@ -120,8 +122,12 @@ pub fn det_postprocess(pred: &[f32], pred_w: usize, pred_h: usize, dest_w: usize
         let mut scaled = [Pt::new(0.0, 0.0); 4];
         for (k, p) in quad2.iter().enumerate() {
             scaled[k] = Pt::new(
-                (p.x / pred_w as f64 * dest_w as f64).round_ties_even().clamp(0.0, dest_w as f64),
-                (p.y / pred_h as f64 * dest_h as f64).round_ties_even().clamp(0.0, dest_h as f64),
+                (p.x / pred_w as f64 * dest_w as f64)
+                    .round_ties_even()
+                    .clamp(0.0, dest_w as f64),
+                (p.y / pred_h as f64 * dest_h as f64)
+                    .round_ties_even()
+                    .clamp(0.0, dest_h as f64),
             );
         }
         boxes.push((scaled, score));
@@ -438,8 +444,14 @@ mod tests {
             for k in 0..4 {
                 let dx = (quad[k].x - golden[i][k][0]).abs();
                 let dy = (quad[k].y - golden[i][k][1]).abs();
-                assert!(dx <= 2.0 && dy <= 2.0, "box {i} pt {k}: got ({}, {}) want ({}, {})",
-                    quad[k].x, quad[k].y, golden[i][k][0], golden[i][k][1]);
+                assert!(
+                    dx <= 2.0 && dy <= 2.0,
+                    "box {i} pt {k}: got ({}, {}) want ({}, {})",
+                    quad[k].x,
+                    quad[k].y,
+                    golden[i][k][0],
+                    golden[i][k][1]
+                );
             }
             // 分数跟随 quad（RapidOCR sorted_boxes 不同步 scores，golden 值错位）：
             // 只做合理性断言（通过 box_thresh 且 ≤ 1）
@@ -555,9 +567,7 @@ mod tests {
             0.05, 0.02, 0.02, 0.88, 0.03, //
         ];
         // idx 序列（去重去 blank 后）: 1, 2, 4, 3 → 字典序 CH_DICT[0], [1], [3], [2]
-        let expected: String = [CH_DICT[0], CH_DICT[1], CH_DICT[3], CH_DICT[2]]
-            .iter()
-            .collect();
+        let expected: String = [CH_DICT[0], CH_DICT[1], CH_DICT[3], CH_DICT[2]].iter().collect();
         let (text, conf) = ctc_decode(&preds, 7, 5);
         assert_eq!(text, expected);
         // 选中步（去重+去 blank）: (1,0.8),(2,0.82),(4,0.82),(3,0.88) → mean=0.83

@@ -20,10 +20,7 @@ impl PluginLoader {
     ///
     /// Android：经 Kotlin PluginAssetExtractor 从 APK assets 解压（按来源标记跳过已解压）。
     /// 非 Android（桌面 dev 窗口）：从源码 resources/plugins/mobile 复制（仅 debug 构建）。
-    pub async fn extract_apk_plugins(
-        app_data_dir: &Path,
-        app_version: &str,
-    ) -> crate::Result<()> {
+    pub async fn extract_apk_plugins(app_data_dir: &Path, app_version: &str) -> crate::Result<()> {
         let plugins_data_dir = app_data_dir.join(PLUGIN_DATA_DIR);
         fs::create_dir_all(&plugins_data_dir)?;
 
@@ -69,12 +66,7 @@ impl PluginLoader {
             }
             let dest = plugins_data_dir.join(&id);
             let marker = dest.join(PLUGIN_SOURCE_MARKER);
-            if marker.exists()
-                && fs::read_to_string(&marker)
-                    .unwrap_or_default()
-                    .trim()
-                    == expected
-            {
+            if marker.exists() && fs::read_to_string(&marker).unwrap_or_default().trim() == expected {
                 continue;
             }
             if dest.exists() {
@@ -149,7 +141,8 @@ impl PluginLoader {
                     if !validate_plugin_id(&plugin_id) {
                         tracing::error!(
                             "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
-                            dir_name, plugin_id
+                            dir_name,
+                            plugin_id
                         );
                         continue;
                     }
@@ -182,10 +175,8 @@ impl PluginLoader {
                                     // 与 SDK PermissionManager::grant_permissions 语义一致：storage 默认授予
                                     let mut granted: std::collections::HashSet<String> =
                                         manifest.permissions.iter().cloned().collect();
-                                    granted.insert(
-                                        bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE
-                                            .to_string(),
-                                    );
+                                    granted
+                                        .insert(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string());
                                     match wasm_runtime.instantiate_component(
                                         &component,
                                         &plugin_id,
@@ -195,14 +186,16 @@ impl PluginLoader {
                                         Ok(loaded_wasm) => {
                                             tracing::info!(
                                                 "[PluginLoader] WASM plugin loaded: {} v{}",
-                                                manifest.id, manifest.version
+                                                manifest.id,
+                                                manifest.version
                                             );
                                             wasm_plugins.insert(plugin_id.clone(), loaded_wasm);
                                         }
                                         Err(e) => {
                                             tracing::error!(
                                                 "[PluginLoader] WASM instantiation failed for '{}': {}",
-                                                manifest.id, e
+                                                manifest.id,
+                                                e
                                             );
                                         }
                                     }
@@ -210,20 +203,21 @@ impl PluginLoader {
                                 Err(e) => {
                                     tracing::error!(
                                         "[PluginLoader] WASM compilation failed for '{}': {}",
-                                        manifest.id, e
+                                        manifest.id,
+                                        e
                                     );
                                 }
                             }
                         } else {
                             tracing::warn!(
                                 "[PluginLoader] WASM file not found for '{}': {:?}",
-                                manifest.id, wasm_file
+                                manifest.id,
+                                wasm_file
                             );
                         }
                     }
 
-                    let permissions: std::collections::HashSet<String> =
-                        manifest.permissions.iter().cloned().collect();
+                    let permissions: std::collections::HashSet<String> = manifest.permissions.iter().cloned().collect();
 
                     let loaded = LoadedPlugin {
                         manifest,
@@ -244,7 +238,9 @@ impl PluginLoader {
 
         tracing::info!(
             "[PluginLoader] Scanned {} dir(s), loaded {} plugin(s), {} WASM instance(s)",
-            dir_count, plugins.len(), wasm_plugins.len()
+            dir_count,
+            plugins.len(),
+            wasm_plugins.len()
         );
 
         (plugins, wasm_plugins)
@@ -384,10 +380,9 @@ mod tests {
                 .filter(|e| e.path().extension().map(|x| x == "cwasm").unwrap_or(false))
                 .collect();
             assert!(
-                cache_files.iter().any(|e| e
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with('c')),
+                cache_files
+                    .iter()
+                    .any(|e| e.file_name().to_string_lossy().starts_with('c')),
                 "组件 AOT 缓存应以 c 前缀命名"
             );
         });

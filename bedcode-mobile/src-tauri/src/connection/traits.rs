@@ -35,7 +35,6 @@ pub trait MessageHandler: Send + Sync {
     );
 }
 
-
 /// 客户端信息 trait（泛型基础）
 /// 让不同业务场景可以定义自己的客户端信息结构
 pub trait ClientInfoTrait: Send + Sync + Debug + Clone {
@@ -66,23 +65,13 @@ pub trait ClientInfoTrait: Send + Sync + Debug + Clone {
 #[allow(dead_code)]
 pub trait MessageHandlerWithClientInfo<C: ClientInfoTrait>: Send + Sync {
     /// 处理文本消息（核心方法）
-    fn handle_text(
-        &self,
-        message: &Message,
-        addr: SocketAddr,
-        client_info: &C,
-    ) -> HandlerResult {
+    fn handle_text(&self, message: &Message, addr: SocketAddr, client_info: &C) -> HandlerResult {
         let _ = (message, addr, client_info);
         Ok(None)
     }
 
     /// 处理二进制消息
-    fn handle_binary(
-        &self,
-        message: &Message,
-        addr: SocketAddr,
-        client_info: &C,
-    ) -> HandlerResult {
+    fn handle_binary(&self, message: &Message, addr: SocketAddr, client_info: &C) -> HandlerResult {
         let _ = (message, addr, client_info);
         Ok(None)
     }
@@ -105,10 +94,7 @@ pub trait MessageHandlerWithClientInfo<C: ClientInfoTrait>: Send + Sync {
 /// 客户端消息处理器 trait - 用于 WsClient 处理接收到的消息
 pub trait ClientMessageHandler: Send + Sync {
     /// 处理接收到的消息
-    fn handle(
-        &self,
-        message: Message,
-    ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>>;
+    fn handle(&self, message: Message) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>>;
 
     /// 处理器名称
     fn name(&self) -> &str;
@@ -119,10 +105,7 @@ pub trait ClientMessageHandler: Send + Sync {
 pub struct NoopHandler;
 
 impl ClientMessageHandler for NoopHandler {
-    fn handle(
-        &self,
-        _message: Message,
-    ) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
+    fn handle(&self, _message: Message) -> Pin<Box<dyn Future<Output = HandlerResult> + Send + '_>> {
         Box::pin(async { Ok(None) })
     }
 
@@ -173,9 +156,7 @@ impl SendStrategy for DefaultSendStrategy {
         message: &'a Message,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {
-        Box::pin(async move {
-            client.send_and_wait(message, timeout).await
-        })
+        Box::pin(async move { client.send_and_wait(message, timeout).await })
     }
 
     fn name(&self) -> &str {
@@ -224,9 +205,7 @@ impl SendStrategy for RetrySendStrategy {
                     }
                 }
             }
-            Err(last_error.unwrap_or_else(|| {
-                crate::AppError::WebSocket("Max retries exceeded".to_string())
-            }))
+            Err(last_error.unwrap_or_else(|| crate::AppError::WebSocket("Max retries exceeded".to_string())))
         })
     }
 
@@ -255,9 +234,7 @@ impl SendStrategy for RetrySendStrategy {
                     }
                 }
             }
-            Err(last_error.unwrap_or_else(|| {
-                crate::AppError::WebSocket("Max retries exceeded".to_string())
-            }))
+            Err(last_error.unwrap_or_else(|| crate::AppError::WebSocket("Max retries exceeded".to_string())))
         })
     }
 
@@ -315,36 +292,28 @@ pub struct MetricsInterceptor {
 
 impl MetricsInterceptor {
     pub fn sent_total(&self) -> u64 {
-        self.sent_total
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.sent_total.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn sent_success(&self) -> u64 {
-        self.sent_success
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.sent_success.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn sent_failure(&self) -> u64 {
-        self.sent_failure
-            .load(std::sync::atomic::Ordering::Relaxed)
+        self.sent_failure.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
 impl SendInterceptor for MetricsInterceptor {
     fn on_before_send(&self, _message: &Message) -> Result<()> {
-        self.sent_total
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.sent_total.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(())
     }
 
     fn on_after_send(&self, _message: &Message, result: &Result<()>) {
         match result {
-            Ok(()) => self
-                .sent_success
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            Err(_) => self
-                .sent_failure
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            Ok(()) => self.sent_success.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            Err(_) => self.sent_failure.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
         };
     }
 
@@ -358,10 +327,7 @@ impl SendInterceptor for MetricsInterceptor {
 pub trait ResponseHandler: Send + Sync {
     /// 处理需要响应的消息
     /// 返回 None 表示不需要响应，返回 Some(Message) 使用自定义响应
-    fn handle_response(
-        &self,
-        business_message: &Message,
-    ) -> Option<Message>;
+    fn handle_response(&self, business_message: &Message) -> Option<Message>;
 }
 
 /// 默认响应处理器
@@ -369,10 +335,7 @@ pub trait ResponseHandler: Send + Sync {
 pub struct DefaultResponseHandler;
 
 impl ResponseHandler for DefaultResponseHandler {
-    fn handle_response(
-        &self,
-        _business_message: &Message,
-    ) -> Option<Message> {
+    fn handle_response(&self, _business_message: &Message) -> Option<Message> {
         // 默认不返回响应，由业务层自行决定是否响应
         None
     }

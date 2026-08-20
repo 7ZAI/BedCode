@@ -48,9 +48,10 @@ impl MessageCodec for JsonCodec {
                 Ok(Some(msg))
             }
             WsMsg::Ping(_) | WsMsg::Pong(_) => Ok(None), // 协议层心跳由 tungstenite 自动处理
-            WsMsg::Close(reason) => {
-                Ok(Some(Message::error("close", &reason.map(|r| r.to_string()).unwrap_or_default())))
-            }
+            WsMsg::Close(reason) => Ok(Some(Message::error(
+                "close",
+                &reason.map(|r| r.to_string()).unwrap_or_default(),
+            ))),
             WsMsg::Frame(_) => Ok(None),
         }
     }
@@ -120,7 +121,11 @@ mod tests {
         match codec().decode(ws).unwrap().unwrap() {
             Message::Terminal {
                 session_id,
-                payload: TerminalPayload { action: TerminalAction::Input { data, special_key }, .. },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Input { data, special_key },
+                        ..
+                    },
                 ..
             } => {
                 assert_eq!(session_id, "s");

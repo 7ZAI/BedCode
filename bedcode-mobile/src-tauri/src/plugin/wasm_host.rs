@@ -110,9 +110,7 @@ pub fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::
     }
     // 尝试浮点数
     if let Ok(v) = row.get::<_, f64>(col_index) {
-        return serde_json::Value::Number(
-            serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)),
-        );
+        return serde_json::Value::Number(serde_json::Number::from_f64(v).unwrap_or(serde_json::Number::from(0)));
     }
     // 尝试字符串
     if let Ok(v) = row.get::<_, String>(col_index) {
@@ -162,13 +160,8 @@ struct OpenAiSseDelta {
 /// 宿主代为执行 HTTP 请求，返回完整响应
 /// request 格式：{ "method", "url", "headers", "body" }
 /// response 格式：{ "status", "body", "headers" }
-pub async fn execute_http_request(
-    request: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let method = request
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("GET");
+pub async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
     let url = request
         .get("url")
         .and_then(|v| v.as_str())
@@ -200,7 +193,12 @@ pub async fn execute_http_request(
     let resp_headers: serde_json::Map<String, serde_json::Value> = response
         .headers()
         .iter()
-        .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_str().unwrap_or("").to_string())))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                serde_json::Value::String(v.to_str().unwrap_or("").to_string()),
+            )
+        })
         .collect();
 
     // 响应体带上限流式读取：防止无上限响应体拷入 guest 内存 + guest serde 解析
@@ -209,8 +207,7 @@ pub async fn execute_http_request(
     let mut body_bytes = Vec::new();
     let mut body_stream = response.bytes_stream();
     while let Some(chunk) = body_stream.next().await {
-        let chunk = chunk
-            .map_err(|e| anyhow::anyhow!("http error: read response body failed: {}", e))?;
+        let chunk = chunk.map_err(|e| anyhow::anyhow!("http error: read response body failed: {}", e))?;
         if body_bytes.len() + chunk.len() > PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES {
             return Err(anyhow::anyhow!(
                 "http error: response body exceeds {} bytes limit (use stream:true for large payloads)",
@@ -219,9 +216,8 @@ pub async fn execute_http_request(
         }
         body_bytes.extend_from_slice(&chunk);
     }
-    let resp_body = String::from_utf8(body_bytes).map_err(|e| {
-        anyhow::anyhow!("http error: response body is not UTF-8: {}", e)
-    })?;
+    let resp_body =
+        String::from_utf8(body_bytes).map_err(|e| anyhow::anyhow!("http error: response body is not UTF-8: {}", e))?;
 
     Ok(serde_json::json!({
         "status": status,
@@ -243,20 +239,14 @@ pub async fn execute_streaming_http(
     stream_event: &str,
     plugin_id: &str,
 ) -> anyhow::Result<()> {
-    let method = request
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("POST");
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("POST");
     let url = request
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing 'url' in streaming HTTP request"))?;
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
-    let sse_format = request
-        .get("sseFormat")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let sse_format = request.get("sseFormat").and_then(|v| v.as_str()).unwrap_or("");
 
     let client = reqwest::Client::new();
     let mut req_builder = client.request(method.parse()?, url);
@@ -349,10 +339,7 @@ pub async fn execute_streaming_http(
     }
 
     // 发送完成事件
-    let _ = app_handle.emit(
-        stream_event,
-        serde_json::json!({ "done": true }),
-    );
+    let _ = app_handle.emit(stream_event, serde_json::json!({ "done": true }));
 
     tracing::debug!(
         emitted_events,
@@ -368,12 +355,7 @@ pub async fn execute_streaming_http(
 ///
 /// 按 `\n\n` 分割 SSE 事件，根据 format 解析 data 行中的 JSON，
 /// 提取文本增量后以 `{ chunk, done: false }` 格式 emit
-fn parse_and_emit_sse(
-    buffer: &mut String,
-    format: &str,
-    app_handle: &tauri::AppHandle,
-    stream_event: &str,
-) -> usize {
+fn parse_and_emit_sse(buffer: &mut String, format: &str, app_handle: &tauri::AppHandle, stream_event: &str) -> usize {
     let mut last_usage: Option<serde_json::Value> = None;
     let mut emitted = 0usize;
     while let Some(pos) = buffer.find("\n\n") {
@@ -401,16 +383,10 @@ fn parse_and_emit_sse(
                             if parsed.usage.is_some() {
                                 last_usage = parsed.usage.clone();
                             }
-                            if let Some(content) = parsed
-                                .choices
-                                .first()
-                                .and_then(|c| c.delta.content.as_ref())
-                            {
+                            if let Some(content) = parsed.choices.first().and_then(|c| c.delta.content.as_ref()) {
                                 if !content.is_empty() {
-                                    let _ = app_handle.emit(
-                                        stream_event,
-                                        serde_json::json!({ "chunk": content, "done": false }),
-                                    );
+                                    let _ = app_handle
+                                        .emit(stream_event, serde_json::json!({ "chunk": content, "done": false }));
                                     emitted += 1;
                                 }
                             }
@@ -418,10 +394,7 @@ fn parse_and_emit_sse(
                     }
                     _ => {
                         // 未知格式：emit 原始 data
-                        let _ = app_handle.emit(
-                            stream_event,
-                            serde_json::json!({ "chunk": data, "done": false }),
-                        );
+                        let _ = app_handle.emit(stream_event, serde_json::json!({ "chunk": data, "done": false }));
                         emitted += 1;
                     }
                 }
@@ -495,8 +468,7 @@ mod tests {
     #[tokio::test]
     async fn http_fetch_oversized_response_rejected() {
         disable_proxy_for_loopback();
-        let addr =
-            spawn_mock_server(vec![0u8; PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES + 1]).await;
+        let addr = spawn_mock_server(vec![0u8; PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES + 1]).await;
         let err = execute_http_request(&json!({
             "method": "GET",
             "url": format!("http://{}/big", addr),
@@ -532,10 +504,7 @@ mod tests {
 
     #[test]
     fn test_validate_sql_table_prefix_invalid() {
-        let result = validate_sql_table_prefix(
-            "com.example.my-plugin",
-            "INSERT INTO sessions (id) VALUES ('abc')",
-        );
+        let result = validate_sql_table_prefix("com.example.my-plugin", "INSERT INTO sessions (id) VALUES ('abc')");
         assert!(result.is_err());
     }
 
@@ -559,10 +528,7 @@ mod tests {
 
     #[test]
     fn test_validate_sql_table_prefix_drop_table() {
-        let result = validate_sql_table_prefix(
-            "my-plugin",
-            "DROP TABLE IF EXISTS plugin_my_plugin_cache",
-        );
+        let result = validate_sql_table_prefix("my-plugin", "DROP TABLE IF EXISTS plugin_my_plugin_cache");
         assert!(result.is_ok());
     }
 
@@ -577,9 +543,7 @@ mod tests {
 
     #[test]
     fn test_extract_table_names() {
-        let tables = extract_table_names(
-            "INSERT INTO users (id) VALUES (1); SELECT * FROM orders",
-        );
+        let tables = extract_table_names("INSERT INTO users (id) VALUES (1); SELECT * FROM orders");
         assert!(tables.contains(&"users".to_string()));
         assert!(tables.contains(&"orders".to_string()));
     }

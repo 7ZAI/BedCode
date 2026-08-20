@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::sumary::{SessionConfigSummary, SessionSummary};
 use super::plugin::PluginQuestion;
+use super::sumary::{SessionConfigSummary, SessionSummary};
 
 /// 文件传输意图载荷（强类型：wire 内联字段的项目类型，供 responder/通知跨模块
 /// 传参；serde 往返与 `SyncPayload::FileTransferIntent` 变体字段逐字一致）
@@ -53,15 +53,9 @@ pub enum SyncPayload {
         session_name: String,
     },
     /// 会话停止
-    SessionStopped {
-        session_id: String,
-        session_name: String,
-    },
+    SessionStopped { session_id: String, session_name: String },
     /// 会话删除
-    SessionRemoved {
-        session_id: String,
-        session_name: String,
-    },
+    SessionRemoved { session_id: String, session_name: String },
 
     // === 会话配置同步 ===
     /// 配置创建
@@ -77,10 +71,7 @@ pub enum SyncPayload {
         source_device: String,
     },
     /// 配置删除
-    ConfigRemoved {
-        config_id: String,
-        config_name: String,
-    },
+    ConfigRemoved { config_id: String, config_name: String },
 
     // === 任务状态同步 ===
     /// Plugin 任务状态变更
@@ -93,10 +84,7 @@ pub enum SyncPayload {
 
     // === 会话模式同步 ===
     /// 会话自动授权模式变更
-    SessionModeChanged {
-        session_id: String,
-        auto_approve: bool,
-    },
+    SessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列同步 ===
     /// 会话任务队列变更

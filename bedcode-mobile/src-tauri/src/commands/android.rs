@@ -7,10 +7,7 @@ use tauri_plugin_opener::OpenerExt;
 
 /// 使用系统浏览器打开 URL
 #[tauri::command]
-pub async fn open_url_in_browser(
-    app_handle: tauri::AppHandle,
-    url: String,
-) -> Result<()> {
+pub async fn open_url_in_browser(app_handle: tauri::AppHandle, url: String) -> Result<()> {
     tracing::info!("Opening URL in browser: {}", url);
     app_handle
         .opener()
@@ -22,10 +19,7 @@ pub async fn open_url_in_browser(
 /// 设置 Android 屏幕方向
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn set_screen_orientation(
-    _app_handle: tauri::AppHandle,
-    orientation: String,
-) -> Result<()> {
+pub async fn set_screen_orientation(_app_handle: tauri::AppHandle, orientation: String) -> Result<()> {
     tracing::info!("Setting screen orientation to: {}", orientation);
     Ok(())
 }
@@ -40,10 +34,7 @@ pub async fn set_screen_orientation(_orientation: String) -> Result<()> {
 /// 保持屏幕唤醒（防止锁屏）
 #[cfg(target_os = "android")]
 #[tauri::command]
-pub async fn keep_screen_awake(
-    _app_handle: tauri::AppHandle,
-    enabled: bool,
-) -> Result<()> {
+pub async fn keep_screen_awake(_app_handle: tauri::AppHandle, enabled: bool) -> Result<()> {
     tracing::info!("Setting screen awake: {}", enabled);
     Ok(())
 }

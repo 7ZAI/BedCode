@@ -42,21 +42,13 @@ pub enum LifecycleEvent {
     /// 状态变为断开
     Disconnected,
     /// 进入重连中
-    Reconnecting {
-        attempt: u32,
-        delay_secs: u64,
-    },
+    Reconnecting { attempt: u32, delay_secs: u64 },
     /// 连接错误
-    Error {
-        message: String,
-    },
+    Error { message: String },
     /// 重连成功
     Reconnected,
     /// 重连失败（达到最大重试次数）
-    ReconnectFailed {
-        attempts: u32,
-        last_error: String,
-    },
+    ReconnectFailed { attempts: u32, last_error: String },
 }
 
 /// 生命周期管理器
@@ -108,9 +100,7 @@ impl LifecycleManager {
                 // 连接中不需要特殊事件
             }
             ConnectionStatus::Error(msg) => {
-                let _ = self.event_tx.send(LifecycleEvent::Error {
-                    message: msg.clone(),
-                });
+                let _ = self.event_tx.send(LifecycleEvent::Error { message: msg.clone() });
             }
         }
 
@@ -133,9 +123,7 @@ impl LifecycleManager {
         let status = self.status.read().await;
         matches!(
             *status,
-            ConnectionStatus::Connected
-                | ConnectionStatus::Authed
-                | ConnectionStatus::Paired
+            ConnectionStatus::Connected | ConnectionStatus::Authed | ConnectionStatus::Paired
         )
     }
 

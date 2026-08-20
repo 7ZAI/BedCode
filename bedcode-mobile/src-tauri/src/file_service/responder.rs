@@ -17,8 +17,8 @@
 use crate::enums::file_service::FileServicePayload;
 use crate::enums::sync::FileTransferIntent;
 use crate::file_service::client::{
-    CreateUploadRequest, DownloadClient, DownloadRequest, TransferHandle, UploadClient,
-    UploadError, client_cursor_store, download_with_retry, endpoint, urlencode_path,
+    client_cursor_store, download_with_retry, endpoint, urlencode_path, CreateUploadRequest, DownloadClient,
+    DownloadRequest, TransferHandle, UploadClient, UploadError,
 };
 use crate::model::message::Message;
 use crate::system::error_boundary::spawn_with_error_boundary;
@@ -178,9 +178,7 @@ impl IntentResponder {
     async fn set_state(&self, id: &str, to: IntentState) -> Result<(), String> {
         {
             let mut intents = self.intents.lock().unwrap_or_else(|e| e.into_inner());
-            let record = intents
-                .get_mut(id)
-                .ok_or_else(|| format!("intent not found: {}", id))?;
+            let record = intents.get_mut(id).ok_or_else(|| format!("intent not found: {}", id))?;
             record.set_state(to)?;
         }
         let payload = serde_json::json!(
@@ -207,12 +205,7 @@ impl IntentResponder {
         let id = intent.intent_id.clone();
 
         // 去重：相同 intent_id 已存在（WS 重发）→ 忽略
-        if self
-            .intents
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(&id)
-        {
+        if self.intents.lock().unwrap_or_else(|e| e.into_inner()).contains_key(&id) {
             tracing::debug!(intent_id = %id, "intent already registered, skip");
             return;
         }
@@ -380,17 +373,12 @@ impl IntentResponder {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(intent_id)
-            .ok_or_else(|| {
-                crate::AppError::NotFound(format!("intent approval not found: {}", intent_id))
-            })?;
+            .ok_or_else(|| crate::AppError::NotFound(format!("intent approval not found: {}", intent_id)))?;
         let _ = tx.send(Ok(()));
         let intent_id_owned = intent_id.to_string();
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "intent_approve_cancel_notification",
-            async move {
-                crate::file_service::notify::cancel_intent_notification(&intent_id_owned).await;
-            },
-        );
+        crate::system::error_boundary::spawn_with_error_boundary("intent_approve_cancel_notification", async move {
+            crate::file_service::notify::cancel_intent_notification(&intent_id_owned).await;
+        });
         Ok(())
     }
 
@@ -401,25 +389,17 @@ impl IntentResponder {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(intent_id)
-            .ok_or_else(|| {
-                crate::AppError::NotFound(format!("intent approval not found: {}", intent_id))
-            })?;
+            .ok_or_else(|| crate::AppError::NotFound(format!("intent approval not found: {}", intent_id)))?;
         let _ = tx.send(Err("user-rejected".to_string()));
         let intent_id_owned = intent_id.to_string();
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "intent_reject_cancel_notification",
-            async move {
-                crate::file_service::notify::cancel_intent_notification(&intent_id_owned).await;
-            },
-        );
+        crate::system::error_boundary::spawn_with_error_boundary("intent_reject_cancel_notification", async move {
+            crate::file_service::notify::cancel_intent_notification(&intent_id_owned).await;
+        });
         Ok(())
     }
 
     fn remove_record(&self, intent_id: &str) {
-        self.intents
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(intent_id);
+        self.intents.lock().unwrap_or_else(|e| e.into_inner()).remove(intent_id);
         self.approvals
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -429,12 +409,7 @@ impl IntentResponder {
     // ==================== 执行 ====================
 
     /// 启动执行任务（并发信号量护栏；状态 Received/Approved → Executing）
-    async fn spawn_execution(
-        &self,
-        intent_id: String,
-        action: IntentAction,
-        intent: FileTransferIntent,
-    ) {
+    async fn spawn_execution(&self, intent_id: String, action: IntentAction, intent: FileTransferIntent) {
         let semaphore = { self.semaphore.read().await.clone() };
         let permit = match semaphore.acquire_owned().await {
             Ok(p) => p,
@@ -541,10 +516,7 @@ impl IntentResponder {
 
 /// 本地已写字节（断点续传真源；无记录时为 0）
 fn resume_offset(intent_id: &str) -> u64 {
-    client_cursor_store()
-        .get(intent_id)
-        .map(|c| c.position)
-        .unwrap_or(0)
+    client_cursor_store().get(intent_id).map(|c| c.position).unwrap_or(0)
 }
 
 /// 执行终局
@@ -567,11 +539,7 @@ struct HandledTransfer {
 /// 命名视角 = 手机侧动作：intent{push}（桌面推文件给手机）→ 手机 Download
 /// （GET 桌面文件落盘）；intent{pull}（桌面拉手机文件）→ 手机 Upload（POST
 /// 桌面上传引擎）。函数名与手机动作一致，与业务方向互补而非反转
-async fn run_action(
-    handle: &TransferHandle,
-    intent: &FileTransferIntent,
-    action: IntentAction,
-) -> HandledTransfer {
+async fn run_action(handle: &TransferHandle, intent: &FileTransferIntent, action: IntentAction) -> HandledTransfer {
     match action {
         IntentAction::Download => run_download(handle, intent).await,
         IntentAction::Upload => run_upload(handle, intent).await,
@@ -582,7 +550,6 @@ async fn run_action(
 
 /// 解析桌面 HTTP 端点（base + JWT）：共享实现见
 /// [`crate::file_service::client::desktop_http_endpoint`]
-
 
 /// 从桌面 peer 记录解析端点挂载（plugin_id + mount_name）
 ///
@@ -605,10 +572,7 @@ async fn resolve_desktop_mount(op: FileOperation) -> Result<(String, String), St
 }
 
 /// push：下载桌面文件落本地（Range 续传 + HEAD 指纹比对）
-async fn run_download(
-    handle: &TransferHandle,
-    intent: &FileTransferIntent,
-) -> HandledTransfer {
+async fn run_download(handle: &TransferHandle, intent: &FileTransferIntent) -> HandledTransfer {
     let fail = |e: &str| HandledTransfer {
         transferred: handle_progress(handle).0,
         total: intent.size,
@@ -659,14 +623,15 @@ async fn run_download(
         Err(_) if handle.is_cancelled() => Outcome::Cancelled,
         Err(e) => Outcome::Failed(e.to_string()),
     };
-    HandledTransfer { transferred, total: intent.size, outcome }
+    HandledTransfer {
+        transferred,
+        total: intent.size,
+        outcome,
+    }
 }
 
 /// pull：本地/SAF 文件 POST 给桌面（session 编排；batch_id 随 intent 下发）
-async fn run_upload(
-    handle: &TransferHandle,
-    intent: &FileTransferIntent,
-) -> HandledTransfer {
+async fn run_upload(handle: &TransferHandle, intent: &FileTransferIntent) -> HandledTransfer {
     let fail = |e: &str| HandledTransfer {
         transferred: handle_progress(handle).0,
         total: intent.size,
@@ -708,7 +673,11 @@ async fn run_upload(
         Err(UploadError::DuplicateName(_)) => Outcome::Failed("duplicate-name".to_string()),
         Err(e) => Outcome::Failed(e.to_string()),
     };
-    HandledTransfer { transferred, total: intent.size, outcome }
+    HandledTransfer {
+        transferred,
+        total: intent.size,
+        outcome,
+    }
 }
 
 fn handle_progress(handle: &TransferHandle) -> (u64, u64) {
@@ -720,10 +689,7 @@ fn handle_progress(handle: &TransferHandle) -> (u64, u64) {
 // 每 500ms 一次 tick：有推进 → `transfer_progress`；静默 ≥10s → `transfer_heartbeat`。
 // 循环句柄为 handle 的 child token（父取消即停；任务正常结束时由调用方 cancel）。
 
-fn spawn_progress_loop(
-    handle: &TransferHandle,
-    intent: &FileTransferIntent,
-) -> CancellationToken {
+fn spawn_progress_loop(handle: &TransferHandle, intent: &FileTransferIntent) -> CancellationToken {
     let token = handle.token().child_token();
     let token_for_task = token.clone();
     let handle_cl = handle.clone();

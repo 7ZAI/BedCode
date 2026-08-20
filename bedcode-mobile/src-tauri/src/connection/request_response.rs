@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
-use crate::model::message::Message;
 use crate::connection::codec::{JsonCodec, MessageCodec};
+use crate::model::message::Message;
 use crate::Result;
 
 /// 等待中的请求
@@ -62,7 +62,7 @@ impl RequestResponseManager {
         // 解码消息
         let message = match self.codec.decode(WsMsg::Text(text)) {
             Ok(Some(msg)) => msg,
-            Ok(None) => return None,  // 协议消息
+            Ok(None) => return None, // 协议消息
             Err(e) => {
                 tracing::warn!("[RequestResponseManager] Failed to decode: {}", e);
                 return None;
@@ -88,7 +88,7 @@ impl RequestResponseManager {
             if let Some(pending) = self.pending.lock().await.remove(&id) {
                 tracing::debug!("[RequestResponseManager] ✓ Matched pending request for id={}", id);
                 let _ = pending.tx.send(Ok(message));
-                return None;  // 已匹配，不返回消息
+                return None; // 已匹配，不返回消息
             }
             // 调试终端组件订阅偏移量时使用：推送消息（含终端输出广播）每帧都会命中
             // 此分支（带 message_id 但无 pending 请求），逐帧 WARN 刷屏，已注释；
@@ -208,7 +208,10 @@ mod tests {
         // 未注册的 message_id：无法匹配，消息应原样返回给调用方（推送消息语义）
         let mgr = RequestResponseManager::new();
         let result = mgr.try_match(text_frame(&terminal_with_id("ghost"))).await;
-        assert_eq!(result.map(|m| m.message_id().map(|s| s.to_string())), Some(Some("ghost".to_string())));
+        assert_eq!(
+            result.map(|m| m.message_id().map(|s| s.to_string())),
+            Some(Some("ghost".to_string()))
+        );
         assert_eq!(mgr.pending_count().await, 0);
     }
 
@@ -229,7 +232,10 @@ mod tests {
         let frame = text_frame(&terminal_with_id("m-1"));
         assert!(mgr.try_match(frame.clone()).await.is_none());
         let second = mgr.try_match(frame).await;
-        assert_eq!(second.map(|m| m.message_id().map(|s| s.to_string())), Some(Some("m-1".to_string())));
+        assert_eq!(
+            second.map(|m| m.message_id().map(|s| s.to_string())),
+            Some(Some("m-1".to_string()))
+        );
     }
 
     #[tokio::test]

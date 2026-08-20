@@ -22,7 +22,12 @@ impl ClientRouteHandler for FileServiceHandler {
     async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
         if let Message::FileService { payload, .. } = message {
             match payload {
-                FileServicePayload::Announce { port, token, device_name, mounts } => {
+                FileServicePayload::Announce {
+                    port,
+                    token,
+                    device_name,
+                    mounts,
+                } => {
                     tracing::info!(port, mounts = mounts.len(), "desktop file service announced");
                     apply_desktop_announce(port, token, device_name, mounts).await;
                 }
@@ -122,7 +127,9 @@ impl ClientRouteHandler for FileServiceHandler {
                 }
                 // === v2.1 以下变体为 手机 → 桌面 方向（响应器发送），桌面不应回推 ===
                 // 兜底：旧/异常对端回推时仅记录，不阻塞路由
-                FileServicePayload::IntentAck { intent_id, decision, .. } => {
+                FileServicePayload::IntentAck {
+                    intent_id, decision, ..
+                } => {
                     tracing::warn!(intent_id = %intent_id, decision = %decision, "unexpected inbound IntentAck (M→D variant received)");
                 }
                 FileServicePayload::TransferProgress { intent_id, .. } => {
@@ -169,15 +176,16 @@ async fn apply_desktop_announce(port: u16, token: String, device_name: String, m
     let fs = crate::state::get_file_service();
     let registry = &fs.registry;
 
-    let mut peer = registry.get_peer(&peer_id).await.unwrap_or_else(|| {
-        bedcode_plugin_api_mobile::PeerFileService {
+    let mut peer = registry
+        .get_peer(&peer_id)
+        .await
+        .unwrap_or_else(|| bedcode_plugin_api_mobile::PeerFileService {
             ip: target.address.clone(),
             port: target.port,
             token: crate::state::get_global_token(),
             device_name: String::new(),
             mounts: Vec::new(),
-        }
-    });
+        });
     peer.ip = target.address.clone();
     peer.port = port;
     // 公告携带对端真实设备名（桌面端 SystemInfo 兜底保证非空）

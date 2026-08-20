@@ -13,7 +13,7 @@
 //!
 //! ApiResponse 信封解析：`{ code, message, data }`（camelCase），data 为会话信息。
 
-use super::{TransferHandle, endpoint};
+use super::{endpoint, TransferHandle};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -24,11 +24,7 @@ use std::sync::Arc;
 pub enum UploadError {
     /// HTTP 非 2xx（403 批未批准 / 404 会话不存在 / 500 服务端）
     #[error("upload HTTP {status} for {url}: {message}")]
-    Http {
-        status: u16,
-        url: String,
-        message: String,
-    },
+    Http { status: u16, url: String, message: String },
     /// 请求/流式网络错误（可重试：重查偏移续传）
     #[error("upload network error: {0}")]
     Network(String),
@@ -142,11 +138,7 @@ impl UploadClient {
     }
 
     /// GET 断点重查（服务端已收字节；404 → SessionNotFound）
-    pub async fn query_session(
-        &self,
-        url: &str,
-        auth: &str,
-    ) -> Result<UploadSessionInfo, UploadError> {
+    pub async fn query_session(&self, url: &str, auth: &str) -> Result<UploadSessionInfo, UploadError> {
         let resp = self
             .client
             .get(url)
@@ -176,14 +168,12 @@ impl UploadClient {
     ) -> Result<u64, UploadError> {
         let url_with_offset = format!("{}?offset={}", url, offset);
         let transferred = handle.transferred_handle();
-        let body = reqwest::Body::wrap_stream(
-            tokio_util::io::ReaderStream::new(source).map(move |item| {
-                item.map(|bytes| {
-                    transferred.fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                    bytes
-                })
-            }),
-        );
+        let body = reqwest::Body::wrap_stream(tokio_util::io::ReaderStream::new(source).map(move |item| {
+            item.map(|bytes| {
+                transferred.fetch_add(bytes.len() as u64, std::sync::atomic::Ordering::Relaxed);
+                bytes
+            })
+        }));
         let resp = self
             .client
             .put(&url_with_offset)
@@ -201,24 +191,17 @@ impl UploadClient {
         let status = resp.status().as_u16();
         match status {
             200..=299 => {
-                let envelope = parse_json_envelope::<UploadSessionInfo>(resp, &url_with_offset, "append")
-                    .await?;
+                let envelope = parse_json_envelope::<UploadSessionInfo>(resp, &url_with_offset, "append").await?;
                 envelope
                     .data
                     .map(|d| d.received)
                     .ok_or_else(|| UploadError::Io(format!("append {}: missing data", url)))
             }
             409 => {
-                let msg = resp
-                    .text()
-                    .await
-                    .unwrap_or_else(|_| "offset mismatch".to_string());
+                let msg = resp.text().await.unwrap_or_else(|_| "offset mismatch".to_string());
                 // 从错误消息中尝试提取服务端已收字节（警告性；以重查为准）
                 let expected = extract_expected_offset(&msg).unwrap_or(0);
-                Err(UploadError::OffsetMismatch {
-                    expected,
-                    got: offset,
-                })
+                Err(UploadError::OffsetMismatch { expected, got: offset })
             }
             404 => Err(UploadError::SessionNotFound(url.to_string())),
             _ => {
@@ -233,11 +216,7 @@ impl UploadClient {
     }
 
     /// POST complete（原子改名）；409 → DuplicateName，404 → SessionNotFound
-    pub async fn complete_session(
-        &self,
-        url: &str,
-        auth: &str,
-    ) -> Result<(), CompleteError> {
+    pub async fn complete_session(&self, url: &str, auth: &str) -> Result<(), CompleteError> {
         let resp = self
             .client
             .post(url)
@@ -264,11 +243,7 @@ impl UploadClient {
     }
 
     /// DELETE 取消会话（清理服务端 .part）
-    pub async fn cancel_session(
-        &self,
-        url: &str,
-        auth: &str,
-    ) -> Result<(), UploadError> {
+    pub async fn cancel_session(&self, url: &str, auth: &str) -> Result<(), UploadError> {
         let resp = self
             .client
             .delete(url)
@@ -326,11 +301,7 @@ impl UploadClient {
                 Some(s) => s,
                 None => {
                     match self
-                        .create_session(
-                            &endpoint(base, plugin_id, mount_path, "upload"),
-                            auth,
-                            create,
-                        )
+                        .create_session(&endpoint(base, plugin_id, mount_path, "upload"), auth, create)
                         .await
                     {
                         Ok(info) => info.session_id,
@@ -403,19 +374,13 @@ impl UploadClient {
                             received,
                         })
                     }
-                    Err(CompleteError::DuplicateName(p)) => {
-                        return Err(UploadError::DuplicateName(p))
-                    }
+                    Err(CompleteError::DuplicateName(p)) => return Err(UploadError::DuplicateName(p)),
                     Err(CompleteError::SessionNotFound(_)) => {
                         session_id = None;
                         continue;
                     }
                     Err(CompleteError::Http { status, url, message }) => {
-                        return Err(UploadError::Http {
-                            status,
-                            url,
-                            message,
-                        })
+                        return Err(UploadError::Http { status, url, message })
                     }
                     Err(CompleteError::Network(e)) => {
                         network_failures += 1;
@@ -437,23 +402,14 @@ impl UploadClient {
                 .map_err(UploadError::Io)?;
 
             // 4. append 流式上传
-            let append_url =
-                endpoint(base, plugin_id, mount_path, &format!("upload/{}", sid));
-            match self
-                .append_stream(&append_url, auth, received, source, handle)
-                .await
-            {
+            let append_url = endpoint(base, plugin_id, mount_path, &format!("upload/{}", sid));
+            match self.append_stream(&append_url, auth, received, source, handle).await {
                 Ok(new_received) => {
                     if new_received >= create.size {
                         // 全量收齐 → complete
                         match self
                             .complete_session(
-                                &endpoint(
-                                    base,
-                                    plugin_id,
-                                    mount_path,
-                                    &format!("upload/{}/complete", sid),
-                                ),
+                                &endpoint(base, plugin_id, mount_path, &format!("upload/{}/complete", sid)),
                                 auth,
                             )
                             .await
@@ -464,9 +420,7 @@ impl UploadClient {
                                     received: new_received,
                                 })
                             }
-                            Err(CompleteError::DuplicateName(p)) => {
-                                return Err(UploadError::DuplicateName(p))
-                            }
+                            Err(CompleteError::DuplicateName(p)) => return Err(UploadError::DuplicateName(p)),
                             Err(CompleteError::SessionNotFound(_)) => {
                                 session_id = None;
                                 continue;
@@ -555,12 +509,8 @@ async fn parse_json_envelope<T: for<'de> Deserialize<'de>>(
         .text()
         .await
         .map_err(|e| UploadError::Network(format!("{}: read body failed: {}", op, e)))?;
-    serde_json::from_str(&text).map_err(|e| {
-        UploadError::Io(format!(
-            "{}: invalid ApiResponse JSON from '{}': {}",
-            op, url, e
-        ))
-    })
+    serde_json::from_str(&text)
+        .map_err(|e| UploadError::Io(format!("{}: invalid ApiResponse JSON from '{}': {}", op, url, e)))
 }
 
 /// 打开上传源：本地路径（tokio::fs，可 seek 真续传）或 content:// SAF 流
@@ -592,9 +542,9 @@ async fn open_source(
             eof: false,
         }))
     } else {
-        let mut file = tokio::fs::File::open(Path::new(path)).await.map_err(|e| {
-            format!("open local file '{}' failed: {}", path, e)
-        })?;
+        let mut file = tokio::fs::File::open(Path::new(path))
+            .await
+            .map_err(|e| format!("open local file '{}' failed: {}", path, e))?;
         if offset > 0 {
             use tokio::io::AsyncSeekExt;
             file.seek(std::io::SeekFrom::Start(offset))
@@ -692,15 +642,24 @@ mod tests {
     }
     impl Resp {
         fn json(status: u16, body: impl Into<Vec<u8>>) -> Self {
-            Self { status, body: body.into() }
+            Self {
+                status,
+                body: body.into(),
+            }
         }
         fn ok_data(data: serde_json::Value) -> Self {
             let payload = serde_json::json!({ "code": 0, "message": "ok", "data": data });
-            Self { status: 200, body: serde_json::to_vec(&payload).unwrap() }
+            Self {
+                status: 200,
+                body: serde_json::to_vec(&payload).unwrap(),
+            }
         }
         fn err(status: u16, msg: &str) -> Self {
             let payload = serde_json::json!({ "code": status, "message": msg });
-            Self { status, body: serde_json::to_vec(&payload).unwrap() }
+            Self {
+                status,
+                body: serde_json::to_vec(&payload).unwrap(),
+            }
         }
     }
 
@@ -721,9 +680,7 @@ mod tests {
         dup_complete: bool,
     }
 
-    async fn spawn_session_server(
-        state: Arc<Mutex<MockState>>,
-    ) -> SocketAddr {
+    async fn spawn_session_server(state: Arc<Mutex<MockState>>) -> SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move {
@@ -733,7 +690,9 @@ mod tests {
                 };
                 let state = state.clone();
                 tokio::spawn(async move {
-                    let Some(req) = read_request(&mut sock).await else { return };
+                    let Some(req) = read_request(&mut sock).await else {
+                        return;
+                    };
                     let resp = route(&req, &state);
                     let reason = match resp.status {
                         200 => "OK",
@@ -810,13 +769,15 @@ mod tests {
             }
             body.truncate(content_length);
         }
-        Some(Req { method, path, headers, body })
+        Some(Req {
+            method,
+            path,
+            headers,
+            body,
+        })
     }
 
-    async fn read_chunked(
-        sock: &mut tokio::net::TcpStream,
-        mut buf: Vec<u8>,
-    ) -> Option<Vec<u8>> {
+    async fn read_chunked(sock: &mut tokio::net::TcpStream, mut buf: Vec<u8>) -> Option<Vec<u8>> {
         let mut tmp = [0u8; 4096];
         let mut out = Vec::new();
         loop {
@@ -833,8 +794,7 @@ mod tests {
             };
             let line = String::from_utf8_lossy(&buf[..line_end]).to_string();
             buf.drain(..line_end + 2);
-            let size =
-                usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).ok()?;
+            let size = usize::from_str_radix(line.split(';').next().unwrap_or("").trim(), 16).ok()?;
             if size == 0 {
                 return Some(out);
             }
@@ -862,8 +822,7 @@ mod tests {
 
         if req.method == "POST" && path.ends_with("/upload") {
             // 建会话
-            let body: serde_json::Value =
-                serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
+            let body: serde_json::Value = serde_json::from_slice(&req.body).unwrap_or(serde_json::Value::Null);
             if req.header("authorization").is_none() || body.is_null() {
                 return Resp::err(403, "batch-context-required");
             }

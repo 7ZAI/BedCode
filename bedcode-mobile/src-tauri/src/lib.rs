@@ -6,6 +6,7 @@ pub mod connection;
 pub mod enums;
 pub mod file_service;
 pub mod handler;
+pub mod mdns;
 pub mod model;
 pub mod ocr;
 pub mod plugin;
@@ -13,17 +14,16 @@ pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
-pub mod mdns;
 
 // Re-export core types
-pub use system::error::{AppError, Result};
 pub use system::config;
+pub use system::error::{AppError, Result};
 
+use android_logger::Config;
 use connection::PairingService;
+use log::LevelFilter;
 use std::sync::Arc;
 use tauri::Manager;
-use android_logger::Config;
-use log::LevelFilter;
 
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
@@ -35,11 +35,7 @@ pub fn run() {
     // 尽可能早地初始化日志
     // tracing 的 "log" feature 将 tracing:: 宏自动转发到 log crate
     // android_logger 将 log:: 输出发送到 adb logcat
-    android_logger::init_once(
-        Config::default()
-            .with_max_level(LevelFilter::Debug)
-            .with_tag("BedCode")
-    );
+    android_logger::init_once(Config::default().with_max_level(LevelFilter::Debug).with_tag("BedCode"));
     tracing::info!("BedCode Mobile early logging init (tracing → log → logcat)");
 
     tracing::info!("Building Tauri application...");
@@ -79,10 +75,7 @@ pub fn run() {
             ));
 
             // 初始化移动端设置管理器 (JSON 文件存储)
-            let app_data_dir = app_handle
-                .path()
-                .app_data_dir()
-                .expect("Failed to get app data dir");
+            let app_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
@@ -90,8 +83,7 @@ pub fn run() {
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
             let db_path = app_data_dir.join("bedcode_plugins.db");
             let plugin_db = Arc::new(std::sync::Mutex::new(
-                rusqlite::Connection::open(&db_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?
+                rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
             ));
 
             // 创建插件管理器（WASM 运行时延迟初始化）
@@ -121,8 +113,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     // 采集并挂载全局系统信息（OS / 设备名称 / IP），
                     // 并同步设备名到 AuthManager，配对时上报真实用户设备名
-                    let system_info =
-                        crate::system::info::SystemInfo::collect().await;
+                    let system_info = crate::system::info::SystemInfo::collect().await;
                     let device_name = system_info.device_name.clone();
                     crate::state::init_system_info(system_info);
                     crate::state::get_auth_manager()
@@ -138,7 +129,9 @@ pub fn run() {
                     if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
                         &app_data_dir_for_extract,
                         &app_version,
-                    ).await {
+                    )
+                    .await
+                    {
                         tracing::warn!("Failed to extract bundled plugins: {}", e);
                     }
 

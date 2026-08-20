@@ -114,9 +114,7 @@ pub async fn run_supervisor(
                                     }
                                 });
                             } else {
-                                tracing::info!(
-                                    "[EventWsSupervisor] Target changed since establish, skip self-heal"
-                                );
+                                tracing::info!("[EventWsSupervisor] Target changed since establish, skip self-heal");
                             }
                             break;
                         }

@@ -59,11 +59,7 @@ pub fn delete_models(data_dir: &Path) -> Result<(bool, u64)> {
     std::fs::remove_dir_all(&dir).map_err(|e| {
         crate::AppError::Io(std::io::Error::new(
             e.kind(),
-            format!(
-                "plugin_ocr_delete_models: failed to remove {}: {}",
-                dir.display(),
-                e
-            ),
+            format!("plugin_ocr_delete_models: failed to remove {}: {}", dir.display(), e),
         ))
     })?;
     Ok((true, freed))
@@ -81,8 +77,7 @@ pub async fn restore_models(data_dir: &Path, app_version: &str) -> Result<bool> 
         let count = crate::plugin::android_plugins::extract_ocr_models(app_version).await?;
         if count == 0 {
             return Err(crate::AppError::Plugin(
-                "plugin_ocr_restore_models: no model assets in APK (resources/ocr_models)"
-                    .into(),
+                "plugin_ocr_restore_models: no model assets in APK (resources/ocr_models)".into(),
             ));
         }
         if !models_present(data_dir) {
@@ -97,8 +92,7 @@ pub async fn restore_models(data_dir: &Path, app_version: &str) -> Result<bool> 
     #[cfg(not(target_os = "android"))]
     {
         Err(crate::AppError::Internal(
-            "plugin_ocr_restore_models: no APK assets on this platform (models extract on Android)"
-                .into(),
+            "plugin_ocr_restore_models: no APK assets on this platform (models extract on Android)".into(),
         ))
     }
 }
@@ -109,11 +103,7 @@ mod tests {
 
     /// 独立临时目录（带进程 id 防并行测试互踩），用后清理
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "bedcode-ocr-models-test-{}-{}",
-            tag,
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("bedcode-ocr-models-test-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -132,8 +122,7 @@ mod tests {
     fn present_when_dir_has_files() {
         let dir = temp_dir("present");
         std::fs::create_dir_all(models_dir(&dir)).unwrap();
-        std::fs::write(models_dir(&dir).join("ch_PP-OCRv4_det_infer.onnx"), vec![0u8; 1024])
-            .unwrap();
+        std::fs::write(models_dir(&dir).join("ch_PP-OCRv4_det_infer.onnx"), vec![0u8; 1024]).unwrap();
         assert!(models_present(&dir));
         assert_eq!(models_bytes(&dir), 1024);
     }

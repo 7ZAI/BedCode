@@ -13,34 +13,25 @@ use crate::connection::PairingService;
 
 /// 生成配对码
 #[tauri::command]
-pub async fn generate_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<PairingCode> {
+pub async fn generate_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<PairingCode> {
     Ok(pairing_service.generate_code().await)
 }
 
 /// 获取当前配对码
 #[tauri::command]
-pub async fn get_current_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<Option<PairingCode>> {
+pub async fn get_current_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<Option<PairingCode>> {
     Ok(pairing_service.get_current_code().await)
 }
 
 /// 验证配对码
 #[tauri::command]
-pub async fn verify_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-    code: String,
-) -> Result<bool> {
+pub async fn verify_pairing_code(pairing_service: State<'_, Arc<PairingService>>, code: String) -> Result<bool> {
     Ok(pairing_service.verify_and_consume_code(&code).await)
 }
 
 /// 清除当前配对码
 #[tauri::command]
-pub async fn clear_pairing_code(
-    pairing_service: State<'_, Arc<PairingService>>,
-) -> Result<()> {
+pub async fn clear_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<()> {
     pairing_service.clear_code().await;
     Ok(())
 }
@@ -49,17 +40,14 @@ pub async fn clear_pairing_code(
 
 /// 获取应用设置
 #[tauri::command]
-pub async fn get_app_settings(
-    app_handle: tauri::AppHandle,
-) -> crate::Result<crate::system::config::AppConfig> {
+pub async fn get_app_settings(app_handle: tauri::AppHandle) -> crate::Result<crate::system::config::AppConfig> {
     let config_path = app_handle
         .path()
         .app_data_dir()
         .map(|p| p.join("config.json"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
 
-    crate::system::config::AppConfig::load(&config_path)
-        .map_err(|e| crate::AppError::Config(e.to_string()))
+    crate::system::config::AppConfig::load(&config_path).map_err(|e| crate::AppError::Config(e.to_string()))
 }
 
 /// 保存应用设置

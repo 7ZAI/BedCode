@@ -8,7 +8,6 @@ use tauri::plugin::{Builder, PluginHandle};
 /// 已注册的 DeviceInfoPlugin 句柄（仅 Android 平台使用）
 static DEVICE_INFO_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
-
 /// 注册 DeviceInfoPlugin（读取系统设备信息：用户设备名 / 机型 / OS 版本）
 ///
 /// gen/android 重建恢复清单：DeviceInfoPlugin.kt 须恢复
@@ -43,7 +42,6 @@ pub struct AndroidDeviceInfo {
     pub sdk_int: i32,
 }
 
-
 /// 获取 Android 系统设备信息
 ///
 /// 经 Kotlin DeviceInfoPlugin 调用。仅 Android 平台可用；非 Android 返回 None。
@@ -58,14 +56,29 @@ pub async fn get_android_device_info() -> Option<AndroidDeviceInfo> {
         return None;
     }
     Some(AndroidDeviceInfo {
-        device_name: response.get("deviceName").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        model: response.get("model").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        manufacturer: response.get("manufacturer").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
-        os_version: response.get("osVersion").and_then(|v| v.as_str()).unwrap_or_default().to_string(),
+        device_name: response
+            .get("deviceName")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        model: response
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        manufacturer: response
+            .get("manufacturer")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        os_version: response
+            .get("osVersion")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
         sdk_int: response.get("sdkInt").and_then(|v| v.as_i64()).unwrap_or_default() as i32,
     })
 }
-
 
 /// 非 Android 平台无系统设备信息
 #[cfg(not(target_os = "android"))]

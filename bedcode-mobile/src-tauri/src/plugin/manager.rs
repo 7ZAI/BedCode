@@ -2,7 +2,6 @@
 //!
 //! 插件生命周期管理 — WASM 动态加载、激活、停用、状态持久化
 
-use async_trait::async_trait;
 use crate::plugin::approval::{
     compute_dir_hash, effective_permissions, verify_approval, ApprovalStatus, PluginApprovalStore,
 };
@@ -11,10 +10,11 @@ use crate::plugin::registry::builtin_manifests;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::*;
 use crate::plugin::wasm_runtime::{LoadedComponentPlugin, WasmHostContext, WasmRuntime};
-use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::constants::plugin::PLUGIN_DATA_DIR;
+use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::settings::SettingsManager;
 use crate::Result;
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -78,8 +78,7 @@ impl PluginManager {
         let mut plugins = HashMap::new();
         for manifest in builtin_manifests() {
             let id = manifest.id.clone();
-            let permissions: std::collections::HashSet<String> =
-                manifest.permissions.iter().cloned().collect();
+            let permissions: std::collections::HashSet<String> = manifest.permissions.iter().cloned().collect();
             plugins.insert(
                 id,
                 LoadedPlugin {
@@ -114,12 +113,7 @@ impl PluginManager {
     /// async：内部需 await 注入 dispatcher，禁止在运行时内使用 block_on（会 panic）
     pub async fn init_wasm_runtime(&self) -> crate::Result<()> {
         // AOT 缓存目录：宿主 cache 目录（非插件目录，防反序列化产物被投毒）
-        let aot_cache_dir = self
-            .app_handle
-            .path()
-            .app_cache_dir()
-            .ok()
-            .map(|d| d.join("wasm-aot"));
+        let aot_cache_dir = self.app_handle.path().app_cache_dir().ok().map(|d| d.join("wasm-aot"));
         if let Some(dir) = &aot_cache_dir {
             if let Err(e) = std::fs::create_dir_all(dir) {
                 tracing::warn!(
@@ -135,19 +129,18 @@ impl PluginManager {
         let plugins = self.plugins.clone();
         let settings = self.settings.clone();
         let app_handle = self.app_handle.clone();
-        let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> =
-            Arc::new(move |plugin_id, error| {
-                let plugins = plugins.clone();
-                let settings = settings.clone();
-                let app_handle = app_handle.clone();
-                let pid = plugin_id.to_string();
-                let err = error.to_string();
-                // async block 需要独占所有权，外层克隆供 emit/日志使用
-                let pid_clone = pid.clone();
-                let err_clone = err.clone();
+        let status_reporter: Arc<dyn Fn(&str, &str) + Send + Sync> = Arc::new(move |plugin_id, error| {
+            let plugins = plugins.clone();
+            let settings = settings.clone();
+            let app_handle = app_handle.clone();
+            let pid = plugin_id.to_string();
+            let err = error.to_string();
+            // async block 需要独占所有权，外层克隆供 emit/日志使用
+            let pid_clone = pid.clone();
+            let err_clone = err.clone();
 
-                tokio::task::block_in_place(|| {
-                    tokio::runtime::Handle::current().block_on(async move {
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async move {
                         // 置 Error 状态
                         let mut map = plugins.write().await;
                         if let Some(p) = map.get_mut(&pid_clone) {
@@ -160,18 +153,21 @@ impl PluginManager {
                             tracing::warn!(plugin_id = %pid_clone, error = %e, "Failed to persist disabled state after plugin error");
                         }
                     });
-                });
+            });
 
-                // 通知前端
-                if let Err(e) = app_handle.emit("plugin:error", serde_json::json!({
+            // 通知前端
+            if let Err(e) = app_handle.emit(
+                "plugin:error",
+                serde_json::json!({
                     "pluginId": pid,
                     "error": err,
-                })) {
-                    tracing::error!(plugin_id = %pid, error = %e, "Failed to emit plugin:error event");
-                }
+                }),
+            ) {
+                tracing::error!(plugin_id = %pid, error = %e, "Failed to emit plugin:error event");
+            }
 
-                tracing::info!(plugin_id = %pid, error = %err, "Plugin reported error, marked Error and disabled");
-            });
+            tracing::info!(plugin_id = %pid, error = %err, "Plugin reported error, marked Error and disabled");
+        });
 
         let host_ctx = Arc::new(WasmHostContext::new(
             self.plugin_db.clone(),
@@ -212,11 +208,7 @@ impl PluginManager {
             return;
         };
 
-        let (plugins, wasm_plugins) = PluginLoader::load_all(
-            &self.plugins_dir,
-            wasm_runtime,
-            wasm_host_ctx,
-        );
+        let (plugins, wasm_plugins) = PluginLoader::load_all(&self.plugins_dir, wasm_runtime, wasm_host_ctx);
 
         let mut current_plugins = self.plugins.write().await;
         for (id, plugin) in plugins {
@@ -255,11 +247,7 @@ impl PluginManager {
             if self.is_trusted_source(id).await {
                 continue;
             }
-            let enabled = match self
-                .settings
-                .get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, id))
-                .await
-            {
+            let enabled = match self.settings.get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, id)).await {
                 Ok(Some(value)) => value == "true",
                 Ok(None) => false,
                 Err(e) => {
@@ -292,14 +280,10 @@ impl PluginManager {
             };
             let hash = {
                 let ext = extension_path.clone();
-                tokio::task::spawn_blocking(move || {
-                    compute_dir_hash(std::path::Path::new(&ext))
-                })
-                .await
-                .map_err(|e| {
-                    crate::AppError::Plugin(format!("Approval hash task failed: {}", e))
-                })
-                .and_then(|r| r)
+                tokio::task::spawn_blocking(move || compute_dir_hash(std::path::Path::new(&ext)))
+                    .await
+                    .map_err(|e| crate::AppError::Plugin(format!("Approval hash task failed: {}", e)))
+                    .and_then(|r| r)
             };
             match hash {
                 Ok(hash) => {
@@ -340,7 +324,11 @@ impl PluginManager {
         self.auto_approve_legacy(&plugin_ids).await;
 
         for id in plugin_ids {
-            if let Ok(Some(value)) = self.settings.get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &id)).await {
+            if let Ok(Some(value)) = self
+                .settings
+                .get(&format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, &id))
+                .await
+            {
                 if value == "true" {
                     if let Err(e) = self.activate(&id, app_handle).await {
                         tracing::warn!(plugin_id = %id, error = %e, "Failed to auto-activate plugin on startup");
@@ -362,9 +350,7 @@ impl PluginManager {
         let plugins = self.plugins.read().await;
         plugins
             .get(plugin_id)
-            .map(|p| {
-                p.source == PluginSource::ApkAsset || p.source == PluginSource::FrontendOnly
-            })
+            .map(|p| p.source == PluginSource::ApkAsset || p.source == PluginSource::FrontendOnly)
             .unwrap_or(false)
     }
 
@@ -382,9 +368,9 @@ impl PluginManager {
         }
         let (extension_path, version, requested) = {
             let plugins = self.plugins.read().await;
-            let plugin = plugins.get(plugin_id).ok_or_else(|| {
-                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
-            })?;
+            let plugin = plugins
+                .get(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
             (
                 plugin.extension_path.clone(),
                 plugin.manifest.version.clone(),
@@ -394,12 +380,10 @@ impl PluginManager {
 
         let content_hash = {
             let ext = extension_path.clone();
-            tokio::task::spawn_blocking(move || {
-                compute_dir_hash(std::path::Path::new(&ext))
-            })
-            .await
-            .map_err(|e| crate::AppError::Plugin(format!("Approval hash task failed: {}", e)))?
-            .map_err(|e| crate::AppError::Plugin(format!("Failed to hash plugin dir: {}", e)))?
+            tokio::task::spawn_blocking(move || compute_dir_hash(std::path::Path::new(&ext)))
+                .await
+                .map_err(|e| crate::AppError::Plugin(format!("Approval hash task failed: {}", e)))?
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to hash plugin dir: {}", e)))?
         };
         self.approvals
             .approve(plugin_id, &requested, &content_hash, &version)
@@ -448,18 +432,11 @@ impl PluginManager {
                 let approval_for_hash = approval.clone();
                 let ext_for_hash = extension_path.clone();
                 tokio::task::spawn_blocking(move || {
-                    verify_approval(
-                        approval_for_hash.as_ref(),
-                        std::path::Path::new(&ext_for_hash),
-                    )
+                    verify_approval(approval_for_hash.as_ref(), std::path::Path::new(&ext_for_hash))
                 })
                 .await
-                .map_err(|e| {
-                    crate::AppError::Plugin(format!("Approval verify task failed: {}", e))
-                })?
-                .map_err(|e| {
-                    crate::AppError::Plugin(format!("Failed to verify plugin approval: {}", e))
-                })?
+                .map_err(|e| crate::AppError::Plugin(format!("Approval verify task failed: {}", e)))?
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to verify plugin approval: {}", e)))?
             };
             match status {
                 ApprovalStatus::Approved => {
@@ -633,21 +610,13 @@ impl PluginManager {
     /// 调用 WASM 插件命令
     ///
     /// 取实例句柄后 drop map 守卫，命令执行期间仅持单插件实例锁
-    pub async fn invoke_command(
-        &self,
-        plugin_id: &str,
-        command_name: &str,
-        args_json: &str,
-    ) -> Result<String> {
+    pub async fn invoke_command(&self, plugin_id: &str, command_name: &str, args_json: &str) -> Result<String> {
         let wasm_plugin = {
             let wasm_plugins = self.wasm_plugins.read().await;
             wasm_plugins.get(plugin_id).cloned()
         };
         let Some(wasm_plugin) = wasm_plugin else {
-            return Err(crate::AppError::Plugin(format!(
-                "WASM plugin not found: {}",
-                plugin_id
-            )));
+            return Err(crate::AppError::Plugin(format!("WASM plugin not found: {}", plugin_id)));
         };
 
         let mut loaded = wasm_plugin.lock().await;
@@ -696,9 +665,7 @@ impl PluginManager {
     /// 设置插件启用状态并持久化
     pub async fn set_enabled(&self, plugin_id: &str, enabled: bool) -> Result<()> {
         let key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
-        self.settings
-            .set(key, enabled.to_string())
-            .await?;
+        self.settings.set(key, enabled.to_string()).await?;
         tracing::info!(plugin_id = %plugin_id, enabled = enabled, "Plugin enabled state persisted");
         Ok(())
     }
@@ -735,9 +702,9 @@ impl PluginManager {
     pub async fn uninstall(&self, plugin_id: &str) -> Result<()> {
         {
             let plugins = self.plugins.read().await;
-            let plugin = plugins.get(plugin_id).ok_or_else(|| {
-                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
-            })?;
+            let plugin = plugins
+                .get(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
             if plugin.source == PluginSource::ApkAsset {
                 return Err(crate::AppError::Plugin(format!(
                     "Builtin plugin cannot be uninstalled: {}",
@@ -768,9 +735,8 @@ impl PluginManager {
         // 删除插件目录
         let plugin_dir = self.plugins_dir.join(plugin_id);
         if plugin_dir.exists() {
-            std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
-                crate::AppError::Plugin(format!("Failed to remove plugin dir: {}", e))
-            })?;
+            std::fs::remove_dir_all(&plugin_dir)
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to remove plugin dir: {}", e)))?;
         }
 
         tracing::info!(plugin_id = %plugin_id, "Plugin uninstalled");
@@ -877,7 +843,10 @@ impl PluginManager {
                     .filter(|p| {
                         p.state == PluginState::Activated
                             && p.manifest.plugin_type == PluginType::Wasm
-                            && p.manifest.contributes.lifecycle.as_ref()
+                            && p.manifest
+                                .contributes
+                                .lifecycle
+                                .as_ref()
                                 .map(|l| l.is_declared(event_name))
                                 .unwrap_or(false)
                     })
@@ -947,13 +916,20 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
     /// 由投递 worker 任务调用（async 上下文）：短读 map 取实例句柄 → drop map 守卫 →
     /// 持单插件锁执行 on_bus_message。投递串行进行，慢插件会推迟后续投递
     /// （换取全局顺序与无死锁）。
-    async fn dispatch_to_wasm(&self, plugin_id: &str, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
+    async fn dispatch_to_wasm(
+        &self,
+        plugin_id: &str,
+        msg: &bedcode_plugin_api_mobile::BusMessage,
+    ) -> anyhow::Result<()> {
         let wasm_plugin = {
             let map = self.wasm_plugins.read().await;
             map.get(plugin_id).cloned()
         };
         let Some(wasm_plugin) = wasm_plugin else {
-            tracing::warn!("PluginManagerDispatcher: WASM plugin '{}' not loaded, message dropped", plugin_id);
+            tracing::warn!(
+                "PluginManagerDispatcher: WASM plugin '{}' not loaded, message dropped",
+                plugin_id
+            );
             return Ok(());
         };
 

@@ -5,29 +5,27 @@
 //! WS 层在 04（常驻事件 WS）之前不存在，「已认证」语义（Authed）由设备级
 //! status 承载。WS 建连路径（`establish_ws_client`）保留给集成测试与 04 复用。
 
+use anyhow::Context;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
-use anyhow::Context;
-use tokio::sync::{broadcast, RwLock};
 use tauri::{AppHandle, Emitter};
+use tokio::sync::{broadcast, RwLock};
 use tracing;
 
-use crate::connection::{WsClient, WsClientConfig, WsClientEvent, ClientDefaultMessageHandler};
 use crate::connection::request::AuthRequest;
+use crate::connection::{ClientDefaultMessageHandler, WsClient, WsClientConfig, WsClientEvent};
 use crate::model::message::Message;
-use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::state::get_global_token;
+use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
+use crate::router::{AuthHandler, FileServiceHandler, SyncHandler, SystemHandler, TerminalHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
-use crate::router::{TerminalHandler, AuthHandler, SyncHandler, SystemHandler, FileServiceHandler};
 
 use crate::system::constants::connection::{
     BROADCAST_CHANNEL_CAPACITY, CONNECTION_STABILIZE_DELAY_MS, LOG_PREVIEW_MAX_LEN, WS_EVENT_PATH,
 };
-use crate::system::constants::reconnect::{
-    DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS,
-};
+use crate::system::constants::reconnect::{DEFAULT_MAX_RETRIES, DEFAULT_RETRY_DELAYS_MS};
 
 // Re-export ConnectionStatus for public API
 pub use crate::connection::ConnectionStatus;
@@ -131,11 +129,7 @@ impl ConnectionManager {
     /// 监督任务建立事件 WS 前共用（04）。
     pub async fn set_target(&self, address: String, port: u16, name: Option<String>) {
         self.manual_disconnect.store(false, Ordering::SeqCst);
-        *self.target.write().await = Some(TargetDevice {
-            address,
-            port,
-            name,
-        });
+        *self.target.write().await = Some(TargetDevice { address, port, name });
         tracing::debug!("Target device saved");
     }
 
@@ -162,11 +156,14 @@ impl ConnectionManager {
         {
             let status = self.get_status().await;
             if status == ConnectionStatus::Connecting {
-                let _ = app_handle.emit("ws_connecting", serde_json::json!({
-                    "address": address,
-                    "port": port,
-                    "status": "already_connecting"
-                }));
+                let _ = app_handle.emit(
+                    "ws_connecting",
+                    serde_json::json!({
+                        "address": address,
+                        "port": port,
+                        "status": "already_connecting"
+                    }),
+                );
                 tracing::info!("Already connecting");
                 return Ok(());
             }
@@ -183,10 +180,13 @@ impl ConnectionManager {
         self.set_target(address.clone(), port, name.clone()).await;
 
         // 发射连接开始事件
-        let _ = app_handle.emit("ws_connecting", serde_json::json!({
-            "address": address,
-            "port": port,
-        }));
+        let _ = app_handle.emit(
+            "ws_connecting",
+            serde_json::json!({
+                "address": address,
+                "port": port,
+            }),
+        );
         tracing::info!("Connecting to {}:{} (HTTP auth)", address, port);
 
         // 清除上一次连接的客户端（如果有）
@@ -258,7 +258,9 @@ impl ConnectionManager {
         let router = build_router(self.event_tx.clone())?;
 
         client
-            .set_handler(Arc::new(ClientDefaultMessageHandler::new().with_router(Arc::new(router))))
+            .set_handler(Arc::new(
+                ClientDefaultMessageHandler::new().with_router(Arc::new(router)),
+            ))
             .await;
 
         // 直接 await 连接
@@ -328,9 +330,7 @@ impl ConnectionManager {
             tracing::debug!("[ConnMonitor] Started monitoring connection");
             while let Ok(event) = event_rx.recv().await {
                 match event {
-                    WsClientEvent::Disconnected
-                    | WsClientEvent::Error { .. }
-                    | WsClientEvent::ServerClosed { .. } => {
+                    WsClientEvent::Disconnected | WsClientEvent::Error { .. } | WsClientEvent::ServerClosed { .. } => {
                         if !manual_flag.load(Ordering::SeqCst) {
                             tracing::warn!("[ConnMonitor] Unexpected disconnect detected: {:?}", event);
                             let reason = match &event {
@@ -338,18 +338,20 @@ impl ConnectionManager {
                                 WsClientEvent::Error { message } => message.clone(),
                                 _ => "Connection lost".to_string(),
                             };
-                            let _ = app_clone.emit("ws_unexpected_disconnect", serde_json::json!({
-                                "reason": reason
-                            }));
+                            let _ = app_clone.emit(
+                                "ws_unexpected_disconnect",
+                                serde_json::json!({
+                                    "reason": reason
+                                }),
+                            );
 
                             // 通知插件连接断开
                             {
                                 let pm = crate::state::get_plugin_manager();
-                                pm.dispatch_lifecycle_event(
-                                    crate::plugin::types::PluginLifecycleEvent::Disconnect {
-                                        reason: reason.clone(),
-                                    }
-                                ).await;
+                                pm.dispatch_lifecycle_event(crate::plugin::types::PluginLifecycleEvent::Disconnect {
+                                    reason: reason.clone(),
+                                })
+                                .await;
                             }
                         } else {
                             tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
@@ -434,10 +436,13 @@ impl ConnectionManager {
 
             // 发射重连开始事件（无 AppHandle 时跳过：纯后台自愈路径）
             if let Some(ah) = &app_handle {
-                let _ = ah.emit("ws_reconnecting", serde_json::json!({
-                    "retry": current_retry + 1,
-                    "max_retry": max_retry
-                }));
+                let _ = ah.emit(
+                    "ws_reconnecting",
+                    serde_json::json!({
+                        "retry": current_retry + 1,
+                        "max_retry": max_retry
+                    }),
+                );
             }
             tracing::info!("Reconnecting attempt {}/{}", current_retry + 1, max_retry);
 
@@ -510,9 +515,12 @@ impl ConnectionManager {
             return Ok(());
         }
         if let Some(ah) = &app_handle {
-            let _ = ah.emit("ws_reconnect_failed", serde_json::json!({
-                "reason": "Max retries exceeded"
-            }));
+            let _ = ah.emit(
+                "ws_reconnect_failed",
+                serde_json::json!({
+                    "reason": "Max retries exceeded"
+                }),
+            );
         }
         tracing::error!("Reconnect failed after {} attempts", max_retry);
 
@@ -529,9 +537,11 @@ impl ConnectionManager {
         };
 
         let msg_preview = message.to_json().unwrap_or_default();
-        tracing::debug!("[ConnectionManager] send() message_type={:?}, preview={}",
+        tracing::debug!(
+            "[ConnectionManager] send() message_type={:?}, preview={}",
             "Message",
-            &msg_preview[..msg_preview.len().min(LOG_PREVIEW_MAX_LEN)]);
+            &msg_preview[..msg_preview.len().min(LOG_PREVIEW_MAX_LEN)]
+        );
 
         if let Some(client) = self.client.read().await.as_ref() {
             let result = client.send(&message).await;
@@ -560,11 +570,19 @@ impl ConnectionManager {
         };
 
         if let Some(client) = self.client.read().await.as_ref() {
-            tracing::debug!("[ConnectionManager] send_and_wait: client exists, status={:?}", client.get_status().await);
-            let result = client.send_and_wait(&message, timeout).await
+            tracing::debug!(
+                "[ConnectionManager] send_and_wait: client exists, status={:?}",
+                client.get_status().await
+            );
+            let result = client
+                .send_and_wait(&message, timeout)
+                .await
                 .with_context(|| format!("send_and_wait timeout={}s", timeout.as_secs()))
                 .map_err(|e| crate::AppError::WebSocket(e.to_string()));
-            tracing::debug!("[ConnectionManager] send_and_wait: result={:?}", result.as_ref().map(|m| m.message_type().unwrap_or("unknown")));
+            tracing::debug!(
+                "[ConnectionManager] send_and_wait: result={:?}",
+                result.as_ref().map(|m| m.message_type().unwrap_or("unknown"))
+            );
             result
         } else {
             tracing::error!("[ConnectionManager] send_and_wait: client is None!");
@@ -575,19 +593,21 @@ impl ConnectionManager {
     /// 发送消息，失败时检查是否为断开错误并发射事件
     ///
     /// 此方法用于需要自动处理断开场景的调用方
-    pub async fn send_with_disconnect_handling(
-        &self,
-        app_handle: &AppHandle,
-        message: &Message,
-    ) -> Result<()> {
+    pub async fn send_with_disconnect_handling(&self, app_handle: &AppHandle, message: &Message) -> Result<()> {
         let result = self.send(message).await;
 
         if let Err(ref e) = result {
             if is_disconnect_error(e) {
-                tracing::warn!("[ConnectionManager] send_with_disconnect_handling: detected disconnect error: {}", e);
-                let _ = app_handle.emit("ws_unexpected_disconnect", serde_json::json!({
-                    "reason": format!("连接已断开: {}", e)
-                }));
+                tracing::warn!(
+                    "[ConnectionManager] send_with_disconnect_handling: detected disconnect error: {}",
+                    e
+                );
+                let _ = app_handle.emit(
+                    "ws_unexpected_disconnect",
+                    serde_json::json!({
+                        "reason": format!("连接已断开: {}", e)
+                    }),
+                );
             }
         }
 
@@ -607,10 +627,16 @@ impl ConnectionManager {
 
         if let Err(ref e) = result {
             if is_disconnect_error(e) {
-                tracing::warn!("[ConnectionManager] send_and_wait_with_disconnect_handling: detected disconnect error: {}", e);
-                let _ = app_handle.emit("ws_unexpected_disconnect", serde_json::json!({
-                    "reason": format!("连接已断开: {}", e)
-                }));
+                tracing::warn!(
+                    "[ConnectionManager] send_and_wait_with_disconnect_handling: detected disconnect error: {}",
+                    e
+                );
+                let _ = app_handle.emit(
+                    "ws_unexpected_disconnect",
+                    serde_json::json!({
+                        "reason": format!("连接已断开: {}", e)
+                    }),
+                );
             }
         }
 

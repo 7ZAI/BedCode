@@ -13,39 +13,28 @@ use tauri::Manager;
 
 /// 获取所有已加载插件信息
 #[tauri::command]
-pub async fn plugin_list_loaded(
-    app_handle: tauri::AppHandle,
-) -> Result<Vec<MobilePluginInfo>> {
+pub async fn plugin_list_loaded(app_handle: tauri::AppHandle) -> Result<Vec<MobilePluginInfo>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     Ok(manager.list_loaded().await)
 }
 
 /// 获取单个插件信息
 #[tauri::command]
-pub async fn plugin_get_info(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<Option<MobilePluginInfo>> {
+pub async fn plugin_get_info(app_handle: tauri::AppHandle, plugin_id: String) -> Result<Option<MobilePluginInfo>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     Ok(manager.get_info(&plugin_id).await)
 }
 
 /// 激活插件
 #[tauri::command]
-pub async fn plugin_activate(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_activate(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.activate(&plugin_id, &app_handle).await
 }
 
 /// 停用插件
 #[tauri::command]
-pub async fn plugin_deactivate(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_deactivate(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.deactivate(&plugin_id).await
 }
@@ -54,32 +43,21 @@ pub async fn plugin_deactivate(
 
 /// 查询插件启用状态
 #[tauri::command]
-pub async fn plugin_is_enabled(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<bool> {
+pub async fn plugin_is_enabled(app_handle: tauri::AppHandle, plugin_id: String) -> Result<bool> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     Ok(manager.is_enabled(&plugin_id).await)
 }
 
 /// 设置插件启用状态
 #[tauri::command]
-pub async fn plugin_set_enabled(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    enabled: bool,
-) -> Result<()> {
+pub async fn plugin_set_enabled(app_handle: tauri::AppHandle, plugin_id: String, enabled: bool) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.set_enabled(&plugin_id, enabled).await
 }
 
 /// 标记插件错误
 #[tauri::command]
-pub async fn plugin_mark_error(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    error: String,
-) -> Result<()> {
+pub async fn plugin_mark_error(app_handle: tauri::AppHandle, plugin_id: String, error: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.mark_error(&plugin_id, error).await;
     Ok(())
@@ -87,10 +65,7 @@ pub async fn plugin_mark_error(
 
 /// 插件显式上报启动成功（Error → Activated 自愈）
 #[tauri::command]
-pub async fn plugin_report_ready(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_report_ready(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.report_ready(&plugin_id).await
 }
@@ -100,10 +75,7 @@ pub async fn plugin_report_ready(
 /// 仅用户安装插件（file-install / remote-download）需要审批；
 /// 内置插件（apk-asset）调用返回错误。批准成功后状态 NeedsApproval → Loaded。
 #[tauri::command]
-pub async fn plugin_approve(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_approve(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.approve(&plugin_id).await
 }
@@ -112,11 +84,7 @@ pub async fn plugin_approve(
 
 /// 获取插件存储值
 #[tauri::command]
-pub async fn plugin_storage_get(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    key: String,
-) -> Result<Option<Value>> {
+pub async fn plugin_storage_get(app_handle: tauri::AppHandle, plugin_id: String, key: String) -> Result<Option<Value>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.storage().get(&plugin_id, &key).await
 }
@@ -135,11 +103,7 @@ pub async fn plugin_storage_set(
 
 /// 删除插件存储值
 #[tauri::command]
-pub async fn plugin_storage_delete(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    key: String,
-) -> Result<()> {
+pub async fn plugin_storage_delete(app_handle: tauri::AppHandle, plugin_id: String, key: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.storage().delete(&plugin_id, &key).await
 }
@@ -148,18 +112,11 @@ pub async fn plugin_storage_delete(
 
 /// 下载并安装远程 zip 插件包
 #[tauri::command]
-pub async fn plugin_download(
-    app_handle: tauri::AppHandle,
-    zip_url: String,
-) -> Result<String> {
+pub async fn plugin_download(app_handle: tauri::AppHandle, zip_url: String) -> Result<String> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     let plugins_dir = manager.plugins_dir().clone();
 
-    let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(
-        &zip_url,
-        &plugins_dir,
-    )
-    .await?;
+    let plugin_id = crate::plugin::downloader::PluginDownloader::download_and_install(&zip_url, &plugins_dir).await?;
 
     // 重新扫描并加载
     manager.scan_and_load().await;
@@ -169,18 +126,11 @@ pub async fn plugin_download(
 
 /// 从本地 zip 插件包安装
 #[tauri::command]
-pub async fn plugin_install_from_file(
-    app_handle: tauri::AppHandle,
-    path: String,
-) -> Result<String> {
+pub async fn plugin_install_from_file(app_handle: tauri::AppHandle, path: String) -> Result<String> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     let plugins_dir = manager.plugins_dir().clone();
 
-    let plugin_id = crate::plugin::downloader::PluginDownloader::install_from_file(
-        &path,
-        &plugins_dir,
-    )
-    .await?;
+    let plugin_id = crate::plugin::downloader::PluginDownloader::install_from_file(&path, &plugins_dir).await?;
 
     // 重新扫描并加载
     manager.scan_and_load().await;
@@ -190,20 +140,14 @@ pub async fn plugin_install_from_file(
 
 /// 卸载插件（仅用户安装的插件；内置插件拒绝）
 #[tauri::command]
-pub async fn plugin_uninstall(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_uninstall(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     manager.uninstall(&plugin_id).await
 }
 
 /// 重新加载 WASM 插件（热重载）
 #[tauri::command]
-pub async fn reload_wasm_plugin(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn reload_wasm_plugin(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
 
     // 先停用
@@ -233,60 +177,68 @@ pub async fn plugin_fs_auth_respond(
 
 /// 添加路径白名单
 #[tauri::command]
-pub async fn plugin_fs_add_path_whitelist(
-    app_handle: tauri::AppHandle,
-    path: String,
-) -> Result<()> {
+pub async fn plugin_fs_add_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().add_path_whitelist(&path).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .add_path_whitelist(&path)
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 /// 移除路径白名单
 #[tauri::command]
-pub async fn plugin_fs_remove_path_whitelist(
-    app_handle: tauri::AppHandle,
-    path: String,
-) -> Result<()> {
+pub async fn plugin_fs_remove_path_whitelist(app_handle: tauri::AppHandle, path: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().remove_path_whitelist(&path).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .remove_path_whitelist(&path)
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 /// 获取路径白名单
 #[tauri::command]
-pub async fn plugin_fs_get_path_whitelist(
-    app_handle: tauri::AppHandle,
-) -> Result<Vec<String>> {
+pub async fn plugin_fs_get_path_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().get_path_whitelist().await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .get_path_whitelist()
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 /// 添加插件白名单
 #[tauri::command]
-pub async fn plugin_fs_add_plugin_whitelist(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_fs_add_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().add_plugin_whitelist(&plugin_id).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .add_plugin_whitelist(&plugin_id)
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 /// 移除插件白名单
 #[tauri::command]
-pub async fn plugin_fs_remove_plugin_whitelist(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_fs_remove_plugin_whitelist(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().remove_plugin_whitelist(&plugin_id).await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .remove_plugin_whitelist(&plugin_id)
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 /// 获取插件白名单
 #[tauri::command]
-pub async fn plugin_fs_get_plugin_whitelist(
-    app_handle: tauri::AppHandle,
-) -> Result<Vec<String>> {
+pub async fn plugin_fs_get_plugin_whitelist(app_handle: tauri::AppHandle) -> Result<Vec<String>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.fs_auth().get_plugin_whitelist().await.map_err(|e| crate::AppError::Plugin(e.to_string()))
+    manager
+        .fs_auth()
+        .get_plugin_whitelist()
+        .await
+        .map_err(|e| crate::AppError::Plugin(e.to_string()))
 }
 
 // ==================== Plugin Logging Commands ====================
@@ -309,11 +261,7 @@ pub fn plugin_log(plugin_id: String, level: String, message: String) {
 // filesrv:upload_request 事件往返（registry.call_webview_hook）。
 
 /// 身份 + fileservice 权限校验（Rust 端为最终仲裁）
-async fn require_fileservice(
-    manager: &PluginManager,
-    plugin_id: &str,
-    op: &str,
-) -> Result<()> {
+async fn require_fileservice(manager: &PluginManager, plugin_id: &str, op: &str) -> Result<()> {
     if !manager.is_activated(plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' is not activated",
@@ -321,10 +269,7 @@ async fn require_fileservice(
         )));
     }
     if !manager
-        .has_permission(
-            plugin_id,
-            bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE,
-        )
+        .has_permission(plugin_id, bedcode_plugin_api_mobile::permission::PERMISSION_FILESERVICE)
         .await
     {
         return Err(crate::AppError::Plugin(format!(
@@ -336,11 +281,7 @@ async fn require_fileservice(
 }
 
 /// 身份 + system:open 权限校验（Rust 端为最终仲裁）
-async fn require_system_open(
-    manager: &PluginManager,
-    plugin_id: &str,
-    op: &str,
-) -> Result<()> {
+async fn require_system_open(manager: &PluginManager, plugin_id: &str, op: &str) -> Result<()> {
     if !manager.is_activated(plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' is not activated",
@@ -348,10 +289,7 @@ async fn require_system_open(
         )));
     }
     if !manager
-        .has_permission(
-            plugin_id,
-            bedcode_plugin_api_mobile::permission::PERMISSION_SYSTEM_OPEN,
-        )
+        .has_permission(plugin_id, bedcode_plugin_api_mobile::permission::PERMISSION_SYSTEM_OPEN)
         .await
     {
         return Err(crate::AppError::Plugin(format!(
@@ -374,13 +312,12 @@ pub async fn plugin_filesrv_mount(
 ) -> Result<bedcode_plugin_api_mobile::MountResult> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_filesrv_mount").await?;
-    let options: bedcode_plugin_api_mobile::MountOptions = serde_json::from_str(&options_json)
-        .map_err(|e| {
-            crate::AppError::InvalidInput(format!(
-                "plugin_filesrv_mount: invalid MountOptions JSON for plugin '{}': {}",
-                plugin_id, e
-            ))
-        })?;
+    let options: bedcode_plugin_api_mobile::MountOptions = serde_json::from_str(&options_json).map_err(|e| {
+        crate::AppError::InvalidInput(format!(
+            "plugin_filesrv_mount: invalid MountOptions JSON for plugin '{}': {}",
+            plugin_id, e
+        ))
+    })?;
     tracing::info!(
         plugin_id = %plugin_id,
         mount = %options.mount_path,
@@ -391,11 +328,7 @@ pub async fn plugin_filesrv_mount(
     fs.registry.set_app_handle(app_handle.clone()).await;
     let entry = fs
         .registry
-        .mount(
-            &plugin_id,
-            options,
-            crate::file_service::registry::HookTarget::Webview,
-        )
+        .mount(&plugin_id, options, crate::file_service::registry::HookTarget::Webview)
         .await?;
     let result = bedcode_plugin_api_mobile::MountResult {
         mount_path: entry.mount_path.clone(),
@@ -405,12 +338,9 @@ pub async fn plugin_filesrv_mount(
     // 首个挂载会启动 HTTP 服务；挂载变更后立即公告（异步，不阻塞命令；
     // 错误边界包装：announce/ensure_started panic 不致 release 构建闪退）
     let fs_announce = fs.clone();
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "filesrv_after_mount_changed",
-        async move {
-            fs_announce.after_mount_changed().await;
-        },
-    );
+    crate::system::error_boundary::spawn_with_error_boundary("filesrv_after_mount_changed", async move {
+        fs_announce.after_mount_changed().await;
+    });
     Ok(result)
 }
 
@@ -431,26 +361,17 @@ pub async fn plugin_filesrv_update_roots(
         ))
     })?;
     let fs = crate::state::get_file_service();
-    fs.registry
-        .update_roots(&plugin_id, &mount_path, roots)
-        .await?;
+    fs.registry.update_roots(&plugin_id, &mount_path, roots).await?;
     // 目录变更即时生效：重新公告（挂载集合未变，公告幂等）
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "filesrv_after_update_roots",
-        async move {
-            fs.after_mount_changed().await;
-        },
-    );
+    crate::system::error_boundary::spawn_with_error_boundary("filesrv_after_update_roots", async move {
+        fs.after_mount_changed().await;
+    });
     Ok(())
 }
 
 /// 摘除挂载点（对应 TS SDK `mount.dispose()`）
 #[tauri::command]
-pub async fn plugin_filesrv_dispose(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    mount_path: String,
-) -> Result<()> {
+pub async fn plugin_filesrv_dispose(app_handle: tauri::AppHandle, plugin_id: String, mount_path: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_filesrv_dispose").await?;
     tracing::info!(
@@ -461,12 +382,9 @@ pub async fn plugin_filesrv_dispose(
     let fs = crate::state::get_file_service();
     fs.registry.unmount(&plugin_id, &mount_path).await?;
     // 末个挂载摘除时停服务并 Withdraw，否则重新公告
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "filesrv_after_unmount",
-        async move {
-            fs.after_unmount().await;
-        },
-    );
+    crate::system::error_boundary::spawn_with_error_boundary("filesrv_after_unmount", async move {
+        fs.after_unmount().await;
+    });
     Ok(())
 }
 
@@ -492,10 +410,7 @@ pub async fn plugin_filesrv_respond_upload_request(
         )
     };
     let fs = crate::state::get_file_service();
-    let matched = fs
-        .registry
-        .respond_upload_hook(&request_id, decision)
-        .await;
+    let matched = fs.registry.respond_upload_hook(&request_id, decision).await;
     if matched {
         Ok(())
     } else {
@@ -658,10 +573,7 @@ pub async fn plugin_filesrv_respond_transfer_request(
             ))
         })?;
     let fs = crate::state::get_file_service();
-    let matched = fs
-        .registry
-        .respond_transfer_hook(&request_id, decision)
-        .await;
+    let matched = fs.registry.respond_transfer_hook(&request_id, decision).await;
     if matched {
         Ok(())
     } else {
@@ -704,11 +616,7 @@ pub async fn plugin_open_file(
 /// 打开文件所在目录（历史记录「打开所在文件夹」；FileProvider + ACTION_VIEW）。
 /// 需 system:open 权限。
 #[tauri::command]
-pub async fn plugin_open_file_location(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    path: String,
-) -> Result<()> {
+pub async fn plugin_open_file_location(app_handle: tauri::AppHandle, plugin_id: String, path: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_system_open(&manager, &plugin_id, "plugin_open_file_location").await?;
     crate::plugin::android_plugins::open_download_file_location(&path).await
@@ -720,10 +628,7 @@ pub async fn plugin_open_file_location(
 /// pick_folder 仅桌面可用）：返回明确错误，插件可在 catch 中改用手动路径
 /// 输入（如 `context.dialogs.showPrompt`）
 #[tauri::command]
-pub async fn plugin_pick_directory(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<Option<String>> {
+pub async fn plugin_pick_directory(app_handle: tauri::AppHandle, plugin_id: String) -> Result<Option<String>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_pick_directory").await?;
     pick_directory_native(&plugin_id, &app_handle).await
@@ -731,10 +636,7 @@ pub async fn plugin_pick_directory(
 
 /// 桌面：tauri-plugin-dialog 系统目录选择对话框
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn pick_directory_native(
-    plugin_id: &str,
-    app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_directory_native(plugin_id: &str, app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
     app_handle.dialog().file().pick_folder(move |selection| {
@@ -770,10 +672,7 @@ async fn pick_directory_native(
 /// 移动端（Android）：经 Kotlin SafPickerPlugin 弹 SAF 目录树选择器，
 /// 解析为真实路径（主存储/SD 卡/downloads raw:）；不支持的 provider 返回错误供插件降级
 #[cfg(target_os = "android")]
-async fn pick_directory_native(
-    plugin_id: &str,
-    _app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_directory_native(plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     crate::plugin::android_plugins::pick_directory_android()
         .await
         .map_err(|e| crate::AppError::Plugin(format!("{}: {}", plugin_id, e)))
@@ -781,10 +680,7 @@ async fn pick_directory_native(
 
 /// 移动端（iOS）：系统选择器无目录选择能力，返回明确错误供插件降级
 #[cfg(target_os = "ios")]
-async fn pick_directory_native(
-    plugin_id: &str,
-    _app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_directory_native(plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     tracing::warn!(
         plugin_id = %plugin_id,
         "plugin_pick_directory: directory picker unavailable on iOS"
@@ -799,10 +695,7 @@ async fn pick_directory_native(
 
 /// 弹出系统文件选择对话框（插件上传本地文件用；用户取消返回 null）
 #[tauri::command]
-pub async fn plugin_pick_file(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<Option<String>> {
+pub async fn plugin_pick_file(app_handle: tauri::AppHandle, plugin_id: String) -> Result<Option<String>> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_pick_file").await?;
     pick_file_native(&plugin_id, &app_handle).await
@@ -810,10 +703,7 @@ pub async fn plugin_pick_file(
 
 /// 桌面：tauri-plugin-dialog 系统文件选择对话框
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-async fn pick_file_native(
-    plugin_id: &str,
-    app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_file_native(plugin_id: &str, app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
     app_handle.dialog().file().pick_file(move |selection| {
@@ -849,10 +739,7 @@ async fn pick_file_native(
 /// 移动端（Android）：经 Kotlin SafPickerPlugin 弹 SAF 文件选择器，
 /// 优先 _data 列直读真实路径，否则按 externalstorage/downloads raw: 解析
 #[cfg(target_os = "android")]
-async fn pick_file_native(
-    plugin_id: &str,
-    _app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_file_native(plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     crate::plugin::android_plugins::pick_file_android()
         .await
         .map_err(|e| crate::AppError::Plugin(format!("{}: {}", plugin_id, e)))
@@ -860,10 +747,7 @@ async fn pick_file_native(
 
 /// 移动端（iOS）：系统文档选择器未接入，返回明确错误供插件降级
 #[cfg(target_os = "ios")]
-async fn pick_file_native(
-    plugin_id: &str,
-    _app_handle: &tauri::AppHandle,
-) -> Result<Option<String>> {
+async fn pick_file_native(plugin_id: &str, _app_handle: &tauri::AppHandle) -> Result<Option<String>> {
     tracing::warn!(
         plugin_id = %plugin_id,
         "plugin_pick_file: file picker unavailable on iOS"
@@ -874,7 +758,6 @@ async fn pick_file_native(
     )))
 }
 
-
 // ==================== All Files Access（分区存储授权引导） ====================
 
 /// 查询/引导「所有文件访问权限」（Android 11+ 分区存储）
@@ -884,15 +767,11 @@ async fn pick_file_native(
 /// （无运行时弹窗机制）。此命令跳转系统授权页并返回跳转前是否已授权；
 /// 非 Android 平台（桌面 dev 窗口 / iOS）返回明确错误。
 #[tauri::command]
-pub async fn open_all_files_settings(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<bool> {
+pub async fn open_all_files_settings(app_handle: tauri::AppHandle, plugin_id: String) -> Result<bool> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "open_all_files_settings").await?;
     crate::plugin::android_plugins::open_all_files_settings_android().await
 }
-
 
 // ==================== SAF 存储访问（SafIo 主 seam，共享目录/上传页用） ====================
 
@@ -942,11 +821,7 @@ pub async fn plugin_saf_copy_status(
 
 /// SAF：取消中转复制（复制方删除半成品后结束，无残留）
 #[tauri::command]
-pub async fn plugin_saf_copy_cancel(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-    copy_id: String,
-) -> Result<()> {
+pub async fn plugin_saf_copy_cancel(app_handle: tauri::AppHandle, plugin_id: String, copy_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_saf_copy_cancel").await?;
     let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
@@ -955,10 +830,7 @@ pub async fn plugin_saf_copy_cancel(
 
 /// SAF：清扫中转复制残留（file-transfer 插件激活时调用）
 #[tauri::command]
-pub async fn plugin_saf_cleanup_stale_copies(
-    app_handle: tauri::AppHandle,
-    plugin_id: String,
-) -> Result<()> {
+pub async fn plugin_saf_cleanup_stale_copies(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_saf_cleanup_stale_copies").await?;
     let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
@@ -993,12 +865,7 @@ pub async fn plugin_saf_write_media_downloads(
     let manager = app_handle.state::<Arc<PluginManager>>();
     require_fileservice(&manager, &plugin_id, "plugin_saf_write_media_downloads").await?;
     let saf = app_handle.state::<crate::plugin::saf_io::SafIoState>();
-    saf_write_media_downloads_impl(
-        saf.inner().0.as_ref(),
-        &src_path,
-        &display_name,
-        &mime_type,
-    )
+    saf_write_media_downloads_impl(saf.inner().0.as_ref(), &src_path, &display_name, &mime_type)
 }
 
 /// SAF：弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用）
@@ -1041,9 +908,8 @@ fn saf_list_tree_impl(
     tree_uri: &str,
     document_id: &str,
 ) -> Result<Vec<crate::plugin::saf_io::SafEntry>> {
-    saf.list_tree(tree_uri, document_id).map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_list_tree({}): {}", tree_uri, e))
-    })
+    saf.list_tree(tree_uri, document_id)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_list_tree({}): {}", tree_uri, e)))
 }
 
 fn saf_copy_start_impl(
@@ -1051,36 +917,31 @@ fn saf_copy_start_impl(
     uri: &str,
     dest_name: &str,
 ) -> Result<crate::plugin::saf_io::SafCopyHandle> {
-    saf.read_to_cache(uri, dest_name).map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_copy_start({}): {}", uri, e))
-    })
+    saf.read_to_cache(uri, dest_name)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_copy_start({}): {}", uri, e)))
 }
 
 fn saf_copy_status_impl(
     saf: &dyn crate::plugin::saf_io::SafIo,
     copy_id: &str,
 ) -> Result<crate::plugin::saf_io::SafCopyStatus> {
-    saf.copy_status(copy_id).map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_copy_status({}): {}", copy_id, e))
-    })
+    saf.copy_status(copy_id)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_copy_status({}): {}", copy_id, e)))
 }
 
 fn saf_copy_cancel_impl(saf: &dyn crate::plugin::saf_io::SafIo, copy_id: &str) -> Result<()> {
-    saf.cancel_copy(copy_id).map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_copy_cancel({}): {}", copy_id, e))
-    })
+    saf.cancel_copy(copy_id)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_copy_cancel({}): {}", copy_id, e)))
 }
 
 fn saf_cleanup_stale_copies_impl(saf: &dyn crate::plugin::saf_io::SafIo) -> Result<()> {
-    saf.cleanup_stale_copies().map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_cleanup_stale_copies: {}", e))
-    })
+    saf.cleanup_stale_copies()
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_cleanup_stale_copies: {}", e)))
 }
 
 fn saf_check_authorized_impl(saf: &dyn crate::plugin::saf_io::SafIo, tree_uri: &str) -> Result<bool> {
-    saf.check_authorized(tree_uri).map_err(|e| {
-        crate::AppError::Plugin(format!("plugin_saf_check_authorized({}): {}", tree_uri, e))
-    })
+    saf.check_authorized(tree_uri)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_check_authorized({}): {}", tree_uri, e)))
 }
 
 fn saf_write_media_downloads_impl(
@@ -1089,12 +950,8 @@ fn saf_write_media_downloads_impl(
     display_name: &str,
     mime_type: &str,
 ) -> Result<()> {
-    saf.write_media_downloads(src_path, display_name, mime_type).map_err(|e| {
-        crate::AppError::Plugin(format!(
-            "plugin_saf_write_media_downloads({}): {}",
-            src_path, e
-        ))
-    })
+    saf.write_media_downloads(src_path, display_name, mime_type)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_write_media_downloads({}): {}", src_path, e)))
 }
 
 /// 列出 AppDownloadsDir 及其子目录（白名单校验 + std::fs::read_dir）
@@ -1114,12 +971,8 @@ async fn list_private_downloads_dir(
         )));
     }
 
-    let entries = std::fs::read_dir(path).map_err(|e| {
-        crate::AppError::Plugin(format!(
-            "plugin_saf_list_dir: failed to read '{}': {}",
-            path, e
-        ))
-    })?;
+    let entries = std::fs::read_dir(path)
+        .map_err(|e| crate::AppError::Plugin(format!("plugin_saf_list_dir: failed to read '{}': {}", path, e)))?;
     let mut out = Vec::new();
     for entry in entries {
         let entry = match entry {
@@ -1152,15 +1005,10 @@ async fn list_private_downloads_dir(
     Ok(out)
 }
 
-
 // ==================== OCR Commands（spec §4.2，插件 com.bedcode.ocr 宿主侧）====================
 
 /// 身份 + ocr 权限校验（Rust 端为最终仲裁，仿 require_fileservice）
-async fn require_ocr(
-    manager: &PluginManager,
-    plugin_id: &str,
-    op: &str,
-) -> Result<()> {
+async fn require_ocr(manager: &PluginManager, plugin_id: &str, op: &str) -> Result<()> {
     if !manager.is_activated(plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
             "{}: plugin '{}' is not activated",
@@ -1168,10 +1016,7 @@ async fn require_ocr(
         )));
     }
     if !manager
-        .has_permission(
-            plugin_id,
-            bedcode_plugin_api_mobile::permission::PERMISSION_OCR,
-        )
+        .has_permission(plugin_id, bedcode_plugin_api_mobile::permission::PERMISSION_OCR)
         .await
     {
         return Err(crate::AppError::Plugin(format!(
@@ -1210,11 +1055,7 @@ fn cleanup_ocr_temp_rgba(app_handle: &tauri::AppHandle, rgba_path: &str) {
     let path = std::path::Path::new(rgba_path);
     if let Err(e) = std::fs::remove_file(path) {
         if e.kind() != std::io::ErrorKind::NotFound {
-            tracing::warn!(
-                "plugin_ocr_recognize: failed to remove temp RGBA {}: {}",
-                rgba_path,
-                e
-            );
+            tracing::warn!("plugin_ocr_recognize: failed to remove temp RGBA {}: {}", rgba_path, e);
         }
     }
 }
@@ -1392,12 +1233,7 @@ mod tests {
             }
         }
 
-        fn write_media_downloads(
-            &self,
-            src_path: &str,
-            display_name: &str,
-            _mime_type: &str,
-        ) -> Result<()> {
+        fn write_media_downloads(&self, src_path: &str, display_name: &str, _mime_type: &str) -> Result<()> {
             assert_eq!(src_path, "/data/downloads/a.txt");
             assert_eq!(display_name, "a.txt");
             match self.fail_with {
@@ -1456,7 +1292,9 @@ mod tests {
 
     #[test]
     fn saf_list_tree_impl_wraps_error_with_command_context() {
-        let fake = FakeSaf { fail_with: Some("boom") };
+        let fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_list_tree_impl(&fake, "content://tree/root", "d1").unwrap_err();
         // 错误必须带命令名与参数（调用方定位），而非裸底层错误
         assert!(err.to_string().contains("plugin_saf_list_tree"));
@@ -1473,7 +1311,9 @@ mod tests {
 
     #[test]
     fn saf_copy_start_impl_wraps_error_with_uri() {
-        let fake = FakeSaf { fail_with: Some("boom") };
+        let fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_copy_start_impl(&fake, "content://tree/root/document/f1", "a.txt").unwrap_err();
         assert!(err.to_string().contains("plugin_saf_copy_start"));
         assert!(err.to_string().contains("content://tree/root/document/f1"));
@@ -1481,7 +1321,9 @@ mod tests {
 
     #[test]
     fn saf_copy_status_impl_wraps_error_with_copy_id() {
-        let fake = FakeSaf { fail_with: Some("boom") };
+        let fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_copy_status_impl(&fake, "copy-1").unwrap_err();
         assert!(err.to_string().contains("plugin_saf_copy_status"));
         assert!(err.to_string().contains("copy-1"));
@@ -1489,7 +1331,9 @@ mod tests {
 
     #[test]
     fn saf_copy_cancel_impl_wraps_error_with_copy_id() {
-        let fake = FakeSaf { fail_with: Some("boom") };
+        let fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_copy_cancel_impl(&fake, "copy-1").unwrap_err();
         assert!(err.to_string().contains("plugin_saf_copy_cancel"));
         assert!(err.to_string().contains("copy-1"));
@@ -1497,7 +1341,9 @@ mod tests {
 
     #[test]
     fn saf_cleanup_stale_copies_impl_wraps_error() {
-        let fake = FakeSaf { fail_with: Some("boom") };
+        let fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_cleanup_stale_copies_impl(&fake).unwrap_err();
         assert!(err.to_string().contains("plugin_saf_cleanup_stale_copies"));
     }
@@ -1506,7 +1352,9 @@ mod tests {
     fn saf_check_authorized_impl_forwards_and_wraps() {
         let ok_fake = FakeSaf { fail_with: None };
         assert!(saf_check_authorized_impl(&ok_fake, "content://tree/root").expect("check should succeed"));
-        let err_fake = FakeSaf { fail_with: Some("boom") };
+        let err_fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
         let err = saf_check_authorized_impl(&err_fake, "content://tree/root").unwrap_err();
         assert!(err.to_string().contains("plugin_saf_check_authorized"));
     }
@@ -1516,9 +1364,10 @@ mod tests {
         let ok_fake = FakeSaf { fail_with: None };
         saf_write_media_downloads_impl(&ok_fake, "/data/downloads/a.txt", "a.txt", "")
             .expect("media write should succeed");
-        let err_fake = FakeSaf { fail_with: Some("boom") };
-        let err = saf_write_media_downloads_impl(&err_fake, "/data/downloads/a.txt", "a.txt", "")
-            .unwrap_err();
+        let err_fake = FakeSaf {
+            fail_with: Some("boom"),
+        };
+        let err = saf_write_media_downloads_impl(&err_fake, "/data/downloads/a.txt", "a.txt", "").unwrap_err();
         assert!(err.to_string().contains("plugin_saf_write_media_downloads"));
         assert!(err.to_string().contains("/data/downloads/a.txt"));
     }

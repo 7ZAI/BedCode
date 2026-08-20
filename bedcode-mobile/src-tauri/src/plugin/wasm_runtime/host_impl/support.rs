@@ -12,12 +12,7 @@
 /// 统一在此截获：记录 error 日志（含插件 ID 与调用名），返回 fallback 让调用方
 /// 按失败语义继续 —— WASM 插件侧已有结构化错误处理（任务置 Failed 推送到前端），
 /// 插件业务 panic 不再拖垮整个应用。
-pub(crate) fn guarded_host_call<T>(
-    plugin_id: &str,
-    host_fn: &'static str,
-    fallback: T,
-    f: impl FnOnce() -> T,
-) -> T {
+pub(crate) fn guarded_host_call<T>(plugin_id: &str, host_fn: &'static str, fallback: T, f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
         Err(panic_err) => {

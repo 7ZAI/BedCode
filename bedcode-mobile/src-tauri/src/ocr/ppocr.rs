@@ -134,9 +134,9 @@ impl PpOcrEngine {
         let scale_y = image.height as f64 / work_h as f64;
 
         // 单飞：锁覆盖「惰性加载 + 识别全程」，并发 recognize 串行执行
-        let mut guard = Self::resident().lock().map_err(|_| {
-            crate::AppError::Internal("plugin_ocr_recognize: ocr engine mutex poisoned".into())
-        })?;
+        let mut guard = Self::resident()
+            .lock()
+            .map_err(|_| crate::AppError::Internal("plugin_ocr_recognize: ocr engine mutex poisoned".into()))?;
         if guard.is_none() {
             *guard = Some(load_engine(&self.ctx)?);
         }
@@ -144,18 +144,10 @@ impl PpOcrEngine {
 
         // ---------- det ----------
         let (det_t, det_w, det_h) = pipeline::det_preprocess(&work);
-        let det_arr = ndarray::Array4::from_shape_vec(
-            (1usize, 3usize, det_h as usize, det_w as usize),
-            det_t,
-        )
-        .map_err(|e| {
-            crate::AppError::Internal(format!("plugin_ocr_recognize: det tensor build: {e}"))
-        })?;
+        let det_arr = ndarray::Array4::from_shape_vec((1usize, 3usize, det_h as usize, det_w as usize), det_t)
+            .map_err(|e| crate::AppError::Internal(format!("plugin_ocr_recognize: det tensor build: {e}")))?;
         let det_value = ort::value::Tensor::from_array(det_arr).map_err(ort_err("det input"))?;
-        let det_out = eng
-            .det
-            .run([det_value.into()])
-            .map_err(ort_err("det session run"))?;
+        let det_out = eng.det.run([det_value.into()]).map_err(ort_err("det session run"))?;
         let det_prob = det_out[0].try_extract_array::<f32>().map_err(ort_err("det output"))?;
         let pred_h = det_prob.shape()[2];
         let pred_w = det_prob.shape()[3];
@@ -177,20 +169,18 @@ impl PpOcrEngine {
             // cls：180° 旋转矫正（置信度 >0.9）
             let (cls_t, _) = pipeline::cls_preprocess(&crop);
             let cls_arr = ndarray::Array4::from_shape_vec(
-                (1usize, 3usize, pipeline::CLS_IMG_H as usize, pipeline::CLS_IMG_W as usize),
+                (
+                    1usize,
+                    3usize,
+                    pipeline::CLS_IMG_H as usize,
+                    pipeline::CLS_IMG_W as usize,
+                ),
                 cls_t,
             )
-            .map_err(|e| {
-                crate::AppError::Internal(format!("plugin_ocr_recognize: cls tensor build: {e}"))
-            })?;
+            .map_err(|e| crate::AppError::Internal(format!("plugin_ocr_recognize: cls tensor build: {e}")))?;
             let cls_value = ort::value::Tensor::from_array(cls_arr).map_err(ort_err("cls input"))?;
-            let cls_out = eng
-                .cls
-                .run([cls_value.into()])
-                .map_err(ort_err("cls session run"))?;
-            let cls_prob = cls_out[0]
-                .try_extract_array::<f32>()
-                .map_err(ort_err("cls output"))?;
+            let cls_out = eng.cls.run([cls_value.into()]).map_err(ort_err("cls session run"))?;
+            let cls_prob = cls_out[0].try_extract_array::<f32>().map_err(ort_err("cls output"))?;
             let crop = pipeline::cls_apply(&[cls_prob[[0, 0]], cls_prob[[0, 1]]], crop);
             drop(cls_out);
 
@@ -199,21 +189,12 @@ impl PpOcrEngine {
             let max_wh = (pipeline::REC_MAX_W / pipeline::REC_IMG_H as f64).max(wh);
             let rec_w = pipeline::rec_width(max_wh);
             let (rec_t, _) = pipeline::rec_preprocess(&crop, rec_w);
-            let rec_arr = ndarray::Array4::from_shape_vec(
-                (1usize, 3usize, pipeline::REC_IMG_H as usize, rec_w as usize),
-                rec_t,
-            )
-            .map_err(|e| {
-                crate::AppError::Internal(format!("plugin_ocr_recognize: rec tensor build: {e}"))
-            })?;
+            let rec_arr =
+                ndarray::Array4::from_shape_vec((1usize, 3usize, pipeline::REC_IMG_H as usize, rec_w as usize), rec_t)
+                    .map_err(|e| crate::AppError::Internal(format!("plugin_ocr_recognize: rec tensor build: {e}")))?;
             let rec_value = ort::value::Tensor::from_array(rec_arr).map_err(ort_err("rec input"))?;
-            let rec_out = eng
-                .rec
-                .run([rec_value.into()])
-                .map_err(ort_err("rec session run"))?;
-            let rec_probs = rec_out[0]
-                .try_extract_array::<f32>()
-                .map_err(ort_err("rec output"))?;
+            let rec_out = eng.rec.run([rec_value.into()]).map_err(ort_err("rec session run"))?;
+            let rec_probs = rec_out[0].try_extract_array::<f32>().map_err(ort_err("rec output"))?;
             let t = rec_probs.shape()[1];
             let vocab = rec_probs.shape()[2];
             let probs: Vec<f32> = rec_probs.iter().copied().collect();
@@ -243,8 +224,7 @@ impl PpOcrEngine {
 fn load_engine(ctx: &PpOcrContext) -> Result<LoadedEngine> {
     let so = ctx.onnxruntime_so.as_ref().ok_or_else(|| {
         crate::AppError::Plugin(
-            "plugin_ocr_recognize: onnxruntime .so path unavailable (nativeLibraryDir probe failed)"
-                .into(),
+            "plugin_ocr_recognize: onnxruntime .so path unavailable (nativeLibraryDir probe failed)".into(),
         )
     })?;
     if !so.is_file() {
@@ -286,10 +266,7 @@ fn load_engine(ctx: &PpOcrContext) -> Result<LoadedEngine> {
     let det = build(DET_MODEL)?;
     let cls = build(CLS_MODEL)?;
     let rec = build(REC_MODEL)?;
-    tracing::info!(
-        "OCR engine loaded (det/cls/rec sessions) from {}",
-        dir.display()
-    );
+    tracing::info!("OCR engine loaded (det/cls/rec sessions) from {}", dir.display());
     Ok(LoadedEngine { det, cls, rec })
 }
 

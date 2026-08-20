@@ -2,11 +2,11 @@
 
 use async_trait::async_trait;
 
-use crate::model::message::Message;
 use crate::enums::SyncPayload;
+use crate::model::message::Message;
 use crate::Result;
 
-use crate::router::{ClientRouteContext, MobileEvent, ClientRouteHandler};
+use crate::router::{ClientRouteContext, ClientRouteHandler, MobileEvent};
 
 /// 桌面端对端 peer_id 前缀（移动 → 桌面方向，peer_id = "desktop:" + 连接目标地址）
 ///
@@ -23,14 +23,25 @@ impl ClientRouteHandler for SyncHandler {
         if let Message::SyncData { payload, .. } = message {
             match payload {
                 SyncPayload::SessionCreated { session, source_device } => {
-                    tracing::info!("[SyncHandler] SessionCreated: session_id={}, source={}", session.id, source_device);
-                    ctx.emit(MobileEvent::SyncSessionCreated {
-                        session,
-                        source_device,
-                    });
+                    tracing::info!(
+                        "[SyncHandler] SessionCreated: session_id={}, source={}",
+                        session.id,
+                        source_device
+                    );
+                    ctx.emit(MobileEvent::SyncSessionCreated { session, source_device });
                 }
-                SyncPayload::SessionStatusChanged { session_id, old_status, new_status, session_name } => {
-                    tracing::info!("[SyncHandler] SessionStatusChanged: session_id={}, {} -> {}", session_id, old_status, new_status);
+                SyncPayload::SessionStatusChanged {
+                    session_id,
+                    old_status,
+                    new_status,
+                    session_name,
+                } => {
+                    tracing::info!(
+                        "[SyncHandler] SessionStatusChanged: session_id={}, {} -> {}",
+                        session_id,
+                        old_status,
+                        new_status
+                    );
                     ctx.emit(MobileEvent::SyncSessionStatusChanged {
                         session_id,
                         old_status,
@@ -38,14 +49,20 @@ impl ClientRouteHandler for SyncHandler {
                         session_name,
                     });
                 }
-                SyncPayload::SessionStopped { session_id, session_name } => {
+                SyncPayload::SessionStopped {
+                    session_id,
+                    session_name,
+                } => {
                     tracing::info!("[SyncHandler] SessionStopped: session_id={}", session_id);
                     ctx.emit(MobileEvent::SyncSessionStopped {
                         session_id,
                         session_name,
                     });
                 }
-                SyncPayload::SessionRemoved { session_id, session_name } => {
+                SyncPayload::SessionRemoved {
+                    session_id,
+                    session_name,
+                } => {
                     tracing::info!("[SyncHandler] SessionRemoved: session_id={}", session_id);
                     ctx.emit(MobileEvent::SyncSessionRemoved {
                         session_id,
@@ -53,28 +70,36 @@ impl ClientRouteHandler for SyncHandler {
                     });
                 }
                 SyncPayload::ConfigCreated { config, source_device } => {
-                    tracing::info!("[SyncHandler] ConfigCreated: config_id={}, source={}", config.id, source_device);
-                    ctx.emit(MobileEvent::SyncConfigCreated {
-                        config,
-                        source_device,
-                    });
+                    tracing::info!(
+                        "[SyncHandler] ConfigCreated: config_id={}, source={}",
+                        config.id,
+                        source_device
+                    );
+                    ctx.emit(MobileEvent::SyncConfigCreated { config, source_device });
                 }
                 SyncPayload::ConfigUpdated { config, source_device } => {
-                    tracing::info!("[SyncHandler] ConfigUpdated: config_id={}, source={}", config.id, source_device);
-                    ctx.emit(MobileEvent::SyncConfigUpdated {
-                        config,
-                        source_device,
-                    });
+                    tracing::info!(
+                        "[SyncHandler] ConfigUpdated: config_id={}, source={}",
+                        config.id,
+                        source_device
+                    );
+                    ctx.emit(MobileEvent::SyncConfigUpdated { config, source_device });
                 }
                 SyncPayload::ConfigRemoved { config_id, config_name } => {
                     tracing::info!("[SyncHandler] ConfigRemoved: config_id={}", config_id);
-                    ctx.emit(MobileEvent::SyncConfigRemoved {
-                        config_id,
-                        config_name,
-                    });
+                    ctx.emit(MobileEvent::SyncConfigRemoved { config_id, config_name });
                 }
-                SyncPayload::TaskStatusChanged { session_id, task_status, task_reason, task_questions } => {
-                    tracing::info!("[SyncHandler] TaskStatusChanged: session_id={}, status={}", session_id, task_status);
+                SyncPayload::TaskStatusChanged {
+                    session_id,
+                    task_status,
+                    task_reason,
+                    task_questions,
+                } => {
+                    tracing::info!(
+                        "[SyncHandler] TaskStatusChanged: session_id={}, status={}",
+                        session_id,
+                        task_status
+                    );
                     ctx.emit(MobileEvent::SyncTaskStatusChanged {
                         session_id,
                         task_status,
@@ -82,15 +107,35 @@ impl ClientRouteHandler for SyncHandler {
                         task_questions,
                     });
                 }
-                SyncPayload::SessionModeChanged { session_id, auto_approve } => {
-                    tracing::info!("[SyncHandler] SessionModeChanged: session_id={}, auto_approve={}", session_id, auto_approve);
+                SyncPayload::SessionModeChanged {
+                    session_id,
+                    auto_approve,
+                } => {
+                    tracing::info!(
+                        "[SyncHandler] SessionModeChanged: session_id={}, auto_approve={}",
+                        session_id,
+                        auto_approve
+                    );
                     ctx.emit(MobileEvent::SyncSessionModeChanged {
                         session_id,
                         auto_approve,
                     });
                 }
-                SyncPayload::TaskQueueChanged { session_id, queue_count, action, task_id, status } => {
-                    tracing::info!("[SyncHandler] TaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}", session_id, queue_count, action, task_id, status);
+                SyncPayload::TaskQueueChanged {
+                    session_id,
+                    queue_count,
+                    action,
+                    task_id,
+                    status,
+                } => {
+                    tracing::info!(
+                        "[SyncHandler] TaskQueueChanged: session_id={}, count={}, action={}, task_id={:?}, status={:?}",
+                        session_id,
+                        queue_count,
+                        action,
+                        task_id,
+                        status
+                    );
                     ctx.emit(MobileEvent::SyncTaskQueueChanged {
                         session_id,
                         queue_count,
@@ -100,15 +145,26 @@ impl ClientRouteHandler for SyncHandler {
                     });
                 }
                 SyncPayload::TaskScheduledChanged { job_id, status, action } => {
-                    tracing::info!("[SyncHandler] TaskScheduledChanged: job_id={}, status={}, action={}", job_id, status, action);
-                    ctx.emit(MobileEvent::SyncTaskScheduledChanged {
+                    tracing::info!(
+                        "[SyncHandler] TaskScheduledChanged: job_id={}, status={}, action={}",
                         job_id,
                         status,
-                        action,
-                    });
+                        action
+                    );
+                    ctx.emit(MobileEvent::SyncTaskScheduledChanged { job_id, status, action });
                 }
-                SyncPayload::FileServiceChanged { plugin_id, mount_path, available, operations } => {
-                    tracing::info!("[SyncHandler] FileServiceChanged: plugin_id={}, mount={}, available={}", plugin_id, mount_path, available);
+                SyncPayload::FileServiceChanged {
+                    plugin_id,
+                    mount_path,
+                    available,
+                    operations,
+                } => {
+                    tracing::info!(
+                        "[SyncHandler] FileServiceChanged: plugin_id={}, mount={}, available={}",
+                        plugin_id,
+                        mount_path,
+                        available
+                    );
 
                     // 同步更新桌面端 peer 记录（挂载增量合并），触发 peer_changed 推送
                     update_desktop_peer(&plugin_id, &mount_path, available, &operations).await;
@@ -137,7 +193,7 @@ impl ClientRouteHandler for SyncHandler {
                         .registry
                         .publish_transfer_approval(&batch_id, &decision, &reason)
                         .await;
-                }                
+                }
                 SyncPayload::FileTransferIntent {
                     intent_id,
                     direction,
@@ -173,10 +229,7 @@ impl ClientRouteHandler for SyncHandler {
                 }
                 SyncPayload::FileTransferCancel { intent_id } => {
                     // 文件传输取消（v2.1）：中止对应 HTTP 会话（已写字节保留）
-                    tracing::info!(
-                        "[SyncHandler] FileTransferCancel: intent_id={}",
-                        intent_id
-                    );
+                    tracing::info!("[SyncHandler] FileTransferCancel: intent_id={}", intent_id);
                     crate::file_service::get_responder().cancel_intent(&intent_id);
                 }
             }
@@ -253,7 +306,8 @@ async fn update_desktop_peer(
     }
 
     // 增量合并挂载列表
-    peer.mounts.retain(|m| !(m.plugin_id == plugin_id && m.mount_path == mount_path));
+    peer.mounts
+        .retain(|m| !(m.plugin_id == plugin_id && m.mount_path == mount_path));
     if available {
         peer.mounts.push(bedcode_plugin_api_mobile::PeerMountAnnouncement {
             plugin_id: plugin_id.to_string(),

@@ -121,10 +121,7 @@ impl CursorStore {
 
     /// 读取游标（不存在返回 None）
     pub fn get(&self, key: &str) -> Option<StoredCursor> {
-        self.inner
-            .lock()
-            .ok()
-            .and_then(|inner| inner.get(key).cloned())
+        self.inner.lock().ok().and_then(|inner| inner.get(key).cloned())
     }
 
     /// 移除游标（任务终态清理）
@@ -154,10 +151,7 @@ impl CursorStore {
 
     /// 已存游标数量（诊断/测试用）
     pub fn len(&self) -> usize {
-        self.inner
-            .lock()
-            .map(|inner| inner.len())
-            .unwrap_or(0)
+        self.inner.lock().map(|inner| inner.len()).unwrap_or(0)
     }
 
     /// 是否为空（测试用）
@@ -242,10 +236,7 @@ mod tests {
         c.advance(30).unwrap();
         assert_eq!(
             c.rollback(40).unwrap_err(),
-            CursorError::InvalidRollback {
-                from: 30,
-                to: 40
-            }
+            CursorError::InvalidRollback { from: 30, to: 40 }
         );
         assert_eq!(c.position, 30);
     }

@@ -59,17 +59,11 @@ pub enum ReconnectState {
     /// 空闲（未在重连）
     Idle,
     /// 重连中
-    Reconnecting {
-        attempt: u32,
-        next_delay: Duration,
-    },
+    Reconnecting { attempt: u32, next_delay: Duration },
     /// 重连成功
     Success,
     /// 重连失败（达到最大重试次数）
-    Failed {
-        attempts: u32,
-        last_error: String,
-    },
+    Failed { attempts: u32, last_error: String },
     /// 已放弃（手动放弃）
     Abandoned,
 }
@@ -78,28 +72,15 @@ pub enum ReconnectState {
 #[derive(Debug, Clone)]
 pub enum ReconnectEvent {
     /// 开始重连
-    Started {
-        attempt: u32,
-    },
+    Started { attempt: u32 },
     /// 重试
-    Retrying {
-        attempt: u32,
-        delay: Duration,
-    },
+    Retrying { attempt: u32, delay: Duration },
     /// 重连成功
-    Succeeded {
-        attempts: u32,
-    },
+    Succeeded { attempts: u32 },
     /// 重连失败
-    Failed {
-        attempts: u32,
-        error: String,
-    },
+    Failed { attempts: u32, error: String },
     /// 放弃重连
-    Abandoned {
-        attempts: u32,
-        reason: String,
-    },
+    Abandoned { attempts: u32, reason: String },
 }
 
 /// 重连策略管理器
@@ -212,19 +193,25 @@ impl ReconnectManager {
         let max = Duration::from_millis(self.config.max_delay_ms);
         let multiplier = self.config.backoff_multiplier;
 
-        let delay_ms = (self.config.initial_delay_ms as f64)
-            * (multiplier.powi(attempt as i32 - 1));
+        let delay_ms = (self.config.initial_delay_ms as f64) * (multiplier.powi(attempt as i32 - 1));
 
         let delay = Duration::from_millis(delay_ms as u64);
 
-        if delay > max { max } else { delay }
+        if delay > max {
+            max
+        } else {
+            delay
+        }
     }
 
     /// 重连成功
     pub async fn on_success(&self) {
         let attempts = *self.retry_count.read().await;
         *self.state.write().await = ReconnectState::Success;
-        info!("[ReconnectManager] Reconnected successfully after {} attempts", attempts);
+        info!(
+            "[ReconnectManager] Reconnected successfully after {} attempts",
+            attempts
+        );
         self.reset().await;
     }
 
@@ -278,10 +265,7 @@ impl ReconnectManager {
 
     /// 检查是否正在重连
     pub async fn is_reconnecting(&self) -> bool {
-        matches!(
-            *self.state.read().await,
-            ReconnectState::Reconnecting { .. }
-        )
+        matches!(*self.state.read().await, ReconnectState::Reconnecting { .. })
     }
 }
 
@@ -301,10 +285,7 @@ impl Default for ReconnectManager {
 
 fn rand_simple() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .subsec_nanos();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().subsec_nanos();
     (nanos as f64) / (u32::MAX as f64)
 }
 

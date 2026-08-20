@@ -101,12 +101,10 @@ pub fn tree_document_id(tree_uri: &str) -> Option<String> {
 pub fn tree_alias(tree_uri: &str) -> Option<String> {
     let decoded = tree_document_id(tree_uri)?;
     // 剥 "provider:" 前缀（primary:Download → Download）；冒号后为空时保原样
-    Some(
-        match decoded.split_once(':') {
-            Some((_, rest)) if !rest.is_empty() => rest.to_string(),
-            _ => decoded,
-        },
-    )
+    Some(match decoded.split_once(':') {
+        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
+        _ => decoded,
+    })
 }
 
 /// percent-decode（最小实现：%XX 与 + 保持字面；document id 仅含 %XX 转义）
@@ -159,11 +157,7 @@ pub fn match_saf_root(saf_roots: &[String], rel: &str) -> Option<(String, Vec<St
         } else {
             continue;
         };
-        let parts: Vec<String> = rest
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .map(String::from)
-            .collect();
+        let parts: Vec<String> = rest.split('/').filter(|p| !p.is_empty()).map(String::from).collect();
         return Some((root.clone(), parts));
     }
     None
@@ -198,12 +192,10 @@ pub async fn walk_to_entry(
                 tree_uri, doc_id, e
             ))
         })?;
-        let child = children.into_iter().find(|c| &c.name == part).ok_or_else(|| {
-            crate::AppError::NotFound(format!(
-                "'{}' not found in SAF tree {}",
-                part, tree_uri
-            ))
-        })?;
+        let child = children
+            .into_iter()
+            .find(|c| &c.name == part)
+            .ok_or_else(|| crate::AppError::NotFound(format!("'{}' not found in SAF tree {}", part, tree_uri)))?;
         if i == parts.len() - 1 {
             return Ok(child);
         }
@@ -246,11 +238,7 @@ pub fn relay_cache_path(relay_dir: &Path, uri: &str) -> PathBuf {
 ///   崩溃残留的 `.part` 不会伪装成完整副本）
 ///
 /// 副本生命周期（TTL 清理）由调用方在服务完成后经 [`arm_relay_cleanup`] 管理。
-pub async fn ensure_relay_copy(
-    saf: &dyn SafIo,
-    relay_dir: &Path,
-    uri: &str,
-) -> crate::Result<PathBuf> {
+pub async fn ensure_relay_copy(saf: &dyn SafIo, relay_dir: &Path, uri: &str) -> crate::Result<PathBuf> {
     if let Err(e) = std::fs::create_dir_all(relay_dir) {
         return Err(crate::AppError::Internal(format!(
             "ensure_relay_copy: failed to create relay dir '{}': {}",
@@ -275,9 +263,9 @@ pub async fn ensure_relay_copy(
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| final_path.display().to_string())
     );
-    let handle = saf.read_to_cache(uri, &part_name).map_err(|e| {
-        crate::AppError::Plugin(format!("ensure_relay_copy: read_to_cache({}) failed: {}", uri, e))
-    })?;
+    let handle = saf
+        .read_to_cache(uri, &part_name)
+        .map_err(|e| crate::AppError::Plugin(format!("ensure_relay_copy: read_to_cache({}) failed: {}", uri, e)))?;
 
     // 轮询复制终态（顺序流不可续，等待完成；取消/失败即整体失败）
     loop {
@@ -448,22 +436,15 @@ mod tests {
         assert!(!is_saf_tree_uri(
             "content://com.android.externalstorage.documents/document/primary%3ADownload"
         ));
-        assert!(!is_saf_tree_uri(
-            "content://com.android.externalstorage.documents/tree"
-        ));
+        assert!(!is_saf_tree_uri("content://com.android.externalstorage.documents/tree"));
         // 根 document id / 别名解析对完整形态同样生效
         assert_eq!(
-            tree_document_id(
-                "content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD"
-            )
-            .as_deref(),
+            tree_document_id("content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD")
+                .as_deref(),
             Some("primary:下载")
         );
         assert_eq!(
-            tree_alias(
-                "content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD"
-            )
-            .as_deref(),
+            tree_alias("content://com.android.externalstorage.documents/tree/primary%3A%E4%B8%8B%E8%BD%BD").as_deref(),
             Some("下载")
         );
         // 根 document id = 解码形态（与 Kotlin getTreeDocumentId / SafEntry.document_id 一致）
@@ -476,12 +457,18 @@ mod tests {
             Some("0123-4567:DCIM/Camera")
         );
         // 别名 = 根 document id 剥 provider 前缀（primary:Download → Download）
-        assert_eq!(tree_alias("content://tree/primary%3ADownload").as_deref(), Some("Download"));
+        assert_eq!(
+            tree_alias("content://tree/primary%3ADownload").as_deref(),
+            Some("Download")
+        );
         assert_eq!(
             tree_alias("content://tree/primary%3ADCIM%2FCamera").as_deref(),
             Some("DCIM/Camera")
         );
-        assert_eq!(tree_alias("content://tree/0123-4567%3ADownload").as_deref(), Some("Download"));
+        assert_eq!(
+            tree_alias("content://tree/0123-4567%3ADownload").as_deref(),
+            Some("Download")
+        );
         // 无冒号前缀的 provider：解码原样
         assert_eq!(tree_alias("content://tree/root").as_deref(), Some("root"));
     }
@@ -507,10 +494,7 @@ mod tests {
         // 别名含 '/'（%2F 转义）时按整串前缀匹配（DCIM/Camera/xxx）
         let roots = vec!["content://tree/primary%3ADCIM%2FCamera".to_string()];
         let hit = match_saf_root(&roots, "DCIM/Camera/2026/IMG_1.jpg");
-        assert_eq!(
-            hit.unwrap().1,
-            vec!["2026".to_string(), "IMG_1.jpg".to_string()]
-        );
+        assert_eq!(hit.unwrap().1, vec!["2026".to_string(), "IMG_1.jpg".to_string()]);
         assert!(match_saf_root(&roots, "DCIM/Other").is_none());
     }
 

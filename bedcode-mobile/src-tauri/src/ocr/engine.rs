@@ -30,12 +30,10 @@ pub fn route_engine(
     onnxruntime_so: Option<PathBuf>,
 ) -> Result<Box<dyn OcrEngine + Send + Sync>> {
     match engine {
-        "offline" => Ok(Box::new(super::ppocr::PpOcrEngine::new(
-            super::ppocr::PpOcrContext {
-                data_dir,
-                onnxruntime_so,
-            },
-        ))),
+        "offline" => Ok(Box::new(super::ppocr::PpOcrEngine::new(super::ppocr::PpOcrContext {
+            data_dir,
+            onnxruntime_so,
+        }))),
         _ => Err(crate::AppError::InvalidInput(format!(
             "plugin_ocr_recognize: unsupported engine '{}' (supported: offline)",
             engine
@@ -55,11 +53,8 @@ pub async fn recognize(app_handle: &tauri::AppHandle, input: &OcrRecognizeInput)
     let started = Instant::now();
     let output = tokio::task::spawn_blocking(move || -> Result<OcrOutput> {
         // 图片校验（文件存在、字节数与尺寸匹配、像素数上限）
-        let image = RgbaImage::load_from_file(
-            Path::new(&input.image.rgba_path),
-            input.image.width,
-            input.image.height,
-        )?;
+        let image =
+            RgbaImage::load_from_file(Path::new(&input.image.rgba_path), input.image.width, input.image.height)?;
         // offline 语义：模型未解压 → 明确错误，UI 引导恢复（spec §4.2）
         if is_offline && !models::models_present(&data_dir) {
             return Err(crate::AppError::Plugin(format!(
@@ -70,9 +65,7 @@ pub async fn recognize(app_handle: &tauri::AppHandle, input: &OcrRecognizeInput)
         engine.recognize(&image, input.max_side)
     })
     .await
-    .map_err(|e| {
-        crate::AppError::Internal(format!("plugin_ocr_recognize: blocking task failed: {e}"))
-    })??;
+    .map_err(|e| crate::AppError::Internal(format!("plugin_ocr_recognize: blocking task failed: {e}")))??;
 
     let mut output = output;
     output.duration_ms = started.elapsed().as_millis() as u64;
@@ -144,9 +137,7 @@ mod tests {
     #[test]
     fn route_rejects_unknown_engines() {
         for name in ["online:aws", "tesseract", ""] {
-            let err = route_engine(name, PathBuf::new(), None)
-                .unwrap_err()
-                .to_string();
+            let err = route_engine(name, PathBuf::new(), None).unwrap_err().to_string();
             assert!(err.contains("unsupported engine"), "got: {}", err);
             assert!(err.contains(name), "got: {}", err);
         }
@@ -155,10 +146,7 @@ mod tests {
     /// engine_status：.so 存在 → available；缺失 → false；None（非 Android dev）→ 恒 true
     #[tokio::test]
     async fn status_available_reflects_onnxruntime_so() {
-        let dir = std::env::temp_dir().join(format!(
-            "bedcode-ocr-status-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("bedcode-ocr-status-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let so = dir.join("libonnxruntime.so");
@@ -184,9 +172,6 @@ mod tests {
     fn onnx_so_path_joins_lib_dir() {
         let p = onnxruntime_so_path("/data/app/xx/lib/arm64");
         assert_eq!(p.file_name().unwrap().to_str().unwrap(), "libonnxruntime.so");
-        assert_eq!(
-            p.parent().unwrap().to_str().unwrap(),
-            "/data/app/xx/lib/arm64"
-        );
+        assert_eq!(p.parent().unwrap().to_str().unwrap(), "/data/app/xx/lib/arm64");
     }
 }

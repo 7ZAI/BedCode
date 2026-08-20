@@ -2,9 +2,9 @@
 //!
 //! 广播本设备的 _bedcode._tcp.local. 服务
 
+use mdns_sd::{ServiceDaemon, ServiceInfo};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use mdns_sd::{ServiceDaemon, ServiceInfo};
 
 use super::types::{AdvertiseConfig, SERVICE_TYPE};
 
@@ -44,10 +44,7 @@ impl MdnsAdvertiser {
         let instance_name = &config.service_name;
 
         // TXT 记录的 key 在 mdns-sd 中自动转小写
-        let properties: Vec<(String, String)> = config.txt_records
-            .into_iter()
-            .map(|(k, v)| (k, v))
-            .collect();
+        let properties: Vec<(String, String)> = config.txt_records.into_iter().map(|(k, v)| (k, v)).collect();
 
         let service_info = ServiceInfo::new(
             service_type,
@@ -60,14 +57,20 @@ impl MdnsAdvertiser {
         .map_err(|e| crate::AppError::Internal(format!("Failed to create ServiceInfo: {}", e)))?
         .enable_addr_auto();
 
-        daemon.register(service_info)
+        daemon
+            .register(service_info)
             .map_err(|e| crate::AppError::Internal(format!("Failed to register mDNS service: {}", e)))?;
 
         *self.daemon.write().await = Some(daemon);
         *self.registered_name.write().await = Some(instance_name.clone());
         *advertising = true;
 
-        tracing::info!("[MdnsAdvertiser] Advertising {} as {} on port {}", SERVICE_TYPE, instance_name, config.port);
+        tracing::info!(
+            "[MdnsAdvertiser] Advertising {} as {} on port {}",
+            SERVICE_TYPE,
+            instance_name,
+            config.port
+        );
         Ok(())
     }
 
