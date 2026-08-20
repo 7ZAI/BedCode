@@ -63,6 +63,8 @@ pub struct SessionManager {
     input_listeners: Arc<RwLock<Vec<Arc<dyn SessionInputListener>>>>,
     /// 提交输入行重建器（每会话字节流缓冲区）
     submitted_line_tracker: SubmittedLineTracker,
+    /// 高频输入写日志节流计数：抑制 TUI 高频输入（鼠标移动/焦点序列等）刷屏
+    input_log_throttle: std::sync::atomic::AtomicU64,
 }
 
 impl SessionManager {
@@ -121,6 +123,7 @@ impl SessionManager {
             lifecycle_listeners,
             input_listeners,
             submitted_line_tracker: SubmittedLineTracker::new(),
+            input_log_throttle: std::sync::atomic::AtomicU64::new(0),
         }
     }
 
@@ -615,14 +618,20 @@ impl SessionManager {
 
     /// 向会话写入输入
     pub async fn write_input(&self, session_id: &str, data: &str) -> Result<()> {
-        // 使用 chars() 确保 UTF-8 安全截断，避免在多字节字符中间切割
-        let preview: String = data.chars().take(50).collect();
-        tracing::info!(
-            "[SessionManager] write_input session_id={}, data_len={}, data={:?}",
-            session_id,
-            data.len(),
-            preview
-        );
+        // 高频输入限流日志：TUI 应用（opencode 等）开启鼠标 1003 / 焦点 1004 上报后，
+        // 鼠标移动/焦点切换会以每秒数十条输入帧灌入，逐条引日志会刷屏（历史：
+        // 每次输入 3 条 INFO-[SessionManager] write_input）。改为节流采样：
+        // 前 3 次 + 每 256 次采样一条，保留输入链路可查性
+        if self.input_log_throttle.fetch_add(1, Ordering::SeqCst) < 3 {
+            // 使用 chars() 确保 UTF-8 安全截断，避免在多字节字符中间切割
+            let preview: String = data.chars().take(50).collect();
+            tracing::debug!(
+                "[SessionManager] write_input session_id={}, data_len={}, data={:?}",
+                session_id,
+                data.len(),
+                preview
+            );
+        }
 
         // 通过插件 TerminalHandler 管道处理输入
         let processed_data = {
@@ -635,12 +644,15 @@ impl SessionManager {
         // 观察修改后的最终数据（与 PTY 实际接收一致）；分发为 fire-and-forget，
         // 监听器故障不影响写入，空提交同样通知（宿主不做语义过滤）
         let submitted_lines = self.submitted_line_tracker.feed(session_id, &processed_data);
-        tracing::debug!(
-            "[SessionManager] write_input line-rebuild session_id={}, data_len={}, submitted_lines={}",
-            session_id,
-            processed_data.len(),
-            submitted_lines.len()
-        );
+        if !submitted_lines.is_empty() {
+            // 仅提交行有意义时才打日志（逐键输入 submitted_lines 恒为 0，跳过避免刷屏）
+            tracing::debug!(
+                "[SessionManager] write_input line-rebuild session_id={}, data_len={}, submitted_lines={}",
+                session_id,
+                processed_data.len(),
+                submitted_lines.len()
+            );
+        }
         for line in submitted_lines {
             self.dispatch_input_submitted(session_id.to_string(), line).await;
         }
@@ -652,21 +664,22 @@ impl SessionManager {
             .update_status(session_id, SessionStatus::Running)
             .await;
 
-        tracing::info!("[SessionManager] write_input OK session_id={}", session_id);
         Ok(())
     }
 
     /// 发送特殊键
     pub async fn send_special_key(&self, session_id: &str, key: &str) -> Result<()> {
-        tracing::info!(
-            "[SessionManager] send_special_key session_id={}, key={:?}",
-            session_id,
-            key
-        );
+        // 与 write_input 同一节流（按住退格/回车连发时避免逐次刷屏）
+        if self.input_log_throttle.fetch_add(1, Ordering::SeqCst) < 3 {
+            tracing::debug!(
+                "[SessionManager] send_special_key session_id={}, key={:?}",
+                session_id,
+                key
+            );
+        }
 
         self.pty_registry.send_special_key(session_id, key).await?;
 
-        tracing::info!("[SessionManager] send_special_key OK session_id={}", session_id);
         Ok(())
     }
 

@@ -25,6 +25,9 @@ pub use command::build_command;
 pub use pty_reader::PtyReader;
 
 /// 全局 PTY 输出索引计数器（跨所有会话）
+///
+/// 仅作路由/日志唯一标记：权威的输出序号（seq）由 SessionOutputManager::on_output
+/// 按会话连续分配（队列 max_seq + 1），见 session_output.rs
 static OUTPUT_INDEX_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
 /// 获取下一个全局输出索引（pub 供其他模块使用）

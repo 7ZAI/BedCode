@@ -35,8 +35,9 @@ pub enum OutputFrame {
 /// `data` 存储原始字节数据，在发送到 WebSocket 时才进行 Base64 编码
 /// 避免在缓冲合并时多次编解码
 ///
-/// `index` 为跨会话全局计数器分配的序号（见 next_output_index），
-/// 多会话并发时单会话缓冲内 index 可能含跨会话空洞，段内单调递增
+/// `index` 为会话级序号：写入路径（SessionOutputManager::on_output）按会话内
+/// 单调连续分配（队列 max_seq + 1），实时流不含跨会话空洞；入队前的全局计数
+///（next_output_index）仅作路由/日志唯一标记
 #[derive(Debug, Clone)]
 pub struct OutputEvent {
     pub session_id: String,
@@ -97,10 +98,10 @@ impl OutputEvent {
 /// - `max_total_bytes`: 最大总字节数（内存级限制）
 /// 任一限制超出时丢弃最旧事件，与前端 buffer 逻辑一致
 ///
-/// 序号语义：`index` 是跨会话全局计数器分配的（见 pty.rs 的 next_output_index），
-/// 因此单会话缓冲内 index 天然可能有跨会话空洞（如 A 会话 = [0,2,4]），
-/// 队列不变量仅保证「push 序 == index 单调序，段内无重无缺」——
-/// 历史回放只能是整体重播，禁止基于 seq 的范围算术/裁剪（见 get_events 注释）
+/// 序号语义：写入路径按会话连续分配 index（on_output 取队列 max_seq + 1），
+/// 实时流无跨会话空洞；队列层保持 index 无关（防御性容忍任意单调 index），
+/// 不变量仅保证「push 序 == index 单调序，段内无重无缺」——
+/// 历史回放恒为整体重播，min_seq/max_seq 仅作元数据供响应携带（见 get_events 注释）
 pub struct UnifiedOutputQueue {
     buffer: std::collections::VecDeque<OutputEvent>,
     capacity: usize,
@@ -149,7 +150,8 @@ impl UnifiedOutputQueue {
     /// 推入新事件，返回完整事件（供调用方转发给订阅者）
     ///
     /// 双重容量检查：条目数和总字节数任一超出时丢弃最旧事件。
-    /// index 由调用方从全局计数器分配，push 只登记 max_seq/min_seq
+    /// index 由 SessionOutputManager::on_output 按会话连续分配（max_seq + 1），
+    /// push 只登记 max_seq/min_seq
     pub fn push(&mut self, event: OutputEvent) -> OutputEvent {
         self.max_seq.store(event.index, Ordering::SeqCst);
         self.total_produced.fetch_add(1, Ordering::SeqCst);
@@ -173,9 +175,9 @@ impl UnifiedOutputQueue {
 
     /// 获取缓冲内全部事件（FIFO 序，整段克隆，无裁剪/范围语义）
     ///
-    /// index 是跨会话全局计数器（见 pty.rs 的 next_output_index），多会话并发时
-    /// 单会话缓冲内 seq 天然有跨会话空洞，因此不能做范围算术/裁剪——
-    /// 历史回放只能是整体重播，min_seq/snapshot_seq 仅作元数据供响应携带
+    /// 写入路径按会话连续分配 index（见 on_output），缓冲内默认无跨会话空洞；
+    /// 队列层不依赖 index 来源、保持整段 FIFO 返回——历史回放恒为整体重播，
+    /// min_seq/snapshot_seq 仅作元数据供响应携带
     pub fn get_events(&self) -> Vec<OutputEvent> {
         self.buffer.iter().cloned().collect()
     }
@@ -290,7 +292,17 @@ impl SessionOutputManager {
     /// 停摆。满时丢弃该事件：客户端重订阅全量重播整体回补，事件仍保留
     /// 在输出队列中
     pub async fn on_output(&self, event: OutputEvent) {
-        let event = self.output_queue.write().await.push(event);
+        // 序号按会话连续分配（队列 max_seq + 1），替代跨会话全局计数器（next_output_index）：
+        // 消除「多会话并发 → 会话内实时帧 seq 带跨会话空洞 → 客户端 `seq > last_rendered + 1 →
+        // 重订阅` 缺口检测被误触发 → 反复重订阅风暴」（桌面端 opencode 会话输入时后台日志
+        // 反复「连/订阅/断」刷屏即此根因）。按会话连续后缺口检测只在真实丢帧
+        // （背压 / 占位 pending 溢出）时命中，由重订阅 → 全量重播 → 按游标跳过去重自愈补回
+        let mut event = event;
+        {
+            let mut queue = self.output_queue.write().await;
+            event.index = queue.max_seq() + 1;
+            event = queue.push(event);
+        }
 
         let subscribers = self.subscribers.read().await;
         for subscriber in subscribers.values() {
@@ -867,7 +879,8 @@ mod tests {
         assert!(matches!(marker, OutputFrame::HistoryEnd { .. }));
     }
 
-    /// 全局 seq 空洞语义：跨会话混合 index 的队列，get_events 返回该会话全部缓冲事件
+    /// 队列层 index 无关性（防御性）：直接 push 任意单调 index（模拟极端/历史数据），
+    /// get_events 仍整段返回；生产路径 on_output 已按会话分配连续 seq，不会产生此空洞
     #[tokio::test]
     async fn test_subscribe_with_global_seq_gaps() {
         let manager = SessionOutputManager::new("test-session");
@@ -997,8 +1010,9 @@ mod tests {
 
         let f1 = rx1.recv().await.unwrap();
         let f2 = rx2.recv().await.unwrap();
-        assert_eq!(output_index(&f1), 0);
-        assert_eq!(output_index(&f2), 0);
+        // on_output 按会话连续分配：空队列首事件 seq = max_seq(0) + 1 = 1
+        assert_eq!(output_index(&f1), 1);
+        assert_eq!(output_index(&f2), 1);
     }
 
     #[tokio::test]
@@ -1042,7 +1056,8 @@ mod tests {
             panic!("expected output frame");
         };
         assert_eq!(e.session_id, "session-1");
-        assert_eq!(e.index, 0);
+        // on_output 按会话连续分配：本会话首个事件 seq = 队列 max_seq(0) + 1 = 1
+        assert_eq!(e.index, 1);
     }
 
     #[tokio::test]
