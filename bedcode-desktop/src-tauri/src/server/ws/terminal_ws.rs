@@ -67,35 +67,12 @@ struct UnsubscribeResult {
     success: bool,
 }
 
-/// 终端输出消息（从输出转发任务传回，文本 JSON 形态，供移动端 WS 使用）
-#[derive(Message)]
-#[rtype(result = "()")]
-struct TerminalOutput {
-    text: String,
-}
-
 /// 终端输出消息（从输出转发任务传回，二进制帧形态，供桌面端本地 WS 使用）
-/// `data` 为已编码的完整帧（含 20 字节头），直接 ctx.binary 发送
+/// `data` 为已编码的完整帧（含 16 字节 TB v2 帧头），直接 ctx.binary 发送
 #[derive(Message)]
 #[rtype(result = "()")]
 struct TerminalOutputBinary {
     data: Vec<u8>,
-}
-
-/// 认证响应消息（从异步 auth_service 传回）
-#[derive(Message)]
-#[rtype(result = "()")]
-struct AuthResponse {
-    /// 是否将客户端标记为已认证
-    authenticated: bool,
-    /// 设备 ID（认证成功时设置）
-    device_id: Option<String>,
-    /// 设备名称（认证成功时设置）
-    device_name: Option<String>,
-    /// 设备指纹（认证成功时设置）
-    fingerprint: Option<String>,
-    /// 响应 JSON 文本
-    response_json: Option<String>,
 }
 
 /// 外部推送消息（用于广播/定向发送，由 WsSessionRegistry 调用）
@@ -112,7 +89,8 @@ pub struct TerminalWs {
     /// 是否为本地环回通道（桌面端 WebView 直连，免 JWT、输出走二进制帧）
     local: bool,
     /// 绑定会话（新路由 /ws/terminal/session/{id}）：连接创建即绑定，
-    /// 订阅即连接、无多路复用；None = 旧路由 /ws/terminal（多会话订阅）
+    /// 订阅即连接、无多路复用；None = 本地环回 /ws/terminal/local
+    /// （无预绑定会话，经 subscribe 控制帧订阅）
     bound_session: Option<String>,
     /// 会话停止监听任务（新路由）：bound 会话 Stopped 时推送 session_stopped 帧
     session_stopped_watcher: Option<tokio::task::JoinHandle<()>>,
@@ -696,14 +674,11 @@ impl TerminalWs {
             Duration::ZERO
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
-        let session_id_for_fwd = session_id.clone();
         let fwd_handle = tokio::spawn(forward::forward_loop(
             output_rx,
             out_tx,
             interval,
             max_buffer_size,
-            forward::OutputFormat::RemoteV2,
-            session_id_for_fwd,
             generation,
             my_gen,
         ));
@@ -727,8 +702,6 @@ impl TerminalWs {
                             break;
                         }
                     }
-                    // RemoteV2 恒二进制/HistoryEnd，文本形态仅防御（不应出现）
-                    forward::ForwardOutput::Text(_) => {}
                 }
             }
         });
@@ -745,6 +718,23 @@ impl TerminalWs {
         let app_ctx = AppContext::global();
         let sm = app_ctx.session_manager().clone();
         actix::spawn(async move {
+            // wire 协议：新路由 input 的 data 为 Base64（UTF-8 → Standard，移动端
+            // btoa/TextEncoder 编码）。handle_input → write_input 全链路按明文透传，
+            // 此处先解码，避免把 base64 字符串原样写入 PTY（修复：快捷命令 /new 被
+            // 回显为 L25ldw==）。解码失败按明文透传，兼容误用此路由的明文客户端
+            let data = match base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &data,
+            ) {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id, error = %e, data = %data,
+                        "input data 非合法 Base64，按明文透传"
+                    );
+                    data
+                }
+            };
             let payload = TerminalPayload {
                 action: crate::enums::TerminalAction::Input { data, special_key },
             };
@@ -1077,9 +1067,11 @@ impl TerminalWs {
 
     /// 处理认证消息 — 根据阶段路由到不同处理器
     ///
-    /// - RequestPairing / VerifyCode / QrConnect / ExchangeCertificate / BiometricRequest / BiometricVerify
-    ///   → auth_service::handle_auth（配对/生物认证流程）
     /// - Authenticated（JWT re-auth）→ 内联 JWT 验证（快速路径，无需异步）
+    ///
+    /// 旧 v2.0.0 客户端的 WS 配对认证阶段（RequestPairing / VerifyCode /
+    /// QrConnect / ExchangeCertificate / Biometric*）已随 /ws/terminal 兼容路由
+    /// 下线删除；配对统一走 HTTP /api/auth/*，WS 首消息仅接受 JWT（Reauthenticate）
     fn handle_auth(
         &mut self,
         payload: crate::enums::AuthPayload,
@@ -1087,17 +1079,6 @@ impl TerminalWs {
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
         match payload.stage {
-            // ==================== compat：旧 v2.0.0 客户端 WS 认证路径（spec §7 D2，保留不删） ====================
-            // 配对/生物认证流程：需要异步调用 auth_service（涉及 PairingService、QrTokenManager 等）
-            crate::enums::AuthStage::RequestPairing
-            | crate::enums::AuthStage::VerifyCode
-            | crate::enums::AuthStage::QrConnect
-            | crate::enums::AuthStage::ExchangeCertificate
-            | crate::enums::AuthStage::BiometricRequest
-            | crate::enums::AuthStage::BiometricVerify => {
-                self.handle_auth_pairing(payload, message_id, ctx);
-            }
-            // ==================== JWT 主路径（新客户端 / 重连快速路径） ====================
             // JWT 重新认证：同步路径，直接验证 JWT token
             crate::enums::AuthStage::Authenticated
             | crate::enums::AuthStage::Reauthenticate => {
@@ -1108,91 +1089,6 @@ impl TerminalWs {
                 if let Ok(json) = error.to_json() { ctx.text(json); }
             }
         }
-    }
-
-    /// 处理配对认证（RequestPairing / VerifyCode / QrConnect / ExchangeCertificate /
-    /// BiometricRequest / BiometricVerify）
-    ///
-    /// ==================== compat：旧 v2.0.0 客户端 WS 认证路径（spec §7 D2，保留不删） ====================
-    /// 通过 actix::spawn 桥接异步 auth_service::handle_auth 调用
-    fn handle_auth_pairing(
-        &mut self,
-        payload: crate::enums::AuthPayload,
-        message_id: String,
-        ctx: &mut ws::WebsocketContext<Self>,
-    ) {
-        let addr = self.session.addr;
-        let actor_addr = ctx.address();
-
-        actix::spawn(async move {
-            let app_ctx = AppContext::global();
-            let pairing_service = app_ctx.pairing_service().clone();
-            let qr_manager = app_ctx.qr_manager().clone();
-            // 无头/测试上下文可能无 AppHandle：handle_auth 签名本身就是 Option，直接透传
-            let app_handle: Option<std::sync::Arc<tauri::AppHandle>> = app_ctx.app_handle().clone();
-            let ws_manager = crate::server::ws::WebSocketManager::global();
-            let jwt_service = JwtService::new();
-            let db = app_ctx.db().clone();
-
-            let result = crate::server::services::auth_service::handle_auth(
-                payload,
-                message_id,
-                addr,
-                &pairing_service,
-                &qr_manager,
-                &jwt_service,
-                ws_manager,
-                &app_handle,
-                &db,
-            ).await;
-
-            let auth_response = match result {
-                Ok(Some(response_msg)) => {
-                    // 从响应中提取认证状态
-                    let (authenticated, device_id, device_name, fingerprint) = if let Message::Auth { payload, .. } = &response_msg {
-                        match payload.stage {
-                            crate::enums::AuthStage::Authenticated => (
-                                true,
-                                payload.device_id.clone(),
-                                payload.device_name.clone(),
-                                payload.device_fingerprint.clone(),
-                            ),
-                            _ => (false, None, None, None),
-                        }
-                    } else {
-                        (false, None, None, None)
-                    };
-
-                    AuthResponse {
-                        authenticated,
-                        device_id,
-                        device_name,
-                        fingerprint,
-                        response_json: response_msg.to_json().ok(),
-                    }
-                }
-                Ok(None) => AuthResponse {
-                    authenticated: false,
-                    device_id: None,
-                    device_name: None,
-                    fingerprint: None,
-                    response_json: None,
-                },
-                Err(e) => {
-                    tracing::error!(error = %e, addr = %addr, "Auth service error");
-                    let error = Message::error("AUTH_ERROR", &e.to_string());
-                    AuthResponse {
-                        authenticated: false,
-                        device_id: None,
-                        device_name: None,
-                        fingerprint: None,
-                        response_json: error.to_json().ok(),
-                    }
-                }
-            };
-
-            let _ = actor_addr.send(auth_response).await;
-        });
     }
 
     /// 处理 JWT 重新认证（快速同步路径）
@@ -1397,19 +1293,12 @@ impl TerminalWs {
             }
         });
 
-        // 启动输出转发任务：将 OutputEvent 转为 WS 消息发到 actor
-        // 本地通道（桌面 WebView）→ TB v2 二进制帧（07 迁移）；远程旧通道 → base64 JSON（兼容）
+        // 启动输出转发任务：将 OutputEvent 转为 TB v2 二进制帧发到 actor。
+        // 旧 /ws/terminal 兼容路由（base64 JSON 文本帧）已删除，仅剩 TB v2
         let addr = ctx.address();
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
-        // 通道输出格式：本地环回与 /ws/terminal/session/{id} 同用 TB v2；
-        // 旧 /ws/terminal 远程通道保持 base64 JSON（移动端 compat，P2 迁移后删除）
-        let format = if self.local {
-            forward::OutputFormat::RemoteV2
-        } else {
-            forward::OutputFormat::RemoteLegacy
-        };
         let local = self.local;
         let merge_output = config.terminal.merge_output;
 
@@ -1422,14 +1311,11 @@ impl TerminalWs {
             flush_interval
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
-        let session_id_for_fwd = session_id.clone();
         let fwd_handle = tokio::spawn(forward::forward_loop(
             output_rx,
             out_tx,
             interval,
             max_buffer_size,
-            format,
-            session_id_for_fwd,
             generation,
             my_gen,
         ));
@@ -1440,20 +1326,13 @@ impl TerminalWs {
         actix::spawn(async move {
             while let Some(out) = out_rx.recv().await {
                 match out {
-                    forward::ForwardOutput::Text(text) => {
-                        if addr.send(TerminalOutput { text }).await.is_err() {
-                            tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
-                            break;
-                        }
-                    }
                     forward::ForwardOutput::Binary(data) => {
                         if addr.send(TerminalOutputBinary { data }).await.is_err() {
                             tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
                             break;
                         }
                     }
-                    // 旧路由无可编码的 history_end 帧（客户端不识别），直接吞掉；
-                    // 06 新路由在此编码 JSON 控制帧
+                    // 本地环回客户端不识别 history_end 控制帧，直接吞掉
                     forward::ForwardOutput::HistoryEnd { .. } => {}
                 }
             }
@@ -1672,16 +1551,6 @@ impl Handler<UnsubscribeResult> for TerminalWs {
     }
 }
 
-/// 处理终端输出转发
-impl Handler<TerminalOutput> for TerminalWs {
-    type Result = ();
-
-    fn handle(&mut self, msg: TerminalOutput, ctx: &mut Self::Context) {
-        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-        ctx.text(msg.text);
-    }
-}
-
 /// 处理终端输出转发（二进制帧，本地通道）
 impl Handler<TerminalOutputBinary> for TerminalWs {
     type Result = ();
@@ -1689,40 +1558,6 @@ impl Handler<TerminalOutputBinary> for TerminalWs {
     fn handle(&mut self, msg: TerminalOutputBinary, ctx: &mut Self::Context) {
         crate::server::metrics::MetricsCollector::global().inc_ws_sent();
         ctx.binary(msg.data);
-    }
-}
-
-/// 处理认证响应（从 auth_service 异步调用返回）
-impl Handler<AuthResponse> for TerminalWs {
-    type Result = ();
-
-    fn handle(&mut self, msg: AuthResponse, ctx: &mut Self::Context) {
-        // 更新会话认证状态
-        if msg.authenticated {
-            self.session.authenticated = true;
-            self.session.device_id = msg.device_id.clone();
-            self.session.device_name = msg.device_name.clone();
-            self.session.fingerprint = msg.fingerprint.clone();
-
-            // 补发文件服务挂载快照（配对认证成功：修复先挂载后连接的广播丢失）
-            self.push_file_service_snapshot(ctx);
-
-            // 注册到 WsSessionRegistry
-            let client_id = self.session.addr.to_string();
-            let device_name = msg.device_name.clone();
-            let fingerprint = msg.fingerprint.clone();
-            actix::spawn(async move {
-                use crate::server::ws::registry::WsSessionRegistry;
-                let registry = WsSessionRegistry::global();
-                registry.set_authenticated(&client_id, device_name, fingerprint).await;
-            });
-        }
-
-        // 发送响应给客户端
-        if let Some(json) = msg.response_json {
-            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-            ctx.text(json);
-        }
     }
 }
 

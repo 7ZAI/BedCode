@@ -3,9 +3,6 @@
 /// 默认服务器端口
 pub const DEFAULT_SERVER_PORT: u16 = 8765;
 
-/// WebSocket 终端路径
-pub const WS_TERMINAL_PATH: &str = "/ws/terminal";
-
 /// 本地 WebSocket 终端路径（仅限环回地址，免 JWT，供桌面端 WebView 消费 PTY 输出）
 pub const LOCAL_WS_TERMINAL_PATH: &str = "/ws/terminal/local";
 

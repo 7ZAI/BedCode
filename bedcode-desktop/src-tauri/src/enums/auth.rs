@@ -8,10 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthStage {
-    /// 请求配对
-    RequestPairing,
-    /// 配对码验证
-    VerifyCode,
     /// 交换证书（生物凭证绑定：移动端上报公钥，空公钥表示解绑）
     ExchangeCertificate,
     /// 生物认证请求（移动端 → 桌面端，请求挑战值）
@@ -26,10 +22,6 @@ pub enum AuthStage {
     Reauthenticate,
     /// 认证失败
     Failed,
-    /// QR 码连接
-    QrConnect,
-    /// QR 连接失败
-    QrFailed,
 }
 
 /// 认证载荷
@@ -75,7 +67,9 @@ pub struct AuthPayload {
 impl Default for AuthPayload {
     fn default() -> Self {
         Self {
-            stage: AuthStage::RequestPairing,
+            // 占位值：调用方以 `..Default::default()` 填充其余字段并显式覆盖 stage，
+            // 旧 RequestPairing/VerifyCode 配对 stage 已随 WS 配对 HTTP 化下线删除
+            stage: AuthStage::Failed,
             device_id: None,
             device_name: None,
             device_fingerprint: None,

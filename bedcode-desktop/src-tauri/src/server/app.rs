@@ -15,14 +15,14 @@ use crate::server::controllers::{
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
-    WS_TERMINAL_PATH, WS_EVENT_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
+    WS_EVENT_PATH, API_HEALTH_PATH, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR,
     CORS_MAX_AGE_SECS, BIND_ADDRESS,
 };
 
 /// WS 帧/消息大小上限（字节）
 ///
 /// max_size 同时限制 frame 和 message 大小，取两者中较大的值；
-/// 三条 WS 路由（terminal / local / event）共用同一计算
+/// 三条 WS 路由（session / local / event）共用同一计算
 fn ws_frame_limit() -> usize {
     let config = crate::system::config::AppConfig::global();
     std::cmp::max(
@@ -31,20 +31,12 @@ fn ws_frame_limit() -> usize {
     )
 }
 
-/// WS 握手端点 — 升级为 WebSocket 连接处理终端 I/O
-async fn terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req.peer_addr().unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    let ws_actor = TerminalWs::new(addr);
-    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(ws_frame_limit())
-        .start()
-}
-
 /// 每会话终端 WS 握手端点 — 连接创建即绑定 session_id（spec §5.1）
 ///
 /// 移动端前端直连（P2）：首消息 JWT 认证（§4.3 规则），输出帧为 TB v2
 /// 二进制（§5.3），订阅即连接（无多路复用）。会话不存在 → 认证通过后
-/// error(SESSION_NOT_FOUND) 并关闭。旧 /ws/terminal 路由保持不动（§7 D2）
+/// error(SESSION_NOT_FOUND) 并关闭。旧 /ws/terminal 兼容路由已随旧 v2.0.0
+/// 客户端下线删除（§7 D2）
 async fn session_terminal_ws(
     path: web::Path<String>,
     req: HttpRequest,
@@ -193,10 +185,9 @@ async fn terminal_bg_image() -> HttpResponse {
 
 /// 构建路由配置
 pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    // WebSocket 终端端点
-    cfg.route(WS_TERMINAL_PATH, web::get().to(terminal_ws));
-
-    // 每会话终端端点（spec §5.1）：连接创建即绑定 session_id，订阅即连接
+    // WebSocket 每会话终端端点（spec §5.1）：连接创建即绑定 session_id，订阅即连接。
+    // 旧 /ws/terminal 兼容路由（多会话订阅 + base64 JSON 文本帧 + 旧 WS 配对认证）
+    // 已随旧 v2.0.0 客户端下线删除
     cfg.route(
         "/ws/terminal/session/{session_id}",
         web::get().to(session_terminal_ws),

@@ -1169,9 +1169,9 @@ mod tests {
     #[test]
     fn auth_constructor_carries_stage_and_payload_fields() {
         let payload = AuthPayload {
-            stage: AuthStage::VerifyCode,
+            stage: AuthStage::Reauthenticate,
             device_id: Some("dev-1".to_string()),
-            pairing_code: Some("123456".to_string()),
+            session_token: Some("jwt-1".to_string()),
             ..Default::default()
         };
         let m = Message::auth(Some("sess-1".to_string()), payload);
@@ -1183,15 +1183,15 @@ mod tests {
                     AuthPayload {
                         stage,
                         device_id,
-                        pairing_code,
+                        session_token,
                         ..
                     },
                 ..
             } => {
                 assert_eq!(session_id.as_deref(), Some("sess-1"));
-                assert_eq!(*stage, AuthStage::VerifyCode);
+                assert_eq!(*stage, AuthStage::Reauthenticate);
                 assert_eq!(device_id.as_deref(), Some("dev-1"));
-                assert_eq!(pairing_code.as_deref(), Some("123456"));
+                assert_eq!(session_token.as_deref(), Some("jwt-1"));
             }
             _ => panic!("期望 auth 消息"),
         }
