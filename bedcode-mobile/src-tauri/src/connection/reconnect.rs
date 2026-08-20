@@ -328,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_exponential_backoff_sequence() {
-        // 指数退避：1s→2s→4s→8s→16s（默认倍数 2.0）
+        // 指数退避：1s→2s→4s（默认倍数 2.0；ReconnectManager 内部等比退避）
         let mgr = ReconnectManager::new(deterministic_config(5, 1000, 30_000));
         let expected = [1000u64, 2000, 4000, 8000, 16000];
         for expect_ms in expected {
@@ -378,13 +378,20 @@ mod tests {
 
     #[tokio::test]
     async fn test_default_retry_delays_match_constant_table() {
-        // 默认配置（抖动仅影响 get_delay，不影响 start 的退避序列）
-        // 与常量表 DEFAULT_RETRY_DELAYS_MS 锁死，防止两侧漂移
+        // ReconnectManager 默认配置（等比 2.0）与 manager.rs 顶层重连等待表
+        // DEFAULT_RETRY_DELAYS_MS 一致：1s→2s→4s（max_retries=3），防止两侧漂移
         let mgr = ReconnectManager::with_default_config();
         for expect_ms in DEFAULT_RETRY_DELAYS_MS {
             let delay = mgr.start().await.unwrap();
             assert_eq!(delay, Duration::from_millis(*expect_ms));
         }
+    }
+
+    #[tokio::test]
+    async fn test_reconnect_config_shrunk_to_three_rounds() {
+        // 重连收敛配置（2026-08-20）：3 轮封顶 + 等比 1s/2s/4s
+        assert_eq!(DEFAULT_MAX_RETRIES, 3);
+        assert_eq!(DEFAULT_RETRY_DELAYS_MS, &[1000u64, 2000, 4000]);
     }
 
     #[tokio::test]
