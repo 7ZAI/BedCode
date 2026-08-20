@@ -72,10 +72,7 @@ impl OutputEvent {
     pub fn to_serialized(&self) -> OutputEventSerialized {
         OutputEventSerialized {
             session_id: self.session_id.clone(),
-            data: base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                &self.data,
-            ),
+            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data),
             index: self.index,
             timestamp: self.timestamp,
             is_waiting: self.is_waiting,
@@ -84,10 +81,7 @@ impl OutputEvent {
 
     /// 获取 Base64 编码的数据
     pub fn data_base64(&self) -> String {
-        base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            &self.data,
-        )
+        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data)
     }
 }
 
@@ -160,8 +154,7 @@ impl UnifiedOutputQueue {
         self.total_bytes += event_bytes;
 
         // 条目数或总字节数超出时，丢弃最旧事件直到满足限制
-        while (self.buffer.len() >= self.capacity || self.total_bytes > self.max_total_bytes)
-            && !self.buffer.is_empty()
+        while (self.buffer.len() >= self.capacity || self.total_bytes > self.max_total_bytes) && !self.buffer.is_empty()
         {
             if let Some(old) = self.buffer.pop_front() {
                 self.total_bytes -= old.data.len() as u64;
@@ -211,6 +204,13 @@ pub struct SubscriberState {
 /// 16384：大历史重播（数万事件）期间实时输出缓存余量，降低重订阅风暴频率
 const PENDING_EVENT_CAP: usize = 16384;
 
+/// 背压水位：未 ack 字节超过该值 → 暂停该会话 PTY 读取（spec 04-06 渲染反馈环）
+/// 取值须 > 前端 ack 阈值(64KB) + 渲染/写管线 in-flight 余量；1MB 保守兜底
+const BACKPRESSURE_WATERMARK_BYTES: u64 = 1024 * 1024;
+/// 未 ack 记账 FIFO 容量（事件数）：防 ack 停滞时无限增长；满则冻结记账，
+/// unacked 保持近满态触发暂停（保守），ack 弹出后自动恢复精确记账
+const UNACKED_FIFO_CAP: usize = 8192;
+
 impl SubscriberState {
     pub fn new(client_id: String, send_queue: mpsc::Sender<OutputFrame>) -> Self {
         Self {
@@ -243,7 +243,8 @@ impl SubscriberState {
             if let Err(e) = self.send_queue.send(OutputFrame::Output(event.clone())).await {
                 tracing::warn!(
                     "[SessionOutputManager] Failed to send pending to {}: {}",
-                    self.client_id, e
+                    self.client_id,
+                    e
                 );
             }
         }
@@ -266,6 +267,12 @@ pub struct SessionOutputManager {
     session_id: String,
     output_queue: Arc<RwLock<UnifiedOutputQueue>>,
     subscribers: RwLock<HashMap<String, SubscriberState>>,
+    /// 背压记账：已产出未 ack 的字节数（渲染反馈环，前端 onWriteParsed 后
+    /// 回发 ack；超水位 → 暂停该会话 PTY 读取）
+    unacked_bytes: AtomicU64,
+    /// 未 ack 事件 FIFO（index → bytes）：ack 按序弹出精减 unacked_bytes；
+    /// std Mutex 仅作短临界区（无 await 保持），热路径成本低
+    unacked_fifo: std::sync::Mutex<std::collections::VecDeque<(u64, u64)>>,
 }
 
 impl SessionOutputManager {
@@ -274,6 +281,8 @@ impl SessionOutputManager {
             session_id: session_id.to_string(),
             output_queue: Arc::new(RwLock::new(UnifiedOutputQueue::default())),
             subscribers: RwLock::new(HashMap::new()),
+            unacked_bytes: AtomicU64::new(0),
+            unacked_fifo: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -304,6 +313,21 @@ impl SessionOutputManager {
             event = queue.push(event);
         }
 
+        // 背压记账：产出字节累加 + FIFO 登记（ack 按序弹出精减）。FIFO 满表示
+        // ack 严重停滞 → 冻结记账：unacked 保持近满态触发暂停（保守方向），
+        // ack 弹出腾出空间后自动恢复精确记账
+        {
+            let event_bytes = event.data.len() as u64;
+            let mut fifo = match self.unacked_fifo.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if fifo.len() < UNACKED_FIFO_CAP {
+                self.unacked_bytes.fetch_add(event_bytes, Ordering::SeqCst);
+                fifo.push_back((event.index, event_bytes));
+            }
+        }
+
         let subscribers = self.subscribers.read().await;
         for subscriber in subscribers.values() {
             if subscriber.is_active() {
@@ -315,7 +339,8 @@ impl SessionOutputManager {
                             if n <= 3 || n % 100 == 0 {
                                 tracing::warn!(
                                     "[SessionOutputManager] Subscriber {} backlog full, dropped event #{}",
-                                    subscriber.client_id, n
+                                    subscriber.client_id,
+                                    n
                                 );
                             }
                         }
@@ -334,7 +359,8 @@ impl SessionOutputManager {
                         if n <= 3 || n % 100 == 0 {
                             tracing::warn!(
                                 "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{}",
-                                subscriber.client_id, n
+                                subscriber.client_id,
+                                n
                             );
                         }
                     } else {
@@ -343,6 +369,32 @@ impl SessionOutputManager {
                 }
             }
         }
+    }
+
+    /// 客户端 ack：释放 ≤ last_rendered_seq 的未 ack 字节（渲染反馈环回调）
+    ///
+    /// seq 单调前进（前端只对已渲染帧回发）；比当前水位陈旧或超出已产出
+    ///（重订阅竞态/陈旧客户端）的 ack 被 FIFO 弹出条件天然忽略——只弹
+    /// index ≤ seq 的条目，无匹配即不动，unacked 不会越界减为负
+    pub fn on_ack(&self, last_rendered_seq: u64) {
+        let mut fifo = match self.unacked_fifo.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        while let Some(&(index, bytes)) = fifo.front() {
+            if index <= last_rendered_seq {
+                fifo.pop_front();
+                self.unacked_bytes.fetch_sub(bytes, Ordering::SeqCst);
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// 背压判定（PTY 读线程同步调用）：未 ack 字节超过水位 → 暂停读取。
+    /// 纯原子读，零锁零阻塞，可安全地从阻塞读线程高频轮询
+    pub fn should_pause(&self) -> bool {
+        self.unacked_bytes.load(Ordering::SeqCst) > BACKPRESSURE_WATERMARK_BYTES
     }
 
     /// 订阅会话输出（05 快照协议）
@@ -374,10 +426,7 @@ impl SessionOutputManager {
         let subscriber = SubscriberState::new(client_id.to_string(), ws_sender);
 
         // 第一步：插入占位 subscriber（active=false），释放写锁
-        self.subscribers
-            .write()
-            .await
-            .insert(client_id.to_string(), subscriber);
+        self.subscribers.write().await.insert(client_id.to_string(), subscriber);
 
         // 第二步：读取历史并发送（不持锁，不阻塞 on_output）
         // 持读锁期间 on_output 的写锁被阻塞 → 快照与历史严格一致
@@ -390,9 +439,7 @@ impl SessionOutputManager {
 
         // 历史回放起点模式：snapshot（2J 清屏快照点 seq 化记录）尚未实现，
         // 恒回退 min 严格回放；快照机制随后续 ticket 引入
-        if AppConfig::global().channels.history_start_mode
-            == crate::system::config::HistoryStartMode::Snapshot
-        {
+        if AppConfig::global().channels.history_start_mode == crate::system::config::HistoryStartMode::Snapshot {
             tracing::warn!(
                 "[SessionOutputManager] history_start_mode=snapshot 未实现（快照回放延后），回退 min_seq 严格回放"
             );
@@ -421,10 +468,7 @@ impl SessionOutputManager {
             if let Some(sub) = subscribers.get(client_id) {
                 for event in &history {
                     if let Err(e) = sub.send_queue.send(OutputFrame::Output(event.clone())).await {
-                        tracing::warn!(
-                            "[SessionOutputManager] Failed to send history to {}: {}",
-                            client_id, e
-                        );
+                        tracing::warn!("[SessionOutputManager] Failed to send history to {}: {}", client_id, e);
                     }
                 }
                 // 历史边界标记：消费端据此明确"此后为实时流"；旧路由吞掉
@@ -527,7 +571,8 @@ impl SessionOutputManager {
         if self.subscribers.write().await.remove(client_id).is_some() {
             tracing::info!(
                 "[SessionOutputManager] Client {} unsubscribed from session {}",
-                client_id, self.session_id
+                client_id,
+                self.session_id
             );
         }
     }
@@ -537,12 +582,7 @@ impl SessionOutputManager {
     }
 
     pub async fn active_subscriber_count(&self) -> usize {
-        self.subscribers
-            .read()
-            .await
-            .values()
-            .filter(|s| s.is_active())
-            .count()
+        self.subscribers.read().await.values().filter(|s| s.is_active()).count()
     }
 }
 
@@ -603,6 +643,35 @@ impl GlobalOutputManager {
         }
     }
 
+    /// 背压判定（PtyReader 阻塞读线程同步调用，非阻塞零锁）：会话存在且
+    /// 未 ack 超额 → 返回 true（暂停读）。try_read 拿不到读锁（写入者持锁
+    /// 的瞬态窗口）或会话不存在时保守返回 false（不暂停）
+    pub fn should_pause(&self, session_id: &str) -> bool {
+        if let Ok(sessions) = self.sessions.try_read() {
+            if let Some(manager) = sessions.get(session_id) {
+                return manager.should_pause();
+            }
+        }
+        false
+    }
+
+    /// 客户端 ack（背压反馈环 Rust 侧入口）：推进会话未 ack 记账，释放
+    /// `last_rendered_seq` 及之前的输出字节；会话不存在时忽略
+    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64) {
+        let sessions = self.sessions.read().await;
+        if let Some(manager) = sessions.get(session_id) {
+            manager.on_ack(last_rendered_seq);
+            tracing::trace!(
+                session_id,
+                last_rendered_seq,
+                unacked_bytes = manager.unacked_bytes.load(Ordering::SeqCst),
+                "output ack applied"
+            );
+        } else {
+            tracing::debug!(session_id, last_rendered_seq, "ack for unknown session ignored");
+        }
+    }
+
     /// 订阅会话输出（05 快照协议：全量历史 + HistoryEnd 标记，无 start_seq）
     pub async fn subscribe(
         &self,
@@ -615,10 +684,7 @@ impl GlobalOutputManager {
         if let Some(manager) = sessions.get(session_id) {
             Some(manager.subscribe(client_id, ws_sender, response_tx).await)
         } else {
-            tracing::warn!(
-                "[GlobalOutputManager] Session {} not found for subscribe",
-                session_id
-            );
+            tracing::warn!("[GlobalOutputManager] Session {} not found for subscribe", session_id);
             None
         }
     }
@@ -641,12 +707,14 @@ impl GlobalOutputManager {
             manager.unsubscribe(client_id).await;
             tracing::debug!(
                 "[GlobalOutputManager] Unsubscribed client {} from session {}",
-                client_id, session_id
+                client_id,
+                session_id
             );
         }
         tracing::info!(
             "[GlobalOutputManager] Cleaned up subscriptions for client {} across {} sessions",
-            client_id, sessions.len()
+            client_id,
+            sessions.len()
         );
     }
 }
@@ -818,7 +886,11 @@ mod tests {
         // HistoryEnd 标记（携带 snapshot_seq/min_seq/history_count）
         let marker = rx.recv().await.unwrap();
         match marker {
-            OutputFrame::HistoryEnd { snapshot_seq, min_seq, history_count } => {
+            OutputFrame::HistoryEnd {
+                snapshot_seq,
+                min_seq,
+                history_count,
+            } => {
                 assert_eq!(snapshot_seq, 2);
                 assert_eq!(min_seq, 0);
                 assert_eq!(history_count, 3);
@@ -843,7 +915,11 @@ mod tests {
 
         let marker = rx.recv().await.unwrap();
         match marker {
-            OutputFrame::HistoryEnd { snapshot_seq, history_count, .. } => {
+            OutputFrame::HistoryEnd {
+                snapshot_seq,
+                history_count,
+                ..
+            } => {
                 assert_eq!(snapshot_seq, 0);
                 assert_eq!(history_count, 0);
             }
@@ -859,8 +935,7 @@ mod tests {
         let manager = SessionOutputManager::new("test-session");
 
         // 换小容量队列（2）：push 3 条 → index 0 淘汰，min_seq=1
-        *manager.output_queue.write().await =
-            UnifiedOutputQueue::new(2);
+        *manager.output_queue.write().await = UnifiedOutputQueue::new(2);
         manager.output_queue.write().await.push(make_event(0));
         manager.output_queue.write().await.push(make_event(1));
         manager.output_queue.write().await.push(make_event(2));
@@ -928,7 +1003,10 @@ mod tests {
                 break;
             }
         }
-        assert!(manager.is_subscribed("client-race").await, "subscribe must have inserted placeholder");
+        assert!(
+            manager.is_subscribed("client-race").await,
+            "subscribe must have inserted placeholder"
+        );
         // 此时通道已被第 1 帧占满，subscribe 必然挂起在背压上（未激活）
 
         // 占位期（未激活）on_output 产生新事件 → 进入 pending，不入历史
@@ -1061,6 +1139,78 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_backpressure_accounting_pause_and_resume() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-bp").await;
+
+        let (tx, mut rx) = mpsc::channel(1000);
+        manager.subscribe("session-bp", "client-ack", tx, None).await;
+        let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
+
+        let big = vec![b'x'; 32 * 1024];
+        for _ in 0..40 {
+            manager
+                .on_output(OutputEvent {
+                    session_id: "session-bp".to_string(),
+                    data: big.clone(),
+                    index: 0,
+                    timestamp: Utc::now().timestamp_millis(),
+                    is_waiting: false,
+                })
+                .await;
+        }
+        // 40×32KB = 1.25MB > 1MB 水位 → 暂停读
+        assert!(manager.should_pause("session-bp"), "burst should pause");
+
+        // 收集事件 seq（订阅通道 40 帧；on_output 按会话连续分配 1..40）
+        let mut seqs = Vec::new();
+        while let Ok(OutputFrame::Output(e)) = rx.try_recv() {
+            seqs.push(e.index);
+        }
+        assert_eq!(seqs.len(), 40);
+        assert_eq!(seqs[0], 1);
+
+        // ack 到 seq 20：剩余 20×32KB = 640KB < 水位 → 恢复读
+        manager.ack("session-bp", 20).await;
+        assert!(!manager.should_pause("session-bp"), "ack advance should resume");
+
+        // 一次性 ack 超限 seq：全部释放，unacked 不为负
+        manager.ack("session-bp", 9999).await;
+        assert!(!manager.should_pause("session-bp"));
+
+        // 会话不存在：ack 静默忽略，不 panic
+        manager.ack("no-such-session", 5).await;
+    }
+
+    #[tokio::test]
+    async fn test_backpressure_fifo_cap_freeze_and_drain() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-bp-cap").await;
+
+        let tiny = vec![b'c'; 1];
+        // 9000 小事件 > FIFO 容量(8192)：冻结记账，unacked 不再增长
+        for _ in 0..9000 {
+            manager
+                .on_output(OutputEvent {
+                    session_id: "session-bp-cap".to_string(),
+                    data: tiny.clone(),
+                    index: 0,
+                    timestamp: Utc::now().timestamp_millis(),
+                    is_waiting: false,
+                })
+                .await;
+        }
+        // FIFO 满冻结：unacked = 8192B，远小于水位 → 不暂停
+        assert!(!manager.should_pause("session-bp-cap"));
+
+        // 超限 ack：FIFO 内全部弹出，unacked 归零，不因冻结期欠记而变负
+        manager.ack("session-bp-cap", 99999).await;
+        assert!(!manager.should_pause("session-bp-cap"));
+        // 重复 ack：空 FIFO 无匹配，no-op，不越界
+        manager.ack("session-bp-cap", 99999).await;
+    }
+
+    #[tokio::test]
     async fn test_multiple_sessions() {
         let manager = GlobalOutputManager::new();
 
@@ -1175,10 +1325,7 @@ mod tests {
             let subs = manager.subscribers.read().await;
             let sub = subs.get("client-1").unwrap();
             for i in 0..3 {
-                sub.send_queue
-                    .send(OutputFrame::Output(make_event(i)))
-                    .await
-                    .unwrap();
+                sub.send_queue.send(OutputFrame::Output(make_event(i))).await.unwrap();
             }
         }
 

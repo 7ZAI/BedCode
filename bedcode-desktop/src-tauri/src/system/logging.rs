@@ -20,6 +20,24 @@ use tracing_subscriber::registry::LookupSpan;
 /// 控制台时间格式：本地时间毫秒精度（示例：`2026-08-02 00:56:48.819`）
 const CONSOLE_TIME_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.3f";
 
+// ==================== 临时调试：字节 dump 目录（已注释禁用，恢复排查时取消注释） ====================
+// PTY 源头 dump（pty_reader.rs）与终端侧 dump（append_terminal_output_dump 命令）
+// 统一写入同一目录 = 真实日志目录，保证两文件可逐字节对比。目录由 init_logging 写入一次。
+/*
+/// dump 目录（仅 dev 构建下 init_logging 会设置；未初始化时为 None）
+static DUMP_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// 设置 dump 目录（临时调试；幂等，仅首次生效）
+pub fn set_dump_dir(dir: PathBuf) {
+    let _ = DUMP_DIR.set(Some(dir));
+}
+
+/// 获取 dump 目录（未初始化返回 None，调用方应静默跳过）
+pub fn dump_dir() -> Option<&'static PathBuf> {
+    DUMP_DIR.get().and_then(Option::as_ref)
+}
+*/
+
 /// 自定义 `FormatTime`：输出本地时间毫秒精度
 struct LocalMsTimer;
 
@@ -41,9 +59,7 @@ pub struct ConsoleFormatter {
 impl ConsoleFormatter {
     /// 创建默认控制台格式化器
     pub fn new() -> Self {
-        Self {
-            display_location: true,
-        }
+        Self { display_location: true }
     }
 }
 
@@ -251,12 +267,8 @@ mod tests {
         let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
 
         // 时间戳为本地时间毫秒精度
-        let ts_re = regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}")
-            .expect("valid timestamp regex");
-        assert!(
-            ts_re.is_match(&out),
-            "timestamp should be local ms format, got:\n{out}"
-        );
+        let ts_re = regex::Regex::new(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}").expect("valid timestamp regex");
+        assert!(ts_re.is_match(&out), "timestamp should be local ms format, got:\n{out}");
 
         // 时间戳与级别之间必须有空格（修复日志粘连：`27.869DEBUG`）
         // 级别可能被 ANSI 颜色码包裹（\x1b[34mDEBUG\x1b[0m），正则允许颜色码穿插
@@ -283,9 +295,6 @@ mod tests {
 
         // 保留源文件定位行（"at" 被格式化器渲染为 ANSI 斜体样式，字面量 "at " 不出现，
         // 改为断言定位行内容本身）
-        assert!(
-            out.contains("logging.rs:"),
-            "location line should be kept, got:\n{out}"
-        );
+        assert!(out.contains("logging.rs:"), "location line should be kept, got:\n{out}");
     }
 }

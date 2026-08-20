@@ -6,21 +6,23 @@
 use actix::prelude::*;
 use actix_web_actors::ws;
 use actix_web_actors::ws::{Message as WsMessage, ProtocolError};
-use tauri::Emitter;
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
+use tauri::Emitter;
 
-use crate::server::ws::session::WsSession;
-use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
-use crate::server::message::Message;
-use control_frame::ServerFrame;
-use crate::system::app_context::AppContext;
-use crate::session::{GlobalOutputManager, OutputFrame, SessionStatus};
-use crate::utils::auth::jwt::JwtService;
 use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
+use crate::server::message::Message;
+use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
+use crate::server::ws::session::WsSession;
+use crate::session::{GlobalOutputManager, OutputFrame, SessionStatus};
+use crate::system::app_context::AppContext;
 use crate::system::config::AppConfig;
-use crate::system::constants::server::{HEARTBEAT_INTERVAL_SECS, CLIENT_TIMEOUT_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS};
 use crate::system::constants::event;
+use crate::system::constants::server::{
+    CLIENT_TIMEOUT_SECS, HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS,
+};
+use crate::utils::auth::jwt::JwtService;
+use control_frame::ServerFrame;
 
 mod control_frame;
 
@@ -228,9 +230,7 @@ impl Actor for TerminalWs {
                 let session_manager = app_ctx.session_manager();
                 let mut rx = session_manager.subscribe_status();
                 while let Ok(event) = rx.recv().await {
-                    if event.session_id == session_id
-                        && matches!(event.new_status, SessionStatus::Stopped)
-                    {
+                    if event.session_id == session_id && matches!(event.new_status, SessionStatus::Stopped) {
                         let frame = ServerFrame::SessionStopped {
                             session_id: session_id.clone(),
                         };
@@ -350,10 +350,7 @@ impl Actor for TerminalWs {
             // resend announce 自然刷新 peer 记录
             if is_offline {
                 if let Some(device_id) = device_id {
-                    app_ctx
-                        .file_service()
-                        .remove_peer(&device_id)
-                        .await;
+                    app_ctx.file_service().remove_peer(&device_id).await;
                 }
             }
         });
@@ -387,7 +384,10 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
                 crate::server::metrics::MetricsCollector::global().inc_ws_received();
                 self.handle_text_message(text.to_string(), ctx);
             }
-            WsMessage::Binary(_) => {}
+            WsMessage::Binary(data) => {
+                crate::server::metrics::MetricsCollector::global().inc_ws_received();
+                self.handle_ack_binary(data.as_ref(), ctx);
+            }
             WsMessage::Close(reason) => {
                 ctx.close(reason);
                 ctx.stop();
@@ -422,10 +422,18 @@ impl TerminalWs {
         };
 
         match message {
-            Message::Auth { payload, message_id, .. } => {
+            Message::Auth {
+                payload, message_id, ..
+            } => {
                 self.handle_auth(payload, message_id, ctx);
             }
-            Message::Terminal { session_id, payload, message_id, expect_response, .. } => {
+            Message::Terminal {
+                session_id,
+                payload,
+                message_id,
+                expect_response,
+                ..
+            } => {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {
@@ -440,7 +448,12 @@ impl TerminalWs {
                 }
                 self.handle_terminal(session_id, payload, message_id, expect_response, ctx);
             }
-            Message::SessionControl { payload, message_id, expect_response, .. } => {
+            Message::SessionControl {
+                payload,
+                message_id,
+                expect_response,
+                ..
+            } => {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {
@@ -455,7 +468,9 @@ impl TerminalWs {
                 }
                 self.handle_session_control(payload, message_id, expect_response, ctx);
             }
-            Message::FileService { payload, message_id, .. } => {
+            Message::FileService {
+                payload, message_id, ..
+            } => {
                 // 文件服务控制面（移动端 → 桌面，规格阶段 2）：
                 // Announce → 登记对端文件服务；Withdraw → 移除
                 if !self.session.authenticated {
@@ -495,11 +510,7 @@ impl TerminalWs {
     /// 连接级状态机：auth（首消息 JWT，未认证前拒绝一切业务帧并关闭）→
     /// subscribe（无参快照订阅）→ 输出流；input 直通 PTY。
     /// 拒绝对称（spec §4.3）：未认证发业务帧 → error(AUTH_REQUIRED) + 关闭
-    fn handle_session_control_frame(
-        &mut self,
-        text: String,
-        ctx: &mut ws::WebsocketContext<Self>,
-    ) {
+    fn handle_session_control_frame(&mut self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
         let metrics = crate::server::metrics::MetricsCollector::global();
         let frame = match control_frame::parse_client_frame(&text) {
             Ok(f) => f,
@@ -581,9 +592,7 @@ impl TerminalWs {
                 let actor_addr = ctx.address();
                 actix::spawn(async move {
                     let exists = GlobalOutputManager::global().has_session(&session_id).await;
-                    let _ = actor_addr
-                        .send(SessionAuthOutcome { session_id, exists })
-                        .await;
+                    let _ = actor_addr.send(SessionAuthOutcome { session_id, exists }).await;
                 });
             }
             Err((code, message)) => {
@@ -646,11 +655,12 @@ impl TerminalWs {
                 .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx))
                 .await;
             if result.is_none() {
-                let _ = addr.send(SessionSubscribeOutcome {
-                    session_id: session_id_for_sub,
-                    result: None,
-                })
-                .await;
+                let _ = addr
+                    .send(SessionSubscribeOutcome {
+                        session_id: session_id_for_sub,
+                        result: None,
+                    })
+                    .await;
             }
         });
         self.subscribe_tasks.insert(sub_key, subscribe_handle);
@@ -674,11 +684,7 @@ impl TerminalWs {
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
         let merge_output = config.terminal.merge_output;
-        let interval = if merge_output {
-            flush_interval
-        } else {
-            Duration::ZERO
-        };
+        let interval = if merge_output { flush_interval } else { Duration::ZERO };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
         let fwd_handle = tokio::spawn(forward::forward_loop(
             output_rx,
@@ -713,6 +719,27 @@ impl TerminalWs {
         });
     }
 
+    /// 处理客户端背压 ack 帧（spec 04-06 渲染反馈环）：解析后交给全局输出
+    /// 管理器推进该会话未 ack 记账（释放 ≤ last_rendered_seq 的输出字节），
+    /// 使 PTY 读取得以恢复。非法帧（未知二进制）仅记日志，不中断连接——
+    /// ack 尽力而为，丢失时由水位暂停兜底，不缺字节不丢帧
+    fn handle_ack_binary(&self, bytes: &[u8], _ctx: &mut ws::WebsocketContext<Self>) {
+        match control_frame::parse_ack_frame(bytes) {
+            Ok((acked_seq, session_id)) => {
+                actix::spawn(async move {
+                    GlobalOutputManager::global().ack(&session_id, acked_seq).await;
+                });
+            }
+            Err(()) => {
+                tracing::debug!(
+                    addr = %self.session.addr,
+                    len = bytes.len(),
+                    "non-ack binary frame ignored"
+                );
+            }
+        }
+    }
+
     /// 新路由输入：控制帧 input → PTY（data 为 Base64，与旧路由 wire 一致）
     fn handle_session_input(
         &mut self,
@@ -728,10 +755,7 @@ impl TerminalWs {
             // btoa/TextEncoder 编码）。handle_input → write_input 全链路按明文透传，
             // 此处先解码，避免把 base64 字符串原样写入 PTY（修复：快捷命令 /new 被
             // 回显为 L25ldw==）。解码失败按明文透传，兼容误用此路由的明文客户端
-            let data = match base64::Engine::decode(
-                &base64::engine::general_purpose::STANDARD,
-                &data,
-            ) {
+            let data = match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &data) {
                 Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
                 Err(e) => {
                     tracing::warn!(
@@ -744,12 +768,8 @@ impl TerminalWs {
             let payload = TerminalPayload {
                 action: crate::enums::TerminalAction::Input { data, special_key },
             };
-            if let Err(e) = crate::server::services::terminal_service::handle_input(
-                &session_id,
-                payload,
-                &Some(sm),
-            )
-            .await
+            if let Err(e) =
+                crate::server::services::terminal_service::handle_input(&session_id, payload, &Some(sm)).await
             {
                 tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
             }
@@ -761,10 +781,7 @@ impl TerminalWs {
     /// 验证 token → 设置会话认证状态 → 注册到 WsSessionRegistry + 更新
     /// 配对 last_seen + 通知前端设备上线。成功返回 claims（调用方各自
     /// 构造响应帧：旧路由 Message::Auth JSON，新路由 auth_ok 控制帧）
-    fn authenticate_jwt(
-        &mut self,
-        token: &str,
-    ) -> Result<crate::utils::auth::jwt::JwtClaims, (String, String)> {
+    fn authenticate_jwt(&mut self, token: &str) -> Result<crate::utils::auth::jwt::JwtClaims, (String, String)> {
         let jwt_service = JwtService::new();
         let claims = match jwt_service.verify_token_with_expiry(token) {
             Ok(c) => c,
@@ -796,10 +813,7 @@ impl TerminalWs {
         // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
         let fingerprint = claims.fingerprint.clone();
         let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
-            crate::server::services::auth_service::format_device_display_name(
-                n,
-                &self.session.addr.to_string(),
-            )
+            crate::server::services::auth_service::format_device_display_name(n, &self.session.addr.to_string())
         });
         actix::spawn(async move {
             if let Some(fp) = fingerprint {
@@ -815,13 +829,16 @@ impl TerminalWs {
         // 通知桌面端（无头/测试上下文无 AppHandle：跳过前端事件）
         let app_ctx = AppContext::global();
         if let Some(handle) = app_ctx.app_handle() {
-            let _ = handle.emit(event::DEVICE_CONNECTED, &crate::server::connection_types::DeviceConnectionEvent {
-                addr: self.session.addr.to_string(),
-                device_id: claims.sub.clone(),
-                device_name: self.session.device_name.clone(),
-                fingerprint: self.session.fingerprint.clone(),
-                event: "authenticated".to_string(),
-            });
+            let _ = handle.emit(
+                event::DEVICE_CONNECTED,
+                &crate::server::connection_types::DeviceConnectionEvent {
+                    addr: self.session.addr.to_string(),
+                    device_id: claims.sub.clone(),
+                    device_name: self.session.device_name.clone(),
+                    fingerprint: self.session.fingerprint.clone(),
+                    event: "authenticated".to_string(),
+                },
+            );
         }
 
         Ok(claims)
@@ -841,7 +858,12 @@ impl TerminalWs {
         let file_service = crate::system::app_context::AppContext::global().file_service().clone();
 
         match payload {
-            FileServicePayload::Announce { port, token, device_name, mounts } => {
+            FileServicePayload::Announce {
+                port,
+                token,
+                device_name,
+                mounts,
+            } => {
                 // IP 取连接 peer_addr（移动端 bind 0.0.0.0，公告不含 IP）
                 let ip = self.session.addr.ip().to_string();
                 let info = bedcode_plugin_api::PeerFileService {
@@ -888,7 +910,11 @@ impl TerminalWs {
                     send_file_service_snapshot_to(addr).await;
                 });
             }
-            FileServicePayload::TransferApproval { batch_id, decision, reason } => {
+            FileServicePayload::TransferApproval {
+                batch_id,
+                decision,
+                reason,
+            } => {
                 // v2：移动端（接收端宿主）应答传输批 → 桌面端（发送端宿主）：
                 // 经注册表双通道发布 `filesrv:transfer_approval`，发送方插件据此
                 // 推进批记录（approved → 批内任务重新调度 / rejected → 任务拒绝）
@@ -1019,9 +1045,7 @@ impl TerminalWs {
                     ok = ok,
                     "file list response received from peer"
                 );
-                if let Some(tx) =
-                    crate::plugin::file_service::list_pending::take(&list_id)
-                {
+                if let Some(tx) = crate::plugin::file_service::list_pending::take(&list_id) {
                     if tx
                         .send(FileServicePayload::FileListResponse {
                             list_id,
@@ -1037,9 +1061,7 @@ impl TerminalWs {
                     {
                         // 等待方（filesrv_list_remote）已因超时丢弃：仅记 debug
                         //（list_id 已随响应移入 send，此处不再引用）
-                        tracing::debug!(
-                            "file list response: waiting side already dropped (timeout)"
-                        );
+                        tracing::debug!("file list response: waiting side already dropped (timeout)");
                     }
                 } else {
                     tracing::debug!(
@@ -1086,13 +1108,14 @@ impl TerminalWs {
     ) {
         match payload.stage {
             // JWT 重新认证：同步路径，直接验证 JWT token
-            crate::enums::AuthStage::Authenticated
-            | crate::enums::AuthStage::Reauthenticate => {
+            crate::enums::AuthStage::Authenticated | crate::enums::AuthStage::Reauthenticate => {
                 self.handle_auth_jwt(payload, message_id, ctx);
             }
             _ => {
                 let error = Message::error_with_id(&message_id, "INVALID_AUTH_STAGE", "Unsupported auth stage");
-                if let Ok(json) = error.to_json() { ctx.text(json); }
+                if let Ok(json) = error.to_json() {
+                    ctx.text(json);
+                }
             }
         }
     }
@@ -1175,9 +1198,13 @@ impl TerminalWs {
                 actix::spawn(async move {
                     if let Err(e) = crate::server::services::terminal_service::handle_input(
                         &session_id,
-                        TerminalPayload { action: crate::enums::TerminalAction::Input { data, special_key } },
+                        TerminalPayload {
+                            action: crate::enums::TerminalAction::Input { data, special_key },
+                        },
                         &Some(sm),
-                    ).await {
+                    )
+                    .await
+                    {
                         tracing::error!(session_id = %session_id, error = %e, "Terminal input error");
                     }
                 });
@@ -1279,11 +1306,13 @@ impl TerminalWs {
                 .await;
             // 响应已通过 resp_tx 前置返回；此处仅处理会话不存在（resp_tx 已丢弃）
             if result.is_none() {
-                let _ = addr.send(SubscribeResult {
-                    session_id: session_id_for_sub,
-                    request_id,
-                    result: None,
-                }).await;
+                let _ = addr
+                    .send(SubscribeResult {
+                        session_id: session_id_for_sub,
+                        request_id,
+                        result: None,
+                    })
+                    .await;
             }
         });
         self.subscribe_tasks.insert(sub_key, subscribe_handle);
@@ -1291,11 +1320,13 @@ impl TerminalWs {
         // 响应转发任务：订阅建立后立即把裁决消息送回客户端
         actix::spawn(async move {
             if let Ok(response) = resp_rx.await {
-                let _ = addr_for_resp.send(SubscribeResult {
-                    session_id: session_id_for_resp,
-                    request_id: request_id_for_resp,
-                    result: Some(response),
-                }).await;
+                let _ = addr_for_resp
+                    .send(SubscribeResult {
+                        session_id: session_id_for_resp,
+                        request_id: request_id_for_resp,
+                        result: Some(response),
+                    })
+                    .await;
             }
         });
 
@@ -1346,12 +1377,7 @@ impl TerminalWs {
     }
 
     /// 取消订阅
-    fn handle_unsubscribe(
-        &mut self,
-        session_id: String,
-        message_id: String,
-        ctx: &mut ws::WebsocketContext<Self>,
-    ) {
+    fn handle_unsubscribe(&mut self, session_id: String, message_id: String, ctx: &mut ws::WebsocketContext<Self>) {
         let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
@@ -1377,11 +1403,13 @@ impl TerminalWs {
 
         actix::spawn(async move {
             let success = global_manager.unsubscribe(&session_id, &client_id).await;
-            let _ = addr.send(UnsubscribeResult {
-                session_id,
-                request_id,
-                success,
-            }).await;
+            let _ = addr
+                .send(UnsubscribeResult {
+                    session_id,
+                    request_id,
+                    success,
+                })
+                .await;
         });
     }
 
@@ -1412,7 +1440,8 @@ impl TerminalWs {
                 addr,
                 device_name,
                 app_handle,
-            ).await;
+            )
+            .await;
 
             match result {
                 Ok(Some(response_msg)) => {
@@ -1470,7 +1499,11 @@ impl Handler<SubscribeResult> for TerminalWs {
                 }
             }
             None => {
-                let error = Message::error_with_id(&msg.request_id, "SESSION_NOT_FOUND", &format!("Session {} not found", msg.session_id));
+                let error = Message::error_with_id(
+                    &msg.request_id,
+                    "SESSION_NOT_FOUND",
+                    &format!("Session {} not found", msg.session_id),
+                );
                 if let Ok(json) = error.to_json() {
                     crate::server::metrics::MetricsCollector::global().inc_ws_sent();
                     ctx.text(json);
@@ -1613,4 +1646,3 @@ async fn send_file_service_snapshot_to(addr: SocketAddr) {
 }
 
 mod forward;
-
