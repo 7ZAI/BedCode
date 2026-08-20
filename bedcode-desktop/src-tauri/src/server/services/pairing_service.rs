@@ -5,6 +5,7 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::utils::auth::pairing::{PairingCode, PendingDevice};
+use crate::system::constants::auth::PAIRING_CODE_TTL_SECS;
 
 /// 配对服务 - 业务层实现
 /// 负责配对码的生成、验证和待配对设备的管理
@@ -24,13 +25,18 @@ impl PairingService {
         }
     }
 
-    /// 生成新的配对码
+    /// 生成新的配对码（使用默认 TTL）
     pub async fn generate_code(&self) -> PairingCode {
-        let code = PairingCode::generate();
+        self.generate_code_with_ttl(PAIRING_CODE_TTL_SECS).await
+    }
+
+    /// 生成新的配对码，指定有效期（秒）
+    pub async fn generate_code_with_ttl(&self, ttl_secs: u64) -> PairingCode {
+        let code = PairingCode::generate_with_ttl(ttl_secs);
         let mut current = self.current_code.lock().await;
         *current = Some(code.clone());
 
-        tracing::info!("Generated pairing code: {}", code.code);
+        tracing::info!("Generated pairing code: {} (TTL: {}s)", code.code, ttl_secs);
         code
     }
 

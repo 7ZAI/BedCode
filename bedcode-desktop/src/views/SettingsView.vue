@@ -36,7 +36,11 @@
 
     <!-- 内容区：按功能分 section，section 间 24px -->
     <div class="flex-1 overflow-auto px-6 py-6">
-      <div class="max-w-3xl mx-auto space-y-6">
+      <div
+        class="lang-fade-content max-w-3xl mx-auto space-y-6"
+        :class="{ 'lang-fading': langFading }"
+        :style="{ transitionDuration: animationsEnabled ? '0.4s' : '0s' }"
+      >
         <!-- ==================== APPEARANCE ==================== -->
         <section>
           <h3 class="wb-section-title">{{ t('settings.ui.title') }}</h3>
@@ -131,7 +135,7 @@
                       ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
                   "
-                  @click="currentLanguage = opt.value"
+                  @click="switchLanguage(opt.value)"
                 >
                   {{ opt.label }}
                 </button>
@@ -218,9 +222,9 @@
           </div>
         </section>
 
-        <!-- ==================== NETWORK ==================== -->
+        <!-- ==================== PAIRING ==================== -->
         <section>
-          <h3 class="wb-section-title">{{ t('settings.network.title') }}</h3>
+          <h3 class="wb-section-title">{{ t('settings.pairing.title') }}</h3>
           <div
             class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
           >
@@ -228,10 +232,10 @@
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div>
                 <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{
-                  t('settings.network.defaultPort')
+                  t('settings.pairing.defaultPort')
                 }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
-                  {{ t('settings.network.defaultPortDesc') }}
+                  {{ t('settings.pairing.defaultPortDesc') }}
                 </p>
               </div>
               <input
@@ -246,36 +250,42 @@
               />
             </div>
 
-            <!-- 防止休眠：方角开关 -->
+            <!-- 二维码有效期：配对时展示的二维码有效时间 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div>
                 <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{
-                  t('settings.network.preventSleep')
+                  t('settings.pairing.qrValidity')
                 }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
-                  {{ t('settings.network.preventSleepDesc') }}
+                  {{ t('settings.pairing.qrValidityDesc') }}
                 </p>
               </div>
-              <button
-                class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
-                :class="
-                  preventSleep
-                    ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
-                    : 'bg-[var(--bg-page)] border-[var(--border-strong)]'
-                "
-                role="switch"
-                :aria-checked="preventSleep"
-                @click="preventSleep = !preventSleep"
-              >
-                <span
-                  class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
-                  :class="
-                    preventSleep
-                      ? 'left-[22px] bg-[var(--color-primary-contrast)]'
-                      : 'left-[3px] bg-[var(--border-strong)]'
-                  "
-                />
-              </button>
+              <input
+                type="number"
+                :value="qrTokenTtl"
+                class="h-8 w-28 px-2.5 rounded-[6px] wb-mono text-right bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @input="qrTokenTtl = Number(($event.target as HTMLInputElement).value)"
+                @blur="saveQrTokenTtl"
+              />
+            </div>
+
+            <!-- 配对码有效期：手动输入的配对码有效时间 -->
+            <div class="px-5 py-3.5 flex items-center justify-between gap-4">
+              <div>
+                <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{
+                  t('settings.pairing.pairingCodeTtl')
+                }}</span>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
+                  {{ t('settings.pairing.pairingCodeTtlDesc') }}
+                </p>
+              </div>
+              <input
+                type="number"
+                :value="pairingCodeTtl"
+                class="h-8 w-28 px-2.5 rounded-[6px] wb-mono text-right bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
+                @input="pairingCodeTtl = Number(($event.target as HTMLInputElement).value)"
+                @blur="savePairingCodeTtl"
+              />
             </div>
           </div>
         </section>
@@ -329,26 +339,42 @@
           </div>
         </section>
 
-        <!-- ==================== QR CODE ==================== -->
+        <!-- ==================== SYSTEM ==================== -->
         <section>
-          <h3 class="wb-section-title">{{ t('settings.qr.title') }}</h3>
-          <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px]">
+          <h3 class="wb-section-title">{{ t('settings.system.title') }}</h3>
+          <div
+            class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
+          >
+            <!-- 防止休眠：方角开关 -->
             <div class="px-5 py-3.5 flex items-center justify-between gap-4">
               <div>
                 <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">{{
-                  t('settings.qr.validity')
+                  t('settings.system.preventSleep')
                 }}</span>
                 <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
-                  {{ t('settings.qr.validityDesc') }}
+                  {{ t('settings.system.preventSleepDesc') }}
                 </p>
               </div>
-              <input
-                type="number"
-                :value="qrTokenTtl"
-                class="h-8 w-28 px-2.5 rounded-[6px] wb-mono text-right bg-[var(--bg-page)] border border-[var(--border-strong)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
-                @input="qrTokenTtl = Number(($event.target as HTMLInputElement).value)"
-                @blur="saveQrTokenTtl"
-              />
+              <button
+                class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
+                :class="
+                  preventSleep
+                    ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
+                    : 'bg-[var(--bg-page)] border-[var(--border-strong)]'
+                "
+                role="switch"
+                :aria-checked="preventSleep"
+                @click="preventSleep = !preventSleep"
+              >
+                <span
+                  class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+                  :class="
+                    preventSleep
+                      ? 'left-[22px] bg-[var(--color-primary-contrast)]'
+                      : 'left-[3px] bg-[var(--border-strong)]'
+                  "
+                />
+              </button>
             </div>
           </div>
         </section>
@@ -426,7 +452,11 @@ import { useI18nStore } from '@/stores/i18n'
 import { useQrCodeApi } from '@/composables/useTauri'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import i18n from '@/locales'
-import { getAppVersion } from '@/composables/useDesktopCommands'
+import {
+  getAppVersion,
+  getPairingCodeTtl,
+  setPairingCodeTtl,
+} from '@/composables/useDesktopCommands'
 import { open } from '@tauri-apps/plugin-shell'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, NORMAL_FONT_SIZE } from '@/composables/useFontSize'
@@ -448,6 +478,7 @@ const {
 
 const appVersion = ref('')
 const qrTokenTtl = ref(300)
+const pairingCodeTtl = ref(60)
 
 // ==================== 字体大小档位 ====================
 // 档位间可无级滑动，点击下方标签跳到对应档位；值以 px 存储（12 = 正常）
@@ -573,6 +604,30 @@ const currentLanguage = computed({
   set: (value: string) => i18nStore.setLanguage(value),
 })
 
+// 语言切换过渡：先淡出当前内容，再在不可见时换语言，最后淡入新内容，
+// 避免新旧文案重叠造成的闪烁；总时长由「动画效果」开关与 0.4s 时长控制。
+const FADE_MS = 400
+const langFading = ref(false)
+let langFadeTimer: ReturnType<typeof setTimeout> | null = null
+
+function switchLanguage(value: string) {
+  if (currentLanguage.value === value) return
+  if (langFadeTimer) clearTimeout(langFadeTimer)
+  if (!animationsEnabled.value) {
+    void i18nStore.setLanguage(value)
+    return
+  }
+  langFading.value = true
+  langFadeTimer = setTimeout(() => {
+    void i18nStore.setLanguage(value)
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        langFading.value = false
+      })
+    })
+  }, FADE_MS)
+}
+
 async function loadQrTokenTtl() {
   qrTokenTtl.value = await qrApi.getQrTokenTtl()
 }
@@ -581,6 +636,16 @@ async function saveQrTokenTtl() {
   const val = Math.max(60, Math.min(3600, qrTokenTtl.value))
   qrTokenTtl.value = val
   await qrApi.setQrTokenTtl(val)
+}
+
+async function loadPairingCodeTtl() {
+  pairingCodeTtl.value = await getPairingCodeTtl()
+}
+
+async function savePairingCodeTtl() {
+  const val = Math.max(60, Math.min(3600, pairingCodeTtl.value))
+  pairingCodeTtl.value = val
+  await setPairingCodeTtl(val)
 }
 
 // 防抖保存逻辑：设置变更 500ms 后统一持久化；组件卸载时立即 flush，
@@ -616,6 +681,7 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   await settingsStore.loadSettings()
   await loadQrTokenTtl()
+  await loadPairingCodeTtl()
   try {
     appVersion.value = await getAppVersion()
   } catch {
@@ -652,3 +718,14 @@ const downloadPercent = computed(() => {
   )
 })
 </script>
+
+<style scoped>
+/* 语言切换：淡出 → 换文案 → 淡入（单元素不重挂载，无重叠闪烁） */
+.lang-fade-content {
+  transition-property: opacity;
+  transition-timing-function: ease;
+}
+.lang-fade-content.lang-fading {
+  opacity: 0;
+}
+</style>

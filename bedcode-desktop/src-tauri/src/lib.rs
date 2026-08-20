@@ -69,6 +69,9 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     #[cfg(debug_assertions)]
     reset_today_logs(&log_dir);
 
+    // 2026-08: 字节 dump 目录记录已注释禁用（临时调试，恢复排查时取消注释）
+    // system::logging::set_dump_dir(log_dir.clone());
+
     // 解析轮转策略
     let rotation = match log_config.rotation.as_str() {
         "hourly" => tracing_appender::rolling::Rotation::HOURLY,
@@ -539,6 +542,8 @@ pub fn run() {
             commands::system::get_current_pairing_code,
             commands::system::verify_pairing_code,
             commands::system::clear_pairing_code,
+            commands::system::get_pairing_code_ttl,
+            commands::system::set_pairing_code_ttl,
             commands::system::list_paired_devices,
             commands::system::remove_paired_device,
             commands::system::list_connection_history,
@@ -562,6 +567,8 @@ pub fn run() {
             commands::system::get_startup_time,
             commands::system::get_local_ip_addresses,
             commands::system::get_system_info,
+            // 2026-08: append_terminal_output_dump 临时调试命令已注释禁用（恢复排查时取消注释）
+            // commands::system::append_terminal_output_dump,
             commands::system::confirm_window_close,
             commands::devices::get_connected_devices,
             // Plugin

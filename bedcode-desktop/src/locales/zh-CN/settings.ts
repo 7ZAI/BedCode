@@ -1,22 +1,24 @@
 export default {
   settings: {
     title: '设置',
-    network: {
-      title: '网络设置',
+    pairing: {
+      title: '配对设置',
       defaultPort: '默认端口',
       defaultPortDesc: '服务器启动时使用的端口，重启后生效',
-      preventSleep: '防止系统休眠',
-      preventSleepDesc: '服务器运行时阻止系统进入休眠状态（允许屏幕熄灭）',
+      qrValidity: '二维码有效期',
+      qrValidityDesc: '设置二维码的有效时间（60-3600秒）',
+      pairingCodeTtl: '配对码有效期',
+      pairingCodeTtlDesc: '设置配对码的有效时间（60-3600秒）',
     },
     session: {
       title: '会话默认设置',
       defaultEnvironment: '默认执行环境',
       defaultCommand: '默认启动命令',
     },
-    qr: {
-      title: '二维码设置',
-      validity: '二维码有效期',
-      validityDesc: '设置二维码的有效时间（60-3600秒）',
+    system: {
+      title: '系统设置',
+      preventSleep: '防止系统休眠',
+      preventSleepDesc: '服务器运行时阻止系统进入休眠状态（允许屏幕熄灭）',
     },
     ui: {
       title: '界面设置',

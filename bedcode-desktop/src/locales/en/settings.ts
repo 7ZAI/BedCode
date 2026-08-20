@@ -1,23 +1,25 @@
 export default {
   settings: {
     title: 'Settings',
-    network: {
-      title: 'Network Settings',
+    pairing: {
+      title: 'Pairing Settings',
       defaultPort: 'Default Port',
       defaultPortDesc: 'The port used when the server starts; takes effect after restart',
-      preventSleep: 'Prevent System Sleep',
-      preventSleepDesc:
-        'Prevent the system from sleeping while the server is running (display sleep allowed)',
+      qrValidity: 'QR Code Validity',
+      qrValidityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
+      pairingCodeTtl: 'Pairing Code Validity',
+      pairingCodeTtlDesc: 'Set the validity period for pairing codes (60-3600 seconds)',
     },
     session: {
       title: 'Session Defaults',
       defaultEnvironment: 'Default Environment',
       defaultCommand: 'Default Start Command',
     },
-    qr: {
-      title: 'QR Code Settings',
-      validity: 'QR Code Validity',
-      validityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
+    system: {
+      title: 'System Settings',
+      preventSleep: 'Prevent System Sleep',
+      preventSleepDesc:
+        'Prevent the system from sleeping while the server is running (display sleep allowed)',
     },
     ui: {
       title: 'UI Settings',

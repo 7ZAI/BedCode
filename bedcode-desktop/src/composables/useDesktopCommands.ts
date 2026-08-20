@@ -215,6 +215,20 @@ export async function generatePairingCode(): Promise<PairingCodeInfo> {
 }
 
 /**
+ * 获取配对码有效期（秒）
+ */
+export async function getPairingCodeTtl(): Promise<number> {
+  return await invoke('get_pairing_code_ttl')
+}
+
+/**
+ * 设置配对码有效期（秒）
+ */
+export async function setPairingCodeTtl(ttl: number): Promise<void> {
+  return await invoke('set_pairing_code_ttl', { ttl })
+}
+
+/**
  * 获取当前配对码
  */
 export async function getCurrentPairingCode(): Promise<PairingCodeInfo | null> {
@@ -474,6 +488,8 @@ export function useDesktopCommands() {
     getCurrentPairingCode,
     verifyPairingCode,
     clearPairingCode,
+    getPairingCodeTtl,
+    setPairingCodeTtl,
     listPairedDevices,
     removePairedDevice,
 

@@ -84,9 +84,9 @@ pub async fn get_qr_token_ttl(
 #[tauri::command]
 pub async fn set_qr_token_ttl(
     db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
-    seconds: u64,
+    ttl: u64,
 ) -> Result<()> {
     let db = db.lock().await;
-    db.set_setting("qr_token_ttl", &seconds.to_string())
+    db.set_setting("qr_token_ttl", &ttl.to_string())
         .map_err(|e| crate::AppError::Config(e.to_string()))
 }
