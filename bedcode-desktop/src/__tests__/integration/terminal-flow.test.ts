@@ -417,10 +417,10 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     expect(inputMarkers.visibleMarkers.value[0].text).toBe('echo hi')
     expect(inputMarkers.visibleMarkers.value[0].line).toBe(0)
 
-    // PTY 尺寸同步参数构造（TerminalPreview onResize 的 store 路径）
+    // PTY 尺寸同步参数构造（TerminalPreview onResize 的 store 路径；默认 force=false）
     await sessionStore.resizeSession('session-1', 80, 24)
     expect(invokeCalls('resize_session')).toEqual([
-      [{ sessionId: 'session-1', cols: 80, rows: 24 }],
+      [{ sessionId: 'session-1', cols: 80, rows: 24, force: false }],
     ])
   })
 })

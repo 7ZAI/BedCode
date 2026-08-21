@@ -160,7 +160,18 @@ fn convert_json_to_message(message_type: &str, payload: serde_json::Value) -> Op
                         .and_then(|a| a.get("rows"))
                         .and_then(|v| v.as_u64())
                         .unwrap_or(DEFAULT_ROWS as u64) as u16;
-                    SessionControlAction::ResizeSession { session_id, cols, rows }
+                    // force 可选字段：移动端前端走 HTTP resize（force 随 HTTP 体），WS 路径默认不强制
+                    let force = payload
+                        .get("action")
+                        .and_then(|a| a.get("force"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    SessionControlAction::ResizeSession {
+                        session_id,
+                        cols,
+                        rows,
+                        force,
+                    }
                 }
                 _ => return None,
             };

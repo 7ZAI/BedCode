@@ -1,6 +1,6 @@
 //! Session Commands
 
-use crate::session::SessionManager;
+use crate::session::{RendererSource, ResizeOutcome, SessionManager};
 use crate::Result;
 use std::sync::Arc;
 use tauri::State;
@@ -86,12 +86,25 @@ pub async fn restart_session(session_manager: State<'_, Arc<SessionManager>>, se
     session_manager.restart_session(&session_id).await
 }
 
+/// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）
+///
+/// force 置位表示覆盖确认已通过（前端弹窗确认后重发）；返回 ResizeOutcome
+/// 供前端判断是否需要弹窗确认（NeedsConfirmation 时未应用任何改动）。
 #[tauri::command]
 pub async fn resize_session(
     session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     cols: u16,
     rows: u16,
-) -> Result<()> {
-    session_manager.resize_session(&session_id, cols, rows).await
+    force: Option<bool>,
+) -> Result<ResizeOutcome> {
+    session_manager
+        .resize_session(
+            &session_id,
+            cols,
+            rows,
+            RendererSource::Desktop,
+            force.unwrap_or(false),
+        )
+        .await
 }

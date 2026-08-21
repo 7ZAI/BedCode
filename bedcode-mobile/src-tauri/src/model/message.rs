@@ -2084,6 +2084,7 @@ mod tests {
                     session_id: "s1".into(),
                     cols: 80,
                     rows: 24,
+                    force: false,
                 },
                 Some("s1"),
             ),

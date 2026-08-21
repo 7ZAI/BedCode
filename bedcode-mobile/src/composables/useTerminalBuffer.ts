@@ -49,8 +49,18 @@ export function useTerminalBuffer() {
     terminal: Terminal,
     wrapSyncOutput = false,
     onRawOutput?: (data: Uint8Array) => void,
+    /** 渲染背压门控：仅本端为会话正统渲染端时回发 ack（非正统时服务端丢弃，白红流量） */
+    shouldAck?: () => boolean,
   ) {
     const writeCoalescer = createWriteCoalescer(terminal, { wrapSyncOutput })
+    // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
+    // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
+    // shouldAck 门控：仅本端为会话正统渲染端时发送（非正统时服务端丢弃）
+    terminal.onWriteParsed(() => {
+      if (shouldAck?.()) {
+        store.ackRendered(sessionId)
+      }
+    })
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         onRawOutput?.(data)

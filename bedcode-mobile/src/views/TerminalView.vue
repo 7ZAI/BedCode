@@ -124,6 +124,26 @@
       @confirm="clearTerminal"
       @cancel="showClearConfirm = false"
     />
+
+    <!-- 正统渲染端覆盖确认：服务端裁决本端非正统（另一端正渲染输出）时弹出，
+         确认后 force 重发覆盖，取消则抑制同尺寸后续请求 -->
+    <ConfirmDialog
+      v-model="showRendererOverrideDialog"
+      :title="$t('mobile.terminal.rendererOverrideTitle')"
+      :message="
+        rendererOverrideTarget
+          ? $t('mobile.terminal.rendererOverrideBody', {
+              renderer: rendererOverrideTarget.rendererName,
+            })
+          : ''
+      "
+      :confirm-text="$t('mobile.terminal.rendererOverrideConfirm')"
+      :cancel-text="$t('mobile.terminal.rendererOverrideCancel')"
+      variant="warning"
+      :close-on-backdrop="false"
+      @confirm="confirmRendererOverride"
+      @cancel="cancelRendererOverride"
+    />
   </div>
 
   <!-- Task Picker -->
@@ -179,7 +199,8 @@ import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
-import { httpResizeSession } from '@/composables/useHttpApi'
+import { httpResizeSession, type RendererSource } from '@/composables/useHttpApi'
+import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useOrientation } from '@/composables/useOrientation'
 import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
@@ -1176,8 +1197,9 @@ async function initTerminal() {
   }
 
   // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
-  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹仅 WebGL 模式启用）
-  registerRealtimeHandler(sessionId.value, term, webglActive, feedTuiOutput)
+  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹仅 WebGL 模式启用）；
+  // shouldAck 门控 = 本端是会话正统渲染端（渲染背压 ack 仅正统端发送）
+  registerRealtimeHandler(sessionId.value, term, webglActive, feedTuiOutput, () => isCanonicalRenderer.value)
 
   // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
   attachTuiCompat(term)
@@ -1250,17 +1272,72 @@ async function initTerminal() {
 // 最后请求的尺寸，杜绝多通道/并发乱序覆盖
 
 let resizeInFlight = false
-let pendingResize: { cols: number; rows: number } | null = null
+let pendingResize: { cols: number; rows: number; force: boolean } | null = null
 
-async function queueResize(cols: number, rows: number) {
+// ==================== 正统渲染端裁决交互 ====================
+// 桌面端与移动端共用同一 PTY 尺寸：服务段裁决本端是否正统渲染端。
+// 非正统时 resize 响应 needsConfirmation（未应用），此处弹窗确认，
+// 确认后 force 重发覆盖；取消则记下被拒尺寸防旋转/RO 弹窗风暴。
+
+/** 用户拒绝覆盖的尺寸（成功后清空；同尺寸不再重发） */
+let rejectedSize: { cols: number; rows: number } | null = null
+
+/** 待确认覆盖目标（弹窗内容源） */
+const rendererOverrideTarget = ref<{
+  cols: number
+  rows: number
+  rendererName: string
+} | null>(null)
+const showRendererOverrideDialog = ref(false)
+
+/**
+ * 本端是否为当前会话的正统渲染端。
+ * resize 响应 applied（请求方即位正统）后置 true；needsConfirmation 置 false。
+ * 决定渲染背压 ack 是否发送（非正统时服务端丢弃 ack，不浪费流量）
+ */
+const isCanonicalRenderer = ref(false)
+
+/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名 */
+function rendererDisplayName(source: RendererSource): string {
+  if (source.kind === 'desktop') return t('mobile.terminal.rendererDesktop')
+  return source.deviceName || t('mobile.terminal.rendererMobile')
+}
+
+/** 用户确认覆盖：force 重发（尺寸移交服务端正统归属） */
+async function confirmRendererOverride() {
+  const target = rendererOverrideTarget.value
+  showRendererOverrideDialog.value = false
+  rendererOverrideTarget.value = null
+  if (target) await queueResize(target.cols, target.rows, true)
+}
+
+/** 用户拒绝覆盖：记录被拒尺寸，同尺寸不再打扰 */
+function cancelRendererOverride() {
+  const target = rendererOverrideTarget.value
+  showRendererOverrideDialog.value = false
+  rendererOverrideTarget.value = null
+  if (target) rejectedSize = { cols: target.cols, rows: target.rows }
+}
+
+async function queueResize(cols: number, rows: number, force = false) {
   if (cols <= 0 || rows <= 0) return
   if (isMockSession(sessionId.value)) return
   const sid = sessionId.value
   if (!sid) return
   // 未 fit 的 xterm 默认尺寸（80x24）：跳过，等 fit 后发送真实尺寸
   if (cols === 80 && rows === 24) return
+  // 用户刚拒绝过的相同尺寸：抑制（force 重发绕过，确认覆盖是明确意图）
+  if (!force && rejectedSize && rejectedSize.cols === cols && rejectedSize.rows === rows) return
+  // 相同尺寸已在确认弹窗中：不再重复入队（防弹窗期间 RO 事件叠加）
+  if (
+    rendererOverrideTarget.value &&
+    rendererOverrideTarget.value.cols === cols &&
+    rendererOverrideTarget.value.rows === rows
+  ) {
+    return
+  }
 
-  pendingResize = { cols, rows }
+  pendingResize = { cols, rows, force }
   if (resizeInFlight) return
   resizeInFlight = true
   try {
@@ -1269,10 +1346,31 @@ async function queueResize(cols: number, rows: number) {
       pendingResize = null
       if (!isConnected.value) break
       // 调试验证：记录实际发送给主机 PTY 的尺寸
-      console.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}`)
-      const result = await httpResizeSession(sid, next.cols, next.rows)
+      console.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}${next.force ? ' (force)' : ''}`)
+      const result = await httpResizeSession(sid, next.cols, next.rows, next.force)
       if (result.code !== 0) {
         console.warn('[TerminalView] Queue resize failed:', result.message)
+        continue
+      }
+      const outcome = result.data
+      if (!outcome) {
+        // 服务端未返回裁决数据（异常响应）：按失败处理，下次触发时重试
+        console.warn('[TerminalView] Resize response missing outcome data')
+        continue
+      }
+      if (outcome.status === 'applied') {
+        // 已应用：本端即位正统渲染端（请求方即正统），清空抑制记录
+        rejectedSize = null
+        isCanonicalRenderer.value = true
+      } else if (outcome.status === 'needsConfirmation') {
+        // 另一端正渲染输出：弹窗确认是否覆盖（未应用，PTY 尺寸保持对方设置）
+        isCanonicalRenderer.value = false
+        rendererOverrideTarget.value = {
+          cols: next.cols,
+          rows: next.rows,
+          rendererName: rendererDisplayName(outcome.currentCanonical),
+        }
+        showRendererOverrideDialog.value = true
       }
     }
   } finally {

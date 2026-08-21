@@ -100,8 +100,26 @@ export async function restartSession(sessionId: string): Promise<void> {
 /**
  * 调整终端大小
  */
-export async function resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
-  return await invoke('resize_session', { sessionId, cols, rows })
+export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
+
+/** resize 裁决结果（与 Rust 侧 ResizeOutcome serde 形状对齐） */
+export type ResizeOutcome =
+  | { status: 'applied'; canonical: RendererSource }
+  | { status: 'needsConfirmation'; currentCanonical: RendererSource }
+
+/**
+ * 调整会话终端大小（正统渲染端裁决）
+ *
+ * force=false：本端非当前正统渲染端时返回 needsConfirmation（未应用），
+ * 由调用方弹窗确认后以 force=true 重发覆盖。
+ */
+export async function resizeSession(
+  sessionId: string,
+  cols: number,
+  rows: number,
+  force = false,
+): Promise<ResizeOutcome> {
+  return await invoke('resize_session', { sessionId, cols, rows, force })
 }
 
 /**

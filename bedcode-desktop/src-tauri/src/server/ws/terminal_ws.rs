@@ -14,7 +14,7 @@ use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
 use crate::server::message::Message;
 use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::ws::session::WsSession;
-use crate::session::{GlobalOutputManager, OutputFrame, SessionStatus};
+use crate::session::{GlobalOutputManager, OutputFrame, RendererSource, SessionStatus};
 use crate::system::app_context::AppContext;
 use crate::system::config::AppConfig;
 use crate::system::constants::event;
@@ -723,11 +723,32 @@ impl TerminalWs {
     /// 管理器推进该会话未 ack 记账（释放 ≤ last_rendered_seq 的输出字节），
     /// 使 PTY 读取得以恢复。非法帧（未知二进制）仅记日志，不中断连接——
     /// ack 尽力而为，丢失时由水位暂停兜底，不缺字节不丢帧
+    ///
+    /// 来源身份：本地环回通道（桌面 WebView）为 Desktop；远程通道（移动端）
+    /// 取认证时的 device_name——服务端据此做背压门控（仅正统渲染端的 ack
+    /// 推进记账，见 GlobalOutputManager::ack）
     fn handle_ack_binary(&self, bytes: &[u8], _ctx: &mut ws::WebsocketContext<Self>) {
+        // 提前解析来源（actix::spawn 需要 'static）
+        let source = if self.local {
+            RendererSource::Desktop
+        } else {
+            match self.session.device_name.clone() {
+                Some(name) => RendererSource::Mobile { device_name: name },
+                None => {
+                    tracing::debug!(
+                        addr = %self.session.addr,
+                        "ack from unauthenticated remote channel, treating as Desktop source"
+                    );
+                    RendererSource::Desktop
+                }
+            }
+        };
         match control_frame::parse_ack_frame(bytes) {
             Ok((acked_seq, session_id)) => {
                 actix::spawn(async move {
-                    GlobalOutputManager::global().ack(&session_id, acked_seq).await;
+                    GlobalOutputManager::global()
+                        .ack(&session_id, acked_seq, source)
+                        .await;
                 });
             }
             Err(()) => {

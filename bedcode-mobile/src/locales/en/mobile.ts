@@ -156,6 +156,13 @@ export default {
       refreshFailed: 'Refresh failed',
       subscribeFailed: 'Failed to subscribe terminal output, retrying...',
       scrollToBottom: 'Scroll to bottom',
+      rendererOverrideTitle: 'Override Terminal Size',
+      rendererOverrideBody:
+        'The {renderer} end is currently rendering output. Override its size?\nThe {renderer} end display will be misformatted after override.',
+      rendererOverrideConfirm: 'Override',
+      rendererOverrideCancel: 'Cancel',
+      rendererDesktop: 'Desktop',
+      rendererMobile: 'Mobile',
     },
     pairing: {
       title: 'Enter Pairing Code',

@@ -11,8 +11,9 @@ use crate::session::{
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
-        ConfigMapper, DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry,
-        DefaultStatusDetector, NamingService, PtyRegistry, SessionInfoRegistry, StatusDetector,
+        CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
+        DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
+        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
@@ -36,6 +37,8 @@ pub struct SessionManager {
     pty_registry: Arc<DefaultPtyRegistry>,
     /// 会话信息注册表
     session_info: Arc<DefaultSessionInfoRegistry>,
+    /// 正统渲染端注册表（每会话 PTY 尺寸归属端，尺寸裁决 + 背压门控权威）
+    canonical_renderer: Arc<DefaultCanonicalRendererRegistry>,
     /// 事件总线
     event_bus: Arc<DefaultSessionEventBus>,
     /// 命名服务
@@ -97,6 +100,7 @@ impl SessionManager {
     ) -> Self {
         let pty_registry = Arc::new(DefaultPtyRegistry::new());
         let session_info = Arc::new(DefaultSessionInfoRegistry::new());
+        let canonical_renderer = Arc::new(DefaultCanonicalRendererRegistry::new());
         let event_bus = Arc::new(DefaultSessionEventBus::new());
         let naming_service = Arc::new(DefaultNamingService::new());
         let config_mapper = Arc::new(DefaultConfigMapper::new());
@@ -108,6 +112,7 @@ impl SessionManager {
         Self {
             pty_registry,
             session_info,
+            canonical_renderer,
             event_bus,
             naming_service,
             config_mapper,
@@ -333,6 +338,19 @@ impl SessionManager {
 
         // 保存到各服务
         self.pty_registry.insert(session_id.clone(), pty_session).await;
+        // 正统渲染端初始归属 = 启动端：PTY 在「启动按钮」按下时即创建并运行，
+        // 先于任何终端视图打开；其初始网格尺寸由首个打开终端的 resize 确立。
+        // 故归属在启动时按来源固定：桌面本地启动（source_device=None）为
+        // Desktop；移动端经 HTTP/WS 启动（source_device=claims 设备名）为
+        // Mobile{device_name}。归属随启动端确立，避免移动端单独启动会话时
+        // 首次 resize 误弹覆盖确认（见 resize_session 裁决）。
+        let initial_canonical = match &source_device {
+            Some(name) => RendererSource::Mobile {
+                device_name: name.clone(),
+            },
+            None => RendererSource::Desktop,
+        };
+        self.canonical_renderer.set(&session_id, initial_canonical).await;
         self.session_info.insert(info).await;
 
         // 注册到全局输出管理器（启用移动端订阅功能）
@@ -414,6 +432,7 @@ impl SessionManager {
 
         // 保存到各服务
         self.pty_registry.insert(session_id.clone(), pty_session).await;
+        // 正统渲染端初始为空：首位设置尺寸的端经 resize_session 抢占归属
         self.session_info.insert(info).await;
 
         // 发布同步事件：会话创建（状态为 starting）
@@ -576,6 +595,8 @@ impl SessionManager {
 
         // 保存到各服务
         self.pty_registry.insert(session_id.to_string(), pty_session).await;
+        // 正统渲染端归属：重启由桌面端发起（source_device=None）→ Desktop
+        self.canonical_renderer.set(&session_id, RendererSource::Desktop).await;
         self.session_info.insert(info).await;
 
         tracing::info!("Session restarted: {} ({})", old_name_for_event, session_id);
@@ -684,9 +705,53 @@ impl SessionManager {
         Ok(())
     }
 
-    /// 调整会话终端大小（多个查看者并发时按「最后调整者生效」竞争）
-    pub async fn resize_session(&self, session_id: &str, cols: u16, rows: u16) -> Result<()> {
-        self.pty_registry.resize(session_id, cols, rows).await
+    /// 调整会话终端大小（多端并发时的正统渲染端裁决）
+    ///
+    /// 参数：
+    /// - `source` 请求方身份（桌面端恒为 Desktop，移动端为 Mobile{device_name}）
+    /// - `force` 是否强制覆盖（客户端弹窗确认后置位）
+    ///
+    /// 规则：无归属时首次请求方即位正统；归属 = 请求方直接应用；归属 ≠ 请求方
+    /// 且未 force → 返回 NeedsConfirmation（不应用底层 resize），由请求方弹窗
+    /// 确认后带 force 重发；force → 应用并移交归属。
+    pub async fn resize_session(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        source: RendererSource,
+        force: bool,
+    ) -> Result<ResizeOutcome> {
+        let current = self.canonical_renderer.get(session_id).await;
+        match &current {
+            // 无归属（首次设置者即位正统）或归属 = 请求方：直接应用
+            None => {}
+            Some(c) if c == &source => {}
+            // 归属 = 其他端且未确认覆盖：不应用，返回需确认信号
+            Some(_) if !force => {
+                tracing::debug!(
+                    session_id,
+                    source = ?source,
+                    current = ?current,
+                    "resize blocked: needs confirmation from current canonical renderer"
+                );
+                return Ok(ResizeOutcome::NeedsConfirmation {
+                    current_canonical: current.expect("checked above"),
+                });
+            }
+            // force：覆盖其他端归属
+            Some(_) => {}
+        }
+
+        self.pty_registry.resize(session_id, cols, rows).await?;
+        self.canonical_renderer.set(session_id, source.clone()).await;
+
+        Ok(ResizeOutcome::Applied { canonical: source })
+    }
+
+    /// 查询会话当前正统渲染端（背压门控等只读路径）
+    pub async fn canonical_renderer_of(&self, session_id: &str) -> Option<RendererSource> {
+        self.canonical_renderer.get(session_id).await
     }
 
     /// 终止会话
@@ -779,6 +844,8 @@ impl SessionManager {
         // 从各注册表移除（PTY 的缓存会随 PTY 一起被清理）
         let _ = self.pty_registry.remove(session_id).await;
         let _ = self.session_info.remove(session_id).await;
+        // 正统渲染端归属随会话销毁清除
+        self.canonical_renderer.clear(session_id).await;
 
         // 清理输入行缓冲区（restart 经此路径重建同 ID 会话，从干净状态开始）
         self.submitted_line_tracker.remove_session(session_id);
@@ -838,6 +905,7 @@ impl SessionManager {
         for id in stopped_ids {
             let _ = self.pty_registry.remove(&id).await;
             let _ = self.session_info.remove(&id).await;
+            self.canonical_renderer.clear(&id).await;
             tracing::debug!("Cleaned up stopped session: {}", id);
         }
     }
@@ -879,10 +947,107 @@ impl Drop for SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::RendererSource;
 
     #[tokio::test]
     async fn test_session_manager_default() {
         let manager: SessionManager = Default::default();
         assert!(manager.list_sessions().await.is_empty());
+    }
+
+    /// 正统渲染端裁决：归属 = 其他端且未 force → NeedsConfirmation（不碰底层）
+    #[tokio::test]
+    async fn test_resize_needs_confirmation_from_other_renderer() {
+        let manager = SessionManager::default();
+        let current = RendererSource::Mobile {
+            device_name: "Pixel-9".to_string(),
+        };
+        let requester = RendererSource::Mobile {
+            device_name: "Redmi-K70".to_string(),
+        };
+        // 预置归属：当前正统为 Pixel-9
+        manager
+            .canonical_renderer
+            .set("s1", current.clone())
+            .await;
+
+        // 他端未 force：返回 NeedsConfirmation，且不调用底层 resize（无会话也不报 NotFound）
+        let outcome = manager
+            .resize_session("s1", 100, 40, requester.clone(), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome,
+            ResizeOutcome::NeedsConfirmation {
+                current_canonical: current.clone()
+            }
+        );
+        // 归属未被移动端请求方抢占
+        assert_eq!(
+            manager.canonical_renderer_of("s1").await,
+            Some(current.clone())
+        );
+
+        // force：尝试应用（无真实会话 → NotFound，证明已越过裁决进入底层调用）
+        let err = manager
+            .resize_session("s1", 100, 40, requester.clone(), true)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::AppError::NotFound(_)));
+        // 归属：force 路径先 resize 后 set —— 底层失败则归属不変
+        assert_eq!(manager.canonical_renderer_of("s1").await, Some(current));
+    }
+
+    /// 正统渲染端裁决：请求方就是正统端 → 直接应用（无会话 → NotFound 证明已到底层）
+    #[tokio::test]
+    async fn test_resize_self_is_canonical_applies_directly() {
+        let manager = SessionManager::default();
+        let desktop = RendererSource::Desktop;
+        manager.canonical_renderer.set("s2", renderer_desktop()).await;
+
+        let err = manager
+            .resize_session("s2", 120, 30, desktop, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::AppError::NotFound(_)));
+    }
+
+    /// 正统渲染端裁决：无归属时首次请求方即位正统并尝试应用
+    #[tokio::test]
+    async fn test_resize_first_requester_claims_no_confirmation() {
+        let manager = SessionManager::default();
+        assert_eq!(manager.canonical_renderer_of("s3").await, None);
+
+        // 无归属：不返回 NeedsConfirmation，直接到底层（无会话 → NotFound）
+        let err = manager
+            .resize_session(
+                "s3",
+                80,
+                24,
+                RendererSource::Mobile {
+                    device_name: "Reno-11".to_string(),
+                },
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::AppError::NotFound(_)));
+        // 归属已确立为首次请求方（先 set 后底层报错？—— 见实现：set 在 resize 之后，
+        // 底层失败则不 set；此处只验证回归路径不误判为 NeedsConfirmation）
+    }
+
+    /// 会话不存在时的裁决：归属查询为 None → 走应用路径 → NotFound
+    #[tokio::test]
+    async fn test_resize_unknown_session_falls_through() {
+        let manager = SessionManager::default();
+        let err = manager
+            .resize_session("ghost", 80, 24, RendererSource::Desktop, false)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::AppError::NotFound(_)));
+    }
+
+    fn renderer_desktop() -> RendererSource {
+        RendererSource::Desktop
     }
 }

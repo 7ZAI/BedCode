@@ -379,6 +379,11 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.subscribed = true
   }
 
+  /** 渲染背压 ack：转发到会话 socket（视图 onWriteParsed 门控后调用） */
+  function ackRendered(sessionId: string) {
+    sockets.get(sessionId)?.ackRendered()
+  }
+
   /** 标记未订阅（取消订阅时）：关 socket + 清实时/防御缓冲，保留游标与历史缓存 */
   function markUnsubscribed(sessionId: string) {
     invalidatePrepared(sessionId)
@@ -528,6 +533,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markSessionStopped,
     markSessionRunning,
     forceReplay,
+    ackRendered,
     clearBuffer,
     clearAllBuffers,
     registerRealtimeHandler,

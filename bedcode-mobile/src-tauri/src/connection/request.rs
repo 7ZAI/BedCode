@@ -123,13 +123,16 @@ impl SessionRequest {
 
     /// 构建调整会话终端大小消息
     ///
-    /// 移动端屏幕尺寸变化时通知桌面端调整 PTY 大小
+    /// 移动端屏幕尺寸变化时通知桌面端调整 PTY 大小。force=false：非正统端首次
+    /// 请求会收到 NeedsConfirmation（服务端裁决），由前端弹窗确认后经 HTTP
+    /// resize（force=true）覆盖重发；WS 路径保持简单，不带强制。
     pub fn resize_session(session_id: &str, cols: u16, rows: u16) -> Message {
         with_token(Message::session_control(
             SessionControlAction::ResizeSession {
                 session_id: session_id.to_string(),
                 cols,
                 rows,
+                force: false,
             },
             Some(session_id),
         ))

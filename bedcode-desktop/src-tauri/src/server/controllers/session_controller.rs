@@ -12,6 +12,7 @@
 use crate::server::dtos::session_dto::*;
 use crate::server::dtos::ApiResponse;
 use crate::server::middleware::jwt_auth::get_claims_from_request;
+use crate::session::RendererSource;
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
@@ -118,17 +119,39 @@ pub async fn stop_session(req: HttpRequest, path: web::Path<String>) -> HttpResp
 }
 
 /// POST /api/sessions/{id}/resize
-pub async fn resize_session(path: web::Path<String>, body: web::Json<ResizeSessionRequest>) -> HttpResponse {
+///
+/// 正统渲染端裁决：来源身份取自 JWT claims 的 device_name（移动端）；
+/// 无 claims（未认证/桌面回退）视为 Desktop。裁决不通过时返回
+/// ResizeOutcome::NeedsConfirmation（未应用），客户端弹窗确认后带 force 重发。
+pub async fn resize_session(req: HttpRequest, path: web::Path<String>, body: web::Json<ResizeSessionRequest>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
-    if let Err(e) = session_manager.resize_session(&session_id, body.cols, body.rows).await {
-        tracing::warn!(error = %e, session_id = %session_id, "Failed to resize session");
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
-    }
+    // 来源身份：移动端 JWT 携带 device_name；缺失时回退 Desktop（不会静默覆盖，
+    // 仍受 NeedConfirmation 门控）
+    let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
+    let source = match device_name {
+        Some(name) => RendererSource::Mobile { device_name: name },
+        None => {
+            tracing::warn!(
+                session_id = %session_id,
+                "resize request without device_name claims, treating as Desktop source"
+            );
+            RendererSource::Desktop
+        }
+    };
 
-    HttpResponse::Ok().json(ApiResponse::ok())
+    match session_manager
+        .resize_session(&session_id, body.cols, body.rows, source, body.force)
+        .await
+    {
+        Ok(outcome) => HttpResponse::Ok().json(ApiResponse::ok_with_data(outcome)),
+        Err(e) => {
+            tracing::warn!(error = %e, session_id = %session_id, "Failed to resize session");
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
+        }
+    }
 }
 
 /// DELETE /api/sessions/{id}/remove

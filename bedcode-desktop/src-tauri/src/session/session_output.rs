@@ -2,6 +2,7 @@
 //!
 //! PTY 输出相关的组件：统一输出队列、会话输出管理、全局输出管理
 
+use crate::session::RendererSource;
 use crate::system::config::AppConfig;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -703,9 +704,31 @@ impl GlobalOutputManager {
 
     /// 客户端 ack（背压反馈环 Rust 侧入口）：推进会话未 ack 记账，释放
     /// `last_rendered_seq` 及之前的输出字节；会话不存在时忽略
-    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64) {
+    ///
+    /// 背压门控：仅正统渲染端（current canonical）的 ack 推进记账；非正统端
+    /// 的 ack 直接丢弃（其渲染格式可能与 PTY 尺寸不匹配，吞吐不代表权威消费
+    /// 速度，混入会污染水位）。会话无归属时保守接受，避免水位锁死。
+    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64, source: RendererSource) {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
+            let is_canonical = match crate::system::app_context::AppContext::try_global() {
+                Some(ctx) => match ctx.session_manager().canonical_renderer_of(session_id).await {
+                    Some(c) => c == source,
+                    // 会话无正统归属（尚未 resize）：保守接受，避免背压水位永久暂停
+                    None => true,
+                },
+                // 无 AppContext（无头/测试上下文）：跳过门控，保守接受
+                None => true,
+            };
+            if !is_canonical {
+                tracing::debug!(
+                    session_id,
+                    last_rendered_seq,
+                    source = ?source,
+                    "ack from non-canonical renderer ignored"
+                );
+                return;
+            }
             manager.on_ack(last_rendered_seq);
             tracing::trace!(
                 session_id,
@@ -1217,15 +1240,15 @@ mod tests {
         assert_eq!(seqs[0], 1);
 
         // ack 到 seq 20：剩余 20×32KB = 640KB < 水位 → 恢复读
-        manager.ack("session-bp", 20).await;
+        manager.ack("session-bp", 20, RendererSource::Desktop).await;
         assert!(!manager.should_pause("session-bp"), "ack advance should resume");
 
         // 一次性 ack 超限 seq：全部释放，unacked 不为负
-        manager.ack("session-bp", 9999).await;
+        manager.ack("session-bp", 9999, RendererSource::Desktop).await;
         assert!(!manager.should_pause("session-bp"));
 
         // 会话不存在：ack 静默忽略，不 panic
-        manager.ack("no-such-session", 5).await;
+        manager.ack("no-such-session", 5, RendererSource::Desktop).await;
     }
 
     #[tokio::test]
@@ -1250,10 +1273,10 @@ mod tests {
         assert!(!manager.should_pause("session-bp-cap"));
 
         // 超限 ack：FIFO 内全部弹出，unacked 归零，不因冻结期欠记而变负
-        manager.ack("session-bp-cap", 99999).await;
+        manager.ack("session-bp-cap", 99999, RendererSource::Desktop).await;
         assert!(!manager.should_pause("session-bp-cap"));
         // 重复 ack：空 FIFO 无匹配，no-op，不越界
-        manager.ack("session-bp-cap", 99999).await;
+        manager.ack("session-bp-cap", 99999, RendererSource::Desktop).await;
     }
 
     #[tokio::test]

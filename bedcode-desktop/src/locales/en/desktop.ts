@@ -179,6 +179,13 @@ export default {
       bgImageRemove: 'Remove',
       bgImageOpacity: 'Image Opacity',
       bgImageSetFailed: 'Failed to set background image',
+      rendererOverrideTitle: 'Override Terminal Size',
+      rendererOverrideBody:
+        'The {renderer} end is currently rendering output. Override its size?\nThe {renderer} end display will be misformatted after override.',
+      rendererOverrideConfirm: 'Override',
+      rendererOverrideCancel: 'Cancel',
+      rendererDesktop: 'Desktop',
+      rendererMobile: 'Mobile',
     },
     server: {
       title: 'Server Management',

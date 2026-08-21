@@ -1660,6 +1660,7 @@ mod tests {
                     session_id: "s".to_string(),
                     cols: 80,
                     rows: 24,
+                    force: false,
                 },
                 Some("s"),
             ),

@@ -66,6 +66,15 @@ const FRAME_MAGIC = [0x54, 0x42] // "TB"
 const FRAME_VERSION = 2
 const FRAME_FLAG_WAITING = 0x01
 const FRAME_FLAG_COUNT_SHIFT = 1
+// 背压 ack 标志位（仅客户端→服务端方向使用；服务端→客户端帧的 flags 低 2 位
+// 是 WAITING + 事件数编码，与服务端只认入站二进制帧作 ack 的解析互不冲突）
+const FRAME_FLAG_ACK = 0x02
+
+// ack 节流（对齐桌面端 useTerminalOutputStream）：累计待 ack 字节达阈值即
+// 回发（对齐上游 WATERMARK 节奏，风暴批发）；空闲超时强制回发（低频输出
+// 不滞留记账，服务端 unacked_bytes 不虚高）
+const ACK_BYTES_THRESHOLD = 64 * 1024
+const ACK_MAX_IDLE_MS = 250
 
 // ==================== Frame Parsing ====================
 
@@ -105,6 +114,12 @@ export interface TerminalSocket {
   reconnect(): void
   /** 当前是否已建立连接 */
   isOpen(): boolean
+  /**
+   * 渲染背压 ack（对齐桌面端 confirmWriteParsed）：写入解析完成后调用，
+   * 按 64KB 阈值 + 250ms 空闲节流回发 TB v2 ACK 帧。仅本端为会话正统
+   * 渲染端时调用（服务端也会丢弃非正统端的 ack，双保险）
+   */
+  ackRendered(): void
 }
 
 /**
@@ -121,6 +136,15 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
   let pendingSubscribe = false
   let reconnectAttempts = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+  // ==================== 渲染背压 ack 状态（spec 04-06，对齐桌面端） ====================
+  // lastRenderedSeq：已交付帧末 seq（帧到达即更新，写入管线消费中）；
+  // ackRendered() 由视图 onWriteParsed 触发，节流回发（阈值/空闲兜底）
+  let lastRenderedSeq: number | null = null
+  let ackedThroughSeq: number | null = null
+  let pendingAckBytes = 0
+  let lastAckSentAt = 0
+  let ackIdleTimer: ReturnType<typeof setTimeout> | null = null
 
   // 重连退避（ms）：500 → 1000 → 2000 → 4000 → 8000 封顶
   const RECONNECT_BASE_MS = 500
@@ -139,6 +163,52 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       clearTimeout(reconnectTimer)
       reconnectTimer = null
     }
+  }
+
+  /** 构建背压 ack 帧（与服务端 control_frame::parse_ack_frame 布局一致） */
+  function buildAckFrame(sessionId: string, ackedSeq: number): ArrayBuffer {
+    const sessionBytes = new TextEncoder().encode(sessionId)
+    const buf = new ArrayBuffer(FRAME_HEADER_LEN + sessionBytes.byteLength)
+    const view = new DataView(buf)
+    view.setUint8(0, FRAME_MAGIC[0])
+    view.setUint8(1, FRAME_MAGIC[1])
+    view.setUint8(2, FRAME_VERSION)
+    view.setUint8(3, FRAME_FLAG_ACK)
+    view.setBigUint64(4, BigInt(ackedSeq), true)
+    view.setUint32(12, sessionBytes.byteLength, true)
+    new Uint8Array(buf, FRAME_HEADER_LEN).set(sessionBytes)
+    return buf
+  }
+
+  /**
+   * 写入解析完成 ack（视图 onWriteParsed 接线）：推进 ack 水位
+   *
+   * 语义：onWriteParsed 证明写入管线正在推进（有 write 被解析），此刻对
+   * 已交付游标 last_rendered_seq 回发 ack（与桌面端一致的保守近似）。
+   * 节流：64KB 阈值批发回发 + 250ms 空闲兜底，避免高频逐帧 ack。
+   */
+  function ackRendered() {
+    if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return
+    if (lastRenderedSeq === null || ackedThroughSeq === lastRenderedSeq) return
+    const now = Date.now()
+    if (pendingAckBytes < ACK_BYTES_THRESHOLD && lastAckSentAt !== 0 && now - lastAckSentAt < ACK_MAX_IDLE_MS) {
+      // 未到字节阈值也未到空闲兜底：挂起兜底计时器，后续批次或到点再回发
+      if (!ackIdleTimer) {
+        ackIdleTimer = setTimeout(() => {
+          ackIdleTimer = null
+          ackRendered()
+        }, ACK_MAX_IDLE_MS)
+      }
+      return
+    }
+    if (ackIdleTimer) {
+      clearTimeout(ackIdleTimer)
+      ackIdleTimer = null
+    }
+    ws.send(buildAckFrame(currentSession, lastRenderedSeq))
+    ackedThroughSeq = lastRenderedSeq
+    pendingAckBytes = 0
+    lastAckSentAt = now
   }
 
   function scheduleReconnect() {
@@ -196,6 +266,15 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       stopped = false
       pendingSubscribe = false
       reconnectAttempts = 0
+      // 重置渲染背压游标（新会话 seq 重新从历史快照开始）
+      lastRenderedSeq = null
+      ackedThroughSeq = null
+      pendingAckBytes = 0
+      lastAckSentAt = 0
+      if (ackIdleTimer) {
+        clearTimeout(ackIdleTimer)
+        ackIdleTimer = null
+      }
     }
     if (connecting) return
     connecting = true
@@ -223,6 +302,9 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
           console.error('[useTerminalSocket] invalid binary frame received')
           return
         }
+        // 渲染背压游标：帧末 seq 即已交付边界（与桌面端语义一致）
+        lastRenderedSeq = Math.max(lastRenderedSeq ?? 0, frame.lastSeq)
+        pendingAckBytes += frame.data.byteLength
         handlers.onFrame(frame)
       }
       socket.onerror = () => {
@@ -278,7 +360,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
     return !!ws && ws.readyState === WebSocket.OPEN
   }
 
-  return { start, subscribe, sendInput, stop, reconnect, isOpen }
+  return { start, subscribe, sendInput, stop, reconnect, isOpen, ackRendered }
 }
 
 // ==================== Utility ====================

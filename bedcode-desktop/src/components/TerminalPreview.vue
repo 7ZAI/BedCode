@@ -98,6 +98,34 @@
         </button>
       </transition>
     </div>
+
+    <!-- 正统渲染端覆盖确认弹窗：本端 resize 被服务端裁决为
+         needsConfirmation（另一个端正在渲染输出）时弹出，确认后 force 重发 -->
+    <Modal
+      v-model="showRendererOverrideModal"
+      :title="$t('desktop.terminal.rendererOverrideTitle')"
+      size="sm"
+      :closable="false"
+      :close-on-backdrop="false"
+    >
+      <p class="text-sm text-[var(--text-secondary)] whitespace-pre-line">
+        {{
+          $t('desktop.terminal.rendererOverrideBody', {
+            renderer: rendererOverrideTarget?.rendererName ?? '',
+          })
+        }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <Button variant="ghost" size="sm" @click="cancelRendererOverride">
+            {{ $t('desktop.terminal.rendererOverrideCancel') }}
+          </Button>
+          <Button size="sm" @click="confirmRendererOverride">
+            {{ $t('desktop.terminal.rendererOverrideConfirm') }}
+          </Button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -127,7 +155,9 @@ import type { SessionInfo } from '@/stores/session'
 import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
+import type { RendererSource } from '@/composables/useDesktopCommands'
 import Button from '@/components/Button.vue'
+import Modal from '@/components/Modal.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
@@ -778,9 +808,10 @@ function initTerminal() {
   syncTerminalSize()
 
   // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话
+  // （经正统渲染端裁决：本端非正统时服务端返回需要确认，由弹窗处理）
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
-      sessionStore.resizeSession(props.session.id, cols, rows)
+      requestResize(cols, rows)
     }
   })
 
@@ -886,13 +917,80 @@ function initTerminal() {
   })
 }
 
+// ==================== 正统渲染端 resize 裁决交互 ====================
+// 桌面端与移动端共用同一 PTY 尺寸：服务端裁决本端是否正统渲染端。
+// 非正统时 resize 返回 needsConfirmation（未应用），此处弹窗确认，
+// 确认后 force 重发覆盖；取消则记下被拒尺寸，防 RO/resize 事件风暴。
+
+/** 用户拒绝覆盖的尺寸（成功后清空；同尺寸不再重发） */
+let rejectedSize: { cols: number; rows: number } | null = null
+
+/** 待确认的覆盖目标（弹窗内容源） */
+const rendererOverrideTarget = ref<{
+  cols: number
+  rows: number
+  rendererName: string
+} | null>(null)
+const showRendererOverrideModal = ref(false)
+
+/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名 */
+function rendererDisplayName(source: RendererSource): string {
+  if (source.kind === 'desktop') return t('desktop.terminal.rendererDesktop')
+  return source.deviceName || t('desktop.terminal.rendererMobile')
+}
+
+/**
+ * 请求调整会话尺寸（经服务端正统渲染端裁决）
+ *
+ * force=false：本端非正统且用户未确认前，服务端不改底层 PTY；
+ * needsConfirmation 时弹出确认框。用户拒绝过的同尺寸直接忽略，
+ * 避免拖窗/RO 事件持续触发弹窗风暴。
+ */
+async function requestResize(cols: number, rows: number, force = false) {
+  if (!props.session) return
+  // 用户刚拒绝过的相同尺寸：抑制（每次成功应用后清空）
+  if (!force && rejectedSize && rejectedSize.cols === cols && rejectedSize.rows === rows) return
+  // 相同尺寸已在确认弹窗中：避免并发弹窗
+  if (rendererOverrideTarget.value && rendererOverrideTarget.value.cols === cols && rendererOverrideTarget.value.rows === rows) {
+    return
+  }
+  const outcome = await sessionStore.resizeSession(props.session.id, cols, rows, force)
+  if (outcome.status === 'applied') {
+    rejectedSize = null
+    return
+  }
+  // needsConfirmation：当前有另一个端在渲染，弹窗确认是否覆盖
+  rendererOverrideTarget.value = {
+    cols,
+    rows,
+    rendererName: rendererDisplayName(outcome.currentCanonical),
+  }
+  showRendererOverrideModal.value = true
+}
+
+/** 用户确认覆盖：force 重发（尺寸移交服务端正统归属） */
+async function confirmRendererOverride() {
+  const target = rendererOverrideTarget.value
+  showRendererOverrideModal.value = false
+  rendererOverrideTarget.value = null
+  if (target) await requestResize(target.cols, target.rows, true)
+}
+
+/** 用户拒绝覆盖：记录被拒尺寸，同尺寸不再打扰 */
+function cancelRendererOverride() {
+  const target = rendererOverrideTarget.value
+  showRendererOverrideModal.value = false
+  rendererOverrideTarget.value = null
+  if (target) rejectedSize = { cols: target.cols, rows: target.rows }
+}
+
 /** 同步当前终端尺寸到后端会话（PTY cols/rows） */
 function syncTerminalSize() {
   if (!terminal || !props.session) return
   const cols = terminal.cols
   const rows = terminal.rows
   if (cols > 0 && rows > 0) {
-    sessionStore.resizeSession(props.session.id, cols, rows)
+    requestResize(cols, rows)
   }
 }
 

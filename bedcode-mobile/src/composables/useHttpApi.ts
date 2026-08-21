@@ -30,6 +30,14 @@ export interface ApiResult<T = any> {
   data?: T
 }
 
+/** 正统渲染端身份（与桌面端 ResizeOutcome serde 形状对齐） */
+export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
+
+/** resize 裁决结果 */
+export type ResizeOutcome =
+  | { status: 'applied'; canonical: RendererSource }
+  | { status: 'needsConfirmation'; currentCanonical: RendererSource }
+
 async function request<T = any>(
   path: string,
   options: RequestInit = {}
@@ -142,10 +150,15 @@ export async function httpStopSession(sessionId: string) {
   return request(`/api/sessions/${sessionId}/stop`, { method: 'POST' })
 }
 
-export async function httpResizeSession(sessionId: string, cols: number, rows: number) {
+export async function httpResizeSession(
+  sessionId: string,
+  cols: number,
+  rows: number,
+  force = false,
+): Promise<ApiResult<ResizeOutcome>> {
   return request(`/api/sessions/${sessionId}/resize`, {
     method: 'POST',
-    body: JSON.stringify({ cols, rows }),
+    body: JSON.stringify({ cols, rows, force }),
   })
 }
 

@@ -53,6 +53,7 @@ function setupSocket() {
     stop: vi.fn(),
     reconnect: vi.fn(),
     isOpen: vi.fn(() => false),
+    ackRendered: vi.fn(),
   }
   capturedHandlers = null
   createTerminalSocketMock.mockImplementation((handlers: unknown) => {

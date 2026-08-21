@@ -48,6 +48,9 @@ pub struct StartSessionResponseData {
 pub struct ResizeSessionRequest {
     pub cols: u16,
     pub rows: u16,
+    /// 覆盖确认标志：服务端裁决返回 needsConfirmation 后，客户端弹窗确认以 force=true 重发
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// POST /api/sessions/{id}/input request

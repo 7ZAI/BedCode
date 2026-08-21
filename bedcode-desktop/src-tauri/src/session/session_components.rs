@@ -338,3 +338,78 @@ impl StatusDetector for DefaultStatusDetector {
         crate::utils::parser::detect_waiting_input(output)
     }
 }
+
+// ==================== Canonical Renderer Registry ====================
+
+/// 正统渲染端身份：当前 PTY 网格尺寸的权威归属端
+///
+/// 桌面端与移动端同时查看同一会话时 PTY 只能有一个尺寸，输出格式必须
+/// 匹配实际渲染的那个端。每次 resize 后归属即确立为请求方，其他端再
+/// 调整需先确认覆盖（见 SessionManager::resize_session 裁决）。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum RendererSource {
+    /// 桌面端（会话宿主：本地命令 / 本地环回 WS）
+    Desktop,
+    /// 移动端设备（device_name 来自 JWT claims）
+    Mobile { device_name: String },
+}
+
+impl RendererSource {
+    /// 是否为桌面端（桌面本地路径恒为 Desktop）
+    pub fn is_desktop(&self) -> bool {
+        matches!(self, RendererSource::Desktop)
+    }
+}
+
+/// resize 裁决结果（统一输出给所有 entry：桌面命令 / 移动端 HTTP / WS 控制）
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase")]
+pub enum ResizeOutcome {
+    /// 已应用：请求方就是正统端，或强制覆盖已确认
+    Applied { canonical: RendererSource },
+    /// 需要确认：另一个端正在渲染输出，本次未应用；客户端弹窗确认后带 force 重发
+    NeedsConfirmation { current_canonical: RendererSource },
+}
+
+/// 正统渲染端注册表 - 每会话记录当前 PTY 尺寸归属端
+pub trait CanonicalRendererRegistry: Send + Sync {
+    async fn get(&self, session_id: &str) -> Option<RendererSource>;
+    async fn set(&self, session_id: &str, source: RendererSource);
+    async fn clear(&self, session_id: &str);
+}
+
+pub struct DefaultCanonicalRendererRegistry {
+    map: Arc<RwLock<HashMap<String, RendererSource>>>,
+}
+
+impl DefaultCanonicalRendererRegistry {
+    pub fn new() -> Self {
+        Self {
+            map: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl Default for DefaultCanonicalRendererRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CanonicalRendererRegistry for DefaultCanonicalRendererRegistry {
+    async fn get(&self, session_id: &str) -> Option<RendererSource> {
+        let map = self.map.read().await;
+        map.get(session_id).cloned()
+    }
+
+    async fn set(&self, session_id: &str, source: RendererSource) {
+        let mut map = self.map.write().await;
+        map.insert(session_id.to_string(), source);
+    }
+
+    async fn clear(&self, session_id: &str) {
+        let mut map = self.map.write().await;
+        map.remove(session_id);
+    }
+}

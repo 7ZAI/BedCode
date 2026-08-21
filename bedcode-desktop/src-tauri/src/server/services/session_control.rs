@@ -4,7 +4,7 @@
 //! JoinSession/LeaveSession 通过 GlobalOutputManager 管理输出订阅
 
 use crate::server::message::{Message, SessionControlAction, SessionSummary};
-use crate::session::{GlobalOutputManager, SessionManager};
+use crate::session::{GlobalOutputManager, RendererSource, SessionManager};
 use crate::Result;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -122,13 +122,32 @@ pub async fn handle_control(
             }))
         }
 
-        SessionControlAction::ResizeSession { session_id, cols, rows } => {
-            // 更新 PTY 尺寸，使输出按移动端实际屏幕宽度排版
+        SessionControlAction::ResizeSession {
+            session_id,
+            cols,
+            rows,
+            force,
+        } => {
+            // 更新 PTY 尺寸，使输出按实际渲染端排版。
             //
-            // 桌面端 PTY 的尺寸由最后一个调整尺寸的客户端决定。
-            // 如果桌面端和移动端同时使用，后调整的一方会覆盖前者的设置。
-            // 这是有意为之：PTY 只能有一个尺寸，输出格式必须匹配实际渲染端。
-            if let Err(e) = session_manager.resize_session(&session_id, cols, rows).await {
+            // 桌面端 PTY 的尺寸由正统渲染端决定（每会话唯一归属，见
+            // SessionManager::resize_session 裁决）：请求方非正统且未 force 时
+            // 返回 NeedsConfirmation（此处仅记日志，客户端弹窗确认后带 force
+            // 重发或改用 HTTP 路径）。桌面本地 resize 默认经 Tauri 命令路径。
+            let source = match device_name.clone() {
+                Some(name) => RendererSource::Mobile { device_name: name },
+                None => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        "WS resize without device_name claims, treating as Desktop source"
+                    );
+                    RendererSource::Desktop
+                }
+            };
+            if let Err(e) = session_manager
+                .resize_session(&session_id, cols, rows, source, force)
+                .await
+            {
                 tracing::warn!(error = %e, session_id = %session_id, "Failed to resize PTY session");
             }
 

@@ -30,8 +30,14 @@ pub enum SessionControlAction {
     StopSession { session_id: String },
     /// 删除会话
     RemoveSession { session_id: String },
-    /// 调整终端大小
-    ResizeSession { session_id: String, cols: u16, rows: u16 },
+    /// 调整终端大小（force：覆盖确认后置位，服务端正统渲染端裁决用）
+    ResizeSession {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+        #[serde(default)]
+        force: bool,
+    },
     /// 加入会话，开始接收输出
     JoinSession { session_id: String },
     /// 离开会话，停止接收输出

@@ -156,6 +156,12 @@ export default {
       refreshFailed: '刷新格式失败',
       subscribeFailed: '终端输出订阅失败，正在重试...',
       scrollToBottom: '回到底部',
+      rendererOverrideTitle: '覆盖终端尺寸',
+      rendererOverrideBody: '当前{renderer}端正在渲染输出，是否覆盖它的尺寸？\n覆盖后{renderer}端显示格式将错乱。',
+      rendererOverrideConfirm: '覆盖',
+      rendererOverrideCancel: '取消',
+      rendererDesktop: '桌面',
+      rendererMobile: '移动端',
     },
     pairing: {
       title: '输入配对码',

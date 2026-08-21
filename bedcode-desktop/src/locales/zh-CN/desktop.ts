@@ -176,6 +176,12 @@ export default {
       bgImageRemove: '移除',
       bgImageOpacity: '图片不透明度',
       bgImageSetFailed: '设置背景图片失败',
+      rendererOverrideTitle: '覆盖终端尺寸',
+      rendererOverrideBody: '当前{renderer}端正在渲染输出，是否覆盖它的尺寸？\n覆盖后{renderer}端显示格式将错乱。',
+      rendererOverrideConfirm: '覆盖',
+      rendererOverrideCancel: '取消',
+      rendererDesktop: '桌面',
+      rendererMobile: '移动端',
     },
     server: {
       title: '服务器管理',

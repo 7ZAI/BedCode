@@ -91,6 +91,8 @@ function makeMockTerminal() {
     element: {},
     write: vi.fn(),
     clear: vi.fn(),
+    // 渲染背压接线（registerRealtimeHandler 挂 onWriteParsed）
+    onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
   } as unknown as Terminal
 }
 
@@ -113,6 +115,7 @@ function setupSocket() {
     stop: vi.fn(),
     reconnect: vi.fn(),
     isOpen: vi.fn(() => false),
+    ackRendered: vi.fn(),
   }
   capturedHandlers = null
   createTerminalSocketMock.mockImplementation((handlers: unknown) => {

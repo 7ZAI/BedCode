@@ -28,8 +28,9 @@ pub use storage::{SessionStorage, SessionStore};
 
 // 从 session_components 重导出
 pub use session_components::{
-    ConfigMapper, DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry,
-    DefaultStatusDetector, NamingService, PtyRegistry, SessionInfoRegistry, StatusDetector,
+    CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
+    DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
+    PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector,
 };
 
 // 从 event_bus 重导出
