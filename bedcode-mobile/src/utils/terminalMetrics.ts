@@ -24,6 +24,17 @@
  */
 export const TERMINAL_SCROLLBAR_GUTTER_PX = 6
 
+/**
+ * 行尾安全余量列数：网格列数在可用宽度内再预留的格数。
+ *
+ * 为什么需要：移动端 DOM 渲染下行尾列紧贴画布/容器右缘时，CJK 字形墨迹
+ * 超出单元格 advance、字体回退度量偏差与亚像素舍入，都会被外层容器的
+ * overflow:hidden 削掉右半（pi 等满行文本输出的最后一个字显示半个）。
+ * 预留 1 列把行尾字符拉离边缘。所有 fit 口径必须一致携带：
+ * computeGridSize 调用方与 getXtermScaledDimensions 的 marginCols 参数。
+ */
+export const TERMINAL_LINE_END_MARGIN_COLS = 1
+
 /** 字体网格尺寸（与 xterm renderService.dimensions.css.cell 同源） */
 export interface CellSize {
   width: number
