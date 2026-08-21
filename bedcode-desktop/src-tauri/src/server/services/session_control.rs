@@ -65,8 +65,10 @@ pub async fn handle_control(
         }
 
         SessionControlAction::StartSession { config_id } => {
+            // WS 控制路径未携带初始尺寸（协议未扩展）：None → 用配置默认值；
+            // 移动端 UI 实际走 HTTP start（携带终端组件默认网格）
             let session_id = session_manager
-                .create_session_with_source(&config_id, device_name.clone())
+                .create_session_with_source(&config_id, device_name.clone(), None)
                 .await?;
             Ok(Some(Message::SessionControl {
                 message_id: request_message_id,

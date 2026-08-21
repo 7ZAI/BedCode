@@ -163,6 +163,7 @@ import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
+import { computeDesktopInitialTerminalSize } from '@/utils/terminalInitialSize'
 import {
   shouldApplyGridResize,
   ATLAS_PREHEAT_DELAY_MS,
@@ -1225,7 +1226,14 @@ watch(
         historyTruncatedNotified = false
 
         if (props.session?.status === 'starting') {
-          await sessionStore.startSession(newId)
+          // 延迟启动第二阶段：终端已挂载传当前实际网格；否则按当前终端窗口
+          // 实际尺寸精确预测（widthRatio=1，本组件只存在于终端窗口内），
+          // spawn 前 resize PTY，子进程从正确行列起步
+          const size =
+            terminal != null
+              ? { cols: terminal.cols, rows: terminal.rows }
+              : await computeDesktopInitialTerminalSize(fontSize.value)
+          await sessionStore.startSession(newId, size ?? undefined)
         }
 
         terminalStream.start(newId)

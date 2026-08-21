@@ -2,7 +2,6 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import {
   listSessions,
-  startSession,
   createSessionNoStart,
   startExistingSession,
   killSession,
@@ -17,6 +16,7 @@ import {
   updateSessionConfig,
   type SessionConfig,
   type SessionInfo,
+  type TerminalSize,
 } from '@/composables/useDesktopCommands'
 
 export { type SessionConfig, type SessionInfo }
@@ -47,9 +47,10 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   // 启动已创建的会话（用于两阶段启动的第二阶段）
-  async function startSessionAction(sessionId: string) {
+  // size：本端终端组件默认网格，spawn 前调整 PTY 初始尺寸
+  async function startSessionAction(sessionId: string, size?: TerminalSize) {
     console.log('startSession called with sessionId:', sessionId)
-    await startExistingSession(sessionId)
+    await startExistingSession(sessionId, size)
     sessions.value = await listSessions()
     console.log('startSession completed, sessionId:', sessionId)
 

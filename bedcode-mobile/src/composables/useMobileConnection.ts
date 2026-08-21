@@ -874,10 +874,17 @@ export async function loadActiveSessions(): Promise<any[]> {
 
 /**
  * 启动会话，返回完整会话信息
+ *
+ * size：本端终端组件按设备屏幕预算的默认网格（computeDeviceDefaultGridSize），
+ * 随请求传给主机，PTY 以该尺寸创建；同一设备/朝向下数值稳定
  */
-export async function startSession(configId: string, sessionName?: string): Promise<{ sessionId: string; session?: any }> {
+export async function startSession(
+  configId: string,
+  sessionName?: string,
+  size?: { cols: number; rows: number }
+): Promise<{ sessionId: string; session?: any }> {
   const { httpStartSession } = useHttpApi()
-  const result = await httpStartSession(configId)
+  const result = await httpStartSession(configId, size)
   if (result.code === 0 && result.data) {
     return { sessionId: result.data.sessionId, session: undefined }
   }

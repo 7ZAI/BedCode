@@ -30,7 +30,7 @@ pub use storage::{SessionStorage, SessionStore};
 pub use session_components::{
     CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
     DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
-    PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector,
+    PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector, resolve_initial_size,
 };
 
 // 从 event_bus 重导出

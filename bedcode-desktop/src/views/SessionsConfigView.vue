@@ -606,11 +606,17 @@ import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { useToast } from '@/composables/useToast'
 import { InvokeTimeoutError } from '@/utils/invoke'
+import {
+  computeDesktopInitialTerminalSize,
+  TERMINAL_WINDOW_WIDTH_RATIO,
+} from '@/utils/terminalInitialSize'
+import { useSettingsStore } from '@/stores/settings'
 import { useSessionStore, type SessionInfo, type SessionConfig } from '@/stores/session'
 import { useSessionWindows } from '@/composables/useSessionWindows'
 import { useSessionStatusListener } from '@/composables/useSessionStatusListener'
 
 const sessionStore = useSessionStore()
+const settingsStore = useSettingsStore()
 const { t } = useI18n()
 const toast = useToast()
 const { openTerminalWindow, closeTerminalWindow, windows } = useSessionWindows()
@@ -831,8 +837,14 @@ async function startSession(configId: string) {
 
   try {
     // 两阶段启动：先创建会话（不启动 PTY），初始化历史缓存，再启动 PTY
+    // 精确预测终端窗口初始网格（创建规则：主窗口内容区 ×60% 宽、同高；
+    // 内部 chrome 40+24px）随启动请求传给 PTY，openpty 即以正确行列创建
+    const size = await computeDesktopInitialTerminalSize(
+      settingsStore.settings.ui.terminal_font_size,
+      { widthRatio: TERMINAL_WINDOW_WIDTH_RATIO },
+    )
     const sessionId = await sessionStore.createSession(configId)
-    await sessionStore.startSession(sessionId)
+    await sessionStore.startSession(sessionId, size ?? undefined)
     toast.success(t('desktop.session.sessionStarted'))
   } catch (e: any) {
     console.error('[SessionsConfigView] startSession error:', e)

@@ -139,10 +139,17 @@ export async function httpListSessions() {
   return request<{ sessions: any[] }>('/api/sessions')
 }
 
-export async function httpStartSession(configId: string) {
+export async function httpStartSession(
+  configId: string,
+  size?: { cols: number; rows: number }
+) {
   return request<{ sessionId: string; status: string }>(
     '/api/sessions/start',
-    { method: 'POST', body: JSON.stringify({ configId }) }
+    {
+      method: 'POST',
+      // size：本端终端组件按设备屏幕预算的默认网格，主机 PTY 以此为初始尺寸
+      body: JSON.stringify({ configId, cols: size?.cols, rows: size?.rows })
+    }
   )
 }
 

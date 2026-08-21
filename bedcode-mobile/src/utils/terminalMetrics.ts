@@ -93,3 +93,25 @@ export function computeGridSize(
     rows: Math.max(1, Math.floor(height / cell.height)),
   }
 }
+
+/** 字体未就绪时的兜底网格 */
+const FALLBACK_GRID = { cols: 80, rows: 24 }
+
+/**
+ * 设备默认网格预估（会话启动时随请求传给主机 PTY 作初始尺寸）：
+ * 以设备屏幕可视区为容器、按当前终端字号预算，同一设备/朝向下数值稳定。
+ *
+ * 为什么：PTY 在主机端「启动」时即按初始尺寸创建，早于 TerminalView 挂载；
+ * 不传则主机用固定缺省（120x40），与手机屏差距大。挂载后仍由 fit 校准 +
+ * resize 队列同步精确值，本估算只需消灭起步尺寸偏差窗口。
+ *
+ * @returns 网格尺寸；屏幕/字体不可用时回退 {80, 24}
+ */
+export function computeDeviceDefaultGridSize(fontSize: number): { cols: number; rows: number } {
+  if (!Number.isFinite(fontSize) || fontSize <= 0) return FALLBACK_GRID
+  const root = document.documentElement
+  if (root.clientWidth <= 0 || root.clientHeight <= 0) return FALLBACK_GRID
+  const grid = computeGridSize(root, fontSize, FONT_FAMILY, 2, 1)
+  if (grid.cols <= 0 || grid.rows <= 0) return FALLBACK_GRID
+  return grid
+}

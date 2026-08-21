@@ -59,8 +59,14 @@ pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest
 
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
+    // 启动端终端组件默认网格：两者齐备且 >0 才生效，作为 PTY 初始尺寸
+    let initial_size = match (body.cols, body.rows) {
+        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => Some((cols, rows)),
+        _ => None,
+    };
+
     match session_manager
-        .create_session_with_source(&body.config_id, device_name)
+        .create_session_with_source(&body.config_id, device_name, initial_size)
         .await
     {
         Ok(session_id) => {

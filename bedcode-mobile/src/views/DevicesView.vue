@@ -349,6 +349,8 @@ import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
 import { useMobileSettings } from '@/composables/useMobileSettings'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
+import { useInputAssistantStore } from '@/stores/inputAssistant'
+import { computeDeviceDefaultGridSize } from '@/utils/terminalMetrics'
 import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
@@ -362,6 +364,7 @@ import SessionConfigCard, { type SessionConfigSummary } from '@/components/Sessi
 const router = useRouter()
 const connection = useMobileConnection()
 const { prepareSession } = useTerminalBuffer()
+const assistStore = useInputAssistantStore()
 const { settings: mobileSettings } = useMobileSettings()
 const toast = useToast()
 const { t } = useI18n()
@@ -520,7 +523,10 @@ async function handleStartSession(config: SessionConfigSummary) {
 
   startingConfigId.value = config.id
   try {
-    const result = await connection.startSession(config.id, config.name)
+    // 携带按设备屏幕预算的默认网格：主机 PTY 以此为初始尺寸创建，
+    // 避免 120x40（主机桌面缺省）起步的首帧回绕；挂载后 fit 校准精确值
+    const size = computeDeviceDefaultGridSize(assistStore.settings.terminalFontSize)
+    const result = await connection.startSession(config.id, config.name, size)
     if (result.sessionId) {
       // 如果返回了会话信息，添加到本地列表
       if (result.session) {

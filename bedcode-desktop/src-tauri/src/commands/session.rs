@@ -6,9 +6,21 @@ use std::sync::Arc;
 use tauri::State;
 
 #[tauri::command]
-pub async fn start_session(session_manager: State<'_, Arc<SessionManager>>, config_id: String) -> Result<String> {
+pub async fn start_session(
+    session_manager: State<'_, Arc<SessionManager>>,
+    config_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<String> {
     tracing::info!("start_session called with config_id: {}", config_id);
-    let result = session_manager.create_session(&config_id).await;
+    // 桌面端启动：携带本端终端组件默认网格作为 PTY 初始尺寸
+    let initial_size = match (cols, rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
+    let result = session_manager
+        .create_session_with_source(&config_id, None, initial_size)
+        .await;
     match result {
         Ok(id) => {
             tracing::info!("Session created successfully: {}", id);
@@ -41,9 +53,21 @@ pub async fn create_session_no_start(
 }
 
 #[tauri::command]
-pub async fn start_existing_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
+pub async fn start_existing_session(
+    session_manager: State<'_, Arc<SessionManager>>,
+    session_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
+) -> Result<()> {
     tracing::info!("start_existing_session called with session_id: {}", session_id);
-    let result = session_manager.start_existing_session(&session_id).await;
+    // 两阶段启动第二阶段：spawn 前按请求端尺寸调整 PTY
+    let initial_size = match (cols, rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
+    let result = session_manager
+        .start_existing_session(&session_id, initial_size)
+        .await;
     match result {
         Ok(_) => {
             tracing::info!("Session started successfully: {}", session_id);
@@ -99,12 +123,6 @@ pub async fn resize_session(
     force: Option<bool>,
 ) -> Result<ResizeOutcome> {
     session_manager
-        .resize_session(
-            &session_id,
-            cols,
-            rows,
-            RendererSource::Desktop,
-            force.unwrap_or(false),
-        )
+        .resize_session(&session_id, cols, rows, RendererSource::Desktop, force.unwrap_or(false))
         .await
 }

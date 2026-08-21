@@ -13,7 +13,7 @@ use crate::session::{
     session_components::{
         CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
         DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
-        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector,
+        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector, resolve_initial_size,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
@@ -251,14 +251,20 @@ impl SessionManager {
 
     /// 从配置创建会话
     pub async fn create_session(&self, config_id: &str) -> Result<String> {
-        self.create_session_with_source(config_id, None).await
+        self.create_session_with_source(config_id, None, None).await
     }
 
     /// 从配置创建会话（带来源设备）
     ///
     /// source_device: 触发操作的设备名称，桌面本地操作为 None
-    pub async fn create_session_with_source(&self, config_id: &str, source_device: Option<String>) -> Result<String> {
-        self.create_session_with_source_and_id(config_id, source_device, None)
+    /// initial_size: 启动端终端组件的默认网格（cols, rows），None 时用配置默认值
+    pub async fn create_session_with_source(
+        &self,
+        config_id: &str,
+        source_device: Option<String>,
+        initial_size: Option<(u16, u16)>,
+    ) -> Result<String> {
+        self.create_session_with_source_and_id(config_id, source_device, None, initial_size)
             .await
     }
 
@@ -269,7 +275,7 @@ impl SessionManager {
     /// 会因生命周期事件（Creating/Created）回灌同一插件实例而死锁，
     /// 因此创建改为宿主异步执行，先返回预生成 ID 供插件记录匹配键。
     pub async fn create_session_with_id(&self, config_id: &str, session_id: &str) -> Result<String> {
-        self.create_session_with_source_and_id(config_id, None, Some(session_id))
+        self.create_session_with_source_and_id(config_id, None, Some(session_id), None)
             .await
     }
 
@@ -279,6 +285,7 @@ impl SessionManager {
         config_id: &str,
         source_device: Option<String>,
         session_id: Option<&str>,
+        initial_size: Option<(u16, u16)>,
     ) -> Result<String> {
         // 从存储加载配置
         let config: crate::db::SessionConfig = self
@@ -302,8 +309,12 @@ impl SessionManager {
             .naming_service
             .generate_unique_name(config_id, &config.name, &sessions);
 
-        // 使用配置映射服务构建启动配置
-        let launch_config = self.config_mapper.to_launch_config(&config)?;
+        // 使用配置映射服务构建启动配置（启动端默认网格覆盖配置缺省值，
+        // PTY openpty 即以正确行列创建，避免 80x24 首帧回绕）
+        let mut launch_config = self.config_mapper.to_launch_config(&config)?;
+        let (cols, rows) = resolve_initial_size(launch_config.cols, launch_config.rows, initial_size);
+        launch_config.cols = cols;
+        launch_config.rows = rows;
 
         // 创建 PTY 会话（指定 ID 或由 PTY 层生成）
         let pty_session = match session_id {
@@ -447,7 +458,11 @@ impl SessionManager {
     }
 
     /// 启动已存在的会话（用于延迟启动场景）
-    pub async fn start_existing_session(&self, session_id: &str) -> Result<()> {
+    ///
+    /// initial_size: 启动端终端组件当前/默认网格。两阶段启动时 PTY 对已按
+    /// 配置默认尺寸 openpty，这里在 spawn 前先 resize 到请求端真实尺寸，
+    /// 子进程从正确的行列起步（避免 80x24 起步的首帧回绕）。
+    pub async fn start_existing_session(&self, session_id: &str, initial_size: Option<(u16, u16)>) -> Result<()> {
         // 获取会话信息
         let session_info = self
             .session_info
@@ -465,6 +480,13 @@ impl SessionManager {
         // 注册到全局输出管理器（启用移动端订阅功能）
         // 必须在启动 PTY 之前注册，否则输出事件会被丢弃
         self.register_output_manager(session_id).await;
+
+        // spawn 前按请求端尺寸调整 PTY（openpty 已完成，resize 仅改内核窗口大小）
+        if let Some((cols, rows)) = initial_size.filter(|(c, r)| *c > 0 && *r > 0) {
+            if let Err(e) = pty_session.resize(cols, rows).await {
+                tracing::warn!(error = %e, session_id = %session_id, cols, rows, "Failed to apply initial size before PTY start");
+            }
+        }
 
         // 启动 PTY
         pty_session.start().await?;

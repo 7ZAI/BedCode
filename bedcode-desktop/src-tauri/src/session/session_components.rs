@@ -377,6 +377,17 @@ pub enum ResizeOutcome {
     NeedsConfirmation { current_canonical: RendererSource },
 }
 
+/// 启动初始网格解析：启动端携带且合法（>0）时覆盖配置默认尺寸
+///
+/// 各端终端组件按自身窗口/字体预算出默认网格随启动请求传入，PTY openpty
+/// 直接以该尺寸创建，避免「先 80x24 启动 → 挂载后再 resize」的首帧回绕。
+pub fn resolve_initial_size(base_cols: u16, base_rows: u16, initial: Option<(u16, u16)>) -> (u16, u16) {
+    match initial {
+        Some((cols, rows)) if cols > 0 && rows > 0 => (cols, rows),
+        _ => (base_cols, base_rows),
+    }
+}
+
 /// 正统渲染端注册表 - 每会话记录当前 PTY 尺寸归属端
 pub trait CanonicalRendererRegistry: Send + Sync {
     async fn get(&self, session_id: &str) -> Option<RendererSource>;
@@ -455,5 +466,15 @@ mod tests {
                 canonical: RendererSource::Desktop
             }
         );
+    }
+
+    /// 启动初始网格解析：合法尺寸覆盖默认值，非法（0）或缺省回退配置默认
+    #[test]
+    fn test_resolve_initial_size_overrides_only_when_valid() {
+        assert_eq!(resolve_initial_size(80, 24, Some((120, 40))), (120, 40));
+        assert_eq!(resolve_initial_size(80, 24, None), (80, 24));
+        // 0 尺寸（隐藏容器误传）不生效
+        assert_eq!(resolve_initial_size(80, 24, Some((0, 40))), (80, 24));
+        assert_eq!(resolve_initial_size(80, 24, Some((120, 0))), (80, 24));
     }
 }

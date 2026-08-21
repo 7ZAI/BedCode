@@ -40,11 +40,23 @@ export async function isWslAvailable(): Promise<boolean> {
 
 // ==================== Session Commands ====================
 
+/** 终端网格尺寸（启动时作为 PTY 初始 cols/rows） */
+export interface TerminalSize {
+  cols: number
+  rows: number
+}
+
 /**
- * 启动会话（含超时，PTY 进程创建可能耗时较长）
+ * 启动会话（含超时）
+ *
+ * size：本端终端组件默认网格，PTY 以该尺寸创建（缺省用服务端配置默认值）
  */
-export async function startSession(configId: string): Promise<string> {
-  return await invokeWithTimeout('start_session', { configId })
+export async function startSession(configId: string, size?: TerminalSize): Promise<string> {
+  return await invokeWithTimeout('start_session', {
+    configId,
+    cols: size?.cols,
+    rows: size?.rows,
+  })
 }
 
 /**
@@ -57,9 +69,15 @@ export async function createSessionNoStart(configId: string): Promise<string> {
 
 /**
  * 启动已存在的会话（含超时，用于延迟启动场景）
+ *
+ * size：spawn 前按该尺寸调整 PTY（两阶段启动的第二阶段传入）
  */
-export async function startExistingSession(sessionId: string): Promise<void> {
-  return await invokeWithTimeout('start_existing_session', { sessionId })
+export async function startExistingSession(sessionId: string, size?: TerminalSize): Promise<void> {
+  return await invokeWithTimeout('start_existing_session', {
+    sessionId,
+    cols: size?.cols,
+    rows: size?.rows,
+  })
 }
 
 /**
