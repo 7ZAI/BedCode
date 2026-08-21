@@ -1,0 +1,9 @@
+{
+    "i18n-ally.localesPaths": [
+        "src/locales"
+    ]
+    // "rust-analyzer.linkedProjects": [
+    //     "bedcode-desktop/src-tauri/Cargo.toml",
+    //     "bedcode-mobile/src-tauri/Cargo.toml"
+    // ]
+}

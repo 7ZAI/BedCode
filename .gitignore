@@ -19,7 +19,7 @@ build/
 
 CLAUDE.md
 CONTEXT.md
-.scratch/
+
 
 # Tauri / Rust
 **/target/
@@ -42,7 +42,6 @@ CONTEXT.md
 .codex/
 .opencode/
 opencode.jsonc
-.vscode/
 .VSCodeCounter/
 *.swp
 *.swo
