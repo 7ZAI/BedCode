@@ -11,14 +11,8 @@
  * 同帧事件合为一次 write。合并路径带 100ms 兜底定时器：窗口最小化/后台时
  * rAF 暂停，定时器保证队列最终被清空。
  *
- * DEC 2026 同步输出包裹默认关闭（wrapSyncOutput=false）：
- * - DOM 渲染器（WebGL 不可用回退时）不需要它——rAF 合并已保证单帧一次 write，
- *   xterm 渲染去抖在整帧写入完成后统一绘制，清屏+重绘同帧提交不闪烁
- * - 包裹会与 TUI 应用（opencode 等）自身发出的 2026 序列嵌套——xterm 的
- *   2026 是标志位而非计数器，应用大重绘跨多个 rAF flush 时，包裹的 ESU
- *   会在清屏后、内容重绘前触发全量刷新，把空白帧渲染出来（每秒一次闪烁）；
- *   且 xterm 的 2026 看门狗（1000ms）会在同步窗口过长时强制全量刷新
- * - 仅 WebGL 渲染器（USE_WEBGL_RENDERER=true）需要包裹防双缓冲重影
+ * DEC 2026 同步输出不再由应用侧包裹：xterm.js 6.0 已内置该协议（解析 BSU/ESU
+ * 序列并按帧统一提交渲染），应用侧包裹反而会与 TUI 应用自身的 2026 序列嵌套。
  *
  * 单次 write 上限 MAX_WRITE_CHUNK：超过则拆块，让 xterm parser 在块间让出
  * 主线程，避免单帧解析超大字符串导致 UI 卡顿。
@@ -28,15 +22,6 @@
  */
 
 import type { Terminal } from '@xterm/xterm'
-
-// DEC Mode 2026 同步输出序列：包裹一次写入，渲染器收到 ESU 前不刷新屏幕
-//
-// 调试开关（默认关闭）：包裹会与 TUI 应用（opencode 等）自身发出的 2026
-// 序列嵌套——xterm 同步标志是位而非计数器，BSU 后 ESU 被拒（游标连续性
-// violation）会令渲染管线长期挂起（黑屏）。排查渲染僵死时可置 true 做 A/B
-const ENABLE_SYNC_OUTPUT_WRAP = false
-const SYNC_OUTPUT_START = new TextEncoder().encode('\x1b[?2026h')
-const SYNC_OUTPUT_END = new TextEncoder().encode('\x1b[?2026l')
 
 // rAF 合并调试开关（默认关闭）：直写路径下每个输出事件直接 terminal.write，
 // 不经 rAF 合并/兜底定时器——排查「渲染挂起/黑屏/帧滞留」时可置 true 恢复
@@ -52,17 +37,6 @@ const MAX_COALESCED_BYTES = 256 * 1024
 /** rAF 暂停（最小化/后台）时的兜底 flush 延迟 */
 const FALLBACK_FLUSH_MS = 100
 
-/**
- * 用 DEC Mode 2026 同步输出序列包裹数据，让 xterm 缓存所有变化到下一帧统一绘制
- */
-export function wrapSyncOutput(data: Uint8Array): Uint8Array {
-  const wrapped = new Uint8Array(SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length)
-  wrapped.set(SYNC_OUTPUT_START, 0)
-  wrapped.set(data, SYNC_OUTPUT_START.length)
-  wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
-  return wrapped
-}
-
 /** 写入合并器：调用即入队，rAF 时统一 flush */
 export interface WriteCoalescer {
   (data: Uint8Array): void
@@ -72,10 +46,6 @@ export interface WriteCoalescer {
 
 /** 创建选项 */
 export interface WriteCoalescerOptions {
-  /** 是否用 DEC 2026 同步输出包裹每次写入（仅 WebGL 渲染器需要） */
-  wrapSyncOutput?: boolean
-  /** 全局调试开关（默认 ENABLE_SYNC_OUTPUT_WRAP）；测试可显式开启以覆盖包裹路径 */
-  enableSyncOutputWrap?: boolean
   /** rAF 合并调试开关（默认 ENABLE_RAF_COALESCE）；测试可显式开启以覆盖合并路径 */
   enableRafCoalesce?: boolean
 }
@@ -84,9 +54,6 @@ export function createWriteCoalescer(
   terminal: Terminal,
   options: WriteCoalescerOptions = {},
 ): WriteCoalescer {
-  const wrapSync =
-    (options.enableSyncOutputWrap ?? ENABLE_SYNC_OUTPUT_WRAP) &&
-    (options.wrapSyncOutput ?? false)
   // rAF 合并关闭时每个事件直接写入（调试/对比路径）
   const rafCoalesce = options.enableRafCoalesce ?? ENABLE_RAF_COALESCE
   let pending: Uint8Array[] = []
@@ -94,27 +61,12 @@ export function createWriteCoalescer(
   let flushRaf = 0
   let flushTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** 写入单块字节（包裹 + 拆块，rAF 合并与直写共用） */
+  /** 写入单块字节（拆块，rAF 合并与直写共用） */
   function writeBytes(data: Uint8Array) {
     // terminal 可能已 dispose（页面切换/会话关闭）：与合并路径 flush 的守卫一致
     if (!terminal.element) return
-    if (data.byteLength <= MAX_WRITE_CHUNK) {
-      terminal.write(wrapSync ? wrapSyncOutput(data) : data)
-      return
-    }
-    // 大块拆分：多次 write，避免单帧解析超大字符串卡主线程
-    if (wrapSync) {
-      // 2026 包裹整体：渲染器仍缓存变更到帧末统一绘制；
-      // subarray 零拷贝切片，避免大块复制
-      terminal.write(SYNC_OUTPUT_START)
-      for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
-        terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
-      }
-      terminal.write(SYNC_OUTPUT_END)
-    } else {
-      for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
-        terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
-      }
+    for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
+      terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
     }
   }
 

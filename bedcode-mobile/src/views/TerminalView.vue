@@ -167,8 +167,8 @@
  * 终端视图（移动端）— xterm.js 渲染内核 + 移动端输入/键盘避让
  *
  * 渲染与滚动架构对齐桌面端 TerminalPreview.vue（VS Code 终端体验）：
- * - 写入管线：同帧输出经 rAF 合并 + DEC 2026 同步输出包裹 + 64KB 拆块
- *   （writeCoalescer），高频输出无撕裂/重影、超大块不卡主线程
+ * - 写入管线：同帧输出经 rAF 合并 + 64KB 拆块（writeCoalescer），
+ *   高频输出无撕裂/重影、超大块不卡主线程
  * - 渲染：默认 DOM 渲染器（xterm 内置 canvas，移动端 TUI 场景稳定无闪烁）；
  *   可选 WebGL addon（USE_WEBGL_RENDERER 开关，context loss 自动回退恢复）
  * - 滚动：onScroll 推导"是否在底部"（位置即状态），回到底部自动跟随输出
@@ -206,7 +206,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
-import { computeGridSize } from '@/utils/terminalMetrics'
+import { computeGridSize, TERMINAL_SCROLLBAR_GUTTER_PX, TERMINAL_LINE_END_MARGIN_COLS } from '@/utils/terminalMetrics'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { shouldApplyGridResize, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
@@ -612,7 +612,15 @@ function handleSettingsConfirm(settings: TerminalSettings) {
   })
 
   applyTerminalTheme()
-  applyScrollSettings(settings.theme, settings.fontSize, fitAddonRef.value)
+  // 字号变更后重排：显式更新 xterm 字号 + 走统一口径 refit（DPR 感知 +
+  // 行尾安全余量），不再走裸 fitAddon.fit()（无行尾余量，行尾字符被削半）；
+  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽
+  if (terminalRef.value) {
+    terminalRef.value.options.fontSize = settings.fontSize
+  }
+  setTimeout(() => {
+    if (fitWithMargin()) syncTerminalSizeToHost()
+  }, 50)
   showSettings.value = false
 }
 
@@ -940,8 +948,7 @@ watch(isSystemDark, () => {
 /**
  * 渲染器开关：移动端默认 WebGL（与桌面端 TerminalPreview 对齐）——
  * Android WebView 的 WebGL 常为软件渲染（SwiftShader），双缓冲纹理交换
- * 在 TUI 全屏重绘（opencode/vim 每帧清屏+重绘）时可能闪烁/撕裂，故开启
- * 时用 DEC 2026 同步输出包裹（writeCoalescer wrapSyncOutput）防双缓冲重影；
+ * 在 TUI 全屏重绘（opencode/vim 每帧清屏+重绘）时可能闪烁/撕裂；
  * WebGL 不可用（context loss / 初始化失败）时自动回退 DOM 渲染器。
  * 切换为 false 即禁用 WebGL addon，仅影响移动端；桌面端不受此开关影响。
  *
@@ -995,22 +1002,22 @@ async function initWebGL(term: Terminal): Promise<boolean> {
 // 不一致」导致行尾字符溢出/裁半）；Windows 桌面调试时回退链覆盖等宽字体
 const FONT_FAMILY = 'monospace, "Cascadia Mono", Consolas, Monaco, "Courier New", "Roboto Mono", "Droid Sans Mono"'
 
-/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，
- * 仅扣滚动条 14px，宽度/高度不增减） */
+/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，仅扣自绘
+ * 滚动条预留宽 + 行尾安全余量 1 列，高度不增减） */
 function computeInitialSize(): { cols: number; rows: number } {
   const container = xtermContainer.value
   if (!container) return { cols: 80, rows: 24 }
-  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, 0, 0)
+  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0)
   // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
   if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
   return grid
 }
 
 /**
- * FitAddon 尺寸适配：直接采用官方 fit 计算的原始尺寸，宽度/高度不做任何
- * 增减（不额外扣列余量、不补行数）。
- * FitAddon 在字体测量未就绪时 proposeDimensions 返回 null → 无操作（幂等），
- * 由就绪轮询重试。
+ * 尺寸适配（初始校准 / 主题切换 / 手动刷新入口）：委托 applyDprFit 统一口径
+ * （DPR 感知 + 滚动条预留宽 + 行尾安全余量），不再裸调 FitAddon.fit()——
+ * 裸 fit 无行尾余量，行尾字符贴画布右缘被削半。
+ * applyDprFit 在字体测量未就绪时降级裸 fit（幂等无操作），由就绪轮询重试。
  * @returns 是否实际发生了尺寸变化
  */
 function fitWithMargin(): boolean {
@@ -1018,7 +1025,7 @@ function fitWithMargin(): boolean {
   if (!term || !fitAddonRef.value) return false
   const beforeCols = term.cols
   const beforeRows = term.rows
-  fitAddonRef.value.fit()
+  applyDprFit()
   if (term.cols !== beforeCols || term.rows !== beforeRows) {
     // 调试验证：记录 fit 导致的尺寸变化轨迹（排查行尾裁切/右侧遮挡）
     console.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
@@ -1042,7 +1049,7 @@ function measureCellSize(): { width: number; height: number } | null {
 
 /**
  * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算物理像素后计算 cols/rows
- * （行高 ceil、列宽 floor；口径对齐 FitAddon 裸 fit：仅扣滚动条 14px、无行列余量），
+ * （行高 ceil、列宽 floor；仅扣自绘滚动条预留宽 + 行尾安全余量 1 列），
  * 替代裸 fitAddon.fit() 的 DPR 不感知计算（Android 高 DPR 下网格更精确、无字模）。
  * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
  *
@@ -1066,6 +1073,7 @@ function applyDprFit() {
     cellWidthCss: cell.width,
     cellHeightCss: cell.height,
     devicePixelRatio: window.devicePixelRatio,
+    marginCols: TERMINAL_LINE_END_MARGIN_COLS,
   })
   // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
   // 变化时经 ±1 漂移钳制，仅在真实变化时 resize
@@ -1148,6 +1156,11 @@ async function initTerminal() {
     lineHeight: 1,
     // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
+    // 自绘滚动条预留宽（唯一真源 TERMINAL_SCROLLBAR_GUTTER_PX）：xterm 6 内部
+    // verticalScrollbarSize 与 FitAddon 可用宽扣除同源取此值（缺省 14px，
+    // 原生滚动条已被 CSS 隐藏却仍按 14px 预留 → 右侧固定空白竖条）。
+    // 设为自绘指示线足迹后，画布右缘与滚动条零重叠且死区收窄到 6px
+    overviewRuler: { width: TERMINAL_SCROLLBAR_GUTTER_PX },
     // 默认即时滚动：关闭平滑滚动，避免滚动动画期间合成器缓存旧帧导致重影；
     // 仅在惯性甩动时由 useTerminalScroll 临时开启（smoothScrollDuration）
     // 做单次平滑滑行，滑行结束立即复位为 0
@@ -1185,21 +1198,18 @@ async function initTerminal() {
 
   term.open(xtermContainer.value)
 
-  // WebGL 激活与否决定 DEC 2026 包裹：仅 WebGL 渲染器需要包裹防双缓冲
-  // 重影；回退 DOM 时包裹会与 TUI 应用自身 2026 序列嵌套产生空白帧闪烁
-  let webglActive = false
   if (USE_WEBGL_RENDERER) {
     // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
-    webglActive = await initWebGL(term)
+    const webglActive = await initWebGL(term)
     if (webglActive) {
       term.element?.classList.add('xterm-hidden-cursor')
     }
   }
 
   // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
-  // 统一经 writeCoalescer 的 rAF 合并管线写入（DEC 2026 包裹仅 WebGL 模式启用）；
+  // 统一经 writeCoalescer 的 rAF 合并管线写入；
   // shouldAck 门控 = 本端是会话正统渲染端（渲染背压 ack 仅正统端发送）
-  registerRealtimeHandler(sessionId.value, term, webglActive, feedTuiOutput, () => isCanonicalRenderer.value)
+  registerRealtimeHandler(sessionId.value, term, feedTuiOutput, () => isCanonicalRenderer.value)
 
   // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
   attachTuiCompat(term)
@@ -1458,7 +1468,7 @@ async function syncTerminalSizeToHost() {
 }
 
 /** 合成层强制重绘：1px transform 往返抖动，迫使 WebView 合成器重新合成 canvas 层。
- * xterm 渲染管线挂起（DEC 2026 BSU/ESU 失衡 / 脏区跳过）时 refresh() 不生效，
+ * xterm 渲染管线挂起（脏区跳过等）时 refresh() 不生效，
  * DOM transform 变化能绕过渲染管线直接触发合成器重绘（实测：键盘避让后黑屏恢复） */
 function forceCompositorRepaint() {
   const el = xtermContainer.value

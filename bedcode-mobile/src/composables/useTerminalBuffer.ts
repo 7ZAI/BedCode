@@ -24,10 +24,9 @@ export type { SubscribeResultInfo } from '@/stores/terminalBuffer'
 //   都会让 xterm 调度一次 render。
 // - xterm.js WebGL 渲染器使用双缓冲，多个异步 render 在同一帧内排队时
 //   会出现「前一帧部分内容 + 当前帧新内容」同时可见（鬼影/重影）。
-// - 参考 xterm.js 官方推荐：DEC Mode 2026 (Synchronized Output) 是在一次刷新内
-//   收集多次修改、只渲染一次的协议机制。但 PTY 应用不一定发出 BSU/ESU 序列。
-// - 在前端按 rAF 合并多次 terminal.write() 等价于应用了同步输出语义：
-//   同一帧内所有写入只产生一次 render commit，避免双缓冲竞态。
+// - 在前端按 rAF 合并多次 terminal.write()：同一帧内所有写入只产生一次
+//   render commit，避免双缓冲竞态。DEC 2026 同步输出协议已由 xterm.js 6.0
+//   内置处理（应用侧包裹会与 TUI 应用自身 2026 序列嵌套，不再需要）。
 // 实现见 @/composables/writeCoalescer
 
 // ==================== Composable ====================
@@ -40,19 +39,16 @@ export function useTerminalBuffer() {
    *
    * @param sessionId - 会话 ID
    * @param terminal - xterm Terminal 实例
-   * @param wrapSyncOutput - 是否用 DEC 2026 包裹每次写入（仅 WebGL 渲染器需要；
-   *   DOM 渲染器默认关闭，避免与 TUI 应用自身 2026 序列嵌套导致闪烁）
    * @param onRawOutput - 原始输出字节钩子（合并前、写入前调用，供 TUI 兼容嗅探）
    */
   function registerRealtimeHandler(
     sessionId: string,
     terminal: Terminal,
-    wrapSyncOutput = false,
     onRawOutput?: (data: Uint8Array) => void,
     /** 渲染背压门控：仅本端为会话正统渲染端时回发 ack（非正统时服务端丢弃，白红流量） */
     shouldAck?: () => boolean,
   ) {
-    const writeCoalescer = createWriteCoalescer(terminal, { wrapSyncOutput })
+    const writeCoalescer = createWriteCoalescer(terminal)
     // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
     // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
     // shouldAck 门控：仅本端为会话正统渲染端时发送（非正统时服务端丢弃）
