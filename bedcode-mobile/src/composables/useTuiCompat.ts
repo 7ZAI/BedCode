@@ -10,6 +10,9 @@
  *   且应用启用了 SGR 鼠标上报（输出流嗅探 DECSET 1006h）才视为 TUI 模式
  * - TUI 模式下触摸拖动/惯性翻译成 SGR 滚轮序列（ESC[<64/65;col;rowM），
  *   经既有 WS 通道（ws_send_input_async）原样写入主机 PTY，由应用自行滚动
+ * - 灵敏度折算：主流 TUI 把单个滚轮事件放大为 ~3 行滚动（终端惯例），
+ *   手势行数按 WHEEL_SENSITIVITY_NUM/DEN 折算后再入队，否则 TUI 内滚动比
+ *   非 TUI 的 1:1 行滚动快约 3 倍；缩放余量保留在积压中，慢速拖动不丢意图
  * - 节流 ~16ms 合并发送；发送在途（inflight）时不丢弃积压——滚动量保留，
  *   窗口结束后补发（否则快速翻历史时滚动距离严重缩水，体感只能滚一屏多）；
  *   仅积压超限（一屏两倍）时丢弃最旧部分；每窗口至多发送 2 行（超出部分
@@ -27,6 +30,22 @@ import { wsSendInput } from '@/composables/useMobileCommands'
 /** SGR 滚轮按钮号：64=上滚（wheel up），65=下滚（wheel down） */
 const WHEEL_UP_BUTTON = 64
 const WHEEL_DOWN_BUTTON = 65
+
+/**
+ * 滚轮灵敏度（整数分数 NUM/DEN = 1/3）：手势行数 → SGR 滚轮事件数折算。
+ *
+ * 主流 TUI 应用（bubbletea viewport、opencode 等）把单个滚轮事件放大为
+ * ~3 行滚动（终端惯例），1:1 直发会让 TUI 内滚动比非 TUI 的 1:1 行滚动
+ * 快约 3 倍。折算后 3 行手指位移产生 1 个滚轮事件，应用侧放大 3 行 →
+ * 体感与非 TUI 一致。
+ *
+ * 用整数分子/分母而非浮点系数：积压按分母缩放为整数累积（events×DEN），
+ * 全程整数运算无精度损失——浮点 1/3 会让 3*(1/3)=0.99…9 被 trunc 丢弃，
+ * 慢速拖动的滚动意图莫名消失。小数余量以缩放整数形式保留在积压中，
+ * 累积到完整事件再发。若个别应用单事件只滚 1 行导致偏慢，可调大 NUM（≤DEN）。
+ */
+const WHEEL_SENSITIVITY_NUM = 1
+const WHEEL_SENSITIVITY_DEN = 3
 
 /** 滚轮事件节流窗口（毫秒）：窗口内多次拖动合并为一个发送。
  * 对齐一帧（16ms）：窗口越短事件流越连续，应用滚动越跟手；
@@ -137,8 +156,8 @@ export function useTuiCompat(sessionId: string) {
   let altScreen = false
   const sniffer = createMouseSgrSniffer()
 
-  // 节流状态
-  let pendingDelta = 0
+  // 节流状态（pendingScaled 为灵敏度分母缩放后的整数积压：events×DEN）
+  let pendingScaled = 0
   let pendingCol = 1
   let pendingRow = 1
   let throttleTimer: ReturnType<typeof setTimeout> | null = null
@@ -175,18 +194,20 @@ export function useTuiCompat(sessionId: string) {
     if (throttleTimer) return
     throttleTimer = setTimeout(() => {
       throttleTimer = null
-      const delta = pendingDelta
-      if (delta === 0) return
+      if (pendingScaled === 0) return
       if (inflight) {
         // 上次发送仍在途：保留积压不清零（丢弃会丢失大量滚动量，
         // 体感「只能滚一屏多一点」），窗口到期后由下一次调度补发
         scheduleSend()
         return
       }
-      // 每窗口至多发送 MAX_WHEEL_EVENTS_PER_WINDOW 行：超出部分留在积压
-      // 随下一窗口补发（不丢弃），摊平单帧批量跳跃
-      const capped = Math.max(-MAX_WHEEL_EVENTS_PER_WINDOW, Math.min(delta, MAX_WHEEL_EVENTS_PER_WINDOW))
-      pendingDelta -= capped
+      // 只发整数个事件（缩放余量留在积压，累积到完整事件再发）；
+      // 每窗口至多 MAX_WHEEL_EVENTS_PER_WINDOW 个：超出部分随下一窗口
+      // 补发（不丢弃），摊平单帧批量跳跃
+      const whole = Math.trunc(pendingScaled / WHEEL_SENSITIVITY_DEN)
+      if (whole === 0) return
+      const capped = Math.max(-MAX_WHEEL_EVENTS_PER_WINDOW, Math.min(whole, MAX_WHEEL_EVENTS_PER_WINDOW))
+      pendingScaled -= capped * WHEEL_SENSITIVITY_DEN
       const seq = createSgrWheelSequence(capped, pendingCol, pendingRow)
       if (!seq) return
 
@@ -198,20 +219,23 @@ export function useTuiCompat(sessionId: string) {
         .finally(() => {
           inflight = false
           // 在途期间可能已累积新积压：立即调度补发（不等下一次手势）
-          if (pendingDelta !== 0) scheduleSend()
+          if (pendingScaled !== 0) scheduleSend()
         })
     }, WHEEL_THROTTLE_MS)
   }
 
   /**
-   * 发送滚轮事件（TUI 模式）：累积 delta 并节流合并，
-   * 窗口到期生成 SGR 序列经 WS 送达 PTY，fire-and-forget
+   * 发送滚轮事件（TUI 模式）：手势行数经灵敏度折算后累积并节流合并，
+   * 窗口到期生成 SGR 序列经 WS 送达 PTY，fire-and-forget。
+   * 拖动与惯性甩动共用此入口，灵敏度单点生效
    */
   function sendWheel(deltaLines: number, col: number, row: number) {
     if (!isTuiMode.value || deltaLines === 0) return
 
+    // 灵敏度折算：积压按分母缩放（events×DEN），行数×NUM 整数累加；
     // 积压上限：超过上限丢弃最旧部分（保留最新滚动意图），防长期拥塞无限堆积
-    pendingDelta = Math.max(-MAX_PENDING_DELTA, Math.min(pendingDelta + deltaLines, MAX_PENDING_DELTA))
+    const maxScaled = MAX_PENDING_DELTA * WHEEL_SENSITIVITY_DEN
+    pendingScaled = Math.max(-maxScaled, Math.min(pendingScaled + deltaLines * WHEEL_SENSITIVITY_NUM, maxScaled))
     pendingCol = col
     pendingRow = row
 
@@ -228,7 +252,7 @@ export function useTuiCompat(sessionId: string) {
     terminal = null
     sniffer.reset()
     altScreen = false
-    pendingDelta = 0
+    pendingScaled = 0
     isTuiMode.value = false
   }
 
