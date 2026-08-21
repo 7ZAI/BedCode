@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, RwLock};
 
 // ==================== Output Frame ====================
@@ -204,6 +205,12 @@ pub struct SubscriberState {
 /// 16384：大历史重播（数万事件）期间实时输出缓存余量，降低重订阅风暴频率
 const PENDING_EVENT_CAP: usize = 16384;
 
+/// 发送背压超时：订阅者 send_queue 满时 on_output 有界等待发送的时限。
+/// 等待期间 on_output 阻塞 → PTY 读循环停等 → 数据留在 PTY 内核缓冲，零丢失
+/// （实时流不允许中断的契约）。超时仅用于客户端死亡/连接悬挂的极端场景：
+/// 丢弃该事件并冲正背压记账，防止 PERMANENT 阻塞拖死整个会话
+const SEND_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(2);
+
 /// 背压水位：未 ack 字节超过该值 → 暂停该会话 PTY 读取（spec 04-06 渲染反馈环）
 /// 取值须 > 前端 ack 阈值(64KB) + 渲染/写管线 in-flight 余量；1MB 保守兜底
 const BACKPRESSURE_WATERMARK_BYTES: u64 = 1024 * 1024;
@@ -331,43 +338,82 @@ impl SessionOutputManager {
         let subscribers = self.subscribers.read().await;
         for subscriber in subscribers.values() {
             if subscriber.is_active() {
-                if let Err(e) = subscriber.send_queue.try_send(OutputFrame::Output(event.clone())) {
-                    match e {
-                        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                            // 背压丢弃：限频日志（前 3 次 + 每 100 次），避免刷屏
-                            let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
-                            if n <= 3 || n % 100 == 0 {
-                                tracing::warn!(
-                                    "[SessionOutputManager] Subscriber {} backlog full, dropped event #{}",
-                                    subscriber.client_id,
-                                    n
-                                );
+                match subscriber.send_queue.try_send(OutputFrame::Output(event.clone())) {
+                    Ok(()) => {}
+                    Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                        // 背压：队列满 = 该订阅者消费停滞。有界等待发送——等待期间
+                        // on_output 阻塞 → 上游 PTY 读循环停等 → 数据留在 PTY 内核
+                        // 缓冲，零丢失（满足「实时流不允许中断」契约）；超时仅兜底
+                        // 客户端死亡/连接悬挂异常，超时丢弃并冲正记账（见 revert_unacked）
+                        match tokio::time::timeout(
+                            SEND_BACKPRESSURE_TIMEOUT,
+                            subscriber.send_queue.send(OutputFrame::Output(event.clone())),
+                        )
+                        .await
+                        {
+                            Ok(Ok(())) => {}
+                            Ok(Err(_)) => {
+                                // Closed：订阅者已移除/连接断开，静默忽略
+                            }
+                            Err(_) => {
+                                // 超时：satellite 死亡等极端场景，丢弃该事件并冲正
+                                // 未 ack 记账（丢的事件永远不会有 ack，不冲正则
+                                // unacked_bytes 永久虚高 → 背压水位永久暂停 → 饿死）
+                                let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+                                if n <= 3 || n % 100 == 0 {
+                                    tracing::warn!(
+                                        "[SessionOutputManager] Subscriber {} send stalled >{}s, dropped event #{} (index={})",
+                                        subscriber.client_id,
+                                        SEND_BACKPRESSURE_TIMEOUT.as_secs(),
+                                        n,
+                                        event.index
+                                    );
+                                }
+                                self.revert_unacked(event.index, event.data.len() as u64);
                             }
                         }
-                        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-                            // 订阅者已移除：静默忽略
-                        }
+                    }
+                    Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                        // 订阅者已移除：静默忽略
                     }
                 }
             } else {
                 // inactive 期间缓存事件，激活时排空，消除历史发送→激活的丢失窗口。
                 // 有界保护：占位窗口（历史排空）可能因慢链路持续很久，pending 无上限
-                // 会持续吃内存；超出容量丢弃并计数，缺口由连续性自愈补回
+                // 会持续吃内存；超出容量丢弃并冲正记账（丢的事件不产生 ack，不冲正
+                // 会导致 unacked_bytes 虚高），缺口由客户端重订阅全量重播自愈
                 if let Ok(mut pending) = subscriber.pending.try_write() {
                     if pending.len() >= PENDING_EVENT_CAP {
                         let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
                         if n <= 3 || n % 100 == 0 {
                             tracing::warn!(
-                                "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{}",
+                                "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{} (index={})",
                                 subscriber.client_id,
-                                n
+                                n,
+                                event.index
                             );
                         }
+                        self.revert_unacked(event.index, event.data.len() as u64);
                     } else {
                         pending.push(event.clone());
                     }
                 }
             }
+        }
+    }
+
+    /// 冲正未 ack 记账：事件被丢弃（发送超时/pending 溢出）后永远不会收到 ack，
+    /// 将其从 FIFO 移除并回减 unacked_bytes，防止永久虚高导致背压水位永久暂停
+    /// （饥饿）。FIFO 上限 8K，retain 线性扫描可接受（std Mutex 仅短临界区无 await）
+    fn revert_unacked(&self, index: u64, bytes: u64) {
+        let mut fifo = match self.unacked_fifo.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let before = fifo.len();
+        fifo.retain(|(i, _)| *i != index);
+        if fifo.len() != before {
+            self.unacked_bytes.fetch_sub(bytes, Ordering::SeqCst);
         }
     }
 
@@ -1253,6 +1299,128 @@ mod tests {
         assert!(!manager.has_session("session-1").await);
 
         manager.on_output(make_session_event("session-1", 0)).await;
+    }
+
+    /// 实时流连续性契约：send_queue 满时 on_output 有界等待发送（背压），
+    /// 事件零丢失——满足「环形可丢最旧、实时不允许中断」
+    #[tokio::test]
+    async fn test_send_queue_full_waits_no_drop() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-wait").await;
+
+        // 容量 1：第 2 个事件起 try_send 必 Full → 内部 await send 等待
+        let (tx, mut rx) = mpsc::channel(1);
+        manager.subscribe("session-wait", "client-wait", tx, None).await;
+        let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
+
+        // 并发消费者：腾出通道空间让 on_output 的等待发送完成
+        let consumer = tokio::spawn(async move {
+            let mut got = 0;
+            while got < 5 {
+                let frame = tokio::time::timeout(Duration::from_millis(500), rx.recv()).await;
+                if let Ok(Some(OutputFrame::Output(_))) = frame {
+                    got += 1;
+                }
+            }
+            got
+        });
+
+        for _ in 0..5 {
+            manager.on_output(make_session_event("session-wait", 0)).await;
+        }
+
+        let got = consumer.await.unwrap();
+        assert_eq!(got, 5, "队列满时等待发送：事件必须零丢失到达");
+
+        // dropped 计数必须为 0（无任何丢弃路径命中）
+        {
+            let sessions = manager.sessions.read().await;
+            let m = sessions.get("session-wait").unwrap();
+            let subs = m.subscribers.read().await;
+            let sub = subs.get("client-wait").unwrap();
+            assert_eq!(
+                sub.dropped.load(Ordering::SeqCst),
+                0,
+                "有界等待场景不得丢弃任何事件"
+            );
+        }
+    }
+
+    /// 发送停滞超时兜底：客户端死亡/悬挂时丢弃事件并冲正未 ack 记账
+    /// （丢的事件永远不会有 ack，不冲正 → unacked 虚高 → 背压永久暂停饿死）
+    #[tokio::test(start_paused = true)]
+    async fn test_send_stall_timeout_drops_with_revert() {
+        // Arc 包装以支持并发任务（GlobalOutputManager 不可 Clone）
+        let manager = Arc::new(GlobalOutputManager::new());
+        manager.register_session("session-stall").await;
+
+        let (tx, mut rx) = mpsc::channel(1);
+        manager.subscribe("session-stall", "client-stall", tx, None).await;
+        let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
+
+        // 事件 1 入队成功（占满容量 1），之后不再消费 → 事件 2 等待超时
+        manager.on_output(make_session_event("session-stall", 0)).await;
+
+        let stall = {
+            let manager = manager.clone();
+            tokio::spawn(async move { manager.on_output(make_session_event("session-stall", 0)).await })
+        };
+        // 快进虚拟时钟越过 SEND_BACKPRESSURE_TIMEOUT(2s) → 超时丢弃
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::advance(Duration::from_secs(3)).await;
+        stall.await.unwrap();
+
+        let sessions = manager.sessions.read().await;
+        let m = sessions.get("session-stall").unwrap().clone();
+        drop(sessions);        {
+            let subscribers = m.subscribers.read().await;
+            let sub = subscribers.get("client-stall").unwrap();
+            assert_eq!(sub.dropped.load(Ordering::SeqCst), 1, "超时应丢弃一次");
+        }
+        // 冲正：被丢弃事件的字节从记账中移除（事件 1 的 4B 仍在）
+        // FIFO 与 unacked 同步：事件 2 已冲正，此时未 ack = 事件 1 的 4B
+        {
+            let fifo = m.unacked_fifo.lock().unwrap();
+            assert_eq!(fifo.len(), 1, "FIFO 仅保留事件 1");
+            assert_eq!(fifo[0], (1, 4), "事件 1 index=1, 4 字节");
+        }
+        assert_eq!(m.unacked_bytes.load(Ordering::SeqCst), 4, "冲正后 unacked 回落");
+        // 未 ack 已低于水位 → 不暂停（冲正防止背压永久暂停）
+        assert!(!m.should_pause());
+    }
+
+    /// inactive 占位期 pending 溢出：丢弃并冲正记账（缺口由客户端重订阅
+    /// 全量重播自愈，但不允许 unacked 虚高饿死背压）
+    #[tokio::test]
+    async fn test_pending_overflow_drops_with_revert() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-pending-overflow").await;
+        let sessions = manager.sessions.read().await;
+        let m = sessions.get("session-pending-overflow").unwrap().clone();
+        drop(sessions);
+
+        // 直接构造 inactive 订阅者并把 pending 填到容量上限（模拟占位期漫链路）
+        let (tx, _rx) = mpsc::channel(1);
+        let sub = SubscriberState::new("client-pending".to_string(), tx);
+        {
+            let mut pending = sub.pending.try_write().unwrap();
+            for _ in 0..PENDING_EVENT_CAP {
+                pending.push(make_event(0));
+            }
+        }
+        m.subscribers.write().await.insert("client-pending".to_string(), sub);
+
+        // 溢出事件（index 由 on_output 分配）：丢弃 + 冲正
+        m.on_output(make_event(0)).await;
+
+        let subs = m.subscribers.read().await;
+        let sub2 = subs.get("client-pending").unwrap();
+        assert_eq!(sub2.dropped.load(Ordering::SeqCst), 1, "pending 溢出丢弃一次");
+        // 正常时间事件的所有未 ack 记账已被冲正 → unacked 为 0（不虚高）
+        assert_eq!(m.unacked_bytes.load(Ordering::SeqCst), 0, "冲正后无虚高");
+        let fifo = m.unacked_fifo.lock().unwrap();
+        assert_eq!(fifo.len(), 0);
+        assert!(!m.should_pause());
     }
 
     /// pending 缓冲消除订阅丢失窗口：subscribe 前后的事件零丢失
