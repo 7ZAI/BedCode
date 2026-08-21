@@ -277,6 +277,8 @@ export default {
     codeViewer: {
       title: 'Code Viewer',
       settingsTitle: 'Code Viewer Settings',
+      tabEditor: 'Layout',
+      tabTheme: 'Theme',
       fontSize: 'Font Size',
       lineHeight: 'Line Height',
       codeTheme: 'Code Theme',

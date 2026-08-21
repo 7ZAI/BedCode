@@ -29,11 +29,11 @@ describe('codeViewer store', () => {
     setActivePinia(createPinia())
   })
 
-  it('fresh storage: defaults (fontSize 10, lineHeight 1.0, theme system, tabSize 4, line numbers on)', () => {
+  it('fresh storage: defaults (fontSize 8, lineHeight 0.7, theme system, tabSize 4, line numbers on)', () => {
     const store = useCodeViewerStore()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,
@@ -47,7 +47,7 @@ describe('codeViewer store', () => {
     expect(store.settings.theme).toBe('nord')
     // 未保存的字段回退默认
     expect(store.settings.tabSize).toBe(4)
-    expect(store.settings.lineHeight).toBe(1.0)
+    expect(store.settings.lineHeight).toBe(0.7)
     expect(store.settings.showLineNumbers).toBe(true)
   })
 
@@ -56,8 +56,8 @@ describe('codeViewer store', () => {
     localStorage.setItem(STORAGE_KEY, '{not json')
     const store = useCodeViewerStore()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,
@@ -112,8 +112,8 @@ describe('codeViewer store', () => {
     store.saveSettings({ fontSize: 20, theme: 'github-dark' })
     store.resetSettings()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,

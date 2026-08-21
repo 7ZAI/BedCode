@@ -17,14 +17,36 @@
         </button>
       </div>
 
-      <div class="settings-content">
+      <!-- Tab 切换：排版 / 代码主题（同快捷键配置弹窗的分段控件） -->
+      <div class="settings-tabs">
+        <div class="segmented">
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTab === 'editor' }"
+            @click="activeTab = 'editor'"
+          >
+            {{ t('mobile.codeViewer.tabEditor') }}
+          </button>
+          <button
+            class="segmented-btn"
+            :class="{ active: activeTab === 'theme' }"
+            @click="activeTab = 'theme'"
+          >
+            {{ t('mobile.codeViewer.tabTheme') }}
+          </button>
+        </div>
+      </div>
+
+      <!-- ==================== Tab: 排版 ==================== -->
+      <template v-if="activeTab === 'editor'">
+      <div class="settings-content" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
         <!-- 字体大小 -->
         <div class="settings-section">
           <label class="settings-label">{{ t('mobile.codeViewer.fontSize') }}</label>
           <div class="font-size-control">
-            <button class="size-btn" @click.stop="localSettings.fontSize--" :disabled="localSettings.fontSize <= 6">-</button>
+            <button class="size-btn" :disabled="localSettings.fontSize <= 6" @click.stop="localSettings.fontSize--">-</button>
             <span class="size-value">{{ localSettings.fontSize }}px</span>
-            <button class="size-btn" @click.stop="localSettings.fontSize++" :disabled="localSettings.fontSize >= 24">+</button>
+            <button class="size-btn" :disabled="localSettings.fontSize >= 24" @click.stop="localSettings.fontSize++">+</button>
           </div>
         </div>
 
@@ -34,31 +56,14 @@
           <div class="slider-control">
             <span class="slider-value">{{ localSettings.lineHeight.toFixed(1) }}</span>
             <input
+              v-model.number="localSettings.lineHeight"
               type="range"
               class="slider-track"
               min="0.5"
               max="2.5"
               step="0.1"
-              v-model.number="localSettings.lineHeight"
             />
             <span class="slider-range-label">0.5 – 2.5</span>
-          </div>
-        </div>
-
-        <!-- 代码主题 -->
-        <div class="settings-section">
-          <label class="settings-label">{{ t('mobile.codeViewer.codeTheme') }}</label>
-          <div class="theme-grid">
-            <button
-              v-for="(config, id) in CODE_THEMES"
-              :key="id"
-              class="theme-btn"
-              :class="{ active: localSettings.theme === id }"
-              @click.stop="localSettings.theme = id"
-            >
-              <span class="theme-preview" :style="{ background: config.background, color: config.foreground }">Aa</span>
-              <span class="theme-name">{{ resolveThemeLabel(config.label, t) }}</span>
-            </button>
           </div>
         </div>
 
@@ -93,8 +98,30 @@
           </div>
         </div>
       </div>
+      </template>
 
-      <!-- Footer -->
+      <!-- ==================== Tab: 代码主题 ==================== -->
+      <template v-else>
+      <div class="settings-content" @touchstart="onTouchStart" @touchmove="onTouchMove" @touchend="onTouchEnd">
+        <div class="settings-section">
+          <label class="settings-label">{{ t('mobile.codeViewer.codeTheme') }}</label>
+          <div class="theme-grid">
+            <button
+              v-for="(config, id) in CODE_THEMES"
+              :key="id"
+              class="theme-btn"
+              :class="{ active: localSettings.theme === id }"
+              @click.stop="localSettings.theme = id"
+            >
+              <span class="theme-preview" :style="{ background: config.background, color: config.foreground }">Aa</span>
+              <span class="theme-name">{{ resolveThemeLabel(config.label, t) }}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+      </template>
+
+      <!-- Footer：固定在底部，不随内容滚动 -->
       <div class="settings-footer">
         <button class="settings-footer-btn cancel" @click.stop="emit('close')">{{ t('common.button.cancel') }}</button>
         <button class="settings-footer-btn confirm" @click.stop="handleConfirm">{{ t('common.button.confirm') }}</button>
@@ -109,11 +136,12 @@
 /**
  * CodeViewerSettingsModal - 代码查看设置弹窗
  *
- * 支持调整字体大小、代码主题、Tab 缩进和行号显示
- * 编辑中修改临时变量，确认后保存到 store
+ * 双 Tab 结构（同快捷键配置弹窗）：排版页调整字体大小、行间距、Tab 缩进和行号显示，代码主题独立成 Tab
+ * 编辑中修改临时变量，确认后保存到 store；头部/Tab/Footer 固定，内容超出时在内容区滚动查看
  */
 import { ref, computed, watch, inject, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useSwipeTabs } from '@/composables/useSwipeTabs'
 import { useCodeViewerStore, CODE_THEMES, type CodeViewerSettings } from '@/stores/codeViewer'
 import { resolveThemeLabel } from '@/config/terminalThemes'
 
@@ -137,9 +165,23 @@ const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 
 const localSettings = ref<CodeViewerSettings>({ ...store.settings })
 
+// ==================== Tab 状态 ====================
+
+/** 设置分组 Tab：排版（字体/行距/缩进/行号）与代码主题 */
+type SettingsTab = 'editor' | 'theme'
+const activeTab = ref<SettingsTab>('editor')
+
+// 内容区左右滑动切换 Tab：左滑 → 代码主题，右滑 → 排版
+const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
+  if (dir === 'left' && activeTab.value === 'editor') activeTab.value = 'theme'
+  else if (dir === 'right' && activeTab.value === 'theme') activeTab.value = 'editor'
+})
+
 watch(() => props.visible, (show) => {
   if (show) {
     localSettings.value = { ...store.settings }
+    // 每次打开回到「排版」页，避免停留在上一回的分组
+    activeTab.value = 'editor'
   }
 })
 
@@ -177,12 +219,53 @@ function handleConfirm() {
   --toggle-w: clamp(2.25rem, 2.75rem, 3.25rem);
   --toggle-h: clamp(1.25rem, 1.5rem, 1.75rem);
 
+  display: flex;
+  flex-direction: column;
   background: var(--mobile-bg-secondary);
   border-radius: 1rem;
   width: 100%;
   max-width: clamp(280px, 360px, 420px);
-  max-height: 80vh;
-  overflow-y: auto;
+  /* 固定高度：不随 Tab 切换变化，内容超出由内容区滚动，Footer 始终固定在底部 */
+  height: clamp(26rem, 72vh, 34rem);
+  overflow: hidden;
+}
+
+.settings-tabs {
+  padding: 0.75rem 1rem 0;
+  flex-shrink: 0;
+}
+
+/* 分段控件（同快捷键配置弹窗） */
+.segmented {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  background: var(--mobile-bg-elevated);
+  border: 1px solid var(--mobile-border);
+  border-radius: 0.75rem;
+}
+
+.segmented-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  height: 2.25rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  color: var(--mobile-text-muted);
+  transition: all 0.2s ease;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.segmented-btn.active {
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.15);
 }
 
 .settings-header {
@@ -217,6 +300,8 @@ function handleConfirm() {
 }
 
 .settings-content {
+  flex: 1;
+  overflow-y: auto;
   padding: 1rem;
 }
 
@@ -250,7 +335,7 @@ function handleConfirm() {
   background: var(--mobile-bg-elevated);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-primary);
-  font-size: clamp(1.125rem, 1.25rem + (100vw - 360px) / 840 * 2, 1.375rem);
+  font-size: clamp(1rem, 1.25rem, 1.5rem);
   cursor: pointer;
   transition: all 0.2s ease;
 }
@@ -267,7 +352,7 @@ function handleConfirm() {
 .size-value {
   flex: 1;
   text-align: center;
-  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
+  font-size: clamp(1rem, 1.125rem, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -307,13 +392,13 @@ function handleConfirm() {
   padding: 0.5rem;
   border-radius: 0.375rem;
   text-align: center;
-  font-size: clamp(0.6875rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
+  font-size: clamp(0.75rem, 0.875rem, 1rem);
   font-weight: 600;
   font-family: 'Fira Code', 'JetBrains Mono', monospace;
 }
 
 .theme-name {
-  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
+  font-size: clamp(0.625rem, 0.75rem, 0.875rem);
   color: var(--mobile-text-muted);
 }
 
@@ -335,7 +420,7 @@ function handleConfirm() {
   background: var(--mobile-bg-elevated);
   border: 2px solid transparent;
   color: var(--mobile-text-secondary);
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
+  font-size: clamp(0.75rem, 0.875rem, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;
@@ -367,7 +452,7 @@ function handleConfirm() {
 }
 
 .slider-value {
-  font-size: clamp(0.9375rem, 1.125rem + (100vw - 360px) / 840 * 2, 1.25rem);
+  font-size: clamp(1rem, 1.125rem, 1.25rem);
   font-weight: 500;
   color: var(--mobile-text-primary);
 }
@@ -417,7 +502,7 @@ function handleConfirm() {
 }
 
 .slider-range-label {
-  font-size: clamp(0.5625rem, 0.75rem + (100vw - 360px) / 840 * 2, 0.875rem);
+  font-size: clamp(0.625rem, 0.75rem, 0.875rem);
   color: var(--mobile-text-muted);
   text-align: right;
 }
@@ -466,7 +551,7 @@ function handleConfirm() {
   flex: 1;
   padding: var(--footer-btn-py);
   border-radius: 0.5rem;
-  font-size: clamp(0.75rem, 0.875rem + (100vw - 360px) / 840 * 2, 1rem);
+  font-size: clamp(0.8125rem, 0.875rem, 1rem);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.2s ease;

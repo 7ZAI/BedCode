@@ -276,6 +276,8 @@ export default {
     codeViewer: {
       title: '代码查看',
       settingsTitle: '代码查看设置',
+      tabEditor: '排版',
+      tabTheme: '代码主题',
       fontSize: '字体大小',
       lineHeight: '行间距',
       codeTheme: '代码主题',
