@@ -55,6 +55,7 @@ export type {
   SafCopyHandle,
   SafCopyStatus,
   PickedSharedDirectory,
+  FileTransferRequest,
   OcrApi,
 } from '@binblink/plugin-sdk-mobile'
 

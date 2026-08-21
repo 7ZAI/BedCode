@@ -53,6 +53,7 @@ export type {
   SafCopyHandle,
   SafCopyStatus,
   PickedSharedDirectory,
+  FileTransferRequest,
   OcrApi,
   OcrLine,
   OcrBBox,

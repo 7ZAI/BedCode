@@ -31,6 +31,7 @@ import type {
   SafCopyHandle,
   SafCopyStatus,
   PickedSharedDirectory,
+  FileTransferRequest,
   OcrApi,
   ToolboxPageDescriptor,
   NavTabDescriptor,
@@ -403,6 +404,18 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async cancelReceivingSession(sessionId: string): Promise<void> {
       requireFileservicePermission('fileService.cancelReceivingSession')
       return pluginCmds.pluginFilesrvCancelReceiving(info.id, sessionId)
+    },
+
+    // v2.1 客户端传输栈的 JS 桥（plugin_filesrv_download / plugin_filesrv_upload）
+    // 尚未接入：client 栈已落地但命令层未打通，临时 reject 以维持类型契约
+    async download(_req: FileTransferRequest): Promise<string> {
+      requireFileservicePermission('fileService.download')
+      throw new Error('fileService.download is not implemented')
+    },
+
+    async upload(_req: FileTransferRequest): Promise<string> {
+      requireFileservicePermission('fileService.upload')
+      throw new Error('fileService.upload is not implemented')
     },
 
     async getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null> {
