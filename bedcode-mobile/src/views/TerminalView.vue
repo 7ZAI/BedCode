@@ -186,6 +186,9 @@ import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
 import { computeGridSize } from '@/utils/terminalMetrics'
+import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
+import { shouldApplyGridResize, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
+import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { useTuiCompat } from '@/composables/useTuiCompat'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import TerminalHeader from '@/components/TerminalHeader.vue'
@@ -258,6 +261,14 @@ const fitAddonRef = ref<FitAddon | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
 // ResizeObserver rAF 节流句柄：同一帧内多次 fit 只执行一次
 let resizeRaf = 0
+// resize 分层防抖器（对齐桌面端 TerminalPreview）：垂直立即 / 水平 100ms 合并
+let resizeDebouncer: TerminalResizeDebouncer | null = null
+// WebGL atlas 重建后字符图集预热的补刷定时器（DOM 渲染器下无害，纯 refresh）
+let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
+// DPR 变化监听（matchMedia 递归注册）；屏幕旋转/DPI 变化时窗口尺寸可能不变，
+// ResizeObserver 不触发，须显式重新 fit
+let dprMediaQuery: MediaQueryList | null = null
+let dprChangeHandler: ((this: MediaQueryList, ev: MediaQueryListEvent) => void) | null = null
 
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
@@ -994,6 +1005,111 @@ function fitWithMargin(): boolean {
   return term.cols !== beforeCols || term.rows !== beforeRows
 }
 
+/** 读取 xterm 实测 cell CSS 尺寸（DPR 感知计算的输入）；不可用时返回 null */
+function measureCellSize(): { width: number; height: number } | null {
+  const term = terminalRef.value
+  if (!term) return null
+  // addon-fit 0.11 内部即此访问路径（FitAddon.proposeDimensions）；
+  // 私有 API 无类型声明，逐级防御，任一环节缺失即回退 fitAddon.fit()
+  const core = (term as unknown as { _core?: unknown })._core as
+    | { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } }
+    | undefined
+  const cell = core?._renderService?.dimensions?.css?.cell
+  if (!cell || cell.width <= 0 || cell.height <= 0) return null
+  return { width: cell.width, height: cell.height }
+}
+
+/**
+ * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算物理像素后计算 cols/rows
+ * （行高 ceil、列宽 floor；口径对齐 FitAddon 裸 fit：仅扣滚动条 14px、无行列余量），
+ * 替代裸 fitAddon.fit() 的 DPR 不感知计算（Android 高 DPR 下网格更精确、无字模）。
+ * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
+ *
+ * 触发 resize 前经 shouldApplyGridResize 钳制 ±1 列/行测量漂移：DPR 感知吞吐
+ * 口径与当前网格存在 ±1~2 列系统性偏差，每次精确比较都 resize 会在旋转/键盘
+ * 避让触发的尺寸微调下产生 resize 风暴；真实尺寸变化后 scheduleAtlasPreheat 补刷。
+ */
+function applyDprFit() {
+  const term = terminalRef.value
+  if (!term || !fitAddonRef.value) return
+  const container = xtermContainer.value
+  const cell = measureCellSize()
+  if (!container || container.clientWidth <= 0 || container.clientHeight <= 0 || !cell) {
+    fitAddonRef.value.fit()
+    // 降级 fit 后同步变化（不重绘——由调用方统一处理）
+    return
+  }
+  const { cols, rows } = getXtermScaledDimensions({
+    containerWidthCss: container.clientWidth,
+    containerHeightCss: container.clientHeight,
+    cellWidthCss: cell.width,
+    cellHeightCss: cell.height,
+    devicePixelRatio: window.devicePixelRatio,
+  })
+  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
+  // 变化时经 ±1 漂移钳制，仅在真实变化时 resize
+  if (term.cols !== cols || term.rows !== rows) {
+    if (!shouldApplyGridResize(term.cols, term.rows, cols, rows)) {
+      return
+    }
+    term.resize(cols, rows)
+    scheduleAtlasPreheat()
+  }
+}
+
+/**
+ * 字符图集重建后的补刷：resize 后等 idle 分片把非 ASCII 字形（中文/box-drawing/
+ * emoji）基本光栅化完成，补一次全量重绘，让屏幕一次恢复完整。DOM 渲染器下无害
+ * （refresh 只是重建 DOM 行）；WebGL 渲染器（USE_WEBGL_RENDERER 开启时）则必要
+ * （避免「前几次乱，第三次好」）。同一次 resize 合并为一次（重置计时器）。
+ */
+function scheduleAtlasPreheat() {
+  if (atlasPreheatTimer) clearTimeout(atlasPreheatTimer)
+  atlasPreheatTimer = setTimeout(() => {
+    atlasPreheatTimer = null
+    // xterm 已销毁（element 已脱离 DOM）则不再重绘
+    if (terminalRef.value && terminalRef.value.element?.isConnected) {
+      terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+    }
+  }, ATLAS_PREHEAT_DELAY_MS)
+}
+
+/**
+ * resize 实际应用（防抖器 onApply 接线）：DPR 感知 fit + 仅 cols/rows 实际变化
+ * 才全量重绘 + PTY 同步（走串行队列）。subpixel 抖动（容器尺寸微调但行列不变）
+ * 不触发多余重绘，避免旋转/键盘避让时每帧全量重绘的浪费。
+ */
+function applyResize() {
+  const term = terminalRef.value
+  if (!term || !fitAddonRef.value) return
+  const beforeCols = term.cols
+  const beforeRows = term.rows
+  applyDprFit()
+  if (term.cols !== beforeCols || term.rows !== beforeRows) {
+    // 仅行列真实变化才重绘 + 同步 PTY；不变时 fitAddon 不重排、无多余开销
+    term.refresh(0, term.rows - 1)
+    syncTerminalSizeToHost()
+  }
+}
+
+/**
+ * 监听 DPR 变化并应用新尺寸：matchMedia 只匹配固定 dppx 值，每次命中后按新
+ * DPR 重新注册（递归），直到组件卸载。屏幕旋转/DPI 变化时窗口尺寸可能不变，
+ * ResizeObserver 不触发，须显式重新 fit（桌面端同路径）。
+ */
+function watchDprChanges() {
+  if (dprMediaQuery && dprChangeHandler) {
+    dprMediaQuery.removeEventListener('change', dprChangeHandler)
+  }
+  dprChangeHandler = () => {
+    // DPI 变化后重新 fit + 条件重绘/同步（窗口尺寸可能未变，ResizeObserver 不触发）
+    applyResize()
+    watchDprChanges()
+  }
+  dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
+  dprMediaQuery.addEventListener('change', dprChangeHandler)
+}
+
 async function initTerminal() {
   if (!xtermContainer.value) return
 
@@ -1087,22 +1203,35 @@ async function initTerminal() {
     tryInitialFit()
   }, 50)
 
-  // ResizeObserver — rAF 节流，避免快速连续 fit 导致的重复渲染；
-  // 仅当 cols/rows 实际变化时同步 PTY（xterm 自身负责重绘）
-  resizeObserverRef.value = new ResizeObserver(() => {
-    if (resizeRaf) return
-    resizeRaf = requestAnimationFrame(() => {
-      resizeRaf = 0
-      if (!fitAddonRef.value || !terminalRef.value) return
-      const cols = terminalRef.value.cols
-      const rows = terminalRef.value.rows
-      fitWithMargin()
-      if (terminalRef.value.cols !== cols || terminalRef.value.rows !== rows) {
-        syncTerminalSizeToHost()
-      }
-    })
+  // ResizeObserver — 接入分层防抖（对齐桌面端 TerminalPreview / VS Code）：
+  // 垂直 resize（行数变化）立即应用，仅宽度变化 100ms 防抖合并，避免旋转/键盘
+  // 避让触发容器尺寸微调时每帧整屏 reflow；0/非法尺寸（隐藏/过渡中 RO 报 0）被
+  // 防抖器忽略，避免把 PTY 缩成 1×1 打乱 shell。小缓冲（<200 行，VS Code
+  // StartDebouncingThreshold）连宽度变化也立即应用。flush() 保证防抖窗口内最后
+  // 一次尺寸必达。仅 cols/rows 实际变化才同步 PTY（见 applyResize）。
+  resizeDebouncer = new TerminalResizeDebouncer({
+    onApply: applyResize,
+    getBufferLength: () => {
+      const t = terminalRef.value
+      return t ? t.buffer.active.length : null
+    },
+  })
+  resizeObserverRef.value = new ResizeObserver((entries) => {
+    const rect = entries[0]?.contentRect
+    if (rect) {
+      // rAF 聚合同一帧的多次回调，再喂给防抖器（采集侧节流，防抖器负责应用侧调度）
+      if (resizeRaf) return
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0
+        resizeDebouncer?.resize(rect.width, rect.height)
+      })
+    }
   })
   resizeObserverRef.value.observe(xtermContainer.value)
+
+  // DPR 动态变化监听（跨 DPI 旋转 / 系统缩放变化时窗口尺寸可能不变，
+  // ResizeObserver 不触发）：matchMedia 只能匹配固定 dppx 值，变化后按新值递归注册
+  watchDprChanges()
 
   // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到主机会话。
   // 统一走 HTTP 串行队列（queueResize）：HTTP 与 WS 双通道并发会把不同
@@ -1159,6 +1288,20 @@ function disposeTerminal() {
   if (resizeRaf) {
     cancelAnimationFrame(resizeRaf)
     resizeRaf = 0
+  }
+  // 清理 resize 分层防抖器（去不触发挂起应用）
+  resizeDebouncer?.dispose()
+  resizeDebouncer = null
+  // 清理 atlas 预热补刷定时器
+  if (atlasPreheatTimer) {
+    clearTimeout(atlasPreheatTimer)
+    atlasPreheatTimer = null
+  }
+  // 移除 DPR 变化监听（matchMedia 递归注册的当前句柄）
+  if (dprMediaQuery && dprChangeHandler) {
+    dprMediaQuery.removeEventListener('change', dprChangeHandler)
+    dprMediaQuery = null
+    dprChangeHandler = null
   }
 
   // 卸载时 route.params 已失效（undefined），须用挂载时固定的会话 ID，
