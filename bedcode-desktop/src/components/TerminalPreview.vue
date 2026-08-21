@@ -113,8 +113,10 @@
  *   xterm 渲染循环，不做手动全量 refresh 补丁
  * - 滚动：onScroll 仅驱动"是否在底部"状态，scrollToBottom 经 rAF 合并，
  *   同一帧内多次输出只滚动一次
- * - 尺寸：ResizeObserver + 分层防抖 fit（垂直立即 / 水平 100ms 合并）+
- *   DPR 感知行列计算，cols/rows 实际变化才全量重绘与同步 PTY
+ * - 尺寸：ResizeObserver + 分层防抖 fit（垂直立即 / 水平 100ms 合并；
+ *   小缓冲 <200 行免防抖立即应用）+ DPR 感知行列计算，cols/rows 实际变化
+ *   才全量重绘与同步 PTY；0 尺寸（最小化）忽略不缩 PTY，恢复可见时 flush
+ *   一次兑现挂起防抖
  *
  * 终端窗口模式（TerminalWindowView）下 show-header=false，工具栏由外层
  * 统一管理；本组件仅通过 defineExpose 暴露主题/字号/清屏/刷新等能力。
@@ -131,6 +133,10 @@ import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
+import {
+  shouldApplyGridResize,
+  ATLAS_PREHEAT_DELAY_MS,
+} from '@/utils/terminalResizePolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -174,10 +180,16 @@ const bgImageUrl = ref('')
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+// WebGL resize 后字符图集重建的补刷定时器（atlas 预热：等 idle 分片光栅化
+// 基本完成后补一次全量重绘，避免整屏字形缺失的“临时失明”）
+let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
 let webglAddon: WebglAddon | null = null
 let resizeObserver: ResizeObserver | null = null
 // resize 分层防抖：垂直立即 / 水平 100ms 合并（对齐 VS Code TerminalResizeDebouncer）
 let resizeDebouncer: TerminalResizeDebouncer | null = null
+// 前台 flush 监听（对齐 VS Code 切回前台时对 debouncer 的 flush 语义）：
+// 后台/最小化期间的尺寸变化挂起防抖，恢复可见时以最终尺寸一次性兑现
+let windowVisibleHandler: (() => void) | null = null
 // DPR 变化监听（跨屏拖动 / 系统缩放变化）：matchMedia 递归注册，卸载时移除
 let dprMediaQuery: MediaQueryList | null = null
 let dprChangeHandler: ((e: MediaQueryListEvent) => void) | null = null
@@ -221,6 +233,15 @@ let writeQueue: Uint8Array[] = []
 let writeQueueBytes = 0
 let flushRaf = 0
 let flushTimer: ReturnType<typeof setTimeout> | null = null
+
+// 回放静止补刷：订阅/重订阅后的历史回放与渲染器冷启动时序竞态，可能留下
+// 未被后续帧覆盖的中间态（字符残缺/错位，用户需手动点刷新才恢复）。
+// 机制：订阅后置补刷标记，每次有数据入队重置静止计时器；回放完毕连续
+// REPLAY_IDLE_MS 无新数据 → 自动补一次全量重绘（等价用户点击刷新，
+// glyph 缓存全部命中，无副作用；实时持续输出时计时器不断重置不会触发）
+const REPLAY_IDLE_MS = 250
+let replayRefreshTimer: ReturnType<typeof setTimeout> | null = null
+let pendingReplayRefresh = false
 
 // 单次 write 上限：超过则拆块，让 xterm parser 在块间让出主线程，
 // 避免单帧解析超大字符串导致 UI 卡顿
@@ -321,11 +342,29 @@ async function writeInChunks(buf: Uint8Array) {
   }
 }
 
+function armReplayRefresh() {
+  pendingReplayRefresh = true
+  if (replayRefreshTimer) clearTimeout(replayRefreshTimer)
+  replayRefreshTimer = setTimeout(() => {
+    replayRefreshTimer = null
+    if (!pendingReplayRefresh) return
+    pendingReplayRefresh = false
+    // xterm 已销毁（element 已脱离 DOM）则不再重绘
+    if (terminal && terminal.element?.isConnected) {
+      terminal.refresh(0, terminal.rows - 1)
+    }
+  }, REPLAY_IDLE_MS)
+}
+
 /** 入队输出：合并到下一渲染帧统一写入 */
 function enqueueOutput(data: Uint8Array) {
   if (data.length === 0) return
   writeQueue.push(data)
   writeQueueBytes += data.byteLength
+  // 数据继续到达 = 回放/输出仍在进行：重置静止补刷计时器（仅在补刷待命期）
+  if (pendingReplayRefresh) {
+    armReplayRefresh()
+  }
   if (flushRaf) return
   // rAF 合并同帧事件；100ms 兜底：窗口最小化（rAF 暂停）时也能及时清空队列
   flushRaf = requestAnimationFrame(flushWriteQueue)
@@ -358,6 +397,8 @@ const terminalStream = useTerminalOutputStream({
   onReset: () => {
     if (terminal) {
       terminal.clear()
+      // 清屏后即将全量重播：重播结束静止时补刷一次（防重播中间态残留）
+      armReplayRefresh()
     }
   },
   onTruncated: (minSeq: number) => {
@@ -650,6 +691,9 @@ function initWebGL(term: Terminal): boolean {
           webglAddon = newAddon
           // 恢复后重新隐藏 DOM 光标
           term.element?.classList.add('xterm-hidden-cursor')
+          // WebGL 渲染器 cell 尺寸与 DOM 渲染器不同（VS Code 在 webgl 加载后同样
+          // 触发刷新重测网格），恢复后重算一次避免行列差 1 的漂移
+          applyResize()
           console.info('[TerminalPreview] WebGL context recovered')
         } catch (e) {
           console.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
@@ -741,13 +785,30 @@ function initTerminal() {
   })
 
   // ResizeObserver — 分层防抖（垂直立即 / 水平 100ms 合并，flush 保证最终尺寸必达），
-  // 避免拖窗时每帧整屏 reflow；仅当 cols/rows 实际变化时同步 PTY（见 applyResize）
-  resizeDebouncer = new TerminalResizeDebouncer({ onApply: applyResize })
+  // 避免拖窗时每帧整屏 reflow；仅当 cols/rows 实际变化时同步 PTY（见 applyResize）。
+  // 小缓冲（<200 行，VS Code StartDebouncingThreshold）连宽度变化也立即应用：
+  // 新终端/输出少的 shell reflow 便宜，拖窗时网格即时反应不滞后；
+  // buffer 行数不可得时保守防抖（terminal 未就绪场景）
+  resizeDebouncer = new TerminalResizeDebouncer({
+    onApply: applyResize,
+    getBufferLength: () => (terminal ? terminal.buffer.active.length : null),
+  })
   resizeObserver = new ResizeObserver((entries) => {
     const rect = entries[0]?.contentRect
     if (rect) resizeDebouncer?.resize(rect.width, rect.height)
   })
   resizeObserver.observe(terminalHostRef.value)
+
+  // 窗口恢复可见/聚焦时立即兑现挂起的防抖（最小化时 ResizeObserver 报 0 尺寸
+  // 已被防抖器过滤，恢复后的首帧通过 RO 正常触发；flush 负责隐藏期间
+  // 已入队的非 0 尺寸滞后兑现，不必等 100ms 计时器）
+  windowVisibleHandler = () => {
+    if (document.visibilityState === 'visible') {
+      resizeDebouncer?.flush()
+    }
+  }
+  document.addEventListener('visibilitychange', windowVisibleHandler)
+  window.addEventListener('focus', windowVisibleHandler)
 
   // DPR 动态变化监听（跨屏拖动 / 系统缩放变化时窗口尺寸可能不变，
   // ResizeObserver 不触发）：matchMedia 只能匹配固定 dppx 值，变化后需按新值递归注册
@@ -867,7 +928,13 @@ function measureCellSize(): { width: number; height: number } | null {
 /**
  * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算设备像素后计算 cols/rows
  * （行高 ceil、列宽 floor），替换 fitAddon.fit() 的裸 DPR 不感知计算。
- * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸
+ * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
+ *
+ * 触发 resize 前经 shouldApplyGridResize 锌制 ±1 列/行测量漂移：applyDprFit 的
+ * 尺寸口径（clientWidth × 渲染器 css.cell）与当前网格存在 ±1~2 列系统性偏差，
+ * 每次精确比较都 resize 会让 WebGL 在点“刷新”时重建整个字符图集（非 ASCII
+ * 字形按 idle 分片异步重新光栅化），表现为前几次刷新格式乱、图集预热完才正常。
+ * 真实 resize（拖窗/字号变化）后 scheduleAtlasPreheat 补刷收尾。
  */
 function applyDprFit() {
   if (!terminal || !fitAddon) return
@@ -884,10 +951,32 @@ function applyDprFit() {
     cellHeightCss: cell.height,
     devicePixelRatio: window.devicePixelRatio,
   })
-  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），变化才 resize
+  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
+  // 变化时经 ±1 漂移锌制，仅在真实变化时 resize
   if (terminal.cols !== cols || terminal.rows !== rows) {
+    if (!shouldApplyGridResize(terminal.cols, terminal.rows, cols, rows)) {
+      return
+    }
     terminal.resize(cols, rows)
+    scheduleAtlasPreheat()
   }
+}
+
+/**
+ * WebGL atlas 预热补刷：resize 重建字符图集后，非 ASCII 字形（中文/box-drawing/
+ * emoji）按 requestIdleCallback 分片异步光栅化，等基本完成后补一次全量重绘，
+ * 让屏幕一次恢复完整（否则用户看到“前几次乱，第三次好”）。DOM 渲染器下无害
+ * （refresh 只是重建 DOM 行）。同窗口多次 resize 合并为一次（重置计时器）。
+ */
+function scheduleAtlasPreheat() {
+  if (atlasPreheatTimer) clearTimeout(atlasPreheatTimer)
+  atlasPreheatTimer = setTimeout(() => {
+    atlasPreheatTimer = null
+    // xterm 已销毁（element 已脱离 DOM）则不再重绘
+    if (terminal && terminal.element?.isConnected) {
+      terminal.refresh(0, terminal.rows - 1)
+    }
+  }, ATLAS_PREHEAT_DELAY_MS)
 }
 
 /**
@@ -908,9 +997,10 @@ function watchDprChanges() {
 }
 
 /**
- * fit 后强制全量重绘：WebGL 渲染器在容器尺寸变化（全屏/滚动触发布局微变/
- * 刷新）后不会自动重绘可见区域，旧纹理残留导致字符错位与格式错乱，故 fit
- * 后立即 refresh 整屏修正。覆盖 resize / 刷新 / 字号变化三类重绘场景。
+ * fit 后强制全量重绘：WebGL 渲染器在容器尺寸变化（全屏/滚动触发布局微变/字号变化）
+ * 后不会自动重绘可见区域，旧纹理残留导致字符错位与格式错乱，故 fit 后立即
+ * refresh 整屏修正。覆盖 resize 与字号变化两类重绘场景（刷新按钮不经过此处，
+ * 见 refreshTerminal 的“为什么不 fit”说明）。
  */
 function fitAndRefresh() {
   if (!fitAddon || !terminal) return
@@ -918,10 +1008,19 @@ function fitAndRefresh() {
   terminal.refresh(0, terminal.rows - 1)
 }
 
-/** 刷新格式：重新 fit 终端尺寸并同步到 PTY，不清除内容 */
+/**
+ * 刷新格式：纯重绘 + 同步 PTY，不清除内容、**不重算尺寸**。
+ *
+ * 为什么不在这里 fit：尺寸已由三条路径维护——ResizeObserver（容器变化）、
+ * 字号 watcher、DPR 监听；而 applyDprFit 的口径（clientWidth × 渲染器 css.cell）
+ * 与当前网格存在 ±1~2 列恒定测量偏差，点击时重算几乎必然触发一次 resize →
+ * WebGL 重建整个字符图集（非 ASCII 字形重新光栅化）→ 当次显示混乱，再点才
+ * 恢复。刷新按钮的语义就是“重绘一次”，fit 在这里只会帮倒忙（尺寸偏差已由
+ * 防抖器经 shouldApplyGridResize 鉗制兜底，偏差 >1 才可能真触发 resize）。
+ */
 function refreshTerminal() {
-  if (!fitAddon || !terminal || !props.session) return
-  fitAndRefresh()
+  if (!terminal || !props.session) return
+  terminal.refresh(0, terminal.rows - 1)
   syncTerminalSize()
 }
 
@@ -1032,6 +1131,7 @@ watch(
         }
 
         terminalStream.start(newId)
+        armReplayRefresh()
         if (streamMounted) {
           terminalStream.subscribe()
         }
@@ -1052,6 +1152,7 @@ watch(
       terminalStream.stop()
     } else if (status === 'running') {
       terminalStream.start(sessionId.value)
+      armReplayRefresh()
       terminalStream.subscribe()
     }
   },
@@ -1079,6 +1180,7 @@ onMounted(async () => {
 
   // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
   terminalStream.start(sessionId.value)
+  armReplayRefresh()
   terminalStream.subscribe()
   streamMounted = true
 
@@ -1121,6 +1223,26 @@ onUnmounted(() => {
   }
   writeQueue.length = 0
   writeQueueBytes = 0
+
+  // 清理回放静止补刷定时器
+  if (replayRefreshTimer) {
+    clearTimeout(replayRefreshTimer)
+    replayRefreshTimer = null
+    pendingReplayRefresh = false
+  }
+
+  // 清理 WebGL atlas 预热补刷定时器
+  if (atlasPreheatTimer) {
+    clearTimeout(atlasPreheatTimer)
+    atlasPreheatTimer = null
+  }
+
+  // 清理前台 flush 监听
+  if (windowVisibleHandler) {
+    document.removeEventListener('visibilitychange', windowVisibleHandler)
+    window.removeEventListener('focus', windowVisibleHandler)
+    windowVisibleHandler = null
+  }
 
   // 清理 resize 防抖器（挂起的水平防抖直接丢弃：组件已卸载无需应用）
   if (resizeDebouncer) {

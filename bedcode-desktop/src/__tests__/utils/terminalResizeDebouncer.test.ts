@@ -3,7 +3,9 @@
  *
  * 覆盖 resize 分层契约：高度变化立即应用；仅宽度变化 100ms 防抖合并；
  * 宽高同时变化高度优先立即；flush 最终尺寸必达且不重复触发；
- * dispose 后挂起防抖不再触发；等值喂入（subpixel 抖动）不触发。
+ * dispose 后挂起防抖不再触发；等值喂入（subpixel 抖动）不触发；
+ * 小缓冲（<200 行）立即应用、大缓冲保持防抖、行数不可知保守处理；
+ * 0/NaN/负尺寸（最小化、display:none）no-op 不污染状态。
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
@@ -150,5 +152,73 @@ describe('TerminalResizeDebouncer', () => {
     expect(onApply).not.toHaveBeenCalled()
     vi.advanceTimersByTime(1)
     expect(onApply).toHaveBeenCalledTimes(1)
+  })
+
+  it('小缓冲（<200 行）：仅宽度变化也立即应用，不走防抖', () => {
+    const onApply = vi.fn()
+    const d = new TerminalResizeDebouncer({
+      onApply,
+      getBufferLength: () => 100,
+    })
+    d.resize(800, 600)
+    onApply.mockClear()
+
+    d.resize(900, 600)
+    expect(onApply).toHaveBeenCalledTimes(1)
+    vi.advanceTimersByTime(500)
+    expect(onApply).toHaveBeenCalledTimes(1) // 无挂起防抖补发
+  })
+
+  it('大缓冲（≥200 行）：仅宽度变化保持防抖', () => {
+    const onApply = vi.fn()
+    const d = new TerminalResizeDebouncer({
+      onApply,
+      getBufferLength: () => 200,
+    })
+    d.resize(800, 600)
+    onApply.mockClear()
+
+    d.resize(900, 600)
+    expect(onApply).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(onApply).toHaveBeenCalledTimes(1)
+  })
+
+  it('buffer 行数不可知（null）：保守按防抖处理', () => {
+    const onApply = vi.fn()
+    const d = new TerminalResizeDebouncer({
+      onApply,
+      getBufferLength: () => null,
+    })
+    d.resize(800, 600)
+    onApply.mockClear()
+
+    d.resize(900, 600)
+    expect(onApply).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(100)
+    expect(onApply).toHaveBeenCalledTimes(1)
+  })
+
+  it('0/NaN/负尺寸（最小化、display:none）：no-op 不记录；恢复后正常尺寸仍正确触发', () => {
+    const onApply = vi.fn()
+    const d = new TerminalResizeDebouncer({ onApply })
+    d.resize(800, 600)
+    onApply.mockClear()
+
+    // 非法喂入全部被忽略
+    d.resize(0, 0)
+    d.resize(-1, 600)
+    d.resize(Number.NaN, 600)
+    expect(onApply).not.toHaveBeenCalled()
+
+    // 恢复真实尺寸：等值（与 last 一致）不触发
+    d.resize(800, 600)
+    expect(onApply).not.toHaveBeenCalled()
+    // 恢复真实尺寸：变化正常触发（宽度防抖 / 高度立即）
+    d.resize(900, 600)
+    vi.advanceTimersByTime(100)
+    expect(onApply).toHaveBeenCalledTimes(1)
+    d.resize(900, 700)
+    expect(onApply).toHaveBeenCalledTimes(2)
   })
 })
