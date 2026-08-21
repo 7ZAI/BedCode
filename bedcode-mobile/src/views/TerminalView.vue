@@ -206,7 +206,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
-import { computeGridSize, TERMINAL_SCROLLBAR_GUTTER_PX, TERMINAL_LINE_END_MARGIN_COLS } from '@/utils/terminalMetrics'
+import { computeGridSize, FONT_FAMILY as METRICS_FONT_FAMILY, TERMINAL_SCROLLBAR_GUTTER_PX } from '@/utils/terminalMetrics'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { shouldApplyGridResize, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
@@ -612,15 +612,7 @@ function handleSettingsConfirm(settings: TerminalSettings) {
   })
 
   applyTerminalTheme()
-  // 字号变更后重排：显式更新 xterm 字号 + 走统一口径 refit（DPR 感知 +
-  // 行尾安全余量），不再走裸 fitAddon.fit()（无行尾余量，行尾字符被削半）；
-  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽
-  if (terminalRef.value) {
-    terminalRef.value.options.fontSize = settings.fontSize
-  }
-  setTimeout(() => {
-    if (fitWithMargin()) syncTerminalSizeToHost()
-  }, 50)
+  applyScrollSettings(settings.theme, settings.fontSize, fitAddonRef.value)
   showSettings.value = false
 }
 
@@ -997,27 +989,25 @@ async function initWebGL(term: Terminal): Promise<boolean> {
     return false
   }
 }
-// 终端字体栈：monospace 优先（Android 无 Cascadia/Consolas/Monaco，直接回退
-// 系统等宽，避免「测量时字体缓存未就绪 → fallback 不同 → 网格与渲染宽度
-// 不一致」导致行尾字符溢出/裁半）；Windows 桌面调试时回退链覆盖等宽字体
-const FONT_FAMILY = 'monospace, "Cascadia Mono", Consolas, Monaco, "Courier New", "Roboto Mono", "Droid Sans Mono"'
+// 终端字体栈：唯一真源在 utils/terminalMetrics（启动尺寸预估共用），此处仅导入
+const FONT_FAMILY = METRICS_FONT_FAMILY
 
-/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，仅扣自绘
- * 滚动条预留宽 + 行尾安全余量 1 列，高度不增减） */
+/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，
+ * 仅扣自绘滚动条预留宽 TERMINAL_SCROLLBAR_GUTTER_PX，宽度/高度不增减） */
 function computeInitialSize(): { cols: number; rows: number } {
   const container = xtermContainer.value
   if (!container) return { cols: 80, rows: 24 }
-  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0)
+  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, 0, 0)
   // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
   if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
   return grid
 }
 
 /**
- * 尺寸适配（初始校准 / 主题切换 / 手动刷新入口）：委托 applyDprFit 统一口径
- * （DPR 感知 + 滚动条预留宽 + 行尾安全余量），不再裸调 FitAddon.fit()——
- * 裸 fit 无行尾余量，行尾字符贴画布右缘被削半。
- * applyDprFit 在字体测量未就绪时降级裸 fit（幂等无操作），由就绪轮询重试。
+ * FitAddon 尺寸适配：直接采用官方 fit 计算的原始尺寸，宽度/高度不做任何
+ * 增减（不额外扣列余量、不补行数）。
+ * FitAddon 在字体测量未就绪时 proposeDimensions 返回 null → 无操作（幂等），
+ * 由就绪轮询重试。
  * @returns 是否实际发生了尺寸变化
  */
 function fitWithMargin(): boolean {
@@ -1025,7 +1015,7 @@ function fitWithMargin(): boolean {
   if (!term || !fitAddonRef.value) return false
   const beforeCols = term.cols
   const beforeRows = term.rows
-  applyDprFit()
+  fitAddonRef.value.fit()
   if (term.cols !== beforeCols || term.rows !== beforeRows) {
     // 调试验证：记录 fit 导致的尺寸变化轨迹（排查行尾裁切/右侧遮挡）
     console.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
@@ -1049,7 +1039,8 @@ function measureCellSize(): { width: number; height: number } | null {
 
 /**
  * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算物理像素后计算 cols/rows
- * （行高 ceil、列宽 floor；仅扣自绘滚动条预留宽 + 行尾安全余量 1 列），
+ * （行高 ceil、列宽 floor；口径对齐 FitAddon 裸 fit：仅扣自绘滚动条预留宽、
+ * 无行列余量），
  * 替代裸 fitAddon.fit() 的 DPR 不感知计算（Android 高 DPR 下网格更精确、无字模）。
  * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
  *
@@ -1073,7 +1064,6 @@ function applyDprFit() {
     cellWidthCss: cell.width,
     cellHeightCss: cell.height,
     devicePixelRatio: window.devicePixelRatio,
-    marginCols: TERMINAL_LINE_END_MARGIN_COLS,
   })
   // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
   // 变化时经 ±1 漂移钳制，仅在真实变化时 resize
