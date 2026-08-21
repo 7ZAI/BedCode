@@ -933,9 +933,9 @@ const rendererOverrideTarget = ref<{
 } | null>(null)
 const showRendererOverrideModal = ref(false)
 
-/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名 */
-function rendererDisplayName(source: RendererSource): string {
-  if (source.kind === 'desktop') return t('desktop.terminal.rendererDesktop')
+/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名；source 异常时兜底，避免弹窗崩溃 */
+function rendererDisplayName(source?: RendererSource | null): string {
+  if (!source || source.kind === 'desktop') return t('desktop.terminal.rendererDesktop')
   return source.deviceName || t('desktop.terminal.rendererMobile')
 }
 

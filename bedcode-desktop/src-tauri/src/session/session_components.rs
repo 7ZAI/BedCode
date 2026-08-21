@@ -346,8 +346,13 @@ impl StatusDetector for DefaultStatusDetector {
 /// 桌面端与移动端同时查看同一会话时 PTY 只能有一个尺寸，输出格式必须
 /// 匹配实际渲染的那个端。每次 resize 后归属即确立为请求方，其他端再
 /// 调整需先确认覆盖（见 SessionManager::resize_session 裁决）。
+///
+/// serde 注意：容器级 rename_all 只作用于变体名（tag 值），字段名需另用
+/// rename_all_fields（serde ≥1.0.186）转为 camelCase，与两端前端的 TS 类型
+/// （`{ kind: 'mobile'; deviceName }` / `{ status: 'needsConfirmation'; currentCanonical }`）
+/// 对齐——曾因字段保持 snake_case 导致前端读到 undefined 崩溃、确认弹窗不显示。
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum RendererSource {
     /// 桌面端（会话宿主：本地命令 / 本地环回 WS）
     Desktop,
@@ -364,7 +369,7 @@ impl RendererSource {
 
 /// resize 裁决结果（统一输出给所有 entry：桌面命令 / 移动端 HTTP / WS 控制）
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(tag = "status", rename_all = "camelCase")]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ResizeOutcome {
     /// 已应用：请求方就是正统端，或强制覆盖已确认
     Applied { canonical: RendererSource },
@@ -411,5 +416,44 @@ impl CanonicalRendererRegistry for DefaultCanonicalRendererRegistry {
     async fn clear(&self, session_id: &str) {
         let mut map = self.map.write().await;
         map.remove(session_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// serde 形状回归：字段必须输出 camelCase（与两端前端 TS 类型对齐）。
+    /// 曾因容器级 rename_all 只转换变体名、current_canonical/device_name 保持
+    /// snake_case，导致前端读 currentCanonical 为 undefined 崩溃且确认弹窗不显示。
+    #[test]
+    fn test_resize_outcome_and_renderer_source_json_shape_is_camel_case() {
+        let outcome = ResizeOutcome::NeedsConfirmation {
+            current_canonical: RendererSource::Mobile {
+                device_name: "Pixel-9".to_string(),
+            },
+        };
+        let json: serde_json::Value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["status"], "needsConfirmation");
+        assert!(json.get("currentCanonical").is_some(), "field must be camelCase: {json}");
+        assert!(json.get("current_canonical").is_none());
+        assert_eq!(json["currentCanonical"]["kind"], "mobile");
+        assert_eq!(json["currentCanonical"]["deviceName"], "Pixel-9");
+
+        let applied = ResizeOutcome::Applied {
+            canonical: RendererSource::Desktop,
+        };
+        let json: serde_json::Value = serde_json::to_value(&applied).unwrap();
+        assert_eq!(json["status"], "applied");
+        assert_eq!(json["canonical"]["kind"], "desktop");
+
+        // 反序列化回环（HTTP/命令边界双向兼容）
+        let back: ResizeOutcome = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back,
+            ResizeOutcome::Applied {
+                canonical: RendererSource::Desktop
+            }
+        );
     }
 }
