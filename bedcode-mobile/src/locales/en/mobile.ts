@@ -26,6 +26,7 @@ export default {
       confirmStopMsg: 'Are you sure you want to stop session "{name}"?',
       pairingRequest: 'Requesting pairing...',
       connecting: 'Connecting to {name}...',
+      connectingPlain: 'Connecting...',
       pairing: 'Connected, requesting pairing...',
       enterCode: 'Enter the 6-digit pairing code shown on desktop',
       authenticated: 'Authenticated, connection OK',

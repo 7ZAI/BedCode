@@ -332,7 +332,9 @@
     <!-- Loading Dialog: 连接中（弹窗遮罩，点击连接历史/扫码/手动连接后展示，阻断重复点击） -->
     <LoadingDialog
       :visible="showConnectLoading"
-      :message="t('mobile.connection.connecting', { name: pendingDevice?.name || t('mobile.nav.connection') })"
+      :message="pendingDevice?.name
+        ? t('mobile.connection.connecting', { name: pendingDevice.name })
+        : t('mobile.connection.connectingPlain')"
     />
 
     <!-- Loading Dialog: 终端准备中（就绪后才跳转，弹窗展示在连接页） -->
@@ -448,7 +450,9 @@ const activeSessionId = computed(() => connection.activeSessionId.value)
 const connectionStatusText = computed(() => {
   switch (connection.connectionStatus.value) {
     case 'connecting':
-      return t('mobile.connection.connecting', { name: pendingDevice.value?.name || t('mobile.nav.connection') })
+      return pendingDevice.value?.name
+        ? t('mobile.connection.connecting', { name: pendingDevice.value.name })
+        : t('mobile.connection.connectingPlain')
     case 'connected':
       return t('mobile.connection.pairing')
     case 'pairing':

@@ -26,6 +26,7 @@ export default {
       confirmStopMsg: '确定要停止会话 "{name}" 吗？',
       pairingRequest: '正在请求配对...',
       connecting: '正在连接 {name}...',
+      connectingPlain: '正在连接...',
       pairing: '已连接，正在请求配对...',
       enterCode: '请在桌面端查看 6 位配对码并输入',
       authenticated: '已认证，连接正常',
