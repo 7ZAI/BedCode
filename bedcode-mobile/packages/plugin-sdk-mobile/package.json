@@ -47,6 +47,10 @@
       "types": "./src/ui/Select.d.ts",
       "import": "./src/ui/Select.vue"
     },
+    "./ui/swipe-tabs": {
+      "types": "./src/ui/useSwipeTabs.d.ts",
+      "import": "./src/ui/useSwipeTabs.ts"
+    },
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js"

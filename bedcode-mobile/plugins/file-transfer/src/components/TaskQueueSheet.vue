@@ -12,6 +12,7 @@
  * group-row / status-badge / icon-chip，字号全部 clamp() 流式缩放。
  */
 import { computed, ref } from 'vue'
+import { useSwipeTabs } from '@binblink/plugin-sdk-mobile/ui/swipe-tabs'
 import type { Task, ReceivingTask, HistoryEntry } from '../types'
 import { TASK_STATE_KEYS, TASK_STATE_COLOR_CLASS, TASK_STATE_PROGRESS_CLASS, isTerminalState } from '../types'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
@@ -55,6 +56,16 @@ const TABS: { key: 'all' | 'sending' | 'receiving' | 'history'; labelKey: string
   { key: 'receiving', labelKey: 'transfer.queue.receiving' },
   { key: 'history', labelKey: 'transfer.queue.history' },
 ]
+
+/** 当前 tab 序号：横滑步进切换用 */
+const tabIndex = computed(() => TABS.findIndex(item => item.key === tab.value))
+
+// 内容区左右滑切换 tab（弹层 Teleport 到 body，不与宿主页面横滑容器冲突；
+// 边界页同向滑动为死手势，仅内部切换语义）
+const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
+  const next = tabIndex.value + (dir === 'left' ? 1 : -1)
+  if (next >= 0 && next < TABS.length) tab.value = TABS[next].key
+})
 
 /** 活跃传输数（仅真正在传输的任务；排队/暂停/失败不计入，避免数字与状态不符） */
 const activeCount = computed(
@@ -260,8 +271,14 @@ function directionChipClass(): string {
             </button>
           </div>
 
-          <!-- 任务卡列表 -->
-          <div class="flex-1 overflow-y-auto min-h-0 px-4 pb-[calc(var(--safe-area-bottom,0px)+12px)]">
+          <!-- 任务卡列表：左右滑切换 tab -->
+          <div
+            class="flex-1 overflow-y-auto min-h-0 px-4 pb-[calc(var(--safe-area-bottom,0px)+12px)]"
+            @touchstart.passive="onTouchStart"
+            @touchmove.passive="onTouchMove"
+            @touchend="onTouchEnd"
+            @touchcancel="onTouchEnd"
+          >
             <!-- ============ 全部 / 正在发送 ============ -->
             <template v-if="tab === 'all' || tab === 'sending'">
               <div v-if="visibleTasks.length === 0" class="py-10 text-center">

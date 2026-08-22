@@ -27,6 +27,10 @@
  * 使用 capture 阶段 + 非 passive 监听器确保水平滑动手势
  * 始终被容器拦截，不被子元素滚动或浏览器默认行为吞掉。
  * Teleport 弹窗打开时自动禁用滑动。
+ *
+ * 内部横滑区协作：子组件声明 data-swipe-zone（附 data-zone-at-start /
+ * data-zone-at-end 边界状态）后，区内水平滑动优先由区内部消费（切换内部
+ * 页签）；区处于该方向边界时手势交还外层翻主页面，见 onTouchMove 仲裁。
  */
 import { ref, computed, onMounted, onUnmounted, onActivated, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -93,6 +97,37 @@ let startX = 0
 let startY = 0
 let startTime = 0
 let direction: 'horizontal' | 'vertical' | null = null
+
+// ==================== 内部横滑区仲裁（data-swipe-zone 协议） ====================
+//
+// 页内组件（如插件页签容器）可在根元素声明 data-swipe-zone，接管区内水平
+// 滑动以切换内部页签；外层仅在区处于该方向边界时接管翻页：
+// - 区内左滑（下一个）：未到末页 → 内部消费；已到末页 → 外层翻下一页
+// - 区内右滑（上一个）：未到首页 → 内部消费；已到首页 → 外层翻上一页
+// 边界状态由区内组件经 data-zone-at-start / data-zone-at-end 实时同步。
+// touch 事件全程以 touchstart 目标为 target，区内/边界判定在整轮手势中稳定。
+let zoneEl: HTMLElement | null = null
+let zoneOwnershipDecided = false
+let zoneOwned = false
+
+function resolveSwipeZone(target: EventTarget | null): HTMLElement | null {
+  const el = target as HTMLElement | null
+  return (el?.closest?.('[data-swipe-zone]') as HTMLElement | null) ?? null
+}
+
+/** 区是否已处于该滑动方向的边界（true = 该方向手势交外层翻页） */
+function zoneAtBoundary(el: HTMLElement, deltaX: number): boolean {
+  const atStart = el.dataset.zoneAtStart === 'true'
+  const atEnd = el.dataset.zoneAtEnd === 'true'
+  return (deltaX > 0 && atStart) || (deltaX < 0 && atEnd)
+}
+
+/** 重置内部横滑区仲裁状态（每轮手势独立判定） */
+function resetZoneState() {
+  zoneEl = null
+  zoneOwnershipDecided = false
+  zoneOwned = false
+}
 
 // 参数配置
 const CONFIG = {
@@ -170,9 +205,14 @@ function resetTouchState() {
 // 5. Teleport 弹窗打开时完全跳过触摸处理
 
 function onTouchStart(e: TouchEvent) {
+  resetZoneState()
+
   // 弹窗打开时不处理滑动
   if (isModalOpen.value) return
   if (isAnimating.value) return
+
+  // 记录触摸起点所在的内部横滑区（touch 全程 target 不变，此处判定一次即可）
+  zoneEl = resolveSwipeZone(e.target)
 
   startX = e.touches[0].clientX
   startY = e.touches[0].clientY
@@ -212,6 +252,14 @@ function onTouchMove(e: TouchEvent) {
   if (direction === 'horizontal') {
     e.preventDefault()
 
+    // 首次判定为水平方向时仲裁归属：触摸起点在横滑区内且该方向未到边界
+    // → 本轮手势交给区内组件（外层不拖动轨道、touchend 不翻页）
+    if (!zoneOwnershipDecided) {
+      zoneOwnershipDecided = true
+      zoneOwned = zoneEl !== null && !zoneAtBoundary(zoneEl, deltaX)
+    }
+    if (zoneOwned) return
+
     const containerWidth = window.innerWidth
     const baseTranslate = -currentPage.value * containerWidth
     let newTranslate = baseTranslate + deltaX
@@ -228,9 +276,18 @@ function onTouchMove(e: TouchEvent) {
 }
 
 function onTouchEnd(e: TouchEvent) {
+  // 手势已交给内部横滑区：外层不翻页，轨道未被拖动也无需回弹
+  if (zoneOwned) {
+    isDragging.value = false
+    direction = null
+    resetZoneState()
+    return
+  }
+
   if (!isDragging.value || direction !== 'horizontal') {
     isDragging.value = false
     direction = null
+    resetZoneState()
     return
   }
 
@@ -256,11 +313,13 @@ function onTouchEnd(e: TouchEvent) {
 
   isDragging.value = false
   direction = null
+  resetZoneState()
 }
 
 function onTouchCancel() {
   isDragging.value = false
   direction = null
+  resetZoneState()
   translateX.value = -currentPage.value * window.innerWidth
 }
 

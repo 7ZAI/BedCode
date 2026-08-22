@@ -19,6 +19,7 @@
       "@/*": ["./src/*"],
       "@binblink/plugin-sdk-mobile": ["./packages/plugin-sdk-mobile/src/index.ts"],
       "@binblink/plugin-sdk-mobile/ui": ["./packages/plugin-sdk-mobile/src/ui/Select.d.ts"],
+      "@binblink/plugin-sdk-mobile/ui/swipe-tabs": ["./packages/plugin-sdk-mobile/src/ui/useSwipeTabs.ts"],
       "@binblink/plugin-sdk-mobile/*": ["./packages/plugin-sdk-mobile/src/*"]
     }
   },

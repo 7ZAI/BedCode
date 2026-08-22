@@ -53,6 +53,12 @@
   background: var(--mobile-accent);
 }
 
+/* 页签内容区横滑容器：包裹双面板，声明 data-swipe-zone（见 AutoTaskToolboxView） */
+.att-tab-panels {
+  flex: 1;
+  min-height: 0;
+}
+
 .att-tab-panel {
   flex: 1;
   min-height: 0;
