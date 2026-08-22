@@ -280,9 +280,12 @@ impl WasmPlugin for AutoTaskPlugin {
                 let (task_id, position) = queue::add_task(&host, &session_id, &prompt);
 
                 // 自动执行开启且会话空闲时立即调度；关闭时仅入队（可先添加多个任务再统一执行），
-                // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）
+                // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）。
+                // has_inflight_task 拦截队列仍有在途项的场景：此刻调度会把在途
+                // executing 项误归档为 done 并广播，移动端预设被误标已完成
                 if state::auto_execute_on(&host, &session_id)
                     && !state::has_active_task(&host, &session_id)
+                    && !queue::has_inflight_task(&host, &session_id)
                 {
                     queue::try_dispatch_next(&host, &session_id);
                 }
@@ -378,8 +381,10 @@ impl WasmPlugin for AutoTaskPlugin {
                         .map_err(|e| anyhow::anyhow!(e))?;
 
                 // 与手动 add-task 同语义：自动执行开启且会话空闲时立即调度
+                //（含队列在途项判定，防止在途 executing 项被误归档为 done）
                 if state::auto_execute_on(&host, &session_id)
                     && !state::has_active_task(&host, &session_id)
+                    && !queue::has_inflight_task(&host, &session_id)
                 {
                     queue::try_dispatch_next(&host, &session_id);
                 }

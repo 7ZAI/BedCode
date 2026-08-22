@@ -553,6 +553,27 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         // 终态保护：completed / interrupted 不应被后续事件降级
         // 防止 Stop(completed) 后 SessionEnd(interrupted) 覆盖正常完成状态
         let current_status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+
+        // 运行中行保护：执行中/等待输入的任务收到 idle 推送时不降级状态。
+        // idle 本义是"无任务运行"（SessionStart），但任务运行中途也会到达：
+        // opencode Task 工具创建子会话推 session.created→idle、Claude Code
+        // compact/resume 触发 SessionStart。若据此把执行中行改写为 idle，
+        // has_active_task 会误判会话空闲：开启自动执行的瞬间即出队下发
+        // （prompt 打进忙碌终端），后续终态推送触发的归档又把该队列项广播
+        // 为 done —— 移动端对应预设被误标「已完成」而原任务仍在执行。
+        // Codex 版已在脚本侧以 SessionStart matcher 限定 startup|resume|clear
+        // 规避同类问题，此处为全部 agent 的宿主侧兜底。
+        if status == "idle" && matches!(current_status, "in_progress" | "asking") {
+            if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+                upsert_session_mapping(host, session_id, bedcode_sid);
+            }
+            host.log_info(&format!(
+                "task-status: session_id={} skip, current '{}' is active, incoming 'idle' not applied",
+                session_id, current_status
+            ));
+            return http_response::ok();
+        }
+
         let is_current_terminal = matches!(current_status, "completed" | "interrupted");
         let is_new_terminal = matches!(status, "completed" | "interrupted");
         if is_current_terminal && !is_new_terminal {
@@ -1466,8 +1487,17 @@ pub fn set_auto_mode(
         }),
     );
 
-    // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务
-    if new_execute && !prev_execute && !has_active_task(host, session_id) {
+    // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务。
+    // 双重空闲判定：任务历史（has_active_task）+ 队列在途项
+    // （queue::has_inflight_task）。后者拦截"历史行失真但队列仍有
+    // waiting/executing"的场景——此刻进入 try_dispatch_next 会先把在途
+    // executing 项归档为 done 并广播，移动端对应预设被误标「已完成」
+    // （该任务实际仍在执行，终态推送尚未到达）
+    if new_execute
+        && !prev_execute
+        && !has_active_task(host, session_id)
+        && !crate::queue::has_inflight_task(host, session_id)
+    {
         crate::queue::try_dispatch_next(host, session_id);
     }
 

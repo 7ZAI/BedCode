@@ -306,6 +306,23 @@ pub fn list_active_task(host: &WasmHost, session_id: &str) -> Option<Value> {
     .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
 }
 
+/// 会话是否有在途队列项（waiting / executing）
+///
+/// 与 [`crate::state::has_active_task`]（按任务历史最新行判定）互补：本函数
+/// 看队列自身的状态机。两者分别覆盖对方的数据源失真场景——任务历史行被
+/// 中途 idle 推送污染、或终态推送丢失导致队列项残留 executing。调度入口
+/// 需同时满足两者为否才可出队，否则归档逻辑会把仍在执行的任务误标 done。
+pub fn has_inflight_task(host: &WasmHost, session_id: &str) -> bool {
+    host.plugin_db_query_params(
+        "SELECT 1 FROM task_queue WHERE session_id = ?1 AND status IN ('waiting', 'executing') LIMIT 1",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().map(|a| !a.is_empty()))
+    .unwrap_or(false)
+}
+
 /// 清空指定会话的所有 pending 任务
 pub fn clear_queue(host: &WasmHost, session_id: &str) -> i32 {
     host.plugin_db_execute_params(
@@ -432,6 +449,18 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     if !crate::state::auto_execute_on(host, session_id) {
         host.log_debug(&format!(
             "try_dispatch_next: auto_execute off, hold dispatch for session_id={}",
+            session_id
+        ));
+        return;
+    }
+
+    // 会话有进行中任务（in_progress/asking）时不下发：防止把 prompt 打进忙碌终端。
+    // 常规调度链由终态推送驱动，进入本函数前最新任务行必为终态；该守卫兜底
+    // 状态跟踪失真（中途 idle 推送、输入行未识别建行等）时的所有调用方，
+    // 避免任务被误下发或在途队列项被归档逻辑误标 done（移动端预设显示已完成）
+    if crate::state::has_active_task(host, session_id) {
+        host.log_warn(&format!(
+            "try_dispatch_next: session_id={} has active task, hold dispatch",
             session_id
         ));
         return;
@@ -972,9 +1001,12 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     let count_after = pending_count(host, &resolved_id);
     broadcast_queue_changed(host, &resolved_id, count_after, "add", None, None);
 
-    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）
+    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）。
+    // has_inflight_task 拦截队列仍有在途项的场景：此刻调度会把在途
+    // executing 项误归档为 done 并广播，移动端预设被误标已完成
     if crate::state::auto_execute_on(host, &resolved_id)
         && !crate::state::has_active_task(host, &resolved_id)
+        && !has_inflight_task(host, &resolved_id)
     {
         try_dispatch_next(host, &resolved_id);
     }
