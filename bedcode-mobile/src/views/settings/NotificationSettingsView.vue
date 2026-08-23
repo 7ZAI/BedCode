@@ -39,14 +39,26 @@
 <script setup lang="ts">
 /**
  * 通知设置二级页面 - 等待输入/连接变化/后台通知/振动/任务完成提示音
- * 状态来自 useMobileSettings 共享单例，变更自动保存
+ * 状态来自 useMobileSettings 共享单例，变更自动保存；
+ * 震动/提示音从关切换到开时各执行一次效果预览（震动一下/响一声）
  */
-import { onMounted } from 'vue'
+import { onMounted, watch } from 'vue'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import Toggle from '@/components/Toggle.vue'
 import { useMobileSettings } from '@/composables/useMobileSettings'
+import { useNotification } from '@/composables/useNotification'
 
 const { settings, loadSettings } = useMobileSettings()
+const { previewVibrate, previewSound } = useNotification()
 
 onMounted(loadSettings)
+
+// 仅在用户把开关从关切到开时预览效果；loadSettings 加载时默认值即为 true，
+// 不会产生 false→true 的跳变，不会误触发
+watch(() => settings.value.vibrate, (now, prev) => {
+  if (now && !prev) void previewVibrate()
+})
+watch(() => settings.value.soundOnTaskComplete, (now, prev) => {
+  if (now && !prev) void previewSound()
+})
 </script>

@@ -285,6 +285,30 @@ export function useNotification() {
     }
   }
 
+  /**
+   * 预览震动一次（设置页开启「震动反馈」时触发）
+   */
+  async function previewVibrate(): Promise<void> {
+    if (!isAndroid()) return
+    try {
+      await invoke('plugin:task-notification|testVibrate')
+    } catch (e) {
+      console.warn('[Notification] testVibrate failed:', e)
+    }
+  }
+
+  /**
+   * 预览提示音一次（设置页开启「任务完成提示音」时触发）
+   */
+  async function previewSound(): Promise<void> {
+    if (!isAndroid()) return
+    try {
+      await invoke('plugin:task-notification|testSound')
+    } catch (e) {
+      console.warn('[Notification] testSound failed:', e)
+    }
+  }
+
   return {
     ensurePermission,
     setSessionMode,
@@ -294,5 +318,7 @@ export function useNotification() {
     cancelAllTaskNotifications,
     showConnectionNotification,
     cancelConnectionNotification,
+    previewVibrate,
+    previewSound,
   }
 }
