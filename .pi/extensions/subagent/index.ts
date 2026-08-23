@@ -12,7 +12,7 @@
  * Uses JSON mode to capture structured output from subagents.
  */
 
-import { spawn } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -264,6 +264,92 @@ function getPiInvocation(args: string[]): { command: string; args: string[] } {
 
 type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
+/** exit 后等待 stdio 结束的宽限期（毫秒），超时则放弃跟踪被继承的句柄 */
+const EXIT_STDIO_GRACE_MS = 100;
+
+/**
+ * 等待子进程退出，但不被「分离后代继承的 stdio 句柄」卡死。
+ *
+ * Windows 上 daemon 化的孙进程可能继承子进程的 stdout/stderr 管道句柄，
+ * 此时子进程早已发出 `exit`，但 `close` 会永久挂起（同上游 pi-mono#2389）。
+ * 策略：exit 后短暂等待 stdio 流结束，超时则强制销毁流并返回退出码。
+ */
+function waitForSubagentExit(child: ChildProcess): Promise<number | null> {
+	return new Promise((resolve, reject) => {
+		let settled = false;
+		let exited = false;
+		let exitCode: number | null = null;
+		let postExitTimer: NodeJS.Timeout | undefined;
+		let stdoutEnded = child.stdout === null;
+		let stderrEnded = child.stderr === null;
+
+		const cleanup = () => {
+			if (postExitTimer) {
+				clearTimeout(postExitTimer);
+				postExitTimer = undefined;
+			}
+			child.removeListener("error", onError);
+			child.removeListener("exit", onExit);
+			child.removeListener("close", onClose);
+			child.stdout?.removeListener("end", onStdoutEnd);
+			child.stderr?.removeListener("end", onStderrEnd);
+		};
+
+		const finalize = (code: number | null) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			child.stdout?.destroy();
+			child.stderr?.destroy();
+			resolve(code);
+		};
+
+		const maybeFinalizeAfterExit = () => {
+			if (!exited || settled) return;
+			if (stdoutEnded && stderrEnded) {
+				finalize(exitCode);
+			}
+		};
+
+		const onStdoutEnd = () => {
+			stdoutEnded = true;
+			maybeFinalizeAfterExit();
+		};
+
+		const onStderrEnd = () => {
+			stderrEnded = true;
+			maybeFinalizeAfterExit();
+		};
+
+		const onError = (err: Error) => {
+			if (settled) return;
+			settled = true;
+			cleanup();
+			reject(err);
+		};
+
+		const onExit = (code: number | null) => {
+			exited = true;
+			exitCode = code;
+			maybeFinalizeAfterExit();
+			// 宽限 100ms 等 stdio 收尾（含最后一批缓冲输出），仍挂着就强制收尾
+			if (!settled) {
+				postExitTimer = setTimeout(() => finalize(code), EXIT_STDIO_GRACE_MS);
+			}
+		};
+
+		const onClose = (code: number | null) => {
+			finalize(code);
+		};
+
+		child.stdout?.once("end", onStdoutEnd);
+		child.stderr?.once("end", onStderrEnd);
+		child.once("error", onError);
+		child.once("exit", onExit);
+		child.once("close", onClose);
+	});
+}
+
 async function runSingleAgent(
 	defaultCwd: string,
 	agents: AgentConfig[],
@@ -387,14 +473,16 @@ async function runSingleAgent(
 				currentResult.stderr += data.toString();
 			});
 
-			proc.on("close", (code) => {
-				if (buffer.trim()) processLine(buffer);
-				resolve(code ?? 0);
-			});
-
-			proc.on("error", () => {
-				resolve(1);
-			});
+			// 用 waitForSubagentExit 替代裸 close 监听：避免 Windows 上
+			// 孤儿后代继承 stdout 句柄导致 close 永不触发、主 agent 卡住
+			waitForSubagentExit(proc)
+				.then((code) => {
+					if (buffer.trim()) processLine(buffer);
+					resolve(code ?? 0);
+				})
+				.catch(() => {
+					resolve(1);
+				});
 
 			if (signal) {
 				const killProc = () => {
