@@ -1,6 +1,6 @@
 <template>
   <div class="att-root mobile-ui">
-    <!-- 自绘页签：任务记录 / 定时任务（v-show 双挂载，切页不丢订阅与滚动位置） -->
+    <!-- 自绘页签：任务记录 / 定时任务（双面板常驻挂载，切页不丢订阅与滚动位置） -->
     <div class="att-tabs">
       <button
         v-for="tab in tabs"
@@ -26,10 +26,12 @@
       @touchend="onZoneTouchEnd"
       @touchcancel="onZoneTouchEnd"
     >
-      <div v-show="activeTab === 'history'" class="att-tab-panel">
+      <!-- 双面板常驻挂载（保订阅与滚动位置），切页走透明度+位移过渡；
+           面板停靠类由 activeTabIndex 驱动：新页自动从滑动方向侧滑入 -->
+      <div :class="['att-tab-panel', panelClass(0)]">
         <TaskHistoryTab :context="context" :history="history" />
       </div>
-      <div v-show="activeTab === 'scheduled'" class="att-tab-panel">
+      <div :class="['att-tab-panel', panelClass(1)]">
         <ScheduledJobsTab :context="context" :scheduled="scheduled" />
       </div>
     </div>
@@ -65,6 +67,12 @@ const tabs: { key: 'history' | 'scheduled'; label: string }[] = [
 
 /** 当前页签序号：横滑区边界声明（data-zone-at-*）与步进切换共用 */
 const activeTabIndex = computed(() => tabs.findIndex(tab => tab.key === activeTab.value))
+
+/** 面板停靠态：当前页居中；已过页停左侧、未到页停右侧——切页时新页从停靠侧滑入 */
+function panelClass(index: number): string {
+  if (index === activeTabIndex.value) return 'att-tab-panel--active'
+  return index < activeTabIndex.value ? 'att-tab-panel--left' : 'att-tab-panel--right'
+}
 
 // ==================== 页签内容区横滑切换 ====================
 //
