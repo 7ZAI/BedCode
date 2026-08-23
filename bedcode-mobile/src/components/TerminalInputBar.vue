@@ -372,22 +372,19 @@
           </button>
 
           <button
-            class="inline-btn send-btn"
-            :disabled="!canSubmit"
-            @click="handleSubmit"
-          >
-            <!-- 实体上箭头：发送语义，填充图标 + 放大尺寸提升辨识度 -->
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 4l8 9h-4.5v7h-7v-7H4z" />
-            </svg>
-          </button>
-
-          <button
             class="inline-btn execute-btn"
+            :class="{ 'execute-armed': sendArmed }"
             :disabled="!canSubmit"
-            @click="handleExecute"
+            :aria-label="t('mobile.input.executeHint')"
+            @pointerdown="onExecutePointerDown"
+            @pointermove="onExecutePointerMove"
+            @pointerup="onExecutePointerUp"
+            @pointercancel="onExecutePointerCancel"
+            @contextmenu.prevent
           >
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <!-- 纸飞机：默认水平朝右（执行语义）；长按蓄势后逆时针转 90°
+                 垂直朝上（发送语义），松开手指即发送 -->
+            <svg class="execute-icon w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>
@@ -406,6 +403,7 @@ import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssista
 import type { QuickBarItem } from '@/stores/inputAssistant'
 import { filterPresetCommands, getAllPresetCommandTexts } from '@/config/agentPresets'
 import { useToast } from '@/composables/useToast'
+import { useMobileSettings } from '@/composables/useMobileSettings'
 
 // ==================== Types ====================
 
@@ -765,6 +763,70 @@ function handleExecute() {
   }
 }
 
+// ==================== Execute Button Dual Action（点按执行 / 长按发送）====================
+
+/** 长按阈值：足够跟手不拖沓，同时为误触留出余量 */
+const EXECUTE_LONG_PRESS_MS = 400
+/** 滑动取消长按（防误触）：位移距离阈值 */
+const EXECUTE_MOVE_CANCEL_SLOP_PX = 10
+
+/** 长按蓄势态：图标转为垂直朝上，松手触发「发送」而非「执行」 */
+const sendArmed = ref(false)
+let executeLongPressTimer: ReturnType<typeof setTimeout> | null = null
+let executePointerStartX = 0
+let executePointerStartY = 0
+// 触觉反馈跟随振动设置开关（与 FileTreeItem 长按惯例一致）
+const { settings: mobileSettings } = useMobileSettings()
+
+function clearExecuteLongPressTimer() {
+  if (executeLongPressTimer) {
+    clearTimeout(executeLongPressTimer)
+    executeLongPressTimer = null
+  }
+}
+
+function onExecutePointerDown(e: PointerEvent) {
+  if (!canSubmit.value) return
+  // 捕获指针：手指滑出按钮仍能收到 pointerup/cancel，保证状态复位
+  ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  executePointerStartX = e.clientX
+  executePointerStartY = e.clientY
+  executeLongPressTimer = setTimeout(() => {
+    executeLongPressTimer = null
+    sendArmed.value = true
+    if (mobileSettings.value.vibrate && navigator.vibrate) {
+      navigator.vibrate(30)
+    }
+  }, EXECUTE_LONG_PRESS_MS)
+}
+
+function onExecutePointerMove(e: PointerEvent) {
+  // 长按触发前移动超出阈值 → 取消蓄势（滑动即意图取消）
+  if (!executeLongPressTimer) return
+  const dx = e.clientX - executePointerStartX
+  const dy = e.clientY - executePointerStartY
+  if (dx * dx + dy * dy > EXECUTE_MOVE_CANCEL_SLOP_PX * EXECUTE_MOVE_CANCEL_SLOP_PX) {
+    clearExecuteLongPressTimer()
+  }
+}
+
+function onExecutePointerUp() {
+  if (executeLongPressTimer) {
+    // 短击：定时器未触发 → 执行（文本 + Enter）
+    clearExecuteLongPressTimer()
+    handleExecute()
+  } else if (sendArmed.value) {
+    // 长按已蓄势 → 发送（文本写入输入行，不带 Enter）
+    handleSubmit()
+  }
+  sendArmed.value = false
+}
+
+function onExecutePointerCancel() {
+  clearExecuteLongPressTimer()
+  sendArmed.value = false
+}
+
 function handleShortcutClick(code: string) {
   assistStore.recordShortcut(code)
   emit('specialKey', code)
@@ -1001,7 +1063,7 @@ onMounted(() => {
   border-radius: 0.875rem;
 }
 
-/* 操作按钮行：左对齐 toggle，右对齐 send/execute */
+/* 操作按钮行：左对齐 toggle，右对齐执行按钮（点按执行 / 长按发送 双操作） */
 .action-row {
   display: flex;
   align-items: center;
@@ -1027,6 +1089,10 @@ onMounted(() => {
   transition: all 0.15s ease;
   flex-shrink: 0;
   padding: 0;
+  /* 长按双操作防系统手势干扰：禁用长按呼出菜单/文本选择，消除双击缩放延迟 */
+  -webkit-touch-callout: none;
+  user-select: none;
+  touch-action: manipulation;
 }
 
 .toggle-btn {
@@ -1083,20 +1149,18 @@ onMounted(() => {
   color: var(--mobile-input-placeholder);
 }
 
-.send-btn {
-  background: var(--mobile-send-bg);
-  border-color: var(--mobile-send-border);
-  color: var(--mobile-send-color);
+/* 纸飞机图标：朝向区分操作语义（点按执行 = 水平朝右，长按蓄势 = 垂直朝上） */
+.execute-icon {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.send-btn:active:not(:disabled) {
-  transform: scale(0.93);
-  background: var(--mobile-send-active-bg);
+.execute-btn.execute-armed .execute-icon {
+  transform: rotate(-90deg);
 }
 
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+/* 蓄势态微增亮：与图标转向、触觉反馈共同确认「发送模式」已激活 */
+.execute-btn.execute-armed:not(:disabled) {
+  filter: brightness(1.25);
 }
 
 .execute-btn {
