@@ -178,11 +178,10 @@
  * - disableStdin：禁用 xterm 原生输入（桌面键盘输入流无法在移动端复现），
  *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
  * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
- * - 键盘避让：visualViewport + 插件 safeAreaChanged 双通道检测，movable-area
- *   transform 上移（配合 AndroidManifest adjustNothing）。键盘动画结束后
- *   （偏移稳定 ~250ms）才应用最终偏移，并播放 250ms 过渡动画（与快捷键
- *   面板弹出收起一致）——键盘完全到位前输入区保持原位，不逐帧跟随，
- *   避免动画期间露出底部空隙
+ * - 键盘避让：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道检测，
+ *   movable-area 纯 transform 直接跟随（配合 AndroidManifest adjustNothing），
+ *   无 settle 延迟、无自绘过渡动画——键盘系统动画即视觉过渡，输入区实时
+ *   贴合键盘顶缘，且不会因过渡属性启停反复提升/降出合成层产生旧帧残留
  * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
  */
 defineOptions({ name: 'TerminalView' })
@@ -504,13 +503,16 @@ const pluginKeyboardHeight = ref(0)
 // 侧边栏设置面板输入框聚焦时，禁用键盘避让
 const settingsInputFocused = ref(false)
 
-// 最终键盘偏移量：取两个通道中的较大值
+// 最终键盘偏移量：visualViewport 优先（逐帧跟踪真实遮挡高度），插件高度兜底
+// （部分 WebView 的 vv 不触发事件）。不用 Math.max：插件在键盘动画 onStart 即
+// 上报最终高度，取大值会让偏移在动画开始瞬间跳到终态——输入条先于键盘到位，
+// 底部短暂露出背景空隙；vv 可用时它就是当前真实遮挡量
 const keyboardOffset = computed(() => {
   // 侧边栏设置面板输入框聚焦时，禁用键盘避让偏移
   if (settingsInputFocused.value) return 0
   const vvOffset = fullLayoutHeight.value - viewportHeight.value
-  const offset = Math.max(vvOffset, pluginKeyboardHeight.value)
-  return offset > 10 ? offset : 0
+  if (vvOffset > 10) return vvOffset
+  return pluginKeyboardHeight.value > 10 ? pluginKeyboardHeight.value : 0
 })
 function handleVisualViewportChange() {
   const vv = window.visualViewport
@@ -536,40 +538,22 @@ const terminalViewStyle = computed(() => ({
   paddingTop: `${safeAreaTop.value}px`,
 }))
 
-// 键盘避让动画参数（对齐快捷键面板弹出收起动画：250ms + Material 曲线）：
-// - KEYBOARD_SETTLE_MS：键盘动画结束判定——visualViewport 偏移稳定这么久
-//   才认为键盘到位；期间输入区保持原位（由键盘覆盖），不逐帧跟随
-// - KEYBOARD_TRANSITION_MS：输入区/终端内容上移过渡动画时长
-const KEYBOARD_SETTLE_MS = 250
-const KEYBOARD_TRANSITION_MS = 250
-
-// 键盘稳定后生效的最终偏移：键盘动画期间保持不变，稳定后一次性应用
-const keyboardSettledOffset = ref(0)
-let keyboardSettleTimer: ReturnType<typeof setTimeout> | null = null
-// 过渡动画临时启用：动画结束后移除 transition，避免 movable-area 长期
-// 被提升为合成层（与 xterm-container 的快捷键面板动画同一模式）
-const keyboardTransitionActive = ref(false)
-let keyboardTransitionTimer: ReturnType<typeof setTimeout> | null = null
-// 过渡结束后延迟重绘句柄（清除 canvas 移动残留帧）
-let keyboardRefreshTimer: ReturnType<typeof setTimeout> | null = null
-
 // 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
-// 纯 transform 方案：GPU 合成不触发布局重排，无卡顿
+// 纯 transform 直接跟随（无 settle 延迟、无自绘过渡）：transform 只走 GPU 合成
+// 不触发布局重排，逐事件应用零成本——键盘自身的系统动画就是视觉过渡。
+// 旧的「稳定 250ms 后一次性播放 250ms 过渡」方案有双重代价：
+// ① 输入区在键盘已完全弹出后仍滞留原位 ~500ms 才动（体感卡顿/迟滞）；
+// ② transition 属性临时启停把 movable-area 反复提升/降出合成层，降层重光栅化
+//    产生旧帧分块残留（米白横带/底部间隔），事后被迫再做整屏 refresh +
+//    强制重合成补丁。直接跟随从根上消除这两个问题，无需事后重绘
 //
 // 配合 AndroidManifest adjustNothing：
-// 系统不调整 WebView 大小，完全由 JS 控制偏移
-// 双通道检测取较大值，兼容不同 WebView 的 visualViewport 行为
-//
-// 时序：键盘动画进行中（keyboardOffset 逐帧变化）保持原位；等偏移稳定
-// （KEYBOARD_SETTLE_MS 无变化）后应用最终偏移并播放 250ms 过渡——键盘
-// 完全到位后才移动，动画期间底部区域被键盘覆盖，不会露出空隙
+// 系统不调整 WebView 大小，完全由 JS 控制偏移；
+// 双通道检测（vv 优先、插件兜底），兼容不同 WebView 的 visualViewport 行为
 const movableAreaStyle = computed(() => ({
-  transform: keyboardSettledOffset.value > 0
-    ? `translateY(-${keyboardSettledOffset.value}px)`
+  transform: keyboardOffset.value > 0
+    ? `translateY(-${keyboardOffset.value}px)`
     : 'translateY(0)',
-  transition: keyboardTransitionActive.value
-    ? `transform ${KEYBOARD_TRANSITION_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`
-    : 'none',
 }))
 
 /** 选择操作栏定位：避让选区和屏幕边界 */
@@ -861,25 +845,21 @@ onMounted(async () => {
   }
   await nextPaintFrame()
   isTerminalReady.value = true
+
+  // 入场渲染收尾（等价手动刷新按钮的渲染半段）：首次 fit/历史回放/遮罩淡出
+  // 过渡期间真机 WebView 合成器可能缓存旧帧分块，表现为终端区底部与输入栏
+  // 之间出现一段背景色空白间隔（点击刷新后消失的现场）。全量重绘 + 强制
+  // 重合成一次清除（仅此一次，幂等低成本）
+  if (terminalRef.value && terminalRef.value.rows > 0) {
+    terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+  }
+  forceCompositorRepaint()
 })
 
 onUnmounted(async () => {
   disposed = true
   clearSubscribeRetry()
 
-  // 清理键盘避让延迟任务（稳定判定/过渡动画/延迟重绘）
-  if (keyboardSettleTimer) {
-    clearTimeout(keyboardSettleTimer)
-    keyboardSettleTimer = null
-  }
-  if (keyboardTransitionTimer) {
-    clearTimeout(keyboardTransitionTimer)
-    keyboardTransitionTimer = null
-  }
-  if (keyboardRefreshTimer) {
-    clearTimeout(keyboardRefreshTimer)
-    keyboardRefreshTimer = null
-  }
   if (panelRepaintTimer) {
     clearTimeout(panelRepaintTimer)
     panelRepaintTimer = null
@@ -981,50 +961,19 @@ const {
 
 // ==================== Watchers ====================
 
-// 键盘偏移变化：不逐帧跟随，等键盘动画结束（偏移稳定 KEYBOARD_SETTLE_MS）
-// 后再应用最终偏移——键盘完全到位后输入区/终端内容才移动，
-// 避免与系统键盘动画逐帧竞争露出底部空隙（白屏闪烁）
-watch(keyboardOffset, (offset) => {
-  if (keyboardSettleTimer) clearTimeout(keyboardSettleTimer)
-  keyboardSettleTimer = setTimeout(() => {
-    keyboardSettleTimer = null
-    keyboardSettledOffset.value = offset
-  }, KEYBOARD_SETTLE_MS)
-})
-
-// 偏移稳定应用：临时启用过渡动画（250ms，与快捷键面板弹出收起一致），
-// 动画结束后移除 transition 并强制重绘终端，清除 canvas 移动后的残留帧
-// （WebGL 渲染器开启时合成层移动尤为明显，DOM 渲染器下也保持一致性）
-watch(keyboardSettledOffset, () => {
-  keyboardTransitionActive.value = true
-  if (keyboardTransitionTimer) clearTimeout(keyboardTransitionTimer)
-  keyboardTransitionTimer = setTimeout(() => {
-    keyboardTransitionActive.value = false
-    keyboardTransitionTimer = null
-  }, KEYBOARD_TRANSITION_MS + 50)
-
-  if (keyboardRefreshTimer) clearTimeout(keyboardRefreshTimer)
-  keyboardRefreshTimer = setTimeout(() => {
-    keyboardRefreshTimer = null
-    if (terminalRef.value && terminalRef.value.rows > 0) {
-      terminalRef.value.refresh(0, terminalRef.value.rows - 1)
-    }
-    // 合成层强制重合成：内容未变时 refresh() 会被渲染管线脏区跳过变成 no-op，
-    // 移动期间合成器缓存的旧分块仍在——transform 往返绕过渲染管线迫使合成器
-    // 重新合成 canvas 层（与快捷键面板/手动刷新路径同模式）
-    forceCompositorRepaint()
-    // 键盘收起（偏移回落为 0）：内容回落后强制滚动到最新行——键盘弹出
-    // 期间用户可能已向上查看历史或视口停在中间，收起后回到底部跟随输出
-    if (keyboardSettledOffset.value === 0) {
-      scrollToBottomManual()
-    }
-  }, KEYBOARD_TRANSITION_MS + 50)
+// 键盘收起（偏移回落到 0）：内容回落后滚动到最新行——键盘弹出期间用户可能
+// 已向上查看历史或视口停在中间，收起后回到底部跟随输出。纯轻量状态复位，
+// 无重绘/重合成开销（transform 直接跟随不产生旧帧残留）
+watch(keyboardOffset, (offset, prev) => {
+  if (offset === 0 && (prev ?? 0) > 0) {
+    scrollToBottomManual()
+  }
 })
 
 // 快捷键面板收起后强制重绘：xterm 容器经 translateY(-h) 上移后还原时，真机
 // WebView 合成层会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现
 // 米白横带与右侧竖带、底部“间隔”）。过渡动画（250ms）结束后强制 xterm 重绘
-// 全部行 + 合成器重合成，清除残留（与键盘避让的 keyboardRefreshTimer 同模式）
+// 全部行 + 合成器重合成，清除残留（与入场渲染收尾同模式）
 let panelRepaintTimer: ReturnType<typeof setTimeout> | null = null
 watch(shortcutsPanelHeight, (height) => {
   // 仅面板收起（还原 transform）时需要清理；展开时上移由合成器处理

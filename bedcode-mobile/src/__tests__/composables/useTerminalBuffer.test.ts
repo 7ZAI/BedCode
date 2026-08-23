@@ -190,6 +190,40 @@ describe('useTerminalBuffer.subscribeSession', () => {
     }
   })
 
+  it('registerRealtimeHandler：历史回放路径同样喂 onRawOutput（TUI 嗅探不丢历史中的 DECSET 1006h）', async () => {
+    // 场景：进入终端页前 opencode 已启用 SGR 鼠标上报，1006h 只存在于
+    // 历史缓存中——回放若绕过原始字节钩子，嗅探器丢失该状态 → isTuiMode
+    // 误判关闭 → 备用屏幕上触摸滚动完全失效
+    await terminalBuffer.subscribeSession('s1')
+    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    capturedHandlers!.onHistoryEnd(10)
+    // 视图未挂载（无 handler）：帧仅入历史缓存
+    const tuiBytes = new TextEncoder().encode('prompt\x1b[?1049h\x1b[?1006h')
+    capturedHandlers!.onFrame({ data: tuiBytes, seq: 11, eventCount: 1, lastSeq: 11, isWaiting: false })
+    expect(store.getBuffer('s1')!.historyCache.length).toBe(1)
+
+    const rawFed: Uint8Array[] = []
+    const written: Uint8Array[] = []
+    const terminal = {
+      element: document.createElement('div'),
+      write: vi.fn((data: Uint8Array, cb?: () => void) => {
+        written.push(data)
+        cb?.()
+      }),
+      clear: vi.fn(),
+      dispose: vi.fn(),
+      onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
+    } as unknown as Terminal
+
+    const { replayDone } = terminalBuffer.registerRealtimeHandler('s1', terminal, (d) => rawFed.push(d))
+    await replayDone
+
+    // 原始字节钩子与 xterm 写入收到相同字节：嗅探器可从回放恢复 1006h 状态
+    expect(written.length).toBeGreaterThan(0)
+    const fedText = rawFed.map((d) => new TextDecoder().decode(d)).join('')
+    expect(fedText).toContain('\x1b[?1006h')
+  })
+
   it('sendInput：转发到 store（socket 输入帧）', async () => {
     await terminalBuffer.subscribeSession('s1')
     capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })

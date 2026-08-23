@@ -111,6 +111,11 @@ export function useTerminalBuffer() {
           resolve()
           return
         }
+        // 回放路径同样必须喂原始字节钩子（TUI 嗅探）：DECSET 1006h 若只出现在
+        // 历史缓存中（进入会话前 TUI 应用已启用鼠标上报），不喂则嗅探器状态
+        // 丢失 → isTuiMode 误判关闭 → 触摸滚动落在无 scrollback 的备用屏幕上
+        // 完全失效（opencode 等进入后无法滚动查看的根因）
+        onRawOutput?.(data)
         terminal.write(data, () => resolve())
       }).then(() => yieldNextFrame())
 
@@ -120,7 +125,7 @@ export function useTerminalBuffer() {
     let replayIdleTimer: ReturnType<typeof setTimeout> | null = null
     const armReplayIdleRefresh = () => {
       clearReplayIdleTimer(sessionId)
-      replayIdleTimer = setTimeout(() => {
+      const timer = setTimeout(() => {
         replayIdleTimer = null
         replayIdleTimers.delete(sessionId)
         // xterm 可能已销毁（页面卸载竞态）：element 已脱离 DOM 则跳过
@@ -128,12 +133,10 @@ export function useTerminalBuffer() {
           terminal.refresh(0, terminal.rows - 1)
         }
       }, REPLAY_IDLE_REFRESH_MS)
-      replayIdleTimers.set(sessionId, () => {
-        if (replayIdleTimer) {
-          clearTimeout(replayIdleTimer)
-          replayIdleTimer = null
-        }
-      })
+      replayIdleTimer = timer
+      // 存定时器句柄（非闭包）：clearReplayIdleTimer 靠 clearTimeout 清理，
+      // 存闭包会让 clearTimeout 收到函数变成 no-op、僵尸刷新清不掉
+      replayIdleTimers.set(sessionId, timer)
     }
 
     // 回放就绪信号：本地缓存分片回放完成（onReplayDone）时 resolve。
@@ -143,6 +146,11 @@ export function useTerminalBuffer() {
     const replayDone = new Promise<void>((resolve) => {
       resolveReplayDone = resolve
     })
+    // 统一收尾：resolve 后置 null；独立函数避开调用点控制流窄化成 never 的误报
+    const settleReplayDone = () => {
+      resolveReplayDone?.()
+      resolveReplayDone = null
+    }
 
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
@@ -163,8 +171,7 @@ export function useTerminalBuffer() {
       },
       onReplayDone: () => {
         armReplayIdleRefresh()
-        resolveReplayDone?.()
-        resolveReplayDone = null
+        settleReplayDone()
       },
     })
 
@@ -172,8 +179,7 @@ export function useTerminalBuffer() {
     // replayDone 立即完成——服务端历史段结束由视图按 phase 离开 'history' 推导
     const buffer = store.getBuffer(sessionId)
     if (!buffer || buffer.historyCache.length === 0) {
-      resolveReplayDone?.()
-      resolveReplayDone = null
+      settleReplayDone()
     }
 
     return { replayDone }
