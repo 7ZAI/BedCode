@@ -1,5 +1,7 @@
 # 移动端文件服务归零：全发起侧传输架构
 
+> **状态：已取代（issue 12 切换收口）。** 本 ADR 描述的「桌面端唯一 HTTP 服务端 + filesrv 挂载栈 + upload session + intent 协调」链路已随对等网络切换整体删除：两端统一为 `packages/peer-net` 直连传输（mTLS + 批级 send/pull），移动端发送改走系统文件选择器（SAF 换算真实路径），中转复制与 HTTP 文件服务不再存在。本文仅作历史决策记录保留。
+
 文件传输的传输层改为「**全手机发起**」模型：移动端不再运行任何 HTTP 服务端（删除独立 actix-web server），大文件数据流全部由手机侧作为 HTTP client 主动发起，**桌面端为唯一的 HTTP 服务端**；WS 控制面承担意图通知 / 进度 / 取消 / 状态同步等全部协调职责。业务上的上传 / 下载语义保留不变，运输层统一收敛为两种原生动作——「手机从桌面拉（`GET + Range`）」与「手机推给桌面（`POST/PUT + session`）」。
 
 这推翻了此前两处定案：① ADR 0016 与 `.scratch/lan-file-transfer-plugin/issues/01-传输协议选型.md` 隐含的「移动端做服务端、桌面端直连移动端 HTTP 端点」（01 明确列出『移动端做服务端 → 常规 Rust HTTP server』为备选）；② 当前已实现的「移动端独立 actix server（随机端口 + Bearer token）+ 桌面端 reqwest 直连」双栈形态。协议仍为 ADR 0016 与 01 选定的 **HTTP/1.1 + Range + upload session**，本 ADR 只改变服务端归属与发起权：桌面端不直连手机，手机端无监听、零端口、零 HTTP server 依赖。

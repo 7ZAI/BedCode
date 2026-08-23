@@ -4,10 +4,10 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** ready-for-human
 
-- [ ] harness：A 推单文件到 B，三种策略分支行为各自正确
-- [ ] 询问超时自动拒绝且 A 收到终态
-- [ ] 双向可取消（发送方/接收方），对端收到中断并落正确终态
-- [ ] 进度事件序列完整（含速率）；断点真源 = 接收端已写字节的约定在此层生效
-- [ ] 批状态机纯函数沿用无头惯例独立单测；`cargo test` 通过
+- [x] harness：A 推单文件到 B，三种策略分支行为各自正确（`tests/transfer_session.rs`：always_accept / always_deny / ask×accept+reject）
+- [x] 询问超时自动拒绝且 A 收到终态（`ask_timeout_auto_rejects_and_sender_receives_terminal_state`）
+- [x] 双向可取消（发送方/接收方），对端收到中断并落正确终态（`sender_cancel_*` / `receiver_cancel_*`，含 RST 吞帧防护）
+- [x] 进度事件序列完整（含速率）；断点真源 = 接收端已写字节的约定在此层生效（`receiver_written_offset_is_resume_truth_source`：预置 .part 后发送端进度恰为 全量−已写偏移）
+- [x] 批状态机纯函数沿用无头惯例独立单测；`cargo test` 通过（60 lib + 1 discovery + 9 harness + 8 transfer_session）
