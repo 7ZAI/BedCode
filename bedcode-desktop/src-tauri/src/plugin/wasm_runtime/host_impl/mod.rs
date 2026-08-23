@@ -6,7 +6,7 @@
 //!
 //! 各功能域与 SDK `host/*` trait 一一对应：
 //! storage / database / terminal / session / events / http / log / fs / config /
-//! bus / lifecycle / file_service / transfer / process / app
+//! bus / lifecycle / peer / process / app
 //!
 //! 历史：阶段 A/B 时本目录名为 `host_functions`，包含 core module 胶水层
 //! （(ptr,len) 内存搬运 + Linker 注册）；阶段 C 已删除胶水层，仅保留实现层。
@@ -17,18 +17,17 @@ pub(super) mod bus;
 pub(super) mod config;
 pub(super) mod database;
 pub(super) mod events;
-pub(super) mod file_service;
 pub(super) mod fs;
 pub(super) mod http;
 pub(super) mod lifecycle;
 pub(super) mod log;
+pub(super) mod peer;
 pub(super) mod process;
 pub(super) mod session;
 pub(super) mod status;
 pub(super) mod storage;
 pub(super) mod terminal;
 pub(super) mod timer;
-pub(super) mod transfer;
 mod wsl_fs;
 
 use crate::plugin::wasm_runtime::WasmHostContext;
@@ -54,7 +53,6 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
 pub(super) mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::plugin::file_service::FileServiceRegistry;
     use crate::plugin::fs_auth::FsAuthChecker;
     use crate::plugin::message_bus::MessageBus;
     use crate::plugin::permission::PermissionManager;
@@ -86,7 +84,6 @@ pub(super) mod tests {
         let permission = Arc::new(PermissionManager::new());
         let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
         let message_bus = Arc::new(MessageBus::new());
-        let file_service = FileServiceRegistry::new(fs_auth.clone(), None);
         Arc::new(WasmHostContext::new(
             db,
             Arc::new(Mutex::new(HashMap::new())),
@@ -97,7 +94,6 @@ pub(super) mod tests {
             permission,
             fs_auth,
             message_bus,
-            file_service,
         ))
     }
 

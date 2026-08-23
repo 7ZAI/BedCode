@@ -310,7 +310,6 @@ impl Clone for PluginHost {
             wasm_plugins: self.wasm_plugins.clone(),
             wasm_host_ctx: self.wasm_host_ctx.clone(),
             message_bus: self.message_bus.clone(),
-            file_service: self.file_service.clone(),
             plugin_timers: self.plugin_timers.clone(),
             wasm_reload_throttle: self.wasm_reload_throttle.clone(),
             runtime_error_notify_throttle: self.runtime_error_notify_throttle.clone(),

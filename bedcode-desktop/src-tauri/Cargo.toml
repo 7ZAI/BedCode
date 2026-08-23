@@ -98,6 +98,8 @@ sysinfo = "0.33"
 
 # Plugin API
 bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
+bedcode-peer-net = { path = "../../packages/peer-net" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)

@@ -46,10 +46,6 @@ const FRONTEND_PERMISSION_RULES = [
   { re: /\.session\s*\.\s*(list|get|onStatusChange)\b/, perm: 'session:read' },
   { re: /\.session\s*\.\s*(create|stop)\b/, perm: 'session:write' },
   { re: /\.http\s*\.\s*registerEndpoint\b/, perm: 'network:http' },
-  {
-    re: /\.fileService\s*\.\s*(mount|unmount|updateRoots|getPeer|pickDirectory|pickFiles)\b/,
-    perm: 'fileservice',
-  },
   { re: /\.events\s*\.\s*(on|emit)\b/, perm: 'broadcast' },
 ]
 

@@ -11,7 +11,6 @@ use crate::enums::control::{
     SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction,
     TerminalPayload,
 };
-use crate::enums::file_service::FileServicePayload;
 use crate::enums::special_key::KeyCombo;
 use crate::enums::summary::SessionSummary;
 use crate::enums::SubscribeMode;
@@ -207,40 +206,11 @@ pub enum Message {
         #[serde(default = "default_token")]
         token: String,
     },
-
-    /// 文件服务控制面消息 (移动端 → 桌面端，内网文件传输插件规格阶段 2)
-    ///
-    /// 承载移动文件服务的 Announce（端口/token/挂载公告）与 Withdraw（服务撤回）。
-    /// 与移动端 `model/message.rs` 的同名变体双写互引：两端
-    /// 新增/变更字段必须同步
-    #[serde(rename = "file_service")]
-    FileService {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        /// 认证令牌
-        #[serde(default = "default_token")]
-        token: String,
-        payload: FileServicePayload,
-    },
 }
 
 // ==================== 辅助方法 ====================
 
 impl Message {
-    /// 创建文件服务控制面消息（桌面端 → 移动端：Query / 挂载快照补发）
-    pub fn file_service(payload: FileServicePayload) -> Self {
-        Message::FileService {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            token: String::new(),
-            payload,
-        }
-    }
-
     /// 创建终端输出消息
     pub fn output(session_id: &str, data: &[u8], is_waiting: bool, index: usize) -> Self {
         Message::Terminal {
@@ -619,7 +589,6 @@ impl Message {
             Message::SessionEvent { .. } => None,
             Message::Ack { .. } => None,
             Message::SyncData { .. } => None,
-            Message::FileService { message_id, .. } => Some(message_id),
         }
     }
 
@@ -636,7 +605,6 @@ impl Message {
             Message::SessionEvent { .. } => Some("session_event"),
             Message::Ack { .. } => Some("ack"),
             Message::SyncData { .. } => Some("sync_data"),
-            Message::FileService { .. } => Some("file_service"),
         }
     }
 
@@ -653,7 +621,6 @@ impl Message {
             Message::SessionEvent { .. } => false,
             Message::Ack { .. } => false,
             Message::SyncData { .. } => false,
-            Message::FileService { expect_response, .. } => *expect_response,
         }
     }
 
@@ -670,7 +637,6 @@ impl Message {
             Message::SessionEvent { token, .. } => token,
             Message::Ack { token, .. } => token,
             Message::SyncData { token, .. } => token,
-            Message::FileService { token, .. } => token,
         }
     }
 
@@ -879,19 +845,6 @@ impl Message {
                 payload,
                 token: token.to_string(),
             },
-            Message::FileService {
-                message_id,
-                expect_response,
-                timestamp,
-                payload,
-                ..
-            } => Message::FileService {
-                message_id,
-                expect_response,
-                timestamp,
-                token: token.to_string(),
-                payload,
-            },
         }
     }
 
@@ -940,9 +893,7 @@ impl Message {
 mod tests {
     use super::*;
     use crate::enums::auth::AuthStage;
-    use crate::enums::file_service::MountAnnouncement;
     use crate::enums::special_key::KeyCode;
-    use bedcode_plugin_api::FileOperation;
     use serde_json::Value;
     // CloseCode 在 tungstenite 0.24 中不公开导出，需从 frame::coding 引入
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -970,22 +921,6 @@ mod tests {
     }
 
     // ==================== 构造器 ====================
-
-    #[test]
-    fn file_service_constructor_sets_control_plane_fields() {
-        let m = Message::file_service(FileServicePayload::Query {});
-        assert_eq!(m.message_type(), Some("file_service"));
-        // 消息 ID 由生成器产生，只验证非空
-        assert!(!m.message_id().unwrap().is_empty());
-        assert!(!m.expect_response());
-        assert_eq!(m.token(), "");
-        match &m {
-            Message::FileService { payload, .. } => {
-                assert!(matches!(payload, FileServicePayload::Query {}));
-            }
-            _ => panic!("期望 file_service 消息"),
-        }
-    }
 
     #[test]
     fn output_constructor_base64_encodes_payload() {
@@ -1430,7 +1365,6 @@ mod tests {
     fn message_type_mapping_covers_all_variants() {
         // 逐变体验证类型名映射，防止序列化标签与调试名漂移
         let cases: Vec<(Message, &str)> = vec![
-            (Message::file_service(FileServicePayload::Withdraw {}), "file_service"),
             (Message::output("s", b"x", false, 0), "terminal"),
             (Message::auth(None, AuthPayload::default()), "auth"),
             (
@@ -1496,7 +1430,6 @@ mod tests {
             auto_approve: true,
         })
         .expect_response());
-        assert!(!Message::file_service(FileServicePayload::Query {}).expect_response());
     }
 
     #[test]
@@ -1516,7 +1449,6 @@ mod tests {
                 session_id: "s".to_string(),
                 auto_approve: true,
             }),
-            Message::file_service(FileServicePayload::Query {}),
         ];
         for m in cases {
             assert_eq!(m.with_token("tok-9").token(), "tok-9");
@@ -1644,7 +1576,6 @@ mod tests {
     fn json_round_trip_preserves_all_variants() {
         // 构造器产物经 to_json/from_json 往返后，序列化结果应完全一致
         let cases = vec![
-            Message::file_service(FileServicePayload::Withdraw {}),
             Message::output("s", b"abc", true, 1),
             Message::output_from_base64("s", "YWJj", false, 2, Some(3), Some(4), Some(5)),
             Message::input("s", "ls", None),
@@ -1703,16 +1634,6 @@ mod tests {
     fn serde_value_round_trip_preserves_rich_payloads() {
         // 含嵌套结构的代表变体走 serde to_value/from_value 往返，验证内部标签与内容分发
         let cases = vec![
-            Message::file_service(FileServicePayload::Announce {
-                port: 41234,
-                token: "t".to_string(),
-                device_name: "my-phone".to_string(),
-                mounts: vec![MountAnnouncement {
-                    plugin_id: "com.bedcode.file-transfer".to_string(),
-                    mount_path: "files".to_string(),
-                    operations: vec![FileOperation::List, FileOperation::Download],
-                }],
-            }),
             Message::session_control(
                 SessionControlAction::SessionChanged {
                     change_type: "created".to_string(),

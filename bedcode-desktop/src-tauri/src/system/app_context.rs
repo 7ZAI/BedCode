@@ -5,7 +5,6 @@
 
 use crate::db::Database;
 use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::plugin::file_service::FileServiceRegistry;
 use crate::plugin::PluginHost;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
@@ -30,8 +29,6 @@ pub struct AppContext {
     config_manager: Arc<SessionConfigManager>,
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
-    /// 插件文件服务注册表（挂载/沙箱/上传会话/钩子分发）
-    file_service: Arc<FileServiceRegistry>,
     /// 配对服务
     pairing_service: Arc<PairingService>,
     /// QR Token 管理器
@@ -98,10 +95,6 @@ impl AppContext {
         &self.plugin_host
     }
 
-    pub fn file_service(&self) -> &Arc<FileServiceRegistry> {
-        &self.file_service
-    }
-
     pub fn pairing_service(&self) -> &Arc<PairingService> {
         &self.pairing_service
     }
@@ -141,7 +134,6 @@ pub struct AppContextBuilder {
     session_manager: Option<Arc<SessionManager>>,
     config_manager: Option<Arc<SessionConfigManager>>,
     plugin_host: Option<Arc<PluginHost>>,
-    file_service: Option<Arc<FileServiceRegistry>>,
     pairing_service: Option<Arc<PairingService>>,
     qr_manager: Option<Arc<QrTokenManager>>,
     biometric_challenges: Option<Arc<BiometricChallengeManager>>,
@@ -159,7 +151,6 @@ impl AppContextBuilder {
             session_manager: None,
             config_manager: None,
             plugin_host: None,
-            file_service: None,
             pairing_service: None,
             qr_manager: None,
             biometric_challenges: None,
@@ -191,10 +182,6 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn file_service(mut self, fs: Arc<FileServiceRegistry>) -> Self {
-        self.file_service = Some(fs);
-        self
-    }
 
     pub fn pairing_service(mut self, ps: Arc<PairingService>) -> Self {
         self.pairing_service = Some(ps);
@@ -238,7 +225,6 @@ impl AppContextBuilder {
             session_manager: self.session_manager.expect("AppContext: session_manager is required"),
             config_manager: self.config_manager.expect("AppContext: config_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
-            file_service: self.file_service.expect("AppContext: file_service is required"),
             pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
             biometric_challenges: self

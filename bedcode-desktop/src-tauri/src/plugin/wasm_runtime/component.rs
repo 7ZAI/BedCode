@@ -5,10 +5,10 @@
 //!   （单一事实来源），本模块用 `bindgen!` 生成绑定：
 //!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
 //!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
-//! - 已接线 15 组 import 接口（host-app / host-storage / host-log / host-config /
+//! - 已接线 14 组 import 接口（host-app / host-storage / host-log / host-config /
 //!   host-terminal / host-database / host-plugin-database / host-session /
 //!   host-timer / host-events / host-http / host-fs / host-bus /
-//!   host-file-service / host-transfer / host-process），完整 `plugin` world 可直接实例化；
+//!   host-peer / host-process），完整 `plugin` world 可直接实例化；
 //!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
 //! - 宿主能力实现层在 `host_impl`（阶段 C 后仅此一层，core 胶水已删）
 //!
@@ -21,8 +21,8 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process, session, status, storage,
-    terminal, timer, transfer,
+    api, app, bus, config, database, events, fs, http, lifecycle, log, peer, process, session,
+    status, storage, terminal, timer,
 };
 use super::{block_on_async, WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
@@ -262,72 +262,121 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_file_service::Host for WasmPluginState {
-    fn mount(&mut self, options_json: String) -> Result<String, String> {
-        file_service::filesrv_mount(&self.host_ctx, &self.plugin_id, &options_json)
+impl bedcode::plugin::host_peer::Host for WasmPluginState {
+    fn list_devices(&mut self) -> Result<String, String> {
+        peer::peer_list_devices(&self.host_ctx, &self.plugin_id)
     }
 
-    fn unmount(&mut self, mount_path: String) -> Result<(), String> {
-        file_service::filesrv_unmount(&self.host_ctx, &self.plugin_id, &mount_path)
+    fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
+        peer::peer_dial(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
-    fn update_roots(&mut self, mount_path: String, roots_json: String) -> Result<(), String> {
-        file_service::filesrv_update_roots(&self.host_ctx, &self.plugin_id, &mount_path, &roots_json)
+    fn disconnect_peer(&mut self, node_id: String) -> Result<bool, String> {
+        peer::peer_disconnect(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
-    fn get_peer(&mut self, peer_id: String) -> Result<Option<String>, String> {
-        file_service::filesrv_get_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
+        peer::peer_respond_consent(&self.host_ctx, &self.plugin_id, &request_id, accepted)
     }
 
-    fn query_peer(&mut self, peer_id: String) -> Result<(), String> {
-        file_service::filesrv_query_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    fn list_trusted(&mut self) -> Result<String, String> {
+        peer::peer_list_trusted(&self.host_ctx, &self.plugin_id)
     }
 
-    fn approve_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        file_service::filesrv_approve_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
+        peer::peer_revoke_trusted(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
-    fn reject_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        file_service::filesrv_reject_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    fn send_files(&mut self, node_id: String, paths_json: String) -> Result<String, String> {
+        peer::peer_send_files(&self.host_ctx, &self.plugin_id, &node_id, &paths_json)
     }
 
-    fn set_approval_timeout(&mut self, mount_path: String, seconds: u64) -> Result<(), String> {
-        file_service::filesrv_set_approval_timeout(&self.host_ctx, &self.plugin_id, &mount_path, seconds)
+    fn list_transfers(&mut self) -> Result<String, String> {
+        peer::peer_list_transfers(&self.host_ctx, &self.plugin_id)
     }
 
-    fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
-        file_service::filesrv_cancel_receiving(&self.host_ctx, &self.plugin_id, &session_id)
+    fn cancel_transfer(&mut self, batch_id: String) -> Result<bool, String> {
+        peer::peer_cancel_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
     }
 
-    fn self_approve_batch(
-        &mut self,
-        mount_path: String,
-        batch_id: String,
-        files_json: String,
-        total_size: u64,
-    ) -> Result<(), String> {
-        file_service::filesrv_self_approve_batch(
+    fn retry_transfer(&mut self, batch_id: String) -> Result<String, String> {
+        peer::peer_retry_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn clear_transfer_history(&mut self) -> Result<u32, String> {
+        peer::peer_clear_transfer_history(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn list_receiving(&mut self) -> Result<String, String> {
+        peer::peer_list_receiving(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
+        peer::peer_respond_transfer(&self.host_ctx, &self.plugin_id, &batch_id, accept)
+    }
+
+    fn cancel_receiving(&mut self, batch_id: String) -> Result<bool, String> {
+        peer::peer_cancel_receiving(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn clear_receiving_history(&mut self) -> Result<u32, String> {
+        peer::peer_clear_receiving_history(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn get_receive_settings(&mut self) -> Result<String, String> {
+        peer::peer_get_receive_settings(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
+        peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
+    }
+
+    fn list_shared_directories(&mut self) -> Result<String, String> {
+        peer::peer_list_shared_directories(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn remove_shared_directory(&mut self, id: String) -> Result<bool, String> {
+        peer::peer_remove_shared_directory(&self.host_ctx, &self.plugin_id, &id)
+    }
+
+    fn add_shared_directory(&mut self, request_json: String) -> Result<String, String> {
+        peer::peer_add_shared_directory(&self.host_ctx, &self.plugin_id, &request_json)
+    }
+
+    fn list_shared_roots(&mut self, node_id: String) -> Result<String, String> {
+        peer::peer_list_shared_roots(&self.host_ctx, &self.plugin_id, &node_id)
+    }
+
+    fn browse_directory(&mut self, node_id: String, dir_id: String, rel_path: String) -> Result<String, String> {
+        peer::peer_browse_directory(
             &self.host_ctx,
             &self.plugin_id,
-            &mount_path,
-            &batch_id,
-            &files_json,
-            total_size,
+            &node_id,
+            &dir_id,
+            &rel_path,
         )
     }
 
-    fn list_remote(&mut self, mount_path: String, path: String) -> Result<String, String> {
-        file_service::filesrv_list_remote(&self.host_ctx, &self.plugin_id, &mount_path, &path)
+    fn pull_files(&mut self, node_id: String, dir_id: String, files_json: String) -> Result<u32, String> {
+        peer::peer_pull_files(
+            &self.host_ctx,
+            &self.plugin_id,
+            &node_id,
+            &dir_id,
+            &files_json,
+        )
     }
-}
 
-impl bedcode::plugin::host_transfer::Host for WasmPluginState {
-    fn start(&mut self, request_json: String) -> Result<String, String> {
-        transfer::transfer_start(&self.host_ctx, &self.plugin_id, &request_json)
+    fn pick_files(&mut self) -> Result<String, String> {
+        peer::peer_pick_files(&self.host_ctx, &self.plugin_id)
     }
 
-    fn cancel(&mut self, task_id: String) -> Result<(), String> {
-        transfer::transfer_cancel(&self.host_ctx, &self.plugin_id, &task_id)
+    fn pick_folder(&mut self) -> Result<String, String> {
+        peer::peer_pick_folder(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn set_download_dir(&mut self, path: String) -> Result<(), String> {
+        peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
     }
 }
 
@@ -355,8 +404,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_api_call::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -616,24 +664,6 @@ impl LoadedWasmPlugin {
             }
             Err(e) => Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e))),
         }
-    }
-
-    /// 调用插件的上传策略钩子导出（fail-closed 语义由调用方保持）
-    pub(crate) fn on_upload_request(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_upload_hook();
-        hooks
-            .call_on_upload_request(&mut self.store, meta_json)
-            .map_err(|e| AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e)))
-    }
-
-    /// 调用插件的批量传输请求钩子导出（v2，fail-closed 语义由调用方保持）
-    pub(crate) fn on_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_transfer_request_hook();
-        hooks
-            .call_on_transfer_request(&mut self.store, meta_json)
-            .map_err(|e| AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e)))
     }
 
     /// 获取插件的 manifest JSON

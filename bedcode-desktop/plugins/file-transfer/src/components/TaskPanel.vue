@@ -1,19 +1,14 @@
 <script setup lang="ts">
 /**
- * TaskPanel — 传输队列面板（右侧 360px 常驻）
+ * TaskPanel — 传输队列面板（右侧滑入）— host-peer 契约版
  *
- * v2 四 tab：全部 | 正在发送 | 正在接收 | 历史（spec §14.4）。
- * - 全部 = 本端任务（非终态）+ 接收任务合并，按创建时间倒序
- * - 正在发送 = 本端上传任务（waiting-approval 显示「等待对方同意」+ 可取消）
- * - 正在接收 = 对端发起的接收任务（只可取消，无暂停/恢复）
- * - 历史 = 终态归档只读条目（时间/方向/文件名/大小/结果 + 清空 + 打开所在文件夹）
- * 状态汇总 chips（四色体系，spec §9.3）+ 进度条 + 速率 · 剩余时间。
- * 纯展示组件，动作经 emit 交给父级 composable。
+ * 四 tab：全部 | 正在发送 | 正在接收 | 历史。
+ * 任务为批级记录（一批 = 一条）：传输中可取消，失败/拒绝可重试；
+ * 接收 tab 仅可取消；历史只读 + 清空。状态 chips（四色体系）+ 进度条 + 速率。
  */
 import { computed, inject, ref } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { HistoryEntry, ReceivingTask, Task, TaskStateName } from '../types'
-import { TASK_STATE_KEYS } from '../composables/useTasks'
 import { formatBytes, formatEta, displayName, formatClock } from '../utils/format'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -21,53 +16,39 @@ const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, par
 
 const props = defineProps<{
   tasks: Task[]
-  /** 逐任务速率（字节/秒，来自快照差分） */
-  speedMap: Record<string, number>
-  summary: {
-    active: number
-    queued: number
-    failed: number
-    rejected: number
-    resumable: number
-    paused: number
-  }
-  /** 可恢复任务数（resume-all 按钮条件） */
-  resumableCount: number
   /** 传输中任务总速率 */
   totalSpeed: number
-  /** v2：接收中任务（正在接收 tab） */
+  /** 接收中任务（正在接收 tab） */
   receiving: ReceivingTask[]
-  /** v2：传输历史（历史 tab） */
+  /** 传输历史（历史 tab） */
   history: HistoryEntry[]
-  /** v2：对端名映射（peerId → 展示名，批卡/接收任务用） */
+  /** 对端名映射（peerId → 展示名） */
   peerNames: Record<string, string>
 }>()
 
 const emit = defineEmits<{
-  (e: 'pause', id: string): void
-  (e: 'resume', id: string): void
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
-  (e: 'remove', id: string): void
-  (e: 'openDir', id: string): void
-  (e: 'resumeAll'): void
   (e: 'cancelReceiving', sessionId: string): void
   (e: 'clearHistory'): void
-  (e: 'openHistoryDir', localPath: string): void
 }>()
 
 /** 队列 tab（自绘分段控件，禁原生 select） */
 type QueueTab = 'all' | 'sending' | 'receiving' | 'history'
 const activeTab = ref<QueueTab>('all')
 
+/** 状态 → 展示文案 key */
+const STATE_KEYS: Record<TaskStateName, string> = {
+  transferring: 'transfer.task.state.transferring',
+  completed: 'transfer.task.state.completed',
+  failed: 'transfer.task.state.failed',
+  rejected: 'transfer.task.state.rejected',
+  cancelled: 'transfer.task.state.cancelled',
+}
+
 /** 状态 → chip 样式（四色体系） */
 const CHIP_CLASS: Record<TaskStateName, string> = {
-  queued: 'ft-chip--queued',
-  'waiting-approval': 'ft-chip--queued',
-  'waiting-reply': 'ft-chip--queued',
   transferring: 'ft-chip--active',
-  paused: 'ft-chip--pause',
-  resumable: 'ft-chip--pause',
   completed: 'ft-chip--active',
   failed: 'ft-chip--fail',
   rejected: 'ft-chip--reject',
@@ -75,27 +56,15 @@ const CHIP_CLASS: Record<TaskStateName, string> = {
 }
 
 function stateLabel(state: TaskStateName): string {
-  return t(TASK_STATE_KEYS[state])
+  return t(STATE_KEYS[state])
 }
 
 function chipClass(state: TaskStateName): string {
   return CHIP_CLASS[state] ?? 'ft-chip--queued'
 }
 
-/**
- * 任务卡 chip 文案：resumable + reason=peer-offline（对端离线自动暂停）
- * 时显示「对端离线，任务挂起」（v2.1 状态文案），其余按状态默认 key。
- */
-function taskStateText(task: Task): string {
-  if (task.state === 'resumable' && task.reason === 'peer-offline') {
-    return t('transfer.task.peerOffline')
-  }
-  return stateLabel(task.state)
-}
-
-/** 是否暂停类状态（进度条/动作按钮按琥珀色呈现） */
-function isPausedState(state: TaskStateName): boolean {
-  return state === 'paused' || state === 'resumable'
+function stateText(state: TaskStateName): string {
+  return stateLabel(state)
 }
 
 /** 进度百分比 */
@@ -104,22 +73,24 @@ function percent(task: Task): number {
   return Math.min(100, Math.round((task.offset / task.size) * 100))
 }
 
-/** 各状态可用的动作 */
-function canPause(task: Task): boolean {
-  return task.state === 'transferring'
-}
-function canResume(task: Task): boolean {
-  return task.state === 'paused' || task.state === 'resumable'
-}
 function canRetry(task: Task): boolean {
   return task.state === 'failed' || task.state === 'rejected'
 }
 function canCancel(task: Task): boolean {
-  return task.state !== 'completed' && task.state !== 'cancelled'
+  return !isTerminal(task.state)
+}
+
+function isTerminal(state: TaskStateName): boolean {
+  return (
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'rejected' ||
+    state === 'cancelled'
+  )
 }
 
 function speedOf(task: Task): number {
-  return props.speedMap[task.id] ?? 0
+  return task.rateBps ?? 0
 }
 
 function etaOf(task: Task): string {
@@ -128,17 +99,7 @@ function etaOf(task: Task): string {
   return formatEta((task.size - task.offset) / sp, t)
 }
 
-/** 已完成/进行中/暂停类展示传输元信息；终态展示原因文案 */
-function showMeta(task: Task): boolean {
-  return (
-    task.state === 'transferring' ||
-    task.state === 'paused' ||
-    task.state === 'resumable' ||
-    task.state === 'completed'
-  )
-}
-
-/** 拒绝原因映射（v2：user-rejected / timeout / policy-denied 三文案） */
+/** 拒绝原因映射 */
 function rejectReasonText(reason: string | null | undefined): string {
   switch (reason) {
     case 'user-rejected':
@@ -154,17 +115,12 @@ function rejectReasonText(reason: string | null | undefined): string {
   }
 }
 
-/** 失败/拒绝原因文案（复用 spec §10 + v2 错误 key） */
+/** 失败/拒绝原因文案 */
 function reasonText(task: Task): string {
   if (task.state === 'rejected')
     return rejectReasonText(task.reason) || t('transfer.task.state.rejected')
-  if (task.state === 'failed' && task.reason === 'duplicate-name') {
-    return t('transfer.error.duplicateName')
-  }
-  if (task.state === 'failed' && task.reason === 'remote-changed') {
-    return t('transfer.error.remoteChanged')
-  }
-  return task.state === 'failed' && task.reason ? task.reason : ''
+  if (task.state === 'failed') return rejectReasonText(task.reason) || (task.reason ?? '')
+  return ''
 }
 
 /** 对端展示名（peerId → 缓存名 → 原始 ID） */
@@ -172,23 +128,24 @@ function peerNameOf(peerId: string): string {
   return props.peerNames[peerId] || peerId || '—'
 }
 
-/** 接收任务对端展示名（优先任务侧缓存，回退映射表） */
+/** 接收任务对端展示名 */
 function receivingPeerName(task: ReceivingTask): string {
+  const name = (task as any).peerName as string | undefined
+  if (name) return name
   return task.peerId ? peerNameOf(task.peerId) : ''
 }
 
-/** tab 列表：正在发送 = 本端上传任务（本端发起的下载归「全部」tab，避免
- * 接收方向任务混入发送语义）；全部 tab = 本端非终态任务 + 接收任务合并 */
+/** tab 列表：正在发送 = 本端上传；全部 = 本端任务 + 接收任务合并倒序 */
 const tabItems = computed(() => {
   if (activeTab.value === 'sending') {
     return props.tasks
-      .filter((t) => t.direction === 'upload')
+      .filter((tk) => tk.direction === 'upload')
       .slice()
       .sort((a, b) => b.createdAt - a.createdAt)
-      .map((t) => ({ id: t.id, kind: 'task' as const }))
+      .map((tk) => ({ id: tk.id, kind: 'task' as const }))
   }
   const items: Array<{ id: string; kind: 'task' | 'receiving'; createdAt: number }> = [
-    ...props.tasks.map((t) => ({ id: t.id, kind: 'task' as const, createdAt: t.createdAt })),
+    ...props.tasks.map((tk) => ({ id: tk.id, kind: 'task' as const, createdAt: tk.createdAt })),
     ...props.receiving.map((r) => ({
       id: r.sessionId,
       kind: 'receiving' as const,
@@ -199,7 +156,7 @@ const tabItems = computed(() => {
   return items
 })
 
-/** 历史结果文案（history.results.*） */
+/** 历史结果文案 */
 function historyResult(entry: HistoryEntry): string {
   return t(`transfer.history.results.${entry.state}`)
 }
@@ -229,27 +186,8 @@ function historyReason(entry: HistoryEntry): string {
         </span>
       </div>
 
-      <!-- 状态汇总 chips（历史 tab 也常驻，队列概况） -->
-      <div class="ft-chips">
-        <span v-if="summary.active > 0" class="ft-chip ft-chip--active">
-          {{ t('transfer.summary.active', { count: summary.active }) }}
-        </span>
-        <span v-if="summary.queued > 0" class="ft-chip ft-chip--queued">
-          {{ t('transfer.summary.queued', { count: summary.queued }) }}
-        </span>
-        <span v-if="summary.failed > 0" class="ft-chip ft-chip--fail">
-          {{ t('transfer.summary.failed', { count: summary.failed }) }}
-        </span>
-        <span v-if="summary.rejected > 0" class="ft-chip ft-chip--reject">
-          {{ t('transfer.summary.rejected', { count: summary.rejected }) }}
-        </span>
-        <button v-if="resumableCount > 0" class="ft-btn ft-resume-all" @click="emit('resumeAll')">
-          {{ t('transfer.task.resumeAll') }}
-        </button>
-      </div>
-
       <!-- 总速率（仅传输中显示） -->
-      <div v-if="summary.active > 0 && totalSpeed > 0" class="ft-summary-speed">
+      <div v-if="totalSpeed > 0" class="ft-summary-speed">
         {{ t('transfer.summary.speed', { speed: formatBytes(totalSpeed) }) }}
       </div>
 
@@ -314,22 +252,6 @@ function historyReason(entry: HistoryEntry): string {
                 {{ historyReason(entry) }}
               </div>
             </div>
-            <!-- 打开所在文件夹：仅完成且有本地文件 -->
-            <button
-              v-if="entry.state === 'completed' && entry.localPath"
-              class="ft-mini-btn"
-              :title="t('transfer.history.openFolder')"
-              @click="emit('openHistoryDir', entry.localPath)"
-            >
-              <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  stroke-width="2"
-                  d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"
-                />
-              </svg>
-            </button>
           </div>
         </TransitionGroup>
         <button
@@ -472,37 +394,8 @@ function historyReason(entry: HistoryEntry): string {
                     displayName(task.remotePath)
                   }}</span>
                   <span class="ft-chip" :class="chipClass(task.state)">{{
-                    taskStateText(task)
+                    stateText(task.state)
                   }}</span>
-                  <button
-                    v-if="canPause(task)"
-                    class="ft-mini-btn"
-                    :title="t('transfer.task.pause')"
-                    @click="emit('pause', task.id)"
-                  >
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-width="2"
-                        d="M9 4h2v16H9zM15 4h2v16h-2z"
-                      />
-                    </svg>
-                  </button>
-                  <button
-                    v-if="canResume(task)"
-                    class="ft-mini-btn"
-                    :title="t('transfer.task.resume')"
-                    @click="emit('resume', task.id)"
-                  >
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M7 4l13 8-13 8V4z"
-                      />
-                    </svg>
-                  </button>
                   <button
                     v-if="canRetry(task)"
                     class="ft-mini-btn"
@@ -533,49 +426,18 @@ function historyReason(entry: HistoryEntry): string {
                       />
                     </svg>
                   </button>
-                  <button
-                    class="ft-mini-btn"
-                    :title="t('transfer.task.remove')"
-                    @click="emit('remove', task.id)"
-                  >
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
-                      />
-                    </svg>
-                  </button>
-                  <!-- 打开本地目录：仅已完成任务（文件已落盘） -->
-                  <button
-                    v-if="task.state === 'completed'"
-                    class="ft-mini-btn"
-                    :title="t('transfer.task.openDir')"
-                    @click="emit('openDir', task.id)"
-                  >
-                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"
-                      />
-                    </svg>
-                  </button>
                 </div>
 
-                <!-- 进度条（终态无进度条时也渲染完成态） -->
+                <!-- 进度条 -->
                 <div class="ft-pbar">
                   <span
                     class="ft-pbar-fill"
-                    :class="{ 'ft-pbar-fill--pause': isPausedState(task.state) }"
                     :style="{ width: percent(task) + '%' }"
                   ></span>
                 </div>
 
                 <!-- 元信息 / 原因 -->
-                <div v-if="showMeta(task)" class="ft-task-meta">
+                <div class="ft-task-meta">
                   <span>{{ formatBytes(task.offset) }} / {{ formatBytes(task.size) }}</span>
                   <span v-if="speedOf(task) > 0">{{ formatBytes(speedOf(task)) }}/s</span>
                   <span v-if="etaOf(task)">{{ etaOf(task) }}</span>

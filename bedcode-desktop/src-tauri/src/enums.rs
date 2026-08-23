@@ -4,7 +4,6 @@
 
 pub mod auth;
 pub mod control;
-pub mod file_service;
 pub mod plugin;
 pub mod pty_status;
 pub mod session;
@@ -19,7 +18,6 @@ pub use control::{
     SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
     TerminalAction, TerminalPayload,
 };
-pub use file_service::{FileServicePayload, MountAnnouncement};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
 pub use session::{SessionStatus, SessionType, TaskStatus};

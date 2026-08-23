@@ -7,6 +7,10 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
+pub mod peer_net;
+pub mod peer_receive;
+pub mod peer_remote;
+pub mod peer_transfer;
 pub mod plugin;
 pub mod process;
 pub mod pty;
@@ -277,6 +281,23 @@ pub fn run() {
                 std::fs::create_dir_all(parent)?;
             }
 
+            // 对等网络节点身份：目录与 DB 同源解析自 app_data_dir（决策 D3 宿主只
+            // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
+            // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
+            let peer_net_data_dir = app_handle
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data dir");
+            crate::peer_net::init_node_identity(&peer_net_data_dir)?;
+
+            // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
+            // 与 mDNS 发现守护，真机冒烟零操作可见
+            app.manage(crate::peer_net::PeerNetState::default());
+            app.manage(crate::peer_transfer::PeerTransferState::default());
+            app.manage(crate::peer_receive::PeerReceiveState::default());
+            app.manage(crate::peer_remote::PeerRemoteState::default());
+            crate::peer_net::spawn_autostart(app_handle.clone());
+
             let db = Database::new(&db_path)?;
             db.init_schema()?;
 
@@ -302,12 +323,6 @@ pub fn run() {
             )));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            // 文件服务注册表已在 PluginHost::new() 内创建（早于插件 auto-activate，
-            // 激活时挂载可用）；此处注入宿主引用并启动后台 sweeper（两阶段收尾）
-            tauri::async_runtime::block_on(async {
-                plugin_host.file_service().set_plugin_host(plugin_host.clone()).await;
-                plugin_host.file_service().start_background_tasks();
-            });
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
@@ -329,7 +344,6 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
-                .file_service(plugin_host.file_service().clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
@@ -583,20 +597,7 @@ pub fn run() {
             commands::plugin::plugin_list_rust_commands,
             commands::plugin::plugin_dev_reload,
             commands::plugin::plugin_fs_auth_respond,
-            // File Service (Plugin)
-            commands::file_service::plugin_filesrv_mount,
             commands::opener::plugin_reveal_in_dir,
-            commands::file_service::plugin_filesrv_update_roots,
-            commands::file_service::plugin_filesrv_dispose,
-            commands::file_service::plugin_filesrv_respond_upload_request,
-            commands::file_service::plugin_filesrv_get_peer,
-            commands::file_service::plugin_filesrv_approve_transfer,
-            commands::file_service::plugin_filesrv_reject_transfer,
-            commands::file_service::plugin_filesrv_set_approval_timeout,
-            commands::file_service::plugin_filesrv_cancel_receiving,
-            commands::file_service::plugin_filesrv_respond_transfer_request,
-            commands::file_service::plugin_pick_directory,
-            commands::file_service::plugin_pick_files,
             // Server
             commands::server::server_start,
             commands::server::server_stop,
@@ -613,6 +614,39 @@ pub fn run() {
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
             commands::mdns::mdns_is_advertising,
+            // Peer Net
+            peer_net::start_peer_node,
+            peer_net::stop_peer_node,
+            peer_net::list_discovered_peers,
+            peer_net::dial_peer,
+            peer_net::disconnect_peer,
+            peer_net::respond_peer_consent,
+            peer_net::list_trusted_peers,
+            peer_net::revoke_trusted_peer,
+            peer_net::list_shared_directories,
+            peer_net::add_shared_directory,
+            peer_net::remove_shared_directory,
+            // Peer Transfer (issue 09 发送侧)
+            peer_transfer::send_files_to_peer,
+            peer_transfer::cancel_peer_transfer,
+            peer_transfer::retry_peer_transfer,
+            peer_transfer::list_peer_transfers,
+            peer_transfer::clear_peer_transfer_history,
+            peer_transfer::peer_pick_files,
+            peer_transfer::peer_pick_folder,
+            // Peer Receive (issue 10 接收侧)
+            peer_receive::list_peer_receiving,
+            peer_receive::respond_peer_transfer,
+            peer_receive::cancel_peer_receiving,
+            peer_receive::get_peer_receive_settings,
+            peer_receive::set_peer_receive_policy,
+            peer_receive::set_peer_download_dir,
+            peer_receive::peer_pick_download_dir,
+            peer_receive::clear_peer_receiving_history,
+            // Peer Remote (issue 11 远端浏览/拉取)
+            peer_remote::list_peer_shared_roots,
+            peer_remote::browse_peer_directory,
+            peer_remote::pull_peer_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

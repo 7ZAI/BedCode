@@ -28,7 +28,6 @@ import TerminalView from './views/TerminalView.vue'
 import TerminalInputRailDemo from './views/TerminalInputRailDemo.vue'
 import SettingsView from './views/SettingsView.vue'
 import LogPanel from './components/LogPanel.vue'
-import PromptHost from './components/PromptHost.vue'
 
 type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings' | 'rail'
 const activeTab = ref<BaseTab>('toolbox')
@@ -264,7 +263,6 @@ window.addEventListener('beforeunload', () => {
     </div>
 
     <LogPanel v-model:log-open="logOpen" />
-    <PromptHost />
 
     <!-- 宿主同款 Toast 容器（expand 防重叠；主题跟随宿主设置） -->
     <Toaster

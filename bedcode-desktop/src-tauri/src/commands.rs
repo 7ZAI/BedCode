@@ -3,7 +3,6 @@
 //! 前端 invoke 命令层 - 系统命令、会话命令、PTY 命令等
 
 pub mod devices;
-pub mod file_service;
 pub mod mdns;
 pub mod opener;
 pub mod plugin;

@@ -1,26 +1,30 @@
 /**
- * 插件设置
+ * 插件设置 — host-peer 契约版
  *
- * get/set-settings 命令封装 + 目录选择（经 context.fileService.pickDirectory，
- * WASM 的 pick-download-dir 命令无法弹窗）。
- *
- * 注意：WASM set-settings 读取的是**顶层** roots/downloadDir/concurrency 字段
- * （见 rust commands::set_settings），并非契约文档里的嵌套 { settings } 对象；
- * 本 composable 按实际实现传参。get-settings 返回 snake_case download_dir，
- * 在此归一化为 camelCase 内部模型。
+ * 共享目录由宿主持久化（SharedDirDto：id/name/kind/path），添加 = 系统
+ * 目录选择器 → host add_shared_directory；下载目录经 pick-download-dir
+ * （系统选择器 + set_download_dir）；接收策略/超时经 set-settings。
  */
 import { ref, computed, type Ref } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Settings } from '../types'
 
+/** 宿主 SharedDirDto → 前端条目（保留 id 供移除寻址） */
+export interface RootItem {
+  id: string
+  name: string
+}
+
 export function useSettings(context: PluginContext) {
   const settings = ref<Settings>({
     roots: [],
     downloadDir: '',
-    concurrency: 3,
+    concurrency: 1,
     receivingPolicy: 'ask',
     approvalTimeoutSec: 60,
   }) as Ref<Settings>
+  /** roots 带条目 id（宿主 DTO），与 Settings.roots（展示名列表）并行维护 */
+  const rootItems = ref<RootItem[]>([]) as Ref<RootItem[]>
   const loading = ref(false)
 
   /** 拉取设置并归一化 */
@@ -29,14 +33,22 @@ export function useSettings(context: PluginContext) {
     try {
       const r = await context.commands.execute('file-transfer.get-settings', {})
       if (r) {
-        const policy = r.receiving_policy ?? r.receivingPolicy ?? 'ask'
+        const policy = r.policy_mode ?? r.policyMode ?? 'ask'
+        const normalized =
+          policy === 'always_accept' ? 'accept' : policy === 'always_deny' ? 'reject' : 'ask'
+        const rawRoots = Array.isArray(r.roots) ? r.roots : []
+        rootItems.value = rawRoots.map((x: any) => ({
+          id: x?.id ?? '',
+          name: x?.name ?? x?.path ?? x?.id ?? '',
+        }))
         settings.value = {
-          roots: Array.isArray(r.roots) ? r.roots : [],
-          downloadDir: r.download_dir ?? r.downloadDir ?? '',
-          concurrency: typeof r.concurrency === 'number' ? r.concurrency : 3,
-          receivingPolicy: ['ask', 'accept', 'reject'].includes(policy) ? policy : 'ask',
+          ...settings.value,
+          downloadDir: typeof r.download_dir === 'string' ? r.download_dir : (r.downloadDir ?? ''),
+          receivingPolicy: normalized as Settings['receivingPolicy'],
           approvalTimeoutSec:
-            typeof r.approval_timeout_sec === 'number' ? r.approval_timeout_sec : 60,
+            typeof r.ask_timeout_sec === 'number'
+              ? r.ask_timeout_sec
+              : (typeof r.askTimeoutSecs === 'number' ? r.askTimeoutSecs : 60),
         }
       }
     } catch (e) {
@@ -46,79 +58,71 @@ export function useSettings(context: PluginContext) {
     }
   }
 
-  /** 持久化当前设置到 WASM（顶层字段传参） */
-  async function save(): Promise<void> {
+  /** 设置接收策略（即时保存） */
+  async function setReceivingPolicy(policy: Settings['receivingPolicy']): Promise<void> {
     await context.commands.execute('file-transfer.set-settings', {
-      roots: settings.value.roots,
-      downloadDir: settings.value.downloadDir,
-      concurrency: settings.value.concurrency,
-      receivingPolicy: settings.value.receivingPolicy,
+      receivingPolicy: policy,
       approvalTimeoutSec: settings.value.approvalTimeoutSec,
     })
-  }
-
-  /** 设置接收策略（v2；即时保存） */
-  async function setReceivingPolicy(policy: Settings['receivingPolicy']): Promise<void> {
     settings.value = { ...settings.value, receivingPolicy: policy }
-    await save()
   }
 
-  /** 设置同意超时（v2，10–600 钳制；仅 ask 策略生效） */
+  /** 设置同意超时（10–600 钳制；仅 ask 策略生效） */
   async function setApprovalTimeoutSec(secs: number): Promise<void> {
     const clamped = Math.min(600, Math.max(10, Math.round(secs)))
+    await context.commands.execute('file-transfer.set-settings', {
+      receivingPolicy: settings.value.receivingPolicy,
+      approvalTimeoutSec: clamped,
+    })
     settings.value = { ...settings.value, approvalTimeoutSec: clamped }
-    await save()
   }
 
-  /** 添加共享目录（弹系统目录选择器；去重后持久化，返回 null 表示用户取消） */
+  /** 添加共享目录（弹系统目录选择器；用户取消返回 null） */
   async function addRoot(): Promise<string | null> {
-    const dir = await context.fileService.pickDirectory()
-    if (!dir) return null
-    if (!settings.value.roots.includes(dir)) {
-      settings.value = { ...settings.value, roots: [...settings.value.roots, dir] }
-      await save()
-    }
-    return dir
+    // 系统目录选择器仍走宿主 dialog 插件（系统强关联场景，允许原生）
+    const { open } = await import('@tauri-apps/plugin-dialog')
+    const picked = await open({ directory: true, multiple: false })
+    if (typeof picked !== 'string' || !picked) return null
+    const name = picked.split(/[\\/]/).filter(Boolean).pop() ?? picked
+    await context.commands.execute('file-transfer.mount-local', { name, path: picked })
+    await load()
+    return picked
   }
 
-  /** 移除共享目录 */
-  async function removeRoot(dir: string): Promise<void> {
-    settings.value = {
-      ...settings.value,
-      roots: settings.value.roots.filter((r) => r !== dir),
-    }
-    await save()
+  /** 移除共享目录（按条目 id） */
+  async function removeRoot(id: string): Promise<void> {
+    await context.commands.execute('file-transfer.update-roots', { remove: id })
+    rootItems.value = rootItems.value.filter((r) => r.id !== id)
   }
 
-  /** 选择下载目录（弹系统目录选择器） */
+  /** 选择下载目录（插件命令内含系统选择器 + 持久化；取消返回 null） */
   async function pickDownloadDir(): Promise<string | null> {
-    const dir = await context.fileService.pickDirectory()
-    if (!dir) return null
-    settings.value = { ...settings.value, downloadDir: dir }
-    await save()
-    return dir
-  }
-
-  /** 设置并发数（钳制 1..8，同时调用 set-concurrency 即时生效） */
-  async function setConcurrency(n: number): Promise<void> {
-    const clamped = Math.min(8, Math.max(1, Math.round(n)))
-    settings.value = { ...settings.value, concurrency: clamped }
-    await context.commands.execute('file-transfer.set-concurrency', { concurrency: clamped })
+    try {
+      const result = await context.commands.execute('file-transfer.pick-download-dir', {})
+      if (result?.cancelled) return null
+      if (result?.path) {
+        settings.value = { ...settings.value, downloadDir: result.path }
+        return result.path as string
+      }
+      return null
+    } catch (e) {
+      console.error('[File Transfer] pick-download-dir failed:', e)
+      return null
+    }
   }
 
   /** 是否已配置共享目录（空态判断用） */
-  const hasRoots = computed(() => settings.value.roots.length > 0)
+  const hasRoots = computed(() => rootItems.value.length > 0)
 
   return {
     settings,
+    rootItems,
     loading,
     hasRoots,
     load,
-    save,
     addRoot,
     removeRoot,
     pickDownloadDir,
-    setConcurrency,
     setReceivingPolicy,
     setApprovalTimeoutSec,
   }

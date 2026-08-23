@@ -301,7 +301,6 @@ export default {
       fsAuthAllow: 'Allow',
       fsAuthDeny: 'Deny',
       alwaysOn: 'Always on',
-      noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       noSystemOpenPermission: 'Plugin {plugin} lacks the system:open permission',
       toolboxPanels: 'Toolbox',
       // ==================== Detail page additions ====================

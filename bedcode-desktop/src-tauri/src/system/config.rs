@@ -416,8 +416,8 @@ impl Default for ChannelsConfig {
             restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
             pty_subscription_capacity: 1024,
-            global_queue_capacity: 50000,
-            global_queue_max_bytes: 128 * 1024 * 1024, // 128MB
+            global_queue_capacity: 100_000,
+            global_queue_max_bytes: 64 * 1024 * 1024, // 64MB
             history_start_mode: HistoryStartMode::Min,
             ws_event_capacity: 1024,
             lifecycle_capacity: 16,
@@ -634,8 +634,8 @@ impl AppConfig {
                 restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
                 pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
-                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 50000),
-                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 128 * 1024 * 1024),
+                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 100_000),
+                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 64 * 1024 * 1024),
                 // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
                 history_start_mode: match parse_value::<String>(props, "channels.history_start_mode", "min".to_string())
                     .as_str()
@@ -649,7 +649,8 @@ impl AppConfig {
             terminal: TerminalConfig {
                 default_cols: parse_value(props, "terminal.default_cols", 120),
                 default_rows: parse_value(props, "terminal.default_rows", 40),
-                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 20),
+                // 兜底默认与 TerminalConfig::default 的 30ms 保持一致（两处曾不一致：20/30）
+                flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 30),
                 merge_output: parse_value(props, "terminal.merge_output", true),
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),

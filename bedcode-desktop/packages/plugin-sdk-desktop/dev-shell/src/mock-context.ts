@@ -6,25 +6,21 @@
  * - commands.execute：仅执行前端注册 handler；WASM 后端不在浏览器运行
  * - storage：localStorage 持久化（flush 为空操作）
  * - http.registerEndpoint：仅登记展示（真实宿主由 Rust 服务端挂载，浏览器不可达）
- * - fileService：内存挂载点 + 模拟目录/文件选择（pickFiles 返回数组）
  * - 权限检查跳过（dev-shell 视为全部授予）
  */
 import type {
   Disposable,
-  FileServiceAPI,
   HttpAPI,
   I18nAPI,
   PluginContext,
   UIRegistry,
 } from '../../src/types'
 import { emitDevEvent, onDevEvent, sendInputToSession, sendOutput, sessions } from './mock/session'
-import { dialogService } from './mock/dialog-service'
 import {
   pushLog,
   registerEndpoint,
   registerFileHandler,
   registerInputExtension,
-  registerMount,
   registerPageToolbarItem,
   registerSidebarPanel,
   registerStatusBarItem,
@@ -179,69 +175,6 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
   }
 
-  // ==================== FileServiceAPI ====================
-  const fileService: FileServiceAPI = {
-    async mount(options) {
-      const handle = registerMount(pluginId, options.mountPath, options.roots, options.operations)
-      pushLog(
-        'info',
-        pluginId,
-        `fileService.mount "${options.mountPath}" roots=[${options.roots.join(', ')}]`,
-      )
-      return {
-        mountPath: options.mountPath,
-        async updateRoots(roots: string[]) {
-          handle.updateRoots(roots)
-          pushLog(
-            'info',
-            pluginId,
-            `fileService.updateRoots "${options.mountPath}" -> [${roots.join(', ')}]`,
-          )
-        },
-        async dispose() {
-          handle.dispose()
-          pushLog('info', pluginId, `fileService 卸载 "${options.mountPath}"`)
-        },
-      }
-    },
-    async getPeerInfo(_peerId) {
-      return null
-    },
-    async pickDirectory() {
-      return promptForMockPath(
-        '选择目录（dev-shell mock）',
-        '浏览器无法调起系统目录选择器，请手动输入模拟目录路径',
-        'C:\\mock\\downloads',
-      )
-    },
-    async pickFiles() {
-      const value = await promptForMockPath(
-        '选择文件（dev-shell mock，逗号分隔多个）',
-        '浏览器无法调起系统文件选择器，请手动输入模拟文件路径',
-        'C:\\mock\\a.txt, C:\\mock\\b.txt',
-      )
-      return value
-        ? value
-            .split(/[,，]/)
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : []
-    },
-  }
-
-  function promptForMockPath(
-    title: string,
-    message: string,
-    placeholder: string,
-  ): Promise<string | null> {
-    return dialogService.showPrompt({
-      title,
-      message,
-      inputPlaceholder: placeholder,
-      inputValue: placeholder,
-    })
-  }
-
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
     getI18n() {
@@ -274,7 +207,6 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     events,
     storage,
     http,
-    fileService,
     i18n,
     _disposables: disposables,
   }

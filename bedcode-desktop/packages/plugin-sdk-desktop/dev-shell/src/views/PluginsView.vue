@@ -2,14 +2,13 @@
 /**
  * PluginsView — 插件管理（桌面端）：状态徽章、激活/停用、全部注册项一览
  * （侧边栏面板 / 工具箱 / 状态栏 / 输入扩展 / 终端工具栏 / 标题栏 / 页面工具栏 /
- * 文件处理器 / HTTP 端点 / 文件服务挂载）
+ * 文件处理器 / HTTP 端点）
  */
 import { useI18n } from 'vue-i18n'
 import {
   endpoints,
   fileHandlers,
   inputExtensions,
-  mounts,
   pageToolbarItems,
   plugins,
   sidebarPanels,
@@ -156,16 +155,6 @@ async function toggle(pluginId: string) {
             class="px-2 py-1 rounded-tag bg-[var(--bg-hover)] font-mono"
           >
             {{ x.path }}
-          </p>
-        </div>
-        <div v-if="mounts.filter((x) => x.pluginId === record.id).length">
-          <p class="text-[var(--text-tertiary)] mb-1">{{ t('devshell.plugins.mounts') }}</p>
-          <p
-            v-for="x in mounts.filter((y) => y.pluginId === record.id)"
-            :key="x.mountPath"
-            class="px-2 py-1 rounded-tag bg-[var(--bg-hover)] font-mono break-all"
-          >
-            {{ x.mountPath }} → [{{ x.roots.join(', ') }}]
           </p>
         </div>
         <div v-if="titleBarItems.filter((x) => x.pluginId === record.id).length">

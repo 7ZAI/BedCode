@@ -110,7 +110,7 @@ export async function activate(context: PluginContext): Promise<void> {
 // ==================== 前端权限推断 ====================
 
 describe('前端权限推断', () => {
-  it('storage / terminal / session / http / fileService / broadcast', () => {
+  it('storage / terminal / session / http / broadcast', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
       'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
@@ -122,7 +122,6 @@ export async function activate(context: PluginContext): Promise<void> {
   await context.session.list()
   await context.session.stop('s')
   context.http.registerEndpoint('/x', async () => ({ status: 200, body: {} }))
-  await context.fileService.pickDirectory()
   context.events.on('evt', () => {})
 }`,
     })
@@ -136,7 +135,6 @@ export async function activate(context: PluginContext): Promise<void> {
     expect(perms).toContain('session:read')
     expect(perms).toContain('session:write')
     expect(perms).toContain('network:http')
-    expect(perms).toContain('fileservice')
     expect(perms).toContain('broadcast')
   })
 

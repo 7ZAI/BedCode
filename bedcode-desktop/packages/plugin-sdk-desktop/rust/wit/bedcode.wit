@@ -15,9 +15,9 @@
 /// ## 命名空间约定
 ///
 /// 宿主能力 import 接口前缀 `host-`，插件导出接口为普通名字：
-/// - import：`host-storage` / `host-database` / ... （13 组，对应 host_functions/*）
+/// - import：`host-storage` / `host-database` / ... （对应 host_functions/*）
 /// - export：`command` / `lifecycle` / `events` / `terminal-hooks` /
-///   `upload-hook` / `manifest` / `abi`
+///   `manifest` / `abi`
 ///
 /// ## ABI 版本协商（阶段 A）
 ///
@@ -53,6 +53,74 @@ interface host-bus {
     publish: func(topic: string, payload-json: string) -> result<_, string>;
     subscribe: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
+}
+
+/// 对等网络基础能力（issue 12 切换后：宿主只提供能力原语，
+/// file-transfer 插件是首个上层消费者）
+///
+/// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
+/// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
+/// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
+/// - `peer:devices`    发现缓存全量列表变化
+/// - `peer:connection` 节点连上/断开
+/// - `peer:consent`    首次连接确认请求
+/// - `peer:transfer`   发送任务列表变化（含进度与终态）
+/// - `peer:receive`    接收侧变化（待应答批/进行中接收）
+interface host-peer {
+    /// 发现缓存全量列表 → DiscoveredPeerDto JSON 数组
+    list-devices: func() -> result<string, string>;
+    /// 拨号连接指定节点（等待对端确认）→ DialPeerResultDto JSON
+    dial-peer: func(node-id: string) -> result<string, string>;
+    /// 断开与指定节点的会话（返回是否存在该会话）
+    disconnect-peer: func(node-id: string) -> result<bool, string>;
+    /// 首次连接确认应答（返回是否命中了待确认项）
+    respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
+    /// 可信对端列表 → TrustedPeerDto JSON 数组
+    list-trusted: func() -> result<string, string>;
+    /// 撤销对指定节点的信任（返回是否删除了条目）
+    revoke-trusted: func(node-id: string) -> result<bool, string>;
+    /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
+    /// 扇出 = 对多个对端各调一次，各批相互独立）→ PeerTransferDto JSON
+    send-files: func(node-id: string, paths-json: string) -> result<string, string>;
+    /// 发送任务列表（含历史）→ PeerTransferDto JSON 数组
+    list-transfers: func() -> result<string, string>;
+    /// 取消发送批
+    cancel-transfer: func(batch-id: string) -> result<bool, string>;
+    /// 重试失败/被拒/取消的发送批（断点续传）→ PeerTransferDto JSON
+    retry-transfer: func(batch-id: string) -> result<string, string>;
+    /// 清空发送+接收历史（返回清除条数）
+    clear-transfer-history: func() -> result<u32, string>;
+    /// 待应答/进行中的接收任务 → PeerTransferDto JSON 数组
+    list-receiving: func() -> result<string, string>;
+    /// 接收批应答：accept=false 或超时视为拒绝
+    respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
+    /// 取消进行中的接收批（pending 视为拒绝）
+    cancel-receiving: func(batch-id: string) -> result<bool, string>;
+    /// 清空接收终态记录（返回清除条数）
+    clear-receiving-history: func() -> result<u32, string>;
+    /// 接收设置 → { policyMode, timeoutSecs, downloadDir } JSON
+    get-receive-settings: func() -> result<string, string>;
+    /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
+    set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    /// 本机暴露的共享目录 → SharedDirDto JSON 数组
+    list-shared-directories: func() -> result<string, string>;
+    /// 移除共享目录条目
+    remove-shared-directory: func(id: string) -> result<bool, string>;
+    /// 新增共享目录：request = { name?: string, path?: string }
+    /// （桌面端用 path；移动端忽略 path 弹 SAF 目录树选择器）→ SharedDirDto JSON
+    add-shared-directory: func(request-json: string) -> result<string, string>;
+    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组
+    list-shared-roots: func(node-id: string) -> result<string, string>;
+    /// 目录下钻 → RemoteBrowseDto JSON
+    browse-directory: func(node-id: string, dir-id: string, rel-path: string) -> result<string, string>;
+    /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
+    pull-files: func(node-id: string, dir-id: string, files-json: string) -> result<u32, string>;
+    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
+    pick-files: func() -> result<string, string>;
+    /// 系统文件夹选择器（共享目录源）→ 绝对路径；用户取消返回空串
+    pick-folder: func() -> result<string, string>;
+    /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\）
+    set-download-dir: func(path: string) -> result<_, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
@@ -113,12 +181,6 @@ interface host-fs {
     request-auth: func(paths-json: string) -> result<bool, string>;
 }
 
-/// 文件传输引擎（原 transfer.rs：transfer_start/cancel，ABI v5）
-interface host-transfer {
-    start: func(request-json: string) -> result<string, string>;
-    cancel: func(task-id: string) -> result<_, string>;
-}
-
 /// 宿主日志与插件状态上报（原 log.rs + status.rs）
 interface host-log {
     info: func(message: string);
@@ -165,37 +227,6 @@ interface host-plugin-database {
     query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
 }
 
-/// 文件服务注册表（原 file_service.rs：filesrv_mount/unmount/update_roots/get_peer/query_peer）
-interface host-file-service {
-    mount: func(options-json: string) -> result<string, string>;
-    unmount: func(mount-path: string) -> result<_, string>;
-    update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
-    get-peer: func(peer-id: string) -> result<option<string>, string>;
-    query-peer: func(peer-id: string) -> result<_, string>;
-    /// v2：批准传输批（接收端用户应答「接受全部」）
-    approve-transfer: func(batch-id: string) -> result<_, string>;
-    /// v2：拒绝传输批（接收端用户应答「拒绝全部」）
-    reject-transfer: func(batch-id: string) -> result<_, string>;
-    /// v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
-    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
-    /// v2：取消接收中的上传会话（接收端本地取消，session 级）
-    cancel-receiving: func(session-id: string) -> result<_, string>;
-    /// v2.1：内部自批准创建 approved 批（pull 批上下文自批准）
-    ///
-    /// pull 数据流 = 手机 POST 桌面上传引擎，会撞桌面 ask 策略的
-    /// 「无已批准批 ID 的 session 创建 403」；桌面发 intent{pull} 前调用
-    /// 此函数在本插件挂载名下自建 approved 批（审批人即桌面用户本人，
-    /// 零用户交互），batchId 随 intent 下发，手机 POST 时携带 → 宿主 gating 通过。
-    /// files-json 为 `UploadRequestMeta` 数组的 JSON。
-    self-approve-batch: func(mount-path: string, batch-id: string, files-json: string, total-size: u64) -> result<_, string>;
-    /// v2.1：列举对端（手机）目录（WS list 迁移，同步等待响应）
-    ///
-    /// 服务器归零后桌面不再直连手机 `/list` 端点：发 FileListRequest → 等
-    /// FileListResponse（5s 超时兜底）→ 返回 `{"entries":[...],"notice":...}`
-    /// （camelCase 条目；形状与旧直连 /list 响应一致，前端零改动）。
-    list-remote: func(mount-path: string, path: string) -> result<string, string>;
-}
-
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================
 
 /// 命令入口（原 invoke_command，JSON 载荷保留）
@@ -228,16 +259,6 @@ interface terminal-hooks {
     on-terminal-output: func(session-id: string, data: string) -> option<string>;
 }
 
-/// 上传策略钩子（原 on_upload_request，fail-closed 语义由宿主保持）
-interface upload-hook {
-    on-upload-request: func(meta-json: string) -> string;
-}
-
-/// 批量传输请求钩子（v2：POST /transfer-request 时调用一次，fail-closed 同上传钩子）
-interface transfer-request-hook {
-    on-transfer-request: func(meta-json: string) -> string;
-}
-
 /// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
 interface manifest {
     get: func() -> string;
@@ -268,8 +289,7 @@ world plugin {
     import host-log;
     import host-bus;
     import host-api-call;
-    import host-file-service;
-    import host-transfer;
+    import host-peer;
     import host-timer;
     import host-process;
     import host-app;
@@ -278,8 +298,6 @@ world plugin {
     export lifecycle;
     export events;
     export terminal-hooks;
-    export upload-hook;
-    export transfer-request-hook;
     export manifest;
     export abi;
 }

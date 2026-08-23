@@ -15,15 +15,14 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService,
-    HostFs, HostHttp, HostLog, HostPluginDatabase, HostProcess, HostSession, HostStorage,
-    HostTerminal, HostTransfer,
+    ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
+    HostHttp, HostLog, HostPeer, HostPluginDatabase, HostProcess, HostSession, HostStorage,
+    HostTerminal,
 };
-use crate::types::{MountOptions, MountResult, PeerFileService, TransferRequest, UploadRequestMeta};
 use crate::wasm::bedcode::plugin::{
-    host_app, host_bus, host_config, host_database, host_events, host_file_service, host_fs,
-    host_http, host_log, host_plugin_database, host_process, host_session, host_storage,
-    host_terminal, host_timer, host_transfer,
+    host_app, host_bus, host_config, host_database, host_events, host_fs,
+    host_http, host_log, host_peer, host_plugin_database, host_process, host_session, host_storage,
+    host_terminal, host_timer,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -373,96 +372,152 @@ impl HostConfig for WasmHost {
     }
 }
 
-// ==================== HostFileService ====================
+// ==================== HostPeer ====================
 
-impl HostFileService for WasmHost {
-    fn filesrv_mount(&self, options: &MountOptions) -> Result<MountResult, HostError> {
-        let opts_str = serde_json::to_string(options).map_err(|e| {
-            HostError::custom(-1, format!("filesrv_mount: serialize options failed: {}", e))
-        })?;
-        let json_str = host_file_service::mount(&opts_str)
-            .map_err(|e| host_err("filesrv_mount", e))?;
-        serde_json::from_str(&json_str).map_err(|e| {
-            HostError::custom(-1, format!("filesrv_mount: invalid JSON from host: {}", e))
-        })
-    }
-
-    fn filesrv_unmount(&self, mount_path: &str) -> Result<(), HostError> {
-        host_file_service::unmount(mount_path).map_err(|e| host_err("filesrv_unmount", e))
-    }
-
-    fn filesrv_update_roots(&self, mount_path: &str, roots: &[String]) -> Result<(), HostError> {
-        let roots_str = serde_json::to_string(roots).unwrap_or_else(|_| "[]".to_string());
-        host_file_service::update_roots(mount_path, &roots_str)
-            .map_err(|e| host_err("filesrv_update_roots", e))
-    }
-
-    fn filesrv_get_peer(&self, peer_id: &str) -> Result<Option<PeerFileService>, HostError> {
-        match host_file_service::get_peer(peer_id)
-            .map_err(|e| host_err("filesrv_get_peer", e))?
-        {
-            Some(s) => serde_json::from_str(&s).map(Some).map_err(|e| {
-                HostError::custom(-1, format!("filesrv_get_peer: invalid JSON from host: {}", e))
-            }),
-            None => Ok(None),
-        }
-    }
-
-    fn filesrv_query_peer(&self, peer_id: &str) -> Result<(), HostError> {
-        host_file_service::query_peer(peer_id).map_err(|e| host_err("filesrv_query_peer", e))
-    }
-
-    fn filesrv_approve_transfer(&self, batch_id: &str) -> Result<(), HostError> {
-        host_file_service::approve_transfer(batch_id)
-            .map_err(|e| host_err("filesrv_approve_transfer", e))
-    }
-
-    fn filesrv_reject_transfer(&self, batch_id: &str) -> Result<(), HostError> {
-        host_file_service::reject_transfer(batch_id)
-            .map_err(|e| host_err("filesrv_reject_transfer", e))
-    }
-
-    fn filesrv_set_approval_timeout(&self, mount_path: &str, seconds: u64) -> Result<(), HostError> {
-        host_file_service::set_approval_timeout(mount_path, seconds)
-            .map_err(|e| host_err("filesrv_set_approval_timeout", e))
-    }
-
-    fn filesrv_cancel_receiving(&self, session_id: &str) -> Result<(), HostError> {
-        host_file_service::cancel_receiving(session_id)
-            .map_err(|e| host_err("filesrv_cancel_receiving", e))
-    }
-
-    fn filesrv_self_approve_batch(
-        &self,
-        mount_path: &str,
-        batch_id: &str,
-        files: &[UploadRequestMeta],
-        total_size: u64,
-    ) -> Result<(), HostError> {
-        let files_str = serde_json::to_string(files).map_err(|e| {
-            HostError::custom(-1, format!("filesrv_self_approve_batch: serialize files failed: {}", e))
-        })?;
-        host_file_service::self_approve_batch(mount_path, batch_id, &files_str, total_size)
-            .map_err(|e| host_err("filesrv_self_approve_batch", e))
-    }
-
-    fn filesrv_list_remote(&self, mount_path: &str, path: &str) -> Result<String, HostError> {
-        host_file_service::list_remote(mount_path, path)
-            .map_err(|e| host_err("filesrv_list_remote", e))
-    }
+/// 宿主返回的 JSON 字符串 → Value 的统一包装（peer 接口全部 DTO 走此路径）
+fn peer_json(api: &str, s: String) -> Result<serde_json::Value, HostError> {
+    parse_json(api, s)
 }
 
-// ==================== HostTransfer ====================
+fn to_json_string(api: &str, value: &serde_json::Value) -> Result<String, HostError> {
+    serde_json::to_string(value)
+        .map_err(|e| HostError::custom(-1, format!("{api}: serialize failed: {e}")))
+}
 
-impl HostTransfer for WasmHost {
-    fn transfer_start(&self, request: &TransferRequest) -> Result<String, HostError> {
-        let req_str = serde_json::to_string(request).map_err(|e| {
-            HostError::custom(-1, format!("transfer_start: serialize request failed: {}", e))
-        })?;
-        host_transfer::start(&req_str).map_err(|e| host_err("transfer_start", e))
+impl HostPeer for WasmHost {
+    fn peer_list_devices(&self) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_list_devices", host_peer::list_devices().map_err(|e| host_err("peer_list_devices", e))?)
     }
 
-    fn transfer_cancel(&self, task_id: &str) -> Result<(), HostError> {
-        host_transfer::cancel(task_id).map_err(|e| host_err("transfer_cancel", e))
+    fn peer_dial(&self, node_id: &str) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_dial", host_peer::dial_peer(node_id).map_err(|e| host_err("peer_dial", e))?)
+    }
+
+    fn peer_disconnect(&self, node_id: &str) -> Result<bool, HostError> {
+        host_peer::disconnect_peer(node_id).map_err(|e| host_err("peer_disconnect", e))
+    }
+
+    fn peer_respond_consent(&self, request_id: &str, accepted: bool) -> Result<bool, HostError> {
+        host_peer::respond_consent(request_id, accepted).map_err(|e| host_err("peer_respond_consent", e))
+    }
+
+    fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_list_trusted", host_peer::list_trusted().map_err(|e| host_err("peer_list_trusted", e))?)
+    }
+
+    fn peer_revoke_trusted(&self, node_id: &str) -> Result<bool, HostError> {
+        host_peer::revoke_trusted(node_id).map_err(|e| host_err("peer_revoke_trusted", e))
+    }
+
+    fn peer_send_files(&self, node_id: &str, paths: &[String]) -> Result<serde_json::Value, HostError> {
+        let paths_json = to_json_string("peer_send_files", &serde_json::to_value(paths).unwrap_or_default())?;
+        peer_json("peer_send_files", host_peer::send_files(node_id, &paths_json).map_err(|e| host_err("peer_send_files", e))?)
+    }
+
+    fn peer_list_transfers(&self) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_list_transfers", host_peer::list_transfers().map_err(|e| host_err("peer_list_transfers", e))?)
+    }
+
+    fn peer_cancel_transfer(&self, batch_id: &str) -> Result<bool, HostError> {
+        host_peer::cancel_transfer(batch_id).map_err(|e| host_err("peer_cancel_transfer", e))
+    }
+
+    fn peer_retry_transfer(&self, batch_id: &str) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_retry_transfer", host_peer::retry_transfer(batch_id).map_err(|e| host_err("peer_retry_transfer", e))?)
+    }
+
+    fn peer_clear_transfer_history(&self) -> Result<u32, HostError> {
+        host_peer::clear_transfer_history().map_err(|e| host_err("peer_clear_transfer_history", e))
+    }
+
+    fn peer_list_receiving(&self) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_list_receiving", host_peer::list_receiving().map_err(|e| host_err("peer_list_receiving", e))?)
+    }
+
+    fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError> {
+        host_peer::respond_transfer(batch_id, accept).map_err(|e| host_err("peer_respond_transfer", e))
+    }
+
+    fn peer_cancel_receiving(&self, batch_id: &str) -> Result<bool, HostError> {
+        host_peer::cancel_receiving(batch_id).map_err(|e| host_err("peer_cancel_receiving", e))
+    }
+
+    fn peer_clear_receiving_history(&self) -> Result<u32, HostError> {
+        host_peer::clear_receiving_history().map_err(|e| host_err("peer_clear_receiving_history", e))
+    }
+
+    fn peer_get_receive_settings(&self) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_get_receive_settings", host_peer::get_receive_settings().map_err(|e| host_err("peer_get_receive_settings", e))?)
+    }
+
+    fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError> {
+        host_peer::set_receive_policy(mode, timeout_secs).map_err(|e| host_err("peer_set_receive_policy", e))
+    }
+
+    fn peer_list_shared_directories(&self) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_list_shared_directories",
+            host_peer::list_shared_directories().map_err(|e| host_err("peer_list_shared_directories", e))?,
+        )
+    }
+
+    fn peer_remove_shared_directory(&self, id: &str) -> Result<bool, HostError> {
+        host_peer::remove_shared_directory(id).map_err(|e| host_err("peer_remove_shared_directory", e))
+    }
+
+    fn peer_add_shared_directory(
+        &self,
+        request: &serde_json::Value,
+    ) -> Result<serde_json::Value, HostError> {
+        let request_json = to_json_string("peer_add_shared_directory", request)?;
+        peer_json(
+            "peer_add_shared_directory",
+            host_peer::add_shared_directory(&request_json)
+                .map_err(|e| host_err("peer_add_shared_directory", e))?,
+        )
+    }
+
+    fn peer_list_shared_roots(&self, node_id: &str) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_list_shared_roots",
+            host_peer::list_shared_roots(node_id).map_err(|e| host_err("peer_list_shared_roots", e))?,
+        )
+    }
+
+    fn peer_browse_directory(
+        &self,
+        node_id: &str,
+        dir_id: &str,
+        rel_path: &str,
+    ) -> Result<serde_json::Value, HostError> {
+        peer_json(
+            "peer_browse_directory",
+            host_peer::browse_directory(node_id, dir_id, rel_path)
+                .map_err(|e| host_err("peer_browse_directory", e))?,
+        )
+    }
+
+    fn peer_pull_files(
+        &self,
+        node_id: &str,
+        dir_id: &str,
+        files: &[serde_json::Value],
+    ) -> Result<u32, HostError> {
+        let files_json = to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
+        host_peer::pull_files(node_id, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
+    }
+
+    fn peer_pick_files(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json("peer_pick_files", host_peer::pick_files().map_err(|e| host_err("peer_pick_files", e))?)?;
+        serde_json::from_value(v)
+            .map_err(|e| HostError::custom(-1, format!("peer_pick_files: invalid JSON from host: {e}")))
+    }
+
+    fn peer_pick_folder(&self) -> Result<String, HostError> {
+        host_peer::pick_folder().map_err(|e| host_err("peer_pick_folder", e))
+    }
+
+    fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
+        host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
     }
 }

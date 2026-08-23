@@ -35,25 +35,33 @@ export interface TransferToast {
 }
 
 function mapPendingBatch(raw: any): PendingBatch {
+  const rawFiles = Array.isArray(raw.files) ? raw.files : []
   return {
     batchId: raw.batch_id ?? raw.batchId ?? '',
     peerId: raw.peer_id ?? raw.peerId ?? '',
     peerName: raw.peer_name ?? raw.peerName ?? '',
-    files: Array.isArray(raw.files) ? raw.files : [],
+    // 宿主批 DTO 文件项为 { path, size }，归一化为前端 relativePath 契约
+    files: rawFiles.map((f: any) => ({
+      relativePath: f.relativePath ?? f.relative_path ?? f.path ?? '',
+      size: f.size ?? 0,
+    })),
     totalSize: raw.total_size ?? raw.totalSize ?? 0,
     createdAt: raw.created_at ?? raw.createdAt ?? 0,
   }
 }
 
 function mapReceivingTask(raw: any): ReceivingTask {
+  const state = String(raw.state ?? raw.status ?? 'transferring')
   return {
     sessionId: raw.session_id ?? raw.sessionId ?? '',
     batchId: raw.batch_id ?? raw.batchId ?? null,
     remotePath: raw.remote_path ?? raw.remotePath ?? '',
     size: raw.size ?? 0,
-    state: raw.state ?? 'transferring',
+    offset: raw.offset ?? 0,
+    state: state === 'running' ? 'transferring' : state,
     reason: raw.reason ?? null,
     peerId: raw.peer_id ?? raw.peerId ?? '',
+    peerName: raw.peer_name ?? raw.peerName ?? undefined,
     createdAt: raw.created_at ?? raw.createdAt ?? 0,
     updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
   }

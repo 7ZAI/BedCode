@@ -110,13 +110,6 @@ export interface EndpointEntry {
   pluginId: string
   path: string
 }
-export interface MountEntry {
-  pluginId: string
-  mountPath: string
-  roots: string[]
-  operations: string[]
-}
-
 const sidebarPanels = ref<SidebarPanelEntry[]>([])
 const toolboxPages = ref<ToolboxPageEntry[]>([])
 const statusBarItems = ref<StatusBarEntry[]>([])
@@ -126,7 +119,6 @@ const titleBarItems = ref<TitleBarEntry[]>([])
 const pageToolbarItems = ref<PageToolbarEntry[]>([])
 const fileHandlers = ref<FileHandlerEntry[]>([])
 const endpoints = ref<EndpointEntry[]>([])
-const mounts = ref<MountEntry[]>([])
 
 function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
   return {
@@ -209,25 +201,6 @@ export function registerEndpoint(pluginId: string, path: string): Disposable {
   return makeDisposable(endpoints, entry)
 }
 
-export function registerMount(
-  pluginId: string,
-  mountPath: string,
-  roots: string[],
-  operations: string[],
-): { updateRoots(roots: string[]): void; dispose(): void } {
-  const entry: MountEntry = { pluginId, mountPath, roots, operations }
-  mounts.value.push(entry)
-  return {
-    updateRoots(next: string[]) {
-      entry.roots = next
-    },
-    dispose() {
-      const idx = mounts.value.indexOf(entry)
-      if (idx !== -1) mounts.value.splice(idx, 1)
-    },
-  }
-}
-
 // ==================== 当前打开的插件视图 ====================
 
 export interface ActiveView {
@@ -249,7 +222,6 @@ export {
   fileHandlers,
   inputExtensions,
   logs,
-  mounts,
   pageToolbarItems,
   plugins,
   sidebarPanels,

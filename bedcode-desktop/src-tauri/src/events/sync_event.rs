@@ -98,61 +98,6 @@ pub enum DesktopSyncEvent {
         /// 触发动作：create / delete / trigger / missed / failed
         action: String,
     },
-
-    // === 文件服务相关（内网文件传输插件规格阶段 2） ===
-    /// 桌面侧插件挂载点可用性变更（宿主在 registry mount/unmount/update_roots
-    /// 成功后自动发出，不经插件；移动端经 SyncData 接收后转 MessageBus）
-    FileServiceChanged {
-        plugin_id: String,
-        mount_path: String,
-        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
-        available: bool,
-        /// 挂载支持的操作集合（unmount 时为空）
-        operations: Vec<bedcode_plugin_api::FileOperation>,
-    },
-
-    // === 传输批应答（v2） ===
-    /// 桌面端（接收端宿主）对传输批的应答：批准/拒绝/超时 → 移动端发送方
-    ///
-    /// 由 registry.publish_batch_resolved 经 sync_tx 发出，SyncEventHandler
-    /// 映射为 SyncPayload::TransferApproval 广播到 WS
-    TransferApproval {
-        /// 批 ID
-        batch_id: String,
-        /// "approved" | "rejected"
-        decision: String,
-        /// "" | "user-rejected" | "timeout"
-        reason: String,
-    },
-
-    // === 文件传输意图（v2.1：服务器归零，桌面经 WS 指挥手机执行） ===
-    /// 桌面文件传输意图：由插件经 `HostEvents::broadcast_sync` 发起，
-    /// SyncEventHandler 映射为 `SyncPayload::FileTransferIntent` 广播到 WS
-    ///
-    /// 方向：桌面（协调者）→ 移动端（执行方）
-    FileTransferIntent {
-        /// 意图 ID（uuid）
-        intent_id: String,
-        /// "pull" | "push"
-        direction: String,
-        /// "download" | "upload"（业务语义）
-        semantics: String,
-        /// 批 ID（pull：桌面已自批准的批，随 intent 下发；push：None）
-        batch_id: Option<String>,
-        /// 挂载相对路径
-        relative_path: String,
-        /// 字节大小
-        size: u64,
-        /// 对端设备名（通知展示）
-        device_name: String,
-        /// 期望回执
-        expect_response: bool,
-    },
-    /// 取消文件传输意图
-    FileTransferCancel {
-        /// 意图 ID
-        intent_id: String,
-    },
 }
 
 impl AppEvent for DesktopSyncEvent {}
@@ -198,26 +143,6 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
             SyncEvent::TaskScheduledChanged { job_id, status, action } => {
                 DesktopSyncEvent::TaskScheduledChanged { job_id, status, action }
             }
-            SyncEvent::FileTransferIntent {
-                intent_id,
-                direction,
-                semantics,
-                batch_id,
-                relative_path,
-                size,
-                device_name,
-                expect_response,
-            } => DesktopSyncEvent::FileTransferIntent {
-                intent_id,
-                direction,
-                semantics,
-                batch_id,
-                relative_path,
-                size,
-                device_name,
-                expect_response,
-            },
-            SyncEvent::FileTransferCancel { intent_id } => DesktopSyncEvent::FileTransferCancel { intent_id },
         }
     }
 }

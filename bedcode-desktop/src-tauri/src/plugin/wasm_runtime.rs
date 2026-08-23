@@ -13,7 +13,6 @@ mod host_impl;
 pub use component::LoadedWasmPlugin;
 
 use crate::db::Database;
-use crate::plugin::file_service::FileServiceRegistry;
 use crate::plugin::fs_auth::FsAuthChecker;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::storage::PluginStorage;
@@ -337,11 +336,6 @@ pub struct WasmHostContext {
     permission: Arc<PermissionManager>,
     fs_auth: Arc<FsAuthChecker>,
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
-    /// 文件服务注册表（挂载/沙箱/上传会话/钩子分发）
-    ///
-    /// 在 PluginHost::new() 中早于插件 auto-activate 创建并注入，插件激活阶段
-    /// （AppContext 全局可能尚未初始化）host_filesrv_mount 即可用
-    file_service: Arc<FileServiceRegistry>,
     /// 插件宿主服务（两阶段初始化，避免 PluginHost 与 WasmHostContext 类型互引）
     plugin_services: Arc<RwLock<Option<Arc<dyn PluginServices>>>>,
     /// 运行中进程注册表（host-process，v8）：run_id → 进程句柄
@@ -689,7 +683,6 @@ impl WasmHostContext {
         permission: Arc<PermissionManager>,
         fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::plugin::message_bus::MessageBus>,
-        file_service: Arc<FileServiceRegistry>,
     ) -> Self {
         Self {
             db,
@@ -701,7 +694,6 @@ impl WasmHostContext {
             permission,
             fs_auth,
             message_bus,
-            file_service,
             plugin_services: Arc::new(RwLock::new(None)),
             process_registry: Arc::new(ProcessRegistry::new()),
             api_registry: Arc::new(crate::plugin::api_registry::ApiRegistry::new()),
@@ -735,11 +727,6 @@ impl WasmHostContext {
     /// 获取插件互调 api 注册表引用（ADR-0017 门禁）
     pub fn api_registry(&self) -> &Arc<crate::plugin::api_registry::ApiRegistry> {
         &self.api_registry
-    }
-
-    /// 获取文件服务注册表引用
-    pub fn file_service(&self) -> &Arc<FileServiceRegistry> {
-        &self.file_service
     }
 
     /// 获取 SessionManager 的 Arc 引用
@@ -817,7 +804,6 @@ mod tests {
     /// AOT 缓存目录注入到系统临时目录，保证 compile_component_from_file 走缓存路径。
     fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
-        use crate::plugin::file_service::FileServiceRegistry;
         use crate::plugin::message_bus::MessageBus;
         use crate::plugin::permission::PermissionManager;
         use crate::plugin::storage::PluginStorage;
@@ -874,9 +860,6 @@ mod tests {
             // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
             wasm_runtime.aot_cache_dir = Some(std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())));
 
-            // 文件服务注册表与宿主上下文同步构造（headless：无 AppHandle）
-            let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
-
             let host_ctx = Arc::new(WasmHostContext::new(
                 db,
                 Arc::new(Mutex::new(std::collections::HashMap::new())),
@@ -887,7 +870,6 @@ mod tests {
                 permission,
                 wasm_runtime.fs_auth().clone(),
                 message_bus,
-                file_service,
             ));
 
             (wasm_runtime, host_ctx)
@@ -1041,13 +1023,6 @@ mod tests {
                 .expect("on_input_submitted");
             plugin.on_startup().expect("on_startup");
             plugin.on_shutdown().expect("on_shutdown");
-
-            // 上传钩子：fail-closed 决策 JSON
-            let decision = plugin
-                .on_upload_request(r#"{"name": "f.bin"}"#)
-                .expect("on_upload_request");
-            let decision_json: serde_json::Value = serde_json::from_str(&decision).unwrap();
-            assert_eq!(decision_json["allow"], false);
         });
     }
 
@@ -1367,13 +1342,6 @@ mod tests {
                 plugin.on_terminal_input("session-1", "sdk input").unwrap(),
                 Some("SDK INPUT".to_string())
             );
-
-            // 上传钩子（宏生成的 upload_hook::Guest，默认 fail-closed）
-            let decision = plugin
-                .on_upload_request(r#"{"name": "f.bin"}"#)
-                .expect("on_upload_request");
-            let d: serde_json::Value = serde_json::from_str(&decision).unwrap();
-            assert_eq!(d["allow"], false);
         });
     }
 
@@ -1643,106 +1611,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-    // ==================== 真实 file-transfer 组件端到端 ====================
-
-    /// 加载真实 file-transfer 组件产物并预置设置（roots 指向临时目录）
-    ///
-    /// 返回 (插件实例, 共享根目录)；测试结束由调用方清理临时目录。
-    /// 产物缺失时 panic（构建顺序依赖：先跑插件构建脚本再跑测试）
-    fn load_real_file_transfer(
-        wasm_runtime: &WasmRuntime,
-        host_ctx: &Arc<WasmHostContext>,
-    ) -> (LoadedWasmPlugin, std::path::PathBuf) {
-        const FT_PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
-        // 授予与插件 manifest 一致的权限（activate 路径：storage/fileservice/bus）
-        let permissions: &[&str] = &[
-            "broadcast",
-            "bus",
-            "fileservice",
-            "fs:read",
-            "fs:write",
-            "network:http",
-            "storage",
-            "transfer",
-            "ui:sidebar",
-        ];
-        host_ctx.permission.grant_permissions(
-            FT_PLUGIN_ID,
-            &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
-
-        // 预置插件设置：roots 非空才会走到挂载路径（空 roots 直接跳过）
-        let root_dir = std::env::temp_dir().join(format!("bedcode_ft_epoch_test_{}", std::process::id()));
-        std::fs::create_dir_all(&root_dir).unwrap();
-        let settings = serde_json::json!({
-            "roots": [root_dir.to_string_lossy()],
-            "downloadDir": "",
-            "concurrency": 2,
-        });
-        let storage = host_ctx.storage.clone();
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            storage
-                .set(FT_PLUGIN_ID, "file-transfer-settings", settings)
-                .await
-                .unwrap();
-        });
-
-        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources/plugins/desktop/com.bedcode.file-transfer")
-            .join("bedcode_plugin_file_transfer.wasm");
-        assert!(
-            wasm_path.exists(),
-            "file-transfer wasm artifact missing: {}",
-            wasm_path.display()
-        );
-
-        let plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, FT_PLUGIN_ID, host_ctx.clone())
-            .expect("load real file-transfer component");
-        (plugin, root_dir)
-    }
-
-    /// 真实组件快速路径：activate 端到端成功（设置加载 → 挂载 → 任务加载）
-    #[test]
-    fn test_real_file_transfer_activate_success() {
-        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-        let (mut plugin, root_dir) = load_real_file_transfer(&wasm_runtime, &host_ctx);
-
-        // 宿主调用需 tokio 运行时上下文（block_on_async 依赖）
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            plugin.activate().expect("real file-transfer activate should succeed");
-        });
-
-        let _ = std::fs::remove_dir_all(&root_dir);
-    }
-
-    /// 慢宿主调用与看门狗机制的回归测试
-    ///
-    /// 曾出现：宿主 filesrv_mount 阻塞超过 epoch 窗口（2s）后返回，guest 重新进入
-    /// wasm 提升返回值时被中断 trap（backtrace 首帧 cabi_realloc），activate 整体
-    /// 失败。修复为燃料看门狗：燃料只计 guest 指令数，宿主阻塞期间零消耗，
-    /// 慢调用无论多久都不会被误杀（死循环则持续烧燃料必被 trap）。
-    #[test]
-    fn test_real_file_transfer_activate_slow_host_call() {
-        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-        let (mut plugin, root_dir) = load_real_file_transfer(&wasm_runtime, &host_ctx);
-
-        // 模拟宿主调用阻塞 4s：宿主延迟不得计入 guest 燃料消耗
-        let previous = std::env::var("BEDCODE_TEST_MOUNT_DELAY_MS").ok();
-        std::env::set_var("BEDCODE_TEST_MOUNT_DELAY_MS", "4000");
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async { plugin.activate() });
-        match previous {
-            Some(v) => std::env::set_var("BEDCODE_TEST_MOUNT_DELAY_MS", v),
-            None => std::env::remove_var("BEDCODE_TEST_MOUNT_DELAY_MS"),
-        }
-        result.expect("activate must survive slow host calls (fuel counts guest instructions only)");
-
-        let _ = std::fs::remove_dir_all(&root_dir);
-    }
 
     /// 真实组件：scheduler 插件加载 + activate + tick 命令路由冒烟
     ///

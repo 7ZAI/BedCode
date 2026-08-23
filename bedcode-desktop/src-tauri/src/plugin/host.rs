@@ -63,8 +63,6 @@ pub struct PluginHost {
     wasm_host_ctx: Arc<WasmHostContext>,
     /// 消息总线
     message_bus: Arc<crate::plugin::message_bus::MessageBus>,
-    /// 文件服务注册表（宿主通用文件服务能力，规格第 4 节）
-    file_service: Arc<crate::plugin::file_service::FileServiceRegistry>,
     /// 插件定时器（plugin_id → tokio 任务句柄，v6 ADR 0003）
     ///
     /// 重复注册替换旧句柄；插件停用/应用关闭时中止。
@@ -116,12 +114,6 @@ impl PluginHost {
         // 创建消息总线（dispatcher 延迟注入，在 init_message_bus 中设置）
         let message_bus = Arc::new(crate::plugin::message_bus::MessageBus::new());
 
-        // 文件服务注册表：必须在 auto_activate 之前创建 ——
-        // 插件激活时可能立即调用 host_filesrv_mount；宿主引用待 PluginHost
-        // Arc 化后经 set_plugin_host 两阶段注入
-        let file_service =
-            crate::plugin::file_service::FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), app_handle.clone());
-
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db.clone(),
             Arc::new(Mutex::new(HashMap::new())),
@@ -132,8 +124,6 @@ impl PluginHost {
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
-            // 注册表早于 auto-activate 注入宿主上下文，插件激活阶段挂载可用
-            file_service.clone(),
         ));
 
         // 1. 收集静态注册的 Rust 插件
@@ -252,7 +242,6 @@ impl PluginHost {
             wasm_plugins: Arc::new(RwLock::new(wasm_plugins_map)),
             wasm_host_ctx,
             message_bus,
-            file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -378,11 +367,6 @@ impl PluginHost {
     /// 获取消息总线引用
     pub fn message_bus(&self) -> &Arc<crate::plugin::message_bus::MessageBus> {
         &self.message_bus
-    }
-
-    /// 获取文件服务注册表（宿主通用文件服务能力）
-    pub fn file_service(&self) -> &Arc<crate::plugin::file_service::FileServiceRegistry> {
-        &self.file_service
     }
 
     /// 初始化消息总线 dispatcher（必须在 new() 之后调用）
@@ -761,9 +745,6 @@ impl PluginHost {
         // 清理消息总线订阅
         self.message_bus.remove_all_subscriptions(plugin_id).await;
 
-        // 摘除文件服务挂载（fail-closed：停用插件 = 服务消失，规格 8 节）
-        self.file_service.unmount_plugin(plugin_id).await;
-
         // 移除该插件的会话生命周期监听器与输入监听器
         {
             let session_manager = self.wasm_host_ctx().session_manager_arc();
@@ -798,97 +779,6 @@ impl PluginHost {
         Ok(())
     }
 
-    /// 调用 WASM 插件的上传策略钩子（fail-closed，规格 4.2 节）
-    ///
-    /// 供 FileServiceRegistry 在上传会话创建时调用：锁 wasm_plugins →
-    /// LoadedWasmPlugin::on_upload_request(meta_json) → 解析返回的决定。
-    /// 插件未加载 / 未导出钩子 / 调用失败 / 决定 JSON 非法时一律拒绝。
-    /// （2 秒超时由调用方 registry 用 tokio::time::timeout 包裹）
-    pub async fn call_upload_hook(&self, plugin_id: &str, meta_json: &str) -> bedcode_plugin_api::UploadHookDecision {
-        use bedcode_plugin_api::UploadHookDecision;
-
-        // 插件未加载 → 直接拒绝（fail-closed），不触发重载
-        if self.get_wasm_plugin(plugin_id).await.is_none() {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "call_upload_hook: wasm plugin not loaded, denying (fail-closed)"
-            );
-            return UploadHookDecision::deny("wasm plugin not loaded");
-        }
-
-        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
-        let meta_json = meta_json.to_string();
-        match self
-            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.on_upload_request(&meta_json))
-            .await
-        {
-            Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
-                Ok(decision) => decision,
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        plugin_id = %plugin_id,
-                        "call_upload_hook: invalid decision JSON from plugin, denying (fail-closed)"
-                    );
-                    UploadHookDecision::deny("invalid upload hook decision")
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    plugin_id = %plugin_id,
-                    "call_upload_hook: plugin hook call failed, denying (fail-closed)"
-                );
-                UploadHookDecision::deny("upload hook call failed")
-            }
-        }
-    }
-
-    /// 调用 WASM 插件的批量传输请求钩子（v2，fail-closed，spec 2.1）
-    ///
-    /// 与 [`call_upload_hook`](Self::call_upload_hook) 同构：锁 wasm_plugins →
-    /// LoadedWasmPlugin::on_transfer_request(meta_json) → 解析返回的决定。
-    /// 插件未加载 / 未导出钩子 / 调用失败 / 决定 JSON 非法时一律拒绝。
-    /// （2 秒超时由调用方 registry 用 tokio::time::timeout 包裹）
-    pub async fn call_transfer_hook(&self, plugin_id: &str, meta_json: &str) -> bedcode_plugin_api::UploadHookDecision {
-        use bedcode_plugin_api::UploadHookDecision;
-
-        // 插件未加载 → 直接拒绝（fail-closed），不触发重载
-        if self.get_wasm_plugin(plugin_id).await.is_none() {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "call_transfer_hook: wasm plugin not loaded, denying (fail-closed)"
-            );
-            return UploadHookDecision::deny("wasm plugin not loaded");
-        }
-
-        // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
-        let meta_json = meta_json.to_string();
-        match self
-            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.on_transfer_request(&meta_json))
-            .await
-        {
-            Ok(decision_json) => match serde_json::from_str::<UploadHookDecision>(&decision_json) {
-                Ok(decision) => decision,
-                Err(e) => {
-                    tracing::error!(
-                        error = %e,
-                        plugin_id = %plugin_id,
-                        "call_transfer_hook: invalid decision JSON from plugin, denying (fail-closed)"
-                    );
-                    UploadHookDecision::deny("invalid transfer hook decision")
-                }
-            },
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    plugin_id = %plugin_id,
-                    "call_transfer_hook: plugin hook call failed, denying (fail-closed)"
-                );
-                UploadHookDecision::deny("transfer hook call failed")
-            }
-        }
-    }
 
     /// 热重载 WASM 插件（开发模式）
     ///
@@ -1184,7 +1074,6 @@ pub use listeners::{PluginInputListener, PluginLifecycleListener};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::file_service::FileServiceRegistry;
     use crate::plugin::message_bus::{MessageBus, MessageDispatcher};
     use crate::system::config::AppConfig;
     use bedcode_plugin_api::{PluginCommand, PluginContributes, PluginManifest, PluginType, TerminalHandler};
@@ -1241,7 +1130,6 @@ mod tests {
         let message_bus = Arc::new(MessageBus::new());
 
         let wasm_runtime = Arc::new(WasmRuntime::new(storage.clone(), None).unwrap());
-        let file_service = FileServiceRegistry::new(wasm_runtime.fs_auth().clone(), None);
 
         let wasm_host_ctx = Arc::new(WasmHostContext::new(
             db,
@@ -1253,7 +1141,6 @@ mod tests {
             permission.clone(),
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
-            file_service.clone(),
         ));
 
         PluginHost {
@@ -1267,7 +1154,6 @@ mod tests {
             wasm_plugins: Arc::new(RwLock::new(HashMap::new())),
             wasm_host_ctx,
             message_bus,
-            file_service,
             plugin_timers: Arc::new(std::sync::Mutex::new(HashMap::new())),
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -1312,7 +1198,6 @@ mod tests {
         assert!(Arc::ptr_eq(host.storage(), &host.storage));
         assert!(Arc::ptr_eq(host.wasm_runtime(), &host.wasm_runtime));
         assert!(Arc::ptr_eq(host.message_bus(), &host.message_bus));
-        assert!(Arc::ptr_eq(host.file_service(), &host.file_service));
         assert!(Arc::ptr_eq(host.wasm_host_ctx(), &host.wasm_host_ctx));
     }
 
@@ -1846,25 +1731,6 @@ mod tests {
         assert!(!MessageDispatcher::is_activated(&host, "com.bedcode.d"));
     }
 
-    // ==================== Upload Hook（fail-closed） ====================
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_call_upload_hook_fail_closed() {
-        let host = setup_host().await;
-        // 插件在 plugins map 中（Wasm 来源）但实例未加载 → 拒绝
-        host.plugins.write().await.insert(
-            TEST_PLUGIN_ID.to_string(),
-            make_plugin(TEST_PLUGIN_ID, PluginSource::Wasm, PluginState::Activated),
-        );
-        let decision = host.call_upload_hook(TEST_PLUGIN_ID, r#"{"name":"f.bin"}"#).await;
-        assert!(!decision.allow);
-        assert_eq!(decision.reason.as_deref(), Some("wasm plugin not loaded"));
-
-        // 未知插件 → 同样拒绝
-        let decision = host.call_upload_hook("com.missing", "{}").await;
-        assert!(!decision.allow);
-    }
-
     // ==================== WASM 插件（真实组件测试插件） ====================
 
     /// 将 wit-bindgen 产出的 core module 编码为组件
@@ -1981,16 +1847,6 @@ mod tests {
         assert_eq!(result["stored"], json!({"k": "v"}));
         let args: serde_json::Value = serde_json::from_str(result["args"].as_str().unwrap()).unwrap();
         assert_eq!(args["resource_dir"], json!(tmp_dir.path().to_string_lossy()));
-
-        // 上传钩子：组件返回固定拒绝决策（JSON 解析链路）
-        let decision = host.call_upload_hook(&pid, r#"{"name": "f.bin"}"#).await;
-        assert!(!decision.allow);
-        let reason = decision.reason.unwrap();
-        assert!(
-            reason.starts_with("component-test deny"),
-            "unexpected reason: {}",
-            reason
-        );
 
         // 停用：调用组件 on_shutdown + __bedcode_deactivate
         host.deactivate_plugin(&pid, false).await.unwrap();

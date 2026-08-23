@@ -1,10 +1,11 @@
 <script setup lang="ts">
 /**
- * FileTransferView — 文件传输双栏工作台（原型 Variant A）
+ * FileTransferView — 文件传输双栏工作台（host-peer 契约版）
  *
- * 顶栏（对端 pill + 下载所选/刷新/设置）+ 左栏 RemoteFileTable + 右栏
- * TaskPanel（360px 常驻）。空态分级：未配共享目录 → 未配对 → 未设下载目录。
- * 对端上/下线（filesrv:peer_changed）驱动目录自动加载与清空。
+ * 顶栏（对端 pill + 发送/下载所选/刷新/设置）+ 左栏 RemoteFileTable
+ * （对端共享根 → 根内目录两级浏览）+ 右栏 TaskPanel（批级队列）。
+ * 发送 = 系统选择器多选直发；接收 = 浏览勾选拉取；设备列表由
+ * devices-changed 事件驱动。
  */
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
@@ -17,7 +18,6 @@ import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { usePeer } from '../composables/usePeer'
-import { formatBytes } from '../utils/format'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -33,21 +33,12 @@ const {
 } = usePeer(context)
 const {
   tasks,
-  speedMap,
-  summary,
-  resumableCount,
   totalSpeed,
-  enqueueDownload,
-  enqueueUpload,
   queryPeer,
   refresh: refreshTasks,
-  pause,
-  resume,
+  sendPickedFiles,
   cancel,
   retry,
-  removeTask,
-  openInDir,
-  resumeAll,
   start: startTasks,
   stop: stopTasks,
 } = useTasks(context)
@@ -59,92 +50,54 @@ const {
   approveBatch,
   rejectBatch,
   cancelReceiving,
-  clearHistory,
+  clearHistory: clearHistoryEntries,
   dismissToast,
   start: startReceiving,
   stop: stopReceiving,
 } = useReceiving(context)
 const {
   settings,
+  rootItems,
   hasRoots,
   load: loadSettings,
   addRoot,
   removeRoot,
   pickDownloadDir,
-  setConcurrency,
   setReceivingPolicy,
   setApprovalTimeoutSec,
 } = useSettings(context)
-const {
-  entries,
-  loading,
-  errorKey,
-  notice,
-  breadcrumb,
-  selectedNames,
-  currentPath,
-  selectedEntries,
-  clearSelection,
-  load: loadDir,
-  enterDir,
-  navigateTo,
-  toggleSelect,
-  toggleAll,
-  refresh: refreshDir,
-  stop: stopRemote,
-} = useRemoteFs(context, () => peer.value.id)
+const fs = useRemoteFs(context, () => peer.value.id)
 
 const showSettings = ref(false)
 
-/** 传输队列面板是否展开（默认收起，顶栏按钮切换） */
+/** 传输队列面板是否展开 */
 const queueVisible = ref(false)
 
-/**
- * 对端显示名：device-connected 缓存 → 任务快照 peer.name → peerId → IP。
- * 详见 usePeer 内设备名说明。
- */
+/** 对端显示名 */
 const peerDisplayName = computed(() => {
   if (peer.value.name) return peer.value.name
   const withName = tasks.value.find((x) => x.peer?.name)
   if (withName?.peer?.name) return withName.peer.name
-  // 无设备名时 IP 比原始 peerId 更可辨识（内网传输场景），再退到 peerId
-  if (peer.value.ip || peer.value.id) return peer.value.ip || peer.value.id
-  // 已连接但尚未收到对端公告（未共享）：无可辨识信息时用占位符，
-  // 避免与「未连接设备」文案混用
+  if (peer.value.id) return peer.value.id
   if (connOnline.value) return '—'
   return t('transfer.peer.unpaired')
 })
 
-const selectedCount = computed(() => selectedNames.value.length)
+const selectedCount = computed(() => fs.selectedNames.value.length)
 
-/** v2：对端名映射（peerId → 展示名，批卡/接收任务展示用） */
+/** 对端名映射（peerId → 展示名，批卡/接收任务展示用） */
 const peerNames = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
-  for (const p of peers.value) map[p.id] = p.name || p.ip || p.id
-  // 任务快照里的 peer.name 兜底（设备列表可能未含任务绑定的对端）
-  for (const t of tasks.value) {
-    if (t.peer?.deviceId && t.peer.name && !map[t.peer.deviceId]) {
-      map[t.peer.deviceId] = t.peer.name
+  for (const p of peers.value) map[p.id] = p.name || p.id
+  for (const tk of tasks.value) {
+    if (tk.peer?.deviceId && tk.peer.name && !map[tk.peer.deviceId]) {
+      map[tk.peer.deviceId] = tk.peer.name
     }
   }
   return map
 })
 
-/** v2：历史条目打开所在文件夹（localPath 直接可用）
- * 下载方向历史 local_path 为 .part 临时名（文件完成后已 rename 到最终路径），
- * 需去后缀后才存在；兼容旧库数据的同时与任务卡 openInDir 保持一致 */
-function openHistoryDir(localPath: string): void {
-  if (!localPath) return
-  // 与 openInDir 相同的 .part 剥离（历史库可能存旧 .part 路径，见 wasm 归档逻辑）
-  const finalPath = localPath.endsWith('.part') ? localPath.slice(0, -'.part'.length) : localPath
-  // 诊断：点击历史「打开所在文件夹」时打印实际解析出的定位路径
-  console.log(`[File Transfer] openHistoryDir raw=${localPath} -> ${finalPath}`)
-  void context.system.revealInDir(finalPath).catch((err: unknown) => {
-    console.error(`[File Transfer] reveal failed for "${finalPath}":`, err)
-  })
-}
-
-/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动，失败仅记日志） */
+/** 批请求应答（fire-and-forget） */
 function handleBatchApprove(batchId: string): void {
   approveBatch(batchId).catch((e: unknown) => {
     console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
@@ -156,73 +109,66 @@ function handleBatchReject(batchId: string): void {
   })
 }
 
-/** 顶栏状态文案：未连接 / 已连接但对端未共享 / 已连接 */
 const peerStatusLabel = computed(() => {
   if (!connOnline.value) return t('transfer.peer.offline')
   if (!peer.value.online) return t('transfer.peer.notSharing')
   return t('transfer.peer.online')
 })
 
-/** 主下载按钮可用性：有选择 + 对端已共享 + 已配下载目录 */
-const canDownload = computed(
-  () => selectedCount.value > 0 && peer.value.online && settings.value.downloadDir !== '',
-)
+/** 主下载按钮可用性：当前处于共享根内且有勾选 */
+const canDownload = computed(() => fs.currentRoot.value !== null && selectedCount.value > 0)
 
-/** 空态分支优先级：共享目录 → 对端 → 下载目录 */
+/** 空态分支优先级：共享目录 → 对端 */
 const showNoRoots = computed(() => !hasRoots.value)
-/** 无法浏览对端目录：未连接（提示未连接）或已连接但未共享（提示对端未共享） */
 const showNoPeer = computed(() => !peer.value.online)
 const noPeerLabel = computed(() =>
   connOnline.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
 )
 
-/** 批量下载所选文件（remotePath 拼接当前目录路径）；入队成功后展开队列面板便于查看进度 */
+/** 拉取所选文件（一次 pull_files 批调用）；成功后展开队列面板 */
 async function handleDownload(): Promise<void> {
-  if (!canDownload.value) return
-  const base = currentPath.value
-  const paths = selectedEntries.value.map((e) => (base ? `${base}/${e.name}` : e.name))
-  const ok = await enqueueDownload(paths, { id: peer.value.id, name: peerDisplayName.value })
-  clearSelection()
-  if (ok > 0) queueVisible.value = true
-}
-
-/** 顶栏刷新：任务列表 + 当前目录 + 主动探测对端状态 */
-async function handleRefresh(): Promise<void> {
-  await Promise.all([refreshTasks(), refreshDir(), queryPeer()])
-}
-
-/** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录）；入队成功后展开队列面板便于查看进度 */
-async function handleUpload(): Promise<void> {
-  if (!peer.value.online) return
-  const files = await context.fileService.pickFiles()
-  if (!files.length) return
-  const ok = await enqueueUpload(files, { id: peer.value.id, name: peerDisplayName.value })
-  if (ok > 0) queueVisible.value = true
-  if (ok < files.length) {
-    // 部分失败（如对端同名拒绝）时刷新任务列表让用户看到 rejected 原因
-    void refreshTasks()
+  if (!canDownload.value || !fs.currentRoot.value) return
+  try {
+    await context.commands.execute('file-transfer.pull-files', {
+      dirId: fs.currentRoot.value.id,
+      path: '',
+      files: fs.selectedNames.value,
+    })
+    fs.clearSelection()
+    queueVisible.value = true
+  } catch (e) {
+    console.error('[File Transfer] pull-files failed:', e)
   }
 }
 
-/** 设备切换菜单开合（多对端切换入口） */
+/** 顶栏刷新：任务 + 当前目录层级 + 设备探测 */
+async function handleRefresh(): Promise<void> {
+  await Promise.all([refreshTasks(), fs.refresh(), queryPeer()])
+}
+
+/** 发送到手机：系统多文件选择器直发活跃对端 */
+async function handleUpload(): Promise<void> {
+  if (!peer.value.online) return
+  const ok = await sendPickedFiles()
+  if (ok > 0) queueVisible.value = true
+}
+
+/** 设备切换菜单开合 */
 const peerMenuOpen = ref(false)
 
-/** 切换激活设备：关菜单 + 调插件命令；成功由 activePeerId 变化驱动目录重载 */
 async function handleSwitchPeer(id: string): Promise<void> {
   peerMenuOpen.value = false
   await switchPeer(id)
 }
 
-/** 激活设备变化（上线自动激活 / 手动切换）驱动目录加载/清空 */
+/** 激活设备变化驱动目录加载/清空 */
 watch(
   () => peer.value.id,
   (id) => {
     if (id) {
-      // 重置到根目录：切换设备后旧面包屑路径可能在新对端不存在
-      navigateTo(0)
+      void fs.loadRoots()
     } else {
-      stopRemote()
-      clearSelection()
+      fs.reset()
     }
   },
 )
@@ -232,16 +178,13 @@ onMounted(async () => {
   startTasks()
   startReceiving()
   await Promise.all([loadSettings(), refreshTasks()])
-  // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
   void queryPeer()
-  if (peer.value.online) await loadDir()
 })
 
 onUnmounted(() => {
   stopPeer()
   stopTasks()
   stopReceiving()
-  stopRemote()
 })
 </script>
 
@@ -479,15 +422,15 @@ onUnmounted(() => {
             </div>
           </Transition>
           <RemoteFileTable
-            :entries="entries"
-            :loading="loading"
-            :error-key="errorKey"
-            :breadcrumb="breadcrumb"
-            :selected-names="selectedNames"
-            @enter="enterDir"
-            @navigate="navigateTo"
-            @toggle="toggleSelect"
-            @toggle-all="toggleAll"
+            :entries="fs.entries.value"
+            :loading="fs.loading.value"
+            :error-key="fs.errorKey.value"
+            :breadcrumb="fs.breadcrumb.value"
+            :selected-names="fs.selectedNames.value"
+            @enter="fs.cd"
+            @navigate="fs.goTo"
+            @toggle="fs.toggle"
+            @toggle-all="fs.toggleAll"
           />
         </div>
       </Transition>
@@ -497,23 +440,14 @@ onUnmounted(() => {
         <TaskPanel
           v-if="queueVisible"
           :tasks="tasks"
-          :speed-map="speedMap"
-          :summary="summary"
-          :resumable-count="resumableCount"
           :total-speed="totalSpeed"
           :receiving="receiving"
           :history="history"
           :peer-names="peerNames"
-          @pause="pause"
-          @resume="resume"
           @cancel="cancel"
           @retry="retry"
-          @remove="removeTask"
-          @open-dir="openInDir"
-          @resume-all="resumeAll"
           @cancel-receiving="cancelReceiving"
-          @clear-history="clearHistory"
-          @open-history-dir="openHistoryDir"
+          @clear-history="clearHistoryEntries"
         />
       </Transition>
     </div>
@@ -556,10 +490,10 @@ onUnmounted(() => {
       <SettingsPanel
         v-if="showSettings"
         :settings="settings"
+        :root-items="rootItems"
         @add-root="addRoot"
         @remove-root="removeRoot"
         @pick-download-dir="pickDownloadDir"
-        @set-concurrency="setConcurrency"
         @set-receiving-policy="setReceivingPolicy"
         @set-approval-timeout-sec="setApprovalTimeoutSec"
         @close="showSettings = false"

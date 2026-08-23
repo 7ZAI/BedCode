@@ -290,6 +290,135 @@
           </div>
         </section>
 
+        <!-- ==================== TRUSTED PEERS（对等网络，issue 04） ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.peer.title') }}</h3>
+          <div
+            class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
+          >
+            <!-- 空态 -->
+            <div v-if="trustedPeers.length === 0" class="px-5 py-6 text-center">
+              <p class="text-xs text-[var(--text-tertiary)]">{{ t('settings.peer.empty') }}</p>
+            </div>
+
+            <!-- 对端行：名称/指纹/加入时间 + 撤销 -->
+            <div
+              v-for="peer in trustedPeers"
+              :key="peer.nodeId"
+              class="px-5 py-3.5 flex items-center justify-between gap-4 min-w-0"
+            >
+              <div class="min-w-0">
+                <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)] truncate">
+                  {{ peer.displayName || t('settings.peer.unknownDevice') }}
+                  <span class="wb-mono text-xs text-[var(--text-tertiary)] ml-1.5">
+                    {{ peer.fingerprintShort }}
+                  </span>
+                </p>
+                <p class="wb-mono text-xs text-[var(--text-secondary)] mt-0.5 truncate">
+                  {{ peer.nodeId }}
+                </p>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
+                  {{ t('settings.peer.addedAt') }}{{ formatDateTime(peer.addedAt) }}
+                </p>
+              </div>
+              <button
+                class="wb-btn-ghost flex-shrink-0 text-red-500 hover:text-red-600 transition-colors"
+                @click="openRevokeConfirm(peer)"
+              >
+                {{ t('settings.peer.revoke') }}
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- ==================== PEER RECEIVE（对等网络接收，issue 10） ==================== -->
+        <section>
+          <h3 class="wb-section-title">{{ t('settings.peerReceive.title') }}</h3>
+          <div
+            class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
+          >
+            <!-- 接收策略：三段分段控件（自定义自绘，非原生 radio） -->
+            <div class="px-5 py-4 flex items-center justify-between gap-4">
+              <div class="min-w-0">
+                <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">
+                  {{ t('settings.peerReceive.policyLabel') }}
+                </p>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5">
+                  {{ policyDesc }}
+                </p>
+              </div>
+              <div
+                class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0"
+              >
+                <button
+                  v-for="mode in policyModes"
+                  :key="mode.value"
+                  class="h-8 px-3 text-xs font-medium transition-colors"
+                  :class="
+                    policyMode === mode.value
+                      ? 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)]'
+                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+                  "
+                  @click="policyMode = mode.value"
+                >
+                  {{ mode.label }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 询问超时：预设时长 chips（仅 ask 模式有意义） -->
+            <div
+              class="px-5 py-4 flex items-center justify-between gap-4"
+              :class="policyMode !== 'ask' ? 'opacity-50' : ''"
+            >
+              <span class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">
+                {{ t('settings.peerReceive.timeoutLabel') }}
+              </span>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <button
+                  v-for="secs in timeoutPresets"
+                  :key="secs"
+                  class="h-8 px-3 text-xs wb-mono rounded-md border transition-colors"
+                  :class="
+                    askTimeoutSecs === secs
+                      ? 'bg-[var(--color-primary)] border-transparent text-[var(--color-primary-contrast)]'
+                      : 'border-[var(--border-strong)] text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+                  "
+                  :disabled="policyMode !== 'ask'"
+                  @click="askTimeoutSecs = secs"
+                >
+                  {{ secs }}{{ t('settings.peerReceive.timeoutUnit') }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 接收落点：当前路径展示 + 更换/恢复默认（桌面端专属） -->
+            <div class="px-5 py-4 flex items-center justify-between gap-4 min-w-0">
+              <div class="min-w-0">
+                <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">
+                  {{ t('settings.peerReceive.downloadDirLabel') }}
+                </p>
+                <p class="text-xs text-[var(--text-tertiary)] mt-0.5 truncate">
+                  {{ t('settings.peerReceive.downloadDirHint') }}
+                </p>
+                <p
+                  class="wb-mono text-xs text-[var(--text-secondary)] mt-1 px-2 py-1 rounded bg-[var(--bg-page)] border border-[var(--border)] truncate"
+                >
+                  {{ settings.downloadDir }}
+                </p>
+              </div>
+              <div class="flex items-center gap-2 flex-shrink-0">
+                <button class="wb-btn-ghost" @click="handlePickDownloadDir">
+                  {{ t('settings.peerReceive.chooseDir') }}
+                </button>
+                <button v-if="dirIsCustom" class="wb-btn-ghost" @click="handleResetDownloadDir">
+                  {{ t('settings.peerReceive.resetDir') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <!-- ==================== SESSION ==================== -->
         <section>
           <h3 class="wb-section-title">{{ t('settings.session.title') }}</h3>
@@ -437,6 +566,26 @@
         </section>
       </div>
     </div>
+    <!-- 撤销可信对端确认 -->
+    <Modal
+      v-model="showRevokeConfirm"
+      :title="t('settings.peer.revokeConfirmTitle')"
+      size="sm"
+    >
+      <p class="text-[calc(13px*var(--ui-scale))] text-[var(--text-primary)]">
+        {{ t('settings.peer.revokeConfirmMsg', { name: revokeTargetName }) }}
+      </p>
+      <template #footer>
+        <div class="flex justify-end gap-3">
+          <button class="wb-btn-ghost" @click="showRevokeConfirm = false">
+            {{ t('common.cancel') }}
+          </button>
+          <button class="wb-btn-primary" @click="handleRevokeTrustedPeer">
+            {{ t('settings.peer.revoke') }}
+          </button>
+        </div>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -451,12 +600,15 @@ import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { useQrCodeApi } from '@/composables/useTauri'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
+import Modal from '@/components/Modal.vue'
 import i18n from '@/locales'
 import {
   getAppVersion,
   getPairingCodeTtl,
   setPairingCodeTtl,
 } from '@/composables/useDesktopCommands'
+import { listTrustedPeers, revokeTrustedPeer, type TrustedPeer } from '@/composables/useTrustedPeers'
+import { usePeerReceiving, type PeerReceivePolicyMode } from '@/composables/usePeerReceiving'
 import { open } from '@tauri-apps/plugin-shell'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, NORMAL_FONT_SIZE } from '@/composables/useFontSize'
@@ -479,6 +631,68 @@ const {
 const appVersion = ref('')
 const qrTokenTtl = ref(300)
 const pairingCodeTtl = ref(60)
+
+// ==================== 对等网络接收设置（issue 10） ====================
+// 本地编辑态先行，变更即落库（setPolicy 持久化 + 热生效），失败回滚并提示
+const receiving = usePeerReceiving()
+const settings = receiving.settings
+
+onMounted(() => {
+  // 幂等单例启动：拉取接收设置快照（已启动则为 no-op）
+  void receiving.start()
+})
+
+const policyModes = computed(() => [
+  { value: 'ask' as PeerReceivePolicyMode, label: t('settings.peerReceive.policyAsk') },
+  { value: 'always_accept' as PeerReceivePolicyMode, label: t('settings.peerReceive.policyAlwaysAccept') },
+  { value: 'always_deny' as PeerReceivePolicyMode, label: t('settings.peerReceive.policyAlwaysDeny') },
+])
+
+/** 当前策略的说明文案（随选中项切换） */
+const policyDesc = computed(() => {
+  switch (policyMode.value) {
+    case 'always_accept': return t('settings.peerReceive.policyAlwaysAcceptDesc')
+    case 'always_deny': return t('settings.peerReceive.policyAlwaysDenyDesc')
+    default: return t('settings.peerReceive.policyAskDesc')
+  }
+})
+
+const policyMode = ref<PeerReceivePolicyMode>('ask')
+const askTimeoutSecs = ref(60)
+/** 预设询问窗口（秒；crate 校验范围 10..=600） */
+const timeoutPresets = [15, 30, 60, 120, 300]
+
+watch(settings, (value) => {
+  policyMode.value = value.policyMode
+  askTimeoutSecs.value = value.askTimeoutSecs
+}, { immediate: true })
+
+watch([policyMode, askTimeoutSecs], async ([mode, secs], [prevMode, prevSecs]) => {
+  if (mode === prevMode && secs === prevSecs) return
+  const ok = await receiving.setPolicy(mode, secs)
+  if (ok) {
+    toast.info(t('settings.peerReceive.savedToast'))
+  } else {
+    toast.error(t('settings.peerReceive.savedFailedToast'))
+  }
+})
+
+/** 落点是否为用户自定义（非缺省时展示「恢复默认」入口） */
+const dirIsCustom = computed(() => !!settings.value.downloadDir)
+
+async function handlePickDownloadDir(): Promise<void> {
+  const picked = await receiving.pickDownloadDir()
+  if (!picked) return
+  const ok = await receiving.setDownloadDir(picked)
+  if (ok) toast.info(t('settings.peerReceive.savedToast'))
+  else toast.error(t('settings.peerReceive.savedFailedToast'))
+}
+
+async function handleResetDownloadDir(): Promise<void> {
+  const ok = await receiving.setDownloadDir(null)
+  if (ok) toast.info(t('settings.peerReceive.savedToast'))
+  else toast.error(t('settings.peerReceive.savedFailedToast'))
+}
 
 // ==================== 字体大小档位 ====================
 // 档位间可无级滑动，点击下方标签跳到对应档位；值以 px 存储（12 = 正常）
@@ -678,10 +892,64 @@ onBeforeUnmount(() => {
   }
 })
 
+// ==================== 可信对端管理（对等网络，issue 04） ====================
+const trustedPeers = ref<TrustedPeer[]>([])
+const showRevokeConfirm = ref(false)
+const revokeTarget = ref<TrustedPeer | null>(null)
+
+const revokeTargetName = computed(() =>
+  revokeTarget.value ? revokeTarget.value.displayName || revokeTarget.value.fingerprintShort : '',
+)
+
+/** 跟随当前 i18n locale 格式化加入时间 */
+function formatDateTime(dateStr: string): string {
+  if (!dateStr) return ''
+  const locale = i18n.global.locale.value === 'en' ? 'en-US' : 'zh-CN'
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return dateStr
+  return new Intl.DateTimeFormat(locale, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+async function loadTrustedPeers() {
+  try {
+    trustedPeers.value = await listTrustedPeers()
+  } catch (error) {
+    console.error('Failed to load trusted peers:', error)
+    trustedPeers.value = []
+  }
+}
+
+function openRevokeConfirm(peer: TrustedPeer) {
+  revokeTarget.value = peer
+  showRevokeConfirm.value = true
+}
+
+async function handleRevokeTrustedPeer() {
+  const target = revokeTarget.value
+  if (!target) return
+  showRevokeConfirm.value = false
+  try {
+    await revokeTrustedPeer(target.nodeId)
+    toast.info(t('settings.peer.revokedToast', { name: target.displayName || target.fingerprintShort }))
+  } catch (error) {
+    console.error('Failed to revoke trusted peer:', error)
+    toast.error(t('settings.peer.revokeFailedToast'))
+  }
+  revokeTarget.value = null
+  await loadTrustedPeers()
+}
+
 onMounted(async () => {
   await settingsStore.loadSettings()
   await loadQrTokenTtl()
   await loadPairingCodeTtl()
+  await loadTrustedPeers()
   try {
     appVersion.value = await getAppVersion()
   } catch {

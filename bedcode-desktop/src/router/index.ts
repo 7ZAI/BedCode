@@ -21,6 +21,21 @@ const router = createRouter({
       component: () => import('@/views/DevicesView.vue'),
     },
     {
+      path: '/peer-devices',
+      name: 'peer-devices',
+      component: () => import('@/views/PeerDevicesView.vue'),
+    },
+    {
+      path: '/peer-transfers',
+      name: 'peer-transfers',
+      component: () => import('@/views/PeerTransfersView.vue'),
+    },
+    {
+      path: '/peer-files/:nodeId',
+      name: 'peer-files',
+      component: () => import('@/views/PeerRemoteFilesView.vue'),
+    },
+    {
       path: '/devices/:id/history',
       name: 'device-history',
       component: () => import('@/views/ConnectionHistoryView.vue'),
