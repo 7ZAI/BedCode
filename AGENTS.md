@@ -13,35 +13,6 @@ BedCode 是局域网远程终端应用：桌面端作为主机运行终端会话
 
 ---
 
-## Code Exploration
-
-项目根目录已有 `.codegraph/` 索引（预建知识图谱：全部符号、调用边、依赖，30+ 语言），**代码探索与改动前分析必须直接使用 CodeGraph 工具，禁止用 grep/read 循环重复推导结构**。explore 返回的源码视为已 Read，可直接 Edit。
-
-### 核心原则（官方最佳实践）
-
-- **`codegraph_explore` 是唯一主力工具**：接受自然语言问题或符号/文件名组合，一次返回相关符号的逐字源码（按文件分组）+ 调用路径（含 grep 追不上的动态分派：回调、事件、interface→impl）+ 影响面摘要。其他工具（node/search/callers/callees/impact）的信息已内联在 explore 的返回中，仅当 explore 不足以回答时才补用
-- **信任结果，禁止用 grep 重新验证**——结果来自完整 AST 解析，grep 复检更慢、更不准且浪费上下文
-- **编辑前后都用 explore**：改代码前先查目标符号（谁调用它、改它影响什么），改完后再查关联面
-- **响应出现 `⚠️` staleness banner**：banner 列出的文件刚被编辑、索引尚未同步（滞后约 1s）——只对这些文件用 Read 取最新内容，banner 之外的文件仍然可信
-- **「Already sent earlier in this conversation」是提示不是缺口**：本会话先前已返回过该文件且未变化——不要重新获取
-- **不要将结构探索委派给读文件的 subagent**——subagent 重新读文件会重复 CodeGraph 已做的工作；仅当 subagent 自己也用 CodeGraph 时例外
-
-### 工具选择
-
-- 符号名不确定时，先用 `semble search "概念或描述" .` 定位符号
-- 仅定位符号位置 → `codegraph_search`；调用/被调用关系 → `codegraph_callers` / `codegraph_callees`；超出 explore 影响面的深入分析 → `codegraph_impact`；单个符号完整源码或重载名 → `codegraph_node`
-- Store/handler action（Pinia、route map 等）被索引为真实符号，直接用 `codegraph_explore`，无需通读整个 store 文件
-- 字面量问题（字符串内容、注释、日志、配置文本）或 CodeGraph 不索引的内容（docs、配置文件）→ 原生 grep/read
-- 无 `.codegraph/` 索引的项目 → 停止调用 CodeGraph，用内置工具
-
-### 预算与边界
-
-- 只读结构性问题默认最多 **2 次** CodeGraph 调用：`codegraph_explore` + 必要时一次 `codegraph_node(includeCode:true)`
-- 首次调用已显示决定性类型/签名/关系时立即作答，不再二次调用
-- 前两次结果冲突或用户明确要求更多证据时才用第三次调用
-- 优先决定性边界符号（公共类型/schema、保存加载函数、请求构建器、命令/路由 handler、适配器），不深入工具函数/回调/UI 组件
-- 避免重复获取同一符号源码；只读问题不运行 `git diff` / `git status`
-
 ## Build & Run
 
 ```bash
@@ -320,6 +291,19 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 ---
 
+## Code Map（文件查找索引）
+
+两端各有一份目录级代码地图（只到**目录层级 + 模块职责划分**，不索引具体文件）：
+
+- 桌面端：`bedcode-desktop/docs/code-map.md`
+- 移动端：`bedcode-mobile/docs/code-map.md`
+
+**触发时机（prompt）**：当任务涉及「探索代码 / 了解项目结构 / 理解架构 / 查找文件 / 定位模块 / 寻找某个功能的实现位置 / 修改某模块前需要了解上下文」时，**先读对应端的 code-map.md**，按其 Project Structure → Core Modules → Quick Navigation 定位到目标目录，再进入该目录用 `ls` / `rg` 查找具体文件。禁止在未读 code-map 的情况下盲目全仓 grep。
+
+code-map 只维护到目录层级；新增/删除**顶层模块目录**或核心模块职责变化时同步更新对应 code-map.md，普通文件级增删不需要更新。若 code-map 描述与实际目录结构不符，以实际结构为准并顺手修正文档。
+
+---
+
 ## Agent skills
 
 ### Skills 共享布局
@@ -446,4 +430,4 @@ subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路�
 
 输出格式固定:基础描述 → 详细分析 → Pre-Flight 自查 → 建议。详见 `.pi/agents/vision.md`。
 
-适用场景：可并行的独立子任务、需要隔离上下文的重型任务。**结构/探索类任务不要委派**（见上 Code Exploration：subagent 重新读文件是重复劳动），直接自己用 CodeGraph 回答；简单的定位/小改动也直接用 codegraph 工具，不必启动 subagent。
+适用场景：可并行的独立子任务、需要隔离上下文的重型任务。简单的定位/小改动不必启动 subagent。

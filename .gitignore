@@ -11,9 +11,6 @@
 build/
 *.local
 
-# CodeGraph index
-.codegraph/
-
 # Documentation
 **/docs/
 

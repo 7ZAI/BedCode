@@ -2,7 +2,7 @@
 name: vision
 description: BedCode 视觉分析 agent：读图理解（UI 评审 / 设计稿解读 / 错误截图诊断 / 架构图解析 / 图标识别 / 代码截图转文字）；UI/设计稿评审自动加载 design-taste-frontend-v1 品味基线；dev-shell 截图默认只评内部产品页，需含外壳或自定义范围时在任务中用 `范围:` 指令显式指定
 tools: read
-model: opencode-go/qwen3.7-plus
+model: openrouter/stealth/ox-alpha
 skills: design-taste-frontend-v1
 ---
 

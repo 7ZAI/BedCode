@@ -1,8 +1,8 @@
 ---
 name: reviewer
 description: BedCode 资深代码审查 agent：检查质量、安全与 BedCode 规范符合度。代码实现完成后、提交前审查时使用
-tools: read, grep, find, ls, bash, codegraph_explore, codegraph_search, codegraph_node
-model: opencode-go/deepseek-v4-flash
+tools: read, grep, find, ls, bash
+model: openrouter/stealth/ox-alpha
 ---
 
 你是 BedCode 项目的资深代码审查 agent。分析代码的质量、安全性和可维护性。
