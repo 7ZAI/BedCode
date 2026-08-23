@@ -3,6 +3,7 @@
  * Dev Runner — 并行启动插件前端 watch 构建与宿主 dev 命令
  *
  * `npm run tauri:dev` 一条命令即完成：
+ *   - 各插件 WASM 缺失预检 + 自动补建（watch 只建前端，WASM 需一次性全量构建产出）
  *   - 各插件前端 watch：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）
  *   - 宿主 dev 进程（tauri dev）
  * 任一子进程退出（Ctrl+C / 宿主崩溃）时统一回收全部。
@@ -12,10 +13,10 @@
  *   node scripts/dev-run.js --host-cmd "<命令>"   # 覆盖宿主命令（按空格拆分）
  */
 
-import { spawn, execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import { readFileSync, existsSync } from 'node:fs'
 import net from 'node:net'
-import { resolve, dirname } from 'node:path'
+import { resolve, basename, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -111,12 +112,28 @@ const NPM_CLI =
 
 // ==================== 平台配置 ====================
 
-/** 插件 watch 启动项（dir 相对仓库根，args 在插件目录内执行） */
+/** 插件 watch 启动项（dir 相对仓库根，args 在插件目录内执行；wasmFile 为插件内 WASM 产物相对路径） */
 const PLUGIN_WATCH_CMDS = [
-  { dir: 'plugins/ai-chatbox', args: ['scripts/build.js', '--watch'] },
-  { dir: 'plugins/auto-task', args: ['scripts/build.js', '--watch'] },
-  { dir: 'plugins/file-transfer', args: ['scripts/build.js', '--watch'] },
+  {
+    dir: 'plugins/ai-chatbox',
+    args: ['scripts/build.js', '--watch'],
+    // ai-chatbox 已迁移 wasm32-wasip2（WASI 预打开文件访问），与另两插件的 unknown-unknown 不同
+    wasmFile: 'rust/target/wasm32-wasip2/release/bedcode_plugin_ai_chatbox.wasm',
+  },
+  {
+    dir: 'plugins/auto-task',
+    args: ['scripts/build.js', '--watch'],
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm',
+  },
+  {
+    dir: 'plugins/file-transfer',
+    args: ['scripts/build.js', '--watch'],
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
+  },
 ]
+
+/** 宿主插件产物目录（各插件子目录名 = dir 的最后一段，即插件 id） */
+const RESOURCES_BASE = resolve(ROOT, 'src-tauri/resources/plugins/desktop')
 
 /** 宿主 dev 命令（可用 --host-cmd 覆盖） */
 const DEFAULT_HOST_CMD = [process.execPath, [NPM_CLI, 'run', 'tauri', '--', 'dev']]
@@ -181,6 +198,39 @@ function shutdown(code) {
   setTimeout(() => process.exit(exitCode), 2000).unref()
 }
 
+// ==================== WASM 缺失自动补建 ====================
+
+/**
+ * 各插件产物目录缺 .wasm 时串行补建一次。
+ *
+ * dev watch 只构建前端（见 plugin-watch.js），WASM 靠此前一次性全量构建产出——
+ * 全新 clone 或清理过 resources 后直接 tauri:dev，宿主激活插件必报
+ * "WASM module not loaded"。这里在启动 watch 前检测并自动补齐：
+ *   - dist/index.js 已存在 → node scripts/build.js --rust-only（跳过 vite，最快路径）
+ *   - 全新目录（dist 也没有）→ node scripts/build.js 全量构建一次（含前端），
+ *     其后 watch 接管前端增量
+ * 补建失败 fail-fast：宿主起来也只会报加载失败，早停并给手动指引更可排查。
+ */
+function ensurePluginWasm() {
+  for (const { dir, wasmFile } of PLUGIN_WATCH_CMDS) {
+    if (!wasmFile) continue
+    const pluginRoot = resolve(ROOT, dir)
+    const wasmDest = resolve(RESOURCES_BASE, basename(dir), basename(wasmFile))
+    if (existsSync(wasmDest)) continue
+
+    console.warn(`[dev-run] ⚠ 插件 ${dir} 缺少 WASM 产物：${wasmDest}`)
+    const hasFrontend = existsSync(resolve(pluginRoot, 'dist', 'index.js'))
+    const script = hasFrontend ? ['scripts/build.js', '--rust-only'] : ['scripts/build.js']
+    console.log(`[dev-run] 自动补建 WASM（${hasFrontend ? '--rust-only' : '全量'}）：node ${script.join(' ')}`)
+    const res = spawnSync(process.execPath, script, { cwd: pluginRoot, stdio: 'inherit' })
+    if (res.status !== 0) {
+      console.error(`[dev-run] ✗ WASM 补建失败（${dir}）。请手动执行后重试：`)
+      console.error(`[dev-run]   cd ${pluginRoot} && node scripts/build.js`)
+      process.exit(res.status ?? 1)
+    }
+  }
+}
+
 // ==================== 启动 ====================
 
 // 解析 --host-cmd 覆盖（测试/定制用）
@@ -194,8 +244,17 @@ const hostCmd = hostOverride ? [hostBin, hostArgs] : DEFAULT_HOST_CMD
 await precheckDevPort()
 await precheckHmrPort()
 
-// 1. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
+// 1. 插件 WASM 缺失自动补建（串行同步，完成后才启动 watch / 宿主）
+ensurePluginWasm()
+
+// 2. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
 for (const { dir, args } of PLUGIN_WATCH_CMDS) {
+  // 插件目录可能被临时移除（停用/排查）：缺失时跳过而非 fail-fast 整组回收，
+  // 否则单个插件下线会连带杀死宿主 dev 会话
+  if (!existsSync(resolve(ROOT, dir))) {
+    console.warn(`[dev-run] 插件目录不存在，跳过 watch：${dir}`)
+    continue
+  }
   const child = start(process.execPath, args, resolve(ROOT, dir))
   // 插件 watch 异常退出 → 整组回收（fail fast，避免宿主运行在过期产物上）
   child.on('exit', (code) => {
@@ -206,7 +265,7 @@ for (const { dir, args } of PLUGIN_WATCH_CMDS) {
   })
 }
 
-// 2. 宿主 dev 进程
+// 3. 宿主 dev 进程
 const host = start(hostCmd[0], hostCmd[1], ROOT)
 host.on('exit', (code) => {
   if (!shuttingDown) {
