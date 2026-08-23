@@ -182,7 +182,8 @@ export default {
       input: 'Input',
       shortcuts: 'Shortcuts',
       shortcutsLandscapeUnavailable: 'Shortcut panel is unavailable in landscape mode',
-      executeHint: 'Tap to execute · Hold to send',
+      executeHint: 'Tap to execute · Hold to switch to Send',
+      sendHint: 'Tap to send · Hold to switch to Execute',
     },
     inputAssistant: {
       title: 'Input Assistant Settings',

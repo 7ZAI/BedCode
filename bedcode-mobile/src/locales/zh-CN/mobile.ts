@@ -181,7 +181,8 @@ export default {
       input: '输入',
       shortcuts: '快捷键',
       shortcutsLandscapeUnavailable: '横屏模式不支持快捷键面板',
-      executeHint: '点按执行 · 长按发送',
+      executeHint: '点按执行 · 长按切换为发送',
+      sendHint: '点按发送 · 长按切换为执行',
     },
     inputAssistant: {
       title: '输入助手设置',

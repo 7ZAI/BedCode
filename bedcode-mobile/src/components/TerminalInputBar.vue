@@ -373,17 +373,17 @@
 
           <button
             class="inline-btn execute-btn"
-            :class="{ 'execute-armed': sendArmed }"
-            :disabled="!canSubmit"
-            :aria-label="t('mobile.input.executeHint')"
+            :class="{ 'mode-send': sendMode, 'is-disabled': !canSubmit }"
+            :aria-disabled="!canSubmit"
+            :aria-label="sendMode ? t('mobile.input.sendHint') : t('mobile.input.executeHint')"
             @pointerdown="onExecutePointerDown"
             @pointermove="onExecutePointerMove"
             @pointerup="onExecutePointerUp"
             @pointercancel="onExecutePointerCancel"
             @contextmenu.prevent
           >
-            <!-- 纸飞机：默认水平朝右（执行语义）；长按蓄势后逆时针转 90°
-                 垂直朝上（发送语义），松开手指即发送 -->
+            <!-- 纸飞机：水平朝右（执行语义）/ 垂直朝上（发送语义），由长按切换的
+                 常驻功能模式决定，样式随模式保持不变 -->
             <svg class="execute-icon w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
@@ -763,15 +763,19 @@ function handleExecute() {
   }
 }
 
-// ==================== Execute Button Dual Action（点按执行 / 长按发送）====================
+// ==================== Execute Button Mode Toggle（长按切模式 / 短按触发）====================
 
 /** 长按阈值：足够跟手不拖沓，同时为误触留出余量 */
 const EXECUTE_LONG_PRESS_MS = 400
 /** 滑动取消长按（防误触）：位移距离阈值 */
 const EXECUTE_MOVE_CANCEL_SLOP_PX = 10
 
-/** 长按蓄势态：图标转为垂直朝上，松手触发「发送」而非「执行」 */
-const sendArmed = ref(false)
+/**
+ * 按钮功能模式（常驻锁存）：false = 执行（文本 + Enter 直接运行，默认），
+ * true = 发送（仅写入输入行不回车）。长按在两模式间切换并一直保持，
+ * 短按触发当前模式的动作——非旧版的一次性蓄势（armed 后松手即消费）
+ */
+const sendMode = ref(false)
 let executeLongPressTimer: ReturnType<typeof setTimeout> | null = null
 let executePointerStartX = 0
 let executePointerStartY = 0
@@ -786,14 +790,17 @@ function clearExecuteLongPressTimer() {
 }
 
 function onExecutePointerDown(e: PointerEvent) {
-  if (!canSubmit.value) return
+  // 置灰（无内容/会话不可用）时仍允许长按切换模式：模式是常驻偏好，
+  // 提前切好发送/执行后输入内容即可直接短按；仅短按动作被门控
   // 捕获指针：手指滑出按钮仍能收到 pointerup/cancel，保证状态复位
   ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
   executePointerStartX = e.clientX
   executePointerStartY = e.clientY
   executeLongPressTimer = setTimeout(() => {
     executeLongPressTimer = null
-    sendArmed.value = true
+    // 长按：切换常驻功能模式（执行 ↔ 发送），触觉反馈确认切换成功；
+    // 本次按压到此结束——松开手指不触发任何动作，动作由后续短按承担
+    sendMode.value = !sendMode.value
     if (mobileSettings.value.vibrate && navigator.vibrate) {
       navigator.vibrate(30)
     }
@@ -801,7 +808,7 @@ function onExecutePointerDown(e: PointerEvent) {
 }
 
 function onExecutePointerMove(e: PointerEvent) {
-  // 长按触发前移动超出阈值 → 取消蓄势（滑动即意图取消）
+  // 长按触发前移动超出阈值 → 取消切换（滑动即意图取消）
   if (!executeLongPressTimer) return
   const dx = e.clientX - executePointerStartX
   const dy = e.clientY - executePointerStartY
@@ -812,19 +819,20 @@ function onExecutePointerMove(e: PointerEvent) {
 
 function onExecutePointerUp() {
   if (executeLongPressTimer) {
-    // 短击：定时器未触发 → 执行（文本 + Enter）
+    // 短击：定时器未触发 → 执行当前模式的动作；置灰时不触发（仅长按可切换）
     clearExecuteLongPressTimer()
-    handleExecute()
-  } else if (sendArmed.value) {
-    // 长按已蓄势 → 发送（文本写入输入行，不带 Enter）
-    handleSubmit()
+    if (!canSubmit.value) return
+    if (sendMode.value) {
+      handleSubmit()
+    } else {
+      handleExecute()
+    }
   }
-  sendArmed.value = false
+  // 长按已切换模式：本次按压结束，不触发动作（避免切换的同时误发内容）
 }
 
 function onExecutePointerCancel() {
   clearExecuteLongPressTimer()
-  sendArmed.value = false
 }
 
 function handleShortcutClick(code: string) {
@@ -1149,18 +1157,28 @@ onMounted(() => {
   color: var(--mobile-input-placeholder);
 }
 
-/* 纸飞机图标：朝向区分操作语义（点按执行 = 水平朝右，长按蓄势 = 垂直朝上） */
+/* 纸飞机图标：朝向区分常驻功能模式（点按执行 = 水平朝右，点按发送 = 垂直朝上）。
+ * 模式由长按切换并一直保持，转向动画仅在切换瞬间播放一次 */
 .execute-icon {
   transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.execute-btn.execute-armed .execute-icon {
+.execute-btn.mode-send .execute-icon {
   transform: rotate(-90deg);
 }
 
-/* 蓄势态微增亮：与图标转向、触觉反馈共同确认「发送模式」已激活 */
-.execute-btn.execute-armed:not(:disabled) {
-  filter: brightness(1.25);
+/* 发送模式：accent 底色与执行模式（黑底）形成稳定视觉区分；
+ * 文字用对比 token（accent 色跨主题反转，禁止写死白/黑）。
+ * 置灰态仅靠 opacity 叠加降饱和，不覆盖模式底色 */
+.execute-btn.mode-send {
+  background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+.execute-btn.mode-send:active:not(.is-disabled) {
+  background: var(--mobile-accent);
+  filter: brightness(1.15);
 }
 
 .execute-btn {
@@ -1170,13 +1188,16 @@ onMounted(() => {
   color: #ffffff;
 }
 
-.execute-btn:active:not(:disabled) {
+.execute-btn:active:not(.is-disabled) {
   transform: scale(0.93);
   background: #0a0a0f;
   filter: brightness(1.3);
 }
 
-.execute-btn:disabled {
+/* 置灰态（无内容/会话不可用）：短按动作已门控，长按切换仍可用，
+ * 仅视觉降透明度提示不可提交；不用原生 disabled 属性——
+ * disabled 按钮不派发 pointer 事件，会连带禁掉长按切换 */
+.execute-btn.is-disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
