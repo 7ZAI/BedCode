@@ -40,9 +40,16 @@ export interface SubscribeResultInfo {
 /** 实时输出回调 — TerminalView 注册 */
 export interface RealtimeHandler {
   onOutput: (data: Uint8Array, frame: TerminalSocketFrame) => void
+  /**
+   * 分片回放写入：写入一批合并字节，resolve 于 xterm 解析完成后
+   * （渲染高水位背压信号，回放循环据此节流）；缺省时回退 onOutput 同步逐帧写
+   */
+  writeParsed?: (data: Uint8Array) => Promise<void>
+  /** 历史缓存分片回放完成（末批已解析），供视图做静止全量重绘兜底 */
+  onReplayDone?: () => void
   /** 清屏（已渲染区域被环形淘汰需全量重播时） */
   onClear?: () => void
-  /** 历史头部被淘汰提示（min_seq > 0 时触发一次） */
+  /** 历史头部被淘汰提示（服务端 min_seq 越过游标或本地缓存头部被 LRU 裁剪时触发） */
   onTruncated?: (minSeq: number) => void
 }
 
@@ -66,6 +73,8 @@ export interface SessionBuffer {
   historyCache: TerminalSocketFrame[]
   /** 历史缓存总字节数 */
   historyBytes: number
+  /** 缓存头部曾被 LRU 裁剪（回放起点非流首，可能切断转义序列，消费方需提示） */
+  headTrimmed: boolean
   /** history_end 前到达的实时帧（按 seq 入队，history_end 后按序写入） */
   liveBuffer: TerminalSocketFrame[]
   /** subscribe_ok 前到达的帧（防御缓冲；服务端同 actor 顺序下不应出现） */
@@ -92,6 +101,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 历史缓存字节上限（LRU 淘汰） */
   const MAX_HISTORY_CACHE_BYTES = 16 * 1024 * 1024
+  /**
+   * 分片回放高水位（字节）：单批累计达到即等待 xterm 解析完成再续写——
+   * 以移动端 xterm 实际消费速度节流历史回放，避免整段缓存（上限 16MB）
+   * 一次灌入冻结主线程、渲染长时间无响应
+   */
+  const REPLAY_HIGH_WATERMARK_BYTES = 256 * 1024
   /** subscribe_ok 前缓冲帧上限（防御性） */
   const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
   /** 会话不存在（启动中/已停止）时的重试上限，超出后停止等待外部恢复 */
@@ -103,6 +118,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   const sessionMissingStrikes = new Map<string, number>()
   /** sessionId → 上次输出活动通知时间戳 */
   const lastActivityAt = new Map<string, number>()
+
+  /**
+   * sessionId → 历史回放代数（注册/注销/清理时递增）：
+   * 在途分片回放循环每批检查代数，失效即放弃剩余批次——
+   * 防止重注册产生双循环交错写入同一 xterm
+   */
+  const replayGenerations = new Map<string, number>()
 
   /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
   const preparedSessionId = ref<string | null>(null)
@@ -140,8 +162,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         buffer.minSeq = info.minSeq
 
         // 截断检测：已渲染区域被环形淘汰（服务端最早存续 seq 已越过游标）→
-        // 清屏 + 提示 + 锚定到服务端可提供的最早 seq（避免重播首帧触发缺口循环）
+        // 清屏 + 提示 + 锚定到服务端可提供的最早 seq（避免重播首帧触发缺口循环）。
+        // 在途分片回放一并取消：屏幕即将清空、服务端从锚点重发，旧回放继续写只会污染
         if (buffer.lastRenderedSeq !== null && info.minSeq > buffer.lastRenderedSeq + 1) {
+          replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
           const handler = realtimeHandlers.get(sessionId)
           handler?.onClear?.()
           if (!buffer.truncatedNotified) {
@@ -260,10 +284,14 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
     buffer.historyCache.push(frame)
     buffer.historyBytes += frame.data.byteLength
-    // LRU 淘汰：超出上限从头丢弃（缓存仅用于页面重进回放，丢最旧不影响实时）
+    // LRU 淘汰：超出上限从头丢弃（缓存仅用于页面重进回放，丢最旧不影响实时）。
+    // 头部被裁剪过则标记——回放起点可能落在转义序列中段，消费方需提示历史不完整
     while (buffer.historyBytes > MAX_HISTORY_CACHE_BYTES && buffer.historyCache.length > 0) {
       const oldest = buffer.historyCache.shift()
-      if (oldest) buffer.historyBytes -= oldest.data.byteLength
+      if (oldest) {
+        buffer.historyBytes -= oldest.data.byteLength
+        buffer.headTrimmed = true
+      }
     }
 
     buffer.lastRenderedSeq = frame.lastSeq
@@ -293,6 +321,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         sessionStopped: false,
         historyCache: [],
         historyBytes: 0,
+        headTrimmed: false,
         liveBuffer: [],
         pending: [],
         pendingBytes: 0,
@@ -449,6 +478,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 清理单个会话订阅状态 */
   function clearBuffer(sessionId: string) {
     invalidatePrepared(sessionId)
+    // 代数推进 + 计数清理：取消在途分片回放
+    replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
     sockets.get(sessionId)?.stop()
     sockets.delete(sessionId)
     buffers.delete(sessionId)
@@ -460,6 +491,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 清理所有订阅状态 */
   function clearAllBuffers() {
     preparedSessionId.value = null
+    replayGenerations.clear()
     for (const socket of sockets.values()) socket.stop()
     sockets.clear()
     buffers.clear()
@@ -473,23 +505,91 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 注册实时输出回调（TerminalView onMounted 时调用） */
   function registerRealtimeHandler(sessionId: string, handler: RealtimeHandler) {
     realtimeHandlers.set(sessionId, handler)
-    // 注册时机 = xterm 全新实例（页面挂载）：历史缓存无条件立即回放，
+    // 回放代数推进：重注册使在途分片回放循环失效（防双循环交错写入同一 xterm）
+    const gen = (replayGenerations.get(sessionId) ?? 0) + 1
+    replayGenerations.set(sessionId, gen)
+
+    // 注册时机 = xterm 全新实例（页面挂载）：历史缓存无条件回放，
     // 随后服务端帧按 seq 跳过（不双写）。覆盖两个场景：
     // - 页面重进：缓存即全部可见历史，回放后 lastRenderedSeq 推进到缓存末帧
     // - 预加载：会话页订阅期间无 handler，帧已入缓存，挂载时一次回放
     const buffer = buffers.get(sessionId)
-    if (buffer && buffer.historyCache.length > 0) {
-      for (const frame of buffer.historyCache) {
-        handler.onOutput(frame.data, frame)
+    if (!buffer || buffer.historyCache.length === 0) return
+
+    // 游标先同步推进到缓存末帧（去重基准即刻生效）：回放期间到达的实时帧
+    // 按正常路径续写，与回放块在 xterm 内部 FIFO 写队列中保持全局有序；
+    // 回放本身的节奏由 replayHistoryCache 以消费方解析速度控制（高水位背压）
+    const last = buffer.historyCache[buffer.historyCache.length - 1]
+    buffer.lastRenderedSeq = last.lastSeq
+
+    void replayHistoryCache(sessionId, handler, gen)
+  }
+
+  /**
+   * 历史缓存分片回放：按高水位切批，每批等待 xterm 解析完成再续写，
+   * 让渲染/输入在批次间插入——以移动端 xterm 实际消费速度为高水位的背压，
+   * 替代旧实现的一次性同步灌入（16MB 缓存单宏任务写完 → 主线程长冻结）。
+   */
+  async function replayHistoryCache(sessionId: string, handler: RealtimeHandler, gen: number) {
+    const buffer = buffers.get(sessionId)
+    if (!buffer || buffer.sessionStopped) return
+
+    // 快照迭代：回放期间缓存仍会被实时帧追加 / 头部 LRU 裁剪，快照固定本轮回放边界
+    const frames = buffer.historyCache.slice()
+
+    const flushBatch = async (batch: TerminalSocketFrame[]) => {
+      if (batch.length === 0) return
+      if (handler.writeParsed) {
+        // 合并为单块一次写入：批量受高水位约束，合并避免逐帧 write 的调度开销
+        let total = 0
+        for (const f of batch) total += f.data.byteLength
+        const combined = new Uint8Array(total)
+        let offset = 0
+        for (const f of batch) {
+          combined.set(f.data, offset)
+          offset += f.data.byteLength
+        }
+        await handler.writeParsed(combined)
+      } else {
+        // 兜底：消费方无分片写入能力时保持旧契约（同步逐帧写）
+        for (const f of batch) handler.onOutput(f.data, f)
       }
-      const last = buffer.historyCache[buffer.historyCache.length - 1]
-      buffer.lastRenderedSeq = last.lastSeq
     }
+
+    let batch: TerminalSocketFrame[] = []
+    let batchBytes = 0
+    for (const frame of frames) {
+      // 代数失效（重注册/注销/清理）或会话停止：放弃剩余批次
+      if (
+        replayGenerations.get(sessionId) !== gen ||
+        buffers.get(sessionId)?.sessionStopped
+      ) {
+        return
+      }
+      batch.push(frame)
+      batchBytes += frame.data.byteLength
+      if (batchBytes >= REPLAY_HIGH_WATERMARK_BYTES) {
+        await flushBatch(batch)
+        batch = []
+        batchBytes = 0
+      }
+    }
+    await flushBatch(batch)
+
+    // 本轮仍有效才收尾通知；本地头部被裁剪过 → 回放起点非流首（可能切断
+    // 转义序列），与服务端 min_seq 截断同语义提示消费方
+    if (replayGenerations.get(sessionId) !== gen) return
+    if (buffer.headTrimmed && frames.length > 0) {
+      handler.onTruncated?.(frames[0].seq)
+    }
+    handler.onReplayDone?.()
   }
 
   /** 注销实时输出回调（TerminalView onUnmounted 时调用） */
   function unregisterRealtimeHandler(sessionId: string) {
     realtimeHandlers.delete(sessionId)
+    // 代数推进：取消在途分片回放（闭包引用的 handler 已随注销失效）
+    replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
   }
 
   // ==================== Input ====================

@@ -13,9 +13,50 @@ import type { Terminal } from '@xterm/xterm'
 /** 会话页预加载的超时上限（毫秒）：超时不再等待，直接跳转由终端页自行重试 */
 const PREPARE_TIMEOUT_MS = 8000
 
+/**
+ * 回放静止判定窗口（毫秒，对齐桌面端 TerminalPreview 的 REPLAY_IDLE_MS）：
+ * 回放完成后持续这么久无新输出才补一次全量重绘；实时持续输出时计时器
+ * 不断重置不会触发
+ */
+const REPLAY_IDLE_REFRESH_MS = 250
+
+/** sessionId → 回放静止全量重绘定时器（注销时清理，防页面卸载后僵尸刷新） */
+const replayIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** 清理回放静止重绘定时器 */
+function clearReplayIdleTimer(sessionId: string) {
+  const timer = replayIdleTimers.get(sessionId)
+  if (timer) {
+    clearTimeout(timer)
+    replayIdleTimers.delete(sessionId)
+  }
+}
+
+/** 让出下一帧渲染（rAF 暂停的后台 WebView / 测试环境立即继续） */
+function yieldNextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+    } else {
+      resolve()
+    }
+  })
+}
+
 // ==================== Types ====================
 
 export type { SubscribeResultInfo } from '@/stores/terminalBuffer'
+
+/** registerRealtimeHandler 返回值：供视图做「历史渲染完成后再撤加载遮罩」的门控 */
+export interface RealtimeHandlerRegistration {
+  /**
+   * 本地历史缓存分片回放完成的信号：
+   * - 有缓存：末批解析完成（onReplayDone）时 resolve
+   * - 无缓存（mock 会话 / 首次进入尚未订阅）：立即 resolve，
+   *   服务端历史段结束由视图按 buffer.phase 离开 'history' 推导
+   */
+  replayDone: Promise<void>
+}
 
 // ==================== Write Coalescer ====================
 // 为什么需要 rAF 合并写入：
@@ -40,6 +81,7 @@ export function useTerminalBuffer() {
    * @param sessionId - 会话 ID
    * @param terminal - xterm Terminal 实例
    * @param onRawOutput - 原始输出字节钩子（合并前、写入前调用，供 TUI 兼容嗅探）
+   * @returns 回放完成信号（replayDone），供视图门控加载遮罩
    */
   function registerRealtimeHandler(
     sessionId: string,
@@ -47,7 +89,7 @@ export function useTerminalBuffer() {
     onRawOutput?: (data: Uint8Array) => void,
     /** 渲染背压门控：仅本端为会话正统渲染端时回发 ack（非正统时服务端丢弃，白红流量） */
     shouldAck?: () => boolean,
-  ) {
+  ): RealtimeHandlerRegistration {
     const writeCoalescer = createWriteCoalescer(terminal)
     // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
     // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
@@ -57,11 +99,59 @@ export function useTerminalBuffer() {
         store.ackRendered(sessionId)
       }
     })
+
+    // 分片回放高水位写入（store 回放循环的背压信号）：合并批经 terminal.write
+    // 的回调确认「已解析完成」，再让出一帧渲染才 resolve——回放节奏由本端
+    // xterm 实际消费速度决定，历史回放期间渲染/触摸可插入，不再长冻结。
+    // xterm 内部写队列 FIFO 保序：回放批与实时帧交错入队不破坏输出顺序
+    const writeParsed = (data: Uint8Array): Promise<void> =>
+      new Promise<void>((resolve) => {
+        // terminal 可能已 dispose（页面切换/会话关闭）：与 writeCoalescer 守卫一致
+        if (!terminal.element) {
+          resolve()
+          return
+        }
+        terminal.write(data, () => resolve())
+      }).then(() => yieldNextFrame())
+
+    // 回放静止全量重绘兜底：历史起点若落在被 LRU 裁剪的转义序列中段，
+    // 增量解析会残留脏屏（光标/属性错位）；连续静止窗口无新数据时补一次整屏
+    // refresh（等价用户点击刷新，幂等无副作用）
+    let replayIdleTimer: ReturnType<typeof setTimeout> | null = null
+    const armReplayIdleRefresh = () => {
+      clearReplayIdleTimer(sessionId)
+      replayIdleTimer = setTimeout(() => {
+        replayIdleTimer = null
+        replayIdleTimers.delete(sessionId)
+        // xterm 可能已销毁（页面卸载竞态）：element 已脱离 DOM 则跳过
+        if (terminal.element?.isConnected && terminal.rows > 0) {
+          terminal.refresh(0, terminal.rows - 1)
+        }
+      }, REPLAY_IDLE_REFRESH_MS)
+      replayIdleTimers.set(sessionId, () => {
+        if (replayIdleTimer) {
+          clearTimeout(replayIdleTimer)
+          replayIdleTimer = null
+        }
+      })
+    }
+
+    // 回放就绪信号：本地缓存分片回放完成（onReplayDone）时 resolve。
+    // store 层 onReplayDone 最早也在 writeParsed 的异步链之后触发，
+    // 此处同步赋值 resolver 不会与回放收尾竞态
+    let resolveReplayDone: (() => void) | null = null
+    const replayDone = new Promise<void>((resolve) => {
+      resolveReplayDone = resolve
+    })
+
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         onRawOutput?.(data)
         writeCoalescer(data)
+        // 输出到达即重置静止窗口：持续输出期间不触发补刷
+        if (replayIdleTimer) armReplayIdleRefresh()
       },
+      writeParsed,
       onClear: () => {
         writeCoalescer.dispose()
         if (terminal) {
@@ -71,7 +161,22 @@ export function useTerminalBuffer() {
       onTruncated: (minSeq: number) => {
         console.warn(`[useTerminalBuffer] history truncated at min_seq=${minSeq}`)
       },
+      onReplayDone: () => {
+        armReplayIdleRefresh()
+        resolveReplayDone?.()
+        resolveReplayDone = null
+      },
     })
+
+    // 无本地缓存（mock 会话 / 首次进入尚未订阅）：分片回放不会启动，
+    // replayDone 立即完成——服务端历史段结束由视图按 phase 离开 'history' 推导
+    const buffer = store.getBuffer(sessionId)
+    if (!buffer || buffer.historyCache.length === 0) {
+      resolveReplayDone?.()
+      resolveReplayDone = null
+    }
+
+    return { replayDone }
   }
 
   /**
@@ -80,6 +185,7 @@ export function useTerminalBuffer() {
    * @param sessionId - 会话 ID
    */
   function unregisterRealtimeHandler(sessionId: string) {
+    clearReplayIdleTimer(sessionId)
     store.unregisterRealtimeHandler(sessionId)
   }
 
@@ -100,6 +206,7 @@ export function useTerminalBuffer() {
    * @param sessionId - 会话 ID
    */
   async function unsubscribeSession(sessionId: string) {
+    clearReplayIdleTimer(sessionId)
     store.unregisterRealtimeHandler(sessionId)
     store.markUnsubscribed(sessionId)
   }
@@ -174,6 +281,7 @@ export function useTerminalBuffer() {
    * 会话删除时 — 清理 buffer + 关闭 socket
    */
   async function handleSessionRemoved(sessionId: string) {
+    clearReplayIdleTimer(sessionId)
     store.unregisterRealtimeHandler(sessionId)
     store.clearBuffer(sessionId)
   }

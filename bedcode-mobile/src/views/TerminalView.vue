@@ -291,6 +291,80 @@ let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
 let dprMediaQuery: MediaQueryList | null = null
 let dprChangeHandler: ((this: MediaQueryList, ev: MediaQueryListEvent) => void) | null = null
 
+// ==================== History Render Gate ====================
+// 加载遮罩放行门控：等「历史输出渲染完成」再撤遮罩，避免用户看到内容
+// 逐批蹦出的闪烁过程。三条件 AND（全部满足才放行）：
+//   ① 本地缓存分片回放完成（registerRealtimeHandler 的 replayDone）
+//   ② 服务端历史段结束：phase 到达 'live'（history_end 帧落地）。
+//      'connecting'/'auth'/'history' 为中间态继续等待——防止首次订阅
+//      失败重试期间遮罩提前撤除、历史随后才逐批蹦出
+//   ③ 首次 fit 校准生效（tryInitialFit 成功或重试放弃）
+// 任一环节卡死（订阅失败/会话停止/极端慢）由 HISTORY_SETTLE_TIMEOUT_MS 兜底。
+const HISTORY_SETTLE_TIMEOUT_MS = 8000
+
+let historySettled: Promise<void> = Promise.resolve()
+let settleReplay: (() => void) | null = null
+let settleServerHistory: (() => void) | null = null
+let settleFirstFit: (() => void) | null = null
+
+/** 挂载时布防：重建三信号 promise（onUnmounted 后不再复用） */
+function armHistoryGate() {
+  historySettled = new Promise<void>((resolve) => {
+    let replayDone = false
+    let serverDone = false
+    let fitDone = false
+    const tryResolve = () => {
+      if (replayDone && serverDone && fitDone) resolve()
+    }
+    settleReplay = () => { replayDone = true; tryResolve() }
+    settleServerHistory = () => { serverDone = true; tryResolve() }
+    settleFirstFit = () => { fitDone = true; tryResolve() }
+  })
+}
+
+/**
+ * 服务端历史段监听：phase 到达 'live' 即放行；中间态继续等待；
+ * 连续 HISTORY_SETTLE_TIMEOUT_MS 未到 live（订阅失败重试中/会话停止/
+ * 无输出会话）强制放行，避免遮罩悬挂。watch 随组件作用域自动清理，
+ * 兜底定时器由 unmount 清理
+ */
+let serverGateFallbackTimer: ReturnType<typeof setTimeout> | null = null
+/** 门控整体超时兜底定时器（race 结束后清理，防僵尸 timer） */
+let gateTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+
+/** 让出下一帧渲染（末批内容 commit 上屏后再撤遮罩；无 rAF 的测试环境立即继续） */
+function nextPaintFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    if (typeof requestAnimationFrame === 'function') {
+      requestAnimationFrame(() => resolve())
+    } else {
+      resolve()
+    }
+  })
+}
+
+function armServerHistoryWatcher() {
+  let stop: (() => void) | null = null
+  const settle = () => {
+    settleServerHistory?.()
+    settleServerHistory = null
+    if (serverGateFallbackTimer) {
+      clearTimeout(serverGateFallbackTimer)
+      serverGateFallbackTimer = null
+    }
+    stop?.()
+    stop = null
+  }
+  stop = watch(
+    () => bufferStore.getBuffer(sessionId.value)?.phase,
+    (phase) => {
+      if (phase === 'live') settle()
+    },
+    { immediate: true },
+  )
+  serverGateFallbackTimer = setTimeout(settle, HISTORY_SETTLE_TIMEOUT_MS)
+}
+
 const showSettings = ref(false)
 const showClearConfirm = ref(false)
 const showSidebar = ref(false)
@@ -734,10 +808,20 @@ onMounted(async () => {
   }
 
   await nextTick()
+
+  // 历史渲染就绪门控布防：先于 initTerminal（回放完成信号在 handler 注册时
+  // 即接线）与订阅路径（phase 监听需捕获 subscribe_ok 后 history 段全程）
+  armHistoryGate()
+  armServerHistoryWatcher()
+  const historyGate = historySettled
+
   await initTerminal()
 
   // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
   if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
+    // mock 会话无服务端历史段：立即放行该门控条件（否则只能等超时兜底）
+    settleServerHistory?.()
+    settleServerHistory = null
     if (terminalRef.value) {
       mockTerminal.startOutput(terminalRef.value)
     }
@@ -751,6 +835,11 @@ onMounted(async () => {
       forceReplay(sessionId.value)
     }
     await subscribeWithRetry()
+  } else {
+    // 非活跃/未连接：本次挂载不会发起订阅，无服务端历史段可等，立即放行；
+    // 本地缓存仍由 replayDone 门控（重进展示最后已知内容）
+    settleServerHistory?.()
+    settleServerHistory = null
   }
 
   // 无条件同步一次尺寸（内部按 isConnected 门控）：会话状态 stale 时
@@ -758,6 +847,19 @@ onMounted(async () => {
   // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
   syncTerminalSizeToHost()
 
+  // 等历史输出渲染完成再撤遮罩：缓存回放 + 服务端历史段 + 首次 fit 三条件
+  // 全部满足；任一环节卡死由 HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
+  // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
+  // 避免遮罩半透明期间透出逐批写入的闪烁过程
+  await Promise.race([
+    historyGate,
+    new Promise<void>((resolve) => { gateTimeoutTimer = setTimeout(resolve, HISTORY_SETTLE_TIMEOUT_MS) }),
+  ])
+  if (gateTimeoutTimer !== null) {
+    clearTimeout(gateTimeoutTimer)
+    gateTimeoutTimer = null
+  }
+  await nextPaintFrame()
   isTerminalReady.value = true
 })
 
@@ -781,6 +883,15 @@ onUnmounted(async () => {
   if (panelRepaintTimer) {
     clearTimeout(panelRepaintTimer)
     panelRepaintTimer = null
+  }
+  // 门控定时器清理（遮罩已放行时为 null，防御未走完 onMounted 的卸载竞态）
+  if (serverGateFallbackTimer) {
+    clearTimeout(serverGateFallbackTimer)
+    serverGateFallbackTimer = null
+  }
+  if (gateTimeoutTimer) {
+    clearTimeout(gateTimeoutTimer)
+    gateTimeoutTimer = null
   }
   // 移除 visualViewport 事件监听
   if (window.visualViewport) {
@@ -898,6 +1009,10 @@ watch(keyboardSettledOffset, () => {
     if (terminalRef.value && terminalRef.value.rows > 0) {
       terminalRef.value.refresh(0, terminalRef.value.rows - 1)
     }
+    // 合成层强制重合成：内容未变时 refresh() 会被渲染管线脏区跳过变成 no-op，
+    // 移动期间合成器缓存的旧分块仍在——transform 往返绕过渲染管线迫使合成器
+    // 重新合成 canvas 层（与快捷键面板/手动刷新路径同模式）
+    forceCompositorRepaint()
     // 键盘收起（偏移回落为 0）：内容回落后强制滚动到最新行——键盘弹出
     // 期间用户可能已向上查看历史或视口停在中间，收起后回到底部跟随输出
     if (keyboardSettledOffset.value === 0) {
@@ -1203,10 +1318,17 @@ async function initTerminal() {
     }
   }
 
-  // 注册实时 handler — 历史回放（订阅后服务端流式送达）与实时推送同通道，
-  // 统一经 writeCoalescer 的 rAF 合并管线写入；
-  // shouldAck 门控 = 本端是会话正统渲染端（渲染背压 ack 仅正统端发送）
-  registerRealtimeHandler(sessionId.value, term, feedTuiOutput, () => isCanonicalRenderer.value)
+  // 注册实时 handler — 历史分片回放（高水位节流，见 useTerminalBuffer）与
+  // 实时推送同通道写入；shouldAck 门控 = 本端是会话正统渲染端（渲染背压 ack 仅正统端发送）
+  // 回放完成信号接入加载遮罩门控：末批解析完成后才允许撤遮罩
+  const { replayDone } = registerRealtimeHandler(sessionId.value, term, feedTuiOutput, () => isCanonicalRenderer.value)
+  void replayDone.then(() => settleReplay?.())
+
+  // 本地历史缓存曾被头部 LRU 裁剪（超 16MB）：本次回放起点非流首，可能切断
+  // 转义序列，提示历史不完整（渲染残留由 composable 的回放静止全量重绘兜底）
+  if (bufferStore.getBuffer(sessionId.value)?.headTrimmed) {
+    toast.warning(t('mobile.terminal.historyTruncated'))
+  }
 
   // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
   attachTuiCompat(term)
@@ -1224,9 +1346,15 @@ async function initTerminal() {
       if (fitWithMargin()) {
         // 校准生效：补发一次实际尺寸（队列合并，防 onResize 门控漏发）
         syncTerminalSizeToHost()
+        settleFirstFit?.()
+        settleFirstFit = null
       } else if (fitAttempts++ < 20) {
         // 字体测量未就绪：50ms 后重试，最多 ~1s（超时后由 ResizeObserver 兜底）
         setTimeout(tryInitialFit, 50)
+      } else {
+        // 重试上限内始终未生效：放弃校准并放行遮罩门控（后续尺寸由 ResizeObserver 兜底）
+        settleFirstFit?.()
+        settleFirstFit = null
       }
     }
     tryInitialFit()
