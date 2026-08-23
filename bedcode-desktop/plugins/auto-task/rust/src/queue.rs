@@ -36,6 +36,18 @@ use crate::agent;
 /// 才放弃，避免"任务永远卡在 waiting"或"慢启动被误杀"。
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
+/// executing 态静默看门狗阈值（秒）
+///
+/// executing 队列项的收敛完全依赖 agent 终态推送（completed/interrupted），
+/// 推送链路断裂（插件未加载 / HTTP 持续失败 / agent 未发 idle）时会永久悬挂，
+/// 只能靠关闭会话兜底或手动取消（2026-08-22「移动端操作体验优化」卡 1 小时
+/// 后被会话关闭兜底成 interrupted）。真实运行中的 agent 每分钟级都有 busy
+/// 推送（实测 opencode 持续输出 Response running），因此以"会话最新任务行
+/// 事件时间静默时长"为判据而非总执行时长，长任务不受影响。
+/// 阈值需覆盖机器休眠（休眠期间 tick 与 agent 同时暂停，唤醒后一起恢复，
+/// 但 elapsed 含休眠时长），取 12h 折中。
+pub const EXECUTING_SILENCE_TIMEOUT_SECS: i64 = 12 * 3600;
+
 /// 第 N 次尝试的等待窗口（秒）：clear 发出后等待新会话 idle 推送的时限
 ///
 /// 节奏 1s → 2s → 3s 递增：首次给终端留出渲染输出的时间窗口，重试窗口
@@ -855,8 +867,7 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
 /// updated_at 距当前超过 WAITING_TIMEOUT_SECONDS 视为超时。
 /// 未达最大重试次数 → 重新登记延迟 clear（与首次一致，同样延迟
 /// CLEAR_DELAY_SECONDS，由 send_due_clears 到点发送）；否则置 cancelled 并广播。
-fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
-    // 超时判定按行内 attempts 选择窗口（1s/2s/3s 递增），elapsed 由 SQLite 计算
+fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判定按行内 attempts 选择窗口（1s/2s/3s 递增），elapsed 由 SQLite 计算
     // （WASM 无系统时钟）；clear 发送成功会重置 updated_at，窗口即从
     // "clear 已发出、等待新会话 idle" 时刻起算
     let overdue = host
@@ -934,6 +945,57 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
                 Some("cancelled"),
             );
         }
+    }
+}
+
+/// executing 态静默看门狗（scheduler-tick 周期调用）
+///
+/// 对每个 executing 队列项，取其会话任务行的最新事件时间（event_time 缺失时
+/// 回退 started_at / created_at），距 now 超过 [`EXECUTING_SILENCE_TIMEOUT_SECS`]
+/// 即判定终态推送链断裂，复用 [`crate::state::interrupt_running_tasks_on_session_end`]
+/// 把运行中任务行与在途队列项一并收敛到 interrupted 并广播（语义同会话结束兜底，
+/// 但原因不同：不是会话退出，而是信号丢失）。真实执行中的 agent 每分钟级都有
+/// busy 推送推进事件时间，长任务不会被误杀。
+pub fn check_executing_silence(host: &WasmHost, now_utc: &str) {
+    let overdue = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT DISTINCT q.session_id AS session_id, \
+                    (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) AS silent_secs \
+                 FROM task_queue q \
+                 WHERE q.status = 'executing' \
+                   AND (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) > {}",
+                EXECUTING_SILENCE_TIMEOUT_SECS
+            ),
+            &sql_params![now_utc],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for row in overdue {
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let silent_secs = row.get("silent_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+        if session_id.is_empty() || silent_secs <= EXECUTING_SILENCE_TIMEOUT_SECS {
+            continue;
+        }
+
+        host.log_warn(&format!(
+            "check_executing_silence: session_id={} executing task silent for {}s, terminal signal lost, interrupting",
+            session_id, silent_secs
+        ));
+        crate::state::interrupt_running_tasks_on_session_end(host, &session_id);
     }
 }
 

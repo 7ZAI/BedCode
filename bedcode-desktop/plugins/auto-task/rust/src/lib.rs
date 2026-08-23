@@ -872,8 +872,15 @@ impl WasmPlugin for AutoTaskPlugin {
         }
 
         // 会话已有进行中的任务则不再创建：队列调度由插件自身 terminal_send 投递输入，
-        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（见 ADR 0001）
+        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（见 ADR 0001）。
+        // 执行中用户的手动输入同样在此被忽略（单终端同时只能运行一个 prompt），
+        // 不能静默：记日志便于排查「输入了但任务日志没有记录」类反馈
         if state::has_active_task(&host, &event.session_id) {
+            host.log_info(&format!(
+                "InputSubmitted: session={} has active task, input not tracked as new task: {:?}",
+                event.session_id,
+                event.text.trim_start().chars().take(32).collect::<String>()
+            ));
             return Ok(());
         }
 
