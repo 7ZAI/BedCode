@@ -18,10 +18,11 @@ export default defineConfig({
     strictPort: true,
     watch: {
       // 排除巨型构建目录，避免 chokidar 扫描/监听数万文件霸占事件循环导致请求挂起
+      // （2026-08-23 复发：packages/plugins 下各 Rust crate 的 target 共约 5.9GB
+      // 未被覆盖，重编译期间 fs 事件风暴打满 vite 事件循环，HTTP 完全无响应）
       ignored: [
-        '**/src-tauri/target/**',
+        '**/target/**',
         '**/src-tauri/gen/**',
-        '**/rust/target/**',
         '**/dist/**',
         '**/node_modules/**',
         '**/.git/**',
