@@ -2,8 +2,7 @@
  * 插件流组合集成测试（L2 场景 5）
  *
  * 协作实体：真实 pluginLoader（模块级单例，清单过滤 / 扫描轮询 / 加载降级） +
- * plugin registry（扩展点注册清理） + pluginCmds（invoke 命令层） +
- * file_service fixtures（挂载契约）。
+ * plugin registry（扩展点注册清理） + pluginCmds（invoke 命令层）。
  *
  * 测试 seam：mock invoke（plugin_list_loaded / plugin_is_enabled /
  * plugin_mark_error）+ convertFileSrc 返回不可解析路径（前端模块动态 import
@@ -11,18 +10,12 @@
  *
  * 覆盖：loadAll 清单过滤（rust-only 跳过 / 未启用跳过）；空清单扫描轮询
  * 补载（fake timers 压缩 250ms 轮询）；前端模块加载失败 → plugin_mark_error
- * + registry 清理（半激活状态摘除）；file_service fixtures 契约（camelCase
- * 条目 / lowercase operations / skip 字段省略）。
+ * + registry 清理（半激活状态摘除）。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { PluginInfo } from '@/plugin/types'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
-import {
-  makeFileEntry,
-  makeListResponse,
-  makeSyncFileServiceChanged,
-} from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -99,7 +92,7 @@ afterEach(() => {
   vi.useRealTimers()
 })
 
-describe('插件流：pluginLoader × registry × file_service fixtures', () => {
+describe('插件流：pluginLoader × registry', () => {
   it('loadAll 清单过滤：rust-only 插件跳过、未启用前端插件不加载', async () => {
     const manifests = [
       makePluginInfo({ id: 'rust-only', pluginType: 'rust' }),
@@ -166,30 +159,5 @@ describe('插件流：pluginLoader × registry × file_service fixtures', () => 
     expect(invokeCalls('plugin_mark_error')[0]).toMatchObject([{ pluginId: 'frontend-ok' }])
     expect(pluginLoader.getActivePlugin('frontend-ok')).toBeUndefined()
     expect(getPluginRegistry().getContext('frontend-ok')).toBeUndefined()
-  })
-
-  it('file_service fixtures 契约：camelCase 条目 / lowercase operations / skip 字段省略', () => {
-    // FileEntryDto：camelCase（isDir），mtime 为 Unix 秒
-    const entry = makeFileEntry({ name: 'docs', size: 0, mtime: 1755300000, isDir: true })
-    expect(Object.keys(entry).sort()).toEqual(['isDir', 'mtime', 'name', 'size'])
-    expect(JSON.parse(JSON.stringify(entry))).toEqual({
-      name: 'docs',
-      size: 0,
-      mtime: 1755300000,
-      isDir: true,
-    })
-
-    // ListResponse：notice 为 skip_serializing_if → 默认序列化省略（键在、值为 undefined）
-    const list = makeListResponse({ path: 'docs' })
-    expect(Object.keys(list).sort()).toEqual(['entries', 'notice', 'path'])
-    const serialized = JSON.parse(JSON.stringify(list))
-    expect(serialized.notice).toBeUndefined()
-    expect(serialized.path).toBe('docs')
-    expect(serialized.entries).toHaveLength(2)
-
-    // SyncFileServiceChanged：operations 为 lowercase 枚举值（list/download/upload）
-    const sync = makeSyncFileServiceChanged({ operations: ['list', 'download', 'upload'] })
-    expect(sync.operations).toEqual(['list', 'download', 'upload'])
-    expect(Object.keys(sync).sort()).toEqual(['available', 'mount_path', 'operations', 'plugin_id'])
   })
 })

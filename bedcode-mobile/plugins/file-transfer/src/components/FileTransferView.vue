@@ -1,35 +1,23 @@
 <script setup lang="ts">
 /**
- * FileTransferView — 文件传输浏览主页面 (Mobile)
+ * FileTransferView — 文件传输浏览主页面 (Mobile) — host-peer 契约版
  *
- * 结构（spec 9.2）：
- *   顶栏（对端名+连接状态，纯信息不带操作按钮）→ 面包屑 → Material 文件列表
- *   （图标+名称+元信息+多选勾选）→ 多选时底部主按钮「下载到手机（N 项 · 总大小）」
- *   → 迷你传输条（常驻）→ 右下角 FAB（上传 + 设置，悬浮于底部栏上方）。
- *   对端重测入口下沉到空态（对端未共享/目录不可用时展示重试按钮）。
+ * 结构：
+ *   顶栏（对端名+连接状态）→ 面包屑 → 共享根/目录列表（多选勾选）
+ *   → 多选时底部「下载到手机」→ 迷你传输条 → 顶栏右侧上传（系统选择器直发）。
  *
- * 语义分层（避免连接与文件共享混杂）：
- *   - 顶栏：只反映「连接」维度（已连接 / 未连接），与对端是否共享文件无关。
- *   - 页面正文：只反映「对端文件共享」维度（空目录 / 对端未共享 / 目录不可用），
- *     无论连接是否已建立，看不到对端文件统一归到「对端未共享」空态。
- *
- * 业务逻辑全部在 composables（useTasks / useRemoteFs / useSharedUpload），本组件只做 UI；
- * 设置页经 context.ui.openPage('settings') 整体路由跳转（SettingsPage 包装 useSettings）。
- * 上传入口为共享目录上传页（底部抽屉）：App 内遍历共享目录（SAF URI 存储）→
- * 「准备中」中转复制进度 + 取消 → 完成后自动入队（M1 上传页）。
- *
- * 经宿主 PluginViewHost 渲染（provide pluginContext），故此处直接断言非空。
+ * 发送 = 系统文件选择器（SAF 多选，宿主换算真实路径后 send_files）；
+ * 接收 = 浏览对端共享根 → 勾选拉取（pull_files 批量）；
+ * 队列/接收应答/历史见 TaskQueueSheet 与 BatchRequestDialog。
  */
 import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { PluginContext, Disposable } from '@binblink/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
-import { useSharedUpload } from '../composables/useSharedUpload'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
 import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
-import SharedDirSheet from './SharedDirSheet.vue'
 import BatchRequestDialog from './BatchRequestDialog.vue'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -40,19 +28,11 @@ const fs = useRemoteFs(context)
 const settings = useSettings(context)
 // 解构 Ref：模板需直接读 approvalTimeoutSec（settings 对象顶层是 settings Ref）
 const { settings: transferSettings } = settings
-const upload = useSharedUpload(context, tasks, settings)
 
 /** 队列 bottom sheet 是否展开 */
 const queueOpen = ref(false)
 
-// ==================== v2 批量传输请求应答（全局弹窗，spec 14.4） ====================
-//
-// 前台 = BatchRequestDialog（排队 + 倒计时 + 必须明确选择接收/拒绝；超时自动
-// 关闭、默认拒绝由宿主 pending TTL 执行）；后台/锁屏 = 系统通知 action 按钮
-// （Kotlin 侧，见 TaskNotificationManager）。数据源为 batches-changed 事件 +
-// list-batches 初始拉取；应答后批卡经 batches-changed 消失（宿主 resolved 事件驱动）。
-
-/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动，失败仅记日志） */
+/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动） */
 function handleBatchApprove(batchId: string): void {
   tasks.approveBatch(batchId).catch((e: unknown) => {
     console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
@@ -64,26 +44,18 @@ function handleBatchReject(batchId: string): void {
   })
 }
 
-// ==================== 下拉刷新（与原生下拉刷新同语义） ====================
-/** 释放触发刷新的阈值（px） */
+// ==================== 下拉刷新 ====================
 const PULL_TRIGGER = 56
-/** 下拉最大位移（px） */
 const PULL_MAX = 96
-/** 阻尼系数：手指位移 → 指示器位移 */
 const PULL_RESISTANCE = 0.45
 
-/** 文件列表滚动容器（下拉手势作用域） */
 const scrollEl = ref<HTMLElement | null>(null)
-/** 指示器可见高度（随下拉位移变化；刷新中常驻阈值高度） */
 const pullDistance = ref(0)
-/** 下拉状态机：idle → pulling（未达阈值）/ ready（达阈值）→ refreshing → idle */
 const pullState = ref<'idle' | 'pulling' | 'ready' | 'refreshing'>('idle')
-/** 手指按住期间关闭回弹过渡（跟手），抬起后开启平滑回弹 */
 const pullingActive = ref(false)
 
 let pullStartY = 0
 
-/** 仅在容器位于顶部且非加载/刷新中时接管触摸 */
 function onPullStart(e: TouchEvent): void {
   const el = scrollEl.value
   if (!el || el.scrollTop > 0 || fs.loading.value || pullState.value === 'refreshing') return
@@ -109,7 +81,6 @@ function onPullEnd(): void {
   if (!pullingActive.value) return
   pullingActive.value = false
   if (pullState.value === 'ready') {
-    // 释放刷新：指示器常驻刷新态，目录加载完成后回弹
     pullState.value = 'refreshing'
     pullDistance.value = PULL_TRIGGER
     void fs.refresh().finally(() => {
@@ -122,42 +93,27 @@ function onPullEnd(): void {
   }
 }
 
-/**
- * 系统返回拦截：队列面板 → 先关闭面板；目录栈内 → 逐级返回上级目录；
- * 根目录 → 恢复默认后退（退出页面回上一页）。
- * 经宿主 ui.onBackPressed 注册（Tauri AppPlugin 将 Android 系统返回转发到 JS）。
- */
 let disposeBackPress: Disposable | null = null
 
-/** 对端展示名（实际名字或未连接文案） */
+/** 对端展示名 */
 const peerLabel = computed(() => tasks.displayPeerName.value)
 
-/**
- * 顶栏连接状态文案：只反映连接层，不掺杂对端共享语义。
- * 「对端未共享」是业务层信息，仅在页面正文空态出现，与顶栏分离。
- */
 const peerStatusLabel = computed(() =>
   tasks.connOnline.value ? t('transfer.peer.online') : t('transfer.peer.offline'),
 )
 
-/** 顶栏连接状态文字语义色：成功 / 静默 */
 const peerStatusClass = computed(() =>
   tasks.connOnline.value ? 'ft-peer-status--online' : 'ft-peer-status--offline',
 )
 
-/**
- * 空态类型：只表达「对端文件共享」维度，连接状态由顶栏承载。
- * 「对端未共享」统一兜底未连接 + 已连接但未共享两种看不到文件的情况。
- */
 type EmptyKind = 'empty' | 'notSharing' | 'error'
 
 const emptyKind = computed<EmptyKind>(() => {
   if (fs.error.value) return 'error'
-  if (!tasks.peerOnline.value) return 'notSharing'
+  if (!tasks.peerOnline.value && !fs.currentRoot.value) return 'notSharing'
   return 'empty'
 })
 
-/** 空态主标题（按场景区分，避免无差别展示「此目录为空」） */
 const emptyTitle = computed(() => {
   if (fs.notice.value) return t('transfer.notice.storageAccessTitle')
   switch (emptyKind.value) {
@@ -167,7 +123,6 @@ const emptyTitle = computed(() => {
   }
 })
 
-/** 空态说明文案（引导用户下一步操作） */
 const emptyHint = computed(() => {
   if (fs.notice.value) return t('transfer.notice.storageAccess')
   switch (emptyKind.value) {
@@ -177,7 +132,6 @@ const emptyHint = computed(() => {
   }
 })
 
-/** 空态图标底色（扁平 tint，随状态色） */
 const emptyIcoClass = computed(() => {
   switch (emptyKind.value) {
     case 'error': return 'ft-empty-ico--error'
@@ -186,21 +140,17 @@ const emptyIcoClass = computed(() => {
   }
 })
 
-/** 空态图标路径（24 线性描边） */
 const emptyIcoPath = computed(() => {
   switch (emptyKind.value) {
     case 'error':
       return 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
     case 'notSharing':
-      // 同心圆弧 wifi：顶部最宽 → 往下依次变短 → 底部圆点；
-      // 不用 heroicons 原版 4 弧路径（其中 r5.25 弧会压在最长弧上方，视觉错乱）
       return 'M4.72 4.39a9.5 9.5 0 0114.56 0M7.82 5.52a6.5 6.5 0 018.36 0M10.8 7.21a3.5 3.5 0 012.4 0M12 20h.01'
     default:
       return 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z'
   }
 })
 
-/** 空态 CTA：异常场景重测对端；正常空目录刷新 */
 const emptyCta = computed(() => {
   if (emptyKind.value === 'empty') {
     return {
@@ -213,16 +163,13 @@ const emptyCta = computed(() => {
   return {
     label: t('transfer.topbar.queryPeer'),
     primary: true,
-    // 循环箭头 = 重新探测/重试语义（放大镜是搜索语义，不匹配）
     icon: 'M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15',
     action: () => tasks.queryPeer(),
   }
 })
 
-/** 迷你传输条主任务（null 表示无活跃任务） */
 const primaryTask = computed(() => tasks.primaryTask.value)
 
-/** 多选下载按钮文案：下载到手机 (N 项 · 总大小) */
 const downloadLabel = computed(() =>
   t('transfer.topbar.downloadSelected', {
     count: fs.selectedCount.value,
@@ -230,65 +177,10 @@ const downloadLabel = computed(() =>
   }),
 )
 
-// ==================== 「保存到…」（M3 单文件目标） ====================
-
-/** 长按触发阈值（ms）：与原生长按菜单语义对齐 */
-const LONG_PRESS_MS = 500
-/** 长按定时器（触发后清除） */
-let longPressTimer: ReturnType<typeof setTimeout> | null = null
-/** 长按已触发标记：抑制随后 touchend 派生的 click（避免误勾选） */
-let longPressFired = false
-
-/** 长按文件行：启动定时器；目录长按不处理 */
-function onRowTouchStart(_e: TouchEvent, entry: { isDir: boolean; name: string }): void {
-  if (entry.isDir) return
-  longPressFired = false
-  longPressTimer = setTimeout(() => {
-    longPressTimer = null
-    longPressFired = true
-    void saveToFile(entry.name)
-  }, LONG_PRESS_MS)
-}
-
-/** 手指移动/抬起/取消：取消未达阈值的长按 */
-function onRowTouchCancel(): void {
-  if (longPressTimer) {
-    clearTimeout(longPressTimer)
-    longPressTimer = null
-  }
-}
-
-/** 桌面 dev 兜底：右键菜单触发「保存到…」（真机走长按） */
-function onRowContextMenu(entry: { isDir: boolean; name: string }): void {
-  if (entry.isDir) return
-  void saveToFile(entry.name)
-}
-
-/**
- * 「保存到…」：入队下载（中转目录唯一名）→ 完成时 WASM 弹系统保存对话框
- * （ACTION_CREATE_DOCUMENT，用户选位置）→ 流拷贝即达 → 删除中转副本
- */
-async function saveToFile(name: string): Promise<void> {
-  if (!tasks.peerOnline.value) {
-    context.dialogs.showToast(t('transfer.upload.offline'), 'error')
-    return
-  }
-  const base = fs.currentPath.value
-  const path = base ? `${base}/${name}` : name
-  const ok = await tasks.enqueueDownload(
-    [path],
-    { id: tasks.peerId.value, name: tasks.displayPeerName.value },
-    { saveTo: true },
-  )
-  if (ok > 0) {
-    context.dialogs.showToast(t('transfer.saveTo.enqueued'), 'success')
-  }
-}
-
-/** 点击行：目录进入，文件勾选（长按已触发时抑制，避免误勾选） */
+/** 点击行：目录进入（根清单层=进入共享根），文件勾选 */
 function onRowTap(entry: { name: string; isDir: boolean }): void {
-  if (longPressFired) {
-    longPressFired = false
+  if (!fs.currentRoot.value && entry.isDir) {
+    void fs.cd(entry.name)
     return
   }
   if (entry.isDir) {
@@ -298,45 +190,58 @@ function onRowTap(entry: { name: string; isDir: boolean }): void {
   }
 }
 
-/** 批量下载勾选文件（remotePath 拼接当前目录路径，与桌面端 handleDownload 对齐） */
+/** 批量拉取勾选文件（当前根内相对路径拼装，一次 pull_files 调用） */
 async function downloadSelected(): Promise<void> {
-  if (!tasks.peerOnline.value) return
-  const base = fs.currentPath.value
-  const paths = fs.selectedFiles.value.map(name => (base ? `${base}/${name}` : name))
-  if (paths.length === 0) return
-  const ok = await tasks.enqueueDownload(paths, {
-    id: tasks.peerId.value,
-    name: tasks.displayPeerName.value,
-  })
-  if (ok > 0) fs.clearSelection()
+  if (!tasks.peerOnline.value || !fs.currentRoot.value) return
+  const names = fs.selectedFiles.value
+  if (names.length === 0) return
+  try {
+    const result = await context.commands.execute('file-transfer.pull-files', {
+      dirId: fs.currentRoot.value.id,
+      path: fs.currentPath.value,
+      files: names,
+    })
+    if ((result?.count ?? 0) > 0) {
+      context.dialogs.showToast(t('transfer.saveTo.enqueued'), 'success')
+      fs.clearSelection()
+    }
+  } catch (e) {
+    console.error('[File Transfer] pull-files failed:', e)
+    context.dialogs.showToast(String(e), 'error')
+  }
 }
 
 /**
- * 上传入口：打开共享目录上传页（底部抽屉）
- *
- * M1 上传源严格限于共享目录（SAF 目录树授权，见 spec）：App 内遍历
- * 共享目录文件列表 → 「准备中」中转复制 → 完成后自动入队。
+ * 上传入口：系统文件选择器多选 → 直发活跃对端
+ * （宿主 SAF 选图换算真实路径；取消静默返回）
  */
 async function uploadFile(): Promise<void> {
   if (!tasks.peerOnline.value) {
     context.dialogs.showToast(t('transfer.upload.offline'), 'error')
     return
   }
-  await upload.openSheet()
+  try {
+    const raw = await context.commands.execute('file-transfer.pick-files', {})
+    const paths: string[] = Array.isArray(raw) ? raw : []
+    if (paths.length === 0) return
+    const ok = await tasks.sendFiles(paths)
+    if (ok > 0) {
+      context.dialogs.showToast(t('transfer.upload.enqueued'), 'success')
+    }
+  } catch (e) {
+    const msg = String(e)
+    if (msg.includes('cancel')) return
+    console.error('[File Transfer] pick/send failed:', e)
+  }
 }
 
-/**
- * 对端共享状态变化驱动目录加载（与桌面端 watch(peer.online) 对齐）：
- * queryPeer/peer_changed 置位 peerOnline 后自动刷新目录，
- * 避免首次进入停留在「对端未共享」空态需手动点重测。
- */
+/** 对端就绪状态变化驱动目录加载（上线加载共享根，下线清空） */
 watch(
   () => tasks.peerOnline.value,
   (online) => {
     if (online) {
-      void fs.refresh()
+      void fs.loadRoots()
     } else {
-      // 对端下线：清空残留目录条目与勾选，避免对离线对端入队
       fs.reset()
     }
   },
@@ -344,26 +249,24 @@ watch(
 
 onMounted(() => {
   tasks.start()
-  void tasks.refreshV2()
   disposeBackPress = context.ui.onBackPressed(({ canGoBack }) => {
     if (queueOpen.value) {
       queueOpen.value = false
       return
     }
-    if (fs.crumbs.value.length > 0) {
+    if (fs.crumbs.value.length > 1) {
       void fs.up()
+      return
+    }
+    if (fs.crumbs.value.length === 1) {
+      void fs.goRoot()
       return
     }
     if (canGoBack) history.back()
   })
-  if (tasks.peerOnline.value) {
-    // 对端已就绪（视图挂载晚于事件）：直接加载
-    void fs.load('')
-  } else {
-    // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）；
-    // 探测回复后 peerOnline 置位，由上方 watch 自动加载目录
-    void tasks.queryPeer()
-  }
+  // 挂载晚于设备事件时主动探测一次
+  if (!tasks.peerOnline.value) void tasks.queryPeer()
+  void fs.loadRoots()
 })
 
 onUnmounted(() => {
@@ -513,11 +416,6 @@ onUnmounted(() => {
               'ft-row-selected': !entry.isDir && fs.selected.value.has(entry.name),
             }"
             @click="onRowTap(entry)"
-            @touchstart.passive="(e) => onRowTouchStart(e, entry)"
-            @touchmove.passive="onRowTouchCancel"
-            @touchend="onRowTouchCancel"
-            @touchcancel="onRowTouchCancel"
-            @contextmenu.prevent="onRowContextMenu(entry)"
           >
             <!-- 类型图标（按扩展名匹配：音乐/视频/图片/PDF/文档等，未知回退通用文件） -->
             <FileTypeIcon :name="entry.name" :is-dir="entry.isDir" />
@@ -619,36 +517,19 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 队列 bottom sheet（v2 四 tab：全部/发送/接收/历史） -->
+    <!-- 队列 bottom sheet（四 tab：发送/接收/历史） -->
     <TaskQueueSheet
       :open="queueOpen"
       :tasks="tasks.tasks.value"
       :receiving="tasks.receivingTasks.value"
       :history="tasks.history.value"
-      :speed-map="tasks.speedMap.value"
       :total-speed="tasks.totalSpeed.value"
-      :resumable-count="tasks.resumableCount.value"
       :t="t"
       @close="queueOpen = false"
-      @pause="(id) => tasks.pause(id)"
-      @resume="(id) => tasks.resume(id)"
       @cancel="(id) => tasks.cancel(id)"
       @retry="(id) => tasks.retry(id)"
-      @remove="(id) => tasks.removeTask(id)"
-      @open="(id) => tasks.openTask(id)"
-      @resume-all="() => tasks.resumeAll()"
       @cancel-receiving="(sessionId) => tasks.cancelReceiving(sessionId)"
       @clear-history="() => tasks.clearHistory()"
-      @open-history="(entry) => tasks.openHistoryEntry(entry)"
-    />
-
-    <!-- 共享目录上传页（M1：共享目录文件列表 + 准备中进度 + 取消） -->
-    <SharedDirSheet
-      :open="upload.open.value"
-      :upload="upload"
-      :t="t"
-      @close="upload.close()"
-      @open-settings="() => { upload.close(); context.ui.openPage('settings') }"
     />
   </div>
 </template>

@@ -127,19 +127,11 @@ export interface RouteEntry {
   /** router 路由名（registerRoute 时 addRoute，dispose 时 removeRoute） */
   routeName: string
 }
-export interface MountEntry {
-  pluginId: string
-  mountPath: string
-  roots: string[]
-  operations: string[]
-}
-
 const toolboxPages = ref<ToolboxPageEntry[]>([])
 const navTabs = ref<NavTabEntry[]>([])
 const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
 const settingsSections = ref<SettingsSectionEntry[]>([])
 const routes = ref<RouteEntry[]>([])
-const mounts = ref<MountEntry[]>([])
 
 /** 从列表中移除条目（dispose 回调） */
 function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
@@ -201,25 +193,6 @@ export function registerRoute(pluginId: string, route: PluginRouteDescriptor): D
   }
 }
 
-export function registerMount(
-  pluginId: string,
-  mountPath: string,
-  roots: string[],
-  operations: string[],
-): { updateRoots(roots: string[]): void; dispose(): void } {
-  const entry: MountEntry = { pluginId, mountPath, roots, operations }
-  mounts.value.push(entry)
-  return {
-    updateRoots(next: string[]) {
-      entry.roots = next
-    },
-    dispose() {
-      const idx = mounts.value.indexOf(entry)
-      if (idx !== -1) mounts.value.splice(idx, 1)
-    },
-  }
-}
-
 // ==================== 当前打开的插件视图（视图栈，与宿主路由栈语义一致） ====================
 
 export interface ActiveView {
@@ -253,4 +226,4 @@ export function goBackView(): void {
   activeView.value = viewStack.value[viewStack.value.length - 1] ?? null
 }
 
-export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes, mounts }
+export { activeView, logs, plugins, toolboxPages, navTabs, terminalToolbarItems, settingsSections, routes }

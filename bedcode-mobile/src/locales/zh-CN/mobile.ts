@@ -156,6 +156,7 @@ export default {
       refreshed: '已刷新格式',
       refreshFailed: '刷新格式失败',
       subscribeFailed: '终端输出订阅失败，正在重试...',
+      historyTruncated: '较早的历史输出已超出缓存上限，仅显示最近部分',
       scrollToBottom: '回到底部',
       rendererOverrideTitle: '覆盖终端尺寸',
       rendererOverrideBody: '当前{renderer}端正在渲染输出，是否覆盖它的尺寸？\n覆盖后{renderer}端显示格式将错乱。',
@@ -180,6 +181,7 @@ export default {
       input: '输入',
       shortcuts: '快捷键',
       shortcutsLandscapeUnavailable: '横屏模式不支持快捷键面板',
+      executeHint: '点按执行 · 长按发送',
     },
     inputAssistant: {
       title: '输入助手设置',
@@ -454,7 +456,6 @@ export default {
       approveSuccess: '已批准: {name}',
       approveFailed: '批准失败: {error}',
       noPermissions: '无权限请求',
-      noFileservicePermission: '插件 {plugin} 缺少 fileservice 权限',
       noOcrPermission: '插件 {plugin} 缺少 ocr 权限',
       noSystemOpenPermission: '插件 {plugin} 缺少 system:open 权限',
       fsAuthTitle: '文件访问授权',

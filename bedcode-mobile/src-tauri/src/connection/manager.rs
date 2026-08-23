@@ -19,7 +19,7 @@ use crate::state::get_global_token;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
-use crate::router::{AuthHandler, FileServiceHandler, SyncHandler, SystemHandler, TerminalHandler};
+use crate::router::{AuthHandler, SyncHandler, SystemHandler, TerminalHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 
 use crate::system::constants::connection::{
@@ -59,7 +59,6 @@ fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusine
         .route("Terminal", Arc::new(TerminalHandler))
         .route("Auth", Arc::new(AuthHandler))
         .route("SyncData", Arc::new(SyncHandler))
-        .route("FileService", Arc::new(FileServiceHandler))
         .route("ServerClosed", Arc::new(SystemHandler))
         .route("Error", Arc::new(SystemHandler))
         .route("Ack", Arc::new(SystemHandler))
@@ -357,12 +356,6 @@ impl ConnectionManager {
                             tracing::debug!("[ConnMonitor] Manual disconnect, skipping notification");
                         }
 
-                        // 清理桌面端 peer 记录并推送 online=false（双通道）
-                        if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
-                            let fs = crate::state::get_file_service();
-                            fs.registry.remove_peer(&peer_id).await;
-                        }
-
                         break;
                     }
                     _ => {}
@@ -379,13 +372,6 @@ impl ConnectionManager {
         // 重置重连标记，确保进行中的重连循环退出
         self.is_reconnecting.store(false, Ordering::SeqCst);
         tracing::info!("Disconnecting...");
-
-        // 在清除 target 之前主动移除桌面 peer 记录并推送 online=false
-        // （remove_peer 幂等：monitor 循环后续再调一次无害）
-        if let Some(peer_id) = crate::handler::sync::desktop_peer_id().await {
-            let fs = crate::state::get_file_service();
-            fs.registry.remove_peer(&peer_id).await;
-        }
 
         // 断开 WebSocket（04 前恒为空）
         if let Some(client) = self.client.read().await.as_ref() {

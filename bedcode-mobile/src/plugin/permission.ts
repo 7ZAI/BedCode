@@ -21,26 +21,9 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'fs:read': ['fs.read', 'fs.copy'],
   'fs:write': ['fs.write', 'fs.copy'],
   'bus': ['bus.publish', 'bus.subscribe', 'bus.unsubscribe'],
-  'fileservice': [
-    'fileService.mount',
-    'fileService.unmount',
-    'fileService.updateRoots',
-    'fileService.getPeer',
-    'fileService.pickDirectory',
-    'fileService.pickFile',
-    'fileService.pickSharedDirectory',
-    'fileService.listDir',
-    'fileService.saf.listTree',
-    'fileService.saf.copyStart',
-    'fileService.saf.copyStatus',
-    'fileService.saf.copyCancel',
-    'fileService.saf.cleanupStaleCopies',
-    'fileService.saf.checkAuthorized',
-    'fileService.requestAllFilesAccess',
-  ],
   'system:open': ['system.openFile', 'system.revealInDir'],
-  // transfer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
-  'transfer': [],
+  // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
+  'peer': [],
   // OCR 引擎（宿主命令直供，不经 WASM；见 .scratch/ocr-plugin/spec.md §4.1）
   'ocr': [
     'ocr.recognize',

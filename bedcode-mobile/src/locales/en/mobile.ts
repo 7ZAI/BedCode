@@ -156,6 +156,7 @@ export default {
       refreshed: 'Format refreshed',
       refreshFailed: 'Refresh failed',
       subscribeFailed: 'Failed to subscribe terminal output, retrying...',
+      historyTruncated: 'Older history exceeded the cache limit; only recent output is shown',
       scrollToBottom: 'Scroll to bottom',
       rendererOverrideTitle: 'Override Terminal Size',
       rendererOverrideBody:
@@ -181,6 +182,7 @@ export default {
       input: 'Input',
       shortcuts: 'Shortcuts',
       shortcutsLandscapeUnavailable: 'Shortcut panel is unavailable in landscape mode',
+      executeHint: 'Tap to execute · Hold to send',
     },
     inputAssistant: {
       title: 'Input Assistant Settings',
@@ -455,7 +457,6 @@ export default {
       approveSuccess: 'Approved: {name}',
       approveFailed: 'Approval failed: {error}',
       noPermissions: 'No permissions requested',
-      noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       noOcrPermission: 'Plugin {plugin} lacks the ocr permission',
       noSystemOpenPermission: 'Plugin {plugin} lacks the system:open permission',
       fsAuthTitle: 'File Access Authorization',

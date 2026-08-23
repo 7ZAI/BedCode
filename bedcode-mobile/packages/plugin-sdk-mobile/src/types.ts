@@ -495,210 +495,6 @@ export interface OcrApi {
   cameraCapture(): Promise<OcrImageSource | null>
 }
 
-// ==================== File Service API Types ====================
-
-/** 上传策略钩子元信息（宿主 → 插件，与 SDK Rust UploadRequestMeta camelCase 对应） */
-export interface UploadRequestMeta {
-  /** 目标相对路径（相对挂载根） */
-  relativePath: string
-  /** 声明的文件大小（字节） */
-  size: number
-}
-
-/** 批量传输请求元信息（宿主 → 插件批钩子入参，v2；与 SDK Rust TransferRequestMeta 对应） */
-export interface TransferRequestMeta {
-  /** 批 ID（发送方生成，跨端唯一标识一次「发送」动作） */
-  batchId: string
-  /** 批内文件清单（相对路径 + 大小） */
-  files: { relativePath: string; size: number }[]
-  /** 批内文件总大小（字节） */
-  totalSize: number
-}
-
-/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝）
- *
- * v2 三路化：allow / ask（请求用户批准，批上下文）/ deny。
- * wire 兼容：旧插件返回 `{ allow: false }` → deny；`{ allow: true }` → allow。 */
-export interface UploadHookDecision {
-  /** 是否允许上传 */
-  allow: boolean
-  /** v2：true = 需要用户批准（批上下文）；与 allow 互斥 */
-  ask?: boolean
-  /** 拒绝原因（如 duplicate-name / policy-denied），允许时为空 */
-  reason?: string
-}
-
-/** 文件服务挂载选项（与 SDK Rust MountOptions camelCase 对应） */
-export interface MountOptions {
-  /** 挂载点名称（小写字母数字 -_），暴露为 /{pluginId}/{mountPath}/**（移动端无 /api 前缀） */
-  mountPath: string
-  /** 允许目录根（绝对路径，来自插件 storage 的用户配置） */
-  roots: string[]
-  /** 允许的操作集合（未声明的操作端点返回 403） */
-  operations: ('list' | 'download' | 'upload')[]
-  /** 上传策略钩子（可选；提供时以 Webview 钩子目标注册，上传会话创建时调用一次） */
-  onUploadRequest?: (meta: UploadRequestMeta) => Promise<UploadHookDecision>
-  /** v2：批量传输请求钩子（可选；提供时以 Webview 批钩子目标注册，POST /transfer-request 时调用一次） */
-  onTransferRequest?: (meta: TransferRequestMeta) => Promise<UploadHookDecision>
-}
-
-/** 挂载句柄（fileService.mount 返回值） */
-export interface FileServiceMount {
-  /** 挂载点名称 */
-  mountPath: string
-  /** 更新允许目录根（目录变更即时生效） */
-  updateRoots(roots: string[]): Promise<void>
-  /** 摘除挂载点（插件 deactivate 时应一并调用） */
-  dispose(): Promise<void>
-}
-
-/** 对端挂载点信息（与 SDK Rust PeerMountAnnouncement camelCase 对应） */
-export interface PeerMountAnnouncement {
-  /** 挂载所属插件 ID（URL 第一段） */
-  pluginId: string
-  /** 挂载点名称（URL 第二段） */
-  mountPath: string
-  /** 该挂载支持的操作集合 */
-  operations: ('list' | 'download' | 'upload')[]
-}
-
-/** 对端文件服务信息（与 SDK Rust PeerFileService 对应，控制面公告填充） */
-export interface PeerFileServiceInfo {
-  /** 对端 IP */
-  ip: string
-  /** 对端文件服务端口 */
-  port: number
-  /** 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时为空） */
-  token: string
-  /** 对端真实设备名（用户设置名，获取不到时为兜底名；wire 为 snake_case） */
-  device_name: string
-  /** 对端挂载点列表 */
-  mounts: PeerMountAnnouncement[]
-}
-
-/** v2.1：手机自主发起 HTTP 传输（服务器归零，与 SDK Rust FileTransferRequest 对应） */
-export interface FileTransferRequest {
-  /** 对端挂载插件 ID（filesrv_get_peer 拿到；下载/上传定位桌面端点用） */
-  pluginId: string
-  /** 对端挂载点名称 */
-  mountPath: string
-  /** 相对路径（下载 = 桌面挂载内路径；上传 = 桌面目标路径） */
-  relativePath: string
-  /** 文件总大小（字节，进度展示 + 断点预期） */
-  size: number
-  /** v2：所属传输批 ID（pull 场景桌面已自批准随 intent 下发；自主上传可选） */
-  batchId?: string | null
-  /** 下载落点（本地路径；缺省 = app 下载目录按文件名自动命名） */
-  destPath?: string | null
-  /** 上传源（本地路径或 content://；缺省 = relativePath 同路径） */
-  sourcePath?: string | null
-}
-
-/** SAF 目录树条目（listTree 返回；真实路径条目列表复用，uri 承载绝对路径） */
-export interface SafEntry {
-  name: string
-  isDir: boolean
-  /** 文件大小（字节；目录/未知为 0） */
-  size: number
-  /** MIME 类型（可空串） */
-  mime: string
-  /** 条目 document URI（content://.../document/...；真实路径条目为绝对路径） */
-  uri: string
-  /** 条目 document id（子目录遍历用；真实路径条目为空串） */
-  documentId: string
-}
-
-/** 中转复制启动结果 */
-export interface SafCopyHandle {
-  /** 复制句柄 id（copyStatus / copyCancel 用） */
-  copyId: string
-  /** cache 落盘绝对路径（复制完成后即 enqueue 的 localPath） */
-  destPath: string
-}
-
-/** 中转复制进度快照（「准备中」进度条数据源） */
-export interface SafCopyStatus {
-  copyId: string
-  /** 已复制字节数 */
-  done: number
-  /** 总字节数（未知大小（流式 provider）为 0） */
-  total: number
-  /** 复制是否已结束（成功/失败/取消三者其一） */
-  finished: boolean
-  /** 是否被用户取消 */
-  cancelled: boolean
-  /** 失败原因（仅失败时非空） */
-  error: string | null
-  /** cache 落盘绝对路径 */
-  destPath: string
-}
-
-/** 系统目录树选择结果（添加共享目录条目用；Kotlin SafPickerPlugin 返回） */
-export interface PickedSharedDirectory {
-  /** content://tree URI（条目 id） */
-  uri: string
-  /** 树根 document id（子目录遍历起点） */
-  documentId: string
-  /** 目录展示名 */
-  displayName: string
-}
-
-/** SAF 存储访问 API（需 fileservice 权限；非 Android 平台 reject） */
-export interface SafAPI {
-  /** 列出目录树子条目（共享目录 App 内遍历，免系统选择器） */
-  listTree(treeUri: string, documentId: string): Promise<SafEntry[]>
-  /** 启动中转复制（Relay Copy）：SAF 源 → app 私有 cache，立即返回句柄 */
-  copyStart(uri: string, destName: string): Promise<SafCopyHandle>
-  /** 轮询中转复制进度 */
-  copyStatus(copyId: string): Promise<SafCopyStatus>
-  /** 取消中转复制（复制方删除半成品后结束，无残留） */
-  copyCancel(copyId: string): Promise<void>
-  /** 清扫中转复制残留（插件激活时调用，删除缓存 staging 目录全部文件） */
-  cleanupStaleCopies(): Promise<void>
-  /** 检测树授权是否仍有效（失效标记 → 提示重新授权） */
-  checkAuthorized(treeUri: string): Promise<boolean>
-}
-
-/** 文件服务 API（需 fileservice 权限） */
-export interface FileServiceAPI {
-  /** 挂载文件服务端点（插件作为文件服务方），返回挂载句柄 */
-  mount(options: MountOptions): Promise<FileServiceMount>
-  /** 获取对端文件服务信息（对端 = 桌面端；未公告返回 null） */
-  getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
-  /** v2：批准传输批（接收端应答「接受全部」） */
-  approveTransferRequest(batchId: string): Promise<void>
-  /** v2：拒绝传输批（接收端应答「拒绝全部」） */
-  rejectTransferRequest(batchId: string): Promise<void>
-  /** v2：设置批准超时（秒，10–600） */
-  setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
-  /** v2：取消接收中的上传会话（本地取消） */
-  cancelReceivingSession(sessionId: string): Promise<void>
-  /** v2.1：手机自主发起下载（宿主 client 栈 GET+Range 落 SAF/下载目录），返回 task_id */
-  download(req: FileTransferRequest): Promise<string>
-  /** v2.1：手机自主发起上传（宿主 client 栈 POST/PUT session 编排），返回 task_id */
-  upload(req: FileTransferRequest): Promise<string>
-  /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null）。
-   * Android 使用 SAF 目录树选择器并解析为真实路径；不支持的 provider
-   * （云盘/SD 卡等）或 iOS 会 reject，插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */
-  pickDirectory(): Promise<string | null>
-  /** 弹出系统文件选择对话框（上传本地文件用；用户取消返回 null）。
-   * Android 使用 SAF 文件选择器并解析为真实路径；不支持的 provider 或 iOS 会 reject，
-   * 插件应捕获后改用手动路径输入 */
-  pickFile(): Promise<string | null>
-  /** 弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用；
-   * 持久化授权由宿主完成，重启仍有效；用户取消返回 null；非 Android 平台 reject） */
-  pickSharedDirectory(): Promise<PickedSharedDirectory | null>
-  /** 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用；
-   * 仅允许该目录及其子目录；非 Android 平台 reject） */
-  listDir(path: string): Promise<SafEntry[]>
-  /** SAF 存储访问（共享目录遍历 + 中转复制；非 Android 平台 reject） */
-  readonly saf: SafAPI
-  /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下，非媒体集合的顶层
-   * 自定义目录 read_dir 会被 FUSE 过滤为空，需该权限才能经真实路径读取；
-   * 无运行时弹窗，宿主跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
-  requestAllFilesAccess(): Promise<boolean>
-}
-
 /** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
 export interface SystemAPI {
   /** 用系统查看器打开本地文件（传输完成「打开本地文件」；Android ACTION_VIEW） */
@@ -709,21 +505,6 @@ export interface SystemAPI {
 }
 
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================
-
-/** SAF 目录树条目（dev-shell safTree 用；docId 为子目录遍历 key） */
-export interface SafTreeEntry {
-  name: string
-  isDir: boolean
-  /** 文件大小（字节；目录/未知为 0） */
-  size: number
-  /** MIME 类型（可空串） */
-  mime: string
-  /** 子目录遍历 key（对应 safTree 下一级键；目录条目必填，文件条目忽略） */
-  docId: string
-}
-
-/** 免授权真实路径目录浏览条目种子（dev-shell listDir 用；uri/documentId 由 mock 宿主拼装） */
-export type SafEntrySeed = Omit<SafEntry, 'uri' | 'documentId'>
 
 /** OCR 识别结果种子（dev-shell ocr.recognize 用；缺省时 mock 宿主返回内置示例行） */
 export type OcrLinesSeed = OcrLine[]
@@ -739,10 +520,6 @@ export type OcrLinesSeed = OcrLine[]
 export interface PluginDevMock {
   /** 任务队列种子（auto-task：mobileApi 初始队列项，localStorage 无缓存时使用） */
   queueSeed?: MobileQueueTaskItem[]
-  /** 免授权真实路径目录浏览条目（file-transfer：fileService.listDir 的返回） */
-  listDirEntries?: SafEntrySeed[]
-  /** SAF 目录树（file-transfer：documentId → 条目，saf.listTree 遍历用） */
-  safTree?: Record<string, SafTreeEntry[]>
   /** OCR 识别结果种子（ocr：ocr.recognize 的 mock 返回；空数组演示空结果空态） */
   ocrLinesSeed?: OcrLinesSeed
 }
@@ -774,8 +551,6 @@ export interface PluginContext {
   readonly ui: UIRegistry
   readonly events: EventAPI
   readonly storage: StorageAPI
-  /** 文件服务 API（需 fileservice 权限） */
-  readonly fileService: FileServiceAPI
   /** OCR 引擎 API（需 ocr 权限；识别数据不经 WASM） */
   readonly ocr: OcrApi
   readonly i18n: I18nAPI

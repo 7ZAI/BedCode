@@ -114,15 +114,6 @@ pub enum MobileEvent {
         /// 触发动作：create / delete / trigger / missed / failed
         action: String,
     },
-
-    // === 文件服务同步事件（桌面 → 移动，内网文件传输插件规格阶段 2） ===
-    /// 桌面侧插件挂载点可用性变更
-    SyncFileServiceChanged {
-        plugin_id: String,
-        mount_path: String,
-        available: bool,
-        operations: Vec<bedcode_plugin_api_mobile::FileOperation>,
-    },
 }
 
 // ==================== Event Forwarding ====================
@@ -364,32 +355,6 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
                     "action": action,
                 }),
             );
-        }
-
-        // 文件服务同步事件：前端事件 + 插件消息总线双通道
-        // （插件阶段 4 经 bus topic `sync:file_service` 订阅对端挂载可用性）
-        MobileEvent::SyncFileServiceChanged {
-            plugin_id,
-            mount_path,
-            available,
-            operations,
-        } => {
-            tracing::info!(
-                "[EventForwarder] SyncFileServiceChanged: plugin_id={}, mount={}, available={}",
-                plugin_id,
-                mount_path,
-                available
-            );
-            let payload = serde_json::json!({
-                "plugin_id": plugin_id,
-                "mount_path": mount_path,
-                "available": available,
-                "operations": operations,
-            });
-            let _ = app.emit("ws_sync_file_service_changed", payload.clone());
-            crate::state::get_plugin_manager()
-                .message_bus()
-                .publish("sync:file_service", "host", payload);
         }
 
         // 其他事件不转发

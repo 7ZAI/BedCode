@@ -9,6 +9,10 @@ pub mod handler;
 pub mod mdns;
 pub mod model;
 pub mod ocr;
+pub mod peer_net;
+pub mod peer_receive;
+pub mod peer_remote;
+pub mod peer_transfer;
 pub mod plugin;
 pub mod router;
 pub mod session;
@@ -59,6 +63,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
         .plugin(crate::plugin::android_plugins::camera_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
+        .plugin(crate::plugin::android_plugins::multicast_lock_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -66,7 +71,6 @@ pub fn run() {
             let app_handle = app.handle();
 
             // 窗口焦点监听（后台/锁屏判定：批量传输请求系统通知用）
-            crate::file_service::notify::attach_focus_listener(app_handle);
 
             // 托管 SafIo 主 seam 实现（Android = KotlinSafIo 转发 SafTransferPlugin；
             // 其他平台 = 明确不可用）。经 state 注入命令层，测试可替换为 fake
@@ -78,6 +82,20 @@ pub fn run() {
             let app_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
+
+            // 对等网络节点身份：复用上方 app_data_dir 解析点（决策 D3 宿主只注入
+            // 目录），node_identity.json 与 auth 域 device_identity.json 并列存放；
+            // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
+            crate::peer_net::init_node_identity(&app_data_dir)?;
+
+            // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
+            // 与 mDNS 发现守护；启动前经 Kotlin MulticastLockPlugin 申请多播锁
+            // （Android 收包前提，D6）
+            app.manage(crate::peer_net::PeerNetState::default());
+            app.manage(crate::peer_transfer::PeerTransferState::default());
+            app.manage(crate::peer_receive::PeerReceiveState::default());
+            app.manage(crate::peer_remote::PeerRemoteState::default());
+            crate::peer_net::spawn_autostart(app_handle.clone());
 
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
@@ -140,16 +158,6 @@ pub fn run() {
                         tracing::error!("Failed to init WASM runtime: {}", e);
                         return;
                     }
-
-                    // 注入 AppHandle 到文件服务注册表：双通道推送（Tauri 事件 + 插件
-                    // 总线）的 Tauri 事件通道依赖它。WASM 插件经 host_filesrv_mount
-                    // 挂载时不注入（仅 TS 通道 plugin_filesrv_mount 注入），若此处
-                    // 缺失，filesrv:peer_changed 事件到不了插件前端，对端永远显示
-                    // "未共享"。必须在插件激活（scan_and_load）前注入一次（幂等）
-                    crate::state::get_file_service()
-                        .registry
-                        .set_app_handle(ah.clone())
-                        .await;
 
                     // 种子内置受信任插件白名单（幂等：已存在则跳过）
                     // - auto-task: 自动化任务插件
@@ -243,6 +251,37 @@ pub fn run() {
             commands::mdns::mdns_get_discovered_services,
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
+            // Peer Net
+            peer_net::start_peer_node,
+            peer_net::stop_peer_node,
+            peer_net::list_discovered_peers,
+            peer_net::dial_peer,
+            peer_net::disconnect_peer,
+            peer_net::respond_peer_consent,
+            peer_net::list_trusted_peers,
+            peer_net::revoke_trusted_peer,
+            peer_net::list_shared_directories,
+            peer_net::add_shared_directory_saf,
+            peer_net::remove_shared_directory,
+            // Peer Transfer (issue 09 发送侧)
+            peer_transfer::send_files_to_peer,
+            peer_transfer::cancel_peer_transfer,
+            peer_transfer::retry_peer_transfer,
+            peer_transfer::list_peer_transfers,
+            peer_transfer::clear_peer_transfer_history,
+            peer_transfer::peer_pick_files,
+            peer_transfer::peer_pick_folder,
+            // Peer Receive (issue 10 接收侧)
+            peer_receive::list_peer_receiving,
+            peer_receive::respond_peer_transfer,
+            peer_receive::cancel_peer_receiving,
+            peer_receive::get_peer_receive_settings,
+            peer_receive::set_peer_receive_policy,
+            peer_receive::clear_peer_receiving_history,
+            // Peer Remote (issue 11 远端浏览/拉取)
+            peer_remote::list_peer_shared_roots,
+            peer_remote::browse_peer_directory,
+            peer_remote::pull_peer_files,
             // Plugin Commands
             crate::plugin::commands::plugin_list_loaded,
             crate::plugin::commands::plugin_get_info,
@@ -270,32 +309,8 @@ pub fn run() {
             crate::plugin::commands::plugin_log,
             crate::plugin::commands::plugin_invoke,
             // File Service Commands（插件 TS 通道）
-            crate::plugin::commands::plugin_filesrv_mount,
-            crate::plugin::commands::plugin_filesrv_update_roots,
-            crate::plugin::commands::plugin_filesrv_dispose,
-            crate::plugin::commands::plugin_filesrv_respond_upload_request,
-            crate::plugin::commands::plugin_filesrv_get_peer,
             // v2 批量传输批准（接收策略 / 异步批量批准）
-            crate::plugin::commands::plugin_filesrv_approve_transfer,
-            crate::plugin::commands::plugin_filesrv_reject_transfer,
-            crate::plugin::commands::plugin_filesrv_set_approval_timeout,
-            crate::plugin::commands::plugin_filesrv_cancel_receiving,
-            crate::plugin::commands::plugin_filesrv_respond_transfer_request,
-            crate::plugin::commands::plugin_filesrv_respond_intent,
-            crate::plugin::commands::plugin_open_file,
-            crate::plugin::commands::plugin_open_file_location,
-            crate::plugin::commands::plugin_pick_directory,
-            crate::plugin::commands::plugin_pick_file,
-            crate::plugin::commands::open_all_files_settings,
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）
-            crate::plugin::commands::plugin_saf_list_tree,
-            crate::plugin::commands::plugin_saf_copy_start,
-            crate::plugin::commands::plugin_saf_copy_status,
-            crate::plugin::commands::plugin_saf_copy_cancel,
-            crate::plugin::commands::plugin_saf_cleanup_stale_copies,
-            crate::plugin::commands::plugin_saf_check_authorized,
-            crate::plugin::commands::plugin_pick_shared_directory,
-            crate::plugin::commands::plugin_saf_list_dir,
             // OCR 引擎命令（插件 com.bedcode.ocr 宿主侧，spec 见 .scratch/ocr-plugin/spec.md §4.2）
             crate::plugin::commands::plugin_ocr_recognize,
             crate::plugin::commands::plugin_ocr_engine_status,

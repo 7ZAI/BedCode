@@ -159,6 +159,39 @@ const categoryGroups: SettingsGroup[] = [
     ],
   },
   {
+    titleKey: 'settings.groups.peerNetwork',
+    items: [
+      {
+        key: 'peer-devices',
+        labelKey: 'peers.devices.title',
+        descKey: 'peers.devices.subtitleShort',
+        route: 'mobile-settings-peer-devices',
+        iconPath: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
+      },
+      {
+        key: 'trusted-peers',
+        labelKey: 'settings.peer.title',
+        descKey: 'settings.peer.subtitle',
+        route: 'mobile-settings-trusted-peers',
+        iconPath: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
+      },
+      {
+        key: 'peer-transfers',
+        labelKey: 'peers.transfers.title',
+        descKey: 'peers.transfers.subtitleShort',
+        route: 'mobile-settings-peer-transfers',
+        iconPath: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5',
+      },
+      {
+        key: 'peer-receive',
+        labelKey: 'settings.peerReceive.title',
+        descKey: 'settings.peerReceive.subtitle',
+        route: 'mobile-settings-peer-receive',
+        iconPath: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 21m0-18v13.5m0 0L7.5 16.5M12 19.5l4.5-3',
+      },
+    ],
+  },
+  {
     titleKey: 'settings.groups.system',
     items: [
       {

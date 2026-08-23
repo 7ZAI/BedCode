@@ -1,27 +1,22 @@
 /**
- * File Transfer 插件业务类型 (Mobile)
+ * File Transfer 插件业务类型 (Mobile) — host-peer 契约版
  *
- * 前端内部统一使用 camelCase 字段；WASM 快照字段为 snake_case（Task/PeerInfo），
- * enqueue/get-settings 参数为 camelCase，归一化统一在 composable 边界完成。
- * 组件只消费本文件定义的干净类型。
+ * 前端内部统一 camelCase；宿主批级 DTO 由插件 Rust 代理翻译为
+ * snake_case wire 形状，composable 边界归一化。组件只消费本文件的干净类型。
  */
 
-/** 任务方向（与 WASM TaskState::Direction serde lowercase 对应） */
+/** 任务方向（wire lowercase） */
 export type TaskDirection = 'download' | 'upload'
 
-/** 任务状态（与 WASM TaskState serde lowercase 对应） */
+/** 任务状态（宿主托管后仅存在传输中与终态） */
 export type TaskStateName =
-  | 'queued'
   | 'transferring'
-  | 'paused'
-  | 'resumable'
-  | 'waiting-approval'
   | 'completed'
   | 'failed'
   | 'rejected'
   | 'cancelled'
 
-/** 任务发起方（v2 队列分类依据；wire snake_case） */
+/** 任务发起方（队列分类依据；wire snake_case） */
 export type TaskInitiator = 'me' | 'peer'
 
 /** 对端设备信息 */
@@ -30,32 +25,23 @@ export interface PeerInfo {
   name: string
 }
 
-/** 文件指纹（续传有效性校验） */
-export interface Fingerprint {
-  size: number
-  mtime: number
-}
-
-/** 传输任务（camelCase 内部模型，由 WASM 快照映射而来） */
+/** 传输任务（一批 = 一条记录；由宿主 PeerTransferDto 翻译而来） */
 export interface Task {
+  /** 批 ID（宿主生成，cancel/retry 按其寻址） */
   id: string
   direction: TaskDirection
   peer: PeerInfo
+  /** 展示名：首文件名（多文件追加 +N） */
   remotePath: string
-  localPath: string
   size: number
+  /** 已传字节 */
   offset: number
-  uploadSessionId: string | null
-  fingerprint: Fingerprint | null
+  /** 瞬时速率 B/s（宿主滑动窗口） */
+  rateBps: number
   state: TaskStateName
   reason: string | null
-  /** v2：发起方（队列分类依据；wire snake_case，默认 me） */
   initiator: TaskInitiator
-  /** v2：所属批 ID（发送方上传任务） */
   batchId?: string | null
-  /** 下载落点标记（M2/M3）：system=公共下载目录 / private=私有目录回退 /
-   * saved-to=已保存到所选位置 / save-failed=保存失败保留私有副本 */
-  place: string | null
   createdAt: number
   updatedAt: number
 }
@@ -112,49 +98,13 @@ export interface Settings {
   approvalTimeoutSec: number
 }
 
-/** 接收策略取值常量（与 WASM POLICY_* 一致） */
+/** 接收策略取值常量（与宿主 policy mode 映射一致） */
 export const RECEIVING_POLICIES = ['ask', 'accept', 'reject'] as const
 export type ReceivingPolicy = (typeof RECEIVING_POLICIES)[number]
 
-/**
- * TransferProgress.state 的 serde 形状（tag="state" content="reason"）：
- * - running  → { state: "running" }
- * - completed→ { state: "completed" }
- * - failed   → { state: "failed", reason: "..." }
- * - cancelled→ { state: "cancelled" }
- */
-export type TransferProgressState =
-  | { state: 'running' }
-  | { state: 'completed' }
-  | { state: 'failed'; reason: string }
-  | { state: 'cancelled' }
-
-/** 宿主传输引擎进度事件载荷（taskId 为宿主 UUID，非插件任务 id） */
-export interface TransferProgress {
-  taskId: string
-  transferred: number
-  total: number
-  bytesPerSec: number
-  state: TransferProgressState
-}
-
-/** 对端在线状态（filesrv:peer_changed 事件载荷） */
-export interface PeerStatus {
-  peerId: string
-  online: boolean
-  /** 对端真实设备名（宿主公告携带，可为空串） */
-  deviceName?: string
-  /** 对端 IP（宿主公告携带，可为空串） */
-  ip?: string
-}
-
 /** 任务状态 → 展示文案 key（错误类附加 reason，见 TaskQueueSheet） */
 export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
-  queued: 'transfer.task.state.queued',
   transferring: 'transfer.task.state.transferring',
-  paused: 'transfer.task.state.paused',
-  resumable: 'transfer.task.state.resumable',
-  'waiting-approval': 'transfer.task.waitingApproval',
   completed: 'transfer.task.state.completed',
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
@@ -164,10 +114,6 @@ export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
 /** 任务状态 → 四色体系文本色 class（spec 9.3，定义在注入的 styles.css） */
 export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-color-active',
-  queued: 'ft-color-queued',
-  paused: 'ft-color-paused',
-  resumable: 'ft-color-paused',
-  'waiting-approval': 'ft-color-queued',
   completed: 'ft-color-completed',
   failed: 'ft-color-failed',
   rejected: 'ft-color-rejected',
@@ -177,10 +123,6 @@ export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
 /** 任务状态 → 进度条底色 class（与文本色分离，进度条需实色底） */
 export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-progress-active',
-  queued: 'ft-progress-queued',
-  paused: 'ft-progress-paused',
-  resumable: 'ft-progress-paused',
-  'waiting-approval': 'ft-progress-queued',
   completed: 'ft-progress-completed',
   failed: 'ft-progress-failed',
   rejected: 'ft-progress-rejected',
@@ -209,17 +151,19 @@ export interface PendingBatch {
   createdAt: number
 }
 
-/** 接收中任务（v2「正在接收」tab；仅可取消，无暂停/恢复） */
+/** 接收中任务（「正在接收」tab；一批 = 一条，仅可取消） */
 export interface ReceivingTask {
   sessionId: string
   batchId?: string | null
-  /** 远端相对路径（= 目标文件名） */
+  /** 展示名：首文件名（多文件追加 +N） */
   remotePath: string
   size: number
-  /** transferring / completed / failed / rejected / cancelled */
+  offset: number
+  /** running / completed / failed / rejected / cancelled */
   state: string
   reason?: string | null
   peerId: string
+  peerName: string
   createdAt: number
   updatedAt: number
 }

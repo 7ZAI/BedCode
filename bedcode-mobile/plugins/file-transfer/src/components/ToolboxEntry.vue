@@ -19,14 +19,8 @@ const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, par
 
 const tasks = useTasks(context)
 
-/** 活跃传输数（transferring + queued + resumable + paused） */
-const activeCount = computed(
-  () =>
-    tasks.summary.value.active +
-    tasks.summary.value.queued +
-    tasks.summary.value.resumable +
-    tasks.summary.value.paused,
-)
+/** 活跃传输数（传输中的批） */
+const activeCount = computed(() => tasks.tasks.value.filter((tk) => tk.state === 'transferring').length)
 
 const online = computed(() => tasks.connOnline.value)
 

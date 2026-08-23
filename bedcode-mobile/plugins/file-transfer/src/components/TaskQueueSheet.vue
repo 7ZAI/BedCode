@@ -1,14 +1,12 @@
 <script setup lang="ts">
 /**
- * TaskQueueSheet — 底部抽屉传输队列 (Mobile)
+ * TaskQueueSheet — 底部抽屉传输队列 (Mobile) — host-peer 契约版
  *
- * v2 四 tab（spec 14.4）：全部 | 正在发送 | 正在接收 | 历史。
- * 发送/接收以发起方区分：发送 = initiator 'me' 的任务；接收 = 宿主
- * receiving-changed 快照（只可取消，无暂停/恢复）；历史 = history-changed
- * 快照（只读 + 清空 + 打开本地文件）。
+ * 四 tab：全部 | 正在发送 | 正在接收 | 历史。
+ * 任务为批级记录（一批 = 一条）：传输中可取消，失败/拒绝可重试；
+ * 接收 tab 仅 running 批可取消；历史只读 + 清空。
  *
- * 状态按 spec 9.3 四色体系呈现；waiting-approval（等待对方同意）计入
- * 排队视觉（琥珀 → 灰，进度条半透明）。视觉语言复用宿主 group-card /
+ * 状态按 spec 9.3 四色体系呈现。视觉语言复用宿主 group-card /
  * group-row / status-badge / icon-chip，字号全部 clamp() 流式缩放。
  */
 import { computed, ref } from 'vue'
@@ -24,32 +22,23 @@ const props = defineProps<{
   tasks: Task[]
   receiving: ReceivingTask[]
   history: HistoryEntry[]
-  speedMap: Record<string, number>
   totalSpeed: number
-  resumableCount: number
   t: Translate
 }>()
 
 const emit = defineEmits<{
   (e: 'close'): void
-  (e: 'pause', id: string): void
-  (e: 'resume', id: string): void
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
-  (e: 'remove', id: string): void
-  (e: 'open', id: string): void
-  (e: 'resume-all'): void
   (e: 'cancel-receiving', sessionId: string): void
   (e: 'clear-history'): void
-  (e: 'open-history', entry: HistoryEntry): void
 }>()
 
 const t = props.t
 
-/** 当前 tab（v2 四分类） */
+/** 当前 tab */
 const tab = ref<'all' | 'sending' | 'receiving' | 'history'>('all')
 
-/** tab 定义（模板 v-for 数据源） */
 const TABS: { key: 'all' | 'sending' | 'receiving' | 'history'; labelKey: string }[] = [
   { key: 'all', labelKey: 'transfer.queue.all' },
   { key: 'sending', labelKey: 'transfer.queue.sending' },
@@ -57,64 +46,52 @@ const TABS: { key: 'all' | 'sending' | 'receiving' | 'history'; labelKey: string
   { key: 'history', labelKey: 'transfer.queue.history' },
 ]
 
-/** 当前 tab 序号：横滑步进切换用 */
 const tabIndex = computed(() => TABS.findIndex(item => item.key === tab.value))
 
-// 内容区左右滑切换 tab（弹层 Teleport 到 body，不与宿主页面横滑容器冲突；
-// 边界页同向滑动为死手势，仅内部切换语义）
+// 内容区左右滑切换 tab（弹层 Teleport 到 body，不与宿主页面横滑容器冲突）
 const { onTouchStart, onTouchMove, onTouchEnd } = useSwipeTabs((dir) => {
   const next = tabIndex.value + (dir === 'left' ? 1 : -1)
   if (next >= 0 && next < TABS.length) tab.value = TABS[next].key
 })
 
-/** 活跃传输数（仅真正在传输的任务；排队/暂停/失败不计入，避免数字与状态不符） */
+/** 活跃传输数（仅真正在传输的批） */
 const activeCount = computed(
   () => props.tasks.filter(tk => tk.state === 'transferring').length,
 )
 
-/** 发送 tab 任务（仅本端上传；本端发起的下载归「全部」tab，避免接收方向任务混入发送语义） */
+/** 发送 tab 任务（仅本端发出） */
 const sendingTasks = computed(() => props.tasks.filter(tk => tk.direction === 'upload'))
 
-/** 当前 tab 展示列表（全部 = 任务全表；发送 = 仅上传；接收/历史 = 各自快照） */
+/** 当前 tab 展示列表 */
 const visibleTasks = computed(() => (tab.value === 'sending' ? sendingTasks.value : props.tasks))
-
-/** 任务是否可暂停 */
-function canPause(task: Task): boolean {
-  return task.state === 'transferring'
-}
-
-/** 任务是否可恢复 */
-function canResume(task: Task): boolean {
-  return task.state === 'paused' || task.state === 'resumable'
-}
 
 /** 任务是否可取消（非终态） */
 function canCancel(task: Task): boolean {
   return !isTerminalState(task.state)
 }
 
-/** 任务是否可重新排队 */
+/** 任务是否可重试 */
 function canRetry(task: Task): boolean {
   return task.state === 'failed' || task.state === 'rejected'
 }
 
-/** 任务文件名（远端路径 basename） */
+/** 任务文件名（展示名 basename） */
 function taskName(task: Task): string {
   return task.remotePath.split('/').pop() || task.remotePath
 }
 
-/** 任务进度百分比（未知大小返回 0，不渲染数字） */
+/** 任务进度百分比（未知大小返回 0） */
 function taskPercent(task: Task): number {
   return progressPercent(task.offset, task.size) ?? 0
 }
 
-/** 任务 meta 文案：已传/总大小 + 速率（传输中） */
+/** 任务 meta 文案：已传/总大小 + 速率（传输中，速率取宿主滑动窗口值） */
 function taskMeta(task: Task): string {
   const size = task.size > 0
     ? `${formatBytes(task.offset, t)} / ${formatBytes(task.size, t)}`
     : formatBytes(task.offset, t)
   if (task.state === 'transferring') {
-    return `${size} · ${formatSpeed(props.speedMap[task.id] ?? 0, t)}`
+    return `${size} · ${formatSpeed(task.rateBps ?? 0, t)}`
   }
   return size
 }
@@ -143,33 +120,21 @@ function taskReason(task: Task): string | null {
   }
 }
 
-/** 操作按钮（暂停/恢复/取消/重新排队） */
+/** 操作按钮（取消/重试；生命周期由宿主托管，无暂停/恢复/删除） */
 function actionButtons(task: Task): Array<{ key: string; label: string; color: string; onClick: () => void }> {
   const btns: Array<{ key: string; label: string; color: string; onClick: () => void }> = []
-  if (canPause(task)) {
-    btns.push({ key: 'pause', label: t('transfer.task.pause'), color: 'ft-btn-neutral', onClick: () => emit('pause', task.id) })
-  }
-  if (canResume(task)) {
-    btns.push({ key: 'resume', label: t('transfer.task.resume'), color: 'ft-btn-accent', onClick: () => emit('resume', task.id) })
-  }
   if (canRetry(task)) {
     btns.push({ key: 'retry', label: t('transfer.task.retry'), color: 'ft-btn-accent', onClick: () => emit('retry', task.id) })
   }
   if (canCancel(task)) {
     btns.push({ key: 'cancel', label: t('transfer.task.cancel'), color: 'ft-btn-neutral', onClick: () => emit('cancel', task.id) })
   }
-  // 删除：任意状态可用（终态任务无生命周期动作，删除是唯一清理途径）
-  btns.push({ key: 'remove', label: t('transfer.task.remove'), color: 'ft-btn-neutral', onClick: () => emit('remove', task.id) })
-  // 打开本地文件：仅已完成任务（文件已落盘）
-  if (task.state === 'completed') {
-    btns.push({ key: 'open', label: t('transfer.task.open'), color: 'ft-btn-accent', onClick: () => emit('open', task.id) })
-  }
   return btns
 }
 
-/** 接收中任务状态文案（transferring → 「正在接收」；终态 → 结果文案） */
+/** 接收中任务状态文案（running → 「正在接收」；终态 → 结果文案） */
 function receivingStateKey(task: ReceivingTask): string {
-  if (task.state === 'transferring') return 'transfer.task.receiving'
+  if (task.state === 'running' || task.state === 'transferring') return 'transfer.task.receiving'
   switch (task.state) {
     case 'completed': return 'transfer.history.results.completed'
     case 'failed': return 'transfer.history.results.failed'
@@ -249,16 +214,9 @@ function directionChipClass(): string {
             <span v-if="activeCount > 0" class="status-badge badge-cyan">
               {{ t('transfer.queue.active', { count: activeCount }) }}
             </span>
-            <button
-              v-if="resumableCount > 0 && tab !== 'history'"
-              class="flex-shrink-0 ft-resume-all-btn"
-              @click="emit('resume-all')"
-            >
-              {{ t('transfer.task.resumeAll') }}
-            </button>
           </div>
 
-          <!-- v2 四 tab（全部 | 正在发送 | 正在接收 | 历史） -->
+          <!-- 四 tab（全部 | 正在发送 | 正在接收 | 历史） -->
           <div class="flex-shrink-0 flex gap-1 px-4 pb-1">
             <button
               v-for="item in TABS"
@@ -305,12 +263,12 @@ function directionChipClass(): string {
                   </span>
                 </div>
 
-                <!-- 进度条（仅非终态） -->
+                <!-- 进度条（仅传输中） -->
                 <div v-if="!isTerminalState(task.state)" class="px-4 pb-2.5">
                   <div class="ft-progress-track">
                     <div
                       class="h-full rounded-full transition-all duration-300"
-                      :class="[TASK_STATE_PROGRESS_CLASS[task.state], { 'ft-progress-inactive': task.state === 'paused' || task.state === 'resumable' }]"
+                      :class="TASK_STATE_PROGRESS_CLASS[task.state]"
                       :style="{ width: taskPercent(task) + '%' }"
                     ></div>
                   </div>
@@ -336,7 +294,7 @@ function directionChipClass(): string {
               </div>
             </template>
 
-            <!-- ============ 正在接收（只可取消，无暂停/恢复） ============ -->
+            <!-- ============ 正在接收（仅可取消） ============ -->
             <template v-else-if="tab === 'receiving'">
               <div v-if="receiving.length === 0" class="py-10 text-center">
                 <p class="ft-task-empty">{{ t('transfer.task.empty') }}</p>
@@ -351,25 +309,38 @@ function directionChipClass(): string {
                   </span>
                   <div class="flex-1 min-w-0">
                     <p class="ft-task-name text-[var(--mobile-text-primary)] truncate">{{ receivingName(task) }}</p>
-                    <p class="ft-task-meta mt-0.5 truncate">{{ formatBytes(task.size, t) }}</p>
+                    <p class="ft-task-meta mt-0.5 truncate">
+                      {{ task.size > 0 ? `${formatBytes(task.offset ?? 0, t)} / ${formatBytes(task.size, t)}` : formatBytes(task.size, t) }}
+                    </p>
                   </div>
                   <span
                     class="flex-shrink-0 ft-chip"
-                    :class="task.state === 'transferring' ? 'ft-color-active' : 'ft-color-completed'"
+                    :class="task.state === 'running' || task.state === 'transferring' ? 'ft-color-active' : 'ft-color-completed'"
                   >
                     {{ t(receivingStateKey(task)) }}
                   </span>
                 </div>
 
-                <!-- 传输中：进度条（接收任务无偏移数据，仅展示活动态） -->
-                <div v-if="task.state === 'transferring'" class="px-4 pb-2.5">
+                <!-- 传输中：进度条（有偏移数据用确定进度，否则呼吸动画） -->
+                <div
+                  v-if="task.state === 'running' || task.state === 'transferring'"
+                  class="px-4 pb-2.5"
+                >
                   <div class="ft-progress-track">
-                    <div class="h-full rounded-full ft-progress-active ft-progress-indeterminate"></div>
+                    <div
+                      v-if="(task.offset ?? 0) > 0 && task.size > 0"
+                      class="h-full rounded-full ft-progress-active transition-all duration-300"
+                      :style="{ width: (progressPercent(task.offset ?? 0, task.size) ?? 0) + '%' }"
+                    ></div>
+                    <div v-else class="h-full rounded-full ft-progress-active ft-progress-indeterminate"></div>
                   </div>
                 </div>
 
-                <!-- 接收任务只可取消（spec 14.3：暂停/恢复仅限发起方） -->
-                <div v-if="task.state === 'transferring'" class="px-4 pb-3 pt-1 flex gap-2">
+                <!-- 接收批仅可取消 -->
+                <div
+                  v-if="task.state === 'running' || task.state === 'transferring'"
+                  class="px-4 pb-3 pt-1 flex gap-2"
+                >
                   <button
                     class="flex-1 ft-task-action-btn ft-btn-neutral"
                     @click="emit('cancel-receiving', task.sessionId)"
@@ -380,7 +351,7 @@ function directionChipClass(): string {
               </div>
             </template>
 
-            <!-- ============ 历史（只读 + 清空 + 打开） ============ -->
+            <!-- ============ 历史（只读 + 清空） ============ -->
             <template v-else>
               <div v-if="history.length === 0" class="py-10 text-center">
                 <p class="ft-task-empty">{{ t('transfer.history.empty') }}</p>
@@ -407,16 +378,6 @@ function directionChipClass(): string {
                   <span class="flex-shrink-0 ft-chip" :class="entry.state === 'completed' ? 'ft-color-completed' : entry.state === 'cancelled' ? 'ft-color-cancelled' : 'ft-color-failed'">
                     {{ t(historyStateKey(entry.state)) }}
                   </span>
-                </div>
-
-                <!-- 完成且本地有文件：打开所在文件夹（FileProvider 暴露父目录） -->
-                <div v-if="entry.state === 'completed' && entry.localPath" class="px-4 pb-3 pt-1 flex gap-2">
-                  <button
-                    class="flex-1 ft-task-action-btn ft-btn-accent"
-                    @click="emit('open-history', entry)"
-                  >
-                    {{ t('transfer.history.openFolder') }}
-                  </button>
                 </div>
               </div>
             </template>
@@ -461,21 +422,6 @@ function directionChipClass(): string {
   color: var(--mobile-accent);
 }
 
-/* 全部恢复按钮 */
-.ft-resume-all-btn {
-  padding: 0.25rem 0.75rem;
-  border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  font-weight: 500;
-  background: var(--mobile-accent-muted);
-  color: var(--mobile-accent);
-  transition: opacity 0.15s ease;
-}
-
-.ft-resume-all-btn:active {
-  opacity: 0.8;
-}
-
 /* 空态文字 */
 .ft-task-empty {
   font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
@@ -495,12 +441,7 @@ function directionChipClass(): string {
   font-variant-numeric: tabular-nums;
 }
 
-/* 暂停/可恢复任务的进度条：半透明降低「正在活动」的错觉，状态色仍可辨 */
-.ft-progress-inactive {
-  opacity: 0.45;
-}
-
-/* 接收任务不确定进度（宿主无偏移推送）：accent 底 + 呼吸动画 */
+/* 接收任务不确定进度（无偏移数据时）：accent 底 + 呼吸动画 */
 .ft-progress-indeterminate {
   animation: ft-progress-breathe 1.6s ease-in-out infinite;
 }

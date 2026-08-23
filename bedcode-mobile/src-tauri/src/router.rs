@@ -14,4 +14,4 @@ pub use registry::{message_type_key, ClientRouteHandler, ClientRouteRegistry};
 pub use router::{ClientBusinessRouter, ClientBusinessRouterBuilder};
 
 // Re-export handlers from sibling module
-pub use crate::handler::{AuthHandler, FileServiceHandler, SyncHandler, SystemHandler, TerminalHandler};
+pub use crate::handler::{AuthHandler, SyncHandler, SystemHandler, TerminalHandler};

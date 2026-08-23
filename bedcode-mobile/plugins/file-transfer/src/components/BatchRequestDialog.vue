@@ -10,7 +10,7 @@
  * - 批被 resolved（用户从系统通知应答 / 宿主超时）→ 自动关闭当前弹窗并提示下一批
  * - 后台/锁屏场景仍走系统通知（Kotlin TaskNotificationManager），本组件仅前台应答
  */
-import { computed, inject, onUnmounted, ref, watch } from 'vue'
+import { inject, onUnmounted, ref, watch } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { PendingBatch } from '../types'
 import { formatBytes } from '../utils/format'

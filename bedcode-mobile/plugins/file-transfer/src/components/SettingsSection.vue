@@ -1,15 +1,11 @@
 <script setup lang="ts">
 /**
- * SettingsSection — 文件传输设置区 (Mobile)
+ * SettingsSection — 文件传输设置区 (Mobile) — host-peer 契约版
  *
- * 共享目录（Shared Directory）：条目以 SAF URI（content://tree/...）存储，
- * 经系统目录树选择器添加（fileService.pickSharedDirectory，持久化授权重启
- * 仍有效）；免授权特殊条目「app 私有下载目录」由 WASM 派生注入（kind=
- * private_downloads，不可移除）。授权被回收/目录被删 → 条目标记失效，
- * 展示「重新授权」入口（story #10）。旧真实路径条目与手动输入已废除
- * （M1 起上传源严格限于共享目录）。
- * 下载目录只读展示（未显式配置时经 get-settings 解析宿主默认下载目录 AppDownloadsDir）。
- * 并发数 1–8 步进；底部常驻明文传输安全告知（spec §10 transfer.settings.plainWarning）。
+ * 共享目录：条目由宿主持久化（SAF 树授权），添加 = 弹系统目录树选择器；
+ * 免授权特殊条目「app 私有下载目录」由宿主派生注入（builtin，不可移除）。
+ * 下载目录只读展示（固定 MediaStore/Downloads）；接收策略 ask/accept/reject
+ * 经宿主 set_receive_policy 写入；底部常驻明文传输安全告知。
  *
  * 同时注册为宿主 SettingsSection（registerSettingsSection），并作为插件内设置页复用。
  *
@@ -20,9 +16,7 @@
 import { ref, inject } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
-import type { SharedRoot } from '../types'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
-import { CONCURRENCY_MAX } from '../composables/useSettings'
 import type { ReceivingPolicy } from '../types'
 
 type SettingsApi = ReturnType<typeof useSettings>
@@ -46,30 +40,12 @@ async function handlePickRoot(): Promise<void> {
   picking.value = true
   try {
     const result = await props.settingsApi.addRoot()
-    if (result === 'duplicate') {
-      context.dialogs.showToast(t('transfer.settings.rootDuplicate'), 'warning')
-    } else if (result === 'failed') {
+    if (result === 'failed') {
       context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
     } else if (result === 'unsupported') {
       context.dialogs.showToast(t('transfer.settings.pickUnsupported'), 'error')
     }
-    // ok / cancelled（用户取消）静默（目录已入列 / 无需打扰）
-  } catch {
-    context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
-  } finally {
-    picking.value = false
-  }
-}
-
-/** 重新授权失效条目（重新选择目录树替换） */
-async function handleReauthorize(root: SharedRoot): Promise<void> {
-  if (!context || picking.value) return
-  picking.value = true
-  try {
-    const ok = await props.settingsApi.reauthorizeRoot(root)
-    if (ok) {
-      context.dialogs.showToast(t('transfer.settings.reauthorized'), 'success')
-    }
+    // ok / cancelled（用户取消）静默
   } catch {
     context.dialogs.showToast(t('transfer.settings.pickFailed'), 'error')
   } finally {
@@ -82,17 +58,7 @@ async function handleRemoveRoot(id: string): Promise<void> {
   await props.settingsApi.removeRoot(id)
 }
 
-function decConcurrency(): void {
-  const cur = props.settingsApi.settings.value.concurrency
-  if (cur > 1) void props.settingsApi.setConcurrency(cur - 1)
-}
-
-function incConcurrency(): void {
-  const cur = props.settingsApi.settings.value.concurrency
-  if (cur < CONCURRENCY_MAX) void props.settingsApi.setConcurrency(cur + 1)
-}
-
-// ==================== v2 接收策略 ====================
+// ==================== 接收策略 ====================
 
 /** 接收策略选项（自绘 segmented，禁原生 select） */
 const POLICY_OPTIONS: { value: ReceivingPolicy; labelKey: string }[] = [
@@ -109,16 +75,13 @@ async function handleSetPolicy(policy: ReceivingPolicy): Promise<void> {
   }
 }
 
-/** 同意超时输入（秒，10–600；仅 ask 策略显示）。原生数字输入外观完全自绘
- *（输入框 + 步进按钮），不呈现系统控件外观 */
+/** 同意超时输入（秒，10–600；仅 ask 策略显示）。原生数字输入外观完全自绘 */
 const timeoutInput = ref('')
 
-/** 输入框聚焦/失焦时与设置值同步 */
 function syncTimeoutInput(): void {
   timeoutInput.value = String(props.settingsApi.settings.value.approvalTimeoutSec ?? 60)
 }
 
-/** 提交超时（失焦/回车时校验 10–600，越界回弹显示值） */
 async function commitTimeout(): Promise<void> {
   const n = Number(timeoutInput.value)
   if (Number.isFinite(n)) {
@@ -168,7 +131,6 @@ async function stepTimeout(delta: number): Promise<void> {
           v-for="root in settingsApi?.settings.value.roots ?? []"
           :key="root.id"
           class="settings-row"
-          :class="{ 'ft-row-invalid': !root.authorized }"
         >
           <div class="flex items-center gap-2 flex-1 min-w-0">
             <svg class="w-4 h-4 flex-shrink-0 text-[var(--mobile-accent)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -180,23 +142,11 @@ async function stepTimeout(delta: number): Promise<void> {
                 <span v-if="root.kind === KIND_PRIVATE_DOWNLOADS" class="ft-free-badge flex-shrink-0">
                   {{ t('transfer.settings.freeBadge') }}
                 </span>
-                <span v-else-if="!root.authorized" class="ft-invalid-badge flex-shrink-0">
-                  {{ t('transfer.settings.rootInvalid') }}
-                </span>
               </div>
-              <!-- SAF 条目展示 URI（特殊条目展示真实路径） -->
               <p class="ft-root-uri truncate" :title="root.id">{{ root.id }}</p>
             </div>
           </div>
           <div class="flex items-center gap-1.5 flex-shrink-0">
-            <button
-              v-if="root.kind !== KIND_PRIVATE_DOWNLOADS && !root.authorized"
-              class="ft-reauth-btn"
-              :disabled="picking"
-              @click="handleReauthorize(root)"
-            >
-              {{ t('transfer.settings.reauthorize') }}
-            </button>
             <button
               v-if="root.kind !== KIND_PRIVATE_DOWNLOADS"
               class="flex-shrink-0 ft-settings-remove-btn"
@@ -228,37 +178,7 @@ async function stepTimeout(delta: number): Promise<void> {
       <p class="settings-desc ft-settings-hint">{{ t('transfer.settings.downloadDirHint') }}</p>
     </section>
 
-    <!-- ==================== 并发数 ==================== -->
-    <section class="space-y-2">
-      <h2 class="settings-section-title">{{ t('transfer.settings.concurrency') }}</h2>
-      <div class="settings-group">
-        <div class="settings-row">
-          <div class="min-w-0">
-            <div class="settings-label">{{ t('transfer.settings.concurrency') }}</div>
-            <div class="settings-desc">{{ t('transfer.settings.concurrencyHint') }}</div>
-          </div>
-          <div class="flex items-center gap-2 flex-shrink-0">
-            <button
-              class="ft-step-btn"
-              @click="decConcurrency()"
-            >
-              −
-            </button>
-            <span class="ft-step-value">
-              {{ settingsApi?.settings.value.concurrency ?? 3 }}
-            </span>
-            <button
-              class="ft-step-btn"
-              @click="incConcurrency()"
-            >
-              +
-            </button>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- ==================== 接收策略（v2） ==================== -->
+    <!-- ==================== 接收策略 ==================== -->
     <section class="space-y-2">
       <h2 class="settings-section-title">{{ t('transfer.settings.receivingPolicy') }}</h2>
       <div class="settings-group">
@@ -346,38 +266,6 @@ async function stepTimeout(delta: number): Promise<void> {
   background: var(--mobile-bg-tertiary);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-secondary);
-}
-
-/* 失效条目徽标（授权被回收/目录被删） */
-.ft-invalid-badge {
-  padding: 0.125rem 0.5rem;
-  border-radius: 9999px;
-  font-size: clamp(0.625rem, 0.6875rem + (100vw - 360px) / 800, 0.75rem);
-  font-weight: 500;
-  color: var(--mobile-warning);
-  border: 1px solid var(--mobile-warning-muted);
-  background: color-mix(in srgb, var(--mobile-warning) 8%, transparent);
-}
-
-/* 重新授权按钮：警示色描边，44px 触控目标 */
-.ft-reauth-btn {
-  min-height: 2.25rem;
-  padding: 0 0.625rem;
-  border-radius: 0.5rem;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  font-weight: 500;
-  color: var(--mobile-warning);
-  border: 1px solid var(--mobile-warning-muted);
-  background: transparent;
-  transition: opacity 0.15s ease;
-}
-
-.ft-reauth-btn:active {
-  opacity: 0.8;
-}
-
-.ft-reauth-btn:disabled {
-  opacity: 0.5;
 }
 
 /* 删除按钮 */

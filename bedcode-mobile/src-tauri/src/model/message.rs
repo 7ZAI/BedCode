@@ -11,7 +11,6 @@ use crate::enums::control::{
     SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction,
     TerminalPayload,
 };
-use crate::enums::file_service::FileServicePayload;
 use crate::enums::special_key::KeyCombo;
 use crate::enums::sumary::SessionSummary;
 use crate::enums::SyncPayload;
@@ -220,24 +219,6 @@ pub enum Message {
         /// 认证令牌
         #[serde(default = "default_token")]
         token: String,
-    },
-
-    /// 文件服务控制面消息 (移动端 → 桌面端，内网文件传输插件规格阶段 2)
-    ///
-    /// 承载 Announce（端口/token/挂载公告）与 Withdraw（服务撤回）。
-    /// 与桌面端 `server/ws/message.rs` 的同名变体双写互引：两端
-    /// 新增/变更字段必须同步
-    #[serde(rename = "file_service")]
-    FileService {
-        #[serde(default = "generate_message_id")]
-        message_id: String,
-        #[serde(default)]
-        expect_response: bool,
-        timestamp: i64,
-        /// 认证令牌
-        #[serde(default = "default_token")]
-        token: String,
-        payload: FileServicePayload,
     },
 }
 
@@ -584,17 +565,6 @@ impl Message {
         }
     }
 
-    /// 创建文件服务控制面消息（Announce / Withdraw，见 [`FileServicePayload`]）
-    pub fn file_service(payload: FileServicePayload) -> Self {
-        Message::FileService {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            token: String::new(),
-            payload,
-        }
-    }
-
     /// 获取消息ID
     pub fn message_id(&self) -> Option<&str> {
         match self {
@@ -608,7 +578,6 @@ impl Message {
             Message::SessionEvent { .. } => None,
             Message::Ack { .. } => None,
             Message::SyncData { .. } => None,
-            Message::FileService { message_id, .. } => Some(message_id),
         }
     }
 
@@ -625,7 +594,6 @@ impl Message {
             Message::SessionEvent { .. } => Some("session_event"),
             Message::Ack { .. } => Some("ack"),
             Message::SyncData { .. } => Some("sync_data"),
-            Message::FileService { .. } => Some("file_service"),
         }
     }
 
@@ -642,7 +610,6 @@ impl Message {
             Message::SessionEvent { .. } => false,
             Message::Ack { .. } => false,
             Message::SyncData { .. } => false,
-            Message::FileService { expect_response, .. } => *expect_response,
         }
     }
 
@@ -659,7 +626,6 @@ impl Message {
             Message::SessionEvent { token, .. } => token,
             Message::Ack { token, .. } => token,
             Message::SyncData { token, .. } => token,
-            Message::FileService { token, .. } => token,
         }
     }
 
@@ -867,19 +833,6 @@ impl Message {
                 timestamp,
                 payload,
                 token: token.to_string(),
-            },
-            Message::FileService {
-                message_id,
-                expect_response,
-                timestamp,
-                payload,
-                ..
-            } => Message::FileService {
-                message_id,
-                expect_response,
-                timestamp,
-                token: token.to_string(),
-                payload,
             },
         }
     }
@@ -1576,37 +1529,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_file_service_constructor() {
-        let payload = FileServicePayload::Announce {
-            port: 41234,
-            token: "file-tok".to_string(),
-            device_name: "phone".to_string(),
-            mounts: vec![],
-        };
-        let msg = Message::file_service(payload.clone());
-        assert_eq!(msg.message_type(), Some("file_service"));
-        assert!(msg.message_id().is_some_and(|id| !id.is_empty()));
-        assert!(!msg.expect_response());
-        match msg {
-            Message::FileService { payload: got, .. } => match got {
-                FileServicePayload::Announce {
-                    port,
-                    token,
-                    device_name,
-                    mounts,
-                } => {
-                    assert_eq!(port, 41234);
-                    assert_eq!(token, "file-tok");
-                    assert_eq!(device_name, "phone");
-                    assert!(mounts.is_empty());
-                }
-                _ => panic!(),
-            },
-            _ => panic!(),
-        }
-    }
-
     // ==================== 访问器测试 ====================
 
     #[test]
@@ -1675,10 +1597,6 @@ mod tests {
                     session_name: "n".into(),
                 }),
                 Some("sync_data"),
-            ),
-            (
-                Message::file_service(FileServicePayload::Withdraw {}),
-                Some("file_service"),
             ),
         ];
         for (msg, expected) in cases {
@@ -1938,27 +1856,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_json_file_service_exact() {
-        // FileServicePayload 为 action/data 相邻标签格式
-        let msg = Message::FileService {
-            message_id: "m-003".to_string(),
-            expect_response: false,
-            timestamp: FIXED_TS,
-            token: "".to_string(),
-            payload: FileServicePayload::Announce {
-                port: 41234,
-                token: "file-tok".to_string(),
-                device_name: "phone".to_string(),
-                mounts: vec![],
-            },
-        };
-        assert_eq!(
-            msg.to_json().unwrap(),
-            "{\"type\":\"file_service\",\"payload\":{\"message_id\":\"m-003\",\"expect_response\":false,\"timestamp\":1700000000000,\"token\":\"\",\"payload\":{\"action\":\"announce\",\"data\":{\"port\":41234,\"token\":\"file-tok\",\"device_name\":\"phone\",\"mounts\":[]}}}}"
-        );
-    }
-
-    #[test]
     fn test_from_json_applies_defaults() {
         // 旧端/简化端可省略 message_id/expect_response/token，反序列化必须兜底
         let json = r#"{"type":"terminal","payload":{"timestamp":1700000000000,"session_id":"s1","payload":{"action":{"type":"input","data":"ls"}}}}"#;
@@ -2056,13 +1953,6 @@ mod tests {
                 },
                 token: "".into(),
             },
-            Message::FileService {
-                message_id: "m11".into(),
-                expect_response: false,
-                timestamp: FIXED_TS,
-                token: "".into(),
-                payload: FileServicePayload::Withdraw {},
-            },
         ];
         for v in variants {
             let value = serde_json::to_value(&v).unwrap();
@@ -2103,7 +1993,6 @@ mod tests {
                 task_reason: None,
                 task_questions: None,
             }),
-            Message::file_service(FileServicePayload::Query {}),
         ];
         for v in variants {
             let json = v.to_json().unwrap();

@@ -26,56 +26,40 @@
   "contributes": {
     "commands": [
       {
-        "id": "file-transfer.list-tasks",
-        "title": "List Tasks"
+        "id": "file-transfer.list-peers",
+        "title": "List Peers"
       },
       {
         "id": "file-transfer.query-peer",
         "title": "Query Peer Status"
       },
       {
-        "id": "file-transfer.list-peers",
-        "title": "List Peers"
-      },
-      {
         "id": "file-transfer.set-active-peer",
         "title": "Set Active Peer"
       },
       {
-        "id": "file-transfer.list-remote",
-        "title": "List Remote Files"
+        "id": "file-transfer.pick-files",
+        "title": "file-transfer.pick-files"
       },
       {
         "id": "file-transfer.enqueue",
         "title": "Enqueue Transfer"
       },
       {
-        "id": "file-transfer.pause",
-        "title": "Pause Transfer"
-      },
-      {
-        "id": "file-transfer.resume",
-        "title": "Resume Transfer"
+        "id": "file-transfer.list-tasks",
+        "title": "List Tasks"
       },
       {
         "id": "file-transfer.cancel",
         "title": "Cancel Transfer"
       },
       {
-        "id": "file-transfer.remove-task",
-        "title": "Remove Task"
-      },
-      {
-        "id": "file-transfer.resume-all",
-        "title": "Resume All Transfers"
-      },
-      {
         "id": "file-transfer.retry",
         "title": "Retry Transfer"
       },
       {
-        "id": "file-transfer.set-concurrency",
-        "title": "Set Concurrency"
+        "id": "file-transfer.remove-task",
+        "title": "Remove Task"
       },
       {
         "id": "file-transfer.list-batches",
@@ -106,6 +90,14 @@
         "title": "Clear Transfer History"
       },
       {
+        "id": "file-transfer.list-remote",
+        "title": "List Remote Files"
+      },
+      {
+        "id": "file-transfer.pull-files",
+        "title": "file-transfer.pull-files"
+      },
+      {
         "id": "file-transfer.get-settings",
         "title": "Get Settings"
       },
@@ -114,16 +106,16 @@
         "title": "Set Settings"
       },
       {
-        "id": "file-transfer.pick-download-dir",
-        "title": "Pick Download Directory"
-      },
-      {
         "id": "file-transfer.mount-local",
         "title": "Mount Local Directory"
       },
       {
         "id": "file-transfer.update-roots",
         "title": "Update Mount Roots"
+      },
+      {
+        "id": "file-transfer.pick-download-dir",
+        "title": "Pick Download Directory"
       }
     ],
     "views": [

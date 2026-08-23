@@ -24,8 +24,6 @@ use exports::bedcode::plugin::events::Guest as EventsGuest;
 use exports::bedcode::plugin::lifecycle::Guest as LifecycleGuest;
 use exports::bedcode::plugin::manifest::Guest as ManifestGuest;
 use exports::bedcode::plugin::terminal_hooks::Guest as TerminalHooksGuest;
-use exports::bedcode::plugin::transfer_request_hook::Guest as TransferRequestHookGuest;
-use exports::bedcode::plugin::upload_hook::Guest as UploadHookGuest;
 
 struct ComponentTestPlugin;
 
@@ -133,7 +131,7 @@ impl EventsGuest for ComponentTestPlugin {
     }
 }
 
-// ==================== terminal-hooks / upload / transfer ====================
+// ==================== terminal-hooks ====================
 
 impl TerminalHooksGuest for ComponentTestPlugin {
     fn on_terminal_input(_session_id: String, _text: String) -> Option<String> {
@@ -142,21 +140,6 @@ impl TerminalHooksGuest for ComponentTestPlugin {
 
     fn on_terminal_output(_session_id: String, _data: String) -> Option<String> {
         None
-    }
-}
-
-impl UploadHookGuest for ComponentTestPlugin {
-    fn on_upload_request(_meta_json: String) -> String {
-        // 固定拒绝决定 JSON：宿主 fail-closed 透传断言用（上层 manager 06 起解析）
-        serde_json::json!({"approved": false, "reason": "component-test default deny"})
-            .to_string()
-    }
-}
-
-impl TransferRequestHookGuest for ComponentTestPlugin {
-    fn on_transfer_request(_meta_json: String) -> String {
-        serde_json::json!({"approved": false, "reason": "component-test default deny"})
-            .to_string()
     }
 }
 

@@ -1,7 +1,7 @@
 // 移动端插件契约（Plugin Contract）——单一事实来源
 //
 // 与桌面端 WIT 的差异维护在 docs/implementation-plans/mobile-wasmtime-component-migration.md §3.2：
-// - import 接口 11 组（无 session/api-call/timer/process/app/plugin-database）
+// - import 接口 9 组（无 session/api-call/timer/process/app/plugin-database/file-service/transfer）
 // - host-fs 含移动端特有 SAF/下载目录能力（write-media-downloads / save-to-document）
 // - abi 仅 version（无 form：项目未发布、一次性切割，不存在 core 形态共存）
 //
@@ -70,31 +70,72 @@ interface host-bus {
     unsubscribe: func(topic: string) -> result<_, string>;
 }
 
-/// 文件服务注册表（与桌面 host-file-service 同名函数集，全量一致）
-interface host-file-service {
-    mount: func(options-json: string) -> result<string, string>;
-    unmount: func(mount-path: string) -> result<_, string>;
-    update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
-    get-peer: func(peer-id: string) -> result<option<string>, string>;
-    query-peer: func(peer-id: string) -> result<_, string>;
-    approve-transfer: func(batch-id: string) -> result<_, string>;
-    reject-transfer: func(batch-id: string) -> result<_, string>;
-    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
-    cancel-receiving: func(session-id: string) -> result<_, string>;
-    /// v2.1（服务器归零）：手机自主发起 HTTP 下载（GET+Range 落 SAF/下载目录）。
-    /// request-json 为 FileTransferRequest（camelCase），返回 task_id（宿主后台执行，
-    /// 进度经 `plugin:transfer:progress` / `transfer:{task_id}` 通道回报）
-    download: func(request-json: string) -> result<string, string>;
-    /// v2.1（服务器归零）：手机自主发起 HTTP 上传（POST/PUT session 编排）。
-    /// request-json 为 FileTransferRequest（camelCase），返回 task_id
-    upload: func(request-json: string) -> result<string, string>;
-    /// v2.1：intent 应答（push 场景用户审批；decision = "accepted" | "rejected"）
-    respond-intent: func(intent-id: string, decision: string) -> result<_, string>;
-}
-
-interface host-transfer {
-    start: func(request-json: string) -> result<string, string>;
-    cancel: func(task-id: string) -> result<_, string>;
+/// 对等网络基础能力（与桌面端 host-peer 同名同函数集；宿主只提供能力原语，
+/// file-transfer 插件是首个上层消费者）
+///
+/// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
+/// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
+/// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
+/// - `peer:devices`    发现缓存全量列表变化
+/// - `peer:connection` 节点连上/断开
+/// - `peer:consent`    首次连接确认请求
+/// - `peer:transfer`   发送任务列表变化（含进度与终态）
+/// - `peer:receive`    接收侧变化（待应答批/进行中接收）
+interface host-peer {
+    /// 发现缓存全量列表 → DiscoveredPeerDto JSON 数组
+    list-devices: func() -> result<string, string>;
+    /// 拨号连接指定节点（等待对端确认）→ DialPeerResultDto JSON
+    dial-peer: func(node-id: string) -> result<string, string>;
+    /// 断开与指定节点的会话（返回是否存在该会话）
+    disconnect-peer: func(node-id: string) -> result<bool, string>;
+    /// 首次连接确认应答（返回是否命中了待确认项）
+    respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
+    /// 可信对端列表 → TrustedPeerDto JSON 数组
+    list-trusted: func() -> result<string, string>;
+    /// 撤销对指定节点的信任（返回是否删除了条目）
+    revoke-trusted: func(node-id: string) -> result<bool, string>;
+    /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
+    /// 扇出 = 对多个对端各调一次，各批相互独立）→ PeerTransferDto JSON
+    send-files: func(node-id: string, paths-json: string) -> result<string, string>;
+    /// 发送任务列表（含历史）→ PeerTransferDto JSON 数组
+    list-transfers: func() -> result<string, string>;
+    /// 取消发送批
+    cancel-transfer: func(batch-id: string) -> result<bool, string>;
+    /// 重试失败/被拒/取消的发送批（断点续传）→ PeerTransferDto JSON
+    retry-transfer: func(batch-id: string) -> result<string, string>;
+    /// 清空发送+接收历史（返回清除条数）
+    clear-transfer-history: func() -> result<u32, string>;
+    /// 待应答/进行中的接收任务 → PeerTransferDto JSON 数组
+    list-receiving: func() -> result<string, string>;
+    /// 接收批应答：accept=false 或超时视为拒绝
+    respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
+    /// 取消进行中的接收批（pending 视为拒绝）
+    cancel-receiving: func(batch-id: string) -> result<bool, string>;
+    /// 清空接收终态记录（返回清除条数）
+    clear-receiving-history: func() -> result<u32, string>;
+    /// 接收设置 → { policyMode, timeoutSecs, downloadDir } JSON
+    get-receive-settings: func() -> result<string, string>;
+    /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
+    set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    /// 本机暴露的共享目录 → SharedDirDto JSON 数组
+    list-shared-directories: func() -> result<string, string>;
+    /// 移除共享目录条目
+    remove-shared-directory: func(id: string) -> result<bool, string>;
+    /// 新增共享目录：request = { name?: string, path?: string }
+    /// （桌面端用 path；移动端忽略 path 弹 SAF 目录树选择器）→ SharedDirDto JSON
+    add-shared-directory: func(request-json: string) -> result<string, string>;
+    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组
+    list-shared-roots: func(node-id: string) -> result<string, string>;
+    /// 目录下钻 → RemoteBrowseDto JSON
+    browse-directory: func(node-id: string, dir-id: string, rel-path: string) -> result<string, string>;
+    /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
+    pull-files: func(node-id: string, dir-id: string, files-json: string) -> result<u32, string>;
+    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
+    pick-files: func() -> result<string, string>;
+    /// 系统文件夹选择器（共享目录源）→ 绝对路径；用户取消返回空串
+    pick-folder: func() -> result<string, string>;
+    /// 设置接收落点目录（移动端固定 MediaStore.Downloads，不支持自定义：返回错误）
+    set-download-dir: func(path: string) -> result<_, string>;
 }
 
 // ==================== 插件导出 ====================
@@ -124,14 +165,6 @@ interface terminal-hooks {
     on-terminal-output: func(session-id: string, data: string) -> option<string>;
 }
 
-interface upload-hook {
-    on-upload-request: func(meta-json: string) -> string;
-}
-
-interface transfer-request-hook {
-    on-transfer-request: func(meta-json: string) -> string;
-}
-
 interface manifest {
     get: func() -> string;
 }
@@ -152,15 +185,12 @@ world plugin {
     import host-config;
     import host-log;
     import host-bus;
-    import host-file-service;
-    import host-transfer;
+    import host-peer;
 
     export command;
     export lifecycle;
     export events;
     export terminal-hooks;
-    export upload-hook;
-    export transfer-request-hook;
     export manifest;
     export abi;
 }

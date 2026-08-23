@@ -49,8 +49,7 @@ impl bedcode::plugin::host_log::Host for WasmPluginState {
     }
 
     fn mark_plugin_error(&mut self, error: String) {
-        // 与 host_mark_plugin_error（host_impl/filesrv.rs）同语义：状态上报回调
-        super::host_impl::mark_plugin_error(self, &error);
+        (self.host_ctx.status_reporter)(&self.plugin_id, &error);
     }
 }
 
@@ -161,63 +160,110 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_file_service::Host for WasmPluginState {
-    fn mount(&mut self, options_json: String) -> Result<String, String> {
-        super::host_impl::filesrv_mount(self, &options_json)
+impl bedcode::plugin::host_peer::Host for WasmPluginState {
+    fn list_devices(&mut self) -> Result<String, String> {
+        super::host_impl::peer_list_devices(self)
     }
 
-    fn unmount(&mut self, mount_path: String) -> Result<(), String> {
-        super::host_impl::filesrv_unmount(self, &mount_path)
+    fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
+        super::host_impl::peer_dial(self, &node_id)
     }
 
-    fn update_roots(&mut self, mount_path: String, roots_json: String) -> Result<(), String> {
-        super::host_impl::filesrv_update_roots(self, &mount_path, &roots_json)
+    fn disconnect_peer(&mut self, node_id: String) -> Result<bool, String> {
+        super::host_impl::peer_disconnect(self, &node_id)
     }
 
-    fn get_peer(&mut self, peer_id: String) -> Result<Option<String>, String> {
-        super::host_impl::filesrv_get_peer(self, &peer_id)
+    fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
+        super::host_impl::peer_respond_consent(self, &request_id, accepted)
     }
 
-    fn query_peer(&mut self, peer_id: String) -> Result<(), String> {
-        super::host_impl::filesrv_query_peer(self, &peer_id)
+    fn list_trusted(&mut self) -> Result<String, String> {
+        super::host_impl::peer_list_trusted(self)
     }
 
-    fn approve_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        super::host_impl::filesrv_approve_transfer(self, &batch_id)
+    fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
+        super::host_impl::peer_revoke_trusted(self, &node_id)
     }
 
-    fn reject_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        super::host_impl::filesrv_reject_transfer(self, &batch_id)
+    fn send_files(&mut self, node_id: String, paths_json: String) -> Result<String, String> {
+        super::host_impl::peer_send_files(self, &node_id, &paths_json)
     }
 
-    fn set_approval_timeout(&mut self, mount_path: String, seconds: u64) -> Result<(), String> {
-        super::host_impl::filesrv_set_approval_timeout(self, &mount_path, seconds)
+    fn list_transfers(&mut self) -> Result<String, String> {
+        super::host_impl::peer_list_transfers(self)
     }
 
-    fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
-        super::host_impl::filesrv_cancel_receiving(self, &session_id)
+    fn cancel_transfer(&mut self, batch_id: String) -> Result<bool, String> {
+        super::host_impl::peer_cancel_transfer(self, &batch_id)
     }
 
-    fn download(&mut self, request_json: String) -> Result<String, String> {
-        super::host_impl::filesrv_download(self, &request_json)
+    fn retry_transfer(&mut self, batch_id: String) -> Result<String, String> {
+        super::host_impl::peer_retry_transfer(self, &batch_id)
     }
 
-    fn upload(&mut self, request_json: String) -> Result<String, String> {
-        super::host_impl::filesrv_upload(self, &request_json)
+    fn clear_transfer_history(&mut self) -> Result<u32, String> {
+        super::host_impl::peer_clear_transfer_history(self)
     }
 
-    fn respond_intent(&mut self, intent_id: String, decision: String) -> Result<(), String> {
-        super::host_impl::filesrv_respond_intent(self, &intent_id, &decision)
-    }
-}
-
-impl bedcode::plugin::host_transfer::Host for WasmPluginState {
-    fn start(&mut self, request_json: String) -> Result<String, String> {
-        super::host_impl::transfer_start(self, &request_json)
+    fn list_receiving(&mut self) -> Result<String, String> {
+        super::host_impl::peer_list_receiving(self)
     }
 
-    fn cancel(&mut self, task_id: String) -> Result<(), String> {
-        super::host_impl::transfer_cancel(self, &task_id)
+    fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
+        super::host_impl::peer_respond_transfer(self, &batch_id, accept)
+    }
+
+    fn cancel_receiving(&mut self, batch_id: String) -> Result<bool, String> {
+        super::host_impl::peer_cancel_receiving(self, &batch_id)
+    }
+
+    fn clear_receiving_history(&mut self) -> Result<u32, String> {
+        super::host_impl::peer_clear_receiving_history(self)
+    }
+
+    fn get_receive_settings(&mut self) -> Result<String, String> {
+        super::host_impl::peer_get_receive_settings(self)
+    }
+
+    fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
+        super::host_impl::peer_set_receive_policy(self, &mode, timeout_secs)
+    }
+
+    fn list_shared_directories(&mut self) -> Result<String, String> {
+        super::host_impl::peer_list_shared_directories(self)
+    }
+
+    fn remove_shared_directory(&mut self, id: String) -> Result<bool, String> {
+        super::host_impl::peer_remove_shared_directory(self, &id)
+    }
+
+    fn add_shared_directory(&mut self, request_json: String) -> Result<String, String> {
+        super::host_impl::peer_add_shared_directory(self, &request_json)
+    }
+
+    fn list_shared_roots(&mut self, node_id: String) -> Result<String, String> {
+        super::host_impl::peer_list_shared_roots(self, &node_id)
+    }
+
+    fn browse_directory(&mut self, node_id: String, dir_id: String, rel_path: String) -> Result<String, String> {
+        super::host_impl::peer_browse_directory(self, &node_id, &dir_id, &rel_path)
+    }
+
+    fn pull_files(&mut self, node_id: String, dir_id: String, files_json: String) -> Result<u32, String> {
+        super::host_impl::peer_pull_files(self, &node_id, &dir_id, &files_json)
+    }
+
+    fn pick_files(&mut self) -> Result<String, String> {
+        super::host_impl::peer_pick_files(self)
+    }
+
+    fn pick_folder(&mut self) -> Result<String, String> {
+        super::host_impl::peer_pick_folder(self)
+    }
+
+    fn set_download_dir(&mut self, _path: String) -> Result<(), String> {
+        // 移动端接收落点固定 MediaStore.Downloads，不支持自定义
+        Err("set-download-dir is not supported on mobile (downloads always land in MediaStore.Downloads)".to_string())
     }
 }
 
@@ -225,7 +271,7 @@ impl bedcode::plugin::host_transfer::Host for WasmPluginState {
 
 /// 构建组件侧 Linker（注册已接线的 import 接口）
 ///
-/// 02：host-log / host-storage 两组；ticket 03 追加其余 9 组
+/// 02：host-log / host-storage 两组；ticket 03 追加其余接口
 /// （未注册接口被组件 import 时实例化报 unknown import——02 的缺接口可读报错依据）
 pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result<Linker<WasmPluginState>> {
     let mut linker = Linker::new(engine);
@@ -240,8 +286,7 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(&mut linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -547,25 +592,6 @@ impl LoadedComponentPlugin {
             },
             "on_bus_message",
         )
-    }
-
-    /// 调用插件的上传策略钩子导出（fail-closed 语义由调用方保持；
-    /// 组件契约强制实现，guest 返回的决定 JSON 原样透传）
-    pub(crate) fn call_upload_hook(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_upload_hook();
-        hooks
-            .call_on_upload_request(&mut self.store, meta_json)
-            .map_err(|e| AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e)))
-    }
-
-    /// 调用插件的批量传输请求钩子导出（fail-closed 语义由调用方保持）
-    pub(crate) fn call_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_transfer_request_hook();
-        hooks
-            .call_on_transfer_request(&mut self.store, meta_json)
-            .map_err(|e| AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e)))
     }
 
     /// 获取插件的 manifest JSON
@@ -990,14 +1016,6 @@ pub(crate) mod tests {
             let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
 
-            // 上传/传输钩子：fail-closed 决定透传（组件返回固定拒绝 JSON）
-            let upload_decision = plugin.call_upload_hook(r#"{"name":"a"}"#).expect("upload hook");
-            let d: serde_json::Value = serde_json::from_str(&upload_decision).unwrap();
-            assert_eq!(d["approved"], false, "上传钩子必须 fail-closed 拒绝");
-            let transfer_decision = plugin.call_transfer_request(r#"{"name":"a"}"#).expect("transfer hook");
-            let d: serde_json::Value = serde_json::from_str(&transfer_decision).unwrap();
-            assert_eq!(d["approved"], false, "传输钩子必须 fail-closed 拒绝");
-
             // bus 事件回调（组件返回 Ok）
             plugin
                 .on_bus_message(&bedcode_plugin_api_mobile::BusMessage {
@@ -1181,22 +1199,6 @@ pub(crate) mod tests {
                 "命令错误应经宏转义为 error JSON，实际: {}",
                 result
             );
-
-            // 未实现钩子的默认行为（SDK trait 默认 fail-closed）：upload/transfer 均拒绝
-            let d: serde_json::Value = serde_json::from_str(
-                &plugin
-                    .call_upload_hook(r#"{"relativePath":"a.txt","size":1}"#)
-                    .expect("upload hook"),
-            )
-            .unwrap();
-            assert_eq!(d["allow"], false, "默认上传钩子必须 fail-closed 拒绝");
-            let d: serde_json::Value = serde_json::from_str(
-                &plugin
-                    .call_transfer_request(r#"{"batchId":"b1"}"#)
-                    .expect("transfer hook"),
-            )
-            .unwrap();
-            assert_eq!(d["allow"], false, "默认传输钩子必须 fail-closed 拒绝");
         });
     }
 

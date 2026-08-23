@@ -1,11 +1,10 @@
 <script setup lang="ts">
 /**
  * PluginsView — 插件管理（骨架）：状态徽章、激活/停用、设置区、路由、
- * 终端工具栏、文件服务挂载一览（全部由 dev-shell mock 驱动）。
+ * 终端工具栏一览（全部由 dev-shell mock 驱动）。
  */
 import { useI18n } from 'vue-i18n'
 import {
-  mounts,
   openActiveView,
   plugins,
   routes,
@@ -153,17 +152,6 @@ async function toggle(pluginId: string) {
             >
               {{ item.item.label }}
             </span>
-          </div>
-        </div>
-
-        <div v-if="mounts.filter((m) => m.pluginId === record.id).length">
-          <p class="text-[var(--mobile-text-muted)] mb-1">{{ t('devshell.plugins.mounts') }}</p>
-          <div
-            v-for="m in mounts.filter((x) => x.pluginId === record.id)"
-            :key="m.mountPath"
-            class="px-2 py-1.5 rounded-md bg-[var(--mobile-bg-tertiary)] text-[var(--mobile-text-secondary)] font-mono text-[11px] break-all"
-          >
-            {{ m.mountPath }} → [{{ m.roots.join(', ') }}] ({{ m.operations.join(', ') }})
           </div>
         </div>
       </div>

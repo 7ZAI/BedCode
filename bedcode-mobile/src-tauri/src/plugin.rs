@@ -14,7 +14,6 @@ pub mod registry;
 pub mod saf_io;
 pub mod saf_path;
 pub mod storage;
-pub mod transfer;
 pub mod types;
 pub mod validation;
 pub mod wasm_host;

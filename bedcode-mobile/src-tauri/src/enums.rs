@@ -4,7 +4,6 @@
 
 pub mod auth;
 pub mod control;
-pub mod file_service;
 pub mod plugin;
 pub mod session;
 pub mod special_key;
@@ -17,7 +16,6 @@ pub use control::{
     SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
     TerminalAction, TerminalPayload,
 };
-pub use file_service::{FileServicePayload, MountAnnouncement};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use session::{SessionStatus, TaskStatus};
 pub use special_key::{KeyCode, KeyCombo};

@@ -8,4 +8,3 @@
 export * from './auth'
 export * from './session'
 export * from './sync'
-export * from './file_service'

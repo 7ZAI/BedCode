@@ -184,9 +184,5 @@ pub fn ws_get_token() -> String {
 #[tauri::command]
 pub fn ws_clear_token() -> Result<()> {
     clear_global_token();
-    // 同步 command 无 await 上下文，关停交给全局运行时
-    tauri::async_runtime::spawn(async {
-        crate::state::get_file_service().shutdown().await;
-    });
     Ok(())
 }

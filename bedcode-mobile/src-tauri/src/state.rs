@@ -7,7 +7,6 @@ use std::sync::OnceLock;
 
 use crate::auth::AuthManager;
 use crate::connection::manager::ConnectionManager;
-use crate::file_service::FileService;
 use crate::plugin::manager::PluginManager;
 use crate::session::SessionManager;
 use crate::system::info::SystemInfo;
@@ -125,11 +124,3 @@ pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
 }
 
 // ==================== File Service ====================
-
-/// 获取文件服务单例（内网文件传输插件规格阶段 2）
-///
-/// OnceLock 惰性初始化（实现在 `file_service::get_file_service`）；
-/// 首次调用必须在 tokio runtime 上下文内（启动上传会话 sweeper）
-pub fn get_file_service() -> Arc<FileService> {
-    crate::file_service::get_file_service()
-}

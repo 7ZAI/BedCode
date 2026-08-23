@@ -649,7 +649,7 @@ const VALID_PERMISSIONS = new Set([
   'fs:read',
   'fs:write',
   'bus',
-  'fileservice',
+  'peer',
 ])
 
 const VALID_PLUGIN_TYPES = new Set(['wasm', 'ts-only', 'rust', 'rust-ts'])

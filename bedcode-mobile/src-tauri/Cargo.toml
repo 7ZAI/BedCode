@@ -99,6 +99,8 @@ android_logger = "0.14"
 
 # Plugin SDK (Mobile)
 bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
+bedcode-peer-net = { path = "../../packages/peer-net" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 # ==================== OCR 引擎（仅 Android 平台，规格 §4.6）====================

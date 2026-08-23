@@ -18,6 +18,11 @@
 
     <!-- Bottom Navigation (hide on terminal view) -->
     <MobileNav v-if="!isTerminalRoute" />
+
+    <!-- 对等网络首连确认弹窗宿主（issue 04）：全局单例，Teleport 到 body -->
+    <PeerConsentDialogHost />
+    <!-- 对等网络传输询问弹窗宿主（issue 10）：全局单例，Teleport 到 body -->
+    <PeerBatchDialogHost />
   </div>
   <!-- 安全区域初始化前的占位，避免内容在状态栏下闪现 -->
   <div v-else class="h-[100dvh] mobile-app mobile-ui bg-[var(--mobile-bg-primary)]" />
@@ -27,6 +32,8 @@
 import { computed, inject, type Ref } from 'vue'
 import { useRoute } from 'vue-router'
 import MobileNav from '@/components/MobileNav.vue'
+import PeerConsentDialogHost from '@/components/PeerConsentDialogHost.vue'
+import PeerBatchDialogHost from '@/components/PeerBatchDialogHost.vue'
 
 const route = useRoute()
 
