@@ -8,16 +8,23 @@
         class="sr-only"
         @change="$emit('update:modelValue', !modelValue)"
       />
+      <!-- 开关样式与桌面端 SettingsView 对齐：方形墨色轨道 + 方形滑块 -->
       <div
-        class="w-10 h-6 rounded-full transition-colors"
+        class="w-10 h-5 rounded-[4px] border transition-colors"
         :class="[
-          modelValue ? 'bg-[var(--mobile-accent)]' : 'bg-[var(--mobile-bg-elevated)]',
+          modelValue
+            ? 'bg-[var(--mobile-accent)] border-[var(--mobile-accent)]'
+            : 'bg-[var(--mobile-bg-primary)] border-[var(--mobile-border-hover)]',
           { 'opacity-50 cursor-not-allowed': disabled }
         ]"
       ></div>
       <div
-        class="absolute top-1 w-4 h-4 bg-white rounded-full transition-transform shadow"
-        :class="[modelValue ? 'translate-x-5 left-1' : 'translate-x-0 left-1']"
+        class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
+        :class="[
+          modelValue
+            ? 'left-[22px] bg-[var(--mobile-text-on-accent)]'
+            : 'left-[3px] bg-[var(--mobile-bg-tertiary)]'
+        ]"
       ></div>
     </div>
     <span v-if="label" class="text-sm text-[var(--mobile-text-secondary)]">{{ label }}</span>

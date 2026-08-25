@@ -2,25 +2,26 @@
    移动端主题变量
    ============================================ */
 
-/* 深色模式（默认） - 主色与桌面端 warm 色板同源（墨纸体系：#ECE8DC 纸张色） */
+/* 深色模式（默认） - 与桌面端 warm 色板深色同源
+   （bg-page #15130F / bg-sidebar #191712 / bg-card #1D1A15 / bg-hover #2A261E，墨纸体系） */
 :root {
-  /* 背景色 */
-  --mobile-bg-primary: #0a0a0f;
-  --mobile-bg-secondary: #12121a;
-  --mobile-bg-tertiary: #1a1a2e;
-  --mobile-bg-card: #12121a;
-  --mobile-bg-elevated: #1f2937;
+  /* 背景色 - 与桌面端同名 token 对齐（tertiary 取 border-strong 色调，作强内嵌面） */
+  --mobile-bg-primary: #15130F;
+  --mobile-bg-secondary: #191712;
+  --mobile-bg-tertiary: #3C372B;
+  --mobile-bg-card: #1D1A15;
+  --mobile-bg-elevated: #2A261E;
 
   /* 卡片阴影 */
   --mobile-card-shadow: 0 2px 8px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2);
   --mobile-card-shadow-hover: 0 4px 16px rgba(0, 0, 0, 0.4), 0 2px 4px rgba(0, 0, 0, 0.3);
-  --mobile-card-shadow-connected: 0 2px 12px rgba(16, 185, 129, 0.15), 0 1px 3px rgba(0, 0, 0, 0.2);
+  --mobile-card-shadow-connected: 0 2px 12px rgba(34, 197, 94, 0.15), 0 1px 3px rgba(0, 0, 0, 0.2);
 
-  /* 文字色 */
-  --mobile-text-primary: #ffffff;
-  --mobile-text-secondary: #9ca3af;
-  --mobile-text-muted: #6b7280;
-  --mobile-text-disabled: #4b5563;
+  /* 文字色 - 与桌面端 warm 深色 text token 同源 */
+  --mobile-text-primary: #ECE8DC;
+  --mobile-text-secondary: #9C9482;
+  --mobile-text-muted: #6B6455;
+  --mobile-text-disabled: #55503F;
 
   /* 强调色上的文字 */
   --mobile-text-on-accent: #15130F;
@@ -33,11 +34,11 @@
   --mobile-accent-muted: rgba(236, 232, 220, 0.12);
   --mobile-accent-secondary: rgba(236, 232, 220, 0.2);
 
-  /* 状态色 */
-  --mobile-success: #10b981;
-  --mobile-success-muted: rgba(16, 185, 129, 0.1);
-  --mobile-success-connected-bg: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 95, 70, 0.18));
-  --mobile-success-connected-border: rgba(16, 185, 129, 0.2);
+  /* 状态色 - 与桌面端语义色同源（success #22C55E / warning #F59E0B / danger #EF4444） */
+  --mobile-success: #22C55E;
+  --mobile-success-muted: rgba(34, 197, 94, 0.14);
+  --mobile-success-connected-bg: linear-gradient(135deg, rgba(34, 197, 94, 0.12), rgba(21, 128, 61, 0.18));
+  --mobile-success-connected-border: rgba(34, 197, 94, 0.2);
   --mobile-warning: #f59e0b;
   --mobile-warning-muted: rgba(245, 158, 11, 0.1);
   --mobile-error: #ef4444;
@@ -48,21 +49,21 @@
   --mobile-overlay-heavy: rgba(0, 0, 0, 0.8);
   --mobile-overlay-light: rgba(0, 0, 0, 0.4);
 
-  /* 终端色 */
-  --mobile-terminal-bg: #0a0a0f;
-  --mobile-terminal-header: rgba(18, 18, 26, 0.9);
+  /* 终端色 - 终端区保持比页面更深一档的暖黑 */
+  --mobile-terminal-bg: #0F0D0A;
+  --mobile-terminal-header: rgba(29, 26, 21, 0.9);
 
   /* 导航栏 */
-  --mobile-nav-bg: rgba(10, 10, 15, 0.9);
+  --mobile-nav-bg: rgba(21, 19, 15, 0.9);
   --mobile-nav-border: rgba(236, 232, 220, 0.2);
   --mobile-nav-active: #ECE8DC;
-  --mobile-nav-inactive: #6b7280;
+  --mobile-nav-inactive: #6B6455;
 
   /* 输入框 - 终端输入区专属配色，比终端输出区稍亮 */
-  --mobile-input-bg: #16161e;
-  --mobile-input-border: rgba(139, 233, 253, 0.25);
-  --mobile-input-focus: rgba(139, 233, 253, 0.45);
-  --mobile-input-placeholder: #5c5c6d;
+  --mobile-input-bg: #1D1A15;
+  --mobile-input-border: rgba(236, 232, 220, 0.25);
+  --mobile-input-focus: rgba(236, 232, 220, 0.45);
+  --mobile-input-placeholder: #55503F;
 
   /* 触控目标最小尺寸（恒常值，不随屏幕缩放） */
   --mobile-input-height: 44px;
@@ -70,9 +71,9 @@
   --mobile-touch-target-min: 44px;
 
   /* 代码查看器 */
-  --mobile-code-gutter-bg: rgba(255, 255, 255, 0.04);
-  --mobile-code-gutter-border: rgba(100, 100, 120, 0.12);
-  --mobile-code-gutter-color: rgba(100, 100, 120, 0.45);
+  --mobile-code-gutter-bg: rgba(236, 232, 220, 0.04);
+  --mobile-code-gutter-border: rgba(156, 148, 130, 0.15);
+  --mobile-code-gutter-color: rgba(156, 148, 130, 0.5);
 
   /* 快捷键面板功能色 */
   /* 快捷键/命令 chip：墨纸主题强调色（与 send 同源），Enter/Del 保留 confirm/danger 语义色 */
@@ -85,103 +86,104 @@
   --mobile-custom-cmd-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.12), rgba(236, 232, 220, 0.06));
   --mobile-custom-cmd-border: rgba(236, 232, 220, 0.3);
   --mobile-custom-cmd-active-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.28), rgba(236, 232, 220, 0.16));
-  --mobile-arrow-color: #f1fa8c;
-  --mobile-arrow-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.12), rgba(241, 250, 140, 0.06));
-  --mobile-arrow-border: rgba(241, 250, 140, 0.35);
-  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(241, 250, 140, 0.28), rgba(241, 250, 140, 0.16));
+  --mobile-arrow-color: #F59E0B;
+  --mobile-arrow-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.06));
+  --mobile-arrow-border: rgba(245, 158, 11, 0.35);
+  --mobile-arrow-active-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(245, 158, 11, 0.16));
   --mobile-send-color: #ECE8DC;
   --mobile-send-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.12), rgba(236, 232, 220, 0.06));
   --mobile-send-border: rgba(236, 232, 220, 0.3);
   --mobile-send-active-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.28), rgba(236, 232, 220, 0.16));
-  --mobile-execute-color: #ffb86c;
-  --mobile-execute-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
-  --mobile-execute-border: rgba(255, 184, 108, 0.35);
-  --mobile-execute-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
+  --mobile-execute-color: #F59E0B;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.06));
+  --mobile-execute-border: rgba(245, 158, 11, 0.35);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(245, 158, 11, 0.16));
   --mobile-add-cmd-color: #ECE8DC;
   --mobile-add-cmd-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.12), rgba(236, 232, 220, 0.06));
   --mobile-add-cmd-border: rgba(236, 232, 220, 0.5);
   --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(236, 232, 220, 0.28), rgba(236, 232, 220, 0.16));
-  --mobile-edit-cmd-color: #ffb86c;
-  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.12), rgba(255, 184, 108, 0.06));
-  --mobile-edit-cmd-border: rgba(255, 184, 108, 0.35);
-  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(255, 184, 108, 0.28), rgba(255, 184, 108, 0.16));
-  --mobile-danger-color: #ff5555;
-  --mobile-danger-bg: linear-gradient(135deg, rgba(255, 85, 85, 0.12), rgba(255, 85, 85, 0.06));
-  --mobile-danger-border: rgba(255, 85, 85, 0.5);
-  --mobile-danger-solid-bg: rgba(255, 85, 85, 0.9);
-  --mobile-confirm-color: #50fa7b;
-  --mobile-confirm-bg: linear-gradient(135deg, rgba(80, 250, 123, 0.2), rgba(80, 250, 123, 0.1));
-  --mobile-confirm-border: rgba(80, 250, 123, 0.5);
+  --mobile-edit-cmd-color: #F59E0B;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.12), rgba(245, 158, 11, 0.06));
+  --mobile-edit-cmd-border: rgba(245, 158, 11, 0.35);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(245, 158, 11, 0.28), rgba(245, 158, 11, 0.16));
+  --mobile-danger-color: #EF4444;
+  --mobile-danger-bg: linear-gradient(135deg, rgba(239, 68, 68, 0.12), rgba(239, 68, 68, 0.06));
+  --mobile-danger-border: rgba(239, 68, 68, 0.5);
+  --mobile-danger-solid-bg: rgba(239, 68, 68, 0.9);
+  --mobile-confirm-color: #22C55E;
+  --mobile-confirm-bg: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(34, 197, 94, 0.1));
+  --mobile-confirm-border: rgba(34, 197, 94, 0.5);
 
   /* 输入助手悬浮球 */
   --mobile-input-assist-bg: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%);
 
   /* 分组卡片 */
-  --mobile-group-bg: #131318;
-  --mobile-group-border: rgba(255, 255, 255, 0.055);
-  --mobile-group-divider: rgba(255, 255, 255, 0.045);
-  --mobile-group-row-active: rgba(255, 255, 255, 0.03);
+  --mobile-group-bg: #1D1A15;
+  --mobile-group-border: rgba(236, 232, 220, 0.08);
+  --mobile-group-divider: rgba(236, 232, 220, 0.06);
+  --mobile-group-row-active: rgba(236, 232, 220, 0.05);
 
   /* 分组标题 */
-  --mobile-section-title-color: #63636e;
+  --mobile-section-title-color: #6B6455;
 
-  /* 图标 chip 色调 (12% 透明底) */
+  /* 图标 chip 色调 (12% 透明底) - 状态色与桌面端语义色同源，violet 为移动端分类装饰色 */
   --mobile-chip-cyan: #ECE8DC;
   --mobile-chip-cyan-bg: rgba(236, 232, 220, 0.12);
-  --mobile-chip-emerald: #34d399;
-  --mobile-chip-emerald-bg: rgba(52, 211, 153, 0.12);
-  --mobile-chip-amber: #fbbf24;
-  --mobile-chip-amber-bg: rgba(251, 191, 36, 0.12);
+  --mobile-chip-emerald: #22C55E;
+  --mobile-chip-emerald-bg: rgba(34, 197, 94, 0.14);
+  --mobile-chip-amber: #F59E0B;
+  --mobile-chip-amber-bg: rgba(245, 158, 11, 0.14);
   --mobile-chip-violet: #a78bfa;
   --mobile-chip-violet-bg: rgba(167, 139, 250, 0.12);
-  --mobile-chip-red: #f87171;
-  --mobile-chip-red-bg: rgba(248, 113, 113, 0.12);
-  --mobile-chip-zinc: #a1a1aa;
-  --mobile-chip-zinc-bg: rgba(255, 255, 255, 0.06);
+  --mobile-chip-red: #EF4444;
+  --mobile-chip-red-bg: rgba(239, 68, 68, 0.14);
+  --mobile-chip-zinc: #ABA492;
+  --mobile-chip-zinc-bg: rgba(236, 232, 220, 0.08);
 
   /* badge 状态 */
-  --mobile-badge-zinc-color: #8e8e99;
-  --mobile-badge-zinc-bg: rgba(255, 255, 255, 0.06);
+  --mobile-badge-zinc-color: #ABA492;
+  --mobile-badge-zinc-bg: rgba(236, 232, 220, 0.08);
 
   /* 行文字 */
-  --mobile-row-title: #f4f4f5;
-  --mobile-row-sub: #71717a;
-  --mobile-row-value: #a1a1aa;
+  --mobile-row-title: #ECE8DC;
+  --mobile-row-sub: #9C9482;
+  --mobile-row-value: #ABA492;
 
-  /* 滚动条 */
-  --scrollbar-track-bg: #1e293b;
-  --scrollbar-thumb-bg: #475569;
-  --scrollbar-thumb-hover-bg: #64748b;
+  /* 滚动条 - 与桌面端全局 scrollbar 规则同源（track=bg-hover / thumb=text-tertiary / hover=text-secondary） */
+  --scrollbar-track-bg: #2A261E;
+  --scrollbar-thumb-bg: #6B6455;
+  --scrollbar-thumb-hover-bg: #9C9482;
 }
 
-/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效 */
+/* 浅色模式 - 当 html 没有 .dark 类且元素有 .mobile-ui 或 .mobile-app 类时生效
+   （与桌面端 warm 色板浅色同源：bg-page #F5F4F0 / bg-sidebar #EFEDE7 / bg-card #FDFCFA / bg-hover #E7E4DC） */
 html:not(.dark) .mobile-ui,
 html:not(.dark) .mobile-app {
-  /* 背景色 - 拉开层次，避免白茫茫 */
-  --mobile-bg-primary: #f5f7fa;
-  --mobile-bg-secondary: #eef1f5;
-  --mobile-bg-tertiary: #e4e8ee;
-  --mobile-bg-card: #ffffff;
-  --mobile-bg-elevated: #f8f9fb;
+  /* 背景色 - 与桌面端同名 token 对齐（tertiary 取 border-strong 色调，作强内嵌面） */
+  --mobile-bg-primary: #F5F4F0;
+  --mobile-bg-secondary: #EFEDE7;
+  --mobile-bg-tertiary: #D6D2C4;
+  --mobile-bg-card: #FDFCFA;
+  --mobile-bg-elevated: #E7E4DC;
 
   /* 卡片阴影 - 浅色模式阴影更明显以增强层次 */
   --mobile-card-shadow: 0 1px 3px rgba(0, 0, 0, 0.1), 0 1px 2px rgba(0, 0, 0, 0.06);
   --mobile-card-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.12), 0 2px 4px rgba(0, 0, 0, 0.08);
   --mobile-card-shadow-connected: 0 2px 8px rgba(5, 150, 105, 0.15), 0 1px 3px rgba(0, 0, 0, 0.08);
 
-  /* 文字色 - 优化对比度以满足 WCAG AA 标准 */
-  --mobile-text-primary: #1e293b;    /* slate-800, 对比度 10.7:1 */
-  --mobile-text-secondary: #475569;  /* slate-600, 对比度 7.1:1 */
-  --mobile-text-muted: #64748b;      /* slate-500, 对比度 4.5:1 */
-  --mobile-text-disabled: #94a3b8;   /* slate-400, 禁用状态语义色 */
+  /* 文字色 - 与桌面端 warm 浅色 text token 同源（primary 对比度 ~13:1） */
+  --mobile-text-primary: #26231B;
+  --mobile-text-secondary: #7C7565;
+  --mobile-text-muted: #ABA492;
+  --mobile-text-disabled: #C6BFAE;
 
   /* 强调色上的文字 - 与桌面端 warm 色板 primary-contrast 同源 */
   --mobile-text-on-accent: #FDFCFA;
 
-  /* 边框色 - 提高可见度 */
-  --mobile-border: rgba(15, 23, 42, 0.12);
-  --mobile-border-hover: rgba(15, 23, 42, 0.2);
-  --mobile-border-active: rgba(29, 26, 20, 0.4);
+  /* 边框色 - 墨色基（#26231B）alpha，与桌面端 border 色相同源 */
+  --mobile-border: rgba(38, 35, 27, 0.12);
+  --mobile-border-hover: rgba(38, 35, 27, 0.2);
+  --mobile-border-active: rgba(38, 35, 27, 0.4);
 
   /* 强调色 - 与桌面端 warm 色板 primary 同源（墨色） */
   --mobile-accent: #1D1A14;
@@ -203,26 +205,26 @@ html:not(.dark) .mobile-app {
   --mobile-overlay-heavy: rgba(0, 0, 0, 0.6);
   --mobile-overlay-light: rgba(0, 0, 0, 0.2);
 
-  /* 终端色 */
-  --mobile-terminal-bg: #fafafa;
-  --mobile-terminal-header: rgba(238, 241, 245, 0.95);
+  /* 终端色 - 浅色终端区取暖白 */
+  --mobile-terminal-bg: #FAF9F5;
+  --mobile-terminal-header: rgba(245, 244, 240, 0.95);
 
   /* 导航栏 */
-  --mobile-nav-bg: rgba(255, 255, 255, 0.9);
-  --mobile-nav-border: rgba(15, 23, 42, 0.1);
+  --mobile-nav-bg: rgba(253, 252, 250, 0.9);
+  --mobile-nav-border: rgba(38, 35, 27, 0.1);
   --mobile-nav-active: #1D1A14;
-  --mobile-nav-inactive: #94a3b8;
+  --mobile-nav-inactive: #ABA492;
 
-  /* 输入框 */
-  --mobile-input-bg: #f0f2f5;
-  --mobile-input-border: rgba(15, 23, 42, 0.18);
-  --mobile-input-focus: rgba(8, 145, 178, 0.5);
-  --mobile-input-placeholder: #94a3b8;
+  /* 输入框 - 输入面取页面色（桌面端卡片内输入框同规则），聚焦用墨色 accent */
+  --mobile-input-bg: #F5F4F0;
+  --mobile-input-border: rgba(38, 35, 27, 0.2);
+  --mobile-input-focus: rgba(29, 26, 20, 0.45);
+  --mobile-input-placeholder: #ABA492;
 
   /* 代码查看器 */
   --mobile-code-gutter-bg: rgba(0, 0, 0, 0.04);
   --mobile-code-gutter-border: rgba(0, 0, 0, 0.08);
-  --mobile-code-gutter-color: rgba(100, 116, 139, 0.5);
+  --mobile-code-gutter-color: rgba(124, 117, 101, 0.55);
 
   /* 快捷键面板功能色 - 浅色模式使用饱和度适中的配色 */
   /* 快捷键/命令 chip：墨纸主题强调色（与 send 同源），Enter/Del 保留 confirm/danger 语义色 */
@@ -243,18 +245,18 @@ html:not(.dark) .mobile-app {
   --mobile-send-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.08), rgba(29, 26, 20, 0.04));
   --mobile-send-border: rgba(29, 26, 20, 0.3);
   --mobile-send-active-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.16), rgba(29, 26, 20, 0.1));
-  --mobile-execute-color: #c2410c;
-  --mobile-execute-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(194, 65, 12, 0.05));
-  --mobile-execute-border: rgba(194, 65, 12, 0.3);
-  --mobile-execute-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(194, 65, 12, 0.12));
+  --mobile-execute-color: #B45309;
+  --mobile-execute-bg: linear-gradient(135deg, rgba(180, 83, 9, 0.1), rgba(180, 83, 9, 0.05));
+  --mobile-execute-border: rgba(180, 83, 9, 0.3);
+  --mobile-execute-active-bg: linear-gradient(135deg, rgba(180, 83, 9, 0.2), rgba(180, 83, 9, 0.12));
   --mobile-add-cmd-color: #1D1A14;
   --mobile-add-cmd-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.08), rgba(29, 26, 20, 0.04));
   --mobile-add-cmd-border: rgba(29, 26, 20, 0.4);
   --mobile-add-cmd-active-bg: linear-gradient(135deg, rgba(29, 26, 20, 0.16), rgba(29, 26, 20, 0.1));
-  --mobile-edit-cmd-color: #c2410c;
-  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.1), rgba(194, 65, 12, 0.05));
-  --mobile-edit-cmd-border: rgba(194, 65, 12, 0.3);
-  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(194, 65, 12, 0.2), rgba(194, 65, 12, 0.12));
+  --mobile-edit-cmd-color: #B45309;
+  --mobile-edit-cmd-bg: linear-gradient(135deg, rgba(180, 83, 9, 0.1), rgba(180, 83, 9, 0.05));
+  --mobile-edit-cmd-border: rgba(180, 83, 9, 0.3);
+  --mobile-edit-cmd-active-bg: linear-gradient(135deg, rgba(180, 83, 9, 0.2), rgba(180, 83, 9, 0.12));
   --mobile-danger-color: #dc2626;
   --mobile-danger-bg: linear-gradient(135deg, rgba(220, 38, 38, 0.1), rgba(220, 38, 38, 0.05));
   --mobile-danger-border: rgba(220, 38, 38, 0.4);
@@ -264,15 +266,15 @@ html:not(.dark) .mobile-app {
   --mobile-confirm-border: rgba(5, 150, 105, 0.4);
 
   /* 分组卡片 - 浅色模式 */
-  --mobile-group-bg: #ffffff;
-  --mobile-group-border: rgba(15, 23, 42, 0.08);
-  --mobile-group-divider: rgba(15, 23, 42, 0.06);
-  --mobile-group-row-active: rgba(15, 23, 42, 0.04);
+  --mobile-group-bg: #FDFCFA;
+  --mobile-group-border: rgba(38, 35, 27, 0.08);
+  --mobile-group-divider: rgba(38, 35, 27, 0.06);
+  --mobile-group-row-active: rgba(38, 35, 27, 0.04);
 
   /* 分组标题 */
-  --mobile-section-title-color: #94a3b8;
+  --mobile-section-title-color: #ABA492;
 
-  /* 图标 chip 色调 - 浅色模式（加深前景色，提高饱和度） */
+  /* 图标 chip 色调 - 浅色模式（状态色用加深变体保证对比度，色相与桌面端语义色同族） */
   --mobile-chip-cyan: #1D1A14;
   --mobile-chip-cyan-bg: rgba(29, 26, 20, 0.1);
   --mobile-chip-emerald: #059669;
@@ -283,25 +285,25 @@ html:not(.dark) .mobile-app {
   --mobile-chip-violet-bg: rgba(124, 58, 237, 0.1);
   --mobile-chip-red: #dc2626;
   --mobile-chip-red-bg: rgba(220, 38, 38, 0.1);
-  --mobile-chip-zinc: #64748b;
-  --mobile-chip-zinc-bg: rgba(15, 23, 42, 0.06);
+  --mobile-chip-zinc: #7C7565;
+  --mobile-chip-zinc-bg: rgba(38, 35, 27, 0.06);
 
   /* badge 状态 */
-  --mobile-badge-zinc-color: #64748b;
-  --mobile-badge-zinc-bg: rgba(15, 23, 42, 0.06);
+  --mobile-badge-zinc-color: #7C7565;
+  --mobile-badge-zinc-bg: rgba(38, 35, 27, 0.06);
 
   /* 行文字 */
-  --mobile-row-title: #1e293b;
-  --mobile-row-sub: #64748b;
-  --mobile-row-value: #475569;
+  --mobile-row-title: #26231B;
+  --mobile-row-sub: #ABA492;
+  --mobile-row-value: #7C7565;
 
   /* 输入助手悬浮球 */
   --mobile-input-assist-bg: linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%);
 
-  /* 滚动条 */
-  --scrollbar-track-bg: #f1f5f9;
-  --scrollbar-thumb-bg: #94a3b8;
-  --scrollbar-thumb-hover-bg: #64748b;
+  /* 滚动条 - 与桌面端全局 scrollbar 规则同源 */
+  --scrollbar-track-bg: #E7E4DC;
+  --scrollbar-thumb-bg: #ABA492;
+  --scrollbar-thumb-hover-bg: #7C7565;
 }
 
 /* 主题切换过渡动画 */
@@ -734,7 +736,8 @@ button.settings-row:active {
 /* ==================== 主色色板（与桌面端同名 palette 同源） ====================
    仅覆盖主色相关 token（--mobile-accent 系 + text-on-accent），色值取自
    bedcode-desktop/src/style.css 同名 palette（改色需双端同改）。
-   背景/文字/边框等其余 token 保持移动端自身风格（Dracula）。 */
+   背景/文字/边框等基础 token 的默认值（warm 色板）已与桌面端对齐；
+   其余 palette 仅切换主色，不覆盖背景（与桌面端「色板只换主色调」策略一致）。 */
 
 :root[data-palette='forest'] {
   --mobile-accent: #86c49b;

@@ -507,36 +507,38 @@ function handleConfirm() {
   text-align: right;
 }
 
+/* 开关样式与桌面端 SettingsView 对齐：方形墨色轨道 + 方形滑块（尺寸保留移动端 clamp 触控规格） */
 .toggle-btn {
   width: var(--toggle-w);
   height: var(--toggle-h);
-  border-radius: calc(var(--toggle-h) / 2);
-  background: var(--mobile-bg-elevated);
-  border: none;
+  border-radius: 0.25rem;
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border-hover);
   cursor: pointer;
   position: relative;
-  transition: background 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   flex-shrink: 0;
 }
 
 .toggle-btn.active {
   background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
 }
 
 .toggle-thumb {
   position: absolute;
-  top: 0.125rem;
-  left: 0.125rem;
-  width: calc(var(--toggle-h) - 0.25rem);
-  height: calc(var(--toggle-h) - 0.25rem);
-  border-radius: 50%;
-  background: var(--mobile-text-primary);
-  box-shadow: 0 1px 3px var(--mobile-overlay-light);
-  transition: transform 0.2s ease;
+  top: 0.1875rem;
+  left: 0.1875rem;
+  width: calc(var(--toggle-h) - 0.5rem);
+  height: calc(var(--toggle-h) - 0.5rem);
+  border-radius: 0.125rem;
+  background: var(--mobile-bg-tertiary);
+  transition: transform 0.2s ease, background-color 0.2s ease;
 }
 
 .toggle-thumb.on {
   transform: translateX(calc(var(--toggle-w) - var(--toggle-h)));
+  background: var(--mobile-text-on-accent);
 }
 
 /* Footer */
