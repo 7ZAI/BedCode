@@ -461,10 +461,11 @@ impl LoadedWasmPlugin {
         component: &Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[String],
     ) -> crate::Result<Self> {
-        // WASI 上下文：按插件配置（useSelfFileAccess + fileAccessDir）构建预打开
-        // 目录 /data；未开启/未授权时为空上下文（插件仍走 host_fs 路径）
-        let wasi_ctx = build_wasi_ctx(&host_ctx, plugin_id);
+        // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
+        // 目录 /data…；无声明/未授权时为空上下文
+        let wasi_ctx = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
         let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
@@ -688,20 +689,28 @@ impl LoadedWasmPlugin {
 
 // ==================== WASI 预打开 ====================
 
-/// 构建插件实例的 WASI 上下文
-///
-/// 预打开目录 = 插件配置 `config` 声明的 fileAccessDir（useSelfFileAccess 开启时），
-/// 且必须已通过授权（fs_granted_paths 持久化 / 白名单 / 受信任插件，无弹窗）。
-/// 预打开失败（目录不存在/不可读）仅告警，不阻断加载（插件降级走 host_fs）。
-fn build_wasi_ctx(host_ctx: &WasmHostContext, plugin_id: &str) -> wasmtime_wasi::WasiCtx {
+/// 构建 WASI 上下文：将 manifest 声明（`wasiPreopenDirs`，经展开+授权过滤）的
+/// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
+/// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
+pub(crate) fn build_wasi_ctx(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+) -> wasmtime_wasi::WasiCtx {
     let mut builder = WasiCtxBuilder::new();
-    if let Some(dir) = resolve_preopen_dir(host_ctx, plugin_id) {
-        match builder.preopened_dir(&dir, "/data", DirPerms::all(), FilePerms::all()) {
+    for (i, dir) in resolve_preopen_dirs(host_ctx, plugin_id, declared_dirs)
+        .into_iter()
+        .enumerate()
+    {
+        // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
+        let guest_path = if i == 0 { "/data".to_string() } else { format!("/data{}", i) };
+        match builder.preopened_dir(&dir, &guest_path, DirPerms::all(), FilePerms::all()) {
             Ok(_) => {
                 tracing::info!(
                     plugin_id = %plugin_id,
                     dir = %dir,
-                    "WASI preopened dir at /data (plugin self file access)"
+                    "WASI preopened dir at {} (manifest declared)",
+                    guest_path
                 );
             }
             Err(e) => {
@@ -709,7 +718,7 @@ fn build_wasi_ctx(host_ctx: &WasmHostContext, plugin_id: &str) -> wasmtime_wasi:
                     plugin_id = %plugin_id,
                     dir = %dir,
                     error = %e,
-                    "WASI preopen failed, plugin falls back to host_fs"
+                    "WASI preopen failed, directory not visible to plugin"
                 );
             }
         }
@@ -717,36 +726,39 @@ fn build_wasi_ctx(host_ctx: &WasmHostContext, plugin_id: &str) -> wasmtime_wasi:
     builder.build()
 }
 
-/// 解析插件配置声明的 WASI 预打开目录（storage key `config` 的
-/// useSelfFileAccess + fileAccessDir），并校验该目录已被授权
+/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表
 ///
-/// 读取/校验失败一律返回 None（不阻断加载）；无 tokio 运行时上下文
-/// （无头/测试）时跳过 storage 读取。
-fn resolve_preopen_dir(host_ctx: &WasmHostContext, plugin_id: &str) -> Option<String> {
+/// - `${home}` 变量展开为主目录绝对路径；home 不可用时跳过该项
+/// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
+///   主机位置，不得绕过授权机制建立预打开
+/// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
+fn resolve_preopen_dirs(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+) -> Vec<String> {
     if tokio::runtime::Handle::try_current().is_err() {
-        return None;
+        return Vec::new();
     }
-    let config = match super::host_impl::storage::storage_get(host_ctx, plugin_id, "config") {
-        Ok(Some(v)) => v,
-        _ => return None,
-    };
-    let obj = config.as_object()?;
-    if !obj.get("useSelfFileAccess")?.as_bool()? {
-        return None;
-    }
-    let dir = obj
-        .get("fileAccessDir")?
-        .as_str()?
-        .trim()
-        .trim_matches(['/', '\\'])
-        .trim();
-    if dir.is_empty() {
-        return None;
-    }
-    let dir = dir.to_string();
-    // 仅对已授权目录建立预打开：config 可由插件自身写入，不能借此绕过授权弹窗
-    let granted = block_on_async(host_ctx.fs_auth.is_granted(plugin_id, &dir));
-    granted.then_some(dir)
+    let home = dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string());
+    declared_dirs
+        .iter()
+        .filter_map(|raw| {
+            let dir = match home.as_ref() {
+                Some(home) => raw.trim().replacen("${home}", home, 1),
+                None => {
+                    tracing::warn!(plugin_id = %plugin_id, "wasiPreopenDirs: home_dir unavailable, skipping");
+                    return None;
+                }
+            };
+            let dir = dir.trim_matches(['/', '\\']).trim().to_string();
+            if dir.is_empty() {
+                return None;
+            }
+            let granted = block_on_async(host_ctx.fs_auth.is_granted(plugin_id, &dir));
+            granted.then_some(dir)
+        })
+        .collect()
 }
 
 // ==================== 测试 ====================
@@ -897,7 +909,7 @@ mod tests {
                 .await
                 .expect("preset storage key");
 
-            let mut plugin = LoadedWasmPlugin::new(&engine, &linker, &component, TEST_PLUGIN_ID, host_ctx)
+            let mut plugin = LoadedWasmPlugin::new(&engine, &linker, &component, TEST_PLUGIN_ID, host_ctx, &[])
                 .expect("instantiate component");
 
             // 生命周期（new 内已隐式通过 verify_abi：form=1 且 version<=ABI_VERSION）
@@ -939,10 +951,9 @@ mod tests {
 
     // ==================== WASI 预打开目录解析 ====================
 
-    /// 预打开解析测试基建：enabled 文件访问配置 + 授权目录
+    /// 预打开解析测试基建：返回 (host_ctx, 已授权目录)
     ///
-    /// 返回 (host_ctx, 已授权目录)。目录真实存在（canonicalize 需要），
-    /// 测试结束时由 TempDir 自动清理。
+    /// 目录真实存在（canonicalize 需要），测试结束时由 TempDir 自动清理。
     async fn preopen_ctx(plugin_id: &str) -> (Arc<WasmHostContext>, tempfile::TempDir) {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, plugin_id, &["storage"]);
@@ -959,113 +970,68 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_preopen_dir_requires_self_access_config() {
-        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
-        let preopen = dir.path().to_string_lossy().to_string();
-        let pid = "com.bedcode.test";
-
-        // 无配置 → None（默认宿主 fs 路径）
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
-
-        // useSelfFileAccess=false → None（即使配置了目录）
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-            &ctx,
-            pid,
-            "config",
-            serde_json::json!({
-                "useSelfFileAccess": false,
-                "fileAccessDir": preopen,
-            }),
-        )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
-
-        // 开启自身访问但目录已授权 → 解析成功（路径去头尾空白/斜杠）
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-            &ctx,
-            pid,
-            "config",
-            serde_json::json!({
-                "useSelfFileAccess": true,
-                "fileAccessDir": format!(" {} /", preopen),
-            }),
-        )
-        .expect("storage_set ok");
-        assert_eq!(resolve_preopen_dir(&ctx, pid).as_deref(), Some(preopen.as_str()));
+    async fn resolve_preopen_dirs_empty_when_no_declaration() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        assert!(resolve_preopen_dirs(&ctx, "com.bedcode.test", &[]).is_empty());
     }
 
     #[tokio::test]
-    async fn resolve_preopen_dir_requires_granted_dir() {
+    async fn resolve_preopen_dirs_keeps_granted_and_trims() {
         let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
         let pid = "com.bedcode.test";
-        // 开启自身访问，但 fileAccessDir 指向未授权目录 → None（不绕过授权弹窗）
+        let granted = dir.path().to_string_lossy().to_string();
+
+        // 已授权目录保留；头尾空白与多余分隔符被清理
+        let out = resolve_preopen_dirs(&ctx, pid, &[format!(" {} /", granted)]);
+        assert_eq!(out, vec![granted]);
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dirs_filters_ungranted_and_blank() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+
+        // 未授权目录不得预打开（manifest 声明不能绕过授权机制）
         let rogue = std::env::temp_dir().join("wasi-rogue-not-authorized");
         std::fs::create_dir_all(&rogue).unwrap();
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-            &ctx,
-            pid,
-            "config",
-            serde_json::json!({
-                "useSelfFileAccess": true,
-                "fileAccessDir": rogue.to_string_lossy(),
-            }),
-        )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none(), "未授权目录不得建立预打开");
+        // 授权根之外的不存在路径（canonicalize 回退父目录+名，不在授权前缀下）同样剔除
+        let missing = rogue.join("missing-deep");
 
-        // 目录名指向授权根之外的不存在路径（canonicalize 回退父目录+名，
-        // 不在授权前缀下）同样 None
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+        let out = resolve_preopen_dirs(
             &ctx,
             pid,
-            "config",
-            serde_json::json!({
-                "useSelfFileAccess": true,
-                "fileAccessDir": rogue.join("missing-deep").to_string_lossy(),
-                "defaultDir": "ignored",
-            }),
-        )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+            &[
+                rogue.to_string_lossy().to_string(),
+                missing.to_string_lossy().to_string(),
+                "   ".to_string(),
+                "/".to_string(),
+            ],
+        );
+        assert!(out.is_empty(), "未授权/空白声明全部剔除，实际: {:?}", out);
     }
 
     #[tokio::test]
-    async fn resolve_preopen_dir_rejects_bad_config_shapes() {
-        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+    async fn resolve_preopen_dirs_expands_home_variable() {
+        let Some(home) = dirs::home_dir() else {
+            return; // 无主目录环境跳过
+        };
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
         let pid = "com.bedcode.test";
-        let preopen = dir.path().to_string_lossy().to_string();
 
-        // 非对象 config / 字段类型错 / 空白路径 → 一律 None
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(&ctx, pid, "config", serde_json::json!([1, 2]))
-            .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
-
+        // 在主目录下建真实目录并授权，验证 ${home} 展开 + 授权过滤联合生效
+        let probe = home.join(".bedcode-wasi-preopen-test");
+        std::fs::create_dir_all(&probe).unwrap();
         crate::plugin::wasm_runtime::host_impl::storage::storage_set(
             &ctx,
             pid,
-            "config",
-            serde_json::json!({ "useSelfFileAccess": "yes", "fileAccessDir": 42 }),
+            "fs_granted_paths",
+            serde_json::json!([probe.to_string_lossy()]),
         )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
+        .expect("seed granted path");
 
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-            &ctx,
-            pid,
-            "config",
-            serde_json::json!({ "useSelfFileAccess": true, "fileAccessDir": "   " }),
-        )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_none());
-
-        // 已授权目录 + 合法配置 → 解析成功（对照基线）
-        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-            &ctx,
-            pid,
-            "config",
-            serde_json::json!({ "useSelfFileAccess": true, "fileAccessDir": preopen }),
-        )
-        .expect("storage_set ok");
-        assert!(resolve_preopen_dir(&ctx, pid).is_some());
+        let out = resolve_preopen_dirs(&ctx, pid, &["${home}/.bedcode-wasi-preopen-test".to_string()]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].ends_with(".bedcode-wasi-preopen-test"));
+        std::fs::remove_dir_all(&probe).ok();
     }
 }

@@ -152,6 +152,7 @@ mod tests {
             plugin_type: PluginType::RustTs,
             rust_library: "bedcode_test.wasm".to_string(),
             icon: None,
+            wasi_preopen_dirs: vec![],
         }
     }
 

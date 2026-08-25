@@ -51,6 +51,14 @@ pub struct PluginManifest {
     /// 插件图标：图片路径（相对插件目录）或内联 SVG 标记
     #[serde(default)]
     pub icon: Option<String>,
+    /// WASI 预打开目录声明（wasm32-wasip2 插件 std::fs 直连文件访问）
+    ///
+    /// 宿主在实例化时逐项校验授权（is_granted，无弹窗）后挂载到 guest
+    /// 路径 `/data`、`/data1`、…；未授权/展开失败的目录跳过（不阻断加载）。
+    /// 支持 `${home}` 变量展开为主目录绝对路径。缺省空数组 = 无预打开
+    /// （既有 wasm32-unknown-unknown 插件不受影响）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wasi_preopen_dirs: Vec<String>,
 }
 
 fn default_sandbox() -> String {

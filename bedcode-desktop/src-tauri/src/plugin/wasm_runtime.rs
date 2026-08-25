@@ -630,17 +630,21 @@ impl WasmRuntime {
     }
 
     /// 从文件加载 WASM 插件（阶段 C 起仅组件形态）
+    ///
+    /// `declared_preopen_dirs`：manifest 声明的 WASI 预打开目录（原始值，
+    /// 支持 ${home}；实例化时经展开+授权过滤，见 component::build_wasi_ctx）
     pub fn load_plugin_from_file(
         &self,
         path: &Path,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[String],
     ) -> crate::Result<LoadedWasmPlugin> {
         let bytes = std::fs::read(path).map_err(|e| {
             crate::AppError::Plugin(format!("Failed to read WASM artifact '{}': {}", path.display(), e))
         })?;
         let component = self.compile_component(&bytes)?;
-        self.instantiate_component(&component, plugin_id, host_ctx)
+        self.instantiate_component(&component, plugin_id, host_ctx, declared_preopen_dirs)
     }
 
     /// 实例化 WASM 组件
@@ -652,8 +656,9 @@ impl WasmRuntime {
         component: &wasmtime::component::Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[String],
     ) -> crate::Result<LoadedWasmPlugin> {
-        let plugin = component::LoadedWasmPlugin::new(&self.engine, &self.linker, component, plugin_id, host_ctx)?;
+        let plugin = component::LoadedWasmPlugin::new(&self.engine, &self.linker, component, plugin_id, host_ctx, declared_preopen_dirs)?;
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
         // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
         tracing::info!(
@@ -963,7 +968,7 @@ mod tests {
                 .expect("preset storage key");
 
             let mut plugin = wasm_runtime
-                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
                 .expect("instantiate test component");
 
             // 生命周期
@@ -1141,7 +1146,7 @@ mod tests {
 
     /// WASI 预打开端到端：wasip2 插件经 std::fs 直写宿主预打开目录
     ///
-    /// 验证链路：插件配置 useSelfFileAccess + fileAccessDir（已授权）→
+    /// 验证链路：manifest 声明 wasiPreopenDirs（已授权）→
     /// 实例化时宿主 preopen /data → 插件 std::fs::write("/data/demo.txt") →
     /// 宿主侧校验文件落盘 + 读回 + 沙箱边界（根外路径不可达）。
     #[test]
@@ -1153,11 +1158,11 @@ mod tests {
         let pid = "com.bedcode.wasi-test";
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        // 阶段 1（runtime 上下文）：宿主侧准备——授权 + storage seed + 实例化。
-        // 实例化需当前 handle（resolve_preopen_dir 读 storage 并校验授权）；
+        // 阶段 1（runtime 上下文）：宿主侧准备——授权 + 实例化。
+        // 实例化需当前 handle（resolve_preopen_dirs 校验授权）；
         // 组件 ctor 不触发 wasi 文件访问，故此时有 handle 仍安全。
         let (mut plugin, dir) = rt.block_on(async {
-            // 授权插件（storage 权限用于写入配置）与数据目录
+            // 授权插件（storage 权限用于 seed fs_granted_paths）
             host_ctx.permission.grant_permissions(pid, &["storage".to_string()]);
             let dir = tempfile::tempdir().expect("tempdir");
             crate::plugin::wasm_runtime::host_impl::storage::storage_set(
@@ -1167,20 +1172,11 @@ mod tests {
                 serde_json::json!([dir.path().to_string_lossy()]),
             )
             .expect("seed granted path");
-            crate::plugin::wasm_runtime::host_impl::storage::storage_set(
-                &host_ctx,
-                pid,
-                "config",
-                serde_json::json!({
-                    "useSelfFileAccess": true,
-                    "fileAccessDir": dir.path().to_string_lossy(),
-                }),
-            )
-            .expect("seed wasi config");
 
-            // 实例化：组件导入 wasi 接口，宿主按配置 preopen /data
+            // 实例化：组件导入 wasi 接口，宿主按声明（授权过滤后）preopen /data
+            let declared = vec![dir.path().to_string_lossy().to_string()];
             let plugin = wasm_runtime
-                .instantiate_component(&component, pid, host_ctx.clone())
+                .instantiate_component(&component, pid, host_ctx.clone(), &declared)
                 .expect("instantiate wasi test component");
             (plugin, dir)
         });
@@ -1259,7 +1255,7 @@ mod tests {
         }
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
         let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx)
+            .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx, &[])
             .expect("load wasip2 ai-chatbox: all imports must resolve");
         // manifest 往返（无副作用导出，验证 bindgen 接口工作）
         let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
@@ -1278,7 +1274,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let mut plugin = wasm_runtime
-                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
                 .expect("instantiate SDK test component");
 
             // 生命周期（宏生成的 lifecycle::Guest）
@@ -1407,12 +1403,12 @@ mod tests {
         rt.block_on(async {
             let target = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, TARGET_ID, host_ctx.clone())
+                    .instantiate_component(&component, TARGET_ID, host_ctx.clone(), &[])
                     .expect("instantiate target"),
             ));
             let caller = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, CALLER_ID, host_ctx.clone())
+                    .instantiate_component(&component, CALLER_ID, host_ctx.clone(), &[])
                     .expect("instantiate caller"),
             ));
 
@@ -1514,7 +1510,7 @@ mod tests {
         std::fs::write(&wasm_path, build_test_component()).unwrap();
 
         let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, TEST_PLUGIN_ID, host_ctx)
+            .load_plugin_from_file(&wasm_path, TEST_PLUGIN_ID, host_ctx, &[])
             .expect("load_plugin_from_file should load component");
         // 加载成功即可调用：激活 + manifest 往返验证组件路径
         assert_eq!(plugin.activate().expect("activate"), 0);
@@ -1569,7 +1565,7 @@ mod tests {
 
         for c in [component, cached] {
             wasm_runtime
-                .instantiate_component(&c, TEST_PLUGIN_ID, host_ctx.clone())
+                .instantiate_component(&c, TEST_PLUGIN_ID, host_ctx.clone(), &[])
                 .expect("component from cache should instantiate");
         }
 
@@ -1605,7 +1601,7 @@ mod tests {
             .compile_component_from_file(&wasm_path)
             .expect("invalid cache should fall back to full compile");
         wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
             .expect("component from full compile should instantiate");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1639,7 +1635,7 @@ mod tests {
         );
 
         let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, SCHED_PLUGIN_ID, host_ctx.clone())
+            .load_plugin_from_file(&wasm_path, SCHED_PLUGIN_ID, host_ctx.clone(), &[])
             .expect("load real scheduler component");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -1669,7 +1665,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
             .expect("instantiate test component");
 
         // 调用前剩余燃料 ≈ 单次预算（实例化/ABI 校验的消耗可忽略）
@@ -1721,7 +1717,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
             .expect("instantiate test component");
 
         let (store, instance) = plugin.raw_store();
@@ -1744,7 +1740,7 @@ mod tests {
 
         // 1. 实例 A：制造一次 trap（燃料耗尽）
         let mut plugin_a = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone())
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[])
             .expect("instantiate component A");
         {
             let (store, instance) = plugin_a.raw_store();
@@ -1774,7 +1770,7 @@ mod tests {
 
         // 3. 重新实例化（等价宿主 reload_wasm_plugin 的重建）→ 新实例正常可用
         let mut plugin_b = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx)
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
             .expect("re-instantiate after trap");
         let rt = tokio::runtime::Runtime::new().unwrap();
         let echo = rt.block_on(async {

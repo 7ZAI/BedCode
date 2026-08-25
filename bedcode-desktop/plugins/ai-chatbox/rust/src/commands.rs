@@ -6,7 +6,7 @@
 
 use crate::client;
 use crate::store::{self, ChatMessageRecord, ConversationMeta};
-use crate::DATA_DIR;
+use crate::DATA_ROOT;
 use bedcode_plugin_api::{CommandArgs, WasmHost};
 
 fn host() -> WasmHost {
@@ -45,8 +45,7 @@ pub fn fetch_models(args: serde_json::Value) -> anyhow::Result<serde_json::Value
 
 /// 列出所有对话（index.jsonl，按 updatedAt DESC）
 pub fn list_conversations(_args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    let dir = DATA_DIR.read().ok().and_then(|g| g.clone()).unwrap_or_default();
-    let conversations = store::list_conversations(&host(), &dir)?;
+    let conversations = store::list_conversations(&host(), DATA_ROOT)?;
     Ok(serde_json::json!({ "conversations": conversations }))
 }
 
@@ -119,11 +118,7 @@ pub fn delete_conversation(args: serde_json::Value) -> anyhow::Result<serde_json
     Ok(serde_json::json!({ "success": true }))
 }
 
-/// 数据目录（activate 时初始化）
+/// 数据目录（WASI 预打开根，activate 时宿主已挂载）
 fn data_dir() -> String {
-    DATA_DIR
-        .read()
-        .expect("data_dir lock poisoned")
-        .clone()
-        .expect("data_dir must be initialized during plugin activate")
+    DATA_ROOT.to_string()
 }

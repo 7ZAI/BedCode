@@ -197,7 +197,7 @@ impl PluginHost {
                 }
 
                 // 阶段 A 共存入口：按产物格式自动选择 core module / component
-                match wasm_runtime.load_plugin_from_file(&wasm_path, &id, wasm_host_ctx.clone()) {
+                match wasm_runtime.load_plugin_from_file(&wasm_path, &id, wasm_host_ctx.clone(), &loaded.manifest.wasi_preopen_dirs) {
                     Ok(wasm_plugin) => {
                         tracing::info!(
                             "WASM plugin loaded: {} v{} (module: {})",
@@ -787,7 +787,7 @@ impl PluginHost {
     /// 2. 重新编译并实例化 WASM 模块
     /// 3. 重新激活插件
     pub async fn reload_wasm_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        let (rust_library, extension_path) = {
+        let (rust_library, extension_path, declared_preopen_dirs) = {
             let plugins = self.plugins.read().await;
             let loaded = plugins
                 .get(plugin_id)
@@ -798,7 +798,11 @@ impl PluginHost {
                     plugin_id
                 )));
             }
-            (loaded.manifest.rust_library.clone(), loaded.extension_path.clone())
+            (
+                loaded.manifest.rust_library.clone(),
+                loaded.extension_path.clone(),
+                loaded.manifest.wasi_preopen_dirs.clone(),
+            )
         };
 
         tracing::info!("Hot-reloading WASM plugin: {}", plugin_id);
@@ -813,7 +817,7 @@ impl PluginHost {
 
         let new_wasm_plugin =
             self.wasm_runtime
-                .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone())?;
+                .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone(), &declared_preopen_dirs)?;
 
         // 替换 wasm_plugins map 中的实例
         self.wasm_plugins
@@ -1178,6 +1182,7 @@ mod tests {
                 plugin_type: PluginType::TsOnly,
                 rust_library: String::new(),
                 icon: None,
+                wasi_preopen_dirs: vec![],
             },
             state,
             granted_permissions: HashSet::new(),
@@ -1803,7 +1808,7 @@ mod tests {
             .expect("compile test component");
         let plugin = host
             .wasm_runtime()
-            .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone())
+            .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[])
             .expect("instantiate test component");
 
         host.storage()

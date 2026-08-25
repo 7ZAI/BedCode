@@ -33,13 +33,10 @@ describe('usePluginConfig', () => {
       codeLineHeight: 1.6,
       codeFontSize: 13,
       codeTheme: 'auto',
-      useSelfFileAccess: false,
-      fileAccessDir: '',
-      defaultDir: '',
     })
   })
 
-  it('全量配置读回：原样生效（旧版行距枚举映射为数字）', async () => {
+  it('全量配置读回：原样生效（旧版行距枚举映射为数字；已删除的文件访问字段被忽略）', async () => {
     const { mock, pluginConfig } = setup()
     mock.storageMap.set('config', {
       thinkingMode: 'disabled',
@@ -48,9 +45,6 @@ describe('usePluginConfig', () => {
       codeLineHeight: 'relaxed',
       codeFontSize: 15,
       codeTheme: 'github-dark',
-      useSelfFileAccess: true,
-      fileAccessDir: '  D:/chat-logs  ',
-      defaultDir: ' D:/ai-chatbox-data ',
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual({
@@ -60,9 +54,6 @@ describe('usePluginConfig', () => {
       codeLineHeight: 1.8,
       codeFontSize: 15,
       codeTheme: 'github-dark',
-      useSelfFileAccess: true,
-      fileAccessDir: 'D:/chat-logs',
-      defaultDir: 'D:/ai-chatbox-data',
     })
   })
 
@@ -75,34 +66,9 @@ describe('usePluginConfig', () => {
       codeLineHeight: 'huge',
       codeFontSize: 99,
       codeTheme: 'blue',
-      useSelfFileAccess: 'yes',
-      fileAccessDir: 42,
-      defaultDir: { path: 'x' },
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value).toEqual(DEFAULT_PLUGIN_CONFIG)
-  })
-
-  it('文件访问新字段：布尔非法回退、路径去首尾空白（WASI 预打开配置契约）', async () => {
-    const { mock, pluginConfig } = setup()
-    mock.storageMap.set('config', {
-      thinkingMode: 'default',
-      reasoningEffort: 'high',
-      showReasoning: true,
-      codeLineHeight: 1.6,
-      codeFontSize: 13,
-      codeTheme: 'auto',
-      useSelfFileAccess: 1,
-      fileAccessDir: '   ',
-      defaultDir: '',
-    })
-    await pluginConfig.loadConfig()
-    // useSelfFileAccess 非布尔回退 false；fileAccessDir 空白串归一化为空（未配置）
-    expect(pluginConfig.config.value).toEqual({
-      ...DEFAULT_PLUGIN_CONFIG,
-      fileAccessDir: '',
-    })
-    expect(pluginConfig.config.value.useSelfFileAccess).toBe(false)
   })
 
   it('行距数字夹取：超出 [0.5, 2] 范围与多余小数位归一化', async () => {
