@@ -380,12 +380,18 @@ pub fn run() {
 
             // ==================== 启动服务器（通过 ServerSupervisor）====================
 
+            // 链路加密装配句柄（issue 01）：init_at_startup 需访问数据目录与 DB 状态
+            let link_crypto_app_handle = app_handle.clone();
             let supervisor = server::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
             // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
             let auto_start = true;
             tauri::async_runtime::spawn(async move {
+                // 链路加密先于服务器启动装配：第一条流量就要被开关裁决（spec §6）；
+                // 身份损坏时强制回退全关，不阻断启动
+                server::link_crypto::init_at_startup(&link_crypto_app_handle).await;
+
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
                 // 注册同步事件处理器
@@ -609,6 +615,9 @@ pub fn run() {
             commands::server::update_server_port,
             commands::server::update_server_auto_start,
             commands::server::update_server_network_config,
+            commands::server::get_traffic_encryption_config,
+            commands::server::set_traffic_encryption_config,
+            commands::server::get_link_crypto_fingerprint,
             commands::server::reset_server_network_config,
             // mDNS
             commands::mdns::mdns_start_advertise,

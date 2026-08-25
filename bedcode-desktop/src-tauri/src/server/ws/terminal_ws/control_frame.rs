@@ -7,14 +7,20 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::enums::auth::CryptoProposal;
 use crate::enums::special_key::KeyCombo;
 
 /// 客户端 → 服务端控制帧
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
-    /// 首消息 JWT 认证（spec §4.3 规则与旧路由一致）
-    Auth { token: String },
+    /// 首消息 JWT 认证（spec §4.3 规则与旧路由一致）；
+    /// crypto 可选：携带即发起链路加密协商（issue 04，auth_ok 回带服务端临时公钥）
+    Auth {
+        token: String,
+        #[serde(default)]
+        crypto: Option<CryptoProposal>,
+    },
     /// 订阅绑定会话（无参：连接创建即绑定，快照协议全量重播）
     Subscribe,
     /// PTY 输入（data 为 Base64；special_key 为按键组合字符串）
@@ -25,12 +31,24 @@ pub enum ClientFrame {
     },
 }
 
+/// 服务端 → 客户端加密协商回执载荷（auth_ok.crypto；v 固定 1）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoEcho {
+    pub v: u8,
+    pub ek: String,
+}
+
 /// 服务端 → 客户端控制帧
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
-    /// JWT 认证成功（此后客户端可发 subscribe）
-    AuthOk,
+    /// JWT 认证成功（此后客户端可发 subscribe）；
+    /// crypto 回执存在表示服务端已接受加密协商，此后所有帧进入加密模式
+    AuthOk {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        crypto: Option<CryptoEcho>,
+    },
     /// 订阅已建立（快照元数据；历史帧在其后按序到达）
     SubscribeOk {
         /// 订阅时刻队列最新序号（历史边界）
@@ -109,8 +127,26 @@ mod tests {
     fn parse_auth_frame() {
         let frame = parse_client_frame(r#"{"type":"auth","token":"jwt-token"}"#).unwrap();
         match frame {
-            ClientFrame::Auth { token } => assert_eq!(token, "jwt-token"),
+            ClientFrame::Auth { token, crypto } => {
+                assert_eq!(token, "jwt-token");
+                assert!(crypto.is_none(), "无 crypto 字段应解析为 None（老客户端兼容）");
+            }
             _ => panic!("expected auth frame"),
+        }
+
+        // 携带加密协商的 auth 帧
+        let frame = parse_client_frame(
+            r#"{"type":"auth","token":"t","crypto":{"v":1,"ek":"QUJDREVG"}}"#,
+        )
+        .unwrap();
+        match frame {
+            ClientFrame::Auth { token, crypto } => {
+                assert_eq!(token, "t");
+                let proposal = crypto.expect("crypto 应被解析");
+                assert_eq!(proposal.v, 1);
+                assert_eq!(proposal.ek, "QUJDREVG");
+            }
+            _ => panic!("expected auth frame with crypto"),
         }
     }
 
@@ -180,8 +216,23 @@ mod tests {
 
     #[test]
     fn serialize_auth_ok_and_error() {
-        let v: serde_json::Value = serde_json::from_str(&ServerFrame::AuthOk.to_json()).unwrap();
-        assert_eq!(v["type"], "auth_ok");
+        // 无协商：crypto 省略，老客户端报文形状不变
+        let plain: serde_json::Value =
+            serde_json::from_str(&ServerFrame::AuthOk { crypto: None }.to_json()).unwrap();
+        assert_eq!(plain["type"], "auth_ok");
+        assert!(plain.get("crypto").is_none());
+
+        // 带协商回执
+        let negotiated: serde_json::Value = serde_json::from_str(
+            &ServerFrame::AuthOk {
+                crypto: Some(CryptoEcho { v: 1, ek: "QUJDREVG".to_string() }),
+            }
+            .to_json(),
+        )
+        .unwrap();
+        assert_eq!(negotiated["type"], "auth_ok");
+        assert_eq!(negotiated["crypto"]["v"], 1);
+        assert_eq!(negotiated["crypto"]["ek"], "QUJDREVG");
 
         let v: serde_json::Value = serde_json::from_str(
             &ServerFrame::Error {

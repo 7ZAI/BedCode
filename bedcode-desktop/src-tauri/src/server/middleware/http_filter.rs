@@ -89,9 +89,16 @@ where
             .map(|a| a.to_string())
             .unwrap_or_else(|| "unknown".to_string());
         let path = req.path().to_string();
+        // 链路加密协商头（issue 02）：原样透传给过滤器，解析归 link_crypto
+        let negotiation = req
+            .headers()
+            .get(crate::server::link_crypto::NEGOTIATION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
         let service = self.service.clone();
 
-        Box::pin(async move { run_traffic_filter(req, service, peer, path).await })
+        Box::pin(async move { run_traffic_filter(req, service, peer, path, negotiation).await })
     }
 }
 
@@ -101,6 +108,7 @@ async fn run_traffic_filter<S, B>(
     service: Rc<S>,
     peer: String,
     path: String,
+    negotiation: String,
 ) -> Result<ServiceResponse>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
@@ -117,6 +125,7 @@ where
         direction: Direction::Inbound,
         peer: &peer,
         route: &path,
+        negotiation: &negotiation,
         data: body.to_vec(),
     };
     if let Err(rej) = chain.run_inbound(&mut ctx) {
@@ -143,6 +152,7 @@ where
         direction: Direction::Outbound,
         peer: &peer,
         route: &path,
+        negotiation: &negotiation,
         data: res_bytes,
     };
     if let Err(rej) = chain.run_outbound(&mut out_ctx) {

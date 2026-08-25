@@ -106,6 +106,10 @@ pub struct FilterContext<'a> {
     pub peer: &'a str,
     /// 路由提示：HTTP = 请求 path，WS = 帧类别（"text" / "binary"）
     pub route: &'a str,
+    /// 协商信号（链路加密）：HTTP = 请求头 `X-BedCode-Crypto` 原始值
+    /// （如 "v1 <ek_b64>"），无协商为空串；WS 不用此字段（握手态由
+    /// link_crypto 的连接密码表按 peer 查询）。issue 02 引入。
+    pub negotiation: &'a str,
     /// 当前载荷（可原地替换实现加解密）
     pub data: Vec<u8>,
 }
@@ -368,6 +372,7 @@ mod tests {
             direction: Direction::Inbound,
             peer: "",
             route,
+            negotiation: "",
             data: data.to_vec(),
         }
     }
@@ -410,6 +415,7 @@ mod tests {
             direction: Direction::Outbound,
             peer: "127.0.0.1:5000",
             route: "text",
+            negotiation: "",
             data: b"bbb".to_vec(),
         };
         assert!(chain.run_outbound(&mut out_ctx).is_ok());

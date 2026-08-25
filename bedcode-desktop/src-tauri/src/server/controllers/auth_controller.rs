@@ -11,6 +11,7 @@
 
 use crate::server::dtos::auth_dto::*;
 use crate::server::dtos::ApiResponse;
+use crate::server::link_crypto;
 use crate::server::services::auth_service::{
     format_device_display_name, issue_biometric_challenge, verify_biometric_challenge, BiometricAuthError,
 };
@@ -139,6 +140,8 @@ pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpR
     let data = AuthTokenResponseData {
         expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
         token,
+        kd_public_b64: link_crypto::identity_parts().map(|(_, public)| public),
+        kd_fingerprint: link_crypto::identity_fingerprint().map(str::to_string),
     };
     HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
 }
@@ -216,6 +219,8 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
             let data = AuthTokenResponseData {
                 expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
                 token,
+                kd_public_b64: link_crypto::identity_parts().map(|(_, public)| public),
+                kd_fingerprint: link_crypto::identity_fingerprint().map(str::to_string),
             };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
@@ -298,6 +303,8 @@ pub async fn reauthenticate(body: web::Json<ReauthRequest>) -> HttpResponse {
             let data = AuthTokenResponseData {
                 expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
                 token: new_token,
+                kd_public_b64: link_crypto::identity_parts().map(|(_, public)| public),
+                kd_fingerprint: link_crypto::identity_fingerprint().map(str::to_string),
             };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
@@ -437,6 +444,8 @@ pub async fn biometric_verify(body: web::Json<BiometricVerifyRequest>) -> HttpRe
             let data = AuthTokenResponseData {
                 expires_in: DEFAULT_TOKEN_EXPIRY_SECS,
                 token,
+                kd_public_b64: link_crypto::identity_parts().map(|(_, public)| public),
+                kd_fingerprint: link_crypto::identity_fingerprint().map(str::to_string),
             };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
