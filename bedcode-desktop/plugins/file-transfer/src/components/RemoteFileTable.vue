@@ -26,7 +26,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'enter', entry: RemoteEntry): void
+  (e: 'enter', name: string): void
   (e: 'navigate', index: number): void
   (e: 'toggle', name: string): void
   (e: 'toggleAll'): void
@@ -50,7 +50,9 @@ const isRoot = computed(() => props.breadcrumb.length <= 1)
 
 /** 双击行：目录进入，文件无操作 */
 function onRowDblClick(entry: RemoteEntry): void {
-  if (entry.isDir) emit('enter', entry)
+  // 只传名字：cd(name) 在根清单层按名回查根 id、目录层拼相对路径；
+  // 传整个对象会被当作 name 字符串层层透传（面包屑渲染 JSON、dirId 序列化后丢失→列表恒空）
+  if (entry.isDir) emit('enter', entry.name)
 }
 </script>
 
