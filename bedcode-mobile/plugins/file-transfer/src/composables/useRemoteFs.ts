@@ -26,6 +26,8 @@ export function useRemoteFs(context: PluginContext) {
   const error = ref<string | null>(null)
   /** 对端分区存储过滤提示 */
   const notice = ref<string | null>(null)
+  /** 最近一次根清单快照（根清单层点击进入共享根时按展示名解析真实 dirId） */
+  let rootsCache: SharedRootRef[] = []
 
   /** 已勾选文件名集合（当前目录内唯一） */
   const selected = ref<Set<string>>(new Set())
@@ -60,6 +62,8 @@ export function useRemoteFs(context: PluginContext) {
         dirId: '',
       })
       const roots: SharedRootRef[] = Array.isArray(data?.roots) ? data.roots : []
+      // 缓存 id ↔ name 映射：entries 仅保留展示名，进入共享根需按名回查真实 id
+      rootsCache = roots
       entries.value = roots.map((r) => ({ name: r.name, size: 0, mtime: 0, isDir: true }))
       notice.value = null
       currentPath.value = ''
@@ -110,8 +114,10 @@ export function useRemoteFs(context: PluginContext) {
   /** 进入子目录（仅根内有效） */
   async function cd(name: string): Promise<void> {
     if (!currentRoot.value) {
-      // 根清单层点击 = 进入该共享根（name 即根展示名）
-      const root = { id: name, name }
+      // 根清单层点击 = 进入该共享根；dirId 必须是宿主分配的条目 id，
+      // 展示名 ≠ id，直接拿名字当 id 会命中不了目录表（表现为「目录不可用」），
+      // 与桌面端同构：按展示名从最近一次根清单解析真实 id，缺失才兜底同名
+      const root = rootsCache.find((r) => r.name === name) ?? { id: name, name }
       await enterRoot(root)
       return
     }
@@ -166,6 +172,7 @@ export function useRemoteFs(context: PluginContext) {
 
   /** 重置浏览状态（对端下线时调用） */
   function reset(): void {
+    rootsCache = []
     currentRoot.value = null
     currentPath.value = ''
     entries.value = []

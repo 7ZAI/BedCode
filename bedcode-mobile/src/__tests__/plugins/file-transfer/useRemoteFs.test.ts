@@ -130,21 +130,32 @@ describe('useRemoteFs orchestration', () => {
     expect(fs.crumbs.value).toEqual(['下载'])
   })
 
-  it('cd nests rel paths inside the root; at the chooser level it enters by root name', async () => {
+  it('cd nests rel paths inside the root; at the chooser level it resolves the real dirId by name', async () => {
     respondRootsAndEntries(env)
     const fs = useRemoteFs(env.context)
 
-    // 根清单层 cd = 进入该共享根（name 即根展示名）
+    // 根清单层点击 = 进入该共享根：按展示名从根清单解析真实 dirId（展示名 ≠ id，
+    // 直接拿名字当 id 会寻址不到目录表 → 「目录不可用」）
+    await fs.loadRoots()
     await fs.cd('下载')
-    expect(fs.currentRoot.value).toEqual({ id: '下载', name: '下载' })
+    expect(fs.currentRoot.value).toEqual({ id: 'root-1', name: '下载' })
 
     await fs.cd('docs')
-    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: 'docs', dirId: '下载' })
+    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: 'docs', dirId: 'root-1' })
     expect(fs.currentPath.value).toBe('docs')
     expect(fs.crumbs.value).toEqual(['下载', 'docs'])
 
     await fs.cd('sub')
-    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: 'docs/sub', dirId: '下载' })
+    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: 'docs/sub', dirId: 'root-1' })
+  })
+
+  it('cd at the chooser level without a prior roots fetch falls back to same-name id', async () => {
+    respondRootsAndEntries(env)
+    const fs = useRemoteFs(env.context)
+
+    // 防御兑底：未拉取过根清单时无法回查映射，同名兜底不阻断进入
+    await fs.cd('下载')
+    expect(fs.currentRoot.value).toEqual({ id: '下载', name: '下载' })
   })
 
   it('up walks back; from the first level it returns to the roots chooser', async () => {
