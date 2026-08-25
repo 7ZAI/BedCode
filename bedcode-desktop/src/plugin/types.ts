@@ -86,12 +86,12 @@ export interface CommandContribution {
   icon?: string
 }
 
-/** 视图扩展点 */
+/** 视图扩展点（statusbar 项无静态 title/component，运行时注册动态 label） */
 export interface ViewContribution {
   id: string
   type: 'sidebar' | 'toolbox' | 'statusbar'
-  title: string
-  component: string
+  title?: string
+  component?: string
   icon?: string
 }
 

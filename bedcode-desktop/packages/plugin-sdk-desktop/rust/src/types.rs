@@ -172,7 +172,11 @@ pub struct ViewContribution {
     /// "sidebar" | "toolbox" | "statusbar"
     #[serde(rename = "type")]
     pub view_type: String,
+    /// 静态标题；statusbar 项由运行时注册动态 label，声明中可缺省
+    #[serde(default)]
     pub title: String,
+    /// 视图组件名；statusbar 项无独立视图组件（点击行为运行时注册），声明中可缺省
+    #[serde(default)]
     pub component: String,
 }
 
@@ -359,6 +363,19 @@ mod tests {
                 "component": "SidePanel"
             })
         );
+    }
+
+    #[test]
+    fn test_view_contribution_statusbar_optional_fields() {
+        // statusbar 项由 manifest-gen 扫描 registerStatusBarItem 生成，无静态 title/component；
+        // 反序列化必须放行，否则整个插件加载失败（missing field `title`）
+        let v: ViewContribution =
+            serde_json::from_value(serde_json::json!({ "id": "v1", "type": "statusbar" }))
+                .unwrap();
+        assert_eq!(v.id, "v1");
+        assert_eq!(v.view_type, "statusbar");
+        assert_eq!(v.title, "");
+        assert_eq!(v.component, "");
     }
 
     #[test]
