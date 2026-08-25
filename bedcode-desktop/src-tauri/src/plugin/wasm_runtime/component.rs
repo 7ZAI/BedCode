@@ -589,7 +589,11 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的 on_startup 导出
-    pub(crate) fn on_startup(&mut self) -> crate::Result<()> {
+    ///
+    /// 双层 Result 语义：外层 = 调用本身失败（trap / 导出缺失 / 燃料耗尽），
+    /// 内层 = guest 报告的启动初始化结果（v8 契约 `result<_, string>`）。
+    /// 宿主据此区分「插件自报启动失败 → Degraded」与「调用故障」
+    pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         lifecycle
@@ -598,7 +602,10 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的 on_shutdown 导出
-    pub(crate) fn on_shutdown(&mut self) -> crate::Result<()> {
+    ///
+    /// 双层 Result 语义同 [`Self::on_startup`]；停用流程对 guest 报告的
+    /// 清理失败仅记录，不影响状态机
+    pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         lifecycle

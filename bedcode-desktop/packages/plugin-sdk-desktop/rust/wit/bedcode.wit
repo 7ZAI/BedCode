@@ -237,11 +237,14 @@ interface command {
 }
 
 /// 生命周期（原 activate/deactivate/on_startup/on_shutdown）
+///
+/// 四个导出均携带结果（v8）：启动初始化/清理的成败由导出返回值如实上抛，
+/// 宿主据此区分 Activated / Degraded，不再依赖「调用没抛错」推断成功
 interface lifecycle {
     activate: func() -> result<_, string>;
     deactivate: func() -> result<_, string>;
-    on-startup: func();
-    on-shutdown: func();
+    on-startup: func() -> result<_, string>;
+    on-shutdown: func() -> result<_, string>;
 }
 
 /// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）

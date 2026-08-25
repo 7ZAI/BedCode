@@ -64,11 +64,17 @@ pub trait WasmPlugin: Send + Sync + 'static {
     }
 
     /// 应用启动完成回调（可选）
+    ///
+    /// 启动初始化（建表、注册扩展点、加载资源等）在此执行；
+    /// 返回 Err 时宿主将插件置为 Degraded（实例可用但启动未就绪），
+    /// 不再被静默忽略。panic 由宿主捕获并按故障处理
     fn on_startup() -> anyhow::Result<()> {
         Ok(())
     }
 
     /// 应用即将关闭回调（可选）
+    ///
+    /// 返回 Err 仅记录日志（停用流程继续），不影响插件状态机
     fn on_shutdown() -> anyhow::Result<()> {
         Ok(())
     }
@@ -222,6 +228,9 @@ macro_rules! wasm_entry {
 
         // ==================== lifecycle（原 __bedcode_activate/deactivate/on_startup/on_shutdown） ====================
 
+        // 固化流程：四个生命周期导出的结果一律如实上抛宿主（v8 契约），
+        // SDK 骨架只负责日志与错误字符串化，不吞任何失败——
+        // 启动初始化失败由宿主置 Degraded，不再被静默降级为「已激活」
         impl $crate::wasm::exports::bedcode::plugin::lifecycle::Guest for $plugin_type {
             fn activate() -> Result<(), String> {
                 // WasmHost 是无状态 unit struct；插件身份由宿主侧 Caller state 维护。
@@ -253,12 +262,35 @@ macro_rules! wasm_entry {
                 }
             }
 
-            fn on_startup() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_startup();
+            fn on_startup() -> Result<(), String> {
+                let host = $crate::wasm_host::WasmHost;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_startup() {
+                    Ok(()) => {
+                        $crate::host::HostLog::log_info(&host, "Plugin startup init completed");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_startup failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
 
-            fn on_shutdown() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown();
+            fn on_shutdown() -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_shutdown failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
         }
 
@@ -364,7 +396,7 @@ macro_rules! wasm_entry {
         // ==================== abi（原 __bedcode_abi_version + form 形态字段） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v6）完全一致
+            /// ABI 版本：语义与 `abi::ABI_VERSION` 完全一致
             fn version() -> u32 {
                 $crate::abi::ABI_VERSION as u32
             }

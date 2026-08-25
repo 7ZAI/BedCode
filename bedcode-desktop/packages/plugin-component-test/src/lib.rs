@@ -113,9 +113,18 @@ impl lifecycle::Guest for Guest {
         Ok(())
     }
 
-    fn on_startup() {}
+    // v8 契约：结果如实上抛。宿主测试预写 storage key `component-test-fail-startup`
+    // 时启动初始化失败，用于验证宿主 Degraded 路径（运行期开关，免构建矩阵）
+    fn on_startup() -> Result<(), String> {
+        match host_storage::get("component-test-fail-startup") {
+            Ok(Some(_)) => Err("simulated startup init failure (component-test)".to_string()),
+            _ => Ok(()),
+        }
+    }
 
-    fn on_shutdown() {}
+    fn on_shutdown() -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl events::Guest for Guest {
@@ -156,9 +165,9 @@ impl manifest::Guest for Guest {
 }
 
 impl abi::Guest for Guest {
-    // 与 SDK abi::ABI_VERSION（当前 v7）保持一致；宿主按 `abi.form()==1` 识别组件形态
+    // 与 SDK abi::ABI_VERSION（当前 v8）保持一致；宿主按 `abi.form()==1` 识别组件形态
     fn version() -> u32 {
-        7
+        8
     }
 
     fn form() -> u32 {

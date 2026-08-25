@@ -211,7 +211,12 @@ pub struct FileHandlerContribution {
 #[serde(tag = "state", content = "error")]
 pub enum PluginState {
     Loaded,
+    /// 激活进行中（auto-activation / 手动激活期间的瞬时中间态，列表查询可见）
+    Activating,
     Activated,
+    /// 激活成功但启动初始化失败（v8 契约）：WASM 实例可用、扩展点已注册，
+    /// 但插件内部启动流程未完成。可重试激活回到 Activated
+    Degraded(String),
     /// 插件请求的权限尚未获得用户批准（需在插件管理页人工审批后才能激活）
     NeedsApproval,
     Error(String),
@@ -313,6 +318,25 @@ mod tests {
         let back: PluginState =
             serde_json::from_value(serde_json::json!({ "state": "Error", "error": "x" })).unwrap();
         assert_eq!(back, PluginState::Error("x".into()));
+    }
+
+    #[test]
+    fn test_plugin_state_activating_and_degraded() {
+        // v8 契约新增变体：Activating 瞬时中间态 + Degraded 携带降级原因，
+        // serde 形状与 Error 一致（tag=state / content=error）
+        assert_eq!(
+            serde_json::to_value(PluginState::Activating).unwrap(),
+            serde_json::json!({ "state": "Activating" })
+        );
+        assert_eq!(
+            serde_json::to_value(PluginState::Degraded("init failed".into())).unwrap(),
+            serde_json::json!({ "state": "Degraded", "error": "init failed" })
+        );
+        let back: PluginState = serde_json::from_value(
+            serde_json::json!({ "state": "Degraded", "error": "hooks install failed" }),
+        )
+        .unwrap();
+        assert_eq!(back, PluginState::Degraded("hooks install failed".into()));
     }
 
     // ==================== 扩展点声明 ====================

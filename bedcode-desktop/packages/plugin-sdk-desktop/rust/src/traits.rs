@@ -41,19 +41,21 @@ pub trait BedcodePlugin: Send + Sync + 'static {
         vec![]
     }
 
-    /// 应用启动完成回调（可选，默认为空操作）
+    /// 应用启动完成回调（可选，默认为成功）
     ///
     /// 在所有核心服务初始化完成后触发，插件可在此执行启动后的初始化逻辑。
-    fn on_startup() -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async {})
+    /// 返回 Err 时宿主记录 error 日志并通知失败；WASM 插件的对应失败
+    /// 会进入 Degraded 终态（v8 契约）
+    fn on_startup() -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+        Box::pin(async { Ok(()) })
     }
 
-    /// 应用即将关闭回调（可选，默认为空操作）
+    /// 应用即将关闭回调（可选，默认为成功）
     ///
     /// 在插件 deactivate 之前触发，用于执行插件特定的清理逻辑。
     /// 此时插件仍处于激活状态，权限和注册表条目仍可用。
-    fn on_shutdown() -> Pin<Box<dyn Future<Output = ()> + Send>> {
-        Box::pin(async {})
+    fn on_shutdown() -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -65,8 +67,8 @@ pub struct BedcodePluginEntry {
     pub deactivate: fn(RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
     pub register_commands: fn() -> Vec<PluginCommand>,
     pub terminal_handlers: fn() -> Vec<Box<dyn TerminalHandler>>,
-    pub on_startup: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
-    pub on_shutdown: fn() -> Pin<Box<dyn Future<Output = ()> + Send>>,
+    pub on_startup: fn() -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
+    pub on_shutdown: fn() -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>,
 }
 
 // inventory crate 需要的 submit! 宏目标类型
@@ -129,6 +131,7 @@ mod tests {
                 rust_library: String::new(),
                 api: vec![],
                 icon: None,
+                wasi_preopen_dirs: vec![],
             }
         }
 
@@ -164,9 +167,9 @@ mod tests {
         // 未覆盖的扩展点走 trait 默认实现：空命令表/空终端处理器
         assert!((entry.register_commands)().is_empty());
         assert!((entry.terminal_handlers)().is_empty());
-        // 默认启动/关闭回调可直接执行（async 无等待点）
-        block_on((entry.on_startup)());
-        block_on((entry.on_shutdown)());
+        // 默认启动/关闭回调可直接执行（async 无等待点）且默认成功
+        block_on((entry.on_startup)()).unwrap();
+        block_on((entry.on_shutdown)()).unwrap();
     }
 
     #[test]

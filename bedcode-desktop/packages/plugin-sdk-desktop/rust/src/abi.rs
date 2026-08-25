@@ -19,7 +19,10 @@
 //!   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
 //! - v7: 新增会话关闭（host function `SESSION_CLOSE`），支撑插件在
 //!   定时自动任务执行完后关闭其创建的会话
-pub const ABI_VERSION: u32 = 7;
+//! - v8: 生命周期契约补全（WIT `on-startup`/`on-shutdown` 携带
+//!   `result<_, string>`），启动初始化/清理的失败可如实上抛宿主，
+//!   宿主据此进入 Degraded 终态而非静默标记 Activated
+pub const ABI_VERSION: u32 = 8;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -33,9 +36,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v7() {
-        // 版本号序列与历史 core ABI 共用：v7 = 新增 SESSION_CLOSE（ADR 0003 配套）
-        assert_eq!(ABI_VERSION, 7);
+    fn test_abi_version_is_v8() {
+        // 版本号序列与历史 core ABI 共用：v8 = 生命周期契约补全
+        // （WIT on-startup/on-shutdown 携带 result）
+        assert_eq!(ABI_VERSION, 8);
     }
 
     #[test]
