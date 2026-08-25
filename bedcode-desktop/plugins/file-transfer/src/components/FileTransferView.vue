@@ -13,24 +13,28 @@ import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
 import BatchRequestDialog from './BatchRequestDialog.vue'
+import ConsentDialog from './ConsentDialog.vue'
+import PeerDevicesPanel from './PeerDevicesPanel.vue'
 import { useTasks } from '../composables/useTasks'
 import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
-import { usePeer } from '../composables/usePeer'
+import { usePeerDevices } from '../composables/usePeerDevices'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const {
-  peer,
+  rows: deviceRows,
   peers,
-  activePeerId,
+  peer,
   connOnline,
+  connect: connectDevice,
+  disconnect: disconnectDevice,
   switchPeer,
   start: startPeer,
   stop: stopPeer,
-} = usePeer(context)
+} = usePeerDevices(context)
 const {
   tasks,
   totalSpeed,
@@ -153,13 +157,57 @@ async function handleUpload(): Promise<void> {
   if (ok > 0) queueVisible.value = true
 }
 
-/** 设备切换菜单开合 */
-const peerMenuOpen = ref(false)
+/** 附近设备面板开合（点击外部关闭，见 onMounted 文档监听） */
+const devPanelOpen = ref(false)
+const devPanelWrap = ref<HTMLElement | null>(null)
 
-async function handleSwitchPeer(id: string): Promise<void> {
-  peerMenuOpen.value = false
-  await switchPeer(id)
+/** 已连接设备数（顶栏入口角标语义：可互传的设备数） */
+const connectedCount = computed(
+  () => deviceRows.value.filter((r) => r.status === 'connected').length,
+)
+
+function handleConnectDevice(nodeId: string): void {
+  void connectDevice(nodeId)
 }
+
+function handleDisconnectDevice(nodeId: string): void {
+  void disconnectDevice(nodeId)
+}
+
+async function handleSetActiveDevice(nodeId: string): Promise<void> {
+  await switchPeer(nodeId)
+}
+
+/** 点击面板外部时收起（capture 阶段拦截，避免先触发内部点击） */
+function handleDocClick(e: MouseEvent): void {
+  if (!devPanelOpen.value) return
+  if (devPanelWrap.value && !devPanelWrap.value.contains(e.target as Node)) {
+    devPanelOpen.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocClick, true)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocClick, true)
+})
+
+onMounted(async () => {
+  startPeer()
+  startTasks()
+  startReceiving()
+  await Promise.all([loadSettings(), refreshTasks()])
+  void queryPeer()
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocClick, true)
+  stopPeer()
+  stopTasks()
+  stopReceiving()
+})
 
 /** 激活设备变化驱动目录加载/清空 */
 watch(
@@ -172,20 +220,6 @@ watch(
     }
   },
 )
-
-onMounted(async () => {
-  startPeer()
-  startTasks()
-  startReceiving()
-  await Promise.all([loadSettings(), refreshTasks()])
-  void queryPeer()
-})
-
-onUnmounted(() => {
-  stopPeer()
-  stopTasks()
-  stopReceiving()
-})
 </script>
 
 <template>
@@ -197,6 +231,10 @@ onUnmounted(() => {
       @approve="handleBatchApprove"
       @reject="handleBatchReject"
     />
+
+    <!-- 首连确认弹窗：编排常驻于插件激活期（useConsent），此处仅渲染当前待确认项；
+         不在面板时经状态栏项跳转过来后即可见可操作 -->
+    <ConsentDialog />
 
     <!-- 顶栏 -->
     <div class="ft-topbar">
@@ -212,14 +250,13 @@ onUnmounted(() => {
           {{ peerStatusLabel }}
         </span>
       </div>
-      <!-- 设备切换：多对端场景点击弹出在线设备列表 -->
-      <div class="ft-peer-switch-wrap">
+      <!-- 附近设备面板：三态连接管理（自绘，禁原生 select；点击外部收起） -->
+      <div ref="devPanelWrap" class="ft-peer-switch-wrap">
         <button
           class="ft-btn ft-peer-switch-btn"
-          :class="{ 'ft-peer-switch-btn--open': peerMenuOpen }"
-          :disabled="peers.length === 0"
+          :class="{ 'ft-peer-switch-btn--open': devPanelOpen }"
           :title="t('transfer.peer.switchTitle')"
-          @click="peerMenuOpen = !peerMenuOpen"
+          @click="devPanelOpen = !devPanelOpen"
         >
           <svg
             class="w-3.5 h-3.5 flex-shrink-0"
@@ -234,34 +271,16 @@ onUnmounted(() => {
               d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
             />
           </svg>
-          <span class="ft-btn-text">{{ peers.length }}</span>
+          <span class="ft-btn-text">{{ connectedCount }}</span>
         </button>
-        <!-- 设备列表下拉（自绘，禁原生 select） -->
         <Transition name="ft-drop">
-          <div v-if="peerMenuOpen" class="ft-peer-menu">
-            <div class="ft-peer-menu-title">{{ t('transfer.peer.switchTitle') }}</div>
-            <button
-              v-for="p in peers"
-              :key="p.id"
-              class="ft-peer-menu-item"
-              :class="{ 'ft-peer-menu-item--active': p.id === activePeerId }"
-              @click="handleSwitchPeer(p.id)"
-            >
-              <!-- 列表内对端均为在线（peer_changed online 才入列），统一绿点，激活项以高亮+勾标识 -->
-              <span class="ft-dot ft-dot--online"></span>
-              <span class="ft-peer-menu-name">{{ p.name || p.ip || p.id }}</span>
-              <span v-if="p.id === activePeerId" class="ft-peer-menu-check">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    stroke-width="3"
-                    d="M5 13l4 4L19 7"
-                  />
-                </svg>
-              </span>
-            </button>
-          </div>
+          <PeerDevicesPanel
+            v-if="devPanelOpen"
+            :rows="deviceRows"
+            @connect="handleConnectDevice"
+            @disconnect="handleDisconnectDevice"
+            @set-active="handleSetActiveDevice"
+          />
         </Transition>
       </div>
       <div class="ft-spacer"></div>
@@ -485,7 +504,10 @@ onUnmounted(() => {
       </TransitionGroup>
     </Teleport>
 
-    <!-- 设置覆盖层（淡入 + 上滑） -->
+    <!-- 设置覆盖层（淡入 + 上滑）。注：SettingsPanel 曾因 defineEmits 缺失调用
+         括号（宏未被展开，运行时 ReferenceError）导致半初始化组件毒化本层
+         Transition 的更新路径（locateNonHydratedAsyncRoot 遍历遇 null subTree
+         抛错），覆盖层永不出现；宏修复后 Transition 工作正常 -->
     <Transition name="ft-settings">
       <SettingsPanel
         v-if="showSettings"

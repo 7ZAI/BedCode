@@ -7,7 +7,13 @@
 import { reactive, ref } from 'vue'
 import type { PluginContext, PluginModule } from '../../src/types'
 import { createMockContext } from './mock-context'
-import { getPluginRecord, plugins, pushLog, type DevPluginRecord } from './registry'
+import {
+  getPluginRecord,
+  plugins,
+  pushLog,
+  registerDevMock,
+  type DevPluginRecord,
+} from './registry'
 
 // dev-shell 专用 mock：浏览器中 WASM 后端不可用，为特定插件注入模拟命令与事件
 import { registerFileTransferMock, disposeFileTransferMock } from './mock/file-transfer'
@@ -40,18 +46,24 @@ export async function loadPlugins(): Promise<void> {
       pushLog('info', pluginId, `开始加载（${spec.dir}）`)
 
       try {
+        // 领域种子数据（devMock）先注册：mock 命令实现按 pluginId 消费（与移动端同构）
+        const module = spec.entry as PluginModule
+        if (module.devMock) {
+          record.devMockDisposable = registerDevMock(pluginId, module.devMock)
+          pushLog('info', pluginId, '已注册 devMock（领域种子数据）')
+        }
         const context: PluginContext = createMockContext(pluginId, spec.dir)
         record.context = context
-        const module = spec.entry as PluginModule
+        // mock 命令先于 activate() 注册：插件 activate/首帧即会拉设置与设备，
+        // 后注册会错过首轮命令（空态假象）；与移动端 loader 同构
+        if (pluginId === 'com.bedcode.file-transfer') {
+          registerFileTransferMock(context)
+          pushLog('info', pluginId, '已注入 dev-shell mock 数据')
+        }
         if (typeof module.activate === 'function') {
           await module.activate(context)
           record.state = 'activated'
           pushLog('info', pluginId, 'activate() 成功')
-          // 注入插件 mock（浏览器无 WASM 后端，模拟命令与事件以展示完整 UI）
-          if (pluginId === 'com.bedcode.file-transfer') {
-            registerFileTransferMock(context)
-            pushLog('info', pluginId, '已注入 dev-shell mock 数据')
-          }
         } else {
           record.state = 'loaded'
           pushLog('warn', pluginId, '入口模块未导出 activate()，仅完成加载')
@@ -72,6 +84,8 @@ export async function loadPlugins(): Promise<void> {
 export async function deactivatePlugin(pluginId: string): Promise<void> {
   const record = getPluginRecord(pluginId)
   if (!record || record.state === 'deactivated') return
+  record.devMockDisposable?.dispose()
+  record.devMockDisposable = undefined
   const context = record.context as PluginContext | null
   if (context) {
     for (const d of [...context._disposables]) {

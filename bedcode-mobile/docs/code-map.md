@@ -48,7 +48,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   ├── stores/                       # Pinia 全局状态：代码查看器、输入助手、设置、终端缓冲、i18n
 │   ├── views/                        # 页面：代码浏览器、设备、mDNS 发现、插件、扫码、会话、
 │   │                                 #   设置（views/settings/ 下按领域拆分子页：外观/连接/认证/
-│   │                                 #   通知/关于 + 文件传输对端相关页）、终端、工具箱
+│   │                                 #   通知/关于）、终端、工具箱
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
 │   │                                 #   共享模块运行时、对话框宿主；components/ 下为插件 UI 宿主，
 │   │                                 #   auto-task/ 为 Auto Task 任务队列面板
@@ -194,7 +194,7 @@ Desktop PTY → Claude Code
 | 文件传输 (SAF) | `plugins/file-transfer/` + `src-tauri/src/plugin/`（saf_io/saf_path）+ `src-tauri/src/file_service/` |
 | SAF Uri → 路径解析 / SAF 读写抽象 | `src-tauri/src/plugin/saf_path.rs`、`saf_io.rs`（主 seam） |
 | 插件审批 / 身份校验 | `src-tauri/src/plugin/approval.rs`、`validation.rs` |
-| 设置子页面 (外观/连接/认证/通知/对端) | `src/views/settings/` |
+| 设置子页面 (外观/连接/认证/通知) | `src/views/settings/` |
 | 帮助文档资源 (快捷键/终端) | `src/assets/` |
 | Android 前台服务 / 平台特性 | `src/composables/`（useForegroundService/useAndroidFeatures/useEdgeToEdge） |
 | Android 原生插件注册 | `src-tauri/src/plugin/android_plugins/` |

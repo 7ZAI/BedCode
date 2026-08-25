@@ -42,13 +42,11 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位，对等网络设备列表(150)、传输任务(160)紧随其后；
- * 插件管理(9998) 与 设置(9999) 置于所有插件排序值之后，保证这两个入口
- * 永远排在菜单最末。说明：server 槽位(300) 保留不复用，防止插件排序撞位 */
+ * 设备配对(100) 置于首位；插件管理(9998) 与 设置(9999) 置于所有插件
+ * 排序值之后，保证这两个入口永远排在菜单最末。说明：server 槽位(300)
+ * 保留不复用，防止插件排序撞位 */
 export const BUILTIN_MENU_ORDERS = {
   devices: 100,
-  peerDevices: 150,
-  peerTransfers: 160,
   sessions: 200,
   server: 300,
   plugins: 9998,
@@ -92,24 +90,6 @@ export const builtinMenuItems: SidebarMenuItem[] = [
     isI18nKey: true,
     icon: 'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z',
     order: BUILTIN_MENU_ORDERS.devices,
-  },
-  {
-    id: 'peer-devices',
-    path: '/peer-devices',
-    labelKey: 'peers.devices.title',
-    isI18nKey: true,
-    // WiFi 弧线图标：与终端配对设备页区分，指向局域网对等发现
-    icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0',
-    order: BUILTIN_MENU_ORDERS.peerDevices,
-  },
-  {
-    id: 'peer-transfers',
-    path: '/peer-transfers',
-    labelKey: 'peers.transfers.title',
-    isI18nKey: true,
-    // 托盘上行箭头图标：发送/推送语义，与设备列表的 WiFi 弧线区分
-    icon: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5m-13.5-9L12 3m0 0l4.5 4.5M12 3v13.5',
-    order: BUILTIN_MENU_ORDERS.peerTransfers,
   },
   {
     id: 'plugins',

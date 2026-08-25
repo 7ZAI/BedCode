@@ -271,6 +271,53 @@ export interface PluginContext {
 export interface PluginModule {
   activate(context: PluginContext): Promise<void>
   deactivate?: () => Promise<void>
+  /** dev-shell 领域种子数据（见 PluginDevMock）；真实宿主忽略，无需条件编译 */
+  devMock?: PluginDevMock
+}
+
+// ==================== devMock 协议（dev-shell 领域种子数据） ====================
+//
+// 种子数据由插件工程持有（入口导出 devMock），dev-shell 只做通用接线：
+// loader 按 pluginId 注册，mock 命令实现消费种子返回演示值。
+// 真实宿主忽略多余导出，与移动端 SDK 同构。
+
+/** file-transfer 对等领域种子（附近设备面板 / 后续首连确认、可信对端演示数据） */
+export interface PeerDevMock {
+  /**
+   * 发现设备列表（宿主 DiscoveredPeerDto 的 camelCase 子集），
+   * 须覆盖在线/未连接两态；fileTransfer=false 节点可见但不可连接
+   */
+  devices: Array<{
+    nodeId: string
+    deviceName: string
+    addr?: string
+    fileTransfer?: boolean
+  }>
+  /** 初始已连接节点 id（对端已确认的传输会话） */
+  connectedNodeIds?: string[]
+  /** 初始活跃对端 nodeId（应为 connectedNodeIds 之一） */
+  activeNodeId?: string
+  /** 拨号行为覆盖：nodeId → 终态；未列出的可传输节点按 unreachable 处理 */
+  dialBehavior?: Record<string, 'connected' | 'denied' | 'unreachable'>
+  /** 模拟握手耗时 ms（缺省 800） */
+  dialLatencyMs?: number
+  /**
+   * 待确认首连请求种子（dev-shell 延迟逐条推送 consent-requested 事件，
+   * 驱动确认弹窗与状态栏计数两路演示；缺省不演示）。多条种子可演示排队：
+   * 第一条立即弹窗，后续进入队列待当前项结算后依次展示
+   */
+  consent?: Array<{
+    requestId: string
+    nodeId: string
+    fingerprintShort: string
+    /** 设备名；null 时弹窗以短指纹兑底 + 身份提示展示 */
+    deviceName: string | null
+  }>
+}
+
+/** 插件 dev-shell 演示数据（后续领域按需扩充子字段） */
+export interface PluginDevMock {
+  peer?: PeerDevMock
 }
 
 /** 插件运行时状态 */

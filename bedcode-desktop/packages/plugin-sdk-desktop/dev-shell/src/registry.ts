@@ -11,6 +11,7 @@ import type {
   FileHandlerDescriptor,
   InputExtensionDescriptor,
   PageToolbarItemDescriptor,
+  PluginDevMock,
   RequestHandler,
   SidebarPanelDescriptor,
   StatusBarItemDescriptor,
@@ -18,6 +19,25 @@ import type {
   TitleBarItemDescriptor,
   ToolboxPageDescriptor,
 } from '../../src/types'
+
+// ==================== 插件 devMock（领域种子数据） ====================
+
+/** 按 pluginId 注册的开发期领域数据（loader 在 activate 前调用，deactivate 时清理） */
+const devMocks = new Map<string, PluginDevMock>()
+
+export function registerDevMock(pluginId: string, mock: PluginDevMock): Disposable {
+  devMocks.set(pluginId, mock)
+  return {
+    dispose() {
+      devMocks.delete(pluginId)
+    },
+  }
+}
+
+/** 取指定插件的领域种子（mock 命令实现消费，与移动端 SDK 同构） */
+export function getDevMock(pluginId: string): PluginDevMock | undefined {
+  return devMocks.get(pluginId)
+}
 
 // ==================== 日志 ====================
 
@@ -64,6 +84,8 @@ export interface DevPluginRecord {
   state: DevPluginState
   error?: string
   context: any
+  /** devMock 注册句柄（deactivate 时清理） */
+  devMockDisposable?: Disposable
 }
 
 const plugins = ref<DevPluginRecord[]>([])

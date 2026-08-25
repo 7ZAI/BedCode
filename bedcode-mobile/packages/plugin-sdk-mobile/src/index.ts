@@ -47,6 +47,7 @@ export type {
   OcrEngineStatus,
   OcrImageSource,
   OcrLinesSeed,
+  PeerDevMock,
   PluginDevMock,
   PluginContext,
   PluginModule,

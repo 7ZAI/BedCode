@@ -10,6 +10,11 @@ import type { PluginContext, PluginModule } from '../../src/types'
 import { createMockContext } from './mock-context'
 import { emitDevEvent } from './mock/session'
 import {
+  registerFileTransferPeerMock,
+  disposeFileTransferPeerMock,
+} from './mock/file-transfer'
+import {
+  getDevMock,
   getPluginRecord,
   plugins,
   pushLog,
@@ -53,6 +58,12 @@ export async function loadPlugins(): Promise<void> {
           pushLog('info', pluginId, '已注册 devMock（领域种子数据）')
         }
         const context: PluginContext = createMockContext(pluginId)
+        // 对等领域 mock（通用接线：插件 devMock.peer 种子存在时才注册）
+        const peerSeed = getDevMock(pluginId)?.peer
+        if (peerSeed) {
+          registerFileTransferPeerMock(context, peerSeed, pluginId)
+          pushLog('info', pluginId, '已注册对等域命令 mock（dev-shell 演示用）')
+        }
         record.context = context
         if (typeof module.activate === 'function') {
           await module.activate(context)
@@ -91,6 +102,7 @@ export async function deactivatePlugin(pluginId: string): Promise<void> {
   if (!record || record.state === 'deactivated') return
   record.devMockDisposable?.dispose()
   record.devMockDisposable = undefined
+  if (getDevMock(pluginId)?.peer) disposeFileTransferPeerMock()
   const context = record.context as PluginContext | null
   if (context) {
     for (const d of [...context._disposables]) {

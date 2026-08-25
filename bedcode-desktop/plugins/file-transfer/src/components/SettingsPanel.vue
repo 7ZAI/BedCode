@@ -9,6 +9,7 @@ import { inject } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Settings } from '../types'
 import type { RootItem } from '../composables/useSettings'
+import TrustedPeersSection from './TrustedPeersSection.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -26,7 +27,7 @@ const emit = defineEmits<{
   (e: 'setReceivingPolicy', policy: 'ask' | 'accept' | 'reject'): void
   (e: 'setApprovalTimeoutSec', secs: number): void
   (e: 'close'): void
-}>
+}>()
 
 // ==================== v2 接收策略（自绘分段控件，禁原生 select） ====================
 
@@ -143,6 +144,9 @@ function onTimeoutBlur(e: Event): void {
             />
           </div>
         </section>
+
+        <!-- 可信对端管理（spec 决策 8）：独立分区，列表/撤销自包含 -->
+        <TrustedPeersSection />
 
         <!-- 安全告知（spec §10 常驻） -->
         <div class="ft-warning">

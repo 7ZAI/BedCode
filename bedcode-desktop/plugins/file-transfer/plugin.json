@@ -16,6 +16,7 @@
     "fs:read",
     "fs:write",
     "network:http",
+    "peer",
     "storage",
     "system:open",
     "timer:schedule",
@@ -39,6 +40,26 @@
       {
         "id": "file-transfer.set-active-peer",
         "title": "Set Active Peer"
+      },
+      {
+        "id": "file-transfer.dial-peer",
+        "title": "Dial Peer Connection"
+      },
+      {
+        "id": "file-transfer.disconnect-peer",
+        "title": "Disconnect Peer Session"
+      },
+      {
+        "id": "file-transfer.respond-consent",
+        "title": "Respond First-Connect Consent"
+      },
+      {
+        "id": "file-transfer.list-trusted",
+        "title": "List Trusted Peers"
+      },
+      {
+        "id": "file-transfer.revoke-trusted",
+        "title": "Revoke Trusted Peer"
       },
       {
         "id": "file-transfer.list-remote",

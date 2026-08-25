@@ -44,8 +44,6 @@ describe('useSidebarMenu', () => {
     const { menuItems } = useSidebarMenu()
     expect(menuItems.value.map((m) => m.id)).toEqual([
       'devices',
-      'peer-devices',
-      'peer-transfers',
       'sessions',
       'plugins',
       'settings',
@@ -53,9 +51,6 @@ describe('useSidebarMenu', () => {
     // 设备配对菜单项使用"设备配对" i18n key
     expect(menuItems.value[0].labelKey).toBe('desktop.sidebar.devicePairing')
     expect(menuItems.value[0].isI18nKey).toBe(true)
-    // 对等网络设备列表紧随设备配对（issue 08），传输任务紧随其后（issue 09）
-    expect(menuItems.value[1].labelKey).toBe('peers.devices.title')
-    expect(menuItems.value[2].labelKey).toBe('peers.transfers.title')
   })
 
   it('插件面板与内置菜单合并为单一列表，未指定 order 时排在设置/插件管理之前', () => {
@@ -67,8 +62,6 @@ describe('useSidebarMenu', () => {
     // 插件默认 order 600：位于内置业务菜单（sessions 200）之后，但始终排在插件管理(9998)/设置(9999)之前
     expect(ids).toEqual([
       'devices',
-      'peer-devices',
-      'peer-transfers',
       'sessions',
       'plugin-p1-v1',
       'plugin-p2-v2',
@@ -78,17 +71,15 @@ describe('useSidebarMenu', () => {
   })
 
   it('插件可通过 order 插入到任意内置菜单项之间', () => {
-    // order 150：与内置"附近设备"(150) 同槽位，稳定排序内置在前
+    // order 150：位于"设备配对"(100) 与"终端会话"(200) 之间
     registerPluginView('p1', 'v1', 'sidebar', 150)
-    // order 350：位于"终端会话"(200) 与"插件"(400) 之间（server 槽位 300 已废弃）
+    // order 350：位于"终端会话"(200) 之后（server 槽位 300 已废弃）
     registerPluginView('p2', 'v2', 'toolbox', 350)
 
     const { menuItems } = useSidebarMenu()
     expect(menuItems.value.map((m) => m.id)).toEqual([
       'devices',
-      'peer-devices',
       'plugin-p1-v1',
-      'peer-transfers',
       'sessions',
       'plugin-p2-v2',
       'plugins',
@@ -122,8 +113,6 @@ describe('useSidebarMenu', () => {
     const { menuItems } = useSidebarMenu()
     expect(menuItems.value.map((m) => m.id)).toEqual([
       'devices',
-      'peer-devices',
-      'peer-transfers',
       'sessions',
       'custom',
       'plugins',
@@ -134,8 +123,6 @@ describe('useSidebarMenu', () => {
     custom.dispose()
     expect(menuItems.value.map((m) => m.id)).toEqual([
       'devices',
-      'peer-devices',
-      'peer-transfers',
       'sessions',
       'plugins',
       'settings',

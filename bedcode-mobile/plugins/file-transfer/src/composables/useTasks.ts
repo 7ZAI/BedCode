@@ -30,7 +30,6 @@ function mapWireTask(raw: any): Task {
       name: raw.peer?.name ?? '',
     },
     remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    localPath: null,
     size: raw.size ?? 0,
     offset: raw.offset ?? 0,
     rateBps: raw.rate_bps ?? raw.rateBps ?? 0,
@@ -154,23 +153,15 @@ export function useTasks(context: PluginContext) {
     checkSettledNotification()
   }
 
-  /** 设备列表变化：挑选首个具备文件传输能力的节点为活跃对端 */
+  /** 设备列表变化：仅维护「存在可传输发现节点」粗粒度标记（可发送性）。
+   *  活跃对端选择已收敛到 usePeerDevices（保持当前选择 + 空选时兑底），
+   *  此处不再强制 set-active-peer 覆盖用户手动选择；connOnline 只由 ws_*
+   *  控制面事件驱动，不与发现缓存混浠。 */
   function onDevicesChanged(payload: unknown): void {
     if (!Array.isArray(payload)) return
-    const capable = payload.find(
+    peerOnline.value = payload.some(
       (d: DeviceInfo) => d.fileTransfer !== false && !!d.nodeId,
-    ) as DeviceInfo | undefined
-    if (capable) {
-      peerOnline.value = true
-      peerId.value = capable.nodeId
-      if (capable.deviceName) peerName.value = capable.deviceName
-      connOnline.value = true
-      void context.commands
-        .execute('file-transfer.set-active-peer', { peerId: capable.nodeId })
-        .catch(() => {})
-    } else {
-      peerOnline.value = false
-    }
+    )
   }
 
   /** 队列全部完成/失败 → 系统通知（每批仅一次） */

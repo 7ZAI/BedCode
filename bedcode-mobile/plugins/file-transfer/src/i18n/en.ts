@@ -25,6 +25,24 @@ export default {
   // Connected but peer announcement not received yet: placeholder name
   'transfer.peer.unknown': 'Unknown device',
 
+  // ==================== Nearby devices sheet ====================
+  'transfer.devices.title': 'Nearby Devices',
+  'transfer.devices.subtitle': 'BedCode nodes on this network',
+  'transfer.devices.empty':
+    'No nearby devices found; make sure the other device has BedCode open and is on the same network',
+  'transfer.devices.online': 'Online',
+  'transfer.devices.connected': 'Connected',
+  'transfer.devices.connecting': 'Connecting…',
+  'transfer.devices.capNone': 'No transfer',
+  'transfer.devices.activeCurrent': 'Current',
+  'transfer.devices.setActive': 'Set active',
+  'transfer.devices.connect': 'Connect',
+  'transfer.devices.disconnect': 'Disconnect',
+  'transfer.devices.denied': 'Connection rejected by the other device',
+  'transfer.devices.unreachable': 'Cannot connect; the device may be offline',
+  'transfer.devices.trustHint':
+    'First-time connections need approval on the other side; manage trust in Settings → Trusted peers',
+
   // ==================== Top bar / browsing ====================
   'transfer.topbar.settings': 'Settings',
   'transfer.topbar.closeSettings': 'Back',
@@ -198,4 +216,28 @@ export default {
   'transfer.settings.receivingPolicyReject': 'Reject automatically',
   'transfer.settings.receivingPolicyHint': 'Whether to ask before receiving files from peers',
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
-}
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': 'Connection request',
+  'transfer.consent.body': '{name} wants to connect to your device for file transfer',
+  'transfer.consent.fingerprint': 'Device fingerprint: {fingerprint}',
+  'transfer.consent.timeoutHint': 'Auto-reject if unanswered in {seconds}s',
+  'transfer.consent.namelessHint': 'The device name could not be verified; check the fingerprint before deciding',
+  'transfer.consent.trust': 'Trust',
+  'transfer.consent.deny': 'Deny',
+  'transfer.consent.autoTrustedToast': 'Auto-trusted paired device {name}',
+
+  // ==================== Trusted peers (spec decision 8) ====================
+  'transfer.trusted.title': 'Trusted peers',
+  'transfer.trusted.loading': 'Loading...',
+  'transfer.trusted.empty': 'No trusted peers yet; trust is established after the first approved connection',
+  'transfer.trusted.loadFailed': 'Failed to load trusted peers',
+  'transfer.trusted.retry': 'Retry',
+  'transfer.trusted.addedAt': 'Added: {time}',
+  'transfer.trusted.revoke': 'Revoke',
+  'transfer.trusted.cancel': 'Cancel',
+  'transfer.trusted.revokeTitle': 'Revoke trust',
+  'transfer.trusted.revokeBody': 'After revoking, {name} will need your approval again on the next connection. Revoke trust for this device?',
+  'transfer.trusted.revokeFailed': 'Revoke failed; please try again later',
+  'transfer.trusted.revokedToast': 'Revoked trust for {name}',
+} satisfies MessageSchema

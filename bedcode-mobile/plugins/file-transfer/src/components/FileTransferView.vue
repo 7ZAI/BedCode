@@ -13,24 +13,39 @@
 import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { PluginContext, Disposable } from '@binblink/plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
+import { usePeerDevices } from '../composables/usePeerDevices'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
 import FileTypeIcon from './FileTypeIcon.vue'
 import TaskQueueSheet from './TaskQueueSheet.vue'
+import PeerDevicesSheet from './PeerDevicesSheet.vue'
 import BatchRequestDialog from './BatchRequestDialog.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const tasks = useTasks(context)
+const devices = usePeerDevices(context)
 const fs = useRemoteFs(context)
 const settings = useSettings(context)
 // 解构 Ref：模板需直接读 approvalTimeoutSec（settings 对象顶层是 settings Ref）
 const { settings: transferSettings } = settings
 
-/** 队列 bottom sheet 是否展开 */
+/** 队列 / 附近设备两个 bottom sheet 是否展开 */
 const queueOpen = ref(false)
+const devicesOpen = ref(false)
+
+/** 设备操作 → 编排 composable 命令路由（fire-and-forget，失败已在内部上报） */
+function handleDeviceConnect(nodeId: string): void {
+  void devices.connect(nodeId)
+}
+function handleDeviceDisconnect(nodeId: string): void {
+  void devices.disconnect(nodeId)
+}
+function handleDeviceSetActive(nodeId: string): void {
+  void devices.switchPeer(nodeId)
+}
 
 /** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动） */
 function handleBatchApprove(batchId: string): void {
@@ -95,8 +110,8 @@ function onPullEnd(): void {
 
 let disposeBackPress: Disposable | null = null
 
-/** 对端展示名 */
-const peerLabel = computed(() => tasks.displayPeerName.value)
+/** 对端展示名：优先活跃对端名（三态真相），回落旧任务快照/占位链 */
+const peerLabel = computed(() => devices.peer.value.name || tasks.displayPeerName.value)
 
 const peerStatusLabel = computed(() =>
   tasks.connOnline.value ? t('transfer.peer.online') : t('transfer.peer.offline'),
@@ -249,7 +264,13 @@ watch(
 
 onMounted(() => {
   tasks.start()
+  devices.start()
   disposeBackPress = context.ui.onBackPressed(({ canGoBack }) => {
+    // 返回键接管顺序：最上层弹层先关（附近设备 sheet → 队列 sheet）→ 退目录
+    if (devicesOpen.value) {
+      devicesOpen.value = false
+      return
+    }
     if (queueOpen.value) {
       queueOpen.value = false
       return
@@ -271,6 +292,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   disposeBackPress?.dispose()
+  devices.stop()
   tasks.stop()
 })
 </script>
@@ -285,11 +307,20 @@ onUnmounted(() => {
       @reject="handleBatchReject"
     />
 
-    <!-- 顶栏：对端名 + 连接状态 + 右上操作（上传 / 设置） -->
+    <!-- 顶栏：对端名（可点开附近设备 sheet）+ 连接状态 + 右上操作（上传 / 设置） -->
     <div class="flex-shrink-0 flex items-center gap-2 px-4 pt-2.5 pb-2">
-      <span class="ft-peer-name min-w-0 max-w-[45%] text-[var(--mobile-text-primary)] truncate">
-        {{ peerLabel }}
-      </span>
+      <!-- 对端名区域：整块可点（44px 触控目标），chevron 提示可展开设备面板 -->
+      <button
+        class="ft-peer-trigger min-w-0 max-w-[55%] flex items-center gap-1"
+        @click="devicesOpen = true"
+      >
+        <span class="ft-peer-name min-w-0 text-[var(--mobile-text-primary)] truncate">
+          {{ peerLabel }}
+        </span>
+        <svg class="w-3.5 h-3.5 flex-shrink-0 text-[var(--mobile-text-muted)]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
       <!-- 状态胶囊紧跟对端名（连接态 success tint 底 / 断开态中性底） -->
       <span class="ft-peer-status flex-shrink-0" :class="peerStatusClass">
         {{ peerStatusLabel }}
@@ -517,6 +548,17 @@ onUnmounted(() => {
       </button>
     </div>
 
+    <!-- 附近设备 bottom sheet（三态列表 + 连接/断开/切换活跃对端） -->
+    <PeerDevicesSheet
+      :open="devicesOpen"
+      :rows="devices.rows.value"
+      :t="t"
+      @close="devicesOpen = false"
+      @connect="handleDeviceConnect"
+      @disconnect="handleDeviceDisconnect"
+      @set-active="handleDeviceSetActive"
+    />
+
     <!-- 队列 bottom sheet（四 tab：发送/接收/历史） -->
     <TaskQueueSheet
       :open="queueOpen"
@@ -535,7 +577,18 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 对端名称：流式字号 */
+/* 对端名称触控区：44px 最小触控目标，按压反馈底色；名称流式字号 */
+.ft-peer-trigger {
+  min-height: 2.75rem;
+  border-radius: 0.5rem;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.ft-peer-trigger:active {
+  background: var(--mobile-bg-tertiary);
+}
+
 .ft-peer-name {
   font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
   font-weight: 500;

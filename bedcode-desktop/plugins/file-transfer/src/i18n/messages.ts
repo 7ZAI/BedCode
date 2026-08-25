@@ -20,6 +20,22 @@ export interface MessageSchema {
   'transfer.peer.unknown': string
   'transfer.peer.switchTitle': string
 
+  // ==================== 附近设备面板 ====================
+  'transfer.devices.title': string
+  'transfer.devices.subtitle': string
+  'transfer.devices.empty': string
+  'transfer.devices.online': string
+  'transfer.devices.connected': string
+  'transfer.devices.connecting': string
+  'transfer.devices.capNone': string
+  'transfer.devices.activeCurrent': string
+  'transfer.devices.setActive': string
+  'transfer.devices.connect': string
+  'transfer.devices.disconnect': string
+  'transfer.devices.denied': string
+  'transfer.devices.unreachable': string
+  'transfer.devices.trustHint': string
+
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': string
   'transfer.topbar.downloadSelected': string
@@ -82,6 +98,30 @@ export interface MessageSchema {
   'transfer.request.acceptAll': string
   'transfer.request.rejectAll': string
   'transfer.toast.receiving': string
+
+  // ==================== 首连确认（spec 决策 6） ====================
+  'transfer.consent.title': string
+  'transfer.consent.body': string
+  'transfer.consent.namelessHint': string
+  'transfer.consent.fingerprintLabel': string
+  'transfer.consent.countdown': string
+  'transfer.consent.accept': string
+  'transfer.consent.deny': string
+  'transfer.consent.close': string
+  'transfer.consent.statusItem': string
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': string
+  'transfer.trusted.loading': string
+  'transfer.trusted.empty': string
+  'transfer.trusted.loadFailed': string
+  'transfer.trusted.retry': string
+  'transfer.trusted.addedAt': string
+  'transfer.trusted.revoke': string
+  'transfer.trusted.cancel': string
+  'transfer.trusted.revokeTitle': string
+  'transfer.trusted.revokeBody': string
+  'transfer.trusted.revokeFailed': string
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': string

@@ -18,6 +18,22 @@ const zhCN: MessageSchema = {
   'transfer.peer.unknown': '未知设备',
   'transfer.peer.switchTitle': '切换设备',
 
+  // ==================== 附近设备面板 ====================
+  'transfer.devices.title': '附近设备',
+  'transfer.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.devices.empty': '未发现附近设备；请确认对方已打开 BedCode 并接入同一网络',
+  'transfer.devices.online': '在线',
+  'transfer.devices.connected': '已连接',
+  'transfer.devices.connecting': '连接中…',
+  'transfer.devices.capNone': '不支持传输',
+  'transfer.devices.activeCurrent': '当前设备',
+  'transfer.devices.setActive': '设为当前',
+  'transfer.devices.connect': '连接',
+  'transfer.devices.disconnect': '断开',
+  'transfer.devices.denied': '对方拒绝了连接',
+  'transfer.devices.unreachable': '无法连接，设备可能已离线',
+  'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': '发送到手机…',
   'transfer.topbar.downloadSelected': '下载所选 ({count})',
@@ -79,6 +95,30 @@ const zhCN: MessageSchema = {
   'transfer.request.acceptAll': '接受全部',
   'transfer.request.rejectAll': '拒绝全部',
   'transfer.toast.receiving': '{name} 正在向你上传 {count} 个文件',
+
+  // ==================== 首连确认（spec 决策 6） ====================
+  'transfer.consent.title': '连接请求',
+  'transfer.consent.body': '{name} 想与你建立文件传输连接',
+  'transfer.consent.namelessHint': '未能获取设备名称，请核对设备指纹后再决定',
+  'transfer.consent.fingerprintLabel': '设备指纹',
+  'transfer.consent.countdown': '将在 {seconds} 秒后自动拒绝',
+  'transfer.consent.accept': '接受',
+  'transfer.consent.deny': '拒绝',
+  'transfer.consent.close': '关闭（等同拒绝）',
+  'transfer.consent.statusItem': '{n} 台设备等待确认',
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': '可信对端',
+  'transfer.trusted.loading': '加载中...',
+  'transfer.trusted.empty': '暂无可信对端；首次连接经对方确认后建立信任',
+  'transfer.trusted.loadFailed': '可信对端列表加载失败',
+  'transfer.trusted.retry': '重试',
+  'transfer.trusted.addedAt': '加入时间：{time}',
+  'transfer.trusted.revoke': '撤销',
+  'transfer.trusted.cancel': '取消',
+  'transfer.trusted.revokeTitle': '撤销信任',
+  'transfer.trusted.revokeBody': '撤销后，{name} 再次连接时需要重新经过你的确认。确定撤销对该设备的信任吗？',
+  'transfer.trusted.revokeFailed': '撤销失败，请稍后重试',
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': '{count} 传输中',

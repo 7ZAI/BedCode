@@ -32,9 +32,6 @@
       </div>
     </div>
     <PluginCommandPalette />
-    <!-- 对等网络首连确认弹窗宿主（issue 04）：全局单例，终端窗口路由不挂载 -->
-    <PeerConsentDialogHost />
-    <PeerBatchDialogHost />
   </template>
 </template>
 
@@ -43,8 +40,6 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import TitleBar from '@/components/TitleBar.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import PeerConsentDialogHost from '@/components/PeerConsentDialogHost.vue'
-import PeerBatchDialogHost from '@/components/PeerBatchDialogHost.vue'
 import PluginCommandPalette from '@/plugin/components/PluginCommandPalette.vue'
 import PluginStatusBar from '@/plugin/components/PluginStatusBar.vue'
 

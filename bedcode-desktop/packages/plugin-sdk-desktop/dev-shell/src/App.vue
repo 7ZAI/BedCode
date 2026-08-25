@@ -252,10 +252,23 @@ window.addEventListener('beforeunload', () => {
           <button
             v-for="entry in statusBarItems"
             :key="entry.pluginId + entry.item.id"
-            class="px-1.5 py-0.5 rounded-tag text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors duration-200"
+            class="px-1.5 py-0.5 rounded-tag text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors duration-200 flex items-center gap-1"
             @click="entry.item.onClick?.()"
           >
-            {{ entry.item.icon ? entry.item.icon + ' ' : '' }}{{ entry.item.label }}
+            <!-- 图标约定与侧边栏一致：SVG path d 字符串用 <svg> 渲染，emoji/文本直出 -->
+            <span v-if="isSvgIcon(entry.item.icon)" class="w-3.5 h-3.5 flex-shrink-0">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                class="w-3.5 h-3.5"
+              >
+                <path :d="entry.item.icon" />
+              </svg>
+            </span>
+            <span v-else-if="entry.item.icon" class="flex-shrink-0">{{ entry.item.icon }}</span>
+            <span class="whitespace-nowrap">{{ entry.item.label }}</span>
           </button>
           <span class="text-[var(--text-tertiary)] whitespace-nowrap">{{ clock }}</span>
         </footer>

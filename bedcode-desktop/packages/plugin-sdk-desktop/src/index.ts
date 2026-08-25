@@ -37,6 +37,8 @@ export type {
   SystemAPI,
   PluginContext,
   PluginModule,
+  PluginDevMock,
+  PeerDevMock,
   PluginState,
   PluginInfo,
 } from './types'

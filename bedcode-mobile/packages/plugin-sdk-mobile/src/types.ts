@@ -509,6 +509,28 @@ export interface SystemAPI {
 /** OCR 识别结果种子（dev-shell ocr.recognize 用；缺省时 mock 宿主返回内置示例行） */
 export type OcrLinesSeed = OcrLine[]
 
+/** file-transfer 对等领域种子（附近设备面板 / 后续首连确认、可信对端演示数据） */
+export interface PeerDevMock {
+  /**
+   * 发现设备列表（宿主 DiscoveredPeerDto 的 camelCase 子集），
+   * 须覆盖在线/未连接两态；fileTransfer=false 节点可见但不可连接
+   */
+  devices: Array<{
+    nodeId: string
+    deviceName: string
+    addr?: string
+    fileTransfer?: boolean
+  }>
+  /** 初始已连接节点 id（对端已确认的传输会话） */
+  connectedNodeIds?: string[]
+  /** 初始活跃对端 nodeId（应为 connectedNodeIds 之一） */
+  activeNodeId?: string
+  /** 拨号行为覆盖：nodeId → 终态；未列出的可传输节点按 unreachable 处理 */
+  dialBehavior?: Record<string, 'connected' | 'denied' | 'unreachable'>
+  /** 模拟握手耗时 ms（缺省 800） */
+  dialLatencyMs?: number
+}
+
 /**
  * 插件开发期领域数据：dev-shell mock 宿主按 pluginId 合并（仅浏览器 dev 环境消费）
  *
@@ -522,6 +544,8 @@ export interface PluginDevMock {
   queueSeed?: MobileQueueTaskItem[]
   /** OCR 识别结果种子（ocr：ocr.recognize 的 mock 返回；空数组演示空结果空态） */
   ocrLinesSeed?: OcrLinesSeed
+  /** file-transfer 对等子数据（附近设备面板演示态；见 PeerDevMock） */
+  peer?: PeerDevMock
 }
 
 /** 国际化 API */

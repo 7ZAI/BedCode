@@ -21,6 +21,22 @@ export interface MessageSchema {
   'transfer.peer.unpaired': string
   'transfer.peer.unknown': string
 
+  // ==================== 附近设备面板（bottom sheet） ====================
+  'transfer.devices.title': string
+  'transfer.devices.subtitle': string
+  'transfer.devices.empty': string
+  'transfer.devices.online': string
+  'transfer.devices.connected': string
+  'transfer.devices.connecting': string
+  'transfer.devices.capNone': string
+  'transfer.devices.activeCurrent': string
+  'transfer.devices.setActive': string
+  'transfer.devices.connect': string
+  'transfer.devices.disconnect': string
+  'transfer.devices.denied': string
+  'transfer.devices.unreachable': string
+  'transfer.devices.trustHint': string
+
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': string
   'transfer.topbar.closeSettings': string
@@ -48,6 +64,8 @@ export interface MessageSchema {
   'transfer.task.resume': string
   'transfer.task.cancel': string
   'transfer.task.retry': string
+  'transfer.task.remove': string
+  'transfer.task.open': string
   'transfer.task.resumeAll': string
   'transfer.task.download': string
   'transfer.task.upload': string
@@ -65,8 +83,14 @@ export interface MessageSchema {
   'transfer.minibar.speed': string
   'transfer.minibar.openQueue': string
 
+  // ==================== 下拉刷新 ====================
+  'transfer.pull.pull': string
+  'transfer.pull.ready': string
+  'transfer.pull.refreshing': string
+
   // ==================== 队列 bottom sheet ====================
   'transfer.queue.title': string
+  'transfer.queue.entry': string
   'transfer.queue.active': string
   'transfer.queue.rejectedChip': string
   'transfer.queue.failedChip': string
@@ -186,4 +210,28 @@ export interface MessageSchema {
   'transfer.settings.receivingPolicyReject': string
   'transfer.settings.receivingPolicyHint': string
   'transfer.settings.approvalTimeout': string
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': string
+  'transfer.consent.body': string
+  'transfer.consent.fingerprint': string
+  'transfer.consent.timeoutHint': string
+  'transfer.consent.namelessHint': string
+  'transfer.consent.trust': string
+  'transfer.consent.deny': string
+  'transfer.consent.autoTrustedToast': string
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': string
+  'transfer.trusted.loading': string
+  'transfer.trusted.empty': string
+  'transfer.trusted.loadFailed': string
+  'transfer.trusted.retry': string
+  'transfer.trusted.addedAt': string
+  'transfer.trusted.revoke': string
+  'transfer.trusted.cancel': string
+  'transfer.trusted.revokeTitle': string
+  'transfer.trusted.revokeBody': string
+  'transfer.trusted.revokeFailed': string
+  'transfer.trusted.revokedToast': string
 }

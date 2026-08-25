@@ -74,36 +74,6 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
-      path: '/mobile/settings/trusted-peers',
-      name: 'mobile-settings-trusted-peers',
-      component: () => import('@/views/settings/TrustedPeersView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/settings/peer-devices',
-      name: 'mobile-settings-peer-devices',
-      component: () => import('@/views/settings/PeerDevicesView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/settings/peer-transfers',
-      name: 'mobile-settings-peer-transfers',
-      component: () => import('@/views/settings/PeerTransfersView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/settings/peer-files/:nodeId',
-      name: 'mobile-peer-files',
-      component: () => import('@/views/settings/PeerRemoteFilesView.vue'),
-      meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/settings/peer-receive',
-      name: 'mobile-settings-peer-receive',
-      component: () => import('@/views/settings/PeerReceiveSettingsView.vue'),
-      meta: { standAlone: true },
-    },
-    {
       path: '/mobile/settings/appearance',
       name: 'mobile-settings-appearance',
       component: () => import('@/views/settings/AppearanceSettingsView.vue'),

@@ -8,12 +8,23 @@ import FileTransferView from './components/FileTransferView.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import { getRouter, type PluginContext } from '@binblink/plugin-sdk-desktop'
+import peerDevMock from './devMock'
+import { useConsent, type ConsentController } from './composables/useConsent'
+
+// dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
+export const devMock = peerDevMock
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 
 let sidebarDisposable: { dispose(): void } | null = null
 let stopLocaleWatch: (() => void) | null = null
+let consentController: ConsentController | null = null
+let statusItemDisposable: { dispose(): void } | null = null
+let stopConsentWatch: (() => void) | null = null
+
+/** 插件面板在宿主路由中的路径（状态栏项跳转落点，spec 决策 6） */
+const PANEL_ROUTE = '/plugin/sidebar/com.bedcode.file-transfer/file-transfer.sidebar'
 
 /**
  * 注册侧边栏面板
@@ -31,6 +42,32 @@ function registerPluginUi(context: PluginContext) {
     order: 220,
     icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
     component: FileTransferView,
+  })
+}
+
+/**
+ * 同步首连确认状态栏项：有待确认请求时注册展示计数，清零即注销
+ *
+ * label 在注册时被静态捕获（同侧边栏标题），待确认数或语言变化时整体重注册。
+ * 点击经宿主共享 router 跳转插件面板，跳转后弹窗可见可操作（useConsent 状态
+ * 常驻于激活期，不依赖视图挂载）；dev-shell router 无此路由时 push 静默无害。
+ */
+function syncConsentStatusItem(context: PluginContext, count: number) {
+  statusItemDisposable?.dispose()
+  statusItemDisposable = null
+  if (count <= 0) return
+  statusItemDisposable = context.ui.registerStatusBarItem({
+    id: 'file-transfer.consent',
+    label: context.i18n.t('transfer.consent.statusItem', { n: count }),
+    // 盾牌盾勾图标（Heroicons outline shield-check，与宿主图标体系一致）
+    icon: 'M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.99 11.99 0 003 9.75c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.57-.598-3.75h-.152c-3.196 0-6.1-1.248-8.25-3.285z',
+    onClick: () => {
+      try {
+        getRouter()?.push(PANEL_ROUTE)
+      } catch (e) {
+        console.warn('[File Transfer] navigate to panel failed:', e)
+      }
+    },
   })
 }
 
@@ -61,10 +98,26 @@ export async function activate(context: PluginContext): Promise<void> {
     () => registerPluginUi(context),
   )
 
+  // 首连确认编排：激活期常驻订阅（不依赖视图挂载），弹窗渲染在
+  // FileTransferView 内，不在面板时经状态栏项跳转处理（spec 决策 6 折衷）
+  consentController = useConsent(context)
+  consentController.start()
+  stopConsentWatch = watch(
+    () => [hostI18n?.global?.locale?.value, consentController!.pendingCount.value] as const,
+    ([, count]) => syncConsentStatusItem(context, Number(count)),
+    { immediate: true },
+  )
+
   console.log('[File Transfer] Plugin activated (wasm mode)')
 }
 
 export async function deactivate(): Promise<void> {
   stopLocaleWatch?.()
+  stopConsentWatch?.()
+  stopConsentWatch = null
+  statusItemDisposable?.dispose()
+  statusItemDisposable = null
+  consentController?.stop()
+  consentController = null
   console.log('[File Transfer] Plugin deactivated')
 }

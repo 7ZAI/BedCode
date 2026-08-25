@@ -17,8 +17,16 @@ import SettingsPage from './components/SettingsPage.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import peerDevMock from './devMock'
+import { useConsent, type ConsentController } from './composables/useConsent'
+
+// dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
+export const devMock = peerDevMock
 
 const STYLE_ID = 'file-transfer-plugin-style'
+
+/** 首连确认编排（激活期常驻单例；deactivate 时对称停止） */
+let consentController: ConsentController | null = null
 
 export async function activate(context: PluginContext): Promise<void> {
   // 1. 注册 i18n 消息（必须在组件 setup 前完成，保证模板取文案可用）
@@ -59,10 +67,17 @@ export async function activate(context: PluginContext): Promise<void> {
     component: SettingsSection,
   })
 
+  // 6. 首连确认编排：激活期常驻订阅（不依赖视图挂载），确认框经插件
+  // 对话框 API 全局弹出，终端配对迁移规则静默互信 + toast（spec 决策 7）
+  consentController = useConsent(context)
+  consentController.start()
+
   context.logger.info('File Transfer plugin activated (host-peer proxy, mobile)')
 }
 
 export async function deactivate(): Promise<void> {
+  consentController?.stop()
+  consentController = null
   // 样式保留（幂等），组件级监听已在卸载时清理；
   // 注册表/事件由宿主 loader 依据 context._disposables 统一摘除
   console.log('[File Transfer] Plugin deactivated')

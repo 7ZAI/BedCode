@@ -13,11 +13,12 @@
  * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放；
  * 提示与安全告知统一使用黄色提醒框（ft-warning-box）。
  */
-import { ref, inject } from 'vue'
+import { ref, inject, watch } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import type { ReceivingPolicy } from '../types'
+import TrustedPeersSection from './TrustedPeersSection.vue'
 
 type SettingsApi = ReturnType<typeof useSettings>
 
@@ -97,6 +98,10 @@ async function stepTimeout(delta: number): Promise<void> {
   await props.settingsApi.setApprovalTimeout(next)
   syncTimeoutInput()
 }
+
+// 初始即同步当前值：此前仅 focus/commit/step 时同步，首帧数值框空白（评审 P0）
+syncTimeoutInput()
+watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInput)
 </script>
 
 <template>
@@ -227,6 +232,10 @@ async function stepTimeout(delta: number): Promise<void> {
         </div>
       </div>
     </section>
+
+    <!-- ==================== 可信对端管理（spec 决策 8） ==================== -->
+    <!-- 独立分区，列表/撤销自包含；置于明文安全告知之前，保持安全告知常驻底部 -->
+    <TrustedPeersSection />
 
     <!-- ==================== 明文安全告知（spec §10） ==================== -->
     <div class="ft-warning-box">

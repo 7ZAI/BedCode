@@ -6,11 +6,9 @@
 import { createI18n } from 'vue-i18n'
 import zhCNCommon from './zh-CN/common'
 import zhCNDesktop from './zh-CN/desktop'
-import zhCNPeers from './zh-CN/peers'
 import zhCNSettings from './zh-CN/settings'
 import enCommon from './en/common'
 import enDesktop from './en/desktop'
-import enPeers from './en/peers'
 import enSettings from './en/settings'
 
 const i18n = createI18n({
@@ -21,13 +19,11 @@ const i18n = createI18n({
     'zh-CN': {
       ...zhCNCommon,
       ...zhCNDesktop,
-      ...zhCNPeers,
       ...zhCNSettings,
     },
     en: {
       ...enCommon,
       ...enDesktop,
-      ...enPeers,
       ...enSettings,
     },
   },

@@ -10,7 +10,8 @@
 //!    ReceivingTask/HistoryEntry），前端 composables 改动最小化；
 //! 2. **事件桥接**：订阅总线 `peer:*` topic，翻译后经 emit_event 推给
 //!    前端既有事件名（tasks-changed / batches-changed / receiving-changed /
-//!    history-changed / devices-changed）。
+//!    history-changed / devices-changed），首连确认与连接态原样透传
+//!    （consent-requested / connection-changed，camelCase 载荷不过翻译）。
 
 use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostPeer};
 use bedcode_plugin_api_mobile::types::PluginManifest;
@@ -51,6 +52,9 @@ impl WasmPlugin for FileTransferPlugin {
         let _ = h.bus_subscribe("peer:devices");
         let _ = h.bus_subscribe("peer:transfer");
         let _ = h.bus_subscribe("peer:receive");
+        // 首连确认 / 连接态：对等 UI 已迁入本插件前端消费
+        let _ = h.bus_subscribe("peer:consent");
+        let _ = h.bus_subscribe("peer:connection");
         Ok(())
     }
 
@@ -59,6 +63,8 @@ impl WasmPlugin for FileTransferPlugin {
         let _ = h.bus_unsubscribe("peer:devices");
         let _ = h.bus_unsubscribe("peer:transfer");
         let _ = h.bus_unsubscribe("peer:receive");
+        let _ = h.bus_unsubscribe("peer:consent");
+        let _ = h.bus_unsubscribe("peer:connection");
         Ok(())
     }
 
@@ -68,6 +74,15 @@ impl WasmPlugin for FileTransferPlugin {
             // ==================== 设备 ====================
             "file-transfer.list-peers" => Ok(peer::list_peers(&h)?),
             "file-transfer.query-peer" => Ok(peer::list_devices_raw(&h)?),
+            "file-transfer.dial-peer" => {
+                let node_id = require_str(&args, "nodeId")?;
+                Ok(h.peer_dial(&node_id)?)
+            }
+            "file-transfer.disconnect-peer" => {
+                let node_id = require_str(&args, "nodeId")?;
+                let existed = h.peer_disconnect(&node_id)?;
+                Ok(serde_json::json!({ "existed": existed }))
+            }
             "file-transfer.set-active-peer" => {
                 let id = args
                     .get("peerId")
@@ -124,6 +139,20 @@ impl WasmPlugin for FileTransferPlugin {
                 Ok(serde_json::json!({ "cleared": a + b }))
             }
 
+            // ==================== 信任层 ====================
+            "file-transfer.respond-consent" => {
+                let request_id = require_str(&args, "requestId")?;
+                let accepted = args.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
+                let hit = h.peer_respond_consent(&request_id, accepted)?;
+                Ok(serde_json::json!({ "hit": hit }))
+            }
+            "file-transfer.list-trusted" => Ok(h.peer_list_trusted()?),
+            "file-transfer.revoke-trusted" => {
+                let node_id = require_str(&args, "nodeId")?;
+                let removed = h.peer_revoke_trusted(&node_id)?;
+                Ok(serde_json::json!({ "removed": removed }))
+            }
+
             // ==================== 远端浏览 / 拉取 ====================
             "file-transfer.list-remote" => Ok(peer::list_remote(&h, &args, active_node())?),
             "file-transfer.pull-files" => Ok(peer::pull_files(&h, &args, active_node())?),
@@ -148,6 +177,19 @@ impl WasmPlugin for FileTransferPlugin {
         if msg.topic == "peer:devices" {
             // 透传 DiscoveredPeerDto 数组；前端挑选具备文件传输能力的设备
             h.emit_event("plugin:file-transfer:devices-changed", &msg.payload);
+            return Ok(());
+        }
+
+        // 首连确认请求：原样转发（payload 已是 camelCase 契约形状），
+        // 弹窗/队列/超时/终端配对自动互信编排在前端 useConsent 完成
+        if msg.topic == "peer:consent" {
+            h.emit_event("plugin:file-transfer:consent-requested", &msg.payload);
+            return Ok(());
+        }
+
+        // 连接态变化：connected/disconnected 原样转发（{ nodeId, ... }）
+        if msg.topic == "peer:connection" {
+            h.emit_event("plugin:file-transfer:connection-changed", &msg.payload);
             return Ok(());
         }
 

@@ -25,6 +25,22 @@ export default {
   // 已连接但尚未收到对端公告（未共享）：无可辨识信息时的占位名
   'transfer.peer.unknown': '未知设备',
 
+  // ==================== 附近设备面板 ====================
+  'transfer.devices.title': '附近设备',
+  'transfer.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.devices.empty': '未发现附近设备；请确认对方已打开 BedCode 并接入同一网络',
+  'transfer.devices.online': '在线',
+  'transfer.devices.connected': '已连接',
+  'transfer.devices.connecting': '连接中…',
+  'transfer.devices.capNone': '不支持传输',
+  'transfer.devices.activeCurrent': '当前设备',
+  'transfer.devices.setActive': '设为当前',
+  'transfer.devices.connect': '连接',
+  'transfer.devices.disconnect': '断开',
+  'transfer.devices.denied': '对方拒绝了连接',
+  'transfer.devices.unreachable': '无法连接，设备可能已离线',
+  'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': '设置',
   'transfer.topbar.closeSettings': '返回',
@@ -198,4 +214,28 @@ export default {
   'transfer.settings.receivingPolicyReject': '直接拒绝',
   'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
-}
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': '连接请求',
+  'transfer.consent.body': '{name} 请求连接你的设备以互传文件',
+  'transfer.consent.fingerprint': '设备指纹：{fingerprint}',
+  'transfer.consent.timeoutHint': '{seconds} 秒内未处理将自动拒绝',
+  'transfer.consent.namelessHint': '无法确认对方设备名，请核对指纹后再决定',
+  'transfer.consent.trust': '信任',
+  'transfer.consent.deny': '拒绝',
+  'transfer.consent.autoTrustedToast': '已自动信任配对设备 {name}',
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': '可信对端',
+  'transfer.trusted.loading': '加载中...',
+  'transfer.trusted.empty': '暂无可信对端；首次连接经确认后建立信任',
+  'transfer.trusted.loadFailed': '可信对端列表加载失败',
+  'transfer.trusted.retry': '重试',
+  'transfer.trusted.addedAt': '加入时间：{time}',
+  'transfer.trusted.revoke': '撤销',
+  'transfer.trusted.cancel': '取消',
+  'transfer.trusted.revokeTitle': '撤销信任',
+  'transfer.trusted.revokeBody': '撤销后，{name} 再次连接时需要重新经过你的确认。确定撤销对该设备的信任吗？',
+  'transfer.trusted.revokeFailed': '撤销失败，请稍后重试',
+  'transfer.trusted.revokedToast': '已撤销对 {name} 的信任',
+} satisfies MessageSchema
