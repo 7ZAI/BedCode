@@ -57,6 +57,22 @@ async function ensureBackButtonListener(): Promise<void> {
   }
 }
 
+/**
+ * 提取 Tauri invoke 拒绝值的可读信息
+ *
+ * Rust 命令返回 Err(AppError) 时，AppError 的 Serialize 实现是纯字符串，
+ * Tauri IPC 以该字符串 reject（非 Error 实例、无 .message 字段）；
+ * dev-shell / 单测环境抛出的则是 Error 对象。两种形态都取到文本。
+ */
+function extractInvokeErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
+    return (e as { message: string }).message
+  }
+  return ''
+}
+
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
   const disposables: Disposable[] = []
@@ -85,12 +101,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       const handler = commandHandlers.get(id)
       if (handler) return handler(...args)
       // 本地 handler 查不到时回退到 WASM 命令桥（宿主 PluginManager.invoke_command）；
-      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found
+      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found。
+      // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
       try {
         return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
-      } catch (e: any) {
-        const detail = e?.message ? ` (${e.message})` : ''
-        throw new Error(`Command not found: ${id}${detail}`)
+      } catch (e) {
+        const detail = extractInvokeErrorMessage(e)
+        throw new Error(detail ? `Command not found: ${id} (${detail})` : `Command not found: ${id}`)
       }
     },
   }
