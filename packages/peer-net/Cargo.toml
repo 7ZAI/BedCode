@@ -38,7 +38,15 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # TLS 1.3 CertificateVerify 的真实 Ed25519 签名验证直用 ring（Decision 1 安全约束）
 ring = "0.17"
 
-# ==================== ticket 03：mDNS 节点发现 ====================
+# ==================== 传输应用层加密（Offer/Decision 自定义头协商）====================
+# x25519-dalek：会话临时 ECDH 密钥协商；hkdf：HKDF-SHA256 派生对称密钥；
+# aes-gcm：AES-256-GCM 数据块加解密。均为纯 Rust 实现，Android 构建链无额外要求。
+# 版本对齐两端宿主既有依赖（src-tauri utils/crypto 同款），无 lockfile 版本漂移。
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+hkdf = "0.12"
+aes-gcm = "0.10"
+
+# ==================== ticket 03：mDNS 节点发现 ====
 # 对等网络专用 mDNS 发现（_bedcode-peer._tcp.local.，与终端链路 _bedcode._tcp 并存）。
 # 版本严格对齐两端宿主 Cargo.lock 现状（均 0.20.1），避免同进程多实例版本分叉。
 mdns-sd = "0.20"

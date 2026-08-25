@@ -51,6 +51,15 @@ pub enum TransferFrame {
         files: Vec<FileMeta>,
         /// 批内文件总大小（字节）
         total_size: u64,
+        // ==================== 应用层加密请求头（自定义头协商）====================
+        /// 本批数据块为 AES-256-GCM 密文；旧版对端反序列化缺省 false（向后兼容）。
+        /// true 时 enc_pub_key 必须同时携带。
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        encrypted: bool,
+        /// 发送方临时 X25519 公钥（64 字符小写 hex）；仅 encrypted=true 时携带，
+        /// 接收方用它 + 自己的临时私钥派生会话密钥完成自动解密
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enc_pub_key: Option<String>,
     },
     /// 接收端 → 发送端：批协商应答
     Decision {
@@ -58,6 +67,12 @@ pub enum TransferFrame {
         accepted: bool,
         /// 拒绝原因（accepted=true 时省略）
         reason: Option<RejectReason>,
+        // ==================== 加密协商回执头 ====================
+        /// 接收方临时 X25519 公钥（hex）：对加密 Offer 放行时必须携带——
+        /// 双头齐全即双方约定本会话数据面加密。旧版对端不识别加密头、
+        /// 回包无此字段 → 发送端据此 fail-fast，禁止静默明文降级
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        enc_pub_key: Option<String>,
     },
     /// 接收端 → 发送端：指示从某文件某偏移开始推流
     ///
@@ -306,6 +321,8 @@ mod tests {
             batch_id: "b-42".to_string(),
             files: vec![FileMeta::new("a.txt", 11), FileMeta::new("d/b.bin", 7)],
             total_size: 18,
+            encrypted: false,
+            enc_pub_key: None,
         }
     }
 
@@ -341,10 +358,12 @@ mod tests {
             TransferFrame::Decision {
                 accepted: false,
                 reason: Some(RejectReason::Timeout),
+                enc_pub_key: None,
             },
             TransferFrame::Decision {
                 accepted: true,
                 reason: None,
+                enc_pub_key: None,
             },
             TransferFrame::StartFile { index: 1, offset: 4096 },
             TransferFrame::FileDone { index: 0 },
@@ -515,8 +534,56 @@ mod tests {
             batch_id: "b-future".to_string(),
             files: vec![],
             total_size: 0,
+            encrypted: false,
+            enc_pub_key: None,
         };
         let json = serde_json::to_string(&offer).expect("serde");
         assert!(json.contains(r#""protocol_version":10"#));
+    }
+
+    /// 加密请求头线上形状：缺省字段不出现（旧对端零感知），开启时逐字锁定
+    #[test]
+    fn encryption_header_wire_format() {
+        let plain = serde_json::to_string(&sample_offer()).expect("serde");
+        assert!(!plain.contains("encrypted") && !plain.contains("enc_pub_key"));
+
+        let encrypted = TransferFrame::Offer {
+            protocol_version: TRANSFER_PROTOCOL_VERSION,
+            batch_id: "b-42".to_string(),
+            files: vec![FileMeta::new("a.txt", 11)],
+            total_size: 11,
+            encrypted: true,
+            enc_pub_key: Some("aa".repeat(32)),
+        };
+        let json = serde_json::to_string(&encrypted).expect("serde");
+        assert!(json.starts_with(r#"{"type":"offer","#), "{json}");
+        assert!(json.contains(r#""encrypted":true"#));
+        assert!(json.contains(r#""enc_pub_key":"#));
+
+        // Decision 加密回执头：无头时字段省略（旧对端零感知），有头时原样往返
+        let ack_plain = serde_json::to_string(&TransferFrame::Decision {
+            accepted: true,
+            reason: None,
+            enc_pub_key: None,
+        })
+        .expect("serde");
+        assert!(ack_plain.starts_with(r#"{"type":"decision""#), "{ack_plain}");
+        assert!(!ack_plain.contains("enc_pub_key"));
+
+        let ack_enc = TransferFrame::Decision {
+            accepted: true,
+            reason: None,
+            enc_pub_key: Some("bb".repeat(32)),
+        };
+        let mut buf = Vec::new();
+        futures_block_on(write_control(&mut buf, &ack_enc)).expect("encode");
+        let mut reader: &[u8] = &buf;
+        match futures_block_on(read_frame(&mut reader)).expect("decode") {
+            IncomingFrame::Control(boxed) => {
+                assert_eq!(*boxed, ack_enc);
+                assert!(reader.is_empty());
+            }
+            other => panic!("expected control frame, got {other:?}"),
+        }
     }
 }

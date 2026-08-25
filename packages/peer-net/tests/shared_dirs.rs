@@ -589,6 +589,7 @@ async fn traversal_and_absolute_pull_requests_are_rejected_readonly() {
             TransferFrame::Decision {
                 accepted: false,
                 reason: Some(reason),
+                ..
             } => {
                 assert_eq!(
                     reason,

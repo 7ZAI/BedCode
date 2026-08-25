@@ -251,6 +251,8 @@ async fn always_accept_pushes_single_file_end_to_end() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("send session io");
@@ -294,6 +296,8 @@ async fn always_deny_rejects_offer_without_touching_disk() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("send session io");
@@ -350,6 +354,8 @@ async fn ask_policy_accept_after_explicit_reply() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     ));
 
     // 询问事件携带批清单与总大小（询问弹窗的知情依据）
@@ -395,6 +401,8 @@ async fn ask_policy_reject_after_explicit_reply() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     ));
 
     match rx.events.recv().await.expect("offer pending event") {
@@ -442,6 +450,8 @@ async fn ask_timeout_auto_rejects_and_sender_receives_terminal_state() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("send session io");
@@ -496,6 +506,7 @@ async fn sender_cancel_mid_transfer_lands_correct_terminals_both_sides() {
         }],
         tx,
         cancel_a.clone(),
+        false,
     ));
 
     // 观察到首个进度事件即取消（此刻必然仍在传输中）
@@ -577,6 +588,8 @@ async fn receiver_cancel_mid_transfer_lands_correct_terminals_both_sides() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     ));
 
     // 观察接收端进度后触发宿主取消入口
@@ -662,6 +675,8 @@ async fn receiver_written_offset_is_resume_truth_source() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("send session io");
@@ -728,6 +743,8 @@ async fn push_partial_then_cut(
         conn,
         &TransferFrame::Offer {
             protocol_version: TRANSFER_PROTOCOL_VERSION,
+            encrypted: false,
+            enc_pub_key: None,
             batch_id: batch_id.to_string(),
             files: metas.clone(),
             total_size,
@@ -742,6 +759,7 @@ async fn push_partial_then_cut(
             TransferFrame::Decision {
                 accepted: true,
                 reason: None,
+                ..
             } => {}
             other => panic!("expected accept decision, got {other:?}"),
         },
@@ -931,6 +949,8 @@ async fn connection_drop_mid_file_resumes_and_content_matches() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("leg2 send io");
@@ -1049,6 +1069,8 @@ async fn receiver_process_restart_resumes_from_disk_truth() {
         }],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("leg2 send io");
@@ -1133,6 +1155,8 @@ async fn multi_file_batch_retry_supplements_only_missing_files() {
         ],
         tx,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("leg2 send io");
@@ -1179,6 +1203,7 @@ async fn sender_cancel_then_retry_resumes_from_kept_part() {
         }],
         tx,
         cancel_a.clone(),
+        false,
     ));
     match tokio::time::timeout(Duration::from_secs(10), a_events.recv()).await {
         Ok(Some(TransferEvent::Progress { .. })) => {}
@@ -1210,6 +1235,8 @@ async fn sender_cancel_then_retry_resumes_from_kept_part() {
         }],
         tx2,
         CancelToken::new(),
+        false,
+
     )
     .await
     .expect("leg2 send io");

@@ -253,16 +253,20 @@ impl ConnectionHandler for SharedDirHandler {
                         batch_id,
                         files,
                         total_size,
+                        encrypted,
+                        enc_pub_key,
                     } => {
                         batch_slot = Some(batch_id.clone());
                         let _guard =
                             SessionGuard::new(Arc::clone(&inner), batch_id.clone(), cancel.clone());
-                        // 原样回传预读 Offer，接收管线内部完成版本校验与批登记
+                        // 原样回传预读 Offer（加密请求头一并透传），接收管线内部完成版本校验与批登记
                         let pre = IncomingFrame::Control(Box::new(TransferFrame::Offer {
                             protocol_version,
                             batch_id,
                             files,
                             total_size,
+                            encrypted,
+                            enc_pub_key,
                         }));
                         run_receive(
                             conn,
@@ -347,6 +351,7 @@ impl ConnectionHandler for SharedDirHandler {
                             &TransferFrame::Decision {
                                 accepted: false,
                                 reason: Some(crate::transfer::RejectReason::PolicyDenied),
+                                enc_pub_key: None,
                             },
                         )
                         .await;
@@ -380,7 +385,7 @@ async fn write_rejection(
     conn: &mut Connection,
     reason: crate::transfer::RejectReason,
 ) {
-    if let Err(e) = crate::transfer::write_decision(conn, false, Some(reason)).await {
+    if let Err(e) = crate::transfer::write_decision(conn, false, Some(reason), None).await {
         tracing::debug!("write rejection decision failed: {e}");
     }
 }
@@ -578,6 +583,9 @@ async fn serve_pull(
             batch_id: batch_id.clone(),
             files: vec![meta.clone()],
             total_size: resolved.size,
+            // 拉取路径暂不启用应用层加密：免协商数据面，明文推送
+            encrypted: false,
+            enc_pub_key: None,
         },
     )
     .await
@@ -996,6 +1004,7 @@ pub async fn browse_shared_dir(
         TransferFrame::Decision {
             accepted: false,
             reason,
+            ..
         } => {
             let reason = reason.unwrap_or(crate::transfer::RejectReason::NotFound);
             Err(proto_violation(
@@ -1087,6 +1096,8 @@ async fn run_pull_session(
             batch_id: peer_batch,
             files,
             total_size,
+            encrypted: _,
+            enc_pub_key: _,
         } => {
             if protocol_version > TRANSFER_PROTOCOL_VERSION {
                 return Err(proto_violation(
@@ -1101,6 +1112,7 @@ async fn run_pull_session(
         TransferFrame::Decision {
             accepted: false,
             reason,
+            ..
         } => {
             let reason = reason.unwrap_or(crate::transfer::RejectReason::NotFound);
             return Ok(TerminalState::Rejected { reason });
@@ -1122,6 +1134,8 @@ async fn run_pull_session(
         batch_id,
         &files,
         total_size,
+        // 拉取路径暂无应用层加密：对端 pull 服务 Offer 不携带加密头
+        None,
     )
     .await
 }

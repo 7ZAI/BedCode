@@ -31,6 +31,7 @@
 //! 批内已完成文件零重传直接跳过，进度按批聚合跨会话单调推进。
 
 pub mod batch;
+pub mod crypto;
 pub mod message;
 
 use std::path::PathBuf;
@@ -437,18 +438,19 @@ async fn send_cancel_then_drain(
     let _ = tokio::io::AsyncWriteExt::shutdown(conn).await;
 }
 
-/// 写一条批协商应答
+/// 写一条批协商应答（`enc_pub_key`：对加密 Offer 放行时携带的回执头，明文会话为 None）
 pub(crate) async fn write_decision<W>(
     sink: &mut W,
     accepted: bool,
     reason: Option<RejectReason>,
+    enc_pub_key: Option<String>,
 ) -> std::io::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
     write_control(
         sink,
-        &TransferFrame::Decision { accepted, reason },
+        &TransferFrame::Decision { accepted, reason, enc_pub_key },
     )
     .await
 }
@@ -484,38 +486,50 @@ pub(crate) async fn run_receive(
             })?
             .map_err(|e| sess_io(ROLE, e))?,
     };
-    let (batch_id, files, total_size) = match *match first {
-        IncomingFrame::Control(frame) => frame,
-        IncomingFrame::Data(_) => {
-            return Err(proto_violation(
-                ROLE,
-                "first transfer frame must be an offer, got data",
-            ))
-        }
-    } {
-        TransferFrame::Offer {
-            protocol_version,
-            batch_id,
-            files,
-            total_size,
-        } => {
-            if protocol_version > TRANSFER_PROTOCOL_VERSION {
-                // 版本不识别：按拒绝回话并快速失败——静默错读未来协议更危险
-                let _ = write_decision(&mut conn, false, Some(RejectReason::PolicyDenied)).await;
+    let (batch_id, files, total_size, offer_encrypted, sender_enc_pub_key) =
+        match *match first {
+            IncomingFrame::Control(frame) => frame,
+            IncomingFrame::Data(_) => {
                 return Err(proto_violation(
                     ROLE,
-                    format!("offer protocol_version {protocol_version} is newer than supported"),
-                ));
+                    "first transfer frame must be an offer, got data",
+                ))
             }
-            (batch_id, files, total_size)
-        }
-        other => {
-            return Err(proto_violation(
-                ROLE,
-                format!("first transfer frame must be an offer, got {other:?}"),
-            ))
-        }
-    };
+        } {
+            TransferFrame::Offer {
+                protocol_version,
+                batch_id,
+                files,
+                total_size,
+                encrypted,
+                enc_pub_key,
+            } => {
+                if protocol_version > TRANSFER_PROTOCOL_VERSION {
+                    // 版本不识别：按拒绝回话并快速失败——静默错读未来协议更危险
+                    let _ =
+                        write_decision(&mut conn, false, Some(RejectReason::PolicyDenied), None)
+                            .await;
+                    return Err(proto_violation(
+                        ROLE,
+                        format!("offer protocol_version {protocol_version} is newer than supported"),
+                    ));
+                }
+                // 加密请求头自洽性：声明加密却缺公钥即协议违规（fail-fast）
+                if encrypted && enc_pub_key.is_none() {
+                    return Err(proto_violation(
+                        ROLE,
+                        "offer declares encrypted=true but carries no enc_pub_key header",
+                    ));
+                }
+                (batch_id, files, total_size, encrypted, enc_pub_key)
+            }
+            other => {
+                return Err(proto_violation(
+                    ROLE,
+                    format!("first transfer frame must be an offer, got {other:?}"),
+                ))
+            }
+        };
     *batch_slot = Some(batch_id.clone());
 
     // ---- 接收策略分流（spec Decision 10）----
@@ -528,7 +542,7 @@ pub(crate) async fn run_receive(
     };
     match &config.policy {
         ReceivePolicy::AlwaysDeny => {
-            write_decision(&mut conn, false, Some(RejectReason::PolicyDenied))
+            write_decision(&mut conn, false, Some(RejectReason::PolicyDenied), None)
                 .await
                 .map_err(|e| sess_io(ROLE, e))?;
             batch.state = BatchState::Rejected {
@@ -568,7 +582,7 @@ pub(crate) async fn run_receive(
             match outcome {
                 AskOutcome::Accepted => {}
                 AskOutcome::Denied(reason) => {
-                    write_decision(&mut conn, false, Some(reason))
+                    write_decision(&mut conn, false, Some(reason), None)
                         .await
                         .map_err(|e| sess_io(ROLE, e))?;
                     batch.state = BatchState::Rejected { reason };
@@ -583,8 +597,21 @@ pub(crate) async fn run_receive(
         .map_err(|detail| proto_violation(ROLE, detail))?;
     batch.state = BatchState::Approved;
 
+    // ---- 加密协商结算（接收方自动解密契约）：对加密 Offer 生成本端临时密钥，
+    // 放行应答携带公钥回执头；明文会话两值均为 None。派生失败即协商破裂 fail-fast
+    let (cipher, enc_ack_key) = if offer_encrypted {
+        let keys = crypto::EphemeralKeys::generate();
+        let cipher = keys
+            .derive_cipher(sender_enc_pub_key.as_deref().unwrap_or_default(), &batch_id)
+            .map_err(|e| sess_io(ROLE, e))?;
+        tracing::debug!(batch_id = %batch_id, "incoming batch requests encryption, acking with session key");
+        (Some(cipher), Some(keys.public_hex().to_string()))
+    } else {
+        (None, None)
+    };
+
     // ---- 放行：应答后进入逐文件数据面（与 pull 接收共用的下半程）----
-    write_decision(&mut conn, true, None)
+    write_decision(&mut conn, true, None, enc_ack_key)
         .await
         .map_err(|e| sess_io(ROLE, e))?;
     receive_files_after_accept(
@@ -596,6 +623,7 @@ pub(crate) async fn run_receive(
         &batch_id,
         &files,
         total_size,
+        cipher,
     )
     .await
 }
@@ -606,7 +634,8 @@ pub(crate) async fn run_receive(
 /// 天然一致。
 ///
 /// 调用方负责已写 Decision{accepted=true}（push 协商放行）或按语义免协商
-/// （pull 是用户主动获取，恒放行）。
+/// （pull 是用户主动获取，恒放行）。`cipher`：加密协商成立时由调用方传入的
+/// 会话密码上下文——本函数只负责对每个数据帧自动解密后落盘。
 pub(crate) async fn receive_files_after_accept(
     mut conn: crate::transport::Connection,
     config: &TransferConfig,
@@ -616,6 +645,7 @@ pub(crate) async fn receive_files_after_accept(
     batch_id: &str,
     files: &[FileMeta],
     total_size: u64,
+    cipher: Option<crypto::SessionCipher>,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "receiver";
 
@@ -625,6 +655,8 @@ pub(crate) async fn receive_files_after_accept(
         .map_err(|e| sess_io(ROLE, e))?;
 
     let mut transferred_total: u64 = 0;
+    // 会话内全局数据块序号：与发送端推流侧锁步计数一致，参与 nonce 构造
+    let mut chunk_counter: u64 = 0;
     let mut rate = RateTracker::new();
 
     for (index, meta) in files.iter().enumerate() {
@@ -730,21 +762,30 @@ pub(crate) async fn receive_files_after_accept(
             };
             match frame {
                 IncomingFrame::Data(bytes) => {
-                    if bytes.len() as u64 > remaining {
+                    // 加密会话：先解密（含 GCM 认证），再按明文长度校验越界。
+                    // 块序号与文件内偏移由本函数锁步推进，与发送端构造参数严格一致
+                    let plaintext = match &cipher {
+                        Some(c) => c
+                            .decrypt_chunk(index, meta.size - remaining, chunk_counter, &bytes)
+                            .map_err(|e| sess_io(ROLE, e))?,
+                        None => bytes,
+                    };
+                    chunk_counter += 1;
+                    if plaintext.len() as u64 > remaining {
                         return Err(proto_violation(
                             ROLE,
                             format!(
                                 "data chunk {} bytes overruns remaining {remaining} of {}",
-                                bytes.len(),
+                                plaintext.len(),
                                 meta.path
                             ),
                         ));
                     }
-                    tokio::io::AsyncWriteExt::write_all(&mut file, &bytes)
+                    tokio::io::AsyncWriteExt::write_all(&mut file, &plaintext)
                         .await
                         .map_err(|e| sess_io(ROLE, e))?;
-                    remaining -= bytes.len() as u64;
-                    transferred_total += bytes.len() as u64;
+                    remaining -= plaintext.len() as u64;
+                    transferred_total += plaintext.len() as u64;
                     emit(
                         events,
                         TransferEvent::Progress {
@@ -846,15 +887,21 @@ impl OutgoingFile {
 ///
 /// 终态同时经 `events` 上报与返回值给出；本地准备失败（源不可读等）返回
 /// Err 并上报 Failed 终态。`cancel` 由宿主持有，随时可取消进行中的发送。
+///
+/// `encrypt`：应用层加密开关（宿主设置面持久化，默认关）。开启后本会话
+/// 生成临时 X25519 密钥对、Offer 携带加密请求头；接收端未回加密回执头
+/// （旧版不支持）则 fail-fast，禁止静默明文降级。
 pub async fn send_batch(
     conn: crate::transport::Connection,
     batch_id: String,
     files: Vec<OutgoingFile>,
     events: mpsc::Sender<TransferEvent>,
     cancel: CancelToken,
+    encrypt: bool,
 ) -> crate::Result<TerminalState> {
     let remote = conn.peer_node_id().clone();
-    let state = match run_send(conn, &batch_id, files, &events, &cancel, remote.clone()).await {
+    let state = match run_send(conn, &batch_id, files, &events, &cancel, remote.clone(), encrypt).await
+    {
         Ok(state) => state,
         Err(e) => {
             tracing::warn!("send session failed: {e}");
@@ -909,6 +956,7 @@ async fn run_send(
     events: &mpsc::Sender<TransferEvent>,
     cancel: &CancelToken,
     remote: NodeId,
+    encrypt: bool,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "sender";
 
@@ -924,6 +972,12 @@ async fn run_send(
         total_size = total_size.saturating_add(size);
     }
 
+    // ---- 加密请求头：开关开启即随 Offer 携带临时 X25519 公钥（每会话全新）----
+    let ephemeral = if encrypt {
+        Some(crypto::EphemeralKeys::generate())
+    } else {
+        None
+    };
     message::write_control(
         &mut conn,
         &TransferFrame::Offer {
@@ -931,6 +985,8 @@ async fn run_send(
             batch_id: batch_id.to_string(),
             files: metas.clone(),
             total_size,
+            encrypted: ephemeral.is_some(),
+            enc_pub_key: ephemeral.as_ref().map(|k| k.public_hex().to_string()),
         },
     )
     .await
@@ -965,6 +1021,7 @@ async fn run_send(
         cancel,
         remote,
         &mut frame_rx,
+        ephemeral,
     )
     .await;
     reader_task.abort();
@@ -980,6 +1037,11 @@ where
 }
 
 /// 发送主状态机：逐文件「等 StartFile → 推流 → 等 FileDone」，最后等 BatchDone
+///
+/// `ephemeral`：加密请求头协商上下文（None = 明文会话）。有值时 Decision
+/// 回执必须携带对端临时公钥，缺头即旧版不支持 → fail-fast（静默明文降级
+/// 比失败更危险）；协商成立则逐块 AES-256-GCM 加密推流。
+#[allow(clippy::too_many_arguments)]
 async fn drive_send(
     wr: &mut (impl tokio::io::AsyncWrite + Unpin + Send),
     batch_id: &str,
@@ -990,20 +1052,37 @@ async fn drive_send(
     cancel: &CancelToken,
     remote: NodeId,
     frame_rx: &mut mpsc::Receiver<std::io::Result<IncomingFrame>>,
+    ephemeral: Option<crate::transfer::crypto::EphemeralKeys>,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "sender";
 
-    // ---- 批协商应答 ----
+    // ---- 批协商应答（含加密回执头结算）----
     let decision = next_frame_or_cancel(frame_rx, cancel).await?;
     let Some(IncomingFrame::Control(boxed)) = decision else {
         return Err(proto_violation(ROLE, "expected decision frame"));
     };
-    match *boxed {
+    let cipher = match *boxed {
         TransferFrame::Decision {
             accepted: true,
             reason: None,
-        } => {}
-        TransferFrame::Decision { accepted: false, reason } => {
+            enc_pub_key,
+        } => match ephemeral {
+            None => None,
+            Some(keys) => {
+                let peer_key = enc_pub_key.ok_or_else(|| {
+                    proto_violation(
+                        ROLE,
+                        "peer lacks transfer encryption support (no ack header on accept)",
+                    )
+                })?;
+                let cipher = keys
+                    .derive_cipher(&peer_key, batch_id)
+                    .map_err(|e| sess_io(ROLE, e))?;
+                tracing::debug!(batch_id = %batch_id, "transfer session encryption negotiated");
+                Some(cipher)
+            }
+        },
+        TransferFrame::Decision { accepted: false, reason, .. } => {
             // reason 缺省视为协议违规（拒绝必须带原因）
             let reason = reason.ok_or_else(|| {
                 proto_violation(ROLE, "decision rejected without reason")
@@ -1019,11 +1098,14 @@ async fn drive_send(
                 format!("expected decision after offer, got {other:?}"),
             ))
         }
-    }
+    };
 
     let chunk_capacity = 64 * 1024usize; // 与缺省 chunk_size 一致；仅作读缓冲上限
     let mut buf = vec![0u8; chunk_capacity];
     let mut transferred_total: u64 = 0;
+    // 会话内全局数据块序号（跨文件连续，与接收端按帧锁步计数一致）：
+    // 参与 nonce 构造保证唯一；重试换新会话即新临时密钥，计数归零无碰撞
+    let mut chunk_counter: u64 = 0;
     let mut rate = RateTracker::new();
 
     for (index, meta) in metas.iter().enumerate() {
@@ -1126,7 +1208,16 @@ async fn drive_send(
                             ),
                         ));
                     }
-                    message::write_data(wr, &buf[..n])
+                    // 加密会话：本块在文件内的绝对偏移参与 AAD 位置绑定，
+                    // 密文（含 GCM tag）经同一条数据帧通道推送
+                    let payload = match &cipher {
+                        Some(c) => {
+                            c.encrypt_chunk(index, meta.size - remaining, chunk_counter, &buf[..n])
+                        }
+                        None => buf[..n].to_vec(),
+                    };
+                    chunk_counter += 1;
+                    message::write_data(wr, &payload)
                         .await
                         .map_err(|e| sess_io(ROLE, e))?;
                     remaining -= n as u64;
