@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>repro</title></head>
+<body>
+<div id="app"></div>
+<script type="module">
+  import { createApp, ref, defineComponent, h } from '/node_modules/.vite/deps/vue.js?v=b4341cfa'
+
+  const Panel = defineComponent({
+    name: 'Panel',
+    setup() {
+      return () => h('div', { class: 'panel-backdrop' }, 'PANEL CONTENT')
+    },
+  })
+
+  // 结构复刻 FileTransferView：root div 下先 Teleport 再 Transition(component v-if)
+  const App = {
+    setup() {
+      const show = ref(false)
+      window.__setShow = (v) => (show.value = v)
+      return () =>
+        h('div', { class: 'ft-view' }, [
+          h('div', 'before'),
+          h(Teleport, { to: 'body' }, () => h('div', { id: 'tel' }, 'teleported')),
+          h(Transition, { name: 'ft-settings' }, () =>
+            show.value ? h(Panel) : h('comment', null, ''),
+          ),
+          h('button', {
+            onClick: () => (show.value = !show.value),
+          }, 'toggle'),
+        ])
+    },
+  }
+  createApp(App).mount('#app')
+  window.__show = () => window.__setShow(true)
+  setTimeout(() => window.__setShow(true), 300)
+</script>
+</body>
+</html>
