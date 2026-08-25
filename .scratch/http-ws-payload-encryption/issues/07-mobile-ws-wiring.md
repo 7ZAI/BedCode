@@ -12,3 +12,7 @@
 - [ ] 4003 close 映射错误文案，i18n zh-CN / en 成对
 - [ ] 与背压 ack 流回归共存（既有 terminal socket 测试全绿）
 - [ ] `npm run test:run` 全绿
+
+## Comments
+
+- 2026-08-26 实现：终端 WS 握手提案/auth_ok 回执消费/双向帧编解码/Close 4003 映射 onError；重连自动重握手。事件通道在移动端为 Rust 实现（connection/event_ws.rs），TS 覆盖不到 → 已拆 issue 09（needs-triage）。

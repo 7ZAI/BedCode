@@ -2,11 +2,14 @@
 //!
 //! Tauri commands for server lifecycle management and metrics query
 
+use crate::db::Database;
+use crate::server::link_crypto::{self, LinkCryptoConfig};
 use crate::server::metrics::ServerMetrics;
 use crate::server::supervisor::{ServerStatusInfo, ServerSupervisor};
 use crate::system::config::{AppConfig, NetworkConfig};
 use crate::Result;
-use tauri::Manager;
+use std::sync::Arc;
+use tauri::{Manager, State};
 
 /// 启动服务器
 #[tauri::command]
@@ -49,6 +52,36 @@ pub async fn server_restart() -> Result<()> {
 pub async fn get_server_status() -> Result<ServerStatusInfo> {
     let supervisor = ServerSupervisor::global();
     Ok(supervisor.get_status_info().await)
+}
+
+// ==================== 链路加密配置（issue 01） ====================
+
+/// 读取链路加密配置（运行期快照，spec §6）
+#[tauri::command]
+pub fn get_traffic_encryption_config() -> LinkCryptoConfig {
+    link_crypto::current_config()
+}
+
+/// 更新链路加密配置：先持久化成功再热更新快照并同步过滤器注册；
+/// 落库失败不影响运行态（快照保持原值）
+#[tauri::command]
+pub async fn set_traffic_encryption_config(
+    db: State<'_, Arc<tokio::sync::Mutex<Database>>>,
+    config: LinkCryptoConfig,
+) -> Result<()> {
+    {
+        let guard = db.lock().await;
+        link_crypto::persist_config_to_db(&guard, &config)?;
+    }
+    link_crypto::update_config(config);
+    link_crypto::sync_registration();
+    Ok(())
+}
+
+/// 本机链路加密身份指纹（SHA-256 前 16 hex；未初始化时懒生成）
+#[tauri::command]
+pub async fn get_link_crypto_fingerprint(app_handle: tauri::AppHandle) -> Result<String> {
+    link_crypto::ensure_identity_fingerprint(&app_handle).await
 }
 
 /// 获取本地 WS 通道短期一次性令牌

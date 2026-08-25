@@ -12,3 +12,7 @@
 - [ ] 金样向量：TS 解码 Rust 生成的 HTTP 信封与 WS 帧成功，TS 加密的载荷可被 Rust 向量流程验证
 - [ ] pin 随凭据持久化，重启 App 不丢；重新配对可刷新
 - [ ] `npm run test:run` 全绿；vue-tsc 干净
+
+## Comments
+
+- 2026-08-26 实现：services/linkCrypto.ts（@noble/curves+ciphers+hashes）+ useLinkEncryption 配置/pin composable（localStorage 惯例与 auth_* 同域）+ 单测双侧复刻。跨语言金样：桌面端 ws/http 派生单测锚定相同字节常量，真机互通为最终判据。

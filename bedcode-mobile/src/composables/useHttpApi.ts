@@ -9,6 +9,8 @@
 import { ref } from 'vue'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMobileConnection } from './useMobileConnection'
+import { isChannelEncryptionActive, notePinFromAuthData, getPinnedKey, useLinkEncryptionSettings } from './useLinkEncryption'
+import { decryptResponse, encryptRequest, type HttpTrafficKeys } from '../services/linkCrypto'
 
 // ==================== Config ====================
 
@@ -51,7 +53,6 @@ async function request<T = any>(
   }
 
   const url = `http://${baseUrl}${path}`
-  console.log('[HttpApi] Request:', options.method || 'GET', url)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -63,9 +64,34 @@ async function request<T = any>(
     headers['Authorization'] = `Bearer ${authCredentials.value.sessionToken}`
   }
 
+  // 链路加密（issue 06）：非 auth 路径且已 pin 且主开关开 → 请求体信封化 + 协商头；
+  // 加密失败不静默降级为明文发送（fail-closed）
+  const encryptionActive = !path.startsWith('/api/auth/') && isChannelEncryptionActive('http')
+  let requestKeys: HttpTrafficKeys | null = null
+  let effectiveOptions = options
+  if (encryptionActive) {
+    const pinnedKey = getPinnedKey()
+    if (!pinnedKey) {
+      console.error('[HttpApi] encryption active but no pinned key:', path)
+      return { code: -1, message: 'LINK_ENCRYPTION_NO_PIN' }
+    }
+    try {
+      const bodyText =
+        typeof options.body === 'string' ? options.body : options.body ? JSON.stringify(options.body) : ''
+      const sealed = encryptRequest(pinnedKey, path, bodyText)
+      headers['X-BedCode-Crypto'] = sealed.negotiation
+      requestKeys = sealed.keys
+      effectiveOptions = { ...options, body: sealed.envelope }
+    } catch (e: any) {
+      console.error('[HttpApi] encrypt request failed:', path, e?.message || e)
+      return { code: -1, message: 'LINK_ENCRYPTION_SEAL_FAILED' }
+    }
+  }
+
   try {
+    console.log('[HttpApi] Request:', options.method || 'GET', url, encryptionActive ? '(encrypted)' : '')
     const response = await tauriFetch(url, {
-      ...options,
+      ...effectiveOptions,
       headers,
       connectTimeout: 30000,
     })
@@ -76,7 +102,34 @@ async function request<T = any>(
       return { code: response.status, message: `HTTP ${response.status}: ${response.statusText}` }
     }
 
-    const result = await response.json()
+    const rawText = await response.text()
+    let bodyText = rawText
+
+    if (encryptionActive && requestKeys) {
+      const respHeader = response.headers.get('X-BedCode-Crypto')
+      const outcome = decryptResponse(requestKeys, respHeader === 'v1', rawText, path)
+      if (outcome.kind === 'decrypted') {
+        bodyText = outcome.text
+      } else if (outcome.kind === 'downgrade') {
+        // 预期加密而响应明文：strict 断连报错；非 strict 明文续跑 + 提示态（UI 层映射）
+        const { settings } = useLinkEncryptionSettings()
+        if (settings.value.strictMode) {
+          console.error('[HttpApi] strict mode: encryption downgrade detected on', path)
+          return { code: -1, message: 'LINK_ENCRYPTION_DOWNGRADE' }
+        }
+        console.warn('[HttpApi] response unencrypted (downgrade tolerated):', path)
+      }
+    }
+
+    // pin 刷新：auth 响应携带 kdPublicB64/kdFingerprint 时自动更新（issue 03/05）
+    try {
+      const parsedForPin = JSON.parse(bodyText)
+      notePinFromAuthData(parsedForPin?.data)
+    } catch {
+      /* 非 JSON 响应不阻断 */
+    }
+
+    const result = JSON.parse(bodyText)
     console.log('[HttpApi] Response OK:', path, 'code=', result.code)
     return result
   } catch (e: any) {

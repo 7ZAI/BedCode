@@ -12,6 +12,7 @@ use tauri::Emitter;
 
 use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
 use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
+use crate::server::link_crypto;
 use crate::server::message::Message;
 use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::ws::session::WsSession;
@@ -120,6 +121,9 @@ pub struct TerminalWs {
     stream_generations: std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
     /// 通道类型（注册时定死）：终端 I/O 路由 → Terminal；事件路由（ticket 02）→ Event
     channel_type: ChannelType,
+    /// 链路加密待处理协商（issue 04）：auth 帧携带的客户端临时公钥，
+    /// 认证成功后派生并回执（新路由在 SessionAuthOutcome 消费，旧路由同步消费）
+    pending_ws_crypto: Option<crate::enums::auth::CryptoProposal>,
 }
 
 impl TerminalWs {
@@ -134,6 +138,7 @@ impl TerminalWs {
             subscribe_tasks: std::collections::HashMap::new(),
             stream_generations: std::collections::HashMap::new(),
             channel_type: ChannelType::Terminal,
+            pending_ws_crypto: None,
         }
     }
 
@@ -202,38 +207,60 @@ impl TerminalWs {
         }
     }
 
-    /// 入站帧过滤：None = 被拒（已记 warn），调用方应丢弃该帧
-    fn filter_inbound_data(&self, data: Vec<u8>, kind: &'static str) -> Option<Vec<u8>> {
+    /// 链路加密失败收尾：Close(4003) 并停止 actor（spec：WS 解密失败不丢帧，
+    /// TBv2 序列流丢帧会破坏 ack 环与渲染序，必须断连重建）
+    fn close_link_crypto_failure(&self, reason: String, ctx: &mut ws::WebsocketContext<Self>) {
+        tracing::warn!(addr = %self.session.addr, %reason, "link crypto failure, closing 4003");
+        ctx.close(Some(ws::CloseReason {
+            code: ws::CloseCode::Other(4003),
+            description: Some(reason),
+        }));
+        ctx.stop();
+    }
+
+    /// 入站帧过滤：None = 被拒（已关连接），调用方应立即返回
+    fn filter_inbound_data(
+        &self,
+        data: Vec<u8>,
+        kind: &'static str,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) -> Option<Vec<u8>> {
         let chain = TrafficFilterChain::global();
         if chain.is_empty() {
             return Some(data);
         }
         let peer = self.session.addr.to_string();
-        let mut ctx = FilterContext {
+        let mut fctx = FilterContext {
             channel: self.traffic_channel(),
             direction: Direction::Inbound,
             peer: &peer,
             route: kind,
+            negotiation: "",
             data,
         };
-        match chain.run_inbound(&mut ctx) {
-            Ok(()) => Some(ctx.data),
+        match chain.run_inbound(&mut fctx) {
+            Ok(()) => Some(fctx.data),
             Err(rej) => {
                 tracing::warn!(
                     addr = %peer,
                     channel = self.traffic_channel().as_str(),
                     frame = kind,
                     %rej,
-                    "WS inbound frame rejected by traffic filter, dropped"
+                    "WS inbound frame rejected by traffic filter"
                 );
+                self.close_link_crypto_failure(rej.to_string(), ctx);
                 None
             }
         }
     }
 
     /// 入站文本帧过滤（JSON 控制帧 / 业务消息）
-    fn filter_inbound_text(&self, text: String) -> Option<String> {
-        self.filter_inbound_data(text.into_bytes(), "text")
+    fn filter_inbound_text(
+        &self,
+        text: String,
+        ctx: &mut ws::WebsocketContext<Self>,
+    ) -> Option<String> {
+        self.filter_inbound_data(text.into_bytes(), "text", ctx)
             .map(|data| String::from_utf8_lossy(&data).into_owned())
     }
 
@@ -264,8 +291,9 @@ impl TerminalWs {
                     addr = %peer,
                     channel = self.traffic_channel().as_str(),
                     %rej,
-                    "WS outbound text frame rejected by traffic filter, dropped"
+                    "WS outbound text frame rejected by traffic filter"
                 );
+                self.close_link_crypto_failure(rej.to_string(), ctx);
             }
         }
     }
@@ -297,8 +325,9 @@ impl TerminalWs {
                     addr = %peer,
                     channel = self.traffic_channel().as_str(),
                     %rej,
-                    "WS outbound binary frame rejected by traffic filter, dropped"
+                    "WS outbound binary frame rejected by traffic filter"
                 );
+                self.close_link_crypto_failure(rej.to_string(), ctx);
             }
         }
     }
@@ -450,6 +479,9 @@ impl Actor for TerminalWs {
                 app_ctx.biometric_challenges().clear(&fp).await;
             }
 
+            // 断连清理：链路加密密码表（issue 04）——必须在连接标识失效前移除
+            link_crypto::ws_remove_ciphers(&client_id);
+
             // 取消所有订阅
             let global_manager = GlobalOutputManager::global();
             for session_id in sessions {
@@ -487,16 +519,16 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
             }
             WsMessage::Text(text) => {
                 crate::server::metrics::MetricsCollector::global().inc_ws_received();
-                // 入站先过流量过滤链（解密/审计），被拒则丢弃该帧
-                let Some(text) = self.filter_inbound_text(text.to_string()) else {
+                // 入站先过流量过滤链（解密/审计）；被拒即链路加密失败 → 已 Close 4003
+                let Some(text) = self.filter_inbound_text(text.to_string(), ctx) else {
                     return;
                 };
                 self.handle_text_message(text, ctx);
             }
             WsMessage::Binary(data) => {
                 crate::server::metrics::MetricsCollector::global().inc_ws_received();
-                // 入站先过流量过滤链，被拒则丢弃该帧（ack 尽力而为，丢帧由水位暂停兜底）
-                let Some(data) = self.filter_inbound_data(data.to_vec(), "binary") else {
+                // 入站先过流量过滤链，被拒即链路加密失败 → 已 Close 4003（不丢帧续跑）
+                let Some(data) = self.filter_inbound_data(data.to_vec(), "binary", ctx) else {
                     return;
                 };
                 self.handle_ack_binary(&data, ctx);
@@ -614,11 +646,12 @@ impl TerminalWs {
         };
 
         match frame {
-            control_frame::ClientFrame::Auth { token } => {
+            control_frame::ClientFrame::Auth { token, crypto } => {
                 // 幂等：已认证连接重复发 auth 直接忽略
                 if self.session.authenticated {
                     return;
                 }
+                self.pending_ws_crypto = crypto;
                 self.handle_session_auth(token, ctx);
             }
             control_frame::ClientFrame::Subscribe => {
@@ -670,7 +703,8 @@ impl TerminalWs {
 
         match self.authenticate_jwt(&token) {
             Ok(_) => {
-                // 会话存在性校验放异步块：has_session 需持 GlobalOutputManager 锁
+                // 会话存在性校验放异步块：has_session 需持 GlobalOutputManager 锁；
+                // 加密协商回执与密码表注册延后到 SessionAuthOutcome（auth_ok 发出后生效）
                 let session_id = self.bound_session.clone().unwrap();
                 let actor_addr = ctx.address();
                 actix::spawn(async move {
@@ -998,6 +1032,21 @@ impl TerminalWs {
 
         match self.authenticate_jwt(&token) {
             Ok(claims) => {
+                // 链路加密协商（issue 04）：回执随 auth 响应明文下发，
+                // 密码表注册在发送之后——此后的帧才进入加密模式
+                let mut ws_handshake = None;
+                if let Some(proposal) = self.pending_ws_crypto.take() {
+                    if link_crypto::current_config().enabled {
+                        match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
+                            Ok(hs) => ws_handshake = Some(hs),
+                            Err(e) => tracing::warn!(
+                                addr = %self.session.addr,
+                                error = %e,
+                                "ws link crypto handshake failed, staying plaintext"
+                            ),
+                        }
+                    }
+                }
                 let response = Message::Auth {
                     message_id,
                     expect_response: false,
@@ -1011,11 +1060,22 @@ impl TerminalWs {
                         device_fingerprint: claims.fingerprint,
                         session_token: Some(token),
                         error: None,
+                        crypto: ws_handshake.as_ref().map(|hs| crate::enums::auth::CryptoProposal {
+                            v: 1,
+                            ek: hs.server_ek_b64.clone(),
+                        }),
                         ..Default::default()
                     },
                 };
                 if let Ok(json) = response.to_json() {
                     self.send_text_filtered(json, ctx);
+                }
+                if let Some(hs) = ws_handshake {
+                    link_crypto::ws_register_ciphers(&self.session.addr.to_string(), hs.ciphers);
+                    tracing::info!(
+                        addr = %self.session.addr,
+                        "ws link encryption negotiated (legacy route), frames encrypted from now on"
+                    );
                 }
             }
             Err((code, message)) => {
@@ -1395,7 +1455,35 @@ impl Handler<SessionAuthOutcome> for TerminalWs {
 
     fn handle(&mut self, msg: SessionAuthOutcome, ctx: &mut Self::Context) {
         if msg.exists {
-            self.send_text_filtered(ServerFrame::AuthOk.to_json(), ctx);
+            // 加密协商回执：auth_ok 本身保持明文（客户端需先读到服务端临时公钥
+            // 才能派生密钥），注册在发送之后——此后的所有帧进入加密模式
+            let mut handshake = None;
+            if let Some(proposal) = self.pending_ws_crypto.take() {
+                if link_crypto::current_config().enabled {
+                    match link_crypto::derive_ws_session_ciphers(&proposal.ek) {
+                        Ok(hs) => {
+                            handshake = Some(hs);
+                            tracing::info!(
+                                addr = %self.session.addr,
+                                "ws link encryption negotiated, frames encrypted from now on"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(addr = %self.session.addr, error = %e, "ws link crypto handshake failed, staying plaintext")
+                        }
+                    }
+                }
+            }
+            let frame = ServerFrame::AuthOk {
+                crypto: handshake.as_ref().map(|hs| control_frame::CryptoEcho {
+                    v: 1,
+                    ek: hs.server_ek_b64.clone(),
+                }),
+            };
+            self.send_text_filtered(frame.to_json(), ctx);
+            if let Some(hs) = handshake {
+                link_crypto::ws_register_ciphers(&self.session.addr.to_string(), hs.ciphers);
+            }
         } else {
             tracing::warn!(
                 addr = %self.session.addr,
