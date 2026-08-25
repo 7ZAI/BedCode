@@ -2,14 +2,14 @@
 
 ## Project Overview
 
-BedCode 是局域网远程终端应用：桌面端作为主机运行终端会话（Claude Code 等），移动端作为远程终端控制，通过 WebSocket + HTTP 通信，当前适配两端同一 WiFi 场景。也可作为通用远程终端使用。
+BedCode：局域网远程终端应用——桌面端作为主机运行终端会话（Claude Code 等），移动端作为远程终端控制，通过 WebSocket + HTTP 通信，适配两端同一 WiFi 场景。
 
 **Tech Stack:** Tauri 2.0 + Vue 3 + TypeScript + TailwindCSS + Rust (Tokio) + SQLite + vue-i18n@9
 
-**Monorepo 结构:**
-- `bedcode-desktop/` — 桌面端主机（Tauri + Vue 3）
-- `bedcode-mobile/` — 移动端远程终端（Tauri + Vue 3）
-- 各项目独立 `src/` (前端) 和 `src-tauri/` (Rust 后端)
+**Monorepo 结构：**
+- `bedcode-desktop/` — 桌面端主机
+- `bedcode-mobile/` — 移动端远程终端
+- 各项目独立 `src/`（前端）与 `src-tauri/`（Rust 后端）
 
 ---
 
@@ -38,15 +38,10 @@ cargo test
 cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugKotlin
 ```
 
-> **Kotlin 编译验证规范**：改 `gen/android/app/src/main/java/com/bedcode/mobile/` 下的自定义 Kotlin 插件（SafPickerPlugin/SafTransferPlugin 等）后，仅靠 `cargo test` / 前端测试**无法覆盖** Kotlin 代码（独立 Gradle + Kotlin 工具链），必须额外跑 `./gradlew :app:compileUniversalDebugKotlin`（离线模式加 `--offline`）验证编译。曾因漏验导致 `OpenableColumns.MIME_TYPE` 不存在等真实编译错误（见 `.scratch/lan-file-transfer-plugin/issues/08` Comments）。
-
-> **前端测试规范**：`npm run test` 等于 `vitest`（watch 模式），执行完不退出、会一直挂着监听文件变化。
-> 统一使用 `npm run test:run`（即 `vitest run`，一次性跑完并退出），也可直接 `npx vitest run`。
-> 注意 `vite` 命令本身是 dev server / 构建工具，不执行测试，不能替代 vitest。
-
-编译前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`。
-
-桌面端 `npm run tauri:build`（`scripts/tauri-build.js`）自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_FILE` / `.env`）；未配置时自动禁用升级包生成（`createUpdaterArtifacts=false`），本地构建无需私钥。正式发布由 GitHub Actions Secrets 签名，密钥说明见 `docs/knowledge/release-workflow.md`。
+- **Kotlin 验证**：改 `gen/android/app/src/main/java/com/bedcode/mobile/` 下自定义 Kotlin 插件后，必须额外跑上述 gradlew 命令（独立 Gradle/Kotlin 工具链，`cargo test` 与前端测试均不覆盖）；离线加 `--offline`
+- **前端测试统一 `npm run test:run`**（= `npx vitest run`，跑完退出）；`npm run test` 是 vitest watch 模式，执行后挂起不退出，禁止使用；`vite` 不执行测试
+- 构建前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`
+- 桌面端 `tauri:build`（`scripts/tauri-build.js`）自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_FILE` / `.env`），未配置时自动禁用升级包生成，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（见 `docs/knowledge/release-workflow.md`）
 
 ---
 
@@ -54,115 +49,56 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 
 ### File Naming
 
-Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`），不使用旧式 `mod.rs`；测试文件 `*_test.rs`。
+snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs`；测试文件 `*_test.rs`。
 
-### Error Handling
+### Error Handling & Thread Safety
 
-- 使用 `AppError` 统一错误类型：`pub type Result<T> = std::result::Result<T, AppError>`
-- 关键调用链用 `anyhow::Context` 添加上下文
-- `tokio::spawn` 用 `spawn_with_error_boundary()` 包装
-- panic hook 中禁止调用 `tracing::error!`，只使用 `eprintln!`
-- 禁止 `unsafe impl Send/Sync`，禁止在重要路径上 `let _ =` 静默忽略错误
-- 错误字符串应说明什么操作在哪失败，禁止无上下文的裸字符串
-
-### Thread Safety
-
-使用 `Arc<Mutex<T>>` 或 `Arc<RwLock<T>>` 进行状态共享，禁止 `unsafe impl Send/Sync`。
+- 统一错误类型 `AppError`：`pub type Result<T> = std::result::Result<T, AppError>`
+- 关键调用链用 `anyhow::Context` 添加上下文；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装
+- 错误字符串必须说明什么操作在哪失败，禁止无上下文裸字符串
+- 重要路径禁止 `let _ =` 静默忽略错误
+- panic hook 中只用 `eprintln!`，禁止 `tracing::error!`
+- 状态共享用 `Arc<Mutex<T>>` / `Arc<RwLock<T>>`
 
 ### Tauri Commands
 
-命名规范：`list_*`（返回多个）、`get_*`（返回单个）、`create_*`、`delete_*`、`start_*` / `stop_*`（生命周期）。用 `// ====================` 分隔注释按领域分组。
+命名：`list_*`（多个）、`get_*`（单个）、`create_*`、`delete_*`、`start_*` / `stop_*`（生命周期）。用 `// ====================` 分隔注释按领域分组。
 
 ### Logging
 
-全部使用 `tracing`，日志级别：`debug!`（常规）、`info!`（关键）、`warn!`（警告/重试）、`error!`（异常）。Android 平台统一写 `tracing::` 宏，自动转发到 logcat。
+统一 `tracing`：`debug!`（常规）、`info!`（关键）、`warn!`（警告/重试）、`error!`（异常）。Android 统一写 `tracing::` 宏，自动转发 logcat。
 
-**日志落盘（调试/排查用，主要为编程 agent 提供可查询路径）：**
+| 端 | 落盘方式 | 位置 |
+|----|---------|------|
+| 桌面端 | 始终写文件（dev/release） | `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
+| 移动端 | 电脑端落盘仅 `npm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep） |
 
-| 端 | 行为 | 日志位置（电脑端） | 说明 |
-|----|------|--------------------|------|
-| 桌面端 | 始终落盘（dev/release 均写文件） | `%LOCALAPPDATA%\com.bedcode.app\logs\`（如 `C:\Users\<user>\AppData\Local\com.bedcode.app\logs\`） | `runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
-| 移动端 | **电脑端落盘需用 `npm run tauri:android:dev:log`**（普通 `tauri:android:dev` 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（本地日期，与设备 logcat 日期线一致） | 脚本把 Tauri CLI 转发的 logcat 同时写文件（无 ANSI 码，可 grep）；移动端进程在手机上，**无法直接写电脑磁盘**，故不设手机内部落盘（agent 读不到） |
+实际路径确认：桌面端 dev 控制台首行 `Logging initialized.`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
 
-确认实际路径：桌面端 dev 控制台首行 `Logging initialized. Log directory: ...`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
-
-排查链路问题时优先看两端 `runtime.*.log`（含 DEBUG 级）：搜索 `file_service`、`peer_changed`、`MessageBus`、`reqwest::connect`（桌面端代理劫持痕迹 `proxy(...) intercepts`）等关键词。
+排查链路问题优先 grep 两端 `runtime.*.log`：`file_service`、`peer_changed`、`MessageBus`、`reqwest::connect`（代理劫持痕迹 `proxy(...) intercepts`）。
 
 ---
 
 ## Frontend (Vue 3 + TypeScript)
 
-### Component Structure
-
-使用 `<script setup lang="ts">`。
-
-### Composables
-
-业务逻辑放在 composables，组件只负责 UI。命名：`use<Resource>` / `use<Action>`。
-
-### Stores
-
-全局状态使用 Pinia store 包装 composables。
-
-### Platform Detection
-
-使用 `@tauri-apps/plugin-os`，**禁止使用屏幕宽度检测桌面/移动端**。
+- 组件用 `<script setup lang="ts">`；业务逻辑放 composables，组件只负责 UI
+- Composable 命名 `use<Resource>` / `use<Action>`；全局状态用 Pinia store 包装 composables
+- 平台检测用 `@tauri-apps/plugin-os`，**禁止屏幕宽度检测**
 
 ### Styles & Layout（必读 skill，强制）
 
-**任何前端 UI 改动（新建 Vue 组件、布局重构、CSS/Tailwind 类、design token、动画/过渡、深浅色主题、响应式适配、移动端安全区、字体/行高）都必须先加载 `frontend-styles` skill，并以其规范为准，禁止凭通用前端经验自行发挥。**
-
-该 skill 给出：token-bound 取值优先级、class 书写顺序、safe-stack z-index 层级、过渡/动画规范、反模式清单、新组件 checklist；配套文件（`TOKENS.md` / `ANIMATIONS.md` / `MOBILE.md` / `BLUEPRINTS.md` / `I18N.md` / `PERFORMANCE.md` / `VUE3-STYLING.md` / `MODERN-CSS.md` / `LINTING.md`）位于 `.agents/skills/frontend-styles/`。
+任何前端 UI 改动（组件、布局、CSS/Tailwind 类、design token、动画/过渡、主题、响应式、安全区、字体/行高）**必须先加载 `frontend-styles` skill 并以其规范为准**，禁止凭通用前端经验自行发挥。配套文件位于 `.agents/skills/frontend-styles/`。
 
 ---
 
-## UI 组件规范
 
-**禁止使用系统原生 UI 控件外观**（原生 `<select>` 下拉、`<input type="checkbox/radio">`、
-`<input type="date/datetime-local/time/range/color">` 等），移动端与桌面端一致适用。
-
-例外（系统强关联，允许原生）：
-
-- 文件选择弹窗（`@tauri-apps/plugin-dialog` / 系统文件选择器）
-- 系统通知弹窗、系统授权弹窗（如 FsAuthDialog）
-- 完全自绘外观的 input/textarea（外观 100% 由 CSS token 定制、无系统观感，如宿主 Input.vue）
-- 隐藏原生控件仅作交互内核的自绘组件（如 Toggle.vue 内部的 checkbox）
-
-正确做法（按优先级）：
-
-1. 宿主/SDK 共享组件：宿主内部用 `src/components/`；插件用 SDK 子路径（桌面端
-   `@binblink/plugin-sdk-desktop/ui`、移动端移动 SDK 的 `./ui`），禁止插件自实现一套
-2. 成熟开源 Vue 组件（如 `@vuepic/vue-datepicker`），并用主题 token
-   （`var(--bg-*)` / `var(--mobile-*)`）适配深浅色主题，禁止裸用默认样式
-3. 自实现小型组件（自绘外观 + 原生交互内核），放入共享组件库（宿主或 SDK）供复用
-
-新增共享组件须同时考虑桌面端与移动端（或至少放入对应 SDK 供插件引用）。
-
-> 所有组件的视觉实现（颜色/圆角/阴影/间距/动画/响应式）一律遵循 `frontend-styles` skill 的 token 体系（token-bound），禁止硬编码视觉值。
-
----
-
-## i18n
-
-使用 vue-i18n@9 Composition API，zh-CN（默认）和 en。
-
-- 翻译 key 命名：`{domain}.{section}.{key}`
-- **新增 key 必须同时添加到 zh-CN 和 en**
-- Vue 模板用 `$t()`，脚本用 `t()`（来自 `useI18n`）
-- Composable（模块级代码）用 `i18n.global.t()`，不能用 `useI18n()`
-- **composable 中禁止中文硬编码字符串**，状态变量存 i18n key，throw 中使用 i18n key
-- 不翻译：代码注释、console 调试、终端输入、品牌名称
-
----
 
 ## Code Comments
 
-- 注释解释为什么而非是什么
-- Rust：模块级 `//!`，pub 项 `///`，内联 `//`
-- TypeScript：文件头 `/** */`，export 项 JSDoc，Vue 组件 `<script setup>` 顶部加说明
+- 注释解释为什么而非是什么；语言中文，技术术语保留英文
+- Rust：模块级 `//!`、pub 项 `///`、内联 `//`；TS：文件头 `/** */`、export JSDoc、Vue 组件 `<script setup>` 顶部说明
 - 分隔注释：`// ==================== Section ====================`
-- 注释语言：中文，技术术语保留英文
-- 注释掉的代码（`/* … */` / `// …`）：允许保留，但必须标注意图与恢复方式（如 `/* 临时调试：排查 X，恢复时取消注释 */`）；禁止保留无说明、无用途的陈腐注释代码（冗余注释）
+- 注释掉的代码必须标注意图与恢复方式（如 `/* 临时调试：排查 X，恢复时取消注释 */`）；无说明的陈旧注释代码一律删除
 
 ---
 
@@ -173,118 +109,87 @@ Rust 文件均为 snake_case：模块入口文件与目录同名（`module.rs`�
 | Vue Component | PascalCase (`TitleBar.vue`) |
 | Composable | camelCase with `use` prefix |
 | Store | camelCase |
-
-> Rust 文件命名见上文 `## Rust (Backend)` 的 File Naming。
+| Rust | 见上文 Rust File Naming |
 
 ---
 
 ## Architecture Decisions
 
 1. Multi-Project Monorepo（各自独立 `src/` 和 `src-tauri/`）
-2. Async Everywhere（Rust Tokio，前端 async/await + Tauri commands）
-3. Event-Driven（PTY 输出通过 `broadcast` 通道分发）
-4. Graceful Shutdown（`AtomicBool` 信号通知后台任务关闭）
+2. Async Everywhere（Tokio + async/await + Tauri commands）
+3. Event-Driven（PTY 输出经 `broadcast` 通道分发）
+4. Graceful Shutdown（`AtomicBool` 通知后台任务关闭）
 5. Flat Module Structure（按领域扁平组织）
 6. Plugin System（Rust API crate + 前端加载器双层架构）
+7. 插件 Mock 数据归属插件工程：各插件的 mock 数据 / 演示种子在各自工程目录内维护（如插件入口导出 `devMock`，SDK `PluginDevMock` 协议）；dev-shell 只提供 mock 抽象封装与通用接线（devMock 注册、命令 handler 骨架、事件总线），**禁止在 dev-shell 中编写具体业务 mock 数据**——dev-shell 不感知任何插件领域细节，新增演示数据一律改插件自己的 devMock 导出
 
 ---
 
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- `gen/android` 重建后需恢复自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、OcrModelExtractorPlugin.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、CameraPlugin.kt、OcrImageDecoder.kt、MulticastLockPlugin.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、key.properties、keystore、drawable 资源；jniLibs 的 `libonnxruntime.so`（OCR 插件运行时 dlopen）重建后执行 `sh bedcode-mobile/scripts/fetch-ort-android.sh` 恢复（离线可从已构建 APK 的 lib/<abi>/ 提取）
-- **Android 签名唯一真源**：仓库根 `bedcode.keystore`（alias `bedcode`，密码 `bedcode123`，证书 SHA-256 `A8:5E:2F:1B:C5:...` = GitHub release 与 ANDROID_KEY_BASE64 secret 所用）。`gen/android/` 与 `android-backup/` 下的 `bedcode-keystore.jks` / `bedcode.keystore` 必须是该证书的副本（历史上曾混入两套错误证书，导致本地打包与已安装版「签名不一致」无法覆盖升级）；*勿用其他 keystore 文件签名发布版*——更换签名证书会让所有已安装用户只能卸载重装。验证：`keytool -list -v -keystore <file> -storepass bedcode123 | grep SHA256` 须为 `A8:5E:2F:1B...`
+- **`gen/android` 重建后需恢复**：自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、OcrModelExtractorPlugin.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、CameraPlugin.kt、OcrImageDecoder.kt、MulticastLockPlugin.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、key.properties、keystore、drawable 资源；jniLibs 的 `libonnxruntime.so` 执行 `sh bedcode-mobile/scripts/fetch-ort-android.sh` 恢复（离线可从已构建 APK 的 lib/<abi>/ 提取）
+- **签名唯一真源**：仓库根 `bedcode.keystore`（alias `bedcode`，密码 `bedcode123`，SHA-256 `A8:5E:2F:1B:C5:...` = GitHub release 与 ANDROID_KEY_BASE64 secret 所用）。`gen/android/` 与 `android-backup/` 下的 keystore 必须是其副本；**勿用其他 keystore 签发布版**（换证书 = 已装用户只能卸载重装）。验证：`keytool -list -v -keystore <file> -storepass bedcode123 | grep SHA256` 须为 `A8:5E:2F:1B...`
 
 ---
 
 ## Git Hooks：分支级文档跟踪
 
-开发过程文档与配置文件（docs/、CLAUDE.md、CONTEXT.md、.pi 配置、.scratch 等，见下）只在除 **uat / master** 外的分支入库（dev、feature/* 等全部正常跟踪）；uat / master 仅从 index 剔除、不提交删除，工作区始终保留副本。README 与 AGENTS.md 不受此限（全分支跟踪）。实现在 `scripts/doc-tracking.sh`，由 husky 在 `.husky/` 下挂载 `pre-commit` / `post-checkout` / `post-merge` 钩子调用（钩子运行器 `.husky/_` 由 `husky` / `npm install` 重新生成，已加入 `.gitignore`）。
+受保护路径（`docs/`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置、`.scratch/`）只在除 **uat/master** 外的分支入库；uat/master 仅从 index 剔除、不提交删除，工作区保留副本。`README*` 与 `AGENTS.md` 全分支正常跟踪。实现在 `scripts/doc-tracking.sh`，由 husky 钩子（pre-commit / post-checkout / post-merge）调用；启用：clone 后在根目录执行一次 `npm install`（或 `npx husky install`）。
 
-ESLint / Prettier 为**全局单根配置**，同时覆盖 `bedcode-desktop` 与 `bedcode-mobile`：仓库根的 `eslint.config.js`（ESLint 9 flat config）、`.prettierrc.json`、`.editorconfig`、`.prettierignore`。`pre-commit` 钩子与 CI `lint.yml` 均从根目录运行 `eslint .` 校验两端前端（仅因 error 阻断）。子项目 `lint` / `format` 脚本通过 `../node_modules/.bin/` 调用根依赖。
-
-### 启用（clone 后每人执行一次）
-
-```bash
-# 仓库根目录：安装 husky 并触发 prepare 脚本，自动设置 core.hooksPath=.husky/_
-npm install
-# 若仅需初始化钩子（不装依赖），可执行：
-npx husky install
-```
-
-> 钩子依赖 `bedcode-desktop/node_modules/.bin/eslint` 做提交前前端门禁；未安装时自动跳过，不阻断提交。
-
-### 受保护路径
-
-`docs/`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置（`agents/`、`extensions/`、`prompts/`、`settings.json`）、`.scratch/`（issue 文档）。定义在 `scripts/doc-tracking.sh` 的 `PROTECTED_PATHS`，与 `.gitignore` 对应段落保持同步。
-
-**`README.md` / `README_en.md` 与 `AGENTS.md` 不在受保护路径中，所有分支（含 uat/master）均正常跟踪。**
-
-### 行为规则
+ESLint/Prettier 为全局单根配置（仓库根 `eslint.config.js` 等），同时覆盖两端前端；pre-commit 与 CI `lint.yml` 均从根目录运行 `eslint .`（仅 error 阻断）。
 
 | 场景 | 自动行为 |
 |------|----------|
-| dev / feature 等分支提交 | 正常跟踪，hooks 不干预（已跟踪文件不受 .gitignore 影响） |
-| uat / master `pre-commit` | 仅从 index 剔除受保护文件（工作区保留），防止入库 |
-| 切换分支 `post-checkout` | 切到 uat/master：剔除 index 中的受保护文件 + 从 dev 恢复工作区副本（仅供本地查阅） |
-| 成功合并 `post-merge` | 合并落到 uat/master：剔除合并带入的受保护文件，以暂存删除形式待提交 |
+| dev / feature 提交 | 正常跟踪，hooks 不干预 |
+| uat / master `pre-commit` | 仅从 index 剔除受保护文件（工作区保留） |
+| 切到 uat/master `post-checkout` | 剔除 index 中受保护文件 + 从 dev 恢复工作区副本 |
+| 合并落到 uat/master `post-merge` | 剔除合并带入的受保护文件，以暂存删除形式待提交 |
 
-- `.pi/sessions/` 会话日志**始终忽略、不入库**；新增 .pi 文件时用 `git add -f .pi/<子路径>` 精确添加，**禁止 `git add -f .pi` 整目录**
-- uat/master 上剔除产生的暂存删除，随下次提交落库（或 `git commit -m 'chore: untrack docs'`）——仅影响该分支自身，不会反向影响 dev / feature 分支
-- dev→uat/master 合并若产生 modify/delete 冲突（hooks 在冲突时不运行），手动解决：
-
-```bash
-sh scripts/doc-tracking.sh untrack && git commit
-```
-
-- 新增受保护路径：同时改 `PROTECTED_PATHS` 和 `.gitignore`
-- 不跟踪分支黑名单可用环境变量 `DOC_UNTRACKED_BRANCHES` 覆盖（默认 `uat master`）；恢复工作区副本的源分支用 `DOC_TRACKING_SOURCE`（默认 `dev`）
+- `.pi/sessions/` 始终忽略不入库；新增 .pi 文件用 `git add -f .pi/<子路径>` 精确添加，**禁止 `git add -f .pi` 整目录**
+- uat/master 上剔除产生的暂存删除随下次提交落库，不影响 dev / feature 分支
+- dev→uat/master 合并产生 modify/delete 冲突时（hooks 在冲突时不运行）手动解决：`sh scripts/doc-tracking.sh untrack && git commit`
+- 新增受保护路径：同步修改 `PROTECTED_PATHS` 和 `.gitignore`
+- 环境变量：`DOC_UNTRACKED_BRANCHES`（默认 `uat master`）、`DOC_TRACKING_SOURCE`（默认 `dev`）
 
 ---
 
 ## Git Rules
 
-**禁止在 commit message 中添加 `Co-Authored-By: Claude ...` 行。**
-
-**禁止将 `dev` 分支推送到远程仓库（`git push origin dev` / `git push -u origin dev`）。**
-
-远程仓库仅维护发布线：master（发布）与 uat（预发布）等。dev / feature 分支仅存在于本地，用于日常开发与合并，**绝不上推**。需要把某改动发布到远程时：先确认该改动属于任务范围，再按需合并到 master（或 uat）并只推送该发布分支。若本地存在 `origin/dev` 之类的远程 dev 分支残留（如历史遗留或误推），不得继续在该分支上 push，先与用户确认处理方式。
+- **禁止 commit message 中出现 AI 协作者标记（Co-Authored-By 等）**
+- **禁止推送 dev / feature 分支到远程**（`git push origin dev` / `-u origin dev` 均禁止）。远程仅维护发布线 master / uat；发布流程：确认改动属任务范围 → 合并到 master（或 uat）→ 只推送该发布分支
+- 发现 `origin/dev` 等远程 dev 残留时不得继续 push，先与用户确认处理方式
 
 ### 文件回滚规范（强制）
 
-回滚/撤销对某文件的修改前，必须先确认该文件**不包含本次会话之外的未提交改动**：
+回滚/撤销某文件的修改前，先 `git status <file>` + `git diff <file>` 确认其不含本次会话之外的未提交改动：
 
-1. 检查：`git status <file>` + `git diff <file>`，并核对本次会话开始时的内容
-2. **若文件包含他人/其他任务的在途改动（未提交），禁止 `git checkout -- <file>` / `git restore` 整文件回滚** —— 这会把无关的在途工作一并覆盖丢失（git 无法恢复未提交内容）
-3. 正确做法：**只精确删除本次修改的内容**（用 edit 工具逐段逆向替换，恢复为本次修改前的原文），保留其余行原样
-4. 本次新增的独立文件可直接删除（前提是确认非他人创建）
-5. 误用 `git checkout` 覆盖了在途改动时，立即停手并如实上报（可能的恢复源：`.pi/sessions/` 会话日志中的 Read 输出、`.scratch/` 交接文档），不得自行猜测重建
-
-> 教训案例：2026-08 移动端 wasmtime 组件迁移的在途未提交改动（loader.rs / manager.rs 等）曾因整文件 `git checkout` 被一并覆盖丢失，分支与 git 均无法恢复。
+1. 含他人/其他任务在途改动的文件，**禁止 `git checkout -- <file>` / `git restore` 整文件回滚**（未提交内容无法从 git 恢复）
+2. 正确做法：用 edit 工具逐段逆向替换，只精确还原本次修改的内容
+3. 本次新增且非他人创建的独立文件可直接删除
+4. 误用 `git checkout` 覆盖在途改动时立即停手上报（恢复源：`.pi/sessions/` 会话日志、`.scratch/` 交接文档），不得猜测重建
 
 ---
 
 ## Constraints
 
-- 禁止 `unsafe impl Send/Sync`
 - 禁止屏幕宽度检测平台
-- 禁止系统原生 UI 控件外观（select/checkbox/radio/date/range 等；文件选择、系统通知、授权弹窗等系统强关联场景除外）
 - 禁止 composable 中文硬编码字符串
-- 禁止无说明、无用途的陈腐注释代码（合理标注的临时调试代码允许保留，见 Code Comments）
+- 禁止无说明的陈旧注释代码（标注过的临时调试代码允许保留）
 - 禁止 commit 中 AI 协作者标记
 - 禁止 panic hook 中调用 `tracing::error!`
 - 禁止无上下文的裸字符串错误
-- 禁止 `.pi/sessions/` 会话日志入库（用 `git add -f .pi/<子路径>`，勿整目录添加）
-- 前端 UI/样式改动（组件、布局、主题、动画）必须先加载 `frontend-styles` skill 再动手
+- 禁止在 dev-shell 中编写具体业务 mock 数据（插件演示种子一律放各自插件工程，见 Architecture Decisions 7）
+- 前端 UI/样式改动必须先加载 `frontend-styles` skill 再动手
 
 ---
 
 ## Done When
 
-- 所有修改的 Rust 代码 `cargo test` 通过
-- 所有修改的前端代码 `npm run test:run`（vitest run）通过
+- 修改的 Rust 代码 `cargo test` 通过
+- 修改的前端代码 `npm run test:run` 通过
 - 修改了 `gen/android` 下 Kotlin 代码的，`./gradlew :app:compileUniversalDebugKotlin` 通过
-- i18n key 同步出现在 zh-CN 和 en 文件中
+- i18n key 同步出现在 zh-CN 和 en
 - 公开项有文档注释
 - 错误处理使用 `AppError` 而非裸字符串
 - 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
@@ -293,43 +198,21 @@ sh scripts/doc-tracking.sh untrack && git commit
 
 ## Code Map（文件查找索引）
 
-两端各有一份目录级代码地图（只到**目录层级 + 模块职责划分**，不索引具体文件）：
+两端各有一份目录级代码地图（只到目录层级 + 模块职责）：桌面 `bedcode-desktop/docs/code-map.md`、移动 `bedcode-mobile/docs/code-map.md`。
 
-- 桌面端：`bedcode-desktop/docs/code-map.md`
-- 移动端：`bedcode-mobile/docs/code-map.md`
+**探索代码 / 了解结构 / 定位模块 / 查找功能实现位置时，必须先读对应端 code-map.md**，按 Project Structure → Core Modules → Quick Navigation 定位目标目录，再用 `ls` / `rg` 找具体文件。禁止未读 code-map 盲目全仓 grep。
 
-**触发时机（prompt）**：当任务涉及「探索代码 / 了解项目结构 / 理解架构 / 查找文件 / 定位模块 / 寻找某个功能的实现位置 / 修改某模块前需要了解上下文」时，**先读对应端的 code-map.md**，按其 Project Structure → Core Modules → Quick Navigation 定位到目标目录，再进入该目录用 `ls` / `rg` 查找具体文件。禁止在未读 code-map 的情况下盲目全仓 grep。
-
-code-map 只维护到目录层级；新增/删除**顶层模块目录**或核心模块职责变化时同步更新对应 code-map.md，普通文件级增删不需要更新。若 code-map 描述与实际目录结构不符，以实际结构为准并顺手修正文档。
+维护规则：只到目录层级；顶层模块目录增删或核心职责变化时同步更新；描述与实际不符时以实际为准并顺手修正文档。
 
 ---
 
 ## Agent skills
 
-### Skills 共享布局
+统一 skills 目录为项目根 **`.agents/skills/`**（唯一真源，git 跟踪）。当前 skills：`logo-generator`、`taste-skill-v1`（frontmatter name `design-taste-frontend-v1`）、`frontend-styles`。
 
-统一 skills 目录为项目根 **`.agents/skills/`**（唯一真源，git 跟踪），供 pi / OpenCode / Codex / Claude Code 共享：
-
-| 工具 | 读取方式 |
-|------|----------|
-| pi | 原生读取项目级 `.agents/skills/`（cwd 起向上到 git root），零配置 |
-| OpenCode | 原生读取 `.agents/skills/`，零配置 |
-| Codex | 原生读取 `.agents/skills/`（CWD → 父目录 → repo root），零配置 |
-| Claude Code | 只读 `.claude/skills/`，需桥接链接，见下 |
-
-当前 skills：`logo-generator`、`taste-skill-v1`（frontmatter name `design-taste-frontend-v1`）、`frontend-styles`。
-
-**新增/修改 skill**：直接在 `.agents/skills/<name>/` 操作，所有工具自动生效（Claude Code 若已跑过桥接脚本，junction 指向同一目录也即时生效）。
-
-**clone 后每台机器执行一次**（Claude Code 桥接）：
-
-```bash
-sh scripts/sync-skills.sh
-```
-
-脚本为 `.agents/skills/` 下每个含 `SKILL.md` 的目录在 `.claude/skills/` 创建链接：Windows 用目录 junction（`mklink /J`，无需管理员权限），Unix 用 symlink。幂等，可重复执行；`.claude/` 已在 `.gitignore`，链接不入库。
-
-> 历史副本说明：`.pi/skills/` 下保留指向真源的 symlink 以兼容旧配置；`~/.claude/skills/frontend-styles` 为个人全局副本，与项目内同名 skill 共存时 Claude Code 以个人级优先，如需严格单一来源可删除个人副本。
+- pi / OpenCode / Codex 原生读取 `.agents/skills/`，零配置
+- Claude Code 只读 `.claude/skills/`：每台机器执行一次 `sh scripts/sync-skills.sh` 桥接（junction/symlink，幂等）
+- 新增/修改 skill 直接操作 `.agents/skills/<name>/`，所有工具即时生效
 
 ### Issue tracker
 
@@ -345,11 +228,9 @@ Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/ag
 
 ### Subagents
 
-pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委派给隔离上下文窗口中的专用 agent。项目 agent 定义在 `.pi/agents/*.md`。
+pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委派给隔离上下文的专用 agent；项目 agent 定义在 `.pi/agents/*.md`。
 
-**调用 `subagent` 工具时必须传 `agentScope: "both"`**（默认 "user" 不会加载本仓库的 agent）。
-
-可用 agent：
+**调用 `subagent` 工具必须传 `agentScope: "both"`**（默认 "user" 不加载本仓库 agent）。
 
 | Agent | 用途 |
 |-------|------|
@@ -358,22 +239,21 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 | `reviewer` | 代码审查（只读） |
 | `worker` | 通用实现（完整能力） |
 | `tester` | 运行测试并报告 |
-| `vision` | 视觉分析（图片识别 / UI 评审 / 设计稿解读），详见下节 |
+| `vision` | 视觉分析（唯一带视觉能力），详见下节 |
 
-三种模式：
-- 单任务：`{ agent, task, agentScope: "both" }`
-- 并行：`{ tasks: [{ agent, task }, ...], agentScope: "both" }`（最多 8 个，4 并发）
-- 链式：`{ chain: [{ agent, task }, ...], agentScope: "both" }`，步骤间用 `{previous}` 占位符传递输出
+三种模式：单任务 `{ agent, task, agentScope }`；并行 `{ tasks: [...] }`（最多 8 个，4 并发）；链式 `{ chain: [...] }`，步骤间用 `{previous}` 传输出。
 
-工作流 prompt 模板（`.pi/prompts/`）：`/implement`（scout → planner → worker）、`/scout-and-plan`（只出计划）、`/implement-and-review`（worker → reviewer → worker）、`/implement-and-test`（worker → tester）。
+工作流模板（`.pi/prompts/`）：`/implement`（scout→planner→worker）、`/scout-and-plan`（只出计划）、`/implement-and-review`（worker→reviewer→worker）、`/implement-and-test`（worker→tester）。
+
+适用场景：可并行的独立子任务、需隔离上下文的重型任务；简单定位/小改动不必启动 subagent。
 
 ### Vision subagent
 
-`vision` 是**唯一带视觉能力的 agent**（模型支持图像理解），主 agent 需提供**图片文件路径**（非 URL / 非 base64）。它不修改文件、不执行命令，仅做读图与结构化分析。
+`vision` 是唯一带视觉能力的 agent：读图与结构化分析，不改文件、不执行命令。主 agent 必须提供**图片文件绝对路径**（非 URL / 非 base64）。
 
-#### 评审范围协议(Scope Protocol)
+#### 评审范围协议（强制）
 
-主 agent 必须在 `task` 字符串中用 `范围:` 或 `scope:` 一行显式指定评审范围:
+主 agent 必须在 `task` 中用 `范围:` 或 `scope:` 一行显式指定评审范围：
 
 | 指令 | 行为 |
 |------|------|
@@ -383,51 +263,66 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 | `范围: 忽略外壳` / `scope: ignore-chrome` | 自动识别 dev-shell 外壳并只评内部 |
 | `范围: <自由描述>` | 按描述执行 |
 
-**未指定范围时**:vision 自动识别 dev-shell(适用于 BedCode `bedcode-mobile` / `bedcode-desktop` 的 dev-shell 调试壳),忽略外壳只评内部。**指令冲突时主 agent 优先**(主 agent 可能有 vision 看不到的上下文,如只想看 dev-shell 自身的 UI bug、只想看错误堆栈)。
+未指定范围时自动识别 dev-shell 并只评内部；指令冲突时主 agent 指令优先。完整协议见 `.pi/agents/vision.md`。
 
-完整协议见 `.pi/agents/vision.md` 的 "## 评审范围协议" 段。
-
-#### 标准调用
+标准调用：
 
 ```javascript
-// 显式指定范围 — 评审手机内部
+// 显式指定范围
 subagent(agent: "vision", agentScope: "both", task: `
   范围: 手机内部
   截图: <绝对路径>
   ...评审要求...
 `)
 
-// 显式完整 — 评审 dev-shell 自身(顶栏/手机框/控制面板)
-subagent(agent: "vision", agentScope: "both", task: `
-  范围: 完整
-  截图: <绝对路径>
-  请评审 dev-shell 调试壳的顶栏按钮对齐、手机框定位、四周留白。
-`)
-
 // 零配置 — 默认自动识别 dev-shell
 subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路径>")
 ```
 
-#### 截图准备
+截图准备：Chrome headless 直连（`chrome.exe --headless=new --screenshot=<out.png> --window-size=1440,900 <url>`）、`browser-tools` skill 的 `browser-screenshot.js` / `browser-content.js`（`browser-start.js` 仅 macOS）、或已有图片文件直传绝对路径。
 
-主 agent 需先截图再传路径给 vision,常用方式:
-- Chrome headless 直连截图:`chrome.exe --headless=new --screenshot=/path/to/out.png --window-size=1440,900 <url>`
-- `browser-tools` skill:`browser-screenshot.js` / `browser-content.js`(注意该 skill 的 `browser-start.js` 仅 macOS 可用,Windows 用 Chrome headless 替代)
-- 已有图片文件:直接传绝对路径
+协助 skill：`design-taste-frontend-v1`（`.agents/skills/taste-skill-v1/`），vision 做 UI/设计稿评审时自动加载，提供品味基线（VARIANCE=8 / MOTION=6 / DENSITY=4）与硬性指标；React/Next.js 原始语境自动映射到 Vue 3 + Tauri 栈。
 
-#### 协助 Skills
+适用场景：错误截图诊断、UI 截图评审、设计稿解读、架构图/流程图解析、代码截图转文字、图标识别。输出固定格式：基础描述 → 详细分析 → Pre-Flight 自查 → 建议。
 
-`design-taste-frontend-v1`(位于 `.agents/skills/taste-skill-v1/`) — UI 截图 / 设计稿评审时由 vision 自动加载,提供品味基线(`VARIANCE=8` / `MOTION=6` / `DENSITY=4`)与 AI 套路识别清单(第 7 节)、五大硬性指标(第 3 节)、Pre-Flight 自查(第 10 节)。原 skill 面向 React/Next.js,vision 评审时自动映射到 Vue 3 + Tauri 栈。
+### LSP 代码智能（lsp-pi 扩展，符号查询优先于文本搜索）
 
-#### 适用场景
+已安装 `git:github.com/leblancfg/lsp-pi` 包（用户级），提供 IDE 级语义查询：`references` / `definition` / `hover` / `symbols` / `signature` / `rename`。语言服务器：TypeScript/JS、Vue（`.vue` SFC）、Rust。
 
-- 错误截图诊断(Tauri / Vue 报错 → 定位问题)
-- UI 截图评审(对照 `frontend-styles` + `design-taste-frontend-v1` 给出量化反馈)
-- 设计稿解读(提取颜色 / 间距 / 字体 / 组件结构)
-- 架构图 / 流程图解析(转文字描述 + 代码骨架)
-- 代码截图转文字(截图里的代码提取为可编辑文本)
-- 图标 / Logo 识别
+**自动诊断 hook 已禁用**（`lsp.hookMode: "disabled"`），不实时推送编译诊断；编译级验证仍以 `npm run test:run` / `cargo test` 为准，LSP 只用于代码理解与导航。
 
-输出格式固定:基础描述 → 详细分析 → Pre-Flight 自查 → 建议。详见 `.pi/agents/vision.md`。
+#### 何时必须用 LSP（行为规则）
 
-适用场景：可并行的独立子任务、需要隔离上下文的重型任务。简单的定位/小改动不必启动 subagent。
+涉及「某个函数/类型/常量/composable/store」的以下任务，**优先调 `lsp` 工具，禁止直接 bash 全目录搜索**：
+
+| 任务场景 | 用法 | 为什么不用 bash 搜索 |
+|---------|------|---------------------|
+| 改接口/签名/删除导出前评估影响面 | `lsp { action: "references", query: "<符号名>", file: "<任一使用处或定义处>" }` | `rg 符号名` 会命中注释、字符串、同名局部变量等大量误报，LSP 只返回真实引用（文件:行:列） |
+| 从 import/调用点找真实实现 | `lsp { action: "definition", ... }` | 跨文件 re-export、composable 解构后 rg 链路难追，LSP 一步到位 |
+| 确认函数参数/返回类型 | `lsp { action: "hover", ... }` | 一行返回类型+文档，不必读整个文件 |
+| 了解大文件结构再定点阅读 | `lsp { action: "symbols", file: "..." }` | 先看大纲再 read 指定区域，省 token |
+| 重构前列出将被改动的位置 | `lsp { action: "rename", ... }` + `newName` 试探 | 返回完整改动清单供人工确认，不盲改 |
+
+判断口诀：**问「谁在用它/它是什么」→ LSP；搜「某段文案/日志字样/配置项」→ bash grep 才是对的**（字符串字面量、注释、日志 tag 不是符号，LSP 不适用）。
+
+典型工作流：
+
+```
+1. code-map.md 定位模块 → ls 看目录 → 打开入口文件
+2. 对关键符号发 lsp hover/references 摸清类型与调用面
+3. 按 references 结果定点 read 具体行段（非整文件）
+4. 动手修改；验证走 npm run test:run / cargo test
+```
+
+示例：
+
+```
+lsp { action: "references", query: "refreshTerminal", file: "bedcode-mobile/src/composables/usePeer.ts" }
+lsp { action: "hover", query: "MessageBus", file: "bedcode-desktop/src-tauri/src/terminal_ws.rs" }
+```
+
+注意事项：
+
+- rust-analyzer 首次查询需索引整个工程（30-60s+，一次性成本），之后毫秒级响应；会话内尽早发一次轻量查询预热
+- 同名符号歧义用 `hover` 类型签名消歧
+- `.vue` 由 vue-language-server 处理，`<script setup>` 内 ref/computed 引用可精确定位
