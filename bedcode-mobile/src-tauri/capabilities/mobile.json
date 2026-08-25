@@ -2,8 +2,13 @@
   "$schema": "../gen/schemas/mobile-schema.json",
   "identifier": "mobile",
   "description": "Capabilities for mobile platforms (Android/iOS)",
-  "windows": ["main"],
-  "platforms": ["iOS", "android"],
+  "windows": [
+    "main"
+  ],
+  "platforms": [
+    "iOS",
+    "android"
+  ],
   "permissions": [
     "core:event:default",
     "core:event:allow-listen",
@@ -16,8 +21,12 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "http://*:*" },
-        { "url": "https://*:*" }
+        {
+          "url": "http://*:*"
+        },
+        {
+          "url": "https://*:*"
+        }
       ]
     },
     "edge-to-edge:allow-enable",
@@ -26,6 +35,8 @@
     "edge-to-edge:allow-get-keyboard-info",
     "edge-to-edge:allow-show-keyboard",
     "edge-to-edge:allow-hide-keyboard",
-    "machine-uid:default"
+    "machine-uid:default",
+    "task-notification:default",
+    "foreground-service:default"
   ]
 }
