@@ -5,13 +5,12 @@
  * 共享目录：条目由宿主持久化（SAF 树授权），添加 = 弹系统目录树选择器；
  * 免授权特殊条目「app 私有下载目录」由宿主派生注入（builtin，不可移除）。
  * 下载目录只读展示（固定 MediaStore/Downloads）；接收策略 ask/accept/reject
- * 经宿主 set_receive_policy 写入；底部常驻明文传输安全告知。
+ * 经宿主 set_receive_policy 写入。
  *
  * 同时注册为宿主 SettingsSection（registerSettingsSection），并作为插件内设置页复用。
  *
  * 样式完全复用宿主 settings-group / settings-row / settings-section-title /
- * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放；
- * 提示与安全告知统一使用黄色提醒框（ft-warning-box）。
+ * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放。
  */
 import { ref, inject, watch } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
@@ -125,11 +124,6 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
     <!-- ==================== 共享目录 ==================== -->
     <section class="space-y-3">
       <h2 class="settings-section-title">{{ t('transfer.settings.sharedRoots') }}</h2>
-
-      <!-- 使用说明：黄色提醒框（与底部明文安全告知同款视觉） -->
-      <div class="ft-warning-box">
-        <p class="ft-warning-text">{{ t('transfer.settings.addRootHint') }}</p>
-      </div>
 
       <!-- 系统目录树选择器：通栏主按钮（图标 + 文案，44px+ 触控目标） -->
       <button
@@ -277,15 +271,8 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
     </section>
 
     <!-- ==================== 可信对端管理（spec 决策 8） ==================== -->
-    <!-- 独立分区，列表/撤销自包含；置于明文安全告知之前，保持安全告知常驻底部 -->
+    <!-- 独立分区，列表/撤销自包含 -->
     <TrustedPeersSection />
-
-    <!-- ==================== 明文安全告知（spec §10） ==================== -->
-    <div class="ft-warning-box">
-      <p class="ft-warning-text">
-        {{ t('transfer.settings.plainWarning') }}
-      </p>
-    </div>
   </div>
 </template>
 
@@ -444,21 +431,6 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
 .ft-timeout-input::-webkit-outer-spin-button,
 .ft-timeout-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
-  margin: 0;
-}
-
-/* 黄色提醒框（使用说明 / 安全告知共用） */
-.ft-warning-box {
-  padding: 0.75rem 1rem;
-  border-radius: 0.75rem;
-  border: 1px solid var(--mobile-warning-muted);
-  background: color-mix(in srgb, var(--mobile-warning) 6%, transparent);
-}
-
-.ft-warning-text {
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  line-height: 1.5;
-  color: var(--mobile-warning);
   margin: 0;
 }
 </style>

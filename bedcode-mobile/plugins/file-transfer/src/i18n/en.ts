@@ -107,7 +107,6 @@ export default {
   // ==================== Settings ====================
   'transfer.settings.title': 'File Transfer Settings',
   'transfer.settings.sharedRoots': 'Shared folders',
-  'transfer.settings.addRootHint': 'Shared folders are picked with the system directory picker and stay authorized across restarts. You can browse and upload from them inside the app without the "All files access" permission.',
   'transfer.settings.pickRoot': 'Pick folder',
   'transfer.settings.picking': 'Picking…',
   'transfer.settings.pickFailed': 'Failed to add: folder selection incomplete or authorization failed. Try again.',
@@ -125,7 +124,6 @@ export default {
   'transfer.settings.downloadDirHint': 'Downloads are saved to the system Downloads folder',
   'transfer.settings.concurrency': 'Concurrency',
   'transfer.settings.concurrencyHint': 'Number of files transferred at once (1–8)',
-  'transfer.settings.plainWarning': 'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
   'transfer.settings.saved': 'Settings saved',
 
   // ==================== Upload page (shared directories) ====================
@@ -221,7 +219,7 @@ export default {
   'transfer.settings.encryption': 'Transfer encryption',
   'transfer.settings.encryptionOn': 'On',
   'transfer.settings.encryptionOff': 'Off',
-  'transfer.settings.encryptionHint': 'Encrypt outgoing transfers with AES-256-GCM; receivers decrypt automatically (requires newer BedCode on both ends)',
+  'transfer.settings.encryptionHint': 'When enabled, transfers are automatically encrypted in transit to protect them from interception.',
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
 
   // ==================== 首连确认（全局对话框，spec 决策 7） ====================

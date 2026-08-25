@@ -103,7 +103,6 @@ export interface MessageSchema {
   // ==================== 设置 ====================
   'transfer.settings.title': string
   'transfer.settings.sharedRoots': string
-  'transfer.settings.addRootHint': string
   'transfer.settings.pickRoot': string
   'transfer.settings.picking': string
   'transfer.settings.pickFailed': string
@@ -121,7 +120,6 @@ export interface MessageSchema {
   'transfer.settings.downloadDirHint': string
   'transfer.settings.concurrency': string
   'transfer.settings.concurrencyHint': string
-  'transfer.settings.plainWarning': string
   'transfer.settings.saved': string
 
   // ==================== 上传页（共享目录） ====================

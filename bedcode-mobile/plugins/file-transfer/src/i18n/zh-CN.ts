@@ -105,7 +105,6 @@ export default {
   // ==================== 设置 ====================
   'transfer.settings.title': '文件传输设置',
   'transfer.settings.sharedRoots': '共享目录',
-  'transfer.settings.addRootHint': '共享目录经系统选择器选择并持久化授权（重启仍有效）；App 内可直接浏览并上传其中的文件，无需「所有文件访问权限」',
   'transfer.settings.pickRoot': '选择目录',
   'transfer.settings.picking': '选择中…',
   'transfer.settings.pickFailed': '添加失败：目录选择未完成或授权失败，请重试',
@@ -123,7 +122,6 @@ export default {
   'transfer.settings.downloadDirHint': '下载固定保存到系统下载目录',
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的文件数（1–8）',
-  'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任 WiFi 网络中使用',
   'transfer.settings.saved': '设置已保存',
 
   // ==================== 上传页（共享目录） ====================
@@ -219,7 +217,7 @@ export default {
   'transfer.settings.encryption': '传输加密',
   'transfer.settings.encryptionOn': '开',
   'transfer.settings.encryptionOff': '关',
-  'transfer.settings.encryptionHint': '发送时用 AES-256-GCM 加密，接收端自动解密（需对方为新版 BedCode）',
+  'transfer.settings.encryptionHint': '开启后，传输内容将自动加密保护，防止被第三方截取',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
 
   // ==================== 首连确认（全局对话框，spec 决策 7） ====================
