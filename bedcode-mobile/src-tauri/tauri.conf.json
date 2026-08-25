@@ -1,7 +1,7 @@
 {
   "productName": "BedCode Mobile",
   "identifier": "com.bedcode.mobile",
-  "version": "2.0.0",
+  "version": "2.0.10",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1423",
