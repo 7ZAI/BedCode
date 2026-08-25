@@ -329,6 +329,10 @@ pub async fn start_http_server(
                 crate::server::metrics::MetricsCollector::global().inc_http_request();
                 srv.call(req)
             })
+            // 流量过滤器责任链（HTTP 接入点）：请求体入站过滤 + 响应体出站过滤。
+            // 挂在最内层：CORS/日志层拒绝的请求不进入缓冲逻辑；
+            // 链为空时零开销透传（加密等扩展经 server::filter::TrafficFilterChain 注册）
+            .wrap(crate::server::middleware::http_filter::TrafficFilter)
             .configure(configure_routes)
     })
     .bind(format!("{}:{}", BIND_ADDRESS, port))?

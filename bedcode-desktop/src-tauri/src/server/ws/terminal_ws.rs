@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 
 use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
+use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::message::Message;
 use crate::server::ws::registry::{ChannelType, WsSessionRegistry};
 use crate::server::ws::session::WsSession;
@@ -185,6 +186,121 @@ impl TerminalWs {
             }
             ctx.ping(b"");
         });
+    }
+
+    // ==================== Traffic Filter Hooks（流量过滤责任链接线） ====================
+
+    /// 本连接对应的流量通道类型（本地环回优先于通道类型判断）
+    fn traffic_channel(&self) -> TrafficChannel {
+        if self.local {
+            TrafficChannel::WsLocal
+        } else {
+            match self.channel_type {
+                ChannelType::Terminal => TrafficChannel::WsTerminal,
+                ChannelType::Event => TrafficChannel::WsEvent,
+            }
+        }
+    }
+
+    /// 入站帧过滤：None = 被拒（已记 warn），调用方应丢弃该帧
+    fn filter_inbound_data(&self, data: Vec<u8>, kind: &'static str) -> Option<Vec<u8>> {
+        let chain = TrafficFilterChain::global();
+        if chain.is_empty() {
+            return Some(data);
+        }
+        let peer = self.session.addr.to_string();
+        let mut ctx = FilterContext {
+            channel: self.traffic_channel(),
+            direction: Direction::Inbound,
+            peer: &peer,
+            route: kind,
+            data,
+        };
+        match chain.run_inbound(&mut ctx) {
+            Ok(()) => Some(ctx.data),
+            Err(rej) => {
+                tracing::warn!(
+                    addr = %peer,
+                    channel = self.traffic_channel().as_str(),
+                    frame = kind,
+                    %rej,
+                    "WS inbound frame rejected by traffic filter, dropped"
+                );
+                None
+            }
+        }
+    }
+
+    /// 入站文本帧过滤（JSON 控制帧 / 业务消息）
+    fn filter_inbound_text(&self, text: String) -> Option<String> {
+        self.filter_inbound_data(text.into_bytes(), "text")
+            .map(|data| String::from_utf8_lossy(&data).into_owned())
+    }
+
+    /// 出站文本帧：经过滤链后写出（含 metrics 计数）；被拒 → 丢弃 + warn。
+    /// 全部业务文本帧的唯一写出口，广播/推送经 Handler<SendTextMessage> 汇入
+    fn send_text_filtered(&self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
+        let chain = TrafficFilterChain::global();
+        if chain.is_empty() {
+            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+            ctx.text(text);
+            return;
+        }
+        let peer = self.session.addr.to_string();
+        let mut fctx = FilterContext {
+            channel: self.traffic_channel(),
+            direction: Direction::Outbound,
+            peer: &peer,
+            route: "text",
+            data: text.into_bytes(),
+        };
+        match chain.run_outbound(&mut fctx) {
+            Ok(()) => {
+                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                ctx.text(String::from_utf8_lossy(&fctx.data).into_owned());
+            }
+            Err(rej) => {
+                tracing::warn!(
+                    addr = %peer,
+                    channel = self.traffic_channel().as_str(),
+                    %rej,
+                    "WS outbound text frame rejected by traffic filter, dropped"
+                );
+            }
+        }
+    }
+
+    /// 出站二进制帧：经过滤链后写出（含 metrics 计数）；被拒 → 丢弃 + warn。
+    /// 承载 TB v2 终端输出流（spec §5.3），加密过滤器的主战场
+    fn send_binary_filtered(&self, data: Vec<u8>, ctx: &mut ws::WebsocketContext<Self>) {
+        let chain = TrafficFilterChain::global();
+        if chain.is_empty() {
+            crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+            ctx.binary(data);
+            return;
+        }
+        let peer = self.session.addr.to_string();
+        let mut fctx = FilterContext {
+            channel: self.traffic_channel(),
+            direction: Direction::Outbound,
+            peer: &peer,
+            route: "binary",
+            data,
+        };
+        match chain.run_outbound(&mut fctx) {
+            Ok(()) => {
+                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
+                ctx.binary(fctx.data);
+            }
+            Err(rej) => {
+                tracing::warn!(
+                    addr = %peer,
+                    channel = self.traffic_channel().as_str(),
+                    %rej,
+                    "WS outbound binary frame rejected by traffic filter, dropped"
+                );
+            }
+        }
     }
 }
 
@@ -371,11 +487,19 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
             }
             WsMessage::Text(text) => {
                 crate::server::metrics::MetricsCollector::global().inc_ws_received();
-                self.handle_text_message(text.to_string(), ctx);
+                // 入站先过流量过滤链（解密/审计），被拒则丢弃该帧
+                let Some(text) = self.filter_inbound_text(text.to_string()) else {
+                    return;
+                };
+                self.handle_text_message(text, ctx);
             }
             WsMessage::Binary(data) => {
                 crate::server::metrics::MetricsCollector::global().inc_ws_received();
-                self.handle_ack_binary(data.as_ref(), ctx);
+                // 入站先过流量过滤链，被拒则丢弃该帧（ack 尽力而为，丢帧由水位暂停兜底）
+                let Some(data) = self.filter_inbound_data(data.to_vec(), "binary") else {
+                    return;
+                };
+                self.handle_ack_binary(&data, ctx);
             }
             WsMessage::Close(reason) => {
                 ctx.close(reason);
@@ -396,15 +520,13 @@ impl TerminalWs {
             return;
         }
 
-        let metrics = crate::server::metrics::MetricsCollector::global();
         let message = match Message::from_json(&text) {
             Ok(m) => m,
             Err(e) => {
                 tracing::warn!(error = %e, addr = %self.session.addr, "Failed to parse WS message");
                 let error = Message::error("PARSE_ERROR", &e.to_string());
                 if let Ok(json) = error.to_json() {
-                    metrics.inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
                 return;
             }
@@ -426,8 +548,7 @@ impl TerminalWs {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {
-                        metrics.inc_ws_sent();
-                        ctx.text(json);
+                        self.send_text_filtered(json, ctx);
                     }
                     // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接。
                     // 显式 close：仅 stop() 时 socket 要等下一个 heartbeat tick 才关闭
@@ -446,8 +567,7 @@ impl TerminalWs {
                 if !self.session.authenticated {
                     let error = Message::error_with_id(&message_id, "AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {
-                        metrics.inc_ws_sent();
-                        ctx.text(json);
+                        self.send_text_filtered(json, ctx);
                     }
                     // spec §4.3 拒绝对称：未认证连接发业务消息 → 回错误后关闭连接。
                     // 显式 close：仅 stop() 时 socket 要等下一个 heartbeat tick 才关闭
@@ -464,8 +584,7 @@ impl TerminalWs {
                     // （无 id），spec §4.3 拒绝对称
                     let error = Message::error("AUTH_REQUIRED", "Please authenticate first");
                     if let Ok(json) = error.to_json() {
-                        metrics.inc_ws_sent();
-                        ctx.text(json);
+                        self.send_text_filtered(json, ctx);
                     }
                     ctx.stop();
                     return;
@@ -481,7 +600,6 @@ impl TerminalWs {
     /// subscribe（无参快照订阅）→ 输出流；input 直通 PTY。
     /// 拒绝对称（spec §4.3）：未认证发业务帧 → error(AUTH_REQUIRED) + 关闭
     fn handle_session_control_frame(&mut self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
-        let metrics = crate::server::metrics::MetricsCollector::global();
         let frame = match control_frame::parse_client_frame(&text) {
             Ok(f) => f,
             Err(e) => {
@@ -490,8 +608,7 @@ impl TerminalWs {
                     code: "PARSE_ERROR".to_string(),
                     message: e,
                 };
-                metrics.inc_ws_sent();
-                ctx.text(error.to_json());
+                self.send_text_filtered(error.to_json(), ctx);
                 return;
             }
         };
@@ -526,13 +643,11 @@ impl TerminalWs {
         if self.session.authenticated {
             return true;
         }
-        let metrics = crate::server::metrics::MetricsCollector::global();
         let error = ServerFrame::Error {
             code: "AUTH_REQUIRED".to_string(),
             message: "Please authenticate first".to_string(),
         };
-        metrics.inc_ws_sent();
-        ctx.text(error.to_json());
+        self.send_text_filtered(error.to_json(), ctx);
         ctx.close(None);
         ctx.stop();
         false
@@ -541,14 +656,12 @@ impl TerminalWs {
     /// 新路由认证：JWT 验证（与旧路由共享 `authenticate_jwt` 核心）→
     /// 认证通过后校验绑定会话存在（spec §5.1：不存在 → error(SESSION_NOT_FOUND) + 关闭）
     fn handle_session_auth(&mut self, token: String, ctx: &mut ws::WebsocketContext<Self>) {
-        let metrics = crate::server::metrics::MetricsCollector::global();
         if token.is_empty() {
             let error = ServerFrame::Error {
                 code: "NO_TOKEN".to_string(),
                 message: "No JWT token provided".to_string(),
             };
-            metrics.inc_ws_sent();
-            ctx.text(error.to_json());
+            self.send_text_filtered(error.to_json(), ctx);
             // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
             ctx.close(None);
             ctx.stop();
@@ -567,8 +680,7 @@ impl TerminalWs {
             }
             Err((code, message)) => {
                 let error = ServerFrame::Error { code, message };
-                metrics.inc_ws_sent();
-                ctx.text(error.to_json());
+                self.send_text_filtered(error.to_json(), ctx);
                 // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接。
                 // 显式 close：仅 ctx.stop() 时 socket 要等下一个 heartbeat tick 才关闭
                 // （测试实测延迟 5s，偶发更久），close 立即发 Close 帧并关闭 TCP
@@ -857,7 +969,7 @@ impl TerminalWs {
             _ => {
                 let error = Message::error_with_id(&message_id, "INVALID_AUTH_STAGE", "Unsupported auth stage");
                 if let Ok(json) = error.to_json() {
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
             }
         }
@@ -870,14 +982,12 @@ impl TerminalWs {
         message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        let metrics = crate::server::metrics::MetricsCollector::global();
         let token = match &payload.session_token {
             Some(t) if !t.is_empty() => t.clone(),
             _ => {
                 let error = Message::error_with_id(&message_id, "NO_TOKEN", "No JWT token provided");
                 if let Ok(json) = error.to_json() {
-                    metrics.inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
                 // spec §4.3 拒绝对称：JWT 认证失败（缺 token）→ 回错误后关闭连接
                 ctx.close(None);
@@ -905,15 +1015,13 @@ impl TerminalWs {
                     },
                 };
                 if let Ok(json) = response.to_json() {
-                    metrics.inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
             }
             Err((code, message)) => {
                 let error = Message::error_with_id(&message_id, &code, &message);
                 if let Ok(json) = error.to_json() {
-                    metrics.inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
                 // spec §4.3 拒绝对称：JWT 认证失败（无效/过期 token）→ 回错误后关闭连接
                 ctx.close(None);
@@ -953,8 +1061,7 @@ impl TerminalWs {
                 if expect_response {
                     let ack = Message::ack(&message_id);
                     if let Ok(json) = ack.to_json() {
-                        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                        ctx.text(json);
+                        self.send_text_filtered(json, ctx);
                     }
                 }
             }
@@ -1234,8 +1341,7 @@ impl Handler<SubscribeResult> for TerminalWs {
                     &msg.request_id,
                 );
                 if let Ok(json) = ws_msg.to_json() {
-                    crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
             }
             None => {
@@ -1245,8 +1351,7 @@ impl Handler<SubscribeResult> for TerminalWs {
                     &format!("Session {} not found", msg.session_id),
                 );
                 if let Ok(json) = error.to_json() {
-                    crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                    ctx.text(json);
+                    self.send_text_filtered(json, ctx);
                 }
             }
         }
@@ -1268,8 +1373,7 @@ impl Handler<SessionSubscribeOutcome> for TerminalWs {
                     min_seq: response.min_seq,
                     history_count: response.history_count,
                 };
-                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                ctx.text(frame.to_json());
+                self.send_text_filtered(frame.to_json(), ctx);
             }
             None => {
                 // 会话在认证后被移除（罕见竞态）：与认证时一致的错误流
@@ -1277,8 +1381,7 @@ impl Handler<SessionSubscribeOutcome> for TerminalWs {
                     code: "SESSION_NOT_FOUND".to_string(),
                     message: format!("Session {} not found", msg.session_id),
                 };
-                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                ctx.text(frame.to_json());
+                self.send_text_filtered(frame.to_json(), ctx);
                 ctx.close(None);
                 ctx.stop();
             }
@@ -1291,10 +1394,8 @@ impl Handler<SessionAuthOutcome> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: SessionAuthOutcome, ctx: &mut Self::Context) {
-        let metrics = crate::server::metrics::MetricsCollector::global();
         if msg.exists {
-            metrics.inc_ws_sent();
-            ctx.text(ServerFrame::AuthOk.to_json());
+            self.send_text_filtered(ServerFrame::AuthOk.to_json(), ctx);
         } else {
             tracing::warn!(
                 addr = %self.session.addr,
@@ -1305,8 +1406,7 @@ impl Handler<SessionAuthOutcome> for TerminalWs {
                 code: "SESSION_NOT_FOUND".to_string(),
                 message: format!("Session {} not found", msg.session_id),
             };
-            metrics.inc_ws_sent();
-            ctx.text(frame.to_json());
+            self.send_text_filtered(frame.to_json(), ctx);
             // spec §5.1：会话不存在 → 认证通过后 error + 关闭
             ctx.close(None);
             ctx.stop();
@@ -1323,8 +1423,7 @@ impl Handler<UnsubscribeResult> for TerminalWs {
             self.session.subscribed_sessions.remove(&msg.session_id);
             let ws_msg = Message::unsubscribe_response_with_request_id(&msg.session_id, &msg.request_id);
             if let Ok(json) = ws_msg.to_json() {
-                crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-                ctx.text(json);
+                self.send_text_filtered(json, ctx);
             }
         }
     }
@@ -1335,8 +1434,7 @@ impl Handler<TerminalOutputBinary> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: TerminalOutputBinary, ctx: &mut Self::Context) {
-        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-        ctx.binary(msg.data);
+        self.send_binary_filtered(msg.data, ctx);
     }
 }
 
@@ -1345,8 +1443,7 @@ impl Handler<SendTextMessage> for TerminalWs {
     type Result = ();
 
     fn handle(&mut self, msg: SendTextMessage, ctx: &mut Self::Context) {
-        crate::server::metrics::MetricsCollector::global().inc_ws_sent();
-        ctx.text(msg.text);
+        self.send_text_filtered(msg.text, ctx);
     }
 }
 mod forward;
