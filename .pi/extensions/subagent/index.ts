@@ -267,6 +267,11 @@ type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 /** exit 后等待 stdio 结束的宽限期（毫秒），超时则放弃跟踪被继承的句柄 */
 const EXIT_STDIO_GRACE_MS = 100;
 
+/** agent_end 后等进程自然退出的时限（毫秒），超时强制 kill。
+ *  agent_end 表示回合已完成、全部消息已经 stdout 捕获，进程存活与否不影响结果；
+ *  Windows 上子进程可能被残留句柄（MCP 连接/扩展定时器）挂住永不退出。 */
+const AGENT_END_FORCE_EXIT_MS = 3000;
+
 /**
  * 等待子进程退出，但不被「分离后代继承的 stdio 句柄」卡死。
  *
@@ -424,6 +429,13 @@ async function runSingleAgent(
 				stdio: ["ignore", "pipe", "pipe"],
 			});
 			let buffer = "";
+			let agentEndKillTimer: NodeJS.Timeout | undefined;
+			const disarmAgentEndKill = () => {
+				if (agentEndKillTimer) {
+					clearTimeout(agentEndKillTimer);
+					agentEndKillTimer = undefined;
+				}
+			};
 
 			const processLine = (line: string) => {
 				if (!line.trim()) return;
@@ -460,6 +472,21 @@ async function runSingleAgent(
 					currentResult.messages.push(event.message as Message);
 					emitUpdate();
 				}
+
+				if (event.type === "agent_end") {
+					// 回合已结束：不再依赖进程自行退出（可能被残留句柄永久挂住），
+					// 宽限片刻后仍活着就强杀，exit 随之触发、waitForSubagentExit 正常收尾
+					disarmAgentEndKill();
+					agentEndKillTimer = setTimeout(() => {
+						if (proc.exitCode === null && !proc.killed) {
+							currentResult.stderr += "\n[subagent] agent_end 后进程未退出（疑似残留句柄），已强制结束";
+							proc.kill("SIGTERM");
+							setTimeout(() => {
+								if (proc.exitCode === null) proc.kill("SIGKILL");
+							}, 2000);
+						}
+					}, AGENT_END_FORCE_EXIT_MS);
+				}
 			};
 
 			proc.stdout.on("data", (data) => {
@@ -478,9 +505,11 @@ async function runSingleAgent(
 			waitForSubagentExit(proc)
 				.then((code) => {
 					if (buffer.trim()) processLine(buffer);
+					disarmAgentEndKill();
 					resolve(code ?? 0);
 				})
 				.catch(() => {
+					disarmAgentEndKill();
 					resolve(1);
 				});
 
