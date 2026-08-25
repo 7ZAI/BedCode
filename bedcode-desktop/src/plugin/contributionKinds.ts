@@ -229,6 +229,8 @@ export function getDetailRows(
 export function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'desktop.plugin.error'
   if (state.state === 'Activated') return 'desktop.plugin.activated'
+  if (state.state === 'Degraded') return 'desktop.plugin.degraded'
+  if (state.state === 'Activating') return 'desktop.plugin.activating'
   if (state.state === 'NeedsApproval') return 'desktop.plugin.needsApproval'
   if (state.state === 'Loaded') return 'desktop.plugin.loaded'
   if (state.state === 'Deactivated') return 'desktop.plugin.deactivated'
@@ -238,6 +240,28 @@ export function getStateKey(state: PluginState): string {
 /** 判断插件是否为激活状态 */
 export function isActivated(state: PluginState): boolean {
   return state.state === 'Activated'
+}
+
+/** 判断插件是否为降级态（activate 成功但 on_startup 失败：实例在运行，启动初始化未完成） */
+export function isDegraded(state: PluginState): boolean {
+  return state.state === 'Degraded'
+}
+
+/** 获取降级原因（on_startup 失败信息） */
+export function getDegradedMessage(state: PluginState): string {
+  return state.state === 'Degraded' ? state.error || '' : ''
+}
+
+/**
+ * 判断实例是否在运行（Activated 或 Degraded）。
+ *
+ * Degraded 实例 activate 成功且 phase 3 扩展点注册已完成，仅 on_startup 失败 ——
+ * 对「运行中」语义（列表已启用分区归属、启停开关 ON 态、配置入口放行）应视为运行；
+ * 依据 spec §5.1 开放问题裁决：功能门禁先放行 + UI 降级标识。
+ * 注意 `is_activated()` 后端 API 门禁仍严格 Activated，本函数只用于前端展示/入口归类。
+ */
+export function isRunning(state: PluginState): boolean {
+  return state.state === 'Activated' || state.state === 'Degraded'
 }
 
 /** 判断插件是否为错误状态 */
@@ -271,7 +295,7 @@ export function formatTime(ms?: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-/** 插件是否有可配置项（激活 + 有 configuration 声明） */
+/** 插件是否有可配置项（实例运行中 + 有 configuration 声明；Degraded 放行——用户可能正是要改配置修复启动失败） */
 export function hasConfiguration(plugin: PluginInfo): boolean {
-  return isActivated(plugin.state) && !!plugin.contributes.configuration
+  return isRunning(plugin.state) && !!plugin.contributes.configuration
 }

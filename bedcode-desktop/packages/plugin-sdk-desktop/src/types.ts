@@ -320,10 +320,17 @@ export interface PluginDevMock {
   peer?: PeerDevMock
 }
 
-/** 插件运行时状态 */
+/** 插件运行时状态
+ *
+ * 与宿主侧 `bedcode-desktop/src/plugin/types.ts` 为双写副本，修改任一文件必须同步另一份。
+ * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）。
+ */
 export type PluginState =
   | { state: 'Loaded' }
+  | { state: 'Activating' }
   | { state: 'Activated' }
+  | { state: 'Degraded'; error: string }
+  | { state: 'NeedsApproval' }
   | { state: 'Error'; error: string }
   | { state: 'Deactivated' }
 

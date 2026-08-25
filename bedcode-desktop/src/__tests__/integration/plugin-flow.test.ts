@@ -29,7 +29,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import i18n from '@/locales'
 import PluginsView from '@/views/PluginsView.vue'
 import { pluginLoader } from '@/plugin/loader'
-import { makePluginInfo } from '@/__tests__/fixtures/index'
+import { makePluginInfo, makeDegradedPluginInfo } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -158,6 +158,36 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     // Demo Plugin 行的开关是「停用」语义，Other Plugin 是「启用」语义
     expect(wrapper!.find('[aria-label="停用"]').exists()).toBe(true)
     expect(wrapper!.find('[aria-label="启用"]').exists()).toBe(true)
+  })
+
+  it('降级插件：进已启用分区 + 显示「已降级」徽章 + 开关保持停用语义', async () => {
+    backendPlugins = [
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Activated' },
+      }),
+      // on_startup 失败的 Degraded：实例在运行，归属已启用分区但带降级标识
+      makeDegradedPluginInfo({
+        id: 'com.bedcode.other',
+        name: 'Other Plugin',
+        state: { state: 'Degraded', error: 'on_startup failed: db locked' },
+      }),
+    ]
+    await mountView()
+
+    const text = wrapper!.text()
+    // 分区计数含 Degraded（实例运行中），且徽章明确标注降级而非笼统「已启用」
+    expect(text).toContain('2/2')
+    expect(text).toContain('已启用')
+    expect(text).toContain('已降级')
+    // 降级行开关保持「停用」语义（实例在运行），不误入未启用分区
+    const disableToggles = wrapper!.findAll('[aria-label="停用"]')
+    expect(disableToggles.length).toBe(2)
+    // 悬停可见原始降级原因
+    const badge = wrapper!.find('span[title="on_startup failed: db locked"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('已降级')
   })
 
   it('停用联动：toggle → loader 停用 → 列表重载 → 行从已启用迁到未启用', async () => {

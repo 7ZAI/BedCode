@@ -69,10 +69,12 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       // 不能去前缀，否则落入 Unknown command（registry/命令面板/插件视图均传全名）
       try {
         return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
-      } catch (e: any) {
+      } catch (e) {
         // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）
-        // 统一掩盖成 "Command not found"，便于定位问题
-        const detail = e?.message ? ` (${e.message})` : ''
+        // 统一掩盖成 "Command not found"，便于定位问题。
+        // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
+        const raw = e instanceof Error ? e.message : typeof e === 'string' ? e : ''
+        const detail = raw ? ` (${raw})` : ''
         throw new Error(`Command not found: ${id}${detail}`)
       }
     },

@@ -26,7 +26,9 @@ class PluginLoaderClass {
    *
    * 根据 Rust 后端返回的插件状态决定前端加载策略：
    * - Rust 端已 Activated 的插件：加载前端 TS 模块（UI 组件注册）
-   * - Rust 端未激活的插件：跳过，等待用户手动激活
+   * - Degraded 插件：同样加载前端模块 —— 后端实例在运行、phase 3 扩展点已注册，
+   *   UI 入口应可见；仅 console.warn 标注降级原因（spec §3.6）
+   * - 其余状态（含 Activating 中间态）：跳过，等待用户手动激活
    * - Rust-only 插件：完全由后端管理，前端无需处理
    */
   async loadAll(): Promise<void> {
@@ -52,15 +54,21 @@ class PluginLoaderClass {
         continue
       }
 
-      // 只有 Rust 端已 Activated 的插件才加载前端模块
-      // Rust 端在 PluginHost::new() 中已根据持久化状态自动激活
-      const isActivated = manifest.state.state === 'Activated'
+      // 加载门禁：Activated 正常加载；Degraded 也放行（实例在运行，仅降级）；
+      // 其余状态跳过。功能门禁归类依据 spec §5.1 开放问题裁决：先放行 + UI 降级标识
+      const stateName = manifest.state.state
 
-      if (!isActivated) {
+      if (stateName !== 'Activated' && stateName !== 'Degraded') {
         console.log(
-          `[PluginLoader] Plugin ${manifest.id} not activated (state: ${manifest.state.state}), skipping frontend load`,
+          `[PluginLoader] Plugin ${manifest.id} not activated (state: ${stateName}), skipping frontend load`,
         )
         continue
+      }
+
+      if (stateName === 'Degraded') {
+        console.warn(
+          `[PluginLoader] Plugin ${manifest.id} is DEGRADED, loading frontend module anyway. Reason: ${manifest.state.error}`,
+        )
       }
 
       // Rust+TS 插件：Rust 端已激活，前端只加载 TS 入口文件（UI 组件）
@@ -84,6 +92,8 @@ class PluginLoaderClass {
   /** 加载 Rust+TS 插件的前端部分（不触发后端 activate，Rust 端已激活） */
   private async loadFrontendOnly(manifest: PluginInfo): Promise<void> {
     const ACTIVATE_TIMEOUT = 5000
+    // 失败上报需标注发生在哪一步（issue 04：导入/激活/失败三条路径各上报一次）
+    let stage: 'import' | 'activate' = 'import'
 
     try {
       // 不调用 pluginActivate — Rust 端已通过静态注册激活
@@ -91,10 +101,13 @@ class PluginLoaderClass {
       console.log(`[PluginLoader] Importing frontend module: ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
+      stage = 'activate'
       const context = createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
@@ -102,6 +115,12 @@ class PluginLoaderClass {
       console.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      await this.reportLoadDiagnostic(
+        manifest.id,
+        stage,
+        false,
+        e.message || 'Frontend load failed',
+      )
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
   }
@@ -113,6 +132,8 @@ class PluginLoaderClass {
    */
   private async loadFrontendForAlreadyActivated(manifest: PluginInfo): Promise<void> {
     const ACTIVATE_TIMEOUT = 5000
+    // 失败上报需标注发生在哪一步（issue 04：导入/激活/失败三条路径各上报一次）
+    let stage: 'import' | 'activate' = 'import'
 
     try {
       // 跳过 pluginActivate — Rust 端已通过自动激活处理
@@ -120,16 +141,25 @@ class PluginLoaderClass {
       console.log(`[PluginLoader] Importing frontend module (already activated): ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
+      stage = 'activate'
       const context = createPluginContext(manifest)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       getPluginRegistry().setContext(manifest.id, context)
       console.log(`[PluginLoader] Plugin frontend loaded (already activated): ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      await this.reportLoadDiagnostic(
+        manifest.id,
+        stage,
+        false,
+        e.message || 'Frontend load failed',
+      )
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
   }
@@ -275,17 +305,28 @@ class PluginLoaderClass {
 
     // 3. 重新加载 TS 入口（添加时间戳破坏浏览器缓存）
     const entryUrl = this.convertFileUrl(info.extensionPath, info.main) + '?t=' + Date.now()
+    let stage: 'import' | 'activate' = 'import'
 
     try {
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
+      await this.reportLoadDiagnostic(pluginId, 'import', true)
+
+      stage = 'activate'
       const context = createPluginContext(info)
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
+      await this.reportLoadDiagnostic(pluginId, 'activate', true)
 
       this.plugins.set(pluginId, { manifest: info, module, context })
       getPluginRegistry().setContext(pluginId, context)
       console.log(`[PluginLoader] Plugin hot-reloaded: ${pluginId}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
+      await this.reportLoadDiagnostic(
+        pluginId,
+        stage,
+        false,
+        e.message || 'Hot reload failed',
+      )
       await pluginCmds.pluginMarkError(pluginId, e.message || 'Hot reload failed')
     }
   }
@@ -293,6 +334,8 @@ class PluginLoaderClass {
   /** 加载 inline 模式插件 */
   private async loadInline(manifest: PluginInfo): Promise<void> {
     const ACTIVATE_TIMEOUT = 5000
+    // 失败上报需标注发生在哪一步（issue 04：导入/激活/失败三条路径各上报一次）
+    let stage: 'import' | 'activate' = 'import'
 
     try {
       // 通知后端标记激活
@@ -305,13 +348,16 @@ class PluginLoaderClass {
       console.log(`[PluginLoader] Importing frontend module: ${entryUrl}`)
       const module = await this.importWithTimeout(entryUrl, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend module imported: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'import', true)
 
+      stage = 'activate'
       // 创建 PluginContext
       const context = createPluginContext(manifest)
 
       // 调用 activate
       await this.activateWithTimeout(module, context, ACTIVATE_TIMEOUT)
       console.log(`[PluginLoader] Frontend activate() called: ${manifest.id}`)
+      await this.reportLoadDiagnostic(manifest.id, 'activate', true)
 
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
@@ -319,6 +365,12 @@ class PluginLoaderClass {
       console.log(`[PluginLoader] Plugin activated: ${manifest.id}`)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to activate ${manifest.id}:`, e)
+      await this.reportLoadDiagnostic(
+        manifest.id,
+        stage,
+        false,
+        e.message || 'Activation failed',
+      )
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Activation failed')
     }
   }
@@ -327,6 +379,24 @@ class PluginLoaderClass {
   private convertFileUrl(extensionPath: string, main: string): string {
     const filePath = `${extensionPath}/${main}`.replace(/\\/g, '/')
     return convertFileSrc(filePath)
+  }
+
+  /** 上报前端模块加载诊断到宿主落盘日志（spec §3.7 / issue 04）
+   *
+   * 宿主内部诊断通道：结果仅写入 tracing（runtime.*.log），不入状态机。
+   * invoke 失败静默吞掉 —— 诊断命令不可用时绝不阻塞插件加载流程。
+   */
+  private async reportLoadDiagnostic(
+    pluginId: string,
+    stage: 'import' | 'activate',
+    ok: boolean,
+    detail?: string,
+  ): Promise<void> {
+    try {
+      await pluginCmds.pluginFrontendLoadReport(pluginId, stage, ok, detail)
+    } catch {
+      // 诊断通道不可用不影响加载流程
+    }
   }
 
   /** 带超时的动态导入 */

@@ -29,7 +29,7 @@
         >
       </div>
       <div
-        v-if="configSchema && pluginInfo && isActivatedState(pluginInfo.state)"
+        v-if="configSchema && pluginInfo && canConfigure(pluginInfo.state)"
         class="flex items-center gap-2"
       >
         <PluginPageToolbar target="plugin-config" />
@@ -56,7 +56,7 @@
 
         <!-- ==================== 未激活 ==================== -->
         <div
-          v-else-if="!pluginInfo || !isActivatedState(pluginInfo.state)"
+          v-else-if="!pluginInfo || !canConfigure(pluginInfo.state)"
           class="py-16 text-center text-[calc(12.5px*var(--ui-scale))] text-[var(--text-secondary)]"
         >
           {{ $t('desktop.plugin.pluginNotActivated') }}
@@ -324,9 +324,14 @@ function sliderDisplayValue(key: string, prop: ConfigProperty): string {
   return sliderCurrent(key, prop).toFixed(sliderPrecision(prop))
 }
 
-/** 判断插件是否为激活状态 */
-function isActivatedState(state: PluginState): boolean {
-  return state.state === 'Activated'
+/**
+ * 判断插件是否可进入配置（实例运行中：Activated 或 Degraded）。
+ *
+ * Degraded 放行依据 spec §5.1 开放问题裁决：实例存活、扩展点已注册，
+ * 且用户可能正是要通过改配置修复启动失败，门禁收紧只会堵住修复路径。
+ */
+function canConfigure(state: PluginState): boolean {
+  return state.state === 'Activated' || state.state === 'Degraded'
 }
 
 /** 从 manifest defaults 构建初始值 */
@@ -363,7 +368,7 @@ async function loadConfig(): Promise<void> {
     pluginInfo.value = info
 
     // 插件未激活时无法配置
-    if (!isActivatedState(info.state)) {
+    if (!canConfigure(info.state)) {
       loading.value = false
       return
     }

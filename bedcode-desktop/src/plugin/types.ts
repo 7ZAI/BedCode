@@ -116,10 +116,19 @@ export interface FileHandlerContribution {
   icon?: string
 }
 
-/** 插件运行时状态 */
+/** 插件运行时状态
+ *
+ * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）：
+ * 单元变体 → `{ state: "Loaded" }`；newtype 变体 → `{ state: "Degraded", error: "..." }`。
+ * Rust 源：packages/plugin-sdk-desktop/rust/src/types.rs 的 PluginState
+ */
 export type PluginState =
   | { state: 'Loaded' }
+  /** 激活进行中（auto-activation / 手动激活期间的瞬时中间态） */
+  | { state: 'Activating' }
   | { state: 'Activated' }
+  /** activate 成功但 on_startup 失败：实例可用、扩展点已注册，启动初始化未完成 */
+  | { state: 'Degraded'; error: string }
   | { state: 'NeedsApproval' }
   | { state: 'Error'; error: string }
   | { state: 'Deactivated' }

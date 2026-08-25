@@ -8,7 +8,9 @@
  * 命名规则：整体 camelCase（Rust rename_all）；注意与 server/session fixture 的
  * snake_case 相反，以各 DTO 的 serde 属性为准。
  * 特殊点：
- * - state 为 adjacently tagged 枚举：{state:"Activated"} / {state:"Error", error:"..."}
+ * - state 为 adjacently tagged 枚举（serde tag="state", content="error"）：
+ *   {state:"Activated"} / {state:"Degraded", error:"..."} / {state:"Error", error:"..."}；
+ *   全变体清单见 makePluginInfo 头注释
  * - rust_library 为 String 恒序列化（无 rust 库的插件为空字符串）
  * - icon / installed_at 带 skip_serializing_if，None 时不出现在 JSON（fixture 取「出现」形态）
  * - contributes 的 terminal/configuration/lifecycle 为 Option 无 skip，None 序列化为 null；
@@ -103,7 +105,11 @@ export interface PluginInfoFixture {
   installedAt: number
 }
 
-/** 与 plugin/types.rs DesktopPluginInfo（camelCase）字段一一对应 */
+/**
+ * 与 plugin/types.rs DesktopPluginInfo（camelCase）字段一一对应。
+ * state 变体全集（与 Rust PluginState serde 一一对应）：
+ * Loaded / Activating / Activated / Degraded(error) / NeedsApproval / Error(error) / Deactivated
+ */
 export const PLUGIN_INFO_DTO_FIELDS = [
   'id',
   'name',
@@ -147,6 +153,25 @@ export function makePluginInfo(overrides: Partial<PluginInfoFixture> = {}): Plug
   }
   assertDtoFields(fixture, PLUGIN_INFO_DTO_FIELDS, 'PluginInfo')
   return fixture
+}
+
+// ==================== 状态便捷工厂 ====================
+
+/** 降级态插件：activate 成功但 on_startup 失败，实例运行中、扩展点已注册 */
+export function makeDegradedPluginInfo(
+  overrides: Partial<PluginInfoFixture> = {},
+): PluginInfoFixture {
+  return makePluginInfo({
+    state: { state: 'Degraded', error: 'startup init failed: db migration error' },
+    ...overrides,
+  })
+}
+
+/** 激活进行中（auto-activation / 手动激活期间的瞬时中间态） */
+export function makeActivatingPluginInfo(
+  overrides: Partial<PluginInfoFixture> = {},
+): PluginInfoFixture {
+  return makePluginInfo({ state: { state: 'Activating' }, ...overrides })
 }
 
 // ==================== 类型级对齐断言（编译期，对标量字段） ====================

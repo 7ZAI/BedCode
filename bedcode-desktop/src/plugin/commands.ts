@@ -69,6 +69,24 @@ export async function pluginMarkError(pluginId: string, error: string): Promise<
   return await invoke('plugin_mark_error', { pluginId, error })
 }
 
+/** 上报前端模块加载诊断（宿主内部诊断通道，仅写 tracing 不改状态，spec §3.7 / issue 04）
+ *
+ * @param stage 失败/成功发生的步骤：import（动态导入）或 activate（前端 activate()）
+ */
+export async function pluginFrontendLoadReport(
+  pluginId: string,
+  stage: 'import' | 'activate',
+  ok: boolean,
+  detail?: string,
+): Promise<void> {
+  return await invoke('plugin_frontend_load_report', {
+    pluginId,
+    stage,
+    ok,
+    detail: detail ?? null,
+  })
+}
+
 /** 插件存储：获取值 */
 export async function pluginStorageGet(pluginId: string, key: string): Promise<any> {
   return await invoke('plugin_storage_get', { pluginId, key })

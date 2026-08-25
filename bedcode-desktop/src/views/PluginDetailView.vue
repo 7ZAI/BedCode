@@ -83,23 +83,34 @@
                 ></span>
                 {{ $t(getStateKey(plugin.state)) }}
               </span>
+              <!-- 降级原因：activate 成功但启动初始化失败，实例仍在运行 -->
+              <p
+                v-if="isDegraded(plugin.state)"
+                class="mt-1 text-[calc(11px*var(--ui-scale))] leading-relaxed text-amber-600 dark:text-amber-400"
+              >
+                {{
+                  $t('desktop.plugin.degradedReason', {
+                    error: getDegradedMessage(plugin.state),
+                  })
+                }}
+              </p>
             </div>
             <!-- 操作列：启停 + 配置，上下并排 -->
             <div class="flex flex-col gap-2 shrink-0">
-              <!-- 启停按钮 -->
+              <!-- 启停按钮（Degraded 实例在运行，同样展示停用语义） -->
               <button
                 v-if="plugin.pluginType !== 'rust'"
                 class="w-[76px] h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium transition-colors flex items-center justify-center"
                 :class="
-                  isActivated(plugin.state)
+                  isRunning(plugin.state)
                     ? 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-500/20'
                     : 'bg-[var(--color-primary)] text-[var(--color-primary-contrast)] hover:opacity-90'
                 "
                 :disabled="!!togglingId"
-                @click="handleToggle(plugin.id, !isActivated(plugin.state))"
+                @click="handleToggle(plugin.id, !isRunning(plugin.state))"
               >
                 {{
-                  isActivated(plugin.state)
+                  isRunning(plugin.state)
                     ? $t('desktop.plugin.disable')
                     : $t('desktop.plugin.enabled')
                 }}
@@ -329,9 +340,11 @@ import {
   getDetailRows,
   getStateKey,
   isActivated,
+  isDegraded,
+  getDegradedMessage,
   isErrorState,
-  getErrorMessage,
   hasConfiguration,
+  isRunning,
   formatBytes,
 } from '@/plugin/contributionKinds'
 import { pluginLoader } from '@/plugin/loader'
@@ -374,9 +387,11 @@ function goBack(): void {
   router.push({ path: '/plugins', query: { ...route.query } })
 }
 
-/** 状态徽章样式 */
+/** 状态徽章样式（Error 红 / Degraded 琥珀 / Activated 绿 / 其余中性） */
 function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) return 'bg-red-50 dark:bg-red-500/10 text-red-600 dark:text-red-400'
+  if (isDegraded(state))
+    return 'bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400'
   if (isActivated(state))
     return 'bg-green-50 dark:bg-green-500/10 text-green-600 dark:text-green-400'
   return 'bg-[var(--bg-hover)] text-[var(--text-tertiary)]'

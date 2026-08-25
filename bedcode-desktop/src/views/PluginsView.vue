@@ -78,6 +78,14 @@
                       <span class="wb-mono text-[var(--text-tertiary)] shrink-0"
                         >v{{ plugin.version }}</span
                       >
+                      <!-- 降级徽章：实例运行中但启动初始化失败，与完全激活区分（spec §3.6） -->
+                      <span
+                        v-if="isDegraded(plugin.state)"
+                        class="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[calc(10px*var(--ui-scale))] font-medium bg-amber-50 dark:bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                        :title="getDegradedMessage(plugin.state)"
+                      >
+                        ⚠ {{ $t(getStateKey(plugin.state)) }}
+                      </span>
                       <!-- 扩展点 chips -->
                       <span
                         v-for="chip in getContributionChips(plugin)"
@@ -133,12 +141,13 @@
                     class="h-7 px-3 text-xs text-[var(--text-tertiary)] shrink-0 flex items-center"
                     >{{ $t('desktop.plugin.config') }}</span
                   >
-                  <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>） -->
+                  <!-- 启停开关（v-bind 改造：CSS 变量驱动样式，状态切换集中在 <style>）；
+                       Degraded 实例在运行，开关保持 ON 态（停用语义） -->
                   <button
                     v-if="plugin.pluginType !== 'rust'"
                     class="plugin-toggle"
                     :style="{
-                      '--toggle-on': isActivated(plugin.state) ? 1 : 0,
+                      '--toggle-on': isRunning(plugin.state) ? 1 : 0,
                       '--toggle-locked': togglingId === plugin.id ? 1 : 0,
                     }"
                     :title="$t('desktop.plugin.disable')"
@@ -250,7 +259,7 @@
                     v-if="plugin.pluginType !== 'rust'"
                     class="plugin-toggle"
                     :style="{
-                      '--toggle-on': isActivated(plugin.state) ? 1 : 0,
+                      '--toggle-on': isRunning(plugin.state) ? 1 : 0,
                       '--toggle-locked': togglingId === plugin.id ? 1 : 0,
                     }"
                     :title="$t('desktop.plugin.enabled')"
@@ -295,10 +304,12 @@ import PluginIcon from '@/components/PluginIcon.vue'
 import {
   getContributionChips,
   getStateKey,
-  isActivated,
+  isDegraded,
+  getDegradedMessage,
   isErrorState,
   getErrorMessage,
   hasConfiguration,
+  isRunning,
 } from '@/plugin/contributionKinds'
 
 const router = useRouter()
@@ -308,9 +319,9 @@ const { plugins, loading, togglingId, togglingPluginInfo, loadPlugins, togglePlu
 /** 简介折叠状态（每个插件独立控制） */
 const descExpanded = reactive<Record<string, boolean>>({})
 
-/** 已激活 → ENABLED 分区；其余 → DISABLED 分区 */
-const enabledPlugins = computed(() => plugins.value.filter((p) => isActivated(p.state)))
-const disabledPlugins = computed(() => plugins.value.filter((p) => !isActivated(p.state)))
+/** 实例运行中（含 Degraded）→ ENABLED 分区；其余 → DISABLED 分区 */
+const enabledPlugins = computed(() => plugins.value.filter((p) => isRunning(p.state)))
+const disabledPlugins = computed(() => plugins.value.filter((p) => !isRunning(p.state)))
 
 /** 跳转到插件详情页 */
 function goDetail(pluginId: string): void {

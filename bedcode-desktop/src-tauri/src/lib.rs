@@ -585,6 +585,7 @@ pub fn run() {
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
             commands::plugin::plugin_mark_error,
+            commands::plugin::plugin_frontend_load_report,
             commands::plugin::plugin_get_activated_state,
             commands::plugin::plugin_storage_get,
             commands::plugin::plugin_storage_set,
