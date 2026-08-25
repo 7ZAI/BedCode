@@ -12,3 +12,7 @@
 - [ ] 协商失败不清除 pin（单测断言凭据不变）
 - [ ] i18n key zh-CN / en 成对出现
 - [ ] `npm run test:run` 全绿；vue-tsc 干净
+
+## Comments
+
+- 2026-08-26 实现：request() 信封化 + 协商头注入 + 响应解密/downgrade 分支（strict 断连返回 LINK_ENCRYPTION_DOWNGRADE 错误码，UI 文案映射归 issue 08）；pin 经 notePinFromAuthData 在响应拦截层自动刷新，配对调用方零改动。

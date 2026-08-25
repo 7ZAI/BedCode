@@ -15,3 +15,7 @@
 - [ ] 事件通道广播路径同样加解密（websocket_manager 广播出站口验证）
 - [ ] Rust 侧固定金样向量产出（供 05 移动端交叉验证）
 - [ ] `cargo test --lib` 全绿
+
+## Comments
+
+- 2026-08-26 实现：FilterContext 增加 negotiation 字段传递 HTTP 协商头（偏离 spec「不改 trait」表述——最小可选字段扩展）；WS 二进制帧 seq 采用 **u64**（spec 草案写 u32，长会话计数余量更足）。编译/测试验证随分支统一进行。

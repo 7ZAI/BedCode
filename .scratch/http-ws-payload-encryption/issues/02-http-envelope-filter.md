@@ -14,3 +14,7 @@
 - [ ] 缓存并发测试（模拟多 worker 并发互不串键）与 TTL 清扫单测；命中即删防重放复用
 - [ ] nonce 随机性抽查（同一派生上下文两个信封 nonce 不同）
 - [ ] `cargo test --lib` 全绿
+
+## Comments
+
+- 2026-08-26 实现：FilterContext 增加 negotiation 字段传递 HTTP 协商头（偏离 spec「不改 trait」表述——最小可选字段扩展）；WS 二进制帧 seq 采用 **u64**（spec 草案写 u32，长会话计数余量更足）。编译/测试验证随分支统一进行。

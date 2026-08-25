@@ -16,6 +16,14 @@
  */
 
 import { getTerminalWsInfo } from '@/composables/useMobileCommands'
+import {
+  deriveWsSession,
+  generateEphemeral,
+  parseCryptoEcho,
+  type EphemeralKeyPair,
+  type WsSessionCrypto,
+} from '@/services/linkCrypto'
+import { getPinnedKey, isChannelEncryptionActive, useLinkEncryptionSettings } from './useLinkEncryption'
 
 // ==================== Types ====================
 
@@ -134,6 +142,10 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
   let currentSession = ''
   let stopped = true
   let pendingSubscribe = false
+  // 链路加密（issue 07）：握手前的临时密钥对与派生后的会话密码；
+  // 重连/换会话即置空重建（序号随新连接归零）
+  let wsEphemeral: EphemeralKeyPair | null = null
+  let wsCrypto: WsSessionCrypto | null = null
   let reconnectAttempts = 0
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -205,7 +217,8 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       clearTimeout(ackIdleTimer)
       ackIdleTimer = null
     }
-    ws.send(buildAckFrame(currentSession, lastRenderedSeq))
+    const ackFrame = buildAckFrame(currentSession, lastRenderedSeq)
+    ws.send(wsCrypto ? wsCrypto.encryptBinary('ws-terminal', ackFrame) : ackFrame)
     ackedThroughSeq = lastRenderedSeq
     pendingAckBytes = 0
     lastAckSentAt = now
@@ -230,9 +243,10 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
     }
     switch (msg?.type) {
       case 'auth_ok':
+        consumePendingHandshake(msg)
         handlers.onAuthed()
         if (pendingSubscribe) {
-          ws?.send(JSON.stringify({ type: 'subscribe' }))
+          sendControlJson(JSON.stringify({ type: 'subscribe' }))
         }
         break
       case 'subscribe_ok':
@@ -266,6 +280,9 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       stopped = false
       pendingSubscribe = false
       reconnectAttempts = 0
+      // 链路加密状态随连接重建（重连即新握手新序号）
+      wsCrypto = null
+      wsEphemeral = null
       // 重置渲染背压游标（新会话 seq 重新从历史快照开始）
       lastRenderedSeq = null
       ackedThroughSeq = null
@@ -287,17 +304,48 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
 
       socket.onopen = () => {
         reconnectAttempts = 0
-        // 握手成功即认证（JWT 首消息；重连场景复用同一 JWT——桌面端仅验签+有效期）
-        socket.send(JSON.stringify({ type: 'auth', token: info.token }))
+        // 握手成功即认证（JWT 首消息；重连场景复用同一 JWT——桌面端仅验签+有效期）；
+        // 已 pin 且开关开 → 附带加密协商提案（issue 07，auth_ok 回带服务端临时公钥）
+        const pinnedKey = isChannelEncryptionActive('ws') ? getPinnedKey() : null
+        if (pinnedKey) {
+          wsEphemeral = generateEphemeral()
+          socket.send(
+            JSON.stringify({ type: 'auth', token: info.token, crypto: { v: 1, ek: wsEphemeral.pubB64 } }),
+          )
+        } else {
+          socket.send(JSON.stringify({ type: 'auth', token: info.token }))
+        }
         // 订阅在 auth_ok 后发送（pendingSubscribe 由 subscribe() 打开；
         // 重连场景 pendingSubscribe 仍为 true，自动恢复订阅）
       }
       socket.onmessage = (ev: MessageEvent) => {
         if (typeof ev.data === 'string') {
-          handleControl(ev.data)
+          let text = ev.data as string
+          if (wsCrypto) {
+            try {
+              text = wsCrypto.decryptText('ws-terminal', text)
+            } catch (e: any) {
+              console.error('[useTerminalSocket] decrypt control frame failed:', e?.message || e)
+              handlers.onError('LINK_CRYPTO_DECRYPT_FAILED', String(e?.message || e))
+              socket.close(4003, 'decrypt failed')
+              return
+            }
+          }
+          handleControl(text)
           return
         }
-        const frame = parseFrame(ev.data as ArrayBuffer)
+        let raw = new Uint8Array(ev.data as ArrayBuffer)
+        if (wsCrypto) {
+          try {
+            raw = wsCrypto.decryptBinary('ws-terminal', raw)
+          } catch (e: any) {
+            console.error('[useTerminalSocket] decrypt binary frame failed:', e?.message || e)
+            handlers.onError('LINK_CRYPTO_DECRYPT_FAILED', String(e?.message || e))
+            socket.close(4003, 'decrypt failed')
+            return
+          }
+        }
+        const frame = parseFrame(raw.buffer as ArrayBuffer)
         if (!frame) {
           console.error('[useTerminalSocket] invalid binary frame received')
           return
@@ -312,6 +360,8 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       }
       socket.onclose = () => {
         ws = null
+        wsCrypto = null
+        wsEphemeral = null
         handlers.onClose()
         scheduleReconnect()
       }
@@ -323,10 +373,47 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
     }
   }
 
+  /**
+   * 消费 auth_ok 的加密协商回执（issue 07）：
+   * 我方已提案且服务端回带临时公钥 → 派生会话密码，此后帧全加密；
+   * 提案被拒（无回执）→ strict 断连报错，非 strict 明文续跑 + warn。
+   */
+  function consumePendingHandshake(authOkMsg: Record<string, unknown>) {
+    if (!wsEphemeral) return
+    const ephemeral = wsEphemeral
+    wsEphemeral = null // 私钥即用即弃（无论协商成败都不复用）
+    const echo = parseCryptoEcho(authOkMsg as { crypto?: { v?: number; ek?: string } })
+    const pinnedKey = getPinnedKey()
+    if (echo && pinnedKey) {
+      try {
+        wsCrypto = deriveWsSession(ephemeral.priv, ephemeral.pubB64, echo.ek, pinnedKey)
+        console.log('[useTerminalSocket] link encryption negotiated, frames encrypted')
+        return
+      } catch (e: any) {
+        console.error('[useTerminalSocket] ws handshake derive failed:', e?.message || e)
+        wsCrypto = null
+      }
+    }
+    const { settings } = useLinkEncryptionSettings()
+    if (settings.value.strictMode) {
+      console.error('[useTerminalSocket] strict mode: server did not accept encryption, closing')
+      handlers.onError('LINK_ENCRYPTION_DOWNGRADE', 'server did not accept encryption')
+      ws?.close(4003, 'encryption downgrade')
+    } else {
+      console.warn('[useTerminalSocket] connection stays plaintext (downgrade tolerated)')
+    }
+  }
+
+  /** 控制帧发送统一出口：加密会话中自动信封化 */
+  function sendControlJson(json: string) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return
+    ws.send(wsCrypto ? wsCrypto.encryptText('ws-terminal', json) : json)
+  }
+
   function subscribe() {
     pendingSubscribe = true
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'subscribe' }))
+      sendControlJson(JSON.stringify({ type: 'subscribe' }))
     }
   }
 
@@ -335,7 +422,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       console.warn('[useTerminalSocket] sendInput: socket not open')
       return
     }
-    ws.send(
+    sendControlJson(
       JSON.stringify({
         type: 'input',
         data: utf8ToBase64(data),
