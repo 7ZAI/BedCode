@@ -147,6 +147,10 @@ export interface MessageSchema {
   'transfer.settings.receivingPolicyReject': string
   'transfer.settings.receivingPolicyHint': string
   'transfer.settings.approvalTimeout': string
+  'transfer.settings.encryption': string
+  'transfer.settings.encryptionOn': string
+  'transfer.settings.encryptionOff': string
+  'transfer.settings.encryptionHint': string
 
   // ==================== 错误（spec §10 + v2 拒绝原因） ====================
   'transfer.error.duplicateName': string

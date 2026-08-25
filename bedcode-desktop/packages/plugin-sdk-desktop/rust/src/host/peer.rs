@@ -73,4 +73,6 @@ pub trait HostPeer {
     fn peer_pick_folder(&self) -> Result<String, HostError>;
     /// 设置接收落点目录（空串 = 恢复默认）
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError>;
+    /// 设置发送加密开关（应用层 AES-256-GCM；接收端经 Offer 头自动解密）
+    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError>;
 }

@@ -344,6 +344,7 @@ pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
         "policy_mode": policy.get("policyMode").cloned().unwrap_or_else(|| "ask".into()),
         "ask_timeout_sec": policy.get("askTimeoutSecs").and_then(|v| v.as_u64()).unwrap_or(60),
         "download_dir": policy.get("downloadDir").cloned().unwrap_or_default(),
+        "encryption": policy.get("encryptionEnabled").and_then(|v| v.as_bool()).unwrap_or(false),
         "concurrency": 1,
     }))
 }
@@ -367,6 +368,9 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
         if !dir.is_empty() {
             h.peer_set_download_dir(dir)?;
         }
+    }
+    if let Some(enabled) = args.get("encryption").and_then(|v| v.as_bool()) {
+        h.peer_set_transfer_encryption(enabled)?;
     }
     h.log_info("set-settings: policy/download-dir applied");
     Ok(serde_json::json!({ "ok": true }))

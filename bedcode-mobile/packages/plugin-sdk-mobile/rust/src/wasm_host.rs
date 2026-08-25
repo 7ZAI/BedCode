@@ -326,6 +326,10 @@ impl HostPeer for WasmHost {
         host_peer::set_receive_policy(mode, timeout_secs).map_err(|e| host_err("peer_set_receive_policy", e))
     }
 
+    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError> {
+        host_peer::set_transfer_encryption(enabled).map_err(|e| host_err("peer_set_transfer_encryption", e))
+    }
+
     fn peer_list_shared_directories(&self) -> Result<serde_json::Value, HostError> {
         peer_json(
             "peer_list_shared_directories",

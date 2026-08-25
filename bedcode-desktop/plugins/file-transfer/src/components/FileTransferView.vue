@@ -69,6 +69,7 @@ const {
   pickDownloadDir,
   setReceivingPolicy,
   setApprovalTimeoutSec,
+  setEncryption,
 } = useSettings(context)
 const fs = useRemoteFs(context, () => peer.value.id)
 
@@ -518,6 +519,7 @@ watch(
         @pick-download-dir="pickDownloadDir"
         @set-receiving-policy="setReceivingPolicy"
         @set-approval-timeout-sec="setApprovalTimeoutSec"
+        @set-encryption="setEncryption"
         @close="showSettings = false"
       />
     </Transition>

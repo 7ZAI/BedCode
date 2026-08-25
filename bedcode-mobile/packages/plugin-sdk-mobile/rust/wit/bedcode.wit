@@ -117,6 +117,9 @@ interface host-peer {
     get-receive-settings: func() -> result<string, string>;
     /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    /// 设置传输加密开关（发送侧：新发起的发送批启用 AES-256-GCM 应用层加密；
+    /// 接收侧由 Offer 加密头自动驱动，无需设置）
+    set-transfer-encryption: func(enabled: bool) -> result<_, string>;
     /// 本机暴露的共享目录 → SharedDirDto JSON 数组
     list-shared-directories: func() -> result<string, string>;
     /// 移除共享目录条目

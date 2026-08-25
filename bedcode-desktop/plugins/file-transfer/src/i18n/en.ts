@@ -150,6 +150,11 @@ const en: MessageSchema = {
   'transfer.settings.receivingPolicyReject': 'Reject automatically',
   'transfer.settings.receivingPolicyHint': 'Whether to ask before receiving files from peers',
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
+  'transfer.settings.encryption': 'Transfer encryption',
+  'transfer.settings.encryptionOn': 'On',
+  'transfer.settings.encryptionOff': 'Off',
+  'transfer.settings.encryptionHint':
+    'When enabled, sent files are end-to-end encrypted with AES-256-GCM; the peer must also run a recent BedCode version to decrypt them automatically',
 
   // ==================== Errors (spec §10 + v2 reject reasons) ====================
   'transfer.error.duplicateName':

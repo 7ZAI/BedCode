@@ -209,6 +209,10 @@ export interface MessageSchema {
   'transfer.settings.receivingPolicyAccept': string
   'transfer.settings.receivingPolicyReject': string
   'transfer.settings.receivingPolicyHint': string
+  'transfer.settings.encryption': string
+  'transfer.settings.encryptionOn': string
+  'transfer.settings.encryptionOff': string
+  'transfer.settings.encryptionHint': string
   'transfer.settings.approvalTimeout': string
 
   // ==================== 首连确认（全局对话框，spec 决策 7） ====================

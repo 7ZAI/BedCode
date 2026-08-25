@@ -357,6 +357,7 @@ pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
         // 移动端固定落点（只读展示）
         "download_dir": "MediaStore/Downloads",
         "concurrency": 1,
+        "encryption": policy.get("encryptionEnabled").and_then(|v| v.as_bool()).unwrap_or(false),
     }))
 }
 
@@ -375,8 +376,11 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
             .clamp(10, 600);
         h.peer_set_receive_policy(mode, timeout)?;
     }
+    if let Some(v) = args.get("encryption").and_then(|v| v.as_bool()) {
+        h.peer_set_transfer_encryption(v)?;
+    }
     // concurrency / downloadDir：移动端不支持，静默忽略（UI 已隐藏入口）
-    h.log_info("set-settings: policy applied (concurrency/download-dir not supported)");
+    h.log_info("set-settings: policy/encryption applied (concurrency/download-dir not supported)");
     Ok(serde_json::json!({ "ok": true }))
 }
 

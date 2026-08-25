@@ -26,6 +26,7 @@ const emit = defineEmits<{
   (e: 'pickDownloadDir'): void
   (e: 'setReceivingPolicy', policy: 'ask' | 'accept' | 'reject'): void
   (e: 'setApprovalTimeoutSec', secs: number): void
+  (e: 'setEncryption', enabled: boolean): void
   (e: 'close'): void
 }>()
 
@@ -36,6 +37,12 @@ const POLICY_OPTIONS: Array<{ value: 'ask' | 'accept' | 'reject'; key: string }>
   { value: 'ask', key: 'transfer.settings.receivingPolicyAsk' },
   { value: 'accept', key: 'transfer.settings.receivingPolicyAccept' },
   { value: 'reject', key: 'transfer.settings.receivingPolicyReject' },
+]
+
+/** 加密开关选项（复用分段控件标记结构；布尔二值） */
+const ENCRYPTION_OPTIONS: Array<{ value: boolean; key: string }> = [
+  { value: false, key: 'transfer.settings.encryptionOff' },
+  { value: true, key: 'transfer.settings.encryptionOn' },
 ]
 
 /** 超时输入：数字键盘 + 失焦提交（钳制在 composable 内） */
@@ -143,6 +150,25 @@ function onTimeoutBlur(e: Event): void {
               @blur="onTimeoutBlur"
             />
           </div>
+        </section>
+
+        <!-- 传输加密（默认关；发送侧生效，接收端经 Offer 头自动解密） -->
+        <section class="ft-settings-section">
+          <h3 class="ft-settings-section-title">{{ t('transfer.settings.encryption') }}</h3>
+          <div class="ft-segmented" role="tablist">
+            <button
+              v-for="opt in ENCRYPTION_OPTIONS"
+              :key="opt.key"
+              class="ft-segmented-item"
+              :class="{ 'ft-segmented-item--active': settings.encryption === opt.value }"
+              role="tab"
+              :aria-selected="settings.encryption === opt.value"
+              @click="emit('setEncryption', opt.value)"
+            >
+              {{ t(opt.key) }}
+            </button>
+          </div>
+          <p class="ft-settings-helper">{{ t('transfer.settings.encryptionHint') }}</p>
         </section>
 
         <!-- 可信对端管理（spec 决策 8）：独立分区，列表/撤销自包含 -->

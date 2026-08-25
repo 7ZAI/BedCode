@@ -378,6 +378,10 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
         peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
     }
+
+    fn set_transfer_encryption(&mut self, enabled: bool) -> Result<(), String> {
+        peer::peer_set_transfer_encryption(&self.host_ctx, &self.plugin_id, enabled)
+    }
 }
 
 // ==================== Component Linker 组装 ====================

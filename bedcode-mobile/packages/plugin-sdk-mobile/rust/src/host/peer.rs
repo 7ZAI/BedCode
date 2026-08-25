@@ -44,6 +44,8 @@ pub trait HostPeer {
     fn peer_get_receive_settings(&self) -> Result<serde_json::Value, HostError>;
     /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
+    /// 设置传输加密开关（发送侧新批生效；接收侧自动适配）
+    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError>;
     /// 本机暴露的共享目录
     fn peer_list_shared_directories(&self) -> Result<serde_json::Value, HostError>;
     /// 移除共享目录条目

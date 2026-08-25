@@ -32,6 +32,7 @@ function mapWireSettings(raw: any): Settings {
     concurrency: 1,
     receivingPolicy: normalized,
     approvalTimeoutSec: raw?.ask_timeout_sec ?? raw?.askTimeoutSec ?? 60,
+    encryption: raw?.encryption ?? raw?.encryption_enabled ?? false,
   }
 }
 
@@ -42,6 +43,7 @@ export function useSettings(context: PluginContext) {
     concurrency: 1,
     receivingPolicy: 'ask',
     approvalTimeoutSec: 60,
+    encryption: false,
   })
   const loading = ref(false)
 
@@ -91,6 +93,18 @@ export function useSettings(context: PluginContext) {
   }
 
   /** v2 设置接收策略（ask/accept/reject） */
+  /** 设置发送加密开关（即时保存） */
+  async function setEncryption(enabled: boolean): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.set-settings', { encryption: enabled })
+      settings.value = { ...settings.value, encryption: enabled }
+      return true
+    } catch (e) {
+      console.error('[File Transfer] set encryption failed:', e)
+      return false
+    }
+  }
+
   async function setReceivingPolicy(policy: ReceivingPolicy): Promise<boolean> {
     try {
       await context.commands.execute('file-transfer.set-settings', {
@@ -129,5 +143,6 @@ export function useSettings(context: PluginContext) {
     removeRoot,
     setReceivingPolicy,
     setApprovalTimeout,
+    setEncryption,
   }
 }

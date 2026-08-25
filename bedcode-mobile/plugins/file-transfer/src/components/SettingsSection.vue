@@ -76,6 +76,22 @@ async function handleSetPolicy(policy: ReceivingPolicy): Promise<void> {
   }
 }
 
+// ==================== 发送加密 ====================
+
+/** 加密开关选项（自绘 segmented，禁原生 checkbox；默认关） */
+const ENCRYPTION_OPTIONS: { value: boolean; labelKey: string }[] = [
+  { value: false, labelKey: 'transfer.settings.encryptionOff' },
+  { value: true, labelKey: 'transfer.settings.encryptionOn' },
+]
+
+/** 切换传输加密（仅影响本端主动发送；接收端按对端加密头自动解密） */
+async function handleSetEncryption(enabled: boolean): Promise<void> {
+  const ok = await props.settingsApi.setEncryption(enabled)
+  if (ok && context) {
+    context.dialogs.showToast(t('transfer.settings.saved'), 'success')
+  }
+}
+
 /** 同意超时输入（秒，10–600；仅 ask 策略显示）。原生数字输入外观完全自绘 */
 const timeoutInput = ref('')
 
@@ -228,6 +244,33 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
               @keyup.enter="($event.target as HTMLInputElement).blur()"
             />
             <button class="ft-step-btn" @click="stepTimeout(10)">+</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 发送加密 ==================== -->
+    <section class="space-y-2">
+      <h2 class="settings-section-title">{{ t('transfer.settings.encryption') }}</h2>
+      <div class="settings-group">
+        <div class="settings-row ft-policy-row">
+          <div class="min-w-0 flex-1">
+            <div class="settings-label">{{ t('transfer.settings.encryption') }}</div>
+            <div class="settings-desc">{{ t('transfer.settings.encryptionHint') }}</div>
+          </div>
+          <!-- 自绘分段控件：关/开 两档（默认关），与策略分段同构 -->
+          <div class="ft-segmented flex-shrink-0" role="radiogroup">
+            <button
+              v-for="opt in ENCRYPTION_OPTIONS"
+              :key="String(opt.value)"
+              role="radio"
+              :aria-checked="(settingsApi?.settings.value.encryption ?? false) === opt.value"
+              class="ft-segmented-item"
+              :class="{ 'ft-segmented-item--active': (settingsApi?.settings.value.encryption ?? false) === opt.value }"
+              @click="handleSetEncryption(opt.value)"
+            >
+              {{ t(opt.labelKey) }}
+            </button>
           </div>
         </div>
       </div>

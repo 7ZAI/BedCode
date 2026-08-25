@@ -61,6 +61,8 @@ export interface Settings {
   receivingPolicy: 'ask' | 'accept' | 'reject'
   /** 同意超时（秒，10–600，仅 ask 生效） */
   approvalTimeoutSec: number
+  /** 发送加密开关（AES-256-GCM；缺省 false） */
+  encryption?: boolean
 }
 
 /** 任务状态是否为终态 */

@@ -121,6 +121,8 @@ interface host-peer {
     pick-folder: func() -> result<string, string>;
     /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\）
     set-download-dir: func(path: string) -> result<_, string>;
+    /// 设置发送加密开关（应用层 AES-256-GCM；接收端经 Offer 头自动解密）
+    set-transfer-encryption: func(enabled: bool) -> result<_, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复

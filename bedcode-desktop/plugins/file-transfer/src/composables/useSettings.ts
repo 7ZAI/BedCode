@@ -22,6 +22,7 @@ export function useSettings(context: PluginContext) {
     concurrency: 1,
     receivingPolicy: 'ask',
     approvalTimeoutSec: 60,
+    encryption: false,
   }) as Ref<Settings>
   /** roots 带条目 id（宿主 DTO），与 Settings.roots（展示名列表）并行维护 */
   const rootItems = ref<RootItem[]>([]) as Ref<RootItem[]>
@@ -49,6 +50,7 @@ export function useSettings(context: PluginContext) {
             typeof r.ask_timeout_sec === 'number'
               ? r.ask_timeout_sec
               : (typeof r.askTimeoutSecs === 'number' ? r.askTimeoutSecs : 60),
+          encryption: r.encryption ?? r.encryption_enabled ?? false,
         }
       }
     } catch (e) {
@@ -75,6 +77,12 @@ export function useSettings(context: PluginContext) {
       approvalTimeoutSec: clamped,
     })
     settings.value = { ...settings.value, approvalTimeoutSec: clamped }
+  }
+
+  /** 设置发送加密开关（即时保存） */
+  async function setEncryption(enabled: boolean): Promise<void> {
+    await context.commands.execute('file-transfer.set-settings', { encryption: enabled })
+    settings.value = { ...settings.value, encryption: enabled }
   }
 
   /** 添加共享目录（弹系统目录选择器；用户取消返回 null） */
@@ -125,5 +133,6 @@ export function useSettings(context: PluginContext) {
     pickDownloadDir,
     setReceivingPolicy,
     setApprovalTimeoutSec,
+    setEncryption,
   }
 }

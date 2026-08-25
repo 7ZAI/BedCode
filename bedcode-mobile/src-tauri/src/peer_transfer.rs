@@ -27,6 +27,8 @@ use bedcode_peer_net::{
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
+
+use super::peer_receive::ensure_settings_loaded;
 use tokio::sync::mpsc;
 
 // ==================== 常量 ====================
@@ -292,8 +294,9 @@ pub async fn send_files_to_peer(
         state.register_session(&batch_id)
     };
 
+    let encrypt = ensure_settings_loaded(&app).await.encryption_enabled;
     publish(&app);
-    drive_send_session(app.clone(), node, record, batch_id, collected.sources, epoch);
+    drive_send_session(app.clone(), node, record, batch_id, collected.sources, epoch, encrypt);
     tracing::info!(
         batch_id = %dto.batch_id,
         node_id = %node_id,
@@ -377,8 +380,9 @@ pub async fn retry_peer_transfer(
         (task.dto.clone(), task.sources.clone(), epoch)
     };
 
+    let encrypt = ensure_settings_loaded(&app).await.encryption_enabled;
     publish(&app);
-    drive_send_session(app.clone(), node, record, batch_id, sources, epoch);
+    drive_send_session(app.clone(), node, record, batch_id, sources, epoch, encrypt);
     tracing::info!(batch_id = %dto.batch_id, "peer transfer retry started");
     Ok(dto)
 }
@@ -396,6 +400,7 @@ fn drive_send_session(
     batch_id: String,
     sources: Vec<OutgoingFile>,
     epoch: u64,
+    encrypt: bool,
 ) {
     tauri::async_runtime::spawn(async move {
         let (events_tx, mut events_rx) = mpsc::channel::<TransferEvent>(256);
@@ -416,9 +421,15 @@ fn drive_send_session(
                 .state::<PeerTransferState>()
                 .cancel_token_of(&session_batch_id)
                 .unwrap_or_else(CancelToken::new);
-            let _ =
-                bedcode_peer_net::send_batch(conn, session_batch_id, sources, events_tx, cancel)
-                    .await;
+            let _ = bedcode_peer_net::send_batch(
+                conn,
+                session_batch_id,
+                sources,
+                events_tx,
+                cancel,
+                encrypt,
+            )
+            .await;
         });
 
         // 事件转发循环：Progress 节流推送，Terminal 结算历史并即时推送

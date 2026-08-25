@@ -152,6 +152,12 @@ pub(crate) fn peer_set_receive_policy(state: &WasmPluginState, mode: &str, timeo
     run(state, crate::peer_receive::set_peer_receive_policy(app, mode.to_string(), timeout_secs))
 }
 
+pub(crate) fn peer_set_transfer_encryption(state: &WasmPluginState, enabled: bool) -> Result<(), String> {
+    require_peer_permission(state)?;
+    let app = require_app(state)?;
+    run(state, crate::peer_receive::set_peer_transfer_encryption(app, enabled))
+}
+
 pub(crate) fn peer_list_shared_directories(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;

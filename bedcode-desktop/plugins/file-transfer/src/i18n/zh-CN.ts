@@ -144,6 +144,11 @@ const zhCN: MessageSchema = {
   'transfer.settings.receivingPolicyReject': '直接拒绝',
   'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
+  'transfer.settings.encryption': '传输加密',
+  'transfer.settings.encryptionOn': '开启',
+  'transfer.settings.encryptionOff': '关闭',
+  'transfer.settings.encryptionHint':
+    '开启后发送文件经 AES-256-GCM 端到端加密；需对端同为 BedCode 新版本方可自动解密',
 
   // ==================== 错误（spec §10 + v2 拒绝原因） ====================
   'transfer.error.duplicateName': '无法上传：目标目录已存在同名文件',

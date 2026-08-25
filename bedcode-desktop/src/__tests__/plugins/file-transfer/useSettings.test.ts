@@ -109,6 +109,24 @@ describe('useSettings orchestration', () => {
     expect(settings.settings.value.approvalTimeoutSec).toBe(600)
   })
 
+  it('setEncryption routes set-settings and syncs local state; load normalizes missing flag to false', async () => {
+    env.onCommand('file-transfer.get-settings', () => ({ policy_mode: 'ask' }))
+    env.onCommand('file-transfer.set-settings', () => true)
+    const settings = useSettings(env.context)
+
+    // 缺省/旧宿主响应无 encryption 字段 → 归一化为 false
+    await settings.load()
+    expect(settings.settings.value.encryption).toBe(false)
+
+    await settings.setEncryption(true)
+
+    expect(env.calls).toContainEqual({
+      id: 'file-transfer.set-settings',
+      args: { encryption: true },
+    })
+    expect(settings.settings.value.encryption).toBe(true)
+  })
+
   it('removeRoot routes update-roots with the entry id and prunes locally', async () => {
     env.onCommand('file-transfer.get-settings', () => ({
       roots: [

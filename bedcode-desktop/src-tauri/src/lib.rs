@@ -643,6 +643,7 @@ pub fn run() {
             peer_receive::set_peer_download_dir,
             peer_receive::peer_pick_download_dir,
             peer_receive::clear_peer_receiving_history,
+            peer_receive::set_peer_transfer_encryption,
             // Peer Remote (issue 11 远端浏览/拉取)
             peer_remote::list_peer_shared_roots,
             peer_remote::browse_peer_directory,

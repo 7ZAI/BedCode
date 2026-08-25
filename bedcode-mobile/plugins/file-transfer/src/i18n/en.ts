@@ -215,6 +215,10 @@ export default {
   'transfer.settings.receivingPolicyAccept': 'Accept automatically',
   'transfer.settings.receivingPolicyReject': 'Reject automatically',
   'transfer.settings.receivingPolicyHint': 'Whether to ask before receiving files from peers',
+  'transfer.settings.encryption': 'Transfer encryption',
+  'transfer.settings.encryptionOn': 'On',
+  'transfer.settings.encryptionOff': 'Off',
+  'transfer.settings.encryptionHint': 'Encrypt outgoing transfers with AES-256-GCM; receivers decrypt automatically (requires newer BedCode on both ends)',
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
 
   // ==================== 首连确认（全局对话框，spec 决策 7） ====================

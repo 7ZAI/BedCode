@@ -277,6 +277,7 @@ pub fn run() {
             peer_receive::cancel_peer_receiving,
             peer_receive::get_peer_receive_settings,
             peer_receive::set_peer_receive_policy,
+            peer_receive::set_peer_transfer_encryption,
             peer_receive::clear_peer_receiving_history,
             // Peer Remote (issue 11 远端浏览/拉取)
             peer_remote::list_peer_shared_roots,

@@ -45,11 +45,14 @@ pub const POLICY_ALWAYS_DENY: &str = "always_deny";
 /// 接收设置磁盘形态（移动端无落点字段：落点恒为 app 私有下载目录）
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct PeerTransferSettings {
+pub(crate) struct PeerTransferSettings {
     /// `ask` | `always_accept` | `always_deny`
     policy_mode: String,
     /// ask 模式询问窗口（秒；crate 校验 10..=600）
     ask_timeout_secs: u64,
+    /// 传输加密开关（发送侧新批生效；接收侧自动适配，默认关）。
+    /// pub(crate)：发送侧（peer_transfer）发起批前读取
+    pub(crate) encryption_enabled: bool,
 }
 
 impl Default for PeerTransferSettings {
@@ -57,6 +60,7 @@ impl Default for PeerTransferSettings {
         Self {
             policy_mode: POLICY_ASK.to_string(),
             ask_timeout_secs: DEFAULT_ASK_TIMEOUT_SECS,
+            encryption_enabled: false,
         }
     }
 }
@@ -86,6 +90,8 @@ impl PeerTransferSettings {
 pub struct PeerReceiveSettingsDto {
     pub policy_mode: String,
     pub ask_timeout_secs: u64,
+    /// 传输加密开关（发送侧语义；接收侧自动适配）
+    pub encryption_enabled: bool,
 }
 
 // ==================== 状态容器 ====================
@@ -123,7 +129,7 @@ fn is_terminal(task: &PeerTransferDto) -> bool {
 // ==================== 设置持久化 ====================
 
 /// 惰性加载设置（进程内一次；损坏文件按缺省重建并告警）
-async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSettings {
+pub(crate) async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSettings {
     let state = app.state::<PeerReceiveState>();
     if let Some(settings) = state
         .inner
@@ -636,6 +642,7 @@ pub async fn get_peer_receive_settings(
     Ok(PeerReceiveSettingsDto {
         policy_mode: settings.policy_mode,
         ask_timeout_secs: settings.ask_timeout_secs,
+        encryption_enabled: settings.encryption_enabled,
     })
 }
 
@@ -663,6 +670,17 @@ pub async fn set_peer_receive_policy(
         timeout = settings.ask_timeout_secs,
         "receive policy updated"
     );
+    Ok(())
+}
+
+/// 设置发送加密开关（应用层 AES-256-GCM；接收端经 Offer 加密头自动解密）。
+/// 仅持久化：发送会话在发起时读开关，无需热更新接收侧运行时配置。
+#[tauri::command]
+pub async fn set_peer_transfer_encryption(app: AppHandle, enabled: bool) -> crate::Result<()> {
+    let mut settings = ensure_settings_loaded(&app).await;
+    settings.encryption_enabled = enabled;
+    apply_settings(&app, &settings).await;
+    tracing::info!(enabled, "transfer encryption toggled");
     Ok(())
 }
 
@@ -695,6 +713,7 @@ mod tests {
         PeerTransferSettings {
             policy_mode: mode.to_string(),
             ask_timeout_secs: timeout,
+            encryption_enabled: false,
         }
     }
 
@@ -738,6 +757,7 @@ mod tests {
         let settings = PeerTransferSettings {
             policy_mode: POLICY_ALWAYS_DENY.to_string(),
             ask_timeout_secs: 120,
+            encryption_enabled: true,
         };
         write_settings_file(dir.path(), &settings).expect("write");
         assert_eq!(read_settings_file(dir.path()).expect("read"), settings);

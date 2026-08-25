@@ -229,6 +229,10 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_set_receive_policy(self, &mode, timeout_secs)
     }
 
+    fn set_transfer_encryption(&mut self, enabled: bool) -> Result<(), String> {
+        super::host_impl::peer_set_transfer_encryption(self, enabled)
+    }
+
     fn list_shared_directories(&mut self) -> Result<String, String> {
         super::host_impl::peer_list_shared_directories(self)
     }

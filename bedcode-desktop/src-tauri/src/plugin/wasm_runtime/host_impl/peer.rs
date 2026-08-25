@@ -314,3 +314,15 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
     let path = if path.is_empty() { None } else { Some(path.to_string()) };
     sync_result(block_on_async(crate::peer_receive::set_peer_download_dir(app, path)))
 }
+
+pub(crate) fn peer_set_transfer_encryption(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_set_transfer_encryption") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    sync_result(block_on_async(crate::peer_receive::set_peer_transfer_encryption(app, enabled)))
+}

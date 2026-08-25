@@ -49,13 +49,15 @@ pub const POLICY_ALWAYS_DENY: &str = "always_deny";
 /// 接收设置磁盘形态
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
-struct PeerTransferSettings {
+pub(crate) struct PeerTransferSettings {
     /// `ask` | `always_accept` | `always_deny`
     policy_mode: String,
     /// ask 模式询问窗口（秒；crate 校验 10..=600）
     ask_timeout_secs: u64,
     /// 桌面端落点覆盖（None = 缺省 Downloads\BedCode\；移动端恒 None）
     download_dir: Option<String>,
+    /// 发送加密开关（应用层 AES-256-GCM；接收端经 Offer 头自动解密）
+    pub(crate) encryption_enabled: bool,
 }
 
 impl Default for PeerTransferSettings {
@@ -64,6 +66,7 @@ impl Default for PeerTransferSettings {
             policy_mode: POLICY_ASK.to_string(),
             ask_timeout_secs: DEFAULT_ASK_TIMEOUT_SECS,
             download_dir: None,
+            encryption_enabled: false,
         }
     }
 }
@@ -95,6 +98,8 @@ pub struct PeerReceiveSettingsDto {
     pub ask_timeout_secs: u64,
     /// 生效落点绝对路径（含缺省推导）
     pub download_dir: String,
+    /// 发送加密开关
+    pub encryption_enabled: bool,
 }
 
 // ==================== 状态容器 ====================
@@ -141,7 +146,7 @@ fn is_terminal(task: &PeerTransferDto) -> bool {
 
 /// 惰性加载设置（进程内一次；损坏文件按缺省重建并告警——设置丢失不应阻断
 /// 接收链路，但静默采用损坏值更危险）
-async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSettings {
+pub(crate) async fn ensure_settings_loaded(app: &AppHandle) -> PeerTransferSettings {
     let state = app.state::<PeerReceiveState>();
     if let Some(settings) = state
         .inner
@@ -668,6 +673,7 @@ pub async fn get_peer_receive_settings(
         policy_mode: settings.policy_mode,
         ask_timeout_secs: settings.ask_timeout_secs,
         download_dir,
+        encryption_enabled: settings.encryption_enabled,
     })
 }
 
@@ -717,6 +723,16 @@ pub async fn set_peer_download_dir(app: AppHandle, path: Option<String>) -> crat
     }
     apply_settings(&app, &settings).await;
     tracing::info!(dir = ?settings.download_dir, "receive download dir updated (desktop)");
+    Ok(())
+}
+
+/// 设置发送加密开关（持久化；发送侧每次发起会话时读取，无需热更新运行时）
+#[tauri::command]
+pub async fn set_peer_transfer_encryption(app: AppHandle, enabled: bool) -> crate::Result<()> {
+    let mut settings = ensure_settings_loaded(&app).await;
+    settings.encryption_enabled = enabled;
+    apply_settings(&app, &settings).await;
+    tracing::info!(enabled, "transfer encryption toggled");
     Ok(())
 }
 
@@ -801,6 +817,7 @@ mod tests {
             policy_mode: mode.to_string(),
             ask_timeout_secs: timeout,
             download_dir: None,
+            encryption_enabled: false,
         }
     }
 
@@ -847,13 +864,32 @@ mod tests {
     }
 
     const MIN_BOUND: u64 = 10;
-    const MAX_BOUND: u64 = 600;    #[test]
+    const MAX_BOUND: u64 = 600;
+
+    #[test]
+    fn encryption_field_roundtrips_and_defaults_to_false() {
+        // 旧版设置文件无 encryptionEnabled 字段：缺省反序列化为 false（向后兼容）
+        let legacy: PeerTransferSettings = serde_json::from_str(
+            r#"{ "policyMode": "ask", "askTimeoutSecs": 60, "downloadDir": null }"#,
+        )
+        .expect("legacy json");
+        assert!(!legacy.encryption_enabled);
+
+        // 序列化键名为 camelCase encryptionEnabled，roundtrip 保留开关值
+        let enabled = PeerTransferSettings { encryption_enabled: true, ..settings(POLICY_ASK, 60) };
+        let json = serde_json::to_value(&enabled).expect("serialize");
+        assert_eq!(json.get("encryptionEnabled"), Some(&serde_json::Value::Bool(true)));
+        let back: PeerTransferSettings = serde_json::from_value(json).expect("deserialize");
+        assert!(back.encryption_enabled);
+    }
+    #[test]
     fn settings_file_roundtrips_and_rejects_future_version() {
         let dir = tempfile::tempdir().expect("tempdir");
         let settings = PeerTransferSettings {
             policy_mode: POLICY_ALWAYS_ACCEPT.to_string(),
             ask_timeout_secs: 120,
             download_dir: Some("D:/downloads/bedcode".to_string()),
+            encryption_enabled: true,
         };
         write_settings_file(dir.path(), &settings).expect("write");
         assert_eq!(read_settings_file(dir.path()).expect("read"), settings);

@@ -213,6 +213,10 @@ export default {
   'transfer.settings.receivingPolicyAccept': '直接接收',
   'transfer.settings.receivingPolicyReject': '直接拒绝',
   'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
+  'transfer.settings.encryption': '传输加密',
+  'transfer.settings.encryptionOn': '开',
+  'transfer.settings.encryptionOff': '关',
+  'transfer.settings.encryptionHint': '发送时用 AES-256-GCM 加密，接收端自动解密（需对方为新版 BedCode）',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
 
   // ==================== 首连确认（全局对话框，spec 决策 7） ====================

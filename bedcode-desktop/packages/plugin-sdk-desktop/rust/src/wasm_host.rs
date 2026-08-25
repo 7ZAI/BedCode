@@ -520,4 +520,8 @@ impl HostPeer for WasmHost {
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
         host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
     }
+
+    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError> {
+        host_peer::set_transfer_encryption(enabled).map_err(|e| host_err("peer_set_transfer_encryption", e))
+    }
 }
