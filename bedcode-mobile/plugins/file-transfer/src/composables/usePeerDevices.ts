@@ -179,6 +179,8 @@ export function usePeerDevices(context: PluginContext) {
 
   /** 发现快照全量替换（过滤无 nodeId 的畸形条目） */
   function applyDevices(payload: unknown): void {
+    // 诊断插桩：区分「没收到事件 / 收到空 / 收到数据但渲染问题」（排查双端互不可见）
+    console.log('[File Transfer] devices payload:', JSON.stringify(payload))
     if (!Array.isArray(payload)) return
     devices.value = (payload as DevicePayload[])
       .filter((d) => d && typeof d.nodeId === 'string' && d.nodeId !== '')

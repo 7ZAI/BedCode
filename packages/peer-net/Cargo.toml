@@ -22,6 +22,8 @@ x509-parser = "0.17"
 # 主版本与两端宿主一致（均为 1.x），宿主 map_err 时错误链兼容
 thiserror = "1"
 tracing = "0.1"
+# 虚拟网卡过滤的接口枚举（两端宿主均已有 0.6，无版本漂移）
+local-ip-address = "0.6"
 # 可信对端元数据时间戳（added_at）；两端宿主均已有 0.4，无版本漂移
 chrono = { version = "0.4", default-features = false, features = ["clock", "serde"] }
 

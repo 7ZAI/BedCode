@@ -93,6 +93,11 @@ const SYSTEM_INFO_WAIT_ATTEMPTS: u32 = 30;
 /// 仅快照比对无变化时不发事件，LAN 规模下成本可忽略
 const DISCOVERY_PUSH_INTERVAL: Duration = Duration::from_secs(2);
 
+/// 无变化强制重发周期（tick 数）：首帧推送可能早于插件订阅完成而丢失
+/// （delivered=0 静默丢弃），指纹锁定后若记录稳定则永不再发——插件前端
+/// 只能靠 query-peer 兑底。周期性全量重发保证订阅晚到也能最终收到
+const DISCOVERY_FORCE_REPUSH_TICKS: u32 = 15;
+
 /// 运行中节点的完整状态（命令面操作对象；`None` = 未启动）
 struct PeerNetRuntime {
     /// 节点句柄（`dial_peer` 拨号入口；Clone 廉价——内部全是 Arc 共享）
@@ -218,10 +223,13 @@ pub async fn stop_peer_node(app: AppHandle) -> crate::Result<()> {
 pub async fn list_discovered_peers(app: AppHandle) -> crate::Result<Vec<DiscoveredPeerDto>> {
     let state = app.state::<PeerNetState>();
     let guard = state.runtime.lock().await;
-    Ok(guard
+    let peers: Vec<DiscoveredPeerDto> = guard
         .as_ref()
         .map(|runtime| runtime.cache.list().iter().map(DiscoveredPeerDto::from).collect())
-        .unwrap_or_default())
+        .unwrap_or_default();
+    // 诊断插桩：query-peer 是否被调用、缓存当时有几条（排查设备列表空可见性盲区）
+    tracing::info!(count = peers.len(), started = guard.is_some(), "list_discovered_peers queried");
+    Ok(peers)
 }
 
 /// 发起对等连接（issue 08）：从发现缓存取记录 → mTLS 拨号 → 对端确认后进入
@@ -252,6 +260,13 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
     };
 
     let device_name = record.device_name.clone();
+    // 诊断插桩：拨号入口（出口三态已有日志，此处补发起时刻与目标可见性）
+    tracing::info!(
+        node_id = %parsed,
+        short = %parsed.short_fingerprint(),
+        peer = %record.addr,
+        "peer dial requested"
+    );
     match node.dial(&record.to_static_peer_record()).await {
         Ok(connection) => {
             // 替换语义：同节点重复拨号以最新句柄为准，旧连接 drop 即关闭
@@ -682,7 +697,11 @@ async fn drive_gate(
                     name = ?device_name,
                     "first-connect confirmation requested, consent dialog emitted"
                 );
-                if let Err(e) = app.emit(
+                // issue 12 迁移后插件前端是确认弹窗唯一消费者：必须经 emit_json
+                // 同步桥接总线 peer:consent（裸 app.emit 只达主前端，插件永远
+                // 收不到→弹窗不出现→30s 超时自动拒，2026-08-26 双端实测实证）
+                emit_json(
+                    &app,
                     "peer-consent-requested",
                     serde_json::json!({
                         "requestId": request_id,
@@ -690,10 +709,7 @@ async fn drive_gate(
                         "fingerprintShort": node_id.short_fingerprint(),
                         "deviceName": device_name,
                     }),
-                ) {
-                    // 前端未就绪/窗口缺失：登记项留在表内，30s 超时后回执失效无害
-                    tracing::error!(node_id = %node_id, "emit peer-consent-requested failed: {e}");
-                }
+                );
             }
         }
     }
@@ -1050,6 +1066,8 @@ pub(crate) fn emit_json(app: &AppHandle, event: &str, payload: serde_json::Value
     let Some(topic) = bus_topic_for(event) else {
         return;
     };
+    // 诊断插桩：peer 事件推送可见性（移动端 logcat 只落 INFO+，publish 的 DEBUG 日志不可见）
+    tracing::info!(event, topic, "peer event pushed to plugin bus");
     if let Some(pm) = crate::state::try_get_plugin_manager() {
         pm.message_bus().publish(topic, "host", payload);
     }
@@ -1085,6 +1103,7 @@ pub(crate) async fn runtime_snapshot(
 /// 清空前端再退出；重启由 start_locked 重新拉起本任务。（与桌面端同构）
 async fn drive_discovery_push(app: AppHandle) {
     let mut last_fingerprint: Option<String> = None;
+    let mut ticks_since_push: u32 = 0;
     loop {
         tokio::time::sleep(DISCOVERY_PUSH_INTERVAL).await;
         let state = app.state::<PeerNetState>();
@@ -1099,13 +1118,22 @@ async fn drive_discovery_push(app: AppHandle) {
                 // 序列化串即指纹：列表有序（cache.list 按 node_id 稳定排序），可比对
                 let fingerprint = serde_json::to_string(&dtos)
                     .unwrap_or_else(|_| format!("len={}", dtos.len()));
-                if Some(&fingerprint) != last_fingerprint.as_ref() {
+                ticks_since_push += 1;
+                if Some(&fingerprint) != last_fingerprint.as_ref()
+                    || ticks_since_push >= DISCOVERY_FORCE_REPUSH_TICKS
+                {
                     emit_json(
                         &app,
                         "peer-devices-changed",
                         serde_json::to_value(&dtos).unwrap_or_default(),
                     );
+                    tracing::info!(
+                        count = dtos.len(),
+                        forced = ticks_since_push >= DISCOVERY_FORCE_REPUSH_TICKS,
+                        "peer devices snapshot pushed"
+                    );
                     last_fingerprint = Some(fingerprint);
+                    ticks_since_push = 0;
                 }
             }
             None => {

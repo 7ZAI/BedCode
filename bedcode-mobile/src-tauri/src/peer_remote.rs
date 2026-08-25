@@ -185,6 +185,12 @@ pub async fn list_peer_shared_roots(
     let roots = list_shared_roots(conn)
         .await
         .map_err(|e| crate::AppError::Internal(format!("peer-net list shared roots failed: {e}")))?;
+    // 诊断插桩：对端共享根可见性（排查移动端看不到桌面共享目录）
+    tracing::info!(
+        node_id = %parsed,
+        count = roots.len(),
+        "peer shared roots listed"
+    );
     Ok(roots
         .into_iter()
         .map(|root| PeerSharedRootDto { id: root.id, name: root.name })
@@ -206,6 +212,14 @@ pub async fn browse_peer_directory(
             "peer-net browse '{rel_path}' in dir '{dir_id}' failed: {e}"
         ))
     })?;
+    // 诊断插桩：目录浏览结果可见性（dir_id 形状/条目数）
+    tracing::info!(
+        node_id = %parsed,
+        dir_id = %dir_id,
+        rel = %rel_path,
+        entries = listing.entries.len(),
+        "peer directory browsed"
+    );;
     Ok(RemoteBrowseDto {
         entries: listing
             .entries
@@ -243,6 +257,13 @@ pub async fn pull_peer_files(
             files.len()
         )));
     }
+    // 诊断插桩：拉取编排入口（逐文件会话另有 dial/serve 日志）
+    tracing::info!(
+        node_id = %node_id,
+        dir_id = %dir_id,
+        files = files.len(),
+        "peer pull requested"
+    );
     for file in &files {
         if file.rel_path.trim().is_empty() {
             return Err(crate::AppError::InvalidInput(

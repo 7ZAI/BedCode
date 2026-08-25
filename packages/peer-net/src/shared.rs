@@ -336,7 +336,14 @@ impl ConnectionHandler for SharedDirHandler {
                     TransferFrame::RootsRequest { protocol_version } => {
                         batch_slot = Some("roots".to_string());
                         match serve_roots(conn, &store, protocol_version).await {
-                            Ok(()) => TerminalState::Completed,
+                            Ok(()) => {
+                                // 诊断插桩：暴露端 roots 服务成功路径（请求方侧已有日志）
+                                tracing::info!(
+                                    count = store.list().len(),
+                                    "shared roots served to peer"
+                                );
+                                TerminalState::Completed
+                            }
                             Err(e) => {
                                 tracing::warn!("roots session failed: {e}");
                                 TerminalState::Failed {

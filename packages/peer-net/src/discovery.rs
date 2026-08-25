@@ -59,7 +59,11 @@ pub const CAP_FILE_TRANSFER: u64 = 1 << 0;
 ///
 /// 大于 [`SWEEP_INTERVAL`] 数倍，保证崩溃节点的残留记录在一个清扫周期粒度内
 /// 被移除的同时，不会因单次丢包误删活节点（解析事件本身会持续盖章续期）。
-pub const PEER_DISCOVERY_TTL: Duration = Duration::from_secs(30);
+/// 120s：mDNS 周期广播间隔随网络抖动可达 30-60s+（多网卡环境更甚），30s TTL
+/// 会形成「过期清扫→再发现」循环——发现推送把空/非空列表交替推给前端，
+/// 设备面板表现为反复闪空（2026-08-26 双端互不可见排查实证）；TTL 取广播
+/// 间隔的 2 倍以上余量，异常离线由 goodbye 包即时移除兜底，不依赖超时。
+pub const PEER_DISCOVERY_TTL: Duration = Duration::from_secs(120);
 
 /// 守护任务的过期清扫周期
 pub const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
@@ -428,6 +432,40 @@ impl DiscoveryDaemon {
 ///
 /// 广播端口取宿主移交 listener 的实际端口（`running`），广播地址走 addr_auto
 /// 由 mdns-sd 枚举本机全部接口（多网卡/IP 变化免手工维护）。
+/// 常见虚拟/回环网卡名片段（不区分大小写子串匹配）
+///
+/// mDNS 多接口监听会在这些网卡上空等解析响应：Windows VMware/Hyper-V/WSL
+/// 虚拟交换机不转发组播，对端 resolve 可延迟分钟级（2026-08-26 排查实证：
+/// 桌面四接口监听下首次 resolve 移动端耗时 12 分钟）。启动时统一禁用；
+/// 移动端接口名（wlan0 等）不会命中这些模式，行为不变。
+const VIRTUAL_IFACE_PATTERNS: &[&str] = &[
+    "vmware", "virtualbox", "vbox", "vethernet", "hyper-v", "wsl", "docker",
+    "loopback", "loopback pseudo", "virbr", "libvirt",
+];
+
+/// 禁用已知虚拟/回环网卡的 mDNS 收发（枚举失败则保持默认全接口，降级不阻断）
+fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
+    let Ok(ifaces) = local_ip_address::list_afinet_netifas() else {
+        tracing::debug!("peer mDNS interface enumeration unavailable, keep all interfaces");
+        return;
+    };
+    let mut disabled: Vec<String> = Vec::new();
+    for (name, _) in &ifaces {
+        let lower = name.to_lowercase();
+        if VIRTUAL_IFACE_PATTERNS.iter().any(|p| lower.contains(p))
+            && !disabled.iter().any(|d| d == name)
+        {
+            match daemon.disable_interface(name.as_str()) {
+                Ok(()) => disabled.push(name.clone()),
+                Err(e) => tracing::debug!(iface = %name, error = %e, "disable interface failed"),
+            }
+        }
+    }
+    if !disabled.is_empty() {
+        tracing::info!(ifaces = ?disabled, "peer mDNS virtual interfaces disabled");
+    }
+}
+
 pub fn spawn_peer_mdns_daemon(
     node: &PeerNetNode,
     running: &RunningNode,
@@ -444,6 +482,7 @@ pub fn spawn_peer_mdns_daemon(
 
     let daemon =
         ServiceDaemon::new().map_err(|source| PeerNetError::MdnsDaemon { source })?;
+    disable_virtual_interfaces(&daemon);
 
     let properties = encode_txt_properties(
         &own_node_id,
