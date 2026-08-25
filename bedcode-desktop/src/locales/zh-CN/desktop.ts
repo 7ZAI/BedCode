@@ -1,5 +1,9 @@
 export default {
   desktop: {
+    splash: {
+      status: '正在启动…',
+      tagline: '局域网远程终端工作台',
+    },
     sidebar: {
       session: '会话',
       terminalSession: '终端会话',

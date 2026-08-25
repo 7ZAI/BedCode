@@ -1,191 +1,109 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createI18n } from 'vue-i18n'
 import SplashLoading from '@/components/SplashLoading.vue'
+
+/** 测试用最小 i18n 实例：仅含 splash 相关 key */
+function createTestI18n() {
+  return createI18n({
+    legacy: false,
+    locale: 'zh-CN',
+    fallbackLocale: 'zh-CN',
+    messages: {
+      'zh-CN': {
+        desktop: {
+          splash: {
+            status: '正在启动…',
+            tagline: '局域网远程终端工作台',
+          },
+        },
+      },
+    },
+  })
+}
+
+function mountSplash(props: Record<string, unknown>, slots: Record<string, unknown> = {}) {
+  return mount(SplashLoading, {
+    props,
+    slots,
+    global: {
+      plugins: [createTestI18n()],
+      stubs: {
+        Teleport: false,
+        Transition: false,
+      },
+    },
+    attachTo: document.body,
+  })
+}
 
 describe('SplashLoading Component', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
   })
 
-  it('should not render content when visible is false', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: false,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-    })
-
-    // v-if=false 时主要内容不渲染
-    expect(wrapper.find('.fixed.inset-0').exists()).toBe(false)
+  it('should not render overlay when visible is false', () => {
+    mountSplash({ visible: false })
+    expect(document.querySelector('.splash-root')).toBeNull()
   })
 
-  it('should accept visible prop', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-      attachTo: document.body,
-    })
+  it('should render fullscreen overlay with z-[100] when visible', () => {
+    const wrapper = mountSplash({ visible: true })
 
-    // 验证组件接收�?visible prop
-    expect(wrapper.props('visible')).toBe(true)
-  })
-
-  it('should accept status prop', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-        status: 'Custom status',
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-    })
-
-    expect(wrapper.props('status')).toBe('Custom status')
-  })
-
-  it('should accept showProgress prop', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-        showProgress: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-    })
-
-    expect(wrapper.props('showProgress')).toBe(true)
-  })
-
-  it('should accept progress prop', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-        showProgress: true,
-        progress: 50,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-    })
-
-    expect(wrapper.props('progress')).toBe(50)
-  })
-
-  it('should have correct default props', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-    })
-
-    expect(wrapper.props('status')).toBe('Loading...')
-    expect(wrapper.props('showProgress')).toBe(false)
-    expect(wrapper.props('progress')).toBe(0)
-  })
-
-  it('should render Spinner component as child', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-      attachTo: document.body,
-    })
-
-    // 检�?Spinner 组件是否存在
-    const spinnerComponent = wrapper.findComponent({ name: 'Spinner' })
-    expect(spinnerComponent.exists()).toBe(true)
-  })
-
-  it('should pass correct props to Spinner', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-      attachTo: document.body,
-    })
-
-    const spinnerComponent = wrapper.findComponent({ name: 'Spinner' })
-    expect(spinnerComponent.props('size')).toBe('lg')
-    expect(spinnerComponent.props('color')).toBe('primary')
-    expect(spinnerComponent.props('variant')).toBe('circle')
-  })
-
-  it('should have z-[100] class for full screen overlay', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-      attachTo: document.body,
-    })
-
-    // �?body 中查找渲染的内容
-    const overlay = document.querySelector('.fixed.inset-0')
+    const overlay = document.querySelector('.splash-root')
     expect(overlay).toBeTruthy()
-    expect(overlay?.classList.contains('z-50')).toBe(true)
+    expect(overlay?.classList.contains('z-[100]')).toBe(true)
+    wrapper.unmount()
   })
 
-  it('should have bg-dark-900 background class', () => {
-    const wrapper = mount(SplashLoading, {
-      props: {
-        visible: true,
-      },
-      global: {
-        stubs: {
-          Teleport: false,
-          Transition: false,
-        },
-      },
-      attachTo: document.body,
-    })
+  it('should render brand wordmark and boot command line', () => {
+    const wrapper = mountSplash({ visible: true })
 
-    const overlay = document.querySelector('.fixed.inset-0')
-    expect(overlay?.classList.contains('bg-dark-900')).toBe(true)
+    const overlay = document.querySelector('.splash-root')!
+    // 品牌名
+    expect(overlay.textContent).toContain('BedCode')
+    // 终端启动行：$ 提示符 + 命令 + 光标（Teleport 到 body，用 document 查询）
+    const typed = overlay.querySelector('.splash-typed')
+    expect(typed?.textContent).toBe('bedcode')
+    expect(overlay.querySelector('.splash-caret')).toBeTruthy()
+    wrapper.unmount()
+  })
+
+  it('should fall back to i18n status when status prop is empty', () => {
+    const wrapper = mountSplash({ visible: true })
+
+    const overlay = document.querySelector('.splash-root')!
+    expect(overlay.textContent).toContain('正在启动…')
+    wrapper.unmount()
+  })
+
+  it('should display custom status prop over i18n default', () => {
+    const wrapper = mountSplash({ visible: true, status: 'Custom status' })
+
+    const overlay = document.querySelector('.splash-root')!
+    expect(overlay.textContent).toContain('Custom status')
+    expect(overlay.textContent).not.toContain('正在启动…')
+    wrapper.unmount()
+  })
+
+  it('should hide progress bar by default and show it with width binding', () => {
+    const hidden = mountSplash({ visible: true })
+    expect(document.querySelector('.splash-progress')).toBeNull()
+    hidden.unmount()
+
+    const shown = mountSplash({ visible: true, showProgress: true, progress: 50 })
+    const bar = document.querySelector<HTMLElement>('.splash-progress')
+    expect(bar).toBeTruthy()
+    expect(bar?.style.width).toBe('50%')
+    shown.unmount()
+  })
+
+  it('should allow logo slot override', () => {
+    const wrapper = mountSplash({ visible: true }, { logo: '<div class="custom-logo">X</div>' })
+
+    expect(document.querySelector('.custom-logo')).toBeTruthy()
+    // 默认品牌 glyph 不渲染
+    expect(document.querySelector('.splash-logo')).toBeNull()
+    wrapper.unmount()
   })
 })

@@ -1,5 +1,9 @@
 export default {
   desktop: {
+    splash: {
+      status: 'Starting up…',
+      tagline: 'LAN remote terminal workbench',
+    },
     sidebar: {
       session: 'Session',
       terminalSession: 'Terminal Session',
