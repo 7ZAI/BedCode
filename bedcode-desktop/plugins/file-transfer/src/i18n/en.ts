@@ -16,7 +16,7 @@ const en: MessageSchema = {
   'transfer.peer.unpaired': 'No device connected',
   'transfer.peer.noSharedRoots': "Peer hasn't shared any folders yet",
   'transfer.peer.unknown': 'Unknown device',
-  'transfer.peer.switchTitle': 'Switch device',
+  'transfer.peer.switchTitle': 'Nearby devices (initiate connection)',
 
   // ==================== Nearby devices panel ====================
   'transfer.devices.title': 'Nearby Devices',
@@ -35,6 +35,8 @@ const en: MessageSchema = {
   'transfer.devices.unreachable': 'Cannot connect; the device may be offline',
   'transfer.devices.trustHint':
     'First-time connections need approval on the other side; manage trust in Settings → Trusted peers',
+  'transfer.devices.scan': 'Discover',
+  'transfer.devices.scanning': 'Discovering…',
 
   // ==================== Top bar ====================
   'transfer.topbar.sendToPhone': 'Send to phone…',

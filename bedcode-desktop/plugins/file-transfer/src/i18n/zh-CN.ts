@@ -16,7 +16,7 @@ const zhCN: MessageSchema = {
   'transfer.peer.unpaired': '未连接设备',
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
   'transfer.peer.unknown': '未知设备',
-  'transfer.peer.switchTitle': '切换设备',
+  'transfer.peer.switchTitle': '附近设备（主动发起连接）',
 
   // ==================== 附近设备面板 ====================
   'transfer.devices.title': '附近设备',
@@ -33,6 +33,8 @@ const zhCN: MessageSchema = {
   'transfer.devices.denied': '对方拒绝了连接',
   'transfer.devices.unreachable': '无法连接，设备可能已离线',
   'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+  'transfer.devices.scan': '探索发现',
+  'transfer.devices.scanning': '探索中…',
 
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': '发送到手机…',

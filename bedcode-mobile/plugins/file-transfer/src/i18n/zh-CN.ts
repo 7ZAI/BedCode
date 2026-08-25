@@ -40,6 +40,8 @@ export default {
   'transfer.devices.denied': '对方拒绝了连接',
   'transfer.devices.unreachable': '无法连接，设备可能已离线',
   'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+  'transfer.devices.scan': '探索发现',
+  'transfer.devices.scanning': '探索中…',
 
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': '设置',
@@ -48,6 +50,7 @@ export default {
   'transfer.topbar.queryPeer': '重新检测对端',
   'transfer.topbar.downloadSelected': '下载到手机 ({count} 项 · {size})',
   'transfer.topbar.uploadFile': '上传文件',
+  'transfer.topbar.connectDevice': '发起连接（附近设备）',
   'transfer.breadcrumb.home': '文件',
   'transfer.table.empty': '此目录为空',
   'transfer.table.loading': '加载中...',

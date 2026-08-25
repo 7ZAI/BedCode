@@ -5,6 +5,7 @@
  * 列出全部发现的 BedCode 节点：已连接 / 连接中 / 未连接三态可区分，
  * 拨号失败（拒绝/不可达）以行内错误文案呈现；已连接设备可断开、
  * 可设为当前活跃对端；无传输能力节点可见但不可连接。
+ * 头部提供「探索发现」重新扫描同网节点（父组件维护 scanning 态）。
  * 纯展示组件：状态由 usePeerDevices 派生的 rows 传入，操作以事件上抛；
  * 视觉语言复用 TaskQueueSheet（Teleport + ft-sheet 过渡 + safe area 底距）。
  */
@@ -15,6 +16,8 @@ type Translate = (key: string, params?: Record<string, any>) => string
 const props = defineProps<{
   open: boolean
   rows: DeviceRow[]
+  /** 探索发现进行中（扫描按钮转 spinner、防重复点击） */
+  scanning?: boolean
   t: Translate
 }>()
 
@@ -23,6 +26,8 @@ const emit = defineEmits<{
   (e: 'connect', nodeId: string): void
   (e: 'disconnect', nodeId: string): void
   (e: 'set-active', nodeId: string): void
+  /** 探索发现：重新扫描同网节点（父组件调 query-peer 并维护 scanning） */
+  (e: 'scan'): void
 }>()
 
 const t = props.t
@@ -72,14 +77,44 @@ function metaText(row: DeviceRow): string {
             <div class="w-10 h-1 rounded-full bg-[var(--mobile-border-hover)]"></div>
           </div>
 
-          <!-- 标题行 -->
-          <div class="flex-shrink-0 flex items-baseline gap-2 px-4 py-2">
+          <!-- 标题行：标题 + 副标题 + 行尾「探索发现」重扫按钮（44px 触控目标） -->
+          <div class="flex-shrink-0 flex items-center gap-2 px-4 py-2">
             <h3 class="ft-dev-title text-[var(--mobile-text-primary)]">
               {{ t('transfer.devices.title') }}
             </h3>
-            <span class="ft-dev-subtitle text-[var(--mobile-text-muted)] truncate">
+            <span class="ft-dev-subtitle flex-1 min-w-0 text-[var(--mobile-text-muted)] truncate">
               {{ t('transfer.devices.subtitle') }}
             </span>
+            <button
+              class="ft-dev-scan-btn flex-shrink-0"
+              :disabled="props.scanning"
+              @click="emit('scan')"
+            >
+              <!-- 扫描中：旋转圆环占位（GPU 合成 transform）；否则静态放大镜 -->
+              <svg
+                v-if="props.scanning"
+                class="ft-dev-scan-spin"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                />
+              </svg>
+              <svg v-else class="ft-dev-scan-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+                />
+              </svg>
+              {{ props.scanning ? t('transfer.devices.scanning') : t('transfer.devices.scan') }}
+            </button>
           </div>
 
           <!-- 空态：发现缓存无节点 -->
@@ -183,6 +218,59 @@ function metaText(row: DeviceRow): string {
 
 .ft-dev-subtitle {
   font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+}
+
+/* 探索发现按钮：头部行尾，44px 最小触控高度，按压反馈 opacity */
+.ft-dev-scan-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  font-weight: 500;
+  color: var(--mobile-accent);
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity 0.15s ease;
+}
+
+.ft-dev-scan-btn:active {
+  opacity: 0.8;
+}
+
+.ft-dev-scan-btn:disabled {
+  opacity: 0.45;
+}
+
+/* 探索发现图标 */
+.ft-dev-scan-ico {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+}
+
+/* 扫描中 spinner：仅 transform 动画（GPU 合成），尊重减弱动效偏好 */
+.ft-dev-scan-spin {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+  animation: ft-dev-scan-rotate 0.9s linear infinite;
+}
+
+@keyframes ft-dev-scan-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-dev-scan-spin {
+    animation: none;
+  }
 }
 
 /* 空态文字 */

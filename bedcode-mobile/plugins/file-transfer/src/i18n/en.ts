@@ -42,6 +42,8 @@ export default {
   'transfer.devices.unreachable': 'Cannot connect; the device may be offline',
   'transfer.devices.trustHint':
     'First-time connections need approval on the other side; manage trust in Settings → Trusted peers',
+  'transfer.devices.scan': 'Discover',
+  'transfer.devices.scanning': 'Discovering…',
 
   // ==================== Top bar / browsing ====================
   'transfer.topbar.settings': 'Settings',
@@ -50,6 +52,7 @@ export default {
   'transfer.topbar.queryPeer': 'Re-detect peer',
   'transfer.topbar.downloadSelected': 'Download ({count} · {size})',
   'transfer.topbar.uploadFile': 'Upload file',
+  'transfer.topbar.connectDevice': 'Connect (nearby devices)',
   'transfer.breadcrumb.home': 'Files',
   'transfer.table.empty': 'This folder is empty',
   'transfer.table.loading': 'Loading...',

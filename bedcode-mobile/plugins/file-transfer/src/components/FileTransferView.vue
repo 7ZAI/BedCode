@@ -47,6 +47,20 @@ function handleDeviceSetActive(nodeId: string): void {
   void devices.switchPeer(nodeId)
 }
 
+/** 探索发现进行中（附近设备 sheet 头部扫描按钮 spinner 态） */
+const deviceScanning = ref(false)
+
+/** 探索发现：重新拉取发现快照（query-peer），完成后恢复按钮态 */
+async function handleScanDevices(): Promise<void> {
+  if (deviceScanning.value) return
+  deviceScanning.value = true
+  try {
+    await devices.refresh()
+  } finally {
+    deviceScanning.value = false
+  }
+}
+
 /** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动） */
 function handleBatchApprove(batchId: string): void {
   tasks.approveBatch(batchId).catch((e: unknown) => {
@@ -327,7 +341,16 @@ onUnmounted(() => {
       </span>
       <!-- 弹性空隙：把操作按钮推到行尾 -->
       <div class="flex-1 min-w-2"></div>
-      <!-- 操作按钮（上传 / 设置）：纯图标，置于顶栏右侧，避免悬浮于列表数据之上造成遮挡 -->
+      <!-- 操作按钮（主动发起连接 / 上传 / 设置）：纯图标，置于顶栏右侧，避免悬浮于列表数据之上造成遮挡 -->
+      <button
+        class="ft-topbar-btn ft-topbar-btn-primary flex-shrink-0"
+        :title="t('transfer.topbar.connectDevice')"
+        @click="devicesOpen = true"
+      >
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+        </svg>
+      </button>
       <button
         class="ft-topbar-btn ft-topbar-btn-primary flex-shrink-0"
         :title="t('transfer.topbar.uploadFile')"
@@ -548,15 +571,17 @@ onUnmounted(() => {
       </button>
     </div>
 
-    <!-- 附近设备 bottom sheet（三态列表 + 连接/断开/切换活跃对端） -->
+    <!-- 附近设备 bottom sheet（三态列表 + 探索发现重扫 + 连接/断开/切换活跃对端） -->
     <PeerDevicesSheet
       :open="devicesOpen"
       :rows="devices.rows.value"
+      :scanning="deviceScanning"
       :t="t"
       @close="devicesOpen = false"
       @connect="handleDeviceConnect"
       @disconnect="handleDeviceDisconnect"
       @set-active="handleDeviceSetActive"
+      @scan="handleScanDevices"
     />
 
     <!-- 队列 bottom sheet（四 tab：发送/接收/历史） -->

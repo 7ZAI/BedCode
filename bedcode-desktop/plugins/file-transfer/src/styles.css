@@ -149,6 +149,44 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* 探索发现按钮：头部行尾对齐（subtitle 弹性占位推到最右） */
+.ft-dev-scan-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 探索发现图标：随文字字号，不压缩不溢出 */
+.ft-dev-scan-ico {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* 扫描中 spinner：仅 transform 动画（GPU 合成），尊重减弱动效偏好 */
+.ft-dev-scan-spin {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  animation: ft-dev-scan-rotate 0.9s linear infinite;
+}
+
+@keyframes ft-dev-scan-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-dev-scan-spin {
+    animation: none;
+  }
+}
+
 .ft-dev-title {
   flex-shrink: 0;
   font-size: 12px;

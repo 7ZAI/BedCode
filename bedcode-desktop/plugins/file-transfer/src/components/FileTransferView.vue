@@ -32,6 +32,7 @@ const {
   connect: connectDevice,
   disconnect: disconnectDevice,
   switchPeer,
+  refresh: refreshDevices,
   start: startPeer,
   stop: stopPeer,
 } = usePeerDevices(context)
@@ -175,6 +176,20 @@ function handleDisconnectDevice(nodeId: string): void {
   void disconnectDevice(nodeId)
 }
 
+/** 探索发现进行中（面板扫描按钮 spinner 态） */
+const deviceScanning = ref(false)
+
+/** 探索发现：重新拉取发现快照（query-peer），完成后恢复按钮态 */
+async function handleScanDevices(): Promise<void> {
+  if (deviceScanning.value) return
+  deviceScanning.value = true
+  try {
+    await refreshDevices()
+  } finally {
+    deviceScanning.value = false
+  }
+}
+
 async function handleSetActiveDevice(nodeId: string): Promise<void> {
   await switchPeer(nodeId)
 }
@@ -278,9 +293,11 @@ watch(
           <PeerDevicesPanel
             v-if="devPanelOpen"
             :rows="deviceRows"
+            :scanning="deviceScanning"
             @connect="handleConnectDevice"
             @disconnect="handleDisconnectDevice"
             @set-active="handleSetActiveDevice"
+            @scan="handleScanDevices"
           />
         </Transition>
       </div>

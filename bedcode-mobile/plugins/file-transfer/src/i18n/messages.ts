@@ -36,6 +36,9 @@ export interface MessageSchema {
   'transfer.devices.denied': string
   'transfer.devices.unreachable': string
   'transfer.devices.trustHint': string
+  /** 探索发现：重新扫描同网节点（sheet 头部按钮） */
+  'transfer.devices.scan': string
+  'transfer.devices.scanning': string
 
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': string
@@ -44,6 +47,8 @@ export interface MessageSchema {
   'transfer.topbar.queryPeer': string
   'transfer.topbar.downloadSelected': string
   'transfer.topbar.uploadFile': string
+  /** 主动发起连接入口（顶栏设备图标，打开附近设备 sheet） */
+  'transfer.topbar.connectDevice': string
   'transfer.breadcrumb.home': string
   'transfer.table.empty': string
   'transfer.table.loading': string

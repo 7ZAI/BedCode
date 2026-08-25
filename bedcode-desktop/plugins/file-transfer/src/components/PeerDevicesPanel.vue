@@ -14,14 +14,18 @@ import type { DeviceRow } from '../composables/deviceState'
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
-defineProps<{
+const props = defineProps<{
   rows: DeviceRow[]
+  /** 探索发现进行中（扫描按钮转 spinner、防重复点击） */
+  scanning?: boolean
 }>()
 
 const emit = defineEmits<{
   connect: [nodeId: string]
   disconnect: [nodeId: string]
   setActive: [nodeId: string]
+  /** 探索发现：重新扫描同网节点（父组件负责调 query-peer 并维护 scanning 态） */
+  scan: []
 }>()
 
 /** 短指纹（前 8 位）展示 */
@@ -45,6 +49,38 @@ function dotClass(row: DeviceRow): string {
     <div class="ft-dev-head">
       <span class="ft-dev-title">{{ t('transfer.devices.title') }}</span>
       <span class="ft-dev-subtitle">{{ t('transfer.devices.subtitle') }}</span>
+      <!-- 探索发现：主动重新扫描同网节点；扫描中转 spinner 防重复发起 -->
+      <button
+        class="ft-text-btn ft-dev-scan-btn"
+        :disabled="props.scanning"
+        :title="t('transfer.devices.scan')"
+        @click="emit('scan')"
+      >
+        <!-- 扫描中：旋转圆环占位（GPU 合成 transform） -->
+        <svg
+          v-if="props.scanning"
+          class="ft-dev-scan-spin"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+          />
+        </svg>
+        <svg v-else class="ft-dev-scan-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"
+          />
+        </svg>
+        {{ props.scanning ? t('transfer.devices.scanning') : t('transfer.devices.scan') }}
+      </button>
     </div>
 
     <!-- 空态：发现缓存无节点 -->

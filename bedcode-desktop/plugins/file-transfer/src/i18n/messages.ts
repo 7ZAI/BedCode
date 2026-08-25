@@ -35,6 +35,9 @@ export interface MessageSchema {
   'transfer.devices.denied': string
   'transfer.devices.unreachable': string
   'transfer.devices.trustHint': string
+  /** 探索发现：重新扫描同网节点（面板头部按钮） */
+  'transfer.devices.scan': string
+  'transfer.devices.scanning': string
 
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': string
