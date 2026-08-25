@@ -18,20 +18,15 @@ import type {
   NotificationAPI,
   OcrApi,
   OcrEngineStatus,
-  OcrLine,
   PluginContext,
   StatusAPI,
   UIRegistry,
 } from '../../src/types'
 import {
-  authSuccess,
-  createSession,
   emitDevEvent,
   onDevEvent,
   sendInputToSession,
   sessions,
-  setConnected,
-  stopSession,
 } from './mock/session'
 import { dialogService } from './mock/dialog-service'
 import { getDevMock } from './registry'
@@ -307,25 +302,16 @@ export function createMockContext(pluginId: string): PluginContext {
     supportedEngines: ['offline'],
   }
 
-  /** 默认示例识别结果（devMock.ocrLinesSeed 缺省时使用；空数组可演示空结果空态） */
-  const defaultOcrLines: OcrLine[] = [
-    { text: 'Hello, BedCode OCR', confidence: 0.98, bbox: { x: 24, y: 40, w: 420, h: 36 } },
-    { text: '离线文字识别（PP-OCRv4）', confidence: 0.95, bbox: { x: 24, y: 92, w: 380, h: 40 } },
-    { text: '低置信度示例行（点击可复制）', confidence: 0.52, bbox: { x: 24, y: 148, w: 300, h: 36 } },
-  ]
-
   const ocr: OcrApi = {
     async recognize(_input) {
+      // 识别结果种子由插件 devMock.ocrLinesSeed 持有（dev-shell 不含业务示例数据）；
+      // 空数组/缺省均可演示「未识别到文字」空态
       const seed = getDevMock(pluginId)?.ocrLinesSeed
-      pushLog(
-        'info',
-        pluginId,
-        `ocr.recognize (mock) 返回 ${seed ? seed.length : defaultOcrLines.length} 行`,
-      )
+      pushLog('info', pluginId, `ocr.recognize (mock) 返回 ${seed?.length ?? 0} 行`)
       return {
         engine: 'offline',
         durationMs: 86,
-        lines: seed ?? defaultOcrLines,
+        lines: seed ?? [],
       }
     },
     async engineStatus() {

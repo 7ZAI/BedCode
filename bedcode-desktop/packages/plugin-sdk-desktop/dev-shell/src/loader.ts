@@ -15,8 +15,9 @@ import {
   type DevPluginRecord,
 } from './registry'
 
-// dev-shell 专用 mock：浏览器中 WASM 后端不可用，为特定插件注入模拟命令与事件
-import { registerFileTransferMock, disposeFileTransferMock } from './mock/file-transfer'
+// 领域命令 mock（纯通用接线）：浏览器中 WASM 后端不可用，按插件 devMock
+// 种子子域（peer / transfer）判断是否注入，不感知具体插件身份
+import { registerFileTransferMock } from './mock/file-transfer'
 
 export const ready = ref(false)
 
@@ -55,10 +56,11 @@ export async function loadPlugins(): Promise<void> {
         const context: PluginContext = createMockContext(pluginId, spec.dir)
         record.context = context
         // mock 命令先于 activate() 注册：插件 activate/首帧即会拉设置与设备，
-        // 后注册会错过首轮命令（空态假象）；与移动端 loader 同构
-        if (pluginId === 'com.bedcode.file-transfer') {
-          registerFileTransferMock(context)
-          pushLog('info', pluginId, '已注入 dev-shell mock 数据')
+        // 后注册会错过首轮命令（空态假象）；与移动端 loader 同构。
+        // 是否注入由插件 devMock 的领域种子子域决定，dev-shell 不写死插件清单
+        if (module.devMock?.peer || module.devMock?.transfer) {
+          record.mockDisposable = registerFileTransferMock(context, pluginId)
+          pushLog('info', pluginId, '已注册领域命令 mock（通用接线，种子来自插件 devMock）')
         }
         if (typeof module.activate === 'function') {
           await module.activate(context)
@@ -86,6 +88,9 @@ export async function deactivatePlugin(pluginId: string): Promise<void> {
   if (!record || record.state === 'deactivated') return
   record.devMockDisposable?.dispose()
   record.devMockDisposable = undefined
+  // 清理领域命令 mock（停止进度模拟等定时器）
+  record.mockDisposable?.dispose()
+  record.mockDisposable = undefined
   const context = record.context as PluginContext | null
   if (context) {
     for (const d of [...context._disposables]) {
@@ -104,10 +109,6 @@ export async function deactivatePlugin(pluginId: string): Promise<void> {
     } catch (e) {
       pushLog('warn', pluginId, `deactivate() 失败: ${e}`)
     }
-  }
-  // 清理插件 mock（停止进度模拟定时器）
-  if (pluginId === 'com.bedcode.file-transfer') {
-    disposeFileTransferMock()
   }
   record.state = 'deactivated'
   pushLog('info', pluginId, '已停用')

@@ -315,9 +315,54 @@ export interface PeerDevMock {
   }>
 }
 
+// ==================== 传输域种子（file-transfer 任务/远端浏览/共享设置） ====================
+
+/**
+ * 传输任务种子内容（mock 组装完整 DTO：peer 取活跃对端设备、时间戳取当前）。
+ * state 覆盖全部 8 态：queued / transferring / paused / resumable /
+ * completed / cancelled / failed / rejected
+ */
+export interface TransferTaskSeed {
+  id: string
+  direction: 'download' | 'upload'
+  /** 对端侧路径（共享根内相对路径） */
+  remotePath: string
+  /** 本机路径（上传任务；缺省空串） */
+  localPath?: string
+  size: number
+  offset: number
+  state: string
+  reason?: string | null
+}
+
+/** 远端文件浏览种子：根清单 + 目录内容表（key = `${dirId}::${相对路径}`，根目录 path=''） */
+export interface RemoteFsDevMock {
+  roots: Array<{ id: string; name: string }>
+  files?: Record<
+    string,
+    Array<{ name: string; size: number; mtime: number; isDir: boolean }>
+  >
+}
+
+/** 本机共享设置种子（roots 为宿主 RootItem DTO 形状 {id, name}） */
+export interface TransferSettingsDevMock {
+  roots: Array<{ id: string; name: string }>
+  downloadDir?: string
+  concurrency?: number
+}
+
+/** file-transfer 传输域种子（任务列表 / 远端浏览 / 共享设置；缺省子域回退空态） */
+export interface TransferDevMock {
+  tasks?: TransferTaskSeed[]
+  remoteFs?: RemoteFsDevMock
+  settings?: TransferSettingsDevMock
+}
+
 /** 插件 dev-shell 演示数据（后续领域按需扩充子字段） */
 export interface PluginDevMock {
   peer?: PeerDevMock
+  /** 传输域（任务列表、远端文件浏览、本机共享设置） */
+  transfer?: TransferDevMock
 }
 
 /** 插件运行时状态

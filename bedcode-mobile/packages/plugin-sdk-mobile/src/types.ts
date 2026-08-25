@@ -539,6 +539,30 @@ export interface PeerDevMock {
  * dev-shell 加载插件时经 registry 注册、createMockContext 按需取用。
  * 真实宿主忽略该字段（多余导出对 activate 无影响），插件无需条件编译。
  */
+/** 远端文件浏览种子：根清单 + 目录内容表（key = `${dirId}::${相对路径}`，根目录 path=''） */
+export interface RemoteFsDevMock {
+  roots: Array<{ id: string; name: string }>
+  files?: Record<
+    string,
+    Array<{ name: string; size: number; mtime: number; isDir: boolean }>
+  >
+}
+
+/** 本机共享设置种子（roots 为宿主 wire DTO 形状，含 SAF tree_uri） */
+export interface TransferSettingsDevMock {
+  roots?: Array<{ id: string; name: string; tree_uri: string; builtin?: boolean }>
+  /** 缺省 'ask'（协议枚举缺省值） */
+  policyMode?: string
+  askTimeoutSec?: number
+  downloadDir?: string
+}
+
+/** file-transfer 传输域种子（远端浏览 / 共享设置；缺省子域回退空态） */
+export interface TransferDevMock {
+  remoteFs?: RemoteFsDevMock
+  settings?: TransferSettingsDevMock
+}
+
 export interface PluginDevMock {
   /** 任务队列种子（auto-task：mobileApi 初始队列项，localStorage 无缓存时使用） */
   queueSeed?: MobileQueueTaskItem[]
@@ -546,6 +570,8 @@ export interface PluginDevMock {
   ocrLinesSeed?: OcrLinesSeed
   /** file-transfer 对等子数据（附近设备面板演示态；见 PeerDevMock） */
   peer?: PeerDevMock
+  /** file-transfer 传输域（远端文件浏览、本机共享设置） */
+  transfer?: TransferDevMock
 }
 
 /** 国际化 API */

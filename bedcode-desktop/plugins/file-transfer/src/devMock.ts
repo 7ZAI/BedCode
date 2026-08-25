@@ -13,6 +13,9 @@
  * - consent 种子：两条待确认首连请求，驱动确认弹窗与状态栏计数两路演示
  * - trusted 种子：三条可信对端（含一条无名短指纹兑底），驱动设置分区
  *   列表展示与两步撤销全流程演示
+ *
+ * 传输域种子（transfer 子域，SDK TransferDevMock 协议）：任务列表（8 态覆盖）、
+ * 远端共享根与目录树、本机共享设置——原 dev-shell 内置业务数据已全部迁入此处。
  */
 import type { PluginDevMock } from '@binblink/plugin-sdk-desktop'
 
@@ -30,14 +33,15 @@ export interface TrustedDevSeed {
   addedAt: string
 }
 
-/** 扩展了 trusted 字段的 peer 种子（多余字段对 SDK 协议向后兼容） */
-type PeerWithTrusted = NonNullable<PluginDevMock['peer']> & { trusted?: TrustedDevSeed[] }
-type PeerDevMockWithTrusted = Omit<PluginDevMock, 'peer'> & { peer?: PeerWithTrusted }
+/** 扩展了 trusted 字段的 peer 种子 + 传输域种子（多余字段对 SDK 协议向后兼容） */
+type DevMockWithExtensions = PluginDevMock & {
+  peer?: NonNullable<PluginDevMock['peer']> & { trusted?: TrustedDevSeed[] }
+}
 
 export const NODE_XIAOMI = 'f3a91c07e5d24b18a7c60f12d94b8e55'
 export const NODE_PIXEL = '8b02d641c9ae4f77b3e15a90dd276c84'
 
-const peerDevMock: PeerDevMockWithTrusted = {
+const devMock: DevMockWithExtensions = {
   peer: {
     devices: [
       {
@@ -118,6 +122,137 @@ const peerDevMock: PeerDevMockWithTrusted = {
       },
     ],
   },
+  // ==================== 传输域种子（SDK TransferDevMock 协议） ====================
+  transfer: {
+    // 任务快照：覆盖全部 8 态，驱动四色体系展示；paused 条目保留进度与排队（0%）区分
+    tasks: [
+      {
+        id: 'mock-task-1',
+        direction: 'download',
+        remotePath: 'DCIM/VID_20240801_1820.mp4',
+        size: 89244416,
+        offset: 41933507, // 47%
+        state: 'transferring',
+      },
+      {
+        id: 'mock-task-2',
+        direction: 'upload',
+        remotePath: '工作文档/产品需求文档_v3.docx',
+        localPath: 'C:\\workspace\\产品需求文档_v3.docx',
+        size: 248320,
+        offset: 248320,
+        state: 'completed',
+      },
+      {
+        id: 'mock-task-3',
+        direction: 'download',
+        remotePath: '2024年度旅行相册.zip',
+        size: 2470476800,
+        offset: 864667000, // 35%：暂停任务保留已下载进度
+        state: 'paused',
+      },
+      {
+        id: 'mock-task-4',
+        direction: 'upload',
+        remotePath: 'IMG_20240802_0815.jpg',
+        localPath: 'D:\\photos\\IMG_20240802_0815.jpg',
+        size: 5124300,
+        offset: 1024860,
+        state: 'transferring',
+      },
+      {
+        id: 'mock-task-5',
+        direction: 'download',
+        remotePath: '4K测试视频_8分钟.mp4',
+        size: 1258291200,
+        offset: 0,
+        state: 'queued',
+      },
+      {
+        id: 'mock-task-6',
+        direction: 'upload',
+        remotePath: '毕业设计答辩.pptx',
+        localPath: 'D:\\slides\\毕业设计答辩.pptx',
+        size: 18677760,
+        offset: 0,
+        state: 'failed',
+        reason: 'duplicate-name',
+      },
+      {
+        id: 'mock-task-7',
+        direction: 'download',
+        remotePath: '会议录音_产品周会.mp3',
+        size: 12695376,
+        offset: 12695376,
+        state: 'completed',
+      },
+      {
+        id: 'mock-task-8',
+        direction: 'upload',
+        remotePath: 'Backup_2024-08.tar.gz',
+        localPath: 'E:\\backup\\Backup_2024-08.tar.gz',
+        size: 4127191040,
+        offset: 0,
+        state: 'rejected',
+        reason: 'duplicate-name',
+      },
+    ],
+    // 远端共享根（对端设备侧演示目录；dirId + 根内相对路径寻址，契约见 useRemoteFs）
+    remoteFs: {
+      roots: [
+        { id: 'root-dcim', name: 'DCIM' },
+        { id: 'root-download', name: 'Download' },
+        { id: 'root-weixin', name: '微信文件' },
+        { id: 'root-docs', name: '工作文档' },
+      ],
+      files: {
+        'root-dcim::': [
+          { name: 'Camera', size: 0, mtime: 1754688000, isDir: true },
+          { name: 'Screenshots', size: 0, mtime: 1754662000, isDir: true },
+          { name: 'IMG_20240801_1932.jpg', size: 4869382, mtime: 1754664000, isDir: false },
+          { name: 'IMG_20240802_0815.jpg', size: 5124300, mtime: 1754676000, isDir: false },
+          { name: 'VID_20240801_1820.mp4', size: 89244416, mtime: 1754665000, isDir: false },
+        ],
+        'root-dcim::Camera': [
+          { name: 'IMG_20240801_1800.jpg', size: 4123400, mtime: 1754664000, isDir: false },
+          { name: 'IMG_20240801_1815.jpg', size: 3891100, mtime: 1754664600, isDir: false },
+        ],
+        'root-dcim::Screenshots': [
+          { name: 'Screenshot_20240802_1015.png', size: 1843200, mtime: 1754700900, isDir: false },
+          { name: 'Screenshot_20240802_1432.png', size: 2210400, mtime: 1754716300, isDir: false },
+        ],
+        'root-download::': [
+          { name: 'apk-backup', size: 0, mtime: 1754690000, isDir: true },
+          { name: 'BedCode-2.0.0.apk', size: 68_000_000, mtime: 1754560000, isDir: false },
+          { name: 'Ubuntu-24.04.iso', size: 4_720_000_000, mtime: 1754550000, isDir: false },
+          { name: 'Backup_2024-08.tar.gz', size: 4127191040, mtime: 1754694000, isDir: false },
+        ],
+        'root-weixin::': [
+          { name: '产品需求文档_v3.docx', size: 248320, mtime: 1754577000, isDir: false },
+          { name: '销售数据汇总.xlsx', size: 96_000, mtime: 1754570000, isDir: false },
+          { name: '会议录音_产品周会.mp3', size: 12695376, mtime: 1754520000, isDir: false },
+          { name: '4K测试视频_8分钟.mp4', size: 1258291200, mtime: 1754598000, isDir: false },
+          { name: '4K蓝光_星际穿越.mkv', size: 4_100_000_000, mtime: 1754600000, isDir: false },
+        ],
+        'root-docs::': [
+          { name: '产品说明书.pdf', size: 8_600_000, mtime: 1754580000, isDir: false },
+          { name: '毕业设计答辩.pptx', size: 18677760, mtime: 1754512000, isDir: false },
+          { name: '2024年度旅行相册.zip', size: 2470476800, mtime: 1754628000, isDir: false },
+          { name: '系统更新日志.txt', size: 15240, mtime: 1754640000, isDir: false },
+          { name: 'main.ts', size: 12_480, mtime: 1754540000, isDir: false },
+        ],
+      },
+    },
+    // 本机共享设置（roots 为宿主 RootItem DTO：按 name 展示、按 id 寻址移除）
+    settings: {
+      roots: [
+        { id: 'mock-root-1', name: 'C:\\Users\\binblink\\Desktop\\共享文件夹' },
+        { id: 'mock-root-2', name: 'E:\\媒体库\\相机导入' },
+      ],
+      downloadDir: 'C:\\Users\\binblink\\Downloads\\BedCode',
+      concurrency: 3,
+    },
+  },
 }
 
-export default peerDevMock
+export default devMock

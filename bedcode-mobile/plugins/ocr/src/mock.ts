@@ -2,7 +2,7 @@
  * OCR 插件 dev-shell 领域数据
  *
  * ocrLinesSeed：ocr.recognize 的 mock 返回（dev-shell 消费）；
- * 缺省时 mock 宿主返回内置示例行；空数组可演示「未识别到文字」空态。
+ * dev-shell 不含业务示例数据，缺省/空数组均演示「未识别到文字」空态。
  * 真实宿主忽略此导出（对 activate 无影响）。
  */
 import type { PluginDevMock, OcrLinesSeed } from '@binblink/plugin-sdk-mobile'

@@ -14,7 +14,7 @@
  * - trusted 种子：三条可信对端（含一条无名短指纹兑底），驱动设置分区列表展示
  *   与两步撤销全流程演示
  */
-import type { PeerDevMock } from '@binblink/plugin-sdk-mobile'
+import type { PeerDevMock, PluginDevMock } from '@binblink/plugin-sdk-mobile'
 
 /**
  * consent 演示种子（ticket 04）：SDK PluginDevMock 协议的本地扩展字段
@@ -56,8 +56,8 @@ type PeerDevMockWithTrusted = Omit<PeerDevMock, 'consent'> & {
   trusted?: TrustedDevSeed[]
 }
 
-/** SDK PluginDevMock 协议包装（loader 按 .peer 读取；桌面同构） */
-type DevMockWithPeer = { peer?: PeerDevMockWithTrusted }
+/** SDK PluginDevMock 协议包装（loader 按 .peer / .transfer 读取；桌面同构） */
+type DevMockWithPeer = PluginDevMock & { peer?: PeerDevMockWithTrusted }
 
 export const NODE_XIAOMI = 'f3a91c07e5d24b18a7c60f12d94b8e55'
 export const NODE_PIXEL = '8b02d641c9ae4f77b3e15a90dd276c84'
@@ -162,7 +162,54 @@ const peerDevMock: PeerDevMockWithTrusted = {
   ],
 }
 
-// SDK PluginDevMock 协议要求 { peer } 包装（loader getDevMock(id)?.peer 消费；
+// SDK PluginDevMock 协议要求 { peer } 包装（loader 按种子子域判断注入；
 // 此前导出扁平 PeerDevMock 导致 dev-shell 种子永远读不到，面板/consent 全空）
-const devMock: DevMockWithPeer = { peer: peerDevMock }
+const devMock: DevMockWithPeer = {
+  peer: peerDevMock,
+  // ==================== 传输域种子（SDK TransferDevMock 协议） ====================
+  transfer: {
+    // 远端共享根（对端设备侧演示目录；dirId + 根内相对路径寻址，契约见 useRemoteFs）
+    remoteFs: {
+      roots: [
+        { id: 'root-dcim', name: 'DCIM' },
+        { id: 'root-download', name: 'Download' },
+        { id: 'root-weixin', name: '微信文件' },
+      ],
+      files: {
+        'root-dcim::': [
+          { name: 'Camera', size: 0, mtime: 1754688000, isDir: true },
+          { name: 'Screenshots', size: 0, mtime: 1754662000, isDir: true },
+          { name: 'IMG_20240801_1932.jpg', size: 4869382, mtime: 1754664000, isDir: false },
+          { name: 'VID_20240801_1820.mp4', size: 89244416, mtime: 1754665000, isDir: false },
+        ],
+        'root-dcim::Camera': [
+          { name: 'IMG_20240801_1800.jpg', size: 4123400, mtime: 1754664000, isDir: false },
+          { name: 'IMG_20240801_1815.jpg', size: 3891100, mtime: 1754664600, isDir: false },
+        ],
+        'root-download::': [
+          { name: 'BedCode-2.0.0.apk', size: 68_000_000, mtime: 1754560000, isDir: false },
+          { name: 'Ubuntu-24.04.iso', size: 4_720_000_000, mtime: 1754550000, isDir: false },
+        ],
+        'root-weixin::': [
+          { name: '产品需求文档_v3.docx', size: 248320, mtime: 1754577000, isDir: false },
+          { name: '会议录音_产品周会.mp3', size: 12695376, mtime: 1754520000, isDir: false },
+        ],
+      },
+    },
+    // 本机共享设置（roots 为宿主 wire DTO 形状，含 SAF tree_uri）
+    settings: {
+      roots: [
+        {
+          id: 'builtin-private-downloads',
+          name: 'app 私有下载目录',
+          tree_uri: '',
+          builtin: true,
+        },
+      ],
+      policyMode: 'ask',
+      askTimeoutSec: 60,
+      downloadDir: 'MediaStore/Downloads',
+    },
+  },
+}
 export default devMock

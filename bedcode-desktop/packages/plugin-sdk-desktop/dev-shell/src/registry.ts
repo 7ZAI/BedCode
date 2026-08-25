@@ -86,6 +86,8 @@ export interface DevPluginRecord {
   context: any
   /** devMock 注册句柄（deactivate 时清理） */
   devMockDisposable?: Disposable
+  /** 领域命令 mock 注入句柄（清理模拟定时器；deactivate 时调用） */
+  mockDisposable?: Disposable
 }
 
 const plugins = ref<DevPluginRecord[]>([])
