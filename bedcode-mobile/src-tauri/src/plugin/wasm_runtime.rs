@@ -9,7 +9,11 @@
 //!
 //! 安全机制（09 清理后原样保留）：
 //! - 燃料看门狗：单次导出调用预算，宿主调用阻塞不消耗燃料
-//! - ResourceLimiter：单插件线性内存 256MB / 表 1M 条
+//! - ResourceLimiter：单插件线性内存 256MB / 表 1M 条，
+//!   实例/内存/表数量封顶（防多内存声明放大 VA 占用）
+//! - 线性内存预留即硬顶：`memory_reservation` 按估算的最大线性内存
+//!   （= limiter 上限）预留 VA + `memory_may_move(false)` 杜绝搬移；
+//!   栈深 512KiB 上限防递归打穿真实线程栈
 //! - granted_permissions 校验（manifest.permissions，host 调用前检查）
 //! - `abi.version()` 协商：插件版本高于宿主支持版本拒绝加载（fail-closed）
 //! - AOT `.cwasm` 缓存：宿主 cache 目录（非插件目录，防产物投毒），
@@ -54,9 +58,36 @@ pub(crate) use component::LoadedComponentPlugin;
 /// 覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
 const FUEL_PER_CALL: u64 = 64_000_000_000;
 /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
+///
+/// 双重身份：既是 [`ResourceLimiter`] 的增长拒绝线，也是 Engine 层
+/// `memory_reservation` 预留量的估算依据（估算的最大线性内存）：实例化时按此值
+/// 一次性预留虚拟地址空间，guest 内存增长全程落在预留内（零系统调用、基址不搬移），
+/// 触及上限前已被 limiter 拒绝。预留只占虚拟地址空间，物理内存仍按实际触碰页提交。
+/// 两处必须严格一致：预留小于上限会让合法增长退化为搬移路径，
+/// 大于上限则白白放大 VA 占用。移动端构建目标均为 64 位
+/// （arm64-v8a / x86_64），VA 充裕，与桌面端同值
 const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
 /// 单插件表元素上限
 const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
+/// Wasm 执行栈深度上限（字节）——guest 深度递归超限即确定性栈溢出 trap
+///
+/// 防递归打穿真实线程栈导致进程 abort。宿主函数栈帧不计入此预算但计入真实
+/// 线程栈，故该值必须显著小于调用方线程栈余量（Android JNI 调用线程 /
+/// tokio blocking 线程 ≥ 1-2MiB）。与 wasmtime 默认一致（512KiB），
+/// 显式钉死防止上游默认漂移
+const MAX_WASM_STACK_BYTES: usize = 512 * 1024;
+/// 单 Store 核心实例数上限
+///
+/// 组件实例化会为 wit-component 嵌入的 adapter module 派生额外核心实例
+/// （正常插件 1-2 个），留余量的同时封顶防滥用；超限实例化直接报错
+const MAX_PLUGIN_INSTANCES_PER_STORE: usize = 8;
+/// 单 Store 线性内存数量上限
+///
+/// 每个线性内存独立预留 VA（上限 × ~288MiB 含 guard），移动端 VA 相对宝贵，
+/// 多内存声明会线性放大占用；WASI preview2 插件正常仅 1 个内存
+const MAX_PLUGIN_MEMORIES_PER_STORE: usize = 4;
+/// 单 Store 表数量上限——adapter module 自带间接调用表，正常插件个位数
+const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
 
 /// WASM 插件运行时（全局共享）
 ///
@@ -124,6 +155,18 @@ impl ResourceLimiter for WasmPluginState {
             Ok(true)
         }
     }
+
+    fn instances(&self) -> usize {
+        MAX_PLUGIN_INSTANCES_PER_STORE
+    }
+
+    fn memories(&self) -> usize {
+        MAX_PLUGIN_MEMORIES_PER_STORE
+    }
+
+    fn tables(&self) -> usize {
+        MAX_PLUGIN_TABLES_PER_STORE
+    }
 }
 
 /// 宿主上下文（注入到 WasmPluginState）
@@ -177,6 +220,19 @@ impl WasmRuntime {
         let mut config = Config::new();
         // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
         config.consume_fuel(true);
+        // 线性内存预留 = 估算的最大线性内存（与 limiter 上限严格一致，见
+        // MAX_PLUGIN_MEMORY_BYTES）：实例化时一次性预留 256MiB 虚拟地址空间，
+        // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
+        // 内存）大幅降低 VA 占用。GC 堆未显式配置时沿用同值（wasmtime 语义：
+        // gc_heap_* 缺省继承 memory_* 配置）
+        config.memory_reservation(MAX_PLUGIN_MEMORY_BYTES as u64);
+        // 预留即硬顶：初始分配与增长超出预留前均被 limiter 拒绝（memory_growing
+        // 在物理分配前调用），内存永不搬移；编译器可静态假设基址不变做优化，
+        // 同时杜绝任何路径触发重定位
+        config.memory_may_move(false);
+        // Wasm 执行栈深度上限：深度递归在 wasm 侧确定性栈溢出 trap，
+        // 而非打穿真实线程栈导致进程 abort（见 MAX_WASM_STACK_BYTES）
+        config.max_wasm_stack(MAX_WASM_STACK_BYTES);
         // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
         match Cache::new(CacheConfig::new()) {
             Ok(cache) => {
