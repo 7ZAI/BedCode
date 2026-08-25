@@ -293,3 +293,151 @@ impl WasmHostContext {
 // 组件路径的 Host trait impl（wasm_runtime/component.rs）直接调用。
 // core 形态的 func_wrap 胶水（Caller + (ptr,len) 内存搬运）已在 09 清理。
 mod host_impl;
+
+// ==================== Async Blocking Helper ====================
+
+/// 在同步上下文（WASM host function）中阻塞驱动 async future
+///
+/// WASM host functions 是同步的，但需要调用 async Tokio 代码（消息总线、
+/// fs 授权、对等网络等）。宿主函数可能运行在三种线程上：
+/// - 多线程 runtime 的 worker 线程：必须先 `block_in_place` 让出 worker 池，
+///   否则 `Handle::block_on` 直接 panic；
+/// - spawn_blocking / 纯 std 线程：无 runtime 上下文，任意 handle 上阻塞均合法；
+/// - current_thread runtime：`block_in_place` 会 panic，改在新线程上执行。
+///
+/// 重入安全：外层 `block_in_place(|| handle.block_on(...))` 的 tokio enter 守卫
+/// 在 host fn 回调里仍挂在当前线程上，嵌套 `handle.block_on` 必然 panic
+/// （"Cannot start a runtime from within a runtime"）。panic 穿透污染 wasmtime
+/// Store（同步引擎 `set_trapped`），实例后续所有调用恒报
+/// "cannot enter component instance"，插件整体失效。故用线程局部标志检测重入，
+/// 重入时改在新线程上 block_on：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
+/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
+/// （与桌面端 wasm_runtime.rs 同名函数同策略，回归测试亦同源）
+thread_local! {
+    /// 当前线程是否已处于 block_in_place 让出后的阻塞上下文
+    static IN_BLOCK_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// 重入标志的 RAII 守卫：作用域退出（含 block_in_place panic 穿透）时复位标志，
+/// 避免线程残留 `true` 导致后续调用恒走新线程路径（正确但多一次线程切换）
+struct BlockInPlaceGuard;
+
+impl BlockInPlaceGuard {
+    /// 进入阻塞上下文：重入时返回 None（调用方改走新线程路径）
+    fn enter() -> Option<Self> {
+        if IN_BLOCK_IN_PLACE.with(|f| f.get()) {
+            return None;
+        }
+        IN_BLOCK_IN_PLACE.with(|f| f.set(true));
+        Some(BlockInPlaceGuard)
+    }
+}
+
+impl Drop for BlockInPlaceGuard {
+    fn drop(&mut self) {
+        IN_BLOCK_IN_PLACE.with(|f| f.set(false));
+    }
+}
+
+pub(crate) fn block_on_async<F, R>(handle: &tokio::runtime::Handle, fut: F) -> R
+where
+    F: std::future::Future<Output = R> + Send,
+    R: Send,
+{
+    let Ok(current) = tokio::runtime::Handle::try_current() else {
+        // 无当前 runtime 上下文（spawn_blocking 阻塞线程 / 纯 std 线程）：
+        // 直接在应用 handle 上阻塞执行（合法，无 enter 守卫冲突）
+        return handle.block_on(fut);
+    };
+    match current.runtime_flavor() {
+        tokio::runtime::RuntimeFlavor::MultiThread => {
+            if let Some(_guard) = BlockInPlaceGuard::enter() {
+                // guard 持有期间当前线程在 worker 池外阻塞；退出（含 panic）时复位重入标志
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            } else {
+                // 重入：当前线程已被外层 block_in_place + handle.block_on 占据
+                // （enter 守卫仍生效），嵌套 handle.block_on 必然 panic。
+                // 新线程无 enter 守卫，block_on 合法；外层同步 join 等待结果。
+                std::thread::scope(|s| {
+                    s.spawn(|| handle.block_on(fut))
+                        .join()
+                        .expect("block_on_async: spawned thread panicked")
+                })
+            }
+        }
+        _ => {
+            // current_thread 运行时：block_in_place 会 panic，改在新线程上执行
+            std::thread::scope(|s| {
+                s.spawn(|| handle.block_on(fut))
+                    .join()
+                    .expect("block_on_async: spawned thread panicked")
+            })
+        }
+    }
+}
+
+#[cfg(test)]
+mod blocking_helper_tests {
+    use super::block_on_async;
+
+    /// worker 线程路径：block_in_place 让出后阻塞驱动（真实分发场景）
+    #[test]
+    fn block_on_async_on_worker_thread_no_panic() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tokio::spawn(async move {
+                let v = block_on_async(
+                    &tokio::runtime::Handle::current(),
+                    async {
+                        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        7u32
+                    },
+                );
+                assert_eq!(v, 7);
+            })
+            .await
+            .expect("worker task must not panic");
+        });
+    }
+
+    /// 重入路径：外层 block_on_async 的 enter 守卫仍挂在当前线程时再调一次，
+    /// 必须改走新线程而非 panic（旧实现此处直接 panic 污染 Store——2026-08-26
+    /// 真机 file-transfer 插件整体失效的根因）
+    #[test]
+    fn block_on_async_reentrant_nested_call_no_panic() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            tokio::spawn(async move {
+                let outer = block_on_async(&tokio::runtime::Handle::current(), async {
+                    let inner = block_on_async(&tokio::runtime::Handle::current(), async {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        42u32
+                    });
+                    inner * 2
+                });
+                assert_eq!(outer, 84);
+            })
+            .await
+            .expect("nested task must not panic");
+        });
+    }
+
+    /// 无 runtime 上下文线程路径：spawn_blocking / 纯 std 线程直接阻塞合法
+    #[test]
+    fn block_on_async_from_plain_thread_without_runtime_context() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let handle = rt.handle().clone();
+        let got = std::thread::spawn(move || {
+            block_on_async(
+                &handle,
+                async {
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                    String::from("ok")
+                },
+            )
+        })
+        .join()
+        .expect("plain thread must not panic");
+        assert_eq!(got, "ok");
+    }
+}

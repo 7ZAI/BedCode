@@ -4,7 +4,8 @@
 //! `peer_receive` / `peer_remote` 的既有异步实现（与 Tauri 命令同一真源），
 //! DTO 以 JSON 字符串过界。无头上下文（app_handle = None）一律报错。
 
-use crate::plugin::wasm_runtime::WasmPluginState;
+use super::super::{block_on_async, WasmPluginState};
+use super::support::guarded_host_call;
 
 /// 权限守卫：peer 能力统一门禁
 fn require_peer_permission(state: &WasmPluginState) -> Result<(), String> {
@@ -29,51 +30,58 @@ fn require_app(state: &WasmPluginState) -> Result<tauri::AppHandle, String> {
 }
 
 /// 宿主命令返回 crate::Result<T>（AppError）——WASM 边界统一转可读字符串，
-/// 并经插件专属 runtime handle 阻塞驱动（host fn 同步语义）
-fn run<T>(state: &WasmPluginState, fut: impl std::future::Future<Output = crate::Result<T>>) -> Result<T, String> {
-    state
-        .runtime_handle
-        .block_on(fut)
-        .map_err(|e| e.to_string())
+/// 经 [`block_on_async`] 阻塞驱动（host fn 同步语义；worker 线程上自动
+/// block_in_place，重入时改新线程，避免 "Cannot start a runtime from within
+/// a runtime" panic 污染 wasmtime Store 导致插件整体失效——2026-08-26 真机实证）。
+/// 外层 [`guarded_host_call`] 兜底隔离残余 panic（与其他 host 域同防御深度）。
+fn run<T, F>(state: &WasmPluginState, name: &'static str, fut: F) -> Result<T, String>
+where
+    T: Send,
+    F: std::future::Future<Output = crate::Result<T>> + Send,
+{
+    let handle = state.runtime_handle.clone();
+    guarded_host_call(&state.plugin_id, name, Err(format!("{name} panicked")), || {
+        block_on_async(&handle, fut).map_err(|e| e.to_string())
+    })
 }
 
 pub(crate) fn peer_list_devices(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dtos = run(state, crate::peer_net::list_discovered_peers(app))?;
+    let dtos = run(state, "host_peer_list_devices", crate::peer_net::list_discovered_peers(app))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize devices failed: {e}"))
 }
 
 pub(crate) fn peer_dial(state: &WasmPluginState, node_id: &str) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dto = run(state, crate::peer_net::dial_peer(app, node_id.to_string()))?;
+    let dto = run(state, "host_peer_dial", crate::peer_net::dial_peer(app, node_id.to_string()))?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize dial result failed: {e}"))
 }
 
 pub(crate) fn peer_disconnect(state: &WasmPluginState, node_id: &str) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_net::disconnect_peer(app, node_id.to_string()))
+    run(state, "host_peer_disconnect", crate::peer_net::disconnect_peer(app, node_id.to_string()))
 }
 
 pub(crate) fn peer_respond_consent(state: &WasmPluginState, request_id: &str, accepted: bool) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_net::respond_peer_consent(app, request_id.to_string(), accepted))
+    run(state, "host_peer_respond_consent", crate::peer_net::respond_peer_consent(app, request_id.to_string(), accepted))
 }
 
 pub(crate) fn peer_list_trusted(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dtos = run(state, crate::peer_net::list_trusted_peers(app))?;
+    let dtos = run(state, "host_peer_list_trusted", crate::peer_net::list_trusted_peers(app))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize trusted peers failed: {e}"))
 }
 
 pub(crate) fn peer_revoke_trusted(state: &WasmPluginState, node_id: &str) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_net::revoke_trusted_peer(app, node_id.to_string()))
+    run(state, "host_peer_revoke_trusted", crate::peer_net::revoke_trusted_peer(app, node_id.to_string()))
 }
 
 pub(crate) fn peer_send_files(state: &WasmPluginState, node_id: &str, paths_json: &str) -> Result<String, String> {
@@ -81,101 +89,101 @@ pub(crate) fn peer_send_files(state: &WasmPluginState, node_id: &str, paths_json
     let paths: Vec<String> =
         serde_json::from_str(paths_json).map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let app = require_app(state)?;
-    let dto = run(state, crate::peer_transfer::send_files_to_peer(app, node_id.to_string(), paths))?;
+    let dto = run(state, "host_peer_send_files", crate::peer_transfer::send_files_to_peer(app, node_id.to_string(), paths))?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize transfer dto failed: {e}"))
 }
 
 pub(crate) fn peer_list_transfers(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dtos = run(state, crate::peer_transfer::list_peer_transfers(app))?;
+    let dtos = run(state, "host_peer_list_transfers", crate::peer_transfer::list_peer_transfers(app))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize transfers failed: {e}"))
 }
 
 pub(crate) fn peer_cancel_transfer(state: &WasmPluginState, batch_id: &str) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_transfer::cancel_peer_transfer(app, batch_id.to_string()))
+    run(state, "host_peer_cancel_transfer", crate::peer_transfer::cancel_peer_transfer(app, batch_id.to_string()))
 }
 
 pub(crate) fn peer_retry_transfer(state: &WasmPluginState, batch_id: &str) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dto = run(state, crate::peer_transfer::retry_peer_transfer(app, batch_id.to_string()))?;
+    let dto = run(state, "host_peer_retry_transfer", crate::peer_transfer::retry_peer_transfer(app, batch_id.to_string()))?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize transfer dto failed: {e}"))
 }
 
 pub(crate) fn peer_clear_transfer_history(state: &WasmPluginState) -> Result<u32, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let n = run(state, crate::peer_transfer::clear_peer_transfer_history(app))?;
+    let n = run(state, "host_peer_clear_transfer_history", crate::peer_transfer::clear_peer_transfer_history(app))?;
     Ok(n as u32)
 }
 
 pub(crate) fn peer_list_receiving(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dtos = run(state, crate::peer_receive::list_peer_receiving(app))?;
+    let dtos = run(state, "host_peer_list_receiving", crate::peer_receive::list_peer_receiving(app))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize receiving failed: {e}"))
 }
 
 pub(crate) fn peer_respond_transfer(state: &WasmPluginState, batch_id: &str, accept: bool) -> Result<(), String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let _hit = run(state, crate::peer_receive::respond_peer_transfer(app, batch_id.to_string(), accept))?;
+    let _hit = run(state, "host_peer_respond_transfer", crate::peer_receive::respond_peer_transfer(app, batch_id.to_string(), accept))?;
     Ok(())
 }
 
 pub(crate) fn peer_cancel_receiving(state: &WasmPluginState, batch_id: &str) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_receive::cancel_peer_receiving(app, batch_id.to_string()))
+    run(state, "host_peer_cancel_receiving", crate::peer_receive::cancel_peer_receiving(app, batch_id.to_string()))
 }
 
 pub(crate) fn peer_clear_receiving_history(state: &WasmPluginState) -> Result<u32, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let n = run(state, crate::peer_receive::clear_peer_receiving_history(app))?;
+    let n = run(state, "host_peer_clear_receiving_history", crate::peer_receive::clear_peer_receiving_history(app))?;
     Ok(n as u32)
 }
 
 pub(crate) fn peer_get_receive_settings(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dto = run(state, crate::peer_receive::get_peer_receive_settings(app))?;
+    let dto = run(state, "host_peer_get_receive_settings", crate::peer_receive::get_peer_receive_settings(app))?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize receive settings failed: {e}"))
 }
 
 pub(crate) fn peer_set_receive_policy(state: &WasmPluginState, mode: &str, timeout_secs: u64) -> Result<(), String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_receive::set_peer_receive_policy(app, mode.to_string(), timeout_secs))
+    run(state, "host_peer_set_receive_policy", crate::peer_receive::set_peer_receive_policy(app, mode.to_string(), timeout_secs))
 }
 
 pub(crate) fn peer_set_transfer_encryption(state: &WasmPluginState, enabled: bool) -> Result<(), String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_receive::set_peer_transfer_encryption(app, enabled))
+    run(state, "host_peer_set_transfer_encryption", crate::peer_receive::set_peer_transfer_encryption(app, enabled))
 }
 
 pub(crate) fn peer_list_shared_directories(state: &WasmPluginState) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let dtos = run(state, crate::peer_net::list_shared_directories(app))?;
+    let dtos = run(state, "host_peer_list_shared_dirs", crate::peer_net::list_shared_directories(app))?;
     serde_json::to_string(&dtos).map_err(|e| format!("serialize shared dirs failed: {e}"))
 }
 
 pub(crate) fn peer_remove_shared_directory(state: &WasmPluginState, id: &str) -> Result<bool, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    run(state, crate::peer_net::remove_shared_directory(app, id.to_string()))
+    run(state, "host_peer_remove_shared_dir", crate::peer_net::remove_shared_directory(app, id.to_string()))
 }
 
 pub(crate) fn peer_add_shared_directory(state: &WasmPluginState, _request_json: &str) -> Result<String, String> {
     require_peer_permission(state)?;
     // 移动端忽略请求载荷：弹 SAF 目录树选择器，授权与条目落盘由宿主完成
     let app = require_app(state)?;
-    let dto = run(state, crate::peer_net::add_shared_directory_saf(app))?
+    let dto = run(state, "host_peer_add_shared_dir", crate::peer_net::add_shared_directory_saf(app))?
         .ok_or_else(|| "add shared directory: user cancelled".to_string())?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize shared dir failed: {e}"))
 }
@@ -183,7 +191,7 @@ pub(crate) fn peer_add_shared_directory(state: &WasmPluginState, _request_json: 
 pub(crate) fn peer_list_shared_roots(state: &WasmPluginState, node_id: &str) -> Result<String, String> {
     require_peer_permission(state)?;
     let app = require_app(state)?;
-    let roots = run(state, crate::peer_remote::list_peer_shared_roots(app, node_id.to_string()))?;
+    let roots = run(state, "host_peer_list_remote_roots", crate::peer_remote::list_peer_shared_roots(app, node_id.to_string()))?;
     serde_json::to_string(&roots).map_err(|e| format!("serialize shared roots failed: {e}"))
 }
 
@@ -197,6 +205,7 @@ pub(crate) fn peer_browse_directory(
     let app = require_app(state)?;
     let dto = run(
         state,
+        "host_peer_browse_directory",
         crate::peer_remote::browse_peer_directory(app, node_id.to_string(), dir_id.to_string(), rel_path.to_string()),
     )?;
     serde_json::to_string(&dto).map_err(|e| format!("serialize browse listing failed: {e}"))
@@ -214,6 +223,7 @@ pub(crate) fn peer_pull_files(
     let app = require_app(state)?;
     let n = run(
         state,
+        "host_peer_pull_files",
         crate::peer_remote::pull_peer_files(app, node_id.to_string(), dir_id.to_string(), files),
     )?;
     Ok(n as u32)
@@ -222,12 +232,12 @@ pub(crate) fn peer_pull_files(
 pub(crate) fn peer_pick_files(state: &WasmPluginState) -> Result<String, String> {
     // 选源对话框本身即用户授权动作，不再叠加 peer 权限门
     let app = require_app(state)?;
-    let paths = run(state, crate::peer_transfer::peer_pick_files(app))?;
+    let paths = run(state, "host_peer_pick_files", crate::peer_transfer::peer_pick_files(app))?;
     serde_json::to_string(&paths).map_err(|e| format!("serialize picked files failed: {e}"))
 }
 
 pub(crate) fn peer_pick_folder(state: &WasmPluginState) -> Result<String, String> {
     let app = require_app(state)?;
-    let paths = run(state, crate::peer_transfer::peer_pick_folder(app))?;
+    let paths = run(state, "host_peer_pick_folder", crate::peer_transfer::peer_pick_folder(app))?;
     Ok(paths.into_iter().next().unwrap_or_default())
 }
