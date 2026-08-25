@@ -246,6 +246,70 @@ export function registerFileTransferPeerMock(
     return { entries: entries.map((e) => ({ ...e })) }
   })
 
+  // ==================== 设置域（useSettings 契约：宿主 wire DTO 形状） ====================
+  // 此前未注册导致移动端设置页加载空、添加共享目录/保存策略全部报错。
+  // 形状对齐宿主 get_settings 返回值（mapWireSettings 消费 snake_case）
+  interface MockSharedDir {
+    id: string
+    name: string
+    tree_uri: string
+    builtin?: boolean
+  }
+  const localRoots: MockSharedDir[] = [
+    {
+      id: 'builtin-private-downloads',
+      name: 'app 私有下载目录',
+      tree_uri: '',
+      builtin: true,
+    },
+  ]
+  let policyMode: string = 'ask'
+  let askTimeoutSec = 60
+
+  context.commands.register('file-transfer.get-settings', () => ({
+    roots: localRoots.map((r) => ({ ...r })),
+    policy_mode: policyMode,
+    ask_timeout_sec: askTimeoutSec,
+    download_dir: 'MediaStore/Downloads',
+  }))
+  context.commands.register('file-transfer.set-settings', (args: any) => {
+    if (typeof args?.receivingPolicy === 'string') {
+      policyMode = args.receivingPolicy === 'accept'
+        ? 'always_accept'
+        : args.receivingPolicy === 'reject'
+          ? 'always_deny'
+          : 'ask'
+    }
+    if (typeof args?.approvalTimeoutSec === 'number') {
+      askTimeoutSec = Math.min(Math.max(Math.round(args.approvalTimeoutSec), 10), 600)
+    }
+    return { ok: true }
+  })
+  // 添加共享目录：模拟 SAF 目录树选择器授权成功（追加演示条目，同名幂等）；
+  // 真实取消路径由宿主选择器决定，mock 直接返回 ok 驱动「添加 → 列表刷新」全链演示
+  let safSeq = 0
+  context.commands.register('file-transfer.mount-local', () => {
+    safSeq += 1
+    const entry: MockSharedDir = {
+      id: `root-saf-${safSeq}`,
+      name: `SDCARD${safSeq > 1 ? safSeq : ''}`,
+      tree_uri: `content://com.android.externalstorage.documents/tree/primary%3ADocuments-${safSeq}`,
+    }
+    if (!localRoots.some((r) => r.tree_uri === entry.tree_uri)) {
+      localRoots.push(entry)
+    }
+    return { ok: true }
+  })
+  context.commands.register('file-transfer.update-roots', (args: any) => {
+    const removeId: string | undefined = typeof args?.remove === 'string' ? args.remove : undefined
+    if (!removeId) return { removed: false }
+    const target = localRoots.find((r) => r.id === removeId)
+    if (!target || target.builtin) return { removed: false }
+    const idx = localRoots.indexOf(target)
+    localRoots.splice(idx, 1)
+    return { removed: true }
+  })
+
   // ==================== 初始与延迟补发 ====================
 
   // 初始推送（工具箱入口等早订阅者）+ WS 控制面在线（顶栏 pill / connOnline）
