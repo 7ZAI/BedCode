@@ -42,6 +42,10 @@ const zhCN: Record<string, string> = {
   moveUp: '上移',
   moveDown: '下移',
   edit: '编辑',
+  editTitle: '编辑任务',
+  editPlaceholder: '输入任务内容...',
+  editHint: '支持多行内容',
+  save: '保存',
   delete: '删除',
   loading: '加载中...',
   // ==================== 工具箱入口 ====================
@@ -150,6 +154,10 @@ const en: Record<string, string> = {
   moveUp: 'Move Up',
   moveDown: 'Move Down',
   edit: 'Edit',
+  editTitle: 'Edit Task',
+  editPlaceholder: 'Enter task content...',
+  editHint: 'Multi-line supported',
+  save: 'Save',
   delete: 'Delete',
   loading: 'Loading...',
   // ==================== Toolbox entries ====================
