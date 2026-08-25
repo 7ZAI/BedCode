@@ -742,8 +742,8 @@ fn pi_extension_port_matches(content: &str, port: u16) -> bool {
 }
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
-/// （端口匹配检查无法发现脚本内容更新）
-const PI_EXTENSION_TEMPLATE_VERSION: &str = "2";
+/// （端口匹配检查无法发现脚本内容更新）。v3：agent_settled 区分成败终态
+const PI_EXTENSION_TEMPLATE_VERSION: &str = "3";
 
 /// 检查已部署扩展是否携带当前模板版本标记
 fn pi_extension_version_matches(content: &str) -> bool {
