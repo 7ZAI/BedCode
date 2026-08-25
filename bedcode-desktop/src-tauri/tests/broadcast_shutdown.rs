@@ -152,7 +152,6 @@ async fn init_test_app_context() {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .file_service(plugin_host.file_service().clone())
             .pairing_service(pairing_service.clone())
             .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
@@ -362,9 +361,8 @@ async fn authenticate_with_jwt(
 
 /// 轮询等待流中出现满足条件的业务消息（5s 超时）
 ///
-/// 认证成功后服务端还会补发文件服务快照（push_file_service_snapshot，
-/// 无插件时为 FileService(Withdraw)），必须先于 echo 到达客户端——
-/// 等待目标消息时必须跳过这些无关推送，不能假设下一帧就是响应
+/// 服务端可能先于响应推送无关业务帧，等待目标消息时必须跳过，
+/// 不能假设下一帧就是响应
 async fn wait_for_message(stream: &mut WsRecv, is_match: impl FnMut(&Message) -> bool) -> Message {
     let deadline = Instant::now() + Duration::from_secs(5);
     let mut is_match = is_match;

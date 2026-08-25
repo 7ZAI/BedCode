@@ -136,7 +136,6 @@ async fn init_test_app_context() -> String {
             .session_manager(session_manager.clone())
             .config_manager(config_manager.clone())
             .plugin_host(plugin_host.clone())
-            .file_service(plugin_host.file_service().clone())
             .pairing_service(pairing_service.clone())
             .qr_manager(qr_manager.clone())
             .mdns_advertiser(mdns_advertiser.clone())
