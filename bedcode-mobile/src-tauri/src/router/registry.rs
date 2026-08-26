@@ -142,6 +142,7 @@ mod tests {
                         challenge_nonce: None,
                         signature: None,
                         auth_method: None,
+                        crypto: None,
                     },
                 ),
                 "Auth",
