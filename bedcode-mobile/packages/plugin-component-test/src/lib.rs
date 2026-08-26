@@ -35,8 +35,8 @@ impl AbiGuest for ComponentTestPlugin {
         {
             return 999;
         }
-        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步（=6）
-        6
+        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步（=7）
+        7
     }
 }
 

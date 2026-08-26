@@ -86,7 +86,20 @@ interface host-peer {
     list-devices: func() -> result<string, string>;
     /// 拨号连接指定节点（等待对端确认）→ DialPeerResultDto JSON
     dial-peer: func(node-id: string) -> result<string, string>;
+    /// 按 endpoint 拨号连接（ADR 0022 v2）：endpoint = `{ nodeId, addr, port }`
+    /// （camelCase JSON，插件从自身设备缓存/mdns 事件解析后显式传入；宿主不再内藏
+    /// node-id → 地址解析表）。握手期「证书指纹 ↔ nodeId 绑定 + 信任检查」语义不变。
+    /// 成功返回 session 句柄（`sess-<uuid>`，后续按句柄寻址）；denied/unreachable
+    /// 以错误上抛（携带状态字样）
+    dial-peer-endpoint: func(endpoint-json: string) -> result<string, string>;
+    /// 统一资源关闭（ADR 0022 v2）：session 句柄 = 断开连接；传输句柄 = 取消传输
+    /// （先发送批取消、后接收批取消——pending 接收批被关闭即拒绝，闸门 fail-safe
+    /// 的自然结果）。返回是否命中并关闭了任意资源
+    close: func(handle: string) -> result<bool, string>;
     /// 断开与指定节点的会话（返回是否存在该会话）
+    ///
+    /// 旧式寻址入口（ADR 0022 v2 起由 `close` 取代）：并行保留至插件切换完成
+    /// （Phase 4 退役）。
     disconnect-peer: func(node-id: string) -> result<bool, string>;
     /// 首次连接确认应答（返回是否命中了待确认项）
     respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
@@ -96,6 +109,9 @@ interface host-peer {
     revoke-trusted: func(node-id: string) -> result<bool, string>;
     /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
     /// 扇出 = 对多个对端各调一次，各批相互独立）→ PeerTransferDto JSON
+    ///
+    /// ADR 0022 过渡期双态寻址：首参可为 session 句柄或旧式 node-id；返回 DTO 的
+    /// batchId 即传输句柄（可传给 close 取消）。Phase 4 收紧为仅句柄。
     send-files: func(node-id: string, paths-json: string) -> result<string, string>;
     /// 发送任务列表（含历史）→ PeerTransferDto JSON 数组
     list-transfers: func() -> result<string, string>;
@@ -126,8 +142,18 @@ interface host-peer {
     remove-shared-directory: func(id: string) -> result<bool, string>;
     /// 新增共享目录：request = { name?: string, path?: string }
     /// （桌面端用 path；移动端忽略 path 弹 SAF 目录树选择器）→ SharedDirDto JSON
+    ///
+    /// 旧式单条 CRUD（ADR 0022 v2 起由 `set-shared-roots` 取代）：并行保留至
+    /// 插件切换完成（Phase 4 退役）。
     add-shared-directory: func(request-json: string) -> result<string, string>;
+    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, safTreeUri }]`
+    /// （camelCase JSON；移动端共享根均为 SAF 树 URI）。注册表 CRUD 真源在插件侧，
+    /// 本函数只同步暴露面镜像；任一条目非法整批拒绝
+    set-shared-roots: func(dirs-json: string) -> result<_, string>;
     /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组
+    ///
+    /// ADR 0022 过渡期双态寻址：首参可为 session 句柄或旧式 node-id（下同：
+    /// browse-directory / pull-files），Phase 4 收紧为仅句柄。
     list-shared-roots: func(node-id: string) -> result<string, string>;
     /// 目录下钻 → RemoteBrowseDto JSON
     browse-directory: func(node-id: string, dir-id: string, rel-path: string) -> result<string, string>;
@@ -139,6 +165,32 @@ interface host-peer {
     pick-folder: func() -> result<string, string>;
     /// 设置接收落点目录（移动端固定 MediaStore.Downloads，不支持自定义：返回错误）
     set-download-dir: func(path: string) -> result<_, string>;
+}
+
+/// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
+///
+/// 发现/离开经消息总线 `mdns:found` / `mdns:lost` 推送（host-bus 订阅），
+/// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
+/// Record<string,string> }`，宿主不做任何加工。设备列表（去重/TTL 过期/展示名
+/// 解读）是发现事件的派生视图，由消费插件自建缓存。Android MulticastLock 按
+/// browser 句柄引用计数，插件停用时宿主自动回收其全部句柄。
+///
+/// 自我广播（register/advertise）不进本接口：「本机是谁」与宿主 TLS 监听器
+/// 同生共死，留在 peer-net 启动流程自动完成；无插件激活时主机照样可被发现。
+interface host-mdns {
+    /// 浏览某服务类型，返回 browser 句柄；重复浏览同一类型允许（各自独立生命周期）
+    browse: func(service-type: string) -> result<string, string>;
+    /// 停止浏览并回收句柄（返回是否存在该句柄）；插件停用时宿主自动回收其全部句柄
+    stop-browse: func(browser-id: string) -> result<bool, string>;
+}
+
+/// 通用平台能力域（ADR 0022 v2）：系统对话框/授权等与领域无关的平台交互
+interface host-platform {
+    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）；
+    /// 选择即用户授权动作，不叠加权限门
+    pick-files: func() -> result<string, string>;
+    /// 系统文件夹选择器（SAF 目录树选择器）→ 树 URI；用户取消返回空串
+    pick-folder: func() -> result<string, string>;
 }
 
 // ==================== 插件导出 ====================
@@ -189,6 +241,8 @@ world plugin {
     import host-log;
     import host-bus;
     import host-peer;
+    import host-mdns;
+    import host-platform;
 
     export command;
     export lifecycle;

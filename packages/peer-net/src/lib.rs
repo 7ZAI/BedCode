@@ -51,7 +51,7 @@ pub use cert::{CertDer, generate_self_signed_cert, verify_cert_matches_node_id};
 pub use discovery::{
     CAP_FILE_TRANSFER, DISCOVERY_PROTOCOL_VERSION, DiscoveryCache, DiscoveryConfig,
     DiscoveryDaemon, DiscoveredPeerRecord, PEER_DISCOVERY_TTL, SERVICE_TYPE, SWEEP_INTERVAL,
-    spawn_peer_mdns_daemon,
+    disable_virtual_interfaces, spawn_peer_mdns_daemon,
 };
 pub use error::{PeerNetError, Result};
 pub use frame::{TrustStatus, TrustStatusFrame};

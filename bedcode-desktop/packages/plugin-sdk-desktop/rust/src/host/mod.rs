@@ -20,7 +20,9 @@ pub mod events;
 pub mod fs;
 pub mod http;
 pub mod log;
+pub mod mdns;
 pub mod peer;
+pub mod platform;
 pub mod process;
 pub mod session;
 pub mod storage;
@@ -35,7 +37,9 @@ pub use events::HostEvents;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
+pub use mdns::HostMdns;
 pub use peer::HostPeer;
+pub use platform::HostPlatform;
 pub use process::HostProcess;
 pub use session::HostSession;
 pub use storage::HostStorage;
@@ -157,6 +161,8 @@ pub trait HostApi:
     + HostBus
     + HostConfig
     + HostPeer
+    + HostMdns
+    + HostPlatform
     + HostTimer
     + HostProcess
     + HostApp
@@ -176,6 +182,8 @@ impl<T> HostApi for T where
         + HostBus
         + HostConfig
         + HostPeer
+        + HostMdns
+        + HostPlatform
         + HostTimer
         + HostProcess
         + HostApp

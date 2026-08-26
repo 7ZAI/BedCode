@@ -8,7 +8,7 @@
 //! 管理与宿主上下文定义
 
 mod component;
-mod host_impl;
+pub(crate) mod host_impl;
 
 pub use component::LoadedWasmPlugin;
 

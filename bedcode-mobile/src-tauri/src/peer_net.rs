@@ -46,14 +46,14 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use bedcode_peer_net::{
     CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,
     DiscoveryDaemon, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
     PeerNetNode, PeerNetNodeConfig, RunningNode, SeqReader, SharedDirEntry, SharedDirHandler,
-    SharedDirRoot, SharedSafAccess, SharedDirStore, TrustEvent, TrustStore, TransferConfig,
-    TransferEvent,
+    SharedDirRoot, SharedSafAccess, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore,
+    TransferConfig, TransferEvent,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -291,6 +291,110 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
                 serde_json::json!({ "nodeId": parsed.as_str(), "deviceName": device_name }),
             );
             Ok(result)
+        }
+        Err(PeerNetError::DialDeniedByPeer { .. }) => {
+            tracing::info!(node_id = %parsed, "peer dial denied by remote");
+            Ok(DialPeerResultDto { status: "denied".to_string(), device_name: Some(device_name) })
+        }
+        Err(e) => {
+            tracing::warn!(node_id = %parsed, "peer dial unreachable: {e}");
+            Ok(DialPeerResultDto { status: "unreachable".to_string(), device_name: Some(device_name) })
+        }
+    }
+}
+
+// ==================== endpoint 拨号（ADR 0022 v2）====================
+
+/// endpoint 拨号入参：插件从自身设备缓存（mdns:found 事件派生）解析后显式传入
+///
+/// 宿主不再内藏 node-id → 地址解析表（ADR 0022 v2 裁决）：寻址来源由调用方持有，
+/// 握手期「证书指纹 ↔ nodeId 绑定 + 信任检查」语义与 [`dial_peer`] 完全一致。
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DialEndpoint {
+    /// 对端节点 ID（64 位小写 hex 公钥指纹）
+    pub node_id: String,
+    /// 对端监听地址（IP 或主机名，不带端口）
+    pub addr: String,
+    /// 对端监听端口
+    pub port: u16,
+}
+
+/// 按 endpoint 拨号连接（host-peer `dial-peer-endpoint` 原语的引擎入口）
+///
+/// 与 [`dial_peer`] 唯一差异是寻址来源：不再要求目标在发现缓存中。缓存命中时
+/// 复用其展示名；未命中则回退短指纹占位，并观察一条回退记录进缓存——过渡期
+/// 桥接（数据面函数内部仍按 node-id 寻址且依赖缓存解析元数据，Phase 4 退役）。
+pub async fn dial_peer_endpoint(
+    app: AppHandle,
+    endpoint: DialEndpoint,
+) -> crate::Result<DialPeerResultDto> {
+    let parsed = parse_node_id(&endpoint.node_id)?;
+    let addr: SocketAddr = format!("{}:{}", endpoint.addr.trim(), endpoint.port)
+        .parse()
+        .map_err(|_| {
+            crate::AppError::InvalidInput(format!(
+                "peer-net dial failed: invalid endpoint addr '{}:{}'",
+                endpoint.addr, endpoint.port
+            ))
+        })?;
+    tracing::info!(
+        node_id = %parsed,
+        short = %parsed.short_fingerprint(),
+        peer = %addr,
+        "peer dial requested via endpoint"
+    );
+    let state = app.state::<PeerNetState>();
+
+    let (node, cached_record) = {
+        let guard = state.runtime.lock().await;
+        let runtime = guard.as_ref().ok_or_else(|| {
+            crate::AppError::Internal("peer-net dial failed: node not started".to_string())
+        })?;
+        (runtime.node.clone(), runtime.cache.get(&parsed))
+    };
+    let cache_miss = cached_record.is_none();
+
+    let device_name = cached_record
+        .map(|r| r.device_name)
+        .unwrap_or_else(|| format!("node-{}", parsed.short_fingerprint()));
+    let static_record = StaticPeerRecord { node_id: parsed.clone(), addr };
+    match node.dial(&static_record).await {
+        Ok(connection) => {
+            let replaced = state
+                .connections
+                .lock()
+                .expect("connections table lock poisoned")
+                .insert(parsed.to_string(), connection);
+            drop(replaced);
+            // 过渡期桥接：缓存未命中时补一条回退记录，让按 node-id 寻址的
+            // 数据面函数可用（见函数文档，Phase 4 退役）
+            if cache_miss {
+                if let Some(runtime) = state.runtime.lock().await.as_ref() {
+                    runtime.cache.observe(DiscoveredPeerRecord {
+                        node_id: parsed.clone(),
+                        addr,
+                        device_name: device_name.clone(),
+                        protocol_version: 0,
+                        capabilities: 0,
+                        last_seen: Instant::now(),
+                    });
+                }
+            }
+            tracing::info!(
+                node_id = %parsed,
+                short = %parsed.short_fingerprint(),
+                "peer dialed via endpoint and connected"
+            );
+            emit_json(
+                &app,
+                "peer-connected",
+                serde_json::json!({ "nodeId": parsed.as_str(), "deviceName": device_name }),
+            );
+            Ok(DialPeerResultDto {
+                status: "connected".to_string(),
+                device_name: Some(device_name),
+            })
         }
         Err(PeerNetError::DialDeniedByPeer { .. }) => {
             tracing::info!(node_id = %parsed, "peer dial denied by remote");
@@ -788,6 +892,14 @@ pub async fn add_shared_directory_saf(app: AppHandle) -> crate::Result<Option<Sh
 pub async fn remove_shared_directory(app: AppHandle, id: String) -> crate::Result<bool> {
     let store = shared_handle(&app).await?;
     store.remove(&id).map_err(map_peer_net_error)
+}
+
+/// 全量幂等替换引擎广播源（host-peer `set-shared-roots` 原语的引擎入口，
+/// ADR 0022 v2）：注册表 CRUD 真源已移插件侧，本函数只同步暴露面镜像；
+/// 条目 id/name/root 由调用方构造（移动 SAF 树以 SharedDirRoot::Saf 承载）。
+pub async fn set_shared_roots(app: AppHandle, entries: Vec<SharedDirEntry>) -> crate::Result<()> {
+    let store = shared_handle(&app).await?;
+    store.replace_all(&entries).map_err(map_peer_net_error)
 }
 
 /// 共享目录注册表句柄：未加载时惰性从磁盘加载（管理面在节点从未启动时也可用）

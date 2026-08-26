@@ -241,3 +241,126 @@ pub(crate) fn peer_pick_folder(state: &WasmPluginState) -> Result<String, String
     let paths = run(state, "host_peer_pick_folder", crate::peer_transfer::peer_pick_folder(app))?;
     Ok(paths.into_iter().next().unwrap_or_default())
 }
+
+// ==================== v2 原语（ADR 0022）====================
+
+/// session 句柄路由表：dial-peer-endpoint 铸造的 `sess-<uuid>` → node_id
+///
+/// 进程级单例（与引擎连接生命周期对齐：宿主重启即清空，插件重拨即可）。
+/// 传输句柄不进表——send/pull 返回的 batch-id 本身即唯一句柄，close 按
+/// 「session 表 → 发送取消 → 接收取消」顺序路由，命中即停。
+#[derive(Default)]
+struct PeerHandleTable {
+    sessions: std::collections::HashMap<String, String>,
+}
+
+impl PeerHandleTable {
+    fn mint_session(&mut self, node_id: &str) -> String {
+        let handle = format!("sess-{}", uuid::Uuid::new_v4());
+        self.sessions.insert(handle.clone(), node_id.to_string());
+        handle
+    }
+
+    fn resolve_node_arg(&self, handle_or_node: &str) -> String {
+        self.sessions
+            .get(handle_or_node)
+            .cloned()
+            .unwrap_or_else(|| handle_or_node.to_string())
+    }
+
+    fn take_session(&mut self, handle: &str) -> Option<String> {
+        self.sessions.remove(handle)
+    }
+}
+
+static PEER_HANDLES: std::sync::LazyLock<std::sync::Mutex<PeerHandleTable>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(PeerHandleTable::default()));
+
+fn with_handles<T>(f: impl FnOnce(&mut PeerHandleTable) -> T) -> T {
+    let mut guard = PEER_HANDLES.lock().expect("peer handle table lock poisoned");
+    f(&mut guard)
+}
+
+/// endpoint 拨号：入参 `{ nodeId, addr, port }`（camelCase JSON），返回 session
+/// 句柄。仅 connected 态铸造句柄；denied / unreachable 以错误上抛（携带状态字样）。
+pub(crate) fn peer_dial_endpoint(state: &WasmPluginState, endpoint_json: &str) -> Result<String, String> {
+    require_peer_permission(state)?;
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Endpoint {
+        node_id: String,
+        addr: String,
+        port: u16,
+    }
+    let mut endpoint: Endpoint = serde_json::from_str(endpoint_json)
+        .map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
+    let app = require_app(state)?;
+    let node_id = std::mem::take(&mut endpoint.node_id);
+    let dto = run(
+        state,
+        "host_peer_dial_endpoint",
+        crate::peer_net::dial_peer_endpoint(
+            app,
+            crate::peer_net::DialEndpoint {
+                node_id: node_id.clone(),
+                addr: endpoint.addr,
+                port: endpoint.port,
+            },
+        ),
+    )?;
+    match dto.status.as_str() {
+        "connected" => Ok(with_handles(|t| t.mint_session(&node_id))),
+        other => Err(format!("dial endpoint failed: peer {other}")),
+    }
+}
+
+/// 统一资源关闭：session 句柄 = 断开连接；其余按传输句柄路由（先发送批取消，
+/// 后接收批取消/拒）。关闭 pending 接收批即拒绝——闸门 fail-safe 的自然结果。
+pub(crate) fn peer_close(state: &WasmPluginState, handle: &str) -> Result<bool, String> {
+    require_peer_permission(state)?;
+    let app = require_app(state)?;
+    // ① session 句柄 → 断开连接
+    if let Some(node_id) = with_handles(|t| t.take_session(handle)) {
+        return run(state, "host_peer_close_session", crate::peer_net::disconnect_peer(app, node_id));
+    }
+    // ② 发送传输句柄（batch-id）→ 取消发送批
+    let cancelled = run(
+        state,
+        "host_peer_close_transfer",
+        crate::peer_transfer::cancel_peer_transfer(app.clone(), handle.to_string()),
+    );
+    if matches!(&cancelled, Ok(true)) {
+        return cancelled;
+    }
+    // ③ 接收侧句柄（batch-id）→ 取消/拒绝接收批（pending 即拒）
+    run(
+        state,
+        "host_peer_close_receiving",
+        crate::peer_receive::cancel_peer_receiving(app, handle.to_string()),
+    )
+}
+
+/// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（camelCase JSON，
+/// 移动端共享根均为 SAF 树）；注册表真源在插件侧，此处只同步暴露面镜像。
+pub(crate) fn peer_set_shared_roots(state: &WasmPluginState, dirs_json: &str) -> Result<(), String> {
+    require_peer_permission(state)?;
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SharedRootSeed {
+        id: String,
+        name: String,
+        saf_tree_uri: String,
+    }
+    let seeds: Vec<SharedRootSeed> = serde_json::from_str(dirs_json)
+        .map_err(|e| format!("set shared roots: invalid dirs json: {e}"))?;
+    let entries = seeds
+        .into_iter()
+        .map(|s| bedcode_peer_net::SharedDirEntry {
+            id: s.id,
+            name: s.name,
+            root: bedcode_peer_net::SharedDirRoot::Saf { tree_uri: s.saf_tree_uri },
+        })
+        .collect();
+    let app = require_app(state)?;
+    run(state, "host_peer_set_shared_roots", crate::peer_net::set_shared_roots(app, entries))
+}

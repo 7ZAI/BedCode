@@ -21,8 +21,8 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, fs, http, lifecycle, log, peer, process, session,
-    status, storage, terminal, timer,
+    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform,
+    process, session, status, storage, terminal, timer,
 };
 use super::{block_on_async, WasmHostContext, WasmPluginState, FUEL_PER_CALL};
 use crate::AppError;
@@ -267,6 +267,18 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         peer::peer_list_devices(&self.host_ctx, &self.plugin_id)
     }
 
+    fn dial_peer_endpoint(&mut self, endpoint_json: String) -> Result<String, String> {
+        peer::peer_dial_endpoint(&self.host_ctx, &self.plugin_id, &endpoint_json)
+    }
+
+    fn close(&mut self, handle: String) -> Result<bool, String> {
+        peer::peer_close(&self.host_ctx, &self.plugin_id, &handle)
+    }
+
+    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
+        peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
+    }
+
     fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
         peer::peer_dial(&self.host_ctx, &self.plugin_id, &node_id)
     }
@@ -384,6 +396,28 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 }
 
+// ==================== host-mdns / host-platform（ADR 0022 v2）====================
+
+impl bedcode::plugin::host_mdns::Host for WasmPluginState {
+    fn browse(&mut self, service_type: String) -> Result<String, String> {
+        mdns::mdns_browse(&self.host_ctx, &self.plugin_id, &service_type)
+    }
+
+    fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
+        mdns::mdns_stop_browse(&self.host_ctx, &self.plugin_id, &browser_id)
+    }
+}
+
+impl bedcode::plugin::host_platform::Host for WasmPluginState {
+    fn pick_files(&mut self) -> Result<String, String> {
+        platform::platform_pick_files(&self.host_ctx)
+    }
+
+    fn pick_folder(&mut self) -> Result<String, String> {
+        platform::platform_pick_folder(&self.host_ctx)
+    }
+}
+
 // ==================== Component Linker 组装 ====================
 
 /// 将已接线的 import 接口注册到 component linker
@@ -409,6 +443,8 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_api_call::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;

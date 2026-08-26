@@ -165,6 +165,14 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_list_devices(self)
     }
 
+    fn dial_peer_endpoint(&mut self, endpoint_json: String) -> Result<String, String> {
+        super::host_impl::peer_dial_endpoint(self, &endpoint_json)
+    }
+
+    fn close(&mut self, handle: String) -> Result<bool, String> {
+        super::host_impl::peer_close(self, &handle)
+    }
+
     fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
         super::host_impl::peer_dial(self, &node_id)
     }
@@ -269,6 +277,32 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         // 移动端接收落点固定 MediaStore.Downloads，不支持自定义
         Err("set-download-dir is not supported on mobile (downloads always land in MediaStore.Downloads)".to_string())
     }
+
+    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
+        super::host_impl::peer_set_shared_roots(self, &dirs_json)
+    }
+}
+
+// ==================== host-mdns / host-platform（ADR 0022 v2）====================
+
+impl bedcode::plugin::host_mdns::Host for WasmPluginState {
+    fn browse(&mut self, service_type: String) -> Result<String, String> {
+        super::host_impl::mdns_browse(self, &service_type)
+    }
+
+    fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
+        super::host_impl::mdns_stop_browse(self, &browser_id)
+    }
+}
+
+impl bedcode::plugin::host_platform::Host for WasmPluginState {
+    fn pick_files(&mut self) -> Result<String, String> {
+        super::host_impl::platform_pick_files(self)
+    }
+
+    fn pick_folder(&mut self) -> Result<String, String> {
+        super::host_impl::platform_pick_folder(self)
+    }
 }
 
 // ==================== Component Linker 组装 ====================
@@ -291,6 +325,8 @@ pub(crate) fn build_component_linker(engine: &wasmtime::Engine) -> crate::Result
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(&mut linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -853,7 +889,7 @@ pub(crate) mod tests {
         ))
     }
 
-    /// 组件完整加载往返：实例化 + ABI 协商（version=6）+ 导出完整性 +
+    /// 组件完整加载往返：实例化 + ABI 协商（version=ABI_VERSION）+ 导出完整性 +
     /// 燃料注入生效 + manifest 读取 + Host trait（storage/log）接线直测
     #[test]
     fn test_component_roundtrip_and_host_impl() {
@@ -906,7 +942,7 @@ pub(crate) mod tests {
             let denied = bedcode::plugin::host_storage::Host::get(&mut unauth, "test-key".into());
             assert!(denied.is_err(), "未授权 storage 访问必须被拒绝");
 
-            // abi.version() 协商：version=6 <= ABI_VERSION=6
+            // abi.version() 协商：测试组件版本与 SDK ABI_VERSION 同步
             let exports = plugin.exports().expect("world exports");
             assert_eq!(
                 exports.bedcode_plugin_abi().call_version(&mut plugin.store).unwrap(),
@@ -1163,7 +1199,7 @@ pub(crate) mod tests {
     }
 
     /// 迁移 ticket 04 验收：SDK `wasm_entry!` 宏生成的组件能被宿主加载，
-    /// 完成 ABI 协商（version=6）、激活、命令调用（含错误 JSON 透传）
+    /// 完成 ABI 协商（version=ABI_VERSION）、激活、命令调用（含错误 JSON 透传）
     ///
     /// 被测对象是真实插件（auto-task）经新 SDK 编译的产物 —— 宏展开正确性、
     /// `export!` 跨 crate 接线、8 组接口全量导出的最终证明（插件业务代码零改动）。

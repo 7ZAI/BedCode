@@ -16,13 +16,13 @@
 
 use crate::host::{
     ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
-    HostHttp, HostLog, HostPeer, HostPluginDatabase, HostProcess, HostSession, HostStorage,
-    HostTerminal,
+    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess,
+    HostSession, HostStorage, HostTerminal,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_bus, host_config, host_database, host_events, host_fs,
-    host_http, host_log, host_peer, host_plugin_database, host_process, host_session, host_storage,
-    host_terminal, host_timer,
+    host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
+    host_session, host_storage, host_terminal, host_timer,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -523,5 +523,48 @@ impl HostPeer for WasmHost {
 
     fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError> {
         host_peer::set_transfer_encryption(enabled).map_err(|e| host_err("peer_set_transfer_encryption", e))
+    }
+
+    fn peer_dial_endpoint(&self, endpoint: &serde_json::Value) -> Result<String, HostError> {
+        let endpoint_json = to_json_string("peer_dial_endpoint", endpoint)?;
+        host_peer::dial_peer_endpoint(&endpoint_json).map_err(|e| host_err("peer_dial_endpoint", e))
+    }
+
+    fn peer_close(&self, handle: &str) -> Result<bool, HostError> {
+        host_peer::close(handle).map_err(|e| host_err("peer_close", e))
+    }
+
+    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
+        let dirs_json = to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
+        host_peer::set_shared_roots(&dirs_json).map_err(|e| host_err("peer_set_shared_roots", e))
+    }
+}
+
+// ==================== host-mdns（ADR 0022 v2）====================
+
+impl HostMdns for WasmHost {
+    fn mdns_browse(&self, service_type: &str) -> Result<String, HostError> {
+        host_mdns::browse(service_type).map_err(|e| host_err("mdns_browse", e))
+    }
+
+    fn mdns_stop_browse(&self, browser_id: &str) -> Result<bool, HostError> {
+        host_mdns::stop_browse(browser_id).map_err(|e| host_err("mdns_stop_browse", e))
+    }
+}
+
+// ==================== host-platform（ADR 0022 v2）====================
+
+impl HostPlatform for WasmHost {
+    fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_pick_files",
+            host_platform::pick_files().map_err(|e| host_err("platform_pick_files", e))?,
+        )?;
+        serde_json::from_value(v)
+            .map_err(|e| HostError::custom(-1, format!("platform_pick_files: invalid JSON from host: {e}")))
+    }
+
+    fn platform_pick_folder(&self) -> Result<String, HostError> {
+        host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
     }
 }

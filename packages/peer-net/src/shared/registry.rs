@@ -46,7 +46,7 @@ pub const BUILTIN_DOWNLOADS_ID: &str = "local-downloads";
 // ==================== 数据模型 ====================
 
 /// 共享目录根形态（wire internally tagged，`type` 字段即线上契约）
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SharedDirRoot {
     /// 真实文件系统目录
@@ -268,6 +268,96 @@ impl SharedDirStore {
         }
         tracing::info!(dir_id = %entry.id, name = %entry.name, "shared dir added");
         Ok(entry)
+    }
+
+    /// 全量幂等替换用户条目（ADR 0022 v2：host-peer `set-shared-roots` 原语）
+    ///
+    /// 注册表 CRUD 真源在插件侧（host-plugin-database），引擎侧注册表退化为
+    /// 广播/浏览服务面的镜像：插件每次变更后推送全量列表，本方法整体替换
+    /// 用户条目并原子落盘；内置条目不受影响。
+    ///
+    /// 校验与 [`Self::add`] 同尺逐条施加（名称限长、Fs 根存在且为目录、SAF
+    /// URI 形状、同根去重），另加：ID 非空、不得占用内置保留 ID、ID 与根
+    /// 全表唯一。任一条目非法即整批拒绝（全量语义下部分成功无意义），原有
+    /// 条目保持不变；落盘失败同样回滚内存态。
+    pub fn replace_all(&self, entries: &[SharedDirEntry]) -> Result<()> {
+        let mut seen_ids: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut seen_roots: std::collections::HashSet<&SharedDirRoot> = std::collections::HashSet::new();
+        for entry in entries {
+            let trimmed = entry.name.trim();
+            if trimmed.is_empty() || trimmed.len() > 200 {
+                return Err(PeerNetError::TransferSession {
+                    role: "registry",
+                    detail: format!(
+                        "shared dir name must be 1..=200 bytes, got {} (id {})",
+                        trimmed.len(),
+                        entry.id
+                    ),
+                });
+            }
+            if entry.id.trim().is_empty() || entry.id == BUILTIN_DOWNLOADS_ID {
+                return Err(PeerNetError::TransferSession {
+                    role: "registry",
+                    detail: format!("shared dir id '{}' is reserved or empty", entry.id),
+                });
+            }
+            match &entry.root {
+                SharedDirRoot::Fs { path } => {
+                    let meta = std::fs::metadata(path).map_err(|e| PeerNetError::TransferSession {
+                        role: "registry",
+                        detail: format!(
+                            "shared dir root '{}' inaccessible: {e}",
+                            path.display()
+                        ),
+                    })?;
+                    if !meta.is_dir() {
+                        return Err(PeerNetError::TransferSession {
+                            role: "registry",
+                            detail: format!(
+                                "shared dir root '{}' is not a directory",
+                                path.display()
+                            ),
+                        });
+                    }
+                }
+                SharedDirRoot::Saf { tree_uri } => {
+                    if !tree_uri.starts_with("content://") {
+                        return Err(PeerNetError::TransferSession {
+                            role: "registry",
+                            detail: format!(
+                                "shared dir saf root is not a content uri: {tree_uri}"
+                            ),
+                        });
+                    }
+                }
+            }
+            if !seen_ids.insert(entry.id.as_str()) {
+                return Err(PeerNetError::TransferSession {
+                    role: "registry",
+                    detail: format!("shared dir id duplicated in batch: {}", entry.id),
+                });
+            }
+            if !seen_roots.insert(&entry.root) {
+                return Err(PeerNetError::TransferSession {
+                    role: "registry",
+                    detail: "shared dir root duplicated in batch".to_string(),
+                });
+            }
+        }
+
+        // 规范化名称（trim 后回写）再整体换入；持久化失败回滚旧表
+        let normalized: Vec<SharedDirEntry> = entries
+            .iter()
+            .map(|e| SharedDirEntry { name: e.name.trim().to_string(), ..e.clone() })
+            .collect();
+        let mut dirs = self.dirs.write().expect("dirs lock poisoned");
+        let previous = std::mem::replace(&mut *dirs, normalized);
+        if let Err(e) = self.persist_locked(&dirs) {
+            *dirs = previous;
+            return Err(e);
+        }
+        tracing::info!(count = entries.len(), "shared roots replaced wholesale");
+        Ok(())
     }
 
     /// 移除用户条目并原子落盘；返回该 ID 原本是否存在
@@ -494,5 +584,66 @@ mod tests {
                 .add("docs-again", SharedDirRoot::Fs { path: dir.path().to_path_buf() })
                 .is_err()
         );
+    }
+
+    fn fs_entry(id: &str, name: &str, path: &Path) -> SharedDirEntry {
+        SharedDirEntry {
+            id: id.to_string(),
+            name: name.to_string(),
+            root: SharedDirRoot::Fs { path: path.to_path_buf() },
+        }
+    }
+
+    #[test]
+    fn replace_all_swaps_wholesale_and_persists() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SharedDirStore::load_or_create(dir.path())
+            .expect("create store")
+            .with_builtin_download_dir("下载", dir.path().join("dl"));
+        let old = store
+            .add("old", SharedDirRoot::Fs { path: dir.path().to_path_buf() })
+            .expect("seed old entry");
+
+        // 全量替换：旧条目消失，新条目（插件持有 ID）生效；内置条目不动
+        let seeds = vec![fs_entry("plugin-dir-1", "Docs", dir.path())];
+        store.replace_all(&seeds).expect("replace");
+        let listed = store.list();
+        assert_eq!(listed.len(), 2); // builtin + 1 user
+        assert!(store.get(&old.id).is_none());
+        assert_eq!(store.get("plugin-dir-1").expect("new entry"), seeds[0]);
+        assert_eq!(listed[0].id, BUILTIN_DOWNLOADS_ID);
+
+        // 空表替换 = 清空用户面（幂等）；重载后磁盘态一致
+        store.replace_all(&[]).expect("clear via replace");
+        let reloaded = SharedDirStore::load_or_create(dir.path()).expect("reload");
+        assert!(reloaded.list().is_empty());
+        assert!(reloaded.get("plugin-dir-1").is_none());
+    }
+
+    #[test]
+    fn replace_all_rejects_invalid_batch_atomically() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = SharedDirStore::in_memory().with_builtin_download_dir("下载", dir.path().join("dl"));
+        let good = fs_entry("a1", "A", dir.path());
+        store.replace_all(std::slice::from_ref(&good)).expect("seed");
+
+        // 内置保留 ID 拒绝
+        let bad_id = vec![fs_entry(BUILTIN_DOWNLOADS_ID, "x", dir.path())];
+        assert!(store.replace_all(&bad_id).is_err());
+        // 幽灵路径拒绝
+        let ghost = vec![
+            fs_entry("ok", "Ok", dir.path()),
+            fs_entry("g", "G", &dir.path().join("nope")),
+        ];
+        assert!(store.replace_all(&ghost).is_err());
+        // 同批 ID / 根重复拒绝
+        let dup_id = vec![good.clone(), fs_entry("a1", "B", dir.path())];
+        assert!(store.replace_all(&dup_id).is_err());
+        // 空名拒绝（trim 后）
+        let blank = vec![fs_entry("b1", "   ", dir.path())];
+        assert!(store.replace_all(&blank).is_err());
+
+        // 整批原子性：任一非法 → 原有条目原封不动
+        assert_eq!(store.get("a1"), Some(good));
     }
 }

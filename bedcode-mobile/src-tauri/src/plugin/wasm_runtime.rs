@@ -292,7 +292,7 @@ impl WasmHostContext {
 // 业务逻辑（值传递、权限校验、block_on 执行）在 host_impl/，
 // 组件路径的 Host trait impl（wasm_runtime/component.rs）直接调用。
 // core 形态的 func_wrap 胶水（Caller + (ptr,len) 内存搬运）已在 09 清理。
-mod host_impl;
+pub(crate) mod host_impl;
 
 // ==================== Async Blocking Helper ====================
 

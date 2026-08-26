@@ -37,6 +37,8 @@ pub const PERMISSION_PROCESS: &str = "process:run";
 pub const PERMISSION_APP_CLI: &str = "app:cli";
 /// 对等网络：发现/信任/拨号/收发/浏览的宿主 peer-net 能力（host-peer）
 pub const PERMISSION_PEER: &str = "peer";
+/// mDNS 浏览纯能力：browse-only 发现事件透传（host-mdns，ADR 0022 v2）
+pub const PERMISSION_MDNS: &str = "mdns";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -59,6 +61,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_PROCESS,
     PERMISSION_APP_CLI,
     PERMISSION_PEER,
+    PERMISSION_MDNS,
 ];
 
 /// 权限到 API 方法的映射
@@ -106,7 +109,12 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "peer.browseDirectory",
         "peer.pullFiles",
         "peer.pickFiles",
+        // ADR 0022 v2 新增原语
+        "peer.dialEndpoint",
+        "peer.close",
+        "peer.setSharedRoots",
     ]),
+    (PERMISSION_MDNS, &["mdns.browse", "mdns.stopBrowse"]),
 ];
 
 /// 权限管理器

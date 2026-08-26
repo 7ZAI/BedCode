@@ -22,7 +22,11 @@
 //! - v8: 生命周期契约补全（WIT `on-startup`/`on-shutdown` 携带
 //!   `result<_, string>`），启动初始化/清理的失败可如实上抛宿主，
 //!   宿主据此进入 Degraded 终态而非静默标记 Activated
-pub const ABI_VERSION: u32 = 8;
+//! - v9: host-peer 原语化收缩第一阶段（ADR 0022 v2，issue 13）：新增
+//!   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
+//!   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
+//!   v8 插件二进制不受影响
+pub const ABI_VERSION: u32 = 9;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -36,10 +40,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v8() {
-        // 版本号序列与历史 core ABI 共用：v8 = 生命周期契约补全
-        // （WIT on-startup/on-shutdown 携带 result）
-        assert_eq!(ABI_VERSION, 8);
+    fn test_abi_version_is_v9() {
+        // 版本号序列与历史 core ABI 共用：v9 = host-peer 原语化收缩第一阶段
+        // （dial-peer-endpoint / close / set-shared-roots + host-mdns / host-platform）
+        assert_eq!(ABI_VERSION, 9);
     }
 
     #[test]

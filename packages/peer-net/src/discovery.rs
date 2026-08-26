@@ -444,7 +444,9 @@ const VIRTUAL_IFACE_PATTERNS: &[&str] = &[
 ];
 
 /// 禁用已知虚拟/回环网卡的 mDNS 收发（枚举失败则保持默认全接口，降级不阻断）
-fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
+///
+/// pub：宿主侧独立浏览订阅（host-mdns）同样受多网卡解析延迟困扰，复用本逻辑。
+pub fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
     let Ok(ifaces) = local_ip_address::list_afinet_netifas() else {
         tracing::debug!("peer mDNS interface enumeration unavailable, keep all interfaces");
         return;

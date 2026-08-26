@@ -557,6 +557,9 @@ impl PluginManager {
     ///
     /// 锁约定同 activate：执行 WASM deactivate 导出期间不持 map 守卫
     pub async fn deactivate(&self, plugin_id: &str) -> Result<()> {
+        // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
+        crate::plugin::wasm_runtime::host_impl::purge_browsers_for_plugin(plugin_id);
+
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
             let mut plugins = self.plugins.write().await;

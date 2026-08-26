@@ -12,6 +12,14 @@ use crate::host::HostError;
 pub trait HostPeer {
     /// 发现缓存全量列表（DiscoveredPeerDto JSON 数组）
     fn peer_list_devices(&self) -> Result<serde_json::Value, HostError>;
+    /// 按 endpoint 拨号（ADR 0022 v2）：endpoint = `{ nodeId, addr, port }`，
+    /// 成功返回 session 句柄；denied/unreachable 报错
+    fn peer_dial_endpoint(&self, endpoint: &serde_json::Value) -> Result<String, HostError>;
+    /// 统一资源关闭：session 句柄 = 断开；传输句柄 = 取消。返回是否命中
+    fn peer_close(&self, handle: &str) -> Result<bool, HostError>;
+    /// 全量幂等替换引擎广播源：条目 `[{ id, name, path }]`
+    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
+    /// 发现缓存全量列表（DiscoveredPeerDto JSON 数组）
     /// 拨号连接指定节点（等待对端确认），返回 DialPeerResultDto
     fn peer_dial(&self, node_id: &str) -> Result<serde_json::Value, HostError>;
     /// 断开与指定节点的会话（返回是否存在该会话）
