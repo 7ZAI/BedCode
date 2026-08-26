@@ -305,15 +305,77 @@ impl ConnectionManager {
                 fingerprint: String::new(),
                 session_token: String::new(),
             });
-        client
-            .send(&AuthRequest::reauthenticate(
-                &creds.pairing_id,
-                &creds.fingerprint,
-                &creds.session_token,
-            ))
-            .await?;
 
-        Ok(client)
+        // 链路加密协商（issue 09）：已 pin 且主开关+事件子开关开 → 首消息附带
+        // 临时公钥提案，并等待认证响应完成派生；严格模式下失败即断连报错，
+        // 非 strict 回退明文（与 TS 侧语义一致）
+        let ctx = crate::state::get_link_crypto_context();
+        let negotiate = ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some();
+        let (message, ephemeral) = if negotiate {
+            use base64::Engine as _;
+            let (m_priv, m_pub) = bedcode_link_crypto::generate_ephemeral();
+            let proposal = crate::enums::auth::CryptoProposal {
+                v: 1,
+                ek: base64::engine::general_purpose::STANDARD.encode(m_pub),
+            };
+            (
+                AuthRequest::reauthenticate_with_crypto(
+                    &creds.pairing_id,
+                    &creds.fingerprint,
+                    &creds.session_token,
+                    Some(proposal.clone()),
+                ),
+                Some((m_priv, proposal.ek)),
+            )
+        } else {
+            (
+                AuthRequest::reauthenticate(&creds.pairing_id, &creds.fingerprint, &creds.session_token),
+                None,
+            )
+        };
+
+        match ephemeral {
+            Some((m_priv, m_ek_b64)) => {
+                // 提案路径：等认证响应拿服务端临时公钥回执（明文），随后装密码表。
+                // 语义分层：
+                // · 桌面未回执（拒绝/旧版）→ 服务端仍明文：非 strict 明文续跑，
+                //   strict 断连报错（spec：strict 不允许明文旁路）
+                // · 回执存在但派生/安装失败 → 必须断连：桌面端已注册密码表，
+                //   两端加密意愿不一致的半协商状态比纯明文更危险
+                let timeout = std::time::Duration::from_millis(EVENT_WS_AUTH_TIMEOUT_MS);
+                let response = client.send_and_wait(&message, timeout).await?;
+
+                match extract_crypto_echo(&response) {
+                    Some(echo_ek) => {
+                        if let Err(e) =
+                            install_event_crypto(&client, ctx.clone(), m_priv, m_ek_b64, echo_ek).await
+                        {
+                            client.disconnect().await;
+                            return Err(e);
+                        }
+                        Ok(client)
+                    }
+                    None => {
+                        if ctx.strict_mode {
+                            client.disconnect().await;
+                            Err(crate::AppError::WebSocket(
+                                "link crypto strict mode: desktop refused negotiation".to_string(),
+                            ))
+                        } else {
+                            tracing::warn!(
+                                "[EventWs] desktop refused link crypto, staying plaintext (non-strict)"
+                            );
+                            Ok(client)
+                        }
+                    }
+                }
+            }
+            None => {
+                // 无提案：现状路径（fire-and-forget，默认关时与旧行为一致）
+                client.send(&message).await?;
+                Ok(client)
+            }
+        }
     }
 
     /// 创建连接断开监控任务（WS client 建连后调用）
@@ -675,4 +737,47 @@ impl Clone for ConnectionManager {
             is_reconnecting: self.is_reconnecting.clone(),
         }
     }
+}
+
+// ==================== 事件 WS 链路加密（issue 09） ====================
+
+/// 认证响应等待上限：桌面端 JWT 验签为同步路径，毫秒级返回；10s 已覆盖
+/// 极端弱网 RTT，超时按协商失败处理（strict 断连 / 非 strict 明文）
+pub const EVENT_WS_AUTH_TIMEOUT_MS: u64 = 10_000;
+
+/// 从认证响应中提取服务端临时公钥回执（auth 响应 payload.crypto.ek）
+fn extract_crypto_echo(response: &Message) -> Option<String> {
+    if let Message::Auth { payload, .. } = response {
+        return payload.crypto.as_ref().map(|c| c.ek.clone());
+    }
+    None
+}
+
+/// 用回执完成客户端派生并安装到连接上
+///
+/// 仅做派生与安装；失败语义（断连）由调用方处理——桌面端此时已注册密码表，
+/// 本地装表失败必须断连（半协商状态比纯明文更危险）。
+async fn install_event_crypto(
+    client: &Arc<WsClient>,
+    ctx: crate::state::LinkCryptoContext,
+    m_priv: [u8; 32],
+    m_ek_b64: String,
+    echo_ek: String,
+) -> Result<()> {
+    use base64::Engine as _;
+
+    let kd_public_b64 = ctx.kd_public_b64.ok_or_else(|| {
+        crate::AppError::WebSocket("link crypto context missing pin".to_string())
+    })?;
+    let kd_public: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(&kd_public_b64)
+        .map_err(|e| crate::AppError::WebSocket(format!("pin b64 decode failed: {e}")))?
+        .try_into()
+        .map_err(|v: Vec<u8>| {
+            crate::AppError::WebSocket(format!("pin length mismatch: expected 32, got {}", v.len()))
+        })?;
+    let crypto = bedcode_link_crypto::ClientWsCrypto::derive(&m_priv, &m_ek_b64, &echo_ek, &kd_public)
+        .map_err(|e| crate::AppError::WebSocket(format!("link crypto derive failed: {e}")))?;
+    client.install_link_crypto(crypto).await;
+    Ok(())
 }

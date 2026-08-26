@@ -171,6 +171,28 @@ pub fn ws_set_token(token: String) -> Result<()> {
     Ok(())
 }
 
+// ==================== 链路加密上下文（issue 09） ====================
+
+/// 推送链路加密运行期状态到 Rust 侧（前端设置变更/配对刷新/启动时调用）
+///
+/// 常驻事件 WS 建连在 Rust 侧，而开关与 pin 存于 WebView localStorage——
+/// 本命令是两侧的桥。缺省全关：未推送前事件 WS 保持明文。
+#[tauri::command]
+pub fn set_link_crypto_context(
+    enabled: bool,
+    strict_mode: bool,
+    encrypt_ws_event: bool,
+    kd_public_b64: Option<String>,
+) -> Result<()> {
+    crate::state::set_link_crypto_context(crate::state::LinkCryptoContext {
+        enabled,
+        strict_mode,
+        encrypt_ws_event,
+        kd_public_b64,
+    });
+    Ok(())
+}
+
 /// 获取当前全局 Token
 #[tauri::command]
 pub fn ws_get_token() -> String {

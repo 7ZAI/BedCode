@@ -124,3 +124,53 @@ pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
 }
 
 // ==================== File Service ====================
+
+// ==================== Link Crypto Context（issue 09） ====================
+
+/// 链路加密运行期上下文
+///
+/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而常驻
+/// 事件 WS 建连在 Rust 侧——前端经 `set_link_crypto_context` 命令把当前态
+/// 推送到此，建连时读取。缺省全关：未推送前事件 WS 保持明文（与现状一致）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkCryptoContext {
+    /// 主开关（对应移动端 trafficEncryption.enabled）
+    pub enabled: bool,
+    /// 严格模式：协商被拒/失败时断连报错而非明文续跑
+    pub strict_mode: bool,
+    /// 事件通道子开关（对应桌面 encryptWsEvent）
+    pub encrypt_ws_event: bool,
+    /// 已 pin 的桌面端身份公钥（base64）；None = 未配对/未下发
+    pub kd_public_b64: Option<String>,
+}
+
+impl Default for LinkCryptoContext {
+    fn default() -> Self {
+        Self { enabled: false, strict_mode: false, encrypt_ws_event: true, kd_public_b64: None }
+    }
+}
+
+static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> =
+    std::sync::RwLock::new(LinkCryptoContext {
+        enabled: false,
+        strict_mode: false,
+        encrypt_ws_event: true,
+        kd_public_b64: None,
+    });
+
+/// 读取链路加密运行期上下文快照
+pub fn get_link_crypto_context() -> LinkCryptoContext {
+    LINK_CRYPTO_CONTEXT.read().unwrap().clone()
+}
+
+/// 更新链路加密运行期上下文（前端 set_link_crypto_context 命令调用）
+pub fn set_link_crypto_context(ctx: LinkCryptoContext) {
+    *LINK_CRYPTO_CONTEXT.write().unwrap() = ctx;
+}
+
+/// 事件 WS 是否应发起加密协商：主开关 ∧ 事件子开关 ∧ 已持有 pin。
+/// 协商依赖配对期下发的桌面端身份公钥作信任锚，三者缺一即明文。
+pub fn is_event_encryption_active() -> bool {
+    let ctx = get_link_crypto_context();
+    ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some()
+}

@@ -28,6 +28,7 @@ import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useTheme } from '@/composables/useTheme'
+import { syncLinkCryptoContextToNative } from '@/composables/useLinkEncryption'
 import { useFontSize } from '@/composables/useFontSize'
 import { useSettingsStore } from '@/stores/settings'
 // mDNS 广播暂时禁用：移动端目前不需要被发现，避免扫描到自身
@@ -49,6 +50,9 @@ const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' |
 onMounted(async () => {
   setupTheme()
   setupFontSize()
+  // 链路加密上下文启动同步（issue 09）：Rust 侧事件 WS 建连前需要拿到
+  // 当前开关与 pin；失败静默（默认全关，不影响明文现状）
+  void syncLinkCryptoContextToNative()
   // mDNS 广播暂时禁用
   // try {
   //   const deviceName = `BedCode-Mobile-${Math.random().toString(36).slice(2, 6)}`

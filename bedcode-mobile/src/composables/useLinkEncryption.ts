@@ -57,6 +57,7 @@ const settings = ref<LinkEncryptionSettings>(loadSettings())
 
 function persist() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(settings.value))
+  void syncLinkCryptoContextToNative()
 }
 
 /** 配置快照（响应式） */
@@ -78,6 +79,28 @@ export function useLinkEncryptionSettings() {
     persist()
   }
   return { settings, setEnabled, setStrictMode, setChannel }
+}
+
+/**
+ * 把当前开关与 pin 推送到 Rust 侧（issue 09）
+ *
+ * 常驻事件 WS 建连在 Rust 侧（connection/event_ws.rs），而本模块状态存于
+ * WebView localStorage——经 set_link_crypto_context 命令桥接。调用时机：
+ * 设置变更 / pin 刷新 / 应用启动。失败静默（老宿主无此命令时事件 WS
+ * 保持明文，与默认关行为一致，不阻断 UI）。
+ */
+export async function syncLinkCryptoContextToNative(): Promise<void> {
+  try {
+    const { invoke } = await import('@tauri-apps/api/core')
+    await invoke('set_link_crypto_context', {
+      enabled: settings.value.enabled,
+      strictMode: settings.value.strictMode,
+      encryptWsEvent: settings.value.encryptWsEvent,
+      kdPublicB64: getPinnedKey(),
+    })
+  } catch (e) {
+    console.warn('[LinkEncryption] sync to native failed (non-fatal):', e)
+  }
 }
 
 /** 链路加密参与判定的通道（issue 08：与桌面端三子开关一一对应） */
@@ -115,5 +138,7 @@ export function notePinFromAuthData(data: unknown): void {
     if (typeof kdFingerprint === 'string' && kdFingerprint.length > 0) {
       localStorage.setItem(PIN_FINGERPRINT, kdFingerprint)
     }
+    // pin 刷新即推送 Rust 侧：事件 WS 重连协商依赖最新 pin（issue 09）
+    void syncLinkCryptoContextToNative()
   }
 }

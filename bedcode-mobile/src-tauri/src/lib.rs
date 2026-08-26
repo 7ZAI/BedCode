@@ -191,6 +191,8 @@ pub fn run() {
             commands::connection::ws_set_token,
             commands::connection::ws_get_token,
             commands::connection::ws_clear_token,
+            // Link Crypto Context（issue 09：事件 WS 链路加密桥）
+            commands::connection::set_link_crypto_context,
             // Connection Commands
             commands::connection::ws_connect,
             commands::connection::ws_disconnect,

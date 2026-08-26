@@ -36,6 +36,19 @@ impl AuthRequest {
     /// ① 04 常驻事件 WS 建连后的首消息 JWT 认证；
     /// ② 集成测试驱动真实 WsClient→router→handler 链路。
     pub fn reauthenticate(device_id: &str, fingerprint: &str, session_token: &str) -> Message {
+        Self::reauthenticate_with_crypto(device_id, fingerprint, session_token, None)
+    }
+
+    /// 构建 JWT 重新认证消息（可携链路加密提案，issue 09）
+    ///
+    /// `crypto` 为 Some 时首消息附带客户端临时 X25519 公钥；桌面端接受协商后
+    /// 在 auth 响应明文回执服务端临时公钥，此后帧进入加密模式。
+    pub fn reauthenticate_with_crypto(
+        device_id: &str,
+        fingerprint: &str,
+        session_token: &str,
+        crypto: Option<crate::enums::auth::CryptoProposal>,
+    ) -> Message {
         with_token(Message::Auth {
             message_id: uuid::Uuid::new_v4().to_string(),
             expect_response: true,
@@ -47,6 +60,7 @@ impl AuthRequest {
                 device_id: Some(device_id.to_string()),
                 device_fingerprint: Some(fingerprint.to_string()),
                 session_token: Some(session_token.to_string()),
+                crypto,
                 ..Default::default()
             },
         })
