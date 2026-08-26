@@ -10,6 +10,25 @@ export default {
       pairingCodeTtl: 'Pairing Code Validity',
       pairingCodeTtlDesc: 'Set the validity period for pairing codes (60-3600 seconds)',
     },
+    linkCrypto: {
+      title: 'Link Encryption',
+      master: 'Enable Link Encryption',
+      masterDesc:
+        'End-to-end encrypt traffic over LAN; off by default — pair a mobile device first',
+      encryptHttp: 'Encrypt HTTP Payloads',
+      encryptHttpDesc: 'Envelope encryption for REST request/response bodies (e.g. terminal input)',
+      encryptWsTerminal: 'Encrypt Terminal Channel',
+      encryptWsTerminalDesc: 'WS frame encryption for the terminal channel (PTY output stream)',
+      encryptWsEvent: 'Encrypt Event Channel',
+      encryptWsEventDesc: 'WS frame encryption for the event channel (sync broadcasts)',
+      plaintextFallback: 'Allow Plaintext Fallback',
+      plaintextFallbackDesc:
+        'Serve un-negotiated legacy clients in plaintext; when off, non-loopback un-negotiated requests are rejected',
+      fingerprint: 'Local Fingerprint',
+      fingerprintDesc:
+        'Fingerprint of the local identity key (first 16 hex of SHA-256); verify against the value shown on the mobile device',
+      saveFailed: 'Failed to save link encryption settings',
+    },
     session: {
       title: 'Session Defaults',
       defaultEnvironment: 'Default Environment',

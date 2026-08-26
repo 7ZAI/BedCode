@@ -113,9 +113,13 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 
 - **controllers/ + dtos/**：HTTP REST 控制器与请求/响应 DTO（auth、config、file、git、plugin、session）
 - **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则）、HTTP 流量过滤器中间件
-- **filter.rs**：传输层流量过滤器责任链（预留加密机制）——TrafficFilter trait + 全局
+- **filter.rs**：传输层流量过滤器责任链——TrafficFilter trait + 全局
   TrafficFilterChain 单例；HTTP（请求体/响应体）与 WS（收发帧）统一接入，
-  过滤器可观察/改写收发数据（配合 utils/crypto 实现报文加解密）
+  过滤器可观察/改写收发数据
+- **link_crypto.rs**：局域网链路报文加密（issue 01-04）——X25519 静态身份密钥
+  Kd（落盘/指纹/损坏拒重建）、HKDF 方向分离派生、HTTP 信封协议 + WS 双 ECDH
+  握手与帧编解码；以 LinkEncryptionFilter 注册进全局链生效；配置域
+  trafficEncryption 全部默认关（opt-in），get/set 命令供设置页调用
 - **services/**：业务服务（认证、配对、会话配置/控制、终端服务）
 - **ws/**：WebSocket 终端链路（消息类型、连接注册表、WS actor、管理器）
 - **app.rs / supervisor.rs**：路由配置与服务器启动、服务器生命周期管理；另有端口检查、指标

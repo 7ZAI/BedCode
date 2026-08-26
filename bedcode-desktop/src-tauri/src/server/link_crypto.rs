@@ -834,10 +834,14 @@ impl LinkEncryptionFilter {
         };
         match result {
             Ok(sealed) => {
+                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
                 ctx.data = sealed;
                 Verdict::Continue
             }
-            Err(e) => Verdict::Reject(format!("ws frame crypto failed: {e}")),
+            Err(e) => {
+                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                Verdict::Reject(format!("ws frame crypto failed: {e}"))
+            }
         }
     }
 
@@ -881,8 +885,14 @@ impl LinkEncryptionFilter {
         })();
 
         match result {
-            Ok(()) => Verdict::Continue,
-            Err(e) => Verdict::Reject(format!("http request decrypt failed: {e}")),
+            Ok(()) => {
+                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                Verdict::Continue
+            }
+            Err(e) => {
+                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                Verdict::Reject(format!("http request decrypt failed: {e}"))
+            }
         }
     }
 
@@ -897,10 +907,14 @@ impl LinkEncryptionFilter {
         };
         match encrypt_http_body(&keys.response, &ctx.data, &http_aad(Direction::Outbound, ctx.route)) {
             Ok(envelope_json) => {
+                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
                 ctx.data = envelope_json;
                 Verdict::Continue
             }
-            Err(e) => Verdict::Reject(format!("http response encrypt failed: {e}")),
+            Err(e) => {
+                crate::server::metrics::MetricsCollector::global().inc_decrypt_failure();
+                Verdict::Reject(format!("http response encrypt failed: {e}"))
+            }
         }
     }
 }

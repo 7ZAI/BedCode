@@ -28,6 +28,10 @@ pub struct ServerMetrics {
     pub cpu_usage_percent: f64,
     /// 内存占用（字节）
     pub memory_usage_bytes: u64,
+    /// 链路加密成功处理帧/请求累计（issue 08；HTTP 信封与 WS 帧合并计数）
+    pub encrypted_frames: u64,
+    /// 链路加密解密失败累计（fail-closed 拒绝路径，含篡改/重放/密钥不匹配）
+    pub decrypt_failures: u64,
 }
 
 impl Default for ServerMetrics {
@@ -43,6 +47,8 @@ impl Default for ServerMetrics {
             ws_recv_rate: 0.0,
             cpu_usage_percent: 0.0,
             memory_usage_bytes: 0,
+            encrypted_frames: 0,
+            decrypt_failures: 0,
         }
     }
 }
@@ -64,6 +70,10 @@ struct MetricsInner {
     ws_sent: std::sync::atomic::AtomicU64,
     /// WS 接收消息计数
     ws_received: std::sync::atomic::AtomicU64,
+    /// 链路加密成功帧计数（issue 08）
+    encrypted_frames: std::sync::atomic::AtomicU64,
+    /// 链路加密解密失败计数（issue 08）
+    decrypt_failures: std::sync::atomic::AtomicU64,
     /// 上次采样时的 HTTP 请求数
     last_http_requests: std::sync::atomic::AtomicU64,
     /// 上次采样时的 WS 发送数
@@ -83,6 +93,8 @@ impl MetricsCollector {
                 http_requests: std::sync::atomic::AtomicU64::new(0),
                 ws_sent: std::sync::atomic::AtomicU64::new(0),
                 ws_received: std::sync::atomic::AtomicU64::new(0),
+                encrypted_frames: std::sync::atomic::AtomicU64::new(0),
+                decrypt_failures: std::sync::atomic::AtomicU64::new(0),
                 last_http_requests: std::sync::atomic::AtomicU64::new(0),
                 last_ws_sent: std::sync::atomic::AtomicU64::new(0),
                 last_ws_received: std::sync::atomic::AtomicU64::new(0),
@@ -111,6 +123,20 @@ impl MetricsCollector {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// 递增链路加密成功帧计数（issue 08：HTTP 信封与 WS 帧、收发两向均计）
+    pub fn inc_encrypted_frame(&self) {
+        self.inner
+            .encrypted_frames
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 递增链路加密解密失败计数（issue 08：fail-closed 拒绝路径）
+    pub fn inc_decrypt_failure(&self) {
+        self.inner
+            .decrypt_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// 重置所有计数器和计时器（服务器重启时调用）
     pub fn reset(&self) {
         if let Ok(mut start_time) = self.inner.start_time.lock() {
@@ -125,6 +151,12 @@ impl MetricsCollector {
         self.inner.last_ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner
             .last_ws_received
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .encrypted_frames
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .decrypt_failures
             .store(0, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut last_time) = self.inner.last_sample_time.lock() {
             *last_time = std::time::Instant::now();
@@ -182,6 +214,14 @@ impl MetricsCollector {
             ws_recv_rate: rate_ws_recv,
             cpu_usage_percent: cpu_percent,
             memory_usage_bytes: memory_bytes,
+            encrypted_frames: self
+                .inner
+                .encrypted_frames
+                .load(std::sync::atomic::Ordering::Relaxed),
+            decrypt_failures: self
+                .inner
+                .decrypt_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -229,12 +269,22 @@ mod tests {
         assert_eq!(m2.cpu_usage_percent, 50.0);
         assert_eq!(m2.memory_usage_bytes, 8192);
 
+        // 链路加密计数器（issue 08）：成功/失败路径独立累计，快照可观测
+        collector.inc_encrypted_frame();
+        collector.inc_encrypted_frame();
+        collector.inc_decrypt_failure();
+        let m_enc = collector.sample(1, 10.0, 1024);
+        assert_eq!(m_enc.encrypted_frames, 2);
+        assert_eq!(m_enc.decrypt_failures, 1);
+
         // reset 后所有计数器归零
         collector.reset();
         let m3 = collector.sample(0, 0.0, 0);
         assert_eq!(m3.total_http_requests, 0);
         assert_eq!(m3.ws_messages_sent, 0);
         assert_eq!(m3.ws_messages_received, 0);
+        assert_eq!(m3.encrypted_frames, 0);
+        assert_eq!(m3.decrypt_failures, 0);
         assert_eq!(m3.http_requests_per_sec, 0.0);
         assert_eq!(m3.ws_sent_rate, 0.0);
     }
