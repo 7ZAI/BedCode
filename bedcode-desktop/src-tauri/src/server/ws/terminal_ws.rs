@@ -279,6 +279,7 @@ impl TerminalWs {
             direction: Direction::Outbound,
             peer: &peer,
             route: "text",
+            negotiation: "",
             data: text.into_bytes(),
         };
         match chain.run_outbound(&mut fctx) {
@@ -313,6 +314,7 @@ impl TerminalWs {
             direction: Direction::Outbound,
             peer: &peer,
             route: "binary",
+            negotiation: "",
             data,
         };
         match chain.run_outbound(&mut fctx) {

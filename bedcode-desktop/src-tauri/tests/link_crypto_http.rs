@@ -108,7 +108,7 @@ fn test_app() -> actix_web::App<
     >,
 > {
     App::new()
-        .wrap(bedcode_lib::server::middleware::TrafficFilter)
+        .wrap(bedcode_lib::server::middleware::http_filter::TrafficFilter)
         .route("/echo", web::post().to(echo_handler))
 }
 
@@ -123,7 +123,9 @@ async fn encrypted_request_plaintext_handler_encrypted_response() {
     });
     let chain = TrafficFilterChain::global();
     chain.clear();
-    link_crypto::sync_registration();
+    // 直接注册而非 sync_registration：后者受 REGISTERED 标志幂等保护，
+    // 与测试的 chain.clear() 组合会跳过重注册（标志仍在但链已空）
+    link_crypto::register_into(&chain);
 
     let app = test::init_service(test_app()).await;
     let client = make_client("/echo");
@@ -141,7 +143,11 @@ async fn encrypted_request_plaintext_handler_encrypted_response() {
     let body = test::read_body(res).await;
     let opened = client.open_response(&body);
     let value: serde_json::Value = serde_json::from_slice(&opened).unwrap();
-    assert_eq!(value["echo"], "pong", "handler 应收到解密后的明文请求");
+    assert_eq!(
+        value["echo"],
+        serde_json::json!(r#"{"ping":"pong"}"#),
+        "handler 应收到解密后的明文请求（整包回显）"
+    );
 
     // 收尾：清空全局链与快照，不污染其他集成测试
     chain.clear();
@@ -159,7 +165,8 @@ async fn tampered_envelope_rejected_with_400() {
     });
     let chain = TrafficFilterChain::global();
     chain.clear();
-    link_crypto::sync_registration();
+    // 同上：用 register_into 绕开 REGISTERED 标志与 clear() 的状态脱节
+    link_crypto::register_into(&chain);
 
     let app = test::init_service(test_app()).await;
     let client = make_client("/echo");
@@ -198,7 +205,8 @@ async fn strict_policy_rejects_unnegotiated_requests() {
     });
     let chain = TrafficFilterChain::global();
     chain.clear();
-    link_crypto::sync_registration();
+    // 同上：用 register_into 绕开 REGISTERED 标志与 clear() 的状态脱节
+    link_crypto::register_into(&chain);
 
     let app = test::init_service(test_app()).await;
     let req = test::TestRequest::post()

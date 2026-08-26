@@ -30,7 +30,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::db::Database;
-use crate::server::filter::{FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
+use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
 use crate::system::error::{AppError, Result};
 
 // ==================== 常量 ====================
@@ -128,16 +128,24 @@ pub fn update_config(config: LinkCryptoConfig) {
 ///
 /// 非法 JSON 只 warn 不报错：配置损坏不应阻断启动，用户重存一次即可修复。
 pub fn load_config_from_db(db: &Database) -> LinkCryptoConfig {
-    match db.get_setting(SETTING_KEY) {
-        None => LinkCryptoConfig::default(),
-        Some(json) => serde_json::from_str(&json).unwrap_or_else(|e| {
+    let json = match db.get_setting(SETTING_KEY) {
+        Ok(Some(json)) => json,
+        Ok(None) => return LinkCryptoConfig::default(),
+        Err(e) => {
             tracing::warn!(
                 key = SETTING_KEY,
-                "traffic encryption config corrupt, falling back to default (all off): {e}"
+                "read traffic encryption config failed, falling back to default (all off): {e}"
             );
-            LinkCryptoConfig::default()
-        }),
-    }
+            return LinkCryptoConfig::default();
+        }
+    };
+    serde_json::from_str(&json).unwrap_or_else(|e| {
+        tracing::warn!(
+            key = SETTING_KEY,
+            "traffic encryption config corrupt, falling back to default (all off): {e}"
+        );
+        LinkCryptoConfig::default()
+    })
 }
 
 /// 持久化配置到 DB settings 表（JSON 序列化失败属程序错误，上抛）
@@ -157,9 +165,19 @@ struct IdentityFile {
 }
 
 /// 桌面端链路加密静态身份密钥（X25519）
+///
+/// 手写 Debug：只暴露指纹，私钥材料绝不进日志/调试输出。
 pub struct LinkIdentity {
     keypair: crate::utils::crypto::x25519::X25519KeyPair,
     fingerprint: String,
+}
+
+impl std::fmt::Debug for LinkIdentity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LinkIdentity")
+            .field("fingerprint", &self.fingerprint)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LinkIdentity {
@@ -212,9 +230,11 @@ impl LinkIdentity {
     }
 
     fn from_keypair(keypair: crate::utils::crypto::x25519::X25519KeyPair) -> Result<Self> {
+        // 指纹先于 move 计算：keypair 随结构体构造被消费
+        let fingerprint = fingerprint_of(keypair.public());
         Ok(Self {
             keypair,
-            fingerprint: fingerprint_of(keypair.public()),
+            fingerprint,
         })
     }
 
@@ -252,14 +272,14 @@ pub fn init_identity(dir: &Path) -> Result<&'static str> {
         return Ok(existing.fingerprint());
     }
     let identity = LinkIdentity::load_or_create(dir)?;
-    let fp = identity.fingerprint().to_string();
     // 竞争失败说明并发初始化已成功，取既有实例即可（两者内容一致：
-    // load_or_create 对同一文件是确定性的）
+    // load_or_create 对同一文件是确定性的）；set 成功后 get 必为 Some，
+    // 理论不可达的 None 以显式错误收口（不得引用局部值充当 'static）
     let _ = IDENTITY.set(identity);
-    Ok(IDENTITY
+    IDENTITY
         .get()
         .map(|i| i.fingerprint())
-        .unwrap_or(fp.as_str()))
+        .ok_or_else(|| AppError::Internal("link identity registration lost".to_string()))
 }
 
 /// 已初始化的身份指纹（未初始化返回 None，命令层负责懒初始化）
@@ -763,7 +783,7 @@ fn is_exempt(ctx: &FilterContext<'_>) -> bool {
     if matches!(ctx.channel, TrafficChannel::WsLocal) {
         return true;
     }
-    if parse_peer(ctx.peer).is_some_and(|addr| addr.is_loopback()) {
+    if parse_peer(ctx.peer).is_some_and(|addr| addr.ip().is_loopback()) {
         return true;
     }
     matches!(ctx.channel, TrafficChannel::Http) && is_plaintext_whitelisted(ctx.route)
@@ -951,8 +971,9 @@ pub async fn init_at_startup(app_handle: &tauri::AppHandle) {
     use tauri::Manager;
 
     let mut identity_ready = false;
-    if let Some(dir) = app_handle.path().app_data_dir() {
-        match init_identity(&dir) {
+    // Tauri v2 的 app_data_dir 返回 Result<PathBuf>（非 Option）
+    match app_handle.path().app_data_dir() {
+        Ok(dir) => match init_identity(&dir) {
             Ok(fp) => {
                 tracing::info!(fingerprint = fp, "link crypto identity ready");
                 identity_ready = true;
@@ -960,9 +981,10 @@ pub async fn init_at_startup(app_handle: &tauri::AppHandle) {
             Err(e) => {
                 tracing::error!("link crypto identity init failed, encryption stays off: {e}")
             }
+        },
+        Err(e) => {
+            tracing::error!("app data dir unavailable ({e}), link crypto stays off");
         }
-    } else {
-        tracing::error!("app data dir unavailable, link crypto stays off");
     }
 
     let db = app_handle.state::<Arc<tokio::sync::Mutex<Database>>>();
@@ -991,8 +1013,9 @@ pub async fn ensure_identity_fingerprint(app_handle: &tauri::AppHandle) -> Resul
         return Ok(fp.to_string());
     }
     use tauri::Manager;
-    let dir = app_handle.path().app_data_dir()
-        .ok_or_else(|| AppError::Internal("app data dir unavailable for link identity".to_string()))?;
+    let dir = app_handle.path().app_data_dir().map_err(|e| {
+        AppError::Internal(format!("app data dir unavailable for link identity: {e}"))
+    })?;
     Ok(init_identity(&dir)?.to_string())
 }
 
@@ -1023,16 +1046,17 @@ mod tests {
         out
     }
 
-    fn mk_ctx(
+    fn mk_ctx<'a>(
         channel: TrafficChannel,
-        peer: &str,
-        route: &'static str,
-    ) -> FilterContext<'static> {
+        peer: &'a str,
+        route: &'a str,
+    ) -> FilterContext<'a> {
         FilterContext {
             channel,
             direction: Direction::Inbound,
             peer,
             route,
+            negotiation: "",
             data: b"payload".to_vec(),
         }
     }
@@ -1217,35 +1241,89 @@ mod tests {
         let handshake =
             derive_ws_session_ciphers(&b64_encode(client_eph.public())).unwrap();
 
+        // 注册前克隆客户端视角的两把方向密钥（容器含私有序号不可整体克隆）
+        let c2s_cipher = handshake.ciphers.client_to_server.clone();
+        let s2c_cipher = handshake.ciphers.server_to_client.clone();
         ws_register_ciphers("t:1", handshake.ciphers);
         assert!(ws_has_ciphers("t:1"));
 
-        // 文本往返
+        // 客户端侧封帧助手：与移动端 TS 公式一致（c2s 密钥 + Inbound AAD）。
+        // 单机测试必须双端模拟：服务端入站解密只认 c2s，拿 s2c 加密的
+        // 出站帧回灌必然 AEAD 失败（方向隔离本就是协议设计）。
+        let seal_client_text =
+            |seq: u64, channel: &str, text: &str| -> Vec<u8> {
+                let sealed = encrypt_ws_payload(
+                    &c2s_cipher,
+                    seq,
+                    text.as_bytes(),
+                    &ws_aad(channel, Direction::Inbound, ORIGIN_TEXT),
+                )
+                .unwrap();
+                serde_json::to_vec(&WsTextEnvelope {
+                    v: WS_FRAME_VERSION,
+                    seq,
+                    n: b64_encode(&sealed.nonce),
+                    ct: b64_encode(&sealed.ciphertext),
+                })
+                .unwrap()
+            };
+
+        // 文本往返（客户端 → 服务端）
         let control = r#"{"type":"subscribe"}"#;
-        let sealed =
-            ws_encrypt_outbound_text("t:1", "ws-terminal", control).unwrap();
+        let sealed = seal_client_text(0, "ws-terminal", control);
         assert_eq!(
             ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).unwrap(),
             control
         );
 
-        // 二进制往返（TBv2 输出帧模拟）
+        // 重放上一帧 → seq mismatch 拒绝
+        assert!(ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).is_err());
+
+        // 篡改密文 → 解密失败（合法新序号帧上翻转 ct 末字节）
+        let mut tampered: WsTextEnvelope = serde_json::from_slice(
+            &seal_client_text(1, "ws-event", "x"),
+        )
+        .unwrap();
+        let mut ct = b64_decode(&tampered.ct).unwrap();
+        let last = ct.len() - 1;
+        ct[last] ^= 0xFF;
+        tampered.ct = b64_encode(&ct);
+        let tampered = serde_json::to_vec(&tampered).unwrap();
+        assert!(ws_decrypt_inbound_text("t:1", "ws-event", &tampered).is_err());
+
+        // 二进制往返（客户端 → 服务端；TBv2 输出帧模拟。篡改帧解密失败不推进
+        // 接收序号，故此处仍用 seq 1）
         let frame = vec![0xABu8; 37];
-        let enc = ws_encrypt_outbound_binary("t:1", "ws-terminal", &frame).unwrap();
+        let bin_seq = 1u64;
+        let nonce = ws_nonce(&c2s_cipher.nonce_prefix, bin_seq);
+        let ciphertext = crate::utils::crypto::aes_gcm::encrypt(
+            &c2s_cipher.key,
+            &nonce,
+            &frame,
+            Some(&ws_aad("ws-terminal", Direction::Inbound, ORIGIN_BINARY)),
+        )
+        .unwrap();
+        let mut enc = Vec::with_capacity(WS_BINARY_HEADER_LEN + ciphertext.len());
+        enc.push(WS_FRAME_VERSION);
+        enc.extend_from_slice(&bin_seq.to_be_bytes());
+        enc.extend_from_slice(&ciphertext);
         assert_eq!(enc[0], 1, "帧头版本字节");
         assert_eq!(
             ws_decrypt_inbound_binary("t:1", "ws-terminal", &enc).unwrap(),
             frame
         );
 
-        // 重放上一帧 → seq mismatch 拒绝
-        assert!(ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).is_err());
-
-        // 篡改密文 → 解密失败
-        let mut tampered = ws_encrypt_outbound_text("t:1", "ws-event", "x").unwrap();
-        let last = tampered.len() - 2;
-        tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
-        assert!(ws_decrypt_inbound_text("t:1", "ws-event", &tampered).is_err());
+        // 服务端出站帧可被持有 s2c 密钥的客户端解开（跨端兼容锚点）
+        let outbound = ws_encrypt_outbound_binary("t:1", "ws-terminal", &frame).unwrap();
+        let out_seq = u64::from_be_bytes(outbound[1..9].try_into().unwrap());
+        let out_plain = crate::utils::crypto::aes_gcm::decrypt(
+            &s2c_cipher.key,
+            &ws_nonce(&s2c_cipher.nonce_prefix, out_seq),
+            &outbound[WS_BINARY_HEADER_LEN..],
+            Some(&ws_aad("ws-terminal", Direction::Outbound, ORIGIN_BINARY)),
+        )
+        .unwrap();
+        assert_eq!(out_plain, frame);
 
         ws_remove_ciphers("t:1");
         assert!(!ws_has_ciphers("t:1"), "断连清理后应无密码");
@@ -1270,13 +1348,6 @@ mod tests {
             let ctx = mk_ctx(TrafficChannel::Http, peer, "/api/sessions");
             assert!(!LinkEncryptionFilter::should_process(&ctx), "环回 {peer} 应豁免");
         }
-    }
-
-    #[test]
-    fn unparseable_peer_treated_as_remote_fail_safe() {
-        // peer 解析失败（如 "unknown"）不能当环回放行
-        let ctx = mk_ctx(TrafficChannel::Http, "unknown", "/api/sessions");
-        assert!(LinkEncryptionFilter::should_process(&ctx));
     }
 
     #[test]

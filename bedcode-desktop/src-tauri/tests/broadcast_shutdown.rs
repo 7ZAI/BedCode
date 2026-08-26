@@ -250,7 +250,12 @@ async fn registry_entry(client_id: &str) -> Option<bedcode_lib::server::ws::regi
 /// 配对统一走 HTTP /api/auth/*；WS 首消息仅接受 JWT（Authenticated/Reauthenticate）
 async fn http_pair_and_get_token(port: u16, device_id: &str, device_name: &str, fingerprint: &str) -> String {
     let base = format!("http://127.0.0.1:{port}");
-    let client = reqwest::Client::new();
+    // 禁用连接池复用：Windows 环回下复用刚响应完的 keep-alive 连接偶发被
+    // 服务端提前关闭（10053 ConnectionAborted），导致后续请求随机夭折
+    let client = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .expect("reqwest client build failed");
 
     // 1) 请求配对码（HTTP DTO 为 camelCase，见 dtos/auth_dto.rs `rename_all`）
     let resp: serde_json::Value = client
