@@ -27,11 +27,22 @@ use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::db::Database;
 use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
 use crate::system::error::{AppError, Result};
+
+// ==================== 协议核心再导出（issue 09 共享 crate） ====================
+// 字节级协议面已抽至 packages/link-crypto（桌面 server 与移动端 event WS
+// 共同消费，消除第三份实现）；此处保持既有模块路径与测试可见性不变。
+use bedcode_link_crypto as proto;
+
+pub use proto::{
+    b64_decode, b64_encode, decrypt_http_body, encrypt_http_body, parse_negotiation, HttpEnvelope,
+    WsDirectionCipher, WsTextEnvelope, NEGOTIATION_HEADER, ORIGIN_BINARY, ORIGIN_TEXT,
+    PROTOCOL_VERSION, WS_BINARY_HEADER_LEN, WS_FRAME_VERSION, WS_TRANSCRIPT_PREFIX,
+    HTTP_INFO_REQUEST, HTTP_INFO_RESPONSE, WS_INFO_CLIENT_TO_SERVER, WS_INFO_SERVER_TO_CLIENT,
+};
 
 // ==================== 常量 ====================
 
@@ -48,14 +59,7 @@ const IDENTITY_FORMAT_VERSION: u32 = 1;
 pub const FILTER_NAME: &str = "link-crypto";
 
 // HKDF info 常量——协议兼容性表面，issue 05 移动端 TS 实现必须逐字节一致
-/// HTTP 请求方向派生 info
-pub const HTTP_INFO_REQUEST: &[u8] = b"bedcode-link-crypto/v1/http/request";
-/// HTTP 响应方向派生 info
-pub const HTTP_INFO_RESPONSE: &[u8] = b"bedcode-link-crypto/v1/http/response";
-/// WS 客户端→服务端方向派生 info（issue 04 消费）
-pub const WS_INFO_CLIENT_TO_SERVER: &[u8] = b"bedcode-link-crypto/v1/ws/c2s";
-/// WS 服务端→客户端方向派生 info（issue 04 消费）
-pub const WS_INFO_SERVER_TO_CLIENT: &[u8] = b"bedcode-link-crypto/v1/ws/s2c";
+// （已抽至共享 crate，经上方 pub use 保持既有路径可见）
 
 // ==================== 配置域 ====================
 
@@ -255,10 +259,9 @@ impl LinkIdentity {
     }
 }
 
-/// 公钥指纹：SHA-256 前 16 hex 小写
+/// 公钥指纹：SHA-256 前 16 hex 小写（实现在共享 crate）
 fn fingerprint_of(public: &[u8; 32]) -> String {
-    let digest = Sha256::digest(public);
-    hex::encode(&digest[..8])
+    proto::fingerprint_of(public)
 }
 
 static IDENTITY: OnceLock<LinkIdentity> = OnceLock::new();
@@ -329,37 +332,17 @@ pub fn derive_http_traffic_keys(shared_ikm: &[u8], http_path: &str) -> Result<Ht
     })
 }
 
-/// 派生单个 WS 方向密码上下文（HKDF OKM 36B：32B key + 4B 随机前缀）
-fn derive_ws_direction(
-    transcript_salt: &[u8],
-    ikm: &[u8],
-    info: &[u8],
-) -> Result<WsDirectionCipher> {
-    let okm = crate::utils::crypto::kdf::hkdf_sha256(Some(transcript_salt), ikm, info, 36)?;
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&okm[..32]);
-    let mut nonce_prefix = [0u8; 4];
-    nonce_prefix.copy_from_slice(&okm[32..36]);
-    Ok(WsDirectionCipher { key, nonce_prefix })
-}
-
+// 派生单个 WS 方向密码上下文（HKDF OKM 36B：32B key + 4B 随机前缀）——
+// 实现已抽至共享 crate（proto 内部）；桌面侧经 derive_server_handshake 间接消费
 // ==================== WS 会话加密（issue 04） ====================
 
-/// WS 二进制帧头长度：ver(u8) + seq(u64be)
-pub const WS_BINARY_HEADER_LEN: usize = 9;
-const WS_FRAME_VERSION: u8 = 1;
-const WS_TRANSCRIPT_PREFIX: &[u8] = b"bc-link-crypto/v1";
+// WS 帧常量与来源类型字节（WS_BINARY_HEADER_LEN / WS_FRAME_VERSION /
+// WS_TRANSCRIPT_PREFIX / ORIGIN_TEXT / ORIGIN_BINARY）已抽至共享 crate，
+// 经文件头 `pub use proto::{...}` 保持既有模块路径与测试可见性不变。
 
-/// 帧来源类型字节（AAD 绑定，防 text/binary 载荷互换重放）
-const ORIGIN_TEXT: u8 = 0x01;
-const ORIGIN_BINARY: u8 = 0x02;
-
-/// 单方向密码上下文
-#[derive(Debug, Clone)]
-pub struct WsDirectionCipher {
-    pub key: [u8; 32],
-    pub nonce_prefix: [u8; 4],
-}
+/// 单方向密码上下文与双向密码状态：
+/// WsDirectionCipher 实现在共享 crate（文件头再导出，字段形状不变）；
+/// 带序号计数器的 WsSessionCiphers 注册表类型留在桌面侧。
 
 /// 一条 WS 连接的双向密码状态（服务端视角；发送/接收序号严格单调）
 pub struct WsSessionCiphers {
@@ -378,42 +361,19 @@ pub struct WsHandshake {
 /// 双 ECDH 握手派生（spec §3）：服务端生成新鲜 s_eph，
 /// IKM = ECDH(s_eph,m_eph) ‖ ECDH(Kd,m_eph)，salt = "bc-link-crypto/v1" ‖ m_ek_b64 ‖ s_ek_b64。
 /// 字节拼接顺序是跨端兼容性表面，issue 05 移动端 TS 必须一致（金样互验钉死）。
+/// 公式实现在共享 crate；本函数只负责身份私钥与临时密钥生命周期。
 pub fn derive_ws_session_ciphers(client_ek_b64: &str) -> Result<WsHandshake> {
-    use crate::utils::crypto::x25519::{x25519_diffie_hellman, x25519_generate};
-
     let Some(identity) = IDENTITY.get() else {
         return Err(AppError::Internal("link identity unavailable".to_string()));
     };
-    let m_raw = b64_decode(client_ek_b64)?;
-    let m_public: [u8; crate::utils::crypto::x25519::KEY_LEN] = m_raw.try_into().map_err(|v: Vec<u8>| {
-        AppError::Internal(format!(
-            "ws handshake key length mismatch: expected 32, got {}",
-            v.len()
-        ))
-    })?;
-
-    let s_ephemeral = x25519_generate();
-    let eph_eph = x25519_diffie_hellman(&s_ephemeral, &m_public)?;
-    let auth = x25519_diffie_hellman(identity.keypair(), &m_public)?;
-    let mut ikm = [0u8; 64];
-    ikm[..32].copy_from_slice(eph_eph.as_bytes());
-    ikm[32..].copy_from_slice(auth.as_bytes());
-
-    let server_ek_b64 = b64_encode(s_ephemeral.public());
-    let salt = [
-        WS_TRANSCRIPT_PREFIX,
-        client_ek_b64.as_bytes(),
-        server_ek_b64.as_bytes(),
-    ]
-    .concat();
-    let c2s = derive_ws_direction(&salt, &ikm, WS_INFO_CLIENT_TO_SERVER)?;
-    let s2c = derive_ws_direction(&salt, &ikm, WS_INFO_SERVER_TO_CLIENT)?;
+    let (s_ephemeral_private, _s_public_unused) = proto::generate_ephemeral();
+    let hs = proto::derive_server_handshake(client_ek_b64, identity.keypair().private(), &s_ephemeral_private)?;
 
     Ok(WsHandshake {
-        server_ek_b64,
+        server_ek_b64: hs.server_ek_b64,
         ciphers: WsSessionCiphers {
-            client_to_server: c2s,
-            server_to_client: s2c,
+            client_to_server: hs.client_to_server,
+            server_to_client: hs.server_to_client,
             s2c_next_seq: 0,
             c2s_expected_seq: 0,
         },
@@ -447,33 +407,22 @@ pub fn ws_has_ciphers(addr: &str) -> bool {
     WS_CIPHERS.lock().map(|map| map.contains_key(addr)).unwrap_or(false)
 }
 
-fn ws_nonce(prefix: &[u8; 4], seq: u64) -> [u8; 12] {
-    let mut nonce = [0u8; 12];
-    nonce[..4].copy_from_slice(prefix);
-    nonce[4..].copy_from_slice(&seq.to_be_bytes());
-    nonce
-}
+// nonce/AAD 构造已抽至共享 crate；AAD 的 Direction 经适配器映射
+use proto::ws_nonce;
 
 fn ws_aad(channel_str: &str, direction: Direction, origin: u8) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(3 + channel_str.len());
-    aad.extend_from_slice(b"v1");
-    aad.extend_from_slice(channel_str.as_bytes());
-    aad.push(match direction {
-        Direction::Inbound => 0x01,
-        Direction::Outbound => 0x02,
-    });
-    aad.push(origin);
-    aad
+    proto::ws_aad(
+        channel_str,
+        match direction {
+            Direction::Inbound => proto::Direction::Inbound,
+            Direction::Outbound => proto::Direction::Outbound,
+        },
+        origin,
+    )
 }
 
-/// WS 文本帧信封（控制/业务 JSON；类型保持原则——text 帧仍以 text 发送）
-#[derive(Debug, Serialize, Deserialize)]
-struct WsTextEnvelope {
-    v: u8,
-    seq: u64,
-    n: String,
-    ct: String,
-}
+// WS 文本帧信封（WsTextEnvelope）已抽至共享 crate，经文件头 `pub use proto::{...}`
+// 保持既有模块路径可见；字段形状逐字节一致。
 
 /// 加密一条出站文本帧（JSON → 信封 JSON 字符串），并推进发送序号
 pub(crate) fn ws_encrypt_outbound_text(
@@ -622,92 +571,33 @@ fn ws_encrypt_outbound_text_binary(
 
 // ==================== HTTP 信封协议（issue 02） ====================
 
-/// 协商信号头名（HTTP）：值形如 "v1 <ek_b64>"，由移动端每请求携带临时 X25519 公钥
-pub const NEGOTIATION_HEADER: &str = "X-BedCode-Crypto";
-
-/// 当前协议版本（信封 v 字段与协商头 "vN" 前缀共用此源）
-const PROTOCOL_VERSION: u8 = 1;
+// 协商信号头与协议版本常量（NEGOTIATION_HEADER / PROTOCOL_VERSION）已抽至
+// 共享 crate，经文件头 `pub use proto::{...}` 保持既有模块路径可见。
 
 /// 请求级响应密钥缓存 TTL：同请求出入站间隔毫秒级，30s 已是数百倍冗余
 const REQUEST_KEY_TTL: Duration = Duration::from_secs(30);
 
-/// HTTP 加密信封（线上格式，字段 base64 std；与 spec §3 一致）
-#[derive(Debug, Serialize, Deserialize)]
-pub struct HttpEnvelope {
-    /// 协议版本
-    pub v: u8,
-    /// AES-256-GCM nonce（12B，base64，随机）
-    pub n: String,
-    /// 密文 + GCM 认证标签（base64）
-    pub ct: String,
-}
-
-fn b64_encode(data: &[u8]) -> String {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.encode(data)
-}
-
-fn b64_decode(text: &str) -> Result<Vec<u8>> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD
-        .decode(text)
-        .map_err(|e| AppError::Internal(format!("base64 decode failed: {e}")))
-}
-
-/// 解析协商头 "v1 <ek_b64>"；当前仅接受 v1（版本升级时在此扩展兼容矩阵）
-fn parse_negotiation(negotiation: &str) -> Option<&str> {
-    let mut parts = negotiation.trim().split_whitespace();
-    match (parts.next(), parts.next(), parts.next()) {
-        (Some("v1"), Some(ek), None) => (!ek.is_empty()).then_some(ek),
-        _ => None,
-    }
-}
+// HTTP 信封结构与编解码辅助（HttpEnvelope / b64_encode / b64_decode /
+// parse_negotiation）已抽至共享 crate，经文件头 `pub use proto::{...}`
+// 保持既有模块路径与测试可见性不变（错误转换经 AppError 的 From impl）。
 
 /// HTTP AAD 绑定：b"v1" || direction || u32be(path_len) || path
 ///
 /// 路径绑定防信封跨端点搬运；方向绑定防请求/响应载荷互换重放。
+/// 实现在共享 crate，此处仅做 Direction 适配。
 fn http_aad(direction: Direction, path: &str) -> Vec<u8> {
-    let mut aad = Vec::with_capacity(7 + path.len());
-    aad.extend_from_slice(b"v1");
-    aad.push(match direction {
-        Direction::Inbound => 0x01,
-        Direction::Outbound => 0x02,
-    });
-    aad.extend_from_slice(&(path.len() as u32).to_be_bytes());
-    aad.extend_from_slice(path.as_bytes());
-    aad
+    proto::http_aad(
+        match direction {
+            Direction::Inbound => proto::Direction::Inbound,
+            Direction::Outbound => proto::Direction::Outbound,
+        },
+        path,
+    )
 }
 
-/// 明文 → 信封 JSON 字节（随机 nonce；密钥每次请求全新，无 nonce 复用风险）
-pub fn encrypt_http_body(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-    let nonce = crate::utils::crypto::aes_gcm::generate_nonce();
-    let ciphertext = crate::utils::crypto::aes_gcm::encrypt(key, &nonce, plaintext, Some(aad))?;
-    let envelope = HttpEnvelope {
-        v: PROTOCOL_VERSION,
-        n: b64_encode(&nonce),
-        ct: b64_encode(&ciphertext),
-    };
-    Ok(serde_json::to_vec(&envelope)?)
-}
-
-/// 信封 JSON 字节 → 明文（fail-closed：格式/版本/nonce 长度/GCM 校验任一失败即错）
-pub fn decrypt_http_body(key: &[u8; 32], body: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
-    let envelope: HttpEnvelope = serde_json::from_slice(body)
-        .map_err(|e| AppError::Internal(format!("http envelope malformed: {e}")))?;
-    if envelope.v != PROTOCOL_VERSION {
-        return Err(AppError::Internal(format!(
-            "unsupported envelope version {}",
-            envelope.v
-        )));
-    }
-    let nonce_v = b64_decode(&envelope.n)?;
-    let nonce: [u8; crate::utils::crypto::aes_gcm::NONCE_LEN] = nonce_v.try_into().map_err(|v: Vec<u8>| {
-        AppError::Internal(format!("nonce length mismatch: expected 12, got {}", v.len()))
-    })?;
-    let ciphertext = b64_decode(&envelope.ct)?;
-    crate::utils::crypto::aes_gcm::decrypt(key, &nonce, &ciphertext, Some(aad))
-        .map_err(|e| AppError::Internal(format!("http payload decrypt failed: {e}")))
-}
+// 信封编解码（encrypt_http_body / decrypt_http_body）已抽至共享 crate，
+// 经文件头 `pub use proto::{...}` 保持既有模块路径与测试可见性不变
+//（错误经 AppError 的 From<LinkCryptoError> 自动转换，文案不变）。
 
 // ---------- 请求级响应密钥缓存 ----------
 //

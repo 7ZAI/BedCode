@@ -100,6 +100,8 @@ sysinfo = "0.33"
 bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
 # 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
 bedcode-peer-net = { path = "../../packages/peer-net" }
+# 链路报文加密协议核心（issue 09 共享 crate，与移动端 event WS 共同消费）
+bedcode-link-crypto = { path = "../../packages/link-crypto" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)

@@ -84,3 +84,11 @@ impl From<anyhow::Error> for AppError {
         AppError::Internal(e.to_string())
     }
 }
+
+/// 链路加密共享 crate 错误 → AppError（issue 09：保留错误文案，
+/// 过滤器 Reject 理由与既有测试断言的字节面不变）
+impl From<bedcode_link_crypto::LinkCryptoError> for AppError {
+    fn from(e: bedcode_link_crypto::LinkCryptoError) -> Self {
+        AppError::Internal(e.to_string())
+    }
+}
