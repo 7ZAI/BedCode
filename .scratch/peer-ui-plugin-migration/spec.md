@@ -44,7 +44,7 @@ Status: ready-for-agent
 
 ### 服务与契约
 
-1. **层次边界不变**：peer-net crate、Tauri 命令面、`peer-*` 前端事件与消息总线 `peer:*` topic 桥接全部留在宿主；删除的只是宿主内的消费端 Vue 页面/composable 与其接线。host-peer WIT 能力原语不新增不修改。
+1. **层次边界不变**：peer-net crate、Tauri 命令面、`peer-*` 前端事件与消息总线 `peer:*` topic 桥接全部留在宿主；删除的只是宿主内的消费端 Vue 页面/composable 与其接线。host-peer WIT 能力原语不新增不修改（本约束限于本次 UI 迁移范围；随后 docs/adr/0022 v2 对 host-peer 做原语化收缩并新增 host-mdns / host-platform，以后者为准）。
 2. **插件命令面扩展**：两端 file-transfer 插件的 WASM 薄代理补齐五条转发命令——拨号连接、断开会话、首连确认应答、可信对端列表、撤销信任——逐一映射到既有 host-peer 原语，DTO JSON 过界形状与其余命令一致。
 3. **事件桥扩展**：插件 WASM 代理增订 `peer:consent` 与 `peer:connection` 两个总线 topic，分别翻译为插件命名空间下的首连确认事件与连接态事件推给前端；载荷保持宿主 camelCase 契约形状原样透传。
 4. **权限声明显式化**：两端插件 manifest 的 permissions 补声明 `peer`（此前靠既有授权路径隐式可用，迁移后命令面扩大，改为显式声明）。
