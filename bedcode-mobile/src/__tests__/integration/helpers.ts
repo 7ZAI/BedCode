@@ -41,6 +41,24 @@ export async function loadFreshModule<T>(path: string): Promise<T> {
   return await import(path)
 }
 
+/**
+ * 构造 mock HTTP 响应（json + text 双通道）
+ *
+ * 链路加密（issue 06）后 useHttpApi 改用 response.text() 读原始正文
+ * （信封解密需要文本），mock 响应必须同时提供 json() 与 text()。
+ *
+ * @param data - 业务 JSON 体
+ * @param ok - HTTP ok 位（默认 true）
+ */
+export function mockHttpResponse(data: unknown, ok = true): {
+  ok: boolean
+  json: () => Promise<unknown>
+  text: () => Promise<string>
+} {
+  const text = JSON.stringify(data)
+  return { ok, json: async () => data, text: async () => text }
+}
+
 /** 清空 localStorage（happy-dom 原生实现） */
 export function resetLocalStorage(): void {
   localStorage.clear()

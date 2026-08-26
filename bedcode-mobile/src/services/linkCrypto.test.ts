@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { x25519 } from '@noble/curves/x25519'
+// x25519 自 @noble/curves 1.9 起从 ./x25519 子路径移入 ./ed25519（与 linkCrypto.ts 保持一致）
+import { x25519 } from '@noble/curves/ed25519'
 import { gcm } from '@noble/ciphers/aes'
 import { sha256 } from '@noble/hashes/sha256'
 import { hkdf } from '@noble/hashes/hkdf'
@@ -144,10 +145,15 @@ describe('ws session handshake and seq discipline', () => {
     const serverOkm = replicateServerExpand(ikm, salt)
 
     const client = deriveWsSession(mPriv, mEkB64, sEkB64, kdPubB64)
-    expect([...client.c2s.key]).toEqual([...serverOkm.c2s.slice(0, 32)])
-    expect([...client.c2s.prefix]).toEqual([...serverOkm.c2s.slice(32, 36)])
-    expect([...client.s2c.key]).toEqual([...serverOkm.s2c.slice(0, 32)])
-    expect([...client.s2c.prefix]).toEqual([...serverOkm.s2c.slice(32, 36)])
+    // 白盒断言：c2s/s2c 是类私有字段，测试内经 as any 读取派生字节做对称性比对
+    const internal = client as unknown as {
+      c2s: { key: Uint8Array; prefix: Uint8Array }
+      s2c: { key: Uint8Array; prefix: Uint8Array }
+    }
+    expect([...internal.c2s.key]).toEqual([...serverOkm.c2s.slice(0, 32)])
+    expect([...internal.c2s.prefix]).toEqual([...serverOkm.c2s.slice(32, 36)])
+    expect([...internal.s2c.key]).toEqual([...serverOkm.s2c.slice(0, 32)])
+    expect([...internal.s2c.prefix]).toEqual([...serverOkm.s2c.slice(32, 36)])
   })
 
   it('text roundtrip and replay rejection', () => {

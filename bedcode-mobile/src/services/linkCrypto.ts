@@ -15,7 +15,8 @@
  * - 算法库：@noble/curves(x25519) + @noble/ciphers(AES-256-GCM，密文尾部拼 tag) + @noble/hashes
  */
 
-import { x25519 } from '@noble/curves/x25519'
+// x25519 自 @noble/curves 1.9 起从 ./x25519 子路径移入 ./ed25519（该路径在 1.8.x 同样可用）
+import { x25519 } from '@noble/curves/ed25519'
 import { gcm } from '@noble/ciphers/aes'
 import { sha256 } from '@noble/hashes/sha256'
 import { hkdf } from '@noble/hashes/hkdf'

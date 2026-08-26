@@ -19,7 +19,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { Terminal } from '@xterm/xterm'
 import type { RemoteDevice } from '@/composables/model'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
-import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
+import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
 import { makeAuthCredentials } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
@@ -217,9 +217,9 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     // /api/health 为探测响应形状（status/port），其余为 HTTP API 响应形状（code/message）
     mockFetch.mockImplementation((url: string) => {
       if (url.endsWith('/api/health')) {
-        return Promise.resolve({ ok: true, json: async () => ({ status: 'ok', port: 8765, uptime_secs: 120 }) })
+        return Promise.resolve(mockHttpResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
       }
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok' }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
     })
     await conn.connect(DEVICE)
     await flushAsync()

@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
-import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers } from './helpers'
+import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import {
   makeSessionSummary,
@@ -99,25 +99,25 @@ function installFetchMock(): void {
   mockFetch.mockImplementation((url: string, options: { method?: string; body?: string }) => {
     const method = options?.method || 'GET'
     if (url.endsWith('/api/health')) {
-      return Promise.resolve({ ok: true, json: async () => ({ status: 'ok', port: 8765, uptime_secs: 120 }) })
+      return Promise.resolve(mockHttpResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
     }
     // 会话列表 / 配置列表
     if (url.endsWith('/api/configs') && method === 'GET') {
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok', data: { configs: [httpConfig(makeSessionConfigSummary())] } }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { configs: [httpConfig(makeSessionConfigSummary())] } }))
     }
     if (url.endsWith('/api/sessions') && method === 'GET') {
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok', data: { sessions: [] } }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { sessions: [] } }))
     }
     if (url.endsWith('/api/sessions/start') && method === 'POST') {
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } }))
     }
     if (url.includes('/stop') && method === 'POST') {
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok' }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
     }
     if (url.includes('/remove') && method === 'DELETE') {
-      return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok' }) })
+      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
     }
-    return Promise.resolve({ ok: true, json: async () => ({ code: 0, message: 'ok' }) })
+    return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
   })
 }
 

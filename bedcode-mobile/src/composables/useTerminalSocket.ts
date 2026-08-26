@@ -217,7 +217,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
       clearTimeout(ackIdleTimer)
       ackIdleTimer = null
     }
-    const ackFrame = buildAckFrame(currentSession, lastRenderedSeq)
+    const ackFrame = new Uint8Array(buildAckFrame(currentSession, lastRenderedSeq))
     ws.send(wsCrypto ? wsCrypto.encryptBinary('ws-terminal', ackFrame) : ackFrame)
     ackedThroughSeq = lastRenderedSeq
     pendingAckBytes = 0
@@ -334,7 +334,8 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
           handleControl(text)
           return
         }
-        let raw = new Uint8Array(ev.data as ArrayBuffer)
+        // 解密后可能被替换为 @noble 返回的缓冲（ArrayBufferLike），标注宽泛型
+        let raw: Uint8Array<ArrayBufferLike> = new Uint8Array(ev.data as ArrayBuffer)
         if (wsCrypto) {
           try {
             raw = wsCrypto.decryptBinary('ws-terminal', raw)
