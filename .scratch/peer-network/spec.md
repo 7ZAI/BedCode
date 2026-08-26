@@ -65,7 +65,7 @@ BedCode 目前的文件传输只能在移动端与桌面端之间进行，且连
 4. **新旧链路边界**：文件传输整体迁移到对等网络，`Message::FileService` intent 协调管线与旧 announce 机制在切换版本中删除；终端控制链路（mDNS 发现、配对码/QR/生物认证/JWT、WS）原封不动；桌面端同样运行节点服务，天然获得桌面↔桌面传输。
 5. **传输栈**（ADR 0001）：对称化现有 actix-web 4 HTTP+WS 栈。单 TCP 端口承载数据面（HTTP，含 Range 断点续传与上传 session 语义）与控制面（同端口 WS upgrade）。TLS 用 rcgen 从节点 Ed25519 密钥生成自签证书，自定义 rustls verifier 校验对方证书指纹 = 节点 ID 且在可信列表内才放行；首连确认发生在 TLS 握手之后的应用层。
 6. **实现种子**：以 git 标签 v2.0.0 中移动端 actix 服务端代码为种子恢复改造（server/upload/auth/cipher/announce/notify 一族模块当时完整走通双向上传下载），剥离其对宿主 WS 与 Announce token 的依赖，替换为对等信任层；两端同框架无冲突。
-7. **节点发现与在线**：独立 mDNS 服务类型，与终端链路的 `_bedcode._tcp` 并存互不感知；每节点同时广播自身并浏览他人。记录 TXT 载荷含设备名、协议版本、能力位图（文件传输为首 bit）。在线 = 发现记录可见；连接按需建立（点击连接或发起传输时握手），空闲超时自动断开；节点列表来自发现缓存。Android 收多播需 MulticastLock。
+7. **节点发现与在线**：独立 mDNS 服务类型，与终端链路的 `_bedcode._tcp` 并存互不感知；每节点同时广播自身并浏览他人。记录 TXT 载荷含设备名、协议版本、能力位图（文件传输为首 bit）。在线 = 发现记录可见；连接按需建立（点击连接或发起传输时握手），空闲超时自动断开；节点列表来自发现缓存（后续修正：docs/adr/0022 v2 将设备列表下沉为插件经 host-mdns browse 自建缓存，宿主侧发现缓存与 peer:devices 快照退役）。Android 收多播需 MulticastLock。
 8. **共享目录**：两端对称同构——移动端 SAF URI 条目（持久授权）+ 私有下载目录特殊条目；桌面端为用户选择的文件夹。仅可信对端可浏览，恒只读。
 9. **下载目录**：移动端默认 MediaStore.Downloads（失败回退 app 私有目录）；桌面端可配置文件夹，缺省 `Downloads\BedCode\`，逐次不弹窗。
 10. **接收策略**：维持全局单开关粒度（每次询问默认/直接接收/直接拒绝），不区分对端；与信任层正交。可信对端免询问白名单留作后续选项。
@@ -98,3 +98,4 @@ Prior art：桌面端既有集成测试风格（broadcast_shutdown、http_auth_b
 - 开发窗口内旧传输链路冻结：bug 只修不增；Phase 3 完成前新旧不可同时可用是有意接受的中间态。
 - 涉及 gen/android 下 Kotlin 改动的 ticket 必须跑 `./gradlew :app:compileUniversalDebugKotlin` 验证；前端 UI 类 ticket 动手前加载 frontend-styles skill。
 - 移动端 mDNS 广播/收包依赖前台服务与 MulticastLock 的组合，真机验证不可省略（模拟器多播行为不代表真机）。
+- 2026-08-26：docs/adr/0022（v2）修正服务层 WASM 投影粒度与发现缓存归属（决策 7 后半），实施以该 ADR 与 issues/13 为准；决策 1/11/12 不变。
