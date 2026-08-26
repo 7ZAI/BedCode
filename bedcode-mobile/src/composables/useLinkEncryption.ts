@@ -19,19 +19,37 @@ const PIN_FINGERPRINT = 'link_kd_fingerprint'
 export interface LinkEncryptionSettings {
   enabled: boolean
   strictMode: boolean
+  /** HTTP REST 载荷加密（issue 08：粒度收窄，默认开） */
+  encryptHttp: boolean
+  /** WS 终端通道帧加密（默认开） */
+  encryptWsTerminal: boolean
+  /** WS 事件通道帧加密（默认开） */
+  encryptWsEvent: boolean
+}
+
+/** 默认值：功能整体关（opt-in），子开关全开——用户只需打开主开关即获全通道覆盖 */
+const DEFAULTS: LinkEncryptionSettings = {
+  enabled: false,
+  strictMode: false,
+  encryptHttp: true,
+  encryptWsTerminal: true,
+  encryptWsEvent: true,
 }
 
 function loadSettings(): LinkEncryptionSettings {
   try {
     const raw = localStorage.getItem(STORAGE_KEY)
-    if (!raw) return { enabled: false, strictMode: false }
+    if (!raw) return { ...DEFAULTS }
     const parsed = JSON.parse(raw) as Partial<LinkEncryptionSettings>
     return {
       enabled: parsed.enabled === true,
       strictMode: parsed.strictMode === true,
+      encryptHttp: parsed.encryptHttp !== false,
+      encryptWsTerminal: parsed.encryptWsTerminal !== false,
+      encryptWsEvent: parsed.encryptWsEvent !== false,
     }
   } catch {
-    return { enabled: false, strictMode: false }
+    return { ...DEFAULTS }
   }
 }
 
@@ -51,15 +69,26 @@ export function useLinkEncryptionSettings() {
     settings.value.strictMode = value
     persist()
   }
-  return { settings, setEnabled, setStrictMode }
+  /** 通道子开关统一入口（issue 08：设置页粒度收窄；通道名与判定函数一致用 kebab-case） */
+  function setChannel(channel: LinkCryptoChannel, value: boolean) {
+    const key = (
+      { http: 'encryptHttp', 'ws-terminal': 'encryptWsTerminal', 'ws-event': 'encryptWsEvent' } as const
+    )[channel]
+    settings.value[key] = value
+    persist()
+  }
+  return { settings, setEnabled, setStrictMode, setChannel }
 }
 
+/** 链路加密参与判定的通道（issue 08：与桌面端三子开关一一对应） */
+export type LinkCryptoChannel = 'http' | 'ws-terminal' | 'ws-event'
+
 /** 主开关 + 对应通道子开关均开、且已持有 pin → 该通道参与加密 */
-export function isChannelEncryptionActive(channel: 'http' | 'ws'): boolean {
+export function isChannelEncryptionActive(channel: LinkCryptoChannel): boolean {
   if (!settings.value.enabled) return false
-  // 子开关（encryptHttp/encryptWsTerminal/encryptWsEvent）默认全开，
-  // 移动端 v1 未提供粒度收窄 UI，主开关即总闸（spec §6 桌面侧才暴露子开关）
-  void channel
+  if (channel === 'http' && !settings.value.encryptHttp) return false
+  if (channel === 'ws-terminal' && !settings.value.encryptWsTerminal) return false
+  if (channel === 'ws-event' && !settings.value.encryptWsEvent) return false
   return !!getPinnedKey()
 }
 

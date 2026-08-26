@@ -62,6 +62,17 @@ export default {
       defaultPort: 'Default Port',
       reconnectSection: 'Reconnect',
       networkSection: 'Network',
+      linkCryptoSection: 'Link Encryption',
+      linkCryptoMaster: 'Enable Link Encryption',
+      linkEncryptHttp: 'Encrypt HTTP Payloads',
+      linkEncryptWsTerminal: 'Encrypt Terminal Channel',
+      linkEncryptWsEvent: 'Encrypt Event Channel',
+      linkStrictMode: 'Strict Mode (reject plaintext downgrade)',
+      linkPeerFingerprint: 'Peer Fingerprint',
+      linkNotPaired: 'Not paired',
+      linkNeedPairing: 'Pair with the desktop first, then enable link encryption',
+      linkCryptoHint:
+        'Verify the desktop fingerprint shown in its settings page before enabling; off by default.',
     },
     authentication: {
       title: 'Authentication Settings',

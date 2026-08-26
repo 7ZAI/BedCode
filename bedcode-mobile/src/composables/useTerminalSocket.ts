@@ -306,7 +306,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
         reconnectAttempts = 0
         // 握手成功即认证（JWT 首消息；重连场景复用同一 JWT——桌面端仅验签+有效期）；
         // 已 pin 且开关开 → 附带加密协商提案（issue 07，auth_ok 回带服务端临时公钥）
-        const pinnedKey = isChannelEncryptionActive('ws') ? getPinnedKey() : null
+        const pinnedKey = isChannelEncryptionActive('ws-terminal') ? getPinnedKey() : null
         if (pinnedKey) {
           wsEphemeral = generateEphemeral()
           socket.send(
