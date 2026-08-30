@@ -35,6 +35,7 @@ CONTEXT.md
 # IDE and editors
 .idea/
 .claude/
+.omp/
 .pi/
 .codex/
 .opencode/
