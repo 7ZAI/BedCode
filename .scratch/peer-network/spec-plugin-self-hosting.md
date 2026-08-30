@@ -1,6 +1,6 @@
 # Spec: file-transfer 业务自持与旧接口退役（issue 13 Phase 3–4）
 
-Status: ready-for-agent —— 两处开放决策已于 2026-08-26 由用户裁决（见「Resolved Decisions」节）：A 取 A1（终态 host-peer = 13 原语）、B 取停写+一版读取
+Status: implemented（Phase 3–4 已实施，2026-08-26；待真机回归）—— 两处开放决策已于 2026-08-26 由用户裁决（见「Resolved Decisions」节）：A 取 A1（终态 host-peer = 桌面 13 / 移动 12 原语）、B 取停写+一版读取
 
 词汇表沿用 CONTEXT.md「对等网络」「文件传输」节；裁剪线与最终原语面依据 docs/adr/0022 v2 与 `.scratch/peer-network/issues/13-wit-host-peer-slimming.md`（Phase 1–2 已实施：host-peer 新增 dial-peer-endpoint / close / set-shared-roots 三原语、读对端四函数双态寻址、host-mdns / host-platform 就绪、ABI desktop v9 / mobile v7）。本 spec 是该票 Phase 3–4 的可执行规划：**把设备列表、共享目录注册表、任务队列与历史、接收策略设置、重试编排从宿主命令面下沉到 file-transfer 插件自持，随后退役全部旧 WIT 函数与宿主发现快照链路**。
 

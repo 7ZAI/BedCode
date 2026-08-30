@@ -1,6 +1,6 @@
 # host-peer WIT 接口原语化收缩（ADR 0022 v2 实施）
 
-Status: in-progress（Phase 1–2 已实施并验证，2026-08-26；Phase 3–4 规划已定稿见 `.scratch/peer-network/spec-plugin-self-hosting.md`，ready-for-agent）
+Status: in-progress（Phase 1–4 已实施并验证，2026-08-26；真机回归待执行，见下文各 Phase 记录）
 
 > **2026-08-26 ADR 0022 v3 修订**：经裁决 `set-receive-policy` / `set-download-dir` 改判「引擎安全闸门/落盘配置」原语保留（非业务编排），终态 host-peer = **13 个函数**；下文 Goal 的「11 个」为 v2 时点表述，以 v3 为准。
 
@@ -38,8 +38,57 @@ Status: in-progress（Phase 1–2 已实施并验证，2026-08-26；Phase 3–4 
 
 issue 09 抽共享 crate 的半成品导致两端的整库编译被阻断，为解除验证阻塞做了机械性补全（意图均已在代码注释中明示）：desktop link_crypto.rs 删除与 `pub use proto::{…}` 重复的本地定义 + lib.rs 补 WsTextEnvelope re-export；mobile router/registry.rs 补 AuthPayload 新增 crypto 字段的初始化器。相关文件仍属 issue 09 工作区改动，提交归属由用户裁决。
 
-### Phase 3 — file-transfer 业务自持（双端）⬜ 未开始 —— 规划见 `.scratch/peer-network/spec-plugin-self-hosting.md`
-### Phase 4 — 旧接口退役 ⬜ 未开始 —— 规划见 `.scratch/peer-network/spec-plugin-self-hosting.md`
+### Phase 3 — file-transfer 业务自持（双端）✅（2026-08-26 实施，待真机验证）
+
+实施方式与关键裁决（详见会话记忆）：
+
+- **设备缓存状态机放前端 TS**（deviceState.ts 纯函数：parseFoundPayload/applyLost/sweepStaleDevices + cap 位 bit0 解读 + TTL=120s 惰性清扫）：解决 wasm32-unknown-unknown 无时钟问题（两端插件 target 均为 unknown-unknown，禁 std::time/uuid/getrandom，TTL 判定需 Date.now）；Rust 只做 mdns browse 生命周期 + 快照持久化命令（get/save-device-snapshot，storage 键 `device_snapshot`）+ endpoint memo + nodeId→session 句柄映射。快照恢复条目标注「最近可见」（recent），手动 refresh 触发清算；found 刷新即摘标记。
+- **传输任务/历史 store 放 Rust WASM**（transfer_store.rs 纯函数 cargo 直测 ×10：merge 快照按 batchId upsert、终态不被旧快照复活、interrupted 允许被引擎快照覆盖回真实态、200 封顶最旧先出、retryMeta 回放）；桌面落 plugin_db 表 transfer_entries，移动落 storage 单键数组。时间戳全部取自引擎事件载荷 *Ms 字段。
+- **拉取 retryMeta 挂载**：pull-files 入队时压入 PENDING_PULLS 队列（封顶 8），新接收条目首现且文件集匹配时消费挂载（引擎逐文件铸造 batchId，调用点拿不到 id）。
+- **接收策略 auto 分支在 Rust on_message 自动 respond-transfer**（storage 读设置同步可用）；ask 弹窗编排留前端不动；设置真源 = storage 键 `transfer_settings`（SettingsPanel wire 形状），set-settings 写 storage + 推 set-receive-policy/set-download-dir；get-settings 空 storage 时惰性迁移自引擎读接口。
+- **共享根注册表 id = 路径/URI 的 FNV-1a hex**（免随机源、同根天然去重）；变更后全量推 set-shared-roots 失败回滚；移动端 builtin local-downloads 不进注册表，get-settings 以只读形状（builtin:true + treeUri）合并展示。
+- **引擎改动（步骤 5 零 ABI）**：host_impl/peer.rs send 载荷双形态解析（string | {path, encrypt}，任一 true → 批量强制加密 override）→ peer_transfer 新签名 send_files_to_peer_with_policy；SDK HostPeer::peer_send_files 改 &[Value] 直通。
+- **翻译层收敛**：两端 peer.rs 旧 DTO 搬运函数（transfer_to_task/terminal_history/list_* 族等约 60% 体量）删除；新 wire = 引擎 PeerTransferDto camelCase + 插件扩展字段（retryMeta/interrupted/recent）；devMock 重造为 wire 形状种子（设备 = mdns:found 载荷形状 deviceSeeds）；双端 dev-shell mock 同步新契约（get/save-device-snapshot / dial-peer{endpoint} / mdns-found 推送）。
+- manifest：双端 permissions 补 `mdns`；commands 清单移除 query-peer/list-peers、新增 get/save-device-snapshot。
+- **偏离记录**：①pull destRelPath 缓行——需要动引擎接收管线落盘计算且当前零消费方（落点覆盖已由 A1 保留的 set-download-dir 承载），待首个真实场景立票；②重试回放中 send 条目原地换 batchId（一条历史），pull 条目重新入队产生新批、原失败记录保留为历史（引擎 pull 批无 retry-transfer 语义，与旧行为一致）；③TTL 清算对快照恢复条目在手动 refresh 时执行（activate 首屏先渲染，spec 故事 2 与步骤 1 清扫语义的折衷）。
+
+验证：插件 Rust 双端 cargo test 各 20 绿（纯函数直测）；前端 vitest 桌面 515+/移动 297 全绿（含重写的 usePeerDevices/useTasks/useReceiving 编排测试）；vue-tsc 双端干净；宿主 cargo test --lib 桌面 550 / 移动 299 全绿；packages/peer-net 85 绿；双端插件产物（dist + wasm 组件）已重建并同步 resources。
+
+遗留：真机清单（发现→连接→互发→断点续传→历史/设置核对 + 插件停用后本机仍可被发现）待 Phase 4 收口后统一执行。
+
+### Phase 4 — 旧接口退役 ✅（2026-08-26 实施，待真机验证）
+
+**步骤 7：WIT 旧函数删除 + 句柄表升级**
+
+- WIT host-peer 收缩为终态原语：**桌面 13 个**（dial-peer/close/respond-consent/list-trusted/revoke-trusted/send-files/respond-transfer/set-receive-policy/set-shared-roots/list-shared-roots/browse-directory/pull-files/set-download-dir）、**移动 12 个**（移动端无 set-download-dir，落点固定 MediaStore.Downloads——双端原语面差异由 A1 落点配置语义决定，文档注明）
+- 删除：list-devices / dial-peer(node-id) / disconnect-peer / cancel-transfer / retry-transfer / clear-transfer-history / list-receiving / cancel-receiving / clear-receiving-history / get-receive-settings / list-shared-directories / add-shared-directory / remove-shared-directory / pick-files / pick-folder / set-transfer-encryption
+- `dial-peer-endpoint` 更名 `dial-peer`（endpoint 语义转正）；四个数据面函数（send/list-shared-roots/browse/pull）收紧为仅 session 句柄寻址
+- 句柄表升级：`handle → {node_id, addr, port}`（拨号时记忆 endpoint）；新增 `with_auto_redial` 包装——数据面失败且命中「发现缓存缺失」字样时以记忆 endpoint 重走引擎握手后重试一次（信任检查照走引擎握手），是退役 DiscoveryCache 的前置
+- `send-files` 返回值收窄为传输句柄字符串（batch-id）；插件 enqueue/retry 先入店最小条目占位 + retryMeta，引擎快照事件到达后按 batchId 合并补全明细
+- ABI bump：desktop 9→10 / mobile 7→8；双端 WIT 副本同步；SDK trait 收窄；component-test 版本字面量同步（10/8）
+
+**步骤 8：宿主侧链路退役**
+
+- `peer:devices` topic 与 `peer-devices-changed` 事件映射从 `bus_topic_for` 删除
+- `drive_discovery_push` 守护（spawn_peer_mdns_daemon 内的 browse+快照比对推送）退役：删除 spawn + 函数体 + DISCOVERY_PUSH_INTERVAL/FORCE_REPUSH 常量
+- 引擎侧新增 `spawn_peer_mdns_advertiser`（advertise-only：注册/注销广播与 TLS listener 同生命周期，不做浏览）；双端 start_locked 切换调用、runtime 字段类型换 `DiscoveryAdvertiser`；`DiscoveryCache` 本体保留为引擎内部簿记（dial_peer_endpoint 的 observe 桥接仍在，数据面读缓存用——spec 允许「保留为引擎内部结构」）
+- Tauri 命令面去留：`start/stop_peer_node` + `respond_peer_consent` + `list/revoke_trusted` + `set_receive_policy`/`set_transfer_encryption`（双端）保留（生命周期 + 首连确认 + 信任管理宿主级兜底）；其余查询/管理命令从 invoke_handler 注销（函数体暂留一版：部分仍为 host_impl 内部簿记调用如 cancel_peer_transfer/cancel_peer_receiving，下版本删除）
+- 引擎历史持久化停写（裁决 B）：`persist_history` 改为 no-op 桩，`ensure_history_loaded` 保留一版只读兼容回滚；插件历史成为唯一产品历史
+- 移动端 MulticastLock：浏览随 advertiser 退役后不再常开（Phase 2 申请随 Phase 4 释放）
+
+**步骤 9：数据迁移与兼容**
+
+- 双端新增 `peer_migration` 模块（setup 阶段一次性、幂等）：引擎 `transfer_settings.json` → 插件 storage 键 `transfer_settings`（policy 词表 always_*→UI 词表映射、超时钳制）、`shared_dirs.json` → 插件 storage 键 `shared_roots`（id 以 FNV-1a 内容哈希重算与插件算法对齐）；键已存在即跳过（版本戳防重复导入）；插件历史不迁移
+- 桌面迁移用 PluginStorage（SQLite 句柄）、移动用文件型 PluginStorage（app_data_dir）
+
+验证：插件 cargo test 双端各 20 绿；前端 vitest 桌面 515+/移动 297 绿（worker OOM 偶发属环境 flakiness）；vue-tsc 双端干净；宿主 cargo --lib 桌面 550/移动 299 绿；peer-net 90 绿；双端插件产物（dist + wasm 组件）已重建并同步 resources；component-test wasm 重建后 ABI 协商测试绿。
+
+遗留：真机清单（双端交叉：桌面↔桌面、桌面↔手机、手机↔手机 各一轮全链：发现→连接→互发→断点续传→历史/设置核对 + 旧版升级数据迁移验证 + 插件停用后本机仍可被发现）待执行；ABI 跨版本兼容（旧插件 wasm 遇 v10/v8 宿主被拒——需双端同版发布，发布线遵守 Git Rules）。
+
+### Phase 4 后续清理（下版本）
+- 引擎侧 retired 命令函数体删除（cancel_peer_transfer 等若已无内部调用）
+- peer_migration 模块删除（迁移窗口过后）
+- DiscoveryCache observe 桥接评估退役（需数据面全面改传 StaticPeerRecord，属更深引擎重构）
 
 Phase 4 收紧要点备忘：① 删旧 dial-peer/disconnect-peer/cancel-*/add-remove-shared-directory/pick-*/settings 类函数；② 四个双态寻址函数删除 node-id 直呼分支 + dial_peer_endpoint 改名 dial-peer；③ 数据面缓存观察桥接（dial_peer_endpoint 内 cache.observe 回退记录）随数据面全面句柄化一并退役；④ DiscoveryCache 守护与 peer:devices 快照链路退役；⑤ 移动端 MulticastLock 引用计数释放。
 
