@@ -165,9 +165,9 @@ impl manifest::Guest for Guest {
 }
 
 impl abi::Guest for Guest {
-    // 与 SDK abi::ABI_VERSION（当前 v8）保持一致；宿主按 `abi.form()==1` 识别组件形态
+    // 与 SDK abi::ABI_VERSION（当前 v10）保持一致；宿主按 `abi.form()==1` 识别组件形态
     fn version() -> u32 {
-        8
+        10
     }
 
     fn form() -> u32 {

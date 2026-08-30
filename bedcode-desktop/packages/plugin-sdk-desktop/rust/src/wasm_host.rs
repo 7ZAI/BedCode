@@ -385,16 +385,13 @@ fn to_json_string(api: &str, value: &serde_json::Value) -> Result<String, HostEr
 }
 
 impl HostPeer for WasmHost {
-    fn peer_list_devices(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_devices", host_peer::list_devices().map_err(|e| host_err("peer_list_devices", e))?)
+    fn peer_dial(&self, endpoint: &serde_json::Value) -> Result<String, HostError> {
+        let endpoint_json = to_json_string("peer_dial", endpoint)?;
+        host_peer::dial_peer(&endpoint_json).map_err(|e| host_err("peer_dial", e))
     }
 
-    fn peer_dial(&self, node_id: &str) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_dial", host_peer::dial_peer(node_id).map_err(|e| host_err("peer_dial", e))?)
-    }
-
-    fn peer_disconnect(&self, node_id: &str) -> Result<bool, HostError> {
-        host_peer::disconnect_peer(node_id).map_err(|e| host_err("peer_disconnect", e))
+    fn peer_close(&self, handle: &str) -> Result<bool, HostError> {
+        host_peer::close(handle).map_err(|e| host_err("peer_close", e))
     }
 
     fn peer_respond_consent(&self, request_id: &str, accepted: bool) -> Result<bool, HostError> {
@@ -409,134 +406,63 @@ impl HostPeer for WasmHost {
         host_peer::revoke_trusted(node_id).map_err(|e| host_err("peer_revoke_trusted", e))
     }
 
-    fn peer_send_files(&self, node_id: &str, paths: &[String]) -> Result<serde_json::Value, HostError> {
-        let paths_json = to_json_string("peer_send_files", &serde_json::to_value(paths).unwrap_or_default())?;
-        peer_json("peer_send_files", host_peer::send_files(node_id, &paths_json).map_err(|e| host_err("peer_send_files", e))?)
-    }
-
-    fn peer_list_transfers(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_transfers", host_peer::list_transfers().map_err(|e| host_err("peer_list_transfers", e))?)
-    }
-
-    fn peer_cancel_transfer(&self, batch_id: &str) -> Result<bool, HostError> {
-        host_peer::cancel_transfer(batch_id).map_err(|e| host_err("peer_cancel_transfer", e))
-    }
-
-    fn peer_retry_transfer(&self, batch_id: &str) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_retry_transfer", host_peer::retry_transfer(batch_id).map_err(|e| host_err("peer_retry_transfer", e))?)
-    }
-
-    fn peer_clear_transfer_history(&self) -> Result<u32, HostError> {
-        host_peer::clear_transfer_history().map_err(|e| host_err("peer_clear_transfer_history", e))
-    }
-
-    fn peer_list_receiving(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_receiving", host_peer::list_receiving().map_err(|e| host_err("peer_list_receiving", e))?)
+    fn peer_send_files(
+        &self,
+        session: &str,
+        paths: &[serde_json::Value],
+    ) -> Result<String, HostError> {
+        let paths_json =
+            to_json_string("peer_send_files", &serde_json::to_value(paths).unwrap_or_default())?;
+        // 返回值已收窄为传输句柄字符串（Phase 4），不再包一层 JSON
+        host_peer::send_files(session, &paths_json).map_err(|e| host_err("peer_send_files", e))
     }
 
     fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError> {
-        host_peer::respond_transfer(batch_id, accept).map_err(|e| host_err("peer_respond_transfer", e))
-    }
-
-    fn peer_cancel_receiving(&self, batch_id: &str) -> Result<bool, HostError> {
-        host_peer::cancel_receiving(batch_id).map_err(|e| host_err("peer_cancel_receiving", e))
-    }
-
-    fn peer_clear_receiving_history(&self) -> Result<u32, HostError> {
-        host_peer::clear_receiving_history().map_err(|e| host_err("peer_clear_receiving_history", e))
-    }
-
-    fn peer_get_receive_settings(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_get_receive_settings", host_peer::get_receive_settings().map_err(|e| host_err("peer_get_receive_settings", e))?)
+        host_peer::respond_transfer(batch_id, accept)
+            .map_err(|e| host_err("peer_respond_transfer", e))
     }
 
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError> {
-        host_peer::set_receive_policy(mode, timeout_secs).map_err(|e| host_err("peer_set_receive_policy", e))
+        host_peer::set_receive_policy(mode, timeout_secs)
+            .map_err(|e| host_err("peer_set_receive_policy", e))
     }
 
-    fn peer_list_shared_directories(&self) -> Result<serde_json::Value, HostError> {
-        peer_json(
-            "peer_list_shared_directories",
-            host_peer::list_shared_directories().map_err(|e| host_err("peer_list_shared_directories", e))?,
-        )
+    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
+        let dirs_json =
+            to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
+        host_peer::set_shared_roots(&dirs_json).map_err(|e| host_err("peer_set_shared_roots", e))
     }
 
-    fn peer_remove_shared_directory(&self, id: &str) -> Result<bool, HostError> {
-        host_peer::remove_shared_directory(id).map_err(|e| host_err("peer_remove_shared_directory", e))
-    }
-
-    fn peer_add_shared_directory(
-        &self,
-        request: &serde_json::Value,
-    ) -> Result<serde_json::Value, HostError> {
-        let request_json = to_json_string("peer_add_shared_directory", request)?;
-        peer_json(
-            "peer_add_shared_directory",
-            host_peer::add_shared_directory(&request_json)
-                .map_err(|e| host_err("peer_add_shared_directory", e))?,
-        )
-    }
-
-    fn peer_list_shared_roots(&self, node_id: &str) -> Result<serde_json::Value, HostError> {
-        peer_json(
-            "peer_list_shared_roots",
-            host_peer::list_shared_roots(node_id).map_err(|e| host_err("peer_list_shared_roots", e))?,
-        )
+    fn peer_list_shared_roots(&self, session: &str) -> Result<serde_json::Value, HostError> {
+        peer_json("peer_list_shared_roots", host_peer::list_shared_roots(session).map_err(|e| host_err("peer_list_shared_roots", e))?)
     }
 
     fn peer_browse_directory(
         &self,
-        node_id: &str,
+        session: &str,
         dir_id: &str,
         rel_path: &str,
     ) -> Result<serde_json::Value, HostError> {
         peer_json(
             "peer_browse_directory",
-            host_peer::browse_directory(node_id, dir_id, rel_path)
+            host_peer::browse_directory(session, dir_id, rel_path)
                 .map_err(|e| host_err("peer_browse_directory", e))?,
         )
     }
 
     fn peer_pull_files(
         &self,
-        node_id: &str,
+        session: &str,
         dir_id: &str,
         files: &[serde_json::Value],
     ) -> Result<u32, HostError> {
-        let files_json = to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
-        host_peer::pull_files(node_id, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
-    }
-
-    fn peer_pick_files(&self) -> Result<Vec<String>, HostError> {
-        let v = peer_json("peer_pick_files", host_peer::pick_files().map_err(|e| host_err("peer_pick_files", e))?)?;
-        serde_json::from_value(v)
-            .map_err(|e| HostError::custom(-1, format!("peer_pick_files: invalid JSON from host: {e}")))
-    }
-
-    fn peer_pick_folder(&self) -> Result<String, HostError> {
-        host_peer::pick_folder().map_err(|e| host_err("peer_pick_folder", e))
+        let files_json =
+            to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
+        host_peer::pull_files(session, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
     }
 
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
         host_peer::set_download_dir(path).map_err(|e| host_err("peer_set_download_dir", e))
-    }
-
-    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError> {
-        host_peer::set_transfer_encryption(enabled).map_err(|e| host_err("peer_set_transfer_encryption", e))
-    }
-
-    fn peer_dial_endpoint(&self, endpoint: &serde_json::Value) -> Result<String, HostError> {
-        let endpoint_json = to_json_string("peer_dial_endpoint", endpoint)?;
-        host_peer::dial_peer_endpoint(&endpoint_json).map_err(|e| host_err("peer_dial_endpoint", e))
-    }
-
-    fn peer_close(&self, handle: &str) -> Result<bool, HostError> {
-        host_peer::close(handle).map_err(|e| host_err("peer_close", e))
-    }
-
-    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
-        let dirs_json = to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
-        host_peer::set_shared_roots(&dirs_json).map_err(|e| host_err("peer_set_shared_roots", e))
     }
 }
 

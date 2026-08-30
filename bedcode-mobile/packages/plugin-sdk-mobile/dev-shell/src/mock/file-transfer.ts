@@ -16,12 +16,15 @@ import { emitDevEvent } from './session'
 import type { PeerDevMock, PluginContext, PluginDevMock } from '../../../src/types'
 import { pushLog } from '../registry'
 
-/** 种子设备条目（与 SDK PeerDevMock.devices 一致；本地重声明避免隐式 any） */
-interface MockDevice {
-  nodeId: string
-  deviceName: string
-  addr?: string
-  fileTransfer?: boolean
+/** 设备种子条目（插件 devMock 导出的本地扩展字段：mdns:found 载荷形状 + 拨号行为） */
+interface MockDeviceSeed {
+  found: {
+    instanceName: string
+    addresses: string[]
+    port: number
+    txtRecords: { id: string; name?: string; ver?: string; cap?: string }
+  }
+  dialBehavior?: 'connected' | 'denied' | 'unreachable'
 }
 
 /**
@@ -72,20 +75,23 @@ export function registerFileTransferMock(
   mock: PluginDevMock | undefined,
   pluginId: string,
 ): void {
-  const peerSeed = mock?.peer as (PeerDevMock & { consent?: MockConsentSeed; trusted?: unknown }) | undefined
-  const devices: MockDevice[] = peerSeed?.devices ?? []
+  const peerSeed = mock?.peer as
+    | (PeerDevMock & { consent?: MockConsentSeed; trusted?: unknown; deviceSeeds?: MockDeviceSeed[] })
+    | undefined
+  const deviceSeeds: MockDeviceSeed[] = peerSeed?.deviceSeeds ?? []
+  /** 种子派生视图：nodeId → 种子（拨号行为/能力位判定用） */
+  const seedByNode = new Map(deviceSeeds.map((d) => [d.found.txtRecords.id, d]))
   const connectedNodes = new Set<string>(peerSeed?.connectedNodeIds ?? [])
   let activePeerId = peerSeed?.activeNodeId ?? ''
-  const dialBehavior = peerSeed?.dialBehavior ?? {}
   const dialLatencyMs = peerSeed?.dialLatencyMs ?? 800
 
   // ==================== 对等域事件推送 ====================
 
   /** 连接态增量：维护已连接集合并推 connection-changed（{ nodeId, connected } 契约） */
   function emitConnection(nodeId: string, connected: boolean): void {
-    const device = devices.find((d) => d.nodeId === nodeId)
+    const seed = seedByNode.get(nodeId)
     if (connected) {
-      if (!device || connectedNodes.has(nodeId)) return
+      if (!seed || connectedNodes.has(nodeId)) return
       connectedNodes.add(nodeId)
     } else {
       if (!connectedNodes.has(nodeId)) return
@@ -94,66 +100,58 @@ export function registerFileTransferMock(
     emitDevEvent('plugin:file-transfer:connection-changed', {
       nodeId,
       connected,
-      deviceName: device?.deviceName ?? null,
+      deviceName: seed?.found.txtRecords.name ?? null,
     })
   }
 
-  /** 发现快照 + 连接态全量补发（dev-shell 事件总线不重放历史，晚订阅者靠它追平） */
+  /** 发现推送：逐台延迟发 mdns-found（自建缓存版 wire；晚订阅靠延迟窗口追平） */
+  function pushDeviceDiscovery(): void {
+    deviceSeeds.forEach((seed, i) => {
+      timers.push(
+        setTimeout(() => {
+          emitDevEvent('plugin:file-transfer:mdns-found', { ...seed.found })
+        }, 400 + i * 300),
+      )
+    })
+  }
+
+  /** 连接态全量补发（dev-shell 事件总线不重放历史，晚订阅者靠它追平） */
   function pushPeerSnapshot(): void {
-    emitDevEvent(
-      'plugin:file-transfer:devices-changed',
-      devices.map((d) => ({ ...d })),
-    )
-    for (const nodeId of connectedNodes) {
-      const device = devices.find((d) => d.nodeId === nodeId)
-      emitDevEvent('plugin:file-transfer:connection-changed', {
-        nodeId,
-        connected: true,
-        deviceName: device?.deviceName ?? null,
-      })
-    }
+    for (const nodeId of connectedNodes) emitConnection(nodeId, true)
   }
 
   // ==================== 对等域命令 handler ====================
 
-  // 发现快照：执行时同步补发订阅追平事件（组件挂载晚于插件激活，
-  // 初始推送会错失；query-peer 由 usePeerDevices/useTasks 挂载后主动拉取）
-  context.commands.register('file-transfer.query-peer', () => {
-    pushPeerSnapshot()
-    return devices.map((d) => ({ ...d }))
-  })
-  // 旧契约：可传输对端列表 + 活跃对端（usePeerDevices.refresh 拉活跃态用）
-  context.commands.register('file-transfer.list-peers', () => ({
-    peers: devices
-      .filter((d) => d.fileTransfer !== false)
-      .map((d) => ({ deviceId: d.nodeId, name: d.deviceName })),
-    activePeerId,
-  }))
+  // 设备缓存自持（Phase 3 步骤 1）：快照存取 + 发现事件延迟推送
+  context.commands.register('file-transfer.get-device-snapshot', () => ({ devices: [] }))
+  context.commands.register('file-transfer.save-device-snapshot', () => ({ ok: true }))
   context.commands.register('file-transfer.set-active-peer', (args: any) => {
     const id = args?.peerId
-    if (typeof id === 'string' && (!id || devices.some((d) => d.nodeId === id))) {
+    if (typeof id === 'string' && (!id || seedByNode.has(id))) {
       activePeerId = id
     }
     return { activePeerId }
   })
-  // 对等拨号：按 seed.dialBehavior 返回终态；connected 时同步推连接态事件
+  // 对等拨号：入参携带显式 endpoint；按种子 dialBehavior 返回终态（错误以
+  // rejected promise 携带字样供行内文案分流）；connected 时推连接态事件
   context.commands.register('file-transfer.dial-peer', (args: any) => {
-    const nodeId: string = args?.nodeId ?? ''
-    const device = devices.find((d) => d.nodeId === nodeId)
-    if (!device || !device.fileTransfer || connectedNodes.has(nodeId)) {
-      return Promise.reject(new Error(`dial failed: cannot dial "${nodeId}"`))
+    const nodeId: string = args?.endpoint?.nodeId ?? args?.nodeId ?? ''
+    const seed = seedByNode.get(nodeId)
+    const capable = Number.parseInt(seed?.found.txtRecords.cap ?? '0', 16) % 2 === 1
+    if (!seed || !capable || connectedNodes.has(nodeId)) {
+      return Promise.reject(new Error(`dial endpoint failed: peer unreachable (${nodeId})`))
     }
-    const behavior = dialBehavior[nodeId] ?? 'unreachable'
+    const behavior = seed.dialBehavior ?? 'unreachable'
     return new Promise((resolve, reject) => {
       timers.push(
         setTimeout(() => {
           if (behavior === 'connected') {
             emitConnection(nodeId, true)
-            resolve({ status: 'connected', deviceName: device.deviceName })
+            resolve({ status: 'connected' })
           } else if (behavior === 'denied') {
-            resolve({ status: 'denied', deviceName: device.deviceName })
+            reject(new Error('dial endpoint failed: peer denied'))
           } else {
-            reject(new Error('dial failed: node unreachable'))
+            reject(new Error('dial endpoint failed: peer unreachable'))
           }
         }, dialLatencyMs),
       )
@@ -162,7 +160,7 @@ export function registerFileTransferMock(
   context.commands.register('file-transfer.disconnect-peer', (args: any) => {
     const nodeId = args?.nodeId
     if (typeof nodeId === 'string') emitConnection(nodeId, false)
-    return Promise.resolve(true)
+    return Promise.resolve({ existed: true })
   })
 
   // ==================== 首连确认演示（ticket 04，种子来自插件扩展字段） ====================
@@ -254,20 +252,21 @@ export function registerFileTransferMock(
     }
     return { ok: true }
   })
-  // 添加共享目录：模拟 SAF 目录树选择器授权成功（追加条目，同名幂等）；
-  // 真实取消路径由宿主选择器决定，mock 直接返回 ok 驱动「添加 → 列表刷新」全链演示
-  let safSeq = 0
+  // 添加共享目录（Phase 3 自持版契约）：模拟 SAF 目录树选择器授权成功，
+  // 返回注册表条目 { id, name, treeUri }；真实取消路径由宿主选择器决定
+  let safSeq = localRoots.filter((r) => !r.builtin).length
   context.commands.register('file-transfer.mount-local', () => {
     safSeq += 1
+    const uri = `content://com.android.externalstorage.documents/tree/primary%3ADocuments-${safSeq}`
     const entry: MockSharedDir = {
       id: `root-saf-${safSeq}`,
       name: `SDCARD${safSeq > 1 ? safSeq : ''}`,
-      tree_uri: `content://com.android.externalstorage.documents/tree/primary%3ADocuments-${safSeq}`,
+      tree_uri: uri,
     }
     if (!localRoots.some((r) => r.tree_uri === entry.tree_uri)) {
       localRoots.push(entry)
     }
-    return { ok: true }
+    return { id: entry.id, name: entry.name, treeUri: entry.tree_uri }
   })
   context.commands.register('file-transfer.update-roots', (args: any) => {
     const removeId: string | undefined = typeof args?.remove === 'string' ? args.remove : undefined
@@ -281,16 +280,18 @@ export function registerFileTransferMock(
 
   // ==================== 初始与延迟补发 ====================
 
-  // 初始推送（工具箱入口等早订阅者）+ WS 控制面在线（顶栏 pill / connOnline）
-  pushPeerSnapshot()
-  emitDevEvent('device-connected', {
-    device_id: activePeerId || devices[0]?.nodeId || '',
-    device_name: devices[0]?.deviceName ?? '',
-  })
-  emitDevEvent('ws_paired', {})
-
-  // 延迟补发：视图订阅晚于激活时靠它追平（与既有 mock 的延迟富化策略一致）
-  timers.push(setTimeout(pushPeerSnapshot, 600))
+  // 发现事件延迟推送（自建缓存 wire）+ 连接态补发 + WS 控制面在线
+  pushDeviceDiscovery()
+  timers.push(
+    setTimeout(() => {
+      pushPeerSnapshot()
+      emitDevEvent('device-connected', {
+        device_id: activePeerId || deviceSeeds[0]?.found.txtRecords.id || '',
+        device_name: deviceSeeds[0]?.found.txtRecords.name ?? '',
+      })
+      emitDevEvent('ws_paired', {})
+    }, 600),
+  )
 }
 
 /** 清理模拟定时器（插件停用时调用；命令 handler 随 context disposables 摘除） */

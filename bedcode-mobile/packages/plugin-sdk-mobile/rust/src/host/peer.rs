@@ -1,85 +1,59 @@
-//! 对等网络基础能力（WIT `host-peer`，issue 12 切换后新增）
+//! 对等网络基础能力（WIT `host-peer`，ADR 0022 v3 终态 13 原语）
 //!
-//! 宿主只提供发现/信任/拨号/收发/浏览的能力原语；file-transfer 插件
-//! 是首个上层消费者。事件（设备列表变化/连上断开/首连确认请求/任务
-//! 进度）经消息总线 `peer:*` topic 推送，插件用 [`HostBus`](super::HostBus)
-//! 订阅后在自己的 `on_message` 回调里消费。
+//! 宿主只提供拨号/关闭/信任/收发/闸门配置/广播面同步的无业务语义原语；
+//! file-transfer 插件是首个上层消费者，设备列表、任务队列与历史、共享根
+//! 注册表、接收策略等产品状态由插件自持（issue 13 Phase 3）。
+//!
+//! 事件（发现/离开/连上断开/首连确认请求/传输进度）经消息总线
+//! `mdns:*` / `peer:*` topic 推送，插件用 [`HostBus`](super::HostBus)
+//! 订阅后在自己的 `on_bus_message` 回调里消费。
 
 use crate::host::HostError;
 
 /// 对等网络能力 trait —— 函数签名与 WIT `host-peer` 一一对应，
 /// JSON 载荷在绑定层完成字符串 ↔ Value 转换
 pub trait HostPeer {
-    /// 发现缓存全量列表（DiscoveredPeerDto JSON 数组）
-    fn peer_list_devices(&self) -> Result<serde_json::Value, HostError>;
-    /// 按 endpoint 拨号（ADR 0022 v2）：endpoint = `{ nodeId, addr, port }`，
-    /// 成功返回 session 句柄；denied/unreachable 报错
-    fn peer_dial_endpoint(&self, endpoint: &serde_json::Value) -> Result<String, HostError>;
+    /// 按 endpoint 拨号（endpoint = `{ nodeId, addr, port }`），成功返回 session
+    /// 句柄；denied/unreachable 报错
+    fn peer_dial(&self, endpoint: &serde_json::Value) -> Result<String, HostError>;
     /// 统一资源关闭：session 句柄 = 断开；传输句柄 = 取消。返回是否命中
     fn peer_close(&self, handle: &str) -> Result<bool, HostError>;
-    /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（移动 SAF 树）
-    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
-    /// 拨号连接指定节点（等待对端确认），返回 DialPeerResultDto
-    fn peer_dial(&self, node_id: &str) -> Result<serde_json::Value, HostError>;
-    /// 断开与指定节点的会话（返回是否存在该会话）
-    fn peer_disconnect(&self, node_id: &str) -> Result<bool, HostError>;
     /// 首次连接确认应答（返回是否命中了待确认项）
     fn peer_respond_consent(&self, request_id: &str, accepted: bool) -> Result<bool, HostError>;
     /// 可信对端列表（TrustedPeerDto JSON 数组）
     fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError>;
     /// 撤销对指定节点的信任（返回是否删除了条目）
     fn peer_revoke_trusted(&self, node_id: &str) -> Result<bool, HostError>;
-    /// 向单个对端发送一批文件（扇出 = 对多个对端各调一次）→ PeerTransferDto
-    fn peer_send_files(&self, node_id: &str, paths: &[String]) -> Result<serde_json::Value, HostError>;
-    /// 发送任务列表（含历史）
-    fn peer_list_transfers(&self) -> Result<serde_json::Value, HostError>;
-    /// 取消发送批
-    fn peer_cancel_transfer(&self, batch_id: &str) -> Result<bool, HostError>;
-    /// 重试失败/被拒/取消的发送批（断点续传）→ PeerTransferDto
-    fn peer_retry_transfer(&self, batch_id: &str) -> Result<serde_json::Value, HostError>;
-    /// 清空发送+接收历史（返回清除条数）
-    fn peer_clear_transfer_history(&self) -> Result<u32, HostError>;
-    /// 待应答/进行中的接收任务
-    fn peer_list_receiving(&self) -> Result<serde_json::Value, HostError>;
+    /// 向单个对端发送一批文件（扇出 = 对多个对端各调一次）。paths 元素双形态：
+    /// 纯 string 或 `{ path, encrypt? }` 对象（任一元素 encrypt=true → 本批强制
+    /// 加密）。返回传输句柄（batch-id 字符串）；仅接受 session 句柄寻址，
+    /// 连接已断时以句柄记忆的 endpoint 自动重拨
+    fn peer_send_files(
+        &self,
+        session: &str,
+        paths: &[serde_json::Value],
+    ) -> Result<String, HostError>;
     /// 接收批应答：accept=false 或超时视为拒绝
     fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError>;
-    /// 取消进行中的接收批（pending 视为拒绝）
-    fn peer_cancel_receiving(&self, batch_id: &str) -> Result<bool, HostError>;
-    /// 清空接收终态记录（返回清除条数）
-    fn peer_clear_receiving_history(&self) -> Result<u32, HostError>;
-    /// 接收设置 { policyMode, timeoutSecs, downloadDir }
-    fn peer_get_receive_settings(&self) -> Result<serde_json::Value, HostError>;
-    /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
+    /// 设置接收策略（引擎安全闸门配置原语）：mode = "ask" | "always_accept" | "always_deny"
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
-    /// 设置传输加密开关（发送侧新批生效；接收侧自动适配）
-    fn peer_set_transfer_encryption(&self, enabled: bool) -> Result<(), HostError>;
-    /// 本机暴露的共享目录
-    fn peer_list_shared_directories(&self) -> Result<serde_json::Value, HostError>;
-    /// 移除共享目录条目
-    fn peer_remove_shared_directory(&self, id: &str) -> Result<bool, HostError>;
-    /// 新增共享目录：request = { name?, path? }（移动端忽略 path 走 SAF 选择器）
-    fn peer_add_shared_directory(&self, request: &serde_json::Value)
-        -> Result<serde_json::Value, HostError>;
-    /// 浏览对端共享根清单
-    fn peer_list_shared_roots(&self, node_id: &str) -> Result<serde_json::Value, HostError>;
-    /// 目录下钻
+    /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（SAF 树 URI）
+    fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
+    /// 浏览对端共享根清单（仅 session 句柄寻址；断线自动重拨）
+    fn peer_list_shared_roots(&self, session: &str) -> Result<serde_json::Value, HostError>;
+    /// 目录下钻（仅 session 句柄寻址；断线自动重拨）
     fn peer_browse_directory(
         &self,
-        node_id: &str,
+        session: &str,
         dir_id: &str,
         rel_path: &str,
     ) -> Result<serde_json::Value, HostError>;
     /// 拉取对端文件（files = RemotePullFileDto 数组）→ 入队文件数
+    /// （仅 session 句柄寻址；断线自动重拨）
     fn peer_pull_files(
         &self,
-        node_id: &str,
+        session: &str,
         dir_id: &str,
         files: &[serde_json::Value],
     ) -> Result<u32, HostError>;
-    /// 系统多文件选择器（用户取消为空数组）
-    fn peer_pick_files(&self) -> Result<Vec<String>, HostError>;
-    /// 系统文件夹选择器（共享目录源；用户取消返回空串）
-    fn peer_pick_folder(&self) -> Result<String, HostError>;
-    /// 设置接收落点目录（移动端不支持自定义：宿主返回错误）
-    fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError>;
 }

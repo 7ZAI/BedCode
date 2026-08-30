@@ -82,25 +82,16 @@ interface host-bus {
 /// - `peer:transfer`   发送任务列表变化（含进度与终态）
 /// - `peer:receive`    接收侧变化（待应答批/进行中接收）
 interface host-peer {
-    /// 发现缓存全量列表 → DiscoveredPeerDto JSON 数组
-    list-devices: func() -> result<string, string>;
-    /// 拨号连接指定节点（等待对端确认）→ DialPeerResultDto JSON
-    dial-peer: func(node-id: string) -> result<string, string>;
-    /// 按 endpoint 拨号连接（ADR 0022 v2）：endpoint = `{ nodeId, addr, port }`
-    /// （camelCase JSON，插件从自身设备缓存/mdns 事件解析后显式传入；宿主不再内藏
-    /// node-id → 地址解析表）。握手期「证书指纹 ↔ nodeId 绑定 + 信任检查」语义不变。
-    /// 成功返回 session 句柄（`sess-<uuid>`，后续按句柄寻址）；denied/unreachable
-    /// 以错误上抛（携带状态字样）
-    dial-peer-endpoint: func(endpoint-json: string) -> result<string, string>;
+    /// 按 endpoint 拨号连接（ADR 0022 v2 终态，原 dial-peer-endpoint 转正）：
+    /// endpoint = `{ nodeId, addr, port }`（camelCase JSON，插件从自身设备缓存/
+    /// mdns 事件解析后显式传入；宿主不内藏 node-id → 地址解析表）。握手期
+    /// 「证书指纹 ↔ nodeId 绑定 + 信任检查」语义不变。成功返回 session 句柄
+    /// （`sess-<uuid>`，后续按句柄寻址）；denied/unreachable 以错误上抛
+    dial-peer: func(endpoint-json: string) -> result<string, string>;
     /// 统一资源关闭（ADR 0022 v2）：session 句柄 = 断开连接；传输句柄 = 取消传输
     /// （先发送批取消、后接收批取消——pending 接收批被关闭即拒绝，闸门 fail-safe
     /// 的自然结果）。返回是否命中并关闭了任意资源
     close: func(handle: string) -> result<bool, string>;
-    /// 断开与指定节点的会话（返回是否存在该会话）
-    ///
-    /// 旧式寻址入口（ADR 0022 v2 起由 `close` 取代）：并行保留至插件切换完成
-    /// （Phase 4 退役）。
-    disconnect-peer: func(node-id: string) -> result<bool, string>;
     /// 首次连接确认应答（返回是否命中了待确认项）
     respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
     /// 可信对端列表 → TrustedPeerDto JSON 数组
@@ -108,63 +99,29 @@ interface host-peer {
     /// 撤销对指定节点的信任（返回是否删除了条目）
     revoke-trusted: func(node-id: string) -> result<bool, string>;
     /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
-    /// 扇出 = 对多个对端各调一次，各批相互独立）→ PeerTransferDto JSON
+    /// 扇出 = 对多个对端各调一次，各批相互独立）→ 传输句柄（batch-id 字符串）
     ///
-    /// ADR 0022 过渡期双态寻址：首参可为 session 句柄或旧式 node-id；返回 DTO 的
-    /// batchId 即传输句柄（可传给 close 取消）。Phase 4 收紧为仅句柄。
-    send-files: func(node-id: string, paths-json: string) -> result<string, string>;
-    /// 发送任务列表（含历史）→ PeerTransferDto JSON 数组
-    list-transfers: func() -> result<string, string>;
-    /// 取消发送批
-    cancel-transfer: func(batch-id: string) -> result<bool, string>;
-    /// 重试失败/被拒/取消的发送批（断点续传）→ PeerTransferDto JSON
-    retry-transfer: func(batch-id: string) -> result<string, string>;
-    /// 清空发送+接收历史（返回清除条数）
-    clear-transfer-history: func() -> result<u32, string>;
-    /// 待应答/进行中的接收任务 → PeerTransferDto JSON 数组
-    list-receiving: func() -> result<string, string>;
+    /// 仅接受 session 句柄寻址；paths 元素双形态：纯 string 或 `{ path, encrypt? }`
+    /// 对象（任一元素 encrypt=true → 本批强制加密）。连接已断时以句柄记忆的
+    /// endpoint 自动重拨（信任检查照走引擎握手）
+    send-files: func(session-handle: string, paths-json: string) -> result<string, string>;
     /// 接收批应答：accept=false 或超时视为拒绝
     respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
-    /// 取消进行中的接收批（pending 视为拒绝）
-    cancel-receiving: func(batch-id: string) -> result<bool, string>;
-    /// 清空接收终态记录（返回清除条数）
-    clear-receiving-history: func() -> result<u32, string>;
-    /// 接收设置 → { policyMode, timeoutSecs, downloadDir } JSON
-    get-receive-settings: func() -> result<string, string>;
-    /// 设置接收策略：mode = "ask" | "always_accept" | "always_deny"
+    /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
+    /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
-    /// 设置传输加密开关（发送侧：新发起的发送批启用 AES-256-GCM 应用层加密；
-    /// 接收侧由 Offer 加密头自动驱动，无需设置）
-    set-transfer-encryption: func(enabled: bool) -> result<_, string>;
-    /// 本机暴露的共享目录 → SharedDirDto JSON 数组
-    list-shared-directories: func() -> result<string, string>;
-    /// 移除共享目录条目
-    remove-shared-directory: func(id: string) -> result<bool, string>;
-    /// 新增共享目录：request = { name?: string, path?: string }
-    /// （桌面端用 path；移动端忽略 path 弹 SAF 目录树选择器）→ SharedDirDto JSON
-    ///
-    /// 旧式单条 CRUD（ADR 0022 v2 起由 `set-shared-roots` 取代）：并行保留至
-    /// 插件切换完成（Phase 4 退役）。
-    add-shared-directory: func(request-json: string) -> result<string, string>;
-    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, safTreeUri }]`
-    /// （camelCase JSON；移动端共享根均为 SAF 树 URI）。注册表 CRUD 真源在插件侧，
-    /// 本函数只同步暴露面镜像；任一条目非法整批拒绝
+    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
+    /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
+    /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
     set-shared-roots: func(dirs-json: string) -> result<_, string>;
-    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组
-    ///
-    /// ADR 0022 过渡期双态寻址：首参可为 session 句柄或旧式 node-id（下同：
-    /// browse-directory / pull-files），Phase 4 收紧为仅句柄。
-    list-shared-roots: func(node-id: string) -> result<string, string>;
-    /// 目录下钻 → RemoteBrowseDto JSON
-    browse-directory: func(node-id: string, dir-id: string, rel-path: string) -> result<string, string>;
+    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组（仅 session 句柄寻址；
+    /// 连接已断时以句柄记忆的 endpoint 自动重拨）
+    list-shared-roots: func(session-handle: string) -> result<string, string>;
+    /// 目录下钻 → RemoteBrowseDto JSON（仅 session 句柄寻址；重拨语义同上）
+    browse-directory: func(session-handle: string, dir-id: string, rel-path: string) -> result<string, string>;
     /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
-    pull-files: func(node-id: string, dir-id: string, files-json: string) -> result<u32, string>;
-    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）
-    pick-files: func() -> result<string, string>;
-    /// 系统文件夹选择器（共享目录源）→ 绝对路径；用户取消返回空串
-    pick-folder: func() -> result<string, string>;
-    /// 设置接收落点目录（移动端固定 MediaStore.Downloads，不支持自定义：返回错误）
-    set-download-dir: func(path: string) -> result<_, string>;
+    /// （仅 session 句柄寻址；重拨语义同上）
+    pull-files: func(session-handle: string, dir-id: string, files-json: string) -> result<u32, string>;
 }
 
 /// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传

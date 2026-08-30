@@ -26,7 +26,7 @@
 //!   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 //!   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 //!   v8 插件二进制不受影响
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -43,7 +43,7 @@ mod tests {
     fn test_abi_version_is_v9() {
         // 版本号序列与历史 core ABI 共用：v9 = host-peer 原语化收缩第一阶段
         // （dial-peer-endpoint / close / set-shared-roots + host-mdns / host-platform）
-        assert_eq!(ABI_VERSION, 9);
+        assert_eq!(ABI_VERSION, 10);
     }
 
     #[test]

@@ -15,7 +15,7 @@
 ///   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 ///   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 ///   v6 插件二进制不受影响
-pub const ABI_VERSION: u32 = 7;
+pub const ABI_VERSION: u32 = 8;
 
 #[cfg(test)]
 mod tests {
@@ -24,6 +24,6 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        assert_eq!(ABI_VERSION, 7);
+        assert_eq!(ABI_VERSION, 8);
     }
 }
