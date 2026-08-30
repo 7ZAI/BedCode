@@ -27,6 +27,16 @@ const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, par
 
 const tasks = useTasks(context)
 const devices = usePeerDevices(context)
+
+// 可发送性：自建设备缓存中存在具备传输能力的节点（Phase 3 起 devices-changed
+// 事件退役，tasks.peerOnline 不再由命令面驱动）
+watch(
+  () => devices.devices.value,
+  (list) => {
+    tasks.peerOnline.value = list.some((d) => d.fileTransfer !== false && !!d.nodeId)
+  },
+  { deep: false, immediate: true },
+)
 const fs = useRemoteFs(context)
 const settings = useSettings(context)
 // 解构 Ref：模板需直接读 approvalTimeoutSec（settings 对象顶层是 settings Ref）

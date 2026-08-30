@@ -39,7 +39,6 @@ const {
 const {
   tasks,
   totalSpeed,
-  queryPeer,
   refresh: refreshTasks,
   sendPickedFiles,
   cancel,
@@ -147,9 +146,9 @@ async function handleDownload(): Promise<void> {
   }
 }
 
-/** 顶栏刷新：任务 + 当前目录层级 + 设备探测 */
+/** 顶栏刷新：任务 + 当前目录层级 + 设备缓存清扫 */
 async function handleRefresh(): Promise<void> {
-  await Promise.all([refreshTasks(), fs.refresh(), queryPeer()])
+  await Promise.all([refreshTasks(), fs.refresh(), refreshDevices()])
 }
 
 /** 发送到手机：系统多文件选择器直发活跃对端 */
@@ -215,7 +214,6 @@ onMounted(async () => {
   startTasks()
   startReceiving()
   await Promise.all([loadSettings(), refreshTasks()])
-  void queryPeer()
 })
 
 onUnmounted(() => {

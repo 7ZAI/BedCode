@@ -1,46 +1,46 @@
 /**
- * 任务核心逻辑 (Desktop) — host-peer 契约版
+ * 任务核心逻辑 (Desktop) — 自有存储 wire 版（issue 13 Phase 3）
  *
- * 权威数据源为插件 WASM 转发的宿主对等事件（批级模型）：
- * - tasks-changed：发送方向 PeerTransferDto[] → Task（一批一条记录）
- * - devices-changed：DiscoveredPeerDto[]，前端挑选具备文件传输能力的设备
- *
- * 命令调用经 context.commands.execute('file-transfer.*')，由插件 Rust 侧
- * 薄代理转发 host.peer_* 并翻译 wire 形状。
+ * 权威数据源为插件 WASM 自持存储的派生事件（tasks-changed，引擎
+ * PeerTransferDto camelCase 形状 + retryMeta 扩展）：本文件只做一层
+ * camelCase wire → 前端内部模型的映射，组件消费模型不变。
  */
 import { ref, computed, type Ref } from 'vue'
 import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Task, TaskStateName } from '../types'
 import { isTerminalState } from '../types'
 
-/** 将代理层快照项（snake_case）映射为前端 camelCase 内部模型 */
-function mapWireTask(raw: any): Task {
-  return {
-    id: raw.id ?? raw.batch_id ?? '',
-    direction: raw.direction === 'upload' ? 'upload' : 'download',
-    peer: {
-      deviceId: raw.peer?.device_id ?? raw.peer?.deviceId ?? '',
-      name: raw.peer?.name ?? '',
-    },
-    remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    localPath: null,
-    size: raw.size ?? 0,
-    offset: raw.offset ?? 0,
-    rateBps: raw.rate_bps ?? raw.rateBps ?? 0,
-    state: raw.state as TaskStateName,
-    reason: raw.reason ?? null,
-    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
-    batchId: raw.batch_id ?? raw.batchId ?? null,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
-  }
+/** 展示名：首文件名（多文件追加 +N） */
+function displayName(files: unknown): string {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]?.path ?? arr[0]?.relativePath ?? 'file'
+  const name = String(first).split('/').pop() ?? String(first)
+  const extra = Math.max(0, arr.length - 1)
+  return extra > 0 ? `${name} +${extra}` : name
 }
 
-/** 发现设备（devices-changed 事件项） */
-interface DeviceInfo {
-  nodeId: string
-  deviceName: string
-  fileTransfer?: boolean
+/** 将自有存储条目（camelCase TransferEntry）映射为前端内部模型 */
+function mapWireTask(raw: any): Task {
+  const status = String(raw.status ?? '')
+  return {
+    id: raw.batchId ?? '',
+    direction: raw.direction === 'receive' ? 'download' : 'upload',
+    peer: {
+      deviceId: raw.nodeId ?? '',
+      name: raw.peerName ?? '',
+    },
+    remotePath: displayName(raw.files),
+    localPath: null,
+    size: raw.totalBytes ?? 0,
+    offset: raw.transferredBytes ?? 0,
+    rateBps: raw.rateBps ?? 0,
+    state: (status === 'running' ? 'transferring' : status) as TaskStateName,
+    reason: raw.detail ?? raw.rejectReason ?? null,
+    initiator: 'me',
+    batchId: raw.batchId ?? null,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
+  }
 }
 
 export function useTasks(context: PluginContext) {
@@ -49,15 +49,14 @@ export function useTasks(context: PluginContext) {
   /** 活跃传输总速率（B/s） */
   const totalSpeed = ref(0) as Ref<number>
 
-  /** 存在具备文件传输能力的发现设备 */
+  /** 存在具备文件传输能力的发现设备（devices 由 usePeerDevices 维护；本处仅镜像布尔） */
   const peerOnline = ref(false) as Ref<boolean>
   const peerId = ref('') as Ref<string>
   const peerName = ref('') as Ref<string>
 
   let dispTasks: Disposable | null = null
-  let dispDevices: Disposable | null = null
 
-  /** 任务/速率快照整表替换 */
+  /** 任务/速率快照整表替换（对端名镜像自活跃条目，供迷你条展示） */
   function applySnapshot(list: any[]): void {
     const next = list.map(mapWireTask)
     tasks.value = next
@@ -70,27 +69,9 @@ export function useTasks(context: PluginContext) {
     if (firstNamed?.peer?.name) peerName.value = firstNamed.peer.name
   }
 
-  /** 设备列表变化：挑选首个具备文件传输能力的节点为活跃对端 */
-  function onDevicesChanged(payload: unknown): void {
-    if (!Array.isArray(payload)) return
-    const capable = payload.find(
-      (d: DeviceInfo) => d.fileTransfer !== false && !!d.nodeId,
-    ) as DeviceInfo | undefined
-    if (capable) {
-      peerOnline.value = true
-      peerId.value = capable.nodeId
-      if (capable.deviceName) peerName.value = capable.deviceName
-      void context.commands
-        .execute('file-transfer.set-active-peer', { peerId: capable.nodeId })
-        .catch(() => {})
-    } else {
-      peerOnline.value = false
-    }
-  }
-
   // ==================== 命令封装 ====================
 
-  /** 拉取发送方向任务（初始同步） */
+  /** 拉取发送方向任务（初始同步；自持存储读命令） */
   async function refresh(): Promise<void> {
     try {
       const data = await context.commands.execute('file-transfer.list-tasks', {})
@@ -100,16 +81,9 @@ export function useTasks(context: PluginContext) {
     }
   }
 
-  /** 刷新设备列表（探测回复后由 devices-changed 事件驱动状态更新） */
+  /** 兼容保留：设备在线探测已由 usePeerDevices 的事件流接管，此处仅回当前值 */
   async function queryPeer(): Promise<boolean> {
-    try {
-      const devices = await context.commands.execute('file-transfer.query-peer', {})
-      onDevicesChanged(devices)
-      return peerOnline.value
-    } catch (e) {
-      console.error('[File Transfer] query-peer failed:', e)
-      return false
-    }
+    return peerOnline.value
   }
 
   /** 系统选择器多选文件直发活跃对端（返回成功入队的文件数，0 = 取消/失败） */
@@ -151,16 +125,12 @@ export function useTasks(context: PluginContext) {
     dispTasks = context.events.on('plugin:file-transfer:tasks-changed', (payload: unknown) => {
       if (Array.isArray(payload)) applySnapshot(payload)
     })
-    dispDevices = context.events.on('plugin:file-transfer:devices-changed', onDevicesChanged)
     void refresh()
-    void queryPeer()
   }
 
   function stop(): void {
     dispTasks?.dispose()
     dispTasks = null
-    dispDevices?.dispose()
-    dispDevices = null
     totalSpeed.value = 0
   }
 

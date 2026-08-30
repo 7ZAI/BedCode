@@ -70,9 +70,9 @@ function canCancel(task: Task): boolean {
   return !isTerminalState(task.state)
 }
 
-/** 任务是否可重试 */
+/** 任务是否可重试（interrupted 与 failed/rejected 同样可重试） */
 function canRetry(task: Task): boolean {
-  return task.state === 'failed' || task.state === 'rejected'
+  return task.state === 'failed' || task.state === 'rejected' || task.state === 'interrupted'
 }
 
 /** 任务文件名（展示名 basename） */

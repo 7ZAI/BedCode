@@ -34,52 +34,61 @@ export interface TransferToast {
   mode: 'batch' | 'per-file'
 }
 
+/** 展示名：首文件名（多文件追加 +N） */
+function displayName(files: unknown): string {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]?.path ?? arr[0]?.relativePath ?? 'file'
+  const name = String(first).split('/').pop() ?? String(first)
+  const extra = Math.max(0, arr.length - 1)
+  return extra > 0 ? `${name} +${extra}` : name
+}
+
 function mapPendingBatch(raw: any): PendingBatch {
   const rawFiles = Array.isArray(raw.files) ? raw.files : []
   return {
-    batchId: raw.batch_id ?? raw.batchId ?? '',
-    peerId: raw.peer_id ?? raw.peerId ?? '',
-    peerName: raw.peer_name ?? raw.peerName ?? '',
-    // 宿主批 DTO 文件项为 { path, size }，归一化为前端 relativePath 契约
+    batchId: raw.batchId ?? '',
+    peerId: raw.nodeId ?? '',
+    peerName: raw.peerName ?? '',
+    // 自有存储条目文件项为 { path, size }（引擎形状），归一化为前端 relativePath 契约
     files: rawFiles.map((f: any) => ({
-      relativePath: f.relativePath ?? f.relative_path ?? f.path ?? '',
+      relativePath: f.path ?? f.relativePath ?? '',
       size: f.size ?? 0,
     })),
-    totalSize: raw.total_size ?? raw.totalSize ?? 0,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    totalSize: raw.totalBytes ?? 0,
+    createdAt: raw.createdAtMs ?? 0,
   }
 }
 
 function mapReceivingTask(raw: any): ReceivingTask {
-  const state = String(raw.state ?? raw.status ?? 'transferring')
+  const status = String(raw.status ?? 'running')
   return {
-    sessionId: raw.session_id ?? raw.sessionId ?? '',
-    batchId: raw.batch_id ?? raw.batchId ?? null,
-    remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    size: raw.size ?? 0,
-    offset: raw.offset ?? 0,
-    state: state === 'running' ? 'transferring' : state,
-    reason: raw.reason ?? null,
-    peerId: raw.peer_id ?? raw.peerId ?? '',
-    peerName: raw.peer_name ?? raw.peerName ?? undefined,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    sessionId: raw.batchId ?? '',
+    batchId: raw.batchId ?? null,
+    remotePath: displayName(raw.files),
+    size: raw.totalBytes ?? 0,
+    offset: raw.transferredBytes ?? 0,
+    state: status === 'running' ? 'transferring' : status,
+    reason: raw.detail ?? null,
+    peerId: raw.nodeId ?? '',
+    peerName: raw.peerName || undefined,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
 function mapHistoryEntry(raw: any): HistoryEntry {
   return {
-    id: raw.id ?? '',
-    direction: raw.direction === 'upload' ? 'upload' : 'download',
-    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
-    fileName: raw.file_name ?? raw.fileName ?? '',
-    size: raw.size ?? 0,
-    state: raw.state ?? 'failed',
-    reason: raw.reason ?? null,
-    peerName: raw.peer_name ?? raw.peerName ?? '',
-    localPath: raw.local_path ?? raw.localPath ?? null,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    id: raw.batchId ?? '',
+    direction: raw.direction === 'receive' ? 'download' : 'upload',
+    initiator: raw.direction === 'receive' ? 'peer' : 'me',
+    fileName: displayName(raw.files),
+    size: raw.totalBytes ?? 0,
+    state: raw.status ?? 'failed',
+    reason: raw.detail ?? raw.rejectReason ?? null,
+    peerName: raw.peerName ?? '',
+    localPath: null,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 

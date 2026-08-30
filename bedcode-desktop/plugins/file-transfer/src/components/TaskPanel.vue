@@ -74,7 +74,8 @@ function percent(task: Task): number {
 }
 
 function canRetry(task: Task): boolean {
-  return task.state === 'failed' || task.state === 'rejected'
+  // interrupted（插件重启恢复标注）与 failed/rejected 同样可重试
+  return task.state === 'failed' || task.state === 'rejected' || task.state === 'interrupted'
 }
 function canCancel(task: Task): boolean {
   return !isTerminal(task.state)
@@ -85,7 +86,8 @@ function isTerminal(state: TaskStateName): boolean {
     state === 'completed' ||
     state === 'failed' ||
     state === 'rejected' ||
-    state === 'cancelled'
+    state === 'cancelled' ||
+    state === 'interrupted'
   )
 }
 

@@ -1,13 +1,10 @@
 /**
- * 任务核心逻辑 (Mobile) — host-peer 契约版
+ * 任务核心逻辑 (Mobile) — 自有存储 wire 版（issue 13 Phase 3）
  *
- * 权威数据源为插件 WASM 转发的宿主对等事件（批级模型）：
- * - tasks-changed：发送方向 PeerTransferDto[] → Task（一批一条记录）
- * - receiving-changed / batches-changed / history-changed 同构
- * - devices-changed：DiscoveredPeerDto[]，前端挑选具备文件传输能力的设备为活跃对端
- *
- * 命令调用经 context.commands.execute('file-transfer.*')，由插件 Rust 侧
- * 薄代理转发 host.peer_* 并翻译 wire 形状；本层只做事件消费与命令编排。
+ * 权威数据源为插件 WASM 自持存储的派生事件（引擎 PeerTransferDto camelCase
+ * 形状）：tasks/batches/receiving/history 四路快照整表替换；本层只做一层
+ * wire → 前端内部模型映射，组件消费模型不变。可发送性标记改由 usePeerDevices
+ * 的自建设备缓存驱动（mdns-found/lost），本文件不再消费 devices-changed。
  */
 import { ref, computed } from 'vue'
 import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
@@ -20,42 +17,53 @@ import type {
 } from '../types'
 import { isTerminalState } from '../types'
 
-/** 将代理层快照项（snake_case）映射为前端 camelCase 内部模型 */
+/** 展示名：首文件名（多文件追加 +N） */
+function displayName(files: unknown): string {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]?.path ?? arr[0]?.relativePath ?? 'file'
+  const name = String(first).split('/').pop() ?? String(first)
+  const extra = Math.max(0, arr.length - 1)
+  return extra > 0 ? `${name} +${extra}` : name
+}
+
+/** 将自有存储条目（camelCase TransferEntry）映射为前端内部模型 */
 function mapWireTask(raw: any): Task {
+  const status = String(raw.status ?? '')
   return {
-    id: raw.id ?? raw.batch_id ?? '',
-    direction: raw.direction === 'upload' ? 'upload' : 'download',
+    id: raw.batchId ?? '',
+    direction: raw.direction === 'receive' ? 'download' : 'upload',
     peer: {
-      deviceId: raw.peer?.device_id ?? raw.peer?.deviceId ?? '',
-      name: raw.peer?.name ?? '',
+      deviceId: raw.nodeId ?? '',
+      name: raw.peerName ?? '',
     },
-    remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    size: raw.size ?? 0,
-    offset: raw.offset ?? 0,
-    rateBps: raw.rate_bps ?? raw.rateBps ?? 0,
-    state: raw.state as TaskStateName,
-    reason: raw.reason ?? null,
-    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
-    batchId: raw.batch_id ?? raw.batchId ?? null,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    remotePath: displayName(raw.files),
+    size: raw.totalBytes ?? 0,
+    offset: raw.transferredBytes ?? 0,
+    rateBps: raw.rateBps ?? 0,
+    state: (status === 'running' ? 'transferring' : status) as TaskStateName,
+    reason: raw.detail ?? raw.rejectReason ?? null,
+    initiator: 'me',
+    batchId: raw.batchId ?? null,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
-/** 接收任务快照项映射 */
+/** 接收任务快照项映射（自持存储 camelCase wire） */
 function mapWireReceiving(raw: any): ReceivingTask {
+  const status = String(raw.status ?? 'running')
   return {
-    sessionId: raw.session_id ?? raw.sessionId ?? '',
-    batchId: raw.batch_id ?? raw.batchId ?? null,
-    remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    size: raw.size ?? 0,
-    offset: raw.offset ?? 0,
-    state: raw.state ?? 'running',
-    reason: raw.reason ?? null,
-    peerId: raw.peer_id ?? raw.peerId ?? '',
-    peerName: raw.peer_name ?? raw.peerName ?? '',
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    sessionId: raw.batchId ?? '',
+    batchId: raw.batchId ?? null,
+    remotePath: displayName(raw.files),
+    size: raw.totalBytes ?? 0,
+    offset: raw.transferredBytes ?? 0,
+    state: status === 'running' ? 'transferring' : status,
+    reason: raw.detail ?? null,
+    peerId: raw.nodeId ?? '',
+    peerName: raw.peerName ?? '',
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
@@ -68,40 +76,33 @@ function mergeHistory(current: HistoryEntry[], incoming: HistoryEntry[]): Histor
 
 function mapWireHistory(raw: any): HistoryEntry {
   return {
-    id: raw.id ?? '',
-    direction: raw.direction === 'upload' ? 'upload' : 'download',
-    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
-    fileName: raw.file_name ?? raw.fileName ?? '',
-    size: raw.size ?? 0,
-    state: raw.state ?? 'failed',
-    reason: raw.reason ?? null,
-    peerName: raw.peer_name ?? raw.peerName ?? '',
+    id: raw.batchId ?? '',
+    direction: raw.direction === 'receive' ? 'download' : 'upload',
+    initiator: raw.direction === 'receive' ? 'peer' : 'me',
+    fileName: displayName(raw.files),
+    size: raw.totalBytes ?? 0,
+    state: raw.status ?? 'failed',
+    reason: raw.detail ?? raw.rejectReason ?? null,
+    peerName: raw.peerName ?? '',
     localPath: null,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
-/** pending 批映射（宿主 DTO 即 camelCase 契约形状） */
+/** pending 批映射（自持存储 camelCase wire：files[].path → relativePath） */
 function mapWireBatch(raw: any): PendingBatch {
   const files = Array.isArray(raw.files) ? raw.files : []
   return {
-    batchId: raw.batch_id ?? raw.batchId ?? '',
-    peerName: raw.peer_name ?? raw.peerName ?? '',
+    batchId: raw.batchId ?? '',
+    peerName: raw.peerName ?? '',
     files: files.map((f: any) => ({
-      relativePath: f.path ?? f.relativePath ?? f.relative_path ?? '',
+      relativePath: f.path ?? f.relativePath ?? '',
       size: f.size ?? 0,
     })),
-    totalSize: raw.total_size ?? raw.totalSize ?? 0,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    totalSize: raw.totalBytes ?? 0,
+    createdAt: raw.createdAtMs ?? 0,
   }
-}
-
-/** 发现设备（devices-changed 事件项） */
-interface DeviceInfo {
-  nodeId: string
-  deviceName: string
-  fileTransfer?: boolean
 }
 
 export function useTasks(context: PluginContext) {
@@ -127,7 +128,6 @@ export function useTasks(context: PluginContext) {
   let dispBatches: Disposable | null = null
   let dispReceiving: Disposable | null = null
   let dispHistory: Disposable | null = null
-  let dispDevices: Disposable | null = null
   let dispConn: Disposable[] = []
 
   // 初始连接状态：读取宿主共享连接状态（视图挂载可能晚于 ws_paired 事件）
@@ -151,17 +151,6 @@ export function useTasks(context: PluginContext) {
     const firstNamed = next.find((t) => t.peer?.name)
     if (firstNamed?.peer?.name) peerName.value = firstNamed.peer.name
     checkSettledNotification()
-  }
-
-  /** 设备列表变化：仅维护「存在可传输发现节点」粗粒度标记（可发送性）。
-   *  活跃对端选择已收敛到 usePeerDevices（保持当前选择 + 空选时兑底），
-   *  此处不再强制 set-active-peer 覆盖用户手动选择；connOnline 只由 ws_*
-   *  控制面事件驱动，不与发现缓存混浠。 */
-  function onDevicesChanged(payload: unknown): void {
-    if (!Array.isArray(payload)) return
-    peerOnline.value = payload.some(
-      (d: DeviceInfo) => d.fileTransfer !== false && !!d.nodeId,
-    )
   }
 
   /** 队列全部完成/失败 → 系统通知（每批仅一次） */
@@ -229,16 +218,9 @@ export function useTasks(context: PluginContext) {
     }
   }
 
-  /** 刷新设备列表（探测回复后由 devices-changed 事件驱动状态更新） */
+  /** 兼容保留：可发送性已由 usePeerDevices 的自建缓存驱动，此处仅回当前值 */
   async function queryPeer(): Promise<boolean> {
-    try {
-      const devices = await context.commands.execute('file-transfer.query-peer', {})
-      onDevicesChanged(devices)
-      return true
-    } catch (e) {
-      console.error('[File Transfer] query-peer failed:', e)
-      return false
-    }
+    return peerOnline.value
   }
 
   async function cancel(id: string): Promise<void> {
@@ -319,7 +301,6 @@ export function useTasks(context: PluginContext) {
     dispHistory = context.events.on('plugin:file-transfer:history-changed', (payload: unknown) => {
       if (Array.isArray(payload)) history.value = mergeHistory(history.value, payload.map(mapWireHistory))
     })
-    dispDevices = context.events.on('plugin:file-transfer:devices-changed', onDevicesChanged)
     dispConn = [
       context.events.on('ws_connected', () => onConnChanged(true)),
       context.events.on('ws_paired', () => onConnChanged(true)),
@@ -362,8 +343,6 @@ export function useTasks(context: PluginContext) {
     dispReceiving = null
     dispHistory?.dispose()
     dispHistory = null
-    dispDevices?.dispose()
-    dispDevices = null
     dispConn.forEach((d) => d.dispose())
     dispConn = []
     totalSpeed.value = 0

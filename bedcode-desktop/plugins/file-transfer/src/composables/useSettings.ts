@@ -85,16 +85,17 @@ export function useSettings(context: PluginContext) {
     settings.value = { ...settings.value, encryption: enabled }
   }
 
-  /** 添加共享目录（弹系统目录选择器；用户取消返回 null） */
+  /** 添加共享目录（插件内弹系统目录选择器 → 注册表 + set-shared-roots；用户取消返回 null） */
   async function addRoot(): Promise<string | null> {
-    // 系统目录选择器仍走宿主 dialog 插件（系统强关联场景，允许原生）
-    const { open } = await import('@tauri-apps/plugin-dialog')
-    const picked = await open({ directory: true, multiple: false })
-    if (typeof picked !== 'string' || !picked) return null
-    const name = picked.split(/[\\/]/).filter(Boolean).pop() ?? picked
-    await context.commands.execute('file-transfer.mount-local', { name, path: picked })
-    await load()
-    return picked
+    try {
+      const added = await context.commands.execute('file-transfer.mount-local', {})
+      await load()
+      return typeof added?.path === 'string' ? (added.path as string) : null
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e)
+      if (!msg.includes('cancelled')) console.error('[File Transfer] mount-local failed:', e)
+      return null
+    }
   }
 
   /** 移除共享目录（按条目 id） */

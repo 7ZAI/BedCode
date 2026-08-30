@@ -1,33 +1,31 @@
 /**
- * 附近设备面板编排 — 发现 / 三态连接管理 / 活跃对端切换（host-peer 契约版）
+ * 附近设备面板编排 — 自建设备缓存版（issue 13 Phase 3 步骤 1）
  *
- * 数据源：插件事件 `plugin:file-transfer:devices-changed`（发现缓存全量替换）
- * 与 `plugin:file-transfer:connection-changed`（{ nodeId, connected } 连接态
- * 增量）。连接发起经 `file-transfer.dial-peer`（denied/unreachable 终态如实
- * 上报到行内错误），断开走 `file-transfer.disconnect-peer`，活跃对端切换走
- * `file-transfer.set-active-peer`。
- *
- * 语义边界：connOnline 由旧 WS 控制面事件 ws_* 驱动（终端远控链路的设备
- * 在线），与对等传输连接态（connectedIds）互不混淆——前者只影响顶栏 pill
- * 文案，后者决定能否互传。
- *
- * 活跃对端选择策略：保持当前选择 + 空选时兜底（收敛自旧「自动挑首个可用
- * 设备」——不再每次发现事件都强制覆盖用户手动选择）。状态派生归并在
- * deviceState.deriveDeviceRows 纯函数中，本文件只做编排；测试以 mock
- * PluginContext（commands.execute 记录 + events.on 捕获手动派发）驱动，
- * 见宿主测试套件 plugins/file-transfer 子目录。
+ * 数据源：`mdns-found` / `mdns-lost` 插件事件（宿主 mdns:* 原样透传）驱动的
+ * 前端缓存状态机（去重 / TTL / 展示名 / 能力位见 deviceState 纯函数）；
+ * `connection-changed` 维护连接态。缓存经 `save-device-snapshot` debounce
+ * 落盘（含 last-seen），activate 首屏由 `get-device-snapshot` 恢复并标注
+ * 「最近可见」（spec 故事 2）。连接动作携带显式 endpoint 三元组走
+ * `dial-peer`（denied/unreachable 行内错误如实上报），断开走
+ * `disconnect-peer`。
  */
 import { computed, ref, type Ref } from 'vue'
 import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
 import {
+  applyLost,
   deriveDeviceRows,
+  parseFoundPayload,
+  sweepStaleDevices,
   type DeviceRow,
   type DiscoveredDevice,
   type DialErrorStatus,
   type DialStatus,
 } from './deviceState'
 
-/** 可传输对端条目（顶栏/工作台兼容形状） */
+/** 快照落盘 debounce 窗口（毫秒） */
+const SNAPSHOT_SAVE_DEBOUNCE_MS = 2000
+
+/** 可传输对端条目（工作台兼容形状） */
 export interface PeerItem {
   id: string
   name: string
@@ -40,11 +38,15 @@ export interface PeerState {
   online: boolean
 }
 
-interface DevicePayload {
-  nodeId?: string
+/** 快照恢复条目形状（get-device-snapshot 返回，camelCase） */
+interface SnapshotEntry {
+  nodeId: string
   deviceName?: string
   addr?: string
-  fileTransfer?: boolean
+  port?: number
+  capabilitiesHex?: string
+  instanceName?: string
+  lastSeenMs?: number
 }
 
 interface ConnectionPayload {
@@ -65,7 +67,7 @@ function withoutId(set: ReadonlySet<string>, id: string): Set<string> {
 export function usePeerDevices(context: PluginContext) {
   // ==================== 状态 ====================
 
-  /** 发现缓存快照（事件全量替换；refresh 主动拉取首帧） */
+  /** 自建设备缓存（found/lost/TTL 三路事件驱动；快照恢复首屏） */
   const devices = ref<DiscoveredDevice[]>([]) as Ref<DiscoveredDevice[]>
   /** 正在握手的节点集合（防重复点击与并发拨号同一节点） */
   const connectingIds = ref<ReadonlySet<string>>(new Set())
@@ -75,15 +77,16 @@ export function usePeerDevices(context: PluginContext) {
   const dialErrors = ref<Record<string, DialErrorStatus>>({})
   /** 活跃对端 id（'' = 未选择；仅已连接节点可成为活跃对端） */
   const activePeerId = ref('') as Ref<string>
-  /** WS 控制面连接态（ws_* 事件驱动，语义独立于对等连接） */
+  /** WS 控制面连接态（device-connected/disconnected 驱动，语义独立于对等连接） */
   const connOnline = ref(false) as Ref<boolean>
 
   let started = false
   let disposables: Disposable[] = []
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
 
   // ==================== 派生 ====================
 
-  /** 设备行（三态归并 + 行内错误 + 活跃标记），sheet 直接渲染 */
+  /** 设备行（三态归并 + 行内错误 + 活跃标记 + 最近可见标注），面板直接渲染 */
   const rows = computed<DeviceRow[]>(() =>
     deriveDeviceRows({
       devices: devices.value,
@@ -94,7 +97,7 @@ export function usePeerDevices(context: PluginContext) {
     }),
   )
 
-  /** 具备传输能力的发现节点（顶栏对端名映射用，不要求已连接） */
+  /** 具备传输能力的发现节点（工作台设备名映射用，不要求已连接） */
   const peers = computed<PeerItem[]>(() =>
     devices.value
       .filter((d) => d.fileTransfer !== false)
@@ -150,19 +153,12 @@ export function usePeerDevices(context: PluginContext) {
   }
 
   /**
-   * 活跃对端兜底：当前已有活跃且已连接则保持不动（尊重用户手动选择）；
-   * 仅在空选或活跃已掉线时乐观切到首个已连接可传输节点。无任何已连接
-   * 节点时不动（启动早期连接事件未到，不可凭空清掉宿主侧活跃态）。
+   * 活跃对端兜底：当前活跃节点已连接则保持；否则乐观切到首个已连接可传输节点。
+   * 无任何已连接节点时不动（启动早期连接事件未到，不可凭空清掉宿主侧活跃态）。
    */
   function ensureActiveFallback(): boolean {
     const candidates = connectableConnectedIds.value
-    if (candidates.length === 0) return false
-    if (
-      activePeerId.value !== '' &&
-      candidates.includes(activePeerId.value)
-    ) {
-      return false
-    }
+    if (candidates.length === 0 || candidates.includes(activePeerId.value)) return false
     activateOptimistic(candidates[0]!)
     return true
   }
@@ -177,26 +173,62 @@ export function usePeerDevices(context: PluginContext) {
     activePeerId.value = ''
   }
 
-  /** 发现快照全量替换（过滤无 nodeId 的畸形条目） */
-  function applyDevices(payload: unknown): void {
-    // 诊断插桩：区分「没收到事件 / 收到空 / 收到数据但渲染问题」（排查双端互不可见）
-    console.log('[File Transfer] devices payload:', JSON.stringify(payload))
-    if (!Array.isArray(payload)) return
-    devices.value = (payload as DevicePayload[])
-      .filter((d) => d && typeof d.nodeId === 'string' && d.nodeId !== '')
-      .map((d) => ({
-        nodeId: d.nodeId!,
+  /** 缓存 upsert（不可变更新；found 即刷新 last-seen 并摘除快照恢复标记） */
+  function upsertDevice(device: DiscoveredDevice): void {
+    const stamped: DiscoveredDevice = { ...device, lastSeenMs: Date.now(), restored: false }
+    const idx = devices.value.findIndex((d) => d.nodeId === device.nodeId)
+    if (idx >= 0) {
+      const next = [...devices.value]
+      next[idx] = { ...next[idx], ...stamped }
+      devices.value = next
+    } else {
+      devices.value = [...devices.value, stamped]
+    }
+    scheduleSnapshotSave()
+  }
+
+  /** 缓存快照 debounce 落盘（≤50 条裁剪；失败静默——下次变更重试） */
+  function scheduleSnapshotSave(): void {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(() => {
+      saveTimer = null
+      const entries: SnapshotEntry[] = devices.value.slice(0, 50).map((d) => ({
+        nodeId: d.nodeId,
         deviceName: d.deviceName ?? '',
         addr: d.addr ?? '',
-        fileTransfer: d.fileTransfer !== false,
+        port: d.port ?? 0,
+        capabilitiesHex: d.capabilitiesHex ?? '',
+        instanceName: d.instanceName ?? '',
+        lastSeenMs: d.lastSeenMs ?? 0,
       }))
+      context.commands.execute('file-transfer.save-device-snapshot', { devices: entries }).catch(
+        (e: unknown) => {
+          console.error('[File Transfer] save-device-snapshot failed:', e)
+        },
+      )
+    }, SNAPSHOT_SAVE_DEBOUNCE_MS)
   }
 
   // ==================== 事件处理 ====================
 
-  function handleDevicesChanged(payload: unknown): void {
-    applyDevices(payload)
+  function handleFound(payload: unknown): void {
+    const device = parseFoundPayload(payload)
+    if (!device) return
+    upsertDevice(device)
     ensureActiveFallback()
+  }
+
+  function handleLost(payload: unknown): void {
+    const instanceName =
+      payload && typeof payload === 'object'
+        ? String((payload as Record<string, unknown>).instanceName ?? '')
+        : ''
+    if (!instanceName) return
+    const next = applyLost(devices.value, instanceName)
+    if (next.length !== devices.value.length) {
+      devices.value = next
+      scheduleSnapshotSave()
+    }
   }
 
   function handleConnectionChanged(payload: ConnectionPayload): void {
@@ -217,54 +249,44 @@ export function usePeerDevices(context: PluginContext) {
 
   // ==================== 对外操作 ====================
 
-  /** 初始/手动刷新：拉发现快照 + 活跃对端（list-peers 旧契约携带 activePeerId） */
+  /**
+   * 手动刷新：TTL 惰性清扫（含清算快照恢复条目）+ 落盘。发现数据本身由
+   * mDNS 事件流驱动，无需向宿主拉取（spec 步骤 1 的「读取列表时顺带清理」）。
+   */
   async function refresh(): Promise<void> {
-    try {
-      const raw = await context.commands.execute('file-transfer.query-peer', {})
-      applyDevices(raw)
-      try {
-        const legacy = await context.commands.execute('file-transfer.list-peers', {})
-        if (typeof legacy?.activePeerId === 'string') {
-          activePeerId.value = legacy.activePeerId
-        }
-      } catch {
-        // list-peers 缺失不致命：活跃对端由兜底逻辑从已连接集合推导
-      }
-      ensureActiveFallback()
-    } catch (e) {
-      console.error('[File Transfer] query-peer failed:', e)
-    }
+    devices.value = sweepStaleDevices(devices.value, Date.now(), connectedIds.value)
+    scheduleSnapshotSave()
   }
 
   /**
    * 发起对等连接：握手期间该节点进入 connecting 态（重复发起被拒绝），
-   * denied / unreachable 以行内错误呈现。返回终态；null 表示本次未实际发起
-   * （未发现 / 无能力 / 进行中的防御拦截）。
+   * denied / unreachable 以行内错误呈现。endpoint 三元组取自自建缓存；
+   * 返回终态；null 表示本次未实际发起（未发现/无能力/进行中的防御拦截）。
    */
   async function connect(nodeId: string): Promise<DialStatus | null> {
     const device = devices.value.find((d) => d.nodeId === nodeId)
     if (!device || !device.fileTransfer) return null
+    if (!device.addr || !device.port) {
+      setDialError(nodeId, 'unreachable')
+      return 'unreachable'
+    }
     if (connectingIds.value.has(nodeId) || connectedIds.value.has(nodeId)) return null
 
     connectingIds.value = withId(connectingIds.value, nodeId)
     clearDialError(nodeId)
     try {
-      const result = await context.commands.execute('file-transfer.dial-peer', { nodeId })
-      const status = result?.status
-      if (status === 'connected') {
-        markConnected(nodeId)
-        // 活跃缺位时新连接自动接管；已有已连接活跃则保持当前选择
-        ensureActiveFallback()
-        return 'connected'
-      }
-      const terminal: DialErrorStatus = status === 'denied' ? 'denied' : 'unreachable'
-      setDialError(nodeId, terminal)
-      return terminal
+      await context.commands.execute('file-transfer.dial-peer', {
+        endpoint: { nodeId, addr: device.addr, port: device.port },
+      })
+      markConnected(nodeId)
+      ensureActiveFallback()
+      return 'connected'
     } catch (e) {
-      // 命令面异常（节点引擎未启动等）按不可达呈现，完整链路留在控制台
+      // 命令面异常：denied 字样按拒绝呈现，其余按不可达（完整链路留在控制台）
       console.error('[File Transfer] dial-peer failed:', e)
-      setDialError(nodeId, 'unreachable')
-      return 'unreachable'
+      const msg = e instanceof Error ? e.message : String(e)
+      setDialError(nodeId, msg.includes('denied') ? 'denied' : 'unreachable')
+      return msg.includes('denied') ? 'denied' : 'unreachable'
     } finally {
       connectingIds.value = withoutId(connectingIds.value, nodeId)
     }
@@ -295,12 +317,13 @@ export function usePeerDevices(context: PluginContext) {
 
   // ==================== 生命周期 ====================
 
-  /** 幂等启动：重复调用不叠加订阅（视图挂载/重挂载安全） */
+  /** 幂等启动：先恢复快照首屏（「最近可见」标注），再订阅实时事件流 */
   function start(): void {
     if (started) return
     started = true
     disposables = [
-      context.events.on('plugin:file-transfer:devices-changed', handleDevicesChanged),
+      context.events.on('plugin:file-transfer:mdns-found', handleFound),
+      context.events.on('plugin:file-transfer:mdns-lost', handleLost),
       context.events.on(
         'plugin:file-transfer:connection-changed',
         handleConnectionChanged,
@@ -310,13 +333,41 @@ export function usePeerDevices(context: PluginContext) {
         connOnline.value = false
       }),
     ]
-    void refresh()
+    void (async () => {
+      try {
+        const snap = await context.commands.execute('file-transfer.get-device-snapshot', {})
+        const list: DiscoveredDevice[] = Array.isArray(snap?.devices)
+          ? (snap.devices as SnapshotEntry[])
+              .filter((d) => typeof d?.nodeId === 'string' && d.nodeId !== '')
+              .map((d) => ({
+                nodeId: d.nodeId,
+                deviceName: d.deviceName ?? '',
+                addr: d.addr ?? '',
+                port: d.port ?? 0,
+                fileTransfer:
+                  d.capabilitiesHex === ''
+                    ? true
+                    : (Number.parseInt(d.capabilitiesHex, 16) & 1) !== 0,
+                ...(d.instanceName ? { instanceName: d.instanceName } : {}),
+                lastSeenMs: d.lastSeenMs ?? 0,
+                restored: true,
+              }))
+          : []
+        if (list.length > 0 && devices.value.length === 0) devices.value = list
+      } catch (e) {
+        console.error('[File Transfer] get-device-snapshot failed:', e)
+      }
+    })()
   }
 
   function stop(): void {
     disposables.forEach((d) => d.dispose())
     disposables = []
     started = false
+    if (saveTimer) {
+      clearTimeout(saveTimer)
+      saveTimer = null
+    }
   }
 
   return {

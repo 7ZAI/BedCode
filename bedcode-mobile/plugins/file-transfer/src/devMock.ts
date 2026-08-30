@@ -62,39 +62,30 @@ type DevMockWithPeer = PluginDevMock & { peer?: PeerDevMockWithTrusted }
 export const NODE_XIAOMI = 'f3a91c07e5d24b18a7c60f12d94b8e55'
 export const NODE_PIXEL = '8b02d641c9ae4f77b3e15a90dd276c84'
 
+/** 单台设备种子（mdns:found 载荷形状 + 拨号行为标注；桌面同构） */
+function deviceSeed(nodeId: string, name: string, ip: string, port: number, capable = true) {
+  const short = nodeId.slice(0, 8)
+  return {
+    found: {
+      instanceName: `bedcode-peer-${short}._bedcode-peer._tcp.local.`,
+      addresses: [ip],
+      port,
+      txtRecords: { id: nodeId, name, ver: '1', cap: capable ? '1' : '0' },
+    },
+    dialBehavior: 'connected' as 'connected' | 'denied' | 'unreachable',
+  }
+}
+
 const peerDevMock: PeerDevMockWithTrusted = {
-  devices: [
-    {
-      nodeId: NODE_XIAOMI,
-      deviceName: '小米 14 Pro',
-      addr: '192.168.1.108:47821',
-      fileTransfer: true,
-    },
-    {
-      nodeId: NODE_PIXEL,
-      deviceName: 'Pixel 9',
-      addr: '192.168.1.132:51044',
-      fileTransfer: true,
-    },
-    {
-      nodeId: '51c8aa93e07b4d2f96d3b1c45f8ea720',
-      deviceName: '客厅电视 BedBox',
-      addr: '192.168.1.120:47613',
-      fileTransfer: true,
-    },
-    {
-      nodeId: '9d64b2f08c1e4735ae02d7b6cc4910e3',
-      deviceName: 'Old Laptop',
-      addr: '192.168.1.77:47613',
-      fileTransfer: true,
-    },
-    {
-      nodeId: 'c47d19f2ab354e6180d92b7ce30a5f16',
-      deviceName: 'HomeNAS',
-      addr: '192.168.1.2:47613',
-      fileTransfer: false,
-    },
-  ],
+  // mdns:found 载荷形状种子（dev-shell 逐台延迟推送）；SDK 协议 devices 字段
+  // 类型未收录该形状，以 unknown 断言注入（dev-shell mock 消费本地扩展字段）
+  deviceSeeds: [
+    { ...deviceSeed(NODE_XIAOMI, '小米 14 Pro', '192.168.1.108', 47821), dialBehavior: 'connected' as const },
+    { ...deviceSeed(NODE_PIXEL, 'Pixel 9', '192.168.1.132', 51044), dialBehavior: 'connected' as const },
+    { ...deviceSeed('51c8aa93e07b4d2f96d3b1c45f8ea720', '客厅电视 BedBox', '192.168.1.120', 47613), dialBehavior: 'denied' as const },
+    { ...deviceSeed('9d64b2f08c1e4735ae02d7b6cc4910e3', 'Old Laptop', '192.168.1.77', 47613), dialBehavior: 'unreachable' as const },
+    { ...deviceSeed('c47d19f2ab354e6180d92b7ce30a5f16', 'HomeNAS', '192.168.1.2', 47613, false) },
+  ] as unknown as PeerDevMockWithTrusted['devices'],
   connectedNodeIds: [NODE_XIAOMI],
   activeNodeId: NODE_XIAOMI,
   dialBehavior: {

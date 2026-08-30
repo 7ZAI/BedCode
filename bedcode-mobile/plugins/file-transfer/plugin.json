@@ -14,6 +14,7 @@
     "fileservice",
     "fs:read",
     "fs:write",
+    "mdns",
     "network:http",
     "peer",
     "storage",
@@ -27,12 +28,12 @@
   "contributes": {
     "commands": [
       {
-        "id": "file-transfer.list-peers",
-        "title": "List Peers"
+        "id": "file-transfer.get-device-snapshot",
+        "title": "Get Device Snapshot"
       },
       {
-        "id": "file-transfer.query-peer",
-        "title": "Query Peer Status"
+        "id": "file-transfer.save-device-snapshot",
+        "title": "Save Device Snapshot"
       },
       {
         "id": "file-transfer.dial-peer",
@@ -75,6 +76,10 @@
         "title": "List Pending Transfer Batches"
       },
       {
+        "id": "file-transfer.list-receiving",
+        "title": "List Receiving Tasks"
+      },
+      {
         "id": "file-transfer.approve-batch",
         "title": "Approve Transfer Batch"
       },
@@ -83,16 +88,8 @@
         "title": "Reject Transfer Batch"
       },
       {
-        "id": "file-transfer.list-receiving",
-        "title": "List Receiving Tasks"
-      },
-      {
         "id": "file-transfer.cancel-receiving",
         "title": "Cancel Receiving Session"
-      },
-      {
-        "id": "file-transfer.list-history",
-        "title": "List Transfer History"
       },
       {
         "id": "file-transfer.clear-history",
@@ -127,16 +124,16 @@
         "title": "Set Settings"
       },
       {
+        "id": "file-transfer.pick-download-dir",
+        "title": "Pick Download Directory"
+      },
+      {
         "id": "file-transfer.mount-local",
         "title": "Mount Local Directory"
       },
       {
         "id": "file-transfer.update-roots",
         "title": "Update Mount Roots"
-      },
-      {
-        "id": "file-transfer.pick-download-dir",
-        "title": "Pick Download Directory"
       }
     ],
     "views": [

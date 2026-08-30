@@ -15,6 +15,7 @@ export type TaskStateName =
   | 'failed'
   | 'rejected'
   | 'cancelled'
+  | 'interrupted'
 
 /** 任务发起方（队列分类依据；wire snake_case） */
 export type TaskInitiator = 'me' | 'peer'
@@ -111,6 +112,7 @@ export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
   cancelled: 'transfer.task.state.cancelled',
+  interrupted: 'transfer.task.state.interrupted',
 }
 
 /** 任务状态 → 四色体系文本色 class（spec 9.3，定义在注入的 styles.css） */
@@ -118,8 +120,9 @@ export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-color-active',
   completed: 'ft-color-completed',
   failed: 'ft-color-failed',
-  rejected: 'ft-color-rejected',
+  rejected: 'ft-color-failed',
   cancelled: 'ft-color-cancelled',
+  interrupted: 'ft-color-cancelled',
 }
 
 /** 任务状态 → 进度条底色 class（与文本色分离，进度条需实色底） */
@@ -127,8 +130,9 @@ export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-progress-active',
   completed: 'ft-progress-completed',
   failed: 'ft-progress-failed',
-  rejected: 'ft-progress-rejected',
+  rejected: 'ft-progress-failed',
   cancelled: 'ft-progress-cancelled',
+  interrupted: 'ft-progress-cancelled',
 }
 
 /** 任务状态是否为终态（用于队列结算判定） */
@@ -137,7 +141,8 @@ export function isTerminalState(state: TaskStateName): boolean {
     state === 'completed' ||
     state === 'failed' ||
     state === 'rejected' ||
-    state === 'cancelled'
+    state === 'cancelled' ||
+    state === 'interrupted'
   )
 }
 

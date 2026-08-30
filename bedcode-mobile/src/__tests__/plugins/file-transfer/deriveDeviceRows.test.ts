@@ -1,5 +1,5 @@
 /**
- * deriveDeviceRows 纯函数测试（ticket 02）
+ * deriveDeviceRows 纯函数测试（ticket 01）
  *
  * 覆盖三态归并优先级、拨号错误呈现边界、能力位归一化、活跃标记约束。
  */

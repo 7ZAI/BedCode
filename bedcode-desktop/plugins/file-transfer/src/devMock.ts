@@ -4,18 +4,12 @@
  * 仅 dev-shell 浏览器演示消费（loader 按 pluginId 注册，mock 命令实现
  * 消费种子返回演示值）；真实宿主忽略该导出，无需条件编译。
  *
- * 对等子数据覆盖附近设备面板的全部演示态：
- * - 小米 14 Pro：初始已连接且为活跃对端
- * - Pixel 9：未连接，拨号延迟后成功（可演示握手过程与设为当前）
- * - 客厅电视 BedBox：拨号被拒（denied 行内错误文案）
- * - Old Laptop：拨号不可达（unreachable 行内错误文案）
- * - HomeNAS：无文件传输能力（可见但不可连接）
- * - consent 种子：两条待确认首连请求，驱动确认弹窗与状态栏计数两路演示
- * - trusted 种子：三条可信对端（含一条无名短指纹兑底），驱动设置分区
- *   列表展示与两步撤销全流程演示
- *
- * 传输域种子（transfer 子域，SDK TransferDevMock 协议）：任务列表（8 态覆盖）、
- * 远端共享根与目录树、本机共享设置——原 dev-shell 内置业务数据已全部迁入此处。
+ * Phase 3 自持版种子全部为 wire 形状（与真实事件载荷同构）：
+ * - 设备：mdns:found 载荷形状（instanceName/addresses/port/txtRecords），
+ *   由 dev-shell mock 逐台延迟推送驱动前端缓存状态机；
+ * - 任务：引擎 PeerTransferDto camelCase 形状（batchId/status/files[]/
+ *   *Bytes/*Ms），覆盖传输中/终态/interrupted 演示态；
+ * - 共享设置/远端文件树：沿用既有契约形状。
  */
 import type { PluginDevMock } from '@binblink/plugin-sdk-desktop'
 
@@ -41,47 +35,39 @@ type DevMockWithExtensions = PluginDevMock & {
 export const NODE_XIAOMI = 'f3a91c07e5d24b18a7c60f12d94b8e55'
 export const NODE_PIXEL = '8b02d641c9ae4f77b3e15a90dd276c84'
 
+/** 单台设备种子（mdns:found 载荷形状 + 拨号行为标注） */
+function deviceSeed(nodeId: string, name: string, ip: string, port: number, capable = true) {
+  const short = nodeId.slice(0, 8)
+  return {
+    found: {
+      instanceName: `bedcode-peer-${short}._bedcode-peer._tcp.local.`,
+      addresses: [ip],
+      port,
+      txtRecords: {
+        id: nodeId,
+        name,
+        ver: '1',
+        // bit0 = 文件传输；不可传设备置 0
+        cap: capable ? '1' : '0',
+      },
+    },
+    /** 拨号演示行为（缺省 unreachable） */
+    dialBehavior: 'connected' as 'connected' | 'denied' | 'unreachable',
+  }
+}
+
 const devMock: DevMockWithExtensions = {
   peer: {
-    devices: [
-      {
-        nodeId: NODE_XIAOMI,
-        deviceName: '小米 14 Pro',
-        addr: '192.168.1.108:47821',
-        fileTransfer: true,
-      },
-      {
-        nodeId: NODE_PIXEL,
-        deviceName: 'Pixel 9',
-        addr: '192.168.1.132:51044',
-        fileTransfer: true,
-      },
-      {
-        nodeId: '51c8aa93e07b4d2f96d3b1c45f8ea720',
-        deviceName: '客厅电视 BedBox',
-        addr: '192.168.1.120:47613',
-        fileTransfer: true,
-      },
-      {
-        nodeId: '9d64b2f08c1e4735ae02d7b6cc4910e3',
-        deviceName: 'Old Laptop',
-        addr: '192.168.1.77:47613',
-        fileTransfer: true,
-      },
-      {
-        nodeId: 'c47d19f2ab354e6180d92b7ce30a5f16',
-        deviceName: 'HomeNAS',
-        addr: '192.168.1.2:47613',
-        fileTransfer: false,
-      },
-    ],
+    // mdns:found 载荷形状种子（dev-shell 逐台延迟推送）；dialBehavior 按 nodeId 索引
+    deviceSeeds: [
+      { ...deviceSeed(NODE_XIAOMI, '小米 14 Pro', '192.168.1.108', 47821), dialBehavior: 'connected' as const },
+      { ...deviceSeed(NODE_PIXEL, 'Pixel 9', '192.168.1.132', 51044), dialBehavior: 'connected' as const },
+      { ...deviceSeed('51c8aa93e07b4d2f96d3b1c45f8ea720', '客厅电视 BedBox', '192.168.1.120', 47613), dialBehavior: 'denied' as const },
+      { ...deviceSeed('9d64b2f08c1e4735ae02d7b6cc4910e3', 'Old Laptop', '192.168.1.77', 47613), dialBehavior: 'unreachable' as const },
+      { ...deviceSeed('c47d19f2ab354e6180d92b7ce30a5f16', 'HomeNAS', '192.168.1.2', 47613, false) },
+    ] as unknown as NonNullable<PluginDevMock['peer']>['devices'],
     connectedNodeIds: [NODE_XIAOMI],
     activeNodeId: NODE_XIAOMI,
-    dialBehavior: {
-      [NODE_PIXEL]: 'connected',
-      '51c8aa93e07b4d2f96d3b1c45f8ea720': 'denied',
-      '9d64b2f08c1e4735ae02d7b6cc4910e3': 'unreachable',
-    },
     dialLatencyMs: 800,
     // 首连确认演示：第一条立即弹窗（有名设备），第二条 2s 后入队（无名设备，
     // 短指纹兑底文案）——可同时驱动确认弹窗与状态栏「{n} 台设备等待确认」计数
@@ -124,79 +110,72 @@ const devMock: DevMockWithExtensions = {
   },
   // ==================== 传输域种子（SDK TransferDevMock 协议） ====================
   transfer: {
-    // 任务快照：覆盖全部 8 态，驱动四色体系展示；paused 条目保留进度与排队（0%）区分
+    // 任务快照：引擎 PeerTransferDto camelCase wire 形状，覆盖传输中/终态/interrupted
     tasks: [
       {
-        id: 'mock-task-1',
-        direction: 'download',
-        remotePath: 'DCIM/VID_20240801_1820.mp4',
-        size: 89244416,
-        offset: 41933507, // 47%
-        state: 'transferring',
+        batchId: 'mock-task-1',
+        nodeId: NODE_XIAOMI,
+        peerName: '小米 14 Pro',
+        direction: 'receive' as const,
+        status: 'running' as const,
+        files: [{ path: 'DCIM/VID_20240801_1820.mp4', size: 89244416 }],
+        totalBytes: 89244416,
+        transferredBytes: 41933507, // 47%
+        rateBps: 2_400_000,
+        createdAtMs: Date.now() - 600_000,
+        updatedAtMs: Date.now() - 1000,
       },
       {
-        id: 'mock-task-2',
-        direction: 'upload',
-        remotePath: '工作文档/产品需求文档_v3.docx',
-        localPath: 'C:\\workspace\\产品需求文档_v3.docx',
-        size: 248320,
-        offset: 248320,
-        state: 'completed',
+        batchId: 'mock-task-2',
+        nodeId: NODE_PIXEL,
+        peerName: 'Pixel 9',
+        direction: 'send' as const,
+        status: 'completed' as const,
+        files: [{ path: '工作文档/产品需求文档_v3.docx', size: 248320 }],
+        totalBytes: 248320,
+        transferredBytes: 248320,
+        rateBps: 0,
+        detail: null,
+        retryMeta: { kind: 'send', paths: ['C:/workspace/产品需求文档_v3.docx'] },
+        createdAtMs: Date.now() - 700_000,
+        updatedAtMs: Date.now() - 650_000,
       },
       {
-        id: 'mock-task-3',
-        direction: 'download',
-        remotePath: '2024年度旅行相册.zip',
-        size: 2470476800,
-        offset: 864667000, // 35%：暂停任务保留已下载进度
-        state: 'paused',
+        batchId: 'mock-task-6',
+        nodeId: NODE_XIAOMI,
+        peerName: '小米 14 Pro',
+        direction: 'send' as const,
+        status: 'failed' as const,
+        files: [{ path: '毕业设计答辩.pptx', size: 18677760 }],
+        totalBytes: 18677760,
+        transferredBytes: 0,
+        rateBps: 0,
+        detail: 'connection lost mid-transfer',
+        rejectReason: null,
+        retryMeta: { kind: 'send', paths: ['D:/slides/毕业设计答辩.pptx'] },
+        createdAtMs: Date.now() - 300_000,
+        updatedAtMs: Date.now() - 240_000,
       },
       {
-        id: 'mock-task-4',
-        direction: 'upload',
-        remotePath: 'IMG_20240802_0815.jpg',
-        localPath: 'D:\\photos\\IMG_20240802_0815.jpg',
-        size: 5124300,
-        offset: 1024860,
-        state: 'transferring',
+        batchId: 'mock-task-9',
+        nodeId: NODE_PIXEL,
+        peerName: 'Pixel 9',
+        direction: 'receive' as const,
+        status: 'interrupted' as const,
+        files: [{ path: 'Backup_2024-08.tar.gz', size: 4127191040 }],
+        totalBytes: 4127191040,
+        transferredBytes: 1_048_576_000, // 25%
+        rateBps: 0,
+        detail: null,
+        retryMeta: {
+          kind: 'pull',
+          dirId: 'root-download',
+          files: [{ relPath: 'Backup_2024-08.tar.gz', size: 4127191040 }],
+        },
+        createdAtMs: Date.now() - 900_000,
+        updatedAtMs: Date.now() - 850_000,
       },
-      {
-        id: 'mock-task-5',
-        direction: 'download',
-        remotePath: '4K测试视频_8分钟.mp4',
-        size: 1258291200,
-        offset: 0,
-        state: 'queued',
-      },
-      {
-        id: 'mock-task-6',
-        direction: 'upload',
-        remotePath: '毕业设计答辩.pptx',
-        localPath: 'D:\\slides\\毕业设计答辩.pptx',
-        size: 18677760,
-        offset: 0,
-        state: 'failed',
-        reason: 'duplicate-name',
-      },
-      {
-        id: 'mock-task-7',
-        direction: 'download',
-        remotePath: '会议录音_产品周会.mp3',
-        size: 12695376,
-        offset: 12695376,
-        state: 'completed',
-      },
-      {
-        id: 'mock-task-8',
-        direction: 'upload',
-        remotePath: 'Backup_2024-08.tar.gz',
-        localPath: 'E:\\backup\\Backup_2024-08.tar.gz',
-        size: 4127191040,
-        offset: 0,
-        state: 'rejected',
-        reason: 'duplicate-name',
-      },
-    ],
+    ] as unknown as NonNullable<PluginDevMock['transfer']>['tasks'],
     // 远端共享根（对端设备侧演示目录；dirId + 根内相对路径寻址，契约见 useRemoteFs）
     remoteFs: {
       roots: [
@@ -243,11 +222,11 @@ const devMock: DevMockWithExtensions = {
         ],
       },
     },
-    // 本机共享设置（roots 为宿主 RootItem DTO：按 name 展示、按 id 寻址移除）
+    // 本机共享注册表种子（插件自持真源；get-settings 返回 {id,name,path} 条目）
     settings: {
       roots: [
-        { id: 'mock-root-1', name: 'C:\\Users\\binblink\\Desktop\\共享文件夹' },
-        { id: 'mock-root-2', name: 'E:\\媒体库\\相机导入' },
+        { id: 'mock-root-1', name: '共享文件夹', path: 'C:\\Users\\binblink\\Desktop\\共享文件夹' },
+        { id: 'mock-root-2', name: '相机导入', path: 'E:\\媒体库\\相机导入' },
       ],
       downloadDir: 'C:\\Users\\binblink\\Downloads\\BedCode',
       concurrency: 3,

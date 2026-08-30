@@ -56,6 +56,12 @@ function metaText(row: DeviceRow): string {
     case 'connecting':
       return t('transfer.devices.connecting')
     default:
+      // 快照恢复且未被实时事件刷新 → 「最近可见」标注（spec 故事 2）
+      if (row.recent) {
+        return row.addr
+          ? `${t('transfer.devices.recentSeen')} · ${row.addr}`
+          : t('transfer.devices.recentSeen')
+      }
       return row.addr
         ? `${t('transfer.devices.online')} · ${row.addr}`
         : t('transfer.devices.online')

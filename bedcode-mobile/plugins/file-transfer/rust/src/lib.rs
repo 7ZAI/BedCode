@@ -1,30 +1,34 @@
-//! File Transfer Plugin (WASM, Mobile) — HostPeer 薄代理
+//! File Transfer Plugin (WASM, Mobile) — 业务自持版（issue 13 Phase 3）
 //!
-//! issue 12 切换后插件不再自带任务状态机/队列/挂载/握手：对等传输的
-//! 全部能力（发现/拨号/收发/接收应答/浏览拉取/设置）由宿主 `host-peer`
-//! 接口提供（真源 = 宿主 peer_net/peer_transfer/peer_receive/peer_remote）。
-//! 本 crate 只做两件事：
+//! ADR 0022 v2 后插件接管全部业务状态，宿主只提供无业务语义的引擎原语：
 //!
-//! 1. **命令转发**：`invoke_command("file-transfer.*")` → `host.peer_*`，
-//!    并把宿主 DTO 翻译成前端既有 wire 形状（camelCase Task/PendingBatch/
-//!    ReceivingTask/HistoryEntry），前端 composables 改动最小化；
-//! 2. **事件桥接**：订阅总线 `peer:*` topic，翻译后经 emit_event 推给
-//!    前端既有事件名（tasks-changed / batches-changed / receiving-changed /
-//!    history-changed / devices-changed），首连确认与连接态原样透传
-//!    （consent-requested / connection-changed，camelCase 载荷不过翻译）。
+//! - 设备缓存：前端 deviceState.ts 自持（found/lost/TTL/cap 位），本 crate 只做
+//!   browse 生命周期、`mdns:*` 透传与快照持久化（见 device_bridge）；
+//! - 共享根注册表：plugin-database 真源 + `set-shared-roots` 全量推送（roots_registry）；
+//! - 任务队列与历史：`peer:transfer`/`peer:receive` 快照驱动的自有存储
+//!   （transfer_store），终态归档 + 200 封顶 + 重启 interrupted 标注 + retryMeta 回放；
+//! - 接收策略：插件 storage 真源，auto 分支在 on_message 自动应答，
+//!   ask 弹窗留在前端；配置经保留原语推送宿主闸门（settings_store，A1）；
+//! - 加密参数化：send 载荷元素级 `{path, encrypt}`（步骤 5，零 ABI）。
+//!
+//! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
 
-use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostPeer};
+use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostPeer, HostPlatform};
 use bedcode_plugin_api_mobile::types::PluginManifest;
 use bedcode_plugin_api_mobile::wasm_host::WasmHost;
 use bedcode_plugin_api_mobile::{BusMessage, WasmPlugin};
-use peer::PLUGIN_ID;
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+mod device_bridge;
 mod peer;
+mod roots_registry;
+mod settings_store;
+mod transfer_store;
 
-/// 当前选中的对端节点 ID（单对端 UX：移动端 ⇄ 桌面端）。
-/// set-active-peer 写入；后续 send/pull/browse 未显式带 nodeId 时使用。
+pub(crate) use peer::PLUGIN_ID;
+
+/// 当前选中的对端节点 ID（单对端 UX：移动端 ⇄ 桌面端）
 static ACTIVE_NODE: OnceLock<Mutex<String>> = OnceLock::new();
 
 fn active_node() -> &'static Mutex<String> {
@@ -47,75 +51,80 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn activate() -> anyhow::Result<()> {
         let h = host();
-        h.log_info("File Transfer plugin activating (host-peer proxy, mobile)");
-        // 订阅宿主桥接的对等事件 topic（emit_json 同步发布）
-        let _ = h.bus_subscribe("peer:devices");
-        let _ = h.bus_subscribe("peer:transfer");
-        let _ = h.bus_subscribe("peer:receive");
-        // 首连确认 / 连接态：对等 UI 已迁入本插件前端消费
-        let _ = h.bus_subscribe("peer:consent");
-        let _ = h.bus_subscribe("peer:connection");
+        h.log_info("File Transfer plugin activating (self-hosted, mobile)");
+        // mDNS 浏览随插件激活起停（发现事件经 mdns:* 透传给前端缓存）
+        device_bridge::start_browse(&h);
+        // 发现事件（mdns:*）驱动前端自建设备缓存；传输事件驱动任务/历史存储；
+        // consent/connection 原样透传；peer:devices 双写期仅作对账源
+        for topic in [
+            "mdns:found",
+            "mdns:lost",
+            "peer:devices",
+            "peer:transfer",
+            "peer:receive",
+            "peer:consent",
+            "peer:connection",
+        ] {
+            let _ = h.bus_subscribe(topic);
+        }
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
         let h = host();
-        let _ = h.bus_unsubscribe("peer:devices");
-        let _ = h.bus_unsubscribe("peer:transfer");
-        let _ = h.bus_unsubscribe("peer:receive");
-        let _ = h.bus_unsubscribe("peer:consent");
-        let _ = h.bus_unsubscribe("peer:connection");
+        device_bridge::stop_browse(&h);
+        for topic in [
+            "mdns:found",
+            "mdns:lost",
+            "peer:devices",
+            "peer:transfer",
+            "peer:receive",
+            "peer:consent",
+            "peer:connection",
+        ] {
+            let _ = h.bus_unsubscribe(topic);
+        }
         Ok(())
     }
 
     fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
         let h = host();
         match name {
-            // ==================== 设备 ====================
-            "file-transfer.list-peers" => Ok(peer::list_peers(&h)?),
-            "file-transfer.query-peer" => Ok(peer::list_devices_raw(&h)?),
-            "file-transfer.dial-peer" => {
-                let node_id = require_str(&args, "nodeId")?;
-                Ok(h.peer_dial(&node_id)?)
+            // ==================== 设备（自建缓存的宿主侧出口） ====================
+            "file-transfer.get-device-snapshot" => Ok(serde_json::json!({
+                "devices": device_bridge::load_snapshot(&h)?
+            })),
+            "file-transfer.save-device-snapshot" => {
+                let entries: Vec<device_bridge::DeviceSnapshotEntry> =
+                    serde_json::from_value(args.get("devices").cloned().unwrap_or_default())
+                        .map_err(|e| anyhow::anyhow!("invalid device snapshot: {e}"))?;
+                device_bridge::save_snapshot(&h, &entries)?;
+                Ok(serde_json::json!({ "ok": true }))
             }
-            "file-transfer.disconnect-peer" => {
-                let node_id = require_str(&args, "nodeId")?;
-                let existed = h.peer_disconnect(&node_id)?;
-                Ok(serde_json::json!({ "existed": existed }))
-            }
+
+            // ==================== 连接 ====================
+            "file-transfer.dial-peer" => peer::dial_peer(&h, &args),
+            "file-transfer.disconnect-peer" => peer::disconnect_peer(&h, &args),
             "file-transfer.set-active-peer" => {
-                let id = args
-                    .get("peerId")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let id = args.get("peerId").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 *active_node().lock().expect("active node lock") = id;
                 Ok(serde_json::json!({ "ok": true }))
             }
 
-            // ==================== 发送（上传方向） ====================
-            "file-transfer.pick-files" => Ok(peer::pick_files(&h)?),
-            "file-transfer.enqueue" => Ok(peer::enqueue(&h, &args, active_node())?),
-            "file-transfer.list-tasks" => Ok(peer::list_tasks(&h)?),
-            "file-transfer.cancel" => {
-                let batch_id = require_str(&args, "taskId")?;
-                let _ = h.peer_cancel_transfer(&batch_id)?;
-                Ok(serde_json::json!({ "ok": true }))
-            }
-            "file-transfer.retry" => {
-                let batch_id = require_str(&args, "taskId")?;
-                let dto = h.peer_retry_transfer(&batch_id)?;
-                peer::transfer_to_task(&dto)
-                    .map_err(|e| anyhow::anyhow!("retry map failed: {e}"))
-            }
-            // 宿主托管生命周期：暂停/恢复/删除单任务不再支持（前端已移除入口）
+            // ==================== 发送 ====================
+            "file-transfer.pick-files" => Ok(serde_json::to_value(h.platform_pick_files()?)?),
+            "file-transfer.enqueue" => peer::enqueue(&h, &args, active_node()),
+            "file-transfer.list-tasks" => peer::list_tasks(&h),
+            "file-transfer.cancel" => peer::cancel_task(&h, &args),
+            "file-transfer.retry" => peer::retry_task(&h, &args),
             "file-transfer.pause" | "file-transfer.resume" | "file-transfer.resume-all"
             | "file-transfer.remove-task" => Err(anyhow::anyhow!(
-                "unsupported: transfer lifecycle is host-managed"
+                "unsupported: transfer lifecycle is plugin-store managed"
             )),
 
             // ==================== 接收端 ====================
-            "file-transfer.list-batches" => Ok(peer::list_batches(&h)?),
+            "file-transfer.list-batches" => peer::list_batches(&h),
+            "file-transfer.list-receiving" => peer::list_receiving(&h),
             "file-transfer.approve-batch" => {
                 let batch_id = require_str(&args, "batchId")?;
                 h.peer_respond_transfer(&batch_id, true)?;
@@ -126,20 +135,10 @@ impl WasmPlugin for FileTransferPlugin {
                 h.peer_respond_transfer(&batch_id, false)?;
                 Ok(serde_json::json!({ "ok": true }))
             }
-            "file-transfer.list-receiving" => Ok(peer::list_receiving(&h)?),
-            "file-transfer.cancel-receiving" => {
-                let batch_id = require_str(&args, "sessionId")?;
-                h.peer_cancel_receiving(&batch_id)?;
-                Ok(serde_json::json!({ "ok": true }))
-            }
-            "file-transfer.list-history" => Ok(peer::list_history(&h)?),
-            "file-transfer.clear-history" => {
-                let a = h.peer_clear_transfer_history()?;
-                let b = h.peer_clear_receiving_history()?;
-                Ok(serde_json::json!({ "cleared": a + b }))
-            }
+            "file-transfer.cancel-receiving" => peer::cancel_receiving(&h, &args),
+            "file-transfer.clear-history" => peer::clear_history(&h),
 
-            // ==================== 信任层 ====================
+            // ==================== 信任层（原语直通） ====================
             "file-transfer.respond-consent" => {
                 let request_id = require_str(&args, "requestId")?;
                 let accepted = args.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -154,18 +153,18 @@ impl WasmPlugin for FileTransferPlugin {
             }
 
             // ==================== 远端浏览 / 拉取 ====================
-            "file-transfer.list-remote" => Ok(peer::list_remote(&h, &args, active_node())?),
-            "file-transfer.pull-files" => Ok(peer::pull_files(&h, &args, active_node())?),
+            "file-transfer.list-remote" => peer::list_remote(&h, &args, active_node()),
+            "file-transfer.pull-files" => peer::pull_files(&h, &args, active_node()),
 
-            // ==================== 设置 ====================
-            "file-transfer.get-settings" => Ok(peer::get_settings(&h)?),
-            "file-transfer.set-settings" => Ok(peer::set_settings(&h, &args)?),
-            "file-transfer.mount-local" => Ok(peer::mount_local(&h)?),
-            "file-transfer.update-roots" => Ok(peer::update_roots(&h, &args)?),
+            // ==================== 设置（真源 = 插件 storage + 注册表） ====================
+            "file-transfer.get-settings" => peer::get_settings(&h),
+            "file-transfer.set-settings" => peer::set_settings(&h, &args),
             // 移动端接收落点固定 MediaStore.Downloads，不支持自定义
             "file-transfer.pick-download-dir" => Err(anyhow::anyhow!(
                 "unsupported on mobile: downloads land in MediaStore.Downloads"
             )),
+            "file-transfer.mount-local" => peer::mount_local(&h, &args),
+            "file-transfer.update-roots" => peer::update_roots(&h, &args),
 
             _ => Err(anyhow::anyhow!("unknown command: {}", name)),
         }
@@ -174,63 +173,48 @@ impl WasmPlugin for FileTransferPlugin {
     fn on_bus_message(msg: &BusMessage) -> anyhow::Result<()> {
         let h = host();
 
-        if msg.topic == "peer:devices" {
-            // 透传 DiscoveredPeerDto 数组；前端挑选具备文件传输能力的设备
-            h.emit_event("plugin:file-transfer:devices-changed", &msg.payload);
+        // 发现事件原样透传（wire 形状不过翻译）；设备缓存状态机在前端
+        if msg.topic == "mdns:found" || msg.topic == "mdns:lost" {
+            let event = if msg.topic == "mdns:found" { "mdns-found" } else { "mdns-lost" };
+            h.emit_event(&format!("plugin:file-transfer:{event}"), &msg.payload);
             return Ok(());
         }
 
-        // 首连确认请求：原样转发（payload 已是 camelCase 契约形状），
-        // 弹窗/队列/超时/终端配对自动互信编排在前端 useConsent 完成
+        // 首连确认 / 连接态：原样转发；断开同时摘除会话句柄映射
         if msg.topic == "peer:consent" {
             h.emit_event("plugin:file-transfer:consent-requested", &msg.payload);
             return Ok(());
         }
-
-        // 连接态变化：connected/disconnected 原样转发（{ nodeId, ... }）
         if msg.topic == "peer:connection" {
+            if msg.payload.get("connected").and_then(|v| v.as_bool()) == Some(false) {
+                if let Some(node_id) = msg.payload.get("nodeId").and_then(|v| v.as_str()) {
+                    device_bridge::forget_session(node_id);
+                }
+            }
             h.emit_event("plugin:file-transfer:connection-changed", &msg.payload);
             return Ok(());
         }
 
+        // 双写期对账源：宿主发现快照 vs 前端自建缓存规模差异仅记日志
+        if msg.topic == "peer:devices" {
+            if let Some(n) = msg.payload.as_array().map(|a| a.len()) {
+                h.log_info(&format!("reconcile: host discovery cache size = {n}"));
+            }
+            return Ok(());
+        }
+
         if msg.topic == "peer:transfer" {
-            // 发送方向 → 队列快照；终态并入历史
             if let Some(arr) = msg.payload.as_array() {
-                let tasks: Vec<serde_json::Value> = arr
-                    .iter()
-                    .filter(|t| t.get("direction").and_then(|v| v.as_str()) == Some("send"))
-                    .filter_map(|t| peer::transfer_to_task(t).ok())
-                    .collect();
-                h.emit_event(
-                    "plugin:file-transfer:tasks-changed",
-                    &serde_json::Value::Array(tasks),
-                );
-                peer::emit_history(&h, arr);
+                peer::merge_and_emit(&h, arr, "send");
             }
             return Ok(());
         }
 
         if msg.topic == "peer:receive" {
             if let Some(arr) = msg.payload.as_array() {
-                let pending: Vec<serde_json::Value> = arr
-                    .iter()
-                    .filter(|t| t.get("status").and_then(|v| v.as_str()) == Some("pending"))
-                    .cloned()
-                    .collect();
-                let active: Vec<serde_json::Value> = arr
-                    .iter()
-                    .filter(|t| t.get("status").and_then(|v| v.as_str()) != Some("pending"))
-                    .filter_map(|t| peer::transfer_to_receiving(t).ok())
-                    .collect();
-                h.emit_event(
-                    "plugin:file-transfer:batches-changed",
-                    &serde_json::Value::Array(pending),
-                );
-                h.emit_event(
-                    "plugin:file-transfer:receiving-changed",
-                    &serde_json::Value::Array(active),
-                );
-                peer::emit_history(&h, arr);
+                // auto 分支先应答（accept/reject 策略下无弹窗；ask 留给前端倒计时）
+                peer::auto_answer_pending(&h, arr);
+                peer::merge_and_emit(&h, arr, "receive");
             }
             return Ok(());
         }
@@ -239,12 +223,11 @@ impl WasmPlugin for FileTransferPlugin {
     }
 
     fn on_shutdown() -> anyhow::Result<()> {
-        host().log_info("File Transfer plugin shut down (host-peer proxy, mobile)");
+        host().log_info("File Transfer plugin shut down (self-hosted, mobile)");
         Ok(())
     }
 }
 
-/// 取字符串参数（缺省报错）
 fn require_str(args: &serde_json::Value, key: &str) -> anyhow::Result<String> {
     args.get(key)
         .and_then(|v| v.as_str())

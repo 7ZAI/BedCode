@@ -1,28 +1,25 @@
 /**
- * usePeerDevices 编排测试（ticket 02）
+ * usePeerDevices 编排测试（issue 13 Phase 3 自建设备缓存版）
  *
- * mock 最小 PluginContext（commands.execute 记录调用 + events.on 捕获处理器
- * 手动派发），只测编排逻辑不测渲染。场景矩阵：start 幂等、发现快照事件整表
- * 替换、活跃兜底切换（保持当前选择 + 空选时兜底）、连接/断开/切换活跃命令
- * 路由、连接中防重复发起、denied/unreachable 如实上报、WS 控制面与对等连接
- * 态语义隔离。
+ * 场景矩阵：快照恢复首屏（restored → recent 标注）、mdns-found upsert
+ * （TXT/cap 位解读 + last-seen 盖章）、畸形载荷丢弃、mdns-lost 按短指纹移除、
+ * connect 显式 endpoint 拨号与 denied/unreachable 行内错误、并发拨号防护、
+ * 断开乐观摘除、TTL 惰性清扫（refresh 触发）、生命周期幂等。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import { usePeerDevices } from '../../../../plugins/file-transfer/src/composables/usePeerDevices'
+import { DEVICE_TTL_MS } from '../../../../plugins/file-transfer/src/composables/deviceState'
 
-const NODE_A = 'a'.repeat(32)
-const NODE_B = 'b'.repeat(32)
-const NODE_C = 'c'.repeat(32)
+type EventHandler = (payload: any) => void
 
-type EventPayload = Record<string, any>
-type EventHandler = (payload: EventPayload) => void
+const NODE_A = 'a'.repeat(64)
+const NODE_B = 'b'.repeat(64)
 
-/** 最小 mock PluginContext：记录命令调用 + 捕获事件处理器 */
 function makeContext() {
   const calls: Array<{ id: string; args: any }> = []
-  const handlers = new Map<string, EventHandler>()
+  const handlers = new Map<string, EventHandler[]>()
   const responders = new Map<string, (args: any) => unknown>()
 
   const context = {
@@ -37,275 +34,259 @@ function makeContext() {
     },
     events: {
       on(event: string, handler: EventHandler) {
-        handlers.set(event, handler)
-        return { dispose: () => handlers.delete(event) }
+        const list = handlers.get(event) ?? []
+        list.push(handler)
+        handlers.set(event, list)
+        return {
+          dispose: () =>
+            handlers.set(
+              event,
+              (handlers.get(event) ?? []).filter((h) => h !== handler),
+            ),
+        }
       },
     },
   } as unknown as PluginContext
 
-  function emit(event: string, payload: EventPayload): void {
-    const handler = handlers.get(event)
-    if (!handler) throw new Error(`no captured handler for ${event}`)
-    handler(payload)
+  function emit(event: string, payload: unknown): void {
+    const list = handlers.get(event)
+    if (!list?.length) throw new Error(`no captured handler for ${event}`)
+    for (const handler of list) handler(payload)
   }
 
   function onCommand(id: string, respond: (args: any) => unknown): void {
     responders.set(id, respond)
   }
 
-  return { context, calls, emit, onCommand }
+  function listenerCount(event: string): number {
+    return handlers.get(event)?.length ?? 0
+  }
+
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  return { context, calls, emit, onCommand, listenerCount, flush }
 }
 
-function makeDevice(nodeId: string, overrides: Record<string, any> = {}) {
+/** mdns:found 载荷形状（引擎透传 wire） */
+function makeFound(nodeId: string, name: string, overrides: Record<string, any> = {}) {
   return {
-    nodeId,
-    deviceName: `设备-${nodeId.slice(0, 2)}`,
-    addr: '192.168.1.10:47613',
-    fileTransfer: true,
+    instanceName: `bedcode-peer-${nodeId.slice(0, 8)}._bedcode-peer._tcp.local.`,
+    addresses: ['192.168.1.10'],
+    port: 47821,
+    txtRecords: { id: nodeId, name, ver: '1', cap: '1' },
     ...overrides,
   }
 }
 
-describe('usePeerDevices orchestration', () => {
+describe('usePeerDevices orchestration (self-built cache)', () => {
   let env: ReturnType<typeof makeContext>
 
   beforeEach(() => {
     vi.clearAllMocks()
     env = makeContext()
-    // 默认命令响应：空发现快照 + 无活跃对端
-    env.onCommand('file-transfer.query-peer', () => [])
-    env.onCommand('file-transfer.list-peers', () => ({ peers: [], activePeerId: '' }))
+    env.onCommand('file-transfer.get-device-snapshot', () => ({ devices: [] }))
+    env.onCommand('file-transfer.save-device-snapshot', () => ({ ok: true }))
     env.onCommand('file-transfer.set-active-peer', () => ({ ok: true }))
   })
 
-  it('start() is idempotent: subscriptions and initial refresh happen once', () => {
-    const devices = usePeerDevices(env.context)
-    devices.start()
-    devices.start()
-
-    expect(
-      env.calls.filter((c) => c.id === 'file-transfer.query-peer'),
-    ).toHaveLength(1)
-    // 二次 start 后事件订阅仍在（未被重复注册覆盖丢失）
-    expect(() => env.emit('plugin:file-transfer:devices-changed', [])).not.toThrow()
-  })
-
-  it('refresh() pulls discovery snapshot and legacy active peer', async () => {
-    env.onCommand('file-transfer.query-peer', () => [makeDevice(NODE_A)])
-    env.onCommand('file-transfer.list-peers', () => ({
-      peers: [{ deviceId: NODE_A, name: '设备-aa' }],
-      activePeerId: NODE_A,
+  it('start is idempotent and restores snapshot entries annotated recent', async () => {
+    env.onCommand('file-transfer.get-device-snapshot', () => ({
+      devices: [
+        {
+          nodeId: NODE_A,
+          deviceName: '设备-a',
+          addr: '192.168.1.10',
+          port: 47821,
+          capabilitiesHex: '1',
+          lastSeenMs: Date.now() - 60_000,
+        },
+      ],
     }))
-    const devices = usePeerDevices(env.context)
+    const dev = usePeerDevices(env.context)
 
-    await devices.refresh()
+    dev.start()
+    dev.start()
+    await new Promise((r) => setTimeout(r, 5))
+    await dev.refresh()
 
-    expect(devices.devices.value).toHaveLength(1)
-    expect(devices.activePeerId.value).toBe(NODE_A)
-  })
-
-  it('devices-changed event replaces the snapshot wholesale (incl. non-capable rows)', () => {
-    const devices = usePeerDevices(env.context)
-    devices.start()
-
-    env.emit('plugin:file-transfer:devices-changed', [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B, { fileTransfer: false }),
-      { foo: 'malformed' }, // 畸形条目被过滤
-    ])
-
-    expect(devices.devices.value.map((d) => d.nodeId)).toEqual([NODE_A, NODE_B])
-    const rowB = devices.rows.value.find((r) => r.nodeId === NODE_B)!
-    expect(rowB.fileTransfer).toBe(false)
-    expect(rowB.status).toBe('idle')
-  })
-
-  it('keeps the current active selection when it stays connected (no auto override)', async () => {
-    env.onCommand('file-transfer.query-peer', () => [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B),
-    ])
-    const devices = usePeerDevices(env.context)
-    devices.start()
-    await vi.waitFor(() => expect(devices.devices.value).toHaveLength(2))
-
-    // A 已连接并成为活跃；B 随后也连上
-    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
-    expect(devices.activePeerId.value).toBe(NODE_A)
-
-    env.emit('plugin:file-transfer:devices-changed', [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B),
-    ])
-    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_B, connected: true })
-
-    // 收敛后的兜底策略：保持当前选择，不被「首个可用设备」覆盖；
-    // 仅剩 A 接管活跃时那一次 set-active-peer 调用
-    expect(devices.activePeerId.value).toBe(NODE_A)
-    expect(
-      env.calls.filter((c) => c.id === 'file-transfer.set-active-peer'),
-    ).toHaveLength(1)
-  })
-
-  it('active peer offline fallback switches to first connected capable node via command', async () => {
-    env.onCommand('file-transfer.query-peer', () => [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B),
-    ])
-    env.onCommand('file-transfer.list-peers', () => ({ peers: [], activePeerId: NODE_C }))
-    const devices = usePeerDevices(env.context)
-    devices.start()
-    // start 内部异步 refresh：等活跃对端从 list-peers 拉取完成
-    await vi.waitFor(() => expect(devices.activePeerId.value).toBe(NODE_C))
-
-    // A/B 已连接且可传输，活跃 C 不在已连接集合 → 兜底切到首个候选
-    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
-
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(true)
-    expect(devices.activePeerId.value).toBe(NODE_A)
-    expect(env.calls).toContainEqual({
-      id: 'file-transfer.set-active-peer',
-      args: { peerId: NODE_A },
+    expect(env.listenerCount('plugin:file-transfer:mdns-found')).toBe(1)
+    // 快照恢复条目：未连接 → recent 标注（「最近可见」），lastSeen 新鲜故未被清扫
+    expect(dev.rows.value).toHaveLength(1)
+    expect(dev.rows.value[0]).toMatchObject({
+      nodeId: NODE_A,
+      deviceName: '设备-a',
+      status: 'idle',
+      recent: true,
+      fileTransfer: true,
     })
   })
 
-  it('connect routes dial-peer command and marks connected on success', async () => {
-    env.onCommand('file-transfer.query-peer', () => [makeDevice(NODE_A)])
-    env.onCommand('file-transfer.dial-peer', () => ({
-      status: 'connected',
-      deviceName: '设备-aa',
-    }))
-    const devices = usePeerDevices(env.context)
-    await devices.refresh()
+  it('mdns-found upserts with cap-bit parsing and stamps last-seen', async () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
 
-    const status = await devices.connect(NODE_A)
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, '设备-a'))
+    env.emit(
+      'plugin:file-transfer:mdns-found',
+      makeFound(NODE_B, '无能力-b', { txtRecords: { id: NODE_B, cap: '0' } }),
+    )
+    // 畸形载荷：id 非 64 位 hex → 丢弃
+    env.emit('plugin:file-transfer:mdns-found', makeFound('zz', '坏数据'))
+    await dev.refresh()
+
+    expect(dev.devices.value).toHaveLength(2)
+    const [a, b] = dev.rows.value
+    expect(a).toMatchObject({ nodeId: NODE_A, fileTransfer: true, status: 'idle' })
+    expect(b?.fileTransfer).toBe(false)
+    // found 盖章后 restored 清除，recent 不再标注
+    expect(b?.recent).toBe(false)
+    // 快照落盘被 debounce 调度（含两台设备）
+    await new Promise((r) => setTimeout(r, 2100))
+    expect(env.calls.some((c) => c.id === 'file-transfer.save-device-snapshot')).toBe(true)
+  })
+
+  it('mdns-lost removes by instance short fingerprint', async () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, '设备-a'))
+
+    env.emit('plugin:file-transfer:mdns-lost', {
+      instanceName: `bedcode-peer-${NODE_A.slice(0, 8)}._bedcode-peer._tcp.local.`,
+    })
+
+    expect(dev.devices.value).toHaveLength(0)
+  })
+
+  it('connect routes dial-peer with explicit endpoint and marks connected', async () => {
+    env.onCommand('file-transfer.dial-peer', () => ({ status: 'connected' }))
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, '设备-a'))
+
+    const status = await dev.connect(NODE_A)
 
     expect(status).toBe('connected')
-    expect(env.calls).toContainEqual({ id: 'file-transfer.dial-peer', args: { nodeId: NODE_A } })
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(true)
-    expect(devices.connectingIds.value.has(NODE_A)).toBe(false)
-    // 活跃缺位 → 新连接自动接管
-    expect(devices.activePeerId.value).toBe(NODE_A)
+    expect(env.calls).toContainEqual({
+      id: 'file-transfer.dial-peer',
+      args: { endpoint: { nodeId: NODE_A, addr: '192.168.1.10', port: 47821 } },
+    })
+    expect(dev.rows.value[0]?.status).toBe('connected')
   })
 
-  it('records denied / unreachable terminal states as inline errors without connected badge', async () => {
-    env.onCommand('file-transfer.query-peer', () => [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B),
-    ])
+  it('denied / unreachable errors land inline without connected badge', async () => {
     env.onCommand('file-transfer.dial-peer', (args) =>
-      args?.nodeId === NODE_A
-        ? { status: 'denied', deviceName: '设备-aa' }
-        : Promise.reject(new Error('node not started')),
+      String(args?.endpoint?.nodeId) === NODE_A
+        ? Promise.reject(new Error('dial endpoint failed: peer denied'))
+        : Promise.reject(new Error('dial endpoint failed: peer unreachable')),
     )
-    const devices = usePeerDevices(env.context)
-    await devices.refresh()
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, 'a'))
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_B, 'b'))
 
-    expect(await devices.connect(NODE_A)).toBe('denied')
-    expect(devices.rows.value.find((r) => r.nodeId === NODE_A)!.dialError).toBe('denied')
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(false)
+    expect(await dev.connect(NODE_A)).toBe('denied')
+    expect(await dev.connect(NODE_B)).toBe('unreachable')
 
-    // 命令面异常按不可达呈现（失败如实上报）
-    expect(await devices.connect(NODE_B)).toBe('unreachable')
-    expect(devices.rows.value.find((r) => r.nodeId === NODE_B)!.dialError).toBe('unreachable')
+    const rows = Object.fromEntries(dev.rows.value.map((r) => [r.nodeId, r]))
+    expect(rows[NODE_A]?.dialError).toBe('denied')
+    expect(rows[NODE_B]?.dialError).toBe('unreachable')
+    expect(rows[NODE_A]?.status).toBe('idle')
   })
 
-  it('refuses to dial undiscovered / incapable / already-connected nodes', async () => {
-    env.onCommand('file-transfer.query-peer', () => [
-      makeDevice(NODE_A, { fileTransfer: false }),
-      makeDevice(NODE_B),
-    ])
-    const devices = usePeerDevices(env.context)
-    devices.start()
-    await vi.waitFor(() => expect(devices.devices.value).toHaveLength(2))
-    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_B, connected: true })
+  it('refuses to dial undiscovered / incapable nodes without routing commands', async () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit(
+      'plugin:file-transfer:mdns-found',
+      makeFound(NODE_B, '无能力', { txtRecords: { id: NODE_B, cap: '0' } }),
+    )
 
-    expect(await devices.connect(NODE_A)).toBeNull() // 无能力
-    expect(await devices.connect(NODE_C)).toBeNull() // 未发现
-    expect(await devices.connect(NODE_B)).toBeNull() // 已连接
-    expect(env.calls.filter((c) => c.id === 'file-transfer.dial-peer')).toHaveLength(0)
+    expect(await dev.connect('f'.repeat(64))).toBeNull() // 未发现
+    expect(await dev.connect(NODE_B)).toBeNull() // 无能力（面板置灰不可点，防御拦截）
+    expect(env.calls.some((c) => c.id === 'file-transfer.dial-peer')).toBe(false)
   })
 
   it('guards against concurrent duplicate dials of the same node', async () => {
-    env.onCommand('file-transfer.query-peer', () => [makeDevice(NODE_A)])
-    let resolveDial!: (v: unknown) => void
-    env.onCommand('file-transfer.dial-peer', () => new Promise((r) => (resolveDial = r)))
-    const devices = usePeerDevices(env.context)
-    await devices.refresh()
-
-    const pending = devices.connect(NODE_A)
-    expect(devices.connectingIds.value.has(NODE_A)).toBe(true)
-    // 握手在途：再次发起被拒绝且不触发第二次命令
-    expect(await devices.connect(NODE_A)).toBeNull()
-
-    resolveDial({ status: 'connected', deviceName: '设备-aa' })
-    expect(await pending).toBe('connected')
-    expect(env.calls.filter((c) => c.id === 'file-transfer.dial-peer')).toHaveLength(1)
-  })
-
-  it('disconnect routes the command and removes the badge optimistically', async () => {
-    env.onCommand('file-transfer.query-peer', () => [makeDevice(NODE_A)])
-    env.onCommand('file-transfer.dial-peer', () => ({ status: 'connected', deviceName: null }))
-    env.onCommand('file-transfer.disconnect-peer', () => true)
-    const devices = usePeerDevices(env.context)
-    await devices.refresh()
-    await devices.connect(NODE_A)
-
-    await devices.disconnect(NODE_A)
-
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(false)
-    expect(devices.activePeerId.value).toBe('')
-    expect(env.calls).toContainEqual({
-      id: 'file-transfer.disconnect-peer',
-      args: { nodeId: NODE_A },
+    let resolving: (() => void) | null = null
+    env.onCommand('file-transfer.dial-peer', () => {
+      return new Promise((resolve) => {
+        resolving = () => resolve({ status: 'connected' })
+      })
     })
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, 'a'))
+
+    const first = dev.connect(NODE_A)
+    const second = await dev.connect(NODE_A)
+    expect(second).toBeNull()
+    resolving?.()
+    expect(await first).toBe('connected')
   })
 
-  it('connection-changed event maintains connected set and clears stale dial errors', () => {
-    const devices = usePeerDevices(env.context)
-    devices.start()
+  it('disconnect removes optimistically then routes the command', async () => {
+    env.onCommand('file-transfer.disconnect-peer', () => ({ existed: true }))
+    env.onCommand('file-transfer.dial-peer', () => ({ status: 'connected' }))
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, 'a'))
+    await dev.connect(NODE_A)
+    expect(dev.rows.value[0]?.status).toBe('connected')
 
-    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(true)
+    await dev.disconnect(NODE_A)
 
+    expect(dev.rows.value[0]?.status).toBe('idle')
+    expect(env.calls).toContainEqual({ id: 'file-transfer.disconnect-peer', args: { nodeId: NODE_A } })
+  })
+
+  it('connection-changed maintains connected set and active fallback', async () => {
+    env.onCommand('file-transfer.dial-peer', () => ({ status: 'connected' }))
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, 'a'))
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_B, 'b'))
+    await dev.connect(NODE_A)
+    await dev.switchPeer(NODE_A)
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_B, connected: true })
+    expect(dev.peer.value.online).toBe(true)
+
+    // 活跃对端断连：有其他候选时乐观切换
     env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: false })
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(false)
+    expect(dev.activePeerId.value).toBe(NODE_B)
+
+    // 唯一候选也断连：活跃清空
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_B, connected: false })
+    expect(dev.activePeerId.value).toBe('')
   })
 
-  it('keeps WS control-plane state (connOnline) separate from peer connection state', () => {
-    const devices = usePeerDevices(env.context)
-    devices.start()
-
-    // WS 控制面在线 ≠ 对等传输连接：互不污染
-    env.emit('device-connected', { device_id: NODE_A, device_name: '设备-aa' })
-    expect(devices.connOnline.value).toBe(true)
-    expect(devices.connectedIds.value.size).toBe(0)
-
+  it('refresh sweeps TTL-expired idle entries but keeps connected ones', async () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    await env.flush()
+    const expired = Date.now() - DEVICE_TTL_MS - 1000
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, '过期'))
+    // 手工把 lastSeen 拨回过期时刻并标记已恢复（模拟陈旧快照条目）
+    dev.devices.value = dev.devices.value.map((d) => ({
+      ...d,
+      lastSeenMs: expired,
+      restored: true,
+    }))
     env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
-    expect(devices.connectedIds.value.size).toBe(1)
-    expect(devices.connOnline.value).toBe(true)
 
-    env.emit('device-disconnected', {})
-    expect(devices.connOnline.value).toBe(false)
-    expect(devices.connectedIds.value.has(NODE_A)).toBe(true)
-  })
+    await dev.refresh()
 
-  it('switchPeer routes set-active-peer command and updates local state', async () => {
-    env.onCommand('file-transfer.query-peer', () => [
-      makeDevice(NODE_A),
-      makeDevice(NODE_B),
-    ])
-    const devices = usePeerDevices(env.context)
-    await devices.refresh()
-
-    const ok = await devices.switchPeer(NODE_B)
-
-    expect(ok).toBe(true)
-    expect(devices.activePeerId.value).toBe(NODE_B)
-    expect(devices.peer.value).toMatchObject({ id: NODE_B, name: '设备-bb' })
-    expect(env.calls).toContainEqual({
-      id: 'file-transfer.set-active-peer',
-      args: { peerId: NODE_B },
-    })
+    // 已连接条目不被清扫；断开后同一条目因 lastSeen 过期被清算
+    expect(dev.devices.value).toHaveLength(1)
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: false })
+    await dev.refresh()
+    expect(dev.devices.value).toHaveLength(0)
   })
 })

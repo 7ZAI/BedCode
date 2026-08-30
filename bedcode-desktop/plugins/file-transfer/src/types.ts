@@ -8,13 +8,14 @@
 /** 任务方向（wire lowercase） */
 export type TaskDirection = 'download' | 'upload'
 
-/** 任务状态（宿主托管后仅存在传输中与终态） */
+/** 任务状态（宿主托管后仅存在传输中与终态；interrupted = 插件重启恢复标注） */
 export type TaskStateName =
   | 'transferring'
   | 'completed'
   | 'failed'
   | 'rejected'
   | 'cancelled'
+  | 'interrupted'
 
 /** 发起方（wire snake_case，默认 me） */
 export type TaskInitiator = 'me' | 'peer'
@@ -71,9 +72,13 @@ export function isTerminalState(state: TaskStateName): boolean {
     state === 'completed' ||
     state === 'failed' ||
     state === 'rejected' ||
-    state === 'cancelled'
+    state === 'cancelled' ||
+    state === 'interrupted'
   )
 }
+
+/** 传输历史条目状态（含插件重启标注的 interrupted） */
+export type HistoryState = 'completed' | 'failed' | 'rejected' | 'cancelled' | 'interrupted'
 
 /** pending 批（接收端应答卡数据源，list-batches 返回） */
 export interface PendingBatch {
@@ -107,7 +112,7 @@ export interface HistoryEntry {
   initiator: TaskInitiator
   fileName: string
   size: number
-  state: 'completed' | 'failed' | 'rejected' | 'cancelled'
+  state: HistoryState
   reason: string | null
   peerName: string
   localPath: string | null

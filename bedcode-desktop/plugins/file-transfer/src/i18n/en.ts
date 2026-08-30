@@ -24,6 +24,7 @@ const en: MessageSchema = {
   'transfer.devices.empty':
     'No nearby devices found; make sure the other device has BedCode open and is on the same network',
   'transfer.devices.online': 'Online',
+  'transfer.devices.recentSeen': 'Recently seen',
   'transfer.devices.connected': 'Connected',
   'transfer.devices.connecting': 'Connecting…',
   'transfer.devices.capNone': 'No transfer',
@@ -62,6 +63,7 @@ const en: MessageSchema = {
   'transfer.task.state.failed': 'Failed',
   'transfer.task.state.rejected': 'Rejected',
   'transfer.task.state.cancelled': 'Cancelled',
+  'transfer.task.state.interrupted': 'Interrupted (app restarted)',
   'transfer.task.pause': 'Pause',
   'transfer.task.resume': 'Resume',
   'transfer.task.cancel': 'Cancel',

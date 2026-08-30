@@ -121,6 +121,9 @@ function dotClass(row: DeviceRow): string {
             <template v-else-if="row.status === 'connecting'">
               {{ t('transfer.devices.connecting') }}
             </template>
+            <template v-else-if="row.recent">
+              {{ t('transfer.devices.recentSeen') }}<template v-if="row.addr"> · {{ row.addr }}</template>
+            </template>
             <template v-else>
               {{ t('transfer.devices.online') }}<template v-if="row.addr"> · {{ row.addr }}</template>
             </template>

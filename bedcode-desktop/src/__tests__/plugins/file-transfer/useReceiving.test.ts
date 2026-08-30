@@ -61,6 +61,24 @@ function makeContext() {
   return { context, calls, emit, onCommand, listenerCount }
 }
 
+/** 自持存储条目 wire 形状工厂（引擎 PeerTransferDto camelCase） */
+function makeEntry(overrides: Record<string, any> = {}) {
+  return {
+    batchId: 'b-1',
+    nodeId: 'node-a',
+    peerName: '设备-a',
+    direction: 'receive',
+    status: 'running',
+    files: [{ path: 'docs/a.pdf', size: 1024 }],
+    totalBytes: 1024,
+    transferredBytes: 512,
+    rateBps: 0,
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    ...overrides,
+  }
+}
+
 describe('useReceiving orchestration', () => {
   let env: ReturnType<typeof makeContext>
 
@@ -78,13 +96,18 @@ describe('useReceiving orchestration', () => {
 
   it('refresh pulls all three receiving-side lists via commands', async () => {
     env.onCommand('file-transfer.list-batches', () => [
-      { batch_id: 'pb-1', peer_name: '设备-a', files: [{ path: 'docs/a.pdf', size: 10 }], total_size: 10 },
+      {
+        batchId: 'pb-1', nodeId: 'node-a', peerName: '设备-a',
+        direction: 'receive', status: 'pending',
+        files: [{ path: 'docs/a.pdf', size: 10 }], totalBytes: 10,
+        transferredBytes: 0, rateBps: 0, createdAtMs: 1, updatedAtMs: 2,
+      },
     ])
     env.onCommand('file-transfer.list-receiving', () => [
-      { session_id: 'r-1', remote_path: 'a.pdf', state: 'running', peer_id: 'node-a' },
+      makeEntry({ batchId: 'r-1', status: 'running' }),
     ])
     env.onCommand('file-transfer.list-history', () => [
-      { id: 'h-1', direction: 'download', file_name: 'a.pdf', state: 'completed' },
+      makeEntry({ batchId: 'h-1', status: 'completed' }),
     ])
     const rec = useReceiving(env.context)
 
@@ -97,11 +120,11 @@ describe('useReceiving orchestration', () => {
         'file-transfer.list-history',
       ]),
     )
-    // wire 契约翻译：files[].path → relativePath；state running → transferring
+    // wire 契约翻译：files[].path → relativePath；status running → transferring
     expect(rec.batches.value[0]).toMatchObject({ batchId: 'pb-1', peerName: '设备-a' })
     expect(rec.batches.value[0]!.files[0]!.relativePath).toBe('docs/a.pdf')
     expect(rec.receiving.value[0]).toMatchObject({ sessionId: 'r-1', state: 'transferring' })
-    expect(rec.history.value[0]).toMatchObject({ id: 'h-1' })
+    expect(rec.history.value[0]).toMatchObject({ id: 'h-1', fileName: 'a.pdf' })
   })
 
   it('snapshot events replace the three lists wholesale', () => {
@@ -109,12 +132,12 @@ describe('useReceiving orchestration', () => {
     rec.start()
 
     env.emit('plugin:file-transfer:batches-changed', [
-      { batch_id: 'pb-1', peer_name: '设备-a', files: [{ path: 'a.pdf', size: 1 }], total_size: 1 },
-      { batch_id: 'pb-2', peer_name: '设备-b', files: [], total_size: 0 },
+      makeEntry({ batchId: 'pb-1', peerName: '设备-a', status: 'pending' }),
+      makeEntry({ batchId: 'pb-2', peerName: '设备-b', status: 'pending', files: [] }),
     ])
     env.emit('plugin:file-transfer:receiving-changed', [])
     env.emit('plugin:file-transfer:history-changed', [
-      { id: 'h-1', direction: 'upload', file_name: 'x.txt', state: 'completed' },
+      makeEntry({ batchId: 'h-1', direction: 'send', status: 'completed' }),
     ])
 
     expect(rec.batches.value.map((b) => b.batchId)).toEqual(['pb-1', 'pb-2'])

@@ -1,10 +1,9 @@
 /**
- * useTasks 编排测试（ticket 09 场景矩阵补齐）
+ * useTasks 编排测试（issue 13 Phase 3 自持存储版）
  *
- * 承接被删宿主 usePeerTransfers 编排测试的场景矩阵：start 注册监听并拉初始
- * 快照、事件整表替换（进度 + 终态）、cancel/retry 命令路由、发送空选拒绝、
- * 设备变化挑选首个可传输节点为活跃对端（spec 决策 13 单活跃对端模型）、
- * 派生状态（hasRunning/primaryTask/totalSpeed）与生命周期幂等。
+ * 场景矩阵：start 注册监听并拉初始快照、事件整表替换（进度 + 终态 +
+ * interrupted 映射）、cancel/retry 命令路由、发送空选拒绝、派生状态
+ * （hasRunning/primaryTask/totalSpeed）与生命周期幂等。
  * mock 最小 PluginContext，只测编排逻辑不测渲染。
  */
 
@@ -66,22 +65,20 @@ function makeContext() {
   return { context, calls, emit, onCommand, listenerCount, flush }
 }
 
-/** wire 形状快照项（snake_case，与宿主 PeerTransferDto 契约一致） */
+/** wire 形状快照项（引擎 PeerTransferDto camelCase，自持存储条目同构） */
 function makeWireTask(overrides: Record<string, any> = {}) {
   return {
-    id: 'batch-1',
-    direction: 'upload',
-    peer: { device_id: 'node-a', name: '设备-a' },
-    remote_path: 'report.pdf',
-    size: 1024,
-    offset: 512,
-    rate_bps: 256,
-    state: 'transferring',
-    reason: null,
-    initiator: 'me',
-    batch_id: 'batch-1',
-    created_at: 1,
-    updated_at: 2,
+    batchId: 'batch-1',
+    nodeId: 'node-a',
+    peerName: '设备-a',
+    direction: 'send',
+    status: 'running',
+    files: [{ path: 'docs/report.pdf', size: 1024 }],
+    totalBytes: 1024,
+    transferredBytes: 512,
+    rateBps: 256,
+    createdAtMs: 1,
+    updatedAtMs: 2,
     ...overrides,
   }
 }
@@ -93,7 +90,6 @@ describe('useTasks orchestration', () => {
     vi.clearAllMocks()
     env = makeContext()
     env.onCommand('file-transfer.list-tasks', () => [])
-    env.onCommand('file-transfer.query-peer', () => [])
   })
 
   it('refresh routes list-tasks and populates the snapshot', async () => {
@@ -118,9 +114,9 @@ describe('useTasks orchestration', () => {
     await env.flush()
 
     env.emit('plugin:file-transfer:tasks-changed', [
-      makeWireTask({ rate_bps: 300 }),
-      makeWireTask({ id: 'b-2', batch_id: 'b-2', state: 'completed', rate_bps: 999 }),
-      makeWireTask({ id: 'b-3', batch_id: 'b-3', peer: { device_id: 'node-b', name: '' }, state: 'failed' }),
+      makeWireTask({ rateBps: 300 }),
+      makeWireTask({ batchId: 'b-2', status: 'completed', rateBps: 999 }),
+      makeWireTask({ batchId: 'b-3', nodeId: 'node-b', peerName: '', status: 'failed' }),
     ])
 
     // 整表替换（进度 + 终态并存），速率只累加传输中的批次
@@ -132,14 +128,41 @@ describe('useTasks orchestration', () => {
     expect(tasks.primaryTask.value?.id).toBe('batch-1')
   })
 
+  it('interrupted status maps to a retryable terminal state', async () => {
+    const tasks = useTasks(env.context)
+    tasks.start()
+    await env.flush()
+
+    env.emit('plugin:file-transfer:tasks-changed', [
+      makeWireTask({ batchId: 'b-x', status: 'interrupted' }),
+    ])
+
+    expect(tasks.tasks.value[0]?.state).toBe('interrupted')
+    expect(tasks.hasRunning.value).toBe(false)
+    expect(tasks.primaryTask.value).toBeNull()
+  })
+
+  it('multi-file display name appends +N to the first file name', async () => {
+    env.onCommand('file-transfer.list-tasks', () => [
+      makeWireTask({
+        files: [{ path: 'a.png', size: 1 }, { path: 'b.png', size: 2 }, { path: 'c.png', size: 3 }],
+      }),
+    ])
+    const tasks = useTasks(env.context)
+
+    await tasks.refresh()
+
+    expect(tasks.tasks.value[0]?.remotePath).toBe('a.png +2')
+  })
+
   it('all-terminal snapshot settles derived flags (no primary, no running)', async () => {
     const tasks = useTasks(env.context)
     tasks.start()
     await env.flush()
 
     env.emit('plugin:file-transfer:tasks-changed', [
-      makeWireTask({ state: 'completed' }),
-      makeWireTask({ id: 'b-2', batch_id: 'b-2', state: 'cancelled' }),
+      makeWireTask({ status: 'completed' }),
+      makeWireTask({ batchId: 'b-2', status: 'cancelled' }),
     ])
 
     expect(tasks.hasRunning.value).toBe(false)
@@ -148,8 +171,8 @@ describe('useTasks orchestration', () => {
   })
 
   it('cancel and retry route commands with the task id', async () => {
-    env.onCommand('file-transfer.cancel', () => true)
-    env.onCommand('file-transfer.retry', () => true)
+    env.onCommand('file-transfer.cancel', () => ({ ok: true }))
+    env.onCommand('file-transfer.retry', () => ({ batchId: 'new' }))
     const tasks = useTasks(env.context)
 
     await tasks.cancel('batch-9')
@@ -161,7 +184,7 @@ describe('useTasks orchestration', () => {
 
   it('sendPickedFiles refuses an empty picker result without enqueueing', async () => {
     env.onCommand('file-transfer.pick-files', () => [])
-    env.onCommand('file-transfer.enqueue', () => true)
+    env.onCommand('file-transfer.enqueue', () => ({}))
     const tasks = useTasks(env.context)
 
     const sent = await tasks.sendPickedFiles()
@@ -172,7 +195,7 @@ describe('useTasks orchestration', () => {
 
   it('sendPickedFiles routes enqueue with picked paths and reports the count', async () => {
     env.onCommand('file-transfer.pick-files', () => ['C:/a.pdf', 'C:/b.txt'])
-    env.onCommand('file-transfer.enqueue', () => true)
+    env.onCommand('file-transfer.enqueue', () => ({ batchId: 'n' }))
     const tasks = useTasks(env.context)
 
     const sent = await tasks.sendPickedFiles()
@@ -184,43 +207,11 @@ describe('useTasks orchestration', () => {
     })
   })
 
-  it('devices-changed picks the first capable node as active peer via command', async () => {
-    const tasks = useTasks(env.context)
-    tasks.start()
-    await env.flush()
-
-    env.emit('plugin:file-transfer:devices-changed', [
-      { nodeId: 'node-x', deviceName: '不可传', fileTransfer: false },
-      { nodeId: 'node-a', deviceName: '设备-a' },
-      { nodeId: 'node-b', deviceName: '设备-b' },
-    ])
-    await env.flush()
-
-    expect(tasks.peerOnline.value).toBe(true)
-    expect(tasks.peerId.value).toBe('node-a')
-    expect(tasks.peerName.value).toBe('设备-a')
-    expect(env.calls).toContainEqual({
-      id: 'file-transfer.set-active-peer',
-      args: { peerId: 'node-a' },
-    })
-  })
-
-  it('devices-changed without capable nodes clears peerOnline and dials nothing', async () => {
-    const tasks = useTasks(env.context)
-    tasks.start()
-    await env.flush()
-    env.emit('plugin:file-transfer:devices-changed', [{ nodeId: 'node-a', fileTransfer: false }])
-    await env.flush()
-    expect(tasks.peerOnline.value).toBe(false)
-    expect(env.calls.some((c) => c.id === 'file-transfer.set-active-peer')).toBe(false)
-  })
-
   it('start is idempotent (no stacked listeners) and stop detaches + resets', () => {
     const tasks = useTasks(env.context)
     tasks.start()
     tasks.start()
     expect(env.listenerCount('plugin:file-transfer:tasks-changed')).toBe(1)
-    expect(env.listenerCount('plugin:file-transfer:devices-changed')).toBe(1)
 
     tasks.totalSpeed.value = 42
     tasks.stop()

@@ -16,6 +16,7 @@
     "fs:read",
     "fs:write",
     "network:http",
+    "mdns",
     "peer",
     "storage",
     "system:open",
@@ -26,14 +27,6 @@
   ],
   "contributes": {
     "commands": [
-      {
-        "id": "file-transfer.list-peers",
-        "title": "List Peers"
-      },
-      {
-        "id": "file-transfer.query-peer",
-        "title": "Query Peer Status"
-      },
       {
         "id": "file-transfer.dial-peer",
         "title": "Dial Peer Connection"
@@ -137,6 +130,14 @@
       {
         "id": "file-transfer.update-roots",
         "title": "Update Mount Roots"
+      },
+      {
+        "id": "file-transfer.get-device-snapshot",
+        "title": "Get Device Snapshot"
+      },
+      {
+        "id": "file-transfer.save-device-snapshot",
+        "title": "Save Device Snapshot"
       }
     ],
     "views": [

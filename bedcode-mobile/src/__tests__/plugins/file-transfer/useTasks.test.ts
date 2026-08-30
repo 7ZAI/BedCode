@@ -80,23 +80,27 @@ function makeContext() {
   return { context, calls, emit, onCommand, listenerCount, flush, notifications }
 }
 
+/** 自持存储条目 wire 形状工厂（引擎 PeerTransferDto camelCase） */
 function makeWireTask(overrides: Record<string, any> = {}) {
   return {
-    id: 'batch-1',
-    direction: 'upload',
-    peer: { device_id: 'node-a', name: '设备-a' },
-    remote_path: 'report.pdf',
-    size: 1024,
-    offset: 512,
-    rate_bps: 256,
-    state: 'transferring',
-    reason: null,
-    initiator: 'me',
-    batch_id: 'batch-1',
-    created_at: 1,
-    updated_at: 2,
+    batchId: 'batch-1',
+    nodeId: 'node-a',
+    peerName: '设备-a',
+    direction: 'send',
+    status: 'running',
+    files: [{ path: 'docs/report.pdf', size: 1024 }],
+    totalBytes: 1024,
+    transferredBytes: 512,
+    rateBps: 256,
+    createdAtMs: 1,
+    updatedAtMs: 2,
     ...overrides,
   }
+}
+
+/** 接收方向条目（direction=receive） */
+function makeWireReceiving(overrides: Record<string, any> = {}) {
+  return makeWireTask({ direction: 'receive', ...overrides })
 }
 
 describe('useTasks orchestration', () => {
@@ -109,34 +113,27 @@ describe('useTasks orchestration', () => {
     env.onCommand('file-transfer.list-batches', () => [])
     env.onCommand('file-transfer.list-receiving', () => [])
     env.onCommand('file-transfer.list-history', () => [])
-    env.onCommand('file-transfer.query-peer', () => [])
   })
 
   it('start pulls the initial v2 snapshot via the three list commands', async () => {
     env.onCommand('file-transfer.list-batches', () => [
-      { batch_id: 'pb-1', peer_name: '设备-a', files: [{ path: 'a.pdf', size: 1 }], total_size: 1 },
+      makeWireReceiving({ batchId: 'pb-1', peerName: '设备-a', status: 'pending' }),
     ])
     env.onCommand('file-transfer.list-receiving', () => [
-      { session_id: 'r-1', remote_path: 'a.pdf', state: 'running' },
+      makeWireReceiving({ batchId: 'r-1', status: 'running' }),
     ])
     env.onCommand('file-transfer.list-history', () => [
-      { id: 'h-1', direction: 'download', file_name: 'a.pdf', state: 'completed' },
+      makeWireReceiving({ batchId: 'h-1', status: 'completed' }),
     ])
     const tasks = useTasks(env.context)
+
     tasks.start()
     await env.flush()
 
-    expect(env.calls.map((c) => c.id)).toEqual(
-      expect.arrayContaining([
-        'file-transfer.list-batches',
-        'file-transfer.list-receiving',
-        'file-transfer.list-history',
-      ]),
-    )
-    expect(tasks.batches.value[0]!.batchId).toBe('pb-1')
-    expect(tasks.batches.value[0]!.files[0]!.relativePath).toBe('a.pdf')
-    expect(tasks.receivingTasks.value[0]).toMatchObject({ sessionId: 'r-1', state: 'running' })
-    expect(tasks.history.value[0]!.id).toBe('h-1')
+    expect(tasks.batches.value[0]).toMatchObject({ batchId: 'pb-1', peerName: '设备-a' })
+    expect(tasks.batches.value[0]!.files[0]!.relativePath).toBe('docs/report.pdf')
+    expect(tasks.receivingTasks.value[0]).toMatchObject({ sessionId: 'r-1', state: 'transferring' })
+    expect(tasks.history.value).toHaveLength(1)
   })
 
   it('tasks-changed replaces the list and derives totalSpeed from transferring batches', async () => {
@@ -145,8 +142,8 @@ describe('useTasks orchestration', () => {
     await env.flush()
 
     env.emit('plugin:file-transfer:tasks-changed', [
-      makeWireTask({ rate_bps: 300 }),
-      makeWireTask({ id: 'b-2', batch_id: 'b-2', state: 'failed', rate_bps: 999 }),
+      makeWireTask({ rateBps: 300 }),
+      makeWireTask({ batchId: 'b-2', status: 'failed', rateBps: 999 }),
     ])
 
     expect(tasks.tasks.value.map((t) => t.state)).toEqual(['transferring', 'failed'])
@@ -160,12 +157,12 @@ describe('useTasks orchestration', () => {
     await env.flush()
 
     env.emit('plugin:file-transfer:history-changed', [
-      { id: 'h-1', direction: 'upload', file_name: 'a.pdf', state: 'completed', updated_at: 10 },
+      makeWireTask({ batchId: 'h-1', status: 'completed', updatedAtMs: 10 }),
     ])
     env.emit('plugin:file-transfer:history-changed', [
       // 同 id 二次到达 → 覆盖而非重复；新条目按 updatedAt 排前
-      { id: 'h-1', direction: 'upload', file_name: 'a.pdf', state: 'failed', updated_at: 20 },
-      { id: 'h-2', direction: 'download', file_name: 'b.txt', state: 'completed', updated_at: 5 },
+      makeWireTask({ batchId: 'h-1', status: 'failed', updatedAtMs: 20 }),
+      makeWireReceiving({ batchId: 'h-2', status: 'completed', updatedAtMs: 5 }),
     ])
 
     expect(tasks.history.value.map((h) => h.id)).toEqual(['h-1', 'h-2'])
@@ -234,19 +231,19 @@ describe('useTasks orchestration', () => {
     await env.flush()
     expect(env.notifications).toHaveLength(0) // 未全部终态不通知
 
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ state: 'completed' })])
+    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
     expect(env.notifications[0]!.title).toContain('doneTitle')
 
     // 全部终态期间重复快照不重复通知
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ state: 'completed' })])
+    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
 
     // 队列清空后重置，新批次完成可再次通知
     env.emit('plugin:file-transfer:tasks-changed', [])
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ state: 'completed' })])
+    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
     await env.flush()
     expect(env.notifications).toHaveLength(2)
   })
@@ -257,8 +254,8 @@ describe('useTasks orchestration', () => {
     await env.flush()
 
     env.emit('plugin:file-transfer:tasks-changed', [
-      makeWireTask({ state: 'failed' }),
-      makeWireTask({ id: 'b-2', batch_id: 'b-2', state: 'rejected' }),
+      makeWireTask({ status: 'failed' }),
+      makeWireTask({ batchId: 'b-2', status: 'rejected' }),
     ])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
@@ -267,29 +264,10 @@ describe('useTasks orchestration', () => {
     env.emit('plugin:file-transfer:tasks-changed', [])
     env.emit(
       'plugin:file-transfer:tasks-changed',
-      [makeWireTask({ state: 'cancelled' })],
+      [makeWireTask({ status: 'cancelled' })],
     )
     await env.flush()
     expect(env.notifications).toHaveLength(1) // 全取消不打扰用户
-  })
-
-  it('devices-changed only maintains the sendable flag without overriding active peer', async () => {
-    const tasks = useTasks(env.context)
-    tasks.start()
-    await env.flush()
-
-    env.emit('plugin:file-transfer:devices-changed', [
-      { nodeId: 'node-x', deviceName: '不可传', fileTransfer: false },
-      { nodeId: 'node-a', deviceName: '设备-a' },
-    ])
-    expect(tasks.peerOnline.value).toBe(true)
-
-    env.emit('plugin:file-transfer:devices-changed', [{ nodeId: 'node-x', fileTransfer: false }])
-    expect(tasks.peerOnline.value).toBe(false)
-    await env.flush()
-
-    // 活跃对端选择归 usePeerDevices，此处不得越权下发 set-active-peer
-    expect(env.calls.some((c) => c.id === 'file-transfer.set-active-peer')).toBe(false)
   })
 
   it('ws_* control-plane events drive connOnline independently of discovery', async () => {
