@@ -240,6 +240,18 @@ pub async fn send_files_to_peer(
     node_id: String,
     paths: Vec<String>,
 ) -> crate::Result<PeerTransferDto> {
+    send_files_to_peer_with_policy(app, node_id, paths, None).await
+}
+
+/// 发送策略参数化入口（issue 13 Phase 3 步骤 5）：`encrypt_override` 为
+/// `Some(true)` 时本批强制加密（插件载荷元素级 flag 聚合），`None` 回落引擎
+/// 接收设置全局开关——Tauri 命令面恒传 `None`，WASM host_impl 按新载荷解析。
+pub(crate) async fn send_files_to_peer_with_policy(
+    app: AppHandle,
+    node_id: String,
+    paths: Vec<String>,
+    encrypt_override: Option<bool>,
+) -> crate::Result<PeerTransferDto> {
     let parsed = super::peer_net::parse_node_id(&node_id)?;
     if paths.is_empty() || paths.iter().all(|p| p.trim().is_empty()) {
         return Err(crate::AppError::InvalidInput(
@@ -294,7 +306,10 @@ pub async fn send_files_to_peer(
         state.register_session(&batch_id)
     };
 
-    let encrypt = ensure_settings_loaded(&app).await.encryption_enabled;
+    let encrypt = match encrypt_override {
+        Some(v) => v,
+        None => ensure_settings_loaded(&app).await.encryption_enabled,
+    };
     publish(&app);
     drive_send_session(app.clone(), node, record, batch_id, collected.sources, epoch, encrypt);
     tracing::info!(
@@ -577,33 +592,9 @@ async fn ensure_history_loaded(app: &AppHandle) -> crate::Result<()> {
 }
 
 /// 终态快照落盘（tmp+rename 原子替换；写盘在 spawn_blocking，串行锁防竞态）
-async fn persist_history(app: &AppHandle) {
-    let state = app.state::<PeerTransferState>();
-    let entries: Vec<PeerTransferDto> = {
-        let inner = state.inner.lock().expect("peer transfer lock poisoned");
-        inner
-            .tasks
-            .iter()
-            .filter(|t| is_terminal_status(&t.dto.status))
-            .take(HISTORY_CAP)
-            .map(|t| t.dto.clone())
-            .collect()
-    };
-    let dir = match super::peer_net::app_data_dir(app) {
-        Ok(dir) => dir,
-        Err(e) => {
-            tracing::error!("persist history aborted: {e}");
-            return;
-        }
-    };
-    let _guard = HISTORY_SAVE_LOCK.lock().await;
-    let result = tauri::async_runtime::spawn_blocking(move || write_history_file(&dir, &entries))
-        .await
-        .map_err(|e| crate::AppError::Internal(format!("join history save failed: {e}")))
-        .and_then(|r| r.map_err(crate::AppError::Io));
-    if let Err(e) = result {
-        tracing::error!("persist transfer history failed: {e}");
-    }
+async fn persist_history(_app: &AppHandle) {
+    // Phase 4 停写（issue 13 裁决 B）：插件自持历史成为唯一产品历史，引擎侧
+    // 持久化文件冻结在最后版本；ensure_history_loaded 保留一版只读兼容回滚。
 }
 
 /// 历史封顶淘汰：列表为最新在前，保序保留前 CAP 条终态记录，

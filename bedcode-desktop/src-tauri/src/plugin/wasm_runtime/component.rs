@@ -263,28 +263,12 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
 }
 
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
-    fn list_devices(&mut self) -> Result<String, String> {
-        peer::peer_list_devices(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn dial_peer_endpoint(&mut self, endpoint_json: String) -> Result<String, String> {
-        peer::peer_dial_endpoint(&self.host_ctx, &self.plugin_id, &endpoint_json)
+    fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
+        peer::peer_dial(&self.host_ctx, &self.plugin_id, &endpoint_json)
     }
 
     fn close(&mut self, handle: String) -> Result<bool, String> {
         peer::peer_close(&self.host_ctx, &self.plugin_id, &handle)
-    }
-
-    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
-        peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
-    }
-
-    fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
-        peer::peer_dial(&self.host_ctx, &self.plugin_id, &node_id)
-    }
-
-    fn disconnect_peer(&mut self, node_id: String) -> Result<bool, String> {
-        peer::peer_disconnect(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
     fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
@@ -299,100 +283,48 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         peer::peer_revoke_trusted(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
-    fn send_files(&mut self, node_id: String, paths_json: String) -> Result<String, String> {
-        peer::peer_send_files(&self.host_ctx, &self.plugin_id, &node_id, &paths_json)
-    }
-
-    fn list_transfers(&mut self) -> Result<String, String> {
-        peer::peer_list_transfers(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn cancel_transfer(&mut self, batch_id: String) -> Result<bool, String> {
-        peer::peer_cancel_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
-    }
-
-    fn retry_transfer(&mut self, batch_id: String) -> Result<String, String> {
-        peer::peer_retry_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
-    }
-
-    fn clear_transfer_history(&mut self) -> Result<u32, String> {
-        peer::peer_clear_transfer_history(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn list_receiving(&mut self) -> Result<String, String> {
-        peer::peer_list_receiving(&self.host_ctx, &self.plugin_id)
+    fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
+        peer::peer_send_files(&self.host_ctx, &self.plugin_id, &session, &paths_json)
     }
 
     fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
         peer::peer_respond_transfer(&self.host_ctx, &self.plugin_id, &batch_id, accept)
     }
 
-    fn cancel_receiving(&mut self, batch_id: String) -> Result<bool, String> {
-        peer::peer_cancel_receiving(&self.host_ctx, &self.plugin_id, &batch_id)
-    }
-
-    fn clear_receiving_history(&mut self) -> Result<u32, String> {
-        peer::peer_clear_receiving_history(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn get_receive_settings(&mut self) -> Result<String, String> {
-        peer::peer_get_receive_settings(&self.host_ctx, &self.plugin_id)
-    }
-
     fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
         peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
     }
 
-    fn list_shared_directories(&mut self) -> Result<String, String> {
-        peer::peer_list_shared_directories(&self.host_ctx, &self.plugin_id)
+    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
+        peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
     }
 
-    fn remove_shared_directory(&mut self, id: String) -> Result<bool, String> {
-        peer::peer_remove_shared_directory(&self.host_ctx, &self.plugin_id, &id)
+    fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
+        peer::peer_list_shared_roots(&self.host_ctx, &self.plugin_id, &session)
     }
 
-    fn add_shared_directory(&mut self, request_json: String) -> Result<String, String> {
-        peer::peer_add_shared_directory(&self.host_ctx, &self.plugin_id, &request_json)
-    }
-
-    fn list_shared_roots(&mut self, node_id: String) -> Result<String, String> {
-        peer::peer_list_shared_roots(&self.host_ctx, &self.plugin_id, &node_id)
-    }
-
-    fn browse_directory(&mut self, node_id: String, dir_id: String, rel_path: String) -> Result<String, String> {
+    fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
         peer::peer_browse_directory(
             &self.host_ctx,
             &self.plugin_id,
-            &node_id,
+            &session,
             &dir_id,
             &rel_path,
         )
     }
 
-    fn pull_files(&mut self, node_id: String, dir_id: String, files_json: String) -> Result<u32, String> {
+    fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
         peer::peer_pull_files(
             &self.host_ctx,
             &self.plugin_id,
-            &node_id,
+            &session,
             &dir_id,
             &files_json,
         )
     }
 
-    fn pick_files(&mut self) -> Result<String, String> {
-        peer::peer_pick_files(&self.host_ctx, &self.plugin_id)
-    }
-
-    fn pick_folder(&mut self) -> Result<String, String> {
-        peer::peer_pick_folder(&self.host_ctx, &self.plugin_id)
-    }
-
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
         peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
-    }
-
-    fn set_transfer_encryption(&mut self, enabled: bool) -> Result<(), String> {
-        peer::peer_set_transfer_encryption(&self.host_ctx, &self.plugin_id, enabled)
     }
 }
 

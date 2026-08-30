@@ -7,6 +7,7 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
+pub mod peer_migration;
 pub mod peer_net;
 pub mod peer_receive;
 pub mod peer_remote;
@@ -302,6 +303,9 @@ pub fn run() {
             db.init_schema()?;
 
             let db = Arc::new(Mutex::new(db));
+
+            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
+            crate::peer_migration::migrate_legacy_peer_data(&app_handle, &db);
 
             // ==================== 创建所有全局单实例 ====================
 
@@ -627,37 +631,16 @@ pub fn run() {
             // Peer Net
             peer_net::start_peer_node,
             peer_net::stop_peer_node,
-            peer_net::list_discovered_peers,
-            peer_net::dial_peer,
-            peer_net::disconnect_peer,
+            // Phase 4（issue 13）：对等网络产品面已整体迁入 file-transfer 插件
+            // （WIT host-peer 13 原语），主前端命令面退役——仅保留生命周期、
+            // 首连确认与信任管理（宿主级兜底路径）。其余查询/管理命令的函数体
+            // 暂留一版（部分仍为 host_impl 内部簿记调用），下版本删除。
             peer_net::respond_peer_consent,
             peer_net::list_trusted_peers,
             peer_net::revoke_trusted_peer,
-            peer_net::list_shared_directories,
-            peer_net::add_shared_directory,
-            peer_net::remove_shared_directory,
-            // Peer Transfer (issue 09 发送侧)
-            peer_transfer::send_files_to_peer,
-            peer_transfer::cancel_peer_transfer,
-            peer_transfer::retry_peer_transfer,
-            peer_transfer::list_peer_transfers,
-            peer_transfer::clear_peer_transfer_history,
-            peer_transfer::peer_pick_files,
-            peer_transfer::peer_pick_folder,
-            // Peer Receive (issue 10 接收侧)
-            peer_receive::list_peer_receiving,
-            peer_receive::respond_peer_transfer,
-            peer_receive::cancel_peer_receiving,
-            peer_receive::get_peer_receive_settings,
             peer_receive::set_peer_receive_policy,
             peer_receive::set_peer_download_dir,
-            peer_receive::peer_pick_download_dir,
-            peer_receive::clear_peer_receiving_history,
             peer_receive::set_peer_transfer_encryption,
-            // Peer Remote (issue 11 远端浏览/拉取)
-            peer_remote::list_peer_shared_roots,
-            peer_remote::browse_peer_directory,
-            peer_remote::pull_peer_files,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

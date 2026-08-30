@@ -161,24 +161,12 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
 }
 
 impl bedcode::plugin::host_peer::Host for WasmPluginState {
-    fn list_devices(&mut self) -> Result<String, String> {
-        super::host_impl::peer_list_devices(self)
-    }
-
-    fn dial_peer_endpoint(&mut self, endpoint_json: String) -> Result<String, String> {
-        super::host_impl::peer_dial_endpoint(self, &endpoint_json)
+    fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
+        super::host_impl::peer_dial(self, &endpoint_json)
     }
 
     fn close(&mut self, handle: String) -> Result<bool, String> {
         super::host_impl::peer_close(self, &handle)
-    }
-
-    fn dial_peer(&mut self, node_id: String) -> Result<String, String> {
-        super::host_impl::peer_dial(self, &node_id)
-    }
-
-    fn disconnect_peer(&mut self, node_id: String) -> Result<bool, String> {
-        super::host_impl::peer_disconnect(self, &node_id)
     }
 
     fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
@@ -193,93 +181,32 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_revoke_trusted(self, &node_id)
     }
 
-    fn send_files(&mut self, node_id: String, paths_json: String) -> Result<String, String> {
-        super::host_impl::peer_send_files(self, &node_id, &paths_json)
-    }
-
-    fn list_transfers(&mut self) -> Result<String, String> {
-        super::host_impl::peer_list_transfers(self)
-    }
-
-    fn cancel_transfer(&mut self, batch_id: String) -> Result<bool, String> {
-        super::host_impl::peer_cancel_transfer(self, &batch_id)
-    }
-
-    fn retry_transfer(&mut self, batch_id: String) -> Result<String, String> {
-        super::host_impl::peer_retry_transfer(self, &batch_id)
-    }
-
-    fn clear_transfer_history(&mut self) -> Result<u32, String> {
-        super::host_impl::peer_clear_transfer_history(self)
-    }
-
-    fn list_receiving(&mut self) -> Result<String, String> {
-        super::host_impl::peer_list_receiving(self)
+    fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
+        super::host_impl::peer_send_files(self, &session, &paths_json)
     }
 
     fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
         super::host_impl::peer_respond_transfer(self, &batch_id, accept)
     }
 
-    fn cancel_receiving(&mut self, batch_id: String) -> Result<bool, String> {
-        super::host_impl::peer_cancel_receiving(self, &batch_id)
-    }
-
-    fn clear_receiving_history(&mut self) -> Result<u32, String> {
-        super::host_impl::peer_clear_receiving_history(self)
-    }
-
-    fn get_receive_settings(&mut self) -> Result<String, String> {
-        super::host_impl::peer_get_receive_settings(self)
-    }
-
     fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
         super::host_impl::peer_set_receive_policy(self, &mode, timeout_secs)
     }
 
-    fn set_transfer_encryption(&mut self, enabled: bool) -> Result<(), String> {
-        super::host_impl::peer_set_transfer_encryption(self, enabled)
-    }
-
-    fn list_shared_directories(&mut self) -> Result<String, String> {
-        super::host_impl::peer_list_shared_directories(self)
-    }
-
-    fn remove_shared_directory(&mut self, id: String) -> Result<bool, String> {
-        super::host_impl::peer_remove_shared_directory(self, &id)
-    }
-
-    fn add_shared_directory(&mut self, request_json: String) -> Result<String, String> {
-        super::host_impl::peer_add_shared_directory(self, &request_json)
-    }
-
-    fn list_shared_roots(&mut self, node_id: String) -> Result<String, String> {
-        super::host_impl::peer_list_shared_roots(self, &node_id)
-    }
-
-    fn browse_directory(&mut self, node_id: String, dir_id: String, rel_path: String) -> Result<String, String> {
-        super::host_impl::peer_browse_directory(self, &node_id, &dir_id, &rel_path)
-    }
-
-    fn pull_files(&mut self, node_id: String, dir_id: String, files_json: String) -> Result<u32, String> {
-        super::host_impl::peer_pull_files(self, &node_id, &dir_id, &files_json)
-    }
-
-    fn pick_files(&mut self) -> Result<String, String> {
-        super::host_impl::peer_pick_files(self)
-    }
-
-    fn pick_folder(&mut self) -> Result<String, String> {
-        super::host_impl::peer_pick_folder(self)
-    }
-
-    fn set_download_dir(&mut self, _path: String) -> Result<(), String> {
-        // 移动端接收落点固定 MediaStore.Downloads，不支持自定义
-        Err("set-download-dir is not supported on mobile (downloads always land in MediaStore.Downloads)".to_string())
-    }
-
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         super::host_impl::peer_set_shared_roots(self, &dirs_json)
+    }
+
+    fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
+        super::host_impl::peer_list_shared_roots(self, &session)
+    }
+
+    fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
+        super::host_impl::peer_browse_directory(self, &session, &dir_id, &rel_path)
+    }
+
+    fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
+        super::host_impl::peer_pull_files(self, &session, &dir_id, &files_json)
     }
 }
 

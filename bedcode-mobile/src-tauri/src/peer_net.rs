@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 
 use bedcode_peer_net::{
     CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,
-    DiscoveryDaemon, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
+    DiscoveryAdvertiser, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
     PeerNetNode, PeerNetNodeConfig, RunningNode, SeqReader, SharedDirEntry, SharedDirHandler,
     SharedDirRoot, SharedSafAccess, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore,
     TransferConfig, TransferEvent,
@@ -105,7 +105,7 @@ struct PeerNetRuntime {
     /// TCP 监听运行句柄（优雅关停入口）
     running: RunningNode,
     /// mDNS 发现守护句柄（优雅关停入口）
-    daemon: DiscoveryDaemon,
+    daemon: DiscoveryAdvertiser,
     /// 在线缓存句柄（list 命令读取；闸门桥接解析对端设备名共用同一实例）
     cache: Arc<DiscoveryCache>,
     /// 本节点 ID（状态摘要展示用）
@@ -670,7 +670,7 @@ async fn start_locked(
         ),
     }
 
-    let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
+    let daemon = bedcode_peer_net::spawn_peer_mdns_advertiser(
         &node,
         &running,
         DiscoveryConfig {
@@ -688,11 +688,7 @@ async fn start_locked(
         cache,
         node_id,
     });
-    // 发现缓存变更推送：快照比对驱动前端自动刷新（issue 08，与桌面端同构）
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_discovery_push",
-        drive_discovery_push(app.clone()),
-    );
+
     tracing::info!(
         "peer-net node started: addr={listen_addr}, discovery service={}",
         bedcode_peer_net::SERVICE_TYPE
@@ -1188,7 +1184,8 @@ pub(crate) fn emit_json(app: &AppHandle, event: &str, payload: serde_json::Value
 /// 前端事件名 → 插件总线 topic 映射（非对等事件返回 None 不桥接）
 fn bus_topic_for(event: &str) -> Option<&'static str> {
     match event {
-        "peer-devices-changed" => Some("peer:devices"),
+        // "peer-devices-changed" → peer:devices 已随 DiscoveryCache 守护退役
+        // （issue 13 Phase 4：设备列表由插件经 host-mdns 自建）
         "peer-connected" | "peer-disconnected" => Some("peer:connection"),
         "peer-consent-requested" => Some("peer:consent"),
         "peer-transfer-changed" => Some("peer:transfer"),
@@ -1212,51 +1209,6 @@ pub(crate) async fn runtime_snapshot(
 ///
 /// 宿主侧比对而非给 crate 的 DiscoveryCache 加回调：保持共享 crate 接口最小，
 /// LAN 规模下 list + 序列化为微秒级、轮询成本趋零。节点停止后补发一次空列表
-/// 清空前端再退出；重启由 start_locked 重新拉起本任务。（与桌面端同构）
-async fn drive_discovery_push(app: AppHandle) {
-    let mut last_fingerprint: Option<String> = None;
-    let mut ticks_since_push: u32 = 0;
-    loop {
-        tokio::time::sleep(DISCOVERY_PUSH_INTERVAL).await;
-        let state = app.state::<PeerNetState>();
-        let snapshot = {
-            let guard = state.runtime.lock().await;
-            guard.as_ref().map(|runtime| runtime.cache.list())
-        };
-        match snapshot {
-            Some(records) => {
-                let dtos: Vec<DiscoveredPeerDto> =
-                    records.iter().map(DiscoveredPeerDto::from).collect();
-                // 序列化串即指纹：列表有序（cache.list 按 node_id 稳定排序），可比对
-                let fingerprint = serde_json::to_string(&dtos)
-                    .unwrap_or_else(|_| format!("len={}", dtos.len()));
-                ticks_since_push += 1;
-                if Some(&fingerprint) != last_fingerprint.as_ref()
-                    || ticks_since_push >= DISCOVERY_FORCE_REPUSH_TICKS
-                {
-                    emit_json(
-                        &app,
-                        "peer-devices-changed",
-                        serde_json::to_value(&dtos).unwrap_or_default(),
-                    );
-                    tracing::info!(
-                        count = dtos.len(),
-                        forced = ticks_since_push >= DISCOVERY_FORCE_REPUSH_TICKS,
-                        "peer devices snapshot pushed"
-                    );
-                    last_fingerprint = Some(fingerprint);
-                    ticks_since_push = 0;
-                }
-            }
-            None => {
-                if last_fingerprint.map(|f| f != "[]").unwrap_or(false) {
-                    emit_json(&app, "peer-devices-changed", serde_json::json!([]));
-                }
-                return;
-            }
-        }
-    }
-}
 
 /// 可信列表句柄：未加载时惰性从磁盘加载（设置面在节点从未启动时也可用）
 async fn trust_handle(app: &AppHandle) -> crate::Result<Arc<TrustStore>> {

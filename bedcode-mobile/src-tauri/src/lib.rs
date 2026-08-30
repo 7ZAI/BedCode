@@ -9,6 +9,7 @@ pub mod handler;
 pub mod mdns;
 pub mod model;
 pub mod ocr;
+pub mod peer_migration;
 pub mod peer_net;
 pub mod peer_receive;
 pub mod peer_remote;
@@ -87,6 +88,9 @@ pub fn run() {
             // 目录），node_identity.json 与 auth 域 device_identity.json 并列存放；
             // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
             crate::peer_net::init_node_identity(&app_data_dir)?;
+
+            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
+            crate::peer_migration::migrate_legacy_peer_data(&app_data_dir);
 
             // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
             // 与 mDNS 发现守护；启动前经 Kotlin MulticastLockPlugin 申请多播锁
