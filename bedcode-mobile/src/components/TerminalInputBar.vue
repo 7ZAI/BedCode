@@ -937,10 +937,10 @@ onMounted(() => {
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
   /* 响应式快捷键尺寸：使用 clamp + vw 实现自适应 */
-  --shortcut-btn-h: clamp(2rem, 8vw, 2.5rem);
+  --shortcut-btn-h: clamp(1.8rem, 7vw, 2.2rem);
   --shortcut-font: clamp(0.65rem, 2.6vw, 0.8rem);
-  --quickbar-btn-h: clamp(1.5rem, 6vw, 2rem);
-  --quickbar-font: clamp(0.6rem, 2.4vw, 0.75rem);
+  --quickbar-btn-h: clamp(1.8rem, 7vw, 2.2rem);
+  --quickbar-font: clamp(0.65rem, 2.6vw, 0.8rem);
   --action-btn-w: clamp(2.75rem, 10vw, 3.25rem);
   --shortcut-min-w: clamp(2.25rem, 8.5vw, 2.75rem);
 }

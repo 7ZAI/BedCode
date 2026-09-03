@@ -108,7 +108,7 @@ function main() {
     if (CONFIG.autoClean) {
       cargoClean()
     } else {
-      console.log('💡 建议运行: npm run target:clean\n')
+      console.log('💡 建议运行: pnpm run target:clean\n')
       process.exit(1)
     }
   } else {

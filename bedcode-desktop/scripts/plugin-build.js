@@ -72,8 +72,8 @@ try {
 }
 
 try {
-  const npmCmd = IS_WIN ? 'npm.cmd' : 'npm'
-  execSync(`${npmCmd} run build`, {
+  const pkgMgrCmd = IS_WIN ? 'pnpm.cmd' : 'pnpm'
+  execSync(`${pkgMgrCmd} run build`, {
     cwd: pluginDir,
     stdio: 'inherit',
     env: { ...process.env },

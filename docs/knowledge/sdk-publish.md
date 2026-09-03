@@ -71,8 +71,8 @@ GitHub Actions → `SDK Publish` 工作流，三个 job：
 
 | Job | 内容 | 失败后果 |
 |-----|------|---------|
-| `verify` | 版本一致性、构建、测试、`npm pack` / `cargo package` dry-run、wasm32 编译检查 | 直接中断，不发布 |
-| `publish-npm` | 发布两个 npm 包（desktop 走 `npm publish -w`，workspace 成员） | 独立 job，不阻塞 crates |
+| `verify` | 版本一致性、构建、测试、`pnpm pack` / `cargo package` dry-run、wasm32 编译检查 | 直接中断，不发布 |
+| `publish-npm` | 发布两个 npm 包（desktop 走 `pnpm publish --filter`，workspace 成员） | 独立 job，不阻塞 crates |
 | `publish-crates` | 先 dry-run 再发布两个 crate | 独立 job |
 
 ---
@@ -83,7 +83,7 @@ GitHub Actions → `SDK Publish` 工作流，三个 job：
 
 ```bash
 # 用已发布版本生成插件工程（--registry 引用 npm + crates.io 版本）
-npx @binblink/plugin-sdk-mobile create com.example.demo "Demo" --registry
+pnpm exec @binblink/plugin-sdk-mobile create com.example.demo "Demo" --registry
 ```
 
 生成的依赖声明：
@@ -105,14 +105,14 @@ bedcode-plugin-api-mobile = "0.1.0"
 
 ## 注意事项
 
-- **首次发布前**只能用相对路径模式（registry 上查不到 `^0.1.0`，`npm install` / `cargo build` 会失败）
+- **首次发布前**只能用相对路径模式（registry 上查不到 `^0.1.0`，`pnpm install` / `cargo build` 会失败）
 - **crates.io 名称占用**：发布前用 `cargo search <crate名>` 检查；发布后 crate 名不可更改，改名需新 crate
 - **crates.io 强制 license 字段**：`Cargo.toml` 必须含 `license`，缺失时 `cargo publish` 直接拒绝（两 crate 已配 `MIT`）
 - **本地预演**：`cargo publish --dry-run` 会校验 license + 编译 + 打包，未提交的改动需 `--allow-dirty`（CI 里 tag 是干净 checkout，不需要）
 - **token 安全**：token 泄露（如贴入聊天）后应在对应网站删除重建，并用 `gh secret set` 更新
-- **workspace 成员发布**：desktop SDK 是 `bedcode-desktop` npm workspace 成员（`packages/*`），发布用 `npm publish -w @binblink/plugin-sdk-desktop`；`prepublishOnly` 会自动执行 build + test
+- **workspace 成员发布**：desktop SDK 是 `bedcode-desktop` pnpm workspace 成员（`packages/*`），发布用 `pnpm --filter @binblink/plugin-sdk-desktop publish --access public`；`prepublishOnly` 会自动执行 build + test
 - **构建产物不入库**：`dist/` 已被 `.gitignore` 忽略，npm 发布走 `files` 白名单（dist/bin[/template]/dev-shell），CI 中 checkout 后由 `prepublishOnly` 现场构建
-- **dev-shell 随包发布**：两个 SDK 的 `files` 均含 `dev-shell/`（浏览器开发环境，自包含 vite 工程，源码随包分发）；其 `node_modules` 不入包，插件开发者首次运行 `bedcode-plugin dev` 时 CLI 自动在 dev-shell 内执行 `npm install`（打印提示后自动安装，无需手动干预）
+- **dev-shell 随包发布**：两个 SDK 的 `files` 均含 `dev-shell/`（浏览器开发环境，自包含 vite 工程，源码随包分发）；其 `node_modules` 不入包，插件开发者首次运行 `bedcode-plugin dev` 时 CLI 自动在 dev-shell 内执行 `pnpm install`（打印提示后自动安装，无需手动干预）
 
 ---
 

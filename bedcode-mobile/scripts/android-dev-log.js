@@ -4,9 +4,9 @@
  * 原理：移动端进程运行在 Android 设备上，Rust 代码无法直接写电脑磁盘，
  * 但 `tauri android dev` 的 Tauri CLI 会把移动端 logcat 实时转发到电脑
  * 控制台 —— 本脚本把控制台输出同时写一份到电脑端日志文件（按天轮转），
- * 等价于 `npm run tauri:android:dev 2>&1 | tee ...`，跨平台（Windows cmd 无 tee）。
+ * 等价于 `pnpm run tauri:android:dev 2>&1 | tee ...`，跨平台（Windows cmd 无 tee）。
  *
- * 用法：npm run tauri:android:dev:log
+ * 用法：pnpm run tauri:android:dev:log
  * 日志目录：bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log（本地日期，与设备日志日期线一致）
  */
 import { spawn } from 'node:child_process'
@@ -49,7 +49,7 @@ const stripAnsi = (s) =>
 
 console.log(`[dev-log] 电脑端日志落盘: ${logFile}`)
 
-const child = spawn('npm', ['run', 'tauri:android:dev'], {
+const child = spawn(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['run', 'tauri:android:dev'], {
   stdio: ['inherit', 'pipe', 'pipe'],
   shell: process.platform === 'win32',
 })

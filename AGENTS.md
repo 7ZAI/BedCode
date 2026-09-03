@@ -15,21 +15,23 @@ BedCode：局域网远程终端应用——桌面端作为主机运行终端会�
 
 ## Build & Run
 
+项目统一使用 **pnpm** 作为前端包管理器（各独立工程/workspace 各自维护 `pnpm-lock.yaml`）。
+
 ```bash
 # Desktop Development
-cd bedcode-desktop && npm run tauri:dev
+cd bedcode-desktop && pnpm run tauri:dev
 
 # Desktop Build
-cd bedcode-desktop && npm run tauri:build
+cd bedcode-desktop && pnpm run tauri:build
 
 # Mobile Development
-cd bedcode-mobile && npm run tauri:android:dev
+cd bedcode-mobile && pnpm run tauri:android:dev
 
 # Mobile Build
-cd bedcode-mobile && npm run tauri:android:build
+cd bedcode-mobile && pnpm run tauri:android:build
 
-# Frontend Test（必须用 test:run，禁止 npm run test）
-cd bedcode-desktop && npm run test:run
+# Frontend Test（必须用 test:run，禁止 pnpm run test——watch 模式会挂起）
+cd bedcode-desktop && pnpm run test:run
 
 # Rust Test
 cargo test
@@ -39,7 +41,7 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 ```
 
 - **Kotlin 验证**：改 `gen/android/app/src/main/java/com/bedcode/mobile/` 下自定义 Kotlin 插件后，必须额外跑上述 gradlew 命令（独立 Gradle/Kotlin 工具链，`cargo test` 与前端测试均不覆盖）；离线加 `--offline`
-- **前端测试统一 `npm run test:run`**（= `npx vitest run`，跑完退出）；`npm run test` 是 vitest watch 模式，执行后挂起不退出，禁止使用；`vite` 不执行测试
+- **前端测试统一 `pnpm run test:run`**（= `pnpm exec vitest run`，跑完退出）；`pnpm run test` 是 vitest watch 模式，执行后挂起不退出，禁止使用；`vite` 不执行测试
 - 构建前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`
 - 桌面端 `tauri:build`（`scripts/tauri-build.js`）自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_FILE` / `.env`），未配置时自动禁用升级包生成，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（见 `docs/knowledge/release-workflow.md`）
 
@@ -71,7 +73,7 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 | 端 | 落盘方式 | 位置 |
 |----|---------|------|
 | 桌面端 | 始终写文件（dev/release） | `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
-| 移动端 | 电脑端落盘仅 `npm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep） |
+| 移动端 | 电脑端落盘仅 `pnpm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep） |
 
 实际路径确认：桌面端 dev 控制台首行 `Logging initialized.`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
 
@@ -135,7 +137,7 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 ## Git Hooks：分支级文档跟踪
 
-受保护路径（`docs/`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置、`.scratch/`）只在除 **uat/master** 外的分支入库；uat/master 仅从 index 剔除、不提交删除，工作区保留副本。`README*` 与 `AGENTS.md` 全分支正常跟踪。实现在 `scripts/doc-tracking.sh`，由 husky 钩子（pre-commit / post-checkout / post-merge）调用；启用：clone 后在根目录执行一次 `npm install`（或 `npx husky install`）。
+受保护路径（`docs/`、`CLAUDE.md`、`CONTEXT.md`、`.pi` 配置、`.scratch/`）只在除 **uat/master** 外的分支入库；uat/master 仅从 index 剔除、不提交删除，工作区保留副本。`README*` 与 `AGENTS.md` 全分支正常跟踪。实现在 `scripts/doc-tracking.sh`，由 husky 钩子（pre-commit / post-checkout / post-merge）调用；启用：clone 后在根目录执行一次 `pnpm install`（husky v9 的 prepare 钩子自动安装）。
 
 ESLint/Prettier 为全局单根配置（仓库根 `eslint.config.js` 等），同时覆盖两端前端；pre-commit 与 CI `lint.yml` 均从根目录运行 `eslint .`（仅 error 阻断）。
 
@@ -157,8 +159,19 @@ ESLint/Prettier 为全局单根配置（仓库根 `eslint.config.js` 等），�
 ## Git Rules
 
 - **禁止 commit message 中出现 AI 协作者标记（Co-Authored-By 等）**
-- **禁止推送 dev / feature 分支到远程**（`git push origin dev` / `-u origin dev` 均禁止）。远程仅维护发布线 master / uat；发布流程：确认改动属任务范围 → 合并到 master（或 uat）→ 只推送该发布分支
-- 发现 `origin/dev` 等远程 dev 残留时不得继续 push，先与用户确认处理方式
+
+### 分支推送约定
+
+**dev 分支允许推送到远程 `origin/dev`，仅作本地 dev 的只读镜像备份**：
+
+- `git push origin dev` ✅ 允许，用于本地 dev 的云端备份 / 多设备同步
+- `git fetch origin dev` ✅ 允许，用于核对本地与远程 dev 是否一致
+- `git pull origin dev` / `git merge origin/dev` / `git rebase origin/dev` ❌ 禁止——远程 dev 是只读镜像，不向本地 dev 汇入任何 commit
+- 不允许对 `origin/dev` 开 PR；远程 dev 不接收任何外部 commit 流入
+- **CI 隔离**：`origin/dev` 的 push 事件与对 `origin/dev` 的 PR 不触发任何 workflow（`.github/workflows/lint.yml` 的 `push` / `pull_request` 已加 `branches-ignore: [dev]`；`release.yml` / `sdk-publish.yml` 同样防御性忽略 dev）。理由：dev 是本地集成主线，CI 验证在 PR 合并到 master / uat 时由 lint.yml 接管
+- 远程发布线仍为 master / uat；PR / 合并目标基线为 `master`（项目未设计 GitHub PR 流程，开发过程通过 `.scratch/<task>/` 文档记录）
+
+**远程 dev 与本地 dev 出现分叉**（说明远程被错误写入 commit）时，立即停手与用户确认处理方式，禁止自动 `--force` 覆盖，避免掩盖问题。
 
 ### 文件回滚规范（强制）
 
@@ -187,7 +200,7 @@ ESLint/Prettier 为全局单根配置（仓库根 `eslint.config.js` 等），�
 ## Done When
 
 - 修改的 Rust 代码 `cargo test` 通过
-- 修改的前端代码 `npm run test:run` 通过
+- 修改的前端代码 `pnpm run test:run` 通过
 - 修改了 `gen/android` 下 Kotlin 代码的，`./gradlew :app:compileUniversalDebugKotlin` 通过
 - i18n key 同步出现在 zh-CN 和 en
 - 公开项有文档注释
@@ -289,7 +302,7 @@ subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路�
 
 已安装 `git:github.com/leblancfg/lsp-pi` 包（用户级），提供 IDE 级语义查询：`references` / `definition` / `hover` / `symbols` / `signature` / `rename`。语言服务器：TypeScript/JS、Vue（`.vue` SFC）、Rust。
 
-**自动诊断 hook 已禁用**（`lsp.hookMode: "disabled"`），不实时推送编译诊断；编译级验证仍以 `npm run test:run` / `cargo test` 为准，LSP 只用于代码理解与导航。
+**自动诊断 hook 已禁用**（`lsp.hookMode: "disabled"`），不实时推送编译诊断；编译级验证仍以 `pnpm run test:run` / `cargo test` 为准，LSP 只用于代码理解与导航。
 
 #### 何时必须用 LSP（行为规则）
 
@@ -311,7 +324,7 @@ subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路�
 1. code-map.md 定位模块 → ls 看目录 → 打开入口文件
 2. 对关键符号发 lsp hover/references 摸清类型与调用面
 3. 按 references 结果定点 read 具体行段（非整文件）
-4. 动手修改；验证走 npm run test:run / cargo test
+4. 动手修改；验证走 pnpm run test:run / cargo test
 ```
 
 示例：

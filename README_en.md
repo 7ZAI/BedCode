@@ -198,19 +198,19 @@ Currently focused on **Windows (Desktop) + Android (Mobile)**, with both ends' c
 
 ```bash
 # Install dependencies
-cd bedcode-desktop && npm install
-cd bedcode-mobile && npm install
+cd bedcode-desktop && pnpm install
+cd bedcode-mobile && pnpm install
 
 # Development
-cd bedcode-desktop && npm run tauri:dev         # Desktop
-cd bedcode-mobile && npm run tauri:android:dev  # Mobile (Android logs: tauri:android:dev:log)
+cd bedcode-desktop && pnpm run tauri:dev         # Desktop
+cd bedcode-mobile && pnpm run tauri:android:dev  # Mobile (Android logs: tauri:android:dev:log)
 
 # Build
-cd bedcode-desktop && npm run tauri:build
-cd bedcode-mobile && npm run tauri:android:build
+cd bedcode-desktop && pnpm run tauri:build
+cd bedcode-mobile && pnpm run tauri:android:build
 
 # Testing
-cd bedcode-desktop && npm run test:run          # Frontend (vitest run)
+cd bedcode-desktop && pnpm run test:run          # Frontend (vitest run)
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
@@ -228,7 +228,7 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 - **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check
 - **Docs** — `bedcode-desktop/plugin-dev-desktop.md` (desktop) and `bedcode-mobile/plugin-dev-mobile.md` (mobile)
 - **Browser dev environment (dev-shell)** — both SDKs ship a `dev-shell`: an empty-shell host + page skeleton that runs the plugin's frontend source directly in the browser (HMR), so UI and frontend logic can be iterated without building, packaging, or installing on a real device.
-  - Start it with `bedcode-plugin-desktop dev` (mobile: `npm run dev` / `npx bedcode-plugin dev`); `--host` listens on the LAN so the page can be previewed in a phone browser (real touch, real viewport)
+  - Start it with `bedcode-plugin-desktop dev` (mobile: `pnpm run dev` / `pnpm exec bedcode-plugin dev`); `--host` listens on the LAN so the page can be previewed in a phone browser (real touch, real viewport)
   - Skeleton features: title bar / sidebar / toolbox / mock terminal (send input + simulate output + session management) / plugin page (registered items overview + activate/deactivate) / status bar / log panel / dark-light theme switching
   - Mock boundaries: `commands.execute` runs frontend handlers only (Rust WASM backend commands unavailable), `http.registerEndpoint` is display-only, `storage` uses localStorage, `fileService` is an in-memory registry; permission checks are skipped (treated as fully granted) — device-only capabilities (Rust commands, real HTTP endpoints, system file pickers) must be verified in the real host
 

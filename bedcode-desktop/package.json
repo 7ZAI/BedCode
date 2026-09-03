@@ -3,10 +3,7 @@
   "version": "2.0.10",
   "private": true,
   "type": "module",
-  "workspaces": [
-    "packages/*",
-    "plugins/*"
-  ],
+  "packageManager": "pnpm@12.2.1",
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -29,9 +26,9 @@
     "target:clean": "cd src-tauri && cargo clean",
     "prebuild": "node scripts/check-target-size.js",
     "plugins:build": "node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox && node scripts/plugin-build.js --plugin com.bedcode.auto-task && node scripts/plugin-build.js --plugin com.bedcode.file-transfer",
-    "plugins:build:frontend": "cd plugins/ai-chatbox && npm run build:frontend",
-    "plugins:build:rust": "cd plugins/ai-chatbox && npm run build:rust",
-    "plugins:build:all": "npm run plugins:build",
+    "plugins:build:frontend": "pnpm -C plugins/ai-chatbox run build:frontend",
+    "plugins:build:rust": "pnpm -C plugins/ai-chatbox run build:rust",
+    "plugins:build:all": "pnpm run plugins:build",
     "plugins:dev": "node scripts/plugin-dev.js",
     "plugins:build:release": "node scripts/plugin-build.js"
   },

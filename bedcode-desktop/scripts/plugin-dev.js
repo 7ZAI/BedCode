@@ -55,7 +55,7 @@ console.log(`\n=== Plugin Dev: ${targetPlugin} ===\n`)
 const pluginDir = resolve(ROOT, config.pluginDir)
 console.log(`Running plugin dev build in: ${pluginDir}`)
 
-const proc = spawn(IS_WIN ? 'npm.cmd' : 'npm', ['run', 'dev'], {
+const proc = spawn(IS_WIN ? 'pnpm.cmd' : 'pnpm', ['run', 'dev'], {
   cwd: pluginDir,
   stdio: 'inherit',
   env: { ...process.env },

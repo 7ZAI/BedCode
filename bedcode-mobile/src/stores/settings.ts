@@ -80,7 +80,7 @@ export const useSettingsStore = defineStore('settings', () => {
     }
   }
 
-  // 获��终端缓存最大数量
+  // 获终端缓存最大数量
   function getMaxCachedTerminals(): number {
     return settings.value.ui.max_cached_terminals || 10
   }

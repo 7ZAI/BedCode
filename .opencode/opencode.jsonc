@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // 项目专属配置：仅影响 opencode，不涉及 .pi/ .claude/ 等其他 agent
+  // LSP 对齐 pi 的 lsp.hookMode="disabled"：只做代码理解与导航，不做实时编译诊断；
+  // 编译级验证一律走 npm run test:run / cargo test
+  //   - rust：通过 initialization 关闭 rust-analyzer 后台 cargo check（实时编译诊断的唯一大源头）
+  //   - ts/vue：语言服务器本身无诊断开关，但诊断仅在被显式调用时按需拉取，不会自动推送进会话
+  // 按需拉起：打开 .ts/.tsx/.js → typescript、.vue → vue、.rs → rust（需 PATH 中有 rust-analyzer）
+  // 禁用某个：如 "typescript": { "disabled": true }；禁止自动下载 server 设环境变量 OPENCODE_DISABLE_LSP_DOWNLOAD=true
+  "lsp": {
+    "rust": {
+      "command": ["rust-analyzer"],
+      "extensions": [".rs"],
+      "initialization": {
+        "rust-analyzer": {
+          "check": {
+            "enable": false
+          }
+        }
+      }
+    }
+  }
+}

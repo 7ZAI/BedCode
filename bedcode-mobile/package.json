@@ -3,6 +3,7 @@
   "version": "2.0.10",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@12.2.1",
   "scripts": {
     "dev": "vite optimize && vite",
     "build": "vue-tsc --noEmit && vite build",
@@ -20,13 +21,13 @@
     "tauri:android:dev": "node scripts/dev-run.js",
     "tauri:android:dev:log": "node scripts/android-dev-log.js",
     "tauri:android:build": "tauri android build --target aarch64",
-    "tauri:android:build:fast": "npm run build:fast && tauri android build --target aarch64 --debug",
+    "tauri:android:build:fast": "pnpm run build:fast && tauri android build --target aarch64 --debug",
     "tauri:android:build:emulator": "tauri android build --target x86_64 --debug",
     "tauri:android:build:all": "tauri android build",
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",
     "plugins:build": "node scripts/plugin-build.js",
-    "build:all": "npm run plugins:build && npm run build",
+    "build:all": "pnpm run plugins:build && pnpm run build",
     "prebuild": "node scripts/check-target-size.js"
   },
   "dependencies": {

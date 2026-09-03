@@ -12,10 +12,10 @@
 cd bedcode-desktop
 
 # 启动前端 Vite 开发服务器（浏览器预览）
-npm run dev
+pnpm run dev
 
 # 启动 Tauri 桌面端开发模式（含热更新）
-npm run tauri:dev
+pnpm run tauri:dev
 
 # 仅 Rust 编译检查
 cd src-tauri && cargo check
@@ -27,10 +27,10 @@ cd src-tauri && cargo check
 cd bedcode-desktop
 
 # 完整构建（TypeScript 类型检查 + Vite 打包）
-npm run build
+pnpm run build
 
 # 快速构建（跳过类型检查）
-npm run build:fast
+pnpm run build:fast
 ```
 
 ### 桌面端打包
@@ -42,7 +42,7 @@ cd bedcode-desktop
 # Windows → NSIS 安装包 (.exe)
 # macOS → DMG 镜像
 # Linux → AppImage / .deb
-npm run tauri:build
+pnpm run tauri:build
 ```
 
 **安装包输出路径：**
@@ -58,7 +58,7 @@ bedcode-desktop/src-tauri/target/release/bundle/nsis/BedCode_0.1.0_x64-setup.exe
 cd bedcode-desktop
 
 # 构建全部插件（3 个）
-npm run plugins:build
+pnpm run plugins:build
 
 # 构建指定插件（--plugin 接插件 id）
 node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
@@ -66,10 +66,10 @@ node scripts/plugin-build.js --plugin com.bedcode.auto-task
 node scripts/plugin-build.js --plugin com.bedcode.file-transfer
 
 # 仅构建默认插件（ai-chatbox）
-npm run plugins:build:release
+pnpm run plugins:build:release
 
 # 插件开发模式（watch，默认 ai-chatbox）
-npm run plugins:dev
+pnpm run plugins:dev
 
 # 指定插件开发模式
 node scripts/plugin-dev.js --plugin com.bedcode.auto-task
@@ -84,16 +84,16 @@ rustup target add wasm32-unknown-unknown
 **单插件内部命令**（`cd plugins/<name>`）：
 
 ```bash
-npm run build                 # 完整构建：Vite + cargo(WASM) + 复制产物
-npm run dev                   # 开发模式（build.js --watch）
-npm run build:frontend       # 仅前端（Vite）
-npm run build:rust           # 仅 Rust WASM 后端
+pnpm run build                 # 完整构建：Vite + cargo(WASM) + 复制产物
+pnpm run dev                   # 开发模式（build.js --watch）
+pnpm run build:frontend       # 仅前端（Vite）
+pnpm run build:rust           # 仅 Rust WASM 后端
 node scripts/build.js --frontend-only  # 仅前端并复制产物
 node scripts/build.js --rust-only      # 仅 Rust 并复制产物
 
 # 浏览器开发环境（SDK Dev Shell，前端 HMR 实时预览，无需打包）
-# 需先构建 SDK：cd bedcode-desktop/packages/plugin-sdk-desktop && npm run build
-npx bedcode-plugin-desktop dev   # 或 npm i -D @binblink/plugin-sdk-desktop 后在插件目录运行
+# 需先构建 SDK：cd bedcode-desktop/packages/plugin-sdk-desktop && pnpm run build
+pnpm exec bedcode-plugin-desktop dev   # 或 pnpm add -D @binblink/plugin-sdk-desktop 后在插件目录运行
 # 首次运行自动安装 dev-shell 依赖，浏览器打开 http://localhost:5173
 # 详见 ../bedcode-desktop/plugin-dev-desktop.md
 ```
@@ -117,16 +117,16 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/{plugin-id}/
 cd bedcode-mobile
 
 # 启动前端 Vite 开发服务器
-npm run dev
+pnpm run dev
 
 # Android 热加载开发模式（真机/模拟器）
-npm run tauri:android:dev
+pnpm run tauri:android:dev
 
 # Android 开发模式 + 电脑端日志落盘
 # 普通 tauri:android:dev 只打控制台；本命令额外把 Tauri CLI 转发的 logcat
 # 实时写入 .dev-logs/android-dev.YYYY-MM-DD.log（UTC 日期，无 ANSI 码，可 grep）。
 # 每次启动清空当天日志文件（跨天按 UTC 轮转新文件）；Ctrl+C 退出前 flush 落盘
-npm run tauri:android:dev:log
+pnpm run tauri:android:dev:log
 
 # 仅 Rust 编译检查
 cd src-tauri && cargo check
@@ -138,10 +138,10 @@ cd src-tauri && cargo check
 cd bedcode-mobile
 
 # 完整构建
-npm run build
+pnpm run build
 
 # 快速构建
-npm run build:fast
+pnpm run build:fast
 ```
 
 ### Android 构建
@@ -150,22 +150,22 @@ npm run build:fast
 cd bedcode-mobile
 
 # 初始化 Android 项目（首次运行）
-npm run tauri:android:init
+pnpm run tauri:android:init
 
 # 构建 Debug APK（仅 arm64）
-npm run tauri:android:build
+pnpm run tauri:android:build
 
 # 模拟器构建（x86_64）
-npm run tauri:android:build:emulator
+pnpm run tauri:android:build:emulator
 
 # 快速构建 Debug APK（仅 arm64，不优化）
-npm run tauri:android:build:fast
+pnpm run tauri:android:build:fast
 
 # 构建多架构 Debug APK
-npm run tauri:android:build:all
+pnpm run tauri:android:build:all
 
 # 构建 Release APK（需配置签名）
-npx tauri android build --release
+pnpm exec tauri android build --release
 
 # 使用 Android Studio 打开项目
 # File → Open → bedcode-mobile/src-tauri/gen/android
@@ -184,21 +184,21 @@ bedcode-mobile/src-tauri/gen/android/app/build/outputs/apk/
 cd bedcode-mobile
 
 # 构建全部插件（扫描 plugins/，产物复制到 APK 资源目录）
-npm run plugins:build
+pnpm run plugins:build
 
 # 构建指定插件
 node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
 
 # 插件 + 主应用一起构建
-npm run build:all
+pnpm run build:all
 ```
 
 **单插件内部命令**（`cd plugins/<name>`，基于 `bedcode-plugin` SDK CLI）：
 
 ```bash
-npm run dev       # = bedcode-plugin dev：浏览器开发环境（Dev Shell，HMR，无需真机）
-npm run build     # = bedcode-plugin build：vite + cargo wasm32
-npm run package   # = bedcode-plugin package：产出 dist/{id}.zip 插件包
+pnpm run dev       # = bedcode-plugin dev：浏览器开发环境（Dev Shell，HMR，无需真机）
+pnpm run build     # = bedcode-plugin build：vite + cargo wasm32
+pnpm run package   # = bedcode-plugin package：产出 dist/{id}.zip 插件包
 ```
 
 > Dev Shell 用 mock 宿主 + 移动端页面骨架在浏览器预览插件前端，WASM 后端命令需真机验证；详见 `../bedcode-mobile/plugin-dev-mobile.md`。
@@ -284,13 +284,13 @@ cd <project>/src-tauri && cargo update
 
 ```bash
 # ESLint 检查（前端）
-cd <project> && npm run lint
+cd <project> && pnpm run lint
 
 # Prettier 格式化（前端）
-cd <project> && npm run format
+cd <project> && pnpm run format
 
 # TypeScript 类型检查
-cd <project> && npx vue-tsc --noEmit
+cd <project> && pnpm exec vue-tsc --noEmit
 
 # Rust Clippy 检查
 cd <project>/src-tauri && cargo clippy
@@ -307,16 +307,16 @@ cd <project>/src-tauri && cargo fmt --check
 cd <project>
 
 # 监听模式（开发时使用）
-npm run test
+pnpm run test
 
 # 单次运行
-npm run test:run
+pnpm run test:run
 
 # 带覆盖率报告
-npm run test:coverage
+pnpm run test:coverage
 
 # UI 模式（浏览器查看测试结果）
-npm run test:ui
+pnpm run test:ui
 ```
 
 ---
@@ -349,7 +349,7 @@ cd bedcode-mobile/src-tauri && cargo clean
 cd <project> && rm -rf dist/
 
 # 清理 node_modules 重新安装
-cd <project> && rm -rf node_modules && npm install
+cd <project> && rm -rf node_modules && pnpm install
 
 # 移动端：清理 Android 构建产物
 cd bedcode-mobile/src-tauri/gen/android && ./gradlew clean
@@ -361,13 +361,13 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew clean
 
 ```bash
 # 安装前端依赖
-cd <project> && npm install
+cd <project> && pnpm install
 
 # 添加前端依赖
-cd <project> && npm install <package-name>
+cd <project> && pnpm install <package-name>
 
 # 添加开发依赖
-cd <project> && npm install -D <package-name>
+cd <project> && pnpm install -D <package-name>
 
 # 添加 Rust 依赖（编辑 Cargo.toml 后）
 cd <project>/src-tauri && cargo build
@@ -379,14 +379,14 @@ cd <project>/src-tauri && cargo build
 
 | 目标 | 目录 | 命令 | 产物 |
 |------|------|------|------|
-| 桌面端开发 | `bedcode-desktop` | `npm run tauri:dev` | 桌面窗口 + 热更新 |
-| 桌面端打包 | `bedcode-desktop` | `npm run tauri:build` | `.exe` / `.dmg` / `.AppImage` |
-| 插件构建（桌面） | `bedcode-desktop` | `npm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
-| 插件构建（移动） | `bedcode-mobile` | `npm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
-| Android 开发 | `bedcode-mobile` | `npm run tauri:android:dev` | 真机/模拟器 + 热更新 |
-| Android 开发（日志落盘） | `bedcode-mobile` | `npm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log` |
-| Android APK | `bedcode-mobile` | `npm run tauri:android:build` | `.apk` |
-| Android 快速构建 | `bedcode-mobile` | `npm run tauri:android:build:fast` | Debug `.apk` |
-| 前端测试 | `<project>` | `npm run test:run` | 终端输出 |
+| 桌面端开发 | `bedcode-desktop` | `pnpm run tauri:dev` | 桌面窗口 + 热更新 |
+| 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build` | `.exe` / `.dmg` / `.AppImage` |
+| 插件构建（桌面） | `bedcode-desktop` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
+| 插件构建（移动） | `bedcode-mobile` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
+| Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev` | 真机/模拟器 + 热更新 |
+| Android 开发（日志落盘） | `bedcode-mobile` | `pnpm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log` |
+| Android APK | `bedcode-mobile` | `pnpm run tauri:android:build` | `.apk` |
+| Android 快速构建 | `bedcode-mobile` | `pnpm run tauri:android:build:fast` | Debug `.apk` |
+| 前端测试 | `<project>` | `pnpm run test:run` | 终端输出 |
 | Rust 测试 | `<project>/src-tauri` | `cargo test` | 终端输出 |
 | Rust 检查 | `<project>/src-tauri` | `cargo check` | 编译检查 |

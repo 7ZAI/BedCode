@@ -103,12 +103,15 @@ async function precheckHmrPort() {
   )
 }
 
-// npm-cli.js 绝对路径：优先取 npm 注入的 npm_execpath（任何安装布局下都正确），
-// 回退到 Windows Node 安装器标准布局（node.exe 与 node_modules/npm 同目录）；
-// Linux/macOS 的 npm 在系统目录（/usr/lib/node_modules/npm 等），与 node 二进制
-// 不同目录，故不能只用回退路径
-const NPM_CLI =
-  process.env.npm_execpath ?? resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
+// 包管理器 CLI 绝对路径：优先取 pnpm 注入的 pnpm_execpath（pnpm 运行生命周期脚本时
+// 同时设置 npm_execpath / pnpm_execpath，任何安装布局下都正确）；回退到 npm_execpath
+// （仍以 npm 安装/调用时临时兼容）；最后退回 Windows Node 安装器标准布局
+// （node.exe 与 node_modules/npm 同目录）——Linux/macOS 的 npm 在系统目录
+// （/usr/lib/node_modules/npm 等），与 node 二进制不同目录，故不能只用回退路径
+const PKG_MGR_CLI =
+  process.env.pnpm_execpath ??
+  process.env.npm_execpath ??
+  resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
 
 // ==================== 平台配置 ====================
 
@@ -136,7 +139,7 @@ const PLUGIN_WATCH_CMDS = [
 const RESOURCES_BASE = resolve(ROOT, 'src-tauri/resources/plugins/desktop')
 
 /** 宿主 dev 命令（可用 --host-cmd 覆盖） */
-const DEFAULT_HOST_CMD = [process.execPath, [NPM_CLI, 'run', 'tauri', '--', 'dev']]
+const DEFAULT_HOST_CMD = [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', '--', 'dev']]
 
 // ==================== 进程管理 ====================
 

@@ -22,7 +22,7 @@ import { basename, resolve } from 'node:path'
 const COPY_DEBOUNCE_MS = 500
 
 /**
- * 定位 vite 可执行文件：npm workspace 会将依赖 hoist 到仓库根 node_modules，
+ * 定位 vite 可执行文件：pnpm/npm workspace 可能将依赖提升到仓库根 node_modules，
  * 因此从插件目录向上逐级查找，直到仓库根（含根自身）
  */
 function findViteBin(startDir) {
@@ -56,7 +56,7 @@ export function startPluginWatch({ root, resourcesDir, extraFiles = [], wasmFile
 
   if (!viteBin) {
     console.error(
-      `[watch] vite 未找到（自 ${root} 向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 npm install`,
+      `[watch] vite 未找到（自 ${root} 向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 pnpm install`,
     )
     process.exit(1)
   }

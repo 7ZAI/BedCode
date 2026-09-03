@@ -217,10 +217,10 @@ function cmdCreate(positional, flags) {
   console.log(`  pluginType: ${pluginType}${withRust ? ` (crate: ${crate})` : ''}`)
   console.log(`\n下一步：`)
   console.log(`  cd ${toPosix(relative(process.cwd(), outDir)) || '.'}`)
-  console.log(`  npm install`)
-  console.log(`  npm run dev            # 浏览器开发环境（HMR，无需真机）`)
-  console.log(`  npm run build          # 构建（vite${withRust ? ' + cargo wasm32' : ''}）`)
-  console.log(`  npm run build -- --resources-dir <宿主resources/plugins父目录>  # 复制产物到宿主`)
+  console.log(`  pnpm install`)
+  console.log(`  pnpm run dev            # 浏览器开发环境（HMR，无需真机）`)
+  console.log(`  pnpm run build          # 构建（vite${withRust ? ' + cargo wasm32' : ''}）`)
+  console.log(`  pnpm run build -- --resources-dir <宿主resources/plugins父目录>  # 复制产物到宿主`)
 }
 
 // ==================== 命令：build ====================
@@ -261,7 +261,7 @@ function cmdBuild(flags) {
   if (!rustOnly) {
     const viteBin = join(cwd, 'node_modules/vite/bin/vite.js')
     if (!existsSync(viteBin)) {
-      console.error(`[bedcode-plugin-desktop] vite 未安装 — 先在插件目录运行 npm install`)
+      console.error(`[bedcode-plugin-desktop] vite 未安装 — 先在插件目录运行 pnpm install`)
       process.exit(1)
     }
     console.log('\n[bedcode-plugin-desktop] ====== 构建前端 (vite) ======')
@@ -340,7 +340,9 @@ function cmdDev(positional, flags) {
   const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
   if (!existsSync(viteBin)) {
     console.log('[bedcode-plugin-desktop] dev-shell 依赖缺失，正在安装（仅首次）…')
-    run('npm', ['install', '--no-audit', '--no-fund'], devShellDir)
+    // --ignore-workspace：桌面端 dev-shell 位于宿主 pnpm workspace 内，不带该标志
+    // 会触发整个 workspace 安装（装错目录），标准安装即按独立工程处理
+    run('pnpm', ['install', '--ignore-workspace', '--no-audit', '--no-fund'], devShellDir)
   }
 
   const args = [
@@ -485,7 +487,7 @@ function cmdValidate(flags) {
   // main 产物存在性（未构建仅警告）
   const distMain = join(dir, 'dist', manifest.main || 'index.js')
   if (!existsSync(distMain)) {
-    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（npm run build）`)
+    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（pnpm run build）`)
   }
 
   // contributes 结构
@@ -561,7 +563,7 @@ function cmdDoctor() {
   add(
     'SDK 构建产物（file: 依赖）',
     existsSync(sdkDist),
-    existsSync(sdkDist) ? '已构建' : '缺失 — 运行 npm run build（SDK 目录内）',
+    existsSync(sdkDist) ? '已构建' : '缺失 — 运行 pnpm run build（SDK 目录内）',
   )
 
   let failed = 0

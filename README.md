@@ -189,20 +189,20 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 ### 安装与运行
 
 ```bash
-# 安装依赖
-cd bedcode-desktop && npm install
-cd bedcode-mobile && npm install
+# 安装依赖（pnpm；根目录安装一次 husky 钩子，两端各自独立 lockfile）
+cd bedcode-desktop && pnpm install
+cd bedcode-mobile && pnpm install
 
 # 开发
-cd bedcode-desktop && npm run tauri:dev         # 桌面端
-cd bedcode-mobile && npm run tauri:android:dev  # 移动端（查看 Android 日志：tauri:android:dev:log）
+cd bedcode-desktop && pnpm run tauri:dev         # 桌面端
+cd bedcode-mobile && pnpm run tauri:android:dev  # 移动端（查看 Android 日志：tauri:android:dev:log）
 
 # 构建
-cd bedcode-desktop && npm run tauri:build
-cd bedcode-mobile && npm run tauri:android:build
+cd bedcode-desktop && pnpm run tauri:build
+cd bedcode-mobile && pnpm run tauri:android:build
 
 # 测试
-cd bedcode-desktop && npm run test:run          # 前端（vitest run）
+cd bedcode-desktop && pnpm run test:run          # 前端（vitest run）
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
@@ -224,7 +224,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 - **[`@binblink/plugin-sdk-desktop`](https://www.npmjs.com/package/@binblink/plugin-sdk-desktop)** / **[`@binblink/plugin-sdk-mobile`](https://www.npmjs.com/package/@binblink/plugin-sdk-mobile)**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
 - **浏览器开发环境（dev-shell）** — 两 SDK 均内置 `dev-shell`：空壳宿主 + 双端页面骨架，在浏览器中直接运行插件前端源码（支持 HMR），无需构建、打包、真机安装即可迭代 UI 与前端逻辑。
-  - 启动：`bedcode-plugin-desktop dev`（移动端 `npm run dev` / `npx bedcode-plugin dev`）；`--host` 监听局域网后可手机浏览器访问预览（真实触控 / 真机视口）
+  - 启动：`bedcode-plugin-desktop dev`（移动端 `pnpm run dev` / `pnpm exec bedcode-plugin dev`）；`--host` 监听局域网后可手机浏览器访问预览（真实触控 / 真机视口）
   - 骨架能力：标题栏 / 侧边栏 / 工具箱 / 模拟终端（输入发送 + 模拟输出 + 会话管理）/ 插件页（注册项一览 + 激活停用）/ 状态栏 / 日志面板 / 深浅色主题切换
   - Mock 边界：`commands.execute` 仅执行前端 handler（Rust WASM 后端命令不可用）、`http.registerEndpoint` 仅登记展示、`storage` 走 localStorage、`fileService` 为内存注册表；权限检查跳过（视为全部授予）——Rust 命令、真实 HTTP 端点、系统文件选择等真机专属能力需在真实宿主验证
 

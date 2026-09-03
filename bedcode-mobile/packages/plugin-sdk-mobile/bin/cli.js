@@ -286,10 +286,10 @@ function cmdCreate(positional, flags) {
   console.log(`  pluginType: ${pluginType}${tsOnly ? '' : ` (crate: ${crate})`}`)
   console.log(`\n下一步：`)
   console.log(`  cd ${toPosix(relative(process.cwd(), outDir)) || '.'}`)
-  console.log(`  npm install`)
-  console.log(`  npm run dev            # 浏览器开发环境（HMR，无需真机）`)
-  console.log(`  npm run build        # 构建（vite + WASM）`)
-  console.log(`  npm run package      # 打包 dist/${id}.zip 插件包`)
+  console.log(`  pnpm install`)
+  console.log(`  pnpm run dev            # 浏览器开发环境（HMR，无需真机）`)
+  console.log(`  pnpm run build        # 构建（vite + WASM）`)
+  console.log(`  pnpm run package      # 打包 dist/${id}.zip 插件包`)
 }
 
 // ==================== 命令：dev（浏览器开发环境） ====================
@@ -316,7 +316,7 @@ function cmdDev(positional, flags) {
   const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
   if (!existsSync(viteBin)) {
     console.log('[bedcode-plugin] dev-shell 依赖缺失，正在安装（仅首次）…')
-    run('npm', ['install', '--no-audit', '--no-fund'], devShellDir)
+    run('pnpm', ['install', '--ignore-workspace', '--no-audit', '--no-fund'], devShellDir)
   }
 
   const args = [
@@ -396,7 +396,7 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
   const hasWasm = pluginType === 'wasm' && rustLibrary
   const viteBin = findViteBin(cwd)
   if (!viteBin) {
-    console.error('[bedcode-plugin] vite 未找到（自插件目录向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 npm install')
+    console.error('[bedcode-plugin] vite 未找到（自插件目录向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 pnpm install')
     process.exit(1)
   }
 
@@ -408,7 +408,7 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
 
   console.log('\n[bedcode-plugin] ====== watch 前端构建（vite build --watch） ======')
   console.log(`[bedcode-plugin] 产物自动复制到: ${dest}`)
-  console.log('[bedcode-plugin] 修改插件前端源码后自动重建 + 复制（WASM 改动需一次性 npm run build）')
+  console.log('[bedcode-plugin] 修改插件前端源码后自动重建 + 复制（WASM 改动需一次性 pnpm run build）')
   console.log('[bedcode-plugin] Ctrl+C 退出\n')
 
   // WASM 缺失预检：全新 resources 目录（从未跑过全量 build）时，复制完成后插件
@@ -416,7 +416,7 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
   if (hasWasm && !existsSync(wasmPath)) {
     console.warn(`[bedcode-plugin] ⚠ WASM 产物缺失：${wasmPath}`)
     console.warn('[bedcode-plugin]   watch 只重建前端。首次请先执行一次全量构建：')
-    console.warn('[bedcode-plugin]   npm run build（含 cargo wasm32 构建）')
+    console.warn('[bedcode-plugin]   pnpm run build（含 cargo wasm32 构建）')
   }
 
   // 长驻 vite watch 构建（首次启动即完整构建一次）

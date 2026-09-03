@@ -1,9 +1,11 @@
 # Dependencies
 **/node_modules/
 .pnpm-store/
+# 项目已迁移 pnpm（各工程维护 pnpm-lock.yaml）；这里的 package-lock.json 只防误用 npm 生成新锁文件
+**/package-lock.json
 .playwright-cli
 
-# Husky v9 生成的钩子运行器（由 `husky` / `npm install` 重新生成，不入库）
+# Husky v9 生成的钩子运行器（由 `husky` / `pnpm install` 重新生成，不入库）
 .husky/_/
 
 # Build outputs
@@ -12,7 +14,11 @@ build/
 *.local
 
 # Documentation
-**/docs/
+# 注意：只忽略仓库根 docs/，子目录 docs（如 bedcode-desktop/docs/、bedcode-mobile/docs/）允许入库——
+# AGENTS.md "Code Map" 段要求两端 code-map.md 作为必读入口。CLAUDE.md / CONTEXT.md / .scratch/ /
+# 顶层 .pi/ 受 doc-tracking.sh（scripts/doc-tracking.sh）分支级控制：dev 与 feature/* 全分支跟踪，
+# uat / master 不入库（git rm --cached 剔除、工作区保留）。脱离钩子场景（如手动 git add）需自行注意。
+/docs/
 
 CLAUDE.md
 CONTEXT.md
@@ -24,7 +30,10 @@ CONTEXT.md
 **/src-tauri/bedcode.db
 **/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
-**/bedcode-desktop/plugins/auto-task/scripts/__pycache__
+# Python 编译缓存（通用；过去曾针对 auto-task 脚本硬编码，现统一）
+**/__pycache__/
+*.pyc
+*.pyo
 
 # 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
 **/src-tauri/resources/plugins/
@@ -34,12 +43,20 @@ CONTEXT.md
 
 # IDE and editors
 .idea/
-.claude/
+
+# AI 工具配置跟踪策略：关键配置入库（subagent / hook / 命令 prompt），
+# 运行时产物（运行日志 / 本机 bridge / Python cache / 个人 worktree）不入库。
+# .opencode/ 整目录不由根 .gitignore 忽略，由 .opencode/.gitignore 自身接管（已 ignore node_modules / lock / 自身）。
+# 关键配置：subagent 定义与 hooks。运行时产物（settings.local.json / *.log.* / __pycache__ / skills bridge / worktrees）另由下方规则忽略。
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+.codex/*
+!.codex/hooks.json
+
 .omp/
 .pi/
-.codex/
-.opencode/
-opencode.jsonc
+
 .VSCodeCounter/
 *.swp
 *.swo

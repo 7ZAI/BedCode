@@ -2,6 +2,7 @@
   "name": "bedcode",
   "version": "0.0.0",
   "private": true,
+  "packageManager": "pnpm@12.2.1",
   "scripts": {
     "prepare": "husky"
   },

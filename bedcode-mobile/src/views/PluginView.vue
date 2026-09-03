@@ -371,6 +371,9 @@
       @confirm="confirmUninstall"
     />
 
+    <!-- 启用/停用全局遮罩：阻断交互 + 最小展示时长避免闪烁 -->
+    <LoadingDialog :visible="toggleLoading" :message="toggleLoadingMessage" />
+
     <!-- 权限审批弹层 -->
     <Teleport to="body">
       <Transition name="center-modal">
@@ -436,6 +439,7 @@ import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import Toggle from '@/components/Toggle.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import LoadingDialog from '@/components/LoadingDialog.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
 import { open } from '@tauri-apps/plugin-dialog'
@@ -461,6 +465,9 @@ const detailPlugin = ref<PluginInfo | null>(null)
 const showInstallSheet = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
+/** 启用/停用全局遮罩：阻断交互 + 最小展示时长避免闪烁 */
+const toggleLoading = ref(false)
+const toggleLoadingMessage = ref('')
 const uninstallTarget = ref<PluginInfo | null>(null)
 const showUninstallConfirm = ref(false)
 /** 审批弹层：目标插件 + 批准后是否继续启用 */
@@ -481,15 +488,18 @@ onMounted(loadPlugins)
 /** 加载插件列表与启用状态 */
 async function loadPlugins(): Promise<void> {
   try {
-    plugins.value = await pluginListLoaded()
+    const loaded = await pluginListLoaded()
+    // 先构建完整启用状态表，再与列表一并赋值，避免「列表已渲染、状态表仍为空」的
+    // 间隙里 Toggle 收到 undefined 触发 Vue prop 类型告警（N 个插件 = N 条告警）
     const states: Record<string, boolean> = {}
-    for (const p of plugins.value) {
+    for (const p of loaded) {
       states[p.id] = await pluginIsEnabled(p.id)
     }
+    plugins.value = loaded
     pluginEnabledStates.value = states
     // 详情页打开时用最新数据同步，避免状态变更后引用过期
     if (detailPlugin.value) {
-      detailPlugin.value = plugins.value.find((p) => p.id === detailPlugin.value?.id) ?? null
+      detailPlugin.value = loaded.find((p) => p.id === detailPlugin.value?.id) ?? null
     }
   } catch {
     toast.error(t('mobile.plugin.loadFailed'))
@@ -501,7 +511,15 @@ function openDetail(plugin: PluginInfo): void {
   detailPlugin.value = plugin
 }
 
-/** 切换启用/停用：持久化偏好 + 联动激活/停用 */
+/** 启用/停用遮罩最小展示时长：操作瞬时完成也保留遮罩，避免一闪而过 */
+const TOGGLE_MIN_DURATION_MS = 1000
+/** 启用/停用超时兜底：loader 自身 5s import/activate 超时 + 后端命令，15s 兜底防卡死 */
+const TOGGLE_TIMEOUT_MS = 15000
+
+/**
+ * 切换启用/停用：持久化偏好 + 联动激活/停用。
+ * 全局遮罩阻断交互；最小展示 1s 防闪烁；超时兜底防操作卡死时遮罩无限停留。
+ */
 async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<void> {
   // 待授权插件：先走审批流程，批准成功后继续启用
   if (enabled) {
@@ -512,6 +530,20 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
       return
     }
   }
+
+  toggleLoadingMessage.value = t(enabled ? 'mobile.plugin.enabling' : 'mobile.plugin.disabling')
+  toggleLoading.value = true
+  const startedAt = Date.now()
+  let timedOut = false
+  // 超时兜底：操作未在时限内完成时强制摘除遮罩 + 回退开关 + 提示，避免无限卡死
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true
+    toggleLoading.value = false
+    toast.error(t('mobile.plugin.toggleTimeout'))
+    // 操作结果未知，回退开关避免误导用户
+    pluginEnabledStates.value[pluginId] = !enabled
+  }, TOGGLE_TIMEOUT_MS)
+
   try {
     await pluginSetEnabled(pluginId, enabled)
     if (enabled) {
@@ -525,6 +557,16 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
     // 恢复开关状态
     pluginEnabledStates.value[pluginId] = !enabled
   }
+
+  // 超时已先行收尾（隐藏遮罩 + 回退开关 + toast）则跳过，避免重复隐藏
+  if (timedOut) return
+  clearTimeout(timeoutTimer)
+  // 最小展示时长：不足 1s 补齐，避免遮罩闪烁
+  const elapsed = Date.now() - startedAt
+  if (elapsed < TOGGLE_MIN_DURATION_MS) {
+    await new Promise((r) => setTimeout(r, TOGGLE_MIN_DURATION_MS - elapsed))
+  }
+  toggleLoading.value = false
 }
 
 /** 从文件安装：文件选择器选 zip 插件包 */
