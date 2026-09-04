@@ -10,8 +10,8 @@
  * prompts 列表来自 SQLite TEXT 列（JSON 字符串），展示前 JSON.parse 兜底。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
-import { getMobileApi } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import { getAutoTaskApi } from '../api'
 
 /** 定时任务条目（与桌面端 scheduled_jobs 表字段一一对应） */
 export interface ScheduledJob {
@@ -46,7 +46,7 @@ export function parsePrompts(raw: string | null | undefined): string[] {
 }
 
 export function useScheduledJobs(context: PluginContext) {
-  const mobileApi = getMobileApi() as MobileHostApi
+  const api = getAutoTaskApi()
 
   const jobs = ref<ScheduledJob[]>([])
   const loading = ref(false)
@@ -58,7 +58,7 @@ export function useScheduledJobs(context: PluginContext) {
   async function load(): Promise<void> {
     loading.value = true
     try {
-      const result = await mobileApi.httpScheduledJobsList()
+      const result = await api.httpScheduledJobsList()
       if (result.code === 0 && result.data) {
         offline.value = false
         jobs.value = result.data.jobs || []
@@ -131,7 +131,7 @@ export function useScheduledJobs(context: PluginContext) {
     }
     submitting.value = true
     try {
-      const result = await mobileApi.httpScheduledJobCreate({
+      const result = await api.httpScheduledJobCreate({
         name: formName.value.trim() || undefined,
         config_id: formConfigId.value,
         trigger_at: dateToUtc(formTriggerAt.value),

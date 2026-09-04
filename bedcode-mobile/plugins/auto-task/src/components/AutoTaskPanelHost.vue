@@ -261,12 +261,14 @@
  */
 import { ref, computed, watch, nextTick, inject, onMounted, onUnmounted } from 'vue'
 import { getMobileApi, getPresetTasks } from '@binblink/plugin-sdk-mobile'
-import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import { getAutoTaskApi } from '../api'
 import { autoTaskPanelVisible } from '../state'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string): string => context.i18n.t(key)
-const mobileApi = getMobileApi() as MobileHostApi
+const mobileApi = getMobileApi()
+const api = getAutoTaskApi()
 
 // ==================== Types ====================
 
@@ -377,7 +379,7 @@ function close() {
 async function loadQueue() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpTaskQueueList(activeSessionId.value)
+    const result = await api.httpTaskQueueList(activeSessionId.value)
     if (result.code === 0 && result.data) {
       queue.value = result.data.tasks || []
       activeTask.value = result.data.active_task || null
@@ -391,7 +393,7 @@ async function loadQueue() {
 async function loadCurrentTask() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpCurrentTask(activeSessionId.value)
+    const result = await api.httpCurrentTask(activeSessionId.value)
     if (result.code === 0 && result.data) {
       currentTask.value = result.data.task as CurrentTask | null
     }
@@ -403,7 +405,7 @@ async function loadCurrentTask() {
 async function loadSessionSettings() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpSessionSettings(activeSessionId.value)
+    const result = await api.httpSessionSettings(activeSessionId.value)
     if (result.code === 0 && result.data) {
       autoExecute.value = result.data.auto_execute === true
       autoAnswer.value = result.data.auto_answer === true
@@ -438,7 +440,7 @@ watch(autoTaskPanelVisible, (val) => {
 
 async function handleAddFromPreset(task: any) {
   if (!activeSessionId.value || !canEnqueue(task)) return
-  const result = await mobileApi.httpTaskQueueAdd(activeSessionId.value, task.content)
+  const result = await api.httpTaskQueueAdd(activeSessionId.value, task.content)
   if (result.code === 0 && result.data?.task_id) {
     // 入队即视为已执行（可靠信号，不等完成广播）：记录队列项 id 与所在会话
     await markEnqueued(task.id, result.data.task_id, activeSessionId.value)
@@ -450,7 +452,7 @@ async function handleAddFromPreset(task: any) {
 
 async function handleAddManual() {
   if (!activeSessionId.value || !manualInput.value.trim()) return
-  const result = await mobileApi.httpTaskQueueAdd(activeSessionId.value, manualInput.value.trim())
+  const result = await api.httpTaskQueueAdd(activeSessionId.value, manualInput.value.trim())
   if (result.code === 0) {
     manualInput.value = ''
     await loadQueue()
@@ -461,7 +463,7 @@ async function handleAddManual() {
 
 async function handleRemove(taskId: string) {
   if (!activeSessionId.value) return
-  const result = await mobileApi.httpTaskQueueRemove(activeSessionId.value, taskId)
+  const result = await api.httpTaskQueueRemove(activeSessionId.value, taskId)
   if (result.code === 0) {
     // 队列项移除 → 关联预设回退未使用（可再次添加）
     await revertToUnusedByTaskId(taskId)
@@ -474,7 +476,7 @@ async function handleRemove(taskId: string) {
 /** 取消活动队列项（waiting/executing）：预设状态由 cancel 广播落 interrupted（见 handleTaskQueueChanged） */
 async function handleCancelTask(taskId: string) {
   if (!activeSessionId.value) return
-  const result = await mobileApi.httpTaskQueueCancel(activeSessionId.value, taskId)
+  const result = await api.httpTaskQueueCancel(activeSessionId.value, taskId)
   if (result.code === 0) {
     activeTask.value = null
     await loadQueue()
@@ -493,7 +495,7 @@ async function confirmClear() {
   if (!activeSessionId.value) return
   // 清空前快照待清队列项 id：清空成功后逐个回退关联预设
   const clearedIds = queue.value.map(q => q.id)
-  const result = await mobileApi.httpTaskQueueClear(activeSessionId.value)
+  const result = await api.httpTaskQueueClear(activeSessionId.value)
   if (result.code === 0) {
     queue.value = []
     for (const id of clearedIds) {
@@ -536,7 +538,7 @@ async function saveEdit() {
   }
   savingEdit.value = true
   try {
-    const result = await mobileApi.httpTaskQueueUpdate(activeSessionId.value, task.id, prompt)
+    const result = await api.httpTaskQueueUpdate(activeSessionId.value, task.id, prompt)
     if (result.code === 0) {
       cancelEdit()
       await loadQueue()
@@ -566,7 +568,7 @@ async function handleMove(index: number, direction: -1 | 1) {
 async function commitReorder(items: QueueTaskItem[]) {
   if (!activeSessionId.value) return
   const taskIds = items.map(i => i.id)
-  const result = await mobileApi.httpTaskQueueReorder(activeSessionId.value, taskIds)
+  const result = await api.httpTaskQueueReorder(activeSessionId.value, taskIds)
   if (result.code === 0) {
     queue.value = items.map((item, idx) => ({ ...item, position: idx }))
   } else {
@@ -580,7 +582,7 @@ async function commitReorder(items: QueueTaskItem[]) {
 async function toggleAutoExecute() {
   if (!activeSessionId.value) return
   const target = !autoExecute.value
-  const result = await mobileApi.httpSetSessionMode(activeSessionId.value, target, undefined)
+  const result = await api.httpSetSessionMode(activeSessionId.value, target, undefined)
   if (result.code === 0) {
     autoExecute.value = target
   } else {
@@ -591,7 +593,7 @@ async function toggleAutoExecute() {
 async function toggleAutoAnswer() {
   if (!activeSessionId.value) return
   const target = !autoAnswer.value
-  const result = await mobileApi.httpSetSessionMode(activeSessionId.value, undefined, target)
+  const result = await api.httpSetSessionMode(activeSessionId.value, undefined, target)
   if (result.code === 0) {
     autoAnswer.value = target
   } else {

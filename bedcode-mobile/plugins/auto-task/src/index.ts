@@ -12,6 +12,7 @@
 import { createApp, type App, watch } from 'vue'
 import type { PluginContext, PluginDevMock } from '@binblink/plugin-sdk-mobile'
 import { getMobileApi } from '@binblink/plugin-sdk-mobile'
+import { getAutoTaskApi } from './api'
 import AutoTaskPanelHost from './components/AutoTaskPanelHost.vue'
 import AutoTaskToolboxView from './components/AutoTaskToolboxView.vue'
 import { autoTaskPanelVisible } from './state'
@@ -319,11 +320,12 @@ export async function activate(context: PluginContext): Promise<void> {
 
   // 从后端获取适配 agent 白名单（权威来源 Rust AGENT_PROFILES），缓存后供 syncToolbarEntry 使用
   const mobileApi = getMobileApi()
+  const api = getAutoTaskApi()
 
   /** 拉取适配 agent 白名单并缓存（未连接时对端不可达，失败保持旧值） */
   async function refreshSupportedAgents() {
     try {
-      const result = await mobileApi.httpListSupportedAgents()
+      const result = await api.httpListSupportedAgents()
       if (result.code === 0 && result.data) {
         supportedAgents = result.data.agents || []
       }
