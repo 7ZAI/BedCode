@@ -49,7 +49,7 @@ export interface ConversationMeta {
 }
 
 /** 预设模板 id（与 src/assets/providers/ 下品牌图标一一对应） */
-export type PresetId = 'deepseek' | 'qwen' | 'openai' | 'anthropic'
+export type PresetId = 'deepseek' | 'qwen' | 'openai' | 'anthropic' | 'sensenova'
 
 /** 供应商预设模板（只读添加起点，不进入供应商列表） */
 export interface ProviderPreset {
@@ -84,6 +84,19 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     name: 'Anthropic',
     baseUrl: 'https://api.anthropic.com/v1',
     models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'],
+  },
+  {
+    id: 'sensenova',
+    name: 'SenseNova (商汤)',
+    baseUrl: 'https://token.sensenova.cn/v1',
+    // 全部走 OpenAI 兼容 /v1/chat/completions（图片生成模型走独立 /v1/images/*，不列入）
+    models: [
+      'sensenova-6.8-flash-lite',
+      'deepseek-v4-pro',
+      'deepseek-v4-flash',
+      'glm-5.2',
+      'kimi-k3',
+    ],
   },
 ]
 
