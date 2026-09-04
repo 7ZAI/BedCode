@@ -81,25 +81,6 @@ pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String 
 
 // ==================== Async Blocking Helper ====================
 
-/// 在同步上下文中执行 async 闭包，兼容多线程和 current_thread 运行时
-///
-/// WASM host functions 是同步的，但需要调用 async Tokio 代码（数据库、锁等）。
-/// 标准做法 `block_in_place(|| block_on(...))` 仅在多线程运行时上可用，
-/// Actix Web 的 `actix-rt` 使用 `current_thread` 运行时，会导致 panic。
-///
-/// 策略：
-/// - 多线程运行时：`block_in_place` + `block_on`（不阻塞 worker 线程）
-/// - current_thread 运行时或非运行时线程：`std::thread::spawn` + `block_on`（新线程上运行）
-///
-/// 重入安全：`dispatch_to_wasm` → 插件 on_message → host http_fetch 的调用链会
-/// 嵌套调用本函数。嵌套 `block_in_place` 在已让出的线程上会 panic；而嵌套
-/// `handle.block_on` 同样 panic——外层 `block_in_place(|| handle.block_on(...))`
-/// 的 tokio enter 守卫仍挂在当前线程上（block_in_place 只是把线程让出 worker 池，
-/// 守卫不释放），实证见 panic.log 的 wasm_runtime.rs:82 FATAL
-/// （"Cannot start a runtime from within a runtime"）。两种 panic 都会穿透污染
-/// wasmtime Store、插件永久不可用，故用线程局部标志检测重入，重入时改在
-/// **新线程上 block_on**：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
-/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
 thread_local! {
     /// 当前线程是否已处于 block_in_place 让出后的阻塞上下文
     static IN_BLOCK_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -137,6 +118,25 @@ impl Drop for BlockInPlaceGuard {
     }
 }
 
+/// 在同步上下文中执行 async 闭包，兼容多线程和 current_thread 运行时
+///
+/// WASM host functions 是同步的，但需要调用 async Tokio 代码（数据库、锁等）。
+/// 标准做法 `block_in_place(|| block_on(...))` 仅在多线程运行时上可用，
+/// Actix Web 的 `actix-rt` 使用 `current_thread` 运行时，会导致 panic。
+///
+/// 策略：
+/// - 多线程运行时：`block_in_place` + `block_on`（不阻塞 worker 线程）
+/// - current_thread 运行时或非运行时线程：`std::thread::spawn` + `block_on`（新线程上运行）
+///
+/// 重入安全：`dispatch_to_wasm` → 插件 on_message → host http_fetch 的调用链会
+/// 嵌套调用本函数。嵌套 `block_in_place` 在已让出的线程上会 panic；而嵌套
+/// `handle.block_on` 同样 panic——外层 `block_in_place(|| handle.block_on(...))`
+/// 的 tokio enter 守卫仍挂在当前线程上（block_in_place 只是把线程让出 worker 池，
+/// 守卫不释放），实证见 panic.log 的 wasm_runtime.rs:82 FATAL
+/// （"Cannot start a runtime from within a runtime"）。两种 panic 都会穿透污染
+/// wasmtime Store、插件永久不可用，故用线程局部标志检测重入，重入时改在
+/// **新线程上 block_on**：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
+/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
 pub(crate) fn block_on_async<F, R>(fut: F) -> R
 where
     F: std::future::Future<Output = R> + Send,
@@ -947,7 +947,7 @@ mod tests {
     /// 等价于 `wasm-tools component new`（WIT 元数据已由 wit-bindgen
     /// 嵌入 core module 的 component-type 自定义段）
     fn encode_component(module: &[u8]) -> Vec<u8> {
-        let mut encoder = wit_component::ComponentEncoder::default();
+        let encoder = wit_component::ComponentEncoder::default();
         encoder
             .module(module)
             .expect("component encoder module")
@@ -1085,8 +1085,8 @@ mod tests {
             plugin
                 .on_input_submitted(&serde_json::json!({"sessionId": "s1"}))
                 .expect("on_input_submitted");
-            plugin.on_startup().expect("on_startup");
-            plugin.on_shutdown().expect("on_shutdown");
+            plugin.on_startup().expect("on_startup").expect("plugin on_startup returned Err");
+            plugin.on_shutdown().expect("on_shutdown").expect("plugin on_shutdown returned Err");
         });
     }
 

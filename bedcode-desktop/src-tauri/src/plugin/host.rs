@@ -10,9 +10,9 @@ use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
-use crate::plugin::wasm_runtime::{LoadedWasmPlugin, PluginServices, WasmHostContext, WasmRuntime};
+use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::session::{
-    SessionConfigManager, SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener, SessionManager,
+    SessionConfigManager, SessionManager,
 };
 use crate::system::constants::event;
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
@@ -1288,6 +1288,8 @@ pub use listeners::{PluginInputListener, PluginLifecycleListener};
 mod tests {
     use super::*;
     use crate::plugin::message_bus::{MessageBus, MessageDispatcher};
+    use crate::plugin::wasm_runtime::PluginServices;
+    use crate::session::{SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener};
     use crate::system::config::AppConfig;
     use bedcode_plugin_api::{PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler};
     use serde_json::json;
