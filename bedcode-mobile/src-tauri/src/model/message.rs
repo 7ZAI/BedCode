@@ -40,16 +40,6 @@ pub(crate) fn generate_message_id() -> String {
     Uuid::new_v4().to_string()
 }
 
-/// 获取当前时间戳（毫秒）
-pub(crate) fn current_timestamp() -> i64 {
-    Utc::now().timestamp_millis()
-}
-
-/// 默认返回 false
-fn default_false() -> bool {
-    false
-}
-
 /// 默认返回空字符串
 fn default_token() -> String {
     String::new()
@@ -634,7 +624,7 @@ impl Message {
     pub fn with_request_id(self, request_id: &str) -> Self {
         match self {
             Message::Terminal {
-                message_id,
+                message_id: _,
                 expect_response,
                 timestamp,
                 session_id,
@@ -649,7 +639,7 @@ impl Message {
                 payload,
             },
             Message::Auth {
-                message_id,
+                message_id: _,
                 expect_response,
                 timestamp,
                 session_id,
@@ -664,7 +654,7 @@ impl Message {
                 payload,
             },
             Message::SessionControl {
-                message_id,
+                message_id: _,
                 expect_response,
                 timestamp,
                 session_id,
@@ -679,7 +669,7 @@ impl Message {
                 payload,
             },
             Message::SessionConfig {
-                message_id,
+                message_id: _,
                 expect_response,
                 timestamp,
                 session_id,
@@ -694,7 +684,7 @@ impl Message {
                 payload,
             },
             Message::Error {
-                message_id,
+                message_id: _,
                 expect_response,
                 timestamp,
                 token,

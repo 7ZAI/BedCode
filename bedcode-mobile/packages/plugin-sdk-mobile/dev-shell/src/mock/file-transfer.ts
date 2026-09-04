@@ -13,7 +13,7 @@
  * 未导出种子的插件不受影响（各子域回退空态）。
  */
 import { emitDevEvent } from './session'
-import type { PeerDevMock, PluginContext, PluginDevMock } from '../../../src/types'
+import type { PluginContext, PluginDevMock } from '../../../src/types'
 import { pushLog } from '../registry'
 
 /** 设备种子条目（插件 devMock 导出的本地扩展字段：mdns:found 载荷形状 + 拨号行为） */
@@ -25,6 +25,27 @@ interface MockDeviceSeed {
     txtRecords: { id: string; name?: string; ver?: string; cap?: string }
   }
   dialBehavior?: 'connected' | 'denied' | 'unreachable'
+}
+
+/** 对等域种子结构（插件 devMock.peer 的通用形状，dev-shell 只按需取字段） */
+interface MockPeerSeed {
+  connectedNodeIds?: string[]
+  activeNodeId?: string
+  dialLatencyMs?: number
+}
+
+/** 传输域种子结构（插件 devMock.transfer 的通用形状） */
+interface MockTransferSeed {
+  remoteFs?: {
+    roots?: Array<{ id: string; name: string }>
+    files?: Record<string, Array<{ name: string; size: number; mtime: number; isDir: boolean }>>
+  }
+  settings?: {
+    roots?: MockSharedDir[]
+    policyMode?: string
+    askTimeoutSec?: number
+    downloadDir?: string
+  }
 }
 
 /**
@@ -76,7 +97,7 @@ export function registerFileTransferMock(
   pluginId: string,
 ): void {
   const peerSeed = mock?.peer as
-    | (PeerDevMock & { consent?: MockConsentSeed; trusted?: unknown; deviceSeeds?: MockDeviceSeed[] })
+    | (MockPeerSeed & { consent?: MockConsentSeed; trusted?: unknown; deviceSeeds?: MockDeviceSeed[] })
     | undefined
   const deviceSeeds: MockDeviceSeed[] = peerSeed?.deviceSeeds ?? []
   /** 种子派生视图：nodeId → 种子（拨号行为/能力位判定用） */
@@ -211,8 +232,9 @@ export function registerFileTransferMock(
 
   // ==================== 远端浏览（useRemoteFs 契约，种子来自 transfer.remoteFs） ====================
 
-  const remoteRoots = mock?.transfer?.remoteFs?.roots.map((r) => ({ ...r })) ?? []
-  const remoteFiles = mock?.transfer?.remoteFs?.files ?? {}
+  const transfer = mock?.transfer as MockTransferSeed | undefined
+  const remoteRoots = transfer?.remoteFs?.roots?.map((r) => ({ ...r })) ?? []
+  const remoteFiles = transfer?.remoteFs?.files ?? {}
   context.commands.register('file-transfer.list-remote', (args: any) => {
     if (!args?.dirId && !args?.path) {
       return { roots: remoteRoots.map((r) => ({ ...r })) }
@@ -228,10 +250,10 @@ export function registerFileTransferMock(
   // 种子缺省回退协议缺省值（policy ask / 超时 60s / 空下载目录）
 
   const localRoots: MockSharedDir[] =
-    mock?.transfer?.settings?.roots?.map((r) => ({ ...r })) ?? []
-  let policyMode: string = mock?.transfer?.settings?.policyMode ?? 'ask'
-  let askTimeoutSec: number = mock?.transfer?.settings?.askTimeoutSec ?? 60
-  const downloadDir: string = mock?.transfer?.settings?.downloadDir ?? ''
+    transfer?.settings?.roots?.map((r) => ({ ...r })) ?? []
+  let policyMode: string = transfer?.settings?.policyMode ?? 'ask'
+  let askTimeoutSec: number = transfer?.settings?.askTimeoutSec ?? 60
+  const downloadDir: string = transfer?.settings?.downloadDir ?? ''
 
   context.commands.register('file-transfer.get-settings', () => ({
     roots: localRoots.map((r) => ({ ...r })),

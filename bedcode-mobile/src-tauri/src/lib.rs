@@ -113,7 +113,7 @@ pub fn run() {
                 &app_data_dir,
                 settings_manager.clone(),
                 plugin_db,
-                Arc::new(app_handle.clone()),
+                Some(Arc::new(app_handle.clone())),
             );
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
