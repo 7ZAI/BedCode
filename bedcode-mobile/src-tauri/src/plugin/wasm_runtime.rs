@@ -339,6 +339,18 @@ impl Drop for BlockInPlaceGuard {
     }
 }
 
+/// current_thread 运行时（#[tokio::test]）下的阻塞兜底：跨线程 `handle.block_on`
+/// 驱动 IO/process future 会死锁（current_thread 调度器由 owner 线程独占，
+/// 见桌面端 process_kill 测试历史教训）；此处用全局 multi_thread runtime
+/// （enable_all，IO/process/time 驱动齐全）在 scoped 新线程上驱动。
+static AMBIENT_RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .worker_threads(4)
+        .build()
+        .expect("create ambient tokio runtime")
+});
+
 pub(crate) fn block_on_async<F, R>(handle: &tokio::runtime::Handle, fut: F) -> R
 where
     F: std::future::Future<Output = R> + Send,
@@ -366,9 +378,12 @@ where
             }
         }
         _ => {
-            // current_thread 运行时：block_in_place 会 panic，改在新线程上执行
+            // current_thread 运行时（#[tokio::test]）：跨线程 `handle.block_on`
+            // 驱动 IO future 会死锁；改在全局 ambient multi_thread runtime 上
+            // 于 scoped 新线程驱动（scoped 线程无 runtime 上下文且支持非 'static
+            // future，multi_thread block_on 契约允许任意线程调用）
             std::thread::scope(|s| {
-                s.spawn(|| handle.block_on(fut))
+                s.spawn(|| AMBIENT_RT.block_on(fut))
                     .join()
                     .expect("block_on_async: spawned thread panicked")
             })

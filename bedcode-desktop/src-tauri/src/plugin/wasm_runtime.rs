@@ -168,10 +168,19 @@ where
             }
         }
         _ => {
-            // current_thread 运行时（如 Actix-rt）或未来新增变体：
-            // 在新线程上执行 block_on，避免 block_in_place panic
+            // current_thread 运行时（#[tokio::test] / Actix-rt worker）：当前线程
+            // 已在 runtime context 内，两条路都走不通：
+            // - `handle.block_on`（current_thread 调度器由 owner 线程独占驱动，
+            //   本线程即 owner 线程，直接调用必然死锁；跨线程驱动 IO/process
+            //   future 同样永久空转——历史死锁：process_kill 测试）；
+            // - `AMBIENT_RT.block_on`（本线程）：重入检查 panic
+            //   （"Cannot start a runtime from within a runtime"）。
+            // 方案：在 scoped 新线程（无 runtime 上下文、支持非 'static future）
+            // 上 AMBIENT_RT.block_on。ambient runtime 是 multi_thread + enable_all，
+            // IO/process/time 驱动齐全，multi_thread 的 block_on 契约本就允许任意
+            // 线程调用（future 在调用线程内执行、spawned 任务进线程池）。
             std::thread::scope(|s| {
-                s.spawn(|| handle.block_on(fut))
+                s.spawn(|| AMBIENT_RT.block_on(fut))
                     .join()
                     .expect("block_on_async: spawned thread panicked")
             })
