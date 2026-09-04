@@ -705,12 +705,13 @@ function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) {
     return 'bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)]'
   }
-  if (state.state === 'NeedsApproval') {
+  if (state.state === 'NeedsApproval' || state.state === 'Degraded') {
     return 'bg-[color:color-mix(in_srgb,var(--mobile-warning)_15%,transparent)] text-[var(--mobile-warning)]'
   }
   if (state.state === 'Activated') {
     return 'bg-[var(--mobile-success-muted)] text-[var(--mobile-success)]'
   }
+  // Activating / Loaded / Deactivated 走灰（默认 muted）
   return 'bg-[var(--mobile-input-bg)] text-[var(--mobile-text-muted)]'
 }
 
@@ -718,7 +719,9 @@ function stateBadgeClass(state: PluginState): string {
 function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'mobile.plugin.stateError'
   if (state.state === 'NeedsApproval') return 'mobile.plugin.stateNeedsApproval'
+  if (state.state === 'Degraded') return 'mobile.plugin.stateDegraded'
   if (state.state === 'Activated') return 'mobile.plugin.stateActivated'
+  if (state.state === 'Activating') return 'mobile.plugin.stateActivating'
   if (state.state === 'Deactivated') return 'mobile.plugin.stateDeactivated'
   return 'mobile.plugin.stateLoaded'
 }

@@ -98,6 +98,18 @@ class PluginLoaderClass {
         continue
       }
 
+      // 按运行时状态补充门禁（意图优先，状态辅助）：
+      // - Activating 中间态：后端仍在激活进行中，跳过本次前端加载，等最终态轮询兜底
+      // - Degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
+      const st = manifest.state
+      if (st.state === 'Activating') {
+        console.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
+        continue
+      }
+      if (st.state === 'Degraded') {
+        console.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
+      }
+
       await this.loadFrontend(manifest)
     }
   }

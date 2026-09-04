@@ -17,7 +17,9 @@ export type PluginType = 'rust' | 'rust-ts' | 'ts-only' | 'wasm'
 /** 插件运行时状态 */
 export type PluginState =
   | { state: 'Loaded' }
+  | { state: 'Activating' }
   | { state: 'Activated' }
+  | { state: 'Degraded'; error: string }
   | { state: 'NeedsApproval' }
   | { state: 'Deactivated' }
   | { state: 'Error'; error: string }
