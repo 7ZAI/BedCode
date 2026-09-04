@@ -98,6 +98,10 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   let pendingFrames: OutputStreamFrame[] = []
   let pendingBytes = 0
   let subscribed = false
+  // 连续 seq gap 计数：单帧偶发缺口多源于服务端握手窗口阻塞或背压丢弃
+  // （详见 session_output.rs on_output 设计：丢号由重订阅全量重播自愈），
+  // 不必每次都触发重连刷屏；连续 ≥3 次才真正 resubscribe
+  let consecutiveGaps = 0
 
   // ==================== 背压 ack（渲染解析反馈环，spec 04-06） ====================
   // 写入解析完成（TerminalPreview onWriteParsed）后回发 ack 帧携已渲染到的
@@ -224,12 +228,31 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     if (lastRenderedSeq !== null && frame.lastSeq <= lastRenderedSeq) return
     // 连续性内幕：首帧必须无缝衔接（直通模式帧末 + 1 = 下帧首 seq）
     if (lastRenderedSeq !== null && frame.seq > lastRenderedSeq + 1) {
-      console.error(
-        `[useTerminalOutputStream] seq gap: frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}. Re-subscribing for snapshot`,
+      consecutiveGaps += 1
+      if (consecutiveGaps >= 3) {
+        // 连续 3 帧以上缺口才真正 resubscribe——单帧/双帧偶发缺口多源于
+        // 服务端握手窗口阻塞或背压丢弃（详见 session_output.rs on_output
+        // 设计：丢号由重订阅全量重播自愈），不必每次都触发重连刷屏
+        console.error(
+          `[useTerminalOutputStream] persistent seq gap (${consecutiveGaps}x): frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}. Re-subscribing for snapshot`,
+        )
+        consecutiveGaps = 0
+        resubscribe()
+        return
+      }
+      console.warn(
+        `[useTerminalOutputStream] transient seq gap ${consecutiveGaps}/3: frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}, skipping frame`,
       )
-      resubscribe()
+      // 单次偶发缺口仍按非严格路径推进游标：跳到 frame.lastSeq。
+      // 理由：服务端序号已用且丢号由下次重订阅补回；卡死游标只会让后续
+      // 所有帧持续触发 gap。代价：缺失的字节渲染时跳过——桌面端本地环回
+      // 直通模式下应极少出现，已被服务端修复覆盖主要来源
+      lastRenderedSeq = frame.lastSeq
+      pendingAckBytes += frame.data.byteLength
+      options.onData(frame)
       return
     }
+    consecutiveGaps = 0
     lastRenderedSeq = frame.lastSeq
     // 背压记账：交付字节累计（onData 消费后由 confirmWriteParsed 在写解析完成时回发 ack）
     pendingAckBytes += frame.data.byteLength
@@ -244,6 +267,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
    *  仅当 min_seq > last_rendered_seq + 1（已渲染区被环形淘汰）才清屏全量重播 */
   function resubscribe() {
     subscribed = false
+    consecutiveGaps = 0
     closeWs()
     reconnectAttempts = 0
     connect()
@@ -277,6 +301,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
         options.onTruncated?.(snapshot.minSeq)
       }
       // 排空订阅确认前缓冲的回放帧（按到达顺序写入，保持连续）
+      consecutiveGaps = 0
       const frames = pendingFrames
       pendingFrames = []
       pendingBytes = 0
@@ -388,6 +413,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     pendingSubscribe = false
     reconnectAttempts = 0
     sessionMissingStrikes = 0
+    consecutiveGaps = 0
     connect()
   }
 
@@ -395,6 +421,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   function subscribe() {
     pendingSubscribe = true
     sessionMissingStrikes = 0
+    consecutiveGaps = 0
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(buildSubscribe(currentSession)))
     }
@@ -412,6 +439,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     lastRenderedSeq = null
     ackedThroughSeq = null
     pendingAckBytes = 0
+    consecutiveGaps = 0
   }
 
   return { start, subscribe, stop, confirmWriteParsed }

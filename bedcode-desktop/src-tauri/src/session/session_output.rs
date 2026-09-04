@@ -383,21 +383,25 @@ impl SessionOutputManager {
                 // 有界保护：占位窗口（历史排空）可能因慢链路持续很久，pending 无上限
                 // 会持续吃内存；超出容量丢弃并冲正记账（丢的事件不产生 ack，不冲正
                 // 会导致 unacked_bytes 虚高），缺口由客户端重订阅全量重播自愈
-                if let Ok(mut pending) = subscriber.pending.try_write() {
-                    if pending.len() >= PENDING_EVENT_CAP {
-                        let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
-                        if n <= 3 || n % 100 == 0 {
-                            tracing::warn!(
-                                "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{} (index={})",
-                                subscriber.client_id,
-                                n,
-                                event.index
-                            );
-                        }
-                        self.revert_unacked(event.index, event.data.len() as u64);
-                    } else {
-                        pending.push(event.clone());
+                //
+                // 握手期间 drain_pending 持 pending 写锁是短暂窗口（毫秒级历史回放），
+                // 退化为阻塞 write().await 等待持锁方释放——避免序号已分配但帧永久丢失
+                // （try_write 失败时静默丢弃会让客户端 seq 缺口、触发不必要的重订阅）。
+                // 该等待不持有 self.output_queue / subscribers 锁，不会与其他锁路径死锁
+                let mut pending = subscriber.pending.write().await;
+                if pending.len() >= PENDING_EVENT_CAP {
+                    let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
+                    if n <= 3 || n % 100 == 0 {
+                        tracing::warn!(
+                            "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{} (index={})",
+                            subscriber.client_id,
+                            n,
+                            event.index
+                        );
                     }
+                    self.revert_unacked(event.index, event.data.len() as u64);
+                } else {
+                    pending.push(event.clone());
                 }
             }
         }
