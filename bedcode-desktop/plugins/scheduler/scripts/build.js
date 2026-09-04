@@ -66,6 +66,12 @@ function copyArtifacts() {
   // 复制 plugin.json
   cpSync(resolve(ROOT, 'plugin.json'), resolve(RESOURCES_DIR, 'plugin.json'))
 
+  // 复制插件图标（PluginIcon.vue 经 asset protocol 加载 icon.svg）
+  const iconSrc = resolve(ROOT, 'icon.svg')
+  if (existsSync(iconSrc)) {
+    cpSync(iconSrc, resolve(RESOURCES_DIR, 'icon.svg'))
+  }
+
   // 复制前端产物（manifest.main 指向 index.js）
   const distJs = resolve(ROOT, 'dist/index.js')
   if (!existsSync(distJs)) {
@@ -76,6 +82,7 @@ function copyArtifacts() {
   }
   cpSync(distJs, resolve(RESOURCES_DIR, 'index.js'))
   console.log('[build] Copied frontend: index.js')
+  console.log('[build] Copied icon: icon.svg')
 
   // 复制 WASM 模块
   const wasmPath = resolve(

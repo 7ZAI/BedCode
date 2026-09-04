@@ -4,18 +4,11 @@
   "version": "1.0.0-beta",
   "description": "AI 大模型对话：支持 OpenAI 兼容 / Anthropic / Gemini 多供应商\n· 多供应商管理：Base URL、API Key、模型均可配置\n· 流式输出，思考模式与推理强度可调\n· 会话管理：历史会话保存、恢复、删除\n· 对话日志 JSONL 落盘，可追溯审计\n使用：在底部导航「AI」页对话；首次使用先进设置添加供应商并选择模型，随后即可开始聊天。",
   "author": "BedCode",
-  "icon": "💬",
+  "icon": "icon.svg",
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
-  "permissions": [
-    "fs:read",
-    "fs:write",
-    "network:http",
-    "storage",
-    "ui:navtab",
-    "ui:toolbox"
-  ],
+  "permissions": ["fs:read", "fs:write", "network:http", "storage", "ui:navtab", "ui:toolbox"],
   "contributes": {
     "commands": [
       {

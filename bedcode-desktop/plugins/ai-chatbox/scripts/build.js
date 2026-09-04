@@ -21,7 +21,12 @@ const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop',
 
 function run(cmd, options = {}) {
   console.log(`[build] > ${cmd}`)
-  execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...options })
+  try {
+    execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...options })
+  } catch (e) {
+    console.error(`[build] 命令失败: ${cmd} (cwd=${ROOT})`)
+    throw e
+  }
 }
 
 function buildFrontend() {
@@ -56,10 +61,19 @@ function copyArtifacts() {
   // 复制 plugin.json
   cpSync(resolve(ROOT, 'plugin.json'), resolve(RESOURCES_DIR, 'plugin.json'))
 
+  // 复制插件图标（PluginIcon.vue 经 asset protocol 加载 icon.svg）
+  const iconSrc = resolve(ROOT, 'icon.svg')
+  if (existsSync(iconSrc)) {
+    cpSync(iconSrc, resolve(RESOURCES_DIR, 'icon.svg'))
+  }
+
   // 复制 WASM 模块
   const wasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/release', `${RUST_LIB_NAME}.wasm`)
 
-  if (!existsSync(wasmPath)) {
+  if (existsSync(wasmPath)) {
+    cpSync(wasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
+    console.log(`[build] Copied WASM (release): ${RUST_LIB_NAME}.wasm`)
+  } else {
     // 尝试 debug 构建
     const debugWasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/debug', `${RUST_LIB_NAME}.wasm`)
     if (!existsSync(debugWasmPath)) {
@@ -68,14 +82,12 @@ function copyArtifacts() {
     }
     cpSync(debugWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
     console.log(`[build] Copied WASM (debug): ${RUST_LIB_NAME}.wasm`)
-  } else {
-    cpSync(wasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
-    console.log(`[build] Copied WASM (release): ${RUST_LIB_NAME}.wasm`)
   }
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   console.log(`[build]   - index.js`)
   console.log(`[build]   - plugin.json`)
+  console.log(`[build]   - icon.svg`)
   console.log(`[build]   - ${RUST_LIB_NAME}.wasm`)
 }
 
@@ -92,6 +104,7 @@ if (watchMode) {
   startPluginWatch({
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
+    extraFiles: ['icon.svg'],
     wasmFile: `rust/target/wasm32-wasip2/release/${RUST_LIB_NAME}.wasm`,
   })
 } else if (frontendOnly) {

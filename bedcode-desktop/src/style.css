@@ -2,6 +2,18 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==================== Platform Scales ==================== */
+
+/*
+ * Linux 桌面端默认 zoom: 1.15，修正 WebKitGTK 下 Web 默认 16px 字号偏小的观感。
+ * 仅 Linux 生效：macOS 2x Retina 与 Windows DPI-aware 天然更大，不需要额外缩放。
+ * main.ts 中 initPlatform() 完成后向 <html> 加 platform-linux class（只在 isLinux 时）。
+ * 用户仍可用 Ctrl+= / Ctrl+- 手动微调（index.html 已去掉 maximum-scale 限制）。
+ */
+html.platform-linux {
+  zoom: 1.15;
+}
+
 /* ==================== Design Tokens ==================== */
 
 /*
@@ -15,7 +27,14 @@
   color-scheme: light;
 
   /* 基础排版 */
-  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, system-ui, sans-serif;
+  font-family:
+    'Segoe UI',
+    -apple-system,
+    BlinkMacSystemFont,
+    'SF Pro Display',
+    Inter,
+    system-ui,
+    sans-serif;
   line-height: 1.5;
   font-weight: 400;
   font-synthesis: none;
@@ -44,32 +63,32 @@
   --font-size-xl: calc(16px * var(--ui-scale));
 
   /* Backgrounds */
-  --bg-page: #F5F4F0;
-  --bg-sidebar: #EFEDE7;
-  --bg-card: #FDFCFA;
-  --bg-hover: #E7E4DC;
-  --bg-input: #FDFCFA;
+  --bg-page: #f5f4f0;
+  --bg-sidebar: #efede7;
+  --bg-card: #fdfcfa;
+  --bg-hover: #e7e4dc;
+  --bg-input: #fdfcfa;
 
   /* Text */
-  --text-primary: #26231B;
-  --text-secondary: #7C7565;
-  --text-tertiary: #ABA492;
+  --text-primary: #26231b;
+  --text-secondary: #7c7565;
+  --text-tertiary: #aba492;
 
   /* Border */
-  --border: #E4E1D8;
-  --border-strong: #D6D2C4;
-  --border-input: #D6D2C4;
+  --border: #e4e1d8;
+  --border-strong: #d6d2c4;
+  --border-input: #d6d2c4;
 
   /* Brand Colors（强调色只用于主按钮/选中态/链接） */
-  --color-primary: #1D1A14;
-  --color-primary-hover: #0F0D09;
-  --color-primary-light: #EFEDE5;
-  --color-primary-contrast: #FDFCFA;
-  --color-success: #22C55E;
+  --color-primary: #1d1a14;
+  --color-primary-hover: #0f0d09;
+  --color-primary-light: #efede5;
+  --color-primary-contrast: #fdfcfa;
+  --color-success: #22c55e;
   --color-success-light: rgba(34, 197, 94, 0.14);
-  --color-warning: #F59E0B;
+  --color-warning: #f59e0b;
   --color-warning-light: rgba(245, 158, 11, 0.16);
-  --color-danger: #EF4444;
+  --color-danger: #ef4444;
   --color-danger-light: rgba(239, 68, 68, 0.12);
 
   /* Radius */
@@ -109,21 +128,21 @@
 :root.dark {
   color-scheme: dark;
 
-  --bg-page: #15130F;
+  --bg-page: #15130f;
   --bg-sidebar: #191712;
-  --bg-card: #1D1A15;
-  --bg-hover: #2A261E;
-  --bg-input: #1D1A15;
-  --text-primary: #ECE8DC;
-  --text-secondary: #9C9482;
-  --text-tertiary: #6B6455;
-  --border: #2E2A22;
-  --border-strong: #3C372B;
-  --border-input: #3C372B;
-  --color-primary: #ECE8DC;
-  --color-primary-hover: #F5F2EA;
+  --bg-card: #1d1a15;
+  --bg-hover: #2a261e;
+  --bg-input: #1d1a15;
+  --text-primary: #ece8dc;
+  --text-secondary: #9c9482;
+  --text-tertiary: #6b6455;
+  --border: #2e2a22;
+  --border-strong: #3c372b;
+  --border-input: #3c372b;
+  --color-primary: #ece8dc;
+  --color-primary-hover: #f5f2ea;
   --color-primary-light: rgba(236, 232, 220, 0.12);
-  --color-primary-contrast: #15130F;
+  --color-primary-contrast: #15130f;
   --color-success-light: rgba(34, 197, 94, 0.15);
   --color-warning-light: rgba(245, 158, 11, 0.15);
   --color-danger-light: rgba(239, 68, 68, 0.15);
@@ -136,24 +155,24 @@
 /* 新增色板 = 在此加一组 [data-palette='xxx'] 变量覆盖 + 设置页调色台选项 */
 
 :root[data-palette='cool'] {
-  --bg-page: #F3F5F7;
-  --bg-sidebar: #ECEEF2;
-  --bg-card: #FBFCFD;
-  --bg-hover: #E4E8EE;
-  --bg-input: #FBFCFD;
+  --bg-page: #f3f5f7;
+  --bg-sidebar: #eceef2;
+  --bg-card: #fbfcfd;
+  --bg-hover: #e4e8ee;
+  --bg-input: #fbfcfd;
 
-  --text-primary: #1F2937;
-  --text-secondary: #6B7280;
-  --text-tertiary: #9CA3AF;
+  --text-primary: #1f2937;
+  --text-secondary: #6b7280;
+  --text-tertiary: #9ca3af;
 
-  --border: #E2E6EC;
-  --border-strong: #C9D1DC;
-  --border-input: #C9D1DC;
+  --border: #e2e6ec;
+  --border-strong: #c9d1dc;
+  --border-input: #c9d1dc;
 
-  --color-primary: #2563EB;
-  --color-primary-hover: #1D4ED8;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
   --color-primary-light: rgba(37, 99, 235, 0.1);
-  --color-primary-contrast: #FFFFFF;
+  --color-primary-contrast: #ffffff;
 
   --shadow-card: 0 1px 2px rgba(31, 41, 55, 0.04);
   --shadow-card-hover: 0 4px 16px rgba(31, 41, 55, 0.08);
@@ -161,24 +180,24 @@
 }
 
 :root.dark[data-palette='cool'] {
-  --bg-page: #0F172A;
-  --bg-sidebar: #131C2E;
-  --bg-card: #1A2438;
-  --bg-hover: #26334D;
-  --bg-input: #1A2438;
+  --bg-page: #0f172a;
+  --bg-sidebar: #131c2e;
+  --bg-card: #1a2438;
+  --bg-hover: #26334d;
+  --bg-input: #1a2438;
 
-  --text-primary: #E2E8F0;
-  --text-secondary: #94A3B8;
-  --text-tertiary: #64748B;
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+  --text-tertiary: #64748b;
 
   --border: #283548;
-  --border-strong: #3B4A63;
-  --border-input: #3B4A63;
+  --border-strong: #3b4a63;
+  --border-input: #3b4a63;
 
-  --color-primary: #93C5FD;
-  --color-primary-hover: #BFDBFE;
+  --color-primary: #93c5fd;
+  --color-primary-hover: #bfdbfe;
   --color-primary-light: rgba(147, 197, 253, 0.12);
-  --color-primary-contrast: #0F172A;
+  --color-primary-contrast: #0f172a;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -191,24 +210,24 @@
 /* 注意：色板变量组与 dev-shell 的 styles/style.css 镜像同步（改色需双端同改） */
 
 :root[data-palette='forest'] {
-  --bg-page: #F6F5EF;
-  --bg-sidebar: #EFEEE6;
-  --bg-card: #FDFCF7;
-  --bg-hover: #E8E6DB;
-  --bg-input: #FDFCF7;
+  --bg-page: #f6f5ef;
+  --bg-sidebar: #efeee6;
+  --bg-card: #fdfcf7;
+  --bg-hover: #e8e6db;
+  --bg-input: #fdfcf7;
 
-  --text-primary: #23281F;
-  --text-secondary: #6E7367;
-  --text-tertiary: #9CA092;
+  --text-primary: #23281f;
+  --text-secondary: #6e7367;
+  --text-tertiary: #9ca092;
 
-  --border: #E2E1D6;
-  --border-strong: #CFD0C0;
-  --border-input: #CFD0C0;
+  --border: #e2e1d6;
+  --border-strong: #cfd0c0;
+  --border-input: #cfd0c0;
 
-  --color-primary: #3E6B4F;
-  --color-primary-hover: #32583F;
+  --color-primary: #3e6b4f;
+  --color-primary-hover: #32583f;
   --color-primary-light: rgba(62, 107, 79, 0.1);
-  --color-primary-contrast: #FDFCF7;
+  --color-primary-contrast: #fdfcf7;
 
   --shadow-card: 0 1px 2px rgba(35, 40, 31, 0.04);
   --shadow-card-hover: 0 4px 16px rgba(35, 40, 31, 0.08);
@@ -217,21 +236,21 @@
 
 :root.dark[data-palette='forest'] {
   --bg-page: #101713;
-  --bg-sidebar: #141D18;
-  --bg-card: #1A241F;
+  --bg-sidebar: #141d18;
+  --bg-card: #1a241f;
   --bg-hover: #243128;
-  --bg-input: #1A241F;
+  --bg-input: #1a241f;
 
-  --text-primary: #E6EDE4;
-  --text-secondary: #93A29A;
-  --text-tertiary: #66756D;
+  --text-primary: #e6ede4;
+  --text-secondary: #93a29a;
+  --text-tertiary: #66756d;
 
-  --border: #27332C;
-  --border-strong: #37463D;
-  --border-input: #37463D;
+  --border: #27332c;
+  --border-strong: #37463d;
+  --border-input: #37463d;
 
-  --color-primary: #86C49B;
-  --color-primary-hover: #A3D6B4;
+  --color-primary: #86c49b;
+  --color-primary-hover: #a3d6b4;
   --color-primary-light: rgba(134, 196, 155, 0.12);
   --color-primary-contrast: #101713;
 
@@ -243,24 +262,24 @@
 /* ==================== 色板：ocean（海洋青 · 清爽通透） ==================== */
 
 :root[data-palette='ocean'] {
-  --bg-page: #F2F7F9;
-  --bg-sidebar: #E9F0F4;
-  --bg-card: #FAFCFD;
-  --bg-hover: #DFEAEF;
-  --bg-input: #FAFCFD;
+  --bg-page: #f2f7f9;
+  --bg-sidebar: #e9f0f4;
+  --bg-card: #fafcfd;
+  --bg-hover: #dfeaef;
+  --bg-input: #fafcfd;
 
-  --text-primary: #1B2B33;
-  --text-secondary: #5E747F;
-  --text-tertiary: #8FA2AC;
+  --text-primary: #1b2b33;
+  --text-secondary: #5e747f;
+  --text-tertiary: #8fa2ac;
 
-  --border: #DDE6EB;
-  --border-strong: #C4D3DB;
-  --border-input: #C4D3DB;
+  --border: #dde6eb;
+  --border-strong: #c4d3db;
+  --border-input: #c4d3db;
 
-  --color-primary: #0E7490;
-  --color-primary-hover: #0B5E75;
+  --color-primary: #0e7490;
+  --color-primary-hover: #0b5e75;
   --color-primary-light: rgba(14, 116, 144, 0.1);
-  --color-primary-contrast: #FFFFFF;
+  --color-primary-contrast: #ffffff;
 
   --shadow-card: 0 1px 2px rgba(27, 43, 51, 0.04);
   --shadow-card-hover: 0 4px 16px rgba(27, 43, 51, 0.08);
@@ -268,24 +287,24 @@
 }
 
 :root.dark[data-palette='ocean'] {
-  --bg-page: #0B1620;
-  --bg-sidebar: #0F1D29;
+  --bg-page: #0b1620;
+  --bg-sidebar: #0f1d29;
   --bg-card: #152430;
-  --bg-hover: #1E303F;
+  --bg-hover: #1e303f;
   --bg-input: #152430;
 
-  --text-primary: #E2EEF4;
-  --text-secondary: #8FA7B5;
-  --text-tertiary: #5E7686;
+  --text-primary: #e2eef4;
+  --text-secondary: #8fa7b5;
+  --text-tertiary: #5e7686;
 
-  --border: #1F323F;
-  --border-strong: #2E4556;
-  --border-input: #2E4556;
+  --border: #1f323f;
+  --border-strong: #2e4556;
+  --border-input: #2e4556;
 
-  --color-primary: #5FD0E8;
-  --color-primary-hover: #8ADFF0;
+  --color-primary: #5fd0e8;
+  --color-primary-hover: #8adff0;
   --color-primary-light: rgba(95, 208, 232, 0.12);
-  --color-primary-contrast: #0B1620;
+  --color-primary-contrast: #0b1620;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -295,24 +314,24 @@
 /* ==================== 色板：sunset（落日晚霞 · 温暖活力） ==================== */
 
 :root[data-palette='sunset'] {
-  --bg-page: #FBF5EF;
-  --bg-sidebar: #F6ECE2;
-  --bg-card: #FEFAF5;
-  --bg-hover: #F0E2D4;
-  --bg-input: #FEFAF5;
+  --bg-page: #fbf5ef;
+  --bg-sidebar: #f6ece2;
+  --bg-card: #fefaf5;
+  --bg-hover: #f0e2d4;
+  --bg-input: #fefaf5;
 
-  --text-primary: #33281F;
-  --text-secondary: #8A7565;
-  --text-tertiary: #B3A08D;
+  --text-primary: #33281f;
+  --text-secondary: #8a7565;
+  --text-tertiary: #b3a08d;
 
-  --border: #EDE2D6;
-  --border-strong: #DFCBB8;
-  --border-input: #DFCBB8;
+  --border: #ede2d6;
+  --border-strong: #dfcbb8;
+  --border-input: #dfcbb8;
 
-  --color-primary: #D9532A;
-  --color-primary-hover: #BC4520;
+  --color-primary: #d9532a;
+  --color-primary-hover: #bc4520;
   --color-primary-light: rgba(217, 83, 42, 0.1);
-  --color-primary-contrast: #FEFAF5;
+  --color-primary-contrast: #fefaf5;
 
   --shadow-card: 0 1px 2px rgba(51, 40, 31, 0.04);
   --shadow-card-hover: 0 4px 16px rgba(51, 40, 31, 0.08);
@@ -320,24 +339,24 @@
 }
 
 :root.dark[data-palette='sunset'] {
-  --bg-page: #1B1210;
+  --bg-page: #1b1210;
   --bg-sidebar: #211613;
-  --bg-card: #2A1D18;
+  --bg-card: #2a1d18;
   --bg-hover: #382722;
-  --bg-input: #2A1D18;
+  --bg-input: #2a1d18;
 
-  --text-primary: #F5E9E2;
-  --text-secondary: #B0958A;
-  --text-tertiary: #7D6458;
+  --text-primary: #f5e9e2;
+  --text-secondary: #b0958a;
+  --text-tertiary: #7d6458;
 
-  --border: #3A2B26;
-  --border-strong: #4E3A32;
-  --border-input: #4E3A32;
+  --border: #3a2b26;
+  --border-strong: #4e3a32;
+  --border-input: #4e3a32;
 
-  --color-primary: #F5A383;
-  --color-primary-hover: #F8BBA2;
+  --color-primary: #f5a383;
+  --color-primary-hover: #f8bba2;
   --color-primary-light: rgba(245, 163, 131, 0.12);
-  --color-primary-contrast: #1B1210;
+  --color-primary-contrast: #1b1210;
 
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.25);
   --shadow-card-hover: 0 4px 16px rgba(0, 0, 0, 0.4);
@@ -347,24 +366,24 @@
 /* ==================== 色板：violet（星空紫 · 静谧优雅） ==================== */
 
 :root[data-palette='violet'] {
-  --bg-page: #F7F5FB;
-  --bg-sidebar: #F0EDF7;
-  --bg-card: #FCFBFE;
-  --bg-hover: #E9E4F4;
-  --bg-input: #FCFBFE;
+  --bg-page: #f7f5fb;
+  --bg-sidebar: #f0edf7;
+  --bg-card: #fcfbfe;
+  --bg-hover: #e9e4f4;
+  --bg-input: #fcfbfe;
 
-  --text-primary: #2A2533;
-  --text-secondary: #6F687D;
-  --text-tertiary: #A29AB2;
+  --text-primary: #2a2533;
+  --text-secondary: #6f687d;
+  --text-tertiary: #a29ab2;
 
-  --border: #E5E0EE;
-  --border-strong: #D3CCE2;
-  --border-input: #D3CCE2;
+  --border: #e5e0ee;
+  --border-strong: #d3cce2;
+  --border-input: #d3cce2;
 
-  --color-primary: #6D4FC6;
-  --color-primary-hover: #5B3FAE;
+  --color-primary: #6d4fc6;
+  --color-primary-hover: #5b3fae;
   --color-primary-light: rgba(109, 79, 198, 0.1);
-  --color-primary-contrast: #FCFBFE;
+  --color-primary-contrast: #fcfbfe;
 
   --shadow-card: 0 1px 2px rgba(42, 37, 51, 0.04);
   --shadow-card-hover: 0 4px 16px rgba(42, 37, 51, 0.08);
@@ -373,21 +392,21 @@
 
 :root.dark[data-palette='violet'] {
   --bg-page: #141020;
-  --bg-sidebar: #19132A;
+  --bg-sidebar: #19132a;
   --bg-card: #201936;
-  --bg-hover: #2C2247;
+  --bg-hover: #2c2247;
   --bg-input: #201936;
 
-  --text-primary: #ECE8F6;
-  --text-secondary: #A69BC2;
-  --text-tertiary: #756B8F;
+  --text-primary: #ece8f6;
+  --text-secondary: #a69bc2;
+  --text-tertiary: #756b8f;
 
-  --border: #2E2647;
-  --border-strong: #3E3560;
-  --border-input: #3E3560;
+  --border: #2e2647;
+  --border-strong: #3e3560;
+  --border-input: #3e3560;
 
-  --color-primary: #B9A6F7;
-  --color-primary-hover: #CDBFFA;
+  --color-primary: #b9a6f7;
+  --color-primary-hover: #cdbffa;
   --color-primary-light: rgba(185, 166, 247, 0.12);
   --color-primary-contrast: #141020;
 
@@ -578,7 +597,9 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: background 150ms ease, opacity 150ms ease;
+  transition:
+    background 150ms ease,
+    opacity 150ms ease;
 }
 
 .wb-btn-ghost:hover {
@@ -638,7 +659,8 @@ html.anim-disabled *::after {
 /* ==================== Animation ==================== */
 
 @keyframes pulse-slow {
-  0%, 100% {
+  0%,
+  100% {
     opacity: 1;
   }
   50% {
@@ -652,10 +674,14 @@ html.anim-disabled *::after {
 
 /* 页面切换过渡动画 */
 .page-enter-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 .page-leave-active {
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
 }
 .page-enter-from {
   opacity: 0;
@@ -737,6 +763,52 @@ html.anim-disabled *::after {
 @media (prefers-reduced-motion: reduce) {
   [data-sonner-toast],
   [data-sonner-toast] > * {
-    transition: transform 400ms, opacity 400ms, height 400ms, box-shadow 200ms !important;
+    transition:
+      transform 400ms,
+      opacity 400ms,
+      height 400ms,
+      box-shadow 200ms !important;
   }
+}
+
+/* ==================== Window Resize Handles ==================== */
+
+/*
+ * 无边框窗口的边缘 resize 热区（App.vue 中 data-tauri-resize-handle 元素的样式）。
+ * 仅在桌面端渲染（template 中 v-if="isDesktop"）；移动端窗口不可 resize 无需此规则。
+ * 视觉完全透明，仅靠 pointer-events: auto 接住边缘鼠标事件。
+ */
+.resize-handle {
+  position: fixed;
+  background: transparent;
+  pointer-events: auto;
+  z-index: 9999;
+}
+
+.resize-top {
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+}
+
+.resize-bottom {
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+}
+
+.resize-left {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 6px;
+}
+
+.resize-right {
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 6px;
 }

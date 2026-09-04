@@ -21,6 +21,19 @@
     <!-- Exit Confirm Dialog -->
     <ExitConfirmModal v-model:visible="showExitConfirm" :sessions="runningSessions" />
   </div>
+
+  <!--
+    无边框窗口的边缘 resize 热区：decorations:false 后 Linux 失去 GTK 原生边框拖拽，
+    Tauri 用 data-tauri-resize-handle 属性接管边缘 resize，无需自定义 JS。
+    4 条边各 6px，fixed 定位贴视口边缘，透明不可见。
+    仅在桌面端渲染：移动端窗口不可 resize，无需这些热区。
+  -->
+  <template v-if="isDesktop">
+    <div data-tauri-resize-handle class="resize-handle resize-top"></div>
+    <div data-tauri-resize-handle class="resize-handle resize-bottom"></div>
+    <div data-tauri-resize-handle class="resize-handle resize-left"></div>
+    <div data-tauri-resize-handle class="resize-handle resize-right"></div>
+  </template>
 </template>
 
 <script setup lang="ts">
@@ -40,6 +53,7 @@ import { useTheme } from '@/composables/useTheme'
 import { useFontSize } from '@/composables/useFontSize'
 import { useKeyboardShortcuts } from '@/composables/useKeyboardShortcuts'
 import { useSettingsStore } from '@/stores/settings'
+import { usePlatform } from '@/composables/usePlatform'
 
 interface RunningSession {
   id: string
@@ -49,6 +63,10 @@ interface RunningSession {
 
 const router = useRouter()
 const settingsStore = useSettingsStore()
+
+// 平台信息：isDesktop 用于条件渲染桌面端专属 UI（如窗口边缘 resize 热区）
+const { platformInfo } = usePlatform()
+const isDesktop = computed(() => platformInfo.value.isDesktop)
 
 // 主题与字体管理
 const { themeClasses, setupTheme, cleanupTheme } = useTheme()

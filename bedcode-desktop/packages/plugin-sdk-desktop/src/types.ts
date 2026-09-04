@@ -173,12 +173,15 @@ export interface FileHandlerDescriptor {
 }
 
 /** HTTP 请求处理器 */
-export interface RequestHandler {
-  (req: { method: string; path: string; body: any; headers: Record<string, string> }): Promise<{
-    status: number
-    body: any
-  }>
-}
+export type RequestHandler = (req: {
+  method: string
+  path: string
+  body: any
+  headers: Record<string, string>
+}) => Promise<{
+  status: number
+  body: any
+}>
 
 // ==================== PluginContext API ====================
 
@@ -338,10 +341,7 @@ export interface TransferTaskSeed {
 /** 远端文件浏览种子：根清单 + 目录内容表（key = `${dirId}::${相对路径}`，根目录 path=''） */
 export interface RemoteFsDevMock {
   roots: Array<{ id: string; name: string }>
-  files?: Record<
-    string,
-    Array<{ name: string; size: number; mtime: number; isDir: boolean }>
-  >
+  files?: Record<string, Array<{ name: string; size: number; mtime: number; isDir: boolean }>>
 }
 
 /** 本机共享设置种子（roots 为宿主 RootItem DTO 形状 {id, name}） */

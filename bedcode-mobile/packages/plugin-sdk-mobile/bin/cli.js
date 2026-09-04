@@ -149,8 +149,7 @@ function buildZip(entries) {
   // DOS 时间戳（本地时间）
   const now = new Date()
   const dosTime = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1)
-  const dosDate =
-    ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()
+  const dosDate = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate()
 
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name, 'utf-8')
@@ -255,12 +254,12 @@ function cmdCreate(positional, flags) {
 
   // SDK 依赖标识：--registry 引用已发布版本（npm + crates.io），默认引用本地 SDK 相对路径
   const sdkPkg = readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json')
-  const sdkJs = flags.registry === true
-    ? `^${sdkPkg.version}`
-    : `file:${toPosix(relative(outDir, SDK_ROOT))}`
-  const sdkRust = flags.registry === true
-    ? `"${sdkPkg.version}"`
-    : `{ path = "${toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))}" }`
+  const sdkJs =
+    flags.registry === true ? `^${sdkPkg.version}` : `file:${toPosix(relative(outDir, SDK_ROOT))}`
+  const sdkRust =
+    flags.registry === true
+      ? `"${sdkPkg.version}"`
+      : `{ path = "${toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))}" }`
 
   // 复制模板并填充占位符
   cpSync(TEMPLATE_DIR, outDir, { recursive: true })
@@ -332,9 +331,13 @@ function cmdDev(positional, flags) {
 
   console.log(`[bedcode-plugin] 启动 dev-shell（插件: ${pluginDir}）`)
   if (flags.host) {
-    console.log(`[bedcode-plugin] 已监听局域网 — 手机与电脑同一 WiFi 时，手机浏览器打开 http://<电脑IP>:${flags.port || 5173}/ 查看（建议关掉手机框开关）`)
+    console.log(
+      `[bedcode-plugin] 已监听局域网 — 手机与电脑同一 WiFi 时，手机浏览器打开 http://<电脑IP>:${flags.port || 5173}/ 查看（建议关掉手机框开关）`,
+    )
   }
-  console.log(`[bedcode-plugin] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`)
+  console.log(
+    `[bedcode-plugin] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`,
+  )
   const child = spawn(process.execPath, args, {
     cwd: devShellDir,
     stdio: 'inherit',
@@ -396,7 +399,9 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
   const hasWasm = pluginType === 'wasm' && rustLibrary
   const viteBin = findViteBin(cwd)
   if (!viteBin) {
-    console.error('[bedcode-plugin] vite 未找到（自插件目录向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 pnpm install')
+    console.error(
+      '[bedcode-plugin] vite 未找到（自插件目录向上查找 node_modules/vite 均无）— 先在插件目录或仓库根运行 pnpm install',
+    )
     process.exit(1)
   }
 
@@ -408,7 +413,9 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
 
   console.log('\n[bedcode-plugin] ====== watch 前端构建（vite build --watch） ======')
   console.log(`[bedcode-plugin] 产物自动复制到: ${dest}`)
-  console.log('[bedcode-plugin] 修改插件前端源码后自动重建 + 复制（WASM 改动需一次性 pnpm run build）')
+  console.log(
+    '[bedcode-plugin] 修改插件前端源码后自动重建 + 复制（WASM 改动需一次性 pnpm run build）',
+  )
   console.log('[bedcode-plugin] Ctrl+C 退出\n')
 
   // WASM 缺失预检：全新 resources 目录（从未跑过全量 build）时，复制完成后插件
@@ -430,6 +437,9 @@ function startBuildWatch(cwd, resourcesDir, manifest) {
       mkdirSync(dest, { recursive: true })
       copyDirContents(distDir, dest)
       copyFileSync(join(cwd, 'plugin.json'), join(dest, 'plugin.json'))
+      // 插件图标（PluginIcon 经 asset protocol 加载 icon.svg）
+      const iconSrc = join(cwd, 'icon.svg')
+      if (existsSync(iconSrc)) copyFileSync(iconSrc, join(dest, 'icon.svg'))
       // WASM 已构建则一并带上（缺失不报错：watch 场景以前端热更为主）
       if (hasWasm && wasmPath && existsSync(wasmPath)) {
         copyFileSync(wasmPath, join(dest, `${rustLibrary}.wasm`))
@@ -484,7 +494,9 @@ function cmdBuild(flags) {
   // 0.5 watch 模式：vite 长驻构建 + 产物变化自动复制（需 --resources-dir 指定复制目标）
   if (flags.watch) {
     if (!resourcesDir) {
-      console.error('[bedcode-plugin] --watch 需要 --resources-dir <宿主资源目录>（前端产物复制目标）')
+      console.error(
+        '[bedcode-plugin] --watch 需要 --resources-dir <宿主资源目录>（前端产物复制目标）',
+      )
       process.exit(1)
     }
     startBuildWatch(cwd, resourcesDir, manifest)
@@ -514,17 +526,21 @@ function cmdBuild(flags) {
   // 2. WASM 构建
   if (hasWasm && !frontendOnly) {
     console.log('\n[bedcode-plugin] ====== 构建 WASM (cargo) ======')
-    run('cargo', [
-      'build',
-      '--target',
-      'wasm32-unknown-unknown',
-      '--no-default-features',
-      '--features',
-      'wasm',
-      '--manifest-path',
-      'rust/Cargo.toml',
-      '--release',
-    ], cwd)
+    run(
+      'cargo',
+      [
+        'build',
+        '--target',
+        'wasm32-unknown-unknown',
+        '--no-default-features',
+        '--features',
+        'wasm',
+        '--manifest-path',
+        'rust/Cargo.toml',
+        '--release',
+      ],
+      cwd,
+    )
     if (!existsSync(wasmPath)) {
       console.error(`[bedcode-plugin] WASM 构建未产出 ${rustLibrary}.wasm`)
       console.error('  若提示 target 缺失: rustup target add wasm32-unknown-unknown')
@@ -537,16 +553,11 @@ function cmdBuild(flags) {
     // 迁移 spec §4 S2：产物字节形态 `00 61 73 6d 0d 00 01 00`（模块段在组件头前）
     console.log('\n[bedcode-plugin] ====== 组件化 WASM (Component Model) ======')
     const componentizeManifest = join(SDK_ROOT, 'rust/tools/componentize/Cargo.toml')
-    run('cargo', [
-      'run',
-      '--release',
-      '--manifest-path',
-      componentizeManifest,
-      '--',
-      wasmPath,
-      '-o',
-      wasmPath,
-    ], cwd)
+    run(
+      'cargo',
+      ['run', '--release', '--manifest-path', componentizeManifest, '--', wasmPath, '-o', wasmPath],
+      cwd,
+    )
   }
 
   // 3. 复制产物到宿主资源目录（--resources-dir <父目录>，按插件 id 建子目录）
@@ -555,6 +566,9 @@ function cmdBuild(flags) {
     mkdirSync(dest, { recursive: true })
     copyDirContents(join(cwd, 'dist'), dest)
     copyFileSync(manifestPath, join(dest, 'plugin.json'))
+    // 插件图标（PluginIcon 经 asset protocol 加载 icon.svg）
+    const iconSrc = join(cwd, 'icon.svg')
+    if (existsSync(iconSrc)) copyFileSync(iconSrc, join(dest, 'icon.svg'))
     if (hasWasm && !frontendOnly) {
       copyFileSync(wasmPath, join(dest, `${rustLibrary}.wasm`))
     }
@@ -616,9 +630,7 @@ function cmdPackage(flags) {
   }
 
   // 打包条目：plugin.json + dist 全部产物 + wasm，全部位于 zip 根目录
-  const entries = [
-    { name: 'plugin.json', data: readFileSync(manifestPath) },
-  ]
+  const entries = [{ name: 'plugin.json', data: readFileSync(manifestPath) }]
   for (const f of readdirSync(distDir)) {
     const full = join(distDir, f)
     if (statSync(full).isFile()) entries.push({ name: f, data: readFileSync(full) })
@@ -692,7 +704,9 @@ function cmdValidate(flags) {
 
   // pluginType / rustLibrary / wasmHash
   if (manifest.pluginType && !VALID_PLUGIN_TYPES.has(manifest.pluginType)) {
-    errors.push(`pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`)
+    errors.push(
+      `pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`,
+    )
   }
   if (manifest.pluginType === 'wasm' && !manifest.rustLibrary) {
     errors.push('pluginType=wasm 时必须提供 rustLibrary（与 Cargo.toml 包名一致）')
@@ -727,7 +741,9 @@ function cmdValidate(flags) {
     console.error(`\n[bedcode-plugin] validate 失败: ${errors.length} 个错误`)
     process.exit(1)
   }
-  console.log(`\n[bedcode-plugin] validate 通过${warnings.length ? `（${warnings.length} 个警告）` : ''}`)
+  console.log(
+    `\n[bedcode-plugin] validate 通过${warnings.length ? `（${warnings.length} 个警告）` : ''}`,
+  )
 }
 
 // ==================== 命令：doctor（环境自检） ====================
@@ -756,7 +772,11 @@ function cmdDoctor() {
   if (rustOk) {
     const t = spawnSync('rustup', ['target', 'list', '--installed'], { stdio: 'pipe' })
     const hasWasm = t.status === 0 && t.stdout.toString().includes('wasm32-unknown-unknown')
-    add('wasm32-unknown-unknown target', hasWasm, hasWasm ? '已安装' : '缺失 — 运行 rustup target add wasm32-unknown-unknown')
+    add(
+      'wasm32-unknown-unknown target',
+      hasWasm,
+      hasWasm ? '已安装' : '缺失 — 运行 rustup target add wasm32-unknown-unknown',
+    )
   } else {
     add('wasm32-unknown-unknown target', false, '需先安装 Rust')
   }
@@ -776,11 +796,19 @@ function cmdDoctor() {
 
   // dev-shell 依赖（dev 命令就绪性）
   const devVite = join(SDK_ROOT, 'dev-shell/node_modules/vite/bin/vite.js')
-  add('dev-shell 依赖（dev 命令）', existsSync(devVite), existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装')
+  add(
+    'dev-shell 依赖（dev 命令）',
+    existsSync(devVite),
+    existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装',
+  )
 
   // SDK dist（file: 依赖的插件需要）
   const sdkDist = join(SDK_ROOT, 'dist/index.js')
-  add('SDK 构建产物（file: 依赖）', existsSync(sdkDist), existsSync(sdkDist) ? '已构建' : '缺失 — 运行 pnpm run build（SDK 目录内）')
+  add(
+    'SDK 构建产物（file: 依赖）',
+    existsSync(sdkDist),
+    existsSync(sdkDist) ? '已构建' : '缺失 — 运行 pnpm run build（SDK 目录内）',
+  )
 
   let failed = 0
   for (const c of checks) {
@@ -809,10 +837,16 @@ function main() {
     console.log(`bedcode-plugin v${pkg.version}`)
     console.log('\nBedCode 移动端插件开发工具包\n')
     console.log('用法:')
-    console.log('  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]')
-    console.log('  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only] [--watch]')
+    console.log(
+      '  bedcode-plugin create <id> <name> [--author <author>] [--dir <dir>] [--ts-only] [--registry]',
+    )
+    console.log(
+      '  bedcode-plugin build [--resources-dir <dir>] [--frontend-only] [--rust-only] [--watch]',
+    )
     console.log('  bedcode-plugin package [-o <file>] [--hash]   # --hash 写入 wasmHash 完整性校验')
-    console.log('  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR；--host 供手机访问）')
+    console.log(
+      '  bedcode-plugin dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR；--host 供手机访问）',
+    )
     console.log('  bedcode-plugin manifest [--check]   # 按源码自动填充 contributes/permissions')
     console.log('  bedcode-plugin validate [--dir <dir>]   # 校验 plugin.json 结构')
     console.log('  bedcode-plugin doctor   # 环境自检（Node/Rust/wasm32/dev-shell/SDK）')
