@@ -42,6 +42,7 @@ cd bedcode-mobile/src-tauri/gen/android && ./gradlew :app:compileUniversalDebugK
 
 - **Kotlin 验证**：改 `gen/android/app/src/main/java/com/bedcode/mobile/` 下自定义 Kotlin 插件后，必须额外跑上述 gradlew 命令（独立 Gradle/Kotlin 工具链，`cargo test` 与前端测试均不覆盖）；离线加 `--offline`
 - **前端测试统一 `pnpm run test:run`**（= `pnpm exec vitest run`，跑完退出）；`pnpm run test` 是 vitest watch 模式，执行后挂起不退出，禁止使用；`vite` 不执行测试
+- **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档提到测试/构建/安装命令时，**必须**使用本节规定的字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止沿用旧 `npm` / `npm run test` 字眼。背景：master `49398462` 已完成 npm→pnpm 迁移，未同步文档的旧字眼会在审计时制造假阳性。审计新 spec/issue 时若发现命令字眼与本节不一致，先改文档再继续
 - 构建前检查 `src-tauri/target` 目录大小，超过 15GB 执行 `cargo clean`
 - 桌面端 `tauri:build`（`scripts/tauri-build.js`）自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_FILE` / `.env`），未配置时自动禁用升级包生成，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（见 `docs/knowledge/release-workflow.md`）
 
@@ -241,9 +242,7 @@ Single-context — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/ag
 
 ### Subagents
 
-pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委派给隔离上下文的专用 agent；项目 agent 定义在 `.pi/agents/*.md`。
-
-**调用 `subagent` 工具必须传 `agentScope: "both"`**（默认 "user" 不加载本仓库 agent）。
+pi 使用 `pi-subagents` 包（用户级安装 `git:github.com/nicobailon/pi-subagents`）将任务委派给隔离上下文的专用 agent；项目 agent 定义在 `.pi/agents/*.md`，自动被发现，同名 agent 优先于包内置的 scout/worker/reviewer。
 
 | Agent | 用途 |
 |-------|------|
@@ -254,9 +253,7 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 | `tester` | 运行测试并报告 |
 | `vision` | 视觉分析（唯一带视觉能力），详见下节 |
 
-三种模式：单任务 `{ agent, task, agentScope }`；并行 `{ tasks: [...] }`（最多 8 个，4 并发）；链式 `{ chain: [...] }`，步骤间用 `{previous}` 传输出。
-
-工作流模板（`.pi/prompts/`）：`/implement`（scout→planner→worker）、`/scout-and-plan`（只出计划）、`/implement-and-review`（worker→reviewer→worker）、`/implement-and-test`（worker→tester）。
+调用方式：单任务 `{ agent, task }`；并行与链式通过 `workflowScript` 编排（`await runs.run(key, { agent, task })` 顺序执行、`await runs.all([...])` 并行执行），步骤间用上一步结果的 `.output` 传递；旧的顶层 `tasks`/`chain`/`parallel` 参数已不支持。
 
 适用场景：可并行的独立子任务、需隔离上下文的重型任务；简单定位/小改动不必启动 subagent。
 
@@ -282,14 +279,16 @@ pi 已安装 subagent 扩展（`.pi/extensions/subagent/`），可将任务委�
 
 ```javascript
 // 显式指定范围
-subagent(agent: "vision", agentScope: "both", task: `
+subagent({
+  agent: "vision",
+  task: `
   范围: 手机内部
   截图: <绝对路径>
-  ...评审要求...
-`)
+  ...评审要求...`
+})
 
 // 零配置 — 默认自动识别 dev-shell
-subagent(agent: "vision", agentScope: "both", task: "请分析截图 <绝对路径>")
+subagent({ agent: "vision", task: "请分析截图 <绝对路径>" })
 ```
 
 截图准备：Chrome headless 直连（`chrome.exe --headless=new --screenshot=<out.png> --window-size=1440,900 <url>`）、`browser-tools` skill 的 `browser-screenshot.js` / `browser-content.js`（`browser-start.js` 仅 macOS）、或已有图片文件直传绝对路径。

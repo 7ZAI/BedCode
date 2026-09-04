@@ -35,4 +35,4 @@ model: opencode-go/ox-alpha-free
 需要新增的 key 及 zh-CN / en 文案。
 
 ## Verification
-- 需要运行的测试（`cargo test` / `npm run test:run`）与验证点
+- 需要运行的测试（`cargo test` / `pnpm run test:run`）与验证点
