@@ -85,13 +85,13 @@ bedcode-mobile/
 npm install
 
 # 开发模式：构建并安装到 Android 设备（真机或模拟器）
-npm run tauri:android:dev
+pnpm run tauri:android:dev
 
 # 开发模式 + 电脑端日志落盘（logcat 同时写入 .dev-logs/，便于排查）
-npm run tauri:android:dev:log
+pnpm run tauri:android:dev:log
 
 # 生产构建（aarch64）
-npm run tauri:android:build
+pnpm run tauri:android:build
 ```
 
 > [!NOTE]
@@ -100,7 +100,7 @@ npm run tauri:android:build
 ### 测试
 
 ```bash
-npm run test:run            # 前端单元测试（vitest run，注意不要用 npm run test 的 watch 模式）
+pnpm run test:run            # 前端单元测试（vitest run，注意不要用 pnpm run test 的 watch 模式）
 cd src-tauri && cargo test  # Rust 测试
 ```
 
@@ -112,10 +112,10 @@ cd src-tauri && cargo test  # Rust 测试
 
 | 命令 | 说明 |
 |------|------|
-| `npm run build` / `build:fast` | 前端类型检查 + 构建 / 仅构建 |
-| `npm run tauri:android:build:fast` | 跳过类型检查的 debug 快速构建 |
-| `npm run plugins:build` | 构建官方插件（WASM 产物） |
-| `npm run target:size` | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
+| `pnpm run build` / `build:fast` | 前端类型检查 + 构建 / 仅构建 |
+| `pnpm run tauri:android:build:fast` | 跳过类型检查的 debug 快速构建 |
+| `pnpm run plugins:build` | 构建官方插件（WASM 产物） |
+| `pnpm run target:size` | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
 
 ## 插件系统
 

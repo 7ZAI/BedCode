@@ -138,8 +138,16 @@ const PLUGIN_WATCH_CMDS = [
 /** 宿主插件产物目录（各插件子目录名 = dir 的最后一段，即插件 id） */
 const RESOURCES_BASE = resolve(ROOT, 'src-tauri/resources/plugins/desktop')
 
-/** 宿主 dev 命令（可用 --host-cmd 覆盖） */
-const DEFAULT_HOST_CMD = [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', '--', 'dev']]
+/** 宿主 dev 命令（可用 --host-cmd 覆盖）
+ *
+ * 直接 spawn 包管理器 CLI（pnpm/npm）作为命令入口——ELF/可执行文件自带
+ * shebang 或自身就是解释器（pnpm 12+ 是单文件 ELF），无需 node 套壳。
+ * 历史误写成 `[process.execPath, [PKG_MGR_CLI, ...]]` 会让 node 把 pnpm ELF
+ * 当 JS 加载，在 Node 24 下抛 `SyntaxError: Invalid or unexpected token`（pnpm:1 ELF>...）。
+ * 注意 pnpm 12 会把 `run tauri -- dev` 中的 `--` 原样透传给 tauri CLI，
+ * 导致 `tauri -- dev` 报 unexpected argument——因此不能加 `--` 分隔符。
+ */
+const DEFAULT_HOST_CMD = [PKG_MGR_CLI, ['run', 'tauri', 'dev']]
 
 // ==================== 进程管理 ====================
 

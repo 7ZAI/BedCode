@@ -500,7 +500,7 @@ function cmdBuild(flags) {
   if (!rustOnly) {
     const viteBin = join(cwd, 'node_modules/vite/bin/vite.js')
     if (!existsSync(viteBin)) {
-      console.error(`[bedcode-plugin] vite 未安装 — 先在插件目录运行 npm install`)
+      console.error(`[bedcode-plugin] vite 未安装 — 先在插件目录运行 pnpm install`)
       process.exit(1)
     }
     console.log('\n[bedcode-plugin] ====== 构建前端 (vite) ======')
@@ -596,11 +596,11 @@ function cmdPackage(flags) {
     : null
 
   if (!existsSync(distMain)) {
-    console.error(`[bedcode-plugin] dist/${main || 'index.js'} 缺失 — 先运行 npm run build`)
+    console.error(`[bedcode-plugin] dist/${main || 'index.js'} 缺失 — 先运行 pnpm run build`)
     process.exit(1)
   }
   if (hasWasm && !existsSync(wasmPath)) {
-    console.error(`[bedcode-plugin] ${rustLibrary}.wasm 缺失 — 先运行 npm run build`)
+    console.error(`[bedcode-plugin] ${rustLibrary}.wasm 缺失 — 先运行 pnpm run build`)
     process.exit(1)
   }
 
@@ -712,7 +712,7 @@ function cmdValidate(flags) {
   // main 产物存在性（未构建仅警告）
   const distMain = join(dir, 'dist', manifest.main || 'index.js')
   if (!existsSync(distMain)) {
-    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（npm run build）`)
+    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（pnpm run build）`)
   }
 
   // contributes 结构
@@ -780,7 +780,7 @@ function cmdDoctor() {
 
   // SDK dist（file: 依赖的插件需要）
   const sdkDist = join(SDK_ROOT, 'dist/index.js')
-  add('SDK 构建产物（file: 依赖）', existsSync(sdkDist), existsSync(sdkDist) ? '已构建' : '缺失 — 运行 npm run build（SDK 目录内）')
+  add('SDK 构建产物（file: 依赖）', existsSync(sdkDist), existsSync(sdkDist) ? '已构建' : '缺失 — 运行 pnpm run build（SDK 目录内）')
 
   let failed = 0
   for (const c of checks) {

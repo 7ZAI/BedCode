@@ -83,18 +83,18 @@ bedcode-desktop/
 npm install
 
 # Dev mode (builds plugins + launches Tauri dev)
-npm run tauri:dev
+pnpm run tauri:dev
 
 # Production build (tauri-build.js resolves the updater signing key automatically;
 # without a key, updater artifacts are disabled — no private key needed for local builds)
-npm run tauri:build
+pnpm run tauri:build
 ```
 
 ### Tests
 
 ```bash
-npm run test:run            # Frontend unit tests (vitest run — don't use `npm run test`, it's watch mode)
-npx playwright test         # E2E tests
+pnpm run test:run            # Frontend unit tests (vitest run — don't use `pnpm run test`, it's watch mode)
+pnpm exec playwright test         # E2E tests
 cd src-tauri && cargo test  # Rust tests
 ```
 
@@ -102,11 +102,11 @@ cd src-tauri && cargo test  # Rust tests
 
 | Command | Description |
 |---------|-------------|
-| `npm run build` / `build:fast` | Frontend type-check + build / build only |
-| `npm run plugins:build` | Build all official plugins (wasm + frontend artifacts) |
-| `npm run plugins:dev` | Plugin dev hot-reload |
-| `npm run lint` / `format` | ESLint / Prettier |
-| `npm run target:size` | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
+| `pnpm run build` / `build:fast` | Frontend type-check + build / build only |
+| `pnpm run plugins:build` | Build all official plugins (wasm + frontend artifacts) |
+| `pnpm run plugins:dev` | Plugin dev hot-reload |
+| `pnpm run lint` / `format` | ESLint / Prettier |
+| `pnpm run target:size` | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
 
 ## Plugin System
 

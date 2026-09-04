@@ -40,7 +40,7 @@
 ```bash
 bedcode-plugin-desktop create com.example.my-plugin "My Plugin" --author "you"
 cd my-plugin
-npm install
+pnpm install
 ```
 
 - 默认生成 **ts-only**（纯前端）插件；`--rust` 附带 WASM 后端脚手架（`pluginType: rust-ts`）
@@ -49,9 +49,9 @@ npm install
 构建与分发：
 
 ```bash
-npm run build    # = bedcode-plugin-desktop build：vite（+ rust-ts 时 cargo wasm32）
-npm run build -- --resources-dir <宿主resources/plugins父目录>   # 复制产物到宿主（内置插件分发方式）
-npm run build -- --frontend-only / --rust-only   # 只构建一半（rust-ts 插件）
+pnpm run build    # = bedcode-plugin-desktop build：vite（+ rust-ts 时 cargo wasm32）
+pnpm run build -- --resources-dir <宿主resources/plugins父目录>   # 复制产物到宿主（内置插件分发方式）
+pnpm run build -- --frontend-only / --rust-only   # 只构建一半（rust-ts 插件）
 ```
 
 ## 3. 前端 API（context）

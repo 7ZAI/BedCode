@@ -86,7 +86,7 @@ export default {
       workingDir: 'Working Directory',
       command: 'Start Command',
       commandPlaceholder: 'Select or enter a command',
-      commandHelp: 'Enter command to execute, e.g. claude, npm run dev',
+      commandHelp: 'Enter command to execute, e.g. claude, pnpm run dev',
       customCommand: 'Custom Command',
       commandPreset: {
         claude: 'Claude Code',

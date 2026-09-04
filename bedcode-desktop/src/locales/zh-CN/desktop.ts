@@ -83,7 +83,7 @@ export default {
       workingDir: '工作目录',
       command: '启动命令',
       commandPlaceholder: '选择或输入命令',
-      commandHelp: '输入要执行的命令，如 claude、npm run dev 等',
+      commandHelp: '输入要执行的命令，如 claude、pnpm run dev 等',
       customCommand: '自定义命令',
       commandPreset: {
         claude: 'Claude Code',

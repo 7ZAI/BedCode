@@ -665,7 +665,7 @@ await context.storage.set('config', { apiKey: '...', maxResults: 10 })
 ### 前端调试
 
 1. 插件通过 `convertFileSrc()` 从 `resources/plugins/desktop/` 加载**编译后的** `index.js`，修改源码后必须先 `vite build` 再刷新页面才能看到变化
-2. 可使用 `npx vite build --watch` 监听源码变更自动重新构建，减少手动 build 步骤
+2. 可使用 `pnpm exec vite build --watch` 监听源码变更自动重新构建，减少手动 build 步骤
 3. 浏览器 DevTools 中查看 `console.log` / `console.error`
 4. 插件加载错误会标记为 Error 状态，在管理页面查看详情
 
@@ -692,7 +692,7 @@ await context.storage.set('config', { apiKey: '...', maxResults: 10 })
 ```bash
 # 在插件目录下构建
 cd plugins/desktop/com.example.my-plugin
-npx vite build
+pnpm exec vite build
 
 # 产物输出到 src-tauri/resources/plugins/desktop/com.example.my-plugin/index.js
 ```
@@ -735,7 +735,7 @@ cargo build --target wasm32-unknown-unknown --no-default-features --features was
 
 # 3. 编译 TS 前端
 cd ..
-npx vite build
+pnpm exec vite build
 ```
 
 ### 插件分发

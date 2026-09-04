@@ -55,7 +55,7 @@
 ```bash
 bedcode-plugin create com.example.my-plugin "My Plugin" --author "you"
 cd my-plugin
-npm install
+pnpm install
 ```
 
 `create` 从 SDK 内置模板生成完整工程（frontend + WASM + manifest），并填充：
@@ -76,8 +76,8 @@ npm install
 ## 4. 构建与打包
 
 ```bash
-npm run build       # = bedcode-plugin build：vite + cargo wasm32
-npm run package     # = bedcode-plugin package：产出 dist/{id}.zip
+pnpm run build       # = bedcode-plugin build：vite + cargo wasm32
+pnpm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 ```
 
 `bedcode-plugin build` 支持：
@@ -97,8 +97,8 @@ npm run package     # = bedcode-plugin package：产出 dist/{id}.zip
 内置插件由仓库脚本统一构建：
 
 ```bash
-cd bedcode-mobile && npm run plugins:build          # 全部
-cd bedcode-mobile && npm run plugins:build -- --plugin com.bedcode.auto-task
+cd bedcode-mobile && pnpm run plugins:build          # 全部
+cd bedcode-mobile && pnpm run plugins:build -- --plugin com.bedcode.auto-task
 ```
 
 ---
@@ -258,7 +258,7 @@ wasm 构建开启 `--features wasm`（`wasm_entry!` / `WasmHost` / `WasmPlugin` 
 
 ## 9. 安装到 BedCode Mobile
 
-1. `npm run package` 产出 `dist/{id}.zip`
+1. `pnpm run package` 产出 `dist/{id}.zip`
 2. 手机端 → 设置 → 插件管理 → 右上角 **+**
    - **从文件安装**：选择 zip
    - **从 URL 安装**：输入 zip 下载链接
@@ -282,8 +282,8 @@ bedcode-plugin dev --host     # 监听局域网，手机浏览器访问 http://<
 ```
 
 > **Windows 注意**：直接在 cmd / PowerShell 输入 `bedcode-plugin` 会提示「不是内部或外部命令」——
-> Windows 不自动把 `node_modules/.bin` 加入 PATH（只有 npm 脚本 / npx 会解析）。
-> 请用 `npm run dev`（模板与内置插件已内置该脚本）或 `npx bedcode-plugin dev`。
+> Windows 不自动把 `node_modules/.bin` 加入 PATH（ 只有 pnpm 脚本 / pnpm exec 会解析）。
+> 请用 `pnpm run dev`（模板与内置插件已内置该脚本）或 `pnpm exec bedcode-plugin dev`。
 
 浏览器打开 `http://localhost:5173`，页面包含：
 

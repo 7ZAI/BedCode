@@ -26,7 +26,7 @@ function run(cmd, options = {}) {
 
 function buildFrontend() {
   console.log('\n[build] ====== Building frontend (Vite) ======')
-  run('npx vite build')
+  run('pnpm exec vite build')
 }
 
 function buildRust() {

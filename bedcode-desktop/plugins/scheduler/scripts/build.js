@@ -26,7 +26,7 @@ function run(cmd, options = {}) {
 
 function buildFrontend() {
   console.log('\n[build] ====== Building frontend (Vite) ======')
-  run('npx vite build')
+  run('pnpm exec vite build')
 }
 
 function buildRust() {
@@ -70,7 +70,7 @@ function copyArtifacts() {
   const distJs = resolve(ROOT, 'dist/index.js')
   if (!existsSync(distJs)) {
     console.error(
-      `[build] ERROR: frontend dist not found at ${distJs}（先跑 npm install && npm run build:frontend）`,
+      `[build] ERROR: frontend dist not found at ${distJs}（先跑 pnpm install && pnpm run build:frontend）`,
     )
     process.exit(1)
   }

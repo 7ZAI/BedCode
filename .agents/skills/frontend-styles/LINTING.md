@@ -269,34 +269,38 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: 'pnpm'
 
       - name: Install dependencies (desktop)
         working-directory: ./bedcode-desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run Stylelint (desktop)
         working-directory: ./bedcode-desktop
-        run: npx stylelint "src/**/*.{css,vue}"
+        run: pnpm exec stylelint "src/**/*.{css,vue}"
 
       - name: Install dependencies (mobile)
         working-directory: ./bedcode-mobile
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Run Stylelint (mobile)
         working-directory: ./bedcode-mobile
-        run: npx stylelint "src/**/*.{css,vue}"
+        run: pnpm exec stylelint "src/**/*.{css,vue}"
 ```
 
 ### Pre-commit Hook（可选，本地快速反馈）
 
 ```bash
 # 安装 husky + lint-staged
-npm install -D husky lint-staged
-npx husky init
+pnpm add -D husky lint-staged
+# husky v9 通过 prepare 钩子自动安装（仓库根 package.json 的 "prepare": "husky"，pnpm install 时生效）
 ```
 
 ```json
@@ -377,10 +381,10 @@ grep -rn 'class="[^"]*#[0-9a-fA-F]\{3,6\}' src/ && exit 1
 
 ```bash
 # 试运行
-npx stylelint "src/**/*.{css,vue}"
+pnpm exec stylelint "src/**/*.{css,vue}"
 
 # 自动修复（只修可修的）
-npx stylelint --fix "src/**/*.{css,vue}"
+pnpm exec stylelint --fix "src/**/*.{css,vue}"
 ```
 
 ---
@@ -392,7 +396,7 @@ npx stylelint --fix "src/**/*.{css,vue}"
 - [ ] 安装依赖：`stylelint stylelint-config-standard stylelint-config-recommended-vue postcss-html`
 - [ ] 创建 `.stylelintrc.json`（用上面提供的配置）
 - [ ] 把 token 定义文件加入 `ignoreFiles`
-- [ ] CI 中加入 `npx stylelint` 检查
+- [ ] CI 中加入 `pnpm exec stylelint` 检查
 - [ ] 阶段 1 跑 1-2 周收集违规数据
 - [ ] 逐步提升 severity 到 error
 - [ ] 团队周会同步规则变更
