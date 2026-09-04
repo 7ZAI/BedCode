@@ -165,6 +165,24 @@ export interface TitleBarItemDescriptor {
   onClick?: () => void
 }
 
+/** 页面工具栏项描述符 — 注入到指定页面的工具栏页头右操作区 */
+export interface PageToolbarItemDescriptor {
+  /** 目标页面标识：sessions / devices / history / plugins / plugin-config / server / settings / terminal */
+  target:
+    | 'sessions'
+    | 'devices'
+    | 'history'
+    | 'plugins'
+    | 'plugin-config'
+    | 'server'
+    | 'settings'
+    | 'terminal'
+  id: string
+  label: string
+  icon?: string
+  onClick?: () => void
+}
+
 /** 文件处理器描述符 */
 export interface FileHandlerDescriptor {
   id: string
@@ -173,15 +191,12 @@ export interface FileHandlerDescriptor {
 }
 
 /** HTTP 请求处理器 */
-export type RequestHandler = (req: {
-  method: string
-  path: string
-  body: any
-  headers: Record<string, string>
-}) => Promise<{
-  status: number
-  body: any
-}>
+export interface RequestHandler {
+  (req: { method: string; path: string; body: any; headers: Record<string, string> }): Promise<{
+    status: number
+    body: any
+  }>
+}
 
 // ==================== PluginContext API ====================
 
@@ -213,6 +228,7 @@ export interface UIRegistry {
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
+  registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
 }
 
@@ -246,9 +262,9 @@ export interface I18nAPI {
   /** 获取宿主 i18n 实例（vue-i18n I18n 对象） */
   getI18n(): any
   /** 注册插件翻译到宿主 i18n（自动添加插件 ID 前缀隔离） */
-  registerMessages(locale: string, messages: Record<string, any>): void
+  registerMessages(locale: string, messages: Record<string, unknown>): void
   /** 翻译快捷方法（自动添加插件 ID 前缀） */
-  t(key: string, params?: Record<string, any>): string
+  t(key: string, params?: Record<string, unknown>): string
 }
 
 /** 插件上下文 — 插件访问宿主能力的唯一通道 */
@@ -283,87 +299,13 @@ export interface PluginModule {
 // 种子数据由插件工程持有（入口导出 devMock），dev-shell 只做通用接线：
 // loader 按 pluginId 注册，mock 命令实现消费种子返回演示值。
 // 真实宿主忽略多余导出，与移动端 SDK 同构。
+//
+// SDK 只约定「入口导出 devMock」的通用容器协议，不感知任何插件领域细节：
+// 各插件自有类型（文件传输对等/传输域种子等）由插件工程自行定义，
+// dev-shell 消费时 cast 到插件自有形状。
 
-/** file-transfer 对等领域种子（附近设备面板 / 后续首连确认、可信对端演示数据） */
-export interface PeerDevMock {
-  /**
-   * 发现设备列表（宿主 DiscoveredPeerDto 的 camelCase 子集），
-   * 须覆盖在线/未连接两态；fileTransfer=false 节点可见但不可连接
-   */
-  devices: Array<{
-    nodeId: string
-    deviceName: string
-    addr?: string
-    fileTransfer?: boolean
-  }>
-  /** 初始已连接节点 id（对端已确认的传输会话） */
-  connectedNodeIds?: string[]
-  /** 初始活跃对端 nodeId（应为 connectedNodeIds 之一） */
-  activeNodeId?: string
-  /** 拨号行为覆盖：nodeId → 终态；未列出的可传输节点按 unreachable 处理 */
-  dialBehavior?: Record<string, 'connected' | 'denied' | 'unreachable'>
-  /** 模拟握手耗时 ms（缺省 800） */
-  dialLatencyMs?: number
-  /**
-   * 待确认首连请求种子（dev-shell 延迟逐条推送 consent-requested 事件，
-   * 驱动确认弹窗与状态栏计数两路演示；缺省不演示）。多条种子可演示排队：
-   * 第一条立即弹窗，后续进入队列待当前项结算后依次展示
-   */
-  consent?: Array<{
-    requestId: string
-    nodeId: string
-    fingerprintShort: string
-    /** 设备名；null 时弹窗以短指纹兑底 + 身份提示展示 */
-    deviceName: string | null
-  }>
-}
-
-// ==================== 传输域种子（file-transfer 任务/远端浏览/共享设置） ====================
-
-/**
- * 传输任务种子内容（mock 组装完整 DTO：peer 取活跃对端设备、时间戳取当前）。
- * state 覆盖全部 8 态：queued / transferring / paused / resumable /
- * completed / cancelled / failed / rejected
- */
-export interface TransferTaskSeed {
-  id: string
-  direction: 'download' | 'upload'
-  /** 对端侧路径（共享根内相对路径） */
-  remotePath: string
-  /** 本机路径（上传任务；缺省空串） */
-  localPath?: string
-  size: number
-  offset: number
-  state: string
-  reason?: string | null
-}
-
-/** 远端文件浏览种子：根清单 + 目录内容表（key = `${dirId}::${相对路径}`，根目录 path=''） */
-export interface RemoteFsDevMock {
-  roots: Array<{ id: string; name: string }>
-  files?: Record<string, Array<{ name: string; size: number; mtime: number; isDir: boolean }>>
-}
-
-/** 本机共享设置种子（roots 为宿主 RootItem DTO 形状 {id, name}） */
-export interface TransferSettingsDevMock {
-  roots: Array<{ id: string; name: string }>
-  downloadDir?: string
-  concurrency?: number
-}
-
-/** file-transfer 传输域种子（任务列表 / 远端浏览 / 共享设置；缺省子域回退空态） */
-export interface TransferDevMock {
-  tasks?: TransferTaskSeed[]
-  remoteFs?: RemoteFsDevMock
-  settings?: TransferSettingsDevMock
-}
-
-/** 插件 dev-shell 演示数据（后续领域按需扩充子字段） */
-export interface PluginDevMock {
-  peer?: PeerDevMock
-  /** 传输域（任务列表、远端文件浏览、本机共享设置） */
-  transfer?: TransferDevMock
-}
+/** 插件 dev-shell 演示数据（通用容器；具体子域类型由各插件工程持有） */
+export type PluginDevMock = Record<string, unknown>
 
 /** 插件运行时状态
  *

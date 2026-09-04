@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BedCode 开屏动画 · 审核预览</title>
+<style>
+  /* ==================== 预览页外壳(非 App 部分) ==================== */
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    font-family: Inter, system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #0B0A09;
+    background-image: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(245,158,11,.05), transparent 60%);
+    color: #9C9482;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 100vh;
+  }
+  .preview-bar {
+    width: 100%; max-width: 760px;
+    padding: 26px 20px 14px;
+    display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+  }
+  .preview-bar h1 { font-size: 15px; font-weight: 600; color: #ECE8DC; letter-spacing: .04em; }
+  .preview-bar p { font-size: 12px; margin-top: 5px; color: #6B6455; }
+  .controls { display: flex; gap: 8px; }
+  .controls button {
+    font: 12px/1 Inter, system-ui, sans-serif; letter-spacing: .03em;
+    color: #9C9482; background: #17140F;
+    border: 1px solid #2A261E; border-radius: 8px;
+    padding: 9px 14px; cursor: pointer; transition: color .15s, border-color .15s, background .15s;
+  }
+  .controls button:hover { color: #ECE8DC; border-color: #4A4436; }
+  .controls button.on { color: #F59E0B; border-color: rgba(245,158,11,.4); background: rgba(245,158,11,.07); }
+
+  /* ==================== 手机机身 ==================== */
+  .stage { flex: 1; display: flex; align-items: flex-start; justify-content: center; padding: 10px 20px 40px; width: 100%; }
+  .phone {
+    height: min(812px, calc(100vh - 150px));
+    min-height: 620px;
+    aspect-ratio: 380 / 800;
+    background: #14110D;
+    border: 1px solid #2E2A22;
+    border-radius: 52px;
+    padding: 9px;
+    box-shadow: 0 40px 90px -30px rgba(0,0,0,.85), 0 0 0 1px rgba(236,232,220,.03) inset;
+  }
+  .screen {
+    position: relative; width: 100%; height: 100%;
+    border-radius: 44px; overflow: hidden;
+    container-type: size;
+    /* 深色(默认):墨纸暖黑,与 App 同源 */
+    --bg-hi: #1E1A13; --bg-lo: #0F0D0A; --bg-end: #0B0A08;
+    --ink: #ECE8DC; --ink-2: #9C9482; --ink-3: #6B6455;
+    --line: rgba(236,232,220,.12); --line-strong: rgba(236,232,220,.22);
+    --ok: #22C55E; --amber: #F59E0B; --amber-soft: rgba(245,158,11,.13);
+    --blk: rgba(236,232,220,.13);
+    background: linear-gradient(150deg, var(--bg-hi) 0%, var(--bg-lo) 62%, var(--bg-end) 100%);
+  }
+  .screen.light {
+    --bg-hi: #FAF9F6; --bg-lo: #F1EFE9; --bg-end: #E9E6DF;
+    --ink: #1D1A14; --ink-2: #6B6455; --ink-3: #A29A8A;
+    --line: rgba(29,26,20,.1); --line-strong: rgba(29,26,20,.2);
+    --ok: #15803D; --amber: #B45309; --amber-soft: rgba(180,83,9,.1);
+    --blk: rgba(29,26,20,.1);
+  }
+  .punch {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    width: 92px; height: 26px; border-radius: 999px; background: #000; z-index: 40;
+  }
+  .statusbar {
+    position: absolute; top: 0; left: 0; right: 0; height: 46px; z-index: 35;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 28px 0;
+    font-size: 12.5px; font-weight: 600; color: var(--ink);
+  }
+  .statusbar svg { display: block; }
+
+  /* ==================== 开屏主体 ==================== */
+  .splash {
+    position: absolute; inset: 0; z-index: 10;
+    display: flex; flex-direction: column;
+    padding: 64px 28px 36px;
+    background: inherit;
+  }
+  .splash.exiting { animation: splashExit .5s ease-in forwards; }
+  @keyframes splashExit {
+    to { opacity: 0; transform: scale(1.045); }
+  }
+
+  /* 氛围层:琥珀辉光 + 扫描线 */
+  .glow {
+    position: absolute; left: 50%; top: 20cqh;
+    width: 250px; height: 250px; transform: translate(-50%, -50%);
+    background: radial-gradient(circle, var(--amber-soft) 0%, transparent 58%);
+    animation: breathe 4.6s ease-in-out infinite alternate;
+    pointer-events: none;
+  }
+  @keyframes breathe { from { opacity: .45; } to { opacity: .8; } }
+  .scanlines {
+    position: absolute; inset: 0; z-index: 30; pointer-events: none; opacity: .5;
+    background: repeating-linear-gradient(0deg, var(--line) 0 1px, transparent 1px 3px);
+    opacity: .18;
+  }
+  .screen.light .scanlines { opacity: .07; }
+
+  /* 品牌区 */
+  .brand { margin-top: 12cqh; text-align: center; position: relative; }
+  .logo { width: 84px; height: 84px; color: var(--ink); display: inline-block; }
+  .logo-caret { stroke-dasharray: 200; stroke-dashoffset: 200; }
+  .logo.in .logo-caret { animation: draw .6s .1s cubic-bezier(.5,0,.2,1) forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .logo-cursor { opacity: 0; }
+  .logo.in .logo-cursor { animation: cursorIn .3s .55s both, blink 1.1s 1.15s infinite; }
+  @keyframes cursorIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+  .brand-inner { display: inline-block; }
+  .brand-inner.hop { animation: hop .32s cubic-bezier(.34,1.56,.64,1); }
+  @keyframes hop { 0% { transform: translateX(0); } 40% { transform: translateX(4px); } 100% { transform: translateX(0); } }
+
+  .wordmark {
+    margin-top: 18px;
+    font-size: 15px; font-weight: 600; color: var(--ink);
+    letter-spacing: .42em; text-indent: .42em;
+  }
+  .tagline {
+    margin-top: 9px;
+    font-size: 11px; color: var(--ink-3); letter-spacing: .22em; text-indent: .22em;
+  }
+
+  /* 通用入场 */
+  .reveal { opacity: 0; transform: translateY(12px); transition: opacity .5s cubic-bezier(.22,1,.36,1), transform .5s cubic-bezier(.22,1,.36,1); }
+  .reveal.in { opacity: 1; transform: none; }
+
+  /* 开机日志 */
+  .bootlog {
+    margin-top: auto;
+    font-family: ui-monospace, "Cascadia Code", Consolas, Monaco, monospace;
+    font-size: 12.5px; line-height: 2.1; color: var(--ink-2);
+    max-width: 96%;
+  }
+  .line { display: flex; align-items: baseline; gap: 9px; white-space: nowrap; }
+  .prompt { color: var(--amber); font-weight: 700; }
+  .caret-inline { display: inline-block; width: 7px; height: 14px; background: var(--amber); vertical-align: -2px; animation: blink 1.06s infinite; }
+  .caret-inline.gone { display: none; }
+  .tri { color: var(--ink-3); }
+  .task { color: var(--ink-2); }
+  .dots { flex: 1; min-width: 14px; border-bottom: 1px dotted var(--line-strong); opacity: .55; transform: translateY(-4px); }
+  .ok {
+    color: var(--ok); font-weight: 700; font-size: 13px;
+    opacity: 0; transform: scale(.4);
+  }
+  .ok.show { opacity: 1; transform: scale(1); animation: okPop .32s cubic-bezier(.34,1.56,.64,1) both; }
+  @keyframes okPop {
+    0% { opacity: 0; transform: scale(.4); }
+    62% { opacity: 1; transform: scale(1.22); }
+    100% { opacity: 1; transform: scale(1); }
+  }
+  .ok-msg { color: var(--ok); }
+  .block-caret { display: inline-block; width: 9px; height: 15px; background: var(--amber); vertical-align: -2px; animation: blink 1.06s infinite; }
+
+  /* 终端方块进度条 */
+  .progress { margin-top: 20px; display: flex; align-items: center; gap: 3px; }
+  .block { width: 14px; height: 7px; border-radius: 1.5px; background: var(--blk); transition: background .18s; }
+  .block.on { background: var(--ink); }
+  .block.head { background: var(--amber); animation: headPulse .9s ease-in-out infinite; }
+  @keyframes headPulse {
+    0%, 100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+    50% { box-shadow: 0 0 9px 1px var(--amber-soft); opacity: .72; }
+  }
+  .pct { margin-left: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 11px; color: var(--ink-3); min-width: 34px; }
+
+  /* 底栏 */
+  .footer {
+    margin-top: 16px;
+    display: flex; justify-content: space-between; align-items: baseline;
+    font-size: 10px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .home-indicator {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    width: 118px; height: 4px; border-radius: 999px;
+    background: var(--ink); opacity: .28; z-index: 36;
+  }
+
+  /* 交接提示(循环关闭时,退出动画后出现) */
+  .handoff {
+    position: absolute; inset: 0; z-index: 20;
+    display: grid; place-items: center;
+    background: var(--bg-lo);
+    opacity: 0; pointer-events: none; transition: opacity .45s .15s;
+    font-family: ui-monospace, Consolas, monospace; font-size: 13px; color: var(--ink-3);
+  }
+  .handoff.show { opacity: 1; }
+
+  /* 预览说明 */
+  .notes { max-width: 640px; padding: 0 20px 42px; font-size: 12px; line-height: 1.9; color: #6B6455; }
+  .notes b { color: #9C9482; font-weight: 600; }
+
+  /* 截图自检:静态 pose 下禁用全部动效,保证确定性渲染 */
+  .no-anim *, .no-anim *::before, .no-anim *::after {
+    animation: none !important; transition: none !important;
+  }
+
+  /* 无障碍:跟随系统减少动态 */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+      transition-duration: .01ms !important;
+    }
+  }
+
+  /* 手机上直接全屏预览(去掉机身) */
+  @media (max-width: 480px) {
+    .preview-bar, .notes { display: none; }
+    .stage { padding: 0; }
+    .phone { height: 100dvh; aspect-ratio: auto; width: 100vw; border: none; border-radius: 0; padding: 0; box-shadow: none; }
+    .screen { border-radius: 0; }
+  }
+</style>
+</head>
+<body>
+
+<header class="preview-bar">
+  <div>
+    <h1>BedCode 开屏动画 · 审核预览</h1>
+    <p>方案:终端开机自检(Terminal Boot) · 实机动画约 3.2s 后淡出交接进入 App</p>
+  </div>
+  <div class="controls">
+    <button id="btnReplay" type="button">▶ 重播</button>
+    <button id="btnTheme" type="button">切换浅色</button>
+    <button id="btnLoop" type="button" class="on">循环:开</button>
+  </div>
+</header>
+
+<main class="stage">
+  <div class="phone">
+    <div class="screen" id="screen">
+      <div class="punch" aria-hidden="true"></div>
+
+      <div class="statusbar" aria-hidden="true">
+        <span>9:41</span>
+        <svg width="54" height="12" viewBox="0 0 54 12" fill="none">
+          <!-- 信号格 -->
+          <rect x="0" y="7" width="3" height="5" rx="1" fill="currentColor"/>
+          <rect x="5" y="5" width="3" height="7" rx="1" fill="currentColor"/>
+          <rect x="10" y="3" width="3" height="9" rx="1" fill="currentColor"/>
+          <rect x="15" y="1" width="3" height="11" rx="1" fill="currentColor" opacity=".35"/>
+          <!-- wifi -->
+          <path d="M28 4.5a7.5 7.5 0 0 1 9 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M30 7.2a4.4 4.4 0 0 1 5 0" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          <circle cx="32.5" cy="10" r="1.4" fill="currentColor"/>
+          <!-- 电池 -->
+          <rect x="42" y="2" width="10" height="8" rx="2.4" stroke="currentColor" stroke-width="1" opacity=".5"/>
+          <rect x="43.4" y="3.4" width="5.4" height="5.2" rx="1.2" fill="currentColor"/>
+          <path d="M53 5v2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" opacity=".5"/>
+        </svg>
+      </div>
+
+      <div class="splash" id="splash">
+        <div class="glow" aria-hidden="true"></div>
+        <div class="scanlines" aria-hidden="true"></div>
+
+        <div class="brand">
+          <span class="brand-inner" id="brandInner">
+            <svg class="logo reveal" id="logo" viewBox="0 0 96 96" aria-hidden="true">
+              <polyline class="logo-caret" points="20,22 52,52 20,82" fill="none" stroke="currentColor"
+                        stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>
+              <rect class="logo-cursor" x="62" y="68" width="22" height="10" rx="5" fill="currentColor"/>
+            </svg>
+          </span>
+          <div class="wordmark reveal" id="wordmark">BEDCODE</div>
+          <div class="tagline reveal" id="tagline">局域网远程终端</div>
+        </div>
+
+        <div class="bootlog" id="bootlog" aria-hidden="true">
+          <div class="line reveal" id="typedLine">
+            <span class="prompt">$</span><span id="typedText"></span><span class="caret-inline" id="typedCaret"></span>
+          </div>
+          <div class="handoff-gap" id="taskHost"></div>
+          <div class="line reveal" id="doneLine">
+            <span class="prompt">$</span><span class="ok-msg">就绪 · 可以开工了</span><span class="block-caret"></span>
+          </div>
+        </div>
+
+        <div class="progress" id="progress" aria-hidden="true">
+          <span class="pct" id="pct">0%</span>
+        </div>
+
+        <div class="footer" aria-hidden="true">
+          <span>BedCode v2.0.10</span>
+          <span>LAN · WS</span>
+        </div>
+      </div>
+
+      <div class="handoff" id="handoff">→ 进入主界面</div>
+      <div class="home-indicator" aria-hidden="true"></div>
+    </div>
+  </div>
+</main>
+
+<footer class="notes">
+  <b>设计要点:</b>主视觉复用 App 图标的「终端符号 ›_」,光标即加载指示;
+  开机日志呼应墨纸主题(研墨)与局域网喊话,每个任务完成时 logo 轻跳一次 + ✓ 弹出;
+  方块进度条 + 琥珀色脉冲头块;全程只用 transform/opacity(GPU 合成,不卡 WebView);
+  支持 prefers-reduced-motion(直接呈现就绪终态);文案集成时会改走 i18n(zh-CN / en)。
+</footer>
+
+<script>
+(function () {
+  'use strict';
+
+  var $ = function (s) { return document.querySelector(s); };
+  var screen   = $('#screen');
+  var splash   = $('#splash');
+  var brandInner = $('#brandInner');
+  var logo     = $('#logo');
+  var wordmark = $('#wordmark');
+  var tagline  = $('#tagline');
+  var bootlog  = $('#bootlog');
+  var typedLine  = $('#typedLine');
+  var typedText  = $('#typedText');
+  var typedCaret = $('#typedCaret');
+  var taskHost = $('#taskHost');
+  var doneLine = $('#doneLine');
+  var progress = $('#progress');
+  var pct      = $('#pct');
+  var handoff  = $('#handoff');
+
+  var REDUCED = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var LOOP_DEFAULT = location.search.indexOf('loop=0') === -1;
+  var POSE = (location.search.match(/pose=(mid|final|exit)/) || [])[1] || '';
+  if (POSE) document.documentElement.classList.add('no-anim');
+  if (location.search.indexOf('light=1') !== -1) screen.classList.add('light');
+
+  var TYPED = 'bedcode --boot';
+  var TASKS = [
+    '唤醒终端引擎',
+    '研墨 · 载入墨纸主题',
+    '向局域网喊话 · 搜索主机',
+    '校准输入法与快捷键'
+  ];
+  var BLOCKS = 14;
+
+  // ---- 静态结构:任务行 + 进度块 ----
+  var taskLines = [];
+  TASKS.forEach(function (t) {
+    var line = document.createElement('div');
+    line.className = 'line reveal';
+    line.innerHTML = '<span class="tri">▸</span><span class="task"></span><span class="dots"></span><span class="ok">✓</span>';
+    line.querySelector('.task').textContent = t;
+    taskHost.appendChild(line);
+    taskLines.push(line);
+  });
+  var blocks = [];
+  for (var i = 0; i < BLOCKS; i++) {
+    var b = document.createElement('span');
+    b.className = 'block';
+    progress.insertBefore(b, pct);
+    blocks.push(b);
+  }
+
+  // ---- 时间线引擎 ----
+  var timers = [];
+  var loopOn = LOOP_DEFAULT;
+  function at(t, fn) { timers.push(setTimeout(fn, t)); }
+
+  function reset() {
+    timers.forEach(clearTimeout);
+    timers = [];
+    splash.classList.remove('exiting');
+    handoff.classList.remove('show');
+    [logo, wordmark, tagline, typedLine, doneLine].forEach(function (el) { el.classList.remove('in'); });
+    taskLines.forEach(function (el) { el.classList.remove('in'); el.querySelector('.ok').classList.remove('show'); });
+    typedText.textContent = '';
+    typedCaret.classList.remove('gone');
+    blocks.forEach(function (b) { b.classList.remove('on', 'head'); });
+    pct.textContent = '0%';
+  }
+
+  function lightBlock(i) {
+    if (i > 0) blocks[i - 1].classList.remove('head');
+    blocks[i].classList.add('on');
+    if (i < BLOCKS - 1) blocks[i].classList.add('head');
+    else progress.classList.add('full');
+    pct.textContent = Math.round(((i + 1) / BLOCKS) * 100) + '%';
+  }
+
+  function hopBrand() {
+    if (REDUCED) return;
+    brandInner.classList.remove('hop');
+    void brandInner.offsetWidth;
+    brandInner.classList.add('hop');
+  }
+
+  function play() {
+    reset();
+
+    at(80,   function () { logo.classList.add('in'); });
+    at(360,  function () { wordmark.classList.add('in'); });
+    at(520,  function () { tagline.classList.add('in'); });
+
+    // 打字行
+    at(720, function () { typedLine.classList.add('in'); });
+    var t0 = 900, CH = 46;
+    TYPED.split('').forEach(function (ch, i) {
+      at(t0 + i * CH, function () { typedText.textContent += ch; });
+    });
+    var typeEnd = t0 + TYPED.length * CH + 100;
+
+    // 任务行:逐条入场,✓ 稍后弹出,logo 随之轻跳
+    TASKS.forEach(function (_, i) {
+      var ts = typeEnd + 140 + i * 380;
+      at(ts, function () { taskLines[i].classList.add('in'); });
+      at(ts + 260, function () {
+        taskLines[i].querySelector('.ok').classList.add('show');
+        hopBrand();
+      });
+    });
+
+    // 方块进度:与任务行同步推进
+    var pStart = typeEnd + 140;
+    for (var b = 0; b < BLOCKS; b++) {
+      (function (idx) {
+        at(pStart + idx * 108, function () { lightBlock(idx); });
+      })(b);
+    }
+
+    // 收尾:打字光标熄灭,就绪行 + 常驻方块光标亮起
+    var end = typeEnd + 140 + TASKS.length * 380 + 120;
+    at(end, function () {
+      typedCaret.classList.add('gone');
+      doneLine.classList.add('in');
+    });
+
+    // 交接:整屏淡出(scale 微放大,像镜头推过去)
+    at(end + 1250, function () { splash.classList.add('exiting'); });
+    at(end + 1250 + 540, function () {
+      if (loopOn) at(700, play);
+      else handoff.classList.add('show');
+    });
+  }
+
+  // reduced-motion:不做动画,直接呈现就绪终态
+  function renderFinal() {
+    reset();
+    [logo, wordmark, tagline, typedLine].forEach(function (el) { el.classList.add('in'); });
+    typedText.textContent = TYPED;
+    typedCaret.classList.add('gone');
+    taskLines.forEach(function (el) {
+      el.classList.add('in');
+      el.querySelector('.ok').classList.add('show');
+    });
+    doneLine.classList.add('in');
+    for (var i = 0; i < BLOCKS; i++) lightBlock(i);
+    // 静态方块光标(禁用闪烁)
+    var bc = doneLine.querySelector('.block-caret');
+    if (bc) bc.style.animation = 'none';
+    // no-anim 截图 pose 下,描边/淡入动画被禁用,直接内联置终态
+    var caretPath = logo.querySelector('.logo-caret');
+    var cursorDot = logo.querySelector('.logo-cursor');
+    if (caretPath) caretPath.style.strokeDashoffset = '0';
+    if (cursorDot) cursorDot.style.opacity = '1';
+  }
+
+  // 截图自检 pose:定格启动中段(3 个任务完成,进度 9/14)
+  function poseMid() {
+    [logo, wordmark, tagline, typedLine].forEach(function (el) { el.classList.add('in'); });
+    typedText.textContent = TYPED;
+    var caretPath = logo.querySelector('.logo-caret');
+    var cursorDot = logo.querySelector('.logo-cursor');
+    if (caretPath) caretPath.style.strokeDashoffset = '0';
+    if (cursorDot) cursorDot.style.opacity = '1';
+    taskLines.forEach(function (el, i) {
+      if (i > 2) return;
+      el.classList.add('in');
+      el.querySelector('.ok').classList.add('show');
+    });
+    for (var i = 0; i < 9; i++) lightBlock(i);
+  }
+
+  // ---- 预览控件 ----
+  $('#btnReplay').addEventListener('click', function () {
+    if (REDUCED) renderFinal(); else play();
+  });
+  var btnTheme = $('#btnTheme');
+  btnTheme.addEventListener('click', function () {
+    var light = screen.classList.toggle('light');
+    btnTheme.textContent = light ? '切换深色' : '切换浅色';
+  });
+  var btnLoop = $('#btnLoop');
+  btnLoop.addEventListener('click', function () {
+    loopOn = !loopOn;
+    btnLoop.textContent = loopOn ? '循环:开' : '循环:关';
+    btnLoop.classList.toggle('on', loopOn);
+  });
+
+  if (POSE === 'mid') poseMid();
+  else if (POSE === 'final') renderFinal();
+  else if (POSE === 'exit') { renderFinal(); splash.style.opacity = '0'; handoff.classList.add('show'); }
+  else REDUCED ? renderFinal() : play();
+})();
+</script>
+</body>
+</html>

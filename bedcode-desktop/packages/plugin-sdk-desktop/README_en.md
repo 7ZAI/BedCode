@@ -201,10 +201,11 @@ const saved = await context.storage.get<typeof config.properties>(PLUGIN_CONFIG_
 
 ## Event Constants
 
-Host event names are exported as constants (kept in sync with the Rust SDK — single source of truth):
+Event topics follow the `{domain}:{action}` convention; each domain owns its event constants in its own plugin package (single source of truth). The SDK ships no business-specific event names. For example, the Auto Task plugin's event constants live in `plugins/auto-task/src/events.ts` and are used inside that plugin:
 
 ```ts
-import { EVENT_TASK_STATUS_CHANGED } from '@binblink/plugin-sdk-desktop'
+// Inside a plugin, import its domain event constants
+import { EVENT_TASK_STATUS_CHANGED } from './events'
 
 context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
   // Task status change (e.g. Agent CLI idle → in_progress)

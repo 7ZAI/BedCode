@@ -315,9 +315,9 @@ export interface I18nAPI {
   /** 获取宿主 i18n 实例（vue-i18n I18n 对象） */
   getI18n(): any
   /** 注册插件翻译到宿主 i18n（自动添加插件 ID 前缀隔离） */
-  registerMessages(locale: string, messages: Record<string, any>): void
+  registerMessages(locale: string, messages: Record<string, unknown>): void
   /** 翻译快捷方法（自动添加插件 ID 前缀） */
-  t(key: string, params?: Record<string, any>): string
+  t(key: string, params?: Record<string, unknown>): string
 }
 
 /** 插件上下文 — 插件访问宿主能力的唯一通道 */

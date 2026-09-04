@@ -18,6 +18,7 @@ import type {
   NotificationAPI,
   OcrApi,
   OcrEngineStatus,
+  OcrLine,
   PluginContext,
   StatusAPI,
   UIRegistry,
@@ -185,17 +186,17 @@ export function createMockContext(pluginId: string): PluginContext {
 
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${pluginId}.${key}`] = value
       }
       const existing = hostI18n.global.getLocaleMessage(locale)
       hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return key
       return hostI18n.global.t(`${pluginId}.${key}`, params)
@@ -306,7 +307,7 @@ export function createMockContext(pluginId: string): PluginContext {
     async recognize(_input) {
       // 识别结果种子由插件 devMock.ocrLinesSeed 持有（dev-shell 不含业务示例数据）；
       // 空数组/缺省均可演示「未识别到文字」空态
-      const seed = getDevMock(pluginId)?.ocrLinesSeed
+      const seed = getDevMock(pluginId)?.ocrLinesSeed as OcrLine[] | undefined
       pushLog('info', pluginId, `ocr.recognize (mock) 返回 ${seed?.length ?? 0} 行`)
       return {
         engine: 'offline',
@@ -343,6 +344,16 @@ export function createMockContext(pluginId: string): PluginContext {
     },
   }
 
+  // ==================== SystemAPI（dev-shell 浏览器环境 no-op，与宿主接口对齐） ====================
+  const system = {
+    async openFile(_path: string, _displayName?: string): Promise<void> {
+      pushLog('info', pluginId, 'system.openFile (mock) 浏览器环境不支持')
+    },
+    async revealInDir(_path: string): Promise<void> {
+      pushLog('info', pluginId, 'system.revealInDir (mock) 浏览器环境不支持')
+    },
+  }
+
   return {
     id: pluginId,
     commands,
@@ -357,6 +368,7 @@ export function createMockContext(pluginId: string): PluginContext {
     logger,
     dialogs,
     notifications,
+    system,
     status,
     _disposables: disposables,
   }

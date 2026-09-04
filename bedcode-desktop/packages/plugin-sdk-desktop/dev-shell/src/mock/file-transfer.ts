@@ -35,6 +35,16 @@ interface TrustedSeed {
   addedAt: string
 }
 
+/** 对等域种子结构（插件 devMock.peer 的通用形状，dev-shell 只按需取字段） */
+interface MockPeerSeed {
+  connectedNodeIds?: string[]
+  activeNodeId?: string
+  dialLatencyMs?: number
+  consent?: Array<{ requestId: string; nodeId: string; fingerprintShort: string; deviceName: string | null }>
+  trusted?: unknown
+  deviceSeeds?: DeviceSeedEntry[]
+}
+
 let deviceSeeds: DeviceSeedEntry[] = []
 const connectedNodes = new Set<string>()
 let activePeerId = ''
@@ -48,7 +58,22 @@ let consentRequests: Array<{
 let trustedPeers: TrustedSeed[] = []
 
 /** 任务快照（引擎 PeerTransferDto camelCase wire 形状） */
-type MockTask = Record<string, any>
+interface MockTask {
+  batchId: string
+  nodeId?: string
+  peerName?: string
+  direction: 'send' | 'receive'
+  status: string
+  files: Array<{ path: string; size: number }>
+  totalBytes: number
+  transferredBytes: number
+  rateBps: number
+  createdAtMs: number
+  updatedAtMs: number
+  detail?: string | null
+  rejectReason?: string | null
+  retryMeta?: Record<string, unknown>
+}
 let tasks: MockTask[] = []
 
 // 共享注册表 + 设置（get-settings 返回真实 Rust 命令同构 wire）
@@ -80,12 +105,7 @@ function primaryName(): string {
 /** 注入时初始化种子派生状态（loader 静态 import 早于 registerDevMock，注入时才读） */
 function initPeerState(pluginId: string): void {
   const seed = getDevMock(pluginId)
-  const peerSeed = seed?.peer as
-    | (NonNullable<ReturnType<typeof getDevMock>>['peer'] & {
-        trusted?: unknown
-        deviceSeeds?: DeviceSeedEntry[]
-      })
-    | undefined
+  const peerSeed = seed?.peer as MockPeerSeed | undefined
   deviceSeeds = peerSeed?.deviceSeeds ?? []
   connectedNodes.clear()
   for (const id of peerSeed?.connectedNodeIds ?? []) connectedNodes.add(id)
@@ -96,7 +116,11 @@ function initPeerState(pluginId: string): void {
   trustedPeers = Array.isArray(raw) ? raw.map((p) => ({ ...(p as TrustedSeed) })) : []
 
   const transfer = seed?.transfer as any
-  tasks = JSON.parse(JSON.stringify(transfer?.tasks ?? []))
+  try {
+    tasks = JSON.parse(JSON.stringify(transfer?.tasks ?? []))
+  } catch {
+    tasks = []
+  }
   sharedRoots = transfer?.settings ? transfer.settings.roots.map((r: any) => ({ ...r })) : []
   downloadDir = transfer?.settings?.downloadDir ?? ''
   remoteRoots = transfer?.remoteFs ? transfer.remoteFs.roots.map((r: any) => ({ ...r })) : []

@@ -15,7 +15,7 @@ import type {
   PluginContext,
   UIRegistry,
 } from '../../src/types'
-import { emitDevEvent, onDevEvent, sendInputToSession, sendOutput, sessions } from './mock/session'
+import { emitDevEvent, onDevEvent, sendInputToSession, sessions } from './mock/session'
 import {
   pushLog,
   registerEndpoint,
@@ -180,20 +180,27 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     getI18n() {
       return getSharedModule('i18n')
     },
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = getSharedModule('i18n')
       if (!hostI18n) return
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${pluginId}.${key}`] = value
       }
       const existing = hostI18n.global.getLocaleMessage(locale)
       hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = getSharedModule('i18n')
       if (!hostI18n) return key
       return hostI18n.global.t(`${pluginId}.${key}`, params)
+    },
+  }
+
+  // ==================== SystemAPI（dev-shell 浏览器环境 no-op，与宿主接口对齐） ====================
+  const system = {
+    async revealInDir(_path: string): Promise<void> {
+      pushLog('info', pluginId, 'system.revealInDir (mock) 浏览器环境不支持')
     },
   }
 
@@ -208,6 +215,7 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     storage,
     http,
     i18n,
+    system,
     _disposables: disposables,
   }
 }

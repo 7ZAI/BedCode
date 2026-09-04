@@ -5,7 +5,10 @@
  * dev-shell 不含业务示例数据，缺省/空数组均演示「未识别到文字」空态。
  * 真实宿主忽略此导出（对 activate 无影响）。
  */
-import type { PluginDevMock, OcrLinesSeed } from '@binblink/plugin-sdk-mobile'
+import type { PluginDevMock, OcrLine } from '@binblink/plugin-sdk-mobile'
+
+/** OCR 识别结果种子（dev-shell ocr.recognize mock 返回；插件自有类型，SDK 不收录） */
+export type OcrLinesSeed = OcrLine[]
 
 /** 示例识别结果（中英混排 + 低置信度行演示弱化） */
 export const defaultOcrLinesSeed: OcrLinesSeed = [

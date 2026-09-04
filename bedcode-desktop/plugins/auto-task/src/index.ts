@@ -19,6 +19,7 @@ import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
 import { platform } from '@tauri-apps/plugin-os'
 import { autoTaskModalVisible } from './state'
 import { messages } from './i18n'
+import { EVENT_SESSION_MODE_CHANGED, EVENT_TASK_STATUS_CHANGED } from './events'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 
 // ==================== Datepicker 主题定制 ====================
@@ -234,7 +235,7 @@ export async function activate(context: PluginContext): Promise<void> {
   mountModal(context)
 
   // 监听任务状态变更 → toast 提示
-  context.events.on('task:status-changed', (data: any) => {
+  context.events.on(EVENT_TASK_STATUS_CHANGED, (data: any) => {
     const { taskStatus, taskReason } = data
     const statusMessages: Record<string, string> = {
       idle: '空闲',
@@ -248,7 +249,7 @@ export async function activate(context: PluginContext): Promise<void> {
   })
 
   // 监听会话模式变更
-  context.events.on('session:mode-changed', (data: any) => {
+  context.events.on(EVENT_SESSION_MODE_CHANGED, (data: any) => {
     const { autoApprove } = data
     console.log(`[Auto Task] 模式变更: ${autoApprove ? '自动授权' : '手动模式'}`)
   })

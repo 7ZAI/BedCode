@@ -11,26 +11,9 @@
  *   *Bytes/*Ms），覆盖传输中/终态/interrupted 演示态；
  * - 共享设置/远端文件树：沿用既有契约形状。
  */
-import type { PluginDevMock } from '@binblink/plugin-sdk-desktop'
+import type { FileTransferDevMock, PeerDevMock } from './devMockTypes'
 
-/**
- * 可信对端演示种子（ticket 05）：SDK PluginDevMock 协议的本地扩展字段
- *
- * dev-shell mock/file-transfer.ts 消费：list-trusted 返回副本、
- * revoke-trusted 从数组摘除（可演示撤销全流程）。真实宿主忽略。
- */
-export interface TrustedDevSeed {
-  nodeId: string
-  displayName: string | null
-  fingerprintShort: string
-  /** RFC3339 加入时间 */
-  addedAt: string
-}
-
-/** 扩展了 trusted 字段的 peer 种子 + 传输域种子（多余字段对 SDK 协议向后兼容） */
-type DevMockWithExtensions = PluginDevMock & {
-  peer?: NonNullable<PluginDevMock['peer']> & { trusted?: TrustedDevSeed[] }
-}
+export type { TrustedDevSeed } from './devMockTypes'
 
 export const NODE_XIAOMI = 'f3a91c07e5d24b18a7c60f12d94b8e55'
 export const NODE_PIXEL = '8b02d641c9ae4f77b3e15a90dd276c84'
@@ -56,7 +39,7 @@ function deviceSeed(nodeId: string, name: string, ip: string, port: number, capa
   }
 }
 
-const devMock: DevMockWithExtensions = {
+const devMock: FileTransferDevMock = {
   peer: {
     // mdns:found 载荷形状种子（dev-shell 逐台延迟推送）；dialBehavior 按 nodeId 索引
     deviceSeeds: [
@@ -65,7 +48,7 @@ const devMock: DevMockWithExtensions = {
       { ...deviceSeed('51c8aa93e07b4d2f96d3b1c45f8ea720', '客厅电视 BedBox', '192.168.1.120', 47613), dialBehavior: 'denied' as const },
       { ...deviceSeed('9d64b2f08c1e4735ae02d7b6cc4910e3', 'Old Laptop', '192.168.1.77', 47613), dialBehavior: 'unreachable' as const },
       { ...deviceSeed('c47d19f2ab354e6180d92b7ce30a5f16', 'HomeNAS', '192.168.1.2', 47613, false) },
-    ] as unknown as NonNullable<PluginDevMock['peer']>['devices'],
+    ] as PeerDevMock['deviceSeeds'],
     connectedNodeIds: [NODE_XIAOMI],
     activeNodeId: NODE_XIAOMI,
     dialLatencyMs: 800,
@@ -175,7 +158,7 @@ const devMock: DevMockWithExtensions = {
         createdAtMs: Date.now() - 900_000,
         updatedAtMs: Date.now() - 850_000,
       },
-    ] as unknown as NonNullable<PluginDevMock['transfer']>['tasks'],
+    ] as unknown[],
     // 远端共享根（对端设备侧演示目录；dirId + 根内相对路径寻址，契约见 useRemoteFs）
     remoteFs: {
       roots: [

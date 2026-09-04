@@ -1,0 +1,16 @@
+{
+  "format": { "enabled": false },
+  "autofix": { "enabled": false },
+  "tests": { "enabled": false },
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/gen/**",
+    "**/.scratch/**",
+    "**/.pi-lens-cache/**",
+    "bedcode-mobile/src-tauri/gen/**",
+    "bedcode-desktop/src-tauri/target/**",
+    "bedcode-mobile/src-tauri/target/**"
+  ]
+}

@@ -24,6 +24,7 @@ export type {
   InputExtensionDescriptor,
   TerminalToolbarItemDescriptor,
   TitleBarItemDescriptor,
+  PageToolbarItemDescriptor,
   FileHandlerDescriptor,
   RequestHandler,
   CommandRegistry,
@@ -38,7 +39,6 @@ export type {
   PluginContext,
   PluginModule,
   PluginDevMock,
-  PeerDevMock,
   PluginState,
   PluginInfo,
 } from './types'
@@ -56,10 +56,3 @@ export {
 
 // 配置约定导出
 export { PLUGIN_CONFIG_STORAGE_KEY, defineConfiguration } from './config'
-
-// 事件名常量导出（与 Rust SDK constants.rs 同步）
-export {
-  EVENT_TASK_STATUS_CHANGED,
-  EVENT_SESSION_MODE_CHANGED,
-  EVENT_TASK_QUEUE_CHANGED,
-} from './constants'

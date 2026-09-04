@@ -201,10 +201,13 @@ const saved = await context.storage.get<typeof config.properties>(PLUGIN_CONFIG_
 
 ## 事件常量
 
-宿主事件名以常量形式导出（与 Rust SDK 同步，单一事实来源）：
+事件主题遵循 `{domain}:{action}` 命名规范；各领域事件常量由对应插件工程持有（单一事实来源），
+SDK 不内置具体业务事件名。例如 Auto Task 插件的事件常量位于
+`plugins/auto-task/src/events.ts`，插件内部自用：
 
 ```ts
-import { EVENT_TASK_STATUS_CHANGED } from '@binblink/plugin-sdk-desktop'
+// 插件内 import 本领域事件常量
+import { EVENT_TASK_STATUS_CHANGED } from './events'
 
 context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
   // 任务状态变更（如 Agent CLI idle → in_progress）

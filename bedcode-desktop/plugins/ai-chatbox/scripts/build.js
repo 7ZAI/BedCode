@@ -101,7 +101,7 @@ const rustOnly = args.includes('--rust-only')
 if (watchMode) {
   // 前端 watch 构建：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）。
   // vite 子进程 + fs.watch 保持事件循环常驻，Ctrl+C 退出
-  startPluginWatch({
+    startPluginWatch({
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
     extraFiles: ['icon.svg'],

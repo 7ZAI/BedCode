@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>BedCode Splash — Replica</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* ==================== 品牌常量（对齐 SplashLoading.vue） ==================== */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .wb-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  :root {
+    --ui-scale: 1;
+  }
+
+  /* ==================== Splash 主容器（对齐 .splash-root） ==================== */
+  .splash-root {
+    --splash-bg-from: #2e2a22;
+    --splash-bg-to: #0a0907;
+    --splash-text: #ece8dc;
+    --splash-text-dim: rgba(236, 232, 220, 0.55);
+    --splash-text-faint: rgba(236, 232, 220, 0.35);
+    --splash-border: rgba(236, 232, 220, 0.09);
+    --splash-track: rgba(236, 232, 220, 0.12);
+
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    background:
+      radial-gradient(ellipse 62% 48% at 50% 42%, rgba(236, 232, 220, 0.05), transparent 70%),
+      linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+    color: var(--splash-text);
+  }
+
+  /* ==================== 品牌 Logo ==================== */
+  .splash-logo {
+    display: flex;
+    height: 72px;
+    width: 72px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 1rem; /* rounded-2xl */
+    background:
+      linear-gradient(145deg, rgba(236, 232, 220, 0.06), transparent 55%),
+      linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+    border: 1px solid var(--splash-border);
+    box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4);
+  }
+  .splash-logo svg {
+    height: 2.75rem; /* h-11 */
+    width: 2.75rem;  /* w-11 */
+    color: var(--splash-text);
+  }
+
+  /* ==================== 品牌名 + 副标语 ==================== */
+  .splash-brand {
+    margin-bottom: 0.375rem; /* mb-1.5 */
+    font-size: 1.25rem;         /* text-xl */
+    font-weight: 600;           /* font-semibold */
+    letter-spacing: 0.18em;
+    color: var(--splash-text);
+    line-height: 1.5;
+  }
+  .splash-tagline {
+    margin-bottom: 2.5rem;      /* mb-10 */
+    font-size: 0.75rem;         /* text-xs */
+    letter-spacing: 0.05em;     /* tracking-wider */
+    color: var(--splash-text-dim);
+    line-height: 1.5;
+  }
+
+  /* ==================== 终端启动行 ==================== */
+  .splash-terminal {
+    display: flex;
+    height: 1.25rem; /* h-5 */
+    align-items: center;
+    font-size: calc(13px * var(--ui-scale));
+    line-height: 1;
+  }
+  .splash-prompt {
+    color: var(--splash-text-faint);
+  }
+  .splash-typed {
+    display: inline-block;
+    overflow: hidden;
+    white-space: nowrap;
+    vertical-align: bottom;
+    color: var(--splash-text);
+    animation: splash-typing 0.6s steps(7, end) 0.45s both;
+  }
+  .splash-caret {
+    display: inline-block;
+    width: 0.55em;
+    height: 1.05em;
+    margin-left: 3px;
+    background: var(--splash-text);
+    animation: splash-caret-blink 1s steps(1) infinite;
+  }
+
+  /* ==================== 状态文本 ==================== */
+  .splash-status {
+    margin-top: 1rem;   /* mt-4 */
+    margin-bottom: 0;
+    font-size: 0.875rem; /* text-sm */
+    color: var(--splash-text-dim);
+    line-height: 1.5;
+  }
+
+  /* ==================== 进度条 ==================== */
+  .splash-progress-wrap {
+    margin-top: 1.5rem;   /* mt-6 */
+    height: 0.25rem;      /* h-1 */
+    width: 12rem;         /* w-48 */
+    overflow: hidden;
+    border-radius: 9999px;
+    background: var(--splash-track);
+  }
+  .splash-progress {
+    height: 100%;
+    border-radius: 9999px;
+    background: var(--splash-text);
+    opacity: 0.8;
+    transition: width 300ms ease;
+  }
+  .splash-progress-pct {
+    margin-top: 0.5rem;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--splash-text-dim);
+    line-height: 1.5;
+  }
+
+  /* ==================== 入场编排 ==================== */
+  @keyframes splash-rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .splash-rise {
+    animation: splash-rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .splash-rise-1 { animation-delay: 0.08s; }
+  .splash-rise-2 { animation-delay: 0.14s; }
+  .splash-rise-3 { animation-delay: 0.22s; }
+
+  /* Logo 容器额外 mb-7 */
+  .splash-logo-wrap { margin-bottom: 1.75rem; }
+
+  /* ==================== 打字机 + 光标 ==================== */
+  @keyframes splash-typing {
+    from { width: 0; }
+    to   { width: 7ch; }
+  }
+  @keyframes splash-caret-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+  }
+  .splash-glyph-caret {
+    animation: splash-caret-blink 1.2s steps(1) 0.9s infinite;
+  }
+
+  /* ==================== 减弱动态效果 ==================== */
+  @media (prefers-reduced-motion: reduce) {
+    .splash-rise,
+    .splash-typed {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+    }
+    .splash-caret,
+    .splash-glyph-caret {
+      animation: none !important;
+      opacity: 1;
+    }
+  }
+</style>
+</head>
+<body>
+<div class="splash-root" role="status" aria-label="Initializing">
+  <!-- Logo -->
+  <div class="splash-rise splash-logo-wrap">
+    <div class="splash-logo">
+      <svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+        <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" />
+        <path class="splash-glyph-caret" d="M 51 60 L 84 62 L 53 65 Z" />
+      </svg>
+    </div>
+  </div>
+
+  <!-- Brand + tagline -->
+  <div class="splash-rise splash-rise-1 splash-brand">BedCode</div>
+  <div class="splash-rise splash-rise-2 splash-tagline">LAN remote terminal workbench</div>
+
+  <!-- Terminal boot line -->
+  <div class="splash-rise splash-rise-3 wb-mono splash-terminal">
+    <span class="splash-prompt">$&nbsp;</span><span class="splash-typed">bedcode</span><span class="splash-caret" aria-hidden="true"></span>
+  </div>
+
+  <!-- Status -->
+  <p class="splash-rise splash-rise-3 splash-status">Initializing…</p>
+
+  <!-- Progress -->
+  <div class="splash-progress-wrap">
+    <div class="splash-progress" style="width: 42%"></div>
+  </div>
+  <p class="wb-mono splash-progress-pct">42%</p>
+</div>
+</body>
+</html>

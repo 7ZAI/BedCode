@@ -421,8 +421,8 @@ export type PluginDevMock = Record<string, unknown>
 
 /** 国际化 API */
 export interface I18nAPI {
-  registerMessages(locale: string, messages: Record<string, any>): void
-  t(key: string, params?: Record<string, any>): string
+  registerMessages(locale: string, messages: Record<string, unknown>): void
+  t(key: string, params?: Record<string, unknown>): string
 }
 
 /** 生命周期 API */

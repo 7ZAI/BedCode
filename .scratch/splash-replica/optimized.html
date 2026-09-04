@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>BedCode Splash — Optimized</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  /* ==================== 品牌常量（对齐 SplashLoading.vue） ==================== */
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #000;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  .wb-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+    font-size: calc(12.5px * var(--ui-scale));
+  }
+  :root {
+    --ui-scale: 1;
+  }
+
+  /* ==================== Splash 主容器 ==================== */
+  .splash-root {
+    --splash-bg-from: #2e2a22;
+    --splash-bg-to: #0a0907;
+    --splash-text: #ece8dc;
+    --splash-text-dim: rgba(236, 232, 220, 0.55);
+    --splash-text-faint: rgba(236, 232, 220, 0.35);
+    --splash-border: rgba(236, 232, 220, 0.09);
+    --splash-track: rgba(236, 232, 220, 0.12);
+
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    color: var(--splash-text);
+    /* 双层渐变：底层品牌渐变 + 中央呼吸辉光 + 底部 vignette */
+    background:
+      radial-gradient(ellipse 68% 46% at 50% 40%, rgba(236, 232, 220, 0.07), transparent 70%),
+      radial-gradient(ellipse 90% 60% at 50% 105%, rgba(0, 0, 0, 0.55), transparent 60%),
+      linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+  }
+
+  /* 缓慢呼吸的辉光层：独立图层，避免叠加到 background 上造成闪烁 */
+  .splash-halo {
+    position: absolute;
+    left: 50%;
+    top: 40%;
+    transform: translate(-50%, -50%);
+    width: 620px;
+    height: 620px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(236, 232, 220, 0.10), rgba(236, 232, 220, 0.03) 40%, transparent 65%);
+    filter: blur(40px);
+    opacity: 0.7;
+    animation: splash-halo-breath 6s ease-in-out infinite;
+    pointer-events: none;
+  }
+  @keyframes splash-halo-breath {
+    0%, 100% { opacity: 0.55; transform: translate(-50%, -50%) scale(0.96); }
+    50%      { opacity: 0.85; transform: translate(-50%, -50%) scale(1.05); }
+  }
+
+  /* 内容层：置于辉光之上 */
+  .splash-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  /* ==================== 品牌 Logo ==================== */
+  .splash-logo-wrap { margin-bottom: 1.75rem; }
+  .splash-logo {
+    position: relative;
+    display: flex;
+    height: 72px;
+    width: 72px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 1rem;
+    background:
+      linear-gradient(145deg, rgba(236, 232, 220, 0.08), transparent 55%),
+      linear-gradient(135deg, var(--splash-bg-from), var(--splash-bg-to));
+    border: 1px solid var(--splash-border);
+    box-shadow:
+      0 10px 36px rgba(0, 0, 0, 0.5),
+      inset 0 1px 0 rgba(236, 232, 220, 0.06);
+  }
+  /* Logo 外发光：让品牌 mark 在深色背景里有存在感 */
+  .splash-logo::before {
+    content: "";
+    position: absolute;
+    inset: -14px;
+    border-radius: 1.35rem;
+    background: radial-gradient(circle at 50% 50%, rgba(236, 232, 220, 0.14), transparent 70%);
+    filter: blur(18px);
+    z-index: -1;
+    pointer-events: none;
+  }
+  .splash-logo svg {
+    height: 2.75rem;
+    width: 2.75rem;
+    color: var(--splash-text);
+    filter: drop-shadow(0 0 6px rgba(236, 232, 220, 0.25));
+  }
+
+  /* ==================== 品牌名 + 副标语 ==================== */
+  .splash-brand {
+    margin-bottom: 0.375rem;
+    font-size: 1.25rem;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: var(--splash-text);
+    line-height: 1.5;
+    text-shadow: 0 0 24px rgba(236, 232, 220, 0.15);
+  }
+  .splash-tagline {
+    margin-bottom: 2rem; /* 从 2.5rem 收到 2rem，terminal 行更贴近品牌 */
+    font-size: 0.75rem;
+    letter-spacing: 0.05em;
+    color: var(--splash-text-dim);
+    line-height: 1.5;
+  }
+
+  /* ==================== 终端启动行 ==================== */
+  .splash-terminal {
+    display: flex;
+    height: 1.25rem;
+    align-items: center;
+    font-size: calc(13px * var(--ui-scale));
+    line-height: 1;
+    margin-bottom: 1.5rem;
+  }
+  .splash-prompt {
+    color: var(--splash-text-faint);
+  }
+  .splash-typed {
+    display: inline-block;
+    overflow: hidden;
+    white-space: nowrap;
+    vertical-align: bottom;
+    color: var(--splash-text);
+    animation: splash-typing 0.6s steps(7, end) 0.45s both;
+    text-shadow: 0 0 12px rgba(236, 232, 220, 0.18);
+  }
+  .splash-caret {
+    display: inline-block;
+    width: 0.55em;
+    height: 1.05em;
+    margin-left: 3px;
+    background: var(--splash-text);
+    box-shadow: 0 0 8px rgba(236, 232, 220, 0.6);
+    animation: splash-caret-blink 1s steps(1) infinite;
+  }
+
+  /* ==================== Boot log 舞台（替代进度条） ==================== */
+  .splash-bootlog {
+    margin-top: 1.25rem;
+    width: 22rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+  }
+  .bootlog-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    font-size: calc(11px * var(--ui-scale));
+    color: var(--splash-text-dim);
+    line-height: 1.4;
+    opacity: 0;
+    transform: translateY(4px);
+    animation: bootlog-appear 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .bootlog-row .mark {
+    display: inline-flex;
+    width: 1rem;
+    align-items: center;
+    justify-content: center;
+    color: rgba(148, 210, 138, 0.85); /* 终端绿，弱化 */
+    font-size: 11px;
+    text-shadow: 0 0 6px rgba(148, 210, 138, 0.35);
+  }
+  .bootlog-row .text {
+    color: var(--splash-text-dim);
+  }
+  .bootlog-row.active .mark { color: var(--splash-text-faint); }
+  .bootlog-row.active .text { color: var(--splash-text); }
+  .bootlog-row.active .caret-inline {
+    display: inline-block;
+    width: 0.45em;
+    height: 0.85em;
+    margin-left: 4px;
+    background: var(--splash-text);
+    vertical-align: -1px;
+    animation: splash-caret-blink 1s steps(1) infinite;
+  }
+
+  @keyframes bootlog-appear {
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .bootlog-row[data-delay="1"] { animation-delay: 0.7s; }
+  .bootlog-row[data-delay="2"] { animation-delay: 1.0s; }
+  .bootlog-row[data-delay="3"] { animation-delay: 1.35s; }
+  .bootlog-row[data-delay="4"] { animation-delay: 1.7s; }
+
+  /* 底部微进度指示：4 段方块，对齐 bootlog 完成度 */
+  .splash-progress-track {
+    margin-top: 1.5rem;
+    display: flex;
+    gap: 4px;
+  }
+  .splash-progress-track .seg {
+    width: 20px;
+    height: 2px;
+    background: var(--splash-track);
+    border-radius: 1px;
+    transition: background 300ms ease;
+  }
+  .splash-progress-track .seg.done {
+    background: var(--splash-text);
+    opacity: 0.7;
+  }
+
+  /* ==================== 入场编排 ==================== */
+  @keyframes splash-rise {
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .splash-rise {
+    animation: splash-rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .splash-rise-1 { animation-delay: 0.08s; }
+  .splash-rise-2 { animation-delay: 0.14s; }
+  .splash-rise-3 { animation-delay: 0.22s; }
+
+  /* ==================== 打字机 + 光标 ==================== */
+  @keyframes splash-typing {
+    from { width: 0; }
+    to   { width: 7ch; }
+  }
+  @keyframes splash-caret-blink {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0; }
+  }
+  .splash-glyph-caret {
+    animation: splash-caret-blink 1.2s steps(1) 0.9s infinite;
+  }
+
+  /* ==================== 减弱动态效果 ==================== */
+  @media (prefers-reduced-motion: reduce) {
+    .splash-rise,
+    .splash-typed,
+    .bootlog-row {
+      animation-duration: 0.01ms !important;
+      animation-delay: 0ms !important;
+      animation-iteration-count: 1 !important;
+    }
+    .splash-caret,
+    .splash-glyph-caret,
+    .bootlog-row.active .caret-inline,
+    .splash-halo {
+      animation: none !important;
+    }
+    .splash-caret,
+    .splash-glyph-caret {
+      opacity: 1;
+    }
+    .bootlog-row {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+</style>
+</head>
+<body>
+<div class="splash-root" role="status" aria-label="BedCode is initializing">
+  <!-- 呼吸辉光层 -->
+  <div class="splash-halo" aria-hidden="true"></div>
+
+  <div class="splash-content">
+    <!-- Logo -->
+    <div class="splash-rise splash-logo-wrap">
+      <div class="splash-logo">
+        <svg viewBox="0 0 100 100" fill="currentColor" aria-hidden="true">
+          <path d="M 24 18 L 59 50 L 24 82 L 32 74 L 51 50 L 32 26 Z" />
+          <path class="splash-glyph-caret" d="M 51 60 L 84 62 L 53 65 Z" />
+        </svg>
+      </div>
+    </div>
+
+    <!-- Brand + tagline -->
+    <div class="splash-rise splash-rise-1 splash-brand">BedCode</div>
+    <div class="splash-rise splash-rise-2 splash-tagline">LAN remote terminal workbench</div>
+
+    <!-- Terminal boot line -->
+    <div class="splash-rise splash-rise-3 wb-mono splash-terminal">
+      <span class="splash-prompt">$&nbsp;</span><span class="splash-typed">bedcode</span><span class="splash-caret" aria-hidden="true"></span>
+    </div>
+
+    <!-- Boot log stage stack -->
+    <div class="splash-bootlog wb-mono">
+      <div class="bootlog-row" data-delay="1">
+        <span class="mark">✓</span><span class="text">loading modules</span>
+      </div>
+      <div class="bootlog-row" data-delay="2">
+        <span class="mark">✓</span><span class="text">opening pty</span>
+      </div>
+      <div class="bootlog-row" data-delay="3">
+        <span class="mark">✓</span><span class="text">binding ports</span>
+      </div>
+      <div class="bootlog-row active" data-delay="4">
+        <span class="mark">›</span><span class="text">ready<span class="caret-inline"></span></span>
+      </div>
+    </div>
+
+    <!-- 段式进度指示 -->
+    <div class="splash-progress-track" aria-hidden="true">
+      <span class="seg done"></span>
+      <span class="seg done"></span>
+      <span class="seg done"></span>
+      <span class="seg"></span>
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -14,7 +14,27 @@
  * - trusted 种子：三条可信对端（含一条无名短指纹兑底），驱动设置分区列表展示
  *   与两步撤销全流程演示
  */
-import type { PeerDevMock, PluginDevMock } from '@binblink/plugin-sdk-mobile'
+import type { PluginDevMock } from '@binblink/plugin-sdk-mobile'
+
+/** 设备种子（mdns:found 载荷形状 + 拨号行为标注；插件自有类型，SDK 不收录） */
+export interface PeerDeviceSeed {
+  found: {
+    instanceName: string
+    addresses: string[]
+    port: number
+    txtRecords: { id: string; name: string; ver: string; cap: string }
+  }
+  dialBehavior: 'connected' | 'denied' | 'unreachable'
+}
+
+/** 对等域种子（插件自有类型；dev-shell mock 按 deviceSeeds 逐台推发现/拨号） */
+export interface PeerDevMock {
+  deviceSeeds: PeerDeviceSeed[]
+  connectedNodeIds?: string[]
+  activeNodeId?: string
+  dialBehavior?: Record<string, 'connected' | 'denied' | 'unreachable'>
+  dialLatencyMs?: number
+}
 
 /**
  * consent 演示种子（ticket 04）：SDK PluginDevMock 协议的本地扩展字段
@@ -85,7 +105,7 @@ const peerDevMock: PeerDevMockWithTrusted = {
     { ...deviceSeed('51c8aa93e07b4d2f96d3b1c45f8ea720', '客厅电视 BedBox', '192.168.1.120', 47613), dialBehavior: 'denied' as const },
     { ...deviceSeed('9d64b2f08c1e4735ae02d7b6cc4910e3', 'Old Laptop', '192.168.1.77', 47613), dialBehavior: 'unreachable' as const },
     { ...deviceSeed('c47d19f2ab354e6180d92b7ce30a5f16', 'HomeNAS', '192.168.1.2', 47613, false) },
-  ] as unknown as PeerDevMockWithTrusted['devices'],
+  ],
   connectedNodeIds: [NODE_XIAOMI],
   activeNodeId: NODE_XIAOMI,
   dialBehavior: {
