@@ -27,6 +27,11 @@ pub enum ExecutionEnvironment {
     Windows { shell: WindowsShell },
     /// WSL2 环境
     Wsl2 { distro: String },
+    /// Linux 原生环境（仅当 BedCode 运行在 Linux 上时可用）
+    ///
+    /// 直接 fork 当前用户 shell（bash）执行命令，工作目录用 POSIX 路径。
+    /// 与 Wsl2 不同：无需走 wsl.exe 桥接，路径无须 /mnt 转换。
+    Linux,
 }
 
 impl Default for ExecutionEnvironment {

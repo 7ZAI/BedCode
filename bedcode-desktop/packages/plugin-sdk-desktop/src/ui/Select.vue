@@ -67,14 +67,17 @@
               :key="option.value"
               :class="[
                 optionRowCls,
-                'cursor-pointer select-none transition-colors duration-150',
-                hoveredIndex === index
+                'select-none transition-colors duration-150',
+                option.disabled
+                  ? 'opacity-50 cursor-not-allowed text-[var(--text-tertiary)]'
+                  : 'cursor-pointer hover:bg-[var(--color-primary-light)] hover:text-brand hover:font-medium',
+                !option.disabled && hoveredIndex === index
                   ? 'bg-[var(--color-primary-light)] text-brand font-medium'
                   : 'text-[var(--text-primary)]',
               ]"
-              @mouseenter="hoveredIndex = index"
+              @mouseenter="hoveredIndex = option.disabled ? -1 : index"
               @mouseleave="hoveredIndex = -1"
-              @click="select(option.value)"
+              @click="option.disabled ? null : select(option.value)"
             >
               {{ option.label }}
             </li>
@@ -104,6 +107,8 @@ import { computeSelectPosition, SELECT_MAX_PANEL_HEIGHT } from './select-positio
 export interface SelectOption {
   value: string | number
   label: string
+  /** 选项是否禁用——禁用项仍会展示但不可选中，鼠标点击不触发选择 */
+  disabled?: boolean
 }
 
 export interface Props {

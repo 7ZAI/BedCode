@@ -143,6 +143,50 @@ function renameInstallerWithReleaseSuffix() {
   }
 }
 
+/**
+ * DEB 安装包重命名为带 release 标记的格式
+ *
+ * Tauri 2 打包器固定用 {productName}_{version}_{arch}.deb 命名，
+ * 重命名为 {name}-{version}-release-{arch}.deb 以与移动端 APK 风格一致。
+ */
+function renameDebWithReleaseSuffix() {
+  if (process.env.GITHUB_ACTIONS) return
+
+  let productName, version
+  try {
+    const config = JSON.parse(readFileSync(join(projectRoot, 'src-tauri/tauri.conf.json'), 'utf8'))
+    productName = config.productName
+    version = config.version
+  } catch (err) {
+    console.warn(`[tauri-build] 读取 tauri.conf.json 失败，跳过 DEB 重命名: ${err.message}`)
+    return
+  }
+
+  const debDir = join(projectRoot, 'src-tauri/target/release/bundle/deb')
+  if (!existsSync(debDir)) return
+
+  const pattern = new RegExp(
+    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\w+)\.deb$`,
+  )
+  for (const file of readdirSync(debDir)) {
+    const match = file.match(pattern)
+    if (!match) continue
+    const arch = match[1]
+    const renamed = `${productName}-${version}-release-${arch}.deb`
+    for (const suffix of ['', '.sig']) {
+      const from = join(debDir, file + suffix)
+      const to = join(debDir, renamed + suffix)
+      if (!existsSync(from)) continue
+      try {
+        renameSync(from, to)
+        console.log(`[tauri-build] DEB 包已重命名: ${file}${suffix} -> ${renamed}${suffix}`)
+      } catch (err) {
+        console.warn(`[tauri-build] 重命名 ${file}${suffix} 失败: ${err.message}`)
+      }
+    }
+  }
+}
+
 const args = process.argv.slice(2)
 const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...args], {
   stdio: 'inherit',
@@ -152,5 +196,6 @@ const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...
 const status = result.status ?? 1
 if (status === 0) {
   renameInstallerWithReleaseSuffix()
+  renameDebWithReleaseSuffix()
 }
 process.exit(status)

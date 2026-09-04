@@ -292,8 +292,8 @@ impl SessionConfigManager {
             return Err(crate::AppError::InvalidInput("Environment cannot be empty".to_string()));
         }
 
-        // 验证环境类型
-        let valid_envs = ["powershell", "cmd", "wsl2"];
+        // 验证环境类型（windows/wsl2/linux；前端 windows / wsl2 / linux 字面量，兼容 'powershell'/'cmd' 历史值）
+        let valid_envs = ["powershell", "cmd", "wsl2", "windows", "linux"];
         let env_lower = environment.to_lowercase();
         if !valid_envs.iter().any(|e| env_lower.contains(e)) {
             tracing::warn!("Unknown environment type: {}", environment);

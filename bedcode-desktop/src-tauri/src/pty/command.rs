@@ -7,7 +7,7 @@ use portable_pty::CommandBuilder;
 use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
 use crate::pty::wsl::windows_to_wsl_path;
 
-/// 构建命令（Windows/WSL）
+/// 构建命令（Windows/WSL/Linux）
 pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuilder> {
     let mut cmd = match &config.environment {
         ExecutionEnvironment::Windows { shell } => {
@@ -54,10 +54,28 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
             cmd.arg(wsl_command);
             cmd
         }
+        ExecutionEnvironment::Linux => {
+            // Linux 原生环境：直接走当前用户的 bash，避免 spawn 父进程退出导致会话关闭
+            // -c 一次性的命令用 single-quote 包住，避免 shell 展开；
+            // 先切到工作目录并打印 pwd，便于前端看到 PTY 实际所在目录
+            let full_command = format!(
+                "cd '{}' && pwd && {}",
+                config.working_dir.replace('\'', "'\\''"),
+                config.command,
+            );
+
+            let mut cmd = CommandBuilder::new("bash");
+            cmd.arg("-lc");
+            cmd.arg(full_command);
+            cmd
+        }
     };
 
     // 设置进程工作目录（作为备选，确保进程启动位置正确）
     if matches!(config.environment, ExecutionEnvironment::Windows { .. }) {
+        cmd.cwd(&config.working_dir);
+    } else if matches!(config.environment, ExecutionEnvironment::Linux) {
+        // Linux 环境：把 cwd 也设上（命令体里的 cd 已保证工作目录正确，这里只是兜底）
         cmd.cwd(&config.working_dir);
     }
 
@@ -187,5 +205,41 @@ mod tests {
         let _ = argv(&cmd);
         // 路径转换行为由 wsl::windows_to_wsl_path 保证，此处验证 WSL 分支不 panic
         assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn linux_uses_bash_and_sets_cwd_directly() {
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Linux,
+            "echo hi",
+        ))
+        .unwrap();
+
+        let argv = argv(&cmd);
+        assert_eq!(argv[0], "bash");
+        // 必须是 login shell：保留 PATH/环境，claude/codex 这类命令依赖 PATH 解析
+        assert!(argv.iter().any(|a| a == "-lc"));
+
+        let full = argv.iter().find(|a| a.contains("echo hi")).unwrap();
+        // 工作目录走单引号包住的 POSIX 路径（Linux 上直接用原路径，不做 /mnt 转换）
+        assert!(full.contains("cd 'D:\\work'"));
+        assert!(full.contains("pwd"));
+        // Linux 环境显式设置 cwd（兜底机制）
+        assert_eq!(
+            cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
+            Some("D:\\work".to_string())
+        );
+    }
+
+    #[test]
+    fn linux_escapes_single_quotes_in_working_dir() {
+        // 含单引号的工作目录需转义，避免破坏 shell 字符串
+        let mut c = config(ExecutionEnvironment::Linux, "echo ok");
+        c.working_dir = "/tmp/o'clock".to_string();
+        let cmd = build_command(&c).unwrap();
+        let argv = argv(&cmd);
+        let full = argv.iter().find(|a| a.contains("echo ok")).unwrap();
+        // 单引号被转义为 '\''
+        assert!(full.contains("cd '/tmp/o'\\''clock'"));
     }
 }

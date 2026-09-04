@@ -8,10 +8,11 @@
 //! 会话被拒（与 02 票 AUTH_REQUIRED 行为衔接）。
 //!
 //! 环境依赖（PTY 断言失败时先区分测试环境问题与链路缺陷）：
-//! - 真实 PTY 需 spawn powershell.exe（非 "wsl2" 环境 → WindowsShell::PowerShell，
-//!   build_command 已注入 chcp 65001 + UTF-8 OutputEncoding）。PATH 缺
-//!   powershell / 系统禁 ConPTY 属环境问题：StartSession 会回
-//!   SESSION_CONTROL_ERROR，panic 消息会带上原始错误便于判别
+//! - Windows：真实 PTY 需 spawn powershell.exe（非 "wsl2" 环境 →
+//!   WindowsShell::PowerShell，build_command 已注入 chcp 65001 + UTF-8
+//!   OutputEncoding）。PATH 缺 powershell / 系统禁 ConPTY 属环境问题；
+//! - Linux/macOS：走 ExecutionEnvironment::Linux 原生 bash（见 pty/command.rs）。
+//!   两种环境下 StartSession 失败都会回 SESSION_CONTROL_ERROR，panic 消息带原始错误
 //! - 输出编码：启动脚本已强制 UTF-8，断言用 ASCII marker，失败时断言消息
 //!   附带已收集的原始文本（可见是否收到启动横幅等半程输出）辅助判别
 //!
@@ -97,11 +98,12 @@ async fn init_test_app_context() -> String {
         let session_db = Database::new(Path::new(":memory:")).expect("create session db failed");
         session_db.init_schema().expect("init session db schema failed");
 
-        // 预置会话配置：环境取 "windows"（非 "wsl2" → PowerShell），启动命令输出
-        // 固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」两种失败形态）
+        // 预置会话配置：环境按宿主机平台选择（Windows → PowerShell / Linux → bash），
+        // 启动命令输出固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」两种失败形态）
+        let test_env = if cfg!(target_os = "windows") { "windows" } else { "linux" };
         let config = SessionConfig::new(
             "itest-pty".to_string(),
-            "windows".to_string(),
+            test_env.to_string(),
             std::env::temp_dir().to_string_lossy().into_owned(),
             "echo BEDCODE_PTY_STARTUP_MARKER".to_string(),
         );
@@ -473,7 +475,8 @@ async fn pty_session_chain_flow() {
 
     // 2c. 写入 echo 命令（input data 为 UTF-8 → base64，与 handle_session_input 编码约定一致）
     let marker = format!("BEDCODE_PTY_ECHO_{session_id}");
-    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker}\r\n").as_bytes());
+    let line_end = if cfg!(target_os = "windows") { "\r\n" } else { "\n" };
+    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker}{line_end}").as_bytes());
     sink_t
         .send(WsMsg::Text(
             format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into(),

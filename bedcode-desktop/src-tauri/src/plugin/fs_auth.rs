@@ -523,12 +523,17 @@ mod tests {
             std::env::temp_dir().to_string_lossy()
         );
         let canon = FsAuthChecker::canonicalize_path(&fake).expect("fallback must succeed");
+        // 平台感知断言：Windows 规范化分隔符为 `\`，其余平台保持原样
+        // （canonicalize_path 的 fallback 在 cfg(windows) 下 replace 分隔符，
+        //  非 Windows 直接原样返回——见函数注释）
+        #[cfg(not(windows))]
+        assert_eq!(canon.to_string_lossy().as_ref(), fake);
         #[cfg(windows)]
-        assert!(
-            !canon.to_string_lossy().contains('/'),
+        assert_eq!(
+            canon.to_string_lossy().as_ref(),
+            fake.replace('/', "\\"),
             "fallback path must use backslash on Windows"
         );
-        assert_eq!(canon.to_string_lossy().as_ref(), fake.replace('/', "\\"));
     }
 
     /// 已授权前缀：边界匹配 + 尚不存在的子路径（混合分隔符）也应放行

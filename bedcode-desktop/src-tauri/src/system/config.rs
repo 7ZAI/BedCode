@@ -23,7 +23,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("network.shutdown_timeout_secs", "优雅停机超时秒数"),
     ("network.ws_max_frame_size_kb", "WebSocket 单帧最大大小（KB）"),
     ("network.ws_max_message_size_mb", "WebSocket 单消息最大大小（MB，可跨多帧）"),
-    ("session.default_environment", "默认执行环境（windows / wsl2）"),
+    ("session.default_environment", "默认执行环境（windows / wsl2 / linux）"),
     ("session.default_wsl_distro", "默认 WSL 发行版（仅 wsl2 环境有效，留空则使用默认发行版）"),
     ("session.default_working_dir", "默认工作目录（留空则使用用户主目录）"),
     ("session.default_command", "默认启动命令"),
@@ -211,6 +211,19 @@ pub struct NetworkConfig {
     pub metrics_enabled: bool,
 }
 
+/// 默认执行环境：按宿主平台选择（Windows → windows / 其余 → linux）
+///
+/// 前端 useAvailableEnvironments 已按平台过滤并在会话创建时 normalize，
+/// 此处保证后端无 config.properties（首跑失败回退 / 无头上下文）时
+/// 也不会把 powershell 环境发到 Linux PTY（spawn powershell.exe 必然失败）
+fn default_environment() -> String {
+    if cfg!(target_os = "windows") {
+        "windows".to_string()
+    } else {
+        "linux".to_string()
+    }
+}
+
 fn default_prevent_sleep() -> bool {
     true
 }
@@ -270,7 +283,7 @@ impl Default for NetworkConfig {
 /// 会话默认配置
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SessionConfig {
-    /// 默认执行环境（windows/wsl2）
+    /// 默认执行环境（windows/wsl2/linux；运行时自动按宿主机平台过滤）
     pub default_environment: String,
     /// 默认 WSL 发行版（仅 wsl2 环境有效）
     pub default_wsl_distro: Option<String>,
@@ -285,7 +298,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            default_environment: "windows".to_string(),
+            default_environment: default_environment(),
             default_wsl_distro: None,
             default_working_dir: None,
             default_command: Some("claude".to_string()),
@@ -606,7 +619,7 @@ impl AppConfig {
                 metrics_enabled: parse_value(props, "network.metrics_enabled", default_metrics_enabled()),
             },
             session: SessionConfig {
-                default_environment: parse_value(props, "session.default_environment", "windows".to_string()),
+                default_environment: parse_value(props, "session.default_environment", default_environment()),
                 default_wsl_distro: parse_optional(props, "session.default_wsl_distro"),
                 default_working_dir: parse_optional(props, "session.default_working_dir"),
                 default_command: parse_optional(props, "session.default_command"),
@@ -927,7 +940,10 @@ channels.status_broadcast_capacity=64
         let config = AppConfig::from_properties(&props);
         assert_eq!(config.network.port, 8765);
         assert_eq!(config.network.auto_start, true);
+        #[cfg(windows)]
         assert_eq!(config.session.default_environment, "windows");
+        #[cfg(not(windows))]
+        assert_eq!(config.session.default_environment, "linux");
         assert_eq!(config.ui.theme, "system");
         assert_eq!(config.ui.terminal_theme, "dracula");
         assert_eq!(config.ui.terminal_bg_image, None);

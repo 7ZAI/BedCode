@@ -43,7 +43,9 @@
   "bundle": {
     "active": true,
     "createUpdaterArtifacts": true,
-    "targets": ["nsis"],
+    "targets": ["nsis", "deb"],
+    "category": "Utility",
+    "shortDescription": "局域网远程终端——移动端控制桌面端 Claude Code 会话",
     "resources": [
       "resources/config.properties",
       "resources/plugins/"
@@ -53,7 +55,9 @@
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/icon.ico",
+      "icons/icon.svg",
+      "icons/icon.png"
     ],
     "windows": {
       "certificateThumbprint": null,
@@ -68,7 +72,17 @@
     },
     "linux": {
       "deb": {
-        "depends": ["libwebkit2gtk-4.1-0"]
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1",
+          "librsvg2-common",
+          "libdbus-1-3"
+        ],
+        "section": "utils",
+        "priority": "optional",
+        "desktopTemplate": "resources/deb/bedcode.desktop",
+        "postInstallScript": "resources/deb/postinst"
       }
     }
   },

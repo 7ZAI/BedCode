@@ -439,7 +439,7 @@
                 class="flex border border-[var(--border-strong)] rounded-md overflow-hidden flex-shrink-0"
               >
                 <button
-                  v-for="opt in environmentOptions"
+                  v-for="opt in availableEnvironmentOptions"
                   :key="opt.value"
                   class="h-8 px-4 text-xs font-medium wb-mono transition-colors"
                   :class="
@@ -599,6 +599,7 @@ import { open } from '@tauri-apps/plugin-shell'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
 import { MIN_FONT_SIZE, MAX_FONT_SIZE, NORMAL_FONT_SIZE } from '@/composables/useFontSize'
 import { useToast } from '@/composables/useToast'
+import { useAvailableEnvironments } from '@/composables/useAvailableEnvironments'
 
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
@@ -644,7 +645,14 @@ const fontSizeLevelLabel = computed(() => {
 const environmentOptions = computed(() => [
   { value: 'windows', label: i18n.global.t('desktop.form.windowsNative') },
   { value: 'wsl2', label: 'WSL2' },
+  { value: 'linux', label: i18n.global.t('desktop.form.linuxNative') },
 ])
+
+// 仅展示当前宿主平台可用的执行环境；未识别平台（macOS 等）下落到 windows 与老数据兼容
+const { availableValues } = useAvailableEnvironments()
+const availableEnvironmentOptions = computed(() =>
+  environmentOptions.value.filter((opt) => availableValues.value.includes(opt.value as any)),
+)
 
 const themeOptions = computed(() => [
   { value: 'light', label: i18n.global.t('settings.appearance.lightMode') },
@@ -716,7 +724,11 @@ const paletteValue = computed({
 })
 
 const defaultEnvironment = computed({
-  get: () => settingsStore.settings.session.default_environment || 'windows',
+  get: () => {
+    const stored = settingsStore.settings.session.default_environment || 'windows'
+    // 老用户存储的值（如 'wsl2'）在 Linux 平台上无效时，返回平台默认环境
+    return availableValues.value.includes(stored as any) ? stored : (availableValues.value[0] ?? 'windows')
+  },
   set: (value: string) => {
     settingsStore.settings.session.default_environment = value
   },

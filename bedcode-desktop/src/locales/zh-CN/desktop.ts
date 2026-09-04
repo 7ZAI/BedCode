@@ -94,6 +94,7 @@ export default {
       },
       autoStart: '开机自动启动',
       windowsNative: 'Windows',
+      linuxNative: 'Linux',
     },
     device: {
       title: '设备配对',

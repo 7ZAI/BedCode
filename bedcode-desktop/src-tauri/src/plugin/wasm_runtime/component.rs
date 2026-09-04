@@ -726,7 +726,10 @@ fn resolve_preopen_dirs(
                     return None;
                 }
             };
-            let dir = dir.trim_matches(['/', '\\']).trim().to_string();
+            // 只剥尾部分隔符：trim_matches 会连 POSIX 绝对路径的起始 '/' 一起
+            // 剥掉（/tmp/x → tmp/x），相对化后授权匹配必然失败——Windows 盘符
+            // 前缀掩盖了此问题，Linux 首次跑通前从未暴露
+            let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
             if dir.is_empty() {
                 return None;
             }

@@ -47,6 +47,8 @@ const defaultSettings: Settings = {
     port: 8765,
   },
   session: {
+    // 默认执行环境——运行时由 useAvailableEnvironments() 按宿主机平台过滤，
+    // Windows 上 windows/wsl2，Linux 上 linux。这里保留 'windows' 与老用户数据兼容。
     default_environment: 'windows',
     default_wsl_distro: undefined,
     default_working_dir: undefined,

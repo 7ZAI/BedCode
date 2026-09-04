@@ -295,6 +295,8 @@ impl ConfigMapper for DefaultConfigMapper {
             "wsl2" => ExecutionEnvironment::Wsl2 {
                 distro: config.wsl_distro.clone().unwrap_or_else(|| "Ubuntu".to_string()),
             },
+            // Linux 原生环境：直接跑 bash，不带 distro
+            "linux" => ExecutionEnvironment::Linux,
             _ => ExecutionEnvironment::Windows {
                 shell: WindowsShell::PowerShell,
             },

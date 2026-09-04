@@ -139,7 +139,7 @@
                     <span
                       class="wb-mono text-[calc(10.5px*var(--ui-scale))] uppercase px-1.5 py-0.5 rounded border border-[var(--border-strong)] text-[var(--text-secondary)] flex-shrink-0"
                     >
-                      {{ config.environment === 'wsl2' ? 'wsl2' : 'win' }}
+                      {{ envBadge(config.environment) }}
                     </span>
                     <span
                       v-if="cfgAutoStart(config)"
@@ -763,6 +763,17 @@ function cfgCommand(c: SessionConfig): string {
 
 function cfgAutoStart(c: SessionConfig): boolean {
   return c.autoStart ?? c.auto_start ?? false
+}
+
+/**
+ * 环境徽标文本——在配置卡片上以紧凑字串标注执行环境。
+ * windows/wsl2/linux 三档分别对应 win/wsl2/linux；历史 'powershell'/'cmd' 归为 win。
+ */
+function envBadge(env: string | undefined | null): string {
+  const v = (env ?? '').toLowerCase()
+  if (v === 'wsl2') return 'wsl2'
+  if (v === 'linux') return 'linux'
+  return 'win'
 }
 
 function isRunningStatus(status: string): boolean {

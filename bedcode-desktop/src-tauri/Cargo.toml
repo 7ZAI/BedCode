@@ -136,6 +136,12 @@ wasmtime-wasi = "47"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry", "Win32_System_LibraryLoader"] }
 
+# Linux：systemd-logind 休眠抑制（org.freedesktop.login1.Inhibit）
+# 与 nosleep 引入的 dbus crate 同版本（不新增依赖树）；
+# 相比 nosleep 只支持 GNOME SessionManager，logind 与桌面环境无关（见 system/power.rs）
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+
 [dev-dependencies]
 tempfile = "3"
 # 集成测试 HTTP 配对（POST /api/auth/* 换取 JWT）：已为运行依赖，dev 复用同版本

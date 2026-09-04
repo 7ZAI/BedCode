@@ -97,6 +97,7 @@ export default {
       },
       autoStart: 'Auto Start on Launch',
       windowsNative: 'Windows Native',
+      linuxNative: 'Linux Native',
     },
     device: {
       title: 'Device Pairing',

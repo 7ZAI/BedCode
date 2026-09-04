@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS pairings (
 CREATE TABLE IF NOT EXISTS session_configs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2')),
+    environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2', 'linux')),
     wsl_distro TEXT,
     working_dir TEXT NOT NULL,
     command TEXT NOT NULL,

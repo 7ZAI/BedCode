@@ -195,6 +195,7 @@ fn broadcast_setting_change() {
 }
 
 /// Windows：注册 PATH（幂等：已包含则跳过）
+#[cfg(target_os = "windows")]
 pub async fn register_path_windows(bin_dir: &Path) -> Result<(), String> {
     let bin_str = bin_dir.to_string_lossy().to_string();
     let (current, is_expand_sz) = match reg_query_path().await? {
@@ -212,6 +213,7 @@ pub async fn register_path_windows(bin_dir: &Path) -> Result<(), String> {
 }
 
 /// Windows：移除 PATH 条目（仅精确匹配本 bin 目录，保留其他项）
+#[cfg(target_os = "windows")]
 pub async fn unregister_path_windows(bin_dir: &Path) -> Result<(), String> {
     let bin_str = bin_dir.to_string_lossy().to_string();
     let Some((current, is_expand_sz)) = reg_query_path().await? else {
@@ -251,7 +253,7 @@ pub fn register_path_unix(bin_dir: &Path, exe: &str) -> Result<(), String> {
 /// unix：移除 ~/.local/bin/<exe> symlink（仅当指向本 bin 目录，避免误删同名用户文件）
 #[cfg(not(target_os = "windows"))]
 pub fn unregister_path_unix(bin_dir: &Path, exe: &str) -> Result<(), String> {
-    use std::os::unix::fs::symlink_metadata;
+    use std::fs::symlink_metadata;
     let link = user_local_bin().join(exe);
     let Ok(meta) = symlink_metadata(&link) else {
         return Ok(()); // 不存在
