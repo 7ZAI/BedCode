@@ -169,6 +169,8 @@ import {
   ATLAS_PREHEAT_DELAY_MS,
 } from '@/utils/terminalResizePolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
+import { TerminalImeStateMachine } from '@/utils/terminalImeStateMachine'
+import { initPlatform } from '@/composables/usePlatform'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -201,6 +203,16 @@ const terminalHostRef = ref<HTMLElement | null>(null)
 const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
 const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'dracula')
 
+// Linux 平台优化：isLinux 在 onMounted 中 await initPlatform() 后确定（消除
+// setup 时 platform 尚未解析的竞态）；仅 Linux 启用 IME 去重与专用字体栈
+const isLinux = ref(false)
+// Linux 专用等宽字体栈：优先系统自带字体（Ubuntu Mono / DejaVu Sans Mono /
+// Liberation Mono / Noto Sans Mono），确保 WebKitGTK 用真实系统等宽字体渲染，
+// 避免默认栈（Cascadia Mono 等 Windows 字体）在 Linux 上回退非等宽字体导致的
+// 字符间距过大/模糊；Windows/macOS 保持原有字体栈不变
+const LINUX_FONT_STACK =
+  "'Ubuntu Mono', 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', 'Noto Mono', 'Cascadia Mono', 'Consolas', 'Courier New', monospace"
+const DEFAULT_FONT_STACK = 'Cascadia Mono, Consolas, Monaco, Courier New, monospace'
 // 背景图片：设置中存原始文件名（仅用于判断是否启用与回显），
 // 实际图片由本地服务器 /static/terminal-bg 端点提供
 const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
@@ -211,6 +223,9 @@ const bgImageUrl = ref('')
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
+// Linux 平台 IME 去重状态机（WebKitGTK 输入法双发去重，仅 Linux 启用；
+// 事件信号由 onMounted 在终端初始化后挂接到 terminal.textarea）
+let imeStateMachine: TerminalImeStateMachine | null = null
 // WebGL resize 后字符图集重建的补刷定时器（atlas 预热：等 idle 分片光栅化
 // 基本完成后补一次全量重绘，避免整屏字形缺失的“临时失明”）
 let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
@@ -747,8 +762,9 @@ function initTerminal() {
   terminal = new Terminal({
     // 字体与尺寸
     fontSize: fontSize.value,
-    // VS Code 终端默认字体（Windows 11 自带），其后为跨平台回退
-    fontFamily: 'Cascadia Mono, Consolas, Monaco, Courier New, monospace',
+    // Linux 用系统等宽字体栈（优先 Ubuntu Mono/DejaVu Sans Mono 等系统自带等宽字体），
+    // 其余平台保持 VS Code 终端默认字体栈（Windows 11 自带 Cascadia Mono）不变
+    fontFamily: isLinux.value ? LINUX_FONT_STACK : DEFAULT_FONT_STACK,
     lineHeight: 1,
     // 滚动历史行数（与后端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
@@ -794,6 +810,26 @@ function initTerminal() {
 
   terminal.open(terminalHostRef.value)
   initWebGL(terminal)
+
+  // Linux WebKitGTK IME 去重：组合事件/keydown(229)/input 信号喂给状态机，
+  // onData 出口按组合窗口去重（见下方 onData 拦截）。仅 Linux 挂接，
+  // Windows/macOS 保持 xterm 原生行为不变。
+  if (isLinux.value && terminal.textarea) {
+    imeStateMachine = new TerminalImeStateMachine()
+    const ta = terminal.textarea
+    ta.addEventListener('compositionstart', () => imeStateMachine?.onCompositionStart())
+    ta.addEventListener('compositionupdate', () => imeStateMachine?.onCompositionUpdate())
+    ta.addEventListener('compositionend', () => imeStateMachine?.onCompositionEnd())
+    ta.addEventListener('keydown', (e: KeyboardEvent) => imeStateMachine?.onKeyDown(e.keyCode))
+    ta.addEventListener('input', (e: Event) => {
+      const ie = e as InputEvent
+      imeStateMachine?.onInput({
+        inputType: ie.inputType || '',
+        isComposing: ie.isComposing ?? false,
+        data: ie.data,
+      })
+    })
+  }
 
   // 移除光标：用 DECTCEM 隐藏序列（\x1b[?25l）在 buffer 层隐藏光标，
   // WebGL 与 DOM 渲染器均不再绘制（TUI 程序主动发送 \x1b[?25h 时除外）
@@ -885,6 +921,12 @@ function initTerminal() {
   // 键盘输入
   terminal.onData((data: string) => {
     if (!props.session) return
+
+    // Linux WebKitGTK IME 双发去重：同一组合文本被 xterm 两条路径重复发出时，
+    // 丢弃重复载荷（仅 Linux 启用；Windows/macOS 不受影响）
+    if (imeStateMachine && !imeStateMachine.shouldForward(data)) {
+      return
+    }
 
     // 有选区时 Ctrl+C 仅复制（VS Code 终端行为），不向 PTY 发送中断
     if (data === '\x03' && hasSelection) {
@@ -1267,6 +1309,25 @@ watch(
 onMounted(async () => {
   await nextTick()
 
+  // 确定运行平台：await 已 memoized 的 initPlatform()（main.ts 启动前已发起，
+  // 此处最多一个 microtask 即返回），消除 setup 时平台尚未解析的竞态
+  const platform = await initPlatform()
+  isLinux.value = platform?.isLinux === true
+
+  // Linux：等待系统字体加载完成再初始化终端，避免 WebKitGTK 在字体未就绪时
+  // 用回退字体测量字符尺寸，导致字符间距过大/模糊；带超时兜底不阻塞首帧。
+  // Windows/macOS 保持原有行为（字体即装即用，无需等待）。
+  if (isLinux.value && typeof document !== 'undefined' && 'fonts' in document) {
+    try {
+      await Promise.race([
+        document.fonts.ready,
+        new Promise((resolve) => setTimeout(resolve, 400)),
+      ])
+    } catch {
+      // fonts.ready 异常不阻塞终端初始化
+    }
+  }
+
   initTerminal()
 
   // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
@@ -1376,6 +1437,12 @@ onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
     resizeObserver = null
+  }
+
+  // 清理 Linux IME 状态机（监听随 textarea 一并销毁，此处仅复位状态）
+  if (imeStateMachine) {
+    imeStateMachine.reset()
+    imeStateMachine = null
   }
 
   if (terminal) {
