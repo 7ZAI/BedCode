@@ -168,11 +168,12 @@ AVIF > WebP > JPEG/PNG（按兼容性降级）
 
 | 反模式 | 替代 |
 |--------|------|
-| 动画 `height: 0 → 100px` | `transform: scaleY(0 → 1)` + `transform-origin: top` |
-| 动画 `width: 0 → 100%` | `transform: scaleX(0 → 1)` |
+| 动画装饰性条/skeleton 的 `height` | `transform: scaleY(0 → 1)` + `transform-origin: top`（会压扁内容，仅限无文字/无圆角依赖的装饰元素） |
+| 动画装饰性条/skeleton 的 `width` | `transform: scaleX(0 → 1)` |
+| 展开/收起**含文字与边框**的内容 | `grid-template-rows: 0fr → 1fr` 或 `max-height`（scale 会把文字和圆角一起压扁） |
 | 动画 `top: 0 → 100px` | `transform: translateY(0 → 100px)` |
 | 动画 `opacity: 0 → 1` | ✅ 仍然推荐 |
-| 动画 `max-height: 0 → 1000px` | ⚠️ 仅在无法用 transform 替代时（如高度内容动态） |
+| 动画 `max-height: 0 → 1000px` | ⚠️ 内容展开的**兜底**方案，仅当目标高度运行时未知时用；已知高度时改用 `grid-template-rows: 0fr → 1fr`（与 SKILL.md 反模式表一致） |
 
 ### `will-change` 正确用法
 
@@ -217,7 +218,7 @@ const onClick = () => {
 ### CSS 体积控制
 
 - Tailwind 启用 JIT（v3.4+ 默认）：只打包用到的工具类
-- 定期跑 `npx tailwindcss --purge` 验证未使用类不进入产物
+- 无需手动 purge——Tailwind v3.4 在 `vite build` 时自动扫描 `content` 白名单剔除未用类。核对某类是否存在用 `pnpm exec tailwindcss --help` 或直接 grep 构建产物
 - 移动端考虑拆分 critical CSS（首屏）与 lazy CSS（按需）
 
 ### 阻塞资源
@@ -258,7 +259,7 @@ export default defineConfig({
 - [ ] 折叠下方图片用 `loading="lazy"`
 - [ ] 关键图片加 `fetchpriority="high"`
 - [ ] 长列表（50+）用 `content-visibility: auto` + `contain-intrinsic-size`
-- [ ] 动画仅用 `transform` / `opacity`
+- [ ] 动画优先用 `transform` / `opacity` / `filter`（动画布局属性需写注释说明理由）
 - [ ] `will-change` 仅在动画期间
 - [ ] 自托管字体 `font-display: swap` + `size-adjust`
 - [ ] 骨架屏与真实内容同高度

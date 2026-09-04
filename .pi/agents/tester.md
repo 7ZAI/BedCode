@@ -2,7 +2,7 @@
 name: tester
 description: BedCode 测试执行 agent：运行 cargo test / pnpm run test:run 并报告结果。代码改动后需要验证时使用
 tools: read, grep, find, ls, bash
-model: opencode-go/ox-alpha-free
+model: sensenova/deepseek-v4-flash
 completionGuard: false
 ---
 
