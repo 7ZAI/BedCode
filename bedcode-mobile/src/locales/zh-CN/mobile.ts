@@ -39,7 +39,8 @@ export default {
       timeout: '连接超时，请确保桌面端正在运行并监听正确端口',
       pairingTimeout: '配对请求超时，请确保桌面端正在运行',
       refused: '连接被拒绝，请检查桌面端地址和端口',
-      unreachable: '无法连接到桌面端，请检查：1) 桌面端是否运行并开启服务器 2) IP 地址是否正确 3) Windows 防火墙是否允许入站连接 4) 是否在同一局域网',
+      unreachable:
+        '无法连接到桌面端，请检查：1) 桌面端是否运行并开启服务器 2) IP 地址是否正确 3) Windows 防火墙是否允许入站连接 4) 是否在同一局域网',
       connectFailedMsg: '连接失败: {error}',
       userCancelled: '用户取消连接',
       codeVerifyFailed: '配对码验证失败，请重试',
@@ -61,7 +62,8 @@ export default {
       switchToBiometric: '使用生物认证',
       switchToPairing: '使用配对码认证',
       biometricNotBound: '未绑定生物认证，无法切换。请先在认证设置中绑定生物认证',
-      biometricNotBoundOnDesktop: '桌面端未找到该设备的生物凭证，可能已解绑或数据被重置。请改用配对码连接后，在认证设置中重新绑定',
+      biometricNotBoundOnDesktop:
+        '桌面端未找到该设备的生物凭证，可能已解绑或数据被重置。请改用配对码连接后，在认证设置中重新绑定',
       foregroundReconnecting: '正在重连...',
       foregroundSessions: '{count} 个会话运行中 · 已连接 {name}',
       foregroundConnected: '已连接 {name}',
@@ -89,7 +91,8 @@ export default {
       album: '相册',
       albumNoQr: '未在图片中识别到二维码，请换一张试试',
       myQr: '我的二维码',
-      myQrHint: '本机为移动端远程终端，不生成可供扫码的连接二维码。请使用本页扫描桌面端「二维码连接」页签中的二维码完成连接。',
+      myQrHint:
+        '本机为移动端远程终端，不生成可供扫码的连接二维码。请使用本页扫描桌面端「二维码连接」页签中的二维码完成连接。',
       myQrDeviceType: '设备类型',
       myQrPort: '默认端口',
       myQrUnknownDevice: '未知设备',
@@ -159,7 +162,8 @@ export default {
       historyTruncated: '较早的历史输出已超出缓存上限，仅显示最近部分',
       scrollToBottom: '回到底部',
       rendererOverrideTitle: '覆盖终端尺寸',
-      rendererOverrideBody: '当前{renderer}端正在渲染输出，是否覆盖它的尺寸？\n覆盖后{renderer}端显示格式将错乱。',
+      rendererOverrideBody:
+        '当前{renderer}端正在渲染输出，是否覆盖它的尺寸？\n覆盖后{renderer}端显示格式将错乱。',
       rendererOverrideConfirm: '覆盖',
       rendererOverrideCancel: '取消',
       rendererDesktop: '桌面',
@@ -268,7 +272,8 @@ export default {
       switchFailed: '切换分支失败',
       fetchBranchesFailed: '获取分支失败',
       switchConfirmTitle: '切换分支',
-      switchConfirmMsg: '当前有 {count} 个未提交的更改，切换分支可能导致更改丢失。确定要切换到 {branch} 吗？',
+      switchConfirmMsg:
+        '当前有 {count} 个未提交的更改，切换分支可能导致更改丢失。确定要切换到 {branch} 吗？',
       switchConfirmNoChangeMsg: '确定要切换到 {branch} 吗？',
       previewMode: '预览模式',
       sourceMode: '源码模式',
@@ -606,6 +611,16 @@ export default {
         confirm: '确定',
         cancel: '取消',
       },
+    },
+    splash: {
+      tagline: '局域网远程终端',
+      typedCommand: 'bedcode --boot',
+      ready: '就绪 · 可以开工了',
+      linePlatform: '唤醒终端引擎',
+      lineSettings: '研墨 · 载入墨纸主题',
+      linePlugins: '装配插件面板',
+      lineConnection: '向局域网喊话 · 搜索主机',
+      lineUi: '校准显示与安全区',
     },
   },
 }

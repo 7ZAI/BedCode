@@ -6,6 +6,7 @@ import { ref, computed, readonly } from 'vue'
 import i18n from '@/locales'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
+import { completeStartupTask } from '@/composables/useAppStartup'
 import {
   wsConnect,
   wsDisconnect,
@@ -515,6 +516,10 @@ async function init() {
     const toast = useToast()
     toast.error(i18n.global.t('common.notification.reconnectFailed', { reason: event.payload.reason }), 5000)
   })
+
+  // 开屏启动任务打点:监听器与凭据恢复完成即视为连接子系统就绪
+  // (不等 WS 实际建连——建连由用户操作驱动,不属于启动期)
+  completeStartupTask('connection')
 }
 
 // 模块加载时立即初始化，确保事件监听尽早注册

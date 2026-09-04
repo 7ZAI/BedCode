@@ -15,13 +15,17 @@
 
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
+
+    <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载） -->
+    <SplashScreen v-if="showSplash" @closed="showSplash = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { provide, computed, onMounted, onUnmounted } from 'vue'
+import { provide, ref, computed, onMounted, onUnmounted } from 'vue'
 import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
+import SplashScreen from '@/components/SplashScreen.vue'
 import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
@@ -31,6 +35,7 @@ import { useTheme } from '@/composables/useTheme'
 import { syncLinkCryptoContextToNative } from '@/composables/useLinkEncryption'
 import { useFontSize } from '@/composables/useFontSize'
 import { useSettingsStore } from '@/stores/settings'
+import { completeStartupTask } from '@/composables/useAppStartup'
 // mDNS 广播暂时禁用：移动端目前不需要被发现，避免扫描到自身
 // import { useMdnsAdvertiser } from '@/composables/useMdnsAdvertiser'
 
@@ -45,11 +50,16 @@ const { setupFontSize } = useFontSize()
 // Toaster 主题跟随应用设置（'system' 时由 sonner 自身监听系统偏好）
 const settingsStore = useSettingsStore()
 const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' | 'dark' | 'system')
+
+// 开屏动画:淡出动画结束后卸载
+const showSplash = ref(true)
 // const { startAdvertise, stopAdvertise } = useMdnsAdvertiser()
 
 onMounted(async () => {
   setupTheme()
   setupFontSize()
+  // 开屏启动任务打点:主题/字体/安全区等 UI 子系统就绪
+  completeStartupTask('ui')
   // 链路加密上下文启动同步（issue 09）：Rust 侧事件 WS 建连前需要拿到
   // 当前开关与 pin；失败静默（默认全关，不影响明文现状）
   void syncLinkCryptoContextToNative()

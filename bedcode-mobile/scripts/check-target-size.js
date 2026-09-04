@@ -16,7 +16,10 @@ import { join } from 'path'
 // 配置
 const CONFIG = {
   // target 目录最大允许大小 (GB)
-  maxSizeGB: 10,
+  // 阈值 15GB：与 AGENTS.md「构建前检查 src-tauri/target 目录大小，超过 15GB 执行 cargo clean」一致。
+  // 历史值 10GB 已不适用——desktop 完整增量缓存（wasmtime/actix 等）实测 ~15~20GB，
+  // 阈值过低会误清缓存反而拖慢增量构建
+  maxSizeGB: 15,
   // target 目录路径
   targetDir: join(process.cwd(), 'src-tauri', 'target'),
   // 是否自动清理 (设为 false 仅警告)

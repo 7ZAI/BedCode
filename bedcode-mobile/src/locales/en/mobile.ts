@@ -9,7 +9,8 @@ export default {
     connection: {
       title: 'Connection & Config',
       disconnect: 'Disconnect',
-      confirmDisconnectMsg: 'Are you sure you want to disconnect? All remote sessions will be terminated.',
+      confirmDisconnectMsg:
+        'Are you sure you want to disconnect? All remote sessions will be terminated.',
       sessionConfig: 'Session Config',
       currentConnection: 'Current Connection',
       refreshConfig: 'Refresh Config',
@@ -39,7 +40,8 @@ export default {
       timeout: 'Connection timed out. Make sure desktop is running on the correct port',
       pairingTimeout: 'Pairing request timed out. Make sure desktop is running',
       refused: 'Connection refused. Check desktop address and port',
-      unreachable: 'Cannot reach desktop. Check: 1) Desktop is running with server enabled 2) IP address is correct 3) Windows Firewall allows inbound on port 8765 4) Both devices on same network',
+      unreachable:
+        'Cannot reach desktop. Check: 1) Desktop is running with server enabled 2) IP address is correct 3) Windows Firewall allows inbound on port 8765 4) Both devices on same network',
       connectFailedMsg: 'Connection failed: {error}',
       userCancelled: 'Connection cancelled by user',
       codeVerifyFailed: 'Pairing code verification failed, please retry',
@@ -60,8 +62,10 @@ export default {
       biometricVerify: 'Verify with fingerprint',
       switchToBiometric: 'Use biometric auth',
       switchToPairing: 'Use pairing code',
-      biometricNotBound: 'Biometric auth is not bound yet. Please bind it in Authentication Settings first',
-      biometricNotBoundOnDesktop: 'Desktop has no biometric credential for this device. It may have been unbound or data was reset. Use pairing code to connect, then rebind in Authentication Settings',
+      biometricNotBound:
+        'Biometric auth is not bound yet. Please bind it in Authentication Settings first',
+      biometricNotBoundOnDesktop:
+        'Desktop has no biometric credential for this device. It may have been unbound or data was reset. Use pairing code to connect, then rebind in Authentication Settings',
       foregroundReconnecting: 'Reconnecting...',
       foregroundSessions: '{count} sessions running · Connected to {name}',
       foregroundConnected: 'Connected to {name}',
@@ -89,7 +93,8 @@ export default {
       album: 'Gallery',
       albumNoQr: 'No QR code found in this image, try another one',
       myQr: 'My QR',
-      myQrHint: 'This device runs as a remote terminal and does not generate a scannable QR code. Use this page to scan the QR code from the desktop connection page.',
+      myQrHint:
+        'This device runs as a remote terminal and does not generate a scannable QR code. Use this page to scan the QR code from the desktop connection page.',
       myQrDeviceType: 'Device Type',
       myQrPort: 'Default Port',
       myQrUnknownDevice: 'Unknown device',
@@ -139,7 +144,8 @@ export default {
       theme: 'Theme',
       shortcutCount: 'Shortcut Count',
       persistentToolbar: 'Persistent Toolbar',
-      persistentToolbarHint: 'Choose buttons pinned to the header; the rest move into the overflow menu',
+      persistentToolbarHint:
+        'Choose buttons pinned to the header; the rest move into the overflow menu',
       tabAppearance: 'Appearance',
       tabMisc: 'Misc',
       toolbarTask: 'Task',
@@ -269,7 +275,8 @@ export default {
       switchFailed: 'Failed to switch branch',
       fetchBranchesFailed: 'Failed to fetch branches',
       switchConfirmTitle: 'Switch Branch',
-      switchConfirmMsg: 'You have {count} uncommitted change(s). Switching branches may cause these changes to be lost. Are you sure you want to switch to {branch}?',
+      switchConfirmMsg:
+        'You have {count} uncommitted change(s). Switching branches may cause these changes to be lost. Are you sure you want to switch to {branch}?',
       switchConfirmNoChangeMsg: 'Are you sure you want to switch to {branch}?',
       previewMode: 'Preview',
       sourceMode: 'Source',
@@ -460,7 +467,8 @@ export default {
       approve: 'Approve permissions',
       approving: 'Approving…',
       approveTitle: 'Approve plugin permissions',
-      approveDesc: 'Plugin {name} requests the following permissions. After approval, plugin files are content-pinned; any change requires re-approval.',
+      approveDesc:
+        'Plugin {name} requests the following permissions. After approval, plugin files are content-pinned; any change requires re-approval.',
       approveHint: 'Permissions not yet approved — approve before enabling',
       approveSuccess: 'Approved: {name}',
       approveFailed: 'Approval failed: {error}',
@@ -589,7 +597,10 @@ export default {
       },
       perm: {
         unknown: 'Unknown permission',
-        storage: { title: 'Local Storage', desc: 'Read/write plugin key-value storage and database' },
+        storage: {
+          title: 'Local Storage',
+          desc: 'Read/write plugin key-value storage and database',
+        },
         terminalInput: { title: 'Terminal Input', desc: 'Send commands to session terminals' },
         terminalOutput: { title: 'Terminal Output', desc: 'Listen to session terminal output' },
         sessionRead: { title: 'Session Read', desc: 'Read session list and status' },
@@ -607,6 +618,16 @@ export default {
         confirm: 'OK',
         cancel: 'Cancel',
       },
+    },
+    splash: {
+      tagline: 'LAN Remote Terminal',
+      typedCommand: 'bedcode --boot',
+      ready: "Ready · Let's code",
+      linePlatform: 'Waking terminal engine',
+      lineSettings: 'Grinding ink · Loading theme',
+      linePlugins: 'Assembling plugin panels',
+      lineConnection: 'Calling LAN · Seeking host',
+      lineUi: 'Calibrating display & safe area',
     },
   },
 }
