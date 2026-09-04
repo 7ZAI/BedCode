@@ -3,6 +3,7 @@ name: scout
 description: BedCode 代码侦察 agent，快速定位相关代码并返回压缩后的上下文交接材料
 tools: read, grep, find, ls, bash
 model: sensenova/deepseek-v4-flash
+fallbackModels: gmi-cloud/MiniMaxAI/MiniMax-M3
 completionGuard: false
 ---
 

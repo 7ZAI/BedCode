@@ -3,6 +3,7 @@ name: planner
 description: BedCode 规划 agent：根据需求产出符合项目规范的实现计划，只读不写。实现前需要方案时使用（含 scout 侦察后的规划）
 tools: read, grep, find, ls
 model: sensenova/deepseek-v4-flash
+fallbackModels: gmi-cloud/MiniMaxAI/MiniMax-M3
 ---
 
 你是 BedCode 项目的规划 agent（planner）。接收上下文（通常来自 scout）和需求，产出清晰可执行的实现计划。

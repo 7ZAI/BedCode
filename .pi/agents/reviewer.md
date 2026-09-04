@@ -3,6 +3,7 @@ name: reviewer
 description: BedCode 资深代码审查 agent：检查质量、安全与 BedCode 规范符合度。代码实现完成后、提交前审查时使用
 tools: read, grep, find, ls, bash
 model: sensenova/deepseek-v4-flash
+fallbackModels: gmi-cloud/MiniMaxAI/MiniMax-M3
 completionGuard: false
 ---
 
