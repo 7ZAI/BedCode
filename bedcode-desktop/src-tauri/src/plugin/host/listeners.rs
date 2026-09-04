@@ -3,7 +3,6 @@
 //! 从 `host.rs` 拆出：每个 WASM 插件在 activate 时注册，收到宿主事件后
 //! 序列化 payload 调用插件导出函数（SDK 类型化枚举，serde 表示即线协议）。
 
-use bedcode_plugin_api::events::{InputSubmittedEvent, SessionLifecycleEvent as SdkLifecycleEvent};
 use serde_json;
 
 use super::PluginHost;

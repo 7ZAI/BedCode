@@ -28,6 +28,8 @@ pub trait EventFilter<E: AppEvent>: Send + Sync {
 
 /// 泛型事件处理器包装器
 struct TypedHandler<E: AppEvent> {
+    // 仅供反射接口读取,模块内未直接消费
+    #[allow(dead_code)]
     type_name: &'static str,
     handler: Arc<dyn EventHandler<E>>,
 }
@@ -43,6 +45,8 @@ impl<E: AppEvent> TypedHandler<E> {
 
 /// 带过滤器的事件处理器
 struct FilteredHandler<E: AppEvent> {
+    // 仅供反射接口读取,模块内未直接消费
+    #[allow(dead_code)]
     type_name: &'static str,
     handler: Arc<dyn EventHandler<E>>,
     filter: Arc<dyn EventFilter<E>>,
@@ -61,7 +65,10 @@ impl<E: AppEvent> FilteredHandler<E> {
 /// 事件处理器存储 trait object
 trait HandlerTraitObject: Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    // type_id / type_name_str 是反射调试接口,当前模块内未直接调用,保留以备下游使用
+    #[allow(dead_code)]
     fn type_id(&self) -> TypeId;
+    #[allow(dead_code)]
     fn type_name_str(&self) -> &'static str;
 }
 
@@ -96,6 +103,7 @@ impl<E: AppEvent + 'static> HandlerTraitObject for FilteredHandler<E> {
 /// 事件源存储 trait object
 trait EventSourceTraitObject: Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    #[allow(dead_code)] // 反射接口,保留以备将来使用
     fn type_id(&self) -> TypeId;
 }
 
@@ -846,7 +854,7 @@ mod tests {
         matcher.register_source::<SessionEvent>(tx_s.clone()).await;
         matcher.register_source::<ConnectionEvent>(tx_c.clone()).await;
 
-        let (s_events, s_collector) = Collector::new();
+        let (_s_events, s_collector) = Collector::new();
         let (c_events, c_collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(s_collector)).await;
         matcher.register::<ConnectionEvent>(Arc::new(c_collector)).await;

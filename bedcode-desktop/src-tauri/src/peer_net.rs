@@ -43,7 +43,7 @@ use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use bedcode_peer_net::{
     CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,

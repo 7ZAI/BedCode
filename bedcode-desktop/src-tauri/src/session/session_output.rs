@@ -554,7 +554,7 @@ impl SessionOutputManager {
             };
 
             if need_drain {
-                let mut subscribers = self.subscribers.write().await;
+                let subscribers = self.subscribers.write().await;
                 if let Some(sub) = subscribers.get(client_id) {
                     // pending 全部为快照后事件（见 drain_pending 注释），无重叠无需跳过
                     sub.drain_pending().await;
@@ -590,6 +590,7 @@ impl SessionOutputManager {
     /// 无 terminal handler 或非 UTF-8 输出（二进制数据）时直接透传。
     ///
     /// 位于真源（入队前）：所有消费出口（本地 WS / 移动端 WS / 历史）语义一致
+    #[allow(dead_code)] // 预留：入队前 plugin 处理路径尚未接入调用方
     async fn process_through_plugins(&self, mut event: OutputEvent) -> OutputEvent {
         let ctx = crate::system::app_context::AppContext::global();
         let plugin_host = ctx.plugin_host();

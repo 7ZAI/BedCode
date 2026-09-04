@@ -285,7 +285,7 @@ pub fn register_core_lifecycle_hooks() {
     registry.on_shutdown("mdns-advertiser", 40, || async {
         let ctx = crate::system::app_context::AppContext::global();
         let advertiser = ctx.mdns_advertiser();
-        let mut a = advertiser.write().await;
+        let a = advertiser.write().await;
         if let Err(e) = a.stop().await {
             tracing::error!("Failed to stop mDNS during shutdown: {}", e);
         }

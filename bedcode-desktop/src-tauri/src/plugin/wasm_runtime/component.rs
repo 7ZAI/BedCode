@@ -539,6 +539,7 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的 on_terminal_input 导出
+    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
     pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
@@ -548,6 +549,7 @@ impl LoadedWasmPlugin {
     }
 
     /// 调用插件的 on_terminal_output 导出
+    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
     pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
@@ -647,6 +649,7 @@ impl LoadedWasmPlugin {
     }
 
     /// 获取插件的 manifest JSON
+    #[allow(dead_code)] // 测试覆盖,生产侧 manifest 走其他加载路径
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
@@ -765,7 +768,7 @@ mod tests {
     /// 嵌入 core module 的 component-type 自定义段）；与 wasm_runtime.rs
     /// 测试的 encode_component 同实现，测试模块间不共享故在此复制
     fn encode_component(module: &[u8]) -> Vec<u8> {
-        let mut encoder = wit_component::ComponentEncoder::default();
+        let encoder = wit_component::ComponentEncoder::default();
         encoder
             .module(module)
             .expect("component encoder module")

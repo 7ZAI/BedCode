@@ -10,15 +10,21 @@
 //! 留待后续按需补充）。
 
 // ==================== 常量与判定 ====================
+// 以下 API 仅 Windows 平台使用；非 Windows 平台下 spawn_wake_monitor 走 noop 分支，
+// 但这些符号需要保留（Windows 构建 + 单元测试）。在非 Windows build 时屏蔽 dead_code 警告。
 
 /// 系统电源广播消息（WM_POWERBROADCAST，winuser.h）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const WM_POWERBROADCAST: u32 = 0x0218;
 /// 系统自动恢复（无用户交互唤醒，如定时唤醒）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const PBT_APMRESUMEAUTOMATIC: u32 = 0x0012;
 /// 系统从挂起恢复（用户操作唤醒，如按电源键）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) const PBT_APMRESUMESUSPEND: u32 = 0x0007;
 
 /// 唤醒来源类型
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum ResumeKind {
     /// 用户操作唤醒，可安全抢占焦点
@@ -28,6 +34,7 @@ pub(crate) enum ResumeKind {
 }
 
 /// 判定消息是否为"系统唤醒"广播并返回唤醒来源（纯函数，独立于平台以便测试）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn resume_kind(msg: u32, wparam: usize) -> Option<ResumeKind> {
     if msg != WM_POWERBROADCAST {
         return None;
@@ -42,6 +49,7 @@ pub(crate) fn resume_kind(msg: u32, wparam: usize) -> Option<ResumeKind> {
 }
 
 /// 窗口隐藏或最小化时无需恢复（最小化窗口还原时 WebView2 自身会重建渲染）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) fn should_skip_recovery(visible: bool, minimized: bool) -> bool {
     !visible || minimized
 }

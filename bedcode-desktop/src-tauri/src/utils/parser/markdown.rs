@@ -18,7 +18,6 @@ pub enum MarkdownBlock {
 
 /// Markdown Parser
 pub struct MarkdownParser {
-    code_block_start: Regex,
     heading_regex: Regex,
     list_regex: Regex,
     blockquote_regex: Regex,
@@ -28,7 +27,6 @@ pub struct MarkdownParser {
 impl MarkdownParser {
     pub fn new() -> Self {
         Self {
-            code_block_start: Regex::new(r"^```(\w*)").unwrap(),
             heading_regex: Regex::new(r"^(#{1,6})\s+(.+)$").unwrap(),
             list_regex: Regex::new(r"^(\s*)[-*+]\s+(.+)$|^(\s*)(\d+)\.\s+(.+)$").unwrap(),
             blockquote_regex: Regex::new(r"^>\s+(.+)$").unwrap(),

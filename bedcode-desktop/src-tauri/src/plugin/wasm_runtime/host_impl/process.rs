@@ -99,7 +99,6 @@ pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_j
     // 独立进程组：kill 时连带子进程树（超时 / 插件取消共用同一语义）
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
     #[cfg(windows)]

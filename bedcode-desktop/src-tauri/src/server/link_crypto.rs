@@ -296,6 +296,7 @@ pub fn identity_parts() -> Option<(&'static str, String)> {
 }
 
 /// 身份私钥访问（02/04 内部派生用；未初始化返回 None，调用方 fail-closed）
+#[allow(dead_code)] // 预留：ADR 02/04 内部派生路径尚未接入
 pub(crate) fn identity_keypair(
 ) -> Option<&'static crate::utils::crypto::x25519::X25519KeyPair> {
     IDENTITY.get().map(|i| i.keypair())

@@ -9,7 +9,6 @@ use crate::Result;
 use chrono::Utc;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex, RwLock};
-use uuid::Uuid;
 
 /// 会话配置管理器
 ///
@@ -95,10 +94,10 @@ impl SessionConfigManager {
         &self,
         name: String,
         environment: String,
-        wsl_distro: Option<String>,
+        _wsl_distro: Option<String>,
         working_dir: String,
         command: String,
-        auto_start: bool,
+        _auto_start: bool,
     ) -> Result<SessionConfig> {
         let config = SessionConfig::new(name, environment, working_dir, command);
         let config_id = config.id.clone();

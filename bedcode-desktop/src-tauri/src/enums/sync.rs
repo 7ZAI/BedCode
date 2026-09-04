@@ -7,11 +7,6 @@ use serde::{Deserialize, Serialize};
 use super::plugin::PluginQuestion;
 use super::summary::{SessionConfigSummary, SessionSummary};
 
-/// `expect_response` 默认值（v2.1：intent 必须要求回执，ADR 0021 可靠性要求）
-fn default_true() -> bool {
-    true
-}
-
 /// 同步载荷 - 支持多种数据类型的增量同步
 ///
 /// 用于 WebSocket 消息，向客户端推送增量数据变更

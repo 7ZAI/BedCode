@@ -4,7 +4,6 @@
 //! 静态注册）、trap 自动重载、TerminalHandler 输入/输出管道。
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::Mutex;
 

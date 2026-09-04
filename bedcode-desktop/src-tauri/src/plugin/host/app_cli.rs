@@ -58,6 +58,7 @@ fn user_local_bin() -> PathBuf {
 ///
 /// - 已存在（大小写不敏感相等）→ 原样返回
 /// - 空条目（前后空格/连续分号）规范化去除
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn path_add(path: &str, entry: &str) -> String {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -84,6 +85,7 @@ pub fn path_add(path: &str, entry: &str) -> String {
 }
 
 /// 移除 PATH 条目（大小写不敏感），返回 (新 PATH, 是否发生变更)
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub fn path_remove(path: &str, entry: &str) -> (String, bool) {
     let entry = entry.trim();
     if entry.is_empty() {
@@ -110,6 +112,7 @@ pub fn path_remove(path: &str, entry: &str) -> (String, bool) {
 // ==================== Windows 注册表 PATH ====================
 
 /// 读取 HKCU\Environment\Path（含类型），返回 (value, is_expand_sz)
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 async fn reg_query_path() -> Result<Option<(String, bool)>, String> {
     let mut cmd = tokio::process::Command::new("reg");
     cmd.args(["query", "HKCU\\Environment", "/v", "Path"]);
@@ -143,6 +146,7 @@ async fn reg_query_path() -> Result<Option<(String, bool)>, String> {
 }
 
 /// 写回 HKCU\Environment\Path（保留原 REG_EXPAND_SZ 类型）
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 async fn reg_write_path(value: &str, is_expand_sz: bool) -> Result<(), String> {
     let reg_type = if is_expand_sz { "REG_EXPAND_SZ" } else { "REG_SZ" };
     let mut cmd = tokio::process::Command::new("reg");

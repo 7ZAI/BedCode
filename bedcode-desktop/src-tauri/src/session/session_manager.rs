@@ -56,6 +56,7 @@ pub struct SessionManager {
     /// 同步事件发送器（用于向客户端广播增量数据）
     sync_tx: RwLock<Option<broadcast::Sender<DesktopSyncEvent>>>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
+    #[allow(dead_code)] // 预留字段：公开构造参数,后续用于项目级 hooks 脚本复制
     resource_dir: Arc<PathBuf>,
     /// 会话生命周期监听器注册表
     lifecycle_listeners: Arc<RwLock<Vec<Arc<dyn SessionLifecycleListener>>>>,

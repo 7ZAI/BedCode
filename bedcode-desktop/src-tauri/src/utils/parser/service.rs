@@ -11,7 +11,6 @@ pub use super::{AnsiParser, MarkdownParser, StyledSegment};
 /// Output parser combining ANSI and Markdown parsing
 pub struct OutputParser {
     ansi_parser: AnsiParser,
-    md_parser: MarkdownParser,
     progress_regex: Regex,
     waiting_patterns: Vec<Regex>,
 }
@@ -20,7 +19,6 @@ impl OutputParser {
     pub fn new() -> Self {
         Self {
             ansi_parser: AnsiParser::new(),
-            md_parser: MarkdownParser::new(),
             // Match progress patterns like "50%", "[50/100]", "Loading... 50%"
             progress_regex: Regex::new(r"(\d+)%|\[(\d+)/(\d+)\]|progress[:\s]*(\d+)%?").unwrap(),
             waiting_patterns: vec![
