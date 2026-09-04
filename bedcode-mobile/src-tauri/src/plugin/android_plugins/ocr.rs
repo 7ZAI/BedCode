@@ -12,6 +12,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 CameraPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static CAMERA_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 CameraPlugin（ACTION_IMAGE_CAPTURE + FileProvider + CAMERA 运行时权限）

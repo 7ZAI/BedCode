@@ -6,5 +6,6 @@
  */
 
 export * from './auth'
+export * from './plugin'
 export * from './session'
 export * from './sync'

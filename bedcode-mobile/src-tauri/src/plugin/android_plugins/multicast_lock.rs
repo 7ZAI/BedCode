@@ -10,6 +10,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 MulticastLockPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static MULTICAST_LOCK_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 MulticastLockPlugin（幂等 acquire/release 的多播锁持有者）

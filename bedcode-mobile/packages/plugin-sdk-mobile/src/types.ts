@@ -198,19 +198,18 @@ export interface MobileHttpResult<T = any> {
   data?: T
 }
 
-/** 任务队列项（对端桌面端 AutoTask 插件） */
-export interface MobileQueueTaskItem {
-  id: string
-  prompt: string
-  position: number
-  status: string
-  created_at: string
+/** 通用对端 REST 请求选项（宿主注入 JWT / 链路加密 / 错误归一化） */
+export interface MobileHttpRequestOptions {
+  method?: string
+  body?: any
+  headers?: Record<string, string>
 }
 
 /** 移动端宿主连接/HTTP 能力（共享运行时 mobileApi 模块）
  *
- * 经宿主 shared-runtime 暴露，供插件访问当前活动会话与对端桌面端 REST API。
- * 队列接口为 AutoTask 插件专属端点（/api/plugin/com.bedcode.auto-task/...）。
+ * 通用能力层：连接状态 + 对端桌面端 REST 请求通道。
+ * 具体插件业务端点（任务队列 / 会话模式 / 任务历史 / 定时任务等）
+ * 由各插件基于 httpRequest 自行封装，SDK 不感知插件领域细节。
  */
 export interface MobileHostApi {
   /** 当前活动会话 id（响应式 ref，可 watch / computed） */
@@ -221,110 +220,8 @@ export interface MobileHostApi {
   sessionConfigs: import('vue').Ref<any[]>
   /** 是否已连接对端桌面端（响应式 ref，可 watch / computed） */
   isConnected: import('vue').Ref<boolean>
-  /** 查询任务队列 */
-  httpTaskQueueList(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    tasks: MobileQueueTaskItem[]
-    queue_count: number
-    /** 当前活动任务（waiting/executing 最前一项；无活动任务时为 null） */
-    active_task: (MobileQueueTaskItem & { source?: string }) | null
-  }>>
-  /** 添加任务到队列 */
-  httpTaskQueueAdd(sessionId: string, prompt: string): Promise<MobileHttpResult>
-  /** 从队列删除任务 */
-  httpTaskQueueRemove(sessionId: string, taskId: string): Promise<MobileHttpResult>
-  /** 取消活动队列项（waiting / executing） */
-  httpTaskQueueCancel(sessionId: string, taskId: string): Promise<MobileHttpResult>
-  /** 清空任务队列 */
-  httpTaskQueueClear(sessionId: string): Promise<MobileHttpResult>
-  /** 更新队列任务内容 */
-  httpTaskQueueUpdate(sessionId: string, taskId: string, prompt: string): Promise<MobileHttpResult>
-  /** 重排序任务队列 */
-  httpTaskQueueReorder(sessionId: string, taskIds: string[]): Promise<MobileHttpResult>
-  /** 查询会话设置（auto_execute / auto_answer） */
-  httpSessionSettings(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    auto_execute: boolean
-    auto_answer: boolean
-  }>>
-  /** 设置会话自动模式 */
-  httpSetSessionMode(sessionId: string, autoExecute?: boolean, autoAnswer?: boolean): Promise<MobileHttpResult>
-  /** 查询会话当前任务 */
-  httpCurrentTask(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    task: {
-      id: string
-      description: string | null
-      status: string
-      auto_approve: number
-      created_at: string
-    } | null
-  }>>
-  /** 查询 auto-task 支持的 agent 列表 */
-  httpListSupportedAgents(): Promise<MobileHttpResult<{ agents: string[] }>>
-  /**
-   * 查询任务历史列表（分页 + 筛选）
-   *
-   * 只拼接已提供的筛选参数；返回 { tasks, total, limit, offset }，
-   * 时间字段为 UTC `YYYY-MM-DD HH:MM:SS` 字符串，需前端自行转本地时区。
-   */
-  httpTaskHistoryList(params?: {
-    status?: string
-    agent?: string
-    source?: string
-    since?: string
-    until?: string
-    limit?: number
-    offset?: number
-  }): Promise<MobileHttpResult<{
-    tasks: {
-      id: string
-      description: string | null
-      status: string
-      agent: string | null
-      source: string | null
-      session_id: string
-      claude_sid: string | null
-      working_dir: string | null
-      auto_approve: number
-      exit_reason: string | null
-      created_at: string
-      started_at: string | null
-      completed_at: string | null
-      input_tokens: number | null
-      output_tokens: number | null
-    }[]
-    total: number
-    limit: number
-    offset: number
-  }>>
-  /** 查询定时任务列表（返回 { jobs }） */
-  httpScheduledJobsList(): Promise<MobileHttpResult<{
-    jobs: {
-      id: string
-      name: string | null
-      config_id: string
-      trigger_at: string
-      prompts: string
-      status: string
-      session_id: string | null
-      created_at: string
-      executed_at: string | null
-      error: string | null
-    }[]
-  }>>
-  /**
-   * 创建定时任务
-   *
-   * trigger_at 为 UTC `YYYY-MM-DD HH:MM:SS`；prompts 为任务 prompt 数组。
-   * 后端 400 时 message 含具体缺失字段。
-   */
-  httpScheduledJobCreate(body: {
-    name?: string
-    config_id: string
-    trigger_at: string
-    prompts: string[]
-  }): Promise<MobileHttpResult<{ job_id: string }>>
+  /** 通用对端 REST 请求；返回 { code, message, data } 形状 */
+  httpRequest<T = any>(path: string, options?: MobileHttpRequestOptions): Promise<MobileHttpResult<T>>
 }
 
 // ==================== 对话框 ====================
@@ -508,73 +405,19 @@ export interface SystemAPI {
 
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================
 
-/** OCR 识别结果种子（dev-shell ocr.recognize 用；缺省时 mock 宿主返回内置示例行） */
-export type OcrLinesSeed = OcrLine[]
-
-/** file-transfer 对等领域种子（附近设备面板 / 后续首连确认、可信对端演示数据） */
-export interface PeerDevMock {
-  /**
-   * 发现设备列表（宿主 DiscoveredPeerDto 的 camelCase 子集），
-   * 须覆盖在线/未连接两态；fileTransfer=false 节点可见但不可连接
-   */
-  devices: Array<{
-    nodeId: string
-    deviceName: string
-    addr?: string
-    fileTransfer?: boolean
-  }>
-  /** 初始已连接节点 id（对端已确认的传输会话） */
-  connectedNodeIds?: string[]
-  /** 初始活跃对端 nodeId（应为 connectedNodeIds 之一） */
-  activeNodeId?: string
-  /** 拨号行为覆盖：nodeId → 终态；未列出的可传输节点按 unreachable 处理 */
-  dialBehavior?: Record<string, 'connected' | 'denied' | 'unreachable'>
-  /** 模拟握手耗时 ms（缺省 800） */
-  dialLatencyMs?: number
-}
-
 /**
- * 插件开发期领域数据：dev-shell mock 宿主按 pluginId 合并（仅浏览器 dev 环境消费）
+ * 插件开发期领域数据（dev-shell mock 协议，仅浏览器 dev 环境消费）。
  *
- * 与"宿主能力 mock"（会话/对话框/事件/HTTP 接口等，固定在 dev-shell 内实现）
- * 区分：本协议只承载各插件自己的业务演示数据，由插件入口导出 devMock，
- * dev-shell 加载插件时经 registry 注册、createMockContext 按需取用。
+ * 与"宿主能力 mock"（会话/对话框/事件/HTTP 接口等，固定在 dev-shell 内实现）区分：
+ * 本协议只承载各插件自己的业务演示数据，由插件入口导出 devMock，dev-shell
+ * 加载插件时按 pluginId 注册、按需取用。
+ *
+ * SDK 只约定「入口导出 devMock」的通用容器协议，不感知任何插件领域细节：
+ * 各插件自有类型（任务队列种子 / OCR 识别种子 / 文件传输对等与传输域种子等）
+ * 由插件工程自行定义；dev-shell 消费时 cast 到插件自有形状。
  * 真实宿主忽略该字段（多余导出对 activate 无影响），插件无需条件编译。
  */
-/** 远端文件浏览种子：根清单 + 目录内容表（key = `${dirId}::${相对路径}`，根目录 path=''） */
-export interface RemoteFsDevMock {
-  roots: Array<{ id: string; name: string }>
-  files?: Record<
-    string,
-    Array<{ name: string; size: number; mtime: number; isDir: boolean }>
-  >
-}
-
-/** 本机共享设置种子（roots 为宿主 wire DTO 形状，含 SAF tree_uri） */
-export interface TransferSettingsDevMock {
-  roots?: Array<{ id: string; name: string; tree_uri: string; builtin?: boolean }>
-  /** 缺省 'ask'（协议枚举缺省值） */
-  policyMode?: string
-  askTimeoutSec?: number
-  downloadDir?: string
-}
-
-/** file-transfer 传输域种子（远端浏览 / 共享设置；缺省子域回退空态） */
-export interface TransferDevMock {
-  remoteFs?: RemoteFsDevMock
-  settings?: TransferSettingsDevMock
-}
-
-export interface PluginDevMock {
-  /** 任务队列种子（auto-task：mobileApi 初始队列项，localStorage 无缓存时使用） */
-  queueSeed?: MobileQueueTaskItem[]
-  /** OCR 识别结果种子（ocr：ocr.recognize 的 mock 返回；空数组演示空结果空态） */
-  ocrLinesSeed?: OcrLinesSeed
-  /** file-transfer 对等子数据（附近设备面板演示态；见 PeerDevMock） */
-  peer?: PeerDevMock
-  /** file-transfer 传输域（远端文件浏览、本机共享设置） */
-  transfer?: TransferDevMock
-}
+export type PluginDevMock = Record<string, unknown>
 
 /** 国际化 API */
 export interface I18nAPI {

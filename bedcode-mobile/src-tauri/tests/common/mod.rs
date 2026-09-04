@@ -12,6 +12,11 @@
 //! - 支持多连接（04 事件 WS 断线重建、多客户端场景）：每个连接独立处理任务，
 //!   连接计数累计（`connection_count()`），`send_message`/`graceful_close` 广播到全部连接
 
+// 测试公共设施：被多个集成测试共享,各测试按需引用其子集;
+// cargo 在单 test 二进制内会报未引用 item 为 dead_code,加整文件 allow。
+// 测试基础设施不需要生产代码那种「全字段全用」的整洁度,允许 shared 字段被某些测试忽略。
+#![allow(dead_code)]
+
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;

@@ -7,6 +7,7 @@ use tauri::plugin::{Builder, PluginHandle};
 use tauri::Manager;
 
 /// 已注册的 DownloadsDirPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static DOWNLOADS_DIR_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 DownloadsDirPlugin（Android 外部私有下载目录路径获取）

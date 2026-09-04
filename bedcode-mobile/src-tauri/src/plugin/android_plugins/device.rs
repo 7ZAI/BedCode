@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 DeviceIdPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static DEVICE_ID_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 DeviceIdPlugin（读取 Android 设备唯一 ID，卸载重装保持一致）

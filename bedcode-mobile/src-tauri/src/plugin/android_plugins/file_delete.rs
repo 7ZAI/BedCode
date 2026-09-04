@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 FileDeletePlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static FILE_DELETE_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 FileDeletePlugin（删除文件，WASM HostFs::fs_delete 的 Android 实现）

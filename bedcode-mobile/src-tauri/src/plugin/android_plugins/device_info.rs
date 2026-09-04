@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 DeviceInfoPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static DEVICE_INFO_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 DeviceInfoPlugin（读取系统设备信息：用户设备名 / 机型 / OS 版本）

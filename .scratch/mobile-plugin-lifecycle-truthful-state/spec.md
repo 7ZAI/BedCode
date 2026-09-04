@@ -1,6 +1,6 @@
 # Spec：插件生命周期真实上报（移动端）— 让状态与日志反映插件真实加载结果
 
-Status: ready-for-execution（2026-09-04 审计：§3.1–3.3 + §3.5 全部 checklist 已落地，详见 issues/01–02；§3.4 移动端不适用，详见 issues/03；§3.6 P2 留 pending，详见 issues/04）
+Status: ready-for-execution → testing-coverage-complete（2026-09-04 审计：§3.1–3.3 + §3.5 全部 checklist 已落地，详见 issues/01–02；§3.4 移动端不适用，详见 issues/03；§3.6 P2 留 pending，详见 issues/04。**2026-09-04 补盲点完成**：manager.rs 状态机 4 case + loader.ts gating 矩阵 1 case + 修 splash.ts JSDoc 解析 bug；cargo 4/4 + pnpm 36 文件 304/304 全绿）
 Date: 2026-09-04
 Owner: mobile plugin system
 Related: `bedcode-mobile/src-tauri/src/plugin/`、`packages/plugin-sdk-mobile/rust/`
@@ -211,14 +211,14 @@ Loaded/Error(e)/Degraded(e)          // Degraded/Error 可重试激活
 
 ## 4. 测试计划
 
-| 层 | 内容 |
-|----|------|
-| SDK rust | `wasm_entry!` 宏测试：on_startup Err 传播到导出返回值；默认实现 Ok |
-| 测试插件 | `packages/plugin-component-test` 增加 on_startup-fail 用例（feature 开关），覆盖宿主 Degraded 路径 |
+| 层                    | 内容                                                                                                                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| SDK rust              | `wasm_entry!` 宏测试：on_startup Err 传播到导出返回值；默认实现 Ok                                                                                                                                      |
+| 测试插件              | `packages/plugin-component-test` 增加 on_startup-fail 用例（feature 开关），覆盖宿主 Degraded 路径                                                                                                      |
 | 宿主 manager.rs tests | activate on_startup 失败 → Degraded；Degraded 可重试激活 → Activated；deactivate(Degraded) → Deactivated；AppStartup 不再触发二次 on_startup；dispatch_lifecycle_event 对 Degraded 插件仍投递运行期事件 |
-| component.rs tests | `on_startup()` 导出失败传播到 `crate::Result`（WIT result 映射） |
-| 前端 | PluginState fixtures 扩展新状态；loadAll 对 Degraded 放行 + warn、对 Activating 跳过 |
-| 全量 | `cargo test`（workspace）+ `pnpm run test:run`（mobile，AGENTS.md 强制 pnpm 且禁 watch 模式）全绿；4 个内置插件（ai-chatbox / auto-task / file-transfer / ocr）重新构建通过 |
+| component.rs tests    | `on_startup()` 导出失败传播到 `crate::Result`（WIT result 映射）                                                                                                                                        |
+| 前端                  | PluginState fixtures 扩展新状态；loadAll 对 Degraded 放行 + warn、对 Activating 跳过                                                                                                                    |
+| 全量                  | `cargo test`（workspace）+ `pnpm run test:run`（mobile，AGENTS.md 强制 pnpm 且禁 watch 模式）全绿；4 个内置插件（ai-chatbox / auto-task / file-transfer / ocr）重新构建通过                             |
 
 ## 5. 开放问题
 
@@ -236,11 +236,11 @@ Loaded/Error(e)/Degraded(e)          // Degraded/Error 可重试激活
 
 ## 7. 涉及文件清单
 
-| 文件 | 改动 |
-|------|------|
-| `packages/plugin-sdk-mobile/rust/wit/bedcode.wit` | on-startup/on-shutdown 加 result |
-| `packages/plugin-sdk-mobile/rust/src/wasm.rs` | wasm_entry! lifecycle Guest 骨架：吞错 → 上抛 + 日志（trait 不动） |
-| `packages/plugin-sdk-mobile/rust/src/types.rs` | PluginState 增加 Activating / Degraded { error: String } |
-| `bedcode-mobile/src-tauri/src/plugin/manager.rs` | activate() 状态机重构（phase 1b on_startup + Degraded 终态）；dispatch_lifecycle_event 目标扩为 Activated+Degraded 并剔除 on_startup |
-| `bedcode-mobile/src-tauri/src/plugin/loader.rs` | 无（Loaded 初态不变；汇总日志可加 Degraded/Error 分计数） |
-| `bedcode-mobile/src-tauri/src/plugin/wasm_runtime/component.rs` | on_startu
+| 文件                                                            | 改动                                                                                                                                 |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `packages/plugin-sdk-mobile/rust/wit/bedcode.wit`               | on-startup/on-shutdown 加 result                                                                                                     |
+| `packages/plugin-sdk-mobile/rust/src/wasm.rs`                   | wasm_entry! lifecycle Guest 骨架：吞错 → 上抛 + 日志（trait 不动）                                                                   |
+| `packages/plugin-sdk-mobile/rust/src/types.rs`                  | PluginState 增加 Activating / Degraded { error: String }                                                                             |
+| `bedcode-mobile/src-tauri/src/plugin/manager.rs`                | activate() 状态机重构（phase 1b on_startup + Degraded 终态）；dispatch_lifecycle_event 目标扩为 Activated+Degraded 并剔除 on_startup |
+| `bedcode-mobile/src-tauri/src/plugin/loader.rs`                 | 无（Loaded 初态不变；汇总日志可加 Degraded/Error 分计数）                                                                            |
+| `bedcode-mobile/src-tauri/src/plugin/wasm_runtime/component.rs` | on_startu                                                                                                                            |

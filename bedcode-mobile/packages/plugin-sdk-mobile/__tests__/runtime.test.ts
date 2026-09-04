@@ -3,7 +3,7 @@
  *
  * 移动端与桌面端同构：宿主把共享模块挂到 window.__BEDCODE_SHARED__，
  * 插件经 runtime 代理读取。多出的 getPresetTasks / getMobileApi 是
- * 移动端专属模块（预设任务 composable 与连接/HTTP 能力）。
+ * 移动端专属模块（预设任务 composable 与通用连接/HTTP 能力）。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import {
@@ -73,7 +73,7 @@ describe('共享模块代理函数', () => {
 
   it('移动端专属代理：getPresetTasks / getMobileApi', () => {
     const presetTasks = { usePresetTasks: () => {} }
-    const mobileApi = { httpCurrentTask: () => Promise.resolve() }
+    const mobileApi = { isConnected: { value: true }, httpRequest: () => Promise.resolve({ code: 0, message: 'ok' }) }
     shared.presetTasks = presetTasks
     shared.mobileApi = mobileApi
 

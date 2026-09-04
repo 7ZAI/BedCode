@@ -46,13 +46,11 @@ export type {
   OcrResult,
   OcrEngineStatus,
   OcrImageSource,
-  OcrLinesSeed,
-  PeerDevMock,
   PluginDevMock,
   PluginContext,
   PluginModule,
   MobileHttpResult,
-  MobileQueueTaskItem,
+  MobileHttpRequestOptions,
   MobileHostApi,
 } from './types'
 

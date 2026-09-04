@@ -9,6 +9,7 @@ use tauri::plugin::{Builder, PluginHandle};
 ///
 /// 移动端应用运行时的 Runtime 固定为 Wry（桌面 dev 窗口与 Android 一致），
 /// 因此可存储具体类型而非泛型。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static PLUGIN_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 PluginAssetExtractor（内置插件资源解压）

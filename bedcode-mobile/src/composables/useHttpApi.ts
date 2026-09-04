@@ -138,6 +138,33 @@ async function request<T = any>(
   }
 }
 
+// ==================== 通用请求通道（插件 shared runtime mobileApi 用） ====================
+
+/** 通用对端 REST 请求选项（插件经 mobileApi.httpRequest 访问；body 支持对象或字符串） */
+export interface MobileHttpRequestOptions {
+  method?: string
+  body?: unknown
+  headers?: Record<string, string>
+}
+
+/**
+ * 通用 HTTP 请求：与内部 request 一致（JWT 注入 / 链路加密 / 错误归一化），
+ * body 为对象时自动 JSON.stringify（与既有业务包装函数行为对齐）。
+ * 具体插件业务端点由各插件工程基于本通道自行封装，宿主不感知插件领域。
+ */
+export function httpRequest<T = any>(
+  path: string,
+  options: MobileHttpRequestOptions = {},
+): Promise<ApiResult<T>> {
+  const body =
+    typeof options.body === 'string'
+      ? options.body
+      : options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined
+  return request<T>(path, { ...options, body } as RequestInit)
+}
+
 // ==================== Auth API ====================
 
 export async function httpRequestPairing(data: {
@@ -299,7 +326,7 @@ export async function httpGetFileDiff(sessionId: string, filePath: string) {
 
 /** 设置会话自动模式（auto_execute / auto_answer） */
 export async function httpSetSessionMode(sessionId: string, autoExecute?: boolean, autoAnswer?: boolean) {
-  const body: Record<string, any> = { session_id: sessionId }
+  const body: { session_id: string; auto_execute?: boolean; auto_answer?: boolean } = { session_id: sessionId }
   if (autoExecute !== undefined) body.auto_execute = autoExecute
   if (autoAnswer !== undefined) body.auto_answer = autoAnswer
   return request(

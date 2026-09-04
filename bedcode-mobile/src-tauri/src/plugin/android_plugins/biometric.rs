@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 BiometricKeyPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static BIOMETRIC_KEY_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 BiometricKeyPlugin（生物认证密钥：Android Keystore 生成/签名/删除）
@@ -130,6 +131,7 @@ pub async fn biometric_device_supported() -> crate::Result<(bool, i32)> {
 }
 
 /// 生成 Keystore 别名（指纹哈希，避免非法字符并保证长度稳定）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn biometric_alias(fingerprint: &str) -> String {
     use sha2::{Digest, Sha256};
     let hash = Sha256::digest(fingerprint.as_bytes());

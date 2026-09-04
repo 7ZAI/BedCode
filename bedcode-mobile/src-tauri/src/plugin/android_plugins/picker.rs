@@ -8,9 +8,11 @@ use std::sync::OnceLock;
 use tauri::plugin::{Builder, PluginHandle};
 
 /// 已注册的 SafPickerPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static SAF_PICKER_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 已注册的 SafTransferPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 pub(super) static SAF_TRANSFER_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
 
 /// 注册 SafPickerPlugin（SAF 文件/目录选择器，免存储权限）
@@ -133,6 +135,7 @@ pub async fn pick_image_android() -> crate::Result<Option<crate::ocr::OcrImageSo
 /// 把 Kotlin SAF 选择结果（authority/documentId/primaryDir）解析为真实路径
 ///
 /// 用户取消（cancelled=true）返回 Ok(None)；不支持的 provider 返回明确错误。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 fn saf_response_to_path(response: &serde_json::Value, kind: &str) -> crate::Result<Option<String>> {
     if response.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false) {
         return Ok(None);

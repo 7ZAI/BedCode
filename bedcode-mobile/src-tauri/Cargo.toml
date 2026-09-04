@@ -126,14 +126,21 @@ actix-web = { version = "4", default-features = false }
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
 # 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
 panic = "unwind"
-codegen-units = 1
-lto = true
+# fat LTO + 单 codegen unit 会在最终链接阶段合并全部 bitcode，峰值内存 8GB+（含 wasmtime/cranelift 时更甚），
+# 在 12~16GB 内存机器上触发 OOM；改用 thin LTO + 并行 codegen，性能损失 ~2-5%，峰值内存大幅下降
+# （与桌面端 release profile 对齐，2026-09 整改统一两端策略）
+codegen-units = 16
+lto = "thin"
 opt-level = "s"
 strip = true
 
 # ==================== 开发模式优化 ====================
 [profile.dev]
-debug = 1
+# debug = 1 全量调试信息使 rustc 编译巨型 crate（含 wasmtime）时内存峰值过高，
+# 在 collect_and_partition_mono_items 阶段 OOM（0xc0000409，页面文件被禁用的机器上必现）。
+# line-tables-only 保留行号回溯（debugger 变量查看不可用），编译内存与 target 体积大幅下降
+# （与桌面端 dev profile 对齐，避免 wasmtime OOM）
+debug = "line-tables-only"
 incremental = true
 split-debuginfo = "packed"
 
