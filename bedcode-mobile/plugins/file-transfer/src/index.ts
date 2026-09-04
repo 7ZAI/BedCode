@@ -1,14 +1,19 @@
 /**
- * File Transfer 插件入口 (Mobile) — host-peer 契约版
+ * File Transfer 插件入口 (Mobile) — 三段式主视图版
  *
  * activate：
  *   1. 注册 i18n 消息（key 自动加插件 id 前缀）
  *   2. 注入插件全局样式（宿主不加载插件 dist/style.css，运行时注入一次）
- *   3. 注册工具箱视图（component=浏览主页面 + entry=入口卡片带状态角标）
+ *   3. 注册工具箱视图（component=三段式主视图 传输/浏览/设备 + entry=入口卡片）
  *   4. 注册设置区与设置二级页路由
  *
- * 事件监听由组件内的 useTasks.start() 注册（入口卡与浏览页各自启动），
- * 组件卸载/插件停用时经 context._disposables 与组件 onUnmounted 清理。
+ * 主视图 FileTransferView 采用三段式布局：传输列表默认可见、浏览与设备
+ * 折叠为 tab，底栏按多选/活跃/上传三态收敛唯一入口。领域逻辑（useTasks /
+ * usePeerDevices / useRemoteFs / useSettings）由组件内 setup 启动，组件
+ * 卸载/插件停用时经 context._disposables 与组件 onUnmounted 清理。
+ *
+ * 历史：此入口早期为「浏览为主 + 底部 sheet」布局（FileTransferView/TaskQueueSheet/
+ * PeerDevicesSheet），重构为三段式后旧实现已并入并删除，src/v2/ 并行层随之清理。
  */
 import FileTransferView from './components/FileTransferView.vue'
 import ToolboxEntry from './components/ToolboxEntry.vue'
@@ -42,7 +47,7 @@ export async function activate(context: PluginContext): Promise<void> {
     document.head.appendChild(styleEl)
   }
 
-  // 3. 工具箱视图：component 为浏览主页面，entry 为带状态角标的入口卡片
+  // 3. 工具箱视图：component 为主页面（三段式），entry 为带状态角标的入口卡片
   context.ui.registerToolboxPage({
     id: 'file-transfer.toolbox',
     title: context.i18n.t('transfer.toolbox.title'),
@@ -72,7 +77,7 @@ export async function activate(context: PluginContext): Promise<void> {
   consentController = useConsent(context)
   consentController.start()
 
-  context.logger.info('File Transfer plugin activated (host-peer proxy, mobile)')
+  context.logger.info('File Transfer plugin activated (3-section view, mobile)')
 }
 
 export async function deactivate(): Promise<void> {

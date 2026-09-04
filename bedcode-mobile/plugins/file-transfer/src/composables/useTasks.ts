@@ -84,7 +84,7 @@ function mapWireHistory(raw: any): HistoryEntry {
     state: raw.status ?? 'failed',
     reason: raw.detail ?? raw.rejectReason ?? null,
     peerName: raw.peerName ?? '',
-    localPath: null,
+    localPath: raw.localPath ?? null,
     createdAt: raw.createdAtMs ?? 0,
     updatedAt: raw.updatedAtMs ?? 0,
   }
@@ -313,12 +313,12 @@ export function useTasks(context: PluginContext) {
       context.events.on('ws_auth_failed', () => onConnChanged(false)),
     ]
     void refresh()
-    void refreshV2()
+    void refreshReceiving()
     void queryPeer()
   }
 
-  /** 拉取接收侧初始快照 */
-  async function refreshV2(): Promise<void> {
+  /** 拉取接收侧初始快照（pending batches / 接收中 / 历史） */
+  async function refreshReceiving(): Promise<void> {
     try {
       const [b, r, h] = await Promise.all([
         context.commands.execute('file-transfer.list-batches', {}),
@@ -329,7 +329,7 @@ export function useTasks(context: PluginContext) {
       receivingTasks.value = Array.isArray(r) ? r.map(mapWireReceiving) : []
       history.value = Array.isArray(h) ? h.map(mapWireHistory) : []
     } catch (e) {
-      console.error('[File Transfer] initial v2 snapshot failed:', e)
+      console.error('[File Transfer] initial receiving snapshot failed:', e)
     }
   }
 
@@ -362,7 +362,7 @@ export function useTasks(context: PluginContext) {
     peerName,
     displayPeerName,
     refresh,
-    refreshV2,
+    refreshReceiving,
     sendFiles,
     queryPeer,
     cancel,

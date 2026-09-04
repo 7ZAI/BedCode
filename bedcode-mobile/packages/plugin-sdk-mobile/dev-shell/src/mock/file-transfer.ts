@@ -46,6 +46,12 @@ interface MockTransferSeed {
     askTimeoutSec?: number
     downloadDir?: string
   }
+  /** 任务快照种子（插件本地扩展字段；wire camelCase 形状，useTasks mapWire* 消费） */
+  tasks?: {
+    queue: Array<Record<string, unknown>>
+    receiving: Array<Record<string, unknown>>
+    history: Array<Record<string, unknown>>
+  }
 }
 
 /**
@@ -143,8 +149,20 @@ export function registerFileTransferMock(
 
   // ==================== 对等域命令 handler ====================
 
-  // 设备缓存自持（Phase 3 步骤 1）：快照存取 + 发现事件延迟推送
-  context.commands.register('file-transfer.get-device-snapshot', () => ({ devices: [] }))
+  // 设备缓存自持（Phase 3 步骤 1）：快照存取 + 发现事件延迟推送。
+  // get-device-snapshot 从种子派生快照（wire 形状与宿主一致）：插件视图挂载
+  // 晚于激活事件时，设备仍能由「最近可见」快照恢复首屏展示（真实宿主行为同源）
+  context.commands.register('file-transfer.get-device-snapshot', () => ({
+    devices: deviceSeeds.map((d, i) => ({
+      nodeId: d.found.txtRecords.id,
+      deviceName: d.found.txtRecords.name ?? '',
+      addr: d.found.addresses[0] ?? '',
+      port: d.found.port,
+      capabilitiesHex: d.found.txtRecords.cap ?? '0',
+      instanceName: d.found.instanceName,
+      lastSeenMs: Date.now() - i * 8000,
+    })),
+  }))
   context.commands.register('file-transfer.save-device-snapshot', () => ({ ok: true }))
   context.commands.register('file-transfer.set-active-peer', (args: any) => {
     const id = args?.peerId
@@ -300,6 +318,33 @@ export function registerFileTransferMock(
     return { removed: true }
   })
 
+  // ==================== 传输任务快照（useTasks 契约：list-* 命令 + *-changed 事件） ====================
+  // 种子来自插件 devMock.transfer.tasks（业务数据归插件工程，此处仅命令骨架接线），
+  // 缺省回退空数组 —— 插件未导出任务种子时传输 tab 演示空态。
+  // wire 形状与宿主 PeerTransferDto 对齐（camelCase），useTasks 映射层原样消费。
+
+  const taskSeed = transfer?.tasks
+  const taskQueue = taskSeed?.queue?.map((t) => ({ ...t })) ?? []
+  const receivingSeed = taskSeed?.receiving?.map((t) => ({ ...t })) ?? []
+  const historySeed = taskSeed?.history?.map((t) => ({ ...t })) ?? []
+
+  context.commands.register('file-transfer.list-tasks', () => taskQueue.map((t) => ({ ...t })))
+  context.commands.register('file-transfer.list-batches', () => [])
+  context.commands.register('file-transfer.list-receiving', () => receivingSeed.map((t) => ({ ...t })))
+  context.commands.register('file-transfer.list-history', () => historySeed.map((t) => ({ ...t })))
+
+  // 快照整表事件补发（useTasks start() 订阅整表替换；延迟推送模拟宿主激活后首报，
+  // 与初始命令同步幂等，double-push 无害）
+  if (taskQueue.length || receivingSeed.length || historySeed.length) {
+    timers.push(
+      setTimeout(() => {
+        emitDevEvent('plugin:file-transfer:tasks-changed', taskQueue.map((t) => ({ ...t })))
+        emitDevEvent('plugin:file-transfer:receiving-changed', receivingSeed.map((t) => ({ ...t })))
+        emitDevEvent('plugin:file-transfer:history-changed', historySeed.map((t) => ({ ...t })))
+      }, 1500),
+    )
+  }
+
   // ==================== 初始与延迟补发 ====================
 
   // 发现事件延迟推送（自建缓存 wire）+ 连接态补发 + WS 控制面在线
@@ -314,6 +359,29 @@ export function registerFileTransferMock(
       emitDevEvent('ws_paired', {})
     }, 600),
   )
+
+  // 激活事件早于插件视图挂载（dev-shell 事件总线不重放历史，晚订阅者会漏收）：
+  // 在常见挂载窗口后再整表重放两次（6s / 14s），幂等合并，覆盖手动/截图两种节奏。
+  // 纯通用接线：不新增任何业务数据，只是把种子已有状态重新广播一遍。
+  function replayPulse(): void {
+    deviceSeeds.forEach((seed) => {
+      emitDevEvent('plugin:file-transfer:mdns-found', { ...seed.found })
+    })
+    for (const nodeId of connectedNodes) {
+      const seed = seedByNode.get(nodeId)
+      emitDevEvent('plugin:file-transfer:connection-changed', {
+        nodeId,
+        connected: true,
+        deviceName: seed?.found.txtRecords.name ?? null,
+      })
+    }
+    emitDevEvent('device-connected', {
+      device_id: activePeerId || deviceSeeds[0]?.found.txtRecords.id || '',
+      device_name: deviceSeeds[0]?.found.txtRecords.name ?? '',
+    })
+    emitDevEvent('ws_paired', {})
+  }
+  timers.push(setTimeout(replayPulse, 6000), setTimeout(replayPulse, 14000))
 }
 
 /** 清理模拟定时器（插件停用时调用；命令 handler 随 context disposables 摘除） */

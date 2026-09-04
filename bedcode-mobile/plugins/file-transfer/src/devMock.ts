@@ -207,6 +207,108 @@ const devMock: DevMockWithPeer = {
         ],
       },
     },
+    // 任务快照种子（本地扩展字段；wire camelCase 形状，useTasks mapWire*
+    // 消费，dev-shell mock 按此实现 list-tasks / list-receiving / list-history
+    // 命令骨架 + 快照事件补发）。覆盖传输 tab 四象限：发送中（进度+速率）、
+    // 发送失败（原因块 + 重试）、接收中、历史（完成/失败/取消，相对时间）。
+    // 注意：wire status 非 runner 态只有 running（→transferring）与终态，
+    // 没有 queued（TASK_STATE_KEYS 无该键，注入会渲染 undefined）
+    tasks: {
+      // 发送方向任务列表（file-transfer.list-tasks）
+      queue: [
+        {
+          batchId: 'demo-send-img-01',
+          direction: 'send',
+          nodeId: NODE_XIAOMI,
+          peerName: '小米 14 Pro',
+          files: [
+            { path: '/DCIM/IMG_20240801_1932.jpg', size: 4869382 },
+            { path: '/DCIM/IMG_20240801_1940.jpg', size: 4123400 },
+            { path: '/DCIM/IMG_20240801_1955.jpg', size: 3891100 },
+            { path: '/DCIM/IMG_20240801_2001.jpg', size: 4217800 },
+          ],
+          totalBytes: 17101682,
+          transferredBytes: 4380000,
+          rateBps: 2240000,
+          status: 'running',
+          createdAtMs: 1754686000000,
+          updatedAtMs: 1754686000000,
+        },
+        {
+          // 失败条目：rejectReason 命中 taskReason 映射 → 行内原因块 + 重试
+          batchId: 'demo-send-doc-02',
+          direction: 'send',
+          nodeId: '51c8aa93e07b4d2f96d3b1c45f8ea720',
+          peerName: '客厅电视 BedBox',
+          files: [
+            { path: '/微信文件/产品需求文档_v3.docx', size: 248320 },
+            { path: '/微信文件/产品需求文档_v3_修订.docx', size: 296960 },
+          ],
+          totalBytes: 545280,
+          transferredBytes: 198000,
+          rateBps: 0,
+          status: 'failed',
+          rejectReason: 'no-roots',
+          createdAtMs: 1754680000000,
+          updatedAtMs: 1754681000000,
+        },
+      ],
+      // 正在接收列表（file-transfer.list-receiving）
+      receiving: [
+        {
+          batchId: 'demo-recv-video-01',
+          nodeId: NODE_XIAOMI,
+          peerName: '小米 14 Pro',
+          files: [{ path: '/DCIM/VID_20240801_1820.mp4', size: 89244416 }],
+          totalBytes: 89244416,
+          transferredBytes: 31800000,
+          rateBps: 3400000,
+          status: 'running',
+          detail: null,
+          createdAtMs: 1754685000000,
+          updatedAtMs: 1754685000000,
+        },
+      ],
+      // 历史列表（file-transfer.list-history；status 必须为终态）
+      history: [
+        {
+          // 完成条目带 localPath：驱动历史卡「打开所在文件夹」演示链路
+          batchId: 'demo-hist-completed-01',
+          direction: 'receive',
+          nodeId: NODE_XIAOMI,
+          peerName: '小米 14 Pro',
+          files: [{ path: '/微信文件/微信图片_20240801_201234.jpg', size: 2433600 }],
+          totalBytes: 2433600,
+          status: 'completed',
+          localPath: '/storage/emulated/0/Download/微信图片_20240801_201234.jpg',
+          createdAtMs: Date.now() - 34 * 60000,
+          updatedAtMs: Date.now() - 33 * 60000,
+        },
+        {
+          batchId: 'demo-hist-failed-01',
+          direction: 'send',
+          nodeId: '51c8aa93e07b4d2f96d3b1c45f8ea720',
+          peerName: '客厅电视 BedBox',
+          files: [{ path: '/Download/Backup_20240801.zip', size: 4820000000 }],
+          totalBytes: 4820000000,
+          status: 'failed',
+          rejectReason: 'user-rejected',
+          createdAtMs: Date.now() - 10 * 60000,
+          updatedAtMs: Date.now() - 9 * 60000,
+        },
+        {
+          batchId: 'demo-hist-cancelled-01',
+          direction: 'send',
+          nodeId: NODE_PIXEL,
+          peerName: 'Pixel 9',
+          files: [{ path: '/Download/安卓备份_2024.tar.gz', size: 268435456 }],
+          totalBytes: 268435456,
+          status: 'cancelled',
+          createdAtMs: Date.now() - 190 * 60000,
+          updatedAtMs: Date.now() - 185 * 60000,
+        },
+      ],
+    },
     // 本机共享设置（roots 为宿主 wire DTO 形状，含 SAF tree_uri）
     settings: {
       roots: [

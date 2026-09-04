@@ -216,3 +216,23 @@ export function mapRejectReasonKey(reason: string | null | undefined): string {
     default: return 'unknown'
   }
 }
+
+// ==================== 三段式主视图展示契约 ====================
+
+/** 任务卡上的操作按钮描述（调用方决定语义，卡内只渲染） */
+export interface TaskAction {
+  /** 操作语义：cancel / retry / cancel-receiving / clear-history / open-location */
+  kind: 'cancel' | 'retry' | 'cancel-receiving' | 'clear-history' | 'open-location'
+  label: string
+  /** neutral = 灰底（取消）；tint = accent 浅底（重试等需被看见的次级操作） */
+  variant: 'neutral' | 'tint'
+}
+
+/** 底部行动条三态 */
+export type FooterMode = 'upload' | 'select' | 'active'
+
+/** 主分段 tab 键 */
+export type MainTab = 'transfers' | 'browse' | 'devices'
+
+/** 传输 tab 筛选键 */
+export type TransferFilter = 'all' | 'sending' | 'receiving' | 'history'

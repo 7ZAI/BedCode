@@ -182,6 +182,7 @@ export default {
   'transfer.size.gb': '{value} GB',
   'transfer.time.justNow': '刚刚',
   'transfer.time.minutesAgo': '{count} 分钟前',
+  'transfer.time.hoursAgo': '{count} 小时前',
 
   // ==================== v2 队列 4 tab / 批量批准 / 接收 / 历史 ====================
   'transfer.queue.all': '全部',
@@ -245,4 +246,21 @@ export default {
   'transfer.trusted.revokeBody': '撤销后，{name} 再次连接时需要重新经过你的确认。确定撤销对该设备的信任吗？',
   'transfer.trusted.revokeFailed': '撤销失败，请稍后重试',
   'transfer.trusted.revokedToast': '已撤销对 {name} 的信任',
+
+  // ==================== 三段式主视图（传输/浏览/设备） ====================
+  'transfer.v2.tab.transfers': '传输',
+  'transfer.v2.tab.browse': '浏览',
+  'transfer.v2.tab.devices': '设备',
+  'transfer.v2.filter.all': '全部',
+  'transfer.v2.filter.sending': '发送',
+  'transfer.v2.filter.receiving': '接收',
+  'transfer.v2.filter.history': '历史',
+  'transfer.v2.upload.cta': '上传文件',
+  'transfer.v2.queue.hint': '队列 {count} 项',
+  'transfer.v2.active.overall': '总体 {percent}%',
+  'transfer.v2.active.viewQueue': '查看队列',
+  'transfer.v2.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.v2.pendingRequests': '{count} 个待处理请求',
+  'transfer.v2.history.openFolder': '打开所在文件夹',
+  'transfer.v2.history.noLocalFile': '本机没有对应文件',
 } satisfies MessageSchema

@@ -338,6 +338,7 @@ fn insert_send_entry(
         created_at_ms: 0,
         updated_at_ms: 0,
         retry_meta: Some(meta),
+        local_path: None,
     };
     let out = serde_json::to_value(&entry)?;
     let mut guard = ensure_loaded(h);

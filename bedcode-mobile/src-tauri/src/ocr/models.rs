@@ -74,7 +74,7 @@ pub async fn restore_models(data_dir: &Path, _app_version: &str) -> Result<bool>
     }
     #[cfg(target_os = "android")]
     {
-        let count = crate::plugin::android_plugins::extract_ocr_models(app_version).await?;
+        let count = crate::plugin::android_plugins::extract_ocr_models(_app_version).await?;
         if count == 0 {
             return Err(crate::AppError::Plugin(
                 "plugin_ocr_restore_models: no model assets in APK (resources/ocr_models)".into(),

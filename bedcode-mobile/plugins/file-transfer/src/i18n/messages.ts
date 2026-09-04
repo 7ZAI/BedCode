@@ -26,6 +26,8 @@ export interface MessageSchema {
   'transfer.devices.subtitle': string
   'transfer.devices.empty': string
   'transfer.devices.online': string
+  /** 快照恢复未被实时事件刷新的节点标注 */
+  'transfer.devices.recentSeen': string
   'transfer.devices.connected': string
   'transfer.devices.connecting': string
   'transfer.devices.capNone': string
@@ -65,6 +67,7 @@ export interface MessageSchema {
   'transfer.task.state.failed': string
   'transfer.task.state.rejected': string
   'transfer.task.state.cancelled': string
+  'transfer.task.state.interrupted': string
   'transfer.task.pause': string
   'transfer.task.resume': string
   'transfer.task.cancel': string
@@ -178,8 +181,9 @@ export interface MessageSchema {
   'transfer.size.gb': string
   'transfer.time.justNow': string
   'transfer.time.minutesAgo': string
+  'transfer.time.hoursAgo': string
 
-  // ==================== v2 队列 4 tab / 批量批准 / 接收 / 历史 ====================
+  // ==================== 传输 4 筛选（全部/发送/接收/历史）+ 批量批准 + 接收 + 历史文案 ====================
   'transfer.queue.all': string
   'transfer.queue.sending': string
   'transfer.queue.receiving': string
@@ -241,4 +245,36 @@ export interface MessageSchema {
   'transfer.trusted.revokeBody': string
   'transfer.trusted.revokeFailed': string
   'transfer.trusted.revokedToast': string
+
+  // ==================== 三段式主视图（传输/浏览/设备） ====================
+  /** 主分段：传输列表 */
+  'transfer.v2.tab.transfers': string
+  /** 主分段：浏览对端共享目录 */
+  'transfer.v2.tab.browse': string
+  /** 主分段：附近设备 */
+  'transfer.v2.tab.devices': string
+  /** 传输 tab 筛选 chip：全部（含双向） */
+  'transfer.v2.filter.all': string
+  /** 传输 tab 筛选 chip：仅本端发出 */
+  'transfer.v2.filter.sending': string
+  /** 传输 tab 筛选 chip：正在接收 */
+  'transfer.v2.filter.receiving': string
+  /** 传输 tab 筛选 chip：历史记录 */
+  'transfer.v2.filter.history': string
+  /** 上传主按钮文案（底栏 CTA） */
+  'transfer.v2.upload.cta': string
+  /** 底栏上传按钮副文案：队列仍有条目时提示 */
+  'transfer.v2.queue.hint': string
+  /** 迷你传输条：总体进度 */
+  'transfer.v2.active.overall': string
+  /** 迷你传输条：点击展开队列提示 */
+  'transfer.v2.active.viewQueue': string
+  /** 设备 tab 空态：未发现节点 */
+  'transfer.v2.devices.subtitle': string
+  /** 批请求角标：N 个待处理请求 */
+  'transfer.v2.pendingRequests': string
+  /** 历史卡操作：打开所在文件夹（接收完成的条目带本机路径时） */
+  'transfer.v2.history.openFolder': string
+  /** 历史卡操作：本机没有对应文件（路径缺失/已删除） */
+  'transfer.v2.history.noLocalFile': string
 }

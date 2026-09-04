@@ -18,7 +18,7 @@
 ## 架构
 
 - **Rust WASM 层**：对端状态机（`peer.rs` / `handshake.rs`）、传输队列（`queue.rs`）、共享目录（`shared.rs`）、任务命令（`commands.rs`）、全局状态（`state.rs`）
-- **TS 前端**：`FileTransferView`（主视图）、`ToolboxEntry`（工具箱入口）、`TaskQueueSheet`（队列面板）、`BatchRequestDialog`（接收审批）、`SharedDirSheet`（共享目录）、`SettingsPage` / `SettingsSection`（设置）
+- **TS 前端**：`FileTransferView`（三段式主视图：传输/浏览/设备）、`ToolboxEntry`（工具箱入口）、`BatchRequestDialog`（接收审批）、`SettingsPage` / `SettingsSection`（设置）
 - **与桌面端通信**：经宿主 `fileservice` / `transfer` 权限访问桌面端文件服务；上传走系统 SAF 文件选择（`useSharedUpload`）
 
 ## 目录结构
@@ -36,8 +36,8 @@ file-transfer/
 │       ├── shared.rs    # 共享目录
 │       └── state.rs     # 全局状态
 ├── src/
-│   ├── components/      # FileTransferView / TaskQueueSheet / SharedDirSheet 等
-│   ├── composables/     # useRemoteFs / useTasks / useSharedUpload / useSettings
+│   ├── components/      # FileTransferView（三段式主视图：传输/浏览/设备）+ Tab 子组件 + 通用卡片
+│   ├── composables/     # useRemoteFs / useTasks / usePeerDevices / useSettings
 │   └── i18n/            # 插件翻译表（zh-CN / en）
 └── vite.config.ts       # Vite 配置
 ```

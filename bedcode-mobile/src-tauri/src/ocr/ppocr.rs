@@ -14,9 +14,13 @@ pub mod imgops;
 pub mod pipeline;
 
 use std::path::PathBuf;
+#[cfg(target_os = "android")]
+use std::sync::{Mutex, OnceLock};
 
 use super::engine::OcrEngine;
 use super::preprocess::RgbaImage;
+#[cfg(target_os = "android")]
+use super::OcrLine;
 use super::OcrOutput;
 use crate::Result;
 

@@ -610,7 +610,7 @@ async fn start_locked(
     // 若存在 saf 条目会按 read-failed 拒绝——dev 窗口无此形态，防御性兜底）
     #[cfg(target_os = "android")]
     let saf_access: Option<Arc<dyn SharedSafAccess>> =
-        Some(Arc::new(SafSharedAccess::new(crate::plugin::saf_io::default_saf_io())));
+        Some(Arc::new(android_saf_bridge::SafSharedAccess::new(crate::plugin::saf_io::default_saf_io())));
     #[cfg(not(target_os = "android"))]
     let saf_access: Option<Arc<dyn SharedSafAccess>> = None;
 
@@ -923,12 +923,12 @@ use bedcode_peer_net::SeqReader;
 /// SAF 共享目录访问适配器：把既有 [`SafIo`]（Kotlin 桥）映射到 crate 的
 /// [`SharedSafAccess`] 缝。相对路径解析用 list_tree 逐层下降（与
 /// file_service/saf_tree 的 walk 同构，此处同步化以匹配 trait 签名）。
-struct SafSharedAccess {
+pub(crate) struct SafSharedAccess {
     io: Arc<dyn SafIo>,
 }
 
 impl SafSharedAccess {
-    fn new(io: Arc<dyn SafIo>) -> Self {
+    pub(crate) fn new(io: Arc<dyn SafIo>) -> Self {
         Self { io }
     }
 

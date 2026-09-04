@@ -1,16 +1,15 @@
 <script setup lang="ts">
 /**
- * BatchRequestDialog — 全局批量传输请求弹窗（接收端应答，spec 14.4）
+ * BatchRequestDialog — 全局批量传输请求弹窗
  *
- * 与桌面端同构的应答交互：
- * - 多个 pending 批**排队逐个提示**（按创建时间升序 = 先到先弹）
- * - 必须明确选择「接收全部 / 拒绝全部」（无背景关闭、无关闭按钮）
- * - 弹窗显示剩余应答秒数（approvalTimeoutSec 倒计时）；归零**自动关闭**，
- *   默认拒绝由宿主 pending TTL（sweeper，reason=timeout）执行，前端不主动 reject
- * - 批被 resolved（用户从系统通知应答 / 宿主超时）→ 自动关闭当前弹窗并提示下一批
- * - 后台/锁屏场景仍走系统通知（Kotlin TaskNotificationManager），本组件仅前台应答
+ * 交互契约（spec 14.4）：
+ * - 多个 pending 批排队逐个提示（按创建时间升序 = 先到先弹）
+ * - 必须明确选择「接受全部 / 拒绝全部」（无背景关闭、无关闭按钮）
+ * - 倒计时归零自动关闭，默认拒绝由宿主 pending TTL（reason=timeout）执行
+ * - 批被 resolved → 关闭并提示下一批
+ * 视觉：分段按钮 + 倒计时进度条（替代旧版纯按钮排版）。
  */
-import { inject, onUnmounted, ref, watch } from 'vue'
+import { inject, onUnmounted, ref, watch, computed } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
 import type { PendingBatch } from '../types'
 import { formatBytes } from '../utils/format'
@@ -19,6 +18,7 @@ const props = defineProps<{
   batches: PendingBatch[]
   approvalTimeoutSec: number
 }>()
+
 const emit = defineEmits<{
   approve: [batchId: string]
   reject: [batchId: string]
@@ -27,19 +27,26 @@ const emit = defineEmits<{
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
-/** 已提示过的批 ID（防同一批重复弹框；批 resolved / 用户应答 / 超时后不再提示） */
+/** 已提示过的批 ID（防重复弹框；批 resolved / 应答 / 超时后不再提示） */
 const promptedBatches = new Set<string>()
 /** 当前弹窗展示的批（null = 无待提示批，不渲染） */
 const current = ref<PendingBatch | null>(null)
-/** 剩余应答秒数（倒计时；归零自动关闭） */
+/** 剩余应答秒数（归零自动关闭） */
 const secondsLeft = ref(0)
+
+/** 倒计时进度百分比（相对配置超时） */
+const countdownPercent = computed(() =>
+  props.approvalTimeoutSec > 0
+    ? Math.min(100, Math.max(0, (secondsLeft.value / props.approvalTimeoutSec) * 100))
+    : 0,
+)
 
 let timer: ReturnType<typeof setInterval> | null = null
 
 /** 取第一个未提示的 pending 批（按创建时间升序 = 先到先弹） */
 function nextUnprompted(): PendingBatch | null {
   const candidates = props.batches
-    .filter(b => !promptedBatches.has(b.batchId))
+    .filter((b) => !promptedBatches.has(b.batchId))
     .sort((a, b) => a.createdAt - b.createdAt)
   return candidates[0] ?? null
 }
@@ -51,13 +58,12 @@ function stopTimer(): void {
   }
 }
 
-/** 启动当前批的倒计时（基于批创建时间 + 配置超时，与宿主 TTL 对齐） */
+/** 启动倒计时（基于批创建时间 + 配置超时，与宿主 TTL 对齐） */
 function startCountdown(batch: PendingBatch): void {
   const deadline = batch.createdAt + props.approvalTimeoutSec * 1000
   const tick = () => {
     secondsLeft.value = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
     if (secondsLeft.value <= 0) {
-      // 超时：关闭当前弹窗（宿主 pending TTL 拒绝该批，reason=timeout）
       promptedBatches.add(batch.batchId)
       stopTimer()
       advance()
@@ -99,12 +105,12 @@ function handleReject(): void {
   advance()
 }
 
-/** 批列表变化：当前批被 resolved（宿主事件移除）→ 关闭并提示下一批 */
+/** 批列表变化：当前批被 resolved → 关闭并提示下一批 */
 watch(
   () => props.batches,
   (batches) => {
     const currentId = current.value?.batchId
-    if (currentId && !batches.some(b => b.batchId === currentId)) {
+    if (currentId && !batches.some((b) => b.batchId === currentId)) {
       stopTimer()
       advance()
     } else if (!current.value) {
@@ -115,37 +121,106 @@ watch(
 )
 
 onUnmounted(stopTimer)
+
+/** 文件列表展示（最多 3 行，超出折叠为「+N」） */
+const visibleFiles = computed(() => (current.value?.files ?? []).slice(0, 3))
+const hiddenFileCount = computed(
+  () => Math.max(0, (current.value?.files.length ?? 0) - 3),
+)
+
+/** 文件名 basename */
+function basename(path: string): string {
+  return path.split('/').pop() || path
+}
 </script>
 
 <template>
   <Teleport to="body">
-    <Transition name="ft-dialog">
-      <div v-if="current" class="fixed inset-0 z-[100] flex items-center justify-center px-6 mobile-ui" role="dialog" aria-modal="true">
+    <Transition name="fv2-fade">
+      <div v-if="current" class="fixed inset-0 z-[100] flex items-center justify-center mobile-ui px-6">
+        <!-- Backdrop：不可点关闭（必须明确应答） -->
         <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]"></div>
-        <div class="ft-dialog-card relative w-full max-w-[340px]">
-          <div class="ft-dialog-head">
-            <span class="ft-dialog-title">{{ t('transfer.request.title') }}</span>
-            <span
-              class="ft-dialog-countdown"
-              :class="{ 'ft-dialog-countdown--urgent': secondsLeft <= 10 }"
-            >
-              {{ t('transfer.request.countdown', { seconds: secondsLeft }) }}
+
+        <!-- 面板 -->
+        <div
+          class="fv2-sheet-panel relative w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-2xl p-4"
+          style="max-width: 26rem"
+        >
+          <!-- 标题行 -->
+          <div class="flex items-center gap-3">
+            <span class="icon-chip chip-cyan flex-shrink-0">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+              </svg>
             </span>
+            <div class="flex-1 min-w-0">
+              <p class="group-row-title">{{ t('transfer.request.title') }}</p>
+              <p class="group-row-sub mt-0.5 truncate">{{ current.peerName }}</p>
+            </div>
           </div>
-          <p class="ft-dialog-body">
+
+          <!-- 请求摘要 -->
+          <p class="group-row-sub mt-3" style="line-height: 1.5; color: var(--mobile-text-secondary)">
             {{
               t('transfer.request.body', {
-                name: current.peerName || context.i18n.t('transfer.peer.unknown'),
+                name: current.peerName,
                 count: current.files.length,
                 size: formatBytes(current.totalSize, t),
               })
             }}
           </p>
-          <div class="ft-dialog-actions">
-            <button class="ft-dialog-btn" @click="handleReject">
+
+          <!-- 文件清单（最多 3 行 + 折叠计数） -->
+          <div class="group-card mt-3">
+            <div
+              v-for="(file, i) in visibleFiles"
+              :key="file.relativePath"
+              class="group-row"
+              :style="i > 0 ? { borderTop: '1px solid var(--mobile-group-divider)' } : undefined"
+              style="min-height: 2.5rem; padding-top: 0.5rem; padding-bottom: 0.5rem"
+            >
+              <svg class="w-4 h-4 flex-shrink-0" style="color: var(--mobile-row-sub)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              <span class="flex-1 min-w-0 group-row-sub truncate">{{ basename(file.relativePath) }}</span>
+              <span class="group-row-sub flex-shrink-0" style="font-variant-numeric: tabular-nums">
+                {{ formatBytes(file.size, t) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- 倒计时：秒数 + 进度条（时间流逝视觉） -->
+          <div class="mt-3">
+            <div class="flex items-center justify-between">
+              <span class="group-row-sub" style="color: var(--mobile-warning)">
+                {{ t('transfer.request.countdown', { seconds: secondsLeft }) }}
+              </span>
+              <span class="group-row-sub" style="font-variant-numeric: tabular-nums; color: var(--mobile-warning)">
+                {{ secondsLeft }}s
+              </span>
+            </div>
+            <div class="fv2-countdown mt-1.5">
+              <div class="fv2-countdown-fill" :style="{ width: countdownPercent + '%' }"></div>
+            </div>
+          </div>
+
+          <!-- 折叠文件数提示 -->
+          <p v-if="hiddenFileCount > 0" class="group-row-sub mt-2" style="color: var(--mobile-text-muted)">
+            +{{ hiddenFileCount }}
+          </p>
+
+          <!-- 应答按钮：必须明确选择 -->
+          <div class="flex gap-3 mt-4">
+            <button class="fv2-approve-btn fv2-approve-btn--reject flex-1" @click="handleReject">
+              <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
               {{ t('transfer.request.rejectAll') }}
             </button>
-            <button class="ft-dialog-btn ft-dialog-btn--primary" @click="handleApprove">
+            <button class="fv2-approve-btn fv2-approve-btn--accept flex-1" @click="handleApprove">
+              <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
+              </svg>
               {{ t('transfer.request.acceptAll') }}
             </button>
           </div>
@@ -154,99 +229,3 @@ onUnmounted(stopTimer)
     </Transition>
   </Teleport>
 </template>
-
-<style scoped>
-/* 弹窗卡片：token-bound（--mobile-*），居中模态 */
-.ft-dialog-card {
-  padding: 1.25rem;
-  border-radius: 1rem;
-  background: var(--mobile-bg-card);
-  border: 1px solid var(--mobile-border);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35);
-  display: flex;
-  flex-direction: column;
-  gap: 0.75rem;
-}
-
-.ft-dialog-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-}
-
-.ft-dialog-title {
-  font-size: clamp(0.875rem, 0.9375rem + (100vw - 360px) / 800, 1rem);
-  font-weight: 600;
-  color: var(--mobile-text-primary);
-}
-
-.ft-dialog-countdown {
-  flex-shrink: 0;
-  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
-  color: var(--mobile-text-muted);
-  transition: color 0.2s ease;
-}
-
-.ft-dialog-countdown--urgent {
-  color: var(--mobile-error);
-  font-weight: 600;
-}
-
-.ft-dialog-body {
-  margin: 0;
-  font-size: clamp(0.8125rem, 0.875rem + (100vw - 360px) / 800, 0.9375rem);
-  line-height: 1.5;
-  color: var(--mobile-text-secondary);
-}
-
-.ft-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.625rem;
-  margin-top: 0.25rem;
-}
-
-/* 按钮：44px 最小触控目标 */
-.ft-dialog-btn {
-  min-height: 2.75rem;
-  padding: 0 1.125rem;
-  border-radius: 0.625rem;
-  font-size: clamp(0.75rem, 0.8125rem + (100vw - 360px) / 800, 0.875rem);
-  font-weight: 500;
-  color: var(--mobile-text-primary);
-  background: var(--mobile-bg-tertiary);
-  border: 1px solid var(--mobile-border);
-}
-
-.ft-dialog-btn:active {
-  opacity: 0.8;
-}
-
-.ft-dialog-btn--primary {
-  color: var(--mobile-text-on-accent);
-  background: var(--mobile-accent);
-  border-color: var(--mobile-accent);
-}
-
-/* 弹窗淡入 + 上浮（GPU 合成属性） */
-.ft-dialog-enter-active,
-.ft-dialog-leave-active {
-  transition: opacity 0.2s ease;
-}
-
-.ft-dialog-enter-active .ft-dialog-card,
-.ft-dialog-leave-active .ft-dialog-card {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.ft-dialog-enter-from,
-.ft-dialog-leave-to {
-  opacity: 0;
-}
-
-.ft-dialog-enter-from .ft-dialog-card,
-.ft-dialog-leave-to .ft-dialog-card {
-  transform: translateY(8px) scale(0.98);
-}
-</style>

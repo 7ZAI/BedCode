@@ -14,7 +14,7 @@
  */
 
 import { spawn, execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, openSync, readSync, closeSync } from 'node:fs'
 import net from 'node:net'
 import { resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -127,8 +127,32 @@ const PLUGIN_WATCH_CMDS = [
   },
 ]
 
+/**
+ * 判断包管理器 CLI 是否为原生可执行文件（ELF/PE）。
+ *
+ * pnpm 12 起 npm_execpath / pnpm_execpath 指向原生二进制（Linux ELF / Windows PE），
+ * 若继续用 `node <path>` 启动，node 会把二进制当 JS 解析，报
+ * SyntaxError: Invalid or unexpected token。原生二进制需直接 spawn；
+ * JS 入口（npm-cli.js / *.cjs / *.mjs）才需要 node 前缀。
+ */
+function isNativeBinary(p) {
+  try {
+    const fd = openSync(p, 'r')
+    const buf = Buffer.alloc(4)
+    const n = readSync(fd, buf, 0, 4, 0)
+    closeSync(fd)
+    if (n >= 2 && buf[0] === 0x4d && buf[1] === 0x5a) return true // PE（MZ）
+    if (n >= 4 && buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true // ELF
+    return false
+  } catch {
+    return false
+  }
+}
+
 /** 宿主 dev 命令（可用 --host-cmd 覆盖） */
-const DEFAULT_HOST_CMD = [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', '--', 'android', 'dev']]
+const DEFAULT_HOST_CMD = isNativeBinary(PKG_MGR_CLI)
+  ? [PKG_MGR_CLI, ['run', 'tauri', 'android', 'dev']]
+  : [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', 'android', 'dev']]
 
 // ==================== 进程管理 ====================
 

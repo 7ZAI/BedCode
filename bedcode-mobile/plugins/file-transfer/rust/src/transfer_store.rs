@@ -68,6 +68,10 @@ pub(crate) struct TransferEntry {
     pub(crate) updated_at_ms: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) retry_meta: Option<RetryMeta>,
+    /// 本机落盘路径（接收方向 completed 归档时宿主按需填充；
+    /// 仅 completed 且本地文件仍存在时非空，缺省 None 保持向后兼容）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) local_path: Option<String>,
 }
 
 impl TransferEntry {
@@ -88,6 +92,11 @@ impl TransferEntry {
             created_at_ms: dto.get("createdAtMs").and_then(|v| v.as_u64()).unwrap_or(0),
             updated_at_ms: dto.get("updatedAtMs").and_then(|v| v.as_u64()).unwrap_or(0),
             retry_meta: None,
+            local_path: dto
+                .get("localPath")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string()),
         })
     }
 

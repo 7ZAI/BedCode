@@ -184,6 +184,7 @@ export default {
   'transfer.size.gb': '{value} GB',
   'transfer.time.justNow': 'Just now',
   'transfer.time.minutesAgo': '{count} min ago',
+  'transfer.time.hoursAgo': '{count} hr ago',
 
   // ==================== v2 queue tabs / batch approval / receiving / history ====================
   'transfer.queue.all': 'All',
@@ -247,4 +248,21 @@ export default {
   'transfer.trusted.revokeBody': 'After revoking, {name} will need your approval again on the next connection. Revoke trust for this device?',
   'transfer.trusted.revokeFailed': 'Revoke failed; please try again later',
   'transfer.trusted.revokedToast': 'Revoked trust for {name}',
+
+  // ==================== Three-section main view (Transfers / Browse / Devices) ====================
+  'transfer.v2.tab.transfers': 'Transfers',
+  'transfer.v2.tab.browse': 'Browse',
+  'transfer.v2.tab.devices': 'Devices',
+  'transfer.v2.filter.all': 'All',
+  'transfer.v2.filter.sending': 'Sending',
+  'transfer.v2.filter.receiving': 'Receiving',
+  'transfer.v2.filter.history': 'History',
+  'transfer.v2.upload.cta': 'Upload file',
+  'transfer.v2.queue.hint': '{count} in queue',
+  'transfer.v2.active.overall': 'Overall {percent}%',
+  'transfer.v2.active.viewQueue': 'View queue',
+  'transfer.v2.devices.subtitle': 'BedCode nodes on the same network',
+  'transfer.v2.pendingRequests': '{count} pending request(s)',
+  'transfer.v2.history.openFolder': 'Open containing folder',
+  'transfer.v2.history.noLocalFile': 'File not on this device',
 } satisfies MessageSchema

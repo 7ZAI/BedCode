@@ -7,7 +7,15 @@ import { readFileSync, rmSync } from 'fs'
 const host = process.env.TAURI_DEV_HOST
 
 // 从 tauri.conf.json 读取应用版本（作为版本号的唯一来源）
-const tauriConf = JSON.parse(readFileSync(resolve(__dirname, 'src-tauri/tauri.conf.json'), 'utf-8'))
+const tauriConfPath = resolve(__dirname, 'src-tauri/tauri.conf.json')
+let tauriConf: { version?: string }
+try {
+  tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf-8'))
+} catch (err) {
+  throw new Error(
+    `[vite] 读取 tauri.conf.json 失败（应用版本号唯一来源，无法注入 __APP_VERSION__）: ${err instanceof Error ? err.message : String(err)}`,
+  )
+}
 const appVersion = tauriConf.version || '0.0.0'
 
 // ==================== 构建时排除 dev-only 审查工具 ====================
@@ -83,7 +91,6 @@ export default defineConfig({
       '@tauri-apps/api/window',
       '@tauri-apps/plugin-dialog',
       '@tauri-apps/plugin-os',
-      '@tauri-apps/plugin-notification',
       '@skipperndt/plugin-machine-uid',
       'ansi_up',
       'html5-qrcode',
