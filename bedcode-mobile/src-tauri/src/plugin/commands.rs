@@ -28,7 +28,7 @@ pub async fn plugin_get_info(app_handle: tauri::AppHandle, plugin_id: String) ->
 #[tauri::command]
 pub async fn plugin_activate(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.activate(&plugin_id, &app_handle).await
+    manager.activate(&plugin_id).await
 }
 
 /// 停用插件
@@ -156,7 +156,7 @@ pub async fn reload_wasm_plugin(app_handle: tauri::AppHandle, plugin_id: String)
     manager.scan_and_load().await;
 
     // 重新激活
-    manager.activate(&plugin_id, &app_handle).await
+    manager.activate(&plugin_id).await
 }
 
 // ==================== File System Auth Commands ====================

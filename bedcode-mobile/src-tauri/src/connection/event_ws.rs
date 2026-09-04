@@ -57,6 +57,9 @@ pub async fn run_supervisor(
     let mut current: Option<Arc<crate::connection::WsClient>> = None;
     // 建连时的目标副本：断开时目标变更则跳过自愈（换目标会自带新认证流，
     // 旧流自愈会向错误目标发 HTTP reauth）
+    // 注：cargo dead-store 在外层赋 None / 内层再赋 Some 的模式下会误报,
+    // 实际在 106 行的 .as_ref() 比较中被读取
+    #[allow(unused_assignments)]
     let mut establish_target: Option<crate::connection::manager::TargetDevice> = None;
 
     loop {

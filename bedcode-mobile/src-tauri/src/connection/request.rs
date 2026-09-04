@@ -6,8 +6,6 @@
 //! - TerminalRequest: 终端操作请求
 //! - ConfigRequest: 配置查询请求
 
-use std::time::Duration;
-
 use crate::enums::auth::{AuthPayload, AuthStage};
 use crate::enums::control::{SessionConfigAction, SessionControlAction};
 use crate::enums::special_key::KeyCombo;
@@ -94,9 +92,6 @@ impl AuthRequest {
 pub struct SessionRequest;
 
 impl SessionRequest {
-    /// 默认请求超时
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
-
     /// 构建获取会话列表消息
     pub fn list_sessions() -> Message {
         with_token(Message::session_control_with_response(
@@ -159,9 +154,6 @@ impl SessionRequest {
 pub struct TerminalRequest;
 
 impl TerminalRequest {
-    /// 默认订阅超时
-    const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
-
     /// 构建订阅会话输出消息
     ///
     /// 开始接收指定会话的终端输出
@@ -196,9 +188,6 @@ impl TerminalRequest {
 pub struct ConfigRequest;
 
 impl ConfigRequest {
-    /// 配置请求超时
-    const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
-
     /// 构建获取会话配置列表消息
     pub fn list_session_configs() -> Message {
         with_token(Message::session_config_with_response(

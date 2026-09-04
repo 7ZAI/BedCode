@@ -68,7 +68,7 @@ pub fn delete_models(data_dir: &Path) -> Result<(bool, u64)> {
 /// 从 APK assets 恢复模型（惰性解压 + 版本标记；幂等：已就位则跳过）。
 /// Android：经 OcrModelExtractorPlugin 解压；其他平台（桌面 dev）无 APK assets，
 /// 已就位则跳过，否则明确报错（真机/模拟器之外无法恢复）。
-pub async fn restore_models(data_dir: &Path, app_version: &str) -> Result<bool> {
+pub async fn restore_models(data_dir: &Path, _app_version: &str) -> Result<bool> {
     if models_present(data_dir) {
         return Ok(true);
     }

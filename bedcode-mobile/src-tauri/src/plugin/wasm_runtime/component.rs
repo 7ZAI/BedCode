@@ -569,6 +569,7 @@ impl LoadedComponentPlugin {
     }
 
     /// 获取插件的 manifest JSON
+    #[allow(dead_code)] // 测试覆盖,生产侧 manifest 走其他加载路径
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
@@ -644,6 +645,7 @@ impl LoadedComponentPlugin {
     }
 
     /// 测试访问器：直接获取 Store（燃料断言用）
+    #[allow(dead_code)]
     pub(crate) fn raw_store(&mut self) -> (&mut Store<WasmPluginState>, &wasmtime::component::Instance) {
         (&mut self.store, &self.instance)
     }
@@ -742,7 +744,7 @@ pub(crate) mod tests {
     }
 
     /// 构建并编码测试组件：cargo build（指定 features）→ wit-component 编码
-    fn build_test_component(features: &[&str]) -> Vec<u8> {
+    pub(crate) fn build_test_component(features: &[&str]) -> Vec<u8> {
         let cache = COMPONENT_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
         let key = if features.is_empty() {
             "default".to_string()

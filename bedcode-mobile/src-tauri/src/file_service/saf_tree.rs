@@ -25,12 +25,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
-
-/// 中转缓存子目录名（app cache 下；与 Kotlin 上传 staging `bedcode_uploads`
-/// 分离——两者生命周期不同：上传 staging 由 Kotlin cleanupStaleCopies 清扫，
-/// 下载中转副本由本模块 TTL/启动扫描管理）
-const RELAY_CACHE_SUBDIR: &str = "bedcode_downloads";
-
 /// 副本 TTL：最后一次访问后 1 小时删除（桌面端断点续传窗口内文件仍命中；
 /// 副本可随时从 SAF 重新生成，无需更长保留）
 const RELAY_CACHE_TTL: Duration = Duration::from_secs(3600);

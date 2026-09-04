@@ -296,23 +296,6 @@ pub(crate) mod host_impl;
 
 // ==================== Async Blocking Helper ====================
 
-/// 在同步上下文（WASM host function）中阻塞驱动 async future
-///
-/// WASM host functions 是同步的，但需要调用 async Tokio 代码（消息总线、
-/// fs 授权、对等网络等）。宿主函数可能运行在三种线程上：
-/// - 多线程 runtime 的 worker 线程：必须先 `block_in_place` 让出 worker 池，
-///   否则 `Handle::block_on` 直接 panic；
-/// - spawn_blocking / 纯 std 线程：无 runtime 上下文，任意 handle 上阻塞均合法；
-/// - current_thread runtime：`block_in_place` 会 panic，改在新线程上执行。
-///
-/// 重入安全：外层 `block_in_place(|| handle.block_on(...))` 的 tokio enter 守卫
-/// 在 host fn 回调里仍挂在当前线程上，嵌套 `handle.block_on` 必然 panic
-/// （"Cannot start a runtime from within a runtime"）。panic 穿透污染 wasmtime
-/// Store（同步引擎 `set_trapped`），实例后续所有调用恒报
-/// "cannot enter component instance"，插件整体失效。故用线程局部标志检测重入，
-/// 重入时改在新线程上 block_on：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
-/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
-/// （与桌面端 wasm_runtime.rs 同名函数同策略，回归测试亦同源）
 thread_local! {
     /// 当前线程是否已处于 block_in_place 让出后的阻塞上下文
     static IN_BLOCK_IN_PLACE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -351,6 +334,23 @@ static AMBIENT_RT: std::sync::LazyLock<tokio::runtime::Runtime> = std::sync::Laz
         .expect("create ambient tokio runtime")
 });
 
+/// 在同步上下文（WASM host function）中阻塞驱动 async future
+///
+/// WASM host functions 是同步的，但需要调用 async Tokio 代码（消息总线、
+/// fs 授权、对等网络等）。宿主函数可能运行在三种线程上：
+/// - 多线程 runtime 的 worker 线程：必须先 `block_in_place` 让出 worker 池，
+///   否则 `Handle::block_on` 直接 panic；
+/// - spawn_blocking / 纯 std 线程：无 runtime 上下文，任意 handle 上阻塞均合法；
+/// - current_thread runtime：`block_in_place` 会 panic，改在新线程上执行。
+///
+/// 重入安全：外层 `block_in_place(|| handle.block_on(...))` 的 tokio enter 守卫
+/// 在 host fn 回调里仍挂在当前线程上，嵌套 `handle.block_on` 必然 panic
+/// （"Cannot start a runtime from within a runtime"）。panic 穿透污染 wasmtime
+/// Store（同步引擎 `set_trapped`），实例后续所有调用恒报
+/// "cannot enter component instance"，插件整体失效。故用线程局部标志检测重入，
+/// 重入时改在新线程上 block_on：新线程无 enter 守卫、非 worker，任意 flavor 均合法，
+/// 外层线程 join 等待（runtime 其他 worker 推进 IO，无死锁）。
+/// （与桌面端 wasm_runtime.rs 同名函数同策略，回归测试亦同源）
 pub(crate) fn block_on_async<F, R>(handle: &tokio::runtime::Handle, fut: F) -> R
 where
     F: std::future::Future<Output = R> + Send,

@@ -30,7 +30,8 @@ pub enum IoEvent {
 pub struct IoManager {
     /// 事件广播器（供外部订阅）
     event_tx: broadcast::Sender<IoEvent>,
-    /// 运行标记
+    /// 运行标记（预留：用于健康检查 / 重连控制）
+    #[allow(dead_code)]
     running: Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -50,6 +51,7 @@ impl IoManager {
     }
 
     /// 发送事件
+    #[allow(dead_code)] // 预留 API：供未来内部组件推送事件
     fn emit(&self, event: IoEvent) {
         let _ = self.event_tx.send(event);
     }

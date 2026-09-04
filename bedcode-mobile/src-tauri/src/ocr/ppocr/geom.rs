@@ -535,10 +535,10 @@ mod tests {
         corners.sort_by(|a, b| a.partial_cmp(b).unwrap());
         assert!(corners
             .iter()
-            .all(|(x, y)| (x - 1.0).abs() < 1e-6 || (x - 9.0).abs() < 1e-6));
+            .all(|(x, _y)| (x - 1.0).abs() < 1e-6 || (x - 9.0).abs() < 1e-6));
         assert!(corners
             .iter()
-            .all(|(x, y)| (y - 2.0).abs() < 1e-6 || (y - 6.0).abs() < 1e-6));
+            .all(|(_x, y)| (y - 2.0).abs() < 1e-6 || (y - 6.0).abs() < 1e-6));
     }
 
     #[test]

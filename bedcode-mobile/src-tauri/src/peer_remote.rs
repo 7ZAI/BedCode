@@ -219,7 +219,7 @@ pub async fn browse_peer_directory(
         rel = %rel_path,
         entries = listing.entries.len(),
         "peer directory browsed"
-    );;
+    );
     Ok(RemoteBrowseDto {
         entries: listing
             .entries

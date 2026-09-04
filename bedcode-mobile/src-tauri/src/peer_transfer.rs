@@ -127,9 +127,6 @@ struct HistoryFile {
     entries: Vec<PeerTransferDto>,
 }
 
-/// 跨实例串行化历史写盘（并发终态下避免 tmp+rename 竞态）
-static HISTORY_SAVE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -627,6 +624,7 @@ fn read_history_file(dir: &Path) -> std::io::Result<Vec<PeerTransferDto>> {
     Ok(file.entries)
 }
 
+#[allow(dead_code)] // 测试覆盖：history_file_roundtrips_entries,生产侧调度尚未接入
 fn write_history_file(dir: &Path, entries: &[PeerTransferDto]) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let target = dir.join(HISTORY_FILE);

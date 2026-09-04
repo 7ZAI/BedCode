@@ -320,9 +320,9 @@ fn copy_dir_all(src: &Path, dest: &Path) -> crate::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::plugin::fs_auth::FsAuthChecker;
-    use crate::plugin::message_bus::MessageBus;
-    use crate::plugin::storage::PluginStorage;
+    
+    
+    
 
     /// 迁移 ticket 06 验收：生产加载路径（PluginLoader::load_all）直接吃组件产物
     ///

@@ -14,11 +14,10 @@ pub mod imgops;
 pub mod pipeline;
 
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 use super::engine::OcrEngine;
 use super::preprocess::RgbaImage;
-use super::{OcrLine, OcrOutput};
+use super::OcrOutput;
 use crate::Result;
 
 /// 模型文件名（与 APK assets `resources/ocr_models/` 及 Kotlin 解压器一致）
@@ -38,6 +37,9 @@ pub struct PpOcrContext {
 /// PP-OCRv4 离线引擎；状态在模块级常驻缓存（跨命令实例共享）
 #[derive(Debug)]
 pub struct PpOcrEngine {
+    /// Android 平台下在 recognize_android 通过 load_engine(&self.ctx) 初始化,
+    /// 跨平台编译时此字段不被读取（无 ort 编译）
+    #[cfg_attr(not(target_os = "android"), allow(dead_code))]
     ctx: PpOcrContext,
 }
 

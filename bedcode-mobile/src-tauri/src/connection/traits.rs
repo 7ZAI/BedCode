@@ -186,7 +186,7 @@ impl SendStrategy for RetrySendStrategy {
         client: &'a crate::connection::WsClient,
         message: &'a Message,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
-        let client = client.clone();
+        let client = client;
         let message = message.clone();
         let max_retries = self.max_retries;
         let delay = self.delay;
@@ -215,7 +215,7 @@ impl SendStrategy for RetrySendStrategy {
         message: &'a Message,
         timeout: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<Message>> + Send + 'a>> {
-        let client = client.clone();
+        let client = client;
         let message = message.clone();
         let max_retries = self.max_retries;
         let delay = self.delay;

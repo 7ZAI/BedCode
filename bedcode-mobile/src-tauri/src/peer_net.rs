@@ -51,15 +51,14 @@ use std::time::{Duration, Instant};
 use bedcode_peer_net::{
     CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,
     DiscoveryAdvertiser, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
-    PeerNetNode, PeerNetNodeConfig, RunningNode, SeqReader, SharedDirEntry, SharedDirHandler,
+    PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
     SharedDirRoot, SharedSafAccess, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore,
     TransferConfig, TransferEvent,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::file_service::saf_tree;
-use crate::plugin::saf_io::{SafEntry, SafIo};
+use crate::plugin::saf_io::SafIo;
 
 // ==================== 身份初始化（issue 01）====================
 
@@ -88,15 +87,6 @@ const DEFAULT_PEER_PORT: u16 = 47613;
 /// SystemInfo 等待上限：setup 后台任务采集设备名（Android API 调用）可能晚于
 /// 自动启动就绪；15s 后放弃等待以兜底名启动守护，避免无限期阻塞发现功能
 const SYSTEM_INFO_WAIT_ATTEMPTS: u32 = 30;
-
-/// 发现缓存变更推送周期：远小于 TTL，保证上下线在 1-2 个周期内可见；
-/// 仅快照比对无变化时不发事件，LAN 规模下成本可忽略
-const DISCOVERY_PUSH_INTERVAL: Duration = Duration::from_secs(2);
-
-/// 无变化强制重发周期（tick 数）：首帧推送可能早于插件订阅完成而丢失
-/// （delivered=0 静默丢弃），指纹锁定后若记录稳定则永不再发——插件前端
-/// 只能靠 query-peer 兑底。周期性全量重发保证订阅晚到也能最终收到
-const DISCOVERY_FORCE_REPUSH_TICKS: u32 = 15;
 
 /// 运行中节点的完整状态（命令面操作对象；`None` = 未启动）
 struct PeerNetRuntime {
@@ -923,6 +913,12 @@ async fn shared_handle_at(data_dir: &Path) -> crate::Result<SharedDirStore> {
 }
 
 // ==================== SAF 缝适配（SafIo → crate SharedSafAccess）====================
+#[cfg(target_os = "android")]
+mod android_saf_bridge {
+use super::*;
+use crate::file_service::saf_tree;
+use crate::plugin::saf_io::SafEntry;
+use bedcode_peer_net::SeqReader;
 
 /// SAF 共享目录访问适配器：把既有 [`SafIo`]（Kotlin 桥）映射到 crate 的
 /// [`SharedSafAccess`] 缝。相对路径解析用 list_tree 逐层下降（与
@@ -1082,6 +1078,7 @@ impl Drop for SafSeqReader {
 fn io_err(e: crate::AppError) -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
 }
+} // mod android_saf_bridge
 
 // ==================== 接收落点提升（MediaStore 回退语义）====================
 
@@ -1244,7 +1241,7 @@ pub(crate) fn app_data_dir(app: &AppHandle) -> crate::Result<PathBuf> {
 #[cfg(test)]
 mod share_landing_tests {
     use super::*;
-    use crate::plugin::saf_io::{SafCopyHandle, SafCopyStatus, SafStreamHandle};
+    use crate::plugin::saf_io::{SafCopyHandle, SafCopyStatus, SafEntry, SafStreamHandle};
     // trait 方法调用需要 trait 在作用域内
     use bedcode_peer_net::FileLanding as _;
 
