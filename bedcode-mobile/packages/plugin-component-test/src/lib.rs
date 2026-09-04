@@ -102,9 +102,17 @@ impl LifecycleGuest for ComponentTestPlugin {
         Ok(())
     }
 
-    fn on_startup() {}
+    fn on_startup() -> Result<(), String> {
+        // on-startup-fail feature：宿主 Degraded 状态机测试用（激活成功但启动初始化失败）
+        if cfg!(feature = "on-startup-fail") {
+            return Err("startup init failed (test)".to_string());
+        }
+        Ok(())
+    }
 
-    fn on_shutdown() {}
+    fn on_shutdown() -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // ==================== events ====================

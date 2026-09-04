@@ -30,7 +30,11 @@ impl Default for PluginType {
 #[serde(tag = "state", rename_all = "camelCase")]
 pub enum PluginState {
     Loaded,
+    /// 激活进行中（auto-activation / 手动激活期间），列表可见的中间态
+    Activating,
     Activated,
+    /// activate 成功但 on_startup 失败：实例可用、启动初始化未完成
+    Degraded { error: String },
     /// 插件请求的权限尚未获得用户批准（需在插件管理页人工审批后才能激活）
     NeedsApproval,
     Deactivated,
@@ -306,12 +310,23 @@ mod tests {
             serde_json::json!({ "state": "activated" })
         );
         assert_eq!(
+            serde_json::to_value(PluginState::Activating).unwrap(),
+            serde_json::json!({ "state": "activating" })
+        );
+        assert_eq!(
+            serde_json::to_value(PluginState::Degraded { error: "init fail".into() }).unwrap(),
+            serde_json::json!({ "state": "degraded", "error": "init fail" })
+        );
+        assert_eq!(
             serde_json::to_value(PluginState::Error { error: "boom".into() }).unwrap(),
             serde_json::json!({ "state": "error", "error": "boom" })
         );
         let back: PluginState =
             serde_json::from_value(serde_json::json!({ "state": "error", "error": "x" })).unwrap();
         assert_eq!(back, PluginState::Error { error: "x".into() });
+        let degraded_back: PluginState =
+            serde_json::from_value(serde_json::json!({ "state": "degraded", "error": "d" })).unwrap();
+        assert_eq!(degraded_back, PluginState::Degraded { error: "d".into() });
     }
 
     #[test]

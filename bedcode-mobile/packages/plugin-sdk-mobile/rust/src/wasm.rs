@@ -199,12 +199,38 @@ macro_rules! wasm_entry {
                 }
             }
 
-            fn on_startup() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_startup();
+            fn on_startup() -> Result<(), String> {
+                let host = $crate::wasm_host::WasmHost;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_startup() {
+                    Ok(()) => {
+                        $crate::host::HostLog::log_info(&host, "Plugin startup init completed");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_startup failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
 
-            fn on_shutdown() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown();
+            fn on_shutdown() -> Result<(), String> {
+                let host = $crate::wasm_host::WasmHost;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown() {
+                    Ok(()) => {
+                        $crate::host::HostLog::log_info(&host, "Plugin shutdown cleanup completed");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_shutdown failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
         }
 

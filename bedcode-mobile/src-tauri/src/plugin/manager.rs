@@ -583,7 +583,9 @@ impl PluginManager {
                 .get_mut(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-            if plugin.state == PluginState::Activated {
+            if matches!(plugin.state, PluginState::Activated | PluginState::Degraded { .. }) {
+                // Activated / Degraded 均为终态：Degraded 可重试激活但重入无副作用，
+                // 保持当前状态返回成功（幂等）
                 return Ok(());
             }
             plugin.manifest.plugin_type.clone()
@@ -597,6 +599,14 @@ impl PluginManager {
             }
             tracing::info!(plugin_id = %plugin_id, "Plugin activated (ts-only)");
             return Ok(());
+        }
+
+        // 2. WASM 插件：置中间态 Activating（列表可见激活进行中）
+        {
+            let mut plugins = self.plugins.write().await;
+            if let Some(plugin) = plugins.get_mut(plugin_id) {
+                plugin.state = PluginState::Activating;
+            }
         }
 
         // 2. WASM 插件：取实例句柄（短锁），执行 activate 导出（不持 map 守卫）
@@ -615,9 +625,27 @@ impl PluginManager {
             return Ok(());
         };
 
-        let result = {
+        let activation_result: std::result::Result<PluginState, String> = {
             let mut loaded = wasm_plugin.lock().await;
-            loaded.activate()
+            // phase 1: WASM activate() 导出
+            match loaded.activate() {
+                Ok(0) => {
+                    // phase 1b: 激活成功后立即调用 on_startup 导出，结果驱动终态
+                    match loaded.on_startup() {
+                        Ok(()) => Ok(PluginState::Activated),
+                        Err(e) => {
+                            tracing::error!(
+                                plugin_id = %plugin_id,
+                                error = %e,
+                                "WASM plugin on_startup failed, state degraded"
+                            );
+                            Ok(PluginState::Degraded { error: e.to_string() })
+                        }
+                    }
+                }
+                Ok(code) => Err(format!("WASM activate() returned error code: {}", code)),
+                Err(e) => Err(e.to_string()),
+            }
         };
 
         // 3. 根据执行结果更新状态（短锁）
@@ -626,20 +654,27 @@ impl PluginManager {
             .get_mut(plugin_id)
             .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-        match result {
-            Ok(0) => {
-                plugin.state = PluginState::Activated;
-                tracing::info!(plugin_id = %plugin_id, "WASM plugin activated");
+        match activation_result {
+            Ok(state) => {
+                plugin.state = state.clone();
+                match state {
+                    PluginState::Activated => {
+                        tracing::info!(plugin_id = %plugin_id, "WASM plugin activated");
+                    }
+                    PluginState::Degraded { error } => {
+                        tracing::error!(
+                            plugin_id = %plugin_id,
+                            error = %error,
+                            "WASM plugin activated but degraded (startup init incomplete)"
+                        );
+                    }
+                    _ => {}
+                }
                 Ok(())
             }
-            Ok(code) => {
-                let error = format!("WASM activate() returned error code: {}", code);
-                plugin.state = PluginState::Error { error: error.clone() };
-                Err(crate::AppError::Plugin(error))
-            }
             Err(e) => {
-                plugin.state = PluginState::Error { error: e.to_string() };
-                Err(e)
+                plugin.state = PluginState::Error { error: e.clone() };
+                Err(crate::AppError::Plugin(e))
             }
         }
     }
@@ -658,7 +693,7 @@ impl PluginManager {
                 .get_mut(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
 
-            if plugin.state != PluginState::Activated {
+            if !matches!(plugin.state, PluginState::Activated | PluginState::Degraded { .. }) {
                 return Ok(());
             }
             plugin.manifest.plugin_type.clone()
@@ -873,52 +908,60 @@ impl PluginManager {
     pub async fn dispatch_lifecycle_event(&self, event: PluginLifecycleEvent) {
         let event_name = event.name();
 
-        // 快照：声明了该事件的已激活 WASM 插件 id + 实例句柄（短锁）
-        let targets: Vec<(String, Option<Arc<TokioMutex<LoadedComponentPlugin>>>)> = {
-            let ids: Vec<String> = {
-                let plugins = self.plugins.read().await;
-                plugins
-                    .values()
-                    .filter(|p| {
-                        p.state == PluginState::Activated
-                            && p.manifest.plugin_type == PluginType::Wasm
-                            && p.manifest
-                                .contributes
-                                .lifecycle
-                                .as_ref()
-                                .map(|l| l.is_declared(event_name))
-                                .unwrap_or(false)
-                    })
-                    .map(|p| p.manifest.id.clone())
-                    .collect()
+        // AppStartup 的 WASM on_startup 已前置到 activate()（phase 1b），
+        // 此处不再经 dispatch 二次分发（防 on_startup 被执行两次）；仅保留前端事件。
+        // 其余事件（AppShutdown/auth/disconnect/session/terminal）照常对
+        // Activated + Degraded 插件投递 —— Degraded 实例是活的，运行期回调仍应收到。
+        if !matches!(event, PluginLifecycleEvent::AppStartup) {
+            // 快照：声明了该事件的已激活（或降级）WASM 插件 id + 实例句柄（短锁）
+            let targets: Vec<(String, Option<Arc<TokioMutex<LoadedComponentPlugin>>>)> = {
+                let ids: Vec<String> = {
+                    let plugins = self.plugins.read().await;
+                    plugins
+                        .values()
+                        .filter(|p| {
+                            matches!(
+                                p.state,
+                                PluginState::Activated | PluginState::Degraded { .. }
+                            ) && p.manifest.plugin_type == PluginType::Wasm
+                                && p.manifest
+                                    .contributes
+                                    .lifecycle
+                                    .as_ref()
+                                    .map(|l| l.is_declared(event_name))
+                                    .unwrap_or(false)
+                        })
+                        .map(|p| p.manifest.id.clone())
+                        .collect()
+                };
+
+                if ids.is_empty() {
+                    Vec::new()
+                } else {
+                    let wasm_plugins = self.wasm_plugins.read().await;
+                    ids.into_iter()
+                        .map(|id| {
+                            let handle = wasm_plugins.get(&id).cloned();
+                            (id, handle)
+                        })
+                        .collect()
+                }
             };
 
-            if ids.is_empty() {
-                Vec::new()
-            } else {
-                let wasm_plugins = self.wasm_plugins.read().await;
-                ids.into_iter()
-                    .map(|id| {
-                        let handle = wasm_plugins.get(&id).cloned();
-                        (id, handle)
-                    })
-                    .collect()
-            }
-        };
-
-        // WASM 插件回调（不持 map 守卫）
-        for (id, wasm_plugin) in targets {
-            let Some(wasm_plugin) = wasm_plugin else {
-                continue;
-            };
-            let mut loaded = wasm_plugin.lock().await;
-            if let Err(e) = loaded.call_lifecycle_event(&event) {
-                tracing::warn!(
-                    plugin_id = %id,
-                    event = %event_name,
-                    error = %e,
-                    "WASM lifecycle callback failed"
-                );
+            // WASM 插件回调（不持 map 守卫）
+            for (id, wasm_plugin) in targets {
+                let Some(wasm_plugin) = wasm_plugin else {
+                    continue;
+                };
+                let mut loaded = wasm_plugin.lock().await;
+                if let Err(e) = loaded.call_lifecycle_event(&event) {
+                    tracing::warn!(
+                        plugin_id = %id,
+                        event = %event_name,
+                        error = %e,
+                        "WASM lifecycle callback failed"
+                    );
+                }
             }
         }
 

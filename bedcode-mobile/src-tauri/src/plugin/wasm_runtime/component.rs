@@ -509,21 +509,28 @@ impl LoadedComponentPlugin {
     }
 
     /// 调用插件的 on_startup 导出
+    ///
+    /// WIT `result<_, string>`：内层 Err 为插件显式失败（启动初始化未完成），
+    /// 映射为 `crate::Result` 错误以驱动宿主 Degraded 状态机。
     pub(crate) fn on_startup(&mut self) -> crate::Result<()> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle
-            .call_on_startup(&mut self.store)
-            .map_err(|e| AppError::Plugin(format!("WASM on_startup() call failed: {}", e)))
+        match lifecycle.call_on_startup(&mut self.store) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM on_startup() failed: {}", msg))),
+            Err(e) => Err(AppError::Plugin(format!("WASM on_startup() call failed: {}", e))),
+        }
     }
 
     /// 调用插件的 on_shutdown 导出
     pub(crate) fn on_shutdown(&mut self) -> crate::Result<()> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle
-            .call_on_shutdown(&mut self.store)
-            .map_err(|e| AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e)))
+        match lifecycle.call_on_shutdown(&mut self.store) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM on_shutdown() failed: {}", msg))),
+            Err(e) => Err(AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e))),
+        }
     }
 
     /// 调用 events 导出并统一映射 WIT `result<_, string>` 到 `crate::Result`

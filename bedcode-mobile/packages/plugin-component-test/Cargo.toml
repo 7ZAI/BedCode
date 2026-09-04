@@ -22,3 +22,5 @@ default = []
 high-abi = []
 spin-loop = []
 big-alloc = []
+# on-startup-fail — on_startup 返回 Err（宿主 Degraded 状态机测试用）
+on-startup-fail = []
