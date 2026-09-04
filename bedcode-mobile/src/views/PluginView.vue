@@ -532,7 +532,6 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
   }
 
   toggleLoadingMessage.value = t(enabled ? 'mobile.plugin.enabling' : 'mobile.plugin.disabling')
-  toggleLoading.value = true
   const startedAt = Date.now()
   let timedOut = false
   // 超时兜底：操作未在时限内完成时强制摘除遮罩 + 回退开关 + 提示，避免无限卡死
@@ -546,14 +545,33 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
 
   try {
     await pluginSetEnabled(pluginId, enabled)
+    // toggleLoading 推迟到 pluginLoader.activate 入口:后端会在 activate
+    // 内部串行执行 preauthorize(单次合并弹窗),此期间不显示 loading,
+    // 避免授权弹窗被 LoadingDialog 遮挡(file-transfer 等需预授权场景)
     if (enabled) {
-      await pluginLoader.activate(pluginId)
+      toggleLoading.value = true
+      try {
+        await pluginLoader.activate(pluginId)
+      } finally {
+        toggleLoading.value = false
+      }
     } else {
-      await pluginLoader.deactivate(pluginId)
+      toggleLoading.value = true
+      try {
+        await pluginLoader.deactivate(pluginId)
+      } finally {
+        toggleLoading.value = false
+      }
     }
     await loadPlugins()
   } catch (e: any) {
-    toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: e.message || String(e) }))
+    // 预授权前置错误(file-transfer 共享目录未配置):用专门文案提示去设置
+    const msg = e?.message || String(e)
+    if (enabled && msg.includes('configure shared directories')) {
+      toast.error(t('mobile.plugin.enableAuthRequired'))
+    } else {
+      toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: msg }))
+    }
     // 恢复开关状态
     pluginEnabledStates.value[pluginId] = !enabled
   }
