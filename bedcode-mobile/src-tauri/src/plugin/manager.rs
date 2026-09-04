@@ -15,12 +15,48 @@ use crate::system::constants::plugin::PLUGIN_ENABLED_KEY_PREFIX;
 use crate::system::settings::SettingsManager;
 use crate::Result;
 use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use tauri::{Emitter, Manager};
 use tokio::sync::{Mutex as TokioMutex, RwLock};
+
+/// 预授权路径提供者签名:返回插件「启用前需要授权的路径列表」。
+///
+/// 移动端镜像 desktop host.rs 同名抽象;由插件自身在 on_startup
+/// 时通过 host function 注册,优先级高于默认 storage 读取。
+pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
+/// file-transfer 插件 ID:启用前要求 shared_roots 非空,否则直接拒绝激活。
+pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+
+/// 预授权 storage key(file-transfer mount-local 时追加写入)。
+pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
+
+/// 预授权提供者注册表 — 跨 PluginManager 实例共享。
+static PREAUTH_PROVIDERS: OnceLock<RwLock<HashMap<String, PreauthProvider>>> = OnceLock::new();
+
+fn preauth_providers() -> &'static RwLock<HashMap<String, PreauthProvider>> {
+    PREAUTH_PROVIDERS.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// 注册预授权路径提供者(供 plugin 内部 host function 调用,
+/// 优先级高于默认 storage 读取)。同名 plugin_id 覆盖。
+pub async fn register_preauth_provider(plugin_id: &str, provider: PreauthProvider) {
+    let mut map = preauth_providers().write().await;
+    map.insert(plugin_id.to_string(), provider);
+}
+
+/// 收集插件的预授权路径:注册的 provider 优先,否则返回空(由
+/// PluginManager::preauthorize_plugin 从 storage 补足)。
+async fn collect_preauth_paths(plugin_id: &str) -> Vec<String> {
+    if let Some(provider) = preauth_providers().read().await.get(plugin_id).cloned() {
+        return provider(plugin_id);
+    }
+    Vec::new()
+}
 
 /// 插件生命周期管理器
 pub struct PluginManager {
@@ -404,6 +440,56 @@ impl PluginManager {
         Ok(())
     }
 
+    /// 预授权(启用前置):收集插件需授权路径 → 调 `fs_auth::check_batch`
+    /// 单次合并弹窗。失败直接返回 `AppError::Plugin`,**不**改 state。
+    /// **必须在 `activate` 步骤0(审批门禁)之后、状态写之前调用,持有
+    /// plugins 锁时禁止调用**(check_batch 会发事件、可能回调宿主)。
+    ///
+    /// 路径来源:已注册的 `PreauthProvider` 优先;否则从 `PluginStorage`
+    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入)。
+    /// file-transfer 共享目录未配置 → 立即返回错误,提示去设置页配置。
+    pub async fn preauthorize_plugin(&self, plugin_id: &str) -> Result<()> {
+        // 1. 收集路径(注册 provider 优先,否则 storage 数组)
+        let mut paths = collect_preauth_paths(plugin_id).await;
+        if paths.is_empty() {
+            if let Ok(Some(value)) = self.storage.get(plugin_id, PREAUTH_PATHS_STORAGE_KEY).await {
+                if let Value::Array(arr) = value {
+                    paths = arr
+                        .into_iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                }
+            }
+        }
+
+        // 2. file-transfer 共享目录未配置:直接拒绝,避免启用空功能插件
+        if plugin_id == FILE_TRANSFER_PLUGIN_ID && paths.is_empty() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "preauthorize: file-transfer requires shared_roots to be configured first"
+            );
+            return Err(crate::AppError::Plugin(
+                "Please configure shared directories in plugin settings first".to_string(),
+            ));
+        }
+
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        // 3. 合并未授权路径为单次弹窗(check_batch 内部已实现事件 emit + 30s 超时)
+        let allowed = self
+            .fs_auth
+            .check_batch(plugin_id, &paths, crate::plugin::fs_auth::FsOp::Read)
+            .await;
+        if !allowed {
+            return Err(crate::AppError::Plugin(
+                "Plugin enable denied: file access authorization rejected".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// 激活插件
     ///
     /// 锁约定：执行 WASM 导出函数期间不持有 plugins / wasm_plugins map 守卫
@@ -484,6 +570,11 @@ impl PluginManager {
                 }
             }
         }
+
+        // 0.5 预授权 — 审批门禁之后、状态写之前(无锁);失败直接返回,
+        // 前端 catch 后回退 toggle。loading 遮罩由前端 toggle 推迟到此
+        // 调用之后才显示,确保授权弹窗与 loading 不会同时出现
+        self.preauthorize_plugin(plugin_id).await?;
 
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {

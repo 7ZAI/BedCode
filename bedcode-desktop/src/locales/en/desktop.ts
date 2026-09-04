@@ -314,6 +314,8 @@ export default {
       // ==================== Detail page additions ====================
       togglingEnable: 'Enabling {name}...',
       togglingDisable: 'Disabling {name}...',
+      // Preauth gate: enable requires user to pre-configure (file-transfer etc.)
+      enableAuthRequired: 'Please configure shared directories in plugin settings first',
       noDescription: 'No description available',
       openDetail: 'View Details',
       goConfig: 'Configure',

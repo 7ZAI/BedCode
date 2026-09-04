@@ -68,12 +68,15 @@ export function usePluginManager() {
   /** 切换插件启用/停用 */
   async function togglePlugin(id: string, enable: boolean): Promise<boolean> {
     if (togglingId.value) return false
-    togglingId.value = id
     togglingDirection.value = enable
     const startedAt = Date.now()
     console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      // togglingId 推迟到 pluginLoader.activate 入口:后端会在 activate
+      // 内部串行执行 preauthorize(单次合并弹窗),此期间不显示 loading,
+      // 避免授权弹窗被 LoadingOverlay 遮挡(file-transfer 等需预授权场景)
+      togglingId.value = id
       const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -92,9 +95,15 @@ export function usePluginManager() {
       console.log(`[PluginManager] togglePlugin(${id}) succeeded`)
       return true
     } catch (e: any) {
-      const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
       console.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
-      toast.error(t(key, { error: e.message || 'Unknown error' }))
+      // 预授权前置错误(file-transfer 共享目录未配置):用专门文案提示去设置
+      const msg = e?.message || ''
+      if (enable && msg.includes('configure shared directories')) {
+        toast.error(t('desktop.plugin.enableAuthRequired'))
+      } else {
+        const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
+        toast.error(t(key, { error: msg || 'Unknown error' }))
+      }
       return false
     } finally {
       clearTimeout(timer)

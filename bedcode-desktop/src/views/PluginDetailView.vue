@@ -400,13 +400,16 @@ function stateBadgeClass(state: PluginState): string {
 /** 切换启停（带遮罩） */
 async function handleToggle(id: string, enable: boolean): Promise<void> {
   if (togglingId.value) return
-  togglingId.value = id
   const name = plugin.value?.name || id
   const key = enable ? 'desktop.plugin.togglingEnable' : 'desktop.plugin.togglingDisable'
   togglingPluginInfo.value = { id, name, message: t(key, { name }) }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
+    // togglingId 推迟到 pluginLoader.activate 入口:后端会在 activate
+    // 内部串行执行 preauthorize(单次合并弹窗),此期间不显示 loading,
+    // 避免授权弹窗被 LoadingOverlay 遮挡(file-transfer 等需预授权场景)
+    togglingId.value = id
     const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
     const timeout = new Promise<never>((_, reject) => {
       timer = setTimeout(

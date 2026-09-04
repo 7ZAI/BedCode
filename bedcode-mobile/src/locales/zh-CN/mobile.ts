@@ -418,6 +418,8 @@ export default {
       enabling: '正在启用插件...',
       disabling: '正在禁用插件...',
       toggleTimeout: '插件操作超时，请稍后重试',
+      // 预授权前置:启用前要求用户在插件设置中预先配置(file-transfer 等)
+      enableAuthRequired: '请先在插件设置中配置共享目录',
       noPlugins: '暂无插件',
       noPluginsHint: '点击右上角 + 安装插件',
       loadFailed: '插件加载失败',

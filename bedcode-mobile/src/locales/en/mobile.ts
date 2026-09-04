@@ -419,6 +419,8 @@ export default {
       enabling: 'Enabling plugin...',
       disabling: 'Disabling plugin...',
       toggleTimeout: 'Plugin operation timed out, please retry',
+      // Preauth gate: enable requires user to pre-configure (file-transfer etc.)
+      enableAuthRequired: 'Please configure shared directories in plugin settings first',
       noPlugins: 'No plugins',
       noPluginsHint: 'Tap + in the top-right corner to install a plugin',
       loadFailed: 'Plugin load failed',
