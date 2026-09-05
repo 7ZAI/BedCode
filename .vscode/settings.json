@@ -1,9 +1,26 @@
 {
     "i18n-ally.localesPaths": [
         "src/locales"
-    ]
-    // "rust-analyzer.linkedProjects": [
-    //     "bedcode-desktop/src-tauri/Cargo.toml",
-    //     "bedcode-mobile/src-tauri/Cargo.toml"
-    // ]
+    ],
+    "rust-analyzer.files.watcherExclude": [
+        "**/target/**",
+        "**/node_modules/**",
+        "**/gen/android/build/**",
+        "**/gen/android/app/build/**",
+        "**/.git/**"
+    ],
+    "rust-analyzer.files.exclude": [
+        "**/target/**",
+        "**/gen/android/**",
+        "**/node_modules/**"
+    ],
+    "rust-analyzer.memoryUsage": {
+        "contextLimit": 256,
+        "syntaxTreeLimit": 128,
+        "hoverLimit": 128,
+        "completionLimit": 128
+    },
+    "rust-analyzer.cargo.buildScripts.enable": true,
+    "rust-analyzer.procMacro.enable": true,
+    "rust-analyzer.updates.channel": "stable"
 }
