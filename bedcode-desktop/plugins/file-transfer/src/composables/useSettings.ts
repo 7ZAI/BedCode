@@ -2,17 +2,18 @@
  * 插件设置 — host-peer 契约版
  *
  * 共享目录由宿主持久化（SharedDirDto：id/name/kind/path），添加 = 系统
- * 目录选择器 → host add_shared_directory；下载目录经 pick-download-dir
+ * 多目录选择器（一次可加多个）→ host mount-local；下载目录经 pick-download-dir
  * （系统选择器 + set_download_dir）；接收策略/超时经 set-settings。
  */
 import { ref, computed, type Ref } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
 import type { Settings } from '../types'
 
-/** 宿主 SharedDirDto → 前端条目（保留 id 供移除寻址） */
+/** 宿主 SharedDirDto → 前端条目（保留 id 供移除寻址、path 供完整路径展示） */
 export interface RootItem {
   id: string
   name: string
+  path: string
 }
 
 export function useSettings(context: PluginContext) {
@@ -38,10 +39,12 @@ export function useSettings(context: PluginContext) {
         const normalized =
           policy === 'always_accept' ? 'accept' : policy === 'always_deny' ? 'reject' : 'ask'
         const rawRoots = Array.isArray(r.roots) ? r.roots : []
-        rootItems.value = rawRoots.map((x: any) => ({
-          id: x?.id ?? '',
-          name: x?.name ?? x?.path ?? x?.id ?? '',
-        }))
+        rootItems.value = rawRoots.map((x: any) => {
+          const name = (x?.name ?? x?.path ?? x?.id ?? '') as string
+          // path 为展示真源（完整路径）；旧数据缺 path 时退化用 name
+          const path = typeof x?.path === 'string' && x.path ? x.path : name
+          return { id: x?.id ?? '', name, path }
+        })
         settings.value = {
           ...settings.value,
           downloadDir: typeof r.download_dir === 'string' ? r.download_dir : (r.downloadDir ?? ''),
@@ -85,16 +88,22 @@ export function useSettings(context: PluginContext) {
     settings.value = { ...settings.value, encryption: enabled }
   }
 
-  /** 添加共享目录（插件内弹系统目录选择器 → 注册表 + set-shared-roots；用户取消返回 null） */
-  async function addRoot(): Promise<string | null> {
+  /** 添加共享目录（系统多目录选择器，一次可添加多个 → 注册表 + set-shared-roots；
+   * 用户取消返回空数组；兼容旧单条 {id,name,path} 契约） */
+  async function addRoot(): Promise<string[]> {
     try {
-      const added = await context.commands.execute('file-transfer.mount-local', {})
+      const r = await context.commands.execute('file-transfer.mount-local', {})
       await load()
-      return typeof added?.path === 'string' ? (added.path as string) : null
+      if (Array.isArray(r?.added)) {
+        return r.added
+          .map((x: any) => (typeof x?.path === 'string' ? x.path : ''))
+          .filter(Boolean)
+      }
+      return typeof r?.path === 'string' && r.path ? [r.path] : []
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e)
       if (!msg.includes('cancelled')) console.error('[File Transfer] mount-local failed:', e)
-      return null
+      return []
     }
   }
 

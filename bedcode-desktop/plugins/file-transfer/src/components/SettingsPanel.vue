@@ -2,8 +2,8 @@
 /**
  * SettingsPanel — 插件设置（覆盖层面板）— host-peer 契约版
  *
- * 共享目录列表管理（添加 = 系统目录选择器，条目由宿主持久化）、下载目录、
- * 接收策略/超时、安全告知常驻文案。纯展示组件，写操作经 emit 交给父级。
+ * 共享目录列表管理（添加 = 系统多目录选择器，一次可加多个；条目由宿主持久化）、
+ * 下载目录、接收策略/超时、安全告知常驻文案。纯展示组件，写操作经 emit 交给父级。
  */
 import { inject } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-desktop'
@@ -75,7 +75,10 @@ function onTimeoutBlur(e: Event): void {
           </div>
           <div v-else class="ft-root-list">
             <div v-for="root in rootItems" :key="root.id" class="ft-root-item">
-              <span class="ft-root-path" :title="root.name">{{ root.name }}</span>
+              <!-- 完整路径为展示真源（title 悬停可读全文）；缺 path 的旧数据退化用 name -->
+              <span class="ft-root-path" :title="root.path || root.name">
+                {{ root.path || root.name }}
+              </span>
               <button
                 class="ft-mini-btn ft-mini-btn--ghost"
                 :title="t('transfer.settings.removeRoot')"

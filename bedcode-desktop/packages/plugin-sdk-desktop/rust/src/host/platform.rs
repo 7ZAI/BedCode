@@ -11,4 +11,6 @@ pub trait HostPlatform {
     fn platform_pick_files(&self) -> Result<Vec<String>, HostError>;
     /// 系统文件夹选择器（用户取消返回空串；移动端为 SAF 目录树 URI）
     fn platform_pick_folder(&self) -> Result<String, HostError>;
+    /// 系统多目录选择器（用户取消为空数组；移动端返回 SAF 目录树 URI 列表）
+    fn platform_pick_folders(&self) -> Result<Vec<String>, HostError>;
 }

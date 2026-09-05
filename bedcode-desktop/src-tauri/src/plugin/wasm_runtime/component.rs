@@ -348,6 +348,10 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     fn pick_folder(&mut self) -> Result<String, String> {
         platform::platform_pick_folder(&self.host_ctx)
     }
+
+    fn pick_folders(&mut self) -> Result<String, String> {
+        platform::platform_pick_folders(&self.host_ctx)
+    }
 }
 
 // ==================== Component Linker 组装 ====================

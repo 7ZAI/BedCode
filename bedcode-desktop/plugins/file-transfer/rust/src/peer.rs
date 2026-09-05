@@ -11,7 +11,7 @@ use crate::roots_registry::{self, SharedRoot};
 use crate::settings_store::{self, TransferSettings};
 use crate::transfer_store::{self, RetryMeta, PullFileSpec, TransferEntry};
 use bedcode_plugin_api::host::{
-    HostEvents, HostLog, HostPeer, HostPlatform, HostPluginDatabase,
+    HostEvents, HostLog, HostPeer, HostPlatform, HostPluginDatabase, HostStorage,
 };
 use bedcode_plugin_api::wasm_host::WasmHost;
 use std::sync::Mutex;
@@ -20,6 +20,44 @@ use std::sync::OnceLock;
 type Result<T> = anyhow::Result<T>;
 
 pub(crate) const PLUGIN_ID: &str = "com.bedcode.file-transfer";
+
+/// 预授权 storage key：宿主 `preauthorize_plugin` 读取（启用插件时收集路径并合并
+/// 弹窗授权）。与共享目录生命周期同步：mount-local 追加、update-roots 剔除——
+/// 缺失该写入方时 file-transfer 启用永远命中「请先配置共享目录」门禁（Bug A）。
+pub(crate) const PREAUTH_PATHS_KEY: &str = "preauth_paths";
+
+/// 读取预授权路径数组（storage 缺失/损坏视为空数组，幂等）
+fn load_preauth_paths(h: &impl HostStorage) -> anyhow::Result<Vec<String>> {
+    let Some(v) = h.storage_get(PREAUTH_PATHS_KEY)? else {
+        return Ok(Vec::new());
+    };
+    Ok(serde_json::from_value::<Vec<String>>(v)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|s: &String| !s.trim().is_empty())
+        .collect())
+}
+
+/// 追加预授权路径（去重后写回；已存在时无操作）
+pub(crate) fn push_preauth_path(h: &impl HostStorage, path: &str) -> anyhow::Result<()> {
+    let mut paths = load_preauth_paths(h)?;
+    if !paths.iter().any(|p| p == path) {
+        paths.push(path.to_string());
+        h.storage_set(PREAUTH_PATHS_KEY, &serde_json::to_value(&paths)?)?;
+    }
+    Ok(())
+}
+
+/// 按路径剔除预授权（不存在时无操作）
+pub(crate) fn remove_preauth_path(h: &impl HostStorage, path: &str) -> anyhow::Result<()> {
+    let mut paths = load_preauth_paths(h)?;
+    let before = paths.len();
+    paths.retain(|p| p != path);
+    if paths.len() != before {
+        h.storage_set(PREAUTH_PATHS_KEY, &serde_json::to_value(&paths)?)?;
+    }
+    Ok(())
+}
 
 // ==================== 任务存储运行时 ====================
 
@@ -616,55 +654,311 @@ pub(crate) fn pick_download_dir(h: &WasmHost) -> Result<serde_json::Value> {
     Ok(serde_json::json!({ "path": folder }))
 }
 
-/// 添加共享目录：无 path 参数则弹系统选择器（host-platform）；同根去重在
-/// 注册表层完成（id=路径哈希）；推送失败自动回滚
-pub(crate) fn mount_local(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
-    let picked;
-    let path = match args.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
-        Some(p) => p.to_string(),
-        None => {
-            picked = h.platform_pick_folder()?;
-            if picked.is_empty() {
-                anyhow::bail!("cancelled");
+/// 添加共享目录：无 path 参数则弹系统多目录选择器（host-platform，一次可选
+/// 多个）；同根去重在注册表层完成（id=路径哈希）；推送失败自动回滚
+pub(crate) fn mount_local(
+    h: &(impl HostPlatform + HostPluginDatabase + HostPeer + HostStorage),
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
+    let paths =
+        match args.get("path").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+            Some(p) => vec![p.to_string()],
+            None => {
+                let picked = h.platform_pick_folders()?;
+                if picked.is_empty() {
+                    anyhow::bail!("cancelled");
+                }
+                picked
             }
-            picked
-        }
-    };
-    let name = args
+        };
+    // 显式 name 仅单路径注册（args.path + args.name）时生效；选择器多选按
+    // 各自路径末段取默认名
+    let explicit_name = args
         .get("name")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            path.trim_end_matches(['/', '\\'])
-                .rsplit(['/', '\\'])
-                .next()
-                .unwrap_or(&path)
-                .to_string()
-        });
-    let entry = SharedRoot { id: roots_registry::root_id(&path), name, path: path.clone() };
+        .map(|s| s.to_string());
+    let entries: Vec<SharedRoot> = paths
+        .into_iter()
+        .map(|path| {
+            let name =
+                explicit_name.clone().unwrap_or_else(|| default_root_name(&path));
+            SharedRoot { id: roots_registry::root_id(&path), name, path }
+        })
+        .collect();
     let next = roots_registry::apply_and_push(h, |list| {
-        roots_registry::upsert(list, entry.clone());
+        for entry in &entries {
+            roots_registry::upsert(list, entry.clone());
+        }
     })?;
-    let added = next.iter().find(|r| r.id == entry.id);
-    Ok(added
-        .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "path": r.path }))
-        .unwrap_or_default())
+    let mut added = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        if let Some(r) = next.iter().find(|r| r.id == entry.id) {
+            // 预授权路径与共享目录同步：追加后宿主启用插件时才能收集到（缺失时
+            // 启用命中「请先配置共享目录」门禁）。storage 写失败如实上抛——共享目录
+            // 已落库但预授权缺失会再次锁死启用，宁可让用户看到错误重试
+            push_preauth_path(h, &r.path)?;
+            added.push(serde_json::json!({ "id": r.id, "name": r.name, "path": r.path }));
+        }
+    }
+    Ok(serde_json::json!({ "added": added }))
+}
+
+/// 路径默认展示名：去尾分隔符后的最后一段（Windows / Unix 分隔符均适配）
+fn default_root_name(path: &str) -> String {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .next()
+        .unwrap_or(path)
+        .to_string()
 }
 
 /// 移除共享目录：args.remove = 条目 id；推送失败自动回滚
-pub(crate) fn update_roots(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+pub(crate) fn update_roots(
+    h: &(impl HostPluginDatabase + HostPeer + HostStorage),
+    args: &serde_json::Value,
+) -> Result<serde_json::Value> {
     let id = args
         .get("remove")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("missing remove id"))?
         .to_string();
-    let existed = {
+    let (existed, removed_path) = {
         let list = roots_registry::load_all(h)?;
-        list.iter().any(|r| r.id == id)
+        let removed_path = list.iter().find(|r| r.id == id).map(|r| r.path.clone());
+        (list.iter().any(|r| r.id == id), removed_path)
     };
     roots_registry::apply_and_push(h, |list| {
         roots_registry::remove(list, &id);
     })?;
+    if let Some(path) = removed_path {
+        // 预授权路径同步剔除：共享目录移除后启用插件不再收集该路径
+        remove_preauth_path(h, &path)?;
+    }
     Ok(serde_json::json!({ "removed": existed }))
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::{load_preauth_paths, mount_local, roots_registry, update_roots};
+    use bedcode_plugin_api::host::{HostError, HostPeer, HostPlatform, HostPluginDatabase, HostStorage};
+    use std::cell::RefCell;
+
+    /// 内存版宿主 mock：覆盖 mount_local / update_roots 所需 trait
+    /// （storage 键值 + shared_roots 行集 + set-shared-roots 推送记录）
+    struct MockHost {
+        kv: RefCell<std::collections::HashMap<String, serde_json::Value>>,
+        rows: RefCell<Vec<serde_json::Value>>,
+        pushed_roots: RefCell<Vec<serde_json::Value>>,
+        /// platform_pick_folders 预设返回值（多选目录对话框桩）
+        picked: RefCell<Vec<String>>,
+    }
+
+    impl MockHost {
+        fn new() -> Self {
+            MockHost {
+                kv: RefCell::new(std::collections::HashMap::new()),
+                rows: RefCell::new(vec![]),
+                pushed_roots: RefCell::new(vec![]),
+                picked: RefCell::new(vec![]),
+            }
+        }
+
+        fn preauth(&self) -> Vec<String> {
+            load_preauth_paths(self).unwrap()
+        }
+    }
+
+    impl HostStorage for MockHost {
+        fn storage_get(&self, key: &str) -> Result<Option<serde_json::Value>, HostError> {
+            Ok(self.kv.borrow().get(key).cloned())
+        }
+        fn storage_set(&self, key: &str, value: &serde_json::Value) -> Result<(), HostError> {
+            self.kv.borrow_mut().insert(key.to_string(), value.clone());
+            Ok(())
+        }
+        fn storage_delete(&self, key: &str) -> Result<(), HostError> {
+            self.kv.borrow_mut().remove(key);
+            Ok(())
+        }
+    }
+
+    impl HostPluginDatabase for MockHost {
+        fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
+            if sql.contains("CREATE TABLE IF NOT EXISTS shared_roots") {
+                // 建表幂等：不触碰已有行（load_all 每次都会调 ensure_table）
+                return Ok(0);
+            }
+            if sql == "DELETE FROM shared_roots" {
+                self.rows.borrow_mut().clear();
+                return Ok(0);
+            }
+            Ok(0)
+        }
+        fn plugin_db_query(&self, sql: &str) -> Result<Option<serde_json::Value>, HostError> {
+            if sql.contains("SELECT id, name, path FROM shared_roots") {
+                return Ok(Some(serde_json::Value::Array(self.rows.borrow().clone())));
+            }
+            Ok(None)
+        }
+        fn plugin_db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
+            if sql.contains("INSERT INTO shared_roots") {
+                self.rows.borrow_mut().push(serde_json::json!({
+                    "id": params[0],
+                    "name": params[1],
+                    "path": params[2],
+                }));
+                return Ok(1);
+            }
+            Ok(0)
+        }
+        fn plugin_db_query_params(
+            &self,
+            _sql: &str,
+            _params: &[serde_json::Value],
+        ) -> Result<Option<serde_json::Value>, HostError> {
+            Ok(None)
+        }
+    }
+
+    impl HostPeer for MockHost {
+        fn peer_dial(&self, _endpoint: &serde_json::Value) -> Result<String, HostError> {
+            unimplemented!()
+        }
+        fn peer_close(&self, _handle: &str) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_respond_consent(&self, _request_id: &str, _accepted: bool) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_revoke_trusted(&self, _node_id: &str) -> Result<bool, HostError> {
+            unimplemented!()
+        }
+        fn peer_send_files(&self, _session: &str, _paths: &[serde_json::Value]) -> Result<String, HostError> {
+            unimplemented!()
+        }
+        fn peer_respond_transfer(&self, _batch_id: &str, _accept: bool) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_set_receive_policy(&self, _mode: &str, _timeout_secs: u64) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
+            self.pushed_roots.borrow_mut().clear();
+            self.pushed_roots.borrow_mut().extend_from_slice(dirs);
+            Ok(())
+        }
+        fn peer_list_shared_roots(&self, _session: &str) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_browse_directory(&self, _session: &str, _dir_id: &str, _rel_path: &str) -> Result<serde_json::Value, HostError> {
+            unimplemented!()
+        }
+        fn peer_pull_files(&self, _session: &str, _dir_id: &str, _files: &[serde_json::Value]) -> Result<u32, HostError> {
+            unimplemented!()
+        }
+        fn peer_set_download_dir(&self, _path: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+    }
+
+    impl HostPlatform for MockHost {
+        fn platform_pick_files(&self) -> Result<Vec<String>, HostError> {
+            unimplemented!()
+        }
+        fn platform_pick_folder(&self) -> Result<String, HostError> {
+            unimplemented!()
+        }
+        fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
+            Ok(self.picked.borrow().clone())
+        }
+    }
+
+    /// mount-local 追加预授权路径：新增目录落 preauth_paths（宿主启用门禁读取）；
+    /// 同路径重复挂载幂等（注册表 upsert + 预授权去重，均不重复）
+    #[test]
+    fn mount_local_appends_preauth_paths_and_dedupes() {
+        let h = MockHost::new();
+        let r1 = mount_local(&h, &serde_json::json!({ "path": "/tmp/share-x", "name": "x" })).unwrap();
+        assert_eq!(r1["added"][0]["path"], "/tmp/share-x");
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string()]);
+
+        // 同路径重复挂载：预授权不重复、注册表不重复
+        let r2 = mount_local(&h, &serde_json::json!({ "path": "/tmp/share-x", "name": "x" })).unwrap();
+        assert_eq!(r2["added"][0]["id"], r1["added"][0]["id"]);
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string()]);
+        assert_eq!(roots_registry::load_all(&h).unwrap().len(), 1);
+
+        // 第二个目录追加
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-y", "name": "y" })).unwrap();
+        assert_eq!(h.preauth(), vec!["/tmp/share-x".to_string(), "/tmp/share-y".to_string()]);
+        // 注册表与预授权保持一致（宿主收集的就是共享目录）
+        let roots: Vec<String> = roots_registry::load_all(&h).unwrap().into_iter().map(|r| r.path).collect();
+        assert_eq!(roots, h.preauth());
+    }
+
+    /// mount-local 多选：一次注册多个目录，注册表 + 预授权同步追加；
+    /// 默认名取各路径末段（显式 name 仅单路径注册生效）
+    #[test]
+    fn mount_local_multi_pick_registers_all() {
+        let h = MockHost::new();
+        *h.picked.borrow_mut() =
+            vec!["/tmp/multi-a".to_string(), "/tmp/media/multi-b".to_string()];
+        let out = mount_local(&h, &serde_json::json!({})).unwrap();
+        let added = out["added"].as_array().unwrap();
+        assert_eq!(added.len(), 2);
+        assert_eq!(added[0]["path"], "/tmp/multi-a");
+        assert_eq!(added[0]["name"], "multi-a");
+        assert_eq!(added[1]["name"], "multi-b");
+        assert_eq!(
+            h.preauth(),
+            vec!["/tmp/multi-a".to_string(), "/tmp/media/multi-b".to_string()]
+        );
+        assert_eq!(roots_registry::load_all(&h).unwrap().len(), 2);
+    }
+
+    /// mount-local 取消选择：空数组视为用户取消，注册表与预授权不变
+    #[test]
+    fn mount_local_cancelled_when_no_folders_picked() {
+        let h = MockHost::new();
+        let err = mount_local(&h, &serde_json::json!({})).unwrap_err();
+        assert!(err.to_string().contains("cancelled"));
+        assert!(h.preauth().is_empty());
+        assert!(roots_registry::load_all(&h).unwrap().is_empty());
+    }
+
+    /// update-roots 移除共享目录：预授权路径同步剔除；全删后回到空数组
+    /// （宿主 file-transfer 门禁恢复「未配置共享目录」拒绝语义）
+    #[test]
+    fn update_roots_removes_preauth_path() {
+        let h = MockHost::new();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-a", "name": "a" })).unwrap();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-b", "name": "b" })).unwrap();
+        assert_eq!(h.preauth().len(), 2);
+
+        let id_a = roots_registry::root_id("/tmp/share-a");
+        let out = update_roots(&h, &serde_json::json!({ "remove": id_a })).unwrap();
+        assert_eq!(out["removed"], true);
+        assert_eq!(h.preauth(), vec!["/tmp/share-b".to_string()]);
+
+        let id_b = roots_registry::root_id("/tmp/share-b");
+        let out = update_roots(&h, &serde_json::json!({ "remove": id_b })).unwrap();
+        assert_eq!(out["removed"], true);
+        assert!(h.preauth().is_empty());
+    }
+
+    /// 移除不存在的 id：幂等，预授权不受影响
+    #[test]
+    fn update_roots_unknown_id_is_noop() {
+        let h = MockHost::new();
+        mount_local(&h, &serde_json::json!({ "path": "/tmp/share-c", "name": "c" })).unwrap();
+        let out = update_roots(&h, &serde_json::json!({ "remove": "root-deadbeef" })).unwrap();
+        assert_eq!(out["removed"], false);
+        assert_eq!(h.preauth(), vec!["/tmp/share-c".to_string()]);
+    }
 }

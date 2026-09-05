@@ -828,6 +828,25 @@ pub async fn peer_pick_folder(app_handle: AppHandle) -> crate::Result<Vec<String
     }
 }
 
+/// 系统多目录选择器（一次可选多个；用户取消返回空数组）
+pub async fn peer_pick_folders(app_handle: AppHandle) -> crate::Result<Vec<String>> {
+    use tauri_plugin_dialog::DialogExt;
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app_handle.dialog().file().pick_folders(move |selection| {
+        if tx.send(selection).is_err() {
+            tracing::debug!("peer_pick_folders: receiver dropped before dialog completed");
+        }
+    });
+    match rx.await {
+        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
+        // 用户取消选择
+        Ok(None) => Ok(Vec::new()),
+        Err(e) => Err(crate::AppError::Plugin(format!(
+            "peer_pick_folders: dialog channel closed: {e}"
+        ))),
+    }
+}
+
 /// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
 fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
     let path = file_path.into_path().map_err(|e| {

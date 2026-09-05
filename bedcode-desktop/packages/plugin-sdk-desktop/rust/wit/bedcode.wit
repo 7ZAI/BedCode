@@ -136,6 +136,8 @@ interface host-platform {
     /// 系统文件夹选择器 → 绝对路径；用户取消返回空串
     /// （移动端为 SAF 目录树选择器，返回树 URI）
     pick-folder: func() -> result<string, string>;
+    /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
+    pick-folders: func() -> result<string, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复

@@ -493,4 +493,14 @@ impl HostPlatform for WasmHost {
     fn platform_pick_folder(&self) -> Result<String, HostError> {
         host_platform::pick_folder().map_err(|e| host_err("platform_pick_folder", e))
     }
+
+    fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_pick_folders",
+            host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
+        )?;
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(-1, format!("platform_pick_folders: invalid JSON from host: {e}"))
+        })
+    }
 }

@@ -20,6 +20,13 @@ pub(crate) fn platform_pick_folder(host_ctx: &WasmHostContext) -> Result<String,
     Ok(paths.into_iter().next().unwrap_or_default())
 }
 
+/// 系统多目录选择器 → string[] JSON（用户取消为空数组）
+pub(crate) fn platform_pick_folders(host_ctx: &WasmHostContext) -> Result<String, String> {
+    let app = require_app(host_ctx)?;
+    let paths = sync_result(block_on_async(crate::peer_transfer::peer_pick_folders(app)))?;
+    serde_json::to_string(&paths).map_err(|e| format!("serialize picked folders failed: {e}"))
+}
+
 fn require_app(host_ctx: &WasmHostContext) -> Result<tauri::AppHandle, String> {
     host_ctx
         .app_handle

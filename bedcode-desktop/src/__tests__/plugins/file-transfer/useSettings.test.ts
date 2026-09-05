@@ -4,8 +4,8 @@
  * 承接被删宿主 usePeerReceiving 中接收策略设置场景（setPolicy 经后端校验后
  * 本地生效）与宿主接收设置页的插件化版本：wire 设置归一化、策略/超时命令
  * 路由与本地同步、超时钳制（10–600）、共享目录增删与下载目录选择。
- * mock 最小 PluginContext，只测编排逻辑不测渲染；addRoot 依赖系统选择器
- * （@tauri-apps/plugin-dialog 动态导入）不在编排测试范围。
+ * mock 最小 PluginContext，只测编排逻辑不测渲染；addRoot 经 mount-local 命令
+ * （系统多目录选择器在插件 WASM 侧打开）可 mock 编排，含多选添加与取消。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -69,10 +69,38 @@ describe('useSettings orchestration', () => {
       downloadDir: 'C:/Downloads',
     })
     expect(settings.rootItems.value).toEqual([
-      { id: 'r-1', name: '下载' },
-      { id: '', name: 'D:/docs' },
+      { id: 'r-1', name: '下载', path: '下载' }, // 无 path 条目：完整路径退化用 name
+      { id: '', name: 'D:/docs', path: 'D:/docs' }, // 无名条目回退 path
     ])
     expect(settings.loading.value).toBe(false)
+  })
+
+  it('addRoot routes mount-local and reloads; multi-pick returns added paths', async () => {
+    env.onCommand('file-transfer.get-settings', () => ({
+      roots: [
+        { id: 'r-a', name: 'a', path: '/tmp/a' },
+        { id: 'r-b', name: 'b', path: '/media/b' },
+      ],
+    }))
+    env.onCommand('file-transfer.mount-local', () => ({
+      added: [
+        { id: 'r-a', name: 'a', path: '/tmp/a' },
+        { id: 'r-b', name: 'b', path: '/media/b' },
+      ],
+    }))
+    const settings = useSettings(env.context)
+
+    await expect(settings.addRoot()).resolves.toEqual(['/tmp/a', '/media/b'])
+    expect(env.calls).toContainEqual({ id: 'file-transfer.mount-local', args: {} })
+    // 结果经 load 刷新（含完整路径），不依赖返回值手工拼装
+    expect(settings.rootItems.value.map((r) => r.path)).toEqual(['/tmp/a', '/media/b'])
+  })
+
+  it('addRoot treats user cancellation as empty result without error', async () => {
+    env.onCommand('file-transfer.mount-local', () => Promise.reject(new Error('cancelled')))
+    const settings = useSettings(env.context)
+
+    await expect(settings.addRoot()).resolves.toEqual([])
   })
 
   it('load failure keeps defaults and clears loading without throwing', async () => {
