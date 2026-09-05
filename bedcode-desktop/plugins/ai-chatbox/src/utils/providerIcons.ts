@@ -9,17 +9,15 @@ import deepseekIcon from '../assets/providers/deepseek.svg?raw'
 import qwenIcon from '../assets/providers/qwen.svg?raw'
 import openaiIcon from '../assets/providers/openai.svg?raw'
 import anthropicIcon from '../assets/providers/anthropic.svg?raw'
-import sensenovaIcon from '../assets/providers/sensenova.svg?raw'
 import type { PresetId } from '../types'
 
 /** 预设 id → 品牌 SVG 源码（?raw 内联；fill="currentColor" 需随主题文字色渲染，
      <img> 加载会落入隔离文档使 currentColor 恒为黑色，深色主题下不可见） */
-const ICON_BY_PRESET: Record<PresetId, string> = {
+const ICON_BY_PRESET: Partial<Record<PresetId, string>> = {
   deepseek: deepseekIcon,
   qwen: qwenIcon,
   openai: openaiIcon,
   anthropic: anthropicIcon,
-  sensenova: sensenovaIcon,
 }
 
 export function resolveProviderIcon(presetId?: string): string | null {
@@ -33,7 +31,6 @@ const BRAND_COLOR: Partial<Record<PresetId, string>> = {
   deepseek: '#4D6BFE',
   qwen: '#615CED',
   anthropic: '#D97757',
-  sensenova: '#5B29DA',
 }
 
 /** 预设 id → 品牌色；无预设/未知/单色品牌（openai）返回 null（跟随主题文字色） */

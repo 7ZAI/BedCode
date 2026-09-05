@@ -49,7 +49,7 @@ export interface ConversationMeta {
 }
 
 /** 预设模板 id（与 src/assets/providers/ 下品牌图标一一对应） */
-export type PresetId = 'deepseek' | 'qwen' | 'openai' | 'anthropic' | 'sensenova'
+export type PresetId = 'deepseek' | 'qwen' | 'openai' | 'anthropic'
 
 /** 供应商预设模板（只读添加起点，不进入供应商列表） */
 export interface ProviderPreset {
@@ -85,19 +85,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: 'https://api.anthropic.com/v1',
     models: ['claude-sonnet-4-20250514', 'claude-haiku-4-20250414'],
   },
-  {
-    id: 'sensenova',
-    name: 'SenseNova (商汤)',
-    baseUrl: 'https://token.sensenova.cn/v1',
-    // 全部走 OpenAI 兼容 /v1/chat/completions（图片生成模型走独立 /v1/images/*，不列入）
-    models: [
-      'sensenova-6.8-flash-lite',
-      'deepseek-v4-pro',
-      'deepseek-v4-flash',
-      'glm-5.2',
-      'kimi-k3',
-    ],
-  },
 ]
 
 /** 思考模式（插件级全局配置：default=不传参跟随模型；enabled/disabled 强制开/关） */
@@ -121,6 +108,16 @@ export type CodeTheme = 'auto' | 'light' | 'dark' | 'github-light' | 'github-dar
 export const CODE_FONT_SIZE_MIN = 11
 export const CODE_FONT_SIZE_MAX = 18
 
+/** 限流自动重试次数范围（0 = 关闭自动重试；配置归一化与 plugin.json 保持一致） */
+export const RATE_LIMIT_MAX_RETRIES_MIN = 0
+export const RATE_LIMIT_MAX_RETRIES_MAX = 10
+/** 限流重试初始等待范围（ms，首次重试前等待；配置归一化与 plugin.json 保持一致） */
+export const RATE_LIMIT_INITIAL_DELAY_MS_MIN = 100
+export const RATE_LIMIT_INITIAL_DELAY_MS_MAX = 60000
+/** 限流重试等待上限范围（ms，指数退避封顶值；配置归一化与 plugin.json 保持一致） */
+export const RATE_LIMIT_MAX_DELAY_MS_MIN = 1000
+export const RATE_LIMIT_MAX_DELAY_MS_MAX = 300000
+
 /** 插件级全局配置（contributes.configuration，storage key `config`；
     宿主配置页保存的值可能缺项，读取侧必须合并默认值） */
 export interface PluginConfig {
@@ -133,6 +130,12 @@ export interface PluginConfig {
   codeFontSize: number
   /** 代码块高亮主题 */
   codeTheme: CodeTheme
+  /** 限流自动重试最大次数（0 = 关闭自动重试） */
+  rateLimitMaxRetries: number
+  /** 限流重试初始等待（ms，首次重试前等待，之后按指数退避翻倍） */
+  rateLimitInitialDelayMs: number
+  /** 限流重试等待上限（ms，指数退避封顶值） */
+  rateLimitMaxDelayMs: number
 }
 
 /** 配置默认值（与 plugin.json configuration 的 default 字段保持一致） */
@@ -143,6 +146,9 @@ export const DEFAULT_PLUGIN_CONFIG: PluginConfig = {
   codeLineHeight: DEFAULT_CODE_LINE_HEIGHT,
   codeFontSize: 13,
   codeTheme: 'auto',
+  rateLimitMaxRetries: 3,
+  rateLimitInitialDelayMs: 1000,
+  rateLimitMaxDelayMs: 30000,
 }
 
 /** 生成简短 ID（时间戳 + 随机段，对话/供应商/流共用） */

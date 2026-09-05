@@ -49,9 +49,10 @@ function registerPluginUi(context: PluginContext) {
 }
 
 export async function activate(context: PluginContext): Promise<void> {
-  // 注册 i18n 消息（自动添加插件 ID 前缀），必须在 UI 注册前完成
+  // 注册 i18n 消息（自动添加插件 ID 前缀），必须在 UI 注册前完成；
+  // spread 展开：MessageSchema 为 interface 无隐式索引签名，registerMessages 需要 Record<string, unknown>
   for (const [locale, msgs] of Object.entries(messages)) {
-    context.i18n.registerMessages(locale, msgs)
+    context.i18n.registerMessages(locale, { ...msgs })
   }
 
   // dev-shell（浏览器 vite）：注册命令 mock，让无后端环境可预览完整 UI；

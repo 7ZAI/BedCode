@@ -185,6 +185,106 @@
                 </div>
               </div>
             </div>
+
+            <!-- 分组：限流重试（429/503/529 自动重试，指数退避） -->
+            <div class="mt-4">
+              <h3 class="text-xs font-medium text-[var(--mobile-text-secondary)] mb-2">
+                {{ t('mobile.plugin.aiChatbox.rateLimitGroup') }}
+              </h3>
+              <div class="space-y-3">
+                <!-- 自动重试次数：− / 数值 / ＋（0-10，0 = 关闭） -->
+                <div class="flex items-center justify-between min-h-11">
+                  <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+                    {{ t('mobile.plugin.aiChatbox.rateLimitMaxRetries') }}
+                  </span>
+                  <div class="flex items-center gap-1">
+                    <button
+                      class="w-11 h-11 flex items-center justify-center rounded-lg border border-[var(--mobile-border)] text-[var(--mobile-text-primary)] active:bg-[var(--mobile-bg-tertiary)] transition-colors disabled:opacity-30"
+                      :disabled="cfg.rateLimitMaxRetries <= RATE_LIMIT_MAX_RETRIES_MIN"
+                      :aria-label="t('mobile.plugin.aiChatbox.decrease')"
+                      @click="update({ rateLimitMaxRetries: cfg.rateLimitMaxRetries - 1 })"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
+                      </svg>
+                    </button>
+                    <span class="w-12 text-center text-[var(--font-size-sm)] text-[var(--mobile-text-primary)] tabular-nums">
+                      {{ cfg.rateLimitMaxRetries === 0 ? t('mobile.plugin.aiChatbox.rateLimitOff') : cfg.rateLimitMaxRetries }}
+                    </span>
+                    <button
+                      class="w-11 h-11 flex items-center justify-center rounded-lg border border-[var(--mobile-border)] text-[var(--mobile-text-primary)] active:bg-[var(--mobile-bg-tertiary)] transition-colors disabled:opacity-30"
+                      :disabled="cfg.rateLimitMaxRetries >= RATE_LIMIT_MAX_RETRIES_MAX"
+                      :aria-label="t('mobile.plugin.aiChatbox.increase')"
+                      @click="update({ rateLimitMaxRetries: cfg.rateLimitMaxRetries + 1 })"
+                    >
+                      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+
+                <!-- 初始等待：滑块 0.5s-10s（步进 0.5s，即拖即存，ms 存储） -->
+                <div class="flex items-center justify-between min-h-11 gap-3">
+                  <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+                    {{ t('mobile.plugin.aiChatbox.rateLimitInitialDelay') }}
+                  </span>
+                  <div class="flex items-center gap-2 flex-1 min-w-0">
+                    <div
+                      ref="initTrackRef"
+                      class="relative h-11 flex-1 min-w-0 flex items-center cursor-pointer touch-none"
+                      @pointerdown="initSlider.onDown"
+                      @pointermove="initSlider.onMove"
+                      @pointerup="initSlider.onEnd"
+                      @pointercancel="initSlider.onEnd"
+                    >
+                      <div class="absolute left-0 right-0 h-1 rounded-full bg-[var(--mobile-border)] pointer-events-none"></div>
+                      <div
+                        class="absolute h-1 rounded-full bg-[var(--mobile-accent)] pointer-events-none"
+                        :style="{ width: initSlider.fillPercent.value }"
+                      ></div>
+                      <div
+                        class="absolute w-5 h-5 rounded-full bg-[var(--mobile-accent)] border-2 border-[var(--mobile-bg-card)] shadow-sm pointer-events-none"
+                        :style="{ left: `calc(${initSlider.fillPercent.value} - 10px)` }"
+                      ></div>
+                    </div>
+                    <span class="w-11 flex-shrink-0 text-right text-[var(--font-size-sm)] text-[var(--mobile-text-primary)] tabular-nums">
+                      {{ fmtSeconds(cfg.rateLimitInitialDelayMs) }}
+                    </span>
+                  </div>
+                </div>
+
+                <!-- 最大等待：滑块 5s-60s（步进 5s，指数退避封顶值） -->
+                <div class="flex items-center justify-between min-h-11 gap-3">
+                  <span class="text-[var(--font-size-sm)] text-[var(--mobile-text-primary)]">
+                    {{ t('mobile.plugin.aiChatbox.rateLimitMaxDelay') }}
+                  </span>
+                  <div class="flex items-center gap-2 flex-1 min-w-0">
+                    <div
+                      ref="maxTrackRef"
+                      class="relative h-11 flex-1 min-w-0 flex items-center cursor-pointer touch-none"
+                      @pointerdown="maxSlider.onDown"
+                      @pointermove="maxSlider.onMove"
+                      @pointerup="maxSlider.onEnd"
+                      @pointercancel="maxSlider.onEnd"
+                    >
+                      <div class="absolute left-0 right-0 h-1 rounded-full bg-[var(--mobile-border)] pointer-events-none"></div>
+                      <div
+                        class="absolute h-1 rounded-full bg-[var(--mobile-accent)] pointer-events-none"
+                        :style="{ width: maxSlider.fillPercent.value }"
+                      ></div>
+                      <div
+                        class="absolute w-5 h-5 rounded-full bg-[var(--mobile-accent)] border-2 border-[var(--mobile-bg-card)] shadow-sm pointer-events-none"
+                        :style="{ left: `calc(${maxSlider.fillPercent.value} - 10px)` }"
+                      ></div>
+                    </div>
+                    <span class="w-11 flex-shrink-0 text-right text-[var(--font-size-sm)] text-[var(--mobile-text-primary)] tabular-nums">
+                      {{ fmtSeconds(cfg.rateLimitMaxDelayMs) }}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -201,7 +301,7 @@
  * （字体大小 / 行距滑块 / 高亮主题下拉）+ 思考模式。即改即存——每次
  * 变更直接写宿主 storage（key `config`），与桌面配置页同一数据源。
  */
-import { computed, defineComponent, h, ref } from 'vue'
+import { computed, defineComponent, h, ref, type Ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { PluginConfig } from '../types'
 import {
@@ -209,6 +309,8 @@ import {
   CODE_FONT_SIZE_MIN,
   CODE_LINE_HEIGHT_MAX,
   CODE_LINE_HEIGHT_MIN,
+  RATE_LIMIT_MAX_RETRIES_MAX,
+  RATE_LIMIT_MAX_RETRIES_MIN,
 } from '../types'
 
 /** 分段选择器（自绘，无原生控件外观；与宿主 token 体系一致） */
@@ -334,6 +436,61 @@ function selectTheme(value: PluginConfig['codeTheme']): void {
   update({ codeTheme: value })
   openDropdown.value = null
 }
+
+// ==================== 限流重试等待滑块（自绘，指针拖动；ms 存储 / 秒显示） ====================
+
+/** 毫秒 → 秒文案（整数省小数：1s / 1.5s / 30s） */
+function fmtSeconds(ms: number): string {
+  return (ms / 1000).toFixed(1).replace(/\.0$/, '') + 's'
+}
+
+const initTrackRef = ref<HTMLElement | null>(null)
+const maxTrackRef = ref<HTMLElement | null>(null)
+
+type RateLimitDelayKey = 'rateLimitInitialDelayMs' | 'rateLimitMaxDelayMs'
+
+/** 参数化指针滑块工厂（与行距滑块同交互：轨道 + 填充 + thumb，拖出轨道仍持续更新） */
+function makeDelaySlider(
+  trackRef: Ref<HTMLElement | null>,
+  min: number,
+  max: number,
+  step: number,
+  key: RateLimitDelayKey,
+) {
+  let dragging = false
+  const valueFromClientX = (clientX: number): number => {
+    const track = trackRef.value
+    if (!track) return cfg.value[key]
+    const rect = track.getBoundingClientRect()
+    if (rect.width <= 0) return cfg.value[key]
+    const ratio = Math.min(Math.max((clientX - rect.left) / rect.width, 0), 1)
+    return Math.round((min + ratio * (max - min)) / step) * step
+  }
+  const fillPercent = computed(() => {
+    const ratio = (cfg.value[key] - min) / (max - min)
+    return `${Math.min(Math.max(ratio, 0), 1) * 100}%`
+  })
+  return {
+    fillPercent,
+    onDown(e: PointerEvent): void {
+      dragging = true
+      // 捕获指针：拖出轨道范围仍持续更新；松手/取消统一复位
+      ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+      update({ [key]: valueFromClientX(e.clientX) })
+    },
+    onMove(e: PointerEvent): void {
+      if (!dragging) return
+      update({ [key]: valueFromClientX(e.clientX) })
+    },
+    onEnd(): void {
+      dragging = false
+    },
+  }
+}
+
+/** 初始等待 0.5s-10s（步进 0.5s）；最大等待 5s-60s（步进 5s，指数退避封顶） */
+const initSlider = makeDelaySlider(initTrackRef, 500, 10000, 500, 'rateLimitInitialDelayMs')
+const maxSlider = makeDelaySlider(maxTrackRef, 5000, 60000, 5000, 'rateLimitMaxDelayMs')
 
 // ==================== 思考模式 ====================
 

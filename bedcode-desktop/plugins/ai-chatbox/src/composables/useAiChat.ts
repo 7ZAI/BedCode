@@ -6,7 +6,7 @@
  * 持久化经 `context.commands.execute`（Rust store.rs JSONL）+ 流事件监听。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { ChatMessage, ConversationMeta, PluginConfig, Usage } from '../types'
+import type { ApiProvider, ChatMessage, ConversationMeta, PluginConfig, Usage } from '../types'
 import { DEFAULT_PLUGIN_CONFIG, generateId } from '../types'
 import { SseBuffer } from '../adapters/sse'
 import { mergeUsage } from '../adapters/usage'
@@ -36,6 +36,32 @@ function classifyError(message: string): string | null {
   return null
 }
 
+// ==================== 限流（429 等）自动重试（指数退避） ====================
+
+/** 输入框上方滑出条的限流重试状态（null = 无进行中的重试等待） */
+export interface RateLimitRetryState {
+  /** 即将进行的重试序号（1-based） */
+  attempt: number
+  maxRetries: number
+  /** 下次重试剩余秒数（500ms 间隔从绝对截止时间换算，避免调度误差漂移） */
+  countdownSec: number
+  /** 限流 HTTP 状态码（从宿主错误文本解析，未识别为 null） */
+  status: number | null
+}
+
+/** 从宿主错误文本解析 HTTP 状态码（流式非 2xx 统一为 "API error {status}: {body}"） */
+function parseErrorStatus(message: string): number | null {
+  const m = /API error (\d{3}):/.exec(message)
+  return m ? Number(m[1]) : null
+}
+
+/** 限流判定：429 + 常见过载码（503/529，与主流客户端实践对齐），或错误文本明确提及 rate limit */
+function isRateLimitError(message: string): boolean {
+  const status = parseErrorStatus(message)
+  if (status === 429 || status === 503 || status === 529) return true
+  return /rate.?limit|too many requests/i.test(message)
+}
+
 export function useAiChat(
   context: PluginContext,
   config: AiConfig,
@@ -55,6 +81,27 @@ export function useAiChat(
   const loadingHistory = ref(false)
   /** 最近一次错误（i18n key 或原始文本），组件展示后消费 */
   const lastError = ref('')
+
+  // ==================== 限流重试状态（滑出条 + 退避定时器） ====================
+
+  /** 限流重试等待态（null = 无进行中的重试） */
+  const rateLimitRetry = ref<RateLimitRetryState | null>(null)
+  /** 已执行的限流重试次数（单次发送内累计，sendMessage 起始复位） */
+  let rateLimitAttempt = 0
+  /** 限流退避定时器（重试触发 setTimeout + 倒计时刷新 setInterval） */
+  let retryFireTimer: ReturnType<typeof setTimeout> | null = null
+  let retryCountdownTimer: ReturnType<typeof setInterval> | null = null
+
+  function clearRateLimitTimers(): void {
+    if (retryFireTimer !== null) {
+      clearTimeout(retryFireTimer)
+      retryFireTimer = null
+    }
+    if (retryCountdownTimer !== null) {
+      clearInterval(retryCountdownTimer)
+      retryCountdownTimer = null
+    }
+  }
 
   // ==================== rAF 节流 flush（P2 渲染管线） ====================
   // chunk 先累积到缓冲，rAF 回调批量写回 streamingContent（每帧至多一次全量
@@ -306,71 +353,149 @@ export function useAiChat(
     streamEnded.value = false
     pendingContent = ''
     pendingReasoning = ''
+    rateLimitAttempt = 0
 
-    const streamId = generateId()
     const requestMessages = buildRequestMessages()
-    // 协议适配层构建请求（raw 模式：sseFormat 为空，SSE 语义由前端解析）；
-    // 思考类全局配置在发送时刻取值（P3：thinkingMode ≠ default 才写请求参数）
-    const pc = pluginConfig?.value ?? DEFAULT_PLUGIN_CONFIG
-    const thinkingOptions: ThinkingOptions = {
-      thinkingMode: pc.thinkingMode,
-      reasoningEffort: pc.reasoningEffort,
-    }
-    const request = buildStreamRequest(provider, requestMessages, streamId, thinkingOptions)
 
-    // 每次发送独立的流状态：SSE 缓冲 + usage 累积（adapter 解析结果落地处）
-    const sse = new SseBuffer()
-    let usageAcc: Usage | undefined
+    // 嵌套函数声明内使用 provider：TS 对提升声明不做 const 窄化保留，
+    // 以初始化点已完成窄化的别名传递非空引用
+    const activeProvider: ApiProvider = provider
 
-    function applyStreamEvent(ev: StreamEvent): void {
-      if (ev.chunk) {
-        pendingContent += ev.chunk
-        scheduleFlush()
-      }
-      if (ev.reasoning) {
-        pendingReasoning += ev.reasoning
-        scheduleFlush()
-      }
-      if (ev.usage) {
-        usageAcc = mergeUsage(usageAcc, ev.usage)
-      }
-      if (ev.done) {
-        // adapter 侧终结（openai [DONE] / anthropic message_stop）；宿主 done 仅兜底
-        void finishStream(true, undefined, usageAcc, replaceLast)
+    /** 限流重试参数（每次调度时重新读取，跟随宿主配置页实时修改） */
+    function rateLimitParams() {
+      const pc = pluginConfig?.value ?? DEFAULT_PLUGIN_CONFIG
+      return {
+        maxRetries: pc.rateLimitMaxRetries,
+        initialDelayMs: pc.rateLimitInitialDelayMs,
+        maxDelayMs: pc.rateLimitMaxDelayMs,
       }
     }
 
-    streamDisposable = context.events.on(`ai-chatbox:stream:${streamId}`, (payload: any) => {
-      if (streamEnded.value) return
-      if (typeof payload.chunk === 'string') {
-        // 宿主 raw 模式：逐网络 chunk 推原始 SSE 字节，跨 chunk 断行由 SseBuffer 处理
-        for (const data of sse.push(payload.chunk)) {
-          // 异常服务端可能在 [DONE] 后同一 chunk 还带残余事件：收尾后立即停止消费
-          if (streamEnded.value) break
-          const ev = parseStreamEvent(provider.apiStyle, data)
-          if (ev) applyStreamEvent(ev)
-        }
-      } else if (payload.error) {
-        finishStream(false, payload.error, usageAcc, replaceLast)
-      } else if (payload.done) {
-        // 宿主 done 兜底：flush 残留缓冲后终结（已终结时幂等跳过）
-        for (const data of sse.flush()) {
-          if (streamEnded.value) break
-          const ev = parseStreamEvent(provider.apiStyle, data)
-          if (ev) applyStreamEvent(ev)
-        }
-        finishStream(true, undefined, usageAcc, replaceLast)
-      }
-    })
+    /** 本轮尝试是否未收到任何内容（流式开始前的限流才可安全重发，中途限流重发会重复整段请求） */
+    function nothingReceived(): boolean {
+      return (
+        !streamingContent.value &&
+        !streamingReasoning.value &&
+        !pendingContent &&
+        !pendingReasoning
+      )
+    }
 
-    try {
-      await context.commands.execute('ai-chatbox.chat-stream', {
-        streamId,
-        request,
+    /** 发起一次流式尝试：新 streamId + 独立监听 + 独立 SSE 缓冲（限流重试时整体重建） */
+    function startStream(): void {
+      const streamId = generateId()
+      const sse = new SseBuffer()
+      let usageAcc: Usage | undefined
+
+      // 协议适配层构建请求（raw 模式：sseFormat 为空，SSE 语义由前端解析）；
+      // 思考类全局配置在发送时刻取值（P3：thinkingMode ≠ default 才写请求参数）
+      const pc = pluginConfig?.value ?? DEFAULT_PLUGIN_CONFIG
+      const thinkingOptions: ThinkingOptions = {
+        thinkingMode: pc.thinkingMode,
+        reasoningEffort: pc.reasoningEffort,
+      }
+      const request = buildStreamRequest(activeProvider, requestMessages, streamId, thinkingOptions)
+
+      function applyStreamEvent(ev: StreamEvent): void {
+        if (ev.chunk) {
+          pendingContent += ev.chunk
+          scheduleFlush()
+        }
+        if (ev.reasoning) {
+          pendingReasoning += ev.reasoning
+          scheduleFlush()
+        }
+        if (ev.usage) {
+          usageAcc = mergeUsage(usageAcc, ev.usage)
+        }
+        if (ev.done) {
+          // adapter 侧终结（openai [DONE] / anthropic message_stop）；宿主 done 仅兜底
+          void finishStream(true, undefined, usageAcc, replaceLast)
+        }
+      }
+
+      streamDisposable = context.events.on(`ai-chatbox:stream:${streamId}`, (payload: any) => {
+        if (streamEnded.value) return
+        if (typeof payload.chunk === 'string') {
+          // 宿主 raw 模式：逐网络 chunk 推原始 SSE 字节，跨 chunk 断行由 SseBuffer 处理
+          for (const data of sse.push(payload.chunk)) {
+            // 异常服务端可能在 [DONE] 后同一 chunk 还带残余事件：收尾后立即停止消费
+            if (streamEnded.value) break
+            const ev = parseStreamEvent(activeProvider.apiStyle, data)
+            if (ev) applyStreamEvent(ev)
+          }
+        } else if (payload.error) {
+          handleStreamError(String(payload.error))
+        } else if (payload.done) {
+          // 宿主 done 兜底：flush 残留缓冲后终结（已终结时幂等跳过）
+          for (const data of sse.flush()) {
+            if (streamEnded.value) break
+            const ev = parseStreamEvent(activeProvider.apiStyle, data)
+            if (ev) applyStreamEvent(ev)
+          }
+          finishStream(true, undefined, usageAcc, replaceLast)
+        }
       })
-    } catch (e: any) {
-      finishStream(false, String(e?.message || e), usageAcc, replaceLast)
+
+      context.commands
+        .execute('ai-chatbox.chat-stream', { streamId, request })
+        .catch((e: any) => handleStreamError(String(e?.message || e)))
     }
+
+    /** 流错误分派：非限流直接收尾；限流在未收到内容且尚有重试额度时进入指数退避 */
+    function handleStreamError(errorText: string): void {
+      if (!isRateLimitError(errorText) || !nothingReceived()) {
+        finishStream(false, errorText, undefined, replaceLast)
+        return
+      }
+      const { maxRetries } = rateLimitParams()
+      if (maxRetries <= 0 || rateLimitAttempt >= maxRetries) {
+        if (rateLimitAttempt > 0) {
+          console.error('[AI Chatbox] Rate limit persists after retries:', errorText)
+          finishStream(false, 'desktop.plugin.aiChatbox.rateLimitExhausted', undefined, replaceLast)
+        } else {
+          // 自动重试关闭（maxRetries=0）：透传原始错误，避免"重试 0 次"的误导文案
+          finishStream(false, errorText, undefined, replaceLast)
+        }
+        return
+      }
+      scheduleRateLimitRetry(errorText)
+    }
+
+    /** 限流退避调度：终结旧尝试的事件消费 → 倒计时（滑出条展示）→ 以新 streamId 重发同一请求 */
+    function scheduleRateLimitRetry(errorText: string): void {
+      rateLimitAttempt += 1
+      const { maxRetries, initialDelayMs, maxDelayMs } = rateLimitParams()
+      // 指数退避：1×、2×、4×… initialDelay，封顶 maxDelay
+      const delayMs = Math.min(initialDelayMs * 2 ** (rateLimitAttempt - 1), maxDelayMs)
+
+      streamDisposable?.dispose()
+      streamDisposable = null
+      // 旧尝试的监听已断开（迟到 error/done 不会进入处理）；streamEnded 保持 false，
+      // 终止/耗尽走 finishStream 幂等守卫，重试 fire 时直接 startStream 重建监听
+
+      rateLimitRetry.value = {
+        attempt: rateLimitAttempt,
+        maxRetries,
+        countdownSec: Math.ceil(delayMs / 1000),
+        status: parseErrorStatus(errorText),
+      }
+      // 倒计时从绝对截止时间换算（500ms 刷新），不随 interval 调度误差漂移
+      const deadline = Date.now() + delayMs
+      retryCountdownTimer = setInterval(() => {
+        if (!rateLimitRetry.value) return
+        rateLimitRetry.value.countdownSec = Math.max(0, Math.ceil((deadline - Date.now()) / 1000))
+      }, 500)
+      retryFireTimer = setTimeout(() => {
+        clearRateLimitTimers()
+        rateLimitRetry.value = null
+        pendingContent = ''
+        pendingReasoning = ''
+        startStream()
+      }, delayMs)
+    }
+
+    startStream()
   }
 
   /** 流结束统一收尾：复位状态（同步，UI 即时响应）+ 落盘 assistant 消息（含 usage）
@@ -385,6 +510,9 @@ export function useAiChat(
   ): Promise<void> {
     if (streamEnded.value) return
     streamEnded.value = true
+    // 限流重试等待中的任何终态（终止/耗尽/正常兜底）都必须清掉挂起的退避定时器
+    clearRateLimitTimers()
+    rateLimitRetry.value = null
     // 取消待决 rAF 并立即写回缓冲：落盘/复位的必须是含最后一批 chunk 的终态
     flushStreamingNow()
     streamDisposable?.dispose()
@@ -416,6 +544,12 @@ export function useAiChat(
   function stopGeneration(): void {
     if (!sending.value) return
     finishStream(false)
+  }
+
+  /** 终止限流重试等待（滑出条终止按钮）：取消退避定时器并按"已终止"收尾 */
+  function abortRateLimitRetry(): void {
+    if (!rateLimitRetry.value) return
+    finishStream(false, 'desktop.plugin.aiChatbox.rateLimitAborted')
   }
 
   /** 重新生成：删除最后 assistant 消息（前端 + 文件覆盖），重跑最后一条用户消息 */
@@ -453,6 +587,7 @@ export function useAiChat(
     streamingReasoning,
     loadingHistory,
     lastError,
+    rateLimitRetry,
     loadConversations,
     loadMessages,
     newConversation,
@@ -460,6 +595,7 @@ export function useAiChat(
     deleteConversation,
     sendMessage,
     stopGeneration,
+    abortRateLimitRetry,
     regenerate,
     switchConversation,
   }

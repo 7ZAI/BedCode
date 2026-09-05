@@ -2,6 +2,65 @@
 
 > 与 `C:\Users\binblink\AppData\Local\Temp\bedcode-ai-chatbox-handoff.md` 同步。完整规格见 `spec.md`（同目录）。
 
+## 2026-09-05 会话 6：删除商汤预设 + 供应商限流（429）自动重试
+
+### 删除商汤（SenseNova）预设
+- `types.ts`：PresetId 联合类型与 PROVIDER_PRESETS 移除 sensenova（已存用户的 sensenova 供应商
+  走 `resolveProviderIcon` 未知 id → null 兜底，自动降级首字母头像，无需迁移）
+- `providerIcons.ts`：移除图标/品牌色映射（ICON_BY_PRESET 改 Partial）；删 `sensenova.svg`
+- 验证：dev-shell 配置页预设 chips 仅剩 DeepSeek / 通义千问 / OpenAI / Anthropic / 自定义
+
+### 限流自动重试（指数退避，参考 Cherry Studio agentSessionApiRetry / ai-retry 实践）
+- **重试码判定**（useAiChat.ts `isRateLimitError`）：429 + 503/529（过载），或错误文本
+  `/rate.?limit|too many requests/i`；宿主流式非 2xx 统一 `API error {status}: {body}` 事件，
+  `parseErrorStatus` 提取状态码。Retry-After 读不到（宿主不透传 headers），纯指数退避
+- **退避**：`min(initialDelayMs × 2^(n-1), maxDelayMs)`；默认 3 次 / 1s / 30s 封顶
+- **只在未收到任何内容时限流才重发**（`nothingReceived`：streamingContent/Reasoning +
+  pending 缓冲全空）——中途限流重发会重复整段请求，走原始错误 + 手动重新生成
+- **重试耗尽** → i18n `rateLimitExhausted`；`maxRetries=0` 关闭重试透传原始错误
+- **终止**：`abortRateLimitRetry()` → `rateLimitAborted` 收尾（滑出条终止按钮）
+- **状态**：`rateLimitRetry` ref `{ attempt, maxRetries, countdownSec, status }`；倒计时从
+  绝对截止时间换算（500ms interval 刷新，不漂移）；finishStream 统一清定时器 + 清状态
+- **实现要点**：sendMessage 内 startStream/handleStreamError/scheduleRateLimitRetry 每次重试
+  重建 streamId + 监听 + SSE 缓冲；调度时**不置 streamEnded**（监听已 dispose 即可，置 true 会
+  让 abort 走的 finishStream 幂等守卫提前返回——已踩坑修正）；嵌套函数用 `activeProvider`
+  别名（TS 对提升函数声明不做 const 窄化保留）
+
+### 配置页（宿主 PluginConfigView schema 驱动自动渲染）
+- plugin.json configuration 新增：`rateLimitMaxRetries`（滑块 0-10，0=关闭）/
+  `rateLimitInitialDelayMs`（数字输入）/ `rateLimitMaxDelayMs`（数字输入）
+- types.ts PluginConfig + DEFAULT_PLUGIN_CONFIG 三字段；usePluginConfig `normalizeInt`
+  夹取归一化（范围常量与 plugin.json 同步）
+
+### UI（ChatView.vue）
+- 输入框上方滑出条（Transition `retry-slide` 250ms 位移+淡入）：warning 色 token
+  （`--color-warning`/`--color-warning-light`）+ 三角警告图标 + 文案
+  `rateLimitRetryIn`（{seconds} 秒后自动重试 第 {attempt}/{max} 次）+ 终止按钮；
+  `data-testid="rate-limit-banner"`
+- **顺手修复**：全局错误条 `border-[var(--color-danger)]/30` 是 Tailwind v3 不生成的无效写法
+  （var+透明度修饰符静默丢弃，边框一直按全透明度 fallback 渲染）→ 改
+  `border-[color-mix(in_srgb,var(--color-danger)_30%,transparent)]`（CLI 实测验证生成 CSS）
+
+### i18n（宿主 desktop.ts zh/en + 插件 dev-mock 注入同步）
+- 新 key：`rateLimitRetryIn` / `rateLimitStop` / `rateLimitExhausted` / `rateLimitAborted`
+
+### dev-mock 限流演练
+- chat-stream mock：消息含 `429`/`限流` 时 300ms 后 emit `API error 429: {...rate_limit_exceeded}`
+  事件（每次重试都再报，可完整演练倒计时/终止/耗尽）
+
+### 其他
+- index.ts `registerMessages(locale, { ...msgs })` spread 修复（MessageSchema interface 无隐式
+  索引签名，vue-tsc 在途报错，与本任务无关顺手修）
+
+### 验证状态
+- 插件：vue-tsc 干净 + vitest **144 passed**（新增 7 个限流重试用例：退避时序 1s/2s/4s、
+  封顶、终止、耗尽、中途限流不重试、maxRetries=0 透传、非限流错误不重试）
+- 宿主：`pnpm run test:run` **538 passed**（含 locale 校验）；改动文件 eslint 0 error
+- 插件构建：`node scripts/build.js` 通过，产物已同步 `src-tauri/resources/plugins/desktop/`
+- 视觉：dev-shell + Playwright 截图 6 张（重试 1/3 → 2/3 滑出条、终止、耗尽、配置页、
+  预设 chips）全部符合预期；脚本 `.scratch/verify-ai-chatbox-429.mjs`，输出 `/tmp/ai-chatbox-verify/`
+- Rust 侧零改动（薄透传，限流处理全在前端）；移动端插件未动（本任务仅桌面端）
+
 ## 总进度
 
 | 步骤 | 状态 | 说明 |
@@ -145,3 +204,15 @@
 9. **`.plugin-toggle` 列表顺序会变**：`t[t.length-1]` 在插件列表顺序变化后误点其他行（误激活 file-transfer / 误停用 auto-task）；改用"行内文本定位 + 祖先找 toggle"精确选择
 10. **puppeteer reload `waitUntil: 'networkidle2'` 超时**（WebView 长连接）：改用 `domcontentloaded` + 固定 sleep
 11. **bash 模板字符串吞反斜杠**：evaluate 内正则 `[^\n]` 在 bash 双引号内被转义吃掉 → 正则报错；改用 String.fromCharCode(10) 分割行
+
+---
+
+## 2026-09-05 补充：首次启用流程修复（Linux 上「停用再启用」不再死循环）
+
+- 背景：Step 8 记录的「首次启用需停用再启用一次完成预打开挂载」在 Linux 上断裂——授权只落库、
+  目录不创建，且 WASM 实例在加载期构建、停用/启用不重建 → 同会话重试必失败（曾需重启应用恢复）。
+  日志：`WASI 预打开目录未就绪：…/ai-chatbox 的授权已保存，请停用后重新启用插件完成初始化`
+- 修复（宿主侧，详见 `.scratch/plugin-activation-gate-fix/`）：
+  1. `build_wasi_ctx` 对已授权目录幂等 `create_dir_all` 后再 `preopened_dir`（目录创建是宿主职责）
+  2. `activate_plugin` 激活前比对「当前已授权目录 ⊄ 实例已预打开目录」→ 重建实例再 activate
+- 效果：已授权（父目录前缀）用户首启用直接成功；全新用户弹窗同意后按提示停用再启用即成功，无需重启

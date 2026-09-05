@@ -18,6 +18,12 @@ import {
   CODE_LINE_HEIGHT_MIN,
   DEFAULT_CODE_LINE_HEIGHT,
   DEFAULT_PLUGIN_CONFIG,
+  RATE_LIMIT_INITIAL_DELAY_MS_MAX,
+  RATE_LIMIT_INITIAL_DELAY_MS_MIN,
+  RATE_LIMIT_MAX_DELAY_MS_MAX,
+  RATE_LIMIT_MAX_DELAY_MS_MIN,
+  RATE_LIMIT_MAX_RETRIES_MAX,
+  RATE_LIMIT_MAX_RETRIES_MIN,
 } from '../types'
 
 /** 插件配置 storage key（与宿主配置页 pluginStorageGet 共用，见桌面 SDK 约定） */
@@ -52,6 +58,24 @@ export function usePluginConfig(context: PluginContext) {
         codeLineHeight: normalizeLineHeight(saved.codeLineHeight),
         codeFontSize: normalizeFontSize(saved.codeFontSize),
         codeTheme: normalizeEnum(saved.codeTheme, CODE_THEMES, DEFAULT_PLUGIN_CONFIG.codeTheme),
+        rateLimitMaxRetries: normalizeInt(
+          saved.rateLimitMaxRetries,
+          RATE_LIMIT_MAX_RETRIES_MIN,
+          RATE_LIMIT_MAX_RETRIES_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitMaxRetries,
+        ),
+        rateLimitInitialDelayMs: normalizeInt(
+          saved.rateLimitInitialDelayMs,
+          RATE_LIMIT_INITIAL_DELAY_MS_MIN,
+          RATE_LIMIT_INITIAL_DELAY_MS_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitInitialDelayMs,
+        ),
+        rateLimitMaxDelayMs: normalizeInt(
+          saved.rateLimitMaxDelayMs,
+          RATE_LIMIT_MAX_DELAY_MS_MIN,
+          RATE_LIMIT_MAX_DELAY_MS_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitMaxDelayMs,
+        ),
       }
     } catch (e) {
       // 读取失败保持默认值（配置缺失不阻断聊天），仅记录日志
@@ -78,6 +102,12 @@ export function usePluginConfig(context: PluginContext) {
 /** 枚举值归一化：不在白名单内（含 undefined/类型不符）一律回退默认 */
 function normalizeEnum<T extends string>(value: unknown, whitelist: readonly T[], fallback: T): T {
   return whitelist.includes(value as T) ? (value as T) : fallback
+}
+
+/** 整数归一化：非有限数 / 超出 [MIN, MAX] 范围一律回退默认，小数就近取整（限流重试参数） */
+function normalizeInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.round(Math.min(Math.max(value, min), max))
 }
 
 /** 数字归一化：非有限数 / 超出 [MIN, MAX] 范围一律回退默认（桌面配置页可输入任意值） */

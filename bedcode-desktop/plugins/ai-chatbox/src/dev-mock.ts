@@ -77,6 +77,10 @@ const HOST_KEYS_ZH = {
         requestFailed: '请求失败',
         apiKeyRequired: '请先填写 API Key',
         baseUrlInvalid: 'Base URL 地址无效',
+        rateLimitRetryIn: '供应商限流，{seconds} 秒后自动重试（第 {attempt}/{max} 次）',
+        rateLimitStop: '终止',
+        rateLimitExhausted: '供应商限流：自动重试后仍失败，请稍后重试或更换模型',
+        rateLimitAborted: '已终止限流重试',
       },
     },
   },
@@ -147,6 +151,12 @@ const HOST_KEYS_EN = {
         requestFailed: 'Request failed',
         apiKeyRequired: 'API key is required',
         baseUrlInvalid: 'Invalid Base URL',
+        rateLimitRetryIn:
+          'Provider rate limited — retrying in {seconds}s (attempt {attempt}/{max})',
+        rateLimitStop: 'Stop',
+        rateLimitExhausted:
+          'Rate limited by provider: retries exhausted — try again later or switch model',
+        rateLimitAborted: 'Rate limit retry stopped',
       },
     },
   },
@@ -359,6 +369,31 @@ function registerCommands(context: PluginContext): void {
   context.commands.register('ai-chatbox.chat-stream', (args: any) => {
     const streamId = args?.streamId as string | undefined
     if (!streamId) return { ok: false }
+
+    // 限流演练：消息含 "429" / "限流" 时模拟宿主非 2xx 错误事件（每次重试都再报限流，
+    // 可完整演练滑出条倒计时 / 终止 / 重试耗尽；演练文案见 progress.md）
+    let lastUserText = ''
+    try {
+      const body = JSON.parse(args?.request?.body || '{}')
+      const userMsgs = (body.messages || []).filter((m: any) => m.role === 'user')
+      lastUserText = userMsgs[userMsgs.length - 1]?.content || ''
+    } catch {
+      lastUserText = ''
+    }
+    if (/429|限流/.test(lastUserText)) {
+      const h = setTimeout(() => {
+        const tIdx = timers.indexOf(h)
+        if (tIdx !== -1) timers.splice(tIdx, 1)
+        context.events.emit(`ai-chatbox:stream:${streamId}`, {
+          error:
+            'API error 429: {"error":{"message":"Rate limit reached for requests. Please try again in 20s","type":"429","code":"rate_limit_exceeded"}}',
+          done: true,
+        })
+      }, 300) as unknown as number
+      timers.push(h)
+      return { ok: true }
+    }
+
     let i = 0
     const tick = () => {
       const step = 6 + Math.floor(Math.random() * 7)

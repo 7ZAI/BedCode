@@ -140,7 +140,7 @@
               <!-- 全局错误条（授权失效/请求失败等） -->
               <div
                 v-if="visibleError"
-                class="flex items-center gap-2 px-3 py-2 text-xs rounded-btn border border-[var(--color-danger)]/30 bg-[var(--color-danger-light)] text-[var(--color-danger)]"
+                class="flex items-center gap-2 px-3 py-2 text-xs rounded-btn border border-[color-mix(in_srgb,var(--color-danger)_30%,transparent)] bg-[var(--color-danger-light)] text-[var(--color-danger)]"
               >
                 <span class="flex-1">{{ visibleError }}</span>
                 <button
@@ -179,6 +179,43 @@
 
             <!-- 输入区：模型切换与发送按钮同处输入框内（切换后新消息立即生效） -->
             <div class="border-t border-[var(--border)] p-3 bg-[var(--bg-card)]">
+              <!-- 限流重试滑出条：重试进度 + 倒计时 + 终止按钮（自动重试等待期间展示） -->
+              <Transition name="retry-slide">
+                <div
+                  v-if="rateLimitRetry"
+                  class="mb-2 flex items-center gap-2 px-3 py-2 text-xs rounded-btn border border-[color-mix(in_srgb,var(--color-warning)_35%,transparent)] bg-[var(--color-warning-light)] text-[var(--color-warning)]"
+                  data-testid="rate-limit-banner"
+                >
+                  <svg
+                    class="w-3.5 h-3.5 flex-shrink-0"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                    />
+                  </svg>
+                  <span class="flex-1 min-w-0 truncate">
+                    {{
+                      t('desktop.plugin.aiChatbox.rateLimitRetryIn', {
+                        seconds: rateLimitRetry.countdownSec,
+                        attempt: rateLimitRetry.attempt,
+                        max: rateLimitRetry.maxRetries,
+                      })
+                    }}
+                  </span>
+                  <button
+                    class="flex-shrink-0 px-2 py-0.5 text-xs rounded border border-[color-mix(in_srgb,currentColor_40%,transparent)] hover:bg-[color-mix(in_srgb,currentColor_12%,transparent)] transition-colors"
+                    @click="abortRateLimitRetry"
+                  >
+                    {{ t('desktop.plugin.aiChatbox.rateLimitStop') }}
+                  </button>
+                </div>
+              </Transition>
               <ChatInput
                 :disabled="sending || !hasProvider"
                 :streaming="isStreaming"
@@ -253,12 +290,14 @@ const {
   isStreaming,
   loadingHistory,
   lastError,
+  rateLimitRetry,
   loadConversations,
   newConversation,
   renameConversation,
   deleteConversation,
   sendMessage,
   stopGeneration,
+  abortRateLimitRetry,
   regenerate,
   switchConversation,
 } = chat
@@ -401,5 +440,18 @@ onMounted(async () => {
 .page-fade-leave-to {
   opacity: 0;
   transform: translateY(-2px);
+}
+
+/* 限流重试滑出条：自输入区上缘滑入（位移 + 淡入，250ms 缓出） */
+.retry-slide-enter-active,
+.retry-slide-leave-active {
+  transition:
+    opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.retry-slide-enter-from,
+.retry-slide-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>
