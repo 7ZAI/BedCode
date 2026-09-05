@@ -14,7 +14,7 @@ use crate::plugin::permission::PERMISSION_MDNS;
 use crate::plugin::wasm_runtime::WasmHostContext;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
 /// 单条浏览订阅：daemon + 服务类型（stop_browse 按类型退订）+ 事件任务句柄
 struct BrowserEntry {
@@ -54,12 +54,30 @@ pub(crate) fn mdns_browse(
 
     let browser_id = format!("mdnsbr-{}", uuid::Uuid::new_v4());
     let task_browser_id = browser_id.clone();
+    // 自播回显过滤用：捕获宿主 AppHandle，事件循环内按需读取本机节点 ID
+    // （节点可能晚于 browse 启动，须在事件时刻实时比对而非 browse 时刻）
+    let app_handle = host_ctx.app_handle.clone();
     let task = tauri::async_runtime::spawn(async move {
         let browser_id = task_browser_id;
         // found/lost 原样透传；SearchStarted/Resolved 之外的编排事件忽略
         while let Ok(event) = receiver.recv_async().await {
             match event {
                 ServiceEvent::ServiceResolved(info) => {
+                    let txt_records: std::collections::BTreeMap<String, String> = info
+                        .get_properties()
+                        .iter()
+                        .map(|p| (p.key().to_string(), p.val_str().to_string()))
+                        .collect();
+                    // 自播回显过滤：本机广播也会被自己的浏览收到（引擎
+                    // handle_browse_event 同口径）。TXT `id` == 本机 NodeId
+                    // 即自身，跳过不推送——否则设备列表出现自己、拨号连自己
+                    if is_self_broadcast(&app_handle, &txt_records) {
+                        tracing::debug!(
+                            instance = %info.get_fullname(),
+                            "mdns browse self-broadcast filtered"
+                        );
+                        continue;
+                    }
                     let addresses: Vec<String> = {
                         // IPv4 优先（与引擎拨号寻址口径一致），同族内保持库序
                         let all: Vec<_> = info.get_addresses().iter().collect();
@@ -76,11 +94,6 @@ pub(crate) fn mdns_browse(
                         v4.extend(rest);
                         v4
                     };
-                    let txt_records: std::collections::BTreeMap<String, String> = info
-                        .get_properties()
-                        .iter()
-                        .map(|p| (p.key().to_string(), p.val_str().to_string()))
-                        .collect();
                     publish_mdns(
                         "mdns:found",
                         serde_json::json!({
@@ -171,6 +184,23 @@ fn publish_mdns(topic: &str, payload: serde_json::Value) {
     if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
         ctx.plugin_host().message_bus().publish(topic, "host", payload);
     }
+}
+
+/// 自播回显判定：browse 会收到本机自己的广播（TXT `id` == 本机节点 ID）。
+///
+/// 无 app 句柄（无头/测试）或节点未启动时返回 false——无法比对即不拦截，
+/// 与现状一致（引擎 handle_browse_event 的同口径过滤在独立浏览缺失，此处补齐）。
+fn is_self_broadcast(
+    app_handle: &Option<Arc<tauri::AppHandle>>,
+    txt: &std::collections::BTreeMap<String, String>,
+) -> bool {
+    let Some(app) = app_handle.as_ref() else {
+        return false;
+    };
+    let Some(own) = crate::peer_net::current_node_id(app) else {
+        return false;
+    };
+    txt.get("id").map(|v| v.as_str()) == Some(own.as_str())
 }
 
 // ==================== Tests ====================

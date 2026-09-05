@@ -14,10 +14,19 @@ pub(crate) fn platform_pick_files(state: &WasmPluginState) -> Result<String, Str
 }
 
 /// 系统文件夹选择器（SAF 目录树选择器）→ 树 URI；用户取消返回空串
+///
+/// WIT 契约即「树 URI」：共享目录条目以 content:// 树 URI 存储（持久化授权
+/// 凭据，重启仍有效）。真实路径解析（peer_transfer::peer_pick_folder）仅旧
+/// 发送目录选路需要，SAF 化后移动端插件共享目录挂载必须走树 URI——引擎共享
+/// 目录注册表校验 SAF 根为 content://，传真实路径会被整批拒绝（真机实证：
+/// 共享目录多次选择始终只显示一条）。
 pub(crate) fn platform_pick_folder(state: &WasmPluginState) -> Result<String, String> {
-    let app = require_app(state)?;
-    let paths = run(state, "host_platform_pick_folder", crate::peer_transfer::peer_pick_folder(app))?;
-    Ok(paths.into_iter().next().unwrap_or_default())
+    let picked = run(
+        state,
+        "host_platform_pick_folder",
+        crate::plugin::android_plugins::pick_shared_directory_android(),
+    )?;
+    Ok(picked.map(|(uri, _doc_id, _display_name)| uri).unwrap_or_default())
 }
 
 fn require_app(state: &WasmPluginState) -> Result<tauri::AppHandle, String> {

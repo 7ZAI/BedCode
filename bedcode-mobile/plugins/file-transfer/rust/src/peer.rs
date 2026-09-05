@@ -585,6 +585,52 @@ pub(crate) fn pull_files(
 
 // ==================== 设置 / 注册表命令 ====================
 
+/// SAF 树 URI → 展示名：末段 URL 解码 + 去卷前缀
+///
+/// `content://com.android.externalstorage.documents/tree/primary%3ADownload`
+/// → 末段 `primary%3ADownload` → 解码 `primary:Download` → 剥离 `primary:`
+/// → `Download`（SD 卡卷号 `ABCD-1234:Music` 同理）。解码/剥离失败回退原文。
+fn tree_uri_display_name(uri: &str) -> String {
+    let last = uri
+        .trim_end_matches('/')
+        .rsplit('/')
+        .find(|seg| !seg.is_empty())
+        .unwrap_or("");
+    let decoded = percent_decode(last);
+    match decoded.split_once(':') {
+        Some((_, rest)) if !rest.is_empty() => rest.to_string(),
+        _ => decoded,
+    }
+}
+
+/// 最简 percent-decode（%XX → 字节；UTF-8 校验失败回退原文）
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(hi * 16 + lo);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+}
+
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        _ => None,
+    }
+}
+
 pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
     let s = settings_store::load_or_migrate(h)?;
     let roots = roots_registry::load_all(h)?;
@@ -633,6 +679,10 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
 /// 添加共享目录（Mobile）：弹 SAF 目录树选择器（host-platform.pick-folder），
 /// 授权与注册表均由本插件持有（id=URI 哈希，同根天然去重）；推送失败自动回滚。
 /// 用户取消以错误上抛（调用方按 'cancelled' 字样分流）。
+///
+/// 宿主返回 SAF 树 URI（content://.../tree/...，WIT 契约）——引擎共享目录
+/// 注册表校验 SAF 根为 content://，真实路径会被整批拒绝导致「多次选择只显
+/// 示一条」；展示名由树 URI 末段解码（卷前缀剥离）派生。
 pub(crate) fn mount_local(
     h: &(impl HostPlatform + HostStorage + HostPeer),
     _args: &serde_json::Value,
@@ -641,13 +691,10 @@ pub(crate) fn mount_local(
     if uri.is_empty() {
         anyhow::bail!("cancelled");
     }
-    // 展示名兜底：SAF URI 末段；空则用固定占位
-    let name = uri
-        .trim_end_matches('/')
-        .rsplit('/')
-        .find(|seg| !seg.is_empty())
-        .unwrap_or("共享目录")
-        .to_string();
+    // 展示名：树 URI 末段 URL 解码 + 去卷前缀（primary:Download → Download）；
+    // 空则固定占位
+    let name = tree_uri_display_name(&uri);
+    let name = if name.is_empty() { "共享目录".to_string() } else { name };
     let entry = SharedRoot { id: roots_registry::root_id(&uri), name, path: uri.clone() };
     let next = roots_registry::apply_and_push(h, |list| {
         roots_registry::upsert(list, entry.clone());
@@ -694,7 +741,7 @@ pub(crate) fn update_roots(
 #[cfg(test)]
 mod tests {
     use super::roots_registry::{self, SharedRoot};
-    use super::{load_preauth_paths, push_preauth_path, update_roots};
+    use super::{load_preauth_paths, percent_decode, push_preauth_path, tree_uri_display_name, update_roots};
     use bedcode_plugin_api_mobile::host::{HostError, HostPeer, HostPlatform, HostStorage};
     use std::cell::RefCell;
 
@@ -821,5 +868,46 @@ mod tests {
         let out = update_roots(&h, &serde_json::json!({ "remove": "root-deadbeef" })).unwrap();
         assert_eq!(out["removed"], false);
         assert_eq!(h.preauth(), vec![uri.to_string()]);
+    }
+
+    /// SAF 树 URI → 展示名：URL 解码 + 卷前缀剥离
+    #[test]
+    fn tree_uri_display_name_decodes_and_strips_volume() {
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload"
+            ),
+            "Download"
+        );
+        // 嵌套目录：末段解码后含路径分隔，保留路径部分
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/primary%3ADownload%2FFoo"
+            ),
+            "Download/Foo"
+        );
+        // SD 卡卷号
+        assert_eq!(
+            tree_uri_display_name(
+                "content://com.android.externalstorage.documents/tree/ABCD-1234%3AMusic"
+            ),
+            "Music"
+        );
+        // 已解码段（无 %）直接剥离卷前缀；无卷前缀原样返回
+        assert_eq!(tree_uri_display_name("content://x/tree/primary:DCIM"), "DCIM");
+        assert_eq!(tree_uri_display_name("content://x/tree/plain"), "plain");
+        // 空/尾斜杠 → 空（尾斜杠被 trim 后取末段，非空段即其名）
+        assert_eq!(tree_uri_display_name(""), "");
+        assert_eq!(tree_uri_display_name("content://x/tree/"), "tree");
+    }
+
+    /// percent-decode：合法 %XX 解码，非法/孤立 % 原样保留，非 UTF-8 回退原文
+    #[test]
+    fn percent_decode_handles_valid_and_broken_escapes() {
+        assert_eq!(percent_decode("primary%3ADownload"), "primary:Download");
+        assert_eq!(percent_decode("a%2Fb%20c"), "a/b c");
+        assert_eq!(percent_decode("%GG"), "%GG");
+        assert_eq!(percent_decode("100%"), "100%");
+        assert_eq!(percent_decode("%E4%B8%AD%E6%96%87"), "中文");
     }
 }

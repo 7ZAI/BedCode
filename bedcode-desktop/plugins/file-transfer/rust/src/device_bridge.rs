@@ -1,40 +1,34 @@
-//! 设备发现桥接层（issue 13 Phase 3 步骤 1）
+//! 设备发现桥接层（issue 13 Phase 3 步骤 1，Phase 4 修订版）
 //!
 //! 职责切分：设备缓存状态机（去重/TTL/展示名/能力位）在前端 deviceState.ts
 //! 纯函数自持（wasm32-unknown-unknown 无时钟，TTL 判定需 Date.now）；本模块
-//! 只做四件宿主侧的事：
+//! 只做三件宿主侧的事：
 //!
-//! 1. mDNS browse 生命周期：activate 即 browse、deactivate 停止（宿主 purge 兜底）；
-//! 2. `mdns:found` / `mdns:lost` 原样透传给前端（wire 形状不过翻译）；
-//! 3. 设备快照持久化：前端 debounce 写入 storage 键 `device_snapshot`（含
+//! 1. `mdns:found` / `mdns:lost` 原样透传给前端（wire 形状不过翻译）——发现
+//!    事件由引擎单守护浏览后经宿主总线直推，本插件不再自建 mDNS browse
+//!    （回归背景：插件自建 daemon 与引擎广播 daemon 同绑 5353 端口互抢多播
+//!    包，真机实证「只发现自己、发现不了对端」）；
+//! 2. 设备快照持久化：前端 debounce 写入 storage 键 `device_snapshot`（含
 //!    last-seen），activate 时供前端载入首屏（「最近可见」标注）；
-//! 4. endpoint memo + session 句柄映射：数据面命令按 nodeId 记忆
-//!    `{nodeId, addr, port}` 与 `sess-<uuid>`，支撑重试回放与 close 寻址。
+//! 3. endpoint memo + session 句柄映射：数据面命令按 nodeId 记忆
+//!    `{nodeId, addr, port}` 与 `sess-<uuid>`，支撑重试回放与 close 寻址；
+//!    插件停用时先断开全部活跃会话（对端即时感知）再清空会话表。
 
-use bedcode_plugin_api::host::{HostLog, HostMdns, HostStorage};
+use bedcode_plugin_api::host::HostStorage;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-
-/// 对等网络服务类型（与引擎广播一致；SDK 内联常量——插件 crate 不依赖引擎包）
-pub(crate) const SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
 
 /// 设备快照 storage 键（双端一致）
 pub(crate) const DEVICE_SNAPSHOT_KEY: &str = "device_snapshot";
 
 // ==================== 进程级状态 ====================
 
-/// 活跃 browser 句柄（activate browse / deactivate stop）
-static BROWSER_ID: OnceLock<Mutex<String>> = OnceLock::new();
 /// nodeId → session 句柄（dial-peer-endpoint 铸造；connection 断开时摘除）
 static SESSIONS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
 /// nodeId → endpoint memo（数据面命令记忆；重试回放寻址源）
 static ENDPOINTS: OnceLock<Mutex<HashMap<String, DialEndpoint>>> = OnceLock::new();
-
-fn browser_id() -> &'static Mutex<String> {
-    BROWSER_ID.get_or_init(|| Mutex::new(String::new()))
-}
 
 fn sessions() -> &'static Mutex<HashMap<String, String>> {
     SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -53,31 +47,7 @@ pub(crate) struct DialEndpoint {
     pub port: u16,
 }
 
-// ==================== browse 生命周期 ====================
-
-/// activate 即 browse：启动失败不阻断插件激活（节点未启动等场景如实记日志，
-/// 设备列表留空；用户重启节点后 refresh 重试）
-pub(crate) fn start_browse(h: &(impl HostMdns + HostLog)) {
-    match h.mdns_browse(SERVICE_TYPE) {
-        Ok(id) => {
-            *browser_id().lock().expect("browser id lock") = id;
-            h.log_info("mdns browse started (file-transfer)");
-        }
-        Err(e) => h.log_info(&format!("mdns browse failed (non-fatal): {e}")),
-    }
-}
-
-/// deactivate 停止浏览并清空会话句柄映射（endpoint memo 保留——跨激活重连复用）
-pub(crate) fn stop_browse(h: &impl HostMdns) {
-    let id = browser_id().lock().expect("browser id lock").clone();
-    if !id.is_empty() {
-        let _ = h.mdns_stop_browse(&id);
-        *browser_id().lock().expect("browser id lock") = String::new();
-    }
-    sessions().lock().expect("sessions lock").clear();
-}
-
-// ==================== session 句柄映射 ====================
+// ==================== 会话句柄映射 / 停用清理 ====================
 
 /// 登记已连接节点的 session 句柄与 endpoint memo
 pub(crate) fn remember_session(endpoint: &DialEndpoint, handle: String) {
@@ -88,6 +58,15 @@ pub(crate) fn remember_session(endpoint: &DialEndpoint, handle: String) {
 /// 连接断开摘除句柄（endpoint memo 保留供自动重连）
 pub(crate) fn forget_session(node_id: &str) {
     sessions().lock().expect("sessions lock").remove(node_id);
+}
+
+/// 摘除并返回全部活跃 session 句柄（插件停用时调用：先断开连接再清空表，
+/// 让对端即时感知断线——否则 TLS 连接残留、对端仍显示在线）
+pub(crate) fn drain_sessions() -> Vec<String> {
+    let mut sess = sessions().lock().expect("sessions lock");
+    let handles: Vec<String> = sess.values().cloned().collect();
+    sess.clear();
+    handles
 }
 
 /// 解析目标：显式 endpoint 参数优先；否则查 memo。返回 None = 双双缺失。

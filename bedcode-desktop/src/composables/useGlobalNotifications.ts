@@ -11,6 +11,22 @@ let unlistenDeviceConnected: (() => void) | null = null
 let unlistenDeviceDisconnected: (() => void) | null = null
 let unlistenSessionCreated: (() => void) | null = null
 let unlistenSessionStopped: (() => void) | null = null
+let unlistenPeerConsentRequested: (() => void) | null = null
+let unlistenPeerConnected: (() => void) | null = null
+let unlistenPeerDisconnected: (() => void) | null = null
+
+/** peer-net 连接事件载荷（peer_net.rs emit_json 契约，camelCase） */
+interface PeerEventPayload {
+  nodeId?: string
+  deviceName?: string | null
+  fingerprintShort?: string
+}
+
+/** 短指纹兜底展示：无设备名时以指纹呈现，避免裸 nodeId 长串 */
+function peerDisplayName(payload: PeerEventPayload): string {
+  if (payload.deviceName) return payload.deviceName
+  return payload.fingerprintShort || (payload.nodeId || '').slice(0, 8) || 'device'
+}
 
 /**
  * 全局通知监听
@@ -81,6 +97,41 @@ export function useGlobalNotifications() {
         },
       )
     }
+
+    // 对等连接请求（文件传输首连确认）：宿主级感知——即使 file-transfer
+    // 插件关闭（插件内确认弹窗不出现），桌面用户也能看到有设备请求连接
+    if (!unlistenPeerConsentRequested) {
+      unlistenPeerConsentRequested = await listen<PeerEventPayload>(
+        'peer-consent-requested',
+        (event) => {
+          toast.warning(
+            i18n.global.t('common.notification.peerConsentRequested', {
+              name: peerDisplayName(event.payload),
+            }),
+          )
+        },
+      )
+    }
+
+    // 对等连接建立 / 断开（peer-net 链路，区别于 WS 终端链路的 device-*）
+    if (!unlistenPeerConnected) {
+      unlistenPeerConnected = await listen<PeerEventPayload>('peer-connected', (event) => {
+        toast.success(
+          i18n.global.t('common.notification.peerConnected', {
+            name: peerDisplayName(event.payload),
+          }),
+        )
+      })
+    }
+    if (!unlistenPeerDisconnected) {
+      unlistenPeerDisconnected = await listen<PeerEventPayload>('peer-disconnected', (event) => {
+        toast.warning(
+          i18n.global.t('common.notification.peerDisconnected', {
+            name: peerDisplayName(event.payload),
+          }),
+        )
+      })
+    }
   }
 
   function stopListening() {
@@ -99,6 +150,18 @@ export function useGlobalNotifications() {
     if (unlistenSessionStopped) {
       unlistenSessionStopped()
       unlistenSessionStopped = null
+    }
+    if (unlistenPeerConsentRequested) {
+      unlistenPeerConsentRequested()
+      unlistenPeerConsentRequested = null
+    }
+    if (unlistenPeerConnected) {
+      unlistenPeerConnected()
+      unlistenPeerConnected = null
+    }
+    if (unlistenPeerDisconnected) {
+      unlistenPeerDisconnected()
+      unlistenPeerDisconnected = null
     }
   }
 

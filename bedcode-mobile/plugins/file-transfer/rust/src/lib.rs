@@ -52,10 +52,9 @@ impl WasmPlugin for FileTransferPlugin {
     fn activate() -> anyhow::Result<()> {
         let h = host();
         h.log_info("File Transfer plugin activating (self-hosted, mobile)");
-        // mDNS 浏览随插件激活起停（发现事件经 mdns:* 透传给前端缓存）
-        device_bridge::start_browse(&h);
-        // 发现事件（mdns:*）驱动前端自建设备缓存；传输事件驱动任务/历史存储；
-        // consent/connection 原样透传；peer:devices 双写期仅作对账源
+        // 发现事件（mdns:*）由引擎单守护浏览后经宿主总线直推，本插件不自建
+        // mDNS browse（Phase 4 回归修复：插件自建 daemon 与引擎广播 daemon
+        // 同绑 5353 端口互抢多播包，真机实证「只发现自己、发现不了对端」）
         for topic in [
             "mdns:found",
             "mdns:lost",
@@ -72,7 +71,15 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn deactivate() -> anyhow::Result<()> {
         let h = host();
-        device_bridge::stop_browse(&h);
+        // 关闭插件 = 服务下线：先断开全部活跃对等连接（对端即时感知断开，
+        // 否则 TLS 连接残留、对端仍显示在线——「关闭插件 对方无感知」），
+        // 再清空句柄表与订阅
+        for handle in device_bridge::drain_sessions() {
+            if let Err(e) = h.peer_close(&handle) {
+                h.log_info(&format!("deactivate: peer_close {handle} failed (non-fatal): {e}"));
+            }
+        }
+        device_bridge::clear_peer_state();
         for topic in [
             "mdns:found",
             "mdns:lost",

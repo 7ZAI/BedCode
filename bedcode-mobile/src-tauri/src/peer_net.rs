@@ -50,7 +50,7 @@ use std::time::{Duration, Instant};
 
 use bedcode_peer_net::{
     CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,
-    DiscoveryAdvertiser, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
+    DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
     PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
     SharedDirRoot, SharedSafAccess, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore,
     TransferConfig, TransferEvent,
@@ -94,8 +94,8 @@ struct PeerNetRuntime {
     node: PeerNetNode,
     /// TCP 监听运行句柄（优雅关停入口）
     running: RunningNode,
-    /// mDNS 发现守护句柄（优雅关停入口）
-    daemon: DiscoveryAdvertiser,
+    /// mDNS 发现守护句柄（优雅关停入口；广播+浏览同守护，见 start_locked）
+    daemon: DiscoveryDaemon,
     /// 在线缓存句柄（list 命令读取；闸门桥接解析对端设备名共用同一实例）
     cache: Arc<DiscoveryCache>,
     /// 本节点 ID（状态摘要展示用）
@@ -416,6 +416,17 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     Ok(removed)
 }
 
+/// 本机节点 ID（host-mdns 自播回显过滤用；节点未启动/运行时锁忙返回 None）
+///
+/// 独立浏览订阅（host-mdns）会收到本机自己的广播，需按 TXT `id` 与本机
+/// NodeId 比对剔除（引擎 handle_browse_event 已有同口径过滤）。try_lock 非阻塞：
+/// 浏览循环跑在独立线程，禁止等待运行时锁。
+pub(crate) fn current_node_id(app: &AppHandle) -> Option<String> {
+    let state = app.state::<PeerNetState>();
+    let guard = state.runtime.try_lock().ok()?;
+    guard.as_ref().map(|r| r.node_id.clone())
+}
+
 /// 应答首连确认弹窗（issue 04 命令面）
 ///
 /// 接受路径先带展示名落库再回执：transport 随后的 `add` 变 no-op，保证连接
@@ -660,12 +671,37 @@ async fn start_locked(
         ),
     }
 
-    let daemon = bedcode_peer_net::spawn_peer_mdns_advertiser(
+    // 发现事件桥接：引擎单守护（广播+浏览同进程唯一 ServiceDaemon）实时推送
+    // mdns:found / mdns:lost 到插件总线（载荷 = host-mdns wire 形状，插件前端
+    // 直接消费）。回归背景：Phase 4 把浏览改到插件 host-mdns 自建 daemon，与
+    // 引擎广播 daemon 同绑 5353 端口互抢多播包——真机实证「只发现自己、发现
+    // 不了对端」；收回引擎单守护即恢复（多播包只进一个守护，广播+浏览必须同
+    // 守护才能既收对端响应又回自己的广播）。
+    let (discovery_tx, mut discovery_rx) =
+        tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
+    {
+        crate::system::error_boundary::spawn_with_error_boundary(
+            "peer_net_mdns_bridge",
+            async move {
+                while let Some(event) = discovery_rx.recv().await {
+                    let (topic, payload) = match event {
+                        DiscoveryEvent::Found(payload) => ("mdns:found", payload),
+                        DiscoveryEvent::Lost(payload) => ("mdns:lost", payload),
+                    };
+                    publish_mdns_bus(topic, payload);
+                }
+                tracing::debug!("peer mDNS bus bridge exited");
+            },
+        );
+    }
+
+    let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,
         DiscoveryConfig {
             device_name,
             capabilities: CAP_FILE_TRANSFER,
+            events_tx: Some(discovery_tx),
         },
     )
     .map_err(map_peer_net_error)?;
@@ -1173,6 +1209,17 @@ pub(crate) fn emit_json(app: &AppHandle, event: &str, payload: serde_json::Value
     };
     // 诊断插桩：peer 事件推送可见性（移动端 logcat 只落 INFO+，publish 的 DEBUG 日志不可见）
     tracing::info!(event, topic, "peer event pushed to plugin bus");
+    if let Some(pm) = crate::state::try_get_plugin_manager() {
+        pm.message_bus().publish(topic, "host", payload);
+    }
+}
+
+/// 引擎发现事件直推插件总线（`mdns:found` / `mdns:lost`，载荷 = host-mdns
+/// wire 形状原样透传）。与 [`emit_json`] 的桥接区别：发现事件无前端事件名，
+/// 仅插件消费，直接 publish 不经 app.emit。
+pub(crate) fn publish_mdns_bus(topic: &str, payload: serde_json::Value) {
+    // 诊断插桩：与 peer 事件同口径 INFO-only（logcat 过滤见 emit_json 注释）
+    tracing::info!(topic, "mdns event pushed to plugin bus");
     if let Some(pm) = crate::state::try_get_plugin_manager() {
         pm.message_bus().publish(topic, "host", payload);
     }
