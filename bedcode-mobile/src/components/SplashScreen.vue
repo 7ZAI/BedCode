@@ -54,13 +54,13 @@
         </div>
       </div>
 
-      <!-- 终端方块进度条 -->
+      <!-- 终端方块进度条:随任务行揭示分批点亮,琥珀脉冲头块停在已点亮前沿 -->
       <div class="progress" aria-hidden="true">
         <span
           v-for="b in blockCount"
           :key="b"
           class="block"
-          :class="{ on: b <= litBlocks, head: b === litBlocks + 1 && !startupReady }"
+          :class="{ on: b <= litBlocks, head: b === litBlocks && litBlocks > 0 && litBlocks < blockCount }"
         />
         <span class="pct">{{ pctText }}</span>
       </div>
@@ -78,8 +78,8 @@
  * 开屏动画(Terminal Boot)——「终端开机自检」
  *
  * 职责:展示启动进度叙事(品牌 ›_ 符号 + 开机日志 + 方块进度条),
- * 并按 useAppStartup 的时长策略决定退出时刻:
- * 启动快于固定时长则补足显示;区间内就绪即退;超过兜底时长强制淡出。
+ * 并决定退出时刻:最短展示时长从挂载(可见)起算,保证开机叙事完整播放;
+ * 就绪后让就绪行定格一拍再交接;未就绪时按兜底时长强制淡出。
  * 淡出动画播完 emit('closed'),由父组件 v-if 卸载。
  *
  * 根元素带 mobile-app mobile-ui 类:Teleport 到 body 后仍能命中
@@ -148,15 +148,17 @@ const version = pkg.version
 
 // ==================== 进度 ====================
 
+// 跟随任务行揭示节奏(而非真实完成时刻):挂载前已完成的任务按 stagger 逐行
+// 揭示,方块随之分批点亮——避免挂载瞬间直接跳满,进度与 ✓ 弹出保持同步
 const blockCount = 14
-const completedCount = computed(
-  () => SPLASH_CONFIG.lines.filter((line) => taskCompletedAt[line.id] != null).length,
+const revealedCount = computed(
+  () => SPLASH_CONFIG.lines.filter((line) => shown[line.id]).length,
 )
 const litBlocks = computed(() =>
-  Math.round((completedCount.value / SPLASH_CONFIG.lines.length) * blockCount),
+  Math.round((revealedCount.value / SPLASH_CONFIG.lines.length) * blockCount),
 )
 const pctText = computed(() =>
-  `${Math.round((completedCount.value / SPLASH_CONFIG.lines.length) * 100)}%`,
+  `${Math.round((revealedCount.value / SPLASH_CONFIG.lines.length) * 100)}%`,
 )
 
 // ==================== 时间线引擎 ====================
@@ -165,6 +167,8 @@ const TYPE_INTERVAL = 40
 const PRE_START = 1400
 const PRE_STEP = 180
 const OK_DELAY = 240
+/** 就绪行展示后的定格时长:让「就绪」停留一拍再交接(对齐原型 ~1.25s) */
+const NARRATIVE_HOLD_MS = 1100
 /** 挂载后最短可见时长:防止挂载偏晚时开屏一闪而过(硬兜底始终优先) */
 const MIN_VISIBLE_MS = 900
 const exitFadeMs = SPLASH_CONFIG.exitFadeMs
@@ -174,8 +178,12 @@ let exitTimer: number | null = null
 let mountAt = 0
 /** 最近一次任务行 ✓ 的展示时刻(绝对);就绪行需排在其后 */
 let lastOkAt = 0
-/** 挂载时刻起算的动画收尾基线(打字结束 / 挂载前任务行揭示完成) */
-let baseSeqEndMs = 0
+/** 打字动画收尾时刻(挂载起算);就绪行不得早于它出现 */
+let typingEndMs = 0
+/** 就绪行的排程展示时刻(绝对);作为退出定格的起点 */
+let doneRevealAt: number | null = null
+/** 已排程揭示的任务行数:挂载后完成的行接在队尾,保持节奏连续 */
+let revealSlot = 0
 
 function at(delay: number, fn: () => void): void {
   const id = window.setTimeout(() => {
@@ -202,11 +210,24 @@ function revealLine(id: string): void {
   })
 }
 
+/**
+ * 按固定节奏揭示任务行:挂载前已完成的排在前队,挂载后完成的接在队尾
+ * (节奏窗口已过则立即揭示)。进度方块随揭示分批点亮,与 ✓ 弹出同步
+ */
+function scheduleReveal(id: string): void {
+  const slotAt = mountAt + PRE_START + revealSlot * PRE_STEP
+  revealSlot += 1
+  const delay = Math.max(0, slotAt - performance.now())
+  at(delay, () => revealLine(id))
+  lastOkAt = Math.max(lastOkAt, performance.now() + delay + OK_DELAY)
+}
+
 function revealDone(): void {
   // 就绪即收束打字(后续字符定时器因长度不匹配自动失效)
   typedText.value = fullTyped.value
   typedCaretOn.value = false
   doneShown.value = true
+  doneRevealAt = performance.now()
 }
 
 /**
@@ -214,9 +235,9 @@ function revealDone(): void {
  * 避免"就绪"先于全部 ✓ 出现、或快启动时动画被立即截断
  */
 function scheduleDone(readyTime: number): void {
-  const finish = Math.max(readyTime + OK_DELAY, lastOkAt, mountAt + baseSeqEndMs)
-  const delay = Math.max(0, finish + 80 - performance.now())
-  at(delay, revealDone)
+  const finish = Math.max(readyTime + OK_DELAY, lastOkAt, mountAt + typingEndMs)
+  doneRevealAt = finish + 80
+  at(Math.max(0, finish + 80 - performance.now()), revealDone)
 }
 
 // ==================== 退出调度(时长策略) ====================
@@ -228,14 +249,26 @@ function scheduleExit(): void {
   }
   if (mountAt === 0) return
 
+  // 最短展示从挂载(真正可见)起算:若从应用打开起算,静态首屏的加载耗时
+  // 会预先烧掉固定显示时长,挂载后动画还没开播就被判超时提前退出
   const policyExitAt = computeSplashExitAt({
     now: performance.now(),
     readyAt: startupReadyAt.value,
-    minExitAt: props.minDurationMs,
+    minExitAt: mountAt + props.minDurationMs,
     maxExitAt: props.maxDurationMs,
   })
+  // 就绪后兜底上限让位于完整叙事(就绪行定格一拍再交接);
+  // 未就绪时硬兜底按时生效,防止启动卡死困住用户
+  const narrativeExitAt = doneRevealAt !== null ? doneRevealAt + NARRATIVE_HOLD_MS : null
+  const hardCap =
+    startupReady.value && narrativeExitAt !== null
+      ? Math.max(props.maxDurationMs, narrativeExitAt)
+      : props.maxDurationMs
   // 最短可见保障 + 硬兜底始终获胜
-  const exitAt = Math.min(Math.max(policyExitAt, mountAt + MIN_VISIBLE_MS), props.maxDurationMs)
+  const exitAt = Math.min(
+    Math.max(policyExitAt, mountAt + MIN_VISIBLE_MS, narrativeExitAt ?? 0),
+    hardCap,
+  )
   exitTimer = window.setTimeout(beginExit, Math.max(0, exitAt - performance.now()))
 }
 
@@ -266,24 +299,17 @@ onMounted(() => {
     at(440, () => (tagIn.value = true))
     at(580, () => (typedLineIn.value = true))
 
-    const typingEnd = 700 + fullTyped.value.length * TYPE_INTERVAL + 100
+    typingEndMs = 700 + fullTyped.value.length * TYPE_INTERVAL + 100
     fullTyped.value.split('').forEach((ch, i) => {
       at(700 + i * TYPE_INTERVAL, () => {
         if (typedText.value.length === i) typedText.value += ch
       })
     })
 
-    // 挂载前已完成的任务行按固定节奏揭示(动画完整感)
-    const preIds = SPLASH_CONFIG.lines.filter((line) => taskCompletedAt[line.id] != null)
-    preIds.forEach((line) => {
-      const i = SPLASH_CONFIG.lines.indexOf(line)
-      at(PRE_START + i * PRE_STEP, () => revealLine(line.id))
-      lastOkAt = Math.max(lastOkAt, mountAt + PRE_START + i * PRE_STEP + OK_DELAY)
+    // 挂载前已完成的任务行按固定节奏揭示(动画完整感);之后完成的接队尾
+    SPLASH_CONFIG.lines.forEach((line) => {
+      if (taskCompletedAt[line.id] != null) scheduleReveal(line.id)
     })
-    baseSeqEndMs =
-      preIds.length > 0
-        ? Math.max(typingEnd, PRE_START + (preIds.length - 1) * PRE_STEP + OK_DELAY)
-        : typingEnd
 
     if (startupReady.value) scheduleDone(performance.now())
   }
@@ -291,7 +317,7 @@ onMounted(() => {
   scheduleExit()
 })
 
-// 挂载后陆续完成的任务行:完成即揭示 + 打勾
+// 挂载后陆续完成的任务行:接在揭示节奏队尾(节奏已过则立即揭示)
 watch(
   taskCompletedAt,
   () => {
@@ -301,7 +327,7 @@ watch(
           shown[line.id] = true
           okShown[line.id] = true
         } else {
-          revealLine(line.id)
+          scheduleReveal(line.id)
         }
       }
     }
@@ -345,6 +371,23 @@ onBeforeUnmount(() => {
 .splash-root.exiting {
   animation: splashExit var(--splash-exit-ms, 500ms) ease-in forwards;
   will-change: transform, opacity;
+  /* 淡出期间不再拦截触摸：即使极端情况下未及时卸载，也不会盖住主界面交互 */
+  pointer-events: none;
+}
+
+/* 浅色下渐变反转为「上亮下暗」:三枚 token 的明度顺序在两套主题间相反,
+   直接换序复用,保持与原型一致的光从顶部来的方向感。
+   注意:不能用 `:global(html:not(.dark)) .splash-root` 写法——scoped 编译器
+   会丢掉 :global() 之后的后代选择器,把规则错挂到 html 本体上(见
+   scanlines 的 opacity:.06 曾导致整页 6% 透明的灰蓝罩层);裸祖先选择器
+   会被正确编译为 `html:not(.dark) .splash-root[data-v-xxx]` */
+html:not(.dark) .splash-root {
+  background: linear-gradient(
+    160deg,
+    var(--mobile-terminal-bg) 0%,
+    var(--mobile-bg-primary) 55%,
+    var(--mobile-bg-secondary) 100%
+  );
 }
 
 @keyframes splashExit {
@@ -389,8 +432,8 @@ onBeforeUnmount(() => {
   pointer-events: none;
 }
 
-/* 浅色下扫描线减弱,避免纸面脏感 */
-:global(html:not(.dark)) .scanlines {
+/* 浅色下扫描线减弱,避免纸面脏感(写法注意同上,勿用 :global() 后代形式) */
+html:not(.dark) .scanlines {
   opacity: 0.06;
 }
 

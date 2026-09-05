@@ -1,9 +1,9 @@
 /**
  * 开屏(Splash)配置
  *
- * 时长策略:实际启动耗时 < minDurationMs 时,开屏补足到固定显示时长;
- * 启动耗时落在 min ~ max 之间按实际时长显示(就绪即退);
- * 超过 maxDurationMs 仍未就绪则强制淡出进入首页(兜底)。
+ * 时长策略:minDurationMs 从开屏组件挂载(真正可见)起算——启动快于该值时
+ * 补足固定显示时长,保证开机叙事完整播放;maxDurationMs 从应用打开起算,
+ * 是未就绪时的硬兜底(超过强制进入首页),就绪后让位于就绪行的叙事定格。
  * 策略纯函数见 useAppStartup.computeSplashExitAt。
  *
  * 文案可配置:lines 的 labelKey 与各 *_Key 指向 `locales/<locale>/mobile.ts` 的

@@ -2,8 +2,9 @@
  * 应用启动任务注册表 + 开屏退出时刻策略
  *
  * 时间轴:performance.now() 的 0 点即页面 timeOrigin(WebView 导航起点),
- * 所有打点(readyAt / mountAt / min / max)共用该轴——"固定显示时长"从应用
- * 打开起算,涵盖 index.html 静态首屏阶段,而非仅组件挂载后的时段。
+ * 所有打点(readyAt / mountAt / max)共用该轴。开屏的最短展示时长以挂载
+ * 时刻为基准折算(见 SplashScreen.scheduleExit),避免静态首屏的加载耗时
+ * 预先烧掉固定显示时长;硬兜底 max 直接用该轴时刻,限制总启动时长。
  *
  * 启动链路打点(与 SPLASH_CONFIG.lines 的 id 对应):
  * - platform / settings:main.ts 预初始化完成后
@@ -13,8 +14,8 @@
  * - ui:App.vue onMounted(主题/字体/安全区就绪)
  *
  * SplashScreen 依据 computeSplashExitAt 决定淡出时刻:
- * 启动耗时 < minDurationMs → 补足固定显示时长;
- * 落在 min~max 区间 → 就绪即退;
+ * minDurationMs 从开屏挂载(可见)起算——启动快于该值则补足,保证叙事完整;
+ * 落在 min~max 区间 → 就绪即退(就绪行再定格一拍);
  * 超过 maxDurationMs 仍未就绪 → 兜底强制退出。
  */
 import { computed, reactive, readonly } from 'vue'
