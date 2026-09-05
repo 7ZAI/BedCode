@@ -43,6 +43,7 @@ const HOST_KEYS_ZH = {
         delete: '删除',
         deleteMessage: '删除消息',
         providerConfig: '模型供应商配置',
+        pluginSettings: '插件设置',
         backToChat: '返回聊天',
         back: '返回',
         close: '关闭',
@@ -96,6 +97,31 @@ const HOST_KEYS_ZH = {
         rateLimitInitialDelay: '初始等待',
         rateLimitMaxDelay: '最大等待',
         rateLimitOff: '关闭',
+        systemPrompt: '对话指令 (System Prompt)',
+        systemPromptOn: '指令已启用',
+        systemPromptPlaceholder: '为该对话设置专属指令（可选）...',
+        codeRendering: '代码渲染',
+        codeFontSize: '字体大小',
+        decrease: '减小',
+        increase: '增大',
+        codeLineHeight: '行距',
+        codeTheme: '代码主题',
+        codeThemeAuto: '跟随',
+        codeThemeLight: '浅色',
+        codeThemeDark: '深色',
+        codeThemeGithubLight: 'GitHub 浅色',
+        codeThemeGithubDark: 'GitHub 深色',
+        codeThemeDracula: 'Dracula',
+        thinking: '思考',
+        thinkingMode: '思考模式',
+        thinkingDefault: '默认',
+        thinkingEnabled: '开启',
+        thinkingDisabled: '关闭',
+        reasoningEffort: '推理强度',
+        effortLow: '低',
+        effortHigh: '高',
+        effortMax: '最大',
+        showReasoning: '显示思考过程',
       },
     },
   },
@@ -130,6 +156,7 @@ const HOST_KEYS_EN = {
         delete: 'Delete',
         deleteMessage: 'Delete message',
         providerConfig: 'Provider Settings',
+        pluginSettings: 'Plugin Settings',
         backToChat: 'Back to chat',
         back: 'Back',
         close: 'Close',
@@ -185,6 +212,32 @@ const HOST_KEYS_EN = {
         rateLimitInitialDelay: 'Initial Delay',
         rateLimitMaxDelay: 'Max Delay',
         rateLimitOff: 'Off',
+        systemPrompt: 'System Prompt',
+        systemPromptOn: 'Prompt active',
+        systemPromptPlaceholder:
+          'Set a custom instruction for this conversation (optional)...',
+        codeRendering: 'Code Rendering',
+        codeFontSize: 'Font Size',
+        decrease: 'Decrease',
+        increase: 'Increase',
+        codeLineHeight: 'Line Height',
+        codeTheme: 'Code Theme',
+        codeThemeAuto: 'Auto',
+        codeThemeLight: 'Light',
+        codeThemeDark: 'Dark',
+        codeThemeGithubLight: 'GitHub Light',
+        codeThemeGithubDark: 'GitHub Dark',
+        codeThemeDracula: 'Dracula',
+        thinking: 'Thinking',
+        thinkingMode: 'Thinking Mode',
+        thinkingDefault: 'Default',
+        thinkingEnabled: 'On',
+        thinkingDisabled: 'Off',
+        reasoningEffort: 'Reasoning Effort',
+        effortLow: 'Low',
+        effortHigh: 'High',
+        effortMax: 'Max',
+        showReasoning: 'Show Reasoning',
       },
     },
   },
@@ -399,6 +452,8 @@ function registerCommands(context: PluginContext): void {
       lastUserText = ''
     }
     if (/429|限流/.test(lastUserText)) {
+      // SAFETY: dev-shell 运行于浏览器，setTimeout 返回 number（浏览器 TimerHandle）；
+      // Node 类型定义返回 NodeJS.Timeout，断言仅桥接类型差异，运行时值同为数字句柄
       const h = setTimeout(() => {
         const tIdx = timers.indexOf(h)
         if (tIdx !== -1) timers.splice(tIdx, 1)
@@ -408,6 +463,7 @@ function registerCommands(context: PluginContext): void {
           done: true,
         })
       }, 300) as unknown as number
+      timers.push(h)
       timers.push(h)
       return { ok: true }
     }
@@ -436,6 +492,7 @@ function registerCommands(context: PluginContext): void {
         })
       }
     }
+    // SAFETY: 同上——浏览器 setInterval 返回 number，Node 类型定义返回 NodeJS.Timeout，断言桥接类型差异
     const handle = setInterval(tick, 30) as unknown as number
     timers.push(handle)
     return { ok: true }
