@@ -26,6 +26,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { getFixedZoomCompensation } from '@binblink/plugin-sdk-desktop/ui/zoom-compensation'
 
 interface Props {
   content: string
@@ -66,7 +67,11 @@ function calculatePosition() {
   const triggerRect = triggerRef.value.getBoundingClientRect()
   const tooltipRect = tooltipRef.value.getBoundingClientRect()
 
-  const gap = 8
+  // 全部量测与 clamp 在视觉坐标空间内完成，最后除以 F 换算成 fixed 赋值坐标——
+  // Linux 端根 zoom 下 fixed 赋值会被渲染再放大，直接赋 gBCR 读数会向右下漂移
+  // （见 SDK zoom-compensation.ts）；间距乘 F 保持设计观感一致
+  const f = getFixedZoomCompensation()
+  const gap = 8 * f
 
   let top = 0
   let left = 0
@@ -100,8 +105,8 @@ function calculatePosition() {
   if (top + tooltipRect.height > viewportHeight) top = viewportHeight - tooltipRect.height - gap
 
   positionStyle.value = {
-    top: `${top}px`,
-    left: `${left}px`,
+    top: `${top / f}px`,
+    left: `${left / f}px`,
   }
 }
 

@@ -2,17 +2,16 @@
  * 终端 IME 输入状态机（Linux WebKitGTK 专用去重）
  *
  * 背景：xterm.js 在 WebKitGTK（Linux Tauri webview）上输入法提交时存在
- * 「输入随机重复」bug，根因在 xterm 6.0.0 输入链路有两条数据发送路径：
+ * 「输入随机重复」bug。xterm 6.0.0 输入链路有两条数据发送路径：
  *   1. keydown keyCode=229（WebKitGTK 的输入法组合键）→ _handleAnyTextareaChanges()
- *      对 textarea 前后值求差，setTimeout 后把差值作为 onData 发出
+ *      对 textarea 前后值求差，setTimeout 后把差值作为 onData 发出——该路径
+ *      已在 TerminalPreview 初始化时从源头关闭（见其 isLinux 分支），因为差值
+ *      恒为当前 textarea 值的后缀，精确去重覆盖不了「bug 后被补发 ug」的部分后缀。
  *   2. compositionend → _finalizeComposition(true) → 把组合起始位置到当前的
- *      子串作为 onData 再次发出
- * 两条路径发出的载荷可能完全一致（都是同一个已上屏的组合文本），且 WebKitGTK
- * 的组合事件时序不稳定（compositionstart 可能迟到/缺失、compositionend 可能
- * 提前触发），导致同一段文本被终端发送两次 → 输入栏随机重复字符。
- *
- * 解决方案：在组件层维护独立的 IME 状态机，跟踪 compositionstart/update/end
- * 与 keydown(229) 信号，对 xterm 发出的 onData 载荷做**组合窗口内精确去重**：
+ *      子串作为 onData 发出；与 _inputEvent（insertText）提交路径竞态时会
+ *      把同一提交文本发出两次。
+ * 本状态机在组件层跟踪 compositionstart/update/end 与 keydown(229) 信号，
+ * 对 xterm 发出的 onData 载荷做**组合窗口内精确去重**（覆盖路径 2 的双发）：
  * - 处于组合窗口（composing / committed 宽限期）时，同一载荷若刚发送过则丢弃
  * - 普通按键（keyCode≠229）立即复位到 idle，正常连打（如 "aa"）永不被去重
  * - 新一轮 compositionstart 清空最近载荷记录，两次独立组合同一字符不误杀

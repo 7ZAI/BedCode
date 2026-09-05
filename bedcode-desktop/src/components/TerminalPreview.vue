@@ -206,13 +206,17 @@ const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'd
 // Linux 平台优化：isLinux 在 onMounted 中 await initPlatform() 后确定（消除
 // setup 时 platform 尚未解析的竞态）；仅 Linux 启用 IME 去重与专用字体栈
 const isLinux = ref(false)
-// Linux 专用等宽字体栈：优先系统自带字体（Ubuntu Mono / DejaVu Sans Mono /
-// Liberation Mono / Noto Sans Mono），确保 WebKitGTK 用真实系统等宽字体渲染，
-// 避免默认栈（Cascadia Mono 等 Windows 字体）在 Linux 上回退非等宽字体导致的
-// 字符间距过大/模糊；Windows/macOS 保持原有字体栈不变
+// Linux 专用等宽字体栈：优先系统自带、hint 较强的等宽字体（DejaVu Sans Mono /
+// Liberation Mono 对 canvas fillText 的像素对齐更好，Ubuntu Mono 笔画偏软），确保
+// WebKitGTK 用真实系统等宽字体渲染，避免默认栈（Cascadia Mono 等 Windows 字体）
+// 在 Linux 上回退非等宽字体导致的字符间距过大/模糊；Windows/macOS 保持原有字体栈
 const LINUX_FONT_STACK =
-  "'Ubuntu Mono', 'DejaVu Sans Mono', 'Liberation Mono', 'Noto Sans Mono', 'Noto Mono', 'Cascadia Mono', 'Consolas', 'Courier New', monospace"
+  "'DejaVu Sans Mono', 'Liberation Mono', 'Ubuntu Mono', 'Noto Sans Mono', 'Noto Mono', 'Cascadia Mono', 'Consolas', 'Courier New', monospace"
 const DEFAULT_FONT_STACK = 'Cascadia Mono, Consolas, Monaco, Courier New, monospace'
+// Linux WebKitGTK 终端渲染器选择：WebGL 字形图集在 dpr=1 时按 Math.floor(advance)
+// 切格 + LINEAR 采样，文字比原生终端发蒙；DOM(canvas) 渲染器逐字形 fillText，
+// 边缘更清晰（对齐 VS Code Linux 默认关 GPU 加速的做法）。置 false 可切回 WebGL 对比。
+const LINUX_USE_DOM_RENDERER = true
 // 背景图片：设置中存原始文件名（仅用于判断是否启用与回显），
 // 实际图片由本地服务器 /static/terminal-bg 端点提供
 const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
@@ -809,7 +813,28 @@ function initTerminal() {
   terminal.unicode.activeVersion = '11'
 
   terminal.open(terminalHostRef.value)
-  initWebGL(terminal)
+  // Linux 走 DOM(canvas) 渲染器（见 LINUX_USE_DOM_RENDERER，消除 WebGL 图集发蒙）；
+  // Windows/macOS 保持 WebGL（高吞吐 + 已修复的透明残影路径）。DOM 渲染器下
+  // webglAddon 为 null，后续 clearTextureAtlas / xterm-hidden-cursor 分支天然跳过。
+  if (!isLinux.value || !LINUX_USE_DOM_RENDERER) {
+    initWebGL(terminal)
+  }
+
+  // Linux WebKitGTK IME 根因修复：关闭 xterm 6.0.0 的 keydown(229) 遗留差值路径
+  // _handleAnyTextareaChanges。现代 WebKitGTK 文本插入一律经 input 事件
+  // （_inputEvent / compositionend finalize）发出，该差值路径是旧 IME 兜底；
+  // 它在 keydown 229 时用 setTimeout(0) 对 textarea 前后值求差并再次发出，
+  // 与 input 路径竞态时会把「已上屏文本的后缀」重复发出（输入 "bug" 后被补发
+  // "ug"）。差值恒为 textarea 当前值的后缀，状态机的精确去重覆盖不了部分后缀，
+  // 故从源头关闭。仅 Linux 关闭；Windows/macOS 走 xterm 原生路径不变。
+  if (isLinux.value) {
+    const core = (terminal as unknown as {
+      _core?: { _compositionHelper?: { _handleAnyTextareaChanges?: () => void } }
+    })._core
+    if (core?._compositionHelper) {
+      core._compositionHelper._handleAnyTextareaChanges = () => {}
+    }
+  }
 
   // Linux WebKitGTK IME 去重：组合事件/keydown(229)/input 信号喂给状态机，
   // onData 出口按组合窗口去重（见下方 onData 拦截）。仅 Linux 挂接，
@@ -1121,6 +1146,31 @@ function scheduleAtlasPreheat() {
 }
 
 /**
+ * Linux 首帧模糊修复：WebKitGTK 的 document.fonts 不追踪系统字体（DejaVu 等经
+ * fontconfig 解析），fonts.ready 会提前 resolve——首次 measure 可能仍用回退字体/
+ * 旧指标，导致字符尺寸按错指标光栅化 → 整屏文字发蒙。挂载并跑完首帧后延迟重测
+ * + 全量重绘一次，消除首帧模糊残留。DOM 渲染器重绘即重建行；WebGL 渲染器还会
+ * 重建字形图集（clearTextureAtlas 在 DOM 渲染器下为 no-op）。
+ */
+function scheduleInitialFontRemeasure() {
+  if (!isLinux.value) return
+  setTimeout(() => {
+    if (!terminal || !terminal.element?.isConnected) return
+    // 强制重测字符尺寸（等价 xterm open/resize 时的 measure；私有路径与
+    // measureCellSize 同源，缺失时优雅跳过，refresh 仍保证重绘一次）
+    const core = (terminal as unknown as {
+      _core?: { _charSizeService?: { measure?: () => void } }
+    })._core
+    core?._charSizeService?.measure?.()
+    // WebGL 图集按新指标重建；DOM 渲染器下 clearTextureAtlas 为 no-op
+    if (webglAddon) {
+      terminal.clearTextureAtlas()
+    }
+    terminal.refresh(0, terminal.rows - 1)
+  }, 300)
+}
+
+/**
  * 监听 DPR 变化并应用新尺寸：matchMedia 只匹配固定 dppx 值，
  * 每次命中后按新 DPR 重新注册（递归），直到组件卸载
  */
@@ -1336,6 +1386,17 @@ onMounted(async () => {
   if (terminal) {
     terminal.options.theme = getTheme()
   }
+
+  // Linux：首帧后重测字符尺寸 + 全量重绘（见 scheduleInitialFontRemeasure），
+  // 消除 WebKitGTK 首次 measure 用回退字体指标导致的模糊
+  scheduleInitialFontRemeasure()
+
+  // 渲染链路诊断（排查模糊/回退问题时日志可见 renderer 与 DPR）
+  console.info(
+    `[TerminalPreview] renderer=${webglAddon ? 'webgl' : 'dom'} ` +
+      `dpr=${window.devicePixelRatio} fontSize=${fontSize.value} ` +
+      `isLinux=${isLinux.value}`,
+  )
 
   // 监听 AI 插件请求当前终端输入
   pluginEventOn('__host__', 'ai-chatbox:getCurrentInput', () => {
