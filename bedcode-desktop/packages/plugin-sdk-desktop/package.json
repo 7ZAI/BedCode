@@ -47,6 +47,10 @@
       "types": "./src/ui/Select.d.ts",
       "import": "./src/ui/Select.vue"
     },
+    "./ui/zoom-compensation": {
+      "types": "./src/ui/zoom-compensation.d.ts",
+      "import": "./src/ui/zoom-compensation.ts"
+    },
     "./ui/terminal-input-rail": {
       "types": "./src/ui/terminal-input-rail.d.ts",
       "import": "./src/ui/TerminalInputRail.vue"
