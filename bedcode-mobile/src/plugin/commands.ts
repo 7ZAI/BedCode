@@ -24,6 +24,16 @@ export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null
   return await invoke('plugin_get_info', { pluginId })
 }
 
+/**
+ * 预授权（启用前置，独立于 activate 供前端先行调用）
+ *
+ * 时序契约：toggle 启用时先调本命令（此阶段不显示 LoadingDialog，授权弹窗
+ * 可正常交互）→ 通过后再显示 loading 并调 pluginActivate；拒绝则直接失败
+ */
+export async function pluginPreauthorize(pluginId: string): Promise<void> {
+  return await invoke('plugin_preauthorize', { pluginId })
+}
+
 /** 激活插件 */
 export async function pluginActivate(pluginId: string): Promise<void> {
   return await invoke('plugin_activate', { pluginId })

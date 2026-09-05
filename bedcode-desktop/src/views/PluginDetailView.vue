@@ -329,7 +329,7 @@
  */
 import { ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { pluginListLoaded } from '@/plugin/commands'
+import { pluginListLoaded, pluginPreauthorize } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
@@ -401,14 +401,17 @@ function stateBadgeClass(state: PluginState): string {
 async function handleToggle(id: string, enable: boolean): Promise<void> {
   if (togglingId.value) return
   const name = plugin.value?.name || id
-  const key = enable ? 'desktop.plugin.togglingEnable' : 'desktop.plugin.togglingDisable'
-  togglingPluginInfo.value = { id, name, message: t(key, { name }) }
 
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
-    // togglingId 推迟到 pluginLoader.activate 入口:后端会在 activate
-    // 内部串行执行 preauthorize(单次合并弹窗),此期间不显示 loading,
-    // 避免授权弹窗被 LoadingOverlay 遮挡(file-transfer 等需预授权场景)
+    // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 loading 遮罩,
+    // 授权弹窗可正常交互),通过后才显示遮罩进入激活,拒绝则直接失败不遮罩。
+    // 停用无授权环节,直接进遮罩
+    if (enable) {
+      await pluginPreauthorize(id)
+    }
+    const key = enable ? 'desktop.plugin.togglingEnable' : 'desktop.plugin.togglingDisable'
+    togglingPluginInfo.value = { id, name, message: t(key, { name }) }
     togglingId.value = id
     const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
     const timeout = new Promise<never>((_, reject) => {

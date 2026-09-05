@@ -292,6 +292,7 @@ pub fn run() {
             // Plugin Commands
             crate::plugin::commands::plugin_list_loaded,
             crate::plugin::commands::plugin_get_info,
+            crate::plugin::commands::plugin_preauthorize,
             crate::plugin::commands::plugin_activate,
             crate::plugin::commands::plugin_deactivate,
             crate::plugin::commands::plugin_is_enabled,

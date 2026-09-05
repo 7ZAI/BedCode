@@ -31,12 +31,11 @@ use tokio::sync::{Mutex, RwLock};
 /// `PluginStorage::get(plugin_id, "preauth_paths")` 读取。
 pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
-/// file-transfer 插件 ID:启用前要求 shared_roots 非空,否则直接拒绝激活
-/// (移动端镜像见 mobile/src-tauri/src/plugin/manager.rs)。
+/// file-transfer 插件 ID(启用先行门禁测试用;移动端无独立镜像常量)。
 pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
 
 /// 预授权 storage key(file-transfer mount-local 时追加写入;其他插件可由
-/// provider 动态提供;缺字段 = 视为「无预授权路径」,非 file-transfer 直接放行)。
+/// provider 动态提供;缺字段 = 视为「无预授权路径」,直接放行)。
 pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
 
 /// 预授权提供者注册表:静态注册 + host function 动态注册共用,跨 PluginHost
@@ -572,8 +571,13 @@ impl PluginHost {
     /// 会发事件、可能回调宿主,持锁会死锁)。
     ///
     /// 路径来源:已注册的 `PreauthProvider` 优先;否则从 `PluginStorage`
-    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入)。
-    /// file-transfer 共享目录未配置 → 立即返回错误,提示去设置页配置。
+    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入);
+    /// 另并入 manifest `wasiPreopenDirs` 展开后的声明目录(如 ai-chatbox
+    /// 数据目录)——插件 activate 内 fs_request_auth 的弹窗晚于前端 loading
+    /// 遮罩,声明目录必须提前到本阶段统一弹窗。
+    /// 路径为空 → 直接放行(启用先行:file-transfer 首次启用/全部目录移除后
+    /// 均可空目录激活,共享目录配置由插件设置面板引导;硬拒绝会造成
+    /// 「配置需激活 → 激活需先配置」死锁)。
     pub async fn preauthorize_plugin(&self, plugin_id: &str) -> crate::Result<()> {
         // 1. 收集路径(注册 provider 优先,否则 storage 数组)
         let mut paths = collect_preauth_paths(plugin_id).await;
@@ -588,17 +592,20 @@ impl PluginHost {
             }
         }
 
-        // 2. file-transfer 共享目录未配置:直接拒绝,避免启用空功能插件
-        if plugin_id == FILE_TRANSFER_PLUGIN_ID && paths.is_empty() {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "preauthorize: file-transfer requires shared_roots to be configured first"
-            );
-            // 错误信息面向用户,i18n key = desktop.plugin.enableAuthRequired
-            // 前端 catch 后用 toast 展示「请先在插件设置中配置共享目录」
-            return Err(crate::AppError::Plugin(
-                "Please configure shared directories in plugin settings first".to_string(),
-            ));
+        // 1.5 并入 manifest wasiPreopenDirs 声明目录(展开不过滤授权,未授权
+        // 项正需在此弹窗)。短读锁克隆后立即释放:check_batch 会发事件、可能
+        // 回调宿主,跨 await 持锁有死锁风险
+        let declared = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| p.manifest.wasi_preopen_dirs.clone())
+                .unwrap_or_default()
+        };
+        for dir in crate::plugin::wasm_runtime::expand_preopen_declarations(plugin_id, &declared) {
+            if !paths.contains(&dir) {
+                paths.push(dir);
+            }
         }
 
         if paths.is_empty() {
@@ -638,6 +645,7 @@ impl PluginHost {
             source: PluginSource,
             api: Vec<String>,
             subscribes: Vec<String>,
+            declared_preopen_dirs: Vec<String>,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -691,6 +699,7 @@ impl PluginHost {
                 source: loaded.source.clone(),
                 api: loaded.manifest.api.clone(),
                 subscribes: loaded.manifest.contributes.subscribes.clone(),
+                declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
             }
         };
 
@@ -699,6 +708,42 @@ impl PluginHost {
         // on_startup 的 guest 自报失败记录于此，phase 3 据此写 Degraded 终态
         let mut startup_failure: Option<String> = None;
         if plan.source == PluginSource::Wasm {
+            // WASI 预打开目录漂移检测：声明了预打开目录的插件，激活前先核对当前
+            // 实例是否已覆盖「现在已授权」的目录。首次启用时授权经 activate() 内
+            // fs_request_auth 弹窗才落库（早于实例化），实例预打开为空；重试激活
+            // （停用再启用）时授权已持久化，若实例未覆盖则重建——否则 /data 永远
+            // 挂不上，激活自检必失败（Bug B 死循环）。无声明的插件跳过重建（零开销）。
+            if !plan.declared_preopen_dirs.is_empty() {
+                let resolved = crate::plugin::wasm_runtime::resolve_preopen_dirs(
+                    &self.wasm_host_ctx,
+                    plugin_id,
+                    &plan.declared_preopen_dirs,
+                );
+                let missing = {
+                    let wasm_plugins = self.wasm_plugins.read().await;
+                    match wasm_plugins.get(plugin_id).cloned() {
+                        Some(inst) => {
+                            // 锁序纪律：先释放 map 读锁再锁实例（与 deactivate 一致），
+                            // 避免「持 map 锁 + 实例锁」的组合与未来热重载写锁交叉
+                            drop(wasm_plugins);
+                            let preopened = inst.lock().await.preopened_dirs().to_vec();
+                            !resolved.iter().all(|d| preopened.iter().any(|p| p == d))
+                        }
+                        // 实例缺失：走重建路径补建（与 reload 语义一致）
+                        None => true,
+                    }
+                };
+                if missing {
+                    tracing::info!(
+                        plugin_id = %plugin_id,
+                        declared = ?plan.declared_preopen_dirs,
+                        resolved = ?resolved,
+                        "Rebuilding WASM instance before activation: preopen dirs changed after instance creation"
+                    );
+                    self.rebuild_wasm_instance(plugin_id).await?;
+                }
+            }
+
             let wasm_plugin = {
                 let wasm_plugins = self.wasm_plugins.read().await;
                 wasm_plugins.get(plugin_id).cloned()
@@ -855,6 +900,38 @@ impl PluginHost {
         Ok(())
     }
 
+    /// 重建 WASM 插件实例（load_plugin_from_file + 替换 map 条目）
+    ///
+    /// 激活路径：声明 WASI 预打开目录的插件首次授权后实例未覆盖新授权目录时
+    /// 重建，使 /data 挂载与授权一致；热重载路径同样复用（停用 → 重建 → 重注册）。
+    /// 失败上抛（原实例保留，激活流程走既有错误分支置 Error 态）。
+    async fn rebuild_wasm_instance(&self, plugin_id: &str) -> crate::Result<()> {
+        let (rust_library, extension_path, declared_preopen_dirs) = {
+            let plugins = self.plugins.read().await;
+            let loaded = plugins
+                .get(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+            (
+                loaded.manifest.rust_library.clone(),
+                loaded.extension_path.clone(),
+                loaded.manifest.wasi_preopen_dirs.clone(),
+            )
+        };
+
+        let plugin_dir = Path::new(&extension_path);
+        let wasm_filename = format!("{}.wasm", rust_library);
+        let wasm_path = plugin_dir.join(&wasm_filename);
+
+        let new_wasm_plugin = self
+            .wasm_runtime
+            .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone(), &declared_preopen_dirs)?;
+        self.wasm_plugins
+            .write()
+            .await
+            .insert(plugin_id.to_string(), Arc::new(Mutex::new(new_wasm_plugin)));
+        Ok(())
+    }
+
     /// 停用插件
     /// 中止指定插件的定时器（停用时调用，v6 ADR 0003）
     fn abort_plugin_timer(&self, plugin_id: &str) {
@@ -989,7 +1066,7 @@ impl PluginHost {
     /// 2. 重新编译并实例化 WASM 模块
     /// 3. 重新激活插件
     pub async fn reload_wasm_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        let (rust_library, extension_path, declared_preopen_dirs) = {
+        {
             let plugins = self.plugins.read().await;
             let loaded = plugins
                 .get(plugin_id)
@@ -1000,32 +1077,15 @@ impl PluginHost {
                     plugin_id
                 )));
             }
-            (
-                loaded.manifest.rust_library.clone(),
-                loaded.extension_path.clone(),
-                loaded.manifest.wasi_preopen_dirs.clone(),
-            )
-        };
+        }
 
         tracing::info!("Hot-reloading WASM plugin: {}", plugin_id);
 
         // 1. 停用插件（不持久化）
         self.deactivate_plugin(plugin_id, false).await?;
 
-        // 2. 重新编译并实例化 WASM 模块
-        let plugin_dir = Path::new(&extension_path);
-        let wasm_filename = format!("{}.wasm", rust_library);
-        let wasm_path = plugin_dir.join(&wasm_filename);
-
-        let new_wasm_plugin =
-            self.wasm_runtime
-                .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone(), &declared_preopen_dirs)?;
-
-        // 替换 wasm_plugins map 中的实例
-        self.wasm_plugins
-            .write()
-            .await
-            .insert(plugin_id.to_string(), Arc::new(Mutex::new(new_wasm_plugin)));
+        // 2. 重新编译并实例化 WASM 模块（替换 wasm_plugins map 条目）
+        self.rebuild_wasm_instance(plugin_id).await?;
 
         // 3. 重新注册 manifest contributes
         let m = {
@@ -2445,7 +2505,7 @@ mod tests {
     //
     // 验证「先授权再 loading」改造的契约:
     // 1. 无 provider + 无 storage:直接放行(空路径 = 无需预授权)
-    // 2. file-transfer 无共享目录:返回错误,提示去设置页
+    // 2. file-transfer 无共享目录:同样放行(启用先行,配置由插件设置面板引导)
     // 3. 路径已在 storage:不需要 provider,直接放行(check_batch 空路径短路)
 
     /// 无 provider + 无 storage 预授权路径:空路径直接放行。
@@ -2461,21 +2521,85 @@ mod tests {
         );
     }
 
-    /// file-transfer 共享目录未配置:返回 AppError::Plugin,提示去设置页配置。
-    /// 对应「file-transfer 启用时 shared_roots 空 → 不出现弹窗,直接 toast
-    /// 「请先配置共享目录」」场景。
+    /// file-transfer 共享目录未配置:放行(启用先行)。
+    /// 硬拒绝会造成死锁——共享目录配置入口在插件 UI 内,而插件 UI 加载
+    /// 依赖激活成功,「配置需激活 → 激活需先配置」互为前置,首次启用永远失败。
     #[tokio::test]
-    async fn preauthorize_file_transfer_empty_shared_roots_rejected() {
+    async fn preauthorize_file_transfer_empty_shared_roots_passes() {
         let host = setup_host().await;
         let result = host
             .preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID)
             .await;
-        let err = result.expect_err("file-transfer with empty shared_roots must be rejected");
-        let msg = err.to_string();
         assert!(
-            msg.contains("configure shared directories"),
-            "error must guide user to settings, got: {}",
-            msg
+            result.is_ok(),
+            "file-transfer with empty shared_roots must pass (enable-first), got: {:?}",
+            result.err()
+        );
+    }
+
+    /// manifest `wasiPreopenDirs` 声明目录并入预授权收集(如 ai-chatbox 数据
+    /// 目录)。未授权 + 无头上下文(check_batch 保守拒绝)→ 返回「授权被拒」
+    /// 错误——若声明目录未被收集,空路径会直接放行,本用例即失去意义
+    #[tokio::test]
+    async fn preauthorize_collects_manifest_preopen_dirs_ungranted_denied() {
+        let host = setup_host().await;
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded),
+        );
+        host.plugins
+            .write()
+            .await
+            .get_mut(TEST_PLUGIN_ID)
+            .expect("test plugin in map")
+            .manifest
+            .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
+
+        let err = host
+            .preauthorize_plugin(TEST_PLUGIN_ID)
+            .await
+            .expect_err("ungranted manifest dir must be collected and denied headless");
+        assert!(
+            err.to_string().contains("denied"),
+            "must fail via check_batch deny (not storage/parse), got: {}",
+            err
+        );
+    }
+
+    /// 声明目录已授权(storage fs_granted_paths 前缀命中)→ check_batch 短路
+    /// 通过,preauthorize 整体放行
+    #[tokio::test]
+    async fn preauthorize_manifest_preopen_dir_granted_passes() {
+        let host = setup_host().await;
+        let expanded = format!(
+            "{}/.bedcode-preauth-probe",
+            std::env::var("HOME").unwrap_or_else(|_| "/root".to_string())
+        );
+        host.plugins.write().await.insert(
+            TEST_PLUGIN_ID.to_string(),
+            make_plugin(TEST_PLUGIN_ID, PluginSource::FileScan, PluginState::Loaded),
+        );
+        host.plugins
+            .write()
+            .await
+            .get_mut(TEST_PLUGIN_ID)
+            .expect("test plugin in map")
+            .manifest
+            .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
+        host.storage
+            .set(
+                TEST_PLUGIN_ID,
+                "fs_granted_paths",
+                json!([expanded]),
+            )
+            .await
+            .unwrap();
+
+        let result = host.preauthorize_plugin(TEST_PLUGIN_ID).await;
+        assert!(
+            result.is_ok(),
+            "granted manifest dir must pass, got: {:?}",
+            result.err()
         );
     }
 

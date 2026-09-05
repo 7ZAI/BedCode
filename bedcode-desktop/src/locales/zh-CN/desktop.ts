@@ -308,8 +308,6 @@ export default {
       // ==================== 详情页新增 ====================
       togglingEnable: '正在启用 {name}...',
       togglingDisable: '正在停用 {name}...',
-      // 预授权前置:启用前要求用户在插件设置中预先配置(file-transfer 等)
-      enableAuthRequired: '请先在插件设置中配置共享目录',
       noDescription: '暂无描述',
       openDetail: '查看详情',
       goConfig: '配置',

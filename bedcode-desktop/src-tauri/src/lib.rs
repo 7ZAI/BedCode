@@ -592,6 +592,7 @@ pub fn run() {
             // Plugin
             commands::plugin::plugin_list_loaded,
             commands::plugin::plugin_get_info,
+            commands::plugin::plugin_preauthorize,
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
             commands::plugin::plugin_mark_error,

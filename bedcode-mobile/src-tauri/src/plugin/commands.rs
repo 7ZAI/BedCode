@@ -24,6 +24,18 @@ pub async fn plugin_get_info(app_handle: tauri::AppHandle, plugin_id: String) ->
     Ok(manager.get_info(&plugin_id).await)
 }
 
+/// 预授权（启用前置，独立命令供前端先行调用）
+///
+/// 前端 toggle 时序：先调本命令（此阶段**不显示** LoadingDialog，授权弹窗
+/// 可正常交互）→ 通过后再显示 loading 调 `plugin_activate`；拒绝则直接失败，
+/// 不进入激活流程。`activate` 内部的 preauthorize 保留为兜底（启动
+/// auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
+#[tauri::command]
+pub async fn plugin_preauthorize(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
+    let manager = app_handle.state::<Arc<PluginManager>>();
+    manager.preauthorize_plugin(&plugin_id).await
+}
+
 /// 激活插件
 #[tauri::command]
 pub async fn plugin_activate(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {

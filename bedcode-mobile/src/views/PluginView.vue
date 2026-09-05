@@ -446,6 +446,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import {
   pluginListLoaded,
   pluginSetEnabled,
+  pluginPreauthorize,
   pluginIsEnabled,
   pluginInstallFromFile,
   pluginDownload,
@@ -534,44 +535,40 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
   toggleLoadingMessage.value = t(enabled ? 'mobile.plugin.enabling' : 'mobile.plugin.disabling')
   const startedAt = Date.now()
   let timedOut = false
-  // 超时兜底：操作未在时限内完成时强制摘除遮罩 + 回退开关 + 提示，避免无限卡死
-  const timeoutTimer = setTimeout(() => {
-    timedOut = true
-    toggleLoading.value = false
-    toast.error(t('mobile.plugin.toggleTimeout'))
-    // 操作结果未知，回退开关避免误导用户
-    pluginEnabledStates.value[pluginId] = !enabled
-  }, TOGGLE_TIMEOUT_MS)
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined
 
   try {
-    await pluginSetEnabled(pluginId, enabled)
-    // toggleLoading 推迟到 pluginLoader.activate 入口:后端会在 activate
-    // 内部串行执行 preauthorize(单次合并弹窗),此期间不显示 loading,
-    // 避免授权弹窗被 LoadingDialog 遮挡(file-transfer 等需预授权场景)
+    // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 LoadingDialog,
+    // 授权弹窗可正常交互;storage preauth_paths 在此统一弹窗),通过后才
+    // 显示 loading 进入激活,拒绝则直接失败不遮罩。授权阶段不启动下方
+    // 超时(用户思考时间不可预估),激活/停用才开始计时
     if (enabled) {
-      toggleLoading.value = true
-      try {
+      await pluginPreauthorize(pluginId)
+    }
+    // 超时兜底：操作未在时限内完成时强制摘除遮罩 + 回退开关 + 提示，避免无限卡死
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
+      toggleLoading.value = false
+      toast.error(t('mobile.plugin.toggleTimeout'))
+      // 操作结果未知，回退开关避免误导用户
+      pluginEnabledStates.value[pluginId] = !enabled
+    }, TOGGLE_TIMEOUT_MS)
+
+    await pluginSetEnabled(pluginId, enabled)
+    toggleLoading.value = true
+    try {
+      if (enabled) {
         await pluginLoader.activate(pluginId)
-      } finally {
-        toggleLoading.value = false
-      }
-    } else {
-      toggleLoading.value = true
-      try {
+      } else {
         await pluginLoader.deactivate(pluginId)
-      } finally {
-        toggleLoading.value = false
       }
+    } finally {
+      toggleLoading.value = false
     }
     await loadPlugins()
   } catch (e: any) {
-    // 预授权前置错误(file-transfer 共享目录未配置):用专门文案提示去设置
     const msg = e?.message || String(e)
-    if (enabled && msg.includes('configure shared directories')) {
-      toast.error(t('mobile.plugin.enableAuthRequired'))
-    } else {
-      toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: msg }))
-    }
+    toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: msg }))
     // 恢复开关状态
     pluginEnabledStates.value[pluginId] = !enabled
   }

@@ -29,9 +29,6 @@ use tokio::sync::{Mutex as TokioMutex, RwLock};
 /// 时通过 host function 注册,优先级高于默认 storage 读取。
 pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
 
-/// file-transfer 插件 ID:启用前要求 shared_roots 非空,否则直接拒绝激活。
-pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
 /// 预授权 storage key(file-transfer mount-local 时追加写入)。
 pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
 
@@ -475,7 +472,9 @@ impl PluginManager {
     ///
     /// 路径来源:已注册的 `PreauthProvider` 优先;否则从 `PluginStorage`
     /// `preauth_paths` 数组读(file-transfer mount-local 同步写入)。
-    /// file-transfer 共享目录未配置 → 立即返回错误,提示去设置页配置。
+    /// 路径为空 → 直接放行(启用先行:file-transfer 首次启用/全部目录移除后
+    /// 均可空目录激活,共享目录配置由插件设置面板引导;硬拒绝会造成
+    /// 「配置需激活 → 激活需先配置」死锁)。
     pub async fn preauthorize_plugin(&self, plugin_id: &str) -> Result<()> {
         // 1. 收集路径(注册 provider 优先,否则 storage 数组)
         let mut paths = collect_preauth_paths(plugin_id).await;
@@ -488,17 +487,6 @@ impl PluginManager {
                         .collect();
                 }
             }
-        }
-
-        // 2. file-transfer 共享目录未配置:直接拒绝,避免启用空功能插件
-        if plugin_id == FILE_TRANSFER_PLUGIN_ID && paths.is_empty() {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "preauthorize: file-transfer requires shared_roots to be configured first"
-            );
-            return Err(crate::AppError::Plugin(
-                "Please configure shared directories in plugin settings first".to_string(),
-            ));
         }
 
         if paths.is_empty() {

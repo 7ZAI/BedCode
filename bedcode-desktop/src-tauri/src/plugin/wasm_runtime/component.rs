@@ -405,6 +405,13 @@ pub struct LoadedWasmPlugin {
     plugin_id: String,
     instance: Instance,
     store: Store<WasmPluginState>,
+    /// 实例化时实际预打开成功的主机目录（manifest 声明 ∩ 当时已授权 ∩ 创建成功）
+    ///
+    /// 激活时宿主据此判断「新授权目录是否已纳入本次实例」：声明了 WASI 预打开
+    /// 目录的插件首次启用时授权发生在 activate() 内部（fs_request_auth 弹窗），
+    /// 早于实例化；重试激活时若当前实例未覆盖新授权目录则需重建（见 host.rs
+    /// `rebuild_wasm_instance`），使 /data 挂载与授权状态一致。
+    preopened_dirs: Vec<String>,
     /// 实例创建时刻（Drop 日志计算存活时长）
     created_at: std::time::Instant,
 }
@@ -437,7 +444,7 @@ impl LoadedWasmPlugin {
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
         // 目录 /data…；无声明/未授权时为空上下文
-        let wasi_ctx = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
+        let (wasi_ctx, preopened_dirs) = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
         let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
@@ -459,8 +466,19 @@ impl LoadedWasmPlugin {
             plugin_id: plugin_id.to_string(),
             instance,
             store,
+            preopened_dirs,
             created_at: std::time::Instant::now(),
         })
+    }
+
+    /// 本次实例实际预打开成功的主机目录（空 = 无声明 / 未授权 / 创建失败）
+    ///
+    /// 供宿主激活时判定是否需要重建实例以纳入新授权目录（见 host.rs
+    /// `rebuild_wasm_instance`）：声明了 WASI 预打开目录的插件首次启用时，
+    /// 授权经 activate() 内 fs_request_auth 弹窗才落库，早于实例化；重试激活
+    /// 时若当前实例未覆盖新授权目录则需重建，/data 挂载才能与授权一致。
+    pub(crate) fn preopened_dirs(&self) -> &[String] {
+        &self.preopened_dirs
     }
 
     /// ABI 版本协商（对应 core 路径的 `__bedcode_abi_version` 校验）
@@ -674,18 +692,36 @@ impl LoadedWasmPlugin {
 /// 构建 WASI 上下文：将 manifest 声明（`wasiPreopenDirs`，经展开+授权过滤）的
 /// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
 /// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
+///
+/// 返回 `(WasiCtx, 实际预打开成功目录)`：后者供激活时判定「新授权目录是否已
+/// 纳入当前实例」（见 [`LoadedWasmPlugin::preopened_dirs`]）。
+///
+/// 目录创建是宿主职责：授权即代表用户同意插件在该路径写数据；而
+/// `preopened_dir` 要求目录已存在（wasmtime 语义），首次启用前数据目录通常
+/// 尚未创建，缺失会导致 preopen 静默失败、/data 挂不上。故此处先幂等
+/// `create_dir_all` 再挂载——修复首次启用「WASI 预打开目录未就绪」死循环。
 pub(crate) fn build_wasi_ctx(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
     declared_dirs: &[String],
-) -> wasmtime_wasi::WasiCtx {
+) -> (wasmtime_wasi::WasiCtx, Vec<String>) {
     let mut builder = WasiCtxBuilder::new();
+    let mut preopened = Vec::new();
     for (i, dir) in resolve_preopen_dirs(host_ctx, plugin_id, declared_dirs)
         .into_iter()
         .enumerate()
     {
         // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
         let guest_path = if i == 0 { "/data".to_string() } else { format!("/data{}", i) };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                dir = %dir,
+                error = %e,
+                "WASI preopen dir creation failed, directory not visible to plugin"
+            );
+            continue;
+        }
         match builder.preopened_dir(&dir, &guest_path, DirPerms::all(), FilePerms::all()) {
             Ok(_) => {
                 tracing::info!(
@@ -694,6 +730,7 @@ pub(crate) fn build_wasi_ctx(
                     "WASI preopened dir at {} (manifest declared)",
                     guest_path
                 );
+                preopened.push(dir);
             }
             Err(e) => {
                 tracing::warn!(
@@ -705,23 +742,15 @@ pub(crate) fn build_wasi_ctx(
             }
         }
     }
-    builder.build()
+    (builder.build(), preopened)
 }
 
-/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表
+/// 展开 manifest `wasiPreopenDirs` 声明为主机路径候选列表
 ///
-/// - `${home}` 变量展开为主目录绝对路径；home 不可用时跳过该项
-/// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
-///   主机位置，不得绕过授权机制建立预打开
-/// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
-fn resolve_preopen_dirs(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    declared_dirs: &[String],
-) -> Vec<String> {
-    if tokio::runtime::Handle::try_current().is_err() {
-        return Vec::new();
-    }
+/// 纯字符串处理（`${home}` 展开 + 剥尾部分隔符 + 滤空），不查授权、不依赖
+/// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
+/// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
+pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[String]) -> Vec<String> {
     let home = dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string());
     declared_dirs
         .iter()
@@ -737,12 +766,28 @@ fn resolve_preopen_dirs(
             // 剥掉（/tmp/x → tmp/x），相对化后授权匹配必然失败——Windows 盘符
             // 前缀掩盖了此问题，Linux 首次跑通前从未暴露
             let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
-            if dir.is_empty() {
-                return None;
-            }
-            let granted = block_on_async(host_ctx.fs_auth.is_granted(plugin_id, &dir));
-            granted.then_some(dir)
+            (!dir.is_empty()).then_some(dir)
         })
+        .collect()
+}
+
+/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表
+///
+/// - 先经 [`expand_preopen_declarations`] 展开
+/// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
+///   主机位置，不得绕过授权机制建立预打开
+/// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
+pub(crate) fn resolve_preopen_dirs(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+) -> Vec<String> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Vec::new();
+    }
+    expand_preopen_declarations(plugin_id, declared_dirs)
+        .into_iter()
+        .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir)))
         .collect()
 }
 
@@ -1018,5 +1063,91 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert!(out[0].ends_with(".bedcode-wasi-preopen-test"));
         std::fs::remove_dir_all(&probe).ok();
+    }
+
+    /// expand_preopen_declarations：`${home}` 展开 + 尾分隔符清理 + 滤空，
+    /// 且**不过滤未授权项**——preauthorize 收集的恰恰是未授权候选（交由
+    /// check_batch 弹窗），与 resolve_preopen_dirs 的授权过滤形成对照
+    #[test]
+    fn expand_preopen_declarations_expands_and_keeps_ungranted() {
+        let Some(home) = dirs::home_dir() else {
+            return; // 无主目录环境跳过
+        };
+        let home_str = home.to_string_lossy().trim_end_matches('/').to_string();
+
+        let out = expand_preopen_declarations(
+            "com.bedcode.test",
+            &[
+                "${home}/.bedcode/ai-chatbox".to_string(),
+                format!(" {}/trailing/ ", home_str),
+                "   ".to_string(),
+                String::new(),
+            ],
+        );
+        assert_eq!(out.len(), 2, "实际: {:?}", out);
+        assert!(out[0].ends_with("/.bedcode/ai-chatbox"), "实际: {:?}", out);
+        assert!(out[1].ends_with("/trailing"), "实际: {:?}", out);
+    }
+
+    /// 已授权但目录尚不存在（首次启用场景）：build_wasi_ctx 先幂等创建再 preopen，
+    /// 并把实际挂载目录计入返回值——修复「授权只落库、目录不创建」导致的
+    /// WASI 预打开失败死循环（Bug B 方案 A）。
+    #[tokio::test]
+    async fn build_wasi_ctx_creates_missing_granted_dir_and_reports_preopened() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        // 授权父路径（fs_auth save_granted_path 的存储语义即父目录前缀）；
+        // 目标目录刻意不存在，模拟首次启用前数据目录未创建
+        let base = std::env::temp_dir().join(format!("bedcode-wasi-create-{}", std::process::id()));
+        let missing = base.join("ai-chatbox");
+        std::fs::create_dir_all(&base).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([base.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+
+        let (wasi_ctx, preopened) = build_wasi_ctx(&ctx, pid, &[missing.to_string_lossy().to_string()]);
+        assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
+        assert!(missing.is_dir(), "host must create the missing preopen dir");
+        drop(wasi_ctx);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 目录创建失败（不可写路径）不 panic：跳过该声明，其余声明仍正常挂载
+    #[tokio::test]
+    async fn build_wasi_ctx_skips_uncreatable_dir_without_panicking() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        // 已授权目录（可创建）
+        let base = std::env::temp_dir().join(format!("bedcode-wasi-create2-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([base.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+        let ok_dir = base.join("ok");
+        // 不可创建路径：普通文件当父目录（create_dir_all 必然失败）
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let bad_dir = blocker.join("child");
+
+        let (wasi_ctx, preopened) = build_wasi_ctx(
+            &ctx,
+            pid,
+            &[
+                bad_dir.to_string_lossy().to_string(),
+                ok_dir.to_string_lossy().to_string(),
+            ],
+        );
+        assert_eq!(preopened, vec![ok_dir.to_string_lossy().to_string()]);
+        assert!(ok_dir.is_dir());
+        drop(wasi_ctx);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

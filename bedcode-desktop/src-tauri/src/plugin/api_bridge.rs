@@ -30,6 +30,25 @@ pub async fn plugin_get_info(
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
+/// 预授权（启用前置，独立命令供前端先行调用）
+///
+/// 前端 toggle 时序：先调本命令（此阶段**不显示** loading 遮罩，授权弹窗
+/// 可正常交互）→ 通过后再显示遮罩调 `plugin_activate`；拒绝则直接失败，
+/// 不进入激活流程。`plugin_activate` 内部的 preauthorize 保留为兜底
+/// （启动 auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
+#[tauri::command]
+pub async fn plugin_preauthorize(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    tracing::info!("[API] plugin_preauthorize({})", plugin_id);
+    let result = plugin_host.preauthorize_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!("[API] plugin_preauthorize({}) failed: {}", plugin_id, e);
+    }
+    result
+}
+
 /// 激活插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_activate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {

@@ -11,6 +11,10 @@ mod component;
 pub(crate) mod host_impl;
 
 pub use component::LoadedWasmPlugin;
+/// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
+pub(crate) use component::resolve_preopen_dirs;
+/// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
+pub(crate) use component::expand_preopen_declarations;
 
 use crate::db::Database;
 use crate::plugin::fs_auth::FsAuthChecker;
@@ -1197,7 +1201,7 @@ mod tests {
         assert!(status.success(), "WASI test component WASM build failed");
 
         // wasm32-wasip2 目标（Rust 1.85+）已内嵌 wasm-component-ld：产物直接是
-        // 组件（magic  asm 0d），无需再经 encode_component 编码
+        // 组件（magic \0asm 0d），无需再经 encode_component 编码
         std::fs::read(&module_path).expect("Failed to read WASI test component after build")
     }
 
