@@ -113,6 +113,11 @@ export async function pluginOpenFileLocation(pluginId: string, path: string): Pr
   return await invoke<void>('plugin_open_file_location', { pluginId, path })
 }
 
+/** 按文件名打开接收文件所在目录（历史「打开所在文件夹」真机路径；需 system:open 权限） */
+export async function pluginRevealReceivedFile(pluginId: string, fileName: string): Promise<void> {
+  return await invoke<void>('plugin_reveal_received_file', { pluginId, fileName })
+}
+
 
 // ==================== OCR 命令（spec §4.2，宿主直供不经 WASM）====================
 

@@ -251,6 +251,22 @@ export function useTasks(context: PluginContext) {
     }
   }
   async function clearHistory(): Promise<void> {
+    // 破坏性操作：先经 SDK confirm 二次确认（先例：useConsent 首连 / TrustedPeersSection 撤销）
+    let confirmed = false
+    try {
+      confirmed =
+        (await context.dialogs.showConfirm({
+          title: context.i18n.t('transfer.history.clearConfirmTitle'),
+          message: context.i18n.t('transfer.history.clearConfirmMessage'),
+          variant: 'warning',
+          confirmText: context.i18n.t('transfer.history.clearConfirmAction'),
+          cancelText: context.i18n.t('transfer.dialog.cancel'),
+          dismissible: true,
+        })) === true
+    } catch (e) {
+      console.error('[File Transfer] clear-history confirm failed:', e)
+    }
+    if (!confirmed) return
     try {
       await context.commands.execute('file-transfer.clear-history', {})
       history.value = []

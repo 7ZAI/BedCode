@@ -404,6 +404,29 @@ pub async fn plugin_invoke(
     })
 }
 
+// ==================== System Open（历史「打开所在文件夹」真机路径） ====================
+
+/// 按文件名打开接收文件所在目录（历史记录「打开所在文件夹」真实设备路径）
+///
+/// wire 不携带接收落盘路径，仅凭文件名经 Kotlin DownloadsDirPlugin
+/// openFileLocationByName（MediaStore 公共下载按名命中 → primary:Download；
+/// 未命中回退 app 私有下载目录）。需 system:open 权限，前端
+/// requireSystemOpenPermission 已校验（与 plugin_open_file* 回调链同模式）。
+#[tauri::command]
+pub async fn plugin_reveal_received_file(
+    plugin_id: String,
+    file_name: String,
+) -> Result<()> {
+    if file_name.trim().is_empty() {
+        return Err(crate::AppError::Plugin(
+            "plugin_reveal_received_file: file_name is required".to_string(),
+        ));
+    }
+    tracing::debug!(plugin_id = %plugin_id, file_name = %file_name, "reveal received file location");
+    crate::plugin::android_plugins::open_download_file_location_by_name(&file_name)
+        .await
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]

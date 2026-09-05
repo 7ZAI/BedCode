@@ -401,6 +401,10 @@ export interface SystemAPI {
   /** 用系统文件管理器打开文件所在目录（历史记录「打开所在文件夹」；
    * Android FileProvider 暴露父目录 + ACTION_VIEW，需 system:open 权限） */
   revealInDir(path: string): Promise<void>
+  /** 按文件名打开接收文件的所在目录（历史「打开所在文件夹」真机路径；
+   * 接收落点不在 wire 上，宿主 MediaStore 公共下载按 displayName 命中 →
+   * primary:Download 目录，未命中回退 app 私有下载目录；需 system:open 权限） */
+  revealReceivedFileLocation(fileName: string): Promise<void>
 }
 
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================

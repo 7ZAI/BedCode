@@ -21,7 +21,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'fs:read': ['fs.read', 'fs.copy'],
   'fs:write': ['fs.write', 'fs.copy'],
   'bus': ['bus.publish', 'bus.subscribe', 'bus.unsubscribe'],
-  'system:open': ['system.openFile', 'system.revealInDir'],
+  'system:open': ['system.openFile', 'system.revealInDir', 'system.revealReceivedFileLocation'],
   // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'peer': [],
   // OCR 引擎（宿主命令直供，不经 WASM；见 .scratch/ocr-plugin/spec.md §4.1）

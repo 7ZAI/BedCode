@@ -122,17 +122,16 @@ function handleBatchReject(batchId: string): void {
   })
 }
 
-/** 历史「打开所在文件夹」：wire 有本机路径时经宿主文件管理器显示父目录 */
+/** 历史「打开所在文件夹」：优先本地路径（wire 有 localPath，dev-shell 演示链路），
+ * 否则真机凭文件名经宿主 MediaStore 按名解析（接收落点不在 wire 上） */
 async function handleOpenLocation(id: string): Promise<void> {
   const entry = tasks.history.value.find((e) => e.id === id)
-  if (!entry?.localPath) {
-    context.dialogs.showToast(t('transfer.v2.history.noLocalFile'), 'info')
-    return
-  }
+  if (!entry) return
   try {
-    await context.system.revealInDir(entry.localPath)
+    if (entry.localPath) await context.system.revealInDir(entry.localPath)
+    else await context.system.revealReceivedFileLocation(entry.fileName)
   } catch (e) {
-    console.error('[File Transfer] revealInDir failed:', e)
+    console.error('[File Transfer] open location failed:', e)
     context.dialogs.showToast(t('transfer.v2.history.noLocalFile'), 'error')
   }
 }

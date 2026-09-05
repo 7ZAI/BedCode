@@ -258,21 +258,25 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requireSystemOpenPermission('system.revealInDir')
       return pluginCmds.pluginOpenFileLocation(info.id, path)
     },
+    async revealReceivedFileLocation(fileName: string): Promise<void> {
+      requireSystemOpenPermission('system.revealReceivedFileLocation')
+      return pluginCmds.pluginRevealReceivedFile(info.id, fileName)
+    },
   }
 
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${info.id}.${key}`] = value
       }
       const existing = hostI18n.global.getLocaleMessage(locale)
       hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return key
       const fullKey = `${info.id}.${key}`

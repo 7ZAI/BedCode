@@ -129,6 +129,55 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
         }
     }
 
+    /// 按文件名打开接收文件的所在目录（历史记录「打开所在文件夹」真机路径）
+    ///
+    /// 接收落点不在 wire 上（真实设备无路径字段，只有文件名），解析顺序：
+    /// 1. MediaStore 公共下载按 displayName 命中最新一条 → 打开
+    ///    primary:Download 文档树目录（ExternalStorageProvider，Google Files 等可打开）；
+    /// 2. 未命中（发布失败，文件仍留 app 私有下载目录）→ 私有目录按名查找 +
+    ///    FileProvider 暴露父目录。
+    /// 两者均未命中 → reject（历史条目文件已被移动/删除）。
+    /// 需 system:open 权限（前端 requireSystemOpenPermission 已校验）。
+    @Command
+    fun openFileLocationByName(invoke: Invoke) {
+        val args = invoke.parseArgs(OpenFileByNameArgs::class.java)
+        if (args.displayName.isEmpty()) {
+            invoke.reject("openFileLocationByName: displayName is required")
+            return
+        }
+        try {
+            val name = args.displayName
+            // 1. MediaStore 公共下载按名命中 → 直接打开 Download 目录
+            if (resolveMediaStoreDownloadUri(name) != null) {
+                startFolderView(primaryDownloadFolderUri())
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return
+            }
+            // 2. 私有下载目录按名查找 → FileProvider 暴露父目录
+            val dir = activity.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            val file = dir?.let { File(it, name) }?.takeIf { it.exists() }
+            if (file != null) {
+                val folder = file.parentFile ?: file
+                startFolderView(
+                    FileProvider.getUriForFile(
+                        activity,
+                        "${activity.packageName}.fileprovider",
+                        folder,
+                    ),
+                )
+                invoke.resolve(JSObject().apply { put("ok", true) })
+                return
+            }
+            invoke.reject("openFileLocationByName: file not found: $name")
+        } catch (e: ActivityNotFoundException) {
+            android.util.Log.e(TAG, "openFileLocationByName: no folder viewer found: ${e.message}")
+            invoke.reject("openFileLocationByName: no app can open this folder")
+        } catch (e: Exception) {
+            android.util.Log.e(TAG, "openFileLocationByName failed: ${e.message}")
+            invoke.reject("openFileLocationByName failed: ${e.message}")
+        }
+    }
+
     /// 启动目录查看 Intent：vnd.android.document/directory 优先，
     /// ActivityNotFoundException 时回退 resource/folder。
     ///
@@ -156,23 +205,7 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
 
     /// 解析可分享的 content URI：MediaStore 公共下载（按名查最新）→ FileProvider
     private fun resolveContentUri(path: String, displayName: String): Uri? {
-        if (displayName.isNotEmpty()) {
-            val projection = arrayOf(MediaStore.Downloads._ID)
-            val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ?"
-            val selectionArgs = arrayOf(displayName)
-            activity.contentResolver.query(
-                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                projection,
-                selection,
-                selectionArgs,
-                "${MediaStore.Downloads.DATE_ADDED} DESC",
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val id = cursor.getLong(0)
-                    return Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
-                }
-            }
-        }
+        resolveMediaStoreDownloadUri(displayName)?.let { return it }
         // MediaStore 未命中：FileProvider 暴露本地路径（app 私有外部目录）
         val file = File(path)
         if (!file.exists()) return null
@@ -182,11 +215,45 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
             file,
         )
     }
+
+    /// MediaStore Downloads 按 displayName 查最新一条的 content URI（openFile /
+    /// openFileLocationByName 共用；未命中返回 null）
+    private fun resolveMediaStoreDownloadUri(displayName: String): Uri? {
+        if (displayName.isEmpty()) return null
+        val projection = arrayOf(MediaStore.Downloads._ID)
+        val selection = "${MediaStore.Downloads.DISPLAY_NAME} = ?"
+        val selectionArgs = arrayOf(displayName)
+        activity.contentResolver.query(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            projection,
+            selection,
+            selectionArgs,
+            "${MediaStore.Downloads.DATE_ADDED} DESC",
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val id = cursor.getLong(0)
+                return Uri.withAppendedPath(MediaStore.Downloads.EXTERNAL_CONTENT_URI, id.toString())
+            }
+        }
+        return null
+    }
+
+    /// primary 卷 Download 目录的文档树 URI（按名打开所在文件夹的目标目录）
+    ///
+    /// MediaStore 命中即文件位于公共 Download 目录；经 ExternalStorageProvider
+    /// 文档树 URI 直接打开（Google Files / MIUI 文件均支持 vnd.android.document/directory）。
+    private fun primaryDownloadFolderUri(): Uri =
+        Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADownload")
 }
 
 @InvokeArg
 internal class OpenFileArgs {
     var path: String = ""
+    var displayName: String = ""
+}
+
+@InvokeArg
+internal class OpenFileByNameArgs {
     var displayName: String = ""
 }
 

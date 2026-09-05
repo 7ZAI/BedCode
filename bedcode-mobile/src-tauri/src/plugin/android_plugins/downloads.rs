@@ -147,3 +147,33 @@ pub async fn open_download_file_location(_path: &str) -> crate::Result<()> {
         "openFileLocation unavailable on this platform".to_string(),
     ))
 }
+
+/// 按文件名打开接收文件所在目录（历史记录「打开所在文件夹」真机路径）
+///
+/// 接收落点不在 wire 上（真实设备无路径字段），仅凭文件名经 Kotlin
+/// DownloadsDirPlugin.openFileLocationByName 解析：MediaStore 公共下载按名
+/// 命中 → primary:Download 目录；未命中回退 app 私有下载目录按名查找 +
+/// FileProvider 暴露父目录。需 system:open 权限。非 Android 平台返回错误。
+#[cfg(target_os = "android")]
+pub async fn open_download_file_location_by_name(display_name: &str) -> crate::Result<()> {
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
+    let payload = serde_json::json!({ "displayName": display_name });
+    // 与 open_download_file_location 同模式：显式标注 Ok 类型避免 never-type 退化为编译错误
+    let _response: serde_json::Value = handle
+        .run_mobile_plugin_async("openFileLocationByName", payload)
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke openFileLocationByName: {}", e))
+        })?;
+    Ok(())
+}
+
+/// 非 Android 平台无法经 Kotlin 打开目录
+#[cfg(not(target_os = "android"))]
+pub async fn open_download_file_location_by_name(_display_name: &str) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "openFileLocationByName unavailable on this platform".to_string(),
+    ))
+}

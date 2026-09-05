@@ -3,7 +3,8 @@
  * TransfersTab — 传输列表 tab
  *
  * 与旧版的核心差异：传输列表**直接铺在主内容区**（不再收进 bottom sheet），
- * 用四个筛选 chip 划分 全部 / 发送 / 接收 / 历史。领域模型由本层映射为
+ * 用四个筛选 chip 划分 全部 / 发送 / 接收 / 历史。「全部」为发送队列 ∪ 接收中
+ * （计数与展示同口径，历史归档单独成 tab）。领域模型由本层映射为
  * TaskCard 的纯展示 props（文案格式化在此完成，卡内不含逻辑）。
  *
  * 状态呈现仍走 spec 9.3 四色体系（ft-color-* / ft-progress-*）。
@@ -51,13 +52,30 @@ function basename(path: string): string {
 /** 发送 tab：仅本端发出的批 */
 const sendingTasks = computed(() => props.tasks.filter((tk) => tk.direction === 'upload'))
 
-/** 各筛选的条目数（chip 角标） */
+/** 各筛选的条目数（chip 角标；全部 = 发送队列 ∪ 接收中，历史归档不计入） */
 const counts = computed(() => ({
-  all: props.tasks.length,
+  all: props.tasks.length + props.receiving.length,
   sending: sendingTasks.value.length,
   receiving: props.receiving.length,
   history: props.history.length,
 }))
+
+/**
+ * 展示集合（与 chip 计数同口径）：
+ * 「全部」渲染发送队列卡 + 接收卡；「发送/接收」单筛各自只取自己的集合。
+ */
+const visibleQueue = computed(() => {
+  if (filter.value === 'sending') return sendingTasks.value
+  if (filter.value === 'receiving') return []
+  return props.tasks
+})
+
+const receivingCards = computed(() =>
+  filter.value === 'receiving' || filter.value === 'all' ? props.receiving : [],
+)
+
+/** 活动传输区是否整体为空（决定空态显隐） */
+const listEmpty = computed(() => visibleQueue.value.length === 0 && receivingCards.value.length === 0)
 
 const FILTERS: Array<{ key: TransferFilter; labelKey: string; count: number }> = computed(() => [
   { key: 'all', labelKey: 'transfer.v2.filter.all', count: counts.value.all },
@@ -218,18 +236,14 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
     </div>
 
     <div class="flex-1 min-h-0 overflow-y-auto overscroll-behavior-none px-4 pb-2">
-      <!-- 全部 / 发送：我的任务队列 -->
-      <template v-if="filter === 'all' || filter === 'sending'">
-        <div v-if="(filter === 'all' ? tasks : sendingTasks).length === 0" class="h-full flex flex-col">
-          <EmptyState
-            :icon="emptyIcon"
-            :title="emptyTitle"
-            :hint="t('transfer.minibar.noActive')"
-          />
+      <!-- 全部 / 发送 / 接收：活动传输区（全部 = 发送队列 ∪ 接收中） -->
+      <template v-if="filter !== 'history'">
+        <div v-if="listEmpty" class="h-full flex flex-col">
+          <EmptyState :icon="emptyIcon" :title="emptyTitle" :hint="t('transfer.minibar.noActive')" />
         </div>
-        <div v-else>
+        <template v-else>
           <TaskCard
-            v-for="task in filter === 'all' ? tasks : sendingTasks"
+            v-for="task in visibleQueue"
             :key="task.id"
             :id="task.id"
             :direction="task.direction"
@@ -243,17 +257,8 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :actions="taskActions(task)"
             @action="onCardAction"
           />
-        </div>
-      </template>
-
-      <!-- 接收中：仅 running 批可取消 -->
-      <template v-else-if="filter === 'receiving'">
-        <div v-if="receiving.length === 0" class="h-full flex flex-col">
-          <EmptyState :icon="emptyIcon" :title="emptyTitle" :hint="t('transfer.minibar.noActive')" />
-        </div>
-        <div v-else>
           <TaskCard
-            v-for="task in receiving"
+            v-for="task in receivingCards"
             :key="task.sessionId"
             :id="task.sessionId"
             direction="download"
@@ -270,7 +275,7 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
               : []"
             @action="onCardAction"
           />
-        </div>
+        </template>
       </template>
 
       <!-- 历史：只读 + 清空 -->
@@ -297,7 +302,9 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :state-label="t(historyStateKey(entry.state))"
             :state-class="historyStateClass(entry.state)"
             :progress="null"
-            :actions="entry.localPath ? [{ kind: 'open-location', label: t('transfer.v2.history.openFolder'), variant: 'tint' }] : []"
+            :actions="(entry.direction === 'download' && entry.state === 'completed')
+              ? [{ kind: 'open-location', label: t('transfer.v2.history.openFolder'), variant: 'tint' }]
+              : []"
           />
         </template>
       </template>

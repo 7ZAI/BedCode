@@ -352,6 +352,9 @@ export function createMockContext(pluginId: string): PluginContext {
     async revealInDir(_path: string): Promise<void> {
       pushLog('info', pluginId, 'system.revealInDir (mock) 浏览器环境不支持')
     },
+    async revealReceivedFileLocation(_fileName: string): Promise<void> {
+      pushLog('info', pluginId, 'system.revealReceivedFileLocation (mock) 浏览器环境不支持')
+    },
   }
 
   return {

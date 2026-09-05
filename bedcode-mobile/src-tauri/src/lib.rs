@@ -315,6 +315,8 @@ pub fn run() {
             crate::plugin::commands::plugin_fs_get_plugin_whitelist,
             crate::plugin::commands::plugin_log,
             crate::plugin::commands::plugin_invoke,
+            // System Open（历史「打开所在文件夹」真机路径，system:open 权限）
+            crate::plugin::commands::plugin_reveal_received_file,
             // File Service Commands（插件 TS 通道）
             // v2 批量传输批准（接收策略 / 异步批量批准）
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）

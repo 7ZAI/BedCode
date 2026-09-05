@@ -19,6 +19,8 @@ function makeContext() {
   const handlers = new Map<string, EventHandler[]>()
   const responders = new Map<string, (args: any) => unknown>()
   const notifications: Array<{ title: string; body: string }> = []
+  // clear-history 二次确认默认结果（clearHistory 先 confirm；用例翻转验证取消分支）
+  let confirmResult: unknown = true
 
   const context = {
     commands: {
@@ -45,13 +47,16 @@ function makeContext() {
       },
     },
     i18n: {
-      t(key: string, params?: Record<string, any>) {
+      t(key: string, params?: Record<string, unknown>) {
         return params ? `${key}:${JSON.stringify(params)}` : key
       },
     },
     dialogs: {
       showToast(message: string, type?: string) {
         return { message, type }
+      },
+      showConfirm(): Promise<unknown> {
+        return Promise.resolve(confirmResult)
       },
     },
     notifications: {
@@ -76,12 +81,15 @@ function makeContext() {
   }
 
   const flush = () => new Promise((r) => setTimeout(r, 0))
+  const setConfirm = (v: unknown) => {
+    confirmResult = v
+  }
 
-  return { context, calls, emit, onCommand, listenerCount, flush, notifications }
+  return { context, calls, emit, onCommand, listenerCount, flush, notifications, setConfirm }
 }
 
 /** 自持存储条目 wire 形状工厂（引擎 PeerTransferDto camelCase） */
-function makeWireTask(overrides: Record<string, any> = {}) {
+function makeWireTask(overrides: Record<string, unknown> = {}) {
   return {
     batchId: 'batch-1',
     nodeId: 'node-a',
@@ -99,8 +107,23 @@ function makeWireTask(overrides: Record<string, any> = {}) {
 }
 
 /** 接收方向条目（direction=receive） */
-function makeWireReceiving(overrides: Record<string, any> = {}) {
+function makeWireReceiving(overrides: Record<string, unknown> = {}) {
   return makeWireTask({ direction: 'receive', ...overrides })
+}
+
+/** 历史条目 wire 形状工厂（mapWireHistory 消费 camelCase 字段） */
+function makeWireHistoryEntry(overrides: Record<string, unknown> = {}) {
+  return {
+    batchId: 'h-1',
+    direction: 'receive',
+    status: 'completed',
+    files: [{ path: 'docs/a.pdf', size: 1024 }],
+    totalBytes: 1024,
+    peerName: '设备-a',
+    createdAtMs: 1,
+    updatedAtMs: 2,
+    ...overrides,
+  }
 }
 
 describe('useTasks orchestration', () => {
@@ -206,20 +229,39 @@ describe('useTasks orchestration', () => {
     })
   })
 
-  it('clearHistory routes the command and empties local history', async () => {
+  it('clearHistory confirms first, then routes the command and empties local history', async () => {
     env.onCommand('file-transfer.clear-history', () => true)
     const tasks = useTasks(env.context)
     tasks.start()
     await env.flush()
     env.emit('plugin:file-transfer:history-changed', [
-      { id: 'h-1', direction: 'upload', file_name: 'a.pdf', state: 'completed', updated_at: 1 },
+      makeWireHistoryEntry({ direction: 'receive', status: 'completed' }),
     ])
 
     await env.flush()
     await tasks.clearHistory()
 
+    // 默认确认 → 发命令并清空本地历史
     expect(env.calls).toContainEqual({ id: 'file-transfer.clear-history', args: {} })
     expect(tasks.history.value).toEqual([])
+  })
+
+  it('clearHistory aborts when the confirm dialog is cancelled', async () => {
+    env.onCommand('file-transfer.clear-history', () => true)
+    env.setConfirm(false)
+    const tasks = useTasks(env.context)
+    tasks.start()
+    await env.flush()
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ direction: 'receive', status: 'completed' }),
+    ])
+
+    await env.flush()
+    await tasks.clearHistory()
+
+    // 取消确认 → 不发命令、本地历史保留
+    expect(env.calls).not.toContainEqual({ id: 'file-transfer.clear-history', args: {} })
+    expect(tasks.history.value).toHaveLength(1)
   })
 
   it('notifies once when the queue fully settles; resets after the queue empties', async () => {

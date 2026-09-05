@@ -64,7 +64,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
     (PERMISSION_BUS, &["bus.publish", "bus.subscribe", "bus.unsubscribe"]),
-    (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir"]),
+    (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir", "system.revealReceivedFileLocation"]),
     (PERMISSION_OCR, &[
         "ocr.recognize",
         "ocr.engineStatus",
