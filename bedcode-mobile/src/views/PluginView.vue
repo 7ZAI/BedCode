@@ -550,8 +550,12 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
       timedOut = true
       toggleLoading.value = false
       toast.error(t('mobile.plugin.toggleTimeout'))
-      // 操作结果未知，回退开关避免误导用户
+      // 操作结果未知：回退开关 + 幂等拆解后端（fire-and-forget，避免遮罩收尾后
+      // 后端 WASM 实例/mDNS browse 仍存活）；拆解失败仅记日志，不阻塞收尾
       pluginEnabledStates.value[pluginId] = !enabled
+      pluginLoader.deactivate(pluginId).catch((teardownErr) => {
+        console.error('[PluginView] toggle timeout teardown failed:', teardownErr)
+      })
     }, TOGGLE_TIMEOUT_MS)
 
     await pluginSetEnabled(pluginId, enabled)
@@ -569,8 +573,20 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
   } catch (e: any) {
     const msg = e?.message || String(e)
     toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: msg }))
-    // 恢复开关状态
-    pluginEnabledStates.value[pluginId] = !enabled
+    // 失败收敛到运行时真值（三态一致：UI ⇄ 后端运行时 ⇄ 注册表）：幂等重试拆解
+    // 后端运行时（即使前端模块未加载也能停用后端）；持久化 enabled 不回写
+    //（保持用户意图，下次启动 auto-activate 自愈重试）
+    let runtimeStopped = false
+    try {
+      await pluginLoader.deactivate(pluginId)
+      runtimeStopped = true
+    } catch (teardownErr) {
+      console.error('[PluginView] toggle failure teardown failed:', teardownErr)
+    }
+    // 重拉列表刷新运行时状态徽章；重拉按持久化意图回填开关，需重新压回真值
+    await loadPlugins()
+    // UI 开关跟随运行时终态：拆解成功 → 停用；拆解失败（运行时仍活）→ 回退用户原开关方向
+    pluginEnabledStates.value[pluginId] = runtimeStopped ? false : !enabled
   }
 
   // 超时已先行收尾（隐藏遮罩 + 回退开关 + toast）则跳过，避免重复隐藏

@@ -67,7 +67,11 @@ pub(crate) fn start_browse(h: &(impl HostMdns + HostLog)) {
     }
 }
 
-/// deactivate 停止浏览并清空会话句柄映射（endpoint memo 保留——跨激活重连复用）
+/// deactivate 停止浏览并对称清空会话句柄与 endpoint memo。
+///
+/// spec D6 取舍：endpoint memo 原为跨激活重连复用而保留，本决策改为随停用
+/// 全清——收敛「百次 toggle 静态表不增长」的内存不变量；若回归证明重连体验
+/// 受损，回退为「无活跃 session 时再清」折中（issue 02 取舍注明）。
 pub(crate) fn stop_browse(h: &impl HostMdns) {
     let id = browser_id().lock().expect("browser id lock").clone();
     if !id.is_empty() {
@@ -75,6 +79,7 @@ pub(crate) fn stop_browse(h: &impl HostMdns) {
         *browser_id().lock().expect("browser id lock") = String::new();
     }
     sessions().lock().expect("sessions lock").clear();
+    endpoints().lock().expect("endpoints lock").clear();
 }
 
 // ==================== session 句柄映射 ====================
@@ -153,6 +158,30 @@ pub(crate) fn save_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bedcode_plugin_api_mobile::host::HostError;
+    use std::sync::OnceLock;
+
+    /// 静态态互斥：stop_browse / remember_session 操作进程级静态表，
+    /// 并行测试线程间必须串行化，避免互清对方断言数据
+    fn statics_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// HostMdns mock：stop_browse 语义验证用（记录调用供断言）
+    struct MockMdns {
+        stopped: std::sync::Mutex<Vec<String>>,
+    }
+
+    impl HostMdns for MockMdns {
+        fn mdns_browse(&self, _service_type: &str) -> Result<String, HostError> {
+            Ok("mdnsbr-mock".to_string())
+        }
+        fn mdns_stop_browse(&self, browser_id: &str) -> Result<bool, HostError> {
+            self.stopped.lock().expect("stopped lock").push(browser_id.to_string());
+            Ok(true)
+        }
+    }
 
     #[test]
     fn endpoint_roundtrips_camel_case() {
@@ -179,7 +208,8 @@ mod tests {
 
     #[test]
     fn resolve_endpoint_prefers_explicit_and_updates_memo() {
-        // 静态态隔离：本测试独占进程内静态（cargo test 单线程执行同模块用例序）
+        let _guard = statics_lock().lock().expect("statics lock");
+        // 静态态隔离：本测试独占 key，stop_browse 用例经 statics_lock 串行化
         let node = "memo-test-node";
         forget_session(node);
         let memo_ep = DialEndpoint { node_id: node.into(), addr: "10.0.0.1".into(), port: 1 };
@@ -195,9 +225,50 @@ mod tests {
         );
         // 未知节点无解
         assert_eq!(resolve_endpoint(None, "never-seen"), None);
-        // 断开摘除句柄但保留 memo
+        // 断开摘除句柄但保留 memo（激活期内自动重连语义，与停用全清不同）
         forget_session(node);
         assert_eq!(session_of(node), None);
         assert!(resolve_endpoint(None, node).is_some());
+    }
+
+    #[test]
+    fn stop_browse_clears_sessions_and_endpoint_memo() {
+        let _guard = statics_lock().lock().expect("statics lock");
+        // 静态态隔离：本测试独占 key + 先复位残留
+        let node = "stop-browse-memo-node";
+        forget_session(node);
+
+        // 模拟激活期产物：browser 句柄 + session 句柄 + endpoint memo
+        *browser_id().lock().expect("browser id lock") = "mdnsbr-test".to_string();
+        let ep = DialEndpoint { node_id: node.into(), addr: "10.0.0.9".into(), port: 9 };
+        remember_session(&ep, "sess-mock".into());
+        assert!(session_of(node).is_some());
+        assert!(resolve_endpoint(None, node).is_some());
+
+        let mock = MockMdns { stopped: std::sync::Mutex::new(Vec::new()) };
+        stop_browse(&mock);
+
+        // 对称清理：browser 句柄退订、sessions 与 endpoints 全清
+        assert_eq!(
+            mock.stopped.lock().expect("stopped lock").as_slice(),
+            ["mdnsbr-test"],
+            "active browser must be unsubscribed via host"
+        );
+        assert!(browser_id().lock().expect("browser id lock").is_empty());
+        assert_eq!(session_of(node), None, "sessions must be cleared");
+        assert_eq!(
+            resolve_endpoint(None, node),
+            None,
+            "endpoint memo must be cleared together with sessions"
+        );
+
+        // 幂等：重复 stop_browse 无句柄可退订、无副作用
+        stop_browse(&mock);
+        assert_eq!(
+            mock.stopped.lock().expect("stopped lock").len(),
+            1,
+            "repeat stop must not re-issue host unsubscribe"
+        );
+        assert_eq!(resolve_endpoint(None, node), None);
     }
 }

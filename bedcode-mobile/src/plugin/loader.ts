@@ -114,7 +114,13 @@ class PluginLoaderClass {
     }
   }
 
-  /** 激活指定插件 */
+  /**
+   * 激活指定插件
+   *
+   * 后端激活与前端加载分步收口：后端激活失败仅标记错误（无实例存活可拆）；
+   * 前端加载失败的对称拆解（clearPlugin + 后端停用 + markError）由 loadFrontend
+   * 内部完成，此处不重复处理
+   */
   async activate(pluginId: string): Promise<void> {
     if (this.plugins.has(pluginId)) return
 
@@ -126,54 +132,64 @@ class PluginLoaderClass {
 
     try {
       await pluginCmds.pluginActivate(pluginId)
-      await this.loadFrontend(info)
     } catch (e: any) {
       console.error(`[PluginLoader] Failed to activate ${pluginId}:`, e)
       await pluginCmds.pluginMarkError(pluginId, e.message || 'Activation failed')
+      return
     }
+    await this.loadFrontend(info)
   }
 
-  /** 停用插件 */
+  /**
+   * 停用插件
+   *
+   * 对称拆解（幂等）：即使前端模块从未加载成功（plugins Map 无记录），后端
+   * WASM 实例也可能因 plugin_activate 成功而存活（持有 mDNS browse 句柄等），
+   * 必须通知后端停用，保证「前端注册表为空 ⇔ 后端非存活」。前端侧各步存在则
+   * 执行、缺失则跳过；重复调用无副作用（后端对未激活/已停用状态幂等早退）。
+   */
   async deactivate(pluginId: string): Promise<void> {
     const plugin = this.plugins.get(pluginId)
-    if (!plugin) return
 
-    // 清理所有 Disposable
-    plugin.context._disposables.forEach((d: { dispose(): void }) => {
-      try { d.dispose() } catch (e) {
-        console.error(`[PluginLoader] Error disposing resource for ${pluginId}:`, e)
+    if (plugin) {
+      // 清理所有 Disposable
+      plugin.context._disposables.forEach((d: { dispose(): void }) => {
+        try { d.dispose() } catch (e) {
+          console.error(`[PluginLoader] Error disposing resource for ${pluginId}:`, e)
+        }
+      })
+
+      // 调用插件的 deactivate（先于注册表清理：若模块停用期间再注册，随后即被清掉）
+      if (plugin.module.deactivate) {
+        try { await plugin.module.deactivate() } catch (e) {
+          console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
+        }
       }
-    })
 
-    // 清理事件监听（兜底清理失败不中断后续流程，避免注册表残留）
+      this.plugins.delete(pluginId)
+    }
+
+    // 清理事件监听与注册表：前端模块未加载时也执行（激活期失败残留兜底）。
+    // 兜底清理失败不中断后续流程，避免注册表残留
     try {
       clearPluginEvents(pluginId)
     } catch (e) {
       console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
     }
 
-    // 清理注册表中的 context 和 UI 注册
     try {
       getPluginRegistry().clearPlugin(pluginId)
     } catch (e) {
       console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
     }
 
-    // 调用插件的 deactivate
-    if (plugin.module.deactivate) {
-      try { await plugin.module.deactivate() } catch (e) {
-        console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
-      }
-    }
-
-    // 通知后端
+    // 通知后端（无论前端模块是否加载过）
     try {
       await pluginCmds.pluginDeactivate(pluginId)
     } catch (e) {
       console.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
     }
 
-    this.plugins.delete(pluginId)
     console.log(`[PluginLoader] Plugin deactivated: ${pluginId}`)
   }
 
@@ -202,6 +218,15 @@ class PluginLoaderClass {
       console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       // 激活失败：摘除激活期间可能残留的注册（含动态路由），避免半激活状态
       getPluginRegistry().clearPlugin(manifest.id)
+      // 对称拆解后端：plugin_activate 可能已成功（WASM 实例存活，状态
+      // Activated/Degraded），必须先于 markError 停用——后端 deactivate 仅对
+      // Activated/Degraded 生效，markError 置 Error 后实例将无法再拆解。
+      // 保证「前端注册表为空 ⇔ 后端非存活」，重启用从干净状态重启（不命中幂等早退）
+      try {
+        await pluginCmds.pluginDeactivate(manifest.id)
+      } catch (deactivateErr) {
+        console.error(`[PluginLoader] Error tearing down backend for ${manifest.id}:`, deactivateErr)
+      }
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }
   }

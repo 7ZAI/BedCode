@@ -8,9 +8,11 @@
     <main class="flex-1 min-h-0">
       <router-view v-slot="{ Component, route }">
         <!-- TerminalView 不使用 keep-alive：buffer store 持有数据，组件正常销毁/重建 -->
-        <!-- MobileSwipeContainer 保持 keep-alive 缓存 -->
+        <!-- MobileSwipeContainer 保持 keep-alive 缓存；:key 使缓存以路由切换为准，
+             防止同名宿主组件跨路由复用实例（插件停用后返回工具箱「先渲染旧帧
+             再消失」的边角竞态，spec D7 防御性加固） -->
         <keep-alive v-if="route.name !== 'mobile-terminal'" :include="['MobileSwipeContainer']">
-          <component :is="Component" />
+          <component :is="Component" :key="route.fullPath" />
         </keep-alive>
         <component v-else :is="Component" :key="route.fullPath" />
       </router-view>
