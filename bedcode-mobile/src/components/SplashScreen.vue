@@ -228,6 +228,9 @@ function revealDone(): void {
   typedCaretOn.value = false
   doneShown.value = true
   doneRevealAt = performance.now()
+  // 以实际揭示时刻重锚退出:退出定时器此前按预定时刻排程,低性能设备上
+  // 叙事定时器普遍迟到,不重锚会让定格一拍被跳过(就绪行闪现即淡出)
+  scheduleExit()
 }
 
 /**
@@ -549,7 +552,11 @@ html:not(.dark) .scanlines {
 /* ==================== 开机日志 ==================== */
 
 .bootlog {
-  margin-top: auto;
+  /* 开机日志整体居中、紧随品牌区下方:作为开屏主信息随图标排布,
+     底部停靠交给 footer(原 margin-top:auto 已移走) */
+  margin-top: 7cqh;
+  align-self: center;
+  width: fit-content;
   font-size: var(--font-size-sm);
   line-height: 2.1;
   color: var(--mobile-text-secondary);
@@ -638,6 +645,8 @@ html:not(.dark) .scanlines {
 
 .progress {
   margin-top: 20px;
+  /* 与开机日志同轴居中,构成「图标 → 日志 → 进度」纵向中轴 */
+  align-self: center;
   display: flex;
   align-items: center;
   gap: 3px;
@@ -682,7 +691,8 @@ html:not(.dark) .scanlines {
 /* ==================== 底栏 ==================== */
 
 .footer {
-  margin-top: 16px;
+  /* 接管底部停靠(原由 .bootlog 的 margin-top:auto 承担) */
+  margin-top: auto;
   display: flex;
   justify-content: space-between;
   align-items: baseline;
@@ -690,6 +700,40 @@ html:not(.dark) .scanlines {
   letter-spacing: 0.16em;
   text-transform: uppercase;
   color: var(--mobile-text-muted);
+}
+
+/* ==================== 浅色模式:信息文字增强 ==================== */
+
+/* 浅色纸面上 muted(#ABA492)对比度不足,信息类文字整体提一档:
+   叙事正文(命令/任务行)用 primary 墨色,辅助符号(三角/百分比/页脚)用
+   secondary。写法注意同前文:勿用 :global() 后代形式,scoped 编译器
+   会丢掉 :global() 之后的后代选择器 */
+html:not(.dark) .bootlog {
+  color: var(--mobile-text-primary);
+}
+
+html:not(.dark) .task {
+  color: var(--mobile-text-primary);
+}
+
+html:not(.dark) .tri {
+  color: var(--mobile-text-secondary);
+}
+
+html:not(.dark) .dots {
+  opacity: 0.8;
+}
+
+html:not(.dark) .pct {
+  color: var(--mobile-text-secondary);
+}
+
+html:not(.dark) .tagline {
+  color: var(--mobile-text-secondary);
+}
+
+html:not(.dark) .footer {
+  color: var(--mobile-text-secondary);
 }
 
 /* ==================== 无障碍:跟随系统减少动态 ==================== */
