@@ -68,6 +68,22 @@ pub const PEER_DISCOVERY_TTL: Duration = Duration::from_secs(120);
 /// 守护任务的过期清扫周期
 pub const SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
+/// 周期 re-announce 间隔：mdns-sd 注册服务后只做启动 announce，不主动周期
+/// 广播；而 browse 的查询按 RFC 6762 指数退避（上限 1 小时），远超
+/// [`PEER_DISCOVERY_TTL`]，会造成「启动互见 → 记录过期 → 互不可见」
+/// （2026-09-06 双端实测）。守护每此间隔重复 register 触发 unsolicited
+/// announce（register 幂等：同名覆盖，不 probe、不发 goodbye）。
+pub const REANNOUNCE_INTERVAL: Duration = Duration::from_secs(45);
+
+/// 周期主动重查间隔：重新 browse 一次服务类型，触发查询突发 + mdns-sd
+/// 内部缓存重放，刷新本端记录续期。
+///
+/// 被动 announce 在真机 WiFi 环境双向丢失率极高（2026-09-06 实证：手机
+/// 30 分钟内未收到桌面端任一 re-announce，桌面端 40 次中也只收到 2-3 次），
+/// 而「查询 → 应答」路径始终秒级可达。本间隔同时规避 browse 指数退避
+/// （上限 1 小时）远超 [`PEER_DISCOVERY_TTL`] 导致的记录静默过期。
+pub const REQUERY_INTERVAL: Duration = Duration::from_secs(30);
+
 /// 设备名截断上限（字节）
 ///
 /// mdns-sd 要求单条 TXT 键值 ≤255 字节，200 留足余量；按 UTF-8 字符边界截断。
@@ -123,6 +139,24 @@ impl DiscoveredPeerRecord {
             node_id: self.node_id.clone(),
             addr: self.addr,
         }
+    }
+
+    /// 转为 `mdns:found` wire 载荷（宿主快照重发用：插件请求刷新时把当前
+    /// 缓存逐条重推，前端 parseFoundPayload 直接消费，与实时事件同形状）
+    pub fn found_wire_payload(&self) -> serde_json::Value {
+        let short = self.node_id.short_fingerprint();
+        let instance_name = format!("{INSTANCE_PREFIX}{short}.{SERVICE_TYPE}");
+        serde_json::json!({
+            "instanceName": instance_name,
+            "addresses": [self.addr.ip().to_string()],
+            "port": self.addr.port(),
+            "txtRecords": {
+                (TXT_KEY_ID): self.node_id.as_str(),
+                (TXT_KEY_NAME): self.device_name,
+                (TXT_KEY_VER): self.protocol_version.to_string(),
+                (TXT_KEY_CAP): format!("{:x}", self.capabilities),
+            },
+        })
     }
 }
 
@@ -368,6 +402,12 @@ pub struct DiscoveryDaemon {
     shutdown_tx: watch::Sender<bool>,
     /// 事件循环任务句柄（join 用）
     event_task: Option<tokio::task::JoinHandle<()>>,
+    /// 周期 re-announce 任务句柄（join 用）
+    reannounce_task: Option<tokio::task::JoinHandle<()>>,
+    /// 即时重查请求通道（宿主手动刷新触发，不等下一个周期 tick）
+    requery_tx: tokio::sync::mpsc::Sender<()>,
+    /// 周期 requery 任务句柄（join 用）
+    requery_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for DiscoveryDaemon {
@@ -434,10 +474,39 @@ impl DiscoveryDaemon {
                 Err(e) => tracing::error!("peer discovery event loop panicked: {e}"),
             }
         }
+        // ⑥ join 周期 re-announce 任务：停机标志已置位，至多一个 tick 内退出
+        if let Some(task) = self.reannounce_task.take() {
+            match task.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {
+                    tracing::debug!("peer discovery re-announce loop cancelled")
+                }
+                Err(e) => tracing::error!("peer discovery re-announce loop panicked: {e}"),
+            }
+        }
+        // ⑦ join 周期 requery 任务：同上
+        if let Some(task) = self.requery_task.take() {
+            match task.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {
+                    tracing::debug!("peer discovery requery loop cancelled")
+                }
+                Err(e) => tracing::error!("peer discovery requery loop panicked: {e}"),
+            }
+        }
         tracing::info!(service = %self.fullname, "peer mDNS discovery daemon stopped");
         match first_err {
             Some(e) => Err(e),
             None => Ok(()),
+        }
+    }
+
+    /// 请求立即重查：重新 browse 触发查询突发 + 缓存重放（对端设备列表
+    /// 手动刷新用，不等下一个 [`REQUERY_INTERVAL`] 周期）。
+    /// 同步 try_send（通道满即丢弃）：调用方可能持宿主状态锁，禁止 await
+    pub fn request_requery(&self) {
+        if let Err(e) = self.requery_tx.try_send(()) {
+            tracing::debug!("peer mDNS requery request dropped: {e}");
         }
     }
 }
@@ -493,6 +562,10 @@ pub fn disable_virtual_interfaces(daemon: &ServiceDaemon) {
 pub struct DiscoveryAdvertiser {
     daemon: Option<ServiceDaemon>,
     fullname: String,
+    /// 停机标志（通知周期 re-announce 任务退出）
+    shutdown_tx: watch::Sender<bool>,
+    /// 周期 re-announce 任务句柄（join 用）
+    reannounce_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for DiscoveryAdvertiser {
@@ -504,8 +577,11 @@ impl std::fmt::Debug for DiscoveryAdvertiser {
 }
 
 impl DiscoveryAdvertiser {
-    /// 优雅关停：注销广播（对端即时移除本机）→ 关停守护线程
+    /// 优雅关停：注销广播（对端即时移除本机）→ 关停守护线程 → join 周期任务
     pub async fn stop(mut self) -> Result<()> {
+        if self.shutdown_tx.send(true).is_err() {
+            tracing::debug!("peer mDNS re-announce loop already exited before stop");
+        }
         let mut first_err: Option<PeerNetError> = None;
         if let Some(daemon) = self.daemon.take() {
             match daemon.unregister(&self.fullname) {
@@ -529,6 +605,15 @@ impl DiscoveryAdvertiser {
                 Err(source) => {
                     first_err.get_or_insert(PeerNetError::MdnsShutdown { source });
                 }
+            }
+        }
+        if let Some(task) = self.reannounce_task.take() {
+            match task.await {
+                Ok(()) => {}
+                Err(e) if e.is_cancelled() => {
+                    tracing::debug!("peer mDNS re-announce loop cancelled")
+                }
+                Err(e) => tracing::error!("peer mDNS re-announce loop panicked: {e}"),
             }
         }
         match first_err {
@@ -575,15 +660,27 @@ pub fn spawn_peer_mdns_advertiser(
     .enable_addr_auto();
 
     daemon
-        .register(service_info)
+        .register(service_info.clone())
         .map_err(|source| PeerNetError::MdnsRegister { source })?;
+    // 周期 re-announce：mdns-sd 注册后不主动周期广播，须手动续期（见常量注释）
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let reannounce_task = tokio::spawn(run_reannounce_loop(
+        daemon.clone(),
+        service_info,
+        shutdown_rx,
+    ));
     tracing::info!(
         service = %fullname,
         port = listen_port,
         device = %config.device_name,
         "peer mDNS advertiser started (browse retired to host-mdns)"
     );
-    Ok(DiscoveryAdvertiser { daemon: Some(daemon), fullname })
+    Ok(DiscoveryAdvertiser {
+        daemon: Some(daemon),
+        fullname,
+        shutdown_tx,
+        reannounce_task: Some(reannounce_task),
+    })
 }
 
 pub fn spawn_peer_mdns_daemon(
@@ -623,19 +720,36 @@ pub fn spawn_peer_mdns_daemon(
     .enable_addr_auto();
 
     daemon
-        .register(service_info)
+        .register(service_info.clone())
         .map_err(|source| PeerNetError::MdnsRegister { source })?;
     let receiver = daemon
         .browse(SERVICE_TYPE)
         .map_err(|source| PeerNetError::MdnsBrowse { source })?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // 重查换绑通道：周期/即时 requery 把新 browse receiver 移交事件循环
+    let (swap_tx, swap_rx) = tokio::sync::mpsc::channel::<mdns_sd::Receiver<ServiceEvent>>(4);
+    let (requery_tx, requery_rx) = tokio::sync::mpsc::channel::<()>(8);
     let event_task = tokio::spawn(run_discovery_loop(
         receiver,
         cache,
         own_node_id,
-        shutdown_rx,
+        shutdown_rx.clone(),
         config.events_tx,
+        swap_rx,
+    ));
+    // 周期 re-announce：mdns-sd 注册后不主动周期广播，须手动续期（见常量注释）
+    let reannounce_task = tokio::spawn(run_reannounce_loop(
+        daemon.clone(),
+        service_info,
+        shutdown_rx.clone(),
+    ));
+    // 周期主动重查：被动 announce 真机环境不可靠，查询→应答是唯一稳定刷新路径
+    let requery_task = tokio::spawn(run_requery_loop(
+        daemon.clone(),
+        requery_rx,
+        swap_tx,
+        shutdown_rx,
     ));
     tracing::info!(
         service = %fullname,
@@ -648,52 +762,161 @@ pub fn spawn_peer_mdns_daemon(
         fullname,
         shutdown_tx,
         event_task: Some(event_task),
+        reannounce_task: Some(reannounce_task),
+        requery_tx,
+        requery_task: Some(requery_task),
     })
+}
+
+/// 周期 re-announce 任务：每隔 [`REANNOUNCE_INTERVAL`] 重复 register 自身服务
+///
+/// mdns-sd 的 `register` 幂等（同名覆盖），重复调用直接触发 unsolicited
+/// announce（RFC 6762 §8.3 自动补发第二条），不 probe、不发 goodbye——对端
+/// 不会误判离线，又能持续收到续期广播，规避 browse 查询指数退避（上限 1 小时）
+/// 超过缓存 TTL 导致的「启动互见、随后互不可见」。
+async fn run_reannounce_loop(
+    daemon: ServiceDaemon,
+    service_info: ServiceInfo,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(REANNOUNCE_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // 首个 tick 立即到期：跳过（调用方启动时已 register 过一次）
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            _ = interval.tick() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+                match daemon.register(service_info.clone()) {
+                    Ok(()) => tracing::debug!("peer mDNS re-announce sent"),
+                    Err(e) => tracing::warn!(error = %e, "peer mDNS re-announce register failed"),
+                }
+            }
+        }
+    }
+    tracing::debug!("peer mDNS re-announce loop exited");
 }
 
 /// 守护事件循环：三相事件处理 + 周期性过期清扫
 ///
 /// 退出条件（任一）：① `stop_browse` 断开 channel；② 停机标志置位
 /// （stop_browse 失败时的兜底，最迟一个 SWEEP_INTERVAL 后生效）。
+/// 浏览 receiver 支持换绑（`swap_rx`）：周期重查任务重新 browse 时把新
+/// receiver 移交过来（mdns-sd 同类型重复 browse 覆盖内部 querier，旧
+/// receiver 随之失效）。
 async fn run_discovery_loop(
-    receiver: mdns_sd::Receiver<ServiceEvent>,
+    mut receiver: mdns_sd::Receiver<ServiceEvent>,
     cache: Arc<DiscoveryCache>,
     own_node_id: NodeId,
-    shutdown_rx: watch::Receiver<bool>,
+    mut shutdown_rx: watch::Receiver<bool>,
     events_tx: Option<tokio::sync::mpsc::Sender<DiscoveryEvent>>,
+    mut swap_rx: tokio::sync::mpsc::Receiver<mdns_sd::Receiver<ServiceEvent>>,
 ) {
     let mut last_sweep = Instant::now();
     loop {
         if *shutdown_rx.borrow() {
             break;
         }
-        match receiver.recv_timeout(SWEEP_INTERVAL) {
-            Ok(event) => {
-                let event_out = handle_browse_event(&cache, &own_node_id, event);
-                if let (Some(ev), Some(tx)) = (event_out, events_tx.as_ref()) {
-                    // 推送失败（宿主消费者已退出/通道满）只记日志：发现缓存仍自持
-                    if tx.send(ev).await.is_err() {
-                        tracing::debug!("peer discovery event channel closed");
-                    }
-                }
-                // 高频事件流下 Timeout 分支可能长期不触发，清扫按墙钟到期兜底
-                let now = Instant::now();
-                if now.duration_since(last_sweep) >= SWEEP_INTERVAL {
-                    sweep_and_log(&cache);
-                    last_sweep = now;
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
                 }
             }
-            Err(recv_err) => match recv_err {
-                flume::RecvTimeoutError::Disconnected => break,
-                // Timeout = 本周期无事件，正好执行周期性过期清扫
-                flume::RecvTimeoutError::Timeout => {
-                    sweep_and_log(&cache);
-                    last_sweep = Instant::now();
+            new_receiver = swap_rx.recv() => {
+                match new_receiver {
+                    Some(rx) => {
+                        receiver = rx;
+                        tracing::debug!("peer mDNS browse receiver swapped (periodic requery)");
+                    }
+                    // 重查任务已退出（停机中）：继续消费剩余事件直至断连
+                    None => {}
                 }
-            },
+            }
+            // flume 0.12 无 recv_async_timeout：用 tokio 超时包裹 recv_async 同义实现
+            event = tokio::time::timeout(SWEEP_INTERVAL, receiver.recv_async()) => {
+                match event {
+                    Ok(Ok(event)) => {
+                        let event_out = handle_browse_event(&cache, &own_node_id, event);
+                        if let (Some(ev), Some(tx)) = (event_out, events_tx.as_ref()) {
+                            // 推送失败（宿主消费者已退出/通道满）只记日志：发现缓存仍自持
+                            if let Err(e) = tx.send(ev).await {
+                                tracing::debug!("peer mDNS discovery event send failed: {e}");
+                            }
+                        }
+                        // 高频事件流下 Timeout 分支可能长期不触发，清扫按墙钟到期兜底
+                        let now = Instant::now();
+                        if now.duration_since(last_sweep) >= SWEEP_INTERVAL {
+                            sweep_and_log(&cache);
+                            last_sweep = now;
+                        }
+                    }
+                    // 断连 = stop_browse 退订（守护停机路径）
+                    Ok(Err(_recv_err)) => break,
+                    // 超时 = 本周期无事件，正好执行周期性过期清扫
+                    Err(_elapsed) => {
+                        sweep_and_log(&cache);
+                        last_sweep = Instant::now();
+                    }
+                }
+            }
         }
     }
     tracing::debug!("peer mDNS discovery event loop exited");
+}
+
+/// 周期主动重查任务：每 [`REQUERY_INTERVAL`] 重新 browse 一次服务类型
+///
+/// mdns-sd 对同类型重复 browse 会覆盖内部 querier（立即重发查询突发）并
+/// 重放内部缓存记录到新 receiver；新 receiver 经 `swap_tx` 移交事件循环
+/// 换绑。被动 announce 在真机 WiFi 环境不可靠（见 [`REQUERY_INTERVAL`]），
+/// 主动查询是唯一稳定的对端刷新路径。宿主可经 [`DiscoveryDaemon::
+/// request_requery`] 发起即时重查（设备列表手动刷新）。
+async fn run_requery_loop(
+    daemon: ServiceDaemon,
+    mut requery_rx: tokio::sync::mpsc::Receiver<()>,
+    swap_tx: tokio::sync::mpsc::Sender<mdns_sd::Receiver<ServiceEvent>>,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let mut interval = tokio::time::interval(REQUERY_INTERVAL);
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // 首个 tick 立即到期：跳过（spawn_peer_mdns_daemon 启动时已 browse 过一次）
+    interval.tick().await;
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            _ = requery_rx.recv() => {}
+            _ = interval.tick() => {}
+        }
+        if *shutdown_rx.borrow() {
+            break;
+        }
+        match daemon.browse(SERVICE_TYPE) {
+            Ok(new_receiver) => {
+                if swap_tx.send(new_receiver).await.is_err() {
+                    // 事件循环已退出（停机中）：无消费方，退出
+                    break;
+                }
+                tracing::debug!("peer mDNS periodic requery issued");
+            }
+            Err(e) => tracing::warn!(error = %e, "peer mDNS periodic requery browse failed"),
+        }
+    }
+    tracing::debug!("peer mDNS requery loop exited");
 }
 
 /// 单次清扫并按移除数量分级记录

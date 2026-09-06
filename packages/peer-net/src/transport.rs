@@ -247,6 +247,7 @@ pub(crate) async fn run_accept_loop(
                     let runtime = Arc::clone(&runtime);
                     let mut conn_shutdown = shutdown.clone();
                     conn_tasks.spawn(async move {
+                        enable_keepalive(&tcp);
                         if let Err(e) =
                             serve_inbound(tcp, peer_addr, acceptor, runtime, &mut conn_shutdown).await
                         {
@@ -435,6 +436,18 @@ async fn deliver_to_handler(
 /// - 中间态 `PendingConfirmation` → 继续等待终态帧（宿主思考时间可达
 ///   [`CONFIRM_TIMEOUT`]）；
 /// - 证书指纹与期望不符 → [`PeerNetError::TlsBindingMismatch`]（AC#3 断言点）。
+/// LAN 活性探测：拨号/接听即设 TCP keepalive
+///
+/// 对端静默死亡（WiFi 骤断/休眠等无 FIN 场景）时探测失败让挂起的读写以
+/// 错误返回——宿主侧会话活性泵与入站 handler 据此感知中断并发断开事件。
+/// 时间窗取「30s 静默 + 10s×3 探测」，LAN 规模下断网约 1 分钟内收敛。
+fn enable_keepalive(tcp: &TcpStream) {
+    let ka = socket2::TcpKeepalive::new().with_time(Duration::from_secs(30));
+    #[cfg(unix)]
+    let ka = ka.with_interval(Duration::from_secs(10)).with_retries(3);
+    let _ = socket2::SockRef::from(tcp).set_tcp_keepalive(&ka);
+}
+
 pub(crate) async fn dial(
     identity: &NodeIdentity,
     own_cert_der: &[u8],
@@ -447,6 +460,7 @@ pub(crate) async fn dial(
             addr: record.addr,
             source: e,
         })?;
+    enable_keepalive(&tcp);
 
     let config = crate::tls::client_config(&record.node_id, identity, own_cert_der)?;
     let connector = TlsConnector::from(Arc::new(config));

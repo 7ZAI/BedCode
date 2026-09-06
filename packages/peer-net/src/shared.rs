@@ -228,13 +228,16 @@ impl ConnectionHandler for SharedDirHandler {
         let events = self.events.clone();
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
-            // ---- 首帧分流（信任放行后应立即到达）----
-            let first = match tokio::time::timeout(REQUEST_TIMEOUT, message::read_frame(&mut conn))
-                .await
-            {
-                Err(_) => Err(proto_violation("share", "timed out waiting for first frame")),
-                Ok(Err(e)) => Err(sess_io("share", e)),
-                Ok(Ok(frame)) => Ok(frame),
+            // ---- 首帧分流 ----
+            // 不设首帧超时：拨号侧的常驻会话连接握手后不发任何帧（数据面操作
+            // 各自新拨、请求即时到达），按会话语义常驻等待。连接活性由拨号/
+            // 接听时设置的 TCP keepalive（对端静默死亡在探测窗口内以错误浮现）
+            // 与 EOF 保证，宿主会话泵据此外发断开事件。旧实现 10s 首帧超时会
+            // 掐掉闲置会话连接——被连侧「已连接」约 10s 后静默消失，而拨号侧
+            // 无从感知，两端连接态自此失真
+            let first = match message::read_frame(&mut conn).await {
+                Err(e) => Err(sess_io("share", e)),
+                Ok(frame) => Ok(frame),
             };
             // 配置快照：本条连接生命周期内固定，热更新只影响后续连接
             let config = inner
