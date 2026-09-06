@@ -24,6 +24,8 @@ const props = defineProps<{
   history: HistoryEntry[]
   /** 对端名映射（peerId → 展示名） */
   peerNames: Record<string, string>
+  /** 本端下载目录（下载完成「打开所在目录」定位用） */
+  downloadDir: string
 }>()
 
 const emit = defineEmits<{
@@ -31,6 +33,7 @@ const emit = defineEmits<{
   (e: 'retry', id: string): void
   (e: 'cancelReceiving', sessionId: string): void
   (e: 'clearHistory'): void
+  (e: 'openFolder', path: string): void
 }>()
 
 /** 队列 tab（自绘分段控件，禁原生 select） */
@@ -44,6 +47,7 @@ const STATE_KEYS: Record<TaskStateName, string> = {
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
   cancelled: 'transfer.task.state.cancelled',
+  interrupted: 'transfer.task.state.interrupted',
 }
 
 /** 状态 → chip 样式（四色体系） */
@@ -53,6 +57,7 @@ const CHIP_CLASS: Record<TaskStateName, string> = {
   failed: 'ft-chip--fail',
   rejected: 'ft-chip--reject',
   cancelled: 'ft-chip--queued',
+  interrupted: 'ft-chip--queued',
 }
 
 function stateLabel(state: TaskStateName): string {
@@ -131,10 +136,57 @@ function peerNameOf(peerId: string): string {
 }
 
 /** 接收任务对端展示名 */
-function receivingPeerName(task: ReceivingTask): string {
-  const name = (task as any).peerName as string | undefined
+function receivingPeerName(task: ReceivingTask | undefined): string {
+  if (!task) return ''
+  const name = task.peerName as string | undefined
   if (name) return name
   return task.peerId ? peerNameOf(task.peerId) : ''
+}
+
+/** 接收任务状态归一化：running/transferring → transferring，其余终态原样 */
+function receivingStateName(r: ReceivingTask | undefined): TaskStateName {
+  const s = r?.state
+  if (
+    s === 'completed' ||
+    s === 'failed' ||
+    s === 'rejected' ||
+    s === 'cancelled' ||
+    s === 'interrupted'
+  ) {
+    return s
+  }
+  return 'transferring'
+}
+
+/** 接收任务进度百分比 */
+function receivingPercent(r: ReceivingTask | undefined): number {
+  if (!r) return 0
+  if (r.size <= 0) return r.state === 'completed' ? 100 : 0
+  return Math.min(100, Math.round(((r.offset ?? 0) / r.size) * 100))
+}
+
+/** 接收任务是否展示进度条（传输中或已完成） */
+function receivingHasProgress(r: ReceivingTask | undefined): boolean {
+  return !!r && (r.state === 'transferring' || r.state === 'running' || r.state === 'completed')
+}
+
+/** 按 sessionId 取接收任务（全部 tab 混排时用） */
+function receivingById(id: string): ReceivingTask | undefined {
+  return props.receiving.find((r) => r.sessionId === id)
+}
+
+/** 本地落盘路径：下载目录 + 首文件相对路径（reveal 定位用；缺相对路径退回下载目录） */
+function localPathOf(relPath: string | null | undefined): string | null {
+  if (!props.downloadDir) return null
+  if (!relPath) return props.downloadDir
+  const base = props.downloadDir.replace(/[\\/]+$/, '')
+  return `${base}/${relPath.replace(/^[\\/]+/, '')}`
+}
+
+/** 下载完成 → 打开本地所在目录（无落盘目录时静默忽略） */
+function openFolderAt(relPath: string | null | undefined): void {
+  const p = localPathOf(relPath)
+  if (p) emit('openFolder', p)
 }
 
 /** tab 列表：正在发送 = 本端上传；全部 = 本端任务 + 接收任务合并倒序 */
@@ -244,6 +296,22 @@ function historyReason(entry: HistoryEntry): string {
                 <span class="ft-chip" :class="chipClass(entry.state)">{{
                   historyResult(entry)
                 }}</span>
+                <!-- 下载完成且落盘：打开本地所在目录 -->
+                <button
+                  v-if="entry.direction === 'download' && entry.state === 'completed'"
+                  class="ft-mini-btn"
+                  :title="t('transfer.history.openFolder')"
+                  @click="openFolderAt(entry.relPath)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                    />
+                  </svg>
+                </button>
               </div>
               <div class="ft-history-meta">
                 <span>{{ formatClock(entry.updatedAt) }}</span>
@@ -286,9 +354,25 @@ function historyReason(entry: HistoryEntry): string {
               <span class="ft-task-name" :title="r.remotePath">{{
                 displayName(r.remotePath)
               }}</span>
-              <span class="ft-chip" :class="chipClass(r.state)">{{
-                stateLabel(r.state === 'transferring' ? 'transferring' : r.state)
+              <span class="ft-chip" :class="chipClass(receivingStateName(r))">{{
+                stateLabel(receivingStateName(r))
               }}</span>
+              <!-- 下载完成：打开本地所在目录 -->
+              <button
+                v-if="r.state === 'completed'"
+                class="ft-mini-btn"
+                :title="t('transfer.task.openDir')"
+                @click="openFolderAt(r.relPath)"
+              >
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                  />
+                </svg>
+              </button>
               <!-- 接收任务只可取消（spec §14.3：暂停/恢复仅限发起方） -->
               <button
                 class="ft-mini-btn"
@@ -305,9 +389,11 @@ function historyReason(entry: HistoryEntry): string {
                 </svg>
               </button>
             </div>
+            <div v-if="receivingHasProgress(r)" class="ft-pbar">
+              <span class="ft-pbar-fill" :style="{ width: receivingPercent(r) + '%' }"></span>
+            </div>
             <div class="ft-task-meta">
-              <span>{{ t('transfer.task.receiving') }}</span>
-              <span>{{ formatBytes(r.size) }}</span>
+              <span>{{ formatBytes(r.offset ?? 0) }} / {{ formatBytes(r.size) }}</span>
               <span v-if="receivingPeerName(r)">{{ receivingPeerName(r) }}</span>
             </div>
           </div>
@@ -336,15 +422,31 @@ function historyReason(entry: HistoryEntry): string {
                     />
                   </svg>
                 </span>
-                <span
-                  class="ft-task-name"
-                  :title="receiving.find((r) => r.sessionId === item.id)?.remotePath ?? ''"
-                >
-                  {{
-                    displayName(receiving.find((r) => r.sessionId === item.id)?.remotePath ?? '')
-                  }}
+                <span class="ft-task-name" :title="receivingById(item.id)?.remotePath ?? ''">
+                  {{ displayName(receivingById(item.id)?.remotePath ?? '') }}
                 </span>
-                <span class="ft-chip ft-chip--active">{{ t('transfer.task.receiving') }}</span>
+                <span
+                  class="ft-chip"
+                  :class="chipClass(receivingStateName(receivingById(item.id)))"
+                >
+                  {{ stateLabel(receivingStateName(receivingById(item.id))) }}
+                </span>
+                <!-- 下载完成：打开本地所在目录 -->
+                <button
+                  v-if="receivingById(item.id)?.state === 'completed'"
+                  class="ft-mini-btn"
+                  :title="t('transfer.task.openDir')"
+                  @click="openFolderAt(receivingById(item.id)?.relPath)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                    />
+                  </svg>
+                </button>
                 <button
                   class="ft-mini-btn"
                   :title="t('transfer.task.cancel')"
@@ -360,9 +462,19 @@ function historyReason(entry: HistoryEntry): string {
                   </svg>
                 </button>
               </div>
+              <div v-if="receivingHasProgress(receivingById(item.id))" class="ft-pbar">
+                <span
+                  class="ft-pbar-fill"
+                  :style="{ width: receivingPercent(receivingById(item.id)) + '%' }"
+                ></span>
+              </div>
               <div class="ft-task-meta">
-                <span>{{
-                  formatBytes(receiving.find((r) => r.sessionId === item.id)?.size ?? 0)
+                <span>
+                  {{ formatBytes(receivingById(item.id)?.offset ?? 0) }} /
+                  {{ formatBytes(receivingById(item.id)?.size ?? 0) }}
+                </span>
+                <span v-if="receivingPeerName(receivingById(item.id))">{{
+                  receivingPeerName(receivingById(item.id))
                 }}</span>
               </div>
             </div>

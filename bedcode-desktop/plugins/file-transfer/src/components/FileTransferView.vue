@@ -28,7 +28,7 @@ const {
   rows: deviceRows,
   peers,
   peer,
-  connOnline,
+  connectedIds,
   connect: connectDevice,
   disconnect: disconnectDevice,
   switchPeer,
@@ -71,6 +71,9 @@ const {
   setApprovalTimeoutSec,
   setEncryption,
 } = useSettings(context)
+/** 插件自身对等连接：存在任一已建立的对等连接（≠ 宿主主连接） */
+const peerConnected = computed(() => connectedIds.value.size > 0)
+
 const fs = useRemoteFs(context, () => peer.value.id)
 
 const showSettings = ref(false)
@@ -84,7 +87,7 @@ const peerDisplayName = computed(() => {
   const withName = tasks.value.find((x) => x.peer?.name)
   if (withName?.peer?.name) return withName.peer.name
   if (peer.value.id) return peer.value.id
-  if (connOnline.value) return '—'
+  if (peerConnected.value) return '—'
   return t('transfer.peer.unpaired')
 })
 
@@ -115,7 +118,7 @@ function handleBatchReject(batchId: string): void {
 }
 
 const peerStatusLabel = computed(() => {
-  if (!connOnline.value) return t('transfer.peer.offline')
+  if (!peerConnected.value) return t('transfer.peer.offline')
   if (!peer.value.online) return t('transfer.peer.notSharing')
   return t('transfer.peer.online')
 })
@@ -127,7 +130,7 @@ const canDownload = computed(() => fs.currentRoot.value !== null && selectedCoun
 const showNoRoots = computed(() => !hasRoots.value)
 const showNoPeer = computed(() => !peer.value.online)
 const noPeerLabel = computed(() =>
-  connOnline.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
+  peerConnected.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
 )
 
 /** 拉取所选文件（一次 pull_files 批调用）；成功后展开队列面板 */
@@ -136,7 +139,9 @@ async function handleDownload(): Promise<void> {
   try {
     await context.commands.execute('file-transfer.pull-files', {
       dirId: fs.currentRoot.value.id,
-      path: '',
+      // 当前所在根内相对路径：嵌套目录勾选下载必须带上，否则对端按根目录
+      // 解析文件名 → not-found（根清单层不可勾选，relPath 恒有 currentRoot 伴生）
+      path: fs.relPath.value,
       files: fs.selectedNames.value,
     })
     fs.clearSelection()
@@ -156,6 +161,15 @@ async function handleUpload(): Promise<void> {
   if (!peer.value.online) return
   const ok = await sendPickedFiles()
   if (ok > 0) queueVisible.value = true
+}
+
+/** 下载完成 → 打开本地所在目录（system.revealInDir） */
+async function handleOpenFolder(path: string): Promise<void> {
+  try {
+    await context.system.revealInDir(path)
+  } catch (e) {
+    console.error('[File Transfer] open folder failed:', e)
+  }
 }
 
 /** 附近设备面板开合（点击外部关闭，见 onMounted 文档监听） */
@@ -256,7 +270,7 @@ watch(
         <span
           class="ft-dot"
           :class="
-            connOnline ? (peer.online ? 'ft-dot--online' : 'ft-dot--partial') : 'ft-dot--offline'
+            peerConnected ? (peer.online ? 'ft-dot--online' : 'ft-dot--partial') : 'ft-dot--offline'
           "
         ></span>
         <span class="ft-peer-name">{{ peerDisplayName }}</span>
@@ -479,10 +493,12 @@ watch(
           :receiving="receiving"
           :history="history"
           :peer-names="peerNames"
+          :download-dir="settings.downloadDir"
           @cancel="cancel"
           @retry="retry"
           @cancel-receiving="cancelReceiving"
           @clear-history="clearHistoryEntries"
+          @open-folder="handleOpenFolder"
         />
       </Transition>
     </div>

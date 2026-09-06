@@ -60,6 +60,18 @@ pub(crate) fn forget_session(node_id: &str) {
     sessions().lock().expect("sessions lock").remove(node_id);
 }
 
+/// 仅登记 endpoint memo（不铸 session 句柄）
+///
+/// 入站（被连侧）连接的对端寻址来源：被连侧没有拨号句柄，数据面命令
+/// （浏览/拉取/发送）经 memo 重拨铸真实句柄。endpoint 取自前端自建设备缓存
+/// （mdns-found 维护，是最新真源）。
+pub(crate) fn remember_endpoint(endpoint: &DialEndpoint) {
+    endpoints()
+        .lock()
+        .expect("endpoints lock")
+        .insert(endpoint.node_id.clone(), endpoint.clone());
+}
+
 /// 摘除并返回全部活跃 session 句柄（插件停用时调用：先断开连接再清空表，
 /// 让对端即时感知断线——否则 TLS 连接残留、对端仍显示在线）
 pub(crate) fn drain_sessions() -> Vec<String> {
@@ -224,5 +236,21 @@ mod tests {
 
         // 幂等：重复 drain 无句柄可摘
         assert!(drain_sessions().is_empty());
+    }
+
+    /// 入站连接的寻址登记：仅写 memo 不造句柄（session_of 保持 None，
+    /// ensure_target 走 memo 重拨铸真实句柄）
+    #[test]
+    fn remember_endpoint_writes_memo_without_session() {
+        let _guard = statics_lock().lock().expect("statics lock");
+        let node = "inbound-node";
+        forget_session(node);
+        clear_peer_state();
+
+        let ep = DialEndpoint { node_id: node.into(), addr: "10.0.0.9".into(), port: 9 };
+        remember_endpoint(&ep);
+        assert_eq!(resolve_endpoint(None, node), Some(ep));
+        assert_eq!(session_of(node), None, "memo-only: no session handle fabricated");
+        clear_peer_state();
     }
 }

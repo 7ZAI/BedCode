@@ -24,6 +24,8 @@ export interface Crumb {
 export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
   /** 当前所在共享根（null = 处于根清单层） */
   const currentRoot = ref<SharedRootRef | null>(null) as Ref<SharedRootRef | null>
+  /** 最近一次根清单（根清单层点击进根时按展示名回查宿主分配的真实 id） */
+  const rootsCache = ref<SharedRootRef[]>([]) as Ref<SharedRootRef[]>
   /** 目录项列表（根清单层复用同一容器，isDir=true 呈现为可进入） */
   const entries = ref<RemoteEntry[]>([]) as Ref<RemoteEntry[]>
   const loading = ref(false) as Ref<boolean>
@@ -60,6 +62,7 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
       })
       if (seq !== busySeq) return
       const roots: SharedRootRef[] = Array.isArray(data?.roots) ? data.roots : []
+      rootsCache.value = roots
       entries.value = roots.map((r) => ({ name: r.name, size: 0, mtime: 0, isDir: true }))
       notice.value = null
       currentRoot.value = null
@@ -69,7 +72,7 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
     } catch (e) {
       console.error('[File Transfer] list-remote roots FAILED:', e)
       if (seq !== busySeq) return
-      errorKey.value = 'transfer.table.dirUnavailable'
+      errorKey.value = 'transfer.error.dirUnavailable'
       entries.value = []
     } finally {
       if (seq === busySeq) loading.value = false
@@ -94,7 +97,7 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
     } catch (e) {
       console.error(`[File Transfer] list-remote FAILED: path='${path}'`, e)
       if (seq !== busySeq) return
-      errorKey.value = 'transfer.table.dirUnavailable'
+      errorKey.value = 'transfer.error.dirUnavailable'
       entries.value = []
     } finally {
       if (seq === busySeq) loading.value = false
@@ -131,12 +134,10 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
   /** 进入子目录 / 根清单层点击进入共享根 */
   async function cd(name: string): Promise<void> {
     if (!currentRoot.value) {
-      const data = await context.commands.execute('file-transfer.list-remote', {
-        path: '',
-        dirId: '',
-      })
-      const roots: SharedRootRef[] = Array.isArray(data?.roots) ? data.roots : []
-      const root = roots.find((r) => r.name === name) ?? { id: name, name }
+      // 根清单层点击 = 进入该共享根；dirId 必须是宿主分配的条目 id，
+      // 展示名 ≠ id，直接拿名字当 id 会命中不了目录表（表现为「目录不可用」），
+      // 与移动端同构：按展示名从最近一次根清单解析真实 id，缺失才兜底同名
+      const root = rootsCache.value.find((r) => r.name === name) ?? { id: name, name }
       await enterRoot(root)
       return
     }
@@ -219,6 +220,7 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
     errorKey,
     notice,
     breadcrumb,
+    relPath,
     selectedNames,
     selectedEntries,
     hasSelection,

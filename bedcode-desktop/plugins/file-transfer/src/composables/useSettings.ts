@@ -18,7 +18,6 @@ export interface RootItem {
 
 export function useSettings(context: PluginContext) {
   const settings = ref<Settings>({
-    roots: [],
     downloadDir: '',
     concurrency: 1,
     receivingPolicy: 'ask',

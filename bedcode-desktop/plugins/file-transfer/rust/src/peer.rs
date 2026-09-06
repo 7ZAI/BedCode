@@ -154,9 +154,7 @@ fn flush(h: &WasmHost, mut guard: std::sync::MutexGuard<'static, Vec<TransferEnt
         .iter()
         .filter(|e| e.direction == "receive" && e.status != "pending")
         .collect();
-    let mut history: Vec<&TransferEntry> =
-        guard.iter().filter(|e| e.is_terminal()).collect();
-    history.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    let history = history_view(&guard);
 
     let dump = |list: Vec<&TransferEntry>| {
         list.iter()
@@ -504,6 +502,25 @@ pub(crate) fn list_receiving(h: &WasmHost) -> Result<serde_json::Value> {
     ))
 }
 
+/// 历史视图：终态条目按 updatedAtMs 降序（flush 的 history-changed 派发与
+/// list-history 初始快照命令共用同一口径）
+fn history_view(guard: &[TransferEntry]) -> Vec<&TransferEntry> {
+    let mut history: Vec<&TransferEntry> = guard.iter().filter(|e| e.is_terminal()).collect();
+    history.sort_by(|a, b| b.updated_at_ms.cmp(&a.updated_at_ms));
+    history
+}
+
+/// 历史列表命令：与 history-changed 事件同形状（前端 refresh 初始快照）
+pub(crate) fn list_history(h: &WasmHost) -> Result<serde_json::Value> {
+    let guard = ensure_loaded(h);
+    Ok(serde_json::Value::Array(
+        history_view(&guard)
+            .iter()
+            .filter_map(|e| serde_json::to_value(e).ok())
+            .collect(),
+    ))
+}
+
 pub(crate) fn cancel_receiving(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
     let batch_id = args
         .get("sessionId")
@@ -527,6 +544,20 @@ pub(crate) fn clear_history(h: &WasmHost) -> Result<serde_json::Value> {
 
 // ==================== 远端浏览 / 拉取 ====================
 
+/// list-remote 目标解析：dirId 非空即权威根（path = 根内相对路径，两端前端
+/// 目录导航维护的契约）；缺失 dirId 的旧形态（path 首段即根）从 path 推根。
+/// 返回 (root, rel)，rel 已去首尾斜杠
+fn split_root_rel<'a>(dir_id: &'a str, path: &'a str) -> (&'a str, &'a str) {
+    if dir_id.is_empty() {
+        match path.split_once('/') {
+            Some((head, rest)) => (head, rest.trim_matches('/')),
+            None => (path, ""),
+        }
+    } else {
+        (dir_id, path.trim_matches('/'))
+    }
+}
+
 pub(crate) fn list_remote(
     h: &WasmHost,
     args: &serde_json::Value,
@@ -544,13 +575,9 @@ pub(crate) fn list_remote(
         return Ok(serde_json::json!({ "roots": roots }));
     }
 
-    let root = if dir_id.is_empty() {
-        path.split('/').next().unwrap_or("")
-    } else {
-        dir_id
-    };
-    let rel = path.strip_prefix(root).unwrap_or(path);
-    let rel = rel.strip_prefix('/').unwrap_or(rel);
+    // dirId 非空即权威根，path = 根内相对路径（前端目录导航维护）。旧实现按
+    // root 前缀剥离 path——根内子目录名与根 id 同名时误剥离、列错目录
+    let (root, rel) = split_root_rel(dir_id, path);
 
     let listing = h.peer_browse_directory(&target, root, rel)?;
     // 引擎 RemoteBrowseDto.filtered → 旧 notice 提示字段（前端 useRemoteFs 契约）
@@ -745,6 +772,44 @@ mod tests {
     use super::{load_preauth_paths, mount_local, roots_registry, update_roots};
     use bedcode_plugin_api::host::{HostError, HostPeer, HostPlatform, HostPluginDatabase, HostStorage};
     use std::cell::RefCell;
+
+    /// 历史视图口径：仅终态条目、按 updatedAtMs 降序（list-history 初始快照与
+    /// flush 的 history-changed 派发共用本函数，防两路口径漂移）
+    #[test]
+    fn history_view_returns_terminal_entries_sorted_desc() {
+        let mk = |id: &str, status: &str, updated: u64| {
+            serde_json::from_value::<super::TransferEntry>(serde_json::json!({
+                "batchId": id, "direction": "send", "status": status, "updatedAtMs": updated,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("run", "running", 9),
+            mk("b-old", "completed", 1),
+            mk("pend", "pending", 8),
+            mk("b-new", "failed", 5),
+        ];
+        let ids: Vec<&str> =
+            super::history_view(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(ids, vec!["b-new", "b-old"]);
+    }
+
+    /// list-remote 根/相对路径解析：dirId 权威、根内同名子目录不误剥离、
+    /// 旧形态回落（回归：strip_prefix 误命中致列错目录）
+    #[test]
+    fn split_root_rel_prefers_dir_id_and_keeps_root_relative_path() {
+        // 根内子目录与根 id 同名：path 原样保留（旧实现误剥离成 ""，列出根目录）
+        assert_eq!(super::split_root_rel("docs", "docs"), ("docs", "docs"));
+        assert_eq!(super::split_root_rel("docs", "docs/sub"), ("docs", "docs/sub"));
+        assert_eq!(
+            super::split_root_rel("local-downloads", "a/b.txt"),
+            ("local-downloads", "a/b.txt")
+        );
+        assert_eq!(super::split_root_rel("r", "/a/"), ("r", "a"));
+        // 旧形态：缺失 dirId，path 首段即根
+        assert_eq!(super::split_root_rel("", "r/sub"), ("r", "sub"));
+        assert_eq!(super::split_root_rel("", "solo"), ("solo", ""));
+    }
 
     /// 内存版宿主 mock：覆盖 mount_local / update_roots 所需 trait
     /// （storage 键值 + shared_roots 行集 + set-shared-roots 推送记录）

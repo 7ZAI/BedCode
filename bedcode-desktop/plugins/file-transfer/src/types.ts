@@ -95,6 +95,8 @@ export interface ReceivingTask {
   sessionId: string
   batchId: string | null
   remotePath: string
+  /** 首文件相对落盘路径（打开所在目录定位用；缺失时退回下载目录） */
+  relPath?: string | null
   size: number
   offset?: number
   state: string
@@ -111,6 +113,8 @@ export interface HistoryEntry {
   direction: TaskDirection
   initiator: TaskInitiator
   fileName: string
+  /** 首文件相对落盘路径（下载完成「打开所在目录」定位用） */
+  relPath?: string | null
   size: number
   state: HistoryState
   reason: string | null

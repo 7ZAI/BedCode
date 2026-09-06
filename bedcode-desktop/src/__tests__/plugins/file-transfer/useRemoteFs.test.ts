@@ -86,7 +86,7 @@ describe('useRemoteFs orchestration', () => {
 
     await fs.loadRoots()
 
-    expect(fs.errorKey.value).toBe('transfer.table.dirUnavailable')
+    expect(fs.errorKey.value).toBe('transfer.error.dirUnavailable')
     expect(fs.entries.value).toEqual([])
     expect(fs.loading.value).toBe(false)
   })
@@ -124,6 +124,31 @@ describe('useRemoteFs orchestration', () => {
       '下载',
     ])
     expect(fs.errorKey.value).toBe('')
+  })
+
+  it('cd at the chooser level resolves the real dirId by name from the last roots fetch', async () => {
+    env.onCommand('file-transfer.list-remote', () => ({
+      roots: [ROOT, { id: 'root-2', name: '文档' }],
+    }))
+    const fs = useRemoteFs(env.context, () => 'node-a')
+
+    // 根清单层点击 = 进入该共享根：展示名 ≠ id，直接拿名字当 id 会寻址不到
+    // 对端目录表（表现为「目录不可用」）；按展示名从最近一次根清单回查真实 id
+    await fs.loadRoots()
+    await fs.cd('文档')
+    expect(fs.currentRoot.value).toEqual({ id: 'root-2', name: '文档' })
+    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: '', dirId: 'root-2' })
+
+    await fs.cd('docs')
+    expect(env.lastCall('file-transfer.list-remote')!.args).toEqual({ path: 'docs', dirId: 'root-2' })
+  })
+
+  it('cd at the chooser level without a prior roots fetch falls back to same-name id', async () => {
+    const fs = useRemoteFs(env.context, () => 'node-a')
+
+    // 防御兜底：未拉取过根清单时无法回查映射，同名兜底不阻断进入
+    await fs.cd('下载')
+    expect(fs.currentRoot.value).toEqual({ id: '下载', name: '下载' })
   })
 
   it('cd builds nested rel paths and extends the breadcrumb stack', async () => {
@@ -213,7 +238,7 @@ describe('useRemoteFs orchestration', () => {
 
     await fs.cd('docs')
 
-    expect(fs.errorKey.value).toBe('transfer.table.dirUnavailable')
+    expect(fs.errorKey.value).toBe('transfer.error.dirUnavailable')
     expect(fs.entries.value).toEqual([])
     expect(fs.loading.value).toBe(false)
     expect(fs.currentRoot.value).toEqual(ROOT) // 浏览位置未被失败破坏

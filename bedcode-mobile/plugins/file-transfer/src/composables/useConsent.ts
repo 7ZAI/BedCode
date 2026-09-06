@@ -181,6 +181,14 @@ function present(next: ConsentRequest): void {
   // 迟到的用户操作因 settled 已置位而静默无害
   settleTimer = setTimeout(() => {
     void finish(false)
+    // 超时只结算逻辑不会关闭屏幕上的对话框——showConfirm 的 promise 仅由
+    // 用户操作解决，幽灵弹窗残留且宿主对话框队列中后到的请求被其遮挡。
+    // 显式 resolve 队首（本插件 30s 前所弹确认框即队首，FIFO 语义保证）；
+    // 迟到的 promise 回调走 finish(false) 被 settled 拦截，恰好一次应答不变
+    const hostDialogs = (globalThis as unknown as {
+      __BEDCODE_SHARED__?: { dialogs?: { resolveTop?: (action: string) => void } }
+    }).__BEDCODE_SHARED__?.dialogs
+    hostDialogs?.resolveTop?.('cancel')
   }, CONSENT_TIMEOUT_MS)
   activeFinish = finish
 

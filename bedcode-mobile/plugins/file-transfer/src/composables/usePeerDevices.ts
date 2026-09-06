@@ -77,8 +77,6 @@ export function usePeerDevices(context: PluginContext) {
   const dialErrors = ref<Record<string, DialErrorStatus>>({})
   /** 活跃对端 id（'' = 未选择；仅已连接节点可成为活跃对端） */
   const activePeerId = ref('') as Ref<string>
-  /** WS 控制面连接态（device-connected/disconnected 驱动，语义独立于对等连接） */
-  const connOnline = ref(false) as Ref<boolean>
 
   let started = false
   let disposables: Disposable[] = []
@@ -236,25 +234,43 @@ export function usePeerDevices(context: PluginContext) {
     if (payload.connected) {
       markConnected(payload.nodeId)
       ensureActiveFallback()
+      // 入站（被连侧）连接没有拨号 memo：数据面命令（浏览/拉取/发送）经它
+      // 重拨，endpoint 取自自建缓存（mdns-found 维护）
+      rememberEndpoint(payload.nodeId)
     } else {
       connectedIds.value = withoutId(connectedIds.value, payload.nodeId)
       if (payload.nodeId === activePeerId.value) handleActiveLost()
     }
   }
 
-  /** WS 控制面在线（仅 pill 文案语义，不触碰对等连接状态） */
-  function handleControlPlaneConnected(): void {
-    connOnline.value = true
+  /** 入站连接的对端寻址登记（fire-and-forget；缓存缺失时跳过，对端不可达由命令错误呈现） */
+  function rememberEndpoint(nodeId: string): void {
+    const device = devices.value.find((d) => d.nodeId === nodeId)
+    if (!device?.addr || !device.port) return
+    context.commands
+      .execute('file-transfer.remember-peer-endpoint', {
+        endpoint: { nodeId, addr: device.addr, port: device.port },
+      })
+      .catch((e: unknown) => console.error('[File Transfer] remember-peer-endpoint failed:', e))
   }
 
   // ==================== 对外操作 ====================
 
+  /** 向宿主请求发现刷新：宿主立即重查 + 缓存/连接态以事件重发（按钮直达后端，
+   * 挂载晚于引擎发现事件时首屏即有数据） */
+  function requestHostRefresh(): void {
+    context.commands.execute('file-transfer.refresh-devices', {}).catch((e: unknown) => {
+      console.error('[File Transfer] refresh-devices failed:', e)
+    })
+  }
+
   /**
-   * 手动刷新：TTL 惰性清扫（含清算快照恢复条目）+ 落盘。发现数据本身由
-   * mDNS 事件流驱动，无需向宿主拉取（spec 步骤 1 的「读取列表时顺带清理」）。
+   * 手动刷新：TTL 惰性清扫（含清算快照恢复条目）+ 落盘 + 宿主发现刷新。
+   * 发现数据由 mDNS 事件流驱动，本操作触发宿主即时重查加速数据到位。
    */
   async function refresh(): Promise<void> {
     devices.value = sweepStaleDevices(devices.value, Date.now(), connectedIds.value)
+    requestHostRefresh()
     scheduleSnapshotSave()
   }
 
@@ -328,10 +344,6 @@ export function usePeerDevices(context: PluginContext) {
         'plugin:file-transfer:connection-changed',
         handleConnectionChanged,
       ),
-      context.events.on('device-connected', handleControlPlaneConnected),
-      context.events.on('device-disconnected', () => {
-        connOnline.value = false
-      }),
     ]
     void (async () => {
       try {
@@ -358,6 +370,8 @@ export function usePeerDevices(context: PluginContext) {
         console.error('[File Transfer] get-device-snapshot failed:', e)
       }
     })()
+    // 首屏即向宿主要一次发现/连接快照（挂载晚于引擎发现与连接建立时不空屏）
+    requestHostRefresh()
   }
 
   function stop(): void {
@@ -376,7 +390,6 @@ export function usePeerDevices(context: PluginContext) {
     peers,
     peer,
     activePeerId,
-    connOnline,
     connectingIds,
     connectedIds,
     dialErrors,

@@ -66,6 +66,12 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_subscribe(topic);
         }
+        // 引擎电源声明：节点/mDNS 随本插件生命周期启停（宿主静态订阅
+        // peer:node-power 消费——插件运行 mDNS 就运行，不运行也不运行）
+        let _ = h.bus_publish(
+            "peer:node-power",
+            &serde_json::json!({ "on": true, "requestedBy": PLUGIN_ID }),
+        );
         Ok(())
     }
 
@@ -91,6 +97,12 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_unsubscribe(topic);
         }
+        // 引擎电源声明：本插件下线 → 节点/mDNS 服务下线（会话已在上方关闭，
+        // 对端经断流事件即时感知）
+        let _ = h.bus_publish(
+            "peer:node-power",
+            &serde_json::json!({ "on": false, "requestedBy": PLUGIN_ID }),
+        );
         Ok(())
     }
 
@@ -98,6 +110,15 @@ impl WasmPlugin for FileTransferPlugin {
         let h = host();
         match name {
             // ==================== 设备（自建缓存的宿主侧出口） ====================
+            // 「探索发现」直达后端：经总线请求宿主即时重查 + 缓存/连接态重发
+            // （宿主 peer_net 静态订阅 peer:discovery-refresh 消费）
+            "file-transfer.refresh-devices" => {
+                h.bus_publish(
+                    "peer:discovery-refresh",
+                    &serde_json::json!({ "requestedBy": PLUGIN_ID }),
+                )?;
+                Ok(serde_json::json!({ "ok": true }))
+            }
             "file-transfer.get-device-snapshot" => Ok(serde_json::json!({
                 "devices": device_bridge::load_snapshot(&h)?
             })),
@@ -117,6 +138,15 @@ impl WasmPlugin for FileTransferPlugin {
                 *active_node().lock().expect("active node lock") = id;
                 Ok(serde_json::json!({ "ok": true }))
             }
+            // 入站连接的对端寻址登记：被连侧没有拨号 memo，数据面命令经它重拨
+            // （endpoint 来源 = 前端自建设备缓存，connection-changed 时回填）
+            "file-transfer.remember-peer-endpoint" => {
+                let endpoint: device_bridge::DialEndpoint =
+                    serde_json::from_value(args.get("endpoint").cloned().unwrap_or_default())
+                        .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
+                device_bridge::remember_endpoint(&endpoint);
+                Ok(serde_json::json!({ "ok": true }))
+            }
 
             // ==================== 发送 ====================
             "file-transfer.pick-files" => Ok(serde_json::to_value(h.platform_pick_files()?)?),
@@ -132,6 +162,7 @@ impl WasmPlugin for FileTransferPlugin {
             // ==================== 接收端 ====================
             "file-transfer.list-batches" => peer::list_batches(&h),
             "file-transfer.list-receiving" => peer::list_receiving(&h),
+            "file-transfer.list-history" => peer::list_history(&h),
             "file-transfer.approve-batch" => {
                 let batch_id = require_str(&args, "batchId")?;
                 h.peer_respond_transfer(&batch_id, true)?;

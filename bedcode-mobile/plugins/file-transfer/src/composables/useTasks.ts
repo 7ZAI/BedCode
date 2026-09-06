@@ -117,8 +117,6 @@ export function useTasks(context: PluginContext) {
   /** 活跃传输总速率（B/s，取各 running 批 rateBps 求和） */
   const totalSpeed = ref(0)
 
-  /** WS 控制面连接状态（宿主 ws_* 事件驱动） */
-  const connOnline = ref(false)
   /** 存在具备文件传输能力的发现设备（= 可发送） */
   const peerOnline = ref(false)
   const peerId = ref('')
@@ -128,15 +126,6 @@ export function useTasks(context: PluginContext) {
   let dispBatches: Disposable | null = null
   let dispReceiving: Disposable | null = null
   let dispHistory: Disposable | null = null
-  let dispConn: Disposable[] = []
-
-  // 初始连接状态：读取宿主共享连接状态（视图挂载可能晚于 ws_paired 事件）
-  try {
-    connOnline.value =
-      (globalThis as any).__BEDCODE_SHARED__?.connection?.isConnected?.value === true
-  } catch {
-    connOnline.value = false
-  }
 
   /** 任务/速率快照整表替换 */
   function applySnapshot(list: any[]): void {
@@ -289,15 +278,10 @@ export function useTasks(context: PluginContext) {
   const displayPeerName = computed(() => {
     if (peerName.value) return peerName.value
     if (peerId.value) return peerId.value
-    if (connOnline.value) return context.i18n.t('transfer.peer.unknown')
     return context.i18n.t('transfer.peer.unpaired')
   })
 
   // ==================== 生命周期 ====================
-
-  function onConnChanged(online: boolean): void {
-    connOnline.value = online
-  }
 
   /** 注册事件监听（组件挂载调用；随 context._disposables 兜底清理） */
   function start(): void {
@@ -317,17 +301,6 @@ export function useTasks(context: PluginContext) {
     dispHistory = context.events.on('plugin:file-transfer:history-changed', (payload: unknown) => {
       if (Array.isArray(payload)) history.value = mergeHistory(history.value, payload.map(mapWireHistory))
     })
-    dispConn = [
-      context.events.on('ws_connected', () => onConnChanged(true)),
-      context.events.on('ws_paired', () => onConnChanged(true)),
-      context.events.on('ws_reconnected', () => onConnChanged(true)),
-      context.events.on('ws_disconnected', () => onConnChanged(false)),
-      context.events.on('ws_unexpected_disconnect', () => onConnChanged(false)),
-      context.events.on('ws_reconnecting', () => onConnChanged(false)),
-      context.events.on('ws_reconnect_failed', () => onConnChanged(false)),
-      context.events.on('ws_error', () => onConnChanged(false)),
-      context.events.on('ws_auth_failed', () => onConnChanged(false)),
-    ]
     void refresh()
     void refreshReceiving()
     void queryPeer()
@@ -359,8 +332,6 @@ export function useTasks(context: PluginContext) {
     dispReceiving = null
     dispHistory?.dispose()
     dispHistory = null
-    dispConn.forEach((d) => d.dispose())
-    dispConn = []
     totalSpeed.value = 0
   }
 
@@ -372,7 +343,6 @@ export function useTasks(context: PluginContext) {
     totalSpeed,
     hasRunning,
     primaryTask,
-    connOnline,
     peerOnline,
     peerId,
     peerName,

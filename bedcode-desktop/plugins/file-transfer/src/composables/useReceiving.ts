@@ -43,6 +43,15 @@ function displayName(files: unknown): string {
   return extra > 0 ? `${name} +${extra}` : name
 }
 
+/** 首文件相对落盘路径（wire files[0].path / relativePath；缺失为 null） */
+function firstRelPath(files: unknown): string | null {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]
+  if (!first || typeof first !== 'object') return null
+  const p = (first as any).path ?? (first as any).relativePath
+  return typeof p === 'string' && p.length > 0 ? p : null
+}
+
 function mapPendingBatch(raw: any): PendingBatch {
   const rawFiles = Array.isArray(raw.files) ? raw.files : []
   return {
@@ -65,6 +74,7 @@ function mapReceivingTask(raw: any): ReceivingTask {
     sessionId: raw.batchId ?? '',
     batchId: raw.batchId ?? null,
     remotePath: displayName(raw.files),
+    relPath: firstRelPath(raw.files),
     size: raw.totalBytes ?? 0,
     offset: raw.transferredBytes ?? 0,
     state: status === 'running' ? 'transferring' : status,
@@ -82,6 +92,7 @@ function mapHistoryEntry(raw: any): HistoryEntry {
     direction: raw.direction === 'receive' ? 'download' : 'upload',
     initiator: raw.direction === 'receive' ? 'peer' : 'me',
     fileName: displayName(raw.files),
+    relPath: firstRelPath(raw.files),
     size: raw.totalBytes ?? 0,
     state: raw.status ?? 'failed',
     reason: raw.detail ?? raw.rejectReason ?? null,

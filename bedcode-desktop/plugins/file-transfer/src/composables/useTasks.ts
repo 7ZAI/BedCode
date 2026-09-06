@@ -30,7 +30,6 @@ function mapWireTask(raw: any): Task {
       name: raw.peerName ?? '',
     },
     remotePath: displayName(raw.files),
-    localPath: null,
     size: raw.totalBytes ?? 0,
     offset: raw.transferredBytes ?? 0,
     rateBps: raw.rateBps ?? 0,

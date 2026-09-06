@@ -267,6 +267,34 @@ describe('usePeerDevices orchestration (self-built cache)', () => {
     expect(dev.activePeerId.value).toBe('')
   })
 
+  it('connection-changed without explicit connected flag is treated as disconnect (host must always send the field)', () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    // 契约回归锁：缺 connected 字段按断开处理——宿主拨号/入站/刷新重发/断开
+    // 四路事件都必须携带该字段，漏发会把已连接状态回滚成未连接
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
+    expect(dev.connectedIds.value.has(NODE_A)).toBe(true)
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A })
+    expect(dev.connectedIds.value.has(NODE_A)).toBe(false)
+  })
+
+  it('inbound connected event registers the peer endpoint for data-plane redial', () => {
+    const dev = usePeerDevices(env.context)
+    dev.start()
+    env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, 'a'))
+    // 被连侧没有拨号 memo：连接建立时用自建缓存的 addr/port 回填，
+    // 否则浏览/收发数据面命令报 no endpoint known for peer
+    env.emit('plugin:file-transfer:connection-changed', { nodeId: NODE_A, connected: true })
+    expect(
+      env.calls.some((c) => c.id === 'file-transfer.remember-peer-endpoint'),
+    ).toBe(true)
+    expect(
+      env.calls.find((c) => c.id === 'file-transfer.remember-peer-endpoint')!.args,
+    ).toEqual({
+      endpoint: { nodeId: NODE_A, addr: '192.168.1.10', port: 47821 },
+    })
+  })
+
   it('refresh sweeps TTL-expired idle entries but keeps connected ones', async () => {
     const dev = usePeerDevices(env.context)
     dev.start()

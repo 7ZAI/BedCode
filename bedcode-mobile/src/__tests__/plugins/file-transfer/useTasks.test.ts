@@ -312,14 +312,17 @@ describe('useTasks orchestration', () => {
     expect(env.notifications).toHaveLength(1) // 全取消不打扰用户
   })
 
-  it('ws_* control-plane events drive connOnline independently of discovery', async () => {
+  it('no longer subscribes to ws_* control-plane events (connection display is peer-owned)', async () => {
+    // Bug 修正（双端独立连接）：连接显示不得借用宿主主连接（ws_*）状态，
+    // 文件传输插件的连接语义由插件自身对等连接（connection-changed）承担。
+    // 测试环境 emit 对无 handler 抛错——不抛即证明未订阅 ws_*
     const tasks = useTasks(env.context)
     tasks.start()
     await env.flush()
-    env.emit('ws_connected', {})
-    expect(tasks.connOnline.value).toBe(true)
-    env.emit('ws_disconnected', {})
-    expect(tasks.connOnline.value).toBe(false)
+    expect('connOnline' in tasks).toBe(false)
+    expect(() => env.emit('ws_connected', {})).toThrow('no captured handler')
+    expect(() => env.emit('ws_paired', {})).toThrow('no captured handler')
+    expect(() => env.emit('ws_disconnected', {})).toThrow('no captured handler')
   })
 
   it('start is idempotent and stop detaches all listeners', async () => {

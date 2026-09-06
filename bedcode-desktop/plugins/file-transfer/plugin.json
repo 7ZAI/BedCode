@@ -28,6 +28,10 @@
   "contributes": {
     "commands": [
       {
+        "id": "file-transfer.refresh-devices",
+        "title": "file-transfer.refresh-devices"
+      },
+      {
         "id": "file-transfer.get-device-snapshot",
         "title": "Get Device Snapshot"
       },
@@ -46,6 +50,10 @@
       {
         "id": "file-transfer.set-active-peer",
         "title": "Set Active Peer"
+      },
+      {
+        "id": "file-transfer.remember-peer-endpoint",
+        "title": "Remember Peer Endpoint"
       },
       {
         "id": "file-transfer.pick-files",
@@ -78,6 +86,10 @@
       {
         "id": "file-transfer.list-receiving",
         "title": "List Receiving Tasks"
+      },
+      {
+        "id": "file-transfer.list-history",
+        "title": "List Transfer History"
       },
       {
         "id": "file-transfer.approve-batch",

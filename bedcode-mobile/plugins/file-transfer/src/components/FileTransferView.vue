@@ -284,7 +284,7 @@ onUnmounted(() => {
     <!-- 顶栏：活跃对端 + 连接状态 + 设置入口 -->
     <PeerHeader
       :peer-name="peerLabel"
-      :online="tasks.connOnline.value"
+      :online="devices.peer.value.online"
       :online-label="t('transfer.peer.online')"
       :offline-label="t('transfer.peer.offline')"
       :upload-label="t('transfer.v2.upload.cta')"

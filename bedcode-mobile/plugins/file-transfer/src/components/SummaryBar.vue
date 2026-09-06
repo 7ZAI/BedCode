@@ -37,7 +37,10 @@ defineEmits<{
 
 <template>
   <div class="fv2-footer">
-    <Transition name="fv2-fade" mode="out-in">
+    <!-- 三态切换用并行交叉渐变（不用 out-in）：out-in 旧分支完全退场后容器
+         瞬间空置塌陷再撑开，勾选/取消勾选时底栏闪烁跳变。离场分支绝对定位
+         退出文档流，进场分支立即接管布局，高度恒定平滑过渡 -->
+    <Transition name="fv2-bar-swap">
       <!-- 多选操作：浏览 tab 勾选后出现 -->
       <div v-if="mode === 'select'" key="select" class="flex items-center gap-3">
         <button class="fv2-btn-neutral flex-shrink-0" @click="$emit('clear-selection')">
@@ -86,12 +89,34 @@ defineEmits<{
           class="fv2-btn-neutral flex-shrink-0"
           @click="$emit('open-queue')"
         >
-          <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
-          </svg>
-          {{ queueHint }}
-        </button>
-      </div>
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+        </svg>
+        {{ queueHint }}
+      </button>
+    </div>
     </Transition>
   </div>
 </template>
+
+<style scoped>
+/* 底栏三态交叉渐变：compositor 友好（仅 opacity），150ms 与全局 .fv2-fade 同节奏；
+   离场分支绝对定位（相对 .fv2-footer 的 padding 盒）避免双分支堆叠挤高容器 */
+.fv2-bar-swap-enter-active,
+.fv2-bar-swap-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.fv2-bar-swap-enter-from,
+.fv2-bar-swap-leave-to {
+  opacity: 0;
+}
+
+.fv2-bar-swap-leave-active {
+  /* 离场即退出文档流：进场分支同帧接管布局，容器高度不塌陷（防闪烁跳变）；
+     pointer-events 防止 150ms 离场窗口内的幽灵点击 */
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+</style>
