@@ -44,12 +44,14 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
-    CAP_FILE_TRANSFER, Connection, DiscoveryCache, DiscoveryConfig,
-    DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, NodeId, NodeIdentity, PeerNetError,
-    PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
-    SharedDirRoot, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore, TransferConfig, TransferEvent,
+    CAP_FILE_TRANSFER, Connection, ConnectionHandler, DiscoveryCache, DiscoveryConfig,
+    DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, HandlerFuture, NodeId, NodeIdentity,
+    PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
+    SharedDirRoot, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore, TransferConfig,
+    TransferEvent,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -123,8 +125,27 @@ pub struct PeerNetState {
     trust: tokio::sync::Mutex<Option<Arc<TrustStore>>>,
     shared: tokio::sync::Mutex<Option<Arc<SharedDirStore>>>,
     consents: std::sync::Mutex<HashMap<String, PendingConsent>>,
-    connections: std::sync::Mutex<HashMap<String, Connection>>,
+    /// 出站会话表：连接由活性泵自持，宿主只持关闭信号（见 OutboundSession）
+    connections: std::sync::Mutex<HashMap<String, OutboundSession>>,
+    /// 入站（被连侧）存活连接计数（node_id → 连接数）：入站句柄由 crate 的
+    /// SharedDirHandler 自持，宿主仅记账供连接态重发还原首屏；
+    /// 维护在 [`InboundConnectionBridge`]。按连接计数避免会话连接与数据面
+    /// 短连接并存时，短连接结束过早摘除连接态。
+    inbound_peers: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+    /// 入站连接关停句柄（node_id → conn id → 内层 handler AbortHandle）：
+    /// disconnect_peer / stop_locked 据此中止 handler，连接随任务 drop 关闭
+    inbound_conns: std::sync::Mutex<HashMap<String, HashMap<u64, tokio::task::AbortHandle>>>,
 }
+
+/// 出站会话句柄：连接由活性泵任务（session_watch）自持，宿主只持关闭信号。
+/// id 供泵清算防误删——同节点重复拨号会替换表项，旧泵不得动新表项
+struct OutboundSession {
+    close: tokio::sync::watch::Sender<bool>,
+    id: u64,
+}
+
+static NEXT_SESSION_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static NEXT_INBOUND_CONN_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 /// start/stop 命令与自动启动共用的状态摘要
 #[derive(Debug, Serialize)]
@@ -256,13 +277,29 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
     let device_name = record.device_name.clone();
     match node.dial(&record.to_static_peer_record()).await {
         Ok(connection) => {
-            // 替换语义：同节点重复拨号以最新句柄为准，旧连接 drop 即关闭
-            let replaced = state
+            // 会话连接移交常驻活性泵（session_watch）：对端断开（EOF/错误）由
+            // 泵清算并通知前端，本机主动断开经泵关闭信号落地。同节点重复拨号
+            // 以最新会话为准，旧会话经泵信号关闭
+            let (session_close, session_close_rx) = tokio::sync::watch::channel(false);
+            let session_id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(old) = state
                 .connections
                 .lock()
                 .expect("connections table lock poisoned")
-                .insert(parsed.to_string(), connection);
-            drop(replaced);
+                .insert(
+                    parsed.to_string(),
+                    OutboundSession { close: session_close, id: session_id },
+                )
+            {
+                let _ = old.close.send(true);
+            }
+            spawn_session_watch(
+                app.clone(),
+                parsed.to_string(),
+                session_id,
+                session_close_rx,
+                connection,
+            );
             tracing::info!(
                 node_id = %parsed,
                 short = %parsed.short_fingerprint(),
@@ -275,7 +312,7 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
             emit_json(
                 &app,
                 "peer-connected",
-                serde_json::json!({ "nodeId": parsed.as_str(), "deviceName": device_name }),
+                dial_connected_payload(parsed.as_str(), &device_name),
             );
             Ok(result)
         }
@@ -350,12 +387,28 @@ pub async fn dial_peer_endpoint(
     let static_record = StaticPeerRecord { node_id: parsed.clone(), addr };
     match node.dial(&static_record).await {
         Ok(connection) => {
-            let replaced = state
+            // 会话连接移交常驻活性泵（同 dial_peer：对端断开泵感知，本机断开
+            // 经泵信号落地；同节点重复拨号以最新会话为准）
+            let (session_close, session_close_rx) = tokio::sync::watch::channel(false);
+            let session_id = NEXT_SESSION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Some(old) = state
                 .connections
                 .lock()
                 .expect("connections table lock poisoned")
-                .insert(parsed.to_string(), connection);
-            drop(replaced);
+                .insert(
+                    parsed.to_string(),
+                    OutboundSession { close: session_close, id: session_id },
+                )
+            {
+                let _ = old.close.send(true);
+            }
+            spawn_session_watch(
+                app.clone(),
+                parsed.to_string(),
+                session_id,
+                session_close_rx,
+                connection,
+            );
             // 过渡期桥接：缓存未命中时补一条回退记录，让按 node-id 寻址的
             // 数据面函数可用（见函数文档，Phase 4 退役）
             if cache_miss {
@@ -378,7 +431,7 @@ pub async fn dial_peer_endpoint(
             emit_json(
                 &app,
                 "peer-connected",
-                serde_json::json!({ "nodeId": parsed.as_str(), "deviceName": device_name }),
+                dial_connected_payload(parsed.as_str(), &device_name),
             );
             Ok(DialPeerResultDto {
                 status: "connected".to_string(),
@@ -396,23 +449,111 @@ pub async fn dial_peer_endpoint(
     }
 }
 
-/// 断开对等连接：丢弃持有的连接句柄（drop 即 TCP 关闭），返回是否存在。
-/// 成功断开发 `peer-disconnected` 事件供前端摘除已连接徽标。
+/// 断开对等连接：出站会话通知活性泵关闭（drop 连接 → 对端经 EOF 感知）、
+/// 入站连接中止内层 handler（连接随任务 drop 关闭，对端拨号侧泵感知）。
+/// 返回是否存在出站会话。本机确有断开发 `peer-disconnected` 供前端摘除已连接徽标。
 #[tauri::command]
 pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<bool> {
     let parsed = parse_node_id(&node_id)?;
     let state = app.state::<PeerNetState>();
-    let removed = state
-        .connections
-        .lock()
-        .expect("connections table lock poisoned")
-        .remove(&parsed.to_string())
-        .is_some();
-    if removed {
-        tracing::info!(node_id = %parsed, "peer connection dropped by user");
-        emit_json(&app, "peer-disconnected", serde_json::json!({ "nodeId": parsed.as_str() }));
+    let removed = {
+        let mut sessions = state
+            .connections
+            .lock()
+            .expect("connections table lock poisoned");
+        sessions.remove(&parsed.to_string())
+    };
+    if let Some(session) = &removed {
+        let _ = session.close.send(true);
     }
-    Ok(removed)
+    // 被连侧此前无法响应断开（只有拨号侧持句柄），对端会一直显示已连接——
+    // 入站关停句柄让两端断开语义对称
+    let inbound_closed = {
+        let mut conns = state.inbound_conns.lock().expect("inbound conns lock poisoned");
+        conns.remove(&parsed.to_string())
+    };
+    if let Some(handles) = &inbound_closed {
+        tracing::info!(count = handles.len(), "aborting inbound connections on user disconnect");
+        for (_, handle) in handles {
+            handle.abort();
+        }
+    }
+    if removed.is_some() || inbound_closed.is_some() {
+        tracing::info!(node_id = %parsed, "peer connection dropped by user");
+        emit_json(&app, "peer-disconnected", serde_json::json!({ "nodeId": parsed.as_str(), "connected": false }));
+    }
+    Ok(removed.is_some())
+}
+
+/// 出站会话活性泵挂载（spawn_with_error_boundary 包装，宿主后台任务规范）
+fn spawn_session_watch(
+    app: AppHandle,
+    node_id: String,
+    session_id: u64,
+    close_rx: tokio::sync::watch::Receiver<bool>,
+    conn: Connection,
+) {
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "peer_session_watch",
+        session_watch(app, node_id, session_id, close_rx, conn),
+    );
+}
+
+/// 出站会话活性泵：持有会话连接直到对端断开或本机关闭
+///
+/// 会话连接不承载业务数据（数据面操作各自新拨），读到数据一律丢弃。
+/// 对端断开（EOF/错误）→ 清算连接表（仍属本会话才动）并发 `peer-disconnected`，
+/// 前端即时摘除「已连接」徽标；本机关闭 → 静默退出（disconnect_peer 已发事件）。
+/// TCP keepalive（crate 拨号/接听时设置）保证对端静默死亡（WiFi 骤断等无 FIN
+/// 场景）也能在探测窗口内以错误浮现。
+async fn session_watch(
+    app: AppHandle,
+    node_id: String,
+    session_id: u64,
+    mut close: tokio::sync::watch::Receiver<bool>,
+    mut conn: Connection,
+) {
+    let mut buf = [0u8; 256];
+    let remote_closed = loop {
+        tokio::select! {
+            biased;
+            _ = close.changed() => break false,
+            n = conn.read(&mut buf) => match n {
+                Ok(0) => break true,
+                Ok(_) => {}
+                Err(_) => break true,
+            },
+        }
+    };
+    drop(conn);
+    let state = app.state::<PeerNetState>();
+    let owned = {
+        let mut sessions = state
+            .connections
+            .lock()
+            .expect("connections table lock poisoned");
+        let owned = matches!(sessions.get(&node_id), Some(s) if s.id == session_id);
+        if owned {
+            sessions.remove(&node_id);
+        }
+        owned
+    };
+    // 仅当无入站连接时才发断开：同节点可能同时存在出站会话 + 入站数据面
+    // 短连接，出站会话结束不代表节点整体断开（对称于 InboundConnectionBridge）
+    if remote_closed && owned {
+        let has_inbound = state
+            .inbound_peers
+            .lock()
+            .expect("inbound peers lock poisoned")
+            .contains_key(&node_id);
+        if !has_inbound {
+            emit_json(
+                &app,
+                "peer-disconnected",
+                serde_json::json!({ "nodeId": node_id, "connected": false }),
+            );
+        }
+    }
 }
 
 /// 本机节点 ID（host-mdns 自播回显过滤用；节点未启动/运行时锁忙返回 None）
@@ -508,7 +649,16 @@ pub async fn revoke_trusted_peer(app: AppHandle, node_id: String) -> crate::Resu
     let parsed = NodeId::parse(&node_id)
         .map_err(|e| crate::AppError::Internal(format!("invalid peer node id: {e}")))?;
     let trust = trust_handle(&app).await?;
-    trust.remove(&parsed).map_err(map_peer_net_error)
+    let removed = trust.remove(&parsed).map_err(map_peer_net_error)?;
+    // 撤销信任的同时断开与该节点的活跃连接（出站/入站均关停）：信任撤销只影响
+    // 下次首连确认，对已建立的连接无作用，不主动断开会让对端仍显示已连接
+    // （2026-09-07 实机反馈）。断开失败仅记日志不阻断撤销结果——信任已移除。
+    if removed {
+        if let Err(e) = disconnect_peer(app.clone(), node_id).await {
+            tracing::warn!(node_id = %parsed, "disconnect after revoke failed: {e}");
+        }
+    }
+    Ok(removed)
 }
 
 // ==================== 共享目录（issue 07）====================
@@ -605,36 +755,179 @@ pub async fn set_shared_roots(app: AppHandle, entries: Vec<SharedDirEntry>) -> c
     store.replace_all(&entries).map_err(map_peer_net_error)
 }
 
-/// setup 阶段自动启动入口（决策 D7）
+/// 文件传输插件 id：peer-net 节点的唯一消费方（全仓唯一声明 `peer` 权限的插件），
+/// 节点生命周期随其启用状态
+pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
+
+/// 文件传输插件激活 → 确保节点运行（幂等；boot 自动激活与运行时启用共用漏斗）
 ///
-/// 失败只记 error 日志不阻断应用其余功能：发现属增强能力，不应拖垮终端主链路；
-/// 但日志必须醒目便于真机排查。内部经 spawn_with_error_boundary 包装防 panic
-/// 静默（AGENTS.md 宿主后台任务规范）。
-pub fn spawn_autostart(app: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        crate::system::error_boundary::spawn_with_error_boundary("peer_net_autostart", async move {
-            let data_dir = match app_data_dir(&app) {
-                Ok(dir) => dir,
-                Err(e) => {
-                    tracing::error!("peer-net autostart aborted: {e}");
-                    return;
-                }
-            };
-            let device_name = resolve_device_name(&app);
-            let state = app.state::<PeerNetState>();
-            match start_locked(&state, &data_dir, device_name, &app).await {
-                Ok(status) => tracing::info!(
-                    "peer-net autostart ok: node={} addr={}",
-                    status.node_id,
-                    status.listen_addr
-                ),
-                Err(e) => tracing::error!("peer-net autostart failed: {e}"),
-            }
-        });
-    });
+/// 生命周期随属主插件：旧实现 setup 阶段无条件自启，插件停用后本机仍在
+/// `_bedcode-peer` 广播（对端照样发现，与终端链路 `_bedcode` 服务的独立
+/// 语义相悖）且监听未关——受信对端可直连数据面（consent 只拦未信任首连）。
+/// 改为插件激活驱动启动、停用驱动关停。
+pub async fn ensure_node_started(app: &AppHandle) -> crate::Result<()> {
+    let data_dir = app_data_dir(app)?;
+    let device_name = resolve_device_name(&app);
+    let state = app.state::<PeerNetState>();
+    start_locked(&state, &data_dir, device_name, app).await.map(|_| ())
+}
+
+/// 文件传输插件停用 → 服务下线：停广播/关监听/排水连接与入站记账（对端即时
+/// 感知断开），幂等（节点未启动为 no-op）
+pub async fn stop_node_for_plugin(app: &AppHandle) -> crate::Result<()> {
+    let state = app.state::<PeerNetState>();
+    stop_locked(&state, app).await
+}
+
+/// 文件传输插件当前是否已激活（AppContext 全局未就绪视为未激活）
+async fn plugin_transfer_activated() -> bool {
+    match crate::system::app_context::AppContext::try_global() {
+        Some(ctx) => ctx.plugin_host().is_activated(FILE_TRANSFER_PLUGIN_ID).await,
+        None => false,
+    }
+}
+
+/// peer-net 节点与文件传输插件运行状态对齐（状态驱动对账，幂等）
+///
+/// 插件已激活 → 确保节点运行；未激活 → 服务下线。boot 装配完成后调用一次，
+/// 运行时开关由 peer:node-power 总线声明即时驱动，二者互为兜底——boot 装配期
+/// AppContext 全局尚未注册，activate 外壳内的节点启动会被静默跳过
+/// （2026-09-06 实机实证：已激活插件的节点不随 boot 启动，需手动开关插件才
+/// 广播），状态对账不依赖事件是否触发。语义：插件运行 mDNS 就运行，插件不
+/// 运行 mDNS 也不运行。
+pub async fn sync_node_with_plugin_state(app: &AppHandle) -> crate::Result<bool> {
+    let activated = plugin_transfer_activated().await;
+    if activated {
+        ensure_node_started(app).await?;
+    } else {
+        stop_node_for_plugin(app).await?;
+    }
+    Ok(activated)
 }
 
 // ==================== 内部装配 ====================
+
+/// 入站连接生命周期桥：进入 handler 前发 `peer-connected`、结束后发
+/// `peer-disconnected`
+///
+/// 既有设计只在本机主动拨号路径发连接事件（dial_peer / endpoint 拨号），
+/// 被连侧零事件——对端拨入本机时本机 UI 连接态永不点亮、设备行「连接」
+/// 按钮不变（2026-09-06 实机实证）。包装 crate handler 桥接两端事件，并
+/// 记账 [`PeerNetState::inbound_peers`] 供刷新重发还原首屏连接态。
+struct InboundConnectionBridge {
+    inner: Arc<SharedDirHandler>,
+    app: AppHandle,
+    cache: Arc<DiscoveryCache>,
+}
+
+impl ConnectionHandler for InboundConnectionBridge {
+    fn handle(&self, conn: Connection) -> HandlerFuture {
+        let node_id = conn.peer_node_id().clone();
+        let device_name = self.cache.get(&node_id).map(|r| r.device_name);
+        // 按连接计数记账 + 仅首个连接发 peer-connected：同节点可能同时有会话
+        // 连接与数据面短连接（浏览/拉取各自新拨），短连接不得重复点亮连接态
+        //（2026-09-07 实机实证：数据面短连接 churn 造成移动端仍显示未连接）
+        let is_first_connection = {
+            let state = self.app.state::<PeerNetState>();
+            let mut peers = state
+                .inbound_peers
+                .lock()
+                .expect("inbound peers lock poisoned");
+            let count = peers.entry(node_id.as_str().to_string()).or_default();
+            *count += 1;
+            let has_outbound = state
+                .connections
+                .lock()
+                .expect("connections table lock poisoned")
+                .contains_key(node_id.as_str());
+            *count == 1 && !has_outbound
+        };
+        if is_first_connection {
+            tracing::info!(
+                node_id = %node_id,
+                short = %node_id.short_fingerprint(),
+                "inbound connection established, peer-connected emitted"
+            );
+            emit_json(
+                &self.app,
+                "peer-connected",
+                serde_json::json!({
+                    "nodeId": node_id.as_str(),
+                    "deviceName": device_name,
+                    "direction": "inbound",
+                    "connected": true
+                }),
+            );
+        }
+        let inner = Arc::clone(&self.inner);
+        let app = self.app.clone();
+        let conn_id = NEXT_INBOUND_CONN_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Box::pin(async move {
+            // 内层 handler 放入独立任务并登记 JoinHandle：disconnect_peer /
+            // stop_locked 据此按节点中止（连接随任务 drop 关闭，对端活性泵经
+            // EOF 感知）。handler 以 EOF/错误结束时本清算路径发 peer-disconnected
+            let join = tokio::spawn(inner.handle(conn));
+            {
+                let state = app.state::<PeerNetState>();
+                state
+                    .inbound_conns
+                    .lock()
+                    .expect("inbound conns lock poisoned")
+                    .entry(node_id.as_str().to_string())
+                    .or_default()
+                    .insert(conn_id, join.abort_handle());
+            }
+            let _ = join.await;
+            // 摘除记账（按连接计数递减）：与 stop_locked 的排水路径互斥去重。
+            // 仅当本节点最后一个入站连接结束且无出站会话时才发 peer-disconnected
+            //（会话连接与数据面短连接并存时，短连接结束不得摘除连接态）
+            let was_last_inbound = {
+                let state = app.state::<PeerNetState>();
+                let mut peers = state
+                    .inbound_peers
+                    .lock()
+                    .expect("inbound peers lock poisoned");
+                match peers.entry(node_id.as_str().to_string()) {
+                    std::collections::hash_map::Entry::Occupied(mut e) => {
+                        let count = e.get_mut();
+                        *count = count.saturating_sub(1);
+                        if *count == 0 {
+                            e.remove();
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                    std::collections::hash_map::Entry::Vacant(_) => false,
+                }
+            };
+            if let Some(conns) = app
+                .state::<PeerNetState>()
+                .inbound_conns
+                .lock()
+                .expect("inbound conns lock poisoned")
+                .get_mut(node_id.as_str())
+            {
+                conns.remove(&conn_id);
+            }
+            if was_last_inbound {
+                let has_outbound = app
+                    .state::<PeerNetState>()
+                    .connections
+                    .lock()
+                    .expect("connections table lock poisoned")
+                    .contains_key(node_id.as_str());
+                if !has_outbound {
+                    emit_json(
+                        &app,
+                        "peer-disconnected",
+                        serde_json::json!({ "nodeId": node_id.as_str(), "connected": false }),
+                    );
+                }
+            }
+        })
+    }
+}
 
 /// 持锁装配路径：start 命令与自动启动共用（调用方已持有状态互斥锁）
 async fn start_locked(
@@ -722,7 +1015,15 @@ async fn start_locked(
     super::peer_remote::register_session(app, handler.event_sender()).await;
 
     let running = node
-        .start_with_listener(listener, events_tx, handler)
+        .start_with_listener(
+            listener,
+            events_tx,
+            Arc::new(InboundConnectionBridge {
+                inner: handler,
+                app: app.clone(),
+                cache: Arc::clone(&cache),
+            }),
+        )
         .map_err(map_peer_net_error)?;
     let listen_addr = running.local_addr();
 
@@ -737,14 +1038,22 @@ async fn start_locked(
     crate::system::error_boundary::spawn_with_error_boundary(
         "peer_net_mdns_bridge",
         async move {
-            while let Some(event) = discovery_rx.recv().await {
-                let (topic, payload) = match event {
-                    DiscoveryEvent::Found(payload) => ("mdns:found", payload),
-                    DiscoveryEvent::Lost(payload) => ("mdns:lost", payload),
-                };
-                publish_mdns_bus(topic, payload);
+            // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
+            // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
+            // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
+            // 同款形态已实机验证可靠。
+            loop {
+                match discovery_rx.try_recv() {
+                    Ok(event) => forward_discovery_event(event),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                    // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                        tracing::debug!("peer mDNS bus bridge exited");
+                        break;
+                    }
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
-            tracing::debug!("peer mDNS bus bridge exited");
         },
     );
 
@@ -771,6 +1080,7 @@ async fn start_locked(
         "peer-net node started: addr={listen_addr}, discovery service={}",
         bedcode_peer_net::SERVICE_TYPE
     );
+    spawn_discovery_refresh_subscriber(app.clone());
     Ok(PeerNodeStatus {
         started: true,
         node_id: state.runtime.lock().await.as_ref().expect("just stored").node_id.clone(),
@@ -784,15 +1094,42 @@ async fn start_locked(
 async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) -> crate::Result<()> {
     // 主动拨号的存活连接随关停一并丢弃（drop 即 TCP 关闭），并逐个通知前端
     // 摘除已连接徽标——连接表随节点生命周期走，重启后从空表开始
-    let drained: Vec<String> = state
+    // 主动拨号的存活连接随关停一并终结：通知活性泵关闭（drop 连接 → 对端经
+    // EOF 感知本机下线），并逐个通知前端摘除已连接徽标——连接表随节点生命
+    // 周期走，重启后从空表开始
+    let drained: Vec<(String, OutboundSession)> = state
         .connections
         .lock()
         .expect("connections table lock poisoned")
         .drain()
+        .collect();
+    for (node_id, session) in drained {
+        let _ = session.close.send(true);
+        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
+    }
+    // 入站连接随节点关停一并终结：中止内层 handler（连接随任务 drop 关闭，
+    // 对端活性泵感知）+ 排水记账并通知前端（桥的完成路径因记账已摘除而不重复发）
+    let inbound_conns: Vec<HashMap<u64, tokio::task::AbortHandle>> = state
+        .inbound_conns
+        .lock()
+        .expect("inbound conns lock poisoned")
+        .drain()
+        .map(|(_, handles)| handles)
+        .collect();
+    for handles in inbound_conns {
+        for (_, handle) in handles {
+            handle.abort();
+        }
+    }
+    let inbound_drained: Vec<String> = state
+        .inbound_peers
+        .lock()
+        .expect("inbound peers lock poisoned")
+        .drain()
         .map(|(node_id, _)| node_id)
         .collect();
-    for node_id in drained {
-        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id }));
+    for node_id in inbound_drained {
+        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
     }
     let runtime = state.runtime.lock().await.take();
     match runtime {
@@ -941,6 +1278,183 @@ pub(crate) fn publish_mdns_bus(topic: &str, payload: serde_json::Value) {
     }
 }
 
+/// 单条引擎发现事件转发插件总线（found/lost 主题映射，载荷原样透传）
+fn forward_discovery_event(event: DiscoveryEvent) {
+    let (topic, payload) = match event {
+        DiscoveryEvent::Found(payload) => ("mdns:found", payload),
+        DiscoveryEvent::Lost(payload) => ("mdns:lost", payload),
+    };
+    publish_mdns_bus(topic, payload);
+}
+
+// ==================== 插件「探索发现」直达路径 ====================
+
+/// 插件刷新请求 topic：插件 rust 经 `bus_publish` 发布，宿主静态订阅消费
+const DISCOVERY_REFRESH_TOPIC: &str = "peer:discovery-refresh";
+/// 宿主静态订阅者注册名（≠ 插件 id，避免 publish 的 sender 过滤误伤）
+const DISCOVERY_REFRESH_SUBSCRIBER: &str = "host-peer-discovery";
+
+/// 刷新请求处理器：同步回调内不 await，重活移交 tauri 异步运行时
+struct DiscoveryRefreshHandler {
+    app: AppHandle,
+}
+
+impl crate::plugin::message_bus::BusMessageHandler for DiscoveryRefreshHandler {
+    fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            handle_discovery_refresh(app).await;
+        });
+        Ok(())
+    }
+}
+
+/// 处理刷新请求：① 触发即时重查（查询→应答是本环境唯一可靠发现路径）；
+/// ② 当前发现缓存逐条以 `mdns:found` 重发——插件前端激活晚于发现事件时
+/// （引擎启动即发现对端，插件订阅在秒级之后）按钮/首屏仍有完整设备列表
+async fn handle_discovery_refresh(app: AppHandle) {
+    let state = app.state::<PeerNetState>();
+    let guard = state.runtime.lock().await;
+    let Some(runtime) = guard.as_ref() else {
+        tracing::debug!("peer discovery refresh: node not running");
+        return;
+    };
+    runtime.daemon.request_requery();
+    let snapshot = runtime.cache.list();
+    let mut connected: Vec<String> = state
+        .connections
+        .lock()
+        .expect("connections table lock poisoned")
+        .keys()
+        .cloned()
+        .collect();
+    // 入站（被连侧）连接同样纳入重发：插件前端挂载晚于入站连接建立时首屏即真
+    connected.extend(
+        state
+            .inbound_peers
+            .lock()
+            .expect("inbound peers lock poisoned")
+            .keys()
+            .cloned(),
+    );
+    drop(guard);
+    for record in snapshot {
+        publish_mdns_bus("mdns:found", record.found_wire_payload());
+    }
+    // 连接态重发：本机主动拨号的存活连接逐个以 peer:connection 重推
+    // （入站连接的连接态由 accept 时刻的实时事件维护）。插件前端挂载晚于
+    // 连接建立时，连接徽标/状态胶囊首屏即真，不再误用宿主主连接状态
+    for node_id in connected {
+        publish_mdns_bus(
+            "peer:connection",
+            serde_json::json!({ "nodeId": node_id, "connected": true }),
+        );
+    }
+    tracing::info!("peer discovery snapshot republished after refresh request");
+}
+
+/// 挂载刷新请求静态订阅：节点由插件激活驱动启动，注册时插件管理器可能
+/// 尚未进全局态，轮询等就绪后再注册（进程内仅注册一次）
+/// 注册护栏：peer 节点重启会重入 start_locked，静态订阅只挂一次
+static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn spawn_discovery_refresh_subscriber(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+    if DISCOVERY_REFRESH_SUBSCRIBED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "peer_net_discovery_refresh_subscriber",
+        async move {
+            loop {
+                if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+                    ctx.plugin_host()
+                        .message_bus()
+                        .subscribe_static(
+                            DISCOVERY_REFRESH_SUBSCRIBER,
+                            DISCOVERY_REFRESH_TOPIC,
+                            Box::new(DiscoveryRefreshHandler { app }),
+                        )
+                        .await;
+                    tracing::info!("peer discovery refresh subscriber registered");
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        },
+    );
+}
+
+// ==================== 插件引擎电源（peer:node-power）====================
+
+/// 插件电源声明 topic：插件 activate/deactivate 经 `bus_publish` 声明引擎需求
+/// （`{on: bool, requestedBy: <plugin-id>}`）。宿主订阅者只认 topic 不认插件
+/// ——引擎随属主插件生命周期启停的语义由插件自身驱动（ADR 0022 v2：宿主
+/// 不感知插件业务）
+const NODE_POWER_TOPIC: &str = "peer:node-power";
+/// 宿主静态订阅者注册名（≠ 插件 id，避免 publish 的 sender 过滤误伤）
+const NODE_POWER_SUBSCRIBER: &str = "host-peer-node-power";
+
+/// 电源请求处理器：同步回调内不 await，重活移交 tauri 异步运行时
+struct NodePowerHandler {
+    app: AppHandle,
+}
+
+impl crate::plugin::message_bus::BusMessageHandler for NodePowerHandler {
+    fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
+        let Some(on) = msg.payload.get("on").and_then(|v| v.as_bool()) else {
+            return Ok(());
+        };
+        let app = self.app.clone();
+        tauri::async_runtime::spawn(async move {
+            let result = if on {
+                ensure_node_started(&app).await
+            } else {
+                stop_node_for_plugin(&app).await
+            };
+            if let Err(e) = result {
+                tracing::error!(on, error = %e, "peer-net node power request failed");
+            }
+        });
+        Ok(())
+    }
+}
+
+/// 挂载电源声明静态订阅：AppContext 全局可能晚于本调用就绪（boot 竞态），
+/// 轮询等就绪后注册（进程内仅一次）。boot 装配期（PluginHost::new 内
+/// auto_activate）的声明早于注册会被丢弃，由 boot 末尾的
+/// [`sync_node_with_plugin_state`] 对账兜底
+static NODE_POWER_SUBSCRIBED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn spawn_node_power_subscriber(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+    if NODE_POWER_SUBSCRIBED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "peer_net_node_power_subscriber",
+        async move {
+            loop {
+                if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+                    ctx.plugin_host()
+                        .message_bus()
+                        .subscribe_static(
+                            NODE_POWER_SUBSCRIBER,
+                            NODE_POWER_TOPIC,
+                            Box::new(NodePowerHandler { app }),
+                        )
+                        .await;
+                    tracing::info!("peer-net node power subscriber registered");
+                    return;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            }
+        },
+    );
+}
+
 /// 前端事件名 → 插件总线 topic 映射（非对等事件返回 None 不桥接）
 fn bus_topic_for(event: &str) -> Option<&'static str> {
     match event {
@@ -952,6 +1466,15 @@ fn bus_topic_for(event: &str) -> Option<&'static str> {
         "peer-receive-changed" => Some("peer:receive"),
         _ => None,
     }
+}
+
+/// 拨号成功 `peer-connected` 载荷（dial_peer / dial_peer_endpoint 共用）。
+///
+/// `connected` 是插件前端 handleConnectionChanged 的连接判据：缺失即按断开
+/// 处理，会把 dial-peer 命令成功后前端的 markConnected 回滚成「未连接」。
+/// 出站拨号路径曾漏发该字段（入站桥/刷新重发/断开事件均带），集中构造防再漏
+fn dial_connected_payload(node_id: &str, device_name: &str) -> serde_json::Value {
+    serde_json::json!({ "nodeId": node_id, "deviceName": device_name, "connected": true })
 }
 
 /// 运行时句柄快照（issue 09 发送编排用）：节点句柄 + 发现缓存
@@ -1000,4 +1523,18 @@ fn resolve_device_name(app: &AppHandle) -> String {
         .map(|info| info.device_name.clone())
         .filter(|name| !name.is_empty())
         .unwrap_or_else(|| "BedCode Desktop".to_string())
+}
+
+/// 拨号连接事件载荷契约：`connected` 字段必须存在（插件前端缺失即按断开处理）
+#[cfg(test)]
+mod dial_payload_tests {
+    use super::*;
+
+    #[test]
+    fn dial_connected_payload_carries_connected_true() {
+        let payload = dial_connected_payload("aa", "Pixel 9");
+        assert_eq!(payload["nodeId"], "aa");
+        assert_eq!(payload["deviceName"], "Pixel 9");
+        assert_eq!(payload["connected"], true);
+    }
 }

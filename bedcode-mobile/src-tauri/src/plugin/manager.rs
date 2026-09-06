@@ -398,8 +398,11 @@ impl PluginManager {
         // 通知所有插件应用启动完成
         self.dispatch_lifecycle_event(PluginLifecycleEvent::AppStartup).await;
 
-        // 仅在生产路径使用 app_handle：显式忽略未用变量警告
-        let _ = app_handle;
+        // peer-net 节点状态对账：boot 装配后按最终插件状态对齐（幂等，与
+        // activate/deactivate 外壳接线互为兜底——激活失败/半程失败也收敛）
+        if let Err(e) = crate::peer_net::sync_node_with_plugin_state(app_handle).await {
+            tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
+        }
     }
 
     /// 判断插件来源是否属于内置信任域（无需审批）
@@ -516,6 +519,24 @@ impl PluginManager {
     /// `Arc<PluginManager>` 内的 `app_handle` 字段，删去以允许 `#[cfg(test)]`
     /// 构造无头 PluginManager 走真 activate 路径
     pub async fn activate(&self, plugin_id: &str) -> Result<()> {
+        // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
+        // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
+        let result = self.activate_inner(plugin_id).await;
+        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+            if let Some(app) = self.app_handle.clone() {
+                if let Err(e) = crate::peer_net::ensure_node_started(&app).await {
+                    tracing::error!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "peer-net node start on plugin activation failed"
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    async fn activate_inner(&self, plugin_id: &str) -> Result<()> {
         // 0. 审批门禁（防冒名顶替获取权限）
         //
         // 内置插件（ApkAsset/FrontendOnly）属于应用构建信任域，直接放行；
@@ -704,6 +725,24 @@ impl PluginManager {
     ///
     /// 锁约定同 activate：执行 WASM deactivate 导出期间不持 map 守卫
     pub async fn deactivate(&self, plugin_id: &str) -> Result<()> {
+        // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
+        // 服务下线，对端即时感知；幂等）
+        let result = self.deactivate_inner(plugin_id).await;
+        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+            if let Some(app) = self.app_handle.clone() {
+                if let Err(e) = crate::peer_net::stop_node_for_plugin(&app).await {
+                    tracing::error!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "peer-net node stop on plugin deactivation failed"
+                    );
+                }
+            }
+        }
+        result
+    }
+
+    async fn deactivate_inner(&self, plugin_id: &str) -> Result<()> {
         // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
         crate::plugin::wasm_runtime::host_impl::purge_browsers_for_plugin(plugin_id);
 

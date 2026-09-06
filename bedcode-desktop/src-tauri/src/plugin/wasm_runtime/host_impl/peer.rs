@@ -115,10 +115,14 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_dial") {
         return Err(denied());
     }
-    let mut endpoint: crate::peer_net::DialEndpoint = serde_json::from_str(endpoint_json)
+    let endpoint: crate::peer_net::DialEndpoint = serde_json::from_str(endpoint_json)
         .map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
     let app = require_app(host_ctx)?;
-    let node_id = std::mem::take(&mut endpoint.node_id);
+    // 注意：node_id 必须 clone 而非 take——take 会把 endpoint.node_id 置空，
+    // dial_peer_endpoint 对空 node_id 报 "invalid node id ''" 静默失败
+    // （2026-09-07 实机实证：桌面点连接无拨号、无任何日志）。移动端同函数因
+    // take 后重新构造 endpoint 无此 bug，两端口径保持 clone 语义对齐。
+    let node_id = endpoint.node_id.clone();
     let addr = endpoint.addr.clone();
     let port = endpoint.port;
     let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;

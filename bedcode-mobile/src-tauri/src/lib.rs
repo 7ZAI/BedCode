@@ -99,7 +99,8 @@ pub fn run() {
             app.manage(crate::peer_transfer::PeerTransferState::default());
             app.manage(crate::peer_receive::PeerReceiveState::default());
             app.manage(crate::peer_remote::PeerRemoteState::default());
-            crate::peer_net::spawn_autostart(app_handle.clone());
+            // 节点自启已退役：peer-net 生命周期随文件传输插件启停
+            // （插件管理器 activate/deactivate 外壳接线，见 peer_net::ensure_node_started）
 
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）

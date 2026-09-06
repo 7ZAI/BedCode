@@ -263,7 +263,7 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
     while let Some(event) = rx.recv().await {
         match event {
             TransferEvent::OfferPending { remote, batch_id, files, total_size, reply } => {
-                register_offer(&app, remote, batch_id, files, total_size, reply);
+                register_offer(&app, remote, batch_id, files, total_size, reply).await;
             }
             TransferEvent::Progress { batch_id, transferred, rate_bps, .. } => {
                 update_progress(&app, &batch_id, transferred, rate_bps);
@@ -280,14 +280,14 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
 /// 对端展示名解析：发现缓存广播名优先，短指纹兜底
 /// 远端拉取任务预登记（issue 11）：pull 会话发起前插入 running 行，使后续
 /// Progress/Terminal 事件与按批取消入口命中既有任务表（免协商无 pending 阶段）
-pub(crate) fn register_remote_pull(
+pub(crate) async fn register_remote_pull(
     app: &AppHandle,
     remote: NodeId,
     batch_id: String,
     rel_path: String,
     total_size: u64,
 ) {
-    let peer_name = resolve_peer_name(app, &remote);
+    let peer_name = resolve_peer_name(app, &remote).await;
     let now = now_ms();
     let dto = PeerTransferDto {
         batch_id: batch_id.clone(),
@@ -331,20 +331,23 @@ pub(crate) fn fail_task(app: &AppHandle, batch_id: &str, detail: String) {
     publish(app);
 }
 
-fn resolve_peer_name(app: &AppHandle, remote: &NodeId) -> String {
+/// 对端展示名解析：发现缓存广播名优先，短指纹兜底
+///
+/// 必须 async：本函数只在 Tokio 运行时内被调用（pull 队列 / 事件消费循环，
+/// 均经 tokio::spawn），不可 block_on——嵌套 runtime 会 panic
+/// （"Cannot start a runtime from within a runtime"）。
+async fn resolve_peer_name(app: &AppHandle, remote: &NodeId) -> String {
     let fallback = || short_fingerprint(remote.as_str());
-    tauri::async_runtime::block_on(async move {
-        match super::peer_net::runtime_snapshot(app).await {
-            Some((_, cache)) => cache
-                .get(remote)
-                .map(|record| record.device_name)
-                .unwrap_or_else(fallback),
-            None => fallback(),
-        }
-    })
+    match super::peer_net::runtime_snapshot(app).await {
+        Some((_, cache)) => cache
+            .get(remote)
+            .map(|record| record.device_name)
+            .unwrap_or_else(fallback),
+        None => fallback(),
+    }
 }
 
-fn register_offer(
+async fn register_offer(
     app: &AppHandle,
     remote: NodeId,
     batch_id: String,
@@ -352,7 +355,7 @@ fn register_offer(
     total_size: u64,
     reply: tokio::sync::oneshot::Sender<bool>,
 ) {
-    let peer_name = resolve_peer_name(app, &remote);
+    let peer_name = resolve_peer_name(app, &remote).await;
     let now = now_ms();
     let dto = PeerTransferDto {
         batch_id: batch_id.clone(),

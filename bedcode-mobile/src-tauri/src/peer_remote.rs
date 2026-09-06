@@ -359,7 +359,8 @@ async fn run_pull_queue(
             batch_id.clone(),
             file.rel_path.clone(),
             file.size,
-        );
+        )
+        .await;
 
         match node.dial(&record).await {
             Ok(conn) => {

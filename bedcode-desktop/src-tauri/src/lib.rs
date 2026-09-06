@@ -316,13 +316,13 @@ pub fn run() {
                 .expect("Failed to get app data dir");
             crate::peer_net::init_node_identity(&peer_net_data_dir)?;
 
-            // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
-            // 与 mDNS 发现守护，真机冒烟零操作可见
+            // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
+            // 启停（插件管理器 activate/deactivate 外壳接线，
+            // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
             app.manage(crate::peer_net::PeerNetState::default());
             app.manage(crate::peer_transfer::PeerTransferState::default());
             app.manage(crate::peer_receive::PeerReceiveState::default());
             app.manage(crate::peer_remote::PeerRemoteState::default());
-            crate::peer_net::spawn_autostart(app_handle.clone());
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
@@ -392,6 +392,16 @@ pub fn run() {
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
             app.manage(system_info.clone());
+
+            // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
+            // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
+            // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
+            // 装配完成后按最终插件状态补对账
+            if let Err(e) = tauri::async_runtime::block_on(
+                crate::peer_net::sync_node_with_plugin_state(&app_handle_arc),
+            ) {
+                tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
+            }
 
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载

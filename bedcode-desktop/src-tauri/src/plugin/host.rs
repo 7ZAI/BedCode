@@ -630,6 +630,33 @@ impl PluginHost {
     /// - WASM 插件：调用 __bedcode_activate 导出函数
     /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
     pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
+        // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
+        // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
+        let result = self.activate_plugin_inner(plugin_id, persist).await;
+        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+            match crate::system::app_context::AppContext::try_global() {
+                Some(ctx) => {
+                    if let Some(app) = ctx.app_handle() {
+                        if let Err(e) = crate::peer_net::ensure_node_started(app).await {
+                            tracing::error!(
+                                plugin_id = %plugin_id,
+                                error = %e,
+                                "peer-net node start on plugin activation failed"
+                            );
+                        }
+                    }
+                }
+                // boot 装配期 AppContext 未注册：静默跳过，由 boot 末尾的状态
+                // 对账（sync_node_with_plugin_state）兜底
+                None => {
+                    tracing::debug!("peer-net node start skipped: AppContext not ready (boot assembly)");
+                }
+            }
+        }
+        result
+    }
+
+    async fn activate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] activate_plugin({}, persist={})", plugin_id, persist);
 
         // 阶段 0(无锁):预授权 — 必须在持 plugins 锁之前完成,失败直接
@@ -943,6 +970,32 @@ impl PluginHost {
     }
 
     pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
+        // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
+        // 服务下线，对端即时感知；幂等）
+        let result = self.deactivate_plugin_inner(plugin_id, persist).await;
+        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
+            match crate::system::app_context::AppContext::try_global() {
+                Some(ctx) => {
+                    if let Some(app) = ctx.app_handle() {
+                        if let Err(e) = crate::peer_net::stop_node_for_plugin(app).await {
+                            tracing::error!(
+                                plugin_id = %plugin_id,
+                                error = %e,
+                                "peer-net node stop on plugin deactivation failed"
+                            );
+                        }
+                    }
+                }
+                // boot 装配期 AppContext 未注册：由 boot 末尾的状态对账兜底
+                None => {
+                    tracing::debug!("peer-net node stop skipped: AppContext not ready (boot assembly)");
+                }
+            }
+        }
+        result
+    }
+
+    async fn deactivate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!("[PluginHost] deactivate_plugin({}, persist={})", plugin_id, persist);
 
         // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）

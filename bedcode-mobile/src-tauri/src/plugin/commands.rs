@@ -408,12 +408,20 @@ pub async fn plugin_invoke(
     let args_str = args.to_string();
     let result = manager.invoke_command(&plugin_id, &command, &args_str).await?;
     // 还原为 JSON 对象返回前端（任务数组 / {ok:true} 等）
-    serde_json::from_str(&result).map_err(|e| {
+    let value: Value = serde_json::from_str(&result).map_err(|e| {
         crate::AppError::Plugin(format!(
             "plugin_invoke: invalid result JSON from plugin {}: {}",
             plugin_id, e
         ))
-    })
+    })?;
+    // 插件 invoke_command 的 Err 经 SDK 宏序列化为 {"error": "..."} 的**成功** JSON，
+    // 此处还原为真正错误（与桌面端同口径，见 host/commands.rs）
+    if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+        if !err.is_empty() {
+            return Err(crate::AppError::Plugin(err.to_string()));
+        }
+    }
+    Ok(value)
 }
 
 // ==================== System Open（历史「打开所在文件夹」真机路径） ====================
