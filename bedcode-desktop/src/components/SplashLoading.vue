@@ -51,8 +51,7 @@
               class="splash-rise splash-rise-3 wb-mono flex h-5 items-center text-[calc(13px*var(--ui-scale))]"
             >
               <span class="text-[var(--splash-text-faint)]">$&nbsp;</span
-              ><span class="splash-typed text-[var(--splash-text)]">bedcode</span
-              ><span class="splash-caret" aria-hidden="true"></span>
+              ><span class="splash-typed text-[var(--splash-text)]">bedcode</span>
             </div>
 
             <!-- Boot log 阶段栈（可选，替代状态文本） -->
@@ -291,17 +290,6 @@ const statusText = computed(() => props.status || t('desktop.splash.status'))
   }
 }
 
-.splash-caret {
-  display: inline-block;
-  width: 0.55em;
-  height: 1.05em;
-  margin-left: 3px;
-  background: var(--splash-text);
-  /* 磷光效果：box-shadow 让光标像 CRT 磷光余晖 */
-  box-shadow: 0 0 8px rgba(236, 232, 220, 0.7);
-  animation: splash-caret-blink 1s steps(1) infinite;
-}
-
 .splash-glyph-caret {
   animation: splash-caret-blink 1.2s steps(1) 0.9s infinite;
 }
@@ -445,13 +433,11 @@ const statusText = computed(() => props.status || t('desktop.splash.status'))
     animation-iteration-count: 1 !important;
   }
 
-  .splash-caret,
   .splash-glyph-caret,
   .splash-halo {
     animation: none !important;
   }
 
-  .splash-caret,
   .splash-glyph-caret {
     opacity: 1;
   }

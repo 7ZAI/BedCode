@@ -62,10 +62,9 @@ describe('SplashLoading Component', () => {
     const overlay = document.querySelector('.splash-root')!
     // 品牌名
     expect(overlay.textContent).toContain('BedCode')
-    // 终端启动行：$ 提示符 + 命令 + 光标（Teleport 到 body，用 document 查询）
+    // 终端启动行：$ 提示符 + 命令（Teleport 到 body，用 document 查询）
     const typed = overlay.querySelector('.splash-typed')
     expect(typed?.textContent).toBe('bedcode')
-    expect(overlay.querySelector('.splash-caret')).toBeTruthy()
     wrapper.unmount()
   })
 

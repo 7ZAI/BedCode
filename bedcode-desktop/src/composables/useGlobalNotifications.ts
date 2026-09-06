@@ -15,6 +15,13 @@ let unlistenPeerConsentRequested: (() => void) | null = null
 let unlistenPeerConnected: (() => void) | null = null
 let unlistenPeerDisconnected: (() => void) | null = null
 
+/**
+ * 当前已连接的对端 nodeId 集合（去重）：数据面短连接（浏览/拉取各自新拨）会
+ * 让 peer-connected / peer-disconnected 高频重复，仅在真实状态跃迁时 toast
+ * （2026-09-07 实机实证：每次连接/断开弹出一堆 toast）。
+ */
+const connectedPeerIds = new Set<string>()
+
 /** peer-net 连接事件载荷（peer_net.rs emit_json 契约，camelCase） */
 interface PeerEventPayload {
   nodeId?: string
@@ -113,9 +120,14 @@ export function useGlobalNotifications() {
       )
     }
 
-    // 对等连接建立 / 断开（peer-net 链路，区别于 WS 终端链路的 device-*）
+    // 对等连接建立 / 断开（peer-net 链路，区别于 WS 终端链路的 device-*）。
+    // 按 nodeId 去重：仅在真实状态跃迁时 toast（connected 去重/ disconnected
+    // 去重），避免数据面短连接 churn 造成 toast 风暴
     if (!unlistenPeerConnected) {
       unlistenPeerConnected = await listen<PeerEventPayload>('peer-connected', (event) => {
+        const id = event.payload.nodeId
+        if (!id || connectedPeerIds.has(id)) return
+        connectedPeerIds.add(id)
         toast.success(
           i18n.global.t('common.notification.peerConnected', {
             name: peerDisplayName(event.payload),
@@ -125,6 +137,9 @@ export function useGlobalNotifications() {
     }
     if (!unlistenPeerDisconnected) {
       unlistenPeerDisconnected = await listen<PeerEventPayload>('peer-disconnected', (event) => {
+        const id = event.payload.nodeId
+        if (!id || !connectedPeerIds.has(id)) return
+        connectedPeerIds.delete(id)
         toast.warning(
           i18n.global.t('common.notification.peerDisconnected', {
             name: peerDisplayName(event.payload),
@@ -163,6 +178,7 @@ export function useGlobalNotifications() {
       unlistenPeerDisconnected()
       unlistenPeerDisconnected = null
     }
+    connectedPeerIds.clear()
   }
 
   return {
