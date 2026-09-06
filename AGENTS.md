@@ -72,10 +72,16 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 统一 `tracing`：`debug!`（常规）、`info!`（关键）、`warn!`（警告/重试）、`error!`（异常）。Android 统一写 `tracing::` 宏，自动转发 logcat。
 
-| 端     | 落盘方式                                                                                | 位置                                                                                                               |
-| ------ | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| 桌面端 | 始终写文件（dev/release）                                                               | `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR，按天轮转 |
-| 移动端 | 电脑端落盘仅 `pnpm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep）                                       |
+| 端 | 落盘方式 | 位置 |
+| --- | --- | --- |
+| 桌面端 | 始终写文件（dev/release） | `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR、`frontend.*.log`（仅 dev），按天轮转 |
+| 移动端 | 电脑端落盘仅 `pnpm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep；含 `frontend` 目标前端日志） |
+
+**前端 console 日志（仅 debug 构建，AI agent 抓取前端控制台输出的通道）**：前端 `console.*` 经 `src/utils/devConsoleRelay.ts` 覆盖转发 → Rust `commands/dev_logs.rs::report_frontend_log`（`#[cfg(debug_assertions)]` 注册，仅 `tauri:dev` / `tauri:android:dev` 生效）→ tracing（target=`frontend`）。获取方式：
+
+- 桌面端：直接读 `frontend.*.log`（单独文件，纯前端日志；同批事件也混入 `runtime.*.log`）
+- 移动端：`pnpm run tauri:android:dev:log` 落盘文件 grep `frontend`（tracing → logcat）
+- release 两端自动剥离（Rust 命令不注册 + 前端 `import.meta.env.DEV` no-op），无需额外清理
 
 实际路径确认：桌面端 dev 控制台首行 `Logging initialized.`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
 

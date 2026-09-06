@@ -2,6 +2,7 @@
 //!
 //! 前端 invoke 命令层 - 系统命令、会话命令、PTY 命令等
 
+pub mod dev_logs;
 pub mod devices;
 pub mod mdns;
 pub mod opener;

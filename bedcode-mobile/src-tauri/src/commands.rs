@@ -5,6 +5,7 @@
 pub mod android;
 pub mod auth;
 pub mod connection;
+pub mod dev_logs;
 pub mod mdns;
 pub mod mobile_commands;
 pub mod session;

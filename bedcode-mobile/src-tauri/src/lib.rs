@@ -316,6 +316,9 @@ pub fn run() {
             crate::plugin::commands::plugin_fs_get_plugin_whitelist,
             crate::plugin::commands::plugin_log,
             crate::plugin::commands::plugin_invoke,
+            // Dev Console Relay（仅 debug 构建：前端 console 日志转发 → logcat → dev:log 电脑端落盘，见 commands::dev_logs）
+            #[cfg(debug_assertions)]
+            commands::dev_logs::report_frontend_log,
             // System Open（历史「打开所在文件夹」真机路径，system:open 权限）
             crate::plugin::commands::plugin_reveal_received_file,
             // File Service Commands（插件 TS 通道）

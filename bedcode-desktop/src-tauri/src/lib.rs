@@ -44,7 +44,8 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 fn reset_today_logs(log_dir: &std::path::Path) {
     // tracing_appender 的 rolling 文件名日期用 UTC（与本地日期可能错位一天）
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    for prefix in ["runtime", "error"] {
+    // 日志重置列表：runtime / error / frontend（前端 console 单独文件，见 init_logging）
+    for prefix in ["runtime", "error", "frontend"] {
         let path = log_dir.join(format!("{prefix}.{today}.log"));
         if path.exists() {
             match std::fs::remove_file(&path) {
@@ -93,6 +94,29 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
         .expect("Failed to create error log file appender");
 
     // 运行时日志文件：级别由 log.file_level 控制
+    // 前端 console 日志单独文件（仅 dev）：target=`frontend` 的事件写 frontend.*.log，
+    // 与 runtime.*.log 分离，AI agent 直接读此文件即可获取前端控制台输出（无需 grep 混流）
+    #[cfg(debug_assertions)]
+    let frontend_builder = tracing_appender::rolling::RollingFileAppender::builder()
+        .rotation(rotation.clone())
+        .filename_prefix("frontend")
+        .filename_suffix("log");
+    #[cfg(debug_assertions)]
+    let frontend_appender = frontend_builder
+        .build(&log_dir)
+        .expect("Failed to create frontend log file appender");
+    #[cfg(debug_assertions)]
+    let frontend_layer = tracing_subscriber::fmt::layer()
+        .with_writer(frontend_appender)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_line_number(true)
+        .with_filter(
+            tracing_subscriber::filter::Targets::new()
+                .with_target("frontend", tracing::Level::DEBUG),
+        );
+
     let mut runtime_builder = tracing_appender::rolling::RollingFileAppender::builder()
         .rotation(rotation)
         .filename_prefix("runtime")
@@ -130,6 +154,13 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     // 控制台输出逻辑
     let should_add_console = cfg!(debug_assertions) || log_config.console_in_release;
 
+    // 基础注册：error + runtime（release 无 frontend 层）
+    let registry = tracing_subscriber::registry()
+        .with(error_layer)
+        .with(runtime_layer);
+    #[cfg(debug_assertions)]
+    let registry = registry.with(frontend_layer);
+
     if should_add_console {
         // RUST_LOG 环境变量优先级最高，其次使用配置值
         let console_filter =
@@ -141,18 +172,12 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
             .event_format(system::logging::ConsoleFormatter::new())
             .with_filter(console_filter);
 
-        tracing_subscriber::registry()
-            .with(error_layer)
-            .with(runtime_layer)
+        registry
             .with(console_layer)
             .try_init()
             .expect("Failed to set tracing subscriber");
     } else {
-        tracing_subscriber::registry()
-            .with(error_layer)
-            .with(runtime_layer)
-            .try_init()
-            .expect("Failed to set tracing subscriber");
+        registry.try_init().expect("Failed to set tracing subscriber");
     }
 
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
@@ -588,6 +613,9 @@ pub fn run() {
             // 2026-08: append_terminal_output_dump 临时调试命令已注释禁用（恢复排查时取消注释）
             // commands::system::append_terminal_output_dump,
             commands::system::confirm_window_close,
+            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
+            #[cfg(debug_assertions)]
+            commands::dev_logs::report_frontend_log,
             commands::devices::get_connected_devices,
             // Plugin
             commands::plugin::plugin_list_loaded,

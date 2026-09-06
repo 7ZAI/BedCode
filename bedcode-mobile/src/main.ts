@@ -8,11 +8,16 @@ import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { initPluginSystem } from './plugin'
 import { completeStartupTask } from '@/composables/useAppStartup'
+import { installDevConsoleRelay } from '@/utils/devConsoleRelay'
 import './style.css'
 import './styles/mobile.css'
 import 'vue-sonner/style.css'
 
 const app = createApp(App)
+
+// 尽早安装（debug 构建专属）：把前端 console 日志转发到 Rust（tracing → logcat），
+// AI agent 通过 tauri:android:dev:log 落盘文件 grep `frontend` 获取；release 两端均为 no-op
+installDevConsoleRelay()
 const pinia = createPinia()
 
 app.use(pinia)

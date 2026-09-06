@@ -10,6 +10,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
+import { installDevConsoleRelay } from '@/utils/devConsoleRelay'
 import 'vue-sonner/style.css'
 import './style.css'
 
@@ -33,6 +34,10 @@ interface PluginRuntimeErrorPayload {
 }
 
 const app = createApp(App)
+
+// 尽早安装（dev 专属）：把前端 console 日志转发到 Rust 落盘（runtime.*.log，target=frontend），
+// AI agent 可通过日志文件抓取前端控制台输出；release 构建下两端均为 no-op
+installDevConsoleRelay()
 
 // 全局异常处理：Vue 组件渲染/生命周期错误与未捕获的 Promise 拒绝统一提示，
 // 避免静默失败（与插件运行时异常通道互为补充，见下方 plugin:runtime-error 监听）

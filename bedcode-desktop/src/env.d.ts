@@ -13,6 +13,15 @@ interface Window {
   __BEDCODE_SHARED__: BedCodeSharedModules
 }
 
+/** Vite 环境变量（仅声明本项目用到的字段，避免引入完整 vite/client 类型） */
+interface ImportMeta {
+  readonly env: {
+    readonly DEV: boolean
+    readonly PROD: boolean
+    readonly MODE: string
+  }
+}
+
 declare module '*.css' {
   const content: string
   export default content
