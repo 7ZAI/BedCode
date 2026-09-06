@@ -2,7 +2,7 @@
  * 终端流组合集成测试（L2 场景 3，10 号票重写）
  *
  * 协作实体：terminalBuffer store（终端 WS 状态机 + lastRenderedSeq） +
- * useTerminalBuffer（实时 handler 注册） + writeCoalescer（直写管线） +
+ * useTerminalBuffer（实时 handler 注册） + writeCoalescer（rAF 合并写入管线） +
  * xterm Terminal（stub，遵循 writeCoalescer.test.ts 的项目惯例） +
  * useMobileConnection.sendInput（HTTP 输入回传 + JWT 注入）。
  *
@@ -19,6 +19,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import type { Terminal } from '@xterm/xterm'
 import type { RemoteDevice } from '@/composables/model'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
+import type { TerminalSocketHandlers } from '@/composables/useTerminalSocket'
 import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
 import { makeAuthCredentials } from '@/__tests__/fixtures/index'
 
@@ -36,7 +37,7 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
 const mockFetch = vi.fn()
 
 // fake 终端 socket：捕获 handlers，测试手动驱动
-let capturedHandlers: Record<string, any> | null = null
+let capturedHandlers: TerminalSocketHandlers | null = null
 let fakeSocket: {
   start: ReturnType<typeof vi.fn>
   subscribe: ReturnType<typeof vi.fn>
@@ -118,8 +119,8 @@ function setupSocket() {
     ackRendered: vi.fn(),
   }
   capturedHandlers = null
-  createTerminalSocketMock.mockImplementation((handlers: unknown) => {
-    capturedHandlers = handlers as Record<string, any>
+  createTerminalSocketMock.mockImplementation((handlers: TerminalSocketHandlers) => {
+    capturedHandlers = handlers
     return fakeSocket
   })
   return fakeSocket
@@ -184,24 +185,43 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
   })
 
   it('历史段实时帧缓冲 → history_end FLUSH 写入 terminal（快照拼接无缝隙）', async () => {
-    const store = useTerminalBufferStore()
-    const terminal = makeMockTerminal()
-    const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
-    const term = useTerminalBuffer()
-    term.registerRealtimeHandler('s1', terminal)
+    // writeCoalescer 默认 rAF 合并（见 writeCoalescer.ts 头注释）：在测试里
+    // 捕获并手动执行挂起的 rAF 回调，模拟渲染帧推进，不依赖 jsdom 时序
+    const rafCallbacks: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return rafCallbacks.length
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+    const flushRaf = () => {
+      while (rafCallbacks.length) rafCallbacks.shift()!(0)
+    }
+    try {
+      const store = useTerminalBufferStore()
+      const terminal = makeMockTerminal()
+      const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
+      const term = useTerminalBuffer()
+      term.registerRealtimeHandler('s1', terminal)
 
-    await store.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-    capturedHandlers!.onFrame(frame(1, 10, 'his')) // 历史帧覆盖到 snapshot 边界（1-10）
-    // 历史段内实时帧（> snapshot_seq）：缓冲不写入
-    capturedHandlers!.onFrame(frame(11, 1, 'live'))
-    expect(terminal.write).toHaveBeenCalledTimes(1)
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1, 10, 'his')) // 历史帧覆盖到 snapshot 边界（1-10）
+      flushRaf()
+      expect(terminal.write).toHaveBeenCalledTimes(1)
 
-    // history_end：FLUSH 实时缓冲
-    capturedHandlers!.onHistoryEnd(10)
-    await flushAsync()
-    expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('live'))
-    expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(11)
+      // 历史段内实时帧（> snapshot_seq）：缓冲不写入
+      capturedHandlers!.onFrame(frame(11, 1, 'live'))
+      flushRaf()
+      expect(terminal.write).toHaveBeenCalledTimes(1)
+
+      // history_end：FLUSH 实时缓冲
+      capturedHandlers!.onHistoryEnd(10)
+      flushRaf()
+      expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('live'))
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(11)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('输入回传：sendInput → HTTP POST 参数构造 + JWT 注入协作', async () => {

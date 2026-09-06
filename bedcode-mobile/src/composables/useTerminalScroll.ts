@@ -422,6 +422,12 @@ export function useTerminalScroll(
       currentLine.value = lastLine
     }
 
+    // 滚动停止兜底补刷（TUI 局部残留修复）：TUI（opencode）滚动重绘中偶发
+    // 「含背景色/反色的行渲染层漏绘」——高亮选中条更新时 xterm 收到清背景
+    // 序列但 canvas 像素未更新，残留上一帧高亮（刷新=forceReplay 能清 → buffer
+    // 数据正确，属渲染层残留）。滚动完全停止后补一次全量重绘擦除，仅 TUI 模式
+    schedulePostScrollRefresh()
+
     startInertia()
   }
 
@@ -436,6 +442,31 @@ export function useTerminalScroll(
 
   function disableGpuHint() {
     // no-op: will-change 会导致 xterm 滚动重影
+  }
+
+  // ==================== Post-Scroll Refresh ====================
+
+  /** 滚动停止兜底补刷定时器句柄 */
+  let postScrollRefreshTimer: ReturnType<typeof setTimeout> | null = null
+
+  /**
+   * 滚动停止补刷（TUI 局部残留修复）：TUI（opencode）滚动重绘中偶发
+   * 「含背景色/反色的行渲染层漏绘」——高亮选中条/确认框更新时，xterm 收到
+   * 清背景序列但 canvas 像素未更新，残留上一帧高亮（点刷新=forceReplay 能清
+   * → buffer 数据正确，属渲染层残留；rAF 合并解决批次交错成片残影后此类
+   * 局部残留仍在）。滚动完全停止后补一次全量重绘即可擦除。
+   * 仅 TUI 模式调度（非 TUI 无此问题，避免多余整屏重绘开销）；500ms 覆盖
+   * 惯性滑行尾段（TUI 惯性最长 ~430ms），一次性触发不做节流
+   */
+  function schedulePostScrollRefresh() {
+    if (!tuiCompat?.isTuiMode.value) return
+    if (postScrollRefreshTimer) clearTimeout(postScrollRefreshTimer)
+    postScrollRefreshTimer = setTimeout(() => {
+      postScrollRefreshTimer = null
+      if (!terminalRef.value) return
+      const rows = terminalRef.value.rows
+      if (rows > 0) terminalRef.value.refresh(0, rows - 1)
+    }, 500)
   }
 
   // ==================== Inertia Scroll ====================
@@ -785,7 +816,7 @@ export function useTerminalScroll(
     }
   }
 
-  function applySettings(theme: string, fontSize: number, fitAddon: FitAddon | null) {
+  function applySettings(_theme: string, fontSize: number, fitAddon: FitAddon | null) {
     if (!terminalRef.value) return
 
     // 单独设置每个属性，避免覆盖整个 options 对象
@@ -813,6 +844,10 @@ export function useTerminalScroll(
     if (touchState.hideTimer) {
       clearTimeout(touchState.hideTimer)
       touchState.hideTimer = null
+    }
+    if (postScrollRefreshTimer) {
+      clearTimeout(postScrollRefreshTimer)
+      postScrollRefreshTimer = null
     }
     if (touchState.inertiaRafId) {
       cancelAnimationFrame(touchState.inertiaRafId)

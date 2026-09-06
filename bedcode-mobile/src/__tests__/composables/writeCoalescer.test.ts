@@ -31,9 +31,21 @@ function makeMockTerminal(): Terminal {
 }
 
 describe('createWriteCoalescer', () => {
-  it('rAF 合并默认关闭：每个事件直接写入，不经合并管线', () => {
+  it('rAF 合并默认开启：事件挂起到 rAF，不立即写入', () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term)
+
+    const d1 = new Uint8Array([1, 2, 3])
+    coalescer(d1)
+
+    // 默认合并：未注册 rAF 前不写，注册了一个 rAF
+    expect(term.write).not.toHaveBeenCalled()
+    expect(rafCallbacks).toHaveLength(1)
+  })
+
+  it('rAF 合并关闭（调试回退）时：每个事件直接写入，不经合并管线', () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: false })
 
     const d1 = new Uint8Array([1, 2, 3])
     const d2 = new Uint8Array([4, 5])
@@ -47,9 +59,9 @@ describe('createWriteCoalescer', () => {
     expect(rafCallbacks).toHaveLength(0)
   })
 
-  it('rAF 合并关闭时 dispose 幂等无害', () => {
+  it('rAF 合并关闭（调试回退）时 dispose 幂等无害', () => {
     const term = makeMockTerminal()
-    const coalescer = createWriteCoalescer(term)
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: false })
     coalescer(new Uint8Array([1]))
     coalescer.dispose()
     expect(term.write).toHaveBeenCalledTimes(1)
@@ -131,29 +143,29 @@ describe('createWriteCoalescer', () => {
     expect(calls[1]).toEqual(Array.from(payload.subarray(MAX_WRITE_CHUNK)))
   })
 
-  it('累积超过 256KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', () => {
+  it('累积超过 512KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
-    coalescer(new Uint8Array(200 * 1024))
+    coalescer(new Uint8Array(400 * 1024))
     expect(term.write).not.toHaveBeenCalled()
     expect(rafCallbacks).toHaveLength(1)
 
-    coalescer(new Uint8Array(100 * 1024))
-    // 300KB → 5 块，立即执行
-    expect(term.write).toHaveBeenCalledTimes(5)
+    coalescer(new Uint8Array(200 * 1024))
+    // 600KB → 10 块（600KB / 64KB = 9.375），立即执行
+    expect(term.write).toHaveBeenCalledTimes(10)
     // 立即 flush 取消了挂起的 rAF
     expect(rafCallbacks).toHaveLength(1)
 
-    // 内容完整性：分块拼接 = 原始 300KB
+    // 内容完整性：分块拼接 = 原始 600KB
     const written = term.write.mock.calls.map(c => c[0] as Uint8Array)
-    const joined = new Uint8Array(300 * 1024)
+    const joined = new Uint8Array(600 * 1024)
     let offset = 0
     for (const chunk of written) {
       joined.set(chunk, offset)
       offset += chunk.byteLength
     }
-    expect(offset).toBe(300 * 1024)
+    expect(offset).toBe(600 * 1024)
     // 每块不超过上限
     for (const chunk of written) {
       expect(chunk.byteLength).toBeLessThanOrEqual(MAX_WRITE_CHUNK)
