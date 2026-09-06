@@ -242,7 +242,7 @@ pi-lens 提供 IDE 级语义能力（词索引 + tree-sitter 结构 + LSP 诊断
 **强制规则：**
 
 - 目标文件 > 200 行时，**禁止 `read` 整个文件**，必须走 `module_report` 大纲 → `read_symbol` / `read_enclosing` 定点读
-- 找「谁在用它」类符号引用，**禁止 `rg 符号名`**，用 `symbol_search` 或下方 LSP 章节的 `lsp { action: "references" }`
+- 找「谁在用它」类符号引用，**禁止 `rg 符号名`**，用 `symbol_search` 或 `lsp { action: "references" }`；Rust 类型精确引用用 `scipq`（见文末「scipq」节）
 - 找「某段文案 / 日志字样 / 配置项」才是 `rg` 的场景（字符串字面量、注释、日志 tag 不是符号）
 - turn 结束前必须跑一次 `lens_diagnostics mode=all` 收尾；报告 🔴 blocker 未清前不算 done
 - cascade 上报的 LSP 假阳性（Vue 组件类型误判、Vite shim 解析不到、跨 tsconfig 边界的类型缺失）按 `[slop]` / `[code-smell]` 建议对待，不是阻塞；确认后可用 `lens_diagnostic_mark` 记录 false-positive
@@ -354,7 +354,7 @@ subagent({ agent: 'vision', task: '请分析截图 <绝对路径>' })
 
 典型工作流：
 
-```
+```text
 1. code-map.md 定位模块 → ls 看目录 → 打开入口文件
 2. 对关键符号发 lsp hover/references 摸清类型与调用面
 3. 按 references 结果定点 read 具体行段（非整文件）
@@ -363,7 +363,7 @@ subagent({ agent: 'vision', task: '请分析截图 <绝对路径>' })
 
 示例：
 
-```
+```text
 lsp { action: "references", query: "refreshTerminal", file: "bedcode-mobile/src/composables/usePeer.ts" }
 lsp { action: "hover", query: "MessageBus", file: "bedcode-desktop/src-tauri/src/terminal_ws.rs" }
 ```
@@ -373,3 +373,16 @@ lsp { action: "hover", query: "MessageBus", file: "bedcode-desktop/src-tauri/src
 - rust-analyzer 首次查询需索引整个工程（30-60s+，一次性成本），之后毫秒级响应；会话内尽早发一次轻量查询预热
 - 同名符号歧义用 `hover` 类型签名消歧
 - `.vue` 由 vue-language-server 处理，`<script setup>` 内 ref/computed 引用可精确定位
+
+### scipq — Rust 类型精确引用（SCIP 索引，无常驻进程）
+
+rust-analyzer 已在 pi-lens 禁用（`disabledServers`，单实例 2GB+ 内存）。Rust 的「谁定义 / 谁引用 / 改它影响谁」用 SCIP 索引查询——一次性建索引、之后查询零内存：
+
+```bash
+.pi-lens/scip/scipq syms <片段>                # 符号全名/kind（先定位 symbol）
+.pi-lens/scip/scipq defs <片段>                # 定义位置（精确 file:line:col）
+.pi-lens/scip/scipq refs <片段>                # 引用（文件+行区段，秒级）
+.pi-lens/scip/scipq refs-exact "<完整symbol>"  # 引用精确行列（2-5s）
+```
+
+**刷新策略（固定间隔或按需，不做每次代码变更的自动重建）**：按需 `scipq rebuild`；固定间隔 `scipq rebuild-if-stale [hours]`（默认 24h，间隔内零成本跳过）；状态自查 `scipq stale`。role 语义（0=引用、1=定义）、格式与已知限制见 `.pi-lens/scip/README.md`。

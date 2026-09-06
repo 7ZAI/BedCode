@@ -29,17 +29,17 @@ This repository is the desktop project of the BedCode monorepo (Tauri 2.0 + Vue 
 
 ## Tech Stack
 
-| Category | Technology |
-|----------|------------|
-| Framework | Tauri 2.0 (Windows), Node.js + Rust |
-| Frontend | Vue 3 + TypeScript + Vite + TailwindCSS |
-| State | Pinia + vue-router |
-| Backend | Rust (Tokio), Actix Web 4 + tokio-tungstenite |
-| Database | SQLite (rusqlite) |
-| Terminal | @xterm/xterm + addon-fit / web-links / webgl |
-| Auth | JWT (HS256), device fingerprint, 6-digit pairing code / QR token |
-| Plugins | wasmtime (WASM component runtime) + cdylib dynamic loading |
-| Other | shiki, ECharts, qrcode, vue-i18n@9, tracing logging |
+| Category  | Technology                                                       |
+| --------- | ---------------------------------------------------------------- |
+| Framework | Tauri 2.0 (Windows), Node.js + Rust                              |
+| Frontend  | Vue 3 + TypeScript + Vite + TailwindCSS                          |
+| State     | Pinia + vue-router                                               |
+| Backend   | Rust (Tokio), Actix Web 4 + tokio-tungstenite                    |
+| Database  | SQLite (rusqlite)                                                |
+| Terminal  | @xterm/xterm + addon-fit / web-links / webgl                     |
+| Auth      | JWT (HS256), device fingerprint, 6-digit pairing code / QR token |
+| Plugins   | wasmtime (WASM component runtime) + cdylib dynamic loading       |
+| Other     | shiki, ECharts, qrcode, vue-i18n@9, tracing logging              |
 
 ## Directory Structure
 
@@ -73,14 +73,14 @@ bedcode-desktop/
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18, [Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform-specific dependencies
 - An installed & configured Agent CLI (e.g. [Claude Code](https://claude.ai/code), opencode, pi)
 
 ### Install & Run
 
 ```bash
-npm install
+pnpm install
 
 # Dev mode (builds plugins + launches Tauri dev)
 pnpm run tauri:dev
@@ -93,20 +93,20 @@ pnpm run tauri:build
 ### Tests
 
 ```bash
-pnpm run test:run            # Frontend unit tests (vitest run — don't use `pnpm run test`, it's watch mode)
-pnpm exec playwright test         # E2E tests
-cd src-tauri && cargo test  # Rust tests
+pnpm run test:run                  # Frontend unit tests (vitest run — don't use `pnpm run test`, it's watch mode)
+pnpm exec playwright test          # E2E tests
+cd src-tauri && cargo test         # Rust tests
 ```
 
 ### Other Scripts
 
-| Command | Description |
-|---------|-------------|
-| `pnpm run build` / `build:fast` | Frontend type-check + build / build only |
-| `pnpm run plugins:build` | Build all official plugins (wasm + frontend artifacts) |
-| `pnpm run plugins:dev` | Plugin dev hot-reload |
-| `pnpm run lint` / `format` | ESLint / Prettier |
-| `pnpm run target:size` | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
+| Command                         | Description                                                     |
+| ------------------------------- | --------------------------------------------------------------- |
+| `pnpm run build` / `build:fast` | Frontend type-check + build / build only                        |
+| `pnpm run plugins:build`        | Build all official plugins (wasm + frontend artifacts)          |
+| `pnpm run plugins:dev`          | Plugin dev hot-reload                                           |
+| `pnpm run lint` / `format`      | ESLint / Prettier                                               |
+| `pnpm run target:size`          | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
 
 ## Plugin System
 
@@ -121,12 +121,12 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 
 ### Official Plugins
 
-| Plugin | Version | Description |
-|--------|---------|-------------|
-| **AI Chatbox** | 1.0.0-beta | AI chat: any OpenAI-compatible provider, streaming conversations, multi-session management |
-| **Auto Task** | 1.0.0-beta | Agent task queue & auto-approval: task status sync, queue scheduling, preset tasks, scheduled jobs |
+| Plugin            | Version    | Description                                                                                         |
+| ----------------- | ---------- | --------------------------------------------------------------------------------------------------- |
+| **AI Chatbox**    | 1.0.0-beta | AI chat: any OpenAI-compatible provider, streaming conversations, multi-session management          |
+| **Auto Task**     | 1.0.0-beta | Agent task queue & auto-approval: task status sync, queue scheduling, preset tasks, scheduled jobs  |
 | **File Transfer** | 1.0.0-beta | LAN file transfer: peer discovery, remote directory browsing, concurrent transfers (resume / retry) |
-| **Scheduler** | 1.0.0-beta | Generic scheduling framework: cron-triggered shell scripts / inline commands with audit logs |
+| **Scheduler**     | 1.0.0-beta | Generic scheduling framework: cron-triggered shell scripts / inline commands with audit logs        |
 
 To build your own plugin, use [`@binblink/plugin-sdk-desktop`](packages/plugin-sdk-desktop/README_en.md) (TS SDK + Rust `bedcode-plugin-api` crate); full guide in [plugin-dev-desktop.md](plugin-dev-desktop.md).
 

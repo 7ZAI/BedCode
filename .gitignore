@@ -57,6 +57,10 @@ CONTEXT.md
 .omp/
 .pi/
 
+# pi-lens 运行时状态（缓存/会话/变更日志），配置文件 .pi-lens/lsp.json 保持跟踪
+.pi-lens/*
+!.pi-lens/lsp.json
+
 .VSCodeCounter/
 *.swp
 *.swo

@@ -214,6 +214,22 @@ _Avoid_: 任务状态（指队列项/任务记录时）
 自动任务（队列出队/定时触发）执行前先执行的 agent 上下文清理命令，用于防止上下文超限。清理命令由执行 agent 的 profile 提供（Claude Code 为 `/clear`，其他 agent 走扩展点）。清理可能导致 agent 会话重建（新 agent 会话 ID 与新的 session_mapping），其触发的会话结束事件属于机制副作用，不得改写前一任务的终态；全新会话的首个任务无需清理。
 _Avoid_: 清屏、重置对话、/clear（指机制时）
 
+**启动握手 (Startup Handshake)**:
+任务图（DAG）节点进程启动后的就绪证明：节点写 `{nodeId}.startup.json { state: "ready", token }`，插件确认后才把节点从 ready 推进 running；超时未确认标 failed 并终止进程。`process_run` 返回 run-id 只证明 spawn 成功，不证明 agent 已进入工作——握手补齐这一环。
+_Avoid_: 就绪检查（泛称）、心跳（指周期性的，与一次性的启动握手不同）
+
+**两阶段结果提升 (Two-Phase Result Promotion)**:
+任务图节点结果的原子发布：输出先写 `<node>.output.pending`，写完后原子 rename 为 `<node>.output.json`，并写 `<node>.output.done` 哨兵。下游与模板解析只在哨兵存在后读取，永不会读到半写的输出。
+_Avoid_: 输出落盘（指 process_run 的原始产物，未提升）、结果文件（泛称）
+
+**代际 token (Generation Token)**:
+任务图节点每次启动（含重试）生成的随机标识：写入运行实例行与节点启动配置，`on_process_done` 必须携带；状态机只在 token 匹配当前 attempt 时才收敛，不匹配的回调记日志丢弃。用于防止迟到/重试的旧退出回调被误判为新一轮完成证据。
+_Avoid_: run-id（宿主进程标识，可重复、非唯一）、attempt 计数（不含身份证明）
+
+**结果哨兵 (Result Sentinel)**:
+节点输出发布完成的承诺文件（`<node>.output.done`）：内容为输出路径 + 写全时间 + 代际 token。它是下游读取输出的唯一许可，与两阶段结果提升的 rename 互补（哨兵 = 完成承诺，rename = 原子发布）。
+_Avoid_: 完成通知（指宿主进程事件，非文件）、done 标记（泛称）
+
 ### AI 对话 (AI Chatbox)
 
 **对话 (Conversation)**:

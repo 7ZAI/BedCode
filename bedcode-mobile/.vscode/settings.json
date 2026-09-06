@@ -2,32 +2,6 @@
   "i18n-ally.localesPaths": [
     "src/locales"
   ],
-  "editor.formatOnSave": true,
-  "editor.codeActionsOnSave": {
-    "source.fixAll.eslint": "explicit"
-  },
-  "eslint.validate": [
-    "javascript",
-    "javascriptreact",
-    "typescript",
-    "typescriptreact",
-    "vue"
-  ],
-  "[vue]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
-  "[typescript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
-  "[javascript]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
-  "[json]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
-  "[jsonc]": {
-    "editor.defaultFormatter": "esbenp.prettier-vscode"
-  },
   // ==================== rust-analyzer 内存优化 ====================
   // 与仓库根 .vscode/settings.json 同策略（详见 .vscode/README.md）：
   // 本机 12GB 内存，swap 已满，双 Tauri 项目同时索引曾触发 oomd 杀进程。

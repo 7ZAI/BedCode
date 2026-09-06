@@ -21,41 +21,38 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 
 ## 界面
 
-  桌面端
-<img src="bedcode-desktop/desktop_app.png"  alt="BedCode" >
+**桌面端**
 
+<img src="bedcode-desktop/desktop_app.png" alt="BedCode 桌面端">
 
-  移动端(平板)
+**移动端（平板）**
 
-  <img src="bedcode-mobile/bedcode_mobile.jpg"  alt="BedCode" >
+<img src="bedcode-mobile/bedcode_mobile.jpg" alt="BedCode 移动端">
 
 ## 功能特性
 
 ### 设备连接
 
- 移动端连接桌面端
+移动端连接桌面端：
 
-- **手动输入** — 手动输入桌面端ip地址 端口 + 6 位验证码安全配对 
-- **mDNS** — 移动端通过mDNS扫描自动获取桌面端ip与端口 点击 输入配对码
-- **二维码** — 移动端通扫描桌面端生成的二维码完成 
-- **生物特征认证** — 在首次完成连接认证的前提下绑定指纹或者人脸识别，在下一次连接时可通过校验指纹免输入连接
-- **连接历史** — 首次连接认证成功后移动端会记录连接历史认证凭证（7天有效期）通过点击连接历史即可连接
-
+- **手动输入** — 手动输入桌面端 IP 地址 + 端口，6 位验证码安全配对
+- **mDNS** — 移动端通过 mDNS 扫描自动获取桌面端 IP 与端口，点击并输入配对码
+- **二维码** — 移动端扫描桌面端生成的二维码完成配对
+- **生物特征认证** — 首次连接认证成功后绑定指纹或人脸识别，下次连接免输入校验即可连接
+- **连接历史** — 首次连接认证成功后记录连接凭证（7 天有效期），点击历史记录即可一键重连
 
 ### 终端会话管理
 
-- **终端配置** — 给终端配置启动命令、运行环境（支持WSL2）、工作目录的配置项 
-- **终端输出** — 双端均采用xterm.js 模拟终端，以获取原生终端的输出显示体验；提供字体、显示主题配置
-- **终端输入** — 桌面端与系统原生终端输入体验一致；移动端提供了快捷键配置（Tab、Ctrl+C、Esc、方向键）、常用命令配置、agent cli常用命令、快捷键预配置等一些列优化移动端终端输入体验的功能
-- **代码浏览器** — 移动端的终端中提供项目文件浏览侧边栏、源码文件语法高亮、Git diff 渲染、分支切换等配合代码开发的功能
-- **任务自动化（插件）** — 通过双端开启auto-task插件，可在终端添加多个任务，自动执行，任务状态持久化，目前适配pi claude code codex opencode。
-
+- **终端配置** — 配置启动命令、运行环境（支持 WSL2）、工作目录
+- **终端输出** — 双端均采用 xterm.js 模拟终端，以获取原生终端的输出显示体验；提供字体、显示主题配置
+- **终端输入** — 桌面端与系统原生终端输入体验一致；移动端提供快捷键配置（Tab、Ctrl+C、Esc、方向键）、常用命令配置、Agent CLI 快捷命令、快捷键预配置等一系列优化移动端终端输入体验的功能
+- **代码浏览器** — 移动端终端内提供项目文件浏览侧边栏、源码语法高亮、Git diff 渲染、分支切换等配合代码开发的功能
+- **任务自动化（插件）** — 双端开启 Auto Task 插件后，可在终端添加多个任务自动执行，任务状态持久化；目前适配 pi / Claude Code / Codex / opencode
 
 ### 插件系统
 
-
-- **插件管理** — 双端插件均可热插拔，即启即用、即停即止；设置插件自定义的配置项
-- **现有插件** — 双端都有的插件其中AI Cahtbox 互相独立插件，其他两个为关联插件
+- **插件管理** — 双端插件均可热插拔，即启即用、即停即止；支持设置插件自定义配置项
+- **现有插件** — 双端内置相同插件集：AI Chatbox 两端互相独立，其余两个为关联插件
 
 <table>
 <thead>
@@ -80,10 +77,6 @@ BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端
 </tbody>
 </table>
 
-
-
-
-
 ### 国际化
 
 vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错误码映射系统提供本地化错误消息。
@@ -92,25 +85,11 @@ vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错�
 
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
-```text
-┌─ 桌面端（主机）· Tauri 2.0 ────────────────────┐       ┌─ 移动端（远程终端）· Tauri 2.0 / Android ──────┐
-│                                                │       │                                                │
-│  Vue 3 前端                                    │       │  Vue 3 前端                                    │
-│  会话管理 · 终端预览 · 服务器视图 · 插件配置   │       │  终端视图 · 代码浏览器 · 工具箱 · 预设任务     │
-│     ^                                          │       │     ^                                          │
-│     │                                          │       │     │                                          │
-│     v                                          │       │     v                                          │
-│  Rust 宿主（Tauri 命令 / 事件桥）              │       │  Rust 宿主（Tauri 命令 / 事件桥）              │
-│  ├─ PTY 进程管理（命令启动 · WSL · 输出分发）  │       │  ├─ 认证（配对 · JWT · 生物凭证）              │
-│  ├─ 会话管理器（生命周期 · 事件总线）── SQLite │       │  ├─ 消息路由（终端 / 同步 / 文件处理器）       │
-│  ├─ Actix Web 服务器（HTTP REST + WebSocket）  │ <───> │  ├─ WS 客户端（心跳 · 重连 · 请求-响应）       │
-│  ├─ 插件宿主（wasmtime 沙箱 · 权限 · API 桥接）│       │  ├─ 插件宿主（wasmtime 沙箱）                  │
-│  │    └── 经 Actix Web 注册插件 HTTP 端点      │       │  │    └── wit ABI 桥接调用宿主 API             │
-│  ├─ 文件服务（目录挂载 · 传输引擎）            │ <───> │  ├─ 文件服务（SAF · 传输引擎）                 │
-│  └─ mDNS 服务广播                              │ <───> │  └─ mDNS 发现                                  │
-│                                                │       │                                                │
-└────────────────────────────────────────────────┘       └────────────────────────────────────────────────┘
-```
+<a href="docs/architecture/BedCode.architecture.html" target="_blank">
+  <img src="docs/architecture/bedcode-architecture.png" alt="BedCode 架构图 — 桌面主机 · 移动端远程 · WASM 插件沙箱">
+</a>
+
+<sub>📈 交互式版本：支持深色 / 浅色主题、节点聚焦、路由追踪、导出分享卡 —— <a href="docs/architecture/BedCode.architecture.html" target="_blank">打开</a> · 源文件：<a href="docs/architecture/BedCode.architecture.json">archify JSON IR</a>（<a href="https://github.com/tt-a1i/archify">Archify</a> 渲染）</sub>
 
 <table>
 <thead>
@@ -153,15 +132,12 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 </tbody>
 </table>
 
-
-
 ## 快速开始
 
 ### 安装
 
-    1 需要在桌面主机端，配置好agent cli,比如pi、claude code、opencode、codex等
-    
-    2 在github release 获取最新版本安装包；安装
+1. 在桌面主机端配置好 Agent CLI（如 pi、Claude Code、opencode、Codex 等）
+2. 从 [GitHub Releases](https://github.com/7ZAI/BedCode/releases) 获取最新版本安装包并安装
 
 #### 支持平台
 
@@ -180,9 +156,10 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 当前聚焦 **Windows（桌面端）+ Android（移动端）** 双平台，两端核心能力（终端会话、文件服务、插件系统）均已跑通。跨平台适配调试测试工作量较大（系统权限模型、打包分发、平台集成），精力有限暂未覆盖，有志同道合或者需求者可下载源码自行适配。
 
 > 依托 Tauri 2.0 架构（Rust 后端 + Web 前端），跨平台的可能性与便利性天然保留：核心业务逻辑与 UI 均为跨平台技术，未来扩展 macOS / Linux / iOS 时无需重写业务代码，主要工作是平台适配层（打包、权限、系统 API 对接）。
+
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.94（wasmtime 47 MSRV）
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.94（wasmtime 47 MSRV）
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)）
 

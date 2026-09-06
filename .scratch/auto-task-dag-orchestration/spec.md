@@ -120,6 +120,19 @@ running ──(用户取消)──▶ cancelled（连带 kill 进程组）
 
 manifest 权限增加 `process:run`（宿主已实现门禁与逐次审计日志）。现有 `terminal:input` / `terminal:observe` 等在编排路径上不再需要，但交互式路径仍依赖，暂保留；待旧路径退役时同步收敛权限。
 
+### D11. 进程边界可靠性协议（进程握手 / 两阶段结果提升 / 代际 token / 结果索引）
+
+「exit code 是权威终态」（D1）在三个场景下会失真：进程 spawn 成功 ≠ agent 真正启动（配置错、凭据无效会秒退，节点滞留 running）；下游读取上游输出时可能读到半写文件（多图并发 + 断点续跑时）；重试/取消后迟到的旧退出回调可能被误判为新一轮的完成证据（run-id 不唯一）。本决策借鉴 `pi-subagents` 扩展的四项进程级可靠性模式（详见 ADR-0025），宿主零新增能力（遵守 D2），全部在插件层以「文件 + 原子 rename + token」实现：
+
+1. **启动握手（Startup Handshake）**：节点进程启动后写 `{nodeId}.startup.json { state: "ready", token }`，插件确认后才把 `ready → running` 推进；超时（默认 30s）未确认则标 failed 并 `process_kill`。`process_run` 返回 run-id 只证明 spawn 成功，不证明 agent 已进入工作——握手补齐这一环。
+2. **两阶段结果提升（Two-Phase Result Promotion）**：节点输出先写 `<node>.output.pending`，写完后原子 `rename` 为 `<node>.output.json`，并写 `<node>.output.done` 哨兵（内容 = 输出路径 + 写全时间 + 本轮 token）。**下游与模板解析只在哨兵存在后读取**——永远读不到半写的输出。
+3. **代际 token（Generation Token）**：每次 spawn（含每次重试）生成随机 token 写入运行实例行与节点启动配置；`on_process_done` 必须携带 `launch_token`，状态机只在 token 匹配当前 attempt 时才收敛，不匹配的回调记日志丢弃。退出码要先证明「我是这一轮跑出来的」，才配当终态。
+4. **结果索引**：运行实例表新增 `trigger_id` / `node_id` / `launch_token` / `output_file` / `output_done_file` 索引列；下游按 `(trigger_id, 上游 node_id)` 定位输出文件，断点续跑按「非终态节点 + 其 launch_token」恢复（输出已发布而状态未终态时，先收敛再续跑，不重跑已完成节点）。
+
+**明确排除**：pi-subagents 的 Supervisor 双向通道（child 运行中阻塞问 parent，与用户故事 #20 无人值守冲突）与同进程子会话（与 D1「节点 = 独立进程」矛盾）不纳入。
+
+**对既有决策的影响**：D4 状态机的 `ready → running` 增加启动握手前置条件，`running → succeeded/failed` 增加 launch_token 匹配守卫（迁移图语义不变）；`fail-fast` 因握手更早触发（启动即崩立即判 failed），`continue` 因两阶段提升更安全（下游绝不消费半写产物）。
+
 ## Testing Decisions
 
 ### 好测试的标准
@@ -136,6 +149,7 @@ manifest 权限增加 `process:run`（宿主已实现门禁与逐次审计日志
 - **状态机转换**：D4 状态机的全部合法迁移与非法迁移拒绝（表驱动测试）。
 - **结果模板渲染**：全文引用、结构化字段引用、未解析引用报错。
 - **执行调度**（fake 执行器）：失败重试、超时、取消、fail-fast / continue 传播、断点续跑（从运行实例表恢复非终态节点）。
+- **进程边界协议**（D11）：fake 执行器断言启动握手文件与 token、输出文件 + 哨兵、launch_token 匹配收敛；令牌不匹配的回调被丢弃；哨兵未现时下游不读取（Rust 侧对 `std::fs::rename` 原子性语义的路径级断言）。
 - **执行适配层**：各 agent 非交互启动参数与退出码映射（纯函数，表驱动）。
 
 ### 测试先例（prior art）
@@ -157,6 +171,7 @@ manifest 权限增加 `process:run`（宿主已实现门禁与逐次审计日志
 ## Further Notes
 
 - 迁移策略建议分阶段：先以「单链图」替换定时自动任务的执行路径（`session_create` → `process_run`）验证进程级执行的可行性，再引入图模型与拓扑调度，最后退役旧 hooks 编排路径。
+- 进程边界可靠性协议（启动握手 / 两阶段提升 / 代际 token / 结果索引）见 D11 与 ADR-0025；其实现参考 pi-subagents 的跨进程通信模式（结果索引、原子两阶段提升、启动握手、token 证明）。
 - 执行适配层是剩余的外部依赖面（各 agent CLI 的非交互 flag 与退出码语义），比现有四套 hook 脚本简单一个数量级，因为它只关心进程启动与退出，不解析生命周期事件。
 - 任务图的引入不改变 ADR-0004 的任务记录语义：图节点成功/失败仍产生任务记录（来源标记为图执行），图节点与任务记录是"执行单元"与"归档视图"的关系，与现有"队列项 = 任务记录同一实体"保持一致。
 - 上下文清理（`/clear`）机制在 DAG 路径上消失后，交互式路径仍需要它；相关 agent profile 字段与调度分支在旧路径退役前保持不变。

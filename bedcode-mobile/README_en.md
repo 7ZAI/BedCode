@@ -31,17 +31,17 @@ This repository is the mobile project of the BedCode monorepo (Tauri 2.0 + Vue 3
 
 ## Tech Stack
 
-| Category | Technology |
-|----------|------------|
-| Framework | Tauri 2.0 (Android), Node.js + Rust |
-| Frontend | Vue 3 + TypeScript + Vite + TailwindCSS |
-| State | Pinia + vue-router |
-| Backend | Rust (Tokio), tokio-tungstenite (WS client) |
-| Terminal | @xterm/xterm + addon-fit / unicode11 / web-links / webgl |
-| Auth | JWT (HS256), ECDSA biometric credential (p256), device fingerprint |
-| Files | SAF (Storage Access Framework) tree traversal & relay copy |
-| Plugins | WASM components (wasmtime) runtime |
-| Other | shiki, html5-qrcode, marked, vue-i18n@9, tracing logging (logcat) |
+| Category  | Technology                                                         |
+| --------- | ------------------------------------------------------------------ |
+| Framework | Tauri 2.0 (Android), Node.js + Rust                                |
+| Frontend  | Vue 3 + TypeScript + Vite + TailwindCSS                            |
+| State     | Pinia + vue-router                                                 |
+| Backend   | Rust (Tokio), tokio-tungstenite (WS client)                        |
+| Terminal  | @xterm/xterm + addon-fit / unicode11 / web-links / webgl           |
+| Auth      | JWT (HS256), ECDSA biometric credential (p256), device fingerprint |
+| Files     | SAF (Storage Access Framework) tree traversal & relay copy         |
+| Plugins   | WASM components (wasmtime) runtime                                 |
+| Other     | shiki, html5-qrcode, marked, vue-i18n@9, tracing logging (logcat)  |
 
 ## Directory Structure
 
@@ -75,23 +75,23 @@ bedcode-mobile/
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18, [Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) with Android SDK / NDK
 - A computer running [BedCode Desktop](../bedcode-desktop/) as the host
 
 ### Install & Run
 
 ```bash
-npm install
+pnpm install
 
 # Dev mode: build & install to an Android device (physical or emulator)
-npm run tauri:android:dev
+pnpm run tauri:android:dev
 
 # Dev mode with host-side log capture (logcat also written to .dev-logs/ for debugging)
-npm run tauri:android:dev:log
+pnpm run tauri:android:dev:log
 
 # Production build (aarch64)
-npm run tauri:android:build
+pnpm run tauri:android:build
 ```
 
 > [!NOTE]
@@ -100,8 +100,8 @@ npm run tauri:android:build
 ### Tests
 
 ```bash
-npm run test:run            # Frontend unit tests (vitest run — don't use `npm run test`, it's watch mode)
-cd src-tauri && cargo test  # Rust tests
+pnpm run test:run                  # Frontend unit tests (vitest run — don't use `pnpm run test`, it's watch mode)
+cd src-tauri && cargo test         # Rust tests
 ```
 
 > After modifying custom Kotlin plugins under `src-tauri/gen/android/`, you must additionally run
@@ -110,12 +110,12 @@ cd src-tauri && cargo test  # Rust tests
 
 ### Other Scripts
 
-| Command | Description |
-|---------|-------------|
-| `npm run build` / `build:fast` | Frontend type-check + build / build only |
-| `npm run tauri:android:build:fast` | Quick debug build without type-check |
-| `npm run plugins:build` | Build official plugins (WASM artifacts) |
-| `npm run target:size` | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
+| Command                             | Description                                                     |
+| ----------------------------------- | --------------------------------------------------------------- |
+| `pnpm run build` / `build:fast`     | Frontend type-check + build / build only                        |
+| `pnpm run tauri:android:build:fast` | Quick debug build without type-check                            |
+| `pnpm run plugins:build`            | Build official plugins (WASM artifacts)                         |
+| `pnpm run target:size`              | Check `src-tauri/target` size (run `target:clean` if over 15GB) |
 
 ## Plugin System
 
@@ -125,10 +125,10 @@ To build your own plugin, use [`@binblink/plugin-sdk-mobile`](packages/plugin-sd
 
 ### Official Plugins
 
-| Plugin | Version | Description |
-|--------|---------|-------------|
-| **AI Chatbox** | 1.0.0-beta | AI chat: any OpenAI-compatible provider, streaming conversations, multi-session management |
-| **Auto Task** | 1.0.0-beta | Agent task queue & auto-approval: task status sync, queue scheduling, preset tasks, scheduled jobs |
+| Plugin            | Version    | Description                                                                                                |
+| ----------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| **AI Chatbox**    | 1.0.0-beta | AI chat: any OpenAI-compatible provider, streaming conversations, multi-session management                 |
+| **Auto Task**     | 1.0.0-beta | Agent task queue & auto-approval: task status sync, queue scheduling, preset tasks, scheduled jobs         |
 | **File Transfer** | 1.0.0-beta | LAN file transfer: online peer discovery, remote directory browsing, concurrent transfers (resume / retry) |
 
 ## Related Docs

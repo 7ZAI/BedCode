@@ -2,25 +2,43 @@
     "i18n-ally.localesPaths": [
         "src/locales"
     ],
-    "rust-analyzer.files.watcherExclude": [
-        "**/target/**",
-        "**/node_modules/**",
-        "**/gen/android/build/**",
-        "**/gen/android/app/build/**",
-        "**/.git/**"
-    ],
-    "rust-analyzer.files.exclude": [
-        "**/target/**",
-        "**/gen/android/**",
-        "**/node_modules/**"
-    ],
-    "rust-analyzer.memoryUsage": {
-        "contextLimit": 256,
-        "syntaxTreeLimit": 128,
-        "hoverLimit": 128,
-        "completionLimit": 128
+    // ==================== rust-analyzer 内存优化 ====================
+    // 背景：2026-09-04 打开工作区根同时索引 desktop+mobile 两个 Tauri 项目（根目录无
+    // Cargo workspace），RA RSS 冲到 3.2GB 被 systemd-oomd 杀进程。当时使用的
+    // memoryUsage.*Limit 与 rust-analyzer.files.watcherExclude 键在 rust-analyzer
+    // 0.3.3033 已移除（`--print-config-schema` 确认），本段以当前版本有效键重新收紧。
+    //
+    // VSCode 原生文件监听排除（支持 glob，替代已移除的 rust-analyzer.files.watcherExclude；
+    // 两个 target 合计约 43G，必须排除，否则启动遍历即吃爆内存）
+    "files.watcherExclude": {
+        "**/target/**": true,
+        "**/gen/**": true,
+        "**/node_modules/**": true,
+        "**/.git/**": true
     },
-    "rust-analyzer.cargo.buildScripts.enable": true,
+    // RA 自身 VFS 排除：0.3.3033 起不再支持 glob，须为相对路径；
+    // 同时列出「根相对」与「工作区相对」两种写法，兼容不同解析基准
+    "rust-analyzer.files.exclude": [
+        "target",
+        "gen",
+        "bedcode-desktop/src-tauri/target",
+        "bedcode-mobile/src-tauri/target",
+        "bedcode-desktop/src-tauri/gen",
+        "bedcode-mobile/src-tauri/gen",
+        "node_modules"
+    ],
+    // 关闭启动时全工作区缓存预热：内存最大头（替代已移除的 memoryUsage.*Limit；
+    // 代价：首次 hover / 跳转略慢）
+    "rust-analyzer.cachePriming.enable": false,
+    // 语法树 LRU 缓存 128 → 64 条（条目数，非 MB）
+    "rust-analyzer.lru.capacity": 64,
+    // proc-macro 服务进程 2 → 1（tauri+serde+tokio 宏栈每进程占用可观）
+    "rust-analyzer.procMacro.processes": 1,
+    // 不后台跑 cargo check：省一个常驻 rustc 进程（编译错误改由 cargo check / cargo test 自查）
+    "rust-analyzer.checkOnSave": false,
+    // 主循环并行线程默认全核(16) → 4，压低双工作区并行索引的峰值内存
+    "rust-analyzer.numThreads": 4,
+    // Tauri 重度依赖过程宏（#[tauri::command] / generate_context! / serde 派生），必须保持开启
     "rust-analyzer.procMacro.enable": true,
-    "rust-analyzer.updates.channel": "stable"
+    "rust-analyzer.cargo.buildScripts.enable": true
 }

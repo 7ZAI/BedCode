@@ -21,13 +21,13 @@ BedCode is a LAN remote terminal application: the desktop app acts as the host r
 
 ## Interface
 
-  Desktop
-<img src="bedcode-desktop/desktop_app.png"  alt="BedCode" >
+**Desktop**
 
+<img src="bedcode-desktop/desktop_app.png" alt="BedCode desktop">
 
-  Mobile (tablet)
+**Mobile (tablet)**
 
-  <img src="bedcode-mobile/bedcode_mobile.jpg"  alt="BedCode" >
+<img src="bedcode-mobile/bedcode_mobile.jpg" alt="BedCode mobile">
 
 ## Features
 
@@ -84,44 +84,11 @@ Full vue-i18n support (zh-CN / en) with persistent language switcher in settings
 
 Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 60, "rankSpacing": 80}}}%%
-flowchart LR
-    subgraph DESKTOP["Desktop (Host) · Tauri 2.0"]
-        direction TB
-        D_UI["Vue 3 Frontend<br/>Session manager · terminal preview · server view · plugin config"]
-        D_CORE["Rust Host<br/>Tauri commands / event bridge"]
-        D_PTY["PTY Process Manager<br/>command launch · WSL · output dispatch"]
-        D_SESS["Session Manager<br/>lifecycle · event bus"]
-        D_SRV["Actix Web Server<br/>HTTP REST + WebSocket"]
-        D_PLG["Plugin Host<br/>wasmtime sandbox · permissions · API bridge"]
-        D_FS["File Service<br/>directory mounting · transfer engine"]
-        D_MDNS["mDNS Service Broadcast"]
-        D_DB[("SQLite")]
-        D_UI <--> D_CORE
-        D_CORE --- D_PTY & D_SESS & D_SRV & D_PLG & D_FS & D_MDNS
-        D_SESS --- D_DB
-        D_PLG --- D_SRV
-    end
+<a href="docs/architecture/BedCode.architecture.html" target="_blank">
+  <img src="docs/architecture/bedcode-architecture.png" alt="BedCode architecture — desktop host · mobile client · WASM plugin sandbox">
+</a>
 
-    subgraph MOBILE["Mobile (Remote Terminal) · Tauri 2.0 / Android"]
-        direction TB
-        M_UI["Vue 3 Frontend<br/>terminal view · code explorer · toolbox · preset tasks"]
-        M_CORE["Rust Host<br/>Tauri commands / event bridge"]
-        M_WS["WS Client<br/>heartbeat · reconnect · request-response"]
-        M_RT["Message Routing<br/>terminal / sync / file handlers"]
-        M_AUTH["Authentication<br/>pairing · JWT · biometric credential"]
-        M_PLG["Plugin Host<br/>wasmtime sandbox"]
-        M_FS["File Service<br/>SAF · transfer engine"]
-        M_MDNS["mDNS Discovery"]
-        M_UI <--> M_CORE
-        M_CORE --- M_WS & M_RT & M_AUTH & M_PLG & M_FS & M_MDNS
-    end
-
-    D_SRV <--> M_WS
-    D_FS <--> M_FS
-    D_MDNS <--> M_MDNS
-```
+<sub>📈 Interactive version: dark / light themes, node focus, route tracing, share-card export —— <a href="docs/architecture/BedCode.architecture.html" target="_blank">Open</a> · Source: <a href="docs/architecture/BedCode.architecture.json">archify JSON IR</a> (rendered by <a href="https://github.com/tt-a1i/archify">Archify</a>)</sub>
 
 <table>
 <thead>
@@ -190,7 +157,7 @@ Currently focused on **Windows (Desktop) + Android (Mobile)**, with both ends' c
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18, [Rust](https://www.rust-lang.org/tools/install) >= 1.94 (wasmtime 47 MSRV)
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.94 (wasmtime 47 MSRV)
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform dependencies
 - An Agent CLI installed and configured (e.g. [Claude Code](https://claude.ai/code))
 

@@ -29,17 +29,17 @@
 
 ## 技术栈
 
-| 分类 | 技术 |
-|------|------|
-| 框架 | Tauri 2.0（Windows），Node.js + Rust |
-| 前端 | Vue 3 + TypeScript + Vite + TailwindCSS |
-| 状态 | Pinia + vue-router |
-| 后端 | Rust（Tokio）、Actix Web 4 + tokio-tungstenite |
-| 数据库 | SQLite（rusqlite） |
-| 终端 | @xterm/xterm + addon-fit / web-links / webgl |
-| 认证 | JWT（HS256）、设备指纹、6 位配对码 / QR 令牌 |
-| 插件 | wasmtime（WASM 组件运行时）+ cdylib 动态加载 |
-| 其他 | shiki、ECharts、qrcode、vue-i18n@9、tracing 日志 |
+| 分类   | 技术                                             |
+| ------ | ------------------------------------------------ |
+| 框架   | Tauri 2.0（Windows），Node.js + Rust             |
+| 前端   | Vue 3 + TypeScript + Vite + TailwindCSS          |
+| 状态   | Pinia + vue-router                               |
+| 后端   | Rust（Tokio）、Actix Web 4 + tokio-tungstenite   |
+| 数据库 | SQLite（rusqlite）                               |
+| 终端   | @xterm/xterm + addon-fit / web-links / webgl     |
+| 认证   | JWT（HS256）、设备指纹、6 位配对码 / QR 令牌     |
+| 插件   | wasmtime（WASM 组件运行时）+ cdylib 动态加载     |
+| 其他   | shiki、ECharts、qrcode、vue-i18n@9、tracing 日志 |
 
 ## 目录结构
 
@@ -73,14 +73,14 @@ bedcode-desktop/
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及平台相关依赖
 - 已安装并配置 Agent CLI（如 [Claude Code](https://claude.ai/code)、opencode、pi）
 
 ### 安装与运行
 
 ```bash
-npm install
+pnpm install
 
 # 开发模式（自动构建插件 + 启动 Tauri dev）
 pnpm run tauri:dev
@@ -93,20 +93,20 @@ pnpm run tauri:build
 ### 测试
 
 ```bash
-pnpm run test:run            # 前端单元测试（vitest run，注意不要用 pnpm run test 的 watch 模式）
-pnpm exec playwright test         # E2E 测试
-cd src-tauri && cargo test  # Rust 测试
+pnpm run test:run                  # 前端单元测试（vitest run，注意不要用 pnpm run test 的 watch 模式）
+pnpm exec playwright test          # E2E 测试
+cd src-tauri && cargo test         # Rust 测试
 ```
 
 ### 其他常用脚本
 
-| 命令 | 说明 |
-|------|------|
-| `pnpm run build` / `build:fast` | 前端类型检查 + 构建 / 仅构建 |
-| `pnpm run plugins:build` | 构建全部官方插件（wasm + 前端产物） |
-| `pnpm run plugins:dev` | 插件开发热重载 |
-| `pnpm run lint` / `format` | ESLint / Prettier |
-| `pnpm run target:size` | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
+| 命令                            | 说明                                                              |
+| ------------------------------- | ----------------------------------------------------------------- |
+| `pnpm run build` / `build:fast` | 前端类型检查 + 构建 / 仅构建                                      |
+| `pnpm run plugins:build`        | 构建全部官方插件（wasm + 前端产物）                               |
+| `pnpm run plugins:dev`          | 插件开发热重载                                                    |
+| `pnpm run lint` / `format`      | ESLint / Prettier                                                 |
+| `pnpm run target:size`          | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
 
 ## 插件系统
 
@@ -121,12 +121,12 @@ cd src-tauri && cargo test  # Rust 测试
 
 ### 官方插件
 
-| 插件 | 版本 | 说明 |
-|------|------|------|
-| **AI Chatbox** | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商，流式对话、多会话管理 |
-| **Auto Task** | 1.0.0-beta | Agent 任务队列与自动授权：同步任务状态、队列调度、预设任务、定时任务 |
+| 插件              | 版本       | 说明                                                                        |
+| ----------------- | ---------- | --------------------------------------------------------------------------- |
+| **AI Chatbox**    | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商，流式对话、多会话管理             |
+| **Auto Task**     | 1.0.0-beta | Agent 任务队列与自动授权：同步任务状态、队列调度、预设任务、定时任务        |
 | **File Transfer** | 1.0.0-beta | 内网文件传输：对端发现、远程目录浏览、多任务并发传输（断点续传 / 失败重试） |
-| **Scheduler** | 1.0.0-beta | 通用调度框架：cron 表达式触发 shell 脚本 / 内联命令，执行记录可审计 |
+| **Scheduler**     | 1.0.0-beta | 通用调度框架：cron 表达式触发 shell 脚本 / 内联命令，执行记录可审计         |
 
 开发自己的插件：使用 [`@binblink/plugin-sdk-desktop`](packages/plugin-sdk-desktop/README.md)（TS SDK + Rust `bedcode-plugin-api` crate），完整指南见 [plugin-dev-desktop.md](plugin-dev-desktop.md)。
 

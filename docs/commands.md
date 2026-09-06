@@ -324,15 +324,55 @@ pnpm run test:ui
 ## 端口管理
 
 ```bash
-# 查找 1420 端口被哪个进程占用
+# Windows：查找 1420 端口被哪个进程占用
 netstat -ano | findstr :1420
 
-# 终止占用 1420 端口的进程（Windows）
+# Windows：终止占用 1420 端口的进程
 taskkill /PID <PID> /F
 
-# PowerShell 版
+# Windows PowerShell 版
 Stop-Process -Id (Get-NetTCPConnection -LocalPort 1420).OwningProcess -Force
 ```
+
+### BedCode dev 端口速查与一键释放（Linux / WSL）
+
+BedCode 开发态各端口对应关系：
+
+| 端口 | 占用者 | 说明 |
+| ---- | ------ | ---- |
+| `1420` | `bedcode-desktop` Vite | `pnpm run dev` / `pnpm run tauri:dev` |
+| `1423` / `1424` | `bedcode-mobile` Vite | `pnpm run tauri:android:dev`；真机经 `adb reverse tcp:1423 tcp:1423` 转发 |
+| `5173` | 移动端插件 Dev Shell | `cd plugins/<name> && pnpm run dev`（`bedcode-plugin dev`） |
+| `5199` | `packages/plugin-sdk-mobile/dev-shell` | SDK 自带 Dev Shell |
+| `5037` / `9333` | adb server | Android 调试桥（kill 后下次 adb 命令自动重启，不影响已连设备） |
+| `36537`（动态） | Gradle daemon | Android 构建守护进程，杀掉后下次构建自动重启 |
+
+```bash
+# 1) 查看端口占用（确认 PID）
+ss -tlnp | grep -E ':(1420|1423|1424|5173|5199|5037|9333)\b'
+
+# 2) 确认进程身份（端口绑定未必是根进程，dev 树要整棵杀）
+#    例如 1420 对应的 vite 父进程是 nohup 启动脚本；移动端 tauri android dev
+#    本身不绑端口，但会拉起并看护 vite，需连父进程一起结束以免被重新拉起
+ps -eo pid,ppid,etime,cmd | grep -E 'vite|tauri.js android|dev-shell|GradleDaemon' | grep -v grep
+
+# 3) 整棵进程树温和关闭（SIGTERM → 2 秒 → SIGKILL 兜底）
+#    按实际 PID 替换；惯用组合：桌面 vite + 启动脚本、tauri android dev 子树、
+#    两个 Dev Shell 子树、adb server、Gradle daemon
+TARGETS='<PID1> <PID2> ...'
+for pid in $TARGETS; do kill -TERM "$pid" 2>/dev/null; done
+sleep 2
+for pid in $TARGETS; do ps -p "$pid" >/dev/null 2>&1 && kill -KILL "$pid"; done
+
+# 4) 复核端口已释放（无输出即干净）
+ss -tlnp | grep -E ':(1420|1423|1424|5173|5199|5037|9333)\b' || echo '全部端口已释放'
+```
+
+**说明：**
+
+- 优先杀进程树根（如 `sh -c 'tauri android dev'` → `tauri.js android dev` → `vite`），避免 tauri CLI 看护逻辑把 vite 重新拉起
+- adb server 与 Gradle daemon 都是自动重启型守护进程，杀掉不会破坏环境，只为释放端口/内存
+- SIGKILL 兜底与「遗留 dev 进程清理」同因：异常退出后的进程事件循环可能已僵死，SIGTERM 不响应（见下方「遗留 dev 进程」节）
 
 ---
 
@@ -354,6 +394,38 @@ cd <project> && rm -rf node_modules && pnpm install
 # 移动端：清理 Android 构建产物
 cd bedcode-mobile/src-tauri/gen/android && ./gradlew clean
 ```
+
+### 遗留 dev 进程 / 黑框窗口清理
+
+`pnpm run tauri:dev` 意外退出（崩溃 / 强制关终端 / kill -9）后，`target/debug/bedcode-desktop` 主进程常常被 systemd 收养继续运行，表现为桌面上一片关不掉的黑框窗口；同时插件 `--watch` 进程也会一起残留。以下命令一次性清干净（Linux / WSL）。
+
+```bash
+# 1) 查看当前遗留（不匹配则无输出）
+ps -eo pid,ppid,etime,stat,cmd | grep -E 'bedcode-desktop|vite.*--watch' | grep -v grep
+
+# 2) 温和关闭所有遗留（先 SIGTERM，等 2 秒，未响应再 SIGKILL）
+pkill -TERM -f 'target/debug/bedcode-desktop' ; \
+pkill -TERM -f 'vite.js build --watch' ; \
+sleep 2 ; \
+pkill -KILL -f 'target/debug/bedcode-desktop' ; \
+pkill -KILL -f 'vite.js build --watch'
+
+# 3) 复核
+ps -eo pid,etime,cmd | grep -E 'bedcode-desktop|vite.*--watch' | grep -v grep
+echo "(空 = 干净)"
+```
+
+如果只想处理单个已知 PID（推荐用于窗口确认阶段），把上面 `pkill -f` 替换为：
+
+```bash
+TARGET=<PID>
+kill -TERM $TARGET ; sleep 2
+ps -p $TARGET >/dev/null && kill -KILL $TARGET
+```
+
+**为什么需要 SIGKILL 兜底**：`bedcode-desktop` 的 SIGTERM 处理链依赖窗口事件循环，dev 异常退出后事件循环可能已僵死，SIGTERM 不响应，必须 KILL。
+
+**注意**：窗口里如果同时挂着 pi 子进程（Tauri 里的 pi 会话），会随父进程一并退出——**若该 pi 会话就是你要清理的目标，正常；否则先关那个终端**再杀主进程。
 
 ---
 

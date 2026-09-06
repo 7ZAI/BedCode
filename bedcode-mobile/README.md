@@ -31,16 +31,16 @@
 
 ## 技术栈
 
-| 分类 | 技术 |
-|------|------|
-| 框架 | Tauri 2.0（Android），Node.js + Rust |
-| 前端 | Vue 3 + TypeScript + Vite + TailwindCSS |
-| 状态 | Pinia + vue-router |
-| 后端 | Rust（Tokio）、tokio-tungstenite（WS 客户端） |
-| 终端 | @xterm/xterm + addon-fit / unicode11 / web-links / webgl |
-| 认证 | JWT（HS256）、ECDSA 生物凭证（p256）、设备指纹 |
-| 文件 | SAF（Storage Access Framework）目录树遍历与中转复制 |
-| 插件 | WASM 组件（wasmtime）运行时 |
+| 分类 | 技术                                                            |
+| ---- | --------------------------------------------------------------- |
+| 框架 | Tauri 2.0（Android），Node.js + Rust                            |
+| 前端 | Vue 3 + TypeScript + Vite + TailwindCSS                         |
+| 状态 | Pinia + vue-router                                              |
+| 后端 | Rust（Tokio）、tokio-tungstenite（WS 客户端）                   |
+| 终端 | @xterm/xterm + addon-fit / unicode11 / web-links / webgl        |
+| 认证 | JWT（HS256）、ECDSA 生物凭证（p256）、设备指纹                  |
+| 文件 | SAF（Storage Access Framework）目录树遍历与中转复制             |
+| 插件 | WASM 组件（wasmtime）运行时                                     |
 | 其他 | shiki、html5-qrcode、marked、vue-i18n@9、tracing 日志（logcat） |
 
 ## 目录结构
@@ -75,14 +75,14 @@ bedcode-mobile/
 
 ### 环境要求
 
-- [Node.js](https://nodejs.org/) >= 18、[Rust](https://www.rust-lang.org/tools/install) >= 1.70
+- [Node.js](https://nodejs.org/) ≥ 18、[Rust](https://www.rust-lang.org/tools/install) ≥ 1.70
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) 及 Android SDK / NDK 环境
 - 一台电脑运行 [BedCode Desktop](../bedcode-desktop/) 作为主机
 
 ### 安装与运行
 
 ```bash
-npm install
+pnpm install
 
 # 开发模式：构建并安装到 Android 设备（真机或模拟器）
 pnpm run tauri:android:dev
@@ -100,8 +100,8 @@ pnpm run tauri:android:build
 ### 测试
 
 ```bash
-pnpm run test:run            # 前端单元测试（vitest run，注意不要用 pnpm run test 的 watch 模式）
-cd src-tauri && cargo test  # Rust 测试
+pnpm run test:run                  # 前端单元测试（vitest run，注意不要用 pnpm run test 的 watch 模式）
+cd src-tauri && cargo test         # Rust 测试
 ```
 
 > 修改 `src-tauri/gen/android/` 下自定义 Kotlin 插件后，必须额外运行
@@ -110,12 +110,12 @@ cd src-tauri && cargo test  # Rust 测试
 
 ### 其他常用脚本
 
-| 命令 | 说明 |
-|------|------|
-| `pnpm run build` / `build:fast` | 前端类型检查 + 构建 / 仅构建 |
-| `pnpm run tauri:android:build:fast` | 跳过类型检查的 debug 快速构建 |
-| `pnpm run plugins:build` | 构建官方插件（WASM 产物） |
-| `pnpm run target:size` | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
+| 命令                                | 说明                                                              |
+| ----------------------------------- | ----------------------------------------------------------------- |
+| `pnpm run build` / `build:fast`     | 前端类型检查 + 构建 / 仅构建                                      |
+| `pnpm run tauri:android:build:fast` | 跳过类型检查的 debug 快速构建                                     |
+| `pnpm run plugins:build`            | 构建官方插件（WASM 产物）                                         |
+| `pnpm run target:size`              | 检查 `src-tauri/target` 目录大小（超过 15GB 建议 `target:clean`） |
 
 ## 插件系统
 
@@ -125,10 +125,10 @@ cd src-tauri && cargo test  # Rust 测试
 
 ### 官方插件
 
-| 插件 | 版本 | 说明 |
-|------|------|------|
-| **AI Chatbox** | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商，流式对话、多会话管理 |
-| **Auto Task** | 1.0.0-beta | Agent 任务队列与自动授权：任务状态同步、队列调度、预设任务、定时任务 |
+| 插件              | 版本       | 说明                                                                            |
+| ----------------- | ---------- | ------------------------------------------------------------------------------- |
+| **AI Chatbox**    | 1.0.0-beta | AI 大模型对话：接入任意 OpenAI 兼容供应商，流式对话、多会话管理                 |
+| **Auto Task**     | 1.0.0-beta | Agent 任务队列与自动授权：任务状态同步、队列调度、预设任务、定时任务            |
 | **File Transfer** | 1.0.0-beta | 内网文件传输：在线对端发现、远程目录浏览、多任务并发传输（断点续传 / 失败重试） |
 
 ## 相关文档
