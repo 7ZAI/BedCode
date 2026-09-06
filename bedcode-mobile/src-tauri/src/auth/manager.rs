@@ -199,7 +199,19 @@ impl AuthManager {
     /// HTTP 认证路径不经过 `handler/auth.rs`（WS 应答处理器）——经此契口
     /// 广播 `MobileEvent::AuthSuccess` 是唯一等价补齐点：04 的事件 WS 订阅
     /// 后恢复建连；事件转发层（event.rs）同时转发为前端 ws_auth_success。
-    async fn apply_auth_success(&self, session_token: String, fingerprint: String) {
+    ///
+    /// 链路加密 pin 随认证响应落地（修复：pin 此前仅在无人调用的 HTTP auth
+    /// 函数里写入，配对/重认证全走本处导致前端 localStorage 恒空、设置页误报
+    /// 未配对）：桌面端下发身份公钥/指纹时，1) 写入 Rust 侧运行期 context
+    /// （事件 WS 建连协商直接用）；2) 广播 `LinkCryptoPin` 事件 → 前端写
+    /// localStorage（HTTP/终端 WS 通道 + 设置页指纹展示）。
+    async fn apply_auth_success(
+        &self,
+        session_token: String,
+        fingerprint: String,
+        kd_public_b64: Option<String>,
+        kd_fingerprint: Option<String>,
+    ) {
         let device_id = self.device_id.read().await.clone();
         let creds = AuthCredentials {
             pairing_id: device_id,
@@ -210,6 +222,19 @@ impl AuthManager {
         crate::state::set_global_token(&session_token);
         *self.status.write().await = AuthStatus::Authenticated;
         self.connection.set_authed().await;
+
+        // pin 落地：Rust 侧 context（事件 WS 建连时读取）+ 前端事件广播
+        if let Some(kd) = &kd_public_b64 {
+            tracing::info!(
+                "[apply_auth_success] link crypto pin refreshed (kd fingerprint={})",
+                kd_fingerprint.as_deref().unwrap_or("n/a")
+            );
+            crate::state::update_link_crypto_pin(Some(kd.clone()));
+        }
+        let _ = self
+            .connection
+            .event_tx()
+            .send(MobileEvent::LinkCryptoPin { kd_public_b64, kd_fingerprint });
 
         let _ = self
             .connection
@@ -231,7 +256,13 @@ impl AuthManager {
         match self.http.reauth(&base_url, &device_id, &fingerprint, token).await {
             Ok(data) => {
                 // reauth 返回刷新后的新 token：refresh 语义，写回凭据与全局
-                self.apply_auth_success(data.token, fingerprint).await;
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
                 tracing::info!("[authenticate] HTTP re-authentication successful");
                 Ok(true)
             }
@@ -301,7 +332,13 @@ impl AuthManager {
             .await
         {
             Ok(data) => {
-                self.apply_auth_success(data.token, fingerprint).await;
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
                 Ok(true)
             }
             Err(AppError::Auth(msg)) => {
@@ -335,7 +372,13 @@ impl AuthManager {
             .await
         {
             Ok(data) => {
-                self.apply_auth_success(data.token, fingerprint).await;
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
                 Ok(true)
             }
             Err(AppError::Auth(msg)) => {
@@ -398,7 +441,13 @@ impl AuthManager {
             .await
         {
             Ok(data) => {
-                self.apply_auth_success(data.token, fingerprint).await;
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
                 tracing::info!("[authenticate_with_biometric] Biometric authentication successful");
                 Ok(true)
             }

@@ -142,6 +142,7 @@ import Toggle from '@/components/Toggle.vue'
 import { useMobileSettings } from '@/composables/useMobileSettings'
 import {
   getPinnedFingerprint,
+  getPinnedKey,
   useLinkEncryptionSettings,
 } from '@/composables/useLinkEncryption'
 import { useToast } from '@/composables/useToast'
@@ -172,11 +173,12 @@ const linkChannelRows = computed(() => [
 ])
 
 /**
- * 主开关切换守卫：无 pin 时拒绝开启并引导先配对——加密协商依赖配对期
- * 下发的桌面端身份公钥（pin），无 pin 开关只会产生「开着但永不生效」的半启用态
+ * 主开关切换守卫：无 pin（桌面端身份公钥）时拒绝开启并引导先配对——加密协商
+ * 依赖配对期下发的桌面端身份公钥作信任锚，无 pin 开关只会产生「开着但永不
+ * 生效」的半启用态。判断用公钥而非指纹：指纹仅展示用途，公钥才是协商前提。
  */
 function onToggleLinkEncryption(next: boolean) {
-  if (next && !getPinnedFingerprint()) {
+  if (next && !getPinnedKey()) {
     toast.error(t('settings.connection.linkNeedPairing'))
     return
   }

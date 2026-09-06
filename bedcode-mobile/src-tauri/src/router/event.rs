@@ -38,6 +38,13 @@ pub enum MobileEvent {
     /// 配对完成（认证成功）
     Paired,
 
+    // === 链路加密事件 ===
+    /// 链路加密 pin 刷新（auth 响应携带桌面端身份公钥/指纹时广播，供前端落盘）
+    LinkCryptoPin {
+        kd_public_b64: Option<String>,
+        kd_fingerprint: Option<String>,
+    },
+
     // === 系统事件 ===
     /// 服务器关闭
     ServerClosed { reason: String },
@@ -353,6 +360,26 @@ async fn forward_event(app: &AppHandle, event: MobileEvent) {
                     "job_id": job_id,
                     "status": status,
                     "action": action,
+                }),
+            );
+        }
+
+        MobileEvent::LinkCryptoPin {
+            kd_public_b64,
+            kd_fingerprint,
+        } => {
+            tracing::info!(
+                "[EventForwarder] LinkCryptoPin: kd_public_b64={}, kd_fingerprint={}",
+                kd_public_b64.as_deref().unwrap_or("none"),
+                kd_fingerprint.as_deref().unwrap_or("none")
+            );
+            // 字段用 camelCase 与前端 notePinFromAuthData 读取约定一致；
+            // Option 序列化为 null，前端仅在非空时写 pin
+            let _ = app.emit(
+                "ws_link_crypto_pin",
+                serde_json::json!({
+                    "kdPublicB64": kd_public_b64,
+                    "kdFingerprint": kd_fingerprint,
                 }),
             );
         }

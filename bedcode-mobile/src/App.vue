@@ -32,7 +32,7 @@ import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useTheme } from '@/composables/useTheme'
-import { syncLinkCryptoContextToNative } from '@/composables/useLinkEncryption'
+import { syncLinkCryptoContextToNative, initLinkCryptoPinSync } from '@/composables/useLinkEncryption'
 import { useFontSize } from '@/composables/useFontSize'
 import { useSettingsStore } from '@/stores/settings'
 import { completeStartupTask } from '@/composables/useAppStartup'
@@ -63,6 +63,9 @@ onMounted(async () => {
   // 链路加密上下文启动同步（issue 09）：Rust 侧事件 WS 建连前需要拿到
   // 当前开关与 pin；失败静默（默认全关，不影响明文现状）
   void syncLinkCryptoContextToNative()
+  // 监听认证成功时 Rust 广播的 pin（配对码/QR/reauth/生物认证统一出口）：
+  // 写入 localStorage 供 HTTP/终端 WS 通道与设置页指纹展示（修复 pin 断链）
+  void initLinkCryptoPinSync()
   // mDNS 广播暂时禁用
   // try {
   //   const deviceName = `BedCode-Mobile-${Math.random().toString(36).slice(2, 6)}`

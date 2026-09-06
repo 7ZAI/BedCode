@@ -127,6 +127,7 @@ where
         route: &path,
         negotiation: &negotiation,
         data: body.to_vec(),
+        outbound_headers: Vec::new(),
     };
     if let Err(rej) = chain.run_inbound(&mut ctx) {
         tracing::warn!(peer = %peer, route = %path, %rej, "HTTP inbound request rejected by traffic filter");
@@ -154,6 +155,7 @@ where
         route: &path,
         negotiation: &negotiation,
         data: res_bytes,
+        outbound_headers: Vec::new(),
     };
     if let Err(rej) = chain.run_outbound(&mut out_ctx) {
         tracing::warn!(peer = %peer, route = %path, %rej, "HTTP outbound response rejected by traffic filter");
@@ -165,13 +167,21 @@ where
     }
 
     // 重建响应：替换体后 Content-Length 已失配，剔除原值由 builder 按新体重算；
-    // 其余头（含 CORS / Set-Cookie / Content-Type）原样保留
+    // 其余头（含 CORS / Set-Cookie / Content-Type）原样保留，并入过滤器
+    // 注入的出站附加头（如链路加密响应标记 `X-BedCode-Crypto: v1`，spec §4）
     let mut builder = HttpResponse::build(res_head.status());
     for (name, value) in res_head.headers() {
         if name == CONTENT_LENGTH {
             continue;
         }
         builder.insert_header((name.clone(), value.clone()));
+    }
+    for (name, value) in out_ctx.outbound_headers {
+        let name = actix_web::http::header::HeaderName::try_from(name);
+        let value = actix_web::http::header::HeaderValue::try_from(value);
+        if let (Ok(name), Ok(value)) = (name, value) {
+            builder.insert_header((name, value));
+        }
     }
     let rebuilt = builder.body(Bytes::from(out_ctx.data));
 

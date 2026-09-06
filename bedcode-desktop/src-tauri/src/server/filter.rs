@@ -112,6 +112,10 @@ pub struct FilterContext<'a> {
     pub negotiation: &'a str,
     /// 当前载荷（可原地替换实现加解密）
     pub data: Vec<u8>,
+    /// 出站附加响应头（HTTP 专用）：过滤器在出站转换成功后写入
+    /// （如响应加密标记 `X-BedCode-Crypto: v1`），由 http_filter 重建
+    /// 响应时注入；WS 通道不消费此字段。
+    pub outbound_headers: Vec<(String, String)>,
 }
 
 /// 过滤器裁决
@@ -374,6 +378,7 @@ mod tests {
             route,
             negotiation: "",
             data: data.to_vec(),
+            outbound_headers: Vec::new(),
         }
     }
 
@@ -417,6 +422,7 @@ mod tests {
             route: "text",
             negotiation: "",
             data: b"bbb".to_vec(),
+            outbound_headers: Vec::new(),
         };
         assert!(chain.run_outbound(&mut out_ctx).is_ok());
         assert_eq!(out_ctx.data, b"ccc");

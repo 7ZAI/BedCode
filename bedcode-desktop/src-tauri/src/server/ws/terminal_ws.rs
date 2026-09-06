@@ -237,6 +237,7 @@ impl TerminalWs {
             route: kind,
             negotiation: "",
             data,
+            outbound_headers: Vec::new(),
         };
         match chain.run_inbound(&mut fctx) {
             Ok(()) => Some(fctx.data),
@@ -281,6 +282,7 @@ impl TerminalWs {
             route: "text",
             negotiation: "",
             data: text.into_bytes(),
+            outbound_headers: Vec::new(),
         };
         match chain.run_outbound(&mut fctx) {
             Ok(()) => {
@@ -316,6 +318,7 @@ impl TerminalWs {
             route: "binary",
             negotiation: "",
             data,
+            outbound_headers: Vec::new(),
         };
         match chain.run_outbound(&mut fctx) {
             Ok(()) => {

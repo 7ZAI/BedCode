@@ -65,7 +65,9 @@ async function request<T = any>(
   }
 
   // 链路加密（issue 06）：非 auth 路径且已 pin 且主开关开 → 请求体信封化 + 协商头；
-  // 加密失败不静默降级为明文发送（fail-closed）
+  // 加密失败不静默降级为明文发送（fail-closed）。
+  // GET/HEAD 无请求体（HTTP 语义禁止 body）：仍发协商头 + 派生响应密钥
+  // （响应加密不受影响），但信封不进 body——否则 fetch 构造直接失败。
   const encryptionActive = !path.startsWith('/api/auth/') && isChannelEncryptionActive('http')
   let requestKeys: HttpTrafficKeys | null = null
   let effectiveOptions = options
@@ -76,12 +78,18 @@ async function request<T = any>(
       return { code: -1, message: 'LINK_ENCRYPTION_NO_PIN' }
     }
     try {
-      const bodyText =
-        typeof options.body === 'string' ? options.body : options.body ? JSON.stringify(options.body) : ''
+      const method = (options.method || 'GET').toUpperCase()
+      const hasRequestBody = method !== 'GET' && method !== 'HEAD'
+      let bodyText = ''
+      if (hasRequestBody) {
+        bodyText = typeof options.body === 'string' ? options.body : options.body ? JSON.stringify(options.body) : ''
+      }
       const sealed = encryptRequest(pinnedKey, path, bodyText)
       headers['X-BedCode-Crypto'] = sealed.negotiation
       requestKeys = sealed.keys
-      effectiveOptions = { ...options, body: sealed.envelope }
+      if (hasRequestBody) {
+        effectiveOptions = { ...options, body: sealed.envelope }
+      }
     } catch (e: any) {
       console.error('[HttpApi] encrypt request failed:', path, e?.message || e)
       return { code: -1, message: 'LINK_ENCRYPTION_SEAL_FAILED' }

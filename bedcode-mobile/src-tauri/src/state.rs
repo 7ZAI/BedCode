@@ -168,6 +168,16 @@ pub fn set_link_crypto_context(ctx: LinkCryptoContext) {
     *LINK_CRYPTO_CONTEXT.write().unwrap() = ctx;
 }
 
+/// 更新已 pin 的桌面端身份公钥（认证成功时随 auth 响应落地，issue：修复 pin 断链）
+///
+/// 仅在有值时覆盖：None 不清除既有 pin——防主动降级攻击抹除信任锚
+/// （与前端 notePin 的语义一致：协商失败不清 pin）。
+pub fn update_link_crypto_pin(kd_public_b64: Option<String>) {
+    if let Some(kd) = kd_public_b64 {
+        LINK_CRYPTO_CONTEXT.write().unwrap().kd_public_b64 = Some(kd);
+    }
+}
+
 /// 事件 WS 是否应发起加密协商：主开关 ∧ 事件子开关 ∧ 已持有 pin。
 /// 协商依赖配对期下发的桌面端身份公钥作信任锚，三者缺一即明文。
 pub fn is_event_encryption_active() -> bool {

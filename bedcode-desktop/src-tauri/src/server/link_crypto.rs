@@ -738,6 +738,9 @@ impl LinkEncryptionFilter {
 
     /// HTTP 入站：协商 → ECDH(Kd, ek) 派生 → 解信封 → 缓存响应密钥。
     /// 任一步失败一律 Reject（fail-closed），错误详情进 400 响应体。
+    ///
+    /// GET/HEAD 无请求体：协商头携带临时公钥即足以派生响应密钥，body
+    /// 为空时跳过解信封（无载荷可解），仅缓存密钥供出站加密响应。
     fn on_http_inbound(ctx: &mut FilterContext<'_>) -> Verdict {
         let Some(ek_b64) = parse_negotiation(ctx.negotiation) else {
             // 无协商：按服务端明文回退策略裁决（老客户端兼容 vs 强加密模式）
@@ -767,11 +770,18 @@ impl LinkEncryptionFilter {
             let shared =
                 crate::utils::crypto::x25519::x25519_diffie_hellman(identity.keypair(), &peer_public)?;
             let keys = derive_http_traffic_keys(shared.as_bytes(), ctx.route)?;
-            let request_key = keys.request;
-            let plaintext =
-                decrypt_http_body(&request_key, &ctx.data, &http_aad(Direction::Inbound, ctx.route))?;
+            // GET/HEAD 空 body：无载荷可解，协商仅用于响应加密（密钥派生已足以
+            // 证明对端持有临时私钥）——空 body 直接通过，不尝试解信封
+            if !ctx.data.is_empty() {
+                let request_key = keys.request;
+                let plaintext = decrypt_http_body(
+                    &request_key,
+                    &ctx.data,
+                    &http_aad(Direction::Inbound, ctx.route),
+                )?;
+                ctx.data = plaintext;
+            }
             store_http_keys(ctx.peer, ek_b64, keys);
-            ctx.data = plaintext;
             Ok(())
         })();
 
@@ -800,6 +810,14 @@ impl LinkEncryptionFilter {
             Ok(envelope_json) => {
                 crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
                 ctx.data = envelope_json;
+                // 响应加密标记（spec §4）：移动端据 `X-BedCode-Crypto: v1`
+                // 识别加密响应并解信封；值必须带 "v" 前缀（与请求侧
+                // parse_negotiation 的 `format!("v{PROTOCOL_VERSION}")` 同源），
+                // 裸 `1` 会被移动端 `respHeader === 'v1'` 判为不匹配 → 误报降级
+                ctx.outbound_headers.push((
+                    NEGOTIATION_HEADER.to_string(),
+                    format!("v{PROTOCOL_VERSION}"),
+                ));
                 Verdict::Continue
             }
             Err(e) => {
@@ -963,6 +981,7 @@ mod tests {
             route,
             negotiation: "",
             data: b"payload".to_vec(),
+            outbound_headers: Vec::new(),
         }
     }
 
@@ -1434,6 +1453,7 @@ mod tests {
                 route: "/api/sessions",
                 negotiation: &negotiation,
                 data: req_sealed,
+                outbound_headers: Vec::new(),
             };
             assert_eq!(LinkEncryptionFilter.on_inbound(&mut inbound), Verdict::Continue);
             assert_eq!(inbound.data, req_plain, "handler 应收到明文");
@@ -1447,9 +1467,18 @@ mod tests {
                 route: "/api/sessions",
                 negotiation: &negotiation,
                 data: resp_plain.clone(),
+                outbound_headers: Vec::new(),
             };
             assert_eq!(LinkEncryptionFilter.on_outbound(&mut outbound), Verdict::Continue);
             assert_ne!(outbound.data, resp_plain, "响应应已加密");
+            // 加密响应必须回协商头标记（spec §4）：客户端据 `X-BedCode-Crypto: v1`
+            // 识别并解密，缺失/值不符会导致客户端误判明文降级（值必须是 "v1"，
+            // 与移动端 `respHeader === 'v1'` 判定一致，非裸 "1"）
+            assert_eq!(
+                outbound.outbound_headers,
+                vec![(NEGOTIATION_HEADER.to_string(), format!("v{PROTOCOL_VERSION}"))],
+                "加密响应应注入 X-BedCode-Crypto: v1 标记头"
+            );
             let decrypted =
                 decrypt_http_body(&keys.response, &outbound.data, &http_aad(Direction::Outbound, "/api/sessions"))
                     .unwrap();
@@ -1463,6 +1492,7 @@ mod tests {
                 route: "/api/sessions",
                 negotiation: &negotiation,
                 data: b"late".to_vec(),
+                outbound_headers: Vec::new(),
             };
             assert_eq!(LinkEncryptionFilter.on_outbound(&mut second), Verdict::Continue);
             assert_eq!(second.data, b"late");
@@ -1496,6 +1526,7 @@ mod tests {
             route: "/api/sessions",
             negotiation: &negotiation,
             data: b"definitely-not-an-envelope".to_vec(),
+            outbound_headers: Vec::new(),
         };
         assert!(matches!(
             LinkEncryptionFilter.on_inbound(&mut garbage),
@@ -1510,9 +1541,65 @@ mod tests {
             route: "/api/sessions",
             negotiation: "v1 !!!not-base64!!!",
             data: vec![0u8; 16],
+            outbound_headers: Vec::new(),
         };
         assert!(matches!(LinkEncryptionFilter.on_inbound(&mut bad_key), Verdict::Reject(_)));
 
         update_config(original);
+    }
+
+    /// GET/HEAD 无请求体协商：空 body + 协商头 → 直接通过并缓存响应密钥，
+    /// 出站时响应以 k_resp 加密并回标记头（修复：移动端 GET 请求此前无 body
+    /// 可加密但协商必须成立，否则响应密钥缓存缺失、响应加密失效）
+    #[test]
+    fn http_get_with_empty_body_negotiates_and_encrypts_response() {
+        let dir = tempfile::tempdir().unwrap();
+        init_identity(dir.path()).unwrap();
+
+        with_all_enabled(|| {
+            use crate::utils::crypto::x25519::{x25519_diffie_hellman, x25519_generate};
+
+            let client_eph = x25519_generate();
+            let (_, kd_pub_b64) = identity_parts().unwrap();
+            let kd_pub: [u8; 32] = b64_decode(&kd_pub_b64).unwrap().try_into().unwrap();
+            let shared = x25519_diffie_hellman(&client_eph, &kd_pub).unwrap();
+            let keys = derive_http_traffic_keys(shared.as_bytes(), "/api/sessions").unwrap();
+            let negotiation = format!("v1 {}", b64_encode(client_eph.public()));
+
+            // 入站：空 body（GET）→ 通过，不解信封（无载荷可解）
+            let mut inbound = FilterContext {
+                channel: TrafficChannel::Http,
+                direction: Direction::Inbound,
+                peer: "192.168.1.9:55005",
+                route: "/api/sessions",
+                negotiation: &negotiation,
+                data: Vec::new(),
+                outbound_headers: Vec::new(),
+            };
+            assert_eq!(LinkEncryptionFilter.on_inbound(&mut inbound), Verdict::Continue);
+            assert!(inbound.data.is_empty(), "空 body 应原样透传");
+
+            // 出站：响应加密 + 标记头（客户端据头解密）
+            let resp_plain = br#"{"code":0,"data":[]}"#.to_vec();
+            let mut outbound = FilterContext {
+                channel: TrafficChannel::Http,
+                direction: Direction::Outbound,
+                peer: "192.168.1.9:55005",
+                route: "/api/sessions",
+                negotiation: &negotiation,
+                data: resp_plain.clone(),
+                outbound_headers: Vec::new(),
+            };
+            assert_eq!(LinkEncryptionFilter.on_outbound(&mut outbound), Verdict::Continue);
+            assert_ne!(outbound.data, resp_plain, "GET 响应应加密");
+            assert_eq!(
+                outbound.outbound_headers,
+                vec![(NEGOTIATION_HEADER.to_string(), format!("v{PROTOCOL_VERSION}"))]
+            );
+            let decrypted =
+                decrypt_http_body(&keys.response, &outbound.data, &http_aad(Direction::Outbound, "/api/sessions"))
+                    .unwrap();
+            assert_eq!(decrypted, resp_plain);
+        });
     }
 }

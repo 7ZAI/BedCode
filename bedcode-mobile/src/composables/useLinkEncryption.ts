@@ -127,18 +127,41 @@ export function getPinnedFingerprint(): string | null {
 
 /**
  * 从 auth 响应数据中提取并刷新 pin（qr-connect / verify / reauth 均携带）。
- * 由 useHttpApi 统一拦截调用，调用方无需感知。
+ * 由 useHttpApi 统一拦截调用，调用方无需感知；
+ * 配对/重认证主路径为 Rust invoke（wsVerifyPairingCode 等），经事件
+ * `ws_link_crypto_pin`（initLinkCryptoPinSync）落地，此处保留供 HTTP 通道接入。
  */
 export function notePinFromAuthData(data: unknown): void {
   if (!data || typeof data !== 'object') return
-  const kdPublic = (data as Record<string, unknown>).kdPublicB64
-  const kdFingerprint = (data as Record<string, unknown>).kdFingerprint
-  if (typeof kdPublic === 'string' && kdPublic.length > 0) {
-    localStorage.setItem(PIN_PUBLIC_KEY, kdPublic)
-    if (typeof kdFingerprint === 'string' && kdFingerprint.length > 0) {
-      localStorage.setItem(PIN_FINGERPRINT, kdFingerprint)
-    }
-    // pin 刷新即推送 Rust 侧：事件 WS 重连协商依赖最新 pin（issue 09）
-    void syncLinkCryptoContextToNative()
+  applyPin(
+    (data as Record<string, unknown>).kdPublicB64,
+    (data as Record<string, unknown>).kdFingerprint,
+  )
+}
+
+/** pin 写入统一入口：公钥必存（加密协商信任锚），指纹随带（仅展示用途） */
+function applyPin(kdPublicB64: unknown, kdFingerprint: unknown): void {
+  if (typeof kdPublicB64 !== 'string' || kdPublicB64.length === 0) return
+  localStorage.setItem(PIN_PUBLIC_KEY, kdPublicB64)
+  if (typeof kdFingerprint === 'string' && kdFingerprint.length > 0) {
+    localStorage.setItem(PIN_FINGERPRINT, kdFingerprint)
   }
+  // pin 刷新即推送 Rust 侧：事件 WS 重连协商依赖最新 pin（issue 09）
+  void syncLinkCryptoContextToNative()
+}
+
+/**
+ * 监听 Rust 侧认证成功时广播的 pin（配对码 / QR / reauth / 生物认证统一出口）。
+ * 修复 pin 断链：前端认证走 Rust invoke，auth 响应携带的桌面端身份公钥此前
+ * 无处落地，导致设置页误报“请先完成设备配对”、加密开关形同虚设。
+ * 返回 unlisten，App 启动时注册一次即可。
+ */
+export async function initLinkCryptoPinSync(): Promise<() => void> {
+  const { listen } = await import('@tauri-apps/api/event')
+  return listen<{ kdPublicB64?: string | null; kdFingerprint?: string | null }>(
+    'ws_link_crypto_pin',
+    (event) => {
+      applyPin(event.payload?.kdPublicB64 ?? null, event.payload?.kdFingerprint ?? null)
+    },
+  )
 }

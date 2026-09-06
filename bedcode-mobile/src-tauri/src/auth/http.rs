@@ -47,6 +47,12 @@ pub struct PairingResponseData {
 pub struct AuthTokenResponseData {
     pub token: String,
     pub expires_in: u64,
+    /// 桌面端链路加密身份公钥（base64；老桌面端未下发时省略，serde 默认 None）
+    #[serde(default)]
+    pub kd_public_b64: Option<String>,
+    /// 桌面端身份指纹（SHA-256 前 16 hex，供设置页人工核对）
+    #[serde(default)]
+    pub kd_fingerprint: Option<String>,
 }
 
 /// POST /api/auth/biometric-challenge 响应 data
