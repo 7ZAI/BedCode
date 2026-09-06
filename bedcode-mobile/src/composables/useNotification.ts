@@ -6,6 +6,9 @@
  * - vibrate：所有提醒通知是否震动
  * - soundOnTaskComplete：任务完成（completed）是否播放提示音
  * - notifyOnWaiting：手动模式下等待输入（asking）是否提醒
+ * - notifyOnConnection：断连/重连失败/认证失败是否发系统通知
+ * - notifyInBackground：后台运行时才发通知（前台由界面 toast/状态反馈；
+ *   关闭则后台也不发，等于完全不推送）
  *
  * 通知权限（Android 13+）由 TaskNotificationPlugin 原生实现检查与请求；
  * 前台服务通知仍由 Kotlin ForegroundServicePlugin 处理。
@@ -61,9 +64,34 @@ function getAlertFlags(
 /** 读取移动端设置 */
 function getMobileSettings() {
   const saved = localStorage.getItem('mobile-settings')
-  return saved
-    ? JSON.parse(saved)
-    : { vibrate: true, notifyOnWaiting: true, soundOnTaskComplete: true }
+  if (!saved) return defaultMobileSettings()
+  try {
+    return JSON.parse(saved)
+  } catch {
+    // 存储损坏/旧版形状：回退默认值，不抛错阻塞通知链路
+    return defaultMobileSettings()
+  }
+}
+
+/** 移动端设置默认值 */
+function defaultMobileSettings() {
+  return {
+    vibrate: true,
+    notifyOnWaiting: true,
+    notifyOnConnection: true,
+    notifyInBackground: true,
+    soundOnTaskComplete: true,
+  }
+}
+
+/**
+ * 应用是否前台可见（WebView visible）
+ *
+ * 灭屏/锁屏/切后台 WebView 均为 hidden——此时用户看不到界面，
+ * 系统通知是唯一感知渠道（MIUI 实测锁屏/灭屏下同样上报 hidden）
+ */
+function isAppForeground(): boolean {
+  return document.visibilityState === 'visible'
 }
 
 /** 构建任务状态通知内容 */
@@ -85,25 +113,6 @@ function buildTaskBody(status: string, reason?: string): string {
     default:
       return status
   }
-}
-
-/**
- * 根据 sessionId 生成通知 ID（32-bit integer）
- *
- * 与 Kotlin 端 TaskNotificationManager 使用相同的算法，
- * 基数 2000 避免与前台服务通知 ID（1001）冲突
- */
-function getNotificationId(sessionId: string): number {
-  return 2000 + Math.abs(hashCode(sessionId)) % 1000
-}
-
-/** 简易 Java-style hashCode */
-function hashCode(str: string): number {
-  let hash = 0
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash + str.charCodeAt(i)) | 0
-  }
-  return hash
 }
 
 // 模块级状态：缓存会话执行模式
@@ -180,6 +189,9 @@ export function useNotification() {
     // idle / in_progress 不发通知
     if (['idle', 'in_progress'].includes(params.taskStatus)) return
 
+    // 后台运行时通知：前台由界面直接反馈，不发系统通知；开关关闭则后台同样不发
+    if (isAppForeground() || !(settings.notifyInBackground ?? true)) return
+
     const hasPermission = await ensurePermission()
     if (!hasPermission) return
 
@@ -240,10 +252,15 @@ export function useNotification() {
   }): Promise<void> {
     if (!isAndroid()) return
 
+    const settings = getMobileSettings()
+
+    // 用户关闭「连接状态变化通知」时不发连接类通知
+    if (!(settings.notifyOnConnection ?? true)) return
+    // 后台运行时通知：前台界面已有 toast/连接状态提示，不发系统通知；开关关闭则后台同样不发
+    if (isAppForeground() || !(settings.notifyInBackground ?? true)) return
+
     const hasPermission = await ensurePermission()
     if (!hasPermission) return
-
-    const settings = getMobileSettings()
 
     const t = i18n.global.t
     let body: string
