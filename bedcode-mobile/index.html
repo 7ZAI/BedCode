@@ -16,7 +16,9 @@
   <body class="bg-dark-900 text-dark-100">
     <div id="app">
       <!-- 静态首屏:Vue 挂载前可见(挂载后由 SplashScreen 组件无缝接管)
-           颜色硬编码为墨纸深色(应用默认主题):此时设计 token 尚未加载 -->
+           颜色与前端开屏(SplashScreen.vue)首帧同源:深色为默认,
+           浅色由下方 prefers-color-scheme:light 分支覆盖。
+           此时设计 token 尚未加载,只能跟随系统深浅色,读不到应用内手动主题设置 -->
       <style>
         .splash {
           display: flex;
@@ -80,6 +82,17 @@
             opacity: 0;
           }
         }
+        /* 浅色系统:与前端开屏浅色首帧同源(跟随系统,非应用内设置) */
+        @media (prefers-color-scheme: light) {
+          .splash {
+            background: linear-gradient(160deg, #faf9f5 0%, #f5f4f0 55%, #efede7 100%);
+          }
+          .splash svg,
+          .splash .word {
+            color: #26231b;
+          }
+        }
+
         @media (prefers-reduced-motion: reduce) {
           .splash .logo-caret {
             animation: none;

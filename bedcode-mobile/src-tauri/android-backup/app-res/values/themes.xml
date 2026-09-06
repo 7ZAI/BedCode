@@ -1,8 +1,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.bedcode_mobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- 启动期窗口背景:显式指定墨纸深色,覆盖 DayNight 在浅色系统下的白底
-             (否则系统浅色时冷启动先闪白屏再进 WebView 暗色首屏) -->
+        <!-- 启动期窗口背景:与前端开屏首帧同色(浅色值见 values/colors.xml) -->
         <item name="android:windowBackground">@color/bedcode_launch_bg</item>
         <!-- Android 12+ 系统开屏背景同色(API 31+ 生效,低版本忽略) -->
         <item name="android:windowSplashScreenBackground">@color/bedcode_launch_bg</item>

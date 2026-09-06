@@ -7,7 +7,7 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
-    <!-- 启动期窗口/系统开屏背景:与 index.html 静态开屏、App 深色主题同源,
-         避免浅色系统模式下 DayNight 白底闪屏与异色窗口期 -->
-    <color name="bedcode_launch_bg">#0F0D0A</color>
+    <!-- 启动期窗口/系统开屏背景:与前端开屏(SplashScreen.vue)首帧同源,
+         浅色值由 values/ 提供、深色值由 values-night/ 提供,跟随系统深浅色 -->
+    <color name="bedcode_launch_bg">#F5F4F0</color>
 </resources>
