@@ -115,11 +115,10 @@ onMounted(async () => {
   startGlobalNotifications()
 
   // 首帧渲染完成即开始计时，最低展示 900ms 后淡出启动画面
-  /* 临时调试：开屏延长至 10s 便于观察效果，恢复时改回 900 */
   splashTimer = setTimeout(() => {
     showSplash.value = false
     splashTimer = null
-  }, 10_000)
+  }, 900)
 
   // 监听窗口关闭请求事件（有运行中会话时后端发送）
   unlistenCloseRequested = await listen<RunningSession[]>('window-close-requested', (event) => {
