@@ -211,6 +211,9 @@ export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
     relPath.value = ''
     breadcrumb.value = [{ name: 'transfer.breadcrumb.home', path: '' }]
     selectedNames.value = []
+    // 根清单缓存随对端切换/下线清空：cd() 在根层反查展示名 → dirId 时，
+    // 残留旧对端的根会让 enterRoot 用错 dirId（后端 not-found）
+    rootsCache.value = []
   }
 
   return {

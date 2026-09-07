@@ -66,12 +66,8 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_subscribe(topic);
         }
-        // 引擎电源声明：节点/mDNS 随本插件生命周期启停（宿主静态订阅
-        // peer:node-power 消费——插件运行 mDNS 就运行，不运行也不运行）
-        let _ = h.bus_publish(
-            "peer:node-power",
-            &serde_json::json!({ "on": true, "requestedBy": PLUGIN_ID }),
-        );
+        // 引擎电源：节点/mDNS 生命周期由宿主 activate/deactivate 外壳直接驱动
+        // （plugin/manager.rs 接线 ensure_node_started），插件侧无需声明
         Ok(())
     }
 
@@ -97,12 +93,9 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_unsubscribe(topic);
         }
-        // 引擎电源声明：本插件下线 → 节点/mDNS 服务下线（会话已在上方关闭，
-        // 对端经断流事件即时感知）
-        let _ = h.bus_publish(
-            "peer:node-power",
-            &serde_json::json!({ "on": false, "requestedBy": PLUGIN_ID }),
-        );
+        // 引擎电源：本插件下线 → 节点/mDNS 服务下线由宿主 deactivate 外壳直接
+        // 驱动（plugin/manager.rs 接线 stop_node_for_plugin），会话已在上方关闭，
+        // 对端经断流事件即时感知
         Ok(())
     }
 
@@ -144,6 +137,11 @@ impl WasmPlugin for FileTransferPlugin {
                 let endpoint: device_bridge::DialEndpoint =
                     serde_json::from_value(args.get("endpoint").cloned().unwrap_or_default())
                         .map_err(|e| anyhow::anyhow!("invalid endpoint: {e}"))?;
+                // 空 node_id 拒绝：写入污染 memo（后续任意 node_id 查询均不命中但
+                // 长期驻留静态表）且掩盖前端缺字段 bug
+                if endpoint.node_id.is_empty() {
+                    return Err(anyhow::anyhow!("remember-peer-endpoint: empty node_id rejected"));
+                }
                 device_bridge::remember_endpoint(&endpoint);
                 Ok(serde_json::json!({ "ok": true }))
             }

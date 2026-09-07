@@ -64,7 +64,7 @@ function withoutId(set: ReadonlySet<string>, id: string): Set<string> {
   return next
 }
 
-export function usePeerDevices(context: PluginContext) {
+function createPeerDevices(context: PluginContext) {
   // ==================== 状态 ====================
 
   /** 自建设备缓存（found/lost/TTL 三路事件驱动；快照恢复首屏） */
@@ -351,19 +351,20 @@ export function usePeerDevices(context: PluginContext) {
         const list: DiscoveredDevice[] = Array.isArray(snap?.devices)
           ? (snap.devices as SnapshotEntry[])
               .filter((d) => typeof d?.nodeId === 'string' && d.nodeId !== '')
-              .map((d) => ({
-                nodeId: d.nodeId,
-                deviceName: d.deviceName ?? '',
-                addr: d.addr ?? '',
-                port: d.port ?? 0,
-                fileTransfer:
-                  d.capabilitiesHex === ''
-                    ? true
-                    : (Number.parseInt(d.capabilitiesHex, 16) & 1) !== 0,
-                ...(d.instanceName ? { instanceName: d.instanceName } : {}),
-                lastSeenMs: d.lastSeenMs ?? 0,
-                restored: true,
-              }))
+              .map((d) => {
+                const capHex = d.capabilitiesHex ?? ''
+                return {
+                  nodeId: d.nodeId,
+                  deviceName: d.deviceName ?? '',
+                  addr: d.addr ?? '',
+                  port: d.port ?? 0,
+                  fileTransfer:
+                    capHex === '' ? true : (Number.parseInt(capHex, 16) & 1) !== 0,
+                  ...(d.instanceName ? { instanceName: d.instanceName } : {}),
+                  lastSeenMs: d.lastSeenMs ?? 0,
+                  restored: true,
+                }
+              })
           : []
         if (list.length > 0 && devices.value.length === 0) devices.value = list
       } catch (e) {
@@ -399,5 +400,39 @@ export function usePeerDevices(context: PluginContext) {
     refresh,
     start,
     stop,
+  }
+}
+
+// ==================== 模块级单例（跨组件共享） ====================
+
+/**
+ * ToolboxEntry 与 FileTransferView 各自挂载时不得建立两份事件订阅与宿主命令
+ * 流量（mdns-found/lost/connection-changed 双份消费、双份 get-device-snapshot /
+ * requestHostRefresh）。按 context 键控共享：宿主单插件进程内两组件注入的是
+ * 同一 pluginContext → 共享同一实例；测试各造独立 context/mock env → 天然隔离。
+ * start/stop 引用计数，最后一个持有者停止才真正摘除监听。
+ */
+const sharedDevices = new WeakMap<object, ReturnType<typeof createPeerDevices>>()
+const devicesRefCounts = new WeakMap<object, number>()
+
+export function usePeerDevices(context: PluginContext) {
+  let instance = sharedDevices.get(context)
+  if (!instance) {
+    instance = createPeerDevices(context)
+    sharedDevices.set(context, instance)
+    devicesRefCounts.set(context, 0)
+  }
+  return {
+    ...instance,
+    start() {
+      const next = (devicesRefCounts.get(context) ?? 0) + 1
+      devicesRefCounts.set(context, next)
+      if (next === 1) instance!.start()
+    },
+    stop() {
+      const next = Math.max(0, (devicesRefCounts.get(context) ?? 0) - 1)
+      devicesRefCounts.set(context, next)
+      if (next === 0) instance!.stop()
+    },
   }
 }

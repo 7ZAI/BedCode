@@ -1,13 +1,15 @@
 /**
  * File Transfer 插件 i18n 消息类型（唯一 key 来源）
  *
- * zh-CN 与 en 两个语言文件都必须实现该接口：
+ * zh-CN 与 en 两个语言文件都必须实现该类型：
  * 新增/遗漏 key 在编译期即报错，保证两个语言文件的 key 永远同步。
  * 所有 key 以 `transfer.` 域命名，注册时经插件 ID 前缀隔离为
  * `com.bedcode.file-transfer.transfer.*`。
+ * 用 type 别名而非 interface：TS 给类型别名隐式索引签名，使 MessageSchema
+ * 可直接赋给 `Record<string, unknown>`（registerMessages 入参）。
  */
 
-export interface MessageSchema {
+export type MessageSchema = {
   // ==================== 侧边栏 ====================
   'transfer.sidebar.title': string
 

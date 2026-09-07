@@ -2,9 +2,12 @@
  * File Transfer 插件 i18n 消息 schema（编译期 key 强制）
  *
  * 与桌面端对齐：zh-CN / en 均标注为 MessageSchema，
- * 新增 key 必须同时出现在本接口与两个语言文件中，否则编译失败。
+ * 新增 key 必须同时出现在本类型与两个语言文件中，否则编译失败。
+ * 用 type 别名而非 interface：TS 给类型别名隐式索引签名，使 MessageSchema
+ * 可直接赋给 `Record<string, unknown>`（registerMessages 入参），interface
+ * 无此能力会在 index.ts 的 registerMessages 调用处报类型不匹配。
  */
-export interface MessageSchema {
+export type MessageSchema = {
   // ==================== 工具箱入口 ====================
   'transfer.toolbox.title': string
   'transfer.toolbox.subtitle': string

@@ -60,6 +60,14 @@ pub(crate) fn forget_session(node_id: &str) {
     sessions().lock().expect("sessions lock").remove(node_id);
 }
 
+/// 清空 endpoint memo（停用收尾；sessions 已由 drain_sessions 清空）
+///
+/// 与移动端同构：不清理时跨 activate/deactivate 残留旧地址，对端换 IP/端口
+/// 后数据面重拨会命中过期 memo
+pub(crate) fn clear_peer_state() {
+    endpoints().lock().expect("endpoints lock").clear();
+}
+
 /// 仅登记 endpoint memo（不铸 session 句柄）
 ///
 /// 入站（被连侧）连接的对端寻址来源：被连侧没有拨号句柄，数据面命令
