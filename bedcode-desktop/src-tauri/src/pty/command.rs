@@ -56,7 +56,15 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
         }
         ExecutionEnvironment::Linux => {
             // Linux 原生环境：直接走当前用户的 bash，避免 spawn 父进程退出导致会话关闭
-            // -c 一次性的命令用 single-quote 包住，避免 shell 展开；
+            // -lic：login + interactive + command。
+            //   - login：读 .profile（umask / cargo env 等）
+            //   - interactive 是必须的：Ubuntu 默认 .bashrc 顶部有
+            //     `case $- in *i*) ;; *) return;; esac` 交互守卫，非交互 shell
+            //     会在 nvm/pnpm/opencode 等 PATH 初始化之前就 return。仅用 -lc
+            //     时 PTY 子进程拿到的是被截断的 PATH，`pi` / `opencode` 等
+            //     nvm 安装的用户命令直接 command not found。加 -i 让守卫通过。
+            //   - PTY 场景下 interactive 不会有问题：BedCode 已经分配了真实 PTY，
+            //     bash 的 job control 警告只在无 TTY 的非 PTY 调用里出现。
             // 先切到工作目录并打印 pwd，便于前端看到 PTY 实际所在目录
             let full_command = format!(
                 "cd '{}' && pwd && {}",
@@ -65,7 +73,7 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
             );
 
             let mut cmd = CommandBuilder::new("bash");
-            cmd.arg("-lc");
+            cmd.arg("-lic");
             cmd.arg(full_command);
             cmd
         }
@@ -217,8 +225,9 @@ mod tests {
 
         let argv = argv(&cmd);
         assert_eq!(argv[0], "bash");
-        // 必须是 login shell：保留 PATH/环境，claude/codex 这类命令依赖 PATH 解析
-        assert!(argv.iter().any(|a| a == "-lc"));
+        // -lic：login + interactive + command。加 -i 是关键——绕过 Ubuntu 默认
+        // .bashrc 的交互守卫，让 nvm/opencode/pnpm 等 PATH 初始化真正生效。
+        assert!(argv.iter().any(|a| a == "-lic"));
 
         let full = argv.iter().find(|a| a.contains("echo hi")).unwrap();
         // 工作目录走单引号包住的 POSIX 路径（Linux 上直接用原路径，不做 /mnt 转换）
