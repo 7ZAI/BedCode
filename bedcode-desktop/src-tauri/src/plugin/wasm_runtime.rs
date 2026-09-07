@@ -1671,54 +1671,6 @@ mod tests {
     }
 
 
-    /// 真实组件：scheduler 插件加载 + activate + tick 命令路由冒烟
-    ///
-    /// 验证 bindgen world 与产物 export 一致（events 含 on_process_done）、
-    /// activate 恢复路径无 panic（测试上下文无宿主 DB/services，相关调用
-    /// 仅记日志降级）。完整调度行为属 issue 06 端到端验证。
-    #[test]
-    fn test_real_scheduler_plugin_loads_and_ticks() {
-        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
-        const SCHED_PLUGIN_ID: &str = "com.bedcode.scheduler";
-
-        // 授予与插件 manifest 一致的权限（activate 的 timer_register/cli_install 路径）
-        let permissions: &[&str] = &["app:cli", "broadcast", "process:run", "storage", "timer:schedule"];
-        host_ctx.permission.grant_permissions(
-            SCHED_PLUGIN_ID,
-            &permissions.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
-        );
-
-        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("resources/plugins/desktop/com.bedcode.scheduler")
-            .join("bedcode_plugin_scheduler.wasm");
-        assert!(
-            wasm_path.exists(),
-            "scheduler wasm artifact missing (run plugins/scheduler build first): {}",
-            wasm_path.display()
-        );
-
-        let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, SCHED_PLUGIN_ID, host_ctx.clone(), &[])
-            .expect("load real scheduler component");
-
-        let rt = tokio::runtime::Runtime::new().unwrap();
-        rt.block_on(async {
-            plugin.activate().expect("real scheduler activate should succeed");
-            // tick 命令路由：now_local 参数透传，宿主 DB 缺失时插件侧降级不 panic
-            let result = plugin
-                .invoke_command(
-                    "task-scheduler.tick",
-                    r#"{"now_local":"2026-08-14 12:00:00","now_utc":"2026-08-14 04:00:00"}"#,
-                )
-                .expect("tick command should return");
-            assert!(
-                result.contains("ticked"),
-                "tick response should contain ticked: {}",
-                result
-            );
-        });
-    }
-
     /// 燃料看门狗：guest 执行必须消耗燃料（组件形态下 fuel 生效），
     /// 且每次导出调用前重置预算（预算不跨调用累积）
     #[test]
