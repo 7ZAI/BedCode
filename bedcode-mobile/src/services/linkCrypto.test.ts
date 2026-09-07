@@ -114,6 +114,40 @@ describe('http single-shot encryption', () => {
     expect([...client.request]).toEqual([...server.request])
     expect([...client.response]).toEqual([...server.response])
   })
+
+  it('strips query string for AAD/HKDF salt (desktop req.path() contract)', () => {
+    // 桌面端服务端按 req.path()（不含 query）计算 salt/AAD，客户端传入的
+    // path 可能带 query（GET 参数端点）。回归锁：带 query 的完整路径必须
+    // 与裸路径派生出相同密钥并完成双向加解密
+    const kdPriv = x25519.utils.randomPrivateKey()
+    const kdPubB64 = bytesToBase64(x25519.getPublicKey(kdPriv))
+    const wire = '/api/file-tree-children'
+    const queryPath = `${wire}?session_id=abc&dir_path=.&_t=123`
+    const plaintext = JSON.stringify({ hello: 'world' })
+
+    // 客户端用带 query 的路径封装请求；服务端按裸路径派生/解封
+    const sealed = encryptRequest(kdPubB64, queryPath, plaintext)
+    const ekB64 = sealed.negotiation.slice(3)
+    const serverKeys = serverDeriveHttp(ekB64, kdPriv, wire)
+    const env = JSON.parse(sealed.envelope) as { v: number; n: string; ct: string }
+    const opened = gcm(serverKeys.request, base64ToBytes(env.n), serverAad(0x01, wire)).decrypt(
+      base64ToBytes(env.ct),
+    )
+    expect(new TextDecoder().decode(opened)).toBe(plaintext)
+
+    // 服务端按裸路径加密响应 → 客户端用带 query 的路径解密（密钥同源）
+    const respPlain = JSON.stringify({ code: 0 })
+    const respNonce = crypto.getRandomValues(new Uint8Array(12))
+    const respCt = gcm(serverKeys.response, respNonce, serverAad(0x02, wire))
+      .encrypt(new TextEncoder().encode(respPlain))
+    const outcome = decryptResponse(
+      sealed.keys,
+      true,
+      JSON.stringify({ v: 1, n: bytesToBase64(respNonce), ct: bytesToBase64(respCt) }),
+      queryPath,
+    )
+    expect(outcome).toEqual({ kind: 'decrypted', text: respPlain })
+  })
 })
 
 describe('ws session handshake and seq discipline', () => {

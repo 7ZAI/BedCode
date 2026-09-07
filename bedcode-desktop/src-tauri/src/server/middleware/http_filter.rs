@@ -181,6 +181,14 @@ where
         let value = actix_web::http::header::HeaderValue::try_from(value);
         if let (Ok(name), Ok(value)) = (name, value) {
             builder.insert_header((name, value));
+        } else {
+            // 标记头是承重件：丢失会让客户端把无标记的加密信封当明文 API 载荷
+            // 解析（JSON.parse 成功但 code === undefined），比崩溃更难排查
+            tracing::warn!(
+                route = %path,
+                peer = %peer,
+                "dropped filter outbound header (invalid name/value)"
+            );
         }
     }
     let rebuilt = builder.body(Bytes::from(out_ctx.data));

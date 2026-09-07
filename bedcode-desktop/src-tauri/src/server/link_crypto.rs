@@ -342,8 +342,8 @@ pub fn derive_http_traffic_keys(shared_ikm: &[u8], http_path: &str) -> Result<Ht
 // 经文件头 `pub use proto::{...}` 保持既有模块路径与测试可见性不变。
 
 /// 单方向密码上下文与双向密码状态：
-/// WsDirectionCipher 实现在共享 crate（文件头再导出，字段形状不变）；
-/// 带序号计数器的 WsSessionCiphers 注册表类型留在桌面侧。
+/// WsDirectionCipher 实现在共享 crate（文件头再导出，字段形状不变）；带序号
+/// 计数器的 WsSessionCiphers 注册表类型留在桌面侧。
 
 /// 一条 WS 连接的双向密码状态（服务端视角；发送/接收序号严格单调）
 pub struct WsSessionCiphers {
@@ -605,7 +605,10 @@ fn http_aad(direction: Direction, path: &str) -> Vec<u8> {
 // filter 是全局单例、出入站两次独立调用，而响应加密密钥只能从该次请求的
 // 临时公钥派生（spec §3 实现要点）。入站成功解密时写入，出站命中即取走，
 // 未命中（入站被拒/未协商）→ 响应保持明文。
-// 移动端每请求全新临时密钥对 → (peer, ek) 天然唯一，无并发覆盖问题。
+/// 移动端每请求全新临时密钥对 → (peer, ek) 天然唯一，无并发覆盖问题。
+/// 容量护栏：TTL（30s）已收敛缓存规模，但 GET 懒加载高频协商下极端流量仍可
+/// 让 map 逼近窗口内唯一 (peer, ek) 数上界之外的增长——超限时逐出最早项
+const HTTP_KEY_CACHE_MAX: usize = 1024;
 
 struct CachedHttpKeys {
     keys: HttpTrafficKeys,
@@ -629,6 +632,16 @@ fn store_http_keys(peer: &str, ek_b64: &str, keys: HttpTrafficKeys) {
     match HTTP_KEY_CACHE.lock() {
         Ok(mut map) => {
             map.retain(|_, entry| !entry_expired(entry, now)); // 插入时顺带清扫
+            if map.len() >= HTTP_KEY_CACHE_MAX {
+                // 逐出最早项：容量有界，防极端流量下 map 无界增长
+                if let Some(oldest) = map
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.inserted_at)
+                    .map(|(k, _)| k.clone())
+                {
+                    map.remove(&oldest);
+                }
+            }
             map.insert(cache_key(peer, ek_b64), CachedHttpKeys { keys, inserted_at: now });
         }
         Err(_) => {
@@ -741,6 +754,8 @@ impl LinkEncryptionFilter {
     ///
     /// GET/HEAD 无请求体：协商头携带临时公钥即足以派生响应密钥，body
     /// 为空时跳过解信封（无载荷可解），仅缓存密钥供出站加密响应。
+    /// 注：实际只有 GET 走此路径——HEAD 由 http_filter 在责任链之前按
+    /// 快速路径短路（响应无 body 可加密），此处注释泛指无请求体语义
     fn on_http_inbound(ctx: &mut FilterContext<'_>) -> Verdict {
         let Some(ek_b64) = parse_negotiation(ctx.negotiation) else {
             // 无协商：按服务端明文回退策略裁决（老客户端兼容 vs 强加密模式）
@@ -757,6 +772,10 @@ impl LinkEncryptionFilter {
             return Verdict::Reject("link identity unavailable".to_string());
         };
 
+        // GET/HEAD 空 body：无载荷可解，协商仅用于响应加密（密钥派生已足以
+        // 证明对端持有临时私钥）——空 body 直接通过，不尝试解信封。had_body
+        // 须在闭包前捕获（闭包会把 ctx.data 替换为明文）
+        let had_body = !ctx.data.is_empty();
         let result = (|| -> Result<()> {
             let ek_raw = b64_decode(ek_b64)?;
             let peer_public: [u8; crate::utils::crypto::x25519::KEY_LEN] = ek_raw
@@ -772,7 +791,7 @@ impl LinkEncryptionFilter {
             let keys = derive_http_traffic_keys(shared.as_bytes(), ctx.route)?;
             // GET/HEAD 空 body：无载荷可解，协商仅用于响应加密（密钥派生已足以
             // 证明对端持有临时私钥）——空 body 直接通过，不尝试解信封
-            if !ctx.data.is_empty() {
+            if had_body {
                 let request_key = keys.request;
                 let plaintext = decrypt_http_body(
                     &request_key,
@@ -787,7 +806,11 @@ impl LinkEncryptionFilter {
 
         match result {
             Ok(()) => {
-                crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                // 仅实际解封了请求体才计加密帧：空 body 协商只派生响应密钥，
+                // 计帧会高估加密吞吐（指标语义：成功处理帧/请求）
+                if had_body {
+                    crate::server::metrics::MetricsCollector::global().inc_encrypted_frame();
+                }
                 Verdict::Continue
             }
             Err(e) => {
@@ -804,6 +827,15 @@ impl LinkEncryptionFilter {
             return Verdict::Continue;
         };
         let Some(keys) = take_http_keys(ctx.peer, ek_b64) else {
+            // 入站已协商但出站取 key 失败（TTL 竞态/锁毒化/密钥失配）→ 响应
+            // 明文放行（错误信息需对端可读）。必须留痕：strict 客户端会据此
+            // 断流报 LINK_ENCRYPTION_DOWNGRADE，服务端若无日志与计数将无从排查
+            tracing::warn!(
+                peer = ctx.peer,
+                route = ctx.route,
+                "http response key miss; response sent plaintext"
+            );
+            crate::server::metrics::MetricsCollector::global().inc_response_key_miss();
             return Verdict::Continue;
         };
         match encrypt_http_body(&keys.response, &ctx.data, &http_aad(Direction::Outbound, ctx.route)) {

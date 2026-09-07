@@ -32,6 +32,8 @@ pub struct ServerMetrics {
     pub encrypted_frames: u64,
     /// 链路加密解密失败累计（fail-closed 拒绝路径，含篡改/重放/密钥不匹配）
     pub decrypt_failures: u64,
+    /// 出站响应密钥未命中缓存累计（入站已协商但取 key 失败 → 明文降级响应）
+    pub response_key_miss: u64,
 }
 
 impl Default for ServerMetrics {
@@ -49,6 +51,7 @@ impl Default for ServerMetrics {
             memory_usage_bytes: 0,
             encrypted_frames: 0,
             decrypt_failures: 0,
+            response_key_miss: 0,
         }
     }
 }
@@ -74,6 +77,8 @@ struct MetricsInner {
     encrypted_frames: std::sync::atomic::AtomicU64,
     /// 链路加密解密失败计数（issue 08）
     decrypt_failures: std::sync::atomic::AtomicU64,
+    /// 出站响应密钥未命中缓存计数（入站已协商但取 key 失败 → 明文降级响应）
+    response_key_miss: std::sync::atomic::AtomicU64,
     /// 上次采样时的 HTTP 请求数
     last_http_requests: std::sync::atomic::AtomicU64,
     /// 上次采样时的 WS 发送数
@@ -95,6 +100,7 @@ impl MetricsCollector {
                 ws_received: std::sync::atomic::AtomicU64::new(0),
                 encrypted_frames: std::sync::atomic::AtomicU64::new(0),
                 decrypt_failures: std::sync::atomic::AtomicU64::new(0),
+                response_key_miss: std::sync::atomic::AtomicU64::new(0),
                 last_http_requests: std::sync::atomic::AtomicU64::new(0),
                 last_ws_sent: std::sync::atomic::AtomicU64::new(0),
                 last_ws_received: std::sync::atomic::AtomicU64::new(0),
@@ -134,6 +140,13 @@ impl MetricsCollector {
     pub fn inc_decrypt_failure(&self) {
         self.inner
             .decrypt_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 递增出站响应密钥未命中计数（入站已协商但取 key 失败 → 明文降级响应）
+    pub fn inc_response_key_miss(&self) {
+        self.inner
+            .response_key_miss
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
@@ -221,6 +234,10 @@ impl MetricsCollector {
             decrypt_failures: self
                 .inner
                 .decrypt_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            response_key_miss: self
+                .inner
+                .response_key_miss
                 .load(std::sync::atomic::Ordering::Relaxed),
         }
     }

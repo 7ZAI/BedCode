@@ -118,15 +118,26 @@ export function deriveHttpKeys(ephemeralPriv: Uint8Array, kdPublicB64: string, p
   const kdPub = base64ToBytes(kdPublicB64)
   if (kdPub.length !== 32) throw new Error(`kd public key length ${kdPub.length} != 32`)
   const shared = x25519.getSharedSecret(ephemeralPriv, kdPub)
-  const salt = utf8(path)
+  const salt = utf8(wirePath(path))
   return {
     request: hkdf(sha256, shared, salt, utf8(HKDF_INFO_HTTP_REQUEST), 32),
     response: hkdf(sha256, shared, salt, utf8(HKDF_INFO_HTTP_RESPONSE), 32),
   }
 }
 
+/**
+ * 归一化 wire 路径：剥离 query string。桌面端服务端按 `req.path()`（不含
+ * query）计算 HKDF salt 与 AAD，调用方（如 useHttpApi）传入的 path 可能带
+ * query（GET 参数端点）——两端口径必须一致，否则带 query 端点的密钥派生与
+ * GCM tag 校验全部失配（修复：GET/HEAD 空 body 协商上线后暴露的存量缺陷）
+ */
+function wirePath(path: string): string {
+  const q = path.indexOf('?')
+  return q >= 0 ? path.slice(0, q) : path
+}
+
 function httpAad(direction: number, path: string): Uint8Array {
-  const pathBytes = utf8(path)
+  const pathBytes = utf8(wirePath(path))
   const aad = new Uint8Array(7 + pathBytes.length)
   aad.set(utf8('v1'), 0)
   aad[2] = direction
