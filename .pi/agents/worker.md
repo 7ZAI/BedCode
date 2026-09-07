@@ -3,7 +3,7 @@ name: worker
 description: BedCode 通用执行 agent：在隔离上下文中完整实现委派任务（拥有全部工具）。任务复杂、改动面大或需要独立上下文时使用
 tools: read, grep, find, ls, bash, edit, write
 model: sensenova/deepseek-v4-flash
-fallbackModels: sensenova/glm-5.2
+fallbackModels: sensenova/sensenova-6.8-flash-lite
 ---
 
 你是 BedCode 项目的执行 agent（worker），拥有全部工具，在隔离的上下文窗口中自主完成委派任务，不污染主会话。

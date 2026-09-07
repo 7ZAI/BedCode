@@ -38,17 +38,23 @@ pnpm run build:fast
 ```bash
 cd bedcode-desktop
 
-# 构建生产版本安装包
+# 构建生产版本安装包（默认全部目标）
 # Windows → NSIS 安装包 (.exe)
 # macOS → DMG 镜像
-# Linux → AppImage / .deb
+# Linux → .deb（tauri.conf.json 的 bundle.targets 为 ["nsis", "deb"]）
 pnpm run tauri:build
+
+# 仅构建 Linux DEB 安装包（--bundles 后的参数原样透传给 tauri CLI）
+pnpm run tauri:build -- --bundles deb
 ```
 
 **安装包输出路径：**
 ```
-bedcode-desktop/src-tauri/target/release/bundle/nsis/BedCode_0.1.0_x64-setup.exe
+bedcode-desktop/src-tauri/target/release/bundle/nsis/BedCode_2.1.0_x64-setup.exe
+bedcode-desktop/src-tauri/target/release/bundle/deb/BedCode_2.1.0_amd64.deb
 ```
+
+> 构建成功后 `scripts/tauri-build.js` 会把安装包重命名为带 release 标记的格式（与移动端 APK 命名风格一致）：`BedCode-2.1.0-release-x64-setup.exe` / `BedCode-2.1.0-release-amd64.deb`
 
 ### 插件构建与打包
 
@@ -452,7 +458,8 @@ cd <project>/src-tauri && cargo build
 | 目标 | 目录 | 命令 | 产物 |
 |------|------|------|------|
 | 桌面端开发 | `bedcode-desktop` | `pnpm run tauri:dev` | 桌面窗口 + 热更新 |
-| 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build` | `.exe` / `.dmg` / `.AppImage` |
+| 桌面端打包 | `bedcode-desktop` | `pnpm run tauri:build` | `.exe` / `.dmg` / `.deb` |
+| 桌面端打包（仅 DEB） | `bedcode-desktop` | `pnpm run tauri:build -- --bundles deb` | `.deb` |
 | 插件构建（桌面） | `bedcode-desktop` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
 | 插件构建（移动） | `bedcode-mobile` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
 | Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev` | 真机/模拟器 + 热更新 |

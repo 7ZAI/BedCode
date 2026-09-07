@@ -187,7 +187,12 @@ function renameDebWithReleaseSuffix() {
   }
 }
 
-const args = process.argv.slice(2)
+// pnpm run 会在脚本参数前注入一个 `--`（pnpm 的参数分隔符，非 tauri CLI 参数）；
+// 若原样透传，tauri CLI 会把 `--` 当作“转发给底层 cargo build”的分隔符，导致
+// `pnpm run tauri:build -- --bundles deb` 时 --bundles 被抛给 cargo 而报错。
+// 这里剥离一个前导 `--`；如需向 cargo 透传参数，连写两个 `--` 即可（剥离一个后仍保留一个）。
+const rawArgs = process.argv.slice(2)
+const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs
 const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...args], {
   stdio: 'inherit',
   env: { ...process.env, ...signingEnv },

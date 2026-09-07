@@ -257,7 +257,7 @@ pi-lens 提供 IDE 级语义能力（词索引 + tree-sitter 结构 + LSP 诊断
 
 ## Agent skills
 
-统一 skills 目录为项目根 **`.agents/skills/`**（唯一真源，git 跟踪）。当前 skills：`logo-generator`、`taste-skill-v1`（frontmatter name `design-taste-frontend-v1`）、`frontend-styles`。
+统一 skills 目录为项目根 **`.agents/skills/`**（唯一真源，git 跟踪）。当前 skills：`logo-generator`、`taste-skill-v1`（frontmatter name `design-taste-frontend-v1`）、`frontend-styles`、`scip-rebuild`。
 
 - pi / OpenCode / Codex 原生读取 `.agents/skills/`，零配置
 - Claude Code 只读 `.claude/skills/`：每台机器执行一次 `sh scripts/sync-skills.sh` 桥接（junction/symlink，幂等）
@@ -385,4 +385,4 @@ rust-analyzer 已在 pi-lens 禁用（`disabledServers`，单实例 2GB+ 内存�
 .pi-lens/scip/scipq refs-exact "<完整symbol>"  # 引用精确行列（2-5s）
 ```
 
-**刷新策略（固定间隔或按需，不做每次代码变更的自动重建）**：按需 `scipq rebuild`；固定间隔 `scipq rebuild-if-stale [hours]`（默认 24h，间隔内零成本跳过）；状态自查 `scipq stale`。role 语义（0=引用、1=定义）、格式与已知限制见 `.pi-lens/scip/README.md`。
+**刷新策略（固定间隔或按需，不做每次代码变更的自动重建）**：按需 `scipq rebuild`；固定间隔 `scipq rebuild-if-stale [hours]`（默认 24h，间隔内零成本跳过）；状态自查 `scipq stale`。重建触发时机、执行步骤与验证标准见 `scip-rebuild` skill。role 语义（0=引用、1=定义）、格式与已知限制见 `.pi-lens/scip/README.md`。
