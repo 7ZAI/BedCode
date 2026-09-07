@@ -27,7 +27,6 @@ import {
   sessions,
 } from './mock/session'
 import { dialogService } from './mock/dialog-service'
-import { getDevMock } from './registry'
 import {
   getPluginRecord,
   goBackView,
