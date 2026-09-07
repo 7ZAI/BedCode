@@ -19,6 +19,10 @@ let unlistenPeerDisconnected: (() => void) | null = null
  * 当前已连接的对端 nodeId 集合（去重）：数据面短连接（浏览/拉取各自新拨）会
  * 让 peer-connected / peer-disconnected 高频重复，仅在真实状态跃迁时 toast
  * （2026-09-07 实机实证：每次连接/断开弹出一堆 toast）。
+ *
+ * 后端 peer_net.rs 已按引用计数去重（inbound 首连才发 connected、末连才发
+ * disconnected），本处是防回归兜底——若后端计数逻辑漂移漏发/多发，前端仍有
+ * 最后一道去重；两侧去重语义不同步时以实际为准，勿把本处当成唯一防抖层
  */
 const connectedPeerIds = new Set<string>()
 
