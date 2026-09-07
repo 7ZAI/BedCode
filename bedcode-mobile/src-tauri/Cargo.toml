@@ -105,15 +105,6 @@ bedcode-peer-net = { path = "../../packages/peer-net" }
 bedcode-link-crypto = { path = "../../packages/link-crypto" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
-# ==================== OCR 引擎（仅 Android 平台，规格 §4.6）====================
-# ort 2.x（rc.13）：load-dynamic 运行时 dlopen libonnxruntime.so（onnxruntime-android AAR 的 .so
-# 经 scripts/fetch-ort-android.sh 放入 gen/android jniLibs）；download-binaries 不支持 Android 目标。
-# api-20 显式锁低版本 C API：AAR 用 1.20.0，默认 api-27 会在 dlopen 时拒绝旧 .so。
-[target.'cfg(target_os = "android")'.dependencies]
-ort = { version = "2.0.0-rc.13", default-features = false, features = ["load-dynamic", "ndarray", "api-20"] }
-# ndarray 显式声明（ort 的 ndarray feature 为其传递依赖；ppocr 张量构建直接使用）
-ndarray = "0.17"
-
 [dev-dependencies]
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）

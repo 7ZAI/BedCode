@@ -21,8 +21,6 @@ pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BUS: &str = "bus";
 /// 系统文件操作：用系统查看器打开本地文件（传输完成「打开本地文件」）
 pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
-/// OCR 引擎：离线识别（插件 com.bedcode.ocr 宿主命令，见 .scratch/ocr-plugin/spec.md §4.1）
-pub const PERMISSION_OCR: &str = "ocr";
 /// 对等网络：发现/信任/拨号/收发/浏览的宿主 peer-net 能力（host-peer）
 pub const PERMISSION_PEER: &str = "peer";
 /// mDNS 浏览纯能力：browse-only 发现事件透传（host-mdns，ADR 0022 v2）
@@ -44,7 +42,6 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_FS_WRITE,
     PERMISSION_BUS,
     PERMISSION_SYSTEM_OPEN,
-    PERMISSION_OCR,
     PERMISSION_PEER,
     PERMISSION_MDNS,
 ];
@@ -65,12 +62,6 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
     (PERMISSION_BUS, &["bus.publish", "bus.subscribe", "bus.unsubscribe"]),
     (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir", "system.revealReceivedFileLocation"]),
-    (PERMISSION_OCR, &[
-        "ocr.recognize",
-        "ocr.engineStatus",
-        "ocr.deleteModels",
-        "ocr.restoreModels",
-    ]),
     (PERMISSION_PEER, &[
         "peer.listDevices",
         "peer.dial",
@@ -223,25 +214,9 @@ mod tests {
             PERMISSION_FS_READ,
             PERMISSION_FS_WRITE,
             PERMISSION_BUS,
-            PERMISSION_OCR,
         ] {
             assert!(VALID_PERMISSIONS.contains(&p), "{} not in whitelist", p);
         }
-    }
-
-    /// ocr 权限：API 方法映射 + 未授予拒绝
-    #[test]
-    fn test_check_api_ocr() {
-        let pm = PermissionManager::new();
-        pm.grant_permissions("p", &["ocr".to_string()]);
-        assert!(pm.check_api("p", "ocr.recognize"));
-        assert!(pm.check_api("p", "ocr.engineStatus"));
-        assert!(pm.check_api("p", "ocr.deleteModels"));
-        assert!(pm.check_api("p", "ocr.restoreModels"));
-        // 未授予 ocr 的插件一律拒绝
-        let pm2 = PermissionManager::new();
-        pm2.grant_permissions("p2", &["storage".to_string()]);
-        assert!(!pm2.check_api("p2", "ocr.recognize"));
     }
 
     #[test]

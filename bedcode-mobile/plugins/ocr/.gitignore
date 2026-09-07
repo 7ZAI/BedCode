@@ -1,4 +1,0 @@
-node_modules/
-dist/
-rust/target/
-*.zip

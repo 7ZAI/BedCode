@@ -471,7 +471,6 @@ export default {
       approveSuccess: 'Approved: {name}',
       approveFailed: 'Approval failed: {error}',
       noPermissions: 'No permissions requested',
-      noOcrPermission: 'Plugin {plugin} lacks the ocr permission',
       noSystemOpenPermission: 'Plugin {plugin} lacks the system:open permission',
       fsAuthTitle: 'File Access Authorization',
       fsAuthRead: 'read',

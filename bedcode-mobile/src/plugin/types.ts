@@ -43,7 +43,6 @@ export type {
   PluginContext,
   PluginModule,
   SystemAPI,
-  OcrApi,
 } from '@binblink/plugin-sdk-mobile'
 
 /** 插件信息（从后端获取，含 source 字段） */

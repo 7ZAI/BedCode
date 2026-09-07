@@ -18,8 +18,6 @@ import app.tauri.plugin.Plugin
  * 用 Android Storage Access Framework 弹系统选择器（免任何存储权限）：
  * - pickDirectory：ACTION_OPEN_DOCUMENT_TREE，选共享目录（挂载根）
  * - pickFile：ACTION_OPEN_DOCUMENT，选本地文件（上传用）
- * - pickImage：ACTION_OPEN_DOCUMENT + image 类型过滤，选图片并直接解码为 RGBA8
- *   临时文件（OCR 取图入口一，spec §4.4/§5.1）
  *
  * 选择后调用 takePersistableUriPermission 持久化授权（重启仍有效），
  * 并把 SAF Uri 拆成 (authority, documentId, primaryDir) 返回；
@@ -166,57 +164,6 @@ class SafPickerPlugin(private val activity: Activity) : Plugin(activity) {
             }
             Activity.RESULT_CANCELED -> invoke.resolve(JSObject().apply { put("cancelled", true) })
             else -> invoke.reject("File picker failed (resultCode=${result.resultCode})")
-        }
-    }
-
-    // ==================== 图片选择（OCR 取图） ====================
-
-    /// 弹系统图片选择器（image/*，零权限）；选中后直接解码降采样为 RGBA8
-    /// 临时文件（spec §4.4/§5.1），resolve {path,width,height} 供
-    /// plugin_ocr_recognize 直接消费——不经 Rust 侧路径解析
-    @Command
-    fun pickImage(invoke: Invoke) {
-        try {
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-            intent.addCategory(Intent.CATEGORY_OPENABLE)
-            intent.type = "image/*"
-            startActivityForResult(invoke, intent, "pickImageResult")
-        } catch (e: Exception) {
-            android.util.Log.e(TAG, "pickImage launch failed: ${e.message}")
-            invoke.reject("Failed to launch image picker: ${e.message}")
-        }
-    }
-
-    /// 图片选择回调：解码失败（损坏/超大/非图片）→ reject 带可读上下文
-    @ActivityCallback
-    fun pickImageResult(invoke: Invoke, result: androidx.activity.result.ActivityResult) {
-        android.util.Log.i(TAG, "pickImageResult: code=${result.resultCode} data=${result.data}")
-        when (result.resultCode) {
-            Activity.RESULT_OK -> {
-                // Intent.data 为 Java 平台类型，需显式标注 Uri? 才能经空检查智能转换
-                val uri: Uri? = result.data?.data
-                if (uri == null) {
-                    android.util.Log.e(TAG, "pickImageResult: RESULT_OK but no uri in data")
-                    invoke.reject("No image selected")
-                    return
-                }
-                persistPermission(uri)
-                try {
-                    val img = OcrImageDecoder.decode(activity, uri)
-                    invoke.resolve(
-                        JSObject().apply {
-                            put("path", img.path)
-                            put("width", img.width)
-                            put("height", img.height)
-                        },
-                    )
-                } catch (e: Exception) {
-                    android.util.Log.e(TAG, "pickImageResult: decode failed", e)
-                    invoke.reject("Failed to decode image: ${e.message}")
-                }
-            }
-            Activity.RESULT_CANCELED -> invoke.resolve(JSObject().apply { put("cancelled", true) })
-            else -> invoke.reject("Image picker failed (resultCode=${result.resultCode})")
         }
     }
 

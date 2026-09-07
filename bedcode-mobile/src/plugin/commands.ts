@@ -5,14 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type { PluginInfo, OcrApi } from './types'
-
-/** OCR recognize 请求（与 SDK Rust OcrRecognizeInput camelCase 对应） */
-interface OcrRecognizeInput {
-  engine?: string
-  image: { rgbaPath: string; width: number; height: number }
-  maxSide?: number
-}
+import type { PluginInfo } from './types'
 
 /** 获取所有已加载插件信息 */
 export async function pluginListLoaded(): Promise<PluginInfo[]> {
@@ -126,50 +119,4 @@ export async function pluginOpenFileLocation(pluginId: string, path: string): Pr
 /** 按文件名打开接收文件所在目录（历史「打开所在文件夹」真机路径；需 system:open 权限） */
 export async function pluginRevealReceivedFile(pluginId: string, fileName: string): Promise<void> {
   return await invoke<void>('plugin_reveal_received_file', { pluginId, fileName })
-}
-
-
-// ==================== OCR 命令（spec §4.2，宿主直供不经 WASM）====================
-
-/** 识别图片（RGBA 由 Kotlin 桥产出；识别完成后宿主自动清理临时文件） */
-export async function pluginOcrRecognize(
-  pluginId: string,
-  input: OcrRecognizeInput,
-): Promise<ReturnType<OcrApi['recognize']>> {
-  return await invoke('plugin_ocr_recognize', { pluginId, input })
-}
-
-/** 引擎状态：模型是否就位/占用字节/引擎加载态/支持引擎列表 */
-export async function pluginOcrEngineStatus(
-  pluginId: string,
-): Promise<ReturnType<OcrApi['engineStatus']>> {
-  return await invoke('plugin_ocr_engine_status', { pluginId })
-}
-
-/** 删除已解压模型（释放空间；先释放常驻引擎 session） */
-export async function pluginOcrDeleteModels(
-  pluginId: string,
-): Promise<ReturnType<OcrApi['deleteModels']>> {
-  return await invoke('plugin_ocr_delete_models', { pluginId })
-}
-
-/** 从 APK assets 恢复模型（幂等；Android 经 Kotlin 桥惰性解压） */
-export async function pluginOcrRestoreModels(
-  pluginId: string,
-): Promise<ReturnType<OcrApi['restoreModels']>> {
-  return await invoke('plugin_ocr_restore_models', { pluginId })
-}
-
-/** 相册选图（SAF image/*，零权限）→ RGBA8 临时文件；取消返回 null */
-export async function pluginPickImage(
-  pluginId: string,
-): Promise<ReturnType<OcrApi['pickImage']>> {
-  return await invoke('plugin_pick_image', { pluginId })
-}
-
-/** 拍照（CAMERA 运行时权限）→ RGBA8 临时文件；取消返回 null */
-export async function pluginCameraCapture(
-  pluginId: string,
-): Promise<ReturnType<OcrApi['cameraCapture']>> {
-  return await invoke('plugin_camera_capture', { pluginId })
 }

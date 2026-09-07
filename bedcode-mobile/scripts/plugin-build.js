@@ -29,7 +29,7 @@ const pluginsDir = resolve(ROOT, 'plugins')
 const resourcesDir = resolve(ROOT, 'src-tauri/resources/plugins/mobile')
 
 // 暂停开发的插件：不参与构建，恢复开发时从列表移除
-const EXCLUDED_PLUGINS = ['ocr']
+const EXCLUDED_PLUGINS = []
 
 // 扫描插件目录（跳过模板/隐藏目录/暂停开发的插件，需含 plugin.json）
 const candidates = readdirSync(pluginsDir, { withFileTypes: true })

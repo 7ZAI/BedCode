@@ -21,8 +21,6 @@ mod file_delete;
 mod foreground;
 mod multicast_lock;
 mod notifications;
-mod ocr;
-mod ocr_models;
 mod picker;
 mod saf;
 
@@ -37,7 +35,5 @@ pub use file_delete::*;
 pub use foreground::*;
 pub use multicast_lock::*;
 pub use notifications::*;
-pub use ocr::*;
-pub use ocr_models::*;
 pub use picker::*;
 pub use saf::*;

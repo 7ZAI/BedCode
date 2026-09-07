@@ -16,9 +16,6 @@ import type {
   LifecycleAPI,
   LoggerAPI,
   NotificationAPI,
-  OcrApi,
-  OcrEngineStatus,
-  OcrLine,
   PluginContext,
   StatusAPI,
   UIRegistry,
@@ -292,58 +289,6 @@ export function createMockContext(pluginId: string): PluginContext {
     },
   }
 
-  // ==================== OcrAPI（dev-shell mock） ====================
-
-  /** mock 引擎状态：模型在位、引擎常驻（dev-shell 恒就绪） */
-  const mockEngineStatus: OcrEngineStatus = {
-    available: true,
-    modelsPresent: true,
-    modelsBytes: 17_417_728,
-    engineLoaded: true,
-    supportedEngines: ['offline'],
-  }
-
-  const ocr: OcrApi = {
-    async recognize(_input) {
-      // 识别结果种子由插件 devMock.ocrLinesSeed 持有（dev-shell 不含业务示例数据）；
-      // 空数组/缺省均可演示「未识别到文字」空态
-      const seed = getDevMock(pluginId)?.ocrLinesSeed as OcrLine[] | undefined
-      pushLog('info', pluginId, `ocr.recognize (mock) 返回 ${seed?.length ?? 0} 行`)
-      return {
-        engine: 'offline',
-        durationMs: 86,
-        lines: seed ?? [],
-      }
-    },
-    async engineStatus() {
-      pushLog('info', pluginId, 'ocr.engineStatus (mock) 引擎就绪')
-      return mockEngineStatus
-    },
-    async deleteModels() {
-      // 内存态：删除后 modelsPresent=false，演示「模型缺失引导恢复」链路
-      mockEngineStatus.modelsPresent = false
-      mockEngineStatus.modelsBytes = 0
-      mockEngineStatus.engineLoaded = false
-      pushLog('info', pluginId, 'ocr.deleteModels (mock) 已删除')
-      return { deleted: true, freedBytes: 17_417_728 }
-    },
-    async restoreModels() {
-      mockEngineStatus.modelsPresent = true
-      mockEngineStatus.modelsBytes = 17_417_728
-      mockEngineStatus.engineLoaded = true
-      pushLog('info', pluginId, 'ocr.restoreModels (mock) 已恢复')
-      return { restored: true }
-    },
-    async pickImage() {
-      pushLog('info', pluginId, 'ocr.pickImage (mock) 模拟相册选图')
-      return { path: '/mock/cache/ocr/ocr_mock_pick.rgba', width: 1000, height: 750 }
-    },
-    async cameraCapture() {
-      pushLog('info', pluginId, 'ocr.cameraCapture (mock) 模拟拍照（权限已授予）')
-      return { path: '/mock/cache/ocr/ocr_mock_camera.rgba', width: 1200, height: 900 }
-    },
-  }
-
   // ==================== SystemAPI（dev-shell 浏览器环境 no-op，与宿主接口对齐） ====================
   const system = {
     async openFile(_path: string, _displayName?: string): Promise<void> {
@@ -365,7 +310,6 @@ export function createMockContext(pluginId: string): PluginContext {
     ui,
     events,
     storage,
-    ocr,
     i18n,
     lifecycle,
     logger,

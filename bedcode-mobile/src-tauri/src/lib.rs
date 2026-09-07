@@ -8,7 +8,6 @@ pub mod file_service;
 pub mod handler;
 pub mod mdns;
 pub mod model;
-pub mod ocr;
 pub mod peer_migration;
 pub mod peer_net;
 pub mod peer_receive;
@@ -53,7 +52,6 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
-        .plugin(crate::plugin::android_plugins::ocr_model_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
         .plugin(crate::plugin::android_plugins::task_notification_plugin())
         .plugin(crate::plugin::android_plugins::biometric_key_plugin())
@@ -62,7 +60,6 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::device_info_plugin())
         .plugin(crate::plugin::android_plugins::saf_picker_plugin())
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
-        .plugin(crate::plugin::android_plugins::camera_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
         .plugin(crate::plugin::android_plugins::multicast_lock_plugin())
         .setup(|app| {
@@ -325,13 +322,6 @@ pub fn run() {
             // File Service Commands（插件 TS 通道）
             // v2 批量传输批准（接收策略 / 异步批量批准）
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）
-            // OCR 引擎命令（插件 com.bedcode.ocr 宿主侧，spec 见 .scratch/ocr-plugin/spec.md §4.2）
-            crate::plugin::commands::plugin_ocr_recognize,
-            crate::plugin::commands::plugin_ocr_engine_status,
-            crate::plugin::commands::plugin_ocr_delete_models,
-            crate::plugin::commands::plugin_ocr_restore_models,
-            crate::plugin::commands::plugin_pick_image,
-            crate::plugin::commands::plugin_camera_capture,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

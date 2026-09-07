@@ -467,7 +467,6 @@ export default {
       approveSuccess: '已批准: {name}',
       approveFailed: '批准失败: {error}',
       noPermissions: '无权限请求',
-      noOcrPermission: '插件 {plugin} 缺少 ocr 权限',
       noSystemOpenPermission: '插件 {plugin} 缺少 system:open 权限',
       fsAuthTitle: '文件访问授权',
       fsAuthRead: '读取',
