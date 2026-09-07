@@ -517,7 +517,11 @@ async fn list_shared_dir(
                 let name = item.file_name().to_string_lossy().into_owned();
                 let meta = item.metadata().await;
                 let (is_dir, size) = match meta {
-                    Ok(m) => (m.is_dir(), m.len()),
+                    // 目录 size 归一为 0：目录的 st_size 是文件系统实现细节
+                    // （ext4 报块大小、tmpfs 报 0），对端展示无意义——统一契约
+                    // 避免同一代码在 CI/本机文件系统差异下列表断言漂移
+                    Ok(m) if m.is_dir() => (true, 0),
+                    Ok(m) => (false, m.len()),
                     Err(_) => (false, 0),
                 };
                 out.push(crate::transfer::batch::DirEntry::new(name, is_dir, size));

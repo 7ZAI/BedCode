@@ -786,8 +786,11 @@ async fn run_reannounce_loop(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
+            r = shutdown_rx.changed() => {
+                // changed() 在 Sender 被 drop（未 send true 的异常停机路径）时
+                // 返回 Err(Closed) 立即就绪：若只查 borrow() 不 break，本循环
+                // 会在 biased 首分支上空转（busy-loop 100% CPU）
+                if r.is_err() || *shutdown_rx.borrow() {
                     break;
                 }
             }
@@ -827,8 +830,9 @@ async fn run_discovery_loop(
         }
         tokio::select! {
             biased;
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
+            r = shutdown_rx.changed() => {
+                // Sender 被 drop → Err(Closed)：同 reannounce 循环，视为停机
+                if r.is_err() || *shutdown_rx.borrow() {
                     break;
                 }
             }
@@ -838,8 +842,10 @@ async fn run_discovery_loop(
                         receiver = rx;
                         tracing::debug!("peer mDNS browse receiver swapped (periodic requery)");
                     }
-                    // 重查任务已退出（停机中）：继续消费剩余事件直至断连
-                    None => {}
+                    // requery 任务已退出（drop 了 swap_tx，仅停机路径）：事件
+                    // 循环同步退出——若继续运行，关闭的 channel 会令本分支在
+                    // 每次 select! 立即就绪，持续抢占事件消费
+                    None => break,
                 }
             }
             // flume 0.12 无 recv_async_timeout：用 tokio 超时包裹 recv_async 同义实现
@@ -894,8 +900,9 @@ async fn run_requery_loop(
     loop {
         tokio::select! {
             biased;
-            _ = shutdown_rx.changed() => {
-                if *shutdown_rx.borrow() {
+            r = shutdown_rx.changed() => {
+                // Sender 被 drop → Err(Closed)：同 reannounce 循环，视为停机
+                if r.is_err() || *shutdown_rx.borrow() {
                     break;
                 }
             }

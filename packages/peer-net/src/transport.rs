@@ -440,12 +440,18 @@ async fn deliver_to_handler(
 ///
 /// 对端静默死亡（WiFi 骤断/休眠等无 FIN 场景）时探测失败让挂起的读写以
 /// 错误返回——宿主侧会话活性泵与入站 handler 据此感知中断并发断开事件。
-/// 时间窗取「30s 静默 + 10s×3 探测」，LAN 规模下断网约 1 分钟内收敛。
+/// 时间窗取「30s 静默 + 10s×3 探测」（interval/retries 仅 Unix 可显式设置，
+/// Windows 用系统默认约 1-2s、收敛更快但两端不一致），LAN 规模下断网约
+/// 1 分钟内收敛。
 fn enable_keepalive(tcp: &TcpStream) {
     let ka = socket2::TcpKeepalive::new().with_time(Duration::from_secs(30));
     #[cfg(unix)]
     let ka = ka.with_interval(Duration::from_secs(10)).with_retries(3);
-    let _ = socket2::SockRef::from(tcp).set_tcp_keepalive(&ka);
+    // keepalive 设置失败不阻断建连（fail-open），但必须留痕：首帧超时移除后
+    // 连接活性强依赖此探测，静默失败会让对端静默死亡时挂起无兜底
+    if let Err(e) = socket2::SockRef::from(tcp).set_tcp_keepalive(&ka) {
+        tracing::warn!(error = %e, "set TCP keepalive failed; dead-peer detection degraded");
+    }
 }
 
 pub(crate) async fn dial(
