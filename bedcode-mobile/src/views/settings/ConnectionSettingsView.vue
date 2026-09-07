@@ -135,7 +135,7 @@
  * 连接设置二级页面 - 自动重连、保持连接、重连间隔、默认端口 + 链路加密（issue 08）
  * 状态来自 useMobileSettings 共享单例，变更自动保存
  */
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import Toggle from '@/components/Toggle.vue'
@@ -151,7 +151,14 @@ const { t } = useI18n()
 const toast = useToast()
 const { settings, loadSettings } = useMobileSettings()
 const linkSettings = useLinkEncryptionSettings()
-const pinnedFingerprint = computed(() => getPinnedFingerprint())
+// 指纹行用 ref 而非无依赖 computed：后者首次求值后永久缓存，设置页常驻时
+// 配对完成（ws_link_crypto_pin 事件落地）指纹行仍显示「未配对」
+const pinnedFingerprint = ref(getPinnedFingerprint())
+
+/** 从 localStorage 刷新指纹（配对/重认证事件驱动） */
+function refreshPinnedFingerprint(): void {
+  pinnedFingerprint.value = getPinnedFingerprint()
+}
 
 /** 通道子开关行元数据（与桌面端三子开关一一对应） */
 const linkChannelRows = computed(() => [
@@ -185,7 +192,14 @@ function onToggleLinkEncryption(next: boolean) {
   linkSettings.setEnabled(next)
 }
 
-onMounted(loadSettings)
+onMounted(async () => {
+  await loadSettings()
+  refreshPinnedFingerprint()
+  // 配对/重认证（配对码/QR/reauth/生物认证）统一经 ws_link_crypto_pin 落地
+  const { listen } = await import('@tauri-apps/api/event')
+  const unlisten = await listen('ws_link_crypto_pin', refreshPinnedFingerprint)
+  onUnmounted(() => unlisten())
+})
 
 // ==================== 数字步进 ====================
 

@@ -146,7 +146,16 @@ const navItems = computed<NavItem[]>(() => {
       icon: {
         render: () => h('svg', { fill: 'none', stroke: 'currentColor', viewBox: '0 0 24 24' }, [
           // 箱体（y=9.5 使整体垂直几何中心落 12，与会话/设置同一纵横标尺）
-          h('rect', { x: 3, y: 9.5, width: 18, height: 10, rx: 2 }),
+          h('rect', {
+            'stroke-linecap': 'round',
+            'stroke-linejoin': 'round',
+            'stroke-width': '2',
+            x: 3,
+            y: 9.5,
+            width: 18,
+            height: 10,
+            rx: 2,
+          }),
           // 居中提手
           h('path', {
             'stroke-linecap': 'round',

@@ -65,7 +65,12 @@ onMounted(async () => {
   void syncLinkCryptoContextToNative()
   // 监听认证成功时 Rust 广播的 pin（配对码/QR/reauth/生物认证统一出口）：
   // 写入 localStorage 供 HTTP/终端 WS 通道与设置页指纹展示（修复 pin 断链）
-  void initLinkCryptoPinSync()
+  try {
+    const unlisten = await initLinkCryptoPinSync()
+    unlistenQueue.push(unlisten)
+  } catch (e) {
+    console.error('[App] initLinkCryptoPinSync failed:', e)
+  }
   // mDNS 广播暂时禁用
   // try {
   //   const deviceName = `BedCode-Mobile-${Math.random().toString(36).slice(2, 6)}`
@@ -75,8 +80,18 @@ onMounted(async () => {
   // }
 })
 
+// pin 事件监听器句柄（onUnmounted 释放，避免 HMR/测试重复注册泄漏）
+const unlistenQueue: Array<() => void> = []
+
 onUnmounted(async () => {
   cleanupTheme()
+  for (const unlisten of unlistenQueue.splice(0)) {
+    try {
+      unlisten()
+    } catch (e) {
+      console.error('[App] unlisten failed:', e)
+    }
+  }
   // await stopAdvertise()
 })
 

@@ -11,6 +11,7 @@
  */
 
 import { ref } from 'vue'
+import { base64ToBytes } from '@/services/linkCrypto'
 
 const STORAGE_KEY = 'link-encryption'
 const PIN_PUBLIC_KEY = 'link_kd_public_b64'
@@ -142,9 +143,27 @@ export function notePinFromAuthData(data: unknown): void {
 /** pin 写入统一入口：公钥必存（加密协商信任锚），指纹随带（仅展示用途） */
 function applyPin(kdPublicB64: unknown, kdFingerprint: unknown): void {
   if (typeof kdPublicB64 !== 'string' || kdPublicB64.length === 0) return
+  // 公钥必须可解为 32 字节：畸形值写入会让 HTTP 侧每次 deriveHttpKeys 抛错
+  // 返回 LINK_ENCRYPTION_SEAL_FAILED、事件 WS 侧解码失败断连，pin 只能靠
+  // 重新配对恢复——信任锚不应被污染，写入前校验
+  let decoded: Uint8Array | null = null
+  try {
+    decoded = base64ToBytes(kdPublicB64)
+  } catch {
+    console.error('[LinkEncryption] invalid kdPublicB64 (not base64), pin rejected')
+    return
+  }
+  if (decoded.length !== 32) {
+    console.error(`[LinkEncryption] invalid kdPublicB64 (length ${decoded.length} != 32), pin rejected`)
+    return
+  }
   localStorage.setItem(PIN_PUBLIC_KEY, kdPublicB64)
   if (typeof kdFingerprint === 'string' && kdFingerprint.length > 0) {
     localStorage.setItem(PIN_FINGERPRINT, kdFingerprint)
+  } else {
+    // 指纹缺失（桌面端身份重生成/换机时 kdFingerprint 为 None）→ 清除旧指纹：
+    // 展示「新公钥+旧指纹」会把人工核对的防中间人锚点变成 false-positive 信任
+    localStorage.removeItem(PIN_FINGERPRINT)
   }
   // pin 刷新即推送 Rust 侧：事件 WS 重连协商依赖最新 pin（issue 09）
   void syncLinkCryptoContextToNative()

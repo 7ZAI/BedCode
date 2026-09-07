@@ -85,24 +85,37 @@ describe('useLinkEncryptionSettings', () => {
 })
 
 describe('notePinFromAuthData', () => {
+  // 合法 X25519 公钥（32 字节 0xAB 的 base64）：applyPin 写入前校验 32 字节，
+  // 短/畸形公钥被拒绝——信任锚不应被污染
+  const VALID_KID_B64 = 'q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s='
+
   it('auth 数据携带公钥+指纹时两者都写入', () => {
-    notePinFromAuthData({ kdPublicB64: 'cHVibGljLWtleQ==', kdFingerprint: 'aabbccdd' })
-    expect(getPinnedKey()).toBe('cHVibGljLWtleQ==')
+    notePinFromAuthData({ kdPublicB64: VALID_KID_B64, kdFingerprint: 'aabbccdd' })
+    expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
   })
 
-  it('指纹缺失时公钥仍写入（公钥为协商必需，指纹仅展示）', () => {
-    notePinFromAuthData({ kdPublicB64: 'cHVibGljLWtleQ==' })
-    expect(getPinnedKey()).toBe('cHVibGljLWtleQ==')
+  it('指纹缺失时公钥仍写入且旧指纹被清除（换机后旧指纹是 false-positive 信任锚）', () => {
+    localStorage.setItem('link_kd_fingerprint', 'stale-fingerprint')
+    notePinFromAuthData({ kdPublicB64: VALID_KID_B64 })
+    expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBeNull()
   })
 
+  it('畸形公钥（非 32 字节）拒绝写入，且不清除既有 pin', () => {
+    localStorage.setItem('link_kd_public_b64', VALID_KID_B64)
+    localStorage.setItem('link_kd_fingerprint', 'aabbccdd')
+    notePinFromAuthData({ kdPublicB64: 'cHVibGljLWtleQ==' /* 10 字节 */ })
+    expect(getPinnedKey()).toBe(VALID_KID_B64)
+    expect(getPinnedFingerprint()).toBe('aabbccdd')
+  })
+
   it('无公钥不写任何 pin（防空串污染）', () => {
-    localStorage.setItem('link_kd_public_b64', 'cHVibGljLWtleQ==')
+    localStorage.setItem('link_kd_public_b64', VALID_KID_B64)
     localStorage.setItem('link_kd_fingerprint', 'aabbccdd')
     notePinFromAuthData({})
     // 既有 pin 不被清空（协商失败不清 pin 的信任锚语义）
-    expect(getPinnedKey()).toBe('cHVibGljLWtleQ==')
+    expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
   })
 })
