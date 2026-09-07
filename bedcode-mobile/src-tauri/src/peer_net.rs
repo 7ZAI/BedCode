@@ -124,7 +124,6 @@ struct PendingConsent {
 ///   连接句柄由 crate 的 SharedDirHandler 自持（宿主不持有），宿主仅记账供
 ///   连接态重发还原首屏；维护在 [`InboundConnectionBridge`]。按连接计数避免
 ///   会话连接与数据面短连接并存时，短连接结束过早摘除连接态。
-#[derive(Default)]
 pub struct PeerNetState {
     runtime: tokio::sync::Mutex<Option<PeerNetRuntime>>,
     trust: tokio::sync::Mutex<Option<Arc<TrustStore>>>,
@@ -136,6 +135,26 @@ pub struct PeerNetState {
     /// 入站连接关停句柄（node_id → conn id → 内层 handler AbortHandle）：
     /// disconnect_peer / stop_locked 据此中止 handler，连接随任务 drop 关闭
     inbound_conns: std::sync::Mutex<HashMap<String, HashMap<u64, tokio::task::AbortHandle>>>,
+    /// 生命周期闸门（start/stop 装配串行化）：activate 外壳与 boot 对账可能
+    /// 并发触发 start/stop，先前「幂等检查在锁内、装配在锁外」构成 TOCTOU——
+    /// 双装配时次者 bind 回退 :0 随机端口、首个 runtime 泄漏。不持 runtime
+    /// 锁跨 await（与全仓短持锁风格一致），闸门只串行化装配本身
+    lifecycle_gate: tokio::sync::Semaphore,
+}
+
+impl Default for PeerNetState {
+    fn default() -> Self {
+        Self {
+            runtime: tokio::sync::Mutex::new(None),
+            trust: tokio::sync::Mutex::new(None),
+            shared: tokio::sync::Mutex::new(None),
+            consents: std::sync::Mutex::new(HashMap::new()),
+            connections: std::sync::Mutex::new(HashMap::new()),
+            inbound_peers: std::sync::Mutex::new(HashMap::new()),
+            inbound_conns: std::sync::Mutex::new(HashMap::new()),
+            lifecycle_gate: tokio::sync::Semaphore::new(1),
+        }
+    }
 }
 
 /// 出站会话句柄：连接由活性泵任务（session_watch）自持，宿主只持关闭信号。
@@ -474,7 +493,7 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     };
     if let Some(handles) = &inbound_closed {
         tracing::info!(count = handles.len(), "aborting inbound connections on user disconnect");
-        for (_, handle) in handles {
+        for handle in handles.values() {
             handle.abort();
         }
     }
@@ -696,9 +715,10 @@ async fn plugin_transfer_activated() -> bool {
 /// peer-net 节点与文件传输插件运行状态对齐（状态驱动对账，幂等）
 ///
 /// 插件已激活 → 确保节点运行；未激活 → 服务下线。boot 装配完成后调用一次，
-/// 运行时开关由 peer:node-power 总线声明即时驱动，二者互为兜底——声明可能
-/// 因装配期依赖未就绪而被跳过（桌面 2026-09-06 实机实证），状态对账不依赖
-/// 事件是否触发。语义：插件运行 mDNS 就运行，插件不运行 mDNS 也不运行。
+/// 运行时开关由插件 activate/deactivate 外壳（ensure_node_started /
+/// stop_node_for_plugin）直接驱动——声明可能因装配期依赖未就绪而被跳过
+/// （桌面 2026-09-06 实机实证），状态对账不依赖外壳是否已执行。
+/// 语义：插件运行 mDNS 就运行，插件不运行 mDNS 也不运行。
 pub async fn sync_node_with_plugin_state(app: &AppHandle) -> crate::Result<bool> {
     let activated = plugin_transfer_activated().await;
     if activated {
@@ -841,6 +861,15 @@ async fn start_locked(
     device_name: String,
     app: &AppHandle,
 ) -> crate::Result<PeerNodeStatus> {
+    // 生命周期闸门：全程持 permit 串行化并发装配/关停（activate 外壳
+    // ensure_node_started 与 boot 对账 sync_node_with_plugin_state 可能并发
+    // 触发）。修复 TOCTOU：先前幂等检查在锁内、装配在锁外，双装配时次者
+    // bind 回退 :0 随机端口、首个 runtime 泄漏
+    let _gate = state
+        .lifecycle_gate
+        .acquire()
+        .await
+        .expect("lifecycle gate never closed");
     // 幂等：重复 start 返回现状而非报错（命令面与自动启动可能竞争触发）
     {
         let guard = state.runtime.lock().await;
@@ -1034,6 +1063,13 @@ async fn start_locked(
 ///
 /// 可信列表句柄刻意保留（`trust` 槽位不清空）：节点停止后设置面仍可查看/撤销。
 async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) -> crate::Result<()> {
+    // 与 start_locked 串行：装配/关停互斥，避免与并发装配交错（闸门见
+    // PeerNetState::lifecycle_gate）
+    let _gate = state
+        .lifecycle_gate
+        .acquire()
+        .await
+        .expect("lifecycle gate never closed");
     // 主动拨号的存活连接随关停一并终结：通知活性泵关闭（drop 连接 → 对端经
     // EOF 感知本机下线），并逐个通知前端摘除已连接徽标——连接表随节点生命
     // 周期走，重启后从空表开始
@@ -1578,9 +1614,12 @@ struct DiscoveryRefreshHandler {
 impl crate::plugin::message_bus::BusMessageHandler for DiscoveryRefreshHandler {
     fn on_message(&self, _msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
         let app = self.app.clone();
-        tauri::async_runtime::spawn(async move {
-            handle_discovery_refresh(app).await;
-        });
+        crate::system::error_boundary::spawn_with_error_boundary(
+            "peer_net_discovery_refresh_handler",
+            async move {
+                handle_discovery_refresh(app).await;
+            },
+        );
         Ok(())
     }
 }
@@ -1614,16 +1653,27 @@ async fn handle_discovery_refresh(app: tauri::AppHandle) {
             .cloned(),
     );
     drop(guard);
+    // 连接态重发前预取 node_id → 展示名映射（snapshot 随后被消费）
+    let device_names: std::collections::HashMap<String, String> = snapshot
+        .iter()
+        .map(|record| (record.node_id.as_str().to_string(), record.device_name.clone()))
+        .collect();
     for record in snapshot {
         publish_mdns_bus("mdns:found", record.found_wire_payload());
     }
     // 连接态重发：本机主动拨号的存活连接逐个以 peer:connection 重推
     // （入站连接的连接态由 accept 时刻的实时事件维护）。插件前端挂载晚于
-    // 连接建立时，连接徽标/状态胶囊首屏即真，不再误用宿主主连接状态
+    // 连接建立时，连接徽标/状态胶囊首屏即真，不再误用宿主主连接状态。
+    // deviceName 与正常路径（dial_connected_payload / 入站桥）一致携带：
+    // 重发缺 deviceName 时前端首屏只能用指纹兜底展示
     for node_id in connected {
         publish_mdns_bus(
             "peer:connection",
-            serde_json::json!({ "nodeId": node_id, "connected": true }),
+            serde_json::json!({
+                "nodeId": node_id,
+                "deviceName": device_names.get(&node_id).map(String::as_str).unwrap_or(""),
+                "connected": true,
+            }),
         );
     }
     tracing::info!("peer discovery snapshot republished after refresh request");
@@ -1653,73 +1703,6 @@ fn spawn_discovery_refresh_subscriber(app: tauri::AppHandle) {
                         )
                         .await;
                     tracing::info!("peer discovery refresh subscriber registered");
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-            }
-        },
-    );
-}
-
-// ==================== 插件引擎电源（peer:node-power）====================
-
-/// 插件电源声明 topic：插件 activate/deactivate 经 `bus_publish` 声明引擎需求
-/// （`{on: bool, requestedBy: <plugin-id>}`）。宿主订阅者只认 topic 不认插件
-/// ——引擎随属主插件生命周期启停的语义由插件自身驱动（ADR 0022 v2：宿主
-/// 不感知插件业务）
-const NODE_POWER_TOPIC: &str = "peer:node-power";
-/// 宿主静态订阅者注册名（≠ 插件 id，避免 publish 的 sender 过滤误伤）
-const NODE_POWER_SUBSCRIBER: &str = "host-peer-node-power";
-
-/// 电源请求处理器：同步回调内不 await，重活移交 tauri 异步运行时
-struct NodePowerHandler {
-    app: AppHandle,
-}
-
-impl crate::plugin::message_bus::BusMessageHandler for NodePowerHandler {
-    fn on_message(&self, msg: &bedcode_plugin_api_mobile::BusMessage) -> anyhow::Result<()> {
-        let Some(on) = msg.payload.get("on").and_then(|v| v.as_bool()) else {
-            return Ok(());
-        };
-        let app = self.app.clone();
-        tauri::async_runtime::spawn(async move {
-            let result = if on {
-                ensure_node_started(&app).await
-            } else {
-                stop_node_for_plugin(&app).await
-            };
-            if let Err(e) = result {
-                tracing::error!(on, error = %e, "peer-net node power request failed");
-            }
-        });
-        Ok(())
-    }
-}
-
-/// 挂载电源声明静态订阅：插件管理器可能晚于本调用就绪（boot 竞态），轮询等
-/// 就绪后注册（进程内仅一次）。boot 期插件的 activate 声明若早于注册被丢弃，
-/// 由 load_all 末尾的 [`sync_node_with_plugin_state`] 对账兜底
-static NODE_POWER_SUBSCRIBED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-pub fn spawn_node_power_subscriber(app: AppHandle) {
-    use std::sync::atomic::Ordering;
-    if NODE_POWER_SUBSCRIBED.swap(true, Ordering::SeqCst) {
-        return;
-    }
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_node_power_subscriber",
-        async move {
-            loop {
-                if let Some(pm) = crate::state::try_get_plugin_manager() {
-                    pm.message_bus()
-                        .subscribe_static(
-                            NODE_POWER_SUBSCRIBER,
-                            NODE_POWER_TOPIC,
-                            Arc::new(NodePowerHandler { app }),
-                        )
-                        .await;
-                    tracing::info!("peer-net node power subscriber registered");
                     return;
                 }
                 tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -1760,11 +1743,6 @@ pub(crate) async fn runtime_snapshot(
     let guard = state.runtime.lock().await;
     guard.as_ref().map(|r| (r.node.clone(), r.cache.clone()))
 }
-
-/// 发现缓存变更推送（issue 08）：周期比对缓存快照指纹，变化才发全量列表事件
-///
-/// 宿主侧比对而非给 crate 的 DiscoveryCache 加回调：保持共享 crate 接口最小，
-/// LAN 规模下 list + 序列化为微秒级、轮询成本趋零。节点停止后补发一次空列表
 
 /// 可信列表句柄：未加载时惰性从磁盘加载（设置面在节点从未启动时也可用）
 async fn trust_handle(app: &AppHandle) -> crate::Result<Arc<TrustStore>> {
