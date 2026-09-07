@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "BedCode 移动端文件传输插件架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    { "id": "user", "type": "external", "label": "用户", "sublabel": "手机端", "pos": [40, 290], "size": [120, 60] },
+    { "id": "ts-frontend", "type": "frontend", "label": "TS 前端", "sublabel": "三段式视图 + 设备缓存", "pos": [250, 290], "size": [150, 64] },
+    { "id": "rust-wasm", "type": "backend", "label": "Rust WASM", "sublabel": "peer + store + registry", "pos": [500, 290], "size": [150, 64] },
+    { "id": "host-engine", "type": "backend", "label": "宿主引擎", "sublabel": "fileservice + transfer + SAF", "pos": [750, 290], "size": [150, 64] },
+    { "id": "desktop-plugin", "type": "external", "label": "桌面端插件", "sublabel": "共享目录 + 传输执行", "pos": [1000, 290], "size": [150, 64] },
+    { "id": "mdns", "type": "messagebus", "label": "mDNS 发现", "sublabel": "设备发现事件", "pos": [250, 170], "size": [150, 60] },
+    { "id": "plugin-storage", "type": "database", "label": "插件存储", "sublabel": "设备快照 + 共享根 + 策略", "pos": [500, 430], "size": [150, 64] },
+    { "id": "saf", "type": "database", "label": "系统文件选择器", "sublabel": "SAF + MediaStore.Downloads", "pos": [750, 430], "size": [150, 64] }
+  ],
+  "connections": [
+    { "id": "user-to-frontend", "from": "user", "to": "ts-frontend", "label": "UI 交互", "variant": "emphasis", "labelDy": -42 },
+    { "id": "frontend-to-wasm", "from": "ts-frontend", "to": "rust-wasm", "label": "invoke_command", "labelDy": -42 },
+    { "id": "wasm-to-engine", "from": "rust-wasm", "to": "host-engine", "label": "权限原语", "labelDy": -42 },
+    { "id": "engine-to-desktop", "from": "host-engine", "to": "desktop-plugin", "label": "HTTP 传输", "variant": "emphasis", "labelDy": -42 },
+    { "id": "wasm-to-storage", "from": "rust-wasm", "to": "plugin-storage", "label": "KV 读写", "fromSide": "bottom", "toSide": "top", "labelAt": [575, 387] },
+    { "id": "engine-to-saf", "from": "host-engine", "to": "saf", "label": "SAF 选择 / 下载", "fromSide": "bottom", "toSide": "top", "labelAt": [825, 387] },
+    { "id": "mdns-to-frontend", "from": "mdns", "to": "ts-frontend", "label": "mdns:* 事件", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelAt": [325, 252] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "前端层", "items": [
+      "TS 三段式视图（传输 / 浏览 / 设备）",
+      "deviceState 纯函数状态机（去重 / TTL / 能力位）"
+    ] },
+    { "dot": "emerald", "title": "业务层", "items": [
+      "Rust WASM：命令路由 / 设备桥接 / 注册表 / 任务存储 / 策略",
+      "插件存储 KV：设备快照 / 共享根 / 接收策略真源"
+    ] },
+    { "dot": "rose", "title": "安全与系统", "items": [
+      "SAF 文件选择器：多选上传、保存到指定位置",
+      "MediaStore.Downloads：移动端固定下载目录"
+    ] },
+    { "dot": "amber", "title": "网络层", "items": [
+      "宿主引擎：fileservice / transfer / peer / mdns / storage",
+      "mDNS：局域网设备发现（事件透传至 TS 前端）",
+      "桌面端插件：共享目录与传输执行"
+    ] }
+  ]
+}

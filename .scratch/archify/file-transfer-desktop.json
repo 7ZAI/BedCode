@@ -1,0 +1,176 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "File Transfer Plugin 架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户",
+      "sublabel": "桌面端",
+      "pos": [40, 220],
+      "size": [120, 50]
+    },
+    {
+      "id": "ts-frontend",
+      "type": "frontend",
+      "label": "TS 前端",
+      "sublabel": "FileTransferView + TaskPanel",
+      "pos": [200, 220],
+      "size": [140, 50]
+    },
+    {
+      "id": "rust-wasm",
+      "type": "backend",
+      "label": "Rust WASM",
+      "sublabel": "peer + store + registry",
+      "pos": [380, 220],
+      "size": [140, 50]
+    },
+    {
+      "id": "host-engine",
+      "type": "backend",
+      "label": "宿主引擎",
+      "sublabel": "fileservice + transfer + peer",
+      "pos": [560, 220],
+      "size": [140, 50]
+    },
+    {
+      "id": "peer-device",
+      "type": "external",
+      "label": "对端设备",
+      "sublabel": "局域网",
+      "pos": [740, 220],
+      "size": [140, 50]
+    },
+    {
+      "id": "plugin-db",
+      "type": "database",
+      "label": "插件数据库",
+      "sublabel": "SQLite 自持存储",
+      "pos": [380, 370],
+      "size": [140, 50]
+    },
+    {
+      "id": "local-fs",
+      "type": "database",
+      "label": "本地文件系统",
+      "sublabel": "下载 + 挂载目录",
+      "pos": [560, 370],
+      "size": [140, 50]
+    },
+    {
+      "id": "security",
+      "type": "security",
+      "label": "安全层",
+      "sublabel": "Consent + 信任对端",
+      "pos": [380, 80],
+      "size": [140, 50]
+    },
+    {
+      "id": "mdns",
+      "type": "messagebus",
+      "label": "mDNS 发现",
+      "sublabel": "设备发现事件",
+      "pos": [200, 80],
+      "size": [140, 50]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-frontend",
+      "from": "user",
+      "to": "ts-frontend",
+      "label": "用户交互",
+      "variant": "emphasis",
+      "labelAt": [180, 205]
+    },
+    {
+      "id": "frontend-to-wasm",
+      "from": "ts-frontend",
+      "to": "rust-wasm",
+      "label": "invoke_command",
+      "labelAt": [364, 205]
+    },
+    {
+      "id": "wasm-to-engine",
+      "from": "rust-wasm",
+      "to": "host-engine",
+      "label": "引擎原语",
+      "labelAt": [540, 205]
+    },
+    {
+      "id": "engine-to-peer",
+      "from": "host-engine",
+      "to": "peer-device",
+      "label": "传输通道",
+      "labelAt": [720, 205]
+    },
+    {
+      "id": "mdns-to-frontend",
+      "from": "mdns",
+      "to": "ts-frontend",
+      "label": "mdns:* 事件",
+      "variant": "dashed",
+      "labelAt": [310, 160]
+    },
+    {
+      "id": "security-to-wasm",
+      "from": "security",
+      "to": "rust-wasm",
+      "label": "信任对端",
+      "variant": "security",
+      "labelAt": [490, 160]
+    },
+    {
+      "id": "wasm-to-db",
+      "from": "rust-wasm",
+      "to": "plugin-db",
+      "label": "SQLite 读写",
+      "variant": "dashed",
+      "labelAt": [490, 325]
+    },
+    {
+      "id": "engine-to-fs",
+      "from": "host-engine",
+      "to": "local-fs",
+      "label": "文件读写",
+      "variant": "dashed",
+      "labelAt": [670, 325]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "前端层 (TS UI)",
+      "items": [
+        "FileTransferView + TaskPanel + Composables + 弹窗组件"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "业务层 (Rust WASM + 插件数据库)",
+      "items": [
+        "lib.rs 命令路由 + peer.rs / transfer_store.rs / roots_registry.rs + SQLite 自持存储"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全层 (Consent / 信任对端)",
+      "items": [
+        "首连确认 30s 倒计时 + 信任对端列表 / 撤销 / 持久化 + 批次审批"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "网络层 (宿主引擎 + mDNS + 对端)",
+      "items": [
+        "fileservice / transfer 通道 + peer 原语 + mDNS 发现 + HTTP 加密"
+      ]
+    }
+  ]
+}

@@ -29,6 +29,8 @@ Claude Code 会话创建时自动安装项目 hooks 同步任务状态；终端�
 
 ## 架构
 
+> 📊 架构图：[architecture.html](./docs/architecture.html)
+
 - **Rust WASM 层**：全部业务逻辑（任务状态管理、队列调度、hooks 管理、数据库操作、定时调度）
 - **TS 前端**：UI 渲染与用户交互，通过 Tauri invoke 调用 Rust 命令
 - **Agent hooks 脚本**：`scripts/` 下 4 个集成脚本在 agent 生命周期事件时通过 HTTP API 推送任务状态
@@ -51,14 +53,16 @@ auto-task/
 │       ├── preset.rs    # 预设任务管理（one-shot 消耗语义）
 │       └── hooks.rs     # 多 agent 项目 hooks 管理（安装/清理）
 ├── scripts/
-│   ├── build.js         # 统一构建脚本（Vite + Cargo WASM + 复制产物）
-│   ├── auto_task_hook.py    # Claude Code hook 脚本
-│   ├── pi_task_hook.ts      # pi 扩展（部署到项目 .pi/extensions/）
-│   ├── opencode_task_hook.ts # opencode 插件（部署到项目 .opencode/plugins/）
-│   └── codex_task_hook.py   # Codex hook 脚本
+│   ├── build.js               # 统一构建脚本（Vite + Cargo WASM + componentize + 复制产物）
+│   ├── auto_task_hook.py      # Claude Code hook 脚本
+│   ├── pi_task_hook.ts        # pi 扩展（部署到项目 .pi/extensions/）
+│   ├── opencode_task_hook.ts  # opencode 插件（部署到项目 .opencode/plugins/）
+│   ├── codex_task_hook.py     # Codex hook 脚本
+│   └── test_codex_task_hook.py # Codex hook 单元测试
 ├── src/                 # TS 前端源码
-│   ├── components/      # TaskHistoryView（侧边栏历史）、AutoTaskModal（队列弹窗）
-│   ├── i18n/            # 插件翻译表（zh-CN / en，MessageSchema 编译期校验同步）
+│   ├── components/      # TaskHistoryView（侧边栏历史）、AutoTaskModal（队列弹窗）、auto-task-modal.css（弹窗样式）
+│   ├── i18n/            # 插件翻译表（messages.ts 类型 / index.ts 汇总 / zh-CN.ts / en.ts，MessageSchema 编译期校验同步）
+│   ├── events.ts        # UI 事件名常量（与 Rust 侧常量单一事实来源）
 │   └── state.ts         # 插件前端共享状态（弹窗可见性）
 ├── dist/                # Vite 构建产物
 └── vite.config.ts       # Vite 配置
@@ -72,6 +76,8 @@ auto-task/
 cd bedcode-desktop/plugins/auto-task
 node scripts/build.js
 ```
+
+`build.js` 串联三步：`vite build` → `cargo build` (WASM) → 复制产物。其中 WASM 产物需先经过 `componentize` 工具（`packages/plugin-sdk-desktop/rust/tools/componentize`）编码为 WebAssembly Component Model 组件后再复制，供插件运行时加载。
 
 ### 仅构建前端
 
@@ -108,6 +114,7 @@ cargo build --target wasm32-unknown-unknown --no-default-features --features was
 bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.auto-task/
 ├── index.js                              # TS 前端
 ├── plugin.json                           # 插件清单
+├── icon.svg                              # 插件图标（asset protocol 加载）
 ├── bedcode_plugin_auto_task.wasm         # Rust WASM
 ├── auto_task_hook.py                     # Claude Code hook 脚本
 ├── pi_task_hook.ts                       # pi 扩展脚本
@@ -138,7 +145,7 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.auto-task/
 
 ## HTTP 端点
 
-通过 `/api/plugin/com.bedcode.auto-task/{path}` 访问：
+通过 `/api/plugin/com.bedcode.auto-task/{path}` 访问（`lib.rs` 的 `_http_endpoint` 按路径前缀分发到 `queue::handle_queue_http` / `scheduled::handle_scheduled_http` / `state::handle_http_endpoint`）：
 
 | 方法 | 路径 | 用途 |
 |------|------|------|
@@ -154,6 +161,13 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/com.bedcode.auto-task/
 | DELETE | `task-queue/remove` | 从队列删除任务 |
 | GET | `task-queue/list` | 查询队列 |
 | POST | `task-queue/clear` | 清空队列 |
+| POST | `task-queue/update` | 更新队列任务内容 |
+| POST | `task-queue/reorder` | 重排序队列 |
+| POST | `task-queue/cancel` | 取消活动队列项（waiting / executing） |
+| POST | `scheduled-jobs/create` | 创建定时任务 |
+| GET | `scheduled-jobs/list` | 查询定时任务列表 |
+| DELETE | `scheduled-jobs/remove` | 删除定时任务（pending / missed / failed / executed） |
+| POST | `scheduled-jobs/reset` | 重置定时任务（missed / failed 重新调度，可改触发时间） |
 
 ## 命令（WASM invoke_command）
 

@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Auto Task (Mobile) — 薄壳代理架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "user",
+      "type": "external",
+      "label": "用户 / 手机端",
+      "sublabel": "触发自动任务",
+      "pos": [40, 220],
+      "size": [170, 70]
+    },
+    {
+      "id": "ts-frontend",
+      "type": "frontend",
+      "label": "TS 前端",
+      "sublabel": "工具箱 · 队列面板 · 定时任务 · 任务记录",
+      "tag": "Vue 3",
+      "pos": [300, 220],
+      "size": [280, 70]
+    },
+    {
+      "id": "session-watcher",
+      "type": "messagebus",
+      "label": "会话监听",
+      "sublabel": "watch activeSessionId / isConnected",
+      "pos": [700, 160],
+      "size": [240, 70]
+    },
+    {
+      "id": "rust-wasm-stub",
+      "type": "backend",
+      "label": "Rust WASM (stub)",
+      "sublabel": "manifest() 读 plugin.json · invoke_command 拒绝所有命令",
+      "tag": "仅激活日志",
+      "pos": [300, 100],
+      "size": [280, 70]
+    },
+    {
+      "id": "host-http-bridge",
+      "type": "backend",
+      "label": "宿主 HTTP 桥",
+      "sublabel": "插件 SDK · REST 代理",
+      "pos": [300, 400],
+      "size": [280, 70]
+    },
+    {
+      "id": "desktop-plugin",
+      "type": "external",
+      "label": "桌面端插件",
+      "sublabel": "auto-task 核心 · 队列调度 · hooks 安装",
+      "tag": "/api/plugin/com.bedcode.auto-task/…",
+      "pos": [700, 380],
+      "size": [240, 100]
+    }
+  ],
+  "connections": [
+    {
+      "id": "user-to-frontend",
+      "from": "user",
+      "to": "ts-frontend",
+      "label": "触发 →",
+      "variant": "emphasis"
+    },
+    {
+      "id": "frontend-to-bridge",
+      "from": "ts-frontend",
+      "to": "host-http-bridge",
+      "label": "HTTP →",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelDy": 24
+    },
+    {
+      "id": "bridge-to-desktop",
+      "from": "host-http-bridge",
+      "to": "desktop-plugin",
+      "label": "REST →",
+      "variant": "emphasis"
+    },
+    {
+      "id": "frontend-to-wasm",
+      "from": "ts-frontend",
+      "to": "rust-wasm-stub",
+      "label": "本地 invoke",
+      "variant": "dashed"
+    },
+    {
+      "id": "watcher-to-frontend",
+      "from": "session-watcher",
+      "to": "ts-frontend",
+      "label": "← 可见性 / 连接状态",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "前端层",
+      "items": [
+        "TS 前端承载工具箱 / 队列面板 / 定时任务 / 任务记录",
+        "会话监听 watch 驱动工具栏可见性与连接状态"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "通信层",
+      "items": [
+        "宿主 HTTP 桥代理所有业务 API 请求",
+        "Rust WASM 仅激活日志，invoke_command 显式拒绝"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "桌面端依赖",
+      "items": [
+        "桌面端 auto-task 插件承载队列调度与 hooks 安装",
+        "移动端作为薄壳代理，仅负责入口与状态展示"
+      ]
+    }
+  ]
+}
