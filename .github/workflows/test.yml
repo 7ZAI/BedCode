@@ -1,0 +1,131 @@
+name: Tests (Rust + Frontend)
+
+# 回归测试合并门禁：两端 Rust 测试 + 前端 vitest。
+# 与 lint.yml 对称——dev 分支是本地集成主线（只读镜像备份），不触发本 workflow；
+# CI 验证在合并到 master / uat 时接管。分层独立 job，失败可定位到具体层。
+on:
+  push:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - '.github/workflows/test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # ==================== Rust 测试 ====================
+
+  rust-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-desktop/src-tauri
+
+      - name: Cargo test (desktop)
+        working-directory: bedcode-desktop/src-tauri
+        run: cargo test
+
+  rust-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-mobile/src-tauri
+
+      - name: Cargo test (mobile)
+        working-directory: bedcode-mobile/src-tauri
+        run: cargo test
+
+  # ==================== 前端 vitest ====================
+
+  frontend-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Vitest (desktop)
+        working-directory: bedcode-desktop
+        run: pnpm run test:run
+
+  frontend-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: bedcode-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Vitest (mobile)
+        working-directory: bedcode-mobile
+        run: pnpm run test:run
