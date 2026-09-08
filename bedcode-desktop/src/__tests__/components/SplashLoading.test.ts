@@ -1,7 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mount, flushPromises } from '@vue/test-utils'
 import { createI18n } from 'vue-i18n'
 import SplashLoading from '@/components/SplashLoading.vue'
+
+// mock Tauri 运行时 API：getVersion 返回固定版本，验证 footer 版本号动态渲染
+vi.mock('@tauri-apps/api/app', () => ({
+  getVersion: vi.fn(() => Promise.resolve('9.9.9')),
+}))
 
 /** 测试用最小 i18n 实例：仅含 splash 相关 key */
 function createTestI18n() {
@@ -95,6 +100,18 @@ describe('SplashLoading Component', () => {
     expect(bar).toBeTruthy()
     expect(bar?.style.width).toBe('50%')
     shown.unmount()
+  })
+
+  it('should render runtime app version in footer when getVersion resolves', async () => {
+    const wrapper = mountSplash({ visible: true })
+
+    // 等待 onMounted 中的 getVersion() resolve
+    await flushPromises()
+
+    const overlay = document.querySelector('.splash-root')!
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('v9.9.9')
+    expect(overlay.querySelector('.splash-footer')?.textContent).toContain('LAN remote terminal')
+    wrapper.unmount()
   })
 
   it('should allow logo slot override', () => {

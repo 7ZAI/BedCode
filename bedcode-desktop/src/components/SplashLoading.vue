@@ -118,8 +118,9 @@
  * 避免启动期主题闪烁），内容为品牌 glyph + 打字机启动行 + boot log 阶段栈 + 可选进度条。
  * 通过 visible 控制显隐；宿主在初始化完成后置 false 触发淡出。
  */
-import { computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { getVersion } from '@tauri-apps/api/app'
 
 interface Props {
   visible: boolean
@@ -135,7 +136,7 @@ interface Props {
   segmentCount?: number
   /** 已完成段数 */
   progressSegments?: number
-  /** 底部 footer 文案 */
+  /** 底部 footer 文案；缺省时组件用运行时应用版本号动态生成（bedcode v<version> · LAN remote terminal） */
   footerText?: string
 }
 
@@ -147,12 +148,30 @@ const props = withDefaults(defineProps<Props>(), {
   showSegments: false,
   segmentCount: 4,
   progressSegments: 0,
-  footerText: 'bedcode v1.0.0 · LAN remote terminal',
+  // 空串触发组件内部动态生成（运行时应用版本号），见下方 footerText computed
+  footerText: '',
 })
 
 const { t } = useI18n()
 
 const statusText = computed(() => props.status || t('desktop.splash.status'))
+
+// 版本号动态化：从 Tauri 运行时取应用版本（单一真源 tauri.conf.json / package.json），
+// 禁止在组件里 hard code 版本号。非 Tauri 环境（vitest、浏览器预览）拿不到版本，
+// 降级为不带版本号的 footer，避免启动期报错。
+const appVersion = ref('')
+onMounted(async () => {
+  try {
+    appVersion.value = await getVersion()
+  } catch {
+    // 非 Tauri 运行环境：保留空版本号，footer 自动降级
+  }
+})
+
+const footerText = computed(() =>
+  props.footerText ||
+  (appVersion.value ? `bedcode v${appVersion.value} · LAN remote terminal` : 'bedcode · LAN remote terminal'),
+)
 </script>
 
 <style scoped>
