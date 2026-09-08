@@ -1,16 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.bedcode_mobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <!-- 启动期窗口背景:与前端开屏深色首帧同色(深色值见 values-night/colors.xml) -->
-        <item name="android:windowBackground">@color/bedcode_launch_bg</item>
-        <!-- Android 12+ 系统开屏背景:已停用,背景回退取 windowBackground(同色无感);
-             恢复系统开屏时取消下行注释
-        <item name="android:windowSplashScreenBackground">@color/bedcode_launch_bg</item>
-        -->
-        <!-- Android 12+ 系统开屏由系统强制存在,无法整体移除:把图标置为透明使其退化为
-             纯色底,开屏动画只保留前端 SplashScreen 一层(API 31+ 生效,低版本忽略);
-             恢复系统图标时删除本行 -->
-        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
         <!-- 状态栏透明，让内容延伸到状态栏下方 -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <!-- 导航栏透明 -->

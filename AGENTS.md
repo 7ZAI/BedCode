@@ -136,7 +136,7 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 ## Android
 
 - 包名：Desktop `com.bedcode.app`，Mobile `com.bedcode.mobile`
-- **`gen/android` 重建后需恢复**：自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、MulticastLockPlugin.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、res/values/（colors.xml、themes.xml，含启动期窗口背景 `bedcode_launch_bg`，备份于 `src-tauri/android-backup/app-res/values/`）、key.properties、keystore、drawable 资源（OCR 相关 Kotlin 桥与 onnxruntime 已随 `feature/ocr-plugin` 隔离，见 `docs/knowledge/feature-branch-isolation.md`）
+- **`gen/android` 重建后需恢复**：自定义 Kotlin 文件（ForegroundService.kt、ForegroundServicePlugin.kt、BiometricKeyPlugin.kt、PluginAssetExtractor.kt、DownloadsDirPlugin.kt、FileDeletePlugin.kt、SafPickerPlugin.kt、SafTransferPlugin.kt、DeviceInfoPlugin.kt、AllFilesAccessPlugin.kt、TaskNotificationPlugin.kt、TaskNotificationManager.kt、MulticastLockPlugin.kt）、AndroidManifest.xml、res/xml/（file_paths.xml、network_security_config.xml）、res/values/（colors.xml、themes.xml，备份于 `src-tauri/android-backup/app-res/values/`）、key.properties、keystore、drawable 资源（OCR 相关 Kotlin 桥与 onnxruntime 已随 `feature/ocr-plugin` 隔离，见 `docs/knowledge/feature-branch-isolation.md`）
 - **签名唯一真源**：仓库根 `bedcode.keystore`（alias `bedcode`，密码 `bedcode123`，SHA-256 `A8:5E:2F:1B:C5:...` = GitHub release 与 ANDROID_KEY_BASE64 secret 所用）。`gen/android/` 与 `android-backup/` 下的 keystore 必须是其副本；**勿用其他 keystore 签发布版**（换证书 = 已装用户只能卸载重装）。验证：`keytool -list -v -keystore <file> -storepass bedcode123 | grep SHA256` 须为 `A8:5E:2F:1B...`
 
 ---
