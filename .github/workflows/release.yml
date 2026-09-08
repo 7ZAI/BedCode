@@ -86,8 +86,10 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target
-          targets: wasm32-unknown-unknown
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
+          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
+          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -168,11 +170,16 @@ jobs:
       - name: Sync release body with changelog
         shell: bash
         run: |
-          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位
+          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位。
+          # 分页查找（per_page=100 × 10 页）：release 超过 10 个时 per_page=10 的旧写法会定位失败
           for i in $(seq 1 10); do
-            RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
-              jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+            RID=""
+            for page in $(seq 1 10); do
+              RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" | \
+                jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+              [ -n "$RID" ] && break
+            done
             if [ -n "$RID" ]; then
               # prepare-release 是独立 job，/tmp 不跨 job 共享，这里用表达式重建 changelog 文件
               cat > /tmp/changelog.txt <<'CHANGELOG_EOF'
@@ -201,11 +208,16 @@ jobs:
           # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
           # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本。
           # 注意：draft release 是 untagged，releases/tags/:tag 端点返回 404，
-          # 必须从 releases 列表（含 draft）按 tag_name 定位再查 assets
+          # 必须从 releases 列表（含 draft）按 tag_name 定位再查 assets。
+          # 分页查找（per_page=100 × 10 页）：release 超过 10 个时 per_page=10 会定位失败
           for i in $(seq 1 10); do
-            RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
-              jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+            RID=""
+            for page in $(seq 1 10); do
+              RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" | \
+                jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+              [ -n "$RID" ] && break
+            done
             if [ -n "$RID" ]; then
               if curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
                 "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" | \
@@ -249,8 +261,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）
-          targets: aarch64-linux-android, wasm32-unknown-unknown
+          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）。
+          # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
+          targets: aarch64-linux-android, wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -324,9 +337,121 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ==================== Linux Build ====================
+  # 产出 deb（tauri.conf.json bundle.targets 含 deb）。同一 draft release 多 job 并行上传时
+  # tauri-action 会读取已存在的 latest.json 并合并 platforms 记录，不会互相覆盖
+  build-linux:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bedcode-desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
+          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2）
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './bedcode-desktop/src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
+      # 必须先本地构建 @binblink/plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      - name: Build SDK (plugin-sdk-desktop dist)
+        run: pnpm run build --filter @binblink/plugin-sdk-desktop
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
+      # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
+      - name: Build plugins (WASM artifacts)
+        run: pnpm run plugins:build
+
+      # deb 同样生成签名升级包（.deb.sig + latest.json 的 linux 平台记录），
+      # 私钥缺失时 tauri 会静默跳过签名，必须显式校验
+      - name: Verify signing key configured
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret 未配置，无法生成签名升级包"
+            exit 1
+          fi
+          echo "签名密钥已配置 ✓"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: bedcode-desktop
+          tagName: v__VERSION__
+          releaseName: 'BedCode v__VERSION__'
+          releaseBody: '${{ needs.prepare-release.outputs.changelog }}'
+          releaseDraft: true
+          prerelease: false
+
+      # tauri-action 找不到 .sig 时只 warn 不报错，显式验证 Linux 平台的 latest.json 记录已上传
+      - name: Verify latest.json uploaded
+        shell: bash
+        run: |
+          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位；
+          # 分页查找（per_page=100 × 10 页）避免 release 数量增多后定位失败
+          for i in $(seq 1 10); do
+            RID=""
+            for page in $(seq 1 10); do
+              RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" | \
+                jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
+              [ -n "$RID" ] && break
+            done
+            if [ -n "$RID" ]; then
+              if curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" | \
+                jq -r '.[].name' | grep -q '^latest.json$'; then
+                echo "latest.json 已上传 ✓"
+                exit 0
+              fi
+            fi
+            sleep 3
+          done
+          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置"
+          exit 1
+
   # ==================== Publish Release ====================
   publish-release:
-    needs: [prepare-release, build-windows, build-android]
+    needs: [prepare-release, build-windows, build-linux, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
