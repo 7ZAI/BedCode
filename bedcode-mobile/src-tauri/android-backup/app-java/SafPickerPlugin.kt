@@ -5,10 +5,10 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Environment
 import android.provider.DocumentsContract
+import androidx.activity.ComponentActivity
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import app.tauri.annotation.Command
 import app.tauri.annotation.TauriPlugin
 import app.tauri.plugin.JSObject
@@ -51,7 +51,14 @@ import app.tauri.plugin.Plugin
  *   - 同一时刻仅一个选择器在途（系统选择器模态），key 用纳秒时间戳保证唯一。
  */
 @TauriPlugin
-class SafPickerPlugin(private val activity: AppCompatActivity) : Plugin(activity) {
+class SafPickerPlugin(private val activity: Activity) : Plugin(activity) {
+
+    // 警告：构造参数必须精确声明为 android.app.Activity，禁止用 AppCompatActivity 等子类。
+    // Rust 侧 register_android_plugin 以 JNI 精确签名 "(Landroid/app/Activity;)V" 查找构造器；
+    // 声明为子类后 saf-picker 类上无该签名，ART 会解析命中父类 Plugin.<init>(Activity) 并
+    // 以父类构造器创建实例——子类构造器体从不执行，activity 字段保持 null，
+    // pickDirectory 在 activity.activityResultRegistry 处 NPE（真机实证 2026-09-09）。
+    // activityResultRegistry 在 androidx Activity（ComponentActivity）上，经转换访问。
 
     companion object {
         private const val TAG = "BedCode-SafPicker"
@@ -162,7 +169,7 @@ class SafPickerPlugin(private val activity: AppCompatActivity) : Plugin(activity
     /// 每次调用以纳秒时间戳生成独立 key 注册，回调后立即 unregister；
     /// 选择器模态单实例，不会并发。launch 抛异常时兜底 unregister 防 key 泄漏。
     private fun launchPicker(intent: Intent, onResult: (ActivityResult) -> Unit) {
-        val registry = activity.activityResultRegistry
+        val registry = (activity as ComponentActivity).activityResultRegistry
         val key = "saf-picker-${System.nanoTime()}"
         lateinit var launcher: ActivityResultLauncher<Intent>
         launcher = registry.register(
