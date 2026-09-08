@@ -88,6 +88,7 @@
 
         <!-- Input Bar -->
         <TerminalInputBar
+          ref="inputBarRef"
           :disabled="!isSessionActive"
           :is-connected="isConnected"
           :placeholder="inputPlaceholder"
@@ -503,6 +504,9 @@ const pluginKeyboardHeight = ref(0)
 // 侧边栏设置面板输入框聚焦时，禁用键盘避让
 const settingsInputFocused = ref(false)
 
+// TerminalInputBar 组件引用：键盘被系统收起时通知其退出编辑态（blur 输入框）
+const inputBarRef = ref<InstanceType<typeof TerminalInputBar> | null>(null)
+
 // 最终键盘偏移量：visualViewport 优先（逐帧跟踪真实遮挡高度），插件高度兜底
 // （部分 WebView 的 vv 不触发事件）。不用 Math.max：插件在键盘动画 onStart 即
 // 上报最终高度，取大值会让偏移在动画开始瞬间跳到终态——输入条先于键盘到位，
@@ -532,6 +536,20 @@ function handlePluginSafeAreaChange(e: Event) {
   }
   pluginKeyboardHeight.value = detail.keyboardVisible ? detail.keyboardHeight : 0
 }
+
+// 键盘隐藏时退出编辑态：Android 返回键/下拉手势收起系统键盘时，WebView 的
+// textarea 仍保有焦点（输入光标常驻在整个编辑态里），这里在双通道检测的键盘
+// 偏移从可见（>10）归零的瞬间主动 blur 输入框——光标消失、输入框收缩回单行、
+// 命令补全弹层关闭，与用户手动收起键盘的预期一致。
+// 偏移归零且 prev 不可见（首次挂载/键盘从未弹起）时不触发；输入框已失焦时
+// blur 为 no-op，无需额外状态同步
+watch(keyboardOffset, (offset, prev) => {
+  const wasVisible = (prev ?? 0) > 10
+  const nowHidden = offset <= 10
+  if (wasVisible && nowHidden && inputBarRef.value?.isFocused()) {
+    inputBarRef.value.blurInput()
+  }
+})
 
 // terminal-view 只负责安全区域，不参与键盘避让动画
 const terminalViewStyle = computed(() => ({

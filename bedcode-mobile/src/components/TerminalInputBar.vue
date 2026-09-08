@@ -910,6 +910,27 @@ function adjustTextareaHeight() {
   textarea.scrollTop = textarea.scrollHeight
 }
 
+// ==================== Expose（键盘收起时父组件退出编辑态） ====================
+// Android 返回键/下拉手势收起系统键盘时，WebView 的 textarea 仍保有焦点
+// （输入光标常驻、输入框保持 3 行展开、命令补全弹层不收起），由
+// TerminalView 检测到键盘偏移归零后调用 blurInput() 主动退出编辑态；
+// isFocused() 供父组件判断输入框是否仍处于编辑态
+
+/** 判断输入框是否处于编辑态（聚焦中） */
+function isFocused(): boolean {
+  return isInputFocused.value
+}
+
+/** 主动 blur 输入框：光标消失、收缩回单行、命令补全弹层关闭 */
+function blurInput() {
+  inputRef.value?.blur()
+}
+
+defineExpose({
+  blurInput,
+  isFocused,
+})
+
 // 弹窗打开时自动聚焦输入框
 watch(showAddDialog, (val) => {
   if (val) {
