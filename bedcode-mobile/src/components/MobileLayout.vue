@@ -8,12 +8,14 @@
     <main class="flex-1 min-h-0">
       <router-view v-slot="{ Component, route }">
         <!-- TerminalView 不使用 keep-alive：buffer store 持有数据，组件正常销毁/重建 -->
-        <!-- MobileSwipeContainer 保持 keep-alive 缓存；:key 使缓存以路由切换为准，
-             防止同名宿主组件跨路由复用实例（插件停用后返回工具箱「先渲染旧帧
-             再消失」的边角竞态，spec D7 防御性加固） -->
+        <!-- MobileSwipeContainer 保持 keep-alive 缓存；:key 用 route.name（而非 fullPath），
+             使缓存以路由切换为准——跨路由（home ↔ terminal 等）不复用实例（spec D7 防御性加固），
+             但同路由下仅 ?page 变化（手势/导航栏切换页面）时不重挂载容器，否则 syncPageFromRoute 会
+             瞬移 translateX、把 280ms 滑动过渡中途掐断（见 MobileSwipeContainer 滑动动画） -->
         <keep-alive v-if="route.name !== 'mobile-terminal'" :include="['MobileSwipeContainer']">
-          <component :is="Component" :key="route.fullPath" />
+          <component :is="Component" :key="route.name" />
         </keep-alive>
+        <!-- Terminal 分支仍用 fullPath：切换不同终端会话（不同 :id）时需重挂载 TerminalView -->
         <component v-else :is="Component" :key="route.fullPath" />
       </router-view>
     </main>

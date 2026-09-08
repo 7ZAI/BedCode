@@ -98,6 +98,10 @@ let startY = 0
 let startTime = 0
 let direction: 'horizontal' | 'vertical' | null = null
 
+// 页面切换过渡动画的定时器句柄（goToPage 用可取消句柄防止快速连续切换时
+// 旧定时器提前复位 isAnimating，导致过渡中途放行新的触摸）
+let animTimeout: ReturnType<typeof setTimeout> | null = null
+
 // ==================== 内部横滑区仲裁（data-swipe-zone 协议） ====================
 //
 // 页内组件（如插件页签容器）可在根元素声明 data-swipe-zone，接管区内水平
@@ -146,8 +150,10 @@ const trackStyle = computed(() => ({
     : `transform ${CONFIG.animationDuration}ms cubic-bezier(0.4, 0, 0.2, 1)`
 }))
 
-// 初始化页面
-function initPage() {
+// 从路由同步当前页位置（query.page 优先，其次路由名），瞬时定位不做滑动动画。
+// 用于首次挂载与 keep-alive 激活时（停用期间可能经外部导航改了 ?page，
+// 例如从独立页返回指定 tab），保证立即停在正确页面。
+function syncPageFromRoute() {
   const queryPage = route.query.page
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
@@ -171,19 +177,26 @@ function syncRoute(page: number) {
   router.replace({ name: 'mobile-home', query: { page: page.toString() } })
 }
 
-// 切换到指定页面
-function goToPage(page: number, animate = true) {
+// 切换到指定页面。
+// 手势释放与点击导航栏统一走同一条滑动过渡动画（CSS transition），动画期间
+// isAnimating=true 拦截新的触摸，避免手势与过渡动画互相打断。此前点击导航栏
+// 走 goToPage(page, false) 使 isAnimating 恒 false，滑入中途的触摸会让
+// isDragging 立即把 transition 置 none，产生跳变。
+function goToPage(page: number) {
   if (page < 0 || page > pages.value.length - 1 || page === currentPage.value) return
 
-  isAnimating.value = animate
+  isAnimating.value = true
   currentPage.value = page
   translateX.value = -page * window.innerWidth
 
   syncRoute(page)
 
-  setTimeout(() => {
+  // 可取消句柄：快速连续切换时清除旧定时器，避免其提前复位 isAnimating
+  if (animTimeout !== null) clearTimeout(animTimeout)
+  animTimeout = setTimeout(() => {
     isAnimating.value = false
-  }, animate ? CONFIG.animationDuration : 0)
+    animTimeout = null
+  }, CONFIG.animationDuration)
 }
 
 /** 重置触摸状态，确保从终端返回后滑动功能正常 */
@@ -366,7 +379,7 @@ watch(() => route.query.page, (queryPage) => {
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
     if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1 && page !== currentPage.value) {
-      goToPage(page, false)
+      goToPage(page)
     }
   }
 })
@@ -380,7 +393,7 @@ function handleResize() {
 // ==================== 生命周期 ====================
 
 onMounted(() => {
-  initPage()
+  syncPageFromRoute()
 
   // 使用 capture 阶段 + non-passive 监听器
   // capture: true 让容器优先于子元素处理触摸事件
@@ -408,12 +421,16 @@ onUnmounted(() => {
 
   window.removeEventListener('resize', handleResize)
 
+  if (animTimeout !== null) clearTimeout(animTimeout)
+
   modalObserver?.disconnect()
   modalObserver = null
 })
 
-// keep-alive 激活时重置触摸状态，确保从终端返回后滑动功能正常
+// keep-alive 激活时：先同步路由页码（停用期间可能因外部导航改变 ?page），
+// 再复位触摸状态，确保从终端/独立页返回后立即停在正确页面且滑动正常
 onActivated(() => {
+  syncPageFromRoute()
   resetTouchState()
 })
 
