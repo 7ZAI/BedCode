@@ -27,6 +27,12 @@ declare module '*.css' {
   export default content
 }
 
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue'
+  const component: DefineComponent<Record<string, unknown>, Record<string, unknown>, unknown>
+  export default component
+}
+
 declare module '@xterm/xterm/css/xterm.css' {
   const content: string
   export default content

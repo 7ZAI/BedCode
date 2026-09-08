@@ -142,6 +142,10 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
 
+# WDIO E2E 测试插件：仅 debug 构建编译/注册（release 不含测试插件，见 lib.rs 的 cfg(debug_assertions) 注册）
+[target.'cfg(debug_assertions)'.dependencies]
+tauri-plugin-wdio = "1"
+
 [dev-dependencies]
 tempfile = "3"
 # 集成测试 HTTP 配对（POST /api/auth/* 换取 JWT）：已为运行依赖，dev 复用同版本

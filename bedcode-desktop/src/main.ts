@@ -1,3 +1,5 @@
+// WDIO E2E 测试探针：暴露 window.wdioTauri（execute/mock/log），无 Rust wdio 插件配合时静默空转
+import '@wdio/tauri-plugin'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import { listen } from '@tauri-apps/api/event'

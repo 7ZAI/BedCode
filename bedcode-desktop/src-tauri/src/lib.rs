@@ -202,14 +202,21 @@ pub fn run() {
     let app_start = AppStartTime(std::time::Instant::now());
     let start = app_start.0;
 
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .setup(move |app| {
+        .plugin(tauri_plugin_process::init());
+
+    // WDIO 测试插件仅 debug 构建注册（release 不编译该依赖、不注册该插件）
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_wdio::init());
+    }
+
+    let app = builder.setup(move |app| {
             app.manage(app_start);
 
             let app_handle = app.handle();

@@ -9,6 +9,8 @@ packages:
 # - sharp：图标生成（node-gyp 预编译产物）
 # - vue-demi：vue-echarts 运行时切换 vue/vue-compat 指向
 allowBuilds:
+  edgedriver: false
   esbuild: true
+  geckodriver: false
   sharp: true
   vue-demi: true

@@ -35,6 +35,7 @@
     "os:default",
     "shell:allow-open",
     "updater:default",
-    "process:default"
+    "process:default",
+    "wdio:default"
   ]
 }
