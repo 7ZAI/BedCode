@@ -169,7 +169,7 @@ import {
   ATLAS_PREHEAT_DELAY_MS,
 } from '@/utils/terminalResizePolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
-import { TerminalImeStateMachine } from '@/utils/terminalImeStateMachine'
+import { attachLinuxImeGuard, type LinuxImeGuard } from '@/utils/terminalLinuxImeGuard'
 import { initPlatform } from '@/composables/usePlatform'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -227,9 +227,9 @@ const bgImageUrl = ref('')
 
 let terminal: Terminal | null = null
 let fitAddon: FitAddon | null = null
-// Linux 平台 IME 去重状态机（WebKitGTK 输入法双发去重，仅 Linux 启用；
-// 事件信号由 onMounted 在终端初始化后挂接到 terminal.textarea）
-let imeStateMachine: TerminalImeStateMachine | null = null
+// Linux 平台 IME 防护（WebKitGTK 输入法多层去重 + textarea 提交后清空，仅
+// Linux 启用；三层缓解的完整说明见 utils/terminalLinuxImeGuard.ts）
+let imeGuard: LinuxImeGuard | null = null
 // WebGL resize 后字符图集重建的补刷定时器（atlas 预热：等 idle 分片光栅化
 // 基本完成后补一次全量重绘，避免整屏字形缺失的“临时失明”）
 let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
@@ -820,40 +820,16 @@ function initTerminal() {
     initWebGL(terminal)
   }
 
-  // Linux WebKitGTK IME 根因修复：关闭 xterm 6.0.0 的 keydown(229) 遗留差值路径
-  // _handleAnyTextareaChanges。现代 WebKitGTK 文本插入一律经 input 事件
-  // （_inputEvent / compositionend finalize）发出，该差值路径是旧 IME 兜底；
-  // 它在 keydown 229 时用 setTimeout(0) 对 textarea 前后值求差并再次发出，
-  // 与 input 路径竞态时会把「已上屏文本的后缀」重复发出（输入 "bug" 后被补发
-  // "ug"）。差值恒为 textarea 当前值的后缀，状态机的精确去重覆盖不了部分后缀，
-  // 故从源头关闭。仅 Linux 关闭；Windows/macOS 走 xterm 原生路径不变。
+  // Linux WebKitGTK IME 防护（仅 Linux；Windows/macOS 走 xterm 原生路径不变）：
+  //   1) 关闭 keydown(229) 遗留差值补发路径（_handleAnyTextareaChanges）
+  //   2) 组合窗口内精确载荷去重（TerminalImeStateMachine）
+  //   3) 组合提交后清空 textarea——xterm 从不清空且 _compositionPosition.start
+  //      只在 compositionstart 更新，WebKitGTK 偶发丢失该事件时 finalize 会把
+  //      value.substring(旧起点) = 上一轮已提交文本 + 本轮文本 整体发出，即
+  //      「按空格提交中文后随机重复之前输入的字符」的根因；清空后起点恒为 0，
+  //      拼接型重复不再产生。细节见 utils/terminalLinuxImeGuard.ts。
   if (isLinux.value) {
-    const core = (terminal as unknown as {
-      _core?: { _compositionHelper?: { _handleAnyTextareaChanges?: () => void } }
-    })._core
-    if (core?._compositionHelper) {
-      core._compositionHelper._handleAnyTextareaChanges = () => {}
-    }
-  }
-
-  // Linux WebKitGTK IME 去重：组合事件/keydown(229)/input 信号喂给状态机，
-  // onData 出口按组合窗口去重（见下方 onData 拦截）。仅 Linux 挂接，
-  // Windows/macOS 保持 xterm 原生行为不变。
-  if (isLinux.value && terminal.textarea) {
-    imeStateMachine = new TerminalImeStateMachine()
-    const ta = terminal.textarea
-    ta.addEventListener('compositionstart', () => imeStateMachine?.onCompositionStart())
-    ta.addEventListener('compositionupdate', () => imeStateMachine?.onCompositionUpdate())
-    ta.addEventListener('compositionend', () => imeStateMachine?.onCompositionEnd())
-    ta.addEventListener('keydown', (e: KeyboardEvent) => imeStateMachine?.onKeyDown(e.keyCode))
-    ta.addEventListener('input', (e: Event) => {
-      const ie = e as InputEvent
-      imeStateMachine?.onInput({
-        inputType: ie.inputType || '',
-        isComposing: ie.isComposing ?? false,
-        data: ie.data,
-      })
-    })
+    imeGuard = attachLinuxImeGuard(terminal)
   }
 
   // 移除光标：用 DECTCEM 隐藏序列（\x1b[?25l）在 buffer 层隐藏光标，
@@ -949,7 +925,7 @@ function initTerminal() {
 
     // Linux WebKitGTK IME 双发去重：同一组合文本被 xterm 两条路径重复发出时，
     // 丢弃重复载荷（仅 Linux 启用；Windows/macOS 不受影响）
-    if (imeStateMachine && !imeStateMachine.shouldForward(data)) {
+    if (imeGuard && !imeGuard.shouldForward(data)) {
       return
     }
 
@@ -1500,11 +1476,9 @@ onUnmounted(() => {
     resizeObserver = null
   }
 
-  // 清理 Linux IME 状态机（监听随 textarea 一并销毁，此处仅复位状态）
-  if (imeStateMachine) {
-    imeStateMachine.reset()
-    imeStateMachine = null
-  }
+  // 清理 Linux IME 防护（拆除监听与未决清空定时器，textarea 随 xterm 一并销毁）
+  imeGuard?.dispose()
+  imeGuard = null
 
   if (terminal) {
     terminal.dispose()
