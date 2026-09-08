@@ -14,9 +14,9 @@
  */
 
 import { spawn, execFileSync } from 'node:child_process'
-import { readFileSync, openSync, readSync, closeSync } from 'node:fs'
+import { readFileSync, openSync, readSync, closeSync, existsSync, renameSync, copyFileSync, chmodSync } from 'node:fs'
 import net from 'node:net'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -63,6 +63,67 @@ async function precheckDevPort() {
   console.error('[dev-run]   通常是上次 dev 会话残留的 vite 进程，宿主启动必失败。请先结束占用进程：')
   console.error(`[dev-run]   netstat -ano | findstr :${port}   然后   taskkill /F /PID <pid>`)
   process.exit(1)
+}
+
+/**
+ * 解析 tauri CLI 实际使用的 adb 绝对路径。
+ *
+ * tauri CLI（cargo-mobile2）用 `env.platform_tools_path().join("adb")` 绝对路径 spawn adb，
+ * 因此 PATH 级 shim 无效，必须替换 SDK 内的二进制本体。
+ */
+function resolveAdbPath() {
+  const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+  if (sdkRoot) {
+    const p = resolve(sdkRoot, 'platform-tools/adb')
+    if (existsSync(p)) return p
+  }
+  try {
+    const out = execFileSync('which', ['adb'], { encoding: 'utf8' }).trim()
+    if (out) return resolve(out)
+  } catch {
+    /* PATH 上无 adb，交给宿主报错 */
+  }
+  return null
+}
+
+/**
+ * adb fd0 shim 幂等安装（修复 tauri CLI pidof 轮询卡死，见 .scratch/adb-fd0-bug）。
+ *
+ * platform-tools 37.0.1 的 adb client 被以「fd 0 关闭或管道阻塞」spawn 时，connect() 落到
+ * 坏 fd → smart-socket 握手失败（"server didn't ACK"）→ 误判 daemon 未运行 → fork 新
+ * fork-server → bind(5037) EADDRINUSE → SIGABRT → exit 1。tauri CLI 的
+ * `adb shell pidof <pkg>` 轮询正是这种 spawn，循环永不成功 → logcat 转发永不启动。
+ *
+ * 修复：把 platform-tools/adb 替换为本仓库的 shim（scripts/adb-fd0-shim.sh），
+ * 原二进制改名 adb.real；shim 在 stdin 非 TTY 时重开 fd0 到 /dev/null。
+ * platform-tools 更新会把 adb 还原成真二进制——本预检在每次 dev 会话前自愈。
+ */
+function ensureAdbFd0Shim() {
+  if (process.platform === 'win32') return // 该 adb bug 为 Unix fd 语义问题，Windows 不受影响
+  const adbPath = resolveAdbPath()
+  if (!adbPath) {
+    console.warn('[dev-run] ⚠ 未找到 adb，跳过 fd0 shim 安装（tauri android dev 将自行报错）')
+    return
+  }
+  const dir = dirname(adbPath)
+  const realPath = join(dir, 'adb.real')
+  const shimSource = join(__dirname, 'adb-fd0-shim.sh')
+  try {
+    const isShim = (readFileSync(adbPath, 'utf8').split('\n', 1)[0] ?? '').startsWith('#!')
+    if (isShim) {
+      if (existsSync(realPath)) return // 已安装且完好
+      // adb.real 丢失（如被清理）：无法恢复真二进制，提示重装 platform-tools
+      console.warn('[dev-run] ⚠ adb 已是 fd0 shim 但 adb.real 缺失，logcat 转发会失效；请重新安装 platform-tools')
+      return
+    }
+    // adb 是真二进制：改名 + 写入 shim（platform-tools 更新后自动重装；adb.real 已存在则覆盖为最新真二进制）
+    renameSync(adbPath, realPath)
+    copyFileSync(shimSource, adbPath)
+    chmodSync(adbPath, 0o755)
+    console.log('[dev-run] adb fd0 shim 已安装（adb → adb.real + shim）——修复 tauri CLI pidof 轮询卡死/无 dev 日志')
+  } catch (err) {
+    console.warn(`[dev-run] ⚠ adb fd0 shim 安装失败：${err.message}（tauri CLI 的 logcat 转发可能不工作）`)
+  }
 }
 
 /**
@@ -216,8 +277,11 @@ const hostOverride = hostIdx !== -1 && process.argv[hostIdx + 1] ? process.argv[
 const [hostBin, ...hostArgs] = hostOverride ? hostOverride.split(' ') : DEFAULT_HOST_CMD[1]
 const hostCmd = hostOverride ? [hostBin, hostArgs] : DEFAULT_HOST_CMD
 
-// 0. 预检：宿主 devUrl 端口占用（被残留 vite 占用时提前报错，避免“执行不动”假象）
-//    + adb reverse 隧道重建（设备拔插后热更新通道会丢，Tauri CLI 不自动恢复）
+// 0. 预检：
+//    - adb fd0 shim 自愈（platform-tools 更新会还原真二进制，必须先行，宿主 pidof 轮询依赖它）
+//    - 宿主 devUrl 端口占用（被残留 vite 占用时提前报错，避免“执行不动”假象）
+//    - adb reverse 隧道重建（设备拔插后热更新通道会丢，Tauri CLI 不自动恢复）
+ensureAdbFd0Shim()
 await precheckDevPort()
 await precheckAdbReverse()
 

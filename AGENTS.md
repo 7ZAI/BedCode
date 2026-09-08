@@ -85,6 +85,8 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 实际路径确认：桌面端 dev 控制台首行 `Logging initialized.`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
 
+**移动端无 dev 日志排查（必读）**：若落盘文件停在 `Starting: Intent` 后无 logcat 行，先查 tauri CLI 是否卡在 `adb shell pidof` 轮询（`ps aux | grep 'adb shell pidof'` + `/tmp/adb.1000.log` 是否每 2 秒一条 `Address already in use` 崩溃）——这是 adb client 37.0.1 的 fd0 bug（详见 `.scratch/adb-fd0-bug/`）。修复已由 `dev-run.js` 预检自愈（`scripts/adb-fd0-shim.sh` 替换 `platform-tools/adb` → `adb.real`）；platform-tools 升级会还原真二进制，下次 dev 会话自动重装；若 `adb.real` 丢失需重新安装 platform-tools。
+
 排查链路问题优先 grep 两端 `runtime.*.log`：`file_service`、`peer_changed`、`MessageBus`、`reqwest::connect`（代理劫持痕迹 `proxy(...) intercepts`）。
 
 ---
