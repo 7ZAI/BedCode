@@ -77,6 +77,14 @@ pub struct PluginManifest {
     /// Rust 库名（对应 WASM 文件名）
     #[serde(default)]
     pub rust_library: String,
+    /// 启用前预授权目录（移动端镜像桌面 wasiPreopenDirs）
+    ///
+    /// 宿主在 `preauthorize_plugin` 收集并展开后统一弹窗，避免插件 WASM
+    /// activate 内部 `fs_request_auth` 弹窗晚于前端 loading 遮罩（授权弹窗与
+    /// loading 同现的根因）。支持 `${downloads}` 模板（展开为宿主 app 下载目录，
+    /// 如 `{AppDownloadsDir}/ai-chatbox`）。
+    #[serde(default)]
+    pub preauth_dirs: Vec<String>,
 }
 
 /// 插件扩展点声明

@@ -39,6 +39,8 @@ export interface PluginManifest {
   icon?: string
   wasmHash?: string
   rustLibrary?: string
+  /** 启用前预授权目录（宿主 preauthorize 统一弹窗，支持 ${downloads} 模板） */
+  preauthDirs?: string[]
 }
 
 /** 移动端扩展点声明 */

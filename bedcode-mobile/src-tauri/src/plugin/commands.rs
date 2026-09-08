@@ -40,7 +40,9 @@ pub async fn plugin_preauthorize(app_handle: tauri::AppHandle, plugin_id: String
 #[tauri::command]
 pub async fn plugin_activate(app_handle: tauri::AppHandle, plugin_id: String) -> Result<()> {
     let manager = app_handle.state::<Arc<PluginManager>>();
-    manager.activate(&plugin_id).await
+    // 前端 toggle 已先行调 plugin_preauthorize（无遮罩弹窗），此处跳过 step 0.5
+    // 重复预授权弹窗，避免授权弹窗与 loading 遮罩同现（activate_after_preauth）
+    manager.activate_after_preauth(&plugin_id).await
 }
 
 /// 停用插件

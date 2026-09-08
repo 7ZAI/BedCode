@@ -312,10 +312,8 @@ impl FsAuthChecker {
             Err(_) => return false,
         };
         for prefix_str in &whitelist {
-            if let Ok(prefix_path) = PathBuf::from(prefix_str).canonicalize() {
-                if canonical.starts_with(&prefix_path) {
-                    return true;
-                }
+            if self.prefix_matches(prefix_str, canonical) {
+                return true;
             }
         }
         false
@@ -339,14 +337,30 @@ impl FsAuthChecker {
         };
         for prefix_val in &granted {
             if let Some(prefix_str) = prefix_val.as_str() {
-                if let Ok(prefix_path) = PathBuf::from(prefix_str).canonicalize() {
-                    if canonical.starts_with(&prefix_path) {
-                        return true;
-                    }
+                if self.prefix_matches(prefix_str, canonical) {
+                    return true;
                 }
             }
         }
         false
+    }
+
+    /// 前缀命中判定：优先规范路径比较；非文件系统路径（如 SAF `content://`
+    /// URI）无法 canonicalize，退化为原始字符串前缀比较。
+    ///
+    /// 背景：移动端 file-transfer 的预授权路径是 SAF 树 URI（content://…），
+    /// 既非真实文件路径也无法 canonicalize；若只做 `PathBuf::canonicalize`
+    /// 比较，已授权（含 remember 持久化）路径永不命中，`preauthorize_plugin`
+    /// 每次（含 activate 内兜底二次弹窗）都重新弹窗——授权弹窗与 loading 遮罩
+    /// 同现的根因。
+    fn prefix_matches(&self, prefix_str: &str, canonical: &Path) -> bool {
+        // 常规文件系统路径：canonicalize 后按路径前缀比较（沿用旧语义）
+        if let Ok(prefix_path) = PathBuf::from(prefix_str).canonicalize() {
+            return canonical.starts_with(&prefix_path);
+        }
+        // SAF URI 等非文件系统路径：canonicalize 必失败，退化为原始字符串前缀比较
+        let canonical_str = canonical.to_string_lossy();
+        canonical_str.starts_with(prefix_str)
     }
 
     /// 弹窗请求用户授权
@@ -407,9 +421,14 @@ impl FsAuthChecker {
             Ok(Some(serde_json::Value::Array(arr))) => arr,
             _ => Vec::new(),
         };
-        // 提取路径的父目录作为前缀（更通用的授权范围）
+        // 提取路径的父目录作为前缀（更通用的授权范围）。
+        // SAF 树 URI（content://…/tree/…）例外：tree 段本身即授权作用域，
+        // 取父级会剥掉 tree 标识，后续 prefix_matches 的原始字符串前缀比对
+        // 将无法命中（父 URI ≠ 树 URI 前缀）；直接存完整 URI。
         let prefix = if path.is_empty() {
             String::new()
+        } else if path.starts_with("content://") {
+            path.to_string()
         } else {
             Path::new(path)
                 .parent()
@@ -441,5 +460,73 @@ impl FsAuthChecker {
         } else {
             Some(p.to_path_buf())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 常规文件系统路径：canonicalize 可成功，路径前缀匹配生效
+    #[tokio::test]
+    async fn prefix_matches_real_path_uses_canonical_prefix() {
+        // 独立临时目录避免测试间共享 storage 状态
+        let dir = std::env::temp_dir().join(format!("fs-auth-test-real-{}", std::process::id()));
+        let checker = FsAuthChecker::new(Arc::new(PluginStorage::new(&dir)), None);
+        // 已授权前缀是真实存在的父目录，canonicalize 后按路径前缀命中
+        let prefix = "/";
+        let canonical = PathBuf::from("/").canonicalize().unwrap();
+        assert!(checker.prefix_matches(prefix, &canonical));
+    }
+
+    /// SAF URI（content://…）：canonicalize 必失败，退化为原始字符串前缀比较。
+    /// 这是授权弹窗与 loading 同现根因的回归测试——已授权 SAF 树 URI 必须命中。
+    #[test]
+    fn prefix_matches_saf_uri_falls_back_to_string_prefix() {
+        let dir = std::env::temp_dir().join(format!("fs-auth-test-saf-{}", std::process::id()));
+        let checker = FsAuthChecker::new(Arc::new(PluginStorage::new(&dir)), None);
+        let uri = "content://com.android.externalstorage.documents/tree/primary%3AShareX";
+        let canonical = Path::new(uri);
+        // 完整 URI 授权前缀（save_granted_path 对 content:// 存完整 URI）
+        assert!(checker.prefix_matches(uri, canonical));
+        // 同根下另一子树 URI（如 document 子路径）也命中
+        let child = Path::new(
+            "content://com.android.externalstorage.documents/tree/primary%3AShareX/child",
+        );
+        assert!(checker.prefix_matches(uri, child));
+        // 不同根不命中
+        let other = Path::new("content://com.android.externalstorage.documents/tree/primary%3AOther");
+        assert!(!checker.prefix_matches(uri, other));
+    }
+
+    /// save_granted_path：content:// URI 存完整 URI（非父级），保证后续前缀命中
+    #[test]
+    fn save_granted_path_keeps_full_saf_uri() {
+        let dir = std::env::temp_dir().join(format!("fs-auth-test-save-{}", std::process::id()));
+        let storage = Arc::new(PluginStorage::new(&dir));
+        let checker = FsAuthChecker::new(storage.clone(), None);
+        let uri = "content://com.android.externalstorage.documents/tree/primary%3AShareX";
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(checker.save_granted_path("p1", uri)).unwrap();
+        let granted = rt.block_on(storage.get("p1", GRANTED_PATHS_KEY)).unwrap();
+        let arr = granted.and_then(|v| v.as_array().cloned()).unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0].as_str().unwrap(), uri);
+    }
+
+    /// 常规文件系统路径：仍存父目录前缀（旧语义不变）
+    #[test]
+    fn save_granted_path_keeps_parent_for_real_path() {
+        let dir = std::env::temp_dir().join(format!("fs-auth-test-parent-{}", std::process::id()));
+        let storage = Arc::new(PluginStorage::new(&dir));
+        let checker = FsAuthChecker::new(storage.clone(), None);
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        // 独立 plugin_id，避免与前一个测试共享 storage 数据
+        rt.block_on(checker.save_granted_path("p2", "/tmp/foo/bar")).unwrap();
+        let granted = rt.block_on(storage.get("p2", GRANTED_PATHS_KEY)).unwrap();
+        let arr = granted.and_then(|v| v.as_array().cloned()).unwrap();
+        assert_eq!(arr.len(), 1);
+        // 父目录作为前缀
+        assert_eq!(arr[0].as_str().unwrap(), "/tmp/foo");
     }
 }

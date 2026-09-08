@@ -55,6 +55,42 @@ async fn collect_preauth_paths(plugin_id: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// 展开 manifest `preauthDirs` 声明目录为真实路径列表
+///
+/// 镜像桌面 wasiPreopenDirs 展开语义:支持 `${downloads}` 模板(展开为宿主
+/// app 下载目录,ai-chatbox 数据目录 `{AppDownloadsDir}/ai-chatbox` 用)。
+/// 只剥尾部分隔符;展开失败(如无头上下文拿不到下载目录)的条目丢弃。
+async fn expand_preauth_dirs(
+    app_handle: &Option<Arc<tauri::AppHandle>>,
+    plugin_id: &str,
+    declared: &[String],
+) -> Vec<String> {
+    // 仅 Android 真机/app_handle 场景可解析下载目录;无头/测试上下文返回空
+    let downloads = match app_handle {
+        Some(app) => crate::plugin::android_plugins::resolve_app_downloads_dir(app)
+            .await
+            .map(|p| p.trim_end_matches(['/', '\\']).to_string()),
+        None => None,
+    };
+    let Some(downloads) = downloads else {
+        if !declared.is_empty() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "preauthDirs: app downloads dir unavailable, skipping expansion"
+            );
+        }
+        return Vec::new();
+    };
+    declared
+        .iter()
+        .filter_map(|raw| {
+            let dir = raw.trim().replacen("${downloads}", &downloads, 1);
+            let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
+            (!dir.is_empty()).then_some(dir)
+        })
+        .collect()
+}
+
 /// 插件生命周期管理器
 pub struct PluginManager {
     /// 已加载的插件清单
@@ -474,7 +510,10 @@ impl PluginManager {
     /// plugins 锁时禁止调用**(check_batch 会发事件、可能回调宿主)。
     ///
     /// 路径来源:已注册的 `PreauthProvider` 优先;否则从 `PluginStorage`
-    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入)。
+    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入);
+    /// 另并入 manifest `preauthDirs` 声明目录(如 ai-chatbox 数据目录)——
+    /// 插件 WASM activate 内 `fs_request_auth` 的弹窗晚于前端 loading 遮罩,
+    /// 声明目录必须提前到本阶段统一弹窗(镜像桌面 wasiPreopenDirs 语义)。
     /// 路径为空 → 直接放行(启用先行:file-transfer 首次启用/全部目录移除后
     /// 均可空目录激活,共享目录配置由插件设置面板引导;硬拒绝会造成
     /// 「配置需激活 → 激活需先配置」死锁)。
@@ -489,6 +528,22 @@ impl PluginManager {
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect();
                 }
+            }
+        }
+
+        // 1.5 并入 manifest preauthDirs 声明目录(展开不过滤授权,未授权
+        // 项正需在此弹窗)。短读锁克隆后立即释放:check_batch 会发事件、可能
+        // 回调宿主,跨 await 持锁有死锁风险
+        let declared = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| p.manifest.preauth_dirs.clone())
+                .unwrap_or_default()
+        };
+        for dir in expand_preauth_dirs(&self.app_handle, plugin_id, &declared).await {
+            if !paths.contains(&dir) {
+                paths.push(dir);
             }
         }
 
@@ -519,9 +574,22 @@ impl PluginManager {
     /// `Arc<PluginManager>` 内的 `app_handle` 字段，删去以允许 `#[cfg(test)]`
     /// 构造无头 PluginManager 走真 activate 路径
     pub async fn activate(&self, plugin_id: &str) -> Result<()> {
+        self.activate_impl(plugin_id, true).await
+    }
+
+    /// 前端已预授权（`plugin_preauthorize` 先行）后的激活入口
+    ///
+    /// 跳过 `activate_inner` step 0.5 的预授权弹窗——前端 toggle 时序已保证
+    /// 授权在 loading 遮罩之前完成，重复弹窗（含 SAF URI 授权后再次触发）会
+    /// 与 loading 同现；启动 auto-activate / 热重载仍走完整 `activate` 保留兜底。
+    pub async fn activate_after_preauth(&self, plugin_id: &str) -> Result<()> {
+        self.activate_impl(plugin_id, false).await
+    }
+
+    async fn activate_impl(&self, plugin_id: &str, run_preauth: bool) -> Result<()> {
         // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
         // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
-        let result = self.activate_inner(plugin_id).await;
+        let result = self.activate_inner(plugin_id, run_preauth).await;
         if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
             if let Some(app) = self.app_handle.clone() {
                 if let Err(e) = crate::peer_net::ensure_node_started(&app).await {
@@ -536,7 +604,7 @@ impl PluginManager {
         result
     }
 
-    async fn activate_inner(&self, plugin_id: &str) -> Result<()> {
+    async fn activate_inner(&self, plugin_id: &str, run_preauth: bool) -> Result<()> {
         // 0. 审批门禁（防冒名顶替获取权限）
         //
         // 内置插件（ApkAsset/FrontendOnly）属于应用构建信任域，直接放行；
@@ -615,8 +683,11 @@ impl PluginManager {
 
         // 0.5 预授权 — 审批门禁之后、状态写之前(无锁);失败直接返回,
         // 前端 catch 后回退 toggle。loading 遮罩由前端 toggle 推迟到此
-        // 调用之后才显示,确保授权弹窗与 loading 不会同时出现
-        self.preauthorize_plugin(plugin_id).await?;
+        // 调用之后才显示,确保授权弹窗与 loading 不会同时出现。
+        // run_preauth=false(前端已预授权):跳过——重复弹窗会与 loading 同现
+        if run_preauth {
+            self.preauthorize_plugin(plugin_id).await?;
+        }
 
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
@@ -1185,6 +1256,7 @@ mod tests {
             icon: None,
             wasm_hash: String::new(),
             rust_library: String::new(),
+            preauth_dirs: vec![],
         };
         let mut plugins = manager.plugins.write().await;
         plugins.insert(

@@ -78,6 +78,7 @@ mod tests {
                 icon: None,
                 wasm_hash: String::new(),
                 rust_library: String::new(),
+                preauth_dirs: vec![],
             }
         }
 

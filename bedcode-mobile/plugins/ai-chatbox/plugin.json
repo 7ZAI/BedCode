@@ -8,6 +8,9 @@
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
+  "preauthDirs": [
+    "${downloads}/ai-chatbox"
+  ],
   "permissions": ["fs:read", "fs:write", "network:http", "storage", "ui:navtab", "ui:toolbox"],
   "contributes": {
     "commands": [
