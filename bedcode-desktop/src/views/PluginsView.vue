@@ -99,7 +99,7 @@
                     <!-- 简介折叠区 -->
                     <div class="mt-0.5">
                       <div
-                        class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] transition-all duration-200"
+                        class="text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] transition-all duration-200"
                         :class="descExpanded[plugin.id] ? 'whitespace-pre-wrap' : 'truncate'"
                       >
                         {{ plugin.description || $t('desktop.plugin.noDescription') }}
@@ -212,7 +212,7 @@
                     </div>
                     <div class="mt-0.5">
                       <div
-                        class="text-[calc(12px*var(--ui-scale))] transition-all duration-200"
+                        class="text-[calc(11px*var(--ui-scale))] transition-all duration-200"
                         :class="[
                           descExpanded[plugin.id] ? 'whitespace-pre-wrap' : 'truncate',
                           isErrorState(plugin.state)
