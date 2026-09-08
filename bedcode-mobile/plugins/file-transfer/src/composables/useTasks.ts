@@ -295,7 +295,18 @@ export function useTasks(context: PluginContext) {
     dispReceiving = context.events.on(
       'plugin:file-transfer:receiving-changed',
       (payload: unknown) => {
-        if (Array.isArray(payload)) receivingTasks.value = payload.map(mapWireReceiving)
+        if (Array.isArray(payload)) {
+          // 诊断插桩：接收快照到达（排查下载进度不更新：确认事件到达前端）
+          const first = payload[0]
+          console.debug(
+            '[File Transfer] receiving snapshot',
+            payload.length,
+            first
+              ? `${first.batchId ?? '?'} off=${first.transferredBytes ?? 0}/${first.totalBytes ?? 0} st=${first.status ?? '?'}`
+              : '(empty)',
+          )
+          receivingTasks.value = payload.map(mapWireReceiving)
+        }
       },
     )
     dispHistory = context.events.on('plugin:file-transfer:history-changed', (payload: unknown) => {

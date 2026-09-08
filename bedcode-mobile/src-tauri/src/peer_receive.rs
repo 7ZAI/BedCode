@@ -266,6 +266,12 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
                 register_offer(&app, remote, batch_id, files, total_size, reply).await;
             }
             TransferEvent::Progress { batch_id, transferred, rate_bps, .. } => {
+                tracing::debug!(
+                    batch_id = %batch_id,
+                    transferred,
+                    rate_bps,
+                    "receive progress event (drive_receive_events)"
+                );
                 update_progress(&app, &batch_id, transferred, rate_bps);
                 throttle_publish(&app);
             }
@@ -524,6 +530,9 @@ fn throttle_publish(app: &AppHandle) {
     };
     if due {
         publish(app);
+    } else {
+        // 诊断插桩：节流跳帧（排查接收进度不更新时确认事件流活跃）
+        tracing::debug!("receive progress throttled (within emit interval)");
     }
 }
 

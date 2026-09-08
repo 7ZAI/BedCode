@@ -305,6 +305,7 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :actions="(entry.direction === 'download' && entry.state === 'completed')
               ? [{ kind: 'open-location', label: t('transfer.v2.history.openFolder'), variant: 'tint' }]
               : []"
+            @action="onCardAction"
           />
         </template>
       </template>
