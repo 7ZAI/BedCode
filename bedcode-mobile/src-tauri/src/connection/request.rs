@@ -63,27 +63,6 @@ impl AuthRequest {
             },
         })
     }
-
-    /// 构建生物凭证绑定/解绑消息
-    ///
-    /// 在已认证连接上注册公钥（绑定）或清空公钥（解绑，public_key 传空串）。
-    /// ExchangeCertificate 无 HTTP 端点，绑定需已认证持久 WS（04 事件 WS 落地
-    /// 后接线；此前的绑定调用报 Not connected 属预期过渡回归）。
-    pub fn exchange_biometric_credential(fingerprint: &str, public_key: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::ExchangeCertificate,
-                device_fingerprint: Some(fingerprint.to_string()),
-                public_key: Some(public_key.to_string()),
-                ..Default::default()
-            },
-        })
-    }
 }
 
 // ==================== Session Control Requests ====================
@@ -235,17 +214,6 @@ impl ResponseParser {
             }
         }
         None
-    }
-
-    /// 解析认证响应
-    ///
-    /// 检查认证是否成功，返回认证阶段
-    pub fn parse_auth_response(response: &Message) -> Option<AuthStage> {
-        if let Message::Auth { payload, .. } = response {
-            Some(payload.stage.clone())
-        } else {
-            None
-        }
     }
 
     /// 解析启动会话响应

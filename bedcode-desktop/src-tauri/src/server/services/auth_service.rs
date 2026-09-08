@@ -91,6 +91,39 @@ pub async fn verify_biometric_challenge(
     Ok(pairing)
 }
 
+/// 绑定/解绑生物凭证公钥（HTTP biometric-bind 端点专用）
+///
+/// 按指纹取配对记录（未配对 → NotPaired），更新 public_key；
+/// `public_key` 空串 = 解绑，非空 = 绑定。成功返回是否绑定。
+pub async fn bind_biometric_credential(
+    fingerprint: &str,
+    public_key: &str,
+) -> std::result::Result<bool, BiometricAuthError> {
+    if fingerprint.is_empty() {
+        return Err(BiometricAuthError::NotPaired);
+    }
+
+    let pairing = {
+        let db_guard = AppContext::global().db().lock().await;
+        db_guard.get_pairing_by_fingerprint(fingerprint)
+    }
+    .map_err(|e| BiometricAuthError::Database(e.to_string()))?;
+    let Some(pairing) = pairing else {
+        return Err(BiometricAuthError::NotPaired);
+    };
+
+    {
+        let db_guard = AppContext::global().db().lock().await;
+        db_guard
+            .update_pairing_public_key(&pairing.id, public_key)
+            .map_err(|e| BiometricAuthError::Database(e.to_string()))?;
+    }
+
+    let is_binding = !public_key.is_empty();
+    tracing::info!(pairing_id = %pairing.id, binding = is_binding, "Biometric credential updated via HTTP");
+    Ok(is_binding)
+}
+
 /// 格式化设备显示名称：名称 + 首次连接 IP
 pub fn format_device_display_name(device_name: &str, address: &str) -> String {
     // address 格式为 "IP:PORT"，提取 IP 部分

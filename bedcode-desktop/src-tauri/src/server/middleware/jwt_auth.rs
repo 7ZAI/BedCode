@@ -57,6 +57,8 @@ mod tests {
         // ticket 01 新增的生物认证端点同样落在 /api/auth/ 前缀下
         assert!(is_public_path("/api/auth/biometric-challenge"));
         assert!(is_public_path("/api/auth/biometric-verify"));
+        // biometric-bind 落在 /api/auth/ 前缀下（中间件放行，handler 内验 JWT）
+        assert!(is_public_path("/api/auth/biometric-bind"));
         assert!(is_public_path("/api/health"));
         assert!(is_public_path("/health"));
     }

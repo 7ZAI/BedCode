@@ -180,6 +180,7 @@ async fn http_biometric_auth_contract() {
 
     let challenge_url = format!("{base}/api/auth/biometric-challenge");
     let verify_url = format!("{base}/api/auth/biometric-verify");
+    let bind_url = format!("{base}/api/auth/biometric-bind");
 
     // 测试用配对：SPKI base64 公钥写入 DB（等价于已配对 + 已绑定生物凭证）
     let (spki_b64, signing_key) = make_keypair();
@@ -425,6 +426,113 @@ async fn http_biometric_auth_contract() {
         body["message"], "Biometric challenge invalid or expired",
         "nonce 不匹配的错因应指向挑战无效"
     );
+
+    // ==================== T7：有效 token 绑定新公钥 → code 0 + bound=true ====================
+
+    let (new_spki_b64, _new_key) = make_keypair();
+    let resp = send_until(
+        post_json(
+            &client,
+            &bind_url,
+            &serde_json::json!({
+                "deviceId": pairing_id,
+                "deviceFingerprint": fingerprint,
+                "publicKey": new_spki_b64,
+                "sessionToken": token,
+            }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("T7 bind request must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 0, "有效 token 绑定公钥必须成功");
+    assert_eq!(body["data"]["bound"], true, "非空公钥绑定 bound 必须为 true");
+    {
+        let db_guard = AppContext::global().db().lock().await;
+        let pairing = db_guard
+            .get_pairing_by_fingerprint(fingerprint)
+            .expect("query pairing")
+            .expect("pairing must exist");
+        assert_eq!(pairing.public_key, new_spki_b64, "绑定后公钥必须更新为新值");
+    }
+
+    // ==================== T8：空公钥解绑 → code 0 + bound=false ====================
+
+    let resp = send_until(
+        post_json(
+            &client,
+            &bind_url,
+            &serde_json::json!({
+                "deviceId": pairing_id,
+                "deviceFingerprint": fingerprint,
+                "publicKey": "",
+                "sessionToken": token,
+            }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("T8 unbind request must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 0, "空公钥解绑必须成功");
+    assert_eq!(body["data"]["bound"], false, "空公钥解绑 bound 必须为 false");
+    {
+        let db_guard = AppContext::global().db().lock().await;
+        let pairing = db_guard
+            .get_pairing_by_fingerprint(fingerprint)
+            .expect("query pairing")
+            .expect("pairing must exist");
+        assert_eq!(pairing.public_key, "", "解绑后公钥必须清空");
+    }
+
+    // ==================== T9：无效 token 绑定 → code 1001 ====================
+
+    let resp = send_until(
+        post_json(
+            &client,
+            &bind_url,
+            &serde_json::json!({
+                "deviceId": pairing_id,
+                "deviceFingerprint": fingerprint,
+                "publicKey": spki_b64,
+                "sessionToken": "not-a-valid-jwt",
+            }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("T9 invalid-token bind must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 1001, "无效 token 绑定必须返回 1001");
+
+    // ==================== T10：token 指纹不匹配 → code 1007 ====================
+
+    // 为另一台设备签发 token，用它绑定 fingerprint 对应设备 → 指纹不一致被拒
+    let other_token = JwtService::new()
+        .generate_token(
+            "other-device-id".to_string(),
+            None,
+            Some("other-device-fingerprint".to_string()),
+        )
+        .expect("generate other-device token");
+    let resp = send_until(
+        post_json(
+            &client,
+            &bind_url,
+            &serde_json::json!({
+                "deviceId": pairing_id,
+                "deviceFingerprint": fingerprint,
+                "publicKey": spki_b64,
+                "sessionToken": other_token,
+            }),
+        ),
+        Duration::from_secs(5),
+    )
+    .await
+    .expect("T10 mismatched-token bind must reach server");
+    let body = body_json(resp).await;
+    assert_eq!(body["code"], 1007, "token 指纹不匹配必须返回 1007");
 
     // ==================== 收尾：优雅停机 + 清理 ====================
 

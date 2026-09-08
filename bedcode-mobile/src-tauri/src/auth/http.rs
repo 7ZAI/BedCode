@@ -63,6 +63,13 @@ pub struct BiometricChallengeResponseData {
     pub expires_in: u64,
 }
 
+/// POST /api/auth/biometric-bind 响应 data
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricBindResponseData {
+    pub bound: bool,
+}
+
 /// 从目标设备地址拼 HTTP base URL
 ///
 /// 桌面端服务监听明文 HTTP（无 TLS），address 为局域网 IP。端口复用
@@ -245,6 +252,29 @@ impl AuthHttpClient {
             "signature": signature,
         });
         post_and_parse(&self.client, url, body, timeouts::BIO_AUTH).await
+    }
+
+    /// POST /api/auth/biometric-bind：注册/清空生物凭证公钥（须已认证）
+    ///
+    /// 绑定传 SPKI base64 公钥，解绑传空串；携带已有 JWT，桌面端校验
+    /// 其指纹与请求一致后更新配对记录。失败返回 1001（token 失效）/
+    /// 1007（token 不归属本设备）/1010（未配对或数据库异常）。
+    pub async fn biometric_bind(
+        &self,
+        base_url: &str,
+        device_id: &str,
+        fingerprint: &str,
+        public_key: &str,
+        session_token: &str,
+    ) -> Result<BiometricBindResponseData> {
+        let url = format!("{}/api/auth/biometric-bind", base_url);
+        let body = json!({
+            "deviceId": device_id,
+            "deviceFingerprint": fingerprint,
+            "publicKey": public_key,
+            "sessionToken": session_token,
+        });
+        post_and_parse(&self.client, url, body, timeouts::AUTH).await
     }
 }
 

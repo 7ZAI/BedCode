@@ -259,6 +259,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 "/auth/biometric-verify",
                 web::post().to(auth_controller::biometric_verify),
             )
+            .route(
+                "/auth/biometric-bind",
+                web::post().to(auth_controller::biometric_bind),
+            )
             // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))

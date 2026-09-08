@@ -130,6 +130,7 @@ impl MockDesktop {
                     web::post().to(mock_biometric_challenge),
                 )
                 .route("/api/auth/biometric-verify", web::post().to(mock_biometric_verify))
+                .route("/api/auth/biometric-bind", web::post().to(mock_biometric_bind))
         })
         .bind(("127.0.0.1", 0))
         .expect("bind mock auth server");
@@ -213,6 +214,12 @@ async fn mock_biometric_verify(body: web::Json<Value>, state: web::Data<MockStat
         return envelope(1009, "Biometric signature verification failed", None::<Value>);
     }
     envelope(0, "ok", Some(json!({ "token": MOCK_TOKEN, "expiresIn": 3600 })))
+}
+
+async fn mock_biometric_bind(body: web::Json<Value>, state: web::Data<MockState>) -> HttpResponse {
+    state.record("/api/auth/biometric-bind", &body);
+    let public_key = body.get("publicKey").and_then(|v| v.as_str()).unwrap_or("");
+    envelope(0, "ok", Some(json!({ "bound": !public_key.is_empty() })))
 }
 
 // ==================== 场景 ①：配对 → 验码 → token ====================
@@ -449,6 +456,37 @@ async fn biometric_challenge_verify_http_shape() {
     assert_eq!(body["challengeNonce"], MOCK_NONCE);
     assert_eq!(body["signature"], "base64-signature");
     assert_eq!(body["deviceFingerprint"], "fp-1");
+
+    mock.shutdown().await;
+}
+
+// ==================== 场景 ⑦：生物凭证绑定（HTTP 形状） ====================
+
+#[tokio::test]
+async fn biometric_bind_http_shape() {
+    let mock = MockDesktop::start(MockMode::Happy).await;
+    let client = AuthHttpClient::new();
+    let base = mock.base_url();
+
+    // 绑定：公钥注册，返回 bound=true
+    let data = client
+        .biometric_bind(&base, "device-1", "fp-1", "spki-base64", "jwt-token")
+        .await
+        .expect("bind should succeed");
+    assert!(data.bound, "非空公钥绑定 bound 必须为 true");
+
+    let body = mock.last_body("/api/auth/biometric-bind");
+    assert_eq!(body["deviceId"], "device-1");
+    assert_eq!(body["deviceFingerprint"], "fp-1");
+    assert_eq!(body["publicKey"], "spki-base64");
+    assert_eq!(body["sessionToken"], "jwt-token");
+
+    // 解绑：空公钥，返回 bound=false
+    let data = client
+        .biometric_bind(&base, "device-1", "fp-1", "", "jwt-token")
+        .await
+        .expect("unbind should succeed");
+    assert!(!data.bound, "空公钥解绑 bound 必须为 false");
 
     mock.shutdown().await;
 }

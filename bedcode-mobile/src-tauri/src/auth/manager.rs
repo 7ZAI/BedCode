@@ -466,14 +466,15 @@ impl AuthManager {
     /// 避免"绑定时从未验证主人"：否则任何人拿到已配对手机都能注册钥匙。
     /// 返回桌面端是否接受绑定。
     ///
-    /// 说明：ExchangeCertificate 无 HTTP 端点（spec §4.5 仅六端点），绑定
-    /// 需已认证持久 WS → 04 事件 WS 落地前后端绑定功能暂时不可用，
-    /// 调用 send_and_wait 报 Not connected，属预期过渡回归（04 内接线）。
+    /// 说明：公钥经 HTTP `POST /api/auth/biometric-bind` 注册，桌面端校验
+    /// 携带 JWT 的指纹与请求一致后更新配对记录（与 challenge/verify 同信道）。
     pub async fn bind_biometric_credential(&self) -> Result<bool> {
         if !self.connection.is_connected().await {
             return Err(AppError::WebSocket("Not connected".to_string()));
         }
 
+        let (base_url, _address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
         let fingerprint = self.device_fingerprint.read().await.clone();
 
         // 1. 本地生成密钥对（私钥存 Keystore，需生物认证解锁）
@@ -516,60 +517,60 @@ impl AuthManager {
             tracing::info!("[bind_biometric_credential] Biometric self-check passed (owner verified)");
         }
 
-        // 3. 通过已认证连接把公钥注册到桌面端
-        let message = crate::connection::request::AuthRequest::exchange_biometric_credential(&fingerprint, &public_key);
-        let response = match self
-            .connection
-            .send_and_wait(&message, crate::connection::request::timeouts::AUTH)
+        // 3. 通过已认证 HTTP 连接把公钥注册到桌面端
+        let session_token = self
+            .get_credentials()
+            .await
+            .map(|c| c.session_token)
+            .unwrap_or_default();
+
+        match self
+            .http
+            .biometric_bind(&base_url, &device_id, &fingerprint, &public_key, &session_token)
             .await
         {
-            Ok(r) => r,
+            Ok(data) => {
+                tracing::info!(
+                    "[bind_biometric_credential] Credential bound to desktop (bound={})",
+                    data.bound
+                );
+                Ok(data.bound)
+            }
             Err(e) => {
                 // 注册失败时清理本地密钥，避免留下孤儿公钥/私钥
                 let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                return Err(e);
-            }
-        };
-
-        match crate::connection::request::ResponseParser::parse_auth_response(&response) {
-            Some(crate::enums::auth::AuthStage::Authenticated) => {
-                tracing::info!("[bind_biometric_credential] Credential bound to desktop");
-                Ok(true)
-            }
-            Some(crate::enums::auth::AuthStage::Failed) => {
-                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                tracing::warn!("[bind_biometric_credential] Desktop rejected binding");
-                Ok(false)
-            }
-            _ => {
-                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                Ok(false)
+                Err(e)
             }
         }
     }
 
     /// 解绑生物凭证：删除本地密钥 + 通知桌面端清空公钥
     ///
-    /// 与绑定的通道限制相同：需已认证持久 WS（04 后可用）。
+    /// 与绑定的信道相同：经 HTTP `POST /api/auth/biometric-bind`（public_key 传空串）。
     pub async fn unbind_biometric_credential(&self) -> Result<bool> {
         if !self.connection.is_connected().await {
             return Err(AppError::WebSocket("Not connected".to_string()));
         }
 
+        let (base_url, _address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
         let fingerprint = self.device_fingerprint.read().await.clone();
 
-        // 1. 通知桌面端清空公钥
-        let message = crate::connection::request::AuthRequest::exchange_biometric_credential(&fingerprint, "");
-        let response = match self
-            .connection
-            .send_and_wait(&message, crate::connection::request::timeouts::AUTH)
+        // 1. 通知桌面端清空公钥（失败仍继续删除本地密钥，避免本地密钥悬空）
+        let session_token = self
+            .get_credentials()
+            .await
+            .map(|c| c.session_token)
+            .unwrap_or_default();
+        let notified = match self
+            .http
+            .biometric_bind(&base_url, &device_id, &fingerprint, "", &session_token)
             .await
         {
-            Ok(r) => Some(r),
+            Ok(_) => true,
             Err(e) => {
                 tracing::warn!("[unbind_biometric_credential] Desktop notification failed: {}", e);
-                // 桌面端通知失败仍继续删除本地密钥，避免本地密钥悬空
-                None
+                false
             }
         };
 
@@ -578,18 +579,12 @@ impl AuthManager {
             tracing::warn!("[unbind_biometric_credential] Failed to delete local key: {}", e);
         }
 
-        match response {
-            Some(crate::model::message::Message::Auth { payload, .. })
-                if payload.stage == crate::enums::auth::AuthStage::Authenticated =>
-            {
-                tracing::info!("[unbind_biometric_credential] Credential unbound");
-                Ok(true)
-            }
-            _ => {
-                tracing::warn!("[unbind_biometric_credential] Desktop did not confirm unbind");
-                Ok(false)
-            }
+        if notified {
+            tracing::info!("[unbind_biometric_credential] Credential unbound");
+        } else {
+            tracing::warn!("[unbind_biometric_credential] Desktop did not confirm unbind");
         }
+        Ok(notified)
     }
 
     /// 检查本地生物认证密钥是否存在

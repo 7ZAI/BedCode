@@ -13,7 +13,8 @@ use crate::server::dtos::auth_dto::*;
 use crate::server::dtos::ApiResponse;
 use crate::server::link_crypto;
 use crate::server::services::auth_service::{
-    format_device_display_name, issue_biometric_challenge, verify_biometric_challenge, BiometricAuthError,
+    bind_biometric_credential, format_device_display_name, issue_biometric_challenge, verify_biometric_challenge,
+    BiometricAuthError,
 };
 use crate::system::app_context::AppContext;
 use crate::system::constants::event;
@@ -471,6 +472,51 @@ pub async fn biometric_verify(body: web::Json<BiometricVerifyRequest>) -> HttpRe
                 BiometricAuthError::Database(err) => err,
             };
             HttpResponse::Ok().json(ApiResponse::<()>::error(1009, &msg))
+        }
+    }
+}
+
+/// POST /api/auth/biometric-bind
+///
+/// 绑定/解绑生物凭证公钥。须已认证：携带 JWT，桌面端验签并校验
+/// token 内指纹与请求指纹一致（防跨设备覆盖他人公钥）；随后按指纹
+/// 取配对记录更新 public_key（绑定传 SPKI base64，解绑传空串）。
+/// 失败返回 1010（与 1008 challenge / 1009 verify 区分）。
+pub async fn biometric_bind(body: web::Json<BiometricBindRequest>) -> HttpResponse {
+    let fingerprint = body.device_fingerprint.clone();
+
+    // 1. 校验 JWT（绑定/解绑须已认证），并确认 token 归属本设备
+    let jwt_service = JwtService::new();
+    let claims = match jwt_service.verify_token_with_expiry(&body.session_token) {
+        Ok(claims) => claims,
+        Err(e) => {
+            tracing::warn!(fingerprint = %fingerprint, error = ?e, "Biometric bind JWT verification failed");
+            let msg = match e {
+                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired".to_string(),
+                _ => "Invalid token".to_string(),
+            };
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, &msg));
+        }
+    };
+
+    if claims.fingerprint.as_deref() != Some(fingerprint.as_str()) {
+        tracing::warn!(fingerprint = %fingerprint, "Biometric bind rejected: token fingerprint mismatch");
+        return HttpResponse::Ok().json(ApiResponse::<()>::error(1007, "Token does not belong to this device"));
+    }
+
+    // 2. 更新配对记录公钥
+    match bind_biometric_credential(&fingerprint, &body.public_key).await {
+        Ok(is_binding) => HttpResponse::Ok().json(ApiResponse::ok_with_data(BiometricBindResponseData {
+            bound: is_binding,
+        })),
+        Err(e) => {
+            tracing::warn!(fingerprint = %fingerprint, error = ?e, "Biometric bind failed");
+            let msg = match e {
+                BiometricAuthError::NotPaired => "Device not paired".to_string(),
+                BiometricAuthError::Database(err) => err,
+                _ => "Failed to update biometric credential".to_string(),
+            };
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1010, &msg))
         }
     }
 }

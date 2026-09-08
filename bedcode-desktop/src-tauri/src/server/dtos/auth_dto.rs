@@ -90,3 +90,23 @@ pub struct BiometricVerifyRequest {
     pub challenge_nonce: String,
     pub signature: String,
 }
+
+/// POST /api/auth/biometric-bind request
+///
+/// 绑定/解绑生物凭证公钥（绑定传 SPKI base64，解绑传空串）。
+/// 绑定/解绑须已认证：携带已有 JWT，桌面端校验其指纹与请求一致。
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricBindRequest {
+    pub device_id: String,
+    pub device_fingerprint: String,
+    pub public_key: String,
+    pub session_token: String,
+}
+
+/// POST /api/auth/biometric-bind response data
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BiometricBindResponseData {
+    pub bound: bool,
+}
