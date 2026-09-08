@@ -14,8 +14,8 @@ import AutoTaskModal from './components/AutoTaskModal.vue'
 import autoTaskModalCss from './components/auto-task-modal.css?inline'
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local 控件，样式可随主题定制）
 import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
-// 宿主 OS 平台：自动任务投递的输入提交符按平台选择（Windows=CR，Linux=LF），
-// 通过 @tauri-apps/plugin-os 读取（同步 API，宿主已注册该插件）
+// 宿主 OS 平台：hooks.rs 按平台选择 Python 解释器命令（Windows=python，
+// Linux/macOS=python3），通过 @tauri-apps/plugin-os 读取（同步 API，宿主已注册该插件）
 import { platform } from '@tauri-apps/plugin-os'
 import { autoTaskModalVisible } from './state'
 import { messages } from './i18n'
@@ -172,8 +172,9 @@ function unmountModal() {
 }
 
 export async function activate(context: PluginContext): Promise<void> {
-  // 上报宿主平台：WASM 调度按平台选择终端输入提交符（Windows=CR，Linux=LF），
-  // 见 rust/src/queue.rs input_submit_char。失败仅告警，不影响插件激活（默认回退 CR）
+  // 上报宿主平台：hooks.rs 按平台选择 Python 解释器命令（Windows=python，
+  // Linux/macOS=python3），见 rust/src/hooks.rs python_interpreter。失败仅告警，
+  // 不影响插件激活（默认回退 python）
   try {
     await context.commands.execute('auto-task.set-platform', { platform: platform() })
   } catch (e) {

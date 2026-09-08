@@ -20,7 +20,7 @@
 use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal,
+    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostTerminal,
 };
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
@@ -57,27 +57,23 @@ fn wait_window_seconds(attempts: i64) -> i64 {
     attempts.clamp(1, MAX_DISPATCH_ATTEMPTS)
 }
 
-/// 自动任务投递输入的提交符（按宿主平台动态选择）
+/// 自动任务投递输入的提交符（统一为 Enter 键字节 `\r`，所有平台一致）
 ///
-/// 投递输入必须以提交符结尾，agent（Claude Code）才会把它当作指令执行：
-/// - Windows（ConPTY）：Enter 键产生的字节是 `\r`（CR），Claude Code 只把 `\r` 识别为
-///   提交，`\n`（LF）仅是换行内容 —— 发 `\n` 会导致 prompt 被"输入"但任务永不开始执行
-/// - Linux / macOS：`\n`（LF）为传统终端提交符（Unix pty 对 `\r` 经 ICRNL 同样兼容）
+/// 投递输入必须以提交符结尾，agent 才会把它当作指令执行。Enter 键在终端中的
+/// 实际字节是 `\r`（CR, 0x0D），各消费端均以 CR 识别提交：
+/// - 原始模式 TUI（pi / Claude Code / opencode / codex）：按键字节就是 `\r`。
+///   pi 的编辑器对单独的 `\n`（LF）一律按"插入换行"处理（多行输入），
+///   `\n` 永远不会触发提交 —— 发 `\n` 会出现"prompt 显示在输入栏但任务
+///   永不开始执行"（2026-09 移动端 + pi agent 实测）
+/// - 规范模式 shell（bash 等）：PTY 行规程 ICRNL 把 `\r` 转换为 `\n` 提交，等价安全
+/// - Windows（ConPTY）：Claude Code 只把 `\r` 识别为提交，`\n` 仅是换行内容
 ///
-/// 平台由前端在插件激活时通过 `@tauri-apps/plugin-os` 读取并调用
-/// `auto-task.set-platform` 上报到插件存储；未上报 / 未知平台回退 `\r`
-/// （Windows 必需，Unix 兼容，两端安全）。
-fn input_submit_char(host: &WasmHost) -> &'static str {
-    let platform = host
-        .storage_get("platform")
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    match platform.as_deref() {
-        Some("windows") => "\r",
-        Some("linux") | Some("macos") => "\n",
-        _ => "\r",
-    }
+/// 结论：统一 `\r` 是唯一在原始模式（TUI）与规范模式（shell）下都正确的提交符。
+/// 旧实现曾按平台选 `\n`（Linux/macOS），仅对规范模式 shell 成立，对原始模式
+/// TUI 失败。`platform` 存储仍被 hooks.rs python_interpreter 使用（选择 Python
+/// 解释器命令），不因本函数简化而移除。
+fn input_submit_char() -> &'static str {
+    "\r"
 }
 
 /// 任务队列表建表 SQL（按语句拆分）
@@ -685,12 +681,13 @@ fn dispatch_task(
     // 出队直接写任务行（description=prompt、source 随队列项），不再依赖输入行重建
     crate::state::create_task_from_dispatch(host, session_id, prompt, agent_name, source);
 
-    // 投递输入必须以提交符结尾（按宿主平台动态选择，见 input_submit_char）：
+    // 投递输入必须以提交符结尾（统一 Enter 字节 \r，见 input_submit_char）：
     // PTY 写入原样透传（宿主不会自动补提交符，见 SessionManager::write_input）。
-    // Windows ConPTY 下 Claude Code 只把 \r 识别为提交，\n 仅是换行内容；
-    // Linux 下 \n 为传统提交符。prompt 统一去尾部空白后拼提交符，避免重复换行。
+    // \r 是 Enter 键字节：原始模式 TUI（pi 等）与规范模式 shell（ICRNL 转 \n）
+    // 都识别为提交；\n 在 pi 编辑器中是"插入换行"，会导致任务卡在输入栏。
+    // prompt 统一去尾部空白后拼提交符，避免重复换行。
     // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
-    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char(host));
+    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char());
     if let Err(e) = host.terminal_send(session_id, &input_line) {
         host.log_error(&format!(
             "dispatch_task: terminal_send failed: task_id={} err={}",
@@ -825,7 +822,7 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
                 .unwrap_or("/clear");
         if let Err(e) = host.terminal_send(
             &session_id,
-            &format!("{}{}", clear_command, input_submit_char(host)),
+            &format!("{}{}", clear_command, input_submit_char()),
         ) {
             host.log_error(&format!(
                 "send_due_clears: terminal_send clear failed: task_id={} err={}",

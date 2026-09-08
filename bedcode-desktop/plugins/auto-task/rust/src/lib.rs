@@ -229,7 +229,10 @@ impl WasmPlugin for AutoTaskPlugin {
             }
             "auto-task.set-platform" => {
                 // 前端在插件激活时通过 @tauri-apps/plugin-os 读取宿主平台并上报。
-                // queue.rs 调度据此选择终端输入提交符（Windows=CR，Linux=LF）
+                // 用途：hooks.rs python_interpreter 按平台选择 Python 解释器命令
+                // （Windows=python，Linux/macOS=python3）；终端输入提交符不再依赖
+                // 平台 —— 统一为 Enter 字节 \r（见 queue.rs input_submit_char，
+                // pi 等原始模式 TUI 只认 \r 提交，\n 会被当作插入换行）
                 let platform = args.str_or("platform", "");
                 if platform.is_empty() {
                     return Err(anyhow::anyhow!("set-platform: missing platform"));

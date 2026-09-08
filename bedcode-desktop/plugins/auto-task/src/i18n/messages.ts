@@ -5,7 +5,7 @@
  * 新增/遗漏 key 在编译期即报错，保证两个语言文件的 key 永远同步。
  */
 
-export interface MessageSchema {
+export type MessageSchema = {
   // ==================== 自动任务弹窗 ====================
   title: string
   idle: string
