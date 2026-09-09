@@ -787,16 +787,81 @@ fn unique_remote_path(requested: String, used: &mut HashSet<String>) -> String {
 
 // ==================== 发送源选择 ====================
 
-/// 选择待发送文件（Android：SAF 选择器优先 _data 直读真实路径，否则按
-/// externalstorage/downloads raw: 解析；单次单个，可多次累加）
+/// 选择待发送文件（Android：SAF 选择器 → 可读路径优先 / SAF 中转复制兜底；
+/// 单次单个，可多次累加）
+///
+/// 分区存储下 `_data` 直读路径（/storage/emulated/0/...）经 std::fs::open 会
+/// EACCES（真机实证：上传 72MB 文件 `Permission denied (os error 13)`）——
+/// 需先探活可读性，不可读则把 content URI 中转复制到 app 私有 cache 再发送
+/// （私有路径 std::fs 恒可读）。
 ///
 /// 宿主自有命令不经插件门控——发送表单是宿主内置 UI 而非插件面板。
 #[tauri::command]
-pub async fn peer_pick_files(_app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    match crate::plugin::android_plugins::pick_file_android().await? {
-        Some(path) => Ok(vec![path]),
+pub async fn peer_pick_files(app_handle: AppHandle) -> crate::Result<Vec<String>> {
+    let Some(meta) = crate::plugin::android_plugins::pick_file_android_meta().await? else {
         // 用户取消选择
-        None => Ok(Vec::new()),
+        return Ok(Vec::new());
+    };
+    // 快速路径：`_data` 直读路径可打开（All Files Access 已授权等场景）→ 零复制
+    if !meta.data_path.is_empty() && std::fs::File::open(&meta.data_path).is_ok() {
+        return Ok(vec![meta.data_path]);
+    }
+    // 分区存储兜底：content URI → app 私有 cache 中转复制（保留原始文件名）
+    if meta.uri.is_empty() {
+        return Err(crate::AppError::Plugin(
+            "file pick returned neither readable path nor SAF uri".to_string(),
+        ));
+    }
+    let dest_name = relay_upload_dest_name(&meta.display_name);
+    let path = relay_copy_upload_source(&app_handle, &meta.uri, &dest_name).await?;
+    Ok(vec![path])
+}
+
+/// 上传源 SAF 中转复制：content URI → app 私有 cache（保留原始文件名）
+///
+/// SAF content URI 持持久化读授权，经 ContentResolver 顺序流复制到 app 私有
+/// cache（`bedcode_uploads` staging），复制完成后返回可被 std::fs 读取的绝对
+/// 路径。顺序流复制不可断点续传，大文件先整体落盘再传输（M2 relay copy 语义）。
+async fn relay_copy_upload_source(
+    app: &AppHandle,
+    uri: &str,
+    dest_name: &str,
+) -> crate::Result<String> {
+    let saf = app.state::<crate::plugin::saf_io::SafIoState>();
+    let handle = saf
+        .read_to_cache(uri, dest_name)
+        .map_err(|e| crate::AppError::Plugin(format!("upload relay copy start failed: {e}")))?;
+    loop {
+        let status = saf
+            .copy_status(&handle.copy_id)
+            .map_err(|e| crate::AppError::Plugin(format!("upload relay copy poll failed: {e}")))?;
+        if status.finished {
+            if status.cancelled {
+                return Err(crate::AppError::Plugin(
+                    "upload relay copy cancelled".to_string(),
+                ));
+            }
+            if let Some(err) = status.error {
+                return Err(crate::AppError::Plugin(format!("upload relay copy failed: {err}")));
+            }
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    Ok(handle.dest_path)
+}
+
+/// 上传源中转副本文件名：保留原始名；空/含路径分隔符兜底为安全名
+fn relay_upload_dest_name(display_name: &str) -> String {
+    let name: String = display_name
+        .chars()
+        .map(|c| if c == '/' || c == '\\' { '_' } else { c })
+        .collect();
+    let name = name.trim().to_string();
+    if name.is_empty() || name == "." || name == ".." {
+        "upload-file".to_string()
+    } else {
+        name
     }
 }
 
@@ -842,6 +907,20 @@ mod tests {
         assert!(retryable("rejected"));
         assert!(!retryable("running"));
         assert!(!retryable("completed"));
+    }
+
+    #[test]
+    fn relay_upload_dest_name_keeps_original_and_sanitizes() {
+        // 正常文件名原样保留
+        assert_eq!(relay_upload_dest_name("report.pdf"), "report.pdf");
+        assert_eq!(relay_upload_dest_name("照片 2026.zip"), "照片 2026.zip");
+        // 路径分隔符替换为下划线（SAF 文档名不含，纵深防御）
+        assert_eq!(relay_upload_dest_name("a/b\\c.txt"), "a_b_c.txt");
+        // 空/点/父目录回退安全名（safToCache 拒绝空名与 .. 逃逸）
+        assert_eq!(relay_upload_dest_name(""), "upload-file");
+        assert_eq!(relay_upload_dest_name("   "), "upload-file");
+        assert_eq!(relay_upload_dest_name("."), "upload-file");
+        assert_eq!(relay_upload_dest_name(".."), "upload-file");
     }
 
     #[test]

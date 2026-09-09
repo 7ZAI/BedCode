@@ -67,12 +67,26 @@ pub async fn pick_directory_android() -> crate::Result<Option<String>> {
     saf_response_to_path(&response, "directory")
 }
 
-/// 弹系统文件选择器，返回真实路径（用户取消返回 None）
+/// SAF 文件选择原始元数据（content URI 读授权凭据 + 展示名 + `_data` 直读路径）
 ///
-/// 优先用 Kotlin 侧 `_data` 列直读路径（Downloads/Media provider），
-/// 否则回退 saf_path 解析（externalstorage/downloads raw:）。
+/// 上传方向须保留 content URI：分区存储下 `_data` 直读路径（/storage/emulated/0/...）
+/// 经 std::fs::open 会 EACCES（真机实证），而 content URI 持持久化读授权，
+/// 可经 ContentResolver（SafIo 中转复制/流直传）读取。
+pub struct PickedFileMeta {
+    /// SAF content URI（`takePersistableUriPermission` 已取；读内容须经 ContentResolver）
+    pub uri: String,
+    /// 原始文件名（OpenableColumns.DISPLAY_NAME；可能为空）
+    pub display_name: String,
+    /// `_data` 列直读路径（Downloads/Media 等 provider 提供；分区存储下可能不可读）
+    pub data_path: String,
+}
+
+/// 弹系统文件选择器，返回 SAF 原始元数据（用户取消返回 None）
+///
+/// 不再在 Kotlin 侧解析真实路径——解析结果（`_data` / externalstorage raw:）
+/// 在分区存储下不可直读，交由调用方按「可读路径优先、否则 SAF 中转」兜底。
 #[cfg(target_os = "android")]
-pub async fn pick_file_android() -> crate::Result<Option<String>> {
+pub async fn pick_file_android_meta() -> crate::Result<Option<PickedFileMeta>> {
     let handle = SAF_PICKER_HANDLE
         .get()
         .ok_or_else(|| crate::AppError::Plugin("SafPickerPlugin not registered".to_string()))?;
@@ -80,13 +94,22 @@ pub async fn pick_file_android() -> crate::Result<Option<String>> {
         .run_mobile_plugin_async("pickFile", serde_json::json!({}))
         .await
         .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke pickFile: {}", e)))?;
-    // _data 直读路径优先（非空即用）
-    if let Some(p) = response.get("dataPath").and_then(|v| v.as_str()) {
-        if !p.is_empty() {
-            return Ok(Some(p.to_string()));
-        }
+    if response.get("cancelled").and_then(|v| v.as_bool()).unwrap_or(false) {
+        return Ok(None);
     }
-    saf_response_to_path(&response, "file")
+    Ok(Some(PickedFileMeta {
+        uri: response.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        display_name: response
+            .get("displayName")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+        data_path: response
+            .get("dataPath")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    }))
 }
 
 /// 非 Android 平台 SAF 选择器不可用（iOS 走系统文档选择器，另行实现）
@@ -98,7 +121,7 @@ pub async fn pick_directory_android() -> crate::Result<Option<String>> {
 }
 
 #[cfg(not(target_os = "android"))]
-pub async fn pick_file_android() -> crate::Result<Option<String>> {
+pub async fn pick_file_android_meta() -> crate::Result<Option<PickedFileMeta>> {
     Err(crate::AppError::Plugin(
         "SAF picker unavailable on this platform".to_string(),
     ))
