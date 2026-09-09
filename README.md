@@ -4,30 +4,21 @@
 
 # BedCode
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 [English](README_en.md) | 简体中文
 
 </div>
 
-BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端会话（Claude Code、opencode 等 Agent CLI），手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管你的终端。任意命令行程序（含 TUI 应用）都可以在桌面端启动、从手机远程操作。
+BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端会话（Pi、Opencode 等 Agent CLI），手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管你的终端。任意命令行程序（含 TUI 应用）都可以在桌面端启动、从手机远程操作。
 
-插件系统是本项目的另一核心：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Auto Task（Agent 任务队列）、File Transfer（局域网文件互传）三个开箱即用的插件，让宿主能力像装扩展一样自由生长。
+插件系统是另一核心能力：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Auto Task（Agent 任务队列）、File Transfer（局域网文件互传）三个开箱即用的插件，让宿主能力可自由扩展一样自由。
 
 > 使用场景：如应用名所述，躺床上编程；或在家务、带孩子、睡觉的同时处理或监控开发编程任务。
-
-## 界面
-
-**桌面端**
-
-<img src="bedcode-desktop/desktop_app.png" alt="BedCode 桌面端">
-
-**移动端（平板）**
-
-<img src="bedcode-mobile/bedcode_mobile.jpg" alt="BedCode 移动端">
 
 ## 功能特性
 
@@ -118,7 +109,7 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 <tr><th align="left">分类</th><th align="left">技术</th></tr>
 </thead>
 <tbody>
-<tr><td>框架</td><td>Tauri 2.0（桌面端 Windows / 移动端 Android）</td></tr>
+<tr><td>框架</td><td>Tauri 2.0（桌面端 Windows / Linux / 移动端 Android）</td></tr>
 <tr><td>前端</td><td>Vue 3 + TypeScript + Vite</td></tr>
 <tr><td>样式</td><td>TailwindCSS，状态管理 Pinia + vue-router</td></tr>
 <tr><td>后端</td><td>Rust（Tokio 异步运行时），Actix Web 4 + tokio-tungstenite</td></tr>
@@ -147,15 +138,16 @@ Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 
 </thead>
 <tbody>
 <tr><td>Windows</td><td align="center">✔</td><td align="center">—</td></tr>
+<tr><td>Linux</td><td align="center">✔</td><td align="center">—</td></tr>
 <tr><td>Android</td><td align="center">—</td><td align="center">✔</td></tr>
-<tr><td>macOS&nbsp;/&nbsp;Linux</td><td align="center">预留</td><td align="center">—</td></tr>
+<tr><td>macOS</td><td align="center">预留</td><td align="center">—</td></tr>
 <tr><td>iOS</td><td align="center">—</td><td align="center">预留</td></tr>
 </tbody>
 </table>
 
-当前聚焦 **Windows（桌面端）+ Android（移动端）** 双平台，两端核心能力（终端会话、文件服务、插件系统）均已跑通。跨平台适配调试测试工作量较大（系统权限模型、打包分发、平台集成），精力有限暂未覆盖，有志同道合或者需求者可下载源码自行适配。
+当前聚焦 **Windows / Linux（桌面端）+ Android（移动端）** 三平台，两端核心能力（终端会话、文件服务、插件系统）均已跑通。剩余 macOS / iOS 适配涉及系统权限模型、打包分发、平台集成等差异化工作，精力有限暂未覆盖，有志同道合或者需求者可下载源码自行适配。
 
-> 依托 Tauri 2.0 架构（Rust 后端 + Web 前端），跨平台的可能性与便利性天然保留：核心业务逻辑与 UI 均为跨平台技术，未来扩展 macOS / Linux / iOS 时无需重写业务代码，主要工作是平台适配层（打包、权限、系统 API 对接）。
+> 依托 Tauri 2.0 架构（Rust 后端 + Web 前端），跨平台的可能性与便利性天然保留：核心业务逻辑与 UI 均为跨平台技术，未来扩展 macOS / iOS 时无需重写业务代码，主要工作是平台适配层（打包、权限、系统 API 对接）。
 
 ### 环境要求
 
@@ -209,18 +201,21 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 **正在开发（未发布）**
 
-- **PTY 输出管线重构** — 终端输出链路全面升级：新二进制流式帧协议（TB v2，16B 帧头 + 序列号，支持缺口检测与重播去重）、每会话独立终端 WebSocket 路由（`/ws/terminal/session/{id}`）、移动端直连终端 WS（authentication 首消息 + 状态机缓冲 + 重连退避）、输出队列 seq 化快照订阅（订阅 → 快照 → HistoryEnd → 实时增量）、旧广播兼容通道拆除。桌面端服务端与移动端客户端均已完成，待联调验证后随下一版本发布
-- **AI Chatbox WASI 预打开文件访问** — 插件构建目标切换 `wasm32-wasip2`（产物直接为 WASI 组件），宿主接入 wasmtime-wasi：激活时按插件配置 preopen 目录，插件经 WASI preview2 `std::fs` 直读写文件，不再完全依赖宿主 host_fs 代理；配套三端配置契约（`useSelfFileAccess` / `fileAccessDir` / `defaultDir`，plugin.json + 前端 + Rust 对齐），preopen 前复用 `fs_auth.is_granted()` 无弹窗授权校验，未授权自动回退 host_fs
+- **桌面端代码查看器** — 桌面端终端窗口新增左侧代码查看器面板（对齐移动端已有能力）：项目文件树浏览 + 多标签代码视图 + shiki 语法高亮（VS Code 同源，双主题 CSS 变量）+ 会话 working_dir 自动锚定 + 大文件 / 二进制 / 权限错误拦截 + 终端宽度动态分配。后端 `commands/code_viewer.rs` 提供 `list_code_dir` / `read_code_file` / `stat_code_file` 三个命令，路径穿越 / 编码检测 / 权限错误全链路防御（16 内联单测）；前端状态层 `useCodeViewer` + 高亮 `useCodeHighlighter` + 面板组件 `CodeViewerPanel` / `FileTree` / `CodeTabs`，i18n zh/en 同步。当前 feature/code-viewer 分支完成，随下一版本发布
+- **磁盘清理插件** — 桌面端内置 WASI 组件，面向 Windows `%USERPROFILE%\AppData\Local` 与 Linux `$XDG_CACHE_HOME` 的个人缓存与用户域系统残留，对标 CCleaner 类工具的缓存清理能力。零 WIT 改动、零 ABI bump：插件经 manifest `wasiPreopenDirs: ["${cacheRoot}"]` 挂载用户级缓存根，宿主按平台解析挂载点，插件只感知固定挂载点；删除动作 = move 到隔离区 + 惰性过期，不绕过隔离区。多轮 issue 迭代完成（骨架 → 规则 → 硬黑名单 → 隔离区 → 批次还原 → 惰性过期 → Linux 平台适配 → i18n 字典）
 
 **规划中**
 
-- **加密接口实现** — 宿主已具备完整加密工具链：对称 AEAD（AES-256-GCM / ChaCha20-Poly1305）+ HKDF 会话密钥派生、X25519 ECDH 密钥协商、RSA-OAEP/PSS、混合加密（非对称封装会话密钥 + 对称加密载荷），当前用于 HTTP 报文加密与文件加密传输。规划将其开放为插件 SDK 加密接口（插件可加解密 / 签名验签 / 密钥协商），并为终端与文件传输链路提供端到端加密选项
-- **内网穿透扩展支持** — 桌面端以插件形式实现内网穿透：经用户自购云服务器（中继，LE 证书 TLS 终止）让外网移动端像在内网一样使用（终端 WS + 文件服务 HTTP + 插件 HTTP 端点全穿透，协议无关透明管道）；含安全加固：JWT 密钥随机化、双层限速、128-bit 隧道 ID 即凭据、首次配对仅限局域网、暴露控制 kill switch + 默认 8h 自动关闭 + 并发设备上限。采用可信中继 TLS 模型，不做端到端加密
+- **内网穿透扩展支持** — 桌面端以插件形式实现内网穿透：经用户自购云服务器（中继，LE 证书 TLS 终止）让外网移动端像在内网一样使用（终端 WS + 文件服务 HTTP + 插件 HTTP 端点全穿透，协议无关透明管道）；含安全加固：JWT 密钥随机化、双层限速、128-bit 隧道 ID 即凭据、首次配对仅限局域网、暴露控制 kill switch + 默认 8h 自动关闭 + 并发设备上限。采用可信中继 TLS 模型，不做端到端加密（搁置到有钱买服务器为止😭）
+- **AI Agent CLI UI 化管理** — 把当前仅通过终端会话操作的 Agent CLI（Claude Code / pi / opencode / Codex）扩展为桌面端图形化管理面板：Agent 版本检测与配置（模型供应商、系统提示、权限预设、上下文策略）、任务编排（预设 / 定时 / 依赖图）、并发队列与授权代管、对话日志 JSONL 检索与回放、执行状态可视（token / 成本 / 时长）、失败重试与人工介入。基于现有 Auto Task 插件的会话桥接能力，UI 层下沉到插件沙箱，宿主仅提供 Agent CLI 生命周期钩子
 
 **架构演进**
 
-- **WASI 标准化红利** — 插件运行于 WASM Component Model + wasmtime 沙箱之上，已接入 WASI preview2（文件系统 / 预打开目录）。随 WASI 标准完善（网络、时钟、进程等系统接口标准化），插件将在安全沙箱内获得近原生系统能力，且保持跨宿主可移植、跨语言、跨平台开发
-- **彻底插件化愿景** — 宿主保持最小核心（窗口、通信、认证、插件加载），终端、文件服务、AI 工具等一切能力皆以插件形式热插拔；「host + plugin」架构让工具制作从少数开发者手中解放——任何人用自己的领域语言描述需求，云上 AI 生成插件、构建、托管，装进宿主即装即用，人人都能直接面对自己的需求
+- **Wasmtime 微内核 · 插件化演进** — 宿主持续向微内核收敛：wasmtime 沙箱 + 组件加载器 + 认证通信是不可切割的核心，其余能力（终端、文件服务、AI Chatbox、Auto Task、File Transfer、磁盘清理）均以 WASM 插件形态热插拔。插件运行于 WASM Component Model + wasmtime 沙箱之上，已接入 WASI preview2（文件系统 / 预打开目录）。随 WASI 标准完善（网络、时钟、进程等系统接口标准化），插件将在安全沙箱内获得近原生系统能力，且保持跨宿主可移植、跨语言、跨平台开发——宿主无需重编译即可引入新能力
+
+## 插件化+AI 有没有搞头？
+
+- **应用插件化 + AI 前景** — 宿主保持最小核心、一切能力皆以插件形式热插拔扩展；「host + plugin」架构 提供的SDK 封装了普通人最缺的工程化能力（SDK将其标准化） 即给AI确立了开发边界 又扩展了应用 让软件开发真正走入普罗大众——任何人都能用自然语言描述需求构建扩展应用。算力 + 云上 AI Agent构建插件将作为一种服务形式，装进宿主App,即装即用。
 
 ## 贡献指南
 
