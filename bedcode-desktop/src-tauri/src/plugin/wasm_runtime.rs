@@ -27,7 +27,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::{Mutex, RwLock};
-use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter};
+use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktraceDetails};
 
 // ==================== Resource Limits & Interruption ====================
 
@@ -41,9 +41,16 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter};
 /// - 纯 guest 死循环持续烧燃料，必然耗尽被 trap（确定性，不受宿主负载影响）
 /// - 每次导出调用前重置燃料（见 component::exports），预算只约束单次调用内
 ///   guest 计算量，与宿主延迟彻底解耦
-/// 64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
-/// 覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
+///   64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
+///   覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
 const FUEL_PER_CALL: u64 = 64_000_000_000;
+/// 插件调试模式（`BEDCODE_PLUGIN_DEBUG=1`）下燃料预算放大倍率
+///
+/// debug profile 的 wasm 产物不做优化，指令数与体积相对 release 成倍膨胀
+/// （典型 10-30 倍），同一逻辑在 debug 产物下烧燃料更快；若不放大，正常
+/// 插件调用可能被燃料看门狗误判为失控 trap。取 32 倍覆盖 debug 膨胀上界
+/// 并留余量；仅 [`plugin_debug_mode`] 为真时生效（`[`fuel_per_call`]`）
+const FUEL_DEBUG_MULTIPLIER: u64 = 32;
 /// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
 ///
 /// 双重身份：既是 [`ResourceLimiter`] 的增长拒绝线，也是 Engine 层
@@ -73,6 +80,27 @@ const MAX_PLUGIN_INSTANCES_PER_STORE: usize = 8;
 const MAX_PLUGIN_MEMORIES_PER_STORE: usize = 4;
 /// 单 Store 表数量上限——adapter module 自带间接调用表，正常插件个位数
 const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
+
+/// 插件调试模式是否开启（dev 构建下读 `BEDCODE_PLUGIN_DEBUG`，非空即开）
+///
+/// 仅 `cfg!(debug_assertions)` 生效：release 构建忽略该变量（调试产物不会
+/// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
+/// 调试模式是会话态开关，不新增持久化配置项。
+pub(crate) fn plugin_debug_mode() -> bool {
+    cfg!(debug_assertions) && std::env::var("BEDCODE_PLUGIN_DEBUG").map(|v| !v.is_empty()).unwrap_or(false)
+}
+
+/// 单次导出调用的燃料预算（debug 模式下按倍率放大，见 [`FUEL_DEBUG_MULTIPLIER`]）
+///
+/// 所有燃料注入点（实例化 / ABI 协商 / 每次导出调用前）统一走此函数，
+/// 避免调试模式与非调试模式语义分叉
+pub(crate) fn fuel_per_call() -> u64 {
+    if plugin_debug_mode() {
+        FUEL_PER_CALL * FUEL_DEBUG_MULTIPLIER
+    } else {
+        FUEL_PER_CALL
+    }
+}
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
 pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -546,6 +574,23 @@ impl WasmRuntime {
         let mut config = Config::new();
         // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
         config.consume_fuel(true);
+        // WASM 内部调用栈：trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带
+        // 插件内部函数调用链（names section 函数名，release 构建即有），随
+        // AppError::Plugin 进 error.log 与插件 Degraded 状态，AI agent 无需重跑
+        // 即可定位插件内部故障点。wasmtime 47 的 backtrace 在 default features
+        // 内（零编译成本），此处显式钉死 32 帧防止上游默认（20 帧）漂移
+        config.wasm_backtrace_max_frames(Some(std::num::NonZeroUsize::new(32).expect("32 > 0")));
+        // 行号解析：Environment 模式读 WASMTIME_BACKTRACE_DETAILS——无 DWARF 时
+        // 零开销回退到函数名栈（release 插件无调试信息，不硬编码强制解析）；
+        // 插件调试模式（BEDCODE_PLUGIN_DEBUG=1）下宿主先置该环境变量再构建
+        // Engine，调试产物（debug profile 保留 DWARF）即可拿到 file:line 行号
+        if plugin_debug_mode() {
+            // edition 2021 下 set_var 非 unsafe；此处单线程启动早期调用，
+            // 无并发读写风险。Environment 模式在 wasm_backtrace_details 调用
+            // 时读取该变量，必须先设置再配置
+            std::env::set_var("WASMTIME_BACKTRACE_DETAILS", "1");
+        }
+        config.wasm_backtrace_details(WasmBacktraceDetails::Environment);
         // 线性内存预留 = 估算的最大线性内存（与 limiter 上限严格一致，见
         // MAX_PLUGIN_MEMORY_BYTES）：实例化时一次性预留 256MiB 虚拟地址空间，
         // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
@@ -964,12 +1009,16 @@ mod tests {
     /// 测试插件为独立 crate（packages/plugin-component-test），基于
     /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
     /// 源码变更检测与 build_test_wasm 同策略
+    ///
+    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
+    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
     fn build_test_component() -> Vec<u8> {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-component-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let profile = if plugin_debug_mode() { "debug" } else { "release" };
+        let output_dir = plugin_dir.join(format!("target/wasm32-unknown-unknown/{}", profile));
         let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
 
         if module_path.exists() {
@@ -994,15 +1043,13 @@ mod tests {
         }
 
         let manifest_path = plugin_dir.join("Cargo.toml");
+        let mut args = vec!["build", "--target", "wasm32-unknown-unknown"];
+        if profile == "release" {
+            args.push("--release");
+        }
+        args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
         let status = std::process::Command::new("cargo")
-            .args([
-                "build",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
+            .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
@@ -1742,6 +1789,180 @@ mod tests {
             .bedcode_plugin_command()
             .call_invoke(store, "test.echo", r#"{"a":1}"#);
         assert!(result.is_err(), "fuel exhausted must trap: {:?}", result);
+    }
+
+    /// ticket 01（wasm backtrace）：trap 错误串携带 WASM 内部函数调用栈
+    ///
+    /// 显式 panic 走生产 Engine（WasmRuntime::new 已开 wasm_backtrace_max_frames
+    /// 32 帧）——错误串必须含 `wasm backtrace:` 且栈穿透到业务函数 invoke
+    /// （names section，release 构建即有），AI agent 无需重跑即可从错误串
+    /// 定位插件内部故障点
+    #[test]
+    fn test_component_trap_error_includes_wasm_backtrace() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate test component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(async { plugin.invoke_command("test.panic", "{}").expect_err("panic must trap").to_string() });
+        assert!(
+            err.contains("wasm backtrace:"),
+            "trap error must include wasm backtrace marker, got: {}",
+            err
+        );
+        // 栈内含插件业务函数名（invoke 是 command 导出实现），证明函数级可读
+        assert!(
+            err.contains("invoke"),
+            "trap backtrace must include plugin function name, got: {}",
+            err
+        );
+    }
+
+    /// 回归：开启 backtrace 不改变正常调用行为（非 trap 路径零影响）
+    #[test]
+    fn test_component_backtrace_enabled_normal_calls_unaffected() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate test component");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let echo = rt.block_on(async {
+            plugin
+                .invoke_command("test.echo", r#"{"hello":"backtrace-on"}"#)
+                .expect("normal invoke must succeed with backtrace enabled")
+        });
+        assert!(echo.contains("backtrace-on"), "got: {}", echo);
+        // 正常返回的 JSON 载荷不应混入 backtrace 文本（非 trap 路径零影响）
+        assert!(!echo.contains("wasm backtrace:"), "got: {}", echo);
+    }
+
+    /// ticket 03（调试模式端到端冒烟）：后台日志行号栈
+    ///
+    /// 仅当宿主持有 `BEDCODE_PLUGIN_DEBUG=1` 时有效（此时构建链路以 debug
+    /// profile 产出带 DWARF 的测试组件，WasmRuntime 也已置 WASMTIME_BACKTRACE_DETAILS
+    /// 开行号解析）——断言 trap 错误串含 `file:line` 行号而非仅函数名。
+    /// 未设该开关的正常测试环境自动跳过（SKIP 输出，不失败）
+    #[test]
+    fn test_debug_mode_trap_includes_line_info() {
+        if !plugin_debug_mode() {
+            eprintln!("SKIP: BEDCODE_PLUGIN_DEBUG 未设置，跳过行号冒烟（调试模式是手工开关）");
+            return;
+        }
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile debug test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate debug test component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt
+            .block_on(async { plugin.invoke_command("test.panic", "{}").expect_err("panic must trap").to_string() });
+        assert!(
+            err.contains(".rs:"),
+            "debug backtrace should include file:line symbols, got: {}",
+            err
+        );
+    }
+
+    /// ticket 02（trap 宿主日志）：trap 时宿主侧产生含 plugin_id 的 error 级记录
+    ///
+    /// 即使调用方静默忽略返回错误，崩溃证据也经 tracing error 落盘；
+    /// trap 详情（含 wasm backtrace）作为结构化字段随日志携带
+    #[test]
+    fn test_component_trap_emits_host_error_log() {
+        use crate::plugin::wasm_runtime::host_impl::log::capture::{capture, CapturedEvent};
+        use tracing::Level;
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate test component");
+
+        let captured = capture(|| {
+            // 通过 invoke_command 触发显式 panic（确定性 trap，栈穿透到 invoke）
+            let _ = plugin.invoke_command("test.panic", "{}");
+        });
+
+        let errors: Vec<&CapturedEvent> = captured.iter().filter(|e| e.level == Level::ERROR).collect();
+        assert!(
+            !errors.is_empty(),
+            "trap must emit host error log, captured: {:?}",
+            captured
+        );
+        let host_error = errors[0];
+        let fields: std::collections::HashMap<&str, &str> = host_error
+            .fields
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+        assert_eq!(fields.get("plugin_id"), Some(&TEST_PLUGIN_ID), "got: {:?}", fields);
+        assert_eq!(fields.get("export"), Some(&"invoke_command"));
+        assert!(
+            fields.get("trap").map(|t| t.contains("wasm backtrace:")).unwrap_or(false),
+            "trap field should carry wasm backtrace, got: {:?}",
+            fields
+        );
+    }
+
+    /// ticket 02：guest 自报失败（内层 Err）不升级为宿主 error
+    ///
+    /// 双层 Result 语义：Ok(Err(msg)) 是插件自己报告的失败，按既有级别（warn/返回）
+    /// 记录，不产生宿主 error 日志——只有真 trap（外层 Err）才走 error 证据路径
+    #[test]
+    fn test_component_guest_self_reported_failure_no_host_error() {
+        use crate::plugin::wasm_runtime::host_impl::log::capture::{capture, CapturedEvent};
+        use tracing::Level;
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+
+        let captured = {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                // 预写 storage key：guest on_startup 读到后返回 Err（见测试插件实现）
+                host_ctx
+                    .storage
+                    .set(
+                        TEST_PLUGIN_ID,
+                        "component-test-fail-startup",
+                        serde_json::json!("x"),
+                    )
+                    .await
+                    .expect("preset failing-startup key");
+                let mut plugin = wasm_runtime
+                    .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[])
+                    .expect("instantiate test component");
+                capture(|| {
+                    let result = plugin.on_startup();
+                    assert!(
+                        matches!(result, Ok(Err(_))),
+                        "guest should self-report startup failure, got: {:?}",
+                        result
+                    );
+                })
+            })
+        };
+
+        assert!(
+            !captured.iter().any(|e| e.level == Level::ERROR),
+            "guest self-reported failure must not emit host error, captured: {:?}",
+            captured
+        );
     }
 
     /// trap 后 Store 被污染：同一实例后续调用持续报 `cannot enter component instance`

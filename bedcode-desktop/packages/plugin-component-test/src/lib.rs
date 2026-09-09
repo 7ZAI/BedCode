@@ -27,6 +27,13 @@ struct Guest;
 
 impl command::Guest for Guest {
     fn invoke(name: String, args: String) -> String {
+        // 测试专用 trap 命令：宿主测试制造确定性 panic（验证 wasm backtrace
+        // 栈穿透到业务函数 invoke，而非只在宿主分配 helper 处；trap 宿主日志
+        // 断言亦用此命令）。panic 在 wasm32 上即 unreachable trap
+        if name == "test.panic" {
+            panic!("intentional panic for wasm backtrace test");
+        }
+
         let mut out = serde_json::json!({
             "name": name,
             "args": args,

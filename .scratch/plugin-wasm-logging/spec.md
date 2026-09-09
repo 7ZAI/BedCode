@@ -1,6 +1,6 @@
 # Spec: 插件 WASM 日志优化——dev 调试模式 + trap 内部调用栈
 
-> Status: ready-for-agent
+> Status: done（2026-09-10 实施完成，4 个 ticket 全部落地并验证）
 > 范围：bedcode-desktop 插件系统（WASM 运行时）；不涉及移动端与前端日志框架
 > 关联：`.scratch/plugin-wasm-logging/issues/`（ticket 由实施拆分）
 

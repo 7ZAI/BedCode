@@ -24,7 +24,9 @@ use super::host_impl::{
     api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform,
     process, session, status, storage, terminal, timer,
 };
-use super::{block_on_async, WasmHostContext, WasmPluginState, FUEL_PER_CALL};
+use super::{block_on_async, fuel_per_call, WasmHostContext, WasmPluginState};
+#[cfg(test)]
+use super::plugin_debug_mode;
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
@@ -450,7 +452,7 @@ impl LoadedWasmPlugin {
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
         store
-            .set_fuel(FUEL_PER_CALL)
+            .set_fuel(fuel_per_call())
             .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
@@ -488,7 +490,7 @@ impl LoadedWasmPlugin {
     fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
         store
-            .set_fuel(FUEL_PER_CALL)
+            .set_fuel(fuel_per_call())
             .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
         let exports = Plugin::new(&mut *store, instance)
             .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
@@ -524,10 +526,26 @@ impl LoadedWasmPlugin {
     /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
     fn exports(&mut self) -> crate::Result<Plugin> {
         self.store
-            .set_fuel(FUEL_PER_CALL)
+            .set_fuel(fuel_per_call())
             .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
         Plugin::new(&mut self.store, &self.instance)
             .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
+    }
+
+    /// WASM 导出调用 trap 的统一宿主日志入口
+    ///
+    /// 双层 Result 的外层 Err 即 trap（panic/unreachable、栈溢出、燃料耗尽、
+    /// 内存越界）——错误串在此已携带 wasm backtrace（见 `WasmRuntime::new` 的
+    /// `wasm_backtrace_max_frames` 配置）。即使调用方静默忽略返回错误，此处
+    /// error 级日志保证崩溃证据落盘；AI agent grep error 日志即可定位
+    /// 「哪个插件在哪个导出上崩了」。guest 自报失败（内层 Err）不经过此入口
+    fn log_trap(&self, export: &str, err: &dyn std::fmt::Display) {
+        tracing::error!(
+            plugin_id = %self.plugin_id,
+            export = export,
+            trap = %err,
+            "WASM plugin export call trapped"
+        );
     }
 
     /// 调用插件的 activate 导出
@@ -537,7 +555,10 @@ impl LoadedWasmPlugin {
         match lifecycle.call_activate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM activate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM activate() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("activate", &e);
+                Err(AppError::Plugin(format!("WASM activate() call failed: {}", e)))
+            }
         }
     }
 
@@ -548,7 +569,10 @@ impl LoadedWasmPlugin {
         match lifecycle.call_deactivate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM deactivate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM deactivate() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("deactivate", &e);
+                Err(AppError::Plugin(format!("WASM deactivate() call failed: {}", e)))
+            }
         }
     }
 
@@ -556,8 +580,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
         let exports = self.exports()?;
         let cmd = exports.bedcode_plugin_command();
-        cmd.call_invoke(&mut self.store, command_name, args_json)
-            .map_err(|e| AppError::Plugin(format!("WASM invoke_command() call failed: {}", e)))
+        match cmd.call_invoke(&mut self.store, command_name, args_json) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("invoke_command", &e);
+                Err(AppError::Plugin(format!("WASM invoke_command() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_terminal_input 导出
@@ -565,9 +594,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks
-            .call_on_terminal_input(&mut self.store, session_id, text)
-            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
+        match hooks.call_on_terminal_input(&mut self.store, session_id, text) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_terminal_input", &e);
+                Err(AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_terminal_output 导出
@@ -575,9 +608,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks
-            .call_on_terminal_output(&mut self.store, session_id, data)
-            .map_err(|e| AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
+        match hooks.call_on_terminal_output(&mut self.store, session_id, data) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_terminal_output", &e);
+                Err(AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_startup 导出
@@ -588,9 +625,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle
-            .call_on_startup(&mut self.store)
-            .map_err(|e| AppError::Plugin(format!("WASM on_startup() call failed: {}", e)))
+        match lifecycle.call_on_startup(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_startup", &e);
+                Err(AppError::Plugin(format!("WASM on_startup() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_shutdown 导出
@@ -600,9 +641,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle
-            .call_on_shutdown(&mut self.store)
-            .map_err(|e| AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e)))
+        match lifecycle.call_on_shutdown(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_shutdown", &e);
+                Err(AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的消息总线消息接收导出
@@ -616,7 +661,10 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_message() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!("WASM on_message() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("on_message", &e);
+                Err(AppError::Plugin(format!("WASM on_message() call failed: {}", e)))
+            }
         }
     }
 
@@ -631,10 +679,13 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_session_lifecycle() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!(
-                "WASM on_session_lifecycle() call failed: {}",
-                e
-            ))),
+            Err(e) => {
+                self.log_trap("on_session_lifecycle", &e);
+                Err(AppError::Plugin(format!(
+                    "WASM on_session_lifecycle() call failed: {}",
+                    e
+                )))
+            }
         }
     }
 
@@ -649,10 +700,13 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_input_submitted() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!(
-                "WASM on_input_submitted() call failed: {}",
-                e
-            ))),
+            Err(e) => {
+                self.log_trap("on_input_submitted", &e);
+                Err(AppError::Plugin(format!(
+                    "WASM on_input_submitted() call failed: {}",
+                    e
+                )))
+            }
         }
     }
 
@@ -666,7 +720,10 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_process_done() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("on_process_done", &e);
+                Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e)))
+            }
         }
     }
 
@@ -675,9 +732,13 @@ impl LoadedWasmPlugin {
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
-        manifest
-            .call_get(&mut self.store)
-            .map_err(|e| AppError::Plugin(format!("WASM manifest() call failed: {}", e)))
+        match manifest.call_get(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("get_manifest", &e);
+                Err(AppError::Plugin(format!("WASM manifest() call failed: {}", e)))
+            }
+        }
     }
 
     /// 测试访问器：直接获取 Store/Instance（燃料断言与耗尽 trap 测试用）
@@ -804,10 +865,14 @@ mod tests {
 
     /// 构建测试引擎：燃料看门狗必须与生产配置一致（WasmRuntime::new）
     ///
-    /// 否则 `Store::set_fuel` 在实例化时直接报错（consume_fuel 未开启）
+    /// 否则 `Store::set_fuel` 在实例化时直接报错（consume_fuel 未开启）；
+    /// backtrace 配置同样与生产同步（wasm_backtrace_max_frames + Environment
+    /// 详情），保证 trap 错误串在测试与生产形态一致
     fn test_engine() -> wasmtime::Engine {
         let mut config = wasmtime::Config::new();
         config.consume_fuel(true);
+        config.wasm_backtrace_max_frames(Some(std::num::NonZeroUsize::new(32).expect("32 > 0")));
+        config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Environment);
         wasmtime::Engine::new(&config).expect("create test engine")
     }
 
@@ -831,12 +896,16 @@ mod tests {
     /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
     /// 源码变更检测与 wasm_runtime.rs 测试同策略（产物存在且源码未更新
     /// 时直接复用，避免每次跑测试都触发 cargo build）
+    ///
+    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
+    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
     fn build_test_component() -> Vec<u8> {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-component-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let profile = if plugin_debug_mode() { "debug" } else { "release" };
+        let output_dir = plugin_dir.join(format!("target/wasm32-unknown-unknown/{}", profile));
         let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
 
         if module_path.exists() {
@@ -861,15 +930,13 @@ mod tests {
         }
 
         let manifest_path = plugin_dir.join("Cargo.toml");
+        let mut args = vec!["build", "--target", "wasm32-unknown-unknown"];
+        if profile == "release" {
+            args.push("--release");
+        }
+        args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
         let status = std::process::Command::new("cargo")
-            .args([
-                "build",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
+            .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
@@ -951,7 +1018,7 @@ mod tests {
                 let (store, _) = plugin.raw_store();
                 let remaining = store.get_fuel().expect("get fuel");
                 assert!(
-                    remaining < FUEL_PER_CALL,
+                    remaining < fuel_per_call(),
                     "activate must consume fuel, remaining={}",
                     remaining
                 );

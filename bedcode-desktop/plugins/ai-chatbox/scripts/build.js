@@ -16,6 +16,13 @@ const ROOT = resolve(__dirname, '..')
 const PLUGIN_ID = 'com.bedcode.ai-chatbox'
 const RUST_LIB_NAME = 'bedcode_plugin_ai_chatbox'
 
+// 插件调试模式：BEDCODE_PLUGIN_DEBUG=1 → wasm 以 debug profile 构建（保留
+// DWARF，宿主开启 backtrace 行号栈用）；release 构建忽略（宿主侧以
+// cfg!(debug_assertions) 兜底，见 wasm_runtime.rs plugin_debug_mode）
+const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
+const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
+const WASM_PROFILE_DIR = `rust/target/wasm32-wasip2/${WASM_PROFILE}`
+
 // 产物目标目录
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
 
@@ -41,7 +48,7 @@ function buildRust() {
   // - 插件 std::fs 映射到 WASI（宿主 WASI preopen /data 后可直接读写，见 useSelfFileAccess）
   // 既有宿主接口（host_fs/host_db/...）在 wasip2 下同样可用，行为不变
   run(
-    'cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml --release',
+    `cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
   )
 }
 
@@ -67,21 +74,21 @@ function copyArtifacts() {
     cpSync(iconSrc, resolve(RESOURCES_DIR, 'icon.svg'))
   }
 
-  // 复制 WASM 模块
-  const wasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/release', `${RUST_LIB_NAME}.wasm`)
+  // 复制 WASM 模块（按构建 profile 取产物；缺失时回退另一 profile）
+  const wasmPath = resolve(ROOT, WASM_PROFILE_DIR, `${RUST_LIB_NAME}.wasm`)
 
   if (existsSync(wasmPath)) {
     cpSync(wasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
-    console.log(`[build] Copied WASM (release): ${RUST_LIB_NAME}.wasm`)
+    console.log(`[build] Copied WASM (${WASM_PROFILE}): ${RUST_LIB_NAME}.wasm`)
   } else {
-    // 尝试 debug 构建
-    const debugWasmPath = resolve(ROOT, 'rust/target/wasm32-wasip2/debug', `${RUST_LIB_NAME}.wasm`)
-    if (!existsSync(debugWasmPath)) {
-      console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${debugWasmPath}`)
+    const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
+    const fallbackWasmPath = resolve(ROOT, `rust/target/wasm32-wasip2/${fallbackProfile}`, `${RUST_LIB_NAME}.wasm`)
+    if (!existsSync(fallbackWasmPath)) {
+      console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${fallbackWasmPath}`)
       process.exit(1)
     }
-    cpSync(debugWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
-    console.log(`[build] Copied WASM (debug): ${RUST_LIB_NAME}.wasm`)
+    cpSync(fallbackWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
+    console.log(`[build] Copied WASM (${fallbackProfile} fallback): ${RUST_LIB_NAME}.wasm`)
   }
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
@@ -105,7 +112,7 @@ if (watchMode) {
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
     extraFiles: ['icon.svg'],
-    wasmFile: `rust/target/wasm32-wasip2/release/${RUST_LIB_NAME}.wasm`,
+    wasmFile: `${WASM_PROFILE_DIR}/${RUST_LIB_NAME}.wasm`,
   })
 } else if (frontendOnly) {
   buildFrontend()

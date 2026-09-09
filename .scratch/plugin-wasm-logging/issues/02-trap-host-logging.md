@@ -6,7 +6,7 @@
 
 **Status:** ready-for-agent
 
-- [ ] WASM 导出调用的 trap 分支（双层 Result 的 Err）统一补宿主侧 error 日志，携带 plugin_id 与 trap 详情（含调用栈）
-- [ ] 双层 Result 语义不变：guest 自报失败（Ok(Err(msg)) 路径）仍只按既有级别记录，不升级为宿主 error
-- [ ] 错误仍按既有控制流返回（日志为证据、返回为控制流），调用方行为零变化
-- [ ] 测试：trap 场景断言宿主侧产生含 plugin_id 的 error 级记录；guest 自报失败场景断言不产生宿主 error
+- [x] WASM 导出调用的 trap 分支（双层 Result 的 Err）统一补宿主侧 error 日志，携带 plugin_id 与 trap 详情（含调用栈）
+- [x] 双层 Result 语义不变：guest 自报失败（Ok(Err(msg)) 路径）仍只按既有级别记录，不升级为宿主 error
+- [x] 错误仍按既有控制流返回（日志为证据、返回为控制流），调用方行为零变化
+- [x] 测试：trap 场景断言宿主侧产生含 plugin_id 的 error 级记录；guest 自报失败场景断言不产生宿主 error
