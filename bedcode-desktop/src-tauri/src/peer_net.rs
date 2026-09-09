@@ -267,6 +267,7 @@ pub async fn list_discovered_peers(app: AppHandle) -> crate::Result<Vec<Discover
 /// 成功后连接句柄登记进状态容器保持会话存活，并发 `peer-connected` 事件。
 /// 重复拨号同一节点以新连接替换旧句柄（旧连接随即关闭）。
 #[tauri::command]
+#[tracing::instrument(skip_all, fields(node_id = %node_id))]
 pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPeerResultDto> {
     let parsed = parse_node_id(&node_id)?;
     // 诊断插桩：拨号入口（出口三态已有日志，此处补发起时刻与目标可见性）

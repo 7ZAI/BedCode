@@ -58,7 +58,7 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 ### Error Handling & Thread Safety
 
 - 统一错误类型 `AppError`：`pub type Result<T> = std::result::Result<T, AppError>`
-- 关键调用链用 `anyhow::Context` 添加上下文；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装
+- 关键调用链在错误构造/转换处带操作描述（`AppError::X(format!(...))`、`io::Error` 自描述包装或 `anyhow::Context` 跨桥），禁止裸 `?` 透传无上下文错误（含 `io::Result` 契约内）；`tokio::spawn` 用 `spawn_with_error_boundary()` 包装
 - 错误字符串必须说明什么操作在哪失败，禁止无上下文裸字符串
 - 重要路径禁止 `let _ =` 静默忽略错误
 - panic hook 中只用 `eprintln!`，禁止 `tracing::error!`
@@ -70,7 +70,38 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 ### Logging
 
-统一 `tracing`：`debug!`（常规）、`info!`（关键）、`warn!`（警告/重试）、`error!`（异常）。Android 统一写 `tracing::` 宏，自动转发 logcat。
+统一 `tracing`。Android 统一写 `tracing::` 宏，自动转发 logcat。
+
+#### 级别语义（何时用什么级别）
+
+| 级别 | 适用场景 | 反例（禁止） |
+| --- | --- | --- |
+| `debug!` | 常规运行细节：连接/订阅建立、请求进出、状态迁移、过滤命中/放行 | 热路径逐帧日志（PTY 输出、WS 每帧）——克制，高频循环内不得无节制打 debug |
+| `info!` | 关键生命周期：启动完成、服务器起停、会话创建/销毁、WS 连接/断开、配置保存 | 每个请求都打 info（高频 API 走 debug） |
+| `warn!` | 可恢复异常/重试：过滤拒绝、授权降级、超时重试、缓存禁用、队列丢弃 | 已由调用方处理的正常分支 |
+| `error!` | 不可恢复异常：操作失败且影响功能；`AppError` 传播点 | panic hook 内（只用 `eprintln!`）；guest 自报的可处理错误 |
+
+#### 日志格式规范（桌面端）
+
+- **行结构**：文件层文本格式 = `时间(UTC) 级别 target: 消息 字段` + `at file:line` + 当前 span 链（Full 格式默认打印，无需配置）；控制台 = 本地时间毫秒 + 品红插件标签；json 模式 = 单行 JSON（level/time/target/fields/line_number）
+- **关联键必须用结构化字段**：`session_id`、`device_id`、`plugin_id`、`request_id`、`batch_id`、`node_id` 等一律 `key = %value` / `key = ?value` 字段形式，**禁止拼进消息字符串**——AI 按 key grep 全链路的前提；消息只写人类可读描述
+- **消息文案**：中文说明 + 英文技术术语；错误信息必须带操作上下文（什么操作在哪失败），禁止裸字符串；消息内不复述字段已表达的信息
+- **错误传播**：关键调用链在错误构造/转换处带操作描述（`AppError::X(format!(...))` 或 `anyhow::Context` 跨桥），禁止裸 `?` 透传
+- **AI 排错索引**：`request_id`（HTTP 请求）/ `session_id`（会话）是跨模块链路主索引，span 插桩（`#[tracing::instrument]`）优先于手写字段；`error.*.log` 单文件定位断点
+- **插件日志**：guest 日志带 `[plugin:xxx]` 前缀（控制台品红渲染，宿主区分插件/宿主日志），target=`bedcode_lib::plugin::plugin_log`，级别动态真实
+
+#### 异步日志（non_blocking）规范
+
+- **文件层必须异步写盘**：`runtime.*.log` / `error.*.log` / `frontend.*.log` 全部走 `tracing-appender` non_blocking（worker 线程 + 有界缓冲），**禁止**在 Tokio/actix 工作线程直接做同步文件 I/O（PTY 输出、WS 广播等高频路径的 syscall 会造成延迟抖动）
+- **何时允许同步写**：控制台 stdout（dev 调试通道、量低）可同步；panic hook 的 `panic.log` 裸文件写（进程可能已不可救药，non_blocking worker 不可依赖）
+- **不依赖必然落盘**：non_blocking 有界缓冲（20000 行）溢出会丢行并计数告警（`spawn_log_maintenance` 每 10 分钟检查），关键证据（error）如需保证持久化应额外落库，不得假设日志一定在
+- **测试日志**：用 `with_default` + 临时目录，禁止写全局 subscriber、禁止污染真实日志目录
+
+#### 插件 WASM 日志（桌面端）
+
+- **trap 必须带 WASM 调用栈**：wasmtime backtrace 已开启（`Config::wasm_backtrace_max_frames(Some(32))` 显式钉死，详情走 `WasmBacktraceDetails::Environment`），插件 panic/栈溢出/燃料耗尽/内存越界的错误串携带 `wasm backtrace:` 函数栈（names section 函数名，release 构建即有——任何改动不得关闭该配置）；trap 分支统一有宿主侧 `error!(plugin_id, export, trap = ...)` 日志（`component.rs::log_trap`），调用方静默也不丢崩溃证据
+- **调试模式**：`BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）→ 插件 wasm 以 debug profile 构建（`plugins/*/scripts/build.js` 按开关切 profile，产物保留 DWARF）+ 宿主自动置 `WASMTIME_BACKTRACE_DETAILS=1` 开行号解析（trap 错误串带 `file:line`）+ 燃料预算 ×32 放大（`fuel_per_call`，debug 产物指令膨胀不误杀）；release 构建忽略该变量。启用后重启插件构建（`pnpm run tauri:dev` 自动经 dev-run.js 继承 env）。详见 `.scratch/plugin-wasm-logging/spec.md`
+- **per-plugin 级别**：`BEDCODE_PLUGIN_LOG=com.bedcode.auto-task=trace,com.bedcode.file-transfer=info`（逗号分隔 `id=level`，非法条目容错忽略）在 `emit_plugin_log` 入口按插件过滤，低于阈值直接丢弃——避免全局热调刷爆 runtime；未列出的插件沿用宿主全局过滤语义（`thread_local` 一次性解析缓存，仅会话态不落配置）
 
 | 端 | 落盘方式 | 位置 |
 | --- | --- | --- |

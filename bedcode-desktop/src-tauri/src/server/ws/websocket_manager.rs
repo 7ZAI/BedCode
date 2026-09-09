@@ -152,7 +152,7 @@ impl WebSocketManager {
         // 如果 Actix 线程异常退出（崩溃），自动清理状态并通知 supervisor
         let inner = self.inner.clone();
         let event_tx = self.inner.event_tx.clone();
-        tokio::spawn(async move {
+        crate::system::error_boundary::spawn_with_error_boundary("actix_crash_monitor", async move {
             let crashed = crash_rx.await.unwrap_or(true);
             if crashed {
                 tracing::error!("Actix server thread exited unexpectedly, cleaning up state");

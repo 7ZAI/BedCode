@@ -26,7 +26,7 @@ pub async fn create_session_config(
 
     match &result {
         Ok(config) => tracing::info!(config_id = %config.id, "create_session_config success"),
-        Err(e) => tracing::error!("create_session_config failed: {:?}", e),
+        Err(e) => tracing::error!("create_session_config failed: {}", e),
     }
 
     result

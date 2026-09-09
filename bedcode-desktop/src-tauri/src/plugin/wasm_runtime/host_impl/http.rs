@@ -125,7 +125,7 @@ pub(crate) fn http_fetch(
 
         let plugin_id_clone = plugin_id.to_string();
         let stream_event_clone = stream_event.clone();
-        tokio::spawn(async move {
+        crate::system::error_boundary::spawn_with_error_boundary("streaming_http", async move {
             if let Err(e) = execute_streaming_http(&request, &app_handle, &stream_event_clone, &plugin_id_clone).await {
                 tracing::error!(
                     error = %e,

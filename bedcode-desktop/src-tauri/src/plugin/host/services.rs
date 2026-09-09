@@ -129,7 +129,7 @@ impl PluginServices for PluginHost {
         let host = self.clone();
         let pid = plugin_id.clone();
         let cmd = command.clone();
-        let handle = tokio::spawn(async move {
+        let handle = crate::system::error_boundary::spawn_with_error_boundary("plugin_timer_loop", async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
             // 首个 tick 立即触发：跳过，从下一个周期开始（避免注册瞬间就回调）
             interval.tick().await;

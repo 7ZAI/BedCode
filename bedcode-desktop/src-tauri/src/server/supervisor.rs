@@ -152,7 +152,10 @@ impl ServerSupervisor {
                 // 调试者需在 config.properties 开启后重启服务生效）
                 if crate::system::config::AppConfig::global().network.metrics_enabled {
                     let inner_arc = self.inner.clone();
-                    tokio::spawn(metrics_sampling_task(inner_arc, cancel_flag.clone()));
+                    crate::system::error_boundary::spawn_with_error_boundary(
+                        "server_metrics_sampling",
+                        metrics_sampling_task(inner_arc, cancel_flag.clone()),
+                    );
                 }
 
                 // 监听 Actix 线程异常退出事件
@@ -162,7 +165,7 @@ impl ServerSupervisor {
                 let event_rx = ws_manager.subscribe();
                 let inner_for_monitor = self.inner.clone();
                 let monitor_cancel = cancel_flag.clone();
-                tokio::spawn(async move {
+                crate::system::error_boundary::spawn_with_error_boundary("server_crash_monitor", async move {
                     let mut rx = event_rx;
                     loop {
                         if monitor_cancel.load(Ordering::Relaxed) {

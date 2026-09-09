@@ -281,6 +281,11 @@ impl SessionManager {
     }
 
     /// 创建会话公共实现：session_id 为 None 时由 PTY 层自行生成
+    ///
+    /// instrument（链路追踪）：会话创建是低频链路关键入口，span 在运行时日志
+    /// (runtime/error.*.log) 中以 `create_session_with_source_and_id{...}:` 前缀
+    /// 聚合下游事件，便于按会话排查；fmt 层事件 scope 自动输出 span 链
+    #[tracing::instrument(skip(self), fields(config_id = %config_id))]
     async fn create_session_with_source_and_id(
         &self,
         config_id: &str,

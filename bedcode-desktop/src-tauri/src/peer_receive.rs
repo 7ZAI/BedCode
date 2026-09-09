@@ -211,7 +211,15 @@ fn read_settings_file(dir: &Path) -> std::io::Result<PeerTransferSettings> {
         version: u32,
         settings: PeerTransferSettings,
     }
-    let raw = std::fs::read_to_string(dir.join(SETTINGS_FILE))?;
+    // io::Result 契约内禁止裸 `?` 透传：包装为带操作描述的自描述错误，
+    // 使"读哪个 settings 文件失败"在任意调用链上可见（AGENTS.md 错误上下文要求）
+    let settings_path = dir.join(SETTINGS_FILE);
+    let raw = std::fs::read_to_string(&settings_path).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("read transfer settings {}: {e}", settings_path.display()),
+        )
+    })?;
     let file: Wrapper = serde_json::from_str(&raw)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     if file.version != SETTINGS_FORMAT_VERSION {
@@ -229,14 +237,33 @@ fn write_settings_file(dir: &Path, settings: &PeerTransferSettings) -> std::io::
         version: u32,
         settings: &'a PeerTransferSettings,
     }
-    std::fs::create_dir_all(dir)?;
+    std::fs::create_dir_all(dir).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("create transfer settings dir {}: {e}", dir.display()),
+        )
+    })?;
     let target = dir.join(SETTINGS_FILE);
     let tmp = dir.join(format!("{SETTINGS_FILE}.tmp"));
     let bytes =
         serde_json::to_vec(&Wrapper { version: SETTINGS_FORMAT_VERSION, settings })
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, &target)
+    std::fs::write(&tmp, bytes).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!("write transfer settings tmp {}: {e}", tmp.display()),
+        )
+    })?;
+    std::fs::rename(&tmp, &target).map_err(|e| {
+        std::io::Error::new(
+            e.kind(),
+            format!(
+                "rename transfer settings {} -> {}: {e}",
+                tmp.display(),
+                target.display()
+            ),
+        )
+    })
 }
 
 /// 生效落点解析：覆盖值优先，否则桌面缺省 Downloads\BedCode\

@@ -130,7 +130,7 @@ impl PluginLoader {
                 }
                 Err(e) => {
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    tracing::error!("[PluginLoader] Failed to load plugin from {:?}: {}", dir_name, e);
+                    tracing::error!("[PluginLoader] Failed to load plugin from {}: {}", dir_name, e);
                 }
             }
         }
