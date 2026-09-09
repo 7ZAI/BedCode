@@ -1,6 +1,6 @@
 # Issue 06：opencode TUI 鼠标坐标偏移 —— 根因 = Linux 全局 CSS zoom，方案 = 去 zoom 换 --ui-scale/font-size 体系
 
-> 状态：根因已实锤（实测数据），方案 1（治本）已选型，待实现 + 走查。
+> 状态：根因已实锤（实测数据），方案 1（治本）已在 dev 分支实施（style.css + useFontSize.ts + TerminalPreview.vue，另同步 zoom-compensation.ts / main.ts 注释），待真机走查（验证清单 2-6）。
 > 发现时间：2026-09-09。实测环境：Deepin 25 (X11) + WebKitGTK，屏幕 1.25x 分数缩放（`~/.config/deepin/qt-theme.ini: ScreenScaleFactors=1.25`）。
 
 ## 现象

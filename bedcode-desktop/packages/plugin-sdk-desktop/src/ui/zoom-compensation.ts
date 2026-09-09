@@ -1,8 +1,11 @@
 /**
- * fixed 定位覆盖层在根元素 CSS zoom 下的坐标换算
+ * fixed 定位覆盖层在根元素 CSS zoom 下的坐标换算（自校准，无 zoom 时自动退回 F=1）
  *
- * 背景：Linux 桌面端 style.css 给 html.platform-linux 加了 zoom: 1.15（修正
- * WebKitGTK 字号观感）。WebKitGTK 2.52 采用标准化 zoom 语义（对齐 Chrome 128+）：
+ * 背景：曾因 Linux 桌面端 style.css 给 html.platform-linux 加 zoom: 1.15（修正
+ * WebKitGTK 字号观感）而引入本补偿。issue 06 已移除该 zoom（改 font-size +
+ * --ui-scale 体系，避免破坏 xterm 鼠标坐标系）；此后探针实测 F=1、补偿自动成为
+ * no-op，本机制保留作防御（未来若根级 zoom 回归，调用方无需改动即可自愈）。
+ * WebKitGTK 2.52 采用标准化 zoom 语义（对齐 Chrome 128+）：
  * - getBoundingClientRect() 返回视觉坐标（已含 zoom 放大）；
  * - 而给 fixed 元素赋 top/left/width 等长度值时，渲染会再次乘以祖先链 zoom。
  * 两者叠加：把 gBCR 读数直接赋给 fixed 面板，会向右下漂移 (zoom-1)×坐标、
