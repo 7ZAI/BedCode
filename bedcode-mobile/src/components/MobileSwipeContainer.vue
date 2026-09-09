@@ -263,7 +263,11 @@ function onTouchMove(e: TouchEvent) {
 
   // 水平滑动：阻止浏览器默认行为（如前进/后退导航、overscroll）
   if (direction === 'horizontal') {
-    e.preventDefault()
+    // 手势已被浏览器接管（如垂直滚动进行中，pan-y 允许的滚动已启动）时，
+    // touchmove 的 cancelable=false，preventDefault 会被静默忽略并在控制台
+    // 刷 "Ignored attempt to cancel a touchmove event..."；滚动本就无法中断，
+    // 直接跳过即可（监听器虽为 non-passive，也无法阻止已接管的滚动）
+    if (e.cancelable) e.preventDefault()
 
     // 首次判定为水平方向时仲裁归属：触摸起点在横滑区内且该方向未到边界
     // → 本轮手势交给区内组件（外层不拖动轨道、touchend 不翻页）
