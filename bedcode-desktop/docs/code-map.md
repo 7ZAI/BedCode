@@ -46,7 +46,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，
 │   │                                 #   含 hooks 管理、任务状态/队列、HTTP 端点、Hook 脚本
 │   ├── file-transfer/                # 文件传输插件：内网对端发现、远程目录浏览、多任务并发传输
-│   │                                 #   （暂停/恢复/断点续传），本地目录挂载供对端访问
+│   │                                 #   （取消/重试；断线重发自动断点续传，无手动暂停/恢复），
+│   │                                 #   本地目录挂载供对端访问
 │   └── scheduler/                    # 调度器插件：cron 表达式触发执行 shell 脚本/内联命令，
 │                                     #   执行记录可审计；cli/ 为独立管理 CLI（bedtask）
 ├── src/                              # Vue 3 前端（扁平化结构）

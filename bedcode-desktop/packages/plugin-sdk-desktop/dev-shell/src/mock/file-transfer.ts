@@ -117,7 +117,10 @@ function initPeerState(pluginId: string): void {
 
   const transfer = seed?.transfer as any
   try {
-    tasks = JSON.parse(JSON.stringify(transfer?.tasks ?? []))
+    // 任务种子 = 活动条目 ∪ 历史条目（引擎 store 同构：单一存储，视图按状态派生）
+    const rawTasks = Array.isArray(transfer?.tasks) ? transfer.tasks : []
+    const rawHistory = Array.isArray(transfer?.history) ? transfer.history : []
+    tasks = JSON.parse(JSON.stringify([...rawTasks, ...rawHistory]))
   } catch {
     tasks = []
   }
@@ -181,13 +184,16 @@ function registerCommands(context: PluginContext): void {
 
   // ==================== 任务队列（自持存储视图） ====================
   context.commands.register('file-transfer.list-tasks', () =>
-    tasks.filter((t) => t.direction === 'send').map((t) => ({ ...t })),
+    activeSendTasks().map((t) => ({ ...t })),
   )
   context.commands.register('file-transfer.list-batches', () =>
     tasks.filter((t) => t.direction === 'receive' && t.status === 'pending').map((t) => ({ ...t })),
   )
   context.commands.register('file-transfer.list-receiving', () =>
-    tasks.filter((t) => t.direction === 'receive' && t.status !== 'pending').map((t) => ({ ...t })),
+    activeReceiveTasks().map((t) => ({ ...t })),
+  )
+  context.commands.register('file-transfer.list-history', () =>
+    historyView().map((t) => ({ ...t })),
   )
   context.commands.register('file-transfer.clear-history', () => {
     const before = tasks.length
@@ -340,7 +346,33 @@ function emitConnection(nodeId: string, connected: boolean): void {
 }
 
 function pushSnapshot(): void {
-  emitDevEvent('plugin:file-transfer:tasks-changed', tasks.map((t) => ({ ...t })))
+  emitDevEvent('plugin:file-transfer:tasks-changed', activeSendTasks().map((t) => ({ ...t })))
+  emitDevEvent(
+    'plugin:file-transfer:batches-changed',
+    tasks.filter((t) => t.direction === 'receive' && t.status === 'pending').map((t) => ({ ...t })),
+  )
+  emitDevEvent('plugin:file-transfer:receiving-changed', activeReceiveTasks().map((t) => ({ ...t })))
+  emitDevEvent('plugin:file-transfer:history-changed', historyView().map((t) => ({ ...t })))
+}
+
+/** 终态集合（与引擎 TransferEntry::is_terminal 同口径） */
+const TERMINAL_STATUS = new Set(['completed', 'failed', 'rejected', 'cancelled', 'interrupted'])
+
+/** 发送视图：仅进行中（与引擎 active_send_entries 同口径） */
+function activeSendTasks(): MockTask[] {
+  return tasks.filter((t) => t.direction === 'send' && !TERMINAL_STATUS.has(t.status))
+}
+
+/** 接收视图：仅 running（与引擎 active_receive_entries 同口径） */
+function activeReceiveTasks(): MockTask[] {
+  return tasks.filter((t) => t.direction === 'receive' && t.status === 'running')
+}
+
+/** 历史视图：终态条目按 updatedAtMs 降序（与引擎 history_view 同口径） */
+function historyView(): MockTask[] {
+  return tasks
+    .filter((t) => TERMINAL_STATUS.has(t.status))
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs)
 }
 
 /** 模拟传输中任务进度推进（每 900ms 推一次快照），返回句柄供停用清理 */

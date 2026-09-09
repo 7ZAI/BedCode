@@ -98,6 +98,8 @@ function mapHistoryEntry(raw: any): HistoryEntry {
     reason: raw.detail ?? raw.rejectReason ?? null,
     peerName: raw.peerName ?? '',
     localPath: null,
+    // 发起方条目携带 retryMeta（历史重试按钮的判定依据）
+    retryable: raw.retryMeta != null,
     createdAt: raw.createdAtMs ?? 0,
     updatedAt: raw.updatedAtMs ?? 0,
   }

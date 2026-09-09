@@ -93,7 +93,8 @@ const devMock: FileTransferDevMock = {
   },
   // ==================== 传输域种子（SDK TransferDevMock 协议） ====================
   transfer: {
-    // 任务快照：引擎 PeerTransferDto camelCase wire 形状，覆盖传输中/终态/interrupted
+    // 任务快照：引擎 PeerTransferDto camelCase wire 形状，仅活动条目
+    // （running/pending）；终态演示条目归 history（与引擎视图口径一致）
     tasks: [
       {
         batchId: 'mock-task-1',
@@ -108,6 +109,9 @@ const devMock: FileTransferDevMock = {
         createdAtMs: Date.now() - 600_000,
         updatedAtMs: Date.now() - 1000,
       },
+    ] as unknown[],
+    // 历史快照：终态条目（发起方携带 retryMeta → 历史 tab 可一键重试）
+    history: [
       {
         batchId: 'mock-task-2',
         nodeId: NODE_PIXEL,

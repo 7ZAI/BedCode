@@ -87,6 +87,9 @@ export type MessageSchema = {
   'transfer.task.reason.dirUnavailable': string
   'transfer.task.reason.noRoots': string
   'transfer.task.reason.localNotFound': string
+  'transfer.task.reason.cancelledBySender': string
+  'transfer.task.reason.cancelledByReceiver': string
+  'transfer.task.reason.cancelledBySelf': string
   'transfer.task.reason.unknown': string
 
   // ==================== 迷你传输条 ====================

@@ -63,7 +63,10 @@ export interface TransferSettingsDevMock {
 
 /** 传输域种子（任务列表为引擎 wire 形状，字段随引擎演进，dev-shell 按快照透传） */
 export interface TransferDevMock {
+  /** 活动条目（running/pending；终态条目请放 history） */
   tasks?: unknown[]
+  /** 历史条目（终态：completed/failed/rejected/cancelled/interrupted） */
+  history?: unknown[]
   remoteFs?: RemoteFsDevMock
   settings?: TransferSettingsDevMock
 }

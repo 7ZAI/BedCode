@@ -56,3 +56,42 @@
 - 传输层加密 MVP 明文直通（`PassthroughCipher`），密钥协商未实现——未来 AES-GCM 两端同源、方向无关（spec「传输层加密」Out of Scope）。
 - AP 客户端隔离（同网设备不可达）场景 v2.1 整体失效，需回退全 WS 数据面（ADR 0021 已知边界）。
 - 评审 13 的「目录浏览 list」已由本会话补 `FileListRequest/Response` wire 迁移（施工图原未安排，用户拍板）。
+
+---
+
+## 已完成（2026-09-10）：传输面板终态自动归档历史（双端同构）
+
+用户反馈：桌面传输面板「正在发送/正在接收」tab 里已完成/失败的任务应自动移到「历史」tab。
+
+- **根因**：引擎 `flush()` 把**全部** send 条目（含终态）当 tasks 派发、receive 非 pending 条目（含终态）当 receiving 派发，终态同时出现在活动 tab 与历史 tab，违反 transfer_store 文档「终态归档」意图。
+- **改动（双端 peer.rs / transfer_store.rs 同构）**：新增纯函数 `active_send_entries`（send && running/pending）与 `active_receive_entries`（receive && running），`flush()` / `list-tasks` / `list-receiving` 统一改用；终态只出现在 `history` 视图（history-changed / list-history 口径不变）。+1 测试 `active_views_exclude_terminal_entries`（两端各 29 绿）。
+- **前端配套**：HistoryEntry 增 `retryable`（wire `retryMeta != null`，仅发起方条目）——重试入口从任务卡迁到历史 tab（桌面 TaskPanel 历史项加重试 mini-btn；移动 TransfersTab 历史卡 actions 加 retry）；两端 devMock/dev-shell mock 同步视图口径（终态种子归 history，含 retryMeta）。
+- **移动端连带修复**：`checkSettledNotification`（队列全终态通知）原依赖终态条目滞留 tasks——改为历史 diff 驱动：历史新增 send 终态累计计数，tasks 清空时结算通知（初始/重载播种只记 batchId 不累计，防旧条目误报；全取消不打扰语义保留）。同步重写移动端 `useTasks.test.ts` 两个 settlement 测试到新数据契约（终态走 history-changed）。**坑**：wire 条目无 `id` 字段只有 `batchId`——累计去重集合若存 `e.id` 会让所有条目都撞同一个 undefined，第二次结算永远被跳过（debug 实锤：`seenHistoryIds=[null]`）。
+- **验证**：两端插件 cargo test 29 绿；桌面 `pnpm run test:run` 全绿（61 files/569 tests）；移动 `pnpm run test:run` 全绿（42 files/360 tests，含重写的 settlement 用例）；插件前端 vue-tsc / eslint 干净。
+
+## 已完成（2026-09-10）：下载进度条恒 0 + 取消原因未国际化（双端同构）
+
+用户反馈：① 桌面下载时任务进度条一直是 0 但数据正常传输；② 移动端被取消的任务显示英文 cancelled by xxx。
+
+- **进度条恒 0 根因（双端 peer_receive.rs）**：远端拉取任务预登记时总大小未知（pull spec 的 `size` 恒 0 → `total_bytes = 0`），而引擎 Progress 事件携带权威 `total`，`update_progress` 却丢弃该字段只写 transferred/rate——`totalBytes` 恒 0，前端进度恒 0%。修复：Progress 解构取 `total` 并入账（`total > 0` 时覆盖 total_bytes）；`settle_terminal` Completed 结算把 transferred 归整为满额（末条 Progress 可能略低于总量）。
+- **取消原因未国际化根因（双端 peer_receive.rs / peer_transfer.rs）**：`settle_terminal` / `apply_terminal` 的 Cancelled 分支把人类文案（`cancelled by sender` / `cancelled by receiver` / `cancelled by self`）直接落 wire `detail`。修复：改发机器码 `cancelled-by-sender` / `cancelled-by-receiver` / `cancelled-by-self`（旧文本 wire 前端兼容映射）。移动端 TransfersTab 接收卡/历史卡原因走 i18n 映射（新增 `transfer.task.reason.cancelledBySender/Receiver/Self` zh+en+messages.ts schema）；顺带修复 TransfersTab 两个预存 vue-tsc 错误（FILTERS computed 泛型注解、历史 TaskCard 缺 `:reason` prop）——移动端插件 vue-tsc 从 2 错归零。
+- **验证**：桌面宿主 cargo 596 绿；移动宿主 cargo 251 绿；移动插件 vue-tsc 0 错；移动插件 build 成功；eslint 0 error。
+
+## 已完成（2026-09-10）：移动端「打开所在文件夹」误报本机没有对应文件
+
+用户反馈：移动端下载完成后打开所在文件夹提示「本机没有对应文件」，明明刚下载。
+
+- **根因（设备日志实证）**：`DownloadsDirPlugin.openFileLocationByName` MediaStore 按名命中成功，但打开 `content://com.android.externalstorage.documents/document/primary:Download` 目录 URI 时抛 `SecurityException`（UID 10462 does not have permission…you could obtain access using ACTION_OPEN_DOCUMENT）——用户未授权「所有文件访问权限」（MANAGE_EXTERNAL_STORAGE），ExternalStorageProvider 目录 URI 对应用无权限；异常被前端 catch 统一渲染为「本机没有对应文件」（文件其实在公共 Download 目录）。
+- **修复（DownloadsDirPlugin.kt）**：MediaStore 命中后先试打开目录，`SecurityException` 时降级打开文件本身（MediaStore 行为应用自有插入，content URI 免权限可访问）——用户至少能查看下载结果；真不存在才 reject「本机没有对应文件」语义恢复准确。
+- **验证**：`./gradlew :app:compileUniversalDebugKotlin` BUILD SUCCESSFUL（离线加 --offline）。
+
+## 已完成（2026-09-10）：双端记账 + 桌面接收方向图标修正
+
+用户反馈：① 一方发送另一方接收时，只有主动发起的一方在传输列表显示任务，另一侧应显示（双端记账）；② 桌面端接收（下载）卡片的方向箭头显示为↑（应是↓，上=发送/下=接收）；③ 语义确认：绿=完成、红=失败。
+
+- **双端记账（peer-net crate + 双端宿主）**：拉取发起方（对端）本就有自己的 receive 任务；缺口在**供流方**——serve_pull 的 Progress/Terminal 此前流入接收侧通道且 batch_id 不一致（Progress 用 `pull-{nanos}`、外层 Terminal 用 dir_id），宿主查无此批全部丢弃。改动：
+  - peer-net：`TransferEvent` 新增 `PullServed { remote, batch_id, files, total_size }`；`SharedDirHandler` 增加独立 `serve_events` 通道（`new()` 第 5 参，push 接收与 serve 供流分流）；serve_pull 解析成功后发 PullServed、进度/终态统一经 serve 通道且 batch_id 同源（outcome 包裹错误路径，PullServed 之后必然一次 Terminal）；外层 dispatch 的 dir_id 伪批 Terminal 跳过（serve_handled 标志）。
+  - 双端宿主：`peer_net.rs` 建 serve 通道并 spawn `peer_transfer::drive_serve_events`；`peer_transfer.rs` 新增消费循环——PullServed → `register_serve_task`（解析对端名，插 direction=send 任务，peer_name 经 discovery cache），Progress → `update_progress`（150ms 节流 publish），Terminal → `settle_serve_terminal`（状态映射同 apply_terminal，取消码 -receiver/-self，completed 归整满额）；两端 `drive_receive_events`/`drive_send_session` 补 PullServed 防御性忽略分支；`lib.rs` 根导出补 `FileMeta`；peer-net 集成测试 `shared_dirs.rs` 2 处 `SharedDirHandler::new` 调用补 serve 通道。
+  - 效果：拉取时供流方「正在发送」出现方向=send 任务（含文件名/大小/进度/终态），发起方「正在接收」不变——两端各自记账。
+- **图标修正（桌面 TaskPanel）**：接收卡（正在接收 tab + 全部 tab 两处）此前恒用 `ft-task-dir--up` + 上箭头 path；改为下箭头 path（`M12 5v14M19 12l-7 7-7-7`）+ 去掉 --up（绿底，与任务卡 download 同款）。移动端 TaskCard 本就正确（upload↑/download↓）。chips 现状已符合绿=完成/红=失败。
+- **验证**：peer-net cargo 全绿（75+1+9+5+12）；桌面宿主 cargo 596 绿、移动宿主 251 绿；桌面 vitest 61/569 绿；桌面插件 build + eslint 干净。

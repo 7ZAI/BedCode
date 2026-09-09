@@ -133,7 +133,9 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
     ///
     /// 接收落点不在 wire 上（真实设备无路径字段，只有文件名），解析顺序：
     /// 1. MediaStore 公共下载按 displayName 命中最新一条 → 打开
-    ///    primary:Download 文档树目录（ExternalStorageProvider，Google Files 等可打开）；
+    ///    primary:Download 文档树目录（ExternalStorageProvider）；
+    ///    未授权「所有文件访问」时目录 URI 无权限（SecurityException）→
+    ///    降级打开文件本身（MediaStore 自有插入行，content URI 可访问）；
     /// 2. 未命中（发布失败，文件仍留 app 私有下载目录）→ 私有目录按名查找 +
     ///    FileProvider 暴露父目录。
     /// 两者均未命中 → reject（历史条目文件已被移动/删除）。
@@ -147,9 +149,21 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
         }
         try {
             val name = args.displayName
-            // 1. MediaStore 公共下载按名命中 → 直接打开 Download 目录
-            if (resolveMediaStoreDownloadUri(name) != null) {
-                startFolderView(primaryDownloadFolderUri())
+            // 1. MediaStore 公共下载按名命中 → 目标位于公共 Download 目录
+            val mediaUri = resolveMediaStoreDownloadUri(name)
+            if (mediaUri != null) {
+                try {
+                    startFolderView(primaryDownloadFolderUri())
+                } catch (e: SecurityException) {
+                    // 未授权「所有文件访问」（ExternalStorageProvider 目录 URI 对应用
+                    // 无权限，真机实证 SecurityException）：降级打开文件本身——
+                    // MediaStore 行为应用自有插入，content URI 免权限可访问
+                    android.util.Log.w(
+                        TAG,
+                        "folder view denied (${e.message}), opening file instead",
+                    )
+                    openMediaStoreFile(mediaUri, name)
+                }
                 invoke.resolve(JSObject().apply { put("ok", true) })
                 return
             }
@@ -201,6 +215,23 @@ class DownloadsDirPlugin(private val activity: Activity) : Plugin(activity) {
             }
             activity.startActivity(fallback)
         }
+    }
+
+    /// 打开 MediaStore 文件本身（自有插入行，content URI 免权限）
+    ///
+    /// 未授权「所有文件访问」时的所在文件夹降级路径：ExternalStorageProvider
+    /// 目录 URI 无权限，退而打开文件——用户至少能查看/分享下载结果。
+    private fun openMediaStoreFile(uri: Uri, displayName: String) {
+        val mime = activity.contentResolver.getType(uri)
+            ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                displayName.substringAfterLast('.', "").lowercase(),
+            )
+            ?: "*/*"
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        activity.startActivity(intent)
     }
 
     /// 解析可分享的 content URI：MediaStore 公共下载（按名查最新）→ FileProvider

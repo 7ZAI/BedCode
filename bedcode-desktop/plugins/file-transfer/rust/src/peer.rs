@@ -139,21 +139,19 @@ fn persist_entries(h: &WasmHost, entries: &[TransferEntry]) {
     }
 }
 
-/// 变更后统一出口：持久化 + 四路视图派发
+/// 变更后统一出口：持久化 + 四路视图派发（tasks/receiving 仅进行中，
+/// 终态条目由 history 视图承接——「完成/失败自动归档历史」）
 fn flush(h: &WasmHost, mut guard: std::sync::MutexGuard<'static, Vec<TransferEntry>>, changed: bool) {
     if changed {
         transfer_store::evict_overflow(&mut guard);
         persist_entries(h, &guard);
     }
-    let tasks: Vec<&TransferEntry> = guard.iter().filter(|e| e.direction == "send").collect();
+    let tasks: Vec<&TransferEntry> = transfer_store::active_send_entries(&guard);
     let batches: Vec<&TransferEntry> = guard
         .iter()
         .filter(|e| e.direction == "receive" && e.status == "pending")
         .collect();
-    let receiving: Vec<&TransferEntry> = guard
-        .iter()
-        .filter(|e| e.direction == "receive" && e.status != "pending")
-        .collect();
+    let receiving: Vec<&TransferEntry> = transfer_store::active_receive_entries(&guard);
     let history = history_view(&guard);
 
     let dump = |list: Vec<&TransferEntry>| {
@@ -402,9 +400,8 @@ fn insert_send_entry(
 
 pub(crate) fn list_tasks(h: &WasmHost) -> Result<serde_json::Value> {
     let guard = ensure_loaded(h);
-    let tasks: Vec<serde_json::Value> = guard
+    let tasks: Vec<serde_json::Value> = transfer_store::active_send_entries(&guard)
         .iter()
-        .filter(|e| e.direction == "send")
         .filter_map(|e| serde_json::to_value(e).ok())
         .collect();
     Ok(serde_json::Value::Array(tasks))
@@ -494,9 +491,8 @@ pub(crate) fn list_batches(h: &WasmHost) -> Result<serde_json::Value> {
 pub(crate) fn list_receiving(h: &WasmHost) -> Result<serde_json::Value> {
     let guard = ensure_loaded(h);
     Ok(serde_json::Value::Array(
-        guard
+        transfer_store::active_receive_entries(&guard)
             .iter()
-            .filter(|e| e.direction == "receive" && e.status != "pending")
             .filter_map(|e| serde_json::to_value(e).ok())
             .collect(),
     ))

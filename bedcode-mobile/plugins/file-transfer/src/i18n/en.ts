@@ -87,6 +87,9 @@ export default {
   'transfer.task.reason.dirUnavailable': 'This folder is currently unavailable',
   'transfer.task.reason.noRoots': 'The remote device has not shared any folders',
   'transfer.task.reason.localNotFound': 'Local file not found',
+  'transfer.task.reason.cancelledBySender': 'Cancelled by the sender',
+  'transfer.task.reason.cancelledByReceiver': 'Cancelled by the receiver',
+  'transfer.task.reason.cancelledBySelf': 'Cancelled by you',
   'transfer.task.reason.unknown': 'Transfer failed',
 
   // ==================== Mini transfer bar ====================

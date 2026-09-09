@@ -269,23 +269,33 @@ describe('useTasks orchestration', () => {
     tasks.start()
     await env.flush()
 
+    // 终态归历史后（引擎视图口径），队列结算点 = tasks 清空 + 历史新增 send 终态
     env.emit('plugin:file-transfer:tasks-changed', [makeWireTask()])
     await env.flush()
     expect(env.notifications).toHaveLength(0) // 未全部终态不通知
 
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
+    env.emit('plugin:file-transfer:tasks-changed', [])
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ direction: 'send', status: 'completed' }),
+    ])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
     expect(env.notifications[0]!.title).toContain('doneTitle')
 
-    // 全部终态期间重复快照不重复通知
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
+    // 重复历史快照（同 id）不重复通知
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ direction: 'send', status: 'completed' }),
+    ])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
 
-    // 队列清空后重置，新批次完成可再次通知
+    // 新活跃任务重置结算态，再次清空 + 新终态 → 可再次通知
+    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask()])
+    await env.flush()
     env.emit('plugin:file-transfer:tasks-changed', [])
-    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask({ status: 'completed' })])
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ batchId: 'h-2', direction: 'send', status: 'completed' }),
+    ])
     await env.flush()
     expect(env.notifications).toHaveLength(2)
   })
@@ -295,19 +305,22 @@ describe('useTasks orchestration', () => {
     tasks.start()
     await env.flush()
 
-    env.emit('plugin:file-transfer:tasks-changed', [
-      makeWireTask({ status: 'failed' }),
-      makeWireTask({ batchId: 'b-2', status: 'rejected' }),
+    env.emit('plugin:file-transfer:tasks-changed', [])
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ batchId: 'h-f1', direction: 'send', status: 'failed' }),
+      makeWireHistoryEntry({ batchId: 'h-f2', direction: 'send', status: 'rejected' }),
     ])
     await env.flush()
     expect(env.notifications).toHaveLength(1)
     expect(env.notifications[0]!.title).toContain('failedTitle')
 
+    // 队列重启（新活跃任务重置结算态）后全取消不打扰
+    env.emit('plugin:file-transfer:tasks-changed', [makeWireTask()])
+    await env.flush()
     env.emit('plugin:file-transfer:tasks-changed', [])
-    env.emit(
-      'plugin:file-transfer:tasks-changed',
-      [makeWireTask({ status: 'cancelled' })],
-    )
+    env.emit('plugin:file-transfer:history-changed', [
+      makeWireHistoryEntry({ batchId: 'h-c1', direction: 'send', status: 'cancelled' }),
+    ])
     await env.flush()
     expect(env.notifications).toHaveLength(1) // 全取消不打扰用户
   })

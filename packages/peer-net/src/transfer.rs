@@ -221,6 +221,21 @@ pub enum TransferEvent {
         /// 应答回执通道
         reply: tokio::sync::oneshot::Sender<bool>,
     },
+    /// 服务侧拉取会话开始（双端记账：供流方登记 send 任务）
+    ///
+    /// serve_pull 解析目标文件成功后上报；后续 Progress/Terminal 同 batch_id，
+    /// 供流方据此登记/推进/结算一条 direction=send 的任务——拉取发起方（对端）
+    /// 另有自己的 receive 任务，两端各自展示同一次传输。
+    PullServed {
+        /// 对端节点 ID（拉取发起方）
+        remote: NodeId,
+        /// 服务侧批 ID（"pull-{nanos}"，进度/终态同源）
+        batch_id: String,
+        /// 供流文件清单（单文件）
+        files: Vec<FileMeta>,
+        /// 批内总大小（字节）
+        total_size: u64,
+    },
     /// 进度：已传字节 / 总量 / 瞬时速率（B/s，滑动窗口）
     ///
     /// 发送端按「实际写入网络」计数，接收端按「实际落盘」计数——两侧

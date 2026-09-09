@@ -326,13 +326,16 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
             TransferEvent::OfferPending { remote, batch_id, files, total_size, reply } => {
                 register_offer(&app, remote, batch_id, files, total_size, reply).await;
             }
-            TransferEvent::Progress { batch_id, transferred, rate_bps, .. } => {
-                update_progress(&app, &batch_id, transferred, rate_bps);
+            TransferEvent::Progress { batch_id, transferred, total, rate_bps, .. } => {
+                update_progress(&app, &batch_id, transferred, total, rate_bps);
                 throttle_publish(&app);
             }
             TransferEvent::Terminal { batch_id, state, .. } => {
                 settle_terminal(&app, &batch_id, state);
             }
+            // 服务侧拉取事件走独立 serve 通道（peer_transfer::drive_serve_events），
+            // 本接收通道理论上收不到；防御性忽略
+            TransferEvent::PullServed { .. } => {}
         }
     }
     // 通道关闭 = 节点停止：在途接收如实落终态；pending 回执弃置即自动拒
@@ -456,7 +459,11 @@ async fn register_offer(
 }
 
 /// 进度入账（pending → running：AlwaysAccept 策略无询问阶段直接进数据面）
-fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, rate_bps: f64) {
+///
+/// `total` 为引擎批内总大小真源：远端拉取任务预登记时大小未知（pull spec
+/// size 恒 0），首个 Progress 即补正 total_bytes——否则 totalBytes 恒 0，
+/// 前端进度条永远停在 0%。
+fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, total: u64, rate_bps: f64) {
     let state = app.state::<PeerReceiveState>();
     let mut inner = state.inner.lock().expect("peer receive lock poisoned");
     if let Some(task) = inner
@@ -466,6 +473,9 @@ fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, rate_bps: 
     {
         task.status = "running".to_string();
         task.transferred_bytes = transferred;
+        if total > 0 {
+            task.total_bytes = total;
+        }
         task.rate_bps = rate_bps;
         task.updated_at_ms = now_ms();
     }
@@ -484,13 +494,14 @@ fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
         ),
         TerminalState::Cancelled { by_peer } => (
             "cancelled".to_string(),
+            // 机器可读原因码（前端 i18n 映射；兼容映射旧本地化文本），
+            // 禁止把人类文案直接落 wire
             Some(
                 if *by_peer {
-                    "cancelled by sender"
+                    "cancelled-by-sender".to_string()
                 } else {
-                    "cancelled by self"
-                }
-                .to_string(),
+                    "cancelled-by-self".to_string()
+                },
             ),
             None,
         ),
@@ -510,6 +521,10 @@ fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
             .find(|t| t.batch_id == batch_id && !is_terminal(t))
         {
             task.status = status;
+            // 完成结算：最后一条 Progress 可能略低于总量，归整为满额
+            if task.status == "completed" {
+                task.transferred_bytes = task.total_bytes;
+            }
             task.detail = detail;
             task.reject_reason = reject_reason;
             task.updated_at_ms = now_ms();

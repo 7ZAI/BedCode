@@ -222,6 +222,24 @@ pub(crate) fn clear_terminal(entries: &mut Vec<TransferEntry>) -> usize {
     before - entries.len()
 }
 
+/// 发送视图（tasks-changed / list-tasks 共用）：仅进行中条目
+/// （running/pending）；终态条目一律归历史视图，不再滞留活动队列。
+pub(crate) fn active_send_entries(entries: &[TransferEntry]) -> Vec<&TransferEntry> {
+    entries
+        .iter()
+        .filter(|e| e.direction == "send" && e.is_active())
+        .collect()
+}
+
+/// 接收视图（receiving-changed / list-receiving 共用）：仅正在接收的
+/// running 条目；pending 归待应答（batches），终态归历史视图。
+pub(crate) fn active_receive_entries(entries: &[TransferEntry]) -> Vec<&TransferEntry> {
+    entries
+        .iter()
+        .filter(|e| e.direction == "receive" && e.status == "running")
+        .collect()
+}
+
 /// 取消乐观结算：命中条目改标 cancelled（引擎快照随后校正/确认）。
 /// 仅对进行中条目生效。返回是否命中。
 pub(crate) fn mark_cancelled(entries: &mut [TransferEntry], batch_id: &str) -> bool {
@@ -383,6 +401,31 @@ mod tests {
         assert_eq!(clear_terminal(&mut store), 1);
         assert_eq!(store.len(), 1);
         assert_eq!(store[0].batch_id, "b");
+    }
+
+    #[test]
+    fn active_views_exclude_terminal_entries() {
+        let mk = |id: &str, direction: &str, status: &str| {
+            serde_json::from_value::<TransferEntry>(json!({
+                "batchId": id, "direction": direction, "status": status,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("s-run", "send", "running"),
+            mk("s-done", "send", "completed"),
+            mk("s-fail", "send", "failed"),
+            mk("s-inter", "send", "interrupted"),
+            mk("r-pend", "receive", "pending"),
+            mk("r-run", "receive", "running"),
+            mk("r-done", "receive", "completed"),
+        ];
+        let send_ids: Vec<&str> =
+            active_send_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(send_ids, vec!["s-run"]);
+        let recv_ids: Vec<&str> =
+            active_receive_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(recv_ids, vec!["r-run"]);
     }
 
     #[test]

@@ -64,7 +64,7 @@ pub use shared::{
     SharedDirHandler, SharedDirRoot, SharedSafAccess, SharedDirStore,
 };
 pub use transfer::{
-    CancelOrigin, CancelToken, FileLanding, IncomingFrame, OutgoingFile, ReceivePolicy,
+    CancelOrigin, CancelToken, FileLanding, FileMeta, IncomingFrame, OutgoingFile, ReceivePolicy,
     RejectReason, TerminalState, TransferConfig, TransferEvent, TransferFrame,
     TransferReceiveHandler, send_batch,
 };

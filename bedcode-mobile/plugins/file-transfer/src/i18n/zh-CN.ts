@@ -85,6 +85,9 @@ export default {
   'transfer.task.reason.dirUnavailable': '该目录当前不可用',
   'transfer.task.reason.noRoots': '对端尚未设置共享目录',
   'transfer.task.reason.localNotFound': '本地文件不存在',
+  'transfer.task.reason.cancelledBySender': '对方取消了传输',
+  'transfer.task.reason.cancelledByReceiver': '对方取消了传输',
+  'transfer.task.reason.cancelledBySelf': '已取消传输',
   'transfer.task.reason.unknown': '传输失败',
 
   // ==================== 迷你传输条 ====================

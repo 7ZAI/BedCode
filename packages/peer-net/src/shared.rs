@@ -119,7 +119,11 @@ pub struct SharedDirHandler {
     saf: Option<Arc<dyn SharedSafAccess>>,
     /// 配置/急停/会话表共享核：连接 future 需 'static，经 Arc 移入
     inner: Arc<SharedHandlerInner>,
+    /// push 接收会话事件通道（OfferPending/Progress/Terminal → 宿主接收侧记账）
     events: mpsc::Sender<TransferEvent>,
+    /// 服务侧拉取会话事件通道（PullServed/Progress/Terminal → 宿主发送侧记账，
+    /// 双端记账：供流方也要在传输列表展示自己的 send 任务）
+    serve_events: mpsc::Sender<TransferEvent>,
 }
 
 /// [`SharedDirHandler`] 的跨会话共享状态
@@ -134,12 +138,14 @@ struct SharedHandlerInner {
 }
 
 impl SharedDirHandler {
-    /// 构造复合处理器（store 必注入；saf 仅移动端提供）
+    /// 构造复合处理器（store 必注入；saf 仅移动端提供；serve_events 供
+    /// 服务侧拉取会话记账——双端记账，见 [`TransferEvent::PullServed`]）
     pub fn new(
         store: Arc<SharedDirStore>,
         saf: Option<Arc<dyn SharedSafAccess>>,
         transfer: TransferConfig,
         events: mpsc::Sender<TransferEvent>,
+        serve_events: mpsc::Sender<TransferEvent>,
     ) -> Self {
         Self {
             store,
@@ -150,6 +156,7 @@ impl SharedDirHandler {
                 sessions: std::sync::Mutex::new(HashMap::new()),
             }),
             events,
+            serve_events,
         }
     }
 
@@ -226,6 +233,7 @@ impl ConnectionHandler for SharedDirHandler {
         let store = Arc::clone(&self.store);
         let saf = self.saf.clone();
         let events = self.events.clone();
+        let serve_events = self.serve_events.clone();
         let inner = Arc::clone(&self.inner);
         Box::pin(async move {
             // ---- 首帧分流 ----
@@ -249,6 +257,9 @@ impl ConnectionHandler for SharedDirHandler {
             // 守卫 drop（任何退出路径）时自动摘除登记项
             let cancel = CancelToken::child(&inner.cancel);
             let mut batch_slot: Option<String> = None;
+            // PullRequest 分支自行经 serve_events 上报终态（batch_id 同源），
+            // 外层统一 emit 跳过，避免 dir_id 伪批双报
+            let mut serve_handled = false;
             let state = match first {
                 Ok(IncomingFrame::Control(boxed)) => match *boxed {
                     TransferFrame::Offer {
@@ -314,11 +325,14 @@ impl ConnectionHandler for SharedDirHandler {
                         batch_slot = Some(dir_id.clone());
                         let _guard =
                             SessionGuard::new(Arc::clone(&inner), dir_id.clone(), cancel.clone());
+                        // 服务侧任务终态由 serve_pull 自行经 serve_events 上报（batch_id
+                        // 与 PullServed/Progress 同源），外层统一 emit 跳过该分支
+                        serve_handled = true;
                         match serve_pull(
                             conn,
                             &store,
                             saf.as_ref(),
-                            &events,
+                            &serve_events,
                             &cancel,
                             remote.clone(),
                             protocol_version,
@@ -377,15 +391,17 @@ impl ConnectionHandler for SharedDirHandler {
                     detail: e.to_string(),
                 },
             };
-            emit(
-                &events,
-                TransferEvent::Terminal {
-                    remote,
-                    batch_id: batch_slot.unwrap_or_default(),
-                    state,
-                },
-            )
-            .await;
+            if !serve_handled {
+                emit(
+                    &events,
+                    TransferEvent::Terminal {
+                        remote,
+                        batch_id: batch_slot.unwrap_or_default(),
+                        state,
+                    },
+                )
+                .await;
+            }
         })
     }
 }
@@ -554,7 +570,7 @@ async fn serve_pull(
     mut conn: Connection,
     store: &SharedDirStore,
     saf: Option<&Arc<dyn SharedSafAccess>>,
-    events: &mpsc::Sender<TransferEvent>,
+    serve_events: &mpsc::Sender<TransferEvent>,
     cancel: &CancelToken,
     remote: NodeId,
     protocol_version: u32,
@@ -605,6 +621,18 @@ async fn serve_pull(
     .await
     .map_err(|e| sess_io(ROLE, e))?;
 
+    // ---- 双端记账：供流方任务登记（对端发起方另有自己的 receive 任务）----
+    emit(
+        serve_events,
+        TransferEvent::PullServed {
+            remote: remote.clone(),
+            batch_id: batch_id.clone(),
+            files: vec![meta.clone()],
+            total_size: resolved.size,
+        },
+    )
+    .await;
+
     // ---- 拆读写半 + 读半转发任务（drive_send 同款：推流期间取消即时可见）----
     let (mut rd, mut wr) = tokio::io::split(conn);
     let (frame_tx, mut frame_rx) = mpsc::channel::<std::io::Result<IncomingFrame>>(16);
@@ -624,17 +652,19 @@ async fn serve_pull(
         }
     });
 
-    // ---- 等接收端声明起点（断点真源）----
-    let start = next_frame_or_cancel(&mut frame_rx, cancel).await?;
-    let outcome = match start {
-        None => {
-            let _ = message::write_control(
-                &mut wr,
-                &TransferFrame::Cancel { by: CancelOrigin::Sender },
-            )
-            .await;
-            Ok(TerminalState::Cancelled { by_peer: false })
-        }
+    // ---- 等接收端声明起点（断点真源）；错误同样收进 outcome，保证
+    //      PullServed 之后必然上报一次 Terminal（服务侧任务不会悬挂 running）----
+    let outcome: crate::Result<TerminalState> = async {
+        let start = next_frame_or_cancel(&mut frame_rx, cancel).await?;
+        match start {
+            None => {
+                let _ = message::write_control(
+                    &mut wr,
+                    &TransferFrame::Cancel { by: CancelOrigin::Sender },
+                )
+                .await;
+                Ok(TerminalState::Cancelled { by_peer: false })
+            }
             Some(IncomingFrame::Control(boxed)) => match *boxed {
                 TransferFrame::StartFile { index: 0, offset } if offset <= resolved.size => {
                     stream_pull_source(
@@ -645,27 +675,29 @@ async fn serve_pull(
                         &meta,
                         &batch_id,
                         resolved.size,
-                        events,
+                        serve_events,
                         cancel,
-                        remote,
+                        remote.clone(),
                     )
                     .await
                 }
-            TransferFrame::StartFile { index: 0, offset } => Err(proto_violation(
+                TransferFrame::StartFile { index: 0, offset } => Err(proto_violation(
+                    ROLE,
+                    format!("peer reported offset {offset} beyond declared size {}", resolved.size),
+                )),
+                TransferFrame::Cancel { .. } => Ok(TerminalState::Cancelled { by_peer: true }),
+                other => Err(proto_violation(
+                    ROLE,
+                    format!("expected start_file for pull, got {other:?}"),
+                )),
+            },
+            Some(IncomingFrame::Data(_)) => Err(proto_violation(
                 ROLE,
-                format!("peer reported offset {offset} beyond declared size {}", resolved.size),
+                "data frame is receiver-to-sender only",
             )),
-            TransferFrame::Cancel { .. } => Ok(TerminalState::Cancelled { by_peer: true }),
-            other => Err(proto_violation(
-                ROLE,
-                format!("expected start_file for pull, got {other:?}"),
-            )),
-        },
-        Some(IncomingFrame::Data(_)) => Err(proto_violation(
-            ROLE,
-            "data frame is receiver-to-sender only",
-        )),
-    };
+        }
+    }
+    .await;
 
     reader_task.abort();
 
@@ -677,6 +709,24 @@ async fn serve_pull(
             tracing::debug!(batch_id = %batch_id, outcome = ?other, "pull serve ended");
         }
     }
+
+    // ---- 服务侧终态上报（host drive_serve_events 消费；失败路径同样落 Failed）----
+    let terminal_state = match &outcome {
+        Ok(state) => state.clone(),
+        Err(e) => TerminalState::Failed {
+            detail: e.to_string(),
+        },
+    };
+    emit(
+        serve_events,
+        TransferEvent::Terminal {
+            remote: remote.clone(),
+            batch_id: batch_id.clone(),
+            state: terminal_state,
+        },
+    )
+    .await;
+
     outcome
 }
 

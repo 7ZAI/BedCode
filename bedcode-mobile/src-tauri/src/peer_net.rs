@@ -955,6 +955,9 @@ async fn start_locked(
             Arc::new(MediaLanding { saf: io }) as Arc<dyn bedcode_peer_net::FileLanding>
         });
     let (transfer_tx, transfer_rx) = tokio::sync::mpsc::channel::<TransferEvent>(256);
+    // 服务侧拉取会话走独立通道（双端记账：供流方要在自己的传输列表展示
+    // send 任务，与 push 接收通道分流）
+    let (serve_tx, serve_rx) = tokio::sync::mpsc::channel::<TransferEvent>(64);
     let config = TransferConfig {
         policy: bedcode_peer_net::ReceivePolicy::Ask {
             timeout: Duration::from_secs(60),
@@ -965,13 +968,19 @@ async fn start_locked(
         chunk_size: 64 * 1024,
         landing,
     };
-    let handler = Arc::new(SharedDirHandler::new(shared, saf_access, config.clone(), transfer_tx));
+    let handler =
+        Arc::new(SharedDirHandler::new(shared, saf_access, config.clone(), transfer_tx, serve_tx));
     // 接收侧登记句柄与配置快照（策略热更新/按批取消入口），并按持久化
     // 设置纠正首份策略
     super::peer_receive::register_handler(app, Arc::clone(&handler), config).await;
     crate::system::error_boundary::spawn_with_error_boundary(
         "peer_net_transfer_events",
         super::peer_receive::drive_receive_events(app.clone(), transfer_rx),
+    );
+    // 服务侧供流记账（双端记账）：PullServed/Progress/Terminal → 发送侧任务
+    crate::system::error_boundary::spawn_with_error_boundary(
+        "peer_net_serve_events",
+        super::peer_transfer::drive_serve_events(app.clone(), serve_rx),
     );
     // 远端浏览/拉取会话上下文（issue 11）：事件通道发送端快照供拉取入账任务表
     super::peer_remote::register_session(app, handler.event_sender()).await;

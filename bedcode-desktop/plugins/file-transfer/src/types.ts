@@ -120,6 +120,8 @@ export interface HistoryEntry {
   reason: string | null
   peerName: string
   localPath: string | null
+  /** 是否携带 retryMeta（仅发起方条目；true 且终态失败/被拒/中断时可在历史重试） */
+  retryable?: boolean
   createdAt: number
   updatedAt: number
 }

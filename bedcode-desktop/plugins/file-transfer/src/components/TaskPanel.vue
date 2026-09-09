@@ -82,6 +82,14 @@ function canRetry(task: Task): boolean {
   // interrupted（插件重启恢复标注）与 failed/rejected 同样可重试
   return task.state === 'failed' || task.state === 'rejected' || task.state === 'interrupted'
 }
+/** 历史条目可重试：携带 retryMeta 的发起方终态（失败/被拒/中断）
+ *（终态归档历史后，重试入口从任务卡迁到历史 tab） */
+function canRetryHistory(entry: HistoryEntry): boolean {
+  return (
+    !!entry.retryable &&
+    (entry.state === 'failed' || entry.state === 'rejected' || entry.state === 'interrupted')
+  )
+}
 function canCancel(task: Task): boolean {
   return !isTerminal(task.state)
 }
@@ -312,6 +320,22 @@ function historyReason(entry: HistoryEntry): string {
                     />
                   </svg>
                 </button>
+                <!-- 发起方失败/被拒/中断且可重试：历史一键重试（重新发起同批） -->
+                <button
+                  v-if="canRetryHistory(entry)"
+                  class="ft-mini-btn"
+                  :title="t('transfer.task.retry')"
+                  @click="emit('retry', entry.id)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M1 4v6h6M3.51 15a9 9 0 102.13-9.36L1 10"
+                    />
+                  </svg>
+                </button>
               </div>
               <div class="ft-history-meta">
                 <span>{{ formatClock(entry.updatedAt) }}</span>
@@ -341,13 +365,13 @@ function historyReason(entry: HistoryEntry): string {
         <TransitionGroup v-else tag="div" name="ft-task" class="ft-task-list">
           <div v-for="r in receiving" :key="r.sessionId" class="ft-task">
             <div class="ft-task-head">
-              <span class="ft-task-dir ft-task-dir--up">
+              <span class="ft-task-dir">
                 <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     stroke-linecap="round"
                     stroke-linejoin="round"
                     stroke-width="2"
-                    d="M12 19V5M5 12l7-7 7 7"
+                    d="M12 5v14M19 12l-7 7-7-7"
                   />
                 </svg>
               </span>
@@ -412,13 +436,13 @@ function historyReason(entry: HistoryEntry): string {
             <!-- 接收任务（全部 tab 混排） -->
             <div v-if="item.kind === 'receiving'" class="ft-task">
               <div class="ft-task-head">
-                <span class="ft-task-dir ft-task-dir--up">
+                <span class="ft-task-dir">
                   <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path
                       stroke-linecap="round"
                       stroke-linejoin="round"
                       stroke-width="2"
-                      d="M12 19V5M5 12l7-7 7 7"
+                      d="M12 5v14M19 12l-7 7-7-7"
                     />
                   </svg>
                 </span>

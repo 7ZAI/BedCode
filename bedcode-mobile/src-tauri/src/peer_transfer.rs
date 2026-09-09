@@ -22,8 +22,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use bedcode_peer_net::{
-    CancelToken, Connection, DiscoveredPeerRecord, OutgoingFile, PeerNetNode, TerminalState,
-    TransferEvent,
+    CancelToken, Connection, DiscoveredPeerRecord, FileMeta, NodeId, OutgoingFile, PeerNetNode,
+    TerminalState, TransferEvent,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
@@ -449,6 +449,9 @@ fn drive_send_session(
         while let Some(event) = events_rx.recv().await {
             match event {
                 TransferEvent::OfferPending { .. } => {}
+                // 服务侧拉取事件走独立 serve 通道（drive_serve_events），
+                // 发起方会话通道收不到；防御性忽略
+                TransferEvent::PullServed { .. } => {}
                 TransferEvent::Progress { batch_id: bid, transferred, rate_bps, .. } => {
                     update_progress(&app, &bid, transferred, rate_bps);
                     if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
@@ -514,7 +517,15 @@ async fn apply_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState
         ),
         TerminalState::Cancelled { by_peer } => (
             "cancelled".to_string(),
-            Some(if *by_peer { "cancelled by receiver" } else { "cancelled by self" }.to_string()),
+            // 机器可读原因码（前端 i18n 映射；兼容映射旧本地化文本），
+            // 禁止把人类文案直接落 wire
+            Some(
+                if *by_peer {
+                    "cancelled-by-receiver".to_string()
+                } else {
+                    "cancelled-by-self".to_string()
+                },
+            ),
             None,
         ),
         TerminalState::Failed { detail } => ("failed".to_string(), Some(detail.clone()), None),
@@ -547,6 +558,125 @@ async fn settle_failed(app: &AppHandle, batch_id: &str, detail: &str, epoch: u64
         epoch,
     )
     .await;
+}
+
+// ==================== 服务侧拉取记账（双端记账） ====================
+
+/// 服务侧拉取会话事件消费（双端记账）：本端作为拉取源为对端供流时，引擎
+/// 经独立 serve 通道上报 PullServed/Progress/Terminal——此处登记/推进/结算
+/// 一条 direction=send 的任务并推 peer-transfer-changed。拉取发起方（对端）
+/// 另有自己的 receive 任务，两端各自展示同一次传输（spec 用户故事 26）。
+pub(crate) async fn drive_serve_events(app: AppHandle, mut rx: mpsc::Receiver<TransferEvent>) {
+    let mut last_emit = tokio::time::Instant::now() - PROGRESS_EMIT_INTERVAL;
+    while let Some(event) = rx.recv().await {
+        match event {
+            TransferEvent::PullServed { remote, batch_id, files, total_size } => {
+                register_serve_task(&app, &remote, &batch_id, files, total_size).await;
+                publish(&app);
+            }
+            TransferEvent::Progress { batch_id, transferred, rate_bps, .. } => {
+                update_progress(&app, &batch_id, transferred, rate_bps);
+                if last_emit.elapsed() >= PROGRESS_EMIT_INTERVAL {
+                    last_emit = tokio::time::Instant::now();
+                    publish(&app);
+                }
+            }
+            TransferEvent::Terminal { batch_id, state, .. } => {
+                settle_serve_terminal(&app, &batch_id, state).await;
+            }
+            TransferEvent::OfferPending { .. } => {}
+        }
+    }
+}
+
+/// 服务侧任务登记：解析对端展示名后插入 send 任务（服务侧不可重试：sources 空）
+async fn register_serve_task(
+    app: &AppHandle,
+    remote: &NodeId,
+    batch_id: &str,
+    files: Vec<FileMeta>,
+    total_size: u64,
+) {
+    let peer_name = super::peer_net::runtime_snapshot(app)
+        .await
+        .and_then(|(_, cache)| cache.get(remote).map(|r| r.device_name.clone()))
+        .unwrap_or_default();
+    let now = now_ms();
+    let dto = PeerTransferDto {
+        batch_id: batch_id.to_string(),
+        node_id: remote.to_string(),
+        peer_name,
+        direction: "send".to_string(),
+        status: "running".to_string(),
+        files: files
+            .into_iter()
+            .map(|f| PeerTransferFileDto { path: f.path, size: f.size })
+            .collect(),
+        total_bytes: total_size,
+        transferred_bytes: 0,
+        rate_bps: 0.0,
+        detail: None,
+        reject_reason: None,
+        created_at_ms: now,
+        updated_at_ms: now,
+    };
+    {
+        let state = app.state::<PeerTransferState>();
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        inner.tasks.insert(0, SendTask { dto, sources: Vec::new() });
+    }
+    tracing::info!(
+        batch_id = %batch_id,
+        remote = %remote,
+        "pull serve task registered (double-sided accounting)"
+    );
+}
+
+/// 服务侧任务终态结算：状态映射与发送侧 apply_terminal 同构（无 epoch——
+/// 服务侧批单次会话；取消码 -receiver 指拉取发起方取消，-self 指本端中止）
+async fn settle_serve_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
+    let (status, detail, reject_reason) = match &terminal {
+        TerminalState::Completed => ("completed".to_string(), None, None),
+        TerminalState::Rejected { reason } => (
+            "rejected".to_string(),
+            None,
+            Some(reason.as_str().to_string()),
+        ),
+        TerminalState::Cancelled { by_peer } => (
+            "cancelled".to_string(),
+            // 机器可读原因码（前端 i18n 映射），禁止把人类文案直接落 wire
+            Some(
+                if *by_peer {
+                    "cancelled-by-receiver".to_string()
+                } else {
+                    "cancelled-by-self".to_string()
+                },
+            ),
+            None,
+        ),
+        TerminalState::Failed { detail } => ("failed".to_string(), Some(detail.clone()), None),
+    };
+    {
+        let state = app.state::<PeerTransferState>();
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        if let Some(task) = inner
+            .tasks
+            .iter_mut()
+            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
+        {
+            task.dto.status = status;
+            // 完成结算：最后一条 Progress 可能略低于总量，归整为满额
+            if task.dto.status == "completed" {
+                task.dto.transferred_bytes = task.dto.total_bytes;
+            }
+            task.dto.detail = detail;
+            task.dto.reject_reason = reject_reason;
+            task.dto.updated_at_ms = now_ms();
+        }
+        evict_history_cap_locked(&mut inner.tasks);
+    }
+    tracing::info!(batch_id = %batch_id, state = ?terminal, "pull serve session ended");
+    publish(app);
 }
 
 // ==================== 发布与持久化 ====================

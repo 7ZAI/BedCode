@@ -77,7 +77,7 @@ const receivingCards = computed(() =>
 /** 活动传输区是否整体为空（决定空态显隐） */
 const listEmpty = computed(() => visibleQueue.value.length === 0 && receivingCards.value.length === 0)
 
-const FILTERS: Array<{ key: TransferFilter; labelKey: string; count: number }> = computed(() => [
+const FILTERS = computed<Array<{ key: TransferFilter; labelKey: string; count: number }>>(() => [
   { key: 'all', labelKey: 'transfer.v2.filter.all', count: counts.value.all },
   { key: 'sending', labelKey: 'transfer.v2.filter.sending', count: counts.value.sending },
   { key: 'receiving', labelKey: 'transfer.v2.filter.receiving', count: counts.value.receiving },
@@ -202,9 +202,54 @@ function historyStateClass(state: string): string {
   return 'ft-color-failed'
 }
 
+/** 取消原因码 → i18n（兼容旧引擎本地化文本 wire：'cancelled by sender' 等） */
+function cancelledReason(reason: string): string {
+  switch (reason) {
+    case 'cancelled-by-sender':
+    case 'cancelled by sender':
+      return t('transfer.task.reason.cancelledBySender')
+    case 'cancelled-by-receiver':
+    case 'cancelled by receiver':
+      return t('transfer.task.reason.cancelledByReceiver')
+    case 'cancelled-by-self':
+    case 'cancelled by self':
+      return t('transfer.task.reason.cancelledBySelf')
+    default:
+      return reason
+  }
+}
+
+/** 接收卡原因文案（wire detail → i18n；未知回退原文） */
+function receivingReason(task: ReceivingTask): string | null {
+  if (!task.reason) return null
+  return cancelledReason(String(task.reason))
+}
+
+/** 历史条目原因文案（取消码 i18n 化；failed detail 保留原文） */
+function historyReason(entry: HistoryEntry): string | null {
+  if (!entry.reason) return null
+  return cancelledReason(String(entry.reason))
+}
+
 function historyMeta(entry: HistoryEntry): string {
   const time = historyTime(entry.updatedAt)
   return time ? `${formatBytes(entry.size, t)} · ${time}` : formatBytes(entry.size, t)
+}
+
+/** 历史条目操作：下载完成 → 打开所在位置；发起方失败/被拒/中断且可重试 → 重试
+ *（终态归档历史后，重试入口从发送列表迁到历史） */
+function historyActions(entry: HistoryEntry): TaskAction[] {
+  const btns: TaskAction[] = []
+  if (entry.direction === 'download' && entry.state === 'completed') {
+    btns.push({ kind: 'open-location', label: t('transfer.v2.history.openFolder'), variant: 'tint' })
+  }
+  if (
+    entry.retryable &&
+    (entry.state === 'failed' || entry.state === 'rejected' || entry.state === 'interrupted')
+  ) {
+    btns.push({ kind: 'retry', label: t('transfer.task.retry'), variant: 'tint' })
+  }
+  return btns
 }
 
 /** 操作分发：kind → 对应 emit */
@@ -269,7 +314,7 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :progress="RECEIVING_TERMINAL.has(task.state) ? null : (progressPercent(task.offset ?? 0, task.size) ?? null)"
             progress-class="ft-progress-active"
             :indeterminate="(task.state === 'running' || task.state === 'transferring') && (task.offset ?? 0) === 0"
-            :reason="task.reason ? String(task.reason) : null"
+            :reason="receivingReason(task)"
             :actions="task.state === 'running' || task.state === 'transferring'
               ? [{ kind: 'cancel-receiving', label: t('transfer.task.cancel'), variant: 'neutral' }]
               : []"
@@ -302,9 +347,8 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             :state-label="t(historyStateKey(entry.state))"
             :state-class="historyStateClass(entry.state)"
             :progress="null"
-            :actions="(entry.direction === 'download' && entry.state === 'completed')
-              ? [{ kind: 'open-location', label: t('transfer.v2.history.openFolder'), variant: 'tint' }]
-              : []"
+            :reason="historyReason(entry)"
+            :actions="historyActions(entry)"
             @action="onCardAction"
           />
         </template>

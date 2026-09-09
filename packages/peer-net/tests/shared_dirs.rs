@@ -123,7 +123,9 @@ async fn spawn_pair(
 
     // 暴露端 B：共享目录复合处理器
     let (tx_b, rx_b) = mpsc::channel(256);
-    let handler_b = SharedDirHandler::new(store_b, saf_b, config_b, tx_b);
+    // 服务侧拉取记账通道（双端记账）：测试无消费方，丢弃即可
+    let (serve_tx_b, _serve_rx_b) = mpsc::channel(64);
+    let handler_b = SharedDirHandler::new(store_b, saf_b, config_b, tx_b, serve_tx_b);
 
     let (gate_tx_a, gate_rx_a) = mpsc::channel(16);
     let (gate_tx_b, gate_rx_b) = mpsc::channel(16);
@@ -475,8 +477,15 @@ async fn untrusted_dial_is_gated_before_any_share_session() {
         let (gate_tx, gate_rx) = mpsc::channel(16);
         let running = if i == 1 {
             let (tx, _rx) = mpsc::channel(64);
-            let handler =
-                SharedDirHandler::new(Arc::clone(&store), None, TransferConfig::default(), tx);
+            // 服务侧拉取记账通道（双端记账）：测试无消费方，丢弃即可
+            let (serve_tx, _serve_rx) = mpsc::channel(64);
+            let handler = SharedDirHandler::new(
+                Arc::clone(&store),
+                None,
+                TransferConfig::default(),
+                tx,
+                serve_tx,
+            );
             node.start_with_listener(listeners[i].try_clone().expect("clone"), gate_tx, Arc::new(handler))
                 .expect("start B")
         } else {

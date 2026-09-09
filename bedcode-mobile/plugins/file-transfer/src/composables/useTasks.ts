@@ -85,6 +85,8 @@ function mapWireHistory(raw: any): HistoryEntry {
     reason: raw.detail ?? raw.rejectReason ?? null,
     peerName: raw.peerName ?? '',
     localPath: raw.localPath ?? null,
+    // 发起方条目携带 retryMeta（历史重试按钮的判定依据）
+    retryable: raw.retryMeta != null,
     createdAt: raw.createdAtMs ?? 0,
     updatedAt: raw.updatedAtMs ?? 0,
   }
@@ -139,27 +141,67 @@ export function useTasks(context: PluginContext) {
 
     const firstNamed = next.find((t) => t.peer?.name)
     if (firstNamed?.peer?.name) peerName.value = firstNamed.peer.name
-    checkSettledNotification()
+    // 队列结算通知：终态已归历史（tasks 只含进行中）——出现新活跃任务即重置
+    // 结算态；队列清空时的通知由 history 新增 send 终态驱动（trySettleNotification）
+    if (list.length > 0) {
+      settledNotified = false
+      settledCounts = { completed: 0, failed: 0, cancelled: 0 }
+    }
   }
 
-  /** 队列全部完成/失败 → 系统通知（每批仅一次） */
+  /** 队列结算通知：终态归档历史后，结算点 = 历史新增 send 终态条目 + tasks 清空。
+   * 新增活跃任务时重置结算态；通知触发见 [`trySettleNotification`]。 */
   let settledNotified = false
-  function checkSettledNotification(): void {
-    const list = tasks.value
-    if (list.length === 0) {
-      settledNotified = false
+  let settledCounts: { completed: number; failed: number; cancelled: number } = {
+    completed: 0,
+    failed: 0,
+    cancelled: 0,
+  }
+  /** 历史已累计的条目 id（增量去重，防事件快照重放重复计数） */
+  let seenHistoryIds = new Set<string>()
+  /** 是否已完成过初始播种（命令路径或首个事件快照；播种前不累计，防旧条目误报） */
+  let historySeeded = false
+
+  /** 历史快照应用（初始播种 / 事件增量两口径）+ 队列结算统计 */
+  function applyHistorySnapshot(raw: any[], isInitialLoad: boolean): void {
+    history.value = isInitialLoad
+      ? raw.map(mapWireHistory)
+      : mergeHistory(history.value, raw.map(mapWireHistory))
+    if (isInitialLoad || !historySeeded) {
+      // 播种：只记 batchId 不累计（初始/重载的历史旧条目不是本次结算；
+      // wire 条目无 id 字段，mapWireHistory 才把 batchId 映射为 id）
+      historySeeded = true
+      seenHistoryIds = new Set(raw.map((e: any) => e.batchId))
       return
     }
-    if (list.some((t) => !isTerminalState(t.state))) {
-      settledNotified = false
+    if (raw.length === 0) {
+      // 清空历史：新纪元，重播种
+      seenHistoryIds = new Set()
+      settledCounts = { completed: 0, failed: 0, cancelled: 0 }
       return
     }
+    for (const e of raw) {
+      if (seenHistoryIds.has(e.batchId)) continue
+      seenHistoryIds.add(e.batchId)
+      // wire direction：send = 本端发出；仅统计发起方队列结算
+      if (e.direction !== 'send') continue
+      if (e.status === 'completed') settledCounts.completed++
+      else if (e.status === 'failed' || e.status === 'rejected') settledCounts.failed++
+      else if (e.status === 'cancelled') settledCounts.cancelled++
+    }
+    trySettleNotification()
+  }
+
+  /** 队列全部终态（tasks 已清空）且历史新增过 send 终态 → 系统通知（每批仅一次） */
+  function trySettleNotification(): void {
+    if (tasks.value.length > 0) return
     if (settledNotified) return
+    const { completed, failed, cancelled } = settledCounts
+    if (completed + failed + cancelled === 0) return
+    // 全取消不打扰（原语义：全部 cancelled 跳过）
+    if (cancelled > 0 && failed === 0 && completed === 0) return
     settledNotified = true
-    const completed = list.filter((t) => t.state === 'completed').length
-    const failed = list.filter((t) => t.state === 'failed' || t.state === 'rejected').length
-    const cancelled = list.filter((t) => t.state === 'cancelled').length
-    if (cancelled === list.length) return
+    settledCounts = { completed: 0, failed: 0, cancelled: 0 }
     void (async () => {
       try {
         if (failed > 0) {
@@ -310,7 +352,7 @@ export function useTasks(context: PluginContext) {
       },
     )
     dispHistory = context.events.on('plugin:file-transfer:history-changed', (payload: unknown) => {
-      if (Array.isArray(payload)) history.value = mergeHistory(history.value, payload.map(mapWireHistory))
+      if (Array.isArray(payload)) applyHistorySnapshot(payload, false)
     })
     void refresh()
     void refreshReceiving()
@@ -327,7 +369,7 @@ export function useTasks(context: PluginContext) {
       ])
       batches.value = Array.isArray(b) ? b.map(mapWireBatch) : []
       receivingTasks.value = Array.isArray(r) ? r.map(mapWireReceiving) : []
-      history.value = Array.isArray(h) ? h.map(mapWireHistory) : []
+      applyHistorySnapshot(Array.isArray(h) ? h : [], true)
     } catch (e) {
       console.error('[File Transfer] initial receiving snapshot failed:', e)
     }
