@@ -10,7 +10,7 @@
  * 日志目录：bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log（本地日期，与设备日志日期线一致）
  */
 import { spawn } from 'node:child_process'
-import { createWriteStream, mkdirSync } from 'node:fs'
+import { createWriteStream, mkdirSync, readdirSync, statSync, unlinkSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StringDecoder } from 'node:string_decoder'
@@ -18,6 +18,26 @@ import { StringDecoder } from 'node:string_decoder'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const LOG_DIR = join(__dirname, '..', '.dev-logs')
 mkdirSync(LOG_DIR, { recursive: true })
+
+// 保留天数：dev 日志按天轮转但不清理，长期开发 .dev-logs 会无限增长（单日
+// 会话可达数十 MB）；每次启动清理超期旧文件（桌面端 max_files 同思路）
+const RETENTION_DAYS = 14
+function cleanupOldLogs() {
+  const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000
+  for (const name of readdirSync(LOG_DIR)) {
+    if (!name.startsWith('android-dev.') || !name.endsWith('.log')) continue
+    const p = join(LOG_DIR, name)
+    try {
+      if (statSync(p).isFile() && statSync(p).mtimeMs < cutoff) {
+        unlinkSync(p)
+        console.log(`[dev-log] 清理过期日志（保留 ${RETENTION_DAYS} 天）: ${name}`)
+      }
+    } catch {
+      // 单文件清理失败不阻断启动
+    }
+  }
+}
+cleanupOldLogs()
 
 // 按天轮转。注意用本地日期：toISOString() 是 UTC，UTC+8 凌晨 0–7 点会
 // 把日志落进「昨天」的文件（设备 logcat 时间是本地时间，文件却少一天）。

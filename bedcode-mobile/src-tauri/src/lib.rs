@@ -39,8 +39,16 @@ pub fn run() {
     // 尽可能早地初始化日志
     // tracing 的 "log" feature 将 tracing:: 宏自动转发到 log crate
     // android_logger 将 log:: 输出发送到 adb logcat
-    android_logger::init_once(Config::default().with_max_level(LevelFilter::Debug).with_tag("BedCode"));
-    tracing::info!("BedCode Mobile early logging init (tracing → log → logcat)");
+    //
+    // 级别：dev 构建打满 Debug（开发期 logcat 全量）；release 收敛到 Info——
+    // Android logcat 主缓冲是系统级环形（每 app 默认约 256KB~1MB），release 打
+    // Debug 会占满缓冲导致关键日志被系统丢弃，且泄露内部路径等调试信息
+    #[cfg(debug_assertions)]
+    let log_level = LevelFilter::Debug;
+    #[cfg(not(debug_assertions))]
+    let log_level = LevelFilter::Info;
+    android_logger::init_once(Config::default().with_max_level(log_level).with_tag("BedCode"));
+    tracing::info!("BedCode Mobile early logging init (tracing → log → logcat, level={log_level})");
 
     tracing::info!("Building Tauri application...");
 
