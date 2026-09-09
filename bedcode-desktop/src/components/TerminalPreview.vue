@@ -63,6 +63,7 @@
     <div
       ref="terminalHostRef"
       class="relative flex-1 min-h-0 overflow-hidden"
+      :class="{ 'terminal-transparent': rendererDecision.allowTransparency }"
       :style="{ backgroundColor: containerBgColor }"
     >
       <!-- 终端背景图片层：渲染在 xterm 画布下方，不透明度由设置控制；
@@ -161,13 +162,16 @@ import Modal from '@/components/Modal.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
+import { useTerminalOutputStreamChannel } from '@/composables/useTerminalOutputStreamChannel'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { computeDesktopInitialTerminalSize } from '@/utils/terminalInitialSize'
+import { shouldApplyGridResize } from '@/utils/terminalResizePolicy'
 import {
-  shouldApplyGridResize,
-  ATLAS_PREHEAT_DELAY_MS,
-} from '@/utils/terminalResizePolicy'
+  decideRenderer,
+  decideAtlasRefreshFrames,
+  ATLAS_PREHEAT_FRAME_BUDGET,
+} from '@/utils/terminalRendererPolicy'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { attachLinuxImeGuard, type LinuxImeGuard } from '@/utils/terminalLinuxImeGuard'
 import { initPlatform } from '@/composables/usePlatform'
@@ -223,6 +227,19 @@ const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
 const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
 const bgImageUrl = ref('')
 
+// 渲染器/透明度决策（spec D-1 / D-2，route 默认 'B'）：背景图开启时强制 DOM
+// 渲染器（透明天然正确，一次切断 alpha 帧缓冲 + 无条件透明 viewport 两条残影
+// 通路）；Linux 无画布场景保持既有 LINUX_USE_DOM_RENDERER 事实选择；其余场景
+// WebGL（高吞吐）。isLinux 在 onMounted 中 await initPlatform() 后才确定，而
+// initTerminal 在之后调用，故此 computed 首次被消费时输入已就绪
+const rendererDecision = computed(() =>
+  decideRenderer({
+    isLinux: isLinux.value,
+    hasBackgroundImage: !!bgImageUrl.value,
+    linuxUseDomRenderer: LINUX_USE_DOM_RENDERER,
+  }),
+)
+
 // ==================== xterm 实例 ====================
 
 let terminal: Terminal | null = null
@@ -230,10 +247,16 @@ let fitAddon: FitAddon | null = null
 // Linux 平台 IME 防护（WebKitGTK 输入法多层去重 + textarea 提交后清空，仅
 // Linux 启用；三层缓解的完整说明见 utils/terminalLinuxImeGuard.ts）
 let imeGuard: LinuxImeGuard | null = null
-// WebGL resize 后字符图集重建的补刷定时器（atlas 预热：等 idle 分片光栅化
-// 基本完成后补一次全量重绘，避免整屏字形缺失的“临时失明”）
-let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
+// WebGL resize 后字符图集重建的补刷（atlas 预热）：rAF 有界迭代补全量重绘，
+// 让 idle 分片异步光栅化的非 ASCII 字形逐步上屏（替代固定延时猜数，见
+// scheduleAtlasPreheat）。0 表示当前无迭代在跑
+let atlasPreheatRaf = 0
 let webglAddon: WebglAddon | null = null
+// 渲染器重建序列号（spec D-1 竞态守卫）：每次透明度状态切换重建渲染器时递增，
+// context-loss 的 1s 异步恢复回调比对序列号，旧序列号（被更新的重建覆盖的
+// addon 周期）的回调一律丢弃——快速连续切背景图时只有最新一次重建的 addon 存活，
+// 对齐 VS Code _webglAddonLoadId 递增守卫（xtermTerminal.ts:901 / :1039）
+let rendererRebuildSeq = 0
 let resizeObserver: ResizeObserver | null = null
 // resize 分层防抖：垂直立即 / 水平 100ms 合并（对齐 VS Code TerminalResizeDebouncer）
 let resizeDebouncer: TerminalResizeDebouncer | null = null
@@ -297,31 +320,6 @@ let pendingReplayRefresh = false
 // 避免单帧解析超大字符串导致 UI 卡顿
 const MAX_WRITE_CHUNK = 64 * 1024
 
-// ==================== 临时调试：终端侧输出字节 dump（已注释禁用，恢复排查时取消注释） ====================
-// 仅用于排查「PTY 源头输出 vs 终端显示」字节不一致问题。
-// [已注释禁用] 恢复时取消下方 /* */ 注释，并恢复后端命令 append_terminal_output_dump 注册。
-/*
-// 本项目 tsconfig 未引入 vite/client 类型，此处强转桥接避免 TS2339（不必为临时调试改配置）
-const TERMINAL_OUTPUT_DUMP_ENABLED = Boolean(
-  (import.meta as unknown as { env?: { DEV?: boolean } }).env?.DEV,
-)
-
-// 记录上一次 dump 所属会话：新 PTY 会话（sessionId 变化）时第一个 flush 前重置终端侧
-// 文件（覆盖旧数据），与源头 pty dump 每次会话 truncate 对齐；同会话内重连/重订阅不重置
-let dumpLastSessionId = ''
-
-// 追加待写入终端的字节到 dump 文件（临时调试；失败仅告警，不阻塞写入管线）
-function dumpTerminalOutput(data: Uint8Array, sessionId: string) {
-  if (!TERMINAL_OUTPUT_DUMP_ENABLED || data.length === 0) return
-  const reset = sessionId !== dumpLastSessionId
-  dumpLastSessionId = sessionId
-  // 只记录真实输出负载，便于与源头逐字节对比；async 调用不阻塞 flush
-  invoke('append_terminal_output_dump', { data: Array.from(data), reset }).catch((e) => {
-    console.warn('[debug-dump] 终端输出 dump 写入失败:', e)
-  })
-}
-*/
-
 // 写入策略：rAF 合并同帧事件为一次 write（对齐 VS Code 行为，xterm.js 内部再统一调度渲染）；
 // 大块（> MAX_WRITE_CHUNK）经 writeInChunks 分片，每 WRITE_YIELD_THRESHOLD 让出主线程一次。
 
@@ -361,9 +359,6 @@ async function flushWriteQueue() {
         combined.set(chunk, offset)
         offset += chunk.byteLength
       }
-
-      // [已注释禁用] 临时调试 dump：terminal.write 前记录待写字节（恢复排查时取消注释）
-      // dumpTerminalOutput(combined, sessionId.value)
 
       if (totalBytes <= MAX_WRITE_CHUNK) {
         terminal.write(combined)
@@ -437,8 +432,15 @@ function enqueueOutput(data: Uint8Array) {
 //   仅首次提示一次，后续重连/重订阅触发时仅后台日志记录，避免反复打扰
 let historyTruncatedNotified = false
 
-const terminalStream = useTerminalOutputStream({
-  onData: ({ data }) => {
+// 终端输出传输层开关：默认 "ws"（WebSocket 环回，现有行为）；
+// "channel"（Tauri Channel 原生 IPC，规避 WebKitGTK WS 缓冲溢出丢消息）。
+// 经 VITE_TERMINAL_TRANSPORT 环境变量选择，便于 A/B 验证两种方案并行。
+const TERMINAL_TRANSPORT: 'ws' | 'channel' =
+  import.meta.env.VITE_TERMINAL_TRANSPORT === 'channel' ? 'channel' : 'ws'
+
+// 两种传输层的公共选项（接口一致，onData 帧已通过 seq 连续性校验/重播去重）
+const terminalStreamOptions = {
+  onData: ({ data }: { data: Uint8Array }) => {
     enqueueOutput(data)
     if (!isUserScrolling.value) {
       scrollToBottom()
@@ -465,7 +467,12 @@ const terminalStream = useTerminalOutputStream({
     )
     toast.warning(t('desktop.terminal.historyTruncated'))
   },
-})
+}
+
+const terminalStream =
+  TERMINAL_TRANSPORT === 'channel'
+    ? useTerminalOutputStreamChannel(terminalStreamOptions)
+    : useTerminalOutputStream(terminalStreamOptions)
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
@@ -704,20 +711,37 @@ watch(
 watch(bgImage, () => {
   resolveBgImageUrl()
 })
-watch([bgImageUrl, bgOpacity], () => {
-  if (terminal) {
-    terminal.options.theme = getTheme()
-    // 仅背景图启用时透明（让图片透出）；其余场景关闭透明，避免 WebGL 透明
-    // 帧缓冲滚动不清帧导致的残影/行入侵。切换后强制重绘一次清除旧模式残留帧
-    terminal.options.allowTransparency = !!bgImageUrl.value
-    terminal.refresh(0, terminal.rows - 1)
+watch([bgImageUrl, bgOpacity], (newVals, oldVals) => {
+  if (!terminal) return
+  const [newUrl] = newVals as [string, number]
+  const [oldUrl] = oldVals as [string, number]
+  // 透明度有无切换以 bgImageUrl 有无为准（背景图开关 = 透明开关）。
+  // 为什么必须重建而非只改 options：addon-webgl 0.19.0 不监听
+  // allowTransparency 的运行时变化（_setTransparency 是零调用的死代码），
+  // 渲染层 alpha 标志与 canvas 的 { alpha } 属性在 getContext 之后不可变——
+  // 只改 options + refresh 会让“无图→开图”后透明背景被 premultiply 成黑色
+  // （背景图不可见）、“开图→关图”后 alpha 残留留下透明洞（spec D-1）
+  if (!!newUrl !== !!oldUrl) {
+    rebuildRenderer()
+    return
   }
+  // 仅不透明度变化：透明状态未切换，无需重建；theme 重设 + 重绘一次即可
+  // （背景图透明度由图片层 CSS opacity 实时控制，xterm 侧无额外状态）
+  terminal.options.theme = getTheme()
+  terminal.refresh(0, terminal.rows - 1)
 })
 
 // ==================== 初始化 ====================
 
-/** WebGL 渲染器：加载并处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建） */
-function initWebGL(term: Terminal): boolean {
+/**
+ * WebGL 渲染器：加载并处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建）。
+ *
+ * seq：initWebGL 调用时刻的渲染器重建序列号（rebuildRenderer / context-loss
+ * 恢复之间的竞态守卫）。恢复回调触发时若序列号已变（期间经历过渲染器重建），
+ * 说明本次恢复属于已被覆盖的旧 addon 周期，直接丢弃，避免旧 addon 的异步
+ * 恢复覆盖新 addon（对齐 VS Code _webglAddonLoadId 守卫）。
+ */
+function initWebGL(term: Terminal, seq: number): boolean {
   try {
     webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
@@ -728,7 +752,10 @@ function initWebGL(term: Terminal): boolean {
       term.element?.classList.remove('xterm-hidden-cursor')
       // 延迟 1s 后尝试重新创建 WebGL 渲染器
       setTimeout(() => {
-        if (!term || webglAddon) return
+        // 恢复回调的竞态守卫：期间若有新 addon 已激活（webglAddon 非空）、
+        // 渲染器被重建过（序列号漂移）或终端已销毁，本次恢复均属残留周期，
+        // 直接丢弃，避免覆盖新渲染器的上下文
+        if (!term || webglAddon || seq !== rendererRebuildSeq) return
         try {
           const newAddon = new WebglAddon()
           newAddon.onContextLoss(() => {
@@ -758,6 +785,50 @@ function initWebGL(term: Terminal): boolean {
     webglAddon = null
     return false
   }
+}
+
+/**
+ * 透明度状态（背景图开/关）切换时重建渲染器（spec D-1）：
+ * dispose 现有 WebGL addon → 重设 allowTransparency → 按 decideRenderer 结果
+ * 重新 initWebGL 或保持 DOM → 重设 theme → 重算尺寸 → 全量重绘。
+ *
+ * 为什么必须重建而非只改 options：addon-webgl 0.19.0 中 _setTransparency 是零
+ * 调用的死代码，渲染层 alpha 标志与 canvas 的 { alpha } 属性在 getContext 之后
+ * 不可变。先 dispose 再 loadAddon 避免泄漏 WebGL context（对齐 VS Code
+ * _enableWebglRenderer “Dispose of existing addon before creating a new one
+ * to avoid leaking WebGL contexts”）。WebGL 与 DOM 渲染器 cell 尺寸不同，
+ * 重建后必须重算行列（context-loss 恢复路径同款处理）；重建期间同步
+ * xterm-hidden-cursor 类的加/删，避免双光标或光标消失。
+ *
+ * DOM 渲染器分支无 addon 可重建：xterm 6.0 的 DOM(canvas) 渲染器透明由 DOM 层
+ * 实现（canvas 恒为 alpha），重设选项 + theme 即生效，此处走同路径保证两条
+ * 残影通路（alpha 帧缓冲 / 无条件透明 viewport）一致的收敛状态。
+ */
+function rebuildRenderer() {
+  if (!terminal) return
+  // 重建序列号递增：从这一刻起，previous 周期（含其 1s 恢复回调）作废
+  const seq = ++rendererRebuildSeq
+  const decision = rendererDecision.value
+  if (webglAddon) {
+    webglAddon.dispose()
+    webglAddon = null
+  }
+  // 透明度是渲染器构造时读一次的选项，必须在重建渲染器之前重设
+  terminal.options.allowTransparency = decision.allowTransparency
+  if (decision.useWebgl) {
+    const loaded = initWebGL(terminal, seq)
+    // WebGL 激活后隐藏 DOM 层光标，避免双光标（与 initTerminal 同款处理）；
+    // 加载失败回退 DOM 渲染器时恢复 DOM 光标
+    terminal.element?.classList.toggle('xterm-hidden-cursor', loaded)
+  } else {
+    // DOM 渲染器：DOM 层光标可见（不再由 WebGL 层替代）
+    terminal.element?.classList.remove('xterm-hidden-cursor')
+  }
+  terminal.options.theme = getTheme()
+  applyResize()
+  // 全量重绘：applyResize 仅在 cols/rows 变化时重绘，而重建后必须无条件整屏
+  // 重绘一次，清除旧渲染模式（alpha toggle / 渲染器切换）的残留帧
+  terminal.refresh(0, terminal.rows - 1)
 }
 
 function initTerminal() {
@@ -791,13 +862,35 @@ function initTerminal() {
     rightClickSelectsWord: true,
     altClickMovesCursor: true,
     drawBoldTextInBrightColors: true,
+    // 与 VS Code 终端对齐的选项（spec D-5 / ticket 04）：
+    // scrollOnEraseInDisplay —— PuTTY 式清屏：ED 清屏序列擦除内容进入
+    // scrollback 而非只清视口（默认 false 时全屏 TUI 清屏后内容错乱残留）
+    scrollOnEraseInDisplay: true,
+    // windowOptions —— 应答 DA1/DSM 能力查询，老式终端不因探测超时降级
+    windowOptions: {
+      getWinSizePixels: true,
+      getCellSizePixels: true,
+      getWinSizeChars: true,
+    },
+    // 双击选词分隔符 = VS Code 默认（实测 terminalConfiguration.ts:503），
+    // 在 xterm 默认（ ()[]{}\',"` ）基础上补齐 box-drawing ─ 与中文引号
+    // ‘’“”，路径/URL 双击选中不截断。字面量含反引号与单引号，故外层用
+    // 单引号时反斜杠作转义前缀
+    wordSeparator: ' ()[]{}\',"`─‘’“”|',
+    // Tab 制表宽度与最低对比度对齐 VS Code 默认值（xterm 默认即 8 / 1，
+    // 显式声明防默认值漂移）；滚动灵敏度保持 VS Code 相同的 1 / 5
+    tabStopWidth: 8,
+    minimumContrastRatio: 1,
+    scrollSensitivity: 1,
+    fastScrollSensitivity: 5,
     // 主题
     theme: getTheme(),
-    // 仅在启用背景图片时允许透明（让背景图透出）；其余场景关闭透明。
-    // 透明模式会迫使 WebGL 使用 alpha 帧缓冲并启用"复制帧缓冲区域"滚动优化，
-    // 旧行像素不被清除 → 滚动/刷新时出现残影与"行入侵"；不透明时 WebGL 每帧
-    // 正常清帧，残影消失。background 透明主题由 getTheme() 在 bgImageUrl 时返回
-    allowTransparency: !!bgImageUrl.value,
+    // 透明度与渲染器由 decideRenderer 统一决策（spec D-1/D-2，route 默认 'B'）：
+    // 仅背景图开启时透明（让图片透出）；其余场景关闭透明，避免 WebGL alpha 帧
+    // 缓冲滚动不清帧导致的残影/行入侵；背景图场景同时强制 DOM 渲染器，透明
+    // 天然正确。allowTransparency 在渲染器创建时一次性生效，运行时的透明度
+    // 状态变化由 rebuildRenderer（dispose + 重建）处理，不能只改 options
+    allowTransparency: rendererDecision.value.allowTransparency,
     allowProposedApi: true,
   })
 
@@ -813,11 +906,13 @@ function initTerminal() {
   terminal.unicode.activeVersion = '11'
 
   terminal.open(terminalHostRef.value)
-  // Linux 走 DOM(canvas) 渲染器（见 LINUX_USE_DOM_RENDERER，消除 WebGL 图集发蒙）；
-  // Windows/macOS 保持 WebGL（高吞吐 + 已修复的透明残影路径）。DOM 渲染器下
-  // webglAddon 为 null，后续 clearTextureAtlas / xterm-hidden-cursor 分支天然跳过。
-  if (!isLinux.value || !LINUX_USE_DOM_RENDERER) {
-    initWebGL(terminal)
+
+  // 渲染器选择由 decideRenderer 决策（Linux 无画布 / 背景图 → DOM，其余 WebGL）；
+  // initTerminal 时机 isLinux 已 await 解析，输入稳定。DOM 渲染器下 webglAddon
+  // 为 null，后续 clearTextureAtlas / xterm-hidden-cursor 分支天然跳过。
+  // 传入当前重建序列号，作为 context-loss 恢复回调的竞态基线
+  if (rendererDecision.value.useWebgl) {
+    initWebGL(terminal, rendererRebuildSeq)
   }
 
   // Linux WebKitGTK IME 防护（仅 Linux；Windows/macOS 走 xterm 原生路径不变）：
@@ -861,6 +956,10 @@ function initTerminal() {
   resizeDebouncer = new TerminalResizeDebouncer({
     onApply: applyResize,
     getBufferLength: () => (terminal ? terminal.buffer.active.length : null),
+    // 窗口不可见（最小化/切后台）时挂起 resize 应用，恢复可见时 flush 一次性兑现
+    // （spec D-6，对齐 VS Code runWhenWindowIdle 分支；模块内不读 document 的
+    // Seam A 约定由注入满足，与下方 windowVisibleHandler 的 flush 语义一致）
+    isVisible: () => document.visibilityState === 'visible' && !document.hidden,
   })
   resizeObserver = new ResizeObserver((entries) => {
     const rect = entries[0]?.contentRect
@@ -1106,19 +1205,33 @@ function applyDprFit() {
 
 /**
  * WebGL atlas 预热补刷：resize 重建字符图集后，非 ASCII 字形（中文/box-drawing/
- * emoji）按 requestIdleCallback 分片异步光栅化，等基本完成后补一次全量重绘，
- * 让屏幕一次恢复完整（否则用户看到“前几次乱，第三次好”）。DOM 渲染器下无害
- * （refresh 只是重建 DOM 行）。同窗口多次 resize 合并为一次（重置计时器）。
+ * emoji）按 requestIdleCallback 分片异步光栅化（warmUp 只预热 ASCII 33-126）。
+ *
+ * 为什么用 rAF 有界迭代而非固定延时：atlas 页合并时 beginFrame() 会触发全量重绘，
+ * 迭代刷新能自然跟上光栅化进度（spec D-4，替代 ATLAS_PREHEAT_DELAY_MS=700 猜数——
+ * 低配机不够、高性能机浪费）。每帧补一次全量 refresh，直到帧预算 0 或元素脱离 DOM。
+ *
+ * 无 atlas 的场景（DOM 渲染器：Linux / 背景图强制 DOM）直接 no-op——refresh 在那里
+ * 只是重建 DOM 行，由渲染循环自身驱动，无需预热。同窗口多次 resize 不重复启动。
+ * rAF 在窗口最小化时暂停，恢复可见后继续跑完剩余预算是可接受语义（预算在隐藏期
+ * 不消耗，可见后仍会补完）。
  */
 function scheduleAtlasPreheat() {
-  if (atlasPreheatTimer) clearTimeout(atlasPreheatTimer)
-  atlasPreheatTimer = setTimeout(() => {
-    atlasPreheatTimer = null
+  if (!terminal || !webglAddon || atlasPreheatRaf !== 0) return
+  let budget = ATLAS_PREHEAT_FRAME_BUDGET
+  const step = () => {
+    atlasPreheatRaf = 0
     // xterm 已销毁（element 已脱离 DOM）则不再重绘
-    if (terminal && terminal.element?.isConnected) {
-      terminal.refresh(0, terminal.rows - 1)
+    if (!terminal || !terminal.element?.isConnected) return
+    terminal.refresh(0, terminal.rows - 1)
+    // 帧预算递减：decideAtlasRefreshFrames 返回 0 表示停止（也防御负数/残留回调）
+    const next = decideAtlasRefreshFrames(budget)
+    if (next > 0) {
+      budget = next
+      atlasPreheatRaf = requestAnimationFrame(step)
     }
-  }, ATLAS_PREHEAT_DELAY_MS)
+  }
+  atlasPreheatRaf = requestAnimationFrame(step)
 }
 
 /**
@@ -1435,10 +1548,10 @@ onUnmounted(() => {
     pendingReplayRefresh = false
   }
 
-  // 清理 WebGL atlas 预热补刷定时器
-  if (atlasPreheatTimer) {
-    clearTimeout(atlasPreheatTimer)
-    atlasPreheatTimer = null
+  // 清理 WebGL atlas 预热迭代（rAF 句柄非 0 时取消；回调内已做 isConnected 检查）
+  if (atlasPreheatRaf) {
+    cancelAnimationFrame(atlasPreheatRaf)
+    atlasPreheatRaf = 0
   }
 
   // 清理前台 flush 监听
@@ -1518,11 +1631,15 @@ defineExpose({
 
 /* xterm.css 默认为 .xterm-viewport 设置 background-color:#000（不透明黑）。
    xterm 6 中滚动已由 .xterm-scrollable-element 接管，但该元素仍是覆盖整个
-   终端区域的定位层，位于背景图片层之上、渲染画布之下。置为透明后背景图片
-   才能透出；未设置背景图片时主题背景色由画布/滚动层绘制，此覆盖无副作用。
-   选择器带 .xterm 前缀，优先级高于 xterm.css 的 `.xterm .xterm-viewport`，
-   不依赖样式表加载顺序。 */
-:deep(.xterm .xterm-viewport) {
+   终端区域的定位层，位于背景图片层之上、渲染画布之下。
+
+   透明仅随 terminal-transparent 类生效（镜像 xterm 6.1 的 allow-transparency
+   类机制在 6.0 结构上的实现，spec D-3）：背景图开启（allowTransparency=true，
+   类绑定于模板容器）时置透明让图片透出；非透明时**不覆盖**，继承 xterm.css 的
+   #000——不再像旧版那样把"透明模式才该透明"变成"永远透明"（无条件透明是第二条
+   残影通路的放大器）。选择器带 .xterm 前缀，优先级高于 xterm.css 的
+   `.xterm .xterm-viewport`，不依赖样式表加载顺序。 */
+:deep(.terminal-transparent .xterm-viewport) {
   background-color: transparent;
 }
 

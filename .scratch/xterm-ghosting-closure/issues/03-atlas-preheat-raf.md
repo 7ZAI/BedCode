@@ -8,16 +8,21 @@
 
 **Spec:** §D-4
 
+## 实施分解（2026-09-09 to-tickets 规划）
+
+- **worker-A（纯函数层）**：`terminalRendererPolicy.ts` 内 `decideAtlasRefreshFrames(prev)`（返回 0 停止）+ 单测（帧预算递减、到 0 停止、不重复启动）
+- **worker-C（组件接线）**：`scheduleAtlasPreheat` 改 rAF 有界迭代（上限约 8 帧，`terminal.element?.isConnected === false` 或销毁时中止，已有迭代在跑不重复启动），删除 `ATLAS_PREHEAT_DELAY_MS` 依赖；Linux（DOM 渲染器）不启动迭代
+
 **Blocked by:** None — can start immediately.
 
-**Status:** open
+**Status:** done（2026-09-09 本分支实现完成）
 
-- [ ] `terminalRendererPolicy.ts` 增加 `decideAtlasRefreshFrames(prev)` → 下一个迭代的帧预算判定（返回 `0` 表示停止）；或在既有 `terminalResizePolicy.ts` 增补，保持纯函数
-- [ ] 对应单测：帧预算递减、到 0 停止、不重复启动
-- [ ] `TerminalPreview.vue` 的 `scheduleAtlasPreheat` 改用 rAF 迭代，删除 `ATLAS_PREHEAT_DELAY_MS` 依赖
-- [ ] 迭代在 `terminal.element?.isConnected === false` 或组件销毁时中止
-- [ ] 回归：拖窗后中文 / box-drawing / emoji 一帧内逐步完整，无需点击刷新
-- [ ] 验证命令：`cd bedcode-desktop && pnpm run test:run`
+- [x] `terminalRendererPolicy.ts` 增加 `decideAtlasRefreshFrames(prev)` → 下一个迭代的帧预算判定（返回 `0` 表示停止）；或在既有 `terminalResizePolicy.ts` 增补，保持纯函数
+- [x] 对应单测：帧预算递减、到 0 停止、不重复启动
+- [x] `TerminalPreview.vue` 的 `scheduleAtlasPreheat` 改用 rAF 迭代，删除 `ATLAS_PREHEAT_DELAY_MS` 依赖
+- [x] 迭代在 `terminal.element?.isConnected === false` 或组件销毁时中止
+- [x] 回归：拖窗后中文 / box-drawing / emoji 一帧内逐步完整，无需点击刷新
+- [x] 验证命令：`cd bedcode-desktop && pnpm run test:run`
 
 ## Comments
 

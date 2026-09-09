@@ -246,7 +246,7 @@ describe('useTerminalOutputStream', () => {
     ])
   })
 
-  it('seq 缺口：单帧偶发跳过不重订阅，连续 3 次才真正快照重订阅', async () => {
+  it('seq 缺口：立即快照重订阅补回缺失字节，冷却期内缺口跳过不渲染', async () => {
     stream.start('s1')
     await flushAsync()
     const ws = MockWebSocket.instances[0]
@@ -260,29 +260,15 @@ describe('useTerminalOutputStream', () => {
     }
     expect(frames).toHaveLength(5)
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // 第 1 次缺口：帧首 seq 6 ≠ lastRendered(4)+1（事件 5 丢失）
-    // 偶发缺口不 resubscribe，按非严格路径推进游标：lastSeq 之后的字节仍写入管线
+    // 缺口：事件 5 丢失，帧 6 到达。新语义：不跳过渲染（残缺字节会写进 buffer
+    // 变残渣），立即快照重订阅补回；缺口帧不交付、不推进游标
     ws.binary([9], 6)
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(warnSpy).toHaveBeenCalled()
-    expect(frames).toHaveLength(6) // 跳过缺口帧，但仍交付
-    expect(MockWebSocket.instances.length).toBe(1) // 未触发重连
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/seq gap, re-subscribing/))
+    expect(frames).toHaveLength(5) // 缺口帧未交付（缺失字节由重播补回）
 
-    // 第 2 次缺口：frame.start=8、lastRendered=6，仍 <3 次不 resubscribe
-    ws.binary([10], 8)
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(warnSpy).toHaveBeenCalledTimes(2)
-    expect(MockWebSocket.instances.length).toBe(1)
-
-    // 第 3 次缺口：frame.start=10、lastRendered=8，连续 3 次 → 真正 resubscribe
-    ws.binary([11], 10)
-    expect(errorSpy).toHaveBeenCalled()
-    expect(errorSpy.mock.calls[0]![0]).toMatch(/persistent seq gap \(3x\)/)
-
-    // 强制重连：旧连接关闭，新连接建立后自动重新订阅（无参——服务端恒全量重播）
+    // 强制重连：旧连接关闭，新连接建立后自动重新订阅（服务端恒全量重播）
     await flushAsync()
     expect(MockWebSocket.instances.length).toBeGreaterThanOrEqual(2)
     const ws2 = MockWebSocket.instances[MockWebSocket.instances.length - 1]
@@ -291,12 +277,17 @@ describe('useTerminalOutputStream', () => {
     const msg = JSON.parse(ws2.sent[0])
     expect(msg.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 快照重播：已渲染部分（seq ≤ 10）跳过，缺口从 seq 11 无缝衔接
+    // 快照重播：已渲染部分（seq ≤ 4）跳过，缺失的 5 从重播补回，无缝衔接
     ws2.text(subscribeResponse(0, 100, 3))
-    ws2.binary([11, 12, 13], 11, 3)
-    expect(frames[frames.length - 1]!.lastSeq).toBe(13)
+    ws2.binary([5, 6, 7, 8], 5, 4)
+    expect(frames[frames.length - 1]!.lastSeq).toBe(8)
 
-    errorSpy.mockRestore()
+    // 冷却期内（3s）再次缺口：不重复重订阅，缺口帧跳过不交付
+    ws2.binary([10], 10)
+    expect(warnSpy).toHaveBeenCalledTimes(1) // 冷却期内不再打 re-subscribing
+    expect(MockWebSocket.instances.length).toBe(2) // 未再触发重连
+    expect(frames[frames.length - 1]!.lastSeq).toBe(8) // 缺口帧未交付
+
     warnSpy.mockRestore()
   })
 

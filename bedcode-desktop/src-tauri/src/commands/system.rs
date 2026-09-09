@@ -259,47 +259,7 @@ pub fn get_local_ip_addresses() -> Vec<String> {
         .unwrap_or_default()
 }
 
-// ==================== 临时调试命令（已注释禁用，恢复排查时取消注释） ====================
-
-// 2026-08: 终端侧输出字节 dump 命令，配合 PtyReader 源头 dump 逐字节对比。
-// [已注释禁用] 恢复时取消下方 /* */ 注释，并在 lib.rs 中重新注册该命令。
-/*
-/// 追加终端侧输出字节到 dump 文件（临时调试用，仅 dev 构建生效）
-///
-/// 配合后端 PTY 源头 dump：前端在每次 terminal.write 前把待写字节追加到
-/// terminal_output_dump.bin（追加模式），与源头 pty_output_dump.bin 同目录
-/// （= 日志目录，见 system::logging::dump_dir）逐字节对比，排查「源头输出 vs
-/// 终端显示」不一致问题。`reset=true` 表示新会话开始：覆盖旧文件，
-/// 与源头 dump 每次会话 truncate 对齐。排查完成后删除本命令及前端调用。
-#[tauri::command]
-pub fn append_terminal_output_dump(data: Vec<u8>, reset: bool) {
-    use std::io::Write;
-    // 仅 dev 构建生效（release 前端不会调用，此处双保险）
-    if !cfg!(debug_assertions) || data.is_empty() {
-        return;
-    }
-    let Some(log_dir) = crate::system::logging::dump_dir() else {
-        tracing::warn!("[debug-dump] dump 目录未初始化，跳过终端 dump");
-        return;
-    };
-    let mut opts = std::fs::OpenOptions::new();
-    opts.create(true).append(true);
-    if reset {
-        // 新会话覆盖：打开即截断旧内容（与源头 pty dump 对齐）
-        opts.truncate(true);
-    }
-    let Ok(mut file) = opts.open(log_dir.join("terminal_output_dump.bin")) else {
-        tracing::warn!(
-            "[debug-dump] 打开 terminal dump 文件失败: {}",
-            log_dir.display()
-        );
-        return;
-    };
-    if let Err(e) = file.write_all(&data).and_then(|_| file.flush()) {
-        tracing::warn!("[debug-dump] 写入 terminal dump 失败: {e}");
-    }
-}
-*/
+// ==================== 系统信息查询 ====================
 
 /// 获取系统基本信息（OS / 设备名称 / IP 地址，启动时采集一次）
 #[tauri::command]

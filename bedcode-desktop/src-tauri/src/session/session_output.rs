@@ -212,9 +212,20 @@ const PENDING_EVENT_CAP: usize = 16384;
 /// 丢弃该事件并冲正背压记账，防止 PERMANENT 阻塞拖死整个会话
 const SEND_BACKPRESSURE_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// 背压水位：未 ack 字节超过该值 → 暂停该会话 PTY 读取（spec 04-06 渲染反馈环）
-/// 取值须 > 前端 ack 阈值(64KB) + 渲染/写管线 in-flight 余量；1MB 保守兜底
-const BACKPRESSURE_WATERMARK_BYTES: u64 = 1024 * 1024;
+/// 背压高位水（暂停）：未 ack 字节超过该值 → 暂停该会话 PTY 读取
+/// （spec 04-06 渲染反馈环）。
+///
+/// 关键约束：必须低于 WebKitGTK WS 接收缓冲容量（约 64KB–256KB）。旧值
+/// 1MB 远高于 WS 缓冲——前端每 64KB 就 ack 一次，unacked 正常只在 64~128KB
+/// 震荡、永远到不了 1MB，PTY 从不暂停；而 WS 缓冲在 ~128KB 就溢出丢整消息
+/// （opencode 滚动残渣 + Parsing error 的直接来源）。降到 64KB 后源头在
+/// 「WS 缓冲装满前」即停住，从根上杜绝丢消息。参考 VS Code 终端流控
+/// HighWatermarkChars=100KB（Electron IPC 可靠通道）的本地位取值。
+const BACKPRESSURE_HIGH_BYTES: u64 = 64 * 1024;
+/// 背压低水位（恢复）：已暂停时未 ack 降到该值以下才恢复读（滞回防抖，
+/// 避免单阈值在临界点反复暂停/恢复抖振）。参考 VS Code LowWatermarkChars=5KB；
+/// 取 8KB 与前端 ack 粒度（64KB 全量释放）配合——一次 ack 即回落穿破低位水。
+const BACKPRESSURE_RESUME_BYTES: u64 = 8 * 1024;
 /// 未 ack 记账 FIFO 容量（事件数）：防 ack 停滞时无限增长；满则冻结记账，
 /// unacked 保持近满态触发暂停（保守），ack 弹出后自动恢复精确记账
 const UNACKED_FIFO_CAP: usize = 8192;
@@ -281,6 +292,15 @@ pub struct SessionOutputManager {
     /// 未 ack 事件 FIFO（index → bytes）：ack 按序弹出精减 unacked_bytes；
     /// std Mutex 仅作短临界区（无 await 保持），热路径成本低
     unacked_fifo: std::sync::Mutex<std::collections::VecDeque<(u64, u64)>>,
+    /// 背压暂停滞回状态：true = 已暂停（等 unacked 降到低水位才恢复）。
+    /// 由 PTY 读线程经 should_pause() 同步读写，纯原子无锁；会话新建为 false
+    paused: AtomicBool,
+    /// 输出入队串行锁：串行化 on_output 的「index 分配 + 入队 + 广播」整段
+    /// 临界区。PtyReader 用 spawn 并发调 on_output，多个任务并发时 index
+    /// 分配（写锁）与广播（读锁）之间可被其他任务插入，导致 send_queue 顺序
+    /// 与 index 顺序错乱（60 先于 59 到达 forward_loop）→ 帧 seq 错乱/空洞 →
+    /// 前端误判 gap。串行后 index 顺序 = 广播顺序，根治该竞态。
+    output_serial: tokio::sync::Mutex<()>,
 }
 
 impl SessionOutputManager {
@@ -291,6 +311,8 @@ impl SessionOutputManager {
             subscribers: RwLock::new(HashMap::new()),
             unacked_bytes: AtomicU64::new(0),
             unacked_fifo: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            paused: AtomicBool::new(false),
+            output_serial: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -309,6 +331,12 @@ impl SessionOutputManager {
     /// 停摆。满时丢弃该事件：客户端重订阅全量重播整体回补，事件仍保留
     /// 在输出队列中
     pub async fn on_output(&self, event: OutputEvent) {
+        // 串行化整个「index 分配 + 入队 + 广播」临界区：PtyReader 用 spawn
+        // 并发调 on_output，若不串行，多个任务在 index 分配（写锁）与广播
+        // （读锁）之间互相插入，send_queue 顺序与 index 顺序错乱（60 先于 59）
+        // → forward_loop 帧 seq 错乱/空洞 → 前端误判 gap。串行后顺序一致。
+        let _guard = self.output_serial.lock().await;
+
         // 序号按会话连续分配（队列 max_seq + 1），替代跨会话全局计数器（next_output_index）：
         // 消除「多会话并发 → 会话内实时帧 seq 带跨会话空洞 → 客户端 `seq > last_rendered + 1 →
         // 重订阅` 缺口检测被误触发 → 反复重订阅风暴」（桌面端 opencode 会话输入时后台日志
@@ -442,10 +470,29 @@ impl SessionOutputManager {
         }
     }
 
-    /// 背压判定（PTY 读线程同步调用）：未 ack 字节超过水位 → 暂停读取。
-    /// 纯原子读，零锁零阻塞，可安全地从阻塞读线程高频轮询
+    /// 背压判定（PTY 读线程同步调用，零锁零阻塞可高频轮询）。
+    ///
+    /// 滞回语义（对比 VS Code 终端流控 High/LowWatermark）：
+    /// - 未暂停时：unacked > 高位水（64KB）→ 置暂停态并暂停读；
+    /// - 已暂停时：unacked ≤ 低水位（8KB）→ 清暂停态并恢复读；
+    /// 区间内保持当前态，避免单阈值在临界点反复抖振（反复暂停/恢复会
+    /// 打断 PTY 读节奏、加剧延迟）。纯原子读 + 原子写，无锁无阻塞。
     pub fn should_pause(&self) -> bool {
-        self.unacked_bytes.load(Ordering::SeqCst) > BACKPRESSURE_WATERMARK_BYTES
+        let unacked = self.unacked_bytes.load(Ordering::SeqCst);
+        if self.paused.load(Ordering::SeqCst) {
+            // 已暂停：降到低水位才恢复（滞回下沿）
+            if unacked <= BACKPRESSURE_RESUME_BYTES {
+                self.paused.store(false, Ordering::SeqCst);
+                return false;
+            }
+            return true;
+        }
+        // 未暂停：超高位水才暂停（滞回上沿）
+        if unacked > BACKPRESSURE_HIGH_BYTES {
+            self.paused.store(true, Ordering::SeqCst);
+            return true;
+        }
+        false
     }
 
     /// 订阅会话输出（05 快照协议）
@@ -1221,8 +1268,9 @@ mod tests {
         manager.subscribe("session-bp", "client-ack", tx, None).await;
         let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
 
-        let big = vec![b'x'; 32 * 1024];
-        for _ in 0..40 {
+        // 每个事件 8KB；16 事件 = 128KB > 高位水 64KB → 暂停读
+        let big = vec![b'x'; 8 * 1024];
+        for _ in 0..16 {
             manager
                 .on_output(OutputEvent {
                     session_id: "session-bp".to_string(),
@@ -1233,20 +1281,30 @@ mod tests {
                 })
                 .await;
         }
-        // 40×32KB = 1.25MB > 1MB 水位 → 暂停读
+        // 16×8KB = 128KB > 64KB 高位水 → 暂停读
         assert!(manager.should_pause("session-bp"), "burst should pause");
 
-        // 收集事件 seq（订阅通道 40 帧；on_output 按会话连续分配 1..40）
+        // 收集事件 seq（订阅通道 16 帧；on_output 按会话连续分配 1..16）
         let mut seqs = Vec::new();
         while let Ok(OutputFrame::Output(e)) = rx.try_recv() {
             seqs.push(e.index);
         }
-        assert_eq!(seqs.len(), 40);
+        assert_eq!(seqs.len(), 16);
         assert_eq!(seqs[0], 1);
 
-        // ack 到 seq 20：剩余 20×32KB = 640KB < 水位 → 恢复读
-        manager.ack("session-bp", 20, RendererSource::Desktop).await;
-        assert!(!manager.should_pause("session-bp"), "ack advance should resume");
+        // ack 到 seq 14：剩余 2×8KB = 16KB，仍在 (8KB, 64KB] 滞回区间 → 保持暂停
+        manager.ack("session-bp", 14, RendererSource::Desktop).await;
+        assert!(
+            manager.should_pause("session-bp"),
+            "hysteresis should hold pause while unacked in (low, high]"
+        );
+
+        // ack 到 seq 15：剩余 1×8KB = 8KB ≤ 低水位 8KB → 恢复读
+        manager.ack("session-bp", 15, RendererSource::Desktop).await;
+        assert!(
+            !manager.should_pause("session-bp"),
+            "ack below low watermark should resume"
+        );
 
         // 一次性 ack 超限 seq：全部释放，unacked 不为负
         manager.ack("session-bp", 9999, RendererSource::Desktop).await;

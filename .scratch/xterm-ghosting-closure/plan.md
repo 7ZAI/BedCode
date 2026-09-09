@@ -338,8 +338,34 @@ BedCode 现有的 `:deep(.xterm-scrollable-element > .scrollbar.vertical)`（`Te
 2. **公共 prerelease 的内部产物**：`-beta.292` → `-beta.304` 说明发布活跃，但也无 semver 稳定承诺；锁死别人的 prerelease 内部产物，依赖风险不成比例
 3. **CSS 破坏性变更需全量审计**（§7.4）
 4. **addon 必须整线同升**：fit / unicode11 / web-links / webgl 四个 addon 全部同升，回归面扩大
+5. **不解决 Linux WebKitGTK IME bug**（§7.6，2026-09-09 复核补充）
 
 **决策：不引入依赖，吸收透明度 CSS 的思路（D-3）。**
+
+### 7.6 fork 的 CompositionHelper 改进与 WebKitGTK IME：环境差异决定无法覆盖（2026-09-09 复核补充）
+
+**问题**：升级 xterm fork 能否同时解决 BedCode 的 Linux IME 输入 bug（`terminalLinuxImeGuard` 的三个修复点）？**不能。**
+
+**环境差异（根因）**：VS Code 跑在 Electron/Chromium（Linux 下也是 Chromium/Ozone），**从不经过 WebKitGTK**；Tauri 2 Linux 的 webview 是 webkit2gtk，GTK IM 桥偶发丢失 compositionstart 事件——BedCode 的三个 IME bug 全是 WebKitGTK 特有行为，VS Code 从未面对过该环境，自然无对应处置。应用层（`xtermTerminal.ts` 及整个 `workbench/contrib/terminal`）grep composition/IME/229 零命中，IME 处理全部在 fork 的 `CompositionHelper`。
+
+**fork（6.1.0-beta.304，实测 pkg-xterm-beta304/lib/xterm.mjs）相对 6.0.0 的四点改进**：
+
+| 改进 | xterm 6.0.0（BedCode 现用） | fork 6.1.0-beta |
+|---|---|---|
+| 组合起点定位 | `compositionstart` 时 `start = textarea.value.length`（假设光标在末尾） | 用 `selectionStart/End`（真实光标位置） |
+| 组合区结束位置 | 无修正，finalize 时 `substring(start)` 取到 textarea **末尾**（历史残留拖入） | 新增 `_compositionSuffix`（组合区之后内容），finalize 用 `s.endsWith(suffix) ? len - suffix.length : len` 精确截到组合区结束 |
+| 229 差值补发防重入 | 无，每次 keydown(229) 直接 setTimeout diff | 加 `_textareaChangeTimer`，已有在跑则跳过 |
+| `_dataAlreadySent` 重置 | compositionstart 时重置 | 同样重置 |
+
+**fork 未覆盖的三条 WebKitGTK 路径**（与 `terminalLinuxImeGuard` 三项修复的映射）：
+
+| BedCode guard 修复 | fork 对应 | fork 是否根治 |
+|---|---|---|
+| ① 关闭 `_handleAnyTextareaChanges` 差值补发（WebKitGTK 下重复发送已提交内容） | 保留但只加防重入 | ❌（防重入 ≠ 消除；Guard 的关闭仍必要） |
+| ② `TerminalImeStateMachine` 组合窗口内精确载荷去重 | 无 | ❌（Chromium 不需要） |
+| ③ 组合提交后清空 textarea（组合起点恒为 0，拼接型重复不再产生） | 无——用 suffix 修正替代 | ❌（不清空；WebKitGTK 丢 compositionstart 时 start/suffix 全错，③仍必要） |
+
+**结论**：两张补丁互补而非替代。fork 的光标定位/后缀机制是 Chromium 事件序列（compositionstart 不丢）下的工程，升级到 6.1+ 只可能让 guard 的 ③ 与 fork 的 suffix 机制协同简化；guard 必须保留（WebKitGTK 专属兜底）。此结论作为 D-7 不引入 fork 的第 5 条理由。
 
 ---
 

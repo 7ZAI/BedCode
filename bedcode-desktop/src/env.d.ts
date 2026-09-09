@@ -19,6 +19,8 @@ interface ImportMeta {
     readonly DEV: boolean
     readonly PROD: boolean
     readonly MODE: string
+    /** 终端输出传输层（"ws" 默认 | "channel"）：Channel 原生 IPC 替代 WS 环回 */
+    readonly VITE_TERMINAL_TRANSPORT?: string
   }
 }
 

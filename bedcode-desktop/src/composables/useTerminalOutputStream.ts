@@ -98,10 +98,13 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   let pendingFrames: OutputStreamFrame[] = []
   let pendingBytes = 0
   let subscribed = false
-  // 连续 seq gap 计数：单帧偶发缺口多源于服务端握手窗口阻塞或背压丢弃
-  // （详见 session_output.rs on_output 设计：丢号由重订阅全量重播自愈），
-  // 不必每次都触发重连刷屏；连续 ≥3 次才真正 resubscribe
-  let consecutiveGaps = 0
+  // seq gap 处理：任何缺口立即触发快照重订阅补回缺失字节（缺失帧字节无法从
+  // 实时流恢复，跳过渲染会把残缺序列写进 buffer → parser 报错 + 字面残渣）。
+  // 冷却防风暴：WebKitGTK WS 缓冲在输出风暴期可能丢弃整消息（单帧缺口），
+  // 若每次缺口都重连会连环重订阅；冷却期内缺口帧不渲染、不推进游标（保持
+  // lastRenderedSeq），冷却结束重订阅后由全量重播一次性补回全部缺失字节。
+  let lastGapResubscribeAt = 0
+  const GAP_RESUBSCRIBE_COOLDOWN_MS = 3000
 
   // ==================== 背压 ack（渲染解析反馈环，spec 04-06） ====================
   // 写入解析完成（TerminalPreview onWriteParsed）后回发 ack 帧携已渲染到的
@@ -201,24 +204,34 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   }
 
   /** 解析 TB v2 二进制帧；非法帧返回 null（打印错误日志，不中断流） */
-  function parseFrame(buffer: ArrayBuffer): OutputStreamFrame | null {
-    if (buffer.byteLength < FRAME_HEADER_LEN) return null
+  /**
+   * 解析 TB v2 二进制消息内全部帧。一个 WS message 允许串联多个 TB v2 帧
+   * （服务端有界合并策略会产生多帧串联），逐个解析避免只取首帧丢尾帧。
+   * 非法帧（魔数/版本/长度越界）截断解析，不中断流；返回已解析帧列表。
+   */
+  function parseFrames(buffer: ArrayBuffer): OutputStreamFrame[] {
+    const frames: OutputStreamFrame[] = []
     const view = new DataView(buffer)
-    if (view.getUint8(0) !== FRAME_MAGIC[0] || view.getUint8(1) !== FRAME_MAGIC[1]) return null
-    if (view.getUint8(2) !== FRAME_VERSION) return null
-    const flags = view.getUint8(3)
-    const isWaiting = (flags & FRAME_FLAG_WAITING) !== 0
-    const eventCount = (flags >> FRAME_FLAG_COUNT_SHIFT) + 1
-    const seq = Number(view.getBigUint64(4, true))
-    const len = view.getUint32(12, true)
-    if (FRAME_HEADER_LEN + len > buffer.byteLength) return null
-    return {
-      data: new Uint8Array(buffer, FRAME_HEADER_LEN, len),
-      seq,
-      eventCount,
-      lastSeq: seq + eventCount - 1,
-      isWaiting,
+    let offset = 0
+    while (offset + FRAME_HEADER_LEN <= buffer.byteLength) {
+      if (view.getUint8(offset) !== FRAME_MAGIC[0] || view.getUint8(offset + 1) !== FRAME_MAGIC[1]) break
+      if (view.getUint8(offset + 2) !== FRAME_VERSION) break
+      const flags = view.getUint8(offset + 3)
+      const isWaiting = (flags & FRAME_FLAG_WAITING) !== 0
+      const eventCount = (flags >> FRAME_FLAG_COUNT_SHIFT) + 1
+      const seq = Number(view.getBigUint64(offset + 4, true))
+      const len = view.getUint32(offset + 12, true)
+      if (offset + FRAME_HEADER_LEN + len > buffer.byteLength) break
+      frames.push({
+        data: new Uint8Array(buffer, offset + FRAME_HEADER_LEN, len),
+        seq,
+        eventCount,
+        lastSeq: seq + eventCount - 1,
+        isWaiting,
+      })
+      offset += FRAME_HEADER_LEN + len
     }
+    return frames
   }
 
   /** 交付帧：重播去重（跳过 ≤ last_rendered_seq）→ 连续性校验（seq 缺口）→ 推进游标 */
@@ -228,31 +241,23 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     if (lastRenderedSeq !== null && frame.lastSeq <= lastRenderedSeq) return
     // 连续性内幕：首帧必须无缝衔接（直通模式帧末 + 1 = 下帧首 seq）
     if (lastRenderedSeq !== null && frame.seq > lastRenderedSeq + 1) {
-      consecutiveGaps += 1
-      if (consecutiveGaps >= 3) {
-        // 连续 3 帧以上缺口才真正 resubscribe——单帧/双帧偶发缺口多源于
-        // 服务端握手窗口阻塞或背压丢弃（详见 session_output.rs on_output
-        // 设计：丢号由重订阅全量重播自愈），不必每次都触发重连刷屏
-        console.error(
-          `[useTerminalOutputStream] persistent seq gap (${consecutiveGaps}x): frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}. Re-subscribing for snapshot`,
+      // 缺口 = 字节永久缺失（服务端无丢弃日志，疑似 WebKitGTK WS 缓冲风暴溢出
+      // 丢整消息）。正确做法：重订阅让服务端全量重播，跳过已渲染部分后缺失
+      // 字节自然补回——而不是跳过缺失继续渲染（会把残缺序列写进 buffer 变成
+      // 屏幕残渣）。带冷却：冷却期内缺口帧不渲染不推进游标，等待重播补回
+      const now = Date.now()
+      if (now - lastGapResubscribeAt >= GAP_RESUBSCRIBE_COOLDOWN_MS) {
+        lastGapResubscribeAt = now
+        console.warn(
+          `[useTerminalOutputStream] seq gap, re-subscribing for snapshot (frame.start=${frame.seq}, last_rendered=${lastRenderedSeq})`,
         )
-        consecutiveGaps = 0
         resubscribe()
         return
       }
-      console.warn(
-        `[useTerminalOutputStream] transient seq gap ${consecutiveGaps}/3: frame.start=${frame.seq}, last_rendered=${lastRenderedSeq}, skipping frame`,
-      )
-      // 单次偶发缺口仍按非严格路径推进游标：跳到 frame.lastSeq。
-      // 理由：服务端序号已用且丢号由下次重订阅补回；卡死游标只会让后续
-      // 所有帧持续触发 gap。代价：缺失的字节渲染时跳过——桌面端本地环回
-      // 直通模式下应极少出现，已被服务端修复覆盖主要来源
-      lastRenderedSeq = frame.lastSeq
-      pendingAckBytes += frame.data.byteLength
-      options.onData(frame)
+      // 冷却期内：跳过缺口帧（不渲染、不推进游标）——后续帧同样跳过，
+      // 冷却结束由全量重播一次性补回；避免把残缺字节写进终端
       return
     }
-    consecutiveGaps = 0
     lastRenderedSeq = frame.lastSeq
     // 背压记账：交付字节累计（onData 消费后由 confirmWriteParsed 在写解析完成时回发 ack）
     pendingAckBytes += frame.data.byteLength
@@ -267,7 +272,9 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
    *  仅当 min_seq > last_rendered_seq + 1（已渲染区被环形淘汰）才清屏全量重播 */
   function resubscribe() {
     subscribed = false
-    consecutiveGaps = 0
+    // 重订阅本身是完整自愈：冷却从此刻重新起算（避免重播补回期间又被后续
+    // 缺口连环触发重订阅风暴）
+    lastGapResubscribeAt = Date.now()
     closeWs()
     reconnectAttempts = 0
     connect()
@@ -301,7 +308,6 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
         options.onTruncated?.(snapshot.minSeq)
       }
       // 排空订阅确认前缓冲的回放帧（按到达顺序写入，保持连续）
-      consecutiveGaps = 0
       const frames = pendingFrames
       pendingFrames = []
       pendingBytes = 0
@@ -365,22 +371,26 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
           handleControl(ev.data)
           return
         }
-        const frame = parseFrame(ev.data as ArrayBuffer)
-        if (!frame) {
+        // 一个 WS message 可能串联多个 TB v2 帧（服务端合并策略），
+        // 逐帧解析交付；空/全非法返回空数组时下方按无帧处理
+        const frames = parseFrames(ev.data as ArrayBuffer)
+        if (frames.length === 0) {
           console.error('[useTerminalOutputStream] invalid binary frame received')
           return
         }
-        if (!subscribed) {
-          // 订阅确认前到达的回放帧：缓冲，确认后按序写入
-          pendingFrames.push(frame)
-          pendingBytes += frame.data.byteLength
-          if (pendingBytes > MAX_PENDING_FRAME_BYTES) {
-            console.error('[useTerminalOutputStream] pending frame overflow, re-subscribing')
-            resubscribe()
+        for (const frame of frames) {
+          if (!subscribed) {
+            // 订阅确认前到达的回放帧：缓冲，确认后按序写入
+            pendingFrames.push(frame)
+            pendingBytes += frame.data.byteLength
+            if (pendingBytes > MAX_PENDING_FRAME_BYTES) {
+              console.error('[useTerminalOutputStream] pending frame overflow, re-subscribing')
+              resubscribe()
+            }
+            continue
           }
-          return
+          deliverFrame(frame)
         }
-        deliverFrame(frame)
       }
       socket.onerror = () => {
         // onclose 统一处理重连
@@ -413,7 +423,6 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     pendingSubscribe = false
     reconnectAttempts = 0
     sessionMissingStrikes = 0
-    consecutiveGaps = 0
     connect()
   }
 
@@ -421,7 +430,6 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   function subscribe() {
     pendingSubscribe = true
     sessionMissingStrikes = 0
-    consecutiveGaps = 0
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(buildSubscribe(currentSession)))
     }
@@ -439,7 +447,6 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     lastRenderedSeq = null
     ackedThroughSeq = null
     pendingAckBytes = 0
-    consecutiveGaps = 0
   }
 
   return { start, subscribe, stop, confirmWriteParsed }

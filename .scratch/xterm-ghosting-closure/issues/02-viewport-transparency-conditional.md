@@ -8,16 +8,20 @@
 
 **Spec:** §D-3
 
+## 实施分解（2026-09-09 to-tickets 规划）
+
+- **worker-C（组件接线）**：终端容器 `:class` 绑定 `terminal-transparent`（键为 `decideRenderer(...).allowTransparency`）；CSS 改条件选择器删除无条件透明；更新注释；frontend-styles 自检
+
 **Blocked by:** 01（复用其 `decideRenderer` 输出的 `allowTransparency` 判定；串行避免组件并发编辑冲突）
 
-**Status:** open
+**Status:** done（2026-09-09 本分支实现完成）
 
-- [ ] 终端容器 `:class` 绑定语义类（如 `terminal-transparent`），键为 `decideRenderer(...).allowTransparency`
-- [ ] CSS 改为条件选择器，删除无条件 `background-color: transparent` 覆盖
-- [ ] 更新 `TerminalPreview.vue` 中该 CSS 块的注释（当前注释说明 6.0 下无条件透明是被迫的，需同步为条件化语义）
-- [ ] 加载 `frontend-styles` skill 并按其规范自检：`:deep()` 仅用于第三方 DOM 覆盖（本场景符合）、token-bound、无反模式
-- [ ] 回归：无背景图场景背景不透明、文字清晰
-- [ ] 验证命令：`cd bedcode-desktop && pnpm run test:run`
+- [x] 终端容器 `:class` 绑定语义类（如 `terminal-transparent`），键为 `decideRenderer(...).allowTransparency`
+- [x] CSS 改为条件选择器，删除无条件 `background-color: transparent` 覆盖
+- [x] 更新 `TerminalPreview.vue` 中该 CSS 块的注释（当前注释说明 6.0 下无条件透明是被迫的，需同步为条件化语义）
+- [x] 加载 `frontend-styles` skill 并按其规范自检：`:deep()` 仅用于第三方 DOM 覆盖（本场景符合）、token-bound、无反模式
+- [x] 回归：无背景图场景背景不透明、文字清晰
+- [x] 验证命令：`cd bedcode-desktop && pnpm run test:run`
 
 ## Comments
 

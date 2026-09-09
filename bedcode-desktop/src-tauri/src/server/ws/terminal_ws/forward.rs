@@ -13,7 +13,7 @@ use crate::session::OutputFrame;
 
 /// 转发输出形态：TB v2 二进制帧或历史标记
 #[derive(Debug)]
-pub(super) enum ForwardOutput {
+pub(crate) enum ForwardOutput {
     Binary(Vec<u8>),
     /// 历史边界标记（05 快照协议）：新路由编码 JSON 控制帧 / 旧路由无帧直接吞掉
     /// min_seq/history_count 为 05 透传元数据（wire 上由 subscribe_ok 携带），
@@ -138,7 +138,7 @@ impl OutputBuffer {
 /// 旧流尾帧与新生订阅帧交错到达 → 客户端字节游标错位 → 连续性违反 → 重订阅风暴。
 /// 每次转发前校验代数：订阅/取消订阅时代数递增，旧代 forward_loop 的残留帧
 /// 直接丢弃，从根源杜绝旧流帧注入新订阅通道
-pub(super) async fn forward_loop(
+pub(crate) async fn forward_loop(
     mut output_rx: tokio::sync::mpsc::Receiver<OutputFrame>,
     out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
     flush_interval: Duration,

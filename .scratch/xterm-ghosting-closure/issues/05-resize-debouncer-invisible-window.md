@@ -8,18 +8,23 @@
 
 **Spec:** §D-6
 
+## 实施分解（2026-09-09 to-tickets 规划）
+
+- **worker-B（纯模块层，独立文件）**：`terminalResizeDebouncer.ts` 增加可选 `isVisible?: () => boolean` 注入（照既有 `getBufferLength` 模式）；不可见时挂起应用（记录 latest、不启动计时器）；`flush()` 兑现挂起；未注入时行为与现状完全一致；扩展 `terminalResizeDebouncer.test.ts` 覆盖不可见分支
+- **worker-C（组件接线）**：传入基于 `document.visibilityState` / 窗口聚焦状态的判定；模块内不读 `document`（Seam A 约定）
+
 **Blocked by:** None — can start immediately.
 
-**Status:** open
+**Status:** done（2026-09-09 本分支实现完成）
 
-- [ ] `TerminalResizeDebouncer` 增加可选 `isVisible?: () => boolean` 注入（照既有 `getBufferLength` 注入模式）
-- [ ] 不可见时挂起应用；不可见分支下 X / Y 的挂起语义与恢复兑现路径明确（对齐 VS Code 的 `_resizeXJob` / `_resizeYJob` 分离语义）
-- [ ] `flush()` 语义不变：挂起的最终尺寸必达
-- [ ] 未注入 `isVisible` 时行为与现状完全一致（向后兼容，现有单测全绿）
-- [ ] 扩展 `src/__tests__/utils/terminalResizeDebouncer.test.ts` 覆盖不可见分支
-- [ ] `TerminalPreview.vue` 接线：传入基于 `document.visibilityState` / 窗口聚焦状态的判定
-- [ ] 保持纯模块零 DOM 依赖约定（Seam A）——`isVisible` 由组件注入，模块内不读 `document`
-- [ ] 验证命令：`cd bedcode-desktop && pnpm run test:run`
+- [x] `TerminalResizeDebouncer` 增加可选 `isVisible?: () => boolean` 注入（照既有 `getBufferLength` 注入模式）
+- [x] 不可见时挂起应用；不可见分支下 X / Y 的挂起语义与恢复兑现路径明确（对齐 VS Code 的 `_resizeXJob` / `_resizeYJob` 分离语义）
+- [x] `flush()` 语义不变：挂起的最终尺寸必达
+- [x] 未注入 `isVisible` 时行为与现状完全一致（向后兼容，现有单测全绿）
+- [x] 扩展 `src/__tests__/utils/terminalResizeDebouncer.test.ts` 覆盖不可见分支
+- [x] `TerminalPreview.vue` 接线：传入基于 `document.visibilityState` / 窗口聚焦状态的判定
+- [x] 保持纯模块零 DOM 依赖约定（Seam A）——`isVisible` 由组件注入，模块内不读 `document`
+- [x] 验证命令：`cd bedcode-desktop && pnpm run test:run`
 
 ## Comments
 

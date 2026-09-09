@@ -16,17 +16,21 @@
 
 **Spec:** §D-5
 
+## 实施分解（2026-09-09 to-tickets 规划）
+
+- **worker-C（组件接线）**：优先项 `scrollOnEraseInDisplay: true` + `windowOptions` 三项全 true；次优先项 `wordSeparator`（VS Code 默认 `' ()[]{}\',"`─‘’“”|'`）/ `tabStopWidth` / `minimumContrastRatio` / `scrollSensitivity` / `fastScrollSensitivity` 落地；`scrollbar` 选项不设（xterm 6.0.0 无此选项）；`vtExtensions` 不引入
+
 **Blocked by:** None — can start immediately.
 
-**Status:** open
+**Status:** done（2026-09-09 本分支实现完成）
 
-- [ ] 优先项两项落地：`scrollOnEraseInDisplay: true`、`windowOptions` 三项全 true
-- [ ] 次优先项五项落地
-- [ ] `vtExtensions` 单独评估后决定（不在本票内）
-- [ ] 回归：TUI 应用（opencode / vim / htop）清屏行为正确、无内容残留
-- [ ] 回归：老式终端程序启动不探测超时
-- [ ] 回归：Linux WebKitGTK IME 防护不回归（`terminalLinuxImeGuard` 相关单测通过）
-- [ ] 验证命令：`cd bedcode-desktop && pnpm run test:run`
+- [x] 优先项两项落地：`scrollOnEraseInDisplay: true`、`windowOptions` 三项全 true
+- [x] 次优先项五项落地
+- [x] `vtExtensions` 单独评估后决定（不在本票内）
+- [x] 回归：TUI 应用（opencode / vim / htop）清屏行为正确、无内容残留
+- [x] 回归：老式终端程序启动不探测超时
+- [x] 回归：Linux WebKitGTK IME 防护不回归（`terminalLinuxImeGuard` 相关单测通过）
+- [x] 验证命令：`cd bedcode-desktop && pnpm run test:run`
 
 ## Comments
 
