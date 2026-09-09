@@ -130,7 +130,7 @@ impl SyncEventHandler {
     async fn handle_session_created(&self, session_id: &str, source_device: Option<String>) {
         // 获取会话信息
         let Some(session_info) = self.session_manager.get_session(session_id).await else {
-            tracing::warn!("[SyncEventHandler] Session not found: {}", session_id);
+            tracing::warn!(session_id = %session_id, "[SyncEventHandler] Session not found");
             return;
         };
 
@@ -226,7 +226,7 @@ impl SyncEventHandler {
     async fn handle_config_created(&self, config_id: &str, source_device: Option<String>) {
         // 获取配置信息
         let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!("[SyncEventHandler] Config not found: {}", config_id);
+            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
             return;
         };
 
@@ -257,7 +257,7 @@ impl SyncEventHandler {
     async fn handle_config_updated(&self, config_id: &str, source_device: Option<String>) {
         // 获取配置信息
         let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!("[SyncEventHandler] Config not found: {}", config_id);
+            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
             return;
         };
 

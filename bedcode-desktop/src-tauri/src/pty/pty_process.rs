@@ -158,7 +158,7 @@ impl PtySession {
         // 启动输出读取线程
         self.start_output_reader().await?;
 
-        tracing::info!("PTY session started: {} ({}, pid={:?})", self.id, self.id, pid);
+        tracing::info!(session_id = %self.id, pid = ?pid, "PTY session started");
         Ok(())
     }
 
@@ -249,7 +249,7 @@ impl PtySession {
         // 获取进程 ID
         let pid = {
             let state = self.state.lock().await;
-            tracing::info!("Kill session {}: process_id = {:?}", self.id, state.process_id);
+            tracing::info!(session_id = %self.id, pid = ?state.process_id, "Kill session");
             state.process_id
         };
 
@@ -261,7 +261,7 @@ impl PtySession {
         if let Some(pid) = pid {
             #[cfg(target_os = "windows")]
             {
-                tracing::info!("Executing taskkill for PID {}", pid);
+                tracing::info!(pid = %pid, "Executing taskkill");
                 let output = create_command("cmd")
                     .args(["/C", &format!("taskkill /F /T /PID {}", pid)])
                     .output();
@@ -278,10 +278,10 @@ impl PtySession {
                     .output();
             }
         } else {
-            tracing::warn!("No process_id available for session {}", self.id);
+            tracing::warn!(session_id = %self.id, "No process_id available");
         }
 
-        tracing::info!("PTY session killed: {} (pid={:?})", self.id, pid);
+        tracing::info!(session_id = %self.id, pid = ?pid, "PTY session killed");
         Ok(())
     }
 
@@ -343,7 +343,7 @@ impl Drop for PtySession {
                             .args(["-9", &pid.to_string()])
                             .output();
                     }
-                    tracing::info!("PTY session killed on drop: {} (pid={})", self.id, pid);
+                    tracing::info!(session_id = %self.id, pid = %pid, "PTY session killed on drop");
                 }
             }
         }

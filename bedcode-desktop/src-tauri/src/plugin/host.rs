@@ -384,7 +384,7 @@ impl PluginHost {
         for entry in static_plugins {
             let plugin_handlers = (entry.terminal_handlers)();
             for handler in plugin_handlers {
-                tracing::info!("Registered Rust terminal handler for plugin {}", entry.id);
+                tracing::info!(plugin_id = %entry.id, "Registered Rust terminal handler");
                 handlers.push(handler);
             }
         }
@@ -458,7 +458,7 @@ impl PluginHost {
             .map(|p| matches!(p.state, PluginState::Activated))
             .unwrap_or(false);
         // 高频校验路径（每插件 API 调用都会经过），仅 trace 级别可见，避免刷屏
-        tracing::trace!("[PluginHost] is_activated({}) = {}", plugin_id, result);
+        tracing::trace!(plugin_id = %plugin_id, activated = result, "[PluginHost] is_activated");
         result
     }
 
@@ -471,18 +471,18 @@ impl PluginHost {
                 .collect();
         for entry in &static_plugins {
             if self.is_activated(entry.id).await {
-                tracing::debug!("Notifying plugin {} on_startup", entry.id);
+                tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_startup");
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
                     (entry.on_startup)(),
                 )
                 .await;
                 match result {
-                    Err(_) => tracing::error!("Plugin {} on_startup timed out", entry.id),
+                    Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_startup timed out"),
                     Ok(Ok(())) => {}
                     // v8 契约：启动初始化失败如实记录（静态插件无 Degraded 态，
                     // 仅日志可观测；builtin 常驻语义见 ticket 03）
-                    Ok(Err(e)) => tracing::error!("Plugin {} on_startup failed: {}", entry.id, e),
+                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_startup failed"),
                 }
             }
         }
@@ -510,17 +510,17 @@ impl PluginHost {
                 .collect();
         for entry in &static_plugins {
             if self.is_activated(entry.id).await {
-                tracing::debug!("Notifying plugin {} on_shutdown", entry.id);
+                tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_shutdown");
                 let result = tokio::time::timeout(
                     std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
                     (entry.on_shutdown)(),
                 )
                 .await;
                 match result {
-                    Err(_) => tracing::error!("Plugin {} on_shutdown timed out", entry.id),
+                    Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_shutdown timed out"),
                     Ok(Ok(())) => {}
                     // 清理失败仅记录：停用流程继续，不影响状态机
-                    Ok(Err(e)) => tracing::error!("Plugin {} on_shutdown failed: {}", entry.id, e),
+                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_shutdown failed"),
                 }
             }
         }
@@ -554,7 +554,7 @@ impl PluginHost {
 
         for id in plugin_ids {
             if let Err(e) = self.deactivate_plugin(&id, false).await {
-                tracing::error!("Failed to deactivate plugin {} during shutdown: {}", id, e);
+                tracing::error!(plugin_id = %id, error = %e, "Failed to deactivate plugin during shutdown");
             }
         }
 
@@ -657,7 +657,7 @@ impl PluginHost {
     }
 
     async fn activate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        tracing::info!("[PluginHost] activate_plugin({}, persist={})", plugin_id, persist);
+        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] activate_plugin");
 
         // 阶段 0(无锁):预授权 — 必须在持 plugins 锁之前完成,失败直接
         // 返回 Err,前端 catch 后回退 toggle。loading 遮罩由前端 toggle
@@ -677,38 +677,35 @@ impl PluginHost {
         let plan = {
             let mut plugins = self.plugins.write().await;
             let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
-                tracing::error!(
-                    "[PluginHost] activate_plugin: plugin {} not found in plugins map",
-                    plugin_id
-                );
+                tracing::error!(plugin_id = %plugin_id, "[PluginHost] activate_plugin: plugin not found in plugins map");
                 crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
             })?;
 
             match &loaded.state {
                 PluginState::Activated => {
-                    tracing::debug!("[PluginHost] Plugin {} already activated, skipping", plugin_id);
+                    tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Plugin already activated, skipping");
                     return Ok(());
                 }
                 PluginState::Error(e) => {
                     tracing::warn!(
-                        "[PluginHost] Plugin {} in error state: {}, attempting re-activation",
-                        plugin_id,
-                        e
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "[PluginHost] Plugin in error state, attempting re-activation"
                     );
                 }
                 // Degraded 重试激活：启动初始化上次失败，本次重新走完整流程
                 PluginState::Degraded(e) => {
                     tracing::info!(
-                        "[PluginHost] Plugin {} in degraded state ({}), attempting re-activation",
-                        plugin_id,
-                        e
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "[PluginHost] Plugin in degraded state, attempting re-activation"
                     );
                 }
                 _ => {
                     tracing::debug!(
-                        "[PluginHost] Plugin {} current state: {:?}, proceeding with activation",
-                        plugin_id,
-                        loaded.state
+                        plugin_id = %plugin_id,
+                        state = ?loaded.state,
+                        "[PluginHost] Plugin current state, proceeding with activation"
                     );
                 }
             }
@@ -776,7 +773,7 @@ impl PluginHost {
                 wasm_plugins.get(plugin_id).cloned()
             };
             let Some(wasm_plugin) = wasm_plugin else {
-                tracing::error!("WASM plugin {} not found in wasm_plugins map", plugin_id);
+                tracing::error!(plugin_id = %plugin_id, "WASM plugin not found in wasm_plugins map");
                 // phase 1 已置 Activating 中间态：失败路径必须落终态，不留悬挂
                 self.mark_error(plugin_id, "WASM module not loaded".to_string())
                     .await;
@@ -789,13 +786,13 @@ impl PluginHost {
             // WASI 需要无 handle 线程执行 guest 导出（见 run_guest_call）
             match self.run_guest_call(wasm_plugin.clone(), |p| p.activate()).await {
                 Ok(Ok(0)) => {
-                    tracing::info!("[PluginHost] Plugin '{}' activated", plugin_id);
+                    tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin activated");
                 }
                 Ok(Ok(code)) => {
                     tracing::error!(
-                        "[PluginHost] Plugin '{}' activate() returned error code {}",
-                        plugin_id,
-                        code
+                        plugin_id = %plugin_id,
+                        code = %code,
+                        "[PluginHost] Plugin activate() returned error code"
                     );
                     self.mark_error(plugin_id, format!("activate() returned error code {}", code))
                         .await;
@@ -805,7 +802,7 @@ impl PluginHost {
                     )));
                 }
                 Ok(Err(e)) => {
-                    tracing::error!("[PluginHost] Plugin '{}' activate() failed: {}", plugin_id, e);
+                    tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin activate() failed");
                     self.mark_error(plugin_id, format!("activate() failed: {}", e)).await;
                     return Err(crate::AppError::Plugin(format!(
                         "Plugin {} activate() failed: {}",
@@ -826,34 +823,34 @@ impl PluginHost {
             // 激活成功后自动调用 on_startup（启动初始化；结果决定 Activated / Degraded）
             // v8 契约：guest 自报失败不再静默吞掉——Degraded 终态如实反映
             // 「实例可用、扩展点已注册，但启动初始化未完成」
-            tracing::info!("[PluginHost] Calling on_startup for plugin '{}'", plugin_id);
+            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_startup");
             match self.run_guest_call(wasm_plugin, |p| p.on_startup()).await {
                 Ok(Ok(Ok(()))) => {
-                    tracing::info!("[PluginHost] Plugin '{}' on_startup completed", plugin_id);
+                    tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_startup completed");
                 }
                 Ok(Ok(Err(e))) => {
                     tracing::error!(
-                        "[PluginHost] Plugin '{}' on_startup reported failure: {}",
-                        plugin_id,
-                        e
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "[PluginHost] Plugin on_startup reported failure"
                     );
                     startup_failure = Some(e);
                 }
                 Ok(Err(e)) => {
                     // 调用层错误（非 trap）：导出不可达 / 燃料异常等，启动初始化同样未完成
                     tracing::error!(
-                        "[PluginHost] Plugin '{}' on_startup call failed: {}",
-                        plugin_id,
-                        e
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "[PluginHost] Plugin on_startup call failed"
                     );
                     startup_failure = Some(e.to_string());
                 }
                 Err(panic) => {
                     let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
                     tracing::error!(
-                        "[PluginHost] Plugin '{}' on_startup panicked: {}",
-                        plugin_id,
-                        msg
+                        plugin_id = %plugin_id,
+                        error = %msg,
+                        "[PluginHost] Plugin on_startup panicked"
                     );
                     // panic 已污染 Store，后续调用必然失败：按故障态处理（区别于可用的
                     // 降级），恢复依赖既有 trap 自动重载机制
@@ -892,9 +889,9 @@ impl PluginHost {
                 self.message_bus.subscribe_wasm(&plugin_id_owned, topic).await;
             }
             tracing::info!(
-                "[PluginHost] Plugin {} subscribed to {} topic(s): {:?}",
-                plugin_id_owned,
-                plan.subscribes.len(),
+                plugin_id = %plugin_id_owned,
+                topic_count = plan.subscribes.len(),
+                "[PluginHost] Plugin subscribed to topic(s): {:?}",
                 plan.subscribes
             );
         }
@@ -902,25 +899,18 @@ impl PluginHost {
         // 终态日志：成功与降级分别如实呈现（汇总日志在 PluginHost::new 尾部）
         match &startup_failure {
             Some(reason) => tracing::info!(
-                "[PluginHost] Plugin activated with degradation: {} (degraded: {}, persist={})",
-                plugin_id,
-                reason,
-                persist
+                plugin_id = %plugin_id,
+                persist,
+                "[PluginHost] Plugin activated with degradation: {}",
+                reason
             ),
             None => {
-                tracing::info!(
-                    "[PluginHost] Plugin activated successfully: {} (persist={})",
-                    plugin_id,
-                    persist
-                );
+                tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] Plugin activated successfully");
             }
         }
 
         if persist {
-            tracing::debug!(
-                "[PluginHost] Persisting activation state after activating {}",
-                plugin_id
-            );
+            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Persisting activation state after activating");
             self.persist_activation_state().await;
         }
 
@@ -965,7 +955,7 @@ impl PluginHost {
         let mut timers = self.plugin_timers.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(handle) = timers.remove(plugin_id) {
             handle.abort();
-            tracing::info!("[PluginHost] Timer aborted for '{}'", plugin_id);
+            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Timer aborted");
         }
     }
 
@@ -996,7 +986,7 @@ impl PluginHost {
     }
 
     async fn deactivate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        tracing::info!("[PluginHost] deactivate_plugin({}, persist={})", plugin_id, persist);
+        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] deactivate_plugin");
 
         // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
         crate::plugin::wasm_runtime::host_impl::mdns::purge_browsers_for_plugin(plugin_id);
@@ -1010,54 +1000,54 @@ impl PluginHost {
                     if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
                         drop(wasm_plugins);
                         // 停用前先调用 on_shutdown（WASI 需无 handle 线程，见 run_guest_call）
-                        tracing::info!("[PluginHost] Calling on_shutdown for plugin '{}'", plugin_id);
+                        tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_shutdown");
                         // v8 契约：guest 自报的清理失败单独记录，不与调用故障混淆；
                         // 停用流程继续，不影响状态机
                         match self.run_guest_call(wasm_plugin.clone(), |p| p.on_shutdown()).await {
                             Ok(Ok(Ok(()))) => {
-                                tracing::info!("[PluginHost] Plugin '{}' on_shutdown completed", plugin_id);
+                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_shutdown completed");
                             }
                             Ok(Ok(Err(e))) => {
                                 tracing::warn!(
-                                    "[PluginHost] Plugin '{}' on_shutdown reported failure: {}",
-                                    plugin_id,
-                                    e
+                                    plugin_id = %plugin_id,
+                                    error = %e,
+                                    "[PluginHost] Plugin on_shutdown reported failure"
                                 );
                             }
                             Ok(Err(e)) => {
                                 tracing::warn!(
-                                    "[PluginHost] Plugin '{}' on_shutdown call failed: {}",
-                                    plugin_id,
-                                    e
+                                    plugin_id = %plugin_id,
+                                    error = %e,
+                                    "[PluginHost] Plugin on_shutdown call failed"
                                 );
                             }
                             Err(panic) => {
                                 let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
                                 tracing::warn!(
-                                    "[PluginHost] Plugin '{}' on_shutdown panicked: {}",
-                                    plugin_id,
-                                    msg
+                                    plugin_id = %plugin_id,
+                                    error = %msg,
+                                    "[PluginHost] Plugin on_shutdown panicked"
                                 );
                             }
                         }
 
                         match self.run_guest_call(wasm_plugin, |p| p.deactivate()).await {
                             Ok(Ok(0)) => {
-                                tracing::info!("[PluginHost] Plugin '{}' deactivated", plugin_id);
+                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin deactivated");
                             }
                             Ok(Ok(code)) => {
                                 tracing::warn!(
-                                    "[PluginHost] Plugin '{}' deactivate() returned error code {}",
-                                    plugin_id,
-                                    code
+                                    plugin_id = %plugin_id,
+                                    code = %code,
+                                    "[PluginHost] Plugin deactivate() returned error code"
                                 );
                             }
                             Ok(Err(e)) => {
-                                tracing::error!("[PluginHost] Plugin '{}' deactivate() failed: {}", plugin_id, e);
+                                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin deactivate() failed");
                             }
                             Err(panic) => {
                                 let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
-                                tracing::error!("[PluginHost] Plugin '{}' deactivate() panicked: {}", plugin_id, msg);
+                                tracing::error!(plugin_id = %plugin_id, error = %msg, "[PluginHost] Plugin deactivate() panicked");
                             }
                         }
                     }
@@ -1091,20 +1081,13 @@ impl PluginHost {
 
         loaded.state = PluginState::Deactivated;
         loaded.activated_at = None;
-        tracing::info!(
-            "[PluginHost] Plugin deactivated successfully: {} (persist={})",
-            plugin_id,
-            persist
-        );
+        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] Plugin deactivated successfully");
 
         // 释放写锁后再持久化
         drop(plugins);
 
         if persist {
-            tracing::debug!(
-                "[PluginHost] Persisting activation state after deactivating {}",
-                plugin_id
-            );
+            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Persisting activation state after deactivating");
             self.persist_activation_state().await;
         }
 
@@ -1132,7 +1115,7 @@ impl PluginHost {
             }
         }
 
-        tracing::info!("Hot-reloading WASM plugin: {}", plugin_id);
+        tracing::info!(plugin_id = %plugin_id, "Hot-reloading WASM plugin");
 
         // 1. 停用插件（不持久化）
         self.deactivate_plugin(plugin_id, false).await?;
@@ -1165,7 +1148,7 @@ impl PluginHost {
         // 4. 重新激活
         self.activate_plugin(plugin_id, false).await?;
 
-        tracing::info!("WASM plugin hot-reloaded successfully: {}", plugin_id);
+        tracing::info!(plugin_id = %plugin_id, "WASM plugin hot-reloaded successfully");
         Ok(())
     }
 
@@ -1285,7 +1268,7 @@ impl PluginHost {
             activated_map.len()
         );
         for (id, active) in &activated_map {
-            tracing::debug!("[PluginHost]   Persist: {} = {}", id, active);
+            tracing::debug!(plugin_id = %id, persist = active, "[PluginHost]   Persist");
         }
         if let Err(e) = self.storage.save_activated_plugins(&activated_map).await {
             tracing::error!("[PluginHost] Failed to persist plugin activation state: {}", e);
@@ -1301,7 +1284,7 @@ impl PluginHost {
                     map.len()
                 );
                 for (id, active) in &map {
-                    tracing::debug!("[PluginHost]   Persisted: {} = {}", id, active);
+                    tracing::debug!(plugin_id = %id, persist = active, "[PluginHost]   Persisted");
                 }
                 map
             }
@@ -1342,9 +1325,9 @@ impl PluginHost {
         );
 
         for plugin_id in &to_activate {
-            tracing::info!("[PluginHost] Auto-activating plugin: {}", plugin_id);
+            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Auto-activating plugin");
             if let Err(e) = self.activate_plugin(plugin_id, false).await {
-                tracing::error!("[PluginHost] Failed to auto-activate plugin {}: {}", plugin_id, e);
+                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Failed to auto-activate plugin");
             }
         }
 

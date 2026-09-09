@@ -30,7 +30,7 @@ impl PluginHost {
                 .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_session_lifecycle(&payload))
                 .await
             {
-                tracing::error!("SessionLifecycle: dispatch to plugin '{}' failed: {}", plugin_id, e);
+                tracing::error!(plugin_id = %plugin_id, error = %e, "SessionLifecycle: dispatch to plugin failed");
             }
         });
     }
@@ -44,8 +44,8 @@ impl PluginHost {
             // 插件未处于 Activated 状态（Loaded/Deactivated/Error）：事件被此门禁静默丢弃，
             // 是输入分发链路上唯一无日志的断点，记录 debug 便于定位
             tracing::debug!(
-                "InputSubmitted: drop event for plugin '{}': plugin not in Activated state",
-                plugin_id
+                plugin_id = %plugin_id,
+                "InputSubmitted: drop event: plugin not in Activated state"
             );
             return;
         }
@@ -64,7 +64,7 @@ impl PluginHost {
                 .with_wasm_plugin_call(&plugin_id, move |plugin| plugin.on_input_submitted(&payload))
                 .await
             {
-                tracing::error!("InputSubmitted: dispatch to plugin '{}' failed: {}", plugin_id, e);
+                tracing::error!(plugin_id = %plugin_id, error = %e, "InputSubmitted: dispatch to plugin failed");
             }
         });
     }
@@ -102,7 +102,7 @@ impl PluginServices for PluginHost {
         crate::plugin::wasm_runtime::block_on_async(async move {
             // 仅通知前端弹窗提示：不置 Error、不持久化，插件保持激活，会话照常运行。
             // hooks 安装失败等自检错误属可恢复/局部问题，不应因此禁用整个插件。
-            tracing::error!("[PluginHost] Plugin {} self-check failed: {}", plugin_id, error);
+            tracing::error!(plugin_id = %plugin_id, error = %error, "[PluginHost] Plugin self-check failed");
 
             // 无头/测试上下文无 AppHandle：跳过前端弹窗
             let ctx = crate::system::app_context::AppContext::global();
@@ -290,7 +290,7 @@ impl PluginServices for PluginHost {
             #[cfg(not(target_os = "windows"))]
             super::app_cli::unregister_path_unix(&bin_dir, &exe)?;
 
-            tracing::info!("[PluginHost] CLI uninstalled for '{}': {}", plugin_id, file.display());
+            tracing::info!(plugin_id = %plugin_id, "[PluginHost] CLI uninstalled: {}", file.display());
             Ok(())
         })
     }

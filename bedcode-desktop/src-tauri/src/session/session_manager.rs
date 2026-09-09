@@ -156,7 +156,7 @@ impl SessionManager {
         listeners.retain(|l| l.plugin_id() != Some(plugin_id));
         let removed = before - listeners.len();
         if removed > 0 {
-            tracing::info!("Removed {} lifecycle listener(s) for plugin '{}'", removed, plugin_id);
+            tracing::info!(plugin_id = %plugin_id, count = removed, "Removed lifecycle listener(s)");
         }
     }
 
@@ -195,7 +195,7 @@ impl SessionManager {
         listeners.retain(|l| l.plugin_id() != Some(plugin_id));
         let removed = before - listeners.len();
         if removed > 0 {
-            tracing::info!("Removed {} input listener(s) for plugin '{}'", removed, plugin_id);
+            tracing::info!(plugin_id = %plugin_id, count = removed, "Removed input listener(s)");
         }
     }
 
@@ -247,7 +247,7 @@ impl SessionManager {
         // 注册会话到全局输出管理器
         let global_manager = GlobalOutputManager::global();
         global_manager.register_session(session_id).await;
-        tracing::info!("Registered session {} in GlobalOutputManager", session_id);
+        tracing::info!(session_id = %session_id, "Registered session in GlobalOutputManager");
     }
 
     /// 从配置创建会话
@@ -384,7 +384,7 @@ impl SessionManager {
         })
         .await;
 
-        tracing::info!("Session created: {} ({})", session_name, session_id);
+        tracing::info!(session_id = %session_id, "Session created: {}", session_name);
         Ok(session_id)
     }
 
@@ -454,7 +454,7 @@ impl SessionManager {
         })
         .await;
 
-        tracing::info!("Session created (not started): {} ({})", session_name, session_id);
+        tracing::info!(session_id = %session_id, "Session created (not started): {}", session_name);
         Ok(session_id)
     }
 
@@ -508,7 +508,7 @@ impl SessionManager {
         })
         .await;
 
-        tracing::info!("Session started: {} ({})", session_name, session_id);
+        tracing::info!(session_id = %session_id, "Session started: {}", session_name);
         Ok(())
     }
 
@@ -622,7 +622,7 @@ impl SessionManager {
         self.canonical_renderer.set(&session_id, RendererSource::Desktop).await;
         self.session_info.insert(info).await;
 
-        tracing::info!("Session restarted: {} ({})", old_name_for_event, session_id);
+        tracing::info!(session_id = %session_id, "Session restarted: {}", old_name_for_event);
 
         // 分发 Created 事件（异步通知）
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
@@ -786,7 +786,7 @@ impl SessionManager {
     ///
     /// source_device: 触发操作的设备名称，桌面本地操作为 None
     pub async fn kill_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
-        tracing::info!("kill_session called for: {}", session_id);
+        tracing::info!(session_id = %session_id, "kill_session called");
 
         // 分发 Stopping 事件（异步通知）
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Stopping {
@@ -797,7 +797,7 @@ impl SessionManager {
 
         // 使用 PTY 注册表终止会话
         if let Err(e) = self.pty_registry.kill(session_id).await {
-            tracing::warn!("Failed to kill PTY for session {}: {}", session_id, e);
+            tracing::warn!(session_id = %session_id, error = %e, "Failed to kill PTY for session");
         }
 
         // 清理输入行缓冲区（残余内容不补发，见 ADR 0001）
@@ -837,7 +837,7 @@ impl SessionManager {
         })
         .await;
 
-        tracing::info!("Session killed: {}", session_id);
+        tracing::info!(session_id = %session_id, "Session killed");
         Ok(())
     }
 
@@ -850,7 +850,7 @@ impl SessionManager {
     ///
     /// source_device: 触发操作的设备名称，桌面本地操作为 None
     pub async fn remove_session_with_source(&self, session_id: &str, source_device: Option<String>) -> Result<()> {
-        tracing::info!("remove_session called for: {}", session_id);
+        tracing::info!(session_id = %session_id, "remove_session called");
 
         // 从全局输出管理器注销
         let global_manager = GlobalOutputManager::global();
@@ -880,7 +880,7 @@ impl SessionManager {
         })
         .await;
 
-        tracing::info!("Session removed: {} ({})", session_id, session_name);
+        tracing::info!(session_id = %session_id, "Session removed: {}", session_name);
         Ok(())
     }
 
@@ -929,7 +929,7 @@ impl SessionManager {
             let _ = self.pty_registry.remove(&id).await;
             let _ = self.session_info.remove(&id).await;
             self.canonical_renderer.clear(&id).await;
-            tracing::debug!("Cleaned up stopped session: {}", id);
+            tracing::debug!(session_id = %id, "Cleaned up stopped session");
         }
     }
 

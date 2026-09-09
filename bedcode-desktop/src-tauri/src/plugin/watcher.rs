@@ -66,8 +66,8 @@ impl PluginDevWatcher {
                     // WASM 产物变化 → 触发 Rust 端热重载
                     Some("wasm") => {
                         tracing::info!(
-                            "Plugin watcher: WASM changed for plugin '{}': {}",
-                            plugin_id,
+                            plugin_id = %plugin_id,
+                            "Plugin watcher: WASM changed: {}",
                             path.display()
                         );
 
@@ -82,7 +82,7 @@ impl PluginDevWatcher {
                                     if prev_id == &plugin_id_clone
                                         && prev_time.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
                                     {
-                                        tracing::debug!("Plugin watcher: debounced reload for '{}'", plugin_id_clone);
+                                        tracing::debug!(plugin_id = %plugin_id_clone, "Plugin watcher: debounced reload");
                                         return;
                                     }
                                 }
@@ -97,13 +97,13 @@ impl PluginDevWatcher {
                             let ph = ctx.plugin_host().clone();
                             match ph.reload_wasm_plugin(&plugin_id_clone).await {
                                 Ok(()) => {
-                                    tracing::info!("Plugin watcher: WASM hot-reloaded '{}'", plugin_id_clone);
+                                    tracing::info!(plugin_id = %plugin_id_clone, "Plugin watcher: WASM hot-reloaded");
                                 }
                                 Err(e) => {
                                     tracing::error!(
-                                        "Plugin watcher: WASM hot-reload failed for '{}': {}",
-                                        plugin_id_clone,
-                                        e
+                                        plugin_id = %plugin_id_clone,
+                                        error = %e,
+                                        "Plugin watcher: WASM hot-reload failed"
                                     );
                                 }
                             }
@@ -112,8 +112,8 @@ impl PluginDevWatcher {
                     // TS 产物变化 → 通知前端重新加载
                     Some("js") => {
                         tracing::info!(
-                            "Plugin watcher: JS changed for plugin '{}': {}",
-                            plugin_id,
+                            plugin_id = %plugin_id,
+                            "Plugin watcher: JS changed: {}",
                             path.display()
                         );
 

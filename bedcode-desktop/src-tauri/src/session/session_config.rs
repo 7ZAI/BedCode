@@ -112,7 +112,7 @@ impl SessionConfigManager {
         .await
         .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))??;
 
-        tracing::info!("Session config created: {} ({})", config_name, config_id);
+        tracing::info!(config_id = %config_id, "Session config created: {}", config_name);
         Ok(result_config)
     }
 
@@ -227,7 +227,7 @@ impl SessionConfigManager {
         })
         .await;
 
-        tracing::info!("Session config updated: {} ({})", updated_for_log, config_id);
+        tracing::info!(config_id = %config_id, "Session config updated: {}", updated_for_log);
         Ok(updated)
     }
 
@@ -259,7 +259,7 @@ impl SessionConfigManager {
         })
         .await;
 
-        tracing::info!("Session config deleted: {}", config_id);
+        tracing::info!(config_id = %config_id, "Session config deleted");
         Ok(())
     }
 

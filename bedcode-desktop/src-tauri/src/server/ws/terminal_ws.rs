@@ -185,7 +185,7 @@ impl TerminalWs {
         };
         ctx.run_interval(HEARTBEAT_INTERVAL, move |act, ctx| {
             if Instant::now().duration_since(act.hb) > timeout {
-                tracing::warn!("WebSocket heartbeat timeout for {}", act.session.addr);
+                tracing::warn!(client = %act.session.addr, "WebSocket heartbeat timeout");
                 ctx.close(None);
                 ctx.stop();
                 return;
@@ -351,7 +351,7 @@ impl Actor for TerminalWs {
             session_id = %self.bound_session.as_deref().unwrap_or("-"),
         )
         .entered();
-        tracing::info!("Terminal WS connected: {}", self.session.addr);
+        tracing::info!(client = %self.session.addr, "Terminal WS connected");
         self.start_heartbeat(ctx);
 
         // 首消息认证超时：连接建立后 10s 内未完成认证（JWT 或配对流程）→
@@ -404,7 +404,7 @@ impl Actor for TerminalWs {
     }
 
     fn stopping(&mut self, _ctx: &mut Self::Context) -> Running {
-        tracing::info!("Terminal WS disconnected: {}", self.session.addr);
+        tracing::info!(client = %self.session.addr, "Terminal WS disconnected");
 
         // 中止会话停止监听任务：连接已断开，通知不再需要
         if let Some(handle) = self.session_stopped_watcher.take() {
@@ -635,7 +635,7 @@ impl TerminalWs {
                     ctx.stop();
                     return;
                 }
-                tracing::debug!("Unsupported WS message type from {}", self.session.addr);
+                tracing::debug!(client = %self.session.addr, "Unsupported WS message type");
             }
         }
     }

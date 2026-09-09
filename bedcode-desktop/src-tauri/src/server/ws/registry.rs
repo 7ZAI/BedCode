@@ -125,7 +125,7 @@ impl WsSessionRegistry {
         if let Some(ref cid) = client_id {
             let mut sessions = self.sessions.write().await;
             sessions.remove(cid);
-            tracing::debug!("[WsSessionRegistry] Unregistered client {} by addr {}", cid, addr);
+            tracing::debug!(client_id = %cid, peer = %addr, "[WsSessionRegistry] Unregistered client");
         }
 
         client_id

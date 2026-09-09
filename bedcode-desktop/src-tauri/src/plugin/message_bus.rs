@@ -125,11 +125,11 @@ impl MessageBus {
                             continue;
                         };
                         if !dispatcher.is_activated(plugin_id) {
-                            tracing::warn!("MessageBus: subscriber '{}' not  activated, skipping", plugin_id);
+                            tracing::warn!(plugin_id = %plugin_id, "MessageBus: subscriber not activated, skipping");
                             continue;
                         }
                         if let Err(e) = dispatcher.dispatch_to_wasm(plugin_id, &msg) {
-                            tracing::error!("MessageBus: dispatch to WASM plugin '{}' failed: {}", plugin_id, e);
+                            tracing::error!(plugin_id = %plugin_id, error = %e, "MessageBus: dispatch to WASM plugin failed");
                         } else {
                             delivered += 1;
                         }
@@ -139,7 +139,7 @@ impl MessageBus {
                             continue;
                         }
                         if let Err(e) = handler.on_message(&msg) {
-                            tracing::error!("MessageBus: handler for static plugin '{}' failed: {}", plugin_id, e);
+                            tracing::error!(plugin_id = %plugin_id, error = %e, "MessageBus: handler for static plugin failed");
                         } else {
                             delivered += 1;
                         }
@@ -166,13 +166,13 @@ impl MessageBus {
             .iter()
             .any(|s| matches!(s, BusSubscriber::Wasm { plugin_id: pid } if pid == plugin_id))
         {
-            tracing::debug!("MessageBus: plugin '{}' already subscribed to '{}'", plugin_id, topic);
+            tracing::debug!(plugin_id = %plugin_id, topic = %topic, "MessageBus: plugin already subscribed");
             return;
         }
         subs.push(BusSubscriber::Wasm {
             plugin_id: plugin_id.to_string(),
         });
-        tracing::info!("MessageBus: plugin '{}' subscribed to '{}'", plugin_id, topic);
+        tracing::info!(plugin_id = %plugin_id, topic = %topic, "MessageBus: plugin subscribed");
     }
 
     /// 订阅 topic（静态注册插件）
@@ -183,7 +183,7 @@ impl MessageBus {
             plugin_id: plugin_id.to_string(),
             handler,
         });
-        tracing::info!("MessageBus: static plugin '{}' subscribed to '{}'", plugin_id, topic);
+        tracing::info!(plugin_id = %plugin_id, topic = %topic, "MessageBus: static plugin subscribed");
     }
 
     /// 取消插件对指定 topic 的订阅
@@ -196,7 +196,7 @@ impl MessageBus {
                 BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
             });
             if subs.len() < before {
-                tracing::info!("MessageBus: plugin '{}' unsubscribed from '{}'", plugin_id, topic);
+                tracing::info!(plugin_id = %plugin_id, topic = %topic, "MessageBus: plugin unsubscribed");
             }
         }
     }
@@ -211,7 +211,7 @@ impl MessageBus {
                 BusSubscriber::Static { plugin_id: pid, .. } => pid != plugin_id,
             });
             if subs.len() < before {
-                tracing::debug!("MessageBus: removed plugin '{}' from topic '{}'", plugin_id, topic);
+                tracing::debug!(plugin_id = %plugin_id, topic = %topic, "MessageBus: removed plugin subscription");
             }
         }
         // 清理空 topic

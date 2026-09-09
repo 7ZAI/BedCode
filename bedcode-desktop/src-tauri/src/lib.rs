@@ -38,8 +38,25 @@ use tokio::sync::Mutex;
 /// dev 启动频次高，按天追加会让同一天的日志混入多次启动的片段，难以定位；
 /// 因此 dev 启动时替换当天日志（删旧建新）。release 保持按天追加轮转。
 /// 必须在 RollingFileAppender 构建前调用，确保 appender 首次写入创建全新文件。
+/// dev 启动同时重置 `bootstrap.log`（bootstrap 通道先于本函数就绪；重置消息本身
+/// 经 bootstrap 落盘即重建该文件，见 system::logging::bootstrap_log）。
 #[cfg(debug_assertions)]
 fn reset_today_logs(log_dir: &std::path::Path) {
+    // bootstrap.log（固定文件名，bootstrap 通道产物、无轮转）：dev 重启替换，
+    // 避免多次启动的启动早期片段混叠；消息经 bootstrap 通道写入即重建文件
+    let bootstrap_path = log_dir.join("bootstrap.log");
+    if bootstrap_path.exists() {
+        match std::fs::remove_file(&bootstrap_path) {
+            Ok(()) => system::logging::bootstrap_log(
+                tracing::Level::INFO,
+                format!("[logging] dev reset: replaced {}", bootstrap_path.display()),
+            ),
+            Err(e) => system::logging::bootstrap_log(
+                tracing::Level::ERROR,
+                format!("[logging] dev reset: failed to replace {}: {e}", bootstrap_path.display()),
+            ),
+        }
+    }
     // tracing_appender 的 rolling 文件名日期用 UTC（与本地日期可能错位一天）
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
     // 日志重置列表：runtime / error / frontend（前端 console 单独文件，见 init_logging）
@@ -47,8 +64,14 @@ fn reset_today_logs(log_dir: &std::path::Path) {
         let path = log_dir.join(format!("{prefix}.{today}.log"));
         if path.exists() {
             match std::fs::remove_file(&path) {
-                Ok(()) => eprintln!("[logging] dev reset: replaced today's log {}", path.display()),
-                Err(e) => eprintln!("[logging] dev reset: failed to replace {}: {}", path.display(), e),
+                Ok(()) => system::logging::bootstrap_log(
+                    tracing::Level::INFO,
+                    format!("[logging] dev reset: replaced today's log {}", path.display()),
+                ),
+                Err(e) => system::logging::bootstrap_log(
+                    tracing::Level::ERROR,
+                    format!("[logging] dev reset: failed to replace {}: {e}", path.display()),
+                ),
             }
         }
     }
@@ -60,6 +83,8 @@ fn reset_today_logs(log_dir: &std::path::Path) {
 fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogConfig) -> Result<()> {
     let log_dir = app_handle.path().app_log_dir().expect("Failed to get log directory");
 
+    // bootstrap 通道幂等兜底：setup 早期已初始化（config 复制/加载沿用），此处仅防漏
+    system::logging::bootstrap_init(&log_dir)?;
     std::fs::create_dir_all(&log_dir)?;
 
     // dev 构建替换当天日志（release 保持追加轮转）
@@ -138,6 +163,18 @@ pub fn run() {
             app.manage(app_start);
 
             let app_handle = app.handle();
+
+            // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志
+            // 写入 bootstrap.log（release 构建启动失败证据不丢），init_logging 之后由
+            // runtime 文件接管；初始化失败仅降级为控制台（eprintln），不阻断启动
+            let log_dir = app_handle
+                .path()
+                .app_log_dir()
+                .expect("Failed to get log directory");
+            if let Err(e) = system::logging::bootstrap_init(&log_dir) {
+                eprintln!("[logging] bootstrap channel init failed: {e}");
+            }
+
             let config_path = app_handle
                 .path()
                 .app_data_dir()
@@ -156,8 +193,14 @@ pub fn run() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         match std::fs::copy(&resource_path, &config_path) {
-                            Ok(_) => eprintln!("Default config copied from resource to {:?}", config_path),
-                            Err(e) => eprintln!("Failed to copy default config: {}, using built-in defaults", e),
+                            Ok(_) => system::logging::bootstrap_log(
+                                tracing::Level::INFO,
+                                format!("Default config copied from resource to {}", config_path.display()),
+                            ),
+                            Err(e) => system::logging::bootstrap_log(
+                                tracing::Level::ERROR,
+                                format!("Failed to copy default config: {e}, using built-in defaults"),
+                            ),
                         }
                     }
                 }
@@ -165,7 +208,10 @@ pub fn run() {
 
             // 先加载配置，再初始化日志系统，使日志行为可配置
             let app_config = crate::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
-                eprintln!("Failed to load config, using defaults: {}", e);
+                system::logging::bootstrap_log(
+                    tracing::Level::ERROR,
+                    format!("Failed to load config, using defaults: {e}"),
+                );
                 crate::system::config::AppConfig::default()
             });
 

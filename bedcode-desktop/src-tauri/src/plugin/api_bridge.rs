@@ -26,7 +26,7 @@ pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<DesktopPluginInfo>> {
-    tracing::debug!("[API] plugin_get_info({})", plugin_id);
+    tracing::debug!(plugin_id = %plugin_id, "[API] plugin_get_info");
     Ok(plugin_host.get_plugin(&plugin_id).await)
 }
 
@@ -41,10 +41,10 @@ pub async fn plugin_preauthorize(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    tracing::info!("[API] plugin_preauthorize({})", plugin_id);
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_preauthorize");
     let result = plugin_host.preauthorize_plugin(&plugin_id).await;
     if let Err(ref e) = result {
-        tracing::error!("[API] plugin_preauthorize({}) failed: {}", plugin_id, e);
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_preauthorize failed");
     }
     result
 }
@@ -52,10 +52,10 @@ pub async fn plugin_preauthorize(
 /// 激活插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_activate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
-    tracing::info!("[API] plugin_activate({})", plugin_id);
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_activate");
     let result = plugin_host.activate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
-        tracing::error!("[API] plugin_activate({}) failed: {}", plugin_id, e);
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_activate failed");
     }
     result
 }
@@ -63,10 +63,10 @@ pub async fn plugin_activate(plugin_id: String, plugin_host: State<'_, Arc<Plugi
 /// 停用插件（用户操作，持久化状态）
 #[tauri::command]
 pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
-    tracing::info!("[API] plugin_deactivate({})", plugin_id);
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_deactivate");
     let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
-        tracing::error!("[API] plugin_deactivate({}) failed: {}", plugin_id, e);
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_deactivate failed");
     }
     result
 }

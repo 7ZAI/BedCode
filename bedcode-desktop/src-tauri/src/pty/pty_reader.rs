@@ -66,7 +66,7 @@ impl PtyReader {
             while let Some(event) = output_rx.recv().await {
                 global_manager.on_output(event).await;
             }
-            tracing::debug!("PTY output consumer exited: {}", consumer_session_id);
+            tracing::debug!(session_id = %consumer_session_id, "PTY output consumer exited");
         });
 
         let handle = thread::spawn(move || {
@@ -84,7 +84,7 @@ impl PtyReader {
                 match buf_reader.read(&mut buffer) {
                     Ok(0) => {
                         // EOF - process exited
-                        tracing::info!("PTY session ended: {}", session_id);
+                        tracing::info!(session_id = %session_id, "PTY session ended");
                         break;
                     }
                     Ok(n) => {

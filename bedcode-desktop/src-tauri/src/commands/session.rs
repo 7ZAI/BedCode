@@ -12,7 +12,7 @@ pub async fn start_session(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<String> {
-    tracing::info!("start_session called with config_id: {}", config_id);
+    tracing::info!(config_id = %config_id, "start_session called");
     // 桌面端启动：携带本端终端组件默认网格作为 PTY 初始尺寸
     let initial_size = match (cols, rows) {
         (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
@@ -23,7 +23,7 @@ pub async fn start_session(
         .await;
     match result {
         Ok(id) => {
-            tracing::info!("Session created successfully: {}", id);
+            tracing::info!(session_id = %id, "Session created successfully");
             Ok(id)
         }
         Err(e) => {
@@ -38,11 +38,11 @@ pub async fn create_session_no_start(
     session_manager: State<'_, Arc<SessionManager>>,
     config_id: String,
 ) -> Result<String> {
-    tracing::info!("create_session_no_start called with config_id: {}", config_id);
+    tracing::info!(config_id = %config_id, "create_session_no_start called");
     let result = session_manager.create_session_no_start(&config_id).await;
     match result {
         Ok(id) => {
-            tracing::info!("Session created (not started) successfully: {}", id);
+            tracing::info!(session_id = %id, "Session created (not started) successfully");
             Ok(id)
         }
         Err(e) => {
@@ -59,7 +59,7 @@ pub async fn start_existing_session(
     cols: Option<u16>,
     rows: Option<u16>,
 ) -> Result<()> {
-    tracing::info!("start_existing_session called with session_id: {}", session_id);
+    tracing::info!(session_id = %session_id, "start_existing_session called");
     // 两阶段启动第二阶段：spawn 前按请求端尺寸调整 PTY
     let initial_size = match (cols, rows) {
         (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
@@ -70,7 +70,7 @@ pub async fn start_existing_session(
         .await;
     match result {
         Ok(_) => {
-            tracing::info!("Session started successfully: {}", session_id);
+            tracing::info!(session_id = %session_id, "Session started successfully");
             Ok(())
         }
         Err(e) => {

@@ -44,7 +44,7 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
     if host_ctx.permission.check(plugin_id, permission) {
         true
     } else {
-        tracing::error!(plugin_id = %plugin_id, permission = %permission, "{}: permission denied", api);
+        tracing::error!(plugin_id = %plugin_id, permission = %permission, api = %api, "permission denied");
         false
     }
 }

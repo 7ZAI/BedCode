@@ -152,7 +152,7 @@ impl LifecycleRegistry {
         tracing::info!("Running {} startup hook(s)", hooks.len());
 
         for (owner, priority, hook) in hooks {
-            tracing::debug!("Startup hook: {} (priority={})", owner, priority);
+            tracing::debug!(hook = %owner, priority, "Startup hook running");
             let result = tokio::time::timeout(std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS), hook()).await;
 
             if result.is_err() {
@@ -182,7 +182,7 @@ impl LifecycleRegistry {
         tracing::info!("Running {} shutdown hook(s)", hooks.len());
 
         for (owner, priority, hook) in hooks {
-            tracing::info!("Shutdown hook: {} (priority={})", owner, priority);
+            tracing::info!(hook = %owner, priority, "Shutdown hook running");
             let result = tokio::time::timeout(std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS), hook()).await;
 
             if result.is_err() {
@@ -213,7 +213,7 @@ impl LifecycleRegistry {
         for (owner, priority, hook) in hooks {
             let result = hook().await;
             if !result {
-                tracing::info!("Window close prevented by hook: {} (priority={})", owner, priority);
+                tracing::info!(hook = %owner, priority, "Window close prevented by hook");
                 return false;
             }
         }

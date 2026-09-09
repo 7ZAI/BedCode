@@ -566,7 +566,7 @@ impl SessionOutputManager {
             if let Some(sub) = subscribers.get(client_id) {
                 for event in &history {
                     if let Err(e) = sub.send_queue.send(OutputFrame::Output(event.clone())).await {
-                        tracing::warn!("[SessionOutputManager] Failed to send history to {}: {}", client_id, e);
+                        tracing::warn!(client_id = %client_id, error = %e, "[SessionOutputManager] Failed to send history");
                     }
                 }
                 // 历史边界标记：消费端据此明确"此后为实时流"；旧路由吞掉
@@ -621,10 +621,10 @@ impl SessionOutputManager {
         }
 
         tracing::info!(
-            "[SessionOutputManager] Client {} subscribed to session {}, history_count={}",
-            client_id,
-            self.session_id,
-            history.len()
+            client_id = %client_id,
+            session_id = %self.session_id,
+            history_count = history.len(),
+            "[SessionOutputManager] Client subscribed"
         );
 
         response
@@ -714,14 +714,14 @@ impl GlobalOutputManager {
             .await
             .insert(session_id.to_string(), manager.clone());
 
-        tracing::info!("[GlobalOutputManager] Session {} registered", session_id);
+        tracing::info!(session_id = %session_id, "[GlobalOutputManager] Session registered");
         manager
     }
 
     /// 注销会话（PTY 会话销毁时调用）
     pub async fn unregister_session(&self, session_id: &str) {
         if self.sessions.write().await.remove(session_id).is_some() {
-            tracing::info!("[GlobalOutputManager] Session {} unregistered", session_id);
+            tracing::info!(session_id = %session_id, "[GlobalOutputManager] Session unregistered");
         }
     }
 
@@ -805,7 +805,7 @@ impl GlobalOutputManager {
         if let Some(manager) = sessions.get(session_id) {
             Some(manager.subscribe(client_id, ws_sender, response_tx).await)
         } else {
-            tracing::warn!("[GlobalOutputManager] Session {} not found for subscribe", session_id);
+            tracing::warn!(session_id = %session_id, "[GlobalOutputManager] Session not found for subscribe");
             None
         }
     }

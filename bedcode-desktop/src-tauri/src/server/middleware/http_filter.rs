@@ -118,6 +118,10 @@ where
 }
 
 /// 完整过滤流程：入站请求体 → 下游 → 出站响应体
+///
+/// 单一出口统一记录请求完成事件（01 全路径日志）：请求结束按结果记
+/// `status` + `duration_ms` 结构化字段，级别按结果语义（成功 debug 不刷 info /
+/// 4xx warn / 5xx+异常 error）；`request_id`/`method`/`path` 由外层 span 字段继承。
 async fn run_traffic_filter<S, B>(
     req: ServiceRequest,
     service: Rc<S>,
@@ -129,86 +133,109 @@ where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
     B: MessageBody + 'static,
 {
-    let chain = TrafficFilterChain::global();
+    let started = std::time::Instant::now();
 
-    // ==================== 入站：请求体 ====================
-    let (http_req, mut payload) = req.into_parts();
-    let body = <web::Bytes as FromRequest>::from_request(&http_req, &mut payload).await?;
+    // 主体流程包进 async 块：错误经 `?` 上抛到单一出口（不再散落 return），
+    // 保证拒绝/下游错误/成功所有路径都有一次完成事件
+    let outcome: Result<ServiceResponse> = async {
+        let chain = TrafficFilterChain::global();
 
-    let mut ctx = FilterContext {
-        channel: TrafficChannel::Http,
-        direction: Direction::Inbound,
-        peer: &peer,
-        route: &path,
-        negotiation: &negotiation,
-        data: body.to_vec(),
-        outbound_headers: Vec::new(),
-    };
-    if let Err(rej) = chain.run_inbound(&mut ctx) {
-        tracing::warn!(peer = %peer, route = %path, %rej, "HTTP inbound request rejected by traffic filter");
-        let response = HttpResponse::BadRequest().json(ApiResponse::<()>::error(
-            CODE_INVALID_REQUEST,
-            &format!("Traffic filter rejected request: {rej}"),
-        ));
-        return Ok(ServiceResponse::new(http_req, response));
-    }
+        // ==================== 入站：请求体 ====================
+        let (http_req, mut payload) = req.into_parts();
+        let body = <web::Bytes as FromRequest>::from_request(&http_req, &mut payload).await?;
 
-    let service_req = ServiceRequest::from_parts(http_req, Payload::from(Bytes::from(ctx.data)));
-
-    // ==================== 下游处理 ====================
-    let res = service.call(service_req).await?.map_into_boxed_body();
-
-    // ==================== 出站：响应体 ====================
-    let (res_req, http_res) = res.into_parts();
-    let (res_head, res_body) = http_res.into_parts();
-    let res_bytes = to_bytes_owned(res_body).await?;
-
-    let mut out_ctx = FilterContext {
-        channel: TrafficChannel::Http,
-        direction: Direction::Outbound,
-        peer: &peer,
-        route: &path,
-        negotiation: &negotiation,
-        data: res_bytes,
-        outbound_headers: Vec::new(),
-    };
-    if let Err(rej) = chain.run_outbound(&mut out_ctx) {
-        tracing::warn!(peer = %peer, route = %path, %rej, "HTTP outbound response rejected by traffic filter");
-        let response = HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
-            CODE_INVALID_REQUEST,
-            &format!("Traffic filter rejected response: {rej}"),
-        ));
-        return Ok(ServiceResponse::new(res_req, response));
-    }
-
-    // 重建响应：替换体后 Content-Length 已失配，剔除原值由 builder 按新体重算；
-    // 其余头（含 CORS / Set-Cookie / Content-Type）原样保留，并入过滤器
-    // 注入的出站附加头（如链路加密响应标记 `X-BedCode-Crypto: v1`，spec §4）
-    let mut builder = HttpResponse::build(res_head.status());
-    for (name, value) in res_head.headers() {
-        if name == CONTENT_LENGTH {
-            continue;
+        let mut ctx = FilterContext {
+            channel: TrafficChannel::Http,
+            direction: Direction::Inbound,
+            peer: &peer,
+            route: &path,
+            negotiation: &negotiation,
+            data: body.to_vec(),
+            outbound_headers: Vec::new(),
+        };
+        if let Err(rej) = chain.run_inbound(&mut ctx) {
+            tracing::warn!(peer = %peer, route = %path, %rej, "HTTP inbound request rejected by traffic filter");
+            let response = HttpResponse::BadRequest().json(ApiResponse::<()>::error(
+                CODE_INVALID_REQUEST,
+                &format!("Traffic filter rejected request: {rej}"),
+            ));
+            return Ok(ServiceResponse::new(http_req, response));
         }
-        builder.insert_header((name.clone(), value.clone()));
-    }
-    for (name, value) in out_ctx.outbound_headers {
-        let name = actix_web::http::header::HeaderName::try_from(name);
-        let value = actix_web::http::header::HeaderValue::try_from(value);
-        if let (Ok(name), Ok(value)) = (name, value) {
-            builder.insert_header((name, value));
-        } else {
-            // 标记头是承重件：丢失会让客户端把无标记的加密信封当明文 API 载荷
-            // 解析（JSON.parse 成功但 code === undefined），比崩溃更难排查
-            tracing::warn!(
-                route = %path,
-                peer = %peer,
-                "dropped filter outbound header (invalid name/value)"
-            );
-        }
-    }
-    let rebuilt = builder.body(Bytes::from(out_ctx.data));
 
-    Ok(ServiceResponse::new(res_req, rebuilt))
+        let service_req = ServiceRequest::from_parts(http_req, Payload::from(Bytes::from(ctx.data)));
+
+        // ==================== 下游处理 ====================
+        let res = service.call(service_req).await?.map_into_boxed_body();
+
+        // ==================== 出站：响应体 ====================
+        let (res_req, http_res) = res.into_parts();
+        let (res_head, res_body) = http_res.into_parts();
+        let res_bytes = to_bytes_owned(res_body).await?;
+
+        let mut out_ctx = FilterContext {
+            channel: TrafficChannel::Http,
+            direction: Direction::Outbound,
+            peer: &peer,
+            route: &path,
+            negotiation: &negotiation,
+            data: res_bytes,
+            outbound_headers: Vec::new(),
+        };
+        if let Err(rej) = chain.run_outbound(&mut out_ctx) {
+            tracing::warn!(peer = %peer, route = %path, %rej, "HTTP outbound response rejected by traffic filter");
+            let response = HttpResponse::InternalServerError().json(ApiResponse::<()>::error(
+                CODE_INVALID_REQUEST,
+                &format!("Traffic filter rejected response: {rej}"),
+            ));
+            return Ok(ServiceResponse::new(res_req, response));
+        }
+
+        // 重建响应：替换体后 Content-Length 已失配，剔除原值由 builder 按新体重算；
+        // 其余头（含 CORS / Set-Cookie / Content-Type）原样保留，并入过滤器
+        // 注入的出站附加头（如链路加密响应标记 `X-BedCode-Crypto: v1`，spec §4）
+        let mut builder = HttpResponse::build(res_head.status());
+        for (name, value) in res_head.headers() {
+            if name == CONTENT_LENGTH {
+                continue;
+            }
+            builder.insert_header((name.clone(), value.clone()));
+        }
+        for (name, value) in out_ctx.outbound_headers {
+            let name = actix_web::http::header::HeaderName::try_from(name);
+            let value = actix_web::http::header::HeaderValue::try_from(value);
+            if let (Ok(name), Ok(value)) = (name, value) {
+                builder.insert_header((name, value));
+            } else {
+                // 标记头是承重件：丢失会让客户端把无标记的加密信封当明文 API 载荷
+                // 解析（JSON.parse 成功但 code === undefined），比崩溃更难排查
+                tracing::warn!(
+                    route = %path,
+                    peer = %peer,
+                    "dropped filter outbound header (invalid name/value)"
+                );
+            }
+        }
+        let rebuilt = builder.body(Bytes::from(out_ctx.data));
+
+        Ok::<ServiceResponse, actix_web::Error>(ServiceResponse::new(res_req, rebuilt))
+    }
+    .await;
+
+    // 完成事件（01）：span 已带 request_id/method/path，事件只补 status/duration_ms/error
+    let duration_ms = started.elapsed().as_millis() as u64;
+    match &outcome {
+        Ok(res) => {
+            let status = res.status().as_u16();
+            match status {
+                200..=399 => tracing::debug!(status, duration_ms, "HTTP request completed"),
+                400..=499 => tracing::warn!(status, duration_ms, "HTTP request completed with client error"),
+                _ => tracing::error!(status, duration_ms, "HTTP request completed with server error"),
+            }
+        }
+        // 下游/读体的异常路径：不吞错误，error 字段带失败文本（request_id 仍由 span 继承）
+        Err(e) => tracing::error!(error = %e, duration_ms, "HTTP request failed"),
+    }
+    outcome
 }
 
 /// 缓冲完整响应体（BoxBody）为内存字节
@@ -367,5 +394,183 @@ mod tests {
 
         let body = test::read_body(res).await;
         assert!(!String::from_utf8_lossy(&body).contains("ENCRYPTED"));
+    }
+
+    // ==================== 01 完成事件日志 ====================
+
+    use std::sync::{Arc, Mutex};
+    use tracing_subscriber::layer::SubscriberExt;
+
+    /// 最小 thread-local 执行器（futures-util 的 executor 特性未启用）：测试中在
+    /// `with_default` 同步闭包内驱动一次请求；局部未来无真实 IO，Pending 即让出。
+    #[allow(dead_code)] // 仅 cfg(test) 下被测试引用；clippy lib 目标按未引用误报（同 TransformFilter 等既有项）
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        let waker = std::task::Waker::noop();
+        let mut cx = std::task::Context::from_waker(waker);
+        let mut pinned = std::pin::pin!(fut);
+        loop {
+            match pinned.as_mut().poll(&mut cx) {
+                std::task::Poll::Ready(v) => return v,
+                std::task::Poll::Pending => std::thread::yield_now(),
+            }
+        }
+    }
+
+    /// 内存收集 fmt 输出（with_default 线程本地：请求未来在测试线程内联轮询，
+    /// 事件可直接捕获，无需全局 subscriber）
+    #[allow(dead_code)] // 仅 cfg(test) 下被测试引用（见 block_on 注释）
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CaptureWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[allow(dead_code)] // 仅 cfg(test) 下被测试引用（见 block_on 注释）
+    struct CaptureWriterMaker(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriterMaker {
+        type Writer = CaptureWriter;
+        fn make_writer(&'a self) -> Self::Writer {
+            CaptureWriter(self.0.clone())
+        }
+    }
+
+    /// 在捕获订阅器下执行一次请求（请求类型与 call_service 一致，泛型透传）
+    #[allow(dead_code)] // 仅 cfg(test) 下被测试引用（见 block_on 注释）
+    fn run_request_captured<S, R, B, E>(app: &S, buf: &Arc<Mutex<Vec<u8>>>, req: R)
+    where
+        S: actix_web::dev::Service<
+            R,
+            Response = actix_web::dev::ServiceResponse<B>,
+            Error = E,
+        >,
+        E: std::fmt::Debug,
+    {
+        let layer = tracing_subscriber::fmt::layer()
+            .with_writer(CaptureWriterMaker(buf.clone()))
+            .with_ansi(false)
+            .with_target(false);
+        let subscriber = tracing_subscriber::registry().with(layer);
+        tracing::subscriber::with_default(subscriber, || {
+            let _ = block_on(test::call_service(app, req));
+        });
+    }
+
+    /// 01 验收：成功请求在 http_request span 内发 debug 完成事件，携带
+    /// status/duration_ms 字段，且 request_id 由 span 继承（文本行 span 前缀）
+    #[actix_web::test]
+    async fn completed_request_logs_status_and_duration() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(TransformFilter));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/echo")
+            .set_payload("hello")
+            .to_request();
+
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        run_request_captured(&app, &buf, req);
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+
+        // 完成事件：debug 级 + status + duration_ms 字段
+        assert!(
+            out.contains("DEBUG") && out.contains("HTTP request completed"),
+            "success completion should be debug level: {out}"
+        );
+        assert!(out.contains("status=200"), "completion should carry status: {out}");
+        assert!(
+            out.contains("duration_ms="),
+            "completion should carry duration_ms: {out}"
+        );
+        // span 继承：文本行带 http_request span（含 request_id）
+        assert!(
+            out.contains("http_request") && out.contains("request_id="),
+            "completion should inherit request_id from span: {out}"
+        );
+
+        chain.clear();
+    }
+
+    /// 01 验收：下游返回 5xx 时完成事件为 error 级
+    #[actix_web::test]
+    async fn completed_request_error_status_logs_error() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(TransformFilter));
+
+        async fn boom() -> HttpResponse {
+            HttpResponse::InternalServerError().finish()
+        }
+        let app = test::init_service(
+            App::new().wrap(TrafficFilter).route("/boom", web::get().to(boom)),
+        )
+        .await;
+        let req = test::TestRequest::get().uri("/boom").to_request();
+
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        run_request_captured(&app, &buf, req);
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+
+        assert!(
+            out.contains("ERROR") && out.contains("HTTP request completed with server error"),
+            "5xx completion should be error level: {out}"
+        );
+        assert!(out.contains("status=500"), "completion should carry 500: {out}");
+
+        chain.clear();
+    }
+
+    /// 01 回归：拒绝路径既有 warn（带 rej 详情）保留，且完成事件为 4xx warn
+    #[actix_web::test]
+    async fn rejected_request_keeps_warn_and_logs_completion() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(RejectAllFilter));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post()
+            .uri("/echo")
+            .set_payload("hello")
+            .to_request();
+
+        let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        run_request_captured(&app, &buf, req);
+        let out = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+
+        // 既有拒绝 warn 保留（rej 详情）
+        assert!(
+            out.contains("HTTP inbound request rejected by traffic filter")
+                && out.contains("blocked by test"),
+            "rejection warn should be kept: {out}"
+        );
+        // 完成事件：400 → warn 级 + status 字段
+        assert!(
+            out.contains("WARN") && out.contains("HTTP request completed with client error"),
+            "4xx completion should be warn: {out}"
+        );
+        assert!(out.contains("status=400"), "completion should carry 400: {out}");
+
+        chain.clear();
     }
 }

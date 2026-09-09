@@ -111,7 +111,7 @@ impl PtyRegistry for DefaultPtyRegistry {
         };
         for (id, session) in sessions {
             if let Err(e) = session.kill().await {
-                tracing::error!("Failed to kill session {}: {}", id, e);
+                tracing::error!(session_id = %id, error = %e, "Failed to kill session");
             }
         }
         Ok(())

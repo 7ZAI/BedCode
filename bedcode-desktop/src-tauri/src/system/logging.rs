@@ -11,6 +11,7 @@
 //! 文件层保持默认格式（UTC 时间戳）以便按时间排序排错；控制台格式仅用于控制台输出层。
 
 use std::fmt;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -211,6 +212,92 @@ pub struct LoggingSetup {
 /// 进程级日志句柄（worker guard 存活载体；02/03 从这里取句柄）
 static LOGGING_SETUP: OnceLock<LoggingSetup> = OnceLock::new();
 
+// ==================== bootstrap 日志（build_logging 之前） ====================
+
+/// bootstrap 文件层日志（进程级启动早期通道）
+///
+/// `build_logging` 之前（config 复制/加载、dev reset 等启动早期路径）tracing 宏
+/// 是 no-op（全局订阅器未安装），消息只走 `eprintln!`——debug 控制台可见，
+/// release 完全不落盘。本通道在这段窗口期内把日志写入 `bootstrap.log`
+/// （与 runtime.*.log 同目录），release 构建的启动失败证据不再丢失；
+/// `init_logging` 完成后启动早期路径不再调用，bootstrap 自然停止增长，
+/// 容量裁剪（`.log` 后缀）覆盖该文件不失控。
+///
+/// 实现：writer 每次写重新打开 `bootstrap.log`（追加模式）——dev reset 删除
+/// 该文件后下一次写自动重建，不依赖 appender 持有 fd；外层套
+/// `NonBlockingBuilder`（worker 线程 + 有界缓冲），符合文件层异步写盘规范。
+const BOOTSTRAP_LOG_FILE: &str = "bootstrap.log";
+
+/// 打开即追加的 bootstrap 文件 writer（每次写重建文件句柄）
+struct BootstrapFileWriter {
+    log_dir: PathBuf,
+}
+
+impl std::io::Write for BootstrapFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.log_dir.join(BOOTSTRAP_LOG_FILE))?;
+        f.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// bootstrap 通道进程级产物（worker guard 存活到进程退出，禁止提前 drop）
+pub struct BootstrapLogger {
+    _guard: WorkerGuard,
+    writer: NonBlocking,
+}
+
+/// 进程级 bootstrap 通道（worker guard 存活载体）
+static BOOTSTRAP: OnceLock<BootstrapLogger> = OnceLock::new();
+
+/// 初始化 bootstrap 通道：创建日志目录（幂等）+ 打开 `bootstrap.log`（追加）
+///
+/// 必须在任何启动早期日志（config 复制/加载、dev reset）之前调用一次；
+/// 重复调用幂等（首次生效）。失败（目录无法创建）返回错误，由调用方降级：
+/// 启动早期日志仍走 `eprintln!`，不阻断启动。
+pub fn bootstrap_init(log_dir: &Path) -> crate::Result<()> {
+    if BOOTSTRAP.get().is_some() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(log_dir)?;
+    let (writer, guard) = NonBlockingBuilder::default()
+        .finish(BootstrapFileWriter { log_dir: log_dir.to_path_buf() });
+    match BOOTSTRAP.set(BootstrapLogger { _guard: guard, writer }) {
+        Ok(()) => {
+            bootstrap_log(
+                Level::INFO,
+                format!("[bootstrap] logging channel initialized: {}", log_dir.display()),
+            );
+            Ok(())
+        }
+        // 并发初始化竞争：另一线程已就绪，视为成功
+        Err(_) => Ok(()),
+    }
+}
+
+/// 启动早期日志：写 `bootstrap.log`（non_blocking 队列）+ 控制台 eprintln 双写
+///
+/// 统一由本函数处理控制台输出，调用方不再单独 eprintln；release 构建控制台
+/// 本就不启用，双写不会产生多余输出。
+pub fn bootstrap_log(level: Level, message: impl AsRef<str>) {
+    let message = message.as_ref();
+    // 控制台双写（dev 可见；release 控制台关闭，输出为空流）
+    eprintln!("{message}");
+    let Some(logger) = BOOTSTRAP.get() else {
+        return; // 通道未初始化（如测试直接调用）：仅控制台，不落盘
+    };
+    let ts = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%S%.3fZ");
+    // non_blocking 队列满丢弃（同 runtime 文件层语义，丢失有容量告警兜底）
+    let mut writer = logger.writer.clone();
+    let _ = writeln!(writer, "{ts} {level:>5} {message}");
+}
+
 /// 进程级保存日志句柄；重复初始化仅告警不覆盖（正常只会调用一次）
 pub fn store_setup(setup: LoggingSetup) {
     if LOGGING_SETUP.set(setup).is_err() {
@@ -283,9 +370,15 @@ pub fn trim_log_dir(log_dir: &Path, max_total_bytes: usize) -> Vec<PathBuf> {
 /// - 容量裁剪：按进程级配置的容量上限执行，需重启后生效（04 设置页保存即改配置）
 /// - 丢弃告警：non_blocking 有界缓冲溢出丢弃日志时输出带数量的 warn，避免静默丢失
 ///
-/// 由应用启动时调用一次；setup 必需为进程级全局存活实例（`global_setup`）。
+/// 由应用启动时调用一次（`init_logging`，位于 tauri setup 回调）；setup 必需为
+/// 进程级全局存活实例（`global_setup`）。
+///
+/// 调用上下文容错：setup 闭包运行在 tauri 事件循环线程，不在 Tokio runtime
+/// 上下文中（`Handle::try_current` 失败），直接 `tokio::spawn` 会 panic
+/// "no reactor running"。此时经 `tauri::async_runtime::block_on` 进入其内部
+/// tokio runtime 取 Handle 再 spawn（与 lib.rs PluginDevWatcher 启动同惯例）
 pub fn spawn_log_maintenance(setup: &'static LoggingSetup, capacity_bytes: usize) {
-    crate::system::error_boundary::spawn_with_error_boundary("log-maintenance", async move {
+    let maintenance = async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(LOG_MAINTENANCE_INTERVAL_SECS));
         let mut last_dropped: usize = 0;
         loop {
@@ -316,6 +409,20 @@ pub fn spawn_log_maintenance(setup: &'static LoggingSetup, capacity_bytes: usize
             }
             last_dropped = dropped;
         }
+    };
+
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(_) => {
+            // setup 阶段（lib.rs::init_logging 在 tauri setup 回调）不在 Tokio 上下文
+            tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() })
+        }
+    };
+    // 在 tokio 工作线程上执行 error boundary 包装的任务（inner tokio::spawn 此刻有 reactor）
+    handle.spawn(async move {
+        crate::system::error_boundary::spawn_with_error_boundary("log-maintenance", maintenance)
+            .await
+            .ok();
     });
 }
 
@@ -358,6 +465,11 @@ pub fn build_logging(
     // runtime 层 filter：级别可热调（reload handle 存入 setup，02 使用）
     let file_level = if dev { "debug" } else { log_config.file_level.as_str() };
     let (runtime_filter, file_level_reload) = reload::Layer::new(EnvFilter::new(file_level));
+    // json 模式事件行带完整 span 链（`with_span_list`，json() 默认已开）：
+    // error.json 行可凭 `spans[].fields.request_id/session_id` 按 key 检索（与
+    // text 模式对称）。span 字段必须由 json 层自己的 `JsonFields` 格式化（默认
+    // DefaultFields 产生 ANSI 文本，span 序列化会 panic）——两处 json 层都要配。
+    let json_event_format = tracing_subscriber::fmt::format::json().with_span_list(true);
 
     // frontend 层（仅 target=`frontend`，前端 console 中继日志）：
     // 层永远存在，dev 时写 frontend 文件，非 dev 时写丢弃 writer（配合 target 过滤，事件零进入）
@@ -410,7 +522,8 @@ pub fn build_logging(
                 .with(
                     tracing_subscriber::fmt::layer()
                         .with_writer(runtime_writer.clone())
-                        .event_format(tracing_subscriber::fmt::format::json())
+                        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
+                        .event_format(json_event_format.clone())
                         .with_target(true)
                         .with_thread_ids(false)
                         .with_line_number(true)
@@ -420,7 +533,8 @@ pub fn build_logging(
                 .with(
                     tracing_subscriber::fmt::layer()
                         .with_writer(error_writer.clone())
-                        .event_format(tracing_subscriber::fmt::format::json())
+                        .fmt_fields(tracing_subscriber::fmt::format::JsonFields::new())
+                        .event_format(json_event_format.clone())
                         .with_target(true)
                         .with_thread_ids(false)
                         .with_line_number(true)
@@ -733,6 +847,85 @@ mod tests {
         let err_line: serde_json::Value = serde_json::from_str(error_log.lines().next().unwrap())
             .expect("error line should be valid JSON");
         assert_eq!(err_line["level"], "ERROR", "error file only ERROR: {err_line}");
+        drop_dir(&dir);
+    }
+
+    /// 02 验收：json 模式事件行携带 span 链（`with_span_list`），error.json 行
+    /// 可凭 `span[].fields.request_id/session_id` 按 key 检索（与 text 模式对称）
+    #[test]
+    fn json_format_events_carry_span_list() {
+        let dir = temp_log_dir("json-span");
+        let config = json_config("info");
+        let (setup, subscriber) = build_logging(&dir, &config, false).expect("build logging");
+        tracing::subscriber::with_default(subscriber, || {
+            let parent = tracing::span!(
+                tracing::Level::INFO,
+                "http_request",
+                request_id = "req-span-1",
+                method = "POST"
+            );
+            parent.in_scope(|| {
+                tracing::error!(target: "bedcode_test", session_id = 7, "boom inside span");
+            });
+        });
+        drop(setup);
+
+        // error 文件只收 ERROR 事件（FilterFn 语义不变），且该行带 span 链
+        let error_log = read_log_file(&dir, "error");
+        let err_line: serde_json::Value = serde_json::from_str(error_log.lines().next().unwrap())
+            .expect("error line should be valid JSON");
+        assert_eq!(err_line["level"], "ERROR", "error file only ERROR: {err_line}");
+        // span 链：json() 全链默认输出 `spans` 数组（root→leaf），并在 `span` 键
+        // 带当前 span 对象；断言全链数组内 request_id 可检索
+        let spans = err_line["spans"]
+            .as_array()
+            .unwrap_or_else(|| panic!("error line should carry spans list: {err_line}"));
+        let outer = spans
+            .iter()
+            .find(|s| s["name"] == "http_request")
+            .unwrap_or_else(|| panic!("spans should contain http_request: {err_line}"));
+        // span 对象里字段平铺（SerializableSpan 把 span 字段写进对象顶层）
+        assert_eq!(
+            outer["request_id"], "req-span-1",
+            "span fields should carry request_id: {err_line}"
+        );
+        assert_eq!(outer["method"], "POST", "span field method: {err_line}");
+        // 既有 json 字段不变（level/target/line_number）
+        assert_eq!(err_line["target"], "bedcode_test", "target field kept: {err_line}");
+        assert!(err_line["line_number"].is_number(), "line_number kept: {err_line}");
+        drop_dir(&dir);
+    }
+
+    /// 03 验收：bootstrap 通道在 build_logging 之前落盘 `bootstrap.log`，
+    /// 文件删除（dev reset）后下一次写自动重建；格式带级别与 UTC 时间戳
+    #[test]
+    fn bootstrap_channel_writes_file_and_recreates_after_delete() {
+        let dir = temp_log_dir("bootstrap");
+        bootstrap_init(&dir).expect("bootstrap init");
+        // worker 线程异步写盘：短暂等待后读取，保证确定性
+        let settle = || std::thread::sleep(std::time::Duration::from_millis(100));
+
+        bootstrap_log(Level::INFO, "bootstrap line one");
+        bootstrap_log(Level::ERROR, "bootstrap line two");
+        settle();
+
+        let path = dir.join("bootstrap.log");
+        let content = std::fs::read_to_string(&path).expect("bootstrap.log written");
+        assert!(content.contains("bootstrap line one"), "first line: {content}");
+        assert!(content.contains("bootstrap line two"), "second line: {content}");
+        // 行结构：UTC 时间戳 + 级别 + 消息
+        assert!(content.lines().any(|l| l.contains(" INFO bootstrap line one")), "level+msg: {content}");
+        assert!(content.lines().any(|l| l.contains("ERROR bootstrap line two")), "level+msg: {content}");
+
+        // dev reset 语义：删除后下一次写重建文件
+        std::fs::remove_file(&path).expect("remove bootstrap.log");
+        bootstrap_log(Level::INFO, "bootstrap line three");
+        settle();
+        let content = std::fs::read_to_string(&path).expect("bootstrap.log recreated");
+        assert!(
+            content.contains("bootstrap line three") && !content.contains("bootstrap line one"),
+            "recreated file should only hold post-reset lines: {content}"
+        );
         drop_dir(&dir);
     }
 
