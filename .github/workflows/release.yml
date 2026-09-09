@@ -119,7 +119,8 @@ jobs:
       # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
       # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
       - name: Build SDK (plugin-sdk-desktop dist)
-        run: pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
+        working-directory: packages/plugin-sdk-desktop
+        run: pnpm run build
 
       # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
@@ -388,7 +389,8 @@ jobs:
       # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
       # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
       - name: Build SDK (plugin-sdk-desktop dist)
-        run: pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
+        working-directory: packages/plugin-sdk-desktop
+        run: pnpm run build
 
       # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
