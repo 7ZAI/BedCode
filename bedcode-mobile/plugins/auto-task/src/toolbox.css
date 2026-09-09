@@ -218,38 +218,11 @@
   color: var(--mobile-text-disabled);
 }
 
-/* ==================== 状态筛选 chips ==================== */
+/* ==================== 状态筛选下拉（Select 替代 chips） ==================== */
 
-.att-chips {
-  display: flex;
-  gap: 0.5rem;
-  overflow-x: auto;
+.att-filter {
   padding: 0.75rem 0;
   flex-shrink: 0;
-}
-
-.att-chip {
-  flex-shrink: 0;
-  padding: 0.375rem 0.875rem;
-  border-radius: 9999px;
-  font-size: 0.8125rem;
-  color: var(--mobile-text-secondary);
-  background: var(--mobile-bg-card);
-  border: 1px solid var(--mobile-border);
-  cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.att-chip:active {
-  opacity: 0.8;
-}
-
-/* 选中：accent 10% tint + 品牌色文字（与徽标同款扁平风格） */
-.att-chip-active {
-  color: var(--mobile-accent);
-  background: color-mix(in srgb, var(--mobile-accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--mobile-accent) 30%, transparent);
 }
 
 /* ==================== 列表行 ==================== */

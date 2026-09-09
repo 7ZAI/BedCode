@@ -30,17 +30,13 @@
 
       <!-- min-h-full + flex-col：空态/加载态在可视区内垂直居中，列表态保持顶部对齐 -->
       <div class="att-scroll-inner">
-        <!-- 状态筛选 chips -->
-        <div class="att-chips">
-          <button
-            v-for="chip in chips"
-            :key="chip.value"
-            class="att-chip"
-            :class="{ 'att-chip-active': statusFilter === chip.value }"
-            @click="props.history.setStatusFilter(chip.value)"
-          >
-            {{ t(chip.label) }}
-          </button>
+        <!-- 状态筛选：下拉选择任务状态（默认全部；切筛选走 composable 回第一页重拉） -->
+        <div class="att-filter">
+          <Select
+            :model-value="statusFilter"
+            :options="statusOptions"
+            @update:model-value="props.history.setStatusFilter($event as HistoryStatusFilter)"
+          />
         </div>
 
         <!-- 未连接空态 -->
@@ -124,10 +120,12 @@
  * TaskHistoryTab — 任务记录页（纯 UI）
  *
  * 数据与交互逻辑在 useTaskHistory composable（宿主容器传入实例）：
- * 状态筛选 chips / 分页加载更多（点击按钮 + 触底上拉手势）/ 下拉刷新均只调用其暴露的 action。
+ * 状态筛选下拉 / 分页加载更多（点击按钮 + 触底上拉手势）/ 下拉刷新均只调用其暴露的 action。
  */
 import { ref, computed } from 'vue'
 import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import Select from '@binblink/plugin-sdk-mobile/ui'
+import type { SelectOption } from '@binblink/plugin-sdk-mobile/ui'
 import type { TaskHistoryComposable, HistoryStatusFilter } from '../composables/useTaskHistory'
 import { utcToLocalDisplay, formatDuration } from '../composables/useTaskHistory'
 
@@ -141,15 +139,20 @@ const t = (key: string): string => props.context.i18n.t(key)
 // 解构 ref：模板顶层自动解包（composable 实例经 props 传入时模板不会自动解包）
 const { tasks, hasMore, statusFilter, loading, loadingMore, offline } = props.history
 
-// ==================== 状态筛选 chips ====================
+// ==================== 状态筛选下拉（Select 替代 chips，默认全部） ====================
 
-const chips: { value: HistoryStatusFilter; label: string }[] = [
+const statusFilters: { value: HistoryStatusFilter; label: string }[] = [
   { value: 'all', label: 'history.statusFilter.all' },
   { value: 'in_progress', label: 'history.statusFilter.in_progress' },
   { value: 'completed', label: 'history.statusFilter.completed' },
   { value: 'interrupted', label: 'history.statusFilter.interrupted' },
   { value: 'failed', label: 'history.statusFilter.failed' },
 ]
+
+/** 下拉选项：文案随 i18n 语言切换实时计算 */
+const statusOptions = computed<SelectOption[]>(() =>
+  statusFilters.map((f) => ({ value: f.value, label: t(f.label) })),
+)
 
 // ==================== 状态/来源展示 ====================
 
