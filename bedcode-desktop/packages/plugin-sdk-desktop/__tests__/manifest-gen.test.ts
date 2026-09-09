@@ -49,7 +49,7 @@ describe('前端注册扫描（views）', () => {
   it('从 registerSidebarPanel 推导 views type=sidebar 与 ui:sidebar 权限', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'My Panel', component: MyPanel })
 }`,
@@ -67,7 +67,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerToolboxPage → views type=toolbox + ui:toolbox', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerToolboxPage({ id: 'test.toolbox', title: 'Toolbox', component: ToolboxPage })
 }`,
@@ -81,7 +81,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerStatusBarItem → views type=statusbar + ui:statusbar', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerStatusBarItem({ id: 'test.status', label: 'Status' })
 }`,
@@ -95,7 +95,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerTerminalToolbarItem → ui:input 权限（不进 views）', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerTerminalToolbarItem({ id: 'test.tool', label: 'Tool' })
 }`,
@@ -113,7 +113,7 @@ describe('前端权限推断', () => {
   it('storage / terminal / session / http / broadcast', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
   await context.terminal.sendInput('s', 'x')

@@ -10,8 +10,8 @@
  * 适配 agent 列表通过后端 HTTP 端点获取（权威来源：Rust AGENT_PROFILES）。
  */
 import { createApp, type App, watch } from 'vue'
-import type { PluginContext, PluginDevMock } from '@binblink/plugin-sdk-mobile'
-import { getMobileApi } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext, PluginDevMock } from '@binblink/bedcode-plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/bedcode-plugin-sdk-mobile'
 import { getAutoTaskApi } from './api'
 import AutoTaskPanelHost from './components/AutoTaskPanelHost.vue'
 import AutoTaskToolboxView from './components/AutoTaskToolboxView.vue'

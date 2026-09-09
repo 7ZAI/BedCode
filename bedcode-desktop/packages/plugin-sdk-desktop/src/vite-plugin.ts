@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop Vite 插件
+ * @binblink/bedcode-plugin-sdk-desktop Vite 插件
  *
  * 处理插件构建时的共享模块外部化：
  * 1. 将 vue/vue-i18n/pinia 标记为 rollup external
@@ -20,7 +20,7 @@ const SHARED_MODULES: Record<string, string> = {
  *
  * 在插件 vite.config.ts 中使用：
  * ```ts
- * import { bedcodePlugin } from '@binblink/plugin-sdk-desktop/vite'
+ * import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
  * export default defineConfig({
  *   plugins: [vue(), bedcodePlugin()],
  *   build: { ... }

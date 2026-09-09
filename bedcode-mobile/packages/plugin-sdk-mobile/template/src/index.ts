@@ -3,7 +3,7 @@
  *
  * 最小可编译模板：激活时注册一个终端工具栏项
  */
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 let _ctx: PluginContext
 

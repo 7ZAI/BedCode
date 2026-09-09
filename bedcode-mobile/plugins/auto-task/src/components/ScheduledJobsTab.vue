@@ -166,8 +166,8 @@
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import Datepicker from '@vuepic/vue-datepicker'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
-import { getMobileApi, getI18n } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import { getMobileApi, getI18n } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { ScheduledJobsComposable, ScheduledJob } from '../composables/useScheduledJobs'
 import { parsePrompts } from '../composables/useScheduledJobs'
 import { utcToLocalDisplay } from '../composables/useTaskHistory'

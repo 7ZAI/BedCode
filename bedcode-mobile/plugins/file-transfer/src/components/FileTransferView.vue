@@ -9,8 +9,8 @@
  * 本文件只做编排与布局。
  */
 import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
-import type { PluginContext, Disposable } from '@binblink/plugin-sdk-mobile'
-import { useSwipeTabs } from '@binblink/plugin-sdk-mobile/ui/swipe-tabs'
+import type { PluginContext, Disposable } from '@binblink/bedcode-plugin-sdk-mobile'
+import { useSwipeTabs } from '@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs'
 import { useTasks } from '../composables/useTasks'
 import { usePeerDevices } from '../composables/usePeerDevices'
 import { useRemoteFs } from '../composables/useRemoteFs'

@@ -15,7 +15,7 @@ import { mergeUsage } from '../adapters/usage'
 import { buildStreamRequest, parseStreamEvent } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
 import type { AdapterMessage, StreamEvent, ThinkingOptions } from '../adapters/types'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { useAiConfig } from './useAiConfig'
 
 type AiConfig = ReturnType<typeof useAiConfig>

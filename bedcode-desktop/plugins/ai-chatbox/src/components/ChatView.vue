@@ -251,11 +251,11 @@ import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import ConversationList from './ConversationList.vue'
 import ProviderConfigPage from './ProviderConfigPage.vue'
-import Select from '@binblink/plugin-sdk-desktop/ui'
+import Select from '@binblink/bedcode-plugin-sdk-desktop/ui'
 import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
 
 const { t } = useI18n()

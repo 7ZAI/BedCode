@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop 类型定义
+ * @binblink/bedcode-plugin-sdk-desktop 类型定义
  *
  * 插件系统所有公开类型 — 插件通过此包引用，无需依赖宿主源码
  *

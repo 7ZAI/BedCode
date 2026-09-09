@@ -10,7 +10,7 @@
  * `disconnect-peer`。
  */
 import { computed, ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import {
   applyLost,
   deriveDeviceRows,

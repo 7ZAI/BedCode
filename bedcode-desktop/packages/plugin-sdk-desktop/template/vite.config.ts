@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'node:path'
-import { bedcodePlugin } from '@binblink/plugin-sdk-desktop/vite'
+import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
 
 export default defineConfig({
   plugins: [vue(), bedcodePlugin()],

@@ -9,7 +9,7 @@
     "manifest": "bedcode-plugin-desktop manifest"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-desktop": "{{SDK_JS}}"
+    "@binblink/bedcode-plugin-sdk-desktop": "{{SDK_JS}}"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",

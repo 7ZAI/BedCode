@@ -19,7 +19,7 @@
  * 内容动态刷新，精确结算仍由 settle 定时器保证。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 /** 插件 consent-requested 事件载荷（宿主 camelCase 契约形状） */
 export interface ConsentRequest {

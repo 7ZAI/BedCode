@@ -4,7 +4,7 @@
 
 - 用户明确：架构框架参考桌面端，功能函数不照抄（移动端场景不同）。
 - 任务按依赖排序：01 CommandArgs → 02 host traits → 03 WasmHost impl → 04 abi → 05 invoke_command 签名 → 06 mark_plugin_error（SDK）→ 07 宿主闭环 → 08 签名表校验 → 09 Dialog → 10 前端状态上报 → 11 Notification → 12 迁移+测试 → 13 遗留处理（权限对齐 + ABI v3）。
-- 宿主已依赖 SDK（Cargo `bedcode-plugin-api-mobile` + tsconfig alias `@binblink/plugin-sdk-mobile`），无需新增依赖。
+- 宿主已依赖 SDK（Cargo `bedcode-plugin-api-mobile` + tsconfig alias `@binblink/bedcode-plugin-sdk-mobile`），无需新增依赖。
 
 ## Decisions so far
 

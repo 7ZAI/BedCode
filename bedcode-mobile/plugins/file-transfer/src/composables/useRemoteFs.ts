@@ -6,7 +6,7 @@
  * dirId 为共享根条目 id（browse/pull 按其寻址）。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { RemoteEntry } from '../types'
 
 /** 共享根条目 */

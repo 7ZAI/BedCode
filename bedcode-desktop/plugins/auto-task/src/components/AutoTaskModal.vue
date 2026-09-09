@@ -7,7 +7,7 @@
  * 当前会话从宿主共享运行时 router 的 /terminal-window/:id 路由参数获取。
  */
 import { ref, computed, watch, onMounted, onUnmounted, inject, nextTick } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { autoTaskModalVisible } from '../state'
 
 const context = inject<PluginContext>('pluginContext')!

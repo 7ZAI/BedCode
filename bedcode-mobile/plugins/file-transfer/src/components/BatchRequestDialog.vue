@@ -10,7 +10,7 @@
  * 视觉：分段按钮 + 倒计时进度条（替代旧版纯按钮排版）。
  */
 import { inject, onUnmounted, ref, watch, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { PendingBatch } from '../types'
 import { formatBytes } from '../utils/format'
 

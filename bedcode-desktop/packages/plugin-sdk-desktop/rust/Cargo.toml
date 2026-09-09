@@ -29,4 +29,4 @@ inventory = "0.3"
 # 版本锁定 =0.60.0（与移动端 SDK 对齐，2025-08；移动端 spike 实证 0.60 产物 × wasmtime 47 兼容）
 wit-bindgen = { version = "=0.60.0", features = ["macros"], optional = true }
 # #[plugin_api] 属性宏（插件互调 IDL：trait → JSON-RPC 分派 + client + 防漂移比对）
-bedcode-plugin-api-macros = { path = "../rust-macros", optional = true }
+bedcode-plugin-api-macros = { path = "../rust-macros", version = "0.1.1", optional = true }

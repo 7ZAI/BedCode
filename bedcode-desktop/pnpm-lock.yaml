@@ -109,7 +109,7 @@ importers:
 
   .:
     dependencies:
-      '@binblink/plugin-sdk-desktop':
+      '@binblink/bedcode-plugin-sdk-desktop':
         specifier: workspace:*
         version: link:packages/plugin-sdk-desktop
       '@tauri-apps/api':
@@ -321,7 +321,7 @@ importers:
 
   plugins/ai-chatbox:
     dependencies:
-      '@binblink/plugin-sdk-desktop':
+      '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
         version: link:../../packages/plugin-sdk-desktop
     devDependencies:
@@ -358,7 +358,7 @@ importers:
 
   plugins/auto-task:
     dependencies:
-      '@binblink/plugin-sdk-desktop':
+      '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
         version: link:../../packages/plugin-sdk-desktop
       '@vuepic/vue-datepicker':
@@ -383,7 +383,7 @@ importers:
 
   plugins/file-transfer:
     dependencies:
-      '@binblink/plugin-sdk-desktop':
+      '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
         version: link:../../packages/plugin-sdk-desktop
     devDependencies:

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { usePeerDevices } from '../../../../plugins/file-transfer/src/composables/usePeerDevices'
 import { DEVICE_TTL_MS } from '../../../../plugins/file-transfer/src/composables/deviceState'
 

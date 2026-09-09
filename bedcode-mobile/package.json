@@ -31,7 +31,7 @@
     "prebuild": "node scripts/check-target-size.js"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-mobile": "file:packages/plugin-sdk-mobile",
+    "@binblink/bedcode-plugin-sdk-mobile": "file:packages/plugin-sdk-mobile",
     "@noble/ciphers": "^1.2.0",
     "@noble/curves": "^1.8.1",
     "@noble/hashes": "^1.5.0",

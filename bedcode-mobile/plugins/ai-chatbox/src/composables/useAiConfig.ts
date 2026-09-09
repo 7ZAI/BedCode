@@ -12,7 +12,7 @@ import type { ApiProvider, ProviderPreset, ApiStyle } from '../types'
 import { generateId } from '../types'
 import { buildCompleteRequest, buildModelsRequest, getAdapter, parseModelsResponse } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 const STORAGE_PROVIDERS = 'apiProviders'
 const STORAGE_ACTIVE_PROVIDER = 'activeProvider'

@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-mobile 类型定义
+ * @binblink/bedcode-plugin-sdk-mobile 类型定义
  *
  * 移动端插件开发者可用的所有公开类型
  */

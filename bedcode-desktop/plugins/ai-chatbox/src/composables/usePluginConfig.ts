@@ -7,8 +7,8 @@
  * 非法枚举值回退默认，避免坏数据流入请求构建。
  */
 import { ref } from 'vue'
-import { PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/plugin-sdk-desktop'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import { PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/bedcode-plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeTheme } from '../types'
 import {
   CODE_FONT_SIZE_MAX,

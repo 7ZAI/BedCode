@@ -1,5 +1,5 @@
 {
-  "name": "@binblink/plugin-sdk-desktop-dev-shell",
+  "name": "@binblink/bedcode-plugin-sdk-desktop-dev-shell",
   "version": "0.1.1",
   "private": true,
   "type": "module",

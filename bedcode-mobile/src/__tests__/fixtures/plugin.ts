@@ -19,7 +19,7 @@ import type { PluginInfo } from '@/plugin/types'
 import type {
   MobilePluginContributes,
   PluginState,
-} from '@binblink/plugin-sdk-mobile'
+} from '@binblink/bedcode-plugin-sdk-mobile'
 
 /**
  * 构造最小可用的 PluginInfo

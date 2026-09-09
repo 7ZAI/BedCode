@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-mobile 运行时代理
+ * @binblink/bedcode-plugin-sdk-mobile 运行时代理
  */
 import type { MobileHostApi, PluginContext } from './types'
 

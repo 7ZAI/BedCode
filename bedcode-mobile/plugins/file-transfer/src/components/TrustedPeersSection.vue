@@ -12,7 +12,7 @@
  * 触控目标 ≥44px。
  */
 import { computed, inject, onMounted, ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import {
   formatTrustedDate,
   useTrustedPeers,

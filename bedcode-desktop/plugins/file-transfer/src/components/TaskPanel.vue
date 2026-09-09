@@ -7,7 +7,7 @@
  * 接收 tab 仅可取消；历史只读 + 清空。状态 chips（四色体系）+ 进度条 + 速率。
  */
 import { computed, inject, ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { HistoryEntry, ReceivingTask, Task, TaskStateName } from '../types'
 import { formatBytes, formatEta, displayName, formatClock } from '../utils/format'
 

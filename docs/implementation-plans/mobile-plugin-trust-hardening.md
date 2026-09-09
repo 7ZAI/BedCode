@@ -64,7 +64,7 @@
 
 - SDK Rust `types.rs`：`PluginState { Loaded, Activated, Deactivated, Error{error} }`，serde tag="state" + camelCase；`PluginManifest` 含 `wasm_hash`/`rust_library`；SDK `permission.rs` 有 `VALID_PERMISSIONS` + `PERMISSION_STORAGE`
 - 宿主 `types.rs`：`PluginSource { ApkAsset, RemoteDownload, FileInstall, FrontendOnly }`（无 serde derive）；`MobilePluginInfo.source` 序列化为字符串 `"apk-asset"` / `"remote-download"` / `"file-install"` / `"frontend-only"`
-- 前端 `PluginState` 从 `@binblink/plugin-sdk-mobile`（`packages/plugin-sdk-mobile/src/types.ts`）导入，当前无 NeedsApproval
+- 前端 `PluginState` 从 `@binblink/bedcode-plugin-sdk-mobile`（`packages/plugin-sdk-mobile/src/types.ts`）导入，当前无 NeedsApproval
 
 ### 2.4 前端
 

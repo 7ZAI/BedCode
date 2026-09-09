@@ -8,7 +8,7 @@ import FileTransferView from './components/FileTransferView.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
-import { getRouter, type PluginContext } from '@binblink/plugin-sdk-desktop'
+import { getRouter, type PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import peerDevMock from './devMock'
 import { useConsent, type ConsentController } from './composables/useConsent'
 

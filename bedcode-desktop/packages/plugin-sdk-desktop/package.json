@@ -1,5 +1,5 @@
 {
-  "name": "@binblink/plugin-sdk-desktop",
+  "name": "@binblink/bedcode-plugin-sdk-desktop",
   "version": "0.1.1",
   "license": "MIT",
   "publishConfig": {

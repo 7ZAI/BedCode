@@ -128,7 +128,7 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 | **File Transfer** | 1.0.0-beta | LAN file transfer: peer discovery, remote directory browsing, concurrent transfers (resume / retry) |
 | **Scheduler**     | 1.0.0-beta | Generic scheduling framework: cron-triggered shell scripts / inline commands with audit logs        |
 
-To build your own plugin, use [`@binblink/plugin-sdk-desktop`](packages/plugin-sdk-desktop/README_en.md) (TS SDK + Rust `bedcode-plugin-api` crate); full guide in [plugin-dev-desktop.md](plugin-dev-desktop.md).
+To build your own plugin, use [`@binblink/bedcode-plugin-sdk-desktop`](packages/plugin-sdk-desktop/README_en.md) (TS SDK + Rust `bedcode-plugin-api` crate); full guide in [plugin-dev-desktop.md](plugin-dev-desktop.md).
 
 ## Related Docs
 

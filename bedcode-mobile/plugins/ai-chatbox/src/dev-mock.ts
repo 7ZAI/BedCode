@@ -7,8 +7,8 @@
  * 的完整形态，便于 UI 评审与样式调试；生产构建（vite build）时 DEV=false，
  * 本模块代码不参与打包。
  */
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
-import { getI18n } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import { getI18n } from '@binblink/bedcode-plugin-sdk-mobile'
 
 // ==================== 宿主 i18n key 补齐（dev-shell 无宿主 locale，运行时由宿主注入） ====================
 // 与 bedcode-mobile/src/locales/{zh-CN,en}/mobile.ts 的 plugin.aiChatbox 段同步

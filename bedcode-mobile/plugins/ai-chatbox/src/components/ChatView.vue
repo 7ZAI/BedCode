@@ -234,7 +234,7 @@ import PluginSettingsSheet from './PluginSettingsSheet.vue'
 import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
 
 const { t } = useI18n()

@@ -14,7 +14,7 @@
  * - trusted 种子：三条可信对端（含一条无名短指纹兑底），驱动设置分区列表展示
  *   与两步撤销全流程演示
  */
-import type { PluginDevMock } from '@binblink/plugin-sdk-mobile'
+import type { PluginDevMock } from '@binblink/bedcode-plugin-sdk-mobile'
 
 /** 设备种子（mdns:found 载荷形状 + 拨号行为标注；插件自有类型，SDK 不收录） */
 export interface PeerDeviceSeed {

@@ -14,7 +14,7 @@
  * 因此直接 inject 插件上下文；组件挂载时启动任务监听，卸载时摘除。
  */
 import { inject, onMounted, onUnmounted, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
 import { usePeerDevices } from '../composables/usePeerDevices'
 

@@ -9,7 +9,7 @@
  * 此处本地定义同一约定值 'config'，与桌面端 storage key 保持一致。
  */
 import { ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeTheme } from '../types'
 import {
   CODE_FONT_SIZE_MAX,

@@ -6,7 +6,7 @@
  * （系统选择器 + set_download_dir）；接收策略/超时经 set-settings。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { Settings } from '../types'
 
 /** 宿主 SharedDirDto → 前端条目（保留 id 供移除寻址、path 供完整路径展示） */

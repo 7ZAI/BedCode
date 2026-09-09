@@ -13,7 +13,7 @@
  * settings-label / settings-desc 设计语言，字号统一 clamp() 流式缩放。
  */
 import { ref, inject, watch } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import type { ReceivingPolicy } from '../types'

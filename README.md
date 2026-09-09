@@ -198,7 +198,7 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 ### 插件开发 SDK
 
-- **[`@binblink/plugin-sdk-desktop`](https://www.npmjs.com/package/@binblink/plugin-sdk-desktop)** / **[`@binblink/plugin-sdk-mobile`](https://www.npmjs.com/package/@binblink/plugin-sdk-mobile)**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
+- **[`@binblink/bedcode-plugin-sdk-desktop`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-desktop)** / **[`@binblink/bedcode-plugin-sdk-mobile`](https://www.npmjs.com/package/@binblink/bedcode-plugin-sdk-mobile)**（npm，MIT）— 主 API、Vite 插件（`./vite`）、共享 UI 组件（`./ui`）、类型定义（`./types`）等子路径导出
 - **脚手架 CLI** — `bedcode-plugin-desktop`（移动端 `bedcode-plugin`）：`create` 生成插件工程、`dev` 浏览器 HMR 开发环境、`build` 构建、`manifest` 自动填充声明、`validate` 校验、`doctor` 环境自检
 - **浏览器开发环境（dev-shell）** — 两 SDK 均内置 `dev-shell`：空壳宿主 + 双端页面骨架，在浏览器中直接运行插件前端源码（支持 HMR），无需构建、打包、真机安装即可迭代 UI 与前端逻辑。
   - 启动：`bedcode-plugin-desktop dev`（移动端 `pnpm run dev` / `pnpm exec bedcode-plugin dev`）；`--host` 监听局域网后可手机浏览器访问预览（真实触控 / 真机视口）

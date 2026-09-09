@@ -7,7 +7,7 @@
  * 并发数与下载目录为移动端固定值（只读展示/隐藏）。
  */
 import { ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { Settings, SharedRoot, ReceivingPolicy } from '../types'
 
 /** 宿主 SharedDirDto → 前端 SharedRoot */

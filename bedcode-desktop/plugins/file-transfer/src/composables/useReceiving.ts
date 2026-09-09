@@ -10,7 +10,7 @@
  * 只更新计数不重复弹（spec §14.4）。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import {
   isPermissionGranted,
   requestPermission,

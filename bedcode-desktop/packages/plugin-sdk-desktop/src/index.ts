@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop
+ * @binblink/bedcode-plugin-sdk-desktop
  *
  * BedCode 插件开发工具包 — 类型定义 + 运行时代理 + 构建工具
  */

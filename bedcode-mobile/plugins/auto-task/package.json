@@ -9,7 +9,7 @@
     "dev": "bedcode-plugin dev"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile",
+    "@binblink/bedcode-plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile",
     "@vuepic/vue-datepicker": "^9.0.3"
   },
   "devDependencies": {

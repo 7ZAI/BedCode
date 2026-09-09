@@ -6,7 +6,7 @@
  * camelCase wire → 前端内部模型的映射，组件消费模型不变。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { Task, TaskStateName } from '../types'
 import { isTerminalState } from '../types'
 

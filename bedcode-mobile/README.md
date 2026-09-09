@@ -121,7 +121,7 @@ cd src-tauri && cargo test         # Rust 测试
 
 移动端插件与桌面端共享同一套插件架构（WASM Component Model + 权限控制），并额外封装移动端专属能力：**SAF 存储访问**、对话框 / 系统通知、**动态路由**、生命周期钩子、Android 系统返回键接管，以及 dev-shell 演示数据协议（浏览器 HMR 开发环境）。
 
-开发自己的插件：使用 [`@binblink/plugin-sdk-mobile`](packages/plugin-sdk-mobile/README.md)（TS SDK + Rust `bedcode-plugin-api-mobile` crate），完整指南见 [plugin-dev-mobile.md](plugin-dev-mobile.md)。
+开发自己的插件：使用 [`@binblink/bedcode-plugin-sdk-mobile`](packages/plugin-sdk-mobile/README.md)（TS SDK + Rust `bedcode-plugin-api-mobile` crate），完整指南见 [plugin-dev-mobile.md](plugin-dev-mobile.md)。
 
 ### 官方插件
 

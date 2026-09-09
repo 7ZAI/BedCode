@@ -7,7 +7,7 @@
  * 目录状态全部来自 props，交互经 emit 交给父级 composable。
  */
 import { computed, inject } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 import type { Crumb } from '../composables/useRemoteFs'
 import { formatBytes, formatModified } from '../utils/format'

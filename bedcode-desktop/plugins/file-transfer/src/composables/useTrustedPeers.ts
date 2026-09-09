@@ -11,7 +11,7 @@
  * plugins/file-transfer 子目录。
  */
 import { ref, type Ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 /** 可信对端条目（宿主 TrustedPeerDto camelCase 契约形状） */
 export interface TrustedPeer {

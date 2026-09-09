@@ -13,7 +13,7 @@
  * 用户不在面板时经状态栏项跳转后再处理（已知体验折衷，spec 决策 6）。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 /** 插件 consent-requested 事件载荷（宿主 camelCase 契约形状） */
 export interface ConsentRequest {

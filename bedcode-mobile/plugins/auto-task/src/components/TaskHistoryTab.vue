@@ -123,9 +123,9 @@
  * 状态筛选下拉 / 分页加载更多（点击按钮 + 触底上拉手势）/ 下拉刷新均只调用其暴露的 action。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
-import Select from '@binblink/plugin-sdk-mobile/ui'
-import type { SelectOption } from '@binblink/plugin-sdk-mobile/ui'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import Select from '@binblink/bedcode-plugin-sdk-mobile/ui'
+import type { SelectOption } from '@binblink/bedcode-plugin-sdk-mobile/ui'
 import type { TaskHistoryComposable, HistoryStatusFilter } from '../composables/useTaskHistory'
 import { utcToLocalDisplay, formatDuration } from '../composables/useTaskHistory'
 

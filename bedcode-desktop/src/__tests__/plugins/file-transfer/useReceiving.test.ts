@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { useReceiving } from '../../../../plugins/file-transfer/src/composables/useReceiving'
 
 type EventHandler = (payload: any) => void

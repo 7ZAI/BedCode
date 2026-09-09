@@ -1,7 +1,7 @@
 # BedCode Desktop 插件开发指南
 
 本文档说明如何为 BedCode Desktop 开发插件，以及如何使用浏览器开发环境（Dev Shell）
-快速迭代插件前端。开发工具包为 `@binblink/plugin-sdk-desktop`（SDK），
+快速迭代插件前端。开发工具包为 `@binblink/bedcode-plugin-sdk-desktop`（SDK），
 命令行为 `bedcode-plugin-desktop`。
 
 ---
@@ -35,7 +35,7 @@
 
 ## 2. 创建插件工程
 
-开发工具包为 `@binblink/plugin-sdk-desktop`，命令行为 `bedcode-plugin-desktop`。
+开发工具包为 `@binblink/bedcode-plugin-sdk-desktop`，命令行为 `bedcode-plugin-desktop`。
 
 ```bash
 bedcode-plugin-desktop create com.example.my-plugin "My Plugin" --author "you"

@@ -5,7 +5,7 @@
  * 本模块承载 AutoTask 业务端点（/api/plugin/com.bedcode.auto-task/...）与 DTO 形状，
  * 使插件业务代码内聚于插件工程、宿主与 SDK 不感知具体业务细节。
  */
-import { getMobileApi, type MobileHostApi, type MobileHttpResult } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi, type MobileHostApi, type MobileHttpResult } from '@binblink/bedcode-plugin-sdk-mobile'
 
 /** 队列任务项（与桌面端 task-queue DTO 对齐） */
 export interface QueueTaskItem {

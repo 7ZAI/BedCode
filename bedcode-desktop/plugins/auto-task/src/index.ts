@@ -20,7 +20,7 @@ import { platform } from '@tauri-apps/plugin-os'
 import { autoTaskModalVisible } from './state'
 import { messages } from './i18n'
 import { EVENT_SESSION_MODE_CHANGED, EVENT_TASK_STATUS_CHANGED } from './events'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 // ==================== Datepicker 主题定制 ====================
 

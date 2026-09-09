@@ -7,7 +7,7 @@
  * 的自建设备缓存驱动（mdns-found/lost），本文件不再消费 devices-changed。
  */
 import { ref, computed } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type {
   Task,
   TaskStateName,

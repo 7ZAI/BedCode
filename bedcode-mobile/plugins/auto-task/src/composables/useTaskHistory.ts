@@ -7,7 +7,7 @@
  * job_id 为空串，v1 简化全量重拉，数据量小）。下拉刷新与断线重连兜底。
  */
 import { ref, computed } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { getAutoTaskApi } from '../api'
 
 /** 任务历史条目（与桌面端 task_history 表字段一一对应） */

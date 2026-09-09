@@ -117,9 +117,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
-      # 必须先本地构建 @binblink/plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
       - name: Build SDK (plugin-sdk-desktop dist)
-        run: pnpm run build --filter @binblink/plugin-sdk-desktop
+        run: pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
 
       # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
@@ -295,7 +295,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # bedcode-plugin CLI 运行时加载 SDK 的 dist/index.js (file: 引用不含 dist)，
-      # 必须先构建 @binblink/plugin-sdk-mobile 再跑 beforeBuildCommand 的 plugins:build。
+      # 必须先构建 @binblink/bedcode-plugin-sdk-mobile 再跑 beforeBuildCommand 的 plugins:build。
       # pnpm 的 file: 依赖不会自动安装目标包的 devDeps（tsup 等），SDK 需独立安装一次
       - name: Install SDK dependencies (plugin-sdk-mobile)
         working-directory: packages/plugin-sdk-mobile
@@ -386,9 +386,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
-      # 必须先本地构建 @binblink/plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
       - name: Build SDK (plugin-sdk-desktop dist)
-        run: pnpm run build --filter @binblink/plugin-sdk-desktop
+        run: pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
 
       # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源

@@ -9,7 +9,7 @@
  * 编排逻辑在 useTrustedPeers；本组件只负责渲染与确认框状态。
  */
 import { computed, inject, onMounted, ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import {
   formatTrustedDate,
   useTrustedPeers,

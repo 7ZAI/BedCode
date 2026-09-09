@@ -21,7 +21,7 @@ import SettingsSection from './components/SettingsSection.vue'
 import SettingsPage from './components/SettingsPage.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import peerDevMock from './devMock'
 import { useConsent, type ConsentController } from './composables/useConsent'
 

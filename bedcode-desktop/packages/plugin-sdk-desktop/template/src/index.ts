@@ -5,7 +5,7 @@
  * 面板 UI 较大时建议拆成独立 .vue 组件引入）。
  */
 import { defineComponent, h } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 let _ctx: PluginContext
 

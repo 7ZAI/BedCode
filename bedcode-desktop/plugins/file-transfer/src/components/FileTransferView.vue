@@ -8,7 +8,7 @@
  * devices-changed 事件驱动。
  */
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'

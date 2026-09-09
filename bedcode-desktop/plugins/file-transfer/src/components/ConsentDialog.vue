@@ -9,7 +9,7 @@
  * 后即可见可操作。
  */
 import { computed, inject } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { useConsent, consentDisplayName } from '../composables/useConsent'
 
 const context = inject<PluginContext>('pluginContext')!

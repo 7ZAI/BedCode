@@ -1,4 +1,4 @@
-# @binblink/plugin-sdk-mobile
+# @binblink/bedcode-plugin-sdk-mobile
 
 BedCode 移动端插件开发工具包 — 提供插件所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**。相比桌面端 SDK，额外封装了移动端专属能力：SAF 存储访问、对话框 / 系统通知、动态路由、生命周期钩子与 dev-shell 演示数据协议。
 
@@ -9,7 +9,7 @@ BedCode 移动端插件开发工具包 — 提供插件所需的**类型定义**
 ## 安装
 
 ```bash
-npm install --save-dev @binblink/plugin-sdk-mobile
+npm install --save-dev @binblink/bedcode-plugin-sdk-mobile
 ```
 
 Peer 依赖（宿主已在运行时提供，插件侧安装用于构建与类型检查）：
@@ -69,7 +69,7 @@ npm run doctor     # 环境自检
 **`src/index.ts`** — 插件入口（必须导出 `activate`）：
 
 ```ts
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 export async function activate(context: PluginContext): Promise<void> {
   // 注册终端工具栏按钮
@@ -154,7 +154,7 @@ context.lifecycle.onTerminalOutput((sessionId, data) => { /* 实时终端输出 
 经 `getMobileApi()` 获取响应式连接状态与对端 REST API（任务队列、会话自动模式、任务历史、定时任务等）：
 
 ```ts
-import { getMobileApi } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi } from '@binblink/bedcode-plugin-sdk-mobile'
 
 const api = getMobileApi()
 console.log(api.isConnected.value, api.activeSessionId.value)
@@ -185,7 +185,7 @@ export const devMock: PluginDevMock = {
 插件构建时 `vue` / `vue-i18n` / `pinia` 会被外部化，运行时从宿主全局 `window.__BEDCODE_SHARED__` 读取。**请通过 SDK 代理函数访问，不要直接操作全局变量**：
 
 ```ts
-import { getVue, getPinia, getRouter, getPresetTasks, getMobileApi, getPluginContext } from '@binblink/plugin-sdk-mobile'
+import { getVue, getPinia, getRouter, getPresetTasks, getMobileApi, getPluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 const { ref, computed } = getVue()      // 宿主 Vue 实例（组件内直接 import 即可，构建期已外部化）
 const presetTasks = getPresetTasks()    // 宿主预设任务 composable
@@ -199,7 +199,7 @@ const context = getPluginContext()      // 组件 setup 内从 inject 获取 Plu
 ```ts
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { bedcodePlugin } from '@binblink/plugin-sdk-mobile/vite'
+import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-mobile/vite'
 
 export default defineConfig({
   plugins: [vue(), bedcodePlugin()],
@@ -264,7 +264,7 @@ cargo build --target wasm32-unknown-unknown --no-default-features --features was
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import Select from '@binblink/plugin-sdk-mobile/ui'
+import Select from '@binblink/bedcode-plugin-sdk-mobile/ui'
 
 const value = ref('a')
 const options = [
@@ -284,10 +284,10 @@ const options = [
 
 | 子路径 | 内容 |
 |--------|------|
-| `@binblink/plugin-sdk-mobile` | 主 API：类型 + 运行时代理 |
-| `@binblink/plugin-sdk-mobile/vite` | `bedcodePlugin()` Vite 构建插件 |
-| `@binblink/plugin-sdk-mobile/types` | 纯类型导出（仅类型，无运行时） |
-| `@binblink/plugin-sdk-mobile/ui` | 共享 Vue 组件 |
+| `@binblink/bedcode-plugin-sdk-mobile` | 主 API：类型 + 运行时代理 |
+| `@binblink/bedcode-plugin-sdk-mobile/vite` | `bedcodePlugin()` Vite 构建插件 |
+| `@binblink/bedcode-plugin-sdk-mobile/types` | 纯类型导出（仅类型，无运行时） |
+| `@binblink/bedcode-plugin-sdk-mobile/ui` | 共享 Vue 组件 |
 
 ## 本地开发本 SDK
 

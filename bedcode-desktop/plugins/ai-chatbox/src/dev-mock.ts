@@ -7,7 +7,7 @@
  * 的完整形态，便于 UI 评审与样式调试；生产构建（vite build）时 DEV=false，
  * 本模块代码不参与打包。
  */
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 // ==================== 宿主 i18n key 补齐（dev-shell 无宿主 locale，运行时由宿主注入） ====================
 // 与 bedcode-desktop/src/locales/{zh-CN,en}/desktop.ts 的 desktop.plugin.aiChatbox 段同步
@@ -389,7 +389,7 @@ function registerCommands(context: PluginContext): void {
             'API error 429: {"error":{"message":"Rate limit reached for requests. Please try again in 20s","type":"429","code":"rate_limit_exceeded"}}',
           done: true,
         })
-      }, 300) as unknown as number
+      }, 300) as unknown as number // SAFETY: mock 运行于浏览器（DOM lib），setTimeout 返回 number；断言消除 node types 混入的 Timeout 类型差异（timers 数组存 number）
       timers.push(h)
       return { ok: true }
     }
@@ -419,7 +419,7 @@ function registerCommands(context: PluginContext): void {
         })
       }
     }
-    const handle = setInterval(tick, 30) as unknown as number
+    const handle = setInterval(tick, 30) as unknown as number // SAFETY: 同 setTimeout——浏览器环境 setInterval 返回 number，断言消除 node types 的 Timeout 差异
     timers.push(handle)
     return { ok: true }
   })

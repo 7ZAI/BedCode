@@ -10,7 +10,7 @@
     "dev": "node scripts/build.js --watch"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
+    "@binblink/bedcode-plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop",
     "@vuepic/vue-datepicker": "^9.0.3",
     "vue": "^3.4.0"
   },

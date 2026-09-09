@@ -16,7 +16,7 @@ import {
   parseModelsResponse,
 } from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 const STORAGE_PROVIDERS = 'apiProviders'
 const STORAGE_ACTIVE_PROVIDER = 'activeProvider'

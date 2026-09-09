@@ -8,7 +8,7 @@
 ### 前提
 
 - Node ≥ 20
-- 插件工程已声明 `@binblink/plugin-sdk-desktop` 依赖（`file:` 本地链接或 npm）
+- 插件工程已声明 `@binblink/bedcode-plugin-sdk-desktop` 依赖（`file:` 本地链接或 npm）
 - SDK 构建产物存在：未构建时先在 SDK 目录执行 `pnpm install && pnpm run build`
   （报找不到模块多半是这一步没做）
 
@@ -86,7 +86,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <
   动态扫描插件源码，新加类名自动生效。
 - **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `pnpm exec bedcode-plugin-desktop dev`
   或 dev-shell 的 main.ts 启动。
-- **SDK 报找不到模块**：插件工程的 `@binblink/plugin-sdk-desktop` 依赖指向
+- **SDK 报找不到模块**：插件工程的 `@binblink/bedcode-plugin-sdk-desktop` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（先构建一次 SDK）。
 - **真机专属能力**（Rust 命令、真实 HTTP 端点、系统文件选择）无法在浏览器
   模拟，发布前需在真实宿主验证。

@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { useTasks } from '../../../../plugins/file-transfer/src/composables/useTasks'
 
 type EventHandler = (payload: any) => void

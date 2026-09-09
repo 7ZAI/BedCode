@@ -6,7 +6,7 @@
  * dirId 为共享根条目 id。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 
 /** 共享根条目 */

@@ -8,7 +8,7 @@
  * 纯展示组件：状态由 usePeerDevices 派生的 rows 传入，操作以事件上抛。
  */
 import { inject } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { DeviceRow } from '../composables/deviceState'
 
 const context = inject<PluginContext>('pluginContext')!

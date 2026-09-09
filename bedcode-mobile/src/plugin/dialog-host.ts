@@ -7,7 +7,7 @@
  */
 
 import { ref } from 'vue'
-import type { DialogOptions, DialogResult } from '@binblink/plugin-sdk-mobile'
+import type { DialogOptions, DialogResult } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useToast } from '@/composables/useToast'
 
 /** 队列中的对话框条目 */

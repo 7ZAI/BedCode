@@ -11,7 +11,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
+    "@binblink/bedcode-plugin-sdk-desktop": "file:../../packages/plugin-sdk-desktop"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",

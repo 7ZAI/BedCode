@@ -109,7 +109,7 @@ importers:
 
   .:
     dependencies:
-      '@binblink/plugin-sdk-mobile':
+      '@binblink/bedcode-plugin-sdk-mobile':
         specifier: file:packages/plugin-sdk-mobile
         version: file:packages/plugin-sdk-mobile(vite@8.2.2(@types/node@20.19.43)(jiti@1.21.7))(vue@3.5.42(typescript@5.9.3))
       '@noble/ciphers':
@@ -287,7 +287,7 @@ packages:
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
 
-  '@binblink/plugin-sdk-mobile@file:packages/plugin-sdk-mobile':
+  '@binblink/bedcode-plugin-sdk-mobile@file:packages/plugin-sdk-mobile':
     resolution: {directory: packages/plugin-sdk-mobile, type: directory}
     hasBin: true
     peerDependencies:
@@ -2488,7 +2488,7 @@ snapshots:
 
   '@bcoe/v8-coverage@1.0.2': {}
 
-  '@binblink/plugin-sdk-mobile@file:packages/plugin-sdk-mobile(vite@8.2.2(@types/node@20.19.43)(jiti@1.21.7))(vue@3.5.42(typescript@5.9.3))':
+  '@binblink/bedcode-plugin-sdk-mobile@file:packages/plugin-sdk-mobile(vite@8.2.2(@types/node@20.19.43)(jiti@1.21.7))(vue@3.5.42(typescript@5.9.3))':
     dependencies:
       magic-string: 0.30.21
       vite: 8.2.2(@types/node@20.19.43)(jiti@1.21.7)

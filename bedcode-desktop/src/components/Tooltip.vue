@@ -26,7 +26,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { getFixedZoomCompensation } from '@binblink/plugin-sdk-desktop/ui/zoom-compensation'
+import { getFixedZoomCompensation } from '@binblink/bedcode-plugin-sdk-desktop/ui/zoom-compensation'
 
 interface Props {
   content: string

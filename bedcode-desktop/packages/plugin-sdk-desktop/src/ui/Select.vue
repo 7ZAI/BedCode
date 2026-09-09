@@ -95,7 +95,7 @@
  * Select - 宿主共享下拉选择组件（新版）
  *
  * 替代原生 <select>，hover 样式完全由 CSS token 控制，适配深色/浅色主题。
- * 同时提供给插件 SDK（@binblink/plugin-sdk-desktop/ui）供插件引用。
+ * 同时提供给插件 SDK（@binblink/bedcode-plugin-sdk-desktop/ui）供插件引用。
  *
  * 组件只负责 UI 与交互；展开定位（视口翻转 / maxHeight 收缩 / 水平夹持 /
  * Linux 根 zoom 坐标换算）全部封装在 apply-select-position.ts。

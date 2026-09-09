@@ -260,8 +260,8 @@
  *   DOM 事件），面板整体上移避开系统输入法
  */
 import { ref, computed, watch, nextTick, inject, onMounted, onUnmounted } from 'vue'
-import { getMobileApi, getPresetTasks } from '@binblink/plugin-sdk-mobile'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi, getPresetTasks } from '@binblink/bedcode-plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { getAutoTaskApi } from '../api'
 import { autoTaskPanelVisible } from '../state'
 

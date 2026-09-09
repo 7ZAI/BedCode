@@ -2,12 +2,12 @@
 
 ## 概述
 
-`@binblink/plugin-sdk-desktop` 与 `@binblink/plugin-sdk-mobile` 是**双栈 SDK 包**，各包含前端 TS 部分和 Rust crate 部分，发布到两个 registry：
+`@binblink/bedcode-plugin-sdk-desktop` 与 `@binblink/bedcode-plugin-sdk-mobile` 是**双栈 SDK 包**，各包含前端 TS 部分和 Rust crate 部分，发布到两个 registry：
 
 | SDK | npm 包 | crates.io crate |
 |-----|--------|-----------------|
-| 桌面端 | `@binblink/plugin-sdk-desktop` | `bedcode-plugin-api` |
-| 移动端 | `@binblink/plugin-sdk-mobile` | `bedcode-plugin-api-mobile` |
+| 桌面端 | `@binblink/bedcode-plugin-sdk-desktop` | `bedcode-plugin-api` |
+| 移动端 | `@binblink/bedcode-plugin-sdk-mobile` | `bedcode-plugin-api-mobile` |
 
 发布由 `.github/workflows/sdk-publish.yml` 统一处理：一个 tag 联动发布 4 个产物。
 
@@ -83,12 +83,12 @@ GitHub Actions → `SDK Publish` 工作流，三个 job：
 
 ```bash
 # 用已发布版本生成插件工程（--registry 引用 npm + crates.io 版本）
-pnpm exec @binblink/plugin-sdk-mobile create com.example.demo "Demo" --registry
+pnpm exec @binblink/bedcode-plugin-sdk-mobile create com.example.demo "Demo" --registry
 ```
 
 生成的依赖声明：
 ```jsonc
-"@binblink/plugin-sdk-mobile": "^0.1.0"
+"@binblink/bedcode-plugin-sdk-mobile": "^0.1.0"
 ```
 ```toml
 bedcode-plugin-api-mobile = "0.1.0"
@@ -110,7 +110,7 @@ bedcode-plugin-api-mobile = "0.1.0"
 - **crates.io 强制 license 字段**：`Cargo.toml` 必须含 `license`，缺失时 `cargo publish` 直接拒绝（两 crate 已配 `MIT`）
 - **本地预演**：`cargo publish --dry-run` 会校验 license + 编译 + 打包，未提交的改动需 `--allow-dirty`（CI 里 tag 是干净 checkout，不需要）
 - **token 安全**：token 泄露（如贴入聊天）后应在对应网站删除重建，并用 `gh secret set` 更新
-- **workspace 成员发布**：desktop SDK 是 `bedcode-desktop` pnpm workspace 成员（`packages/*`），发布用 `pnpm --filter @binblink/plugin-sdk-desktop publish --access public`；`prepublishOnly` 会自动执行 build + test
+- **workspace 成员发布**：desktop SDK 是 `bedcode-desktop` pnpm workspace 成员（`packages/*`），发布用 `pnpm --filter @binblink/bedcode-plugin-sdk-desktop publish --access public`；`prepublishOnly` 会自动执行 build + test
 - **构建产物不入库**：`dist/` 已被 `.gitignore` 忽略，npm 发布走 `files` 白名单（dist/bin[/template]/dev-shell），CI 中 checkout 后由 `prepublishOnly` 现场构建
 - **dev-shell 随包发布**：两个 SDK 的 `files` 均含 `dev-shell/`（浏览器开发环境，自包含 vite 工程，源码随包分发）；其 `node_modules` 不入包，插件开发者首次运行 `bedcode-plugin dev` 时 CLI 自动在 dev-shell 内执行 `pnpm install`（打印提示后自动安装，无需手动干预）
 

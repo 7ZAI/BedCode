@@ -9,7 +9,7 @@
     "package": "bedcode-plugin package"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-mobile": "{{SDK_JS}}"
+    "@binblink/bedcode-plugin-sdk-mobile": "{{SDK_JS}}"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.0",

@@ -10,7 +10,7 @@
     "test:run": "vitest run"
   },
   "dependencies": {
-    "@binblink/plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
+    "@binblink/bedcode-plugin-sdk-mobile": "file:../../packages/plugin-sdk-mobile"
   },
   "devDependencies": {
     "@shikijs/langs": "^4.2.0",

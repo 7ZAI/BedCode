@@ -6,7 +6,7 @@
  * 下载目录、接收策略/超时、安全告知常驻文案。纯展示组件，写操作经 emit 交给父级。
  */
 import { inject } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { Settings } from '../types'
 import type { RootItem } from '../composables/useSettings'
 import TrustedPeersSection from './TrustedPeersSection.vue'
