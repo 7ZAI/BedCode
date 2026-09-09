@@ -1,6 +1,6 @@
 {
   "name": "@binblink/plugin-sdk-mobile-dev-shell",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "BedCode 移动端插件浏览器开发环境（空壳宿主 + 移动端页面骨架 + mock PluginContext）",

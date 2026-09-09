@@ -22,7 +22,7 @@ dependencies = [
 
 [[package]]
 name = "bedcode-plugin-api"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "bedcode-plugin-api-macros",
@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "bedcode-plugin-api-macros"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "proc-macro2",
  "quote",
