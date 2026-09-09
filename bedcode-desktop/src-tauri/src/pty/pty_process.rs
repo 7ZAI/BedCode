@@ -121,6 +121,7 @@ impl PtySession {
     }
 
     /// 启动 PTY 会话
+    #[tracing::instrument(name = "pty_start", skip_all, fields(session_id = %self.id))]
     pub async fn start(&self) -> Result<()> {
         let (cmd, pair) = {
             let mut state = self.state.lock().await;

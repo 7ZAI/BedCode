@@ -69,6 +69,25 @@ pub async fn plugin_reveal_in_dir(
     }
 }
 
+/// 打开日志目录（设置页「打开日志目录」按钮；独立命令，无需插件权限）
+///
+/// 复用 reveal_in_dir_platform 的平台分发（Windows COM / macOS Finder / Linux xdg-open）
+#[tauri::command]
+pub fn open_log_dir() -> crate::Result<()> {
+    let setup = crate::system::logging::global_setup()
+        .ok_or_else(|| crate::AppError::Config("logging not initialized yet".to_string()))?;
+    let dir = &setup.log_dir;
+    if !dir.exists() {
+        return Err(crate::AppError::NotFound(format!(
+            "log directory not found: {}",
+            dir.display()
+        )));
+    }
+    reveal_in_dir_platform(dir).map_err(|e| {
+        crate::AppError::Internal(format!("open log directory '{}' failed: {e}", dir.display()))
+    })
+}
+
 /// 平台分发：仅目标平台分支参与编译（避免未使用函数告警）
 #[cfg(target_os = "windows")]
 fn reveal_in_dir_platform(path: &std::path::Path) -> std::io::Result<()> {

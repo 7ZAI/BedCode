@@ -58,6 +58,8 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
     ("log.max_files", "日志文件最大保留数量（0 = 不限制）"),
+    ("log.capacity_bytes", "日志目录总容量上限（字节，0 = 不限制；超出后按修改时间删除最旧文件，当前在写文件除外）"),
+    ("log.format", "日志文件格式（text / json，默认 text；仅启动生效，改动后重启）"),
     ("log.console_in_release", "Release 模式是否启用控制台输出（调试用，默认关闭）"),
 ];
 
@@ -139,6 +141,8 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "log.console_filter",
             "log.rotation",
             "log.max_files",
+            "log.capacity_bytes",
+            "log.format",
             "log.console_in_release",
         ],
     ),
@@ -491,6 +495,15 @@ pub struct LogConfig {
     /// 日志文件最大保留数量（0 = 不限制，但至少保留当前文件）
     #[serde(default = "default_log_max_files")]
     pub max_files: usize,
+    /// 日志目录总容量上限（字节，0 = 不限制）
+    /// 超出后由后台维护任务按修改时间删除最旧文件（当前在写文件除外），
+    /// 防止 debug 高音量下日志目录撑爆磁盘
+    #[serde(default = "default_log_capacity_bytes")]
+    pub capacity_bytes: usize,
+    /// 日志文件格式（text / json，默认 text；仅启动生效，改动后重启）
+    /// json 输出到 runtime / error 文件层，供脚本按字段（level/time/target）过滤分析
+    #[serde(default = "default_log_format")]
+    pub format: String,
     /// Release 模式是否启用控制台输出（调试用，默认关闭）
     #[serde(default)]
     pub console_in_release: bool,
@@ -508,6 +521,12 @@ fn default_log_rotation() -> String {
 fn default_log_max_files() -> usize {
     7
 }
+fn default_log_capacity_bytes() -> usize {
+    512 * 1024 * 1024
+}
+fn default_log_format() -> String {
+    "text".to_string()
+}
 
 impl Default for LogConfig {
     fn default() -> Self {
@@ -516,6 +535,8 @@ impl Default for LogConfig {
             console_filter: default_log_console_filter(),
             rotation: default_log_rotation(),
             max_files: default_log_max_files(),
+            capacity_bytes: default_log_capacity_bytes(),
+            format: default_log_format(),
             console_in_release: false,
         }
     }
@@ -673,6 +694,8 @@ impl AppConfig {
                 console_filter: parse_value(props, "log.console_filter", default_log_console_filter()),
                 rotation: parse_value(props, "log.rotation", default_log_rotation()),
                 max_files: parse_value(props, "log.max_files", default_log_max_files()),
+                capacity_bytes: parse_value(props, "log.capacity_bytes", default_log_capacity_bytes()),
+                format: parse_value(props, "log.format", default_log_format()),
                 console_in_release: parse_value(props, "log.console_in_release", false),
             },
         }
@@ -857,6 +880,8 @@ impl AppConfig {
         map.insert("log.console_filter".to_string(), self.log.console_filter.clone());
         map.insert("log.rotation".to_string(), self.log.rotation.clone());
         map.insert("log.max_files".to_string(), self.log.max_files.to_string());
+        map.insert("log.capacity_bytes".to_string(), self.log.capacity_bytes.to_string());
+        map.insert("log.format".to_string(), self.log.format.clone());
         map.insert(
             "log.console_in_release".to_string(),
             self.log.console_in_release.to_string(),

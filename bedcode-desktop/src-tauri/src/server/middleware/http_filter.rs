@@ -21,6 +21,7 @@ use actix_web::{
     web::Bytes,
     FromRequest, HttpResponse, Result,
 };
+use tracing::Instrument;
 
 use crate::server::dtos::common_dto::{ApiResponse, CODE_INVALID_REQUEST};
 use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
@@ -98,7 +99,21 @@ where
             .to_string();
         let service = self.service.clone();
 
-        Box::pin(async move { run_traffic_filter(req, service, peer, path, negotiation).await })
+        // 链路追踪（05 调用链）：请求级 span 在同步上下文创建，`instrument` 包裹异步体
+        let method = req.method().clone();
+        let request_id = new_request_id(&peer);
+        let span = tracing::info_span!(
+            "http_request",
+            request_id = %request_id,
+            method = %method,
+            path = %path,
+        );
+
+        Box::pin(async move {
+            run_traffic_filter(req, service, peer, path, negotiation)
+                .instrument(span)
+                .await
+        })
     }
 }
 
@@ -204,7 +219,29 @@ async fn to_bytes_owned(body: BoxBody) -> Result<Vec<u8>> {
     Ok(bytes.to_vec())
 }
 
+/// 生成请求级关联 ID（05 调用链）：peer 归一化 + 纳秒后缀，日志中可凭其跨模块串起一次请求
+fn new_request_id(peer: &str) -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    let peer_slug = peer.replace([':', '.'], "-");
+    format!("req-{peer_slug}-{nanos:x}")
+}
+
 #[cfg(test)]
+
+    #[test]
+    fn request_id_is_stable_format_and_unique_enough() {
+        let r1 = new_request_id("192.168.1.5:54321");
+        let r2 = new_request_id("192.168.1.5:54321");
+        // 格式：req-<peer 归一化>-<hex>
+        assert!(r1.starts_with("req-192-168-1-5-54321-"), "got: {r1}");
+        // 纳秒后缀：同 peer 连续调用几乎必然不同
+        assert_ne!(r1, r2);
+        // 未知 peer 也能生成（不 panic）
+        assert!(new_request_id("unknown").starts_with("req-unknown-"));
+    }
 mod tests {
     use super::*;
     use crate::server::filter::{TrafficFilter, Verdict};

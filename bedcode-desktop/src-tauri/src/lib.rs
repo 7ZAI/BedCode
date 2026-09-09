@@ -32,8 +32,6 @@ use db::Database;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
-use tracing_subscriber::Layer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// 删除当天已存在的日志文件（仅 dev 构建调用）
 ///
@@ -71,114 +69,22 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     // 2026-08: 字节 dump 目录记录已注释禁用（临时调试，恢复排查时取消注释）
     // system::logging::set_dump_dir(log_dir.clone());
 
-    // 解析轮转策略
-    let rotation = match log_config.rotation.as_str() {
-        "hourly" => tracing_appender::rolling::Rotation::HOURLY,
-        "never" => tracing_appender::rolling::Rotation::NEVER,
-        _ => tracing_appender::rolling::Rotation::DAILY,
-    };
+    // 构建日志订阅器：文件层非阻塞写盘 + 控制台层。
+    // 过滤语义与旧实现一致（error 固定 ERROR、runtime 按级别、frontend 仅 dev），
+    // 全部收敛于 system::logging::build_logging，便于独立单测（见该模块测试）
+    let (setup, subscriber) =
+        system::logging::build_logging(&log_dir, log_config, cfg!(debug_assertions))?;
+    install_subscriber(subscriber);
 
-    // max_files: 0 表示不限制，不调用 .max_log_files() 让文件无限增长
-    // tracing_appender 的 max_log_files 接受 usize，无"不限制"选项，只能通过不调用来实现
+    // 保存句柄到进程级全局：worker guard 存活到进程退出（drop 时 flush 剩余日志）；
+    // 级别热调（file_level_reload）与容量裁剪/丢弃告警（writers）由后续模块从此读取
+    system::logging::store_setup(setup);
 
-    // Error 日志文件：固定 ERROR 级别，始终记录最严重问题
-    let mut error_builder = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(rotation.clone())
-        .filename_prefix("error")
-        .filename_suffix("log");
-    if log_config.max_files > 0 {
-        error_builder = error_builder.max_log_files(log_config.max_files);
-    }
-    let error_appender = error_builder
-        .build(&log_dir)
-        .expect("Failed to create error log file appender");
-
-    // 运行时日志文件：级别由 log.file_level 控制
-    // 前端 console 日志单独文件（仅 dev）：target=`frontend` 的事件写 frontend.*.log，
-    // 与 runtime.*.log 分离，AI agent 直接读此文件即可获取前端控制台输出（无需 grep 混流）
-    #[cfg(debug_assertions)]
-    let frontend_builder = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(rotation.clone())
-        .filename_prefix("frontend")
-        .filename_suffix("log");
-    #[cfg(debug_assertions)]
-    let frontend_appender = frontend_builder
-        .build(&log_dir)
-        .expect("Failed to create frontend log file appender");
-    #[cfg(debug_assertions)]
-    let frontend_layer = tracing_subscriber::fmt::layer()
-        .with_writer(frontend_appender)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_line_number(true)
-        .with_filter(
-            tracing_subscriber::filter::Targets::new()
-                .with_target("frontend", tracing::Level::DEBUG),
-        );
-
-    let mut runtime_builder = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(rotation)
-        .filename_prefix("runtime")
-        .filename_suffix("log");
-    if log_config.max_files > 0 {
-        runtime_builder = runtime_builder.max_log_files(log_config.max_files);
-    }
-    let runtime_appender = runtime_builder
-        .build(&log_dir)
-        .expect("Failed to create runtime log file appender");
-
-    // Error 日志层：固定 ERROR 及以上
-    let error_layer = tracing_subscriber::fmt::layer()
-        .with_writer(error_appender)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_line_number(true)
-        .with_filter(EnvFilter::new("error"));
-
-    // 运行时日志层：dev 构建强制 debug，release 使用配置值
-    let file_level = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        log_config.file_level.as_str()
-    };
-    let runtime_layer = tracing_subscriber::fmt::layer()
-        .with_writer(runtime_appender)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_line_number(true)
-        .with_filter(EnvFilter::new(file_level));
-
-    // 控制台输出逻辑
-    let should_add_console = cfg!(debug_assertions) || log_config.console_in_release;
-
-    // 基础注册：error + runtime（release 无 frontend 层）
-    let registry = tracing_subscriber::registry()
-        .with(error_layer)
-        .with(runtime_layer);
-    #[cfg(debug_assertions)]
-    let registry = registry.with(frontend_layer);
-
-    if should_add_console {
-        // RUST_LOG 环境变量优先级最高，其次使用配置值
-        let console_filter =
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter));
-        let console_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stdout)
-            .with_ansi(true)
-            .fmt_fields(tracing_subscriber::fmt::format::PrettyFields::new())
-            .event_format(system::logging::ConsoleFormatter::new())
-            .with_filter(console_filter);
-
-        registry
-            .with(console_layer)
-            .try_init()
-            .expect("Failed to set tracing subscriber");
-    } else {
-        registry.try_init().expect("Failed to set tracing subscriber");
-    }
+    // 启动后台日志维护任务：容量裁剪（超限删最旧，当前在写文件除外）+ 非阻塞队列丢弃告警（03）
+    system::logging::spawn_log_maintenance(
+        system::logging::global_setup().expect("logging setup stored before maintenance"),
+        log_config.capacity_bytes,
+    );
 
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
     tracing::info!(
@@ -191,6 +97,21 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     tracing::info!("BedCode Desktop v{} starting...", env!("CARGO_PKG_VERSION"));
 
     Ok(())
+}
+
+/// 安装 tracing 全局订阅器（容忍 log→tracing 桥已被抢占）
+///
+/// debug 构建下 tauri-plugin-wdio 的 `.setup()` 会先 `log::set_boxed_logger`
+/// 抢占 log 全局 logger（其 setup 早于应用 setup 执行），使 `try_init()` 在
+/// `LogTracer::init()` 阶段返回 `SetLoggerError` 并 panic。拆成两步：桥安装
+/// 失败仅忽略（log 记录由 wdio 自带 logger 承接），tracing 全局默认仍须设置
+/// （与 `try_init` 第二步 `set_global_default` 等价）。
+fn install_subscriber<S>(subscriber: S)
+where
+    S: tracing::Subscriber + Send + Sync + 'static,
+{
+    let _ = tracing_log::LogTracer::init();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
 }
 
 /// 应用启动时间，用于计算启动耗时
@@ -609,6 +530,9 @@ pub fn run() {
             commands::system::remove_paired_device,
             commands::system::list_connection_history,
             commands::system::delete_connection_history,
+            commands::system::set_log_level,
+            commands::system::save_log_settings,
+            commands::opener::open_log_dir,
             // QR Code
             commands::qr::generate_qr_code,
             commands::qr::clear_qr_code,

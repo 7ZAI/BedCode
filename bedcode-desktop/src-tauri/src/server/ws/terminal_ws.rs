@@ -23,6 +23,7 @@ use crate::system::constants::event;
 use crate::system::constants::server::{
     CLIENT_TIMEOUT_SECS, HEARTBEAT_INTERVAL_SECS, REMOTE_CLIENT_TIMEOUT_SECS, WS_AUTH_TIMEOUT_SECS,
 };
+use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::utils::auth::jwt::JwtService;
 use control_frame::ServerFrame;
 
@@ -342,6 +343,14 @@ impl Actor for TerminalWs {
     type Context = ws::WebsocketContext<Self>;
 
     fn started(&mut self, ctx: &mut Self::Context) {
+        // 链路追踪（05）：WS 连接生命周期 span，client 地址 + 绑定会话（若有）；
+        // 后续帧级事件不再各自开 span（热点路径），连接级 span 保持调用链锚点
+        let _span = tracing::info_span!(
+            "terminal_ws",
+            client = %self.session.addr,
+            session_id = %self.bound_session.as_deref().unwrap_or("-"),
+        )
+        .entered();
         tracing::info!("Terminal WS connected: {}", self.session.addr);
         self.start_heartbeat(ctx);
 
@@ -375,7 +384,7 @@ impl Actor for TerminalWs {
         // （会话停止后不再有输出，前端据此提示并断开，避免悬挂等待）
         if let Some(session_id) = self.bound_session.clone() {
             let addr = ctx.address();
-            let handle = tokio::spawn(async move {
+            let handle = spawn_with_error_boundary("ws_session_stopped_monitor", async move {
                 let app_ctx = AppContext::global();
                 let session_manager = app_ctx.session_manager();
                 let mut rx = session_manager.subscribe_status();
@@ -807,7 +816,7 @@ impl TerminalWs {
         let merge_output = config.terminal.merge_output;
         let interval = if merge_output { flush_interval } else { Duration::ZERO };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
-        let fwd_handle = tokio::spawn(forward::forward_loop(
+        let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
             output_rx,
             out_tx,
             interval,
@@ -1260,7 +1269,7 @@ impl TerminalWs {
             flush_interval
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
-        let fwd_handle = tokio::spawn(forward::forward_loop(
+        let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
             output_rx,
             out_tx,
             interval,

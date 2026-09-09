@@ -67,9 +67,10 @@ anyhow = "1"
 thiserror = "1"
 
 # Logging
-tracing = { version = "0.1", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = { version = "0.1", features = ["log", "attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+tracing-error = "0.2"
 tracing-log = "0.2"
 # ANSI 样式（控制台日志格式化器使用；与 tracing-subscriber 传递依赖同版本）
 nu-ansi-term = "0.50"

@@ -12,6 +12,7 @@ use serde::Serialize;
 use std::sync::Arc;
 use tauri::{Manager, State};
 use tokio::sync::Mutex;
+use tracing_subscriber::filter::EnvFilter;
 
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::mobile::remote::PairingService;
@@ -148,6 +149,51 @@ pub async fn save_app_settings(
     settings.save(&config_path)?;
 
     tracing::info!("App settings saved to {:?}", config_path);
+    Ok(())
+}
+
+/// 保存日志配置（设置页「日志设置」区）
+///
+/// 只替换现有配置的 log 段并持久化（避免前端整表保存时丢 log 字段）；
+/// 除 file_level 热调外的项（format/rotation/max_files/capacity_bytes）重启后生效。
+#[tauri::command]
+pub async fn save_log_settings(
+    app_handle: tauri::AppHandle,
+    log: crate::system::config::LogConfig,
+) -> Result<()> {
+    let config_path = app_handle
+        .path()
+        .app_data_dir()
+        .map(|p| p.join("config.properties"))
+        .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
+    let mut config = crate::system::config::AppConfig::load(&config_path)
+        .map_err(|e| crate::AppError::Config(e.to_string()))?;
+    config.log = log;
+    config.save(&config_path)?;
+    tracing::info!("Log settings saved to {:?}", config_path);
+    Ok(())
+}
+
+/// 运行时热调日志文件级别（不落盘；重启后回落到持久化 `log.file_level`）
+///
+/// 仅允许标准五级之一；非法值返回配置错误。
+#[tauri::command]
+pub fn set_log_level(level: String) -> Result<()> {
+    match level.as_str() {
+        "trace" | "debug" | "info" | "warn" | "error" => {}
+        other => {
+            return Err(crate::AppError::Config(format!(
+                "invalid log level '{other}' (expected trace/debug/info/warn/error)"
+            )));
+        }
+    }
+    let setup = crate::system::logging::global_setup()
+        .ok_or_else(|| crate::AppError::Config("logging not initialized yet".to_string()))?;
+    setup
+        .file_level_reload
+        .reload(EnvFilter::new(&level))
+        .map_err(|e| crate::AppError::Config(format!("log level reload failed: {e}")))?;
+    tracing::info!("Log file level hot-reloaded to {level} (restart falls back to config)");
     Ok(())
 }
 
