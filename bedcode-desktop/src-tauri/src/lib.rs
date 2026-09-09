@@ -66,9 +66,6 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     #[cfg(debug_assertions)]
     reset_today_logs(&log_dir);
 
-    // 2026-08: 字节 dump 目录记录已注释禁用（临时调试，恢复排查时取消注释）
-    // system::logging::set_dump_dir(log_dir.clone());
-
     // 构建日志订阅器：文件层非阻塞写盘 + 控制台层。
     // 过滤语义与旧实现一致（error 固定 ERROR、runtime 按级别、frontend 仅 dev），
     // 全部收敛于 system::logging::build_logging，便于独立单测（见该模块测试）
@@ -519,6 +516,10 @@ pub fn run() {
             // PTY Input
             commands::pty_input::write_to_session,
             commands::pty_input::send_special_key,
+            // 终端输出流 Channel 传输（与 WS 环回并行的替代方案，见 commands/terminal_stream.rs）
+            commands::terminal_stream::subscribe_terminal_channel,
+            commands::terminal_stream::unsubscribe_terminal_channel,
+            commands::terminal_stream::terminal_channel_ack,
             // Pairing
             commands::system::generate_pairing_code,
             commands::system::get_current_pairing_code,
@@ -551,8 +552,6 @@ pub fn run() {
             commands::system::get_startup_time,
             commands::system::get_local_ip_addresses,
             commands::system::get_system_info,
-            // 2026-08: append_terminal_output_dump 临时调试命令已注释禁用（恢复排查时取消注释）
-            // commands::system::append_terminal_output_dump,
             commands::system::confirm_window_close,
             // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
             #[cfg(debug_assertions)]

@@ -17,34 +17,6 @@ use crate::system::config::AppConfig;
 /// 忙等开销平衡（本地环回场景可感知的恢复延迟可忽略）
 const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
-// ==================== 临时调试：PTY 源头输出字节 dump ====================
-// 仅用于排查「PTY 源头输出 vs 终端显示」字节不一致问题，临时功能。
-// [已注释禁用] 恢复排查时取消本段 /* */ 注释即可；无需时整段移除。
-/*
-/// 是否启用源头输出 dump（仅 dev 构建；测试运行时自动关闭，避免污染日志目录）
-const PTY_OUTPUT_DUMP_ENABLED: bool = cfg!(debug_assertions) && cfg!(not(test));
-/// dump 文件名（与前端侧 terminal_output_dump.bin 区分）
-const PTY_OUTPUT_DUMP_FILE: &str = "pty_output_dump.bin";
-
-/// 打开追加模式的源头 dump 文件（临时调试用）
-///
-/// 目录复用 init_logging 写入的日志目录（与前端 dump 同目录）；
-/// 每次会话（PtyReader::start）打开时 truncate 旧文件，即新会话覆盖旧数据
-fn open_pty_output_dump() -> Option<std::fs::File> {
-    if !PTY_OUTPUT_DUMP_ENABLED {
-        return None;
-    }
-    let log_dir = crate::system::logging::dump_dir()?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .truncate(true) // 新会话覆盖：打开即截断旧内容
-        .open(log_dir.join(PTY_OUTPUT_DUMP_FILE))
-        .map_err(|e| tracing::warn!("[debug-dump] 打开 PTY dump 文件失败: {e}"))
-        .ok()
-}
-*/
-
 /// PTY 输出读取器
 pub struct PtyReader {
     handle: Option<JoinHandle<()>>,
@@ -83,11 +55,23 @@ impl PtyReader {
         let mut buf_reader = BufReader::new(reader);
         let read_buffer_size = AppConfig::global().terminal.read_buffer_size;
 
+        // 有序输出队列：PTY 读线程按 read 顺序 blocking_send，单消费者任务顺序
+        // on_output——根治「spawn 并发 on_output 乱序」竞态（多任务在 index 分配
+        // 与广播之间互相插入 → 队列 push/broadcast 顺序与事件产生顺序错乱 → 字节
+        // 错位残渣）。队列满时 blocking_send 阻塞读线程（背压：数据留 PTY 内核管道）。
+        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<OutputEvent>(16384);
+        let consumer_session_id = session_id.clone();
+        tauri::async_runtime::spawn(async move {
+            let global_manager = GlobalOutputManager::global();
+            while let Some(event) = output_rx.recv().await {
+                global_manager.on_output(event).await;
+            }
+            tracing::debug!("PTY output consumer exited: {}", consumer_session_id);
+        });
+
         let handle = thread::spawn(move || {
             let mut buffer = vec![0u8; read_buffer_size];
             let mut exit_status = PtySessionStatus::Stopped;
-            // [已注释禁用] 临时调试 dump：打开源头输出文件（恢复排查时取消注释）
-            /* let mut dump_file = open_pty_output_dump(); */
 
             while running.load(Ordering::SeqCst) {
                 // 背压门：未 ack 字节超水位 → 暂停读。暂停只发生在两次 read 之间
@@ -108,17 +92,8 @@ impl PtyReader {
                         let index = next_output_index();
                         let raw_bytes = buffer[..n].to_vec();
 
-                        // [已注释禁用] 临时调试 dump：追加源头原始字节到文件（恢复排查时取消注释）
-                        /*
-                        if let Some(f) = dump_file.as_mut() {
-                            if let Err(e) = f.write_all(&raw_bytes).and_then(|_| f.flush()) {
-                                tracing::warn!("[debug-dump] 写入 PTY dump 失败: {e}");
-                            }
-                        }
-                        */
-
-                        // 发送到 GlobalOutputManager（存储原始字节，统一输出真源）
-                        let global_manager = GlobalOutputManager::global();
+                        // 经有序队列顺序发送（单消费者顺序 on_output，消除 spawn 并发
+                        // 乱序）。队列关闭 = 消费者已退出（应用关闭中），读循环退出
                         let output_event = OutputEvent::new(
                             session_id.clone(),
                             raw_bytes,
@@ -126,9 +101,10 @@ impl PtyReader {
                             timestamp.timestamp_millis(),
                             false,
                         );
-                        tauri::async_runtime::spawn(async move {
-                            global_manager.on_output(output_event).await;
-                        });
+                        if output_tx.blocking_send(output_event).is_err() {
+                            tracing::debug!("PTY output queue closed, reader exiting");
+                            break;
+                        }
                     }
                     Err(e) => {
                         tracing::error!("PTY read error: {}", e);

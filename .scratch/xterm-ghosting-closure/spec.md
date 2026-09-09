@@ -132,12 +132,13 @@ BedCode 现状：不可见时尺寸变化照旧（高度立即 `onApply`、宽�
 
 `npm pack @xterm/addon-webgl@0.20.0-beta.300` 可正常下载，LICENSE 与上游一致（MIT / The xterm.js authors）。
 
-**推荐吗？不推荐作为产品依赖。** 四条理由：
+**推荐吗？不推荐作为产品依赖。** 五条理由：
 
 1. **它没修我们要修的 bug**。实测 `0.20.0-beta.300` 编译产物中 `_setTransparency` 仍只出现 1 次（仅定义、零调用）；该 addon 唯一的选项变更监听是 `blinkIntervalDuration`，没有 `allowTransparency`。WebGL 层的 alpha 仍然是构造时定型。升级不解决核心问题。
 2. **是公共 prerelease 的内部产物**。`-beta.292` → `-beta.304` 说明发布节奏活跃，但也意味着没有 semver 稳定承诺；它是 VS Code 的内部构建产物恰好公开在 npm，可能随时改发布方式。锁死一个别人的 prerelease 内部产物，依赖风险不成比例。
 3. **有破坏性 CSS 变更需全量审计**。对比 xterm 6.0.0 与 6.1.0-beta.304 的 css 类名集合：`.xterm-char-measure-element` 被移除（换 `.xterm-scra`），新增 `.xterm-scrollbar` / `.xterm-shadow*` / `.xterm-arrow-down` / `.xterm-fade` / `.xterm-visible` / `.xterm-invisible`。BedCode 现有的 `:deep(.xterm-scrollable-element > .scrollbar.vertical)` 与 `:deep(.xterm-viewport)` 覆盖需要逐一核对。
 4. **addon 必须整线同升**。`@xterm/addon-*` 与 core 版本强耦合，升级 xterm 意味着 fit / unicode11 / web-links / webgl 四个 addon 全部同升，回归面扩大。
+5. **不解决 Linux WebKitGTK IME bug**（第 5 条，2026-09-09 复核补充，证据见 plan.md §7.6）。fork 的 CompositionHelper 改进（selection 光标定位、`_compositionSuffix` 后缀截断、229 差值补发防重入）全是 **Chromium 世界观**——VS Code 跑 Electron/Chromium（Linux 下也是 Chromium/Ozone），**从不经过 WebKitGTK**；而 Tauri 2 Linux 的 webview 是 webkit2gtk，BedCode 的三个 IME bug（compositionstart 事件丢失 → start 位置漂移重复发送、textarea 不在提交后清空、229 差值补发把已提交内容当新输入）fork **一个都没根治**（丢 start 时 suffix 也全错、textarea 照样不清、差值补发只是防重入非消除）。升级到 6.1+ 只可能让 `terminalLinuxImeGuard` 的③（清空 textarea）与 fork 的 suffix 机制协同简化，guard 本身必须保留。
 
 **吸收思路，不引入依赖**：fork 真正有价值的改进是**把 viewport 背景做成 `allow-transparency` 类驱动的条件逻辑**（xterm core 注册 `onSpecificOptionChange("allowTransparency")` 切换类，css 用 `.xterm:not(.allow-transparency) .xterm-viewport` 条件着色）。D-3 在 6.0 结构上实现同一机制。
 

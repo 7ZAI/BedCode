@@ -8,18 +8,23 @@
 
 **Spec:** §D-1、§D-2（若用户选路线 B，`hasBackgroundImage === true` 时 `useWebgl = false` 一并落地）
 
+## 实施分解（2026-09-09 to-tickets 规划）
+
+- **worker-A（纯函数层，独立文件）**：新建 `src/utils/terminalRendererPolicy.ts`（`decideRenderer` + `decideAtlasRefreshFrames`）+ `src/__tests__/utils/terminalRendererPolicy.test.ts`（isLinux × hasBackgroundImage × route 全组合 + 帧预算递减/停止）
+- **worker-C（组件接线，TerminalPreview.vue 唯一写者）**：初始化改用 decideRenderer 结果；透明度状态变化时重建渲染器（dispose → 重设 options → 重新 initWebGL/移除 → 重设 theme → applyResize → 全量重绘）；重建序列号竞态保护；同步 xterm-hidden-cursor；组件卸载清理
+
 **Blocked by:** None — can start immediately.
 
-**Status:** open
+**Status:** done（2026-09-09 本分支实现完成）
 
-- [ ] 新增 `src/utils/terminalRendererPolicy.ts`：`decideRenderer({ isLinux, hasBackgroundImage, linuxUseDomRenderer, route })` → `{ useWebgl, allowTransparency, useDom }`，零 DOM 依赖
-- [ ] 新增 `src/__tests__/utils/terminalRendererPolicy.test.ts`：覆盖 isLinux × hasBackgroundImage × route 全组合
-- [ ] `TerminalPreview.vue` 初始化时改用 `decideRenderer` 的结果驱动 `allowTransparency` 与 `initWebGL` 调用
-- [ ] 透明度状态变化时重建渲染器（dispose → 重设 options → 重新 initWebGL → 重设 theme → 重算尺寸 → 全量重绘）
-- [ ] 重建路径同步 `xterm-hidden-cursor` 的加/删
-- [ ] 组件卸载/会话切换时清理重建产生的 addon 引用，不泄漏
-- [ ] 回归：默认（无背景图）场景零残影不变
-- [ ] 验证命令：`cd bedcode-desktop && pnpm run test:run`
+- [x] 新增 `src/utils/terminalRendererPolicy.ts`：`decideRenderer({ isLinux, hasBackgroundImage, linuxUseDomRenderer, route })` → `{ useWebgl, allowTransparency, useDom }`，零 DOM 依赖
+- [x] 新增 `src/__tests__/utils/terminalRendererPolicy.test.ts`：覆盖 isLinux × hasBackgroundImage × route 全组合
+- [x] `TerminalPreview.vue` 初始化时改用 `decideRenderer` 的结果驱动 `allowTransparency` 与 `initWebGL` 调用
+- [x] 透明度状态变化时重建渲染器（dispose → 重设 options → 重新 initWebGL → 重设 theme → 重算尺寸 → 全量重绘）
+- [x] 重建路径同步 `xterm-hidden-cursor` 的加/删
+- [x] 组件卸载/会话切换时清理重建产生的 addon 引用，不泄漏
+- [x] 回归：默认（无背景图）场景零残影不变
+- [x] 验证命令：`cd bedcode-desktop && pnpm run test:run`
 
 ## Comments
 

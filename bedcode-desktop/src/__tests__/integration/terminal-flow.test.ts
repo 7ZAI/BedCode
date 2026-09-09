@@ -306,25 +306,20 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
 
-    // 单帧偶发缺口：seq=99 ≠ lastRendered(1)+1 → 第 1 次 → 不 resubscribe
+    // 缺口：seq=99 ≠ lastRendered(1)+1（事件 2..98 丢失）→ 立即快照重订阅补回
+    // （缺口帧不渲染不推进游标——缺失字节无法从实时流恢复，跳过会把残缺序列
+    // 写进 buffer 变残渣）；冷却期内再次缺口仅跳过不重复重订阅
     ws.binary([120], 99)
     await flushAsync()
     expect(errorSpy).not.toHaveBeenCalled()
-    expect(warnSpy).toHaveBeenCalledTimes(1)
-    expect(MockWebSocket.instances.length).toBe(1)
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/seq gap, re-subscribing/))
+    expect(bufferLineText(term, 0)).toBe('hi') // 缺口帧未渲染（无残渣写入）
 
-    // 第 2 次：seq=200 ≠ lastRendered(99)+1 → 仍不 resubscribe
+    // 冷却期内（3s）再次缺口：不重复重订阅，缺口帧跳过
     ws.binary([121], 200)
     await flushAsync()
-    expect(errorSpy).not.toHaveBeenCalled()
-    expect(warnSpy).toHaveBeenCalledTimes(2)
-    expect(MockWebSocket.instances.length).toBe(1)
-
-    // 第 3 次：seq=300 ≠ lastRendered(200)+1 → 真正 resubscribe
-    ws.binary([122], 300)
-    await flushAsync()
-    expect(errorSpy).toHaveBeenCalled()
-    expect(errorSpy.mock.calls[0]![0]).toMatch(/persistent seq gap \(3x\)/)
+    expect(warnSpy).toHaveBeenCalledTimes(1)
+    expect(MockWebSocket.instances.length).toBe(2) // 冷却期内未再触发重连（第一次缺口已建 ws2）
 
     // 重订阅为无参快照订阅（无 start_seq——服务端恒全量重播，前端按 seq 跳过）
     const ws2 = MockWebSocket.instances[1]
@@ -333,11 +328,11 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     const resubscribe = JSON.parse(ws2.sent[0])
     expect(resubscribe.payload.payload.action).toEqual({ type: 'subscribe' })
 
-    // 快照确认（min_seq=0 ≤ lastRendered+1：未截断，不清屏）+ 重播帧 seq=301
+    // 快照确认（min_seq=0 ≤ lastRendered+1：未截断，不清屏）+ 重播帧补回缺失段
     ws2.text(subscribeResponse(0, 400, 3))
-    ws2.binary([111, 107], 301) // "ok"（与偶发缺口写入的 x/y 共占 line 2）
+    ws2.binary([111, 107], 2) // 重播：跳过已渲染 ≤1，从 seq 2 补回
     await flushAsync()
-    expect(bufferLineText(term, 2)).toBe('xyok')
+    expect(bufferLineText(term, 2)).toBe('ok')
     expect(resets).toHaveLength(0) // 未截断，不清屏
 
     errorSpy.mockRestore()

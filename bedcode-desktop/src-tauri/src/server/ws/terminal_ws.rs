@@ -807,14 +807,28 @@ impl TerminalWs {
             }
         });
 
-        // 输出转发任务：OutputEvent 流 → TB v2 二进制帧（spec §5.3），
-        // 远程通道按 merge_output 开关决定合并/直通（语义与旧路由一致）
+        // 输出转发任务：OutputEvent 流 → TB v2 二进制帧（spec §5.3）。
+        // 本地通道（桌面端环回）走小窗口合并（4ms）：直通（一帧一 message）在输出
+        // 风暴期消息数爆炸（每秒上百条 WS 消息），WebKitGTK WS 接收缓冲溢出会丢
+        // 整消息 → seq 缺口 → 字节断裂残渣。合并后消息数降一个量级，缓冲不溢出；
+        // 4ms 窗口远低于远程 30ms，键盘回显无感知延迟。前端 parseFrames 已支持
+        // 解析合并 message 内全部 TB v2 帧（丢尾帧问题已修复）。
+        // 远程通道按 merge_output 开关决定合并/直通（语义与旧路由一致）。
+        // 注意：此守卫与另一 forward 启动点（:1252 附近）语义必须保持一致。
         let addr = ctx.address();
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
         let max_buffer_size = config.terminal.max_buffer_size;
+        let local = self.local;
         let merge_output = config.terminal.merge_output;
-        let interval = if merge_output { flush_interval } else { Duration::ZERO };
+        const LOCAL_FLUSH_INTERVAL_MS: u64 = 4;
+        let interval = if local {
+            Duration::from_millis(LOCAL_FLUSH_INTERVAL_MS)
+        } else if merge_output {
+            flush_interval
+        } else {
+            Duration::ZERO
+        };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
         let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
             output_rx,
@@ -1260,13 +1274,16 @@ impl TerminalWs {
         let local = self.local;
         let merge_output = config.terminal.merge_output;
 
-        // 本地通道（桌面端环回，延迟敏感）恒零缓冲直通；远程通道按开关决定：
-        // 合并开启 → 有界延迟合并；关闭 → 零缓冲直通。合并/直通语义与
-        // 时序保证集中在 forward_loop（有单测覆盖）
-        let interval = if local || !merge_output {
-            Duration::ZERO
-        } else {
+        // 本地通道（桌面端环回）小窗口合并（4ms，降消息数防 WebKitGTK WS 缓冲
+        // 溢出丢消息）；远程通道按 merge_output 开关决定合并/直通。
+        // 与 handle_session_subscribe 的 forward 启动点语义保持一致
+        const LOCAL_FLUSH_INTERVAL_MS: u64 = 4;
+        let interval = if local {
+            Duration::from_millis(LOCAL_FLUSH_INTERVAL_MS)
+        } else if merge_output {
             flush_interval
+        } else {
+            Duration::ZERO
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
         let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
@@ -1548,4 +1565,4 @@ impl Handler<SendTextMessage> for TerminalWs {
         self.send_text_filtered(msg.text, ctx);
     }
 }
-mod forward;
+pub(crate) mod forward;
