@@ -1,4 +1,5 @@
 import { createApp } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { createPinia } from 'pinia'
 import router from './router'
 import App from './App.vue'
@@ -8,16 +9,16 @@ import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
 import { initPluginSystem } from './plugin'
 import { completeStartupTask } from '@/composables/useAppStartup'
-import { installDevConsoleRelay } from '@/utils/devConsoleRelay'
+import { initFrontendLogger } from '@/utils/frontendLogger'
 import './style.css'
 import './styles/mobile.css'
 import 'vue-sonner/style.css'
 
 const app = createApp(App)
 
-// 尽早安装（debug 构建专属）：把前端 console 日志转发到 Rust（tracing → logcat），
-// AI agent 通过 tauri:android:dev:log 落盘文件 grep `frontend` 获取；release 两端均为 no-op
-installDevConsoleRelay()
+// 尽早初始化（debug 构建专属）：把前端日志经 frontendLogger 批量转发到 Rust（tracing → logcat），
+// AI agent 通过 tauri:android:dev:log 落盘文件 grep `frontend` 获取；release 两端 logger 均为空函数
+initFrontendLogger()
 const pinia = createPinia()
 
 app.use(pinia)
@@ -39,14 +40,14 @@ Promise.all([
   // 开屏启动任务打点:平台检测与设置加载均已完成
   completeStartupTask('platform')
   completeStartupTask('settings')
-  console.log('[Init] Platform and settings pre-loaded')
+  logger.log('[Init] Platform and settings pre-loaded')
 
   // 设置就绪后初始化插件系统
   try {
     await initPluginSystem(app, pinia, router, i18n)
-    console.log('[Init] Plugin system initialized')
+    logger.log('[Init] Plugin system initialized')
   } catch (e) {
-    console.error('[Init] Plugin system init failed:', e)
+    logger.error('[Init] Plugin system init failed:', e)
   } finally {
     // 插件初始化结束即打点(失败不卡开屏,交给兜底时长)
     completeStartupTask('plugins')

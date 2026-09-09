@@ -692,6 +692,7 @@
  * Warm Workbench 风格：分段控件 + 方角开关 + section 分组；支持多主题色板预留
  */
 import { onBeforeUnmount, onMounted, ref, watch, computed } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
@@ -768,7 +769,7 @@ async function loadLogSettings() {
     logMaxFiles.value = cfg.log?.max_files ?? 7
     logCapacityMb.value = Math.round((cfg.log?.capacity_bytes ?? 512 * 1024 * 1024) / (1024 * 1024))
   } catch (e) {
-    console.error('[Settings] Failed to load log settings:', e)
+    logger.error('[Settings] Failed to load log settings:', e)
   }
 }
 
@@ -780,7 +781,7 @@ async function onLogLevelClick(level: string) {
     await setLogLevel(level)
     toast.success(i18n.global.t('settings.log.levelApplied'))
   } catch (e) {
-    console.error('[Settings] set_log_level failed:', e)
+    logger.error('[Settings] set_log_level failed:', e)
     logFileLevel.value = previous
     toast.error(i18n.global.t('settings.log.saveFailed'))
   }
@@ -790,7 +791,7 @@ async function onOpenLogDir() {
   try {
     await openLogDir()
   } catch (e) {
-    console.error('[Settings] open_log_dir failed:', e)
+    logger.error('[Settings] open_log_dir failed:', e)
     toast.error(i18n.global.t('settings.log.saveFailed'))
   }
 }
@@ -809,7 +810,7 @@ async function onSaveLogConfig() {
     })
     toast.success(i18n.global.t('settings.log.saved'))
   } catch (e) {
-    console.error('[Settings] save_log_settings failed:', e)
+    logger.error('[Settings] save_log_settings failed:', e)
     toast.error(i18n.global.t('settings.log.saveFailed'))
   } finally {
     logSaving.value = false
@@ -1107,7 +1108,7 @@ async function openGitHub() {
   try {
     await open('https://github.com/7ZAI/BedCode')
   } catch (e) {
-    console.error('Failed to open GitHub repo:', e)
+    logger.error('Failed to open GitHub repo:', e)
   }
 }
 

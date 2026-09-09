@@ -1,4 +1,5 @@
 import { ref, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 
 /**
  * 屏幕方向检测 Composable
@@ -17,7 +18,7 @@ export function useOrientation() {
     isLandscape.value = width > height
     orientation.value = isLandscape.value ? 'landscape' : 'portrait'
 
-    console.log('[Orientation] Changed to:', orientation.value, 'Size:', width, 'x', height)
+    logger.log('[Orientation] Changed to:', orientation.value, 'Size:', width, 'x', height)
   }
 
   onMounted(() => {

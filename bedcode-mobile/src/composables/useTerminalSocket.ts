@@ -16,6 +16,7 @@
  */
 
 import { getTerminalWsInfo } from '@/composables/useMobileCommands'
+import { logger } from '@/utils/frontendLogger'
 import {
   deriveWsSession,
   generateEphemeral,
@@ -266,7 +267,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
         handlers.onError(msg.code ?? 'UNKNOWN', msg.message ?? '')
         break
       default:
-        console.warn('[useTerminalSocket] unknown control frame:', msg?.type)
+        logger.warn('[useTerminalSocket] unknown control frame:', msg?.type)
     }
   }
 
@@ -325,7 +326,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
             try {
               text = wsCrypto.decryptText('ws-terminal', text)
             } catch (e: any) {
-              console.error('[useTerminalSocket] decrypt control frame failed:', e?.message || e)
+              logger.error('[useTerminalSocket] decrypt control frame failed:', e?.message || e)
               handlers.onError('LINK_CRYPTO_DECRYPT_FAILED', String(e?.message || e))
               socket.close(4003, 'decrypt failed')
               return
@@ -340,7 +341,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
           try {
             raw = wsCrypto.decryptBinary('ws-terminal', raw)
           } catch (e: any) {
-            console.error('[useTerminalSocket] decrypt binary frame failed:', e?.message || e)
+            logger.error('[useTerminalSocket] decrypt binary frame failed:', e?.message || e)
             handlers.onError('LINK_CRYPTO_DECRYPT_FAILED', String(e?.message || e))
             socket.close(4003, 'decrypt failed')
             return
@@ -348,7 +349,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
         }
         const frame = parseFrame(raw.buffer as ArrayBuffer)
         if (!frame) {
-          console.error('[useTerminalSocket] invalid binary frame received')
+          logger.error('[useTerminalSocket] invalid binary frame received')
           return
         }
         // 渲染背压游标：帧末 seq 即已交付边界（与桌面端语义一致）
@@ -367,7 +368,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
         scheduleReconnect()
       }
     } catch (e) {
-      console.warn('[useTerminalSocket] connect failed:', e)
+      logger.warn('[useTerminalSocket] connect failed:', e)
       scheduleReconnect()
     } finally {
       connecting = false
@@ -388,20 +389,20 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
     if (echo && pinnedKey) {
       try {
         wsCrypto = deriveWsSession(ephemeral.priv, ephemeral.pubB64, echo.ek, pinnedKey)
-        console.log('[useTerminalSocket] link encryption negotiated, frames encrypted')
+        logger.log('[useTerminalSocket] link encryption negotiated, frames encrypted')
         return
       } catch (e: any) {
-        console.error('[useTerminalSocket] ws handshake derive failed:', e?.message || e)
+        logger.error('[useTerminalSocket] ws handshake derive failed:', e?.message || e)
         wsCrypto = null
       }
     }
     const { settings } = useLinkEncryptionSettings()
     if (settings.value.strictMode) {
-      console.error('[useTerminalSocket] strict mode: server did not accept encryption, closing')
+      logger.error('[useTerminalSocket] strict mode: server did not accept encryption, closing')
       handlers.onError('LINK_ENCRYPTION_DOWNGRADE', 'server did not accept encryption')
       ws?.close(4003, 'encryption downgrade')
     } else {
-      console.warn('[useTerminalSocket] connection stays plaintext (downgrade tolerated)')
+      logger.warn('[useTerminalSocket] connection stays plaintext (downgrade tolerated)')
     }
   }
 
@@ -420,7 +421,7 @@ export function createTerminalSocket(handlers: TerminalSocketHandlers): Terminal
 
   function sendInput(data: string, specialKey?: string) {
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      console.warn('[useTerminalSocket] sendInput: socket not open')
+      logger.warn('[useTerminalSocket] sendInput: socket not open')
       return
     }
     sendControlJson(

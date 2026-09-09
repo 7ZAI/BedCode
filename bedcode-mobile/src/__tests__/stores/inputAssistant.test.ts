@@ -7,6 +7,7 @@
  * （topShortcuts / getQuickBarItems 频次排序、数量钳制 3-10、无统计默认列表、颜色分类映射）。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { createPinia, setActivePinia } from 'pinia'
 import { useInputAssistantStore, type ShortcutItem, type QuickBarItem } from '@/stores/inputAssistant'
 
@@ -238,7 +239,7 @@ describe('inputAssistant store', () => {
     store.recordShortcut('ctrl+k')
     store.saveSettings({ size: 60 })
     localStorage.setItem(KEYS.settings, '{corrupt')
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     store.loadFromStorage()
     // 解析抛错发生在赋值表达式内 → settings 保持当前内存值不变
     expect(store.settings.size).toBe(60)
@@ -314,7 +315,7 @@ describe('inputAssistant store', () => {
 
   it('getEffectiveAgentType: override wins, otherwise keyword detection from command', async () => {
     // 测试环境无 Tauri invoke：覆盖表为空，保存失败仅打日志
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     const store = newStore()
     // 无覆盖：按启动命令关键词识别
     expect(store.getEffectiveAgentType('cfg-1', 'claude --dangerously-skip-permissions')).toBe('claude_code')

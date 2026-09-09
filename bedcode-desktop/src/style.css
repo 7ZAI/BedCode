@@ -5,13 +5,20 @@
 /* ==================== Platform Scales ==================== */
 
 /*
- * Linux 桌面端默认 zoom: 1.15，修正 WebKitGTK 下 Web 默认 16px 字号偏小的观感。
+ * Linux 桌面端默认 UI 缩放 1.15（font-size: 115% 放大 rem 间距/控件 + --ui-scale
+ * 放大 px token 字号），修正 WebKitGTK 下 Web 默认 16px 字号偏小的观感。
+ * 为什么不用 zoom：CSS zoom 会把 xterm.js 鼠标 hit-test（getBoundingClientRect 含
+ * zoom）与字符测量（OffscreenCanvas measureText 无视 zoom）放进不同坐标系，导致
+ * opencode 等 TUI 鼠标高亮错位（issue 06）。font-size + --ui-scale 等效放大 rem/px
+ * 却不破坏坐标。
  * 仅 Linux 生效：macOS 2x Retina 与 Windows DPI-aware 天然更大，不需要额外缩放。
  * main.ts 中 initPlatform() 完成后向 <html> 加 platform-linux class（只在 isLinux 时）。
+ * --ui-scale 此处是 JS 生效前的 CSS 默认（splash 期），useFontSize 就绪后覆盖一致。
  * 用户仍可用 Ctrl+= / Ctrl+- 手动微调（index.html 已去掉 maximum-scale 限制）。
  */
 html.platform-linux {
-  zoom: 1.15;
+  font-size: 115%;
+  --ui-scale: 1.15;
 }
 
 /* ==================== Design Tokens ==================== */

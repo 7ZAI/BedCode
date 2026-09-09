@@ -7,6 +7,7 @@
  * 损坏存储回退默认、resolveCodeTheme / mapThemeForMode 主题解析与明暗映射、CODE_THEMES 元数据。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   useCodeViewerStore,
@@ -52,7 +53,7 @@ describe('codeViewer store', () => {
   })
 
   it('corrupt storage falls back to defaults with a console warning', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     localStorage.setItem(STORAGE_KEY, '{not json')
     const store = useCodeViewerStore()
     expect(store.settings).toEqual({

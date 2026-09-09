@@ -107,6 +107,7 @@
  * 保留插件标题栏扩展点
  */
 import { ref, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
@@ -120,7 +121,7 @@ async function checkMaximized() {
   try {
     isMaximized.value = await appWindow.isMaximized()
   } catch (e) {
-    console.error('Failed to check maximized state:', e)
+    logger.error('Failed to check maximized state:', e)
   }
 }
 
@@ -138,7 +139,7 @@ async function minimize() {
   try {
     await appWindow.minimize()
   } catch (e) {
-    console.error('Failed to minimize:', e)
+    logger.error('Failed to minimize:', e)
   }
 }
 
@@ -148,7 +149,7 @@ async function toggleMaximize() {
     // Wait a bit for the window state to update
     setTimeout(checkMaximized, 100)
   } catch (e) {
-    console.error('Failed to toggle maximize:', e)
+    logger.error('Failed to toggle maximize:', e)
   }
 }
 
@@ -156,7 +157,7 @@ async function close() {
   try {
     await appWindow.close()
   } catch (e) {
-    console.error('Failed to close:', e)
+    logger.error('Failed to close:', e)
   }
 }
 </script>

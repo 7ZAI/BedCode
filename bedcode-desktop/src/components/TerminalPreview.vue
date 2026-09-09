@@ -151,6 +151,7 @@
  * 统一管理；本组件仅通过 defineExpose 暴露主题/字号/清屏/刷新等能力。
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import type { SessionInfo } from '@/stores/session'
 import { useSessionStore } from '@/stores/session'
@@ -175,6 +176,7 @@ import {
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { attachLinuxImeGuard, type LinuxImeGuard } from '@/utils/terminalLinuxImeGuard'
 import { initPlatform } from '@/composables/usePlatform'
+import { PLATFORM_UI_SCALE } from '@/composables/useFontSize'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -210,6 +212,13 @@ const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'd
 // Linux 平台优化：isLinux 在 onMounted 中 await initPlatform() 后确定（消除
 // setup 时 platform 尚未解析的竞态）；仅 Linux 启用 IME 去重与专用字体栈
 const isLinux = ref(false)
+
+// 终端视觉字号：去 zoom 后（issue 06）Linux 按 PLATFORM_UI_SCALE 放大，视觉字号
+// = 设置值 × 1.15，等效原 zoom；用户设置值（terminal_font_size）与下拉显示保持原值不乘
+const effectiveFontSize = computed(() =>
+  isLinux.value ? fontSize.value * PLATFORM_UI_SCALE : fontSize.value,
+)
+
 // Linux 专用等宽字体栈：优先系统自带、hint 较强的等宽字体（DejaVu Sans Mono /
 // Liberation Mono 对 canvas fillText 的像素对齐更好，Ubuntu Mono 笔画偏软），确保
 // WebKitGTK 用真实系统等宽字体渲染，避免默认栈（Cascadia Mono 等 Windows 字体）
@@ -456,13 +465,13 @@ const terminalStreamOptions = {
   onTruncated: (minSeq: number) => {
     if (historyTruncatedNotified) {
       // 已提示过：仅后台日志记录，不再弹 toast 打扰用户
-      console.warn(
+      logger.warn(
         `[TerminalPreview] 终端历史已被环形缓冲截断（已提示过，仅记录）：min_seq=${minSeq}`,
       )
       return
     }
     historyTruncatedNotified = true
-    console.warn(
+    logger.warn(
       `[TerminalPreview] 终端历史已被环形缓冲截断：min_seq=${minSeq}，会话开头输出不可用`,
     )
     toast.warning(t('desktop.terminal.historyTruncated'))
@@ -688,7 +697,7 @@ async function resolveBgImageUrl() {
     })
     bgImageUrl.value = url
   } catch (e) {
-    console.error('[TerminalPreview] Failed to resolve background image URL:', e)
+    logger.error('[TerminalPreview] Failed to resolve background image URL:', e)
     bgImageUrl.value = ''
   }
 }
@@ -745,7 +754,7 @@ function initWebGL(term: Terminal, seq: number): boolean {
   try {
     webglAddon = new WebglAddon()
     webglAddon.onContextLoss(() => {
-      console.warn('[TerminalPreview] WebGL context lost, attempting recovery')
+      logger.warn('[TerminalPreview] WebGL context lost, attempting recovery')
       webglAddon?.dispose()
       webglAddon = null
       // 上下文丢失时恢复 DOM 光标
@@ -759,7 +768,7 @@ function initWebGL(term: Terminal, seq: number): boolean {
         try {
           const newAddon = new WebglAddon()
           newAddon.onContextLoss(() => {
-            console.warn('[TerminalPreview] WebGL context lost again')
+            logger.warn('[TerminalPreview] WebGL context lost again')
             newAddon.dispose()
             if (webglAddon === newAddon) webglAddon = null
             term.element?.classList.remove('xterm-hidden-cursor')
@@ -771,9 +780,9 @@ function initWebGL(term: Terminal, seq: number): boolean {
           // WebGL 渲染器 cell 尺寸与 DOM 渲染器不同（VS Code 在 webgl 加载后同样
           // 触发刷新重测网格），恢复后重算一次避免行列差 1 的漂移
           applyResize()
-          console.info('[TerminalPreview] WebGL context recovered')
+          logger.info('[TerminalPreview] WebGL context recovered')
         } catch (e) {
-          console.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
+          logger.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
           webglAddon = null
         }
       }, 1000)
@@ -781,7 +790,7 @@ function initWebGL(term: Terminal, seq: number): boolean {
     term.loadAddon(webglAddon)
     return true
   } catch (e) {
-    console.warn('[TerminalPreview] WebGL not supported:', e)
+    logger.warn('[TerminalPreview] WebGL not supported:', e)
     webglAddon = null
     return false
   }
@@ -836,7 +845,7 @@ function initTerminal() {
 
   terminal = new Terminal({
     // 字体与尺寸
-    fontSize: fontSize.value,
+    fontSize: effectiveFontSize.value,
     // Linux 用系统等宽字体栈（优先 Ubuntu Mono/DejaVu Sans Mono 等系统自带等宽字体），
     // 其余平台保持 VS Code 终端默认字体栈（Windows 11 自带 Cascadia Mono）不变
     fontFamily: isLinux.value ? LINUX_FONT_STACK : DEFAULT_FONT_STACK,
@@ -1331,7 +1340,7 @@ function clearTerminal() {
 let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
 watch(fontSize, (newSize) => {
   if (!terminal) return
-  terminal.options.fontSize = newSize
+  terminal.options.fontSize = effectiveFontSize.value
   if (fitAddon) {
     fitAndRefresh()
   }
@@ -1350,7 +1359,7 @@ watch(
     if (fontSize.value !== newSize) {
       fontSize.value = newSize
       if (terminal) {
-        terminal.options.fontSize = newSize
+        terminal.options.fontSize = effectiveFontSize.value
         if (fitAddon) fitAndRefresh()
         nextTick(() => syncTerminalSize())
       }
@@ -1413,7 +1422,7 @@ watch(
           const size =
             terminal != null
               ? { cols: terminal.cols, rows: terminal.rows }
-              : await computeDesktopInitialTerminalSize(fontSize.value)
+              : await computeDesktopInitialTerminalSize(effectiveFontSize.value)
           await sessionStore.startSession(newId, size ?? undefined)
         }
 
@@ -1481,7 +1490,7 @@ onMounted(async () => {
   scheduleInitialFontRemeasure()
 
   // 渲染链路诊断（排查模糊/回退问题时日志可见 renderer 与 DPR）
-  console.info(
+  logger.info(
     `[TerminalPreview] renderer=${webglAddon ? 'webgl' : 'dom'} ` +
       `dpr=${window.devicePixelRatio} fontSize=${fontSize.value} ` +
       `isLinux=${isLinux.value}`,

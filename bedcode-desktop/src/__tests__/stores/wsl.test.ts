@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { setActivePinia, createPinia } from 'pinia'
 import { useWslStore } from '@/stores/wsl'
 import { makeWslDistro } from '@/__tests__/fixtures/session'
@@ -61,7 +62,7 @@ describe('WSL Store', () => {
     })
 
     it('should record error message and stay not available on failure', async () => {
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
       mocks.isWslAvailable.mockRejectedValueOnce(new Error('wsl is broken'))
 
       const store = useWslStore()
@@ -77,7 +78,7 @@ describe('WSL Store', () => {
 
     it('should clear previous error before reloading', async () => {
       mocks.isWslAvailable.mockRejectedValueOnce(new Error('first failure'))
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
       const store = useWslStore()
       await store.loadWslInfo()

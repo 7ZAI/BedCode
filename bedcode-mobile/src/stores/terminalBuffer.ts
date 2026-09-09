@@ -15,6 +15,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { reactive, ref } from 'vue'
 import { emit } from '@tauri-apps/api/event'
 import {
@@ -201,13 +202,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       },
       onError: (code: string, message: string) => {
         const buffer = buffers.get(sessionId)
-        console.warn(`[terminalBuffer] session ${sessionId} error: ${code} - ${message}`)
+        logger.warn(`[terminalBuffer] session ${sessionId} error: ${code} - ${message}`)
         if (code === 'SESSION_NOT_FOUND') {
           // 会话启动中或已停止：有限重试后停止，等待消费者恢复
           const strikes = (sessionMissingStrikes.get(sessionId) ?? 0) + 1
           sessionMissingStrikes.set(sessionId, strikes)
           if (strikes >= MAX_SESSION_MISSING_STRIKES) {
-            console.warn(
+            logger.warn(
               `[terminalBuffer] session ${sessionId} not found after ${MAX_SESSION_MISSING_STRIKES} attempts, stopping`,
             )
             sockets.get(sessionId)?.stop()
@@ -261,7 +262,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
     // 连续性缺口：帧首 seq 越过游标（缺帧）→ 重新订阅拿快照（跳过 ≤ lastRenderedSeq）
     if (buffer.lastRenderedSeq !== null && frame.seq > buffer.lastRenderedSeq + 1) {
-      console.error(
+      logger.error(
         `[terminalBuffer] seq gap: frame.start=${frame.seq}, last_rendered=${buffer.lastRenderedSeq}. Re-subscribing for snapshot`,
       )
       sockets.get(sessionId)?.subscribe()
@@ -598,12 +599,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function sendInput(sessionId: string, data: string, specialKey?: string): boolean {
     const buffer = buffers.get(sessionId)
     if (!buffer || !buffer.subscribed) {
-      console.warn(`[terminalBuffer] sendInput: session ${sessionId} not subscribed`)
+      logger.warn(`[terminalBuffer] sendInput: session ${sessionId} not subscribed`)
       return false
     }
     const socket = sockets.get(sessionId)
     if (!socket?.isOpen()) {
-      console.warn(`[terminalBuffer] sendInput: session ${sessionId} socket not open`)
+      logger.warn(`[terminalBuffer] sendInput: session ${sessionId} socket not open`)
       return false
     }
     socket.sendInput(data, specialKey)

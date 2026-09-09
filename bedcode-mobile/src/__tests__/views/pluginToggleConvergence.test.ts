@@ -11,6 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { mount, flushPromises } from '@vue/test-utils'
 import PluginView from '@/views/PluginView.vue'
 import { makePluginInfo } from '@/__tests__/fixtures'
@@ -86,9 +87,9 @@ const PLUGIN_ID = 'com.bedcode.file-transfer'
 
 beforeEach(() => {
   vi.clearAllMocks()
-  vi.spyOn(console, 'error').mockImplementation(() => {})
-  vi.spyOn(console, 'log').mockImplementation(() => {})
-  vi.spyOn(console, 'warn').mockImplementation(() => {})
+  vi.spyOn(logger, 'error').mockImplementation(() => {})
+  vi.spyOn(logger, 'log').mockImplementation(() => {})
+  vi.spyOn(logger, 'warn').mockImplementation(() => {})
 })
 
 afterEach(() => {

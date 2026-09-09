@@ -5,6 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import type { PluginInfo } from './types'
 
 /** Registry entry types from Rust backend */
@@ -33,17 +34,17 @@ export interface FileHandlerEntry {
 
 /** 获取所有已加载插件 */
 export async function pluginListLoaded(): Promise<PluginInfo[]> {
-  console.log('[PluginCmd] pluginListLoaded() invoking...')
+  logger.log('[PluginCmd] pluginListLoaded() invoking...')
   const result = await invoke<PluginInfo[]>('plugin_list_loaded')
-  console.log(`[PluginCmd] pluginListLoaded() returned ${result.length} plugin(s)`)
+  logger.log(`[PluginCmd] pluginListLoaded() returned ${result.length} plugin(s)`)
   return result
 }
 
 /** 获取单个插件信息 */
 export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null> {
-  console.log(`[PluginCmd] pluginGetInfo(${pluginId}) invoking...`)
+  logger.log(`[PluginCmd] pluginGetInfo(${pluginId}) invoking...`)
   const result = await invoke<PluginInfo | null>('plugin_get_info', { pluginId })
-  console.log(
+  logger.log(
     `[PluginCmd] pluginGetInfo(${pluginId}) returned:`,
     result ? `state=${result.state.state}` : 'null',
   )
@@ -57,23 +58,23 @@ export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null
  * 可正常交互）→ 通过后再显示遮罩并调 pluginActivate；拒绝则直接失败
  */
 export async function pluginPreauthorize(pluginId: string): Promise<void> {
-  console.log(`[PluginCmd] pluginPreauthorize(${pluginId}) invoking...`)
+  logger.log(`[PluginCmd] pluginPreauthorize(${pluginId}) invoking...`)
   await invoke('plugin_preauthorize', { pluginId })
-  console.log(`[PluginCmd] pluginPreauthorize(${pluginId}) succeeded`)
+  logger.log(`[PluginCmd] pluginPreauthorize(${pluginId}) succeeded`)
 }
 
 /** 激活插件 */
 export async function pluginActivate(pluginId: string): Promise<void> {
-  console.log(`[PluginCmd] pluginActivate(${pluginId}) invoking...`)
+  logger.log(`[PluginCmd] pluginActivate(${pluginId}) invoking...`)
   await invoke('plugin_activate', { pluginId })
-  console.log(`[PluginCmd] pluginActivate(${pluginId}) succeeded`)
+  logger.log(`[PluginCmd] pluginActivate(${pluginId}) succeeded`)
 }
 
 /** 停用插件 */
 export async function pluginDeactivate(pluginId: string): Promise<void> {
-  console.log(`[PluginCmd] pluginDeactivate(${pluginId}) invoking...`)
+  logger.log(`[PluginCmd] pluginDeactivate(${pluginId}) invoking...`)
   await invoke('plugin_deactivate', { pluginId })
-  console.log(`[PluginCmd] pluginDeactivate(${pluginId}) succeeded`)
+  logger.log(`[PluginCmd] pluginDeactivate(${pluginId}) succeeded`)
 }
 
 /** 标记插件错误 */

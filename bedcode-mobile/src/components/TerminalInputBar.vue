@@ -396,6 +396,7 @@
 
 <script setup lang="ts">
 import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
@@ -576,7 +577,7 @@ async function saveCustomCommands() {
       value: JSON.stringify(customCommands.value),
     })
   } catch (e) {
-    console.error('[TerminalInputBar] Failed to save custom commands:', e)
+    logger.error('[TerminalInputBar] Failed to save custom commands:', e)
   }
 }
 
@@ -722,7 +723,7 @@ function toggleShortcuts() {
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
     // 面板渲染前确认命令列表构成（预设 + 自定义），排查第二页缺失问题
-    console.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
+    logger.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
       '（预设', assistStore.presetCommands.length, '+ 自定义', customCommands.value.length, '）',
       displayCommands.value.slice(0, 3).map(c => c.command))
     // 面板渲染后测量高度并通知终端，同时计算左侧网格列数

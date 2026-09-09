@@ -4,6 +4,7 @@
  * 为每个插件创建 PluginContext 实例 — 权限检查 + API 代理
  */
 
+import { logger as frontendLogger } from '@/utils/frontendLogger'
 import type {
   PluginContext,
   PluginInfo,
@@ -363,7 +364,9 @@ export function createPluginContext(info: PluginInfo): PluginContext {
         }
         await invoke('plugin:task-notification|showPluginNotification', { title, body })
       } catch (e) {
-        console.warn('[PluginContext] notify failed:', e)
+        // 注意：此处是宿主侧通知失败日志，走前端 logger 落盘；
+        // 不能用下方插件 LoggerAPI 的 logger（单参、走 pluginLog 通道）
+        frontendLogger.warn('[PluginContext] notify failed:', e)
       }
     },
   }

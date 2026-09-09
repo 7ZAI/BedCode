@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -90,7 +91,7 @@ export const useSettingsStore = defineStore('settings', () => {
         ui: { ...defaultSettings.ui, ...loaded.ui },
       }
     } catch (e) {
-      console.error('[Settings] Failed to load settings:', e)
+      logger.error('[Settings] Failed to load settings:', e)
     }
   }
 
@@ -104,7 +105,7 @@ export const useSettingsStore = defineStore('settings', () => {
       settings.value = merged
       lastSavedSnapshot = JSON.stringify(merged)
     } catch (e) {
-      console.error('[Settings] Failed to save settings:', e)
+      logger.error('[Settings] Failed to save settings:', e)
     }
   }
 

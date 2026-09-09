@@ -6,6 +6,7 @@
  */
 
 import type { PluginInfo, PluginModule, PluginContext } from './types'
+import { logger } from '@/utils/frontendLogger'
 import { convertFileSrc } from '@tauri-apps/api/core'
 import * as pluginCmds from './commands'
 import { createPluginContext } from './context'
@@ -37,7 +38,7 @@ class PluginLoaderClass {
   /** 应用启动时加载所有已启用插件的前端模块 */
   async loadAll(): Promise<void> {
     const manifests = await pluginCmds.pluginListLoaded()
-    console.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
+    logger.log(`[PluginLoader] Found ${manifests.length} plugin(s)`)
     await this.loadManifests(manifests)
 
     // 后端在 setup 的异步任务里解压内置插件 → 初始化 WASM 运行时 → 扫描加载，
@@ -58,19 +59,19 @@ class PluginLoaderClass {
       this.scanRetryTimer = null
       try {
         const manifests = await pluginCmds.pluginListLoaded()
-        console.log(`[PluginLoader] Scan retry: found ${manifests.length} plugin(s)`)
+        logger.log(`[PluginLoader] Scan retry: found ${manifests.length} plugin(s)`)
         if (manifests.length > 0) {
           await this.loadManifests(manifests)
           return
         }
       } catch (e) {
         // 后端尚未就绪时命令异常：继续轮询，直到超时
-        console.warn('[PluginLoader] Scan retry query failed, will retry:', e)
+        logger.warn('[PluginLoader] Scan retry query failed, will retry:', e)
       }
       if (Date.now() - this.scanRetryStartedAt < STARTUP_SCAN_TIMEOUT_MS) {
         this.scanRetryTimer = setTimeout(tick, STARTUP_SCAN_POLL_MS)
       } else {
-        console.warn('[PluginLoader] Plugin scan not ready after timeout; entries need manual re-toggle')
+        logger.warn('[PluginLoader] Plugin scan not ready after timeout; entries need manual re-toggle')
       }
     }
     this.scanRetryTimer = setTimeout(tick, STARTUP_SCAN_POLL_MS)
@@ -81,7 +82,7 @@ class PluginLoaderClass {
     for (const manifest of manifests) {
       // Rust-only 插件：前端无需加载
       if (manifest.pluginType === 'rust') {
-        console.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend`)
+        logger.log(`[PluginLoader] Rust plugin ${manifest.id} managed by backend`)
         continue
       }
 
@@ -94,7 +95,7 @@ class PluginLoaderClass {
       // 重开插件才恢复。启用状态是持久化存储，查询时立即可用，不受该竞态影响。
       const isEnabled = await pluginCmds.pluginIsEnabled(manifest.id)
       if (!isEnabled) {
-        console.log(`[PluginLoader] Plugin ${manifest.id} not enabled, skipping frontend load`)
+        logger.log(`[PluginLoader] Plugin ${manifest.id} not enabled, skipping frontend load`)
         continue
       }
 
@@ -103,11 +104,11 @@ class PluginLoaderClass {
       // - Degraded：后端实例在运行、命令可用，UI 入口照常挂载，仅标注降级原因
       const st = manifest.state
       if (st.state === 'Activating') {
-        console.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
+        logger.log(`[PluginLoader] Plugin ${manifest.id} activating, deferring frontend load`)
         continue
       }
       if (st.state === 'Degraded') {
-        console.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
+        logger.warn(`[PluginLoader] Plugin ${manifest.id} loaded but degraded: ${st.error}`)
       }
 
       await this.loadFrontend(manifest)
@@ -126,14 +127,14 @@ class PluginLoaderClass {
 
     const info = await pluginCmds.pluginGetInfo(pluginId)
     if (!info) {
-      console.error(`[PluginLoader] Plugin ${pluginId} not found`)
+      logger.error(`[PluginLoader] Plugin ${pluginId} not found`)
       return
     }
 
     try {
       await pluginCmds.pluginActivate(pluginId)
     } catch (e: any) {
-      console.error(`[PluginLoader] Failed to activate ${pluginId}:`, e)
+      logger.error(`[PluginLoader] Failed to activate ${pluginId}:`, e)
       await pluginCmds.pluginMarkError(pluginId, e.message || 'Activation failed')
       return
     }
@@ -155,14 +156,14 @@ class PluginLoaderClass {
       // 清理所有 Disposable
       plugin.context._disposables.forEach((d: { dispose(): void }) => {
         try { d.dispose() } catch (e) {
-          console.error(`[PluginLoader] Error disposing resource for ${pluginId}:`, e)
+          logger.error(`[PluginLoader] Error disposing resource for ${pluginId}:`, e)
         }
       })
 
       // 调用插件的 deactivate（先于注册表清理：若模块停用期间再注册，随后即被清掉）
       if (plugin.module.deactivate) {
         try { await plugin.module.deactivate() } catch (e) {
-          console.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
+          logger.error(`[PluginLoader] Error in deactivate for ${pluginId}:`, e)
         }
       }
 
@@ -174,23 +175,23 @@ class PluginLoaderClass {
     try {
       clearPluginEvents(pluginId)
     } catch (e) {
-      console.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
+      logger.error(`[PluginLoader] Error clearing events for ${pluginId}:`, e)
     }
 
     try {
       getPluginRegistry().clearPlugin(pluginId)
     } catch (e) {
-      console.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
+      logger.error(`[PluginLoader] Error clearing registry for ${pluginId}:`, e)
     }
 
     // 通知后端（无论前端模块是否加载过）
     try {
       await pluginCmds.pluginDeactivate(pluginId)
     } catch (e) {
-      console.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
+      logger.error(`[PluginLoader] Error notifying backend for deactivation of ${pluginId}:`, e)
     }
 
-    console.log(`[PluginLoader] Plugin deactivated: ${pluginId}`)
+    logger.log(`[PluginLoader] Plugin deactivated: ${pluginId}`)
   }
 
   /** 获取已激活插件 */
@@ -213,9 +214,9 @@ class PluginLoaderClass {
       await this.activateWithTimeout(module, context)
 
       this.plugins.set(manifest.id, { manifest, module, context })
-      console.log(`[PluginLoader] Plugin frontend loaded: ${manifest.id}`)
+      logger.log(`[PluginLoader] Plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
-      console.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
       // 激活失败：摘除激活期间可能残留的注册（含动态路由），避免半激活状态
       getPluginRegistry().clearPlugin(manifest.id)
       // 对称拆解后端：plugin_activate 可能已成功（WASM 实例存活，状态
@@ -225,7 +226,7 @@ class PluginLoaderClass {
       try {
         await pluginCmds.pluginDeactivate(manifest.id)
       } catch (deactivateErr) {
-        console.error(`[PluginLoader] Error tearing down backend for ${manifest.id}:`, deactivateErr)
+        logger.error(`[PluginLoader] Error tearing down backend for ${manifest.id}:`, deactivateErr)
       }
       await pluginCmds.pluginMarkError(manifest.id, e.message || 'Frontend load failed')
     }

@@ -188,6 +188,7 @@
 defineOptions({ name: 'TerminalView' })
 
 import { ref, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Terminal } from '@xterm/xterm'
@@ -441,7 +442,7 @@ async function applyAgentPreset() {
   const configId = sessionConfigId.value
   if (!configId) {
     const found = connection.activeSessions.value.find(s => s.id === sessionId.value)
-    console.warn('[TerminalView] applyAgentPreset: 会话未就绪（无 config_id）', JSON.stringify({
+    logger.warn('[TerminalView] applyAgentPreset: 会话未就绪（无 config_id）', JSON.stringify({
       sessionId: sessionId.value,
       activeSessionsCount: connection.activeSessions.value.length,
       foundSession: found,
@@ -456,7 +457,7 @@ async function applyAgentPreset() {
     config = connection.sessionConfigs.value.find(c => c.id === configId)
   }
   if (!config) {
-    console.warn('[TerminalView] applyAgentPreset: 配置列表无匹配 config_id，预设不加载', { configId })
+    logger.warn('[TerminalView] applyAgentPreset: 配置列表无匹配 config_id，预设不加载', { configId })
     return
   }
   const agentType = assistStore.getEffectiveAgentType(configId, config.command)
@@ -1049,7 +1050,7 @@ async function initWebGL(term: Terminal): Promise<boolean> {
     const { WebglAddon } = await import('@xterm/addon-webgl')
     const addon = new WebglAddon()
     addon.onContextLoss(() => {
-      console.warn('[TerminalView] WebGL context lost, disposing renderer')
+      logger.warn('[TerminalView] WebGL context lost, disposing renderer')
       addon.dispose()
       // 上下文丢失时恢复 DOM 层光标
       term.element?.classList.remove('xterm-hidden-cursor')
@@ -1059,15 +1060,15 @@ async function initWebGL(term: Terminal): Promise<boolean> {
         try {
           const newAddon = new WebglAddon()
           newAddon.onContextLoss(() => {
-            console.warn('[TerminalView] WebGL context lost again')
+            logger.warn('[TerminalView] WebGL context lost again')
             newAddon.dispose()
             term.element?.classList.remove('xterm-hidden-cursor')
           })
           term.loadAddon(newAddon)
           term.element?.classList.add('xterm-hidden-cursor')
-          console.info('[TerminalView] WebGL context recovered')
+          logger.info('[TerminalView] WebGL context recovered')
         } catch (e) {
-          console.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
+          logger.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
         }
       }, 1000)
     })
@@ -1107,7 +1108,7 @@ function fitWithMargin(): boolean {
   applyDprFit()
   if (term.cols !== beforeCols || term.rows !== beforeRows) {
     // 调试验证：记录 fit 导致的尺寸变化轨迹（排查行尾裁切/右侧遮挡）
-    console.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
+    logger.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
   }
   return term.cols !== beforeCols || term.rows !== beforeRows
 }
@@ -1363,7 +1364,7 @@ async function initTerminal() {
   // 尺寸，PTY 停在 80x24 → opencode 按 24 行渲染，显示区下半黑（半屏黑）
   term.onResize(({ cols, rows }) => {
     // 调试验证：记录 xterm 每次尺寸变化（fit/容器变化/字号变化）
-    console.debug(`[TerminalView] onResize: ${cols}x${rows}`)
+    logger.debug(`[TerminalView] onResize: ${cols}x${rows}`)
     queueResize(cols, rows)
   })
 }
@@ -1448,16 +1449,16 @@ async function queueResize(cols: number, rows: number, force = false) {
       pendingResize = null
       if (!isConnected.value) break
       // 调试验证：记录实际发送给主机 PTY 的尺寸
-      console.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}${next.force ? ' (force)' : ''}`)
+      logger.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}${next.force ? ' (force)' : ''}`)
       const result = await httpResizeSession(sid, next.cols, next.rows, next.force)
       if (result.code !== 0) {
-        console.warn('[TerminalView] Queue resize failed:', result.message)
+        logger.warn('[TerminalView] Queue resize failed:', result.message)
         continue
       }
       const outcome = result.data
       if (!outcome) {
         // 服务端未返回裁决数据（异常响应）：按失败处理，下次触发时重试
-        console.warn('[TerminalView] Resize response missing outcome data')
+        logger.warn('[TerminalView] Resize response missing outcome data')
         continue
       }
       if (outcome.status === 'applied') {

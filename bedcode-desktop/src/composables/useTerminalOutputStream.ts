@@ -28,6 +28,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 
 /** TB v2 单帧解析结果 */
 export interface OutputStreamFrame {
@@ -248,7 +249,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       const now = Date.now()
       if (now - lastGapResubscribeAt >= GAP_RESUBSCRIBE_COOLDOWN_MS) {
         lastGapResubscribeAt = now
-        console.warn(
+        logger.warn(
           `[useTerminalOutputStream] seq gap, re-subscribing for snapshot (frame.start=${frame.seq}, last_rendered=${lastRenderedSeq})`,
         )
         resubscribe()
@@ -298,7 +299,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       subscribed = true
       // 历史头部被环形淘汰：已渲染区域不可恢复 → 清屏全量重播
       if (lastRenderedSeq !== null && snapshot.minSeq > lastRenderedSeq + 1) {
-        console.warn(
+        logger.warn(
           `[useTerminalOutputStream] history truncated: min_seq=${snapshot.minSeq} > last_rendered=${lastRenderedSeq}+1, full replay`,
         )
         lastRenderedSeq = null
@@ -318,12 +319,12 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       // 错误消息同样为相邻标记格式，code/message 在 payload 内
       const code = msg?.payload?.code
       const message = msg?.payload?.message
-      console.error('[useTerminalOutputStream] server error:', code, message)
+      logger.error('[useTerminalOutputStream] server error:', code, message)
       if (code === 'SESSION_NOT_FOUND') {
         // 会话启动中或已停止：有限重试后停止，等待消费者恢复
         sessionMissingStrikes += 1
         if (sessionMissingStrikes >= MAX_SESSION_MISSING_STRIKES) {
-          console.warn(
+          logger.warn(
             `[useTerminalOutputStream] session ${currentSession} not found after ${MAX_SESSION_MISSING_STRIKES} attempts, stopping`,
           )
           stop()
@@ -375,7 +376,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
         // 逐帧解析交付；空/全非法返回空数组时下方按无帧处理
         const frames = parseFrames(ev.data as ArrayBuffer)
         if (frames.length === 0) {
-          console.error('[useTerminalOutputStream] invalid binary frame received')
+          logger.error('[useTerminalOutputStream] invalid binary frame received')
           return
         }
         for (const frame of frames) {
@@ -384,7 +385,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
             pendingFrames.push(frame)
             pendingBytes += frame.data.byteLength
             if (pendingBytes > MAX_PENDING_FRAME_BYTES) {
-              console.error('[useTerminalOutputStream] pending frame overflow, re-subscribing')
+              logger.error('[useTerminalOutputStream] pending frame overflow, re-subscribing')
               resubscribe()
             }
             continue
@@ -401,7 +402,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
         scheduleReconnect()
       }
     } catch (e) {
-      console.warn('[useTerminalOutputStream] connect failed:', e)
+      logger.warn('[useTerminalOutputStream] connect failed:', e)
       scheduleReconnect()
     } finally {
       connecting = false

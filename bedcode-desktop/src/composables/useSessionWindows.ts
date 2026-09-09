@@ -1,4 +1,5 @@
 import { shallowRef } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 import { WebviewWindow } from '@tauri-apps/api/webviewWindow'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
@@ -81,7 +82,7 @@ export function useSessionWindows() {
         return
       } catch (e) {
         // 窗口可能已关闭，移除引用
-        console.log('[useSessionWindows] Window focus failed, removing reference:', e)
+        logger.log('[useSessionWindows] Window focus failed, removing reference:', e)
         windows.value.delete(session.id)
       }
     }
@@ -96,16 +97,16 @@ export function useSessionWindows() {
     const mainSize = (await mainWindow.outerSize()).toLogical(scaleFactor)
     const mainInnerSize = (await mainWindow.innerSize()).toLogical(scaleFactor)
 
-    console.log('[useSessionWindows] Main window position (logical):', mainPosition)
-    console.log('[useSessionWindows] Main window size (outerSize, logical):', mainSize)
-    console.log('[useSessionWindows] Main window size (innerSize, logical):', mainInnerSize)
+    logger.log('[useSessionWindows] Main window position (logical):', mainPosition)
+    logger.log('[useSessionWindows] Main window size (outerSize, logical):', mainSize)
+    logger.log('[useSessionWindows] Main window size (innerSize, logical):', mainInnerSize)
 
     // 计算终端窗口位置（紧贴主窗口右侧）
     // 使用 innerSize 确保与主窗口内容区高度一致
     const terminalWidth = Math.floor(mainInnerSize.width * 0.6)
     const terminalHeight = mainInnerSize.height
 
-    console.log(
+    logger.log(
       '[useSessionWindows] Terminal window size - width:',
       terminalWidth,
       'height:',
@@ -180,13 +181,13 @@ export function useSessionWindows() {
         try {
           await terminalWindow.setFocus()
         } catch (e) {
-          console.error('[useSessionWindows] Focus error after show:', e)
+          logger.error('[useSessionWindows] Focus error after show:', e)
         }
         // 通知终端页面播放显现动画
         try {
           await emitTo(windowLabel, 'terminal-show', { sessionId: session.id })
         } catch (e) {
-          console.error('[useSessionWindows] Emit terminal-show error:', e)
+          logger.error('[useSessionWindows] Emit terminal-show error:', e)
         }
       } catch (e) {
         rejectReady?.(e)
@@ -228,12 +229,12 @@ export function useSessionWindows() {
       snapDirection: null,
       lastPosition: { x: terminalX, y: mainPosition.y },
     })
-    console.log('[useSessionWindows] Window stored, keys:', Array.from(windows.value.keys()))
+    logger.log('[useSessionWindows] Window stored, keys:', Array.from(windows.value.keys()))
 
     // 监听窗口创建失败
     terminalWindow.once('tauri://error', (e) => {
       cleanup()
-      console.error('[useSessionWindows] Window creation error:', e)
+      logger.error('[useSessionWindows] Window creation error:', e)
       windows.value.delete(session.id)
       rejectReady?.(e)
     })
@@ -249,12 +250,12 @@ export function useSessionWindows() {
   async function closeTerminalWindow(sessionId: string) {
     // 防止重复调用
     if (closingWindows.has(sessionId)) {
-      console.log('[useSessionWindows] Window already closing, skipping:', sessionId)
+      logger.log('[useSessionWindows] Window already closing, skipping:', sessionId)
       return
     }
 
-    console.log('[useSessionWindows] closeTerminalWindow called, sessionId:', sessionId)
-    console.log('[useSessionWindows] windows.value keys:', Array.from(windows.value.keys()))
+    logger.log('[useSessionWindows] closeTerminalWindow called, sessionId:', sessionId)
+    logger.log('[useSessionWindows] windows.value keys:', Array.from(windows.value.keys()))
 
     // 标记为正在关闭
     closingWindows.add(sessionId)
@@ -262,29 +263,29 @@ export function useSessionWindows() {
     try {
       // 使用 getByLabel 检查窗口是否仍然存在
       const windowLabel = `terminal-${sessionId}`
-      console.log('[useSessionWindows] Checking window with label:', windowLabel)
+      logger.log('[useSessionWindows] Checking window with label:', windowLabel)
 
       const window = await WebviewWindow.getByLabel(windowLabel)
-      console.log('[useSessionWindows] getByLabel result:', window)
-      console.log('[useSessionWindows] window type:', window ? typeof window : 'null')
+      logger.log('[useSessionWindows] getByLabel result:', window)
+      logger.log('[useSessionWindows] window type:', window ? typeof window : 'null')
 
       if (window) {
-        console.log('[useSessionWindows] Window exists, closing...')
-        console.log('[useSessionWindows] window.label:', window.label)
+        logger.log('[useSessionWindows] Window exists, closing...')
+        logger.log('[useSessionWindows] window.label:', window.label)
         try {
           await window.close()
-          console.log('[useSessionWindows] Close request sent')
+          logger.log('[useSessionWindows] Close request sent')
         } catch (e) {
-          console.error('[useSessionWindows] Close error:', e)
+          logger.error('[useSessionWindows] Close error:', e)
         }
       } else {
-        console.log('[useSessionWindows] Window already closed or never existed')
+        logger.log('[useSessionWindows] Window already closed or never existed')
       }
 
       // 从本地状态中移除
       windows.value.delete(sessionId)
     } catch (e) {
-      console.error('[useSessionWindows] Error checking window:', e)
+      logger.error('[useSessionWindows] Error checking window:', e)
       windows.value.delete(sessionId)
     } finally {
       // 移除正在关闭的标记
@@ -300,7 +301,7 @@ export function useSessionWindows() {
       try {
         await state.window.close()
       } catch (e) {
-        console.error('[useSessionWindows] Close window error:', e)
+        logger.error('[useSessionWindows] Close window error:', e)
       }
     }
     windows.value.clear()
@@ -361,7 +362,7 @@ export function useSessionWindows() {
     try {
       await state.window.setPosition(new PhysicalPosition(x, y))
     } catch (e) {
-      console.error('[useSessionWindows] Set position error:', e)
+      logger.error('[useSessionWindows] Set position error:', e)
     }
   }
 

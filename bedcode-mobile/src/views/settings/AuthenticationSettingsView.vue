@@ -86,6 +86,7 @@
  * 生物凭证状态来自 wsGetBiometricKeyStatus，绑定/解绑需已认证连接。
  */
 import { computed, onMounted, ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import { useMobileSettings } from '@/composables/useMobileSettings'
@@ -162,7 +163,7 @@ async function refreshStatus() {
     deviceReason.value = status.deviceReason
     hasKey.value = status.hasKey
   } catch (e) {
-    console.warn('[AuthSettings] Failed to load biometric key status:', e)
+    logger.warn('[AuthSettings] Failed to load biometric key status:', e)
     statusError.value = true
   }
 }
@@ -195,7 +196,7 @@ async function toggleBind() {
       }
     }
   } catch (e) {
-    console.error('[AuthSettings] Biometric toggle failed:', e)
+    logger.error('[AuthSettings] Biometric toggle failed:', e)
     // 原生生物识别错误映射为友好 i18n 文案（纯中文，不带 Plugin error: 前缀）
     toast.error(hasKey.value ? t('settings.authentication.unbindFailed') : biometricErrorText(e))
   } finally {

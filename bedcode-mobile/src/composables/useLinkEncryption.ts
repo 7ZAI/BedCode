@@ -11,6 +11,7 @@
  */
 
 import { ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { base64ToBytes } from '@/services/linkCrypto'
 
 const STORAGE_KEY = 'link-encryption'
@@ -100,7 +101,7 @@ export async function syncLinkCryptoContextToNative(): Promise<void> {
       kdPublicB64: getPinnedKey(),
     })
   } catch (e) {
-    console.warn('[LinkEncryption] sync to native failed (non-fatal):', e)
+    logger.warn('[LinkEncryption] sync to native failed (non-fatal):', e)
   }
 }
 
@@ -150,11 +151,11 @@ function applyPin(kdPublicB64: unknown, kdFingerprint: unknown): void {
   try {
     decoded = base64ToBytes(kdPublicB64)
   } catch {
-    console.error('[LinkEncryption] invalid kdPublicB64 (not base64), pin rejected')
+    logger.error('[LinkEncryption] invalid kdPublicB64 (not base64), pin rejected')
     return
   }
   if (decoded.length !== 32) {
-    console.error(`[LinkEncryption] invalid kdPublicB64 (length ${decoded.length} != 32), pin rejected`)
+    logger.error(`[LinkEncryption] invalid kdPublicB64 (length ${decoded.length} != 32), pin rejected`)
     return
   }
   localStorage.setItem(PIN_PUBLIC_KEY, kdPublicB64)

@@ -86,6 +86,7 @@
  * 前台服务相关的 watcher 保留在主页（主页常驻于滑动容器中，始终挂载）。
  */
 import { ref, computed, onMounted, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { useMobileConnection } from '@/composables/useMobileConnection'
@@ -243,7 +244,7 @@ async function clearData() {
         // 停止前台服务
         await stopService()
       } catch (e) {
-        console.warn('[Settings] Disconnect/stopService failed, continuing cleanup:', e)
+        logger.warn('[Settings] Disconnect/stopService failed, continuing cleanup:', e)
       }
 
       // 2. 清除预设任务
@@ -295,7 +296,7 @@ async function executeConfirm() {
     try {
       await callback()
     } catch (e) {
-      console.error('[Settings] Confirm action failed:', e)
+      logger.error('[Settings] Confirm action failed:', e)
     }
   }
 }

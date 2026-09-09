@@ -7,6 +7,7 @@
  */
 
 import { ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMobileConnection } from './useMobileConnection'
 import { isChannelEncryptionActive, notePinFromAuthData, getPinnedKey, useLinkEncryptionSettings } from './useLinkEncryption'
@@ -48,7 +49,7 @@ async function request<T = any>(
   const baseUrl = API_BASE_URL.value
 
   if (!baseUrl) {
-    console.error('[HttpApi] No base URL set, cannot make request to', path)
+    logger.error('[HttpApi] No base URL set, cannot make request to', path)
     return { code: -1, message: 'Not connected: no base URL set' }
   }
 
@@ -74,7 +75,7 @@ async function request<T = any>(
   if (encryptionActive) {
     const pinnedKey = getPinnedKey()
     if (!pinnedKey) {
-      console.error('[HttpApi] encryption active but no pinned key:', path)
+      logger.error('[HttpApi] encryption active but no pinned key:', path)
       return { code: -1, message: 'LINK_ENCRYPTION_NO_PIN' }
     }
     try {
@@ -91,13 +92,13 @@ async function request<T = any>(
         effectiveOptions = { ...options, body: sealed.envelope }
       }
     } catch (e: any) {
-      console.error('[HttpApi] encrypt request failed:', path, e?.message || e)
+      logger.error('[HttpApi] encrypt request failed:', path, e?.message || e)
       return { code: -1, message: 'LINK_ENCRYPTION_SEAL_FAILED' }
     }
   }
 
   try {
-    console.log('[HttpApi] Request:', options.method || 'GET', url, encryptionActive ? '(encrypted)' : '')
+    logger.log('[HttpApi] Request:', options.method || 'GET', url, encryptionActive ? '(encrypted)' : '')
     const response = await tauriFetch(url, {
       ...effectiveOptions,
       headers,
@@ -106,7 +107,7 @@ async function request<T = any>(
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
-      console.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
+      logger.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
       return { code: response.status, message: `HTTP ${response.status}: ${response.statusText}` }
     }
 
@@ -122,10 +123,10 @@ async function request<T = any>(
         // 预期加密而响应明文：strict 断连报错；非 strict 明文续跑 + 提示态（UI 层映射）
         const { settings } = useLinkEncryptionSettings()
         if (settings.value.strictMode) {
-          console.error('[HttpApi] strict mode: encryption downgrade detected on', path)
+          logger.error('[HttpApi] strict mode: encryption downgrade detected on', path)
           return { code: -1, message: 'LINK_ENCRYPTION_DOWNGRADE' }
         }
-        console.warn('[HttpApi] response unencrypted (downgrade tolerated):', path)
+        logger.warn('[HttpApi] response unencrypted (downgrade tolerated):', path)
       }
     }
 
@@ -138,10 +139,10 @@ async function request<T = any>(
     }
 
     const result = JSON.parse(bodyText)
-    console.log('[HttpApi] Response OK:', path, 'code=', result.code)
+    logger.log('[HttpApi] Response OK:', path, 'code=', result.code)
     return result
   } catch (e: any) {
-    console.error('[HttpApi] Fetch failed:', path, e?.message || e)
+    logger.error('[HttpApi] Fetch failed:', path, e?.message || e)
     return { code: -1, message: e?.message || String(e) }
   }
 }
@@ -622,7 +623,7 @@ export interface ProbeResult {
  */
 export async function httpProbe(address: string, port: number): Promise<ProbeResult> {
   const url = `http://${address}:${port}/api/health`
-  console.log('[HttpApi] Probing:', url)
+  logger.log('[HttpApi] Probing:', url)
 
   try {
     const response = await tauriFetch(url, {
@@ -635,7 +636,7 @@ export async function httpProbe(address: string, port: number): Promise<ProbeRes
     }
 
     const data = await response.json()
-    console.log('[HttpApi] Probe success:', data)
+    logger.log('[HttpApi] Probe success:', data)
     return {
       reachable: true,
       status: data.status,
@@ -643,7 +644,7 @@ export async function httpProbe(address: string, port: number): Promise<ProbeRes
       uptimeSecs: data.uptime_secs,
     }
   } catch (e: any) {
-    console.warn('[HttpApi] Probe failed:', e?.message || e)
+    logger.warn('[HttpApi] Probe failed:', e?.message || e)
     return { reachable: false, error: e?.message || String(e) }
   }
 }

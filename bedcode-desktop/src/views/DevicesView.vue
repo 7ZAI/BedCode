@@ -449,6 +449,7 @@
  * Warm Workbench 风格：PAIRING（QR/配对码双卡 + 网络条）+ ONLINE/OFFLINE 设备卡
  */
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import i18n from '@/locales'
@@ -605,13 +606,13 @@ onMounted(async () => {
   // 尝试恢复现有二维码（不重新生成）
   const qrRestored = await qr.restoreQr(selectedIp.value || undefined)
   if (qrRestored) {
-    console.log('[DevicesView] restored active QR token')
+    logger.log('[DevicesView] restored active QR token')
   }
 
   // 检查是否有活跃的配对码，若有则自动恢复显示
   const hasActiveCode = await pairing.checkCurrentCode()
   if (hasActiveCode && pairing.pairingCode.value) {
-    console.log('[DevicesView] restoring active pairing code:', pairing.pairingCode.value)
+    logger.log('[DevicesView] restoring active pairing code:', pairing.pairingCode.value)
     pairingCode.value = pairing.pairingCode.value
     // 使用后端返回的剩余时间（expires_in 已是实际剩余时间）
     remainingSeconds.value = pairing.pairingCode.value.expires_in
@@ -633,7 +634,7 @@ onMounted(async () => {
 
       // 当有设备连接成功后，清除已使用的配对码并刷新显示
       if (pairingCode.value) {
-        console.log('[DevicesView] device connected, clearing pairing code')
+        logger.log('[DevicesView] device connected, clearing pairing code')
         pairing.clearCode()
         pairingCode.value = null
         remainingSeconds.value = 0
@@ -647,7 +648,7 @@ onMounted(async () => {
 
   // 监听 QR token 被消耗事件，自动重新生成二维码
   qrTokenConsumedListener = await listen('qr-token-consumed', () => {
-    console.log('[DevicesView] QR token consumed, regenerating')
+    logger.log('[DevicesView] QR token consumed, regenerating')
     qr.generateQr(selectedIp.value || undefined)
     toast.success(t('desktop.device.deviceConnected'))
   })
@@ -669,7 +670,7 @@ onMounted(async () => {
   pairingCodeListener = await listen<{ code: string; expires_in: number; device_name?: string }>(
     'pairing-code-generated',
     (event) => {
-      console.log('[DevicesView] received pairing-code-generated event:', event.payload)
+      logger.log('[DevicesView] received pairing-code-generated event:', event.payload)
       pairingCode.value = {
         code: event.payload.code,
         expires_in: event.payload.expires_in,
@@ -734,7 +735,7 @@ async function generateCode() {
       toast.error(t('desktop.device.codeGenerateFailedNoCode'))
     }
   } catch (e) {
-    console.error('[DevicesView] generate pairing code failed:', e)
+    logger.error('[DevicesView] generate pairing code failed:', e)
     toast.error(t('desktop.device.codeGenerateFailed'))
   } finally {
     isLoading.value = false

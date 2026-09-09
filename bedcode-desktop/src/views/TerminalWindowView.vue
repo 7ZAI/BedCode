@@ -325,6 +325,7 @@
  * 保留贴靠/显示动画/设置面板（含背景图片）与插件扩展点
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
 import { getCurrentWindow, PhysicalPosition } from '@tauri-apps/api/window'
@@ -519,7 +520,7 @@ async function pickBgImage() {
       })
     }
   } catch (e) {
-    console.error('[TerminalWindowView] Failed to set background image:', e)
+    logger.error('[TerminalWindowView] Failed to set background image:', e)
     toast.error(t('desktop.terminal.bgImageSetFailed'))
   }
 }
@@ -532,7 +533,7 @@ async function removeBgImage() {
       ui: { ...settingsStore.settings.ui, terminal_bg_image: '' },
     })
   } catch (e) {
-    console.error('[TerminalWindowView] Failed to remove background image:', e)
+    logger.error('[TerminalWindowView] Failed to remove background image:', e)
     toast.error(t('desktop.terminal.bgImageSetFailed'))
   }
 }
@@ -562,14 +563,14 @@ async function loadSessionInfo() {
       try {
         config.value = await getSessionConfig(result.config_id)
       } catch (e) {
-        console.error('[TerminalWindowView] Failed to load session config:', e)
+        logger.error('[TerminalWindowView] Failed to load session config:', e)
       }
     }
 
     // 加载完成后初始化位置
     await initWindowPosition()
   } catch (e) {
-    console.error('[TerminalWindow] Failed to load session info:', e)
+    logger.error('[TerminalWindow] Failed to load session info:', e)
     sessionName.value = t('desktop.terminal.defaultName')
   } finally {
     isLoading.value = false
@@ -734,7 +735,7 @@ async function closeWindow() {
   try {
     await appWindow.close()
   } catch (e) {
-    console.error('[TerminalWindowView] Close error:', e)
+    logger.error('[TerminalWindowView] Close error:', e)
   }
 }
 

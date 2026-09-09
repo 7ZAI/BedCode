@@ -57,6 +57,7 @@
  * 退出确认弹窗 — 有运行中会话时展示，防止误关闭
  */
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import Button from '@/components/Button.vue'
 
 interface RunningSession {
@@ -82,7 +83,7 @@ async function forceExit() {
   try {
     await invoke('confirm_window_close')
   } catch (e) {
-    console.error('Failed to confirm window close:', e)
+    logger.error('Failed to confirm window close:', e)
   }
 }
 </script>

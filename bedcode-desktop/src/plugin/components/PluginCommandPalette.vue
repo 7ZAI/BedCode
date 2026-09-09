@@ -43,6 +43,7 @@
  * PluginCommandPalette — 插件命令面板 (Ctrl+Shift+P)
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { pluginListCommands, pluginInvoke, type CommandEntry } from '../commands'
 import { pluginLoader } from '../loader'
 
@@ -94,7 +95,7 @@ async function executeCommand(cmd: CommandEntry) {
   try {
     await pluginInvoke(cmd.plugin_id, cmd.command_id)
   } catch (e: any) {
-    console.error(`[PluginCommandPalette] Failed to execute ${cmd.command_id}:`, e)
+    logger.error(`[PluginCommandPalette] Failed to execute ${cmd.command_id}:`, e)
   }
 }
 

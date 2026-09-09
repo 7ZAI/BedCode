@@ -3,6 +3,7 @@
 //! 所有移动端可用的 Tauri 命令调用
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
@@ -202,7 +203,7 @@ export async function wsRemoveSession(sessionId: string): Promise<void> {
  * 发送输入到会话（异步模式，不等待服务端确认）
  */
 export async function wsSendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
-  console.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
+  logger.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
   return await invoke('ws_send_input_async', { sessionId, data, specialKey: specialKey })
 }
 
@@ -365,49 +366,49 @@ export async function initMobileEventListeners(callbacks: {
   // 初始化同步事件监听
   if (callbacks.onSyncSessionCreated) {
     unlistenSyncSessionCreated = await listen<{ session: any; source_device: string }>('ws_sync_session_created', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_created:', event.payload.session.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_session_created:', event.payload.session.id, 'source:', event.payload.source_device)
       callbacks.onSyncSessionCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStatusChanged) {
     unlistenSyncSessionStatusChanged = await listen<{ session_id: string; old_status: string; new_status: string; session_name: string }>('ws_sync_session_status_changed', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_status_changed:', event.payload.session_id, event.payload.old_status, '->', event.payload.new_status)
+      logger.debug('[MobileCommands] ws_sync_session_status_changed:', event.payload.session_id, event.payload.old_status, '->', event.payload.new_status)
       callbacks.onSyncSessionStatusChanged?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStopped) {
     unlistenSyncSessionStopped = await listen<{ session_id: string; session_name: string }>('ws_sync_session_stopped', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_stopped:', event.payload.session_id, event.payload.session_name)
+      logger.debug('[MobileCommands] ws_sync_session_stopped:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionStopped?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionRemoved) {
     unlistenSyncSessionRemoved = await listen<{ session_id: string; session_name: string }>('ws_sync_session_removed', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_removed:', event.payload.session_id, event.payload.session_name)
+      logger.debug('[MobileCommands] ws_sync_session_removed:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigCreated) {
     unlistenSyncConfigCreated = await listen<{ config: any; source_device: string }>('ws_sync_config_created', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_created:', event.payload.config.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_config_created:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigUpdated) {
     unlistenSyncConfigUpdated = await listen<{ config: any; source_device: string }>('ws_sync_config_updated', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_updated:', event.payload.config.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_config_updated:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigUpdated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigRemoved) {
     unlistenSyncConfigRemoved = await listen<{ config_id: string; config_name: string }>('ws_sync_config_removed', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_removed:', event.payload.config_id, event.payload.config_name)
+      logger.debug('[MobileCommands] ws_sync_config_removed:', event.payload.config_id, event.payload.config_name)
       callbacks.onSyncConfigRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncTaskStatusChanged) {
     unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }>('ws_sync_task_status_changed', (event) => {
-      console.debug('[MobileCommands] ws_sync_task_status_changed:', event.payload.session_id, 'status:', event.payload.task_status, 'reason:', event.payload.task_reason ?? 'none')
+      logger.debug('[MobileCommands] ws_sync_task_status_changed:', event.payload.session_id, 'status:', event.payload.task_status, 'reason:', event.payload.task_reason ?? 'none')
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }
@@ -416,7 +417,7 @@ export async function initMobileEventListeners(callbacks: {
   // 订阅完成广播（action='done' + task_id）更新预设任务执行状态。插件不直接依赖
   // @tauri-apps/api，经宿主转发保持插件/宿主边界（dev-shell 可手动 dispatch 模拟）
   unlistenSyncTaskQueueChanged = await listen<{ session_id: string; queue_count: number; action: string; task_id?: string | null; status?: string | null }>('ws_sync_task_queue_changed', (event) => {
-    console.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
+    logger.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
     window.dispatchEvent(new CustomEvent('bedcode:task_queue_changed', { detail: event.payload }))
   })
 }

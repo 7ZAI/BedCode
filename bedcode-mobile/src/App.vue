@@ -23,6 +23,7 @@
 
 <script setup lang="ts">
 import { provide, ref, computed, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
 import SplashScreen from '@/components/SplashScreen.vue'
@@ -69,14 +70,14 @@ onMounted(async () => {
     const unlisten = await initLinkCryptoPinSync()
     unlistenQueue.push(unlisten)
   } catch (e) {
-    console.error('[App] initLinkCryptoPinSync failed:', e)
+    logger.error('[App] initLinkCryptoPinSync failed:', e)
   }
   // mDNS 广播暂时禁用
   // try {
   //   const deviceName = `BedCode-Mobile-${Math.random().toString(36).slice(2, 6)}`
   //   await startAdvertise(0, deviceName)
   // } catch (e) {
-  //   console.warn('[App] mDNS advertise failed:', e)
+  //   logger.warn('[App] mDNS advertise failed:', e)
   // }
 })
 
@@ -89,7 +90,7 @@ onUnmounted(async () => {
     try {
       unlisten()
     } catch (e) {
-      console.error('[App] unlisten failed:', e)
+      logger.error('[App] unlisten failed:', e)
     }
   }
   // await stopAdvertise()

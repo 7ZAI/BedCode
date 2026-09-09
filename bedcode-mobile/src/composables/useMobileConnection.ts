@@ -3,6 +3,7 @@
 //! 移动端连接管理 - 基于 useMobileCommands 的高级封装
 
 import { ref, computed, readonly } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
@@ -129,7 +130,7 @@ async function init() {
   initialized = true
   // 加载保存的凭据
   const savedCreds = loadAuthCredentials()
-  console.log('[MobileConnection] init() loaded credentials:', savedCreds ? { ...savedCreds, sessionToken: savedCreds.sessionToken ? `length=${savedCreds.sessionToken.length}` : 'missing' } : null)
+  logger.log('[MobileConnection] init() loaded credentials:', savedCreds ? { ...savedCreds, sessionToken: savedCreds.sessionToken ? `length=${savedCreds.sessionToken.length}` : 'missing' } : null)
   if (savedCreds) {
     authCredentials.value = savedCreds
   }
@@ -142,7 +143,7 @@ async function init() {
     try {
       await wsSetToken(savedCreds.sessionToken)
     } catch (e) {
-      console.error('[MobileConnection] wsSetToken failed:', e)
+      logger.error('[MobileConnection] wsSetToken failed:', e)
     }
   }
 
@@ -171,7 +172,7 @@ async function init() {
     onConnecting: () => {
       connectionStatus.value = 'connecting'
       connectionError.value = null
-      console.log('[MobileConnection] Connecting...')
+      logger.log('[MobileConnection] Connecting...')
     },
     onConnected: () => {
       clearConnectionTimeout()
@@ -184,21 +185,21 @@ async function init() {
       // 自动重连退化为仅依赖 Rust 端自身循环（2026-08-16 集成测试发现）
       autoReconnectAborted = false
       autoReconnectAttemptCount = 0
-      console.log('[MobileConnection] Connected')
+      logger.log('[MobileConnection] Connected')
       autoStartForegroundService()
 
       // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
       // 因为桌面端要求先认证才能订阅会话输出）
       const bufferStore = useTerminalBufferStore()
       bufferStore.startGlobalListener().catch((e) => {
-        console.warn('[MobileConnection] Global listener start failed:', e)
+        logger.warn('[MobileConnection] Global listener start failed:', e)
       })
     },
     onDisconnected: () => {
       clearConnectionTimeout()
       connectionStatus.value = 'disconnected'
       isConnecting.value = false
-      console.log('[MobileConnection] Disconnected')
+      logger.log('[MobileConnection] Disconnected')
       autoStopForegroundService()
 
       // 标记所有 buffer 未订阅（重连后按字节游标重新订阅）
@@ -211,11 +212,11 @@ async function init() {
       isConnecting.value = false
       // 配对/认证成功，重置自动重连计数
       autoReconnectAttemptCount = 0
-      console.log('[MobileConnection] Paired')
+      logger.log('[MobileConnection] Paired')
 
       // 认证成功时更新已配对设备信息
-      console.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
-      console.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
+      logger.log('[MobileConnection] onPaired - currentDevice:', currentDevice.value)
+      logger.log('[MobileConnection] onPaired - authCredentials:', authCredentials.value ? { fingerprint: authCredentials.value.fingerprint } : null)
 
       if (currentDevice.value && authCredentials.value) {
         addPairedDevice({
@@ -225,7 +226,7 @@ async function init() {
           fingerprint: authCredentials.value.fingerprint,
         })
       } else {
-        console.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
+        logger.warn('[MobileConnection] onPaired - missing data, currentDevice:', !!currentDevice.value, 'authCredentials:', !!authCredentials.value)
       }
       autoStartForegroundService()
 
@@ -233,7 +234,7 @@ async function init() {
       // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
       const bufferStore = useTerminalBufferStore()
       bufferStore.startGlobalListener().catch((e) => {
-        console.warn('[MobileConnection] Global listener start failed:', e)
+        logger.warn('[MobileConnection] Global listener start failed:', e)
       })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
         // 无条件重订阅（仅跳过已停止会话）：服务端订阅随连接关闭清理，
@@ -242,33 +243,33 @@ async function init() {
         // (client_id, session_id) 替换订阅者，cursor 续传无重复帧）
         if (buffer.sessionStopped) continue
         bufferStore.subscribeSession(sid).catch((e) => {
-          console.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
+          logger.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
         })
       }
     },
     onAuthSuccess: () => {
-      console.log('[MobileConnection] Auth success')
+      logger.log('[MobileConnection] Auth success')
     },
     onAuthFailed: (reason) => {
       connectionStatus.value = 'error'
       connectionError.value = reason
       // 认证失败不断开 isConnecting，startConnection 流程可能继续请求配对
-      console.log('[MobileConnection] Auth failed:', reason)
+      logger.log('[MobileConnection] Auth failed:', reason)
     },
     onPairingRequest: () => {
       clearConnectionTimeout()
       connectionStatus.value = 'pairing'
-      console.log('[MobileConnection] Pairing requested')
+      logger.log('[MobileConnection] Pairing requested')
     },
     onPairingVerified: () => {
-      console.log('[MobileConnection] Pairing verified')
+      logger.log('[MobileConnection] Pairing verified')
     },
     onError: (message) => {
       clearConnectionTimeout()
       connectionError.value = message
       connectionStatus.value = 'error'
       isConnecting.value = false
-      console.error('[MobileConnection] Error:', message)
+      logger.error('[MobileConnection] Error:', message)
       autoStopForegroundService()
     },
     onServerClosed: (reason) => {
@@ -276,12 +277,12 @@ async function init() {
       connectionStatus.value = 'disconnected'
       connectionError.value = reason
       isConnecting.value = false
-      console.log('[MobileConnection] Server closed:', reason)
+      logger.log('[MobileConnection] Server closed:', reason)
       autoStopForegroundService()
     },
     // 同步事件回调
     onSyncConfigCreated: (data) => {
-      console.log('[MobileConnection] SyncConfigCreated:', data.config.id, 'source:', data.source_device)
+      logger.log('[MobileConnection] SyncConfigCreated:', data.config.id, 'source:', data.source_device)
       // 添加新配置到列表
       const newConfig = {
         id: data.config.id,
@@ -297,7 +298,7 @@ async function init() {
       }
     },
     onSyncConfigUpdated: (data) => {
-      console.log('[MobileConnection] SyncConfigUpdated:', data.config.id, 'source:', data.source_device)
+      logger.log('[MobileConnection] SyncConfigUpdated:', data.config.id, 'source:', data.source_device)
       // 更新现有配置
       const index = sessionConfigs.value.findIndex(c => c.id === data.config.id)
       if (index !== -1) {
@@ -322,19 +323,19 @@ async function init() {
       }
     },
     onSyncConfigRemoved: (data) => {
-      console.log('[MobileConnection] SyncConfigRemoved:', data.config_id, data.config_name)
+      logger.log('[MobileConnection] SyncConfigRemoved:', data.config_id, data.config_name)
       // 从列表移除配置
       sessionConfigs.value = sessionConfigs.value.filter(c => c.id !== data.config_id)
     },
     onSyncSessionCreated: (data) => {
-      console.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
+      logger.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
       // 添加新会话到列表
       if (!activeSessions.value.find(s => s.id === data.session.id)) {
         activeSessions.value.push(data.session)
       }
     },
     onSyncSessionStatusChanged: (data) => {
-      console.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
+      logger.log('[MobileConnection] SyncSessionStatusChanged:', data.session_id, data.old_status, '->', data.new_status)
       // 更新会话状态
       const index = activeSessions.value.findIndex(s => s.id === data.session_id)
       if (index !== -1) {
@@ -348,7 +349,7 @@ async function init() {
       }
     },
     onSyncSessionStopped: (data) => {
-      console.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
+      logger.log('[MobileConnection] SyncSessionStopped:', data.session_id, data.session_name)
       // 更新会话状态为 stopped，而不是移除（保留记录显示灰色）
       const index = activeSessions.value.findIndex(s => s.id === data.session_id)
       if (index !== -1) {
@@ -361,7 +362,7 @@ async function init() {
       bufferStore.markSessionStopped(data.session_id)
     },
     onSyncSessionRemoved: (data) => {
-      console.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
+      logger.log('[MobileConnection] SyncSessionRemoved:', data.session_id, data.session_name)
       // 从列表移除会话（删除操作才移除）
       activeSessions.value = activeSessions.value.filter(s => s.id !== data.session_id)
       // 取消该会话的任务通知
@@ -371,7 +372,7 @@ async function init() {
       bufferStore.clearBuffer(data.session_id)
     },
     onSyncTaskStatusChanged: (data) => {
-      console.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
+      logger.log('[MobileConnection] SyncTaskStatusChanged:', data.session_id, data.task_status)
       // 更新对应会话的任务状态
       const index = activeSessions.value.findIndex(s => s.id === data.session_id)
       if (index !== -1) {
@@ -391,7 +392,7 @@ async function init() {
 
   // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）
   unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
-    console.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
+    logger.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
@@ -426,10 +427,10 @@ async function init() {
 
   // 监听重连开始事件
   await listen<{ retry: number; max_retry: number }>('ws_reconnecting', async (event) => {
-    console.log('[MobileConnection] Reconnecting:', event.payload)
+    logger.log('[MobileConnection] Reconnecting:', event.payload)
     // 如果用户已主动发起新连接，忽略过期重连事件
     if (autoReconnectAborted) {
-      console.log('[MobileConnection] Ignoring reconnect event (aborted)')
+      logger.log('[MobileConnection] Ignoring reconnect event (aborted)')
       return
     }
     connectionStatus.value = 'connecting'
@@ -443,11 +444,11 @@ async function init() {
   // 重连成功后重新认证，认证成功后会触发 ws_paired 事件
   // ws_paired 事件会触发 DevicesView 的 watch，进而调用 loadActiveSessions
   await listen('ws_reconnected', async () => {
-    console.log('[MobileConnection] Reconnected successfully')
+    logger.log('[MobileConnection] Reconnected successfully')
 
     // 如果用户已主动发起新连接，跳过过期重连的认证流程
     if (autoReconnectAborted) {
-      console.log('[MobileConnection] Auto-reconnect aborted, skipping re-auth')
+      logger.log('[MobileConnection] Auto-reconnect aborted, skipping re-auth')
       return
     }
 
@@ -463,12 +464,12 @@ async function init() {
     const creds = loadAuthCredentials()
     if (creds?.sessionToken) {
       try {
-        console.log('[MobileConnection] Re-authenticating with token...')
+        logger.log('[MobileConnection] Re-authenticating with token...')
         const authSuccess = await wsAuthenticate(creds.sessionToken)
         if (authSuccess) {
-          console.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
+          logger.log('[MobileConnection] Re-authenticated successfully, ws_paired event should follow')
         } else {
-          console.warn('[MobileConnection] Re-auth failed, need to pair again')
+          logger.warn('[MobileConnection] Re-auth failed, need to pair again')
           // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
           // 后续用户点击历史连接时 conn.connect() 会误判 "Already connected" 拒绝新建
           try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
@@ -478,7 +479,7 @@ async function init() {
           showConnectionNotification({ type: 'auth_failed' })
         }
       } catch (e) {
-        console.error('[MobileConnection] Re-auth error:', e)
+        logger.error('[MobileConnection] Re-auth error:', e)
         // 认证异常（超时/网络错误），同样断开 WebSocket 保持前后端状态一致
         try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
         isConnecting.value = false
@@ -486,7 +487,7 @@ async function init() {
         connectionError.value = 'mobile.connection.reauthError'
       }
     } else {
-      console.log('[MobileConnection] No credentials stored, need manual pairing')
+      logger.log('[MobileConnection] No credentials stored, need manual pairing')
       // 无凭据，断开 WebSocket，用户需要手动发起连接
       try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
       isConnecting.value = false
@@ -497,7 +498,7 @@ async function init() {
 
   // 监听重连失败事件
   await listen<{ reason: string }>('ws_reconnect_failed', (event) => {
-    console.error('[MobileConnection] Reconnect failed:', event.payload.reason)
+    logger.error('[MobileConnection] Reconnect failed:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
     isConnecting.value = false
@@ -531,7 +532,7 @@ init()
  * 连接到设备
  */
 export async function connect(device: RemoteDevice): Promise<void> {
-  console.log('[MobileConnection] Starting connection to:', device.address, device.port)
+  logger.log('[MobileConnection] Starting connection to:', device.address, device.port)
 
   // 取消正在进行的自动重连
   autoReconnectAborted = true
@@ -544,12 +545,12 @@ export async function connect(device: RemoteDevice): Promise<void> {
   try {
     const alreadyConnected = await wsIsConnected()
     if (alreadyConnected) {
-      console.log('[MobileConnection] Disconnecting stale Rust-side connection before new connect')
+      logger.log('[MobileConnection] Disconnecting stale Rust-side connection before new connect')
       await wsDisconnect()
     }
   } catch (e) {
     // wsIsConnected / wsDisconnect 失败不影响后续连接
-    console.warn('[MobileConnection] Pre-connect cleanup failed (expected if no connection):', e)
+    logger.warn('[MobileConnection] Pre-connect cleanup failed (expected if no connection):', e)
   }
   // 确保前端状态也重置干净，无论之前是什么状态
   connectionStatus.value = 'disconnected'
@@ -563,7 +564,7 @@ export async function connect(device: RemoteDevice): Promise<void> {
   clearConnectionTimeout()
   connectionTimeout = setTimeout(async () => {
     if (isConnecting.value && connectionStatus.value === 'connecting') {
-      console.warn('[MobileConnection] Connection timeout')
+      logger.warn('[MobileConnection] Connection timeout')
       connectionError.value = 'mobile.connection.timeoutToast'
       connectionStatus.value = 'error'
       isConnecting.value = false
@@ -579,24 +580,24 @@ export async function connect(device: RemoteDevice): Promise<void> {
     setApiBaseUrl(device.address, device.port)
 
     // HTTP 探测桌面端是否可达（3 秒超时，快速判断网络连通性）
-    console.log('[MobileConnection] Probing desktop reachability...')
+    logger.log('[MobileConnection] Probing desktop reachability...')
     const probeResult = await httpProbe(device.address, device.port)
     if (!probeResult.reachable) {
       clearConnectionTimeout()
-      console.warn('[MobileConnection] Desktop unreachable:', probeResult.error)
+      logger.warn('[MobileConnection] Desktop unreachable:', probeResult.error)
       connectionError.value = 'mobile.connection.unreachable'
       connectionStatus.value = 'error'
       isConnecting.value = false
       throw new Error('mobile.connection.unreachable')
     }
-    console.log('[MobileConnection] Desktop reachable, proceeding to WS connect')
+    logger.log('[MobileConnection] Desktop reachable, proceeding to WS connect')
 
     // 调用后端连接，状态由后端事件驱动更新
     const result = await wsConnect(device.address, device.port, device.name)
-    console.log('[MobileConnection] wsConnect returned:', result)
+    logger.log('[MobileConnection] wsConnect returned:', result)
   } catch (error) {
     clearConnectionTimeout()
-    console.error('[MobileConnection] wsConnect failed:', error)
+    logger.error('[MobileConnection] wsConnect failed:', error)
     connectionStatus.value = 'error'
     isConnecting.value = false
     throw error
@@ -609,7 +610,7 @@ export async function connect(device: RemoteDevice): Promise<void> {
 export async function cancelConnection(): Promise<void> {
   clearConnectionTimeout()
   if (isConnecting.value) {
-    console.log('[MobileConnection] Cancelling connection...')
+    logger.log('[MobileConnection] Cancelling connection...')
     connectionError.value = 'mobile.connection.userCancelled'
     connectionStatus.value = 'disconnected'
     isConnecting.value = false
@@ -652,11 +653,11 @@ async function autoStopForegroundService() {
  * 最多自动重连 MAX_AUTO_RECONNECT_ATTEMPTS 次，超出后放弃并保持 disconnected 状态
  */
 async function handleUnexpectedDisconnect(reason: string) {
-  console.log('[MobileConnection] Handling unexpected disconnect, reason:', reason, 'attempt:', autoReconnectAttemptCount + 1, '/', MAX_AUTO_RECONNECT_ATTEMPTS)
+  logger.log('[MobileConnection] Handling unexpected disconnect, reason:', reason, 'attempt:', autoReconnectAttemptCount + 1, '/', MAX_AUTO_RECONNECT_ATTEMPTS)
 
   // 用户已主动发起新连接或断开，取消自动重连
   if (autoReconnectAborted) {
-    console.log('[MobileConnection] Auto-reconnect aborted by user action')
+    logger.log('[MobileConnection] Auto-reconnect aborted by user action')
     return
   }
 
@@ -668,13 +669,13 @@ async function handleUnexpectedDisconnect(reason: string) {
 
   // 检查是否启用自动重连
   if (!settings.autoReconnect) {
-    console.log('[MobileConnection] Auto-reconnect disabled by user setting')
+    logger.log('[MobileConnection] Auto-reconnect disabled by user setting')
     return
   }
 
   // 检查重连次数限制
   if (autoReconnectAttemptCount >= MAX_AUTO_RECONNECT_ATTEMPTS) {
-    console.warn('[MobileConnection] Max auto-reconnect attempts reached, giving up')
+    logger.warn('[MobileConnection] Max auto-reconnect attempts reached, giving up')
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.reconnectAbandoned'
     const toast = useToast()
@@ -685,18 +686,18 @@ async function handleUnexpectedDisconnect(reason: string) {
   // 从 localStorage 读取凭据
   const creds = loadAuthCredentials()
   if (!creds) {
-    console.log('[MobileConnection] No credentials found, cannot reconnect')
+    logger.log('[MobileConnection] No credentials found, cannot reconnect')
     return
   }
 
   // 检查是否有目标设备
   if (!currentDevice.value) {
-    console.log('[MobileConnection] No target device, cannot reconnect')
+    logger.log('[MobileConnection] No target device, cannot reconnect')
     return
   }
 
   autoReconnectAttemptCount++
-  console.log('[MobileConnection] Starting reconnect attempt', autoReconnectAttemptCount, 'token length:', creds.sessionToken.length)
+  logger.log('[MobileConnection] Starting reconnect attempt', autoReconnectAttemptCount, 'token length:', creds.sessionToken.length)
   // 开始自动重连前重置取消标记
   autoReconnectAborted = false
   isConnecting.value = true
@@ -709,14 +710,14 @@ async function handleUnexpectedDisconnect(reason: string) {
       await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
       // 等待期间用户可能已发起新连接，检查取消标记
       if (autoReconnectAborted) {
-        console.log('[MobileConnection] Auto-reconnect aborted during delay wait')
+        logger.log('[MobileConnection] Auto-reconnect aborted during delay wait')
         return
       }
     }
     await wsReconnect(creds.sessionToken)
-    console.log('[MobileConnection] Reconnect initiated successfully')
+    logger.log('[MobileConnection] Reconnect initiated successfully')
   } catch (error) {
-    console.error('[MobileConnection] Reconnect failed:', error)
+    logger.error('[MobileConnection] Reconnect failed:', error)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'mobile.connection.reconnectFailedMsg'
     isConnecting.value = false
@@ -743,7 +744,7 @@ export async function disconnect(): Promise<void> {
     await cancelAllTaskNotifications()
   } catch (e) {
     // wsDisconnect 可能因无活跃连接而失败，确保前端状态仍被重置
-    console.warn('[MobileConnection] wsDisconnect failed (expected if no active connection):', e)
+    logger.warn('[MobileConnection] wsDisconnect failed (expected if no active connection):', e)
   } finally {
     // 无论后端是否成功断开，前端状态必须重置
     connectionStatus.value = 'disconnected'
@@ -761,21 +762,21 @@ export async function disconnect(): Promise<void> {
  * 带 5 秒超时，超时后自动降级到配对流程
  */
 export async function authenticate(): Promise<boolean> {
-  console.log('[MobileConnection] authenticate() called')
-  console.log('[MobileConnection]   authCredentials.value =', authCredentials.value)
-  console.log('[MobileConnection]   localStorage auth_session_token =', localStorage.getItem('auth_session_token'))
-  console.log('[MobileConnection]   localStorage auth_pairing_id =', localStorage.getItem('auth_pairing_id'))
-  console.log('[MobileConnection]   localStorage auth_fingerprint =', localStorage.getItem('auth_fingerprint'))
+  logger.log('[MobileConnection] authenticate() called')
+  logger.log('[MobileConnection]   authCredentials.value =', authCredentials.value)
+  logger.log('[MobileConnection]   localStorage auth_session_token =', localStorage.getItem('auth_session_token'))
+  logger.log('[MobileConnection]   localStorage auth_pairing_id =', localStorage.getItem('auth_pairing_id'))
+  logger.log('[MobileConnection]   localStorage auth_fingerprint =', localStorage.getItem('auth_fingerprint'))
 
   if (!authCredentials.value?.sessionToken) {
-    console.log('[MobileConnection] No stored credentials, skipping auth -> false')
+    logger.log('[MobileConnection] No stored credentials, skipping auth -> false')
     return false
   }
 
-  console.log('[MobileConnection] Attempting JWT re-auth, token length:', authCredentials.value.sessionToken.length)
+  logger.log('[MobileConnection] Attempting JWT re-auth, token length:', authCredentials.value.sessionToken.length)
   try {
     const result = await wsAuthenticate(authCredentials.value.sessionToken)
-    console.log('[MobileConnection] Auth result:', result)
+    logger.log('[MobileConnection] Auth result:', result)
     if (!result) {
       // 服务端明确拒绝（JWT 过期或无效），清除凭据需要重新配对
       clearAuthCredentials()
@@ -785,7 +786,7 @@ export async function authenticate(): Promise<boolean> {
   } catch (error) {
     // 网络错误/超时，不删除 token — Rust 端有 30 秒超时兜底
     // 下次重连仍可复用，避免因临时网络问题导致必须重新配对
-    console.error('[MobileConnection] Auth error (not clearing token):', error)
+    logger.error('[MobileConnection] Auth error (not clearing token):', error)
     return false
   }
 }
@@ -794,9 +795,9 @@ export async function authenticate(): Promise<boolean> {
  * 请求配对
  */
 export async function requestPairing(): Promise<void> {
-  console.log('[MobileConnection] requestPairing: calling wsRequestPairing (invoke)...')
+  logger.log('[MobileConnection] requestPairing: calling wsRequestPairing (invoke)...')
   await wsRequestPairing()
-  console.log('[MobileConnection] requestPairing: wsRequestPairing returned')
+  logger.log('[MobileConnection] requestPairing: wsRequestPairing returned')
   // 状态由后端事件驱动
 }
 
@@ -815,7 +816,7 @@ export async function verifyPairingCode(code: string): Promise<boolean> {
     }
     return false
   } catch (error) {
-    console.error('[MobileConnection] Pairing verification failed:', error)
+    logger.error('[MobileConnection] Pairing verification failed:', error)
     return false
   }
 }
@@ -855,10 +856,10 @@ export async function loadSessionConfigs(): Promise<any[]> {
       hasLoadedConfigs.value = true
       return configs
     }
-    console.warn('[MobileConnection] Failed to load session configs via HTTP:', result.message)
+    logger.warn('[MobileConnection] Failed to load session configs via HTTP:', result.message)
     return []
   } catch (e: any) {
-    console.error('[MobileConnection] loadSessionConfigs error:', e?.message || e)
+    logger.error('[MobileConnection] loadSessionConfigs error:', e?.message || e)
     return []
   }
 }
@@ -873,7 +874,7 @@ export async function loadActiveSessions(): Promise<any[]> {
     activeSessions.value = result.data.sessions || []
     return result.data.sessions
   }
-  console.warn('[MobileConnection] Failed to load sessions via HTTP:', result.message)
+  logger.warn('[MobileConnection] Failed to load sessions via HTTP:', result.message)
   return []
 }
 
@@ -1028,7 +1029,7 @@ export function addPairedDevice(device: { address: string; port: number; name: s
       lastConnected: now,
       connectCount: existing.connectCount + 1,
     }
-    console.log('[MobileConnection] Updated paired device:', device.fingerprint,
+    logger.log('[MobileConnection] Updated paired device:', device.fingerprint,
       'new address:', fullAddress, 'connectCount:', existing.connectCount + 1)
   } else {
     // 新设备，添加到列表开头，初始连接次数为 1
@@ -1041,7 +1042,7 @@ export function addPairedDevice(device: { address: string; port: number; name: s
       lastConnected: now,
       connectCount: 1,
     })
-    console.log('[MobileConnection] Added new paired device:', device.fingerprint, 'address:', fullAddress)
+    logger.log('[MobileConnection] Added new paired device:', device.fingerprint, 'address:', fullAddress)
   }
 
   // 限制最多保存 10 个设备

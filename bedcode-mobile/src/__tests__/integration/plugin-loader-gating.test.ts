@@ -26,6 +26,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { pluginLoader } from '@/plugin/loader'
 import {
   makePluginInfo,
@@ -71,9 +72,9 @@ beforeEach(() => {
     }
   })
   // 静音预期内的 log/warn/error（动态 import 失败、降级 warn 等）
-  consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
-  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  consoleWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+  consoleLogSpy = vi.spyOn(logger, 'log').mockImplementation(() => {})
+  consoleErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
 })
 
 afterEach(async () => {

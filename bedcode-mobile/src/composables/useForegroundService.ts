@@ -4,6 +4,7 @@
  * 用于保持 WebSocket 连接在后台不被系统杀死
  */
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 import { useMobileConnection } from './useMobileConnection'
 import { usePlatform } from '@/composables/usePlatform'
@@ -42,7 +43,7 @@ export function useForegroundService() {
       })
     } catch (e) {
       // Android 原生插件命令（Tauri 2.0 插件命令需 plugin:名称|命令 格式）
-      console.warn('[ForegroundService] startService failed:', e)
+      logger.warn('[ForegroundService] startService failed:', e)
     }
   }
 
@@ -57,7 +58,7 @@ export function useForegroundService() {
     try {
       await invoke('plugin:foreground-service|stopForegroundService')
     } catch (e) {
-      console.warn('[ForegroundService] stopService failed:', e)
+      logger.warn('[ForegroundService] stopService failed:', e)
     }
   }
 
@@ -77,7 +78,7 @@ export function useForegroundService() {
         content,
       })
     } catch (e) {
-      console.warn('[ForegroundService] updateNotification failed:', e)
+      logger.warn('[ForegroundService] updateNotification failed:', e)
     }
   }
 

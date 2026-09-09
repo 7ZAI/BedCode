@@ -5,6 +5,7 @@
  */
 
 import { ref, readonly } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 
 // ==================== Global State ====================
@@ -25,7 +26,7 @@ export function useMdnsAdvertiser() {
       await invoke('mdns_start_advertise', { port, deviceName })
       isAdvertising.value = true
     } catch (e) {
-      console.error('[MdnsAdvertiser] Failed to start:', e)
+      logger.error('[MdnsAdvertiser] Failed to start:', e)
       throw e
     }
   }
@@ -35,7 +36,7 @@ export function useMdnsAdvertiser() {
     try {
       await invoke('mdns_stop_advertise')
     } catch (e) {
-      console.error('[MdnsAdvertiser] Failed to stop:', e)
+      logger.error('[MdnsAdvertiser] Failed to stop:', e)
     } finally {
       isAdvertising.value = false
     }

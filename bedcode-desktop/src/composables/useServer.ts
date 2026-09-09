@@ -4,6 +4,7 @@
  * 服务器状态管理、生命周期控制和指标轮询
  */
 import { ref, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import i18n from '@/locales'
 
@@ -85,7 +86,7 @@ export function useServer() {
       autoStart.value = info.auto_start
       localIps.value = info.local_ips
     } catch (e) {
-      console.error('Failed to load server status:', e)
+      logger.error('Failed to load server status:', e)
     }
   }
 
@@ -148,7 +149,7 @@ export function useServer() {
       port.value = config.port
       autoStart.value = config.auto_start
     } catch (e) {
-      console.error('Failed to load network config:', e)
+      logger.error('Failed to load network config:', e)
     }
   }
 

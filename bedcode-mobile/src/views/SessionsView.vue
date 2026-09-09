@@ -118,6 +118,7 @@
 
 <script setup lang="ts">
 import { computed, ref, onMounted, onActivated } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection } from '@/composables/useMobileConnection'
@@ -211,7 +212,7 @@ async function confirmStop() {
     showStopConfirm.value = false
     pendingSession.value = null
   } catch (e) {
-    console.error('[SessionsView] Failed to stop session:', e)
+    logger.error('[SessionsView] Failed to stop session:', e)
     toast.error(t('mobile.session.stopFailed'))
   } finally {
     isStopping.value = false
@@ -237,7 +238,7 @@ async function confirmDelete() {
     showDeleteConfirm.value = false
     pendingSession.value = null
   } catch (e) {
-    console.error('[SessionsView] Failed to delete session:', e)
+    logger.error('[SessionsView] Failed to delete session:', e)
     toast.error(t('mobile.session.deleteFailed'))
   } finally {
     isDeleting.value = false
@@ -250,7 +251,7 @@ async function refreshSessions() {
   try {
     await connection.loadActiveSessions()
   } catch (e) {
-    console.error('[SessionsView] Failed to load sessions:', e)
+    logger.error('[SessionsView] Failed to load sessions:', e)
     toast.error(t('mobile.session.loadFailed'))
   }
 }

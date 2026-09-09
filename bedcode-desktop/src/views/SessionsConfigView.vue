@@ -598,6 +598,7 @@
  * Warm Workbench 风格：配置卡片 + 运行中汇总 section；全部操作为真实调用
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { invoke } from '@tauri-apps/api/core'
 import Modal from '@/components/Modal.vue'
@@ -714,7 +715,7 @@ onMounted(async () => {
     await sessionStore.loadConfigs()
     await sessionStore.loadSessions()
   } catch (e) {
-    console.error('Failed to load data:', e)
+    logger.error('Failed to load data:', e)
   }
   isLoading.value = false
 
@@ -727,7 +728,7 @@ onMounted(async () => {
   // 输出应用启动耗时
   try {
     const elapsed = await invoke<number>('get_startup_time')
-    console.log(`[BedCode] 应用启动耗时: ${elapsed}ms`)
+    logger.log(`[BedCode] 应用启动耗时: ${elapsed}ms`)
   } catch (e) {
     // 非 Tauri 环境忽略
   }
@@ -858,7 +859,7 @@ async function startSession(configId: string) {
     await sessionStore.startSession(sessionId, size ?? undefined)
     toast.success(t('desktop.session.sessionStarted'))
   } catch (e: any) {
-    console.error('[SessionsConfigView] startSession error:', e)
+    logger.error('[SessionsConfigView] startSession error:', e)
     if (e instanceof InvokeTimeoutError) {
       toast.error(t('desktop.session.startTimeout'))
     } else {
@@ -903,7 +904,7 @@ async function viewSession(session: SessionInfo) {
   try {
     await openTerminalWindow(session)
   } catch (e) {
-    console.error('[SessionsConfigView] openTerminalWindow error:', e)
+    logger.error('[SessionsConfigView] openTerminalWindow error:', e)
     toast.error(t('desktop.terminal.openFailed'))
   } finally {
     isTerminalOpening.value = false
@@ -1035,7 +1036,7 @@ async function handleSaveConfig(form: SessionFormData) {
     showCreateDialog.value = false
     editingConfig.value = null
   } catch (e: any) {
-    console.error('[SessionsConfigView] handleSaveConfig error:', e)
+    logger.error('[SessionsConfigView] handleSaveConfig error:', e)
     toast.error(t('desktop.session.saveFailed', { error: e?.message || e }))
   }
 }

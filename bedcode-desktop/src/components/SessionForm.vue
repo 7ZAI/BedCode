@@ -99,6 +99,7 @@
  * 使用 WSL Store 读取缓存的 WSL 信息，避免每次打开弹窗时重复执行 wsl 命令
  */
 import { ref, computed, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import type { SessionConfig } from '@/stores/session'
 import Input from '@/components/Input.vue'
@@ -243,7 +244,7 @@ async function browseDir() {
       form.value.workingDir = selected as string
     }
   } catch (e) {
-    console.error('Failed to browse directory:', e)
+    logger.error('Failed to browse directory:', e)
   }
 }
 

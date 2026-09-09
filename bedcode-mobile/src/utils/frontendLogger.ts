@@ -12,6 +12,9 @@
  *   再批量转发到 Rust `report_frontend_log`（target=frontend，logcat 可见）
  * - release：methodFactory 返回空函数，连 DevTools 控制台也不打印
  * - 转发失败静默（仅一次警告），防止递归输出
+ *
+ * 初始化：main.ts 调用 `initFrontendLogger()`（默认读 import.meta.env.DEV）；
+ * 测试可显式 `configureLogger(true/false)` 控制 dev/release 分支。
  */
 
 import loglevel from 'loglevel'
@@ -24,18 +27,9 @@ export interface FrontendLogEntry {
 }
 
 /** 攒批条数阈值，达到后立即发送 */
-const FLUSH_THRESHOLD = 50
+export const FLUSH_THRESHOLD = 50
 /** 定时发送间隔（毫秒），保证低频日志也能及时落盘 */
-const FLUSH_INTERVAL_MS = 400
-
-const originalMethods: Record<string, (...args: unknown[]) => void> = {
-  trace: console.trace,
-  debug: console.debug,
-  log: console.log,
-  info: console.info,
-  warn: console.warn,
-  error: console.error,
-}
+export const FLUSH_INTERVAL_MS = 400
 
 /** 将单个日志参数序列化为文本：Error 取 stack，对象尝试 JSON，其余 String 化 */
 function stringifyArg(arg: unknown): string {
@@ -73,9 +67,6 @@ export function formatLogArgs(args: unknown[]): string {
   return args.map(stringifyArg).join(' ')
 }
 
-/** 当前是否处于 dev 构建（测试可注入） */
-const isDev = () => import.meta.env.DEV
-
 /** 批量转发状态（仅 dev 建立，release 不触碰） */
 let entries: FrontendLogEntry[] = []
 let flushTimer: ReturnType<typeof setInterval> | null = null
@@ -88,36 +79,48 @@ function flush() {
   entries = []
   invoke('report_frontend_log', { logs: batch }).catch(() => {
     if (!reportedFailure) {
+      // 动态读取当前 console.warn：测试 spy 可捕获；reportedFailure 已保证只警告一次，
+      // 且警告本身经 console.warn 直调（非 logger）不会再次触发转发递归
       reportedFailure = true
-      originalMethods.warn.call(console, '[frontendLogger] 日志转发失败（仅 dev 生效，release 无此命令）')
+      console.warn('[frontendLogger] 日志转发失败（仅 dev 生效，release 无此命令）')
     }
   })
 }
 
-/** 构造 loglevel 的 methodFactory：dev 转发 + 原始 console，release 空函数 */
-function makeMethodFactory() {
-  const dev = isDev()
-  // 语义映射：loglevel 方法 → 后端级别（loglevel 无 log 方法，debug 即对应原 console.log）
-  const levelMap: Record<string, string> = {
-    trace: 'debug',
-    debug: 'debug',
-    info: 'info',
-    warn: 'warn',
-    error: 'error',
-  }
+/** 语义映射：loglevel 方法 → 后端级别（loglevel 的 log 即 debug 别名） */
+const LEVEL_MAP: Record<string, string> = {
+  trace: 'debug',
+  debug: 'debug',
+  log: 'debug',
+  info: 'info',
+  warn: 'warn',
+  error: 'error',
+}
 
+/**
+ * 构造 methodFactory（loglevel 调用：methodName, logLevel, loggerName）
+ * @param dev 是否 dev 构建：true=原始 console + 转发落盘；false=空函数（生产零开销）
+ */
+function makeMethodFactory(dev: boolean) {
   return (
     methodName: string,
     _logLevel: loglevel.LogLevelNumbers,
     _loggerName: string | symbol,
   ): ((...args: unknown[]) => void) => {
     if (!dev) {
-      // 生产：空函数，日志零开销零输出
+      // 生产：空函数，日志零开销零输出（连 DevTools 也不打印）
       return () => {}
     }
 
-    const original = originalMethods[methodName] ?? originalMethods.log
-    const level = levelMap[methodName] ?? 'debug'
+    // 动态读取当前 console 方法（非模块级快照）：测试 spy 替换 console 后可被捕获，
+    // dev 下 DevTools 照常可见；release 分支在上面已提前返回空函数
+    // SAFETY: console 的方法属性是运行时字符串索引，但 TS 的 Console 类型没有 index
+    // signature；经 unknown 中转索引后回调类型断言，取值以实际运行时对象为准。
+    const original = (console as unknown as Record<string, unknown>)[methodName] as
+      | ((...args: unknown[]) => void)
+      | undefined
+    const fn = original ?? console.log
+    const level = LEVEL_MAP[methodName] ?? 'debug'
 
     // 启动定时器（幂等）
     if (!flushTimer) {
@@ -125,7 +128,7 @@ function makeMethodFactory() {
     }
 
     return (...args: unknown[]): void => {
-      original.apply(console, args)
+      fn.apply(console, args)
       const message = formatLogArgs(args)
       if (!message) return
       entries.push({ level, message })
@@ -134,30 +137,25 @@ function makeMethodFactory() {
   }
 }
 
-// SAFETY: loglevel 的 Logger 类型没有 log 方法（方法名是 debug），
-// 但业务代码大量使用 console.log 语义的日志，此处显式扩展类型并补挂 log 方法。
-// 断言方向是「收窄」：运行时的 logger 就是 loglevel Logger，扩展字段仅 TS 可见。
-interface BedCodeLogger extends loglevel.Logger {
-  /** console.log 语义映射到 debug（与旧 devConsoleRelay 一致） */
-  log: (...args: unknown[]) => void
+const logger = loglevel.getLogger('bedcode')
+
+/**
+ * 配置 logger（dev 转发落盘 / release 空函数），幂等可重入。
+ * @param dev 是否 dev 构建；默认读 import.meta.env.DEV（测试可注入）
+ */
+export function configureLogger(dev: boolean = import.meta.env.DEV): void {
+  logger.methodFactory = makeMethodFactory(dev)
+  // 重建 logger 内部方法（methodFactory 变更后需调用）
+  logger.setLevel(loglevel.levels.DEBUG)
 }
 
-// 显式导出：业务代码统一从本模块 import logger 对象调用
-// （不导出 error/log 等具名，避免与业务 catch 参数/局部变量遮蔽）
-const logger = loglevel.getLogger('bedcode') as BedCodeLogger
-logger.setLevel(loglevel.levels.DEBUG)
-logger.methodFactory = makeMethodFactory()
-// 重建 logger 内部方法（methodFactory 变更后需调用）
-logger.setLevel(logger.getLevel())
-logger.log = logger.debug.bind(logger)
+/** main.ts 初始化入口：默认按当前构建配置 */
+export function initFrontendLogger(): void {
+  configureLogger(import.meta.env.DEV)
+}
 
-export { logger }
-
-/** 供测试/调试：访问原始 logger 实例 */
-export const rawLogger = logger
-
-/** 供测试：重置转发状态（flush 定时器、失败标记） */
-export function resetLoggerState() {
+/** 供测试：重置转发状态（flush 定时器、失败标记、攒批） */
+export function resetLoggerState(): void {
   if (flushTimer) {
     clearInterval(flushTimer)
     flushTimer = null
@@ -166,4 +164,8 @@ export function resetLoggerState() {
   reportedFailure = false
 }
 
+// 模块加载即按构建配置初始化（业务代码 import 后即可用）
+configureLogger()
+
+export { logger }
 export default logger

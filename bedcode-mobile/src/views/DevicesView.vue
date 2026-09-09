@@ -344,6 +344,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
@@ -412,7 +413,7 @@ async function confirmStop() {
     showStopConfirm.value = false
     pendingSession.value = null
   } catch (e) {
-    console.error('[DevicesView] Failed to stop session:', e)
+    logger.error('[DevicesView] Failed to stop session:', e)
   } finally {
     isStopping.value = false
   }
@@ -543,11 +544,11 @@ async function handleStartSession(config: SessionConfigSummary) {
       // 导航到 mobile-sessions 会卸载 MobileSwipeContainer，导致左右滑动失效
       router.push({ name: 'mobile-home', query: { page: '1' } })
     } else {
-      console.error('Failed to start session: no session_id returned')
+      logger.error('Failed to start session: no session_id returned')
       toast.error(t('mobile.connection.startFailedNoId'))
     }
   } catch (e) {
-    console.error('Failed to start session:', e)
+    logger.error('Failed to start session:', e)
     toast.error(t('mobile.connection.startFailed', { error: String(e) }))
   } finally {
     startingConfigId.value = null
@@ -591,7 +592,7 @@ watch([isConnected, connection.connectionStatus], async ([connected, status], [o
   if (connected && status === 'paired') {
     // 如果是从非 paired 状态变为 paired，或者从断开变为连接，都需要加载
     if (oldStatus !== 'paired' || !oldConnected) {
-      console.log('[DevicesView] Status changed to paired, loading sessions...')
+      logger.log('[DevicesView] Status changed to paired, loading sessions...')
       await connection.loadSessionConfigs()
       await connection.loadActiveSessions()
     }
@@ -663,7 +664,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
   // 连接中弹窗遮罩（连接/认证阶段展示；进入配对/生物认证弹窗后由各自 UI 接管）
   showConnectLoading.value = true
 
-  console.log('[DevicesView] startConnection: Step 1 connect...')
+  logger.log('[DevicesView] startConnection: Step 1 connect...')
   console.time('startConnection')
 
   try {
@@ -677,13 +678,13 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
       connection.connect(device),
       connectTimeout,
     ])
-    console.log('[DevicesView] startConnection: Step 1 done')
+    logger.log('[DevicesView] startConnection: Step 1 done')
 
     // Step 2: 如果允许跳过配对，尝试使用已存储的 JWT token
     if (skipPairing) {
-      console.log('[DevicesView] startConnection: Step 2 authenticate (skipPairing=true)...')
+      logger.log('[DevicesView] startConnection: Step 2 authenticate (skipPairing=true)...')
       const authenticated = await connection.authenticate()
-      console.log('[DevicesView] startConnection: Step 2 done, authenticated=', authenticated)
+      logger.log('[DevicesView] startConnection: Step 2 done, authenticated=', authenticated)
       if (authenticated) {
         pendingDevice.value = null
         connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
@@ -691,7 +692,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
         return
       }
     } else {
-      console.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
+      logger.log('[DevicesView] startConnection: Step 2 skipped (skipPairing=false, must pair)')
     }
 
     // Step 2.5: JWT 认证失败（或手动连接）→ 根据认证设置直接弹出对应认证弹窗。
@@ -700,7 +701,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     authBiometricAvailable.value = !!(keyStatus?.deviceSupported && keyStatus?.hasKey)
     authDialogError.value = ''
     pairingError.value = ''
-    console.log('[DevicesView] startConnection: Step 2.5 auth, preferred=', mobileSettings.value.preferredAuthMethod, 'canBiometric=', authBiometricAvailable.value)
+    logger.log('[DevicesView] startConnection: Step 2.5 auth, preferred=', mobileSettings.value.preferredAuthMethod, 'canBiometric=', authBiometricAvailable.value)
 
     const preferBiometric = mobileSettings.value.preferredAuthMethod === 'biometric' && authBiometricAvailable.value
     if (preferBiometric) {
@@ -710,7 +711,7 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     }
   } catch (error) {
     connectionError.value = String(error)
-    console.error('[DevicesView] startConnection failed:', error)
+    logger.error('[DevicesView] startConnection failed:', error)
 
     // 显示友好的错误提示
     const errorMsg = String(error)
@@ -771,7 +772,7 @@ async function runBiometricAuth() {
     // 生物认证失败/取消 → 弹窗内展示错误，可重试指纹或切换配对码
     authDialogError.value = t('mobile.connection.biometricFailed')
   } catch (e) {
-    console.error('[DevicesView] Biometric auth error:', e)
+    logger.error('[DevicesView] Biometric auth error:', e)
     authDialogError.value = biometricAuthErrorText(e)
   } finally {
     authDialogLoading.value = false
@@ -809,7 +810,7 @@ async function startPairingFlow() {
     connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
   } catch (pairingError) {
     // 配对失败或超时时断开连接
-    console.error('[DevicesView] Pairing failed:', pairingError)
+    logger.error('[DevicesView] Pairing failed:', pairingError)
     connectionError.value = String(pairingError)
     toast.error(String(pairingError))
     await connection.disconnect()

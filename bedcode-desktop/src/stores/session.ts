@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref } from 'vue'
 import {
   listSessions,
@@ -32,7 +33,7 @@ export const useSessionStore = defineStore('session', () => {
 
   async function loadSessions() {
     sessions.value = await listSessions()
-    console.log(
+    logger.log(
       'loadSessions completed, sessions:',
       sessions.value.map((s) => ({ id: s.id, status: s.status })),
     )
@@ -42,17 +43,17 @@ export const useSessionStore = defineStore('session', () => {
     // 两阶段启动：先创建会话（不启动 PTY），前端准备好后再启动
     const sessionId = await createSessionNoStart(configId)
     sessions.value = await listSessions()
-    console.log('createSession (no start) completed, sessionId:', sessionId)
+    logger.log('createSession (no start) completed, sessionId:', sessionId)
     return sessionId
   }
 
   // 启动已创建的会话（用于两阶段启动的第二阶段）
   // size：本端终端组件默认网格，spawn 前调整 PTY 初始尺寸
   async function startSessionAction(sessionId: string, size?: TerminalSize) {
-    console.log('startSession called with sessionId:', sessionId)
+    logger.log('startSession called with sessionId:', sessionId)
     await startExistingSession(sessionId, size)
     sessions.value = await listSessions()
-    console.log('startSession completed, sessionId:', sessionId)
+    logger.log('startSession completed, sessionId:', sessionId)
 
     // 更新 activeSession
     const session = sessions.value.find((s) => s.id === sessionId)
@@ -62,10 +63,10 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function killSessionAction(sessionId: string) {
-    console.log('killSession called with sessionId:', sessionId)
+    logger.log('killSession called with sessionId:', sessionId)
     await killSession(sessionId)
     sessions.value = await listSessions()
-    console.log(
+    logger.log(
       'killSession completed, sessions:',
       sessions.value.map((s) => ({ id: s.id, status: s.status })),
     )
@@ -76,7 +77,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function deleteSessionAction(sessionId: string) {
-    console.log('deleteSession called with sessionId:', sessionId)
+    logger.log('deleteSession called with sessionId:', sessionId)
     await deleteSession(sessionId)
     sessions.value = await listSessions()
 
@@ -86,7 +87,7 @@ export const useSessionStore = defineStore('session', () => {
   }
 
   async function restartSessionAction(sessionId: string) {
-    console.log('restartSession called with sessionId:', sessionId)
+    logger.log('restartSession called with sessionId:', sessionId)
     await restartSession(sessionId)
     sessions.value = await listSessions()
 
@@ -109,7 +110,7 @@ export const useSessionStore = defineStore('session', () => {
     command: string,
     wslDistro?: string,
   ) {
-    console.log('[session store] createConfig called:', { name, environment, workingDir, command })
+    logger.log('[session store] createConfig called:', { name, environment, workingDir, command })
     try {
       const result = await createSessionConfig({
         name,
@@ -118,13 +119,13 @@ export const useSessionStore = defineStore('session', () => {
         command,
         wsl_distro: wslDistro,
       })
-      console.log('[session store] createSessionConfig returned:', result)
+      logger.log('[session store] createSessionConfig returned:', result)
       configs.value = await listSessionConfigs()
-      console.log('[session store] configs refreshed:', configs.value.length)
+      logger.log('[session store] configs refreshed:', configs.value.length)
     } catch (e: any) {
-      console.error('[session store] createConfig error:', e)
-      console.error('[session store] error message:', e?.message)
-      console.error('[session store] error stack:', e?.stack)
+      logger.error('[session store] createConfig error:', e)
+      logger.error('[session store] error message:', e?.message)
+      logger.error('[session store] error stack:', e?.stack)
       throw e
     }
   }

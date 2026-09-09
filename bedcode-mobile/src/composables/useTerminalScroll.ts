@@ -10,6 +10,7 @@
  */
 
 import { ref, reactive, computed, nextTick, watch, type Ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { writeClipboardText } from '@/utils/clipboard'
@@ -801,7 +802,7 @@ export function useTerminalScroll(
       // （与 TerminalView.fitWithMargin 保持一致）
       fitAddon.fit()
     } catch (e) {
-      console.warn('[useTerminalScroll] fit failed:', e)
+      logger.warn('[useTerminalScroll] fit failed:', e)
     }
   }
 

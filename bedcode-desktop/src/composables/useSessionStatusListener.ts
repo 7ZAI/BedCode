@@ -1,4 +1,5 @@
 import { listen } from '@tauri-apps/api/event'
+import { logger } from '@/utils/frontendLogger'
 import { useSessionStore } from '@/stores/session'
 
 // Re-export from model
@@ -27,7 +28,7 @@ export function useSessionStatusListener() {
       'session-status-changed',
       async (event) => {
         const { sessionId, oldStatus, newStatus, sessionName } = event.payload
-        console.log('[SessionStatusListener] Status changed:', {
+        logger.log('[SessionStatusListener] Status changed:', {
           sessionId,
           oldStatus,
           newStatus,
@@ -42,7 +43,7 @@ export function useSessionStatusListener() {
     // 监听会话重启
     unlistenRestart = await listen<SessionRestartEvent>('session-restarted', async (event) => {
       const { oldSessionId, newSessionId, sessionName } = event.payload
-      console.log('[SessionStatusListener] Session restarted:', {
+      logger.log('[SessionStatusListener] Session restarted:', {
         oldSessionId,
         newSessionId,
         sessionName,
@@ -57,7 +58,7 @@ export function useSessionStatusListener() {
       'sessions-refresh',
       async (event) => {
         const { refreshType, source } = event.payload
-        console.log('[SessionStatusListener] Sessions refresh event:', { refreshType, source })
+        logger.log('[SessionStatusListener] Sessions refresh event:', { refreshType, source })
 
         // 刷新会话列表
         await sessionStore.loadSessions()

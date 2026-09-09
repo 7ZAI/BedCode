@@ -10,6 +10,7 @@ export { initSharedRuntime, getSharedModule } from './shared-runtime'
 export type * from './types'
 
 import { initSharedRuntime } from './shared-runtime'
+import { logger } from '@/utils/frontendLogger'
 import { pluginLoader } from './loader'
 import { pluginDialogHost } from './dialog-host'
 import { usePresetTasks } from '@/composables/usePresetTasks'
@@ -51,5 +52,5 @@ export async function initPluginSystem(
   // 2. 加载所有已激活插件的前端模块
   await pluginLoader.loadAll()
 
-  console.log('[PluginSystem] Initialized')
+  logger.log('[PluginSystem] Initialized')
 }

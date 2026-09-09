@@ -107,6 +107,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMdnsDiscovery, type DiscoveredService } from '@/composables/useMdnsDiscovery'
@@ -130,7 +131,7 @@ async function startScan() {
   try {
     await startDiscovery()
   } catch (e) {
-    console.error('[DiscoverView] Start scan failed:', e)
+    logger.error('[DiscoverView] Start scan failed:', e)
   }
 }
 

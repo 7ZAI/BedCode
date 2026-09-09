@@ -7,6 +7,7 @@
  * 保存失败不改本地状态、getMaxCachedTerminals 兜底逻辑。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { createPinia, setActivePinia } from 'pinia'
 
 const invokeMock = vi.fn()
@@ -72,7 +73,7 @@ describe('settings store', () => {
 
   it('loadSettings failure keeps defaults and logs error', async () => {
     invokeMock.mockRejectedValue(new Error('backend down'))
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     await store.loadSettings()
     expect(store.settings.network.port).toBe(8765)
     expect(store.settings.ui.theme).toBe('system')
@@ -105,7 +106,7 @@ describe('settings store', () => {
 
   it('saveSettings failure keeps previous state and logs error', async () => {
     invokeMock.mockRejectedValue(new Error('persist failed'))
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     await store.saveSettings({ ui: fullUi({ theme: 'dark' }) })
     expect(store.settings.ui.theme).toBe('system')
     expect(errorSpy).toHaveBeenCalled()

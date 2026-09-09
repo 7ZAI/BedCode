@@ -23,6 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
@@ -108,8 +109,8 @@ beforeEach(() => {
   pluginLoader.deactivate('com.bedcode.demo').catch(() => {})
   pluginLoader.deactivate('com.bedcode.other').catch(() => {})
   // 静音预期内的 warn（无前端模块停用）与 error（动态 import 失败）
-  consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  consoleWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+  consoleErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
 })
 
 afterEach(() => {

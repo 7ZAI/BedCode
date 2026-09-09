@@ -434,6 +434,7 @@
  * - 详情页：Hero + 操作按钮 + 统计条 + 折叠区域（简介/扩展点/权限/详细信息）
  */
 import { ref, computed, onMounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
@@ -554,7 +555,7 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
       // 后端 WASM 实例/mDNS browse 仍存活）；拆解失败仅记日志，不阻塞收尾
       pluginEnabledStates.value[pluginId] = !enabled
       pluginLoader.deactivate(pluginId).catch((teardownErr) => {
-        console.error('[PluginView] toggle timeout teardown failed:', teardownErr)
+        logger.error('[PluginView] toggle timeout teardown failed:', teardownErr)
       })
     }, TOGGLE_TIMEOUT_MS)
 
@@ -581,7 +582,7 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
       await pluginLoader.deactivate(pluginId)
       runtimeStopped = true
     } catch (teardownErr) {
-      console.error('[PluginView] toggle failure teardown failed:', teardownErr)
+      logger.error('[PluginView] toggle failure teardown failed:', teardownErr)
     }
     // 重拉列表刷新运行时状态徽章；重拉按持久化意图回填开关，需重新压回真值
     await loadPlugins()

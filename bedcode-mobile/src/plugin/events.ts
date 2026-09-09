@@ -5,6 +5,7 @@
  */
 
 import type { Disposable } from './types'
+import { logger } from '@/utils/frontendLogger'
 
 type EventHandler = (...args: any[]) => void
 
@@ -89,7 +90,7 @@ export function emit(event: string, ...args: any[]): void {
         try {
           handler(...args)
         } catch (e) {
-          console.error(`[PluginEvents] Error in handler for ${key}:`, e)
+          logger.error(`[PluginEvents] Error in handler for ${key}:`, e)
         }
       }
     }
@@ -112,7 +113,7 @@ export function clearPluginEvents(pluginId: string): void {
       try {
         d.dispose()
       } catch (e) {
-        console.error(`[PluginEvents] Error disposing listener for ${pluginId}:`, e)
+        logger.error(`[PluginEvents] Error disposing listener for ${pluginId}:`, e)
       }
     }
   }

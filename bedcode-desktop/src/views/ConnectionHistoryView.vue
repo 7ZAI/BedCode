@@ -162,6 +162,7 @@
  * Warm Workbench 风格：工具栏统计 + 按日期分组列表；清空走真实删除 + 确认对话框
  */
 import { ref, computed, onMounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import { useDeviceStore } from '@/stores/device'
@@ -237,7 +238,7 @@ async function loadHistory() {
   try {
     history.value = await commands.listConnectionHistory(deviceId.value)
   } catch (e) {
-    console.error('加载连接历史失败:', e)
+    logger.error('加载连接历史失败:', e)
     toast.error(t('desktop.device.historyLoadFailed'))
   } finally {
     isLoading.value = false
@@ -251,7 +252,7 @@ async function confirmClearHistory() {
     showClearDialog.value = false
     toast.success(t('desktop.device.historyCleared'))
   } catch (e) {
-    console.error('清空连接历史失败:', e)
+    logger.error('清空连接历史失败:', e)
     toast.error(t('desktop.device.historyLoadFailed'))
   }
 }

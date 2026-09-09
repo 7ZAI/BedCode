@@ -7,6 +7,7 @@
  */
 
 import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
+import { logger } from '@/utils/frontendLogger'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
 import type { Terminal } from '@xterm/xterm'
 
@@ -167,7 +168,7 @@ export function useTerminalBuffer() {
         }
       },
       onTruncated: (minSeq: number) => {
-        console.warn(`[useTerminalBuffer] history truncated at min_seq=${minSeq}`)
+        logger.warn(`[useTerminalBuffer] history truncated at min_seq=${minSeq}`)
       },
       onReplayDone: () => {
         armReplayIdleRefresh()
@@ -252,7 +253,7 @@ export function useTerminalBuffer() {
       return false
     } catch (e) {
       // 订阅失败：不阻塞跳转，终端页自行重试
-      console.warn(`[useTerminalBuffer] Prepare session ${sessionId} failed:`, e)
+      logger.warn(`[useTerminalBuffer] Prepare session ${sessionId} failed:`, e)
       return false
     }
   }

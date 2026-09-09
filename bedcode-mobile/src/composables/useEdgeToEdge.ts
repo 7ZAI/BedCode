@@ -14,6 +14,7 @@
  * - Android WebView 不支持 CSS env(safe-area-inset-*)，完全依赖 JS 值
  */
 import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import { usePlatform } from '@/composables/usePlatform'
 
@@ -82,7 +83,7 @@ export function useEdgeToEdge() {
       isVisible: keyboardVisible,
     }
 
-    console.log('[EdgeToEdge] Safe area changed:', safeArea.value, 'Keyboard:', keyboardInfo.value)
+    logger.log('[EdgeToEdge] Safe area changed:', safeArea.value, 'Keyboard:', keyboardInfo.value)
   }
 
   /**
@@ -105,7 +106,7 @@ export function useEdgeToEdge() {
       safeArea.value = result
       return result
     } catch (e) {
-      console.warn('[EdgeToEdge] Failed to get safe area insets:', e)
+      logger.warn('[EdgeToEdge] Failed to get safe area insets:', e)
       return safeArea.value
     }
   }
@@ -123,7 +124,7 @@ export function useEdgeToEdge() {
       keyboardInfo.value = result
       return result
     } catch (e) {
-      console.warn('[EdgeToEdge] Failed to get keyboard info:', e)
+      logger.warn('[EdgeToEdge] Failed to get keyboard info:', e)
       return keyboardInfo.value
     }
   }
@@ -158,12 +159,12 @@ export function useEdgeToEdge() {
           isVisible: keyboardVisible,
         }
 
-        console.log('[EdgeToEdge] Safe area changed via Tauri event:', safeArea.value)
+        logger.log('[EdgeToEdge] Safe area changed via Tauri event:', safeArea.value)
       })
 
       return unlisten
     } catch (e) {
-      console.warn('[EdgeToEdge] Failed to setup Tauri event listener:', e)
+      logger.warn('[EdgeToEdge] Failed to setup Tauri event listener:', e)
       return null
     }
   }
@@ -191,7 +192,7 @@ export function useEdgeToEdge() {
     await getKeyboardInfo()
 
     isReady.value = true
-    console.log('[EdgeToEdge] Initialized:', safeArea.value)
+    logger.log('[EdgeToEdge] Initialized:', safeArea.value)
   }
 
   // 立即启动初始化，不等待 onMounted
@@ -239,18 +240,18 @@ export function useEdgeToEdge() {
       if (!platformInfo.value.isMobile) return
       try {
         await invoke('plugin:edge-to-edge|enable')
-        console.log('[EdgeToEdge] Enabled')
+        logger.log('[EdgeToEdge] Enabled')
       } catch (e) {
-        console.warn('[EdgeToEdge] Failed to enable:', e)
+        logger.warn('[EdgeToEdge] Failed to enable:', e)
       }
     },
     disable: async () => {
       if (!platformInfo.value.isMobile) return
       try {
         await invoke('plugin:edge-to-edge|disable')
-        console.log('[EdgeToEdge] Disabled')
+        logger.log('[EdgeToEdge] Disabled')
       } catch (e) {
-        console.warn('[EdgeToEdge] Failed to disable:', e)
+        logger.warn('[EdgeToEdge] Failed to disable:', e)
       }
     },
     showKeyboard: async () => {
@@ -258,7 +259,7 @@ export function useEdgeToEdge() {
       try {
         await invoke('plugin:edge-to-edge|show_keyboard')
       } catch (e) {
-        console.warn('[EdgeToEdge] Failed to show keyboard:', e)
+        logger.warn('[EdgeToEdge] Failed to show keyboard:', e)
       }
     },
     hideKeyboard: async () => {
@@ -266,7 +267,7 @@ export function useEdgeToEdge() {
       try {
         await invoke('plugin:edge-to-edge|hide_keyboard')
       } catch (e) {
-        console.warn('[EdgeToEdge] Failed to hide keyboard:', e)
+        logger.warn('[EdgeToEdge] Failed to hide keyboard:', e)
       }
     },
   }

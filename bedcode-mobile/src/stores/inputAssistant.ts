@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref, computed } from 'vue'
 import { AGENT_PRESETS, detectAgentType, type AgentType, type CommandMode } from '@/config/agentPresets'
 import { invoke } from '@tauri-apps/api/core'
@@ -215,7 +216,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
         value: JSON.stringify(agentTypeOverrides.value),
       })
     } catch (e) {
-      console.error('[inputAssistant] Failed to save agent type overrides:', e)
+      logger.error('[inputAssistant] Failed to save agent type overrides:', e)
     }
   }
 
@@ -288,7 +289,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       // 加载快捷键配置
       loadShortcutConfig()
     } catch (e) {
-      console.error('Failed to load input assistant storage:', e)
+      logger.error('Failed to load input assistant storage:', e)
     }
   }
 

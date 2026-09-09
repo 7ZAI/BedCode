@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref, computed } from 'vue'
 
 export interface ShortcutStats {
@@ -168,7 +169,7 @@ export const useInputAssistantStore = defineStore('inputAssistant', () => {
       // 加载快捷键配置
       loadShortcutConfig()
     } catch (e) {
-      console.error('Failed to load input assistant storage:', e)
+      logger.error('Failed to load input assistant storage:', e)
     }
   }
 

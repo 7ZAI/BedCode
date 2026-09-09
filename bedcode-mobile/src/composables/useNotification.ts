@@ -14,6 +14,7 @@
  * 前台服务通知仍由 Kotlin ForegroundServicePlugin 处理。
  */
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 import { usePlatform } from '@/composables/usePlatform'
 
@@ -150,7 +151,7 @@ export function useNotification() {
       permissionGranted = granted
       return granted
     } catch (e) {
-      console.warn('[Notification] Permission check failed:', e)
+      logger.warn('[Notification] Permission check failed:', e)
       return false
     }
   }
@@ -214,7 +215,7 @@ export function useNotification() {
         sound,
       })
     } catch (e) {
-      console.warn('[Notification] showTaskNotification failed:', e)
+      logger.warn('[Notification] showTaskNotification failed:', e)
     }
   }
 
@@ -226,7 +227,7 @@ export function useNotification() {
     try {
       await invoke('plugin:task-notification|cancelTaskNotification', { sessionId })
     } catch (e) {
-      console.warn('[Notification] cancelTaskNotification failed:', e)
+      logger.warn('[Notification] cancelTaskNotification failed:', e)
     }
   }
 
@@ -238,7 +239,7 @@ export function useNotification() {
     try {
       await invoke('plugin:task-notification|cancelAllTaskNotifications')
     } catch (e) {
-      console.warn('[Notification] cancelAllTaskNotifications failed:', e)
+      logger.warn('[Notification] cancelAllTaskNotifications failed:', e)
     }
   }
 
@@ -286,7 +287,7 @@ export function useNotification() {
         sound: true,
       })
     } catch (e) {
-      console.warn('[Notification] showConnectionNotification failed:', e)
+      logger.warn('[Notification] showConnectionNotification failed:', e)
     }
   }
 
@@ -298,7 +299,7 @@ export function useNotification() {
     try {
       await invoke('plugin:task-notification|cancelConnectionNotification')
     } catch (e) {
-      console.warn('[Notification] cancelConnectionNotification failed:', e)
+      logger.warn('[Notification] cancelConnectionNotification failed:', e)
     }
   }
 
@@ -310,7 +311,7 @@ export function useNotification() {
     try {
       await invoke('plugin:task-notification|testVibrate')
     } catch (e) {
-      console.warn('[Notification] testVibrate failed:', e)
+      logger.warn('[Notification] testVibrate failed:', e)
     }
   }
 
@@ -322,7 +323,7 @@ export function useNotification() {
     try {
       await invoke('plugin:task-notification|testSound')
     } catch (e) {
-      console.warn('[Notification] testSound failed:', e)
+      logger.warn('[Notification] testSound failed:', e)
     }
   }
 

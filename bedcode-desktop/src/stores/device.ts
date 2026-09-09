@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import {
@@ -55,7 +56,7 @@ export const useDeviceStore = defineStore('device', () => {
       const result = await verifyPairingCode(code)
       return result
     } catch (error) {
-      console.error('Pairing verification failed:', error)
+      logger.error('Pairing verification failed:', error)
       return false
     }
   }

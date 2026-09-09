@@ -8,6 +8,7 @@
  */
 
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { pluginListLoaded, pluginPreauthorize } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import { useToast } from '@/composables/useToast'
@@ -49,16 +50,16 @@ export function usePluginManager() {
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
     loading.value = true
-    console.log('[PluginManager] loadPlugins() started')
+    logger.log('[PluginManager] loadPlugins() started')
     try {
       const result = await pluginListLoaded()
-      console.log('[PluginManager] loadPlugins() received', result.length, 'plugin(s)')
+      logger.log('[PluginManager] loadPlugins() received', result.length, 'plugin(s)')
       for (const p of result) {
-        console.log(`[PluginManager]   - ${p.id} (state=${p.state.state}, type=${p.pluginType})`)
+        logger.log(`[PluginManager]   - ${p.id} (state=${p.state.state}, type=${p.pluginType})`)
       }
       plugins.value = result
     } catch (e: any) {
-      console.error('[PluginManager] loadPlugins() failed:', e)
+      logger.error('[PluginManager] loadPlugins() failed:', e)
       toast.error(t('desktop.plugin.loadFailed'))
     } finally {
       loading.value = false
@@ -70,7 +71,7 @@ export function usePluginManager() {
     if (togglingId.value) return false
     togglingDirection.value = enable
     const startedAt = Date.now()
-    console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
+    logger.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
       // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 loading 遮罩,
@@ -96,10 +97,10 @@ export function usePluginManager() {
       const name = plugins.value.find((p) => p.id === id)?.name || id
       const key = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
       toast.success(t(key, { name }))
-      console.log(`[PluginManager] togglePlugin(${id}) succeeded`)
+      logger.log(`[PluginManager] togglePlugin(${id}) succeeded`)
       return true
     } catch (e: any) {
-      console.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
+      logger.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
       const msg = e?.message || ''
       const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
       toast.error(t(key, { error: msg || 'Unknown error' }))
@@ -129,7 +130,7 @@ export function usePluginManager() {
   onMounted(async () => {
     devReloadUnlisten = await listen<{ pluginId: string }>('plugin:dev-reload', async (event) => {
       const { pluginId } = event.payload
-      console.log(`[PluginManager] Dev reload event: ${pluginId}`)
+      logger.log(`[PluginManager] Dev reload event: ${pluginId}`)
       await pluginLoader.reloadPlugin(pluginId)
       await loadPlugins()
     })

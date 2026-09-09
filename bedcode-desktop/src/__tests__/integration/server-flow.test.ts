@@ -25,6 +25,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import i18n from '@/locales'
@@ -116,7 +117,7 @@ beforeEach(() => {
   const server = useServer()
   server.status.value = 'stopped'
   server.stopPolling()
-  consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  consoleErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
 })
 
 afterEach(() => {

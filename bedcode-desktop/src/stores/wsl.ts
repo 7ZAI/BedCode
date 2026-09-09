@@ -6,6 +6,7 @@
  */
 
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref } from 'vue'
 import {
   isWslAvailable,
@@ -32,7 +33,7 @@ export const useWslStore = defineStore('wsl', () => {
     } catch (e: any) {
       error.value = e?.message || String(e)
       // WSL 不可用不算致命错误，仅记录
-      console.warn('[WslStore] Failed to load WSL info:', e)
+      logger.warn('[WslStore] Failed to load WSL info:', e)
     } finally {
       isLoading.value = false
     }

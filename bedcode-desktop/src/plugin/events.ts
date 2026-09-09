@@ -10,7 +10,7 @@
  */
 
 import type { Disposable } from './types'
-
+import { logger } from '@/utils/frontendLogger'
 type EventHandler = (...args: any[]) => void
 
 /**
@@ -79,7 +79,7 @@ export function emit(event: string, ...args: any[]): void {
         try {
           h(...args)
         } catch (e) {
-          console.error(`[PluginEvents] Error in handler for ${event}:`, e)
+          logger.error(`[PluginEvents] Error in handler for ${event}:`, e)
         }
       })
     }

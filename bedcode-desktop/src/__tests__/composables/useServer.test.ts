@@ -10,6 +10,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { useServer } from '@/composables/useServer'
 import {
   makeServerStatusInfo,
@@ -35,8 +36,8 @@ describe('useServer', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // useServer 的 onUnmounted 在非组件上下文调用会触发 Vue warning，先静音再实例化
-    consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    consoleWarnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    consoleErrorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     // 重置模块级共享 status，并清理上一个用例遗留的轮询定时器
     const s = useServer()
     s.status.value = 'stopped'

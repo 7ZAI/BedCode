@@ -30,6 +30,7 @@ import {
   useTerminalOutputStream,
   type OutputStreamFrame,
 } from '@/composables/useTerminalOutputStream'
+import { logger } from '@/utils/frontendLogger'
 import { useSessionStore } from '@/stores/session'
 import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
 import { makeServerStatusInfo, makeSessionInfo } from '@/__tests__/fixtures/index'
@@ -131,7 +132,7 @@ async function flushAsync() {
 let sessionDb: ReturnType<typeof makeSessionInfo>[]
 
 function installInvokeMock() {
-  mockInvoke.mockImplementation((cmd: string, args?: any) => {
+  mockInvoke.mockImplementation((cmd: string, _args?: any) => {
     switch (cmd) {
       case 'get_server_status':
         return Promise.resolve(makeServerStatusInfo({ status: 'running', port: 8765 }))
@@ -278,7 +279,7 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     stream.stop()
   })
 
-  it('seq 缺口：单帧偶发缺口不重订阅，连续 3 次才触发快照重订阅', async () => {
+  it('seq 缺口：立即快照重订阅补回缺失字节，冷却期内缺口跳过不渲染', async () => {
     const term = createTerminal()
     const resets: unknown[] = []
     const stream = useTerminalOutputStream({
@@ -303,8 +304,8 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     expect(bufferLineText(term, 0)).toBe('hi')
     expect(bufferLineText(term, 1)).toBe('bye')
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
     // 缺口：seq=99 ≠ lastRendered(1)+1（事件 2..98 丢失）→ 立即快照重订阅补回
     // （缺口帧不渲染不推进游标——缺失字节无法从实时流恢复，跳过会把残缺序列
@@ -344,7 +345,7 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     const term = createTerminal()
     // happy-dom 下 xterm.clear() 会触发渲染器内存爆炸（worker OOM，实测稳定复现）；
     // 清屏属 xterm 自身行为而非被测逻辑，用 spy 拦截真实清屏，仅验证回调联动
-    const clearSpy = vi.spyOn(term, 'clear').mockImplementation(() => {})
+    vi.spyOn(term, 'clear').mockImplementation(() => {})
     const resets: unknown[] = []
     const truncated: number[] = []
     const stream = useTerminalOutputStream({
@@ -371,7 +372,7 @@ describe('终端流：xterm × useTerminalOutputStream × useSessionStore × use
     // 重订阅后的快照响应（同连接再次下发 subscribe_response 模拟：截断判定
     // 在任何订阅响应时执行；重连路径已由「seq 缺口」用例覆盖）
     // min_seq=200 > lastRendered(1)+1 → 已渲染区域被环形淘汰 → 清屏全量重播
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     ws.text(subscribeResponse(200, 300, 3))
     warnSpy.mockRestore()
 

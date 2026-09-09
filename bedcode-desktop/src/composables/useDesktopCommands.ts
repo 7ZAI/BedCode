@@ -3,6 +3,7 @@
 //! 所有桌面端可用的 Tauri 命令调用
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import { invokeWithTimeout } from '@/utils/invoke'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
@@ -175,7 +176,7 @@ export async function createSessionConfig(config: {
   command?: string
   wsl_distro?: string
 }): Promise<SessionConfig> {
-  console.log('[createSessionConfig] calling backend with:', {
+  logger.log('[createSessionConfig] calling backend with:', {
     name: config.name,
     environment: config.environment,
     working_dir: config.working_dir || '',
@@ -191,7 +192,7 @@ export async function createSessionConfig(config: {
     wsl_distro: config.wsl_distro,
   })
 
-  console.log('[createSessionConfig] backend returned:', result)
+  logger.log('[createSessionConfig] backend returned:', result)
   return result as SessionConfig
 }
 
@@ -228,7 +229,7 @@ export async function updateSessionConfig(config: {
   wsl_distro?: string
   auto_start?: boolean
 }): Promise<void> {
-  console.log('[updateSessionConfig] calling with:', config)
+  logger.log('[updateSessionConfig] calling with:', config)
   return await invoke('update_session_config', {
     id: config.id,
     name: config.name,

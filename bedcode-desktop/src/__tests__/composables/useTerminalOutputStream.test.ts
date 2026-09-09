@@ -15,6 +15,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import {
   useTerminalOutputStream,
   type OutputStreamFrame,
@@ -260,7 +261,7 @@ describe('useTerminalOutputStream', () => {
     }
     expect(frames).toHaveLength(5)
 
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
     // 缺口：事件 5 丢失，帧 6 到达。新语义：不跳过渲染（残缺字节会写进 buffer
     // 变残渣），立即快照重订阅补回；缺口帧不交付、不推进游标
@@ -337,7 +338,7 @@ describe('useTerminalOutputStream', () => {
     expect(frames).toHaveLength(2)
 
     // 重订阅响应 min_seq=200：已渲染区被环形淘汰 → 截断 → 清屏全量重播
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     ws.text(subscribeResponse(200, 300, 3))
     warnSpy.mockRestore()
 
@@ -368,8 +369,8 @@ describe('useTerminalOutputStream', () => {
     stream.subscribe()
     MockWebSocket.instances[0].open()
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
     const sendError = () =>
       JSON.stringify({
@@ -408,7 +409,7 @@ describe('useTerminalOutputStream', () => {
     stream.subscribe()
     MockWebSocket.instances[0].open()
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
     MockWebSocket.instances[0].text(
       JSON.stringify({ type: 'error', payload: { code: 'INTERNAL', message: 'boom' } }),
     )
