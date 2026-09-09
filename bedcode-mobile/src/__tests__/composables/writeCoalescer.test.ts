@@ -5,7 +5,8 @@
  * - 同帧多次 write 合并为一次 term.write（DEC 2026 同步输出已由 xterm.js 6.0
  *   内置，应用侧不再包裹）
  * - 单次 write 超过 64KB 拆块，让 xterm parser 让出主线程
- * - 累积超过 256KB 阈值立即 flush（移动端特殊处理）
+ * - 大块写入每累积 WRITE_YIELD_THRESHOLD 让出一次宏任务（防 UI 冻结）
+ * - 累积超过 512KB 阈值立即 flush（移动端特殊处理）
  * - rAF 暂停（最小化/后台）时 100ms 兜底定时器清空队列
  */
 
@@ -15,6 +16,19 @@ import type { Terminal } from '@xterm/xterm'
 
 // 单次 write 上限（与实现保持一致）
 const MAX_WRITE_CHUNK = 64 * 1024
+// 主线程让出阈值（与实现保持一致）
+const WRITE_YIELD_THRESHOLD = 128 * 1024
+
+/** 等待 in-flight async flush 把数据全部写入（轮询，不依赖让出点数：
+ * 让出点 = setTimeout(0)，块数/阈值变化时层数不可预判） */
+async function waitForWrites(term: Terminal, count: number): Promise<void> {
+  const deadline = Date.now() + 2000
+  const writeMock = term.write as unknown as { mock: { calls: unknown[][] } }
+  while (writeMock.mock.calls.length < count) {
+    if (Date.now() > deadline) throw new Error(`timeout: expected ${count} writes, got ${writeMock.mock.calls.length}`)
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+}
 
 /** 断言写入的数据 = 原始 payload */
 function expectRaw(writeMock: ReturnType<typeof vi.fn>, payload: number[]) {
@@ -143,7 +157,7 @@ describe('createWriteCoalescer', () => {
     expect(calls[1]).toEqual(Array.from(payload.subarray(MAX_WRITE_CHUNK)))
   })
 
-  it('累积超过 512KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', () => {
+  it('累积超过 512KB 阈值时立即 flush（取消挂起 rAF，仍拆块）', async () => {
     const term = makeMockTerminal()
     const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
 
@@ -152,10 +166,14 @@ describe('createWriteCoalescer', () => {
     expect(rafCallbacks).toHaveLength(1)
 
     coalescer(new Uint8Array(200 * 1024))
-    // 600KB → 10 块（600KB / 64KB = 9.375），立即执行
-    expect(term.write).toHaveBeenCalledTimes(10)
+    // 600KB 超阈值立即 flush：flush 开始同步写前 128KB（2 块）后让出，
+    // 完整 10 块（600KB / 64KB = 9.375）需等让出点消化
+    expect(term.write.mock.calls.length).toBeGreaterThan(0)
+    expect(term.write.mock.calls.length).toBeLessThan(10)
     // 立即 flush 取消了挂起的 rAF
     expect(rafCallbacks).toHaveLength(1)
+
+    await waitForWrites(term, 10)
 
     // 内容完整性：分块拼接 = 原始 600KB
     const written = term.write.mock.calls.map(c => c[0] as Uint8Array)
@@ -170,6 +188,53 @@ describe('createWriteCoalescer', () => {
     for (const chunk of written) {
       expect(chunk.byteLength).toBeLessThanOrEqual(MAX_WRITE_CHUNK)
     }
+  })
+
+  it('超过 WRITE_YIELD_THRESHOLD 时让出主线程（分块分批写，非一次性同步写）', async () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
+
+    // 300KB = 5 块（64KB）；128KB 阈值 → 写 2 块（128KB）让出一次，再 2 块让出一次，末块收尾
+    const payload = new Uint8Array(300 * 1024).fill(9)
+    coalescer(payload)
+    rafCallbacks[0](0)
+
+    // 让出点前的同步窗口：已写满一个 WRITE_YIELD_THRESHOLD（128KB / 64KB = 2 块），
+    // 未全部写完——证明非一次性同步写
+    expect(term.write.mock.calls.length).toBe(WRITE_YIELD_THRESHOLD / MAX_WRITE_CHUNK)
+
+    await waitForWrites(term, 5)
+    expect(term.write).toHaveBeenCalledTimes(5)
+    const calls = term.write.mock.calls.map(c => c[0] as Uint8Array)
+    const joined = new Uint8Array(300 * 1024)
+    let offset = 0
+    for (const chunk of calls) {
+      joined.set(chunk, offset)
+      offset += chunk.byteLength
+    }
+    expect(offset).toBe(300 * 1024)
+    for (const chunk of calls) {
+      expect(chunk.byteLength).toBeLessThanOrEqual(MAX_WRITE_CHUNK)
+    }
+  })
+
+  it('让出期间新入队数据由同一 flush 的 while 轮次消费（无滞留无双写）', async () => {
+    const term = makeMockTerminal()
+    const coalescer = createWriteCoalescer(term, { enableRafCoalesce: true })
+
+    // 第一批 200KB（128KB 阈值 → 写 2 块后让出）；让出期间入队第二批
+    coalescer(new Uint8Array(200 * 1024))
+    rafCallbacks[0](0)
+    // 同步窗口：已写满一个 WRITE_YIELD_THRESHOLD（2 块），flush 在让出点挂起
+    expect(term.write.mock.calls.length).toBe(WRITE_YIELD_THRESHOLD / MAX_WRITE_CHUNK)
+
+    // 让出期间新数据入队：调 write 但不再注册新 rAF（当前 flush 会消费）
+    coalescer(new Uint8Array(200 * 1024))
+    expect(rafCallbacks).toHaveLength(1)
+
+    await waitForWrites(term, 8)
+    // 200KB→4 块 + 200KB→4 块 = 8 块，且全部由同一 flush 消化（无新 rAF）
+    expect(term.write).toHaveBeenCalledTimes(8)
   })
 
   it('rAF 暂停时 100ms 兜底定时器清空队列', () => {
