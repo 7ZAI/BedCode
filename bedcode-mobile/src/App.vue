@@ -16,17 +16,23 @@
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
 
-    <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载） -->
-    <SplashScreen v-if="showSplash" @closed="showSplash = false" />
+    <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载）
+      SplashScreen 暂时下线：移动端开屏页暂停展示，实现完整保留
+      （components/SplashScreen.vue + config/splash.ts + composables/useAppStartup.ts）。
+      恢复方式：取消下方这行注释，并同步取消 script 里 SplashScreen import 与
+      showSplash ref 的注释，把 'ref' 加回 vue import。 -->
+    <!-- <SplashScreen v-if="showSplash" @closed="showSplash = false" /> -->
   </div>
 </template>
 
 <script setup lang="ts">
-import { provide, ref, computed, onMounted, onUnmounted } from 'vue'
+// SplashScreen 下线后 'ref' 无使用点，已暂时从 import 移除（恢复开屏时补回）
+import { provide, computed, onMounted, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
-import SplashScreen from '@/components/SplashScreen.vue'
+// SplashScreen 暂时下线：开屏页暂停挂载，恢复时取消注释
+// import SplashScreen from '@/components/SplashScreen.vue'
 import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
@@ -52,14 +58,16 @@ const { setupFontSize } = useFontSize()
 const settingsStore = useSettingsStore()
 const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' | 'dark' | 'system')
 
-// 开屏动画:淡出动画结束后卸载
-const showSplash = ref(true)
+// 开屏动画:淡出动画结束后卸载（SplashScreen 暂时下线，恢复时取消注释）
+// const showSplash = ref(true)
 // const { startAdvertise, stopAdvertise } = useMdnsAdvertiser()
 
 onMounted(async () => {
   setupTheme()
   setupFontSize()
   // 开屏启动任务打点:主题/字体/安全区等 UI 子系统就绪
+  // SplashScreen 下线期间此打点只写注册表、无 UI 消费方,保留以保证恢复开屏
+  // 时 startupReady 语义完整
   completeStartupTask('ui')
   // 链路加密上下文启动同步（issue 09）：Rust 侧事件 WS 建连前需要拿到
   // 当前开关与 pin；失败静默（默认全关，不影响明文现状）
