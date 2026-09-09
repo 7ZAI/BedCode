@@ -22,6 +22,14 @@ import { basename, resolve } from 'node:path'
 const COPY_DEBOUNCE_MS = 500
 
 /**
+ * 终止信号升级间隔（ms）：SIGTERM 发出后等待该时长，vite 仍未退出则升级 SIGKILL。
+ *
+ * 必须小于 dev-run.js 的回收兜底超时（2000ms），否则宿主 dev 退出时本进程会被
+ * 抢先 process.exit，孙进程又回到孤儿状态。
+ */
+const KILL_ESCALATE_MS = 1500
+
+/**
  * 定位 vite 可执行文件：pnpm/npm workspace 可能将依赖提升到仓库根 node_modules，
  * 因此从插件目录向上逐级查找，直到仓库根（含根自身）
  */
@@ -84,6 +92,53 @@ export function startPluginWatch({ root, resourcesDir, extraFiles = [], wasmFile
     stdio: 'inherit',
   })
   child.on('exit', (code) => process.exit(code ?? 0))
+
+  // ==================== 孙进程回收 ====================
+  //
+  // Node 不会把信号转发给孙进程：dev-run.js 用 SIGTERM 硬杀本进程（build.js）时，
+  // vite 的父进程即消失、被 reparent 到 init 成为孤儿常驻。已实测残留：3 个 vite
+  // 各占数十 MB、持续运行数小时不退出。故本进程必须自己回收 vite。
+  //
+  // 残留成因：tty 的 Ctrl+C 只广播给前台进程组，而「关闭终端标签/窗口、外部 kill、
+  // 宿主崩溃」等非广播路径的信号只送达 shell 与 dev-run.js 一层，vite 收不到任何
+  // 信号。实测 vite 自身对 SIGINT / SIGTERM 均正常退出（不是它吞信号），问题在
+  // 信号根本没送达。
+  //
+  // 终止序列：
+  //   1. 先发 SIGTERM，给 vite 自身的清理逻辑一个机会（实测该路径即已退出）
+  //   2. KILL_ESCALATE_MS 后仍未退出则升级 SIGKILL —— 防御性兜底，vite 正忙于
+  //      构建、信号延迟处理等场景下 SIGTERM 可能不生效
+  //
+  // 升级 timer 需检查 child 状态：vite 响应 SIGTERM 时 child 已退出，
+  // 此时升级只会产生误导日志（对已退出的 child kill 返回 false，无害但噪声）。
+  // child.on('exit') 直接 process.exit 即可：不响应 SIGTERM 时 child 不触发 exit，
+  // 本进程持续存活直到升级 SIGKILL 生效，两条路径都自然闭合。
+  const killVite = (signal) => {
+    try {
+      child.kill(signal)
+    } catch {
+      // 未 spawn 成功或已退出，忽略
+    }
+  }
+
+  let stopping = false
+  const terminateVite = () => {
+    if (stopping) return
+    stopping = true
+    console.error('[watch] 收到终止信号，回收 vite watch 子进程')
+    killVite('SIGTERM')
+    setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) {
+        console.error(`[watch] vite 未在 ${KILL_ESCALATE_MS}ms 内退出，升级 SIGKILL`)
+        killVite('SIGKILL')
+      }
+    }, KILL_ESCALATE_MS)
+  }
+
+  process.on('SIGINT', terminateVite)
+  process.on('SIGTERM', terminateVite)
+  // 兜底：非信号路径退出（进程崩溃等）时已无法等待孙进程，直接 SIGKILL
+  process.on('exit', () => killVite('SIGKILL'))
 
   // 复制产物到宿主资源目录（覆盖式，不删目录：宿主运行时可能正持有文件句柄）
   const copy = () => {

@@ -155,7 +155,11 @@ const children = []
 let shuttingDown = false
 
 function start(cmd, args, cwd) {
-  const child = spawn(cmd, args, { cwd, stdio: 'inherit' })
+  // POSIX：detached 让子进程自成进程组长（pgid = 自己的 pid），shutdown 时可用
+  // 负 pgid 一次杀整棵子树（已实测：孙进程自动继承该 pgid，无需各自 detached）。
+  // Windows 必须排除：detached 会传 CREATE_NEW_CONSOLE 弹出额外控制台窗口，
+  // Windows 侧走下方 taskkill /T /F 分支
+  const child = spawn(cmd, args, { cwd, stdio: 'inherit', detached: !IS_WIN })
   children.push(child)
   return child
 }
@@ -181,32 +185,52 @@ function shutdown(code) {
     process.exit(exitCode)
   }
 
-  // POSIX：kill 后等待所有子进程 exit 再退出（避免信号未送达）。
-  // 已退出的子进程不再等其 exit 事件（否则计数永远差一，拖到 2s 超时）。
-  // 注意：build.js 的孙进程（vite）不会收到 SIGTERM（Node 不转发信号），
-  // 交互式 Ctrl+C 由终端向整个前台进程组广播可覆盖；宿主崩溃/--host-cmd 等
-  // 非交互终止会残留 vite（dev 工具可接受，与 Windows taskkill /T 的彻底
-  // 回收有差距，此处如实记录）
-  let remaining = children.filter((c) => c.exitCode === null).length
-  if (remaining === 0) {
+  // POSIX：按进程组回收整棵子树（对齐 Windows taskkill /T /F）
+  //
+  // 负 pgid 一次覆盖组长及其全部子孙——build.js 的 vite 孙进程、宿主的 tauri
+  // CLI / cargo / 宿主进程 / vite dev server 全部在内。这是 plugin-watch.js 自清理
+  // （应用层）在调度层的对称实现，覆盖「宿主崩溃、关闭终端标签/窗口、外部 kill」
+  // 等信号无法送达孙进程的路径；此前这些路径会残留 vite（实测累积到 3 个、数十 MB、
+  // 数小时不退出）以及宿主 vite dev server 占住 1420 端口
+  for (const c of children) {
+    if (!c.pid) continue
+    try {
+      process.kill(-c.pid, 'SIGTERM')
+    } catch {
+      // 已退出或不是组长（detached 未生效），退回单进程 kill
+      try {
+        c.kill('SIGTERM')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+  }
+
+  // 等 direct children 退出即可（子树内其他进程由组信号覆盖，无需逐个等待）
+  const alive = children.filter((c) => c.exitCode === null)
+  if (alive.length === 0) {
     process.exit(exitCode)
     return
   }
-  for (const c of children) {
-    if (c.exitCode !== null) continue
+  for (const c of alive) {
     c.on('exit', () => {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
+      if (children.every((x) => x.exitCode !== null)) process.exit(exitCode)
     })
-    try {
-      c.kill()
-    } catch {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
-    }
   }
-  // 兜底超时：2 秒后强制退出
-  setTimeout(() => process.exit(exitCode), 2000).unref()
+
+  // 升级兜底：2 秒后对组发 SIGKILL 并退出。plugin-watch.js 自身的升级链是 1500ms，
+  // 早于此处，两者不冲突；unref 避免子进程全部退出后阻塞退出
+  setTimeout(() => {
+    for (const c of children) {
+      if (!c.pid) continue
+      try {
+        process.kill(-c.pid, 'SIGKILL')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+    process.exit(exitCode)
+  }, 2000).unref()
 }
 
 // ==================== WASM 缺失自动补建 ====================
