@@ -5,7 +5,8 @@
 //! AI agent 通过 `pnpm run tauri:android:dev:log` 落盘的
 //! `.dev-logs/android-dev.*.log` 中 grep `frontend` 即可获取前端控制台输出。
 //!
-//! 前端实现见 `src/utils/devConsoleRelay.ts`。
+//! 前端实现见 `src/utils/frontendLogger.ts`（loglevel methodFactory 接管，dev 下先落
+//! DevTools 控制台再批量转发；旧 devConsoleRelay 覆盖方案已随 loglevel 迁移移除）。
 
 use serde::Deserialize;
 

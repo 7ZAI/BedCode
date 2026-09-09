@@ -4,7 +4,8 @@
 //! runtime.*.log（target=`frontend`），与 Rust 日志合并同一份文件——
 //! AI agent 排查前端问题时直接 grep 日志目录即可，无需独立 CLI。
 //!
-//! 前端实现见 `src/utils/devConsoleRelay.ts`。
+//! 前端实现见 `src/utils/frontendLogger.ts`（loglevel methodFactory 接管，dev 下先落
+//! DevTools 控制台再批量转发；旧 devConsoleRelay 覆盖方案已随 loglevel 迁移移除）。
 
 use serde::Deserialize;
 
