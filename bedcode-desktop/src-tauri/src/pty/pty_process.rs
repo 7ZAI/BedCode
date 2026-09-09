@@ -6,6 +6,7 @@
 use crate::enums::{PtySessionStatus, SessionLaunchConfig};
 use crate::pty::command::build_command;
 use crate::pty::pty_reader::PtyReader;
+use crate::process::create_command;
 use crate::system::config::AppConfig;
 use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
 use crate::Result;
