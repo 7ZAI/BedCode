@@ -1,7 +1,6 @@
 //! Session Commands
 
-use crate::session::{OutputHistoryResponse, SessionManager};
-use crate::session::GlobalOutputManager;
+use crate::session::{RendererSource, ResizeOutcome, SessionManager};
 use crate::Result;
 use std::sync::Arc;
 use tauri::State;
@@ -10,12 +9,21 @@ use tauri::State;
 pub async fn start_session(
     session_manager: State<'_, Arc<SessionManager>>,
     config_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<String> {
-    tracing::info!("start_session called with config_id: {}", config_id);
-    let result = session_manager.create_session(&config_id).await;
+    tracing::info!(config_id = %config_id, "start_session called");
+    // 桌面端启动：携带本端终端组件默认网格作为 PTY 初始尺寸
+    let initial_size = match (cols, rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
+    let result = session_manager
+        .create_session_with_source(&config_id, None, initial_size)
+        .await;
     match result {
         Ok(id) => {
-            tracing::info!("Session created successfully: {}", id);
+            tracing::info!(session_id = %id, "Session created successfully");
             Ok(id)
         }
         Err(e) => {
@@ -30,11 +38,11 @@ pub async fn create_session_no_start(
     session_manager: State<'_, Arc<SessionManager>>,
     config_id: String,
 ) -> Result<String> {
-    tracing::info!("create_session_no_start called with config_id: {}", config_id);
+    tracing::info!(config_id = %config_id, "create_session_no_start called");
     let result = session_manager.create_session_no_start(&config_id).await;
     match result {
         Ok(id) => {
-            tracing::info!("Session created (not started) successfully: {}", id);
+            tracing::info!(session_id = %id, "Session created (not started) successfully");
             Ok(id)
         }
         Err(e) => {
@@ -48,12 +56,21 @@ pub async fn create_session_no_start(
 pub async fn start_existing_session(
     session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
+    cols: Option<u16>,
+    rows: Option<u16>,
 ) -> Result<()> {
-    tracing::info!("start_existing_session called with session_id: {}", session_id);
-    let result = session_manager.start_existing_session(&session_id).await;
+    tracing::info!(session_id = %session_id, "start_existing_session called");
+    // 两阶段启动第二阶段：spawn 前按请求端尺寸调整 PTY
+    let initial_size = match (cols, rows) {
+        (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
+        _ => None,
+    };
+    let result = session_manager
+        .start_existing_session(&session_id, initial_size)
+        .await;
     match result {
         Ok(_) => {
-            tracing::info!("Session started successfully: {}", session_id);
+            tracing::info!(session_id = %session_id, "Session started successfully");
             Ok(())
         }
         Err(e) => {
@@ -79,58 +96,33 @@ pub async fn get_session(
 }
 
 #[tauri::command]
-pub async fn kill_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
+pub async fn kill_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
     session_manager.kill_session(&session_id).await
 }
 
 #[tauri::command]
-pub async fn delete_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<()> {
+pub async fn delete_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<()> {
     session_manager.remove_session(&session_id).await
 }
 
 #[tauri::command]
-pub async fn restart_session(
-    session_manager: State<'_, Arc<SessionManager>>,
-    session_id: String,
-) -> Result<String> {
+pub async fn restart_session(session_manager: State<'_, Arc<SessionManager>>, session_id: String) -> Result<String> {
     session_manager.restart_session(&session_id).await
 }
 
+/// 调整会话终端大小（桌面本地路径，正统渲染端身份恒为 Desktop）
+///
+/// force 置位表示覆盖确认已通过（前端弹窗确认后重发）；返回 ResizeOutcome
+/// 供前端判断是否需要弹窗确认（NeedsConfirmation 时未应用任何改动）。
 #[tauri::command]
 pub async fn resize_session(
     session_manager: State<'_, Arc<SessionManager>>,
     session_id: String,
     cols: u16,
     rows: u16,
-) -> Result<()> {
-    session_manager.resize_session(&session_id, cols, rows).await
-}
-
-/// 获取会话的 PTY 输出历史（从 UnifiedOutputQueue 读取，供桌面端终端窗口回放）
-///
-/// # Arguments
-/// * `session_id` - 会话 ID
-/// * `start_seq` - 起始序号，None 或 0 表示从头获取
-#[tauri::command]
-pub async fn get_session_output_history(
-    session_id: String,
-    start_seq: Option<u64>,
-) -> Result<OutputHistoryResponse> {
-    let manager = GlobalOutputManager::global();
-    match manager.get_history(&session_id, start_seq).await {
-        Some(response) => Ok(response),
-        None => Ok(OutputHistoryResponse {
-            min_seq: 0,
-            max_seq: 0,
-            min_offset: 0,
-            max_offset: 0,
-            events: vec![],
-        }),
-    }
+    force: Option<bool>,
+) -> Result<ResizeOutcome> {
+    session_manager
+        .resize_session(&session_id, cols, rows, RendererSource::Desktop, force.unwrap_or(false))
+        .await
 }

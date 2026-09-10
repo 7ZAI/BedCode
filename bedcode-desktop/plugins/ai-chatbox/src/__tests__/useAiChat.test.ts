@@ -2,12 +2,12 @@
  * useAiChat 单测（接缝 3/4）：发送 → 适配层请求 / raw 流解析（chunk/reasoning/usage/done）
  * / 双重终结幂等 / error 分类 / 停止 / 重新生成 / 发送前校验
  */
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { ref } from 'vue'
 import { createMockContext, makeProvider } from './mockContext'
 import { useAiChat } from '../composables/useAiChat'
 import { useAiConfig } from '../composables/useAiConfig'
-import type { PluginConfig } from '../types'
+import { DEFAULT_PLUGIN_CONFIG, type PluginConfig } from '../types'
 
 /** rAF 调度器 stub：手动触发帧回调，验证节流语义（接缝 3） */
 function makeRafStub() {
@@ -22,7 +22,7 @@ function makeRafStub() {
       },
       cancelAnimationFrame(id: number) {
         cancelled.push(id)
-        const i = pending.findIndex(p => p.id === id)
+        const i = pending.findIndex((p) => p.id === id)
         if (i !== -1) pending.splice(i, 1)
       },
     },
@@ -57,15 +57,22 @@ function sse(payload: unknown): string {
 
 /** 取出最近一次 chat-stream 调用的 streamId 与事件名 */
 function streamEventOf(mock: ReturnType<typeof createMockContext>): string {
-  const streamCall = mock.calls.filter(c => c.command === 'ai-chatbox.chat-stream').pop()!
+  const streamCall = mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream').pop()!
   return `ai-chatbox:stream:${streamCall.args.streamId}`
 }
 
 /** 模拟一条完整流：正文 chunk + usage 尾块 + [DONE] + 宿主 done 兜底 */
-function emitFullStream(mock: ReturnType<typeof createMockContext>, eventName: string, content: string) {
+function emitFullStream(
+  mock: ReturnType<typeof createMockContext>,
+  eventName: string,
+  content: string,
+) {
   mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content } }] }) })
   mock.emitStream(eventName, {
-    chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+    chunk: sse({
+      choices: [],
+      usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+    }),
   })
   mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
   mock.emitStream(eventName, { done: true })
@@ -80,17 +87,18 @@ describe('useAiChat', () => {
     await chat.sendMessage('你好')
 
     // 自动创建对话
-    const convCalls = mock.calls.filter(c => c.command === 'ai-chatbox.save-conversation')
+    const convCalls = mock.calls.filter((c) => c.command === 'ai-chatbox.save-conversation')
     expect(convCalls.length).toBeGreaterThanOrEqual(1)
 
     // 用户消息落盘
-    const userSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'user')!
+    const userSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'user',
+    )!
     expect(userSave).toBeTruthy()
     expect(userSave.args.content).toBe('你好')
 
     // chat-stream 载荷：{ streamId, request }（适配层构建，raw 模式）
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     expect(streamCall).toBeTruthy()
     expect(streamCall.args.streamId).toBeTruthy()
     expect(streamCall.args.provider).toBeUndefined()
@@ -139,16 +147,21 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思' } }] }) })
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '考' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '思' } }] }),
+    })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '考' } }] }),
+    })
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '正文' } }] }) })
     mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
 
     const last = chat.messages.value[chat.messages.value.length - 1]
     expect(last.reasoning).toBe('思考')
     // save-message 携带 reasoning（P3 落盘：历史重开可见）
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.reasoning).toBe('思考')
     expect(assistantSave.args.content).toBe('正文')
   })
@@ -173,8 +186,9 @@ describe('useAiChat', () => {
     })
     mock.emitStream(secondEvent, { chunk: 'data: [DONE]\n\n' })
 
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(2)
     // 第二轮落盘：replaceLast 覆盖 + 新正文 + 新思考（旧思考不残留）
     expect(assistantSaves[1].args.replaceLastAssistant).toBe(true)
@@ -185,14 +199,18 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=enabled + effort 透传到 chat-stream 请求体', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'enabled', reasoningEffort: 'max', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
+    const pluginConfig = ref<PluginConfig>({
+      ...DEFAULT_PLUGIN_CONFIG,
+      thinkingMode: 'enabled',
+      reasoningEffort: 'max',
+    })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')
 
     await chat.sendMessage('hi')
 
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     const body = JSON.parse(streamCall.args.request.body)
     expect(body.thinking).toEqual({ type: 'enabled', reasoning_effort: 'max' })
   })
@@ -200,14 +218,18 @@ describe('useAiChat', () => {
   it('插件配置：thinkingMode=default 不写 thinking 字段（跟随模型）', async () => {
     const mock = createMockContext()
     const config = useAiConfig(mock.context)
-    const pluginConfig = ref<PluginConfig>({ thinkingMode: 'default', reasoningEffort: 'high', showReasoning: true, codeLineHeight: 1.6, codeFontSize: 13, codeTheme: 'auto' })
+    const pluginConfig = ref<PluginConfig>({
+      ...DEFAULT_PLUGIN_CONFIG,
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+    })
     const chat = useAiChat(mock.context, config, undefined, pluginConfig)
     await config.addProvider(makeProvider())
     await config.setActiveProvider('p1')
 
     await chat.sendMessage('hi')
 
-    const streamCall = mock.calls.find(c => c.command === 'ai-chatbox.chat-stream')!
+    const streamCall = mock.calls.find((c) => c.command === 'ai-chatbox.chat-stream')!
     expect(JSON.parse(streamCall.args.request.body).thinking).toBeUndefined()
   })
 
@@ -217,12 +239,15 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '部分思考' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '部分思考' } }] }),
+    })
     chat.stopGeneration()
 
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('')
     expect(assistantSave.args.reasoning).toBe('部分思考')
   })
@@ -234,7 +259,9 @@ describe('useAiChat', () => {
 
     // 正文未到达、仅 reasoning chunk（deepseek-reasoner 思考期典型形态）
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { reasoning_content: '思考中' } }] }) })
+    mock.emitStream(eventName, {
+      chunk: sse({ choices: [{ delta: { reasoning_content: '思考中' } }] }),
+    })
 
     expect(chat.isStreaming.value).toBe(true)
     expect(chat.streamingContent.value).toBe('')
@@ -249,7 +276,10 @@ describe('useAiChat', () => {
     const eventName = streamEventOf(mock)
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
     mock.emitStream(eventName, {
-      chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+      chunk: sse({
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+      }),
     })
 
     // 未终结前不落盘
@@ -259,8 +289,9 @@ describe('useAiChat', () => {
 
     expect(chat.sending.value).toBe(false)
     expect(chat.streamingContent.value).toBe('')
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave).toBeTruthy()
     expect(assistantSave.args.content).toBe('回复')
     expect(assistantSave.args.usage).toEqual({
@@ -278,8 +309,9 @@ describe('useAiChat', () => {
     emitFullStream(mock, streamEventOf(mock), '回复')
 
     expect(chat.sending.value).toBe(false)
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(1)
   })
 
@@ -300,8 +332,9 @@ describe('useAiChat', () => {
     const last = chat.messages.value[chat.messages.value.length - 1]
     expect(last.content).toBe('回复')
     // 残余事件不产生第二次落盘
-    const assistantSaves = mock.calls.filter(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')
+    const assistantSaves = mock.calls.filter(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )
     expect(assistantSaves.length).toBe(1)
     expect(assistantSaves[0].args.content).toBe('回复')
   })
@@ -324,8 +357,9 @@ describe('useAiChat', () => {
     })
     mock.emitStream(eventName, { chunk: sse({ type: 'message_stop' }) })
 
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.usage).toEqual({
       promptTokens: 25,
       completionTokens: 15,
@@ -339,7 +373,10 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     const eventName = streamEventOf(mock)
-    mock.emitStream(eventName, { error: 'This model maximum context length is 8192 tokens', done: true })
+    mock.emitStream(eventName, {
+      error: 'This model maximum context length is 8192 tokens',
+      done: true,
+    })
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.contextLimitExceeded')
   })
@@ -369,7 +406,7 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.apiKeyRequired')
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.chat-stream')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.chat-stream')).toBe(false)
   })
 
   it('发送前校验：baseUrl 非法 → baseUrlInvalid 提示，不发请求', async () => {
@@ -380,7 +417,7 @@ describe('useAiChat', () => {
     await chat.sendMessage('hi')
 
     expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.baseUrlInvalid')
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.chat-stream')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.chat-stream')).toBe(false)
   })
 
   it('停止生成：保存已接收内容并复位', async () => {
@@ -394,8 +431,9 @@ describe('useAiChat', () => {
     chat.stopGeneration()
 
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分内容')
   })
 
@@ -427,7 +465,7 @@ describe('useAiChat', () => {
     expect(last.content).toBe('')
 
     // 落盘走 replaceLastAssistant（覆盖旧回复行）
-    const streamCalls = mock.calls.filter(c => c.command === 'ai-chatbox.chat-stream')
+    const streamCalls = mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream')
     expect(streamCalls.length).toBe(2)
     const body = JSON.parse(streamCalls[1].args.request.body)
     expect(body.messages[0]).toEqual({ role: 'user', content: '问题一' })
@@ -446,7 +484,7 @@ describe('useAiChat', () => {
     expect(chat.currentConversation.value?.title).toBe('新标题')
 
     await chat.deleteConversation(convId)
-    expect(chat.conversations.value.find(c => c.id === convId)).toBeUndefined()
+    expect(chat.conversations.value.find((c) => c.id === convId)).toBeUndefined()
     expect(chat.currentConvId.value).toBe('')
   })
 })
@@ -518,7 +556,10 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
     mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
     mock.emitStream(eventName, {
-      chunk: sse({ choices: [], usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 } }),
+      chunk: sse({
+        choices: [],
+        usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+      }),
     })
     // 不触发帧回调，直接 [DONE] 终结：待决 rAF 应被取消并立即 flush
     mock.emitStream(eventName, { chunk: 'data: [DONE]\n\n' })
@@ -526,8 +567,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     expect(stub.cancelled.length).toBe(1)
     expect(stub.pending.length).toBe(0)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分回复')
     expect(assistantSave.args.usage).toEqual({
       promptTokens: 12,
@@ -545,8 +587,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
 
     expect(stub.cancelled.length).toBe(1)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 
@@ -558,8 +601,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     mock.emitStream(eventName, { error: 'boom', done: true })
 
     expect(stub.cancelled.length).toBe(1)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 
@@ -601,8 +645,9 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
     expect(stub.cancelled.length).toBe(1)
     expect(stub.pending.length).toBe(0)
     expect(chat.sending.value).toBe(false)
-    const assistantSave = mock.calls.find(c =>
-      c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant')!
+    const assistantSave = mock.calls.find(
+      (c) => c.command === 'ai-chatbox.save-message' && c.args.role === 'assistant',
+    )!
     expect(assistantSave.args.content).toBe('部分')
   })
 
@@ -617,5 +662,179 @@ describe('rAF 节流 flush（接缝 3，P2 渲染管线）', () => {
 
     // 无需触发任何帧回调，chunk 立即生效
     expect(chat.streamingContent.value).toBe('你好')
+  })
+})
+
+describe('限流自动重试（429/503/529 指数退避，默认 maxRetries=3 / initial 1s / cap 30s）', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** fake timers 下预置供应商并断言重试相关状态的辅助 */
+  async function setupWithFakeTimers(pluginConfig?: PluginConfig) {
+    vi.useFakeTimers()
+    const mock = createMockContext()
+    const config = useAiConfig(mock.context)
+    const chat = useAiChat(
+      mock.context,
+      config,
+      undefined,
+      pluginConfig ? ref(pluginConfig) : undefined,
+    )
+    await config.addProvider(makeProvider())
+    await config.setActiveProvider('p1')
+    return { mock, config, chat }
+  }
+
+  /** 当前 chat-stream 调用次数 */
+  function streamCallCount(mock: ReturnType<typeof createMockContext>): number {
+    return mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream').length
+  }
+
+  it('429 error 事件：进入指数退避等待（滑出条状态）→ 到点后以新 streamId 重发', async () => {
+    const { mock, chat } = await setupWithFakeTimers()
+    await chat.sendMessage('hi')
+
+    mock.emitStream(streamEventOf(mock), {
+      error: 'API error 429: {"code":"rate_limit_exceeded"}',
+      done: true,
+    })
+
+    // 等待中：滑出条状态 + sending 保持 true（输入框禁用、会话切换拦截）
+    expect(chat.rateLimitRetry.value).toEqual({
+      attempt: 1,
+      maxRetries: 3,
+      countdownSec: 1,
+      status: 429,
+    })
+    expect(chat.sending.value).toBe(true)
+
+    vi.advanceTimersByTime(1000)
+
+    // 到点重发：第二次 chat-stream（新 streamId）、滑出条清除、sending 仍 true
+    expect(streamCallCount(mock)).toBe(2)
+    const calls = mock.calls.filter((c) => c.command === 'ai-chatbox.chat-stream')
+    expect(calls[1].args.streamId).not.toBe(calls[0].args.streamId)
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(true)
+
+    // 重试成功走正常流
+    mock.emitStream(streamEventOf(mock), { chunk: sse({ choices: [{ delta: { content: '回复' } }] }) })
+    mock.emitStream(streamEventOf(mock), { chunk: 'data: [DONE]\n\n' })
+    expect(chat.sending.value).toBe(false)
+    expect(chat.messages.value[chat.messages.value.length - 1].content).toBe('回复')
+  })
+
+  it('指数退避时长：1s → 2s → 4s，倒计时随 interval 递减', async () => {
+    const { mock, chat } = await setupWithFakeTimers()
+    await chat.sendMessage('hi')
+
+    // 第 1 次限流 → 等 1s
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+    expect(chat.rateLimitRetry.value?.countdownSec).toBe(1)
+    vi.advanceTimersByTime(1000)
+
+    // 第 2 次限流 → 等 2s，倒计时随 interval 从 2 递减到 1
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+    expect(chat.rateLimitRetry.value).toMatchObject({ attempt: 2, countdownSec: 2 })
+    vi.advanceTimersByTime(500)
+    expect(chat.rateLimitRetry.value?.countdownSec).toBe(2)
+    vi.advanceTimersByTime(500)
+    expect(chat.rateLimitRetry.value?.countdownSec).toBe(1)
+    vi.advanceTimersByTime(1000)
+
+    // 第 3 次限流 → 等 4s（封顶前）
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+    expect(chat.rateLimitRetry.value).toMatchObject({ attempt: 3, countdownSec: 4 })
+    vi.advanceTimersByTime(4000)
+
+    // 第 4 次限流 → 重试额度耗尽，收尾为 i18n key
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(false)
+    expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.rateLimitExhausted')
+    expect(streamCallCount(mock)).toBe(4)
+  })
+
+  it('终止按钮：取消挂起的退避定时器并按"已终止"收尾，不再重发', async () => {
+    const { mock, chat } = await setupWithFakeTimers()
+    await chat.sendMessage('hi')
+
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+    expect(chat.rateLimitRetry.value).not.toBeNull()
+
+    chat.abortRateLimitRetry()
+
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(false)
+    expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.rateLimitAborted')
+
+    // 退避定时器已取消：推进任意时间不产生第二次 chat-stream
+    vi.advanceTimersByTime(60000)
+    expect(streamCallCount(mock)).toBe(1)
+  })
+
+  it('已收到部分内容后的限流：不自动重试（重发会重复整段请求），透传原始错误', async () => {
+    const { mock, chat } = await setupWithFakeTimers()
+    await chat.sendMessage('hi')
+
+    const eventName = streamEventOf(mock)
+    mock.emitStream(eventName, { chunk: sse({ choices: [{ delta: { content: '部分' } }] }) })
+    mock.emitStream(eventName, { error: 'API error 429: rate limited', done: true })
+
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(false)
+    expect(chat.lastError.value).toBe('API error 429: rate limited')
+    vi.advanceTimersByTime(60000)
+    expect(streamCallCount(mock)).toBe(1)
+  })
+
+  it('maxRetries=0（自动重试关闭）：限流错误原样透传，不进入退避', async () => {
+    const { mock, chat } = await setupWithFakeTimers({ ...DEFAULT_PLUGIN_CONFIG, rateLimitMaxRetries: 0 })
+    await chat.sendMessage('hi')
+
+    mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(false)
+    expect(chat.lastError.value).toBe('API error 429: rate limited')
+    vi.advanceTimersByTime(60000)
+    expect(streamCallCount(mock)).toBe(1)
+  })
+
+  it('非限流错误（上下文超限）：不重试，走既有分类', async () => {
+    const { mock, chat } = await setupWithFakeTimers()
+    await chat.sendMessage('hi')
+
+    mock.emitStream(streamEventOf(mock), {
+      error: 'This model maximum context length is 8192 tokens',
+      done: true,
+    })
+
+    expect(chat.rateLimitRetry.value).toBeNull()
+    expect(chat.sending.value).toBe(false)
+    expect(chat.lastError.value).toBe('desktop.plugin.aiChatbox.contextLimitExceeded')
+    vi.advanceTimersByTime(60000)
+    expect(streamCallCount(mock)).toBe(1)
+  })
+
+  it('封顶：initialDelay 1s、第 5 次重试理论 16s > maxDelay 10s 时按 10s 等待', async () => {
+    const { mock, chat } = await setupWithFakeTimers({
+      ...DEFAULT_PLUGIN_CONFIG,
+      rateLimitMaxRetries: 5,
+      rateLimitInitialDelayMs: 1000,
+      rateLimitMaxDelayMs: 10000,
+    })
+    await chat.sendMessage('hi')
+
+    // 连续 4 次限流推进到第 5 次重试调度（1s/2s/4s/8s）
+    for (let i = 0; i < 4; i++) {
+      mock.emitStream(streamEventOf(mock), { error: 'API error 429: rate limited', done: true })
+      vi.advanceTimersByTime(2 ** i * 1000)
+    }
+    // 第 5 次重试理论 16s，被 maxDelay 10s 封顶；503 同样识别为限流
+    mock.emitStream(streamEventOf(mock), { error: 'API error 503: overloaded', done: true })
+    expect(chat.rateLimitRetry.value?.countdownSec).toBe(10)
+    expect(chat.rateLimitRetry.value?.status).toBe(503)
   })
 })

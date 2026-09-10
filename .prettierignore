@@ -1,0 +1,14 @@
+dist
+dist-ssr
+node_modules
+src-tauri
+coverage
+playwright-report
+test-results
+*.local
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+**/auto-imports.d.ts
+**/components.d.ts
+**/*.d.ts

@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
@@ -66,7 +67,7 @@ export const useSettingsStore = defineStore('settings', () => {
         ui: { ...defaultSettings.ui, ...loaded.ui },
       }
     } catch (e) {
-      console.error('[Settings] Failed to load settings:', e)
+      logger.error('[Settings] Failed to load settings:', e)
     }
   }
 
@@ -76,11 +77,11 @@ export const useSettingsStore = defineStore('settings', () => {
       await invoke('save_app_settings', { settings: merged })
       settings.value = merged
     } catch (e) {
-      console.error('[Settings] Failed to save settings:', e)
+      logger.error('[Settings] Failed to save settings:', e)
     }
   }
 
-  // 获��终端缓存最大数量
+  // 获终端缓存最大数量
   function getMaxCachedTerminals(): number {
     return settings.value.ui.max_cached_terminals || 10
   }

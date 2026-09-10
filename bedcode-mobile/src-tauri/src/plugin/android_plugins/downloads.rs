@@ -3,12 +3,12 @@
 //! 从 android_plugins.rs 拆分。
 
 use std::sync::OnceLock;
-use tauri::Manager;
 use tauri::plugin::{Builder, PluginHandle};
+use tauri::Manager;
 
 /// 已注册的 DownloadsDirPlugin 句柄（仅 Android 平台使用）
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static DOWNLOADS_DIR_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
-
 
 /// 注册 DownloadsDirPlugin（Android 外部私有下载目录路径获取）
 ///
@@ -27,7 +27,6 @@ pub fn downloads_dir_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         })
         .build()
 }
-
 
 /// 获取 Android 外部私有下载目录绝对路径
 ///
@@ -48,13 +47,11 @@ pub async fn get_external_downloads_dir() -> Option<String> {
     }
 }
 
-
 /// 非 Android 平台外部下载目录不可用
 #[cfg(not(target_os = "android"))]
 pub async fn get_external_downloads_dir() -> Option<String> {
     None
 }
-
 
 /// 解析 app 下载目录（免授权特殊条目基址，与 WASM host config 共用）
 ///
@@ -84,7 +81,6 @@ pub async fn resolve_app_downloads_dir(app_handle: &tauri::AppHandle) -> Option<
     Some(path.to_string_lossy().into_owned())
 }
 
-
 /// 判断路径是否位于 AppDownloadsDir（免授权特殊条目）之下
 ///
 /// canonicalize 白名单，三处共用（命令层 saf 列表、WASM host media 落位、
@@ -93,10 +89,8 @@ pub async fn is_within_app_downloads_dir(app_handle: &tauri::AppHandle, path: &s
     let Some(base) = resolve_app_downloads_dir(app_handle).await else {
         return false;
     };
-    let base_canon =
-        std::fs::canonicalize(&base).unwrap_or_else(|_| std::path::PathBuf::from(&base));
-    let target_canon =
-        std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
+    let base_canon = std::fs::canonicalize(&base).unwrap_or_else(|_| std::path::PathBuf::from(&base));
+    let target_canon = std::fs::canonicalize(path).unwrap_or_else(|_| std::path::PathBuf::from(path));
     target_canon.starts_with(&base_canon)
 }
 
@@ -106,9 +100,9 @@ pub async fn is_within_app_downloads_dir(app_handle: &tauri::AppHandle, path: &s
 /// 非 Android 平台返回错误（桌面由宿主自行打开）。
 #[cfg(target_os = "android")]
 pub async fn open_download_file(path: &str, display_name: &str) -> crate::Result<()> {
-    let handle = DOWNLOADS_DIR_HANDLE.get().ok_or_else(|| {
-        crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string())
-    })?;
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
     let payload = serde_json::json!({ "path": path, "displayName": display_name });
     // 显式标注 Ok 类型：run_mobile_plugin_async 的 Ok 在无约束时会退化为
     // never type fallback（编译错误），与 android_plugins 其他调用点同模式
@@ -133,18 +127,16 @@ pub async fn open_download_file(_path: &str, _display_name: &str) -> crate::Resu
 /// ACTION_VIEW）。需 system:open 权限。非 Android 平台返回错误。
 #[cfg(target_os = "android")]
 pub async fn open_download_file_location(path: &str) -> crate::Result<()> {
-    let handle = DOWNLOADS_DIR_HANDLE.get().ok_or_else(|| {
-        crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string())
-    })?;
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
     let payload = serde_json::json!({ "path": path });
     // 显式标注 Ok 类型：run_mobile_plugin_async 的 Ok 在无约束时会退化为
     // never type fallback（编译错误），与 open_download_file 同模式
     let _response: serde_json::Value = handle
         .run_mobile_plugin_async("openFileLocation", payload)
         .await
-        .map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to invoke openFileLocation: {}", e))
-        })?;
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke openFileLocation: {}", e)))?;
     Ok(())
 }
 
@@ -156,3 +148,57 @@ pub async fn open_download_file_location(_path: &str) -> crate::Result<()> {
     ))
 }
 
+/// 按文件名打开接收文件所在目录（历史记录「打开所在文件夹」真机路径）
+///
+/// 接收落点不在 wire 上（真实设备无路径字段），仅凭文件名经 Kotlin
+/// DownloadsDirPlugin.openFileLocationByName 解析：MediaStore 公共下载按名
+/// 命中 → primary:Download 目录；未命中回退 app 私有下载目录按名查找 +
+/// FileProvider 暴露父目录。需 system:open 权限。非 Android 平台返回错误。
+#[cfg(target_os = "android")]
+pub async fn open_download_file_location_by_name(display_name: &str) -> crate::Result<()> {
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
+    let payload = serde_json::json!({ "displayName": display_name });
+    // 与 open_download_file_location 同模式：显式标注 Ok 类型避免 never-type 退化为编译错误
+    let _response: serde_json::Value = handle
+        .run_mobile_plugin_async("openFileLocationByName", payload)
+        .await
+        .map_err(|e| {
+            crate::AppError::Plugin(format!("Failed to invoke openFileLocationByName: {}", e))
+        })?;
+    Ok(())
+}
+
+/// 非 Android 平台无法经 Kotlin 打开目录
+#[cfg(not(target_os = "android"))]
+pub async fn open_download_file_location_by_name(_display_name: &str) -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "openFileLocationByName unavailable on this platform".to_string(),
+    ))
+}
+
+/// 打开公共下载目录（设置页「下载目录」区打开按钮）
+///
+/// 经 Kotlin DownloadsDirPlugin.openDownloadDir（primary:Download 文档树 URI；
+/// 需「所有文件访问」，未授权时以 needs_all_files_access 前缀 reject 供前端
+/// 引导）。需 system:open 权限。非 Android 平台返回错误。
+#[cfg(target_os = "android")]
+pub async fn open_download_dir() -> crate::Result<()> {
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
+    let _response: serde_json::Value = handle
+        .run_mobile_plugin_async("openDownloadDir", serde_json::json!({}))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke openDownloadDir: {}", e)))?;
+    Ok(())
+}
+
+/// 非 Android 平台无法经 Kotlin 打开下载目录
+#[cfg(not(target_os = "android"))]
+pub async fn open_download_dir() -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "openDownloadDir unavailable on this platform".to_string(),
+    ))
+}

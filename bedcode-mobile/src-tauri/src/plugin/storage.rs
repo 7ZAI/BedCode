@@ -2,8 +2,8 @@
 //!
 //! 每个插件独立的键值存储，数据持久化到 app_data_dir/plugins/{plugin_id}.json
 
-use crate::Result;
 use crate::system::constants::plugin::{PLUGIN_STORAGE_DIR, PLUGIN_STORAGE_EXT};
+use crate::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -52,9 +52,9 @@ impl PluginStorage {
     /// 设置值
     pub async fn set(&self, plugin_id: &str, key: &str, value: Value) -> Result<()> {
         let mut caches = self.caches.write().await;
-        let store = caches.entry(plugin_id.to_string()).or_insert_with(|| {
-            self.load_from_disk(plugin_id).unwrap_or_default()
-        });
+        let store = caches
+            .entry(plugin_id.to_string())
+            .or_insert_with(|| self.load_from_disk(plugin_id).unwrap_or_default());
         store.insert(key.to_string(), value);
         drop(caches);
 

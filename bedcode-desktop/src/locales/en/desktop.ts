@@ -1,5 +1,9 @@
 export default {
   desktop: {
+    splash: {
+      status: 'Starting up…',
+      tagline: 'LAN remote terminal workbench',
+    },
     sidebar: {
       session: 'Session',
       terminalSession: 'Terminal Session',
@@ -30,9 +34,11 @@ export default {
       confirmStop: 'Confirm Stop Session',
       confirmStopMsg: 'Are you sure you want to stop session "{name}"?',
       confirmDelete: 'Confirm Delete',
-      confirmDeleteMsg: 'Are you sure you want to delete this session config? This action cannot be undone.',
+      confirmDeleteMsg:
+        'Are you sure you want to delete this session config? This action cannot be undone.',
       confirmDeleteSession: 'Confirm Delete Session',
-      confirmDeleteRunning: 'Session "{name}" is still running. It will be stopped before deletion. This action cannot be undone.',
+      confirmDeleteRunning:
+        'Session "{name}" is still running. It will be stopped before deletion. This action cannot be undone.',
       stopAndDelete: 'Stop & Delete',
       sessionStarted: 'Session started',
       sessionStopped: 'Session stopped',
@@ -64,7 +70,8 @@ export default {
       stopTime: 'Stop Time',
       runTime: 'Run Time: {time}',
       confirmExitTitle: 'Confirm Exit',
-      confirmExitMsg: '{count} session(s) are still running. All running processes will be terminated if you exit.',
+      confirmExitMsg:
+        '{count} session(s) are still running. All running processes will be terminated if you exit.',
       confirmExitForce: 'Force Exit',
     },
     form: {
@@ -78,9 +85,19 @@ export default {
       wslDetectFailed: 'WSL detection failed: {error}',
       workingDir: 'Working Directory',
       command: 'Start Command',
-      commandHelp: 'Enter command to execute, e.g. claude, npm run dev',
+      commandPlaceholder: 'Select or enter a command',
+      commandHelp: 'Enter command to execute, e.g. claude, pnpm run dev',
+      customCommand: 'Custom Command',
+      commandPreset: {
+        claude: 'Claude Code',
+        codex: 'Codex',
+        pi: 'Pi',
+        opencode: 'OpenCode',
+        custom: 'Custom',
+      },
       autoStart: 'Auto Start on Launch',
       windowsNative: 'Windows Native',
+      linuxNative: 'Linux Native',
     },
     device: {
       title: 'Device Pairing',
@@ -117,7 +134,6 @@ export default {
       notSelected: 'Not selected',
       confirmRemove: 'Confirm Remove',
       confirmRemoveMsg: 'Are you sure you want to remove this device? You will need to pair again.',
-      deviceConnected: 'Device connected via QR code',
       pairingRequest: 'Mobile pairing request. Enter code: {code}',
       codeGenerateFailed: 'Failed to generate pairing code',
       codeGenerateFailedNoCode: 'Failed to generate pairing code: no valid code received',
@@ -167,6 +183,13 @@ export default {
       bgImageRemove: 'Remove',
       bgImageOpacity: 'Image Opacity',
       bgImageSetFailed: 'Failed to set background image',
+      rendererOverrideTitle: 'Override Terminal Size',
+      rendererOverrideBody:
+        'The {renderer} end is currently rendering output. Override its size?\nThe {renderer} end display will be misformatted after override.',
+      rendererOverrideConfirm: 'Override',
+      rendererOverrideCancel: 'Cancel',
+      rendererDesktop: 'Desktop',
+      rendererMobile: 'Mobile',
     },
     server: {
       title: 'Server Management',
@@ -242,6 +265,9 @@ export default {
       disabledSection: 'Disabled',
       activated: 'Activated',
       loaded: 'Loaded',
+      activating: 'Activating',
+      degraded: 'Degraded',
+      degradedReason: 'Startup initialization failed; plugin running in degraded mode: {error}',
       needsApproval: 'Pending approval',
       deactivated: 'Deactivated',
       disable: 'Disable',
@@ -259,10 +285,12 @@ export default {
       loadFailed: 'Failed to load plugins',
       enabledSuccess: 'Plugin {name} enabled',
       disabledSuccess: 'Plugin {name} disabled',
-      selfCheckFailed: 'Plugin {plugin} self-check failed: {error}. Check the plugin configuration.',
+      selfCheckFailed:
+        'Plugin {plugin} self-check failed: {error}. Check the plugin configuration.',
       runtimePanic: 'Plugin "{name}" hit an unknown error and is being auto-recovered: {error}',
       runtimeTrap: 'Plugin "{name}" crashed unexpectedly; attempting auto-reload',
-      runtimeRecoveryFailed: 'Plugin "{name}" failed and auto-recovery did not help: {error}. Check the plugin list',
+      runtimeRecoveryFailed:
+        'Plugin "{name}" failed and auto-recovery did not help: {error}. Check the plugin list',
       runtimeUnexpected: 'An unexpected error occurred. See logs for details',
       toggleTimeout: 'Operation timed out (backend not responding)',
       copyFailed: 'Failed to copy path',
@@ -280,7 +308,6 @@ export default {
       fsAuthAllow: 'Allow',
       fsAuthDeny: 'Deny',
       alwaysOn: 'Always on',
-      noFileservicePermission: 'Plugin {plugin} lacks the fileservice permission',
       noSystemOpenPermission: 'Plugin {plugin} lacks the system:open permission',
       toolboxPanels: 'Toolbox',
       // ==================== Detail page additions ====================
@@ -309,7 +336,10 @@ export default {
         storage: { title: 'Storage', desc: 'Read/write plugin local storage' },
         'terminal:input': { title: 'Terminal Input', desc: 'Send input to terminal sessions' },
         'terminal:output': { title: 'Terminal Output', desc: 'Listen to terminal output' },
-        'terminal:observe': { title: 'Terminal Observe', desc: 'Observe terminal input submissions' },
+        'terminal:observe': {
+          title: 'Terminal Observe',
+          desc: 'Observe terminal input submissions',
+        },
         'session:read': { title: 'Session Read', desc: 'Read session list and status' },
         'session:write': { title: 'Session Write', desc: 'Create, stop or modify sessions' },
         'ui:sidebar': { title: 'Sidebar Panel', desc: 'Register panels in sidebar' },
@@ -418,6 +448,10 @@ export default {
         requestFailed: 'Request failed',
         apiKeyRequired: 'API key is required',
         baseUrlInvalid: 'Invalid Base URL',
+        rateLimitRetryIn: 'Provider rate limited — retrying in {seconds}s (attempt {attempt}/{max})',
+        rateLimitStop: 'Stop',
+        rateLimitExhausted: 'Rate limited by provider: retries exhausted — try again later or switch model',
+        rateLimitAborted: 'Rate limit retry stopped',
       },
     },
   },

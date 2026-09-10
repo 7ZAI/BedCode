@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop Vite 插件
+ * @binblink/bedcode-plugin-sdk-desktop Vite 插件
  *
  * 处理插件构建时的共享模块外部化：
  * 1. 将 vue/vue-i18n/pinia 标记为 rollup external
@@ -10,9 +10,9 @@ import MagicString from 'magic-string'
 
 /** 共享模块映射：模块名 → 全局变量访问表达式 */
 const SHARED_MODULES: Record<string, string> = {
-  'vue': 'window.__BEDCODE_SHARED__["vue"]',
+  vue: 'window.__BEDCODE_SHARED__["vue"]',
   'vue-i18n': 'window.__BEDCODE_SHARED__["vue-i18n"]',
-  'pinia': 'window.__BEDCODE_SHARED__["pinia"]',
+  pinia: 'window.__BEDCODE_SHARED__["pinia"]',
 }
 
 /**
@@ -20,7 +20,7 @@ const SHARED_MODULES: Record<string, string> = {
  *
  * 在插件 vite.config.ts 中使用：
  * ```ts
- * import { bedcodePlugin } from '@binblink/plugin-sdk-desktop/vite'
+ * import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
  * export default defineConfig({
  *   plugins: [vue(), bedcodePlugin()],
  *   build: { ... }
@@ -61,33 +61,45 @@ export function bedcodePlugin(): Plugin {
         const escapedName = modName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
         // import X from 'vue' → const X = window.__BEDCODE_SHARED__["vue"]
-        const defaultRe = new RegExp(
-          `import\\s+(\\w+)\\s+from\\s+['"]${escapedName}['"]`, 'gm'
-        )
+        const defaultRe = new RegExp(`import\\s+(\\w+)\\s+from\\s+['"]${escapedName}['"]`, 'gm')
         let match: RegExpExecArray | null
         while ((match = defaultRe.exec(code)) !== null) {
           const varName = match[1]
-          s.overwrite(match.index, match.index + match[0].length, `const ${varName} = ${globalExpr}`)
+          s.overwrite(
+            match.index,
+            match.index + match[0].length,
+            `const ${varName} = ${globalExpr}`,
+          )
           modified = true
         }
 
         // import { X, Y } from 'vue' → const { X, Y } = window.__BEDCODE_SHARED__["vue"]
         const namedRe = new RegExp(
-          `import\\s*\\{([^}]+)\\}\\s*from\\s+['"]${escapedName}['"]`, 'gm'
+          `import\\s*\\{([^}]+)\\}\\s*from\\s+['"]${escapedName}['"]`,
+          'gm',
         )
         while ((match = namedRe.exec(code)) !== null) {
           const imports = match[1]
-          s.overwrite(match.index, match.index + match[0].length, `const { ${imports} } = ${globalExpr}`)
+          s.overwrite(
+            match.index,
+            match.index + match[0].length,
+            `const { ${imports} } = ${globalExpr}`,
+          )
           modified = true
         }
 
         // import * as X from 'vue' → const X = window.__BEDCODE_SHARED__["vue"]
         const namespaceRe = new RegExp(
-          `import\\s+\\*\\s+as\\s+(\\w+)\\s+from\\s+['"]${escapedName}['"]`, 'gm'
+          `import\\s+\\*\\s+as\\s+(\\w+)\\s+from\\s+['"]${escapedName}['"]`,
+          'gm',
         )
         while ((match = namespaceRe.exec(code)) !== null) {
           const varName = match[1]
-          s.overwrite(match.index, match.index + match[0].length, `const ${varName} = ${globalExpr}`)
+          s.overwrite(
+            match.index,
+            match.index + match[0].length,
+            `const ${varName} = ${globalExpr}`,
+          )
           modified = true
         }
       }

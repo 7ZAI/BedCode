@@ -1,3 +1,6 @@
+// WDIO E2E 测试探针：暴露 window.wdioTauri（execute/mock/log），无 Rust wdio 插件配合时静默空转
+import '@wdio/tauri-plugin'
+import { logger } from '@/utils/frontendLogger'
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import { listen } from '@tauri-apps/api/event'
@@ -10,6 +13,7 @@ import { useI18nStore } from '@/stores/i18n'
 import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
+import { initFrontendLogger } from '@/utils/frontendLogger'
 import 'vue-sonner/style.css'
 import './style.css'
 
@@ -34,16 +38,20 @@ interface PluginRuntimeErrorPayload {
 
 const app = createApp(App)
 
+// 尽早初始化（dev 专属）：把前端日志经 frontendLogger 批量转发到 Rust 落盘
+// （runtime.*.log，target=frontend）；release 构建 logger 为空函数，零开销零输出
+initFrontendLogger()
+
 // 全局异常处理：Vue 组件渲染/生命周期错误与未捕获的 Promise 拒绝统一提示，
 // 避免静默失败（与插件运行时异常通道互为补充，见下方 plugin:runtime-error 监听）
 // 细节全量进 console，toast 只做用户可见的「发生了未知错误」提示
 app.config.errorHandler = (err, _instance, info) => {
-  console.error(`[GlobalError] ${info || 'render'}:`, err)
+  logger.error(`[GlobalError] ${info || 'render'}:`, err)
   useToast().error(i18n.global.t('desktop.plugin.runtimeUnexpected'))
 }
 
 window.addEventListener('unhandledrejection', (event) => {
-  console.error('[GlobalError] unhandledrejection:', event.reason)
+  logger.error('[GlobalError] unhandledrejection:', event.reason)
   useToast().error(i18n.global.t('desktop.plugin.runtimeUnexpected'))
 })
 
@@ -51,7 +59,7 @@ app.use(createPinia())
 app.use(router)
 app.use(i18n)
 
-// 初始化共享模块运行时（供插件通过 @binblink/plugin-sdk-desktop 访问）
+// 初始化共享模块运行时（供插件通过 @binblink/bedcode-plugin-sdk-desktop 访问）
 setupSharedRuntime(i18n, router)
 
 // 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存
@@ -59,15 +67,26 @@ setupSharedRuntime(i18n, router)
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
 const wslStore = useWslStore()
-Promise.all([
-  initPlatform(),
-  settingsStore.loadSettings(),
-  wslStore.loadWslInfo(),
-]).then(() => {
-  // 设置加载完成后初始化语言偏好
-  i18nStore.initLanguage()
-  console.log('[Init] Platform, settings and WSL info pre-loaded')
-})
+Promise.all([initPlatform(), settingsStore.loadSettings(), wslStore.loadWslInfo()]).then(
+  ([platformInfo]) => {
+    // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
+    // - platform-desktop / platform-mobile：通用桌面/移动区分
+    // - platform-linux：仅 Linux，启用 font-size:115% + --ui-scale:1.15 体系修正
+    //   WebKitGTK 下字号偏小（issue 06 已移除 zoom，避免破坏 xterm 鼠标坐标系）
+    if (platformInfo.isDesktop) {
+      document.documentElement.classList.add('platform-desktop')
+    } else if (platformInfo.isMobile) {
+      document.documentElement.classList.add('platform-mobile')
+    }
+    if (platformInfo.isLinux) {
+      document.documentElement.classList.add('platform-linux')
+    }
+
+    // 设置加载完成后初始化语言偏好
+    i18nStore.initLanguage()
+    logger.log('[Init] Platform, settings and WSL info pre-loaded')
+  },
+)
 
 // 监听插件通知事件（由 host_notify Host Function 发送）
 listen<PluginNotifyPayload>('plugin:notify', (event) => {
@@ -85,7 +104,7 @@ listen<PluginNotifyPayload>('plugin:notify', (event) => {
 listen<PluginErrorPayload>('plugin:error', (event) => {
   const { plugin_id, error } = event.payload
   const toast = useToast()
-  console.error(`[Plugin] ${plugin_id} self-check failed:`, error)
+  logger.error(`[Plugin] ${plugin_id} self-check failed:`, error)
   toast.error(i18n.global.t('desktop.plugin.selfCheckFailed', { plugin: plugin_id, error }))
 })
 
@@ -94,7 +113,7 @@ listen<PluginErrorPayload>('plugin:error', (event) => {
 listen<PluginRuntimeErrorPayload>('plugin:runtime-error', (event) => {
   const { plugin_id, plugin_name, kind, error } = event.payload
   const toast = useToast()
-  console.error(`[Plugin] ${plugin_name} (${plugin_id}) runtime error [${kind}]:`, error)
+  logger.error(`[Plugin] ${plugin_name} (${plugin_id}) runtime error [${kind}]:`, error)
   const shortError = error.length > 120 ? `${error.slice(0, 120)}…` : error
   const key =
     kind === 'panic'
@@ -109,6 +128,6 @@ app.mount('#app')
 
 // 初始化插件系统（非阻塞，失败不影响主应用）
 import { pluginLoader } from '@/plugin/loader'
-pluginLoader.loadAll().catch(e => {
-  console.error('[PluginSystem] Failed to initialize:', e)
+pluginLoader.loadAll().catch((e) => {
+  logger.error('[PluginSystem] Failed to initialize:', e)
 })

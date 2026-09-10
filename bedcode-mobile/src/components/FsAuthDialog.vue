@@ -3,7 +3,7 @@
     <Transition name="center-modal">
       <div
         v-if="request"
-        class="fixed inset-0 z-50 flex items-center justify-center mobile-ui"
+        class="fixed inset-0 z-[120] flex items-center justify-center mobile-ui"
         @click.self="deny"
       >
         <!-- Backdrop -->

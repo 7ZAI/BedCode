@@ -7,7 +7,7 @@
       :style="trackStyle"
     >
       <div
-        v-for="(page, index) in pages"
+        v-for="page in pages"
         :key="page.name"
         class="swipe-page"
       >
@@ -27,6 +27,10 @@
  * 使用 capture 阶段 + 非 passive 监听器确保水平滑动手势
  * 始终被容器拦截，不被子元素滚动或浏览器默认行为吞掉。
  * Teleport 弹窗打开时自动禁用滑动。
+ *
+ * 内部横滑区协作：子组件声明 data-swipe-zone（附 data-zone-at-start /
+ * data-zone-at-end 边界状态）后，区内水平滑动优先由区内部消费（切换内部
+ * 页签）；区处于该方向边界时手势交还外层翻主页面，见 onTouchMove 仲裁。
  */
 import { ref, computed, onMounted, onUnmounted, onActivated, watch, provide } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -94,6 +98,41 @@ let startY = 0
 let startTime = 0
 let direction: 'horizontal' | 'vertical' | null = null
 
+// 页面切换过渡动画的定时器句柄（goToPage 用可取消句柄防止快速连续切换时
+// 旧定时器提前复位 isAnimating，导致过渡中途放行新的触摸）
+let animTimeout: ReturnType<typeof setTimeout> | null = null
+
+// ==================== 内部横滑区仲裁（data-swipe-zone 协议） ====================
+//
+// 页内组件（如插件页签容器）可在根元素声明 data-swipe-zone，接管区内水平
+// 滑动以切换内部页签；外层仅在区处于该方向边界时接管翻页：
+// - 区内左滑（下一个）：未到末页 → 内部消费；已到末页 → 外层翻下一页
+// - 区内右滑（上一个）：未到首页 → 内部消费；已到首页 → 外层翻上一页
+// 边界状态由区内组件经 data-zone-at-start / data-zone-at-end 实时同步。
+// touch 事件全程以 touchstart 目标为 target，区内/边界判定在整轮手势中稳定。
+let zoneEl: HTMLElement | null = null
+let zoneOwnershipDecided = false
+let zoneOwned = false
+
+function resolveSwipeZone(target: EventTarget | null): HTMLElement | null {
+  const el = target as HTMLElement | null
+  return (el?.closest?.('[data-swipe-zone]') as HTMLElement | null) ?? null
+}
+
+/** 区是否已处于该滑动方向的边界（true = 该方向手势交外层翻页） */
+function zoneAtBoundary(el: HTMLElement, deltaX: number): boolean {
+  const atStart = el.dataset.zoneAtStart === 'true'
+  const atEnd = el.dataset.zoneAtEnd === 'true'
+  return (deltaX > 0 && atStart) || (deltaX < 0 && atEnd)
+}
+
+/** 重置内部横滑区仲裁状态（每轮手势独立判定） */
+function resetZoneState() {
+  zoneEl = null
+  zoneOwnershipDecided = false
+  zoneOwned = false
+}
+
 // 参数配置
 const CONFIG = {
   directionThreshold: 10,
@@ -111,8 +150,10 @@ const trackStyle = computed(() => ({
     : `transform ${CONFIG.animationDuration}ms cubic-bezier(0.4, 0, 0.2, 1)`
 }))
 
-// 初始化页面
-function initPage() {
+// 从路由同步当前页位置（query.page 优先，其次路由名），瞬时定位不做滑动动画。
+// 用于首次挂载与 keep-alive 激活时（停用期间可能经外部导航改了 ?page，
+// 例如从独立页返回指定 tab），保证立即停在正确页面。
+function syncPageFromRoute() {
   const queryPage = route.query.page
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
@@ -136,19 +177,26 @@ function syncRoute(page: number) {
   router.replace({ name: 'mobile-home', query: { page: page.toString() } })
 }
 
-// 切换到指定页面
-function goToPage(page: number, animate = true) {
+// 切换到指定页面。
+// 手势释放与点击导航栏统一走同一条滑动过渡动画（CSS transition），动画期间
+// isAnimating=true 拦截新的触摸，避免手势与过渡动画互相打断。此前点击导航栏
+// 走 goToPage(page, false) 使 isAnimating 恒 false，滑入中途的触摸会让
+// isDragging 立即把 transition 置 none，产生跳变。
+function goToPage(page: number) {
   if (page < 0 || page > pages.value.length - 1 || page === currentPage.value) return
 
-  isAnimating.value = animate
+  isAnimating.value = true
   currentPage.value = page
   translateX.value = -page * window.innerWidth
 
   syncRoute(page)
 
-  setTimeout(() => {
+  // 可取消句柄：快速连续切换时清除旧定时器，避免其提前复位 isAnimating
+  if (animTimeout !== null) clearTimeout(animTimeout)
+  animTimeout = setTimeout(() => {
     isAnimating.value = false
-  }, animate ? CONFIG.animationDuration : 0)
+    animTimeout = null
+  }, CONFIG.animationDuration)
 }
 
 /** 重置触摸状态，确保从终端返回后滑动功能正常 */
@@ -170,9 +218,14 @@ function resetTouchState() {
 // 5. Teleport 弹窗打开时完全跳过触摸处理
 
 function onTouchStart(e: TouchEvent) {
+  resetZoneState()
+
   // 弹窗打开时不处理滑动
   if (isModalOpen.value) return
   if (isAnimating.value) return
+
+  // 记录触摸起点所在的内部横滑区（touch 全程 target 不变，此处判定一次即可）
+  zoneEl = resolveSwipeZone(e.target)
 
   startX = e.touches[0].clientX
   startY = e.touches[0].clientY
@@ -210,7 +263,19 @@ function onTouchMove(e: TouchEvent) {
 
   // 水平滑动：阻止浏览器默认行为（如前进/后退导航、overscroll）
   if (direction === 'horizontal') {
-    e.preventDefault()
+    // 手势已被浏览器接管（如垂直滚动进行中，pan-y 允许的滚动已启动）时，
+    // touchmove 的 cancelable=false，preventDefault 会被静默忽略并在控制台
+    // 刷 "Ignored attempt to cancel a touchmove event..."；滚动本就无法中断，
+    // 直接跳过即可（监听器虽为 non-passive，也无法阻止已接管的滚动）
+    if (e.cancelable) e.preventDefault()
+
+    // 首次判定为水平方向时仲裁归属：触摸起点在横滑区内且该方向未到边界
+    // → 本轮手势交给区内组件（外层不拖动轨道、touchend 不翻页）
+    if (!zoneOwnershipDecided) {
+      zoneOwnershipDecided = true
+      zoneOwned = zoneEl !== null && !zoneAtBoundary(zoneEl, deltaX)
+    }
+    if (zoneOwned) return
 
     const containerWidth = window.innerWidth
     const baseTranslate = -currentPage.value * containerWidth
@@ -228,9 +293,18 @@ function onTouchMove(e: TouchEvent) {
 }
 
 function onTouchEnd(e: TouchEvent) {
+  // 手势已交给内部横滑区：外层不翻页，轨道未被拖动也无需回弹
+  if (zoneOwned) {
+    isDragging.value = false
+    direction = null
+    resetZoneState()
+    return
+  }
+
   if (!isDragging.value || direction !== 'horizontal') {
     isDragging.value = false
     direction = null
+    resetZoneState()
     return
   }
 
@@ -256,11 +330,13 @@ function onTouchEnd(e: TouchEvent) {
 
   isDragging.value = false
   direction = null
+  resetZoneState()
 }
 
 function onTouchCancel() {
   isDragging.value = false
   direction = null
+  resetZoneState()
   translateX.value = -currentPage.value * window.innerWidth
 }
 
@@ -307,7 +383,7 @@ watch(() => route.query.page, (queryPage) => {
   if (queryPage) {
     const page = parseInt(queryPage as string, 10)
     if (!isNaN(page) && page >= 0 && page <= pages.value.length - 1 && page !== currentPage.value) {
-      goToPage(page, false)
+      goToPage(page)
     }
   }
 })
@@ -321,7 +397,7 @@ function handleResize() {
 // ==================== 生命周期 ====================
 
 onMounted(() => {
-  initPage()
+  syncPageFromRoute()
 
   // 使用 capture 阶段 + non-passive 监听器
   // capture: true 让容器优先于子元素处理触摸事件
@@ -349,12 +425,16 @@ onUnmounted(() => {
 
   window.removeEventListener('resize', handleResize)
 
+  if (animTimeout !== null) clearTimeout(animTimeout)
+
   modalObserver?.disconnect()
   modalObserver = null
 })
 
-// keep-alive 激活时重置触摸状态，确保从终端返回后滑动功能正常
+// keep-alive 激活时：先同步路由页码（停用期间可能因外部导航改变 ?page），
+// 再复位触摸状态，确保从终端/独立页返回后立即停在正确页面且滑动正常
 onActivated(() => {
+  syncPageFromRoute()
   resetTouchState()
 })
 

@@ -86,12 +86,12 @@ export interface CommandContribution {
   icon?: string
 }
 
-/** 视图扩展点 */
+/** 视图扩展点（statusbar 项无静态 title/component，运行时注册动态 label） */
 export interface ViewContribution {
   id: string
   type: 'sidebar' | 'toolbox' | 'statusbar'
-  title: string
-  component: string
+  title?: string
+  component?: string
   icon?: string
 }
 
@@ -116,10 +116,19 @@ export interface FileHandlerContribution {
   icon?: string
 }
 
-/** 插件运行时状态 */
+/** 插件运行时状态
+ *
+ * 线协议形状与 Rust serde 一一对应（tag = "state", content = "error"）：
+ * 单元变体 → `{ state: "Loaded" }`；newtype 变体 → `{ state: "Degraded", error: "..." }`。
+ * Rust 源：packages/plugin-sdk-desktop/rust/src/types.rs 的 PluginState
+ */
 export type PluginState =
   | { state: 'Loaded' }
+  /** 激活进行中（auto-activation / 手动激活期间的瞬时中间态） */
+  | { state: 'Activating' }
   | { state: 'Activated' }
+  /** activate 成功但 on_startup 失败：实例可用、扩展点已注册，启动初始化未完成 */
+  | { state: 'Degraded'; error: string }
   | { state: 'NeedsApproval' }
   | { state: 'Error'; error: string }
   | { state: 'Deactivated' }
@@ -185,6 +194,71 @@ export interface StatusBarItemDescriptor {
   onClick?: () => void
 }
 
+// ==================== 全局弹窗（宿主通用能力，SDK types.ts 双写副本） ====================
+
+/** 弹窗动作按钮（预设模式，Label 文案由插件经自身 i18n 生成后传入） */
+export interface PluginDialogAction {
+  label: string
+  /** 视觉变体：默认 / 主按钮 / 危险 / 幽灵 */
+  kind?: 'default' | 'primary' | 'danger' | 'ghost'
+  /** 点击回调（可异步）；成功返回后自动关闭弹窗（抛错则保持打开以便重试） */
+  onClick?: () => void | Promise<void>
+  /** 点击后经宿主 router 跳转的目标路由（先关弹窗再跳转） */
+  navigateTo?: string
+  /** 动作进行中禁用（如提交中防重复点击）；经 handle.update() 联动 */
+  disabled?: boolean
+}
+
+/**
+ * 全局弹窗选项（宿主统一渲染：遮罩/卡片/z-index/定时关闭/按钮/路由跳转）
+ *
+ * 两种模式：
+ * - 预设模式：title + message + icon + actions，常见「确认/拒绝」类请求开箱即用；
+ * - 组件模式：content 传入任意 Vue 组件（经 provide('pluginContext') 渲染），
+ *   props 可经 handle.update() 热更新。
+ * 定时关闭为可选能力：仅当 timeoutSec / deadlineAt 之一提供时生效。
+ */
+export interface PluginDialogOptions {
+  /** 自定义内容组件（组件模式）；缺省用 title/message/icon/actions 预设渲染 */
+  content?: any
+  /** 内容组件 props（组件模式；handle.update() 可热更新） */
+  props?: Record<string, unknown>
+  /** 预设模式：标题 */
+  title?: string
+  /** 预设模式：正文 */
+  message?: string
+  /** 预设模式：图标（SVG path d，随文字颜色渲染） */
+  icon?: string
+  /** 预设模式：动作按钮组（缺省无按钮；顺序即展示顺序） */
+  actions?: PluginDialogAction[]
+  /** 定时自动关闭（可选）：相对秒数，从弹窗弹出起算 */
+  timeoutSec?: number
+  /** 定时自动关闭（可选）：绝对截止时间戳 ms（迟到打开 / 排队续算更准确，优先于 timeoutSec） */
+  deadlineAt?: number
+  /** 倒计时文案模板，{seconds} 占位（如 '{seconds} 秒后自动拒绝'）；缺省不显示倒计时 */
+  countdownLabel?: string
+  /** 超时回调（自动关闭前触发）；缺省仅关闭 */
+  onTimeout?: () => void
+  /** 是否可手动关闭（右上角关闭按钮 / Escape / 遮罩点击），默认 true */
+  closable?: boolean
+  /** 点击遮罩是否关闭，默认 true（closable=false 时无效） */
+  closeOnBackdrop?: boolean
+  /** 卡片宽度（Tailwind max-w-* 类），默认 max-w-md */
+  widthClass?: string
+  /** 内容区 padding（Tailwind 类），默认 p-0（组件模式自带内距，预设模式内部处理） */
+  bodyClass?: string
+  /** 关闭后回调（按钮 / 遮罩 / Escape / 超时 / close() / 排队项被取消 均触发） */
+  onClose?: () => void
+}
+
+/** 全局弹窗句柄：调用方据此关闭或热更新当前弹窗 */
+export interface PluginDialogHandle {
+  /** 关闭当前弹窗（幂等）；队列中下一个弹窗自动接替 */
+  close(): void
+  /** 热更新选项（props / 文案 / 按钮 / 倒计时等） */
+  update(options: Partial<PluginDialogOptions>): void
+}
+
 /** 输入扩展描述符 */
 export interface InputExtensionDescriptor {
   id: string
@@ -212,7 +286,15 @@ export interface TitleBarItemDescriptor {
 /** 页面工具栏项描述符 — 注入到指定页面的工具栏页头右操作区 */
 export interface PageToolbarItemDescriptor {
   /** 目标页面标识：sessions / devices / history / plugins / plugin-config / server / settings / terminal */
-  target: 'sessions' | 'devices' | 'history' | 'plugins' | 'plugin-config' | 'server' | 'settings' | 'terminal'
+  target:
+    | 'sessions'
+    | 'devices'
+    | 'history'
+    | 'plugins'
+    | 'plugin-config'
+    | 'server'
+    | 'settings'
+    | 'terminal'
   id: string
   label: string
   icon?: string
@@ -266,6 +348,8 @@ export interface UIRegistry {
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
+  /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
+  showDialog(options: PluginDialogOptions): PluginDialogHandle
 }
 
 /** 事件 API */
@@ -287,105 +371,6 @@ export interface HttpAPI {
   registerEndpoint(path: string, handler: RequestHandler): Disposable
 }
 
-// ==================== File Service API Types ====================
-
-/** 上传策略钩子元信息（宿主 → 插件，与 SDK Rust UploadRequestMeta camelCase 对应） */
-export interface UploadRequestMeta {
-  /** 目标相对路径（相对挂载根） */
-  relativePath: string
-  /** 声明的文件大小（字节） */
-  size: number
-}
-
-/** 批量传输请求元信息（v2 批钩子入参，与 SDK Rust TransferRequestMeta camelCase 对应） */
-export interface TransferRequestMeta {
-  /** 批 ID（UUID，发送方生成） */
-  batchId: string
-  /** 批内文件清单 */
-  files: UploadRequestMeta[]
-  /** 批总大小（字节） */
-  totalSize: number
-}
-
-/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝）
- * v2 三路化：allow / ask / deny（wire 兼容旧 `{ allow, reason }`） */
-export interface UploadHookDecision {
-  /** 是否允许上传 */
-  allow: boolean
-  /** v2：true = 需要用户批准（批上下文）；与 allow 互斥 */
-  ask?: boolean
-  /** 拒绝原因（如 duplicate-name / policy-denied），允许时为空 */
-  reason?: string
-}
-
-/** 文件服务挂载选项（与 SDK Rust MountOptions camelCase 对应） */
-export interface MountOptions {
-  /** 挂载点名称（小写字母数字 -_），暴露为 /api/plugins/{pluginId}/{mountPath}/** */
-  mountPath: string
-  /** 允许目录根（绝对路径，来自插件 storage 的用户配置） */
-  roots: string[]
-  /** 允许的操作集合（未声明的操作端点返回 403） */
-  operations: ('list' | 'download' | 'upload')[]
-  /** 上传策略钩子（可选；提供时以 Webview 钩子目标注册，上传会话创建时调用一次） */
-  onUploadRequest?: (meta: UploadRequestMeta) => Promise<UploadHookDecision>
-  /** v2：批量传输请求钩子（可选；提供时以 Webview 批钩子目标注册，POST /transfer-request 时调用一次） */
-  onTransferRequest?: (meta: TransferRequestMeta) => Promise<UploadHookDecision>
-}
-
-/** 挂载句柄（fileService.mount 返回值） */
-export interface FileServiceMount {
-  /** 挂载点名称 */
-  mountPath: string
-  /** 更新允许目录根（目录变更即时生效） */
-  updateRoots(roots: string[]): Promise<void>
-  /** 摘除挂载点（插件 deactivate 时应一并调用） */
-  dispose(): Promise<void>
-}
-
-/** 对端挂载点信息（与 SDK Rust PeerMountAnnouncement camelCase 对应） */
-export interface PeerMountAnnouncement {
-  /** 挂载所属插件 ID（URL 第一段） */
-  pluginId: string
-  /** 挂载点名称（URL 第二段） */
-  mountPath: string
-  /** 该挂载支持的操作集合 */
-  operations: ('list' | 'download' | 'upload')[]
-}
-
-/** 对端文件服务信息（与 SDK Rust PeerFileService 对应，控制面公告填充） */
-export interface PeerFileServiceInfo {
-  /** 对端 IP */
-  ip: string
-  /** 对端文件服务端口 */
-  port: number
-  /** 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时为空） */
-  token: string
-  /** 对端真实设备名（用户设置名，获取不到时为兜底名；wire 为 snake_case） */
-  device_name: string
-  /** 对端挂载点列表 */
-  mounts: PeerMountAnnouncement[]
-}
-
-/** 文件服务 API（需 fileservice 权限） */
-export interface FileServiceAPI {
-  /** 挂载文件服务端点（插件作为文件服务方），返回挂载句柄 */
-  mount(options: MountOptions): Promise<FileServiceMount>
-  /** 获取对端文件服务信息（对端 = 移动端；未公告返回 null） */
-  getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
-  /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null） */
-  pickDirectory(): Promise<string | null>
-  /** 弹出系统多文件选择对话框（上传方向用；用户取消返回空数组） */
-  pickFiles(): Promise<string[]>
-  /** v2：批准传输批（接收端应答「接受全部」） */
-  approveTransferRequest(batchId: string): Promise<void>
-  /** v2：拒绝传输批（接收端应答「拒绝全部」） */
-  rejectTransferRequest(batchId: string): Promise<void>
-  /** v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用） */
-  setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
-  /** v2：取消接收中的上传会话（接收端本地取消，session 级） */
-  cancelReceivingSession(sessionId: string): Promise<void>
-}
-
 /** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
 export interface SystemAPI {
   /** 在系统文件管理器中显示文件/目录（Windows 资源管理器选中、macOS Finder Reveal） */
@@ -397,9 +382,9 @@ export interface I18nAPI {
   /** 获取宿主 i18n 实例（vue-i18n I18n 对象） */
   getI18n(): any
   /** 注册插件翻译到宿主 i18n（自动添加插件 ID 前缀隔离） */
-  registerMessages(locale: string, messages: Record<string, any>): void
+  registerMessages(locale: string, messages: Record<string, unknown>): void
   /** 翻译快捷方法（自动添加插件 ID 前缀） */
-  t(key: string, params?: Record<string, any>): string
+  t(key: string, params?: Record<string, unknown>): string
 }
 
 /** 插件上下文 — 插件访问宿主能力的唯一通道 */
@@ -413,8 +398,6 @@ export interface PluginContext {
   readonly events: EventAPI
   readonly storage: StorageAPI
   readonly http: HttpAPI
-  /** 文件服务 API（需 fileservice 权限） */
-  readonly fileService: FileServiceAPI
   /** 国际化 API */
   readonly i18n: I18nAPI
   /** 系统 API（需 system:open 权限） */

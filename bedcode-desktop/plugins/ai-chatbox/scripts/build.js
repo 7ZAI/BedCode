@@ -16,28 +16,40 @@ const ROOT = resolve(__dirname, '..')
 const PLUGIN_ID = 'com.bedcode.ai-chatbox'
 const RUST_LIB_NAME = 'bedcode_plugin_ai_chatbox'
 
+// 插件调试模式：BEDCODE_PLUGIN_DEBUG=1 → wasm 以 debug profile 构建（保留
+// DWARF，宿主开启 backtrace 行号栈用）；release 构建忽略（宿主侧以
+// cfg!(debug_assertions) 兜底，见 wasm_runtime.rs plugin_debug_mode）
+const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
+const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
+const WASM_PROFILE_DIR = `rust/target/wasm32-wasip2/${WASM_PROFILE}`
+
 // 产物目标目录
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
 
 function run(cmd, options = {}) {
   console.log(`[build] > ${cmd}`)
-  execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...options })
+  try {
+    execSync(cmd, { stdio: 'inherit', cwd: ROOT, ...options })
+  } catch (e) {
+    console.error(`[build] 命令失败: ${cmd} (cwd=${ROOT})`)
+    throw e
+  }
 }
 
 function buildFrontend() {
   console.log('\n[build] ====== Building frontend (Vite) ======')
-  run('npx vite build')
+  run('pnpm exec vite build')
 }
 
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
-  run('cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml --release')
-  // 迁移阶段 B：将 wit-bindgen 产出的 core module 编码为 Component Model 组件
-  // （等价 wasm-tools component new；工具幂等——产物已是组件时直接复制）
-  console.log('\n[build] ====== Componentizing WASM (Component Model) ======')
-  const componentizeManifest = resolve(ROOT, '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml')
-  const wasmPath = resolve(ROOT, 'rust/target/wasm32-unknown-unknown/release', `${RUST_LIB_NAME}.wasm`)
-  run(`cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`)
+  // WASI preview2 目标（rustup target add wasm32-wasip2）：
+  // - 产物直接是 Component Model 组件（wasm-component-ld 内嵌，无需再经 componentize 编码）
+  // - 插件 std::fs 映射到 WASI（宿主 WASI preopen /data 后可直接读写，见 useSelfFileAccess）
+  // 既有宿主接口（host_fs/host_db/...）在 wasip2 下同样可用，行为不变
+  run(
+    `cargo build --target wasm32-wasip2 --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
+  )
 }
 
 function copyArtifacts() {
@@ -56,34 +68,33 @@ function copyArtifacts() {
   // 复制 plugin.json
   cpSync(resolve(ROOT, 'plugin.json'), resolve(RESOURCES_DIR, 'plugin.json'))
 
-  // 复制 WASM 模块
-  const wasmPath = resolve(
-    ROOT,
-    'rust/target/wasm32-unknown-unknown/release',
-    `${RUST_LIB_NAME}.wasm`
-  )
+  // 复制插件图标（PluginIcon.vue 经 asset protocol 加载 icon.svg）
+  const iconSrc = resolve(ROOT, 'icon.svg')
+  if (existsSync(iconSrc)) {
+    cpSync(iconSrc, resolve(RESOURCES_DIR, 'icon.svg'))
+  }
 
-  if (!existsSync(wasmPath)) {
-    // 尝试 debug 构建
-    const debugWasmPath = resolve(
-      ROOT,
-      'rust/target/wasm32-unknown-unknown/debug',
-      `${RUST_LIB_NAME}.wasm`
-    )
-    if (!existsSync(debugWasmPath)) {
-      console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${debugWasmPath}`)
+  // 复制 WASM 模块（按构建 profile 取产物；缺失时回退另一 profile）
+  const wasmPath = resolve(ROOT, WASM_PROFILE_DIR, `${RUST_LIB_NAME}.wasm`)
+
+  if (existsSync(wasmPath)) {
+    cpSync(wasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
+    console.log(`[build] Copied WASM (${WASM_PROFILE}): ${RUST_LIB_NAME}.wasm`)
+  } else {
+    const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
+    const fallbackWasmPath = resolve(ROOT, `rust/target/wasm32-wasip2/${fallbackProfile}`, `${RUST_LIB_NAME}.wasm`)
+    if (!existsSync(fallbackWasmPath)) {
+      console.error(`[build] ERROR: WASM file not found at ${wasmPath} or ${fallbackWasmPath}`)
       process.exit(1)
     }
-    cpSync(debugWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
-    console.log(`[build] Copied WASM (debug): ${RUST_LIB_NAME}.wasm`)
-  } else {
-    cpSync(wasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
-    console.log(`[build] Copied WASM (release): ${RUST_LIB_NAME}.wasm`)
+    cpSync(fallbackWasmPath, resolve(RESOURCES_DIR, `${RUST_LIB_NAME}.wasm`))
+    console.log(`[build] Copied WASM (${fallbackProfile} fallback): ${RUST_LIB_NAME}.wasm`)
   }
 
   console.log(`[build] Artifacts copied to: ${RESOURCES_DIR}`)
   console.log(`[build]   - index.js`)
   console.log(`[build]   - plugin.json`)
+  console.log(`[build]   - icon.svg`)
   console.log(`[build]   - ${RUST_LIB_NAME}.wasm`)
 }
 
@@ -97,10 +108,11 @@ const rustOnly = args.includes('--rust-only')
 if (watchMode) {
   // 前端 watch 构建：改源码自动重建 + 复制产物（配合宿主 PluginDevWatcher 触发前端热重载）。
   // vite 子进程 + fs.watch 保持事件循环常驻，Ctrl+C 退出
-  startPluginWatch({
+    startPluginWatch({
     root: ROOT,
     resourcesDir: RESOURCES_DIR,
-    wasmFile: `rust/target/wasm32-unknown-unknown/release/${RUST_LIB_NAME}.wasm`,
+    extraFiles: ['icon.svg'],
+    wasmFile: `${WASM_PROFILE_DIR}/${RUST_LIB_NAME}.wasm`,
   })
 } else if (frontendOnly) {
   buildFrontend()

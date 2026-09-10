@@ -40,7 +40,7 @@ const candidates = readdirSync(pluginsDir, { withFileTypes: true })
 
 const selected = targetPlugin
   ? candidates.filter((name) => {
-      const manifest = JSON.parse(readFileSync(resolve(pluginsDir, name, 'plugin.json'), 'utf-8'))
+      const manifest = readManifest(name)
       return manifest.id === targetPlugin
     })
   : candidates
@@ -52,16 +52,36 @@ if (selected.length === 0) {
 
 const builtIds = []
 for (const name of selected) {
-  const manifest = JSON.parse(readFileSync(resolve(pluginsDir, name, 'plugin.json'), 'utf-8'))
+  const manifest = readManifest(name)
   builtIds.push(manifest.id)
   const cwd = resolve(pluginsDir, name)
   console.log(`\n=== Plugin Build (Mobile): ${manifest.id} ===\n`)
   const npxCmd = IS_WIN ? 'npx.cmd' : 'npx'
-  execSync(
-    `${npxCmd} --no-install bedcode-plugin build --resources-dir "${resourcesDir}"`,
-    { cwd, stdio: 'inherit' },
-  )
+  try {
+    execSync(
+      `${npxCmd} --no-install bedcode-plugin build --resources-dir "${resourcesDir}"`,
+      { cwd, stdio: 'inherit' },
+    )
+  } catch (e) {
+    // execSync 默认只透传底层错误（无 cwd/插件名上下文），这里补上插件定位信息
+    // 便于用户在多插件批量构建失败时定位是哪一支构建挂了
+    throw new Error(`[plugin-build] 插件 ${manifest.id}（${cwd}）构建失败: ${e.message}`)
+  }
   console.log(`\n=== Plugin build complete (Mobile): ${manifest.id} ===\n`)
+}
+
+/**
+ * 读取插件 manifest（含错误上下文：什么插件的 plugin.json 解析失败）。
+ * 无效 JSON 让 process 直接退出（脚本语义上等同于缺 manifest，不应继续构建）。
+ */
+function readManifest(name) {
+  const path = resolve(pluginsDir, name, 'plugin.json')
+  try {
+    return JSON.parse(readFileSync(path, 'utf-8'))
+  } catch (e) {
+    console.error(`[plugin-build] 解析插件 manifest 失败（${name} @ ${path}）: ${e.message}`)
+    process.exit(1)
+  }
 }
 
 // 构建产物已写入 src-tauri/resources/plugins/mobile（APK 资源源），

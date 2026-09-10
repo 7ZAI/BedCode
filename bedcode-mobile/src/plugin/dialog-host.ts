@@ -7,7 +7,7 @@
  */
 
 import { ref } from 'vue'
-import type { DialogOptions, DialogResult } from '@binblink/plugin-sdk-mobile'
+import type { DialogOptions, DialogResult } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useToast } from '@/composables/useToast'
 
 /** 队列中的对话框条目 */
@@ -38,6 +38,18 @@ function resolveTop(action: DialogResult['action'], value?: string): void {
   if (item) item.resolve({ action, value })
 }
 
+/**
+ * 解析指定 id 的对话框（超时/宿主主动关闭用）。
+ * resolveTop 只适用于调用方确知自己即队首的场景；跨插件共享队列下队首可能
+ * 是他插件对话框，误结算会关错窗（首连确认 30s 超时关闭用 resolveById 定点）
+ */
+function resolveById(id: number, action: DialogResult['action'], value?: string): void {
+  const idx = queue.value.findIndex((item) => item.id === id)
+  if (idx < 0) return
+  const [item] = queue.value.splice(idx, 1)
+  item.resolve({ action, value })
+}
+
 /** 插件对话框服务（暴露到 window.__BEDCODE_SHARED__.dialogs） */
 export const pluginDialogHost = {
   queue,
@@ -52,4 +64,5 @@ export const pluginDialogHost = {
     toast.show({ message, type, duration })
   },
   resolveTop,
+  resolveById,
 }

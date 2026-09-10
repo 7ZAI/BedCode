@@ -168,6 +168,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { Html5Qrcode } from 'html5-qrcode'
@@ -286,12 +287,12 @@ async function handleQrScan(decodedText: string) {
 
   // Step 2: 发送 QR token 认证
   connectingStep.value = t('mobile.scan.pairing')
-  console.log('[Scan] QR data:', qrData)
+  logger.log('[Scan] QR data:', qrData)
 
   try {
     const creds = await wsAuthenticateWithQr(qrData.token)
     if (!creds) {
-      console.error('[Scan] QR token failed')
+      logger.error('[Scan] QR token failed')
       errorMessage.value = t('mobile.scan.qrExpired')
       isConnecting.value = false
       connection.isConnecting.value = false
@@ -300,7 +301,7 @@ async function handleQrScan(decodedText: string) {
     // 保存 JWT 凭据到 localStorage
     connection.saveCredentials(creds)
   } catch (e) {
-    console.error('[Scan] QR token error:', e)
+    logger.error('[Scan] QR token error:', e)
     errorMessage.value = t('mobile.scan.pairingFailed', { error: String(e) })
     isConnecting.value = false
     connection.isConnecting.value = false
@@ -336,7 +337,7 @@ async function startScanner() {
       () => {} // 忽略扫描错误
     )
   } catch (e) {
-    console.error('Failed to start scanner:', e)
+    logger.error('Failed to start scanner:', e)
     isCameraError.value = true
     errorMessage.value = t('mobile.scan.cameraFailed')
   }
@@ -352,7 +353,7 @@ async function toggleTorch() {
     await html5QrCode.applyVideoConstraints({ advanced: [{ torch: next }] as any })
     torchOn.value = next
   } catch (e) {
-    console.warn('[Scan] Torch not supported:', e)
+    logger.warn('[Scan] Torch not supported:', e)
     torchUnsupported.value = true
     toast.warning(t('mobile.scan.torchUnsupported'))
   }

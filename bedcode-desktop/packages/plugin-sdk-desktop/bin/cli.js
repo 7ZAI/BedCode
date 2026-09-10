@@ -28,7 +28,6 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
-  statSync,
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, relative, resolve } from 'node:path'
@@ -146,8 +145,12 @@ function readManifestOrNull(cwd) {
 function cmdCreate(positional, flags) {
   const [id, name] = positional
   if (!id || !name) {
-    console.error('用法: bedcode-plugin-desktop create <id> <name> [--author <author>] [--dir <dir>] [--rust]')
-    console.error('示例: bedcode-plugin-desktop create com.example.my-plugin "My Plugin" --author "me" --rust')
+    console.error(
+      '用法: bedcode-plugin-desktop create <id> <name> [--author <author>] [--dir <dir>] [--rust]',
+    )
+    console.error(
+      '示例: bedcode-plugin-desktop create com.example.my-plugin "My Plugin" --author "me" --rust',
+    )
     process.exit(1)
   }
   if (!/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(id)) {
@@ -183,12 +186,12 @@ function cmdCreate(positional, flags) {
 
   // SDK 依赖标识：--registry 引用已发布版本（npm + crates.io），默认引用本地 SDK 相对路径
   const sdkPkg = readJson(join(SDK_ROOT, 'package.json'), 'SDK package.json')
-  const sdkJs = flags.registry === true
-    ? `^${sdkPkg.version}`
-    : `file:${toPosix(relative(outDir, SDK_ROOT))}`
-  const sdkRust = flags.registry === true
-    ? `{ version = "${sdkPkg.version}", features = ["wasm"] }`
-    : `{ path = "${toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))}", features = ["wasm"] }`
+  const sdkJs =
+    flags.registry === true ? `^${sdkPkg.version}` : `file:${toPosix(relative(outDir, SDK_ROOT))}`
+  const sdkRust =
+    flags.registry === true
+      ? `{ version = "${sdkPkg.version}", features = ["wasm"] }`
+      : `{ path = "${toPosix(relative(join(outDir, 'rust'), join(SDK_ROOT, 'rust')))}", features = ["wasm"] }`
 
   // 复制模板并填充占位符
   cpSync(TEMPLATE_DIR, outDir, { recursive: true })
@@ -214,10 +217,10 @@ function cmdCreate(positional, flags) {
   console.log(`  pluginType: ${pluginType}${withRust ? ` (crate: ${crate})` : ''}`)
   console.log(`\n下一步：`)
   console.log(`  cd ${toPosix(relative(process.cwd(), outDir)) || '.'}`)
-  console.log(`  npm install`)
-  console.log(`  npm run dev            # 浏览器开发环境（HMR，无需真机）`)
-  console.log(`  npm run build          # 构建（vite${withRust ? ' + cargo wasm32' : ''}）`)
-  console.log(`  npm run build -- --resources-dir <宿主resources/plugins父目录>  # 复制产物到宿主`)
+  console.log(`  pnpm install`)
+  console.log(`  pnpm run dev            # 浏览器开发环境（HMR，无需真机）`)
+  console.log(`  pnpm run build          # 构建（vite${withRust ? ' + cargo wasm32' : ''}）`)
+  console.log(`  pnpm run build -- --resources-dir <宿主resources/plugins父目录>  # 复制产物到宿主`)
 }
 
 // ==================== 命令：build ====================
@@ -258,7 +261,7 @@ function cmdBuild(flags) {
   if (!rustOnly) {
     const viteBin = join(cwd, 'node_modules/vite/bin/vite.js')
     if (!existsSync(viteBin)) {
-      console.error(`[bedcode-plugin-desktop] vite 未安装 — 先在插件目录运行 npm install`)
+      console.error(`[bedcode-plugin-desktop] vite 未安装 — 先在插件目录运行 pnpm install`)
       process.exit(1)
     }
     console.log('\n[bedcode-plugin-desktop] ====== 构建前端 (vite) ======')
@@ -272,17 +275,21 @@ function cmdBuild(flags) {
   // 2. WASM 构建（rust-ts 插件）
   if (hasWasm && !frontendOnly) {
     console.log('\n[bedcode-plugin-desktop] ====== 构建 WASM (cargo) ======')
-    run('cargo', [
-      'build',
-      '--target',
-      'wasm32-unknown-unknown',
-      '--no-default-features',
-      '--features',
-      'wasm',
-      '--manifest-path',
-      'rust/Cargo.toml',
-      '--release',
-    ], cwd)
+    run(
+      'cargo',
+      [
+        'build',
+        '--target',
+        'wasm32-unknown-unknown',
+        '--no-default-features',
+        '--features',
+        'wasm',
+        '--manifest-path',
+        'rust/Cargo.toml',
+        '--release',
+      ],
+      cwd,
+    )
     if (!existsSync(wasmPath)) {
       console.error(`[bedcode-plugin-desktop] WASM 构建未产出 ${rustLibrary}.wasm`)
       console.error('  若提示 target 缺失: rustup target add wasm32-unknown-unknown')
@@ -314,8 +321,12 @@ function cmdDev(positional, flags) {
   const entry = flags.entry ? resolve(cwd, flags.entry) : resolve(pluginDir, 'src/index.ts')
 
   if (!existsSync(join(pluginDir, 'plugin.json')) && !existsSync(entry)) {
-    console.error(`[bedcode-plugin-desktop] 目标不是插件工程（缺少 plugin.json 与 ${entry}）: ${pluginDir}`)
-    console.error('用法: bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]')
+    console.error(
+      `[bedcode-plugin-desktop] 目标不是插件工程（缺少 plugin.json 与 ${entry}）: ${pluginDir}`,
+    )
+    console.error(
+      '用法: bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]',
+    )
     process.exit(1)
   }
 
@@ -329,7 +340,9 @@ function cmdDev(positional, flags) {
   const viteBin = join(devShellDir, 'node_modules/vite/bin/vite.js')
   if (!existsSync(viteBin)) {
     console.log('[bedcode-plugin-desktop] dev-shell 依赖缺失，正在安装（仅首次）…')
-    run('npm', ['install', '--no-audit', '--no-fund'], devShellDir)
+    // --ignore-workspace：桌面端 dev-shell 位于宿主 pnpm workspace 内，不带该标志
+    // 会触发整个 workspace 安装（装错目录），标准安装即按独立工程处理
+    run('pnpm', ['install', '--ignore-workspace', '--no-audit', '--no-fund'], devShellDir)
   }
 
   const args = [
@@ -344,9 +357,13 @@ function cmdDev(positional, flags) {
 
   console.log(`[bedcode-plugin-desktop] 启动 dev-shell（插件: ${pluginDir}）`)
   if (flags.host) {
-    console.log(`[bedcode-plugin-desktop] 已监听局域网 — 手机/平板与电脑同一 WiFi 时，浏览器打开 http://<电脑IP>:${flags.port || 5173}/ 查看`)
+    console.log(
+      `[bedcode-plugin-desktop] 已监听局域网 — 手机/平板与电脑同一 WiFi 时，浏览器打开 http://<电脑IP>:${flags.port || 5173}/ 查看`,
+    )
   }
-  console.log(`[bedcode-plugin-desktop] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`)
+  console.log(
+    `[bedcode-plugin-desktop] 浏览器打开 http://localhost:${flags.port || 5173}/ 预览（Ctrl+C 退出）`,
+  )
   const child = spawn(process.execPath, args, {
     cwd: devShellDir,
     stdio: 'inherit',
@@ -406,8 +423,7 @@ const VALID_PERMISSIONS = new Set([
   'network:http',
   'storage',
   'broadcast',
-  'fileservice',
-  'transfer',
+  'peer',
 ])
 
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])
@@ -432,7 +448,11 @@ function cmdValidate(flags) {
   }
 
   // id：反域名风格
-  if (typeof manifest.id !== 'string' || !/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(manifest.id) || !manifest.id.includes('.')) {
+  if (
+    typeof manifest.id !== 'string' ||
+    !/^[a-zA-Z0-9]+([._-][a-zA-Z0-9]+)*$/.test(manifest.id) ||
+    !manifest.id.includes('.')
+  ) {
     errors.push(`id 非法: "${manifest.id}" — 使用反域名风格，如 com.example.my-plugin`)
   }
 
@@ -445,7 +465,9 @@ function cmdValidate(flags) {
 
   // pluginType / sandbox / rustLibrary
   if (manifest.pluginType && !VALID_PLUGIN_TYPES.has(manifest.pluginType)) {
-    errors.push(`pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`)
+    errors.push(
+      `pluginType 非法: "${manifest.pluginType}"（允许: ${[...VALID_PLUGIN_TYPES].join(' / ')}）`,
+    )
   }
   if (manifest.sandbox && !['inline', 'isolated'].includes(manifest.sandbox)) {
     errors.push(`sandbox 非法: "${manifest.sandbox}"（允许: inline / isolated）`)
@@ -465,7 +487,7 @@ function cmdValidate(flags) {
   // main 产物存在性（未构建仅警告）
   const distMain = join(dir, 'dist', manifest.main || 'index.js')
   if (!existsSync(distMain)) {
-    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（npm run build）`)
+    warnings.push(`dist/${manifest.main || 'index.js'} 不存在 — 尚未构建（pnpm run build）`)
   }
 
   // contributes 结构
@@ -480,7 +502,9 @@ function cmdValidate(flags) {
     console.error(`\n[bedcode-plugin-desktop] validate 失败: ${errors.length} 个错误`)
     process.exit(1)
   }
-  console.log(`\n[bedcode-plugin-desktop] validate 通过${warnings.length ? `（${warnings.length} 个警告）` : ''}`)
+  console.log(
+    `\n[bedcode-plugin-desktop] validate 通过${warnings.length ? `（${warnings.length} 个警告）` : ''}`,
+  )
 }
 
 // ==================== 命令：doctor（环境自检） ====================
@@ -509,7 +533,11 @@ function cmdDoctor() {
   if (rustOk) {
     const t = spawnSync('rustup', ['target', 'list', '--installed'], { stdio: 'pipe' })
     const hasWasm = t.status === 0 && t.stdout.toString().includes('wasm32-unknown-unknown')
-    add('wasm32-unknown-unknown target', hasWasm, hasWasm ? '已安装' : '缺失 — 运行 rustup target add wasm32-unknown-unknown')
+    add(
+      'wasm32-unknown-unknown target',
+      hasWasm,
+      hasWasm ? '已安装' : '缺失 — 运行 rustup target add wasm32-unknown-unknown',
+    )
   } else {
     add('wasm32-unknown-unknown target', false, '需先安装 Rust')
   }
@@ -524,11 +552,19 @@ function cmdDoctor() {
 
   // dev-shell 依赖（dev 命令就绪性）
   const devVite = join(SDK_ROOT, 'dev-shell/node_modules/vite/bin/vite.js')
-  add('dev-shell 依赖（dev 命令）', existsSync(devVite), existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装')
+  add(
+    'dev-shell 依赖（dev 命令）',
+    existsSync(devVite),
+    existsSync(devVite) ? '已安装' : '首次运行 dev 命令时自动安装',
+  )
 
   // SDK dist（file: 依赖的插件需要）
   const sdkDist = join(SDK_ROOT, 'dist/index.js')
-  add('SDK 构建产物（file: 依赖）', existsSync(sdkDist), existsSync(sdkDist) ? '已构建' : '缺失 — 运行 npm run build（SDK 目录内）')
+  add(
+    'SDK 构建产物（file: 依赖）',
+    existsSync(sdkDist),
+    existsSync(sdkDist) ? '已构建' : '缺失 — 运行 pnpm run build（SDK 目录内）',
+  )
 
   let failed = 0
   for (const c of checks) {
@@ -536,7 +572,9 @@ function cmdDoctor() {
     if (!c.ok) failed++
     console.log(`  ${icon} ${c.name} — ${c.detail}`)
   }
-  console.log(`\n[bedcode-plugin-desktop] doctor 完成: ${checks.length - failed}/${checks.length} 通过`)
+  console.log(
+    `\n[bedcode-plugin-desktop] doctor 完成: ${checks.length - failed}/${checks.length} 通过`,
+  )
   if (failed) process.exit(1)
 }
 
@@ -556,10 +594,18 @@ function main() {
     console.log(`bedcode-plugin-desktop v${pkg.version}`)
     console.log('\nBedCode 桌面端插件开发工具包\n')
     console.log('用法:')
-    console.log('  bedcode-plugin-desktop create <id> <name> [--author <author>] [--dir <dir>] [--rust] [--registry]')
-    console.log('  bedcode-plugin-desktop build [--resources-dir <dir>] [--frontend-only] [--rust-only]')
-    console.log('  bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR）')
-    console.log('  bedcode-plugin-desktop manifest [--check]   # 按源码自动填充 contributes/permissions')
+    console.log(
+      '  bedcode-plugin-desktop create <id> <name> [--author <author>] [--dir <dir>] [--rust] [--registry]',
+    )
+    console.log(
+      '  bedcode-plugin-desktop build [--resources-dir <dir>] [--frontend-only] [--rust-only]',
+    )
+    console.log(
+      '  bedcode-plugin-desktop dev [pluginDir] [--entry <file>] [--port <port>] [--host] [--open]   # 浏览器开发环境（HMR）',
+    )
+    console.log(
+      '  bedcode-plugin-desktop manifest [--check]   # 按源码自动填充 contributes/permissions',
+    )
     console.log('  bedcode-plugin-desktop validate [--dir <dir>]   # 校验 plugin.json 结构')
     console.log('  bedcode-plugin-desktop doctor   # 环境自检（Node/Rust/wasm32/dev-shell/SDK）')
     process.exit(0)

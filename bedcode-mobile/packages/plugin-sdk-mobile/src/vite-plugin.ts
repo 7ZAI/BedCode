@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-mobile Vite 插件
+ * @binblink/bedcode-plugin-sdk-mobile Vite 插件
  *
  * 职责：
  * 1. 共享模块（vue/vue-i18n/pinia）外置为宿主全局（window.__BEDCODE_SHARED__）

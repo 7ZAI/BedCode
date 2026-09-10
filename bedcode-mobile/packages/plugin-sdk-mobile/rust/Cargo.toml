@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-plugin-api-mobile"
-version = "0.1.0"
+version = "0.1.1"
 description = "BedCode Mobile Plugin API — trait definitions and shared types for BedCode plugins"
 license = "MIT"
 repository = "https://github.com/7ZAI/BedCode"

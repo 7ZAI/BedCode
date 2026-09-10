@@ -36,9 +36,7 @@ describe('getSharedModule', () => {
   })
 
   it('请求不存在的模块 → 抛错并带模块名', () => {
-    expect(() => getSharedModule('nonexistent')).toThrow(
-      /Shared module "nonexistent" not found/
-    )
+    expect(() => getSharedModule('nonexistent')).toThrow(/Shared module "nonexistent" not found/)
   })
 
   it('存在的模块 → 原样返回宿主对象（不拷贝）', () => {

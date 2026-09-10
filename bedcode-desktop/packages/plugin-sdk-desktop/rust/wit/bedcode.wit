@@ -15,9 +15,9 @@
 /// ## 命名空间约定
 ///
 /// 宿主能力 import 接口前缀 `host-`，插件导出接口为普通名字：
-/// - import：`host-storage` / `host-database` / ... （13 组，对应 host_functions/*）
+/// - import：`host-storage` / `host-database` / ... （对应 host_functions/*）
 /// - export：`command` / `lifecycle` / `events` / `terminal-hooks` /
-///   `upload-hook` / `manifest` / `abi`
+///   `manifest` / `abi`
 ///
 /// ## ABI 版本协商（阶段 A）
 ///
@@ -53,6 +53,91 @@ interface host-bus {
     publish: func(topic: string, payload-json: string) -> result<_, string>;
     subscribe: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
+}
+
+/// 对等网络基础能力（issue 12 切换后：宿主只提供能力原语，
+/// file-transfer 插件是首个上层消费者）
+///
+/// 发现/信任/拨号/收发/浏览的引擎全部在宿主 peer-net 层；本接口只是
+/// 命令面的 WASM 投影。DTO 一律 JSON 字符串承载（camelCase，与 Tauri
+/// 命令返回形状一致）。事件经消息总线 `peer:*` topic 推送（host-bus 订阅）：
+/// - `peer:devices`    发现缓存全量列表变化
+/// - `peer:connection` 节点连上/断开
+/// - `peer:consent`    首次连接确认请求
+/// - `peer:transfer`   发送任务列表变化（含进度与终态）
+/// - `peer:receive`    接收侧变化（待应答批/进行中接收）
+interface host-peer {
+    /// 按 endpoint 拨号连接（ADR 0022 v2 终态，原 dial-peer-endpoint 转正）：
+    /// endpoint = `{ nodeId, addr, port }`（camelCase JSON，插件从自身设备缓存/
+    /// mdns 事件解析后显式传入；宿主不内藏 node-id → 地址解析表）。握手期
+    /// 「证书指纹 ↔ nodeId 绑定 + 信任检查」语义不变。成功返回 session 句柄
+    /// （`sess-<uuid>`，后续按句柄寻址）；denied/unreachable 以错误上抛
+    dial-peer: func(endpoint-json: string) -> result<string, string>;
+    /// 统一资源关闭（ADR 0022 v2）：session 句柄 = 断开连接；传输句柄 = 取消传输
+    /// （先发送批取消、后接收批取消——pending 接收批被关闭即拒绝，闸门 fail-safe
+    /// 的自然结果）。返回是否命中并关闭了任意资源
+    close: func(handle: string) -> result<bool, string>;
+    /// 首次连接确认应答（返回是否命中了待确认项）
+    respond-consent: func(request-id: string, accepted: bool) -> result<bool, string>;
+    /// 可信对端列表 → TrustedPeerDto JSON 数组
+    list-trusted: func() -> result<string, string>;
+    /// 撤销对指定节点的信任（返回是否删除了条目）
+    revoke-trusted: func(node-id: string) -> result<bool, string>;
+    /// 向单个对端发送一批文件（目录递归展开、同名去重由宿主完成；
+    /// 扇出 = 对多个对端各调一次，各批相互独立）→ 传输句柄（batch-id 字符串）
+    ///
+    /// 仅接受 session 句柄寻址；paths 元素双形态：纯 string 或 `{ path, encrypt? }`
+    /// 对象（任一元素 encrypt=true → 本批强制加密）。连接已断时以句柄记忆的
+    /// endpoint 自动重拨（信任检查照走引擎握手）
+    send-files: func(session-handle: string, paths-json: string) -> result<string, string>;
+    /// 接收批应答：accept=false 或超时视为拒绝
+    respond-transfer: func(batch-id: string, accept: bool) -> result<_, string>;
+    /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
+    /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
+    set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
+    /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
+    /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝
+    set-shared-roots: func(dirs-json: string) -> result<_, string>;
+    /// 浏览对端共享根清单 → PeerSharedRootDto JSON 数组（仅 session 句柄寻址；
+    /// 连接已断时以句柄记忆的 endpoint 自动重拨）
+    list-shared-roots: func(session-handle: string) -> result<string, string>;
+    /// 目录下钻 → RemoteBrowseDto JSON（仅 session 句柄寻址；重拨语义同上）
+    browse-directory: func(session-handle: string, dir-id: string, rel-path: string) -> result<string, string>;
+    /// 拉取对端文件（files = RemotePullFileDto JSON 数组）→ 入队文件数
+    /// （仅 session 句柄寻址；重拨语义同上）
+    pull-files: func(session-handle: string, dir-id: string, files-json: string) -> result<u32, string>;
+    /// 设置接收落点目录（空串 = 恢复默认 Downloads\BedCode\；引擎落盘配置原语，
+    /// ADR 0022 v3）
+    set-download-dir: func(path: string) -> result<_, string>;
+}
+
+/// mDNS 浏览纯能力（ADR 0022 v2）：browse-only，发现/离开事件原样透传
+///
+/// 发现/离开经消息总线 `mdns:found` / `mdns:lost` 推送（host-bus 订阅），
+/// payload 原样透传：`{ instanceName, addresses: string[], port, txtRecords:
+/// Record<string,string> }`，宿主不做任何加工。设备列表（去重/TTL 过期/展示名
+/// 解读）是发现事件的派生视图，由消费插件自建缓存。
+///
+/// 自我广播（register/advertise）不进本接口：「本机是谁」与宿主 TLS 监听器
+/// 同生共死，留在 peer-net 启动流程自动完成；无插件激活时主机照样可被发现。
+interface host-mdns {
+    /// 浏览某服务类型，返回 browser 句柄；重复浏览同一类型允许（各自独立生命周期）
+    browse: func(service-type: string) -> result<string, string>;
+    /// 停止浏览并回收句柄（返回是否存在该句柄）；插件停用时宿主自动回收其全部句柄
+    stop-browse: func(browser-id: string) -> result<bool, string>;
+}
+
+/// 通用平台能力域（ADR 0022 v2）：系统对话框/授权等与领域无关的平台交互
+interface host-platform {
+    /// 系统多文件选择器 → string[] JSON（用户取消为空数组）；
+    /// 选择即用户授权动作，不叠加权限门
+    pick-files: func() -> result<string, string>;
+    /// 系统文件夹选择器 → 绝对路径；用户取消返回空串
+    /// （移动端为 SAF 目录树选择器，返回树 URI）
+    pick-folder: func() -> result<string, string>;
+    /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
+    pick-folders: func() -> result<string, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
@@ -113,12 +198,6 @@ interface host-fs {
     request-auth: func(paths-json: string) -> result<bool, string>;
 }
 
-/// 文件传输引擎（原 transfer.rs：transfer_start/cancel，ABI v5）
-interface host-transfer {
-    start: func(request-json: string) -> result<string, string>;
-    cancel: func(task-id: string) -> result<_, string>;
-}
-
 /// 宿主日志与插件状态上报（原 log.rs + status.rs）
 interface host-log {
     info: func(message: string);
@@ -165,23 +244,6 @@ interface host-plugin-database {
     query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
 }
 
-/// 文件服务注册表（原 file_service.rs：filesrv_mount/unmount/update_roots/get_peer/query_peer）
-interface host-file-service {
-    mount: func(options-json: string) -> result<string, string>;
-    unmount: func(mount-path: string) -> result<_, string>;
-    update-roots: func(mount-path: string, roots-json: string) -> result<_, string>;
-    get-peer: func(peer-id: string) -> result<option<string>, string>;
-    query-peer: func(peer-id: string) -> result<_, string>;
-    /// v2：批准传输批（接收端用户应答「接受全部」）
-    approve-transfer: func(batch-id: string) -> result<_, string>;
-    /// v2：拒绝传输批（接收端用户应答「拒绝全部」）
-    reject-transfer: func(batch-id: string) -> result<_, string>;
-    /// v2：设置批准超时（秒，10–600；仅 ask 策略生效，宿主 TTL 扫描用）
-    set-approval-timeout: func(mount-path: string, seconds: u64) -> result<_, string>;
-    /// v2：取消接收中的上传会话（接收端本地取消，session 级）
-    cancel-receiving: func(session-id: string) -> result<_, string>;
-}
-
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================
 
 /// 命令入口（原 invoke_command，JSON 载荷保留）
@@ -190,11 +252,14 @@ interface command {
 }
 
 /// 生命周期（原 activate/deactivate/on_startup/on_shutdown）
+///
+/// 四个导出均携带结果（v8）：启动初始化/清理的成败由导出返回值如实上抛，
+/// 宿主据此区分 Activated / Degraded，不再依赖「调用没抛错」推断成功
 interface lifecycle {
     activate: func() -> result<_, string>;
     deactivate: func() -> result<_, string>;
-    on-startup: func();
-    on-shutdown: func();
+    on-startup: func() -> result<_, string>;
+    on-shutdown: func() -> result<_, string>;
 }
 
 /// 事件回调（原 on_message/on_session_lifecycle/on_input_submitted）
@@ -212,16 +277,6 @@ interface events {
 interface terminal-hooks {
     on-terminal-input: func(session-id: string, text: string) -> option<string>;
     on-terminal-output: func(session-id: string, data: string) -> option<string>;
-}
-
-/// 上传策略钩子（原 on_upload_request，fail-closed 语义由宿主保持）
-interface upload-hook {
-    on-upload-request: func(meta-json: string) -> string;
-}
-
-/// 批量传输请求钩子（v2：POST /transfer-request 时调用一次，fail-closed 同上传钩子）
-interface transfer-request-hook {
-    on-transfer-request: func(meta-json: string) -> string;
 }
 
 /// 插件 manifest（原 __bedcode_manifest，JSON 字符串）
@@ -254,8 +309,9 @@ world plugin {
     import host-log;
     import host-bus;
     import host-api-call;
-    import host-file-service;
-    import host-transfer;
+    import host-peer;
+    import host-mdns;
+    import host-platform;
     import host-timer;
     import host-process;
     import host-app;
@@ -264,8 +320,6 @@ world plugin {
     export lifecycle;
     export events;
     export terminal-hooks;
-    export upload-hook;
-    export transfer-request-hook;
     export manifest;
     export abi;
 }

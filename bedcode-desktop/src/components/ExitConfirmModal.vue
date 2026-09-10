@@ -10,7 +10,9 @@
         <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
 
         <!-- Dialog -->
-        <div class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]">
+        <div
+          class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]"
+        >
           <!-- Header -->
           <div class="px-5 py-4 border-b border-[var(--border)]">
             <h3 class="text-base font-semibold text-[var(--text-primary)]">
@@ -55,6 +57,7 @@
  * 退出确认弹窗 — 有运行中会话时展示，防止误关闭
  */
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import Button from '@/components/Button.vue'
 
 interface RunningSession {
@@ -80,7 +83,7 @@ async function forceExit() {
   try {
     await invoke('confirm_window_close')
   } catch (e) {
-    console.error('Failed to confirm window close:', e)
+    logger.error('Failed to confirm window close:', e)
   }
 }
 </script>

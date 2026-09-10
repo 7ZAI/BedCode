@@ -10,6 +10,7 @@
 //!   - 使用 @tauri-apps/plugin-os 获取真实平台信息
 
 import { ref, readonly, onMounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 
 // Re-export from model
 import type { PlatformInfo } from './model'
@@ -48,10 +49,8 @@ async function detectFromTauri(): Promise<PlatformInfo | null> {
     const versionResult = version()
     const typeResult = type()
 
-    const isDesktop = platformResult !== null &&
-      !['android', 'ios'].includes(platformResult)
-    const isMobile = platformResult !== null &&
-      ['android', 'ios'].includes(platformResult)
+    const isDesktop = platformResult !== null && !['android', 'ios'].includes(platformResult)
+    const isMobile = platformResult !== null && ['android', 'ios'].includes(platformResult)
 
     return {
       platform: platformResult as Platform | null,
@@ -67,7 +66,7 @@ async function detectFromTauri(): Promise<PlatformInfo | null> {
       isIos: platformResult === 'ios',
     }
   } catch (e) {
-    console.warn('[Platform] Tauri OS plugin not available:', e)
+    logger.warn('[Platform] Tauri OS plugin not available:', e)
     return null
   }
 }
@@ -80,10 +79,10 @@ function simulateForBrowser(): PlatformInfo {
 
   const isMobile = simulatedPlatform === 'mobile'
 
-  console.log(
+  logger.log(
     '[Platform] Browser simulation mode:',
     simulatedPlatform,
-    '- Use ?platform=mobile or localStorage to switch'
+    '- Use ?platform=mobile or localStorage to switch',
   )
 
   return {
@@ -112,7 +111,7 @@ export function usePlatform() {
     if (isTauriRuntime()) {
       info = await detectFromTauri()
       if (info) {
-        console.log('[Platform] Detected (Tauri):', info)
+        logger.log('[Platform] Detected (Tauri):', info)
       }
     }
 
@@ -149,7 +148,7 @@ export async function initPlatform(): Promise<PlatformInfo> {
     if (isTauriRuntime()) {
       info = await detectFromTauri()
       if (info) {
-        console.log('[Platform] Detected (Tauri) via initPlatform:', info)
+        logger.log('[Platform] Detected (Tauri) via initPlatform:', info)
       }
     }
 

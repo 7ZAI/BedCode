@@ -61,7 +61,7 @@ HTTP 说明:
     且项目 `.codex/` 配置层本身需被信任；首次使用需用户确认一次。
 
 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）。
-# @bedcode-template-version 1
+# @bedcode-template-version 2
 """
 
 import json
@@ -120,10 +120,12 @@ def setup_logging():
     file_handler = TimedRotatingFileHandler(
         str(log_file), when="midnight", backupCount=LOG_RETENTION_DAYS, encoding="utf-8"
     )
-    file_handler.setFormatter(
-        logging.Formatter("[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ")
+    formatter = logging.Formatter(
+        "[%(asctime)s] [%(levelname)s] %(message)s", datefmt="%Y-%m-%dT%H:%M:%SZ"
     )
-    file_handler.formatter.converter = lambda *args: datetime.now(timezone.utc).timetuple()
+    # UTC 时间戳（格式化器的 converter 在 setFormatter 前设置，避免对可选属性赋值）
+    formatter.converter = lambda *args: datetime.now(timezone.utc).timetuple()
+    file_handler.setFormatter(formatter)
     logger.addHandler(file_handler)
 
     stderr_handler = logging.StreamHandler(sys.stderr)
@@ -620,6 +622,9 @@ def main():
 
     logger = setup_logging()
 
+    # 从 stdin 读取 hook 输入（raw_input 预先绑定，解析异常分支也可安全引用）
+    raw_input = ""
+    data = {}
     try:
         raw_input = sys.stdin.read()
         data = json.loads(raw_input) if raw_input.strip() else {}

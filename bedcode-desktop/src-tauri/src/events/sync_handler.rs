@@ -2,13 +2,13 @@
 //!
 //! 同步事件处理器，将 DesktopSyncEvent 转换为 SyncData WebSocket 消息并广播
 
-use crate::events::DesktopSyncEvent;
-use crate::session::SessionManager;
-use crate::session::SessionConfigManager;
-use crate::server::ws::WebSocketManager;
-use crate::enums::{SessionConfigSummary, SessionSummary, SyncPayload};
 use super::matcher::EventHandler;
+use crate::enums::{SessionConfigSummary, SessionSummary, SyncPayload};
+use crate::events::DesktopSyncEvent;
 use crate::server::ws::message::Message;
+use crate::server::ws::WebSocketManager;
+use crate::session::SessionConfigManager;
+use crate::session::SessionManager;
 use std::sync::Arc;
 
 /// 同步事件处理器
@@ -38,44 +38,90 @@ impl SyncEventHandler {
     async fn process_event(&self, event: DesktopSyncEvent) {
         tracing::info!("[SyncEventHandler] Processing event: {:?}", event);
         match event {
-            DesktopSyncEvent::SessionCreated { session_id, source_device } => {
+            DesktopSyncEvent::SessionCreated {
+                session_id,
+                source_device,
+            } => {
                 self.handle_session_created(&session_id, source_device).await;
             }
-            DesktopSyncEvent::SessionStatusChanged { session_id, old_status, new_status } => {
-                self.handle_session_status_changed(&session_id, old_status, new_status).await;
+            DesktopSyncEvent::SessionStatusChanged {
+                session_id,
+                old_status,
+                new_status,
+            } => {
+                self.handle_session_status_changed(&session_id, old_status, new_status)
+                    .await;
             }
-            DesktopSyncEvent::SessionStopped { session_id, source_device } => {
+            DesktopSyncEvent::SessionStopped {
+                session_id,
+                source_device,
+            } => {
                 self.handle_session_stopped(&session_id, source_device).await;
             }
-            DesktopSyncEvent::SessionRemoved { session_id, source_device } => {
+            DesktopSyncEvent::SessionRemoved {
+                session_id,
+                source_device,
+            } => {
                 self.handle_session_removed(&session_id, source_device).await;
             }
-            DesktopSyncEvent::ConfigCreated { config_id, source_device } => {
+            DesktopSyncEvent::ConfigCreated {
+                config_id,
+                source_device,
+            } => {
                 self.handle_config_created(&config_id, source_device).await;
             }
-            DesktopSyncEvent::ConfigUpdated { config_id, source_device } => {
+            DesktopSyncEvent::ConfigUpdated {
+                config_id,
+                source_device,
+            } => {
                 self.handle_config_updated(&config_id, source_device).await;
             }
-            DesktopSyncEvent::ConfigRemoved { config_id, config_name, source_device } => {
-                self.handle_config_removed(&config_id, &config_name, source_device).await;
+            DesktopSyncEvent::ConfigRemoved {
+                config_id,
+                config_name,
+                source_device,
+            } => {
+                self.handle_config_removed(&config_id, &config_name, source_device)
+                    .await;
             }
-            DesktopSyncEvent::TaskStatusChanged { session_id, task_status, task_reason, task_questions } => {
-                self.handle_task_status_changed(&session_id, &task_status, task_reason.as_deref(), task_questions.as_deref()).await;
+            DesktopSyncEvent::TaskStatusChanged {
+                session_id,
+                task_status,
+                task_reason,
+                task_questions,
+            } => {
+                self.handle_task_status_changed(
+                    &session_id,
+                    &task_status,
+                    task_reason.as_deref(),
+                    task_questions.as_deref(),
+                )
+                .await;
             }
-            DesktopSyncEvent::SessionModeChanged { session_id, auto_approve } => {
+            DesktopSyncEvent::SessionModeChanged {
+                session_id,
+                auto_approve,
+            } => {
                 self.handle_session_mode_changed(&session_id, auto_approve).await;
             }
-            DesktopSyncEvent::TaskQueueChanged { session_id, queue_count, action, task_id, status } => {
-                self.handle_task_queue_changed(&session_id, queue_count, &action, task_id.as_deref(), status.as_deref()).await;
+            DesktopSyncEvent::TaskQueueChanged {
+                session_id,
+                queue_count,
+                action,
+                task_id,
+                status,
+            } => {
+                self.handle_task_queue_changed(
+                    &session_id,
+                    queue_count,
+                    &action,
+                    task_id.as_deref(),
+                    status.as_deref(),
+                )
+                .await;
             }
             DesktopSyncEvent::TaskScheduledChanged { job_id, status, action } => {
                 self.handle_task_scheduled_changed(&job_id, &status, &action).await;
-            }
-            DesktopSyncEvent::FileServiceChanged { plugin_id, mount_path, available, operations } => {
-                self.handle_file_service_changed(&plugin_id, &mount_path, available, operations).await;
-            }
-            DesktopSyncEvent::TransferApproval { batch_id, decision, reason } => {
-                self.handle_transfer_approval(&batch_id, &decision, &reason).await;
             }
         }
     }
@@ -84,7 +130,7 @@ impl SyncEventHandler {
     async fn handle_session_created(&self, session_id: &str, source_device: Option<String>) {
         // 获取会话信息
         let Some(session_info) = self.session_manager.get_session(session_id).await else {
-            tracing::warn!("[SyncEventHandler] Session not found: {}", session_id);
+            tracing::warn!(session_id = %session_id, "[SyncEventHandler] Session not found");
             return;
         };
 
@@ -122,7 +168,10 @@ impl SyncEventHandler {
         new_status: crate::enums::SessionStatus,
     ) {
         // 获取会话名称
-        let session_name = self.session_manager.get_session(session_id).await
+        let session_name = self
+            .session_manager
+            .get_session(session_id)
+            .await
             .map(|s| s.name)
             .unwrap_or_default();
 
@@ -141,7 +190,10 @@ impl SyncEventHandler {
     /// 处理会话停止事件
     async fn handle_session_stopped(&self, session_id: &str, source_device: Option<String>) {
         // 获取会话名称
-        let session_name = self.session_manager.get_session(session_id).await
+        let session_name = self
+            .session_manager
+            .get_session(session_id)
+            .await
             .map(|s| s.name)
             .unwrap_or_default();
 
@@ -174,7 +226,7 @@ impl SyncEventHandler {
     async fn handle_config_created(&self, config_id: &str, source_device: Option<String>) {
         // 获取配置信息
         let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!("[SyncEventHandler] Config not found: {}", config_id);
+            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
             return;
         };
 
@@ -205,7 +257,7 @@ impl SyncEventHandler {
     async fn handle_config_updated(&self, config_id: &str, source_device: Option<String>) {
         // 获取配置信息
         let Ok(Some(config)) = self.config_manager.get_config(config_id).await else {
-            tracing::warn!("[SyncEventHandler] Config not found: {}", config_id);
+            tracing::warn!(config_id = %config_id, "[SyncEventHandler] Config not found");
             return;
         };
 
@@ -306,36 +358,6 @@ impl SyncEventHandler {
         self.broadcast_sync_data(payload, None).await;
     }
 
-    /// 处理文件服务挂载可用性变更事件（桌面宿主自动发出，不经插件）
-    async fn handle_file_service_changed(
-        &self,
-        plugin_id: &str,
-        mount_path: &str,
-        available: bool,
-        operations: Vec<bedcode_plugin_api::FileOperation>,
-    ) {
-        let payload = SyncPayload::FileServiceChanged {
-            plugin_id: plugin_id.to_string(),
-            mount_path: mount_path.to_string(),
-            available,
-            operations,
-        };
-
-        // 挂载可用性广播给所有客户端（移动端插件经 sync:file_service 订阅）
-        self.broadcast_sync_data(payload, None).await;
-    }
-
-    /// 处理传输批应答事件（桌面接收端宿主 → 移动端发送方，v2）
-    async fn handle_transfer_approval(&self, batch_id: &str, decision: &str, reason: &str) {
-        let payload = SyncPayload::TransferApproval {
-            batch_id: batch_id.to_string(),
-            decision: decision.to_string(),
-            reason: reason.to_string(),
-        };
-
-        // 广播给所有客户端（移动端发送方插件经 sync:file_service 订阅后转 MessageBus）
-        self.broadcast_sync_data(payload, None).await;
-    }
 
     /// 广播同步数据消息
     ///

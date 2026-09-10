@@ -8,10 +8,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthStage {
-    /// 请求配对
-    RequestPairing,
-    /// 配对码验证
-    VerifyCode,
     /// 交换证书（生物凭证绑定：移动端上报公钥，空公钥表示解绑）
     ExchangeCertificate,
     /// 生物认证请求（移动端 → 桌面端，请求挑战值）
@@ -26,10 +22,6 @@ pub enum AuthStage {
     Reauthenticate,
     /// 认证失败
     Failed,
-    /// QR 码连接
-    QrConnect,
-    /// QR 连接失败
-    QrFailed,
 }
 
 /// 认证载荷
@@ -70,12 +62,28 @@ pub struct AuthPayload {
     /// 实际使用的认证方式（pairing_code / qr / biometric / jwt）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<String>,
+    /// WS 链路加密协商（issue 04）：Reauthenticate 请求携临时公钥，
+    /// 认证成功响应携服务端临时公钥回执（auth_ok/auth 明文回执，此后帧加密）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub crypto: Option<CryptoProposal>,
+}
+
+/// WS 链路加密协商载荷（issue 04）：请求侧携客户端临时 X25519 公钥（ek），
+/// 响应侧携服务端临时公钥回执。v 当前固定 1
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CryptoProposal {
+    pub v: u8,
+    /// 临时 X25519 公钥（base64）
+    pub ek: String,
 }
 
 impl Default for AuthPayload {
     fn default() -> Self {
         Self {
-            stage: AuthStage::RequestPairing,
+            // 占位值：调用方以 `..Default::default()` 填充其余字段并显式覆盖 stage，
+            // 旧 RequestPairing/VerifyCode 配对 stage 已随 WS 配对 HTTP 化下线删除
+            stage: AuthStage::Failed,
             device_id: None,
             device_name: None,
             device_fingerprint: None,
@@ -87,6 +95,7 @@ impl Default for AuthPayload {
             challenge_nonce: None,
             signature: None,
             auth_method: None,
+            crypto: None,
         }
     }
 }

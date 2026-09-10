@@ -7,6 +7,7 @@
  * 损坏存储回退默认、resolveCodeTheme / mapThemeForMode 主题解析与明暗映射、CODE_THEMES 元数据。
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { createPinia, setActivePinia } from 'pinia'
 import {
   useCodeViewerStore,
@@ -29,11 +30,11 @@ describe('codeViewer store', () => {
     setActivePinia(createPinia())
   })
 
-  it('fresh storage: defaults (fontSize 10, lineHeight 1.0, theme system, tabSize 4, line numbers on)', () => {
+  it('fresh storage: defaults (fontSize 8, lineHeight 0.7, theme system, tabSize 4, line numbers on)', () => {
     const store = useCodeViewerStore()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,
@@ -47,17 +48,17 @@ describe('codeViewer store', () => {
     expect(store.settings.theme).toBe('nord')
     // 未保存的字段回退默认
     expect(store.settings.tabSize).toBe(4)
-    expect(store.settings.lineHeight).toBe(1.0)
+    expect(store.settings.lineHeight).toBe(0.7)
     expect(store.settings.showLineNumbers).toBe(true)
   })
 
   it('corrupt storage falls back to defaults with a console warning', () => {
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
     localStorage.setItem(STORAGE_KEY, '{not json')
     const store = useCodeViewerStore()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,
@@ -112,8 +113,8 @@ describe('codeViewer store', () => {
     store.saveSettings({ fontSize: 20, theme: 'github-dark' })
     store.resetSettings()
     expect(store.settings).toEqual({
-      fontSize: 10,
-      lineHeight: 1.0,
+      fontSize: 8,
+      lineHeight: 0.7,
       theme: 'system',
       tabSize: 4,
       showLineNumbers: true,

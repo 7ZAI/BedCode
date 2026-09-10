@@ -29,14 +29,9 @@ impl PluginStorage {
     pub async fn get(&self, plugin_id: &str, key: &str) -> crate::Result<Option<serde_json::Value>> {
         let db = self.db.lock().await;
         let conn = db.conn();
-        let mut stmt = conn.prepare(
-            "SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2"
-        )?;
+        let mut stmt = conn.prepare("SELECT value FROM plugin_storage WHERE plugin_id = ?1 AND key = ?2")?;
 
-        let result = stmt.query_row(
-            rusqlite::params![plugin_id, key],
-            |row| row.get::<_, String>(0),
-        );
+        let result = stmt.query_row(rusqlite::params![plugin_id, key], |row| row.get::<_, String>(0));
 
         match result {
             Ok(json_str) => {
@@ -100,11 +95,10 @@ impl PluginStorage {
     pub async fn load_activated_plugins(&self) -> crate::Result<HashMap<String, bool>> {
         match self.get(SYSTEM_PLUGIN_ID, ACTIVATION_STATE_KEY).await? {
             Some(value) => {
-                let map: HashMap<String, bool> = serde_json::from_value(value)
-                    .map_err(|e| {
-                        tracing::warn!("Failed to parse activation state, resetting: {}", e);
-                        crate::AppError::Plugin(format!("Invalid activation state: {}", e))
-                    })?;
+                let map: HashMap<String, bool> = serde_json::from_value(value).map_err(|e| {
+                    tracing::warn!("Failed to parse activation state, resetting: {}", e);
+                    crate::AppError::Plugin(format!("Invalid activation state: {}", e))
+                })?;
                 Ok(map)
             }
             None => Ok(HashMap::new()),
@@ -129,11 +123,17 @@ mod tests {
 
         assert!(storage.get("plugin-1", "key1").await.unwrap().is_none());
 
-        storage.set("plugin-1", "key1", serde_json::json!("hello")).await.unwrap();
+        storage
+            .set("plugin-1", "key1", serde_json::json!("hello"))
+            .await
+            .unwrap();
         let val = storage.get("plugin-1", "key1").await.unwrap();
         assert_eq!(val, Some(serde_json::json!("hello")));
 
-        storage.set("plugin-1", "key1", serde_json::json!("world")).await.unwrap();
+        storage
+            .set("plugin-1", "key1", serde_json::json!("world"))
+            .await
+            .unwrap();
         let val = storage.get("plugin-1", "key1").await.unwrap();
         assert_eq!(val, Some(serde_json::json!("world")));
 
@@ -149,11 +149,20 @@ mod tests {
         storage.set("plugin-a", "key1", serde_json::json!("a")).await.unwrap();
         storage.set("plugin-b", "key1", serde_json::json!("b")).await.unwrap();
 
-        assert_eq!(storage.get("plugin-a", "key1").await.unwrap(), Some(serde_json::json!("a")));
-        assert_eq!(storage.get("plugin-b", "key1").await.unwrap(), Some(serde_json::json!("b")));
+        assert_eq!(
+            storage.get("plugin-a", "key1").await.unwrap(),
+            Some(serde_json::json!("a"))
+        );
+        assert_eq!(
+            storage.get("plugin-b", "key1").await.unwrap(),
+            Some(serde_json::json!("b"))
+        );
 
         storage.clear_all("plugin-a").await.unwrap();
         assert!(storage.get("plugin-a", "key1").await.unwrap().is_none());
-        assert_eq!(storage.get("plugin-b", "key1").await.unwrap(), Some(serde_json::json!("b")));
+        assert_eq!(
+            storage.get("plugin-b", "key1").await.unwrap(),
+            Some(serde_json::json!("b"))
+        );
     }
 }

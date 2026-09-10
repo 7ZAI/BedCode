@@ -2,7 +2,11 @@
 
 export interface WslDistro {
   name: string
+  /** 是否为默认发行版（Rust pty/wsl.rs 恒序列化） */
+  is_default: boolean
   state: string
+  /** WSL 版本（1/2） */
+  version: number
 }
 
 export interface SessionInfo {
@@ -42,14 +46,6 @@ export interface DeviceConnectionInfo {
   /** 设备指纹，用于与数据库 pairings 记录关联匹配 */
   fingerprint?: string
   session_count: number
-}
-
-export interface PtyOutputEvent {
-  sessionId: string
-  data: string
-  timestamp: string
-  isWaiting: boolean
-  index: number
 }
 
 // ==================== Shared Types ====================
@@ -114,6 +110,8 @@ export interface SessionEventPayload {
 export interface DeviceEventPayload {
   addr?: string
   device_id?: string
+  /** 设备指纹（稳定设备身份，后端 device-* 事件均携带；与 DeviceConnectionInfo 同键，用于在线态去重） */
+  fingerprint?: string
   device_name?: string
   event?: string
 }

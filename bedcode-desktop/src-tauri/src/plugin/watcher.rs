@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use tauri::Emitter;
 use tokio::sync::RwLock;
 
-use crate::system::constants::plugin::PLUGIN_RELOAD_DEBOUNCE_MS;
 use crate::system::constants::event;
+use crate::system::constants::plugin::PLUGIN_RELOAD_DEBOUNCE_MS;
 
 /// 插件开发文件监听器
 ///
@@ -66,8 +66,8 @@ impl PluginDevWatcher {
                     // WASM 产物变化 → 触发 Rust 端热重载
                     Some("wasm") => {
                         tracing::info!(
-                            "Plugin watcher: WASM changed for plugin '{}': {}",
-                            plugin_id,
+                            plugin_id = %plugin_id,
+                            "Plugin watcher: WASM changed: {}",
                             path.display()
                         );
 
@@ -82,10 +82,7 @@ impl PluginDevWatcher {
                                     if prev_id == &plugin_id_clone
                                         && prev_time.elapsed() < Duration::from_millis(PLUGIN_RELOAD_DEBOUNCE_MS)
                                     {
-                                        tracing::debug!(
-                                            "Plugin watcher: debounced reload for '{}'",
-                                            plugin_id_clone
-                                        );
+                                        tracing::debug!(plugin_id = %plugin_id_clone, "Plugin watcher: debounced reload");
                                         return;
                                     }
                                 }
@@ -100,16 +97,13 @@ impl PluginDevWatcher {
                             let ph = ctx.plugin_host().clone();
                             match ph.reload_wasm_plugin(&plugin_id_clone).await {
                                 Ok(()) => {
-                                    tracing::info!(
-                                        "Plugin watcher: WASM hot-reloaded '{}'",
-                                        plugin_id_clone
-                                    );
+                                    tracing::info!(plugin_id = %plugin_id_clone, "Plugin watcher: WASM hot-reloaded");
                                 }
                                 Err(e) => {
                                     tracing::error!(
-                                        "Plugin watcher: WASM hot-reload failed for '{}': {}",
-                                        plugin_id_clone,
-                                        e
+                                        plugin_id = %plugin_id_clone,
+                                        error = %e,
+                                        "Plugin watcher: WASM hot-reload failed"
                                     );
                                 }
                             }
@@ -118,15 +112,16 @@ impl PluginDevWatcher {
                     // TS 产物变化 → 通知前端重新加载
                     Some("js") => {
                         tracing::info!(
-                            "Plugin watcher: JS changed for plugin '{}': {}",
-                            plugin_id,
+                            plugin_id = %plugin_id,
+                            "Plugin watcher: JS changed: {}",
                             path.display()
                         );
 
                         let ctx = crate::system::app_context::AppContext::global();
-                        let _ = ctx.app_handle().emit(event::PLUGIN_DEV_RELOAD, serde_json::json!({
-                            "pluginId": plugin_id
-                        }));
+                        // 无头/测试上下文无 AppHandle：跳过前端重载通知
+                        if let Some(handle) = ctx.app_handle() {
+                            let _ = handle.emit(event::PLUGIN_DEV_RELOAD, serde_json::json!({ "pluginId": plugin_id }));
+                        }
                     }
                     _ => {}
                 }
@@ -139,10 +134,7 @@ impl PluginDevWatcher {
             .watch(&plugins_dir, RecursiveMode::Recursive)
             .expect("Failed to start watching plugin directory");
 
-        tracing::info!(
-            "Plugin dev watcher started: watching '{}'",
-            plugins_dir.display()
-        );
+        tracing::info!("Plugin dev watcher started: watching '{}'", plugins_dir.display());
 
         Self {
             _watcher: Box::new(watcher),
@@ -156,7 +148,12 @@ impl PluginDevWatcher {
 /// 例如：resources/plugins/desktop/com.bedcode.ai-chatbox/bedcode_plugin_ai_chatbox.wasm
 ///       → "com.bedcode.ai-chatbox"
 fn extract_plugin_id(path: &std::path::Path, plugins_dir: &std::path::Path) -> Option<String> {
-    path.strip_prefix(plugins_dir).ok()?.iter().next()?.to_str().map(String::from)
+    path.strip_prefix(plugins_dir)
+        .ok()?
+        .iter()
+        .next()?
+        .to_str()
+        .map(String::from)
 }
 
 // ==================== Tests ====================
@@ -178,8 +175,13 @@ mod tests {
     #[test]
     fn test_extract_plugin_id_from_nested_file() {
         let dir = plugins_dir();
-        let path = dir.join("com.bedcode.ai-chatbox").join("bedcode_plugin_ai_chatbox.wasm");
-        assert_eq!(extract_plugin_id(&path, &dir), Some("com.bedcode.ai-chatbox".to_string()));
+        let path = dir
+            .join("com.bedcode.ai-chatbox")
+            .join("bedcode_plugin_ai_chatbox.wasm");
+        assert_eq!(
+            extract_plugin_id(&path, &dir),
+            Some("com.bedcode.ai-chatbox".to_string())
+        );
     }
 
     /// 路径不在 plugins_dir 下 → None（例如其他目录的产物）

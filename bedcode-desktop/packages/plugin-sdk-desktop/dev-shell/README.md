@@ -5,21 +5,52 @@
 
 ## 使用
 
-在插件工程目录运行：
+### 前提
+
+- Node ≥ 20
+- 插件工程已声明 `@binblink/bedcode-plugin-sdk-desktop` 依赖（`file:` 本地链接或 npm）
+- SDK 构建产物存在：未构建时先在 SDK 目录执行 `pnpm install && pnpm run build`
+  （报找不到模块多半是这一步没做）
+
+### 启动（推荐走 CLI）
+
+`dev-shell` 由 SDK 提供的 CLI 启动，统一用 **`pnpm exec bedcode-plugin-desktop dev`**：
+在插件工程目录运行（bin 来自插件的 SDK 依赖，勿省略 `npx`）：
 
 ```bash
-bedcode-plugin-desktop dev            # 使用当前目录作为插件
-bedcode-plugin-desktop dev --entry src/custom-entry.ts
-bedcode-plugin-desktop dev ../my-plugin --port 5180 --open
-bedcode-plugin-desktop dev --host     # 监听局域网（平板/其他设备浏览器访问）
+cd bedcode-desktop/plugins/<your-plugin>
+pnpm exec bedcode-plugin-desktop dev            # 使用当前目录作为插件
+pnpm exec bedcode-plugin-desktop dev --entry src/custom-entry.ts
+pnpm exec bedcode-plugin-desktop dev ../my-plugin --port 5180 --open
+pnpm exec bedcode-plugin-desktop dev --host     # 监听局域网（平板/其他设备浏览器访问）
 ```
 
-浏览器打开 `http://localhost:5173`（--open 自动打开）。
+也可在仓库任意位置指定插件目录：
+
+```bash
+pnpm exec bedcode-plugin-desktop dev bedcode-desktop/plugins/file-transfer
+```
+
+浏览器打开 `http://localhost:5173`（`--open` 自动打开）。首次运行会自动安装
+dev-shell 自身依赖（vue / vite / tailwind 等，仅一次）。
+
+#### 参数
+
+| 参数 | 说明 |
+|---|---|
+| `[pluginDir]` | 插件工程目录，默认当前目录（须含 `plugin.json` 或入口文件） |
+| `--entry <file>` | 插件入口文件，默认 `<pluginDir>/src/index.ts` |
+| `--port <port>` | dev server 端口，默认 5173 |
+| `--host [addr]` | 监听局域网（默认 `0.0.0.0`），手机/平板与电脑同一 WiFi 时访问 `http://<电脑IP>:<port>/` |
+| `--open` | 启动后自动打开浏览器 |
+
+环境异常时先自检：`pnpm exec bedcode-plugin-desktop doctor`（检查 Node / Rust /
+wasm32 target / dev-shell 依赖 / SDK 构建产物）。
 
 ### 手动启动（不走 CLI）
 
 ```bash
-BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-shell>/vite.config.ts
+BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <dev-shell>/vite.config.ts
 ```
 
 多个插件用逗号分隔，侧边栏会并列展示所有插件的注册项。
@@ -53,9 +84,9 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
 
 - **插件样式缺失**：dev-shell 的 tailwind.config.js 按 `BEDCODE_DEV_PLUGINS`
   动态扫描插件源码，新加类名自动生效。
-- **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `bedcode-plugin-desktop dev`
+- **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `pnpm exec bedcode-plugin-desktop dev`
   或 dev-shell 的 main.ts 启动。
-- **SDK 报找不到模块**：插件工程的 `@binblink/plugin-sdk-desktop` 依赖指向
+- **SDK 报找不到模块**：插件工程的 `@binblink/bedcode-plugin-sdk-desktop` 依赖指向
   SDK 包（file: 或 npm），其 `dist` 需存在（先构建一次 SDK）。
 - **真机专属能力**（Rust 命令、真实 HTTP 端点、系统文件选择）无法在浏览器
   模拟，发布前需在真实宿主验证。

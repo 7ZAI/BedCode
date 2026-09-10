@@ -5,12 +5,12 @@
 //! - GET /api/git/status?session_id=X
 //! - POST /api/git/checkout
 
-use actix_web::{web, HttpResponse};
-use crate::system::app_context::AppContext;
-use crate::server::dtos::ApiResponse;
-use crate::process::create_command;
 use super::file_controller::resolve_working_dir;
+use crate::process::create_command;
 use crate::server::dtos::git_dto::*;
+use crate::server::dtos::ApiResponse;
+use crate::system::app_context::AppContext;
+use actix_web::{web, HttpResponse};
 
 /// GET /api/git/branches?session_id=X
 ///
@@ -21,7 +21,11 @@ pub async fn get_branches(query: web::Query<GitBranchesQuery>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&query.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -39,14 +43,15 @@ pub async fn get_branches(query: web::Query<GitBranchesQuery>) -> HttpResponse {
 
     let working_dir_clone = working_dir.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        fetch_branches(&working_dir_clone)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || fetch_branches(&working_dir_clone)).await;
 
     match result {
         Ok(Ok(data)) => HttpResponse::Ok().json(ApiResponse::ok_with_data(data)),
         Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
-        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("Git branches task failed: {}", e))),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(
+            500,
+            &format!("Git branches task failed: {}", e),
+        )),
     }
 }
 
@@ -59,7 +64,11 @@ pub async fn checkout(body: web::Json<GitCheckoutRequest>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&body.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
@@ -67,9 +76,7 @@ pub async fn checkout(body: web::Json<GitCheckoutRequest>) -> HttpResponse {
     let branch = body.branch.clone();
     let working_dir_clone = working_dir.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        run_git_checkout(&working_dir_clone, &branch)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || run_git_checkout(&working_dir_clone, &branch)).await;
 
     match result {
         Ok(Ok(new_branch)) => {
@@ -77,7 +84,10 @@ pub async fn checkout(body: web::Json<GitCheckoutRequest>) -> HttpResponse {
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
         Ok(Err(e)) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &e.to_string())),
-        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(500, &format!("Git checkout task failed: {}", e))),
+        Err(e) => HttpResponse::Ok().json(ApiResponse::<()>::error(
+            500,
+            &format!("Git checkout task failed: {}", e),
+        )),
     }
 }
 
@@ -90,16 +100,18 @@ pub async fn get_status(query: web::Query<GitBranchesQuery>) -> HttpResponse {
     let working_dir = match resolve_working_dir(&query.session_id, ctx).await {
         Ok(dir) => dir,
         Err(e) => {
-            let code = if matches!(e, crate::AppError::NotFound(_)) { 404 } else { 500 };
+            let code = if matches!(e, crate::AppError::NotFound(_)) {
+                404
+            } else {
+                500
+            };
             return HttpResponse::Ok().json(ApiResponse::<()>::error(code, &e.to_string()));
         }
     };
 
     let working_dir_clone = working_dir.clone();
 
-    let result = tokio::task::spawn_blocking(move || {
-        check_git_status(&working_dir_clone)
-    }).await;
+    let result = tokio::task::spawn_blocking(move || check_git_status(&working_dir_clone)).await;
 
     match result {
         Ok(Ok(data)) => HttpResponse::Ok().json(ApiResponse::ok_with_data(data)),
@@ -141,8 +153,14 @@ fn fetch_branches(working_dir: &str) -> crate::Result<GitBranchesResponseData> {
 /// 执行 git checkout
 fn run_git_checkout(working_dir: &str, branch: &str) -> crate::Result<String> {
     // 校验分支名，防止命令注入（只允许字母、数字、-、_、/、.）
-    if !branch.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.') {
-        return Err(crate::AppError::InvalidInput(format!("Invalid branch name: {}", branch)));
+    if !branch
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
+    {
+        return Err(crate::AppError::InvalidInput(format!(
+            "Invalid branch name: {}",
+            branch
+        )));
     }
 
     let output = create_command("git")

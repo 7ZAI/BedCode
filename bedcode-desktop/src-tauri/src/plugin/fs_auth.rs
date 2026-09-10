@@ -12,7 +12,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tauri::Emitter;
-use tokio::sync::{Mutex, oneshot};
+use tokio::sync::{oneshot, Mutex};
 
 /// 文件操作类型
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,10 +60,7 @@ impl FsAuthChecker {
     /// 创建文件访问校验器
     ///
     /// `app_handle` 为 None 时（无头/测试上下文）弹窗授权层不可用，直接拒绝
-    pub fn new(
-        storage: Arc<PluginStorage>,
-        app_handle: Option<Arc<tauri::AppHandle>>,
-    ) -> Self {
+    pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> Self {
         // 路径白名单：.claude/ 子目录（Claude Code 配置目录）
         // 不在此处硬编码绝对路径，运行时动态匹配路径后缀
         let path_whitelist = Vec::new();
@@ -188,13 +185,26 @@ impl FsAuthChecker {
         self.request_user_auth_batch(plugin_id, &ungranted, operation).await
     }
 
+    /// 查询路径是否已授权（白名单 / 受信任插件 / 持久化授权），**不弹窗**
+    ///
+    /// 供 WASI 预打开目录校验用：仅为已授权目录建立 preopen，
+    /// 防止插件借自身 storage 配置（config 可由插件写）指向任意路径
+    /// 绕过授权弹窗。无头/测试上下文同样适用（读持久化授权）。
+    pub async fn is_granted(&self, plugin_id: &str, path: &str) -> bool {
+        let Some(canonical) = Self::canonicalize_path(path) else {
+            return false;
+        };
+        if self.match_path_whitelist(&canonical) {
+            return true;
+        }
+        if self.plugin_whitelist.contains(plugin_id) {
+            return true;
+        }
+        self.check_granted_path(plugin_id, &canonical).await
+    }
+
     /// 弹窗请求用户授权（批量：一次弹窗展示全部未授权路径）
-    async fn request_user_auth_batch(
-        &self,
-        plugin_id: &str,
-        paths: &[String],
-        operation: FsOp,
-    ) -> bool {
+    async fn request_user_auth_batch(&self, plugin_id: &str, paths: &[String], operation: FsOp) -> bool {
         let request_id = uuid::Uuid::new_v4().to_string();
         let (reply_tx, reply_rx) = oneshot::channel();
 
@@ -357,12 +367,7 @@ impl FsAuthChecker {
         }
 
         // 等待用户回复（超时 30 秒自动拒绝）
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            reply_rx,
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_secs(30), reply_rx).await {
             Ok(Ok(allowed)) => {
                 tracing::info!(
                     plugin_id = %plugin_id,
@@ -387,11 +392,7 @@ impl FsAuthChecker {
     }
 
     /// 持久化授权路径前缀
-    async fn save_granted_path(
-        &self,
-        plugin_id: &str,
-        path: &str,
-    ) -> anyhow::Result<()> {
+    async fn save_granted_path(&self, plugin_id: &str, path: &str) -> anyhow::Result<()> {
         let storage_key = "fs_granted_paths".to_string();
 
         let mut granted: Vec<serde_json::Value> = match self.storage.get(plugin_id, &storage_key).await {
@@ -522,12 +523,17 @@ mod tests {
             std::env::temp_dir().to_string_lossy()
         );
         let canon = FsAuthChecker::canonicalize_path(&fake).expect("fallback must succeed");
+        // 平台感知断言：Windows 规范化分隔符为 `\`，其余平台保持原样
+        // （canonicalize_path 的 fallback 在 cfg(windows) 下 replace 分隔符，
+        //  非 Windows 直接原样返回——见函数注释）
+        #[cfg(not(windows))]
+        assert_eq!(canon.to_string_lossy().as_ref(), fake);
         #[cfg(windows)]
-        assert!(
-            !canon.to_string_lossy().contains('/'),
+        assert_eq!(
+            canon.to_string_lossy().as_ref(),
+            fake.replace('/', "\\"),
             "fallback path must use backslash on Windows"
         );
-        assert_eq!(canon.to_string_lossy().as_ref(), fake.replace('/', "\\"));
     }
 
     /// 已授权前缀：边界匹配 + 尚不存在的子路径（混合分隔符）也应放行
@@ -552,6 +558,46 @@ mod tests {
         // 相邻目录（前缀后紧跟非分隔符）不放行
         let adjacent = format!("{}2/file.jsonl", granted);
         assert!(!checker.check_batch("com.bedcode.test", &[adjacent], FsOp::Write).await);
+
+        std::fs::remove_dir_all(&granted_dir).unwrap();
+    }
+
+    // ==================== is_granted（WASI 预打开校验，无弹窗） ====================
+
+    #[tokio::test]
+    async fn is_granted_matches_whitelist_and_trusted_plugin() {
+        let checker = headless_checker().await;
+        // .claude/ 白名单目录段 → 直接放行（不经弹窗，无需授权记录）
+        let whitelisted = std::env::temp_dir().join(".claude").to_string_lossy().to_string();
+        assert!(checker.is_granted("com.bedcode.test", &whitelisted).await);
+        // 受信任插件白名单 → 任意路径放行
+        assert!(
+            checker
+                .is_granted("com.bedcode.auto-task", &std::env::temp_dir().to_string_lossy())
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn is_granted_only_after_persisted_grant() {
+        let checker = headless_checker().await;
+        let base = std::env::temp_dir();
+        let granted_dir = base.join("fs-auth-isgranted");
+        std::fs::create_dir_all(&granted_dir).unwrap();
+        let dir = granted_dir.to_string_lossy().to_string();
+
+        // 未授权：is_granted 为 false（不弹窗）
+        assert!(!checker.is_granted("com.bedcode.test", &dir).await);
+
+        // 保存授权（fs_request_auth 用户同意后的持久化结果）：is_granted 变 true
+        checker
+            .save_granted_path("com.bedcode.test", &format!("{}/sub", dir))
+            .await
+            .unwrap();
+        assert!(checker.is_granted("com.bedcode.test", &dir).await);
+
+        // 非授权插件/未授权路径仍 false
+        assert!(!checker.is_granted("com.bedcode.other", &dir).await);
 
         std::fs::remove_dir_all(&granted_dir).unwrap();
     }

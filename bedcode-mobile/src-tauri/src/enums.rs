@@ -4,7 +4,6 @@
 
 pub mod auth;
 pub mod control;
-pub mod file_service;
 pub mod plugin;
 pub mod session;
 pub mod special_key;
@@ -13,10 +12,12 @@ pub mod sync;
 
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
-pub use control::{SessionControlAction, SessionControlPayload, SessionConfigAction, SessionConfigPayload, TerminalAction, TerminalPayload, SubscribeMode};
-pub use file_service::{FileServicePayload, MountAnnouncement};
+pub use control::{
+    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
+    TerminalAction, TerminalPayload,
+};
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use session::{SessionStatus, TaskStatus};
-pub use special_key::{KeyCombo, KeyCode};
+pub use special_key::{KeyCode, KeyCombo};
 pub use sumary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
 pub use sync::SyncPayload;

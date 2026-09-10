@@ -3,15 +3,14 @@
 //! 全局单实例容器，集中管理桌面端所有全局服务的引用
 //! 在 lib.rs 的 run() 中一次性创建，后续通过 AppContext::global() 获取
 
+use crate::db::Database;
+use crate::mdns::advertiser::MdnsAdvertiser;
 use crate::plugin::PluginHost;
-use crate::plugin::file_service::FileServiceRegistry;
 use crate::server::services::pairing_service::PairingService;
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::info::SystemInfo;
-use crate::utils::auth::QrTokenManager;
 use crate::utils::auth::biometric::BiometricChallengeManager;
-use crate::mdns::advertiser::MdnsAdvertiser;
-use crate::db::Database;
+use crate::utils::auth::QrTokenManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::AppHandle;
@@ -30,8 +29,6 @@ pub struct AppContext {
     config_manager: Arc<SessionConfigManager>,
     /// 插件宿主（生命周期管理）
     plugin_host: Arc<PluginHost>,
-    /// 插件文件服务注册表（挂载/沙箱/上传会话/钩子分发）
-    file_service: Arc<FileServiceRegistry>,
     /// 配对服务
     pairing_service: Arc<PairingService>,
     /// QR Token 管理器
@@ -41,7 +38,11 @@ pub struct AppContext {
     /// mDNS 广播管理器
     mdns_advertiser: Arc<tokio::sync::RwLock<MdnsAdvertiser>>,
     /// Tauri AppHandle
-    app_handle: Arc<AppHandle>,
+    ///
+    /// Option 化：无头/测试上下文（`tauri::test::mock_app()` 只能产出
+    /// MockRuntime 句柄，与 Wry 类型不兼容）允许 None，依赖前端事件的
+    /// 能力在调用处降级（emit 跳过），业务链路不受影响
+    app_handle: Option<Arc<AppHandle>>,
     /// 同步事件发送器
     sync_tx: broadcast::Sender<crate::events::DesktopSyncEvent>,
     /// 资源目录路径（用于项目级 hooks 脚本复制）
@@ -56,7 +57,9 @@ static APP_CONTEXT: std::sync::OnceLock<AppContext> = std::sync::OnceLock::new()
 impl AppContext {
     /// 获取全局单例引用
     pub fn global() -> &'static Self {
-        APP_CONTEXT.get().expect("AppContext not initialized, call AppContext::init() first")
+        APP_CONTEXT
+            .get()
+            .expect("AppContext not initialized, call AppContext::init() first")
     }
 
     /// 尝试获取全局单例引用（未初始化返回 None）
@@ -92,10 +95,6 @@ impl AppContext {
         &self.plugin_host
     }
 
-    pub fn file_service(&self) -> &Arc<FileServiceRegistry> {
-        &self.file_service
-    }
-
     pub fn pairing_service(&self) -> &Arc<PairingService> {
         &self.pairing_service
     }
@@ -112,7 +111,7 @@ impl AppContext {
         &self.mdns_advertiser
     }
 
-    pub fn app_handle(&self) -> &Arc<AppHandle> {
+    pub fn app_handle(&self) -> &Option<Arc<AppHandle>> {
         &self.app_handle
     }
 
@@ -135,7 +134,6 @@ pub struct AppContextBuilder {
     session_manager: Option<Arc<SessionManager>>,
     config_manager: Option<Arc<SessionConfigManager>>,
     plugin_host: Option<Arc<PluginHost>>,
-    file_service: Option<Arc<FileServiceRegistry>>,
     pairing_service: Option<Arc<PairingService>>,
     qr_manager: Option<Arc<QrTokenManager>>,
     biometric_challenges: Option<Arc<BiometricChallengeManager>>,
@@ -153,7 +151,6 @@ impl AppContextBuilder {
             session_manager: None,
             config_manager: None,
             plugin_host: None,
-            file_service: None,
             pairing_service: None,
             qr_manager: None,
             biometric_challenges: None,
@@ -185,10 +182,6 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn file_service(mut self, fs: Arc<FileServiceRegistry>) -> Self {
-        self.file_service = Some(fs);
-        self
-    }
 
     pub fn pairing_service(mut self, ps: Arc<PairingService>) -> Self {
         self.pairing_service = Some(ps);
@@ -205,8 +198,8 @@ impl AppContextBuilder {
         self
     }
 
-    pub fn app_handle(mut self, ah: Arc<AppHandle>) -> Self {
-        self.app_handle = Some(ah);
+    pub fn app_handle(mut self, ah: Option<Arc<AppHandle>>) -> Self {
+        self.app_handle = ah;
         self
     }
 
@@ -232,12 +225,14 @@ impl AppContextBuilder {
             session_manager: self.session_manager.expect("AppContext: session_manager is required"),
             config_manager: self.config_manager.expect("AppContext: config_manager is required"),
             plugin_host: self.plugin_host.expect("AppContext: plugin_host is required"),
-            file_service: self.file_service.expect("AppContext: file_service is required"),
             pairing_service: self.pairing_service.expect("AppContext: pairing_service is required"),
             qr_manager: self.qr_manager.expect("AppContext: qr_manager is required"),
-            biometric_challenges: self.biometric_challenges.unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
+            biometric_challenges: self
+                .biometric_challenges
+                .unwrap_or_else(|| Arc::new(BiometricChallengeManager::new())),
             mdns_advertiser: self.mdns_advertiser.expect("AppContext: mdns_advertiser is required"),
-            app_handle: self.app_handle.expect("AppContext: app_handle is required"),
+            // app_handle 允许 None（无头/测试上下文），其余字段仍必填
+            app_handle: self.app_handle,
             sync_tx: self.sync_tx.expect("AppContext: sync_tx is required"),
             resource_dir: self.resource_dir.expect("AppContext: resource_dir is required"),
             system_info: self.system_info.expect("AppContext: system_info is required"),
@@ -251,4 +246,3 @@ impl Default for AppContextBuilder {
         Self::new()
     }
 }
-

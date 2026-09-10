@@ -5,11 +5,10 @@
 use std::sync::Arc;
 use std::sync::OnceLock;
 
-use crate::connection::manager::ConnectionManager;
 use crate::auth::AuthManager;
-use crate::session::SessionManager;
+use crate::connection::manager::ConnectionManager;
 use crate::plugin::manager::PluginManager;
-use crate::file_service::FileService;
+use crate::session::SessionManager;
 use crate::system::info::SystemInfo;
 
 // ==================== Global Token ====================
@@ -57,18 +56,22 @@ pub fn get_connection_manager() -> Arc<ConnectionManager> {
 
 /// 获取认证管理器
 pub fn get_auth_manager() -> Arc<AuthManager> {
-    AUTH_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        AuthManager::new(conn)
-    }).clone()
+    AUTH_MANAGER
+        .get_or_init(|| {
+            let conn = get_connection_manager();
+            AuthManager::new(conn)
+        })
+        .clone()
 }
 
 /// 获取会话管理器
 pub fn get_session_manager() -> Arc<SessionManager> {
-    SESSION_MANAGER.get_or_init(|| {
-        let conn = get_connection_manager();
-        SessionManager::new(conn)
-    }).clone()
+    SESSION_MANAGER
+        .get_or_init(|| {
+            let conn = get_connection_manager();
+            SessionManager::new(conn)
+        })
+        .clone()
 }
 
 // ==================== System Info ====================
@@ -122,10 +125,62 @@ pub fn try_get_plugin_manager() -> Option<Arc<PluginManager>> {
 
 // ==================== File Service ====================
 
-/// 获取文件服务单例（内网文件传输插件规格阶段 2）
+// ==================== Link Crypto Context（issue 09） ====================
+
+/// 链路加密运行期上下文
 ///
-/// OnceLock 惰性初始化（实现在 `file_service::get_file_service`）；
-/// 首次调用必须在 tokio runtime 上下文内（启动上传会话 sweeper）
-pub fn get_file_service() -> Arc<FileService> {
-    crate::file_service::get_file_service()
+/// 设置开关与 pin 存于 WebView localStorage（issue 05/06 的 TS 侧），而常驻
+/// 事件 WS 建连在 Rust 侧——前端经 `set_link_crypto_context` 命令把当前态
+/// 推送到此，建连时读取。缺省全关：未推送前事件 WS 保持明文（与现状一致）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinkCryptoContext {
+    /// 主开关（对应移动端 trafficEncryption.enabled）
+    pub enabled: bool,
+    /// 严格模式：协商被拒/失败时断连报错而非明文续跑
+    pub strict_mode: bool,
+    /// 事件通道子开关（对应桌面 encryptWsEvent）
+    pub encrypt_ws_event: bool,
+    /// 已 pin 的桌面端身份公钥（base64）；None = 未配对/未下发
+    pub kd_public_b64: Option<String>,
+}
+
+impl Default for LinkCryptoContext {
+    fn default() -> Self {
+        Self { enabled: false, strict_mode: false, encrypt_ws_event: true, kd_public_b64: None }
+    }
+}
+
+static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> =
+    std::sync::RwLock::new(LinkCryptoContext {
+        enabled: false,
+        strict_mode: false,
+        encrypt_ws_event: true,
+        kd_public_b64: None,
+    });
+
+/// 读取链路加密运行期上下文快照
+pub fn get_link_crypto_context() -> LinkCryptoContext {
+    LINK_CRYPTO_CONTEXT.read().unwrap().clone()
+}
+
+/// 更新链路加密运行期上下文（前端 set_link_crypto_context 命令调用）
+pub fn set_link_crypto_context(ctx: LinkCryptoContext) {
+    *LINK_CRYPTO_CONTEXT.write().unwrap() = ctx;
+}
+
+/// 更新已 pin 的桌面端身份公钥（认证成功时随 auth 响应落地，issue：修复 pin 断链）
+///
+/// 仅在有值时覆盖：None 不清除既有 pin——防主动降级攻击抹除信任锚
+/// （与前端 notePin 的语义一致：协商失败不清 pin）。
+pub fn update_link_crypto_pin(kd_public_b64: Option<String>) {
+    if let Some(kd) = kd_public_b64 {
+        LINK_CRYPTO_CONTEXT.write().unwrap().kd_public_b64 = Some(kd);
+    }
+}
+
+/// 事件 WS 是否应发起加密协商：主开关 ∧ 事件子开关 ∧ 已持有 pin。
+/// 协商依赖配对期下发的桌面端身份公钥作信任锚，三者缺一即明文。
+pub fn is_event_encryption_active() -> bool {
+    let ctx = get_link_crypto_context();
+    ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some()
 }

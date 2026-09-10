@@ -42,12 +42,14 @@ describe('useAiConfig', () => {
   it('新增供应商不自动激活（首个除外）：不打断当前对话的激活供应商', async () => {
     const { config } = setup()
     const first = await config.addProvider(makeProvider())
-    const second = await config.addProvider(makeProvider({
-      id: 'p2',
-      name: 'Qwen',
-      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      models: ['qwen-turbo'],
-    }))
+    const second = await config.addProvider(
+      makeProvider({
+        id: 'p2',
+        name: 'Qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        models: ['qwen-turbo'],
+      }),
+    )
 
     expect(config.providers.value.length).toBe(2)
     expect(config.activeProviderId.value).toBe(first.id)
@@ -85,13 +87,15 @@ describe('useAiConfig', () => {
   it('删除当前供应商：active 回退到剩余首个', async () => {
     const { config } = setup()
     await config.addProvider(makeProvider())
-    await config.addProvider(makeProvider({
-      id: 'p2',
-      name: 'Qwen',
-      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      models: ['qwen-turbo'],
-      activeModel: 'qwen-turbo',
-    }))
+    await config.addProvider(
+      makeProvider({
+        id: 'p2',
+        name: 'Qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        models: ['qwen-turbo'],
+        activeModel: 'qwen-turbo',
+      }),
+    )
 
     await config.removeProvider('p1')
     expect(config.providers.value.length).toBe(1)
@@ -110,13 +114,15 @@ describe('useAiConfig', () => {
   it('跨供应商模型切换：选中其他供应商的模型时切换激活供应商并持久化', async () => {
     const { mock, config } = setup()
     await config.addProvider(makeProvider())
-    await config.addProvider(makeProvider({
-      id: 'p2',
-      name: 'Qwen',
-      baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-      models: ['qwen-turbo', 'qwen-plus'],
-      activeModel: 'qwen-turbo',
-    }))
+    await config.addProvider(
+      makeProvider({
+        id: 'p2',
+        name: 'Qwen',
+        baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+        models: ['qwen-turbo', 'qwen-plus'],
+        activeModel: 'qwen-turbo',
+      }),
+    )
 
     // 从 DeepSeek 的 deepseek-chat 切到 Qwen 的 qwen-plus（复合键带供应商 id）
     await config.setActiveModel('p2::qwen-plus')
@@ -149,7 +155,7 @@ describe('useAiConfig', () => {
 
     const models = await config.fetchModels(p)
     expect(models).toEqual(['model-a', 'model-b'])
-    expect(mock.calls.find(c => c.command === 'ai-chatbox.fetch-models')).toBeTruthy()
+    expect(mock.calls.find((c) => c.command === 'ai-chatbox.fetch-models')).toBeTruthy()
   })
 
   it('测试连接：chat-complete 返回回复文本', async () => {
@@ -226,10 +232,12 @@ describe('useAiConfig', () => {
   it('编辑保存路径：全量替换更新后非 openai 方言保持原值（ProviderForm save → updateProvider）', async () => {
     const mock = createMockContext()
     // 模拟编辑入口：存储中已有 anthropic 方言供应商，表单保存时整体替换（改名称/模型）
-    mock.storageMap.set('apiProviders', [makeProvider({
-      apiStyle: 'anthropic',
-      name: 'Anthropic',
-    })])
+    mock.storageMap.set('apiProviders', [
+      makeProvider({
+        apiStyle: 'anthropic',
+        name: 'Anthropic',
+      }),
+    ])
     mock.storageMap.set('activeProvider', 'p1')
     const config = useAiConfig(mock.context)
     await config.loadConfig()
@@ -254,7 +262,7 @@ describe('useAiConfig', () => {
     const models = await config.fetchModels(p)
     expect(models).toEqual(['model-a', 'model-b'])
 
-    const call = mock.calls.find(c => c.command === 'ai-chatbox.fetch-models')!
+    const call = mock.calls.find((c) => c.command === 'ai-chatbox.fetch-models')!
     expect(call.args.provider).toBeUndefined()
     expect(call.args.request.method).toBe('GET')
     expect(call.args.request.url).toBe('https://api.deepseek.com/v1/models')
@@ -270,14 +278,16 @@ describe('useAiConfig', () => {
       },
     })
     const config = useAiConfig(mock.context)
-    const p = await config.addProvider(makeProvider({
-      id: 'g1',
-      name: 'Gemini',
-      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-      apiStyle: 'gemini',
-      models: [],
-      activeModel: '',
-    }))
+    const p = await config.addProvider(
+      makeProvider({
+        id: 'g1',
+        name: 'Gemini',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        apiStyle: 'gemini',
+        models: [],
+        activeModel: '',
+      }),
+    )
 
     const models = await config.fetchModels(p)
     expect(models).toEqual(['gemini-2.0-flash'])
@@ -288,7 +298,7 @@ describe('useAiConfig', () => {
     const p = await config.addProvider(makeProvider({ baseUrl: 'not a url' }))
 
     await expect(config.fetchModels(p)).rejects.toThrow(/invalid base url/)
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.fetch-models')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.fetch-models')).toBe(false)
   })
 
   it('testConnection：非法 baseUrl 直接拦截抛错（不发请求）', async () => {
@@ -296,7 +306,7 @@ describe('useAiConfig', () => {
     const p = await config.addProvider(makeProvider({ baseUrl: 'ftp://example.com' }))
 
     await expect(config.testConnection(p)).rejects.toThrow(/invalid base url/)
-    expect(mock.calls.some(c => c.command === 'ai-chatbox.chat-complete')).toBe(false)
+    expect(mock.calls.some((c) => c.command === 'ai-chatbox.chat-complete')).toBe(false)
   })
 
   it('测试连接：适配层构建非流式请求 + 解析回复文本', async () => {
@@ -306,7 +316,7 @@ describe('useAiConfig', () => {
     const reply = await config.testConnection(p)
     expect(reply).toBe('pong')
 
-    const call = mock.calls.find(c => c.command === 'ai-chatbox.chat-complete')!
+    const call = mock.calls.find((c) => c.command === 'ai-chatbox.chat-complete')!
     expect(call.args.request.url).toBe('https://api.deepseek.com/v1/chat/completions')
     const body = JSON.parse(call.args.request.body)
     expect(body.stream).toBe(false)

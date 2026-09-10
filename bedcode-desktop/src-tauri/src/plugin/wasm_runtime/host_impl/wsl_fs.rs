@@ -189,7 +189,9 @@ mod tests {
     fn test_is_wsl_unc_path() {
         assert!(is_wsl_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\user"));
         assert!(is_wsl_unc_path("\\\\wsl$\\Ubuntu\\home\\user"));
-        assert!(is_wsl_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\user/.claude/settings.json"));
+        assert!(is_wsl_unc_path(
+            "\\\\wsl.localhost\\Ubuntu\\home\\user/.claude/settings.json"
+        ));
         assert!(!is_wsl_unc_path("C:\\Users\\test"));
         assert!(!is_wsl_unc_path("D:\\Projects\\my-app/.claude/settings.json"));
         assert!(!is_wsl_unc_path("/home/user"));
@@ -199,22 +201,19 @@ mod tests {
     fn test_parse_wsl_unc_path() {
         // wsl.localhost 新格式
         let (distro, wsl_path) =
-            parse_wsl_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink")
-                .expect("parse failed");
+            parse_wsl_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink").expect("parse failed");
         assert_eq!(distro, "Ubuntu");
         assert_eq!(wsl_path, "/home/binblink/project/blink");
 
         // 混合分隔符（Windows 前缀 + 正斜杠后续）
-        let (distro, wsl_path) = parse_wsl_unc_path(
-            "\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink/.claude/settings.json",
-        )
-        .expect("parse failed");
+        let (distro, wsl_path) =
+            parse_wsl_unc_path("\\\\wsl.localhost\\Ubuntu\\home\\binblink\\project\\blink/.claude/settings.json")
+                .expect("parse failed");
         assert_eq!(distro, "Ubuntu");
         assert_eq!(wsl_path, "/home/binblink/project/blink/.claude/settings.json");
 
         // wsl$ 旧格式
-        let (distro, wsl_path) =
-            parse_wsl_unc_path("\\\\wsl$\\Ubuntu\\home\\user").expect("parse failed");
+        let (distro, wsl_path) = parse_wsl_unc_path("\\\\wsl$\\Ubuntu\\home\\user").expect("parse failed");
         assert_eq!(distro, "Ubuntu");
         assert_eq!(wsl_path, "/home/user");
 

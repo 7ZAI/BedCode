@@ -188,3 +188,997 @@
   from { transform: translateY(0); }
   to { transform: translateY(100%); }
 }
+/**
+ * File Transfer V2 样式（并行设计层）
+ *
+ * 与 ../styles.css 分工：
+ *   ../styles.css — 领域语义类（四色状态 ft-color-* / ft-progress-* / ft-chip），
+ *                   V2 与旧版共用，由 v2/index.ts 一并注入 document.head
+ *   本文件       — V2 专属布局与交互样式（fv2-* 前缀），不复用旧版 ft-* 布局类
+ *
+ * 设计取向（ui-ux-pro-max 关键词：Flat / typography-focused / icon-heavy）：
+ *   - 扁平：无渐变、无多层阴影；层级靠底色分层 + 1px 描边表达
+ *   - 字号统一走宿主 `--font-size-*` 流式 token（.mobile-ui 作用域），
+ *     组件内不内联 clamp，避免双真源
+ *   - 触控目标恒定 ≥44px（2.75rem）；图标视觉 20px，命中区 44px
+ *   - 过渡 150–250ms，仅过渡 color / opacity / transform（禁 transition-all 上容器）
+ */
+
+/* ==================== 页面根 ==================== */
+/* 声明为查询容器：为将来嵌入面板/抽屉留正确基准（本页当前作为整屏工具页） */
+.fv2-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--mobile-bg-primary);
+  container-type: inline-size;
+}
+
+/* ==================== 图标按钮 ==================== */
+/* 视觉 20px 图标 + 44px 命中区；按压仅底色反馈（不改布局，防抖动） */
+.fv2-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: 0.75rem;
+  color: var(--mobile-text-secondary);
+  flex-shrink: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-icon-btn:active {
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-primary);
+}
+
+.fv2-icon-btn > svg {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+.fv2-icon-btn--accent {
+  color: var(--mobile-accent);
+}
+
+.fv2-icon-btn--accent:active {
+  color: var(--mobile-accent);
+}
+
+.fv2-icon-btn:disabled {
+  opacity: 0.4;
+}
+
+/* ==================== 按钮族 ==================== */
+/* 主按钮：实色 accent（上传 CTA 等），扁平无边框无阴影 */
+.fv2-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 1.25rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-btn-primary:active {
+  opacity: 0.85;
+}
+
+.fv2-btn-primary:disabled {
+  opacity: 0.4;
+}
+
+/* 次级按钮：中性底（取消 / 重试等） */
+.fv2-btn-neutral {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.75rem;
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-btn-neutral:active {
+  opacity: 0.8;
+}
+
+/* 危险语义次级按钮（断开连接）：中性底 + 错误色文字 */
+.fv2-btn-neutral--danger {
+  color: var(--mobile-error);
+  background: var(--mobile-error-muted);
+}
+
+/* 强调次级（accent tint 底 + accent 文字）：重试等需要被看见的次级操作 */
+.fv2-btn-tint {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--mobile-accent) 14%, transparent);
+  color: var(--mobile-accent);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-btn-tint:active {
+  opacity: 0.8;
+}
+
+/* 文字按钮（筛选 chip 内的计数、清空选择等无底操作） */
+.fv2-btn-text {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  padding: 0 0.875rem;
+  border-radius: 0.625rem;
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-btn-text:active {
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-primary);
+}
+
+/* ==================== 顶栏 ==================== */
+/* 对端选择器：整块可点（44px），展开设备列表；名称流式字号 + truncate */
+.fv2-peer-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.625rem;
+  min-height: 2.75rem;
+  padding: 0 0.75rem 0 0.25rem;
+  border-radius: 0.75rem;
+  min-width: 0;
+  max-width: 62%;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-peer-chip:active {
+  background: var(--mobile-bg-tertiary);
+}
+
+.fv2-peer-name {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+}
+
+.fv2-peer-chevron {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: var(--mobile-text-muted);
+}
+
+/* 连接状态胶囊（与旧版同语义色：success tint / 中性底） */
+.fv2-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 1.375rem;
+  padding: 0 0.625rem;
+  border-radius: 9999px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.fv2-status-pill--online {
+  background: var(--mobile-success-muted);
+  border: 1px solid var(--mobile-success-connected-border);
+  color: var(--mobile-success);
+}
+
+.fv2-status-pill--offline {
+  background: var(--mobile-bg-tertiary);
+  border: 1px solid var(--mobile-border);
+  color: var(--mobile-text-secondary);
+}
+
+/* 状态点（脉冲呼吸提示实时在线；尊重减弱动效） */
+.fv2-status-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  background: var(--mobile-success);
+  animation: fv2-dot-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes fv2-dot-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fv2-status-dot {
+    animation: none;
+  }
+}
+
+/* ==================== 分段 Tab 栏 ==================== */
+/* iOS 风分段：整块灰底 + 激活段白/米白纸面（与桌面端 .ft-tab--active 的 bg-card 同原则）：
+   深色主题取纸白 accent + 墨色文字；浅色主题取米白卡片底 + 主文字色（纸面在浅色底上依旧弹出） */
+.fv2-tabs {
+  display: flex;
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border-radius: 0.875rem;
+  background: var(--mobile-bg-tertiary);
+}
+
+.fv2-tab {
+  position: relative;
+  flex: 1 1 0;
+  min-height: 2.75rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  border-radius: 0.625rem;
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: background-color 0.2s ease, color 0.2s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-tab:active {
+  opacity: 0.85;
+}
+
+/* 选中段 = 白/米白纸面（深色主题：纸白 accent 底 + 墨色文字，浅色主题：米白卡底 + 主文字） */
+.fv2-tab--active {
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+html:not(.dark) .fv2-tab--active {
+  background: var(--mobile-bg-card);
+  color: var(--mobile-text-primary);
+}
+
+.fv2-tab > svg {
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+}
+
+/* Tab 角标：未读数（如传输中数量、待批请求数） */
+.fv2-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.125rem;
+  height: 1.125rem;
+  padding: 0 0.3125rem;
+  border-radius: 9999px;
+  background: color-mix(in srgb, currentColor 18%, transparent);
+  font-size: 0.625rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== 内容滚动区 ==================== */
+.fv2-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.fv2-pad {
+  padding: 1rem;
+}
+
+/* Tab 切换淡入：只动 opacity（合成层友好） */
+.fv2-fade-enter-active,
+.fv2-fade-leave-active {
+  transition: opacity 0.15s ease;
+}
+
+.fv2-fade-enter-from,
+.fv2-fade-leave-to {
+  opacity: 0;
+}
+
+/* ==================== 筛选 chip（传输 tab 内） ==================== */
+.fv2-filters {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.875rem 1rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fv2-filters::-webkit-scrollbar {
+  display: none;
+}
+
+.fv2-filter {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  padding: 0 0.75rem;
+  border-radius: 9999px;
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: background-color 0.15s ease, color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-filter:active {
+  opacity: 0.85;
+}
+
+.fv2-filter--active {
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+/* 计数（chip 内 tabular-nums，避免数字切换时宽度跳动） */
+.fv2-filter-count {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.8;
+}
+
+/* 横滑区：禁止浏览器默认水平手势，垂直滚动保留（与宿主 MobileSwipeContainer 同模式） */
+.fv2-swipe-zone {
+  touch-action: pan-y;
+}
+
+/* ==================== 任务卡 ==================== */
+.fv2-task {
+  margin-bottom: 0.75rem;
+}
+
+/* 任务首行：图标 chip + 名称/元信息 + 状态 chip */
+.fv2-task-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+.fv2-task-name {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  line-height: 1.35;
+}
+
+/* 元信息（数字等宽对齐，速率/进度切换不跳动） */
+.fv2-task-meta {
+  margin-top: 0.125rem;
+  font-size: var(--font-size-xs);
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+/* 进度轨道 + 填充（填充颜色由 ft-progress-* 状态类提供） */
+.fv2-progress {
+  height: 0.375rem;
+  border-radius: 9999px;
+  background: var(--mobile-bg-tertiary);
+  overflow: hidden;
+}
+
+.fv2-progress-fill {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+/* 不确定进度（无偏移数据）：呼吸动画 */
+.fv2-progress-fill--indeterminate {
+  animation: fv2-progress-breathe 1.6s ease-in-out infinite;
+}
+
+@keyframes fv2-progress-breathe {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fv2-progress-fill--indeterminate {
+    animation: none;
+  }
+}
+
+/* 失败/拒绝原因块：左色条 + 浅红底，与状态 chip 视觉呼应 */
+.fv2-task-reason {
+  margin: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.625rem;
+  border-left: 3px solid var(--mobile-error);
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--mobile-error);
+}
+
+/* 任务操作区 */
+.fv2-task-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+.fv2-task-actions > .fv2-btn-neutral,
+.fv2-task-actions > .fv2-btn-tint {
+  flex: 1 1 0;
+  min-height: 2.5rem;
+}
+
+/* ==================== 任务卡（TaskCard，v2） ==================== */
+/* 卡片：与宿主 group-card 同视觉语言（底 + 1px 描边 + 1rem 圆角），内边距自管 */
+.fv2-card {
+  margin-bottom: 0.75rem;
+  padding: 0.875rem 1rem;
+  background: var(--mobile-group-bg);
+  border: 1px solid var(--mobile-group-border);
+  border-radius: 1rem;
+}
+
+/* 方向 chip：图标方块（上传 accent / 下载 success），视觉 16px 图标 */
+.fv2-dir-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 0.5rem;
+  flex-shrink: 0;
+}
+
+.fv2-dir-chip > svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+.fv2-dir-chip--accent {
+  color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
+}
+
+.fv2-dir-chip--info {
+  color: var(--mobile-success);
+  background: var(--mobile-success-muted);
+}
+
+/* 名称：flex 收缩 + 省略号（长文件名不撑破卡片） */
+.fv2-card-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  line-height: 1.35;
+}
+
+/* 状态 chip：与 ft-chip 同款基底（currentColor 12% 派生底），不覆盖状态色 */
+.fv2-card-state {
+  display: inline-flex;
+  align-items: center;
+  height: 1.25rem;
+  padding: 0 0.5rem;
+  border-radius: 9999px;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  flex-shrink: 0;
+}
+
+/* 元信息行（大小/速率/时间，tabular-nums 防跳动） */
+.fv2-card-meta {
+  margin-top: 0.25rem;
+  font-size: var(--font-size-xs);
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
+/* 进度轨道 + 填充（填充底色由 ft-progress-* 状态类提供） */
+.fv2-progress-track {
+  height: 0.375rem;
+  margin-top: 0.625rem;
+  border-radius: 9999px;
+  background: var(--mobile-bg-tertiary);
+  overflow: hidden;
+}
+
+.fv2-progress-bar {
+  height: 100%;
+  border-radius: 9999px;
+  transition: width 0.3s ease;
+}
+
+/* 不确定进度（offset=0 运行中）：呼吸动画（只动 opacity，合成层友好） */
+.fv2-progress-indeterminate {
+  animation: fv2-progress-breathe 1.6s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fv2-progress-indeterminate {
+    animation: none;
+  }
+}
+
+/* 失败/拒绝原因块：左色条 + 浅红底，与状态 chip 呼应 */
+.fv2-card-reason {
+  margin-top: 0.5rem;
+  padding: 0.625rem 0.75rem;
+  border-radius: 0.625rem;
+  border-left: 3px solid var(--mobile-error);
+  background: color-mix(in srgb, var(--mobile-error) 8%, transparent);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--mobile-error);
+}
+
+/* 操作按钮行（44px 触控目标） */
+.fv2-card-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.625rem;
+}
+
+.fv2-card-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: 0.75rem;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-card-action:active {
+  opacity: 0.8;
+}
+
+.fv2-card-action--tint {
+  background: color-mix(in srgb, var(--mobile-accent) 14%, transparent);
+  color: var(--mobile-accent);
+}
+
+.fv2-card-action--neutral {
+  background: var(--mobile-bg-tertiary);
+  color: var(--mobile-text-secondary);
+}
+
+/* ==================== 设备行 ==================== */
+.fv2-device {
+  margin-bottom: 0.75rem;
+}
+
+.fv2-device-body {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 1rem;
+}
+
+/* 设备名（次要文本色，名称即主信息） */
+.fv2-device-name {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+}
+
+/* 设备元信息（地址 / 短指纹 / 状态） */
+.fv2-device-meta {
+  margin-top: 0.125rem;
+  font-size: var(--font-size-xs);
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 拨号失败行内错误 */
+.fv2-device-error {
+  margin-top: 0.25rem;
+  font-size: var(--font-size-xs);
+  color: var(--mobile-error);
+}
+
+.fv2-device-actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.25rem 0.75rem 0.75rem;
+}
+
+.fv2-device-actions > .fv2-btn-neutral,
+.fv2-device-actions > .fv2-btn-primary {
+  flex: 1 1 0;
+  min-height: 2.5rem;
+  padding: 0 0.75rem;
+}
+
+/* 设备状态点 */
+.fv2-dev-dot {
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 9999px;
+  flex-shrink: 0;
+}
+
+.fv2-dev-dot--connected {
+  background: var(--mobile-chip-emerald);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--mobile-chip-emerald) 80%, transparent);
+}
+
+/* 握手中：琥珀色 + 旋转（transform 合成层） */
+.fv2-dev-dot--connecting {
+  background: transparent;
+  border: 2px solid color-mix(in srgb, var(--mobile-chip-amber) 35%, transparent);
+  border-top-color: var(--mobile-chip-amber);
+  width: 0.875rem;
+  height: 0.875rem;
+  animation: fv2-spin 0.8s linear infinite;
+}
+
+/* 在线未连接：降饱和绿，与已连接区分 */
+.fv2-dev-dot--reachable {
+  background: color-mix(in srgb, var(--mobile-chip-emerald) 55%, var(--mobile-bg-tertiary));
+}
+
+.fv2-dev-dot--offline {
+  background: var(--mobile-text-disabled);
+}
+
+.fv2-dev-dot--nocap {
+  background: var(--mobile-text-disabled);
+}
+
+@keyframes fv2-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ==================== 文件行（浏览 tab） ==================== */
+.fv2-file {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  min-height: 3.25rem;
+  text-align: left;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-file:active {
+  background: var(--mobile-group-row-active);
+}
+
+/* 勾选行底色：accent-muted token（纸白 12%，比裸 8% color-mix 更可辨且 token 同源） */
+.fv2-file--selected {
+  background: var(--mobile-accent-muted);
+}
+
+.fv2-file-name {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+  line-height: 1.35;
+}
+
+/* 勾选框：只过渡受影响属性 */
+.fv2-check {
+  width: 1.375rem;
+  height: 1.375rem;
+  border-radius: 9999px;
+  border: 2px solid var(--mobile-border-hover);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.fv2-check > svg {
+  width: 0.875rem;
+  height: 0.875rem;
+}
+
+.fv2-check--checked {
+  background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+/* ==================== 面包屑 ==================== */
+.fv2-crumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0 1rem 0.625rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.fv2-crumbs::-webkit-scrollbar {
+  display: none;
+}
+
+.fv2-crumb {
+  flex-shrink: 0;
+  max-width: 7rem;
+  min-height: 1.75rem;
+  padding: 0 0.5rem;
+  border-radius: 0.5rem;
+  color: var(--mobile-accent);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-crumb:active {
+  background: var(--mobile-bg-tertiary);
+}
+
+.fv2-crumb--current {
+  color: var(--mobile-text-primary);
+}
+
+.fv2-crumb-sep {
+  width: 0.875rem;
+  height: 0.875rem;
+  flex-shrink: 0;
+  color: var(--mobile-text-disabled);
+}
+
+/* ==================== 提示横幅（存储权限等） ==================== */
+.fv2-notice {
+  display: flex;
+  gap: 0.625rem;
+  align-items: flex-start;
+  margin: 0.75rem 1rem 0;
+  padding: 0.75rem 0.875rem;
+  border-radius: 0.75rem;
+  background: color-mix(in srgb, var(--mobile-warning) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--mobile-warning) 30%, transparent);
+}
+
+.fv2-notice > svg {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+  color: var(--mobile-warning);
+  margin-top: 0.125rem;
+}
+
+.fv2-notice-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fv2-notice-title {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+}
+
+.fv2-notice-text {
+  margin-top: 0.125rem;
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--mobile-text-secondary);
+}
+
+/* ==================== 空态 / 加载态 ==================== */
+/* flex:1 撑满内容区，空态垂直居中；列表态不参与撑高 */
+.fv2-empty {
+  flex: 1 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.375rem;
+  padding: 2rem 1.5rem 2.5rem;
+  text-align: center;
+}
+
+/* 空态图标底：圆角方底 + currentColor 10% tint（与 chip 同手法） */
+.fv2-empty-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 4rem;
+  height: 4rem;
+  border-radius: 1.25rem;
+  margin-bottom: 0.75rem;
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: var(--mobile-text-muted);
+}
+
+.fv2-empty-icon > svg {
+  width: 2rem;
+  height: 2rem;
+}
+
+.fv2-empty-icon--warning {
+  color: var(--mobile-warning);
+}
+
+.fv2-empty-icon--error {
+  color: var(--mobile-error);
+}
+
+.fv2-empty-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--mobile-text-primary);
+}
+
+.fv2-empty-hint {
+  font-size: var(--font-size-sm);
+  color: var(--mobile-text-secondary);
+  line-height: 1.5;
+  max-width: 17rem;
+}
+
+.fv2-empty-action {
+  margin-top: 1rem;
+}
+
+/* spinner（细线圆环） */
+.fv2-spinner {
+  width: 1.75rem;
+  height: 1.75rem;
+  border-radius: 9999px;
+  border: 2px solid var(--mobile-border-hover);
+  border-top-color: var(--mobile-accent);
+  animation: fv2-spin 0.8s linear infinite;
+}
+
+.fv2-spinner--sm {
+  width: 1.25rem;
+  height: 1.25rem;
+  border-width: 2px;
+}
+
+/* ==================== 底部行动条 ==================== */
+/* 常驻底栏：上传 CTA / 选择操作 / 迷你传输进度三态互斥 */
+.fv2-footer {
+  position: relative; /* 三态交叉渐变的离场分支以本条为包含块（SummaryBar scoped） */
+  flex-shrink: 0;
+  border-top: 1px solid var(--mobile-border);
+  background: color-mix(in srgb, var(--mobile-bg-secondary) 92%, transparent);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  padding: 0.75rem 1rem calc(0.75rem + var(--safe-area-bottom, 0px));
+}
+
+/* 迷你传输条：整体可点（切到传输 tab） */
+.fv2-mini {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.75rem;
+  transition: background-color 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-mini:active {
+  background: var(--mobile-bg-tertiary);
+}
+
+.fv2-mini-title {
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--mobile-text-primary);
+}
+
+.fv2-mini-speed {
+  font-size: var(--font-size-xs);
+  color: var(--mobile-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ==================== 批请求弹窗 ==================== */
+/* 面板：仅 opacity + translateY，无布局重排 */
+.fv2-sheet-panel {
+  max-height: 78dvh;
+}
+
+.fv2-approve-btn {
+  min-height: 3rem;
+  padding: 0 1.25rem;
+  border-radius: 0.75rem;
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: opacity 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.fv2-approve-btn:active {
+  opacity: 0.85;
+}
+
+.fv2-approve-btn--accept {
+  background: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+.fv2-approve-btn--reject {
+  background: color-mix(in srgb, var(--mobile-error) 14%, transparent);
+  color: var(--mobile-error);
+}
+
+/* 倒计时进度条（时间流逝视觉） */
+.fv2-countdown {
+  height: 0.25rem;
+  border-radius: 9999px;
+  background: var(--mobile-bg-tertiary);
+  overflow: hidden;
+}
+
+.fv2-countdown-fill {
+  height: 100%;
+  border-radius: 9999px;
+  background: var(--mobile-warning);
+  transition: width 1s linear;
+}

@@ -129,7 +129,7 @@ import ProviderForm from './ProviderForm.vue'
 import ProviderAvatar from './ProviderAvatar.vue'
 import { PROVIDER_PRESETS } from '../types'
 import type { ApiProvider, ProviderPreset } from '../types'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 
 const props = defineProps<{
   providers: ApiProvider[]

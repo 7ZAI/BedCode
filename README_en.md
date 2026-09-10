@@ -6,28 +6,21 @@
 
 **Control your desktop Agent CLI from your phone — from bed**
 
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
+[![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20Android-lightgrey.svg)](https://github.com/7ZAI/BedCode)
 
 English | [简体中文](README.md)
 
 </div>
 
-BedCode is a LAN remote terminal application: the desktop app acts as the host running terminal sessions (Agent CLIs like Claude Code, opencode), while your phone becomes a remote terminal with an optimized touch interface — take over your terminal from anywhere on the same WiFi. Any command-line program (including TUI apps) can be started on the desktop and operated remotely from your phone.
+BedCode is a LAN remote terminal application: the desktop app acts as the host running terminal sessions (Agent CLI such as Pi, Opencode, etc.), while your phone becomes a remote terminal with an optimized touch interface — take over your terminal from anywhere on the same WiFi. Any command-line program (including TUI apps) can be started on the desktop and operated remotely from your phone.
+
+The plugin system is another core capability: plugins run as WASM components inside the wasmtime sandbox (Component Model + wit ABI bridging), resource-limited and memory-isolated — a crash doesn't affect the host; both ends are hot-pluggable and ready out of the box. A full plugin development toolchain comes with it — TypeScript / Rust dual-side SDKs, a scaffolding CLI, and a browser dev-shell development environment; three built-in plugins (AI Chatbox for multi-vendor LLM chat, Auto Task for agent task queues, File Transfer for LAN file exchange) let host capabilities grow freely like browser extensions.
 
 > Use cases: as the name suggests — coding from bed; or handling programming tasks in parallel with chores, childcare, or sleep at home.
-
-## Interface
-
-  Desktop
-<img src="bedcode-desktop/desktop_app.png"  alt="BedCode" >
-
-
-  Mobile (tablet)
-
-  <img src="bedcode-mobile/bedcode_mobile.jpg"  alt="BedCode" >
 
 ## Features
 
@@ -59,18 +52,18 @@ The mobile app connects to the desktop host:
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>AI Chatbox</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>AI&nbsp;Chatbox</strong></td>
+<td>1.0.0-beta</td>
 <td>LLM chat: connect to any OpenAI-compatible provider (OpenAI / Anthropic / DeepSeek / Qwen), streaming chat, multi-conversation management, JSONL chat logs persisted to disk</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>Auto Task</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>Auto&nbsp;Task</strong></td>
+<td>1.0.0-beta</td>
 <td>Agent task queue &amp; auto-approval: sync task status from Claude Code / pi / opencode / Codex, task queue scheduling, preset &amp; scheduled tasks, history statistics; auto-approves agent permission requests</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>File Transfer</strong></td>
-<td style="white-space:nowrap">1.0.0-beta</td>
+<td><strong>File&nbsp;Transfer</strong></td>
+<td>1.0.0-beta</td>
 <td>LAN file transfer: online peer discovery &amp; switching, remote directory browsing, concurrent transfers (pause / resume / resumable / retry), local directory mounting for peers</td>
 </tr>
 </tbody>
@@ -84,44 +77,11 @@ Full vue-i18n support (zh-CN / en) with persistent language switcher in settings
 
 Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
-```mermaid
-%%{init: {"themeVariables": {"fontSize": "18px"}, "flowchart": {"nodeSpacing": 60, "rankSpacing": 80}}}%%
-flowchart LR
-    subgraph DESKTOP["Desktop (Host) · Tauri 2.0"]
-        direction TB
-        D_UI["Vue 3 Frontend<br/>Session manager · terminal preview · server view · plugin config"]
-        D_CORE["Rust Host<br/>Tauri commands / event bridge"]
-        D_PTY["PTY Process Manager<br/>command launch · WSL · output dispatch"]
-        D_SESS["Session Manager<br/>lifecycle · event bus"]
-        D_SRV["Actix Web Server<br/>HTTP REST + WebSocket"]
-        D_PLG["Plugin Host<br/>wasmtime sandbox · permissions · API bridge"]
-        D_FS["File Service<br/>directory mounting · transfer engine"]
-        D_MDNS["mDNS Service Broadcast"]
-        D_DB[("SQLite")]
-        D_UI <--> D_CORE
-        D_CORE --- D_PTY & D_SESS & D_SRV & D_PLG & D_FS & D_MDNS
-        D_SESS --- D_DB
-        D_PLG --- D_SRV
-    end
+<a href="docs/architecture/BedCode.architecture.html" target="_blank">
+  <img src="docs/architecture/bedcode-architecture.png" alt="BedCode architecture — desktop host · mobile client · WASM plugin sandbox">
+</a>
 
-    subgraph MOBILE["Mobile (Remote Terminal) · Tauri 2.0 / Android"]
-        direction TB
-        M_UI["Vue 3 Frontend<br/>terminal view · code explorer · toolbox · preset tasks"]
-        M_CORE["Rust Host<br/>Tauri commands / event bridge"]
-        M_WS["WS Client<br/>heartbeat · reconnect · request-response"]
-        M_RT["Message Routing<br/>terminal / sync / file handlers"]
-        M_AUTH["Authentication<br/>pairing · JWT · biometric credential"]
-        M_PLG["Plugin Host<br/>wasmtime sandbox"]
-        M_FS["File Service<br/>SAF · transfer engine"]
-        M_MDNS["mDNS Discovery"]
-        M_UI <--> M_CORE
-        M_CORE --- M_WS & M_RT & M_AUTH & M_PLG & M_FS & M_MDNS
-    end
-
-    D_SRV <--> M_WS
-    D_FS <--> M_FS
-    D_MDNS <--> M_MDNS
-```
+<sub>📈 Interactive version: dark / light themes, node focus, route tracing, share-card export —— <a href="docs/architecture/BedCode.architecture.html" target="_blank">Open</a> · Source: <a href="docs/architecture/BedCode.architecture.json">archify JSON IR</a> (rendered by <a href="https://github.com/tt-a1i/archify">Archify</a>)</sub>
 
 <table>
 <thead>
@@ -129,12 +89,12 @@ flowchart LR
 </thead>
 <tbody>
 <tr>
-<td style="white-space:nowrap"><strong>Desktop</strong></td>
+<td><strong>Desktop</strong></td>
 <td>Session manager, terminal preview, server view, plugin config</td>
 <td>PTY, Actix Web (HTTP + WS), session management, WASM plugin system, mDNS advertisement</td>
 </tr>
 <tr>
-<td style="white-space:nowrap"><strong>Mobile</strong></td>
+<td><strong>Mobile</strong></td>
 <td>Terminal view, code explorer, preset tasks, toolbox, device discovery</td>
 <td>WS/HTTP client, remote connection &amp; routing, file service, mDNS discovery</td>
 </tr>
@@ -150,17 +110,17 @@ Communication: **WebSocket** (bidirectional terminal stream) + **HTTP REST API**
 <tr><th align="left">Category</th><th align="left">Technology</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">Framework</td><td>Tauri 2.0 (Windows desktop / Android mobile)</td></tr>
-<tr><td style="white-space:nowrap">Frontend</td><td>Vue 3 + TypeScript + Vite</td></tr>
-<tr><td style="white-space:nowrap">Styling</td><td>TailwindCSS, state management with Pinia + vue-router</td></tr>
-<tr><td style="white-space:nowrap">Backend</td><td>Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite</td></tr>
-<tr><td style="white-space:nowrap">Database</td><td>SQLite (rusqlite)</td></tr>
-<tr><td style="white-space:nowrap">Terminal</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
-<tr><td style="white-space:nowrap">Auth</td><td>JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint</td></tr>
-<tr><td style="white-space:nowrap">Crypto</td><td>X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS</td></tr>
-<tr><td style="white-space:nowrap">Discovery</td><td>mDNS (mdns-sd)</td></tr>
-<tr><td style="white-space:nowrap">Plugin System</td><td>wasmtime (WASM component runtime)</td></tr>
-<tr><td style="white-space:nowrap">Other</td><td>shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging</td></tr>
+<tr><td>Framework</td><td>Tauri 2.0 (Windows / Linux desktop / Android mobile)</td></tr>
+<tr><td>Frontend</td><td>Vue 3 + TypeScript + Vite</td></tr>
+<tr><td>Styling</td><td>TailwindCSS, state management with Pinia + vue-router</td></tr>
+<tr><td>Backend</td><td>Rust (Tokio async runtime), Actix Web 4 + tokio-tungstenite</td></tr>
+<tr><td>Database</td><td>SQLite (rusqlite)</td></tr>
+<tr><td>Terminal</td><td>@xterm/xterm + addon-fit / web-links / webgl</td></tr>
+<tr><td>Auth</td><td>JWT (jsonwebtoken HS256), ECDSA biometric credentials (p256), device fingerprint</td></tr>
+<tr><td>Crypto</td><td>X25519 ECDH + AES-256-GCM (HKDF), ChaCha20-Poly1305, RSA-OAEP/PSS</td></tr>
+<tr><td>Discovery</td><td>mDNS (mdns-sd)</td></tr>
+<tr><td>Plugin System</td><td>wasmtime (WASM component runtime)</td></tr>
+<tr><td>Other</td><td>shiki (syntax highlighting), ECharts (metrics dashboard), qrcode / html5-qrcode, vue-i18n@9, tracing logging</td></tr>
 </tbody>
 </table>
 
@@ -177,20 +137,21 @@ Get the latest installer from the GitHub release page, then install it.
 <tr><th align="left">Platform</th><th align="center">Desktop</th><th align="center">Mobile</th></tr>
 </thead>
 <tbody>
-<tr><td style="white-space:nowrap">Windows</td><td align="center">✔</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">Android</td><td align="center">—</td><td align="center">✔</td></tr>
-<tr><td style="white-space:nowrap">macOS / Linux</td><td align="center">Planned</td><td align="center">—</td></tr>
-<tr><td style="white-space:nowrap">iOS</td><td align="center">—</td><td align="center">Planned</td></tr>
+<tr><td>Windows</td><td align="center">✔</td><td align="center">—</td></tr>
+<tr><td>Linux</td><td align="center">✔</td><td align="center">—</td></tr>
+<tr><td>Android</td><td align="center">—</td><td align="center">✔</td></tr>
+<tr><td>macOS</td><td align="center">Planned</td><td align="center">—</td></tr>
+<tr><td>iOS</td><td align="center">—</td><td align="center">Planned</td></tr>
 </tbody>
 </table>
 
-Currently focused on **Windows (Desktop) + Android (Mobile)**, with both ends' core capabilities (terminal sessions, file service, plugin system) fully working. Cross-platform adaptation is a large effort (system permission models, packaging & distribution, platform integration) and is not yet covered due to limited bandwidth — if you are interested or in need, feel free to fork the source and adapt it yourself.
+Currently focused on **Windows / Linux (Desktop) + Android (Mobile)**, with both ends' core capabilities (terminal sessions, file service, plugin system) fully working. Remaining macOS / iOS adaptation involves differentiated work around system permission models, packaging & distribution, and platform integration — not yet covered due to limited bandwidth. If you are interested or in need, feel free to fork the source and adapt it yourself.
 
-> Built on Tauri 2.0 (Rust backend + Web frontend), cross-platform possibility and convenience are naturally preserved: core business logic and UI are cross-platform technologies. Extending to macOS / Linux / iOS later requires no rewrite of business code — the main work is a platform adaptation layer (packaging, permissions, system API integration).
+> Built on Tauri 2.0 (Rust backend + Web frontend), cross-platform possibility and convenience are naturally preserved: core business logic and UI are cross-platform technologies. Extending to macOS / iOS later requires no rewrite of business code — the main work is a platform adaptation layer (packaging, permissions, system API integration).
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18, [Rust](https://www.rust-lang.org/tools/install) >= 1.94 (wasmtime 47 MSRV)
+- [Node.js](https://nodejs.org/) ≥ 18, [Rust](https://www.rust-lang.org/tools/install) ≥ 1.94 (wasmtime 47 MSRV)
 - [Tauri 2.0 CLI](https://v2.tauri.app/start/prerequisites/) and platform dependencies
 - An Agent CLI installed and configured (e.g. [Claude Code](https://claude.ai/code))
 
@@ -198,19 +159,19 @@ Currently focused on **Windows (Desktop) + Android (Mobile)**, with both ends' c
 
 ```bash
 # Install dependencies
-cd bedcode-desktop && npm install
-cd bedcode-mobile && npm install
+cd bedcode-desktop && pnpm install
+cd bedcode-mobile && pnpm install
 
 # Development
-cd bedcode-desktop && npm run tauri:dev         # Desktop
-cd bedcode-mobile && npm run tauri:android:dev  # Mobile (Android logs: tauri:android:dev:log)
+cd bedcode-desktop && pnpm run tauri:dev         # Desktop
+cd bedcode-mobile && pnpm run tauri:android:dev  # Mobile (Android logs: tauri:android:dev:log)
 
 # Build
-cd bedcode-desktop && npm run tauri:build
-cd bedcode-mobile && npm run tauri:android:build
+cd bedcode-desktop && pnpm run tauri:build
+cd bedcode-mobile && pnpm run tauri:android:build
 
 # Testing
-cd bedcode-desktop && npm run test:run          # Frontend (vitest run)
+cd bedcode-desktop && pnpm run test:run          # Frontend (vitest run)
 cd bedcode-desktop/src-tauri && cargo test      # Rust
 ```
 
@@ -224,11 +185,11 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 
 ### Plugin Development SDK
 
-- **`@binblink/plugin-sdk-desktop`** / **`@binblink/plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
+- **`@binblink/bedcode-plugin-sdk-desktop`** / **`@binblink/bedcode-plugin-sdk-mobile`** (npm, MIT) — subpath exports: main API, Vite plugin (`./vite`), shared UI components (`./ui`), type definitions (`./types`)
 - **Scaffolding CLI** — `bedcode-plugin-desktop` (mobile: `bedcode-plugin`): `create` scaffolds a plugin project, `dev` browser HMR dev environment, `build`, `manifest` auto-fills declarations, `validate`, `doctor` environment self-check
 - **Docs** — `bedcode-desktop/plugin-dev-desktop.md` (desktop) and `bedcode-mobile/plugin-dev-mobile.md` (mobile)
 - **Browser dev environment (dev-shell)** — both SDKs ship a `dev-shell`: an empty-shell host + page skeleton that runs the plugin's frontend source directly in the browser (HMR), so UI and frontend logic can be iterated without building, packaging, or installing on a real device.
-  - Start it with `bedcode-plugin-desktop dev` (mobile: `npm run dev` / `npx bedcode-plugin dev`); `--host` listens on the LAN so the page can be previewed in a phone browser (real touch, real viewport)
+  - Start it with `bedcode-plugin-desktop dev` (mobile: `pnpm run dev` / `pnpm exec bedcode-plugin dev`); `--host` listens on the LAN so the page can be previewed in a phone browser (real touch, real viewport)
   - Skeleton features: title bar / sidebar / toolbox / mock terminal (send input + simulate output + session management) / plugin page (registered items overview + activate/deactivate) / status bar / log panel / dark-light theme switching
   - Mock boundaries: `commands.execute` runs frontend handlers only (Rust WASM backend commands unavailable), `http.registerEndpoint` is display-only, `storage` uses localStorage, `fileService` is an in-memory registry; permission checks are skipped (treated as fully granted) — device-only capabilities (Rust commands, real HTTP endpoints, system file pickers) must be verified in the real host
 
@@ -236,18 +197,21 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 
 **In development (unreleased)**
 
-- **PTY output pipeline refactor** — end-to-end overhaul of the terminal output path: a new binary streaming frame protocol (TB v2, 16-byte header + sequence numbers, enabling gap detection and replay deduplication), per-session terminal WebSocket route (`/ws/terminal/session/{id}`), direct mobile terminal WS client (auth first message + state-machine buffering + reconnect backoff), seq-based snapshot subscription on the output queue (subscribe → snapshot → HistoryEnd → live increments), and removal of the legacy broadcast compatibility channel. Desktop server and mobile client are complete; shipping in the next release after integration validation
-- **AI Chatbox WASI preopened file access** — plugin build target switches to `wasm32-wasip2` (output is a WASI component directly); the host integrates wasmtime-wasi: on activation the configured directory is preopened and the plugin reads/writes files via WASI preview2 `std::fs` instead of always going through host_fs proxying. A three-way config contract (`useSelfFileAccess` / `fileAccessDir` / `defaultDir`, aligned across plugin.json + frontend + Rust) is in place; preopen is gated by the existing `fs_auth.is_granted()` non-prompt check and falls back to host_fs when not authorized
+- **Desktop Code Viewer** — adds a left-side code viewer panel to the desktop terminal window (aligning with the mobile side's existing capability): project file tree browsing + multi-tab code view + shiki syntax highlighting (VS Code–sourced, dual-theme CSS variables) + auto-anchoring to the session's working_dir + large-file / binary / permission-error interception + dynamic terminal width allocation. Backend `commands/code_viewer.rs` exposes `list_code_dir` / `read_code_file` / `stat_code_file` with full-chain defense against path traversal, encoding detection, and permission errors (16 inline unit tests); frontend state layer `useCodeViewer` + highlighter `useCodeHighlighter` + panel components `CodeViewerPanel` / `FileTree` / `CodeTabs`, with zh/en i18n synchronized. Complete on the `feature/code-viewer` branch; shipping in the next release.
+- **Disk Cleaner Plugin** — a desktop built-in WASI component targeting Windows `%USERPROFILE%\AppData\Local` and Linux `$XDG_CACHE_HOME` for personal cache and user-scope system residue, matching CCleaner-class cache cleaning. Zero WIT changes, zero ABI bumps: the plugin mounts the user cache root via manifest `wasiPreopenDirs: ["${cacheRoot}"]`, the host resolves the mount point per platform, and the plugin only sees a fixed mount point; deletion = move to quarantine + lazy expiry, never bypassing quarantine. Multi-round issue iteration complete (skeleton → rules → hard blacklist → quarantine → batch restore → lazy expiry → Linux platform adaptation → i18n dictionaries).
 
 **Planned**
 
-- **Crypto interface** — the host already ships a full crypto toolkit: symmetric AEAD (AES-256-GCM / ChaCha20-Poly1305) + HKDF session-key derivation, X25519 ECDH key agreement, RSA-OAEP/PSS, and hybrid encryption (asymmetric key wrap + symmetric payload), currently used for HTTP payload encryption and encrypted file transfer. The plan is to expose it as a plugin SDK crypto interface (encrypt/decrypt, sign/verify, key agreement for plugins) and add optional end-to-end encryption for the terminal and file-transfer links
-- **NAT traversal / internet access** — realized as a desktop-side plugin (requirements confirmed, pending scheduling; see `.scratch/remote-tunnel/` and `docs/adr/0017`): route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption
+- **NAT traversal / internet access** — realized as a desktop-side plugin (requirements confirmed, pending scheduling; see `.scratch/remote-tunnel/` and `docs/adr/0026`): route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption (shelved until a server budget exists 😭)
+- **AI Agent CLI UI management** — extends the currently terminal-session-only Agent CLIs (Claude Code / pi / opencode / Codex) into a graphical management panel on the desktop: Agent version detection and configuration (model provider, system prompt, permission presets, context strategy), task orchestration (presets / schedules / dependency graphs), concurrent queue with authorization delegation, JSONL log retrieval and replay, execution state visualization (tokens / cost / duration), and failure retry with manual intervention. Builds on the existing Auto Task plugin's session bridging; the UI layer sinks into the plugin sandbox, with the host only providing Agent CLI lifecycle hooks.
 
 **Architecture evolution**
 
-- **WASI standardization dividends** — plugins run on top of the WASM Component Model + wasmtime sandbox and now include WASI preview2 (filesystem / preopened directories). As WASI standardizes further (networking, clocks, processes, etc.), plugins gain near-native system capabilities inside a secure sandbox while staying portable across hosts — the same plugin can run on any WASI-compatible environment
-- **Full-pluggability vision** — the host stays a minimal kernel (window, communication, auth, plugin loading) and everything else — terminals, file service, AI tools — is a hot-pluggable plugin. This "host + plugin" architecture frees tool-making from the hands of a few developers: everyone describes their own needs in their own domain language, cloud AI generates, builds, and hosts the plugin, then plugs it into the host for instant use — tools born for the individual
+- **Wasmtime microkernel · plugin-driven evolution** — the host continues to converge toward a microkernel: the wasmtime sandbox + component loader + auth/communication form the irreducible core, and everything else (terminal, file service, AI Chatbox, Auto Task, File Transfer, Disk Cleaner) is a hot-pluggable WASM plugin. Plugins run on the WASM Component Model + wasmtime sandbox and now include WASI preview2 (filesystem / preopened directories). As WASI standardizes further (networking, clocks, processes, and other system interfaces), plugins gain near-native system capabilities inside a secure sandbox while staying portable across hosts, languages, and platforms — no host recompilation required to introduce a new capability.
+
+## Does Plugin-Based + AI Deliver?
+
+- **App plugin-ization + AI prospect** — the host stays a minimal core with all capabilities hot-pluggable as plugins; the SDK the "host + plugin" architecture provides encapsulates the engineering capabilities that ordinary users lack most (the SDK standardizes them) — establishing development boundaries for AI while expanding the app, bringing software development truly to the masses: anyone can describe their needs in natural language to build extension apps. Compute power + cloud AI Agent-generated plugins will exist as a service form, plugged into the host app and used instantly.
 
 ## Contributing
 

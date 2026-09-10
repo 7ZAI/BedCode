@@ -1,4 +1,5 @@
 import { ref, computed } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import {
   generateQrCode,
   clearQrCode,
@@ -54,7 +55,7 @@ export function useQrCode() {
         qrData.value = null
       }
     } catch (e) {
-      console.error('Failed to generate QR:', e)
+      logger.error('Failed to generate QR:', e)
       qrData.value = null
     } finally {
       isLoading.value = false
@@ -76,7 +77,7 @@ export function useQrCode() {
       }
       return false
     } catch (e) {
-      console.error('Failed to restore QR:', e)
+      logger.error('Failed to restore QR:', e)
       return false
     }
   }

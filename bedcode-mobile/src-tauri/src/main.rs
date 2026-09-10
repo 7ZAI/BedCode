@@ -24,9 +24,7 @@ fn main() {
             .unwrap_or_default();
 
         let backtrace = std::backtrace::Backtrace::force_capture();
-        let panic_log = format!(
-            "[FATAL] Panic at {location}: {msg}\nBacktrace:\n{backtrace}",
-        );
+        let panic_log = format!("[FATAL] Panic at {location}: {msg}\nBacktrace:\n{backtrace}",);
 
         // stderr（debug 构建可见，release 的 windows_subsystem 不可见）
         eprintln!("{panic_log}");
@@ -36,11 +34,7 @@ fn main() {
             if let Some(parent) = log_path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            if let Ok(mut file) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&log_path)
-            {
+            if let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
                 let _ = writeln!(
                     file,
                     "{} {panic_log}",

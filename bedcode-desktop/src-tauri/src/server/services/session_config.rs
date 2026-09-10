@@ -2,18 +2,17 @@
 //!
 //! 会话配置 CRUD 服务
 
-use crate::server::message::{SessionConfigAction, SessionConfigPayload, Message, SessionConfigSummary, QuickActionSummary};
-use crate::session::SessionConfigManager;
 use crate::db::Database;
+use crate::server::message::{
+    Message, QuickActionSummary, SessionConfigAction, SessionConfigPayload, SessionConfigSummary,
+};
+use crate::session::SessionConfigManager;
 use crate::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// 获取会话配置列表并构建响应消息
-pub async fn list_session_configs(
-    request_message_id: String,
-    db: &Arc<Mutex<Database>>,
-) -> Result<Option<Message>> {
+pub async fn list_session_configs(request_message_id: String, db: &Arc<Mutex<Database>>) -> Result<Option<Message>> {
     let manager = SessionConfigManager::new(db.clone());
     let configs = manager.list_configs().await?;
 

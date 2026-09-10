@@ -66,6 +66,10 @@
         "title": "Add Task to Queue"
       },
       {
+        "id": "auto-task.cancel-task",
+        "title": "auto-task.cancel-task"
+      },
+      {
         "id": "auto-task.list-preset-tasks",
         "title": "List Preset Tasks"
       },

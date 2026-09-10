@@ -23,6 +23,7 @@ class MainActivity : TauriActivity() {
 
         // 冷启动直达 action（通知 action 点击时进程已死）：处理意图后继续正常启动
         routeTransferBatchAction(intent)
+        routeIntentAction(intent)
     }
 
     // ==================== v2 批量传输请求通知 action 路由 ====================
@@ -36,6 +37,7 @@ class MainActivity : TauriActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         routeTransferBatchAction(intent)
+        routeIntentAction(intent)
     }
 
     /** 解析批量请求 action 意图并路由（非本 action 静默忽略） */
@@ -65,13 +67,64 @@ class MainActivity : TauriActivity() {
             "'$command', { pluginId: '" + jsEscape(pluginId) + "', batchId: '" + jsEscape(batchId) + "' })"
         runOnUiThread {
             try {
-                val field = findDeclaredField(javaClass, "mWebView") ?: return@runOnUiThread
-                field.isAccessible = true
-                val webView = field.get(this) as? WebView ?: return@runOnUiThread
+                val webView = resolveWebView() ?: return@runOnUiThread
                 webView.evaluateJavascript(js, null)
             } catch (e: Exception) {
                 android.util.Log.w(TAG, "failed to route transfer batch action: ${e.message}")
             }
+        }
+    }
+
+    // ==================== v2.1 intent 审批通知 action 路由 ====================
+    //
+    // push 审批通知「接受 / 拒绝」action 点击 → PendingIntent（本 Activity，
+    // kind=intent）→ 此处经 WebView evaluateJavascript 调宿主命令
+    // plugin_filesrv_respond_intent，Rust 侧 approve/reject 响应器并回 IntentAck；
+    // 同时取消该通知。与 v2 批应答（kind=batch）并存，按 action 字符串
+    // （ACTION_TRANSFER_INTENT / ACTION_TRANSFER_BATCH）+ requestCode 路由区分。
+
+    /** 解析 intent 审批 action 意图并路由（非本 action 静默忽略） */
+    private fun routeIntentAction(intent: Intent?) {
+        if (intent?.action != TaskNotificationManager.ACTION_TRANSFER_INTENT) return
+        val action = intent.getStringExtra(TaskNotificationManager.EXTRA_INTENT_ACTION)
+        val intentId = intent.getStringExtra(TaskNotificationManager.EXTRA_INTENT_ID)
+        if (action == null || intentId.isNullOrEmpty()) {
+            android.util.Log.w(TAG, "intent action intent missing extras")
+            return
+        }
+        val decision = when (action) {
+            TaskNotificationManager.INTENT_ACTION_ACCEPT -> "accepted"
+            TaskNotificationManager.INTENT_ACTION_REJECT -> "rejected"
+            else -> {
+                android.util.Log.w(TAG, "unknown intent action: $action")
+                return
+            }
+        }
+        android.util.Log.i(TAG, "routing intent action: decision=$decision intent=$intentId")
+        // 取消通知（应答已处理；IntentAck 后的 cancel 为幂等兜底）
+        TaskNotificationManager.getInstance(this).cancelIntentNotification(intentId)
+
+        val js = "window.__TAURI_INTERNALS__.invoke(" +
+            "'plugin_filesrv_respond_intent', { intentId: '" + jsEscape(intentId) + "', decision: '" + jsEscape(decision) + "' })"
+        runOnUiThread {
+            try {
+                val webView = resolveWebView() ?: return@runOnUiThread
+                webView.evaluateJavascript(js, null)
+            } catch (e: Exception) {
+                android.util.Log.w(TAG, "failed to route intent action: ${e.message}")
+            }
+        }
+    }
+
+    /** 递归反射取 WryActivity.mWebView（打开 App / action 路由共用） */
+    private fun resolveWebView(): WebView? {
+        return try {
+            val field = findDeclaredField(javaClass, "mWebView") ?: return null
+            field.isAccessible = true
+            field.get(this) as? WebView
+        } catch (e: Exception) {
+            android.util.Log.w(TAG, "resolveWebView failed: ${e.message}")
+            null
         }
     }
 

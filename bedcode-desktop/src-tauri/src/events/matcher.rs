@@ -28,6 +28,8 @@ pub trait EventFilter<E: AppEvent>: Send + Sync {
 
 /// 泛型事件处理器包装器
 struct TypedHandler<E: AppEvent> {
+    // 仅供反射接口读取,模块内未直接消费
+    #[allow(dead_code)]
     type_name: &'static str,
     handler: Arc<dyn EventHandler<E>>,
 }
@@ -43,6 +45,8 @@ impl<E: AppEvent> TypedHandler<E> {
 
 /// 带过滤器的事件处理器
 struct FilteredHandler<E: AppEvent> {
+    // 仅供反射接口读取,模块内未直接消费
+    #[allow(dead_code)]
     type_name: &'static str,
     handler: Arc<dyn EventHandler<E>>,
     filter: Arc<dyn EventFilter<E>>,
@@ -61,7 +65,10 @@ impl<E: AppEvent> FilteredHandler<E> {
 /// 事件处理器存储 trait object
 trait HandlerTraitObject: Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    // type_id / type_name_str 是反射调试接口,当前模块内未直接调用,保留以备下游使用
+    #[allow(dead_code)]
     fn type_id(&self) -> TypeId;
+    #[allow(dead_code)]
     fn type_name_str(&self) -> &'static str;
 }
 
@@ -96,6 +103,7 @@ impl<E: AppEvent + 'static> HandlerTraitObject for FilteredHandler<E> {
 /// 事件源存储 trait object
 trait EventSourceTraitObject: Send + Sync {
     fn as_any(&self) -> &dyn Any;
+    #[allow(dead_code)] // 反射接口,保留以备将来使用
     fn type_id(&self) -> TypeId;
 }
 
@@ -153,7 +161,14 @@ impl EventMatcher {
         tracing::debug!("[EventMatcher] Registered event source: {}", type_name::<E>());
 
         // 如果已有处理器，启动订阅任务
-        if !self.handlers.read().await.get(&type_id).map(|v| v.is_empty()).unwrap_or(true) {
+        if !self
+            .handlers
+            .read()
+            .await
+            .get(&type_id)
+            .map(|v| v.is_empty())
+            .unwrap_or(true)
+        {
             self.ensure_subscription::<E>().await;
         }
     }
@@ -266,7 +281,8 @@ impl EventMatcher {
                                     typed.handler.handle(event.clone());
                                 }
                                 // 尝试作为 FilteredHandler（有过滤器）
-                                else if let Some(filtered) = handler_box.as_any().downcast_ref::<FilteredHandler<E>>() {
+                                else if let Some(filtered) = handler_box.as_any().downcast_ref::<FilteredHandler<E>>()
+                                {
                                     if filtered.filter.matches(&event) {
                                         filtered.handler.handle(event.clone());
                                     }
@@ -427,8 +443,7 @@ impl<E: AppEvent + 'static, F: Fn(&E) -> bool + Send + Sync + 'static> EventFilt
 
 /// 全局事件匹配器单例
 pub fn global_matcher() -> &'static EventMatcher {
-    static INSTANCE: std::sync::LazyLock<EventMatcher> =
-        std::sync::LazyLock::new(EventMatcher::new);
+    static INSTANCE: std::sync::LazyLock<EventMatcher> = std::sync::LazyLock::new(EventMatcher::new);
     &INSTANCE
 }
 
@@ -531,7 +546,10 @@ mod tests {
 
         // 通过 matcher.publish 发送事件
         matcher
-            .publish(SessionEvent::Created { id: 1, name: "test".into() })
+            .publish(SessionEvent::Created {
+                id: 1,
+                name: "test".into(),
+            })
             .await
             .unwrap();
 
@@ -539,7 +557,13 @@ mod tests {
 
         let received = events.lock().unwrap();
         assert_eq!(received.len(), 1);
-        assert_eq!(received[0], SessionEvent::Created { id: 1, name: "test".into() });
+        assert_eq!(
+            received[0],
+            SessionEvent::Created {
+                id: 1,
+                name: "test".into()
+            }
+        );
     }
 
     #[tokio::test]
@@ -560,9 +584,7 @@ mod tests {
     async fn test_publish_without_source_returns_ok() {
         let matcher = EventMatcher::new();
         // 未注册事件源时 publish 不 panic，返回 Ok
-        let result = matcher
-            .publish(SessionEvent::Destroyed { id: 99 })
-            .await;
+        let result = matcher.publish(SessionEvent::Destroyed { id: 99 }).await;
         assert!(result.is_ok());
     }
 
@@ -574,9 +596,7 @@ mod tests {
 
         // 注销事件源后 publish 不 panic
         matcher.unregister_source::<SessionEvent>().await;
-        let result = matcher
-            .publish(SessionEvent::Destroyed { id: 99 })
-            .await;
+        let result = matcher.publish(SessionEvent::Destroyed { id: 99 }).await;
         assert!(result.is_ok());
     }
 
@@ -593,7 +613,11 @@ mod tests {
         let (events, collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(collector)).await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "first".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "first".into(),
+        })
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -612,7 +636,11 @@ mod tests {
 
         matcher.register_source::<SessionEvent>(tx.clone()).await;
 
-        tx.send(SessionEvent::Created { id: 2, name: "second".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 2,
+            name: "second".into(),
+        })
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -632,7 +660,11 @@ mod tests {
         matcher.register::<SessionEvent>(Arc::new(collector_a)).await;
         matcher.register::<SessionEvent>(Arc::new(collector_b)).await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "a".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "a".into(),
+        })
+        .unwrap();
         tx.send(SessionEvent::Destroyed { id: 1 }).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -651,7 +683,11 @@ mod tests {
         let (events, collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(collector)).await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "before".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "before".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(events.lock().unwrap().len(), 1);
 
@@ -660,7 +696,11 @@ mod tests {
         assert!(!matcher.has_handler::<SessionEvent>().await);
 
         // 后续事件不会被任何处理器接收
-        tx.send(SessionEvent::Created { id: 2, name: "after".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 2,
+            name: "after".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(events.lock().unwrap().len(), 1);
     }
@@ -675,7 +715,11 @@ mod tests {
         let (events, collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(collector)).await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "before".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "before".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(events.lock().unwrap().len(), 1);
 
@@ -683,7 +727,11 @@ mod tests {
         assert!(!matcher.has_source::<SessionEvent>().await);
 
         // 原始 sender 仍然可用但已与 matcher 解耦
-        tx.send(SessionEvent::Created { id: 2, name: "orphan".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 2,
+            name: "orphan".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(events.lock().unwrap().len(), 1);
     }
@@ -708,11 +756,16 @@ mod tests {
 
         // 发送 Session 事件
         tx_session
-            .send(SessionEvent::Created { id: 1, name: "s1".into() })
+            .send(SessionEvent::Created {
+                id: 1,
+                name: "s1".into(),
+            })
             .unwrap();
         // 发送 Connection 事件
         tx_conn
-            .send(ConnectionEvent::Connected { addr: "192.168.1.1".into() })
+            .send(ConnectionEvent::Connected {
+                addr: "192.168.1.1".into(),
+            })
             .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -723,11 +776,16 @@ mod tests {
 
         assert_eq!(
             session_events.lock().unwrap()[0],
-            SessionEvent::Created { id: 1, name: "s1".into() }
+            SessionEvent::Created {
+                id: 1,
+                name: "s1".into()
+            }
         );
         assert_eq!(
             conn_events.lock().unwrap()[0],
-            ConnectionEvent::Connected { addr: "192.168.1.1".into() }
+            ConnectionEvent::Connected {
+                addr: "192.168.1.1".into()
+            }
         );
     }
 
@@ -752,12 +810,31 @@ mod tests {
         matcher.register::<NotificationEvent>(Arc::new(n_collector)).await;
 
         // 交替发送三种事件
-        tx_s.send(SessionEvent::Created { id: 1, name: "s1".into() }).unwrap();
-        tx_c.send(ConnectionEvent::Connected { addr: "10.0.0.1".into() }).unwrap();
-        tx_n.send(NotificationEvent { level: "info".into(), message: "hello".into() }).unwrap();
+        tx_s.send(SessionEvent::Created {
+            id: 1,
+            name: "s1".into(),
+        })
+        .unwrap();
+        tx_c.send(ConnectionEvent::Connected {
+            addr: "10.0.0.1".into(),
+        })
+        .unwrap();
+        tx_n.send(NotificationEvent {
+            level: "info".into(),
+            message: "hello".into(),
+        })
+        .unwrap();
         tx_s.send(SessionEvent::Destroyed { id: 1 }).unwrap();
-        tx_c.send(ConnectionEvent::Disconnected { addr: "10.0.0.1".into(), reason: "timeout".into() }).unwrap();
-        tx_n.send(NotificationEvent { level: "warn".into(), message: "degraded".into() }).unwrap();
+        tx_c.send(ConnectionEvent::Disconnected {
+            addr: "10.0.0.1".into(),
+            reason: "timeout".into(),
+        })
+        .unwrap();
+        tx_n.send(NotificationEvent {
+            level: "warn".into(),
+            message: "degraded".into(),
+        })
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
@@ -777,7 +854,7 @@ mod tests {
         matcher.register_source::<SessionEvent>(tx_s.clone()).await;
         matcher.register_source::<ConnectionEvent>(tx_c.clone()).await;
 
-        let (s_events, s_collector) = Collector::new();
+        let (_s_events, s_collector) = Collector::new();
         let (c_events, c_collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(s_collector)).await;
         matcher.register::<ConnectionEvent>(Arc::new(c_collector)).await;
@@ -788,7 +865,10 @@ mod tests {
         assert!(matcher.has_source::<ConnectionEvent>().await);
 
         // Connection 事件仍然正常
-        tx_c.send(ConnectionEvent::Heartbeat { addr: "10.0.0.1".into() }).unwrap();
+        tx_c.send(ConnectionEvent::Heartbeat {
+            addr: "10.0.0.1".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         assert_eq!(c_events.lock().unwrap().len(), 1);
     }
@@ -804,7 +884,10 @@ mod tests {
         matcher.register::<NotificationEvent>(Arc::new(collector)).await;
 
         matcher
-            .publish(NotificationEvent { level: "error".into(), message: "disk full".into() })
+            .publish(NotificationEvent {
+                level: "error".into(),
+                message: "disk full".into(),
+            })
             .await
             .unwrap();
 
@@ -847,10 +930,22 @@ mod tests {
             )
             .await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "a".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "a".into(),
+        })
+        .unwrap();
         tx.send(SessionEvent::Destroyed { id: 1 }).unwrap();
-        tx.send(SessionEvent::Data { id: 1, payload: "payload".into() }).unwrap();
-        tx.send(SessionEvent::Created { id: 2, name: "b".into() }).unwrap();
+        tx.send(SessionEvent::Data {
+            id: 1,
+            payload: "payload".into(),
+        })
+        .unwrap();
+        tx.send(SessionEvent::Created {
+            id: 2,
+            name: "b".into(),
+        })
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -880,10 +975,26 @@ mod tests {
             )
             .await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "low".into() }).unwrap();
-        tx.send(SessionEvent::Created { id: 10, name: "high".into() }).unwrap();
-        tx.send(SessionEvent::Created { id: 3, name: "low".into() }).unwrap();
-        tx.send(SessionEvent::Created { id: 99, name: "high".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "low".into(),
+        })
+        .unwrap();
+        tx.send(SessionEvent::Created {
+            id: 10,
+            name: "high".into(),
+        })
+        .unwrap();
+        tx.send(SessionEvent::Created {
+            id: 3,
+            name: "low".into(),
+        })
+        .unwrap();
+        tx.send(SessionEvent::Created {
+            id: 99,
+            name: "high".into(),
+        })
+        .unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
@@ -921,7 +1032,11 @@ mod tests {
 
         tx.send(ConnectionEvent::Connected { addr: "a".into() }).unwrap();
         tx.send(ConnectionEvent::Heartbeat { addr: "a".into() }).unwrap();
-        tx.send(ConnectionEvent::Disconnected { addr: "a".into(), reason: "r".into() }).unwrap();
+        tx.send(ConnectionEvent::Disconnected {
+            addr: "a".into(),
+            reason: "r".into(),
+        })
+        .unwrap();
         tx.send(ConnectionEvent::Connected { addr: "b".into() }).unwrap();
 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -946,7 +1061,11 @@ mod tests {
         let (events, collector) = Collector::new();
         matcher.register::<SessionEvent>(Arc::new(collector)).await;
 
-        tx.send(SessionEvent::Created { id: 1, name: "dup".into() }).unwrap();
+        tx.send(SessionEvent::Created {
+            id: 1,
+            name: "dup".into(),
+        })
+        .unwrap();
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
         // 每个事件只被处理一次（不会因重复订阅而重复处理）
@@ -1013,7 +1132,11 @@ mod tests {
             .await;
 
         for i in 0..100 {
-            tx.send(SessionEvent::Data { id: i, payload: format!("p{}", i) }).unwrap();
+            tx.send(SessionEvent::Data {
+                id: i,
+                payload: format!("p{}", i),
+            })
+            .unwrap();
         }
 
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;

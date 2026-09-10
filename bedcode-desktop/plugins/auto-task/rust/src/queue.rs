@@ -20,7 +20,7 @@
 use bedcode_plugin_api::constants::EVENT_TASK_QUEUE_CHANGED;
 use bedcode_plugin_api::events::SyncEvent;
 use bedcode_plugin_api::host::{
-    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostStorage, HostTerminal,
+    HostBus, HostEvents, HostLog, HostPluginDatabase, HostSession, HostTerminal,
 };
 use bedcode_plugin_api::http_response;
 use bedcode_plugin_api::sql_params;
@@ -36,6 +36,18 @@ use crate::agent;
 /// 才放弃，避免"任务永远卡在 waiting"或"慢启动被误杀"。
 const MAX_DISPATCH_ATTEMPTS: i64 = 3;
 
+/// executing 态静默看门狗阈值（秒）
+///
+/// executing 队列项的收敛完全依赖 agent 终态推送（completed/interrupted），
+/// 推送链路断裂（插件未加载 / HTTP 持续失败 / agent 未发 idle）时会永久悬挂，
+/// 只能靠关闭会话兜底或手动取消（2026-08-22「移动端操作体验优化」卡 1 小时
+/// 后被会话关闭兜底成 interrupted）。真实运行中的 agent 每分钟级都有 busy
+/// 推送（实测 opencode 持续输出 Response running），因此以"会话最新任务行
+/// 事件时间静默时长"为判据而非总执行时长，长任务不受影响。
+/// 阈值需覆盖机器休眠（休眠期间 tick 与 agent 同时暂停，唤醒后一起恢复，
+/// 但 elapsed 含休眠时长），取 12h 折中。
+pub const EXECUTING_SILENCE_TIMEOUT_SECS: i64 = 12 * 3600;
+
 /// 第 N 次尝试的等待窗口（秒）：clear 发出后等待新会话 idle 推送的时限
 ///
 /// 节奏 1s → 2s → 3s 递增：首次给终端留出渲染输出的时间窗口，重试窗口
@@ -45,27 +57,23 @@ fn wait_window_seconds(attempts: i64) -> i64 {
     attempts.clamp(1, MAX_DISPATCH_ATTEMPTS)
 }
 
-/// 自动任务投递输入的提交符（按宿主平台动态选择）
+/// 自动任务投递输入的提交符（统一为 Enter 键字节 `\r`，所有平台一致）
 ///
-/// 投递输入必须以提交符结尾，agent（Claude Code）才会把它当作指令执行：
-/// - Windows（ConPTY）：Enter 键产生的字节是 `\r`（CR），Claude Code 只把 `\r` 识别为
-///   提交，`\n`（LF）仅是换行内容 —— 发 `\n` 会导致 prompt 被"输入"但任务永不开始执行
-/// - Linux / macOS：`\n`（LF）为传统终端提交符（Unix pty 对 `\r` 经 ICRNL 同样兼容）
+/// 投递输入必须以提交符结尾，agent 才会把它当作指令执行。Enter 键在终端中的
+/// 实际字节是 `\r`（CR, 0x0D），各消费端均以 CR 识别提交：
+/// - 原始模式 TUI（pi / Claude Code / opencode / codex）：按键字节就是 `\r`。
+///   pi 的编辑器对单独的 `\n`（LF）一律按"插入换行"处理（多行输入），
+///   `\n` 永远不会触发提交 —— 发 `\n` 会出现"prompt 显示在输入栏但任务
+///   永不开始执行"（2026-09 移动端 + pi agent 实测）
+/// - 规范模式 shell（bash 等）：PTY 行规程 ICRNL 把 `\r` 转换为 `\n` 提交，等价安全
+/// - Windows（ConPTY）：Claude Code 只把 `\r` 识别为提交，`\n` 仅是换行内容
 ///
-/// 平台由前端在插件激活时通过 `@tauri-apps/plugin-os` 读取并调用
-/// `auto-task.set-platform` 上报到插件存储；未上报 / 未知平台回退 `\r`
-/// （Windows 必需，Unix 兼容，两端安全）。
-fn input_submit_char(host: &WasmHost) -> &'static str {
-    let platform = host
-        .storage_get("platform")
-        .ok()
-        .flatten()
-        .and_then(|v| v.as_str().map(|s| s.to_string()));
-    match platform.as_deref() {
-        Some("windows") => "\r",
-        Some("linux") | Some("macos") => "\n",
-        _ => "\r",
-    }
+/// 结论：统一 `\r` 是唯一在原始模式（TUI）与规范模式（shell）下都正确的提交符。
+/// 旧实现曾按平台选 `\n`（Linux/macOS），仅对规范模式 shell 成立，对原始模式
+/// TUI 失败。`platform` 存储仍被 hooks.rs python_interpreter 使用（选择 Python
+/// 解释器命令），不因本函数简化而移除。
+fn input_submit_char() -> &'static str {
+    "\r"
 }
 
 /// 任务队列表建表 SQL（按语句拆分）
@@ -306,6 +314,23 @@ pub fn list_active_task(host: &WasmHost, session_id: &str) -> Option<Value> {
     .and_then(|v| v.as_array().and_then(|a| a.first().cloned()))
 }
 
+/// 会话是否有在途队列项（waiting / executing）
+///
+/// 与 [`crate::state::has_active_task`]（按任务历史最新行判定）互补：本函数
+/// 看队列自身的状态机。两者分别覆盖对方的数据源失真场景——任务历史行被
+/// 中途 idle 推送污染、或终态推送丢失导致队列项残留 executing。调度入口
+/// 需同时满足两者为否才可出队，否则归档逻辑会把仍在执行的任务误标 done。
+pub fn has_inflight_task(host: &WasmHost, session_id: &str) -> bool {
+    host.plugin_db_query_params(
+        "SELECT 1 FROM task_queue WHERE session_id = ?1 AND status IN ('waiting', 'executing') LIMIT 1",
+        &sql_params![session_id],
+    )
+    .ok()
+    .flatten()
+    .and_then(|v| v.as_array().map(|a| !a.is_empty()))
+    .unwrap_or(false)
+}
+
 /// 清空指定会话的所有 pending 任务
 pub fn clear_queue(host: &WasmHost, session_id: &str) -> i32 {
     host.plugin_db_execute_params(
@@ -432,6 +457,18 @@ pub fn try_dispatch_next(host: &WasmHost, session_id: &str) {
     if !crate::state::auto_execute_on(host, session_id) {
         host.log_debug(&format!(
             "try_dispatch_next: auto_execute off, hold dispatch for session_id={}",
+            session_id
+        ));
+        return;
+    }
+
+    // 会话有进行中任务（in_progress/asking）时不下发：防止把 prompt 打进忙碌终端。
+    // 常规调度链由终态推送驱动，进入本函数前最新任务行必为终态；该守卫兜底
+    // 状态跟踪失真（中途 idle 推送、输入行未识别建行等）时的所有调用方，
+    // 避免任务被误下发或在途队列项被归档逻辑误标 done（移动端预设显示已完成）
+    if crate::state::has_active_task(host, session_id) {
+        host.log_warn(&format!(
+            "try_dispatch_next: session_id={} has active task, hold dispatch",
             session_id
         ));
         return;
@@ -644,12 +681,13 @@ fn dispatch_task(
     // 出队直接写任务行（description=prompt、source 随队列项），不再依赖输入行重建
     crate::state::create_task_from_dispatch(host, session_id, prompt, agent_name, source);
 
-    // 投递输入必须以提交符结尾（按宿主平台动态选择，见 input_submit_char）：
+    // 投递输入必须以提交符结尾（统一 Enter 字节 \r，见 input_submit_char）：
     // PTY 写入原样透传（宿主不会自动补提交符，见 SessionManager::write_input）。
-    // Windows ConPTY 下 Claude Code 只把 \r 识别为提交，\n 仅是换行内容；
-    // Linux 下 \n 为传统提交符。prompt 统一去尾部空白后拼提交符，避免重复换行。
+    // \r 是 Enter 键字节：原始模式 TUI（pi 等）与规范模式 shell（ICRNL 转 \n）
+    // 都识别为提交；\n 在 pi 编辑器中是"插入换行"，会导致任务卡在输入栏。
+    // prompt 统一去尾部空白后拼提交符，避免重复换行。
     // 行重建（input_line.rs）对 \r 与 \n 均视为提交，插件自身的输入监听跳过逻辑不受影响。
-    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char(host));
+    let input_line = format!("{}{}", prompt.trim_end(), input_submit_char());
     if let Err(e) = host.terminal_send(session_id, &input_line) {
         host.log_error(&format!(
             "dispatch_task: terminal_send failed: task_id={} err={}",
@@ -784,7 +822,7 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
                 .unwrap_or("/clear");
         if let Err(e) = host.terminal_send(
             &session_id,
-            &format!("{}{}", clear_command, input_submit_char(host)),
+            &format!("{}{}", clear_command, input_submit_char()),
         ) {
             host.log_error(&format!(
                 "send_due_clears: terminal_send clear failed: task_id={} err={}",
@@ -826,8 +864,7 @@ pub fn send_due_clears(host: &WasmHost, now_utc: &str) {
 /// updated_at 距当前超过 WAITING_TIMEOUT_SECONDS 视为超时。
 /// 未达最大重试次数 → 重新登记延迟 clear（与首次一致，同样延迟
 /// CLEAR_DELAY_SECONDS，由 send_due_clears 到点发送）；否则置 cancelled 并广播。
-fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
-    // 超时判定按行内 attempts 选择窗口（1s/2s/3s 递增），elapsed 由 SQLite 计算
+fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {    // 超时判定按行内 attempts 选择窗口（1s/2s/3s 递增），elapsed 由 SQLite 计算
     // （WASM 无系统时钟）；clear 发送成功会重置 updated_at，窗口即从
     // "clear 已发出、等待新会话 idle" 时刻起算
     let overdue = host
@@ -908,6 +945,57 @@ fn check_waiting_timeouts(host: &WasmHost, session_id: &str) {
     }
 }
 
+/// executing 态静默看门狗（scheduler-tick 周期调用）
+///
+/// 对每个 executing 队列项，取其会话任务行的最新事件时间（event_time 缺失时
+/// 回退 started_at / created_at），距 now 超过 [`EXECUTING_SILENCE_TIMEOUT_SECS`]
+/// 即判定终态推送链断裂，复用 [`crate::state::interrupt_running_tasks_on_session_end`]
+/// 把运行中任务行与在途队列项一并收敛到 interrupted 并广播（语义同会话结束兜底，
+/// 但原因不同：不是会话退出，而是信号丢失）。真实执行中的 agent 每分钟级都有
+/// busy 推送推进事件时间，长任务不会被误杀。
+pub fn check_executing_silence(host: &WasmHost, now_utc: &str) {
+    let overdue = host
+        .plugin_db_query_params(
+            &format!(
+                "SELECT DISTINCT q.session_id AS session_id, \
+                    (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) AS silent_secs \
+                 FROM task_queue q \
+                 WHERE q.status = 'executing' \
+                   AND (strftime('%s', ?1) - strftime('%s', ( \
+                        SELECT COALESCE(NULLIF(MAX(event_time), ''), \
+                            COALESCE(NULLIF(MAX(started_at), ''), MAX(created_at))) \
+                        FROM task_history WHERE session_id = q.session_id))) > {}",
+                EXECUTING_SILENCE_TIMEOUT_SECS
+            ),
+            &sql_params![now_utc],
+        )
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
+    for row in overdue {
+        let session_id = row
+            .get("session_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let silent_secs = row.get("silent_secs").and_then(|v| v.as_i64()).unwrap_or(0);
+        if session_id.is_empty() || silent_secs <= EXECUTING_SILENCE_TIMEOUT_SECS {
+            continue;
+        }
+
+        host.log_warn(&format!(
+            "check_executing_silence: session_id={} executing task silent for {}s, terminal signal lost, interrupting",
+            session_id, silent_secs
+        ));
+        crate::state::interrupt_running_tasks_on_session_end(host, &session_id);
+    }
+}
+
 // ==================== HTTP Endpoint Handler ====================
 
 /// 处理队列相关的 HTTP 端点请求
@@ -972,9 +1060,12 @@ fn handle_add(host: &WasmHost, body: &Value, _query: &Value) -> Value {
     let count_after = pending_count(host, &resolved_id);
     broadcast_queue_changed(host, &resolved_id, count_after, "add", None, None);
 
-    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）
+    // 自动执行开启且会话空闲时立即调度；关闭时仅入队（与 auto-task.add-task 命令一致）。
+    // has_inflight_task 拦截队列仍有在途项的场景：此刻调度会把在途
+    // executing 项误归档为 done 并广播，移动端预设被误标已完成
     if crate::state::auto_execute_on(host, &resolved_id)
         && !crate::state::has_active_task(host, &resolved_id)
+        && !has_inflight_task(host, &resolved_id)
     {
         try_dispatch_next(host, &resolved_id);
     }

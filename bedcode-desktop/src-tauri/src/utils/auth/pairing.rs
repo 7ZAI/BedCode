@@ -26,15 +26,22 @@ pub struct PairingCode {
 }
 
 impl PairingCode {
-    /// 生成新的 6 位数字配对码
+    /// 生成新的 6 位数字配对码（使用默认 TTL）
     pub fn generate() -> Self {
+        Self::generate_with_ttl(PAIRING_CODE_TTL_SECS)
+    }
+
+    /// 生成新的 6 位数字配对码，指定有效期（秒）
+    pub fn generate_with_ttl(ttl_secs: u64) -> Self {
         let mut rng = rand::thread_rng();
-        let code: String = (0..PAIRING_CODE_DIGITS).map(|_| rng.gen_range(0..10).to_string()).collect();
+        let code: String = (0..PAIRING_CODE_DIGITS)
+            .map(|_| rng.gen_range(0..10).to_string())
+            .collect();
 
         Self {
             code,
             created_at: Utc::now(),
-            expires_in: PAIRING_CODE_TTL_SECS,
+            expires_in: ttl_secs,
             created_instant: Some(Instant::now()),
         }
     }
@@ -284,4 +291,3 @@ mod tests {
         assert_eq!(decoded.requested_at, device.requested_at);
     }
 }
-

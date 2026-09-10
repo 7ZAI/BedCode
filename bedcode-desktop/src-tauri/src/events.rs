@@ -10,6 +10,6 @@ pub mod sync_handler;
 
 pub use app_event::AppEvent;
 pub use forwarder::EventForwarder;
-pub use matcher::{EventHandler, EventFilter, EventMatcher, global_matcher};
+pub use matcher::{global_matcher, EventFilter, EventHandler, EventMatcher};
 pub use sync_event::DesktopSyncEvent;
 pub use sync_handler::SyncEventHandler;

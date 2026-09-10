@@ -1,12 +1,23 @@
 <template>
   <!-- 图片图标：相对插件目录的资源路径 -->
   <div v-if="kind === 'image'" class="icon-tile overflow-hidden" :class="sizeClass">
-    <img v-if="!imgFailed" :src="imageSrc" :alt="name" class="w-full h-full object-cover" @error="imgFailed = true" />
+    <img
+      v-if="!imgFailed"
+      :src="imageSrc"
+      :alt="name"
+      class="w-full h-full object-cover"
+      @error="imgFailed = true"
+    />
     <LetterAvatar v-else :name="name" :seed="pluginId" :size="size" />
   </div>
 
   <!-- 内联 SVG：manifest.icon 直接携带 <svg> 标记 -->
-  <div v-else-if="kind === 'svg'" class="icon-tile svg-tile" :class="sizeClass" v-html="sanitizedSvg"></div>
+  <div
+    v-else-if="kind === 'svg'"
+    class="icon-tile svg-tile"
+    :class="sizeClass"
+    v-html="sanitizedSvg"
+  ></div>
 
   <!-- 回退：渐变字母头像 -->
   <LetterAvatar v-else :name="name" :seed="pluginId" :size="size" />
@@ -40,15 +51,18 @@ const props = withDefaults(
     /** 图标尺寸 */
     size?: 'md' | 'lg'
   }>(),
-  { icon: '', extensionPath: '', size: 'md' }
+  { icon: '', extensionPath: '', size: 'md' },
 )
 
 const imgFailed = ref(false)
 
 // 插件更新换图标后重置失败标记，避免停留在字母头像回退
-watch(() => [props.icon, props.extensionPath], () => {
-  imgFailed.value = false
-})
+watch(
+  () => [props.icon, props.extensionPath],
+  () => {
+    imgFailed.value = false
+  },
+)
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|webp|gif|svg)$/i
 
@@ -79,7 +93,7 @@ const sanitizedSvg = computed(() => {
 })
 
 const sizeClass = computed(() =>
-  props.size === 'lg' ? 'w-14 h-14 rounded-2xl' : 'w-10 h-10 rounded-xl'
+  props.size === 'lg' ? 'w-14 h-14 rounded-2xl' : 'w-10 h-10 rounded-xl',
 )
 </script>
 

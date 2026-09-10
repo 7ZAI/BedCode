@@ -44,12 +44,12 @@ pub async fn mdns_get_discovered_services(app_handle: AppHandle) -> Result<Vec<D
 
 /// 启动 mDNS 服务广播
 #[tauri::command]
-pub async fn mdns_start_advertise(
-    app_handle: AppHandle,
-    port: u16,
-    device_name: String,
-) -> Result<()> {
-    tracing::info!("[mdns_start_advertise] Starting advertise: {} on port {}", device_name, port);
+pub async fn mdns_start_advertise(app_handle: AppHandle, port: u16, device_name: String) -> Result<()> {
+    tracing::info!(
+        "[mdns_start_advertise] Starting advertise: {} on port {}",
+        device_name,
+        port
+    );
     let mut txt_records = std::collections::HashMap::new();
     txt_records.insert("platform".to_string(), "mobile".to_string());
     txt_records.insert("device_name".to_string(), device_name.clone());

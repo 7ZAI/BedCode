@@ -5,9 +5,13 @@
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::Result;
+use crate::connection::event_ws;
 use crate::router::event;
-use crate::state::{get_connection_manager, get_session_manager, get_auth_manager, set_global_token, get_global_token, clear_global_token};
+use crate::state::{
+    clear_global_token, get_auth_manager, get_connection_manager, get_global_token, get_session_manager,
+    set_global_token,
+};
+use crate::Result;
 
 /// 连接信息
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,13 +29,18 @@ pub async fn ws_connect(
     port: u16,
     name: Option<String>,
 ) -> Result<ConnectionInfo> {
-    eprintln!("[ws_connect] START - address={}, port={}, name={:?}", address, port, name);
+    eprintln!(
+        "[ws_connect] START - address={}, port={}, name={:?}",
+        address, port, name
+    );
     tracing::info!("WebSocket connecting to {}:{}", address, port);
 
     // 初始化设备身份（首次调用时从文件加载或生成新身份）
     {
         let auth = get_auth_manager();
-        let app_data_dir = app_handle.path().app_data_dir()
+        let app_data_dir = app_handle
+            .path()
+            .app_data_dir()
             .map_err(|e| crate::AppError::Config(format!("Failed to get app data dir: {}", e)))?;
         auth.init_identity(&app_handle, app_data_dir).await;
     }
@@ -41,6 +50,10 @@ pub async fn ws_connect(
 
     // 启动事件转发任务（仅一次）
     event::start_event_forwarding(app_handle.clone());
+
+    // 启动常驻事件 WS 监督任务（HTTP 认证成功后自动建连/自愈，单例）；
+    // 先订阅再等首次认证，不漏 AuthSuccess
+    event_ws::start_event_ws_supervisor(Some(app_handle.clone()));
 
     let conn = get_connection_manager();
     tracing::info!("Calling conn.connect()...");
@@ -104,11 +117,11 @@ pub async fn ws_is_connected() -> Result<bool> {
 
 /// 重新连接（断线重连）
 #[tauri::command]
-pub async fn ws_reconnect(
-    app_handle: AppHandle,
-    session_token: Option<String>,
-) -> Result<()> {
-    tracing::info!("[ws_reconnect] session_token: {:?}", session_token.as_ref().map(|t| format!("len={}", t.len())));
+pub async fn ws_reconnect(app_handle: AppHandle, session_token: Option<String>) -> Result<()> {
+    tracing::info!(
+        "[ws_reconnect] session_token: {:?}",
+        session_token.as_ref().map(|t| format!("len={}", t.len()))
+    );
 
     let manager = get_connection_manager();
 
@@ -118,8 +131,35 @@ pub async fn ws_reconnect(
         return Ok(());
     }
 
-    // 调用重连
-    manager.reconnect(app_handle, session_token).await
+    // 调用重连（command 层始终带 AppHandle：前端需收到 reconnecting / reconnected / reconnect_failed 事件）
+    manager.reconnect(Some(app_handle), session_token).await
+}
+
+/// 获取当前持有的 JWT
+///
+/// D3：JWT 由 Rust 持有，前端经此 invoke 获取；禁止落前端存储。
+/// 04 事件 WS 建连时前端需分批请求 token 与 URL 后再建连。
+#[tauri::command]
+pub async fn get_ws_token() -> Result<String> {
+    Ok(get_global_token())
+}
+
+/// 获取常驻事件 WS 的完整 URL（`ws://{address}:{port}/ws/event`）
+///
+/// 04 事件 WS 建连地址：目标设备未保存（未 connect）时报错。
+#[tauri::command]
+pub async fn get_ws_url() -> Result<String> {
+    let conn = get_connection_manager();
+    let target = conn
+        .get_target()
+        .await
+        .ok_or_else(|| crate::AppError::Auth("No target device".to_string()))?;
+    Ok(format!(
+        "ws://{}:{}{}",
+        target.address,
+        target.port,
+        crate::system::constants::connection::WS_EVENT_PATH
+    ))
 }
 
 // ==================== Token Commands ====================
@@ -128,6 +168,28 @@ pub async fn ws_reconnect(
 #[tauri::command]
 pub fn ws_set_token(token: String) -> Result<()> {
     set_global_token(&token);
+    Ok(())
+}
+
+// ==================== 链路加密上下文（issue 09） ====================
+
+/// 推送链路加密运行期状态到 Rust 侧（前端设置变更/配对刷新/启动时调用）
+///
+/// 常驻事件 WS 建连在 Rust 侧，而开关与 pin 存于 WebView localStorage——
+/// 本命令是两侧的桥。缺省全关：未推送前事件 WS 保持明文。
+#[tauri::command]
+pub fn set_link_crypto_context(
+    enabled: bool,
+    strict_mode: bool,
+    encrypt_ws_event: bool,
+    kd_public_b64: Option<String>,
+) -> Result<()> {
+    crate::state::set_link_crypto_context(crate::state::LinkCryptoContext {
+        enabled,
+        strict_mode,
+        encrypt_ws_event,
+        kd_public_b64,
+    });
     Ok(())
 }
 
@@ -144,9 +206,5 @@ pub fn ws_get_token() -> String {
 #[tauri::command]
 pub fn ws_clear_token() -> Result<()> {
     clear_global_token();
-    // 同步 command 无 await 上下文，关停交给全局运行时
-    tauri::async_runtime::spawn(async {
-        crate::state::get_file_service().shutdown().await;
-    });
     Ok(())
 }

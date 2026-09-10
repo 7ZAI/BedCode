@@ -1,0 +1,22 @@
+{
+  "id": "com.bedcode.wasi-test",
+  "name": "WASI Test",
+  "version": "0.1.0",
+  "description": "WASI preopen 测试插件",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "wasm",
+  "rustLibrary": "bedcode_plugin_wasi_test",
+  "icon": "icon.svg",
+  "permissions": [
+    "storage"
+  ],
+  "contributes": {
+    "commands": [
+      { "id": "wasi-test.write-file", "title": "Write File" },
+      { "id": "wasi-test.read-file", "title": "Read File" },
+      { "id": "wasi-test.list", "title": "List" }
+    ]
+  }
+}

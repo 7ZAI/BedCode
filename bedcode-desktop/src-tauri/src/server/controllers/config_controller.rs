@@ -4,11 +4,11 @@
 //! - GET /api/configs
 //! - GET /api/quick-actions
 
-use actix_web::HttpResponse;
-use crate::system::app_context::AppContext;
-use crate::server::dtos::ApiResponse;
 use crate::server::dtos::config_dto::*;
+use crate::server::dtos::ApiResponse;
 use crate::session::SessionConfigManager;
+use crate::system::app_context::AppContext;
+use actix_web::HttpResponse;
 
 /// GET /api/configs
 pub async fn list_configs() -> HttpResponse {
@@ -17,14 +17,17 @@ pub async fn list_configs() -> HttpResponse {
 
     match manager.list_configs().await {
         Ok(configs) => {
-            let items: Vec<ConfigItem> = configs.into_iter().map(|c| ConfigItem {
-                id: c.id,
-                name: c.name,
-                environment: c.environment,
-                wsl_distro: c.wsl_distro,
-                working_dir: c.working_dir,
-                command: c.command,
-            }).collect();
+            let items: Vec<ConfigItem> = configs
+                .into_iter()
+                .map(|c| ConfigItem {
+                    id: c.id,
+                    name: c.name,
+                    environment: c.environment,
+                    wsl_distro: c.wsl_distro,
+                    working_dir: c.working_dir,
+                    command: c.command,
+                })
+                .collect();
             let data = ConfigListResponseData { configs: items };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
@@ -43,13 +46,16 @@ pub async fn list_quick_actions() -> HttpResponse {
 
     match db_guard.get_quick_actions() {
         Ok(actions) => {
-            let items: Vec<QuickActionItem> = actions.into_iter().map(|a| QuickActionItem {
-                id: a.id,
-                name: a.name,
-                content: a.content,
-                icon: a.icon,
-                color: a.color,
-            }).collect();
+            let items: Vec<QuickActionItem> = actions
+                .into_iter()
+                .map(|a| QuickActionItem {
+                    id: a.id,
+                    name: a.name,
+                    content: a.content,
+                    icon: a.icon,
+                    color: a.color,
+                })
+                .collect();
             let data = QuickActionListResponseData { actions: items };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }

@@ -13,10 +13,47 @@ fn main() {
         println!("cargo::rustc-link-arg=/MANIFESTINPUT:{manifest}");
     }
 
+    // 自研 Android 插件（task-notification / foreground-service）由前端 JS 直接
+    // invoke('plugin:<name>|<cmd>') 调用，必须声明为 inlined plugin 才会进入 ACL
+    // manifest；否则所有调用被拒："not allowed. Plugin not found"（设置页提示音/
+    // 震动预览、前台服务通知均受此影响）。其余 android_plugins 仅由 Rust 侧经
+    // PluginHandle.run_mobile_plugin 调用，不经过 ACL，无需声明。
     tauri_build::try_build(
-        tauri_build::Attributes::new().windows_attributes(
-            tauri_build::WindowsAttributes::new_without_app_manifest(),
-        ),
+        tauri_build::Attributes::new()
+            .windows_attributes(tauri_build::WindowsAttributes::new_without_app_manifest())
+            .plugin(
+                "task-notification",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&[
+                        "checkNotificationPermission",
+                        "requestNotificationPermission",
+                        "permissionsCallback",
+                        "testVibrate",
+                        "testSound",
+                        "showTaskNotification",
+                        "showConnectionNotification",
+                        "showPluginNotification",
+                        "showTransferRequestNotification",
+                        "cancelTransferRequestNotification",
+                        "showIntentAskNotification",
+                        "showPullNotice",
+                        "cancelIntentNotification",
+                        "cancelTaskNotification",
+                        "cancelConnectionNotification",
+                        "cancelAllTaskNotifications",
+                    ])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            )
+            .plugin(
+                "foreground-service",
+                tauri_build::InlinedPlugin::new()
+                    .commands(&[
+                        "startForegroundService",
+                        "stopForegroundService",
+                        "updateForegroundNotification",
+                    ])
+                    .default_permission(tauri_build::DefaultPermissionRule::AllowAllCommands),
+            ),
     )
     .expect("tauri-build failed")
 }

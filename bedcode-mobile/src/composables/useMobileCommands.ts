@@ -3,6 +3,7 @@
 //! 所有移动端可用的 Tauri 命令调用
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
@@ -15,9 +16,8 @@ import type {
   AuthState,
   SessionInfo,
   RemoteSession,
-  TerminalOutputEvent,
-  TerminalIncrementalOutput,
 } from './model'
+
 export type {
   ConnectionStatus,
   RemoteDevice,
@@ -26,8 +26,6 @@ export type {
   AuthState,
   SessionInfo,
   RemoteSession,
-  TerminalOutputEvent,
-  TerminalIncrementalOutput,
 }
 
 // ==================== WebSocket Connection Commands ====================
@@ -172,30 +170,12 @@ export async function wsLoadSessions(): Promise<SessionInfo[]> {
 }
 
 /**
- * 订阅会话，开始接收该会话的输出
+ * 获取终端 WS 直连信息（09：前端直连桌面端终端会话路由）
  *
- * @param sessionId - 会话 ID
- * @param startSeq - 起始字节游标，不指定则全量重播；用于断线重连从断点继续
- * @returns 订阅响应信息，含服务端裁决 mode（incremental 续传 / reset 全量重播）
+ * 返回完整 URL 与 JWT；token 仅供建连使用，禁止持久化
  */
-export async function wsJoinSession(sessionId: string, startSeq?: number): Promise<{
-  minSeq: number
-  maxSeq: number
-  historyCount: number
-  mode: 'incremental' | 'reset'
-  minOffset: number
-  maxOffset: number
-}> {
-  console.log('[wsJoinSession] sessionId=' + sessionId + ', startSeq=' + startSeq)
-  return await invoke('ws_subscribe_session', { sessionId, startSeq: startSeq ?? null })
-}
-
-/**
- * 取消订阅会话，停止接收该会话的输出
- */
-export async function wsLeaveSession(sessionId: string): Promise<void> {
-  console.log('[wsLeaveSession] sessionId=' + sessionId)
-  return await invoke('ws_leave_session', { sessionId })
+export async function getTerminalWsInfo(sessionId: string): Promise<{ url: string; token: string }> {
+  return await invoke('get_terminal_ws_info', { sessionId })
 }
 
 /**
@@ -223,7 +203,7 @@ export async function wsRemoveSession(sessionId: string): Promise<void> {
  * 发送输入到会话（异步模式，不等待服务端确认）
  */
 export async function wsSendInput(sessionId: string, data: string, specialKey?: string): Promise<void> {
-  console.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
+  logger.log('[wsSendInput] sessionId=' + sessionId + ' data_len=' + data.length + ' specialKey=' + (specialKey || 'none'))
   return await invoke('ws_send_input_async', { sessionId, data, specialKey: specialKey })
 }
 
@@ -277,50 +257,6 @@ export async function keepScreenAwake(enabled: boolean): Promise<void> {
   return await invoke('keep_screen_awake', { enabled })
 }
 
-// ==================== Terminal Commands ====================
-
-/**
- * 订阅终端（记录当前索引位置，用于增量获取）
- */
-export async function wsSubscribeTerminal(sessionId: string): Promise<number> {
-  return await invoke('ws_subscribe_terminal', { sessionId })
-}
-
-/**
- * 取消订阅终端
- */
-export async function wsUnsubscribeTerminal(sessionId: string): Promise<void> {
-  return await invoke('ws_unsubscribe_terminal', { sessionId })
-}
-
-/**
- * 获取增量输出（自上次获取之后的新数据）
- */
-export async function wsGetTerminalIncremental(sessionId: string): Promise<TerminalIncrementalOutput | null> {
-  return await invoke('ws_get_terminal_incremental', { sessionId })
-}
-
-/**
- * 更新订阅者的索引位置（在增量数据消费后调用）
- */
-export async function wsUpdateTerminalIndex(sessionId: string, index: number): Promise<void> {
-  return await invoke('ws_update_terminal_index', { sessionId, index })
-}
-
-/**
- * 清空终端缓冲区
- */
-export async function wsClearTerminalBuffer(sessionId: string): Promise<void> {
-  return await invoke('ws_clear_terminal_buffer', { sessionId })
-}
-
-/**
- * 清除所有终端缓冲区（断开连接时调用）
- */
-export async function wsClearAllTerminalBuffers(): Promise<void> {
-  return await invoke('ws_clear_all_terminal_buffers')
-}
-
 // ==================== Event Listeners ====================
 
 let unlistenConnecting: UnlistenFn | null = null
@@ -334,7 +270,6 @@ let unlistenPairingVerified: UnlistenFn | null = null
 let unlistenError: UnlistenFn | null = null
 let unlistenServerClosed: UnlistenFn | null = null
 let unlistenUnexpectedDisconnect: UnlistenFn | null = null
-let unlistenOutput: UnlistenFn | null = null
 
 // 同步事件监听器
 let unlistenSyncSessionCreated: UnlistenFn | null = null
@@ -376,7 +311,6 @@ export async function initMobileEventListeners(callbacks: {
   onError?: (message: string) => void
   onServerClosed?: (reason: string) => void
   onUnexpectedDisconnect?: (reason: string) => void
-  onOutput?: (data: any) => void
   // 同步事件回调
   onSyncSessionCreated?: (data: { session: any; source_device: string }) => void
   onSyncSessionStatusChanged?: (data: { session_id: string; old_status: string; new_status: string; session_name: string }) => void
@@ -428,56 +362,53 @@ export async function initMobileEventListeners(callbacks: {
       callbacks.onUnexpectedDisconnect?.(event.payload.reason)
     })
   }
-  if (callbacks.onOutput) {
-    unlistenOutput = await listen('ws_output', callbacks.onOutput)
-  }
 
   // 初始化同步事件监听
   if (callbacks.onSyncSessionCreated) {
     unlistenSyncSessionCreated = await listen<{ session: any; source_device: string }>('ws_sync_session_created', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_created:', event.payload.session.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_session_created:', event.payload.session.id, 'source:', event.payload.source_device)
       callbacks.onSyncSessionCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStatusChanged) {
     unlistenSyncSessionStatusChanged = await listen<{ session_id: string; old_status: string; new_status: string; session_name: string }>('ws_sync_session_status_changed', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_status_changed:', event.payload.session_id, event.payload.old_status, '->', event.payload.new_status)
+      logger.debug('[MobileCommands] ws_sync_session_status_changed:', event.payload.session_id, event.payload.old_status, '->', event.payload.new_status)
       callbacks.onSyncSessionStatusChanged?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionStopped) {
     unlistenSyncSessionStopped = await listen<{ session_id: string; session_name: string }>('ws_sync_session_stopped', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_stopped:', event.payload.session_id, event.payload.session_name)
+      logger.debug('[MobileCommands] ws_sync_session_stopped:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionStopped?.(event.payload)
     })
   }
   if (callbacks.onSyncSessionRemoved) {
     unlistenSyncSessionRemoved = await listen<{ session_id: string; session_name: string }>('ws_sync_session_removed', (event) => {
-      console.debug('[MobileCommands] ws_sync_session_removed:', event.payload.session_id, event.payload.session_name)
+      logger.debug('[MobileCommands] ws_sync_session_removed:', event.payload.session_id, event.payload.session_name)
       callbacks.onSyncSessionRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigCreated) {
     unlistenSyncConfigCreated = await listen<{ config: any; source_device: string }>('ws_sync_config_created', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_created:', event.payload.config.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_config_created:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigCreated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigUpdated) {
     unlistenSyncConfigUpdated = await listen<{ config: any; source_device: string }>('ws_sync_config_updated', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_updated:', event.payload.config.id, 'source:', event.payload.source_device)
+      logger.debug('[MobileCommands] ws_sync_config_updated:', event.payload.config.id, 'source:', event.payload.source_device)
       callbacks.onSyncConfigUpdated?.(event.payload)
     })
   }
   if (callbacks.onSyncConfigRemoved) {
     unlistenSyncConfigRemoved = await listen<{ config_id: string; config_name: string }>('ws_sync_config_removed', (event) => {
-      console.debug('[MobileCommands] ws_sync_config_removed:', event.payload.config_id, event.payload.config_name)
+      logger.debug('[MobileCommands] ws_sync_config_removed:', event.payload.config_id, event.payload.config_name)
       callbacks.onSyncConfigRemoved?.(event.payload)
     })
   }
   if (callbacks.onSyncTaskStatusChanged) {
     unlistenSyncTaskStatusChanged = await listen<{ session_id: string; task_status: string; task_reason?: string; task_questions?: Array<{ header: string; question: string; multi_select: boolean; options: Array<{ label: string; description: string }> }> }>('ws_sync_task_status_changed', (event) => {
-      console.debug('[MobileCommands] ws_sync_task_status_changed:', event.payload.session_id, 'status:', event.payload.task_status, 'reason:', event.payload.task_reason ?? 'none')
+      logger.debug('[MobileCommands] ws_sync_task_status_changed:', event.payload.session_id, 'status:', event.payload.task_status, 'reason:', event.payload.task_reason ?? 'none')
       callbacks.onSyncTaskStatusChanged?.(event.payload)
     })
   }
@@ -486,7 +417,7 @@ export async function initMobileEventListeners(callbacks: {
   // 订阅完成广播（action='done' + task_id）更新预设任务执行状态。插件不直接依赖
   // @tauri-apps/api，经宿主转发保持插件/宿主边界（dev-shell 可手动 dispatch 模拟）
   unlistenSyncTaskQueueChanged = await listen<{ session_id: string; queue_count: number; action: string; task_id?: string | null; status?: string | null }>('ws_sync_task_queue_changed', (event) => {
-    console.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
+    logger.debug('[MobileCommands] ws_sync_task_queue_changed:', event.payload.session_id, 'action:', event.payload.action, 'task_id:', event.payload.task_id ?? 'none')
     window.dispatchEvent(new CustomEvent('bedcode:task_queue_changed', { detail: event.payload }))
   })
 }
@@ -506,7 +437,6 @@ export function cleanupMobileEventListeners() {
   unlistenError?.()
   unlistenServerClosed?.()
   unlistenUnexpectedDisconnect?.()
-  unlistenOutput?.()
   // 清理同步事件监听
   unlistenSyncSessionCreated?.()
   unlistenSyncSessionStatusChanged?.()
@@ -556,14 +486,6 @@ export function useMobileCommands() {
     // Message
     wsSendMessage,
     wsSendAndWait,
-
-    // Terminal (Rust-managed buffer)
-    wsSubscribeTerminal,
-    wsUnsubscribeTerminal,
-    wsGetTerminalIncremental,
-    wsUpdateTerminalIndex,
-    wsClearTerminalBuffer,
-    wsClearAllTerminalBuffers,
 
     // Android-specific
     setScreenOrientation,

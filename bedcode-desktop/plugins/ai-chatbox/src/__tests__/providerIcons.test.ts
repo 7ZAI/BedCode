@@ -13,7 +13,7 @@ describe('resolveProviderIcon', () => {
   })
 
   it('各预设 id 指向不同图标资源', () => {
-    const icons = ['deepseek', 'qwen', 'openai', 'anthropic'].map(id => resolveProviderIcon(id))
+    const icons = ['deepseek', 'qwen', 'openai', 'anthropic'].map((id) => resolveProviderIcon(id))
     expect(new Set(icons).size).toBe(4)
   })
 
@@ -53,7 +53,16 @@ describe('providerAvatarColor', () => {
 
   it('不同名称允许同色（哈希碰撞），但颜色必须来自主题色板', () => {
     // 色板是固定 8 色集合，任何输入都只能落在其中
-    const palette = ['#4f46e5', '#0ea5e9', '#059669', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2']
+    const palette = [
+      '#4f46e5',
+      '#0ea5e9',
+      '#059669',
+      '#d97706',
+      '#dc2626',
+      '#7c3aed',
+      '#db2777',
+      '#0891b2',
+    ]
     for (const name of ['a', 'b', 'c', '中文名', 'x'.repeat(30)]) {
       expect(palette).toContain(providerAvatarColor(name))
     }

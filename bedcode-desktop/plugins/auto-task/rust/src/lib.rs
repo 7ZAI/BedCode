@@ -229,7 +229,10 @@ impl WasmPlugin for AutoTaskPlugin {
             }
             "auto-task.set-platform" => {
                 // 前端在插件激活时通过 @tauri-apps/plugin-os 读取宿主平台并上报。
-                // queue.rs 调度据此选择终端输入提交符（Windows=CR，Linux=LF）
+                // 用途：hooks.rs python_interpreter 按平台选择 Python 解释器命令
+                // （Windows=python，Linux/macOS=python3）；终端输入提交符不再依赖
+                // 平台 —— 统一为 Enter 字节 \r（见 queue.rs input_submit_char，
+                // pi 等原始模式 TUI 只认 \r 提交，\n 会被当作插入换行）
                 let platform = args.str_or("platform", "");
                 if platform.is_empty() {
                     return Err(anyhow::anyhow!("set-platform: missing platform"));
@@ -280,9 +283,12 @@ impl WasmPlugin for AutoTaskPlugin {
                 let (task_id, position) = queue::add_task(&host, &session_id, &prompt);
 
                 // 自动执行开启且会话空闲时立即调度；关闭时仅入队（可先添加多个任务再统一执行），
-                // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）
+                // 调度链由会话 idle / 任务终态事件驱动（try_dispatch_next 内部以 auto_execute 为门）。
+                // has_inflight_task 拦截队列仍有在途项的场景：此刻调度会把在途
+                // executing 项误归档为 done 并广播，移动端预设被误标已完成
                 if state::auto_execute_on(&host, &session_id)
                     && !state::has_active_task(&host, &session_id)
+                    && !queue::has_inflight_task(&host, &session_id)
                 {
                     queue::try_dispatch_next(&host, &session_id);
                 }
@@ -378,8 +384,10 @@ impl WasmPlugin for AutoTaskPlugin {
                         .map_err(|e| anyhow::anyhow!(e))?;
 
                 // 与手动 add-task 同语义：自动执行开启且会话空闲时立即调度
+                //（含队列在途项判定，防止在途 executing 项被误归档为 done）
                 if state::auto_execute_on(&host, &session_id)
                     && !state::has_active_task(&host, &session_id)
+                    && !queue::has_inflight_task(&host, &session_id)
                 {
                     queue::try_dispatch_next(&host, &session_id);
                 }
@@ -867,8 +875,15 @@ impl WasmPlugin for AutoTaskPlugin {
         }
 
         // 会话已有进行中的任务则不再创建：队列调度由插件自身 terminal_send 投递输入，
-        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（见 ADR 0001）
+        // 此时最新记录已置为 in_progress，依赖此检查避免自触发循环（见 ADR 0001）。
+        // 执行中用户的手动输入同样在此被忽略（单终端同时只能运行一个 prompt），
+        // 不能静默：记日志便于排查「输入了但任务日志没有记录」类反馈
         if state::has_active_task(&host, &event.session_id) {
+            host.log_info(&format!(
+                "InputSubmitted: session={} has active task, input not tracked as new task: {:?}",
+                event.session_id,
+                event.text.trim_start().chars().take(32).collect::<String>()
+            ));
             return Ok(());
         }
 

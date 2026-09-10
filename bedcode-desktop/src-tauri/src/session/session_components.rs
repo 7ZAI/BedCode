@@ -3,10 +3,10 @@
 //! 会话管理器的内部组件：注册表、命名服务、配置映射、状态检测
 //! 这些组件各自只有一个实现，trait 已内联到此文件
 
-use crate::session::SessionInfo;
-use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
 use crate::db::SessionConfig;
 use crate::enums::SessionStatus;
+use crate::pty::{ExecutionEnvironment, PtySession, SessionLaunchConfig, WindowsShell};
+use crate::session::SessionInfo;
 use crate::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -111,7 +111,7 @@ impl PtyRegistry for DefaultPtyRegistry {
         };
         for (id, session) in sessions {
             if let Err(e) = session.kill().await {
-                tracing::error!("Failed to kill session {}: {}", id, e);
+                tracing::error!(session_id = %id, error = %e, "Failed to kill session");
             }
         }
         Ok(())
@@ -206,10 +206,7 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
 
     async fn filter_by_config(&self, config_id: &str) -> Vec<SessionInfo> {
         let map = self.info.read().await;
-        map.values()
-            .filter(|s| s.config_id == config_id)
-            .cloned()
-            .collect()
+        map.values().filter(|s| s.config_id == config_id).cloned().collect()
     }
 
     async fn filter_active_by_config(&self, config_id: &str) -> Vec<SessionInfo> {
@@ -225,12 +222,7 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
 
 /// 会话命名服务 - 生成唯一的会话名称
 pub trait NamingService: Send + Sync {
-    fn generate_unique_name(
-        &self,
-        config_id: &str,
-        base_name: &str,
-        sessions: &[SessionInfo],
-    ) -> String;
+    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String;
 }
 
 pub struct DefaultNamingService;
@@ -248,12 +240,7 @@ impl Default for DefaultNamingService {
 }
 
 impl NamingService for DefaultNamingService {
-    fn generate_unique_name(
-        &self,
-        config_id: &str,
-        base_name: &str,
-        sessions: &[SessionInfo],
-    ) -> String {
+    fn generate_unique_name(&self, config_id: &str, base_name: &str, sessions: &[SessionInfo]) -> String {
         // 从同配置的活跃会话名称中提取最大编号，避免删除后编号回退导致重名
         let max_index = sessions
             .iter()
@@ -308,6 +295,8 @@ impl ConfigMapper for DefaultConfigMapper {
             "wsl2" => ExecutionEnvironment::Wsl2 {
                 distro: config.wsl_distro.clone().unwrap_or_else(|| "Ubuntu".to_string()),
             },
+            // Linux 原生环境：直接跑 bash，不带 distro
+            "linux" => ExecutionEnvironment::Linux,
             _ => ExecutionEnvironment::Windows {
                 shell: WindowsShell::PowerShell,
             },
@@ -349,5 +338,145 @@ impl Default for DefaultStatusDetector {
 impl StatusDetector for DefaultStatusDetector {
     fn detect_waiting_input(&self, output: &str) -> bool {
         crate::utils::parser::detect_waiting_input(output)
+    }
+}
+
+// ==================== Canonical Renderer Registry ====================
+
+/// 正统渲染端身份：当前 PTY 网格尺寸的权威归属端
+///
+/// 桌面端与移动端同时查看同一会话时 PTY 只能有一个尺寸，输出格式必须
+/// 匹配实际渲染的那个端。每次 resize 后归属即确立为请求方，其他端再
+/// 调整需先确认覆盖（见 SessionManager::resize_session 裁决）。
+///
+/// serde 注意：容器级 rename_all 只作用于变体名（tag 值），字段名需另用
+/// rename_all_fields（serde ≥1.0.186）转为 camelCase，与两端前端的 TS 类型
+/// （`{ kind: 'mobile'; deviceName }` / `{ status: 'needsConfirmation'; currentCanonical }`）
+/// 对齐——曾因字段保持 snake_case 导致前端读到 undefined 崩溃、确认弹窗不显示。
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum RendererSource {
+    /// 桌面端（会话宿主：本地命令 / 本地环回 WS）
+    Desktop,
+    /// 移动端设备（device_name 来自 JWT claims）
+    Mobile { device_name: String },
+}
+
+impl RendererSource {
+    /// 是否为桌面端（桌面本地路径恒为 Desktop）
+    pub fn is_desktop(&self) -> bool {
+        matches!(self, RendererSource::Desktop)
+    }
+}
+
+/// resize 裁决结果（统一输出给所有 entry：桌面命令 / 移动端 HTTP / WS 控制）
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "status", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum ResizeOutcome {
+    /// 已应用：请求方就是正统端，或强制覆盖已确认
+    Applied { canonical: RendererSource },
+    /// 需要确认：另一个端正在渲染输出，本次未应用；客户端弹窗确认后带 force 重发
+    NeedsConfirmation { current_canonical: RendererSource },
+}
+
+/// 启动初始网格解析：启动端携带且合法（>0）时覆盖配置默认尺寸
+///
+/// 各端终端组件按自身窗口/字体预算出默认网格随启动请求传入，PTY openpty
+/// 直接以该尺寸创建，避免「先 80x24 启动 → 挂载后再 resize」的首帧回绕。
+pub fn resolve_initial_size(base_cols: u16, base_rows: u16, initial: Option<(u16, u16)>) -> (u16, u16) {
+    match initial {
+        Some((cols, rows)) if cols > 0 && rows > 0 => (cols, rows),
+        _ => (base_cols, base_rows),
+    }
+}
+
+/// 正统渲染端注册表 - 每会话记录当前 PTY 尺寸归属端
+pub trait CanonicalRendererRegistry: Send + Sync {
+    async fn get(&self, session_id: &str) -> Option<RendererSource>;
+    async fn set(&self, session_id: &str, source: RendererSource);
+    async fn clear(&self, session_id: &str);
+}
+
+pub struct DefaultCanonicalRendererRegistry {
+    map: Arc<RwLock<HashMap<String, RendererSource>>>,
+}
+
+impl DefaultCanonicalRendererRegistry {
+    pub fn new() -> Self {
+        Self {
+            map: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+impl Default for DefaultCanonicalRendererRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CanonicalRendererRegistry for DefaultCanonicalRendererRegistry {
+    async fn get(&self, session_id: &str) -> Option<RendererSource> {
+        let map = self.map.read().await;
+        map.get(session_id).cloned()
+    }
+
+    async fn set(&self, session_id: &str, source: RendererSource) {
+        let mut map = self.map.write().await;
+        map.insert(session_id.to_string(), source);
+    }
+
+    async fn clear(&self, session_id: &str) {
+        let mut map = self.map.write().await;
+        map.remove(session_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// serde 形状回归：字段必须输出 camelCase（与两端前端 TS 类型对齐）。
+    /// 曾因容器级 rename_all 只转换变体名、current_canonical/device_name 保持
+    /// snake_case，导致前端读 currentCanonical 为 undefined 崩溃且确认弹窗不显示。
+    #[test]
+    fn test_resize_outcome_and_renderer_source_json_shape_is_camel_case() {
+        let outcome = ResizeOutcome::NeedsConfirmation {
+            current_canonical: RendererSource::Mobile {
+                device_name: "Pixel-9".to_string(),
+            },
+        };
+        let json: serde_json::Value = serde_json::to_value(&outcome).unwrap();
+        assert_eq!(json["status"], "needsConfirmation");
+        assert!(json.get("currentCanonical").is_some(), "field must be camelCase: {json}");
+        assert!(json.get("current_canonical").is_none());
+        assert_eq!(json["currentCanonical"]["kind"], "mobile");
+        assert_eq!(json["currentCanonical"]["deviceName"], "Pixel-9");
+
+        let applied = ResizeOutcome::Applied {
+            canonical: RendererSource::Desktop,
+        };
+        let json: serde_json::Value = serde_json::to_value(&applied).unwrap();
+        assert_eq!(json["status"], "applied");
+        assert_eq!(json["canonical"]["kind"], "desktop");
+
+        // 反序列化回环（HTTP/命令边界双向兼容）
+        let back: ResizeOutcome = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            back,
+            ResizeOutcome::Applied {
+                canonical: RendererSource::Desktop
+            }
+        );
+    }
+
+    /// 启动初始网格解析：合法尺寸覆盖默认值，非法（0）或缺省回退配置默认
+    #[test]
+    fn test_resolve_initial_size_overrides_only_when_valid() {
+        assert_eq!(resolve_initial_size(80, 24, Some((120, 40))), (120, 40));
+        assert_eq!(resolve_initial_size(80, 24, None), (80, 24));
+        // 0 尺寸（隐藏容器误传）不生效
+        assert_eq!(resolve_initial_size(80, 24, Some((0, 40))), (80, 24));
+        assert_eq!(resolve_initial_size(80, 24, Some((120, 0))), (80, 24));
     }
 }

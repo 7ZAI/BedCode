@@ -50,20 +50,26 @@ export function useTheme() {
   const settingsStore = useSettingsStore()
 
   // 监听主题设置变化
-  watch(() => settingsStore.settings.ui.theme, (newTheme) => {
-    cleanupTheme()
-    applyTheme(newTheme)
-    setupTheme()
-  })
+  watch(
+    () => settingsStore.settings.ui.theme,
+    (newTheme) => {
+      cleanupTheme()
+      applyTheme(newTheme)
+      setupTheme()
+    },
+  )
 
   // 监听色板设置变化
-  watch(() => settingsStore.settings.ui.theme_palette, (newPalette) => {
-    applyPalette(newPalette ?? 'warm')
-  })
+  watch(
+    () => settingsStore.settings.ui.theme_palette,
+    (newPalette) => {
+      applyPalette(newPalette ?? 'warm')
+    },
+  )
 
   // 主题切换通过 :root.dark CSS 变量自动生效，无需 dark: 前缀
   const themeClasses = computed(() => ({
-    container: 'min-h-screen bg-page text-[var(--text-primary)]'
+    container: 'min-h-screen bg-page text-[var(--text-primary)]',
   }))
 
   return {

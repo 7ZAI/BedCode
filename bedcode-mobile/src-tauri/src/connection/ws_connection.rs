@@ -10,8 +10,7 @@ use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 use tracing::{debug, error, info, warn};
 
 use crate::system::constants::connection::{
-    DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_HEARTBEAT_INTERVAL_SECS,
-    DEFAULT_MESSAGE_QUEUE_SIZE, WS_DEFAULT_PATH,
+    DEFAULT_CONNECT_TIMEOUT_MS, DEFAULT_HEARTBEAT_INTERVAL_SECS, DEFAULT_MESSAGE_QUEUE_SIZE, WS_DEFAULT_PATH,
 };
 
 /// WebSocket 客户端配置
@@ -114,14 +113,20 @@ impl WsConnectionManager {
         tokio::sync::mpsc::Sender<WsMsg>,
     )> {
         // 使用原子操作确保只有一个连接任务在运行
-        if self.running.compare_exchange(
-            false,
-            true,
-            std::sync::atomic::Ordering::SeqCst,
-            std::sync::atomic::Ordering::SeqCst,
-        ).is_err() {
+        if self
+            .running
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_err()
+        {
             warn!("Already connected or connecting");
-            return Err(crate::AppError::WebSocket("Already connected or connecting".to_string()));
+            return Err(crate::AppError::WebSocket(
+                "Already connected or connecting".to_string(),
+            ));
         }
 
         // 检查当前状态
@@ -155,14 +160,21 @@ impl WsConnectionManager {
             Ok(Err(e)) => {
                 self.running.store(false, std::sync::atomic::Ordering::SeqCst);
                 let error_msg = format!("Failed to connect: {}", e);
-                self.lifecycle.set_status(ConnectionStatus::Error(error_msg.clone())).await;
+                self.lifecycle
+                    .set_status(ConnectionStatus::Error(error_msg.clone()))
+                    .await;
                 error!("[WsConnectionManager] Failed to connect to {}: {:#}", url, e);
                 return Err(crate::AppError::WebSocket(error_msg));
             }
             Err(_) => {
                 self.running.store(false, std::sync::atomic::Ordering::SeqCst);
-                self.lifecycle.set_status(ConnectionStatus::Error("Connection timeout".to_string())).await;
-                error!("[WsConnectionManager] Connection timeout after {}ms", self.config.connect_timeout_ms);
+                self.lifecycle
+                    .set_status(ConnectionStatus::Error("Connection timeout".to_string()))
+                    .await;
+                error!(
+                    "[WsConnectionManager] Connection timeout after {}ms",
+                    self.config.connect_timeout_ms
+                );
                 return Err(crate::AppError::WebSocket("Connection timeout".to_string()));
             }
         };

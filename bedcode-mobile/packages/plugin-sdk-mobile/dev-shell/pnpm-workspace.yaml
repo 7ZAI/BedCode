@@ -1,0 +1,9 @@
+# 独立工程声明为最小 pnpm workspace：使 `pnpm install` 锚定本目录（不被上层/相邻
+# workspace 吸附），并按需放行依赖构建脚本。pnpm 12 用 allowBuilds 白名单
+# （旧 onlyBuiltDependencies 已改名）；esbuild 为 vite/tsup 原生二进制所需。
+# 本文件同时被 SDK 的 files 白名单携带，发布后支撑外部脚手架 dev-shell 独立安装。
+packages:
+  - .
+allowBuilds:
+  esbuild: true
+  vue-demi: true

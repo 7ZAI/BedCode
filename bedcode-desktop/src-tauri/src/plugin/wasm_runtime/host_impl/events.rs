@@ -7,11 +7,7 @@ use tauri::Emitter;
 /// 发送 Tauri 事件到前端
 ///
 /// 无头上下文（测试）没有 AppHandle，事件无处投递，返回 Ok 保持幂等
-pub(crate) fn emit_event(
-    host_ctx: &WasmHostContext,
-    event_name: &str,
-    payload_json: &str,
-) -> Result<(), String> {
+pub(crate) fn emit_event(host_ctx: &WasmHostContext, event_name: &str, payload_json: &str) -> Result<(), String> {
     let json_payload: serde_json::Value = match serde_json::from_str(payload_json) {
         Ok(v) => v,
         Err(e) => {
@@ -32,11 +28,7 @@ pub(crate) fn emit_event(
 ///
 /// 载荷为 SDK 类型化 `SyncEvent`（serde 表示即线协议），
 /// 宿主反序列化后经 `From` 穷尽转换为内部事件 —— 未知类型在编译期即不可能出现
-pub(crate) fn broadcast_sync(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    event_json: &str,
-) -> Result<(), String> {
+pub(crate) fn broadcast_sync(host_ctx: &WasmHostContext, plugin_id: &str, event_json: &str) -> Result<(), String> {
     // 权限校验：broadcast 权限门控移动端同步通道
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_BROADCAST, "host_broadcast_sync") {
         return Err("permission denied".to_string());
@@ -60,12 +52,7 @@ pub(crate) fn broadcast_sync(
 }
 
 /// 通过 Tauri 事件发送到前端 toast
-pub(crate) fn notify(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    title: &str,
-    body: &str,
-) -> Result<(), String> {
+pub(crate) fn notify(host_ctx: &WasmHostContext, plugin_id: &str, title: &str, body: &str) -> Result<(), String> {
     let Some(app_handle) = host_ctx.app_handle.as_ref() else {
         return Err("notify error: app_handle not available in headless context".to_string());
     };

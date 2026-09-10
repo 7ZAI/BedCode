@@ -9,8 +9,8 @@ use tauri::plugin::{Builder, PluginHandle};
 ///
 /// 移动端应用运行时的 Runtime 固定为 Wry（桌面 dev 窗口与 Android 一致），
 /// 因此可存储具体类型而非泛型。
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
 static PLUGIN_HANDLE: OnceLock<PluginHandle<tauri::Wry>> = OnceLock::new();
-
 
 /// 注册 PluginAssetExtractor（内置插件资源解压）
 pub fn asset_extractor_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
@@ -29,27 +29,23 @@ pub fn asset_extractor_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .build()
 }
 
-
 /// 调用 Kotlin PluginAssetExtractor 解压内置插件到 app_data_dir/plugins
 ///
 /// 返回解压的插件数量（已是最新版本的跳过）
 #[cfg(target_os = "android")]
 pub async fn extract_bundled_plugins(app_version: &str) -> crate::Result<u32> {
-    let handle = PLUGIN_HANDLE.get().ok_or_else(|| {
-        crate::AppError::Plugin("PluginAssetExtractor not registered".to_string())
-    })?;
+    let handle = PLUGIN_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("PluginAssetExtractor not registered".to_string()))?;
     let payload = serde_json::json!({ "appVersion": app_version });
     let response: serde_json::Value = handle
         .run_mobile_plugin_async("extractBundledPlugins", payload)
         .await
-        .map_err(|e| {
-            crate::AppError::Plugin(format!("Failed to invoke extractBundledPlugins: {}", e))
-        })?;
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke extractBundledPlugins: {}", e)))?;
     let count = response.get("count").and_then(|c| c.as_u64()).unwrap_or(0) as u32;
     tracing::info!(count, "Extracted bundled plugin(s) from APK assets");
     Ok(count)
 }
-
 
 /// 非 Android 平台无内置插件解压（桌面 dev 由 loader 从源码资源目录复制）
 #[cfg(not(target_os = "android"))]

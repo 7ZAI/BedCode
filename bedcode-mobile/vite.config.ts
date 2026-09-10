@@ -7,7 +7,15 @@ import { readFileSync, rmSync } from 'fs'
 const host = process.env.TAURI_DEV_HOST
 
 // 从 tauri.conf.json 读取应用版本（作为版本号的唯一来源）
-const tauriConf = JSON.parse(readFileSync(resolve(__dirname, 'src-tauri/tauri.conf.json'), 'utf-8'))
+const tauriConfPath = resolve(__dirname, 'src-tauri/tauri.conf.json')
+let tauriConf: { version?: string }
+try {
+  tauriConf = JSON.parse(readFileSync(tauriConfPath, 'utf-8'))
+} catch (err) {
+  throw new Error(
+    `[vite] 读取 tauri.conf.json 失败（应用版本号唯一来源，无法注入 __APP_VERSION__）: ${err instanceof Error ? err.message : String(err)}`,
+  )
+}
 const appVersion = tauriConf.version || '0.0.0'
 
 // ==================== 构建时排除 dev-only 审查工具 ====================
@@ -58,7 +66,7 @@ export default defineConfig({
     fs: {
       allow: [
         resolve(__dirname, 'src'),
-        // 插件 SDK 源码（@binblink/plugin-sdk-mobile 经 file: symlink 解析为真实路径，
+        // 插件 SDK 源码（@binblink/bedcode-plugin-sdk-mobile 经 file: symlink 解析为真实路径，
         // 共享 UI 组件如 Select.vue 在 packages/ 下，dev server 需显式放行）
         resolve(__dirname, 'packages'),
         resolve(__dirname, 'index.html'),
@@ -74,6 +82,12 @@ export default defineConfig({
   },
   optimizeDeps: {
     entries: ['./index.html'],
+    // 移动端 SDK 是 file: 快照拷贝（非 workspace symlink），其控制器（如 global-dialog）
+    // 是模块级单例：若被 vite 预打包成 .vite/deps 副本，宿主包说明符导入（prebundle 拷贝）
+    // 与组件相对导入（源文件）会分裂成两个模块实例，openGlobalDialog 的广播到不了组件。
+    // 整包排除预打包，所有导入直解析到同一源文件，保证单实例（桌面端无此问题：workspace
+    // symlink 使两条解析路径 realpath 归一）。
+    exclude: ['@binblink/bedcode-plugin-sdk-mobile'],
     include: [
       'vue',
       'vue-router',
@@ -83,7 +97,6 @@ export default defineConfig({
       '@tauri-apps/api/window',
       '@tauri-apps/plugin-dialog',
       '@tauri-apps/plugin-os',
-      '@tauri-apps/plugin-notification',
       '@skipperndt/plugin-machine-uid',
       'ansi_up',
       'html5-qrcode',

@@ -18,8 +18,7 @@ pub(crate) fn terminal_send(
     }
 
     let sm = host_ctx.session_manager.clone();
-    block_on_async(sm.write_input(session_id, data))
-        .map_err(|e| format!("write failed: {}", e))
+    block_on_async(sm.write_input(session_id, data)).map_err(|e| format!("write failed: {}", e))
 }
 
 // ==================== Tests ====================

@@ -412,6 +412,11 @@ pub fn handle_scheduler_tick(host: &WasmHost, now_utc: &str) {
         ));
         crate::queue::try_dispatch_next(host, &session_id);
     }
+
+    // 4. executing 静默看门狗：executing 队列项的收敛完全依赖 agent 终态推送，
+    //    推送链断裂（插件未加载 / HTTP 持续失败 / agent 未发 idle）时永久悬挂。
+    //    静默超过阈值即复用会话结束兜底收敛（见 queue::check_executing_silence）
+    crate::queue::check_executing_silence(host, now_utc);
 }
 
 /// Created 生命周期事件回调：为 creating 态任务注入 prompts

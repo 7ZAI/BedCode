@@ -2,9 +2,12 @@
  * File Transfer 插件 i18n 消息 schema（编译期 key 强制）
  *
  * 与桌面端对齐：zh-CN / en 均标注为 MessageSchema，
- * 新增 key 必须同时出现在本接口与两个语言文件中，否则编译失败。
+ * 新增 key 必须同时出现在本类型与两个语言文件中，否则编译失败。
+ * 用 type 别名而非 interface：TS 给类型别名隐式索引签名，使 MessageSchema
+ * 可直接赋给 `Record<string, unknown>`（registerMessages 入参），interface
+ * 无此能力会在 index.ts 的 registerMessages 调用处报类型不匹配。
  */
-export interface MessageSchema {
+export type MessageSchema = {
   // ==================== 工具箱入口 ====================
   'transfer.toolbox.title': string
   'transfer.toolbox.subtitle': string
@@ -21,6 +24,27 @@ export interface MessageSchema {
   'transfer.peer.unpaired': string
   'transfer.peer.unknown': string
 
+  // ==================== 附近设备面板（bottom sheet） ====================
+  'transfer.devices.title': string
+  'transfer.devices.subtitle': string
+  'transfer.devices.empty': string
+  'transfer.devices.online': string
+  /** 快照恢复未被实时事件刷新的节点标注 */
+  'transfer.devices.recentSeen': string
+  'transfer.devices.connected': string
+  'transfer.devices.connecting': string
+  'transfer.devices.capNone': string
+  'transfer.devices.activeCurrent': string
+  'transfer.devices.setActive': string
+  'transfer.devices.connect': string
+  'transfer.devices.disconnect': string
+  'transfer.devices.denied': string
+  'transfer.devices.unreachable': string
+  'transfer.devices.trustHint': string
+  /** 探索发现：重新扫描同网节点（sheet 头部按钮） */
+  'transfer.devices.scan': string
+  'transfer.devices.scanning': string
+
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': string
   'transfer.topbar.closeSettings': string
@@ -28,6 +52,8 @@ export interface MessageSchema {
   'transfer.topbar.queryPeer': string
   'transfer.topbar.downloadSelected': string
   'transfer.topbar.uploadFile': string
+  /** 主动发起连接入口（顶栏设备图标，打开附近设备 sheet） */
+  'transfer.topbar.connectDevice': string
   'transfer.breadcrumb.home': string
   'transfer.table.empty': string
   'transfer.table.loading': string
@@ -44,10 +70,13 @@ export interface MessageSchema {
   'transfer.task.state.failed': string
   'transfer.task.state.rejected': string
   'transfer.task.state.cancelled': string
+  'transfer.task.state.interrupted': string
   'transfer.task.pause': string
   'transfer.task.resume': string
   'transfer.task.cancel': string
   'transfer.task.retry': string
+  'transfer.task.remove': string
+  'transfer.task.open': string
   'transfer.task.resumeAll': string
   'transfer.task.download': string
   'transfer.task.upload': string
@@ -58,6 +87,9 @@ export interface MessageSchema {
   'transfer.task.reason.dirUnavailable': string
   'transfer.task.reason.noRoots': string
   'transfer.task.reason.localNotFound': string
+  'transfer.task.reason.cancelledBySender': string
+  'transfer.task.reason.cancelledByReceiver': string
+  'transfer.task.reason.cancelledBySelf': string
   'transfer.task.reason.unknown': string
 
   // ==================== 迷你传输条 ====================
@@ -65,8 +97,14 @@ export interface MessageSchema {
   'transfer.minibar.speed': string
   'transfer.minibar.openQueue': string
 
+  // ==================== 下拉刷新 ====================
+  'transfer.pull.pull': string
+  'transfer.pull.ready': string
+  'transfer.pull.refreshing': string
+
   // ==================== 队列 bottom sheet ====================
   'transfer.queue.title': string
+  'transfer.queue.entry': string
   'transfer.queue.active': string
   'transfer.queue.rejectedChip': string
   'transfer.queue.failedChip': string
@@ -74,7 +112,6 @@ export interface MessageSchema {
   // ==================== 设置 ====================
   'transfer.settings.title': string
   'transfer.settings.sharedRoots': string
-  'transfer.settings.addRootHint': string
   'transfer.settings.pickRoot': string
   'transfer.settings.picking': string
   'transfer.settings.pickFailed': string
@@ -90,9 +127,14 @@ export interface MessageSchema {
   'transfer.settings.downloadDir': string
   'transfer.settings.noDownloadDir': string
   'transfer.settings.downloadDirHint': string
+  /** 下载目录区「打开」按钮：打开系统下载目录核对落盘 */
+  'transfer.settings.openDownloadDir': string
+  /** 打开下载目录进行中（镜像视图生成/系统目录打开中） */
+  'transfer.settings.openDownloadDirOpening': string
+  /** 打开下载目录失败 toast */
+  'transfer.settings.openDownloadDirFailed': string
   'transfer.settings.concurrency': string
   'transfer.settings.concurrencyHint': string
-  'transfer.settings.plainWarning': string
   'transfer.settings.saved': string
 
   // ==================== 上传页（共享目录） ====================
@@ -151,8 +193,9 @@ export interface MessageSchema {
   'transfer.size.gb': string
   'transfer.time.justNow': string
   'transfer.time.minutesAgo': string
+  'transfer.time.hoursAgo': string
 
-  // ==================== v2 队列 4 tab / 批量批准 / 接收 / 历史 ====================
+  // ==================== 传输 4 筛选（全部/发送/接收/历史）+ 批量批准 + 接收 + 历史文案 ====================
   'transfer.queue.all': string
   'transfer.queue.sending': string
   'transfer.queue.receiving': string
@@ -176,6 +219,9 @@ export interface MessageSchema {
   'transfer.history.clear': string
   'transfer.history.empty': string
   'transfer.history.openFolder': string
+  'transfer.history.clearConfirmTitle': string
+  'transfer.history.clearConfirmMessage': string
+  'transfer.history.clearConfirmAction': string
   'transfer.history.results.completed': string
   'transfer.history.results.failed': string
   'transfer.history.results.rejected': string
@@ -185,5 +231,75 @@ export interface MessageSchema {
   'transfer.settings.receivingPolicyAccept': string
   'transfer.settings.receivingPolicyReject': string
   'transfer.settings.receivingPolicyHint': string
+  'transfer.settings.encryption': string
+  'transfer.settings.encryptionOn': string
+  'transfer.settings.encryptionOff': string
+  'transfer.settings.encryptionHint': string
   'transfer.settings.approvalTimeout': string
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': string
+  'transfer.consent.body': string
+  'transfer.consent.fingerprint': string
+  'transfer.consent.timeoutHint': string
+  'transfer.consent.namelessHint': string
+  'transfer.consent.trust': string
+  'transfer.consent.deny': string
+  'transfer.consent.autoTrustedToast': string
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': string
+  'transfer.trusted.loading': string
+  'transfer.trusted.empty': string
+  'transfer.trusted.loadFailed': string
+  'transfer.trusted.retry': string
+  'transfer.trusted.addedAt': string
+  'transfer.trusted.revoke': string
+  'transfer.trusted.cancel': string
+  'transfer.trusted.revokeTitle': string
+  'transfer.trusted.revokeBody': string
+  'transfer.trusted.revokeFailed': string
+  'transfer.trusted.revokedToast': string
+
+  // ==================== 三段式主视图（传输/浏览/设备） ====================
+  /** 主分段：传输列表 */
+  'transfer.v2.tab.transfers': string
+  /** 主分段：浏览对端共享目录 */
+  'transfer.v2.tab.browse': string
+  /** 主分段：附近设备 */
+  'transfer.v2.tab.devices': string
+  /** 传输 tab 筛选 chip：全部（含双向） */
+  'transfer.v2.filter.all': string
+  /** 传输 tab 筛选 chip：仅本端发出 */
+  'transfer.v2.filter.sending': string
+  /** 传输 tab 筛选 chip：正在接收 */
+  'transfer.v2.filter.receiving': string
+  /** 传输 tab 筛选 chip：历史记录 */
+  'transfer.v2.filter.history': string
+  /** 上传主按钮文案（底栏 CTA） */
+  'transfer.v2.upload.cta': string
+  /** 底栏上传按钮副文案：队列仍有条目时提示 */
+  'transfer.v2.queue.hint': string
+  /** 迷你传输条：总体进度 */
+  'transfer.v2.active.overall': string
+  /** 迷你传输条：点击展开队列提示 */
+  'transfer.v2.active.viewQueue': string
+  /** 设备 tab 空态：未发现节点 */
+  'transfer.v2.devices.subtitle': string
+  /** 批请求角标：N 个待处理请求 */
+  'transfer.v2.pendingRequests': string
+  /** 历史卡操作：打开所在文件夹（接收完成的条目带本机路径时） */
+  'transfer.v2.history.openFolder': string
+  /** 历史卡操作：本机没有对应文件（路径缺失/已删除） */
+  'transfer.v2.history.noLocalFile': string
+  /** 打开公共 Download 目录需「所有文件访问」：引导弹窗标题 */
+  'transfer.history.allFilesAccess.title': string
+  /** 引导弹窗正文（说明授权路径与重试提示） */
+  'transfer.history.allFilesAccess.message': string
+  /** 引导弹窗：取消 */
+  'transfer.history.allFilesAccess.cancel': string
+  /** 引导弹窗：去设置（跳系统授权页） */
+  'transfer.history.allFilesAccess.goToSettings': string
+  /** 授权提示 toast：授权后重试原操作 */
+  'transfer.history.allFilesAccess.after': string
 }

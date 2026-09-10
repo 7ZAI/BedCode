@@ -1,0 +1,25 @@
+# 文档跟踪：uat/master 提交前从 index 剔除文档文件（仅 index，工作区磁盘文件保留），防止入库。
+# dev/feature 分支不干预，文档正常跟踪。不删除任何磁盘文件。
+# 用 || true 避免 husky 的 sh -e 因 doc-tracking 非零退出而阻断提交。
+sh "$(git rev-parse --show-toplevel)/scripts/doc-tracking.sh" untrack pre-commit || true
+
+# ==================== 桌面端前端 ESLint 门禁（仅校验暂存文件）====================
+# 不依赖 lint-staged：仅当本次提交包含 bedcode-desktop 前端文件时才校验。
+# 只因 error 阻断提交（warning 不卡，逐步收紧，与 CI `pnpm exec eslint .` 的 0-error 基准一致）。
+# node_modules 缺失（如未 pnpm install 的干净 clone）时跳过，不阻断提交。
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR \
+  | grep -E '^bedcode-(desktop|mobile)/(src|packages|plugins)/.*\.(vue|js|jsx|cjs|mjs|ts|tsx|cts|mts)$' || true)
+
+if [ -n "$STAGED" ]; then
+  ESLINT="$(git rev-parse --show-toplevel)/node_modules/.bin/eslint"
+  if [ ! -x "$ESLINT" ]; then
+    echo "ESLint 未安装（根 node_modules 缺失，需在仓库根执行 pnpm install），跳过前端门禁。"
+    exit 0
+  fi
+  echo "ESLint: 校验暂存的桌面端前端文件 ..."
+  echo "$STAGED" | xargs "$ESLINT" --quiet
+  if [ $? -ne 0 ]; then
+    echo ":: ESLint 发现 error，提交已阻断。请修复后重新 git add 再提交。"
+    exit 1
+  fi
+fi

@@ -371,6 +371,9 @@
       @confirm="confirmUninstall"
     />
 
+    <!-- 启用/停用全局遮罩：阻断交互 + 最小展示时长避免闪烁 -->
+    <LoadingDialog :visible="toggleLoading" :message="toggleLoadingMessage" />
+
     <!-- 权限审批弹层 -->
     <Teleport to="body">
       <Transition name="center-modal">
@@ -431,17 +434,20 @@
  * - 详情页：Hero + 操作按钮 + 统计条 + 折叠区域（简介/扩展点/权限/详细信息）
  */
 import { ref, computed, onMounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useToast } from '@/composables/useToast'
 import Toggle from '@/components/Toggle.vue'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
+import LoadingDialog from '@/components/LoadingDialog.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
 import CollapseSection from '@/components/CollapseSection.vue'
 import { open } from '@tauri-apps/plugin-dialog'
 import {
   pluginListLoaded,
   pluginSetEnabled,
+  pluginPreauthorize,
   pluginIsEnabled,
   pluginInstallFromFile,
   pluginDownload,
@@ -461,6 +467,9 @@ const detailPlugin = ref<PluginInfo | null>(null)
 const showInstallSheet = ref(false)
 const installUrl = ref('')
 const installing = ref(false)
+/** 启用/停用全局遮罩：阻断交互 + 最小展示时长避免闪烁 */
+const toggleLoading = ref(false)
+const toggleLoadingMessage = ref('')
 const uninstallTarget = ref<PluginInfo | null>(null)
 const showUninstallConfirm = ref(false)
 /** 审批弹层：目标插件 + 批准后是否继续启用 */
@@ -481,15 +490,18 @@ onMounted(loadPlugins)
 /** 加载插件列表与启用状态 */
 async function loadPlugins(): Promise<void> {
   try {
-    plugins.value = await pluginListLoaded()
+    const loaded = await pluginListLoaded()
+    // 先构建完整启用状态表，再与列表一并赋值，避免「列表已渲染、状态表仍为空」的
+    // 间隙里 Toggle 收到 undefined 触发 Vue prop 类型告警（N 个插件 = N 条告警）
     const states: Record<string, boolean> = {}
-    for (const p of plugins.value) {
+    for (const p of loaded) {
       states[p.id] = await pluginIsEnabled(p.id)
     }
+    plugins.value = loaded
     pluginEnabledStates.value = states
     // 详情页打开时用最新数据同步，避免状态变更后引用过期
     if (detailPlugin.value) {
-      detailPlugin.value = plugins.value.find((p) => p.id === detailPlugin.value?.id) ?? null
+      detailPlugin.value = loaded.find((p) => p.id === detailPlugin.value?.id) ?? null
     }
   } catch {
     toast.error(t('mobile.plugin.loadFailed'))
@@ -501,7 +513,15 @@ function openDetail(plugin: PluginInfo): void {
   detailPlugin.value = plugin
 }
 
-/** 切换启用/停用：持久化偏好 + 联动激活/停用 */
+/** 启用/停用遮罩最小展示时长：操作瞬时完成也保留遮罩，避免一闪而过 */
+const TOGGLE_MIN_DURATION_MS = 1000
+/** 启用/停用超时兜底：loader 自身 5s import/activate 超时 + 后端命令，15s 兜底防卡死 */
+const TOGGLE_TIMEOUT_MS = 15000
+
+/**
+ * 切换启用/停用：持久化偏好 + 联动激活/停用。
+ * 全局遮罩阻断交互；最小展示 1s 防闪烁；超时兜底防操作卡死时遮罩无限停留。
+ */
 async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<void> {
   // 待授权插件：先走审批流程，批准成功后继续启用
   if (enabled) {
@@ -512,19 +532,73 @@ async function handlePluginToggle(pluginId: string, enabled: boolean): Promise<v
       return
     }
   }
+
+  toggleLoadingMessage.value = t(enabled ? 'mobile.plugin.enabling' : 'mobile.plugin.disabling')
+  const startedAt = Date.now()
+  let timedOut = false
+  let timeoutTimer: ReturnType<typeof setTimeout> | undefined
+
   try {
-    await pluginSetEnabled(pluginId, enabled)
+    // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 LoadingDialog,
+    // 授权弹窗可正常交互;storage preauth_paths 在此统一弹窗),通过后才
+    // 显示 loading 进入激活,拒绝则直接失败不遮罩。授权阶段不启动下方
+    // 超时(用户思考时间不可预估),激活/停用才开始计时
     if (enabled) {
-      await pluginLoader.activate(pluginId)
-    } else {
-      await pluginLoader.deactivate(pluginId)
+      await pluginPreauthorize(pluginId)
+    }
+    // 超时兜底：操作未在时限内完成时强制摘除遮罩 + 回退开关 + 提示，避免无限卡死
+    timeoutTimer = setTimeout(() => {
+      timedOut = true
+      toggleLoading.value = false
+      toast.error(t('mobile.plugin.toggleTimeout'))
+      // 操作结果未知：回退开关 + 幂等拆解后端（fire-and-forget，避免遮罩收尾后
+      // 后端 WASM 实例/mDNS browse 仍存活）；拆解失败仅记日志，不阻塞收尾
+      pluginEnabledStates.value[pluginId] = !enabled
+      pluginLoader.deactivate(pluginId).catch((teardownErr) => {
+        logger.error('[PluginView] toggle timeout teardown failed:', teardownErr)
+      })
+    }, TOGGLE_TIMEOUT_MS)
+
+    await pluginSetEnabled(pluginId, enabled)
+    toggleLoading.value = true
+    try {
+      if (enabled) {
+        await pluginLoader.activate(pluginId)
+      } else {
+        await pluginLoader.deactivate(pluginId)
+      }
+    } finally {
+      toggleLoading.value = false
     }
     await loadPlugins()
   } catch (e: any) {
-    toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: e.message || String(e) }))
-    // 恢复开关状态
-    pluginEnabledStates.value[pluginId] = !enabled
+    const msg = e?.message || String(e)
+    toast.error(t(enabled ? 'mobile.plugin.activateFailed' : 'mobile.plugin.deactivateFailed', { error: msg }))
+    // 失败收敛到运行时真值（三态一致：UI ⇄ 后端运行时 ⇄ 注册表）：幂等重试拆解
+    // 后端运行时（即使前端模块未加载也能停用后端）；持久化 enabled 不回写
+    //（保持用户意图，下次启动 auto-activate 自愈重试）
+    let runtimeStopped = false
+    try {
+      await pluginLoader.deactivate(pluginId)
+      runtimeStopped = true
+    } catch (teardownErr) {
+      logger.error('[PluginView] toggle failure teardown failed:', teardownErr)
+    }
+    // 重拉列表刷新运行时状态徽章；重拉按持久化意图回填开关，需重新压回真值
+    await loadPlugins()
+    // UI 开关跟随运行时终态：拆解成功 → 停用；拆解失败（运行时仍活）→ 回退用户原开关方向
+    pluginEnabledStates.value[pluginId] = runtimeStopped ? false : !enabled
   }
+
+  // 超时已先行收尾（隐藏遮罩 + 回退开关 + toast）则跳过，避免重复隐藏
+  if (timedOut) return
+  clearTimeout(timeoutTimer)
+  // 最小展示时长：不足 1s 补齐，避免遮罩闪烁
+  const elapsed = Date.now() - startedAt
+  if (elapsed < TOGGLE_MIN_DURATION_MS) {
+    await new Promise((r) => setTimeout(r, TOGGLE_MIN_DURATION_MS - elapsed))
+  }
+  toggleLoading.value = false
 }
 
 /** 从文件安装：文件选择器选 zip 插件包 */
@@ -645,12 +719,13 @@ function stateBadgeClass(state: PluginState): string {
   if (isErrorState(state)) {
     return 'bg-[var(--mobile-danger-bg)] text-[var(--mobile-danger-color)]'
   }
-  if (state.state === 'NeedsApproval') {
+  if (state.state === 'NeedsApproval' || state.state === 'Degraded') {
     return 'bg-[color:color-mix(in_srgb,var(--mobile-warning)_15%,transparent)] text-[var(--mobile-warning)]'
   }
   if (state.state === 'Activated') {
     return 'bg-[var(--mobile-success-muted)] text-[var(--mobile-success)]'
   }
+  // Activating / Loaded / Deactivated 走灰（默认 muted）
   return 'bg-[var(--mobile-input-bg)] text-[var(--mobile-text-muted)]'
 }
 
@@ -658,7 +733,9 @@ function stateBadgeClass(state: PluginState): string {
 function getStateKey(state: PluginState): string {
   if (state.state === 'Error') return 'mobile.plugin.stateError'
   if (state.state === 'NeedsApproval') return 'mobile.plugin.stateNeedsApproval'
+  if (state.state === 'Degraded') return 'mobile.plugin.stateDegraded'
   if (state.state === 'Activated') return 'mobile.plugin.stateActivated'
+  if (state.state === 'Activating') return 'mobile.plugin.stateActivating'
   if (state.state === 'Deactivated') return 'mobile.plugin.stateDeactivated'
   return 'mobile.plugin.stateLoaded'
 }

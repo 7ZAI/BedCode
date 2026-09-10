@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 启动期窗口/系统开屏背景(深色):与前端开屏深色首帧同源(墨纸色,即 mobile.css 的
+         mobile-bg-primary 深色值),由 values-night 资源限定符在系统深色时生效;
+         浅色值见 values/colors.xml。tauri android init 重建后需手工恢复 -->
+    <color name="bedcode_launch_bg">#15130F</color>
+</resources>

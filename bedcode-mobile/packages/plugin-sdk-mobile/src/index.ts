@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-mobile
+ * @binblink/bedcode-plugin-sdk-mobile
  *
  * BedCode 移动端插件开发工具包
  */
@@ -25,6 +25,9 @@ export type {
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
+  PluginDialogAction,
+  PluginDialogOptions,
+  PluginDialogHandle,
   CommandRegistry,
   TerminalAPI,
   SessionAPI,
@@ -39,25 +42,12 @@ export type {
   DialogAPI,
   NotificationAPI,
   StatusAPI,
-  UploadRequestMeta,
-  UploadHookDecision,
-  TransferRequestMeta,
-  MountOptions,
-  FileServiceMount,
-  PeerMountAnnouncement,
-  PeerFileServiceInfo,
-  FileServiceAPI,
   SystemAPI,
-  SafAPI,
-  SafEntry,
-  SafCopyHandle,
-  SafCopyStatus,
-  PickedSharedDirectory,
   PluginDevMock,
   PluginContext,
   PluginModule,
   MobileHttpResult,
-  MobileQueueTaskItem,
+  MobileHttpRequestOptions,
   MobileHostApi,
 } from './types'
 
@@ -72,3 +62,19 @@ export {
   getPresetTasks,
   getMobileApi,
 } from './runtime'
+
+// 全局弹窗控制器（宿主 / dev-shell 共用，插件经 context.ui.showDialog 操控）
+export {
+  openGlobalDialog,
+  closeGlobalDialog,
+  updateGlobalDialog,
+  getGlobalDialog,
+  subscribeGlobalDialog,
+  resolveDialogDeadline,
+} from './global-dialog'
+export type {
+  GlobalDialogEntry,
+  GlobalDialogListener,
+  OpenGlobalDialogInput,
+  GlobalDialogHandleOutput,
+} from './global-dialog'

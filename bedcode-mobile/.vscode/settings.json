@@ -1,0 +1,28 @@
+{
+  "i18n-ally.localesPaths": [
+    "src/locales"
+  ],
+  // ==================== rust-analyzer 内存优化 ====================
+  // 与仓库根 .vscode/settings.json 同策略（详见 .vscode/README.md）：
+  // 本机 12GB 内存，swap 已满，双 Tauri 项目同时索引曾触发 oomd 杀进程。
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/gen/**": true,
+    "**/node_modules/**": true,
+    "**/.git/**": true
+  },
+  "rust-analyzer.files.exclude": [
+    "target",
+    "gen",
+    "src-tauri/target",
+    "src-tauri/gen",
+    "node_modules"
+  ],
+  "rust-analyzer.cachePriming.enable": false,
+  "rust-analyzer.lru.capacity": 64,
+  "rust-analyzer.procMacro.processes": 1,
+  "rust-analyzer.checkOnSave": false,
+  "rust-analyzer.numThreads": 4,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.cargo.buildScripts.enable": true
+}

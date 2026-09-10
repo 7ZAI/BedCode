@@ -7,7 +7,7 @@
  * 当前会话从宿主共享运行时 router 的 /terminal-window/:id 路由参数获取。
  */
 import { ref, computed, watch, onMounted, onUnmounted, inject, nextTick } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { autoTaskModalVisible } from '../state'
 
 const context = inject<PluginContext>('pluginContext')!
@@ -399,7 +399,10 @@ function onModeChanged(data: any) {
     typeof data.auto_approve === 'boolean'
   ) {
     autoAnswer.value =
-      data.autoAnswer === true || data.auto_answer === true || data.autoApprove === true || data.auto_approve === true
+      data.autoAnswer === true ||
+      data.auto_answer === true ||
+      data.autoApprove === true ||
+      data.auto_approve === true
   }
 }
 
@@ -454,7 +457,16 @@ onUnmounted(() => {
             {{ t('clearQueue') }}
           </button>
           <button class="at-close" :title="t('close')" @click="visible = false">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -464,14 +476,32 @@ onUnmounted(() => {
       <!-- 前端错误提示（替代系统 alert） -->
       <div v-if="errorMessage" class="at-error" role="alert">
         <span class="at-error-icon">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <circle cx="12" cy="12" r="10" />
             <path d="M12 8v4m0 4h.01" />
           </svg>
         </span>
         <span class="at-error-text">{{ errorMessage }}</span>
         <button class="at-error-close" :title="t('close')" @click="clearError">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <path d="M6 18L18 6M6 6l12 12" />
           </svg>
         </button>
@@ -502,7 +532,9 @@ onUnmounted(() => {
         </div>
         <div v-else class="at-current at-current-idle">
           <span class="at-dot" :style="{ background: statusColor.idle }"></span>
-          <span class="at-current-status" :style="{ color: statusColor.idle }">{{ t('idle') }}</span>
+          <span class="at-current-status" :style="{ color: statusColor.idle }">{{
+            t('idle')
+          }}</span>
         </div>
 
         <!-- 自动执行开关：控制入队任务是否自动调度执行 -->
@@ -567,7 +599,16 @@ onUnmounted(() => {
                 :title="t('addToQueue')"
                 @click="addPreset(p.id)"
               >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
                   <path d="M12 5v14m0 0l6-6m-6 6l-6-6" />
                 </svg>
               </button>
@@ -585,7 +626,16 @@ onUnmounted(() => {
             :title="t('cancelTask')"
             @click="handleCancelTask(activeTask.id)"
           >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
               <path d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -620,7 +670,16 @@ onUnmounted(() => {
                   :title="t('save')"
                   @click="saveEdit"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="M5 13l4 4L19 7" />
                   </svg>
                 </button>
@@ -630,7 +689,16 @@ onUnmounted(() => {
                   :title="t('cancel')"
                   @click="editingId = null"
                 >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
                     <path d="M6 18L18 6M6 6l12 12" />
                   </svg>
                 </button>
@@ -641,7 +709,16 @@ onUnmounted(() => {
                     :title="t('moveUp')"
                     @click="handleMove(index, -1)"
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M12 19V5m0 0l-6 6m6-6l6 6" />
                     </svg>
                   </button>
@@ -651,19 +728,52 @@ onUnmounted(() => {
                     :title="t('moveDown')"
                     @click="handleMove(index, 1)"
                   >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M12 5v14m0 0l6-6m-6 6l-6-6" />
                     </svg>
                   </button>
                   <button class="at-icon-btn" :title="t('edit')" @click="startEdit(item)">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
                       <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
                     </svg>
                   </button>
-                  <button class="at-icon-btn at-icon-btn-danger" :title="t('delete')" @click="handleRemove(item.id)">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                      <path d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2" />
+                  <button
+                    class="at-icon-btn at-icon-btn-danger"
+                    :title="t('delete')"
+                    @click="handleRemove(item.id)"
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path
+                        d="M3 6h18m-2 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"
+                      />
                     </svg>
                   </button>
                 </template>
@@ -675,4 +785,3 @@ onUnmounted(() => {
     </div>
   </div>
 </template>
-

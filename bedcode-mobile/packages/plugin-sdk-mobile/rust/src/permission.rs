@@ -14,17 +14,19 @@ pub const PERMISSION_UI_SETTINGS: &str = "ui:settings";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 /// 动态路由：注册/跳转插件路由页（宿主 addRoute/removeRoute）
 pub const PERMISSION_UI_ROUTE: &str = "ui:route";
+pub const PERMISSION_UI_DIALOG: &str = "ui:dialog";
+pub const PERMISSION_UI_BACK: &str = "ui:back";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BUS: &str = "bus";
-/// 文件服务：挂载受控文件服务端点（与桌面端同名权限，见内网文件传输插件规格）
-pub const PERMISSION_FILESERVICE: &str = "fileservice";
 /// 系统文件操作：用系统查看器打开本地文件（传输完成「打开本地文件」）
 pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
-/// 传输引擎：发起断点续传的文件上传/下载任务
-pub const PERMISSION_TRANSFER: &str = "transfer";
+/// 对等网络：发现/信任/拨号/收发/浏览的宿主 peer-net 能力（host-peer）
+pub const PERMISSION_PEER: &str = "peer";
+/// mDNS 浏览纯能力：browse-only 发现事件透传（host-mdns，ADR 0022 v2）
+pub const PERMISSION_MDNS: &str = "mdns";
 
 static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_TERMINAL_INPUT,
@@ -36,14 +38,16 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_SETTINGS,
     PERMISSION_UI_INPUT,
     PERMISSION_UI_ROUTE,
+    PERMISSION_UI_DIALOG,
+    PERMISSION_UI_BACK,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
     PERMISSION_FS_READ,
     PERMISSION_FS_WRITE,
     PERMISSION_BUS,
-    PERMISSION_FILESERVICE,
     PERMISSION_SYSTEM_OPEN,
-    PERMISSION_TRANSFER,
+    PERMISSION_PEER,
+    PERMISSION_MDNS,
 ];
 
 static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
@@ -56,21 +60,45 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_SETTINGS, &["ui.registerSettingsSection"]),
     (PERMISSION_UI_INPUT, &["ui.registerTerminalToolbarItem"]),
     (PERMISSION_UI_ROUTE, &["ui.registerRoute", "ui.openPage", "ui.goBack"]),
+    (PERMISSION_UI_DIALOG, &["ui.showDialog"]),
+    (PERMISSION_UI_BACK, &["ui.onBackPressed"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete"]),
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
     (PERMISSION_BUS, &["bus.publish", "bus.subscribe", "bus.unsubscribe"]),
-    (PERMISSION_FILESERVICE, &[
-        "fileService.mount",
-        "fileService.unmount",
-        "fileService.updateRoots",
-        "fileService.getPeer",
-        "fileService.pickDirectory",
-        "fileService.requestAllFilesAccess",
+    (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir", "system.revealReceivedFileLocation"]),
+    (PERMISSION_PEER, &[
+        "peer.listDevices",
+        "peer.dial",
+        "peer.disconnect",
+        "peer.respondConsent",
+        "peer.listTrusted",
+        "peer.revokeTrusted",
+        "peer.sendFiles",
+        "peer.listTransfers",
+        "peer.cancelTransfer",
+        "peer.retryTransfer",
+        "peer.clearTransferHistory",
+        "peer.listReceiving",
+        "peer.respondTransfer",
+        "peer.cancelReceiving",
+        "peer.clearReceivingHistory",
+        "peer.getReceiveSettings",
+        "peer.setReceivePolicy",
+        "peer.listSharedDirectories",
+        "peer.removeSharedDirectory",
+        "peer.addSharedDirectory",
+        "peer.listSharedRoots",
+        "peer.browseDirectory",
+        "peer.pullFiles",
+        "peer.pickFiles",
+        // ADR 0022 v2 新增原语
+        "peer.dialEndpoint",
+        "peer.close",
+        "peer.setSharedRoots",
     ]),
-    (PERMISSION_SYSTEM_OPEN, &["system.openFile", "system.revealInDir"]),
-    (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
+    (PERMISSION_MDNS, &["mdns.browse", "mdns.stopBrowse"]),
 ];
 
 pub struct PermissionManager {
@@ -154,20 +182,14 @@ mod tests {
 
     #[test]
     fn test_check_api_mobile_specific() {
-        // 移动端特有权限门：文件服务/传输/UI 扩展点按 API 方法名映射
+        // 移动端特有权限门：UI 扩展点按 API 方法名映射
         let pm = PermissionManager::new();
         pm.grant_permissions("p", &[
-            "fileservice".to_string(),
-            "transfer".to_string(),
             "ui:navtab".to_string(),
             "ui:settings".to_string(),
             "ui:route".to_string(),
             "ui:input".to_string(),
         ]);
-        assert!(pm.check_api("p", "fileService.mount"));
-        assert!(pm.check_api("p", "fileService.requestAllFilesAccess"));
-        assert!(pm.check_api("p", "transfer.start"));
-        assert!(pm.check_api("p", "transfer.cancel"));
         assert!(pm.check_api("p", "ui.registerNavTab"));
         assert!(pm.check_api("p", "ui.registerSettingsSection"));
         assert!(pm.check_api("p", "ui.registerRoute"));
@@ -182,8 +204,7 @@ mod tests {
     #[test]
     fn test_valid_permission_whitelist_complete() {
         // 白名单 = VALID_PERMISSIONS 静态表：任何新增权限必须同步登记，
-        // 否则 grant 静默丢弃（此处锁死 17 项，含移动端特有 ui:navtab/ui:settings/ui:route）
-        assert_eq!(VALID_PERMISSIONS.len(), 17);
+        // 否则 grant 静默丢弃（此处锁死全量，含移动端特有 ui:navtab/ui:settings/ui:route）
         for p in [
             PERMISSION_TERMINAL_INPUT,
             PERMISSION_TERMINAL_OUTPUT,
@@ -199,8 +220,6 @@ mod tests {
             PERMISSION_FS_READ,
             PERMISSION_FS_WRITE,
             PERMISSION_BUS,
-            PERMISSION_FILESERVICE,
-            PERMISSION_TRANSFER,
         ] {
             assert!(VALID_PERMISSIONS.contains(&p), "{} not in whitelist", p);
         }

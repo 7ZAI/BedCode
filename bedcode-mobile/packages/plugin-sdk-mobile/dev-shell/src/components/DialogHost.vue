@@ -44,10 +44,13 @@ function confirmTop(action: 'confirm' | 'cancel') {
       <div
         class="w-full max-w-sm rounded-2xl bg-[var(--mobile-bg-elevated)] border border-[var(--mobile-border)] shadow-2xl p-5"
       >
-        <h3 class="text-base font-semibold text-[var(--mobile-text-primary)] mb-1">
+        <h3
+          class="text-base font-semibold mb-1"
+          :class="dialogService.queue.value[0]?.options.variant === 'danger' ? 'text-[var(--mobile-error)]' : 'text-[var(--mobile-text-primary)]'"
+        >
           {{ dialogService.queue.value[0]?.options.title || '' }}
         </h3>
-        <p v-if="dialogService.queue.value[0]?.options.message" class="text-sm text-[var(--mobile-text-secondary)] mb-4 leading-relaxed">
+        <p v-if="dialogService.queue.value[0]?.options.message" class="text-sm text-[var(--mobile-text-secondary)] mb-4 leading-relaxed whitespace-pre-line">
           {{ dialogService.queue.value[0]?.options.message }}
         </p>
 
@@ -70,7 +73,10 @@ function confirmTop(action: 'confirm' | 'cancel') {
             {{ dialogService.queue.value[0]?.options.cancelText || '取消' }}
           </button>
           <button
-            class="px-4 py-2 rounded-lg text-sm font-medium bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)] transition-colors duration-200"
+            class="px-4 py-2 rounded-lg text-sm font-medium transition-colors duration-200"
+            :class="dialogService.queue.value[0]?.options.variant === 'danger'
+              ? 'bg-[var(--mobile-error)] text-[var(--mobile-text-on-accent)]'
+              : 'bg-[var(--mobile-accent)] text-[var(--mobile-text-on-accent)]'"
             @click="confirmTop('confirm')"
           >
             {{ dialogService.queue.value[0]?.options.confirmText || '确定' }}

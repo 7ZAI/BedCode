@@ -5,7 +5,9 @@
         v-if="visible"
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
       >
-        <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-10 py-8 shadow-xl flex flex-col items-center gap-5 min-w-[260px]">
+        <div
+          class="bg-[var(--bg-card)] border border-[var(--border)] rounded-xl px-10 py-8 shadow-xl flex flex-col items-center gap-5 min-w-[260px]"
+        >
           <!-- 加载动画：呼吸图标 + 双层扩散光环 + 流动加载条 -->
           <div class="loading-overlay-orb">
             <span class="loading-overlay-ring"></span>
@@ -13,13 +15,27 @@
             <span class="loading-overlay-icon">
               <slot name="icon">
                 <!-- 默认图标：拼图块（插件/模块加载语义） -->
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z" />
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path
+                    d="M11 4a2 2 0 114 0v1a1 1 0 001 1h3a1 1 0 011 1v3a1 1 0 01-1 1h-1a2 2 0 100 4h1a1 1 0 011 1v3a1 1 0 01-1 1h-3a1 1 0 01-1-1v-1a2 2 0 10-4 0v1a1 1 0 01-1 1H7a1 1 0 01-1-1v-3a1 1 0 00-1-1H4a2 2 0 110-4h1a1 1 0 001-1V7a1 1 0 011-1h3a1 1 0 001-1V4z"
+                  />
                 </svg>
               </slot>
             </span>
           </div>
-          <p v-if="message" class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ message }}</p>
+          <p
+            v-if="message"
+            class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]"
+          >
+            {{ message }}
+          </p>
           <div class="loading-overlay-bar"><span></span></div>
         </div>
       </div>
@@ -107,17 +123,32 @@ defineProps<{
 }
 
 @keyframes loading-overlay-breathe {
-  0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.08); }
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
 }
 
 @keyframes loading-overlay-ring {
-  0% { transform: scale(0.55); opacity: 0.55; }
-  100% { transform: scale(1.55); opacity: 0; }
+  0% {
+    transform: scale(0.55);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(1.55);
+    opacity: 0;
+  }
 }
 
 @keyframes loading-overlay-bar-flow {
-  0% { transform: translateX(-110%); }
-  100% { transform: translateX(360%); }
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(360%);
+  }
 }
 </style>

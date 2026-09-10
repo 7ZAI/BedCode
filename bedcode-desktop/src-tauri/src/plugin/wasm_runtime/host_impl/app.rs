@@ -11,40 +11,48 @@ use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 ///
 /// payload: `{ "file_name": "bedtask", "bin_dir": "" }` —— file_name 缺省
 /// "bedtask"（Windows 自动补 .exe）；bin_dir 为空用平台默认。
-pub(crate) fn install_cli(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    payload_json: &str,
-) -> Result<String, String> {
+pub(crate) fn install_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload_json: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_APP_CLI, "host_app_install_cli") {
         return Err("permission denied".to_string());
     }
-    let payload: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|e| format!("app error: invalid payload JSON: {}", e))?;
-    let file_name = payload.get("file_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let bin_dir = payload.get("bin_dir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("app error: invalid payload JSON: {}", e))?;
+    let file_name = payload
+        .get("file_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let bin_dir = payload
+        .get("bin_dir")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
-    let services = block_on_async(host_ctx.services())
-        .ok_or_else(|| "app error: host services unavailable".to_string())?;
+    let services =
+        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.install_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 
 /// 卸载 CLI（权限 + 载荷解析 + 宿主服务执行）
-pub(crate) fn uninstall_cli(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    payload_json: &str,
-) -> Result<(), String> {
+pub(crate) fn uninstall_cli(host_ctx: &WasmHostContext, plugin_id: &str, payload_json: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_APP_CLI, "host_app_uninstall_cli") {
         return Err("permission denied".to_string());
     }
-    let payload: serde_json::Value = serde_json::from_str(payload_json)
-        .map_err(|e| format!("app error: invalid payload JSON: {}", e))?;
-    let file_name = payload.get("file_name").and_then(|v| v.as_str()).unwrap_or("").to_string();
-    let bin_dir = payload.get("bin_dir").and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("app error: invalid payload JSON: {}", e))?;
+    let file_name = payload
+        .get("file_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let bin_dir = payload
+        .get("bin_dir")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
 
-    let services = block_on_async(host_ctx.services())
-        .ok_or_else(|| "app error: host services unavailable".to_string())?;
+    let services =
+        block_on_async(host_ctx.services()).ok_or_else(|| "app error: host services unavailable".to_string())?;
     block_on_async(services.uninstall_cli(plugin_id.to_string(), file_name, bin_dir))
 }
 

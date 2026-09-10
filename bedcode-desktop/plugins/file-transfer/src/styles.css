@@ -91,6 +91,12 @@
   background: var(--color-success);
 }
 
+/* 在线未连接（可达但无传输会话）：降饱和绿，与实心绿区分 */
+.ft-dot--reachable {
+  background: var(--color-success);
+  opacity: 0.45;
+}
+
 /* 已连接但对端未共享（partial） */
 .ft-dot--partial {
   background: var(--color-warning);
@@ -104,7 +110,7 @@
   flex: 1;
 }
 
-/* 设备切换入口（多对端场景）与下拉菜单（自绘，禁原生 select） */
+/* 附近设备面板入口与面板体（自绘，禁原生 select；点击外部由视图收起） */
 .ft-peer-switch-wrap {
   position: relative;
   flex-shrink: 0;
@@ -119,65 +125,266 @@
   border-color: var(--color-primary);
 }
 
-.ft-peer-menu {
+/* ==================== 附近设备面板（PeerDevicesPanel） ==================== */
+
+.ft-dev-panel {
   position: absolute;
   top: calc(100% + 6px);
   left: 0;
   z-index: 30;
-  min-width: 180px;
-  max-width: 280px;
-  max-height: 260px;
-  overflow-y: auto;
-  padding: 4px;
+  width: 340px;
+  max-width: calc(100vw - 32px);
+  padding: 10px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-card);
 }
 
-.ft-peer-menu-title {
-  padding: 6px 10px;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
-
-.ft-peer-menu-item {
+.ft-dev-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 8px;
-  width: 100%;
-  padding: 7px 10px;
-  background: transparent;
-  color: var(--text-primary);
-  border: none;
-  border-radius: var(--radius-tag);
+  padding: 2px 4px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 探索发现按钮：头部行尾对齐（subtitle 弹性占位推到最右） */
+.ft-dev-scan-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 探索发现图标：随文字字号，不压缩不溢出 */
+.ft-dev-scan-ico {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+/* 扫描中 spinner：仅 transform 动画（GPU 合成），尊重减弱动效偏好 */
+.ft-dev-scan-spin {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  animation: ft-dev-scan-rotate 0.9s linear infinite;
+}
+
+@keyframes ft-dev-scan-rotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ft-dev-scan-spin {
+    animation: none;
+  }
+}
+
+.ft-dev-title {
+  flex-shrink: 0;
   font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
-.ft-peer-menu-item:hover,
-.ft-peer-menu-item--active {
-  background: var(--bg-hover);
-}
-
-/* 激活项：底色向主色偏（选中语义明确，非 hover 同色） */
-.ft-peer-menu-item--active {
-  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
-}
-
-.ft-peer-menu-name {
-  flex: 1;
+.ft-dev-subtitle {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary);
 }
 
-.ft-peer-menu-check {
+.ft-dev-empty {
+  padding: 18px 10px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.ft-dev-list {
+  max-height: 300px;
+  overflow-y: auto;
+  padding-top: 6px;
+}
+
+.ft-dev-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border-radius: var(--radius-tag);
+  transition: background-color 0.15s ease;
+}
+
+.ft-dev-row:hover {
+  background: var(--bg-hover);
+}
+
+/* 活跃对端行：底色向主色偏（选中语义，与旧菜单一致） */
+.ft-dev-row--active,
+.ft-dev-row--active:hover {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.ft-dev-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.ft-dev-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ft-dev-name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.ft-dev-fp {
   flex-shrink: 0;
+  font-family: ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+.ft-dev-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: var(--radius-tag);
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.ft-dev-tag--active {
   color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+}
+
+.ft-dev-meta {
+  margin-top: 1px;
+  padding-left: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* 拨号终态反馈：拒绝 / 不可达（行内错误文案） */
+.ft-dev-error {
+  margin-top: 1px;
+  padding-left: 14px;
+  font-size: 11px;
+  color: var(--color-danger);
+}
+
+.ft-dev-connecting {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.ft-dev-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ft-text-btn {
+  padding: 3px 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-tag);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+  flex-shrink: 0; /* 行内空间不足时禁止压缩按钮（否则文字溢出盒外与相邻按钮重叠） */
+  transition: color 0.15s ease, border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.ft-text-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.ft-text-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.6);
+}
+
+.ft-text-btn--primary {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--border));
+}
+
+.ft-text-btn--primary:hover:not(:disabled) {
+  color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+}
+
+/* ghost 文字变体（可信对端「撤销」）：默认弱化，hover 显现危险色 */
+.ft-text-btn--ghost {
+  border-color: transparent;
+  opacity: 0.55;
+}
+
+.ft-text-btn--ghost:hover:not(:disabled) {
+  opacity: 1;
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--border));
+  background: var(--color-danger-light);
+}
+
+.ft-mini-btn--danger:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--border));
+  background: var(--color-danger-light);
+}
+
+.ft-dev-hint {
+  padding: 8px 4px 2px;
+  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+/* 握手中状态点：琥珀色呼吸动画（GPU 合成 opacity） */
+.ft-dot--connecting {
+  background: var(--color-warning);
+  animation: ft-dev-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes ft-dev-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
 }
 
 /* 下拉淡入 + 轻微位移（200ms 内，避免拖沓） */
@@ -882,6 +1089,7 @@
   min-height: 0;
   overflow-y: auto;
   padding: 20px;
+  padding-bottom: 32px; /* 末行/提示文案不被容器底缘裁切（评审 P1） */
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -1097,39 +1305,9 @@
 
 /* ==================== v2 pending 批横幅（接收端应答） ==================== */
 
-/* ==================== v2 批量传输请求弹窗（全局模态，spec 14.4） ==================== */
+/* ==================== v2 批量传输请求弹窗（已迁移宿主全局弹窗，仅保留内容排版类） ==================== */
 
-.ft-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-}
-
-.ft-dialog-card {
-  width: min(420px, 100%);
-  padding: 20px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ft-dialog-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
+/* 弹窗内标题 / 倒计时 / 动作行（ConsentDialog 内容复用） */
 .ft-dialog-title {
   font-size: 15px;
   font-weight: 600;
@@ -1148,13 +1326,6 @@
   font-weight: 600;
 }
 
-.ft-dialog-body {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
 .ft-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1162,26 +1333,121 @@
   margin-top: 4px;
 }
 
-/* 弹窗淡入 + 上浮（GPU 合成属性） */
-.ft-dialog-enter-active,
-.ft-dialog-leave-active {
-  transition: opacity 0.2s ease;
+/* ==================== 首连确认弹窗内容（已迁移宿主全局弹窗，仅保留内容排版类） ==================== */
+
+/* 内容根：提供 close 按钮定位锚点（宿主卡片 bodyClass=p-5 提供内边距） */
+.ft-consent-card {
+  position: relative;
 }
 
-.ft-dialog-enter-active .ft-dialog-card,
-.ft-dialog-leave-active .ft-dialog-card {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+.ft-consent-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
 }
 
-.ft-dialog-enter-from,
-.ft-dialog-leave-to {
-  opacity: 0;
+/* 标题 + 倒计时行（复用 ft-dialog-title / ft-dialog-countdown token 样式） */
+.ft-consent-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
-.ft-dialog-enter-from .ft-dialog-card,
-.ft-dialog-leave-to .ft-dialog-card {
-  transform: translateY(8px);
+.ft-consent-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
 }
+
+.ft-consent-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ft-consent-icon svg {
+  width: 26px;
+  height: 26px;
+  color: var(--color-primary);
+}
+
+.ft-consent-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--text-primary);
+  text-align: center;
+  /* 完整节点 ID 充当展示名时允许任意断行，不撑破卡片 */
+  overflow-wrap: anywhere;
+}
+
+.ft-consent-hint {
+  margin: -4px 0 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-warning);
+  text-align: center;
+}
+
+.ft-consent-fp {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 9px 12px;
+  background: var(--bg-page);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  min-width: 0;
+}
+
+.ft-consent-fp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ft-consent-fp-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* 复制按钮：右对齐的轻量 ghost 按钮（复用 ft-text-btn 基础样式） */
+.ft-consent-fp-copy {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
+.ft-consent-fp-code {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px 8px;
+  font-family: ui-monospace, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  /* 分组间换行；组内绝不折行 */
+  overflow-wrap: normal;
+}
+
+.ft-consent-fp-block {
+  white-space: nowrap;
+  letter-spacing: 0.03em;
+}
+
+/* 弹窗进出场（迁移宿主全局弹窗后停用） */
 
 /* ==================== v2 接收中 toast ==================== */
 
@@ -1304,4 +1570,106 @@
 .ft-timeout-input:focus {
   outline: none;
   border-color: var(--color-primary);
+}
+
+/* ==================== 可信对端管理（TrustedPeersSection，spec 决策 8） ==================== */
+
+/* 空态 / 加载态占位：与目录空值占位同视觉语言（弱化、居中） */
+.ft-trusted-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  padding: 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-input);
+  background: var(--bg-card);
+  font-size: var(--font-size-label);
+  color: var(--text-tertiary);
+}
+
+/* 加载失败错误条：危险色如实呈现 + 行内重试入口 */
+.ft-trusted-error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 40%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--color-danger-light);
+}
+
+.ft-trusted-error-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-label);
+  color: var(--text-primary);
+}
+
+/* 条目行：名称+短指纹一行，加入时间+撤销一行（复用 ft-root-item 容器） */
+.ft-trusted-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.ft-trusted-info {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ft-trusted-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--font-size-label);
+  color: var(--text-primary);
+}
+
+.ft-trusted-fp {
+  flex-shrink: 0;
+  font-family: Consolas, Monaco, monospace;
+  font-size: var(--font-size-tag);
+  color: var(--text-secondary);
+}
+
+.ft-trusted-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ft-trusted-added {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+/* 撤销失败就地提示（条目保留，可再次点击行内撤销重试） */
+.ft-trusted-revoke-failed {
+  margin: 6px 0 0;
+  font-size: var(--font-size-tag);
+  color: var(--color-danger);
+}
+
+/* 危险主按钮（确认框「撤销」）：danger 底 + 对比文字 */
+.ft-btn--danger {
+  background: var(--color-danger);
+  border-color: var(--color-danger);
+  color: #fff;
+}
+
+.ft-btn--danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-danger) 85%, black);
+  border-color: color-mix(in srgb, var(--color-danger) 85%, black);
 }

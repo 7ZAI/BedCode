@@ -1,3 +1,27 @@
+# ==================== 编译资源限制（防 CPU 满载 / 防 OOM） ====================
+# 依据：开发机 16 核 / 13GiB 内存 / 无 swap。cargo 默认 build.jobs = 逻辑核心数（16），
+# 而本项目依赖图含 wasmtime / cranelift / actix 等巨型 crate，单个 rustc 进程峰值约 1~2GiB，
+# 16 路并发需要 20GiB+ —— 无 swap 时内核直接 OOM kill rustc（历史事故：桌面 dev 构建
+# 0xc0000409「页面文件被禁用」崩溃、移动端 Android 全量构建 `memory allocation ... failed`
+# 后级联 2300+ 个 `can't find crate` 假错误，极易误判为依赖不兼容）。
+#
+# 取值经验公式：jobs = min(核心数, floor(可用内存GiB / 1.5))
+#   本机（16 核 / 可用 ~6GiB）：min(16, floor(6/1.5)=4) = 4
+#     → 并发降到 1/4，CPU 占用压到 ~25%，不再打满；同时总内存需求降到 ~6GiB
+#   CI（ubuntu-latest / windows-latest = 4 核 / 16GiB）：jobs 恰好等于核数，零性能损失
+#
+# 覆盖方式（Cargo 配置优先级：环境变量 > 本机 ~/.cargo/config.toml > 本文件）：
+#   移动端 Android 全量构建 / 同时开着模拟器（最重，历史 OOM 点）：
+#     CARGO_BUILD_JOBS=3 pnpm run tauri:android:dev
+#   内存 >= 32GiB 的机器想提速（本机永久生效，无需改本文件）：
+#     在 ~/.cargo/config.toml 写 [build] jobs = 8
+#
+# 与 profile 级内存措施互补（profile 段只能写在 src-tauri/Cargo.toml，cargo config 不支持）：
+#   release: lto = "thin" + codegen-units = 16  —— 弃用 fat LTO + 单 codegen unit，峰值 8GiB+ → 数 GiB
+#   dev:     debug = "line-tables-only"          —— 弃用全量 DWARF，避免 wasmtime 编译期 OOM
+[build]
+jobs = 4
+
 # ==================== 链接加速（仅 Windows MSVC 目标） ====================
 # 默认 MSVC link.exe 链接 Tauri 全量依赖（wasmtime/actix 等上千 crate）非常慢，
 # LLD 通常快 2~5 倍。优先使用 rustup 自带 rust-lld（零外部依赖，所有机器/CI 可用）。

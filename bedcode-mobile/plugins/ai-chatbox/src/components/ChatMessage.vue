@@ -36,7 +36,7 @@
         <button
           class="thinking-toggle"
           :aria-expanded="reasoningExpanded"
-          :aria-controls="`thinking-body-${message.id}`"
+          :aria-controls="`thinking-body-${uid}`"
           :title="t('mobile.plugin.aiChatbox.thinkingProcess')"
           @click="reasoningExpanded = !reasoningExpanded"
         >
@@ -53,7 +53,7 @@
         </button>
         <!-- 思考内容为模型 scratchpad 草稿，非成品 Markdown：纯文本展示（预换行），
              不经过渲染管线，天然免疫 prompt injection 的 HTML 注入 -->
-        <div v-if="reasoningExpanded" :id="`thinking-body-${message.id}`" class="thinking-body">{{ message.reasoning }}</div>
+        <div v-if="reasoningExpanded" :id="`thinking-body-${uid}`" class="thinking-body">{{ message.reasoning }}</div>
       </div>
 
       <!-- 内容（user 右对齐气泡卡片；assistant Markdown 渲染 + Shiki 高亮） -->
@@ -157,6 +157,10 @@ defineEmits<{ delete: [message: ChatMessage]; regenerate: [] }>()
 
 const { t } = useI18n()
 
+// 组件实例唯一 id（思考块 aria-controls 关联用）：ChatMessage 无 id 字段，
+// 实例级随机段保证同页多实例稳定唯一
+const uid = `thinking-${Math.random().toString(36).slice(2, 8)}`
+
 // 高亮引擎 seam（ADR-0011）：移动端注入 Shiki 异步实现（懒加载单例 + 多主题包）；
 // 主题解析器注入配置感知实现：具名主题直接锁定，auto 时跟随宿主 html.dark
 const highlightEngine: HighlightEngine = createShikiHighlightEngine(
@@ -197,10 +201,10 @@ watch(
   { immediate: true },
 )
 // 消息列表 shift（如删除中间消息后组件按 :key="i" 复用）会残留上一消息的折叠状态：
-// 消息 id 变化即复位为「当前是否流式末位」——与 streaming watcher 同帧取值，
+// 消息对象引用变化即复位为「当前是否流式末位」——与 streaming watcher 同帧取值，
 // 流式消息默认展开、其余折叠，结果一致
 watch(
-  () => props.message.id,
+  () => props.message,
   () => {
     reasoningExpanded.value = props.streaming === true
   },

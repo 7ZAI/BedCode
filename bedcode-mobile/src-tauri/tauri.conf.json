@@ -1,11 +1,11 @@
 {
   "productName": "BedCode Mobile",
   "identifier": "com.bedcode.mobile",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "build": {
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1423",
-    "beforeBuildCommand": "npm run build:all",
+    "beforeBuildCommand": "pnpm run build:all",
     "frontendDist": "../dist"
   },
   "app": {
@@ -20,7 +20,7 @@
         "center": true,
         "visible": true,
         "decorations": false,
-        "backgroundColor": "#111827"
+        "backgroundColor": "#F5F4F0"
       }
     ],
     "security": {
@@ -28,7 +28,11 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$RESOURCE/**/*", "$APPCONFIG/**/*", "$APPDATA/**/*"]
+          "allow": [
+            "$RESOURCE/**/*",
+            "$APPCONFIG/**/*",
+            "$APPDATA/**/*"
+          ]
         }
       }
     }

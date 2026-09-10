@@ -1,0 +1,16 @@
+# bedcode-desktop pnpm workspace（原 npm workspaces 字段迁移至此）
+# 成员：packages/* 下的 SDK/测试包 + plugins/* 下的插件工程
+packages:
+  - packages/*
+  - plugins/*
+
+# pnpm 10+ 默认拒绝依赖的构建脚本（安全策略），pnpm 12 用 allowBuilds 白名单：
+# - esbuild：vite/tsup 的原生二进制（postinstall 下载平台二进制）
+# - sharp：图标生成（node-gyp 预编译产物）
+# - vue-demi：vue-echarts 运行时切换 vue/vue-compat 指向
+allowBuilds:
+  edgedriver: false
+  esbuild: true
+  geckodriver: false
+  sharp: true
+  vue-demi: true

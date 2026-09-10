@@ -66,11 +66,7 @@ mod tests {
     #[test]
     fn primary_root() {
         assert_eq!(
-            resolve_saf_path(
-                "com.android.externalstorage.documents",
-                "primary:",
-                PRIMARY_DIR,
-            ),
+            resolve_saf_path("com.android.externalstorage.documents", "primary:", PRIMARY_DIR,),
             Some("/storage/emulated/0".to_string())
         );
         assert_eq!(
@@ -87,11 +83,7 @@ mod tests {
     #[test]
     fn primary_subdir() {
         assert_eq!(
-            resolve_saf_path(
-                "com.android.externalstorage.documents",
-                "primary:Download",
-                PRIMARY_DIR,
-            ),
+            resolve_saf_path("com.android.externalstorage.documents", "primary:Download", PRIMARY_DIR,),
             Some("/storage/emulated/0/Download".to_string())
         );
     }
@@ -134,11 +126,7 @@ mod tests {
             Some("/storage/ABCD-1234/Download".to_string())
         );
         assert_eq!(
-            resolve_saf_path(
-                "com.android.externalstorage.documents",
-                "ABCD-1234:",
-                PRIMARY_DIR,
-            ),
+            resolve_saf_path("com.android.externalstorage.documents", "ABCD-1234:", PRIMARY_DIR,),
             Some("/storage/ABCD-1234".to_string())
         );
     }
@@ -156,11 +144,7 @@ mod tests {
         );
         // 空 raw 路径不解析
         assert_eq!(
-            resolve_saf_path(
-                "com.android.providers.downloads.documents",
-                "raw:",
-                PRIMARY_DIR,
-            ),
+            resolve_saf_path("com.android.providers.downloads.documents", "raw:", PRIMARY_DIR,),
             None
         );
     }
@@ -208,11 +192,7 @@ mod tests {
             None
         );
         assert_eq!(
-            resolve_saf_path(
-                "com.android.externalstorage.documents",
-                "primary:..",
-                PRIMARY_DIR,
-            ),
+            resolve_saf_path("com.android.externalstorage.documents", "primary:..", PRIMARY_DIR,),
             None
         );
     }

@@ -9,8 +9,11 @@
  *                          宿主据此放行 waiting 态队列任务，等价 SessionStart）
  *   before_agent_start   → in_progress（用户提交 prompt，等价 UserPromptSubmit）
  *   tool_execution_end   → in_progress（工具执行结束，等价 PostToolUse）
- *   agent_settled        → completed（run 完全收敛：自动重试/压缩/排队续跑
- *                          均结束后触发，等价 Stop + background_tasks 判定）
+ *   agent_settled        → completed / interrupted（run 完全收敛后触发。
+ *                          注意：agent_settled 在 finally 中发出，LLM 报错
+ *                          （429 等）重试耗尽或用户中断时照样触发，不能无
+ *                          条件视为完成——须结合 agent_end 记录的最后一条
+ *                          assistant 消息的 stopReason/errorMessage 判定成败）
  *   session_shutdown     → interrupted（仅 quit：退出 pi 时任务未完成视为中断；
  *                          new/fork/resume 只是会话切换，pi 仍运行，不推送）
  *
@@ -30,15 +33,15 @@
  * 首次启动需用户在终端确认信任。
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 
 // 部署时由宿主按当前端口改写（hooks.rs replace_pi_extension_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
-// @bedcode-template-version 2
+// @bedcode-template-version 3
 
-const PLUGIN_ID = "com.bedcode.auto-task"
-const HOST = "127.0.0.1"
+const PLUGIN_ID = 'com.bedcode.auto-task'
+const HOST = '127.0.0.1'
 const HTTP_TIMEOUT_MS = 3000
 // 终态推送（completed/interrupted）丢失会中断队列调度链，必须重试保证送达
 const HTTP_RETRY_ATTEMPTS = 3
@@ -47,8 +50,8 @@ const HTTP_RETRY_DELAY_MS = 500
 /** 事件发生时刻（UTC，毫秒精度、固定宽度）：与宿主 SQLite strftime 格式一致 */
 function eventTime(): string {
   const now = new Date()
-  const ms = String(now.getMilliseconds()).padStart(3, "0")
-  return `${now.toISOString().slice(0, 19).replace("T", " ")}.${ms}`
+  const ms = String(now.getMilliseconds()).padStart(3, '0')
+  return `${now.toISOString().slice(0, 19).replace('T', ' ')}.${ms}`
 }
 
 /**
@@ -58,7 +61,7 @@ function eventTime(): string {
  * 会把主任务状态污染（subagent 结束时 completed+interrupted 毫秒级连推，
  * 提前落终态且误标中断），故子进程中本扩展整体静默。
  */
-const IS_SUBAGENT_PROCESS = process.argv.includes("--no-session")
+const IS_SUBAGENT_PROCESS = process.argv.includes('--no-session')
 
 /**
  * 推送任务状态到 BedCode 桌面端 HTTP API
@@ -77,7 +80,7 @@ async function push(status: string, reason: string): Promise<void> {
   const payload = {
     session_id: bedcodeSessionId,
     status,
-    reason: reason || "",
+    reason: reason || '',
     event_time: eventTime(),
     bedcode_session_id: bedcodeSessionId,
   }
@@ -87,8 +90,8 @@ async function push(status: string, reason: string): Promise<void> {
       const resp = await fetch(
         `http://${HOST}:${BEDCODE_PORT}/api/plugin/${PLUGIN_ID}/task-status`,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
         },
@@ -112,32 +115,83 @@ function promptPreview(prompt: string): string {
   return prompt.length > 100 ? `${prompt.slice(0, 100)}...` : prompt
 }
 
+/** 最近一次 agent loop 结束时记录的失败信息（null = 正常结束） */
+interface LastRunFailure {
+  /** 用户主动中断（Esc/Ctrl+C）；false = LLM 报错重试耗尽 */
+  aborted: boolean
+  errorMessage: string
+}
+/** agent_end 与 agent_settled 之间共享的最近一次 run 失败状态 */
+let lastRunFailure: LastRunFailure | null = null
+
+/**
+ * 从 agent_end 消息中提取最后一条 assistant 消息的失败状态。
+ *
+ * 自动重试进行中时中间 agent_end 也可能带 error 消息，但本结果只在
+ * agent_settled（run 完全收敛，含全部重试）时消费——重试成功后最终
+ * agent_end 的末条 assistant stopReason 已是正常值，自动覆盖旧记录。
+ */
+function recordLastRunFailure(messages: unknown): void {
+  const list = Array.isArray(messages) ? messages : []
+  for (let i = list.length - 1; i >= 0; i--) {
+    const msg = list[i] as { role?: string; stopReason?: string; errorMessage?: string } | null
+    if (msg?.role !== 'assistant') continue
+    if (msg.stopReason === 'error') {
+      lastRunFailure = { aborted: false, errorMessage: msg.errorMessage || 'unknown LLM error' }
+    } else if (msg.stopReason === 'aborted') {
+      lastRunFailure = { aborted: true, errorMessage: msg.errorMessage || '' }
+    } else {
+      lastRunFailure = null
+    }
+    return
+  }
+  lastRunFailure = null
+}
+
 export default function (pi: ExtensionAPI) {
   // 会话启动 / 重建（/new 后 pi 重新加载扩展并再次触发 session_start）：
   // 推送 idle，宿主驱动 waiting 态队列任务放行
-  pi.on("session_start", () => {
-    void push("idle", "Session started")
+  pi.on('session_start', () => {
+    void push('idle', 'Session started')
   })
 
   // 用户提交 prompt（含队列自动投递）→ 任务进入执行状态
-  pi.on("before_agent_start", (event) => {
-    void push("in_progress", `User submitted: ${promptPreview(event.prompt)}`)
+  pi.on('before_agent_start', (event) => {
+    void push('in_progress', `User submitted: ${promptPreview(event.prompt)}`)
   })
 
   // 工具执行结束（成功/失败均视为任务进行中，与 PostToolUse 语义一致）
-  pi.on("tool_execution_end", (event) => {
-    void push("in_progress", `Tool ${event.toolName} completed`)
+  pi.on('tool_execution_end', (event) => {
+    void push('in_progress', `Tool ${event.toolName} completed`)
   })
 
-  // run 完全收敛（自动重试/压缩/排队续跑均结束）→ 正常完成
-  pi.on("agent_settled", () => {
-    void push("completed", "Task completed")
+  // agent loop 结束：记录末条 assistant 消息的成败状态，供 agent_settled 判定终态
+  // （扩展层拿不到 auto_retry_start/end 事件，stopReason/errorMessage 是唯一错误信号）
+  pi.on('agent_end', (event) => {
+    recordLastRunFailure(event.messages)
+  })
+
+  // run 完全收敛（自动重试/压缩/排队续跑均结束）。agent_settled 在 finally 中发出，
+  // 失败收敛（429 等重试耗尽 / 用户中断）也会到达——按最近一次 run 成败判定终态：
+  // 正常结束才 completed；LLM 报错或用户中断推 interrupted，否则失败任务被误标完成、
+  // 队列立即调度下一项（宿主 valid_statuses 无 failed，interrupted 是唯一的失败终态）
+  pi.on('agent_settled', () => {
+    if (lastRunFailure) {
+      const { aborted, errorMessage } = lastRunFailure
+      lastRunFailure = null
+      void push(
+        'interrupted',
+        aborted ? `Task aborted: ${errorMessage}` : `Task failed: ${errorMessage}`,
+      )
+      return
+    }
+    void push('completed', 'Task completed')
   })
 
   // 退出 pi → 会话中断；new/fork/resume 仅切换会话（pi 仍运行），不推送
-  pi.on("session_shutdown", (event) => {
-    if (event.reason === "quit") {
-      void push("interrupted", "Session ended: quit")
+  pi.on('session_shutdown', (event) => {
+    if (event.reason === 'quit') {
+      void push('interrupted', 'Session ended: quit')
     }
   })
 }

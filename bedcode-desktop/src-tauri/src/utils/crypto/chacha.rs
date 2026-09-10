@@ -6,8 +6,8 @@
 //! 接口与 [`crate::utils::crypto::aes_gcm`] 完全一致，调用方可按平台能力择一使用。
 
 use chacha20poly1305::{
-    ChaCha20Poly1305, Key, Nonce,
     aead::{Aead, KeyInit, Payload},
+    ChaCha20Poly1305, Key, Nonce,
 };
 use rand::rngs::OsRng;
 use rand::RngCore;
@@ -36,12 +36,7 @@ pub fn generate_nonce() -> [u8; NONCE_LEN] {
 /// 使用 ChaCha20-Poly1305 加密
 ///
 /// 语义与 [`crate::utils::crypto::aes_gcm::encrypt`] 一致，返回密文 + Poly1305 认证标签。
-pub fn encrypt(
-    key: &[u8; KEY_LEN],
-    nonce: &[u8; NONCE_LEN],
-    plaintext: &[u8],
-    aad: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+pub fn encrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], plaintext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let payload = Payload {
         msg: plaintext,
@@ -53,12 +48,7 @@ pub fn encrypt(
 }
 
 /// 使用 ChaCha20-Poly1305 解密
-pub fn decrypt(
-    key: &[u8; KEY_LEN],
-    nonce: &[u8; NONCE_LEN],
-    ciphertext: &[u8],
-    aad: Option<&[u8]>,
-) -> Result<Vec<u8>> {
+pub fn decrypt(key: &[u8; KEY_LEN], nonce: &[u8; NONCE_LEN], ciphertext: &[u8], aad: Option<&[u8]>) -> Result<Vec<u8>> {
     let cipher = ChaCha20Poly1305::new(Key::from_slice(key));
     let payload = Payload {
         msg: ciphertext,

@@ -8,6 +8,8 @@ CREATE TABLE IF NOT EXISTS pairings (
     public_key TEXT NOT NULL,
     address TEXT,
     session_token TEXT,
+    -- 设备唯一 ID（ANDROID_ID 等）哈希：跨指纹合并配对记录的锚点
+    uid_hash TEXT,
     paired_at TEXT NOT NULL,
     last_seen TEXT,
     connect_count INTEGER DEFAULT 1,
@@ -18,7 +20,7 @@ CREATE TABLE IF NOT EXISTS pairings (
 CREATE TABLE IF NOT EXISTS session_configs (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2')),
+    environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2', 'linux')),
     wsl_distro TEXT,
     working_dir TEXT NOT NULL,
     command TEXT NOT NULL,

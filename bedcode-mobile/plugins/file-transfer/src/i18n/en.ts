@@ -25,6 +25,27 @@ export default {
   // Connected but peer announcement not received yet: placeholder name
   'transfer.peer.unknown': 'Unknown device',
 
+  // ==================== Nearby devices sheet ====================
+  'transfer.devices.title': 'Nearby Devices',
+  'transfer.devices.subtitle': 'BedCode nodes on this network',
+  'transfer.devices.empty':
+    'No nearby devices found; make sure the other device has BedCode open and is on the same network',
+  'transfer.devices.online': 'Online',
+  'transfer.devices.recentSeen': 'Recently seen',
+  'transfer.devices.connected': 'Connected',
+  'transfer.devices.connecting': 'Connecting…',
+  'transfer.devices.capNone': 'No transfer',
+  'transfer.devices.activeCurrent': 'Current',
+  'transfer.devices.setActive': 'Set active',
+  'transfer.devices.connect': 'Connect',
+  'transfer.devices.disconnect': 'Disconnect',
+  'transfer.devices.denied': 'Connection rejected by the other device',
+  'transfer.devices.unreachable': 'Cannot connect; the device may be offline',
+  'transfer.devices.trustHint':
+    'First-time connections need approval on the other side; manage trust in Settings → Trusted peers',
+  'transfer.devices.scan': 'Discover',
+  'transfer.devices.scanning': 'Discovering…',
+
   // ==================== Top bar / browsing ====================
   'transfer.topbar.settings': 'Settings',
   'transfer.topbar.closeSettings': 'Back',
@@ -32,6 +53,7 @@ export default {
   'transfer.topbar.queryPeer': 'Re-detect peer',
   'transfer.topbar.downloadSelected': 'Download ({count} · {size})',
   'transfer.topbar.uploadFile': 'Upload file',
+  'transfer.topbar.connectDevice': 'Connect (nearby devices)',
   'transfer.breadcrumb.home': 'Files',
   'transfer.table.empty': 'This folder is empty',
   'transfer.table.loading': 'Loading...',
@@ -48,6 +70,7 @@ export default {
   'transfer.task.state.failed': 'Failed',
   'transfer.task.state.rejected': 'Rejected',
   'transfer.task.state.cancelled': 'Cancelled',
+  'transfer.task.state.interrupted': 'Interrupted (app restarted)',
   'transfer.task.pause': 'Pause',
   'transfer.task.resume': 'Resume',
   'transfer.task.cancel': 'Cancel',
@@ -64,6 +87,9 @@ export default {
   'transfer.task.reason.dirUnavailable': 'This folder is currently unavailable',
   'transfer.task.reason.noRoots': 'The remote device has not shared any folders',
   'transfer.task.reason.localNotFound': 'Local file not found',
+  'transfer.task.reason.cancelledBySender': 'Cancelled by the sender',
+  'transfer.task.reason.cancelledByReceiver': 'Cancelled by the receiver',
+  'transfer.task.reason.cancelledBySelf': 'Cancelled by you',
   'transfer.task.reason.unknown': 'Transfer failed',
 
   // ==================== Mini transfer bar ====================
@@ -86,7 +112,6 @@ export default {
   // ==================== Settings ====================
   'transfer.settings.title': 'File Transfer Settings',
   'transfer.settings.sharedRoots': 'Shared folders',
-  'transfer.settings.addRootHint': 'Shared folders are picked with the system directory picker and stay authorized across restarts. You can browse and upload from them inside the app without the "All files access" permission.',
   'transfer.settings.pickRoot': 'Pick folder',
   'transfer.settings.picking': 'Picking…',
   'transfer.settings.pickFailed': 'Failed to add: folder selection incomplete or authorization failed. Try again.',
@@ -102,9 +127,11 @@ export default {
   'transfer.settings.downloadDir': 'Download folder',
   'transfer.settings.noDownloadDir': 'Not set',
   'transfer.settings.downloadDirHint': 'Downloads are saved to the system Downloads folder',
+  'transfer.settings.openDownloadDir': 'Open',
+  'transfer.settings.openDownloadDirOpening': 'Opening…',
+  'transfer.settings.openDownloadDirFailed': 'Failed to open the download folder',
   'transfer.settings.concurrency': 'Concurrency',
   'transfer.settings.concurrencyHint': 'Number of files transferred at once (1–8)',
-  'transfer.settings.plainWarning': 'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
   'transfer.settings.saved': 'Settings saved',
 
   // ==================== Upload page (shared directories) ====================
@@ -163,6 +190,7 @@ export default {
   'transfer.size.gb': '{value} GB',
   'transfer.time.justNow': 'Just now',
   'transfer.time.minutesAgo': '{count} min ago',
+  'transfer.time.hoursAgo': '{count} hr ago',
 
   // ==================== v2 queue tabs / batch approval / receiving / history ====================
   'transfer.queue.all': 'All',
@@ -188,6 +216,9 @@ export default {
   'transfer.history.clear': 'Clear history',
   'transfer.history.empty': 'No transfer history',
   'transfer.history.openFolder': 'Show in folder',
+  'transfer.history.clearConfirmTitle': 'Clear transfer history?',
+  'transfer.history.clearConfirmMessage': 'All history entries (sent and received) will be deleted. This cannot be undone.',
+  'transfer.history.clearConfirmAction': 'Clear',
   'transfer.history.results.completed': 'Completed',
   'transfer.history.results.failed': 'Failed',
   'transfer.history.results.rejected': 'Rejected',
@@ -197,5 +228,55 @@ export default {
   'transfer.settings.receivingPolicyAccept': 'Accept automatically',
   'transfer.settings.receivingPolicyReject': 'Reject automatically',
   'transfer.settings.receivingPolicyHint': 'Whether to ask before receiving files from peers',
+  'transfer.settings.encryption': 'Transfer encryption',
+  'transfer.settings.encryptionOn': 'On',
+  'transfer.settings.encryptionOff': 'Off',
+  'transfer.settings.encryptionHint': 'When enabled, transfers are automatically encrypted in transit to protect them from interception.',
   'transfer.settings.approvalTimeout': 'Approval timeout (s)',
-}
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': 'Connection request',
+  'transfer.consent.body': '{name} wants to connect to your device for file transfer',
+  'transfer.consent.fingerprint': 'Device fingerprint: {fingerprint}',
+  'transfer.consent.timeoutHint': 'Auto-reject if unanswered in {seconds}s',
+  'transfer.consent.namelessHint': 'The device name could not be verified; check the fingerprint before deciding',
+  'transfer.consent.trust': 'Trust',
+  'transfer.consent.deny': 'Deny',
+  'transfer.consent.autoTrustedToast': 'Auto-trusted paired device {name}',
+
+  // ==================== Trusted peers (spec decision 8) ====================
+  'transfer.trusted.title': 'Trusted peers',
+  'transfer.trusted.loading': 'Loading...',
+  'transfer.trusted.empty': 'No trusted peers yet; trust is established after the first approved connection',
+  'transfer.trusted.loadFailed': 'Failed to load trusted peers',
+  'transfer.trusted.retry': 'Retry',
+  'transfer.trusted.addedAt': 'Added: {time}',
+  'transfer.trusted.revoke': 'Revoke',
+  'transfer.trusted.cancel': 'Cancel',
+  'transfer.trusted.revokeTitle': 'Revoke trust',
+  'transfer.trusted.revokeBody': 'After revoking, {name} will need your approval again on the next connection. Revoke trust for this device?',
+  'transfer.trusted.revokeFailed': 'Revoke failed; please try again later',
+  'transfer.trusted.revokedToast': 'Revoked trust for {name}',
+
+  // ==================== Three-section main view (Transfers / Browse / Devices) ====================
+  'transfer.v2.tab.transfers': 'Transfers',
+  'transfer.v2.tab.browse': 'Browse',
+  'transfer.v2.tab.devices': 'Devices',
+  'transfer.v2.filter.all': 'All',
+  'transfer.v2.filter.sending': 'Sending',
+  'transfer.v2.filter.receiving': 'Receiving',
+  'transfer.v2.filter.history': 'History',
+  'transfer.v2.upload.cta': 'Upload file',
+  'transfer.v2.queue.hint': '{count} in queue',
+  'transfer.v2.active.overall': 'Overall {percent}%',
+  'transfer.v2.active.viewQueue': 'View queue',
+  'transfer.v2.devices.subtitle': 'BedCode nodes on the same network',
+  'transfer.v2.pendingRequests': '{count} pending request(s)',
+  'transfer.v2.history.openFolder': 'Open containing folder',
+  'transfer.v2.history.noLocalFile': 'File not on this device',
+  'transfer.history.allFilesAccess.title': 'All files access required',
+  'transfer.history.allFilesAccess.message': 'Opening the system Downloads folder requires the "All files access" permission (Settings → Apps → Special access → All files access). Some devices do not offer this switch; in that case BedCode automatically shows a mirrored folder view of your downloads, no permission needed.',
+  'transfer.history.allFilesAccess.cancel': 'Cancel',
+  'transfer.history.allFilesAccess.goToSettings': 'Open settings',
+  'transfer.history.allFilesAccess.after': 'Enable "All files access" in system settings, then tap "Show in folder" again',
+} satisfies MessageSchema

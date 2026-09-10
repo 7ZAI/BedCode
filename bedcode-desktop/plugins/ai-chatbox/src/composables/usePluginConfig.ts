@@ -7,8 +7,8 @@
  * 非法枚举值回退默认，避免坏数据流入请求构建。
  */
 import { ref } from 'vue'
-import { PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/plugin-sdk-desktop'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import { PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/bedcode-plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { PluginConfig, ReasoningEffort, ThinkingMode, CodeTheme } from '../types'
 import {
   CODE_FONT_SIZE_MAX,
@@ -17,6 +17,12 @@ import {
   CODE_LINE_HEIGHT_MIN,
   DEFAULT_CODE_LINE_HEIGHT,
   DEFAULT_PLUGIN_CONFIG,
+  RATE_LIMIT_INITIAL_DELAY_MS_MAX,
+  RATE_LIMIT_INITIAL_DELAY_MS_MIN,
+  RATE_LIMIT_MAX_DELAY_MS_MAX,
+  RATE_LIMIT_MAX_DELAY_MS_MIN,
+  RATE_LIMIT_MAX_RETRIES_MAX,
+  RATE_LIMIT_MAX_RETRIES_MIN,
 } from '../types'
 
 const THINKING_MODES: ThinkingMode[] = ['default', 'enabled', 'disabled']
@@ -42,12 +48,41 @@ export function usePluginConfig(context: PluginContext) {
       const saved = await context.storage.get<Partial<PluginConfig>>(PLUGIN_CONFIG_STORAGE_KEY)
       if (!saved || typeof saved !== 'object') return
       config.value = {
-        thinkingMode: normalizeEnum(saved.thinkingMode, THINKING_MODES, DEFAULT_PLUGIN_CONFIG.thinkingMode),
-        reasoningEffort: normalizeEnum(saved.reasoningEffort, REASONING_EFFORTS, DEFAULT_PLUGIN_CONFIG.reasoningEffort),
-        showReasoning: typeof saved.showReasoning === 'boolean' ? saved.showReasoning : DEFAULT_PLUGIN_CONFIG.showReasoning,
+        thinkingMode: normalizeEnum(
+          saved.thinkingMode,
+          THINKING_MODES,
+          DEFAULT_PLUGIN_CONFIG.thinkingMode,
+        ),
+        reasoningEffort: normalizeEnum(
+          saved.reasoningEffort,
+          REASONING_EFFORTS,
+          DEFAULT_PLUGIN_CONFIG.reasoningEffort,
+        ),
+        showReasoning:
+          typeof saved.showReasoning === 'boolean'
+            ? saved.showReasoning
+            : DEFAULT_PLUGIN_CONFIG.showReasoning,
         codeLineHeight: normalizeLineHeight(saved.codeLineHeight),
         codeFontSize: normalizeFontSize(saved.codeFontSize),
         codeTheme: normalizeEnum(saved.codeTheme, CODE_THEMES, DEFAULT_PLUGIN_CONFIG.codeTheme),
+        rateLimitMaxRetries: normalizeInt(
+          saved.rateLimitMaxRetries,
+          RATE_LIMIT_MAX_RETRIES_MIN,
+          RATE_LIMIT_MAX_RETRIES_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitMaxRetries,
+        ),
+        rateLimitInitialDelayMs: normalizeInt(
+          saved.rateLimitInitialDelayMs,
+          RATE_LIMIT_INITIAL_DELAY_MS_MIN,
+          RATE_LIMIT_INITIAL_DELAY_MS_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitInitialDelayMs,
+        ),
+        rateLimitMaxDelayMs: normalizeInt(
+          saved.rateLimitMaxDelayMs,
+          RATE_LIMIT_MAX_DELAY_MS_MIN,
+          RATE_LIMIT_MAX_DELAY_MS_MAX,
+          DEFAULT_PLUGIN_CONFIG.rateLimitMaxDelayMs,
+        ),
       }
     } catch (e) {
       // 读取失败保持默认值（配置缺失不阻断聊天），仅记录日志
@@ -63,6 +98,12 @@ export function usePluginConfig(context: PluginContext) {
 /** 枚举值归一化：不在白名单内（含 undefined/类型不符）一律回退默认 */
 function normalizeEnum<T extends string>(value: unknown, whitelist: readonly T[], fallback: T): T {
   return whitelist.includes(value as T) ? (value as T) : fallback
+}
+
+/** 整数归一化：非有限数 / 超出 [MIN, MAX] 范围一律回退默认，小数就近取整（限流重试参数） */
+function normalizeInt(value: unknown, min: number, max: number, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback
+  return Math.round(Math.min(Math.max(value, min), max))
 }
 
 /** 数字归一化：非有限数 / 超出 [MIN, MAX] 范围一律回退默认（桌面配置页可输入任意值） */
@@ -82,7 +123,9 @@ function normalizeLineHeight(value: unknown): number {
     return mapped !== undefined ? mapped : DEFAULT_CODE_LINE_HEIGHT
   }
   if (typeof value === 'number' && Number.isFinite(value)) {
-    return Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
+    return (
+      Math.round(Math.min(Math.max(value, CODE_LINE_HEIGHT_MIN), CODE_LINE_HEIGHT_MAX) * 10) / 10
+    )
   }
   return DEFAULT_CODE_LINE_HEIGHT
 }

@@ -17,17 +17,12 @@ use std::future::Future;
 ///     // ... 可能 panic 的任务逻辑 ...
 /// });
 /// ```
-pub fn spawn_with_error_boundary<F>(
-    task_name: &'static str,
-    future: F,
-) -> tokio::task::JoinHandle<()>
+pub fn spawn_with_error_boundary<F>(task_name: &'static str, future: F) -> tokio::task::JoinHandle<()>
 where
     F: Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(future)
-            .catch_unwind()
-            .await;
+        let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
 
         if let Err(panic_err) = result {
             let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {

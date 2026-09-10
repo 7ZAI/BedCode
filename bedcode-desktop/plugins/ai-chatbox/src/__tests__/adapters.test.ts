@@ -25,11 +25,7 @@ function provider(overrides: Partial<ApiProvider> = {}): ApiProvider {
 }
 
 function messages(extra: AdapterMessage[] = []): AdapterMessage[] {
-  return [
-    { role: 'system', content: 'be terse' },
-    { role: 'user', content: 'hi' },
-    ...extra,
-  ]
+  return [{ role: 'system', content: 'be terse' }, { role: 'user', content: 'hi' }, ...extra]
 }
 
 /** 解析请求体 JSON（body 为字符串） */
@@ -63,7 +59,11 @@ describe('openai adapter', () => {
   })
 
   it('对话级 model 覆盖优先于 activeModel', () => {
-    const req = openaiAdapter.buildRequest(provider({ model: 'deepseek-reasoner' }), messages(), 's1')
+    const req = openaiAdapter.buildRequest(
+      provider({ model: 'deepseek-reasoner' }),
+      messages(),
+      's1',
+    )
     expect(bodyOf(req).model).toBe('deepseek-reasoner')
   })
 
@@ -200,21 +200,32 @@ describe('anthropic adapter', () => {
 
   it('流解析：content_block_delta.delta.text 提取', () => {
     const ev = anthropicAdapter.parseStreamEvent(
-      JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: '你好' } }),
+      JSON.stringify({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: '你好' },
+      }),
     )
     expect(ev).toEqual({ chunk: '你好' })
   })
 
   it('流解析：thinking_delta 提取为 reasoning', () => {
     const ev = anthropicAdapter.parseStreamEvent(
-      JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: '思考' } }),
+      JSON.stringify({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'thinking_delta', thinking: '思考' },
+      }),
     )
     expect(ev).toEqual({ reasoning: '思考' })
   })
 
   it('流解析：message_start 携带输入 usage（部分字段缺省）', () => {
     const ev = anthropicAdapter.parseStreamEvent(
-      JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 25, output_tokens: 1 } } }),
+      JSON.stringify({
+        type: 'message_start',
+        message: { usage: { input_tokens: 25, output_tokens: 1 } },
+      }),
     )
     expect(ev?.usage).toEqual({ promptTokens: 25, completionTokens: 1 })
   })
@@ -229,7 +240,11 @@ describe('anthropic adapter', () => {
 
   it('流解析：message_delta 携带输出 usage', () => {
     const ev = anthropicAdapter.parseStreamEvent(
-      JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 15 } }),
+      JSON.stringify({
+        type: 'message_delta',
+        delta: { stop_reason: 'end_turn' },
+        usage: { output_tokens: 15 },
+      }),
     )
     expect(ev?.usage).toEqual({ completionTokens: 15 })
   })
@@ -377,9 +392,7 @@ describe('注册表', () => {
   })
 
   it('模型列表响应解析：形状不符抛错', () => {
-    expect(() => parseModelsResponse('openai', '{"object":"list"}')).toThrow(
-      /bad models response/,
-    )
+    expect(() => parseModelsResponse('openai', '{"object":"list"}')).toThrow(/bad models response/)
     expect(() => parseModelsResponse('openai', 'not json')).toThrow(/bad models response/)
   })
 })

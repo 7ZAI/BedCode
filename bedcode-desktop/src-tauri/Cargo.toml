@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-desktop"
-version = "2.0.0"
+version = "2.1.0"
 description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
 authors = ["binblink"]
 edition = "2021"
@@ -13,7 +13,7 @@ crate-type = ["cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "test"] }
 tauri-plugin-shell = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-dialog = "2"
@@ -23,6 +23,9 @@ tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
+
+# 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
+libc = "0.2"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
@@ -67,9 +70,10 @@ anyhow = "1"
 thiserror = "1"
 
 # Logging
-tracing = { version = "0.1", features = ["log"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing = { version = "0.1", features = ["log", "attributes"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
+tracing-error = "0.2"
 tracing-log = "0.2"
 # ANSI 样式（控制台日志格式化器使用；与 tracing-subscriber 传递依赖同版本）
 nu-ansi-term = "0.50"
@@ -98,6 +102,10 @@ sysinfo = "0.33"
 
 # Plugin API
 bedcode-plugin-api = { path = "../packages/plugin-sdk-desktop/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
+bedcode-peer-net = { path = "../../packages/peer-net" }
+# 链路报文加密协议核心（issue 09 共享 crate，与移动端 event WS 共同消费）
+bedcode-link-crypto = { path = "../../packages/link-crypto" }
 inventory = "0.3"
 
 # Power management (prevent system sleep)
@@ -124,14 +132,29 @@ actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
+wasmtime-wasi = "47"
 
 # Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
 # + 文件定位 COM API（SHOpenFolderAndSelectItems / ShellExecuteExW，见 commands/opener.rs）
+# + 电源唤醒监听（GetModuleHandleW，见 system/power_wake.rs）
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Registry", "Win32_System_LibraryLoader"] }
+
+# Linux：systemd-logind 休眠抑制（org.freedesktop.login1.Inhibit）
+# 与 nosleep 引入的 dbus crate 同版本（不新增依赖树）；
+# 相比 nosleep 只支持 GNOME SessionManager，logind 与桌面环境无关（见 system/power.rs）
+[target.'cfg(target_os = "linux")'.dependencies]
+dbus = "0.9"
+
+# WDIO E2E 测试插件：仅 debug 构建编译/注册（release 不含测试插件，见 lib.rs 的 cfg(debug_assertions) 注册）
+[target.'cfg(debug_assertions)'.dependencies]
+tauri-plugin-wdio = "1"
 
 [dev-dependencies]
 tempfile = "3"
+# 集成测试 HTTP 配对（POST /api/auth/* 换取 JWT）：已为运行依赖，dev 复用同版本
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
 # （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
 wit-component = "=0.256.0"
@@ -149,7 +172,10 @@ strip = true
 
 # ==================== 开发模式优化 ====================
 [profile.dev]
-debug = 1
+# debug = 1 全量调试信息使 rustc 编译巨型 crate（含 wasmtime）时内存峰值过高，
+# 在 collect_and_partition_mono_items 阶段 OOM（0xc0000409，页面文件被禁用的机器上必现）。
+# line-tables-only 保留行号回溯（debugger 变量查看不可用），编译内存与 target 体积大幅下降
+debug = "line-tables-only"
 incremental = true
 split-debuginfo = "packed"
 

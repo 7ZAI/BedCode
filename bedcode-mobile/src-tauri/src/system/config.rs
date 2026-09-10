@@ -310,10 +310,7 @@ impl AppConfig {
 
         if !is_valid {
             self.plugin.token = Self::generate_token();
-            tracing::info!(
-                "Generated new plugin token (len={})",
-                self.plugin.token.len()
-            );
+            tracing::info!("Generated new plugin token (len={})", self.plugin.token.len());
             true
         } else {
             false
@@ -334,8 +331,7 @@ impl AppConfig {
     ///
     /// 如果未初始化，返回默认配置
     pub fn global() -> &'static AppConfig {
-        static DEFAULT: std::sync::LazyLock<AppConfig> =
-            std::sync::LazyLock::new(AppConfig::default);
+        static DEFAULT: std::sync::LazyLock<AppConfig> = std::sync::LazyLock::new(AppConfig::default);
         CONFIG_INSTANCE.get().unwrap_or(&DEFAULT)
     }
 }

@@ -27,13 +27,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
+          cache: pnpm
           cache-dependency-path: |
-            bedcode-desktop/package-lock.json
-            bedcode-mobile/packages/plugin-sdk-mobile/package-lock.json
+            bedcode-desktop/pnpm-lock.yaml
+            bedcode-mobile/packages/plugin-sdk-mobile/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -59,24 +63,24 @@ jobs:
       - name: Build & test desktop SDK
         working-directory: bedcode-desktop
         run: |
-          npm ci
-          npm run build -w @binblink/plugin-sdk-desktop
-          npm run test:run -w @binblink/plugin-sdk-desktop
+          pnpm install --frozen-lockfile
+          pnpm run build --filter @binblink/bedcode-plugin-sdk-desktop
+          pnpm run test:run --filter @binblink/bedcode-plugin-sdk-desktop
 
       - name: Build & test mobile SDK
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
         run: |
-          npm ci
-          npm run build
-          npm run test:run
+          pnpm install --frozen-lockfile
+          pnpm run build
+          pnpm run test:run
 
       - name: Dry-run npm pack (smoke check)
         working-directory: bedcode-desktop/packages/plugin-sdk-desktop
-        run: npm pack --dry-run
+        run: pnpm pack --dry-run
 
       - name: Dry-run npm pack (mobile)
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
-        run: npm pack --dry-run
+        run: pnpm pack --dry-run
 
       - name: Build desktop SDK rust (verify compile)
         # cargo package dry-run 会校验 path 依赖（bedcode-plugin-api-macros）已在 crates.io，
@@ -101,6 +105,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
@@ -109,22 +116,22 @@ jobs:
       # prepublishOnly 会执行 build（tsup）与 test，必须先在对应目录安装依赖
       - name: Install desktop SDK deps
         working-directory: bedcode-desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      # desktop SDK 是 npm workspace 成员，用 -w 发布；prepublishOnly 会先 build + test
-      - name: Publish @binblink/plugin-sdk-desktop
+      # desktop SDK 是 pnpm workspace 成员，用 --filter 发布；prepublishOnly 会先 build + test
+      - name: Publish @binblink/bedcode-plugin-sdk-desktop
         working-directory: bedcode-desktop
-        run: npm publish -w @binblink/plugin-sdk-desktop --access public
+        run: pnpm --filter @binblink/bedcode-plugin-sdk-desktop publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Install mobile SDK deps
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
-      - name: Publish @binblink/plugin-sdk-mobile
+      - name: Publish @binblink/bedcode-plugin-sdk-mobile
         working-directory: bedcode-mobile/packages/plugin-sdk-mobile
-        run: npm publish --access public
+        run: pnpm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

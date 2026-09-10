@@ -143,18 +143,17 @@ impl LifecycleRegistry {
         // 克隆列表后立即释放锁，避免在异步执行期间持锁
         let hooks: Vec<_> = {
             let hooks = self.startup_hooks.read().unwrap();
-            hooks.iter().map(|e| (e.owner.clone(), e.priority, e.hook.clone())).collect()
+            hooks
+                .iter()
+                .map(|e| (e.owner.clone(), e.priority, e.hook.clone()))
+                .collect()
         };
 
         tracing::info!("Running {} startup hook(s)", hooks.len());
 
         for (owner, priority, hook) in hooks {
-            tracing::debug!("Startup hook: {} (priority={})", owner, priority);
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS),
-                hook(),
-            )
-            .await;
+            tracing::debug!(hook = %owner, priority, "Startup hook running");
+            let result = tokio::time::timeout(std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS), hook()).await;
 
             if result.is_err() {
                 tracing::error!(
@@ -174,18 +173,17 @@ impl LifecycleRegistry {
     pub async fn run_shutdown_hooks(&self) {
         let hooks: Vec<_> = {
             let hooks = self.shutdown_hooks.read().unwrap();
-            hooks.iter().map(|e| (e.owner.clone(), e.priority, e.hook.clone())).collect()
+            hooks
+                .iter()
+                .map(|e| (e.owner.clone(), e.priority, e.hook.clone()))
+                .collect()
         };
 
         tracing::info!("Running {} shutdown hook(s)", hooks.len());
 
         for (owner, priority, hook) in hooks {
-            tracing::info!("Shutdown hook: {} (priority={})", owner, priority);
-            let result = tokio::time::timeout(
-                std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS),
-                hook(),
-            )
-            .await;
+            tracing::info!(hook = %owner, priority, "Shutdown hook running");
+            let result = tokio::time::timeout(std::time::Duration::from_secs(SHUTDOWN_HOOK_TIMEOUT_SECS), hook()).await;
 
             if result.is_err() {
                 tracing::error!(
@@ -206,17 +204,16 @@ impl LifecycleRegistry {
     pub async fn run_window_close_hooks(&self) -> bool {
         let hooks: Vec<_> = {
             let hooks = self.window_close_hooks.read().unwrap();
-            hooks.iter().map(|e| (e.owner.clone(), e.priority, e.hook.clone())).collect()
+            hooks
+                .iter()
+                .map(|e| (e.owner.clone(), e.priority, e.hook.clone()))
+                .collect()
         };
 
         for (owner, priority, hook) in hooks {
             let result = hook().await;
             if !result {
-                tracing::info!(
-                    "Window close prevented by hook: {} (priority={})",
-                    owner,
-                    priority
-                );
+                tracing::info!(hook = %owner, priority, "Window close prevented by hook");
                 return false;
             }
         }
@@ -232,8 +229,7 @@ impl Default for LifecycleRegistry {
 }
 
 /// 全局单例
-static LIFECYCLE_REGISTRY: std::sync::LazyLock<LifecycleRegistry> =
-    std::sync::LazyLock::new(LifecycleRegistry::new);
+static LIFECYCLE_REGISTRY: std::sync::LazyLock<LifecycleRegistry> = std::sync::LazyLock::new(LifecycleRegistry::new);
 
 /// 获取全局生命周期注册表
 pub fn lifecycle_registry() -> &'static LifecycleRegistry {
@@ -289,7 +285,7 @@ pub fn register_core_lifecycle_hooks() {
     registry.on_shutdown("mdns-advertiser", 40, || async {
         let ctx = crate::system::app_context::AppContext::global();
         let advertiser = ctx.mdns_advertiser();
-        let mut a = advertiser.write().await;
+        let a = advertiser.write().await;
         if let Err(e) = a.stop().await {
             tracing::error!("Failed to stop mDNS during shutdown: {}", e);
         }
@@ -316,9 +312,12 @@ pub fn register_window_close_hooks() {
         let ctx = crate::system::app_context::AppContext::global();
         let sm = ctx.session_manager();
         let sessions = sm.list_sessions().await;
-        let has_running = sessions
-            .iter()
-            .any(|s| matches!(s.status, crate::enums::SessionStatus::Running | crate::enums::SessionStatus::Starting));
+        let has_running = sessions.iter().any(|s| {
+            matches!(
+                s.status,
+                crate::enums::SessionStatus::Running | crate::enums::SessionStatus::Starting
+            )
+        });
 
         if has_running {
             tracing::warn!("Window close prevented: running sessions exist");

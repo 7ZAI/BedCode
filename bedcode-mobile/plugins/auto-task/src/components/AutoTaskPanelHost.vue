@@ -161,34 +161,15 @@
             <div v-for="(task, index) in queue" :key="task.id" class="atp-queue-item">
               <div class="atp-queue-item-main">
                 <span class="atp-queue-item-position">{{ task.position + 1 }}</span>
-                <!-- 编辑模式 -->
-                <input
-                  v-if="editingId === task.id"
-                  v-model="editingText"
-                  class="atp-edit-input"
-                  type="text"
-                  @keydown.enter="saveEdit"
-                  @keydown.escape="editingId = null"
-                  ref="editInputRef"
-                />
-                <p v-else class="atp-queue-item-prompt">{{ task.prompt }}</p>
+                <!-- 任务内容：整块可点，打开多行编辑弹窗（多行任务比行内单行 input 友好） -->
+                <p
+                  class="atp-queue-item-prompt"
+                  role="button"
+                  :aria-label="t('edit')"
+                  @click="startEdit(task)"
+                >{{ task.prompt }}</p>
               </div>
               <div class="atp-queue-item-actions">
-                <!-- 编辑模式按钮 -->
-                <template v-if="editingId === task.id">
-                  <button class="atp-action-btn atp-action-btn-primary" @click="saveEdit">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
-                    </svg>
-                  </button>
-                  <button class="atp-action-btn" @click="editingId = null">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </template>
-                <!-- 正常模式按钮 -->
-                <template v-else>
                   <button
                     class="atp-action-btn"
                     :disabled="index === 0"
@@ -219,7 +200,6 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
                     </svg>
                   </button>
-                </template>
               </div>
             </div>
           </div>
@@ -227,6 +207,45 @@
       </div>
     </div>
   </Transition>
+
+  <!-- 编辑任务弹窗（Teleport 脱离面板容器；z-[110] 盖住面板 z-[100]） -->
+  <Teleport to="body">
+    <Transition name="atp-edit">
+      <div
+        v-if="editingTask"
+        class="fixed inset-0 z-[110] flex items-end justify-center mobile-ui"
+        @click.self="cancelEdit"
+      >
+        <div class="absolute inset-0 bg-[var(--mobile-overlay-heavy)]" @click="cancelEdit"></div>
+        <div class="atp-edit-sheet mobile-ui" :style="editorSheetStyle" @click.stop>
+          <div class="atp-edit-grabber"></div>
+          <div class="atp-edit-head">
+            <h4 class="atp-edit-title">{{ t('editTitle') }}</h4>
+            <button class="atp-edit-close" :aria-label="t('cancel')" @click="cancelEdit">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+          <!-- 多行 textarea：Enter 换行不触发保存，保存走显式按钮 -->
+          <textarea
+            ref="editTextareaRef"
+            v-model="editText"
+            class="atp-edit-textarea"
+            rows="5"
+            :placeholder="t('editPlaceholder')"
+          ></textarea>
+          <div class="atp-edit-actions">
+            <span class="atp-edit-hint">{{ t('editHint') }}</span>
+            <div class="atp-edit-buttons">
+              <button class="atp-edit-cancel" @click="cancelEdit">{{ t('cancel') }}</button>
+              <button class="atp-edit-save" :disabled="!canSaveEdit || savingEdit" @click="saveEdit">{{ t('save') }}</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Transition>
+  </Teleport>
 </template>
 
 <script setup lang="ts">
@@ -241,13 +260,15 @@
  *   DOM 事件），面板整体上移避开系统输入法
  */
 import { ref, computed, watch, nextTick, inject, onMounted, onUnmounted } from 'vue'
-import { getMobileApi, getPresetTasks } from '@binblink/plugin-sdk-mobile'
-import type { PluginContext, MobileHostApi } from '@binblink/plugin-sdk-mobile'
+import { getMobileApi, getPresetTasks } from '@binblink/bedcode-plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import { getAutoTaskApi } from '../api'
 import { autoTaskPanelVisible } from '../state'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string): string => context.i18n.t(key)
-const mobileApi = getMobileApi() as MobileHostApi
+const mobileApi = getMobileApi()
+const api = getAutoTaskApi()
 
 // ==================== Types ====================
 
@@ -282,10 +303,13 @@ const currentTask = ref<CurrentTask | null>(null)
 const autoExecute = ref(false)
 const autoAnswer = ref(false)
 
-// 编辑
-const editingId = ref<string | null>(null)
-const editingText = ref('')
-const editInputRef = ref<HTMLInputElement | null>(null)
+// 编辑（弹窗式：多行 textarea 支持换行，替代原行内单行 input）
+const editingTask = ref<QueueTaskItem | null>(null)
+const editText = ref('')
+const editTextareaRef = ref<HTMLTextAreaElement | null>(null)
+const savingEdit = ref(false)
+/** 空白内容不可保存 */
+const canSaveEdit = computed(() => editText.value.trim().length > 0)
 
 // 确认 / 错误
 const confirmingClear = ref(false)
@@ -355,7 +379,7 @@ function close() {
 async function loadQueue() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpTaskQueueList(activeSessionId.value)
+    const result = await api.httpTaskQueueList(activeSessionId.value)
     if (result.code === 0 && result.data) {
       queue.value = result.data.tasks || []
       activeTask.value = result.data.active_task || null
@@ -369,7 +393,7 @@ async function loadQueue() {
 async function loadCurrentTask() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpCurrentTask(activeSessionId.value)
+    const result = await api.httpCurrentTask(activeSessionId.value)
     if (result.code === 0 && result.data) {
       currentTask.value = result.data.task as CurrentTask | null
     }
@@ -381,7 +405,7 @@ async function loadCurrentTask() {
 async function loadSessionSettings() {
   if (!activeSessionId.value) return
   try {
-    const result = await mobileApi.httpSessionSettings(activeSessionId.value)
+    const result = await api.httpSessionSettings(activeSessionId.value)
     if (result.code === 0 && result.data) {
       autoExecute.value = result.data.auto_execute === true
       autoAnswer.value = result.data.auto_answer === true
@@ -416,7 +440,7 @@ watch(autoTaskPanelVisible, (val) => {
 
 async function handleAddFromPreset(task: any) {
   if (!activeSessionId.value || !canEnqueue(task)) return
-  const result = await mobileApi.httpTaskQueueAdd(activeSessionId.value, task.content)
+  const result = await api.httpTaskQueueAdd(activeSessionId.value, task.content)
   if (result.code === 0 && result.data?.task_id) {
     // 入队即视为已执行（可靠信号，不等完成广播）：记录队列项 id 与所在会话
     await markEnqueued(task.id, result.data.task_id, activeSessionId.value)
@@ -428,7 +452,7 @@ async function handleAddFromPreset(task: any) {
 
 async function handleAddManual() {
   if (!activeSessionId.value || !manualInput.value.trim()) return
-  const result = await mobileApi.httpTaskQueueAdd(activeSessionId.value, manualInput.value.trim())
+  const result = await api.httpTaskQueueAdd(activeSessionId.value, manualInput.value.trim())
   if (result.code === 0) {
     manualInput.value = ''
     await loadQueue()
@@ -439,7 +463,7 @@ async function handleAddManual() {
 
 async function handleRemove(taskId: string) {
   if (!activeSessionId.value) return
-  const result = await mobileApi.httpTaskQueueRemove(activeSessionId.value, taskId)
+  const result = await api.httpTaskQueueRemove(activeSessionId.value, taskId)
   if (result.code === 0) {
     // 队列项移除 → 关联预设回退未使用（可再次添加）
     await revertToUnusedByTaskId(taskId)
@@ -452,7 +476,7 @@ async function handleRemove(taskId: string) {
 /** 取消活动队列项（waiting/executing）：预设状态由 cancel 广播落 interrupted（见 handleTaskQueueChanged） */
 async function handleCancelTask(taskId: string) {
   if (!activeSessionId.value) return
-  const result = await mobileApi.httpTaskQueueCancel(activeSessionId.value, taskId)
+  const result = await api.httpTaskQueueCancel(activeSessionId.value, taskId)
   if (result.code === 0) {
     activeTask.value = null
     await loadQueue()
@@ -471,7 +495,7 @@ async function confirmClear() {
   if (!activeSessionId.value) return
   // 清空前快照待清队列项 id：清空成功后逐个回退关联预设
   const clearedIds = queue.value.map(q => q.id)
-  const result = await mobileApi.httpTaskQueueClear(activeSessionId.value)
+  const result = await api.httpTaskQueueClear(activeSessionId.value)
   if (result.code === 0) {
     queue.value = []
     for (const id of clearedIds) {
@@ -485,25 +509,48 @@ async function confirmClear() {
 // ==================== Edit ====================
 
 function startEdit(task: QueueTaskItem) {
-  editingId.value = task.id
-  editingText.value = task.prompt
+  if (editingTask.value) return
+  editingTask.value = task
+  editText.value = task.prompt
   nextTick(() => {
-    editInputRef.value?.focus()
+    const el = editTextareaRef.value
+    if (el) {
+      el.focus()
+      // 光标移到末尾，便于在原有内容后续写
+      el.setSelectionRange(el.value.length, el.value.length)
+    }
   })
 }
 
+function cancelEdit() {
+  editingTask.value = null
+  editText.value = ''
+}
+
 async function saveEdit() {
-  const prompt = editingText.value.trim()
-  if (!activeSessionId.value || !editingId.value || !prompt) {
-    editingId.value = null
+  const prompt = editText.value.trim()
+  const task = editingTask.value
+  if (!activeSessionId.value || !task || !prompt || savingEdit.value) return
+  // 内容未变化直接关闭，省一次请求
+  if (prompt === task.prompt.trim()) {
+    cancelEdit()
     return
   }
-  const result = await mobileApi.httpTaskQueueUpdate(activeSessionId.value, editingId.value, prompt)
-  if (result.code === 0) {
-    editingId.value = null
-    await loadQueue()
-  } else {
-    showError(t('updateFailed'))
+  savingEdit.value = true
+  try {
+    const result = await api.httpTaskQueueUpdate(activeSessionId.value, task.id, prompt)
+    if (result.code === 0) {
+      cancelEdit()
+      await loadQueue()
+    } else {
+      // 弹窗遮罩盖住面板错误条，失败提示改用 toast 保证可见
+      context.dialogs.showToast(t('updateFailed'), 'error')
+    }
+  } catch (e) {
+    console.error('[AutoTask] Failed to update task:', e)
+    context.dialogs.showToast(t('updateFailed'), 'error')
+  } finally {
+    savingEdit.value = false
   }
 }
 
@@ -521,7 +568,7 @@ async function handleMove(index: number, direction: -1 | 1) {
 async function commitReorder(items: QueueTaskItem[]) {
   if (!activeSessionId.value) return
   const taskIds = items.map(i => i.id)
-  const result = await mobileApi.httpTaskQueueReorder(activeSessionId.value, taskIds)
+  const result = await api.httpTaskQueueReorder(activeSessionId.value, taskIds)
   if (result.code === 0) {
     queue.value = items.map((item, idx) => ({ ...item, position: idx }))
   } else {
@@ -535,7 +582,7 @@ async function commitReorder(items: QueueTaskItem[]) {
 async function toggleAutoExecute() {
   if (!activeSessionId.value) return
   const target = !autoExecute.value
-  const result = await mobileApi.httpSetSessionMode(activeSessionId.value, target, undefined)
+  const result = await api.httpSetSessionMode(activeSessionId.value, target, undefined)
   if (result.code === 0) {
     autoExecute.value = target
   } else {
@@ -546,7 +593,7 @@ async function toggleAutoExecute() {
 async function toggleAutoAnswer() {
   if (!activeSessionId.value) return
   const target = !autoAnswer.value
-  const result = await mobileApi.httpSetSessionMode(activeSessionId.value, undefined, target)
+  const result = await api.httpSetSessionMode(activeSessionId.value, undefined, target)
   if (result.code === 0) {
     autoAnswer.value = target
   } else {
@@ -605,6 +652,13 @@ const panelStyle = computed(() => {
     transform: `translateY(-${kb}px)`,
     maxHeight: `calc(100dvh - ${kb}px - 0.75rem)`,
   }
+})
+
+/** 编辑弹窗键盘避让样式（复用面板的 keyboardOffset 双通道检测结果，与面板同步上移） */
+const editorSheetStyle = computed(() => {
+  const kb = keyboardOffset.value
+  if (kb <= 0) return {}
+  return { transform: `translateY(-${kb}px)` }
 })
 
 onMounted(() => {

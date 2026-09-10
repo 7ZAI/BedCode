@@ -6,12 +6,10 @@
 //! - TerminalRequest: 终端操作请求
 //! - ConfigRequest: 配置查询请求
 
-use std::time::Duration;
-
-use crate::model::message::Message;
 use crate::enums::auth::{AuthPayload, AuthStage};
-use crate::enums::control::{SessionControlAction, SessionConfigAction};
+use crate::enums::control::{SessionConfigAction, SessionControlAction};
 use crate::enums::special_key::KeyCombo;
+use crate::model::message::Message;
 use crate::state::get_global_token;
 
 /// 获取当前全局 Token 并应用到消息
@@ -30,82 +28,25 @@ fn with_token(message: Message) -> Message {
 pub struct AuthRequest;
 
 impl AuthRequest {
-    /// 构建配对请求消息
+    /// 构建 JWT Token 重新认证消息（WS 首消息 JWT 认证）
     ///
-    /// 移动端发起配对流程，桌面端返回配对码
-    pub fn request_pairing(device_id: &str, device_name: &str, fingerprint: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::RequestPairing,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建配对码验证消息
-    ///
-    /// 用户输入配对码后发送，桌面端验证后返回认证凭据
-    pub fn verify_pairing_code(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        code: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::VerifyCode,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                pairing_code: Some(code.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建 QR 码认证消息
-    ///
-    /// 扫描桌面端 QR 码后发送 token 进行认证
-    pub fn authenticate_with_qr(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        qr_token: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::QrConnect,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                qr_token: Some(qr_token.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建 JWT Token 重新认证消息
-    ///
-    /// 断线重连时使用已保存的 session_token 重新认证
+    /// 认证已 HTTP 化后，移动端正常路径不再经 WS 握手——本构造器服务：
+    /// ① 04 常驻事件 WS 建连后的首消息 JWT 认证；
+    /// ② 集成测试驱动真实 WsClient→router→handler 链路。
     pub fn reauthenticate(device_id: &str, fingerprint: &str, session_token: &str) -> Message {
+        Self::reauthenticate_with_crypto(device_id, fingerprint, session_token, None)
+    }
+
+    /// 构建 JWT 重新认证消息（可携链路加密提案，issue 09）
+    ///
+    /// `crypto` 为 Some 时首消息附带客户端临时 X25519 公钥；桌面端接受协商后
+    /// 在 auth 响应明文回执服务端临时公钥，此后帧进入加密模式。
+    pub fn reauthenticate_with_crypto(
+        device_id: &str,
+        fingerprint: &str,
+        session_token: &str,
+        crypto: Option<crate::enums::auth::CryptoProposal>,
+    ) -> Message {
         with_token(Message::Auth {
             message_id: uuid::Uuid::new_v4().to_string(),
             expect_response: true,
@@ -117,73 +58,7 @@ impl AuthRequest {
                 device_id: Some(device_id.to_string()),
                 device_fingerprint: Some(fingerprint.to_string()),
                 session_token: Some(session_token.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建生物认证请求消息
-    ///
-    /// 移动端发起生物认证流程，桌面端返回挑战值
-    pub fn biometric_request(device_id: &str, device_name: &str, fingerprint: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::BiometricRequest,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建生物认证签名回传消息
-    ///
-    /// 生物认证通过后对挑战值签名，回传桌面端验签
-    pub fn biometric_verify(
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
-        nonce: &str,
-        signature: &str,
-    ) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::BiometricVerify,
-                device_id: Some(device_id.to_string()),
-                device_name: Some(device_name.to_string()),
-                device_fingerprint: Some(fingerprint.to_string()),
-                challenge_nonce: Some(nonce.to_string()),
-                signature: Some(signature.to_string()),
-                ..Default::default()
-            },
-        })
-    }
-
-    /// 构建生物凭证绑定/解绑消息
-    ///
-    /// 在已认证连接上注册公钥（绑定）或清空公钥（解绑，public_key 传空串）
-    pub fn exchange_biometric_credential(fingerprint: &str, public_key: &str) -> Message {
-        with_token(Message::Auth {
-            message_id: uuid::Uuid::new_v4().to_string(),
-            expect_response: true,
-            timestamp: chrono::Utc::now().timestamp_millis(),
-            session_id: None,
-            token: String::new(),
-            payload: AuthPayload {
-                stage: AuthStage::ExchangeCertificate,
-                device_fingerprint: Some(fingerprint.to_string()),
-                public_key: Some(public_key.to_string()),
+                crypto,
                 ..Default::default()
             },
         })
@@ -196,12 +71,12 @@ impl AuthRequest {
 pub struct SessionRequest;
 
 impl SessionRequest {
-    /// 默认请求超时
-    const DEFAULT_TIMEOUT: Duration = Duration::from_secs(15);
-
     /// 构建获取会话列表消息
     pub fn list_sessions() -> Message {
-        with_token(Message::session_control_with_response(SessionControlAction::ListSessions, None))
+        with_token(Message::session_control_with_response(
+            SessionControlAction::ListSessions,
+            None,
+        ))
     }
 
     /// 构建启动会话消息
@@ -236,13 +111,16 @@ impl SessionRequest {
 
     /// 构建调整会话终端大小消息
     ///
-    /// 移动端屏幕尺寸变化时通知桌面端调整 PTY 大小
+    /// 移动端屏幕尺寸变化时通知桌面端调整 PTY 大小。force=false：非正统端首次
+    /// 请求会收到 NeedsConfirmation（服务端裁决），由前端弹窗确认后经 HTTP
+    /// resize（force=true）覆盖重发；WS 路径保持简单，不带强制。
     pub fn resize_session(session_id: &str, cols: u16, rows: u16) -> Message {
         with_token(Message::session_control(
             SessionControlAction::ResizeSession {
                 session_id: session_id.to_string(),
                 cols,
                 rows,
+                force: false,
             },
             Some(session_id),
         ))
@@ -255,9 +133,6 @@ impl SessionRequest {
 pub struct TerminalRequest;
 
 impl TerminalRequest {
-    /// 默认订阅超时
-    const SUBSCRIBE_TIMEOUT: Duration = Duration::from_secs(10);
-
     /// 构建订阅会话输出消息
     ///
     /// 开始接收指定会话的终端输出
@@ -292,17 +167,20 @@ impl TerminalRequest {
 pub struct ConfigRequest;
 
 impl ConfigRequest {
-    /// 配置请求超时
-    const CONFIG_TIMEOUT: Duration = Duration::from_secs(30);
-
     /// 构建获取会话配置列表消息
     pub fn list_session_configs() -> Message {
-        with_token(Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None))
+        with_token(Message::session_config_with_response(
+            SessionConfigAction::ListSessionConfigs,
+            None,
+        ))
     }
 
     /// 构建获取快捷操作列表消息
     pub fn list_quick_actions() -> Message {
-        with_token(Message::session_config_with_response(SessionConfigAction::ListQuickActions, None))
+        with_token(Message::session_config_with_response(
+            SessionConfigAction::ListQuickActions,
+            None,
+        ))
     }
 }
 
@@ -338,34 +216,14 @@ impl ResponseParser {
         None
     }
 
-    /// 解析认证响应
-    ///
-    /// 检查认证是否成功，返回认证阶段
-    pub fn parse_auth_response(response: &Message) -> Option<AuthStage> {
-        if let Message::Auth { payload, .. } = response {
-            Some(payload.stage.clone())
-        } else {
-            None
-        }
-    }
-
-    /// 解析认证错误响应
-    ///
-    /// 桌面端拒绝认证时返回 `Message::Error`（如 CREDENTIAL_NOT_BOUND / NOT_PAIRED），
-    /// 返回 (错误码, 错误消息) 供调用方透传给用户；非错误消息返回 None。
-    pub fn parse_auth_error(response: &Message) -> Option<(String, String)> {
-        if let Message::Error { code, message, .. } = response {
-            Some((code.clone(), message.clone()))
-        } else {
-            None
-        }
-    }
-
     /// 解析启动会话响应
     ///
     /// 从 SessionControl 响应中提取 session_id
     pub fn parse_start_session_response(response: &Message) -> Option<String> {
-        if let Message::SessionControl { session_id, payload, .. } = response {
+        if let Message::SessionControl {
+            session_id, payload, ..
+        } = response
+        {
             if matches!(payload.action, SessionControlAction::StartSession { .. }) {
                 return session_id.clone();
             }
@@ -397,17 +255,6 @@ pub mod timeouts {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_auth_request_pairing() {
-        let msg = AuthRequest::request_pairing("device-1", "Mobile", "fp-123");
-        if let Message::Auth { payload, .. } = &msg {
-            assert_eq!(payload.stage, AuthStage::RequestPairing);
-            assert_eq!(payload.device_id, Some("device-1".to_string()));
-        } else {
-            panic!("Expected Auth message");
-        }
-    }
 
     #[test]
     fn test_session_request_list() {

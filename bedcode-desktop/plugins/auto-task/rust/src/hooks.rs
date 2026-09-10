@@ -17,7 +17,7 @@ use bedcode_plugin_api::constants::{
     CODEX_HOOK_SCRIPT_NAME, HOOK_SCRIPT_NAME, OPENCODE_CONFIG_DIR_NAME, OPENCODE_HOOK_SCRIPT_NAME,
     OPENCODE_PLUGINS_DIR_NAME, PI_CONFIG_DIR_NAME, PI_EXTENSIONS_DIR_NAME, PI_HOOK_SCRIPT_NAME,
 };
-use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostSession};
+use bedcode_plugin_api::host::{ConfigKey, HostConfig, HostFs, HostLog, HostSession, HostStorage};
 use bedcode_plugin_api::wasm_host::WasmHost;
 use serde::{Deserialize, Serialize};
 
@@ -202,13 +202,18 @@ pub fn ensure_project_hooks(
     // 检查项目是否已有插件 hooks 且端口匹配
     let needs_update = match settings.get("hooks") {
         Some(hooks) if is_plugin_hooks_configured(hooks) => {
-            // hooks 存在，但需要验证端口是否与当前值匹配
+            // hooks 存在，但需要验证端口是否与当前值匹配，以及脚本模板版本是否一致
+            // （脚本内容升级后按版本标记强制重部署，与 codex/pi/opencode 同策略）
             let port_matches = is_hooks_port_matching(hooks, port);
+            let script_version_matches = match host.fs_read(&hook_script_path) {
+                Ok(Some(content)) => claude_hook_version_matches(&content),
+                _ => false,
+            };
             host.log_debug(&format!(
-                "ensure_project_hooks: existing plugin hooks found, port_matching={}",
-                port_matches
+                "ensure_project_hooks: existing plugin hooks found, port_matching={} script_version_matching={}",
+                port_matches, script_version_matches
             ));
-            !port_matches
+            !port_matches || !script_version_matches
         }
         Some(_) => {
             host.log_debug(
@@ -261,7 +266,9 @@ pub fn ensure_project_hooks(
     }
 
     // 3. 构建 hooks 配置并写入项目 settings.json
-    let hooks_config = build_hooks_config(port, &hook_script_path);
+    //    解释器按宿主平台选择：Windows 用 `python`，Linux/macOS 用 `python3`
+    //    （多数 Linux 发行版不提供 `python` 命令，只有 `python3`）
+    let hooks_config = build_hooks_config(port, &hook_script_path, python_interpreter(host));
 
     // 合并 hooks：保留非插件 hooks，添加插件 hooks
     let existing_hooks = settings
@@ -742,8 +749,8 @@ fn pi_extension_port_matches(content: &str, port: u16) -> bool {
 }
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
-/// （端口匹配检查无法发现脚本内容更新）
-const PI_EXTENSION_TEMPLATE_VERSION: &str = "2";
+/// （端口匹配检查无法发现脚本内容更新）。v3：agent_settled 区分成败终态
+const PI_EXTENSION_TEMPLATE_VERSION: &str = "3";
 
 /// 检查已部署扩展是否携带当前模板版本标记
 fn pi_extension_version_matches(content: &str) -> bool {
@@ -1084,7 +1091,7 @@ pub fn ensure_codex_hooks(
     }
 
     // 4. 构建 hooks 配置并合并写入（保留用户自有 hooks 条目）
-    let hooks_config = build_codex_hooks_config(port, &hook_script_path);
+    let hooks_config = build_codex_hooks_config(port, &hook_script_path, python_interpreter(host));
     let existing_hooks = hooks
         .get("hooks")
         .cloned()
@@ -1204,7 +1211,7 @@ pub fn cleanup_codex_hooks(host: &WasmHost, working_dir: &str) -> AgentIntegrati
 
 /// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
 /// （端口匹配检查无法发现脚本内容更新）
-const CODEX_HOOK_TEMPLATE_VERSION: &str = "1";
+const CODEX_HOOK_TEMPLATE_VERSION: &str = "2";
 
 /// 检查已部署脚本是否携带当前模板版本标记
 fn codex_hook_version_matches(content: &str) -> bool {
@@ -1219,39 +1226,64 @@ fn codex_hook_version_matches(content: &str) -> bool {
     })
 }
 
+/// 选择 hook 脚本的 Python 解释器命令（按宿主平台）
+///
+/// - Windows：`python`（标准解释器名，App Execution Alias / py launcher 可用）
+/// - Linux / macOS：`python3`（多数发行版只安装 python3，`python` 命令不存在，
+///   hook 若用 `python` 会直接 command not found，任务状态同步静默失效）
+/// - 未知平台：`python`（保持既有行为；实际部署时前端已在插件激活时通过
+///   auto-task.set-platform 上报平台，不会走到该分支）
+fn python_interpreter(host: &WasmHost) -> &'static str {
+    let platform = host
+        .storage_get("platform")
+        .ok()
+        .flatten()
+        .and_then(|v| v.as_str().map(|s| s.to_string()));
+    python_interpreter_for(platform.as_deref())
+}
+
+/// 平台 → Python 解释器命令名的纯函数映射（宿主无关，便于单测）
+fn python_interpreter_for(platform: Option<&str>) -> &'static str {
+    match platform {
+        Some("windows") => "python",
+        Some("linux") | Some("macos") => "python3",
+        _ => "python",
+    }
+}
+
 /// 构建 hooks JSON 配置
 ///
 /// 注册所有 Claude Code hook 事件，覆盖完整的状态机生命周期：
 /// SessionStart → UserPromptSubmit → PreToolUse → PostToolUse/PostToolUseFailure
 /// → Notification → Stop/SubagentStop → SessionEnd
-fn build_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Value {
+fn build_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> serde_json::Value {
     // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）
     let env_prefix = format!("BEDCODE_PORT={} ", port);
 
     let session_start_cmd = format!(
-        "{}python \"{}\" session-start",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" session-start",
+        env_prefix, python_cmd, hook_script_path
     );
     let user_prompt_submit_cmd = format!(
-        "{}python \"{}\" user-prompt-submit",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" user-prompt-submit",
+        env_prefix, python_cmd, hook_script_path
     );
-    let pre_tool_use_cmd = format!("{}python \"{}\" pre-tool-use", env_prefix, hook_script_path);
+    let pre_tool_use_cmd = format!("{}{} \"{}\" pre-tool-use", env_prefix, python_cmd, hook_script_path);
     let post_tool_use_cmd = format!(
-        "{}python \"{}\" post-tool-use",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" post-tool-use",
+        env_prefix, python_cmd, hook_script_path
     );
     let post_tool_use_fail_cmd = format!(
-        "{}python \"{}\" post-tool-use-fail",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" post-tool-use-fail",
+        env_prefix, python_cmd, hook_script_path
     );
-    let notification_cmd = format!("{}python \"{}\" notification", env_prefix, hook_script_path);
-    let stop_cmd = format!("{}python \"{}\" stop", env_prefix, hook_script_path);
+    let notification_cmd = format!("{}{} \"{}\" notification", env_prefix, python_cmd, hook_script_path);
+    let stop_cmd = format!("{}{} \"{}\" stop", env_prefix, python_cmd, hook_script_path);
     let subagent_stop_cmd = format!(
-        "{}python \"{}\" subagent-stop",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" subagent-stop",
+        env_prefix, python_cmd, hook_script_path
     );
-    let session_end_cmd = format!("{}python \"{}\" session-end", env_prefix, hook_script_path);
+    let session_end_cmd = format!("{}{} \"{}\" session-end", env_prefix, python_cmd, hook_script_path);
 
     serde_json::json!({
         "SessionStart": [
@@ -1379,39 +1411,36 @@ fn build_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Value {
 /// - 新增 SubagentStart：维护子 agent 计数，替代 Claude Stop 载荷的
 ///   background_tasks 字段（Codex Stop 无该字段）
 /// - SessionEnd 是 advisory 且超时上限 3 秒（文档规定），配置 3
-fn build_codex_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Value {
+fn build_codex_hooks_config(port: u16, hook_script_path: &str, python_cmd: &str) -> serde_json::Value {
     // 环境变量前缀：端口（脚本仅在 BedCode 注入 BEDCODE_SESSION_ID 的 PTY 中生效）
     let env_prefix = format!("BEDCODE_PORT={} ", port);
 
     let session_start_cmd = format!(
-        "{}python \"{}\" session-start",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" session-start",
+        env_prefix, python_cmd, hook_script_path
     );
     let user_prompt_submit_cmd = format!(
-        "{}python \"{}\" user-prompt-submit",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" user-prompt-submit",
+        env_prefix, python_cmd, hook_script_path
     );
     let permission_request_cmd = format!(
-        "{}python \"{}\" permission-request",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" permission-request",
+        env_prefix, python_cmd, hook_script_path
     );
     let post_tool_use_cmd = format!(
-        "{}python \"{}\" post-tool-use",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" post-tool-use",
+        env_prefix, python_cmd, hook_script_path
     );
     let subagent_start_cmd = format!(
-        "{}python \"{}\" subagent-start",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" subagent-start",
+        env_prefix, python_cmd, hook_script_path
     );
     let subagent_stop_cmd = format!(
-        "{}python \"{}\" subagent-stop",
-        env_prefix, hook_script_path
+        "{}{} \"{}\" subagent-stop",
+        env_prefix, python_cmd, hook_script_path
     );
-    let stop_cmd = format!("{}python \"{}\" stop", env_prefix, hook_script_path);
-    let session_end_cmd = format!(
-        "{}python \"{}\" session-end",
-        env_prefix, hook_script_path
-    );
+    let stop_cmd = format!("{}{} \"{}\" stop", env_prefix, python_cmd, hook_script_path);
+    let session_end_cmd = format!("{}{} \"{}\" session-end", env_prefix, python_cmd, hook_script_path);
 
     serde_json::json!({
         "SessionStart": [
@@ -1510,6 +1539,23 @@ fn build_codex_hooks_config(port: u16, hook_script_path: &str) -> serde_json::Va
                 ]
             }
         ]
+    })
+}
+
+/// 模板版本标记：内容升级时递增模板内标记，旧部署副本据此自动重部署
+/// （端口匹配检查无法发现脚本内容更新）。v1：修复 HTTP 重试路径缺失的 `import time`
+const CLAUDE_HOOK_TEMPLATE_VERSION: &str = "1";
+
+/// 检查已部署脚本是否携带当前模板版本标记
+fn claude_hook_version_matches(content: &str) -> bool {
+    const MARKER: &str = "@bedcode-template-version ";
+    content.find(MARKER).map_or(false, |start| {
+        let value_start = start + MARKER.len();
+        let digits: String = content[value_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        digits == CLAUDE_HOOK_TEMPLATE_VERSION
     })
 }
 
@@ -1720,6 +1766,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn python_interpreter_for_selects_by_platform() {
+        assert_eq!(python_interpreter_for(Some("windows")), "python");
+        assert_eq!(python_interpreter_for(Some("linux")), "python3");
+        assert_eq!(python_interpreter_for(Some("macos")), "python3");
+        // 未知平台回退 python（Windows 兼容，保持既有行为）
+        assert_eq!(python_interpreter_for(None), "python");
+        assert_eq!(python_interpreter_for(Some("android")), "python");
+    }
+
+    #[test]
+    fn build_hooks_config_linux_uses_python3() {
+        let config = build_hooks_config(8765, r"/home/u/proj/.claude/auto_task_hook.py", "python3");
+        let hooks = config.as_object().expect("hooks config must be an object");
+        for (_event, groups) in hooks {
+            for group in groups.as_array().expect("hook group must be array") {
+                for hook in group["hooks"].as_array().expect("hook list must be array") {
+                    let cmd = hook["command"].as_str().unwrap_or_default();
+                    assert!(
+                        cmd.starts_with("BEDCODE_PORT=8765 python3 \"/home/u/proj/.claude/auto_task_hook.py\""),
+                        "command should invoke python3 on linux: {}",
+                        cmd
+                    );
+                    assert!(!cmd.contains(" python \""), "must not use bare python: {}", cmd);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn build_codex_hooks_config_linux_uses_python3() {
+        let config = build_codex_hooks_config(8765, r"/home/u/proj/.codex/codex_task_hook.py", "python3");
+        let hooks = config.as_object().expect("hooks config must be an object");
+        for (_event, groups) in hooks {
+            for group in groups.as_array().expect("hook group must be array") {
+                for hook in group["hooks"].as_array().expect("hook list must be array") {
+                    let cmd = hook["command"].as_str().unwrap_or_default();
+                    assert!(
+                        cmd.starts_with("BEDCODE_PORT=8765 python3 \"/home/u/proj/.codex/codex_task_hook.py\""),
+                        "command should invoke python3 on linux: {}",
+                        cmd
+                    );
+                    assert!(!cmd.contains(" python \""), "must not use bare python: {}", cmd);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn claude_hook_version_marker_matching() {
+        let content = "# @bedcode-template-version 1\nprint('ok')\n";
+        assert!(claude_hook_version_matches(content));
+        assert!(!claude_hook_version_matches("no marker here"));
+        assert!(!claude_hook_version_matches("# @bedcode-template-version 2"));
+    }
+
+    #[test]
     fn codex_constant_names() {
         assert_eq!(CODEX_CONFIG_DIR_NAME, ".codex");
         assert_eq!(CODEX_HOOKS_FILE, "hooks.json");
@@ -1731,6 +1833,7 @@ mod tests {
         let config = build_codex_hooks_config(
             9876,
             r"C:\proj\.codex\codex_task_hook.py",
+            "python",
         );
         let hooks = config.as_object().expect("hooks config must be an object");
 
@@ -1836,7 +1939,7 @@ mod tests {
                 { "hooks": [{ "type": "command", "command": "user-end-hook" }] }
             ]
         });
-        let plugin = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py");
+        let plugin = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python");
 
         let merged = merge_codex_hooks(&existing, &plugin);
         let stop = merged["Stop"].as_array().expect("Stop must remain");
@@ -1888,15 +1991,17 @@ mod tests {
 
     #[test]
     fn codex_hooks_port_matching_detects_current_port() {
-        let hooks = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py");
+        let hooks = build_codex_hooks_config(8765, r"C:\proj\.codex\codex_task_hook.py", "python");
         assert!(codex_hooks_port_matching(&hooks, 8765));
         assert!(!codex_hooks_port_matching(&hooks, 9000));
     }
 
     #[test]
     fn codex_hook_version_marker_matching() {
-        let content = "# @bedcode-template-version 1\nprint('ok')\n";
+        // 标记版本与 CODEX_HOOK_TEMPLATE_VERSION 同步（当前 2：v2 = 日志/输入防御式重构）
+        let content = "# @bedcode-template-version 2\nprint('ok')\n";
         assert!(codex_hook_version_matches(content));
         assert!(!codex_hook_version_matches("no marker here"));
+        assert!(!codex_hook_version_matches("# @bedcode-template-version 1"));
     }
 }

@@ -1,27 +1,23 @@
 /**
- * File Transfer 插件业务类型
+ * File Transfer 插件业务类型 — host-peer 契约版
  *
- * 前端内部统一使用 camelCase 字段，WASM 侧字段命名差异（Task/RemoteEntry 快照为
- * snake_case、enqueue/get-settings 参数为 camelCase）在 composable 边界归一化，
- * 组件只消费本文件定义的干净类型。
+ * 宿主批级 DTO 由插件 Rust 代理翻译为 snake_case wire 形状，composable
+ * 边界归一化为 camelCase 内部模型；组件只消费本文件定义的干净类型。
  */
 
-/** 任务方向（与 WASM TaskState::Direction serde lowercase 对应） */
+/** 任务方向（wire lowercase） */
 export type TaskDirection = 'download' | 'upload'
 
-/** 任务状态（与 WASM TaskState serde lowercase 对应；v2 含 waiting-approval） */
+/** 任务状态（宿主托管后仅存在传输中与终态；interrupted = 插件重启恢复标注） */
 export type TaskStateName =
-  | 'queued'
-  | 'waiting-approval'
   | 'transferring'
-  | 'paused'
-  | 'resumable'
   | 'completed'
   | 'failed'
   | 'rejected'
   | 'cancelled'
+  | 'interrupted'
 
-/** v2：发起方（队列分类依据；wire snake_case，默认 me） */
+/** 发起方（wire snake_case，默认 me） */
 export type TaskInitiator = 'me' | 'peer'
 
 /** 对端设备信息 */
@@ -30,34 +26,27 @@ export interface PeerInfo {
   name: string
 }
 
-/** 文件指纹（续传有效性校验） */
-export interface Fingerprint {
-  size: number
-  mtime: number
-}
-
-/** 传输任务（camelCase 内部模型，由 WASM 快照映射而来） */
+/** 传输任务（一批 = 一条记录；由宿主 PeerTransferDto 翻译而来） */
 export interface Task {
+  /** 批 ID（cancel/retry 按其寻址） */
   id: string
   direction: TaskDirection
   peer: PeerInfo
+  /** 展示名：首文件名（多文件追加 +N） */
   remotePath: string
-  localPath: string
   size: number
   offset: number
-  uploadSessionId: string | null
-  fingerprint: Fingerprint | null
+  /** 瞬时速率 B/s（宿主滑动窗口） */
+  rateBps: number
   state: TaskStateName
   reason: string | null
   createdAt: number
   updatedAt: number
-  /** v2：发起方（本端发起的任务恒为 'me'） */
   initiator: TaskInitiator
-  /** v2：所属批 ID（发送方上传任务） */
   batchId?: string | null
 }
 
-/** 远端目录项（list-remote 返回，isDir 为 WASM 显式 camelCase 字段） */
+/** 远端目录项（list-remote 返回） */
 export interface RemoteEntry {
   name: string
   size: number
@@ -65,18 +54,33 @@ export interface RemoteEntry {
   isDir: boolean
 }
 
-/** 插件设置（camelCase 内部模型；get-settings 的 download_dir 在 composable 归一化） */
+/** 插件设置（roots 条目清单由 useSettings.rootItems 维护，含移除寻址 id） */
 export interface Settings {
-  roots: string[]
   downloadDir: string
   concurrency: number
-  /** v2 接收策略：ask 每次询问 / accept 直接接收 / reject 直接拒绝 */
+  /** 接收策略：ask 每次询问 / accept 直接接收 / reject 直接拒绝 */
   receivingPolicy: 'ask' | 'accept' | 'reject'
-  /** v2 同意超时（秒，10–600，仅 ask 生效） */
+  /** 同意超时（秒，10–600，仅 ask 生效） */
   approvalTimeoutSec: number
+  /** 发送加密开关（AES-256-GCM；缺省 false） */
+  encryption?: boolean
 }
 
-/** v2：pending 批（接收端应答卡数据源，list-batches 返回） */
+/** 任务状态是否为终态 */
+export function isTerminalState(state: TaskStateName): boolean {
+  return (
+    state === 'completed' ||
+    state === 'failed' ||
+    state === 'rejected' ||
+    state === 'cancelled' ||
+    state === 'interrupted'
+  )
+}
+
+/** 传输历史条目状态（含插件重启标注的 interrupted） */
+export type HistoryState = 'completed' | 'failed' | 'rejected' | 'cancelled' | 'interrupted'
+
+/** pending 批（接收端应答卡数据源，list-batches 返回） */
 export interface PendingBatch {
   batchId: string
   peerId: string
@@ -86,52 +90,38 @@ export interface PendingBatch {
   createdAt: number
 }
 
-/** v2：接收中任务（「正在接收」tab，list-receiving 返回） */
+/** 接收中任务（「正在接收」tab，list-receiving 返回） */
 export interface ReceivingTask {
   sessionId: string
   batchId: string | null
   remotePath: string
+  /** 首文件相对落盘路径（打开所在目录定位用；缺失时退回下载目录） */
+  relPath?: string | null
   size: number
-  state: TaskStateName
+  offset?: number
+  state: string
   reason: string | null
   peerId: string
+  peerName?: string
   createdAt: number
   updatedAt: number
 }
 
-/** v2：传输历史条目（list-history 返回，封顶 200 滚动淘汰） */
+/** 传输历史条目（list-history 返回） */
 export interface HistoryEntry {
   id: string
   direction: TaskDirection
   initiator: TaskInitiator
   fileName: string
+  /** 首文件相对落盘路径（下载完成「打开所在目录」定位用） */
+  relPath?: string | null
   size: number
-  state: 'completed' | 'failed' | 'rejected' | 'cancelled'
+  state: HistoryState
   reason: string | null
   peerName: string
   localPath: string | null
+  /** 是否携带 retryMeta（仅发起方条目；true 且终态失败/被拒/中断时可在历史重试） */
+  retryable?: boolean
   createdAt: number
   updatedAt: number
-}
-
-/**
- * TransferProgress.state 的 serde 形状（tag="state" content="reason"）：
- * - running  → { state: "running" }
- * - completed→ { state: "completed" }
- * - failed   → { state: "failed", reason: "..." }
- * - cancelled→ { state: "cancelled" }
- */
-export type TransferProgressState =
-  | { state: 'running' }
-  | { state: 'completed' }
-  | { state: 'failed'; reason: string }
-  | { state: 'cancelled' }
-
-/** 宿主传输引擎进度事件载荷（taskId 为宿主 UUID，非插件任务 id） */
-export interface TransferProgress {
-  taskId: string
-  transferred: number
-  total: number
-  bytesPerSec: number
-  state: TransferProgressState
 }

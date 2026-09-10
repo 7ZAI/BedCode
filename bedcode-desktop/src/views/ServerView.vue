@@ -3,14 +3,21 @@
     <!-- ==================== 工具栏页头：左标题+状态，右启停/重启/重置 ==================== -->
     <div class="wb-toolbar sticky top-0 z-10">
       <div class="flex items-center gap-2.5">
-        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ t('desktop.server.title') }}</h1>
-        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ statusText }}</span>
+        <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
+          {{ t('desktop.server.title') }}
+        </h1>
+        <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{
+          statusText
+        }}</span>
       </div>
       <div class="flex items-center gap-2">
         <PluginPageToolbar target="server" />
         <button
           class="wb-btn-primary"
-          :class="status !== 'stopped' && '!bg-[var(--bg-hover)] !text-[var(--text-tertiary)] cursor-not-allowed'"
+          :class="
+            status !== 'stopped' &&
+            '!bg-[var(--bg-hover)] !text-[var(--text-tertiary)] cursor-not-allowed'
+          "
           :disabled="status !== 'stopped' || loading"
           @click="handleStart"
         >
@@ -32,7 +39,11 @@
         >
           {{ t('desktop.server.restart') }}
         </button>
-        <button class="wb-btn-ghost !text-[var(--text-secondary)]" :disabled="loading" @click="handleResetDefaults">
+        <button
+          class="wb-btn-ghost !text-[var(--text-secondary)]"
+          :disabled="loading"
+          @click="handleResetDefaults"
+        >
           {{ t('desktop.server.resetDefaults') }}
         </button>
       </div>
@@ -40,7 +51,11 @@
 
     <!-- ==================== 加载态 ==================== -->
     <div v-if="initializing" class="p-5 space-y-4 max-w-5xl mx-auto">
-      <div v-for="i in 3" :key="i" class="h-24 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"></div>
+      <div
+        v-for="i in 3"
+        :key="i"
+        class="h-24 rounded-[10px] animate-pulse bg-[var(--bg-card)] border border-[var(--border)]"
+      ></div>
     </div>
 
     <!-- ==================== 内容分区 ==================== -->
@@ -52,7 +67,10 @@
           <div class="flex items-center justify-between px-4 h-12 border-b border-[var(--border)]">
             <div class="flex items-center gap-2">
               <span class="w-2 h-2 rounded-full" :class="dotClass"></span>
-              <span class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">{{ statusText }}</span>
+              <span
+                class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]"
+                >{{ statusText }}</span
+              >
             </div>
             <span class="wb-mono text-[var(--text-secondary)]">
               {{ status === 'running' ? formatUptime(uptimeTick) : '-' }}
@@ -60,16 +78,34 @@
           </div>
           <div class="grid grid-cols-3 divide-x divide-[var(--border)]">
             <div class="px-4 py-3">
-              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">{{ t('desktop.server.connections') }}</div>
-              <div class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ metrics?.connections ?? '-' }}</div>
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">
+                {{ t('desktop.server.connections') }}
+              </div>
+              <div
+                class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ metrics?.connections ?? '-' }}
+              </div>
             </div>
             <div class="px-4 py-3">
-              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">{{ t('desktop.server.cpuUsage') }}</div>
-              <div class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ metrics ? `${metrics.cpu_usage_percent.toFixed(1)}%` : '-' }}</div>
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">
+                {{ t('desktop.server.cpuUsage') }}
+              </div>
+              <div
+                class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ metrics ? `${metrics.cpu_usage_percent.toFixed(1)}%` : '-' }}
+              </div>
             </div>
             <div class="px-4 py-3">
-              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">{{ t('desktop.server.memoryUsage') }}</div>
-              <div class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ metrics ? formatMemory(metrics.memory_usage_bytes) : '-' }}</div>
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">
+                {{ t('desktop.server.memoryUsage') }}
+              </div>
+              <div
+                class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ metrics ? formatMemory(metrics.memory_usage_bytes) : '-' }}
+              </div>
             </div>
           </div>
         </div>
@@ -80,7 +116,9 @@
         <h2 class="wb-section-title">{{ t('desktop.server.sectionNetwork') }}</h2>
         <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] px-4">
           <div class="flex items-center justify-between h-12 border-b border-[var(--border)]">
-            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.server.port') }}</span>
+            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{
+              t('desktop.server.port')
+            }}</span>
             <div class="flex items-center gap-3">
               <input
                 v-model.number="portInput"
@@ -89,26 +127,48 @@
                 max="65535"
                 class="w-20 h-7 px-2 wb-mono rounded-[6px] border border-[var(--border-input)] bg-[var(--bg-input)] text-[var(--text-primary)] outline-none focus:border-[var(--color-primary)]"
               />
-              <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ t('desktop.server.portHint') }}</span>
+              <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{
+                t('desktop.server.portHint')
+              }}</span>
             </div>
           </div>
-          <div class="flex items-center justify-between min-h-12 py-2 border-b border-[var(--border)]">
-            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.server.localIp') }}</span>
+          <div
+            class="flex items-center justify-between min-h-12 py-2 border-b border-[var(--border)]"
+          >
+            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{
+              t('desktop.server.localIp')
+            }}</span>
             <div class="flex flex-wrap justify-end gap-x-4 gap-y-0.5">
-              <span v-for="ip in localIps" :key="ip" class="wb-mono text-[var(--text-primary)]">{{ ip }}:{{ port }}</span>
-              <span v-if="localIps.length === 0" class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-tertiary)]">-</span>
+              <span v-for="ip in localIps" :key="ip" class="wb-mono text-[var(--text-primary)]"
+                >{{ ip }}:{{ port }}</span
+              >
+              <span
+                v-if="localIps.length === 0"
+                class="text-[calc(12.5px*var(--ui-scale))] text-[var(--text-tertiary)]"
+                >-</span
+              >
             </div>
           </div>
           <div class="flex items-center justify-between h-12">
-            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{ t('desktop.server.autoStart') }}</span>
+            <span class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)]">{{
+              t('desktop.server.autoStart')
+            }}</span>
             <button
               class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
-              :class="autoStart ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
+              :class="
+                autoStart
+                  ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
+                  : 'bg-[var(--bg-page)] border-[var(--border-strong)]'
+              "
               @click="handleAutoStartToggle(!autoStart)"
             >
               <span
                 class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
-                :class="autoStart ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
+                :class="
+                  autoStart
+                    ? 'left-[22px] bg-[var(--color-primary-contrast)]'
+                    : 'left-[3px] bg-[var(--border-strong)]'
+                "
               ></span>
             </button>
           </div>
@@ -118,7 +178,9 @@
       <!-- ---------- SECTION: CONFIG ---------- -->
       <section v-if="networkConfig">
         <div class="flex items-center justify-between mb-2">
-          <h2 class="wb-section-title mb-0">{{ t('desktop.server.advancedConfig').toUpperCase() }}</h2>
+          <h2 class="wb-section-title mb-0">
+            {{ t('desktop.server.advancedConfig').toUpperCase() }}
+          </h2>
           <button
             class="text-[calc(11px*var(--ui-scale))] text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
             @click="advExpanded = !advExpanded"
@@ -126,26 +188,39 @@
             {{ advExpanded ? t('desktop.server.collapse') : t('desktop.server.expand') }}
           </button>
         </div>
-        <div v-show="advExpanded" class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] overflow-hidden">
+        <div
+          v-show="advExpanded"
+          class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] overflow-hidden"
+        >
           <div class="grid grid-cols-2 md:grid-cols-3 divide-x divide-y divide-[var(--border)]">
-            <div
-              v-for="field in advFields"
-              :key="field.key"
-              class="px-4 py-3"
-            >
+            <div v-for="field in advFields" :key="field.key" class="px-4 py-3">
               <div class="flex items-center gap-1.5 mb-1.5">
-                <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{ field.label }}</span>
-                <span v-if="field.hint" class="text-[calc(10px*var(--ui-scale))] text-[color:color-mix(in_srgb,var(--text-tertiary)_70%,transparent)]">{{ field.hint }}</span>
+                <span class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)]">{{
+                  field.label
+                }}</span>
+                <span
+                  v-if="field.hint"
+                  class="text-[calc(10px*var(--ui-scale))] text-[color:color-mix(in_srgb,var(--text-tertiary)_70%,transparent)]"
+                  >{{ field.hint }}</span
+                >
               </div>
               <button
                 v-if="field.type === 'toggle'"
                 class="relative w-10 h-5 rounded-[4px] border transition-colors flex-shrink-0"
-                :class="(advConfig as any)[field.key] ? 'bg-[var(--color-primary)] border-[var(--color-primary)]' : 'bg-[var(--bg-page)] border-[var(--border-strong)]'"
+                :class="
+                  (advConfig as any)[field.key]
+                    ? 'bg-[var(--color-primary)] border-[var(--color-primary)]'
+                    : 'bg-[var(--bg-page)] border-[var(--border-strong)]'
+                "
                 @click="(advConfig as any)[field.key] = !(advConfig as any)[field.key]"
               >
                 <span
                   class="absolute top-[3px] w-3 h-3 rounded-[2px] transition-all"
-                  :class="(advConfig as any)[field.key] ? 'left-[22px] bg-[var(--color-primary-contrast)]' : 'left-[3px] bg-[var(--border-strong)]'"
+                  :class="
+                    (advConfig as any)[field.key]
+                      ? 'left-[22px] bg-[var(--color-primary-contrast)]'
+                      : 'left-[3px] bg-[var(--border-strong)]'
+                  "
                 ></span>
               </button>
               <input
@@ -167,13 +242,21 @@
         <div class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] p-4">
           <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
             <div v-for="m in metricRows" :key="m.key">
-              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">{{ m.label }}</div>
-              <div class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">{{ m.value }}</div>
+              <div class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-1">
+                {{ m.label }}
+              </div>
+              <div
+                class="wb-mono text-[calc(12.5px*var(--ui-scale))] font-semibold text-[var(--text-primary)]"
+              >
+                {{ m.value }}
+              </div>
             </div>
           </div>
           <div class="border-t border-[var(--border)] pt-3">
-            <h3 class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-2">{{ t('desktop.server.wsThroughput') }}</h3>
-            <VChart :option="chartOption" style="height: 220px; width: 100%;" autoresize />
+            <h3 class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mb-2">
+              {{ t('desktop.server.wsThroughput') }}
+            </h3>
+            <VChart :option="chartOption" style="height: 220px; width: 100%" autoresize />
           </div>
         </div>
       </section>
@@ -241,14 +324,21 @@ function syncPortInput() {
 
 const statusText = computed(() => {
   switch (status.value) {
-    case 'running': return t('desktop.server.status.running')
-    case 'starting': return t('desktop.server.status.starting')
-    default: return t('desktop.server.status.stopped')
+    case 'running':
+      return t('desktop.server.status.running')
+    case 'starting':
+      return t('desktop.server.status.starting')
+    default:
+      return t('desktop.server.status.stopped')
   }
 })
 
 const dotClass = computed(() =>
-  status.value === 'running' ? 'bg-green-500' : status.value === 'starting' ? 'bg-yellow-500' : 'bg-red-500'
+  status.value === 'running'
+    ? 'bg-green-500'
+    : status.value === 'starting'
+      ? 'bg-yellow-500'
+      : 'bg-red-500',
 )
 
 /** 运行时长本地计时 — 每秒刷新，不依赖后端轮询 */
@@ -256,17 +346,24 @@ const uptimeTick = ref(0)
 let uptimeTimer: ReturnType<typeof setInterval> | null = null
 
 watch(status, (val) => {
-  if (uptimeTimer) { clearInterval(uptimeTimer); uptimeTimer = null }
+  if (uptimeTimer) {
+    clearInterval(uptimeTimer)
+    uptimeTimer = null
+  }
   if (val === 'running' && metrics.value) {
     uptimeTick.value = metrics.value.uptime_secs
-    uptimeTimer = setInterval(() => { uptimeTick.value++ }, 1000)
+    uptimeTimer = setInterval(() => {
+      uptimeTick.value++
+    }, 1000)
   }
 })
 
 watch(metrics, (m) => {
   if (m && status.value === 'running' && !uptimeTimer) {
     uptimeTick.value = m.uptime_secs
-    uptimeTimer = setInterval(() => { uptimeTick.value++ }, 1000)
+    uptimeTimer = setInterval(() => {
+      uptimeTick.value++
+    }, 1000)
   }
 })
 
@@ -292,18 +389,42 @@ function cssVar(name: string): string {
 
 /** 监控指标行 — 空数据统一显示 - */
 const metricRows = computed(() => [
-  { key: 'uptime', label: t('desktop.server.uptime'), value: status.value === 'running' ? formatUptime(uptimeTick.value) : '-' },
-  { key: 'connections', label: t('desktop.server.connections'), value: metrics.value ? String(metrics.value.connections) : '-' },
-  { key: 'total', label: t('desktop.server.totalRequests'), value: metrics.value ? metrics.value.total_http_requests.toLocaleString() : '-' },
-  { key: 'cpu', label: t('desktop.server.cpuUsage'), value: metrics.value ? `${metrics.value.cpu_usage_percent.toFixed(1)}%` : '-' },
-  { key: 'mem', label: t('desktop.server.memoryUsage'), value: metrics.value ? formatMemory(metrics.value.memory_usage_bytes) : '-' },
-  { key: 'rate', label: t('desktop.server.requestRate'), value: metrics.value ? `${metrics.value.http_requests_per_sec.toFixed(1)}/s` : '-' },
+  {
+    key: 'uptime',
+    label: t('desktop.server.uptime'),
+    value: status.value === 'running' ? formatUptime(uptimeTick.value) : '-',
+  },
+  {
+    key: 'connections',
+    label: t('desktop.server.connections'),
+    value: metrics.value ? String(metrics.value.connections) : '-',
+  },
+  {
+    key: 'total',
+    label: t('desktop.server.totalRequests'),
+    value: metrics.value ? metrics.value.total_http_requests.toLocaleString() : '-',
+  },
+  {
+    key: 'cpu',
+    label: t('desktop.server.cpuUsage'),
+    value: metrics.value ? `${metrics.value.cpu_usage_percent.toFixed(1)}%` : '-',
+  },
+  {
+    key: 'mem',
+    label: t('desktop.server.memoryUsage'),
+    value: metrics.value ? formatMemory(metrics.value.memory_usage_bytes) : '-',
+  },
+  {
+    key: 'rate',
+    label: t('desktop.server.requestRate'),
+    value: metrics.value ? `${metrics.value.http_requests_per_sec.toFixed(1)}/s` : '-',
+  },
 ])
 
 /** ECharts 时序图配置（颜色取自主题变量） */
 const chartOption = computed(() => {
   const history = metricsHistory.value
-  const times = history.map(h => {
+  const times = history.map((h) => {
     const m = Math.floor(h.timestamp_secs / 60)
     const s = h.timestamp_secs % 60
     return `${m}:${s.toString().padStart(2, '0')}`
@@ -319,8 +440,17 @@ const chartOption = computed(() => {
       textStyle: { color: cssVar('--text-secondary') },
     },
     grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
-    xAxis: { type: 'category' as const, boundaryGap: false, data: times, axisLabel: { color: cssVar('--text-tertiary') } },
-    yAxis: { type: 'value' as const, name: 'msg/s', axisLabel: { color: cssVar('--text-tertiary') } },
+    xAxis: {
+      type: 'category' as const,
+      boundaryGap: false,
+      data: times,
+      axisLabel: { color: cssVar('--text-tertiary') },
+    },
+    yAxis: {
+      type: 'value' as const,
+      name: 'msg/s',
+      axisLabel: { color: cssVar('--text-tertiary') },
+    },
     series: [
       {
         name: t('desktop.server.wsSentRate'),
@@ -329,7 +459,7 @@ const chartOption = computed(() => {
         symbol: 'none',
         itemStyle: { color: accent },
         areaStyle: { color: hexToRgba(accent, 0.1) },
-        data: history.map(h => h.ws_sent_rate.toFixed(2)),
+        data: history.map((h) => h.ws_sent_rate.toFixed(2)),
       },
       {
         name: t('desktop.server.wsRecvRate'),
@@ -338,7 +468,7 @@ const chartOption = computed(() => {
         symbol: 'none',
         itemStyle: { color: success },
         areaStyle: { color: hexToRgba(success, 0.1) },
-        data: history.map(h => h.ws_recv_rate.toFixed(2)),
+        data: history.map((h) => h.ws_recv_rate.toFixed(2)),
       },
     ],
   }
@@ -386,7 +516,7 @@ async function handleRestart() {
     }
     if (networkConfig.value && advConfig.value) {
       const dirty = Object.entries(advConfig.value).some(
-        ([k, v]) => (networkConfig.value as any)[k] !== v
+        ([k, v]) => (networkConfig.value as any)[k] !== v,
       )
       if (dirty) {
         const merged = { ...networkConfig.value, ...advConfig.value }
@@ -418,33 +548,101 @@ const advExpanded = ref(true)
 
 /** 高级配置本地编辑副本 */
 const advConfig = computed({
-  get: () => networkConfig.value ? {
-    workers: networkConfig.value.workers,
-    keep_alive_secs: networkConfig.value.keep_alive_secs,
-    client_request_timeout_secs: networkConfig.value.client_request_timeout_secs,
-    client_disconnect_timeout_secs: networkConfig.value.client_disconnect_timeout_secs,
-    max_connections: networkConfig.value.max_connections,
-    backlog: networkConfig.value.backlog,
-    tcp_nodelay: networkConfig.value.tcp_nodelay,
-    shutdown_timeout_secs: networkConfig.value.shutdown_timeout_secs,
-    ws_max_frame_size_kb: networkConfig.value.ws_max_frame_size_kb,
-    ws_max_message_size_mb: networkConfig.value.ws_max_message_size_mb,
-  } : null,
-  set: (v) => { if (v && networkConfig.value) Object.assign(networkConfig.value, v) },
+  get: () =>
+    networkConfig.value
+      ? {
+          workers: networkConfig.value.workers,
+          keep_alive_secs: networkConfig.value.keep_alive_secs,
+          client_request_timeout_secs: networkConfig.value.client_request_timeout_secs,
+          client_disconnect_timeout_secs: networkConfig.value.client_disconnect_timeout_secs,
+          max_connections: networkConfig.value.max_connections,
+          backlog: networkConfig.value.backlog,
+          tcp_nodelay: networkConfig.value.tcp_nodelay,
+          shutdown_timeout_secs: networkConfig.value.shutdown_timeout_secs,
+          ws_max_frame_size_kb: networkConfig.value.ws_max_frame_size_kb,
+          ws_max_message_size_mb: networkConfig.value.ws_max_message_size_mb,
+        }
+      : null,
+  set: (v) => {
+    if (v && networkConfig.value) Object.assign(networkConfig.value, v)
+  },
 })
 
 /** 高级配置字段元数据 — 驱动网格渲染 */
 const advFields = computed(() => [
-  { key: 'workers', label: t('desktop.server.workers'), hint: t('desktop.server.workersHint'), type: 'number', min: 0, max: 64 },
-  { key: 'keep_alive_secs', label: t('desktop.server.keepAlive'), hint: t('desktop.server.keepAliveHint'), type: 'number', min: 0, max: 300 },
-  { key: 'client_request_timeout_secs', label: t('desktop.server.clientRequestTimeout'), hint: 's', type: 'number', min: 1, max: 120 },
-  { key: 'client_disconnect_timeout_secs', label: t('desktop.server.clientDisconnectTimeout'), hint: 's', type: 'number', min: 1, max: 120 },
-  { key: 'max_connections', label: t('desktop.server.maxConnections'), hint: t('desktop.server.maxConnectionsHint'), type: 'number', min: 1, max: 100000 },
-  { key: 'backlog', label: t('desktop.server.backlog'), hint: '', type: 'number', min: 64, max: 8192 },
+  {
+    key: 'workers',
+    label: t('desktop.server.workers'),
+    hint: t('desktop.server.workersHint'),
+    type: 'number',
+    min: 0,
+    max: 64,
+  },
+  {
+    key: 'keep_alive_secs',
+    label: t('desktop.server.keepAlive'),
+    hint: t('desktop.server.keepAliveHint'),
+    type: 'number',
+    min: 0,
+    max: 300,
+  },
+  {
+    key: 'client_request_timeout_secs',
+    label: t('desktop.server.clientRequestTimeout'),
+    hint: 's',
+    type: 'number',
+    min: 1,
+    max: 120,
+  },
+  {
+    key: 'client_disconnect_timeout_secs',
+    label: t('desktop.server.clientDisconnectTimeout'),
+    hint: 's',
+    type: 'number',
+    min: 1,
+    max: 120,
+  },
+  {
+    key: 'max_connections',
+    label: t('desktop.server.maxConnections'),
+    hint: t('desktop.server.maxConnectionsHint'),
+    type: 'number',
+    min: 1,
+    max: 100000,
+  },
+  {
+    key: 'backlog',
+    label: t('desktop.server.backlog'),
+    hint: '',
+    type: 'number',
+    min: 64,
+    max: 8192,
+  },
   { key: 'tcp_nodelay', label: t('desktop.server.tcpNodelay'), hint: '', type: 'toggle' },
-  { key: 'shutdown_timeout_secs', label: t('desktop.server.shutdownTimeout'), hint: 's', type: 'number', min: 1, max: 300 },
-  { key: 'ws_max_frame_size_kb', label: t('desktop.server.wsMaxFrameSize'), hint: t('desktop.server.wsMaxFrameSizeHint'), type: 'number', min: 1, max: 16384 },
-  { key: 'ws_max_message_size_mb', label: t('desktop.server.wsMaxMessageSize'), hint: t('desktop.server.wsMaxMessageSizeHint'), type: 'number', min: 1, max: 512 },
+  {
+    key: 'shutdown_timeout_secs',
+    label: t('desktop.server.shutdownTimeout'),
+    hint: 's',
+    type: 'number',
+    min: 1,
+    max: 300,
+  },
+  {
+    key: 'ws_max_frame_size_kb',
+    label: t('desktop.server.wsMaxFrameSize'),
+    hint: t('desktop.server.wsMaxFrameSizeHint'),
+    type: 'number',
+    min: 1,
+    max: 16384,
+  },
+  {
+    key: 'ws_max_message_size_mb',
+    label: t('desktop.server.wsMaxMessageSize'),
+    hint: t('desktop.server.wsMaxMessageSizeHint'),
+    type: 'number',
+    min: 1,
+    max: 512,
+  },
 ])
 
 /** 还原所有配置为默认值 */
@@ -484,7 +682,10 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
-  if (uptimeTimer) { clearInterval(uptimeTimer); uptimeTimer = null }
+  if (uptimeTimer) {
+    clearInterval(uptimeTimer)
+    uptimeTimer = null
+  }
 })
 
 watch(status, (newVal) => {

@@ -40,7 +40,7 @@ pub mod wasm_host;
 pub use args::CommandArgs;
 pub use command::{PluginCommand, PluginCommandEntry};
 pub use context::RustPluginContext;
-pub use host::{ConfigKey, HostApi, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFileService, HostFs, HostHttp, HostLog, HostStorage, HostTerminal, HostTransfer};
+pub use host::{ConfigKey, HostApi, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs, HostHttp, HostLog, HostStorage, HostTerminal};
 pub use permission::PermissionManager;
 pub use terminal::TerminalHandler;
 pub use traits::{BedcodePlugin, BedcodePluginEntry};

@@ -46,7 +46,6 @@ const FRONTEND_PERMISSION_RULES = [
   { re: /\.session\s*\.\s*(list|get|onStatusChange)\b/, perm: 'session:read' },
   { re: /\.session\s*\.\s*(create|stop)\b/, perm: 'session:write' },
   { re: /\.http\s*\.\s*registerEndpoint\b/, perm: 'network:http' },
-  { re: /\.fileService\s*\.\s*(mount|unmount|updateRoots|getPeer|pickDirectory|pickFiles)\b/, perm: 'fileservice' },
   { re: /\.events\s*\.\s*(on|emit)\b/, perm: 'broadcast' },
 ]
 
@@ -69,7 +68,8 @@ const FRONTEND_EXTS = new Set(['.ts', '.tsx', '.vue', '.js'])
 function collectFiles(dir, exts, out = []) {
   if (!existsSync(dir)) return out
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.')) continue
+    if (entry.name === 'node_modules' || entry.name === 'dist' || entry.name.startsWith('.'))
+      continue
     const full = join(dir, entry.name)
     if (entry.isDirectory()) {
       collectFiles(full, exts, out)
@@ -119,7 +119,11 @@ function splitTopLevel(body) {
       else if (ch === inStr) inStr = null
       continue
     }
-    if (ch === "'" || ch === '"' || ch === '`') { inStr = ch; cur += ch; continue }
+    if (ch === "'" || ch === '"' || ch === '`') {
+      inStr = ch
+      cur += ch
+      continue
+    }
     if (ch === '{' || ch === '[' || ch === '(') depth++
     else if (ch === '}' || ch === ']' || ch === ')') depth--
     if (ch === ',' && depth === 0) {
@@ -267,7 +271,9 @@ export function generateManifest(cwd, { check = false } = {}) {
   if (fileHandlers.length > 0) {
     const old = indexById(contributes.fileHandlers)
     contributes.fileHandlers = fileHandlers.map((s) => mergeEntry(s, old.get(s.id)))
-    report.push(`contributes.fileHandlers ← ${contributes.fileHandlers.map((v) => v.id).join(', ')}`)
+    report.push(
+      `contributes.fileHandlers ← ${contributes.fileHandlers.map((v) => v.id).join(', ')}`,
+    )
   }
 
   // 注册调用 → 权限
@@ -303,7 +309,7 @@ export function generateManifest(cwd, { check = false } = {}) {
     if (commandIds.length > 0) {
       const old = indexById(contributes.commands)
       contributes.commands = commandIds.map((id) =>
-        mergeEntry({ id }, old.get(id), { id, title: id })
+        mergeEntry({ id }, old.get(id), { id, title: id }),
       )
       report.push(`contributes.commands ← ${commandIds.length} 个`)
     }

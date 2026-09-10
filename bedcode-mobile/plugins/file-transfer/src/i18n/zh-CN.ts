@@ -25,6 +25,25 @@ export default {
   // 已连接但尚未收到对端公告（未共享）：无可辨识信息时的占位名
   'transfer.peer.unknown': '未知设备',
 
+  // ==================== 附近设备面板 ====================
+  'transfer.devices.title': '附近设备',
+  'transfer.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.devices.empty': '未发现附近设备；请确认对方已打开 BedCode 并接入同一网络',
+  'transfer.devices.online': '在线',
+'transfer.devices.recentSeen': '最近可见',
+  'transfer.devices.connected': '已连接',
+  'transfer.devices.connecting': '连接中…',
+  'transfer.devices.capNone': '不支持传输',
+  'transfer.devices.activeCurrent': '当前设备',
+  'transfer.devices.setActive': '设为当前',
+  'transfer.devices.connect': '连接',
+  'transfer.devices.disconnect': '断开',
+  'transfer.devices.denied': '对方拒绝了连接',
+  'transfer.devices.unreachable': '无法连接，设备可能已离线',
+  'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+  'transfer.devices.scan': '探索发现',
+  'transfer.devices.scanning': '探索中…',
+
   // ==================== 顶栏 / 浏览 ====================
   'transfer.topbar.settings': '设置',
   'transfer.topbar.closeSettings': '返回',
@@ -32,6 +51,7 @@ export default {
   'transfer.topbar.queryPeer': '重新检测对端',
   'transfer.topbar.downloadSelected': '下载到手机 ({count} 项 · {size})',
   'transfer.topbar.uploadFile': '上传文件',
+  'transfer.topbar.connectDevice': '发起连接（附近设备）',
   'transfer.breadcrumb.home': '文件',
   'transfer.table.empty': '此目录为空',
   'transfer.table.loading': '加载中...',
@@ -48,6 +68,7 @@ export default {
   'transfer.task.state.failed': '失败',
   'transfer.task.state.rejected': '同名被拒',
   'transfer.task.state.cancelled': '已取消',
+  'transfer.task.state.interrupted': '已中断（应用重启）',
   'transfer.task.pause': '暂停',
   'transfer.task.resume': '恢复',
   'transfer.task.cancel': '取消',
@@ -64,6 +85,9 @@ export default {
   'transfer.task.reason.dirUnavailable': '该目录当前不可用',
   'transfer.task.reason.noRoots': '对端尚未设置共享目录',
   'transfer.task.reason.localNotFound': '本地文件不存在',
+  'transfer.task.reason.cancelledBySender': '对方取消了传输',
+  'transfer.task.reason.cancelledByReceiver': '对方取消了传输',
+  'transfer.task.reason.cancelledBySelf': '已取消传输',
   'transfer.task.reason.unknown': '传输失败',
 
   // ==================== 迷你传输条 ====================
@@ -86,7 +110,6 @@ export default {
   // ==================== 设置 ====================
   'transfer.settings.title': '文件传输设置',
   'transfer.settings.sharedRoots': '共享目录',
-  'transfer.settings.addRootHint': '共享目录经系统选择器选择并持久化授权（重启仍有效）；App 内可直接浏览并上传其中的文件，无需「所有文件访问权限」',
   'transfer.settings.pickRoot': '选择目录',
   'transfer.settings.picking': '选择中…',
   'transfer.settings.pickFailed': '添加失败：目录选择未完成或授权失败，请重试',
@@ -102,9 +125,11 @@ export default {
   'transfer.settings.downloadDir': '下载目录',
   'transfer.settings.noDownloadDir': '未设置',
   'transfer.settings.downloadDirHint': '下载固定保存到系统下载目录',
+  'transfer.settings.openDownloadDir': '打开',
+  'transfer.settings.openDownloadDirOpening': '打开中…',
+  'transfer.settings.openDownloadDirFailed': '打开下载目录失败',
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的文件数（1–8）',
-  'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任 WiFi 网络中使用',
   'transfer.settings.saved': '设置已保存',
 
   // ==================== 上传页（共享目录） ====================
@@ -163,6 +188,7 @@ export default {
   'transfer.size.gb': '{value} GB',
   'transfer.time.justNow': '刚刚',
   'transfer.time.minutesAgo': '{count} 分钟前',
+  'transfer.time.hoursAgo': '{count} 小时前',
 
   // ==================== v2 队列 4 tab / 批量批准 / 接收 / 历史 ====================
   'transfer.queue.all': '全部',
@@ -188,6 +214,9 @@ export default {
   'transfer.history.clear': '清空历史',
   'transfer.history.empty': '暂无传输历史',
   'transfer.history.openFolder': '打开所在文件夹',
+  'transfer.history.clearConfirmTitle': '清空传输历史？',
+  'transfer.history.clearConfirmMessage': '将删除全部历史记录（含发送与接收的归档条目），此操作不可撤销。',
+  'transfer.history.clearConfirmAction': '清空',
   'transfer.history.results.completed': '已完成',
   'transfer.history.results.failed': '失败',
   'transfer.history.results.rejected': '已拒绝',
@@ -197,5 +226,55 @@ export default {
   'transfer.settings.receivingPolicyAccept': '直接接收',
   'transfer.settings.receivingPolicyReject': '直接拒绝',
   'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
+  'transfer.settings.encryption': '传输加密',
+  'transfer.settings.encryptionOn': '开',
+  'transfer.settings.encryptionOff': '关',
+  'transfer.settings.encryptionHint': '开启后，传输内容将自动加密保护，防止被第三方截取',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
-}
+
+  // ==================== 首连确认（全局对话框，spec 决策 7） ====================
+  'transfer.consent.title': '连接请求',
+  'transfer.consent.body': '{name} 请求连接你的设备以互传文件',
+  'transfer.consent.fingerprint': '设备指纹：{fingerprint}',
+  'transfer.consent.timeoutHint': '{seconds} 秒内未处理将自动拒绝',
+  'transfer.consent.namelessHint': '无法确认对方设备名，请核对指纹后再决定',
+  'transfer.consent.trust': '信任',
+  'transfer.consent.deny': '拒绝',
+  'transfer.consent.autoTrustedToast': '已自动信任配对设备 {name}',
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': '可信对端',
+  'transfer.trusted.loading': '加载中...',
+  'transfer.trusted.empty': '暂无可信对端；首次连接经确认后建立信任',
+  'transfer.trusted.loadFailed': '可信对端列表加载失败',
+  'transfer.trusted.retry': '重试',
+  'transfer.trusted.addedAt': '加入时间：{time}',
+  'transfer.trusted.revoke': '撤销',
+  'transfer.trusted.cancel': '取消',
+  'transfer.trusted.revokeTitle': '撤销信任',
+  'transfer.trusted.revokeBody': '撤销后，{name} 再次连接时需要重新经过你的确认。确定撤销对该设备的信任吗？',
+  'transfer.trusted.revokeFailed': '撤销失败，请稍后重试',
+  'transfer.trusted.revokedToast': '已撤销对 {name} 的信任',
+
+  // ==================== 三段式主视图（传输/浏览/设备） ====================
+  'transfer.v2.tab.transfers': '传输',
+  'transfer.v2.tab.browse': '浏览',
+  'transfer.v2.tab.devices': '设备',
+  'transfer.v2.filter.all': '全部',
+  'transfer.v2.filter.sending': '发送',
+  'transfer.v2.filter.receiving': '接收',
+  'transfer.v2.filter.history': '历史',
+  'transfer.v2.upload.cta': '上传文件',
+  'transfer.v2.queue.hint': '队列 {count} 项',
+  'transfer.v2.active.overall': '总体 {percent}%',
+  'transfer.v2.active.viewQueue': '查看队列',
+  'transfer.v2.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.v2.pendingRequests': '{count} 个待处理请求',
+  'transfer.v2.history.openFolder': '打开所在文件夹',
+  'transfer.v2.history.noLocalFile': '本机没有对应文件',
+  'transfer.history.allFilesAccess.title': '需要「所有文件访问」权限',
+  'transfer.history.allFilesAccess.message': '打开系统的公共下载目录需要「所有文件访问」权限（系统设置 → 应用 → 特殊权限设置 → 所有文件访问）。部分设备未提供该开关，此时 BedCode 会自动改用镜像目录视图显示下载文件，无需授权。',
+  'transfer.history.allFilesAccess.cancel': '取消',
+  'transfer.history.allFilesAccess.goToSettings': '去设置',
+  'transfer.history.allFilesAccess.after': '请在系统设置中开启「允许访问所有文件」后，重新点击「打开所在文件夹」',
+} satisfies MessageSchema

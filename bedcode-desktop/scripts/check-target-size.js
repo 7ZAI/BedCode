@@ -10,13 +10,16 @@
  */
 
 import { execSync } from 'child_process'
-import { existsSync, statSync } from 'fs'
+import { existsSync } from 'fs'
 import { join } from 'path'
 
 // 配置
 const CONFIG = {
   // target 目录最大允许大小 (GB)
-  maxSizeGB: 10,
+  // 阈值 15GB：与 AGENTS.md「构建前检查 src-tauri/target 目录大小，超过 15GB 执行 cargo clean」一致。
+  // 历史值 10GB 已不适用——desktop 完整增量缓存（wasmtime/actix 等）实测 ~15~20GB，
+  // 阈值过低会误清缓存反而拖慢增量构建
+  maxSizeGB: 15,
   // target 目录路径
   targetDir: join(process.cwd(), 'src-tauri', 'target'),
   // 是否自动清理 (设为 false 仅警告)
@@ -43,7 +46,7 @@ function getDirectorySize(dirPath) {
     // Windows: 使用 PowerShell
     const output = execSync(
       `powershell -Command "(Get-ChildItem -Path '${dirPath}' -Recurse | Measure-Object -Property Length -Sum).Sum"`,
-      { encoding: 'utf-8' }
+      { encoding: 'utf-8' },
     )
     return parseInt(output.trim(), 10)
   } catch (error) {
@@ -108,7 +111,7 @@ function main() {
     if (CONFIG.autoClean) {
       cargoClean()
     } else {
-      console.log('💡 建议运行: npm run target:clean\n')
+      console.log('💡 建议运行: pnpm run target:clean\n')
       process.exit(1)
     }
   } else {

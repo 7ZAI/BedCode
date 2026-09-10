@@ -3,9 +3,9 @@
 //! 桌面端数据变更事件，用于内部事件总线
 //! 触发向客户端的增量数据广播
 
-use crate::enums::SessionStatus;
 use super::app_event::AppEvent;
 use crate::enums::PluginQuestion;
+use crate::enums::SessionStatus;
 
 /// 桌面端数据变更事件
 ///
@@ -72,10 +72,7 @@ pub enum DesktopSyncEvent {
 
     // === 会话模式相关 ===
     /// 会话自动授权模式变更
-    SessionModeChanged {
-        session_id: String,
-        auto_approve: bool,
-    },
+    SessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列相关 ===
     /// 会话任务队列变更（由 auto-task 插件发布）
@@ -100,32 +97,6 @@ pub enum DesktopSyncEvent {
         status: String,
         /// 触发动作：create / delete / trigger / missed / failed
         action: String,
-    },
-
-    // === 文件服务相关（内网文件传输插件规格阶段 2） ===
-    /// 桌面侧插件挂载点可用性变更（宿主在 registry mount/unmount/update_roots
-    /// 成功后自动发出，不经插件；移动端经 SyncData 接收后转 MessageBus）
-    FileServiceChanged {
-        plugin_id: String,
-        mount_path: String,
-        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
-        available: bool,
-        /// 挂载支持的操作集合（unmount 时为空）
-        operations: Vec<bedcode_plugin_api::FileOperation>,
-    },
-
-    // === 传输批应答（v2） ===
-    /// 桌面端（接收端宿主）对传输批的应答：批准/拒绝/超时 → 移动端发送方
-    ///
-    /// 由 registry.publish_batch_resolved 经 sync_tx 发出，SyncEventHandler
-    /// 映射为 SyncPayload::TransferApproval 广播到 WS
-    TransferApproval {
-        /// 批 ID
-        batch_id: String,
-        /// "approved" | "rejected"
-        decision: String,
-        /// "" | "user-rejected" | "timeout"
-        reason: String,
     },
 }
 
@@ -169,15 +140,9 @@ impl From<bedcode_plugin_api::events::SyncEvent> for DesktopSyncEvent {
                 task_id,
                 status,
             },
-            SyncEvent::TaskScheduledChanged {
-                job_id,
-                status,
-                action,
-            } => DesktopSyncEvent::TaskScheduledChanged {
-                job_id,
-                status,
-                action,
-            },
+            SyncEvent::TaskScheduledChanged { job_id, status, action } => {
+                DesktopSyncEvent::TaskScheduledChanged { job_id, status, action }
+            }
         }
     }
 }

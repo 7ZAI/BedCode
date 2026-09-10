@@ -1,6 +1,10 @@
 <template>
   <div class="form-group">
-    <label v-if="label" :for="id" class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]">
+    <label
+      v-if="label"
+      :for="id"
+      class="block text-xs font-medium mb-1.5 text-[var(--text-secondary)]"
+    >
       {{ label }}
       <span v-if="required" class="text-red-500">*</span>
     </label>
@@ -15,7 +19,7 @@
         :class="[
           triggerSizeCls,
           error ? 'border-red-500' : 'border-[var(--border-input)]',
-          { 'opacity-50 cursor-not-allowed': disabled }
+          { 'opacity-50 cursor-not-allowed': disabled },
         ]"
         @click="toggle"
         @keydown.down.prevent="open"
@@ -25,21 +29,31 @@
         <span :class="{ 'text-[var(--text-tertiary)]': !selectedLabel }">
           {{ selectedLabel || placeholder || '' }}
         </span>
-        <svg class="w-5 h-5 flex-shrink-0 text-[var(--text-tertiary)] transition-transform duration-200" :class="{ 'rotate-180': isOpen }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+        <svg
+          class="w-5 h-5 flex-shrink-0 text-[var(--text-tertiary)] transition-transform duration-200"
+          :class="{ 'rotate-180': isOpen }"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M19 9l-7 7-7-7"
+          />
         </svg>
       </button>
 
-      <!-- Dropdown Panel -->
+      <!-- Dropdown Panel：定位由 applySelectPanelPosition 命令式写入（top/left/width + 列表 maxHeight） -->
       <Teleport to="body">
         <div
           v-show="isOpen"
           ref="panelRef"
           class="fixed z-[60] bg-[var(--bg-card)] border border-[var(--border-input)] rounded-input shadow-card overflow-hidden transition-opacity duration-150"
           :class="isOpen ? 'opacity-100' : 'opacity-0 pointer-events-none'"
-          :style="panelStyle"
         >
-          <ul class="py-1 overflow-y-auto" :style="panelListStyle">
+          <ul ref="panelListRef" class="py-1 overflow-y-auto">
             <li
               v-if="placeholder"
               :class="['text-[var(--text-tertiary)] cursor-default select-none', optionRowCls]"
@@ -52,14 +66,17 @@
               :key="option.value"
               :class="[
                 optionRowCls,
-                'cursor-pointer select-none transition-colors duration-150',
-                hoveredIndex === index
+                'select-none transition-colors duration-150',
+                option.disabled
+                  ? 'opacity-50 cursor-not-allowed text-[var(--text-tertiary)]'
+                  : 'cursor-pointer hover:bg-[var(--color-primary-light)] hover:text-brand hover:font-medium',
+                !option.disabled && hoveredIndex === index
                   ? 'bg-[var(--color-primary-light)] text-brand font-medium'
-                  : 'text-[var(--text-primary)]'
+                  : 'text-[var(--text-primary)]',
               ]"
-              @mouseenter="hoveredIndex = index"
+              @mouseenter="hoveredIndex = option.disabled ? -1 : index"
               @mouseleave="hoveredIndex = -1"
-              @click="select(option.value)"
+              @click="option.disabled ? null : select(option.value)"
             >
               {{ option.label }}
             </li>
@@ -75,20 +92,25 @@
 
 <script setup lang="ts">
 /**
- * Select - 宿主共享自定义下拉选择组件
+ * Select - 宿主共享下拉选择组件（新版）
  *
  * 替代原生 <select>，hover 样式完全由 CSS token 控制，适配深色/浅色主题。
- * 同时提供给插件 SDK（@binblink/plugin-sdk-desktop/ui）供插件引用。
+ * 同时提供给插件 SDK（@binblink/bedcode-plugin-sdk-desktop/ui）供插件引用。
+ *
+ * 组件只负责 UI 与交互；展开定位（视口翻转 / maxHeight 收缩 / 水平夹持 /
+ * Linux 根 zoom 坐标换算）全部封装在 apply-select-position.ts。
  *
  * - size="sm"：插件紧凑布局（32px/12px）；默认 md 与宿主表单一致（--input-height）
  * - open 事件：下拉展开时触发（插件可借此静默刷新选项，无原生组件禁用打断问题）
  */
 import { ref, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { computeSelectPosition, SELECT_MAX_PANEL_HEIGHT } from './select-position'
+import { applySelectPanelPosition } from './apply-select-position'
 
 export interface SelectOption {
   value: string | number
   label: string
+  /** 选项是否禁用——禁用项仍会展示但不可选中，鼠标点击不触发选择 */
+  disabled?: boolean
 }
 
 export interface Props {
@@ -116,11 +138,10 @@ const isOpen = ref(false)
 const hoveredIndex = ref(-1)
 const triggerRef = ref<HTMLElement | null>(null)
 const panelRef = ref<HTMLElement | null>(null)
-const panelStyle = ref<Record<string, string>>({})
-const panelListStyle = ref<Record<string, string>>({})
+const panelListRef = ref<HTMLElement | null>(null)
 
 const selectedLabel = computed(() => {
-  const opt = props.options.find(o => o.value === props.modelValue)
+  const opt = props.options.find((o) => o.value === props.modelValue)
   return opt?.label ?? ''
 })
 
@@ -134,24 +155,13 @@ const optionRowCls = computed(() =>
   props.size === 'sm' ? 'px-2 py-1.5 text-xs' : 'px-4 py-2.5 text-sm',
 )
 
-function computePosition() {
-  if (!triggerRef.value) return
-  const rect = triggerRef.value.getBoundingClientRect()
-  // 面板未渲染/高度不可测时退回设计高度，规则仍然成立
-  const panelHeight = panelRef.value?.getBoundingClientRect().height || SELECT_MAX_PANEL_HEIGHT
-  const pos = computeSelectPosition(
-    { top: rect.top, bottom: rect.bottom, left: rect.left, width: rect.width },
-    { width: window.innerWidth, height: window.innerHeight },
-    panelHeight,
-  )
-  panelStyle.value = {
-    top: `${pos.top}px`,
-    left: `${pos.left}px`,
-    width: `${rect.width}px`,
-  }
-  panelListStyle.value = {
-    maxHeight: `${pos.maxHeight}px`,
-  }
+function positionPanel() {
+  if (!triggerRef.value || !panelRef.value || !panelListRef.value) return
+  applySelectPanelPosition({
+    trigger: triggerRef.value,
+    panel: panelRef.value,
+    list: panelListRef.value,
+  })
 }
 
 function toggle() {
@@ -164,7 +174,8 @@ function open() {
   isOpen.value = true
   hoveredIndex.value = -1
   emit('open')
-  nextTick(computePosition)
+  // 等面板随 v-show 渲染可见后再定位（同步测量，同帧写回，无闪帧）
+  nextTick(positionPanel)
 }
 
 function close() {
@@ -179,11 +190,7 @@ function select(value: string | number) {
 
 function onClickOutside(e: MouseEvent) {
   const target = e.target as HTMLElement
-  if (
-    isOpen.value &&
-    !triggerRef.value?.contains(target) &&
-    !panelRef.value?.contains(target)
-  ) {
+  if (isOpen.value && !triggerRef.value?.contains(target) && !panelRef.value?.contains(target)) {
     close()
   }
 }

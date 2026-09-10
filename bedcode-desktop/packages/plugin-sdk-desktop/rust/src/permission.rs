@@ -15,18 +15,15 @@ pub const PERMISSION_SESSION_WRITE: &str = "session:write";
 pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
 pub const PERMISSION_UI_TOOLBOX: &str = "ui:toolbox";
 pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
+pub const PERMISSION_UI_DIALOG: &str = "ui:dialog";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
 pub const PERMISSION_FS_WRITE: &str = "fs:write";
 pub const PERMISSION_BROADCAST: &str = "broadcast";
-/// 文件服务：挂载受控文件服务端点（/api/plugins/{pluginId}/{mount}/**）
-pub const PERMISSION_FILESERVICE: &str = "fileservice";
 /// 系统文件操作：在系统文件管理器中显示本地文件/目录（传输完成「打开本地目录」）
 pub const PERMISSION_SYSTEM_OPEN: &str = "system:open";
-/// 传输引擎：发起断点续传的文件上传/下载任务
-pub const PERMISSION_TRANSFER: &str = "transfer";
 /// 定时器：注册宿主周期回调（到点调用插件 command，见 ADR 0003）
 pub const PERMISSION_TIMER: &str = "timer:schedule";
 /// 进程执行：在桌面端进程内 spawn 外部命令/脚本（host-process，v8）
@@ -39,6 +36,10 @@ pub const PERMISSION_PROCESS: &str = "process:run";
 /// 与 process:run 同信任域（CLI 本质是进程执行入口的封装）；
 /// 幂等安装/卸载，仅操作本插件声明的文件与 PATH 条目
 pub const PERMISSION_APP_CLI: &str = "app:cli";
+/// 对等网络：发现/信任/拨号/收发/浏览的宿主 peer-net 能力（host-peer）
+pub const PERMISSION_PEER: &str = "peer";
+/// mDNS 浏览纯能力：browse-only 发现事件透传（host-mdns，ADR 0022 v2）
+pub const PERMISSION_MDNS: &str = "mdns";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -50,18 +51,19 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_SIDEBAR,
     PERMISSION_UI_TOOLBOX,
     PERMISSION_UI_STATUSBAR,
+    PERMISSION_UI_DIALOG,
     PERMISSION_UI_INPUT,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
     PERMISSION_FS_READ,
     PERMISSION_FS_WRITE,
     PERMISSION_BROADCAST,
-    PERMISSION_FILESERVICE,
     PERMISSION_SYSTEM_OPEN,
-    PERMISSION_TRANSFER,
     PERMISSION_TIMER,
     PERMISSION_PROCESS,
     PERMISSION_APP_CLI,
+    PERMISSION_PEER,
+    PERMISSION_MDNS,
 ];
 
 /// 权限到 API 方法的映射
@@ -74,25 +76,48 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
     (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),
+    (PERMISSION_UI_DIALOG, &["ui.showDialog"]),
     (PERMISSION_UI_INPUT, &["ui.registerInputExtension", "ui.registerTerminalToolbarItem"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),
     (PERMISSION_BROADCAST, &["broadcast.sync"]),
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),
     (PERMISSION_FS_WRITE, &["fs.write", "fs.copy"]),
-    (PERMISSION_FILESERVICE, &[
-        "fileService.mount",
-        "fileService.unmount",
-        "fileService.updateRoots",
-        "fileService.getPeer",
-        "fileService.pickDirectory",
-        "fileService.pickFiles",
-    ]),
     (PERMISSION_SYSTEM_OPEN, &["system.revealInDir"]),
-    (PERMISSION_TRANSFER, &["transfer.start", "transfer.cancel"]),
     (PERMISSION_TIMER, &["timer.register"]),
     (PERMISSION_PROCESS, &["process.run", "process.kill"]),
     (PERMISSION_APP_CLI, &["app.cliInstall", "app.cliUninstall"]),
+    (PERMISSION_PEER, &[
+        "peer.listDevices",
+        "peer.dial",
+        "peer.disconnect",
+        "peer.respondConsent",
+        "peer.listTrusted",
+        "peer.revokeTrusted",
+        "peer.sendFiles",
+        "peer.listTransfers",
+        "peer.cancelTransfer",
+        "peer.retryTransfer",
+        "peer.clearTransferHistory",
+        "peer.listReceiving",
+        "peer.respondTransfer",
+        "peer.cancelReceiving",
+        "peer.clearReceivingHistory",
+        "peer.getReceiveSettings",
+        "peer.setReceivePolicy",
+        "peer.listSharedDirectories",
+        "peer.removeSharedDirectory",
+        "peer.addSharedDirectory",
+        "peer.listSharedRoots",
+        "peer.browseDirectory",
+        "peer.pullFiles",
+        "peer.pickFiles",
+        // ADR 0022 v2 新增原语
+        "peer.dialEndpoint",
+        "peer.close",
+        "peer.setSharedRoots",
+    ]),
+    (PERMISSION_MDNS, &["mdns.browse", "mdns.stopBrowse"]),
 ];
 
 /// 权限管理器

@@ -51,6 +51,14 @@ pub struct PluginManifest {
     /// 插件图标：图片路径（相对插件目录）或内联 SVG 标记
     #[serde(default)]
     pub icon: Option<String>,
+    /// WASI 预打开目录声明（wasm32-wasip2 插件 std::fs 直连文件访问）
+    ///
+    /// 宿主在实例化时逐项校验授权（is_granted，无弹窗）后挂载到 guest
+    /// 路径 `/data`、`/data1`、…；未授权/展开失败的目录跳过（不阻断加载）。
+    /// 支持 `${home}` 变量展开为主目录绝对路径。缺省空数组 = 无预打开
+    /// （既有 wasm32-unknown-unknown 插件不受影响）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub wasi_preopen_dirs: Vec<String>,
 }
 
 fn default_sandbox() -> String {
@@ -164,7 +172,11 @@ pub struct ViewContribution {
     /// "sidebar" | "toolbox" | "statusbar"
     #[serde(rename = "type")]
     pub view_type: String,
+    /// 静态标题；statusbar 项由运行时注册动态 label，声明中可缺省
+    #[serde(default)]
     pub title: String,
+    /// 视图组件名；statusbar 项无独立视图组件（点击行为运行时注册），声明中可缺省
+    #[serde(default)]
     pub component: String,
 }
 
@@ -203,7 +215,12 @@ pub struct FileHandlerContribution {
 #[serde(tag = "state", content = "error")]
 pub enum PluginState {
     Loaded,
+    /// 激活进行中（auto-activation / 手动激活期间的瞬时中间态，列表查询可见）
+    Activating,
     Activated,
+    /// 激活成功但启动初始化失败（v8 契约）：WASM 实例可用、扩展点已注册，
+    /// 但插件内部启动流程未完成。可重试激活回到 Activated
+    Degraded(String),
     /// 插件请求的权限尚未获得用户批准（需在插件管理页人工审批后才能激活）
     NeedsApproval,
     Error(String),
@@ -226,232 +243,6 @@ pub struct PluginInfo {
     pub state: PluginState,
     pub extension_path: String,
     pub contributes: PluginContributes,
-}
-
-// ==================== File Service & Transfer ====================
-//
-// 宿主通用文件服务能力的 SDK 契约类型（两端同构，见内网文件传输插件规格第 4 节）。
-// serde camelCase 与线协议一致：宿主 HTTP 端点、WASM ABI JSON 均直接使用。
-
-/// 文件操作类型（挂载时声明支持的操作集合）
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum FileOperation {
-    /// 目录列举
-    List,
-    /// 文件下载（Range 续传）
-    Download,
-    /// 文件上传（upload session 模型）
-    Upload,
-}
-
-/// 文件服务挂载选项（插件 → 宿主）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MountOptions {
-    /// 挂载点名称（小写字母数字 `-_`，暴露为 /plugins/{pluginId}/{mountPath}/**）
-    pub mount_path: String,
-    /// 允许目录根（绝对路径，来自插件 storage 的用户配置）；供对端浏览/下载（只读暴露），
-    /// 声明 Upload 操作时同时作为接收落点的兼容回退（旧语义）。
-    pub roots: Vec<String>,
-    /// 允许的操作集合（未声明的操作端点返回 403）
-    pub operations: Vec<FileOperation>,
-    /// 接收落点（接收对端 upload 的目录，spec 方向模型：“下载目录 = 接收落点”，
-    /// 不落共享 roots）。存在时 POST /upload 创建 session 的目标名解析以此为准，
-    /// 跳 roots 沙箱；为 None（旧插件）时回退到 roots 语义保后兼容。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub downloads_dir: Option<String>,
-}
-
-/// 挂载结果（宿主 → 插件）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MountResult {
-    /// 挂载点名称
-    pub mount_path: String,
-    /// 服务端基础路径（相对主机地址，如 /api/plugins/{pluginId}/{mountPath}）
-    pub base_path: String,
-}
-
-/// 上传策略钩子入参（宿主 → 插件）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UploadRequestMeta {
-    /// 目标相对路径（相对挂载根）
-    pub relative_path: String,
-    /// 声明的文件大小（字节）
-    pub size: u64,
-}
-
-/// 上传策略钩子决定（插件 → 宿主）—— v2 三路化：allow / deny / ask
-///
-/// fail-closed：任何异常（超时/解析失败/插件未实现）宿主一律视为拒绝。
-/// wire 兼容：旧插件返回 `{ allow: false }` → deny；`{ allow: true }` → allow。
-/// ask = 请求用户批准（批上下文，spec 14.2），与 allow 互斥。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UploadHookDecision {
-    /// 是否允许上传
-    pub allow: bool,
-    /// v2：true = 需要用户批准（批上下文）；与 allow 互斥
-    /// skip_serializing_if：false 时不序列化，保持 v1 wire 形状（与移动端 SDK 逐字一致）
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub ask: bool,
-    /// 拒绝原因（如 duplicate-name / policy-denied），允许时为空
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-/// serde skip 辅助：false 时不序列化（保持 v1 wire 形状，两端字节一致）
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-impl UploadHookDecision {
-    /// 允许上传
-    pub fn allow() -> Self {
-        Self { allow: true, ask: false, reason: None }
-    }
-
-    /// 拒绝上传（fail-closed 语义）
-    pub fn deny(reason: impl Into<String>) -> Self {
-        Self { allow: false, ask: false, reason: Some(reason.into()) }
-    }
-
-    /// v2：请求用户批准（异步批准协议，宿主将批置 pending 并等待用户应答）
-    pub fn ask() -> Self {
-        Self { allow: false, ask: true, reason: None }
-    }
-}
-
-/// 批量传输请求元信息（宿主 → 插件批钩子入参，v2）
-///
-/// POST /transfer-request 时宿主调用一次批级钩子；files 为批内全部
-/// 文件的元信息清单，total_size 为批总大小（字节）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransferRequestMeta {
-    /// 批 ID（UUID，发送方生成，批上下文标识）
-    pub batch_id: String,
-    /// 批内文件清单（相对路径 + 大小）
-    pub files: Vec<UploadRequestMeta>,
-    /// 批总大小（字节）
-    pub total_size: u64,
-}
-
-impl Default for UploadHookDecision {
-    /// 默认拒绝（fail-closed）
-    fn default() -> Self {
-        Self::deny("no decision")
-    }
-}
-
-/// 传输方向
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TransferDirection {
-    /// 从本地读文件 PUT 到对端
-    Upload,
-    /// 从对端 GET 文件写到本地
-    Download,
-}
-
-/// 传输任务请求（插件 → 宿主传输引擎）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransferRequest {
-    /// 任务 ID（插件预生成）。
-    ///
-    /// 宿主以它为进度总线 topic（`transfer:{task_id}`）与 Tauri 事件
-    /// `plugin:transfer:progress` 的 taskId，不再自生成 UUID ——
-    /// 插件可在 `transfer_start` 前订阅 `transfer:{task_id}` 收到全部
-    /// 进度/终态消息，避免「宿主传输先完成、插件后订阅」的竞态丢消息
-    pub task_id: String,
-    /// 传输方向
-    pub direction: TransferDirection,
-    /// 对端 URL（下载 = 文件 URL；上传 = upload session 的 append URL）
-    pub url: String,
-    /// 附加请求头（如 Authorization、Range 由插件控制）
-    #[serde(default)]
-    pub headers: HashMap<String, String>,
-    /// 本地文件路径（下载 = 写入目标，上传 = 读取源）
-    pub local_path: String,
-    /// 续传偏移（字节，0 = 从头）
-    #[serde(default)]
-    pub offset: u64,
-    /// 预期总大小（字节，用于进度计算；0 = 未知）
-    #[serde(default)]
-    pub expected_size: u64,
-    /// 下载完成后的最终落位路径（原子 rename 目标）。
-    /// 仅 Download 方向生效：local_path 写 .part 临时文件，完成后 rename 到此路径；
-    /// 目标已存在 → Failed("duplicate-name") 且保留临时文件。Upload 方向忽略。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub final_path: Option<String>,
-}
-
-/// 传输任务状态
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "state", content = "reason")]
-pub enum TransferState {
-    /// 传输进行中
-    #[serde(rename = "running")]
-    Running,
-    /// 传输完成（终态）
-    #[serde(rename = "completed")]
-    Completed,
-    /// 传输失败（终态，携带原因）
-    #[serde(rename = "failed")]
-    Failed(String),
-    /// 已取消（终态，宿主已回报最终偏移）
-    #[serde(rename = "cancelled")]
-    Cancelled,
-}
-
-/// 传输进度（宿主 → 插件/前端，经 Tauri 事件与消息总线双通道推送）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TransferProgress {
-    /// 任务 ID（= 插件预生成的 task_id，与任务快照同一命名空间）
-    pub task_id: String,
-    /// 已传输字节数（含续传偏移）
-    pub transferred: u64,
-    /// 总字节数（0 = 未知）
-    pub total: u64,
-    /// 瞬时速率（字节/秒）
-    pub bytes_per_sec: u64,
-    /// 当前状态
-    pub state: TransferState,
-}
-
-/// 对端挂载点信息（控制面公告的单个挂载，阶段 2 起）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerMountAnnouncement {
-    /// 挂载所属插件 ID（URL 第一段）
-    pub plugin_id: String,
-    /// 挂载点名称（URL 第二段）
-    pub mount_path: String,
-    /// 该挂载支持的操作集合
-    pub operations: Vec<FileOperation>,
-}
-
-/// 对端文件服务信息（控制面公告，阶段 2 由 WS 公告填充）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PeerFileService {
-    /// 对端 IP
-    pub ip: String,
-    /// 对端文件服务端口
-    pub port: u16,
-    /// 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时可为空）
-    #[serde(default)]
-    pub token: String,
-    /// 对端真实设备名（用户设置名，获取不到时为兜底名）
-    #[serde(default)]
-    pub device_name: String,
-    /// 对端挂载点列表
-    #[serde(default)]
-    pub mounts: Vec<PeerMountAnnouncement>,
 }
 
 #[cfg(test)]
@@ -533,6 +324,25 @@ mod tests {
         assert_eq!(back, PluginState::Error("x".into()));
     }
 
+    #[test]
+    fn test_plugin_state_activating_and_degraded() {
+        // v8 契约新增变体：Activating 瞬时中间态 + Degraded 携带降级原因，
+        // serde 形状与 Error 一致（tag=state / content=error）
+        assert_eq!(
+            serde_json::to_value(PluginState::Activating).unwrap(),
+            serde_json::json!({ "state": "Activating" })
+        );
+        assert_eq!(
+            serde_json::to_value(PluginState::Degraded("init failed".into())).unwrap(),
+            serde_json::json!({ "state": "Degraded", "error": "init failed" })
+        );
+        let back: PluginState = serde_json::from_value(
+            serde_json::json!({ "state": "Degraded", "error": "hooks install failed" }),
+        )
+        .unwrap();
+        assert_eq!(back, PluginState::Degraded("hooks install failed".into()));
+    }
+
     // ==================== 扩展点声明 ====================
 
     #[test]
@@ -553,6 +363,19 @@ mod tests {
                 "component": "SidePanel"
             })
         );
+    }
+
+    #[test]
+    fn test_view_contribution_statusbar_optional_fields() {
+        // statusbar 项由 manifest-gen 扫描 registerStatusBarItem 生成，无静态 title/component；
+        // 反序列化必须放行，否则整个插件加载失败（missing field `title`）
+        let v: ViewContribution =
+            serde_json::from_value(serde_json::json!({ "id": "v1", "type": "statusbar" }))
+                .unwrap();
+        assert_eq!(v.id, "v1");
+        assert_eq!(v.view_type, "statusbar");
+        assert_eq!(v.title, "");
+        assert_eq!(v.component, "");
     }
 
     #[test]
@@ -609,267 +432,4 @@ mod tests {
         assert_eq!(c.provides, vec!["topic:a"]);
     }
 
-    // ==================== FileOperation / Mount ====================
-
-    #[test]
-    fn test_file_operation_lowercase() {
-        // 线协议 lowercase：HTTP 端点与 WASM ABI JSON 直接使用
-        assert_eq!(serde_json::to_value(FileOperation::List).unwrap(), serde_json::json!("list"));
-        assert_eq!(serde_json::to_value(FileOperation::Download).unwrap(), serde_json::json!("download"));
-        assert_eq!(serde_json::to_value(FileOperation::Upload).unwrap(), serde_json::json!("upload"));
-        assert_eq!(
-            serde_json::from_value::<FileOperation>(serde_json::json!("download")).unwrap(),
-            FileOperation::Download
-        );
-        assert!(serde_json::from_value::<FileOperation>(serde_json::json!("Download")).is_err());
-    }
-
-    #[test]
-    fn test_mount_options_and_result_camel_case() {
-        let opts = MountOptions {
-            mount_path: "shared".into(),
-            roots: vec!["/data".into()],
-            operations: vec![FileOperation::List, FileOperation::Download],
-            downloads_dir: None,
-        };
-        assert_eq!(
-            serde_json::to_value(&opts).unwrap(),
-            serde_json::json!({
-                "mountPath": "shared",
-                "roots": ["/data"],
-                "operations": ["list", "download"]
-            })
-        );
-        let result = MountResult {
-            mount_path: "shared".into(),
-            base_path: "/api/plugins/com.bedcode.x/shared".into(),
-        };
-        assert_eq!(
-            serde_json::to_value(&result).unwrap(),
-            serde_json::json!({
-                "mountPath": "shared",
-                "basePath": "/api/plugins/com.bedcode.x/shared"
-            })
-        );
-    }
-
-    // ==================== UploadHookDecision ====================
-
-    #[test]
-    fn test_upload_hook_decision_constructors() {
-        let allow = UploadHookDecision::allow();
-        assert!(allow.allow);
-        assert!(!allow.ask);
-        assert_eq!(allow.reason, None);
-        let deny = UploadHookDecision::deny("duplicate-name");
-        assert!(!deny.allow);
-        assert!(!deny.ask);
-        assert_eq!(deny.reason.as_deref(), Some("duplicate-name"));
-        // v2：ask 与 allow 互斥
-        let ask = UploadHookDecision::ask();
-        assert!(!ask.allow);
-        assert!(ask.ask);
-        assert_eq!(ask.reason, None);
-    }
-
-    #[test]
-    fn test_upload_hook_decision_fail_closed_default() {
-        // fail-closed：Default 必须是拒绝，且携带 "no decision" 原因
-        let d = UploadHookDecision::default();
-        assert!(!d.allow);
-        assert!(!d.ask);
-        assert_eq!(d.reason.as_deref(), Some("no decision"));
-    }
-
-    #[test]
-    fn test_upload_hook_decision_wire_format() {
-        // allow/deny 时 ask 被跳过（skip_serializing_if）：保持 v1 wire 形状
-        // （旧对端/宿主按无 ask 字段解析，与移动端 SDK 逐字一致）；ask 时序列化 ask=true
-        assert_eq!(
-            serde_json::to_value(UploadHookDecision::allow()).unwrap(),
-            serde_json::json!({ "allow": true })
-        );
-        assert_eq!(
-            serde_json::to_value(UploadHookDecision::deny("duplicate-name")).unwrap(),
-            serde_json::json!({ "allow": false, "reason": "duplicate-name" })
-        );
-        assert_eq!(
-            serde_json::to_value(UploadHookDecision::ask()).unwrap(),
-            serde_json::json!({ "allow": false, "ask": true })
-        );
-        // v1 旧插件载荷（无 ask 字段）→ ask=false（deny 语义）
-        let old: UploadHookDecision =
-            serde_json::from_value(serde_json::json!({ "allow": false, "reason": "x" })).unwrap();
-        assert!(!old.ask);
-        // 旧 allow 载荷 → 仍 allow
-        let old_allow: UploadHookDecision =
-            serde_json::from_value(serde_json::json!({ "allow": true })).unwrap();
-        assert!(old_allow.allow);
-        assert!(!old_allow.ask);
-    }
-
-    #[test]
-    fn test_transfer_request_meta_wire_format() {
-        let meta = TransferRequestMeta {
-            batch_id: "b1".into(),
-            files: vec![UploadRequestMeta { relative_path: "a.txt".into(), size: 10 }],
-            total_size: 10,
-        };
-        assert_eq!(
-            serde_json::to_value(&meta).unwrap(),
-            serde_json::json!({
-                "batchId": "b1",
-                "files": [{ "relativePath": "a.txt", "size": 10 }],
-                "totalSize": 10
-            })
-        );
-    }
-
-    #[test]
-    fn test_upload_request_meta_wire_format() {
-        let meta = UploadRequestMeta { relative_path: "dir/a.txt".into(), size: 1024 };
-        assert_eq!(
-            serde_json::to_value(&meta).unwrap(),
-            serde_json::json!({ "relativePath": "dir/a.txt", "size": 1024 })
-        );
-        let back: UploadRequestMeta =
-            serde_json::from_value(serde_json::json!({ "relativePath": "a", "size": 1 })).unwrap();
-        assert_eq!(back.relative_path, "a");
-    }
-
-    // ==================== Transfer ====================
-
-    #[test]
-    fn test_transfer_direction_lowercase() {
-        assert_eq!(serde_json::to_value(TransferDirection::Upload).unwrap(), serde_json::json!("upload"));
-        assert_eq!(serde_json::to_value(TransferDirection::Download).unwrap(), serde_json::json!("download"));
-        assert!(serde_json::from_value::<TransferDirection>(serde_json::json!("UP")).is_err());
-    }
-
-    #[test]
-    fn test_transfer_request_wire_format() {
-        let req = TransferRequest {
-            task_id: "t1".into(),
-            direction: TransferDirection::Download,
-            url: "http://peer:8899/api/plugins/x/m/file".into(),
-            headers: {
-                let mut h = HashMap::new();
-                h.insert("Authorization".into(), "Bearer abc".into());
-                h
-            },
-            local_path: "/tmp/t1.part".into(),
-            offset: 4096,
-            expected_size: 0,
-            final_path: Some("/tmp/t1".into()),
-        };
-        assert_eq!(
-            serde_json::to_value(&req).unwrap(),
-            serde_json::json!({
-                "taskId": "t1",
-                "direction": "download",
-                "url": "http://peer:8899/api/plugins/x/m/file",
-                "headers": { "Authorization": "Bearer abc" },
-                "localPath": "/tmp/t1.part",
-                "offset": 4096,
-                "expectedSize": 0,
-                "finalPath": "/tmp/t1"
-            })
-        );
-    }
-
-    #[test]
-    fn test_transfer_request_minimal_round_trip() {
-        // 缺省字段（headers/offset/expectedSize/finalPath）不携带时按默认值解析
-        let json = serde_json::json!({
-            "taskId": "t2",
-            "direction": "upload",
-            "url": "http://peer/up",
-            "localPath": "/data/f.bin"
-        });
-        let req: TransferRequest = serde_json::from_value(json).unwrap();
-        assert_eq!(req.direction, TransferDirection::Upload);
-        assert!(req.headers.is_empty());
-        assert_eq!(req.offset, 0);
-        assert_eq!(req.expected_size, 0);
-        assert_eq!(req.final_path, None);
-    }
-
-    #[test]
-    fn test_transfer_state_wire_format() {
-        // state/reason 相邻标签，变体名显式锁定小写
-        assert_eq!(
-            serde_json::to_value(TransferState::Running).unwrap(),
-            serde_json::json!({ "state": "running" })
-        );
-        assert_eq!(
-            serde_json::to_value(TransferState::Failed("network".into())).unwrap(),
-            serde_json::json!({ "state": "failed", "reason": "network" })
-        );
-        assert_eq!(
-            serde_json::to_value(TransferState::Cancelled).unwrap(),
-            serde_json::json!({ "state": "cancelled" })
-        );
-        let back: TransferState =
-            serde_json::from_value(serde_json::json!({ "state": "completed" })).unwrap();
-        assert_eq!(back, TransferState::Completed);
-    }
-
-    #[test]
-    fn test_transfer_progress_wire_format() {
-        let p = TransferProgress {
-            task_id: "t1".into(),
-            transferred: 2048,
-            total: 8192,
-            bytes_per_sec: 512,
-            state: TransferState::Running,
-        };
-        assert_eq!(
-            serde_json::to_value(&p).unwrap(),
-            serde_json::json!({
-                "taskId": "t1",
-                "transferred": 2048,
-                "total": 8192,
-                "bytesPerSec": 512,
-                "state": { "state": "running" }
-            })
-        );
-    }
-
-    // ==================== Peer 公告 ====================
-
-    #[test]
-    fn test_peer_file_service_round_trip() {
-        let peer = PeerFileService {
-            ip: "192.168.1.5".into(),
-            port: 8899,
-            token: String::new(),
-            device_name: "phone".into(),
-            mounts: vec![PeerMountAnnouncement {
-                plugin_id: "com.bedcode.x".into(),
-                mount_path: "shared".into(),
-                operations: vec![FileOperation::List],
-            }],
-        };
-        let json = serde_json::to_value(&peer).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "ip": "192.168.1.5",
-                "port": 8899,
-                "token": "",
-                "deviceName": "phone",
-                "mounts": [{
-                    "pluginId": "com.bedcode.x",
-                    "mountPath": "shared",
-                    "operations": ["list"]
-                }]
-            })
-        );
-        // 缺省字段（token/deviceName/mounts）解析为默认值
-        let minimal = serde_json::json!({ "ip": "10.0.0.1", "port": 8899 });
-        let back: PeerFileService = serde_json::from_value(minimal).unwrap();
-        assert_eq!(back.token, "");
-        assert_eq!(back.device_name, "");
-        assert!(back.mounts.is_empty());
-    }
 }

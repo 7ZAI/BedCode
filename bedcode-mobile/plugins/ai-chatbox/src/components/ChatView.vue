@@ -107,7 +107,7 @@
           <!-- 全局错误条（授权失效/请求失败等） -->
           <div
             v-if="visibleError"
-            class="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl border border-[var(--mobile-error)]/30 bg-[var(--mobile-error-muted)] text-[var(--mobile-error)]"
+            class="flex items-center gap-2 px-3 py-2.5 text-xs rounded-xl border border-[color-mix(in_srgb,var(--mobile-error)_30%,transparent)] bg-[var(--mobile-error-muted)] text-[var(--mobile-error)]"
           >
             <span class="flex-1">{{ visibleError }}</span>
             <button class="w-8 h-8 flex items-center justify-center text-[var(--mobile-text-muted)] active:opacity-80" @click="dismissError">
@@ -133,6 +133,43 @@
 
         <!-- 输入区：模型 pill + 输入框内联（DeepSeek/Claude 式，键盘避让 safe area） -->
         <div class="mobile-input-bar border-t border-[var(--mobile-border)] px-3 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-[var(--mobile-bg-secondary)]/95 backdrop-blur-xl">
+          <!-- 限流重试滑出条：重试进度 + 倒计时 + 终止按钮（自动重试等待期间展示） -->
+          <Transition name="retry-slide">
+            <div
+              v-if="rateLimitRetry"
+              data-testid="rate-limit-banner"
+              class="mb-2 flex items-center gap-2 px-3 py-2 rounded-xl border border-[color-mix(in_srgb,var(--mobile-warning)_35%,transparent)] bg-[var(--mobile-warning-muted)] text-[var(--mobile-warning)]"
+            >
+              <svg
+                class="w-4 h-4 flex-shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2"
+                  d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"
+                />
+              </svg>
+              <span class="flex-1 min-w-0 text-xs leading-snug">
+                {{
+                  t('mobile.plugin.aiChatbox.rateLimitRetryIn', {
+                    seconds: rateLimitRetry.countdownSec,
+                    attempt: rateLimitRetry.attempt,
+                    max: rateLimitRetry.maxRetries,
+                  })
+                }}
+              </span>
+              <button
+                class="flex-shrink-0 h-11 px-3 text-xs rounded-lg border border-[color-mix(in_srgb,currentColor_40%,transparent)] active:bg-[color-mix(in_srgb,currentColor_12%,transparent)] transition-colors"
+                @click="abortRateLimitRetry"
+              >
+                {{ t('mobile.plugin.aiChatbox.rateLimitStop') }}
+              </button>
+            </div>
+          </Transition>
           <ChatInput
             :disabled="sending || !hasProvider"
             :streaming="isStreaming"
@@ -197,7 +234,7 @@ import PluginSettingsSheet from './PluginSettingsSheet.vue'
 import { modelKey, useAiConfig } from '../composables/useAiConfig'
 import { useAiChat } from '../composables/useAiChat'
 import { usePluginConfig } from '../composables/usePluginConfig'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { ChatMessage as ChatMessageType, ConversationMeta } from '../types'
 
 const { t } = useI18n()
@@ -233,12 +270,14 @@ const {
   isStreaming,
   loadingHistory,
   lastError,
+  rateLimitRetry,
   loadConversations,
   newConversation,
   renameConversation,
   deleteConversation,
   sendMessage,
   stopGeneration,
+  abortRateLimitRetry,
   regenerate,
   switchConversation,
 } = chat
@@ -404,5 +443,15 @@ onMounted(async () => {
 .page-fade-leave-to {
   opacity: 0;
   transform: translateY(-2px);
+}
+/* 限流重试滑出条：自输入区上缘滑入（位移 + 淡入，250ms 缓出） */
+.retry-slide-enter-active,
+.retry-slide-leave-active {
+  transition: opacity 0.25s cubic-bezier(0.4, 0, 0.2, 1), transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.retry-slide-enter-from,
+.retry-slide-leave-to {
+  opacity: 0;
+  transform: translateY(8px);
 }
 </style>

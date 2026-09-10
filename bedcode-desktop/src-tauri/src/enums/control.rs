@@ -30,14 +30,23 @@ pub enum SessionControlAction {
     StopSession { session_id: String },
     /// 删除会话
     RemoveSession { session_id: String },
-    /// 调整终端大小
-    ResizeSession { session_id: String, cols: u16, rows: u16 },
+    /// 调整终端大小（force：覆盖确认后置位，见正统渲染端裁决）
+    ResizeSession {
+        session_id: String,
+        cols: u16,
+        rows: u16,
+        #[serde(default)]
+        force: bool,
+    },
     /// 加入会话，开始接收输出
     JoinSession { session_id: String },
     /// 离开会话，停止接收输出
     LeaveSession { session_id: String },
     /// 会话变更通知 (created/stopped/removed)
-    SessionChanged { change_type: String, session: SessionSummary },
+    SessionChanged {
+        change_type: String,
+        session: SessionSummary,
+    },
 }
 
 // ==================== Session Config ====================
@@ -156,4 +165,3 @@ pub enum SubscribeMode {
     /// 游标已失效（早于 min_offset / 晚于 max_offset / 首次订阅）：清屏全量重播
     Reset,
 }
-

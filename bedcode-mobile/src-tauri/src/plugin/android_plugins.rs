@@ -19,9 +19,11 @@ mod device_info;
 mod downloads;
 mod file_delete;
 mod foreground;
+mod multicast_lock;
 mod notifications;
 mod picker;
 mod saf;
+mod status_bar_style;
 
 // 保持外部路径 crate::plugin::android_plugins::xxx 不变
 pub use all_files::*;
@@ -32,6 +34,8 @@ pub use device_info::*;
 pub use downloads::*;
 pub use file_delete::*;
 pub use foreground::*;
+pub use multicast_lock::*;
 pub use notifications::*;
 pub use picker::*;
 pub use saf::*;
+pub use status_bar_style::*;

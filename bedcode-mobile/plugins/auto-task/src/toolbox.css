@@ -53,9 +53,54 @@
   background: var(--mobile-accent);
 }
 
-.att-tab-panel {
+/* 页签内容区横滑容器：包裹双面板，声明 data-swipe-zone（见 AutoTaskToolboxView）
+   必须自身是列向 flex 容器并 relative：双面板绝对定位铺满其中，
+   高度约束链由 flex:1 / min-height:0 / inset:0 提供 */
+.att-tab-panels {
+  position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 页签面板：双面板常驻叠放，切页走透明度+位移过渡（仅 GPU 合成属性）。
+   非当前页 visibility 延迟到淡出结束后翻转，动画完整且移出触摸命中区 */
+.att-tab-panel {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transform: translateX(6%);
+  visibility: hidden;
+  transition:
+    opacity 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.22s cubic-bezier(0.4, 0, 0.2, 1),
+    visibility 0s linear 0.22s;
+}
+
+/* 当前页：立即可见，淡入与位移同时进行 */
+.att-tab-panel--active {
+  opacity: 1;
+  transform: translateX(0);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+/* 停靠位：已过页停左侧、未到页停右侧（切页方向感知的入/出场起点） */
+.att-tab-panel--left {
+  transform: translateX(-6%);
+}
+
+.att-tab-panel--right {
+  transform: translateX(6%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .att-tab-panel,
+  .att-tab-panel--active {
+    transition-duration: 0s;
+    transition-delay: 0s;
+  }
 }
 
 .att-tab-body {
@@ -99,6 +144,26 @@
 /* 达阈值：箭头翻转提示「释放立即刷新」 */
 .att-pull-arrow--ready {
   transform: rotate(180deg);
+  color: var(--mobile-accent);
+}
+
+/* 上拉加载指示器：贴滚动容器底部，高度随上拉位移露出（视口由脚本钉在底缘） */
+.att-pushup {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  overflow: hidden;
+  color: var(--mobile-text-secondary);
+}
+
+/* 上拉箭头默认朝上（跟随手势方向）；达阈值翻转向下提示「释放立即加载」 */
+.att-pushup-arrow {
+  transform: rotate(180deg);
+}
+
+.att-pushup-arrow--ready {
+  transform: rotate(0deg);
   color: var(--mobile-accent);
 }
 
@@ -153,38 +218,11 @@
   color: var(--mobile-text-disabled);
 }
 
-/* ==================== 状态筛选 chips ==================== */
+/* ==================== 状态筛选下拉（Select 替代 chips） ==================== */
 
-.att-chips {
-  display: flex;
-  gap: 0.5rem;
-  overflow-x: auto;
+.att-filter {
   padding: 0.75rem 0;
   flex-shrink: 0;
-}
-
-.att-chip {
-  flex-shrink: 0;
-  padding: 0.375rem 0.875rem;
-  border-radius: 9999px;
-  font-size: 0.8125rem;
-  color: var(--mobile-text-secondary);
-  background: var(--mobile-bg-card);
-  border: 1px solid var(--mobile-border);
-  cursor: pointer;
-  transition: color 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
-  -webkit-tap-highlight-color: transparent;
-}
-
-.att-chip:active {
-  opacity: 0.8;
-}
-
-/* 选中：accent 10% tint + 品牌色文字（与徽标同款扁平风格） */
-.att-chip-active {
-  color: var(--mobile-accent);
-  background: color-mix(in srgb, var(--mobile-accent) 10%, transparent);
-  border-color: color-mix(in srgb, var(--mobile-accent) 30%, transparent);
 }
 
 /* ==================== 列表行 ==================== */

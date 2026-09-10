@@ -139,6 +139,9 @@
           </div>
         </div>
         <div class="settings-panel-section">
+          <div class="settings-panel-row">
+            <span class="settings-panel-label">{{ t('mobile.file.filterDirs') }}</span>
+          </div>
           <textarea
             v-model="tempFilterText"
             class="settings-panel-input settings-panel-textarea"
@@ -895,15 +898,16 @@ onUnmounted(() => {
   color: var(--mobile-text-secondary);
 }
 
+/* 开关样式与桌面端 SettingsView 对齐：方形墨色轨道 + 方形滑块 */
 .toggle-switch {
   width: 36px;
   height: 20px;
-  border-radius: 10px;
-  background: var(--mobile-bg-elevated);
-  border: 1px solid var(--mobile-border);
+  border-radius: 4px;
+  background: var(--mobile-bg-primary);
+  border: 1px solid var(--mobile-border-hover);
   cursor: pointer;
   position: relative;
-  transition: all 0.2s ease;
+  transition: background-color 0.2s ease, border-color 0.2s ease;
   padding: 0;
 }
 
@@ -914,17 +918,18 @@ onUnmounted(() => {
 
 .toggle-knob {
   position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 14px;
-  height: 14px;
-  border-radius: 50%;
-  background: white;
-  transition: transform 0.2s ease;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 2px;
+  background: var(--mobile-bg-tertiary);
+  transition: transform 0.2s ease, background-color 0.2s ease;
 }
 
 .toggle-switch.active .toggle-knob {
   transform: translateX(16px);
+  background: var(--mobile-text-on-accent);
 }
 
 .settings-panel-input {

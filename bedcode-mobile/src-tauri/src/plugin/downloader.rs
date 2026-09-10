@@ -61,9 +61,7 @@ impl PluginDownloader {
             .map_err(|e| crate::AppError::Plugin(format!("Failed to read download response: {}", e)))?;
 
         // 写入临时文件后走统一安装流程
-        let temp_zip = plugins_dir
-            .join(PLUGIN_DOWNLOAD_TEMP_DIR)
-            .join("download.zip");
+        let temp_zip = plugins_dir.join(PLUGIN_DOWNLOAD_TEMP_DIR).join("download.zip");
         if let Some(parent) = temp_zip.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }
@@ -77,11 +75,7 @@ impl PluginDownloader {
     }
 
     /// zip 解压安装（file-install / remote-download 共用）
-    async fn install_zip(
-        zip_path: &Path,
-        plugins_dir: &Path,
-        source: &str,
-    ) -> Result<String> {
+    async fn install_zip(zip_path: &Path, plugins_dir: &Path, source: &str) -> Result<String> {
         // 1. 打开 zip
         let file = std::fs::File::open(zip_path)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to open plugin package: {}", e)))?;
@@ -121,9 +115,9 @@ impl PluginDownloader {
         tokio::fs::create_dir_all(&temp_dir).await?;
 
         for i in 0..archive.len() {
-            let mut entry = archive.by_index(i).map_err(|e| {
-                crate::AppError::Plugin(format!("Failed to read plugin package entry: {}", e))
-            })?;
+            let mut entry = archive
+                .by_index(i)
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin package entry: {}", e)))?;
             let name = entry.name().to_string();
             if entry.is_dir() {
                 continue;
@@ -138,9 +132,8 @@ impl PluginDownloader {
             if let Some(parent) = dest.parent() {
                 tokio::fs::create_dir_all(parent).await?;
             }
-            let mut out = std::fs::File::create(&dest).map_err(|e| {
-                crate::AppError::Plugin(format!("Failed to create '{}': {}", name, e))
-            })?;
+            let mut out = std::fs::File::create(&dest)
+                .map_err(|e| crate::AppError::Plugin(format!("Failed to create '{}': {}", name, e)))?;
             std::io::copy(&mut entry, &mut out)
                 .map_err(|e| crate::AppError::Plugin(format!("Failed to extract '{}': {}", name, e)))?;
         }
@@ -178,7 +171,9 @@ impl PluginDownloader {
 
         tracing::info!(
             "[PluginDownloader] Plugin '{}' installed to {:?} (source: {})",
-            plugin_id, final_dir, source
+            plugin_id,
+            final_dir,
+            source
         );
         Ok(plugin_id)
     }
@@ -193,10 +188,7 @@ impl PluginDownloader {
         }
         // 规范化后检查是否有 .. 段
         let normalized = name.replace('\\', "/");
-        if normalized
-            .split('/')
-            .any(|seg| seg == ".." || seg == ".")
-        {
+        if normalized.split('/').any(|seg| seg == ".." || seg == ".") {
             return false;
         }
         true

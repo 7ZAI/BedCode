@@ -453,6 +453,7 @@ mod tests {
         }
     }
 
+
     #[test]
     fn test_sync_event_rejects_unknown_type() {
         // 未知 type 必须失败 —— 宿主穷尽 match 的前提是解析器严格

@@ -57,7 +57,8 @@ function resolveSigningEnv() {
   }
 
   const fromFile = loadSigningEnvFromFile()
-  const keyFile = process.env.TAURI_SIGNING_PRIVATE_KEY_FILE || fromFile.TAURI_SIGNING_PRIVATE_KEY_FILE
+  const keyFile =
+    process.env.TAURI_SIGNING_PRIVATE_KEY_FILE || fromFile.TAURI_SIGNING_PRIVATE_KEY_FILE
   if (keyFile) {
     if (!existsSync(keyFile)) {
       console.error(`[tauri-build] TAURI_SIGNING_PRIVATE_KEY_FILE 指向的文件不存在: ${keyFile}`)
@@ -80,8 +81,12 @@ const extraArgs = []
 if (signingEnv) {
   console.log('[tauri-build] 已检测到 updater 签名密钥，构建将生成签名的升级包')
 } else {
-  console.warn('[tauri-build] 未检测到 updater 签名密钥（TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_FILE / .env）')
-  console.warn('[tauri-build] 本次构建禁用升级包生成（createUpdaterArtifacts=false），产物不含自动更新签名')
+  console.warn(
+    '[tauri-build] 未检测到 updater 签名密钥（TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_FILE / .env）',
+  )
+  console.warn(
+    '[tauri-build] 本次构建禁用升级包生成（createUpdaterArtifacts=false），产物不含自动更新签名',
+  )
   extraArgs.push('--config', JSON.stringify({ bundle: { createUpdaterArtifacts: false } }))
 }
 
@@ -116,7 +121,9 @@ function renameInstallerWithReleaseSuffix() {
   const nsisDir = join(projectRoot, 'src-tauri/target/release/bundle/nsis')
   if (!existsSync(nsisDir)) return
 
-  const pattern = new RegExp(`^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)-setup\\.exe$`)
+  const pattern = new RegExp(
+    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)-setup\\.exe$`,
+  )
   for (const file of readdirSync(nsisDir)) {
     const match = file.match(pattern)
     if (!match) continue
@@ -136,7 +143,56 @@ function renameInstallerWithReleaseSuffix() {
   }
 }
 
-const args = process.argv.slice(2)
+/**
+ * DEB 安装包重命名为带 release 标记的格式
+ *
+ * Tauri 2 打包器固定用 {productName}_{version}_{arch}.deb 命名，
+ * 重命名为 {name}-{version}-release-{arch}.deb 以与移动端 APK 风格一致。
+ */
+function renameDebWithReleaseSuffix() {
+  if (process.env.GITHUB_ACTIONS) return
+
+  let productName, version
+  try {
+    const config = JSON.parse(readFileSync(join(projectRoot, 'src-tauri/tauri.conf.json'), 'utf8'))
+    productName = config.productName
+    version = config.version
+  } catch (err) {
+    console.warn(`[tauri-build] 读取 tauri.conf.json 失败，跳过 DEB 重命名: ${err.message}`)
+    return
+  }
+
+  const debDir = join(projectRoot, 'src-tauri/target/release/bundle/deb')
+  if (!existsSync(debDir)) return
+
+  const pattern = new RegExp(
+    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\w+)\.deb$`,
+  )
+  for (const file of readdirSync(debDir)) {
+    const match = file.match(pattern)
+    if (!match) continue
+    const arch = match[1]
+    const renamed = `${productName}-${version}-release-${arch}.deb`
+    for (const suffix of ['', '.sig']) {
+      const from = join(debDir, file + suffix)
+      const to = join(debDir, renamed + suffix)
+      if (!existsSync(from)) continue
+      try {
+        renameSync(from, to)
+        console.log(`[tauri-build] DEB 包已重命名: ${file}${suffix} -> ${renamed}${suffix}`)
+      } catch (err) {
+        console.warn(`[tauri-build] 重命名 ${file}${suffix} 失败: ${err.message}`)
+      }
+    }
+  }
+}
+
+// pnpm run 会在脚本参数前注入一个 `--`（pnpm 的参数分隔符，非 tauri CLI 参数）；
+// 若原样透传，tauri CLI 会把 `--` 当作“转发给底层 cargo build”的分隔符，导致
+// `pnpm run tauri:build -- --bundles deb` 时 --bundles 被抛给 cargo 而报错。
+// 这里剥离一个前导 `--`；如需向 cargo 透传参数，连写两个 `--` 即可（剥离一个后仍保留一个）。
+const rawArgs = process.argv.slice(2)
+const args = rawArgs[0] === '--' ? rawArgs.slice(1) : rawArgs
 const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...args], {
   stdio: 'inherit',
   env: { ...process.env, ...signingEnv },
@@ -145,5 +201,6 @@ const result = spawnSync(process.execPath, [tauriCli, 'build', ...extraArgs, ...
 const status = result.status ?? 1
 if (status === 0) {
   renameInstallerWithReleaseSuffix()
+  renameDebWithReleaseSuffix()
 }
 process.exit(status)

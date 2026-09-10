@@ -39,7 +39,9 @@ impl SessionStore for SessionStorage {
         tokio::task::spawn_blocking(move || {
             let db = db.blocking_lock();
             db.get_session_config(&config_id)
-        }).await.map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
+        })
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
     }
 
     async fn list_configs(&self) -> Result<Vec<crate::db::SessionConfig>> {
@@ -47,7 +49,9 @@ impl SessionStore for SessionStorage {
         tokio::task::spawn_blocking(move || {
             let db = db.blocking_lock();
             db.get_session_configs()
-        }).await.map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
+        })
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
     }
 
     async fn delete_config(&self, config_id: &str) -> Result<()> {
@@ -56,6 +60,8 @@ impl SessionStore for SessionStorage {
         tokio::task::spawn_blocking(move || {
             let db = db.blocking_lock();
             db.delete_session_config(&config_id)
-        }).await.map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
+        })
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))?
     }
 }

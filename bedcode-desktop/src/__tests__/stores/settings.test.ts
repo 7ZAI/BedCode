@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { logger } from '@/utils/frontendLogger'
 import { setActivePinia, createPinia } from 'pinia'
 import { useSettingsStore } from '@/stores/settings'
 
@@ -93,7 +94,7 @@ describe('Settings Store', () => {
     })
 
     it('should handle load error gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const consoleSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
       mockInvoke.mockRejectedValueOnce(new Error('Load failed'))
 
       const store = useSettingsStore()
@@ -101,7 +102,10 @@ describe('Settings Store', () => {
 
       // Should keep default settings on error
       expect(store.settings.network.port).toBe(8765)
-      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to load settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[Settings] Failed to load settings:',
+        expect.any(Error),
+      )
 
       consoleSpy.mockRestore()
     })
@@ -178,7 +182,7 @@ describe('Settings Store', () => {
     })
 
     it('should handle save error gracefully', async () => {
-      const consoleSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const consoleSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
       mockInvoke.mockRejectedValueOnce(new Error('Save failed'))
 
       const store = useSettingsStore()
@@ -188,7 +192,10 @@ describe('Settings Store', () => {
         },
       })
 
-      expect(consoleSpy).toHaveBeenCalledWith('[Settings] Failed to save settings:', expect.any(Error))
+      expect(consoleSpy).toHaveBeenCalledWith(
+        '[Settings] Failed to save settings:',
+        expect.any(Error),
+      )
 
       consoleSpy.mockRestore()
     })

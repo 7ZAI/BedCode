@@ -5,6 +5,7 @@
  * 使用 localStorage 持久化，纯前端状态不经过 Rust 后端
  */
 import { defineStore } from 'pinia'
+import { logger } from '@/utils/frontendLogger'
 import { ref } from 'vue'
 
 /** 代码查看设置 */
@@ -19,8 +20,8 @@ export interface CodeViewerSettings {
 const STORAGE_KEY = 'bedcode-code-viewer-settings'
 
 const defaultSettings: CodeViewerSettings = {
-  fontSize: 10,
-  lineHeight: 1.0,
+  fontSize: 8,
+  lineHeight: 0.7,
   theme: 'system',
   tabSize: 4,
   showLineNumbers: true,
@@ -77,7 +78,7 @@ function loadFromStorage(): CodeViewerSettings {
       return { ...defaultSettings, ...parsed }
     }
   } catch (e) {
-    console.warn('[CodeViewer] Failed to load settings from localStorage:', e)
+    logger.warn('[CodeViewer] Failed to load settings from localStorage:', e)
   }
   return { ...defaultSettings }
 }
@@ -90,7 +91,7 @@ export const useCodeViewerStore = defineStore('codeViewer', () => {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(settings.value))
     } catch (e) {
-      console.warn('[CodeViewer] Failed to save settings to localStorage:', e)
+      logger.warn('[CodeViewer] Failed to save settings to localStorage:', e)
     }
   }
 

@@ -29,7 +29,9 @@ const props = defineProps<{
 
 const registry = getPluginRegistry()
 
-const items = computed(() => registry.pageToolbarItems.value.filter(item => item.target === props.target))
+const items = computed(() =>
+  registry.pageToolbarItems.value.filter((item) => item.target === props.target),
+)
 </script>
 
 <style scoped>

@@ -83,18 +83,18 @@ mod tests {
     #[test]
     fn test_invalid_ids() {
         for id in [
-            "",                       // 空
-            "noplugin",               // 单段
-            "my-plugin.com",          // 首段连字符（spec 拒绝）
-            "com..bedcode",           // 连续点（空段）
-            "com.bedcode.",           // 尾点
-            ".com.bedcode",           // 首点
-            "Com.BedCode.X",          // 大写
-            "com.bedcode.my_plugin",  // 下划线
-            "com.bedcode.-x",         // 段首连字符
-            "com.bedcode.x-",         // 段尾连字符
-            "com.bedcode.x y",        // 空格
-            "com.bedcode.x/y",        // 路径分隔符
+            "",                                 // 空
+            "noplugin",                         // 单段
+            "my-plugin.com",                    // 首段连字符（spec 拒绝）
+            "com..bedcode",                     // 连续点（空段）
+            "com.bedcode.",                     // 尾点
+            ".com.bedcode",                     // 首点
+            "Com.BedCode.X",                    // 大写
+            "com.bedcode.my_plugin",            // 下划线
+            "com.bedcode.-x",                   // 段首连字符
+            "com.bedcode.x-",                   // 段尾连字符
+            "com.bedcode.x y",                  // 空格
+            "com.bedcode.x/y",                  // 路径分隔符
             &"a".repeat(PLUGIN_ID_MAX_LEN + 1), // 超长
         ] {
             assert!(!validate_plugin_id(id), "id should be invalid: {}", id);

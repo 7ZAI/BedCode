@@ -6,31 +6,24 @@
  * - commands.execute：仅执行前端注册 handler；WASM 后端不在浏览器运行
  * - storage：localStorage 持久化（flush 为空操作）
  * - http.registerEndpoint：仅登记展示（真实宿主由 Rust 服务端挂载，浏览器不可达）
- * - fileService：内存挂载点 + 模拟目录/文件选择（pickFiles 返回数组）
  * - 权限检查跳过（dev-shell 视为全部授予）
  */
 import type {
   Disposable,
-  FileServiceAPI,
   HttpAPI,
   I18nAPI,
   PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
   UIRegistry,
 } from '../../src/types'
-import {
-  emitDevEvent,
-  onDevEvent,
-  sendInputToSession,
-  sendOutput,
-  sessions,
-} from './mock/session'
-import { dialogService } from './mock/dialog-service'
+import { openGlobalDialog } from '../../src/global-dialog'
+import { emitDevEvent, onDevEvent, sendInputToSession, sessions } from './mock/session'
 import {
   pushLog,
   registerEndpoint,
   registerFileHandler,
   registerInputExtension,
-  registerMount,
   registerPageToolbarItem,
   registerSidebarPanel,
   registerStatusBarItem,
@@ -83,7 +76,9 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
       sendInputToSession(sessionId, text)
     },
     onOutput(handler: (sessionId: string, data: string) => void): Disposable {
-      return track(onDevEvent('terminal:output', (payload: any) => handler(payload.sessionId, payload.data)))
+      return track(
+        onDevEvent('terminal:output', (payload: any) => handler(payload.sessionId, payload.data)),
+      )
     },
     onInput(handler: (sessionId: string, text: string) => string | null): Disposable {
       return track(
@@ -138,6 +133,10 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     registerFileHandler(handler) {
       return track(registerFileHandler(pluginId, handler))
     },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      // context 在本函数尾部组装；惰性引用（showDialog 调用时已初始化），供内容组件 provide
+      return openGlobalDialog({ ...options, pluginContext: context })
+    },
   }
 
   // ==================== EventAPI ====================
@@ -183,93 +182,36 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
   }
 
-  // ==================== FileServiceAPI ====================
-  const fileService: FileServiceAPI = {
-    async mount(options) {
-      const handle = registerMount(
-        pluginId,
-        options.mountPath,
-        options.roots,
-        options.operations,
-      )
-      pushLog(
-        'info',
-        pluginId,
-        `fileService.mount "${options.mountPath}" roots=[${options.roots.join(', ')}]`,
-      )
-      return {
-        mountPath: options.mountPath,
-        async updateRoots(roots: string[]) {
-          handle.updateRoots(roots)
-          pushLog('info', pluginId, `fileService.updateRoots "${options.mountPath}" -> [${roots.join(', ')}]`)
-        },
-        async dispose() {
-          handle.dispose()
-          pushLog('info', pluginId, `fileService 卸载 "${options.mountPath}"`)
-        },
-      }
-    },
-    async getPeerInfo(_peerId) {
-      return null
-    },
-    async pickDirectory() {
-      return promptForMockPath(
-        '选择目录（dev-shell mock）',
-        '浏览器无法调起系统目录选择器，请手动输入模拟目录路径',
-        'C:\\mock\\downloads',
-      )
-    },
-    async pickFiles() {
-      const value = await promptForMockPath(
-        '选择文件（dev-shell mock，逗号分隔多个）',
-        '浏览器无法调起系统文件选择器，请手动输入模拟文件路径',
-        'C:\\mock\\a.txt, C:\\mock\\b.txt',
-      )
-      return value
-        ? value
-            .split(/[,，]/)
-            .map((s) => s.trim())
-            .filter(Boolean)
-        : []
-    },
-  }
-
-  function promptForMockPath(
-    title: string,
-    message: string,
-    placeholder: string,
-  ): Promise<string | null> {
-    return dialogService.showPrompt({
-      title,
-      message,
-      inputPlaceholder: placeholder,
-      inputValue: placeholder,
-    })
-  }
-
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
     getI18n() {
       return getSharedModule('i18n')
     },
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = getSharedModule('i18n')
       if (!hostI18n) return
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${pluginId}.${key}`] = value
       }
       const existing = hostI18n.global.getLocaleMessage(locale)
       hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = getSharedModule('i18n')
       if (!hostI18n) return key
       return hostI18n.global.t(`${pluginId}.${key}`, params)
     },
   }
 
-  return {
+  // ==================== SystemAPI（dev-shell 浏览器环境 no-op，与宿主接口对齐） ====================
+  const system = {
+    async revealInDir(_path: string): Promise<void> {
+      pushLog('info', pluginId, 'system.revealInDir (mock) 浏览器环境不支持')
+    },
+  }
+
+  const context = {
     id: pluginId,
     extensionPath,
     commands,
@@ -279,8 +221,9 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     events,
     storage,
     http,
-    fileService,
     i18n,
+    system,
     _disposables: disposables,
   }
+  return context
 }

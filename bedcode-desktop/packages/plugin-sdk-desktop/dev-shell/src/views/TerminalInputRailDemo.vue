@@ -72,7 +72,8 @@ function handleNavigate(line: number) {
     <div class="flex items-center gap-3 px-4 py-2 border-b border-[var(--border)] flex-shrink-0">
       <h2 class="text-sm font-medium text-[var(--text-primary)]">TerminalInputRail 测试</h2>
       <span class="text-xs text-[var(--text-tertiary)]">
-        markers: {{ markers.length }}（最多 10）· bufferLength: {{ bufferLength }} · altBuffer: {{ isAltBuffer }}
+        markers: {{ markers.length }}（最多 10）· bufferLength: {{ bufferLength }} · altBuffer:
+        {{ isAltBuffer }}
       </span>
       <span class="flex-1" />
       <button class="chip" @click="addMarker()">+ 输入</button>
@@ -91,7 +92,9 @@ function handleNavigate(line: number) {
             v-for="(l, i) in displayLines"
             :key="i"
             :class="l.startsWith('$ ') ? 'text-[#50fa7b]' : ''"
-          >{{ l }}</div>
+          >
+            {{ l }}
+          </div>
           <div v-if="!displayLines.length" class="text-[#6272a4]">
             （空终端 — 提交输入后右侧出现主题色横线，鼠标移入展开列表）
           </div>

@@ -1,7 +1,7 @@
 /**
  * Mobile Plugin Types (Host)
  *
- * 基础类型从 @binblink/plugin-sdk-mobile 导入
+ * 基础类型从 @binblink/bedcode-plugin-sdk-mobile 导入
  * 仅保留宿主运行时特有类型
  */
 
@@ -26,6 +26,9 @@ export type {
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
   RouteContribution,
+  PluginDialogAction,
+  PluginDialogOptions,
+  PluginDialogHandle,
   CommandRegistry,
   TerminalAPI,
   SessionAPI,
@@ -42,20 +45,8 @@ export type {
   StatusAPI,
   PluginContext,
   PluginModule,
-  UploadRequestMeta,
-  UploadHookDecision,
-  TransferRequestMeta,
-  MountOptions,
-  FileServiceMount,
-  PeerMountAnnouncement,
-  PeerFileServiceInfo,
-  FileServiceAPI,
   SystemAPI,
-  SafEntry,
-  SafCopyHandle,
-  SafCopyStatus,
-  PickedSharedDirectory,
-} from '@binblink/plugin-sdk-mobile'
+} from '@binblink/bedcode-plugin-sdk-mobile'
 
 /** 插件信息（从后端获取，含 source 字段） */
 export interface PluginInfo {
@@ -65,10 +56,10 @@ export interface PluginInfo {
   description: string
   author: string
   main: string
-  pluginType: import('@binblink/plugin-sdk-mobile').PluginType
+  pluginType: import('@binblink/bedcode-plugin-sdk-mobile').PluginType
   permissions: string[]
-  state: import('@binblink/plugin-sdk-mobile').PluginState
-  contributes: import('@binblink/plugin-sdk-mobile').MobilePluginContributes
+  state: import('@binblink/bedcode-plugin-sdk-mobile').PluginState
+  contributes: import('@binblink/bedcode-plugin-sdk-mobile').MobilePluginContributes
   source: string
   /** 插件目录路径（含 plugin.json），前端经 asset protocol 加载前端模块 */
   extensionPath: string

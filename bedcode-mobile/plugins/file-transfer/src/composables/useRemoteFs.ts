@@ -1,36 +1,45 @@
 /**
- * 远端目录浏览 (Mobile)
+ * 远端目录浏览 (Mobile) — host-peer 契约版
  *
- * 经 `file-transfer.list-remote` 拉取对端目录项，维护面包屑路径与多选状态。
- * 多选勾选发生在当前目录内（RemoteEntry.name 在目录内唯一），切换目录时清空。
+ * 两级结构：对端共享根清单（peer_list_shared_roots）→ 根内目录树
+ * （browse_directory(dirId, relPath)）。path 语义 = 「根内相对路径」，
+ * dirId 为共享根条目 id（browse/pull 按其寻址）。
  */
 import { ref, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { RemoteEntry } from '../types'
-import { MOCK_ENABLED, MOCK_FS_TREE } from '../mock'
+
+/** 共享根条目 */
+export interface SharedRootRef {
+  id: string
+  name: string
+}
 
 export function useRemoteFs(context: PluginContext) {
-  /** 当前相对路径（相对挂载根，"" = 根目录） */
+  /** 当前所在共享根（null = 处于根清单层） */
+  const currentRoot = ref<SharedRootRef | null>(null)
+  /** 根内相对路径（"" = 根目录） */
   const currentPath = ref('')
-  /** 远端目录项列表 */
+  /** 目录项列表（根清单层复用同一展示容器，isDir=true 视觉呈现为可进入） */
   const entries = ref<RemoteEntry[]>([])
   const loading = ref(false)
   const error = ref<string | null>(null)
-  /** 对端存储权限提示（列表为空且可能被分区存储过滤时由对端服务器置位） */
+  /** 对端分区存储过滤提示 */
   const notice = ref<string | null>(null)
+  /** 最近一次根清单快照（根清单层点击进入共享根时按展示名解析真实 dirId） */
+  let rootsCache: SharedRootRef[] = []
 
   /** 已勾选文件名集合（当前目录内唯一） */
   const selected = ref<Set<string>>(new Set())
 
-  /** 面包屑分段（不含空串） */
-  const crumbs = computed(() =>
-    currentPath.value.split('/').filter(Boolean),
-  )
+  /** 面包屑分段：根名 + 路径段 */
+  const crumbs = computed(() => {
+    if (!currentRoot.value) return []
+    return [currentRoot.value.name, ...currentPath.value.split('/').filter(Boolean)]
+  })
 
-  /** 勾选项总数 */
   const selectedCount = computed(() => selected.value.size)
 
-  /** 勾选项总大小（字节） */
   const selectedTotalSize = computed(() => {
     let total = 0
     for (const e of entries.value) {
@@ -39,38 +48,27 @@ export function useRemoteFs(context: PluginContext) {
     return total
   })
 
-  /** 是否全选当前目录文件 */
   const allSelected = computed(
-    () =>
-      entries.value.length > 0 &&
-      entries.value.every(e => selected.value.has(e.name)),
+    () => entries.value.length > 0 && entries.value.every((e) => selected.value.has(e.name)),
   )
 
-  /** 拉取指定路径的目录项 */
-  async function load(path: string): Promise<void> {
+  /** 加载共享根清单（path="" 且未选根） */
+  async function loadRoots(): Promise<void> {
     loading.value = true
     error.value = null
     try {
-      // 开发期 mock：直接读本地模拟文件树（模拟 350ms 往返延迟便于观察 loading 态）
-      if (MOCK_ENABLED) {
-        await new Promise((r) => setTimeout(r, 350))
-        entries.value = MOCK_FS_TREE[path] ?? []
-        currentPath.value = path
-        selected.value = new Set()
-        return
-      }
       const data = await context.commands.execute('file-transfer.list-remote', {
-        peerId: '',
-        path,
+        path: '',
+        dirId: '',
       })
-      // 兼容旧对端裸数组响应（新响应为 { entries, notice }）
-      entries.value = Array.isArray(data) ? data : (data?.entries ?? [])
-      notice.value = Array.isArray(data) ? null : (data?.notice ?? null)
-      currentPath.value = path
-      selected.value = new Set()
-      console.log(`[File Transfer] list-remote OK: path='${path}' entries=${entries.value.length}`)
+      const roots: SharedRootRef[] = Array.isArray(data?.roots) ? data.roots : []
+      // 缓存 id ↔ name 映射：entries 仅保留展示名，进入共享根需按名回查真实 id
+      rootsCache = roots
+      entries.value = roots.map((r) => ({ name: r.name, size: 0, mtime: 0, isDir: true }))
+      notice.value = null
+      currentPath.value = ''
     } catch (e) {
-      console.error(`[File Transfer] list-remote FAILED: path='${path}'`, e)
+      console.error('[File Transfer] list-remote roots FAILED:', e)
       error.value = context.i18n.t('transfer.table.dirUnavailable')
       entries.value = []
     } finally {
@@ -78,38 +76,83 @@ export function useRemoteFs(context: PluginContext) {
     }
   }
 
-  /** 进入子目录 */
-  async function cd(name: string): Promise<void> {
-    const next = currentPath.value
-      ? `${currentPath.value}/${name}`
-      : name
-    await load(next)
+  /** 加载当前根内的 relPath 目录 */
+  async function loadDir(relPath: string): Promise<void> {
+    if (!currentRoot.value) return
+    loading.value = true
+    error.value = null
+    try {
+      const data = await context.commands.execute('file-transfer.list-remote', {
+        path: relPath,
+        dirId: currentRoot.value.id,
+      })
+      entries.value = Array.isArray(data?.entries) ? data.entries : []
+      notice.value = data?.notice ?? null
+      currentPath.value = relPath
+      selected.value = new Set()
+    } catch (e) {
+      console.error(`[File Transfer] list-remote FAILED: path='${relPath}'`, e)
+      error.value = context.i18n.t('transfer.table.dirUnavailable')
+      entries.value = []
+    } finally {
+      loading.value = false
+    }
   }
 
-  /** 返回上级 */
-  async function up(): Promise<void> {
-    const segs = crumbs.value
-    segs.pop()
-    await load(segs.join('/'))
-  }
-
-  /** 回到根 */
-  async function goRoot(): Promise<void> {
-    await load('')
-  }
-
-  /** 面包屑跳转 */
-  async function goTo(index: number): Promise<void> {
-    const segs = crumbs.value.slice(0, index + 1)
-    await load(segs.join('/'))
-  }
-
-  /** 刷新当前目录 */
+  /** 刷新当前层级（根清单或目录） */
   async function refresh(): Promise<void> {
-    await load(currentPath.value)
+    if (currentRoot.value) await loadDir(currentPath.value)
+    else await loadRoots()
   }
 
-  /** 切换单个条目的勾选状态 */
+  /** 进入共享根 */
+  async function enterRoot(root: SharedRootRef): Promise<void> {
+    currentRoot.value = root
+    await loadDir('')
+  }
+
+  /** 进入子目录（仅根内有效） */
+  async function cd(name: string): Promise<void> {
+    if (!currentRoot.value) {
+      // 根清单层点击 = 进入该共享根；dirId 必须是宿主分配的条目 id，
+      // 展示名 ≠ id，直接拿名字当 id 会命中不了目录表（表现为「目录不可用」），
+      // 与桌面端同构：按展示名从最近一次根清单解析真实 id，缺失才兜底同名
+      const root = rootsCache.find((r) => r.name === name) ?? { id: name, name }
+      await enterRoot(root)
+      return
+    }
+    const next = currentPath.value ? `${currentPath.value}/${name}` : name
+    await loadDir(next)
+  }
+
+  /** 返回上级（根内首层返回 → 回根清单） */
+  async function up(): Promise<void> {
+    if (!currentRoot.value) return
+    const segs = currentPath.value.split('/').filter(Boolean)
+    segs.pop()
+    if (segs.length === 0) {
+      await goRoot()
+    } else {
+      await loadDir(segs.join('/'))
+    }
+  }
+
+  /** 回到共享根清单 */
+  async function goRoot(): Promise<void> {
+    currentRoot.value = null
+    await loadRoots()
+  }
+
+  /** 面包屑跳转（0 = 根清单；i≥1 = 根内路径段） */
+  async function goTo(index: number): Promise<void> {
+    if (index < 0 || !currentRoot.value) {
+      await goRoot()
+      return
+    }
+    const segs = currentPath.value.split('/').filter(Boolean).slice(0, index)
+    await loadDir(segs.join('/'))
+  }
+
   function toggle(name: string): void {
     const next = new Set(selected.value)
     if (next.has(name)) next.delete(name)
@@ -117,19 +160,20 @@ export function useRemoteFs(context: PluginContext) {
     selected.value = next
   }
 
-  /** 全选/全不选当前目录 */
   function toggleAll(): void {
+    if (!currentRoot.value) return
     if (allSelected.value) selected.value = new Set()
-    else selected.value = new Set(entries.value.map(e => e.name))
+    else selected.value = new Set(entries.value.map((e) => e.name))
   }
 
-  /** 清空勾选 */
   function clearSelection(): void {
     selected.value = new Set()
   }
 
-  /** 重置浏览状态（对端下线/切换时调用：清空残留目录条目，避免对离线对端误操作） */
+  /** 重置浏览状态（对端下线时调用） */
   function reset(): void {
+    rootsCache = []
+    currentRoot.value = null
     currentPath.value = ''
     entries.value = []
     loading.value = false
@@ -138,12 +182,13 @@ export function useRemoteFs(context: PluginContext) {
     selected.value = new Set()
   }
 
-  /** 当前勾选的文件名列表（不含目录，用于入队下载） */
+  /** 当前勾选文件名列表（不含目录） */
   const selectedFiles = computed(() =>
-    entries.value.filter(e => !e.isDir && selected.value.has(e.name)).map(e => e.name),
+    entries.value.filter((e) => !e.isDir && selected.value.has(e.name)).map((e) => e.name),
   )
 
   return {
+    currentRoot,
     currentPath,
     entries,
     loading,
@@ -155,15 +200,16 @@ export function useRemoteFs(context: PluginContext) {
     selectedTotalSize,
     allSelected,
     selectedFiles,
-    load,
+    refresh,
+    enterRoot,
     cd,
     up,
     goRoot,
     goTo,
-    refresh,
     toggle,
     toggleAll,
     clearSelection,
     reset,
+    loadRoots,
   }
 }

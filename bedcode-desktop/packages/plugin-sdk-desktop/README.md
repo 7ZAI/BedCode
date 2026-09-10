@@ -1,4 +1,4 @@
-# @binblink/plugin-sdk-desktop
+# @binblink/bedcode-plugin-sdk-desktop
 
 BedCode Desktop 插件开发工具包 — 提供插件所需的**类型定义**、**运行时代理**、**Vite 构建插件**与**共享 UI 组件**，插件只需依赖本包即可开发，无需引用宿主源码。
 
@@ -9,7 +9,7 @@ BedCode Desktop 插件开发工具包 — 提供插件所需的**类型定义**�
 ## 安装
 
 ```bash
-npm install --save-dev @binblink/plugin-sdk-desktop
+npm install --save-dev @binblink/bedcode-plugin-sdk-desktop
 ```
 
 Peer 依赖（宿主已在运行时提供，插件侧安装用于构建与类型检查）：
@@ -64,7 +64,7 @@ npm run doctor     # 环境自检
 
 ```ts
 import { defineComponent, h } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 export async function activate(context: PluginContext): Promise<void> {
   // 注册侧边栏面板（组件内可通过 inject('pluginContext') 再次获取 context）
@@ -109,7 +109,7 @@ export async function deactivate(): Promise<void> {
 插件构建时 `vue` / `vue-i18n` / `pinia` 会被外部化，运行时从宿主全局 `window.__BEDCODE_SHARED__` 读取。**请通过 SDK 代理函数访问，不要直接操作全局变量**：
 
 ```ts
-import { getVue, getI18n, getPinia, getRouter, getPluginContext } from '@binblink/plugin-sdk-desktop'
+import { getVue, getI18n, getPinia, getRouter, getPluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 const { ref, computed } = getVue()      // 宿主 Vue 实例（组件内直接 import 即可，构建期已外部化）
 const i18n = getI18n()                  // 宿主 vue-i18n 实例（模块级代码用；组件内用 useI18n()）
@@ -123,7 +123,7 @@ const context = getPluginContext()      // 组件 setup 内从 inject 获取 Plu
 ```ts
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
-import { bedcodePlugin } from '@binblink/plugin-sdk-desktop/vite'
+import { bedcodePlugin } from '@binblink/bedcode-plugin-sdk-desktop/vite'
 
 export default defineConfig({
   plugins: [vue(), bedcodePlugin()],
@@ -187,7 +187,7 @@ cargo build --target wasm32-unknown-unknown --no-default-features --features was
 插件配置在 `plugin.json` 的 `contributes.configuration` 声明，宿主据此渲染配置页；运行时经 `context.storage` 读写（统一键 `PLUGIN_CONFIG_STORAGE_KEY = 'config'`）。SDK 提供声明式助手保持两端一致：
 
 ```ts
-import { defineConfiguration, PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/plugin-sdk-desktop'
+import { defineConfiguration, PLUGIN_CONFIG_STORAGE_KEY } from '@binblink/bedcode-plugin-sdk-desktop'
 
 const config = defineConfiguration('My Plugin Settings', {
   apiKey: { type: 'string', title: 'API Key' },
@@ -201,10 +201,13 @@ const saved = await context.storage.get<typeof config.properties>(PLUGIN_CONFIG_
 
 ## 事件常量
 
-宿主事件名以常量形式导出（与 Rust SDK 同步，单一事实来源）：
+事件主题遵循 `{domain}:{action}` 命名规范；各领域事件常量由对应插件工程持有（单一事实来源），
+SDK 不内置具体业务事件名。例如 Auto Task 插件的事件常量位于
+`plugins/auto-task/src/events.ts`，插件内部自用：
 
 ```ts
-import { EVENT_TASK_STATUS_CHANGED } from '@binblink/plugin-sdk-desktop'
+// 插件内 import 本领域事件常量
+import { EVENT_TASK_STATUS_CHANGED } from './events'
 
 context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
   // 任务状态变更（如 Agent CLI idle → in_progress）
@@ -218,7 +221,7 @@ context.events.on(EVENT_TASK_STATUS_CHANGED, (payload) => {
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import Select from '@binblink/plugin-sdk-desktop/ui'
+import Select from '@binblink/bedcode-plugin-sdk-desktop/ui'
 
 const value = ref('a')
 const options = [
@@ -238,10 +241,10 @@ const options = [
 
 | 子路径 | 内容 |
 |--------|------|
-| `@binblink/plugin-sdk-desktop` | 主 API：类型 + 运行时代理 + 配置助手 + 事件常量 |
-| `@binblink/plugin-sdk-desktop/vite` | `bedcodePlugin()` Vite 构建插件 |
-| `@binblink/plugin-sdk-desktop/types` | 纯类型导出（仅类型，无运行时） |
-| `@binblink/plugin-sdk-desktop/ui` | 共享 Vue 组件 |
+| `@binblink/bedcode-plugin-sdk-desktop` | 主 API：类型 + 运行时代理 + 配置助手 + 事件常量 |
+| `@binblink/bedcode-plugin-sdk-desktop/vite` | `bedcodePlugin()` Vite 构建插件 |
+| `@binblink/bedcode-plugin-sdk-desktop/types` | 纯类型导出（仅类型，无运行时） |
+| `@binblink/bedcode-plugin-sdk-desktop/ui` | 共享 Vue 组件 |
 
 ## 本地开发本 SDK
 

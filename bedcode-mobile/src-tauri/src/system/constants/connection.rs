@@ -48,5 +48,12 @@ pub const PLACEHOLDER_CLIENT_ADDR: &str = "0.0.0.0:0";
 /// WebSocket 默认路径（WsClientConfig 默认值）
 pub const WS_DEFAULT_PATH: &str = "/";
 
-/// 移动端连接桌面端的 WebSocket 路径
-pub const WS_TERMINAL_PATH: &str = "/ws/terminal";
+/// 终端会话直连路径前缀（09 前端直连；桌面端新路由，路径为 /ws/terminal/session/{session_id}）
+pub const WS_TERMINAL_SESSION_PATH: &str = "/ws/terminal/session";
+
+/// 常驻事件 WebSocket 路径（04 事件 WS 建连地址；桌面端 02 已建路由）
+pub const WS_EVENT_PATH: &str = "/ws/event";
+
+/// 链路加密事件通道名（issue 09；与桌面端 TrafficChannel::WsEvent.as_str 一致，
+/// 参与 WS AAD 绑定，两端必须逐字节一致）
+pub const LINK_CRYPTO_CHANNEL_EVENT: &str = "ws-event";

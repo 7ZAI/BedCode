@@ -372,22 +372,19 @@
           </button>
 
           <button
-            class="inline-btn send-btn"
-            :disabled="!canSubmit"
-            @click="handleSubmit"
-          >
-            <!-- 实体上箭头：发送语义，填充图标 + 放大尺寸提升辨识度 -->
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-              <path d="M12 4l8 9h-4.5v7h-7v-7H4z" />
-            </svg>
-          </button>
-
-          <button
             class="inline-btn execute-btn"
-            :disabled="!canSubmit"
-            @click="handleExecute"
+            :class="{ 'mode-send': sendMode, 'is-disabled': !canSubmit }"
+            :aria-disabled="!canSubmit"
+            :aria-label="sendMode ? t('mobile.input.sendHint') : t('mobile.input.executeHint')"
+            @pointerdown="onExecutePointerDown"
+            @pointermove="onExecutePointerMove"
+            @pointerup="onExecutePointerUp"
+            @pointercancel="onExecutePointerCancel"
+            @contextmenu.prevent
           >
-            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+            <!-- 纸飞机：水平朝右（执行语义）/ 垂直朝上（发送语义），由长按切换的
+                 常驻功能模式决定，样式随模式保持不变 -->
+            <svg class="execute-icon w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
               <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
             </svg>
           </button>
@@ -399,6 +396,7 @@
 
 <script setup lang="ts">
 import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import type { Ref } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
@@ -406,6 +404,7 @@ import { useInputAssistantStore, type QuickCommand } from '@/stores/inputAssista
 import type { QuickBarItem } from '@/stores/inputAssistant'
 import { filterPresetCommands, getAllPresetCommandTexts } from '@/config/agentPresets'
 import { useToast } from '@/composables/useToast'
+import { useMobileSettings } from '@/composables/useMobileSettings'
 
 // ==================== Types ====================
 
@@ -578,7 +577,7 @@ async function saveCustomCommands() {
       value: JSON.stringify(customCommands.value),
     })
   } catch (e) {
-    console.error('[TerminalInputBar] Failed to save custom commands:', e)
+    logger.error('[TerminalInputBar] Failed to save custom commands:', e)
   }
 }
 
@@ -724,7 +723,7 @@ function toggleShortcuts() {
   showShortcutsPanel.value = !showShortcutsPanel.value
   if (showShortcutsPanel.value) {
     // 面板渲染前确认命令列表构成（预设 + 自定义），排查第二页缺失问题
-    console.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
+    logger.log('[TerminalInputBar] 面板打开：displayCommands =', displayCommands.value.length,
       '（预设', assistStore.presetCommands.length, '+ 自定义', customCommands.value.length, '）',
       displayCommands.value.slice(0, 3).map(c => c.command))
     // 面板渲染后测量高度并通知终端，同时计算左侧网格列数
@@ -763,6 +762,78 @@ function handleExecute() {
   if (inputRef.value) {
     inputRef.value.style.height = 'auto'
   }
+}
+
+// ==================== Execute Button Mode Toggle（长按切模式 / 短按触发）====================
+
+/** 长按阈值：足够跟手不拖沓，同时为误触留出余量 */
+const EXECUTE_LONG_PRESS_MS = 400
+/** 滑动取消长按（防误触）：位移距离阈值 */
+const EXECUTE_MOVE_CANCEL_SLOP_PX = 10
+
+/**
+ * 按钮功能模式（常驻锁存）：false = 执行（文本 + Enter 直接运行，默认），
+ * true = 发送（仅写入输入行不回车）。长按在两模式间切换并一直保持，
+ * 短按触发当前模式的动作——非旧版的一次性蓄势（armed 后松手即消费）
+ */
+const sendMode = ref(false)
+let executeLongPressTimer: ReturnType<typeof setTimeout> | null = null
+let executePointerStartX = 0
+let executePointerStartY = 0
+// 触觉反馈跟随振动设置开关（与 FileTreeItem 长按惯例一致）
+const { settings: mobileSettings } = useMobileSettings()
+
+function clearExecuteLongPressTimer() {
+  if (executeLongPressTimer) {
+    clearTimeout(executeLongPressTimer)
+    executeLongPressTimer = null
+  }
+}
+
+function onExecutePointerDown(e: PointerEvent) {
+  // 置灰（无内容/会话不可用）时仍允许长按切换模式：模式是常驻偏好，
+  // 提前切好发送/执行后输入内容即可直接短按；仅短按动作被门控
+  // 捕获指针：手指滑出按钮仍能收到 pointerup/cancel，保证状态复位
+  ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  executePointerStartX = e.clientX
+  executePointerStartY = e.clientY
+  executeLongPressTimer = setTimeout(() => {
+    executeLongPressTimer = null
+    // 长按：切换常驻功能模式（执行 ↔ 发送），触觉反馈确认切换成功；
+    // 本次按压到此结束——松开手指不触发任何动作，动作由后续短按承担
+    sendMode.value = !sendMode.value
+    if (mobileSettings.value.vibrate && navigator.vibrate) {
+      navigator.vibrate(30)
+    }
+  }, EXECUTE_LONG_PRESS_MS)
+}
+
+function onExecutePointerMove(e: PointerEvent) {
+  // 长按触发前移动超出阈值 → 取消切换（滑动即意图取消）
+  if (!executeLongPressTimer) return
+  const dx = e.clientX - executePointerStartX
+  const dy = e.clientY - executePointerStartY
+  if (dx * dx + dy * dy > EXECUTE_MOVE_CANCEL_SLOP_PX * EXECUTE_MOVE_CANCEL_SLOP_PX) {
+    clearExecuteLongPressTimer()
+  }
+}
+
+function onExecutePointerUp() {
+  if (executeLongPressTimer) {
+    // 短击：定时器未触发 → 执行当前模式的动作；置灰时不触发（仅长按可切换）
+    clearExecuteLongPressTimer()
+    if (!canSubmit.value) return
+    if (sendMode.value) {
+      handleSubmit()
+    } else {
+      handleExecute()
+    }
+  }
+  // 长按已切换模式：本次按压结束，不触发动作（避免切换的同时误发内容）
+}
+
+function onExecutePointerCancel() {
+  clearExecuteLongPressTimer()
 }
 
 function handleShortcutClick(code: string) {
@@ -840,6 +911,27 @@ function adjustTextareaHeight() {
   textarea.scrollTop = textarea.scrollHeight
 }
 
+// ==================== Expose（键盘收起时父组件退出编辑态） ====================
+// Android 返回键/下拉手势收起系统键盘时，WebView 的 textarea 仍保有焦点
+// （输入光标常驻、输入框保持 3 行展开、命令补全弹层不收起），由
+// TerminalView 检测到键盘偏移归零后调用 blurInput() 主动退出编辑态；
+// isFocused() 供父组件判断输入框是否仍处于编辑态
+
+/** 判断输入框是否处于编辑态（聚焦中） */
+function isFocused(): boolean {
+  return isInputFocused.value
+}
+
+/** 主动 blur 输入框：光标消失、收缩回单行、命令补全弹层关闭 */
+function blurInput() {
+  inputRef.value?.blur()
+}
+
+defineExpose({
+  blurInput,
+  isFocused,
+})
+
 // 弹窗打开时自动聚焦输入框
 watch(showAddDialog, (val) => {
   if (val) {
@@ -867,10 +959,10 @@ onMounted(() => {
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
   /* 响应式快捷键尺寸：使用 clamp + vw 实现自适应 */
-  --shortcut-btn-h: clamp(2rem, 8vw, 2.5rem);
+  --shortcut-btn-h: clamp(1.8rem, 7vw, 2.2rem);
   --shortcut-font: clamp(0.65rem, 2.6vw, 0.8rem);
-  --quickbar-btn-h: clamp(1.5rem, 6vw, 2rem);
-  --quickbar-font: clamp(0.6rem, 2.4vw, 0.75rem);
+  --quickbar-btn-h: clamp(1.8rem, 7vw, 2.2rem);
+  --quickbar-font: clamp(0.65rem, 2.6vw, 0.8rem);
   --action-btn-w: clamp(2.75rem, 10vw, 3.25rem);
   --shortcut-min-w: clamp(2.25rem, 8.5vw, 2.75rem);
 }
@@ -1001,7 +1093,7 @@ onMounted(() => {
   border-radius: 0.875rem;
 }
 
-/* 操作按钮行：左对齐 toggle，右对齐 send/execute */
+/* 操作按钮行：左对齐 toggle，右对齐执行按钮（点按执行 / 长按发送 双操作） */
 .action-row {
   display: flex;
   align-items: center;
@@ -1027,6 +1119,10 @@ onMounted(() => {
   transition: all 0.15s ease;
   flex-shrink: 0;
   padding: 0;
+  /* 长按双操作防系统手势干扰：禁用长按呼出菜单/文本选择，消除双击缩放延迟 */
+  -webkit-touch-callout: none;
+  user-select: none;
+  touch-action: manipulation;
 }
 
 .toggle-btn {
@@ -1083,20 +1179,28 @@ onMounted(() => {
   color: var(--mobile-input-placeholder);
 }
 
-.send-btn {
-  background: var(--mobile-send-bg);
-  border-color: var(--mobile-send-border);
-  color: var(--mobile-send-color);
+/* 纸飞机图标：朝向区分常驻功能模式（点按执行 = 水平朝右，点按发送 = 垂直朝上）。
+ * 模式由长按切换并一直保持，转向动画仅在切换瞬间播放一次 */
+.execute-icon {
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.send-btn:active:not(:disabled) {
-  transform: scale(0.93);
-  background: var(--mobile-send-active-bg);
+.execute-btn.mode-send .execute-icon {
+  transform: rotate(-90deg);
 }
 
-.send-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
+/* 发送模式：accent 底色与执行模式（黑底）形成稳定视觉区分；
+ * 文字用对比 token（accent 色跨主题反转，禁止写死白/黑）。
+ * 置灰态仅靠 opacity 叠加降饱和，不覆盖模式底色 */
+.execute-btn.mode-send {
+  background: var(--mobile-accent);
+  border-color: var(--mobile-accent);
+  color: var(--mobile-text-on-accent);
+}
+
+.execute-btn.mode-send:active:not(.is-disabled) {
+  background: var(--mobile-accent);
+  filter: brightness(1.15);
 }
 
 .execute-btn {
@@ -1106,13 +1210,16 @@ onMounted(() => {
   color: #ffffff;
 }
 
-.execute-btn:active:not(:disabled) {
+.execute-btn:active:not(.is-disabled) {
   transform: scale(0.93);
   background: #0a0a0f;
   filter: brightness(1.3);
 }
 
-.execute-btn:disabled {
+/* 置灰态（无内容/会话不可用）：短按动作已门控，长按切换仍可用，
+ * 仅视觉降透明度提示不可提交；不用原生 disabled 属性——
+ * disabled 按钮不派发 pointer 事件，会连带禁掉长按切换 */
+.execute-btn.is-disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }

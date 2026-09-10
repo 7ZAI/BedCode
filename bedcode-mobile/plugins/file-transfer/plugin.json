@@ -4,7 +4,7 @@
   "version": "1.0.0-beta",
   "description": "内网文件传输：浏览桌面端共享目录，双向传输文件\n· 浏览对端共享目录，多选批量下载到手机\n· 手机文件经共享目录上传到桌面端\n· 传输队列：暂停 / 恢复 / 取消 / 重试，失败原因明示\n· 接收策略：逐批批准 / 自动接受 / 自动拒绝，可设批准超时\n· 长按文件「保存到…」：系统对话框自选保存位置\n· 历史记录：打开所在文件夹、清空记录\n使用：两端连接后先在桌面端开启共享目录，即可在文件传输页浏览、下载或上传；队列面板分「全部 / 发送 / 接收 / 历史」查看进度与记录。",
   "author": "BedCode",
-  "icon": "📁",
+  "icon": "icon.svg",
   "main": "index.js",
   "pluginType": "wasm",
   "rustLibrary": "bedcode_plugin_file_transfer",
@@ -14,11 +14,14 @@
     "fileservice",
     "fs:read",
     "fs:write",
+    "mdns",
     "network:http",
+    "peer",
     "storage",
     "system:open",
     "transfer",
     "ui:back",
+    "ui:dialog",
     "ui:route",
     "ui:settings",
     "ui:toolbox"
@@ -26,60 +29,68 @@
   "contributes": {
     "commands": [
       {
-        "id": "file-transfer.list-tasks",
-        "title": "List Tasks"
+        "id": "file-transfer.refresh-devices",
+        "title": "file-transfer.refresh-devices"
       },
       {
-        "id": "file-transfer.query-peer",
-        "title": "Query Peer Status"
+        "id": "file-transfer.get-device-snapshot",
+        "title": "Get Device Snapshot"
       },
       {
-        "id": "file-transfer.list-peers",
-        "title": "List Peers"
+        "id": "file-transfer.save-device-snapshot",
+        "title": "Save Device Snapshot"
+      },
+      {
+        "id": "file-transfer.dial-peer",
+        "title": "Dial Peer Connection"
+      },
+      {
+        "id": "file-transfer.disconnect-peer",
+        "title": "Disconnect Peer Session"
       },
       {
         "id": "file-transfer.set-active-peer",
         "title": "Set Active Peer"
       },
       {
-        "id": "file-transfer.list-remote",
-        "title": "List Remote Files"
+        "id": "file-transfer.remember-peer-endpoint",
+        "title": "Remember Peer Endpoint"
+      },
+      {
+        "id": "file-transfer.pick-files",
+        "title": "file-transfer.pick-files"
       },
       {
         "id": "file-transfer.enqueue",
         "title": "Enqueue Transfer"
       },
       {
-        "id": "file-transfer.pause",
-        "title": "Pause Transfer"
-      },
-      {
-        "id": "file-transfer.resume",
-        "title": "Resume Transfer"
+        "id": "file-transfer.list-tasks",
+        "title": "List Tasks"
       },
       {
         "id": "file-transfer.cancel",
         "title": "Cancel Transfer"
       },
       {
-        "id": "file-transfer.remove-task",
-        "title": "Remove Task"
-      },
-      {
-        "id": "file-transfer.resume-all",
-        "title": "Resume All Transfers"
-      },
-      {
         "id": "file-transfer.retry",
         "title": "Retry Transfer"
       },
       {
-        "id": "file-transfer.set-concurrency",
-        "title": "Set Concurrency"
+        "id": "file-transfer.remove-task",
+        "title": "Remove Task"
       },
       {
         "id": "file-transfer.list-batches",
         "title": "List Pending Transfer Batches"
+      },
+      {
+        "id": "file-transfer.list-receiving",
+        "title": "List Receiving Tasks"
+      },
+      {
+        "id": "file-transfer.list-history",
+        "title": "List Transfer History"
       },
       {
         "id": "file-transfer.approve-batch",
@@ -90,20 +101,32 @@
         "title": "Reject Transfer Batch"
       },
       {
-        "id": "file-transfer.list-receiving",
-        "title": "List Receiving Tasks"
-      },
-      {
         "id": "file-transfer.cancel-receiving",
         "title": "Cancel Receiving Session"
       },
       {
-        "id": "file-transfer.list-history",
-        "title": "List Transfer History"
-      },
-      {
         "id": "file-transfer.clear-history",
         "title": "Clear Transfer History"
+      },
+      {
+        "id": "file-transfer.respond-consent",
+        "title": "Respond First-Connect Consent"
+      },
+      {
+        "id": "file-transfer.list-trusted",
+        "title": "List Trusted Peers"
+      },
+      {
+        "id": "file-transfer.revoke-trusted",
+        "title": "Revoke Trusted Peer"
+      },
+      {
+        "id": "file-transfer.list-remote",
+        "title": "List Remote Files"
+      },
+      {
+        "id": "file-transfer.pull-files",
+        "title": "file-transfer.pull-files"
       },
       {
         "id": "file-transfer.get-settings",

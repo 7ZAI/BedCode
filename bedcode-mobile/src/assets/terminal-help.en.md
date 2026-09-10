@@ -8,9 +8,11 @@ The input bar sits at the bottom of the terminal, in three parts:
 
 - **Quick Bar**: always-visible shortcuts and commands (auto-sorted by usage frequency), tap to send
 - **Input box**: type your prompt; multi-line supported (expands to 3 lines on focus, max 6 lines)
-- **Action buttons**: shortcut panel toggle, Send (text without Enter), Execute (text + Enter)
+- **Action buttons**: shortcut panel toggle, Send/Execute dual-mode button (paper-plane icon)
 
-> Send vs Execute: **Send** puts the text into the terminal input line **without pressing Enter** (e.g. skill prefix completion); **Execute** sends the text plus Enter to run it immediately.
+> Send vs Execute (one button, two modes): **Send** puts the text into the terminal input line **without pressing Enter** (e.g. skill prefix completion); **Execute** sends the text plus Enter to run it immediately.
+>
+> **Hold the button** to toggle between the two modes; the choice persists: Send mode shows the icon pointing up with an accent background; Execute mode shows the icon pointing right on a black background. **Tap to trigger the current mode's action** (no action while the input is empty, but the hold-to-toggle always works — switch modes first, then type). A haptic buzz confirms the switch.
 
 ## Shortcut Panel
 

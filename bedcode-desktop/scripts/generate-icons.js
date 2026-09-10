@@ -1,10 +1,10 @@
-import sharp from 'sharp';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
+import sharp from 'sharp'
+import path from 'path'
+import fs from 'fs'
+import { fileURLToPath } from 'url'
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const __filename = fileURLToPath(import.meta.url)
+const __dirname = path.dirname(__filename)
 
 // 图标尺寸配置
 const sizes = [
@@ -14,7 +14,7 @@ const sizes = [
   { name: '128x128@2x.png', size: 256 },
   { name: '256x256.png', size: 256 },
   { name: 'icon.png', size: 512 },
-];
+]
 
 // iOS图标尺寸
 const iosSizes = [
@@ -36,7 +36,7 @@ const iosSizes = [
   { name: 'AppIcon-76x76@2x.png', size: 152 },
   { name: 'AppIcon-83.5x83.5@2x.png', size: 167 },
   { name: 'AppIcon-512@2x.png', size: 1024 },
-];
+]
 
 // Windows Store Logo尺寸
 const storeSizes = [
@@ -50,33 +50,33 @@ const storeSizes = [
   { name: 'Square150x150Logo.png', size: 150 },
   { name: 'Square284x284Logo.png', size: 284 },
   { name: 'Square310x310Logo.png', size: 310 },
-];
+]
 
 // 创建SVG模板函数
 function createSvg(size) {
-  const scale = size / 120;
-  const strokeWidth = 10 * scale;
-  const fontSize = Math.max(4, size * 0.125); // 12.5%，最小4px
-  const horizontalGap = size * 0.167; // 16.7%
-  const verticalGap = size * 0.133; // 13.3%
-  const cornerRadius = size * 0.219;
+  const scale = size / 120
+  const strokeWidth = 10 * scale
+  const fontSize = Math.max(4, size * 0.125) // 12.5%，最小4px
+  const horizontalGap = size * 0.167 // 16.7%
+  const verticalGap = size * 0.133 // 13.3%
+  const cornerRadius = size * 0.219
 
   // 计算path坐标（缩放）
-  const p1x = 5 * scale;
-  const p1y = 5 * scale;
-  const p2x = 5 * scale;
-  const p2y = 70 * scale;
-  const p3x = 115 * scale;
-  const p3y = 70 * scale;
-  const p4x = 115 * scale;
-  const p4y = 40 * scale;
-  const p5x = 5 * scale;
-  const p5y = 40 * scale;
+  const p1x = 5 * scale
+  const p1y = 5 * scale
+  const p2x = 5 * scale
+  const p2y = 70 * scale
+  const p3x = 115 * scale
+  const p3y = 70 * scale
+  const p4x = 115 * scale
+  const p4y = 40 * scale
+  const p5x = 5 * scale
+  const p5y = 40 * scale
 
   // 小尺寸图标简化代码显示
-  let codeText = '&gt;&gt;01000011';
+  let codeText = '&gt;&gt;01000011'
   if (size <= 32) {
-    codeText = '&gt;&gt;01'; // 小图标只显示前几位
+    codeText = '&gt;&gt;01' // 小图标只显示前几位
   }
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
@@ -87,45 +87,45 @@ function createSvg(size) {
   <text x="${horizontalGap}" y="${verticalGap + fontSize * 0.8}" fill="#22c55e" font-family="monospace" font-weight="600" font-size="${fontSize}">
     ${codeText}
   </text>
-</svg>`;
+</svg>`
 }
 
 async function generateIcons() {
-  const iconsDir = path.join(__dirname, '..', 'src-tauri', 'icons');
-  const iosDir = path.join(iconsDir, 'ios');
+  const iconsDir = path.join(__dirname, '..', 'src-tauri', 'icons')
+  const iosDir = path.join(iconsDir, 'ios')
 
   // 确保目录存在
   if (!fs.existsSync(iosDir)) {
-    fs.mkdirSync(iosDir, { recursive: true });
+    fs.mkdirSync(iosDir, { recursive: true })
   }
 
-  console.log('Generating BedCode icons...\n');
+  console.log('Generating BedCode icons...\n')
 
   // 生成主图标
   for (const { name, size } of sizes) {
-    const svg = createSvg(size);
-    const outputPath = path.join(iconsDir, name);
-    await sharp(Buffer.from(svg)).png().toFile(outputPath);
-    console.log(`  ✓ ${name} (${size}x${size})`);
+    const svg = createSvg(size)
+    const outputPath = path.join(iconsDir, name)
+    await sharp(Buffer.from(svg)).png().toFile(outputPath)
+    console.log(`  ✓ ${name} (${size}x${size})`)
   }
 
   // 生成iOS图标
   for (const { name, size } of iosSizes) {
-    const svg = createSvg(size);
-    const outputPath = path.join(iosDir, name);
-    await sharp(Buffer.from(svg)).png().toFile(outputPath);
-    console.log(`  ✓ ios/${name} (${size}x${size})`);
+    const svg = createSvg(size)
+    const outputPath = path.join(iosDir, name)
+    await sharp(Buffer.from(svg)).png().toFile(outputPath)
+    console.log(`  ✓ ios/${name} (${size}x${size})`)
   }
 
   // 生成Windows Store图标
   for (const { name, size } of storeSizes) {
-    const svg = createSvg(size);
-    const outputPath = path.join(iconsDir, name);
-    await sharp(Buffer.from(svg)).png().toFile(outputPath);
-    console.log(`  ✓ ${name} (${size}x${size})`);
+    const svg = createSvg(size)
+    const outputPath = path.join(iconsDir, name)
+    await sharp(Buffer.from(svg)).png().toFile(outputPath)
+    console.log(`  ✓ ${name} (${size}x${size})`)
   }
 
-  console.log('\n✅ All icons generated successfully!');
+  console.log('\n✅ All icons generated successfully!')
 }
 
-generateIcons().catch(console.error);
+generateIcons().catch(console.error)

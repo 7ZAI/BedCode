@@ -1,53 +1,67 @@
 /**
- * terminalBuffer store 单元测试
+ * terminalBuffer store 单元测试（10 号票重写）
  *
- * 覆盖：字节游标推进、订阅确认前缓冲回放帧（裁决消息与历史帧乱序竞态）、
- * 连续性不变量违反 → 清屏 + 重新订阅自愈、subscribing 防重、
- * 旧版服务端（无偏移字段）透传兼容。
+ * 覆盖：终端 WS 状态机（HISTORY 拼接 → history_end FLUSH → LIVE）、
+ * 快照重播去重（跳过 ≤ lastRenderedSeq）、seq 缺口重订阅、
+ * 环形淘汰截断（清屏 + 锚定）、重连恢复、历史缓存回放、输入帧发送。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-// mock Tauri 事件与 invoke
-const listenMock = vi.fn()
+// mock Tauri 事件（terminal_output_activity 通知）
+const emitMock = vi.fn().mockResolvedValue(undefined)
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: (...args: unknown[]) => listenMock(...args),
-}))
-const invokeMock = vi.fn()
-vi.mock('@tauri-apps/api/core', () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
+  listen: vi.fn(),
+  emit: (...args: unknown[]) => emitMock(...args),
 }))
 
-import { useTerminalBufferStore, type OutputPayload } from '@/stores/terminalBuffer'
+// mock 终端 socket：测试持有 handlers 引用，手动驱动状态机
+let capturedHandlers: Record<string, any> | null = null
+let fakeSocket: {
+  start: ReturnType<typeof vi.fn>
+  subscribe: ReturnType<typeof vi.fn>
+  sendInput: ReturnType<typeof vi.fn>
+  stop: ReturnType<typeof vi.fn>
+  reconnect: ReturnType<typeof vi.fn>
+  isOpen: ReturnType<typeof vi.fn>
+}
+const createTerminalSocketMock = vi.fn()
+vi.mock('@/composables/useTerminalSocket', () => ({
+  createTerminalSocket: (...args: unknown[]) => createTerminalSocketMock(...args),
+}))
 
-/** 构造 ws_output 载荷 */
-function payload(
-  sessionId: string,
-  data: string,
-  startOffset: number | undefined,
-  endOffset: number | undefined,
-  index = 0,
-): OutputPayload {
+import { useTerminalBufferStore } from '@/stores/terminalBuffer'
+
+/** 构造 TB v2 帧对象（store 消费的解析结果） */
+function frame(seq: number, eventCount = 1, data = `data-${seq}`) {
   return {
-    session_id: sessionId,
-    data_base64: btoa(data),
-    index,
-    is_waiting: false,
-    start_offset: startOffset,
-    end_offset: endOffset,
+    data: new TextEncoder().encode(data),
+    seq,
+    eventCount,
+    lastSeq: seq + eventCount - 1,
+    isWaiting: false,
   }
 }
 
-/** 默认订阅裁决（incremental） */
-const subscribeOk = {
-  minSeq: 0,
-  maxSeq: 10,
-  historyCount: 5,
-  mode: 'incremental',
-  minOffset: 0,
-  maxOffset: 20,
-} as const
+/** 新建 fake socket 并捕获 handlers；返回 [socket, handlers] */
+function setupSocket() {
+  fakeSocket = {
+    start: vi.fn(),
+    subscribe: vi.fn(),
+    sendInput: vi.fn(),
+    stop: vi.fn(),
+    reconnect: vi.fn(),
+    isOpen: vi.fn(() => false),
+    ackRendered: vi.fn(),
+  }
+  capturedHandlers = null
+  createTerminalSocketMock.mockImplementation((handlers: unknown) => {
+    capturedHandlers = handlers as Record<string, any>
+    return fakeSocket
+  })
+  return fakeSocket
+}
 
 async function flushAsync() {
   await new Promise((r) => setTimeout(r, 0))
@@ -56,351 +70,259 @@ async function flushAsync() {
 
 describe('terminalBuffer store', () => {
   let store: ReturnType<typeof useTerminalBufferStore>
-  let listener: ((event: { payload: OutputPayload }) => void) | null = null
 
-  beforeEach(async () => {
+  beforeEach(() => {
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
-    listener = null
-    listenMock.mockImplementation((_name: string, cb: (e: { payload: OutputPayload }) => void) => {
-      listener = cb
-      return Promise.resolve(() => {})
-    })
-    invokeMock.mockResolvedValue(subscribeOk)
-    vi.clearAllMocks()
-    listenMock.mockImplementation((_name: string, cb: (e: { payload: OutputPayload }) => void) => {
-      listener = cb
-      return Promise.resolve(() => {})
-    })
-    invokeMock.mockResolvedValue(subscribeOk)
+    emitMock.mockClear()
+    setupSocket()
   })
 
-  it('已订阅后字节游标随帧推进，handler 收到输出', async () => {
-    store.ensureBuffer('s1')
-    store.markSubscribed('s1')
-    await flushAsync()
+  describe('订阅状态机', () => {
+    it('完整流：subscribe_ok → HISTORY 写历史 → history_end → LIVE 直写实时', async () => {
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      await store.subscribeSession('s1')
 
-    const onOutput = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput })
+      // 连接建立：start + subscribe 挂起（auth_ok 后由 socket 内部发送）
+      expect(fakeSocket.start).toHaveBeenCalledWith('s1')
+      expect(fakeSocket.subscribe).toHaveBeenCalled()
 
-    listener!({ payload: payload('s1', 'ab', 0, 2) })
-    listener!({ payload: payload('s1', 'cd', 2, 4) })
+      // subscribe_ok：进入 HISTORY
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
 
-    expect(store.getBuffer('s1')!.cursor).toBe(4)
-    expect(onOutput).toHaveBeenCalledTimes(2)
-    const first = onOutput.mock.calls[0][0] as Uint8Array
-    expect(String.fromCharCode(...first)).toBe('ab')
-  })
+      // 历史帧（lastSeq ≤ snapshotSeq）：写入 + 入缓存
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onFrame(frame(2))
+      expect(outputs).toEqual(['data-1', 'data-2'])
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(2)
 
-  it('订阅确认前回放帧缓冲（不写入）；确认后跳过快照已覆盖帧，不重复写入', async () => {
-    store.ensureBuffer('s1')
-    store.getBuffer('s1')!.cursor = 0
-    await flushAsync()
-
-    const onOutput = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput })
-
-    // 订阅请求在途，旧流残留帧先于 subscribe_response 到达 → 缓冲不写入
-    listener!({ payload: payload('s1', 'ab', 0, 2) })
-    listener!({ payload: payload('s1', 'cd', 2, 4) })
-    expect(onOutput).not.toHaveBeenCalled()
-    expect(store.getBuffer('s1')!.pending.length).toBe(2)
-
-    // 订阅确认（incremental）：快照 maxOffset=4 已覆盖缓冲帧 [0,4) →
-    // 跳过（服务端历史回放会重发这些字节，写入即重复 → 连续性违反闪屏）
-    const result = await store.subscribeSession('s1')
-    expect(result?.mode).toBe('incremental')
-    expect(onOutput).not.toHaveBeenCalled()
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(0)
-    expect(buf.pending.length).toBe(0)
-
-    // 服务端回放帧（覆盖帧重发 + 新帧）到达：与游标字节级衔接，按序写入
-    listener!({ payload: payload('s1', 'ab', 0, 2) })
-    listener!({ payload: payload('s1', 'cd', 2, 4) })
-    listener!({ payload: payload('s1', 'ef', 4, 6) })
-    expect(onOutput).toHaveBeenCalledTimes(3)
-    expect(buf.cursor).toBe(6)
-  })
-
-  it('reset 订阅：丢弃确认前缓冲的旧流残留帧，等待新回放帧锚定', async () => {
-    store.ensureBuffer('s1')
-    await flushAsync()
-
-    const onOutput = vi.fn()
-    const onClear = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput, onClear })
-
-    // 订阅往返期间到达的帧只能是旧流残留（响应先于新回放帧发送）——
-    // reset 裁决下必须丢弃，否则排空会推进游标导致新回放首帧违反连续性
-    listener!({ payload: payload('s1', 'stale', 100, 112) })
-    invokeMock.mockResolvedValueOnce({
-      minSeq: 0,
-      maxSeq: 10,
-      historyCount: 5,
-      mode: 'reset',
-      minOffset: 5,
-      maxOffset: 30,
+      // history_end → LIVE
+      capturedHandlers!.onHistoryEnd(10)
+      capturedHandlers!.onFrame(frame(3))
+      expect(outputs).toEqual(['data-1', 'data-2', 'data-3'])
+      expect(store.getBuffer('s1')!.phase).toBe('live')
     })
 
-    await store.subscribeSession('s1')
+    it('实时帧先于 history_end 到达：缓冲后统一 FLUSH（按序写入）', async () => {
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
 
-    expect(onClear).toHaveBeenCalledTimes(1)
-    // 残留帧未写入，等待新回放帧（游标 -1 首帧锚定）
-    expect(onOutput).not.toHaveBeenCalled()
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(true)
-    expect(buf.pending.length).toBe(0)
+      // 历史段内实时帧（> snapshotSeq）：入实时缓冲，不写入
+      capturedHandlers!.onFrame(frame(12))
+      capturedHandlers!.onFrame(frame(13))
+      expect(outputs).toEqual([])
 
-    // 新回放帧（快照点起播）到达：游标 -1 跳过校验，锚定后推进
-    listener!({ payload: payload('s1', 'replay', 10, 22) })
-    expect(onOutput).toHaveBeenCalledTimes(1)
-    expect(buf.cursor).toBe(22)
-  })
-
-  it('连续性违反（已订阅后）：丢弃游标 + 重新订阅（裁决 reset 确认后清屏）', async () => {
-    store.ensureBuffer('s1')
-    store.markSubscribed('s1')
-    store.getBuffer('s1')!.cursor = 5
-    await flushAsync()
-
-    const onClear = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput: vi.fn(), onClear })
-
-    // 帧起点 6 而非 5 → 不变量破坏
-    listener!({ payload: payload('s1', 'xy', 6, 8) })
-
-    // 同步部分：游标/订阅状态重置；清屏推迟到裁决确认后（自愈失败时
-    // 不提前清屏 → 不留永久黑屏，旧内容展示到新回放到达）
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(false)
-    expect(onClear).not.toHaveBeenCalled()
-
-    // 自愈重订阅（doSubscribe 先 await 监听器注册，invoke 异步发出）；
-    // 游标已丢弃 → startSeq null → 服务端裁决 reset 全量重播
-    invokeMock.mockResolvedValueOnce({
-      minSeq: 0,
-      maxSeq: 10,
-      historyCount: 5,
-      mode: 'reset',
-      minOffset: 5,
-      maxOffset: 30,
+      // history_end：FLUSH 缓冲帧
+      capturedHandlers!.onHistoryEnd(10)
+      expect(outputs).toEqual(['data-12', 'data-13'])
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(13)
     })
-    await flushAsync()
-    expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
-    expect(buf.subscribed).toBe(true)
-    expect(onClear).toHaveBeenCalledTimes(1)
+
+    it('已订阅会话重复订阅：直接返回快照元数据，不重建连接', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onHistoryEnd(10)
+
+      fakeSocket.start.mockClear()
+      const result = await store.subscribeSession('s1')
+      expect(result).toEqual({ snapshotSeq: 10, minSeq: 0, historyCount: 0 })
+      expect(fakeSocket.start).not.toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.subscribed).toBe(true)
+    })
   })
 
-  it('订阅请求在途时重复订阅跳过（subscribing 防重）', async () => {
-    store.ensureBuffer('s1')
-    await flushAsync()
+  describe('快照重播去重与缺口', () => {
+    it('重播帧跳过 ≤ lastRenderedSeq，不双写', async () => {
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1, 3)) // 1-3
+      capturedHandlers!.onFrame(frame(4, 3)) // 4-6
+      capturedHandlers!.onHistoryEnd(10)
 
-    let resolveInvoke: ((v: unknown) => void) | undefined
-    invokeMock.mockImplementation(
-      () => new Promise((r) => { resolveInvoke = r })
-    )
+      // 快照重播（重连后）：帧与已渲染区重叠 → 整帧跳过
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1, 3))
+      capturedHandlers!.onFrame(frame(4, 3))
+      expect(outputs).toEqual(['data-1', 'data-4'])
 
-    const first = store.subscribeSession('s1')
-    const second = store.subscribeSession('s1')
-    // 第一次订阅先 await 监听器注册，invoke 在微任务后发出；第二次调用直接跳过
-    await flushAsync()
-    expect(invokeMock).toHaveBeenCalledTimes(1)
+      // 未渲染部分正常写入
+      capturedHandlers!.onFrame(frame(7))
+      expect(outputs).toEqual(['data-1', 'data-4', 'data-7'])
+    })
 
-    resolveInvoke!(subscribeOk)
-    await first
-    await second
-    expect(store.getBuffer('s1')!.subscribed).toBe(true)
+    it('seq 缺口（> lastRenderedSeq+1）：重发订阅，帧不写入', async () => {
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onHistoryEnd(10)
+
+      fakeSocket.subscribe.mockClear()
+      capturedHandlers!.onFrame(frame(5)) // 缺口：2-4 缺失
+      expect(fakeSocket.subscribe).toHaveBeenCalled()
+      expect(outputs).toEqual(['data-1'])
+    })
+
+    it('环形淘汰截断：清屏 + onTruncated 一次 + 锚定重播', async () => {
+      const outputs: string[] = []
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)), onClear, onTruncated })
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1, 3))
+      capturedHandlers!.onHistoryEnd(10)
+
+      // 重订阅：min_seq 已越过游标（已渲染区被淘汰）
+      capturedHandlers!.onSubscribed({ snapshotSeq: 30, minSeq: 20, historyCount: 5 })
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledWith(20)
+
+      // 锚定后重播帧（seq 20 起）正常写入，不再触发截断提示
+      capturedHandlers!.onFrame(frame(20))
+      capturedHandlers!.onFrame(frame(21))
+      expect(outputs).toEqual(['data-1', 'data-20', 'data-21'])
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+    })
   })
 
-  it('订阅失败：丢弃缓冲帧，保持未订阅（等待外部重试）', async () => {
-    store.ensureBuffer('s1')
-    await flushAsync()
+  describe('重连与生命周期', () => {
+    it('onClose 后重连：重新 subscribe_ok → 快照重播按 lastRenderedSeq 跳过', async () => {
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onHistoryEnd(10)
 
-    // 订阅确认前先到达回放帧（缓冲）
-    listener!({ payload: payload('s1', 'ab', 0, 2) })
+      capturedHandlers!.onClose()
+      expect(store.getBuffer('s1')!.subscribing).toBe(false)
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(1) // 游标保留
 
-    invokeMock.mockRejectedValueOnce(new Error('network down'))
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // 重连后快照重播：重叠帧跳过，新帧写入
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onFrame(frame(2))
+      capturedHandlers!.onHistoryEnd(10)
+      expect(outputs).toEqual(['data-1', 'data-2'])
+    })
 
-    const result = await store.subscribeSession('s1')
+    it('session_stopped：停 socket、置 idle；恢复运行后重新订阅', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
 
-    expect(result).toBeNull()
-    const buf = store.getBuffer('s1')!
-    expect(buf.subscribed).toBe(false)
-    expect(buf.pending.length).toBe(0) // 缓冲帧已丢弃
+      capturedHandlers!.onSessionStopped('s1')
+      expect(fakeSocket.stop).toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
+      expect(store.getBuffer('s1')!.subscribed).toBe(false)
 
-    warnSpy.mockRestore()
+      store.markSessionRunning('s1')
+      expect(store.getBuffer('s1')!.sessionStopped).toBe(false)
+    })
+
+    it('SESSION_NOT_FOUND 错误：有限重试后停止；其他错误走 reconnect', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+
+      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
+      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
+      expect(fakeSocket.reconnect).toHaveBeenCalledTimes(2)
+      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
+      expect(fakeSocket.stop).toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.subscribed).toBe(false)
+    })
+
+    it('markSessionStopped：重置游标 + 停 socket（会话重启后 seq 空间重建）', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+
+      store.markSessionStopped('s1')
+      expect(fakeSocket.stop).toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBeNull()
+      expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
+    })
   })
 
-  it('旧版服务端（无偏移字段）：透传输出，不推进游标', async () => {
-    store.ensureBuffer('s1')
-    await flushAsync()
+  describe('历史缓存与页面重进', () => {
+    it('无 handler 时帧入缓存；registerRealtimeHandler 回放全部并推进游标', async () => {
+      // 预加载：无 handler 订阅（会话页 prepareSession）
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onFrame(frame(2, 2)) // 2-3
+      capturedHandlers!.onHistoryEnd(10)
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(3) // 无 handler 也推进游标
+      expect(store.getBuffer('s1')!.historyCache).toHaveLength(2)
 
-    const onOutput = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput })
+      // 终端页挂载：回放缓存（lastRenderedSeq 为 null 的场景 = 页面重进 forceReplay 后）
+      store.forceReplay('s1')
+      const outputs: string[] = []
+      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+      expect(outputs).toEqual(['data-1', 'data-2'])
+      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(3)
 
-    listener!({ payload: payload('s1', 'legacy', undefined, undefined) })
+      // 后续 live 帧（seq > 3）正常写入，不双写
+      capturedHandlers!.onFrame(frame(4))
+      expect(outputs).toEqual(['data-1', 'data-2', 'data-4'])
+    })
 
-    expect(onOutput).toHaveBeenCalledTimes(1)
-    expect(store.getBuffer('s1')!.cursor).toBe(-1)
+    it('历史缓存 LRU：超出 16MB 淘汰最旧帧', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 100, minSeq: 0, historyCount: 5 })
+      // 每帧 1MB：写入 20 帧（超 16MB 上限）
+      const bigFrame = (seq: number) => ({
+        data: new Uint8Array(1024 * 1024),
+        seq,
+        eventCount: 1,
+        lastSeq: seq,
+        isWaiting: false,
+      })
+      for (let i = 1; i <= 20; i++) {
+        capturedHandlers!.onFrame(bigFrame(i))
+      }
+      const buffer = store.getBuffer('s1')!
+      expect(buffer.historyBytes).toBeLessThanOrEqual(16 * 1024 * 1024)
+      // 最旧帧被淘汰，最新帧保留
+      const firstSeq = buffer.historyCache[0].seq
+      expect(firstSeq).toBeGreaterThan(1)
+      expect(buffer.historyCache[buffer.historyCache.length - 1].seq).toBe(20)
+    })
   })
 
-  it('未访问过的会话（无 buffer）忽略输出', async () => {
-    // 显式启动全局监听器（不创建任何 buffer）
-    store.startGlobalListener()
-    await flushAsync()
-    listener!({ payload: payload('other', 'x', 0, 1) })
-    expect(store.buffers.has('other')).toBe(false)
+  describe('输入发送', () => {
+    it('已订阅会话 sendInput 经 socket 发送', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onHistoryEnd(10)
+      fakeSocket.isOpen.mockReturnValue(true)
+
+      const ok = store.sendInput('s1', 'ls -la', 'enter')
+      expect(ok).toBe(true)
+      expect(fakeSocket.sendInput).toHaveBeenCalledWith('ls -la', 'enter')
+    })
+
+    it('未订阅会话 sendInput 拒绝', async () => {
+      const ok = store.sendInput('s1', 'ls')
+      expect(ok).toBe(false)
+      expect(fakeSocket.sendInput).not.toHaveBeenCalled()
+    })
   })
 
-  it('会话已停止后忽略输出（游标不推进）', async () => {
-    store.ensureBuffer('s1')
-    store.markSessionStopped('s1')
-    await flushAsync()
-
-    const onOutput = vi.fn()
-    store.registerRealtimeHandler('s1', { onOutput })
-
-    listener!({ payload: payload('s1', 'zz', 0, 2) })
-
-    expect(onOutput).not.toHaveBeenCalled()
-    expect(store.getBuffer('s1')!.cursor).toBe(-1)
-  })
-
-  it('连续性自愈重订阅失败：保持未订阅，等待后续生命周期恢复', async () => {
-    store.ensureBuffer('s1')
-    store.markSubscribed('s1')
-    store.getBuffer('s1')!.cursor = 5
-    await flushAsync()
-
-    // 重订阅 invoke 失败
-    invokeMock.mockRejectedValueOnce(new Error('network down'))
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-
-    listener!({ payload: payload('s1', 'xy', 6, 8) })
-    await flushAsync()
-
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(false) // 未标记订阅，可被外部重试
-
-    warnSpy.mockRestore()
-  })
-
-  it('forceReplay：重置游标与订阅状态，下次订阅服务端裁决 reset 全量重播', async () => {
-    store.ensureBuffer('s1')
-    store.getBuffer('s1')!.cursor = 100
-    store.markSubscribed('s1')
-    await flushAsync()
-
-    store.forceReplay('s1')
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(false)
-    expect(buf.pending.length).toBe(0)
-
-    invokeMock.mockResolvedValueOnce({ ...subscribeOk, mode: 'reset' })
-    const result = await store.subscribeSession('s1')
-
-    // 游标丢弃 → startSeq null → 服务端全量重播
-    expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
-    expect(result?.mode).toBe('reset')
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(true)
-  })
-
-  it('forceReplay 与在途订阅竞态：旧游标 incremental 完成后以重置游标重订阅', async () => {
-    store.ensureBuffer('s1')
-    store.getBuffer('s1')!.cursor = 100
-    await flushAsync()
-
-    let resolveInvoke: ((v: unknown) => void) | undefined
-    invokeMock.mockImplementation(
-      () => new Promise((r) => { resolveInvoke = r })
-    )
-
-    // 后台在途订阅（旧游标 100）：doSubscribe 已越过监听器 await、捕获游标、
-    // 发出 invoke（此时未到页面重进）
-    const bg = store.subscribeSession('s1')
-    await flushAsync()
-    expect(invokeMock).toHaveBeenCalledTimes(1)
-
-    // 页面重进：强制重播（在途订阅未完成，游标与订阅状态已重置）
-    store.forceReplay('s1')
-    expect(store.getBuffer('s1')!.cursor).toBe(-1)
-
-    // 在途订阅按旧游标 incremental 完成；重订阅返回 reset（全量重播）
-    invokeMock.mockResolvedValueOnce({ ...subscribeOk, mode: 'reset' })
-    resolveInvoke!(subscribeOk)
-    const result = await bg
-
-    expect(result?.mode).toBe('reset')
-    expect(invokeMock).toHaveBeenCalledTimes(2)
-    expect(invokeMock).toHaveBeenNthCalledWith(1, 'ws_subscribe_session', { sessionId: 's1', startSeq: 100 })
-    expect(invokeMock).toHaveBeenNthCalledWith(2, 'ws_subscribe_session', { sessionId: 's1', startSeq: null })
-    const buf = store.getBuffer('s1')!
-    expect(buf.subscribed).toBe(true)
-    expect(buf.cursor).toBe(-1)
-  })
-
-  it('会话停止后游标与订阅状态一并失效（重启后走全量重播）', async () => {
-    store.ensureBuffer('s1')
-    store.getBuffer('s1')!.cursor = 50
-    store.markSubscribed('s1')
-    await flushAsync()
-
-    store.markSessionStopped('s1')
-    const buf = store.getBuffer('s1')!
-    expect(buf.cursor).toBe(-1)
-    expect(buf.subscribed).toBe(false)
-
-    // 重启后订阅：游标丢弃 → 全量重播（新流偏移空间从 0 重建，旧游标无效）
-    invokeMock.mockResolvedValueOnce({ ...subscribeOk, mode: 'reset' })
-    const result = await store.subscribeSession('s1')
-    expect(invokeMock).toHaveBeenCalledWith('ws_subscribe_session', { sessionId: 's1', startSeq: null })
-    expect(result?.mode).toBe('reset')
-  })
-
-  it('预加载（已订阅无 handler）：回放帧缓冲，注册 handler 时回退游标统一写入', async () => {
-    store.ensureBuffer('s1')
-    await flushAsync()
-
-    // 会话页预加载订阅（forceReplay 后游标丢弃 → reset 全量重播），无 handler
-    invokeMock.mockResolvedValueOnce({ ...subscribeOk, mode: 'reset' })
-    const result = await store.subscribeSession('s1')
-    expect(result?.mode).toBe('reset')
-    const buf = store.getBuffer('s1')!
-    expect(buf.subscribed).toBe(true)
-
-    // 回放帧到达：无 handler → 缓冲不丢弃，游标正常推进
-    const onOutput = vi.fn()
-    listener!({ payload: payload('s1', 'ab', 0, 2) })
-    listener!({ payload: payload('s1', 'cd', 2, 4) })
-    expect(onOutput).not.toHaveBeenCalled()
-    expect(buf.cursor).toBe(4)
-    expect(buf.pending.length).toBe(2)
-
-    // 终端页挂载注册 handler：回退游标到首帧起点后按序写入
-    store.registerRealtimeHandler('s1', { onOutput })
-    expect(onOutput).toHaveBeenCalledTimes(2)
-    const first = onOutput.mock.calls[0][0] as Uint8Array
-    expect(String.fromCharCode(...first)).toBe('ab')
-    expect(buf.cursor).toBe(4)
-    expect(buf.pending.length).toBe(0)
-
-    // 后续实时帧直达 handler
-    listener!({ payload: payload('s1', 'ef', 4, 6) })
-    expect(onOutput).toHaveBeenCalledTimes(3)
-    expect(buf.cursor).toBe(6)
-  })
-
-  it('预加载就绪标记：markPrepared 后 consumePrepared 一次性消费', async () => {
-    expect(store.consumePrepared()).toBeNull()
-    store.markPrepared('s1')
-    expect(store.consumePrepared()).toBe('s1')
-    expect(store.consumePrepared()).toBeNull()
+  describe('输出活动通知', () => {
+    it('每帧触发 terminal_output_activity（节流窗口内合并）', async () => {
+      await store.subscribeSession('s1')
+      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      capturedHandlers!.onFrame(frame(1))
+      capturedHandlers!.onFrame(frame(2))
+      expect(emitMock).toHaveBeenCalledWith('terminal_output_activity', { session_id: 's1' })
+      expect(emitMock.mock.calls.length).toBeGreaterThanOrEqual(1)
+    })
   })
 })

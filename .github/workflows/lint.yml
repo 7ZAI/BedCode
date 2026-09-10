@@ -1,0 +1,55 @@
+name: Lint (Desktop + Mobile Frontend)
+
+on:
+  push:
+    # dev 分支是本地集成主线的只读镜像备份（详见 AGENTS.md "分支推送约定"），
+    # 不接受远程 dev 触发 workflow——CI 验证在合并到 master / uat 时由本 workflow 接管
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.editorconfig'
+      - '.github/workflows/lint.yml'
+  pull_request:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - 'eslint.config.js'
+      - '.prettierrc.json'
+      - '.editorconfig'
+      - '.github/workflows/lint.yml'
+
+# 全局单根 ESLint 配置（eslint.config.js），同时校验桌面端与移动端前端。
+# 当前状态：pnpm exec eslint . 0 error（warning 暂不计入，逐步收紧）。
+# CI 用 `pnpm exec eslint .`（不带 --fix），纯校验；失败即阻断合并，锁住 0-error 基准。
+permissions:
+  contents: read
+
+jobs:
+  eslint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: ESLint (fail on errors)
+        run: pnpm exec eslint .

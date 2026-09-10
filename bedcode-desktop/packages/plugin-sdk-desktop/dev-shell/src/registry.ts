@@ -11,6 +11,7 @@ import type {
   FileHandlerDescriptor,
   InputExtensionDescriptor,
   PageToolbarItemDescriptor,
+  PluginDevMock,
   RequestHandler,
   SidebarPanelDescriptor,
   StatusBarItemDescriptor,
@@ -18,6 +19,25 @@ import type {
   TitleBarItemDescriptor,
   ToolboxPageDescriptor,
 } from '../../src/types'
+
+// ==================== 插件 devMock（领域种子数据） ====================
+
+/** 按 pluginId 注册的开发期领域数据（loader 在 activate 前调用，deactivate 时清理） */
+const devMocks = new Map<string, PluginDevMock>()
+
+export function registerDevMock(pluginId: string, mock: PluginDevMock): Disposable {
+  devMocks.set(pluginId, mock)
+  return {
+    dispose() {
+      devMocks.delete(pluginId)
+    },
+  }
+}
+
+/** 取指定插件的领域种子（mock 命令实现消费，与移动端 SDK 同构） */
+export function getDevMock(pluginId: string): PluginDevMock | undefined {
+  return devMocks.get(pluginId)
+}
 
 // ==================== 日志 ====================
 
@@ -33,11 +53,7 @@ const logs = ref<DevLogEntry[]>([])
 let nextLogId = 0
 const MAX_LOGS = 500
 
-export function pushLog(
-  level: DevLogEntry['level'],
-  pluginId: string,
-  message: string,
-): void {
+export function pushLog(level: DevLogEntry['level'], pluginId: string, message: string): void {
   const entry: DevLogEntry = {
     id: ++nextLogId,
     ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
@@ -68,6 +84,10 @@ export interface DevPluginRecord {
   state: DevPluginState
   error?: string
   context: any
+  /** devMock 注册句柄（deactivate 时清理） */
+  devMockDisposable?: Disposable
+  /** 领域命令 mock 注入句柄（清理模拟定时器；deactivate 时调用） */
+  mockDisposable?: Disposable
 }
 
 const plugins = ref<DevPluginRecord[]>([])
@@ -114,13 +134,6 @@ export interface EndpointEntry {
   pluginId: string
   path: string
 }
-export interface MountEntry {
-  pluginId: string
-  mountPath: string
-  roots: string[]
-  operations: string[]
-}
-
 const sidebarPanels = ref<SidebarPanelEntry[]>([])
 const toolboxPages = ref<ToolboxPageEntry[]>([])
 const statusBarItems = ref<StatusBarEntry[]>([])
@@ -130,7 +143,6 @@ const titleBarItems = ref<TitleBarEntry[]>([])
 const pageToolbarItems = ref<PageToolbarEntry[]>([])
 const fileHandlers = ref<FileHandlerEntry[]>([])
 const endpoints = ref<EndpointEntry[]>([])
-const mounts = ref<MountEntry[]>([])
 
 function makeDisposable<T>(list: { value: T[] }, entry: T): Disposable {
   return {
@@ -162,14 +174,20 @@ export function registerStatusBarItem(pluginId: string, item: StatusBarItemDescr
   return makeDisposable(statusBarItems, entry)
 }
 
-export function registerInputExtension(pluginId: string, ext: InputExtensionDescriptor): Disposable {
+export function registerInputExtension(
+  pluginId: string,
+  ext: InputExtensionDescriptor,
+): Disposable {
   const entry: InputExtensionEntry = { pluginId, ext }
   inputExtensions.value.push(entry)
   pushLog('debug', pluginId, `注册输入扩展: ${ext.label}`)
   return makeDisposable(inputExtensions, entry)
 }
 
-export function registerTerminalToolbarItem(pluginId: string, item: TerminalToolbarItemDescriptor): Disposable {
+export function registerTerminalToolbarItem(
+  pluginId: string,
+  item: TerminalToolbarItemDescriptor,
+): Disposable {
   const entry: TerminalToolbarEntry = { pluginId, item }
   terminalToolbarItems.value.push(entry)
   pushLog('debug', pluginId, `注册终端工具栏项: ${item.label}`)
@@ -183,7 +201,10 @@ export function registerTitleBarItem(pluginId: string, item: TitleBarItemDescrip
   return makeDisposable(titleBarItems, entry)
 }
 
-export function registerPageToolbarItem(pluginId: string, item: PageToolbarItemDescriptor): Disposable {
+export function registerPageToolbarItem(
+  pluginId: string,
+  item: PageToolbarItemDescriptor,
+): Disposable {
   const entry: PageToolbarEntry = { pluginId, item }
   pageToolbarItems.value.push(entry)
   pushLog('debug', pluginId, `注册页面工具栏项: ${item.label} -> ${item.target}`)
@@ -202,25 +223,6 @@ export function registerEndpoint(pluginId: string, path: string): Disposable {
   endpoints.value.push(entry)
   pushLog('debug', pluginId, `注册 HTTP 端点: ${path}（浏览器中不可达，仅展示）`)
   return makeDisposable(endpoints, entry)
-}
-
-export function registerMount(
-  pluginId: string,
-  mountPath: string,
-  roots: string[],
-  operations: string[],
-): { updateRoots(roots: string[]): void; dispose(): void } {
-  const entry: MountEntry = { pluginId, mountPath, roots, operations }
-  mounts.value.push(entry)
-  return {
-    updateRoots(next: string[]) {
-      entry.roots = next
-    },
-    dispose() {
-      const idx = mounts.value.indexOf(entry)
-      if (idx !== -1) mounts.value.splice(idx, 1)
-    },
-  }
 }
 
 // ==================== 当前打开的插件视图 ====================
@@ -244,7 +246,6 @@ export {
   fileHandlers,
   inputExtensions,
   logs,
-  mounts,
   pageToolbarItems,
   plugins,
   sidebarPanels,

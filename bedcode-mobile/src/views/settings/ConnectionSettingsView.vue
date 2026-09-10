@@ -82,25 +82,124 @@
           </div>
         </div>
       </section>
+      <section class="space-y-2">
+        <h2 class="settings-section-title">{{ $t('settings.connection.linkCryptoSection') }}</h2>
+        <div class="settings-group">
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.linkCryptoMaster') }}</span>
+            <Toggle
+              :model-value="linkSettings.settings.value.enabled"
+              @update:model-value="onToggleLinkEncryption"
+            />
+          </div>
+          <!-- 通道子开关：主开关关时置灰（与桌面端粒度对齐） -->
+          <div
+            v-for="sub in linkChannelRows"
+            :key="sub.channel"
+            class="settings-row"
+            :class="{ 'opacity-50': !linkSettings.settings.value.enabled }"
+          >
+            <span class="settings-label">{{ $t(sub.labelKey) }}</span>
+            <Toggle
+              :model-value="sub.value"
+              :disabled="!linkSettings.settings.value.enabled"
+              @update:model-value="(v: boolean) => linkSettings.setChannel(sub.channel, v)"
+            />
+          </div>
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.linkStrictMode') }}</span>
+            <Toggle
+              :model-value="linkSettings.settings.value.strictMode"
+              :disabled="!linkSettings.settings.value.enabled"
+              @update:model-value="linkSettings.setStrictMode"
+            />
+          </div>
+          <!-- 对端指纹：人工核对锚点；未配对时展示占位 -->
+          <div class="settings-row">
+            <span class="settings-label">{{ $t('settings.connection.linkPeerFingerprint') }}</span>
+            <span class="font-mono text-xs text-[var(--mobile-text-muted)] truncate">{{
+              pinnedFingerprint ?? $t('settings.connection.linkNotPaired')
+            }}</span>
+          </div>
+        </div>
+        <p class="text-xs text-[var(--mobile-text-muted)] px-1">
+          {{ $t('settings.connection.linkCryptoHint') }}
+        </p>
+      </section>
     </div>
   </SettingsSubPage>
 </template>
 
 <script setup lang="ts">
 /**
- * 连接设置二级页面 - 自动重连、保持连接、重连间隔、默认端口
+ * 连接设置二级页面 - 自动重连、保持连接、重连间隔、默认端口 + 链路加密（issue 08）
  * 状态来自 useMobileSettings 共享单例，变更自动保存
  */
-import { onMounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import Toggle from '@/components/Toggle.vue'
 import { useMobileSettings } from '@/composables/useMobileSettings'
+import {
+  getPinnedFingerprint,
+  getPinnedKey,
+  useLinkEncryptionSettings,
+} from '@/composables/useLinkEncryption'
+import { useToast } from '@/composables/useToast'
 
 const { t } = useI18n()
+const toast = useToast()
 const { settings, loadSettings } = useMobileSettings()
+const linkSettings = useLinkEncryptionSettings()
+// 指纹行用 ref 而非无依赖 computed：后者首次求值后永久缓存，设置页常驻时
+// 配对完成（ws_link_crypto_pin 事件落地）指纹行仍显示「未配对」
+const pinnedFingerprint = ref(getPinnedFingerprint())
 
-onMounted(loadSettings)
+/** 从 localStorage 刷新指纹（配对/重认证事件驱动） */
+function refreshPinnedFingerprint(): void {
+  pinnedFingerprint.value = getPinnedFingerprint()
+}
+
+/** 通道子开关行元数据（与桌面端三子开关一一对应） */
+const linkChannelRows = computed(() => [
+  {
+    channel: 'http' as const,
+    labelKey: 'settings.connection.linkEncryptHttp',
+    value: linkSettings.settings.value.encryptHttp,
+  },
+  {
+    channel: 'ws-terminal' as const,
+    labelKey: 'settings.connection.linkEncryptWsTerminal',
+    value: linkSettings.settings.value.encryptWsTerminal,
+  },
+  {
+    channel: 'ws-event' as const,
+    labelKey: 'settings.connection.linkEncryptWsEvent',
+    value: linkSettings.settings.value.encryptWsEvent,
+  },
+])
+
+/**
+ * 主开关切换守卫：无 pin（桌面端身份公钥）时拒绝开启并引导先配对——加密协商
+ * 依赖配对期下发的桌面端身份公钥作信任锚，无 pin 开关只会产生「开着但永不
+ * 生效」的半启用态。判断用公钥而非指纹：指纹仅展示用途，公钥才是协商前提。
+ */
+function onToggleLinkEncryption(next: boolean) {
+  if (next && !getPinnedKey()) {
+    toast.error(t('settings.connection.linkNeedPairing'))
+    return
+  }
+  linkSettings.setEnabled(next)
+}
+
+onMounted(async () => {
+  await loadSettings()
+  refreshPinnedFingerprint()
+  // 配对/重认证（配对码/QR/reauth/生物认证）统一经 ws_link_crypto_pin 落地
+  const { listen } = await import('@tauri-apps/api/event')
+  const unlisten = await listen('ws_link_crypto_pin', refreshPinnedFingerprint)
+  onUnmounted(() => unlisten())
+})
 
 // ==================== 数字步进 ====================
 

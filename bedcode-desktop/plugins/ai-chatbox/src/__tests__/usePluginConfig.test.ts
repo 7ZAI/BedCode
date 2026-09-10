@@ -33,10 +33,13 @@ describe('usePluginConfig', () => {
       codeLineHeight: 1.6,
       codeFontSize: 13,
       codeTheme: 'auto',
+      rateLimitMaxRetries: 3,
+      rateLimitInitialDelayMs: 1000,
+      rateLimitMaxDelayMs: 30000,
     })
   })
 
-  it('全量配置读回：原样生效（旧版行距枚举映射为数字）', async () => {
+  it('全量配置读回：原样生效（旧版行距枚举映射为数字；已删除的文件访问字段被忽略）', async () => {
     const { mock, pluginConfig } = setup()
     mock.storageMap.set('config', {
       thinkingMode: 'disabled',
@@ -54,6 +57,9 @@ describe('usePluginConfig', () => {
       codeLineHeight: 1.8,
       codeFontSize: 15,
       codeTheme: 'github-dark',
+      rateLimitMaxRetries: 3,
+      rateLimitInitialDelayMs: 1000,
+      rateLimitMaxDelayMs: 30000,
     })
   })
 
@@ -105,6 +111,35 @@ describe('usePluginConfig', () => {
     })
     await pluginConfig.loadConfig()
     expect(pluginConfig.config.value.codeLineHeight).toBe(1.6)
+  })
+
+  it('限流重试参数夹取：非整数取整、超出范围回退边界、非法值回退默认', async () => {
+    const { mock, pluginConfig } = setup()
+    mock.storageMap.set('config', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      rateLimitMaxRetries: 5.6,
+      rateLimitInitialDelayMs: 50,
+      rateLimitMaxDelayMs: 999999,
+    })
+    await pluginConfig.loadConfig()
+    expect(pluginConfig.config.value.rateLimitMaxRetries).toBe(6)
+    expect(pluginConfig.config.value.rateLimitInitialDelayMs).toBe(100)
+    expect(pluginConfig.config.value.rateLimitMaxDelayMs).toBe(300000)
+
+    mock.storageMap.set('config', {
+      thinkingMode: 'default',
+      reasoningEffort: 'high',
+      showReasoning: true,
+      rateLimitMaxRetries: 'many',
+      rateLimitInitialDelayMs: null,
+      rateLimitMaxDelayMs: -5,
+    })
+    await pluginConfig.loadConfig()
+    expect(pluginConfig.config.value.rateLimitMaxRetries).toBe(3)
+    expect(pluginConfig.config.value.rateLimitInitialDelayMs).toBe(1000)
+    expect(pluginConfig.config.value.rateLimitMaxDelayMs).toBe(1000)
   })
 
   it('storage 读取抛错：保持默认值不抛错（配置缺失不阻断聊天）', async () => {

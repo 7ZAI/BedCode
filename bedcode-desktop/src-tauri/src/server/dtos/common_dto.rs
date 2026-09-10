@@ -16,17 +16,29 @@ pub struct ApiResponse<T: Serialize> {
 
 impl ApiResponse<()> {
     pub fn ok() -> Self {
-        Self { code: 0, message: "ok".to_string(), data: None }
+        Self {
+            code: 0,
+            message: "ok".to_string(),
+            data: None,
+        }
     }
 
     pub fn error(code: u16, message: &str) -> Self {
-        Self { code, message: message.to_string(), data: None }
+        Self {
+            code,
+            message: message.to_string(),
+            data: None,
+        }
     }
 }
 
 impl<T: Serialize> ApiResponse<T> {
     pub fn ok_with_data(data: T) -> Self {
-        ApiResponse { code: 0, message: "ok".to_string(), data: Some(data) }
+        ApiResponse {
+            code: 0,
+            message: "ok".to_string(),
+            data: Some(data),
+        }
     }
 }
 

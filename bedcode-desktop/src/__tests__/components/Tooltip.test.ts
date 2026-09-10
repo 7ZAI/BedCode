@@ -15,11 +15,11 @@ describe('Tooltip Component', () => {
   it('should render trigger element', () => {
     const wrapper = mount(Tooltip, {
       props: {
-        content: 'Test tooltip'
+        content: 'Test tooltip',
       },
       slots: {
-        default: '<button>Hover me</button>'
-      }
+        default: '<button>Hover me</button>',
+      },
     })
 
     expect(wrapper.find('button').exists()).toBe(true)
@@ -29,11 +29,11 @@ describe('Tooltip Component', () => {
   it('should have correct default props', () => {
     const wrapper = mount(Tooltip, {
       props: {
-        content: 'Test tooltip'
+        content: 'Test tooltip',
       },
       slots: {
-        default: '<button>Hover me</button>'
-      }
+        default: '<button>Hover me</button>',
+      },
     })
 
     expect(wrapper.props('content')).toBe('Test tooltip')
@@ -45,11 +45,11 @@ describe('Tooltip Component', () => {
     const wrapper = mount(Tooltip, {
       props: {
         content: 'Test tooltip',
-        position: 'bottom'
+        position: 'bottom',
       },
       slots: {
-        default: '<button>Hover me</button>'
-      }
+        default: '<button>Hover me</button>',
+      },
     })
 
     expect(wrapper.props('position')).toBe('bottom')
@@ -59,11 +59,11 @@ describe('Tooltip Component', () => {
     const wrapper = mount(Tooltip, {
       props: {
         content: 'Test tooltip',
-        delay: 500
+        delay: 500,
       },
       slots: {
-        default: '<button>Hover me</button>'
-      }
+        default: '<button>Hover me</button>',
+      },
     })
 
     expect(wrapper.props('delay')).toBe(500)
@@ -72,17 +72,17 @@ describe('Tooltip Component', () => {
   it('should not show tooltip content initially', () => {
     const wrapper = mount(Tooltip, {
       props: {
-        content: 'Test tooltip'
+        content: 'Test tooltip',
       },
       slots: {
-        default: '<button>Hover me</button>'
+        default: '<button>Hover me</button>',
       },
       global: {
         stubs: {
           Teleport: false,
-          Transition: false
-        }
-      }
+          Transition: false,
+        },
+      },
     })
 
     // tooltip 内容初始不可见（v-if="visible"，visible 初始值为 false）
@@ -93,11 +93,11 @@ describe('Tooltip Component', () => {
   it('should render relative inline-block container', () => {
     const wrapper = mount(Tooltip, {
       props: {
-        content: 'Test tooltip'
+        content: 'Test tooltip',
       },
       slots: {
-        default: '<button>Hover me</button>'
-      }
+        default: '<button>Hover me</button>',
+      },
     })
 
     expect(wrapper.find('.relative.inline-block').exists()).toBe(true)
@@ -107,12 +107,12 @@ describe('Tooltip Component', () => {
     const wrapper = mount(Tooltip, {
       props: {
         content: 'Test tooltip',
-        delay: 100
+        delay: 100,
       },
       slots: {
-        default: '<button>Hover me</button>'
+        default: '<button>Hover me</button>',
       },
-      attachTo: document.body
+      attachTo: document.body,
     })
 
     const container = wrapper.find('.relative.inline-block')
@@ -131,18 +131,18 @@ describe('Tooltip Component', () => {
     const wrapper = mount(Tooltip, {
       props: {
         content: 'Test tooltip',
-        delay: 0
+        delay: 0,
       },
       slots: {
-        default: '<button>Hover me</button>'
+        default: '<button>Hover me</button>',
       },
       global: {
         stubs: {
           Teleport: false,
-          Transition: false
-        }
+          Transition: false,
+        },
       },
-      attachTo: document.body
+      attachTo: document.body,
     })
 
     const container = wrapper.find('.relative.inline-block')
@@ -160,18 +160,18 @@ describe('Tooltip Component', () => {
     const wrapper = mount(Tooltip, {
       props: {
         content: 'Tooltip message',
-        delay: 0
+        delay: 0,
       },
       slots: {
-        default: '<button>Hover</button>'
+        default: '<button>Hover</button>',
       },
       global: {
         stubs: {
           Teleport: false,
-          Transition: false
-        }
+          Transition: false,
+        },
       },
-      attachTo: document.body
+      attachTo: document.body,
     })
 
     const container = wrapper.find('.relative.inline-block')

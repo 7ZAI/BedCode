@@ -364,3 +364,14 @@
 .xterm-screen {
   will-change: auto !important;
 }
+
+/* 行尾字形防裁切：DOM 渲染器给每行注入 width=网格宽 + overflow:hidden（内联样式），
+ * 但行内 span 是浏览器按字体真实 advance 的流式排布——CJK 回退字体 advance ≠
+ * 精确 2× 等宽格宽，亚像素误差逐字符累积，满行最后一个字的墨迹会超出行宽数 px
+ * 被本行裁掉右半（pi 等中文满行输出必现）。放开行级裁切，让溢出墨迹画进行尾
+ * 安全余量区（TERMINAL_LINE_END_MARGIN_COLS 预留 1 列 + 滚动条 gutter 6px），
+ * 区域背景与终端同色、视觉无感。!important 用于覆盖渲染器的内联 overflow:hidden；
+ * 若未来切到 WebGL 渲染器（逐格绘制无此问题），此规则自然失效无害 */
+.xterm-rows > div {
+  overflow: visible !important;
+}

@@ -6,9 +6,9 @@
 //!   便于单元测试时 mock
 //!
 //! 各子 trait 按功能域一一对应 WIT `bedcode:plugin` world 的 import 接口
-//! （storage / database / terminal / events / http / fs / log / bus / config /
-//! file_service / transfer）。session 能力已随组件迁移删除（内置插件零使用，
-//! 见迁移 spec §3.2/D-Q3）—— WIT 为单一事实来源，编译期杜绝残存调用。
+//! （storage / database / terminal / events / http / fs / log / bus / config）。
+//! session / file_service / transfer 能力已随组件迁移或旧链路切换删除
+//! （内置插件零使用）—— WIT 为单一事实来源，编译期杜绝残存调用。
 //!
 //! 错误语义见 [`HostError`]：仅承载状态码与通用描述，
 //! 详细错误原因记录在宿主日志（WIT `result<T, string>` 透传后含真实消息）。
@@ -17,25 +17,27 @@ pub mod bus;
 pub mod config;
 pub mod database;
 pub mod events;
-pub mod file_service;
 pub mod fs;
 pub mod http;
 pub mod log;
+pub mod mdns;
+pub mod peer;
+pub mod platform;
 pub mod storage;
 pub mod terminal;
-pub mod transfer;
 
 pub use bus::HostBus;
 pub use config::{ConfigKey, HostConfig};
 pub use database::HostDatabase;
 pub use events::HostEvents;
-pub use file_service::HostFileService;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
+pub use mdns::HostMdns;
+pub use peer::HostPeer;
+pub use platform::HostPlatform;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
-pub use transfer::HostTransfer;
 
 /// 宿主调用错误
 ///
@@ -148,8 +150,9 @@ pub trait HostApi:
     + HostFs
     + HostLog
     + HostBus
-    + HostFileService
-    + HostTransfer
+    + HostPeer
+    + HostMdns
+    + HostPlatform
     + HostConfig
 {
 }
@@ -163,8 +166,9 @@ impl<T> HostApi for T where
         + HostFs
         + HostLog
         + HostBus
-        + HostFileService
-        + HostTransfer
+        + HostPeer
+        + HostMdns
+        + HostPlatform
         + HostConfig
 {
 }

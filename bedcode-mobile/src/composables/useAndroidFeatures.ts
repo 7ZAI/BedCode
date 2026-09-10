@@ -10,6 +10,7 @@
  * 任务状态通知由 useNotification + Kotlin TaskNotificationPlugin 处理
  */
 import { ref, onMounted, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import { usePlatform } from './usePlatform'
@@ -39,22 +40,22 @@ export function useAndroidFeatures() {
       const { ensurePermission } = useNotification()
       await ensurePermission()
     } catch {
-      console.log('[Android] Notification plugin not available')
+      logger.log('[Android] Notification plugin not available')
     }
 
     // 监听应用生命周期事件
     try {
       unlistenResume = await listen('app-resume', () => {
         isInBackground.value = false
-        console.log('[Android] App resumed')
+        logger.log('[Android] App resumed')
       })
 
       unlistenPause = await listen('app-pause', () => {
         isInBackground.value = true
-        console.log('[Android] App paused')
+        logger.log('[Android] App paused')
       })
     } catch {
-      console.log('[Android] Lifecycle events not available')
+      logger.log('[Android] Lifecycle events not available')
     }
   })
 
@@ -73,7 +74,7 @@ export function useAndroidFeatures() {
     try {
       await invoke('set_screen_orientation', { orientation })
     } catch (e) {
-      console.error('[Android] Failed to set screen orientation:', e)
+      logger.error('[Android] Failed to set screen orientation:', e)
     }
   }
 
@@ -86,7 +87,7 @@ export function useAndroidFeatures() {
     try {
       await invoke('keep_screen_awake', { enabled })
     } catch (e) {
-      console.error('[Android] Failed to keep screen awake:', e)
+      logger.error('[Android] Failed to keep screen awake:', e)
     }
   }
 

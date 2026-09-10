@@ -8,7 +8,8 @@
  */
 
 import { ref, computed, onMounted, onUnmounted } from 'vue'
-import { pluginListLoaded } from '@/plugin/commands'
+import { logger } from '@/utils/frontendLogger'
+import { pluginListLoaded, pluginPreauthorize } from '@/plugin/commands'
 import { pluginLoader } from '@/plugin/loader'
 import { useToast } from '@/composables/useToast'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
@@ -35,7 +36,7 @@ export function usePluginManager() {
   /** 当前正在切换的插件信息（供遮罩弹窗显示名称） */
   const togglingPluginInfo = computed(() => {
     if (!togglingId.value) return null
-    const p = plugins.value.find(p => p.id === togglingId.value)
+    const p = plugins.value.find((p) => p.id === togglingId.value)
     if (!p) return null
     const key = togglingDirection.value
       ? 'desktop.plugin.togglingEnable'
@@ -49,16 +50,16 @@ export function usePluginManager() {
   /** 加载插件列表 */
   async function loadPlugins(): Promise<void> {
     loading.value = true
-    console.log('[PluginManager] loadPlugins() started')
+    logger.log('[PluginManager] loadPlugins() started')
     try {
       const result = await pluginListLoaded()
-      console.log('[PluginManager] loadPlugins() received', result.length, 'plugin(s)')
+      logger.log('[PluginManager] loadPlugins() received', result.length, 'plugin(s)')
       for (const p of result) {
-        console.log(`[PluginManager]   - ${p.id} (state=${p.state.state}, type=${p.pluginType})`)
+        logger.log(`[PluginManager]   - ${p.id} (state=${p.state.state}, type=${p.pluginType})`)
       }
       plugins.value = result
     } catch (e: any) {
-      console.error('[PluginManager] loadPlugins() failed:', e)
+      logger.error('[PluginManager] loadPlugins() failed:', e)
       toast.error(t('desktop.plugin.loadFailed'))
     } finally {
       loading.value = false
@@ -68,12 +69,19 @@ export function usePluginManager() {
   /** 切换插件启用/停用 */
   async function togglePlugin(id: string, enable: boolean): Promise<boolean> {
     if (togglingId.value) return false
-    togglingId.value = id
     togglingDirection.value = enable
     const startedAt = Date.now()
-    console.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
+    logger.log(`[PluginManager] togglePlugin(${id}, enable=${enable})`)
     let timer: ReturnType<typeof setTimeout> | undefined
     try {
+      // 启用方向授权先行:先单独调 preauthorize(此阶段不显示 loading 遮罩,
+      // 授权弹窗可正常交互;manifest wasiPreopenDirs 与 storage preauth_paths
+      // 均在此统一弹窗),通过后才显示遮罩进入激活,拒绝则直接失败不遮罩。
+      // 停用无授权环节,直接进遮罩
+      if (enable) {
+        await pluginPreauthorize(id)
+      }
+      togglingId.value = id
       const op = enable ? pluginLoader.activate(id) : pluginLoader.deactivate(id)
       const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(
@@ -86,15 +94,16 @@ export function usePluginManager() {
       await Promise.race([op, timeout])
       // 重新加载列表以获取最新状态
       await loadPlugins()
-      const name = plugins.value.find(p => p.id === id)?.name || id
+      const name = plugins.value.find((p) => p.id === id)?.name || id
       const key = enable ? 'desktop.plugin.enabledSuccess' : 'desktop.plugin.disabledSuccess'
       toast.success(t(key, { name }))
-      console.log(`[PluginManager] togglePlugin(${id}) succeeded`)
+      logger.log(`[PluginManager] togglePlugin(${id}) succeeded`)
       return true
     } catch (e: any) {
+      logger.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
+      const msg = e?.message || ''
       const key = enable ? 'desktop.plugin.activateFailed' : 'desktop.plugin.deactivateFailed'
-      console.error(`[PluginManager] togglePlugin(${id}) failed:`, e)
-      toast.error(t(key, { error: e.message || 'Unknown error' }))
+      toast.error(t(key, { error: msg || 'Unknown error' }))
       return false
     } finally {
       clearTimeout(timer)
@@ -121,7 +130,7 @@ export function usePluginManager() {
   onMounted(async () => {
     devReloadUnlisten = await listen<{ pluginId: string }>('plugin:dev-reload', async (event) => {
       const { pluginId } = event.payload
-      console.log(`[PluginManager] Dev reload event: ${pluginId}`)
+      logger.log(`[PluginManager] Dev reload event: ${pluginId}`)
       await pluginLoader.reloadPlugin(pluginId)
       await loadPlugins()
     })

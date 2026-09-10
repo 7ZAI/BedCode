@@ -48,16 +48,14 @@ describe('renderChunk：共享模块 import 改写', () => {
   it('named import → 解构 const（保留花括号内原始空白）', () => {
     const code = `import { ref, computed } from 'vue'\nref(1)`
     const result = invokeHook('renderChunk', code, {})
-    expect(result.code).toBe(
-      'const {  ref, computed  } = window.__BEDCODE_SHARED__["vue"]\nref(1)'
-    )
+    expect(result.code).toBe('const {  ref, computed  } = window.__BEDCODE_SHARED__["vue"]\nref(1)')
   })
 
   it('namespace import → const 声明', () => {
     const code = `import * as VueI18n from 'vue-i18n'\nVueI18n.createI18n()`
     const result = invokeHook('renderChunk', code, {})
     expect(result.code).toBe(
-      'const VueI18n = window.__BEDCODE_SHARED__["vue-i18n"]\nVueI18n.createI18n()'
+      'const VueI18n = window.__BEDCODE_SHARED__["vue-i18n"]\nVueI18n.createI18n()',
     )
   })
 
@@ -66,7 +64,7 @@ describe('renderChunk：共享模块 import 改写', () => {
     const result = invokeHook('renderChunk', code, {})
     expect(result.code).toBe(
       'const Vue = window.__BEDCODE_SHARED__["vue"]\n' +
-        'const {  createPinia  } = window.__BEDCODE_SHARED__["pinia"]'
+        'const {  createPinia  } = window.__BEDCODE_SHARED__["pinia"]',
     )
   })
 

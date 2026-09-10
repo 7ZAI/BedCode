@@ -5,10 +5,10 @@
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-use crate::Result;
 use crate::auth::{AuthCredentials, AuthStatus};
 use crate::router::event;
 use crate::state::get_auth_manager;
+use crate::Result;
 
 /// 认证状态
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,11 +48,9 @@ pub async fn ws_authenticate(app_handle: AppHandle, session_token: String) -> Re
 /// 请求配对
 #[tauri::command]
 pub async fn ws_request_pairing(app_handle: AppHandle) -> Result<()> {
-    eprintln!("[ws_request_pairing] COMMAND ENTERED!");
     tracing::info!("[ws_request_pairing] command entered");
 
     let auth = get_auth_manager();
-    tracing::info!("[ws_request_pairing] got auth manager, calling request_pairing...");
     match auth.request_pairing().await {
         Ok(()) => {
             tracing::info!("[ws_request_pairing] request_pairing OK, emitting event");

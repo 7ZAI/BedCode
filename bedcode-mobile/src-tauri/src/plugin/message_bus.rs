@@ -154,7 +154,8 @@ impl MessageBus {
         if let Err(e) = self.delivery_tx.send(DeliveryJob { subs, msg }) {
             tracing::error!(
                 "MessageBus: delivery worker unavailable, topic '{}' message dropped: {}",
-                topic, e
+                topic,
+                e
             );
         }
     }
@@ -163,21 +164,21 @@ impl MessageBus {
     pub async fn subscribe_wasm(&self, plugin_id: &str, topic: &str) {
         let mut subscribers = self.subscribers.write().unwrap();
         let subs = subscribers.entry(topic.to_string()).or_default();
-        if subs.iter().any(|s| matches!(s, BusSubscriber::Wasm { plugin_id: pid } if pid == plugin_id)) {
+        if subs
+            .iter()
+            .any(|s| matches!(s, BusSubscriber::Wasm { plugin_id: pid } if pid == plugin_id))
+        {
             tracing::debug!("MessageBus: plugin '{}' already subscribed to '{}'", plugin_id, topic);
             return;
         }
-        subs.push(BusSubscriber::Wasm { plugin_id: plugin_id.to_string() });
+        subs.push(BusSubscriber::Wasm {
+            plugin_id: plugin_id.to_string(),
+        });
         tracing::info!("MessageBus: plugin '{}' subscribed to '{}'", plugin_id, topic);
     }
 
     /// 订阅 topic（静态注册插件）
-    pub async fn subscribe_static(
-        &self,
-        plugin_id: &str,
-        topic: &str,
-        handler: Arc<dyn BusMessageHandler>,
-    ) {
+    pub async fn subscribe_static(&self, plugin_id: &str, topic: &str, handler: Arc<dyn BusMessageHandler>) {
         let mut subscribers = self.subscribers.write().unwrap();
         let subs = subscribers.entry(topic.to_string()).or_default();
         subs.push(BusSubscriber::Static {
@@ -244,6 +245,9 @@ async fn deliver_job(disp: &dyn MessageDispatcher, job: DeliveryJob) {
 
     tracing::debug!(
         "MessageBus: published topic='{}' sender='{}' delivered={}/{}",
-        job.msg.topic, job.msg.sender, delivered, job.subs.len()
+        job.msg.topic,
+        job.msg.sender,
+        delivered,
+        job.subs.len()
     );
 }

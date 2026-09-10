@@ -15,8 +15,8 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[]) {
       // 检查修饰键匹配
       const ctrlOrMeta = sc.ctrl || sc.meta
       const matchesMod = ctrlOrMeta
-        ? (event.ctrlKey || event.metaKey)
-        : (!event.ctrlKey && !event.metaKey)
+        ? event.ctrlKey || event.metaKey
+        : !event.ctrlKey && !event.metaKey
       const matchesShift = sc.shift ? event.shiftKey : !event.shiftKey
       const matchesKey = event.key.toLowerCase() === sc.key.toLowerCase()
 
@@ -25,7 +25,12 @@ export function useKeyboardShortcuts(shortcuts: Shortcut[]) {
         if (!sc.ignoreInput) {
           const target = event.target as HTMLElement
           const tag = target.tagName.toLowerCase()
-          if (tag === 'input' || tag === 'textarea' || tag === 'select' || target.isContentEditable) {
+          if (
+            tag === 'input' ||
+            tag === 'textarea' ||
+            tag === 'select' ||
+            target.isContentEditable
+          ) {
             continue
           }
         }

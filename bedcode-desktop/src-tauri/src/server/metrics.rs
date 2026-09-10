@@ -28,6 +28,12 @@ pub struct ServerMetrics {
     pub cpu_usage_percent: f64,
     /// 内存占用（字节）
     pub memory_usage_bytes: u64,
+    /// 链路加密成功处理帧/请求累计（issue 08；HTTP 信封与 WS 帧合并计数）
+    pub encrypted_frames: u64,
+    /// 链路加密解密失败累计（fail-closed 拒绝路径，含篡改/重放/密钥不匹配）
+    pub decrypt_failures: u64,
+    /// 出站响应密钥未命中缓存累计（入站已协商但取 key 失败 → 明文降级响应）
+    pub response_key_miss: u64,
 }
 
 impl Default for ServerMetrics {
@@ -43,6 +49,9 @@ impl Default for ServerMetrics {
             ws_recv_rate: 0.0,
             cpu_usage_percent: 0.0,
             memory_usage_bytes: 0,
+            encrypted_frames: 0,
+            decrypt_failures: 0,
+            response_key_miss: 0,
         }
     }
 }
@@ -64,6 +73,12 @@ struct MetricsInner {
     ws_sent: std::sync::atomic::AtomicU64,
     /// WS 接收消息计数
     ws_received: std::sync::atomic::AtomicU64,
+    /// 链路加密成功帧计数（issue 08）
+    encrypted_frames: std::sync::atomic::AtomicU64,
+    /// 链路加密解密失败计数（issue 08）
+    decrypt_failures: std::sync::atomic::AtomicU64,
+    /// 出站响应密钥未命中缓存计数（入站已协商但取 key 失败 → 明文降级响应）
+    response_key_miss: std::sync::atomic::AtomicU64,
     /// 上次采样时的 HTTP 请求数
     last_http_requests: std::sync::atomic::AtomicU64,
     /// 上次采样时的 WS 发送数
@@ -77,25 +92,29 @@ struct MetricsInner {
 impl MetricsCollector {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<MetricsCollector> =
-            std::sync::LazyLock::new(|| MetricsCollector {
-                inner: std::sync::Arc::new(MetricsInner {
-                    start_time: std::sync::Mutex::new(std::time::Instant::now()),
-                    http_requests: std::sync::atomic::AtomicU64::new(0),
-                    ws_sent: std::sync::atomic::AtomicU64::new(0),
-                    ws_received: std::sync::atomic::AtomicU64::new(0),
-                    last_http_requests: std::sync::atomic::AtomicU64::new(0),
-                    last_ws_sent: std::sync::atomic::AtomicU64::new(0),
-                    last_ws_received: std::sync::atomic::AtomicU64::new(0),
-                    last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
-                }),
-            });
+        static INSTANCE: std::sync::LazyLock<MetricsCollector> = std::sync::LazyLock::new(|| MetricsCollector {
+            inner: std::sync::Arc::new(MetricsInner {
+                start_time: std::sync::Mutex::new(std::time::Instant::now()),
+                http_requests: std::sync::atomic::AtomicU64::new(0),
+                ws_sent: std::sync::atomic::AtomicU64::new(0),
+                ws_received: std::sync::atomic::AtomicU64::new(0),
+                encrypted_frames: std::sync::atomic::AtomicU64::new(0),
+                decrypt_failures: std::sync::atomic::AtomicU64::new(0),
+                response_key_miss: std::sync::atomic::AtomicU64::new(0),
+                last_http_requests: std::sync::atomic::AtomicU64::new(0),
+                last_ws_sent: std::sync::atomic::AtomicU64::new(0),
+                last_ws_received: std::sync::atomic::AtomicU64::new(0),
+                last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
+            }),
+        });
         &INSTANCE
     }
 
     /// 递增 HTTP 请求计数
     pub fn inc_http_request(&self) {
-        self.inner.http_requests.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .http_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 递增 WS 发送计数
@@ -105,7 +124,30 @@ impl MetricsCollector {
 
     /// 递增 WS 接收计数
     pub fn inc_ws_received(&self) {
-        self.inner.ws_received.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .ws_received
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 递增链路加密成功帧计数（issue 08：HTTP 信封与 WS 帧、收发两向均计）
+    pub fn inc_encrypted_frame(&self) {
+        self.inner
+            .encrypted_frames
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 递增链路加密解密失败计数（issue 08：fail-closed 拒绝路径）
+    pub fn inc_decrypt_failure(&self) {
+        self.inner
+            .decrypt_failures
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// 递增出站响应密钥未命中计数（入站已协商但取 key 失败 → 明文降级响应）
+    pub fn inc_response_key_miss(&self) {
+        self.inner
+            .response_key_miss
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// 重置所有计数器和计时器（服务器重启时调用）
@@ -116,9 +158,19 @@ impl MetricsCollector {
         self.inner.http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.inner.last_http_requests.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .last_http_requests
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         self.inner.last_ws_sent.store(0, std::sync::atomic::Ordering::Relaxed);
-        self.inner.last_ws_received.store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .last_ws_received
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .encrypted_frames
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+        self.inner
+            .decrypt_failures
+            .store(0, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut last_time) = self.inner.last_sample_time.lock() {
             *last_time = std::time::Instant::now();
         }
@@ -152,9 +204,15 @@ impl MetricsCollector {
             }
 
             // 更新采样基准
-            self.inner.last_http_requests.store(http_total, std::sync::atomic::Ordering::Relaxed);
-            self.inner.last_ws_sent.store(ws_sent_total, std::sync::atomic::Ordering::Relaxed);
-            self.inner.last_ws_received.store(ws_recv_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_http_requests
+                .store(http_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_ws_sent
+                .store(ws_sent_total, std::sync::atomic::Ordering::Relaxed);
+            self.inner
+                .last_ws_received
+                .store(ws_recv_total, std::sync::atomic::Ordering::Relaxed);
             *last_time = now;
         }
 
@@ -169,6 +227,82 @@ impl MetricsCollector {
             ws_recv_rate: rate_ws_recv,
             cpu_usage_percent: cpu_percent,
             memory_usage_bytes: memory_bytes,
+            encrypted_frames: self
+                .inner
+                .encrypted_frames
+                .load(std::sync::atomic::Ordering::Relaxed),
+            decrypt_failures: self
+                .inner
+                .decrypt_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            response_key_miss: self
+                .inner
+                .response_key_miss
+                .load(std::sync::atomic::Ordering::Relaxed),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MetricsCollector 是全局单例且无私有构造器，全部断言收敛在
+    /// 单个测试函数内，避免并行测试互相污染计数器
+    #[test]
+    fn reset_and_sample_report_totals_and_sliding_window_rates() {
+        let collector = MetricsCollector::global();
+        collector.reset();
+
+        // 等待足够时间，让窗口速率可被观测（Instant 精度下限）
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        collector.inc_http_request();
+        collector.inc_http_request();
+        collector.inc_http_request();
+        collector.inc_ws_sent();
+        collector.inc_ws_received();
+
+        let m = collector.sample(2, 33.5, 4096);
+        assert_eq!(m.total_http_requests, 3);
+        assert_eq!(m.ws_messages_sent, 1);
+        assert_eq!(m.ws_messages_received, 1);
+        assert_eq!(m.connections, 2);
+        assert_eq!(m.cpu_usage_percent, 33.5);
+        assert_eq!(m.memory_usage_bytes, 4096);
+        // 3 次请求 / ~50ms → 速率应显著大于 0
+        assert!(
+            m.http_requests_per_sec > 0.0,
+            "expected positive http rate, got {}",
+            m.http_requests_per_sec
+        );
+
+        // 第二次采样：仅累计新增量，速率基于两次采样间的差值
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        collector.inc_http_request();
+        let m2 = collector.sample(3, 50.0, 8192);
+        assert_eq!(m2.total_http_requests, 4);
+        assert_eq!(m2.connections, 3);
+        assert_eq!(m2.cpu_usage_percent, 50.0);
+        assert_eq!(m2.memory_usage_bytes, 8192);
+
+        // 链路加密计数器（issue 08）：成功/失败路径独立累计，快照可观测
+        collector.inc_encrypted_frame();
+        collector.inc_encrypted_frame();
+        collector.inc_decrypt_failure();
+        let m_enc = collector.sample(1, 10.0, 1024);
+        assert_eq!(m_enc.encrypted_frames, 2);
+        assert_eq!(m_enc.decrypt_failures, 1);
+
+        // reset 后所有计数器归零
+        collector.reset();
+        let m3 = collector.sample(0, 0.0, 0);
+        assert_eq!(m3.total_http_requests, 0);
+        assert_eq!(m3.ws_messages_sent, 0);
+        assert_eq!(m3.ws_messages_received, 0);
+        assert_eq!(m3.encrypted_frames, 0);
+        assert_eq!(m3.decrypt_failures, 0);
+        assert_eq!(m3.http_requests_per_sec, 0.0);
+        assert_eq!(m3.ws_sent_rate, 0.0);
     }
 }

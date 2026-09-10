@@ -14,9 +14,9 @@
  */
 
 import { spawn, execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { readFileSync, openSync, readSync, closeSync, existsSync, renameSync, copyFileSync, chmodSync } from 'node:fs'
 import net from 'node:net'
-import { resolve, dirname } from 'node:path'
+import { resolve, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -66,6 +66,67 @@ async function precheckDevPort() {
 }
 
 /**
+ * 解析 tauri CLI 实际使用的 adb 绝对路径。
+ *
+ * tauri CLI（cargo-mobile2）用 `env.platform_tools_path().join("adb")` 绝对路径 spawn adb，
+ * 因此 PATH 级 shim 无效，必须替换 SDK 内的二进制本体。
+ */
+function resolveAdbPath() {
+  const sdkRoot = process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT
+  if (sdkRoot) {
+    const p = resolve(sdkRoot, 'platform-tools/adb')
+    if (existsSync(p)) return p
+  }
+  try {
+    const out = execFileSync('which', ['adb'], { encoding: 'utf8' }).trim()
+    if (out) return resolve(out)
+  } catch {
+    /* PATH 上无 adb，交给宿主报错 */
+  }
+  return null
+}
+
+/**
+ * adb fd0 shim 幂等安装（修复 tauri CLI pidof 轮询卡死，见 .scratch/adb-fd0-bug）。
+ *
+ * platform-tools 37.0.1 的 adb client 被以「fd 0 关闭或管道阻塞」spawn 时，connect() 落到
+ * 坏 fd → smart-socket 握手失败（"server didn't ACK"）→ 误判 daemon 未运行 → fork 新
+ * fork-server → bind(5037) EADDRINUSE → SIGABRT → exit 1。tauri CLI 的
+ * `adb shell pidof <pkg>` 轮询正是这种 spawn，循环永不成功 → logcat 转发永不启动。
+ *
+ * 修复：把 platform-tools/adb 替换为本仓库的 shim（scripts/adb-fd0-shim.sh），
+ * 原二进制改名 adb.real；shim 在 stdin 非 TTY 时重开 fd0 到 /dev/null。
+ * platform-tools 更新会把 adb 还原成真二进制——本预检在每次 dev 会话前自愈。
+ */
+function ensureAdbFd0Shim() {
+  if (process.platform === 'win32') return // 该 adb bug 为 Unix fd 语义问题，Windows 不受影响
+  const adbPath = resolveAdbPath()
+  if (!adbPath) {
+    console.warn('[dev-run] ⚠ 未找到 adb，跳过 fd0 shim 安装（tauri android dev 将自行报错）')
+    return
+  }
+  const dir = dirname(adbPath)
+  const realPath = join(dir, 'adb.real')
+  const shimSource = join(__dirname, 'adb-fd0-shim.sh')
+  try {
+    const isShim = (readFileSync(adbPath, 'utf8').split('\n', 1)[0] ?? '').startsWith('#!')
+    if (isShim) {
+      if (existsSync(realPath)) return // 已安装且完好
+      // adb.real 丢失（如被清理）：无法恢复真二进制，提示重装 platform-tools
+      console.warn('[dev-run] ⚠ adb 已是 fd0 shim 但 adb.real 缺失，logcat 转发会失效；请重新安装 platform-tools')
+      return
+    }
+    // adb 是真二进制：改名 + 写入 shim（platform-tools 更新后自动重装；adb.real 已存在则覆盖为最新真二进制）
+    renameSync(adbPath, realPath)
+    copyFileSync(shimSource, adbPath)
+    chmodSync(adbPath, 0o755)
+    console.log('[dev-run] adb fd0 shim 已安装（adb → adb.real + shim）——修复 tauri CLI pidof 轮询卡死/无 dev 日志')
+  } catch (err) {
+    console.warn(`[dev-run] ⚠ adb fd0 shim 安装失败：${err.message}（tauri CLI 的 logcat 转发可能不工作）`)
+  }
+}
+
+/**
  * adb reverse 隧道预检（Android WebView 热更新依赖）。
  *
  * WebView 加载 devUrl（http://localhost:<port>）时，设备上的 localhost 指向设备自身，
@@ -87,11 +148,13 @@ async function precheckAdbReverse() {
   }
 }
 
-// npm-cli.js 绝对路径：优先取 npm 注入的 npm_execpath（任何安装布局下都正确），
-// 回退到 Windows Node 安装器标准布局（node.exe 与 node_modules/npm 同目录）；
-// Linux/macOS 的 npm 在系统目录（/usr/lib/node_modules/npm 等），与 node 二进制
-// 不同目录，故不能只用回退路径
-const NPM_CLI =
+// 包管理器 CLI 绝对路径：优先取 pnpm 注入的 pnpm_execpath（pnpm 运行生命周期脚本时
+// 同时设置 npm_execpath / pnpm_execpath，任何安装布局下都正确）；回退到 npm_execpath
+// （仍以 npm 安装/调用时临时兼容）；最后退回 Windows Node 安装器标准布局
+// （node.exe 与 node_modules/npm 同目录）——Linux/macOS 的 npm 在系统目录
+// （/usr/lib/node_modules/npm 等），与 node 二进制不同目录，故不能只用回退路径
+const PKG_MGR_CLI =
+  process.env.pnpm_execpath ??
   process.env.npm_execpath ??
   resolve(dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js')
 
@@ -125,8 +188,32 @@ const PLUGIN_WATCH_CMDS = [
   },
 ]
 
+/**
+ * 判断包管理器 CLI 是否为原生可执行文件（ELF/PE）。
+ *
+ * pnpm 12 起 npm_execpath / pnpm_execpath 指向原生二进制（Linux ELF / Windows PE），
+ * 若继续用 `node <path>` 启动，node 会把二进制当 JS 解析，报
+ * SyntaxError: Invalid or unexpected token。原生二进制需直接 spawn；
+ * JS 入口（npm-cli.js / *.cjs / *.mjs）才需要 node 前缀。
+ */
+function isNativeBinary(p) {
+  try {
+    const fd = openSync(p, 'r')
+    const buf = Buffer.alloc(4)
+    const n = readSync(fd, buf, 0, 4, 0)
+    closeSync(fd)
+    if (n >= 2 && buf[0] === 0x4d && buf[1] === 0x5a) return true // PE（MZ）
+    if (n >= 4 && buf[0] === 0x7f && buf[1] === 0x45 && buf[2] === 0x4c && buf[3] === 0x46) return true // ELF
+    return false
+  } catch {
+    return false
+  }
+}
+
 /** 宿主 dev 命令（可用 --host-cmd 覆盖） */
-const DEFAULT_HOST_CMD = [process.execPath, [NPM_CLI, 'run', 'tauri', '--', 'android', 'dev']]
+const DEFAULT_HOST_CMD = isNativeBinary(PKG_MGR_CLI)
+  ? [PKG_MGR_CLI, ['run', 'tauri', 'android', 'dev']]
+  : [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', 'android', 'dev']]
 
 // ==================== 进程管理 ====================
 
@@ -134,7 +221,11 @@ const children = []
 let shuttingDown = false
 
 function start(cmd, args, cwd) {
-  const child = spawn(cmd, args, { cwd, stdio: 'inherit' })
+  // POSIX：detached 让子进程自成进程组长（pgid = 自己的 pid），shutdown 时可用
+  // 负 pgid 一次杀整棵子树（已实测：孙进程自动继承该 pgid，无需各自 detached）。
+  // Windows 必须排除：detached 会传 CREATE_NEW_CONSOLE 弹出额外控制台窗口，
+  // Windows 侧走下方 taskkill /T /F 分支
+  const child = spawn(cmd, args, { cwd, stdio: 'inherit', detached: !IS_WIN })
   children.push(child)
   return child
 }
@@ -160,26 +251,50 @@ function shutdown(code) {
     process.exit(exitCode)
   }
 
-  // POSIX：kill 后等待所有子进程 exit 再退出（避免信号未送达）
-  let remaining = children.length
-  if (remaining === 0) {
+  // POSIX：按进程组回收整棵子树（对齐 Windows taskkill /T /F）
+  //
+  // 负 pgid 一次覆盖组长及其全部子孙——插件 SDK CLI watch 的 vite 孙进程、
+  // 宿主的 tauri CLI / cargo / 宿主进程 / vite dev server 全部在内。此前用
+  // c.kill() 只杀直接子进程：SDK CLI watch 对 SIGTERM 不转发，其 vite 孙进程
+  // 孤儿化 reparent 到 systemd 永久残留（实测累积、占 1423 端口、数小时不退出）
+  for (const c of children) {
+    if (!c.pid) continue
+    try {
+      process.kill(-c.pid, 'SIGTERM')
+    } catch {
+      // 已退出或不是组长（detached 未生效），退回单进程 kill
+      try {
+        c.kill('SIGTERM')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+  }
+
+  // 等 direct children 退出即可（子树内其他进程由组信号覆盖，无需逐个等待）
+  const alive = children.filter((c) => c.exitCode === null)
+  if (alive.length === 0) {
     process.exit(exitCode)
     return
   }
-  for (const c of children) {
+  for (const c of alive) {
     c.on('exit', () => {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
+      if (children.every((x) => x.exitCode !== null)) process.exit(exitCode)
     })
-    try {
-      c.kill()
-    } catch {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
-    }
   }
-  // 兜底超时：2 秒后强制退出
-  setTimeout(() => process.exit(exitCode), 2000).unref()
+
+  // 升级兜底：2 秒后对组发 SIGKILL 并退出（对齐桌面端 dev-run.js 同款逻辑）
+  setTimeout(() => {
+    for (const c of children) {
+      if (!c.pid) continue
+      try {
+        process.kill(-c.pid, 'SIGKILL')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+    process.exit(exitCode)
+  }, 2000).unref()
 }
 
 // ==================== 启动 ====================
@@ -190,8 +305,11 @@ const hostOverride = hostIdx !== -1 && process.argv[hostIdx + 1] ? process.argv[
 const [hostBin, ...hostArgs] = hostOverride ? hostOverride.split(' ') : DEFAULT_HOST_CMD[1]
 const hostCmd = hostOverride ? [hostBin, hostArgs] : DEFAULT_HOST_CMD
 
-// 0. 预检：宿主 devUrl 端口占用（被残留 vite 占用时提前报错，避免“执行不动”假象）
-//    + adb reverse 隧道重建（设备拔插后热更新通道会丢，Tauri CLI 不自动恢复）
+// 0. 预检：
+//    - adb fd0 shim 自愈（platform-tools 更新会还原真二进制，必须先行，宿主 pidof 轮询依赖它）
+//    - 宿主 devUrl 端口占用（被残留 vite 占用时提前报错，避免“执行不动”假象）
+//    - adb reverse 隧道重建（设备拔插后热更新通道会丢，Tauri CLI 不自动恢复）
+ensureAdbFd0Shim()
 await precheckDevPort()
 await precheckAdbReverse()
 
@@ -219,3 +337,6 @@ host.on('exit', (code) => {
 // Ctrl+C / 终止信号：广播回收
 process.on('SIGINT', () => shutdown(0))
 process.on('SIGTERM', () => shutdown(0))
+// 关闭终端标签页/窗口：终端只发 SIGHUP（SIGINT 不送 detached 子进程组），
+// 不处理则 shutdown 不执行、整棵 detached 子树孤儿化残留
+process.on('SIGHUP', () => shutdown(0))

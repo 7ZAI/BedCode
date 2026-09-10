@@ -1,28 +1,37 @@
 //! Auth Manager
 //!
-//! 认证管理器 - JWT 重连认证、配对码认证、QR 认证
+//! 认证管理器 - HTTP 认证（配对码 / QR / JWT reauth / 生物挑战应答）。
 //! 设备身份持久化到文件，确保重启后 JWT 重连认证仍能使用相同身份
+//!
+//! 认证已从 WS 握手迁移到 HTTP（spec §4.5 六端点）：所有方法经
+//! `AuthHttpClient` 直连桌面端 `/api/auth/*`，不再依赖 WS 通道。
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use serde::{Deserialize, Serialize};
 
-use crate::model::message::Message;
-use crate::enums::auth::AuthStage;
-use crate::connection::request::{AuthRequest, ResponseParser, timeouts};
-use crate::Result;
-
+use crate::auth::http::{format_base_url, AuthHttpClient, DeviceAuthContext};
 use crate::connection::manager::ConnectionManager;
+use crate::router::MobileEvent;
 use crate::system::constants::auth::DEFAULT_DEVICE_NAME;
+use crate::AppError;
+use crate::Result;
 
 use super::{AuthCredentials, AuthStatus};
 
 /// 持久化的设备身份
+///
+/// `uid_hash` 为设备唯一 ID（Android ANDROID_ID / 桌面机硬件标识）的 SHA-256
+/// 哈希，同一设备卸载重装后保持一致——桌面端据它把「指纹再派生后的新配对」合并
+/// 回原配对记录（连接历史 / connect_count 不分裂）。老版本 identity 文件无此字段，
+/// serde 默认 None；init_identity 会在机器 UID 可用时回填。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DeviceIdentity {
     device_id: String,
     fingerprint: String,
+    #[serde(default)]
+    uid_hash: Option<String>,
 }
 
 /// 设备身份文件名
@@ -32,6 +41,8 @@ const IDENTITY_FILE: &str = "device_identity.json";
 pub struct AuthManager {
     /// 关联的连接管理器
     connection: Arc<ConnectionManager>,
+    /// HTTP 认证客户端
+    http: Arc<AuthHttpClient>,
     /// 认证状态
     status: RwLock<AuthStatus>,
     /// 认证凭据
@@ -42,6 +53,8 @@ pub struct AuthManager {
     device_name: RwLock<Option<String>>,
     /// 设备指纹（持久化，重启后保持一致）
     device_fingerprint: RwLock<String>,
+    /// 设备唯一 ID 哈希（持久化；Android 卸载重装后一致，供桌面端合并配对记录）
+    uid_hash: RwLock<Option<String>>,
     /// 身份文件路径（用于持久化 device_id 和 fingerprint）
     identity_path: RwLock<Option<PathBuf>>,
 }
@@ -54,12 +67,14 @@ impl AuthManager {
     pub fn new(connection: Arc<ConnectionManager>) -> Arc<Self> {
         Arc::new(Self {
             connection,
+            http: AuthHttpClient::new(),
             status: RwLock::new(AuthStatus::Unauthenticated),
             credentials: RwLock::new(None),
             // 临时值，init_identity() 会覆盖为持久化值
             device_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
             device_name: RwLock::new(None),
             device_fingerprint: RwLock::new(uuid::Uuid::new_v4().to_string()),
+            uid_hash: RwLock::new(None),
             identity_path: RwLock::new(None),
         })
     }
@@ -82,6 +97,17 @@ impl AuthManager {
                         tracing::info!("Loaded persisted device identity: device_id={}", identity.device_id);
                         *self.device_id.write().await = identity.device_id;
                         *self.device_fingerprint.write().await = identity.fingerprint;
+                        // 老版本 identity 文件无 uid_hash：机器 UID 可用时回填，
+                        // 保证更新后同样拥有跨重装的合并锚点
+                        if identity.uid_hash.is_none() {
+                            if let Some(uid) = self.stable_device_uid(app) {
+                                let (_, _, uid_hash) = derive_identity_from_uid(&uid);
+                                *self.uid_hash.write().await = Some(uid_hash);
+                                self.save_identity().await;
+                            }
+                        } else {
+                            *self.uid_hash.write().await = identity.uid_hash;
+                        }
                         return;
                     }
                 }
@@ -93,10 +119,14 @@ impl AuthManager {
 
         // 文件不存在或读取失败：优先用设备唯一 ID 派生稳定身份
         if let Some(uid) = self.stable_device_uid(app) {
-            let (device_id, fingerprint) = derive_identity_from_uid(&uid);
-            tracing::info!("Derived device identity from stable device UID: device_id={}", device_id);
+            let (device_id, fingerprint, uid_hash) = derive_identity_from_uid(&uid);
+            tracing::info!(
+                "Derived device identity from stable device UID: device_id={}",
+                device_id
+            );
             *self.device_id.write().await = device_id;
             *self.device_fingerprint.write().await = fingerprint;
+            *self.uid_hash.write().await = Some(uid_hash);
             self.save_identity().await;
             return;
         }
@@ -123,6 +153,7 @@ impl AuthManager {
         let identity = DeviceIdentity {
             device_id: self.device_id.read().await.clone(),
             fingerprint: self.device_fingerprint.read().await.clone(),
+            uid_hash: self.uid_hash.read().await.clone(),
         };
 
         if let Some(parent) = path.parent() {
@@ -151,6 +182,11 @@ impl AuthManager {
         self.device_id.read().await.clone()
     }
 
+    /// 获取设备唯一 ID 哈希（跨卸载重装稳定，供桌面端合并配对记录）
+    pub async fn get_uid_hash(&self) -> Option<String> {
+        self.uid_hash.read().await.clone()
+    }
+
     /// 获取设备名称
     pub async fn get_device_name(&self) -> Option<String> {
         self.device_name.read().await.clone()
@@ -176,338 +212,314 @@ impl AuthManager {
         self.status.read().await.clone()
     }
 
-    /// 使用前端传入的 JWT token 重新认证（重连时使用）
-    pub async fn authenticate_with_token(&self, token: &str) -> Result<bool> {
-        if !self.connection.is_connected().await {
-            tracing::error!("[authenticate] Not connected");
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+    /// 解析目标设备 base URL 与客户端地址（供桌面端配对记录，一次读锁）
+    async fn target_context(&self) -> Result<(String, String)> {
+        let target = self
+            .connection
+            .get_target()
+            .await
+            .ok_or_else(|| AppError::Auth("No target device".to_string()))?;
+        Ok((format_base_url(&target.address, target.port), target.address))
+    }
+
+    /// 认证成功统一收尾：持久化凭据 + 全局 token + 设备级 Authed + 04 契口
+    ///
+    /// HTTP 认证路径不经过 `handler/auth.rs`（WS 应答处理器）——经此契口
+    /// 广播 `MobileEvent::AuthSuccess` 是唯一等价补齐点：04 的事件 WS 订阅
+    /// 后恢复建连；事件转发层（event.rs）同时转发为前端 ws_auth_success。
+    ///
+    /// 链路加密 pin 随认证响应落地（修复：pin 此前仅在无人调用的 HTTP auth
+    /// 函数里写入，配对/重认证全走本处导致前端 localStorage 恒空、设置页误报
+    /// 未配对）：桌面端下发身份公钥/指纹时，1) 写入 Rust 侧运行期 context
+    /// （事件 WS 建连协商直接用）；2) 广播 `LinkCryptoPin` 事件 → 前端写
+    /// localStorage（HTTP/终端 WS 通道 + 设置页指纹展示）。
+    async fn apply_auth_success(
+        &self,
+        session_token: String,
+        fingerprint: String,
+        kd_public_b64: Option<String>,
+        kd_fingerprint: Option<String>,
+    ) {
+        let device_id = self.device_id.read().await.clone();
+        let creds = AuthCredentials {
+            pairing_id: device_id,
+            fingerprint,
+            session_token: session_token.clone(),
+        };
+        self.set_credentials(creds).await;
+        crate::state::set_global_token(&session_token);
+        *self.status.write().await = AuthStatus::Authenticated;
+        self.connection.set_authed().await;
+
+        // pin 落地：Rust 侧 context（事件 WS 建连时读取）+ 前端事件广播
+        if let Some(kd) = &kd_public_b64 {
+            tracing::info!(
+                "[apply_auth_success] link crypto pin refreshed (kd fingerprint={})",
+                kd_fingerprint.as_deref().unwrap_or("n/a")
+            );
+            crate::state::update_link_crypto_pin(Some(kd.clone()));
         }
+        let _ = self
+            .connection
+            .event_tx()
+            .send(MobileEvent::LinkCryptoPin { kd_public_b64, kd_fingerprint });
 
-        *self.status.write().await = AuthStatus::Authenticating;
+        let _ = self
+            .connection
+            .event_tx()
+            .send(MobileEvent::AuthSuccess { session_token });
+    }
 
+    /// 使用已持有的 JWT token 重新认证（断线重连）——HTTP reauth
+    ///
+    /// 桌面端校验 token 后签发刷新后的新 JWT，写回凭据与全局 token。
+    pub async fn authenticate_with_token(&self, token: &str) -> Result<bool> {
+        let (base_url, _address) = self.target_context().await?;
         let device_id = self.device_id.read().await.clone();
         let fingerprint = self.device_fingerprint.read().await.clone();
 
-        tracing::info!("[authenticate] Sending JWT re-auth (token length={})", token.len());
-        let message = AuthRequest::reauthenticate(&device_id, &fingerprint, token);
+        *self.status.write().await = AuthStatus::Authenticating;
+        tracing::info!("[authenticate] HTTP reauth (token length={})", token.len());
 
-        match self.connection.send_and_wait(&message, timeouts::AUTH).await {
-            Ok(response) => {
-                if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
-                    // 提取会话 token 写入全局 token：JWT 重连路径的响应经
-                    // RequestResponseManager 按 message_id 消费，不会走到
-                    // AuthHandler（唯一调用 set_global_token 的路径）；不补写则
-                    // 插件对桌面端 HTTP 文件服务的调用无 Authorization 头 → 401
-                    let session_token = if let Message::Auth { payload, .. } = &response {
-                        payload.session_token.clone().unwrap_or_default()
-                    } else {
-                        String::new()
-                    };
-                    if !session_token.is_empty() {
-                        crate::state::set_global_token(&session_token);
-                    }
-                    *self.status.write().await = AuthStatus::Authenticated;
-                    self.connection.set_paired().await;
-                    tracing::info!("[authenticate] JWT re-authentication successful");
-                    return Ok(true);
-                }
-                *self.status.write().await = AuthStatus::Failed("Re-authentication failed".to_string());
-                Ok(false)
+        let uid_hash = self.get_uid_hash().await;
+        match self
+            .http
+            .reauth(&base_url, &device_id, &fingerprint, uid_hash.as_deref(), token)
+            .await
+        {
+            Ok(data) => {
+                // reauth 返回刷新后的新 token：refresh 语义，写回凭据与全局
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
+                tracing::info!("[authenticate] HTTP re-authentication successful");
+                Ok(true)
             }
             Err(e) => {
+                tracing::warn!("[authenticate] HTTP reauth failed: {}", e);
                 *self.status.write().await = AuthStatus::Failed(e.to_string());
                 Err(e)
             }
         }
     }
 
-    /// 请求配对
+    /// 请求配对（HTTP）：桌面端生成一次性配对码
+    ///
+    /// 配对码展示在桌面端，移动端进入等待用户输入状态即可。
     pub async fn request_pairing(&self) -> Result<()> {
-        tracing::info!("[request_pairing] ENTERED");
-
-        if !self.connection.is_connected().await {
-            tracing::error!("[request_pairing] Not connected");
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
-        }
-        tracing::info!("[request_pairing] is_connected OK");
-
+        let (base_url, _address) = self.target_context().await?;
         *self.status.write().await = AuthStatus::Authenticating;
 
         let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
+        let device_name = self
+            .device_name
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
 
-        let message = AuthRequest::request_pairing(&device_id, &device_name, &fingerprint);
-
-        tracing::info!("[request_pairing] Calling send_and_wait (30s timeout)...");
-        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
-            Ok(r) => {
-                tracing::info!("[request_pairing] send_and_wait returned Ok");
-                r
+        match self
+            .http
+            .request_pairing(&base_url, &device_id, &device_name, &fingerprint)
+            .await
+        {
+            Ok(data) => {
+                tracing::info!(
+                    "[request_pairing] HTTP pairing accepted (code len={})",
+                    data.pairing_code.len()
+                );
+                *self.status.write().await = AuthStatus::WaitingPairingCode;
+                Ok(())
             }
             Err(e) => {
-                tracing::error!("[request_pairing] send_and_wait failed: {}", e);
+                tracing::error!("[request_pairing] HTTP pairing failed: {}", e);
+                *self.status.write().await = AuthStatus::Failed(e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// 验证配对码（HTTP）：通过后签发 JWT
+    ///
+    /// 业务拒绝（1005 配对码无效/过期）→ Ok(false)，由 command 层发
+    /// auth_failed 事件；网络故障 → Err。
+    pub async fn verify_pairing_code(&self, code: &str) -> Result<bool> {
+        let (base_url, address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
+        let device_name = self
+            .device_name
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
+        let fingerprint = self.device_fingerprint.read().await.clone();
+        let uid_hash = self.get_uid_hash().await;
+        let ctx = DeviceAuthContext {
+            device_id: &device_id,
+            device_name: &device_name,
+            fingerprint: &fingerprint,
+            uid_hash: uid_hash.as_deref(),
+        };
+        match self
+            .http
+            .verify_pairing_code(&base_url, ctx, code, &address)
+            .await
+        {
+            Ok(data) => {
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
+                Ok(true)
+            }
+            Err(AppError::Auth(msg)) => {
+                tracing::warn!("[verify_pairing_code] Rejected: {}", msg);
+                *self.status.write().await = AuthStatus::Failed(msg.clone());
+                Ok(false)
+            }
+            Err(e) => {
+                tracing::warn!("[verify_pairing_code] Failed: {}", e);
+                *self.status.write().await = AuthStatus::Failed(e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// 使用 QR token 认证（HTTP）
+    pub async fn authenticate_with_qr(&self, token: &str) -> Result<bool> {
+        let (base_url, address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
+        let device_name = self
+            .device_name
+            .read()
+            .await
+            .clone()
+            .unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
+        let fingerprint = self.device_fingerprint.read().await.clone();
+        let uid_hash = self.get_uid_hash().await;
+        let ctx = DeviceAuthContext {
+            device_id: &device_id,
+            device_name: &device_name,
+            fingerprint: &fingerprint,
+            uid_hash: uid_hash.as_deref(),
+        };
+        match self
+            .http
+            .qr_connect(&base_url, ctx, token, &address)
+            .await
+        {
+            Ok(data) => {
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
+                Ok(true)
+            }
+            Err(AppError::Auth(msg)) => {
+                tracing::warn!("[authenticate_with_qr] Rejected: {}", msg);
+                *self.status.write().await = AuthStatus::Failed(msg.clone());
+                Ok(false)
+            }
+            Err(e) => {
+                tracing::warn!("[authenticate_with_qr] Failed: {}", e);
+                *self.status.write().await = AuthStatus::Failed(e.to_string());
+                Err(e)
+            }
+        }
+    }
+
+    /// 生物认证登录（HTTP 挑战-应答握手）
+    ///
+    /// 1. `POST /api/auth/biometric-challenge` 获取一次性挑战值（60s 有效）
+    /// 2. 弹系统生物识别，认证通过后解锁 Keystore 私钥签名
+    /// 3. `POST /api/auth/biometric-verify` 回传签名，桌面端验签后签发 JWT
+    pub async fn authenticate_with_biometric(&self) -> Result<bool> {
+        let (base_url, _address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
+        let fingerprint = self.device_fingerprint.read().await.clone();
+
+        *self.status.write().await = AuthStatus::Authenticating;
+
+        // 1. 请求挑战值
+        // 桌面端拒绝（未绑定凭证/未配对等）：透传真实原因，前端可提示用户改用配对码
+        let challenge = match self.http.biometric_challenge(&base_url, &device_id, &fingerprint).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!("[authenticate_with_biometric] Challenge rejected: {}", e);
+                *self.status.write().await = AuthStatus::Failed(e.to_string());
                 return Err(e);
             }
         };
 
-        // 检查响应
-        if let Some(AuthStage::VerifyCode) = ResponseParser::parse_auth_response(&response) {
-            tracing::info!("[request_pairing] Response stage: VerifyCode");
-            *self.status.write().await = AuthStatus::WaitingPairingCode;
-            return Ok(());
-        }
-
-        tracing::error!("[request_pairing] Failed - unexpected response format");
-        Err(crate::AppError::WebSocket("Pairing request failed".to_string()))
-    }
-
-    /// 验证配对码
-    pub async fn verify_pairing_code(&self, code: &str) -> Result<bool> {
-        if !self.connection.is_connected().await {
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
-        }
-
-        let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone();
-
-        let message = AuthRequest::verify_pairing_code(&device_id, &device_name, &fingerprint, code);
-
-        let response = self.connection.send_and_wait(&message, timeouts::AUTH).await?;
-
-        // 检查响应
-        match ResponseParser::parse_auth_response(&response) {
-            Some(AuthStage::Authenticated) => {
-                // 提取凭据
-                let pairing_id = if let Message::Auth { payload, .. } = &response {
-                    payload.device_id.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                let session_token = if let Message::Auth { payload, .. } = &response {
-                    payload.session_token.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                };
-
-                let creds = AuthCredentials {
-                    pairing_id: pairing_id.clone(),
-                    fingerprint,
-                    session_token: session_token.clone(),
-                };
-
-                self.set_credentials(creds).await;
-                // 响应被 RequestResponseManager 消费，AuthHandler 不会执行；
-                // 全局 token 供文件服务 HTTP 调用（对桌面端 /api/plugins/* 鉴权）
-                if !session_token.is_empty() {
-                    crate::state::set_global_token(&session_token);
-                }
-                *self.status.write().await = AuthStatus::Authenticated;
-                self.connection.set_paired().await;
-                Ok(true)
-            }
-            Some(AuthStage::Failed) => {
-                // 提取错误信息
-                let error_msg = if let Message::Auth { payload, .. } = &response {
-                    payload.error.clone().unwrap_or_else(|| "Pairing verification failed".to_string())
-                } else {
-                    "Pairing verification failed".to_string()
-                };
-                tracing::warn!("[verify_pairing_code] Failed: {}", error_msg);
-                *self.status.write().await = AuthStatus::Failed(error_msg);
-                Ok(false)
-            }
-            _ => {
-                tracing::warn!("[verify_pairing_code] Unexpected response stage");
-                *self.status.write().await = AuthStatus::Failed("Unexpected response".to_string());
-                Ok(false)
-            }
-        }
-    }
-
-    /// 使用 QR token 认证
-    pub async fn authenticate_with_qr(&self, token: &str) -> Result<bool> {
-        if !self.connection.is_connected().await {
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
-        }
-
-        let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone();
-
-        let message = AuthRequest::authenticate_with_qr(&device_id, &device_name, &fingerprint, token);
-
-        let response = self.connection.send_and_wait(&message, timeouts::AUTH).await?;
-
-        // 检查响应
-        if let Some(AuthStage::Authenticated) = ResponseParser::parse_auth_response(&response) {
-            let pairing_id = if let Message::Auth { payload, .. } = &response {
-                payload.device_id.clone().unwrap_or_default()
-            } else {
-                String::new()
-            };
-            let session_token = if let Message::Auth { payload, .. } = &response {
-                payload.session_token.clone().unwrap_or_default()
-            } else {
-                String::new()
-            };
-
-            let creds = AuthCredentials {
-                pairing_id: pairing_id.clone(),
-                fingerprint,
-                session_token: session_token.clone(),
-            };
-
-            self.set_credentials(creds).await;
-            // 同上：响应被 RequestResponseManager 消费，此处补写全局 token
-            if !session_token.is_empty() {
-                crate::state::set_global_token(&session_token);
-            }
-            *self.status.write().await = AuthStatus::Authenticated;
-            self.connection.set_paired().await;
-            return Ok(true);
-        }
-
-        *self.status.write().await = AuthStatus::Failed("QR authentication failed".to_string());
-        Ok(false)
-    }
-
-    /// 生物认证登录（挑战-应答握手）
-    ///
-    /// 1. 发送 BiometricRequest 获取一次性挑战值
-    /// 2. 弹系统生物识别，认证通过后解锁 Keystore 私钥签名
-    /// 3. 回传签名（BiometricVerify），桌面端验签后签发 JWT
-    pub async fn authenticate_with_biometric(&self) -> Result<bool> {
-        if !self.connection.is_connected().await {
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
-        }
-
-        *self.status.write().await = AuthStatus::Authenticating;
-
-        let device_id = self.device_id.read().await.clone();
-        let device_name = self.device_name.read().await.clone().unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
-        let fingerprint = self.device_fingerprint.read().await.clone();
-
-        // 1. 请求挑战值
-        let request = AuthRequest::biometric_request(&device_id, &device_name, &fingerprint);
-        let response = self.connection.send_and_wait(&request, timeouts::BIO_AUTH).await?;
-
-        // 桌面端拒绝（未绑定凭证/未配对等）：透传真实原因，前端可提示用户改用配对码
-        if let Some((code, msg)) = ResponseParser::parse_auth_error(&response) {
-            let reason = format!("{}: {}", code, msg);
-            *self.status.write().await = AuthStatus::Failed(reason.clone());
-            tracing::warn!("[authenticate_with_biometric] Desktop rejected: {}", reason);
-            return Err(crate::AppError::Auth(reason));
-        }
-
-        let nonce = match ResponseParser::parse_auth_response(&response) {
-            Some(AuthStage::BiometricChallenge) => {
-                if let Message::Auth { payload, .. } = &response {
-                    payload.challenge_nonce.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                }
-            }
-            Some(AuthStage::Failed) => {
-                let reason = if let Message::Auth { payload, .. } = &response {
-                    payload.error.clone().unwrap_or_else(|| "Biometric authentication failed".to_string())
-                } else {
-                    "Biometric authentication failed".to_string()
-                };
-                *self.status.write().await = AuthStatus::Failed(reason.clone());
-                tracing::warn!("[authenticate_with_biometric] Desktop rejected: {}", reason);
-                return Err(crate::AppError::Auth(reason));
-            }
-            _ => {
-                *self.status.write().await = AuthStatus::Failed("Unexpected biometric response".to_string());
-                return Err(crate::AppError::Auth("Unexpected biometric response".to_string()));
-            }
-        };
-        if nonce.is_empty() {
-            *self.status.write().await = AuthStatus::Failed("Missing challenge nonce".to_string());
-            return Err(crate::AppError::Auth("Missing challenge nonce".to_string()));
-        }
-
         // 2. 生物认证解锁私钥并签名挑战值
-        let signature = match crate::plugin::android_plugins::biometric_sign(&fingerprint, &nonce).await {
-            Ok(sig) => sig,
-            Err(e) => {
-                tracing::warn!("[authenticate_with_biometric] Biometric sign failed: {}", e);
-                *self.status.write().await = AuthStatus::Failed(format!("Biometric authentication failed: {}", e));
-                return Ok(false);
-            }
-        };
-
-        // 3. 回传签名验证
-        let verify = AuthRequest::biometric_verify(&device_id, &device_name, &fingerprint, &nonce, &signature);
-        let response = self.connection.send_and_wait(&verify, timeouts::BIO_AUTH).await?;
-
-        // 桌面端拒绝（挑战值过期/验签失败等）：透传真实原因
-        if let Some((code, msg)) = ResponseParser::parse_auth_error(&response) {
-            let reason = format!("{}: {}", code, msg);
-            *self.status.write().await = AuthStatus::Failed(reason.clone());
-            tracing::warn!("[authenticate_with_biometric] Verification rejected: {}", reason);
-            return Err(crate::AppError::Auth(reason));
-        }
-
-        match ResponseParser::parse_auth_response(&response) {
-            Some(AuthStage::Authenticated) => {
-                let pairing_id = if let Message::Auth { payload, .. } = &response {
-                    payload.device_id.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                };
-                let session_token = if let Message::Auth { payload, .. } = &response {
-                    payload.session_token.clone().unwrap_or_default()
-                } else {
-                    String::new()
-                };
-
-                let creds = AuthCredentials {
-                    pairing_id: pairing_id.clone(),
-                    fingerprint,
-                    session_token: session_token.clone(),
-                };
-
-                self.set_credentials(creds).await;
-                // 同上：响应被 RequestResponseManager 消费，此处补写全局 token
-                if !session_token.is_empty() {
-                    crate::state::set_global_token(&session_token);
+        let signature =
+            match crate::plugin::android_plugins::biometric_sign(&fingerprint, &challenge.challenge_nonce).await {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::warn!("[authenticate_with_biometric] Biometric sign failed: {}", e);
+                    *self.status.write().await = AuthStatus::Failed(format!("Biometric authentication failed: {}", e));
+                    return Ok(false);
                 }
-                *self.status.write().await = AuthStatus::Authenticated;
-                self.connection.set_paired().await;
+            };
+
+        // 3. 回传签名验证（挑战过期/验签失败 → 1009）
+        match self
+            .http
+            .biometric_verify(
+                &base_url,
+                &device_id,
+                &fingerprint,
+                &challenge.challenge_nonce,
+                &signature,
+            )
+            .await
+        {
+            Ok(data) => {
+                self.apply_auth_success(
+                    data.token,
+                    fingerprint,
+                    data.kd_public_b64,
+                    data.kd_fingerprint,
+                )
+                .await;
                 tracing::info!("[authenticate_with_biometric] Biometric authentication successful");
                 Ok(true)
             }
-            Some(AuthStage::Failed) => {
-                let reason = if let Message::Auth { payload, .. } = &response {
-                    payload.error.clone().unwrap_or_else(|| "Biometric verification failed".to_string())
-                } else {
-                    "Biometric verification failed".to_string()
-                };
-                tracing::warn!("[authenticate_with_biometric] Verification failed: {}", reason);
-                *self.status.write().await = AuthStatus::Failed(reason);
-                Ok(false)
-            }
-            _ => {
-                *self.status.write().await = AuthStatus::Failed("Unexpected verification response".to_string());
-                Ok(false)
+            Err(e) => {
+                tracing::warn!("[authenticate_with_biometric] Verification rejected: {}", e);
+                *self.status.write().await = AuthStatus::Failed(e.to_string());
+                Err(e)
             }
         }
     }
 
-    /// 绑定生物凭证：生成密钥对 + 生物门卫自检，通过后注册公钥到桌面端（需已认证连接）
+    /// 绑定生物凭证：生成密钥对 + 生物门卫自检，通过后注册公钥到桌面端
     ///
     /// 自检：生成密钥后立即弹一次指纹/人脸，对本地随机挑战签名并验签——
-    /// 确认“合法主人”确实能解锁这把钥匙，通过后才把公钥注册到桌面端。
-    /// 避免“绑定时从未验证主人”：否则任何人拿到已配对手机都能注册钥匙。
-    /// 返回桌面端是否接受绑定
+    /// 确认"合法主人"确实能解锁这把钥匙，通过后才把公钥注册到桌面端。
+    /// 避免"绑定时从未验证主人"：否则任何人拿到已配对手机都能注册钥匙。
+    /// 返回桌面端是否接受绑定。
+    ///
+    /// 说明：公钥经 HTTP `POST /api/auth/biometric-bind` 注册，桌面端校验
+    /// 携带 JWT 的指纹与请求一致后更新配对记录（与 challenge/verify 同信道）。
     pub async fn bind_biometric_credential(&self) -> Result<bool> {
         if !self.connection.is_connected().await {
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+            return Err(AppError::WebSocket("Not connected".to_string()));
         }
 
+        let (base_url, _address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
         let fingerprint = self.device_fingerprint.read().await.clone();
 
         // 1. 本地生成密钥对（私钥存 Keystore，需生物认证解锁）
@@ -530,64 +542,80 @@ impl AuthManager {
             let signature = match crate::plugin::android_plugins::biometric_sign(&fingerprint, &nonce).await {
                 Ok(sig) => sig,
                 Err(e) => {
-                    tracing::warn!("[bind_biometric_credential] Biometric self-check cancelled/failed: {}", e);
+                    tracing::warn!(
+                        "[bind_biometric_credential] Biometric self-check cancelled/failed: {}",
+                        e
+                    );
                     let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
                     return Err(e);
                 }
             };
 
             if let Err(e) = verify_biometric_signature(&public_key, &nonce, &signature) {
-                tracing::error!("[bind_biometric_credential] Biometric self-check signature invalid: {}", e);
+                tracing::error!(
+                    "[bind_biometric_credential] Biometric self-check signature invalid: {}",
+                    e
+                );
                 let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                return Err(crate::AppError::Auth("Biometric self-check failed".to_string()));
+                return Err(AppError::Auth("Biometric self-check failed".to_string()));
             }
             tracing::info!("[bind_biometric_credential] Biometric self-check passed (owner verified)");
         }
 
-        // 3. 通过已认证连接把公钥注册到桌面端
-        let message = AuthRequest::exchange_biometric_credential(&fingerprint, &public_key);
-        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
-            Ok(r) => r,
+        // 3. 通过已认证 HTTP 连接把公钥注册到桌面端
+        let session_token = self
+            .get_credentials()
+            .await
+            .map(|c| c.session_token)
+            .unwrap_or_default();
+
+        match self
+            .http
+            .biometric_bind(&base_url, &device_id, &fingerprint, &public_key, &session_token)
+            .await
+        {
+            Ok(data) => {
+                tracing::info!(
+                    "[bind_biometric_credential] Credential bound to desktop (bound={})",
+                    data.bound
+                );
+                Ok(data.bound)
+            }
             Err(e) => {
                 // 注册失败时清理本地密钥，避免留下孤儿公钥/私钥
                 let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                return Err(e);
-            }
-        };
-
-        match ResponseParser::parse_auth_response(&response) {
-            Some(AuthStage::Authenticated) => {
-                tracing::info!("[bind_biometric_credential] Credential bound to desktop");
-                Ok(true)
-            }
-            Some(AuthStage::Failed) => {
-                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                tracing::warn!("[bind_biometric_credential] Desktop rejected binding");
-                Ok(false)
-            }
-            _ => {
-                let _ = crate::plugin::android_plugins::biometric_delete_key(&fingerprint).await;
-                Ok(false)
+                Err(e)
             }
         }
     }
 
-    /// 解绑生物凭证：删除本地密钥 + 通知桌面端清空公钥（需已认证连接）
+    /// 解绑生物凭证：删除本地密钥 + 通知桌面端清空公钥
+    ///
+    /// 与绑定的信道相同：经 HTTP `POST /api/auth/biometric-bind`（public_key 传空串）。
     pub async fn unbind_biometric_credential(&self) -> Result<bool> {
         if !self.connection.is_connected().await {
-            return Err(crate::AppError::WebSocket("Not connected".to_string()));
+            return Err(AppError::WebSocket("Not connected".to_string()));
         }
 
+        let (base_url, _address) = self.target_context().await?;
+        let device_id = self.device_id.read().await.clone();
         let fingerprint = self.device_fingerprint.read().await.clone();
 
-        // 1. 通知桌面端清空公钥
-        let message = AuthRequest::exchange_biometric_credential(&fingerprint, "");
-        let response = match self.connection.send_and_wait(&message, timeouts::AUTH).await {
-            Ok(r) => Some(r),
+        // 1. 通知桌面端清空公钥（失败仍继续删除本地密钥，避免本地密钥悬空）
+        let session_token = self
+            .get_credentials()
+            .await
+            .map(|c| c.session_token)
+            .unwrap_or_default();
+        let notified = match self
+            .http
+            .biometric_bind(&base_url, &device_id, &fingerprint, "", &session_token)
+            .await
+        {
+            Ok(_) => true,
             Err(e) => {
                 tracing::warn!("[unbind_biometric_credential] Desktop notification failed: {}", e);
-                // 桌面端通知失败仍继续删除本地密钥，避免本地密钥悬空
-                None
+                false
             }
         };
 
@@ -596,16 +624,12 @@ impl AuthManager {
             tracing::warn!("[unbind_biometric_credential] Failed to delete local key: {}", e);
         }
 
-        match response {
-            Some(Message::Auth { payload, .. }) if payload.stage == AuthStage::Authenticated => {
-                tracing::info!("[unbind_biometric_credential] Credential unbound");
-                Ok(true)
-            }
-            _ => {
-                tracing::warn!("[unbind_biometric_credential] Desktop did not confirm unbind");
-                Ok(false)
-            }
+        if notified {
+            tracing::info!("[unbind_biometric_credential] Credential unbound");
+        } else {
+            tracing::warn!("[unbind_biometric_credential] Desktop did not confirm unbind");
         }
+        Ok(notified)
     }
 
     /// 检查本地生物认证密钥是否存在
@@ -622,16 +646,18 @@ impl AuthManager {
     }
 }
 
-/// 从设备唯一 ID 派生稳定身份（device_id + fingerprint）
+/// 从设备唯一 ID 派生稳定身份（device_id + fingerprint + uid_hash）
 ///
 /// 同一设备同一签名下卸载重装后 UID 不变，因此派生出的身份不变；
-/// 用哈希而非原始 UID，避免设备标识直接入库/上链。
-fn derive_identity_from_uid(uid: &str) -> (String, String) {
+/// 用哈希而非原始 UID，避免设备标识直接入库/上链。`uid_hash` 独立于
+/// device_id/fingerprint 的哈希域，专供桌面端跨指纹合并配对记录。
+fn derive_identity_from_uid(uid: &str) -> (String, String, String) {
     use sha2::{Digest, Sha256};
     let device_hash = hex::encode(Sha256::digest(format!("bedcode-device:{}", uid).as_bytes()));
     let fingerprint_hash = hex::encode(Sha256::digest(format!("bedcode-fingerprint:{}", uid).as_bytes()));
+    let uid_hash = hex::encode(Sha256::digest(format!("bedcode-uid:{}", uid).as_bytes()));
     // 取前 32 字符保证与旧 UUID 长度风格一致（36 字符左右），便于日志阅读
-    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string())
+    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string(), uid_hash[..32].to_string())
 }
 
 /// 验证生物认证签名（绑定自检用，与桌面端 verify_biometric_signature 算法一致）
@@ -639,11 +665,7 @@ fn derive_identity_from_uid(uid: &str) -> (String, String) {
 /// - `public_key_spki_b64`: 绑定公钥（SPKI X.509 DER，base64）
 /// - `message`: 被签名的消息（挑战值 hex 字符串的 UTF-8 字节）
 /// - `signature_b64`: 签名（原始 r||s 格式，base64）
-fn verify_biometric_signature(
-    public_key_spki_b64: &str,
-    message: &str,
-    signature_b64: &str,
-) -> Result<()> {
+fn verify_biometric_signature(public_key_spki_b64: &str, message: &str, signature_b64: &str) -> Result<()> {
     use base64::Engine;
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -651,21 +673,20 @@ fn verify_biometric_signature(
 
     let spki_der = base64::engine::general_purpose::STANDARD
         .decode(public_key_spki_b64)
-        .map_err(|e| crate::AppError::Auth(format!("Invalid public key encoding: {}", e)))?;
+        .map_err(|e| AppError::Auth(format!("Invalid public key encoding: {}", e)))?;
 
     let verifying_key = VerifyingKey::from_public_key_der(&spki_der)
-        .map_err(|e| crate::AppError::Auth(format!("Invalid public key: {}", e)))?;
+        .map_err(|e| AppError::Auth(format!("Invalid public key: {}", e)))?;
 
     let raw_sig = base64::engine::general_purpose::STANDARD
         .decode(signature_b64)
-        .map_err(|e| crate::AppError::Auth(format!("Invalid signature encoding: {}", e)))?;
+        .map_err(|e| AppError::Auth(format!("Invalid signature encoding: {}", e)))?;
 
-    let signature = Signature::from_slice(&raw_sig)
-        .map_err(|e| crate::AppError::Auth(format!("Invalid signature: {}", e)))?;
+    let signature = Signature::from_slice(&raw_sig).map_err(|e| AppError::Auth(format!("Invalid signature: {}", e)))?;
 
     verifying_key
         .verify(message.as_bytes(), &signature)
-        .map_err(|_| crate::AppError::Auth("Biometric signature verification failed".to_string()))?;
+        .map_err(|_| AppError::Auth("Biometric signature verification failed".to_string()))?;
 
     Ok(())
 }

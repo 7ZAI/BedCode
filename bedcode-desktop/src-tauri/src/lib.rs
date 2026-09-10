@@ -7,6 +7,11 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
+pub mod peer_migration;
+pub mod peer_net;
+pub mod peer_receive;
+pub mod peer_remote;
+pub mod peer_transfer;
 pub mod plugin;
 pub mod process;
 pub mod pty;
@@ -17,9 +22,9 @@ pub mod utils;
 
 // ==================== Re-exports ====================
 
-pub use system::{AppError, Result, AppConfig, AppContext};
-use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use commands::system::RunningSessionInfo;
+use system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+pub use system::{AppConfig, AppContext, AppError, Result};
 
 // ==================== Application Setup ====================
 
@@ -27,27 +32,45 @@ use db::Database;
 use std::sync::Arc;
 use tauri::Manager;
 use tokio::sync::Mutex;
-use tracing_subscriber::Layer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// 删除当天已存在的日志文件（仅 dev 构建调用）
 ///
 /// dev 启动频次高，按天追加会让同一天的日志混入多次启动的片段，难以定位；
 /// 因此 dev 启动时替换当天日志（删旧建新）。release 保持按天追加轮转。
 /// 必须在 RollingFileAppender 构建前调用，确保 appender 首次写入创建全新文件。
+/// dev 启动同时重置 `bootstrap.log`（bootstrap 通道先于本函数就绪；重置消息本身
+/// 经 bootstrap 落盘即重建该文件，见 system::logging::bootstrap_log）。
 #[cfg(debug_assertions)]
 fn reset_today_logs(log_dir: &std::path::Path) {
+    // bootstrap.log（固定文件名，bootstrap 通道产物、无轮转）：dev 重启替换，
+    // 避免多次启动的启动早期片段混叠；消息经 bootstrap 通道写入即重建文件
+    let bootstrap_path = log_dir.join("bootstrap.log");
+    if bootstrap_path.exists() {
+        match std::fs::remove_file(&bootstrap_path) {
+            Ok(()) => system::logging::bootstrap_log(
+                tracing::Level::INFO,
+                format!("[logging] dev reset: replaced {}", bootstrap_path.display()),
+            ),
+            Err(e) => system::logging::bootstrap_log(
+                tracing::Level::ERROR,
+                format!("[logging] dev reset: failed to replace {}: {e}", bootstrap_path.display()),
+            ),
+        }
+    }
     // tracing_appender 的 rolling 文件名日期用 UTC（与本地日期可能错位一天）
     let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-    for prefix in ["runtime", "error"] {
+    // 日志重置列表：runtime / error / frontend（前端 console 单独文件，见 init_logging）
+    for prefix in ["runtime", "error", "frontend"] {
         let path = log_dir.join(format!("{prefix}.{today}.log"));
         if path.exists() {
             match std::fs::remove_file(&path) {
-                Ok(()) => eprintln!("[logging] dev reset: replaced today's log {}", path.display()),
-                Err(e) => eprintln!(
-                    "[logging] dev reset: failed to replace {}: {}",
-                    path.display(),
-                    e
+                Ok(()) => system::logging::bootstrap_log(
+                    tracing::Level::INFO,
+                    format!("[logging] dev reset: replaced today's log {}", path.display()),
+                ),
+                Err(e) => system::logging::bootstrap_log(
+                    tracing::Level::ERROR,
+                    format!("[logging] dev reset: failed to replace {}: {e}", path.display()),
                 ),
             }
         }
@@ -58,112 +81,60 @@ fn reset_today_logs(log_dir: &std::path::Path) {
 ///
 /// 接受 LogConfig 参数，所有日志行为均可通过配置文件控制
 fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogConfig) -> Result<()> {
-    let log_dir = app_handle
-        .path()
-        .app_log_dir()
-        .expect("Failed to get log directory");
+    let log_dir = app_handle.path().app_log_dir().expect("Failed to get log directory");
 
+    // bootstrap 通道幂等兜底：setup 早期已初始化（config 复制/加载沿用），此处仅防漏
+    system::logging::bootstrap_init(&log_dir)?;
     std::fs::create_dir_all(&log_dir)?;
 
     // dev 构建替换当天日志（release 保持追加轮转）
     #[cfg(debug_assertions)]
     reset_today_logs(&log_dir);
 
-    // 解析轮转策略
-    let rotation = match log_config.rotation.as_str() {
-        "hourly" => tracing_appender::rolling::Rotation::HOURLY,
-        "never" => tracing_appender::rolling::Rotation::NEVER,
-        _ => tracing_appender::rolling::Rotation::DAILY,
-    };
+    // 构建日志订阅器：文件层非阻塞写盘 + 控制台层。
+    // 过滤语义与旧实现一致（error 固定 ERROR、runtime 按级别、frontend 仅 dev），
+    // 全部收敛于 system::logging::build_logging，便于独立单测（见该模块测试）
+    let (setup, subscriber) =
+        system::logging::build_logging(&log_dir, log_config, cfg!(debug_assertions))?;
+    install_subscriber(subscriber);
 
-    // max_files: 0 表示不限制，不调用 .max_log_files() 让文件无限增长
-    // tracing_appender 的 max_log_files 接受 usize，无"不限制"选项，只能通过不调用来实现
+    // 保存句柄到进程级全局：worker guard 存活到进程退出（drop 时 flush 剩余日志）；
+    // 级别热调（file_level_reload）与容量裁剪/丢弃告警（writers）由后续模块从此读取
+    system::logging::store_setup(setup);
 
-    // Error 日志文件：固定 ERROR 级别，始终记录最严重问题
-    let mut error_builder = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(rotation.clone())
-        .filename_prefix("error")
-        .filename_suffix("log");
-    if log_config.max_files > 0 {
-        error_builder = error_builder.max_log_files(log_config.max_files);
-    }
-    let error_appender = error_builder
-        .build(&log_dir)
-        .expect("Failed to create error log file appender");
-
-    // 运行时日志文件：级别由 log.file_level 控制
-    let mut runtime_builder = tracing_appender::rolling::RollingFileAppender::builder()
-        .rotation(rotation)
-        .filename_prefix("runtime")
-        .filename_suffix("log");
-    if log_config.max_files > 0 {
-        runtime_builder = runtime_builder.max_log_files(log_config.max_files);
-    }
-    let runtime_appender = runtime_builder
-        .build(&log_dir)
-        .expect("Failed to create runtime log file appender");
-
-    // Error 日志层：固定 ERROR 及以上
-    let error_layer = tracing_subscriber::fmt::layer()
-        .with_writer(error_appender)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_line_number(true)
-        .with_filter(EnvFilter::new("error"));
-
-    // 运行时日志层：dev 构建强制 debug，release 使用配置值
-    let file_level = if cfg!(debug_assertions) {
-        "debug"
-    } else {
-        log_config.file_level.as_str()
-    };
-    let runtime_layer = tracing_subscriber::fmt::layer()
-        .with_writer(runtime_appender)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_line_number(true)
-        .with_filter(EnvFilter::new(file_level));
-
-    // 控制台输出逻辑
-    let should_add_console = cfg!(debug_assertions) || log_config.console_in_release;
-
-    if should_add_console {
-        // RUST_LOG 环境变量优先级最高，其次使用配置值
-        let console_filter = EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter));
-        let console_layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stdout)
-            .with_ansi(true)
-            .fmt_fields(tracing_subscriber::fmt::format::PrettyFields::new())
-            .event_format(system::logging::ConsoleFormatter::new())
-            .with_filter(console_filter);
-
-        tracing_subscriber::registry()
-            .with(error_layer)
-            .with(runtime_layer)
-            .with(console_layer)
-            .try_init()
-            .expect("Failed to set tracing subscriber");
-    } else {
-        tracing_subscriber::registry()
-            .with(error_layer)
-            .with(runtime_layer)
-            .try_init()
-            .expect("Failed to set tracing subscriber");
-    }
+    // 启动后台日志维护任务：容量裁剪（超限删最旧，当前在写文件除外）+ 非阻塞队列丢弃告警（03）
+    system::logging::spawn_log_maintenance(
+        system::logging::global_setup().expect("logging setup stored before maintenance"),
+        log_config.capacity_bytes,
+    );
 
     tracing::info!("Logging initialized. Log directory: {:?}", log_dir);
     tracing::info!(
         "Log config: file_level={}, rotation={}, max_files={}, console_in_release={}",
-        log_config.file_level, log_config.rotation, log_config.max_files, log_config.console_in_release,
+        log_config.file_level,
+        log_config.rotation,
+        log_config.max_files,
+        log_config.console_in_release,
     );
     tracing::info!("BedCode Desktop v{} starting...", env!("CARGO_PKG_VERSION"));
 
     Ok(())
 }
 
+/// 安装 tracing 全局订阅器（容忍 log→tracing 桥已被抢占）
+///
+/// debug 构建下 tauri-plugin-wdio 的 `.setup()` 会先 `log::set_boxed_logger`
+/// 抢占 log 全局 logger（其 setup 早于应用 setup 执行），使 `try_init()` 在
+/// `LogTracer::init()` 阶段返回 `SetLoggerError` 并 panic。拆成两步：桥安装
+/// 失败仅忽略（log 记录由 wdio 自带 logger 承接），tracing 全局默认仍须设置
+/// （与 `try_init` 第二步 `set_global_default` 等价）。
+fn install_subscriber<S>(subscriber: S)
+where
+    S: tracing::Subscriber + Send + Sync + 'static,
+{
+    let _ = tracing_log::LogTracer::init();
+    tracing::subscriber::set_global_default(subscriber).expect("Failed to set tracing subscriber");
+}
 
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
@@ -174,17 +145,88 @@ pub fn run() {
     let app_start = AppStartTime(std::time::Instant::now());
     let start = app_start.0;
 
-    let app = tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init())
-        .setup(move |app| {
+        .plugin(tauri_plugin_process::init());
+
+    // WDIO 测试插件仅 debug 构建注册（release 不编译该依赖、不注册该插件）
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_wdio::init());
+    }
+
+    let app = builder.setup(move |app| {
             app.manage(app_start);
 
+            // 平台条件默认窗口尺寸：tauri.conf.json 全局默认 1300×900 适配
+            // Windows/macOS（字符渲染密度与 DPI 匹配），Linux（WebKitGTK）在
+            // 此放大到 1560×1080（曾全局改大导致 Windows 默认窗口过大，见
+            // b33e5d99 反例，改为仅 Linux 生效）。set_size 失败仅降级为全局
+            // 默认小窗，不阻断启动。
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    // 目标窗口尺寸（逻辑像素）：Linux 下才放大，Windows/macOS 沿用全局默认
+                    let target = tauri::LogicalSize::new(1560.0f64, 1080.0f64);
+                    // 居中位置用目标尺寸一次性原子计算，替代 set_size 后 center()：
+                    // center() 内部读 outer_size() 缓存，在 set_size 异步请求（tao
+                    // window_requests 通道）执行前仍是旧值 1300×900，且 GTK resize
+                    // 左上角锚定，导致窗口扩大后中心点偏向右下、补偿失效。
+                    // 位置与尺寸同源于 target，与请求执行顺序无关。
+                    let monitor = win
+                        .current_monitor()
+                        .ok()
+                        .flatten()
+                        .or_else(|| win.primary_monitor().ok().flatten());
+                    if let Some(monitor) = monitor {
+                        let scale = monitor.scale_factor();
+                        let work_area = *monitor.work_area();
+                        // 物理像素计算，语义与 tauri 内部 calculate_window_center_position
+                        // 一致（work_area 居中，避开 Dock / 任务栏）
+                        let target_phys = target.to_physical::<u32>(scale);
+                        let x = (work_area.size.width as i32
+                            - target_phys.width as i32)
+                            / 2
+                            + work_area.position.x;
+                        let y = (work_area.size.height as i32
+                            - target_phys.height as i32)
+                            / 2
+                            + work_area.position.y;
+                        if let Err(e) = win.set_size(target) {
+                            tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
+                        }
+                        if let Err(e) =
+                            win.set_position(tauri::PhysicalPosition::new(x, y))
+                        {
+                            // 定位失败不阻断启动：仅记录，窗口回落 WM 默认放置
+                            tracing::warn!(error = %e, "Linux 默认窗口居中定位失败，沿用窗口管理器默认位置");
+                        }
+                    } else {
+                        // 无显示器信息（极端环境）：仅调整尺寸，位置交给窗口管理器
+                        if let Err(e) = win.set_size(target) {
+                            tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle();
+
+            // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志
+            // 写入 bootstrap.log（release 构建启动失败证据不丢），init_logging 之后由
+            // runtime 文件接管；初始化失败仅降级为控制台（eprintln），不阻断启动
+            let log_dir = app_handle
+                .path()
+                .app_log_dir()
+                .expect("Failed to get log directory");
+            if let Err(e) = system::logging::bootstrap_init(&log_dir) {
+                eprintln!("[logging] bootstrap channel init failed: {e}");
+            }
+
             let config_path = app_handle
                 .path()
                 .app_data_dir()
@@ -203,8 +245,14 @@ pub fn run() {
                             let _ = std::fs::create_dir_all(parent);
                         }
                         match std::fs::copy(&resource_path, &config_path) {
-                            Ok(_) => eprintln!("Default config copied from resource to {:?}", config_path),
-                            Err(e) => eprintln!("Failed to copy default config: {}, using built-in defaults", e),
+                            Ok(_) => system::logging::bootstrap_log(
+                                tracing::Level::INFO,
+                                format!("Default config copied from resource to {}", config_path.display()),
+                            ),
+                            Err(e) => system::logging::bootstrap_log(
+                                tracing::Level::ERROR,
+                                format!("Failed to copy default config: {e}, using built-in defaults"),
+                            ),
                         }
                     }
                 }
@@ -212,7 +260,10 @@ pub fn run() {
 
             // 先加载配置，再初始化日志系统，使日志行为可配置
             let app_config = crate::system::config::AppConfig::load(&config_path).unwrap_or_else(|e| {
-                eprintln!("Failed to load config, using defaults: {}", e);
+                system::logging::bootstrap_log(
+                    tracing::Level::ERROR,
+                    format!("Failed to load config, using defaults: {e}"),
+                );
                 crate::system::config::AppConfig::default()
             });
 
@@ -225,11 +276,12 @@ pub fn run() {
             // 同步 PowerManager 开关状态到配置值
             crate::system::power::power_manager().set_enabled(app_config.network.prevent_sleep);
 
+            // 启动电源唤醒监听：Windows 显示器长时间熄灭/锁屏后，WebView2 可能黑屏且不自愈，
+            // 系统唤醒时强制窗口重绘（详见 system::power_wake 模块文档）
+            crate::system::power_wake::spawn_wake_monitor(app_handle.clone());
+
             // 保存 resource_dir 供后续会话创建时使用
-            let resource_dir = app_handle
-                .path()
-                .resource_dir()
-                .expect("Failed to get resource dir");
+            let resource_dir = app_handle.path().resource_dir().expect("Failed to get resource dir");
 
             // 解析桌面端插件目录
             // dev 模式下 resolve 指向 target/debug/resources/...（Tauri 不自动复制资源）
@@ -244,11 +296,15 @@ pub fn run() {
                     resolved
                 } else {
                     // dev 模式 fallback：使用源码目录
-                    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
-                        .expect("CARGO_MANIFEST_DIR not set");
+                    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
                     let fallback = std::path::PathBuf::from(manifest_dir)
-                        .join("resources").join("plugins").join("desktop");
-                    tracing::info!("Plugin resolved path not found, falling back to source dir: {:?}", fallback);
+                        .join("resources")
+                        .join("plugins")
+                        .join("desktop");
+                    tracing::info!(
+                        "Plugin resolved path not found, falling back to source dir: {:?}",
+                        fallback
+                    );
                     fallback
                 }
             };
@@ -274,11 +330,30 @@ pub fn run() {
                 std::fs::create_dir_all(parent)?;
             }
 
+            // 对等网络节点身份：目录与 DB 同源解析自 app_data_dir（决策 D3 宿主只
+            // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
+            // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
+            let peer_net_data_dir = app_handle
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data dir");
+            crate::peer_net::init_node_identity(&peer_net_data_dir)?;
+
+            // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
+            // 启停（插件管理器 activate/deactivate 外壳接线，
+            // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
+            app.manage(crate::peer_net::PeerNetState::default());
+            app.manage(crate::peer_transfer::PeerTransferState::default());
+            app.manage(crate::peer_receive::PeerReceiveState::default());
+            app.manage(crate::peer_remote::PeerRemoteState::default());
+
             let db = Database::new(&db_path)?;
             db.init_schema()?;
-           
 
             let db = Arc::new(Mutex::new(db));
+
+            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
+            crate::peer_migration::migrate_legacy_peer_data(&app_handle, &db);
 
             // ==================== 创建所有全局单实例 ====================
 
@@ -291,42 +366,28 @@ pub fn run() {
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
-            let plugin_host = Arc::new(
-                tauri::async_runtime::block_on(
-                    plugin::PluginHost::new(db.clone(), &plugins_dir, session_manager.clone(), config_manager.clone(), app_handle_arc.clone())
-                )
-            );
+            let plugin_host = Arc::new(tauri::async_runtime::block_on(plugin::PluginHost::new(
+                db.clone(),
+                &plugins_dir,
+                session_manager.clone(),
+                config_manager.clone(),
+                Some(app_handle_arc.clone()),
+            )));
             // 注入消息总线 dispatcher（两阶段初始化）
             tauri::async_runtime::block_on(plugin_host.init_message_bus());
-            // 文件服务注册表已在 PluginHost::new() 内创建（早于插件 auto-activate，
-            // 激活时挂载可用）；此处注入宿主引用并启动后台 sweeper（两阶段收尾）
-            tauri::async_runtime::block_on(async {
-                plugin_host
-                    .file_service()
-                    .set_plugin_host(plugin_host.clone())
-                    .await;
-                plugin_host.file_service().start_background_tasks();
-            });
             let pairing_service = Arc::new(server::services::pairing_service::PairingService::new());
             let qr_manager = Arc::new(utils::auth::QrTokenManager::new());
             let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(mdns::advertiser::MdnsAdvertiser::new()));
 
             // 创建同步事件通道
-            let (sync_tx, _) = tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+            let (sync_tx, _) =
+                tokio::sync::broadcast::channel::<events::DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
 
             // 设置 SessionManager 和 SessionConfigManager 的同步事件发送器
             tauri::async_runtime::block_on(async {
                 session_manager.set_sync_tx(sync_tx.clone()).await;
                 config_manager.set_sync_tx(sync_tx.clone()).await;
             });
-
-            // 设置 AppHandle 到 SessionManager
-            // 会话创建时通过 subscribe_output() + FrontendOutputHandler::spawn() 转发输出
-            // 替代旧的 AsyncPtyOutputListener + try_lock 模式，避免 PtyReader 同步线程中锁竞争丢数据
-            tauri::async_runtime::block_on(async {
-                session_manager.set_app_handle(app_handle.clone()).await;
-            });
-            tracing::info!("SessionManager app_handle configured for output forwarding");
 
             // ==================== 注册到 AppContext 全局容器 ====================
 
@@ -335,11 +396,10 @@ pub fn run() {
                 .session_manager(session_manager.clone())
                 .config_manager(config_manager.clone())
                 .plugin_host(plugin_host.clone())
-                .file_service(plugin_host.file_service().clone())
                 .pairing_service(pairing_service.clone())
                 .qr_manager(qr_manager.clone())
                 .mdns_advertiser(mdns_advertiser.clone())
-                .app_handle(app_handle_arc.clone())
+                .app_handle(Some(app_handle_arc.clone()))
                 .sync_tx(sync_tx.clone())
                 .resource_dir(resource_dir_arc.clone())
                 .system_info(system_info.clone())
@@ -356,15 +416,23 @@ pub fn run() {
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
             app.manage(system_info.clone());
 
+            // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
+            // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
+            // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
+            // 装配完成后按最终插件状态补对账
+            if let Err(e) = tauri::async_runtime::block_on(
+                crate::peer_net::sync_node_with_plugin_state(&app_handle_arc),
+            ) {
+                tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
+            }
+
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
             // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
             // setup 闭包不在 Tokio runtime 上下文中，需通过 block_on 获取 Handle
             #[cfg(debug_assertions)]
             {
-                let runtime_handle = tauri::async_runtime::block_on(async {
-                    tokio::runtime::Handle::current()
-                });
+                let runtime_handle = tauri::async_runtime::block_on(async { tokio::runtime::Handle::current() });
                 let _dev_watcher = plugin::watcher::PluginDevWatcher::start(plugins_dir.to_path_buf(), runtime_handle);
                 // dev_watcher 需要 hold 住生命周期，存入 AppContext 或 leak
                 // 使用 Box::leak 使 watcher 生命周期与进程一致（开发模式可接受）
@@ -374,12 +442,18 @@ pub fn run() {
 
             // ==================== 启动服务器（通过 ServerSupervisor）====================
 
+            // 链路加密装配句柄（issue 01）：init_at_startup 需访问数据目录与 DB 状态
+            let link_crypto_app_handle = app_handle.clone();
             let supervisor = server::supervisor::ServerSupervisor::global();
             let ws_port_for_spawn = ws_port;
             // 产品决策：服务器永久自启动，不再可配置（本地功能依赖此服务，
             // 见 ServerSupervisor 类注释；config 中 network.auto_start 已废弃）
             let auto_start = true;
             tauri::async_runtime::spawn(async move {
+                // 链路加密先于服务器启动装配：第一条流量就要被开关裁决（spec §6）；
+                // 身份损坏时强制回退全关，不阻断启动
+                server::link_crypto::init_at_startup(&link_crypto_app_handle).await;
+
                 supervisor.init_config(ws_port_for_spawn, auto_start).await;
 
                 // 注册同步事件处理器
@@ -390,7 +464,9 @@ pub fn run() {
                 ws_manager.init().await.expect("Failed to initialize WebSocketManager");
 
                 // 注册事件源
-                global_matcher().register_source::<DesktopSyncEvent>(ctx.sync_tx().clone()).await;
+                global_matcher()
+                    .register_source::<DesktopSyncEvent>(ctx.sync_tx().clone())
+                    .await;
 
                 // 注册处理器
                 let sync_handler = Arc::new(SyncEventHandler::new(
@@ -435,15 +511,14 @@ pub fn run() {
             });
 
             // 启动事件转发器：将 SessionManager 的事件转发到前端
-            let event_forwarder = events::EventForwarder::new(
-                app_handle.clone(),
-                session_manager.clone(),
-            );
+            let event_forwarder = events::EventForwarder::new(app_handle.clone(), session_manager.clone());
             event_forwarder.start();
 
             setup_tray(app_handle)?;
 
-            let window = app_handle.get_webview_window("main").expect("Failed to get main window");
+            let window = app_handle
+                .get_webview_window("main")
+                .expect("Failed to get main window");
             let close_window = window.clone();
             let close_app_handle = app_handle.clone();
             window.on_window_event(move |event| {
@@ -456,9 +531,7 @@ pub fn run() {
                     let win = close_window.clone();
                     let ah = close_app_handle.clone();
                     tauri::async_runtime::spawn(async move {
-                        let should_close = system::lifecycle::lifecycle_registry()
-                            .run_window_close_hooks()
-                            .await;
+                        let should_close = system::lifecycle::lifecycle_registry().run_window_close_hooks().await;
 
                         if should_close {
                             // 无运行中会话，直接关闭
@@ -472,12 +545,14 @@ pub fn run() {
                             let sessions = sm.list_sessions().await;
                             let running: Vec<_> = sessions
                                 .iter()
-                                .filter(|s| matches!(
-                                    s.status,
-                                    enums::SessionStatus::Running
-                                    | enums::SessionStatus::Starting
-                                    | enums::SessionStatus::WaitingInput
-                                ))
+                                .filter(|s| {
+                                    matches!(
+                                        s.status,
+                                        enums::SessionStatus::Running
+                                            | enums::SessionStatus::Starting
+                                            | enums::SessionStatus::WaitingInput
+                                    )
+                                })
                                 .map(|s| RunningSessionInfo {
                                     id: s.id.clone(),
                                     name: s.name.clone(),
@@ -490,10 +565,7 @@ pub fn run() {
                                 running.len()
                             );
 
-                            if let Err(e) = ah.emit(
-                                system::constants::event::WINDOW_CLOSE_REQUESTED,
-                                &running,
-                            ) {
+                            if let Err(e) = ah.emit(system::constants::event::WINDOW_CLOSE_REQUESTED, &running) {
                                 tracing::error!("Failed to emit window-close-requested: {}", e);
                             }
                         }
@@ -502,7 +574,11 @@ pub fn run() {
             });
 
             let init_elapsed = start.elapsed();
-            tracing::info!("BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)", ws_port, init_elapsed.as_millis());
+            tracing::info!(
+                "BedCode Desktop initialized - WebSocket server on port {} (后端初始化耗时: {}ms)",
+                ws_port,
+                init_elapsed.as_millis()
+            );
 
             // 注册核心模块的生命周期钩子（Shutdown/WindowClose）
             system::lifecycle::register_core_lifecycle_hooks();
@@ -535,26 +611,33 @@ pub fn run() {
             commands::session::delete_session,
             commands::session::restart_session,
             commands::session::resize_session,
-            commands::session::get_session_output_history,
             // PTY Input
             commands::pty_input::write_to_session,
             commands::pty_input::send_special_key,
+            // 终端输出流 Channel 传输（与 WS 环回并行的替代方案，见 commands/terminal_stream.rs）
+            commands::terminal_stream::subscribe_terminal_channel,
+            commands::terminal_stream::unsubscribe_terminal_channel,
+            commands::terminal_stream::terminal_channel_ack,
             // Pairing
             commands::system::generate_pairing_code,
             commands::system::get_current_pairing_code,
             commands::system::verify_pairing_code,
             commands::system::clear_pairing_code,
+            commands::system::get_pairing_code_ttl,
+            commands::system::set_pairing_code_ttl,
             commands::system::list_paired_devices,
             commands::system::remove_paired_device,
             commands::system::list_connection_history,
             commands::system::delete_connection_history,
+            commands::system::set_log_level,
+            commands::system::save_log_settings,
+            commands::opener::open_log_dir,
             // QR Code
             commands::qr::generate_qr_code,
             commands::qr::clear_qr_code,
             commands::qr::get_qr_connection_info,
             commands::qr::get_qr_token_ttl,
             commands::qr::set_qr_token_ttl,
-
             commands::settings::get_all_db_settings,
             commands::settings::set_db_setting,
             // Settings
@@ -568,13 +651,18 @@ pub fn run() {
             commands::system::get_local_ip_addresses,
             commands::system::get_system_info,
             commands::system::confirm_window_close,
+            // Dev Console Relay（仅 dev：前端 console 日志转发，写 runtime.*.log + frontend.*.log 单独文件，见 commands::dev_logs）
+            #[cfg(debug_assertions)]
+            commands::dev_logs::report_frontend_log,
             commands::devices::get_connected_devices,
             // Plugin
             commands::plugin::plugin_list_loaded,
             commands::plugin::plugin_get_info,
+            commands::plugin::plugin_preauthorize,
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
             commands::plugin::plugin_mark_error,
+            commands::plugin::plugin_frontend_load_report,
             commands::plugin::plugin_get_activated_state,
             commands::plugin::plugin_storage_get,
             commands::plugin::plugin_storage_set,
@@ -587,20 +675,7 @@ pub fn run() {
             commands::plugin::plugin_list_rust_commands,
             commands::plugin::plugin_dev_reload,
             commands::plugin::plugin_fs_auth_respond,
-            // File Service (Plugin)
-            commands::file_service::plugin_filesrv_mount,
             commands::opener::plugin_reveal_in_dir,
-            commands::file_service::plugin_filesrv_update_roots,
-            commands::file_service::plugin_filesrv_dispose,
-            commands::file_service::plugin_filesrv_respond_upload_request,
-            commands::file_service::plugin_filesrv_get_peer,
-            commands::file_service::plugin_filesrv_approve_transfer,
-            commands::file_service::plugin_filesrv_reject_transfer,
-            commands::file_service::plugin_filesrv_set_approval_timeout,
-            commands::file_service::plugin_filesrv_cancel_receiving,
-            commands::file_service::plugin_filesrv_respond_transfer_request,
-            commands::file_service::plugin_pick_directory,
-            commands::file_service::plugin_pick_files,
             // Server
             commands::server::server_start,
             commands::server::server_stop,
@@ -612,32 +687,44 @@ pub fn run() {
             commands::server::update_server_port,
             commands::server::update_server_auto_start,
             commands::server::update_server_network_config,
+            commands::server::get_traffic_encryption_config,
+            commands::server::set_traffic_encryption_config,
+            commands::server::get_link_crypto_fingerprint,
             commands::server::reset_server_network_config,
             // mDNS
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
             commands::mdns::mdns_is_advertising,
+            // Peer Net
+            peer_net::start_peer_node,
+            peer_net::stop_peer_node,
+            // Phase 4（issue 13）：对等网络产品面已整体迁入 file-transfer 插件
+            // （WIT host-peer 13 原语），主前端命令面退役——仅保留生命周期、
+            // 首连确认与信任管理（宿主级兜底路径）。其余查询/管理命令的函数体
+            // 暂留一版（部分仍为 host_impl 内部簿记调用），下版本删除。
+            peer_net::respond_peer_consent,
+            peer_net::list_trusted_peers,
+            peer_net::revoke_trusted_peer,
+            peer_receive::set_peer_receive_policy,
+            peer_receive::set_peer_download_dir,
+            peer_receive::set_peer_transfer_encryption,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
 
     // 使用 .build() + .run() 替代 .run()，以接入 Tauri RunEvent 循环
     // RunEvent::ExitRequested 是执行优雅关闭的最后时机
-    app.run(move |_app_handle, event| {
-        match event {
-            tauri::RunEvent::ExitRequested { .. } => {
-                tracing::info!("BedCode Desktop exit requested, running shutdown hooks...");
-                tauri::async_runtime::block_on(async {
-                    system::lifecycle::lifecycle_registry()
-                        .run_shutdown_hooks()
-                        .await;
-                });
-            }
-            tauri::RunEvent::Exit { .. } => {
-                tracing::info!("BedCode Desktop exited");
-            }
-            _ => {}
+    app.run(move |_app_handle, event| match event {
+        tauri::RunEvent::ExitRequested { .. } => {
+            tracing::info!("BedCode Desktop exit requested, running shutdown hooks...");
+            tauri::async_runtime::block_on(async {
+                system::lifecycle::lifecycle_registry().run_shutdown_hooks().await;
+            });
         }
+        tauri::RunEvent::Exit { .. } => {
+            tracing::info!("BedCode Desktop exited");
+        }
+        _ => {}
     });
 }
 

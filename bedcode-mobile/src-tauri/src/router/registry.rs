@@ -2,9 +2,9 @@
 //!
 //! 负责注册和管理消息类型到处理器的映射
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 use crate::model::message::Message;
 use crate::Result;
@@ -36,8 +36,6 @@ pub fn message_type_key(msg: &Message) -> &'static str {
         Message::SessionConfig { .. } => "SessionConfig",
         Message::ClientDisconnected { .. } => "ClientDisconnected",
         Message::SessionEvent { .. } => "SessionEvent",
-        // 移动端仅为发送方（Announce/Withdraw → 桌面）；登记路由名供日志/fallback 使用
-        Message::FileService { .. } => "FileService",
     }
 }
 
@@ -84,7 +82,6 @@ mod tests {
     use super::*;
     use crate::enums::auth::{AuthPayload, AuthStage};
     use crate::enums::control::{SessionConfigAction, SessionControlAction};
-    use crate::enums::file_service::FileServicePayload;
     use crate::enums::sumary::SessionSummary;
     use crate::enums::SyncPayload;
     use tokio::sync::broadcast;
@@ -97,11 +94,7 @@ mod tests {
 
     #[async_trait]
     impl ClientRouteHandler for RecordingHandler {
-        async fn handle(
-            &self,
-            message: Message,
-            _ctx: &ClientRouteContext,
-        ) -> Result<Option<Message>> {
+        async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
             self.calls.lock().unwrap().push(message_type_key(&message));
             Ok(None)
         }
@@ -149,6 +142,7 @@ mod tests {
                         challenge_nonce: None,
                         signature: None,
                         auth_method: None,
+                        crypto: None,
                     },
                 ),
                 "Auth",
@@ -176,7 +170,6 @@ mod tests {
                 Message::session_event("created", session.clone(), "phone"),
                 "SessionEvent",
             ),
-            (Message::file_service(FileServicePayload::Query {}), "FileService"),
         ]
     }
 

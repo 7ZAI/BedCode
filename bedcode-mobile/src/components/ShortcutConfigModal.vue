@@ -928,7 +928,7 @@ watch(() => props.visible, (show) => {
   justify-content: center;
   gap: 0.375rem;
   font-size: var(--font-size-sm);
-  color: var(--mobile-danger-color, #ff5555);
+  color: var(--mobile-danger-color, #EF4444);
   margin-bottom: 0.5rem;
 }
 

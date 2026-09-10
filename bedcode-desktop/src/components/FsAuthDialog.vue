@@ -10,7 +10,9 @@
         <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
 
         <!-- Dialog -->
-        <div class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]">
+        <div
+          class="relative w-full max-w-sm rounded-card shadow-2xl border bg-card border-[var(--border)]"
+        >
           <!-- Header -->
           <div class="px-6 py-4 border-b border-[var(--border)]">
             <h3 class="text-lg font-semibold text-[var(--text-primary)]">
@@ -22,26 +24,28 @@
           <div class="p-6 space-y-4">
             <!-- Description -->
             <p class="text-sm text-[var(--text-secondary)]">
-              {{ t('desktop.plugin.fsAuthRequest', {
-                plugin: request.pluginId,
-                operation: operationLabel
-              }) }}
+              {{
+                t('desktop.plugin.fsAuthRequest', {
+                  plugin: request.pluginId,
+                  operation: operationLabel,
+                })
+              }}
             </p>
 
             <!-- Path display -->
             <div class="space-y-1">
               <span class="text-xs text-[var(--text-tertiary)]">
-                {{ pathCount > 1 ? t('desktop.plugin.fsAuthPaths', { count: pathCount }) : t('desktop.plugin.fsAuthPath') }}
+                {{
+                  pathCount > 1
+                    ? t('desktop.plugin.fsAuthPaths', { count: pathCount })
+                    : t('desktop.plugin.fsAuthPath')
+                }}
               </span>
               <div
                 v-if="pathCount > 1"
                 class="max-h-40 overflow-y-auto p-2 rounded-input bg-[var(--bg-input)] text-xs text-[var(--text-primary)] space-y-1"
               >
-                <div
-                  v-for="p in paths"
-                  :key="p"
-                  class="break-all font-mono leading-relaxed"
-                >
+                <div v-for="p in paths" :key="p" class="break-all font-mono leading-relaxed">
                   {{ p }}
                 </div>
               </div>
@@ -67,16 +71,18 @@
           </div>
 
           <!-- Footer -->
-          <div class="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--border)]">
+          <div
+            class="flex items-center justify-end gap-3 px-6 py-4 border-t border-[var(--border)]"
+          >
             <button
-              @click="deny"
               class="px-4 h-9 rounded-btn text-sm font-medium bg-[var(--bg-hover)] text-[var(--text-secondary)] hover:bg-[var(--bg-input)] transition-colors duration-200"
+              @click="deny"
             >
               {{ t('desktop.plugin.fsAuthDeny') }}
             </button>
             <button
-              @click="allow"
               class="px-4 h-9 rounded-btn text-sm font-medium bg-brand text-white hover:bg-[var(--color-primary-hover)] transition-colors duration-200"
+              @click="allow"
             >
               {{ t('desktop.plugin.fsAuthAllow') }}
             </button>

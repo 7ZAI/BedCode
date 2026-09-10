@@ -27,13 +27,14 @@ pub(crate) fn timer_register(
     }
     let interval = interval_secs.max(MIN_TIMER_INTERVAL_SECS);
     // 两阶段初始化：PluginHost 构造完成后才注入 services
-    let services = block_on_async(host_ctx.services()).ok_or_else(|| {
-        format!("timer error: plugin services not initialized yet for '{}'", plugin_id)
-    })?;
+    let services = block_on_async(host_ctx.services())
+        .ok_or_else(|| format!("timer error: plugin services not initialized yet for '{}'", plugin_id))?;
     services.register_plugin_timer(plugin_id.to_string(), interval, command.to_string());
     tracing::info!(
         "Plugin timer registered for '{}': interval={}s command={}",
-        plugin_id, interval, command
+        plugin_id,
+        interval,
+        command
     );
     Ok(())
 }

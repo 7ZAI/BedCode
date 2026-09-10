@@ -1,111 +1,116 @@
 <script setup lang="ts">
 /**
- * FileTransferView — 文件传输双栏工作台（原型 Variant A）
+ * FileTransferView — 文件传输双栏工作台（host-peer 契约版）
  *
- * 顶栏（对端 pill + 下载所选/刷新/设置）+ 左栏 RemoteFileTable + 右栏
- * TaskPanel（360px 常驻）。空态分级：未配共享目录 → 未配对 → 未设下载目录。
- * 对端上/下线（filesrv:peer_changed）驱动目录自动加载与清空。
+ * 顶栏（对端 pill + 发送/下载所选/刷新/设置）+ 左栏 RemoteFileTable
+ * （对端共享根 → 根内目录两级浏览）+ 右栏 TaskPanel（批级队列）。
+ * 发送 = 系统选择器多选直发；接收 = 浏览勾选拉取；设备列表由
+ * devices-changed 事件驱动。
  */
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type {
+  PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
+} from '@binblink/bedcode-plugin-sdk-desktop'
 import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
-import BatchRequestDialog from './BatchRequestDialog.vue'
+import PeerDevicesPanel from './PeerDevicesPanel.vue'
 import { useTasks } from '../composables/useTasks'
 import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
-import { usePeer } from '../composables/usePeer'
+import { usePeerDevices } from '../composables/usePeerDevices'
+import { useBatchPrompt } from '../composables/useBatchPrompt'
 import { formatBytes } from '../utils/format'
+import type { PendingBatch } from '../types'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const {
-  peer,
+  rows: deviceRows,
   peers,
-  activePeerId,
-  connOnline,
+  peer,
+  connectedIds,
+  connect: connectDevice,
+  disconnect: disconnectDevice,
   switchPeer,
+  refresh: refreshDevices,
   start: startPeer,
   stop: stopPeer,
-} = usePeer(context)
-const { tasks, speedMap, summary, resumableCount, totalSpeed, enqueueDownload, enqueueUpload, queryPeer, refresh: refreshTasks, pause, resume, cancel, retry, removeTask, openInDir, resumeAll, start: startTasks, stop: stopTasks } = useTasks(context)
-const { batches, receiving, history, toasts, approveBatch, rejectBatch, cancelReceiving, clearHistory, dismissToast, start: startReceiving, stop: stopReceiving } = useReceiving(context)
-const { settings, hasRoots, load: loadSettings, addRoot, removeRoot, pickDownloadDir, setConcurrency, setReceivingPolicy, setApprovalTimeoutSec } = useSettings(context)
+} = usePeerDevices(context)
 const {
-  entries,
-  loading,
-  errorKey,
-  notice,
-  breadcrumb,
-  selectedNames,
-  currentPath,
-  selectedEntries,
-  clearSelection,
-  load: loadDir,
-  enterDir,
-  navigateTo,
-  toggleSelect,
-  toggleAll,
-  refresh: refreshDir,
-  stop: stopRemote,
-} = useRemoteFs(context, () => peer.value.id)
+  tasks,
+  totalSpeed,
+  refresh: refreshTasks,
+  sendPickedFiles,
+  cancel,
+  retry,
+  start: startTasks,
+  stop: stopTasks,
+} = useTasks(context)
+const {
+  batches,
+  receiving,
+  history,
+  toasts,
+  approveBatch,
+  rejectBatch,
+  cancelReceiving,
+  clearHistory: clearHistoryEntries,
+  dismissToast,
+  start: startReceiving,
+  stop: stopReceiving,
+} = useReceiving(context)
+const {
+  settings,
+  rootItems,
+  hasRoots,
+  load: loadSettings,
+  addRoot,
+  removeRoot,
+  pickDownloadDir,
+  setReceivingPolicy,
+  setApprovalTimeoutSec,
+  setEncryption,
+} = useSettings(context)
+/** 插件自身对等连接：存在任一已建立的对等连接（≠ 宿主主连接） */
+const peerConnected = computed(() => connectedIds.value.size > 0)
+
+const fs = useRemoteFs(context, () => peer.value.id)
 
 const showSettings = ref(false)
 
-/** 传输队列面板是否展开（默认收起，顶栏按钮切换） */
+/** 传输队列面板是否展开 */
 const queueVisible = ref(false)
 
-/**
- * 对端显示名：device-connected 缓存 → 任务快照 peer.name → peerId → IP。
- * 详见 usePeer 内设备名说明。
- */
+/** 对端显示名 */
 const peerDisplayName = computed(() => {
   if (peer.value.name) return peer.value.name
-  const withName = tasks.value.find(x => x.peer?.name)
+  const withName = tasks.value.find((x) => x.peer?.name)
   if (withName?.peer?.name) return withName.peer.name
-  // 无设备名时 IP 比原始 peerId 更可辨识（内网传输场景），再退到 peerId
-  if (peer.value.ip || peer.value.id) return peer.value.ip || peer.value.id
-  // 已连接但尚未收到对端公告（未共享）：无可辨识信息时用占位符，
-  // 避免与「未连接设备」文案混用
-  if (connOnline.value) return '—'
+  if (peer.value.id) return peer.value.id
+  if (peerConnected.value) return '—'
   return t('transfer.peer.unpaired')
 })
 
-const selectedCount = computed(() => selectedNames.value.length)
+const selectedCount = computed(() => fs.selectedNames.value.length)
 
-/** v2：对端名映射（peerId → 展示名，批卡/接收任务展示用） */
+/** 对端名映射（peerId → 展示名，批卡/接收任务展示用） */
 const peerNames = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
-  for (const p of peers.value) map[p.id] = p.name || p.ip || p.id
-  // 任务快照里的 peer.name 兜底（设备列表可能未含任务绑定的对端）
-  for (const t of tasks.value) {
-    if (t.peer?.deviceId && t.peer.name && !map[t.peer.deviceId]) {
-      map[t.peer.deviceId] = t.peer.name
+  for (const p of peers.value) map[p.id] = p.name || p.id
+  for (const tk of tasks.value) {
+    if (tk.peer?.deviceId && tk.peer.name && !map[tk.peer.deviceId]) {
+      map[tk.peer.deviceId] = tk.peer.name
     }
   }
   return map
 })
 
-/** v2：历史条目打开所在文件夹（localPath 直接可用）
- * 下载方向历史 local_path 为 .part 临时名（文件完成后已 rename 到最终路径），
- * 需去后缀后才存在；兼容旧库数据的同时与任务卡 openInDir 保持一致 */
-function openHistoryDir(localPath: string): void {
-  if (!localPath) return
-  // 与 openInDir 相同的 .part 剥离（历史库可能存旧 .part 路径，见 wasm 归档逻辑）
-  const finalPath = localPath.endsWith('.part')
-    ? localPath.slice(0, -'.part'.length)
-    : localPath
-  // 诊断：点击历史「打开所在文件夹」时打印实际解析出的定位路径
-  console.log(`[File Transfer] openHistoryDir raw=${localPath} -> ${finalPath}`)
-  void context.system.revealInDir(finalPath).catch((err: unknown) => {
-    console.error(`[File Transfer] reveal failed for "${finalPath}":`, err)
-  })
-}
-
-/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动，失败仅记日志） */
+/** 批请求应答（fire-and-forget） */
 function handleBatchApprove(batchId: string): void {
   approveBatch(batchId).catch((e: unknown) => {
     console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
@@ -117,116 +122,210 @@ function handleBatchReject(batchId: string): void {
   })
 }
 
-/** 顶栏状态文案：未连接 / 已连接但对端未共享 / 已连接 */
 const peerStatusLabel = computed(() => {
-  if (!connOnline.value) return t('transfer.peer.offline')
+  if (!peerConnected.value) return t('transfer.peer.offline')
   if (!peer.value.online) return t('transfer.peer.notSharing')
   return t('transfer.peer.online')
 })
 
-/** 主下载按钮可用性：有选择 + 对端已共享 + 已配下载目录 */
-const canDownload = computed(
-  () => selectedCount.value > 0 && peer.value.online && settings.value.downloadDir !== '',
-)
+/** 主下载按钮可用性：当前处于共享根内且有勾选 */
+const canDownload = computed(() => fs.currentRoot.value !== null && selectedCount.value > 0)
 
-/** 空态分支优先级：共享目录 → 对端 → 下载目录 */
+/** 空态分支优先级：共享目录 → 对端 */
 const showNoRoots = computed(() => !hasRoots.value)
-/** 无法浏览对端目录：未连接（提示未连接）或已连接但未共享（提示对端未共享） */
 const showNoPeer = computed(() => !peer.value.online)
 const noPeerLabel = computed(() =>
-  connOnline.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
+  peerConnected.value ? t('transfer.peer.notSharing') : t('transfer.empty.noPeer'),
 )
 
-/** 批量下载所选文件（remotePath 拼接当前目录路径）；入队成功后展开队列面板便于查看进度 */
+/** 拉取所选文件（一次 pull_files 批调用）；成功后展开队列面板 */
 async function handleDownload(): Promise<void> {
-  if (!canDownload.value) return
-  const base = currentPath.value
-  const paths = selectedEntries.value.map(e => (base ? `${base}/${e.name}` : e.name))
-  const ok = await enqueueDownload(paths, { id: peer.value.id, name: peerDisplayName.value })
-  clearSelection()
-  if (ok > 0) queueVisible.value = true
-}
-
-/** 顶栏刷新：任务列表 + 当前目录 + 主动探测对端状态 */
-async function handleRefresh(): Promise<void> {
-  await Promise.all([refreshTasks(), refreshDir(), queryPeer()])
-}
-
-/** 发送到手机：弹本地多文件选择 → 入队上传（对端根目录）；入队成功后展开队列面板便于查看进度 */
-async function handleUpload(): Promise<void> {
-  if (!peer.value.online) return
-  const files = await context.fileService.pickFiles()
-  if (!files.length) return
-  const ok = await enqueueUpload(files, { id: peer.value.id, name: peerDisplayName.value })
-  if (ok > 0) queueVisible.value = true
-  if (ok < files.length) {
-    // 部分失败（如对端同名拒绝）时刷新任务列表让用户看到 rejected 原因
-    void refreshTasks()
+  if (!canDownload.value || !fs.currentRoot.value) return
+  try {
+    await context.commands.execute('file-transfer.pull-files', {
+      dirId: fs.currentRoot.value.id,
+      // 当前所在根内相对路径：嵌套目录勾选下载必须带上，否则对端按根目录
+      // 解析文件名 → not-found（根清单层不可勾选，relPath 恒有 currentRoot 伴生）
+      path: fs.relPath.value,
+      files: fs.selectedNames.value,
+    })
+    fs.clearSelection()
+    queueVisible.value = true
+  } catch (e) {
+    console.error('[File Transfer] pull-files failed:', e)
   }
 }
 
-/** 设备切换菜单开合（多对端切换入口） */
-const peerMenuOpen = ref(false)
-
-/** 切换激活设备：关菜单 + 调插件命令；成功由 activePeerId 变化驱动目录重载 */
-async function handleSwitchPeer(id: string): Promise<void> {
-  peerMenuOpen.value = false
-  await switchPeer(id)
+/** 顶栏刷新：任务 + 当前目录层级 + 设备缓存清扫 */
+async function handleRefresh(): Promise<void> {
+  await Promise.all([refreshTasks(), fs.refresh(), refreshDevices()])
 }
 
-/** 激活设备变化（上线自动激活 / 手动切换）驱动目录加载/清空 */
-watch(
-  () => peer.value.id,
-  (id) => {
-    if (id) {
-      // 重置到根目录：切换设备后旧面包屑路径可能在新对端不存在
-      navigateTo(0)
-    } else {
-      stopRemote()
-      clearSelection()
-    }
-  },
+/** 发送到手机：系统多文件选择器直发活跃对端 */
+async function handleUpload(): Promise<void> {
+  if (!peer.value.online) return
+  const ok = await sendPickedFiles()
+  if (ok > 0) queueVisible.value = true
+}
+
+/** 下载完成 → 打开本地所在目录（system.revealInDir） */
+async function handleOpenFolder(path: string): Promise<void> {
+  try {
+    await context.system.revealInDir(path)
+  } catch (e) {
+    console.error('[File Transfer] open folder failed:', e)
+  }
+}
+
+/** 附近设备面板开合（点击外部关闭，见 onMounted 文档监听） */
+const devPanelOpen = ref(false)
+const devPanelWrap = ref<HTMLElement | null>(null)
+
+/** 已连接设备数（顶栏入口角标语义：可互传的设备数） */
+const connectedCount = computed(
+  () => deviceRows.value.filter((r) => r.status === 'connected').length,
 )
+
+function handleConnectDevice(nodeId: string): void {
+  void connectDevice(nodeId)
+}
+
+function handleDisconnectDevice(nodeId: string): void {
+  void disconnectDevice(nodeId)
+}
+
+/** 探索发现进行中（面板扫描按钮 spinner 态） */
+const deviceScanning = ref(false)
+
+/** 探索发现：重新拉取发现快照（query-peer），完成后恢复按钮态 */
+async function handleScanDevices(): Promise<void> {
+  if (deviceScanning.value) return
+  deviceScanning.value = true
+  try {
+    await refreshDevices()
+  } finally {
+    deviceScanning.value = false
+  }
+}
+
+async function handleSetActiveDevice(nodeId: string): Promise<void> {
+  await switchPeer(nodeId)
+}
+
+/** 点击面板外部时收起（capture 阶段拦截，避免先触发内部点击） */
+function handleDocClick(e: MouseEvent): void {
+  if (!devPanelOpen.value) return
+  if (devPanelWrap.value && !devPanelWrap.value.contains(e.target as Node)) {
+    devPanelOpen.value = false
+  }
+}
+
+onMounted(() => {
+  document.addEventListener('click', handleDocClick, true)
+})
+
+onUnmounted(() => {
+  document.removeEventListener('click', handleDocClick, true)
+})
 
 onMounted(async () => {
   startPeer()
   startTasks()
   startReceiving()
   await Promise.all([loadSettings(), refreshTasks()])
-  // 主动探测对端状态（防止先挂载后连接/广播丢失导致状态未同步）
-  void queryPeer()
-  if (peer.value.online) await loadDir()
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', handleDocClick, true)
   stopPeer()
   stopTasks()
   stopReceiving()
-  stopRemote()
+  batchDialog?.close()
+  batchDialog = null
 })
+
+/** 激活设备变化驱动目录加载/清空 */
+watch(
+  () => peer.value.id,
+  (id) => {
+    if (id) {
+      void fs.loadRoots()
+    } else {
+      fs.reset()
+    }
+  },
+)
+
+// ==================== 传入批请求全局弹窗（宿主通用弹窗，预设模式） ====================
+
+/**
+ * 待确认批提示：由 useBatchPrompt 选择当前批，经宿主全局弹窗渲染
+ *（任何页面可见；计调式基于批创建时间 + 超时配置，迟到/切换后仍准确）。
+ * 超时默认拒绝由宿主 TTL 执行（reason=timeout），前端仅标记并推进。
+ */
+const prompt = useBatchPrompt(batches)
+let batchDialog: PluginDialogHandle | null = null
+
+function buildBatchDialogOptions(batch: PendingBatch): PluginDialogOptions {
+  const timeoutMs = settings.value.approvalTimeoutSec * 1000
+  return {
+    title: t('transfer.request.title'),
+    icon: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3',
+    message: t('transfer.request.body', {
+      name: batch.peerName || t('transfer.peer.unknown'),
+      count: batch.files?.length ?? 1,
+      size: formatBytes(batch.totalSize),
+    }),
+    // 倒计时基于批创建时间 + 配置超时（迟到打开/排队续算仍准确）
+    countdownLabel: t('transfer.request.countdown'),
+    deadlineAt: batch.createdAt + timeoutMs,
+    actions: [
+      {
+        label: t('transfer.request.rejectAll'),
+        kind: 'default',
+        onClick: () => handleBatchReject(batch.batchId),
+      },
+      {
+        label: t('transfer.request.acceptAll'),
+        kind: 'primary',
+        onClick: () => handleBatchApprove(batch.batchId),
+      },
+    ],
+    // 必须明确选择「接收全部 / 拒绝全部」（无背景关闭、无关闭按钮）
+    closable: false,
+    closeOnBackdrop: false,
+    onTimeout: () => prompt.markTimeout(),
+    onClose: () => {
+      batchDialog = null
+    },
+  }
+}
+
+// 当前批变化 → 开 / 热更新 / 关（关闭动作由 onClose 清句柄，下一批自动重开）
+watch(
+  () => prompt.current.value,
+  (cur) => {
+    if (cur && !batchDialog) {
+      batchDialog = context.ui.showDialog(buildBatchDialogOptions(cur))
+    } else if (cur && batchDialog) {
+      batchDialog.update(buildBatchDialogOptions(cur))
+    } else if (!cur && batchDialog) {
+      batchDialog.close()
+      batchDialog = null
+    }
+  },
+)
 </script>
 
 <template>
   <div class="ft-view">
-    <!-- v2：批量传输请求全局弹窗（排队 + 倒计时超时默认拒绝；批 resolved 自动切换下一批） -->
-    <BatchRequestDialog
-      :batches="batches"
-      :approval-timeout-sec="settings.approvalTimeoutSec"
-      @approve="handleBatchApprove"
-      @reject="handleBatchReject"
-    />
-
     <!-- 顶栏 -->
     <div class="ft-topbar">
       <div class="ft-peer-pill">
         <span
           class="ft-dot"
           :class="
-            connOnline
-              ? peer.online
-                ? 'ft-dot--online'
-                : 'ft-dot--partial'
-              : 'ft-dot--offline'
+            peerConnected ? (peer.online ? 'ft-dot--online' : 'ft-dot--partial') : 'ft-dot--offline'
           "
         ></span>
         <span class="ft-peer-name">{{ peerDisplayName }}</span>
@@ -234,60 +333,90 @@ onUnmounted(() => {
           {{ peerStatusLabel }}
         </span>
       </div>
-      <!-- 设备切换：多对端场景点击弹出在线设备列表 -->
-      <div class="ft-peer-switch-wrap">
+      <!-- 附近设备面板：三态连接管理（自绘，禁原生 select；点击外部收起） -->
+      <div ref="devPanelWrap" class="ft-peer-switch-wrap">
         <button
           class="ft-btn ft-peer-switch-btn"
-          :class="{ 'ft-peer-switch-btn--open': peerMenuOpen }"
-          :disabled="peers.length === 0"
+          :class="{ 'ft-peer-switch-btn--open': devPanelOpen }"
           :title="t('transfer.peer.switchTitle')"
-          @click="peerMenuOpen = !peerMenuOpen"
+          @click="devPanelOpen = !devPanelOpen"
         >
-          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+          <svg
+            class="w-3.5 h-3.5 flex-shrink-0"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"
+            />
           </svg>
-          <span class="ft-btn-text">{{ peers.length }}</span>
+          <span class="ft-btn-text">{{ connectedCount }}</span>
         </button>
-        <!-- 设备列表下拉（自绘，禁原生 select） -->
         <Transition name="ft-drop">
-          <div v-if="peerMenuOpen" class="ft-peer-menu">
-            <div class="ft-peer-menu-title">{{ t('transfer.peer.switchTitle') }}</div>
-            <button
-              v-for="p in peers"
-              :key="p.id"
-              class="ft-peer-menu-item"
-              :class="{ 'ft-peer-menu-item--active': p.id === activePeerId }"
-              @click="handleSwitchPeer(p.id)"
-            >
-              <!-- 列表内对端均为在线（peer_changed online 才入列），统一绿点，激活项以高亮+勾标识 -->
-              <span class="ft-dot ft-dot--online"></span>
-              <span class="ft-peer-menu-name">{{ p.name || p.ip || p.id }}</span>
-              <span v-if="p.id === activePeerId" class="ft-peer-menu-check">
-                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7" />
-                </svg>
-              </span>
-            </button>
-          </div>
+          <PeerDevicesPanel
+            v-if="devPanelOpen"
+            :rows="deviceRows"
+            :scanning="deviceScanning"
+            @connect="handleConnectDevice"
+            @disconnect="handleDisconnectDevice"
+            @set-active="handleSetActiveDevice"
+            @scan="handleScanDevices"
+          />
         </Transition>
       </div>
       <div class="ft-spacer"></div>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleUpload" :title="t('transfer.topbar.sendToPhone')">
+      <button
+        class="ft-btn"
+        :disabled="!peer.online"
+        :title="t('transfer.topbar.sendToPhone')"
+        @click="handleUpload"
+      >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.sendToPhone') }}</span>
       </button>
       <button class="ft-btn ft-btn--primary" :disabled="!canDownload" @click="handleDownload">
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"
+          />
         </svg>
-        <span class="ft-btn-text">{{ t('transfer.topbar.downloadSelected', { count: selectedCount }) }}</span>
+        <span class="ft-btn-text">{{
+          t('transfer.topbar.downloadSelected', { count: selectedCount })
+        }}</span>
       </button>
-      <button class="ft-btn" :disabled="!peer.online" @click="handleRefresh" :title="t('transfer.topbar.refresh')">
+      <button
+        class="ft-btn"
+        :disabled="!peer.online"
+        :title="t('transfer.topbar.refresh')"
+        @click="handleRefresh"
+      >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M23 4v6h-6M1 20v-6h6" />
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M23 4v6h-6M1 20v-6h6"
+          />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.refresh') }}</span>
       </button>
@@ -299,7 +428,12 @@ onUnmounted(() => {
         @click="queueVisible = !queueVisible"
       >
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h10" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 7h16M4 12h16M4 17h10"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.queue.title') }}</span>
         <span
@@ -310,9 +444,14 @@ onUnmounted(() => {
           {{ tasks.length }}
         </span>
       </button>
-      <button class="ft-btn" @click="showSettings = true" :title="t('transfer.topbar.settings')">
+      <button class="ft-btn" :title="t('transfer.topbar.settings')" @click="showSettings = true">
         <svg class="ft-ico-btn" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6" />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="2"
+            d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"
+          />
         </svg>
         <span class="ft-btn-text">{{ t('transfer.topbar.settings') }}</span>
       </button>
@@ -324,63 +463,71 @@ onUnmounted(() => {
       <Transition name="ft-page" mode="out-in">
         <!-- 空态：未配置共享目录 -->
         <div v-if="showNoRoots" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z" />
-          </svg>
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
+          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+            {{ t('transfer.topbar.settings') }}
+          </button>
         </div>
-        <div class="ft-empty-title">{{ t('transfer.empty.noRoots') }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noRootsHint') }}</div>
-        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-          {{ t('transfer.topbar.settings') }}
-        </button>
-      </div>
 
-      <!-- 空态：对端未连接 / 已连接但未共享 -->
-      <div v-else-if="showNoPeer" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 18h2" />
-          </svg>
+        <!-- 空态：对端未连接 / 已连接但未共享 -->
+        <div v-else-if="showNoPeer" class="ft-empty">
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="6" y="2" width="12" height="20" rx="2" ry="2" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M11 18h2"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ noPeerLabel }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
         </div>
-        <div class="ft-empty-title">{{ noPeerLabel }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noPeerHint') }}</div>
-      </div>
 
-      <!-- 空态：未设置下载目录 -->
-      <div v-else-if="settings.downloadDir === ''" class="ft-empty">
-        <div class="ft-empty-ico">
-          <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 3v12M5 12l7 7 7-7" />
-          </svg>
+        <!-- 空态：未设置下载目录 -->
+        <div v-else-if="settings.downloadDir === ''" class="ft-empty">
+          <div class="ft-empty-ico">
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="1.5"
+                d="M12 3v12M5 12l7 7 7-7"
+              />
+            </svg>
+          </div>
+          <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
+          <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
+          <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
+            {{ t('transfer.topbar.settings') }}
+          </button>
         </div>
-        <div class="ft-empty-title">{{ t('transfer.empty.noDownloadDir') }}</div>
-        <div class="ft-empty-desc">{{ t('transfer.empty.noDownloadDirHint') }}</div>
-        <button class="ft-btn ft-btn--primary ft-empty-action" @click="showSettings = true">
-          {{ t('transfer.topbar.settings') }}
-        </button>
-      </div>
 
-        <!-- 工作态：远端文件表格（含对端存储权限提示） -->
+        <!-- 工作态：远端文件表格 -->
         <div v-else class="ft-browse">
-          <!-- 对端存储权限提示：列表为空且对端（移动端）可能未授予「所有文件访问权限」 -->
-          <Transition name="ft-fade">
-            <div v-if="notice === 'all_files_access_may_be_required'" class="ft-warning">
-              <span class="ft-warning-ico">⚠</span>
-              <span>{{ t('transfer.notice.storageAccess') }}</span>
-            </div>
-          </Transition>
           <RemoteFileTable
-            :entries="entries"
-            :loading="loading"
-            :error-key="errorKey"
-            :breadcrumb="breadcrumb"
-            :selected-names="selectedNames"
-            @enter="enterDir"
-            @navigate="navigateTo"
-            @toggle="toggleSelect"
-            @toggle-all="toggleAll"
+            :entries="fs.entries.value"
+            :loading="fs.loading.value"
+            :error-key="fs.errorKey.value"
+            :breadcrumb="fs.breadcrumb.value"
+            :selected-names="fs.selectedNames.value"
+            @enter="fs.cd"
+            @navigate="fs.goTo"
+            @toggle="fs.toggle"
+            @toggle-all="fs.toggleAll"
           />
         </div>
       </Transition>
@@ -390,23 +537,16 @@ onUnmounted(() => {
         <TaskPanel
           v-if="queueVisible"
           :tasks="tasks"
-          :speed-map="speedMap"
-          :summary="summary"
-          :resumable-count="resumableCount"
           :total-speed="totalSpeed"
           :receiving="receiving"
           :history="history"
           :peer-names="peerNames"
-          @pause="pause"
-          @resume="resume"
+          :download-dir="settings.downloadDir"
           @cancel="cancel"
           @retry="retry"
-          @remove="removeTask"
-          @open-dir="openInDir"
-          @resume-all="resumeAll"
           @cancel-receiving="cancelReceiving"
-          @clear-history="clearHistory"
-          @open-history-dir="openHistoryDir"
+          @clear-history="clearHistoryEntries"
+          @open-folder="handleOpenFolder"
         />
       </Transition>
     </div>
@@ -416,29 +556,49 @@ onUnmounted(() => {
       <TransitionGroup name="ft-toast" tag="div" class="ft-toasts">
         <div v-for="toast in toasts" :key="toast.id" class="ft-toast">
           <svg class="ft-toast-ico" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19V5M5 12l7-7 7 7" />
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="2"
+              d="M12 19V5M5 12l7-7 7 7"
+            />
           </svg>
           <span class="ft-toast-text">
             {{ t('transfer.toast.receiving', { name: toast.name || '—', count: toast.count }) }}
           </span>
-          <button class="ft-mini-btn ft-toast-close" :title="t('transfer.task.cancel')" @click="dismissToast(toast.id)">
-            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 6L6 18M6 6l12 12" /></svg>
+          <button
+            class="ft-mini-btn ft-toast-close"
+            :title="t('transfer.task.cancel')"
+            @click="dismissToast(toast.id)"
+          >
+            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M18 6L6 18M6 6l12 12"
+              />
+            </svg>
           </button>
         </div>
       </TransitionGroup>
     </Teleport>
 
-    <!-- 设置覆盖层（淡入 + 上滑） -->
+    <!-- 设置覆盖层（淡入 + 上滑）。注：SettingsPanel 曾因 defineEmits 缺失调用
+         括号（宏未被展开，运行时 ReferenceError）导致半初始化组件毒化本层
+         Transition 的更新路径（locateNonHydratedAsyncRoot 遍历遇 null subTree
+         抛错），覆盖层永不出现；宏修复后 Transition 工作正常 -->
     <Transition name="ft-settings">
       <SettingsPanel
         v-if="showSettings"
         :settings="settings"
+        :root-items="rootItems"
         @add-root="addRoot"
         @remove-root="removeRoot"
         @pick-download-dir="pickDownloadDir"
-        @set-concurrency="setConcurrency"
         @set-receiving-policy="setReceivingPolicy"
         @set-approval-timeout-sec="setApprovalTimeoutSec"
+        @set-encryption="setEncryption"
         @close="showSettings = false"
       />
     </Transition>

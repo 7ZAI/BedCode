@@ -10,7 +10,15 @@ import { relaunch } from '@tauri-apps/plugin-process'
 import i18n from '@/locales'
 
 /** 更新状态 */
-type UpdateStatus = 'idle' | 'checking' | 'available' | 'latest' | 'failed' | 'downloading' | 'downloaded' | 'installing'
+type UpdateStatus =
+  | 'idle'
+  | 'checking'
+  | 'available'
+  | 'latest'
+  | 'failed'
+  | 'downloading'
+  | 'downloaded'
+  | 'installing'
 
 const status = ref<UpdateStatus>('idle')
 const downloadProgress = ref({ downloaded: 0, contentLength: 0 })

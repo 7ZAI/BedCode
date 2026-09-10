@@ -9,9 +9,14 @@
 import { ref, computed } from 'vue'
 import type { ApiProvider, ProviderPreset, ApiStyle } from '../types'
 import { generateId } from '../types'
-import { buildCompleteRequest, buildModelsRequest, getAdapter, parseModelsResponse } from '../adapters/registry'
+import {
+  buildCompleteRequest,
+  buildModelsRequest,
+  getAdapter,
+  parseModelsResponse,
+} from '../adapters/registry'
 import { isValidBaseUrl } from '../adapters/utils'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 
 const STORAGE_PROVIDERS = 'apiProviders'
 const STORAGE_ACTIVE_PROVIDER = 'activeProvider'
@@ -38,8 +43,8 @@ export function useAiConfig(context: PluginContext) {
   const activeModel = ref('')
   const loading = ref(false)
 
-  const activeProvider = computed(() =>
-    providers.value.find(p => p.id === activeProviderId.value) || null
+  const activeProvider = computed(
+    () => providers.value.find((p) => p.id === activeProviderId.value) || null,
   )
 
   const hasProvider = computed(() => providers.value.length > 0)
@@ -61,7 +66,8 @@ export function useAiConfig(context: PluginContext) {
       }
       activeProviderId.value = activeId || (providers.value[0]?.id ?? '')
       if (!activeModel.value) {
-        activeModel.value = model || providers.value[0]?.activeModel || providers.value[0]?.models[0] || ''
+        activeModel.value =
+          model || providers.value[0]?.activeModel || providers.value[0]?.models[0] || ''
       }
       // 恢复的 activeModel 若不属于当前供应商（该供应商已删除或模型列表变更），
       // 回退到供应商记录/首个模型，避免模型选择器显示无效选中
@@ -100,7 +106,7 @@ export function useAiConfig(context: PluginContext) {
   /** 持久化 providers 列表（同步 activeProviderId 有效性） */
   async function saveProviders(): Promise<void> {
     await context.storage.set(STORAGE_PROVIDERS, providers.value)
-    if (activeProviderId.value && !providers.value.some(p => p.id === activeProviderId.value)) {
+    if (activeProviderId.value && !providers.value.some((p) => p.id === activeProviderId.value)) {
       activeProviderId.value = providers.value[0]?.id || ''
       await context.storage.set(STORAGE_ACTIVE_PROVIDER, activeProviderId.value)
     }
@@ -140,7 +146,7 @@ export function useAiConfig(context: PluginContext) {
 
   /** 更新供应商（含模型/activeModel 变更） */
   async function updateProvider(provider: ApiProvider): Promise<void> {
-    const idx = providers.value.findIndex(p => p.id === provider.id)
+    const idx = providers.value.findIndex((p) => p.id === provider.id)
     if (idx === -1) return
     providers.value[idx] = { ...provider }
     await saveProviders()
@@ -153,7 +159,7 @@ export function useAiConfig(context: PluginContext) {
 
   /** 删除供应商（同时清理 active 引用） */
   async function removeProvider(id: string): Promise<void> {
-    providers.value = providers.value.filter(p => p.id !== id)
+    providers.value = providers.value.filter((p) => p.id !== id)
     await saveProviders()
     if (activeProviderId.value === id) {
       activeProviderId.value = providers.value[0]?.id || ''
@@ -166,7 +172,7 @@ export function useAiConfig(context: PluginContext) {
   async function setActiveProvider(id: string): Promise<void> {
     activeProviderId.value = id
     await context.storage.set(STORAGE_ACTIVE_PROVIDER, id)
-    const p = providers.value.find(x => x.id === id)
+    const p = providers.value.find((x) => x.id === id)
     if (p) {
       activeModel.value = p.activeModel || p.models[0] || ''
       await context.storage.set(STORAGE_ACTIVE_MODEL, activeModel.value)

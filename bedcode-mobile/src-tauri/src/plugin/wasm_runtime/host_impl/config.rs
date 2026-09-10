@@ -16,9 +16,7 @@ pub(crate) fn config_get(state: &WasmPluginState, key: &str) -> Result<Option<St
 
     // 穷尽 match：新增 ConfigKey 变体必须在此补实现（编译错误兜底）
     let value = match config_key {
-        bedcode_plugin_api_mobile::ConfigKey::AppDownloadsDir => {
-            resolve_downloads_dir_state(state)?
-        }
+        bedcode_plugin_api_mobile::ConfigKey::AppDownloadsDir => resolve_downloads_dir_state(state)?,
         bedcode_plugin_api_mobile::ConfigKey::CurrentTimeMs => {
             // wasm32-unknown-unknown 无系统时钟（SystemTime/Instant 均 panic），
             // 插件经此获取真实时间（Unix 毫秒）

@@ -7,7 +7,7 @@
  * 目录状态全部来自 props，交互经 emit 交给父级 composable。
  */
 import { computed, inject } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 import type { Crumb } from '../composables/useRemoteFs'
 import { formatBytes, formatModified } from '../utils/format'
@@ -26,7 +26,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  (e: 'enter', entry: RemoteEntry): void
+  (e: 'enter', name: string): void
   (e: 'navigate', index: number): void
   (e: 'toggle', name: string): void
   (e: 'toggleAll'): void
@@ -34,14 +34,14 @@ const emit = defineEmits<{
 
 /** 是否全部文件已被选中（表头全选框状态） */
 const allSelected = computed(() => {
-  const fileNames = props.entries.filter(e => !e.isDir)
-  return fileNames.length > 0 && fileNames.every(e => props.selectedNames.includes(e.name))
+  const fileNames = props.entries.filter((e) => !e.isDir)
+  return fileNames.length > 0 && fileNames.every((e) => props.selectedNames.includes(e.name))
 })
 
 /** 部分文件被选中（表头半选态：驱动原生 checkbox 的 indeterminate 属性） */
 const someSelected = computed(() => {
-  const fileNames = props.entries.filter(e => !e.isDir)
-  const selectedCount = fileNames.filter(e => props.selectedNames.includes(e.name)).length
+  const fileNames = props.entries.filter((e) => !e.isDir)
+  const selectedCount = fileNames.filter((e) => props.selectedNames.includes(e.name)).length
   return selectedCount > 0 && !allSelected.value
 })
 
@@ -50,7 +50,9 @@ const isRoot = computed(() => props.breadcrumb.length <= 1)
 
 /** 双击行：目录进入，文件无操作 */
 function onRowDblClick(entry: RemoteEntry): void {
-  if (entry.isDir) emit('enter', entry)
+  // 只传名字：cd(name) 在根清单层按名回查根 id、目录层拼相对路径；
+  // 传整个对象会被当作 name 字符串层层透传（面包屑渲染 JSON、dirId 序列化后丢失→列表恒空）
+  if (entry.isDir) emit('enter', entry.name)
 }
 </script>
 
@@ -95,7 +97,15 @@ function onRowDblClick(entry: RemoteEntry): void {
                     @change="emit('toggleAll')"
                   />
                   <span class="ft-checkbox-box" aria-hidden="true">
-                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      class="ft-checkbox-mark"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M5 13l4 4L19 7" />
                     </svg>
                     <span class="ft-checkbox-indet"></span>
@@ -115,10 +125,7 @@ function onRowDblClick(entry: RemoteEntry): void {
               @dblclick="onRowDblClick(entry)"
             >
               <td>
-                <label
-                  class="ft-checkbox"
-                  :class="{ 'ft-checkbox--disabled': entry.isDir }"
-                >
+                <label class="ft-checkbox" :class="{ 'ft-checkbox--disabled': entry.isDir }">
                   <!-- 原生 checkbox 仅作交互内核；目录行隐藏（与目录不可勾选语义一致） -->
                   <input
                     type="checkbox"
@@ -128,7 +135,15 @@ function onRowDblClick(entry: RemoteEntry): void {
                     @change="emit('toggle', entry.name)"
                   />
                   <span class="ft-checkbox-box" aria-hidden="true">
-                    <svg class="ft-checkbox-mark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round">
+                    <svg
+                      class="ft-checkbox-mark"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="3.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
                       <path d="M5 13l4 4L19 7" />
                     </svg>
                   </span>

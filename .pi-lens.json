@@ -1,0 +1,78 @@
+{
+  "$schema": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
+  "format": { "enabled": false },
+  "autofix": { "enabled": false },
+  "ignore": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/target/**",
+    "**/gen/**",
+    "**/.scratch/**",
+    "**/.pi-lens-cache/**",
+    "bedcode-mobile/src-tauri/gen/**",
+    "bedcode-desktop/src-tauri/target/**",
+    "bedcode-mobile/src-tauri/target/**",
+    "**/packages/plugin-sdk-desktop/template/**",
+    "**/packages/plugin-sdk-mobile/template/**"
+  ],
+  "lsp": {
+    "serverOverrides": {
+      "rust": {
+        "initializationOptions": {
+          "checkOnSave": false,
+          "cachePriming": { "enable": false },
+          "cargo": {
+            "autoreload": false,
+            "buildScripts": { "rebuildOnSave": false }
+          },
+          "diagnostics": { "enable": true }
+        }
+      }
+    },
+    "disabledServers": [
+      "rust",
+      "deno",
+      "python",
+      "python-jedi",
+      "go",
+      "ruby",
+      "php",
+      "powershell",
+      "csharp",
+      "omnisharp",
+      "fsharp",
+      "java",
+      "kotlin",
+      "swift",
+      "dart",
+      "lua",
+      "cpp",
+      "zig",
+      "haskell",
+      "elixir",
+      "expert",
+      "gleam",
+      "marksman",
+      "ocaml",
+      "clojure",
+      "cue",
+      "terraform",
+      "nix",
+      "bash",
+      "fish",
+      "cmake",
+      "docker",
+      "yaml",
+      "json",
+      "html",
+      "toml",
+      "prisma",
+      "svelte",
+      "css",
+      "opengrep",
+      "ast-grep",
+      "zizmor",
+      "typos"
+    ]
+  }
+}

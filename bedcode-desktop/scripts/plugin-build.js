@@ -52,6 +52,12 @@ if (!config) {
 
 console.log(`\n=== Plugin Build: ${targetPlugin} ===\n`)
 
+// 插件调试模式提示（BEDCODE_PLUGIN_DEBUG 经 env 透传给插件构建脚本；
+// release 构建不应设置该变量，宿主以 cfg!(debug_assertions) 兜底）
+if (process.env.BEDCODE_PLUGIN_DEBUG) {
+  console.log('[plugin-build] 注意：BEDCODE_PLUGIN_DEBUG 已设置——插件将以 debug profile 构建（仅供调试）')
+}
+
 // 委托给插件的构建脚本
 const pluginDir = resolve(ROOT, config.pluginDir)
 console.log(`Running plugin build in: ${pluginDir}`)
@@ -72,8 +78,8 @@ try {
 }
 
 try {
-  const npmCmd = IS_WIN ? 'npm.cmd' : 'npm'
-  execSync(`${npmCmd} run build`, {
+  const pkgMgrCmd = IS_WIN ? 'pnpm.cmd' : 'pnpm'
+  execSync(`${pkgMgrCmd} run build`, {
     cwd: pluginDir,
     stdio: 'inherit',
     env: { ...process.env },

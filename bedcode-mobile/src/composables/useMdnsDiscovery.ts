@@ -5,6 +5,7 @@
  */
 
 import { ref, readonly } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
@@ -36,12 +37,12 @@ async function initListeners() {
   listenersInitialized = true
 
   unlistenFound = await listen<{ instance_name: string }>('mdns_service_found', (event) => {
-    console.debug('[MdnsDiscovery] Service found:', event.payload.instance_name)
+    logger.debug('[MdnsDiscovery] Service found:', event.payload.instance_name)
   })
 
   unlistenResolved = await listen<DiscoveredService>('mdns_service_resolved', (event) => {
     const service = event.payload
-    console.log('[MdnsDiscovery] Service resolved:', service.device_name, service.address, service.port)
+    logger.log('[MdnsDiscovery] Service resolved:', service.device_name, service.address, service.port)
     // 更新或添加到列表（同一实例名只保留最新）
     const index = discoveredServices.value.findIndex(s => s.instance_name === service.instance_name)
     if (index !== -1) {
@@ -52,7 +53,7 @@ async function initListeners() {
   })
 
   unlistenRemoved = await listen<{ instance_name: string }>('mdns_service_removed', (event) => {
-    console.debug('[MdnsDiscovery] Service removed:', event.payload.instance_name)
+    logger.debug('[MdnsDiscovery] Service removed:', event.payload.instance_name)
     discoveredServices.value = discoveredServices.value.filter(
       s => s.instance_name !== event.payload.instance_name
     )
@@ -85,7 +86,7 @@ export function useMdnsDiscovery() {
     try {
       await invoke('mdns_start_discovery')
     } catch (e) {
-      console.error('[MdnsDiscovery] Failed to start:', e)
+      logger.error('[MdnsDiscovery] Failed to start:', e)
       isScanning.value = false
       throw e
     }
@@ -96,7 +97,7 @@ export function useMdnsDiscovery() {
     try {
       await invoke('mdns_stop_discovery')
     } catch (e) {
-      console.error('[MdnsDiscovery] Failed to stop:', e)
+      logger.error('[MdnsDiscovery] Failed to stop:', e)
     } finally {
       isScanning.value = false
       cleanupListeners()
@@ -108,7 +109,7 @@ export function useMdnsDiscovery() {
       const services: DiscoveredService[] = await invoke('mdns_get_discovered_services')
       discoveredServices.value = services
     } catch (e) {
-      console.error('[MdnsDiscovery] Failed to refresh:', e)
+      logger.error('[MdnsDiscovery] Failed to refresh:', e)
     }
   }
 

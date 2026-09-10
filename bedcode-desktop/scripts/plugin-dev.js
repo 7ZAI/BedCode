@@ -51,11 +51,17 @@ if (!config) {
 
 console.log(`\n=== Plugin Dev: ${targetPlugin} ===\n`)
 
+// 插件调试模式提示（BEDCODE_PLUGIN_DEBUG 经 env 透传给插件构建脚本，
+// 其 build.js 按开关切 debug profile 产物）
+if (process.env.BEDCODE_PLUGIN_DEBUG) {
+  console.log('[plugin-dev] BEDCODE_PLUGIN_DEBUG 已设置——插件将以 debug profile 构建（DWARF 行号）')
+}
+
 // 委托给插件的构建脚本
 const pluginDir = resolve(ROOT, config.pluginDir)
 console.log(`Running plugin dev build in: ${pluginDir}`)
 
-const proc = spawn(IS_WIN ? 'npm.cmd' : 'npm', ['run', 'dev'], {
+const proc = spawn(IS_WIN ? 'pnpm.cmd' : 'pnpm', ['run', 'dev'], {
   cwd: pluginDir,
   stdio: 'inherit',
   env: { ...process.env },

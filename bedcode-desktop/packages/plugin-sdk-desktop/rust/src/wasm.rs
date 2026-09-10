@@ -4,7 +4,7 @@
 //! wasm_entry! 宏 — 生成组件世界（WIT `bedcode:plugin` world）的全部导出实现
 //!
 //! 插件开发者只需实现 WasmPlugin trait，然后调用 wasm_entry!(MyPlugin)。
-//! 宏展开为 wit-bindgen 生成的 7 组 `Guest` trait 实现 + `export!` 导出，
+//! 宏展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现 + `export!` 导出，
 //! 产物为组件（component）而非旧 ABI 的 core module：
 //! - 内存搬运由绑定层处理，不再有 (ptr,len) 与 alloc/dealloc 配对
 //! - 契约定义在 `wit/bedcode.wit`（单一事实来源），接口漂移编译期即暴露
@@ -21,7 +21,7 @@
 //!   （`exports::bedcode::plugin::<iface>::Guest`）随宏体解析到 SDK
 
 use crate::events::{InputSubmittedEvent, ProcessDoneEvent, SessionLifecycleEvent};
-use crate::types::{PluginManifest, TransferRequestMeta, UploadHookDecision, UploadRequestMeta};
+use crate::types::PluginManifest;
 use crate::BusMessage;
 
 wit_bindgen::generate!({
@@ -64,11 +64,17 @@ pub trait WasmPlugin: Send + Sync + 'static {
     }
 
     /// 应用启动完成回调（可选）
+    ///
+    /// 启动初始化（建表、注册扩展点、加载资源等）在此执行；
+    /// 返回 Err 时宿主将插件置为 Degraded（实例可用但启动未就绪），
+    /// 不再被静默忽略。panic 由宿主捕获并按故障处理
     fn on_startup() -> anyhow::Result<()> {
         Ok(())
     }
 
     /// 应用即将关闭回调（可选）
+    ///
+    /// 返回 Err 仅记录日志（停用流程继续），不影响插件状态机
     fn on_shutdown() -> anyhow::Result<()> {
         Ok(())
     }
@@ -104,27 +110,6 @@ pub trait WasmPlugin: Send + Sync + 'static {
     /// 不走消息总线。事件为类型化结构体（宏已从 JSON 载荷解析）。
     fn on_process_done(_event: &ProcessDoneEvent) -> anyhow::Result<()> {
         Ok(())
-    }
-
-    /// 上传请求策略钩子（可选，默认 fail-closed 拒绝）
-    ///
-    /// 宿主在文件服务上传会话创建时调用一次（写任何字节前），
-    /// 同步阻塞上传握手，宿主外层 2 秒超时。「同名即拒」等策略
-    /// 由插件在此实现（目标目录存在同名文件 → deny("duplicate-name")）。
-    ///
-    /// 默认拒绝：插件未覆盖此方法时，所有上传都会被拒绝（fail-closed，安全优先）
-    fn on_upload_request(_meta: &UploadRequestMeta) -> UploadHookDecision {
-        UploadHookDecision::deny("plugin does not implement on_upload_request")
-    }
-
-    /// 批量传输请求钩子（v2，可选，默认 fail-closed 拒绝）
-    ///
-    /// 宿主在 POST /transfer-request 时调用一次（批 ID + 文件清单 + 总大小）。
-    /// 三路决定：allow = 直接批准；ask = 批置 pending 等待用户应答；
-    /// deny = 403 拒绝（reason 如 policy-denied）。
-    /// 默认拒绝：插件未覆盖此方法时，批量传输一律被拒（fail-closed，安全优先）
-    fn on_transfer_request(_meta: &TransferRequestMeta) -> UploadHookDecision {
-        UploadHookDecision::deny("plugin does not implement on_transfer_request")
     }
 }
 
@@ -170,88 +155,6 @@ mod tests {
         }
     }
 
-    /// 覆盖上传钩子的插件：验证插件可自主决定允许/拒绝
-    struct AllowUploadPlugin;
-
-    impl WasmPlugin for AllowUploadPlugin {
-        const ID: &'static str = "com.bedcode.test-allow";
-
-        fn manifest() -> PluginManifest {
-            PluginManifest {
-                id: Self::ID.to_string(),
-                name: "Allow".to_string(),
-                version: "0.1.0".to_string(),
-                description: String::new(),
-                author: String::new(),
-                main: String::new(),
-                sandbox: "inline".to_string(),
-                permissions: vec![],
-                contributes: PluginContributes::default(),
-                plugin_type: PluginType::Rust,
-                rust_library: String::new(),
-                api: vec![],
-                icon: None,
-            }
-        }
-
-        fn activate() -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn deactivate() -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
-        }
-
-        fn on_upload_request(_meta: &UploadRequestMeta) -> UploadHookDecision {
-            UploadHookDecision::allow()
-        }
-    }
-
-    /// 覆盖批钩子的插件：验证插件可返回 ask（v2 异步批准）
-    struct AskTransferPlugin;
-
-    impl WasmPlugin for AskTransferPlugin {
-        const ID: &'static str = "com.bedcode.test-ask";
-
-        fn manifest() -> PluginManifest {
-            PluginManifest {
-                id: Self::ID.to_string(),
-                name: "Ask".to_string(),
-                version: "0.1.0".to_string(),
-                description: String::new(),
-                author: String::new(),
-                main: String::new(),
-                sandbox: "inline".to_string(),
-                permissions: vec![],
-                contributes: PluginContributes::default(),
-                plugin_type: PluginType::Rust,
-                rust_library: String::new(),
-                api: vec![],
-                icon: None,
-            }
-        }
-
-        fn activate() -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn deactivate() -> anyhow::Result<()> {
-            Ok(())
-        }
-
-        fn invoke_command(_name: &str, _args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-            Ok(serde_json::Value::Null)
-        }
-
-        fn on_transfer_request(_meta: &crate::types::TransferRequestMeta) -> UploadHookDecision {
-            UploadHookDecision::ask()
-        }
-    }
-
     #[test]
     fn test_default_terminal_hooks_are_pass_through() {
         // 默认行为 = 不修改管道（None），宿主按原样放行
@@ -280,59 +183,13 @@ mod tests {
         let input = InputSubmittedEvent { session_id: "s1".into(), text: "x".into() };
         assert!(TestWasmPlugin::on_input_submitted(&input).is_ok());
     }
-
-    #[test]
-    fn test_default_upload_hook_is_fail_closed() {
-        // 安全契约：未实现钩子的插件默认拒绝一切上传，并给出明确原因
-        let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
-        let decision = TestWasmPlugin::on_upload_request(&meta);
-        assert!(!decision.allow);
-        assert_eq!(decision.reason.as_deref(), Some("plugin does not implement on_upload_request"));
-    }
-
-    #[test]
-    fn test_upload_hook_override_can_allow() {
-        // 插件可覆盖钩子放行上传（决策完全由插件表达）
-        let meta = UploadRequestMeta { relative_path: "a.txt".into(), size: 1 };
-        assert!(AllowUploadPlugin::on_upload_request(&meta).allow);
-    }
-
-    #[test]
-    fn test_default_transfer_hook_is_fail_closed() {
-        // 安全契约：未实现批钩子的插件默认拒绝一切批量传输请求
-        let meta = crate::types::TransferRequestMeta {
-            batch_id: "b1".into(),
-            files: vec![UploadRequestMeta { relative_path: "a.txt".into(), size: 1 }],
-            total_size: 1,
-        };
-        let decision = TestWasmPlugin::on_transfer_request(&meta);
-        assert!(!decision.allow);
-        assert!(!decision.ask);
-        assert_eq!(
-            decision.reason.as_deref(),
-            Some("plugin does not implement on_transfer_request")
-        );
-    }
-
-    #[test]
-    fn test_transfer_hook_override_can_ask() {
-        // 插件可覆盖批钩子返回 ask（批置 pending 等待用户应答）
-        let meta = crate::types::TransferRequestMeta {
-            batch_id: "b2".into(),
-            files: Vec::new(),
-            total_size: 0,
-        };
-        let decision = AskTransferPlugin::on_transfer_request(&meta);
-        assert!(decision.ask);
-        assert!(!decision.allow);
-    }
 }
 
 
 /// 生成组件 world（`bedcode:plugin`）的全部导出实现
 ///
-/// 展开为 wit-bindgen 生成的 7 组 `Guest` trait 实现（command / lifecycle /
-/// events / terminal-hooks / upload-hook / manifest / abi）并调用 `export!`
+/// 展开为 wit-bindgen 生成的 5 组 `Guest` trait 实现（command / lifecycle /
+/// events / terminal-hooks / manifest / abi）并调用 `export!`
 /// 导出。语义与旧 `__bedcode_*` 导出 1:1 对应（见各 impl 注释）。
 ///
 /// # 用法
@@ -371,6 +228,9 @@ macro_rules! wasm_entry {
 
         // ==================== lifecycle（原 __bedcode_activate/deactivate/on_startup/on_shutdown） ====================
 
+        // 固化流程：四个生命周期导出的结果一律如实上抛宿主（v8 契约），
+        // SDK 骨架只负责日志与错误字符串化，不吞任何失败——
+        // 启动初始化失败由宿主置 Degraded，不再被静默降级为「已激活」
         impl $crate::wasm::exports::bedcode::plugin::lifecycle::Guest for $plugin_type {
             fn activate() -> Result<(), String> {
                 // WasmHost 是无状态 unit struct；插件身份由宿主侧 Caller state 维护。
@@ -402,12 +262,35 @@ macro_rules! wasm_entry {
                 }
             }
 
-            fn on_startup() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_startup();
+            fn on_startup() -> Result<(), String> {
+                let host = $crate::wasm_host::WasmHost;
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_startup() {
+                    Ok(()) => {
+                        $crate::host::HostLog::log_info(&host, "Plugin startup init completed");
+                        Ok(())
+                    }
+                    Err(e) => {
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_startup failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
 
-            fn on_shutdown() {
-                let _ = <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown();
+            fn on_shutdown() -> Result<(), String> {
+                match <$plugin_type as $crate::wasm::WasmPlugin>::on_shutdown() {
+                    Ok(()) => Ok(()),
+                    Err(e) => {
+                        let host = $crate::wasm_host::WasmHost;
+                        $crate::host::HostLog::log_error(
+                            &host,
+                            &format!("on_shutdown failed: {}", e),
+                        );
+                        Err(e.to_string())
+                    }
+                }
             }
         }
 
@@ -501,56 +384,6 @@ macro_rules! wasm_entry {
             }
         }
 
-        // ==================== upload-hook（原 __bedcode_on_upload_request） ====================
-
-        impl $crate::wasm::exports::bedcode::plugin::upload_hook::Guest for $plugin_type {
-            /// 上传策略钩子：fail-closed（入参解析失败时直接拒绝，不调用插件逻辑）。
-            /// 拒绝语义完全由决定 JSON 表达，宿主据此 fail-closed。
-            fn on_upload_request(meta_json: String) -> String {
-                let decision =
-                    match serde_json::from_str::<$crate::types::UploadRequestMeta>(&meta_json) {
-                        Ok(meta) => <$plugin_type as $crate::wasm::WasmPlugin>::on_upload_request(&meta),
-                        Err(e) => {
-                            let host = $crate::wasm_host::WasmHost;
-                            $crate::host::HostLog::log_error(
-                                &host,
-                                &format!("on_upload_request: invalid meta payload: {}", e),
-                            );
-                            $crate::types::UploadHookDecision::deny("invalid upload request meta")
-                        }
-                    };
-
-                // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
-                serde_json::to_string(&decision)
-                    .unwrap_or_else(|_| r#"{"allow":false,"ask":false,"reason":"serialize decision failed"}"#.to_string())
-            }
-        }
-
-        // ==================== transfer-request-hook（v2，原 __bedcode_on_transfer_request） ====================
-
-        impl $crate::wasm::exports::bedcode::plugin::transfer_request_hook::Guest for $plugin_type {
-            /// 批量传输请求钩子：fail-closed（入参解析失败时直接拒绝，不调用插件逻辑），
-            /// 与 upload-hook 同构。
-            fn on_transfer_request(meta_json: String) -> String {
-                let decision =
-                    match serde_json::from_str::<$crate::types::TransferRequestMeta>(&meta_json) {
-                        Ok(meta) => <$plugin_type as $crate::wasm::WasmPlugin>::on_transfer_request(&meta),
-                        Err(e) => {
-                            let host = $crate::wasm_host::WasmHost;
-                            $crate::host::HostLog::log_error(
-                                &host,
-                                &format!("on_transfer_request: invalid meta payload: {}", e),
-                            );
-                            $crate::types::UploadHookDecision::deny("invalid transfer request meta")
-                        }
-                    };
-
-                // 序列化失败时退化为裸 JSON 拒绝，保证宿主永远拿到合法决定
-                serde_json::to_string(&decision)
-                    .unwrap_or_else(|_| r#"{"allow":false,"ask":false,"reason":"serialize decision failed"}"#.to_string())
-            }
-        }
-
         // ==================== manifest（原 __bedcode_manifest） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::manifest::Guest for $plugin_type {
@@ -563,7 +396,7 @@ macro_rules! wasm_entry {
         // ==================== abi（原 __bedcode_abi_version + form 形态字段） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v6）完全一致
+            /// ABI 版本：语义与 `abi::ABI_VERSION` 完全一致
             fn version() -> u32 {
                 $crate::abi::ABI_VERSION as u32
             }
@@ -576,7 +409,7 @@ macro_rules! wasm_entry {
 
         // ==================== 组件导出 ====================
 
-        // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 7 组接口的 cabi 导出）。
+        // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 5 组接口的 cabi 导出）。
         // 宏展开处 `$crate` 为插件依赖的 SDK：绑定类型路径经 lib.rs 的
         // `pub use wasm::bedcode` re-export 定位（generate! 的 default_bindings_module）
         $crate::wasm::export!($plugin_type);

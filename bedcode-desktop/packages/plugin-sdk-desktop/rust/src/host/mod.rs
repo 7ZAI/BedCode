@@ -17,32 +17,34 @@ pub mod bus;
 pub mod config;
 pub mod database;
 pub mod events;
-pub mod file_service;
 pub mod fs;
 pub mod http;
 pub mod log;
+pub mod mdns;
+pub mod peer;
+pub mod platform;
 pub mod process;
 pub mod session;
 pub mod storage;
 pub mod terminal;
 pub mod timer;
-pub mod transfer;
 
 pub use app::HostApp;
 pub use bus::HostBus;
 pub use config::{ConfigKey, HostConfig};
 pub use database::{HostDatabase, HostPluginDatabase};
 pub use events::HostEvents;
-pub use file_service::HostFileService;
 pub use fs::HostFs;
 pub use http::HostHttp;
 pub use log::HostLog;
+pub use mdns::HostMdns;
+pub use peer::HostPeer;
+pub use platform::HostPlatform;
 pub use process::HostProcess;
 pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
 pub use timer::HostTimer;
-pub use transfer::HostTransfer;
 
 /// 宿主调用错误
 ///
@@ -158,8 +160,9 @@ pub trait HostApi:
     + HostLog
     + HostBus
     + HostConfig
-    + HostFileService
-    + HostTransfer
+    + HostPeer
+    + HostMdns
+    + HostPlatform
     + HostTimer
     + HostProcess
     + HostApp
@@ -178,8 +181,9 @@ impl<T> HostApi for T where
         + HostLog
         + HostBus
         + HostConfig
-        + HostFileService
-        + HostTransfer
+        + HostPeer
+        + HostMdns
+        + HostPlatform
         + HostTimer
         + HostProcess
         + HostApp

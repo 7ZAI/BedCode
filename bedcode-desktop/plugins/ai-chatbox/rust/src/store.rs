@@ -2,9 +2,10 @@
 //!
 //! 对话历史唯一存储：`conversations/{convId}.jsonl`（首行 meta + 逐行消息）、
 //! `index.jsonl`（对话列表索引，按 updatedAt DESC）、`providers.json`（配置占位）。
-//! 全部经宿主 `fs_*` 读写；宿主 `fs_write` 是整文件覆盖，追加消息 = 读-拼-写。
+//! 文件访问全部经 WASI（wasm32-wasip2 目标，std::fs 直连宿主预打开的 `/data`
+//! 目录），不经宿主 fs_* 转发；日志仍经 HostLog 转发到宿主。
 
-use bedcode_plugin_api::host::{HostFs, HostLog};
+use bedcode_plugin_api::host::HostLog;
 
 use serde::{Deserialize, Serialize};
 
@@ -56,35 +57,36 @@ struct ConversationLine {
     body: serde_json::Value,
 }
 
-/// 初始化数据目录：缺省文件（index.jsonl / providers.json）不存在时创建
-pub fn init<H: HostFs + HostLog>(host: &H, data_dir: &str) -> anyhow::Result<()> {
+/// 初始化数据目录：缺省子目录与文件（conversations / index.jsonl / providers.json）不存在时创建
+pub fn init<H: HostLog>(_log: &H, data_dir: &str) -> anyhow::Result<()> {
+    std::fs::create_dir_all(format!("{}/conversations", data_dir))
+        .map_err(|e| anyhow::anyhow!("failed to create conversations dir under {}: {}", data_dir, e))?;
+
     let index_path = format!("{}/index.jsonl", data_dir);
-    if !host.fs_exists(&index_path)? {
-        host.fs_write(&index_path, "")
-            .map_err(|e| anyhow::anyhow!("failed to create {}: {}", index_path, e))?;
+    if !file_exists(&index_path) {
+        write_file(&index_path, "")?;
     }
 
     let providers_path = format!("{}/providers.json", data_dir);
-    if !host.fs_exists(&providers_path)? {
+    if !file_exists(&providers_path) {
         let default = serde_json::json!({
             "providers": [],
             "activeProviderId": "",
             "activeModel": ""
         });
-        host.fs_write(
+        write_file(
             &providers_path,
             &serde_json::to_string_pretty(&default)
                 .map_err(|e| anyhow::anyhow!("failed to serialize providers.json: {}", e))?,
-        )
-        .map_err(|e| anyhow::anyhow!("failed to create {}: {}", providers_path, e))?;
+        )?;
     }
     Ok(())
 }
 
 /// 列出全部对话（index.jsonl），按 updatedAt 降序；索引文件缺失视为空列表
-pub fn list_conversations<H: HostFs + HostLog>(host: &H, data_dir: &str) -> anyhow::Result<Vec<ConversationMeta>> {
+pub fn list_conversations<H: HostLog>(log: &H, data_dir: &str) -> anyhow::Result<Vec<ConversationMeta>> {
     let index_path = format!("{}/index.jsonl", data_dir);
-    let Some(content) = host.fs_read(&index_path)? else {
+    let Some(content) = read_file(&index_path)? else {
         return Ok(Vec::new());
     };
 
@@ -97,8 +99,8 @@ pub fn list_conversations<H: HostFs + HostLog>(host: &H, data_dir: &str) -> anyh
         match serde_json::from_str::<ConversationMeta>(trimmed) {
             Ok(conv) => convs.push(conv),
             Err(e) => {
-                // WASM 无 tracing subscriber，经 HostLog 转发到宿主日志
-                host.log_warn(&format!(
+                // 解析告警经 HostLog 转发到宿主日志
+                log.log_warn(&format!(
                     "list_conversations: skipping corrupted index line: {}",
                     e
                 ));
@@ -110,13 +112,13 @@ pub fn list_conversations<H: HostFs + HostLog>(host: &H, data_dir: &str) -> anyh
 }
 
 /// 获取对话全部消息（跳过首行 meta；损坏行跳过）
-pub fn get_messages<H: HostFs + HostLog>(
-    host: &H,
+pub fn get_messages<H: HostLog>(
+    log: &H,
     data_dir: &str,
     conversation_id: &str,
 ) -> anyhow::Result<Vec<ChatMessageRecord>> {
     let path = conversation_path(data_dir, conversation_id);
-    let Some(content) = host.fs_read(&path)? else {
+    let Some(content) = read_file(&path)? else {
         return Ok(Vec::new());
     };
 
@@ -129,7 +131,7 @@ pub fn get_messages<H: HostFs + HostLog>(
         let parsed = match serde_json::from_str::<ConversationLine>(trimmed) {
             Ok(p) => p,
             Err(e) => {
-                host.log_warn(&format!(
+                log.log_warn(&format!(
                     "get_messages: skipping corrupted line: {} (conversation {})",
                     e, conversation_id
                 ));
@@ -142,7 +144,7 @@ pub fn get_messages<H: HostFs + HostLog>(
         match serde_json::from_value::<ChatMessageRecord>(parsed.body) {
             Ok(msg) => messages.push(msg),
             Err(e) => {
-                host.log_warn(&format!(
+                log.log_warn(&format!(
                     "get_messages: skipping corrupted message line: {}",
                     e
                 ));
@@ -156,16 +158,15 @@ pub fn get_messages<H: HostFs + HostLog>(
 ///
 /// `replace_last_assistant` 为 true 时先删除文件末尾的 assistant 消息行再追加
 /// （重新生成场景：旧回复被新回复覆盖，避免重启后旧回复复现）。
-pub fn save_message<H: HostFs + HostLog>(
-    host: &H,
+pub fn save_message<H: HostLog>(
+    _log: &H,
     data_dir: &str,
     conversation_id: &str,
     msg: &ChatMessageRecord,
     replace_last_assistant: bool,
 ) -> anyhow::Result<()> {
     let path = conversation_path(data_dir, conversation_id);
-    let mut content = host
-        .fs_read(&path)?
+    let mut content = read_file(&path)?
         .ok_or_else(|| anyhow::anyhow!("conversation file not found: {}", path))?;
 
     if replace_last_assistant {
@@ -189,20 +190,19 @@ pub fn save_message<H: HostFs + HostLog>(
     content.push_str(&line);
     content.push('\n');
 
-    host.fs_write(&path, &content)
-        .map_err(|e| anyhow::anyhow!("failed to write message to {}: {}", path, e))?;
+    write_file(&path, &content)?;
     Ok(())
 }
 
 /// 更新对话 meta（重写对话文件首行 + 重写 index.jsonl）
-pub fn save_conversation<H: HostFs + HostLog>(
-    host: &H,
+pub fn save_conversation<H: HostLog>(
+    _log: &H,
     data_dir: &str,
     conv: &ConversationMeta,
 ) -> anyhow::Result<()> {
     // 重写对话文件首行（meta 与消息行保持同文件）；新对话文件尚不存在时直接创建
     let path = conversation_path(data_dir, &conv.id);
-    let content = host.fs_read(&path)?.unwrap_or_default();
+    let content = read_file(&path)?.unwrap_or_default();
     let mut lines: Vec<&str> = content.lines().collect();
     let meta_line = meta_json_line(conv)?;
     // 解析首行判断是否 meta（serde_json key 顺序不保证，不能用字符串前缀匹配）
@@ -220,27 +220,59 @@ pub fn save_conversation<H: HostFs + HostLog>(
     if !rewritten.ends_with('\n') {
         rewritten.push('\n');
     }
-    host.fs_write(&path, &rewritten)
-        .map_err(|e| anyhow::anyhow!("failed to rewrite {}: {}", path, e))?;
+    write_file(&path, &rewritten)?;
 
-    rewrite_index(host, data_dir, &[conv.clone()], &[])
+    rewrite_index(_log, data_dir, &[conv.clone()], &[])
 }
 
 /// 删除对话（删对话文件 + 从 index.jsonl 移除）
-pub fn delete_conversation<H: HostFs + HostLog>(
-    host: &H,
+pub fn delete_conversation<H: HostLog>(
+    log: &H,
     data_dir: &str,
     conversation_id: &str,
 ) -> anyhow::Result<()> {
     let path = conversation_path(data_dir, conversation_id);
-    host.fs_delete(&path)
-        .map_err(|e| anyhow::anyhow!("failed to delete {}: {}", path, e))?;
-    rewrite_index(host, data_dir, &[], &[conversation_id.to_string()])
+    delete_file(&path)?;
+    rewrite_index(log, data_dir, &[], &[conversation_id.to_string()])
 }
 
 /// 对话文件路径
 fn conversation_path(data_dir: &str, conversation_id: &str) -> String {
     format!("{}/conversations/{}.jsonl", data_dir, conversation_id)
+}
+
+// ==================== WASI std::fs 访问辅助 ====================
+
+/// 读文件：不存在返回 None，其余 IO 错误上抛（错误带路径上下文）
+fn read_file(path: &str) -> anyhow::Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(anyhow::anyhow!("failed to read {}: {}", path, e)),
+    }
+}
+
+/// 写文件（整文件覆盖）：父目录不存在时自动创建
+fn write_file(path: &str, content: &str) -> anyhow::Result<()> {
+    if let Some(parent) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| anyhow::anyhow!("failed to create parent dir for {}: {}", path, e))?;
+    }
+    std::fs::write(path, content).map_err(|e| anyhow::anyhow!("failed to write {}: {}", path, e))
+}
+
+/// 文件是否存在
+fn file_exists(path: &str) -> bool {
+    std::path::Path::new(path).exists()
+}
+
+/// 删文件：不存在视为已删除（幂等）
+fn delete_file(path: &str) -> anyhow::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("failed to delete {}: {}", path, e)),
+    }
 }
 
 /// 序列化 meta 行（对话文件首行 / index.jsonl 行）
@@ -259,14 +291,14 @@ fn meta_json_line(conv: &ConversationMeta) -> anyhow::Result<String> {
 }
 
 /// 重写 index.jsonl（upsert 覆盖同 id，exclude 剔除 id，按 updatedAt DESC 全量落盘）
-fn rewrite_index<H: HostFs + HostLog>(
-    host: &H,
+fn rewrite_index<H: HostLog>(
+    log: &H,
     data_dir: &str,
     upsert: &[ConversationMeta],
     exclude: &[String],
 ) -> anyhow::Result<()> {
     let index_path = format!("{}/index.jsonl", data_dir);
-    let existing = list_conversations(host, data_dir)?;
+    let existing = list_conversations(log, data_dir)?;
 
     // upsert 覆盖同 id，exclude 剔除，其余保留
     let mut merged: Vec<ConversationMeta> = existing
@@ -281,9 +313,7 @@ fn rewrite_index<H: HostFs + HostLog>(
         content.push_str(&meta_json_line(conv)?);
         content.push('\n');
     }
-    host.fs_write(&index_path, &content)
-        .map_err(|e| anyhow::anyhow!("failed to write {}: {}", index_path, e))?;
-    Ok(())
+    write_file(&index_path, &content)
 }
 
 /// 删除文件末尾最后一条 assistant 消息行（按行倒序查找 role == assistant）
@@ -318,15 +348,11 @@ fn strip_last_assistant_line(content: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::{Arc, Mutex};
 
-    /// 内存版 HostFs mock：读写删落到 map（接缝 2 先例）
-    struct MockHost {
-        files: Arc<Mutex<HashMap<String, String>>>,
-    }
+    /// 测试日志：静默（不落盘）
+    struct TestLog;
 
-    impl HostLog for MockHost {
+    impl HostLog for TestLog {
         fn log_info(&self, _message: &str) {}
         fn log_debug(&self, _message: &str) {}
         fn log_warn(&self, _message: &str) {}
@@ -334,27 +360,15 @@ mod tests {
         fn mark_plugin_error(&self, _error: &str) {}
     }
 
-    impl HostFs for MockHost {
-        fn fs_read(&self, path: &str) -> Result<Option<String>, bedcode_plugin_api::host::HostError> {
-            Ok(self.files.lock().unwrap().get(path).cloned())
-        }
-        fn fs_write(&self, path: &str, data: &str) -> Result<(), bedcode_plugin_api::host::HostError> {
-            self.files.lock().unwrap().insert(path.to_string(), data.to_string());
-            Ok(())
-        }
-        fn fs_copy(&self, _src: &str, _dst: &str) -> Result<(), bedcode_plugin_api::host::HostError> {
-            Ok(())
-        }
-        fn fs_delete(&self, path: &str) -> Result<(), bedcode_plugin_api::host::HostError> {
-            self.files.lock().unwrap().remove(path);
-            Ok(())
-        }
-        fn fs_exists(&self, path: &str) -> Result<bool, bedcode_plugin_api::host::HostError> {
-            Ok(self.files.lock().unwrap().contains_key(path))
-        }
-        fn fs_request_auth(&self, _paths: &[String]) -> Result<bool, bedcode_plugin_api::host::HostError> {
-            Ok(true)
-        }
+    /// 每测试独立临时目录作为数据根（生产中为 WASI 预打开的 /data，
+    /// 函数签名保留 data_dir 参数使测试可用真实文件系统直连）
+    fn data_root() -> String {
+        tempfile::tempdir()
+            .expect("tempdir")
+            .path()
+            .to_string_lossy()
+            .trim_end_matches(['/', '\\'])
+            .to_string()
     }
 
     fn meta(id: &str, updated_at: &str) -> ConversationMeta {
@@ -382,29 +396,32 @@ mod tests {
 
     #[test]
     fn init_creates_default_files() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
-        init(&host, "/data").unwrap();
-        assert_eq!(host.files.lock().unwrap().get("/data/index.jsonl").unwrap(), "");
-        assert!(host
-            .files
-            .lock()
-            .unwrap()
-            .get("/data/providers.json")
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
+        assert_eq!(std::fs::read_to_string(format!("{}/index.jsonl", dir)).unwrap(), "");
+        assert!(std::fs::read_to_string(format!("{}/providers.json", dir))
             .unwrap()
             .contains("\"activeProviderId\""));
     }
 
     #[test]
     fn save_message_creates_file_with_meta_and_appends() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        std::fs::create_dir_all(format!("{}/conversations", dir)).unwrap();
         // 先建对话文件（meta 首行）
         let conv = meta("c1", "2026-01-01T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
+        std::fs::write(
+            format!("{}/conversations/c1.jsonl", dir),
+            meta_json_line(&conv).unwrap(),
+        )
+        .unwrap();
 
-        save_message(&host, "/data", "c1", &msg("user", "hello"), false).unwrap();
-        save_message(&host, "/data", "c1", &msg("assistant", "hi"), false).unwrap();
+        save_message(&log, &dir, "c1", &msg("user", "hello"), false).unwrap();
+        save_message(&log, &dir, "c1", &msg("assistant", "hi"), false).unwrap();
 
-        let content = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        let content = std::fs::read_to_string(format!("{}/conversations/c1.jsonl", dir)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 3);
         assert!(lines[0].contains("\"type\":\"meta\""));
@@ -414,16 +431,18 @@ mod tests {
 
     #[test]
     fn get_messages_skips_meta_and_corrupted_lines() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        std::fs::create_dir_all(format!("{}/conversations", dir)).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
         let mut content = meta_json_line(&conv).unwrap();
         content.push('\n');
         content.push_str("{\"type\":\"message\",\"role\":\"user\",\"content\":\"a\",\"timestamp\":\"t\"}\n");
         content.push_str("this is not json\n");
         content.push_str("{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"b\",\"timestamp\":\"t\"}\n");
-        host.fs_write("/data/conversations/c1.jsonl", &content).unwrap();
+        std::fs::write(format!("{}/conversations/c1.jsonl", dir), content).unwrap();
 
-        let messages = get_messages(&host, "/data", "c1").unwrap();
+        let messages = get_messages(&log, &dir, "c1").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0].role, "user");
         assert_eq!(messages[1].content, "b");
@@ -431,17 +450,15 @@ mod tests {
 
     #[test]
     fn index_sorted_by_updated_at_desc() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
-        init(&host, "/data").unwrap();
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let c1 = meta("c1", "2026-01-02T00:00:00Z");
         let c2 = meta("c2", "2026-01-03T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&c1).unwrap()).unwrap();
-        host.fs_write("/data/conversations/c2.jsonl", &meta_json_line(&c2).unwrap()).unwrap();
+        save_conversation(&log, &dir, &c1).unwrap();
+        save_conversation(&log, &dir, &c2).unwrap();
 
-        save_conversation(&host, "/data", &c1).unwrap();
-        save_conversation(&host, "/data", &c2).unwrap();
-
-        let list = list_conversations(&host, "/data").unwrap();
+        let list = list_conversations(&log, &dir).unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, "c2");
         assert_eq!(list[1].id, "c1");
@@ -449,49 +466,53 @@ mod tests {
 
     #[test]
     fn delete_conversation_removes_file_and_index() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
-        init(&host, "/data").unwrap();
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let c1 = meta("c1", "2026-01-02T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&c1).unwrap()).unwrap();
-        save_conversation(&host, "/data", &c1).unwrap();
-        assert_eq!(list_conversations(&host, "/data").unwrap().len(), 1);
+        save_conversation(&log, &dir, &c1).unwrap();
+        assert_eq!(list_conversations(&log, &dir).unwrap().len(), 1);
 
-        delete_conversation(&host, "/data", "c1").unwrap();
-        assert!(!host.files.lock().unwrap().contains_key("/data/conversations/c1.jsonl"));
-        assert!(list_conversations(&host, "/data").unwrap().is_empty());
+        delete_conversation(&log, &dir, "c1").unwrap();
+        assert!(!std::path::Path::new(&format!("{}/conversations/c1.jsonl", dir)).exists());
+        assert!(list_conversations(&log, &dir).unwrap().is_empty());
     }
 
     #[test]
     fn save_message_replace_last_assistant() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
-        save_message(&host, "/data", "c1", &msg("user", "q"), false).unwrap();
-        save_message(&host, "/data", "c1", &msg("assistant", "old answer"), false).unwrap();
+        save_conversation(&log, &dir, &conv).unwrap();
+        save_message(&log, &dir, "c1", &msg("user", "q"), false).unwrap();
+        save_message(&log, &dir, "c1", &msg("assistant", "old answer"), false).unwrap();
 
-        save_message(&host, "/data", "c1", &msg("assistant", "new answer"), true).unwrap();
+        save_message(&log, &dir, "c1", &msg("assistant", "new answer"), true).unwrap();
 
-        let messages = get_messages(&host, "/data", "c1").unwrap();
+        let messages = get_messages(&log, &dir, "c1").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].content, "new answer");
     }
 
     #[test]
     fn save_message_persists_reasoning_and_reads_back() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
+        save_conversation(&log, &dir, &conv).unwrap();
 
         let mut assistant = msg("assistant", "正文");
         assistant.reasoning = Some("思考过程".to_string());
-        save_message(&host, "/data", "c1", &assistant, false).unwrap();
+        save_message(&log, &dir, "c1", &assistant, false).unwrap();
 
         // JSONL 行含 reasoning 字段
-        let content = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        let content = std::fs::read_to_string(format!("{}/conversations/c1.jsonl", dir)).unwrap();
         assert!(content.contains("\"reasoning\":\"思考过程\""));
 
         // 读回：reasoning 与正文同消息还原
-        let messages = get_messages(&host, "/data", "c1").unwrap();
+        let messages = get_messages(&log, &dir, "c1").unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "正文");
         assert_eq!(messages[0].reasoning.as_deref(), Some("思考过程"));
@@ -500,13 +521,15 @@ mod tests {
     #[test]
     fn get_messages_legacy_lines_without_reasoning_read_as_none() {
         // P3 前的历史日志无 reasoning 字段：必须读回 None 而非解析失败
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        std::fs::create_dir_all(format!("{}/conversations", dir)).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
         let mut content = meta_json_line(&conv).unwrap();
         content.push_str("\n{\"type\":\"message\",\"role\":\"assistant\",\"content\":\"旧回复\",\"timestamp\":\"t\"}\n");
-        host.fs_write("/data/conversations/c1.jsonl", &content).unwrap();
+        std::fs::write(format!("{}/conversations/c1.jsonl", dir), content).unwrap();
 
-        let messages = get_messages(&host, "/data", "c1").unwrap();
+        let messages = get_messages(&log, &dir, "c1").unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].reasoning, None);
         assert_eq!(messages[0].content, "旧回复");
@@ -515,65 +538,71 @@ mod tests {
     #[test]
     fn save_message_replace_last_assistant_overwrites_reasoning() {
         // 重新生成：正文与思考一并覆盖（旧 reasoning 不得残留）
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
-        save_message(&host, "/data", "c1", &msg("user", "q"), false).unwrap();
+        save_conversation(&log, &dir, &conv).unwrap();
+        save_message(&log, &dir, "c1", &msg("user", "q"), false).unwrap();
 
         let mut old = msg("assistant", "旧正文");
         old.reasoning = Some("旧思考".to_string());
-        save_message(&host, "/data", "c1", &old, false).unwrap();
+        save_message(&log, &dir, "c1", &old, false).unwrap();
 
         let mut fresh = msg("assistant", "新正文");
         fresh.reasoning = Some("新思考".to_string());
-        save_message(&host, "/data", "c1", &fresh, true).unwrap();
+        save_message(&log, &dir, "c1", &fresh, true).unwrap();
 
-        let messages = get_messages(&host, "/data", "c1").unwrap();
+        let messages = get_messages(&log, &dir, "c1").unwrap();
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].content, "新正文");
         assert_eq!(messages[1].reasoning.as_deref(), Some("新思考"));
         // 旧思考已随旧行一起被覆盖，不残留
-        let raw = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        let raw = std::fs::read_to_string(format!("{}/conversations/c1.jsonl", dir)).unwrap();
         assert!(!raw.contains("旧思考"));
     }
 
     #[test]
     fn save_conversation_updates_meta_first_line() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let conv = meta("c1", "2026-01-01T00:00:00Z");
-        host.fs_write("/data/conversations/c1.jsonl", &meta_json_line(&conv).unwrap()).unwrap();
-        save_message(&host, "/data", "c1", &msg("user", "hello"), false).unwrap();
+        save_conversation(&log, &dir, &conv).unwrap();
+        save_message(&log, &dir, "c1", &msg("user", "hello"), false).unwrap();
 
         let mut renamed = conv.clone();
         renamed.title = "renamed".to_string();
         renamed.updated_at = "2026-01-04T00:00:00Z".to_string();
-        save_conversation(&host, "/data", &renamed).unwrap();
+        save_conversation(&log, &dir, &renamed).unwrap();
 
-        let content = host.files.lock().unwrap().get("/data/conversations/c1.jsonl").unwrap().clone();
+        let content = std::fs::read_to_string(format!("{}/conversations/c1.jsonl", dir)).unwrap();
         let first_line = content.lines().next().unwrap();
         assert!(first_line.contains("\"title\":\"renamed\""));
         // 消息行保留
         assert!(content.contains("\"role\":\"user\""));
         // 索引已更新
-        assert_eq!(list_conversations(&host, "/data").unwrap()[0].title, "renamed");
+        assert_eq!(list_conversations(&log, &dir).unwrap()[0].title, "renamed");
     }
 
     #[test]
     fn save_conversation_creates_file_when_missing() {
-        let host = MockHost { files: Arc::new(Mutex::new(HashMap::new())) };
+        let dir = data_root();
+        let log = TestLog;
+        init(&log, &dir).unwrap();
         let conv = meta("c-new", "2026-01-05T00:00:00Z");
 
         // 新建对话：对话文件不存在，save_conversation 应创建（meta 首行）而非报错
-        save_conversation(&host, "/data", &conv).unwrap();
+        save_conversation(&log, &dir, &conv).unwrap();
 
-        let content = host.files.lock().unwrap().get("/data/conversations/c-new.jsonl").unwrap().clone();
+        let content = std::fs::read_to_string(format!("{}/conversations/c-new.jsonl", dir)).unwrap();
         assert!(content.lines().next().unwrap().contains("\"type\":\"meta\""));
         // 索引同步
-        assert_eq!(list_conversations(&host, "/data").unwrap()[0].id, "c-new");
+        assert_eq!(list_conversations(&log, &dir).unwrap()[0].id, "c-new");
 
         // 之后 save_message 可正常追加（文件已存在）
-        save_message(&host, "/data", "c-new", &msg("user", "first"), false).unwrap();
-        let messages = get_messages(&host, "/data", "c-new").unwrap();
+        save_message(&log, &dir, "c-new", &msg("user", "first"), false).unwrap();
+        let messages = get_messages(&log, &dir, "c-new").unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "first");
     }

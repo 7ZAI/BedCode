@@ -16,7 +16,26 @@ const zhCN: MessageSchema = {
   'transfer.peer.unpaired': '未连接设备',
   'transfer.peer.noSharedRoots': '对方尚未设置共享目录',
   'transfer.peer.unknown': '未知设备',
-  'transfer.peer.switchTitle': '切换设备',
+  'transfer.peer.switchTitle': '附近设备（主动发起连接）',
+
+  // ==================== 附近设备面板 ====================
+  'transfer.devices.title': '附近设备',
+  'transfer.devices.subtitle': '同一网络内的 BedCode 节点',
+  'transfer.devices.empty': '未发现附近设备；请确认对方已打开 BedCode 并接入同一网络',
+  'transfer.devices.online': '在线',
+  'transfer.devices.recentSeen': '最近可见',
+  'transfer.devices.connected': '已连接',
+  'transfer.devices.connecting': '连接中…',
+  'transfer.devices.capNone': '不支持传输',
+  'transfer.devices.activeCurrent': '当前设备',
+  'transfer.devices.setActive': '设为当前',
+  'transfer.devices.connect': '连接',
+  'transfer.devices.disconnect': '断开',
+  'transfer.devices.denied': '对方拒绝了连接',
+  'transfer.devices.unreachable': '无法连接，设备可能已离线',
+  'transfer.devices.trustHint': '首次连接需对方确认；信任管理见 设置 → 可信对端',
+  'transfer.devices.scan': '探索发现',
+  'transfer.devices.scanning': '探索中…',
 
   // ==================== 顶栏 ====================
   'transfer.topbar.sendToPhone': '发送到手机…',
@@ -42,6 +61,7 @@ const zhCN: MessageSchema = {
   'transfer.task.state.failed': '失败',
   'transfer.task.state.rejected': '同名被拒',
   'transfer.task.state.cancelled': '已取消',
+  'transfer.task.state.interrupted': '已中断（应用重启）',
   'transfer.task.pause': '暂停',
   'transfer.task.resume': '恢复',
   'transfer.task.cancel': '取消',
@@ -55,6 +75,9 @@ const zhCN: MessageSchema = {
   'transfer.task.receivingEmpty': '暂无接收任务',
   'transfer.task.waitingApproval': '等待对方同意',
   'transfer.task.receiving': '正在接收',
+  // ==================== intent 驱动（v2.1） ====================
+  'transfer.task.waitingReply': '等待对方确认',
+  'transfer.task.peerOffline': '对端离线，任务挂起',
 
   // ==================== 队列面板 ====================
   'transfer.queue.title': '传输队列',
@@ -67,15 +90,38 @@ const zhCN: MessageSchema = {
   'transfer.queue.history': '历史',
 
   // ==================== 批量请求应答（v2） ====================
-  'transfer.batch.pendingTitle': '文件传输请求',
-  'transfer.batch.acceptAll': '接受全部',
-  'transfer.batch.rejectAll': '拒绝全部',
   'transfer.request.title': '文件传输请求',
   'transfer.request.body': '{name} 想向你发送 {count} 个文件（共 {size}）',
   'transfer.request.countdown': '将在 {seconds} 秒后自动拒绝',
   'transfer.request.acceptAll': '接受全部',
   'transfer.request.rejectAll': '拒绝全部',
   'transfer.toast.receiving': '{name} 正在向你上传 {count} 个文件',
+
+  // ==================== 首连确认（spec 决策 6） ====================
+  'transfer.consent.title': '连接请求',
+  'transfer.consent.body': '{name} 想与你建立文件传输连接',
+  'transfer.consent.namelessHint': '未能获取设备名称，请核对设备指纹后再决定',
+  'transfer.consent.fingerprintLabel': '设备指纹',
+  'transfer.consent.copy': '复制指纹',
+  'transfer.consent.copied': '已复制',
+  'transfer.consent.copyHint': '复制完整指纹，便于在另一台设备上比对',
+  'transfer.consent.countdown': '将在 {seconds} 秒后自动拒绝',
+  'transfer.consent.accept': '接受',
+  'transfer.consent.deny': '拒绝',
+  'transfer.consent.close': '关闭（等同拒绝）',
+
+  // ==================== 可信对端管理（spec 决策 8） ====================
+  'transfer.trusted.title': '可信对端',
+  'transfer.trusted.loading': '加载中...',
+  'transfer.trusted.empty': '暂无可信对端；首次连接经对方确认后建立信任',
+  'transfer.trusted.loadFailed': '可信对端列表加载失败',
+  'transfer.trusted.retry': '重试',
+  'transfer.trusted.addedAt': '加入时间：{time}',
+  'transfer.trusted.revoke': '撤销',
+  'transfer.trusted.cancel': '取消',
+  'transfer.trusted.revokeTitle': '撤销信任',
+  'transfer.trusted.revokeBody': '撤销后，{name} 再次连接时需要重新经过你的确认。确定撤销对该设备的信任吗？',
+  'transfer.trusted.revokeFailed': '撤销失败，请稍后重试',
 
   // ==================== 队列汇总 ====================
   'transfer.summary.active': '{count} 传输中',
@@ -101,6 +147,11 @@ const zhCN: MessageSchema = {
   'transfer.settings.receivingPolicyReject': '直接拒绝',
   'transfer.settings.receivingPolicyHint': '对端发送文件前是否需要你同意',
   'transfer.settings.approvalTimeout': '同意超时（秒）',
+  'transfer.settings.encryption': '传输加密',
+  'transfer.settings.encryptionOn': '开启',
+  'transfer.settings.encryptionOff': '关闭',
+  'transfer.settings.encryptionHint':
+    '开启后发送文件经 AES-256-GCM 端到端加密；需对端同为 BedCode 新版本方可自动解密',
 
   // ==================== 错误（spec §10 + v2 拒绝原因） ====================
   'transfer.error.duplicateName': '无法上传：目标目录已存在同名文件',
@@ -127,10 +178,6 @@ const zhCN: MessageSchema = {
   'transfer.empty.noPeerHint': '确保手机与电脑在同一局域网，且手机端已配对并开启共享',
   'transfer.empty.noDownloadDir': '请先在设置中配置下载目录',
   'transfer.empty.noDownloadDirHint': '选择接收文件的保存位置，之后就能从对端下载文件到本机',
-
-  // ==================== 对端存储权限提示 ====================
-  'transfer.notice.storageAccess': '对端共享的可能是 Android 顶层目录，而手机上未授予「所有文件访问权限」——在手机系统设置 → 应用 → BedCode → 允许访问所有文件 中授权后刷新即可看到内容',
-
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': '剩 {count} 秒',
   'transfer.eta.minutes': '剩 {count} 分 {seconds} 秒',

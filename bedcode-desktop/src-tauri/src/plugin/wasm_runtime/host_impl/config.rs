@@ -32,15 +32,13 @@ pub(crate) fn config_get(plugin_id: &str, key: &str) -> Result<Option<String>, S
                 config.network.port.to_string()
             }
         }
-        ConfigKey::HomeDir => {
-            match dirs::home_dir() {
-                Some(dir) => dir.to_string_lossy().to_string(),
-                None => {
-                    tracing::error!(plugin_id = %plugin_id, "host_config_get: home_dir not available");
-                    return Err("home_dir not available".to_string());
-                }
+        ConfigKey::HomeDir => match dirs::home_dir() {
+            Some(dir) => dir.to_string_lossy().to_string(),
+            None => {
+                tracing::error!(plugin_id = %plugin_id, "host_config_get: home_dir not available");
+                return Err("home_dir not available".to_string());
             }
-        }
+        },
         ConfigKey::CurrentTimeMs => {
             // wasm32-unknown-unknown 无系统时钟（SystemTime/Instant 均 panic），
             // 插件经此获取真实时间（Unix 毫秒）

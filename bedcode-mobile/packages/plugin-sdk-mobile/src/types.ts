@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-mobile 类型定义
+ * @binblink/bedcode-plugin-sdk-mobile 类型定义
  *
  * 移动端插件开发者可用的所有公开类型
  */
@@ -17,7 +17,9 @@ export type PluginType = 'rust' | 'rust-ts' | 'ts-only' | 'wasm'
 /** 插件运行时状态 */
 export type PluginState =
   | { state: 'Loaded' }
+  | { state: 'Activating' }
   | { state: 'Activated' }
+  | { state: 'Degraded'; error: string }
   | { state: 'NeedsApproval' }
   | { state: 'Deactivated' }
   | { state: 'Error'; error: string }
@@ -37,6 +39,8 @@ export interface PluginManifest {
   icon?: string
   wasmHash?: string
   rustLibrary?: string
+  /** 启用前预授权目录（宿主 preauthorize 统一弹窗，支持 ${downloads} 模板） */
+  preauthDirs?: string[]
 }
 
 /** 移动端扩展点声明 */
@@ -196,19 +200,18 @@ export interface MobileHttpResult<T = any> {
   data?: T
 }
 
-/** 任务队列项（对端桌面端 AutoTask 插件） */
-export interface MobileQueueTaskItem {
-  id: string
-  prompt: string
-  position: number
-  status: string
-  created_at: string
+/** 通用对端 REST 请求选项（宿主注入 JWT / 链路加密 / 错误归一化） */
+export interface MobileHttpRequestOptions {
+  method?: string
+  body?: any
+  headers?: Record<string, string>
 }
 
 /** 移动端宿主连接/HTTP 能力（共享运行时 mobileApi 模块）
  *
- * 经宿主 shared-runtime 暴露，供插件访问当前活动会话与对端桌面端 REST API。
- * 队列接口为 AutoTask 插件专属端点（/api/plugin/com.bedcode.auto-task/...）。
+ * 通用能力层：连接状态 + 对端桌面端 REST 请求通道。
+ * 具体插件业务端点（任务队列 / 会话模式 / 任务历史 / 定时任务等）
+ * 由各插件基于 httpRequest 自行封装，SDK 不感知插件领域细节。
  */
 export interface MobileHostApi {
   /** 当前活动会话 id（响应式 ref，可 watch / computed） */
@@ -219,110 +222,8 @@ export interface MobileHostApi {
   sessionConfigs: import('vue').Ref<any[]>
   /** 是否已连接对端桌面端（响应式 ref，可 watch / computed） */
   isConnected: import('vue').Ref<boolean>
-  /** 查询任务队列 */
-  httpTaskQueueList(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    tasks: MobileQueueTaskItem[]
-    queue_count: number
-    /** 当前活动任务（waiting/executing 最前一项；无活动任务时为 null） */
-    active_task: (MobileQueueTaskItem & { source?: string }) | null
-  }>>
-  /** 添加任务到队列 */
-  httpTaskQueueAdd(sessionId: string, prompt: string): Promise<MobileHttpResult>
-  /** 从队列删除任务 */
-  httpTaskQueueRemove(sessionId: string, taskId: string): Promise<MobileHttpResult>
-  /** 取消活动队列项（waiting / executing） */
-  httpTaskQueueCancel(sessionId: string, taskId: string): Promise<MobileHttpResult>
-  /** 清空任务队列 */
-  httpTaskQueueClear(sessionId: string): Promise<MobileHttpResult>
-  /** 更新队列任务内容 */
-  httpTaskQueueUpdate(sessionId: string, taskId: string, prompt: string): Promise<MobileHttpResult>
-  /** 重排序任务队列 */
-  httpTaskQueueReorder(sessionId: string, taskIds: string[]): Promise<MobileHttpResult>
-  /** 查询会话设置（auto_execute / auto_answer） */
-  httpSessionSettings(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    auto_execute: boolean
-    auto_answer: boolean
-  }>>
-  /** 设置会话自动模式 */
-  httpSetSessionMode(sessionId: string, autoExecute?: boolean, autoAnswer?: boolean): Promise<MobileHttpResult>
-  /** 查询会话当前任务 */
-  httpCurrentTask(sessionId: string): Promise<MobileHttpResult<{
-    session_id: string
-    task: {
-      id: string
-      description: string | null
-      status: string
-      auto_approve: number
-      created_at: string
-    } | null
-  }>>
-  /** 查询 auto-task 支持的 agent 列表 */
-  httpListSupportedAgents(): Promise<MobileHttpResult<{ agents: string[] }>>
-  /**
-   * 查询任务历史列表（分页 + 筛选）
-   *
-   * 只拼接已提供的筛选参数；返回 { tasks, total, limit, offset }，
-   * 时间字段为 UTC `YYYY-MM-DD HH:MM:SS` 字符串，需前端自行转本地时区。
-   */
-  httpTaskHistoryList(params?: {
-    status?: string
-    agent?: string
-    source?: string
-    since?: string
-    until?: string
-    limit?: number
-    offset?: number
-  }): Promise<MobileHttpResult<{
-    tasks: {
-      id: string
-      description: string | null
-      status: string
-      agent: string | null
-      source: string | null
-      session_id: string
-      claude_sid: string | null
-      working_dir: string | null
-      auto_approve: number
-      exit_reason: string | null
-      created_at: string
-      started_at: string | null
-      completed_at: string | null
-      input_tokens: number | null
-      output_tokens: number | null
-    }[]
-    total: number
-    limit: number
-    offset: number
-  }>>
-  /** 查询定时任务列表（返回 { jobs }） */
-  httpScheduledJobsList(): Promise<MobileHttpResult<{
-    jobs: {
-      id: string
-      name: string | null
-      config_id: string
-      trigger_at: string
-      prompts: string
-      status: string
-      session_id: string | null
-      created_at: string
-      executed_at: string | null
-      error: string | null
-    }[]
-  }>>
-  /**
-   * 创建定时任务
-   *
-   * trigger_at 为 UTC `YYYY-MM-DD HH:MM:SS`；prompts 为任务 prompt 数组。
-   * 后端 400 时 message 含具体缺失字段。
-   */
-  httpScheduledJobCreate(body: {
-    name?: string
-    config_id: string
-    trigger_at: string
-    prompts: string[]
-  }): Promise<MobileHttpResult<{ job_id: string }>>
+  /** 通用对端 REST 请求；返回 { code, message, data } 形状 */
+  httpRequest<T = any>(path: string, options?: MobileHttpRequestOptions): Promise<MobileHttpResult<T>>
 }
 
 // ==================== 对话框 ====================
@@ -399,6 +300,71 @@ export interface SessionAPI {
   onStatusChange(handler: (event: any) => void): Disposable
 }
 
+// ==================== 全局弹窗（宿主通用能力，与桌面端 SDK 同构） ====================
+
+/** 弹窗动作按钮（预设模式，Label 文案由插件经自身 i18n 生成后传入） */
+export interface PluginDialogAction {
+  label: string
+  /** 视觉变体：默认 / 主按钮 / 危险 / 幽灵 */
+  kind?: 'default' | 'primary' | 'danger' | 'ghost'
+  /** 点击回调（可异步）；成功返回后自动关闭弹窗（抛错则保持打开以便重试） */
+  onClick?: () => void | Promise<void>
+  /** 点击后经宿主 router 跳转的目标路由（先关弹窗再跳转） */
+  navigateTo?: string
+  /** 动作进行中禁用（如提交中防重复点击）；经 handle.update() 联动 */
+  disabled?: boolean
+}
+
+/**
+ * 全局弹窗选项（宿主统一渲染：遮罩/卡片/z-index/定时关闭/按钮/路由跳转）
+ *
+ * 两种模式：
+ * - 预设模式：title + message + icon + actions，常见「确认/拒绝」类请求开箱即用；
+ * - 组件模式：content 传入任意 Vue 组件（经 provide('pluginContext') 渲染），
+ *   props 可经 handle.update() 热更新。
+ * 定时关闭为可选能力：仅当 timeoutSec / deadlineAt 之一提供时生效。
+ */
+export interface PluginDialogOptions {
+  /** 自定义内容组件（组件模式）；缺省用 title/message/icon/actions 预设渲染 */
+  content?: any
+  /** 内容组件 props（组件模式；handle.update() 可热更新） */
+  props?: Record<string, unknown>
+  /** 预设模式：标题 */
+  title?: string
+  /** 预设模式：正文 */
+  message?: string
+  /** 预设模式：图标（SVG path d，随文字颜色渲染） */
+  icon?: string
+  /** 预设模式：动作按钮组（缺省无按钮；顺序即展示顺序） */
+  actions?: PluginDialogAction[]
+  /** 定时自动关闭（可选）：相对秒数，从弹窗弹出起算 */
+  timeoutSec?: number
+  /** 定时自动关闭（可选）：绝对截止时间戳 ms（迟到打开 / 排队续算更准确，优先于 timeoutSec） */
+  deadlineAt?: number
+  /** 倒计时文案模板，{seconds} 占位（如 '{seconds} 秒后自动拒绝'）；缺省不显示倒计时 */
+  countdownLabel?: string
+  /** 超时回调（自动关闭前触发）；缺省仅关闭 */
+  onTimeout?: () => void
+  /** 是否可手动关闭（右上角关闭按钮 / Escape / 遮罩点击），默认 true */
+  closable?: boolean
+  /** 点击遮罩是否关闭，默认 true（closable=false 时无效） */
+  closeOnBackdrop?: boolean
+  /** 卡片宽度（Tailwind max-w-* 类），默认 max-w-md */
+  widthClass?: string
+  /** 内容区 padding（Tailwind 类），默认 p-0（组件模式自带内距，预设模式内部处理） */
+  bodyClass?: string
+  /** 关闭后回调（按钮 / 遮罩 / Escape / 超时 / close() / 排队项被取消 均触发） */
+  onClose?: () => void
+}
+
+/** 全局弹窗句柄：调用方据此关闭或热更新当前弹窗 */
+export interface PluginDialogHandle {
+  /** 关闭当前弹窗（幂等）；队列中下一个弹窗自动接替 */
+  close(): void
+  /** 热更新选项（props / 文案 / 按钮 / 倒计时等） */
+  update(options: Partial<PluginDialogOptions>): void
+}
+
 /** UI 注册表 */
 export interface UIRegistry {
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
@@ -415,6 +381,8 @@ export interface UIRegistry {
    *  回调需自行决定行为：目录栈内返回上级，栈顶时可用 payload.canGoBack 恢复默认后退（如 history.back()）。
    *  非 Android（dev-shell / iOS）静默降级为永不触发；Disposable.dispose = 取消监听并恢复默认行为。 */
   onBackPressed(handler: (payload: { canGoBack: boolean }) => void): Disposable
+  /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
+  showDialog(options: PluginDialogOptions): PluginDialogHandle
 }
 
 /** 事件 API */
@@ -430,187 +398,7 @@ export interface StorageAPI {
   delete(key: string): Promise<void>
 }
 
-// ==================== File Service API Types ====================
-
-/** 上传策略钩子元信息（宿主 → 插件，与 SDK Rust UploadRequestMeta camelCase 对应） */
-export interface UploadRequestMeta {
-  /** 目标相对路径（相对挂载根） */
-  relativePath: string
-  /** 声明的文件大小（字节） */
-  size: number
-}
-
-/** 批量传输请求元信息（宿主 → 插件批钩子入参，v2；与 SDK Rust TransferRequestMeta 对应） */
-export interface TransferRequestMeta {
-  /** 批 ID（发送方生成，跨端唯一标识一次「发送」动作） */
-  batchId: string
-  /** 批内文件清单（相对路径 + 大小） */
-  files: { relativePath: string; size: number }[]
-  /** 批内文件总大小（字节） */
-  totalSize: number
-}
-
-/** 上传策略钩子决定（插件 → 宿主；fail-closed 语义，异常一律拒绝）
- *
- * v2 三路化：allow / ask（请求用户批准，批上下文）/ deny。
- * wire 兼容：旧插件返回 `{ allow: false }` → deny；`{ allow: true }` → allow。 */
-export interface UploadHookDecision {
-  /** 是否允许上传 */
-  allow: boolean
-  /** v2：true = 需要用户批准（批上下文）；与 allow 互斥 */
-  ask?: boolean
-  /** 拒绝原因（如 duplicate-name / policy-denied），允许时为空 */
-  reason?: string
-}
-
-/** 文件服务挂载选项（与 SDK Rust MountOptions camelCase 对应） */
-export interface MountOptions {
-  /** 挂载点名称（小写字母数字 -_），暴露为 /{pluginId}/{mountPath}/**（移动端无 /api 前缀） */
-  mountPath: string
-  /** 允许目录根（绝对路径，来自插件 storage 的用户配置） */
-  roots: string[]
-  /** 允许的操作集合（未声明的操作端点返回 403） */
-  operations: ('list' | 'download' | 'upload')[]
-  /** 上传策略钩子（可选；提供时以 Webview 钩子目标注册，上传会话创建时调用一次） */
-  onUploadRequest?: (meta: UploadRequestMeta) => Promise<UploadHookDecision>
-  /** v2：批量传输请求钩子（可选；提供时以 Webview 批钩子目标注册，POST /transfer-request 时调用一次） */
-  onTransferRequest?: (meta: TransferRequestMeta) => Promise<UploadHookDecision>
-}
-
-/** 挂载句柄（fileService.mount 返回值） */
-export interface FileServiceMount {
-  /** 挂载点名称 */
-  mountPath: string
-  /** 更新允许目录根（目录变更即时生效） */
-  updateRoots(roots: string[]): Promise<void>
-  /** 摘除挂载点（插件 deactivate 时应一并调用） */
-  dispose(): Promise<void>
-}
-
-/** 对端挂载点信息（与 SDK Rust PeerMountAnnouncement camelCase 对应） */
-export interface PeerMountAnnouncement {
-  /** 挂载所属插件 ID（URL 第一段） */
-  pluginId: string
-  /** 挂载点名称（URL 第二段） */
-  mountPath: string
-  /** 该挂载支持的操作集合 */
-  operations: ('list' | 'download' | 'upload')[]
-}
-
-/** 对端文件服务信息（与 SDK Rust PeerFileService 对应，控制面公告填充） */
-export interface PeerFileServiceInfo {
-  /** 对端 IP */
-  ip: string
-  /** 对端文件服务端口 */
-  port: number
-  /** 鉴权 Token（移动端服务为 Bearer Token；桌面端走 JWT 时为空） */
-  token: string
-  /** 对端真实设备名（用户设置名，获取不到时为兜底名；wire 为 snake_case） */
-  device_name: string
-  /** 对端挂载点列表 */
-  mounts: PeerMountAnnouncement[]
-}
-
-/** SAF 目录树条目（listTree 返回；真实路径条目列表复用，uri 承载绝对路径） */
-export interface SafEntry {
-  name: string
-  isDir: boolean
-  /** 文件大小（字节；目录/未知为 0） */
-  size: number
-  /** MIME 类型（可空串） */
-  mime: string
-  /** 条目 document URI（content://.../document/...；真实路径条目为绝对路径） */
-  uri: string
-  /** 条目 document id（子目录遍历用；真实路径条目为空串） */
-  documentId: string
-}
-
-/** 中转复制启动结果 */
-export interface SafCopyHandle {
-  /** 复制句柄 id（copyStatus / copyCancel 用） */
-  copyId: string
-  /** cache 落盘绝对路径（复制完成后即 enqueue 的 localPath） */
-  destPath: string
-}
-
-/** 中转复制进度快照（「准备中」进度条数据源） */
-export interface SafCopyStatus {
-  copyId: string
-  /** 已复制字节数 */
-  done: number
-  /** 总字节数（未知大小（流式 provider）为 0） */
-  total: number
-  /** 复制是否已结束（成功/失败/取消三者其一） */
-  finished: boolean
-  /** 是否被用户取消 */
-  cancelled: boolean
-  /** 失败原因（仅失败时非空） */
-  error: string | null
-  /** cache 落盘绝对路径 */
-  destPath: string
-}
-
-/** 系统目录树选择结果（添加共享目录条目用；Kotlin SafPickerPlugin 返回） */
-export interface PickedSharedDirectory {
-  /** content://tree URI（条目 id） */
-  uri: string
-  /** 树根 document id（子目录遍历起点） */
-  documentId: string
-  /** 目录展示名 */
-  displayName: string
-}
-
-/** SAF 存储访问 API（需 fileservice 权限；非 Android 平台 reject） */
-export interface SafAPI {
-  /** 列出目录树子条目（共享目录 App 内遍历，免系统选择器） */
-  listTree(treeUri: string, documentId: string): Promise<SafEntry[]>
-  /** 启动中转复制（Relay Copy）：SAF 源 → app 私有 cache，立即返回句柄 */
-  copyStart(uri: string, destName: string): Promise<SafCopyHandle>
-  /** 轮询中转复制进度 */
-  copyStatus(copyId: string): Promise<SafCopyStatus>
-  /** 取消中转复制（复制方删除半成品后结束，无残留） */
-  copyCancel(copyId: string): Promise<void>
-  /** 清扫中转复制残留（插件激活时调用，删除缓存 staging 目录全部文件） */
-  cleanupStaleCopies(): Promise<void>
-  /** 检测树授权是否仍有效（失效标记 → 提示重新授权） */
-  checkAuthorized(treeUri: string): Promise<boolean>
-}
-
-/** 文件服务 API（需 fileservice 权限） */
-export interface FileServiceAPI {
-  /** 挂载文件服务端点（插件作为文件服务方），返回挂载句柄 */
-  mount(options: MountOptions): Promise<FileServiceMount>
-  /** 获取对端文件服务信息（对端 = 桌面端；未公告返回 null） */
-  getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null>
-  /** v2：批准传输批（接收端应答「接受全部」） */
-  approveTransferRequest(batchId: string): Promise<void>
-  /** v2：拒绝传输批（接收端应答「拒绝全部」） */
-  rejectTransferRequest(batchId: string): Promise<void>
-  /** v2：设置批准超时（秒，10–600） */
-  setApprovalTimeout(mountPath: string, seconds: number): Promise<void>
-  /** v2：取消接收中的上传会话（本地取消） */
-  cancelReceivingSession(sessionId: string): Promise<void>
-  /** 弹出系统目录选择对话框（设置允许目录用；用户取消返回 null）。
-   * Android 使用 SAF 目录树选择器并解析为真实路径；不支持的 provider
-   * （云盘/SD 卡等）或 iOS 会 reject，插件应捕获后改用手动路径输入（如 dialogs.showPrompt） */
-  pickDirectory(): Promise<string | null>
-  /** 弹出系统文件选择对话框（上传本地文件用；用户取消返回 null）。
-   * Android 使用 SAF 文件选择器并解析为真实路径；不支持的 provider 或 iOS 会 reject，
-   * 插件应捕获后改用手动路径输入 */
-  pickFile(): Promise<string | null>
-  /** 弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用；
-   * 持久化授权由宿主完成，重启仍有效；用户取消返回 null；非 Android 平台 reject） */
-  pickSharedDirectory(): Promise<PickedSharedDirectory | null>
-  /** 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用；
-   * 仅允许该目录及其子目录；非 Android 平台 reject） */
-  listDir(path: string): Promise<SafEntry[]>
-  /** SAF 存储访问（共享目录遍历 + 中转复制；非 Android 平台 reject） */
-  readonly saf: SafAPI
-  /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下，非媒体集合的顶层
-   * 自定义目录 read_dir 会被 FUSE 过滤为空，需该权限才能经真实路径读取；
-   * 无运行时弹窗，宿主跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
-  requestAllFilesAccess(): Promise<boolean>
-}
+// ==================== System API ====================
 
 /** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
 export interface SystemAPI {
@@ -619,46 +407,43 @@ export interface SystemAPI {
   /** 用系统文件管理器打开文件所在目录（历史记录「打开所在文件夹」；
    * Android FileProvider 暴露父目录 + ACTION_VIEW，需 system:open 权限） */
   revealInDir(path: string): Promise<void>
+  /** 按文件名打开接收文件的所在目录（历史「打开所在文件夹」真机路径；
+   * 接收落点不在 wire 上，宿主 MediaStore 公共下载按 displayName 命中 →
+   * primary:Download 目录，未命中回退 app 私有下载目录；需 system:open 权限） */
+  revealReceivedFileLocation(fileName: string): Promise<void>
+  /** 引导开启「所有文件访问」权限（打开系统公共 Download 目录需要
+   * MANAGE_EXTERNAL_STORAGE，无运行时弹窗只能跳系统设置页手动开启；
+   * 未授权时跳转系统授权页并在无该页面的 ROM 兑底应用详情页），返回
+   * 跳转前的授权状态；授权后用户重试 revealReceivedFileLocation 即达；
+   * 需 system:open 权限） */
+  requestAllFilesAccess(): Promise<boolean>
+  /** 打开系统公共下载目录（设置页下载目录区「打开」，核对文件是否落盘；
+   * 目标为系统 Download 目录（ExternalStorageProvider 树 URI），未授予
+   * 「所有文件访问」时报 needs_all_files_access，前端据此引导授权；
+   * 需 system:open 权限） */
+  openDownloadDir(): Promise<void>
 }
 
 // ==================== 插件开发期领域数据（dev-shell mock 协议） ====================
 
-/** SAF 目录树条目（dev-shell safTree 用；docId 为子目录遍历 key） */
-export interface SafTreeEntry {
-  name: string
-  isDir: boolean
-  /** 文件大小（字节；目录/未知为 0） */
-  size: number
-  /** MIME 类型（可空串） */
-  mime: string
-  /** 子目录遍历 key（对应 safTree 下一级键；目录条目必填，文件条目忽略） */
-  docId: string
-}
-
-/** 免授权真实路径目录浏览条目种子（dev-shell listDir 用；uri/documentId 由 mock 宿主拼装） */
-export type SafEntrySeed = Omit<SafEntry, 'uri' | 'documentId'>
-
 /**
- * 插件开发期领域数据：dev-shell mock 宿主按 pluginId 合并（仅浏览器 dev 环境消费）
+ * 插件开发期领域数据（dev-shell mock 协议，仅浏览器 dev 环境消费）。
  *
- * 与"宿主能力 mock"（会话/对话框/事件/HTTP 接口等，固定在 dev-shell 内实现）
- * 区分：本协议只承载各插件自己的业务演示数据，由插件入口导出 devMock，
- * dev-shell 加载插件时经 registry 注册、createMockContext 按需取用。
+ * 与"宿主能力 mock"（会话/对话框/事件/HTTP 接口等，固定在 dev-shell 内实现）区分：
+ * 本协议只承载各插件自己的业务演示数据，由插件入口导出 devMock，dev-shell
+ * 加载插件时按 pluginId 注册、按需取用。
+ *
+ * SDK 只约定「入口导出 devMock」的通用容器协议，不感知任何插件领域细节：
+ * 各插件自有类型（任务队列种子 / 文件传输对等与传输域种子等）
+ * 由插件工程自行定义；dev-shell 消费时 cast 到插件自有形状。
  * 真实宿主忽略该字段（多余导出对 activate 无影响），插件无需条件编译。
  */
-export interface PluginDevMock {
-  /** 任务队列种子（auto-task：mobileApi 初始队列项，localStorage 无缓存时使用） */
-  queueSeed?: MobileQueueTaskItem[]
-  /** 免授权真实路径目录浏览条目（file-transfer：fileService.listDir 的返回） */
-  listDirEntries?: SafEntrySeed[]
-  /** SAF 目录树（file-transfer：documentId → 条目，saf.listTree 遍历用） */
-  safTree?: Record<string, SafTreeEntry[]>
-}
+export type PluginDevMock = Record<string, unknown>
 
 /** 国际化 API */
 export interface I18nAPI {
-  registerMessages(locale: string, messages: Record<string, any>): void
-  t(key: string, params?: Record<string, any>): string
+  registerMessages(locale: string, messages: Record<string, unknown>): void
+  t(key: string, params?: Record<string, unknown>): string
 }
 
 /** 生命周期 API */
@@ -682,8 +467,6 @@ export interface PluginContext {
   readonly ui: UIRegistry
   readonly events: EventAPI
   readonly storage: StorageAPI
-  /** 文件服务 API（需 fileservice 权限） */
-  readonly fileService: FileServiceAPI
   readonly i18n: I18nAPI
   readonly lifecycle: LifecycleAPI
   readonly logger: LoggerAPI

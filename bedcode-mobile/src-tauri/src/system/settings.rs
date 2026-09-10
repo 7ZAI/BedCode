@@ -28,8 +28,8 @@ impl MobileSettings {
         }
 
         let content = fs::read_to_string(path)?;
-        let settings: MobileSettings = serde_json::from_str(&content)
-            .map_err(|e| crate::AppError::Config(e.to_string()))?;
+        let settings: MobileSettings =
+            serde_json::from_str(&content).map_err(|e| crate::AppError::Config(e.to_string()))?;
         Ok(settings)
     }
 
@@ -39,8 +39,7 @@ impl MobileSettings {
             fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(self)
-            .map_err(|e| crate::AppError::Config(e.to_string()))?;
+        let content = serde_json::to_string_pretty(self).map_err(|e| crate::AppError::Config(e.to_string()))?;
         fs::write(path, content)?;
         Ok(())
     }
@@ -57,9 +56,7 @@ impl MobileSettings {
 
     /// 获取所有设置
     pub fn get_all(&self) -> Vec<(String, String)> {
-        self.settings.iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect()
+        self.settings.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
     }
 }
 
@@ -113,6 +110,7 @@ impl SettingsManager {
     }
 
     /// 保存到文件
+    #[allow(dead_code)] // 预留：供未来持久化触发
     async fn save(&self) -> Result<()> {
         let settings = self.settings.read().await;
         settings.save(&self.path)?;

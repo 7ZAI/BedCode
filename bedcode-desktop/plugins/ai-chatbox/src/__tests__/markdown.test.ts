@@ -12,27 +12,29 @@ import { getClosedCodeBlocks, patchIncompleteMarkdown } from '../utils/markdown'
 /** 从真实 marked 词法结果提取 fenced 块信息（lang 取首词，与渲染的 language-* 类一致） */
 function markedFencedBlocks(text: string): { lang: string; closed: boolean }[] {
   const fenced = (t: unknown) => t as { type: string; lang?: unknown; raw: string }
-  return marked
-    .lexer(text)
-    // fenced 块带 lang（可能为空串），缩进代码块无 lang 属性——据此区分
-    .filter(t => t.type === 'code' && typeof fenced(t).lang === 'string')
-    .map(t => {
-      const raw = fenced(t).raw
-      const lines = raw.split('\n')
-      // 开口 run（反引号/波浪线）：闭合判定按 marked 的 \1 反引用语义，闭合行
-      // 必须以开口 run 原样开头（同字符、长度 >= 开口），其后可跟任意 ~/` 再仅空格
-      const openRun = /^ {0,3}(`{3,}|~{3,})/.exec(lines[0])?.[1]
-      // 去掉开口 fence 行后才是内容行：末行为闭合 fence 行才算已闭合
-      // （raw 可能带尾换行；raw 仅开口行本身时 rest 为空 → 未闭合）
-      const rest = lines.slice(1)
-      const last = rest[rest.length - 1] === '' ? rest[rest.length - 2] : rest[rest.length - 1]
-      const closed =
-        last !== undefined &&
-        openRun !== undefined &&
-        // run 只含反引号/波浪线（非正则元字符），可直接拼接
-        new RegExp('^ {0,3}' + openRun + '[~`]* *$').test(last)
-      return { lang: String(fenced(t).lang).match(/^\S*/)?.[0] ?? '', closed }
-    })
+  return (
+    marked
+      .lexer(text)
+      // fenced 块带 lang（可能为空串），缩进代码块无 lang 属性——据此区分
+      .filter((t) => t.type === 'code' && typeof fenced(t).lang === 'string')
+      .map((t) => {
+        const raw = fenced(t).raw
+        const lines = raw.split('\n')
+        // 开口 run（反引号/波浪线）：闭合判定按 marked 的 \1 反引用语义，闭合行
+        // 必须以开口 run 原样开头（同字符、长度 >= 开口），其后可跟任意 ~/` 再仅空格
+        const openRun = /^ {0,3}(`{3,}|~{3,})/.exec(lines[0])?.[1]
+        // 去掉开口 fence 行后才是内容行：末行为闭合 fence 行才算已闭合
+        // （raw 可能带尾换行；raw 仅开口行本身时 rest 为空 → 未闭合）
+        const rest = lines.slice(1)
+        const last = rest[rest.length - 1] === '' ? rest[rest.length - 2] : rest[rest.length - 1]
+        const closed =
+          last !== undefined &&
+          openRun !== undefined &&
+          // run 只含反引号/波浪线（非正则元字符），可直接拼接
+          new RegExp('^ {0,3}' + openRun + '[~`]* *$').test(last)
+        return { lang: String(fenced(t).lang).match(/^\S*/)?.[0] ?? '', closed }
+      })
+  )
 }
 
 /** 与 marked 规则一致的语料（对拍用；blockquote/列表 fence 为已知边界，不入语料）
@@ -218,7 +220,7 @@ describe('getClosedCodeBlocks 闭合块检测', () => {
 describe('与真实 marked 对拍', () => {
   it('闭合块检测与 marked 词法一致（语言与闭合状态）', () => {
     for (const t of ALIGNED_CORPUS) {
-      const ours = getClosedCodeBlocks(t).map(b => ({ lang: b.lang, closed: b.closed }))
+      const ours = getClosedCodeBlocks(t).map((b) => ({ lang: b.lang, closed: b.closed }))
       expect(ours).toEqual(markedFencedBlocks(t))
     }
   })
@@ -226,7 +228,7 @@ describe('与真实 marked 对拍', () => {
   it('补偿后 marked 解析无未闭合块（每帧渲染的都是闭合形态）', () => {
     for (const t of ALIGNED_CORPUS) {
       const blocks = markedFencedBlocks(patchIncompleteMarkdown(t))
-      expect(blocks.every(b => b.closed)).toBe(true)
+      expect(blocks.every((b) => b.closed)).toBe(true)
     }
   })
 })

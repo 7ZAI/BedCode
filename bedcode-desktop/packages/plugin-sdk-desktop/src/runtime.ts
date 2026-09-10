@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop 运行时代理
+ * @binblink/bedcode-plugin-sdk-desktop 运行时代理
  *
  * 插件通过这些函数访问宿主共享模块，避免直接依赖 window 全局变量
  */
@@ -46,6 +46,9 @@ export function getRouter(): any {
 export function getPluginContext(): PluginContext {
   const vue = getVue()
   const context = vue.inject('pluginContext')
-  if (!context) throw new Error('[PluginSDK] PluginContext not available — ensure component is rendered inside PluginViewHost')
+  if (!context)
+    throw new Error(
+      '[PluginSDK] PluginContext not available — ensure component is rendered inside PluginViewHost',
+    )
   return context
 }

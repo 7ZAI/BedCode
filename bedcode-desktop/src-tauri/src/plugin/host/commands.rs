@@ -4,17 +4,15 @@
 //! 静态注册）、trap 自动重载、TerminalHandler 输入/输出管道。
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use tokio::sync::Mutex;
 
 use bedcode_plugin_api::PluginCommandEntry;
 
-use super::{LoadedWasmPlugin, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS, PluginHost};
+use super::{LoadedWasmPlugin, PluginHost, PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS};
 use crate::plugin::types::PluginSource;
 
 impl PluginHost {
-
     // ==================== Rust Command Dispatch ====================
 
     /// 执行 Rust 插件的 command handler
@@ -30,38 +28,32 @@ impl PluginHost {
     ) -> crate::Result<serde_json::Value> {
         if !self.is_activated(plugin_id).await {
             return Err(crate::AppError::Plugin(format!(
-                "Plugin {} is not activated", plugin_id
+                "Plugin {} is not activated",
+                plugin_id
             )));
         }
 
         let source = {
             let plugins = self.plugins.read().await;
-            plugins.get(plugin_id)
+            plugins
+                .get(plugin_id)
                 .map(|p| p.source.clone())
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?
         };
 
         match source {
-            PluginSource::Wasm => {
-                self.invoke_wasm_command(plugin_id, command_name, args).await
-            }
-            PluginSource::StaticRegistry => {
-                self.invoke_static_command(plugin_id, command_name, args).await
-            }
-            PluginSource::FileScan => {
-                Err(crate::AppError::Plugin(format!(
-                    "Plugin {} is TS-only, cannot invoke Rust command", plugin_id
-                )))
-            }
+            PluginSource::Wasm => self.invoke_wasm_command(plugin_id, command_name, args).await,
+            PluginSource::StaticRegistry => self.invoke_static_command(plugin_id, command_name, args).await,
+            PluginSource::FileScan => Err(crate::AppError::Plugin(format!(
+                "Plugin {} is TS-only, cannot invoke Rust command",
+                plugin_id
+            ))),
         }
     }
 
     /// 获取 WASM 插件实例句柄（map 读锁仅在取 Arc 期间持有，随即释放，
     /// 实例串行化由各插件自己的 Mutex 承担，插件间互不阻塞）
-    pub(super) async fn get_wasm_plugin(
-        &self,
-        plugin_id: &str,
-    ) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
+    pub(super) async fn get_wasm_plugin(&self, plugin_id: &str) -> Option<Arc<Mutex<LoadedWasmPlugin>>> {
         let wasm_plugins = self.wasm_plugins.read().await;
         wasm_plugins.get(plugin_id).cloned()
     }
@@ -79,14 +71,9 @@ impl PluginHost {
 
         // 限频：距上次自动重载不足最小间隔则跳过（已在上次恢复或仍属持久性故障）
         {
-            let mut throttle = self
-                .wasm_reload_throttle
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
+            let mut throttle = self.wasm_reload_throttle.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(last) = throttle.get(&plugin_id) {
-                if last.elapsed()
-                    < std::time::Duration::from_secs(PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS)
-                {
+                if last.elapsed() < std::time::Duration::from_secs(PLUGIN_AUTO_RELOAD_MIN_INTERVAL_SECS) {
                     tracing::warn!(
                         plugin_id = %plugin_id,
                         "plugin trap recovery throttled (recent reload), keeping error state"
@@ -125,14 +112,45 @@ impl PluginHost {
                     host.notify_plugin_runtime_error(&plugin_id, "recovery_failed", &e.to_string())
                         .await;
                     // 置 Error 态：UI 可见原因，且 is_activated 门禁停止后续分发
-                    host.mark_error(
-                        &plugin_id,
-                        format!("auto reload after trap failed: {}", e),
-                    )
-                    .await;
+                    host.mark_error(&plugin_id, format!("auto reload after trap failed: {}", e))
+                        .await;
                 }
             }
         });
+    }
+
+    /// 在无当前 runtime handle 的阻塞线程上执行 guest 导出调用
+    ///
+    /// WASI 预打开模式下，wasi 同步绑定（`in_tokio`）要求调用线程没有进入
+    /// 任何 tokio runtime——否则其内部 `handle.block_on` 会 panic
+    /// （"Cannot start a runtime from within a runtime"）。故所有 guest 调用
+    /// 统一搬到 `spawn_blocking` 阻塞线程执行：该线程无当前 handle，wasi 走
+    /// 其自身 ambient runtime；宿主函数经 [`block_on_async`] 的 ambient 兜底
+    /// 同样可阻塞执行。非 WASI 插件不受影响（未见 wasi 导入就不触发）。
+    ///
+    /// 返回 `Result<crate::Result<T>, panic 载荷>`：guest 的 `crate::Result<T>`
+    /// 保留在内层（`Ok(Ok(v))`=值 / `Ok(Err(e))`=guest 错误），panic 走外层
+    /// `Err(panic)`（不跨 spawn_blocking 传播为 JoinError）。
+    pub(super) async fn run_guest_call<T>(
+        &self,
+        wasm_plugin: Arc<Mutex<LoadedWasmPlugin>>,
+        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
+    ) -> std::result::Result<crate::Result<T>, Box<dyn std::any::Any + Send>>
+    where
+        T: Send + 'static,
+    {
+        tokio::task::spawn_blocking(move || {
+            // 阻塞线程无当前 tokio handle，符合 wasi 同步绑定（in_tokio）要求；
+            // 在 ambient runtime 上驱动 tokio 锁（借用闭包内 Arc，见 block_on_ambient），
+            // guest 调用在无 handle 线程执行，锁在 catch_unwind 后由 drop 释放
+            let mut guard = crate::plugin::wasm_runtime::block_on_ambient(wasm_plugin.lock());
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
+        })
+        .await
+        // spawn_blocking 任务自身 panic（理论上 guard move 前的一切异常）→
+        // 视为 panic 载荷，与 catch_unwind 语义对齐（外层 Result 的 Err 槽位
+        // = panic 载荷），调用方统一走重载恢复
+        .unwrap_or_else(|join| Err(Box::new(join.to_string()) as Box<dyn std::any::Any + Send>))
     }
 
     /// 持锁调用 WASM 插件导出并统一处理失败恢复
@@ -145,18 +163,19 @@ impl PluginHost {
     pub(super) async fn with_wasm_plugin_call<T>(
         &self,
         plugin_id: &str,
-        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T>,
-    ) -> crate::Result<T> {
+        call: impl FnOnce(&mut LoadedWasmPlugin) -> crate::Result<T> + Send + 'static,
+    ) -> crate::Result<T>
+    where
+        T: Send + 'static,
+    {
         let Some(wasm_plugin) = self.get_wasm_plugin(plugin_id).await else {
             return Err(crate::AppError::Plugin(format!(
                 "WASM plugin {} not found in loaded instances",
                 plugin_id
             )));
         };
-        let result = {
-            let mut guard = wasm_plugin.lock().await;
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| call(&mut guard)))
-        };
+        // 在无 handle 阻塞线程上执行（WASI 需要），结果 catch_unwind 已在此
+        let result = self.run_guest_call(wasm_plugin, call).await;
         match result {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => {
@@ -170,11 +189,7 @@ impl PluginHost {
             Err(panic) => {
                 // panic：unwind 已释放实例锁，但 wasmtime Store 被污染，
                 // 必须重载才能恢复插件
-                let msg = panic
-                    .downcast_ref::<&str>()
-                    .map(|s| s.to_string())
-                    .or_else(|| panic.downcast_ref::<String>().cloned())
-                    .unwrap_or_else(|| "unknown panic".to_string());
+                let msg = crate::plugin::wasm_runtime::panic_payload_to_string(&panic);
                 tracing::error!(
                     plugin_id = %plugin_id,
                     panic = %msg,
@@ -207,30 +222,36 @@ impl PluginHost {
                 enriched_args.as_object_mut().map(|obj| {
                     obj.insert(
                         "resource_dir".to_string(),
-                        serde_json::Value::String(crate::plugin::loader::strip_verbatim_prefix(
-                            &loaded.extension_path,
-                        )),
+                        serde_json::Value::String(crate::plugin::loader::strip_verbatim_prefix(&loaded.extension_path)),
                     );
                 });
             }
         }
 
         let args_str = serde_json::to_string(&enriched_args)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "Failed to serialize command args: {}", e
-            )))?;
+            .map_err(|e| crate::AppError::Plugin(format!("Failed to serialize command args: {}", e)))?;
 
         // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
+        let command_name = command_name.to_string();
         let result_str = self
-            .with_wasm_plugin_call(plugin_id, |plugin| {
-                plugin.invoke_command(command_name, &args_str)
-            })
+            .with_wasm_plugin_call(plugin_id, move |plugin| plugin.invoke_command(&command_name, &args_str))
             .await?;
 
-        let value: serde_json::Value = serde_json::from_str(&result_str)
-            .map_err(|e| crate::AppError::Plugin(format!(
-                "WASM plugin {} invoke_command() returned invalid JSON: {}", plugin_id, e
-            )))?;
+        let value: serde_json::Value = serde_json::from_str(&result_str).map_err(|e| {
+            crate::AppError::Plugin(format!(
+                "WASM plugin {} invoke_command() returned invalid JSON: {}",
+                plugin_id, e
+            ))
+        })?;
+
+        // 插件 invoke_command 的 Err 经 SDK 宏序列化为 {"error": "..."} 的**成功**
+        // JSON（非 WIT Err），此处还原为真正错误——否则前端把失败当成功
+        // （真机实证：dial-peer 被拒仍 markConnected，桌面显示「已连接」）
+        if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
+            if !err.is_empty() {
+                return Err(crate::AppError::Plugin(err.to_string()));
+            }
+        }
 
         Ok(value)
     }
@@ -244,11 +265,12 @@ impl PluginHost {
     ) -> crate::Result<serde_json::Value> {
         let handlers = self.rust_command_handlers.read().await;
         let full_name = format!("{}::{}", plugin_id, command_name);
-        let cmd = handlers.get(&full_name).ok_or_else(|| {
-            crate::AppError::Plugin(format!("Command not found: {}", full_name))
-        })?;
+        let cmd = handlers
+            .get(&full_name)
+            .ok_or_else(|| crate::AppError::Plugin(format!("Command not found: {}", full_name)))?;
 
-        let result = (cmd.handler)(args).await
+        let result = (cmd.handler)(args)
+            .await
             .map_err(|e| crate::AppError::Plugin(format!("Command execution error: {}", e)))?;
 
         Ok(result)
@@ -257,23 +279,24 @@ impl PluginHost {
     /// 获取所有 Rust 插件的 command 列表
     pub async fn list_rust_commands(&self) -> Vec<PluginCommandEntry> {
         let handlers = self.rust_command_handlers.read().await;
-        handlers.iter().map(|(full_name, cmd)| {
-            let parts: Vec<&str> = full_name.splitn(2, "::").collect();
-            let plugin_id = parts.first().map(|s| s.to_string()).unwrap_or_default();
-            let command_name = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
-            PluginCommandEntry {
-                plugin_id,
-                command_name,
-                title: cmd.title.clone(),
-            }
-        }).collect()
+        handlers
+            .iter()
+            .map(|(full_name, cmd)| {
+                let parts: Vec<&str> = full_name.splitn(2, "::").collect();
+                let plugin_id = parts.first().map(|s| s.to_string()).unwrap_or_default();
+                let command_name = parts.get(1).map(|s| s.to_string()).unwrap_or_default();
+                PluginCommandEntry {
+                    plugin_id,
+                    command_name,
+                    title: cmd.title.clone(),
+                }
+            })
+            .collect()
     }
 
     // ==================== Terminal Handler Pipeline ====================
 
     /// 是否有已注册的 Rust terminal handler
-    ///
-    /// 输出管道在无 handler 时直接透传，跳过解码与字符串转换（见 FrontendOutputHandler）
     pub async fn has_terminal_handlers(&self) -> bool {
         !self.rust_terminal_handlers.read().await.is_empty()
     }
@@ -286,7 +309,9 @@ impl PluginHost {
             if let Some(modified) = handler.on_input(session_id, &result) {
                 tracing::debug!(
                     "Terminal input modified by plugin handler: session_id={}, original_len={}, modified_len={}",
-                    session_id, result.len(), modified.len()
+                    session_id,
+                    result.len(),
+                    modified.len()
                 );
                 result = modified;
             }
@@ -302,7 +327,9 @@ impl PluginHost {
             if let Some(modified) = handler.on_output(session_id, &result) {
                 tracing::debug!(
                     "Terminal output modified by plugin handler: session_id={}, original_len={}, modified_len={}",
-                    session_id, result.len(), modified.len()
+                    session_id,
+                    result.len(),
+                    modified.len()
                 );
                 result = modified;
             }

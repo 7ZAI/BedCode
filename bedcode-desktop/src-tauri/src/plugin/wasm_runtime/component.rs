@@ -5,10 +5,10 @@
 //!   （单一事实来源），本模块用 `bindgen!` 生成绑定：
 //!   - import 接口 → `Host` trait，由本模块对 `WasmPluginState` 实现
 //!   - export 接口 → `exports::bedcode::plugin::*::Guest`，宿主侧调用组件
-//! - 已接线 15 组 import 接口（host-app / host-storage / host-log / host-config /
+//! - 已接线 14 组 import 接口（host-app / host-storage / host-log / host-config /
 //!   host-terminal / host-database / host-plugin-database / host-session /
 //!   host-timer / host-events / host-http / host-fs / host-bus /
-//!   host-file-service / host-transfer / host-process），完整 `plugin` world 可直接实例化；
+//!   host-peer / host-process），完整 `plugin` world 可直接实例化；
 //!   接线模式见本文件 `add_to_linker` 与各 `impl ... Host` 块
 //! - 宿主能力实现层在 `host_impl`（阶段 C 后仅此一层，core 胶水已删）
 //!
@@ -21,15 +21,18 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, file_service, fs, http, lifecycle, log, process,
-    session, status, storage, terminal, timer, transfer,
+    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform,
+    process, session, status, storage, terminal, timer,
 };
-use super::{WasmHostContext, WasmPluginState, FUEL_PER_CALL};
+use super::{block_on_async, fuel_per_call, WasmHostContext, WasmPluginState};
+#[cfg(test)]
+use super::plugin_debug_mode;
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
 use wasmtime::component::{bindgen, Component, Instance, Linker};
 use wasmtime::{ResourceLimiter, Store};
+use wasmtime_wasi::{p2, DirPerms, FilePerms, WasiCtxBuilder};
 
 bindgen!({
     path: "../packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
@@ -44,13 +47,12 @@ bindgen!({
 
 impl bedcode::plugin::host_storage::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        storage::storage_get(&self.host_ctx, &self.plugin_id, &key)
-            .map(|opt| opt.map(|v| v.to_string()))
+        storage::storage_get(&self.host_ctx, &self.plugin_id, &key).map(|opt| opt.map(|v| v.to_string()))
     }
 
     fn set(&mut self, key: String, value: String) -> Result<(), String> {
-        let json_value: serde_json::Value = serde_json::from_str(&value)
-            .map_err(|e| format!("invalid JSON value: {}", e))?;
+        let json_value: serde_json::Value =
+            serde_json::from_str(&value).map_err(|e| format!("invalid JSON value: {}", e))?;
         storage::storage_set(&self.host_ctx, &self.plugin_id, &key, json_value)
     }
 
@@ -262,51 +264,95 @@ impl bedcode::plugin::host_api_call::Host for WasmPluginState {
     }
 }
 
-impl bedcode::plugin::host_file_service::Host for WasmPluginState {
-    fn mount(&mut self, options_json: String) -> Result<String, String> {
-        file_service::filesrv_mount(&self.host_ctx, &self.plugin_id, &options_json)
+impl bedcode::plugin::host_peer::Host for WasmPluginState {
+    fn dial_peer(&mut self, endpoint_json: String) -> Result<String, String> {
+        peer::peer_dial(&self.host_ctx, &self.plugin_id, &endpoint_json)
     }
 
-    fn unmount(&mut self, mount_path: String) -> Result<(), String> {
-        file_service::filesrv_unmount(&self.host_ctx, &self.plugin_id, &mount_path)
+    fn close(&mut self, handle: String) -> Result<bool, String> {
+        peer::peer_close(&self.host_ctx, &self.plugin_id, &handle)
     }
 
-    fn update_roots(&mut self, mount_path: String, roots_json: String) -> Result<(), String> {
-        file_service::filesrv_update_roots(&self.host_ctx, &self.plugin_id, &mount_path, &roots_json)
+    fn respond_consent(&mut self, request_id: String, accepted: bool) -> Result<bool, String> {
+        peer::peer_respond_consent(&self.host_ctx, &self.plugin_id, &request_id, accepted)
     }
 
-    fn get_peer(&mut self, peer_id: String) -> Result<Option<String>, String> {
-        file_service::filesrv_get_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    fn list_trusted(&mut self) -> Result<String, String> {
+        peer::peer_list_trusted(&self.host_ctx, &self.plugin_id)
     }
 
-    fn query_peer(&mut self, peer_id: String) -> Result<(), String> {
-        file_service::filesrv_query_peer(&self.host_ctx, &self.plugin_id, &peer_id)
+    fn revoke_trusted(&mut self, node_id: String) -> Result<bool, String> {
+        peer::peer_revoke_trusted(&self.host_ctx, &self.plugin_id, &node_id)
     }
 
-    fn approve_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        file_service::filesrv_approve_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    fn send_files(&mut self, session: String, paths_json: String) -> Result<String, String> {
+        peer::peer_send_files(&self.host_ctx, &self.plugin_id, &session, &paths_json)
     }
 
-    fn reject_transfer(&mut self, batch_id: String) -> Result<(), String> {
-        file_service::filesrv_reject_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    fn respond_transfer(&mut self, batch_id: String, accept: bool) -> Result<(), String> {
+        peer::peer_respond_transfer(&self.host_ctx, &self.plugin_id, &batch_id, accept)
     }
 
-    fn set_approval_timeout(&mut self, mount_path: String, seconds: u64) -> Result<(), String> {
-        file_service::filesrv_set_approval_timeout(&self.host_ctx, &self.plugin_id, &mount_path, seconds)
+    fn set_receive_policy(&mut self, mode: String, timeout_secs: u64) -> Result<(), String> {
+        peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
     }
 
-    fn cancel_receiving(&mut self, session_id: String) -> Result<(), String> {
-        file_service::filesrv_cancel_receiving(&self.host_ctx, &self.plugin_id, &session_id)
+    fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
+        peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
+    }
+
+    fn list_shared_roots(&mut self, session: String) -> Result<String, String> {
+        peer::peer_list_shared_roots(&self.host_ctx, &self.plugin_id, &session)
+    }
+
+    fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
+        peer::peer_browse_directory(
+            &self.host_ctx,
+            &self.plugin_id,
+            &session,
+            &dir_id,
+            &rel_path,
+        )
+    }
+
+    fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
+        peer::peer_pull_files(
+            &self.host_ctx,
+            &self.plugin_id,
+            &session,
+            &dir_id,
+            &files_json,
+        )
+    }
+
+    fn set_download_dir(&mut self, path: String) -> Result<(), String> {
+        peer::peer_set_download_dir(&self.host_ctx, &self.plugin_id, &path)
     }
 }
 
-impl bedcode::plugin::host_transfer::Host for WasmPluginState {
-    fn start(&mut self, request_json: String) -> Result<String, String> {
-        transfer::transfer_start(&self.host_ctx, &self.plugin_id, &request_json)
+// ==================== host-mdns / host-platform（ADR 0022 v2）====================
+
+impl bedcode::plugin::host_mdns::Host for WasmPluginState {
+    fn browse(&mut self, service_type: String) -> Result<String, String> {
+        mdns::mdns_browse(&self.host_ctx, &self.plugin_id, &service_type)
     }
 
-    fn cancel(&mut self, task_id: String) -> Result<(), String> {
-        transfer::transfer_cancel(&self.host_ctx, &self.plugin_id, &task_id)
+    fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
+        mdns::mdns_stop_browse(&self.host_ctx, &self.plugin_id, &browser_id)
+    }
+}
+
+impl bedcode::plugin::host_platform::Host for WasmPluginState {
+    fn pick_files(&mut self) -> Result<String, String> {
+        platform::platform_pick_files(&self.host_ctx)
+    }
+
+    fn pick_folder(&mut self) -> Result<String, String> {
+        platform::platform_pick_folder(&self.host_ctx)
+    }
+
+    fn pick_folders(&mut self) -> Result<String, String> {
+        platform::platform_pick_folders(&self.host_ctx)
     }
 }
 
@@ -334,13 +380,19 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_fs::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_bus::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_api_call::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_file_service::add_to_linker::<WasmPluginState, D>,
-        bedcode::plugin::host_transfer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
     ] {
-        iface(linker, |s| s).map_err(|e| {
-            AppError::Plugin(format!("Failed to register component host interface: {}", e))
-        })?;
+        iface(linker, |s| s)
+            .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
     }
+    // WASI preview2（wasm32-wasip2 插件经 std::fs 直接访问文件所需的全部接口：
+    // clock/random/cli/filesystem/io/sockets）。
+    // 未导入 wasi 的既有插件（wasm32-unknown-unknown 产物）不受影响——
+    // linker 中无对应 import 的注册是惰性的。
+    p2::add_to_linker_sync(linker)
+        .map_err(|e| AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e)))?;
     Ok(())
 }
 
@@ -355,6 +407,13 @@ pub struct LoadedWasmPlugin {
     plugin_id: String,
     instance: Instance,
     store: Store<WasmPluginState>,
+    /// 实例化时实际预打开成功的主机目录（manifest 声明 ∩ 当时已授权 ∩ 创建成功）
+    ///
+    /// 激活时宿主据此判断「新授权目录是否已纳入本次实例」：声明了 WASI 预打开
+    /// 目录的插件首次启用时授权发生在 activate() 内部（fs_request_auth 弹窗），
+    /// 早于实例化；重试激活时若当前实例未覆盖新授权目录则需重建（见 host.rs
+    /// `rebuild_wasm_instance`），使 /data 挂载与授权状态一致。
+    preopened_dirs: Vec<String>,
     /// 实例创建时刻（Drop 日志计算存活时长）
     created_at: std::time::Instant,
 }
@@ -383,17 +442,18 @@ impl LoadedWasmPlugin {
         component: &Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
+        declared_preopen_dirs: &[String],
     ) -> crate::Result<Self> {
-        let state = WasmPluginState {
-            plugin_id: plugin_id.to_string(),
-            host_ctx,
-        };
+        // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
+        // 目录 /data…；无声明/未授权时为空上下文
+        let (wasi_ctx, preopened_dirs) = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
+        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
-        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e))
-        })?;
+        store
+            .set_fuel(fuel_per_call())
+            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
             AppError::Plugin(format!(
@@ -408,33 +468,40 @@ impl LoadedWasmPlugin {
             plugin_id: plugin_id.to_string(),
             instance,
             store,
+            preopened_dirs,
             created_at: std::time::Instant::now(),
         })
+    }
+
+    /// 本次实例实际预打开成功的主机目录（空 = 无声明 / 未授权 / 创建失败）
+    ///
+    /// 供宿主激活时判定是否需要重建实例以纳入新授权目录（见 host.rs
+    /// `rebuild_wasm_instance`）：声明了 WASI 预打开目录的插件首次启用时，
+    /// 授权经 activate() 内 fs_request_auth 弹窗才落库，早于实例化；重试激活
+    /// 时若当前实例未覆盖新授权目录则需重建，/data 挂载才能与授权一致。
+    pub(crate) fn preopened_dirs(&self) -> &[String] {
+        &self.preopened_dirs
     }
 
     /// ABI 版本协商（对应 core 路径的 `__bedcode_abi_version` 校验）
     ///
     /// - `abi.version()` 语义与 `abi::ABI_VERSION` 完全一致
     /// - `abi.form()` 必须为 1（component 形态）；0 是 core 形态的自研 ABI
-    fn verify_abi(
-        store: &mut Store<WasmPluginState>,
-        instance: &Instance,
-    ) -> crate::Result<()> {
+    fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
-        store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e))
-        })?;
-        let exports = Plugin::new(&mut *store, instance).map_err(|e| {
-            AppError::Plugin(format!("WASM component missing required exports: {}", e))
-        })?;
+        store
+            .set_fuel(fuel_per_call())
+            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
+        let exports = Plugin::new(&mut *store, instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
         let abi_guest = exports.bedcode_plugin_abi();
 
-        let version = abi_guest.call_version(&mut *store).map_err(|e| {
-            AppError::Plugin(format!("WASM component abi.version() call failed: {}", e))
-        })?;
-        let form = abi_guest.call_form(&mut *store).map_err(|e| {
-            AppError::Plugin(format!("WASM component abi.form() call failed: {}", e))
-        })?;
+        let version = abi_guest
+            .call_version(&mut *store)
+            .map_err(|e| AppError::Plugin(format!("WASM component abi.version() call failed: {}", e)))?;
+        let form = abi_guest
+            .call_form(&mut *store)
+            .map_err(|e| AppError::Plugin(format!("WASM component abi.form() call failed: {}", e)))?;
 
         if form != abi::FORM_COMPONENT {
             return Err(AppError::Plugin(format!(
@@ -446,7 +513,8 @@ impl LoadedWasmPlugin {
         if version > abi::ABI_VERSION {
             return Err(AppError::Plugin(format!(
                 "Plugin requires ABI v{} but host supports v{} — please upgrade BedCode",
-                version, abi::ABI_VERSION
+                version,
+                abi::ABI_VERSION
             )));
         }
         Ok(())
@@ -457,12 +525,27 @@ impl LoadedWasmPlugin {
     /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
     /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
     fn exports(&mut self) -> crate::Result<Plugin> {
-        self.store.set_fuel(FUEL_PER_CALL).map_err(|e| {
-            AppError::Plugin(format!("WASM fuel refill failed: {}", e))
-        })?;
-        Plugin::new(&mut self.store, &self.instance).map_err(|e| {
-            AppError::Plugin(format!("WASM component exports access failed: {}", e))
-        })
+        self.store
+            .set_fuel(fuel_per_call())
+            .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
+        Plugin::new(&mut self.store, &self.instance)
+            .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
+    }
+
+    /// WASM 导出调用 trap 的统一宿主日志入口
+    ///
+    /// 双层 Result 的外层 Err 即 trap（panic/unreachable、栈溢出、燃料耗尽、
+    /// 内存越界）——错误串在此已携带 wasm backtrace（见 `WasmRuntime::new` 的
+    /// `wasm_backtrace_max_frames` 配置）。即使调用方静默忽略返回错误，此处
+    /// error 级日志保证崩溃证据落盘；AI agent grep error 日志即可定位
+    /// 「哪个插件在哪个导出上崩了」。guest 自报失败（内层 Err）不经过此入口
+    fn log_trap(&self, export: &str, err: &dyn std::fmt::Display) {
+        tracing::error!(
+            plugin_id = %self.plugin_id,
+            export = export,
+            trap = %err,
+            "WASM plugin export call trapped"
+        );
     }
 
     /// 调用插件的 activate 导出
@@ -472,7 +555,10 @@ impl LoadedWasmPlugin {
         match lifecycle.call_activate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM activate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM activate() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("activate", &e);
+                Err(AppError::Plugin(format!("WASM activate() call failed: {}", e)))
+            }
         }
     }
 
@@ -483,74 +569,89 @@ impl LoadedWasmPlugin {
         match lifecycle.call_deactivate(&mut self.store) {
             Ok(Ok(())) => Ok(0),
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM deactivate() failed: {}", msg))),
-            Err(e) => Err(AppError::Plugin(format!("WASM deactivate() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("deactivate", &e);
+                Err(AppError::Plugin(format!("WASM deactivate() call failed: {}", e)))
+            }
         }
     }
 
     /// 调用插件的 invoke_command 导出（JSON 载荷保留，语义与 core 路径 1:1）
-    pub(crate) fn invoke_command(
-        &mut self,
-        command_name: &str,
-        args_json: &str,
-    ) -> crate::Result<String> {
+    pub(crate) fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
         let exports = self.exports()?;
         let cmd = exports.bedcode_plugin_command();
-        cmd.call_invoke(&mut self.store, command_name, args_json).map_err(|e| {
-            AppError::Plugin(format!("WASM invoke_command() call failed: {}", e))
-        })
+        match cmd.call_invoke(&mut self.store, command_name, args_json) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("invoke_command", &e);
+                Err(AppError::Plugin(format!("WASM invoke_command() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_terminal_input 导出
-    pub(crate) fn on_terminal_input(
-        &mut self,
-        session_id: &str,
-        text: &str,
-    ) -> crate::Result<Option<String>> {
+    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
+    pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks.call_on_terminal_input(&mut self.store, session_id, text).map_err(|e| {
-            AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e))
-        })
+        match hooks.call_on_terminal_input(&mut self.store, session_id, text) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_terminal_input", &e);
+                Err(AppError::Plugin(format!("WASM on_terminal_input() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_terminal_output 导出
-    pub(crate) fn on_terminal_output(
-        &mut self,
-        session_id: &str,
-        data: &str,
-    ) -> crate::Result<Option<String>> {
+    #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
+    pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        hooks.call_on_terminal_output(&mut self.store, session_id, data).map_err(|e| {
-            AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e))
-        })
+        match hooks.call_on_terminal_output(&mut self.store, session_id, data) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_terminal_output", &e);
+                Err(AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_startup 导出
-    pub(crate) fn on_startup(&mut self) -> crate::Result<()> {
+    ///
+    /// 双层 Result 语义：外层 = 调用本身失败（trap / 导出缺失 / 燃料耗尽），
+    /// 内层 = guest 报告的启动初始化结果（v8 契约 `result<_, string>`）。
+    /// 宿主据此区分「插件自报启动失败 → Degraded」与「调用故障」
+    pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle.call_on_startup(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM on_startup() call failed: {}", e))
-        })
+        match lifecycle.call_on_startup(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_startup", &e);
+                Err(AppError::Plugin(format!("WASM on_startup() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的 on_shutdown 导出
-    pub(crate) fn on_shutdown(&mut self) -> crate::Result<()> {
+    ///
+    /// 双层 Result 语义同 [`Self::on_startup`]；停用流程对 guest 报告的
+    /// 清理失败仅记录，不影响状态机
+    pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        lifecycle.call_on_shutdown(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e))
-        })
+        match lifecycle.call_on_shutdown(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("on_shutdown", &e);
+                Err(AppError::Plugin(format!("WASM on_shutdown() call failed: {}", e)))
+            }
+        }
     }
 
     /// 调用插件的消息总线消息接收导出
-    pub(crate) fn on_message(
-        &mut self,
-        topic: &str,
-        sender: &str,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -560,15 +661,15 @@ impl LoadedWasmPlugin {
                 tracing::warn!("WASM on_message() failed: {}", msg);
                 Ok(())
             }
-            Err(e) => Err(AppError::Plugin(format!("WASM on_message() call failed: {}", e))),
+            Err(e) => {
+                self.log_trap("on_message", &e);
+                Err(AppError::Plugin(format!("WASM on_message() call failed: {}", e)))
+            }
         }
     }
 
     /// 调用插件的会话生命周期事件导出
-    pub(crate) fn on_session_lifecycle(
-        &mut self,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_session_lifecycle(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -579,16 +680,17 @@ impl LoadedWasmPlugin {
                 Ok(())
             }
             Err(e) => {
-                Err(AppError::Plugin(format!("WASM on_session_lifecycle() call failed: {}", e)))
+                self.log_trap("on_session_lifecycle", &e);
+                Err(AppError::Plugin(format!(
+                    "WASM on_session_lifecycle() call failed: {}",
+                    e
+                )))
             }
         }
     }
 
     /// 调用插件的提交输入行事件导出（纯观察通知，失败仅记录日志）
-    pub(crate) fn on_input_submitted(
-        &mut self,
-        payload: &serde_json::Value,
-    ) -> crate::Result<()> {
+    pub(crate) fn on_input_submitted(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -599,7 +701,11 @@ impl LoadedWasmPlugin {
                 Ok(())
             }
             Err(e) => {
-                Err(AppError::Plugin(format!("WASM on_input_submitted() call failed: {}", e)))
+                self.log_trap("on_input_submitted", &e);
+                Err(AppError::Plugin(format!(
+                    "WASM on_input_submitted() call failed: {}",
+                    e
+                )))
             }
         }
     }
@@ -615,36 +721,24 @@ impl LoadedWasmPlugin {
                 Ok(())
             }
             Err(e) => {
+                self.log_trap("on_process_done", &e);
                 Err(AppError::Plugin(format!("WASM on_process_done() call failed: {}", e)))
             }
         }
     }
 
-    /// 调用插件的上传策略钩子导出（fail-closed 语义由调用方保持）
-    pub(crate) fn on_upload_request(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_upload_hook();
-        hooks.call_on_upload_request(&mut self.store, meta_json).map_err(|e| {
-            AppError::Plugin(format!("WASM on_upload_request() call failed: {}", e))
-        })
-    }
-
-    /// 调用插件的批量传输请求钩子导出（v2，fail-closed 语义由调用方保持）
-    pub(crate) fn on_transfer_request(&mut self, meta_json: &str) -> crate::Result<String> {
-        let exports = self.exports()?;
-        let hooks = exports.bedcode_plugin_transfer_request_hook();
-        hooks.call_on_transfer_request(&mut self.store, meta_json).map_err(|e| {
-            AppError::Plugin(format!("WASM on_transfer_request() call failed: {}", e))
-        })
-    }
-
     /// 获取插件的 manifest JSON
+    #[allow(dead_code)] // 测试覆盖,生产侧 manifest 走其他加载路径
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
-        manifest.call_get(&mut self.store).map_err(|e| {
-            AppError::Plugin(format!("WASM manifest() call failed: {}", e))
-        })
+        match manifest.call_get(&mut self.store) {
+            Ok(v) => Ok(v),
+            Err(e) => {
+                self.log_trap("get_manifest", &e);
+                Err(AppError::Plugin(format!("WASM manifest() call failed: {}", e)))
+            }
+        }
     }
 
     /// 测试访问器：直接获取 Store/Instance（燃料断言与耗尽 trap 测试用）
@@ -654,9 +748,109 @@ impl LoadedWasmPlugin {
     }
 }
 
-// ==================== 产物形态检测 ====================
-//
-// 阶段 C 已删除：产物仅剩组件形态，无需按魔法字节分派加载路径。
+// ==================== WASI 预打开 ====================
+
+/// 构建 WASI 上下文：将 manifest 声明（`wasiPreopenDirs`，经展开+授权过滤）的
+/// 目录逐项预打开到 guest 路径 `/data`、`/data1`、…；无声明时为空上下文。
+/// 单项失败仅告警不阻断（该目录 guest 不可见，由插件激活时自检并引导用户）。
+///
+/// 返回 `(WasiCtx, 实际预打开成功目录)`：后者供激活时判定「新授权目录是否已
+/// 纳入当前实例」（见 [`LoadedWasmPlugin::preopened_dirs`]）。
+///
+/// 目录创建是宿主职责：授权即代表用户同意插件在该路径写数据；而
+/// `preopened_dir` 要求目录已存在（wasmtime 语义），首次启用前数据目录通常
+/// 尚未创建，缺失会导致 preopen 静默失败、/data 挂不上。故此处先幂等
+/// `create_dir_all` 再挂载——修复首次启用「WASI 预打开目录未就绪」死循环。
+pub(crate) fn build_wasi_ctx(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+) -> (wasmtime_wasi::WasiCtx, Vec<String>) {
+    let mut builder = WasiCtxBuilder::new();
+    let mut preopened = Vec::new();
+    for (i, dir) in resolve_preopen_dirs(host_ctx, plugin_id, declared_dirs)
+        .into_iter()
+        .enumerate()
+    {
+        // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
+        let guest_path = if i == 0 { "/data".to_string() } else { format!("/data{}", i) };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                dir = %dir,
+                error = %e,
+                "WASI preopen dir creation failed, directory not visible to plugin"
+            );
+            continue;
+        }
+        match builder.preopened_dir(&dir, &guest_path, DirPerms::all(), FilePerms::all()) {
+            Ok(_) => {
+                tracing::info!(
+                    plugin_id = %plugin_id,
+                    dir = %dir,
+                    "WASI preopened dir at {} (manifest declared)",
+                    guest_path
+                );
+                preopened.push(dir);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    dir = %dir,
+                    error = %e,
+                    "WASI preopen failed, directory not visible to plugin"
+                );
+            }
+        }
+    }
+    (builder.build(), preopened)
+}
+
+/// 展开 manifest `wasiPreopenDirs` 声明为主机路径候选列表
+///
+/// 纯字符串处理（`${home}` 展开 + 剥尾部分隔符 + 滤空），不查授权、不依赖
+/// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
+/// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
+pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[String]) -> Vec<String> {
+    let home = dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string());
+    declared_dirs
+        .iter()
+        .filter_map(|raw| {
+            let dir = match home.as_ref() {
+                Some(home) => raw.trim().replacen("${home}", home, 1),
+                None => {
+                    tracing::warn!(plugin_id = %plugin_id, "wasiPreopenDirs: home_dir unavailable, skipping");
+                    return None;
+                }
+            };
+            // 只剥尾部分隔符：trim_matches 会连 POSIX 绝对路径的起始 '/' 一起
+            // 剥掉（/tmp/x → tmp/x），相对化后授权匹配必然失败——Windows 盘符
+            // 前缀掩盖了此问题，Linux 首次跑通前从未暴露
+            let dir = dir.trim().trim_end_matches(['/', '\\']).trim_end().to_string();
+            (!dir.is_empty()).then_some(dir)
+        })
+        .collect()
+}
+
+/// 解析 manifest `wasiPreopenDirs` 声明为可预打开的主机路径列表
+///
+/// - 先经 [`expand_preopen_declarations`] 展开
+/// - 仅保留已授权目录（is_granted 无弹窗校验）：manifest 路径可能指向任意
+///   主机位置，不得绕过授权机制建立预打开
+/// - 无 tokio 运行时上下文（无头场景）无法查询授权 → 返回空（不阻断加载）
+pub(crate) fn resolve_preopen_dirs(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+) -> Vec<String> {
+    if tokio::runtime::Handle::try_current().is_err() {
+        return Vec::new();
+    }
+    expand_preopen_declarations(plugin_id, declared_dirs)
+        .into_iter()
+        .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir)))
+        .collect()
+}
 
 // ==================== 测试 ====================
 
@@ -671,10 +865,14 @@ mod tests {
 
     /// 构建测试引擎：燃料看门狗必须与生产配置一致（WasmRuntime::new）
     ///
-    /// 否则 `Store::set_fuel` 在实例化时直接报错（consume_fuel 未开启）
+    /// 否则 `Store::set_fuel` 在实例化时直接报错（consume_fuel 未开启）；
+    /// backtrace 配置同样与生产同步（wasm_backtrace_max_frames + Environment
+    /// 详情），保证 trap 错误串在测试与生产形态一致
     fn test_engine() -> wasmtime::Engine {
         let mut config = wasmtime::Config::new();
         config.consume_fuel(true);
+        config.wasm_backtrace_max_frames(Some(std::num::NonZeroUsize::new(32).expect("32 > 0")));
+        config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Environment);
         wasmtime::Engine::new(&config).expect("create test engine")
     }
 
@@ -684,7 +882,7 @@ mod tests {
     /// 嵌入 core module 的 component-type 自定义段）；与 wasm_runtime.rs
     /// 测试的 encode_component 同实现，测试模块间不共享故在此复制
     fn encode_component(module: &[u8]) -> Vec<u8> {
-        let mut encoder = wit_component::ComponentEncoder::default();
+        let encoder = wit_component::ComponentEncoder::default();
         encoder
             .module(module)
             .expect("component encoder module")
@@ -698,12 +896,16 @@ mod tests {
     /// WIT 契约（packages/plugin-sdk-desktop/rust/wit）生成绑定；
     /// 源码变更检测与 wasm_runtime.rs 测试同策略（产物存在且源码未更新
     /// 时直接复用，避免每次跑测试都触发 cargo build）
+    ///
+    /// `BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）时以 debug profile 构建（保留
+    /// DWARF 行号，供行号冒烟测试断言 trap 错误串含 file:line）
     fn build_test_component() -> Vec<u8> {
         let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-component-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let profile = if plugin_debug_mode() { "debug" } else { "release" };
+        let output_dir = plugin_dir.join(format!("target/wasm32-unknown-unknown/{}", profile));
         let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
 
         if module_path.exists() {
@@ -723,29 +925,23 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return encode_component(
-                    &std::fs::read(&module_path).expect("Failed to read test component module"),
-                );
+                return encode_component(&std::fs::read(&module_path).expect("Failed to read test component module"));
             }
         }
 
         let manifest_path = plugin_dir.join("Cargo.toml");
+        let mut args = vec!["build", "--target", "wasm32-unknown-unknown"];
+        if profile == "release" {
+            args.push("--release");
+        }
+        args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
         let status = std::process::Command::new("cargo")
-            .args([
-                "build",
-                "--target",
-                "wasm32-unknown-unknown",
-                "--release",
-                "--manifest-path",
-                manifest_path.to_str().unwrap(),
-            ])
+            .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        encode_component(
-            &std::fs::read(&module_path).expect("Failed to read test component after build"),
-        )
+        encode_component(&std::fs::read(&module_path).expect("Failed to read test component after build"))
     }
 
     /// 14 组 import 接口全部注册成功（add_to_linker 是纯接线代码，
@@ -782,8 +978,7 @@ mod tests {
     #[test]
     fn test_loaded_plugin_component_roundtrip() {
         let engine = test_engine();
-        let component = Component::from_binary(&engine, &build_test_component())
-            .expect("compile test component");
+        let component = Component::from_binary(&engine, &build_test_component()).expect("compile test component");
         let mut linker = Linker::new(&engine);
         add_to_linker(&mut linker).expect("register host interfaces");
 
@@ -811,14 +1006,8 @@ mod tests {
                 .await
                 .expect("preset storage key");
 
-            let mut plugin = LoadedWasmPlugin::new(
-                &engine,
-                &linker,
-                &component,
-                TEST_PLUGIN_ID,
-                host_ctx,
-            )
-            .expect("instantiate component");
+            let mut plugin = LoadedWasmPlugin::new(&engine, &linker, &component, TEST_PLUGIN_ID, host_ctx, &[])
+                .expect("instantiate component");
 
             // 生命周期（new 内已隐式通过 verify_abi：form=1 且 version<=ABI_VERSION）
             assert_eq!(plugin.activate().expect("activate"), 0);
@@ -829,15 +1018,14 @@ mod tests {
                 let (store, _) = plugin.raw_store();
                 let remaining = store.get_fuel().expect("get fuel");
                 assert!(
-                    remaining < FUEL_PER_CALL,
+                    remaining < fuel_per_call(),
                     "activate must consume fuel, remaining={}",
                     remaining
                 );
             }
 
             // manifest（guest 静态导出）
-            let manifest: serde_json::Value =
-                serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
+            let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
             assert_eq!(manifest["id"], "com.bedcode.component-test");
 
             // 命令调用：guest 内 host_storage.get 读回预写值（跨边界往返）
@@ -856,5 +1044,177 @@ mod tests {
 
             assert_eq!(plugin.deactivate().expect("deactivate"), 0);
         });
+    }
+
+    // ==================== WASI 预打开目录解析 ====================
+
+    /// 预打开解析测试基建：返回 (host_ctx, 已授权目录)
+    ///
+    /// 目录真实存在（canonicalize 需要），测试结束时由 TempDir 自动清理。
+    async fn preopen_ctx(plugin_id: &str) -> (Arc<WasmHostContext>, tempfile::TempDir) {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, plugin_id, &["storage"]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        // 模拟激活时 fs_request_auth 同意后的持久化授权（storage key fs_granted_paths）
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            plugin_id,
+            "fs_granted_paths",
+            serde_json::json!([dir.path().to_string_lossy()]),
+        )
+        .expect("seed granted path");
+        (ctx, dir)
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dirs_empty_when_no_declaration() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        assert!(resolve_preopen_dirs(&ctx, "com.bedcode.test", &[]).is_empty());
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dirs_keeps_granted_and_trims() {
+        let (ctx, dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        let granted = dir.path().to_string_lossy().to_string();
+
+        // 已授权目录保留；头尾空白与多余分隔符被清理
+        let out = resolve_preopen_dirs(&ctx, pid, &[format!(" {} /", granted)]);
+        assert_eq!(out, vec![granted]);
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dirs_filters_ungranted_and_blank() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+
+        // 未授权目录不得预打开（manifest 声明不能绕过授权机制）
+        let rogue = std::env::temp_dir().join("wasi-rogue-not-authorized");
+        std::fs::create_dir_all(&rogue).unwrap();
+        // 授权根之外的不存在路径（canonicalize 回退父目录+名，不在授权前缀下）同样剔除
+        let missing = rogue.join("missing-deep");
+
+        let out = resolve_preopen_dirs(
+            &ctx,
+            pid,
+            &[
+                rogue.to_string_lossy().to_string(),
+                missing.to_string_lossy().to_string(),
+                "   ".to_string(),
+                "/".to_string(),
+            ],
+        );
+        assert!(out.is_empty(), "未授权/空白声明全部剔除，实际: {:?}", out);
+    }
+
+    #[tokio::test]
+    async fn resolve_preopen_dirs_expands_home_variable() {
+        let Some(home) = dirs::home_dir() else {
+            return; // 无主目录环境跳过
+        };
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+
+        // 在主目录下建真实目录并授权，验证 ${home} 展开 + 授权过滤联合生效
+        let probe = home.join(".bedcode-wasi-preopen-test");
+        std::fs::create_dir_all(&probe).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([probe.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+
+        let out = resolve_preopen_dirs(&ctx, pid, &["${home}/.bedcode-wasi-preopen-test".to_string()]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].ends_with(".bedcode-wasi-preopen-test"));
+        std::fs::remove_dir_all(&probe).ok();
+    }
+
+    /// expand_preopen_declarations：`${home}` 展开 + 尾分隔符清理 + 滤空，
+    /// 且**不过滤未授权项**——preauthorize 收集的恰恰是未授权候选（交由
+    /// check_batch 弹窗），与 resolve_preopen_dirs 的授权过滤形成对照
+    #[test]
+    fn expand_preopen_declarations_expands_and_keeps_ungranted() {
+        let Some(home) = dirs::home_dir() else {
+            return; // 无主目录环境跳过
+        };
+        let home_str = home.to_string_lossy().trim_end_matches('/').to_string();
+
+        let out = expand_preopen_declarations(
+            "com.bedcode.test",
+            &[
+                "${home}/.bedcode/ai-chatbox".to_string(),
+                format!(" {}/trailing/ ", home_str),
+                "   ".to_string(),
+                String::new(),
+            ],
+        );
+        assert_eq!(out.len(), 2, "实际: {:?}", out);
+        assert!(out[0].ends_with("/.bedcode/ai-chatbox"), "实际: {:?}", out);
+        assert!(out[1].ends_with("/trailing"), "实际: {:?}", out);
+    }
+
+    /// 已授权但目录尚不存在（首次启用场景）：build_wasi_ctx 先幂等创建再 preopen，
+    /// 并把实际挂载目录计入返回值——修复「授权只落库、目录不创建」导致的
+    /// WASI 预打开失败死循环（Bug B 方案 A）。
+    #[tokio::test]
+    async fn build_wasi_ctx_creates_missing_granted_dir_and_reports_preopened() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        // 授权父路径（fs_auth save_granted_path 的存储语义即父目录前缀）；
+        // 目标目录刻意不存在，模拟首次启用前数据目录未创建
+        let base = std::env::temp_dir().join(format!("bedcode-wasi-create-{}", std::process::id()));
+        let missing = base.join("ai-chatbox");
+        std::fs::create_dir_all(&base).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([base.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+
+        let (wasi_ctx, preopened) = build_wasi_ctx(&ctx, pid, &[missing.to_string_lossy().to_string()]);
+        assert_eq!(preopened, vec![missing.to_string_lossy().to_string()]);
+        assert!(missing.is_dir(), "host must create the missing preopen dir");
+        drop(wasi_ctx);
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 目录创建失败（不可写路径）不 panic：跳过该声明，其余声明仍正常挂载
+    #[tokio::test]
+    async fn build_wasi_ctx_skips_uncreatable_dir_without_panicking() {
+        let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
+        let pid = "com.bedcode.test";
+        // 已授权目录（可创建）
+        let base = std::env::temp_dir().join(format!("bedcode-wasi-create2-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        crate::plugin::wasm_runtime::host_impl::storage::storage_set(
+            &ctx,
+            pid,
+            "fs_granted_paths",
+            serde_json::json!([base.to_string_lossy()]),
+        )
+        .expect("seed granted path");
+        let ok_dir = base.join("ok");
+        // 不可创建路径：普通文件当父目录（create_dir_all 必然失败）
+        let blocker = base.join("blocker");
+        std::fs::write(&blocker, b"not a dir").unwrap();
+        let bad_dir = blocker.join("child");
+
+        let (wasi_ctx, preopened) = build_wasi_ctx(
+            &ctx,
+            pid,
+            &[
+                bad_dir.to_string_lossy().to_string(),
+                ok_dir.to_string_lossy().to_string(),
+            ],
+        );
+        assert_eq!(preopened, vec![ok_dir.to_string_lossy().to_string()]);
+        assert!(ok_dir.is_dir());
+        drop(wasi_ctx);
+        std::fs::remove_dir_all(&base).ok();
     }
 }

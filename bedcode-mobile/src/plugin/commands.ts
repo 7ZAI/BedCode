@@ -5,14 +5,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core'
-import type {
-  PluginInfo,
-  PeerFileServiceInfo,
-  SafEntry,
-  SafCopyHandle,
-  SafCopyStatus,
-  PickedSharedDirectory,
-} from './types'
+import type { PluginInfo } from './types'
 
 /** 获取所有已加载插件信息 */
 export async function pluginListLoaded(): Promise<PluginInfo[]> {
@@ -22,6 +15,16 @@ export async function pluginListLoaded(): Promise<PluginInfo[]> {
 /** 获取单个插件信息 */
 export async function pluginGetInfo(pluginId: string): Promise<PluginInfo | null> {
   return await invoke('plugin_get_info', { pluginId })
+}
+
+/**
+ * 预授权（启用前置，独立于 activate 供前端先行调用）
+ *
+ * 时序契约：toggle 启用时先调本命令（此阶段不显示 LoadingDialog，授权弹窗
+ * 可正常交互）→ 通过后再显示 loading 并调 pluginActivate；拒绝则直接失败
+ */
+export async function pluginPreauthorize(pluginId: string): Promise<void> {
+  return await invoke('plugin_preauthorize', { pluginId })
 }
 
 /** 激活插件 */
@@ -99,133 +102,6 @@ export async function pluginUninstall(pluginId: string): Promise<void> {
   return await invoke('plugin_uninstall', { pluginId })
 }
 
-// ==================== File Service ====================
-
-/** 文件服务挂载结果（与 SDK Rust MountResult camelCase 对应） */
-export interface FileSrvMountResult {
-  mountPath: string
-  basePath: string
-}
-
-/** 挂载文件服务（TS 通道；options 为不含 onUploadRequest 函数的 MountOptions） */
-export async function pluginFilesrvMount(
-  pluginId: string,
-  options: Record<string, unknown>,
-): Promise<FileSrvMountResult> {
-  return await invoke<FileSrvMountResult>('plugin_filesrv_mount', {
-    pluginId,
-    optionsJson: JSON.stringify(options),
-  })
-}
-
-/** 更新挂载点的允许目录根 */
-export async function pluginFilesrvUpdateRoots(
-  pluginId: string,
-  mountPath: string,
-  roots: string[],
-): Promise<void> {
-  return await invoke('plugin_filesrv_update_roots', {
-    pluginId,
-    mountPath,
-    rootsJson: JSON.stringify(roots),
-  })
-}
-
-/** 摘除挂载点（对应 TS SDK mount.dispose()） */
-export async function pluginFilesrvDispose(pluginId: string, mountPath: string): Promise<void> {
-  return await invoke('plugin_filesrv_dispose', { pluginId, mountPath })
-}
-
-/** 回填 Webview 上传策略钩子决定 */
-export async function pluginFilesrvRespondUploadRequest(
-  pluginId: string,
-  requestId: string,
-  allow: boolean,
-  reason?: string,
-): Promise<void> {
-  return await invoke('plugin_filesrv_respond_upload_request', {
-    pluginId,
-    requestId,
-    allow,
-    reason: reason ?? null,
-  })
-}
-
-/** 获取对端文件服务信息（未公告返回 null） */
-export async function pluginFilesrvGetPeer(
-  pluginId: string,
-  peerId: string,
-): Promise<PeerFileServiceInfo | null> {
-  return await invoke<PeerFileServiceInfo | null>('plugin_filesrv_get_peer', { pluginId, peerId })
-}
-
-// ==================== v2 批量传输批准（TS 通道） ====================
-
-/** 批准传输批（接收端应答「接受全部」） */
-export async function pluginFilesrvApproveTransfer(
-  pluginId: string,
-  batchId: string,
-): Promise<void> {
-  return await invoke('plugin_filesrv_approve_transfer', { pluginId, batchId })
-}
-
-/** 拒绝传输批（接收端应答「拒绝全部」） */
-export async function pluginFilesrvRejectTransfer(
-  pluginId: string,
-  batchId: string,
-): Promise<void> {
-  return await invoke('plugin_filesrv_reject_transfer', { pluginId, batchId })
-}
-
-/** 设置批准超时（秒，10–600） */
-export async function pluginFilesrvSetApprovalTimeout(
-  pluginId: string,
-  mountPath: string,
-  seconds: number,
-): Promise<void> {
-  return await invoke('plugin_filesrv_set_approval_timeout', { pluginId, mountPath, seconds })
-}
-
-/** 取消接收中的上传会话（本地取消） */
-export async function pluginFilesrvCancelReceiving(
-  pluginId: string,
-  sessionId: string,
-): Promise<void> {
-  return await invoke('plugin_filesrv_cancel_receiving', { pluginId, sessionId })
-}
-
-/** 回填 Webview 批量传输钩子决定（decision 为 UploadHookDecision JSON） */
-export async function pluginFilesrvRespondTransferRequest(
-  pluginId: string,
-  requestId: string,
-  decisionJson: string,
-): Promise<void> {
-  return await invoke('plugin_filesrv_respond_transfer_request', {
-    pluginId,
-    requestId,
-    decisionJson,
-  })
-}
-
-/** 系统目录选择对话框（用户取消返回 null） */
-export async function pluginPickDirectory(pluginId: string): Promise<string | null> {
-  return await invoke<string | null>('plugin_pick_directory', { pluginId })
-}
-
-/** 系统文件选择对话框（插件上传本地文件用；用户取消返回 null） */
-export async function pluginPickFile(pluginId: string): Promise<string | null> {
-  return await invoke<string | null>('plugin_pick_file', { pluginId })
-}
-
-/**
- * 查询/引导「所有文件访问权限」（Android 11+ 分区存储）
- *
- * 未授权时宿主跳转系统授权页；返回跳转前是否已授权。非 Android 平台 reject。
- */
-export async function pluginOpenAllFilesSettings(pluginId: string): Promise<boolean> {
-  return await invoke<boolean>('open_all_files_settings', { pluginId })
-}
-
 /** 用系统查看器打开已下载文件（需 system:open 权限） */
 export async function pluginOpenFile(
   pluginId: string,
@@ -240,64 +116,19 @@ export async function pluginOpenFileLocation(pluginId: string, path: string): Pr
   return await invoke<void>('plugin_open_file_location', { pluginId, path })
 }
 
-// ==================== SAF 存储访问（SafIo 主 seam） ====================
-
-/** SAF：列出目录树子条目（共享目录 App 内遍历） */
-export async function pluginSafListTree(
-  pluginId: string,
-  treeUri: string,
-  documentId: string,
-): Promise<SafEntry[]> {
-  return await invoke<SafEntry[]>('plugin_saf_list_tree', { pluginId, treeUri, documentId })
+/** 按文件名打开接收文件所在目录（历史「打开所在文件夹」真机路径；需 system:open 权限） */
+export async function pluginRevealReceivedFile(pluginId: string, fileName: string): Promise<void> {
+  return await invoke<void>('plugin_reveal_received_file', { pluginId, fileName })
 }
 
-/** SAF：启动中转复制（SAF 源 → app 私有 cache），返回 {copyId, destPath} */
-export async function pluginSafCopyStart(
-  pluginId: string,
-  uri: string,
-  destName: string,
-): Promise<SafCopyHandle> {
-  return await invoke<SafCopyHandle>('plugin_saf_copy_start', { pluginId, uri, destName })
+/** 引导开启「所有文件访问」权限（打开公共 Download 目录所需；未授权时跳系统设置页
+ * 返回跳转前授权状态；需 system:open 权限） */
+export async function pluginOpenAllFilesAccess(pluginId: string): Promise<boolean> {
+  return await invoke<boolean>('plugin_open_all_files_access', { pluginId })
 }
 
-/** SAF：轮询中转复制进度 */
-export async function pluginSafCopyStatus(
-  pluginId: string,
-  copyId: string,
-): Promise<SafCopyStatus> {
-  return await invoke<SafCopyStatus>('plugin_saf_copy_status', { pluginId, copyId })
-}
-
-/** SAF：取消中转复制 */
-export async function pluginSafCopyCancel(pluginId: string, copyId: string): Promise<void> {
-  return await invoke<void>('plugin_saf_copy_cancel', { pluginId, copyId })
-}
-
-/** SAF：清扫中转复制残留（file-transfer 插件激活时调用） */
-export async function pluginSafCleanupStaleCopies(pluginId: string): Promise<void> {
-  return await invoke<void>('plugin_saf_cleanup_stale_copies', { pluginId })
-}
-
-/** SAF：检测树授权是否仍有效 */
-export async function pluginSafCheckAuthorized(
-  pluginId: string,
-  treeUri: string,
-): Promise<boolean> {
-  return await invoke<boolean>('plugin_saf_check_authorized', { pluginId, treeUri })
-}
-
-/** 弹系统目录树选择器，返回 SAF 树元数据（添加共享目录条目用；取消返回 null） */
-export async function pluginPickSharedDirectory(
-  pluginId: string,
-): Promise<PickedSharedDirectory | null> {
-  const picked = await invoke<[string, string, string] | null>('plugin_pick_shared_directory', {
-    pluginId,
-  })
-  if (!picked) return null
-  return { uri: picked[0], documentId: picked[1], displayName: picked[2] }
-}
-
-/** 列出真实路径目录条目（免授权特殊条目「app 私有下载目录」浏览用） */
-export async function pluginSafListDir(pluginId: string, path: string): Promise<SafEntry[]> {
-  return await invoke<SafEntry[]>('plugin_saf_list_dir', { pluginId, path })
+/** 打开公共下载目录（设置页下载目录区「打开」；未授权时报 needs_all_files_access；
+ * 需 system:open 权限） */
+export async function pluginOpenDownloadDir(pluginId: string): Promise<void> {
+  return await invoke<void>('plugin_open_download_dir', { pluginId })
 }

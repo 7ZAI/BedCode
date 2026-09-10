@@ -5,7 +5,7 @@
  * 用户操作后 resolveTop 完成对应 Promise。toasts 由 ToastHost 渲染。
  */
 import { ref } from 'vue'
-import type { DialogOptions, DialogResult } from '../../src/types'
+import type { DialogOptions, DialogResult } from '../../../src/types'
 
 export interface DialogItem {
   id: number

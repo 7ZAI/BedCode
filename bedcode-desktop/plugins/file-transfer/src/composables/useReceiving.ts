@@ -10,8 +10,12 @@
  * 只更新计数不重复弹（spec §14.4）。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/plugin-sdk-desktop'
-import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification'
 import type { HistoryEntry, PendingBatch, ReceivingTask } from '../types'
 import { formatBytes } from '../utils/format'
 
@@ -30,44 +34,74 @@ export interface TransferToast {
   mode: 'batch' | 'per-file'
 }
 
+/** 展示名：首文件名（多文件追加 +N） */
+function displayName(files: unknown): string {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]?.path ?? arr[0]?.relativePath ?? 'file'
+  const name = String(first).split('/').pop() ?? String(first)
+  const extra = Math.max(0, arr.length - 1)
+  return extra > 0 ? `${name} +${extra}` : name
+}
+
+/** 首文件相对落盘路径（wire files[0].path / relativePath；缺失为 null） */
+function firstRelPath(files: unknown): string | null {
+  const arr = Array.isArray(files) ? files : []
+  const first = arr[0]
+  if (!first || typeof first !== 'object') return null
+  const p = (first as any).path ?? (first as any).relativePath
+  return typeof p === 'string' && p.length > 0 ? p : null
+}
+
 function mapPendingBatch(raw: any): PendingBatch {
+  const rawFiles = Array.isArray(raw.files) ? raw.files : []
   return {
-    batchId: raw.batch_id ?? raw.batchId ?? '',
-    peerId: raw.peer_id ?? raw.peerId ?? '',
-    peerName: raw.peer_name ?? raw.peerName ?? '',
-    files: Array.isArray(raw.files) ? raw.files : [],
-    totalSize: raw.total_size ?? raw.totalSize ?? 0,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
+    batchId: raw.batchId ?? '',
+    peerId: raw.nodeId ?? '',
+    peerName: raw.peerName ?? '',
+    // 自有存储条目文件项为 { path, size }（引擎形状），归一化为前端 relativePath 契约
+    files: rawFiles.map((f: any) => ({
+      relativePath: f.path ?? f.relativePath ?? '',
+      size: f.size ?? 0,
+    })),
+    totalSize: raw.totalBytes ?? 0,
+    createdAt: raw.createdAtMs ?? 0,
   }
 }
 
 function mapReceivingTask(raw: any): ReceivingTask {
+  const status = String(raw.status ?? 'running')
   return {
-    sessionId: raw.session_id ?? raw.sessionId ?? '',
-    batchId: raw.batch_id ?? raw.batchId ?? null,
-    remotePath: raw.remote_path ?? raw.remotePath ?? '',
-    size: raw.size ?? 0,
-    state: raw.state ?? 'transferring',
-    reason: raw.reason ?? null,
-    peerId: raw.peer_id ?? raw.peerId ?? '',
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    sessionId: raw.batchId ?? '',
+    batchId: raw.batchId ?? null,
+    remotePath: displayName(raw.files),
+    relPath: firstRelPath(raw.files),
+    size: raw.totalBytes ?? 0,
+    offset: raw.transferredBytes ?? 0,
+    state: status === 'running' ? 'transferring' : status,
+    reason: raw.detail ?? null,
+    peerId: raw.nodeId ?? '',
+    peerName: raw.peerName || undefined,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
 function mapHistoryEntry(raw: any): HistoryEntry {
   return {
-    id: raw.id ?? '',
-    direction: raw.direction === 'upload' ? 'upload' : 'download',
-    initiator: raw.initiator === 'peer' ? 'peer' : 'me',
-    fileName: raw.file_name ?? raw.fileName ?? '',
-    size: raw.size ?? 0,
-    state: raw.state ?? 'failed',
-    reason: raw.reason ?? null,
-    peerName: raw.peer_name ?? raw.peerName ?? '',
-    localPath: raw.local_path ?? raw.localPath ?? null,
-    createdAt: raw.created_at ?? raw.createdAt ?? 0,
-    updatedAt: raw.updated_at ?? raw.updatedAt ?? 0,
+    id: raw.batchId ?? '',
+    direction: raw.direction === 'receive' ? 'download' : 'upload',
+    initiator: raw.direction === 'receive' ? 'peer' : 'me',
+    fileName: displayName(raw.files),
+    relPath: firstRelPath(raw.files),
+    size: raw.totalBytes ?? 0,
+    state: raw.status ?? 'failed',
+    reason: raw.detail ?? raw.rejectReason ?? null,
+    peerName: raw.peerName ?? '',
+    localPath: null,
+    // 发起方条目携带 retryMeta（历史重试按钮的判定依据）
+    retryable: raw.retryMeta != null,
+    createdAt: raw.createdAtMs ?? 0,
+    updatedAt: raw.updatedAtMs ?? 0,
   }
 }
 
@@ -88,14 +122,14 @@ export function useReceiving(context: PluginContext) {
   /** per-file 合并窗口内的 toast id（窗口内只更新计数） */
   let perFileToastId: number | null = null
   let toastSeq = 0
-  let dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
+  const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>()
 
   function applyBatches(list: any[]): void {
     batches.value = (Array.isArray(list) ? list : []).map(mapPendingBatch)
     // 最小化/后台时新 pending 批 → 系统通知「打开应用」（spec §12.3：桌面最小化
     // 不提供通知内应答，仅提示；点击通知聚焦窗口）。前台横幅已足够，不发通知。
     // 同批只通知一次；批消失后从集合移除，允许重新请求时再次提示
-    const ids = new Set(batches.value.map(b => b.batchId))
+    const ids = new Set(batches.value.map((b) => b.batchId))
     for (const id of [...notifiedBatches]) {
       if (!ids.has(id)) notifiedBatches.delete(id)
     }
@@ -110,7 +144,7 @@ export function useReceiving(context: PluginContext) {
 
   /** 移除 toast（自动消失或手动关闭） */
   function dismissToast(id: number): void {
-    toasts.value = toasts.value.filter(t => t.id !== id)
+    toasts.value = toasts.value.filter((t) => t.id !== id)
     dismissTimers.delete(id)
   }
 
@@ -121,7 +155,10 @@ export function useReceiving(context: PluginContext) {
   /** 通知权限是否已检查过（避免每次批到达都请求） */
   let notifyPermissionChecked = false
 
-  /** 窗口不可见且批未通知过时发系统通知（best-effort，失败仅记日志） */
+  /**
+   * 窗口不可见时发系统通知（best-effort，失败仅记日志）。
+   * 前台时全局弹窗已覆盖所有页面（宿主通用弹窗），无需通知。
+   */
   async function maybeNotifyPendingBatch(batch: PendingBatch): Promise<void> {
     if (!document.hidden || notifiedBatches.has(batch.batchId)) return
     try {
@@ -152,7 +189,7 @@ export function useReceiving(context: PluginContext) {
 
     if (mode === 'per-file' && perFileToastId !== null) {
       // 窗口内：只更新计数，不重复弹（spec §14.4 3s 窗口合并）
-      const existing = toasts.value.find(t => t.id === perFileToastId)
+      const existing = toasts.value.find((t) => t.id === perFileToastId)
       if (existing) {
         existing.count += count
         return
@@ -164,11 +201,14 @@ export function useReceiving(context: PluginContext) {
     const toast: TransferToast = { id, name, count, totalSize, mode }
     toasts.value = [...toasts.value, toast]
     if (mode === 'per-file') perFileToastId = id
-    // 自动消失：5s（batch）/ 3s（per-file）
-    const timer = setTimeout(() => {
-      dismissToast(id)
-      if (perFileToastId === id) perFileToastId = null
-    }, mode === 'batch' ? 5000 : 3000)
+    // 自动消失：5s（batch）/ 3s（per-file，与合并窗口同值 = 窗口结束即消失）
+    const timer = setTimeout(
+      () => {
+        dismissToast(id)
+        if (perFileToastId === id) perFileToastId = null
+      },
+      mode === 'batch' ? 5000 : PER_FILE_TOAST_WINDOW_MS,
+    )
     dismissTimers.set(id, timer)
   }
 

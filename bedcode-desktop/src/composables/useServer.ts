@@ -4,6 +4,7 @@
  * 服务器状态管理、生命周期控制和指标轮询
  */
 import { ref, onUnmounted } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import i18n from '@/locales'
 
@@ -16,6 +17,8 @@ export interface ServerStatusInfo {
   port: number
   auto_start: boolean
   local_ips: string[]
+  /** 运行时长（秒）；服务器从未启动时为 null（Rust Option<u64> 恒序列化） */
+  uptime_secs: number | null
 }
 
 /** 网络配置 — Actix Web + WebSocket 参数 */
@@ -83,7 +86,7 @@ export function useServer() {
       autoStart.value = info.auto_start
       localIps.value = info.local_ips
     } catch (e) {
-      console.error('Failed to load server status:', e)
+      logger.error('Failed to load server status:', e)
     }
   }
 
@@ -146,7 +149,7 @@ export function useServer() {
       port.value = config.port
       autoStart.value = config.auto_start
     } catch (e) {
-      console.error('Failed to load network config:', e)
+      logger.error('Failed to load network config:', e)
     }
   }
 

@@ -1,0 +1,80 @@
+{
+    // See https://go.microsoft.com/fwlink/?LinkId=733558
+    // 任务文档: https://code.visualstudio.com/docs/editor/tasks
+    //
+    // 本文件配合 .vscode/launch.json 使用（参考 https://v2.tauri.app/develop/debug/vscode/）：
+    // 调试配置不经 tauri CLI 启动，beforeDevCommand / beforeBuildCommand 在此以任务形式补齐，
+    // 由 launch.json 的 preLaunchTask 引用。
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // 桌面端前端 dev server（等价 tauri.conf.json 的 beforeDevCommand: pnpm run dev）
+            "label": "ui:dev",
+            "type": "shell",
+            // dev server 常驻后台不退出，靠下方 background problemMatcher 判断「已就绪」：
+            // 匹配到 vite 输出的 Local: 行后才继续执行 preLaunchTask 后续流程
+            "isBackground": true,
+            "command": "pnpm",
+            "args": ["run", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}/bedcode-desktop"
+            },
+            "problemMatcher": [
+                {
+                    "owner": "vite-dev",
+                    "pattern": {
+                        "regexp": "."
+                    },
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": ".",
+                        "endsPattern": "Local:"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        },
+        {
+            // 桌面端前端产物构建（等价 tauri.conf.json 的 beforeBuildCommand: pnpm run build）
+            "label": "ui:build",
+            "type": "shell",
+            "command": "pnpm",
+            "args": ["run", "build"],
+            "options": {
+                "cwd": "${workspaceFolder}/bedcode-desktop"
+            },
+            "group": "build"
+        },
+        {
+            // 移动端宿主调试用的前端 dev server（devUrl: http://localhost:1423）
+            "label": "mobile:ui:dev",
+            "type": "shell",
+            "isBackground": true,
+            "command": "pnpm",
+            "args": ["run", "dev"],
+            "options": {
+                "cwd": "${workspaceFolder}/bedcode-mobile"
+            },
+            "problemMatcher": [
+                {
+                    "owner": "vite-dev-mobile",
+                    "pattern": {
+                        "regexp": "."
+                    },
+                    "background": {
+                        "activeOnStart": true,
+                        "beginsPattern": ".",
+                        "endsPattern": "Local:"
+                    }
+                }
+            ],
+            "presentation": {
+                "reveal": "silent",
+                "panel": "dedicated"
+            }
+        }
+    ]
+}

@@ -1,6 +1,6 @@
 {
-  "name": "@binblink/plugin-sdk-desktop-dev-shell",
-  "version": "0.1.0",
+  "name": "@binblink/bedcode-plugin-sdk-desktop-dev-shell",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "BedCode 桌面端插件浏览器开发环境（空壳宿主 + 桌面端页面骨架 + mock PluginContext）",
@@ -10,12 +10,12 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@vitejs/plugin-vue": "^5.0.4",
+    "@vitejs/plugin-vue": "^6.0.0",
     "autoprefixer": "^10.4.19",
     "pinia": "^2.1.7",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.1",
-    "vite": "^5.1.4",
+    "vite": "^8.0.0",
     "vue": "^3.4.21",
     "vue-i18n": "^9.14.0",
     "vue-router": "^4.3.0",

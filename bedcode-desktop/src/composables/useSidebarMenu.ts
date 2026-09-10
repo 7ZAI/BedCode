@@ -42,8 +42,9 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位；插件管理(9998) 与设置(9999) 置于所有插件排序值之后，
- * 保证这两个入口永远排在菜单最末。说明：server 槽位(300) 保留不复用，防止插件排序撞位 */
+ * 设备配对(100) 置于首位；插件管理(9998) 与 设置(9999) 置于所有插件
+ * 排序值之后，保证这两个入口永远排在菜单最末。说明：server 槽位(300)
+ * 保留不复用，防止插件排序撞位 */
 export const BUILTIN_MENU_ORDERS = {
   devices: 100,
   sessions: 200,
@@ -175,7 +176,9 @@ export function useSidebarMenu(): { menuItems: ComputedRef<SidebarMenuItem[]> } 
   const registry = getPluginRegistry()
 
   const menuItems = computed<SidebarMenuItem[]>(() => {
-    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(toMenuItem)
+    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(
+      toMenuItem,
+    )
     const all = [...builtinMenuItems, ...customItemsRef.value, ...pluginItems]
     all.sort((a, b) => a.order - b.order)
     return all

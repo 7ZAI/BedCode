@@ -7,35 +7,37 @@
  * 角标随 `plugin:file-transfer:tasks-changed` 刷新：对端在线且 N 传输中时显示数量，
  * 离线显示「未连接」文案。
  *
+ * 连接角标跟随插件自身对等连接状态（connection-changed 事件 + 挂载时宿主
+ * 快照重发），与外部配对认证（宿主主连接）无关——文件传输双端独立连接。
+ *
  * 由宿主 ToolboxView 经 PluginViewHost 渲染（宿主 provide pluginContext），
  * 因此直接 inject 插件上下文；组件挂载时启动任务监听，卸载时摘除。
  */
 import { inject, onMounted, onUnmounted, computed } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useTasks } from '../composables/useTasks'
+import { usePeerDevices } from '../composables/usePeerDevices'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
 
 const tasks = useTasks(context)
+const devices = usePeerDevices(context)
 
-/** 活跃传输数（transferring + queued + resumable + paused） */
-const activeCount = computed(
-  () =>
-    tasks.summary.value.active +
-    tasks.summary.value.queued +
-    tasks.summary.value.resumable +
-    tasks.summary.value.paused,
-)
+/** 活跃传输数（传输中的批） */
+const activeCount = computed(() => tasks.tasks.value.filter((tk) => tk.state === 'transferring').length)
 
-const online = computed(() => tasks.connOnline.value)
+/** 插件自身对等连接：存在任一已建立的对等连接（≠ 宿主主连接） */
+const online = computed(() => devices.connectedIds.value.size > 0)
 
 onMounted(() => {
   tasks.start()
+  devices.start()
 })
 
 onUnmounted(() => {
   tasks.stop()
+  devices.stop()
 })
 </script>
 

@@ -33,6 +33,12 @@ pub struct SessionItem {
 #[serde(rename_all = "camelCase")]
 pub struct StartSessionRequest {
     pub config_id: String,
+    /// 启动端终端组件默认网格列数（与 rows 同时提供且 >0 才生效）
+    #[serde(default)]
+    pub cols: Option<u16>,
+    /// 启动端终端组件默认网格行数
+    #[serde(default)]
+    pub rows: Option<u16>,
 }
 
 /// POST /api/sessions/start response data
@@ -48,6 +54,9 @@ pub struct StartSessionResponseData {
 pub struct ResizeSessionRequest {
     pub cols: u16,
     pub rows: u16,
+    /// 覆盖确认标志：服务端裁决返回 needsConfirmation 后，客户端弹窗确认以 force=true 重发
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// POST /api/sessions/{id}/input request

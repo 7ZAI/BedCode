@@ -13,9 +13,26 @@ interface Window {
   __BEDCODE_SHARED__: BedCodeSharedModules
 }
 
+/** Vite 环境变量（仅声明本项目用到的字段，避免引入完整 vite/client 类型） */
+interface ImportMeta {
+  readonly env: {
+    readonly DEV: boolean
+    readonly PROD: boolean
+    readonly MODE: string
+    /** 终端输出传输层（"ws" 默认 | "channel"）：Channel 原生 IPC 替代 WS 环回 */
+    readonly VITE_TERMINAL_TRANSPORT?: string
+  }
+}
+
 declare module '*.css' {
   const content: string
   export default content
+}
+
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue'
+  const component: DefineComponent<Record<string, unknown>, Record<string, unknown>, unknown>
+  export default component
 }
 
 declare module '@xterm/xterm/css/xterm.css' {

@@ -6,23 +6,28 @@ pub mod connection;
 pub mod enums;
 pub mod file_service;
 pub mod handler;
+pub mod mdns;
 pub mod model;
+pub mod peer_migration;
+pub mod peer_net;
+pub mod peer_receive;
+pub mod peer_remote;
+pub mod peer_transfer;
 pub mod plugin;
 pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
-pub mod mdns;
 
 // Re-export core types
-pub use system::error::{AppError, Result};
 pub use system::config;
+pub use system::error::{AppError, Result};
 
+use android_logger::Config;
 use connection::PairingService;
+use log::LevelFilter;
 use std::sync::Arc;
 use tauri::Manager;
-use android_logger::Config;
-use log::LevelFilter;
 
 /// 应用启动时间，用于计算启动耗时
 pub struct AppStartTime(std::time::Instant);
@@ -34,12 +39,16 @@ pub fn run() {
     // 尽可能早地初始化日志
     // tracing 的 "log" feature 将 tracing:: 宏自动转发到 log crate
     // android_logger 将 log:: 输出发送到 adb logcat
-    android_logger::init_once(
-        Config::default()
-            .with_max_level(LevelFilter::Debug)
-            .with_tag("BedCode")
-    );
-    tracing::info!("BedCode Mobile early logging init (tracing → log → logcat)");
+    //
+    // 级别：dev 构建打满 Debug（开发期 logcat 全量）；release 收敛到 Info——
+    // Android logcat 主缓冲是系统级环形（每 app 默认约 256KB~1MB），release 打
+    // Debug 会占满缓冲导致关键日志被系统丢弃，且泄露内部路径等调试信息
+    #[cfg(debug_assertions)]
+    let log_level = LevelFilter::Debug;
+    #[cfg(not(debug_assertions))]
+    let log_level = LevelFilter::Info;
+    android_logger::init_once(Config::default().with_max_level(log_level).with_tag("BedCode"));
+    tracing::info!("BedCode Mobile early logging init (tracing → log → logcat, level={log_level})");
 
     tracing::info!("Building Tauri application...");
 
@@ -60,6 +69,8 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::saf_picker_plugin())
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
+        .plugin(crate::plugin::android_plugins::multicast_lock_plugin())
+        .plugin(crate::plugin::android_plugins::status_bar_style_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -67,7 +78,6 @@ pub fn run() {
             let app_handle = app.handle();
 
             // 窗口焦点监听（后台/锁屏判定：批量传输请求系统通知用）
-            crate::file_service::notify::attach_focus_listener(app_handle);
 
             // 托管 SafIo 主 seam 实现（Android = KotlinSafIo 转发 SafTransferPlugin；
             // 其他平台 = 明确不可用）。经 state 注入命令层，测试可替换为 fake
@@ -76,19 +86,33 @@ pub fn run() {
             ));
 
             // 初始化移动端设置管理器 (JSON 文件存储)
-            let app_data_dir = app_handle
-                .path()
-                .app_data_dir()
-                .expect("Failed to get app data dir");
+            let app_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
+
+            // 对等网络节点身份：复用上方 app_data_dir 解析点（决策 D3 宿主只注入
+            // 目录），node_identity.json 与 auth 域 device_identity.json 并列存放；
+            // 错误经 ? 上抛走既有启动失败路径——静默换身份会让对端可信列表全部失效
+            crate::peer_net::init_node_identity(&app_data_dir)?;
+
+            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
+            crate::peer_migration::migrate_legacy_peer_data(&app_data_dir);
+
+            // 对等网络节点状态容器 + 自动启动（ticket 03，决策 D7）：异步装配节点
+            // 与 mDNS 发现守护；启动前经 Kotlin MulticastLockPlugin 申请多播锁
+            // （Android 收包前提，D6）
+            app.manage(crate::peer_net::PeerNetState::default());
+            app.manage(crate::peer_transfer::PeerTransferState::default());
+            app.manage(crate::peer_receive::PeerReceiveState::default());
+            app.manage(crate::peer_remote::PeerRemoteState::default());
+            // 节点自启已退役：peer-net 生命周期随文件传输插件启停
+            // （插件管理器 activate/deactivate 外壳接线，见 peer_net::ensure_node_started）
 
             // 创建插件数据库连接（WASM Host Function 使用；
             // std Mutex：SQL 为同步操作，host fn 同步取锁，避免 block_on 绕行）
             let db_path = app_data_dir.join("bedcode_plugins.db");
             let plugin_db = Arc::new(std::sync::Mutex::new(
-                rusqlite::Connection::open(&db_path)
-                    .map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?
+                rusqlite::Connection::open(&db_path).map_err(|e| anyhow::anyhow!("Failed to open plugin DB: {}", e))?,
             ));
 
             // 创建插件管理器（WASM 运行时延迟初始化）
@@ -96,10 +120,16 @@ pub fn run() {
                 &app_data_dir,
                 settings_manager.clone(),
                 plugin_db,
-                Arc::new(app_handle.clone()),
+                Some(Arc::new(app_handle.clone())),
             );
             let plugin_manager = crate::state::init_plugin_manager(Arc::new(plugin_manager));
             app.manage(plugin_manager.clone());
+
+            // 监听前端 terminal_output_activity（前端直连终端 WS 收到输出帧时触发
+            // 插件 TerminalOutput 通知；输出不再经 Rust 中转，见 ticket 09）
+            // 必须在 init_plugin_manager 之后注册：内部会取全局插件管理器，
+            // 早于初始化调用会触发 OnceLock panic（PluginManager not initialized）
+            crate::router::event::init_terminal_output_listener(app_handle);
 
             // 异步：解压内置插件 → 初始化 WASM 运行时 → 扫描加载 → 自动激活
             // 使用 tauri::async_runtime::spawn 而非 tokio::spawn，
@@ -112,8 +142,7 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     // 采集并挂载全局系统信息（OS / 设备名称 / IP），
                     // 并同步设备名到 AuthManager，配对时上报真实用户设备名
-                    let system_info =
-                        crate::system::info::SystemInfo::collect().await;
+                    let system_info = crate::system::info::SystemInfo::collect().await;
                     let device_name = system_info.device_name.clone();
                     crate::state::init_system_info(system_info);
                     crate::state::get_auth_manager()
@@ -129,7 +158,9 @@ pub fn run() {
                     if let Err(e) = crate::plugin::loader::PluginLoader::extract_apk_plugins(
                         &app_data_dir_for_extract,
                         &app_version,
-                    ).await {
+                    )
+                    .await
+                    {
                         tracing::warn!("Failed to extract bundled plugins: {}", e);
                     }
 
@@ -138,16 +169,6 @@ pub fn run() {
                         tracing::error!("Failed to init WASM runtime: {}", e);
                         return;
                     }
-
-                    // 注入 AppHandle 到文件服务注册表：双通道推送（Tauri 事件 + 插件
-                    // 总线）的 Tauri 事件通道依赖它。WASM 插件经 host_filesrv_mount
-                    // 挂载时不注入（仅 TS 通道 plugin_filesrv_mount 注入），若此处
-                    // 缺失，filesrv:peer_changed 事件到不了插件前端，对端永远显示
-                    // "未共享"。必须在插件激活（scan_and_load）前注入一次（幂等）
-                    crate::state::get_file_service()
-                        .registry
-                        .set_app_handle(ah.clone())
-                        .await;
 
                     // 种子内置受信任插件白名单（幂等：已存在则跳过）
                     // - auto-task: 自动化任务插件
@@ -181,12 +202,16 @@ pub fn run() {
             commands::connection::ws_set_token,
             commands::connection::ws_get_token,
             commands::connection::ws_clear_token,
+            // Link Crypto Context（issue 09：事件 WS 链路加密桥）
+            commands::connection::set_link_crypto_context,
             // Connection Commands
             commands::connection::ws_connect,
             commands::connection::ws_disconnect,
             commands::connection::ws_get_status,
             commands::connection::ws_is_connected,
             commands::connection::ws_reconnect,
+            commands::connection::get_ws_token,
+            commands::connection::get_ws_url,
             // Auth Commands
             commands::auth::ws_get_auth_status,
             commands::auth::ws_authenticate,
@@ -200,8 +225,7 @@ pub fn run() {
             // Session Commands
             commands::session::ws_load_sessions,
             commands::session::ws_join_session,
-            commands::session::ws_leave_session,
-            commands::session::ws_subscribe_session,
+            commands::session::get_terminal_ws_info,
             commands::session::ws_start_session,
             commands::session::ws_stop_session,
             commands::session::ws_remove_session,
@@ -231,6 +255,7 @@ pub fn run() {
             commands::android::set_screen_orientation,
             commands::android::keep_screen_awake,
             commands::android::open_url_in_browser,
+            commands::android::set_status_bar_style,
             // Session Config (移动端使用内存存储)
             commands::mobile_commands::list_session_configs_mobile,
             commands::mobile_commands::get_session_config_mobile,
@@ -240,9 +265,42 @@ pub fn run() {
             commands::mdns::mdns_get_discovered_services,
             commands::mdns::mdns_start_advertise,
             commands::mdns::mdns_stop_advertise,
+            // Peer Net
+            peer_net::start_peer_node,
+            peer_net::stop_peer_node,
+            peer_net::list_discovered_peers,
+            peer_net::dial_peer,
+            peer_net::disconnect_peer,
+            peer_net::respond_peer_consent,
+            peer_net::list_trusted_peers,
+            peer_net::revoke_trusted_peer,
+            peer_net::list_shared_directories,
+            peer_net::add_shared_directory_saf,
+            peer_net::remove_shared_directory,
+            // Peer Transfer (issue 09 发送侧)
+            peer_transfer::send_files_to_peer,
+            peer_transfer::cancel_peer_transfer,
+            peer_transfer::retry_peer_transfer,
+            peer_transfer::list_peer_transfers,
+            peer_transfer::clear_peer_transfer_history,
+            peer_transfer::peer_pick_files,
+            peer_transfer::peer_pick_folder,
+            // Peer Receive (issue 10 接收侧)
+            peer_receive::list_peer_receiving,
+            peer_receive::respond_peer_transfer,
+            peer_receive::cancel_peer_receiving,
+            peer_receive::get_peer_receive_settings,
+            peer_receive::set_peer_receive_policy,
+            peer_receive::set_peer_transfer_encryption,
+            peer_receive::clear_peer_receiving_history,
+            // Peer Remote (issue 11 远端浏览/拉取)
+            peer_remote::list_peer_shared_roots,
+            peer_remote::browse_peer_directory,
+            peer_remote::pull_peer_files,
             // Plugin Commands
             crate::plugin::commands::plugin_list_loaded,
             crate::plugin::commands::plugin_get_info,
+            crate::plugin::commands::plugin_preauthorize,
             crate::plugin::commands::plugin_activate,
             crate::plugin::commands::plugin_deactivate,
             crate::plugin::commands::plugin_is_enabled,
@@ -266,32 +324,18 @@ pub fn run() {
             crate::plugin::commands::plugin_fs_get_plugin_whitelist,
             crate::plugin::commands::plugin_log,
             crate::plugin::commands::plugin_invoke,
+            // Dev Console Relay（仅 debug 构建：前端 console 日志转发 → logcat → dev:log 电脑端落盘，见 commands::dev_logs）
+            #[cfg(debug_assertions)]
+            commands::dev_logs::report_frontend_log,
+            // System Open（历史「打开所在文件夹」真机路径，system:open 权限）
+            crate::plugin::commands::plugin_reveal_received_file,
+            // System Open 配套：「所有文件访问」授权引导（system:open 权限）
+            crate::plugin::commands::plugin_open_all_files_access,
+            // System Open 配套：打开公共下载目录（设置页下载目录区「打开」，system:open 权限）
+            crate::plugin::commands::plugin_open_download_dir,
             // File Service Commands（插件 TS 通道）
-            crate::plugin::commands::plugin_filesrv_mount,
-            crate::plugin::commands::plugin_filesrv_update_roots,
-            crate::plugin::commands::plugin_filesrv_dispose,
-            crate::plugin::commands::plugin_filesrv_respond_upload_request,
-            crate::plugin::commands::plugin_filesrv_get_peer,
             // v2 批量传输批准（接收策略 / 异步批量批准）
-            crate::plugin::commands::plugin_filesrv_approve_transfer,
-            crate::plugin::commands::plugin_filesrv_reject_transfer,
-            crate::plugin::commands::plugin_filesrv_set_approval_timeout,
-            crate::plugin::commands::plugin_filesrv_cancel_receiving,
-            crate::plugin::commands::plugin_filesrv_respond_transfer_request,
-            crate::plugin::commands::plugin_open_file,
-            crate::plugin::commands::plugin_open_file_location,
-            crate::plugin::commands::plugin_pick_directory,
-            crate::plugin::commands::plugin_pick_file,
-            crate::plugin::commands::open_all_files_settings,
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）
-            crate::plugin::commands::plugin_saf_list_tree,
-            crate::plugin::commands::plugin_saf_copy_start,
-            crate::plugin::commands::plugin_saf_copy_status,
-            crate::plugin::commands::plugin_saf_copy_cancel,
-            crate::plugin::commands::plugin_saf_cleanup_stale_copies,
-            crate::plugin::commands::plugin_saf_check_authorized,
-            crate::plugin::commands::plugin_pick_shared_directory,
-            crate::plugin::commands::plugin_saf_list_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

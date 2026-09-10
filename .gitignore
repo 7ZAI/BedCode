@@ -1,22 +1,26 @@
 # Dependencies
 **/node_modules/
 .pnpm-store/
+# 项目已迁移 pnpm（各工程维护 pnpm-lock.yaml）；这里的 package-lock.json 只防误用 npm 生成新锁文件
+**/package-lock.json
 .playwright-cli
+
+# Husky v9 生成的钩子运行器（由 `husky` / `pnpm install` 重新生成，不入库）
+.husky/_/
 
 # Build outputs
 **/dist/
 build/
 *.local
 
-# CodeGraph index
-.codegraph/
-
-# Documentation
-**/docs/
+# Documentation（顶层 docs/ 与两端 docs/ 的入库策略统一由 doc-tracking.sh（scripts/doc-tracking.sh）管理：
+# dev / feature/* 全分支跟踪，uat / master 不入库（git rm --cached 剔除、工作区保留），
+# 与 .scratch/ 同机制。根 .gitignore 不再忽略 /docs/，新文档文件可直接 git add。
+# CLAUDE.md / CONTEXT.md 为低频单文件，保持忽略，走 git add -f + 钩子剔除。
 
 CLAUDE.md
 CONTEXT.md
-.scratch/
+
 
 # Tauri / Rust
 **/target/
@@ -24,7 +28,10 @@ CONTEXT.md
 **/src-tauri/bedcode.db
 **/src-tauri/gen/android/app/src/main/assets/_up_/
 *.pdb
-**/bedcode-desktop/plugins/auto-task/scripts/__pycache__
+# Python 编译缓存（通用；过去曾针对 auto-task 脚本硬编码，现统一）
+**/__pycache__/
+*.pyc
+*.pyo
 
 # 插件编译产物（WASM / index.js / plugin.json）由各插件 build 脚本生成，不入库
 **/src-tauri/resources/plugins/
@@ -32,12 +39,26 @@ CONTEXT.md
 
 # IDE and editors
 .idea/
-.claude/
+
+# AI 工具配置跟踪策略：关键配置入库（subagent / hook / 命令 prompt），
+# 运行时产物（运行日志 / 本机 bridge / Python cache / 个人 worktree）不入库。
+# .opencode/ 整目录不由根 .gitignore 忽略，由 .opencode/.gitignore 自身接管（已 ignore node_modules / lock / 自身）。
+# 关键配置：subagent 定义与 hooks。运行时产物（settings.local.json / *.log.* / __pycache__ / skills bridge / worktrees）另由下方规则忽略。
+.claude/*
+!.claude/agents/
+!.claude/agents/**
+.codex/*
+!.codex/hooks.json
+
+.omp/
 .pi/
-.codex/
-.opencode/
-opencode.jsonc
-.vscode/
+
+# pi-lens 运行时状态（缓存/会话/变更日志），配置文件 .pi-lens/lsp.json 保持跟踪
+.pi-lens/*
+!.pi-lens/lsp.json
+# pi-lens 配置备份（会话自动生成，非真源）
+.pi-lens.json.bak.*
+
 .VSCodeCounter/
 *.swp
 *.swo
@@ -62,6 +83,11 @@ logs/
 
 # Dev Shell 调试脚本（临时产物，不入库）
 bedcode-desktop/packages/plugin-sdk-desktop/dev-shell/debug-*.mjs
+# 终端 PTY 输出 dump 调试数据（临时产物，不入库）：
+# pty/terminal 字节对比 dump .bin 由排查临时功能产生（见 SCRATCHPAD），
+# 体积大（可达数十 MB）且排查完删除，禁止入库；terminal-mock 为调试用 mock
+# 终端，整目录均不入库
+bedcode-desktop/src/dev/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*

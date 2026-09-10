@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
+import { ref, watch } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 
 export interface Settings {
@@ -21,6 +22,8 @@ export interface Settings {
     theme: string
     // 色板（warm 暖调工作台，未来可扩展）
     theme_palette?: string
+    // 全局动画效果总开关（关闭时禁用所有页面过渡/动画），默认开启
+    animations_enabled?: boolean
     // 全局界面字体大小（终端字体大小由 terminal_font_size 独立控制）
     font_size: number
     terminal_font_size: number
@@ -45,6 +48,8 @@ const defaultSettings: Settings = {
     port: 8765,
   },
   session: {
+    // 默认执行环境——运行时由 useAvailableEnvironments() 按宿主机平台过滤，
+    // Windows 上 windows/wsl2，Linux 上 linux。这里保留 'windows' 与老用户数据兼容。
     default_environment: 'windows',
     default_wsl_distro: undefined,
     default_working_dir: undefined,
@@ -54,6 +59,7 @@ const defaultSettings: Settings = {
   ui: {
     theme: 'system',
     theme_palette: 'warm',
+    animations_enabled: true,
     font_size: 12,
     terminal_font_size: 12,
     terminal_font_family: 'Consolas',
@@ -85,7 +91,7 @@ export const useSettingsStore = defineStore('settings', () => {
         ui: { ...defaultSettings.ui, ...loaded.ui },
       }
     } catch (e) {
-      console.error('[Settings] Failed to load settings:', e)
+      logger.error('[Settings] Failed to load settings:', e)
     }
   }
 
@@ -99,7 +105,7 @@ export const useSettingsStore = defineStore('settings', () => {
       settings.value = merged
       lastSavedSnapshot = JSON.stringify(merged)
     } catch (e) {
-      console.error('[Settings] Failed to save settings:', e)
+      logger.error('[Settings] Failed to save settings:', e)
     }
   }
 
@@ -107,6 +113,19 @@ export const useSettingsStore = defineStore('settings', () => {
   function isPersisted(current: Settings): boolean {
     return lastSavedSnapshot !== null && JSON.stringify(current) === lastSavedSnapshot
   }
+
+  // 全局动画总开关：关闭时给 <html> 添加 anim-disabled，
+  // 由全局 CSS（style.css 的 html.anim-disabled 规则）瞬时禁用所有过渡/动画。
+  // immediate 在 loadSettings 回填后与初始默认值都生效，保证刷新后状态一致。
+  watch(
+    () => settings.value.ui.animations_enabled,
+    (enabled) => {
+      const root = document.documentElement
+      if (enabled === false) root.classList.add('anim-disabled')
+      else root.classList.remove('anim-disabled')
+    },
+    { immediate: true },
+  )
 
   // 获��终端缓存最大数量
   function getMaxCachedTerminals(): number {

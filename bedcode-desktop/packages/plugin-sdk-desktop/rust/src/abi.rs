@@ -19,7 +19,14 @@
 //!   `TIMER_REGISTER`），支撑插件定时自动任务，见 ADR 0003
 //! - v7: 新增会话关闭（host function `SESSION_CLOSE`），支撑插件在
 //!   定时自动任务执行完后关闭其创建的会话
-pub const ABI_VERSION: u32 = 7;
+//! - v8: 生命周期契约补全（WIT `on-startup`/`on-shutdown` 携带
+//!   `result<_, string>`），启动初始化/清理的失败可如实上抛宿主，
+//!   宿主据此进入 Degraded 终态而非静默标记 Activated
+//! - v9: host-peer 原语化收缩第一阶段（ADR 0022 v2，issue 13）：新增
+//!   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
+//!   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
+//!   v8 插件二进制不受影响
+pub const ABI_VERSION: u32 = 10;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -33,9 +40,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v7() {
-        // 版本号序列与历史 core ABI 共用：v7 = 新增 SESSION_CLOSE（ADR 0003 配套）
-        assert_eq!(ABI_VERSION, 7);
+    fn test_abi_version_is_v9() {
+        // 版本号序列与历史 core ABI 共用：v9 = host-peer 原语化收缩第一阶段
+        // （dial-peer-endpoint / close / set-shared-roots + host-mdns / host-platform）
+        assert_eq!(ABI_VERSION, 10);
     }
 
     #[test]

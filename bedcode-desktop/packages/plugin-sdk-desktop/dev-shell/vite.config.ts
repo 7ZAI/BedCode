@@ -60,8 +60,7 @@ function devPluginsVirtual(plugins: DevPluginSpec[]): Plugin {
         .join('\n')
       const records = plugins
         .map(
-          (p, i) =>
-            `{ dir: ${JSON.stringify(p.dir)}, manifest: manifest${i}, entry: entry${i} }`,
+          (p, i) => `{ dir: ${JSON.stringify(p.dir)}, manifest: manifest${i}, entry: entry${i} }`,
         )
         .join(',\n  ')
       return `${imports}\n\nexport default [\n  ${records},\n]\n`

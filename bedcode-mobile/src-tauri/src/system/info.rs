@@ -34,10 +34,7 @@ impl SystemInfo {
 
         Self {
             os_name: std::env::consts::OS.to_string(),
-            os_version: android_info
-                .as_ref()
-                .map(|i| i.os_version.clone())
-                .unwrap_or_default(),
+            os_version: android_info.as_ref().map(|i| i.os_version.clone()).unwrap_or_default(),
             // Android 平台 hostname 恒为 "localhost"，设备名插件不可用时直接
             // 走 `{os}-{ip}` 组合名，避免所有设备同名（多设备无区分度）
             device_name: device_name(

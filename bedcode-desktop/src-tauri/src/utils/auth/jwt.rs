@@ -44,10 +44,7 @@ impl JwtClaims {
         fingerprint: Option<String>,
         expires_in_secs: u64,
     ) -> Self {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
 
         Self {
             sub: subject,
@@ -61,19 +58,13 @@ impl JwtClaims {
 
     /// 检查 token 是否过期
     pub fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         self.exp < now
     }
 
     /// 剩余有效时间（秒）
     pub fn remaining_secs(&self) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
         if self.exp > now {
             self.exp - now
         } else {
@@ -119,19 +110,10 @@ impl JwtService {
         device_name: Option<String>,
         fingerprint: Option<String>,
     ) -> Result<String, JwtError> {
-        let claims = JwtClaims::new(
-            subject,
-            device_name,
-            fingerprint,
-            self.default_expiry_secs,
-        );
+        let claims = JwtClaims::new(subject, device_name, fingerprint, self.default_expiry_secs);
 
-        let token = encode(
-            &Header::new(JWT_ALGORITHM),
-            &claims,
-            &self.encoding_key,
-        )
-        .map_err(|e| JwtError::EncodeError(e.to_string()))?;
+        let token = encode(&Header::new(JWT_ALGORITHM), &claims, &self.encoding_key)
+            .map_err(|e| JwtError::EncodeError(e.to_string()))?;
 
         Ok(token)
     }
@@ -139,15 +121,12 @@ impl JwtService {
     /// 验证并解码 JWT token
     pub fn verify_token(&self, token: &str) -> Result<JwtClaims, JwtError> {
         let validation = Validation::new(JWT_ALGORITHM);
-        let token_data = decode::<JwtClaims>(token, &self.decoding_key, &validation)
-            .map_err(|e| match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-                    JwtError::TokenExpired
-                }
-                jsonwebtoken::errors::ErrorKind::InvalidToken => JwtError::InvalidToken,
-                jsonwebtoken::errors::ErrorKind::InvalidSignature => JwtError::InvalidSignature,
-                _ => JwtError::VerifyError(e.to_string()),
-            })?;
+        let token_data = decode::<JwtClaims>(token, &self.decoding_key, &validation).map_err(|e| match e.kind() {
+            jsonwebtoken::errors::ErrorKind::ExpiredSignature => JwtError::TokenExpired,
+            jsonwebtoken::errors::ErrorKind::InvalidToken => JwtError::InvalidToken,
+            jsonwebtoken::errors::ErrorKind::InvalidSignature => JwtError::InvalidSignature,
+            _ => JwtError::VerifyError(e.to_string()),
+        })?;
 
         Ok(token_data.claims)
     }
@@ -243,9 +222,7 @@ mod tests {
     fn test_token_expiry() {
         let service = JwtService::with_expiry(1); // 1 second expiry
 
-        let token = service
-            .generate_token("device-123".to_string(), None, None)
-            .unwrap();
+        let token = service.generate_token("device-123".to_string(), None, None).unwrap();
 
         // exp 以秒级截断（exp = 签发秒 + 1），1500ms 睡眠可能未跨秒导致 flaky；
         // 睡 2.1s 确保越过 exp 边界（`exp < now` 需 now ≥ exp + 1s）

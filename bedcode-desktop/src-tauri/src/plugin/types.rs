@@ -3,9 +3,7 @@
 //! 桌面端插件类型 — 仅保留桌面端特有的内部模型
 //! 共享类型（PluginManifest, PluginContributes, PluginState 等）迁移到 bedcode-plugin-api
 
-use bedcode_plugin_api::{
-    PluginContributes, PluginManifest, PluginState, PluginType,
-};
+use bedcode_plugin_api::{PluginContributes, PluginManifest, PluginState, PluginType};
 use chrono::{DateTime, Utc};
 use std::collections::HashSet;
 use std::path::Path;
@@ -154,6 +152,7 @@ mod tests {
             plugin_type: PluginType::RustTs,
             rust_library: "bedcode_test.wasm".to_string(),
             icon: None,
+            wasi_preopen_dirs: vec![],
         }
     }
 

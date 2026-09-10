@@ -52,16 +52,12 @@ fn default_timeout_ms() -> u64 {
 ///
 /// 异步执行模式与 `session_create` 相同：wasm 调用栈内同步等待子进程会
 /// 阻塞 Store；此处 spawn 后台任务执行，wasm 调用立即返回。
-pub(crate) fn process_run(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    request_json: &str,
-) -> Result<String, String> {
+pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_json: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run") {
         return Err("permission denied".to_string());
     }
-    let request: ProcessRequest = serde_json::from_str(request_json)
-        .map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    let request: ProcessRequest =
+        serde_json::from_str(request_json).map_err(|e| format!("process error: invalid request JSON: {}", e))?;
     if request.command.trim().is_empty() {
         return Err("process error: empty command".to_string());
     }
@@ -76,13 +72,8 @@ pub(crate) fn process_run(
     // 安全上无新增面：拥有 process:run 的插件本就可执行任意命令
     if let Some(parent) = std::path::Path::new(&request.output_path).parent() {
         if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                format!(
-                    "process error: create output dir '{}' failed: {}",
-                    parent.display(),
-                    e
-                )
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("process error: create output dir '{}' failed: {}", parent.display(), e))?;
         }
     }
     let output_file = std::fs::File::create(&request.output_path).map_err(|e| {
@@ -108,7 +99,6 @@ pub(crate) fn process_run(
     // 独立进程组：kill 时连带子进程树（超时 / 插件取消共用同一语义）
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         cmd.process_group(0);
     }
     #[cfg(windows)]
@@ -119,12 +109,9 @@ pub(crate) fn process_run(
         cmd.creation_flags(0x0000_0200 | 0x0800_0000);
     }
 
-    let mut child = cmd.spawn().map_err(|e| {
-        format!(
-            "process error: spawn '{}' failed: {}",
-            request.command, e
-        )
-    })?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("process error: spawn '{}' failed: {}", request.command, e))?;
     // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）
     let pid = child.id().unwrap_or(0);
     let run_id = Uuid::new_v4().to_string();
@@ -197,11 +184,7 @@ pub(crate) fn process_run(
 ///
 /// 尽力而为：进程可能已结束/未被找到（SDK 契约约定此时返回 Ok）。
 /// kill 成功后执行任务侧的 `wait` 随即返回，完成事件照常分发。
-pub(crate) fn process_kill(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    run_id: &str,
-) -> Result<(), String> {
+pub(crate) fn process_kill(host_ctx: &WasmHostContext, plugin_id: &str, run_id: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_kill") {
         return Err("permission denied".to_string());
     }
@@ -230,6 +213,20 @@ mod tests {
     use crate::plugin::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
 
     const PLUGIN: &str = "test-plugin";
+
+    /// 测试体兜底超时：整个测试在限时内完成，超时按失败处理并 panic（缺省 panic
+    /// 消息携带模块路径，便于定位）。无法拦截测试体内的同步阻塞（如无超时的 std
+    /// channel recv——同步阻塞会连 runtime 线程一起堵死，超时无从触发），但能兜住
+    /// 所有 await 挂点（轮询循环 / 通道等待 / IO）。与根因修复（block_on_async
+    /// current_thread 分支改跑 ambient runtime）互补：根因修复治本，此处是保险网。
+    async fn with_test_timeout<T>(
+        fut: impl std::future::Future<Output = T> + Send,
+        secs: u64,
+    ) -> T {
+        tokio::time::timeout(std::time::Duration::from_secs(secs), fut)
+            .await
+            .unwrap_or_else(|_| panic!("test exceeded {secs}s deadline (possible deadlock)"))
+    }
 
     fn request(command: &str, args: Vec<&str>, output_path: &str) -> String {
         let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -299,73 +296,93 @@ mod tests {
     /// services 为 None（测试上下文）→ 完成事件仅记日志，不影响结果。
     /// 输出目录故意不预创建：验证 host-process 对嵌套路径的自动建目录。
     #[tokio::test]
+    /// 兜底超时时限 30s：子进程/文件 IO 均为毫秒级，超时即视为死锁
     async fn process_run_spawns_and_writes_output() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let dir = std::env::temp_dir().join(format!("bedcode-proc-run-{}", Uuid::new_v4()));
-        let out = dir.join("nested").join("deeper").join("out.log");
-        let (cmd, args) = if cfg!(target_os = "windows") {
-            ("cmd", vec!["/C", "echo hello-from-process"])
-        } else {
-            ("sh", vec!["-c", "echo hello-from-process"])
-        };
-        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-            .expect("run ok");
-        assert_eq!(run_id.len(), 36);
+        with_test_timeout(
+            async move {
+                let ctx = build_host_ctx();
+                grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+                let dir = std::env::temp_dir()
+                    .join(format!("bedcode-proc-run-{}", Uuid::new_v4()));
+                let out = dir.join("nested").join("deeper").join("out.log");
+                let (cmd, args) = if cfg!(target_os = "windows") {
+                    ("cmd", vec!["/C", "echo hello-from-process"])
+                } else {
+                    ("sh", vec!["-c", "echo hello-from-process"])
+                };
+                let run_id =
+                    process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
+                        .expect("run ok");
+                assert_eq!(run_id.len(), 36);
 
-        // 等待后台任务完成（输出落盘 + 注册表移除）
-        let registry = ctx.process_registry().clone();
-        for _ in 0..200 {
-            if registry.running_count() == 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        assert_eq!(registry.running_count(), 0, "registry entry not removed");
+                // 等待后台任务完成（输出落盘 + 注册表移除）
+                let registry = ctx.process_registry().clone();
+                for _ in 0..200 {
+                    if registry.running_count() == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert_eq!(registry.running_count(), 0, "registry entry not removed");
 
-        let content = std::fs::read_to_string(&out).expect("read output file");
-        assert!(content.contains("hello-from-process"), "output: {}", content);
-        let _ = std::fs::remove_dir_all(&dir);
+                let content = std::fs::read_to_string(&out).expect("read output file");
+                assert!(content.contains("hello-from-process"), "output: {}", content);
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+            30,
+        )
+        .await
     }
 
     /// kill 路径：spawn 长跑进程 → process_kill → 进程组被终止 → 注册表移除
     #[tokio::test]
+    /// 兜底超时时限 30s：spawn/kill 均为毫秒级，超时即视为死锁（历史：
+    /// block_on_async 跨线程驱动 IO future 曾在此永久挂起，见 wasm_runtime.rs
+    /// current_thread 分支注释）
     async fn process_kill_terminates_process_group() {
-        let ctx = build_host_ctx();
-        grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-        let dir = std::env::temp_dir().join(format!("bedcode-proc-kill-{}", Uuid::new_v4()));
-        std::fs::create_dir_all(&dir).expect("create temp dir");
-        let out = dir.join("out.log");
-        let (cmd, args) = if cfg!(target_os = "windows") {
-            // ping 阻塞 60s，由 cmd /C 拉起（进程树：cmd → ping）
-            ("cmd", vec!["/C", "ping -n 60 127.0.0.1 >nul"])
-        } else {
-            // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
-            ("sh", vec!["-c", "sleep 60"])
-        };
-        let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-            .expect("run ok");
+        with_test_timeout(
+            async move {
+                let ctx = build_host_ctx();
+                grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
+                let dir = std::env::temp_dir()
+                    .join(format!("bedcode-proc-kill-{}", Uuid::new_v4()));
+                std::fs::create_dir_all(&dir).expect("create temp dir");
+                let out = dir.join("out.log");
+                let (cmd, args) = if cfg!(target_os = "windows") {
+                    // ping 阻塞 60s，由 cmd /C 拉起（进程树：cmd → ping）
+                    ("cmd", vec!["/C", "ping -n 60 127.0.0.1 >nul"])
+                } else {
+                    // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
+                    ("sh", vec!["-c", "sleep 60"])
+                };
+                let run_id =
+                    process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
+                        .expect("run ok");
 
-        // 等待注册完成，确认进程在跑
-        let registry = ctx.process_registry().clone();
-        for _ in 0..100 {
-            if registry.running_count() == 1 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        assert_eq!(registry.running_count(), 1, "process not registered");
+                // 等待注册完成，确认进程在跑
+                let registry = ctx.process_registry().clone();
+                for _ in 0..100 {
+                    if registry.running_count() == 1 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+                assert_eq!(registry.running_count(), 1, "process not registered");
 
-        process_kill(&ctx, PLUGIN, &run_id).expect("kill ok");
+                process_kill(&ctx, PLUGIN, &run_id).expect("kill ok");
 
-        // 进程组被终止 → 执行任务 wait 返回并移除注册表项
-        for _ in 0..200 {
-            if registry.running_count() == 0 {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-        assert_eq!(registry.running_count(), 0, "process group not killed");
-        let _ = std::fs::remove_dir_all(&dir);
+                // 进程组被终止 → 执行任务 wait 返回并移除注册表项
+                for _ in 0..200 {
+                    if registry.running_count() == 0 {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                assert_eq!(registry.running_count(), 0, "process group not killed");
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+            30,
+        )
+        .await
     }
 }

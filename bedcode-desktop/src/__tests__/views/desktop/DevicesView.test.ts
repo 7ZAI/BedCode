@@ -12,8 +12,18 @@ vi.mock('@tauri-apps/api/core', () => ({
     if (cmd === 'get_app_settings') {
       return Promise.resolve({
         network: { port: 8765 },
-        session: { default_environment: 'windows', default_command: 'claude', session_timeout: 3600 },
-        ui: { theme: 'system', terminal_font_size: 12, terminal_font_family: 'Consolas', terminal_theme: 'dracula', show_preview: true },
+        session: {
+          default_environment: 'windows',
+          default_command: 'claude',
+          session_timeout: 3600,
+        },
+        ui: {
+          theme: 'system',
+          terminal_font_size: 12,
+          terminal_font_family: 'Consolas',
+          terminal_theme: 'dracula',
+          show_preview: true,
+        },
       })
     }
     return Promise.resolve(undefined)
@@ -45,13 +55,19 @@ const pairingState = vi.hoisted(() => ({
 vi.mock('@/composables/useTauri', () => ({
   usePairing: () => ({
     pairingCode: {
-      get value() { return pairingState.code },
-      set value(v) { pairingState.code = v },
+      get value() {
+        return pairingState.code
+      },
+      set value(v) {
+        pairingState.code = v
+      },
     },
     generateCode: vi.fn(async () => {
       pairingState.code = { code: '123456', expires_in: 60, created_at: new Date().toISOString() }
     }),
-    clearCode: vi.fn(async () => { pairingState.code = null }),
+    clearCode: vi.fn(async () => {
+      pairingState.code = null
+    }),
     checkCurrentCode: vi.fn().mockResolvedValue(false),
   }),
   useNetwork: () => ({

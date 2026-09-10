@@ -81,7 +81,10 @@ mod tests {
         let reg = ApiRegistry::new();
         reg.register(
             "com.bedcode.scheduler",
-            &["com.bedcode.scheduler.add".to_string(), "com.bedcode.scheduler.list".to_string()],
+            &[
+                "com.bedcode.scheduler.add".to_string(),
+                "com.bedcode.scheduler.list".to_string(),
+            ],
         );
         reg.register("com.bedcode.other", &["com.bedcode.other.ping".to_string()]);
         reg.unregister("com.bedcode.scheduler");

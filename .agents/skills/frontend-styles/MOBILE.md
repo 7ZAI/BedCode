@@ -57,7 +57,7 @@ clamp(min, base + (100cqw - small_bp) / (large_bp - small_bp) * (max - min), max
 
 ### Touch targets are fixed, visual size is fluid
 
-Fingers don't grow with the screen: interactive controls keep a **constant minimum of 44px**, and `clamp()` min values must never go below it. Tablets get more spacing and content density, not bigger buttons (Apple HIG / Material: touch targets are ergonomics, not display size).
+Fingers don't grow with the screen: `clamp()` min values must never go below 44px. Touch targets are fixed, visual size is fluid — see **Touch targets** below for the constant 44px minimum.
 
 ### What scales, what doesn't
 
@@ -87,7 +87,7 @@ Always use utility classes (defined in `bedcode-mobile/src/style.css`) — raw `
 | `mobile-nav-safe` | Bottom padding for home indicator |
 | `mobile-input-bar` | Bottom input container with keyboard avoidance |
 
-The `mobile-input-bar` class handles `keyboard-inset-bottom` with `duration-250` smooth transitions.
+The `mobile-input-bar` class handles `keyboard-inset-bottom` with a `cubic-bezier(0.4, 0, 0.2, 1)` smooth transition.
 
 ## Touch & Gesture
 

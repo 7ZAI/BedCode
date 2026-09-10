@@ -2,14 +2,14 @@
 //!
 //! 将解析后的 Message 按类型分发给已注册的处理器
 
-use std::sync::Arc;
 use async_trait::async_trait;
+use std::sync::Arc;
 
-use crate::model::message::Message;
 use crate::connection::MessageRouter;
+use crate::model::message::Message;
 use crate::Result;
 
-use super::{ClientRouteContext, ClientRouteRegistry, message_type_key};
+use super::{message_type_key, ClientRouteContext, ClientRouteRegistry};
 
 /// 客户端业务路由器
 ///
@@ -83,9 +83,9 @@ impl ClientBusinessRouterBuilder {
     }
 
     pub fn build(self) -> Result<ClientBusinessRouter> {
-        let context = self.context.ok_or_else(|| {
-            crate::AppError::WebSocket("ClientRouteContext is required".to_string())
-        })?;
+        let context = self
+            .context
+            .ok_or_else(|| crate::AppError::WebSocket("ClientRouteContext is required".to_string()))?;
         Ok(ClientBusinessRouter {
             registry: self.registry,
             context,
@@ -114,11 +114,7 @@ mod tests {
 
     #[async_trait]
     impl crate::router::ClientRouteHandler for TestHandler {
-        async fn handle(
-            &self,
-            message: Message,
-            _ctx: &ClientRouteContext,
-        ) -> Result<Option<Message>> {
+        async fn handle(&self, message: Message, _ctx: &ClientRouteContext) -> Result<Option<Message>> {
             self.calls.lock().unwrap().push(message_type_key(&message));
             Ok(self.respond.clone())
         }
@@ -212,10 +208,7 @@ mod tests {
             .unwrap();
 
         // 已注册类型不落入 fallback
-        router
-            .route(Message::output("s", b"hi", false, 0))
-            .await
-            .unwrap();
+        router.route(Message::output("s", b"hi", false, 0)).await.unwrap();
         assert_eq!(calls.lock().unwrap().as_slice(), &["Terminal"]);
 
         // 未注册类型落入 fallback

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 透明开屏图标:Android 12+ 系统开屏强制存在、无法整体移除,把图标替换为全透明
+     矢量使系统开屏退化为纯色底。相比 @android:color/transparent,透明矢量对
+     MIUI 等 OEM 更可靠(透明 color 在部分 ROM 上会回退渲染启动器图标)。
+     gen/android 重建后需手工恢复(与 values/themes.xml 同组维护) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,0h48v48h-48z" />
+</vector>

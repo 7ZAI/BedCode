@@ -1,5 +1,5 @@
 /**
- * @binblink/plugin-sdk-desktop
+ * @binblink/bedcode-plugin-sdk-desktop
  *
  * BedCode 插件开发工具包 — 类型定义 + 运行时代理 + 构建工具
  */
@@ -24,7 +24,11 @@ export type {
   InputExtensionDescriptor,
   TerminalToolbarItemDescriptor,
   TitleBarItemDescriptor,
+  PageToolbarItemDescriptor,
   FileHandlerDescriptor,
+  PluginDialogAction,
+  PluginDialogOptions,
+  PluginDialogHandle,
   RequestHandler,
   CommandRegistry,
   TerminalAPI,
@@ -34,17 +38,10 @@ export type {
   StorageAPI,
   HttpAPI,
   I18nAPI,
-  UploadRequestMeta,
-  UploadHookDecision,
-  TransferRequestMeta,
-  MountOptions,
-  FileServiceMount,
-  PeerMountAnnouncement,
-  PeerFileServiceInfo,
-  FileServiceAPI,
   SystemAPI,
   PluginContext,
   PluginModule,
+  PluginDevMock,
   PluginState,
   PluginInfo,
 } from './types'
@@ -60,15 +57,21 @@ export {
   getPluginContext,
 } from './runtime'
 
-// 配置约定导出
+// 全局弹窗控制器导出（宿主 / dev-shell 的 ui.showDialog 实现与渲染组件订阅）
 export {
-  PLUGIN_CONFIG_STORAGE_KEY,
-  defineConfiguration,
-} from './config'
+  openGlobalDialog,
+  closeGlobalDialog,
+  updateGlobalDialog,
+  getGlobalDialog,
+  subscribeGlobalDialog,
+  resolveDialogDeadline,
+} from './global-dialog'
+export type {
+  GlobalDialogEntry,
+  GlobalDialogListener,
+  OpenGlobalDialogInput,
+  GlobalDialogHandleOutput,
+} from './global-dialog'
 
-// 事件名常量导出（与 Rust SDK constants.rs 同步）
-export {
-  EVENT_TASK_STATUS_CHANGED,
-  EVENT_SESSION_MODE_CHANGED,
-  EVENT_TASK_QUEUE_CHANGED,
-} from './constants'
+// 配置约定导出
+export { PLUGIN_CONFIG_STORAGE_KEY, defineConfiguration } from './config'

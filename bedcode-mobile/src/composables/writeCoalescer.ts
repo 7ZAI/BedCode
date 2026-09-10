@@ -1,67 +1,66 @@
 /**
  * xterm 写入管线（对齐桌面端 TerminalPreview.vue）
  *
- * 默认直写：每个输出事件直接 terminal.write()（rAF 合并关闭），
- * 避免依赖 rAF 回调的合并路径在页面后台/动画挂起时延迟写入（黑屏/帧滞留）。
+ * 默认 rAF 合并：同一帧内到达的多次 write() 合并为一次 terminal.write。
  *
- * rAF 合并（调试开关 ENABLE_RAF_COALESCE=true）：把同帧内多次 write() 合并为
- * 一次，降低高频输出时每事件一次渲染的开销——排查渲染挂起/黑屏/帧滞留时
- * 可开启做 A/B 对比。为什么不用 queueMicrotask：Tauri 事件每个都是独立
- * macrotask，微任务会在每个事件后立即 flush，无法跨事件合并；rAF 才能把
- * 同帧事件合为一次 write。合并路径带 100ms 兜底定时器：窗口最小化/后台时
- * rAF 暂停，定时器保证队列最终被清空。
+ * 为什么必须合并（移动端 TUI 滚动残影根因，取证实验 2026-09-07）：
+ * TUI 应用（opencode 等）一次滚轮重绘被拆成多个 WS 消息，若逐事件直写，
+ * xterm 按 write 边界多次提交渲染——同一逻辑屏幕更新的多个批次在不同帧
+ * 渲染，canvas 位图残留旧帧像素：滚动停止后不消失、refresh(0, rows-1)
+ * 只能清主体剩边缘残字、transform 往返无效（排除合成器滞留）；
+ * 开启 rAF 合并后残影 100% 消除。桌面端始终合并，移动端直写在 TUI 高频
+ * 重绘下必现残影，故移动端默认同样合并。
  *
- * DEC 2026 同步输出包裹默认关闭（wrapSyncOutput=false）：
- * - DOM 渲染器（WebGL 不可用回退时）不需要它——rAF 合并已保证单帧一次 write，
- *   xterm 渲染去抖在整帧写入完成后统一绘制，清屏+重绘同帧提交不闪烁
- * - 包裹会与 TUI 应用（opencode 等）自身发出的 2026 序列嵌套——xterm 的
- *   2026 是标志位而非计数器，应用大重绘跨多个 rAF flush 时，包裹的 ESU
- *   会在清屏后、内容重绘前触发全量刷新，把空白帧渲染出来（每秒一次闪烁）；
- *   且 xterm 的 2026 看门狗（1000ms）会在同步窗口过长时强制全量刷新
- * - 仅 WebGL 渲染器（USE_WEBGL_RENDERER=true）需要包裹防双缓冲重影
+ * 为什么不用 queueMicrotask：Tauri 事件每个都是独立 macrotask，微任务会在
+ * 每个事件后立即 flush，无法跨事件合并；rAF 才能把同帧事件合为一次 write。
  *
- * 单次 write 上限 MAX_WRITE_CHUNK：超过则拆块，让 xterm parser 在块间让出
- * 主线程，避免单帧解析超大字符串导致 UI 卡顿。
+ * 兜底：合并路径带 100ms 定时器（FALLBACK_FLUSH_MS）——窗口最小化/后台时
+ * rAF 暂停，定时器保证队列最终被清空，不产生写入延迟/黑屏。
+ *
+ * 调试：置 ENABLE_RAF_COALESCE=false 可回退逐事件直写做 A/B 对比
+ * （排查渲染挂起/黑屏/帧滞留时可反向验证合并路径影响）。
+ *
+ * DEC 2026 同步输出不再由应用侧包裹：xterm.js 6.0 已内置该协议（解析 BSU/ESU
+ * 序列并按帧统一提交渲染），应用侧包裹反而会与 TUI 应用自身的 2026 序列嵌套。
+ *
+ * 单次 write 上限 MAX_WRITE_CHUNK：超过则拆块（writeInChunks），让 xterm
+ * parser 在块间让出主线程，避免单帧解析超大字符串导致 UI 卡顿。
+ *
+ * 主线程让出 WRITE_YIELD_THRESHOLD：分片写入每累积该量即退让一次宏任务
+ * （对齐桌面端 TerminalPreview.writeInChunks）——输出风暴期间允许触摸/渲染
+ * 插入，防 UI 冻结。移动端 CPU 更弱，阈值取桌面端（256KB）一半，让出更频繁；
+ * 只控制写节奏，不限制总量（flush 内 while 轮次继续消费新入队数据）。
  *
  * 移动端特殊处理：累积阈值 MAX_COALESCED_BYTES —— 极端大块数据下手机 CPU 更弱、
- * rAF 延迟更敏感，超过阈值立即 flush 而非等下一帧。
+ * rAF 延迟更敏感，超过阈值立即 flush 而非等下一帧（与让出机制不冲突：
+ * flush 内部依旧按 WRITE_YIELD_THRESHOLD 让出）。
  */
 
 import type { Terminal } from '@xterm/xterm'
 
-// DEC Mode 2026 同步输出序列：包裹一次写入，渲染器收到 ESU 前不刷新屏幕
-//
-// 调试开关（默认关闭）：包裹会与 TUI 应用（opencode 等）自身发出的 2026
-// 序列嵌套——xterm 同步标志是位而非计数器，BSU 后 ESU 被拒（游标连续性
-// violation）会令渲染管线长期挂起（黑屏）。排查渲染僵死时可置 true 做 A/B
-const ENABLE_SYNC_OUTPUT_WRAP = false
-const SYNC_OUTPUT_START = new TextEncoder().encode('\x1b[?2026h')
-const SYNC_OUTPUT_END = new TextEncoder().encode('\x1b[?2026l')
-
-// rAF 合并调试开关（默认关闭）：直写路径下每个输出事件直接 terminal.write，
-// 不经 rAF 合并/兜底定时器——排查「渲染挂起/黑屏/帧滞留」时可置 true 恢复
-// 合并路径做 A/B 对比（合并依赖 rAF 回调，页面后台/动画挂起时可能延迟写入）
-const ENABLE_RAF_COALESCE = false
+/** rAF 合并开关（默认 true）：同帧多次 write 合并为一次渲染提交，消除 TUI
+ * 滚动残影（根因见文件头）；置 false 回退逐事件直写，供排查「渲染挂起/黑屏/
+ * 帧滞留」时做 A/B 对比（合并依赖 rAF 回调，后台时由兜底定时器兜底） */
+const ENABLE_RAF_COALESCE = true
 
 /** 单次 write 上限：超过则拆块（与桌面端一致） */
 const MAX_WRITE_CHUNK = 64 * 1024
 
-/** 累积阈值：超过立即 flush（移动端特殊处理） */
-const MAX_COALESCED_BYTES = 256 * 1024
+/** 累积阈值（512KB）：超过立即 flush（移动端特殊处理）。抬到 512KB 的理由：
+ * TUI 滚动重绘脉冲（一次逻辑屏幕更新）在 16ms 帧内可数百 KB，阈值过低会
+ * 在更新中途截断合并 → 一次屏幕更新拆成两次渲染提交，重蹈批次交错残影。
+ * 512KB 足够容纳单帧内全部滚动重绘数据；瞬时内存峰 ≈ 1MB（pending + 合并
+ * 缓冲），移动端可接受 */
+const MAX_COALESCED_BYTES = 512 * 1024
+
+/** 主线程让出阈值：分片写入每累积该量让出一次宏任务（桌面端 256KB 的一半）。
+ * 移动端 CPU 更弱，256KB 连续 parse 在低端机可致数百 ms 冻结（掉触摸/卡滚动）；
+ * 128KB 在风暴下约每 2 个 64KB 块让出一次，渲染/输入可插入。对写作节奏影响：
+ * 每次让出约 1 帧（setTimeout 0），512KB 合并缓冲最多 4 次让出，可接受 */
+const WRITE_YIELD_THRESHOLD = 128 * 1024
 
 /** rAF 暂停（最小化/后台）时的兜底 flush 延迟 */
 const FALLBACK_FLUSH_MS = 100
-
-/**
- * 用 DEC Mode 2026 同步输出序列包裹数据，让 xterm 缓存所有变化到下一帧统一绘制
- */
-export function wrapSyncOutput(data: Uint8Array): Uint8Array {
-  const wrapped = new Uint8Array(SYNC_OUTPUT_START.length + data.byteLength + SYNC_OUTPUT_END.length)
-  wrapped.set(SYNC_OUTPUT_START, 0)
-  wrapped.set(data, SYNC_OUTPUT_START.length)
-  wrapped.set(SYNC_OUTPUT_END, SYNC_OUTPUT_START.length + data.byteLength)
-  return wrapped
-}
 
 /** 写入合并器：调用即入队，rAF 时统一 flush */
 export interface WriteCoalescer {
@@ -72,10 +71,6 @@ export interface WriteCoalescer {
 
 /** 创建选项 */
 export interface WriteCoalescerOptions {
-  /** 是否用 DEC 2026 同步输出包裹每次写入（仅 WebGL 渲染器需要） */
-  wrapSyncOutput?: boolean
-  /** 全局调试开关（默认 ENABLE_SYNC_OUTPUT_WRAP）；测试可显式开启以覆盖包裹路径 */
-  enableSyncOutputWrap?: boolean
   /** rAF 合并调试开关（默认 ENABLE_RAF_COALESCE）；测试可显式开启以覆盖合并路径 */
   enableRafCoalesce?: boolean
 }
@@ -84,71 +79,101 @@ export function createWriteCoalescer(
   terminal: Terminal,
   options: WriteCoalescerOptions = {},
 ): WriteCoalescer {
-  const wrapSync =
-    (options.enableSyncOutputWrap ?? ENABLE_SYNC_OUTPUT_WRAP) &&
-    (options.wrapSyncOutput ?? false)
   // rAF 合并关闭时每个事件直接写入（调试/对比路径）
   const rafCoalesce = options.enableRafCoalesce ?? ENABLE_RAF_COALESCE
   let pending: Uint8Array[] = []
   let totalBytes = 0
   let flushRaf = 0
   let flushTimer: ReturnType<typeof setTimeout> | null = null
+  // 重入守卫（对齐桌面端 flushWriteQueue）：flush 在让出点 await 期间，后续
+  // write 触发的新 flush 直接返回——当前 flush 的 while 轮次会继续消费新入队
+  // 数据，避免双写与数据滞留
+  let flushing = false
 
-  /** 写入单块字节（包裹 + 拆块，rAF 合并与直写共用） */
+  /** 写入单块字节（仅 rAF 合并关闭的调试直写路径使用；合并路径走 writeInChunks） */
   function writeBytes(data: Uint8Array) {
     // terminal 可能已 dispose（页面切换/会话关闭）：与合并路径 flush 的守卫一致
     if (!terminal.element) return
-    if (data.byteLength <= MAX_WRITE_CHUNK) {
-      terminal.write(wrapSync ? wrapSyncOutput(data) : data)
-      return
+    for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
+      terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
     }
-    // 大块拆分：多次 write，避免单帧解析超大字符串卡主线程
-    if (wrapSync) {
-      // 2026 包裹整体：渲染器仍缓存变更到帧末统一绘制；
-      // subarray 零拷贝切片，避免大块复制
-      terminal.write(SYNC_OUTPUT_START)
-      for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
-        terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
-      }
-      terminal.write(SYNC_OUTPUT_END)
-    } else {
-      for (let i = 0; i < data.length; i += MAX_WRITE_CHUNK) {
-        terminal.write(data.subarray(i, i + MAX_WRITE_CHUNK))
+  }
+
+  /** 分片写入：按 MAX_WRITE_CHUNK 拆块写，每累积 WRITE_YIELD_THRESHOLD 让出
+   * 主线程一次（宏任务），使触摸/渲染能在输出风暴期间插入，防 UI 冻结
+   * （对齐桌面端 TerminalPreview.writeInChunks；阈值按弱 CPU 减半） */
+  async function writeInChunks(buf: Uint8Array) {
+    let written = 0
+    for (let i = 0; i < buf.length; i += MAX_WRITE_CHUNK) {
+      // terminal 可能已 dispose（页面切换/会话关闭）：让出点期间也可能销毁
+      if (!terminal.element) return
+      terminal.write(buf.subarray(i, i + MAX_WRITE_CHUNK))
+      written += MAX_WRITE_CHUNK
+      if (written >= WRITE_YIELD_THRESHOLD) {
+        written = 0
+        await new Promise((resolve) => setTimeout(resolve, 0))
       }
     }
   }
 
-  function flush() {
-    flushRaf = 0
-    if (flushTimer) {
-      clearTimeout(flushTimer)
-      flushTimer = null
-    }
-    if (pending.length === 0) return
-    // terminal 可能已 dispose（页面切换/会话关闭）
+  /** 清空并合并当前 pending，返回合并缓冲（调用方决定直写或分块）；pending 空
+   * 或 terminal 已 dispose 时返回 null（dispose 情形清空计数）。同步函数：不做
+   * 任何 await——小数据路径必须零微任务让出，否则 flushing 复位滞后会拦截
+   * 随后的 scheduleFlush（对齐桌面端 flushWriteQueue 同步 while 语义） */
+  function flushPendingSync(): Uint8Array | null {
     if (!terminal.element) {
+      // terminal 可能已 dispose（页面切换/会话关闭）
       pending = []
       totalBytes = 0
-      return
+      return null
     }
+    if (pending.length === 0) return null
 
     const chunks = pending
     const bytes = totalBytes
     pending = []
     totalBytes = 0
 
-    // 合并同帧所有事件为单块字节，一次 write
+    // 合并同帧所有事件为单块字节
     const combined = new Uint8Array(bytes)
     let offset = 0
     for (const chunk of chunks) {
       combined.set(chunk, offset)
       offset += chunk.byteLength
     }
+    return combined
+  }
 
-    writeBytes(combined)
+  async function flush() {
+    flushRaf = 0
+    if (flushTimer) {
+      clearTimeout(flushTimer)
+      flushTimer = null
+    }
+    if (pending.length === 0) return
+    if (flushing) return
+    flushing = true
+    try {
+      let combined: Uint8Array | null
+      // while 轮次：flush 在让出点 await 期间新入队的数据也由本次消费，
+      // 直到 pending 清空（无滞留、无双写）。小数据路径全同步（flushPendingSync
+      // 无 await），仅大数据分块路径在让出点 await——与测试/桌面端语义一致
+      while ((combined = flushPendingSync()) !== null) {
+        if (combined.byteLength <= MAX_WRITE_CHUNK) {
+          terminal.write(combined)
+        } else {
+          await writeInChunks(combined)
+        }
+      }
+    } finally {
+      flushing = false
+    }
   }
 
   function scheduleFlush() {
+    // 已有 flush 在让出点挂起：新数据直接入 pending，由该 flush 的 while 轮次
+    // 消费——重复调度会注册多余的 rAF/兜底定时器（残留 timer）
+    if (flushing) return
     if (flushRaf) return
     flushRaf = requestAnimationFrame(flush)
     if (!flushTimer) {
@@ -176,12 +201,13 @@ export function createWriteCoalescer(
     totalBytes += data.byteLength
 
     if (totalBytes >= MAX_COALESCED_BYTES) {
-      // 累积过大，立即 flush 避免 rAF 延迟影响响应（移动端特殊处理）
+      // 累积过大，立即 flush 避免 rAF 延迟影响响应（移动端特殊处理；
+      // flush 内部按 WRITE_YIELD_THRESHOLD 让出，不阻塞主线程太久）
       if (flushRaf) {
         cancelAnimationFrame(flushRaf)
         flushRaf = 0
       }
-      flush()
+      void flush()
     } else {
       scheduleFlush()
     }
@@ -198,6 +224,9 @@ export function createWriteCoalescer(
     }
     pending = []
     totalBytes = 0
+    // in-flight flush 的让出点醒来后由 terminal.element 守卫拦截（dispose 后
+    // 通常伴随 terminal 销毁/换终端的 element 失效）；此处不置永久禁用标志——
+    // 测试断言 dispose 后 coalescer 可复用，且会话切换场景会重建实例
   }
 
   return Object.assign(write, { dispose }) as WriteCoalescer

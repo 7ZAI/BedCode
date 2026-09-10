@@ -7,8 +7,8 @@
  * 的完整形态，便于 UI 评审与样式调试；生产构建（vite build）时 DEV=false，
  * 本模块代码不参与打包。
  */
-import type { PluginContext } from '@binblink/plugin-sdk-mobile'
-import { getI18n } from '@binblink/plugin-sdk-mobile'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import { getI18n } from '@binblink/bedcode-plugin-sdk-mobile'
 
 // ==================== 宿主 i18n key 补齐（dev-shell 无宿主 locale，运行时由宿主注入） ====================
 // 与 bedcode-mobile/src/locales/{zh-CN,en}/mobile.ts 的 plugin.aiChatbox 段同步
@@ -43,6 +43,7 @@ const HOST_KEYS_ZH = {
         delete: '删除',
         deleteMessage: '删除消息',
         providerConfig: '模型供应商配置',
+        pluginSettings: '插件设置',
         backToChat: '返回聊天',
         back: '返回',
         close: '关闭',
@@ -87,6 +88,40 @@ const HOST_KEYS_ZH = {
         requestFailed: '请求失败',
         apiKeyRequired: '请先填写 API Key',
         baseUrlInvalid: 'Base URL 地址无效',
+        rateLimitRetryIn: '供应商限流，{seconds} 秒后自动重试（第 {attempt}/{max} 次）',
+        rateLimitStop: '终止',
+        rateLimitExhausted: '供应商限流：自动重试后仍失败，请稍后重试或更换模型',
+        rateLimitAborted: '已终止限流重试',
+        rateLimitGroup: '限流重试',
+        rateLimitMaxRetries: '自动重试次数',
+        rateLimitInitialDelay: '初始等待',
+        rateLimitMaxDelay: '最大等待',
+        rateLimitOff: '关闭',
+        systemPrompt: '对话指令 (System Prompt)',
+        systemPromptOn: '指令已启用',
+        systemPromptPlaceholder: '为该对话设置专属指令（可选）...',
+        codeRendering: '代码渲染',
+        codeFontSize: '字体大小',
+        decrease: '减小',
+        increase: '增大',
+        codeLineHeight: '行距',
+        codeTheme: '代码主题',
+        codeThemeAuto: '跟随',
+        codeThemeLight: '浅色',
+        codeThemeDark: '深色',
+        codeThemeGithubLight: 'GitHub 浅色',
+        codeThemeGithubDark: 'GitHub 深色',
+        codeThemeDracula: 'Dracula',
+        thinking: '思考',
+        thinkingMode: '思考模式',
+        thinkingDefault: '默认',
+        thinkingEnabled: '开启',
+        thinkingDisabled: '关闭',
+        reasoningEffort: '推理强度',
+        effortLow: '低',
+        effortHigh: '高',
+        effortMax: '最大',
+        showReasoning: '显示思考过程',
       },
     },
   },
@@ -121,6 +156,7 @@ const HOST_KEYS_EN = {
         delete: 'Delete',
         deleteMessage: 'Delete message',
         providerConfig: 'Provider Settings',
+        pluginSettings: 'Plugin Settings',
         backToChat: 'Back to chat',
         back: 'Back',
         close: 'Close',
@@ -165,6 +201,43 @@ const HOST_KEYS_EN = {
         requestFailed: 'Request failed',
         apiKeyRequired: 'API Key is required',
         baseUrlInvalid: 'Invalid Base URL',
+        rateLimitRetryIn:
+          'Provider rate limited — retrying in {seconds}s (attempt {attempt}/{max})',
+        rateLimitStop: 'Stop',
+        rateLimitExhausted:
+          'Rate limited by provider: retries exhausted — try again later or switch model',
+        rateLimitAborted: 'Rate limit retry stopped',
+        rateLimitGroup: 'Rate-limit Retry',
+        rateLimitMaxRetries: 'Max Auto Retries',
+        rateLimitInitialDelay: 'Initial Delay',
+        rateLimitMaxDelay: 'Max Delay',
+        rateLimitOff: 'Off',
+        systemPrompt: 'System Prompt',
+        systemPromptOn: 'Prompt active',
+        systemPromptPlaceholder:
+          'Set a custom instruction for this conversation (optional)...',
+        codeRendering: 'Code Rendering',
+        codeFontSize: 'Font Size',
+        decrease: 'Decrease',
+        increase: 'Increase',
+        codeLineHeight: 'Line Height',
+        codeTheme: 'Code Theme',
+        codeThemeAuto: 'Auto',
+        codeThemeLight: 'Light',
+        codeThemeDark: 'Dark',
+        codeThemeGithubLight: 'GitHub Light',
+        codeThemeGithubDark: 'GitHub Dark',
+        codeThemeDracula: 'Dracula',
+        thinking: 'Thinking',
+        thinkingMode: 'Thinking Mode',
+        thinkingDefault: 'Default',
+        thinkingEnabled: 'On',
+        thinkingDisabled: 'Off',
+        reasoningEffort: 'Reasoning Effort',
+        effortLow: 'Low',
+        effortHigh: 'High',
+        effortMax: 'Max',
+        showReasoning: 'Show Reasoning',
       },
     },
   },
@@ -367,6 +440,34 @@ function registerCommands(context: PluginContext): void {
   context.commands.register('ai-chatbox.chat-stream', (args: any) => {
     const streamId = args?.streamId as string | undefined
     if (!streamId) return { ok: false }
+
+    // 限流演练：消息含 "429" / "限流" 时模拟宿主非 2xx 错误事件（每次重试都再报，
+    // 可完整演练滑出条倒计时 / 终止 / 重试耗尽）
+    let lastUserText = ''
+    try {
+      const body = JSON.parse(args?.request?.body || '{}')
+      const userMsgs = (body.messages || []).filter((m: any) => m.role === 'user')
+      lastUserText = userMsgs[userMsgs.length - 1]?.content || ''
+    } catch {
+      lastUserText = ''
+    }
+    if (/429|限流/.test(lastUserText)) {
+      // SAFETY: dev-shell 运行于浏览器，setTimeout 返回 number（浏览器 TimerHandle）；
+      // Node 类型定义返回 NodeJS.Timeout，断言仅桥接类型差异，运行时值同为数字句柄
+      const h = setTimeout(() => {
+        const tIdx = timers.indexOf(h)
+        if (tIdx !== -1) timers.splice(tIdx, 1)
+        context.events.emit(`ai-chatbox:stream:${streamId}`, {
+          error:
+            'API error 429: {"error":{"message":"Rate limit reached for requests. Please try again in 20s","type":"429","code":"rate_limit_exceeded"}}',
+          done: true,
+        })
+      }, 300) as unknown as number
+      timers.push(h)
+      timers.push(h)
+      return { ok: true }
+    }
+
     // 与真实宿主 raw 模式一致：逐网络 chunk 推原始 SSE 字节（openai 方言
     // data 行），前端 SseBuffer + adapter 自行解析；结尾补 usage 尾块与 [DONE]
     let i = 0
@@ -391,6 +492,7 @@ function registerCommands(context: PluginContext): void {
         })
       }
     }
+    // SAFETY: 同上——浏览器 setInterval 返回 number，Node 类型定义返回 NodeJS.Timeout，断言桥接类型差异
     const handle = setInterval(tick, 30) as unknown as number
     timers.push(handle)
     return { ok: true }

@@ -37,7 +37,8 @@ pub enum SessionIntegration {
 pub struct AgentProfile {
     /// agent CLI 名称（写入 task_history.agent 字段）
     pub name: &'static str,
-    /// 上下文清理命令本体（不含提交符；投递时由调用方按宿主平台拼接 `\r` / `\n`）；
+    /// 上下文清理命令本体（不含提交符；投递时由调用方统一拼接 Enter 字节 `\r`，
+    /// 见 queue::input_submit_char）；
     /// None 表示未适配
     pub clear_command: Option<&'static str>,
     /// 会话集成方式（状态回传载体）

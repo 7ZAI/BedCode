@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name={{name}}
+{{#if comment}}
+Comment={{comment}}
+{{/if}}
+Exec={{exec}}
+Icon={{icon}}
+Terminal=false
+Type=Application
+Categories=Utility;Development;Network;
+StartupNotify=true
+StartupWMClass={{exec}}
+Keywords=remote;terminal;claude;code;mobile;ssh;

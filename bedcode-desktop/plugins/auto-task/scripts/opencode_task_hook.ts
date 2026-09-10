@@ -45,15 +45,15 @@
  *   的 allow 列表）声明式放行，比 hook 拦截更简单
  */
 
-import type { Plugin } from "@opencode-ai/plugin"
+import type { Plugin } from '@opencode-ai/plugin'
 
 // 部署时由宿主按当前端口改写（hooks.rs replace_opencode_plugin_port），勿手改
 const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
 // @bedcode-template-version 1
 
-const PLUGIN_ID = "com.bedcode.auto-task"
-const HOST = "127.0.0.1"
+const PLUGIN_ID = 'com.bedcode.auto-task'
+const HOST = '127.0.0.1'
 const HTTP_TIMEOUT_MS = 3000
 // 终态推送（completed/interrupted）丢失会中断队列调度链，必须重试保证送达
 const HTTP_RETRY_ATTEMPTS = 3
@@ -62,8 +62,8 @@ const HTTP_RETRY_DELAY_MS = 500
 /** 事件发生时刻（UTC，毫秒精度、固定宽度）：与宿主 SQLite strftime 格式一致 */
 function eventTime(): string {
   const now = new Date()
-  const ms = String(now.getMilliseconds()).padStart(3, "0")
-  return `${now.toISOString().slice(0, 19).replace("T", " ")}.${ms}`
+  const ms = String(now.getMilliseconds()).padStart(3, '0')
+  return `${now.toISOString().slice(0, 19).replace('T', ' ')}.${ms}`
 }
 
 /** 截断过长的 prompt 用于 reason */
@@ -85,7 +85,7 @@ async function push(status: string, reason: string, questions?: unknown): Promis
   const payload: Record<string, unknown> = {
     session_id: bedcodeSessionId,
     status,
-    reason: reason || "",
+    reason: reason || '',
     event_time: eventTime(),
     bedcode_session_id: bedcodeSessionId,
   }
@@ -96,8 +96,8 @@ async function push(status: string, reason: string, questions?: unknown): Promis
       const resp = await fetch(
         `http://${HOST}:${BEDCODE_PORT}/api/plugin/${PLUGIN_ID}/task-status`,
         {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload),
           signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
         },
@@ -121,16 +121,16 @@ async function push(status: string, reason: string, questions?: unknown): Promis
  * 权限请求没有选项结构，按 notification 的 Allow/Deny 双选项构造。
  */
 function permissionQuestions(properties: Record<string, unknown>): unknown[] {
-  const permission = String(properties.permission ?? "")
+  const permission = String(properties.permission ?? '')
   if (!permission) return []
   return [
     {
       question: `Permission requested: ${permission}`,
-      header: "opencode permission",
+      header: 'opencode permission',
       multi_select: false,
       options: [
-        { label: "Allow", description: "Approve the request" },
-        { label: "Deny", description: "Reject the request" },
+        { label: 'Allow', description: 'Approve the request' },
+        { label: 'Deny', description: 'Reject the request' },
       ],
     },
   ]
@@ -143,68 +143,68 @@ export const BedCodeTaskHook: Plugin = async () => {
 
       switch (event.type) {
         // 会话启动 → idle：宿主据此放行 waiting 态队列任务
-        case "session.created":
-          void push("idle", "Session started")
+        case 'session.created':
+          void push('idle', 'Session started')
           break
 
         // 用户提交 prompt（含队列自动投递）→ 任务进入执行状态
-        case "session.next.prompted": {
-          const text = (properties.prompt as { text?: string } | undefined)?.text ?? ""
-          void push("in_progress", `User submitted: ${promptPreview(text)}`)
+        case 'session.next.prompted': {
+          const text = (properties.prompt as { text?: string } | undefined)?.text ?? ''
+          void push('in_progress', `User submitted: ${promptPreview(text)}`)
           break
         }
 
         // 工具被调用 → 任务进行中
-        case "session.next.tool.called": {
-          const tool = String(properties.tool ?? "")
-          void push("in_progress", `Tool ${tool} called`)
+        case 'session.next.tool.called': {
+          const tool = String(properties.tool ?? '')
+          void push('in_progress', `Tool ${tool} called`)
           break
         }
 
         // run 状态机：busy/retry 运行中，idle 为完全收敛（终态由 Stop 等价语义判定）
-        case "session.status": {
+        case 'session.status': {
           const status = (properties.status as { type?: string } | undefined)?.type
-          if (status === "idle") {
-            void push("completed", "Task completed")
-          } else if (status === "retry") {
-            void push("in_progress", "Auto retry in progress")
+          if (status === 'idle') {
+            void push('completed', 'Task completed')
+          } else if (status === 'retry') {
+            void push('in_progress', 'Auto retry in progress')
           } else {
-            void push("in_progress", "Response running")
+            void push('in_progress', 'Response running')
           }
           break
         }
 
         // session.status 的 deprecated 前身：兼容旧版 opencode
-        case "session.idle":
-          void push("completed", "Task completed")
+        case 'session.idle':
+          void push('completed', 'Task completed')
           break
 
         // 权限请求需要用户决策 → asking（自动放行的请求不会发布此事件）
-        case "permission.asked": {
+        case 'permission.asked': {
           const questions = permissionQuestions(properties)
-          void push("asking", "Waiting for user permission", questions)
+          void push('asking', 'Waiting for user permission', questions)
           break
         }
 
         // 用户已回复授权 → 恢复执行
-        case "permission.replied":
-          void push("in_progress", "User replied to permission")
+        case 'permission.replied':
+          void push('in_progress', 'User replied to permission')
           break
 
         // 用户中断（Ctrl+C / Esc）→ interrupted；其余错误 agent 会恢复 → 保持进行中
-        case "session.error": {
+        case 'session.error': {
           const error = (properties.error ?? {}) as { name?: string; data?: { message?: string } }
-          if (error.name === "MessageAbortedError") {
-            void push("interrupted", "User interrupted the run")
+          if (error.name === 'MessageAbortedError') {
+            void push('interrupted', 'User interrupted the run')
           } else {
-            void push("in_progress", `Run error (recovering): ${error.name ?? "unknown"}`)
+            void push('in_progress', `Run error (recovering): ${error.name ?? 'unknown'}`)
           }
           break
         }
 
         // 步骤失败会触发自动重试 → 任务仍在进行
-        case "session.next.step.failed":
-          void push("in_progress", "Step failed, retrying")
+        case 'session.next.step.failed':
+          void push('in_progress', 'Step failed, retrying')
           break
       }
     },

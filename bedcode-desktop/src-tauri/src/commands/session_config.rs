@@ -14,22 +14,19 @@ pub async fn create_session_config(
     command: String,
     wsl_distro: Option<String>,
 ) -> Result<crate::db::SessionConfig> {
-    tracing::info!("create_session_config called: name={}, environment={}", name, environment);
+    tracing::info!(
+        "create_session_config called: name={}, environment={}",
+        name,
+        environment
+    );
 
     let result = config_manager
-        .create_config_full(
-            name,
-            environment,
-            wsl_distro,
-            working_dir,
-            command,
-            false,
-        )
+        .create_config_full(name, environment, wsl_distro, working_dir, command, false)
         .await;
 
     match &result {
-        Ok(config) => tracing::info!("create_session_config success: id={}", config.id),
-        Err(e) => tracing::error!("create_session_config failed: {:?}", e),
+        Ok(config) => tracing::info!(config_id = %config.id, "create_session_config success"),
+        Err(e) => tracing::error!("create_session_config failed: {}", e),
     }
 
     result
@@ -51,10 +48,7 @@ pub async fn get_session_config(
 }
 
 #[tauri::command]
-pub async fn delete_session_config(
-    config_manager: State<'_, Arc<SessionConfigManager>>,
-    id: String,
-) -> Result<()> {
+pub async fn delete_session_config(config_manager: State<'_, Arc<SessionConfigManager>>, id: String) -> Result<()> {
     config_manager.delete_config(&id).await
 }
 

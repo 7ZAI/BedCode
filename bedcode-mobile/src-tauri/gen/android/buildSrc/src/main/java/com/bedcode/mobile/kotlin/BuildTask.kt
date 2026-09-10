@@ -16,7 +16,10 @@ open class BuildTask : DefaultTask() {
 
     @TaskAction
     fun assemble() {
-        val executable = """npm""";
+        // 仓库规范 pnpm-only(AGENTS.md),本机 npm 会 SIGABRT;
+        // pnpm 与 npm 的 `run -- <script> <args>` 语法兼容。
+        // ⚠ tauri android init 重建会重新生成本文件,恢复时需把 npm 改回 pnpm。
+        val executable = """pnpm""";
         try {
             runTauriCli(executable)
         } catch (e: Exception) {

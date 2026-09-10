@@ -30,10 +30,7 @@ let systemQuery: MediaQueryList | null = null
 
 /** 按当前模式 + 系统偏好应用 .dark 类（与宿主 useTheme.applyTheme 同逻辑） */
 function applyTheme(): void {
-  const isDark =
-    theme.value === 'system'
-      ? (systemQuery?.matches ?? false)
-      : theme.value === 'dark'
+  const isDark = theme.value === 'system' ? (systemQuery?.matches ?? false) : theme.value === 'dark'
   document.documentElement.classList.toggle('dark', isDark)
 }
 
@@ -68,8 +65,12 @@ export function initHostUi(): void {
     }
     const savedPalette = localStorage.getItem(PALETTE_KEY)
     if (
-      savedPalette === 'warm' || savedPalette === 'cool' || savedPalette === 'forest' ||
-      savedPalette === 'ocean' || savedPalette === 'sunset' || savedPalette === 'violet'
+      savedPalette === 'warm' ||
+      savedPalette === 'cool' ||
+      savedPalette === 'forest' ||
+      savedPalette === 'ocean' ||
+      savedPalette === 'sunset' ||
+      savedPalette === 'violet'
     ) {
       palette.value = savedPalette
     }

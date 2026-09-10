@@ -33,8 +33,17 @@ jobs:
         id: changelog
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          # 提取当前版本的 changelog 内容（从 ## [version] 到下一个 ## 之间的内容）
-          CHANGELOG=$(awk "/^## \\[${VERSION}\\]/,/^## \\[|^## \\[Unreleased/" CHANGELOG.md | head -n -1 | tail -n +2)
+          # 提取当前版本的 changelog 内容（从 ## [version] 下一行到下一个版本头之间的内容）。
+          # 注意：旧写法用范围模式 /^## \[ver\]/,/^## \[/，结束模式 ^## \[ 会匹配起始行自身
+          # （## [ver] 同样以 ## [ 开头），导致永远只取到版本头 1 行、提取为空。
+          # 这里改为状态机：命中版本头后跳过该行，遇到下一个版本头即停止；
+          # index() 按字面匹配，避免版本号中的 . 被当作正则通配符；过滤段落间的 --- 分隔线。
+          CHANGELOG=$(awk -v v="$VERSION" '
+            index($0, "## [" v "]") == 1 { found = 1; next }
+            found && /^## \[/ { exit }
+            found && !started && $0 == "" { next }
+            found && $0 != "---" { started = 1; print }
+          ' CHANGELOG.md)
           # 如果没找到对应版本，使用完整 CHANGELOG
           if [ -z "$CHANGELOG" ]; then
             CHANGELOG=$(cat CHANGELOG.md)
@@ -58,18 +67,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: bedcode-desktop/package-lock.json
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target
-          targets: wasm32-unknown-unknown
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
+          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
+          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -94,17 +110,18 @@ jobs:
           echo "certificateThumbprint=$thumbprint"
 
       - name: Install frontend dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
-      # 必须先本地构建 @binblink/plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
       - name: Build SDK (plugin-sdk-desktop dist)
-        run: npm run build -w @binblink/plugin-sdk-desktop
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
 
       # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
       # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
       - name: Build plugins (WASM artifacts)
-        run: npm run plugins:build
+        run: pnpm run plugins:build
 
       - name: Verify updater artifacts enabled in config
         shell: bash
@@ -143,30 +160,6 @@ jobs:
           prerelease: false
           updaterJsonPreferNsis: true
 
-      - name: Verify latest.json uploaded
-        shell: bash
-        run: |
-          # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
-          # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本。
-          # 注意：draft release 是 untagged，releases/tags/:tag 端点返回 404，
-          # 必须从 releases 列表（含 draft）按 tag_name 定位再查 assets
-          for i in $(seq 1 10); do
-            RID=$(curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
-              jq -r '.[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id' | head -1)
-            if [ -n "$RID" ]; then
-              if curl -sS -H "Authorization: Bearer $GITHUB_TOKEN" \
-                "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" | \
-                jq -r '.[].name' | grep -q '^latest.json$'; then
-                echo "latest.json 已上传 ✓"
-                exit 0
-              fi
-            fi
-            sleep 3
-          done
-          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置"
-          exit 1
-
       - name: Clean up certificate
         if: always()
         run: |
@@ -182,18 +175,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: npm
-          cache-dependency-path: bedcode-mobile/package-lock.json
+          cache: pnpm
+          cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）
-          targets: aarch64-linux-android, wasm32-unknown-unknown
+          # aarch64 为宿主 target；wasm32 用于插件产物构建（beforeBuildCommand 的 plugins:build）。
+          # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
+          targets: aarch64-linux-android, wasm32-unknown-unknown, wasm32-wasip2
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -222,14 +221,20 @@ jobs:
           echo "storeFile=$RUNNER_TEMP/keystore.jks" >> key.properties
 
       - name: Install frontend dependencies
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       # bedcode-plugin CLI 运行时加载 SDK 的 dist/index.js (file: 引用不含 dist)，
-      # 必须先构建 @binblink/plugin-sdk-mobile 再跑 beforeBuildCommand 的 plugins:build
-      - name: Build SDK (plugin-sdk-mobile dist)
-        run: npm run build --prefix packages/plugin-sdk-mobile
+      # 必须先构建 @binblink/bedcode-plugin-sdk-mobile 再跑 beforeBuildCommand 的 plugins:build。
+      # pnpm 的 file: 依赖不会自动安装目标包的 devDeps（tsup 等），SDK 需独立安装一次
+      - name: Install SDK dependencies (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
 
-      # mobile 插件是独立目录（无 workspaces），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      - name: Build SDK (plugin-sdk-mobile dist)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm run build
+
+      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
       # 部分插件仅存在于 dev 分支（发布分支未必包含），对不存在的目录跳过
       - name: Install plugin dependencies
         run: |
@@ -239,14 +244,14 @@ jobs:
               continue
             fi
             echo "== installing plugins/$p =="
-            (cd plugins/$p && npm ci) || exit 1
+            (cd plugins/$p && pnpm install --frozen-lockfile) || exit 1
           done
 
       - name: Build Android APK
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npx tauri android build --apk -t aarch64
+        run: pnpm exec tauri android build --apk -t aarch64
 
       - name: Upload APK to Release
         uses: softprops/action-gh-release@v2
@@ -261,9 +266,177 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ==================== Linux Build ====================
+  # 产出 deb（tauri.conf.json bundle.targets 含 deb）。同一 draft release 多 job 并行上传时
+  # tauri-action 会读取已存在的 latest.json 并合并 platforms 记录，不会互相覆盖
+  build-linux:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bedcode-desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
+          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2）
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './bedcode-desktop/src-tauri -> target'
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
+      # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重新构建），
+      # 必须先生成 resources/plugins/desktop 再打包，否则 tauri build 找不到资源
+      - name: Build plugins (WASM artifacts)
+        run: pnpm run plugins:build
+
+      # deb 同样生成签名升级包（.deb.sig + latest.json 的 linux 平台记录），
+      # 私钥缺失时 tauri 会静默跳过签名，必须显式校验
+      - name: Verify signing key configured
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY secret 未配置，无法生成签名升级包"
+            exit 1
+          fi
+          echo "签名密钥已配置 ✓"
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+
+      - name: Build and release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: bedcode-desktop
+          tagName: v__VERSION__
+          releaseName: 'BedCode v__VERSION__'
+          releaseBody: '${{ needs.prepare-release.outputs.changelog }}'
+          releaseDraft: true
+          prerelease: false
+
+  # ==================== Finalize Release ====================
+  # 所有平台 build 完成后的单 job 收尾：同步 release body + 校验 latest.json。
+  # 之前这两步挂在 build-windows / build-linux 里各自跑一遍，并行重复调用 GitHub API，
+  # 是 GITHUB_TOKEN rate limit（1000/hr）被打爆的主因之一；收敛到单 job 从根上砍掉重复调用。
+  finalize-release:
+    needs: [prepare-release, build-windows, build-linux, build-android]
+    runs-on: ubuntu-latest
+    steps:
+      # tauri-action 只在创建 release 时写入 body；若 draft 已存在（重跑、手动预建等），
+      # 其源码仅对非 draft 调 updateRelease（避免 updateRelease 改变 draft 的 tag 产生重复 release），
+      # 因此已存在 draft 的 body 不会被更新（v2.0.0 发布即因此为空白 body）。
+      # 这里显式 PATCH 兜底，保证 body 始终等于提取的 changelog（新建/复用 draft 均覆盖）。
+      - name: Sync release body with changelog
+        shell: bash
+        run: |
+          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表按 tag_name 定位。
+          # 分页查找（per_page=100 × 3 页）：release 超过 10 个时 per_page=10 的旧写法会定位失败
+          for i in $(seq 1 10); do
+            RID=""
+            # 容错：curl -f 使 HTTP 错误（403 rate limit / 5xx）直接失败进重试；
+            # jq 加 type=="array" 守卫——rate limit 响应是单对象，.[] 迭代出字符串会报
+            # "Cannot index string"（exit 5）中断 run（GITHUB_TOKEN 限额 1000/hr，多 job 并行易触顶）
+            for page in $(seq 1 3); do
+              RESP=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" 2>/dev/null) || { sleep 5; continue; }
+              RID=$(printf '%s' "$RESP" | jq -r 'if type=="array" then .[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id else empty end' 2>/dev/null | head -1)
+              [ -n "$RID" ] && break
+            done
+            if [ -n "$RID" ]; then
+              # prepare-release 是独立 job，/tmp 不跨 job 共享，这里用表达式重建 changelog 文件
+              cat > /tmp/changelog.txt <<'CHANGELOG_EOF'
+          ${{ needs.prepare-release.outputs.changelog }}
+          CHANGELOG_EOF
+              BODY_JSON=$(jq -n --rawfile body /tmp/changelog.txt '{body: $body}')
+              STATUS=$(curl -sS -o /tmp/patch-resp.json -w "%{http_code}" -X PATCH \
+                -H "Authorization: Bearer $GITHUB_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$RID" \
+                --data "$BODY_JSON")
+              if [ "$STATUS" = "200" ]; then
+                echo "release body 已同步 ✓"
+                exit 0
+              fi
+              echo "::warning::release body PATCH 失败 HTTP $STATUS: $(jq -r .message /tmp/patch-resp.json)"
+            fi
+            sleep 3
+          done
+          echo "::error::release body 同步失败（未定位到 release 或 PATCH 报错；若 GITHUB_TOKEN 触发 rate limit 会误报，可稍后重跑）"
+          exit 1
+
+      # tauri-action 找不到 .sig 时只 warn 不报错（"Signature not found for the updater JSON"），
+      # 必须显式验证升级清单已上传，防止静默发布不带升级产物的版本。
+      # 所有平台 job 已跑完，此时 latest.json 应已包含全部平台记录（linux / windows）。
+      - name: Verify latest.json uploaded
+        shell: bash
+        run: |
+          # draft 是 untagged，releases/tags/:tag 端点返回 404，必须从 releases 列表（含 draft）按 tag_name 定位再查 assets。
+          # 分页查找（per_page=100 × 3 页）：release 超过 10 个时 per_page=10 会定位失败
+          for i in $(seq 1 10); do
+            RID=""
+            # 容错：curl -f 使 HTTP 错误（403 rate limit / 5xx）直接失败进重试；
+            # jq 加 type=="array" 守卫——rate limit 响应是单对象，.[] 迭代出字符串会报
+            # "Cannot index string" 中断 run（GITHUB_TOKEN 限额 1000/hr，多 job 并行易触顶）
+            for page in $(seq 1 3); do
+              RESP=$(curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases?per_page=100&page=$page" 2>/dev/null) || { sleep 5; continue; }
+              RID=$(printf '%s' "$RESP" | jq -r 'if type=="array" then .[] | select(.tag_name=="v${{ needs.prepare-release.outputs.version }}") | .id else empty end' 2>/dev/null | head -1)
+              [ -n "$RID" ] && break
+            done
+            if [ -n "$RID" ]; then
+              if curl -sS -f -H "Authorization: Bearer $GITHUB_TOKEN" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/$RID/assets" 2>/dev/null | \
+                jq -r 'if type=="array" then .[].name else empty end' | grep -q '^latest.json$'; then
+                echo "latest.json 已上传 ✓"
+                exit 0
+              fi
+            fi
+            sleep 3
+          done
+          echo "::error::latest.json 未上传到 release，检查签名密钥与 createUpdaterArtifacts 配置（若 GITHUB_TOKEN 触发 rate limit 会误报，可稍后重跑）"
+          exit 1
+
   # ==================== Publish Release ====================
   publish-release:
-    needs: [prepare-release, build-windows, build-android]
+    needs: [prepare-release, finalize-release]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:

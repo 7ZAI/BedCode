@@ -18,10 +18,11 @@ export default defineConfig({
     strictPort: true,
     watch: {
       // 排除巨型构建目录，避免 chokidar 扫描/监听数万文件霸占事件循环导致请求挂起
+      // （2026-08-23 复发：packages/plugins 下各 Rust crate 的 target 共约 5.9GB
+      // 未被覆盖，重编译期间 fs 事件风暴打满 vite 事件循环，HTTP 完全无响应）
       ignored: [
-        '**/src-tauri/target/**',
+        '**/target/**',
         '**/src-tauri/gen/**',
-        '**/rust/target/**',
         '**/dist/**',
         '**/node_modules/**',
         '**/.git/**',
@@ -37,7 +38,7 @@ export default defineConfig({
     fs: {
       allow: [
         resolve(__dirname, 'src'),
-        // 插件 SDK 源码（@binblink/plugin-sdk-desktop 经 file: symlink 解析为真实路径，
+        // 插件 SDK 源码（@binblink/bedcode-plugin-sdk-desktop 经 file: symlink 解析为真实路径，
         // 共享 UI 组件如 Select.vue 在 packages/ 下，dev server 需显式放行）
         resolve(__dirname, 'packages'),
         resolve(__dirname, 'index.html'),

@@ -21,14 +21,19 @@ use crate::bedcode::plugin::{
     host_bus, host_database, host_events, host_log, host_plugin_database, host_session,
     host_storage,
 };
-use crate::exports::bedcode::plugin::{
-    abi, command, events, lifecycle, manifest, terminal_hooks, transfer_request_hook, upload_hook,
-};
+use crate::exports::bedcode::plugin::{abi, command, events, lifecycle, manifest, terminal_hooks};
 
 struct Guest;
 
 impl command::Guest for Guest {
     fn invoke(name: String, args: String) -> String {
+        // 测试专用 trap 命令：宿主测试制造确定性 panic（验证 wasm backtrace
+        // 栈穿透到业务函数 invoke，而非只在宿主分配 helper 处；trap 宿主日志
+        // 断言亦用此命令）。panic 在 wasm32 上即 unreachable trap
+        if name == "test.panic" {
+            panic!("intentional panic for wasm backtrace test");
+        }
+
         let mut out = serde_json::json!({
             "name": name,
             "args": args,
@@ -115,9 +120,18 @@ impl lifecycle::Guest for Guest {
         Ok(())
     }
 
-    fn on_startup() {}
+    // v8 契约：结果如实上抛。宿主测试预写 storage key `component-test-fail-startup`
+    // 时启动初始化失败，用于验证宿主 Degraded 路径（运行期开关，免构建矩阵）
+    fn on_startup() -> Result<(), String> {
+        match host_storage::get("component-test-fail-startup") {
+            Ok(Some(_)) => Err("simulated startup init failure (component-test)".to_string()),
+            _ => Ok(()),
+        }
+    }
 
-    fn on_shutdown() {}
+    fn on_shutdown() -> Result<(), String> {
+        Ok(())
+    }
 }
 
 impl events::Guest for Guest {
@@ -150,26 +164,6 @@ impl terminal_hooks::Guest for Guest {
     }
 }
 
-impl upload_hook::Guest for Guest {
-    // fail-closed 语义由宿主保持；测试插件固定拒绝并附原因
-    fn on_upload_request(meta_json: String) -> String {
-        format!(
-            "{{\"allow\":false,\"reason\":\"component-test deny ({})\"}}",
-            meta_json.len()
-        )
-    }
-}
-
-impl transfer_request_hook::Guest for Guest {
-    // v2：批量传输请求钩子（默认 fail-closed；测试插件固定拒绝并附原因）
-    fn on_transfer_request(meta_json: String) -> String {
-        format!(
-            "{{\"allow\":false,\"reason\":\"component-test transfer deny ({})\"}}",
-            meta_json.len()
-        )
-    }
-}
-
 impl manifest::Guest for Guest {
     fn get() -> String {
         r#"{"id":"com.bedcode.component-test","version":"0.1.0","name":"Component Test"}"#
@@ -178,9 +172,9 @@ impl manifest::Guest for Guest {
 }
 
 impl abi::Guest for Guest {
-    // 与 SDK abi::ABI_VERSION（当前 v7）保持一致；宿主按 `abi.form()==1` 识别组件形态
+    // 与 SDK abi::ABI_VERSION（当前 v10）保持一致；宿主按 `abi.form()==1` 识别组件形态
     fn version() -> u32 {
-        7
+        10
     }
 
     fn form() -> u32 {

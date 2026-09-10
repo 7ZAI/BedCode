@@ -5,6 +5,7 @@
  * 保证跨路由页面数据一致。设置变更自动保存到 localStorage 与后端数据库。
  */
 import { ref, computed, watch } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
@@ -118,7 +119,7 @@ async function loadSettings(): Promise<void> {
           settings.value.maxOpenTerminals = maxCachedTerminals
         }
       } catch (e) {
-        console.error('Failed to load settings:', e)
+        logger.error('Failed to load settings:', e)
       }
     }
 

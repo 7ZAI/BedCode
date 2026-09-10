@@ -22,7 +22,7 @@ describe('detectAgentType', () => {
 
   it('returns generic when no keyword matches', () => {
     expect(detectAgentType('')).toBe('generic')
-    expect(detectAgentType('npm run dev')).toBe('generic')
+    expect(detectAgentType('pnpm run dev')).toBe('generic')
     expect(detectAgentType('powershell.exe')).toBe('generic')
   })
 })

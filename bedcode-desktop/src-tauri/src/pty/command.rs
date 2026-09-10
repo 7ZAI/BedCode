@@ -7,7 +7,7 @@ use portable_pty::CommandBuilder;
 use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
 use crate::pty::wsl::windows_to_wsl_path;
 
-/// 构建命令（Windows/WSL）
+/// 构建命令（Windows/WSL/Linux）
 pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuilder> {
     let mut cmd = match &config.environment {
         ExecutionEnvironment::Windows { shell } => {
@@ -31,8 +31,7 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
                     // 构建完整的 CMD 命令
                     let full_command = format!(
                         "@chcp 65001 > nul && cd /d \"{}\" && echo Working directory: %cd% && {}",
-                        config.working_dir,
-                        config.command
+                        config.working_dir, config.command
                     );
 
                     let mut cmd = CommandBuilder::new("cmd.exe");
@@ -51,18 +50,40 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
             cmd.arg("-lic");
 
             let wsl_path = windows_to_wsl_path(&config.working_dir);
-            let wsl_command = format!(
-                "cd '{}' && pwd && {}",
-                wsl_path,
-                config.command
-            );
+            let wsl_command = format!("cd '{}' && pwd && {}", wsl_path, config.command);
             cmd.arg(wsl_command);
+            cmd
+        }
+        ExecutionEnvironment::Linux => {
+            // Linux 原生环境：直接走当前用户的 bash，避免 spawn 父进程退出导致会话关闭
+            // -lic：login + interactive + command。
+            //   - login：读 .profile（umask / cargo env 等）
+            //   - interactive 是必须的：Ubuntu 默认 .bashrc 顶部有
+            //     `case $- in *i*) ;; *) return;; esac` 交互守卫，非交互 shell
+            //     会在 nvm/pnpm/opencode 等 PATH 初始化之前就 return。仅用 -lc
+            //     时 PTY 子进程拿到的是被截断的 PATH，`pi` / `opencode` 等
+            //     nvm 安装的用户命令直接 command not found。加 -i 让守卫通过。
+            //   - PTY 场景下 interactive 不会有问题：BedCode 已经分配了真实 PTY，
+            //     bash 的 job control 警告只在无 TTY 的非 PTY 调用里出现。
+            // 先切到工作目录并打印 pwd，便于前端看到 PTY 实际所在目录
+            let full_command = format!(
+                "cd '{}' && pwd && {}",
+                config.working_dir.replace('\'', "'\\''"),
+                config.command,
+            );
+
+            let mut cmd = CommandBuilder::new("bash");
+            cmd.arg("-lic");
+            cmd.arg(full_command);
             cmd
         }
     };
 
     // 设置进程工作目录（作为备选，确保进程启动位置正确）
     if matches!(config.environment, ExecutionEnvironment::Windows { .. }) {
+        cmd.cwd(&config.working_dir);
+    } else if matches!(config.environment, ExecutionEnvironment::Linux) {
+        // Linux 环境：把 cwd 也设上（命令体里的 cd 已保证工作目录正确，这里只是兜底）
         cmd.cwd(&config.working_dir);
     }
 
@@ -72,4 +93,162 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
     }
 
     Ok(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::enums::WindowsShell;
+    use std::collections::HashMap;
+
+    /// 构造最小启动配置（environment 由调用方指定）
+    fn config(env: ExecutionEnvironment, command: &str) -> SessionLaunchConfig {
+        SessionLaunchConfig {
+            name: "test".to_string(),
+            environment: env,
+            working_dir: "D:\\work".to_string(),
+            command: command.to_string(),
+            env_vars: HashMap::new(),
+            cols: 120,
+            rows: 40,
+        }
+    }
+
+    /// 提取 argv（OsString → String）供断言
+    fn argv(cmd: &CommandBuilder) -> Vec<String> {
+        cmd.get_argv()
+            .iter()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect()
+    }
+
+    #[test]
+    fn powershell_builds_utf8_codepage_command_with_cwd() {
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
+            "echo hi",
+        ))
+        .unwrap();
+
+        let argv = argv(&cmd);
+        assert_eq!(argv[0], "powershell.exe");
+        assert!(argv.iter().any(|a| a == "-NoLogo"));
+        assert!(argv.iter().any(|a| a == "-NoExit"));
+
+        // 完整命令：设置 UTF-8 输出编码 → 切换到工作目录 → 执行用户命令
+        let full = argv.iter().find(|a| a.contains("echo hi")).unwrap();
+        assert!(full.contains("chcp 65001 > $null"));
+        assert!(full.contains("Set-Location 'D:\\work'"));
+        assert!(full.contains("Write-Host 'Working directory:'"));
+
+        // Windows 原生环境必须显式设置 cwd（备选机制）
+        assert_eq!(
+            cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
+            Some("D:\\work".to_string())
+        );
+    }
+
+    #[test]
+    fn cmd_shell_builds_cmd_commands() {
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::Cmd,
+            },
+            "dir",
+        ))
+        .unwrap();
+
+        let argv = argv(&cmd);
+        assert_eq!(argv[0], "cmd.exe");
+        assert!(argv.iter().any(|a| a == "/K"));
+
+        let full = argv.iter().find(|a| a.contains("dir")).unwrap();
+        assert!(full.contains("@chcp 65001 > nul"));
+        assert!(full.contains("cd /d \"D:\\work\""));
+        assert!(full.contains("echo Working directory:"));
+
+        assert_eq!(
+            cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
+            Some("D:\\work".to_string())
+        );
+    }
+
+    #[test]
+    fn wsl2_uses_distro_and_converts_windows_path() {
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            "pwd",
+        ))
+        .unwrap();
+
+        let argv = argv(&cmd);
+        assert_eq!(argv[0], "wsl.exe");
+        assert!(argv.iter().any(|a| a == "-d"));
+        assert!(argv.iter().any(|a| a == "Ubuntu"));
+        assert!(argv.iter().any(|a| a == "bash"));
+        assert!(argv.iter().any(|a| a == "-lic"));
+
+        // Windows 路径必须转换为 /mnt/d/work（WSL 挂载规则）
+        let wsl_cmd = argv.iter().find(|a| a.contains("pwd")).unwrap();
+        assert!(wsl_cmd.contains("cd '/mnt/d/work'"));
+
+        // WSL 环境不设置 Windows cwd（由 wsl.exe 自身处理）
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn wsl_path_passthrough_for_unix_style_paths() {
+        // 已是非 /mnt 的类 Unix 路径应原样透传
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            "ls",
+        ))
+        .unwrap();
+        let _ = argv(&cmd);
+        // 路径转换行为由 wsl::windows_to_wsl_path 保证，此处验证 WSL 分支不 panic
+        assert!(cmd.get_cwd().is_none());
+    }
+
+    #[test]
+    fn linux_uses_bash_and_sets_cwd_directly() {
+        let cmd = build_command(&config(
+            ExecutionEnvironment::Linux,
+            "echo hi",
+        ))
+        .unwrap();
+
+        let argv = argv(&cmd);
+        assert_eq!(argv[0], "bash");
+        // -lic：login + interactive + command。加 -i 是关键——绕过 Ubuntu 默认
+        // .bashrc 的交互守卫，让 nvm/opencode/pnpm 等 PATH 初始化真正生效。
+        assert!(argv.iter().any(|a| a == "-lic"));
+
+        let full = argv.iter().find(|a| a.contains("echo hi")).unwrap();
+        // 工作目录走单引号包住的 POSIX 路径（Linux 上直接用原路径，不做 /mnt 转换）
+        assert!(full.contains("cd 'D:\\work'"));
+        assert!(full.contains("pwd"));
+        // Linux 环境显式设置 cwd（兜底机制）
+        assert_eq!(
+            cmd.get_cwd().map(|c| c.to_string_lossy().into_owned()),
+            Some("D:\\work".to_string())
+        );
+    }
+
+    #[test]
+    fn linux_escapes_single_quotes_in_working_dir() {
+        // 含单引号的工作目录需转义，避免破坏 shell 字符串
+        let mut c = config(ExecutionEnvironment::Linux, "echo ok");
+        c.working_dir = "/tmp/o'clock".to_string();
+        let cmd = build_command(&c).unwrap();
+        let argv = argv(&cmd);
+        let full = argv.iter().find(|a| a.contains("echo ok")).unwrap();
+        // 单引号被转义为 '\''
+        assert!(full.contains("cd '/tmp/o'\\''clock'"));
+    }
 }

@@ -11,6 +11,7 @@ pub mod info;
 pub mod lifecycle;
 pub mod logging;
 pub mod power;
+pub mod power_wake;
 
 pub use app_context::AppContext;
 pub use config::AppConfig;
@@ -19,3 +20,4 @@ pub use error_boundary::spawn_with_error_boundary;
 pub use info::SystemInfo;
 pub use lifecycle::lifecycle_registry;
 pub use power::power_manager;
+pub use power_wake::spawn_wake_monitor;

@@ -10,7 +10,7 @@ Vue `<Transition>` patterns and CSS animation reference for BedCode.
 | Color-only changes | `200ms` | `ease` | Background, text color |
 | Layout shifts | `250ms` | `cubic-bezier(0.4, 0, 0.2, 1)` | Keyboard avoidance, safe area padding |
 | Enter/leave (modals) | `200ms` | `ease` | Mount/unmount transitions |
-| Enter/leave (sheets) | `300ms` | Material curve | Bottom sheets, slide panels |
+| Enter/leave (sheets) | `300ms` | `cubic-bezier(0.4, 0, 0.2, 1)` | Bottom sheets, slide panels |
 | Theme switching | `200ms` | `ease` | Root containers only |
 
 ## Vue `<Transition>` Patterns
@@ -24,7 +24,7 @@ Vue `<Transition>` patterns and CSS animation reference for BedCode.
 
 <style scoped>
 .modal-enter-active,
-.modal-leave-active { transition: all 0.2s ease; }
+.modal-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
 .modal-enter-from,
 .modal-leave-to { opacity: 0; }
 .modal-enter-from > :last-child,
@@ -59,7 +59,7 @@ Vue `<Transition>` patterns and CSS animation reference for BedCode.
 ```vue
 <style scoped>
 .toast-enter-active,
-.toast-leave-active { transition: all 0.3s ease; }
+.toast-leave-active { transition: opacity 0.3s ease, transform 0.3s ease; }
 .toast-enter-from,
 .toast-leave-to { opacity: 0; transform: translateX(-50%) translateY(-10px); }
 </style>
@@ -101,10 +101,13 @@ Add to `style.css` as `@keyframes` + utility class:
 
 ## Performance Rules
 
-1. Animate `transform` and `opacity` only — GPU-composited, no layout recalc
-2. `will-change: transform` on actively animating elements; remove on completion
-3. Use scoped `<style>` for `<Transition>` classes to avoid global CSS pollution
-4. `prefers-reduced-motion` is **mandatory**, not optional. Every project ships this global guard (in `style.css` / `mobile.css`), so decorative transitions collapse to near-instant:
+1. Prefer compositor-friendly properties: `transform` / `opacity` / `filter`, plus `@property`-registered variables. Animating layout properties (`width` / `height` / `top` / `left` / `margin` / `padding`) forces a reflow — acceptable for content-expansion UX (`grid-template-rows: 0fr → 1fr`, `max-height`) with a comment explaining why
+2. Durations default to 200–300ms. Anything beyond 300ms is a deliberate choice (see the `prefers-reduced-motion` gate below)
+3. `will-change: transform` on actively animating elements; remove on completion
+4. Use scoped `<style>` for `<Transition>` classes to avoid global CSS pollution
+5. `prefers-reduced-motion` is **mandatory**, not optional
+
+Every project ships this global guard (in `style.css` / `mobile.css`), so decorative transitions collapse to near-instant:
 
 ```css
 @media (prefers-reduced-motion: reduce) {

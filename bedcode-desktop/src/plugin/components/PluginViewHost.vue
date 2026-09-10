@@ -1,8 +1,5 @@
 <template>
-  <component
-    :is="resolvedComponent"
-    v-if="resolvedComponent"
-  />
+  <component :is="resolvedComponent" v-if="resolvedComponent" />
   <div v-else class="p-4 text-sm text-slate-500">
     {{ $t('desktop.plugin.viewNotFound') }}
   </div>
@@ -40,10 +37,8 @@ watch(
     if (ctx) {
       provide('pluginContext', ctx)
     }
-  }
+  },
 )
 
-const resolvedComponent = computed(() =>
-  registry.getViewComponent(props.pluginId, props.viewId)
-)
+const resolvedComponent = computed(() => registry.getViewComponent(props.pluginId, props.viewId))
 </script>

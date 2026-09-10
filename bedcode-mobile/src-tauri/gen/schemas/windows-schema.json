@@ -2643,6 +2643,48 @@
           "markdownDescription": "Denies the show_keyboard command without any pre-configured scope."
         },
         {
+          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-startForegroundService`\n- `allow-stopForegroundService`\n- `allow-updateForegroundNotification`",
+          "type": "string",
+          "const": "foreground-service:default",
+          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-startForegroundService`\n- `allow-stopForegroundService`\n- `allow-updateForegroundNotification`"
+        },
+        {
+          "description": "Enables the startForegroundService command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:allow-startForegroundService",
+          "markdownDescription": "Enables the startForegroundService command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the stopForegroundService command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:allow-stopForegroundService",
+          "markdownDescription": "Enables the stopForegroundService command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the updateForegroundNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:allow-updateForegroundNotification",
+          "markdownDescription": "Enables the updateForegroundNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the startForegroundService command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:deny-startForegroundService",
+          "markdownDescription": "Denies the startForegroundService command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the stopForegroundService command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:deny-stopForegroundService",
+          "markdownDescription": "Denies the stopForegroundService command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the updateForegroundNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "foreground-service:deny-updateForegroundNotification",
+          "markdownDescription": "Denies the updateForegroundNotification command without any pre-configured scope."
+        },
+        {
           "description": "This permission set configures what kind of\nfetch operations are available from the http plugin.\n\nThis enables all fetch operations but does not\nallow explicitly any origins to be fetched. This needs to\nbe manually configured before usage.\n\n#### Granted Permissions\n\nAll fetch operations are enabled.\n\n\n#### This default permission set includes:\n\n- `allow-fetch`\n- `allow-fetch-cancel`\n- `allow-fetch-send`\n- `allow-fetch-read-body`\n- `allow-fetch-cancel-body`",
           "type": "string",
           "const": "http:default",
@@ -2875,6 +2917,204 @@
           "type": "string",
           "const": "os:deny-version",
           "markdownDescription": "Denies the version command without any pre-configured scope."
+        },
+        {
+          "description": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-checkNotificationPermission`\n- `allow-requestNotificationPermission`\n- `allow-permissionsCallback`\n- `allow-testVibrate`\n- `allow-testSound`\n- `allow-showTaskNotification`\n- `allow-showConnectionNotification`\n- `allow-showPluginNotification`\n- `allow-showTransferRequestNotification`\n- `allow-cancelTransferRequestNotification`\n- `allow-showIntentAskNotification`\n- `allow-showPullNotice`\n- `allow-cancelIntentNotification`\n- `allow-cancelTaskNotification`\n- `allow-cancelConnectionNotification`\n- `allow-cancelAllTaskNotifications`",
+          "type": "string",
+          "const": "task-notification:default",
+          "markdownDescription": "Default plugin permissions.\n#### This default permission set includes:\n\n- `allow-checkNotificationPermission`\n- `allow-requestNotificationPermission`\n- `allow-permissionsCallback`\n- `allow-testVibrate`\n- `allow-testSound`\n- `allow-showTaskNotification`\n- `allow-showConnectionNotification`\n- `allow-showPluginNotification`\n- `allow-showTransferRequestNotification`\n- `allow-cancelTransferRequestNotification`\n- `allow-showIntentAskNotification`\n- `allow-showPullNotice`\n- `allow-cancelIntentNotification`\n- `allow-cancelTaskNotification`\n- `allow-cancelConnectionNotification`\n- `allow-cancelAllTaskNotifications`"
+        },
+        {
+          "description": "Enables the cancelAllTaskNotifications command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-cancelAllTaskNotifications",
+          "markdownDescription": "Enables the cancelAllTaskNotifications command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancelConnectionNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-cancelConnectionNotification",
+          "markdownDescription": "Enables the cancelConnectionNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancelIntentNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-cancelIntentNotification",
+          "markdownDescription": "Enables the cancelIntentNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancelTaskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-cancelTaskNotification",
+          "markdownDescription": "Enables the cancelTaskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the cancelTransferRequestNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-cancelTransferRequestNotification",
+          "markdownDescription": "Enables the cancelTransferRequestNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the checkNotificationPermission command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-checkNotificationPermission",
+          "markdownDescription": "Enables the checkNotificationPermission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the permissionsCallback command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-permissionsCallback",
+          "markdownDescription": "Enables the permissionsCallback command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the requestNotificationPermission command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-requestNotificationPermission",
+          "markdownDescription": "Enables the requestNotificationPermission command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showConnectionNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showConnectionNotification",
+          "markdownDescription": "Enables the showConnectionNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showIntentAskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showIntentAskNotification",
+          "markdownDescription": "Enables the showIntentAskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showPluginNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showPluginNotification",
+          "markdownDescription": "Enables the showPluginNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showPullNotice command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showPullNotice",
+          "markdownDescription": "Enables the showPullNotice command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showTaskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showTaskNotification",
+          "markdownDescription": "Enables the showTaskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the showTransferRequestNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-showTransferRequestNotification",
+          "markdownDescription": "Enables the showTransferRequestNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the testSound command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-testSound",
+          "markdownDescription": "Enables the testSound command without any pre-configured scope."
+        },
+        {
+          "description": "Enables the testVibrate command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:allow-testVibrate",
+          "markdownDescription": "Enables the testVibrate command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancelAllTaskNotifications command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-cancelAllTaskNotifications",
+          "markdownDescription": "Denies the cancelAllTaskNotifications command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancelConnectionNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-cancelConnectionNotification",
+          "markdownDescription": "Denies the cancelConnectionNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancelIntentNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-cancelIntentNotification",
+          "markdownDescription": "Denies the cancelIntentNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancelTaskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-cancelTaskNotification",
+          "markdownDescription": "Denies the cancelTaskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the cancelTransferRequestNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-cancelTransferRequestNotification",
+          "markdownDescription": "Denies the cancelTransferRequestNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the checkNotificationPermission command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-checkNotificationPermission",
+          "markdownDescription": "Denies the checkNotificationPermission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the permissionsCallback command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-permissionsCallback",
+          "markdownDescription": "Denies the permissionsCallback command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the requestNotificationPermission command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-requestNotificationPermission",
+          "markdownDescription": "Denies the requestNotificationPermission command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showConnectionNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showConnectionNotification",
+          "markdownDescription": "Denies the showConnectionNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showIntentAskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showIntentAskNotification",
+          "markdownDescription": "Denies the showIntentAskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showPluginNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showPluginNotification",
+          "markdownDescription": "Denies the showPluginNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showPullNotice command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showPullNotice",
+          "markdownDescription": "Denies the showPullNotice command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showTaskNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showTaskNotification",
+          "markdownDescription": "Denies the showTaskNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the showTransferRequestNotification command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-showTransferRequestNotification",
+          "markdownDescription": "Denies the showTransferRequestNotification command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the testSound command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-testSound",
+          "markdownDescription": "Denies the testSound command without any pre-configured scope."
+        },
+        {
+          "description": "Denies the testVibrate command without any pre-configured scope.",
+          "type": "string",
+          "const": "task-notification:deny-testVibrate",
+          "markdownDescription": "Denies the testVibrate command without any pre-configured scope."
         }
       ]
     },

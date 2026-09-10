@@ -32,7 +32,7 @@ const BASE_MANIFEST = JSON.stringify(
     contributes: {},
   },
   null,
-  2
+  2,
 )
 
 beforeEach(() => {
@@ -49,7 +49,7 @@ describe('前端注册扫描（views）', () => {
   it('从 registerSidebarPanel 推导 views type=sidebar 与 ui:sidebar 权限', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerSidebarPanel({ id: 'test.sidebar', title: 'My Panel', component: MyPanel })
 }`,
@@ -67,7 +67,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerToolboxPage → views type=toolbox + ui:toolbox', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerToolboxPage({ id: 'test.toolbox', title: 'Toolbox', component: ToolboxPage })
 }`,
@@ -81,7 +81,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerStatusBarItem → views type=statusbar + ui:statusbar', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerStatusBarItem({ id: 'test.status', label: 'Status' })
 }`,
@@ -95,7 +95,7 @@ export async function activate(context: PluginContext): Promise<void> {
   it('registerTerminalToolbarItem → ui:input 权限（不进 views）', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   context.ui.registerTerminalToolbarItem({ id: 'test.tool', label: 'Tool' })
 }`,
@@ -110,10 +110,10 @@ export async function activate(context: PluginContext): Promise<void> {
 // ==================== 前端权限推断 ====================
 
 describe('前端权限推断', () => {
-  it('storage / terminal / session / http / fileService / broadcast', () => {
+  it('storage / terminal / session / http / broadcast', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,
-      'src/index.ts': `import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+      'src/index.ts': `import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
   await context.terminal.sendInput('s', 'x')
@@ -122,7 +122,6 @@ export async function activate(context: PluginContext): Promise<void> {
   await context.session.list()
   await context.session.stop('s')
   context.http.registerEndpoint('/x', async () => ({ status: 200, body: {} }))
-  await context.fileService.pickDirectory()
   context.events.on('evt', () => {})
 }`,
     })
@@ -136,7 +135,6 @@ export async function activate(context: PluginContext): Promise<void> {
     expect(perms).toContain('session:read')
     expect(perms).toContain('session:write')
     expect(perms).toContain('network:http')
-    expect(perms).toContain('fileservice')
     expect(perms).toContain('broadcast')
   })
 
@@ -165,7 +163,7 @@ describe('Rust 扫描', () => {
           },
         },
         null,
-        2
+        2,
       ),
       'rust/src/lib.rs': `impl WasmPlugin for TestPlugin {
   fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
@@ -213,7 +211,7 @@ describe('Rust 扫描', () => {
     generateManifest(cwd)
     const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
     expect(manifest.permissions).toEqual(
-      expect.arrayContaining(['storage', 'network:http', 'fs:read', 'fs:write'])
+      expect.arrayContaining(['storage', 'network:http', 'fs:read', 'fs:write']),
     )
   })
 })
@@ -229,7 +227,7 @@ describe('合并策略', () => {
           permissions: ['ui:sidebar', 'storage'],
         },
         null,
-        2
+        2,
       ),
       'src/index.ts': `export async function activate(context: PluginContext): Promise<void> {
   await context.storage.get('k')
@@ -245,7 +243,10 @@ describe('合并策略', () => {
     const withExtra = JSON.parse(BASE_MANIFEST)
     withExtra.icon = 'icon.svg'
     withExtra.contributes = {
-      configuration: { title: 'Settings', properties: { apiKey: { type: 'string', title: 'Key' } } },
+      configuration: {
+        title: 'Settings',
+        properties: { apiKey: { type: 'string', title: 'Key' } },
+      },
       lifecycle: { onStartup: true },
     }
     scaffoldPlugin({
@@ -270,7 +271,7 @@ describe('合并策略', () => {
           },
         },
         null,
-        2
+        2,
       ),
       'src/index.ts': `export async function activate() {}`,
     })

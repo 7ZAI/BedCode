@@ -4,6 +4,7 @@
  * 为每个插件创建 PluginContext 实例 — 权限检查 + API 代理
  */
 
+import { logger as frontendLogger } from '@/utils/frontendLogger'
 import type {
   PluginContext,
   PluginInfo,
@@ -20,22 +21,14 @@ import type {
   DialogAPI,
   NotificationAPI,
   StatusAPI,
-  FileServiceAPI,
   SystemAPI,
-  FileServiceMount,
-  MountOptions,
-  PeerFileServiceInfo,
-  UploadRequestMeta,
-  TransferRequestMeta,
-  SafEntry,
-  SafCopyHandle,
-  SafCopyStatus,
-  PickedSharedDirectory,
   ToolboxPageDescriptor,
   NavTabDescriptor,
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
+  PluginDialogOptions,
+  PluginDialogHandle,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
@@ -44,22 +37,10 @@ import { getPluginRegistry } from './registry'
 import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
 import { invoke } from '@tauri-apps/api/core'
-
-/** Webview 上传策略钩子事件载荷（宿主 emit，camelCase 与 Rust 侧一致） */
-interface UploadHookEventPayload {
-  requestId: string
-  pluginId: string
-  mountPath: string
-  meta: UploadRequestMeta
-}
-
-/** Webview 批量传输钩子事件载荷（v2；meta 为 TransferRequestMeta） */
-interface TransferHookEventPayload {
-  requestId: string
-  pluginId: string
-  mountPath: string
-  meta: TransferRequestMeta
-}
+// 全局弹窗控制器：必须经包说明符解析（与 App.vue 挂载的 PluginGlobalDialog.vue 同源）。
+// 移动端 file: 依赖是快照拷贝，若直连源码相对路径会与组件产生两个模块实例，
+// openGlobalDialog 的广播到不了组件（弹窗静默不渲染）；包说明符保证同一拷贝文件。
+import { openGlobalDialog } from '@binblink/bedcode-plugin-sdk-mobile/global-dialog'
 
 // ==================== Android 系统返回键（跨插件共享单例） ====================
 // Tauri AppPlugin 的行为：只要 JS 侧存在 back-button listener，系统返回一律转发到 JS，
@@ -82,10 +63,27 @@ async function ensureBackButtonListener(): Promise<void> {
   }
 }
 
+/**
+ * 提取 Tauri invoke 拒绝值的可读信息
+ *
+ * Rust 命令返回 Err(AppError) 时，AppError 的 Serialize 实现是纯字符串，
+ * Tauri IPC 以该字符串 reject（非 Error 实例、无 .message 字段）；
+ * dev-shell / 单测环境抛出的则是 Error 对象。两种形态都取到文本。
+ */
+function extractInvokeErrorMessage(e: unknown): string {
+  if (e instanceof Error) return e.message
+  if (typeof e === 'string') return e
+  if (e && typeof e === 'object' && 'message' in e && typeof (e as { message: unknown }).message === 'string') {
+    return (e as { message: string }).message
+  }
+  return ''
+}
+
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
   const disposables: Disposable[] = []
   const permissions = info.permissions
+  let context: PluginContext | null = null
 
   /** 快速失败：检查权限 */
   function requirePermission(apiMethod: string): void {
@@ -110,12 +108,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       const handler = commandHandlers.get(id)
       if (handler) return handler(...args)
       // 本地 handler 查不到时回退到 WASM 命令桥（宿主 PluginManager.invoke_command）；
-      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found
+      // 保留底层错误信息，避免把真实失败原因（如 WASM trap、插件未激活）统一掩盖成 Command not found。
+      // 注意：Rust AppError 经 Tauri IPC 以纯字符串 reject（无 .message），需按类型提取
       try {
         return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
-      } catch (e: any) {
-        const detail = e?.message ? ` (${e.message})` : ''
-        throw new Error(`Command not found: ${id}${detail}`)
+      } catch (e) {
+        const detail = extractInvokeErrorMessage(e)
+        throw new Error(detail ? `Command not found: ${id} (${detail})` : `Command not found: ${id}`)
       }
     },
   }
@@ -215,6 +214,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      requirePermission('ui.showDialog')
+      return openGlobalDialog({ ...options, pluginContext: context! })
+    },
   }
 
   // ==================== EventAPI ====================
@@ -243,227 +246,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  // ==================== FileServiceAPI ====================
-
-  /** 检查 fileservice 权限，失败时抛 i18n 文案错误 */
-  function requireFileservicePermission(apiMethod: string): void {
-    if (!hasPermissionForApi(permissions, apiMethod)) {
-      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
-      const message = hostI18n
-        ? hostI18n.global.t('mobile.plugin.noFileservicePermission', { plugin: info.id })
-        : 'mobile.plugin.noFileservicePermission'
-      throw new Error(message)
-    }
-  }
-
-  const fileService: FileServiceAPI = {
-    async mount(options: MountOptions): Promise<FileServiceMount> {
-      requireFileservicePermission('fileService.mount')
-
-      const hook = options.onUploadRequest
-      const batchHook = options.onTransferRequest
-      // 构造线上传输选项：剥离函数，只序列化数据字段
-      const wireOptions: Record<string, unknown> = {
-        mountPath: options.mountPath,
-        roots: options.roots,
-        operations: options.operations,
-      }
-      const result = await pluginCmds.pluginFilesrvMount(info.id, wireOptions)
-
-      // 若插件提供了上传策略钩子，建立 Tauri 事件监听
-      let hookUnlisten: (() => void) | null = null
-      if (hook) {
-        try {
-          const { listen } = await import('@tauri-apps/api/event')
-          hookUnlisten = await listen<UploadHookEventPayload>(
-            'filesrv:upload_request',
-            async (event) => {
-              const payload = event.payload
-              // 宿主全局 emit，必须过滤属于当前插件 + 当前挂载点的事件
-              if (payload.pluginId !== info.id || payload.mountPath !== result.mountPath) return
-
-              try {
-                const decision = await hook(payload.meta)
-                await pluginCmds.pluginFilesrvRespondUploadRequest(
-                  info.id,
-                  payload.requestId,
-                  decision.allow,
-                  decision.reason,
-                )
-              } catch (err) {
-                console.error(`[FileService] upload hook error for ${info.id}:`, err)
-                // fail-closed：hook 异常一律拒绝，回填失败只记 debug
-                try {
-                  await pluginCmds.pluginFilesrvRespondUploadRequest(
-                    info.id,
-                    payload.requestId,
-                    false,
-                    'hook-error',
-                  )
-                } catch (respondErr) {
-                  console.debug('[FileService] respond after hook-error failed (likely timed out):', respondErr)
-                }
-              }
-            },
-          )
-        } catch (listenErr) {
-          // 非 Tauri 环境（如单元测试）降级：不影响 mount 本身
-          console.warn('[FileService] failed to establish upload hook listener:', listenErr)
-        }
-      }
-
-      // v2：批量传输请求钩子（onTransferRequest）——与上传钩子同构的事件桥
-      let batchHookUnlisten: (() => void) | null = null
-      if (batchHook) {
-        try {
-          const { listen } = await import('@tauri-apps/api/event')
-          batchHookUnlisten = await listen<TransferHookEventPayload>(
-            'filesrv:transfer_request_hook',
-            async (event) => {
-              const payload = event.payload
-              if (payload.pluginId !== info.id || payload.mountPath !== result.mountPath) return
-
-              try {
-                const decision = await batchHook(payload.meta)
-                await pluginCmds.pluginFilesrvRespondTransferRequest(
-                  info.id,
-                  payload.requestId,
-                  JSON.stringify(decision),
-                )
-              } catch (err) {
-                console.error(`[FileService] transfer hook error for ${info.id}:`, err)
-                // fail-closed：hook 异常一律 deny（回填失败只记 debug）
-                try {
-                  await pluginCmds.pluginFilesrvRespondTransferRequest(
-                    info.id,
-                    payload.requestId,
-                    JSON.stringify({ allow: false, reason: 'hook-error' }),
-                  )
-                } catch (respondErr) {
-                  console.debug('[FileService] respond after transfer hook-error failed (likely timed out):', respondErr)
-                }
-              }
-            },
-          )
-        } catch (listenErr) {
-          console.warn('[FileService] failed to establish transfer hook listener:', listenErr)
-        }
-      }
-
-      // 封装 unlisten 为 Disposable，随插件 deactivate 清理
-      const hookDisposable: Disposable = {
-        dispose() {
-          if (hookUnlisten) {
-            hookUnlisten()
-            hookUnlisten = null
-          }
-          if (batchHookUnlisten) {
-            batchHookUnlisten()
-            batchHookUnlisten = null
-          }
-        },
-      }
-      disposables.push(hookDisposable)
-
-      let disposed = false
-      return {
-        mountPath: result.mountPath,
-        async updateRoots(roots: string[]): Promise<void> {
-          requireFileservicePermission('fileService.updateRoots')
-          return pluginCmds.pluginFilesrvUpdateRoots(info.id, result.mountPath, roots)
-        },
-        async dispose(): Promise<void> {
-          if (disposed) return
-          disposed = true
-          requireFileservicePermission('fileService.unmount')
-          hookDisposable.dispose()
-          return pluginCmds.pluginFilesrvDispose(info.id, result.mountPath)
-        },
-      }
-    },
-
-    // ==================== v2 批量传输批准 ====================
-
-    async approveTransferRequest(batchId: string): Promise<void> {
-      requireFileservicePermission('fileService.approveTransferRequest')
-      return pluginCmds.pluginFilesrvApproveTransfer(info.id, batchId)
-    },
-
-    async rejectTransferRequest(batchId: string): Promise<void> {
-      requireFileservicePermission('fileService.rejectTransferRequest')
-      return pluginCmds.pluginFilesrvRejectTransfer(info.id, batchId)
-    },
-
-    async setApprovalTimeout(mountPath: string, seconds: number): Promise<void> {
-      requireFileservicePermission('fileService.setApprovalTimeout')
-      return pluginCmds.pluginFilesrvSetApprovalTimeout(info.id, mountPath, seconds)
-    },
-
-    async cancelReceivingSession(sessionId: string): Promise<void> {
-      requireFileservicePermission('fileService.cancelReceivingSession')
-      return pluginCmds.pluginFilesrvCancelReceiving(info.id, sessionId)
-    },
-
-    async getPeerInfo(peerId: string): Promise<PeerFileServiceInfo | null> {
-      requireFileservicePermission('fileService.getPeer')
-      return pluginCmds.pluginFilesrvGetPeer(info.id, peerId)
-    },
-
-    async pickDirectory(): Promise<string | null> {
-      requireFileservicePermission('fileService.pickDirectory')
-      return pluginCmds.pluginPickDirectory(info.id)
-    },
-
-    async pickFile(): Promise<string | null> {
-      requireFileservicePermission('fileService.pickFile')
-      return pluginCmds.pluginPickFile(info.id)
-    },
-
-    async pickSharedDirectory(): Promise<PickedSharedDirectory | null> {
-      requireFileservicePermission('fileService.pickSharedDirectory')
-      return pluginCmds.pluginPickSharedDirectory(info.id)
-    },
-
-    async listDir(path: string): Promise<SafEntry[]> {
-      requireFileservicePermission('fileService.listDir')
-      return pluginCmds.pluginSafListDir(info.id, path)
-    },
-
-    // SAF 存储访问（共享目录遍历 + 中转复制；Android 真机可用，其他平台 reject）
-    saf: {
-      async listTree(treeUri: string, documentId: string): Promise<SafEntry[]> {
-        requireFileservicePermission('fileService.saf.listTree')
-        return pluginCmds.pluginSafListTree(info.id, treeUri, documentId)
-      },
-      async copyStart(uri: string, destName: string): Promise<SafCopyHandle> {
-        requireFileservicePermission('fileService.saf.copyStart')
-        return pluginCmds.pluginSafCopyStart(info.id, uri, destName)
-      },
-      async copyStatus(copyId: string): Promise<SafCopyStatus> {
-        requireFileservicePermission('fileService.saf.copyStatus')
-        return pluginCmds.pluginSafCopyStatus(info.id, copyId)
-      },
-      async copyCancel(copyId: string): Promise<void> {
-        requireFileservicePermission('fileService.saf.copyCancel')
-        return pluginCmds.pluginSafCopyCancel(info.id, copyId)
-      },
-      async cleanupStaleCopies(): Promise<void> {
-        requireFileservicePermission('fileService.saf.cleanupStaleCopies')
-        return pluginCmds.pluginSafCleanupStaleCopies(info.id)
-      },
-      async checkAuthorized(treeUri: string): Promise<boolean> {
-        requireFileservicePermission('fileService.saf.checkAuthorized')
-        return pluginCmds.pluginSafCheckAuthorized(info.id, treeUri)
-      },
-    },
-
-    /** 引导授予「所有文件访问权限」（Android 11+ 分区存储下读取顶层自定义目录必需；
-     * 无运行时弹窗，跳转系统授权页）。返回当前是否已授权；非 Android 平台 reject */
-    async requestAllFilesAccess(): Promise<boolean> {
-      requireFileservicePermission('fileService.requestAllFilesAccess')
-      return pluginCmds.pluginOpenAllFilesSettings(info.id)
-    },
-  }
 
   // ==================== SystemAPI ====================
 
@@ -487,21 +269,39 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requireSystemOpenPermission('system.revealInDir')
       return pluginCmds.pluginOpenFileLocation(info.id, path)
     },
+    async revealReceivedFileLocation(fileName: string): Promise<void> {
+      requireSystemOpenPermission('system.revealReceivedFileLocation')
+      return pluginCmds.pluginRevealReceivedFile(info.id, fileName)
+    },
+    /**
+     * 引导开启「所有文件访问」权限（打开公共 Download 目录所需；未授权时跳系统
+     * 设置页，返回跳转前的授权状态；授权后重试 revealReceivedFileLocation 即达）
+     */
+    async requestAllFilesAccess(): Promise<boolean> {
+      requireSystemOpenPermission('system.requestAllFilesAccess')
+      return pluginCmds.pluginOpenAllFilesAccess(info.id)
+    },
+    /** 打开系统公共下载目录（设置页下载目录区「打开」，核对文件是否落盘；
+     * 未授予「所有文件访问」时报 needs_all_files_access 前缀，前端据此引导授权） */
+    async openDownloadDir(): Promise<void> {
+      requireSystemOpenPermission('system.openDownloadDir')
+      return pluginCmds.pluginOpenDownloadDir(info.id)
+    },
   }
 
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${info.id}.${key}`] = value
       }
       const existing = hostI18n.global.getLocaleMessage(locale)
       hostI18n.global.mergeLocaleMessage(locale, { ...existing, ...prefixed })
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return key
       const fullKey = `${info.id}.${key}`
@@ -589,7 +389,9 @@ export function createPluginContext(info: PluginInfo): PluginContext {
         }
         await invoke('plugin:task-notification|showPluginNotification', { title, body })
       } catch (e) {
-        console.warn('[PluginContext] notify failed:', e)
+        // 注意：此处是宿主侧通知失败日志，走前端 logger 落盘；
+        // 不能用下方插件 LoggerAPI 的 logger（单参、走 pluginLog 通道）
+        frontendLogger.warn('[PluginContext] notify failed:', e)
       }
     },
   }
@@ -604,7 +406,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  return {
+  context = {
     id: info.id,
     commands,
     terminal,
@@ -612,7 +414,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     ui,
     events,
     storage,
-    fileService,
     i18n,
     lifecycle,
     logger,
@@ -622,4 +423,5 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     status,
     _disposables: disposables,
   }
+  return context!
 }

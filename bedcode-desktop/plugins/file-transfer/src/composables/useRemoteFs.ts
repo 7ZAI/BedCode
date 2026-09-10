@@ -1,152 +1,243 @@
 /**
- * 远端目录浏览
+ * 远端目录浏览 (Desktop) — host-peer 契约版
  *
- * list-remote 命令 + 面包屑栈 + 文件多选。对端是否在线由上层
- * FileTransferView 监听 peer.online 变化后触发 load()；本 composable
- * 自身不订阅事件，只负责目录状态的请求与维护。
- *
- * 选择策略：仅文件可被多选（目录经双击进入浏览），下载命令按文件入队，
- * 目录整体递归下载不在 WASM 命令契约内。
+ * 两级结构：对端共享根清单（list_shared_roots）→ 根内目录树
+ * （browse_directory(dirId, relPath)）。path 语义 = 「根内相对路径」，
+ * dirId 为共享根条目 id。
  */
 import { ref, computed, type Ref } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { RemoteEntry } from '../types'
 
-/** 面包屑节点：显示名 + 累积路径（根节点 path 为空串） */
+/** 共享根条目 */
+export interface SharedRootRef {
+  id: string
+  name: string
+}
+
+/** 面包屑节点：展示名 + 累积相对路径（根节点 path 为空串） */
 export interface Crumb {
   name: string
   path: string
 }
 
-export function useRemoteFs(context: PluginContext, getPeerId: () => string) {
-  /** 当前目录条目 */
+export function useRemoteFs(context: PluginContext, _getPeerId: () => string) {
+  /** 当前所在共享根（null = 处于根清单层） */
+  const currentRoot = ref<SharedRootRef | null>(null) as Ref<SharedRootRef | null>
+  /** 最近一次根清单（根清单层点击进根时按展示名回查宿主分配的真实 id） */
+  const rootsCache = ref<SharedRootRef[]>([]) as Ref<SharedRootRef[]>
+  /** 目录项列表（根清单层复用同一容器，isDir=true 呈现为可进入） */
   const entries = ref<RemoteEntry[]>([]) as Ref<RemoteEntry[]>
-  const loading = ref(false)
-  /** 目录不可用时的 i18n key（空 = 无错误） */
-  const errorKey = ref('')
-  /** 对端存储权限提示（列表为空且可能被分区存储过滤时由对端服务器置位） */
-  const notice = ref<string | null>(null)
-  /** 面包屑栈（首个为根节点） */
-  const breadcrumb = ref<Crumb[]>([{ name: 'transfer.breadcrumb.home', path: '' }]) as Ref<Crumb[]>
-  /** 已选文件名（相对当前目录） */
+  const loading = ref(false) as Ref<boolean>
+  /** 目录加载失败时的 i18n key（空 = 无错误） */
+  const errorKey = ref('') as Ref<string>
+  /** 对端存储权限提示 */
+  const notice = ref<string | null>(null) as Ref<string | null>
+  /** 根内相对路径 */
+  const relPath = ref('') as Ref<string>
+  /** 面包屑栈 */
+  const breadcrumb = ref<Crumb[]>([
+    { name: 'transfer.breadcrumb.home', path: '' },
+  ]) as Ref<Crumb[]>
+  /** 已选文件名集合（当前目录内） */
   const selectedNames = ref<string[]>([]) as Ref<string[]>
 
-  const currentPath = computed(() => breadcrumb.value[breadcrumb.value.length - 1].path)
   const selectedEntries = computed(() =>
-    entries.value.filter(e => selectedNames.value.includes(e.name)),
+    entries.value.filter((e) => selectedNames.value.includes(e.name)),
   )
   const hasSelection = computed(() => selectedNames.value.length > 0)
 
-  /** 请求序号：目录快速切换时使过期响应失效，避免后发覆盖先发 */
+  /** 防竞态序号：目录快速切换时旧响应作废 */
   let busySeq = 0
 
-  /** 归一化路径（去首尾斜杠；根为 ""） */
-  function norm(path: string): string {
-    return path.replace(/^\/+/, '').replace(/\/+$/, '')
-  }
-
-  /** 列举目标目录（默认当前面包屑路径） */
-  async function load(path?: string): Promise<void> {
-    const target = norm(path === undefined ? currentPath.value : path)
+  /** 加载共享根清单 */
+  async function loadRoots(): Promise<void> {
     const seq = ++busySeq
     loading.value = true
     errorKey.value = ''
     try {
       const data = await context.commands.execute('file-transfer.list-remote', {
-        peerId: getPeerId(),
-        path: target,
+        path: '',
+        dirId: '',
       })
       if (seq !== busySeq) return
-      // 兼容旧对端裸数组响应（新响应为 { entries, notice }）
-      const arr = Array.isArray(data) ? data : (data?.entries ?? [])
-      notice.value = Array.isArray(data) ? null : (data?.notice ?? null)
-      entries.value = arr.map((e: any) => ({
-        name: e.name,
-        size: e.size ?? 0,
-        mtime: e.mtime ?? 0,
-        isDir: !!e.isDir,
-      }))
-      // 目录内容变化后仅保留仍存在的选中项
-      const alive = new Set(entries.value.map(e => e.name))
-      selectedNames.value = selectedNames.value.filter(n => alive.has(n))
-      console.log(`[File Transfer] list-remote OK: path='${target}' entries=${entries.value.length}`)
-    } catch (e) {
-      if (seq !== busySeq) return
-      entries.value = []
+      const roots: SharedRootRef[] = Array.isArray(data?.roots) ? data.roots : []
+      rootsCache.value = roots
+      entries.value = roots.map((r) => ({ name: r.name, size: 0, mtime: 0, isDir: true }))
       notice.value = null
+      currentRoot.value = null
+      relPath.value = ''
+      breadcrumb.value = [{ name: 'transfer.breadcrumb.home', path: '' }]
+      selectedNames.value = []
+    } catch (e) {
+      console.error('[File Transfer] list-remote roots FAILED:', e)
+      if (seq !== busySeq) return
       errorKey.value = 'transfer.error.dirUnavailable'
-      console.error(`[File Transfer] list-remote FAILED: path='${target}'`, e)
+      entries.value = []
     } finally {
       if (seq === busySeq) loading.value = false
     }
   }
 
-  /** 进入子目录（压栈并列举） */
-  async function enterDir(entry: RemoteEntry): Promise<void> {
-    if (!entry.isDir) return
-    const base = currentPath.value
-    const path = base ? `${base}/${entry.name}` : entry.name
-    breadcrumb.value = [...breadcrumb.value, { name: entry.name, path }]
-    selectedNames.value = []
-    await load(path)
+  /** 加载当前根内的 relPath 目录 */
+  async function loadDir(root: SharedRootRef, path: string): Promise<void> {
+    const seq = ++busySeq
+    loading.value = true
+    errorKey.value = ''
+    try {
+      const data = await context.commands.execute('file-transfer.list-remote', {
+        path,
+        dirId: root.id,
+      })
+      if (seq !== busySeq) return
+      entries.value = Array.isArray(data?.entries) ? data.entries : []
+      notice.value = data?.notice ?? null
+      relPath.value = path
+      selectedNames.value = []
+    } catch (e) {
+      console.error(`[File Transfer] list-remote FAILED: path='${path}'`, e)
+      if (seq !== busySeq) return
+      errorKey.value = 'transfer.error.dirUnavailable'
+      entries.value = []
+    } finally {
+      if (seq === busySeq) loading.value = false
+    }
   }
 
-  /** 跳转面包屑节点（截断栈并列举） */
-  async function navigateTo(index: number): Promise<void> {
-    if (index < 0 || index >= breadcrumb.value.length) return
+  /** 兼容入口：无参/空路径刷新当前层级；带路径时需先有 currentRoot */
+  async function load(path?: string): Promise<void> {
+    if (!currentRoot.value) {
+      await loadRoots()
+      return
+    }
+    const target =
+      path === undefined ? relPath.value : path.replace(/^\/+/, '').replace(/\/+$/, '')
+    // 面包屑重建
+    const segs = target.split('/').filter(Boolean)
+    breadcrumb.value = [
+      { name: 'transfer.breadcrumb.home', path: '' },
+      ...segs.map((s, i) => ({ name: s, path: segs.slice(0, i + 1).join('/') })),
+    ]
+    await loadDir(currentRoot.value, target)
+  }
+
+  /** 进入共享根 */
+  async function enterRoot(root: SharedRootRef): Promise<void> {
+    currentRoot.value = root
+    breadcrumb.value = [
+      { name: 'transfer.breadcrumb.home', path: '' },
+      { name: root.name, path: '' },
+    ]
+    await loadDir(root, '')
+  }
+
+  /** 进入子目录 / 根清单层点击进入共享根 */
+  async function cd(name: string): Promise<void> {
+    if (!currentRoot.value) {
+      // 根清单层点击 = 进入该共享根；dirId 必须是宿主分配的条目 id，
+      // 展示名 ≠ id，直接拿名字当 id 会命中不了目录表（表现为「目录不可用」），
+      // 与移动端同构：按展示名从最近一次根清单解析真实 id，缺失才兜底同名
+      const root = rootsCache.value.find((r) => r.name === name) ?? { id: name, name }
+      await enterRoot(root)
+      return
+    }
+    const next = relPath.value ? `${relPath.value}/${name}` : name
+    breadcrumb.value = [
+      ...breadcrumb.value,
+      { name, path: next },
+    ]
+    await loadDir(currentRoot.value, next)
+  }
+
+  /** 返回上级 */
+  async function up(): Promise<void> {
+    if (breadcrumb.value.length <= 1) return
+    if (breadcrumb.value.length === 2) {
+      await goRoot()
+      return
+    }
+    breadcrumb.value = breadcrumb.value.slice(0, -1)
+    const prev = breadcrumb.value[breadcrumb.value.length - 1]
+    if (currentRoot.value) await loadDir(currentRoot.value, prev.path)
+  }
+
+  /** 回到共享根清单 */
+  async function goRoot(): Promise<void> {
+    await loadRoots()
+  }
+
+  /** 面包屑跳转（0 = 根清单） */
+  async function goTo(index: number): Promise<void> {
+    if (index <= 0 || !currentRoot.value) {
+      await goRoot()
+      return
+    }
+    const crumb = breadcrumb.value[index]
     breadcrumb.value = breadcrumb.value.slice(0, index + 1)
-    selectedNames.value = []
-    await load()
+    await loadDir(currentRoot.value, crumb.path)
   }
 
-  /** 切换单文件选中 */
-  function toggleSelect(name: string): void {
-    selectedNames.value = selectedNames.value.includes(name)
-      ? selectedNames.value.filter(n => n !== name)
-      : [...selectedNames.value, name]
+  async function refresh(): Promise<void> {
+    if (currentRoot.value) await loadDir(currentRoot.value, relPath.value)
+    else await loadRoots()
   }
 
-  /** 表头全选：仅作用于文件（目录不可下载） */
+  function toggle(name: string): void {
+    if (selectedNames.value.includes(name)) {
+      selectedNames.value = selectedNames.value.filter((n) => n !== name)
+    } else {
+      selectedNames.value = [...selectedNames.value, name]
+    }
+  }
+
+  /** 全选/全不选当前目录文件 */
   function toggleAll(): void {
-    const fileNames = entries.value.filter(e => !e.isDir).map(e => e.name)
-    const allSelected =
-      fileNames.length > 0 && fileNames.every(n => selectedNames.value.includes(n))
-    selectedNames.value = allSelected
-      ? selectedNames.value.filter(n => !fileNames.includes(n))
-      : Array.from(new Set([...selectedNames.value, ...fileNames]))
+    const files = entries.value.filter((e) => !e.isDir).map((e) => e.name)
+    const allOn = files.every((n) => selectedNames.value.includes(n))
+    selectedNames.value = allOn ? [] : files
   }
 
   function clearSelection(): void {
     selectedNames.value = []
   }
 
-  /** 刷新当前目录（顶栏「刷新」按钮调用） */
-  function refresh(): Promise<void> {
-    return load()
-  }
-
-  /** 组件卸载时使在途请求失效 */
-  function stop(): void {
-    busySeq++
+  /** 重置浏览状态（对端下线时调用） */
+  function reset(): void {
+    currentRoot.value = null
+    entries.value = []
+    loading.value = false
+    errorKey.value = ''
+    notice.value = null
+    relPath.value = ''
+    breadcrumb.value = [{ name: 'transfer.breadcrumb.home', path: '' }]
+    selectedNames.value = []
+    // 根清单缓存随对端切换/下线清空：cd() 在根层反查展示名 → dirId 时，
+    // 残留旧对端的根会让 enterRoot 用错 dirId（后端 not-found）
+    rootsCache.value = []
   }
 
   return {
+    currentRoot,
     entries,
     loading,
     errorKey,
     notice,
     breadcrumb,
+    relPath,
     selectedNames,
-    currentPath,
     selectedEntries,
     hasSelection,
-    load,
-    enterDir,
-    navigateTo,
-    toggleSelect,
+    refresh,
+    enterRoot,
+    cd,
+    up,
+    goRoot,
+    goTo,
+    toggle,
     toggleAll,
     clearSelection,
-    refresh,
-    stop,
+    reset,
+    loadRoots,
+    load,
   }
 }

@@ -24,8 +24,6 @@ use exports::bedcode::plugin::events::Guest as EventsGuest;
 use exports::bedcode::plugin::lifecycle::Guest as LifecycleGuest;
 use exports::bedcode::plugin::manifest::Guest as ManifestGuest;
 use exports::bedcode::plugin::terminal_hooks::Guest as TerminalHooksGuest;
-use exports::bedcode::plugin::transfer_request_hook::Guest as TransferRequestHookGuest;
-use exports::bedcode::plugin::upload_hook::Guest as UploadHookGuest;
 
 struct ComponentTestPlugin;
 
@@ -37,8 +35,8 @@ impl AbiGuest for ComponentTestPlugin {
         {
             return 999;
         }
-        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步（=6）
-        6
+        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步（=8）
+        8
     }
 }
 
@@ -104,9 +102,17 @@ impl LifecycleGuest for ComponentTestPlugin {
         Ok(())
     }
 
-    fn on_startup() {}
+    fn on_startup() -> Result<(), String> {
+        // on-startup-fail feature：宿主 Degraded 状态机测试用（激活成功但启动初始化失败）
+        if cfg!(feature = "on-startup-fail") {
+            return Err("startup init failed (test)".to_string());
+        }
+        Ok(())
+    }
 
-    fn on_shutdown() {}
+    fn on_shutdown() -> Result<(), String> {
+        Ok(())
+    }
 }
 
 // ==================== events ====================
@@ -133,7 +139,7 @@ impl EventsGuest for ComponentTestPlugin {
     }
 }
 
-// ==================== terminal-hooks / upload / transfer ====================
+// ==================== terminal-hooks ====================
 
 impl TerminalHooksGuest for ComponentTestPlugin {
     fn on_terminal_input(_session_id: String, _text: String) -> Option<String> {
@@ -142,21 +148,6 @@ impl TerminalHooksGuest for ComponentTestPlugin {
 
     fn on_terminal_output(_session_id: String, _data: String) -> Option<String> {
         None
-    }
-}
-
-impl UploadHookGuest for ComponentTestPlugin {
-    fn on_upload_request(_meta_json: String) -> String {
-        // 固定拒绝决定 JSON：宿主 fail-closed 透传断言用（上层 manager 06 起解析）
-        serde_json::json!({"approved": false, "reason": "component-test default deny"})
-            .to_string()
-    }
-}
-
-impl TransferRequestHookGuest for ComponentTestPlugin {
-    fn on_transfer_request(_meta_json: String) -> String {
-        serde_json::json!({"approved": false, "reason": "component-test default deny"})
-            .to_string()
     }
 }
 

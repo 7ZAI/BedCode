@@ -62,6 +62,7 @@ async function addTask(input: { content: string; repeatable?: boolean }): Promis
     createdAt: new Date().toISOString(),
     repeatable: input.repeatable ?? true,
     pendingTaskId: null,
+    pendingSessionId: null,
   })
   saveToStorage()
 }

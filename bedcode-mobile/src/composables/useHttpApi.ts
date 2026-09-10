@@ -7,8 +7,11 @@
  */
 
 import { ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
 import { useMobileConnection } from './useMobileConnection'
+import { isChannelEncryptionActive, notePinFromAuthData, getPinnedKey, useLinkEncryptionSettings } from './useLinkEncryption'
+import { decryptResponse, encryptRequest, type HttpTrafficKeys } from '../services/linkCrypto'
 
 // ==================== Config ====================
 
@@ -30,6 +33,14 @@ export interface ApiResult<T = any> {
   data?: T
 }
 
+/** 正统渲染端身份（与桌面端 ResizeOutcome serde 形状对齐） */
+export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
+
+/** resize 裁决结果 */
+export type ResizeOutcome =
+  | { status: 'applied'; canonical: RendererSource }
+  | { status: 'needsConfirmation'; currentCanonical: RendererSource }
+
 async function request<T = any>(
   path: string,
   options: RequestInit = {}
@@ -38,12 +49,11 @@ async function request<T = any>(
   const baseUrl = API_BASE_URL.value
 
   if (!baseUrl) {
-    console.error('[HttpApi] No base URL set, cannot make request to', path)
+    logger.error('[HttpApi] No base URL set, cannot make request to', path)
     return { code: -1, message: 'Not connected: no base URL set' }
   }
 
   const url = `http://${baseUrl}${path}`
-  console.log('[HttpApi] Request:', options.method || 'GET', url)
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -55,26 +65,113 @@ async function request<T = any>(
     headers['Authorization'] = `Bearer ${authCredentials.value.sessionToken}`
   }
 
+  // 链路加密（issue 06）：非 auth 路径且已 pin 且主开关开 → 请求体信封化 + 协商头；
+  // 加密失败不静默降级为明文发送（fail-closed）。
+  // GET/HEAD 无请求体（HTTP 语义禁止 body）：仍发协商头 + 派生响应密钥
+  // （响应加密不受影响），但信封不进 body——否则 fetch 构造直接失败。
+  const encryptionActive = !path.startsWith('/api/auth/') && isChannelEncryptionActive('http')
+  let requestKeys: HttpTrafficKeys | null = null
+  let effectiveOptions = options
+  if (encryptionActive) {
+    const pinnedKey = getPinnedKey()
+    if (!pinnedKey) {
+      logger.error('[HttpApi] encryption active but no pinned key:', path)
+      return { code: -1, message: 'LINK_ENCRYPTION_NO_PIN' }
+    }
+    try {
+      const method = (options.method || 'GET').toUpperCase()
+      const hasRequestBody = method !== 'GET' && method !== 'HEAD'
+      let bodyText = ''
+      if (hasRequestBody) {
+        bodyText = typeof options.body === 'string' ? options.body : options.body ? JSON.stringify(options.body) : ''
+      }
+      const sealed = encryptRequest(pinnedKey, path, bodyText)
+      headers['X-BedCode-Crypto'] = sealed.negotiation
+      requestKeys = sealed.keys
+      if (hasRequestBody) {
+        effectiveOptions = { ...options, body: sealed.envelope }
+      }
+    } catch (e: any) {
+      logger.error('[HttpApi] encrypt request failed:', path, e?.message || e)
+      return { code: -1, message: 'LINK_ENCRYPTION_SEAL_FAILED' }
+    }
+  }
+
   try {
+    logger.log('[HttpApi] Request:', options.method || 'GET', url, encryptionActive ? '(encrypted)' : '')
     const response = await tauriFetch(url, {
-      ...options,
+      ...effectiveOptions,
       headers,
       connectTimeout: 30000,
     })
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
-      console.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
+      logger.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
       return { code: response.status, message: `HTTP ${response.status}: ${response.statusText}` }
     }
 
-    const result = await response.json()
-    console.log('[HttpApi] Response OK:', path, 'code=', result.code)
+    const rawText = await response.text()
+    let bodyText = rawText
+
+    if (encryptionActive && requestKeys) {
+      const respHeader = response.headers.get('X-BedCode-Crypto')
+      const outcome = decryptResponse(requestKeys, respHeader === 'v1', rawText, path)
+      if (outcome.kind === 'decrypted') {
+        bodyText = outcome.text
+      } else if (outcome.kind === 'downgrade') {
+        // 预期加密而响应明文：strict 断连报错；非 strict 明文续跑 + 提示态（UI 层映射）
+        const { settings } = useLinkEncryptionSettings()
+        if (settings.value.strictMode) {
+          logger.error('[HttpApi] strict mode: encryption downgrade detected on', path)
+          return { code: -1, message: 'LINK_ENCRYPTION_DOWNGRADE' }
+        }
+        logger.warn('[HttpApi] response unencrypted (downgrade tolerated):', path)
+      }
+    }
+
+    // pin 刷新：auth 响应携带 kdPublicB64/kdFingerprint 时自动更新（issue 03/05）
+    try {
+      const parsedForPin = JSON.parse(bodyText)
+      notePinFromAuthData(parsedForPin?.data)
+    } catch {
+      /* 非 JSON 响应不阻断 */
+    }
+
+    const result = JSON.parse(bodyText)
+    logger.log('[HttpApi] Response OK:', path, 'code=', result.code)
     return result
   } catch (e: any) {
-    console.error('[HttpApi] Fetch failed:', path, e?.message || e)
+    logger.error('[HttpApi] Fetch failed:', path, e?.message || e)
     return { code: -1, message: e?.message || String(e) }
   }
+}
+
+// ==================== 通用请求通道（插件 shared runtime mobileApi 用） ====================
+
+/** 通用对端 REST 请求选项（插件经 mobileApi.httpRequest 访问；body 支持对象或字符串） */
+export interface MobileHttpRequestOptions {
+  method?: string
+  body?: unknown
+  headers?: Record<string, string>
+}
+
+/**
+ * 通用 HTTP 请求：与内部 request 一致（JWT 注入 / 链路加密 / 错误归一化），
+ * body 为对象时自动 JSON.stringify（与既有业务包装函数行为对齐）。
+ * 具体插件业务端点由各插件工程基于本通道自行封装，宿主不感知插件领域。
+ */
+export function httpRequest<T = any>(
+  path: string,
+  options: MobileHttpRequestOptions = {},
+): Promise<ApiResult<T>> {
+  const body =
+    typeof options.body === 'string'
+      ? options.body
+      : options.body !== undefined
+        ? JSON.stringify(options.body)
+        : undefined
+  return request<T>(path, { ...options, body } as RequestInit)
 }
 
 // ==================== Auth API ====================
@@ -131,10 +228,17 @@ export async function httpListSessions() {
   return request<{ sessions: any[] }>('/api/sessions')
 }
 
-export async function httpStartSession(configId: string) {
+export async function httpStartSession(
+  configId: string,
+  size?: { cols: number; rows: number }
+) {
   return request<{ sessionId: string; status: string }>(
     '/api/sessions/start',
-    { method: 'POST', body: JSON.stringify({ configId }) }
+    {
+      method: 'POST',
+      // size：本端终端组件按设备屏幕预算的默认网格，主机 PTY 以此为初始尺寸
+      body: JSON.stringify({ configId, cols: size?.cols, rows: size?.rows })
+    }
   )
 }
 
@@ -142,10 +246,15 @@ export async function httpStopSession(sessionId: string) {
   return request(`/api/sessions/${sessionId}/stop`, { method: 'POST' })
 }
 
-export async function httpResizeSession(sessionId: string, cols: number, rows: number) {
+export async function httpResizeSession(
+  sessionId: string,
+  cols: number,
+  rows: number,
+  force = false,
+): Promise<ApiResult<ResizeOutcome>> {
   return request(`/api/sessions/${sessionId}/resize`, {
     method: 'POST',
-    body: JSON.stringify({ cols, rows }),
+    body: JSON.stringify({ cols, rows, force }),
   })
 }
 
@@ -226,7 +335,7 @@ export async function httpGetFileDiff(sessionId: string, filePath: string) {
 
 /** 设置会话自动模式（auto_execute / auto_answer） */
 export async function httpSetSessionMode(sessionId: string, autoExecute?: boolean, autoAnswer?: boolean) {
-  const body: Record<string, any> = { session_id: sessionId }
+  const body: { session_id: string; auto_execute?: boolean; auto_answer?: boolean } = { session_id: sessionId }
   if (autoExecute !== undefined) body.auto_execute = autoExecute
   if (autoAnswer !== undefined) body.auto_answer = autoAnswer
   return request(
@@ -514,7 +623,7 @@ export interface ProbeResult {
  */
 export async function httpProbe(address: string, port: number): Promise<ProbeResult> {
   const url = `http://${address}:${port}/api/health`
-  console.log('[HttpApi] Probing:', url)
+  logger.log('[HttpApi] Probing:', url)
 
   try {
     const response = await tauriFetch(url, {
@@ -527,7 +636,7 @@ export async function httpProbe(address: string, port: number): Promise<ProbeRes
     }
 
     const data = await response.json()
-    console.log('[HttpApi] Probe success:', data)
+    logger.log('[HttpApi] Probe success:', data)
     return {
       reachable: true,
       status: data.status,
@@ -535,7 +644,7 @@ export async function httpProbe(address: string, port: number): Promise<ProbeRes
       uptimeSecs: data.uptime_secs,
     }
   } catch (e: any) {
-    console.warn('[HttpApi] Probe failed:', e?.message || e)
+    logger.warn('[HttpApi] Probe failed:', e?.message || e)
     return { reachable: false, error: e?.message || String(e) }
   }
 }

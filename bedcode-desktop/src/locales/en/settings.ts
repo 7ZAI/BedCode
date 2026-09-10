@@ -1,22 +1,68 @@
 export default {
   settings: {
     title: 'Settings',
-    network: {
-      title: 'Network Settings',
+    pairing: {
+      title: 'Pairing Settings',
       defaultPort: 'Default Port',
       defaultPortDesc: 'The port used when the server starts; takes effect after restart',
-      preventSleep: 'Prevent System Sleep',
-      preventSleepDesc: 'Prevent the system from sleeping while the server is running (display sleep allowed)',
+      qrValidity: 'QR Code Validity',
+      qrValidityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
+      pairingCodeTtl: 'Pairing Code Validity',
+      pairingCodeTtlDesc: 'Set the validity period for pairing codes (60-3600 seconds)',
+    },
+    linkCrypto: {
+      title: 'Link Encryption',
+      master: 'Enable Link Encryption',
+      masterDesc:
+        'End-to-end encrypt traffic over LAN; off by default — pair a mobile device first',
+      encryptHttp: 'Encrypt HTTP Payloads',
+      encryptHttpDesc: 'Envelope encryption for REST request/response bodies (e.g. terminal input)',
+      encryptWsTerminal: 'Encrypt Terminal Channel',
+      encryptWsTerminalDesc: 'WS frame encryption for the terminal channel (PTY output stream)',
+      encryptWsEvent: 'Encrypt Event Channel',
+      encryptWsEventDesc: 'WS frame encryption for the event channel (sync broadcasts)',
+      plaintextFallback: 'Allow Plaintext Fallback',
+      plaintextFallbackDesc:
+        'Serve un-negotiated legacy clients in plaintext; when off, non-loopback un-negotiated requests are rejected',
+      fingerprint: 'Local Fingerprint',
+      fingerprintDesc:
+        'Fingerprint of the local identity key (first 16 hex of SHA-256); verify against the value shown on the mobile device',
+      saveFailed: 'Failed to save link encryption settings',
     },
     session: {
       title: 'Session Defaults',
       defaultEnvironment: 'Default Environment',
       defaultCommand: 'Default Start Command',
     },
-    qr: {
-      title: 'QR Code Settings',
-      validity: 'QR Code Validity',
-      validityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
+    system: {
+      title: 'System Settings',
+      preventSleep: 'Prevent System Sleep',
+      preventSleepDesc:
+        'Prevent the system from sleeping while the server is running (display sleep allowed)',
+    },
+    log: {
+      title: 'Log Settings',
+      level: 'Log Level',
+      levelDesc: 'Switch the runtime log file level; takes effect immediately without restart',
+      levelDebug: 'Debug',
+      levelInfo: 'Info',
+      levelWarn: 'Warn',
+      levelError: 'Error',
+      levelApplied: 'Log level switched',
+      format: 'Log Format',
+      formatDesc: 'Text for direct reading; JSON for field-based filtering by scripts (after restart)',
+      formatText: 'Text',
+      formatJson: 'JSON',
+      maxFiles: 'Retained Files',
+      maxFilesDesc: 'Daily-rotated log files to keep, 0 means unlimited',
+      capacityMb: 'Capacity Limit (MB)',
+      capacityMbDesc: 'Total log directory size cap; oldest files are removed automatically. 0 means unlimited',
+      persist: 'Persist Config',
+      persistDesc: 'Format / retention / capacity are saved to the config file and take effect after restart',
+      openDir: 'Open Log Directory',
+      save: 'Save Config',
+      saved: 'Log config saved',
+      saveFailed: 'Failed to save log config',
     },
     ui: {
       title: 'UI Settings',
@@ -42,6 +88,8 @@ export default {
       fontLarge: 'Large',
       fontXl: 'Extra Large',
       terminalCacheCount: 'Terminal Cache Count',
+      animations: 'Animations',
+      animationsDesc: 'Turn off to disable all page transitions and interaction animations',
     },
     connection: {
       title: 'Connection Settings',

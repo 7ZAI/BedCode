@@ -67,7 +67,7 @@
  */
 import { ref, computed, watch, nextTick } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Select from '@binblink/plugin-sdk-mobile/ui'
+import Select from '@binblink/bedcode-plugin-sdk-mobile/ui'
 
 const props = withDefaults(defineProps<{
   disabled?: boolean

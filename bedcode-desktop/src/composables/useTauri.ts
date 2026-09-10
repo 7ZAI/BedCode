@@ -13,10 +13,21 @@ import {
 } from '@/composables/useDesktopCommands'
 
 // Re-export types from desktop model
-export type { SessionInfo, SessionConfig, DeviceConnectionInfo, WslDistro } from '@/composables/model'
+export type {
+  SessionInfo,
+  SessionConfig,
+  DeviceConnectionInfo,
+  WslDistro,
+} from '@/composables/model'
 
 // Re-export types from shared model
-export type { QrConnectionInfo, SessionStatusEvent, SessionRestartEvent, AnsiRenderOptions, Shortcut } from '@/composables/model'
+export type {
+  QrConnectionInfo,
+  SessionStatusEvent,
+  SessionRestartEvent,
+  AnsiRenderOptions,
+  Shortcut,
+} from '@/composables/model'
 
 // 重新导出桌面端 composables
 export { useWsl } from '@/composables/useWsl'

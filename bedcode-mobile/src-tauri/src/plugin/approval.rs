@@ -162,9 +162,8 @@ pub fn compute_dir_hash(dir: &Path) -> crate::Result<String> {
             if path.is_dir() {
                 collect(&path, base, files)?;
             } else if path.is_file() {
-                let content = std::fs::read(&path).map_err(|e| {
-                    AppError::Plugin(format!("Failed to read '{}' for hashing: {}", rel, e))
-                })?;
+                let content = std::fs::read(&path)
+                    .map_err(|e| AppError::Plugin(format!("Failed to read '{}' for hashing: {}", rel, e)))?;
                 files.push((rel, content));
             }
         }
@@ -198,8 +197,7 @@ pub fn effective_permissions(
     } else {
         match approval {
             Some(appr) => {
-                let approved: HashSet<&str> =
-                    appr.approved_permissions.iter().map(|s| s.as_str()).collect();
+                let approved: HashSet<&str> = appr.approved_permissions.iter().map(|s| s.as_str()).collect();
                 requested
                     .iter()
                     .filter(|p| approved.contains(p.as_str()))
@@ -210,9 +208,7 @@ pub fn effective_permissions(
         }
     };
     // storage 恒授予：插件自身配置空间的读写（与 SDK PermissionManager 语义一致）
-    effective.insert(
-        bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string(),
-    );
+    effective.insert(bedcode_plugin_api_mobile::permission::PERMISSION_STORAGE.to_string());
     effective
 }
 
@@ -220,10 +216,7 @@ pub fn effective_permissions(
 ///
 /// 返回 (status, 当前目录哈希)。Pending / HashMismatch 均表示
 /// 插件不可按既有审批激活，调用方应要求重新人工批准。
-pub fn verify_approval(
-    approval: Option<&PluginApproval>,
-    dir: &Path,
-) -> crate::Result<(ApprovalStatus, String)> {
+pub fn verify_approval(approval: Option<&PluginApproval>, dir: &Path) -> crate::Result<(ApprovalStatus, String)> {
     let current_hash = compute_dir_hash(dir)?;
     let status = match approval {
         None => ApprovalStatus::Pending,
@@ -271,7 +264,10 @@ mod tests {
         let store = test_store();
         assert!(store.get("com.test.p").await.unwrap().is_none());
 
-        store.approve("com.test.p", &["fs:read".to_string()], "abc123", "1.0.0").await.unwrap();
+        store
+            .approve("com.test.p", &["fs:read".to_string()], "abc123", "1.0.0")
+            .await
+            .unwrap();
         let approval = store.get("com.test.p").await.unwrap().expect("approved");
         assert_eq!(approval.approved_permissions, vec!["fs:read"]);
         assert_eq!(approval.content_hash, "abc123");
@@ -285,11 +281,14 @@ mod tests {
     fn test_compute_dir_hash_stable_and_sensitive() {
         let tmp = tempfile::TempDir::new().unwrap();
         let dir = tmp.path().join("p");
-        write_plugin_dir(&dir, &[
-            ("plugin.json", r#"{"id":"com.test.p"}"#),
-            ("dist/main.js", "console.log(1)"),
-            ("icon.png", "PNG-DATA"),
-        ]);
+        write_plugin_dir(
+            &dir,
+            &[
+                ("plugin.json", r#"{"id":"com.test.p"}"#),
+                ("dist/main.js", "console.log(1)"),
+                ("icon.png", "PNG-DATA"),
+            ],
+        );
 
         let h1 = compute_dir_hash(&dir).unwrap();
         let h2 = compute_dir_hash(&dir).unwrap();
@@ -306,11 +305,7 @@ mod tests {
 
     #[test]
     fn test_effective_permissions_gating() {
-        let requested = vec![
-            "fs:read".to_string(),
-            "process:run".to_string(),
-            "storage".to_string(),
-        ];
+        let requested = vec!["fs:read".to_string(), "process:run".to_string(), "storage".to_string()];
 
         let eff = effective_permissions(&requested, None, false);
         assert!(eff.contains("storage"));

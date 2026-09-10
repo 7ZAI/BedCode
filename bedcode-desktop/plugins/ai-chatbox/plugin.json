@@ -8,6 +8,9 @@
   "sandbox": "inline",
   "pluginType": "rust-ts",
   "rustLibrary": "bedcode_plugin_ai_chatbox",
+  "wasiPreopenDirs": [
+    "${home}/.bedcode/ai-chatbox"
+  ],
   "icon": "icon.svg",
   "permissions": [
     "broadcast",
@@ -113,6 +116,26 @@
           "title": "代码高亮主题",
           "description": "auto：跟随宿主深浅色；light/dark：通用浅深色；github-light/github-dark/dracula：具名风格主题",
           "default": "auto"
+        },
+        "rateLimitMaxRetries": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "title": "限流自动重试次数",
+          "description": "供应商返回 429/503/529 等限流码时的自动重试上限（0 = 关闭自动重试）",
+          "default": 3
+        },
+        "rateLimitInitialDelayMs": {
+          "type": "number",
+          "title": "限流重试初始等待（ms）",
+          "description": "首次重试前的等待毫秒数，之后按指数退避翻倍（如 1000 → 2s/4s/8s…）",
+          "default": 1000
+        },
+        "rateLimitMaxDelayMs": {
+          "type": "number",
+          "title": "限流重试最大等待（ms）",
+          "description": "指数退避的等待上限（毫秒），达到后按该值重试",
+          "default": 30000
         }
       }
     }

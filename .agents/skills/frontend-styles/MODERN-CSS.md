@@ -4,7 +4,7 @@ CSS Layers、@property、:has()、View Transitions——主 SKILL 之外能显�
 
 > **何时加载**：解决优先级冲突、动画 CSS 变量、简化条件样式、页面切换动画时。
 >
-> **支持基线**：2024+ 主流浏览器，**移动端 Android 5+ / iOS 15+** 可用。
+> **支持基线**：`@layer` / `:has()` / `subgrid` / `aspect-ratio`——2024 年主流浏览器全覆盖（Chromium 105+、Safari 15.4+/16、Firefox 112+，含 Android WebView 5+）。**例外**：`@property` 需 Chromium 85+ / Safari 16.4+；View Transitions 需 Chromium 111+ / Safari 18+（Firefox 需开 flag）。这两项必须特性检测 + 降级。
 
 ---
 
@@ -41,7 +41,7 @@ CSS Layers、@property、:has()、View Transitions——主 SKILL 之外能显�
 }
 ```
 
-**优先级规则**：`reset < base < components < utilities`（后定义层级高的优先级低，但**同层内后定义覆盖前定义**）。
+**优先级规则**：`reset < base < components < utilities`。`@layer` 的优先级取决于**声明顺序**——后声明的层优先级更高（同层内后定义覆盖前定义），且 layer 内样式永远低于 layer 外样式。上例把 `utilities` 声明在最后，所以它赢。
 
 **这意味着**：
 - 任何 `utilities` 层的工具类永远赢过 `components` 层
@@ -50,14 +50,14 @@ CSS Layers、@property、:has()、View Transitions——主 SKILL 之外能显�
 
 ### Tailwind 集成
 
-Tailwind v3 默认在 `utilities` 层。把项目自定义组件放进 `components` 层：
+这是 **v4 方向**的用法（BedCode 当前用 v3.4：`@tailwind base/components/utilities` 三个指令不进 layer，自定义 CSS 留在层外，因此天然高于 Tailwind 工具类——不需要 `!important`）。等迁移到 v4 时再启用：
 
 ```css
 /* main.css */
 @layer tailwind-base, components, tailwind-utilities;
 
 @import 'tailwindcss/base' layer(tailwind-base);
-@import 'tailwindcss/components' layer(tailwind-utilities);  /* 注意：Tailwind 的 components 工具类 */
+// v3 对应写法：@tailwind base; / @tailwind components; / @tailwind utilities;
 @import 'tailwindcss/utilities' layer(tailwind-utilities);
 
 /* 自己的组件放进 components 层 */
@@ -142,7 +142,7 @@ Tailwind v3 默认在 `utilities` 层。把项目自定义组件放进 `componen
 | `'<length>'` | 长度 |
 | `'<color>'` | 颜色 |
 | `'<angle>'` | 角度 |
-| `'*"'` | 任意 token（默认） |
+| `'*'` | 任意 token（默认） |
 
 ### BedCode 应用场景
 

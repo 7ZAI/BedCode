@@ -33,9 +33,10 @@ struct ReplyHandler {
 
 impl BusMessageHandler for ReplyHandler {
     fn on_message(&self, msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
-        let mut tx = self.tx.try_lock().map_err(|_| {
-            anyhow::anyhow!("api_call: reply handler lock poisoned")
-        })?;
+        let mut tx = self
+            .tx
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("api_call: reply handler lock poisoned"))?;
         if let Some(tx) = tx.take() {
             let _ = tx.send(msg.payload.to_string());
         }
@@ -55,8 +56,8 @@ pub(crate) fn api_call(
     timeout_ms: u64,
 ) -> Result<String, String> {
     // 1. 解析请求载荷并提取 correlation id（回复 topic 路由依据）
-    let payload: Value = serde_json::from_str(payload_json)
-        .map_err(|e| format!("api_call: invalid JSON payload: {}", e))?;
+    let payload: Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("api_call: invalid JSON payload: {}", e))?;
     let request_id = payload
         .get("id")
         .and_then(|v| v.as_str())
@@ -74,9 +75,7 @@ pub(crate) fn api_call(
     let sub_bus = bus.clone();
     let sub_topic = reply_topic.clone();
     let sub_result = block_on_async(async move {
-        sub_bus
-            .subscribe_static(caller_id, &sub_topic, Box::new(handler))
-            .await;
+        sub_bus.subscribe_static(caller_id, &sub_topic, Box::new(handler)).await;
         Ok::<(), String>(())
     });
     sub_result.map_err(|e| format!("api_call: subscribe failed: {}", e))?;
@@ -86,9 +85,8 @@ pub(crate) fn api_call(
     bus::bus_publish(host_ctx, caller_id, request_topic, payload_json)?;
 
     // 4. 等待回复（超时）
-    let wait_result = block_on_async(async move {
-        tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await
-    });
+    let wait_result =
+        block_on_async(async move { tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), rx).await });
     let reply_json = match wait_result {
         Ok(Ok(reply)) => reply,
         Ok(Err(_)) => {
@@ -108,8 +106,7 @@ pub(crate) fn api_call(
     };
 
     // 5. 校验回复 id 与请求一致（防迟到的旧回复/错配回复串台）
-    let reply: Value = serde_json::from_str(&reply_json)
-        .map_err(|e| format!("api_call: invalid reply JSON: {}", e))?;
+    let reply: Value = serde_json::from_str(&reply_json).map_err(|e| format!("api_call: invalid reply JSON: {}", e))?;
     let reply_id = reply.get("id").and_then(|v| v.as_str());
     if reply_id != Some(request_id) {
         cleanup_reply_subscription(&bus, caller_id, &reply_topic);
@@ -212,23 +209,15 @@ mod tests {
         rx
     }
 
-
     /// 完整往返：请求发布（门禁放行）→ 响应者回复 → 等待解析 → id 校验
     #[test]
     fn api_call_roundtrip_success() {
         let ctx = build_host_ctx();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            ctx.api_registry().register(
-                "com.bedcode.sdk-test",
-                &["com.bedcode.sdk-test.echo".to_string()],
-            );
-            let mut rx = setup_responder(
-                &ctx,
-                "bedcode.api.com.bedcode.sdk-test.echo",
-                true,
-                None,
-            );
+            ctx.api_registry()
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
+            let mut rx = setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.echo", true, None);
 
             let reply = api_call(
                 &ctx,
@@ -273,10 +262,8 @@ mod tests {
         let ctx = build_host_ctx();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            ctx.api_registry().register(
-                "com.bedcode.sdk-test",
-                &["com.bedcode.sdk-test.silent".to_string()],
-            );
+            ctx.api_registry()
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.silent".to_string()]);
             // 目标订阅了但静默不回复
             setup_responder(&ctx, "bedcode.api.com.bedcode.sdk-test.silent", false, None);
 
@@ -290,7 +277,10 @@ mod tests {
             )
             .unwrap_err();
             assert!(err.contains("timeout"), "got: {}", err);
-            assert!(started.elapsed() >= Duration::from_millis(400), "must wait at least the timeout");
+            assert!(
+                started.elapsed() >= Duration::from_millis(400),
+                "must wait at least the timeout"
+            );
         });
     }
 
@@ -300,10 +290,8 @@ mod tests {
         let ctx = build_host_ctx();
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
-            ctx.api_registry().register(
-                "com.bedcode.sdk-test",
-                &["com.bedcode.sdk-test.echo".to_string()],
-            );
+            ctx.api_registry()
+                .register("com.bedcode.sdk-test", &["com.bedcode.sdk-test.echo".to_string()]);
             setup_responder(
                 &ctx,
                 "bedcode.api.com.bedcode.sdk-test.echo",

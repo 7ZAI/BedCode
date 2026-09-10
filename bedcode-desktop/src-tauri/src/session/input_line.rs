@@ -78,10 +78,7 @@ impl SubmittedLineTracker {
     /// Multiple lines may be returned (if the chunk contains multiple submissions); empty lines are likewise returned,
     /// whether to ignore them is decided by the listener's own business logic.
     pub fn feed(&self, session_id: &str, data: &str) -> Vec<String> {
-        let mut map = self
-            .buffers
-            .lock()
-            .expect("SubmittedLineTracker mutex poisoned");
+        let mut map = self.buffers.lock().expect("SubmittedLineTracker mutex poisoned");
         let buffer = map.entry(session_id.to_string()).or_default();
         buffer.feed(data)
     }
@@ -90,10 +87,7 @@ impl SubmittedLineTracker {
     ///
     /// Unsubmitted residual content is discarded directly without dispatch — if not submitted, it is not a submitted input line
     pub fn remove_session(&self, session_id: &str) {
-        let mut map = self
-            .buffers
-            .lock()
-            .expect("SubmittedLineTracker mutex poisoned");
+        let mut map = self.buffers.lock().expect("SubmittedLineTracker mutex poisoned");
         map.remove(session_id);
     }
 }
@@ -299,9 +293,7 @@ impl LineBuffer {
     /// Extracts the parameter-byte string currently collected by CSI and resets the state reference
     fn take_csi_params(&self) -> String {
         match self.esc {
-            EscState::Csi { params, count } => {
-                String::from_utf8_lossy(&params[..count]).into_owned()
-            }
+            EscState::Csi { params, count } => String::from_utf8_lossy(&params[..count]).into_owned(),
             // Theoretically unreachable (only called within Csi state); returns empty string as fallback
             _ => String::new(),
         }
@@ -339,10 +331,7 @@ mod tests {
 
     /// Feeds multiple chunks sequentially via the tracker and collects all submission results
     fn feed_chunks(tracker: &SubmittedLineTracker, session: &str, chunks: &[&str]) -> Vec<String> {
-        chunks
-            .iter()
-            .flat_map(|chunk| tracker.feed(session, chunk))
-            .collect()
+        chunks.iter().flat_map(|chunk| tracker.feed(session, chunk)).collect()
     }
 
     #[test]
@@ -443,7 +432,11 @@ mod tests {
     fn test_osc_within_paste_dropped() {
         // 粘贴块内的 OSC 序列同样丢弃，粘贴内容不受影响
         let t = SubmittedLineTracker::new();
-        let out = feed_chunks(&t, "s1", &["\x1b[200~pre\x1b]4;0;rgb:2828/2c2c/3434\x07post\x1b[201~\r"]);
+        let out = feed_chunks(
+            &t,
+            "s1",
+            &["\x1b[200~pre\x1b]4;0;rgb:2828/2c2c/3434\x07post\x1b[201~\r"],
+        );
         assert_eq!(out, vec!["prepost"]);
     }
 
@@ -482,11 +475,7 @@ mod tests {
     #[test]
     fn test_bracketed_paste_split_across_chunks() {
         let t = SubmittedLineTracker::new();
-        let out = feed_chunks(
-            &t,
-            "s1",
-            &["pre \x1b[200", "~in\r\npaste\x1b[2", "01~ post\r"],
-        );
+        let out = feed_chunks(&t, "s1", &["pre \x1b[200", "~in\r\npaste\x1b[2", "01~ post\r"]);
         assert_eq!(out, vec!["pre in\npaste post"]);
     }
 

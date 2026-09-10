@@ -1,5 +1,9 @@
 import { ref, onUnmounted } from 'vue'
-import { getConnectedDevices, onDeviceConnected, onDeviceDisconnected } from '@/composables/useDesktopCommands'
+import {
+  getConnectedDevices,
+  onDeviceConnected,
+  onDeviceDisconnected,
+} from '@/composables/useDesktopCommands'
 
 export interface ConnectedDeviceInfo {
   id: string
@@ -11,8 +15,6 @@ export interface ConnectedDeviceInfo {
   connected_at?: string
 }
 
-
-
 export function useConnectedDevices() {
   const connectedDevices = ref<ConnectedDeviceInfo[]>([])
   let unlistenConnected: (() => void) | null = null
@@ -20,7 +22,7 @@ export function useConnectedDevices() {
 
   async function loadConnectedDevices() {
     const devices = await getConnectedDevices()
-    connectedDevices.value = devices.map(d => ({
+    connectedDevices.value = devices.map((d) => ({
       id: d.device_id || '',
       name: d.device_id || 'Unknown',
       address: d.addr || '',

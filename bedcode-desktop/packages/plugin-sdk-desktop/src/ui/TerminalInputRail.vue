@@ -123,14 +123,21 @@ const positionedMarkers = computed<PositionedMarker[]>(() => {
           v-for="m in positionedMarkers"
           :key="'row-' + m.id"
           class="group flex items-center gap-2 px-2 py-1 rounded-btn text-xs cursor-pointer transition-colors duration-200 hover:bg-[var(--bg-hover)]"
-          :class="selectedId === m.id ? 'bg-[color-mix(in_srgb,var(--color-primary)_15%,transparent)]' : ''"
+          :class="
+            selectedId === m.id
+              ? 'bg-[color-mix(in_srgb,var(--color-primary)_15%,transparent)]'
+              : ''
+          "
           :title="`$ ${m.text}`"
           @click="navigate(m)"
         >
           <span
             class="font-mono truncate min-w-0 flex-1 transition-colors duration-200"
-            :class="selectedId === m.id ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'"
-          >$ {{ m.text }}</span>
+            :class="
+              selectedId === m.id ? 'text-[var(--text-primary)]' : 'text-[var(--text-secondary)]'
+            "
+            >$ {{ m.text }}</span
+          >
           <span
             class="w-[10px] h-[2px] rounded-full bg-[var(--color-primary)] flex-shrink-0 transition-opacity duration-200"
             :class="selectedId === m.id ? 'opacity-100' : 'opacity-60 group-hover:opacity-100'"
@@ -164,7 +171,9 @@ const positionedMarkers = computed<PositionedMarker[]>(() => {
 /* 默认态 ↔ 展开态切换：fade + 轻微横向位移（GPU 合成属性） */
 .rail-enter-active,
 .rail-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
 }
 
 .rail-enter-from,

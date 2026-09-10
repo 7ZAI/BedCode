@@ -1,0 +1,18 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb", // 1. 调试器类型设为 lldb
+      "request": "launch",
+      "name": "Tauri Debug",
+      "cargo": {
+        // 2. 使用 cargo 管理构建
+        "args": [
+          "build",
+          "--manifest-path=./src-tauri/Cargo.toml",
+          "--no-default-features" // 跳过默认 features，按需调整
+        ]
+      }
+    }
+  ]
+}

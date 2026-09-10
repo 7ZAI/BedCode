@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 use tauri::{AppHandle, Emitter};
+use tokio::sync::RwLock;
 
 use mdns_sd::{ServiceDaemon, ServiceEvent};
 
@@ -43,7 +43,8 @@ impl MdnsDiscovery {
         let daemon = ServiceDaemon::new()
             .map_err(|e| crate::AppError::Internal(format!("Failed to create mDNS daemon: {}", e)))?;
 
-        let receiver = daemon.browse(SERVICE_TYPE)
+        let receiver = daemon
+            .browse(SERVICE_TYPE)
             .map_err(|e| crate::AppError::Internal(format!("Failed to browse mDNS: {}", e)))?;
 
         *self.daemon.write().await = Some(daemon);
@@ -67,16 +68,21 @@ impl MdnsDiscovery {
                         match event {
                             ServiceEvent::ServiceFound(service_type, instance_name) => {
                                 tracing::debug!("[MdnsDiscovery] Found: {} ({})", instance_name, service_type);
-                                let _ = app_handle.emit("mdns_service_found", serde_json::json!({
-                                    "instance_name": instance_name,
-                                }));
+                                let _ = app_handle.emit(
+                                    "mdns_service_found",
+                                    serde_json::json!({
+                                        "instance_name": instance_name,
+                                    }),
+                                );
                             }
                             ServiceEvent::ServiceResolved(info) => {
                                 let instance_name = info.get_fullname().to_string();
                                 let host_name = info.get_hostname().to_string();
                                 let port = info.get_port();
                                 // 优先使用 IPv4 地址，避免 IPv6 导致连接失败
-                                let address = info.get_addresses().iter()
+                                let address = info
+                                    .get_addresses()
+                                    .iter()
                                     .find(|a| a.is_ipv4())
                                     .map(|a| a.to_string())
                                     .or_else(|| info.get_addresses().iter().next().map(|a| a.to_string()))
@@ -88,10 +94,12 @@ impl MdnsDiscovery {
                                     .map(|p| (p.key().to_string(), p.val_str().to_string()))
                                     .collect();
 
-                                let platform = txt_records.get("platform")
+                                let platform = txt_records
+                                    .get("platform")
                                     .cloned()
                                     .unwrap_or_else(|| "unknown".to_string());
-                                let device_name = txt_records.get("device_name")
+                                let device_name = txt_records
+                                    .get("device_name")
                                     .cloned()
                                     .unwrap_or_else(|| host_name.clone());
 
@@ -105,7 +113,13 @@ impl MdnsDiscovery {
                                     device_name,
                                 };
 
-                                tracing::info!("[MdnsDiscovery] Resolved: {} at {}:{} (platform={})", service.device_name, service.address, service.port, service.platform);
+                                tracing::info!(
+                                    "[MdnsDiscovery] Resolved: {} at {}:{} (platform={})",
+                                    service.device_name,
+                                    service.address,
+                                    service.port,
+                                    service.platform
+                                );
 
                                 // 更新缓存
                                 services.write().await.insert(instance_name.clone(), service.clone());
@@ -115,9 +129,12 @@ impl MdnsDiscovery {
                             ServiceEvent::ServiceRemoved(service_type, instance_name) => {
                                 tracing::debug!("[MdnsDiscovery] Removed: {} ({})", instance_name, service_type);
                                 services.write().await.remove(&instance_name);
-                                let _ = app_handle.emit("mdns_service_removed", serde_json::json!({
-                                    "instance_name": instance_name,
-                                }));
+                                let _ = app_handle.emit(
+                                    "mdns_service_removed",
+                                    serde_json::json!({
+                                        "instance_name": instance_name,
+                                    }),
+                                );
                             }
                             ServiceEvent::SearchStarted(service_type) => {
                                 tracing::debug!("[MdnsDiscovery] Search started: {}", service_type);

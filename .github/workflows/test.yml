@@ -1,0 +1,215 @@
+name: Tests (Rust + Frontend)
+
+# 回归测试合并门禁：两端 Rust 测试 + 前端 vitest。
+# 与 lint.yml 对称——dev 分支是本地集成主线（只读镜像备份），不触发本 workflow；
+# CI 验证在合并到 master / uat 时接管。分层独立 job，失败可定位到具体层。
+on:
+  push:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches-ignore:
+      - 'dev'
+    paths:
+      - 'bedcode-desktop/**'
+      - 'bedcode-mobile/**'
+      - '.github/workflows/test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # ==================== Rust 测试 ====================
+
+  rust-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主测试用宿主 target。
+          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
+          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-desktop/src-tauri
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重建），
+      # cargo test 前必须先 plugins:build 生成 resources/plugins/desktop，
+      # 否则 tauri build script 报 "resource path resources/plugins doesn't exist"
+      - name: Install dependencies
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      # 插件 vite.config.ts / CLI 引用 SDK 的 dist/ 产物（dist 不入库），
+      # 必须先本地构建 @binblink/bedcode-plugin-sdk-desktop 生成 dist，plugins:build 才能跑
+      - name: Build SDK (plugin-sdk-desktop dist)
+        working-directory: bedcode-desktop/packages/plugin-sdk-desktop
+        run: pnpm run build
+
+      - name: Build plugins (WASM artifacts)
+        working-directory: bedcode-desktop
+        run: pnpm run plugins:build
+
+      - name: Cargo test (desktop)
+        working-directory: bedcode-desktop/src-tauri
+        run: cargo test
+
+  rust-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri Linux system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            libssl-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            pkg-config
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主测试用宿主 target。
+          # wasip2 防御性预装：mobile 插件当前用 unknown-unknown，未来若迁移 WASI preview2 不炸 CI
+          targets: wasm32-unknown-unknown, wasm32-wasip2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bedcode-mobile/src-tauri
+
+      # 插件产物（wasm/index.js/plugin.json）不入库（CI 重建），
+      # cargo test 前必须先 plugins:build 生成 resources/plugins/mobile，
+      # 否则 tauri build script 报 "glob pattern resources/plugins/**/* path not found"
+      - name: Install dependencies
+        working-directory: bedcode-mobile
+        run: pnpm install --frozen-lockfile
+
+      # bedcode-plugin CLI 运行时加载 SDK 的 dist/index.js (file: 引用不含 dist)，
+      # 必须先构建 @binblink/bedcode-plugin-sdk-mobile 再跑 plugins:build。
+      # pnpm 的 file: 依赖不会自动安装目标包的 devDeps（tsup 等），SDK 需独立安装一次
+      - name: Install SDK dependencies (plugin-sdk-mobile)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK (plugin-sdk-mobile dist)
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm run build
+
+      # mobile 插件是独立目录（无 workspace），plugins:build 的 CLI 需要各插件自己的依赖（vite 等）
+      - name: Install plugin dependencies
+        run: |
+          for p in ai-chatbox auto-task file-transfer ocr; do
+            if [ ! -d "bedcode-mobile/plugins/$p" ]; then
+              echo "plugins/$p 不存在（可能仅 dev 分支开发中），跳过"
+              continue
+            fi
+            echo "== installing plugins/$p =="
+            (cd bedcode-mobile/plugins/$p && pnpm install --frozen-lockfile) || exit 1
+          done
+
+      - name: Build plugins (WASM artifacts)
+        working-directory: bedcode-mobile
+        run: pnpm run plugins:build
+
+      - name: Cargo test (mobile)
+        working-directory: bedcode-mobile/src-tauri
+        run: cargo test
+
+  # ==================== 前端 vitest ====================
+
+  frontend-desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-desktop/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      - name: Vitest (desktop)
+        working-directory: bedcode-desktop
+        run: pnpm run test:run
+
+  frontend-mobile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: bedcode-mobile/pnpm-lock.yaml
+
+      - name: Install dependencies
+        working-directory: bedcode-mobile
+        run: pnpm install --frozen-lockfile
+
+      - name: Vitest (mobile)
+        working-directory: bedcode-mobile
+        run: pnpm run test:run

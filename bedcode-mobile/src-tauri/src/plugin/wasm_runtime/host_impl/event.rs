@@ -1,7 +1,7 @@
 //! host_emit_event — 事件推送（逻辑层）
 
-use tauri::Emitter;
 use super::super::WasmPluginState;
+use tauri::Emitter;
 
 /// 逻辑层：向前端发送事件（WIT host-events.emit，无错误返回；
 /// 失败仅记录日志——与旧 func_wrap 同语义）

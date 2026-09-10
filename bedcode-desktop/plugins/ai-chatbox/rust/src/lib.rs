@@ -1,9 +1,12 @@
-//! AI Chatbox Plugin (WASM)
+//! AI Chatbox Plugin (WASM, wasm32-wasip2)
 //!
 //! 纯 AI 对话插件：JSONL 对话日志落盘 + 多方言供应商协议（请求构建与 SSE 解析
 //! 在前端适配层 src/adapters/，Rust 仅透传 http_fetch 载荷）。
-//! 激活时集中目录授权（宿主 fs_auth 弹窗）：同意 → 初始化数据目录 → 激活成功；
-//! 拒绝/超时 → 激活失败（Error 状态），重新启用可重试。
+//! 文件访问全部经 WASI：宿主实例化时按 manifest `wasiPreopenDirs` 声明
+//! （${home} 展开 + 授权校验）预打开数据目录到 `/data`，本插件 std::fs 直连，
+//! 不经宿主 fs_* 转发。激活时集中目录授权（fs_auth 弹窗）：同意 → 持久化授权
+//! 记录（下次实例化据此建立预打开）→ 初始化数据目录；拒绝/超时 → 激活失败
+//! （Error 状态），重新启用可重试。首次启用需停用再启用一次完成预打开挂载。
 
 mod client;
 mod commands;
@@ -12,10 +15,9 @@ mod store;
 use bedcode_plugin_api::host::{HostConfig, HostFs, HostLog};
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::{WasmHost, WasmPlugin};
-use std::sync::RwLock;
 
-/// 数据目录（activate 时解析；deactivate 时清空，支持同一进程内停用后重新激活）
-static DATA_DIR: RwLock<Option<String>> = RwLock::new(None);
+/// WASI 预打开根路径（guest 视角）：宿主按 manifest wasiPreopenDirs 首项挂载
+const DATA_ROOT: &str = "/data";
 
 struct AiChatboxPlugin;
 
@@ -30,13 +32,18 @@ impl WasmPlugin for AiChatboxPlugin {
     fn activate() -> anyhow::Result<()> {
         let host = WasmHost;
 
-        // 数据目录：{HomeDir}/.bedcode/ai-chatbox/（插件目录外，卸载不清用户数据）
+        // 数据目录固定：{HomeDir}/.bedcode/ai-chatbox/（与 manifest wasiPreopenDirs
+        // 声明一致；此处仅用于授权弹窗展示与持久化授权记录）
         let home = host
             .config_get(bedcode_plugin_api::host::ConfigKey::HomeDir)?
             .ok_or_else(|| anyhow::anyhow!("activate: home_dir config unavailable"))?;
-        let data_dir = format!("{}/.bedcode/ai-chatbox", home.trim_end_matches(['/', '\\']));
+        let data_dir = format!(
+            "{}/.bedcode/ai-chatbox",
+            home.trim_end_matches(['/', '\\'])
+        );
 
-        // 集中目录授权：未同意（拒绝/30s 超时）→ 激活失败，重新启用可再次弹窗
+        // 集中目录授权：同意 → 授权记录持久化（宿主下次实例化据此建立 WASI 预打开）；
+        // 未同意（拒绝/30s 超时）→ 激活失败，重新启用可再次弹窗
         let allowed = host
             .fs_request_auth(&[data_dir.clone()])
             .map_err(|e| anyhow::anyhow!("activate: fs_request_auth failed: {}", e))?;
@@ -47,22 +54,23 @@ impl WasmPlugin for AiChatboxPlugin {
             ));
         }
 
-        *DATA_DIR
-            .write()
-            .map_err(|e| anyhow::anyhow!("activate: data_dir lock poisoned: {}", e))? = Some(data_dir.clone());
-        store::init(&host, &data_dir)?;
+        // WASI 预打开自检：若本次实例化时该目录尚未授权（首次启用），
+        // /data 未挂载——授权已随上方弹窗落库，停用再启用即生效
+        if std::fs::metadata(DATA_ROOT).is_err() {
+            return Err(anyhow::anyhow!(
+                "WASI 预打开目录未就绪：{} 的授权已保存，请停用后重新启用插件完成初始化",
+                data_dir
+            ));
+        }
 
-        host.log_info("Plugin activated (wasm)");
+        store::init(&host, DATA_ROOT)?;
+
+        host.log_info("Plugin activated (wasm, wasi file access)");
         Ok(())
     }
 
     fn deactivate() -> anyhow::Result<()> {
-        let host = WasmHost;
-        // 清空数据目录：同一进程内停用后重新激活可再次初始化（宿主复用 WASM 实例）
-        if let Ok(mut guard) = DATA_DIR.write() {
-            *guard = None;
-        }
-        host.log_info("Plugin deactivated (wasm)");
+        WasmHost.log_info("Plugin deactivated (wasm)");
         Ok(())
     }
 

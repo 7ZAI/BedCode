@@ -6,8 +6,8 @@
 
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
-use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
+use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -64,7 +64,8 @@ impl PluginLoader {
                     if !validate_plugin_id(&plugin_id) {
                         tracing::error!(
                             "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
-                            dir_name, plugin_id
+                            dir_name,
+                            plugin_id
                         );
                         continue;
                     }
@@ -98,10 +99,7 @@ impl PluginLoader {
                     }
 
                     // 授权并过滤非法权限
-                    let granted = permission_mgr.grant_permissions(
-                        &plugin_id,
-                        &manifest.permissions,
-                    );
+                    let granted = permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
 
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan
                     let source = if !manifest.rust_library.is_empty() {
@@ -112,7 +110,11 @@ impl PluginLoader {
 
                     tracing::info!(
                         "[PluginLoader] Plugin loaded: {} v{} (type={:?}, source={:?}, path={})",
-                        manifest.id, manifest.version, manifest.plugin_type, source, extension_path
+                        manifest.id,
+                        manifest.version,
+                        manifest.plugin_type,
+                        source,
+                        extension_path
                     );
 
                     let loaded = LoadedPlugin {
@@ -128,12 +130,16 @@ impl PluginLoader {
                 }
                 Err(e) => {
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
-                    tracing::error!("[PluginLoader] Failed to load plugin from {:?}: {}", dir_name, e);
+                    tracing::error!("[PluginLoader] Failed to load plugin from {}: {}", dir_name, e);
                 }
             }
         }
 
-        tracing::info!("[PluginLoader] Scanned {} dir(s), loaded {} plugin(s)", dir_count, plugins.len());
+        tracing::info!(
+            "[PluginLoader] Scanned {} dir(s), loaded {} plugin(s)",
+            dir_count,
+            plugins.len()
+        );
         plugins
     }
 

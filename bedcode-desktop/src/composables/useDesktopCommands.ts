@@ -3,13 +3,14 @@
 //! 所有桌面端可用的 Tauri 命令调用
 
 import { invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 import { invokeWithTimeout } from '@/utils/invoke'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
 // ==================== Types ====================
 
-import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent } from './model'
-export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo, PtyOutputEvent }
+import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo } from './model'
+export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo }
 
 // ==================== Pairing Types ====================
 
@@ -40,11 +41,23 @@ export async function isWslAvailable(): Promise<boolean> {
 
 // ==================== Session Commands ====================
 
+/** 终端网格尺寸（启动时作为 PTY 初始 cols/rows） */
+export interface TerminalSize {
+  cols: number
+  rows: number
+}
+
 /**
- * 启动会话（含超时，PTY 进程创建可能耗时较长）
+ * 启动会话（含超时）
+ *
+ * size：本端终端组件默认网格，PTY 以该尺寸创建（缺省用服务端配置默认值）
  */
-export async function startSession(configId: string): Promise<string> {
-  return await invokeWithTimeout('start_session', { configId })
+export async function startSession(configId: string, size?: TerminalSize): Promise<string> {
+  return await invokeWithTimeout('start_session', {
+    configId,
+    cols: size?.cols,
+    rows: size?.rows,
+  })
 }
 
 /**
@@ -57,9 +70,15 @@ export async function createSessionNoStart(configId: string): Promise<string> {
 
 /**
  * 启动已存在的会话（含超时，用于延迟启动场景）
+ *
+ * size：spawn 前按该尺寸调整 PTY（两阶段启动的第二阶段传入）
  */
-export async function startExistingSession(sessionId: string): Promise<void> {
-  return await invokeWithTimeout('start_existing_session', { sessionId })
+export async function startExistingSession(sessionId: string, size?: TerminalSize): Promise<void> {
+  return await invokeWithTimeout('start_existing_session', {
+    sessionId,
+    cols: size?.cols,
+    rows: size?.rows,
+  })
 }
 
 /**
@@ -100,8 +119,26 @@ export async function restartSession(sessionId: string): Promise<void> {
 /**
  * 调整终端大小
  */
-export async function resizeSession(sessionId: string, cols: number, rows: number): Promise<void> {
-  return await invoke('resize_session', { sessionId, cols, rows })
+export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
+
+/** resize 裁决结果（与 Rust 侧 ResizeOutcome serde 形状对齐） */
+export type ResizeOutcome =
+  | { status: 'applied'; canonical: RendererSource }
+  | { status: 'needsConfirmation'; currentCanonical: RendererSource }
+
+/**
+ * 调整会话终端大小（正统渲染端裁决）
+ *
+ * force=false：本端非当前正统渲染端时返回 needsConfirmation（未应用），
+ * 由调用方弹窗确认后以 force=true 重发覆盖。
+ */
+export async function resizeSession(
+  sessionId: string,
+  cols: number,
+  rows: number,
+  force = false,
+): Promise<ResizeOutcome> {
+  return await invoke('resize_session', { sessionId, cols, rows, force })
 }
 
 /**
@@ -139,7 +176,7 @@ export async function createSessionConfig(config: {
   command?: string
   wsl_distro?: string
 }): Promise<SessionConfig> {
-  console.log('[createSessionConfig] calling backend with:', {
+  logger.log('[createSessionConfig] calling backend with:', {
     name: config.name,
     environment: config.environment,
     working_dir: config.working_dir || '',
@@ -155,7 +192,7 @@ export async function createSessionConfig(config: {
     wsl_distro: config.wsl_distro,
   })
 
-  console.log('[createSessionConfig] backend returned:', result)
+  logger.log('[createSessionConfig] backend returned:', result)
   return result as SessionConfig
 }
 
@@ -192,7 +229,7 @@ export async function updateSessionConfig(config: {
   wsl_distro?: string
   auto_start?: boolean
 }): Promise<void> {
-  console.log('[updateSessionConfig] calling with:', config)
+  logger.log('[updateSessionConfig] calling with:', config)
   return await invoke('update_session_config', {
     id: config.id,
     name: config.name,
@@ -212,6 +249,20 @@ export async function updateSessionConfig(config: {
  */
 export async function generatePairingCode(): Promise<PairingCodeInfo> {
   return await invoke('generate_pairing_code')
+}
+
+/**
+ * 获取配对码有效期（秒）
+ */
+export async function getPairingCodeTtl(): Promise<number> {
+  return await invoke('get_pairing_code_ttl')
+}
+
+/**
+ * 设置配对码有效期（秒）
+ */
+export async function setPairingCodeTtl(ttl: number): Promise<void> {
+  return await invoke('set_pairing_code_ttl', { ttl })
 }
 
 /**
@@ -474,6 +525,8 @@ export function useDesktopCommands() {
     getCurrentPairingCode,
     verifyPairingCode,
     clearPairingCode,
+    getPairingCodeTtl,
+    setPairingCodeTtl,
     listPairedDevices,
     removePairedDevice,
 

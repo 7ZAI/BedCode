@@ -80,6 +80,7 @@
  * 更新检查基于 GitHub Releases API，发现新版本后引导浏览器下载 APK
  */
 import { ref } from 'vue'
+import { logger } from '@/utils/frontendLogger'
 import { invoke } from '@tauri-apps/api/core'
 import SettingsSubPage from '@/components/SettingsSubPage.vue'
 import { useUpdateChecker } from '@/composables/useUpdateChecker'
@@ -103,7 +104,7 @@ async function confirmOpenBrowser() {
     try {
       await invoke('open_url_in_browser', { url: pendingUrl.value })
     } catch (e) {
-      console.error('Failed to open URL:', e)
+      logger.error('Failed to open URL:', e)
     }
   }
   showBrowserConfirm.value = false

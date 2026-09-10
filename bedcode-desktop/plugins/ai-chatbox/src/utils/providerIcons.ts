@@ -13,7 +13,7 @@ import type { PresetId } from '../types'
 
 /** 预设 id → 品牌 SVG 源码（?raw 内联；fill="currentColor" 需随主题文字色渲染，
      <img> 加载会落入隔离文档使 currentColor 恒为黑色，深色主题下不可见） */
-const ICON_BY_PRESET: Record<PresetId, string> = {
+const ICON_BY_PRESET: Partial<Record<PresetId, string>> = {
   deepseek: deepseekIcon,
   qwen: qwenIcon,
   openai: openaiIcon,

@@ -5,15 +5,24 @@
  * cdylib 插件架构：Rust 后端处理传输逻辑，前端通过 PluginContext 调用
  */
 import FileTransferView from './components/FileTransferView.vue'
+import ConsentDialog from './components/ConsentDialog.vue'
 import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
-import type { PluginContext } from '@binblink/plugin-sdk-desktop'
+import type { PluginContext, PluginDialogHandle } from '@binblink/bedcode-plugin-sdk-desktop'
+import peerDevMock from './devMock'
+import { useConsent, type ConsentController } from './composables/useConsent'
+
+// dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
+export const devMock = peerDevMock
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 
 let sidebarDisposable: { dispose(): void } | null = null
 let stopLocaleWatch: (() => void) | null = null
+let consentController: ConsentController | null = null
+let stopConsentWatch: (() => void) | null = null
+let consentDialog: PluginDialogHandle | null = null
 
 /**
  * 注册侧边栏面板
@@ -32,6 +41,27 @@ function registerPluginUi(context: PluginContext) {
     icon: 'M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z',
     component: FileTransferView,
   })
+}
+
+/**
+ * 同步首连确认全局弹窗：有待确认请求时打开（宿主统一渲染，任何页面可见），
+ * 队列结清即关闭。内容组件（ConsentDialog）经 provide('pluginContext') 注入，
+ * 内部直接消费 useConsent 单例状态；语言切换时内容随 vue-i18n 自动刷新。
+ */
+function syncConsentDialog(context: PluginContext): void {
+  const hasRequest = consentController!.currentRequest.value != null
+  if (hasRequest && !consentDialog) {
+    consentDialog = context.ui.showDialog({
+      content: ConsentDialog,
+      // 关闭（等同拒绝）由内容卡片内按钮处理；遮罩/Escape 误关会丢请求，故禁用手动关闭
+      closable: false,
+      closeOnBackdrop: false,
+      bodyClass: 'p-5',
+    })
+  } else if (!hasRequest && consentDialog) {
+    consentDialog.close()
+    consentDialog = null
+  }
 }
 
 export async function activate(context: PluginContext): Promise<void> {
@@ -61,10 +91,27 @@ export async function activate(context: PluginContext): Promise<void> {
     () => registerPluginUi(context),
   )
 
+  // 首连确认编排：激活期常驻订阅（不依赖视图挂载），弹窗由宿主全局弹窗渲染
+  //（任何页面可见可操作），有请求即开、结清即关
+  consentController = useConsent(context)
+  consentController.start()
+  stopConsentWatch = watch(
+    () => consentController!.currentRequest.value?.requestId ?? null,
+    () => syncConsentDialog(context),
+    { immediate: true },
+  )
+
   console.log('[File Transfer] Plugin activated (wasm mode)')
 }
 
 export async function deactivate(): Promise<void> {
   stopLocaleWatch?.()
+  stopLocaleWatch = null
+  stopConsentWatch?.()
+  stopConsentWatch = null
+  consentDialog?.close()
+  consentDialog = null
+  consentController?.stop()
+  consentController = null
   console.log('[File Transfer] Plugin deactivated')
 }

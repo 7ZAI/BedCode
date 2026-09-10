@@ -9,18 +9,18 @@
 
 ```bash
 npm run dev                   # 推荐：npm 脚本自动解析 node_modules/.bin（Windows 必需）
-npx bedcode-plugin dev        # 或 npx 方式（等效）
+pnpm exec bedcode-plugin dev        # 或 pnpm exec 方式（等效）
 bedcode-plugin dev            # 仅 macOS/Linux（PATH 含 .bin 时）
 ```
 
 > **Windows**：cmd / PowerShell 直接输入 `bedcode-plugin` 会报"不是内部或外部命令"，
-> 因为 Windows 不把 `node_modules/.bin` 加入 PATH——请用 `npm run dev` 或 `npx`。
+> 因为 Windows 不把 `node_modules/.bin` 加入 PATH——请用 `pnpm run dev` 或 `pnpm exec`。
 
 带参数示例：
 
 ```bash
-npx bedcode-plugin dev --entry src/custom-entry.ts
-npx bedcode-plugin dev --port 5180 --open
+pnpm exec bedcode-plugin dev --entry src/custom-entry.ts
+pnpm exec bedcode-plugin dev --port 5180 --open
 ```
 
 浏览器打开 `http://localhost:5173`（--open 自动打开）。
@@ -45,7 +45,7 @@ bedcode-plugin dev --host     # 监听局域网（默认 0.0.0.0）
 ### 手动启动（不走 CLI）
 
 ```bash
-BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-shell>/vite.config.ts
+BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" pnpm exec vite --config <dev-shell>/vite.config.ts
 ```
 
 多个插件用逗号分隔（如 `a::a/src/index.ts,b::b/src/index.ts`），
@@ -99,7 +99,7 @@ BEDCODE_DEV_PLUGINS="<插件目录>[::<入口文件>]" npx vite --config <dev-sh
   新加类名会自动生效（无需重启）。
 - **`window.__BEDCODE_SHARED__` 未初始化**：确认经由 `bedcode-plugin dev` 或
   dev-shell 的 main.ts 启动，且未在入口前直接 import 插件模块。
-- **SDK 报找不到模块**：插件工程的 `@binblink/plugin-sdk-mobile` 依赖指向
-  SDK 包（file: 或 npm），其 `dist` 需存在（`npm run build` 一次）。
+- **SDK 报找不到模块**：插件工程的 `@binblink/bedcode-plugin-sdk-mobile` 依赖指向
+  SDK 包（file: 或 npm），其 `dist` 需存在（`pnpm run build` 一次）。
 - **真机专属能力**（WASM 命令、真实 WS、SAF 文件选择、系统通知）无法在
   浏览器模拟，发布前仍按 `../../../plugin-dev-mobile.md` 验证清单过真机。

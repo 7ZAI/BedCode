@@ -544,15 +544,90 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         .map(|s| s.to_string())
         .unwrap_or_else(|| resolve_session_id(host, session_id));
 
-    // 查找已有任务记录：优先按 claude_sid（宿主建行时已反向写入），
-    // 兜底按解析后的 bedcode sid（兼容建行时映射缺失的旧数据）
-    let existing = find_task_by_claude_sid(host, session_id)
-        .or_else(|| find_task_by_session(host, &resolved_session_id));
+    // 查找已有任务记录：claude_sid 与 bedcode sid 双路查询取 created_at 较新的一行。
+    //
+    // 不能用 claude_sid 优先短路（旧实现 .or_else）：opencode/pi 等脚本 payload 的
+    // session_id 就是 bedcode sid，首个任务行的 claude_sid 被推送回写后，后续所有
+    // 推送都会持续命中旧行；而出队新建的行若建行时映射缺失（如 opencode TUI 会话
+    // 先于跟踪启动、session.created → idle 从未到达）claude_sid 为 NULL，对
+    // claude_sid 查询永久不可见——真实执行中的任务行收不到任何状态更新，卡死
+    // in_progress 直到会话关闭被兜底中断（2026-08-22「移动端操作体验优化」事故）。
+    // 同秒并列时偏向 session_id 路：其 ORDER BY 已含该会话全量行的排序语义
+    let existing = match (
+        find_task_by_claude_sid(host, session_id),
+        find_task_by_session(host, &resolved_session_id),
+    ) {
+        (Some(by_sid), Some(by_session)) => {
+            let sid_created = by_sid
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let sess_created = by_session
+                .get("created_at")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            if sess_created >= sid_created {
+                Some(by_session)
+            } else {
+                Some(by_sid)
+            }
+        }
+        (Some(by_sid), None) => Some(by_sid),
+        (None, by_session) => by_session,
+    };
+
+    // 终态迁移追踪：仅"非终态行 → 终态"的真实迁移才允许触发队列调度
+    // （见函数尾部 try_dispatch_next 门控）
+    let mut updated_row = false;
+    let mut transitioned_to_terminal = false;
 
     if let Some(row) = existing {
         // 终态保护：completed / interrupted 不应被后续事件降级
         // 防止 Stop(completed) 后 SessionEnd(interrupted) 覆盖正常完成状态
         let current_status = row.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        // 时序基准：事件发生时刻（脚本 UTC 时间戳，固定宽度字符串，字典序可比）。
+        // 无 event_time（旧版脚本）或行无 event_time（迁移前数据）时相关保护跳过，
+        // 保持兼容。供重复推送幂等判定与时序保护共用
+        let row_event_time = row.get("event_time").and_then(|v| v.as_str()).unwrap_or("");
+        let incoming_event_time = event_time.unwrap_or("");
+
+        // 重复推送幂等：同一事件的重试/并发投递（event_time 完全相同）且状态未变化
+        // 时直接确认成功，不重复广播、不重复调度。opencode 对同一事件可能投递两次，
+        // 第二次若照常走完广播 + try_dispatch_next，会在第一次刚出队下发下一项、
+        // 新任务行尚未可见的窗口内把该队列项误归档为 done 并广播 done（2026-08-22
+        // 事故：「移动端操作体验优化」下发约 40ms 后即被误标完成）。同一事件的
+        // 状态唯一，等值比较不会误伤不同事件
+        if status == current_status
+            && !incoming_event_time.is_empty()
+            && incoming_event_time == row_event_time
+        {
+            host.log_info(&format!(
+                "task-status: session_id={} skip, duplicate push (status '{}' at '{}') already applied",
+                session_id, status, incoming_event_time
+            ));
+            return http_response::ok();
+        }
+
+        // 运行中行保护：执行中/等待输入的任务收到 idle 推送时不降级状态。
+        // idle 本义是"无任务运行"（SessionStart），但任务运行中途也会到达：
+        // opencode Task 工具创建子会话推 session.created→idle、Claude Code
+        // compact/resume 触发 SessionStart。若据此把执行中行改写为 idle，
+        // has_active_task 会误判会话空闲：开启自动执行的瞬间即出队下发
+        // （prompt 打进忙碌终端），后续终态推送触发的归档又把该队列项广播
+        // 为 done —— 移动端对应预设被误标「已完成」而原任务仍在执行。
+        // Codex 版已在脚本侧以 SessionStart matcher 限定 startup|resume|clear
+        // 规避同类问题，此处为全部 agent 的宿主侧兜底。
+        if status == "idle" && matches!(current_status, "in_progress" | "asking") {
+            if let Some(bedcode_sid) = bedcode_session_id.filter(|s| !s.is_empty()) {
+                upsert_session_mapping(host, session_id, bedcode_sid);
+            }
+            host.log_info(&format!(
+                "task-status: session_id={} skip, current '{}' is active, incoming 'idle' not applied",
+                session_id, current_status
+            ));
+            return http_response::ok();
+        }
+
         let is_current_terminal = matches!(current_status, "completed" | "interrupted");
         let is_new_terminal = matches!(status, "completed" | "interrupted");
         if is_current_terminal && !is_new_terminal {
@@ -577,10 +652,8 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
             return http_response::ok();
         }
 
-        // 时序基准：事件发生时刻（脚本 UTC 时间戳，固定宽度字符串，字典序可比）。
-        // 无 event_time（旧版脚本）或行无 event_time（迁移前数据）时相关保护跳过，保持兼容。
-        let row_event_time = row.get("event_time").and_then(|v| v.as_str()).unwrap_or("");
-        let incoming_event_time = event_time.unwrap_or("");
+        // 时序基准说明：row_event_time / incoming_event_time 已在分支开头统一取出，
+        // 供重复推送幂等判定与本处时序保护共用。
 
         // subagent 回声保护：subagent 子进程（pi --mode json -p --no-session）在
         // agent_settled 推 completed 后进程退出随即推 interrupted（毫秒级连发），
@@ -685,7 +758,11 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
         );
 
         match host.plugin_db_execute_params(&sql, &params) {
-            Ok(affected) => host.log_debug(&format!("UPDATE task_history: affected={}", affected)),
+            Ok(affected) => {
+                host.log_debug(&format!("UPDATE task_history: affected={}", affected));
+                updated_row = true;
+                transitioned_to_terminal = is_new_terminal && !is_current_terminal;
+            }
             Err(e) => host.log_error(&format!("UPDATE task_history failed: {}", e)),
         }
     } else if status == "idle" {
@@ -749,8 +826,13 @@ fn handle_update_task_status(host: &WasmHost, body: &Value) -> Value {
     ));
 
     // 任务终态时检查队列，尝试调度下一个任务
-    // idle 不触发：仅表示"无任务运行"，SessionStart 时推送 idle，此时不应出队
-    if matches!(status, "completed" | "interrupted") {
+    // idle 不触发：仅表示"无任务运行"，SessionStart 时推送 idle，此时不应出队。
+    // 仅真实终态迁移（非终态行更新为终态）或无行可更新时触发：已终态行的再次
+    // 终态确认（重复推送/多轮 run 的迟到确认）不重复归档——并发窗口内刚出队
+    // 下发的下一项会被误归档为 done 并广播 done（2026-08-22 事故根因之一）
+    if matches!(status, "completed" | "interrupted")
+        && (!updated_row || transitioned_to_terminal)
+    {
         crate::queue::try_dispatch_next(host, &resolved_session_id);
     }
 
@@ -1466,8 +1548,17 @@ pub fn set_auto_mode(
         }),
     );
 
-    // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务
-    if new_execute && !prev_execute && !has_active_task(host, session_id) {
+    // 自动执行刚开启且会话空闲 → 立即调度队列中已积累的任务。
+    // 双重空闲判定：任务历史（has_active_task）+ 队列在途项
+    // （queue::has_inflight_task）。后者拦截"历史行失真但队列仍有
+    // waiting/executing"的场景——此刻进入 try_dispatch_next 会先把在途
+    // executing 项归档为 done 并广播，移动端对应预设被误标「已完成」
+    // （该任务实际仍在执行，终态推送尚未到达）
+    if new_execute
+        && !prev_execute
+        && !has_active_task(host, session_id)
+        && !crate::queue::has_inflight_task(host, session_id)
+    {
         crate::queue::try_dispatch_next(host, session_id);
     }
 

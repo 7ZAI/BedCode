@@ -89,7 +89,7 @@ Status 文字在浅色背景用 `*-600` 系（`text-red-600`），暗色背景�
 | `text-sm` | 14px | `text-xl` | 20px |
 | `text-base` | 16px | | |
 
-All font sizes are `calc(Npx * var(--ui-scale))`. **Use `text-*` in templates — do not use `var(--font-size-xs…xl)`** (legacy parallel scale: 9/10/12/14/16px, deprecated, migrate on touch).
+All font sizes are `calc(Npx * var(--ui-scale))`. **Use `text-*` in templates — do not use `var(--font-size-xs…xl)`** (legacy parallel scale: 9/10/12/14/16px, deprecated — migrate when touching the component that uses it).
 
 Semantic size tokens (defined in `style.css`, also `--ui-scale`-scaled):
 
@@ -246,7 +246,7 @@ fontSize: {
 
 All tokens wrap in `calc(... * var(--mobile-font-scale, 1))`. **Root-level tokens use `100vw` by design** (the app is full-screen) — this is the documented exception; components embedded in panels use `cqw` (see [`MOBILE.md`](MOBILE.md)).
 
-> **Readability floor**: `--font-size-xs` bottoms out at 9px at 360px — below the ~11px industry minimum for auxiliary text. Prefer `--font-size-sm`+ for anything user-facing; raise the xs minimum on touch (code pending).
+> **Readability floor**: `--font-size-xs` bottoms out at 9px at 360px — below the ~11px industry minimum for auxiliary text. Prefer `--font-size-sm`+ for anything user-facing; raise the xs minimum when touching the component that uses it (code pending).
 
 ### Touch Targets — spec tokens (defined in `mobile.css`)
 
@@ -260,7 +260,7 @@ Constant ergonomic minimums; **never** scale with screen size:
 
 ### Namespace Discipline
 
-Mobile code must not reference desktop tokens (`--bg-*`, `--text-*`, `--color-*`). Current violations to migrate: `--text-tertiary` (4), `--bg-hover` (3), `--text-secondary` (2), `--color-primary-light` (2), `--color-danger-light` (2) — replace with `--mobile-*` equivalents.
+Mobile code must not reference desktop tokens (`--bg-*`, `--text-*`, `--color-*`) — replace with `--mobile-*` equivalents. Current violations: **0** (`grep -rn -- '--bg-\|--text-\|--color-primary\|--color-danger' bedcode-mobile/src` returns nothing; earlier `--text-tertiary` / `--bg-hover` / `--text-secondary` / `--color-*-light` usages are all migrated).
 
 ### Component Token Groups (`--mobile-<component>-*`)
 
@@ -269,7 +269,7 @@ Mobile code must not reference desktop tokens (`--bg-*`, `--text-*`, `--color-*`
 | `--mobile-terminal-*` | Terminal background/header | `--mobile-terminal-bg` |
 | `--mobile-code-*` | Code viewer gutter | `--mobile-code-gutter-*` |
 | `--mobile-shortcut-*` | Shortcut panel (violet) | `-color`, `-bg`, `-border`, `-active-bg` |
-| `--mobile-custom-cmd-*` | Custom commands (green) | 同 shortut 结构 |
+| `--mobile-custom-cmd-*` | Custom commands (green) | 同 shortcut 结构 |
 | `--mobile-arrow-*` | Arrow keys (yellow) | 同上 |
 | `--mobile-send-*` | Send (blue) | 同上 |
 | `--mobile-execute-*` | Execute (orange) | 同上 |

@@ -2,8 +2,7 @@
 
 use crate::plugin::wasm_runtime::{block_on_async, WasmHostContext};
 use crate::system::constants::plugin::{
-    PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES,
-    PLUGIN_HTTP_TIMEOUT_SECS,
+    PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
 };
 use futures_util::StreamExt;
 use serde::Deserialize;
@@ -105,8 +104,8 @@ pub(crate) fn http_fetch(
     plugin_id: &str,
     request_json: &str,
 ) -> Result<Option<String>, String> {
-    let request: serde_json::Value = serde_json::from_str(request_json)
-        .map_err(|e| format!("http error: invalid request JSON: {}", e))?;
+    let request: serde_json::Value =
+        serde_json::from_str(request_json).map_err(|e| format!("http error: invalid request JSON: {}", e))?;
 
     let is_stream = request.get("stream").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -126,15 +125,8 @@ pub(crate) fn http_fetch(
 
         let plugin_id_clone = plugin_id.to_string();
         let stream_event_clone = stream_event.clone();
-        tokio::spawn(async move {
-            if let Err(e) = execute_streaming_http(
-                &request,
-                &app_handle,
-                &stream_event_clone,
-                &plugin_id_clone,
-            )
-            .await
-            {
+        crate::system::error_boundary::spawn_with_error_boundary("streaming_http", async move {
+            if let Err(e) = execute_streaming_http(&request, &app_handle, &stream_event_clone, &plugin_id_clone).await {
                 tracing::error!(
                     error = %e,
                     plugin_id = %plugin_id_clone,
@@ -158,8 +150,7 @@ pub(crate) fn http_fetch(
             .map_err(|e| format!("http error: response serialization failed: {}", e))
     } else {
         // 非流式模式：同步执行 HTTP 请求
-        let response = block_on_async(execute_http_request(&request))
-            .map_err(|e| format!("http error: {}", e))?;
+        let response = block_on_async(execute_http_request(&request)).map_err(|e| format!("http error: {}", e))?;
         serde_json::to_string(&response)
             .map(Some)
             .map_err(|e| format!("http error: response serialization failed: {}", e))
@@ -193,13 +184,8 @@ struct OpenAiSseDelta {
 /// 宿主代为执行 HTTP 请求，返回完整响应
 /// request 格式：{ "method", "url", "headers", "body" }
 /// response 格式：{ "status", "body", "headers" }
-async fn execute_http_request(
-    request: &serde_json::Value,
-) -> anyhow::Result<serde_json::Value> {
-    let method = request
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("GET");
+async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
     let url = request
         .get("url")
         .and_then(|v| v.as_str())
@@ -225,7 +211,12 @@ async fn execute_http_request(
     let resp_headers: serde_json::Map<String, serde_json::Value> = response
         .headers()
         .iter()
-        .map(|(k, v)| (k.to_string(), serde_json::Value::String(v.to_str().unwrap_or("").to_string())))
+        .map(|(k, v)| {
+            (
+                k.to_string(),
+                serde_json::Value::String(v.to_str().unwrap_or("").to_string()),
+            )
+        })
         .collect();
 
     // 响应体带上限流式读取：防止无上限响应体拷入 guest 内存 + guest serde 解析
@@ -243,9 +234,8 @@ async fn execute_http_request(
         }
         body_bytes.extend_from_slice(&chunk);
     }
-    let resp_body = String::from_utf8(body_bytes).map_err(|e| {
-        anyhow::anyhow!("http error: response body is not UTF-8: {}", e)
-    })?;
+    let resp_body =
+        String::from_utf8(body_bytes).map_err(|e| anyhow::anyhow!("http error: response body is not UTF-8: {}", e))?;
 
     Ok(serde_json::json!({
         "status": status,
@@ -267,20 +257,14 @@ async fn execute_streaming_http(
     stream_event: &str,
     plugin_id: &str,
 ) -> anyhow::Result<()> {
-    let method = request
-        .get("method")
-        .and_then(|v| v.as_str())
-        .unwrap_or("POST");
+    let method = request.get("method").and_then(|v| v.as_str()).unwrap_or("POST");
     let url = request
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing 'url' in streaming HTTP request"))?;
     let headers = request.get("headers").and_then(|v| as_string_map(v));
     let body = request.get("body").and_then(|v| v.as_str());
-    let sse_format = request
-        .get("sseFormat")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
+    let sse_format = request.get("sseFormat").and_then(|v| v.as_str()).unwrap_or("");
 
     let mut req_builder = stream_client_for(url).request(method.parse()?, url);
 
@@ -372,10 +356,7 @@ async fn execute_streaming_http(
     }
 
     // 发送完成事件
-    let _ = app_handle.emit(
-        stream_event,
-        serde_json::json!({ "done": true }),
-    );
+    let _ = app_handle.emit(stream_event, serde_json::json!({ "done": true }));
 
     tracing::debug!(
         emitted_events,
@@ -401,12 +382,7 @@ async fn execute_streaming_http(
 /// 提取文本增量后以 `{ chunk, done: false }` 格式 emit。
 ///
 /// 返回本次解析 emit 的事件数（供调用方统计可观测性）。
-fn parse_and_emit_sse(
-    buffer: &mut String,
-    format: &str,
-    app_handle: &tauri::AppHandle,
-    stream_event: &str,
-) -> usize {
+fn parse_and_emit_sse(buffer: &mut String, format: &str, app_handle: &tauri::AppHandle, stream_event: &str) -> usize {
     let mut last_usage: Option<serde_json::Value> = None;
     let mut emitted = 0usize;
     loop {
@@ -448,16 +424,10 @@ fn parse_and_emit_sse(
                             if parsed.usage.is_some() {
                                 last_usage = parsed.usage.clone();
                             }
-                            if let Some(content) = parsed
-                                .choices
-                                .first()
-                                .and_then(|c| c.delta.content.as_ref())
-                            {
+                            if let Some(content) = parsed.choices.first().and_then(|c| c.delta.content.as_ref()) {
                                 if !content.is_empty() {
-                                    let _ = app_handle.emit(
-                                        stream_event,
-                                        serde_json::json!({ "chunk": content, "done": false }),
-                                    );
+                                    let _ = app_handle
+                                        .emit(stream_event, serde_json::json!({ "chunk": content, "done": false }));
                                     emitted += 1;
                                 }
                             }
@@ -465,10 +435,7 @@ fn parse_and_emit_sse(
                     }
                     _ => {
                         // 未知格式：emit 原始 data
-                        let _ = app_handle.emit(
-                            stream_event,
-                            serde_json::json!({ "chunk": data, "done": false }),
-                        );
+                        let _ = app_handle.emit(stream_event, serde_json::json!({ "chunk": data, "done": false }));
                         emitted += 1;
                     }
                 }
@@ -555,7 +522,6 @@ mod tests {
         );
         assert!(
             err.to_string().contains("stream:true"),
-
             "error should guide to streaming mode, got: {}",
             err
         );

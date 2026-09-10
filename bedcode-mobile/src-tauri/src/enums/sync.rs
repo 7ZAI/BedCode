@@ -4,8 +4,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::sumary::{SessionConfigSummary, SessionSummary};
 use super::plugin::PluginQuestion;
+use super::sumary::{SessionConfigSummary, SessionSummary};
 
 /// 同步载荷 - 支持多种数据类型的增量同步
 ///
@@ -28,15 +28,9 @@ pub enum SyncPayload {
         session_name: String,
     },
     /// 会话停止
-    SessionStopped {
-        session_id: String,
-        session_name: String,
-    },
+    SessionStopped { session_id: String, session_name: String },
     /// 会话删除
-    SessionRemoved {
-        session_id: String,
-        session_name: String,
-    },
+    SessionRemoved { session_id: String, session_name: String },
 
     // === 会话配置同步 ===
     /// 配置创建
@@ -52,10 +46,7 @@ pub enum SyncPayload {
         source_device: String,
     },
     /// 配置删除
-    ConfigRemoved {
-        config_id: String,
-        config_name: String,
-    },
+    ConfigRemoved { config_id: String, config_name: String },
 
     // === 任务状态同步 ===
     /// Plugin 任务状态变更
@@ -68,10 +59,7 @@ pub enum SyncPayload {
 
     // === 会话模式同步 ===
     /// 会话自动授权模式变更
-    SessionModeChanged {
-        session_id: String,
-        auto_approve: bool,
-    },
+    SessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列同步 ===
     /// 会话任务队列变更
@@ -98,32 +86,7 @@ pub enum SyncPayload {
         /// 触发动作：create / delete / trigger / missed / failed
         action: String,
     },
-
-    // === 文件服务同步（桌面 → 移动，内网文件传输插件规格阶段 2） ===
-    /// 桌面侧插件挂载点可用性变更（mount/unmount/update_roots 后由宿主自动发出）
-    ///
-    /// 与桌面端 `enums/sync.rs` 同名变体保持同构
-    FileServiceChanged {
-        plugin_id: String,
-        mount_path: String,
-        /// true = 挂载可用（mount/update_roots），false = 已摘除（unmount）
-        available: bool,
-        /// 挂载支持的操作集合（unmount 时为空）
-        operations: Vec<bedcode_plugin_api_mobile::FileOperation>,
-    },
-
-    // === 传输批应答（v2，桌面 → 移动，发送端=移动） ===
-    /// 传输批应答推送（接收端批准/拒绝/超时 → 发送端）
-    ///
-    /// 移动端作为发送方时收到（对端桌面接收方经 WS 推送）；宿主发布
-    /// `filesrv:transfer_approval` 双通道事件，发送方插件据此调度批内任务。
-    /// 与桌面端 `enums/sync.rs` 同名变体保持同构（逐字一致）
-    TransferApproval {
-        /// 批 ID
-        batch_id: String,
-        /// "approved" | "rejected"
-        decision: String,
-        /// "" | "user-rejected" | "timeout"
-        reason: String,
-    },
 }
+
+// ==================== Tests ====================
+

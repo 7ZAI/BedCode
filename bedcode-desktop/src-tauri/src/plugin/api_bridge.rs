@@ -13,9 +13,7 @@ use tauri::State;
 
 /// 获取所有已加载插件列表
 #[tauri::command]
-pub async fn plugin_list_loaded(
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<Vec<DesktopPluginInfo>> {
+pub async fn plugin_list_loaded(plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<Vec<DesktopPluginInfo>> {
     tracing::debug!("[API] plugin_list_loaded called");
     let result = plugin_host.list_plugins().await;
     tracing::debug!("[API] plugin_list_loaded returning {} plugin(s)", result.len());
@@ -28,34 +26,47 @@ pub async fn plugin_get_info(
     plugin_id: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<DesktopPluginInfo>> {
-    tracing::debug!("[API] plugin_get_info({})", plugin_id);
+    tracing::debug!(plugin_id = %plugin_id, "[API] plugin_get_info");
     Ok(plugin_host.get_plugin(&plugin_id).await)
+}
+
+/// 预授权（启用前置，独立命令供前端先行调用）
+///
+/// 前端 toggle 时序：先调本命令（此阶段**不显示** loading 遮罩，授权弹窗
+/// 可正常交互）→ 通过后再显示遮罩调 `plugin_activate`；拒绝则直接失败，
+/// 不进入激活流程。`plugin_activate` 内部的 preauthorize 保留为兜底
+/// （启动 auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
+#[tauri::command]
+pub async fn plugin_preauthorize(
+    plugin_id: String,
+    plugin_host: State<'_, Arc<PluginHost>>,
+) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_preauthorize");
+    let result = plugin_host.preauthorize_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_preauthorize failed");
+    }
+    result
 }
 
 /// 激活插件（用户操作，持久化状态）
 #[tauri::command]
-pub async fn plugin_activate(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
-    tracing::info!("[API] plugin_activate({})", plugin_id);
+pub async fn plugin_activate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_activate");
     let result = plugin_host.activate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
-        tracing::error!("[API] plugin_activate({}) failed: {}", plugin_id, e);
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_activate failed");
     }
     result
 }
 
 /// 停用插件（用户操作，持久化状态）
 #[tauri::command]
-pub async fn plugin_deactivate(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
-    tracing::info!("[API] plugin_deactivate({})", plugin_id);
+pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_deactivate");
     let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
-        tracing::error!("[API] plugin_deactivate({}) failed: {}", plugin_id, e);
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_deactivate failed");
     }
     result
 }
@@ -79,6 +90,40 @@ pub async fn plugin_get_activated_state(
     Ok(plugin_host.get_activated_state().await)
 }
 
+// ==================== Frontend Load Diagnostics ====================
+
+/// 插件前端模块加载诊断上报（宿主内部诊断通道，spec §3.7 / issue 04）
+///
+/// 前端 PluginLoader 在 TS 模块导入/激活成败时调用，把结果写入 tracing 落盘日志
+/// （runtime.*.log），使日志能看到插件加载「后端半程之外」的前端半程。仅写日志：
+/// 不改插件状态机；也不做存在性/权限校验——诊断通道自身失败会丢日志行，
+/// 门禁拒绝只会再丢一次。
+///
+/// 注意：这是宿主自身的启动期诊断命令，不是插件协议，不受「不加特殊上报 ABI」约束。
+#[tauri::command]
+pub async fn plugin_frontend_load_report(
+    plugin_id: String,
+    stage: String,
+    ok: bool,
+    detail: Option<String>,
+) -> crate::Result<()> {
+    if ok {
+        tracing::info!(
+            plugin_id = %plugin_id,
+            stage = %stage,
+            "[PluginLoader] frontend module load ok"
+        );
+    } else {
+        tracing::error!(
+            plugin_id = %plugin_id,
+            stage = %stage,
+            detail = detail.as_deref().unwrap_or("(no detail)"),
+            "[PluginLoader] frontend module load FAILED"
+        );
+    }
+    Ok(())
+}
+
 // ==================== Plugin Storage ====================
 
 /// 插件存储：获取值
@@ -92,12 +137,14 @@ pub async fn plugin_storage_get(
 ) -> crate::Result<Option<serde_json::Value>> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().get(&plugin_id, &key).await
@@ -113,12 +160,14 @@ pub async fn plugin_storage_set(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().set(&plugin_id, &key, value).await
@@ -133,12 +182,14 @@ pub async fn plugin_storage_delete(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "storage") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission", plugin_id
+            "Plugin {} has no storage permission",
+            plugin_id
         )));
     }
     plugin_host.storage().delete(&plugin_id, &key).await
@@ -156,12 +207,14 @@ pub async fn plugin_terminal_send_input(
 ) -> crate::Result<()> {
     if !plugin_host.is_activated(&plugin_id).await {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated", plugin_id
+            "Plugin {} is not activated",
+            plugin_id
         )));
     }
     if !plugin_host.permission().check(&plugin_id, "terminal:input") {
         return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no terminal:input permission", plugin_id
+            "Plugin {} has no terminal:input permission",
+            plugin_id
         )));
     }
     let ctx = crate::system::app_context::AppContext::global();
@@ -227,10 +280,7 @@ pub async fn plugin_list_rust_commands(
 /// 执行完整的卸载-重载-激活循环，用于开发期间快速迭代。
 /// 生产构建中调用此命令返回错误
 #[tauri::command]
-pub async fn plugin_dev_reload(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_dev_reload(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     #[cfg(debug_assertions)]
     {
         plugin_host.reload_wasm_plugin(&plugin_id).await
@@ -238,7 +288,9 @@ pub async fn plugin_dev_reload(
     #[cfg(not(debug_assertions))]
     {
         let _ = (plugin_host, plugin_id);
-        Err(crate::AppError::Plugin("Hot reload only available in dev mode".to_string()))
+        Err(crate::AppError::Plugin(
+            "Hot reload only available in dev mode".to_string(),
+        ))
     }
 }
 
@@ -254,7 +306,9 @@ pub async fn plugin_fs_auth_respond(
 ) -> crate::Result<()> {
     tracing::info!(
         "[API] plugin_fs_auth_respond: request_id={}, allowed={}, remember={}",
-        request_id, allowed, remember
+        request_id,
+        allowed,
+        remember
     );
     fs_auth.respond(&request_id, allowed, remember).await;
     Ok(())
@@ -264,7 +318,7 @@ pub async fn plugin_fs_auth_respond(
 
 #[cfg(test)]
 mod tests {
-    //! 本模块（Tauri commands 桥）不可单测的原因：
+    //! 本模块（Tauri commands 桥）大部分不可单测的原因：
     //!
     //! 1. 所有 command 函数的第一个/最后一个参数均为
     //!    `State<'_, Arc<PluginHost>>`（或 `State<'_, Arc<FsAuthChecker>>`），
@@ -286,4 +340,28 @@ mod tests {
     //!
     //! 若未来启用 tauri test feature，可在此处为 `plugin_storage_*` /
     //! `plugin_terminal_send_input` 的门禁错误分支补测试。
+    //!
+    //! 例外：`plugin_frontend_load_report` 不依赖任何 State 参数（纯日志透传），
+    //! 可直接调用测试。
+
+    /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）
+    #[tokio::test]
+    async fn frontend_load_report_always_ok() {
+        let ok_report = super::plugin_frontend_load_report(
+            "com.bedcode.demo".into(),
+            "import".into(),
+            true,
+            None,
+        )
+        .await;
+        let fail_report = super::plugin_frontend_load_report(
+            "com.bedcode.demo".into(),
+            "activate".into(),
+            false,
+            Some("import timeout".into()),
+        )
+        .await;
+        assert!(ok_report.is_ok());
+        assert!(fail_report.is_ok());
+    }
 }

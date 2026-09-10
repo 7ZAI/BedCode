@@ -9,12 +9,13 @@
 //! - POST   /api/sessions/{id}/input
 //! - DELETE /api/sessions/{id}/remove
 
+use crate::server::dtos::session_dto::*;
+use crate::server::dtos::ApiResponse;
+use crate::server::middleware::jwt_auth::get_claims_from_request;
+use crate::session::RendererSource;
+use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
-use crate::system::app_context::AppContext;
-use crate::server::dtos::ApiResponse;
-use crate::server::dtos::session_dto::*;
-use crate::server::middleware::jwt_auth::get_claims_from_request;
 
 /// GET /api/sessions
 pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
@@ -50,25 +51,35 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
 }
 
 /// POST /api/sessions/start
-pub async fn start_session(
-    req: HttpRequest,
-    body: web::Json<StartSessionRequest>,
-) -> HttpResponse {
+pub async fn start_session(req: HttpRequest, body: web::Json<StartSessionRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
-    let device_name = get_claims_from_request(&req)
-        .and_then(|c| c.device_name);
+    let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
 
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match session_manager.create_session_with_source(&body.config_id, device_name).await {
+    // 启动端终端组件默认网格：两者齐备且 >0 才生效，作为 PTY 初始尺寸
+    let initial_size = match (body.cols, body.rows) {
+        (Some(cols), Some(rows)) if cols > 0 && rows > 0 => Some((cols, rows)),
+        _ => None,
+    };
+
+    match session_manager
+        .create_session_with_source(&body.config_id, device_name, initial_size)
+        .await
+    {
         Ok(session_id) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(
+                    "sessions-refresh",
+                    serde_json::json!({
+                        "refreshType": "sessions",
+                        "source": source,
+                    }),
+                );
+            }
 
             let data = StartSessionResponseData {
                 session_id,
@@ -84,25 +95,26 @@ pub async fn start_session(
 }
 
 /// POST /api/sessions/{id}/stop
-pub async fn stop_session(
-    req: HttpRequest,
-    path: web::Path<String>,
-) -> HttpResponse {
+pub async fn stop_session(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
-    let device_name = get_claims_from_request(&req)
-        .and_then(|c| c.device_name);
+    let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
     match session_manager.kill_session_with_source(&session_id, device_name).await {
         Ok(()) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(
+                    "sessions-refresh",
+                    serde_json::json!({
+                        "refreshType": "sessions",
+                        "source": source,
+                    }),
+                );
+            }
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {
@@ -113,42 +125,65 @@ pub async fn stop_session(
 }
 
 /// POST /api/sessions/{id}/resize
-pub async fn resize_session(
-    path: web::Path<String>,
-    body: web::Json<ResizeSessionRequest>,
-) -> HttpResponse {
+///
+/// 正统渲染端裁决：来源身份取自 JWT claims 的 device_name（移动端）；
+/// 无 claims（未认证/桌面回退）视为 Desktop。裁决不通过时返回
+/// ResizeOutcome::NeedsConfirmation（未应用），客户端弹窗确认后带 force 重发。
+pub async fn resize_session(req: HttpRequest, path: web::Path<String>, body: web::Json<ResizeSessionRequest>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
-    if let Err(e) = session_manager.resize_session(&session_id, body.cols, body.rows).await {
-        tracing::warn!(error = %e, session_id = %session_id, "Failed to resize session");
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()));
-    }
+    // 来源身份：移动端 JWT 携带 device_name；缺失时回退 Desktop（不会静默覆盖，
+    // 仍受 NeedConfirmation 门控）
+    let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
+    let source = match device_name {
+        Some(name) => RendererSource::Mobile { device_name: name },
+        None => {
+            tracing::warn!(
+                session_id = %session_id,
+                "resize request without device_name claims, treating as Desktop source"
+            );
+            RendererSource::Desktop
+        }
+    };
 
-    HttpResponse::Ok().json(ApiResponse::ok())
+    match session_manager
+        .resize_session(&session_id, body.cols, body.rows, source, body.force)
+        .await
+    {
+        Ok(outcome) => HttpResponse::Ok().json(ApiResponse::ok_with_data(outcome)),
+        Err(e) => {
+            tracing::warn!(error = %e, session_id = %session_id, "Failed to resize session");
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, &e.to_string()))
+        }
+    }
 }
 
 /// DELETE /api/sessions/{id}/remove
-pub async fn remove_session(
-    req: HttpRequest,
-    path: web::Path<String>,
-) -> HttpResponse {
+pub async fn remove_session(req: HttpRequest, path: web::Path<String>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
-    let device_name = get_claims_from_request(&req)
-        .and_then(|c| c.device_name);
+    let device_name = get_claims_from_request(&req).and_then(|c| c.device_name);
     let source = device_name.clone().unwrap_or_else(|| "mobile".to_string());
 
-    match session_manager.remove_session_with_source(&session_id, device_name).await {
+    match session_manager
+        .remove_session_with_source(&session_id, device_name)
+        .await
+    {
         Ok(()) => {
-            let app_handle = ctx.app_handle();
-            let _ = app_handle.emit("sessions-refresh", serde_json::json!({
-                "refreshType": "sessions",
-                "source": source,
-            }));
+            // 无头/测试上下文无 AppHandle：跳过前端刷新通知
+            if let Some(handle) = ctx.app_handle() {
+                let _ = handle.emit(
+                    "sessions-refresh",
+                    serde_json::json!({
+                        "refreshType": "sessions",
+                        "source": source,
+                    }),
+                );
+            }
             HttpResponse::Ok().json(ApiResponse::ok())
         }
         Err(e) => {
@@ -162,10 +197,7 @@ pub async fn remove_session(
 ///
 /// 通过 HTTP 直接写入终端输入，绕过 WebSocket 的 send_and_wait 阻塞
 /// 适用于移动端长文本输入场景，避免 WebSocket 通道因等待 ack 导致超时
-pub async fn send_session_input(
-    path: web::Path<String>,
-    body: web::Json<SessionInputRequest>,
-) -> HttpResponse {
+pub async fn send_session_input(path: web::Path<String>, body: web::Json<SessionInputRequest>) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();

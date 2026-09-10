@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-mobile"
-version = "2.0.0"
+version = "2.1.0"
 description = "BedCode Mobile - Remote terminal for Claude Code"
 authors = ["binblink"]
 edition = "2021"
@@ -78,14 +78,11 @@ futures-util = "0.3"
 # 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
 wasmtime = "47"
 
-# HTTP client (WASM plugin HTTP proxy + remote download)
-reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+# HTTP client (WASM plugin HTTP proxy + remote download + 认证端点 .json() 解析)
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls", "json"] }
 
 # 传输引擎工具（CancellationToken 取消 + ReaderStream 文件流，与桌面端 transfer 同语义）
 tokio-util = { version = "0.7", features = ["io"] }
-
-# 独立 HTTP 文件服务（插件 fileservice 能力，仅 HTTP 明文，无 TLS/compression 需求）
-actix-web = { version = "4", default-features = false }
 
 # Regex for SQL table name extraction
 regex = "1"
@@ -102,25 +99,39 @@ android_logger = "0.14"
 
 # Plugin SDK (Mobile)
 bedcode-plugin-api-mobile = { path = "../packages/plugin-sdk-mobile/rust" }
+# 对等网络共享基础设施（节点身份 + 自签证书，issue peer-network/01）
+bedcode-peer-net = { path = "../../packages/peer-net" }
+# 链路报文加密协议核心（issue 09 共享 crate，与桌面 server 共同消费）
+bedcode-link-crypto = { path = "../../packages/link-crypto" }
 p256 = { version = "0.13", features = ["ecdsa", "pkcs8"] }
 
 [dev-dependencies]
 tempfile = "3"
 # 组件测试编码（ticket 02 宿主单测：测试组件 core module → 组件；spike 实证 0.256）
 wit-component = "=0.256.0"
+# 仅测试用 mock server（http_auth_flow 起 mock 桌面端 HTTP 端点；生产依赖已删，
+# 不进 APK——服务器归零，手机端无任何 HTTP server 依赖）
+actix-web = { version = "4", default-features = false }
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic
 # 不再拖垮整个应用（abort 会让一切 panic 处理机制失效，任何 panic 直接闪退）
 panic = "unwind"
-codegen-units = 1
-lto = true
+# fat LTO + 单 codegen unit 会在最终链接阶段合并全部 bitcode，峰值内存 8GB+（含 wasmtime/cranelift 时更甚），
+# 在 12~16GB 内存机器上触发 OOM；改用 thin LTO + 并行 codegen，性能损失 ~2-5%，峰值内存大幅下降
+# （与桌面端 release profile 对齐，2026-09 整改统一两端策略）
+codegen-units = 16
+lto = "thin"
 opt-level = "s"
 strip = true
 
 # ==================== 开发模式优化 ====================
 [profile.dev]
-debug = 1
+# debug = 1 全量调试信息使 rustc 编译巨型 crate（含 wasmtime）时内存峰值过高，
+# 在 collect_and_partition_mono_items 阶段 OOM（0xc0000409，页面文件被禁用的机器上必现）。
+# line-tables-only 保留行号回溯（debugger 变量查看不可用），编译内存与 target 体积大幅下降
+# （与桌面端 dev profile 对齐，避免 wasmtime OOM）
+debug = "line-tables-only"
 incremental = true
 split-debuginfo = "packed"
 

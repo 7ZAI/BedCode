@@ -20,15 +20,7 @@ impl ClientRouteContext {
 
     /// 发送业务事件
     pub fn emit(&self, event: MobileEvent) {
-        // 高频输出事件用 debug 级别，避免日志刷屏
-        match &event {
-            MobileEvent::Output { .. } => {
-                tracing::debug!("[ClientRouteContext] emit: Output event");
-            }
-            _ => {
-                tracing::info!("[ClientRouteContext] emit: {:?}", event);
-            }
-        }
+        tracing::info!("[ClientRouteContext] emit: {:?}", event);
         if let Err(e) = self.event_tx.send(event) {
             tracing::error!("[ClientRouteContext] Failed to send event: {}", e);
         }
@@ -83,14 +75,8 @@ mod tests {
             request_id: "r1".to_string(),
         });
 
-        assert!(matches!(
-            rx.recv().await,
-            Ok(MobileEvent::AuthSuccess { .. })
-        ));
-        assert!(matches!(
-            rx.recv().await,
-            Ok(MobileEvent::ServerClosed { .. })
-        ));
+        assert!(matches!(rx.recv().await, Ok(MobileEvent::AuthSuccess { .. })));
+        assert!(matches!(rx.recv().await, Ok(MobileEvent::ServerClosed { .. })));
         assert!(matches!(rx.recv().await, Ok(MobileEvent::Ack { .. })));
     }
 

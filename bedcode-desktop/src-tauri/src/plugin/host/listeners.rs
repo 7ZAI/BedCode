@@ -3,10 +3,6 @@
 //! 从 `host.rs` 拆出：每个 WASM 插件在 activate 时注册，收到宿主事件后
 //! 序列化 payload 调用插件导出函数（SDK 类型化枚举，serde 表示即线协议）。
 
-use bedcode_plugin_api::events::{
-    InputSubmittedEvent,
-    SessionLifecycleEvent as SdkLifecycleEvent,
-};
 use serde_json;
 
 use super::PluginHost;
@@ -57,38 +53,46 @@ impl SessionLifecycleListener for PluginLifecycleListener {
         use bedcode_plugin_api::events::SessionLifecycleEvent as SdkLifecycleEvent;
 
         let sdk_event = match event {
-            SessionLifecycleEvent::Creating { config_id, command, working_dir, source_device } => {
-                SdkLifecycleEvent::Creating {
-                    config_id: config_id.clone(),
-                    command: command.clone(),
-                    working_dir: working_dir.clone(),
-                    source_device: source_device.clone(),
-                    resource_dir: resource_dir.clone(),
-                }
-            }
-            SessionLifecycleEvent::Created { session_id, config_id, name, working_dir } => {
-                SdkLifecycleEvent::Created {
-                    session_id: session_id.clone(),
-                    config_id: config_id.clone(),
-                    name: name.clone(),
-                    working_dir: working_dir.clone(),
-                    resource_dir: resource_dir.clone(),
-                }
-            }
-            SessionLifecycleEvent::Stopping { session_id, source_device } => {
-                SdkLifecycleEvent::Stopping {
-                    session_id: session_id.clone(),
-                    source_device: source_device.clone(),
-                    resource_dir: resource_dir.clone(),
-                }
-            }
-            SessionLifecycleEvent::Stopped { session_id, source_device } => {
-                SdkLifecycleEvent::Stopped {
-                    session_id: session_id.clone(),
-                    source_device: source_device.clone(),
-                    resource_dir: resource_dir.clone(),
-                }
-            }
+            SessionLifecycleEvent::Creating {
+                config_id,
+                command,
+                working_dir,
+                source_device,
+            } => SdkLifecycleEvent::Creating {
+                config_id: config_id.clone(),
+                command: command.clone(),
+                working_dir: working_dir.clone(),
+                source_device: source_device.clone(),
+                resource_dir: resource_dir.clone(),
+            },
+            SessionLifecycleEvent::Created {
+                session_id,
+                config_id,
+                name,
+                working_dir,
+            } => SdkLifecycleEvent::Created {
+                session_id: session_id.clone(),
+                config_id: config_id.clone(),
+                name: name.clone(),
+                working_dir: working_dir.clone(),
+                resource_dir: resource_dir.clone(),
+            },
+            SessionLifecycleEvent::Stopping {
+                session_id,
+                source_device,
+            } => SdkLifecycleEvent::Stopping {
+                session_id: session_id.clone(),
+                source_device: source_device.clone(),
+                resource_dir: resource_dir.clone(),
+            },
+            SessionLifecycleEvent::Stopped {
+                session_id,
+                source_device,
+            } => SdkLifecycleEvent::Stopped {
+                session_id: session_id.clone(),
+                source_device: source_device.clone(),
+                resource_dir: resource_dir.clone(),
+            },
         };
 
         // serde 表示即线协议；序列化失败（理论上不可能）退化为空对象，插件侧按协议错误处理
@@ -147,4 +151,3 @@ impl SessionInputListener for PluginInputListener {
         Some(&self.plugin_id)
     }
 }
-

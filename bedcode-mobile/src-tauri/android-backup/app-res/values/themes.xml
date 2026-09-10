@@ -1,0 +1,24 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- Base application theme. -->
+    <style name="Theme.bedcode_mobile" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- 状态栏透明，让内容延伸到状态栏下方 -->
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <!-- 导航栏透明 -->
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <!-- 允许内容绘制在系统栏后面 -->
+        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
+        <!-- 状态栏图标使用深色（因为我们的 app 是深色主题） -->
+        <item name="android:windowLightStatusBar">false</item>
+        <!-- 导航栏图标使用深色 -->
+        <item name="android:windowLightNavigationBar">false</item>
+        <!-- 与 gen/android 同步维护:启动期窗口背景与系统开屏退化为纯色底,开屏动画只保留前端一层 -->
+        <item name="android:windowBackground">@color/bedcode_launch_bg</item>
+        <item name="android:windowSplashScreenBackground">@color/bedcode_launch_bg</item>
+        <!-- Android 12+ 系统开屏由系统强制存在、无法整体移除:用全透明矢量图标
+             (splash_icon_transparent)使其退化为纯色底(即"没有开屏动画"的配置),
+             比透明 color 对 MIUI 等 OEM 更可靠;恢复系统图标时删除本行 -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon_transparent</item>
+        <!-- 图标衬圈同底色:部分 OEM 会为开屏图标画背景圈,与背景同色则不可见 -->
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/bedcode_launch_bg</item>
+    </style>
+</resources>

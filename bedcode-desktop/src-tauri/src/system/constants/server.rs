@@ -3,11 +3,11 @@
 /// 默认服务器端口
 pub const DEFAULT_SERVER_PORT: u16 = 8765;
 
-/// WebSocket 终端路径
-pub const WS_TERMINAL_PATH: &str = "/ws/terminal";
-
 /// 本地 WebSocket 终端路径（仅限环回地址，免 JWT，供桌面端 WebView 消费 PTY 输出）
 pub const LOCAL_WS_TERMINAL_PATH: &str = "/ws/terminal/local";
+
+/// WebSocket 事件通道路径（常驻，设备在线判定基准 + 同步广播接收方）
+pub const WS_EVENT_PATH: &str = "/ws/event";
 
 /// 健康检查 API 路径
 pub const API_HEALTH_PATH: &str = "/api/health";
@@ -22,6 +22,12 @@ pub const HEARTBEAT_INTERVAL_SECS: u64 = 5;
 ///
 /// 超过此时间未收到 Pong 则判定连接断开
 pub const CLIENT_TIMEOUT_SECS: u64 = 10;
+
+/// WebSocket 首消息认证超时（秒）
+///
+/// spec §4.3：连接建立后 10s 内未完成首消息认证（JWT 或配对流程），
+/// 服务端主动关闭连接；local 通道构造时即已认证，自动豁免
+pub const WS_AUTH_TIMEOUT_SECS: u64 = 10;
 
 /// 远程客户端超时（秒）
 ///
