@@ -22,9 +22,20 @@ export const MAX_FONT_SIZE = 16
 /** Linux 平台基线 UI 缩放因子（替代原 zoom:1.15，TerminalPreview 复用同一因子） */
 export const PLATFORM_UI_SCALE = 1.15
 
-function applyFontSize(size: number, isLinux: boolean) {
+/**
+ * 档位字号 → --ui-scale 换算（纯函数，供 applyFontSize 与测试共用）
+ *
+ * scale = 设置档位 / 正常档位 × (Linux ? PLATFORM_UI_SCALE : 1)。
+ * Linux 基线因子只对 Linux 生效——Windows/macOS 必须返回 1.0，
+ * 否则为 Linux 调整的字号会泄漏到其他平台。
+ */
+export function computeUiScale(size: number, isLinux: boolean): number {
   const clamped = Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, size))
-  const scale = (clamped / NORMAL_FONT_SIZE) * (isLinux ? PLATFORM_UI_SCALE : 1)
+  return (clamped / NORMAL_FONT_SIZE) * (isLinux ? PLATFORM_UI_SCALE : 1)
+}
+
+function applyFontSize(size: number, isLinux: boolean) {
+  const scale = computeUiScale(size, isLinux)
   document.documentElement.style.setProperty('--ui-scale', String(scale), 'important')
 }
 
