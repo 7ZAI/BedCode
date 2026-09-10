@@ -116,3 +116,24 @@ metadata:
 **收益**：减少 33% 传输体积，省去 Base64 编解码 CPU 开销。
 
 **风险**：需要重新设计消息协议（Binary 消息无法携带 JSON 元数据如 session_id、index）；需要处理消息分帧和路由；改动范围大，影响 desktop 和 mobile 两端的 WS 层。
+
+### 10. 背压 ack 双门控死锁——「显示一点就卡住」（已修复，2026-09-10）
+
+**症状**：移动端终端只显示开头一些输出后永久卡住，后续输出不再出现。
+
+**根因**（服务端 `SessionOutputManager` + 移动端双重门控叠加）：
+
+1. 服务端背压水位**按会话整体记账**（每产出事件 +bytes，`unacked_bytes`），超 64KB 高位水即**暂停该会话 PTY 读取**（作用于所有订阅者），仅 ack 能把水位降到 8KB 恢复
+2. 服务端 `GlobalOutputManager::ack` 有 **正统渲染端门控**：非正统端（current canonical 之外的订阅者）的 ack 直接丢弃
+3. 移动端 `TerminalView` 的 `shouldAck` 又门控 `isCanonicalRenderer`（仅 resize 返回 applied 才为 true）→ 非正统时**根本不发 ack**
+
+**死锁场景**：桌面端启动会话（初始正统 = Desktop）、手机观看——手机 resize 触发 needsConfirmation（或用户拒绝/80x24 skip/HTTP 失败）→ `isCanonicalRenderer=false` → 手机永不 ack；桌面顺向没在看（用户在手机上操作）也不 ack → `unacked_bytes` 触及 64KB → **会话 PTY 读整体暂停且仅 ack 能恢复 → 永久卡死**。历史回放不记账，故症状是"历史/开头能显示，实时输出到 64KB 后戛然而止"。
+
+**修复**（双端，backward compatible）：
+
+- **服务端** `session_output.rs::GlobalOutputManager::ack`：去掉正统门控，任何已认证订阅端的 ack 都推进记账（`_source` 保留签名）。`unacked` 是共享流量水位而非尺寸裁决依据，观看端确认即代表字节被消化；多端并发时慢端 ack 只落后不拖垮快端
+- **移动端** `useTerminalBuffer.ts` / `TerminalView.vue`：`registerRealtimeHandler` 删除 `shouldAck` 参数，`onWriteParsed` 触发即无条件回发 ack（该事件本身就证明本端在消费渲染管线；mock/未连接时 `socket.ackRendered` 内部空转安全）。`isCanonicalRenderer` 保留（resize 覆盖弹窗 UI 仍用）
+
+**回归护栏**：`test_ack_from_mobile_observer_releases_backpressure`（服务端，移动端身份 ack 推经水位恢复）。验证：cargo session_output 28 绿 / forward 15 / control_frame 13 / terminal_ws 28；移动端 vitest 360 绿。
+
+**遗留观察**：超高速持续输出下（xterm write 队列常满导致 onWriteParsed 稀疏），ack 节奏可能退化为服务端暂停/恢复锯齿——主修复后实机烟测，若抖动明显再调水位或 ack 节流参数。
