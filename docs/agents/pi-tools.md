@@ -26,6 +26,11 @@ pi-lens 提供 IDE 级语义能力（词索引 + tree-sitter 结构 + LSP 诊断
 - 找「谁在用它」类符号引用，**禁止 `rg 符号名`**，用 `symbol_search` 或 `lsp { action: "references" }`；Rust 类型精确引用用 `scipq`（见文末「scipq」节）
 - 找「某段文案 / 日志字样 / 配置项」才是 `rg` 的场景（字符串字面量、注释、日志 tag 不是符号）
 - turn 结束前必须跑一次 `lens_diagnostics mode=all` 收尾；报告 🔴 blocker 未清前不算 done
+- **LSP 进程纪律（用户指令 2026-09-11）**：每次 `lsp_diagnostics` / `lens_diagnostics` 完成后，pi-lens 拉起的 LSP server（`~/.pi-lens/tools/` 下的 typescript-language-server / vue-language-server / tsserver 子进程）会常驻累积；**诊断完立即清理**：
+  ```bash
+  pkill -f '[.]pi-lens/tools'   # 字符类 [.] 防止 pkill 匹配自身 argv；pi 主进程不受影响
+  ```
+  副作用：下次诊断重新拉起 server（慢几百 ms），正确性无影响
 - cascade 上报的 LSP 假阳性（Vue 组件类型误判、Vite shim 解析不到、跨 tsconfig 边界的类型缺失）按 `[slop]` / `[code-smell]` 建议对待，不是阻塞；确认后可用 `lens_diagnostic_mark` 记录 false-positive
 
 **Fallback：**
