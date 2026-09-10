@@ -32,6 +32,8 @@
       </div>
     </div>
     <PluginCommandPalette />
+    <!-- 插件全局弹窗（SDK 共享组件：预设/组件两模式、定时关闭、按钮跳转） -->
+    <PluginGlobalDialog />
   </template>
 </template>
 
@@ -42,6 +44,8 @@ import TitleBar from '@/components/TitleBar.vue'
 import Sidebar from '@/components/Sidebar.vue'
 import PluginCommandPalette from '@/plugin/components/PluginCommandPalette.vue'
 import PluginStatusBar from '@/plugin/components/PluginStatusBar.vue'
+// SDK 共享全局弹窗宿主（经 packages 下文件路径 import，见 vite fs.allow 注释）
+import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-desktop/ui/plugin-global-dialog'
 
 const route = useRoute()
 

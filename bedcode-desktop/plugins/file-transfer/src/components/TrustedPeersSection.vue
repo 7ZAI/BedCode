@@ -8,8 +8,12 @@
  *
  * 编排逻辑在 useTrustedPeers；本组件只负责渲染与确认框状态。
  */
-import { computed, inject, onMounted, ref } from 'vue'
-import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import { computed, inject, onMounted, ref, watch } from 'vue'
+import type {
+  PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
+} from '@binblink/bedcode-plugin-sdk-desktop'
 import {
   formatTrustedDate,
   useTrustedPeers,
@@ -25,6 +29,48 @@ const { peers, loadState, errorKey, revokingIds, refresh, revoke } = useTrustedP
 const confirmTarget = ref<TrustedPeer | null>(null)
 /** 确认后撤销提交中（按钮禁用防重复提交） */
 const confirming = ref(false)
+/** 撤销确认宿主全局弹窗句柄 */
+let confirmDialog: PluginDialogHandle | null = null
+
+function buildConfirmOptions(peer: TrustedPeer): PluginDialogOptions {
+  return {
+    // 警告三角图标（Heroicons outline exclamation-triangle）
+    icon: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z',
+    title: t('transfer.trusted.revokeTitle'),
+    message: t('transfer.trusted.revokeBody', { name: displayName(peer) }),
+    actions: [
+      { label: t('transfer.trusted.cancel'), kind: 'default', disabled: confirming.value, onClick: cancelConfirm },
+      {
+        label: t('transfer.trusted.revoke'),
+        kind: 'danger',
+        disabled: confirming.value,
+        onClick: confirmRevoke,
+      },
+    ],
+    // 遮罩/Escape 等同取消（沿用旧行为）
+    onClose: () => {
+      confirmTarget.value = null
+      if (confirmDialog) {
+        confirmDialog = null
+      }
+    },
+  }
+}
+
+watch(
+  () => [confirmTarget.value, confirming.value] as const,
+  ([target]) => {
+    if (target && !confirmDialog) {
+      confirmDialog = context.ui.showDialog(buildConfirmOptions(target))
+    } else if (target && confirmDialog) {
+      // 确认中状态变化（禁用按钮）也经 update 联动
+      confirmDialog.update(buildConfirmOptions(target))
+    } else if (!target && confirmDialog) {
+      confirmDialog.close()
+      confirmDialog = null
+    }
+  },
+)
 
 /** 跟随宿主语言本地化加入时间 */
 function formatDate(dateStr: string): string {
@@ -51,8 +97,9 @@ async function confirmRevoke(): Promise<void> {
   if (!target || confirming.value) return
   confirming.value = true
   try {
-    // 成功时 composable 本地摘除条目；失败保留并经 errorKey 提示
-    await revoke(target.nodeId)
+    const ok = await revoke(target.nodeId)
+    // 失败：抛错使宿主弹窗保持打开可重试（composable 已就地提示 errorKey）
+    if (!ok) throw new Error('revoke failed')
     confirmTarget.value = null
   } finally {
     confirming.value = false
@@ -117,37 +164,5 @@ onMounted(() => {
       </p>
       <p class="ft-settings-helper">{{ t('transfer.devices.trustHint') }}</p>
     </template>
-
-    <!-- 撤销后果说明确认框（两步撤销第二步；Teleport 覆盖设置面板） -->
-    <Teleport to="body">
-      <Transition name="ft-dialog">
-        <div
-          v-if="confirmTarget"
-          class="ft-dialog-overlay"
-          role="dialog"
-          aria-modal="true"
-          @click.self="cancelConfirm"
-        >
-          <div class="ft-dialog-card">
-            <span class="ft-dialog-title">{{ t('transfer.trusted.revokeTitle') }}</span>
-            <p class="ft-dialog-body">
-              {{ t('transfer.trusted.revokeBody', { name: displayName(confirmTarget) }) }}
-            </p>
-            <div class="ft-dialog-actions">
-              <button class="ft-btn" :disabled="confirming" @click="cancelConfirm">
-                {{ t('transfer.trusted.cancel') }}
-              </button>
-              <button
-                class="ft-btn ft-btn--danger"
-                :disabled="confirming"
-                @click="confirmRevoke"
-              >
-                {{ t('transfer.trusted.revoke') }}
-              </button>
-            </div>
-          </div>
-        </div>
-      </Transition>
-    </Teleport>
   </section>
 </template>

@@ -90,9 +90,6 @@ const zhCN: MessageSchema = {
   'transfer.queue.history': '历史',
 
   // ==================== 批量请求应答（v2） ====================
-  'transfer.batch.pendingTitle': '文件传输请求',
-  'transfer.batch.acceptAll': '接受全部',
-  'transfer.batch.rejectAll': '拒绝全部',
   'transfer.request.title': '文件传输请求',
   'transfer.request.body': '{name} 想向你发送 {count} 个文件（共 {size}）',
   'transfer.request.countdown': '将在 {seconds} 秒后自动拒绝',
@@ -105,11 +102,13 @@ const zhCN: MessageSchema = {
   'transfer.consent.body': '{name} 想与你建立文件传输连接',
   'transfer.consent.namelessHint': '未能获取设备名称，请核对设备指纹后再决定',
   'transfer.consent.fingerprintLabel': '设备指纹',
+  'transfer.consent.copy': '复制指纹',
+  'transfer.consent.copied': '已复制',
+  'transfer.consent.copyHint': '复制完整指纹，便于在另一台设备上比对',
   'transfer.consent.countdown': '将在 {seconds} 秒后自动拒绝',
   'transfer.consent.accept': '接受',
   'transfer.consent.deny': '拒绝',
   'transfer.consent.close': '关闭（等同拒绝）',
-  'transfer.consent.statusItem': '{n} 台设备等待确认',
 
   // ==================== 可信对端管理（spec 决策 8） ====================
   'transfer.trusted.title': '可信对端',
@@ -179,11 +178,6 @@ const zhCN: MessageSchema = {
   'transfer.empty.noPeerHint': '确保手机与电脑在同一局域网，且手机端已配对并开启共享',
   'transfer.empty.noDownloadDir': '请先在设置中配置下载目录',
   'transfer.empty.noDownloadDirHint': '选择接收文件的保存位置，之后就能从对端下载文件到本机',
-
-  // ==================== 对端存储权限提示 ====================
-  'transfer.notice.storageAccess':
-    '对端共享的可能是 Android 顶层目录，而手机上未授予「所有文件访问权限」——在手机系统设置 → 应用 → BedCode → 允许访问所有文件 中授权后刷新即可看到内容',
-
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': '剩 {count} 秒',
   'transfer.eta.minutes': '剩 {count} 分 {seconds} 秒',

@@ -25,11 +25,17 @@ import type {
   TitleBarItemDescriptor,
   PageToolbarItemDescriptor,
   FileHandlerDescriptor,
+  PluginDialogOptions,
+  PluginDialogHandle,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
 import * as pluginEvents from './events'
 import { getPluginRegistry } from './registry'
+// 控制器放 SDK 包内（宿主/dev-shell 共用同一实现）；相对导入直连源码，
+// 不依赖已发布的 dist 构建（packages 在 vite fs.allow 与 TS include 之外，
+// 经相对路径显式拉入编译）
+import { openGlobalDialog } from '../../packages/plugin-sdk-desktop/src/global-dialog'
 
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
@@ -178,6 +184,12 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      requirePermission('ui.showDialog')
+      // context 对象在本函数尾部组装；此处惰性引用（showDialog 调用时已初始化），
+      // 供内容组件 provide('pluginContext') 使用
+      return openGlobalDialog({ ...options, pluginContext: context })
+    },
   }
 
   // ==================== EventAPI ====================
@@ -245,18 +257,18 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     getI18n(): any {
       return (window as any).__BEDCODE_SHARED__?.i18n
     },
-    registerMessages(locale: string, messages: Record<string, any>): void {
+    registerMessages(locale: string, messages: Record<string, unknown>): void {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return
       // 用插件 ID 作为命名空间前缀，避免 key 冲突
-      const prefixed: Record<string, any> = {}
+      const prefixed: Record<string, unknown> = {}
       for (const [key, value] of Object.entries(messages)) {
         prefixed[`${info.id}.${key}`] = value
       }
       // 直接合并新消息，vue-i18n 会自动与现有消息深度合并
       hostI18n.global.mergeLocaleMessage(locale, prefixed)
     },
-    t(key: string, params?: Record<string, any>): string {
+    t(key: string, params?: Record<string, unknown>): string {
       const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
       if (!hostI18n) return key
       // 自动添加插件 ID 前缀
@@ -265,7 +277,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  return {
+  const context = {
     id: info.id,
     extensionPath: info.extensionPath,
     commands,
@@ -279,4 +291,5 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     system,
     _disposables: disposables,
   }
+  return context
 }

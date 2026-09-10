@@ -8,18 +8,23 @@
  * devices-changed 事件驱动。
  */
 import { ref, computed, watch, inject, onMounted, onUnmounted } from 'vue'
-import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import type {
+  PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
+} from '@binblink/bedcode-plugin-sdk-desktop'
 import RemoteFileTable from './RemoteFileTable.vue'
 import TaskPanel from './TaskPanel.vue'
 import SettingsPanel from './SettingsPanel.vue'
-import BatchRequestDialog from './BatchRequestDialog.vue'
-import ConsentDialog from './ConsentDialog.vue'
 import PeerDevicesPanel from './PeerDevicesPanel.vue'
 import { useTasks } from '../composables/useTasks'
 import { useReceiving } from '../composables/useReceiving'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
 import { usePeerDevices } from '../composables/usePeerDevices'
+import { useBatchPrompt } from '../composables/useBatchPrompt'
+import { formatBytes } from '../utils/format'
+import type { PendingBatch } from '../types'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -235,6 +240,8 @@ onUnmounted(() => {
   stopPeer()
   stopTasks()
   stopReceiving()
+  batchDialog?.close()
+  batchDialog = null
 })
 
 /** 激活设备变化驱动目录加载/清空 */
@@ -248,22 +255,70 @@ watch(
     }
   },
 )
+
+// ==================== 传入批请求全局弹窗（宿主通用弹窗，预设模式） ====================
+
+/**
+ * 待确认批提示：由 useBatchPrompt 选择当前批，经宿主全局弹窗渲染
+ *（任何页面可见；计调式基于批创建时间 + 超时配置，迟到/切换后仍准确）。
+ * 超时默认拒绝由宿主 TTL 执行（reason=timeout），前端仅标记并推进。
+ */
+const prompt = useBatchPrompt(batches)
+let batchDialog: PluginDialogHandle | null = null
+
+function buildBatchDialogOptions(batch: PendingBatch): PluginDialogOptions {
+  const timeoutMs = settings.value.approvalTimeoutSec * 1000
+  return {
+    title: t('transfer.request.title'),
+    icon: 'M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3',
+    message: t('transfer.request.body', {
+      name: batch.peerName || t('transfer.peer.unknown'),
+      count: batch.files?.length ?? 1,
+      size: formatBytes(batch.totalSize),
+    }),
+    // 倒计时基于批创建时间 + 配置超时（迟到打开/排队续算仍准确）
+    countdownLabel: t('transfer.request.countdown'),
+    deadlineAt: batch.createdAt + timeoutMs,
+    actions: [
+      {
+        label: t('transfer.request.rejectAll'),
+        kind: 'default',
+        onClick: () => handleBatchReject(batch.batchId),
+      },
+      {
+        label: t('transfer.request.acceptAll'),
+        kind: 'primary',
+        onClick: () => handleBatchApprove(batch.batchId),
+      },
+    ],
+    // 必须明确选择「接收全部 / 拒绝全部」（无背景关闭、无关闭按钮）
+    closable: false,
+    closeOnBackdrop: false,
+    onTimeout: () => prompt.markTimeout(),
+    onClose: () => {
+      batchDialog = null
+    },
+  }
+}
+
+// 当前批变化 → 开 / 热更新 / 关（关闭动作由 onClose 清句柄，下一批自动重开）
+watch(
+  () => prompt.current.value,
+  (cur) => {
+    if (cur && !batchDialog) {
+      batchDialog = context.ui.showDialog(buildBatchDialogOptions(cur))
+    } else if (cur && batchDialog) {
+      batchDialog.update(buildBatchDialogOptions(cur))
+    } else if (!cur && batchDialog) {
+      batchDialog.close()
+      batchDialog = null
+    }
+  },
+)
 </script>
 
 <template>
   <div class="ft-view">
-    <!-- v2：批量传输请求全局弹窗（排队 + 倒计时超时默认拒绝；批 resolved 自动切换下一批） -->
-    <BatchRequestDialog
-      :batches="batches"
-      :approval-timeout-sec="settings.approvalTimeoutSec"
-      @approve="handleBatchApprove"
-      @reject="handleBatchReject"
-    />
-
-    <!-- 首连确认弹窗：编排常驻于插件激活期（useConsent），此处仅渲染当前待确认项；
-         不在面板时经状态栏项跳转过来后即可见可操作 -->
-    <ConsentDialog />
-
     <!-- 顶栏 -->
     <div class="ft-topbar">
       <div class="ft-peer-pill">
@@ -461,15 +516,8 @@ watch(
           </button>
         </div>
 
-        <!-- 工作态：远端文件表格（含对端存储权限提示） -->
+        <!-- 工作态：远端文件表格 -->
         <div v-else class="ft-browse">
-          <!-- 对端存储权限提示：列表为空且对端（移动端）可能未授予「所有文件访问权限」 -->
-          <Transition name="ft-fade">
-            <div v-if="notice === 'all_files_access_may_be_required'" class="ft-warning">
-              <span class="ft-warning-ico">⚠</span>
-              <span>{{ t('transfer.notice.storageAccess') }}</span>
-            </div>
-          </Transition>
           <RemoteFileTable
             :entries="fs.entries.value"
             :loading="fs.loading.value"

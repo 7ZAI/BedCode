@@ -23,7 +23,8 @@
     "timer:schedule",
     "transfer",
     "ui:sidebar",
-    "ui:statusbar"
+    "ui:statusbar",
+    "ui:dialog"
   ],
   "contributes": {
     "commands": [

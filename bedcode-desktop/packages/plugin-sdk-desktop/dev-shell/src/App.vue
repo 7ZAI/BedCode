@@ -28,6 +28,8 @@ import TerminalView from './views/TerminalView.vue'
 import TerminalInputRailDemo from './views/TerminalInputRailDemo.vue'
 import SettingsView from './views/SettingsView.vue'
 import LogPanel from './components/LogPanel.vue'
+// SDK 共享全局弹窗宿主（与宿主 DesktopLayout 同组件）
+import PluginGlobalDialog from '../../src/ui/PluginGlobalDialog.vue'
 
 type BaseTab = 'terminal' | 'toolbox' | 'plugins' | 'settings' | 'rail'
 const activeTab = ref<BaseTab>('toolbox')
@@ -286,5 +288,7 @@ window.addEventListener('beforeunload', () => {
       :visible-toasts="6"
       :toast-options="toastOptions"
     />
+    <!-- 插件全局弹窗（预设/组件两模式、定时关闭、按钮跳转） -->
+    <PluginGlobalDialog />
   </div>
 </template>

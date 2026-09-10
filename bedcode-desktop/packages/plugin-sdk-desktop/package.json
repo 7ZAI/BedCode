@@ -55,6 +55,10 @@
       "types": "./src/ui/terminal-input-rail.d.ts",
       "import": "./src/ui/TerminalInputRail.vue"
     },
+    "./ui/plugin-global-dialog": {
+      "types": "./src/ui/plugin-global-dialog.d.ts",
+      "import": "./src/ui/PluginGlobalDialog.vue"
+    },
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js"

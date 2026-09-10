@@ -155,7 +155,10 @@ export function useReceiving(context: PluginContext) {
   /** 通知权限是否已检查过（避免每次批到达都请求） */
   let notifyPermissionChecked = false
 
-  /** 窗口不可见且批未通知过时发系统通知（best-effort，失败仅记日志） */
+  /**
+   * 窗口不可见时发系统通知（best-effort，失败仅记日志）。
+   * 前台时全局弹窗已覆盖所有页面（宿主通用弹窗），无需通知。
+   */
   async function maybeNotifyPendingBatch(batch: PendingBatch): Promise<void> {
     if (!document.hidden || notifiedBatches.has(batch.batchId)) return
     try {
@@ -198,13 +201,13 @@ export function useReceiving(context: PluginContext) {
     const toast: TransferToast = { id, name, count, totalSize, mode }
     toasts.value = [...toasts.value, toast]
     if (mode === 'per-file') perFileToastId = id
-    // 自动消失：5s（batch）/ 3s（per-file）
+    // 自动消失：5s（batch）/ 3s（per-file，与合并窗口同值 = 窗口结束即消失）
     const timer = setTimeout(
       () => {
         dismissToast(id)
         if (perFileToastId === id) perFileToastId = null
       },
-      mode === 'batch' ? 5000 : 3000,
+      mode === 'batch' ? 5000 : PER_FILE_TOAST_WINDOW_MS,
     )
     dismissTimers.set(id, timer)
   }

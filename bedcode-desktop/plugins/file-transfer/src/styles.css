@@ -1305,39 +1305,9 @@
 
 /* ==================== v2 pending 批横幅（接收端应答） ==================== */
 
-/* ==================== v2 批量传输请求弹窗（全局模态，spec 14.4） ==================== */
+/* ==================== v2 批量传输请求弹窗（已迁移宿主全局弹窗，仅保留内容排版类） ==================== */
 
-.ft-dialog-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 24px;
-  background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-}
-
-.ft-dialog-card {
-  width: min(420px, 100%);
-  padding: 20px;
-  background: var(--bg-card);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ft-dialog-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
+/* 弹窗内标题 / 倒计时 / 动作行（ConsentDialog 内容复用） */
 .ft-dialog-title {
   font-size: 15px;
   font-weight: 600;
@@ -1356,13 +1326,6 @@
   font-weight: 600;
 }
 
-.ft-dialog-body {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-}
-
 .ft-dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1370,9 +1333,9 @@
   margin-top: 4px;
 }
 
-/* ==================== 首连确认弹窗（ConsentDialog，spec 决策 6） ==================== */
+/* ==================== 首连确认弹窗内容（已迁移宿主全局弹窗，仅保留内容排版类） ==================== */
 
-/* 卡片右上角关闭按钮（关闭等同拒绝）需要定位锚点 */
+/* 内容根：提供 close 按钮定位锚点（宿主卡片 bodyClass=p-5 提供内边距） */
 .ft-consent-card {
   position: relative;
 }
@@ -1436,13 +1399,19 @@
 .ft-consent-fp {
   width: 100%;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
   padding: 9px 12px;
   background: var(--bg-page);
   border: 1px solid var(--border);
   border-radius: var(--radius-btn);
   min-width: 0;
+}
+
+.ft-consent-fp-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .ft-consent-fp-label {
@@ -1452,36 +1421,33 @@
   white-space: nowrap;
 }
 
+/* 复制按钮：右对齐的轻量 ghost 按钮（复用 ft-text-btn 基础样式） */
+.ft-consent-fp-copy {
+  margin-left: auto;
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .ft-consent-fp-code {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 5px 8px;
   font-family: ui-monospace, monospace;
   font-size: 11px;
   color: var(--text-secondary);
-  overflow-wrap: anywhere;
-  text-align: right;
+  /* 分组间换行；组内绝不折行 */
+  overflow-wrap: normal;
 }
 
-/* 弹窗淡入 + 上浮（GPU 合成属性） */
-.ft-dialog-enter-active,
-.ft-dialog-leave-active {
-  transition: opacity 0.2s ease;
+.ft-consent-fp-block {
+  white-space: nowrap;
+  letter-spacing: 0.03em;
 }
 
-.ft-dialog-enter-active .ft-dialog-card,
-.ft-dialog-leave-active .ft-dialog-card {
-  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.ft-dialog-enter-from,
-.ft-dialog-leave-to {
-  opacity: 0;
-}
-
-.ft-dialog-enter-from .ft-dialog-card,
-.ft-dialog-leave-to .ft-dialog-card {
-  transform: translateY(8px);
-}
+/* 弹窗进出场（迁移宿主全局弹窗后停用） */
 
 /* ==================== v2 接收中 toast ==================== */
 
