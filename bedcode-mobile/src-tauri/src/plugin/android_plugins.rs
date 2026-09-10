@@ -23,6 +23,7 @@ mod multicast_lock;
 mod notifications;
 mod picker;
 mod saf;
+mod status_bar_style;
 
 // 保持外部路径 crate::plugin::android_plugins::xxx 不变
 pub use all_files::*;
@@ -37,3 +38,4 @@ pub use multicast_lock::*;
 pub use notifications::*;
 pub use picker::*;
 pub use saf::*;
+pub use status_bar_style::*;

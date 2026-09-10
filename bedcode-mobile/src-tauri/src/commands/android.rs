@@ -31,6 +31,24 @@ pub async fn set_screen_orientation(_orientation: String) -> Result<()> {
     Ok(())
 }
 
+/// 同步系统状态栏/导航栏图标外观（App 主题 → 系统栏）
+///
+/// edge-to-edge 下系统栏透明、App 背景延伸到其后：App 深色配浅色图标，
+/// 浅色配深色图标。仅 Android 生效（非 Android 空操作）。
+#[cfg(target_os = "android")]
+#[tauri::command]
+pub async fn set_status_bar_style(dark: bool) -> Result<()> {
+    tracing::info!("Syncing system bar appearance: dark={}", dark);
+    crate::plugin::android_plugins::set_status_bar_style(dark).await
+}
+
+/// 非 Android 平台忽略
+#[cfg(not(target_os = "android"))]
+#[tauri::command]
+pub async fn set_status_bar_style(_dark: bool) -> Result<()> {
+    Ok(())
+}
+
 /// 保持屏幕唤醒（防止锁屏）
 #[cfg(target_os = "android")]
 #[tauri::command]

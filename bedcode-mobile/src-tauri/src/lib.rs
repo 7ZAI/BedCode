@@ -70,6 +70,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
         .plugin(crate::plugin::android_plugins::multicast_lock_plugin())
+        .plugin(crate::plugin::android_plugins::status_bar_style_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -254,6 +255,7 @@ pub fn run() {
             commands::android::set_screen_orientation,
             commands::android::keep_screen_awake,
             commands::android::open_url_in_browser,
+            commands::android::set_status_bar_style,
             // Session Config (移动端使用内存存储)
             commands::mobile_commands::list_session_configs_mobile,
             commands::mobile_commands::get_session_config_mobile,
