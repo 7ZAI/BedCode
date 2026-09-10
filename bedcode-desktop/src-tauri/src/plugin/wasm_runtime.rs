@@ -520,26 +520,24 @@ pub(crate) async fn kill_process_group(pid: u32) -> bool {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        // 负 pid 表示进程组；process_group(0) 后组 id == 进程 pid
-        match tokio::process::Command::new("kill")
-            .args(["-9", &format!("-{}", pid)])
-            .output()
-            .await
-        {
-            Ok(o) if o.status.success() => true,
-            Ok(o) => {
-                tracing::warn!(
-                    pid,
-                    output = %String::from_utf8_lossy(&o.stderr),
-                    "kill_process_group: kill reported failure"
-                );
-                false
-            }
-            Err(e) => {
-                tracing::warn!(pid, error = %e, "kill_process_group: kill failed");
-                false
-            }
+        // 直接系统调用杀进程组（负 pgid = 组；process_group(0) 后组 id == 进程 pid）。
+        // 不使用外部 kill 命令：命令进程是第二个 tokio child，在
+        // current_thread（sh 的 wait）与 ambient multi_thread（kill 命令）双 runtime
+        // 共享全局 SIGCHLD handler 的场景下，kill 命令退出与目标被杀同时发生时，
+        // 两个 reaper 竞争 waitpid(-1) 回收 zombie，可能吞掉 sh 的退出通知导致
+        // wait() 永久挂起（CI flaky：process_kill_terminates_process_group）。
+        // 同步系统调用不产生 child，从根上消除该竞争。
+        let rc = unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        if rc == 0 {
+            return true;
         }
+        let err = std::io::Error::last_os_error();
+        tracing::warn!(
+            pid,
+            error = %err,
+            "kill_process_group: kill(-pid) failed"
+        );
+        false
     }
 }
 

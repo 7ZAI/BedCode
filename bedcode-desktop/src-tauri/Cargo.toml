@@ -24,6 +24,9 @@ tauri-plugin-process = "2"
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
 
+# 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
+libc = "0.2"
+
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 
