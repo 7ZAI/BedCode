@@ -53,10 +53,10 @@
   --mobile-terminal-bg: #0F0D0A;
   --mobile-terminal-header: rgba(29, 26, 21, 0.9);
 
-  /* 导航栏 */
+  /* 导航栏（激活色跟随主色 --mobile-accent：palette 切换时指示条/激活态同步变色，warm 下与主色同值不变） */
   --mobile-nav-bg: rgba(21, 19, 15, 0.9);
   --mobile-nav-border: rgba(236, 232, 220, 0.2);
-  --mobile-nav-active: #ECE8DC;
+  --mobile-nav-active: var(--mobile-accent);
   --mobile-nav-inactive: #6B6455;
 
   /* 输入框 - 终端输入区专属配色，比终端输出区稍亮 */
@@ -209,10 +209,10 @@ html:not(.dark) .mobile-app {
   --mobile-terminal-bg: #FAF9F5;
   --mobile-terminal-header: rgba(245, 244, 240, 0.95);
 
-  /* 导航栏 */
+  /* 导航栏（激活色跟随主色 --mobile-accent：palette 切换时指示条/激活态同步变色） */
   --mobile-nav-bg: rgba(253, 252, 250, 0.9);
   --mobile-nav-border: rgba(38, 35, 27, 0.1);
-  --mobile-nav-active: #1D1A14;
+  --mobile-nav-active: var(--mobile-accent);
   --mobile-nav-inactive: #ABA492;
 
   /* 输入框 - 输入面取页面色（桌面端卡片内输入框同规则），聚焦用墨色 accent */
