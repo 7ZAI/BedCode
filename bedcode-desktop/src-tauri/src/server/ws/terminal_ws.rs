@@ -471,10 +471,11 @@ impl Actor for TerminalWs {
                                 },
                             );
                         }
-                        // 回填连接历史断开时间
+                        // 回填连接历史断开时间（连接历史按 pairings.id 键控，须按指纹
+                        // 解析——claims.sub 是移动端自身 ID，直接传会匹配不到 open 行）
                         let db_guard = app_ctx.db().lock().await;
-                        if let Err(e) = db_guard.close_open_connection_event(device_id) {
-                            tracing::warn!(device_id = %device_id, error = %e, "Failed to close connection history");
+                        if let Err(e) = db_guard.close_open_connection_event_by_fingerprint(fp) {
+                            tracing::warn!(fingerprint = %fp, error = %e, "Failed to close connection history");
                         }
                     }
                     offline

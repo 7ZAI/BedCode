@@ -272,6 +272,18 @@ impl Database {
         Ok(())
     }
 
+    /// 按指纹回填断开时间（WS 断链路径专用）
+    ///
+    /// connection_history 的 device_id 是 pairings.id（写入路径按指纹解析），
+    /// 而 WS 会话持有的 device_id 是 JWT claims.sub（移动端自身 ID）——两者不自洽，
+    /// 直接关历史会永远匹配不到 open 行。统一按指纹解析成 pairings.id 再回填。
+    pub fn close_open_connection_event_by_fingerprint(&self, fingerprint: &str) -> Result<()> {
+        if let Some(device_id) = self.find_pairing_id_by_fingerprint(fingerprint)? {
+            self.close_open_connection_event(&device_id)?;
+        }
+        Ok(())
+    }
+
     /// 获取设备连接历史（按时间倒序）
     pub fn get_connection_history(&self, device_id: &str) -> Result<Vec<ConnectionHistory>> {
         let mut stmt = self.conn().prepare(
@@ -524,5 +536,91 @@ impl Database {
             .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(settings)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// 测试库：内存 SQLite + 完整 schema/迁移
+    fn test_db() -> Database {
+        let db = Database::new(Path::new(":memory:")).unwrap();
+        db.init_schema().unwrap();
+        db
+    }
+
+    /// 同一 uid_hash 下指纹再派生（移动端更新/重装）：合并回原配对记录
+    ///
+    /// 回归：设备身份再派生后桌面不得当新设备——连接历史 / connect_count /
+    /// 生物凭证都挂原记录 id
+    #[test]
+    fn add_pairing_merges_by_uid_hash_when_fingerprint_changes() {
+        let db = test_db();
+
+        let id1 = db
+            .add_pairing("Phone", "fp-old", "pk", Some("192.168.1.5"), Some("uid-hash-1"))
+            .unwrap();
+        // 同设备指纹变化的二次配对（更新/重装后的身份再派生）
+        let id2 = db
+            .add_pairing("Phone", "fp-new", "pk2", Some("192.168.1.6"), Some("uid-hash-1"))
+            .unwrap();
+
+        assert_eq!(id1, id2, "同 uid_hash 应复用原配对记录");
+
+        // 活跃配对只剩一条，指纹已迁移到新值，connect_count 累计
+        let pairings = db.get_pairings().unwrap();
+        assert_eq!(pairings.len(), 1);
+        assert_eq!(pairings[0].id, id1);
+        assert_eq!(pairings[0].device_fingerprint, "fp-new");
+        assert_eq!(pairings[0].uid_hash.as_deref(), Some("uid-hash-1"));
+        assert_eq!(pairings[0].connect_count, 2);
+
+        // 新指纹能解析到同一记录（连接历史据此不分裂）
+        let resolved = db.find_pairing_id_by_fingerprint("fp-new").unwrap();
+        assert_eq!(resolved.as_deref(), Some(id1.as_str()));
+    }
+
+    /// 不同 uid_hash（确属不同设备）不允许合并：各自独立配对
+    #[test]
+    fn add_pairing_keeps_distinct_uid_hashes_separate() {
+        let db = test_db();
+
+        let id_a = db.add_pairing("A", "fp-a", "pk", None, Some("uid-a")).unwrap();
+        let id_b = db.add_pairing("B", "fp-b", "pk", None, Some("uid-b")).unwrap();
+        let id_a2 = db.add_pairing("A", "fp-a", "pk", None, Some("uid-a")).unwrap();
+
+        assert_ne!(id_a, id_b);
+        assert_eq!(id_a, id_a2, "同指纹 upsert 仍复用原记录");
+        assert_eq!(db.get_pairings().unwrap().len(), 2);
+    }
+
+    /// 断开时间回填：按指纹解析 pairings.id 后关闭 open 行
+    ///
+    /// 回归：WS 断链传移动端 device_id（claims.sub）匹配不到记录键，
+    /// disconnected_at 永不回填
+    #[test]
+    fn close_open_connection_event_by_fingerprint_backfills_disconnect() {
+        let db = test_db();
+        let pairing_id = db.add_pairing("Phone", "fp-1", "pk", None, None).unwrap();
+
+        db.record_connection_event_by_fingerprint("fp-1", "qr", "success", Some("192.168.1.5"))
+            .unwrap();
+
+        // 直接用移动端 device_id 关闭：应匹配不到（旧路径的 bug 行为）
+        db.close_open_connection_event("mobile-device-id-not-pairing-id")
+            .unwrap();
+        let hist = db.get_connection_history(&pairing_id).unwrap();
+        assert_eq!(hist.len(), 1);
+        assert!(hist[0].disconnected_at.is_none(), "旧的错误键不应误关行");
+
+        // 按指纹关闭：正确解析并回填
+        db.close_open_connection_event_by_fingerprint("fp-1").unwrap();
+        let hist = db.get_connection_history(&pairing_id).unwrap();
+        assert!(
+            hist[0].disconnected_at.is_some(),
+            "按指纹关闭应回填 disconnected_at"
+        );
     }
 }
