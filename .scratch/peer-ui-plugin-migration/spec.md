@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 
-词汇表沿用 CONTEXT.md「对等网络」「文件传输」节；信任模型约束见 ADR 0002，传输栈见 ADR 0001。本 spec 是 `.scratch/peer-network/spec.md`（下称「父 spec」）的修正性后续：父 spec 落地时，对等网络的**服务层**正确落在宿主共享 crate，但其**前端页面与编排逻辑**被错误地内置进了两端宿主应用。本 spec 将这部分 UI 职责整体迁移到两端的 file-transfer 插件。
+词汇表沿用 CONTEXT.md「对等网络」「文件传输」节；信任模型约束见 ADR 0028，传输栈见 ADR 0027。本 spec 是 `.scratch/peer-network/spec.md`（下称「父 spec」）的修正性后续：父 spec 落地时，对等网络的**服务层**正确落在宿主共享 crate，但其**前端页面与编排逻辑**被错误地内置进了两端宿主应用。本 spec 将这部分 UI 职责整体迁移到两端的 file-transfer 插件。
 
 ## Problem Statement
 

@@ -32,7 +32,7 @@ Status: ready-for-agent
 
 **Non-goals**
 
-- TLS / 证书体系 —— 属 peer-net 对等网络域（ADR 0001），终端链路继续走应用层加密
+- TLS / 证书体系 —— 属 peer-net 对等网络域（ADR 0027），终端链路继续走应用层加密
 - file-transfer 插件传输流量 —— 已有独立加密层（f7ada90a），不受本 spec 影响
 - 公网/中继场景、跨子网直连
 - 完美前向保密的形式化证明（工程上做到临时密钥每会话/每请求全新即可）

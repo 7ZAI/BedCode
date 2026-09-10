@@ -2,7 +2,7 @@
 
 > 需求规格见同目录 `spec.md`（已确认，暂不实施）
 > 会话日期：2026-08-14 · 方式：grilling + domain-modeling
-> 关联：ADR `docs/adr/0017-remote-access-trusted-relay-tls.md`、`CONTEXT.md`「远程隧道」节
+> 关联：ADR `docs/adr/0026-remote-access-trusted-relay-tls.md`、`CONTEXT.md`「远程隧道」节
 
 ## 1. 目标
 
@@ -27,7 +27,7 @@
 
 | # | 决策 | 结论 |
 |---|------|------|
-| Q1 | 中继信任模型 | **可信中继（自购云服务器）**，不做端到端加密 → ADR 0017 |
+| Q1 | 中继信任模型 | **可信中继（自购云服务器）**，不做端到端加密 → ADR 0026 |
 | Q2 | 传输层 TLS | **域名 + Let's Encrypt 全链路 TLS**（两端公网段 wss/https，中继终止）；放弃自签名+插件带 CA（需 3 个移动端 TLS 注入扩展点且无私钥吊销机制） |
 | Q3 | E2E 密钥方案 | 不做（随 Q1 下桌） |
 | Q4 | 凭证加固 | **双层限速**：中继 per-IP 20 次/分钟 + 应用层每连接 5 次失败/冷却 60s；**JWT_SECRET 硬编码 → 每安装随机生成 + 持久化**（前置条件，已签发 JWT 作废） |

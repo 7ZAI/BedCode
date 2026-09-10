@@ -6,7 +6,7 @@
 //! 不暴露此缝；本票亦无 HTTP 面，引入 actix 只扩编译面（Android 目标尤其敏感）
 //! 而零测试收益。后续 HTTP 服务票在本模块定义的 [`ConnectionHandler`] 缝上挂
 //! 低层驱动（`actix_http::HttpService` 可驱动既有 IO 流）或并行 actix-server，
-//! 监听/TLS/闸门层零返工——此衔接意图即 ADR 0001「数据面栈复用方向」的落点。
+//! 监听/TLS/闸门层零返工——此衔接意图即 ADR 0027「数据面栈复用方向」的落点。
 //!
 //! ## 事件通道形态
 //!
@@ -89,7 +89,7 @@ pub enum TrustEvent {
 ///
 /// 身份已在 TLS 层证毕（证书指纹钉扎 + CertificateVerify 私钥持有证明），
 /// 上层无需也无法再做身份协商；`AsyncRead`/`AsyncWrite` 直接透传内层流，
-/// 供后续 HTTP/WS 服务票原样挂载（ADR 0001 衔接缝）。
+/// 供后续 HTTP/WS 服务票原样挂载（ADR 0027 衔接缝）。
 ///
 /// 内部用 tokio-rustls 的统一 `TlsStream` 枚举承载：拨号侧（client 变体）与
 /// 接听侧（server 变体）移交的连接对上层形态一致。
@@ -305,7 +305,7 @@ async fn serve_inbound(
     shutdown: &mut watch::Receiver<bool>,
 ) -> Result<()> {
     // TLS 握手：mandatory client auth + 形状校验 verifier 在此生效；
-    // 非 BedCode 客户端在此直接失败（ADR 0001 协议私有）
+    // 非 BedCode 客户端在此直接失败（ADR 0027 协议私有）
     let mut tls = tokio::select! {
         biased;
         _ = wait_for_shutdown(shutdown) => return Ok(()),

@@ -1,4 +1,4 @@
-//! rustls 配置与自定义证书 verifier：「证书指纹即身份」的 TLS 层落地（ADR 0002）。
+//! rustls 配置与自定义证书 verifier：「证书指纹即身份」的 TLS 层落地（ADR 0028）。
 //!
 //! ## Decision 1 —— 两层校验的不对称分工
 //!
@@ -148,7 +148,7 @@ impl ClientCertVerifier for ShapeCheckingClientCertVerifier {
 
     fn client_auth_mandatory(&self) -> bool {
         // mandatory client auth：非 BedCode 的 TLS 客户端直接握手失败，
-        // 符合 ADR 0001「协议私有是接受的成本」，也让闸门只面对已认证连接
+        // 符合 ADR 0027「协议私有是接受的成本」，也让闸门只面对已认证连接
         true
     }
 
