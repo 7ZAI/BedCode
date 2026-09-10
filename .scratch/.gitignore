@@ -1,4 +1,0 @@
-*.png
-*.mjs
-# pi agent 会话压缩产物（快照/指标/patch），不入库
-compactions/
