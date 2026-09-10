@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>课 0001 · Matt Pocock Skills 全景图与主线流程</title>
+<link rel="stylesheet" href="../assets/skill-course.css">
+</head>
+<body>
+<div class="sheet">
+
+<h1>课 0001 · 全景图与主线流程</h1>
+<p class="lead">你装了 25+ 个 Matt Pocock 技能，但大多数活其实只走<strong>一条主线</strong>。这节课让你拿到任何场景都能把它放到这条线上、说出该调哪个技能。</p>
+
+<h2>一个心智模型：idea → ship</h2>
+<p>别去背 25 个技能。先记<strong>一条主线</strong>，再把少数几个旁路挂在上面。主线长这样：</p>
+
+<div class="flow">
+  <div class="step"><b>grill-with-docs</b>磨想法<small class="branch">没代码库 → grill-me</small></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>to-spec</b>固化 spec<small class="branch">一次干完可跳过</small></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>to-tickets</b>拆成票<small class="branch">声明 blocking</small></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>implement</b>每票一窗口<small class="branch">内驱 tdd</small></div>
+  <div class="arrow">→</div>
+  <div class="step"><b>code-review</b>双轴评审<small class="branch">再 commit</small></div>
+</div>
+
+<p>三条 <strong>on-ramp</strong>（旁路）处理后并入主线 <code>implement</code>：</p>
+<ul>
+  <li><code>/triage</code> —— 别人提来的 raw issue 堆积，走 triage 角色机产出 agent-ready 票。</li>
+  <li><code>/diagnosing-bugs</code> —— 难 bug（一眼看不出、间歇、回归），先建就红反馈环再修。</li>
+  <li><code>/wayfinder</code> —— 巨型雾状工作、看不清路；产<strong>决策票</strong>不是交付，地图清了 handoff 到 <code>to-spec</code>。</li>
+</ul>
+
+<div class="callout tip">
+<p><strong>上下文卫生（最容易踩的坑）</strong>：从 <code>grill-with-docs</code> 到 <code>to-tickets</code> 保持<strong>一个未中断的 context window</strong>，让磨想法/spec/票建立在同一套思考上；<strong>每张</strong> implement 票开<strong>新</strong>窗口从 ticket 干。快满时阶段之间用内置 <code>/compact</code>，要 fork 用 <code>/handoff</code>。</p>
+</div>
+
+<h2>记不住时</h2>
+<p>先调 <code>/ask-matt</code> —— 它是这套技能的<strong>路由器</strong>，会回主线+on-ramp 全景图告诉你下一步走哪。完整的"选哪个/何时别用/最佳用法"在速查表里：</p>
+<p>→ <a href="../reference/skill-selector.html"><strong>速查表：skill-selector.html</strong></a>（建议打印贴墙）</p>
+
+<h2>小练习：这个场景该调哪个？</h2>
+<p>下面 4 题各给一个 BedCode 真实场景，选出<strong>最该先调</strong>的技能。答案等长，别被格式套路。</p>
+
+<!-- Q1 -->
+<div class="quiz" data-q="1">
+  <q>1. 用户在 GitHub 给 BedCode 提了个 bug 报告，描述含糊，你还没看过代码。该先调？</q>
+  <div class="opts">
+    <button class="opt" data-ok="false">implement</button>
+    <button class="opt" data-ok="true">triage</button>
+    <button class="opt" data-ok="false">diagnosing-bugs</button>
+    <button class="opt" data-ok="false">to-tickets</button>
+  </div>
+  <div class="fb"></div>
+</div>
+
+<!-- Q2 -->
+<div class="quiz" data-q="2">
+  <q>2. 你自己想给 BedCode 加"终端标签拖拽排序"功能，想法还比较模糊。该先调？</q>
+  <div class="opts">
+    <button class="opt" data-ok="false">implement</button>
+    <button class="opt" data-ok="false">wayfinder</button>
+    <button class="opt" data-ok="true">grill-with-docs</button>
+    <button class="opt" data-ok="false">prototype</button>
+  </div>
+  <div class="fb"></div>
+</div>
+
+<!-- Q3 -->
+<div class="quiz" data-q="3">
+  <q>3. BedCode 移动端 WebSocket 偶发断连，本地难复现，重启就好。该先调？</q>
+  <div class="opts">
+    <button class="opt" data-ok="false">triage</button>
+    <button class="opt" data-ok="true">diagnosing-bugs</button>
+    <button class="opt" data-ok="false">code-review</button>
+    <button class="opt" data-ok="false">tdd</button>
+  </div>
+  <div class="fb"></div>
+</div>
+
+<!-- Q4 -->
+<div class="quiz" data-q="4">
+  <q>4. implement 干完一张票，提交前必做的最后一步是？</q>
+  <div class="opts">
+    <button class="opt" data-ok="false">to-spec</button>
+    <button class="opt" data-ok="false">handoff</button>
+    <button class="opt" data-ok="false">grilling</button>
+    <button class="opt" data-ok="true">code-review</button>
+  </div>
+  <div class="fb"></div>
+</div>
+
+<h2>你今天拿到的</h2>
+<p>一条主线（idea → ship）+ 三条 on-ramp（triage / diagnosing-bugs / wayfinder）+ 一个路由器（ask-matt）。下次遇到活，先问"这是别人提的、难 bug、还是我自己的新想法"，然后对号入座。完整对照去翻 <a href="../reference/skill-selector.html">速查表</a>。</p>
+
+<h2>推荐精读</h2>
+<p><a href="file:///C:/Users/binblink/.agents/skills/ask-matt/SKILL.md"><strong>ask-matt/SKILL.md</strong></a> —— 整套技能的地图原文，主线和 on-ramp 的权威出处。一遍读完就能自己复述这条线。</p>
+
+<div class="callout">
+<p><strong>有不清楚的地方？</strong>直接问我（你的 agent 老师）。比如："为什么 triage 不能处理 to-tickets 自己产的票？" 或 "grill-with-docs 和 grill-me 到底啥区别？" —— 任何一题的反馈、速查表里某行、或主线哪一环都可以追问。</p>
+</div>
+
+<div class="meta">
+  <span>下一课预告：主线第 1 环 <code>grill-with-docs</code> 怎么磨想法 + 落 CONTEXT.md</span>
+  <span><a href="../MISSION.md">MISSION</a> · <a href="../reference/skill-selector.html">速查表</a></span>
+</div>
+
+</div>
+
+<script>
+// 极简 quiz 组件 —— 复用资产，后续课直接链这段逻辑
+(function(){
+  const FBS = {
+    1: { t: "triage", w: "对。别人提来的 <em>raw</em> issue 是 triage 的唯一战场：走五个角色标签，产出 ready-for-agent 票，再由 implement 接手。" ,
+         f: ["implement 要有 spec/ticket 才能干，现在票都还没成型。",
+             "diagnosing-bugs 是给<strong>难</strong> bug 的——这个还没看过代码，先 triage 分类再说。",
+             "to-tickets 是<strong>你自己</strong>把 spec 拆票用的；别人提的 raw issue 不走这。"] },
+    2: { t: "grill-with-docs", w: "对。有代码库 + 想法模糊 = grill-with-docs 的标准入口，它会落 CONTEXT.md/ADR 留痕。" ,
+         f: ["implement 要先有 spec，想法还没磨。",
+             "wayfinder 给<strong>看不清路、一次 session 装不下</strong>的巨型活；这个功能规模够小，磨清就行。",
+             "prototype 是定<strong>一个具体设计问题</strong>（UI/状态模型）；现在连要干啥都还模糊，先磨想法。"] },
+    3: { t: "diagnosing-bugs", w: "对。偶发、难复现、回归型 = 难 bug。它先建一条就红的反馈环再修，别先理论化。" ,
+         f: ["triage 是给<strong>别人提的</strong> issue 分类；这是你自己要查的 bug，不归类。",
+             "code-review 评的是已有 diff，现在还没改动可评。",
+             "tdd 造新行为用；修 bug 该走 diagnosing-bugs 的回归测试路径。"] },
+    4: { t: "code-review", w: "对。implement 的收尾就是跑 code-review 双轴评审（Standards vs Spec）再 commit。" ,
+         f: ["to-spec 在 implement <strong>之前</strong>，不是之后。",
+             "handoff 是跨 session 桥，不是提交前评审。",
+             "grilling 是磨想法的访谈原语，不是评审工具。"] }
+  };
+  document.querySelectorAll('.quiz').forEach(box=>{
+    const qid = box.dataset.q;
+    const fb = box.querySelector('.fb');
+    const opts = [...box.querySelectorAll('.opt')];
+    opts.forEach(opt=>{
+      opt.addEventListener('click', ()=>{
+        opts.forEach(o=>{ o.classList.remove('correct','wrong'); o.removeAttribute('data-picked'); });
+        opt.setAttribute('data-picked','true');
+        const ok = opt.dataset.ok === 'true';
+        const info = FBS[qid];
+        let html = '<b>'+(ok?'✓ 答对':'✗ 再想想')+'：</b> ' + (ok? info.w : ('正确答案是 <code>'+info.t+'</code>。')) + '<ul style="margin:.5rem 0 0;padding-left:1.2rem;font-size:.9rem">';
+        // 给每个错误选项一句解释
+        const labels = opts.map(o=>o.textContent.trim());
+        const correctLabel = info.t;
+        labels.forEach((lab,i)=>{
+          if(lab.toLowerCase() === correctLabel.toLowerCase()) return;
+          const why = info.f.shift() || '';
+          html += '<li><code>'+lab+'</code>：'+why+'</li>';
+        });
+        html += '</ul>';
+        opt.classList.add(ok?'correct':'wrong');
+        fb.innerHTML = html; fb.classList.add('show');
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>

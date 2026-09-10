@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Matt Pocock Skills 速查表</title>
+<link rel="stylesheet" href="../assets/skill-course.css">
+<style>
+  .grp { margin: 2.2rem 0 1rem; }
+  .grp > h2 { margin-bottom: .3rem; }
+  .grp > p.desc { color: var(--muted); font-size: .92rem; margin: 0 0 .6rem; }
+  td .tg { font-family: var(--mono); color: var(--accent); white-space: nowrap; }
+  td .no { color: var(--bad); font-size: .85rem; }
+  td .yes { color: var(--good); font-size: .85rem; }
+  .legend { font-family: var(--sans); font-size: .84rem; color: var(--muted); margin: .3rem 0 1.5rem; }
+</style>
+</head>
+<body>
+<div class="sheet">
+
+<h1>Matt Pocock Skills 速查表</h1>
+<p class="lead">"选哪个技能"的一页答案。按<strong>要干的活</strong>分组；每行：触发词、什么时候用、什么时候<strong>别</strong>用、最佳用法。</p>
+<p class="legend">触发格式统一为 <code>/技能名</code>。术语：主线 = idea → ship 的默认路径；on-ramp = 旁路并入主线；seam = 测试切入的公共边界。</p>
+
+<!-- ============ PRECONDITION ============ -->
+<div class="grp">
+<h2>0 · 前置（只跑一次）</h2>
+<p class="desc">用任何工程流之前先把仓库配好。BedCode 已完成，平时跳过。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/setup-matt-pocock-skills</span></td>
+  <td>新仓库第一次用这套技能：配 issue tracker、triage labels、domain docs</td>
+  <td>仓库已有 <code>docs/agents/issue-tracker.md</code> 等产物 —— 已经配过</td>
+  <td>它会先探查再逐节给推荐答案，<strong>逐项接受</strong>即可；切 tracker 或重启才需重跑</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ ROUTER ============ -->
+<div class="grp">
+<h2>1 · 路由（记不住时先问）</h2>
+<p class="desc">唯一一个"帮你选技能"的技能。自己不确定该调哪个时，先调它。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/ask-matt</span></td>
+  <td>拿不准哪个技能/流程匹配当前场景</td>
+  <td>你已经清楚要干嘛 —— 直接调目标技能，别多绕一跳</td>
+  <td>它返回主线 + on-ramp 全景图，按它给的路径走下一步</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ MAIN FLOW ============ -->
+<div class="grp">
+<h2>2 · 主线流程：idea → ship</h2>
+<p class="desc">绝大多数新功能走这条路。顺序：磨想法 → （切票）→ 实现 → 评审 → 提交。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/grill-with-docs</span></td>
+  <td><strong>有代码库</strong>，要把模糊想法磨清楚；状态化，落 <code>CONTEXT.md</code> + ADR</td>
+  <td>没代码库 → 用 <code>/grill-me</code>；想法已很清楚 → 直接 implement</td>
+  <td>从这一步起<strong>保持一个未中断的 context window</strong>直到 to-tickets 完成</td>
+</tr>
+<tr>
+  <td><span class="tg">/grill-me</span></td>
+  <td><strong>没代码库</strong>，磨任何计划/设计；无状态、不落本地</td>
+  <td>有代码库且想要留痕 → grill-with-docs</td>
+  <td>和 grill-with-docs 共用 <code>/grilling</code> 原语：一次一问、给推荐答案</td>
+</tr>
+<tr>
+  <td><span class="tg">/grilling</span></td>
+  <td>底层访谈原语，被上面几个技能内部驱动</td>
+  <td>通常不直接调 —— 让 grill-me / wayfinder 去调</td>
+  <td>事实去环境里查，<strong>决策归你</strong>，每题等你答才继续</td>
+</tr>
+<tr>
+  <td><span class="tg">/to-spec</span></td>
+  <td>对话磨清楚了，要把它固化成可构建的 spec（多 session 构建前）</td>
+  <td>一次 session 能干完的小活 → 跳过，直接 implement</td>
+  <td>wayfinder 地图清了也在这里并入：把 linked decisions 塌缩成 plan</td>
+</tr>
+<tr>
+  <td><span class="tg">/to-tickets</span></td>
+  <td>spec 要拆成可独立领取的 tracer-bullet 票，每张声明 blocking edges</td>
+  <td>单 session 小活；或 triage 产出的票（已经 agent-ready）</td>
+  <td>本地 tracker = <code>.scratch/&lt;feature&gt;/issues/</code> 一票一文件；按 blocker 顺序领</td>
+</tr>
+<tr>
+  <td><span class="tg">/implement</span></td>
+  <td>按 spec/ticket 实现一块工作</td>
+  <td>还没 spec/ticket —— 先 grill/to-spec；纯探索用 prototype</td>
+  <td>内部驱动 <code>/tdd</code>，结尾跑 <code>/code-review</code> 再 commit；<strong>每张票开新 context</strong></td>
+</tr>
+<tr>
+  <td><span class="tg">/tdd</span></td>
+  <td>要测试先行地造一个具体行为；红→绿循环</td>
+  <td>想要完整 spec 流程 —— 它只是 implement 的内件；重构属评审阶段不是循环内</td>
+  <td><strong>先定 seam 并和你确认</strong>；竖直切片（一测试一实现），别横向铺所有测试</td>
+</tr>
+<tr>
+  <td><span class="tg">/code-review</span></td>
+  <td>评审自某固定点（commit/branch/tag/merge-base）以来的 diff</td>
+  <td>还没东西可评；或评审对象不是 diff</td>
+  <td>双轴分开看：<strong>Standards</strong>（仓库规范+Fowler smell 基线）vs <strong>Spec</strong>（需求对齐），别合并排一名</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ ON-RAMPS ============ -->
+<div class="grp">
+<h2>3 · On-ramps（旁路并入主线）</h2>
+<p class="desc">不是你主动发起的新功能，而是"情况来了"——处理后并入主线 implement。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/triage</span></td>
+  <td><strong>别人提的</strong> bug/需求堆积，要走 triage 角色状态机、产出 agent-ready 票</td>
+  <td><code>/to-tickets</code> 自己产的票 —— 已经 agent-ready，别再 triage</td>
+  <td>五个角色标签：needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix</td>
+</tr>
+<tr>
+  <td><span class="tg">/diagnosing-bugs</span></td>
+  <td>难 bug：一眼看不出、间歇 flake、两个已知好状态间的回归</td>
+  <td>一眼能定的 bug —— 直接修；想边修边加功能的复杂改动</td>
+  <td>拒绝先理论化，先建<strong>一条就红的反馈环</strong>，再用回归测试修；找不到 seam 就 handoff 给 improve-codebase-architecture</td>
+</tr>
+<tr>
+  <td><span class="tg">/wayfinder</span></td>
+  <td>巨型雾状工作：一次 session 装不下、且<strong>看不清路线</strong></td>
+  <td>well-scoped 的小功能；或看得清路只是活多 —— 直接 to-spec/to-tickets</td>
+  <td>产 <strong>decision tickets</strong>（决策，不是交付）；地图清了 handoff 到 to-spec，<strong>不</strong>直接 implement</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ CROSSING SESSIONS ============ -->
+<div class="grp">
+<h2>4 · 跨 session（上下文管理）</h2>
+<p class="desc">context 快满或要分叉时用。一个 fork、一个 continue。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/handoff</span></td>
+  <td>对话满了/要分叉（如进 prototype session）；把对话压成 markdown，<strong>开新 session</strong>引用它</td>
+  <td>想留在同一对话 —— 用内置 <code>/compact</code></td>
+  <td>双向桥：handoff 出去 → 新 session 干 → handoff 回来带上结论</td>
+</tr>
+<tr>
+  <td><span class="tg">/compact</span> <small>（内置）</small></td>
+  <td>留在同一对话，在<strong>阶段之间</strong>压缩早期轮次</td>
+  <td>阶段中途 —— agent 会迷失；要留痕用 handoff</td>
+  <td>handoff 是 fork，compact 是 continue；别搞反</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ STANDALONE ============ -->
+<div class="grp">
+<h2>5 · 独立工具（主线之外）</h2>
+<p class="desc">不并入主线的独立技能，按需取用。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/prototype</span></td>
+  <td>一个设计问题纸面定不下：状态模型对不对、UI 该长啥样</td>
+  <td>要保留的代码 —— 它是 throwaway，留答案删代码</td>
+  <td>主线第 2 步的支路：handoff 出 → prototype → handoff 回</td>
+</tr>
+<tr>
+  <td><span class="tg">/research</span></td>
+  <td>把读资料腿活委托给<strong>后台 agent</strong>，对 primary sources 调查，留 cited markdown</td>
+  <td>当前目录内能查到的；要立刻同步拿答案的</td>
+  <td>产出带进主线 grill-with-docs 喂思考，<strong>不</strong>替代思考</td>
+</tr>
+<tr>
+  <td><span class="tg">/teach</span></td>
+  <td>跨多 session 学一个概念，用当前目录做有状态工作区</td>
+  <td>一次性问答；要立刻产出代码</td>
+  <td>你现在就在用这个 —— MISSION.md/lessons/reference 体系</td>
+</tr>
+<tr>
+  <td><span class="tg">/writing-great-skills</span></td>
+  <td>写或改技能，要可预测的技能设计词汇</td>
+  <td>只是用现成技能</td>
+  <td>本 mission 之外，单独学</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ CODEBASE HEALTH ============ -->
+<div class="grp">
+<h2>6 · 代码库健康 + 词汇层</h2>
+<p class="desc">不是功能开发，是养护 + 跑在其他技能下面的"词"。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/improve-codebase-architecture</span></td>
+  <td>有空档，扫"deepening 机会"，生成一个可带进主线的点子</td>
+  <td>赶功能 deadline；没整块时间评审</td>
+  <td>它是<strong>勘察</strong>找候选；选中的那个到 <code>/codebase-design</code> 长凳上去设计</td>
+</tr>
+<tr>
+  <td><span class="tg">/codebase-design</span></td>
+  <td>设计一个模块的<strong>形状</strong>：小接口 + 深_behaviour + 干净 seam</td>
+  <td>还没选中要深化的模块</td>
+  <td>tdd 和 improve-codebase-architecture 都讲这套词（depth/seam/adapter/locality）</td>
+</tr>
+<tr>
+  <td><span class="tg">/domain-modeling</span></td>
+  <td>磨<strong>领域</strong>语言：挑战模糊术语、消歧 overloaded 词、把难逆决策记成 ADR</td>
+  <td>是模块形状问题而非用词问题 → codebase-design</td>
+  <td>grill-with-docs 靠它保持 <code>CONTEXT.md</code> 是干净 glossary</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ UTILITIES ============ -->
+<div class="grp">
+<h2>7 · 外部能力 / 工具型</h2>
+<p class="desc">和主线正交的外部资源与杂项（部分来自本机 .claude/skills）。</p>
+<table>
+<thead><tr><th>技能</th><th>何时用</th><th>何时别用</th><th>最佳用法</th></tr></thead>
+<tbody>
+<tr>
+  <td><span class="tg">/find-docs</span> / <span class="tg">/ctx7</span></td>
+  <td>第三方库的<strong>最新版</strong> API 文档/用法（Tauri 2 fs、React hook 等）</td>
+  <td>本仓库自有代码的问题；纯 git 操作</td>
+  <td>训练数据可能过时，API 细节一律先查不靠记忆</td>
+</tr>
+<tr>
+  <td><span class="tg">/firecrawl</span></td>
+  <td>web 搜索/抓取/交互（需登录点击的页面也行）</td>
+  <td>本地文件/git/部署/代码编辑</td>
+  <td>比内置 fetch 更强，做实时调研</td>
+</tr>
+<tr>
+  <td><span class="tg">/gh</span></td>
+  <td>GitHub 操作：PR/issue/release/Actions（经 <code>gh</code> CLI）</td>
+  <td>纯本地 git（commit/branch/stash）</td>
+  <td>开 PR、查 CI、建 release 用它</td>
+</tr>
+<tr>
+  <td><span class="tg">/find-skills</span></td>
+  <td>"有没有能干 X 的技能"、想装新技能</td>
+  <td>已知用哪个</td>
+  <td>发现/安装可复用技能</td>
+</tr>
+<tr>
+  <td><span class="tg">/resolving-merge-conflicts</span></td>
+  <td>进行中的 merge/rebase 冲突</td>
+  <td>没在冲突中</td>
+  <td>按它流程逐步解，别手乱</td>
+</tr>
+<tr>
+  <td><span class="tg">/frontend-styles</span> <small>（BedCode 专属）</small></td>
+  <td>改 CSS/layout/animation/theme/移动端安全区</td>
+  <td>纯逻辑/后端改动</td>
+  <td>BedCode 约定：碰任何 CSS 类都要先加载它</td>
+</tr>
+</tbody>
+</table>
+</div>
+
+<!-- ============ DECISION TREE ============ -->
+<div class="grp">
+<h2>速决：拿到一个活，怎么走？</h2>
+<ol>
+  <li><strong>是别人提来的 raw issue？</strong> → <code>/triage</code>，产出 ready-for-agent 票后并入 implement。</li>
+  <li><strong>是难 bug？</strong> → <code>/diagnosing-bugs</code>；找不到 seam 再 handoff 给 improve-codebase-architecture。</li>
+  <li><strong>大到一次 session 装不下又看不清路？</strong> → <code>/wayfinder</code>；地图清了 handoff 到 to-spec。</li>
+  <li><strong>是自己的新想法？</strong> → 有代码库 <code>/grill-with-docs</code>，没代码库 <code>/grill-me</code>。</li>
+  <li>磨清楚后：<strong>一次 session 干得完？</strong>直接 <code>/implement</code>；干不完 → <code>/to-spec</code> → <code>/to-tickets</code> → 每张票开新窗口 <code>/implement</code>。</li>
+  <li>implement 内部：红→绿 <code>/tdd</code>（先定 seam），完事 <code>/code-review</code> 双轴评审，再 commit。</li>
+  <li><strong>context 快满？</strong> 阶段之间用内置 <code>/compact</code>；要 fork 出去用 <code>/handoff</code>。</li>
+</ol>
+</div>
+
+<div class="meta">
+  <span>本表是 <a href="../lessons/0001-mattpocock-skill-map.html">课 0001 · 全景图</a> 的配套速查</span>
+  <span>信源：<a href="file:///C:/Users/binblink/.agents/skills/ask-matt/SKILL.md">ask-matt/SKILL.md</a></span>
+</div>
+
+</div>
+</body>
+</html>

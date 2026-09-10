@@ -1,0 +1,136 @@
+/* skill-course.css — shared stylesheet for the Matt Pocock Skills course
+   Tufte-inspired: serif body, generous margins, narrow column, prints well. */
+
+:root {
+  --bg: #fbfaf7;
+  --ink: #1a1a1a;
+  --muted: #6b6b66;
+  --rule: #d8d4cc;
+  --accent: #8a1538;     /* deep oxblood for headings/links */
+  --accent-soft: #f4e9ec;
+  --code-bg: #f3f1ec;
+  --good: #2f6b3e;
+  --bad: #9a2a2a;
+  --maxw: 720px;
+  --serif: "ETBembo","Charter","Iowan Old Style","Georgia","Cambria",serif;
+  --sans: -apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+  --mono: "SFMono-Regular",ui-monospace,"JetBrains Mono","Cascadia Code",Consolas,monospace;
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 17px; -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--serif);
+  line-height: 1.55;
+  font-feature-settings: "kern","liga","onum";
+  text-rendering: optimizeLegibility;
+}
+
+/* ---- layout shell ---- */
+.sheet {
+  max-width: var(--maxw);
+  margin: 0 auto;
+  padding: 4rem 2rem 6rem;
+}
+
+/* ---- typography ---- */
+h1, h2, h3, h4 { font-family: var(--sans); font-weight: 600; line-height: 1.25; color: #111; }
+h1 {
+  font-size: 2.1rem; letter-spacing: -0.01em; margin: 0 0 .4rem;
+  font-variant: small-caps; letter-spacing: .04em; color: var(--accent);
+}
+h2 { font-size: 1.35rem; margin: 2.4rem 0 .7rem; border-bottom: 1px solid var(--rule); padding-bottom: .25rem; }
+h3 { font-size: 1.1rem; margin: 1.6rem 0 .5rem; color: #222; }
+h4 { font-size: .95rem; margin: 1.2rem 0 .4rem; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+
+p { margin: .7rem 0; }
+a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(138,21,56,.25); }
+a:hover { border-bottom-color: var(--accent); }
+
+small { color: var(--muted); }
+em { font-style: italic; }
+strong { font-weight: 600; }
+
+/* ---- code ---- */
+code, kbd, samp { font-family: var(--mono); font-size: .88em; }
+code {
+  background: var(--code-bg); padding: .12em .38em; border-radius: 3px;
+  border: 1px solid #e7e3da; color: #7a1530;
+}
+pre {
+  background: var(--code-bg); border: 1px solid var(--rule); border-radius: 4px;
+  padding: .9rem 1.1rem; overflow-x: auto; font-size: .85rem; line-height: 1.5;
+}
+pre code { background: none; border: 0; padding: 0; color: var(--ink); }
+
+/* ---- callouts ---- */
+.callout {
+  border-left: 3px solid var(--accent); background: var(--accent-soft);
+  padding: .8rem 1.1rem; margin: 1.3rem 0; font-size: .96rem;
+}
+.callout.warn { border-left-color: var(--bad); background: #f9ececec; }
+.callout.tip  { border-left-color: var(--good); background: #ecf3ed; }
+.callout p:first-child { margin-top: 0; } .callout p:last-child { margin-bottom: 0; }
+
+/* ---- tables (used by the selector reference) ---- */
+table { width: 100%; border-collapse: collapse; font-size: .9rem; margin: 1rem 0; }
+th, td { text-align: left; vertical-align: top; padding: .5rem .6rem; border-bottom: 1px solid var(--rule); }
+th { font-family: var(--sans); font-weight: 600; color: #444; border-bottom: 2px solid #b8b2a6; }
+tr:hover td { background: #f6f3ee; }
+
+/* ---- flow diagram (CSS-only) ---- */
+.flow { display: flex; flex-wrap: wrap; align-items: stretch; gap: 0; margin: 1.4rem 0; }
+.flow .step {
+  flex: 1 1 auto; min-width: 120px; border: 1px solid var(--rule); border-radius: 5px;
+  padding: .6rem .7rem; background: #fff; font-family: var(--sans); font-size: .82rem;
+}
+.flow .step b { color: var(--accent); display: block; font-size: .9rem; }
+.flow .arrow {
+  flex: 0 0 auto; align-self: center; padding: 0 .35rem; color: var(--muted);
+  font-family: var(--sans); font-size: 1.1rem;
+}
+.flow .branch { font-size: .72rem; color: var(--muted); margin-top: .3rem; }
+
+/* ---- quiz widget ---- */
+.quiz { border: 1px solid var(--rule); border-radius: 6px; padding: 1.1rem 1.2rem; margin: 1.5rem 0; background: #fff; }
+.quiz q { display: block; font-style: italic; margin-bottom: .8rem; }
+.quiz .opts { display: grid; gap: .55rem; }
+.quiz .opt {
+  display: block; cursor: pointer; border: 1px solid var(--rule); border-radius: 4px;
+  padding: .55rem .8rem; font-family: var(--sans); font-size: .9rem; background: #fcfbf8;
+  transition: background .12s, border-color .12s;
+}
+.quiz .opt:hover { background: #f4eee2; }
+.quiz .opt[data-picked="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.quiz .opt.correct { border-color: var(--good); background: #e6f1e8; }
+.quiz .opt.wrong   { border-color: var(--bad);  background: #f6e6e6; }
+.quiz .opt .mark { float: right; font-size: .78rem; color: var(--muted); }
+.quiz .fb { margin-top: .9rem; font-size: .92rem; display: none; line-height: 1.5; }
+.quiz .fb.show { display: block; }
+.quiz .fb b { font-family: var(--sans); }
+
+/* ---- meta footer ---- */
+.meta {
+  margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--rule);
+  font-family: var(--sans); font-size: .82rem; color: var(--muted); display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem;
+}
+.meta a { color: var(--muted); border: 0; }
+.meta a:hover { color: var(--accent); }
+
+.lead { font-size: 1.08rem; color: #333; margin: 1rem 0 1.4rem; }
+
+/* ---- print ---- */
+@media print {
+  body { background: #fff; font-size: 10.5pt; }
+  .sheet { max-width: 100%; padding: 1.2cm 1.4cm; }
+  .quiz .opt, .flow .step { border: 1px solid #999; }
+  a { color: #333; border-bottom: 0; }
+  .callout { break-inside: avoid; }
+  h2 { break-after: avoid; }
+  tr { break-inside: avoid; }
+}

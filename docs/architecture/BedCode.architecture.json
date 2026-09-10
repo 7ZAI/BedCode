@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "BedCode",
+    "locale": "zh-CN",
+    "output": "docs/architecture/BedCode.architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/7ZAI/BedCode",
+      "revision": "2289b441898ede9ae39d3c39a3f6d7c414cd307b"
+    },
+    "viewBox": [900, 430]
+  },
+  "components": [
+    {
+      "id": "d_ui",
+      "type": "frontend",
+      "label": "Desktop UI",
+      "sublabel": "Vue 3 · Tauri 2.0",
+      "pos": [60, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src/App.vue", "label": "Vue 3 frontend" }
+      ]
+    },
+    {
+      "id": "d_rust",
+      "type": "backend",
+      "label": "Desktop Rust Host",
+      "sublabel": "PTY · Session · Events · SQLite",
+      "pos": [60, 150],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/lib.rs", "label": "Rust backend" }
+      ]
+    },
+    {
+      "id": "d_web",
+      "type": "backend",
+      "label": "Actix Web Server",
+      "sublabel": "HTTP + WS · link_crypto",
+      "pos": [60, 240],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/server/app.rs", "label": "Actix Web" }
+      ]
+    },
+    {
+      "id": "mdns",
+      "type": "messagebus",
+      "label": "mDNS Discovery",
+      "sublabel": "LAN service discovery",
+      "pos": [370, 60],
+      "size": [180, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/mdns.rs", "label": "Broadcast" }
+      ]
+    },
+    {
+      "id": "ws",
+      "type": "messagebus",
+      "label": "WebSocket",
+      "sublabel": "terminal bidirectional",
+      "pos": [370, 150],
+      "size": [180, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/server/ws.rs", "label": "Server" },
+        { "path": "bedcode-mobile/src-tauri/src/connection/ws_client.rs", "label": "Client" }
+      ]
+    },
+    {
+      "id": "http",
+      "type": "backend",
+      "label": "HTTP REST",
+      "sublabel": "plugin hooks · files",
+      "pos": [370, 240],
+      "size": [180, 60],
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/server/controllers.rs", "label": "Controllers" }
+      ]
+    },
+    {
+      "id": "m_ui",
+      "type": "frontend",
+      "label": "Mobile UI",
+      "sublabel": "Vue 3 · Tauri / Android",
+      "pos": [640, 60],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-mobile/src/App.vue", "label": "Vue 3 frontend" }
+      ]
+    },
+    {
+      "id": "m_rust",
+      "type": "backend",
+      "label": "Mobile Rust Host",
+      "sublabel": "Connection · mDNS · Auth · SAF · OCR",
+      "pos": [640, 150],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-mobile/src-tauri/src/lib.rs", "label": "Rust backend" }
+      ]
+    },
+    {
+      "id": "m_native",
+      "type": "backend",
+      "label": "Android Native",
+      "sublabel": "SAF · Camera · Biometric · Kotlin",
+      "pos": [640, 240],
+      "size": [200, 60],
+      "sources": [
+        { "path": "bedcode-mobile/src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/SafTransferPlugin.kt", "label": "Kotlin plugins" }
+      ]
+    },
+    {
+      "id": "wasm",
+      "type": "cloud",
+      "label": "WASM Plugin Sandbox",
+      "sublabel": "wasmtime · wit ABI",
+      "pos": [60, 340],
+      "size": [350, 70],
+      "tag": "dual-side",
+      "sources": [
+        { "path": "bedcode-desktop/src-tauri/src/plugin.rs", "label": "Desktop runtime" },
+        { "path": "bedcode-mobile/src-tauri/src/plugin.rs", "label": "Mobile runtime" }
+      ]
+    },
+    {
+      "id": "plugins",
+      "type": "external",
+      "label": "Built-in Plugins",
+      "sublabel": "ai-chatbox · auto-task · file-transfer · scheduler · ocr",
+      "pos": [500, 340],
+      "size": [370, 70],
+      "sources": [
+        { "path": "bedcode-desktop/plugins/ai-chatbox/plugin.json", "label": "Desktop plugins" },
+        { "path": "bedcode-mobile/plugins/ocr/plugin.json", "label": "Mobile plugins" }
+      ]
+    }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Desktop host", "wraps": ["d_ui", "d_rust", "d_web"] },
+    { "kind": "region", "label": "Mobile remote", "wraps": ["m_ui", "m_rust", "m_native"] }
+  ],
+  "connections": [
+    { "from": "d_ui", "to": "d_rust", "label": "Tauri commands", "variant": "emphasis", "labelAt": [160, 135] },
+    { "from": "d_rust", "to": "d_web", "label": "sessions", "variant": "emphasis", "labelAt": [160, 225] },
+    { "from": "d_web", "to": "mdns", "label": "advertise", "variant": "dashed" },
+    { "from": "mdns", "to": "m_rust", "label": "discover", "variant": "dashed" },
+    { "from": "d_web", "to": "ws", "label": "serve", "variant": "emphasis", "labelDx": -30 },
+    { "from": "ws", "to": "m_rust", "label": "terminal", "variant": "emphasis", "labelDy": 15 },
+    { "from": "d_web", "to": "http", "label": "serve", "variant": "emphasis", "labelDy": 15 },
+    { "from": "http", "to": "m_rust", "label": "REST", "variant": "emphasis" },
+    { "from": "m_ui", "to": "m_rust", "label": "Tauri commands", "variant": "emphasis", "labelAt": [740, 135] },
+    { "from": "m_rust", "to": "m_native", "label": "Android calls", "variant": "emphasis", "labelAt": [740, 225] },
+    { "from": "plugins", "to": "wasm", "label": "loaded", "variant": "emphasis" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Desktop host",
+      "items": [
+        "Tauri 2.0 + Vue 3 + Rust (Tokio)",
+        "PTY · Session · Events · SQLite 持久化",
+        "Actix Web：HTTP + WS + link_crypto 链路加密"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Mobile remote",
+      "items": [
+        "Tauri 2.0 / Android + Vue 3",
+        "Connection · Router · mDNS · Auth · SAF · OCR",
+        "Android Native Layer（Kotlin 插件）"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "WASM plugin sandbox",
+      "items": [
+        "wasmtime 组件运行时 · 权限模型 · wit ABI 桥接",
+        "双端一致：ai-chatbox / auto-task / file-transfer / scheduler / ocr",
+        "崩溃隔离 · 热插拔 · 即启即用"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Cross-device links",
+      "items": [
+        "WebSocket：终端双向流（xterm.js 模拟）",
+        "HTTP REST：插件 hooks + 文件传输",
+        "mDNS：局域网设备发现（二维码 / 手动配对）"
+      ]
+    }
+  ]
+}
