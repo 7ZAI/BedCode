@@ -14,6 +14,24 @@ BedCode：局域网远程终端应用——桌面端作为主机运行终端会�
 
 ---
 
+## Architecture Vision（架构愿景与演化方向）
+
+**最终目标：无业务内核（Businessless Kernel）** —— 底座内核零业务，所有产品能力插件化，可扩展任意应用。
+
+- **内核只含「应用无关的通用引擎」**：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时
+- **一切产品概念都是插件**：会话、终端、设备连接、文件传输、AI、调度…… 全部插件化
+- **裁剪线（ADR 0022）**：宿主能力只暴露「离宿主无法实现、且无业务语义」的原语；业务编排一律在插件层
+
+**渐进演化**：先基础设施后产品核心。核心业务（会话/终端/设备连接/认证）**暂留宿主侧**，按阶段逐步下沉。路线见 `.scratch/plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/platform-kernel/spec.md`。
+
+**高内聚、低耦合**（强制架构原则）：
+
+- 内核只做引擎原语与安全边界，禁止携带产品语义
+- 业务代码内聚到各自插件工程；插件间只经互调 API（ADR 0017）与消息总线通信，禁止跨插件直接耦合
+- 模块内高内聚、模块间低耦合；新增能力优先评估「放哪个插件」而非「改内核」
+
+---
+
 ## Build & Run
 
 项目统一使用 **pnpm** 作为前端包管理器（各独立工程/workspace 各自维护 `pnpm-lock.yaml`）。
@@ -70,9 +88,9 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 ### Logging
 
-统一 `tracing`。Android 统一写 `tracing::` 宏，自动转发 logcat。
+统一 `tracing`（Android 自动转发 logcat）。
 
-#### 级别语义（何时用什么级别）
+**级别语义**：
 
 | 级别 | 适用场景 | 反例（禁止） |
 | --- | --- | --- |
@@ -81,44 +99,20 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 | `warn!` | 可恢复异常/重试：过滤拒绝、授权降级、超时重试、缓存禁用、队列丢弃 | 已由调用方处理的正常分支 |
 | `error!` | 不可恢复异常：操作失败且影响功能；`AppError` 传播点 | panic hook 内（只用 `eprintln!`）；guest 自报的可处理错误 |
 
-#### 日志格式规范（桌面端）
+**结构化字段（强制）**：`session_id` / `device_id` / `plugin_id` / `request_id` / `batch_id` / `node_id` 一律 `key = %value` 字段形式，**禁止拼进消息字符串**；消息只写人类可读描述（中文 + 英文术语），错误信息必须带操作上下文。
 
-- **行结构**：文件层文本格式 = `时间(UTC) 级别 target: 消息 字段` + `at file:line` + 当前 span 链（Full 格式默认打印，无需配置）；控制台 = 本地时间毫秒 + 品红插件标签；json 模式 = 单行 JSON（level/time/target/fields/line_number）
-- **关联键必须用结构化字段**：`session_id`、`device_id`、`plugin_id`、`request_id`、`batch_id`、`node_id` 等一律 `key = %value` / `key = ?value` 字段形式，**禁止拼进消息字符串**——AI 按 key grep 全链路的前提；消息只写人类可读描述
-- **消息文案**：中文说明 + 英文技术术语；错误信息必须带操作上下文（什么操作在哪失败），禁止裸字符串；消息内不复述字段已表达的信息
-- **错误传播**：关键调用链在错误构造/转换处带操作描述（`AppError::X(format!(...))` 或 `anyhow::Context` 跨桥），禁止裸 `?` 透传
-- **AI 排错索引**：`request_id`（HTTP 请求）/ `session_id`（会话）是跨模块链路主索引，span 插桩（`#[tracing::instrument]`）优先于手写字段；`error.*.log` 单文件定位断点
-- **插件日志**：guest 日志带 `[plugin:xxx]` 前缀（控制台品红渲染，宿主区分插件/宿主日志），target=`bedcode_lib::plugin::plugin_log`，级别动态真实
+**异步写盘**：文件层走 `tracing-appender` non_blocking（有界缓冲 20000 行，溢出丢行并计数告警）；控制台 stdout 可同步；panic hook 裸文件写；测试用 `with_default` + 临时目录，禁止污染真实日志目录。
 
-#### 异步日志（non_blocking）规范
+**插件日志**：见 Plugin Development（target=`bedcode_lib::plugin::plugin_log` / trap backtrace 不得关闭 / per-plugin 级别 `BEDCODE_PLUGIN_LOG`）。
 
-- **文件层必须异步写盘**：`runtime.*.log` / `error.*.log` / `frontend.*.log` 全部走 `tracing-appender` non_blocking（worker 线程 + 有界缓冲），**禁止**在 Tokio/actix 工作线程直接做同步文件 I/O（PTY 输出、WS 广播等高频路径的 syscall 会造成延迟抖动）
-- **何时允许同步写**：控制台 stdout（dev 调试通道、量低）可同步；panic hook 的 `panic.log` 裸文件写（进程可能已不可救药，non_blocking worker 不可依赖）
-- **不依赖必然落盘**：non_blocking 有界缓冲（20000 行）溢出会丢行并计数告警（`spawn_log_maintenance` 每 10 分钟检查），关键证据（error）如需保证持久化应额外落库，不得假设日志一定在
-- **测试日志**：用 `with_default` + 临时目录，禁止写全局 subscriber、禁止污染真实日志目录
+| 端 | 落盘 |
+| --- | --- |
+| 桌面端 | 始终写文件 `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）/ `error.*.log` 仅 ERROR / `frontend.*.log` 仅 dev，按天轮转 |
+| 移动端 | `pnpm run tauri:android:dev:log` 落盘 `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（可 grep）；release 走 logcat |
 
-#### 插件 WASM 日志（桌面端）
+**前端 console 日志（仅 debug）**：`logger.*` → `report_frontend_log` → tracing（target=`frontend`），release 自动剥离。
 
-- **trap 必须带 WASM 调用栈**：wasmtime backtrace 已开启（`Config::wasm_backtrace_max_frames(Some(32))` 显式钉死，详情走 `WasmBacktraceDetails::Environment`），插件 panic/栈溢出/燃料耗尽/内存越界的错误串携带 `wasm backtrace:` 函数栈（names section 函数名，release 构建即有——任何改动不得关闭该配置）；trap 分支统一有宿主侧 `error!(plugin_id, export, trap = ...)` 日志（`component.rs::log_trap`），调用方静默也不丢崩溃证据
-- **调试模式**：`BEDCODE_PLUGIN_DEBUG=1`（dev 构建下）→ 插件 wasm 以 debug profile 构建（`plugins/*/scripts/build.js` 按开关切 profile，产物保留 DWARF）+ 宿主自动置 `WASMTIME_BACKTRACE_DETAILS=1` 开行号解析（trap 错误串带 `file:line`）+ 燃料预算 ×32 放大（`fuel_per_call`，debug 产物指令膨胀不误杀）；release 构建忽略该变量。启用后重启插件构建（`pnpm run tauri:dev` 自动经 dev-run.js 继承 env）。详见 `.scratch/plugin-wasm-logging/spec.md`
-- **per-plugin 级别**：`BEDCODE_PLUGIN_LOG=com.bedcode.auto-task=trace,com.bedcode.file-transfer=info`（逗号分隔 `id=level`，非法条目容错忽略）在 `emit_plugin_log` 入口按插件过滤，低于阈值直接丢弃——避免全局热调刷爆 runtime；未列出的插件沿用宿主全局过滤语义（`thread_local` 一次性解析缓存，仅会话态不落配置）
-
-| 端 | 落盘方式 | 位置 |
-| --- | --- | --- |
-| 桌面端 | 始终写文件（dev/release） | `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）、`error.*.log` 仅 ERROR、`frontend.*.log`（仅 dev），按天轮转 |
-| 移动端 | 电脑端落盘仅 `pnpm run tauri:android:dev:log`（普通 dev 只打控制台）；release 走 logcat | `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（无 ANSI 码，可 grep；含 `frontend` 目标前端日志） |
-
-**前端 console 日志（仅 debug 构建，AI agent 抓取前端控制台输出的通道）**：前端 `logger.*`（`src/utils/frontendLogger.ts`，loglevel methodFactory 接管；旧 `devConsoleRelay.ts` 覆盖方案已随 loglevel 迁移移除）在 dev 构建下先落 DevTools 控制台、再攒批转发 → Rust `commands/dev_logs.rs::report_frontend_log`（`#[cfg(debug_assertions)]` 注册，仅 `tauri:dev` / `tauri:android:dev` 生效）→ tracing（target=`frontend`）。获取方式：
-
-- 桌面端：直接读 `frontend.*.log`（单独文件，纯前端日志；同批事件也混入 `runtime.*.log`）
-- 移动端：`pnpm run tauri:android:dev:log` 落盘文件 grep `frontend`（tracing → logcat）
-- release 两端自动剥离（Rust 命令不注册 + 前端 `import.meta.env.DEV` no-op），无需额外清理
-
-实际路径确认：桌面端 dev 控制台首行 `Logging initialized.`；移动端 `dev:log` 启动打印 `[dev-log] 电脑端日志落盘: <路径>`。
-
-**移动端无 dev 日志排查（必读）**：若落盘文件停在 `Starting: Intent` 后无 logcat 行，先查 tauri CLI 是否卡在 `adb shell pidof` 轮询（`ps aux | grep 'adb shell pidof'` + `/tmp/adb.1000.log` 是否每 2 秒一条 `Address already in use` 崩溃）——这是 adb client 37.0.1 的 fd0 bug（详见 `.scratch/adb-fd0-bug/`）。修复已由 `dev-run.js` 预检自愈（`scripts/adb-fd0-shim.sh` 替换 `platform-tools/adb` → `adb.real`）；platform-tools 升级会还原真二进制，下次 dev 会话自动重装；若 `adb.real` 丢失需重新安装 platform-tools。
-
-排查链路问题优先 grep 两端 `runtime.*.log`：`file_service`、`peer_changed`、`MessageBus`、`reqwest::connect`（代理劫持痕迹 `proxy(...) intercepts`）。
+**移动端无 dev 日志排查**：落盘停在 `Starting: Intent` 后无 logcat 行时，查 tauri CLI 是否卡 `adb shell pidof` 轮询（adb client 37.0.1 fd0 bug，见 `.scratch/adb-fd0-bug/`，`dev-run.js` 预检自愈）。排查链路问题优先 grep 两端 `runtime.*.log`：`file_service` / `peer_changed` / `MessageBus` / `reqwest::connect`。
 
 ---
 
@@ -131,6 +125,21 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 ### Styles & Layout（必读 skill，强制）
 
 任何前端 UI 改动（组件、布局、CSS/Tailwind 类、design token、动画/过渡、主题、响应式、安全区、字体/行高）**必须先加载 `frontend-styles` skill 并以其规范为准**，禁止凭通用前端经验自行发挥。配套文件位于 `.agents/skills/frontend-styles/`。
+
+---
+
+## Plugin Development（插件开发规范）
+
+插件是 BedCode 的能力单元，位于 `plugins/<plugin-id>/`，每个插件独立 package：`plugin.json` 元数据 + `rust/`（WASM 后端）+ `src/`（TS 前端）+ `vite.config.ts`。
+
+- **契约单一事实来源**：宿主/插件能力边界定义在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`），改动需双端同步 + ABI bump；wasmtime 47 两端锁死，升级必须同步（ADR 0019）
+- **宿主能力（import）**：插件经 `host-*` 原语访问引擎（进程/网络/存储/安全/通信），能力本身**不得携带业务语义**（ADR 0022）
+- **插件导出（export）**：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点等
+- **权限**：manifest 声明 `permissions`，前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验（路径白名单 → 插件白名单 → 弹窗授权）
+- **插件互调（ADR 0017）**：对外可调 API 必须在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；未声明不可调
+- **存储**：插件独立库（私有 SQLite，无表名限制）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）
+- **插件日志**：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀；WASM trap 必须带 backtrace（`Config::wasm_backtrace_max_frames(Some(32))` 配置**不得关闭**）；per-plugin 级别 `BEDCODE_PLUGIN_LOG=id=level`
+- **mock 数据归属插件工程**：dev-shell 不写业务 mock（见 Architecture Decisions 8）
 
 ---
 
@@ -156,13 +165,14 @@ snake_case；模块入口文件与目录同名（`module.rs`），不用 `mod.rs
 
 ## Architecture Decisions
 
-1. Multi-Project Monorepo（各自独立 `src/` 和 `src-tauri/`）
+1. Multi-Project Monorepo（各自独立 `src/` 与 `src-tauri/`）
 2. Async Everywhere（Tokio + async/await + Tauri commands）
 3. Event-Driven（PTY 输出经 `broadcast` 通道分发）
 4. Graceful Shutdown（`AtomicBool` 通知后台任务关闭）
 5. Flat Module Structure（按领域扁平组织）
-6. Plugin System（Rust API crate + 前端加载器双层架构）
-7. 插件 Mock 数据归属插件工程：各插件的 mock 数据 / 演示种子在各自工程目录内维护（如插件入口导出 `devMock`，SDK `PluginDevMock` 协议）；dev-shell 只提供 mock 抽象封装与通用接线（devMock 注册、命令 handler 骨架、事件总线），**禁止在 dev-shell 中编写具体业务 mock 数据**——dev-shell 不感知任何插件领域细节，新增演示数据一律改插件自己的 devMock 导出
+6. Plugin System（wasmtime Component Model + 前端加载器双层架构）
+7. 无业务内核（Businessless Kernel）：底座只含通用引擎原语 + 安全边界，业务全部插件化（见 Architecture Vision）
+8. 插件 Mock 数据归属插件工程：各插件 mock 数据/演示种子在各自工程维护（插件入口导出 `devMock`）；dev-shell 只提供 mock 抽象封装与通用接线，**禁止在 dev-shell 写具体业务 mock**
 
 ---
 
@@ -231,8 +241,9 @@ ESLint/Prettier 为全局单根配置（仓库根 `eslint.config.js` 等），�
 - 禁止 commit 中 AI 协作者标记
 - 禁止 panic hook 中调用 `tracing::error!`
 - 禁止无上下文的裸字符串错误
-- 禁止在 dev-shell 中编写具体业务 mock 数据（插件演示种子一律放各自插件工程，见 Architecture Decisions 7）
+- 禁止在 dev-shell 中编写具体业务 mock 数据（插件演示种子一律放各自插件工程，见 Architecture Decisions 8）
 - 前端 UI/样式改动必须先加载 `frontend-styles` skill 再动手
+- **高内聚、低耦合**：禁止跨插件直接耦合（插件间只经互调 API 与消息总线通信）；禁止在内核携带产品语义；新增能力优先评估放插件而非改内核
 
 ---
 
