@@ -4,6 +4,7 @@ description: |
   BedCode frontend styling conventions — Vue 3 + TailwindCSS v3.4+ + CSS design tokens.
   Use when writing or modifying CSS classes, design tokens, layouts, animations, themes, or responsive styling.
   Also use when creating Vue components, refactoring layouts, adding transitions, or working with dark/light themes.
+  Mandatory pairing: any UI *design decision* (new page/component, style/color/typography direction, interaction or a11y redesign) requires loading and querying the `ui-ux-pro-max` skill first — see the "UI 设计决策（强制前置 ui-ux-pro-max）" section.
 ---
 
 # Frontend Styles
@@ -12,6 +13,37 @@ description: |
 > **Stack**: Vue 3 `<script setup>` + Tailwind utility-first + CSS custom properties (design tokens) + scoped `<style>`
 > **Stack**: `bedcode-desktop` — 桌面 app 风 + `--ui-scale` 等比缩放
 > **Stack**: `bedcode-mobile` — 移动 app 风（dark-first Dracula-inspired）
+
+## UI 设计决策（强制前置 ui-ux-pro-max）
+
+本 skill 只管「BedCode 里怎么实现」；**「UI 该长什么样」的设计决策必须先查 [`ui-ux-pro-max`](../ui-ux-pro-max/SKILL.md)**。凭通用经验直接拍板视觉方案是不合规的。
+
+**必须检索的场景（先跑检索，再动手写样式）：**
+
+- 新页面 / 新视图 / 新组件（含插件 UI）
+- 视觉方向类决定：配色、字体、图标风格、整体 style、密度与留白节奏
+- 交互与动效方案设计：状态反馈、手势、动画编排、空态/加载/错误态
+- 无障碍改造：对比度、焦点管理、语义、reduced-motion
+- 图表 / 数据可视化的选型
+
+**不必检索的场景（直接走本 skill 的 Checklist）：**纯 token 级修正（换个颜色类、修对齐/断点/溢出）、既有组件的微调、修 CSS bug、按本 skill 既有蓝图复制组件。
+
+**检索模式对照：**
+
+| 需求 | 命令形态 |
+|------|---------|
+| 新页面 / 视觉方向 | `search.py "<product> <tone>" --design-system` |
+| 聚焦问题（焦点、表单错误、滚动、图标语义） | `search.py "<outcome>" --domain ux`（一次一个 observable outcome） |
+| 配色 / 字体 / 图标语义 | `--domain color` / `--domain typography` / `--domain icons` |
+| 实现层细节 | `--stack vue` 或 `--stack html-tailwind` |
+
+BedCode 的技术栈是 **Vue 3 + Tailwind v3 + Tauri（桌面 webview / Android WebView）**：检索结果里 `react` / `nextjs` / `react-native` / `swiftui` 等专属条目一律不适用，`web` domain 中 App UI 的 safe-area / 触控目标条目适用。
+
+**真源裁决（本 skill 优先于检索结果）：**
+
+1. 检索结果只是建议，**不得覆盖**本 skill 的 token-bound / safe-stack / dark-mode / 移动端 safe-area 规则，也**不得引入新的第三方色板、hex 值或 Google Fonts**——颜色与字体的落点只能是 [`TOKENS.md`](TOKENS.md) 里的 token；图标规范以 [`BLUEPRINTS.md`](BLUEPRINTS.md) 的 SVG 标准为准（`@phosphor-icons/react` 之类 npm 图标包不适用）
+2. 禁止把检索结果 `--persist` 成 `design-system/<slug>/MASTER.md`——BedCode 的设计真源就是本 skill 目录，不新建平行真源
+3. 结论要可追溯：新增 UI 的设计决策需在改动说明里写明参考了哪条检索结果（domain + 关键词），而不是泛泛「参考了最佳实践」
 
 ## 引用文档
 
@@ -184,6 +216,7 @@ Full mobile reference — safe areas, touch targets, keyboard avoidance, scroll 
 
 ## New Component Checklist
 
+- [ ] 设计决策已用 `ui-ux-pro-max` 检索过（新页面/新组件/视觉方向/交互或无障碍改造必查；纯 token 级修正豁免），且结论未被检索建议覆盖 token-bound / safe-stack 规则
 - [ ] Colors are token-bound (semantic alias > `var()` > `color-mix()`)
 - [ ] Brand/accent text uses contrast token, not `text-white`/`text-black`
 - [ ] Font size follows the platform's single source (`text-*` desktop / fluid tokens mobile)
