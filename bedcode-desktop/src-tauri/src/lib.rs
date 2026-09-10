@@ -162,6 +162,24 @@ pub fn run() {
     let app = builder.setup(move |app| {
             app.manage(app_start);
 
+            // 平台条件默认窗口尺寸：tauri.conf.json 全局默认 1300×900 适配
+            // Windows/macOS（字符渲染密度与 DPI 匹配），Linux（WebKitGTK）在
+            // 此放大到 1560×1080（曾全局改大导致 Windows 默认窗口过大，见
+            // b33e5d99 反例，改为仅 Linux 生效）。set_size 失败仅降级为全局
+            // 默认小窗，不阻断启动。
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) =
+                        win.set_size(tauri::LogicalSize::new(1560.0f64, 1080.0f64))
+                    {
+                        tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
+                    } else {
+                        let _ = win.center();
+                    }
+                }
+            }
+
             let app_handle = app.handle();
 
             // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志

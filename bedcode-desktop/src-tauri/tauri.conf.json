@@ -13,8 +13,8 @@
     "windows": [
       {
         "title": "BedCode",
-        "width": 1560,
-        "height": 1080,
+        "width": 1300,
+        "height": 900,
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true,
