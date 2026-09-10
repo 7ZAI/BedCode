@@ -14,8 +14,11 @@
         <!-- 与 gen/android 同步维护:启动期窗口背景与系统开屏退化为纯色底,开屏动画只保留前端一层 -->
         <item name="android:windowBackground">@color/bedcode_launch_bg</item>
         <item name="android:windowSplashScreenBackground">@color/bedcode_launch_bg</item>
-        <!-- Android 12+ 系统开屏由系统强制存在、无法整体移除:把图标置为透明使其退化为
-             纯色底(即"没有开屏动画"的配置);恢复系统图标时删除本行 -->
-        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+        <!-- Android 12+ 系统开屏由系统强制存在、无法整体移除:用全透明矢量图标
+             (splash_icon_transparent)使其退化为纯色底(即"没有开屏动画"的配置),
+             比透明 color 对 MIUI 等 OEM 更可靠;恢复系统图标时删除本行 -->
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_icon_transparent</item>
+        <!-- 图标衬圈同底色:部分 OEM 会为开屏图标画背景圈,与背景同色则不可见 -->
+        <item name="android:windowSplashScreenIconBackgroundColor">@color/bedcode_launch_bg</item>
     </style>
 </resources>
