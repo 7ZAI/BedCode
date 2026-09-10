@@ -26,7 +26,10 @@
 
 ```
 bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
-├── scripts/                          # 构建/开发工具脚本：图标生成、编译产物大小检查、插件构建与开发热重载
+├── scripts/                          # 构建/开发工具脚本：dev-run（Tauri dev 编排）、tauri-build（updater
+│                                     #   签名密钥解析）、插件构建与热重载（plugin-build/plugin-dev/plugin-watch）、
+│                                     #   产物大小检查（check-target-size）、图标生成（generate-icons 等）、
+│                                     #   Linux 依赖安装（install-tauri-deps.sh）；含 README
 ├── packages/                         # 共享包（供插件开发与测试使用）
 │   ├── plugin-sdk-desktop/           # 插件开发工具包，Rust + TS 双侧 SDK（含 dev-shell 调试壳、
 │   │   │                             #   插件模板 template/、脚手架 bin/）
@@ -35,8 +38,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │   │                             #   权限/SQL/命令参数辅助宏；rust-macros/ 为配套过程宏 crate
 │   │   └── src/                      # TS SDK：插件类型定义、共享模块运行时代理（__BEDCODE_SHARED__）、
 │   │                                 #   Vite 构建插件（vue/pinia/vue-i18n 外部化）
-│   ├── plugin-test/                  # 测试用 WASM 插件 crate，覆盖全部宿主调用路径，
-│   │                                 #   供宿主 wasm_runtime 测试套件做签名验证与连通性测试
+│   ├── plugin-component-test/        # 测试用 WASM 插件 crate（Component Model 绑定验证与连通性测试，
+│   │                                 #   覆盖宿主调用路径，供宿主 wasm_runtime 测试套件做签名验证）
 │   ├── plugin-sdk-test/              # SDK 接口测试用插件 crate
 │   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直写预打开目录）
 ├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
@@ -45,11 +48,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   聊天 UI、供应商配置、提示词优化
 │   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，
 │   │                                 #   含 hooks 管理、任务状态/队列、HTTP 端点、Hook 脚本
-│   ├── file-transfer/                # 文件传输插件：内网对端发现、远程目录浏览、多任务并发传输
-│   │                                 #   （取消/重试；断线重发自动断点续传，无手动暂停/恢复），
-│   │                                 #   本地目录挂载供对端访问
-│   └── scheduler/                    # 调度器插件：cron 表达式触发执行 shell 脚本/内联命令，
-│                                     #   执行记录可审计；cli/ 为独立管理 CLI（bedtask）
+│   └── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
+│                                     #   切换、共享目录浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID
+│                                     #   重发即断点续传）、接收策略与历史归档、本地目录挂载供对端访问
 ├── src/                              # Vue 3 前端（扁平化结构）
 │   ├── components/                   # UI 组件：桌面布局、会话卡片/表单/列表、侧边栏、终端预览、
 │   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件
@@ -74,6 +75,13 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
+        ├── peer_net.rs               # 对等网络接入（宿主薄封装）：节点身份初始化（与设备身份分离）、
+        │                             #   节点/发现守护装配、首连确认闸门事件桥接、可信对端管理
+        ├── peer_receive.rs           # 接收侧：询问应答回流、接收任务登记、接收策略与落点设置
+        ├── peer_remote.rs            # 远端浏览/拉取：共享目录列目录 + 多文件拉取编排（只读）
+        ├── peer_transfer.rs          # 发送侧：扇出发送编排、进度节流行转、终态历史持久化
+        ├── peer_migration.rs         # 旧对等网络数据 → file-transfer 插件存储键一次性幂等迁移
+        │                             #   （计划随引擎停写收尾删除）
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
         ├── server/                   # Actix Web HTTP + WS 服务器（核心模块，详见 Core Modules）
@@ -84,7 +92,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         │                             #   crypto/（对称/非对称/混合加密：AES-GCM、ChaCha20-Poly1305、
         │                             #   RSA、X25519、KDF，用于 HTTP 报文与文件加密传输）
         ├── process.rs                # 进程工具（create_command）
-        ├── lib.rs                    # 库入口（模块声明 + 日志初始化 + Tauri 应用搭建）
+        ├── lib.rs                    # 库入口（模块声明 + 日志初始化 + Tauri 应用搭建；对等网络模块的
+        │                             #   Tauri 命令也直接在此注册，不经 commands/）
         └── main.rs                   # 二进制入口（panic hook）
 ```
 
@@ -101,8 +110,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
   （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
 - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
 - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
-  WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（storage/database/terminal/session/events/
-  http/log/fs/config/bus/lifecycle/process/timer/peer/wsl_fs 等），统一注册到 Linker
+  WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
+  events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
+  统一注册到 Linker
 - **approval / validation**：插件审批与校验
 - **message_bus**：插件间 Topic 消息总线（发布/订阅），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
 - **fs_auth**：文件系统访问三层校验（路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）
@@ -141,6 +151,36 @@ PTY 进程生命周期（启动时注入 `BEDCODE_SESSION_ID` 环境变量）、
 
 AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转发 Tauri 前端（forwarder）与转 WebSocket 同步广播（sync_event/sync_handler）。
 
+### 对等网络 — `src-tauri/src/peer_*.rs` + `packages/peer-net`
+
+跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立互不感知：
+
+- **底座 crate**：`packages/peer-net`（节点身份 identity / 自签证书 cert / TLS 1.3 直连 transport /
+  信任存储 trust_store / `_bedcode-peer._tcp` 专用 mDNS 发现 discovery / 传输引擎 transfer）与
+  `packages/link-crypto`（链路密码学），桌面端与移动端共享
+- **peer_net.rs**：宿主侧薄封装——`NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` 刻意分离
+  （重装即新身份，不做设备标识派生）；setup 阶段自动启动节点 + 发现守护；首连确认闸门经
+  `peer-consent-requested` 事件桥接前端弹应用内确认框（迁移规则匹配在前端层，见插件 useConsent）
+- **插件入口（真入口）— WIT `host-peer`**：定义于 SDK `rust/wit/bedcode.wit`，宿主实现在
+  `plugin/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3 终态 13 原语）：`dial-peer`（按 endpoint
+  拨号，返 session 句柄）、`close`（session/传输句柄统一关闭）、`respond-consent`、`list-trusted`、
+  `revoke-trusted`、`send-files`、`respond-transfer`、`set-receive-policy`、`set-shared-roots`、
+  `list-shared-roots`、`browse-directory`、`pull-files`、`set-download-dir`；
+  插件侧经 `HostPeer` trait 调用（`plugins/file-transfer/rust/src/peer.rs`）
+- **命令面（注册于 `lib.rs`，主前端已退役）**：Phase 4（issue 13）产品面整体迁入 file-transfer
+  插件后，仅保留生命周期（`start/stop_peer_node`）、首连确认（`respond_peer_consent`）、
+  信任管理（`list_trusted_peers` / `revoke_trusted_peer`）与接收配置
+  （`set_peer_receive_policy` / `set_peer_download_dir` / `set_peer_transfer_encryption`）作为
+  宿主级兜底路径；其余查询/管理命令函数体暂留一版（部分仍为 `host_impl` 内部簿记调用），
+  下版本删除
+- **数据面**：`peer_remote.rs` 浏览/拉取（线协议「单连接单请求」，任务行预登记进接收表）；
+  `peer_transfer.rs` 发送扇出（「群发」仅是前端编排概念，每个接收方独立 batch_id）；
+  `peer_receive.rs` 接收策略（ask/always_accept/always_deny）+ 询问超时 + 落点目录
+- **事件范式**：`peer-transfer-changed` / `peer-receive-changed` 全量推送（与 `peer-devices-changed`
+  同款），前端按 batchId 合并双源列表分组（正在发送 / 正在接收 / 历史）
+- **业务归属**：传输 UI 与业务逻辑在 file-transfer 插件（经 `HostPeer` trait 调宿主原语），
+  宿主只提供无业务语义的引擎原语；`peer_migration.rs` 把引擎侧旧数据幂等迁入插件存储键
+
 ### 插件开发 SDK — `packages/plugin-sdk-desktop/`
 
 Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名漂移由测试暴露）；`wasm_host.rs` 以 WASM import 后端实现全部宿主能力 trait。TS 侧通过共享模块运行时（`__BEDCODE_SHARED__`）复用宿主的 Vue/Pinia/vue-i18n。
@@ -162,11 +202,15 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 数据库 | `src-tauri/src/db/` |
 | 全局事件系统 | `src-tauri/src/events/` |
 | mDNS 广播 | `src-tauri/src/mdns/` |
+| 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
+| 对等传输（发送/接收/远端浏览） | `src-tauri/src/peer_transfer.rs`、`peer_receive.rs`、`peer_remote.rs` |
+| 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
+| 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
 | 插件系统 (Rust) | `src-tauri/src/plugin/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
-| 测试插件 | `packages/plugin-test/`、`plugin-sdk-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/`、`plugins/scheduler/` |
+| 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-wasi-test/` |
+| 插件源码 | `plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |
@@ -214,6 +258,8 @@ Claude Code (PTY)
 | 插件 SDK | `packages/plugin-sdk-desktop/` |
 | WASM 宿主能力 | `src-tauri/src/plugin/wasm_runtime/host_impl/` |
 | 插件随包 CLI 安装/卸载 | `src-tauri/src/plugin/host/` |
+| 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
+| 链路加密 | `src-tauri/src/server/link_crypto.rs` |
 | 加密工具（报文/文件传输加密） | `src-tauri/src/utils/crypto/` |
 | 认证工具 | `src-tauri/src/utils/auth/*.rs` |
 | 解析器 | `src-tauri/src/utils/parser/*.rs` |

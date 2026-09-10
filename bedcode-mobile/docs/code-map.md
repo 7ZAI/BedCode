@@ -26,8 +26,10 @@
 
 ```
 bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
-├── scripts/                          # 构建/开发脚本：Android dev 日志落盘、图标检查、插件构建、
-│                                     #   onnxruntime so 恢复（fetch-ort-android.sh）
+├── scripts/                          # 构建/开发脚本：dev-run.js（dev 编排与 adb fd0 预检自愈）、
+│                                     #   android-dev-log.js（logcat 落盘 + 按天清理）、插件构建
+│                                     #   （plugin-build.js）、产物大小检查（check-target-size.js）、
+│                                     #   adb-fd0-shim.sh（adb client fd0 bug 自愈 shim）
 ├── packages/                         # 共享包（供移动端插件开发与测试使用）
 │   ├── plugin-sdk-mobile/            # 移动端插件开发 SDK：Rust + TS 双侧、dev-shell 调试壳、
 │   │                                 #   插件模板（template/）、UI 子路径导出
@@ -36,8 +38,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端
 │   ├── auto-task/                    # Auto Task 插件：任务队列 UI 面板（后端逻辑在桌面端同名插件）
-│   ├── file-transfer/                # 文件传输插件：局域网文件互传（SAF 选择/写入）
-│   └── ocr/                          # OCR 插件：拍照/选图文字识别（配合宿主 ocr 引擎）
+│   └── file-transfer/                # 文件传输插件：基于对等网络的在线对端发现与共享目录浏览、
+│                                     #   多选批量传输、接收策略、SAF 自选保存位置与历史记录
+│                                     #   （OCR 插件已随 feature/ocr-plugin 隔离，本分支无）
 ├── src/                              # Vue 3 前端（扁平化结构）
 │   ├── components/                   # UI 组件：设备卡片、文件浏览/查看、输入助手/输入栏、
 │   │                                 #   移动布局/导航/状态栏、滑动容器、配对、任务弹窗、
@@ -54,6 +57,7 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   auto-task/ 为 Auto Task 任务队列面板
 │   ├── utils/                        # 工具函数（剪贴板等）
 │   ├── config/                       # 配置（终端主题定义）
+│   ├── services/                     # 跨端复用服务（linkCrypto.ts 链路加密客户端）
 │   ├── assets/                       # 静态资源：快捷键/终端帮助文档（zh-CN/en markdown）
 │   ├── styles/                       # 样式：mobile.css 全局 + terminal.css 终端/xterm/滚动条
 │   ├── locales/                      # 国际化（zh-CN / en，各含 common / desktop / mobile / settings）
@@ -67,24 +71,35 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
         │                             #   移动端特有（Quick Actions/Settings/Session Config）、会话、终端
         ├── connection/               # 远程连接模块（核心模块，详见 Core Modules）
         ├── enums/                    # 枚举类型：认证、控制、插件、会话、特殊键、总结、同步
-        ├── file_service/             # 文件服务：SAF 目录树读取等存储访问框架相关逻辑
+        ├── file_service/             # 文件服务：SAF 目录树读取（saf_tree.rs）
         ├── handler/                  # WS 消息处理器：认证、同步、系统、终端
         ├── mdns/                     # mDNS 服务发现与广播（局域网设备互发现）
         ├── model/                    # 数据模型：API DTO、WebSocket 消息
-        ├── ocr/                      # OCR 引擎（核心模块，详见 Core Modules）
+        ├── peer_net.rs               # 对等网络接入：节点身份初始化（与 DeviceIdentity 分离）、
+        │                             #   节点/发现守护装配（Android 启动守护前先经 Kotlin
+        │                             #   MulticastLockPlugin 申请多播锁，不持锁则单侧不可见）、
+        │                             #   首连确认闸门事件桥接
+        ├── peer_receive.rs           # 接收侧：询问应答回流、接收任务登记、接收策略设置
+        │                             #   （落点恒为 app 私有下载目录，MediaLanding 提升进 MediaStore）
+        ├── peer_remote.rs            # 远端浏览/拉取：共享目录列目录 + 多文件拉取编排（只读）
+        ├── peer_transfer.rs          # 发送侧：扇出发送编排、进度节流行转、终态历史持久化
+        ├── peer_migration.rs         # 旧对等网络数据 → file-transfer 插件存储键一次性幂等迁移
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见「插件核心模块引导」）
         ├── router/                   # 消息路由：路由上下文、事件、注册表、主实现
         ├── system/                   # 系统模块：共享命令、配置管理、常量（按领域分组）、
         │                             #   统一错误类型、Panic 捕获、JSON 设置持久化
         ├── session.rs                # 远程会话管理
         ├── state.rs                  # 全局状态管理（单例管理器 + Token 存储）
-        ├── lib.rs                    # 库入口（模块声明；注意 setup 内 init 顺序敏感）
+        ├── lib.rs                    # 库入口（模块声明 + peer_* 模块的 Tauri 命令直接注册；
+        │                             #   注意 setup 内 init 顺序敏感）
         └── main.rs                   # 二进制入口
 ```
 
 > **Android 原生层**：`src-tauri/gen/android/app/src/main/java/com/bedcode/mobile/` 下有大量自定义 Kotlin 插件
-> （ForegroundService、SafPicker/SafTransfer、Camera/OcrModelExtractor、BiometricKey、AllFilesAccess、
-> DownloadsDir、FileDelete、DeviceInfo、MulticastLock、TaskNotification 等）及 AndroidManifest、res/xml 配置。
+> （ForegroundService/ForegroundServicePlugin、TaskNotificationPlugin/Manager、SafPicker/SafTransfer、
+> BiometricKey、AllFilesAccess、DownloadsDir、FileDelete、DeviceInfo、MulticastLock、
+> StatusBarStyle（App 主题 → 系统栏图标外观同步）、PluginAssetExtractor 等）
+> 及 AndroidManifest、res/xml 配置。
 > 改动 Kotlin 后必须跑 `./gradlew :app:compileUniversalDebugKotlin` 验证（见 AGENTS.md）。gen/android 重建后需恢复清单见 AGENTS.md。
 
 ---
@@ -112,14 +127,14 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
   APK assets 内置插件解压 + app_data_dir 扫描、注册表、存储
 - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 管理（`component.rs`
   为 WASM 组件模式接线）；宿主能力实现按功能域拆分于 host_impl/
-  （storage/db/fs/http/terminal/event/bus/config/notify/peer/support）
+  （storage/db/fs/http/mdns/terminal/event/bus/config/notify/peer/support/platform）
 - **downloader**：插件远程下载 + SHA256 校验 + 安装到 app_data_dir
 - **approval / validation**：权限审批与内容钉扎、插件身份校验（目录名与 manifest id 一致性，防冒名）
 - **saf_io / saf_path**：SAF 存储访问抽象（`SafIo` trait 主 seam，Kotlin `SafTransferPlugin` 实现）
   与 SAF Uri → 真实路径解析（文件传输 SAF 化改造核心接口）
 - **message_bus / fs_auth / types / commands**：插件间消息总线、文件系统校验、类型定义、Tauri 命令
-- **android_plugins/**：Android 原生插件 Rust 注册桥（前台服务、SAF 选择/写入、相机/OCR 模型、生物识别、
-  全部文件访问、下载目录、文件删除、组播锁、通知等 → 对应 Kotlin 端 Plugin，
+- **android_plugins/**：Android 原生插件 Rust 注册桥（前台服务、SAF 选择/写入、生物识别、
+  全部文件访问、下载目录、文件删除、组播锁、通知、设备信息、插件资产解压 → 对应 Kotlin 端 Plugin，
   Kotlin 文件位置见 Project Structure 下方的「Android 原生层」说明）
 
 **前端插件系统 — `src/plugin/`：** 加载器、注册表、权限、上下文、事件、命令、共享模块运行时
@@ -136,12 +151,38 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 **典型任务入口：** 新增宿主能力 → `wasm_runtime/host_impl/` + SDK `rust/src/host/` 对应域 trait；
 新增 Android 原生能力 → Kotlin Plugin（gen/android）+ `android_plugins/` 注册桥；
-插件 UI/存储问题 → 先分清前端（`src/plugin/`）还是 Rust 侧（`api_bridge` 对应的 host_impl 域）。
+插件 UI/存储问题 → 先分清前端（`src/plugin/`）还是 Rust 侧（`commands.rs` / `manager.rs`
+  对应的 host_impl 域）。
 
-### OCR 引擎 — `src-tauri/src/ocr/`
+### 对等网络 — `src-tauri/src/peer_*.rs` + `packages/peer-net`
 
-本地离线 OCR：图像预处理、PaddleOCR（ppocr）模型推理、模型文件管理；运行时经 jniLibs 的 `libonnxruntime.so`
-（dlopen 加载，重建后用 `scripts/fetch-ort-android.sh` 恢复）。
+与桌面端镜像的跨设备可信直连底座，与终端链路（`_bedcode._tcp`）完全独立：
+
+- **底座 crate**：`packages/peer-net`（identity / cert / transport / trust_store / discovery / transfer）
+  与 `packages/link-crypto`，双端共享
+- **peer_net.rs**：`NodeIdentity` 首启纯随机生成、与 `DeviceIdentity` / `device_identity.json`
+  刻意分离（不做 ANDROID_ID 等设备标识派生）；setup 阶段自动启动节点 + 发现守护；
+  **Android 专属**启动守护前经 Kotlin MulticastLockPlugin 申请多播锁、关停时释放（不持锁则 mDNS
+  响应收不到，表现为单侧可见）；首连确认闸门经 `peer-consent-requested` 事件桥接前端确认框
+- **插件入口（真入口）— WIT `host-peer`**：同桌面端的 13 原语（见桌面 code-map 对等网络节），
+  宿主实现在 `plugin/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3）；插件侧经 `HostPeer` trait
+  调用（`plugins/file-transfer/rust/src/peer.rs`）
+- **命令面（注册于 `lib.rs`，移动端全量保留）**：节点/发现（`start/stop_peer_node`、
+  `list_discovered_peers`、`dial_peer`、`disconnect_peer`）、首连确认与信任管理
+  （`respond_peer_consent` / `list_trusted_peers` / `revoke_trusted_peer`）、共享目录注册表
+  （`list_shared_directories` / `add_shared_directory_saf` / `remove_shared_directory`）、
+  发送侧（`send_files_to_peer`、`cancel_peer_transfer`、`retry_peer_transfer`、
+  `list_peer_transfers`、`clear_peer_transfer_history`、`peer_pick_files/folder`）、
+  接收侧（`list_peer_receiving`、`respond_peer_transfer`、`cancel_peer_receiving`、
+  `get_peer_receive_settings`、`set_peer_receive_policy`、`set_peer_transfer_encryption`、
+  `clear_peer_receiving_history`）、远端浏览（`list_peer_shared_roots`、
+  `browse_peer_directory`、`pull_peer_files`）
+- **数据面**：`peer_remote.rs` 浏览/拉取（线协议「单连接单请求」）；`peer_transfer.rs` 发送扇出
+  （「群发」仅是前端编排概念，每个接收方独立 batch_id）；`peer_receive.rs` 接收策略
+  （ask/always_accept/always_deny）+ 询问超时（无落点设置）
+- **事件范式**：`peer-transfer-changed` / `peer-receive-changed` 全量推送，前端按 batchId 合并双源列表
+- **业务归属**：传输 UI 与业务逻辑在 file-transfer 插件（`rust/src/peer.rs`、`usePeerDevices`、
+  `useConsent` 等，经 `HostPeer` trait 调宿主原语）；`peer_migration.rs` 把引擎侧旧数据幂等迁入插件存储键
 
 ### 前端终端链路 — `src/composables/` + `src/stores/`
 
@@ -190,8 +231,12 @@ Desktop PTY → Claude Code
 | 预设任务 / 任务弹窗 | `src/composables/`（usePresetTasks）、`src/components/`（Task* 弹窗） |
 | 任务通知 | `src/composables/`（useNotification） |
 | Auto Task 插件面板 | `src/plugin/auto-task/` |
-| OCR 识别 | `src-tauri/src/ocr/`、`plugins/ocr/` |
 | 文件传输 (SAF) | `plugins/file-transfer/` + `src-tauri/src/plugin/`（saf_io/saf_path）+ `src-tauri/src/file_service/` |
+| 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
+| 对等传输（发送/接收/远端浏览） | `src-tauri/src/peer_transfer.rs`、`peer_receive.rs`、`peer_remote.rs` |
+| 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
+| 链路加密（HTTP 信封 + WS 帧） | `src/services/linkCrypto.ts`、`src/composables/`（useLinkEncryption） |
+| 多播锁（mDNS 前置） | `src-tauri/src/plugin/android_plugins/multicast_lock.rs` + Kotlin `MulticastLockPlugin` |
 | SAF Uri → 路径解析 / SAF 读写抽象 | `src-tauri/src/plugin/saf_path.rs`、`saf_io.rs`（主 seam） |
 | 插件审批 / 身份校验 | `src-tauri/src/plugin/approval.rs`、`validation.rs` |
 | 设置子页面 (外观/连接/认证/通知) | `src/views/settings/` |
@@ -220,6 +265,7 @@ Desktop PTY → Claude Code
 | Pinia Stores | `src/stores/*.ts` |
 | Composables | `src/composables/*.ts` |
 | WebSocket 客户端 | `src-tauri/src/connection/*.rs` |
+| 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
 | 路由 | `src-tauri/src/router/*.rs` |
 | 认证 | `src-tauri/src/auth/*.rs` |
 | mDNS | `src-tauri/src/mdns/*.rs` |
