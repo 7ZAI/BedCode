@@ -221,7 +221,11 @@ const children = []
 let shuttingDown = false
 
 function start(cmd, args, cwd) {
-  const child = spawn(cmd, args, { cwd, stdio: 'inherit' })
+  // POSIX：detached 让子进程自成进程组长（pgid = 自己的 pid），shutdown 时可用
+  // 负 pgid 一次杀整棵子树（已实测：孙进程自动继承该 pgid，无需各自 detached）。
+  // Windows 必须排除：detached 会传 CREATE_NEW_CONSOLE 弹出额外控制台窗口，
+  // Windows 侧走下方 taskkill /T /F 分支
+  const child = spawn(cmd, args, { cwd, stdio: 'inherit', detached: !IS_WIN })
   children.push(child)
   return child
 }
@@ -247,26 +251,50 @@ function shutdown(code) {
     process.exit(exitCode)
   }
 
-  // POSIX：kill 后等待所有子进程 exit 再退出（避免信号未送达）
-  let remaining = children.length
-  if (remaining === 0) {
+  // POSIX：按进程组回收整棵子树（对齐 Windows taskkill /T /F）
+  //
+  // 负 pgid 一次覆盖组长及其全部子孙——插件 SDK CLI watch 的 vite 孙进程、
+  // 宿主的 tauri CLI / cargo / 宿主进程 / vite dev server 全部在内。此前用
+  // c.kill() 只杀直接子进程：SDK CLI watch 对 SIGTERM 不转发，其 vite 孙进程
+  // 孤儿化 reparent 到 systemd 永久残留（实测累积、占 1423 端口、数小时不退出）
+  for (const c of children) {
+    if (!c.pid) continue
+    try {
+      process.kill(-c.pid, 'SIGTERM')
+    } catch {
+      // 已退出或不是组长（detached 未生效），退回单进程 kill
+      try {
+        c.kill('SIGTERM')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+  }
+
+  // 等 direct children 退出即可（子树内其他进程由组信号覆盖，无需逐个等待）
+  const alive = children.filter((c) => c.exitCode === null)
+  if (alive.length === 0) {
     process.exit(exitCode)
     return
   }
-  for (const c of children) {
+  for (const c of alive) {
     c.on('exit', () => {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
+      if (children.every((x) => x.exitCode !== null)) process.exit(exitCode)
     })
-    try {
-      c.kill()
-    } catch {
-      remaining -= 1
-      if (remaining === 0) process.exit(exitCode)
-    }
   }
-  // 兜底超时：2 秒后强制退出
-  setTimeout(() => process.exit(exitCode), 2000).unref()
+
+  // 升级兜底：2 秒后对组发 SIGKILL 并退出（对齐桌面端 dev-run.js 同款逻辑）
+  setTimeout(() => {
+    for (const c of children) {
+      if (!c.pid) continue
+      try {
+        process.kill(-c.pid, 'SIGKILL')
+      } catch {
+        // 已退出，忽略
+      }
+    }
+    process.exit(exitCode)
+  }, 2000).unref()
 }
 
 // ==================== 启动 ====================
@@ -309,3 +337,6 @@ host.on('exit', (code) => {
 // Ctrl+C / 终止信号：广播回收
 process.on('SIGINT', () => shutdown(0))
 process.on('SIGTERM', () => shutdown(0))
+// 关闭终端标签页/窗口：终端只发 SIGHUP（SIGINT 不送 detached 子进程组），
+// 不处理则 shutdown 不执行、整棵 detached 子树孤儿化残留
+process.on('SIGHUP', () => shutdown(0))

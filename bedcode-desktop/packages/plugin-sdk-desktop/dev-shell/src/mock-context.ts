@@ -13,8 +13,11 @@ import type {
   HttpAPI,
   I18nAPI,
   PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
   UIRegistry,
 } from '../../src/types'
+import { openGlobalDialog } from '../../src/global-dialog'
 import { emitDevEvent, onDevEvent, sendInputToSession, sessions } from './mock/session'
 import {
   pushLog,
@@ -130,6 +133,10 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     registerFileHandler(handler) {
       return track(registerFileHandler(pluginId, handler))
     },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      // context 在本函数尾部组装；惰性引用（showDialog 调用时已初始化），供内容组件 provide
+      return openGlobalDialog({ ...options, pluginContext: context })
+    },
   }
 
   // ==================== EventAPI ====================
@@ -204,7 +211,7 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
   }
 
-  return {
+  const context = {
     id: pluginId,
     extensionPath,
     commands,
@@ -218,4 +225,5 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     system,
     _disposables: disposables,
   }
+  return context
 }

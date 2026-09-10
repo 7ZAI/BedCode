@@ -15,6 +15,7 @@ pub const PERMISSION_SESSION_WRITE: &str = "session:write";
 pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
 pub const PERMISSION_UI_TOOLBOX: &str = "ui:toolbox";
 pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
+pub const PERMISSION_UI_DIALOG: &str = "ui:dialog";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
@@ -50,6 +51,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_SIDEBAR,
     PERMISSION_UI_TOOLBOX,
     PERMISSION_UI_STATUSBAR,
+    PERMISSION_UI_DIALOG,
     PERMISSION_UI_INPUT,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
@@ -74,6 +76,7 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
     (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),
+    (PERMISSION_UI_DIALOG, &["ui.showDialog"]),
     (PERMISSION_UI_INPUT, &["ui.registerInputExtension", "ui.registerTerminalToolbarItem"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),

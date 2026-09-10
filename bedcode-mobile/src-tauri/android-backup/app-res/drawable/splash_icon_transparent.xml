@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 与 gen/android 同步维护:透明开屏图标(使 Android 12+ 系统开屏退化为纯色底),
+     tauri android init 重建后需手工恢复(与 values/themes.xml 同组维护) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="48"
+    android:viewportHeight="48">
+    <path
+        android:fillColor="#00000000"
+        android:pathData="M0,0h48v48h-48z" />
+</vector>

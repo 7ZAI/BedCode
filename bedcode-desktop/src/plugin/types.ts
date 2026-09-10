@@ -194,6 +194,71 @@ export interface StatusBarItemDescriptor {
   onClick?: () => void
 }
 
+// ==================== 全局弹窗（宿主通用能力，SDK types.ts 双写副本） ====================
+
+/** 弹窗动作按钮（预设模式，Label 文案由插件经自身 i18n 生成后传入） */
+export interface PluginDialogAction {
+  label: string
+  /** 视觉变体：默认 / 主按钮 / 危险 / 幽灵 */
+  kind?: 'default' | 'primary' | 'danger' | 'ghost'
+  /** 点击回调（可异步）；成功返回后自动关闭弹窗（抛错则保持打开以便重试） */
+  onClick?: () => void | Promise<void>
+  /** 点击后经宿主 router 跳转的目标路由（先关弹窗再跳转） */
+  navigateTo?: string
+  /** 动作进行中禁用（如提交中防重复点击）；经 handle.update() 联动 */
+  disabled?: boolean
+}
+
+/**
+ * 全局弹窗选项（宿主统一渲染：遮罩/卡片/z-index/定时关闭/按钮/路由跳转）
+ *
+ * 两种模式：
+ * - 预设模式：title + message + icon + actions，常见「确认/拒绝」类请求开箱即用；
+ * - 组件模式：content 传入任意 Vue 组件（经 provide('pluginContext') 渲染），
+ *   props 可经 handle.update() 热更新。
+ * 定时关闭为可选能力：仅当 timeoutSec / deadlineAt 之一提供时生效。
+ */
+export interface PluginDialogOptions {
+  /** 自定义内容组件（组件模式）；缺省用 title/message/icon/actions 预设渲染 */
+  content?: any
+  /** 内容组件 props（组件模式；handle.update() 可热更新） */
+  props?: Record<string, unknown>
+  /** 预设模式：标题 */
+  title?: string
+  /** 预设模式：正文 */
+  message?: string
+  /** 预设模式：图标（SVG path d，随文字颜色渲染） */
+  icon?: string
+  /** 预设模式：动作按钮组（缺省无按钮；顺序即展示顺序） */
+  actions?: PluginDialogAction[]
+  /** 定时自动关闭（可选）：相对秒数，从弹窗弹出起算 */
+  timeoutSec?: number
+  /** 定时自动关闭（可选）：绝对截止时间戳 ms（迟到打开 / 排队续算更准确，优先于 timeoutSec） */
+  deadlineAt?: number
+  /** 倒计时文案模板，{seconds} 占位（如 '{seconds} 秒后自动拒绝'）；缺省不显示倒计时 */
+  countdownLabel?: string
+  /** 超时回调（自动关闭前触发）；缺省仅关闭 */
+  onTimeout?: () => void
+  /** 是否可手动关闭（右上角关闭按钮 / Escape / 遮罩点击），默认 true */
+  closable?: boolean
+  /** 点击遮罩是否关闭，默认 true（closable=false 时无效） */
+  closeOnBackdrop?: boolean
+  /** 卡片宽度（Tailwind max-w-* 类），默认 max-w-md */
+  widthClass?: string
+  /** 内容区 padding（Tailwind 类），默认 p-0（组件模式自带内距，预设模式内部处理） */
+  bodyClass?: string
+  /** 关闭后回调（按钮 / 遮罩 / Escape / 超时 / close() / 排队项被取消 均触发） */
+  onClose?: () => void
+}
+
+/** 全局弹窗句柄：调用方据此关闭或热更新当前弹窗 */
+export interface PluginDialogHandle {
+  /** 关闭当前弹窗（幂等）；队列中下一个弹窗自动接替 */
+  close(): void
+  /** 热更新选项（props / 文案 / 按钮 / 倒计时等） */
+  update(options: Partial<PluginDialogOptions>): void
+}
+
 /** 输入扩展描述符 */
 export interface InputExtensionDescriptor {
   id: string
@@ -283,6 +348,8 @@ export interface UIRegistry {
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
+  /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
+  showDialog(options: PluginDialogOptions): PluginDialogHandle
 }
 
 /** 事件 API */

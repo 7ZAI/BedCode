@@ -88,17 +88,17 @@ export function useTerminalBuffer() {
     sessionId: string,
     terminal: Terminal,
     onRawOutput?: (data: Uint8Array) => void,
-    /** 渲染背压门控：仅本端为会话正统渲染端时回发 ack（非正统时服务端丢弃，白红流量） */
-    shouldAck?: () => boolean,
   ): RealtimeHandlerRegistration {
     const writeCoalescer = createWriteCoalescer(terminal)
     // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
     // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
-    // shouldAck 门控：仅本端为会话正统渲染端时发送（非正统时服务端丢弃）
+    // 不设正统门控：onWriteParsed 触发即证明本端正在消费写入管线，任何订阅端
+    // 的确认都代表 PTY 字节被消化。此前依赖 isCanonicalRenderer 导致「桌面启动
+    // 会话、手机观看」等 resize 未 applied 场景 ack 永不回发 → 服务端 unacked
+    // 超高位水 → PTY 读整体暂停 → 输出卡死（2.1.x 修复）。mock 会话/未连接时
+    // store.ackRendered → socket.ackRendered 内部空转安全
     terminal.onWriteParsed(() => {
-      if (shouldAck?.()) {
-        store.ackRendered(sessionId)
-      }
+      store.ackRendered(sessionId)
     })
 
     // 分片回放高水位写入（store 回放循环的背压信号）：合并批经 terminal.write

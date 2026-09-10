@@ -32,7 +32,7 @@ impl Database {
             rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
 
-        for col in &["address", "session_token", "last_seen"] {
+        for col in &["address", "session_token", "last_seen", "uid_hash"] {
             if !existing_columns.iter().any(|c| c == col) {
                 self.conn
                     .execute(&format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"), [])?;
@@ -132,7 +132,7 @@ mod tests {
             let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
         };
-        for col in &["address", "session_token", "last_seen"] {
+        for col in &["address", "session_token", "last_seen", "uid_hash"] {
             if !existing_columns.iter().any(|c| c == col) {
                 conn.execute(&format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"), [])?;
             }

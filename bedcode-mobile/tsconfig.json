@@ -19,6 +19,7 @@
       "@/*": ["./src/*"],
       "@binblink/bedcode-plugin-sdk-mobile": ["./packages/plugin-sdk-mobile/src/index.ts"],
       "@binblink/bedcode-plugin-sdk-mobile/ui": ["./packages/plugin-sdk-mobile/src/ui/Select.d.ts"],
+      "@binblink/bedcode-plugin-sdk-mobile/ui/plugin-global-dialog": ["./packages/plugin-sdk-mobile/src/ui/PluginGlobalDialog.vue"],
       "@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs": ["./packages/plugin-sdk-mobile/src/ui/useSwipeTabs.ts"],
       "@binblink/bedcode-plugin-sdk-mobile/*": ["./packages/plugin-sdk-mobile/src/*"]
     }

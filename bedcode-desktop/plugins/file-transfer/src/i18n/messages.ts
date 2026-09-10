@@ -27,6 +27,7 @@ export type MessageSchema = {
   'transfer.devices.subtitle': string
   'transfer.devices.empty': string
   'transfer.devices.online': string
+  'transfer.devices.recentSeen': string
   'transfer.devices.connected': string
   'transfer.devices.connecting': string
   'transfer.devices.capNone': string
@@ -64,6 +65,7 @@ export type MessageSchema = {
   'transfer.task.state.completed': string
   'transfer.task.state.failed': string
   'transfer.task.state.rejected': string
+  'transfer.task.state.interrupted': string
   'transfer.task.state.cancelled': string
   'transfer.task.pause': string
   'transfer.task.resume': string
@@ -94,9 +96,6 @@ export type MessageSchema = {
   'transfer.queue.history': string
 
   // ==================== 批量请求应答（v2） ====================
-  'transfer.batch.pendingTitle': string
-  'transfer.batch.acceptAll': string
-  'transfer.batch.rejectAll': string
   'transfer.request.title': string
   'transfer.request.body': string
   'transfer.request.countdown': string
@@ -109,11 +108,13 @@ export type MessageSchema = {
   'transfer.consent.body': string
   'transfer.consent.namelessHint': string
   'transfer.consent.fingerprintLabel': string
+  'transfer.consent.copy': string
+  'transfer.consent.copied': string
+  'transfer.consent.copyHint': string
   'transfer.consent.countdown': string
   'transfer.consent.accept': string
   'transfer.consent.deny': string
   'transfer.consent.close': string
-  'transfer.consent.statusItem': string
 
   // ==================== 可信对端管理（spec 决策 8） ====================
   'transfer.trusted.title': string
@@ -182,9 +183,6 @@ export type MessageSchema = {
   'transfer.empty.noPeerHint': string
   'transfer.empty.noDownloadDir': string
   'transfer.empty.noDownloadDirHint': string
-
-  // ==================== 对端存储权限提示 ====================
-  'transfer.notice.storageAccess': string
 
   // ==================== 剩余时间 ====================
   'transfer.eta.seconds': string

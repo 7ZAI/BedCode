@@ -303,9 +303,10 @@ pub async fn plugin_invoke(
 /// 按文件名打开接收文件所在目录（历史记录「打开所在文件夹」真实设备路径）
 ///
 /// wire 不携带接收落盘路径，仅凭文件名经 Kotlin DownloadsDirPlugin
-/// openFileLocationByName（MediaStore 公共下载按名命中 → primary:Download；
-/// 未命中回退 app 私有下载目录）。需 system:open 权限，前端
-/// requireSystemOpenPermission 已校验（与 plugin_open_file* 回调链同模式）。
+/// openFileLocationByName（MediaStore 公共下载按名命中 → 打开 primary:Download
+/// 目录——查询与写入同源 external_primary、EXTERNAL_CONTENT_URI 兑底；未命中回退
+/// app 私有下载目录按名查找，顶层优先 + 子目录递归兑底）。需 system:open 权限，
+/// 前端 requireSystemOpenPermission 已校验（与 plugin_open_file* 回调链同模式）。
 #[tauri::command]
 pub async fn plugin_reveal_received_file(
     plugin_id: String,
@@ -319,4 +320,29 @@ pub async fn plugin_reveal_received_file(
     tracing::debug!(plugin_id = %plugin_id, file_name = %file_name, "reveal received file location");
     crate::plugin::android_plugins::open_download_file_location_by_name(&file_name)
         .await
+}
+
+/// 引导开启「所有文件访问」权限（打开系统公共 Download 目录所需）
+///
+/// 经 Kotlin AllFilesAccessPlugin.openAllFilesAccessSettings 查询
+/// isExternalStorageManager，未授权时跳转系统授权页（无该页面的 ROM 兑底
+/// 应用详情页）；返回跳转前的授权状态。授权后用户重新点击「打开所在文件夹」
+/// 即达（MediaStore 命中可重复查询）。需 system:open 权限，前端
+/// requireSystemOpenPermission 已校验（与 plugin_reveal_* 回调链同模式）。
+#[tauri::command]
+pub async fn plugin_open_all_files_access(plugin_id: String) -> Result<bool> {
+    tracing::debug!(plugin_id = %plugin_id, "open all files access settings");
+    crate::plugin::android_plugins::open_all_files_settings_android().await
+}
+
+/// 打开公共下载目录（设置页「下载目录」区打开按钮，核对文件是否落盘）
+///
+/// 经 Kotlin DownloadsDirPlugin.openDownloadDir 打开 primary:Download 文档树
+/// 目录；未授予「所有文件访问」时以 needs_all_files_access 前缀 reject，前端
+/// 据此弹引导跳系统设置。需 system:open 权限，前端 requireSystemOpenPermission
+/// 已校验（与 plugin_reveal_* 回调链同模式）。
+#[tauri::command]
+pub async fn plugin_open_download_dir(plugin_id: String) -> Result<()> {
+    tracing::debug!(plugin_id = %plugin_id, "open system download dir");
+    crate::plugin::android_plugins::open_download_dir().await
 }

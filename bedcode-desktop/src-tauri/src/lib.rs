@@ -162,6 +162,58 @@ pub fn run() {
     let app = builder.setup(move |app| {
             app.manage(app_start);
 
+            // 平台条件默认窗口尺寸：tauri.conf.json 全局默认 1300×900 适配
+            // Windows/macOS（字符渲染密度与 DPI 匹配），Linux（WebKitGTK）在
+            // 此放大到 1560×1080（曾全局改大导致 Windows 默认窗口过大，见
+            // b33e5d99 反例，改为仅 Linux 生效）。set_size 失败仅降级为全局
+            // 默认小窗，不阻断启动。
+            #[cfg(target_os = "linux")]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    // 目标窗口尺寸（逻辑像素）：Linux 下才放大，Windows/macOS 沿用全局默认
+                    let target = tauri::LogicalSize::new(1560.0f64, 1080.0f64);
+                    // 居中位置用目标尺寸一次性原子计算，替代 set_size 后 center()：
+                    // center() 内部读 outer_size() 缓存，在 set_size 异步请求（tao
+                    // window_requests 通道）执行前仍是旧值 1300×900，且 GTK resize
+                    // 左上角锚定，导致窗口扩大后中心点偏向右下、补偿失效。
+                    // 位置与尺寸同源于 target，与请求执行顺序无关。
+                    let monitor = win
+                        .current_monitor()
+                        .ok()
+                        .flatten()
+                        .or_else(|| win.primary_monitor().ok().flatten());
+                    if let Some(monitor) = monitor {
+                        let scale = monitor.scale_factor();
+                        let work_area = *monitor.work_area();
+                        // 物理像素计算，语义与 tauri 内部 calculate_window_center_position
+                        // 一致（work_area 居中，避开 Dock / 任务栏）
+                        let target_phys = target.to_physical::<u32>(scale);
+                        let x = (work_area.size.width as i32
+                            - target_phys.width as i32)
+                            / 2
+                            + work_area.position.x;
+                        let y = (work_area.size.height as i32
+                            - target_phys.height as i32)
+                            / 2
+                            + work_area.position.y;
+                        if let Err(e) = win.set_size(target) {
+                            tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
+                        }
+                        if let Err(e) =
+                            win.set_position(tauri::PhysicalPosition::new(x, y))
+                        {
+                            // 定位失败不阻断启动：仅记录，窗口回落 WM 默认放置
+                            tracing::warn!(error = %e, "Linux 默认窗口居中定位失败，沿用窗口管理器默认位置");
+                        }
+                    } else {
+                        // 无显示器信息（极端环境）：仅调整尺寸，位置交给窗口管理器
+                        if let Err(e) = win.set_size(target) {
+                            tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
+                        }
+                    }
+                }
+            }
+
             let app_handle = app.handle();
 
             // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志

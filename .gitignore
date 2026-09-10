@@ -13,12 +13,10 @@
 build/
 *.local
 
-# Documentation
-# 注意：只忽略仓库根 docs/，子目录 docs（如 bedcode-desktop/docs/、bedcode-mobile/docs/）允许入库——
-# AGENTS.md "Code Map" 段要求两端 code-map.md 作为必读入口。CLAUDE.md / CONTEXT.md / .scratch/ /
-# 顶层 .pi/ 受 doc-tracking.sh（scripts/doc-tracking.sh）分支级控制：dev 与 feature/* 全分支跟踪，
-# uat / master 不入库（git rm --cached 剔除、工作区保留）。脱离钩子场景（如手动 git add）需自行注意。
-/docs/
+# Documentation（顶层 docs/ 与两端 docs/ 的入库策略统一由 doc-tracking.sh（scripts/doc-tracking.sh）管理：
+# dev / feature/* 全分支跟踪，uat / master 不入库（git rm --cached 剔除、工作区保留），
+# 与 .scratch/ 同机制。根 .gitignore 不再忽略 /docs/，新文档文件可直接 git add。
+# CLAUDE.md / CONTEXT.md 为低频单文件，保持忽略，走 git add -f + 钩子剔除。
 
 CLAUDE.md
 CONTEXT.md

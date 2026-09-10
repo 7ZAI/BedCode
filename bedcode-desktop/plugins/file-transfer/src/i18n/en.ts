@@ -93,9 +93,6 @@ const en: MessageSchema = {
   'transfer.queue.history': 'History',
 
   // ==================== Batch request (v2) ====================
-  'transfer.batch.pendingTitle': 'File transfer request',
-  'transfer.batch.acceptAll': 'Accept all',
-  'transfer.batch.rejectAll': 'Reject all',
   'transfer.request.title': 'File transfer request',
   'transfer.request.body': '{name} wants to send you {count} files ({size} total)',
   'transfer.request.countdown': 'Auto-reject in {seconds}s',
@@ -109,11 +106,13 @@ const en: MessageSchema = {
   'transfer.consent.namelessHint':
     "Device name unavailable — verify the fingerprint below before deciding",
   'transfer.consent.fingerprintLabel': 'Device fingerprint',
+  'transfer.consent.copy': 'Copy fingerprint',
+  'transfer.consent.copied': 'Copied',
+  'transfer.consent.copyHint': 'Copy the full fingerprint to compare on another device',
   'transfer.consent.countdown': 'Auto-reject in {seconds}s',
   'transfer.consent.accept': 'Accept',
   'transfer.consent.deny': 'Reject',
   'transfer.consent.close': 'Close (same as reject)',
-  'transfer.consent.statusItem': '{n} awaiting approval',
 
   // ==================== Trusted peers (spec decision 8) ====================
   'transfer.trusted.title': 'Trusted peers',
@@ -190,10 +189,6 @@ const en: MessageSchema = {
   'transfer.empty.noDownloadDir': 'Configure a download folder in Settings first',
   'transfer.empty.noDownloadDirHint':
     'Choose where received files are saved, then you can download files from your peer to this device',
-
-  // ==================== Peer storage permission notice ====================
-  'transfer.notice.storageAccess':
-    'The peer may share an Android top-level folder, but "All files access" is not granted on the phone. Grant it in System settings → Apps → BedCode → Allow all files, then refresh to see the contents',
 
   // ==================== ETA ====================
   'transfer.eta.seconds': '{count}s left',

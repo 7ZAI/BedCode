@@ -16,12 +16,13 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:input': ['ui.registerTerminalToolbarItem'],
   'ui:route': ['ui.registerRoute', 'ui.openPage', 'ui.goBack'],
   'ui:back': ['ui.onBackPressed'],
+  'ui:dialog': ['ui.showDialog'],
   'network:http': ['http.registerEndpoint'],
   'storage': ['storage.get', 'storage.set', 'storage.delete'],
   'fs:read': ['fs.read', 'fs.copy'],
   'fs:write': ['fs.write', 'fs.copy'],
   'bus': ['bus.publish', 'bus.subscribe', 'bus.unsubscribe'],
-  'system:open': ['system.openFile', 'system.revealInDir', 'system.revealReceivedFileLocation'],
+  'system:open': ['system.openFile', 'system.revealInDir', 'system.revealReceivedFileLocation', 'system.requestAllFilesAccess', 'system.openDownloadDir'],
   // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   'peer': [],
 }

@@ -356,8 +356,9 @@ export function usePeerDevices(context: PluginContext) {
                 deviceName: d.deviceName ?? '',
                 addr: d.addr ?? '',
                 port: d.port ?? 0,
+                // 缺失/空 capabilitiesHex 均视为默认开放文件传输（undefined 不再走进 parseInt 得 NaN）
                 fileTransfer:
-                  d.capabilitiesHex === ''
+                  d.capabilitiesHex === '' || d.capabilitiesHex == null
                     ? true
                     : (Number.parseInt(d.capabilitiesHex, 16) & 1) !== 0,
                 ...(d.instanceName ? { instanceName: d.instanceName } : {}),

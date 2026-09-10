@@ -14,6 +14,8 @@ pub const PERMISSION_UI_SETTINGS: &str = "ui:settings";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
 /// 动态路由：注册/跳转插件路由页（宿主 addRoute/removeRoute）
 pub const PERMISSION_UI_ROUTE: &str = "ui:route";
+pub const PERMISSION_UI_DIALOG: &str = "ui:dialog";
+pub const PERMISSION_UI_BACK: &str = "ui:back";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
@@ -36,6 +38,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_UI_SETTINGS,
     PERMISSION_UI_INPUT,
     PERMISSION_UI_ROUTE,
+    PERMISSION_UI_DIALOG,
+    PERMISSION_UI_BACK,
     PERMISSION_NETWORK_HTTP,
     PERMISSION_STORAGE,
     PERMISSION_FS_READ,
@@ -56,6 +60,8 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_UI_SETTINGS, &["ui.registerSettingsSection"]),
     (PERMISSION_UI_INPUT, &["ui.registerTerminalToolbarItem"]),
     (PERMISSION_UI_ROUTE, &["ui.registerRoute", "ui.openPage", "ui.goBack"]),
+    (PERMISSION_UI_DIALOG, &["ui.showDialog"]),
+    (PERMISSION_UI_BACK, &["ui.onBackPressed"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete"]),
     (PERMISSION_FS_READ, &["fs.read", "fs.copy"]),

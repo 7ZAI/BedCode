@@ -10,6 +10,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import { useReceiving } from '../../../../plugins/file-transfer/src/composables/useReceiving'
+import { isPermissionGranted, requestPermission, sendNotification } from '@tauri-apps/plugin-notification'
+
+// 系统通知模块整体 mock：编排测试只验证是否/何时触发，不触碰真实 Tauri 桥
+vi.mock('@tauri-apps/plugin-notification', () => ({
+  isPermissionGranted: vi.fn().mockResolvedValue(true),
+  requestPermission: vi.fn().mockResolvedValue(true),
+  sendNotification: vi.fn(),
+}))
 
 type EventHandler = (payload: any) => void
 
@@ -41,6 +49,10 @@ function makeContext() {
             ),
         }
       },
+    },
+    // maybeNotifyPendingBatch 转发到系统通知的 title/body
+    i18n: {
+      t: (key: string) => key,
     },
   } as unknown as PluginContext
 
@@ -215,5 +227,78 @@ describe('useReceiving orchestration', () => {
     rec.stop()
     expect(rec.toasts.value).toHaveLength(0)
     expect(() => env.emit('plugin:file-transfer:batches-changed', [])).toThrow()
+  })
+})
+
+describe('useReceiving pending-batch 系统通知（窗口不可见时；前台由宿主全局弹窗承载）', () => {
+  let env: ReturnType<typeof makeContext>
+  /** document.hidden 的可变桩值（happy-dom 下 hidden 为可重定义普通属性） */
+  let docHidden = false
+  /** pending 批 wire 形状（ask 策略下宿主推送） */
+  const pendingWire = () => [
+    {
+      batchId: 'pb-1', nodeId: 'node-a', peerName: '设备-a',
+      direction: 'receive', status: 'pending',
+      files: [{ path: 'docs/a.pdf', size: 10 }], totalBytes: 10,
+      transferredBytes: 0, rateBps: 0, createdAtMs: 1, updatedAtMs: 2,
+    },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    docHidden = false
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => docHidden,
+    })
+    env = makeContext()
+    env.onCommand('file-transfer.list-batches', () => [])
+    env.onCommand('file-transfer.list-receiving', () => [])
+    env.onCommand('file-transfer.list-history', () => [])
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    Object.defineProperty(document, 'hidden', {
+      configurable: true,
+      get: () => false,
+    })
+  })
+
+  it('窗口不可见时发系统通知，同批去重不重复发', async () => {
+    const rec = useReceiving(env.context)
+    rec.start()
+    // 先落定初始 refresh：其异步空快照会在批事件后到达时把刚记账的批 ID 从
+    // notifiedBatches 清掉（去重记账与启动刷新存在竞态——生产上极小概率重复
+    // 通知；测试需确定性，故先收敛再触发事件）
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+
+    docHidden = true
+    env.emit('plugin:file-transfer:batches-changed', pendingWire())
+    // maybeNotifyPendingBatch 的权限检查 await 挂起后在下一条微任务完成（sendNotification + 记账同在同步块）
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+    expect(isPermissionGranted).toHaveBeenCalled()
+    expect(requestPermission).not.toHaveBeenCalled()
+    // 通知载荷带批信息（title/body 转发 i18n key）
+    expect(sendNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'transfer.request.title' }),
+    )
+
+    // 同批再次到达（事件重复）不重复通知
+    env.emit('plugin:file-transfer:batches-changed', pendingWire())
+    await Promise.resolve()
+    expect(sendNotification).toHaveBeenCalledTimes(1)
+  })
+
+  it('窗口可见（前台）时不发系统通知——待确认弹窗由宿主全局弹窗承载', async () => {
+    const rec = useReceiving(env.context)
+    rec.start()
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+
+    env.emit('plugin:file-transfer:batches-changed', pendingWire())
+    await Promise.resolve()
+    expect(sendNotification).not.toHaveBeenCalled()
   })
 })

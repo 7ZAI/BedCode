@@ -513,8 +513,8 @@
           </div>
         </section>
 
-        <!-- ==================== LOGGING ==================== -->
-        <section>
+        <!-- ==================== LOGGING（仅 dev 构建显示；正式版隐藏，后端功能保留） ==================== -->
+        <section v-if="isDev">
           <h3 class="wb-section-title">{{ t('settings.log.title') }}</h3>
           <div
             class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)]"
@@ -735,6 +735,8 @@ const qrTokenTtl = ref(300)
 const pairingCodeTtl = ref(60)
 
 // ==================== 日志设置（desktop-logging-overhaul 04） ====================
+// 仅 dev 构建展示（正式版用户不需要关心日志；后端配置能力保留，见 useLogSettings）
+const isDev = import.meta.env.DEV
 const { setLogLevel, openLogDir, saveLogSettings } = useLogSettings()
 
 const logLevelOptions = [

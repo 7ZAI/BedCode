@@ -105,7 +105,13 @@ pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpR
     {
         let db = ctx.db();
         let db_guard = db.lock().await;
-        if let Err(e) = db_guard.add_pairing(&display_name, &body.fingerprint, "", Some(&body.address)) {
+        if let Err(e) = db_guard.add_pairing(
+            &display_name,
+            &body.fingerprint,
+            "",
+            Some(&body.address),
+            body.uid_hash.as_deref(),
+        ) {
             tracing::warn!(device_name = %body.device_name, error = %e, "Failed to record pairing");
         }
     }
@@ -184,7 +190,7 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
             {
                 let db = ctx.db();
                 let db_guard = db.lock().await;
-                if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address)) {
+                if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address), body.uid_hash.as_deref()) {
                     tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                 }
             }
@@ -407,7 +413,7 @@ pub async fn biometric_verify(body: web::Json<BiometricVerifyRequest>) -> HttpRe
             // 刷新配对记录（connect_count / last_seen）——必须保留公钥防覆盖
             {
                 let db_guard = ctx.db().lock().await;
-                if let Err(e) = db_guard.add_pairing(&device_name, &fingerprint, &pairing.public_key, None) {
+                if let Err(e) = db_guard.add_pairing(&device_name, &fingerprint, &pairing.public_key, None, None) {
                     tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                 }
             }

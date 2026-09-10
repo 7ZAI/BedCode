@@ -21,6 +21,7 @@
     "system:open",
     "transfer",
     "ui:back",
+    "ui:dialog",
     "ui:route",
     "ui:settings",
     "ui:toolbox"

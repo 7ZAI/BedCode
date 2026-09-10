@@ -177,3 +177,28 @@ pub async fn open_download_file_location_by_name(_display_name: &str) -> crate::
         "openFileLocationByName unavailable on this platform".to_string(),
     ))
 }
+
+/// 打开公共下载目录（设置页「下载目录」区打开按钮）
+///
+/// 经 Kotlin DownloadsDirPlugin.openDownloadDir（primary:Download 文档树 URI；
+/// 需「所有文件访问」，未授权时以 needs_all_files_access 前缀 reject 供前端
+/// 引导）。需 system:open 权限。非 Android 平台返回错误。
+#[cfg(target_os = "android")]
+pub async fn open_download_dir() -> crate::Result<()> {
+    let handle = DOWNLOADS_DIR_HANDLE
+        .get()
+        .ok_or_else(|| crate::AppError::Plugin("DownloadsDirPlugin not registered".to_string()))?;
+    let _response: serde_json::Value = handle
+        .run_mobile_plugin_async("openDownloadDir", serde_json::json!({}))
+        .await
+        .map_err(|e| crate::AppError::Plugin(format!("Failed to invoke openDownloadDir: {}", e)))?;
+    Ok(())
+}
+
+/// 非 Android 平台无法经 Kotlin 打开下载目录
+#[cfg(not(target_os = "android"))]
+pub async fn open_download_dir() -> crate::Result<()> {
+    Err(crate::AppError::Plugin(
+        "openDownloadDir unavailable on this platform".to_string(),
+    ))
+}

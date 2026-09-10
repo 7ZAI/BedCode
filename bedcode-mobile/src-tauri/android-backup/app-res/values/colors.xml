@@ -1,10 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="purple_200">#FFBB86FC</color>
-    <color name="purple_500">#FF6200EE</color>
-    <color name="purple_700">#FF3700B3</color>
-    <color name="teal_200">#FF03DAC5</color>
-    <color name="teal_700">#FF018786</color>
-    <color name="black">#FF000000</color>
-    <color name="white">#FFFFFFFF</color>
+    <!-- 与 gen/android 同步维护:启动期窗口/系统开屏背景浅色值(同 mobile.css 的
+         mobile-bg-primary 浅色值),深色值见 values-night/colors.xml;
+         tauri android init 重建后需手工恢复。模板默认色板已清理(零引用) -->
+    <color name="bedcode_launch_bg">#F5F4F0</color>
 </resources>

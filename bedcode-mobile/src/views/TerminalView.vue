@@ -1287,9 +1287,10 @@ async function initTerminal() {
   }
 
   // 注册实时 handler — 历史分片回放（高水位节流，见 useTerminalBuffer）与
-  // 实时推送同通道写入；shouldAck 门控 = 本端是会话正统渲染端（渲染背压 ack 仅正统端发送）
+  // 实时推送同通道写入；背压 ack 由 useTerminalBuffer 无条件回发（onWriteParsed
+  // 即证明本端在消费，不依赖正统归属，见 composable 注释）
   // 回放完成信号接入加载遮罩门控：末批解析完成后才允许撤遮罩
-  const { replayDone } = registerRealtimeHandler(sessionId.value, term, feedTuiOutput, () => isCanonicalRenderer.value)
+  const { replayDone } = registerRealtimeHandler(sessionId.value, term, feedTuiOutput)
   void replayDone.then(() => settleReplay?.())
 
   // 本地历史缓存曾被头部 LRU 裁剪（超 16MB）：本次回放起点非流首，可能切断

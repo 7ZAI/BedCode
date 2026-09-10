@@ -27,6 +27,8 @@ import type {
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
+  PluginDialogOptions,
+  PluginDialogHandle,
 } from './types'
 import { hasPermissionForApi } from './permission'
 import * as pluginCmds from './commands'
@@ -35,6 +37,10 @@ import { getPluginRegistry } from './registry'
 import { registerPluginRoute, openPluginRoute } from './routes'
 import { getSharedModule } from './shared-runtime'
 import { invoke } from '@tauri-apps/api/core'
+// 全局弹窗控制器：必须经包说明符解析（与 App.vue 挂载的 PluginGlobalDialog.vue 同源）。
+// 移动端 file: 依赖是快照拷贝，若直连源码相对路径会与组件产生两个模块实例，
+// openGlobalDialog 的广播到不了组件（弹窗静默不渲染）；包说明符保证同一拷贝文件。
+import { openGlobalDialog } from '@binblink/bedcode-plugin-sdk-mobile/global-dialog'
 
 // ==================== Android 系统返回键（跨插件共享单例） ====================
 // Tauri AppPlugin 的行为：只要 JS 侧存在 back-button listener，系统返回一律转发到 JS，
@@ -77,6 +83,7 @@ function extractInvokeErrorMessage(e: unknown): string {
 export function createPluginContext(info: PluginInfo): PluginContext {
   const disposables: Disposable[] = []
   const permissions = info.permissions
+  let context: PluginContext | null = null
 
   /** 快速失败：检查权限 */
   function requirePermission(apiMethod: string): void {
@@ -207,6 +214,10 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      requirePermission('ui.showDialog')
+      return openGlobalDialog({ ...options, pluginContext: context! })
+    },
   }
 
   // ==================== EventAPI ====================
@@ -261,6 +272,20 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     async revealReceivedFileLocation(fileName: string): Promise<void> {
       requireSystemOpenPermission('system.revealReceivedFileLocation')
       return pluginCmds.pluginRevealReceivedFile(info.id, fileName)
+    },
+    /**
+     * 引导开启「所有文件访问」权限（打开公共 Download 目录所需；未授权时跳系统
+     * 设置页，返回跳转前的授权状态；授权后重试 revealReceivedFileLocation 即达）
+     */
+    async requestAllFilesAccess(): Promise<boolean> {
+      requireSystemOpenPermission('system.requestAllFilesAccess')
+      return pluginCmds.pluginOpenAllFilesAccess(info.id)
+    },
+    /** 打开系统公共下载目录（设置页下载目录区「打开」，核对文件是否落盘；
+     * 未授予「所有文件访问」时报 needs_all_files_access 前缀，前端据此引导授权） */
+    async openDownloadDir(): Promise<void> {
+      requireSystemOpenPermission('system.openDownloadDir')
+      return pluginCmds.pluginOpenDownloadDir(info.id)
     },
   }
 
@@ -381,7 +406,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  return {
+  context = {
     id: info.id,
     commands,
     terminal,
@@ -398,4 +423,5 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     status,
     _disposables: disposables,
   }
+  return context!
 }

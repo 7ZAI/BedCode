@@ -18,7 +18,7 @@ export function formatBytes(bytes: number | null | undefined): string {
 /** 秒 → 剩余时间文案（经 i18n key） */
 export function formatEta(
   seconds: number,
-  t: (key: string, params?: Record<string, any>) => string,
+  t: (key: string, params?: Record<string, unknown>) => string,
 ): string {
   if (!Number.isFinite(seconds) || seconds < 0) return ''
   if (seconds < 1) return t('transfer.eta.seconds', { count: 0 })
@@ -55,4 +55,21 @@ export function formatClock(ms: number | null | undefined): string {
     hour: '2-digit',
     minute: '2-digit',
   })
+}
+
+/**
+ * 长指纹分组展示（对比友好）：按 groupSize 字符一组切分，返回分组数组。
+ * 模板以 flex-wrap 渲染分组 span，换行严格落在组边界，避免无间隔长串
+ * 任意断行出难看斜边（SSH / Bitcoin 公钥指纹同款惯例）。
+ * 空白（含换行/空格）先剥除；空串返回 []；组尾允许不足整组。
+ */
+export function groupFingerprint(fingerprint: string, groupSize = 4): string[] {
+  const clean = fingerprint.replace(/\s+/g, '')
+  if (!clean) return []
+  const size = Math.max(1, groupSize)
+  const groups: string[] = []
+  for (let i = 0; i < clean.length; i += size) {
+    groups.push(clean.slice(i, i + size))
+  }
+  return groups
 }

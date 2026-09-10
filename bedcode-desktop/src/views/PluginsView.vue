@@ -295,7 +295,7 @@
  * 卡片主体点击进入详情页，chevron 展开简介折叠区。
  * 启停操作显示全页遮罩弹窗，防反复点击。
  */
-import { computed, onMounted, reactive } from 'vue'
+import { computed, onActivated, onMounted, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePluginManager } from '@/composables/usePluginManager'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
@@ -335,6 +335,17 @@ async function handleToggle(id: string, enable: boolean): Promise<void> {
 
 onMounted(() => {
   loadPlugins()
+})
+
+// KeepAlive 缓存恢复（从详情页返回列表）时 onMounted 不会重新执行，列表会保留
+// 进入详情前的旧状态（详情页启停后返回仍显示旧状态）。监听 onActivated 在每次
+// 缓存恢复时重新拉取，保证列表与详情页的启用/禁用状态一致。
+// 注意：KeepAlive 内首次挂载时 onActivated 也会触发一次（onMounted 已加载过），
+// 用标志位跳过，避免双次拉取
+let activatedOnce = false
+onActivated(() => {
+  if (activatedOnce) loadPlugins()
+  activatedOnce = true
 })
 </script>
 

@@ -327,7 +327,7 @@
  * Hero + 操作行 + 统计条 + 四折叠区（简介/扩展点/权限/详细信息）。
  * 从插件列表进入，返回直接回列表页。
  */
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, onActivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { pluginListLoaded, pluginPreauthorize } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
@@ -455,6 +455,16 @@ watch(
     loadPlugin()
   },
 )
+
+// KeepAlive 缓存恢复（从列表页重新进入同一插件详情）时 onMounted 不会重新执行，
+// 详情页会保留缓存前的旧状态（列表页启停后重进详情仍显示旧状态）。监听
+// onActivated 在每次缓存恢复时重新拉取，保证详情与列表的启用/禁用状态一致。
+// 首次挂载在 KeepAlive 内同样触发一次（onMounted 已加载过），用标志位跳过
+let activatedOnce = false
+onActivated(() => {
+  if (activatedOnce) loadPlugin()
+  activatedOnce = true
+})
 </script>
 
 <style scoped>

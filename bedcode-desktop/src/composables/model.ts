@@ -110,6 +110,8 @@ export interface SessionEventPayload {
 export interface DeviceEventPayload {
   addr?: string
   device_id?: string
+  /** 设备指纹（稳定设备身份，后端 device-* 事件均携带；与 DeviceConnectionInfo 同键，用于在线态去重） */
+  fingerprint?: string
   device_name?: string
   event?: string
 }

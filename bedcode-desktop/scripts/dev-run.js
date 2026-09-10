@@ -312,3 +312,6 @@ host.on('exit', (code) => {
 // Ctrl+C / 终止信号：广播回收
 process.on('SIGINT', () => shutdown(0))
 process.on('SIGTERM', () => shutdown(0))
+// 关闭终端标签页/窗口：终端只发 SIGHUP（SIGINT 不送 detached 子进程组），
+// 不处理则 shutdown 不执行、整棵 detached 子树孤儿化残留
+process.on('SIGHUP', () => shutdown(0))

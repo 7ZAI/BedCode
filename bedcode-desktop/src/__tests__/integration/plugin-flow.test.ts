@@ -29,6 +29,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import i18n from '@/locales'
 import PluginsView from '@/views/PluginsView.vue'
+import { KeepAlive, shallowRef } from 'vue'
 import { pluginLoader } from '@/plugin/loader'
 import { makePluginInfo, makeDegradedPluginInfo } from '@/__tests__/fixtures/index'
 
@@ -263,5 +264,51 @@ describe('插件流：pluginLoader × usePluginManager × PluginsView', () => {
     expect(wrapper!.find('[aria-label="启用"]').exists()).toBe(true)
     expect(wrapper!.find('[aria-label="启用"]').attributes('disabled')).toBeUndefined()
     expect(wrapper!.text()).toContain('0/1')
+  })
+
+  it('KeepAlive 缓存恢复：从详情页返回列表时重新拉取，启停状态与详情页同步', async () => {
+    // 首次进入：插件停用中（与真实场景一致：先看列表 → 进详情 → 详情页启用 → 返回）
+    backendPlugins = [
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Deactivated' },
+      }),
+    ]
+    // DesktopLayout 对所有路由页面套 KeepAlive，这里包一层模拟真实缓存行为
+    const comp = shallowRef(PluginsView)
+    wrapper = mount(
+      {
+        components: { KeepAlive },
+        setup: () => ({ comp }),
+        template: '<KeepAlive><component :is="comp" /></KeepAlive>',
+      },
+      { global: { plugins: [createPinia(), makeRouter(), i18n] } },
+    )
+    await flushAsync()
+
+    // 首次挂载：onMounted + onActivated 双钩子只拉取一次（标志位防双拉）
+    expect(invokeCalls('plugin_list_loaded')).toHaveLength(1)
+    expect(wrapper!.text()).toContain('0/1')
+
+    // 模拟详情页内已启用插件（后端状态变化），随后从详情页返回列表
+    backendPlugins = [
+      makePluginInfo({
+        id: 'com.bedcode.demo',
+        name: 'Demo Plugin',
+        state: { state: 'Activated' },
+      }),
+    ]
+    // 切走（列表页入缓存）
+    comp.value = { template: '<div />' }
+    await flushAsync()
+    // 切回（KeepAlive 恢复缓存 → onActivated 重新拉取）
+    comp.value = PluginsView
+    await flushAsync()
+
+    // 列表已重新拉取：状态与详情页一致，行迁到已启用分区，开关呈停用语义
+    expect(invokeCalls('plugin_list_loaded')).toHaveLength(2)
+    expect(wrapper!.text()).toContain('1/1')
+    expect(wrapper!.find('[aria-label="停用"]').exists()).toBe(true)
   })
 })

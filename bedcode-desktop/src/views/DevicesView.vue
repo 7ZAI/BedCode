@@ -647,10 +647,11 @@ onMounted(async () => {
   )
 
   // 监听 QR token 被消耗事件，自动重新生成二维码
+  // 注：连接成功提示由 useGlobalNotifications 的 device-connected 去重 toast 统一负责——
+  // 此处只做状态联动（重复生成 QR），token 刷新时设备本就在线，不再每次扫描都弹「已连接」
   qrTokenConsumedListener = await listen('qr-token-consumed', () => {
     logger.log('[DevicesView] QR token consumed, regenerating')
     qr.generateQr(selectedIp.value || undefined)
-    toast.success(t('desktop.device.deviceConnected'))
   })
 
   // 监听设备断开事件

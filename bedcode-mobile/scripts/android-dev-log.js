@@ -69,9 +69,13 @@ const stripAnsi = (s) =>
 
 console.log(`[dev-log] 电脑端日志落盘: ${logFile}`)
 
-const child = spawn(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['run', 'tauri:android:dev'], {
+const IS_WIN = process.platform === 'win32'
+const child = spawn(IS_WIN ? 'pnpm.cmd' : 'pnpm', ['run', 'tauri:android:dev'], {
   stdio: ['inherit', 'pipe', 'pipe'],
-  shell: process.platform === 'win32',
+  shell: IS_WIN,
+  // POSIX：detached 让子进程自成进程组，信号处理可对整个组（含 dev-run.js 及其
+  // 全部 watch/宿主子树）一次性回收；Ctrl+C 不再直送子进程，由下方 handler 转发
+  detached: !IS_WIN,
 })
 
 for (const fd of ['stdout', 'stderr']) {
@@ -93,10 +97,26 @@ child.on('exit', (code) => {
   stream.end(() => process.exit(code ?? 0))
 })
 
-// Ctrl+C / 终止信号：等缓冲区落盘再退出，避免截断尾部日志
+// Ctrl+C / 终止信号 / 关闭终端标签页：先回收整棵子进程树（dev-log 退出了子进程
+// 不会跟着退，历史上残留 vite/插件 watch），再等缓冲区落盘退出，避免截断尾部日志
 // （flags 'w' 下尾部丢失 + 下次启动覆盖当天文件 = 该段日志永久不可查）
-for (const sig of ['SIGINT', 'SIGTERM']) {
+let signalHandled = false
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.on(sig, () => {
-    stream.end(() => process.exit(0))
+    if (signalHandled) return
+    signalHandled = true
+    if (child.pid) {
+      try {
+        process.kill(-child.pid, 'SIGTERM')
+      } catch {
+        try {
+          child.kill('SIGTERM')
+        } catch {
+          // 已退出，忽略
+        }
+      }
+    }
+    // 子进程树收到 SIGTERM 自行回收；这里给短宽限让 dev-run.js 完成日志冲刷
+    setTimeout(() => stream.end(() => process.exit(0)), 500).unref()
   })
 }

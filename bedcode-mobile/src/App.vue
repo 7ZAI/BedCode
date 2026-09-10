@@ -13,30 +13,35 @@
     <!-- Plugin Dialog Host -->
     <PluginDialogHost />
 
+    <!-- 插件全局弹窗（宿主统一渲染，文件传输等插件经 context.ui.showDialog 触发） -->
+    <PluginGlobalDialog />
+
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
 
     <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载）
-      SplashScreen 暂时下线：移动端开屏页暂停展示，实现完整保留
-      （components/SplashScreen.vue + config/splash.ts + composables/useAppStartup.ts）。
-      恢复方式：取消下方这行注释，并同步取消 script 里 SplashScreen import 与
-      showSplash ref 的注释，把 'ref' 加回 vue import。 -->
-    <!-- <SplashScreen v-if="showSplash" @closed="showSplash = false" /> -->
+         渲染哪个候选页由 config/splash.ts 的 ACTIVE_SPLASH_CANDIDATE 决定：
+         'terminal' = 终端开机自检叙事动画（SplashScreen.vue，原开屏）；
+         'native'   = 原生系统开屏样式复刻（SplashScreenNative.vue，当前默认）。
+         两个候选组件均保留，将来切换开屏样式只改配置一处，无需改 App.vue。 -->
+    <SplashScreen v-if="!splashIsNative && showSplash" @closed="showSplash = false" />
+    <SplashScreenNative v-else-if="showSplash" @closed="showSplash = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-// SplashScreen 下线后 'ref' 无使用点，已暂时从 import 移除（恢复开屏时补回）
-import { provide, computed, onMounted, onUnmounted } from 'vue'
+import { provide, ref, computed, onMounted, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
-// SplashScreen 暂时下线：开屏页暂停挂载，恢复时取消注释
-// import SplashScreen from '@/components/SplashScreen.vue'
+import SplashScreen from '@/components/SplashScreen.vue'
+import SplashScreenNative from '@/components/SplashScreenNative.vue'
+import { ACTIVE_SPLASH_CANDIDATE } from '@/config/splash'
 import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
+import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-mobile/ui/plugin-global-dialog'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { syncLinkCryptoContextToNative, initLinkCryptoPinSync } from '@/composables/useLinkEncryption'
@@ -58,16 +63,16 @@ const { setupFontSize } = useFontSize()
 const settingsStore = useSettingsStore()
 const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' | 'dark' | 'system')
 
-// 开屏动画:淡出动画结束后卸载（SplashScreen 暂时下线，恢复时取消注释）
-// const showSplash = ref(true)
+// 开屏动画:淡出动画结束后卸载;候选页由 ACTIVE_SPLASH_CANDIDATE 决定
+const showSplash = ref(true)
+/** 当前候选是否为原生系统开屏样式复刻(候选 2);false 即终端叙事动画(候选 1) */
+const splashIsNative = ACTIVE_SPLASH_CANDIDATE === 'native'
 // const { startAdvertise, stopAdvertise } = useMdnsAdvertiser()
 
 onMounted(async () => {
   setupTheme()
   setupFontSize()
   // 开屏启动任务打点:主题/字体/安全区等 UI 子系统就绪
-  // SplashScreen 下线期间此打点只写注册表、无 UI 消费方,保留以保证恢复开屏
-  // 时 startupReady 语义完整
   completeStartupTask('ui')
   // 链路加密上下文启动同步（issue 09）：Rust 侧事件 WS 建连前需要拿到
   // 当前开关与 pin；失败静默（默认全关，不影响明文现状）

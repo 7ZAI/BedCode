@@ -12,20 +12,20 @@
 //!   比对（不符即 TLS 层拒绝，AC#3），接听侧仅做 SPKI 形状校验；「是否可信」
 //!   由握手后的应用层闸门查 trust store 决定。两个 verifier 的
 //!   `verify_tls13_signature` 均做真实 Ed25519 签名验证（RFC 8446 §4.4.3），
-//!   证明对端持有对应私钥——伪造身份在密码学上不可行（ADR 0002）。
+//!   证明对端持有对应私钥——伪造身份在密码学上不可行（ADR 0028）。
 //! - **信任与首连闸门**：[`trust_store`] 持久化可信节点列表；未信任方拨入停在
 //!   应用层确认闸门，宿主经 [`TrustEvent::ConfirmRequested`] 回调接受/拒绝，
 //!   接受则双向落库连通、后续重连静默（AC#1/#2），撤销后重走确认（AC#4/#5）。
 //! - **上层缝**（[`transport::ConnectionHandler`]）：信任放行后的已认证连接移交
-//!   点，后续 HTTP 服务票在此挂载低层驱动（ADR 0001 衔接决策）。
+//!   点，后续 HTTP 服务票在此挂载低层驱动（ADR 0027 衔接决策）。
 //! - **mDNS 节点发现**（[`discovery`]，ticket 03）：对等网络专用服务类型
 //!   `_bedcode-peer._tcp.local.` 广播+浏览并存，TXT 携带设备名/协议版本/能力
 //!   位图；发现结果进带 TTL 的在线缓存，「在线」即记录可见、与连接无关。
 //!   守护回调与测试喂入共用 [`DiscoveryCache::observe`] 同一通路（注入缝）；
 //!   与终端链路旧 `_bedcode._tcp` 完全独立互不感知。
 //!
-//! 设计依据：`docs/adr/0001-peer-network-transport-stack.md`（传输栈方向）、
-//! `docs/adr/0002-peer-trust-model.md`（信任模型）。
+//! 设计依据：`docs/adr/0027-peer-network-transport-stack.md`（传输栈方向）、
+//! `docs/adr/0028-peer-trust-model.md`（信任模型）。
 //!
 //! ## 指纹算法（既定约定）
 //!

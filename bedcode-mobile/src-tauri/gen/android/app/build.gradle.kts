@@ -88,7 +88,11 @@ android {
 }
 
 rust {
-    rootDirRel = "../../../"
+    // ⚠ 相对 gen/android/app 上 4 级 = 前端根（bedcode-mobile，含 package.json）；
+    // 模板默认 ../../../ 落到 src-tauri（无 package.json），npm 靠向上查找 package.json 碰巧可用，
+    // pnpm 在 workspace 内不跨目录解析，直接 ERR_PNPM_NO_IMPORTER_MANIFEST_FOUND。
+    // ❗ tauri android init 重建会重置为 ../../../，恢复时需改回 ../../../../。
+    rootDirRel = "../../../../"
 }
 
 dependencies {

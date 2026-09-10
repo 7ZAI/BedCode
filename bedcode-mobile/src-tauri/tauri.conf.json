@@ -20,7 +20,7 @@
         "center": true,
         "visible": true,
         "decorations": false,
-        "backgroundColor": "#111827"
+        "backgroundColor": "#F5F4F0"
       }
     ],
     "security": {
@@ -28,7 +28,11 @@
       "assetProtocol": {
         "enable": true,
         "scope": {
-          "allow": ["$RESOURCE/**/*", "$APPCONFIG/**/*", "$APPDATA/**/*"]
+          "allow": [
+            "$RESOURCE/**/*",
+            "$APPCONFIG/**/*",
+            "$APPDATA/**/*"
+          ]
         }
       }
     }

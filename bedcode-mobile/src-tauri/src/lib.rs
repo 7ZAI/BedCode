@@ -70,6 +70,7 @@ pub fn run() {
         .plugin(crate::plugin::android_plugins::saf_transfer_plugin())
         .plugin(crate::plugin::android_plugins::all_files_access_plugin())
         .plugin(crate::plugin::android_plugins::multicast_lock_plugin())
+        .plugin(crate::plugin::android_plugins::status_bar_style_plugin())
         .setup(|app| {
             tracing::info!("BedCode setup starting...");
             tracing::info!("Plugins initialized");
@@ -254,6 +255,7 @@ pub fn run() {
             commands::android::set_screen_orientation,
             commands::android::keep_screen_awake,
             commands::android::open_url_in_browser,
+            commands::android::set_status_bar_style,
             // Session Config (移动端使用内存存储)
             commands::mobile_commands::list_session_configs_mobile,
             commands::mobile_commands::get_session_config_mobile,
@@ -327,6 +329,10 @@ pub fn run() {
             commands::dev_logs::report_frontend_log,
             // System Open（历史「打开所在文件夹」真机路径，system:open 权限）
             crate::plugin::commands::plugin_reveal_received_file,
+            // System Open 配套：「所有文件访问」授权引导（system:open 权限）
+            crate::plugin::commands::plugin_open_all_files_access,
+            // System Open 配套：打开公共下载目录（设置页下载目录区「打开」，system:open 权限）
+            crate::plugin::commands::plugin_open_download_dir,
             // File Service Commands（插件 TS 通道）
             // v2 批量传输批准（接收策略 / 异步批量批准）
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）

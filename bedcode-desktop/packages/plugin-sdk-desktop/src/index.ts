@@ -26,6 +26,9 @@ export type {
   TitleBarItemDescriptor,
   PageToolbarItemDescriptor,
   FileHandlerDescriptor,
+  PluginDialogAction,
+  PluginDialogOptions,
+  PluginDialogHandle,
   RequestHandler,
   CommandRegistry,
   TerminalAPI,
@@ -53,6 +56,22 @@ export {
   getRouter,
   getPluginContext,
 } from './runtime'
+
+// 全局弹窗控制器导出（宿主 / dev-shell 的 ui.showDialog 实现与渲染组件订阅）
+export {
+  openGlobalDialog,
+  closeGlobalDialog,
+  updateGlobalDialog,
+  getGlobalDialog,
+  subscribeGlobalDialog,
+  resolveDialogDeadline,
+} from './global-dialog'
+export type {
+  GlobalDialogEntry,
+  GlobalDialogListener,
+  OpenGlobalDialogInput,
+  GlobalDialogHandleOutput,
+} from './global-dialog'
 
 // 配置约定导出
 export { PLUGIN_CONFIG_STORAGE_KEY, defineConfiguration } from './config'

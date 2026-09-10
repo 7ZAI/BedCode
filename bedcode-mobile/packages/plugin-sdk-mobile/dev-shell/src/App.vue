@@ -9,6 +9,7 @@ import { ref } from 'vue'
 import AppShell from './components/AppShell.vue'
 import DevToolbar from './components/DevToolbar.vue'
 import DialogHost from './components/DialogHost.vue'
+import PluginGlobalDialog from '../../src/ui/PluginGlobalDialog.vue'
 import LogPanel from './components/LogPanel.vue'
 
 const frame = ref(true)
@@ -32,6 +33,7 @@ const logOpen = ref(false)
 
   <!-- 全局浮层（Teleport to body） -->
   <DialogHost />
+  <PluginGlobalDialog />
   <LogPanel v-model:log-open="logOpen" />
 </template>
 

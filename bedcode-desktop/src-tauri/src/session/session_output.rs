@@ -757,30 +757,19 @@ impl GlobalOutputManager {
     /// 客户端 ack（背压反馈环 Rust 侧入口）：推进会话未 ack 记账，释放
     /// `last_rendered_seq` 及之前的输出字节；会话不存在时忽略
     ///
-    /// 背压门控：仅正统渲染端（current canonical）的 ack 推进记账；非正统端
-    /// 的 ack 直接丢弃（其渲染格式可能与 PTY 尺寸不匹配，吞吐不代表权威消费
-    /// 速度，混入会污染水位）。会话无归属时保守接受，避免水位锁死。
-    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64, source: RendererSource) {
+    /// 背压水位按会话整体记账（每产出事件 +bytes，不区分订阅者），因此任何
+    /// 已认证订阅端的渲染确认都应推进记账。此前实现有正统门控（仅 current
+    /// canonical 的 ack 有效），造成「桌面启动会话、移动端观看」等正统端不在
+    /// 消费路径的场景死锁：观看端 ack 被丢弃 → unacked 超高位水（64KB）→
+    /// 会话 PTY 读整体暂停 → 输出停滞且无法恢复（仅 ack/revert 能降水位）——
+    /// 即移动端「显示一点就卡住」根因。unacked 是共享流量水位而非尺寸裁决
+    /// 依据，门控「非正统渲染格式不匹配、吞吐不代表权威消费速度」的顾虑不
+    /// 成立（订阅端收到的都是同一 PTY 字节流，消费确认即释放）；多端并发时
+    /// 慢端 ack 只落后不加速，快端 ack 照常推进，无拖垮风险。
+    /// 自 2.1.x 起放开：非正统端 ack 同样推进记账（`_source` 保留签名，供日志/审计）
+    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64, _source: RendererSource) {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
-            let is_canonical = match crate::system::app_context::AppContext::try_global() {
-                Some(ctx) => match ctx.session_manager().canonical_renderer_of(session_id).await {
-                    Some(c) => c == source,
-                    // 会话无正统归属（尚未 resize）：保守接受，避免背压水位永久暂停
-                    None => true,
-                },
-                // 无 AppContext（无头/测试上下文）：跳过门控，保守接受
-                None => true,
-            };
-            if !is_canonical {
-                tracing::debug!(
-                    session_id,
-                    last_rendered_seq,
-                    source = ?source,
-                    "ack from non-canonical renderer ignored"
-                );
-                return;
-            }
             manager.on_ack(last_rendered_seq);
             tracing::trace!(
                 session_id,
@@ -1312,6 +1301,50 @@ mod tests {
 
         // 会话不存在：ack 静默忽略，不 panic
         manager.ack("no-such-session", 5, RendererSource::Desktop).await;
+    }
+
+    /// 非正统端（移动端旁观）ack 同样推进记账：背压水位按会话整体消费，任何
+    /// 订阅端的渲染确认都释放未 ack 字节（2.1.x 修复「桌面启动会话/移动端观看」
+    /// 死锁的回归护栏——此前仅正统端 ack 有效，观看端被丢弃导致 unacked 永久
+    /// 高位 → PTY 读整体暂停 → 输出卡死）
+    #[tokio::test]
+    async fn test_ack_from_mobile_observer_releases_backpressure() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-nc").await;
+
+        let (tx, mut rx) = mpsc::channel(1000);
+        manager.subscribe("session-nc", "client-mobile", tx, None).await;
+        let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
+
+        // 每事件 8KB；16 事件 = 128KB > 64KB 高位水 → 暂停读
+        let big = vec![b'x'; 8 * 1024];
+        for _ in 0..16 {
+            manager
+                .on_output(OutputEvent {
+                    session_id: "session-nc".to_string(),
+                    data: big.clone(),
+                    index: 0,
+                    timestamp: Utc::now().timestamp_millis(),
+                    is_waiting: false,
+                })
+                .await;
+        }
+        assert!(manager.should_pause("session-nc"), "burst should pause");
+
+        // 移动端身份 ack：与正统端等效推进（无需 AppContext 门控）→ 降回低水位恢复
+        manager
+            .ack(
+                "session-nc",
+                99999,
+                RendererSource::Mobile {
+                    device_name: "observer-phone".to_string(),
+                },
+            )
+            .await;
+        assert!(
+            !manager.should_pause("session-nc"),
+            "non-canonical (mobile) ack must release watermark"
+        );
     }
 
     #[tokio::test]
