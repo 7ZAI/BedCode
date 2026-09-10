@@ -134,7 +134,6 @@ export default {
       notSelected: 'Not selected',
       confirmRemove: 'Confirm Remove',
       confirmRemoveMsg: 'Are you sure you want to remove this device? You will need to pair again.',
-      deviceConnected: 'Device connected via QR code',
       pairingRequest: 'Mobile pairing request. Enter code: {code}',
       codeGenerateFailed: 'Failed to generate pairing code',
       codeGenerateFailedNoCode: 'Failed to generate pairing code: no valid code received',

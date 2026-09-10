@@ -2,6 +2,8 @@ import { listen } from '@tauri-apps/api/event'
 import i18n from '@/locales'
 import { useToast } from './useToast'
 import { useSessionStore } from '@/stores/session'
+import { getConnectedDevices } from './useDesktopCommands'
+import { logger } from '@/utils/frontendLogger'
 
 // Re-export from model
 import type { SessionEventPayload, DeviceEventPayload } from './model'
@@ -26,6 +28,17 @@ let unlistenPeerDisconnected: (() => void) | null = null
  */
 const connectedPeerIds = new Set<string>()
 
+/**
+ * 当前已在线设备指纹集合（去重）：后端在 4 处发 `device-connected`
+ * （HTTP 配对码 / QR / reauth + 每条已认证事件 WS），而设备「上线」语义
+ * 应只提示一次——按指纹键控，仅在真实 offline→online 跃迁时 toast；
+ * `device-disconnected` 反向守卫：不在集合内的断开视为未知状态不提示。
+ *
+ * 与 connectedPeerIds 同理（2026-09-07 实机实证的 peer 后端计数去重 +
+ * 前端兜底模式）；device 事件后端无连接计数去重，本处即主去重层。
+ */
+const connectedDeviceFps = new Set<string>()
+
 /** peer-net 连接事件载荷（peer_net.rs emit_json 契约，camelCase） */
 interface PeerEventPayload {
   nodeId?: string
@@ -39,6 +52,29 @@ function peerDisplayName(payload: PeerEventPayload): string {
   return payload.fingerprintShort || (payload.nodeId || '').slice(0, 8) || 'device'
 }
 
+/** 设备在线态去重主键：指纹（稳定设备身份，与 DevicesView 追踪键一致），
+ *  兜底 device_id / addr——后端 `device-*` 事件载荷均携带其一 */
+function deviceOnlineKey(payload: DeviceEventPayload): string {
+  return payload.fingerprint || payload.device_id || payload.addr || ''
+}
+
+/** 种子化已在线设备指纹：应用启动时设备可能已连接（长驻事件 WS 存活），
+ *  不预置会将该设备真实的断开 toast 误吞（其连接事件先于本会话发生） */
+async function seedConnectedDevices() {
+  try {
+    const devices = await getConnectedDevices()
+    for (const d of devices) {
+      if (d.fingerprint) connectedDeviceFps.add(d.fingerprint)
+    }
+    logger.log(
+      `[useGlobalNotifications] seeded ${connectedDeviceFps.size} online device fingerprint(s)`,
+    )
+  } catch (e) {
+    // 种子化失败不阻断监听：退化为纯事件驱动（连接事件仍会正确去重）
+    logger.warn('[useGlobalNotifications] seed connected devices failed:', e)
+  }
+}
+
 /**
  * 全局通知监听
  *
@@ -50,19 +86,31 @@ export function useGlobalNotifications() {
   const sessionStore = useSessionStore()
 
   async function startListening() {
-    // 设备连接事件
+    // 种子化已在线设备指纹：先于监听注册，保证断开判定有基线
+    await seedConnectedDevices()
+
+    // 设备连接事件（上线去重：指纹已在集合 = 设备本就在线，静默——配对码 /
+    // QR / reauth 与事件 WS 每次认证都会发 device-connected，设备未离线时
+    // 重复提示是噪音）
     if (!unlistenDeviceConnected) {
       unlistenDeviceConnected = await listen<DeviceEventPayload>('device-connected', (event) => {
+        const key = deviceOnlineKey(event.payload)
+        if (!key || connectedDeviceFps.has(key)) return
+        connectedDeviceFps.add(key)
         const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
         toast.info(i18n.global.t('common.notification.deviceConnected', { name: deviceName }))
       })
     }
 
-    // 设备断开事件
+    // 设备断开事件（后端仅在最后一条事件通道关闭时发；集合守卫：仅对已
+    // 识别为在线的设备提示，避免未知状态误报）
     if (!unlistenDeviceDisconnected) {
       unlistenDeviceDisconnected = await listen<DeviceEventPayload>(
         'device-disconnected',
         (event) => {
+          const key = deviceOnlineKey(event.payload)
+          if (!key || !connectedDeviceFps.has(key)) return
+          connectedDeviceFps.delete(key)
           const deviceName = event.payload.device_name || i18n.global.t('common.misc.mobileDevice')
           toast.warning(
             i18n.global.t('common.notification.deviceDisconnected', { name: deviceName }),
@@ -183,6 +231,7 @@ export function useGlobalNotifications() {
       unlistenPeerDisconnected = null
     }
     connectedPeerIds.clear()
+    connectedDeviceFps.clear()
   }
 
   return {

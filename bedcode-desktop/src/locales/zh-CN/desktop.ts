@@ -131,7 +131,6 @@ export default {
       notSelected: '未选择',
       confirmRemove: '确认移除',
       confirmRemoveMsg: '确定要移除此设备吗？移除后需要重新配对。',
-      deviceConnected: '设备已通过二维码连接',
       pairingRequest: '移动端请求配对，请输入配对码: {code}',
       codeGenerateFailed: '生成配对码失败',
       codeGenerateFailedNoCode: '生成配对码失败：未收到有效配对码',
