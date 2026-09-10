@@ -11,5 +11,12 @@
         <item name="android:windowLightStatusBar">false</item>
         <!-- 导航栏图标使用深色 -->
         <item name="android:windowLightNavigationBar">false</item>
+        <!-- 启动期窗口背景(深色):见 values-night/colors.xml 的 bedcode_launch_bg -->
+        <item name="android:windowBackground">@color/bedcode_launch_bg</item>
+        <!-- Android 12+ 系统开屏背景(深色):与 windowBackground 同色,系统开屏退化为纯色底 -->
+        <item name="android:windowSplashScreenBackground">@color/bedcode_launch_bg</item>
+        <!-- Android 12+ 系统开屏由系统强制存在、无法整体移除:把图标置为透明使其退化为
+             纯色底(即"没有开屏动画"的配置);恢复系统图标时删除本行 -->
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
     </style>
 </resources>

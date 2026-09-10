@@ -7,4 +7,9 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- 启动期窗口/系统开屏背景:与前端开屏(SplashScreen.vue / SplashScreenNative.vue)
+         浅色首帧同源(即 mobile.css 的 mobile-bg-primary 浅色值);深色值见 values-night/colors.xml,
+         由 DayNight 主题按系统深浅色自动切换。
+         tauri android init 重建后需手工恢复:与 values-night/colors.xml、themes.xml 同组维护 -->
+    <color name="bedcode_launch_bg">#F5F4F0</color>
 </resources>
