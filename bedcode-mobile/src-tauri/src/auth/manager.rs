@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-use crate::auth::http::{format_base_url, AuthHttpClient};
+use crate::auth::http::{format_base_url, AuthHttpClient, DeviceAuthContext};
 use crate::connection::manager::ConnectionManager;
 use crate::router::MobileEvent;
 use crate::system::constants::auth::DEFAULT_DEVICE_NAME;
@@ -21,10 +21,17 @@ use crate::Result;
 use super::{AuthCredentials, AuthStatus};
 
 /// 持久化的设备身份
+///
+/// `uid_hash` 为设备唯一 ID（Android ANDROID_ID / 桌面机硬件标识）的 SHA-256
+/// 哈希，同一设备卸载重装后保持一致——桌面端据它把「指纹再派生后的新配对」合并
+/// 回原配对记录（连接历史 / connect_count 不分裂）。老版本 identity 文件无此字段，
+/// serde 默认 None；init_identity 会在机器 UID 可用时回填。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DeviceIdentity {
     device_id: String,
     fingerprint: String,
+    #[serde(default)]
+    uid_hash: Option<String>,
 }
 
 /// 设备身份文件名
@@ -46,6 +53,8 @@ pub struct AuthManager {
     device_name: RwLock<Option<String>>,
     /// 设备指纹（持久化，重启后保持一致）
     device_fingerprint: RwLock<String>,
+    /// 设备唯一 ID 哈希（持久化；Android 卸载重装后一致，供桌面端合并配对记录）
+    uid_hash: RwLock<Option<String>>,
     /// 身份文件路径（用于持久化 device_id 和 fingerprint）
     identity_path: RwLock<Option<PathBuf>>,
 }
@@ -65,6 +74,7 @@ impl AuthManager {
             device_id: RwLock::new(uuid::Uuid::new_v4().to_string()),
             device_name: RwLock::new(None),
             device_fingerprint: RwLock::new(uuid::Uuid::new_v4().to_string()),
+            uid_hash: RwLock::new(None),
             identity_path: RwLock::new(None),
         })
     }
@@ -87,6 +97,17 @@ impl AuthManager {
                         tracing::info!("Loaded persisted device identity: device_id={}", identity.device_id);
                         *self.device_id.write().await = identity.device_id;
                         *self.device_fingerprint.write().await = identity.fingerprint;
+                        // 老版本 identity 文件无 uid_hash：机器 UID 可用时回填，
+                        // 保证更新后同样拥有跨重装的合并锚点
+                        if identity.uid_hash.is_none() {
+                            if let Some(uid) = self.stable_device_uid(app) {
+                                let (_, _, uid_hash) = derive_identity_from_uid(&uid);
+                                *self.uid_hash.write().await = Some(uid_hash);
+                                self.save_identity().await;
+                            }
+                        } else {
+                            *self.uid_hash.write().await = identity.uid_hash;
+                        }
                         return;
                     }
                 }
@@ -98,13 +119,14 @@ impl AuthManager {
 
         // 文件不存在或读取失败：优先用设备唯一 ID 派生稳定身份
         if let Some(uid) = self.stable_device_uid(app) {
-            let (device_id, fingerprint) = derive_identity_from_uid(&uid);
+            let (device_id, fingerprint, uid_hash) = derive_identity_from_uid(&uid);
             tracing::info!(
                 "Derived device identity from stable device UID: device_id={}",
                 device_id
             );
             *self.device_id.write().await = device_id;
             *self.device_fingerprint.write().await = fingerprint;
+            *self.uid_hash.write().await = Some(uid_hash);
             self.save_identity().await;
             return;
         }
@@ -131,6 +153,7 @@ impl AuthManager {
         let identity = DeviceIdentity {
             device_id: self.device_id.read().await.clone(),
             fingerprint: self.device_fingerprint.read().await.clone(),
+            uid_hash: self.uid_hash.read().await.clone(),
         };
 
         if let Some(parent) = path.parent() {
@@ -157,6 +180,11 @@ impl AuthManager {
     /// 获取设备 ID
     pub async fn get_device_id(&self) -> String {
         self.device_id.read().await.clone()
+    }
+
+    /// 获取设备唯一 ID 哈希（跨卸载重装稳定，供桌面端合并配对记录）
+    pub async fn get_uid_hash(&self) -> Option<String> {
+        self.uid_hash.read().await.clone()
     }
 
     /// 获取设备名称
@@ -253,7 +281,12 @@ impl AuthManager {
         *self.status.write().await = AuthStatus::Authenticating;
         tracing::info!("[authenticate] HTTP reauth (token length={})", token.len());
 
-        match self.http.reauth(&base_url, &device_id, &fingerprint, token).await {
+        let uid_hash = self.get_uid_hash().await;
+        match self
+            .http
+            .reauth(&base_url, &device_id, &fingerprint, uid_hash.as_deref(), token)
+            .await
+        {
             Ok(data) => {
                 // reauth 返回刷新后的新 token：refresh 语义，写回凭据与全局
                 self.apply_auth_success(
@@ -325,10 +358,16 @@ impl AuthManager {
             .clone()
             .unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
-
+        let uid_hash = self.get_uid_hash().await;
+        let ctx = DeviceAuthContext {
+            device_id: &device_id,
+            device_name: &device_name,
+            fingerprint: &fingerprint,
+            uid_hash: uid_hash.as_deref(),
+        };
         match self
             .http
-            .verify_pairing_code(&base_url, &device_id, &device_name, &fingerprint, code, &address)
+            .verify_pairing_code(&base_url, ctx, code, &address)
             .await
         {
             Ok(data) => {
@@ -365,10 +404,16 @@ impl AuthManager {
             .clone()
             .unwrap_or_else(|| DEFAULT_DEVICE_NAME.to_string());
         let fingerprint = self.device_fingerprint.read().await.clone();
-
+        let uid_hash = self.get_uid_hash().await;
+        let ctx = DeviceAuthContext {
+            device_id: &device_id,
+            device_name: &device_name,
+            fingerprint: &fingerprint,
+            uid_hash: uid_hash.as_deref(),
+        };
         match self
             .http
-            .qr_connect(&base_url, &device_id, &device_name, &fingerprint, token, &address)
+            .qr_connect(&base_url, ctx, token, &address)
             .await
         {
             Ok(data) => {
@@ -601,16 +646,18 @@ impl AuthManager {
     }
 }
 
-/// 从设备唯一 ID 派生稳定身份（device_id + fingerprint）
+/// 从设备唯一 ID 派生稳定身份（device_id + fingerprint + uid_hash）
 ///
 /// 同一设备同一签名下卸载重装后 UID 不变，因此派生出的身份不变；
-/// 用哈希而非原始 UID，避免设备标识直接入库/上链。
-fn derive_identity_from_uid(uid: &str) -> (String, String) {
+/// 用哈希而非原始 UID，避免设备标识直接入库/上链。`uid_hash` 独立于
+/// device_id/fingerprint 的哈希域，专供桌面端跨指纹合并配对记录。
+fn derive_identity_from_uid(uid: &str) -> (String, String, String) {
     use sha2::{Digest, Sha256};
     let device_hash = hex::encode(Sha256::digest(format!("bedcode-device:{}", uid).as_bytes()));
     let fingerprint_hash = hex::encode(Sha256::digest(format!("bedcode-fingerprint:{}", uid).as_bytes()));
+    let uid_hash = hex::encode(Sha256::digest(format!("bedcode-uid:{}", uid).as_bytes()));
     // 取前 32 字符保证与旧 UUID 长度风格一致（36 字符左右），便于日志阅读
-    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string())
+    (device_hash[..32].to_string(), fingerprint_hash[..32].to_string(), uid_hash[..32].to_string())
 }
 
 /// 验证生物认证签名（绑定自检用，与桌面端 verify_biometric_signature 算法一致）

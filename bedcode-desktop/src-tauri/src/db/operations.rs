@@ -29,22 +29,52 @@ impl Database {
         fingerprint: &str,
         public_key: &str,
         address: Option<&str>,
+        uid_hash: Option<&str>,
     ) -> Result<String> {
         let id = Uuid::new_v4().to_string();
         let now = Utc::now().to_rfc3339();
 
+        // 同一稳定设备 UID 的存量配对（指纹不同：移动端更新/重装导致身份再派生）：
+        // 直接迁移原件——复用原记录 id，连接历史 / connect_count / 生物凭证不分裂
+        if let Some(hash) = uid_hash {
+            let existing_id = self
+                .conn()
+                .query_row(
+                    "SELECT id FROM pairings WHERE uid_hash = ?1 AND is_active = 1 AND device_fingerprint != ?2 LIMIT 1",
+                    rusqlite::params![hash, fingerprint],
+                    |row| row.get::<_, String>(0),
+                )
+                .ok();
+            if let Some(existing_id) = existing_id {
+                self.conn().execute(
+                    "UPDATE pairings SET device_fingerprint = ?1, device_name = ?2, public_key = ?3,
+                     address = ?4, last_seen = ?5, connect_count = connect_count + 1, is_active = 1
+                     WHERE id = ?6",
+                    rusqlite::params![fingerprint, device_name, public_key, address, now, existing_id],
+                )?;
+                tracing::info!(
+                    pairing_id = %existing_id,
+                    uid_hash = %hash,
+                    fingerprint = %fingerprint,
+                    "Pairing merged by stable device UID (identity re-derived)"
+                );
+                return Ok(existing_id);
+            }
+        }
+
         // UPSERT：新设备插入 connect_count=1，已有设备更新 last_seen + connect_count+1
         self.conn().execute(
-            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, paired_at, last_seen, connect_count, is_active)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, 1)
+            "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active)
+             VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7, ?7, 1, 1)
              ON CONFLICT(device_fingerprint) DO UPDATE SET
                 device_name = excluded.device_name,
                 public_key = excluded.public_key,
                 address = excluded.address,
+                uid_hash = COALESCE(excluded.uid_hash, pairings.uid_hash),
                 last_seen = excluded.last_seen,
                 connect_count = connect_count + 1,
                 is_active = 1",
-            rusqlite::params![id, device_name, fingerprint, public_key, address, now, now],
+            rusqlite::params![id, device_name, fingerprint, public_key, address, uid_hash, now],
         )?;
 
         // 返回实际记录 id（冲突时取已有 id）
@@ -94,7 +124,7 @@ impl Database {
 
     pub fn get_pairings(&self) -> Result<Vec<Pairing>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, connect_count, is_active
+            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active
              FROM pairings WHERE is_active = 1 ORDER BY paired_at DESC"
         )?;
 
@@ -107,10 +137,11 @@ impl Database {
                     public_key: row.get(3)?,
                     address: row.get(4)?,
                     session_token: row.get(5)?,
-                    paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
-                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
-                    connect_count: row.get(8)?,
-                    is_active: row.get::<_, i32>(9)? == 1,
+                    uid_hash: row.get(6)?,
+                    paired_at: parse_datetime_sql(&row.get::<_, String>(7)?, "paired_at")?,
+                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(8)?, "last_seen")?,
+                    connect_count: row.get(9)?,
+                    is_active: row.get::<_, i32>(10)? == 1,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -154,7 +185,7 @@ impl Database {
     /// 根据指纹获取活跃配对记录（含公钥，用于生物认证验签）
     pub fn get_pairing_by_fingerprint(&self, fingerprint: &str) -> Result<Option<Pairing>> {
         let mut stmt = self.conn().prepare(
-            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, paired_at, last_seen, connect_count, is_active
+            "SELECT id, device_name, device_fingerprint, public_key, address, session_token, uid_hash, paired_at, last_seen, connect_count, is_active
              FROM pairings WHERE device_fingerprint = ?1 AND is_active = 1"
         )?;
 
@@ -167,10 +198,11 @@ impl Database {
                     public_key: row.get(3)?,
                     address: row.get(4)?,
                     session_token: row.get(5)?,
-                    paired_at: parse_datetime_sql(&row.get::<_, String>(6)?, "paired_at")?,
-                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(7)?, "last_seen")?,
-                    connect_count: row.get(8)?,
-                    is_active: row.get::<_, i32>(9)? == 1,
+                    uid_hash: row.get(6)?,
+                    paired_at: parse_datetime_sql(&row.get::<_, String>(7)?, "paired_at")?,
+                    last_seen: parse_optional_datetime_sql(row.get::<_, Option<String>>(8)?, "last_seen")?,
+                    connect_count: row.get(9)?,
+                    is_active: row.get::<_, i32>(10)? == 1,
                 })
             })
             .ok();

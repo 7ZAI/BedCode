@@ -188,7 +188,7 @@ async fn http_biometric_auth_contract() {
     let pairing_id = {
         let db_guard = AppContext::global().db().lock().await;
         db_guard
-            .add_pairing("Bio Phone", fingerprint, &spki_b64, None)
+            .add_pairing("Bio Phone", fingerprint, &spki_b64, None, None)
             .expect("add pairing failed")
     };
 

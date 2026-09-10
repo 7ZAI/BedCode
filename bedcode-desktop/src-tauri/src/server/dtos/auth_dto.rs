@@ -26,6 +26,8 @@ pub struct VerifyPairingRequest {
     pub device_id: String,
     pub device_name: String,
     pub fingerprint: String,
+    /// 设备唯一 ID 哈希（跨重装稳定，用于把拆分后的配对合并回原记录；老客户端不携带）
+    pub uid_hash: Option<String>,
     pub pairing_code: String,
     pub address: String,
 }
@@ -52,6 +54,8 @@ pub struct QrConnectRequest {
     pub device_id: String,
     pub device_name: String,
     pub fingerprint: String,
+    /// 设备唯一 ID 哈希（跨重装稳定，用于把拆分后的配对合并回原记录；老客户端不携带）
+    pub uid_hash: Option<String>,
     pub qr_token: String,
     pub address: String,
 }

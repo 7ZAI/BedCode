@@ -14,6 +14,8 @@ pub struct Pairing {
     pub public_key: String,
     pub address: Option<String>,
     pub session_token: Option<String>,
+    /// 设备唯一 ID 哈希（跨指纹合并锚点，移动端更新/重装后指纹再派生仍归同一设备）
+    pub uid_hash: Option<String>,
     pub paired_at: DateTime<Utc>,
     pub last_seen: Option<DateTime<Utc>>,
     pub connect_count: i32,

@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpResponse, HttpServer};
-use bedcode_lib::auth::http::{resolve_base_url, AuthHttpClient};
+use bedcode_lib::auth::http::{resolve_base_url, AuthHttpClient, DeviceAuthContext};
 use bedcode_lib::connection::manager::ConnectionManager;
 use bedcode_lib::state::clear_global_token;
 use bedcode_lib::AppError;
@@ -248,9 +248,12 @@ async fn pairing_full_flow_via_http() {
     let token = client
         .verify_pairing_code(
             &base,
-            "device-1",
-            "test-phone",
-            "fp-1",
+            DeviceAuthContext {
+                device_id: "device-1",
+                device_name: "test-phone",
+                fingerprint: "fp-1",
+                uid_hash: Some("uid-hash-1"),
+            },
             MOCK_PAIRING_CODE,
             "192.168.1.5",
         )
@@ -263,6 +266,8 @@ async fn pairing_full_flow_via_http() {
     assert_eq!(body["pairingCode"], MOCK_PAIRING_CODE);
     // address 必填：桌面端写入配对记录的客户端地址，取 TargetDevice.address
     assert_eq!(body["address"], "192.168.1.5");
+    // uidHash（可选）：新客户端携设备唯一 ID 哈希，桌面端据其合并指纹再派生后的配对
+    assert_eq!(body["uidHash"], "uid-hash-1");
 
     mock.shutdown().await;
 }
@@ -276,7 +281,17 @@ async fn qr_connect_success() {
     let base = mock.base_url();
 
     let token = client
-        .qr_connect(&base, "device-2", "test-phone", "fp-2", "qr-token-abc", "192.168.1.6")
+        .qr_connect(
+            &base,
+            DeviceAuthContext {
+                device_id: "device-2",
+                device_name: "test-phone",
+                fingerprint: "fp-2",
+                uid_hash: Some("uid-hash-2"),
+            },
+            "qr-token-abc",
+            "192.168.1.6",
+        )
         .await
         .expect("qr connect should succeed");
     assert_eq!(token.token, MOCK_TOKEN);
@@ -285,6 +300,7 @@ async fn qr_connect_success() {
     assert_eq!(body["qrToken"], "qr-token-abc");
     assert_eq!(body["deviceId"], "device-2");
     assert_eq!(body["address"], "192.168.1.6");
+    assert_eq!(body["uidHash"], "uid-hash-2");
 
     mock.shutdown().await;
 }
@@ -299,7 +315,7 @@ async fn reauth_refreshes_token() {
 
     // reauth 走 body（sessionToken）而非 Authorization 头——桌面端从 body 验 token
     let token = client
-        .reauth(&base, "device-1", "fp-1", MOCK_TOKEN)
+        .reauth(&base, "device-1", "fp-1", Some("uid-hash-1"), MOCK_TOKEN)
         .await
         .expect("reauth should succeed");
     assert_eq!(token.token, MOCK_REAUTH_TOKEN, "reauth 应签发刷新后的新 token");
@@ -308,6 +324,7 @@ async fn reauth_refreshes_token() {
     assert_eq!(body["sessionToken"], MOCK_TOKEN);
     assert_eq!(body["deviceId"], "device-1");
     assert_eq!(body["fingerprint"], "fp-1");
+    assert_eq!(body["uidHash"], "uid-hash-1");
 
     mock.shutdown().await;
 }
@@ -322,7 +339,17 @@ async fn business_error_codes_map_to_auth_error() {
 
     // verify 回 1005（配对码无效）：AppError::Auth 携带业务码与原因
     let err = client
-        .verify_pairing_code(&base, "device-1", "test-phone", "fp-1", "000000", "192.168.1.5")
+        .verify_pairing_code(
+            &base,
+            DeviceAuthContext {
+                device_id: "device-1",
+                device_name: "test-phone",
+                fingerprint: "fp-1",
+                uid_hash: None, // 老客户端：不携带 uidHash，桌面端跳过合并回退常规配对
+            },
+            "000000",
+            "192.168.1.5",
+        )
         .await
         .expect_err("1005 should be an error");
     match &err {
@@ -389,7 +416,7 @@ async fn reauth_rejection_1001() {
     let base = mock.base_url();
 
     let err = client
-        .reauth(&base, "device-1", "fp-1", MOCK_TOKEN)
+        .reauth(&base, "device-1", "fp-1", None, MOCK_TOKEN)
         .await
         .expect_err("1001 should be an error");
     match &err {

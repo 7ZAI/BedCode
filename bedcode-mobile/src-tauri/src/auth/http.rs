@@ -41,6 +41,18 @@ pub struct PairingResponseData {
     pub expires_in: u64,
 }
 
+/// 设备身份参数集合（HTTP 认证请求共用）
+///
+/// `uid_hash` 为设备唯一 ID（ANDROID_ID）哈希，跨卸载重装稳定，桌面端据其把
+/// 指纹再派生后的新配对合并回原记录（连接历史不分裂）。老客户端不携带时 None。
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceAuthContext<'a> {
+    pub device_id: &'a str,
+    pub device_name: &'a str,
+    pub fingerprint: &'a str,
+    pub uid_hash: Option<&'a str>,
+}
+
 /// token 响应 data（verify / qr-connect / reauth / biometric-verify 共用）
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,17 +170,16 @@ impl AuthHttpClient {
     pub async fn verify_pairing_code(
         &self,
         base_url: &str,
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
+        ctx: DeviceAuthContext<'_>,
         pairing_code: &str,
         address: &str,
     ) -> Result<AuthTokenResponseData> {
         let url = format!("{}/api/auth/verify", base_url);
         let body = json!({
-            "deviceId": device_id,
-            "deviceName": device_name,
-            "fingerprint": fingerprint,
+            "deviceId": ctx.device_id,
+            "deviceName": ctx.device_name,
+            "fingerprint": ctx.fingerprint,
+            "uidHash": ctx.uid_hash,
             "pairingCode": pairing_code,
             "address": address,
         });
@@ -179,17 +190,16 @@ impl AuthHttpClient {
     pub async fn qr_connect(
         &self,
         base_url: &str,
-        device_id: &str,
-        device_name: &str,
-        fingerprint: &str,
+        ctx: DeviceAuthContext<'_>,
         qr_token: &str,
         address: &str,
     ) -> Result<AuthTokenResponseData> {
         let url = format!("{}/api/auth/qr-connect", base_url);
         let body = json!({
-            "deviceId": device_id,
-            "deviceName": device_name,
-            "fingerprint": fingerprint,
+            "deviceId": ctx.device_id,
+            "deviceName": ctx.device_name,
+            "fingerprint": ctx.fingerprint,
+            "uidHash": ctx.uid_hash,
             "qrToken": qr_token,
             "address": address,
         });
@@ -205,12 +215,14 @@ impl AuthHttpClient {
         base_url: &str,
         device_id: &str,
         fingerprint: &str,
+        uid_hash: Option<&str>,
         session_token: &str,
     ) -> Result<AuthTokenResponseData> {
         let url = format!("{}/api/auth/reauth", base_url);
         let body = json!({
             "deviceId": device_id,
             "fingerprint": fingerprint,
+            "uidHash": uid_hash,
             "sessionToken": session_token,
         });
         post_and_parse(&self.client, url, body, timeouts::AUTH).await
