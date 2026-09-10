@@ -15,6 +15,7 @@
 import { ref, inject, watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import type { useSettings } from '../composables/useSettings'
+import { isNeedsAllFilesAccess, promptAllFilesAccess } from '../composables/useAllFilesAccess'
 import { KIND_PRIVATE_DOWNLOADS } from '../types'
 import type { ReceivingPolicy } from '../types'
 import TrustedPeersSection from './TrustedPeersSection.vue'
@@ -30,6 +31,26 @@ const props = defineProps<{
 const context = inject<PluginContext>('pluginContext')
 
 const t = props.t
+
+/** 打开下载目录：核对文件是否落盘；未授予「所有文件访问」时宿主自动降级镜像视图 */
+const openingDir = ref(false)
+
+async function handleOpenDownloadDir(): Promise<void> {
+  if (!context || openingDir.value) return
+  openingDir.value = true
+  try {
+    await context.system.openDownloadDir()
+  } catch (e) {
+    if (isNeedsAllFilesAccess(e)) {
+      promptAllFilesAccess(context)
+      return
+    }
+    console.error('[File Transfer] open download dir failed:', e)
+    context.dialogs.showToast(t('transfer.settings.openDownloadDirFailed'), 'error')
+  } finally {
+    openingDir.value = false
+  }
+}
 
 /** 系统目录树选择器添加共享目录中 */
 const picking = ref(false)
@@ -188,6 +209,14 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
               {{ settingsApi?.settings.value.downloadDir || t('transfer.settings.noDownloadDir') }}
             </span>
           </div>
+          <!-- 打开下载目录：核对文件是否落盘（未授权自动降级镜像视图） -->
+          <button
+            class="flex-shrink-0 ft-settings-open-btn"
+            :disabled="openingDir"
+            @click="handleOpenDownloadDir"
+          >
+            {{ openingDir ? t('transfer.settings.openDownloadDirOpening') : t('transfer.settings.openDownloadDir') }}
+          </button>
         </div>
       </div>
       <p class="settings-desc ft-settings-hint">{{ t('transfer.settings.downloadDirHint') }}</p>
@@ -305,6 +334,28 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
   background: var(--mobile-bg-tertiary);
   border: 1px solid var(--mobile-border);
   color: var(--mobile-text-secondary);
+}
+
+/* 下载目录「打开」按钮：行内右侧次级按钮（44px 触控目标） */
+.ft-settings-open-btn {
+  padding: 0.5rem 0.875rem;
+  border-radius: 0.5rem;
+  font-size: clamp(0.6875rem, 0.75rem + (100vw - 360px) / 800, 0.8125rem);
+  color: var(--mobile-accent);
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  transition: opacity 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ft-settings-open-btn:active {
+  opacity: 0.8;
+}
+
+.ft-settings-open-btn:disabled {
+  opacity: 0.5;
 }
 
 /* 删除按钮 */

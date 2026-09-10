@@ -24,6 +24,7 @@ import styles from './styles.css?inline'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
 import peerDevMock from './devMock'
 import { useConsent, type ConsentController } from './composables/useConsent'
+import { useBatchDialog, type BatchDialogController } from './composables/useBatchDialog'
 
 // dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
 export const devMock = peerDevMock
@@ -32,6 +33,8 @@ const STYLE_ID = 'file-transfer-plugin-style'
 
 /** 首连确认编排（激活期常驻单例；deactivate 时对称停止） */
 let consentController: ConsentController | null = null
+/** 批量传输请求全局弹窗（激活期常驻，宿主全局弹窗，跨页面可达） */
+let batchDialogController: BatchDialogController | null = null
 
 export async function activate(context: PluginContext): Promise<void> {
   // 1. 注册 i18n 消息（必须在组件 setup 前完成，保证模板取文案可用）
@@ -77,12 +80,20 @@ export async function activate(context: PluginContext): Promise<void> {
   consentController = useConsent(context)
   consentController.start()
 
+  // 7. 批量传输请求全局弹窗：激活期常驻订阅（不依赖视图挂载），经宿主
+  // 全局弹窗（context.ui.showDialog 预设模式）渲染，任何页面可见；
+  // 行为与桌面端 FileTransferView + useBatchPrompt + 全局弹窗一致
+  batchDialogController = useBatchDialog(context)
+  batchDialogController.start()
+
   context.logger.info('File Transfer plugin activated (3-section view, mobile)')
 }
 
 export async function deactivate(): Promise<void> {
   consentController?.stop()
   consentController = null
+  batchDialogController?.stop()
+  batchDialogController = null
   // 样式保留（幂等），组件级监听已在卸载时清理；
   // 注册表/事件由宿主 loader 依据 context._disposables 统一摘除
   console.log('[File Transfer] Plugin deactivated')

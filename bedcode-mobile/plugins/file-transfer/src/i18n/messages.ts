@@ -127,6 +127,12 @@ export type MessageSchema = {
   'transfer.settings.downloadDir': string
   'transfer.settings.noDownloadDir': string
   'transfer.settings.downloadDirHint': string
+  /** 下载目录区「打开」按钮：打开系统下载目录核对落盘 */
+  'transfer.settings.openDownloadDir': string
+  /** 打开下载目录进行中（镜像视图生成/系统目录打开中） */
+  'transfer.settings.openDownloadDirOpening': string
+  /** 打开下载目录失败 toast */
+  'transfer.settings.openDownloadDirFailed': string
   'transfer.settings.concurrency': string
   'transfer.settings.concurrencyHint': string
   'transfer.settings.saved': string
@@ -286,4 +292,14 @@ export type MessageSchema = {
   'transfer.v2.history.openFolder': string
   /** 历史卡操作：本机没有对应文件（路径缺失/已删除） */
   'transfer.v2.history.noLocalFile': string
+  /** 打开公共 Download 目录需「所有文件访问」：引导弹窗标题 */
+  'transfer.history.allFilesAccess.title': string
+  /** 引导弹窗正文（说明授权路径与重试提示） */
+  'transfer.history.allFilesAccess.message': string
+  /** 引导弹窗：取消 */
+  'transfer.history.allFilesAccess.cancel': string
+  /** 引导弹窗：去设置（跳系统授权页） */
+  'transfer.history.allFilesAccess.goToSettings': string
+  /** 授权提示 toast：授权后重试原操作 */
+  'transfer.history.allFilesAccess.after': string
 }

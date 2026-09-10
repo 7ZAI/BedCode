@@ -17,9 +17,12 @@ import type {
   LoggerAPI,
   NotificationAPI,
   PluginContext,
+  PluginDialogHandle,
+  PluginDialogOptions,
   StatusAPI,
   UIRegistry,
 } from '../../src/types'
+import { openGlobalDialog } from '../../src/global-dialog'
 import {
   emitDevEvent,
   onDevEvent,
@@ -48,6 +51,8 @@ function storageKey(pluginId: string, key: string): string {
 /** 创建插件的 PluginContext */
 export function createMockContext(pluginId: string): PluginContext {
   const disposables: Disposable[] = []
+  // 供 ui.showDialog 闭包惰性引用（与桌面端 dev-shell 同模式，调用时 context 已初始化）
+  let contextRef: PluginContext | null = null
 
   /** 收集 disposable，随插件 deactivate 统一清理 */
   function track(disposable: Disposable): Disposable {
@@ -145,6 +150,9 @@ export function createMockContext(pluginId: string): PluginContext {
     // 保持与宿主插件 API 形状一致，避免插件在浏览器环境调用报错
     onBackPressed() {
       return { dispose() {} }
+    },
+    showDialog(options: PluginDialogOptions): PluginDialogHandle {
+      return openGlobalDialog({ ...options, pluginContext: contextRef! })
     },
   }
 
@@ -299,9 +307,16 @@ export function createMockContext(pluginId: string): PluginContext {
     async revealReceivedFileLocation(_fileName: string): Promise<void> {
       pushLog('info', pluginId, 'system.revealReceivedFileLocation (mock) 浏览器环境不支持')
     },
+    async requestAllFilesAccess(): Promise<boolean> {
+      pushLog('info', pluginId, 'system.requestAllFilesAccess (mock) 浏览器环境无此权限')
+      return true
+    },
+    async openDownloadDir(): Promise<void> {
+      pushLog('info', pluginId, 'system.openDownloadDir (mock) 浏览器环境不支持')
+    },
   }
 
-  return {
+  const context: PluginContext = {
     id: pluginId,
     commands,
     terminal,
@@ -318,4 +333,6 @@ export function createMockContext(pluginId: string): PluginContext {
     status,
     _disposables: disposables,
   }
+  contextRef = context
+  return context
 }

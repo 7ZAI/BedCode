@@ -7,7 +7,7 @@
  * 空态按场景区分（空目录 / 未共享 / 目录不可用 / 存储权限提示），
  * 下拉刷新沿用旧版手势参数（触发 56px、阻尼 0.45）。
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import type { RemoteEntry } from '../types'
 import { formatBytes } from '../utils/format'
 import FileTypeIcon from './FileTypeIcon.vue'
@@ -69,6 +69,21 @@ const pullingActive = ref(false)
 
 let pullStartY = 0
 
+/** 下拉刷新兜底时长：父级刷新（含命令失败/挂起）可能永不回调 onRefreshDone，超时强制复位 */
+const REFRESH_TIMEOUT_MS = 15_000
+let refreshTimer: ReturnType<typeof setTimeout> | null = null
+
+function finishRefresh(): void {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+  if (pullState.value === 'refreshing') {
+    pullState.value = 'idle'
+    pullDistance.value = 0
+  }
+}
+
 function onPullStart(e: TouchEvent): void {
   const el = scrollEl.value
   if (!el || el.scrollTop > 0 || props.loading || pullState.value === 'refreshing') return
@@ -97,6 +112,7 @@ async function onPullEnd(): Promise<void> {
   if (pullState.value === 'ready') {
     pullState.value = 'refreshing'
     pullDistance.value = PULL_TRIGGER
+    refreshTimer = setTimeout(() => finishRefresh(), REFRESH_TIMEOUT_MS)
     emit('refresh')
   } else {
     pullState.value = 'idle'
@@ -105,11 +121,24 @@ async function onPullEnd(): Promise<void> {
 }
 
 function onRefreshDone(): void {
-  if (pullState.value === 'refreshing') {
-    pullState.value = 'idle'
-    pullDistance.value = 0
-  }
+  finishRefresh()
 }
+
+// 刷新期间 loading 回落（loadRoots/loadDir 成功与失败均 finally 复位 loading）→
+// 复位下拉态；即使 fs.refresh 抛错不回调，兜底定时器也会强制复位
+watch(
+  () => props.loading,
+  (v) => {
+    if (!v && pullState.value === 'refreshing') finishRefresh()
+  },
+)
+
+onBeforeUnmount(() => {
+  if (refreshTimer) {
+    clearTimeout(refreshTimer)
+    refreshTimer = null
+  }
+})
 
 // ==================== 空态 ====================
 

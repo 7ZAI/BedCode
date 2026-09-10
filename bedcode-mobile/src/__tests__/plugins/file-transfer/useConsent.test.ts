@@ -2,7 +2,7 @@
  * useConsent 编排测试（ticket 04）
  *
  * mock 最小 PluginContext（commands.execute 记录调用 + events.on 捕获处理器
- * 手动派发 + storage 受控 Map + dialogs.showConfirm 受控应答），只测迁移规则
+ * 手动派发 + storage 受控 Map + ui.showDialog 受控应答），只测迁移规则
  * 与队列/超时/应答编排不测渲染。场景矩阵对齐 ticket 验收：迁移规则命中静默
  * 自动互信（含弹窗占用时插队）、名单损坏回退弹窗路径、单闸门排队、30s 超时
  * 按拒绝结算、迟到对话框结果静默无害、重复事件幂等、畸形载荷丢弃。
@@ -64,11 +64,36 @@ function makeContext() {
         return params ? `${key}:${JSON.stringify(params)}` : key
       },
     },
-    dialogs: {
-      showConfirm(options: any) {
+    ui: {
+      showDialog(options: any) {
         dialogCalls.push(options)
-        return dialogResults.shift() ?? Promise.resolve(true)
+        let closed = false
+        // 受控应答门：与旧 showConfirm 同语义——gate 结果 true→信任(primary)、false→拒绝(default)；
+        // 模拟宿主 SDK 的「onClick 后自动关闭」与「deadlineAt 超时 → onTimeout + onClose」
+        const gate = dialogResults.shift() ?? Promise.resolve(true)
+        void gate.then((confirmed) => {
+          if (closed) return
+          const action = options.actions?.find((a: any) =>
+            confirmed ? a.kind === 'primary' : a.kind === 'default',
+          )
+          action?.onClick?.()
+        })
+        const close = () => {
+          if (closed) return
+          closed = true
+          options.onClose?.()
+        }
+        // 模拟 SDK startTimeout（deadlineAt 绝对截止；受控时钟下 advanceTimers 触发）
+        if (options.deadlineAt && options.deadlineAt > 0) {
+          setTimeout(() => {
+            options.onTimeout?.()
+            close()
+          }, Math.max(0, options.deadlineAt - Date.now()))
+        }
+        return { close, update: vi.fn() }
       },
+    },
+    dialogs: {
       showToast(message: string, type?: string) {
         toasts.push({ message, type })
       },
@@ -199,12 +224,17 @@ describe('useConsent orchestration', () => {
     await emitConsent(makeRequest('req-a'))
 
     expect(env.dialogCalls).toHaveLength(1)
-    expect(env.dialogCalls[0].variant).toBe('warning')
-    // 文案全部经 i18n（echo 断言），消息含短指纹与 30s 超时提示
+    // 预设模式：拒绝(default) + 信任(primary) 两按钮，无 legacy variant
+    expect(env.dialogCalls[0].actions.map((a: any) => a.kind)).toEqual(['default', 'primary'])
+    // 文案全部经 i18n（echo 断言），消息含短指纹；倒计时经右上角 countdownLabel + deadlineAt
     expect(env.dialogCalls[0].title).toContain('transfer.consent.title')
     expect(env.dialogCalls[0].message).toContain('transfer.consent.body')
     expect(env.dialogCalls[0].message).toContain('req-a'.slice(4))
-    expect(env.dialogCalls[0].message).toContain('"seconds":30')
+    // 超时提示只在 countdownLabel 实时显示，不重复进正文
+    expect(env.dialogCalls[0].message).not.toContain('transfer.consent.timeoutHint')
+    expect(env.dialogCalls[0].countdownLabel).toContain('transfer.consent.timeoutHint')
+    expect(env.dialogCalls[0].deadlineAt).toBeGreaterThan(Date.now())
+    expect(env.dialogCalls[0].deadlineAt).toBeLessThanOrEqual(Date.now() + CONSENT_TIMEOUT_MS + 1_000)
     expect(consent.currentRequest.value?.requestId).toBe('req-a')
     expect(consent.pendingCount.value).toBe(1)
   })

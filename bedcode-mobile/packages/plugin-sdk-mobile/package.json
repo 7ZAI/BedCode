@@ -48,9 +48,17 @@
       "types": "./src/ui/Select.d.ts",
       "import": "./src/ui/Select.vue"
     },
+    "./ui/plugin-global-dialog": {
+      "types": "./src/ui/plugin-global-dialog.d.ts",
+      "import": "./src/ui/PluginGlobalDialog.vue"
+    },
     "./ui/swipe-tabs": {
       "types": "./src/ui/useSwipeTabs.d.ts",
       "import": "./src/ui/useSwipeTabs.ts"
+    },
+    "./global-dialog": {
+      "types": "./src/global-dialog.ts",
+      "import": "./src/global-dialog.ts"
     },
     "./types": {
       "types": "./dist/types.d.ts",

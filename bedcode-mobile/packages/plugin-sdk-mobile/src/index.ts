@@ -25,6 +25,9 @@ export type {
   TerminalToolbarItemDescriptor,
   SettingsSectionDescriptor,
   PluginRouteDescriptor,
+  PluginDialogAction,
+  PluginDialogOptions,
+  PluginDialogHandle,
   CommandRegistry,
   TerminalAPI,
   SessionAPI,
@@ -59,3 +62,19 @@ export {
   getPresetTasks,
   getMobileApi,
 } from './runtime'
+
+// 全局弹窗控制器（宿主 / dev-shell 共用，插件经 context.ui.showDialog 操控）
+export {
+  openGlobalDialog,
+  closeGlobalDialog,
+  updateGlobalDialog,
+  getGlobalDialog,
+  subscribeGlobalDialog,
+  resolveDialogDeadline,
+} from './global-dialog'
+export type {
+  GlobalDialogEntry,
+  GlobalDialogListener,
+  OpenGlobalDialogInput,
+  GlobalDialogHandleOutput,
+} from './global-dialog'

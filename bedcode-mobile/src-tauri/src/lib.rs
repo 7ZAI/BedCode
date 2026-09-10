@@ -329,6 +329,10 @@ pub fn run() {
             commands::dev_logs::report_frontend_log,
             // System Open（历史「打开所在文件夹」真机路径，system:open 权限）
             crate::plugin::commands::plugin_reveal_received_file,
+            // System Open 配套：「所有文件访问」授权引导（system:open 权限）
+            crate::plugin::commands::plugin_open_all_files_access,
+            // System Open 配套：打开公共下载目录（设置页下载目录区「打开」，system:open 权限）
+            crate::plugin::commands::plugin_open_download_dir,
             // File Service Commands（插件 TS 通道）
             // v2 批量传输批准（接收策略 / 异步批量批准）
             // SAF 存储访问（SafIo 主 seam，共享目录/上传页）

@@ -13,6 +13,9 @@
     <!-- Plugin Dialog Host -->
     <PluginDialogHost />
 
+    <!-- 插件全局弹窗（宿主统一渲染，文件传输等插件经 context.ui.showDialog 触发） -->
+    <PluginGlobalDialog />
+
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
 
@@ -38,6 +41,7 @@ import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
+import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-mobile/ui/plugin-global-dialog'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { syncLinkCryptoContextToNative, initLinkCryptoPinSync } from '@/composables/useLinkEncryption'

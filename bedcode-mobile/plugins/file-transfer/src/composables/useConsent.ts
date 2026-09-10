@@ -1,11 +1,11 @@
 /**
- * 首连确认编排 — 终端配对迁移规则 + 插件对话框 API 全局确认框（spec 决策 7）
+ * 首连确认编排 — 终端配对迁移规则 + 宿主全局弹窗（spec 决策 7）
  *
  * 订阅插件事件 `plugin:file-transfer:consent-requested`（宿主 peer:consent
  * topic 经 WASM 代理原样透传的 camelCase 契约），编排在插件激活期常驻
  * （index.ts activate 时 start、deactivate 时 stop），不依赖视图挂载——
- * 确认框经 context.dialogs.showConfirm 全局弹出（宿主对话框宿主挂在 App 根，
- * 用户身处任意页面均可达）。
+ * 确认框经 context.ui.showDialog 宿主全局弹窗渲染（PluginGlobalDialog 挂
+ * App 根，用户身处任意页面均可达），预设模式 + deadlineAt 倒计时/超时。
  *
  * 迁移规则先行：请求方设备名命中本地持久化 paired_devices 名单（终端配对
  * 记录即同一用户的证明，ADR 0028）→ 静默自动互信 + autoTrusted toast，不弹窗、
@@ -15,11 +15,11 @@
  * 未命中名单的请求走单闸门队列 + 30s 超时：超时按拒绝先行结算释放闸门
  * （与宿主 sweeper CONFIRM_TIMEOUT 同值，拨入方立即收到 Denied）；应答经
  * `file-transfer.respond-consent` 命令回流携带 requestId；超时后迟到的对话框
- * 结果未命中待确认项时静默无害。倒计时文案为静态提示——通用对话框 API 不支持
- * 内容动态刷新，精确结算仍由 settle 定时器保证。
+ * 结果未命中待确认项时静默无害。倒计时经 deadlineAt 由宿主 SDK 计时（弹出才
+ * 起算），精确结算仍由 settled 标志保证互斥幂等。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-mobile'
+import type { Disposable, PluginContext, PluginDialogHandle } from '@binblink/bedcode-plugin-sdk-mobile'
 
 /** 插件 consent-requested 事件载荷（宿主 camelCase 契约形状） */
 export interface ConsentRequest {
@@ -114,20 +114,14 @@ let queue: ConsentRequest[] = []
 const seenIds = new Set<string>()
 let boundContext: PluginContext | null = null
 let subscription: Disposable | null = null
-let settleTimer: ReturnType<typeof setTimeout> | null = null
+/** 当前展示请求的宿主全局弹窗句柄（stop 清理用） */
+let dialogHandle: PluginDialogHandle | null = null
 /** 当前展示请求的幂等结算函数（accept/deny 编程式入口复用；无展示时为 null） */
 let activeFinish: ((accepted: boolean) => Promise<void>) | null = null
 let started = false
 
 function syncPendingCount(): void {
   pendingCount.value = (currentRequest.value ? 1 : 0) + queue.length
-}
-
-function clearTimers(): void {
-  if (settleTimer) {
-    clearTimeout(settleTimer)
-    settleTimer = null
-  }
 }
 
 function clearActiveFinish(): void {
@@ -169,7 +163,6 @@ function present(next: ConsentRequest): void {
   const finish = async (accepted: boolean): Promise<void> => {
     if (settled || !started) return
     settled = true
-    clearTimers()
     clearActiveFinish()
     currentRequest.value = null
     syncPendingCount()
@@ -177,58 +170,46 @@ function present(next: ConsentRequest): void {
     showNext()
   }
 
-  // 结算定时器独立于对话框 promise：精确对齐 30s 先行结算释放宿主闸门，
-  // 迟到的用户操作因 settled 已置位而静默无害
-  settleTimer = setTimeout(() => {
-    void finish(false)
-    // 超时只结算逻辑不会关闭屏幕上的对话框——showConfirm 的 promise 仅由
-    // 用户操作解决，幽灵弹窗残留且宿主对话框队列中后到的请求被其遮挡。
-    // 按指纹定点结算本插件所弹确认框：resolveTop 只适用于调用方确知自己即
-    // 队首；跨插件共享队列下队首可能是他插件对话框，误结算会关错窗。
-    // 指纹（fingerprintShort）每次确认请求唯一且已写入 message，匹配可靠
-    // SAFETY: 宿主 dialog-host 暴露的 __BEDCODE_SHARED__.dialogs 形状由
-    // bedcode-mobile/src/plugin/dialog-host.ts 固定（queue: DialogItem[] +
-    // resolveById），跨插件共用同一全局单例，断言不变量在宿主侧保证
-    const hostDialogs = (globalThis as unknown as {
-      __BEDCODE_SHARED__?: {
-        dialogs?: {
-          queue?: Array<{ id: number; kind: string; options: { message?: string } }>
-          resolveById?: (id: number, action: string) => void
-        }
-      }
-    }).__BEDCODE_SHARED__?.dialogs
-    const mine = hostDialogs?.queue?.find(
-      (item) => item.kind === 'confirm' && item.options.message?.includes(next.fingerprintShort),
-    )
-    if (mine && hostDialogs?.resolveById) {
-      hostDialogs.resolveById(mine.id, 'cancel')
-    }
-  }, CONSENT_TIMEOUT_MS)
-  activeFinish = finish
-
   const context = boundContext
   if (!context) return
   const displayName = consentDisplayName(next)
   const message = [
     context.i18n.t('transfer.consent.body', { name: displayName }),
     context.i18n.t('transfer.consent.fingerprint', { fingerprint: next.fingerprintShort }),
-    context.i18n.t('transfer.consent.timeoutHint', { seconds: CONSENT_TIMEOUT_MS / 1000 }),
-    // 无名设备身份提示：宁可多一分核对，不可误信陌生节点
+    // 倒计时由右上角 countdownLabel 实时显示，不再重复进正文（避免静态文案与实时秒数重复）
     ...(next.deviceName ? [] : [context.i18n.t('transfer.consent.namelessHint')]),
   ].join('\n')
 
-  void context.dialogs
-    .showConfirm({
-      title: context.i18n.t('transfer.consent.title'),
-      message,
-      variant: 'warning',
-      confirmText: context.i18n.t('transfer.consent.trust'),
-      cancelText: context.i18n.t('transfer.consent.deny'),
-      // 点击背景关闭等同拒绝：不给「误触消失不结算」留口子
-      dismissible: true,
-    })
-    .then((confirmed) => finish(confirmed === true))
-    .catch(() => finish(false))
+  // 宿主全局弹窗（context.ui.showDialog 预设模式）：任何页面可见，FIFO 排队；
+  // 倒计时/超时由宿主 SDK 经 deadlineAt 计时（弹出才起算，排队迟到打开仍准确）。
+  // 结算由 settled 标志互斥幂等：信任/拒绝按钮、超时、任何关闭路径（含背景点击）
+  // 先到者生效，respond-consent 恰好发送一次；晚到路径静默无害。
+  activeFinish = finish
+  dialogHandle = context.ui.showDialog({
+    title: context.i18n.t('transfer.consent.title'),
+    message,
+    actions: [
+      {
+        label: context.i18n.t('transfer.consent.deny'),
+        kind: 'default',
+        onClick: () => finish(false),
+      },
+      {
+        label: context.i18n.t('transfer.consent.trust'),
+        kind: 'primary',
+        onClick: () => finish(true),
+      },
+    ],
+    countdownLabel: context.i18n.t('transfer.consent.timeoutHint'),
+    deadlineAt: Date.now() + CONSENT_TIMEOUT_MS,
+    closable: true,
+    closeOnBackdrop: true,
+    onTimeout: () => void finish(false),
+    // 兜底结算：按钮/超时/背景点击/close 任一关闭路径均经过此处；已结算时静默
+    onClose: () => {
+      if (!settled) void finish(false)
+    },
+  })
 }
 
 function showNext(): void {
@@ -303,8 +284,13 @@ export function useConsent(context: PluginContext): ConsentController {
       subscription?.dispose()
       subscription = null
       started = false
-      clearTimers()
       clearActiveFinish()
+      // 关闭宿主侧在途全局弹窗（onClose 触发 finish，started=false 兜底不发送应答）
+      if (dialogHandle) {
+        const h = dialogHandle
+        dialogHandle = null
+        h.close()
+      }
       currentRequest.value = null
       queue = []
       seenIds.clear()
@@ -325,8 +311,11 @@ export function useConsent(context: PluginContext): ConsentController {
 
 /** 重置模块级状态（仅测试用：用例间隔离共享单例） */
 export function _resetConsentForTest(): void {
-  clearTimers()
   clearActiveFinish()
+  if (dialogHandle) {
+    dialogHandle.close()
+    dialogHandle = null
+  }
   currentRequest.value = null
   autoTrustedName.value = null
   queue = []

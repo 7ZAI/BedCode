@@ -12,10 +12,11 @@ import { inject, ref, onMounted, onUnmounted, computed, watch } from 'vue'
 import type { PluginContext, Disposable } from '@binblink/bedcode-plugin-sdk-mobile'
 import { useSwipeTabs } from '@binblink/bedcode-plugin-sdk-mobile/ui/swipe-tabs'
 import { useTasks } from '../composables/useTasks'
+import { isNeedsAllFilesAccess, promptAllFilesAccess } from '../composables/useAllFilesAccess'
 import { usePeerDevices } from '../composables/usePeerDevices'
 import { useRemoteFs } from '../composables/useRemoteFs'
 import { useSettings } from '../composables/useSettings'
-import { formatBytes, formatSpeed, progressPercent } from '../utils/format'
+import { formatBytes, formatSpeed } from '../utils/format'
 import { isTerminalState } from '../types'
 import type { MainTab, FooterMode } from '../types'
 import PeerHeader from './PeerHeader.vue'
@@ -24,7 +25,6 @@ import TransfersTab from './TransfersTab.vue'
 import BrowseTab from './BrowseTab.vue'
 import DevicesTab from './DevicesTab.vue'
 import SummaryBar from './SummaryBar.vue'
-import BatchRequestDialog from './BatchRequestDialog.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const t = (key: string, params?: Record<string, any>) => context.i18n.t(key, params)
@@ -33,7 +33,6 @@ const tasks = useTasks(context)
 const devices = usePeerDevices(context)
 const fs = useRemoteFs(context)
 const settings = useSettings(context)
-const { settings: transferSettings } = settings
 
 /** 主分段（传输列表默认可见——传输是第一目标） */
 const tab = ref<MainTab>('transfers')
@@ -110,17 +109,7 @@ function handleDeviceSetActive(nodeId: string): void {
   void devices.switchPeer(nodeId)
 }
 
-/** 批请求应答（fire-and-forget；批卡消失由 resolved 快照驱动） */
-function handleBatchApprove(batchId: string): void {
-  tasks.approveBatch(batchId).catch((e: unknown) => {
-    console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
-  })
-}
-function handleBatchReject(batchId: string): void {
-  tasks.rejectBatch(batchId).catch((e: unknown) => {
-    console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
-  })
-}
+
 
 /** 历史「打开所在文件夹」：优先本地路径（wire 有 localPath，dev-shell 演示链路），
  * 否则真机凭文件名经宿主 MediaStore 按名解析（接收落点不在 wire 上） */
@@ -132,6 +121,12 @@ async function handleOpenLocation(id: string): Promise<void> {
     else await context.system.revealReceivedFileLocation(entry.fileName)
   } catch (e) {
     console.error('[File Transfer] open location failed:', e)
+    // 打开系统公共 Download 目录需「所有文件访问」：宿主以固定前缀 reject，
+    // 弹引导对话框跳系统设置，授权后用户重试原操作即达
+    if (isNeedsAllFilesAccess(e)) {
+      void promptAllFilesAccess(context)
+      return
+    }
     context.dialogs.showToast(t('transfer.v2.history.noLocalFile'), 'error')
   }
 }
@@ -273,13 +268,6 @@ onUnmounted(() => {
 
 <template>
   <div class="fv2-view mobile-ui">
-    <!-- v2 批量传输请求全局弹窗（排队 + 倒计时超时默认拒绝） -->
-    <BatchRequestDialog
-      :batches="tasks.batches.value"
-      :approval-timeout-sec="transferSettings.approvalTimeoutSec"
-      @approve="handleBatchApprove"
-      @reject="handleBatchReject"
-    />
 
     <!-- 顶栏：活跃对端 + 连接状态 + 设置入口 -->
     <PeerHeader

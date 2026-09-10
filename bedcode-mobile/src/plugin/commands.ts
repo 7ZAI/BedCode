@@ -120,3 +120,15 @@ export async function pluginOpenFileLocation(pluginId: string, path: string): Pr
 export async function pluginRevealReceivedFile(pluginId: string, fileName: string): Promise<void> {
   return await invoke<void>('plugin_reveal_received_file', { pluginId, fileName })
 }
+
+/** 引导开启「所有文件访问」权限（打开公共 Download 目录所需；未授权时跳系统设置页
+ * 返回跳转前授权状态；需 system:open 权限） */
+export async function pluginOpenAllFilesAccess(pluginId: string): Promise<boolean> {
+  return await invoke<boolean>('plugin_open_all_files_access', { pluginId })
+}
+
+/** 打开公共下载目录（设置页下载目录区「打开」；未授权时报 needs_all_files_access；
+ * 需 system:open 权限） */
+export async function pluginOpenDownloadDir(pluginId: string): Promise<void> {
+  return await invoke<void>('plugin_open_download_dir', { pluginId })
+}
