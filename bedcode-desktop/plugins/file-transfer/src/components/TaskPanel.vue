@@ -31,6 +31,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
+  (e: 'pause', id: string): void
+  (e: 'resume', id: string): void
+  (e: 'resumeAll'): void
   (e: 'cancelReceiving', sessionId: string): void
   (e: 'clearHistory'): void
   (e: 'openFolder', path: string): void
@@ -43,6 +46,8 @@ const activeTab = ref<QueueTab>('all')
 /** 状态 → 展示文案 key */
 const STATE_KEYS: Record<TaskStateName, string> = {
   transferring: 'transfer.task.state.transferring',
+  pending: 'transfer.task.state.queued',
+  paused: 'transfer.task.state.paused',
   completed: 'transfer.task.state.completed',
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
@@ -50,9 +55,11 @@ const STATE_KEYS: Record<TaskStateName, string> = {
   interrupted: 'transfer.task.state.interrupted',
 }
 
-/** 状态 → chip 样式（四色体系） */
+/** 状态 → chip 样式（四色体系；paused 琥珀） */
 const CHIP_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-chip--active',
+  pending: 'ft-chip--queued',
+  paused: 'ft-chip--pause',
   completed: 'ft-chip--active',
   failed: 'ft-chip--fail',
   rejected: 'ft-chip--reject',
@@ -92,6 +99,15 @@ function canRetryHistory(entry: HistoryEntry): boolean {
 }
 function canCancel(task: Task): boolean {
   return !isTerminal(task.state)
+}
+
+/** 传输中可暂停（仅发起方 send 任务）；暂停/恢复按钮寻址 task.id */
+function canPause(task: Task): boolean {
+  return task.state === 'transferring' && task.initiator === 'me'
+}
+
+function canResume(task: Task): boolean {
+  return task.state === 'paused'
 }
 
 function isTerminal(state: TaskStateName): boolean {
@@ -251,6 +267,13 @@ function historyReason(entry: HistoryEntry): string {
       <!-- 总速率（仅传输中显示） -->
       <div v-if="totalSpeed > 0" class="ft-summary-speed">
         {{ t('transfer.summary.speed', { speed: formatBytes(totalSpeed) }) }}
+      </div>
+
+      <!-- 全部继续（存在已暂停任务时） -->
+      <div v-if="tasks.some((tk) => tk.state === 'paused')" class="ft-resume-all">
+        <button class="ft-btn ft-btn--primary" @click="emit('resumeAll')">
+          {{ t('transfer.task.resumeAll') }}
+        </button>
       </div>
 
       <!-- 队列 4 tab（自绘分段，禁原生 select） -->
@@ -503,7 +526,7 @@ function historyReason(entry: HistoryEntry): string {
               </div>
             </div>
 
-            <!-- 本端任务卡 -->
+      <!-- 本端任务卡 -->
             <div v-else-if="tasks.find((tk) => tk.id === item.id)" class="ft-task">
               <template v-for="task in tasks.filter((tk) => tk.id === item.id)" :key="task.id">
                 <div class="ft-task-head">
@@ -534,6 +557,36 @@ function historyReason(entry: HistoryEntry): string {
                   <span class="ft-chip" :class="chipClass(task.state)">{{
                     stateText(task.state)
                   }}</span>
+                  <button
+                    v-if="canResume(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.resume')"
+                    @click="emit('resume', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M8 5v14l11-7z"
+                      />
+                    </svg>
+                  </button>
+                  <button
+                    v-if="canPause(task)"
+                    class="ft-mini-btn"
+                    :title="t('transfer.task.pause')"
+                    @click="emit('pause', task.id)"
+                  >
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                        stroke-width="2"
+                        d="M10 4H6v16h4zM18 4h-4v16h4z"
+                      />
+                    </svg>
+                  </button>
                   <button
                     v-if="canRetry(task)"
                     class="ft-mini-btn"

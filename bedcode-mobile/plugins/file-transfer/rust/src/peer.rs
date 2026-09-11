@@ -311,7 +311,9 @@ pub(crate) fn disconnect_peer(h: &WasmHost, args: &serde_json::Value) -> Result<
 fn send_payload(settings: &TransferSettings, paths: &[String]) -> Vec<serde_json::Value> {
     paths
         .iter()
-        .map(|p| serde_json::json!({ "path": p, "encrypt": settings.encryption }))
+        .map(|p| {
+            serde_json::json!({ "path": p, "encrypt": settings.encryption, "concurrency": settings.concurrency })
+        })
         .collect()
 }
 
@@ -398,6 +400,33 @@ pub(crate) fn cancel_task(h: &WasmHost, args: &serde_json::Value) -> Result<serd
     let changed = transfer_store::mark_cancelled(&mut guard, &batch_id);
     flush(h, guard, changed);
     Ok(serde_json::json!({ "ok": hit || changed }))
+}
+
+/// 显式暂停：宿主中断会话（任务保留含已传字节、不落历史），本地乐观标记
+/// paused 供前端即时反馈；引擎快照随后以 paused 状态合并确认。
+pub(crate) fn pause_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_pause_transfer(&batch_id)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::mark_paused(&mut guard, &batch_id);
+    flush(h, guard, changed);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 恢复单个暂停任务：宿主入队并经并发闸门启动（接收端按已写偏移续传）。
+pub(crate) fn resume_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_resume_transfer(&batch_id)?;
+    // 状态推进由引擎快照事件（pending → running）接管，本地无需乐观改写
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 恢复全部暂停任务，返回入队数。
+pub(crate) fn resume_all_tasks(h: &WasmHost) -> Result<serde_json::Value> {
+    let n = h.peer_resume_all_transfers()?;
+    Ok(serde_json::json!({ "resumed": n }))
 }
 
 /// 重试 = 批元数据回放重调原语（issue 13 步骤 3）：
@@ -677,7 +706,7 @@ pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
         // 移动端固定落点 MediaStore.Downloads（只读展示，不支持自定义）
         "download_dir": "MediaStore/Downloads",
         "encryption": s.encryption,
-        "concurrency": 1,
+        "concurrency": s.concurrency,
     }))
 }
 
@@ -693,6 +722,9 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
     // downloadDir 移动端不支持（固定 MediaStore.Downloads），静默忽略
     if let Some(enabled) = args.get("encryption").and_then(|v| v.as_bool()) {
         s.encryption = enabled;
+    }
+    if let Some(n) = args.get("concurrency").and_then(|v| v.as_u64()) {
+        s.concurrency = settings_store::clamp_concurrency(n as u8);
     }
     settings_store::save_and_push(h, &s)?;
     h.log_info("set-settings: policy/encryption applied (plugin-sourced, mobile)");
@@ -859,6 +891,15 @@ mod tests {
             unimplemented!()
         }
         fn peer_respond_transfer(&self, _batch_id: &str, _accept: bool) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
             unimplemented!()
         }
         fn peer_set_receive_policy(&self, _mode: &str, _timeout_secs: u64) -> Result<(), HostError> {

@@ -11,6 +11,8 @@ export type TaskDirection = 'download' | 'upload'
 /** 任务状态（宿主托管后仅存在传输中与终态） */
 export type TaskStateName =
   | 'transferring'
+  | 'pending'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'rejected'
@@ -108,6 +110,8 @@ export type ReceivingPolicy = (typeof RECEIVING_POLICIES)[number]
 /** 任务状态 → 展示文案 key（错误类附加 reason，见 TaskQueueSheet） */
 export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
   transferring: 'transfer.task.state.transferring',
+  pending: 'transfer.task.state.queued',
+  paused: 'transfer.task.state.paused',
   completed: 'transfer.task.state.completed',
   failed: 'transfer.task.state.failed',
   rejected: 'transfer.task.state.rejected',
@@ -118,6 +122,8 @@ export const TASK_STATE_KEYS: Record<TaskStateName, string> = {
 /** 任务状态 → 四色体系文本色 class（spec 9.3，定义在注入的 styles.css） */
 export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-color-active',
+  pending: 'ft-color-queued',
+  paused: 'ft-color-paused',
   completed: 'ft-color-completed',
   failed: 'ft-color-failed',
   rejected: 'ft-color-failed',
@@ -128,6 +134,8 @@ export const TASK_STATE_COLOR_CLASS: Record<TaskStateName, string> = {
 /** 任务状态 → 进度条底色 class（与文本色分离，进度条需实色底） */
 export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
   transferring: 'ft-progress-active',
+  pending: 'ft-progress-cancelled',
+  paused: 'ft-progress-cancelled',
   completed: 'ft-progress-completed',
   failed: 'ft-progress-failed',
   rejected: 'ft-progress-failed',
@@ -136,6 +144,10 @@ export const TASK_STATE_PROGRESS_CLASS: Record<TaskStateName, string> = {
 }
 
 /** 任务状态是否为终态（用于队列结算判定） */
+export function isActiveState(state: TaskStateName): boolean {
+  return state === 'transferring' || state === 'pending' || state === 'paused'
+}
+
 export function isTerminalState(state: TaskStateName): boolean {
   return (
     state === 'completed' ||
@@ -224,7 +236,7 @@ export function mapRejectReasonKey(reason: string | null | undefined): string {
 /** 任务卡上的操作按钮描述（调用方决定语义，卡内只渲染） */
 export interface TaskAction {
   /** 操作语义：cancel / retry / cancel-receiving / clear-history / open-location */
-  kind: 'cancel' | 'retry' | 'cancel-receiving' | 'clear-history' | 'open-location'
+  kind: 'cancel' | 'retry' | 'pause' | 'resume' | 'cancel-receiving' | 'clear-history' | 'open-location'
   label: string
   /** neutral = 灰底（取消）；tint = accent 浅底（重试等需被看见的次级操作） */
   variant: 'neutral' | 'tint'

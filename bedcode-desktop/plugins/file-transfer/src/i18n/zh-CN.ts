@@ -141,6 +141,8 @@ const zhCN: MessageSchema = {
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的任务数量，增大可能占用更多带宽',
   'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任的 WiFi 网络中使用',
+  'transfer.settings.concurrencyMinus': '减少并发数',
+  'transfer.settings.concurrencyPlus': '增加并发数',
   'transfer.settings.receivingPolicy': '接收策略',
   'transfer.settings.receivingPolicyAsk': '每次询问',
   'transfer.settings.receivingPolicyAccept': '直接接收',

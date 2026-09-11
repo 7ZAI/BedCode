@@ -29,7 +29,7 @@ function mapWireSettings(raw: any): Settings {
   return {
     roots: Array.isArray(raw?.roots) ? raw.roots.map(mapWireRoot) : [],
     downloadDir: raw?.download_dir ?? raw?.downloadDir ?? 'MediaStore/Downloads',
-    concurrency: 1,
+    concurrency: 3,
     receivingPolicy: normalized,
     approvalTimeoutSec: raw?.ask_timeout_sec ?? raw?.askTimeoutSec ?? 60,
     encryption: raw?.encryption ?? raw?.encryption_enabled ?? false,
@@ -40,7 +40,7 @@ export function useSettings(context: PluginContext) {
   const settings = ref<Settings>({
     roots: [],
     downloadDir: 'MediaStore/Downloads',
-    concurrency: 1,
+    concurrency: 3,
     receivingPolicy: 'ask',
     approvalTimeoutSec: 60,
     encryption: false,
@@ -135,6 +135,20 @@ export function useSettings(context: PluginContext) {
     }
   }
 
+  /** 设置发送方向并发上限（1–8 钳制；随下次发送载荷脉冲推送宿主闸门） */
+  async function setConcurrency(n: number): Promise<boolean> {
+    const clamped = Math.min(8, Math.max(1, Math.round(n)))
+    if (clamped === settings.value.concurrency) return true
+    try {
+      await context.commands.execute('file-transfer.set-settings', { concurrency: clamped })
+      settings.value = { ...settings.value, concurrency: clamped }
+      return true
+    } catch (e) {
+      console.error('[File Transfer] set concurrency failed:', e)
+      return false
+    }
+  }
+
   return {
     settings,
     loading,
@@ -144,5 +158,6 @@ export function useSettings(context: PluginContext) {
     setReceivingPolicy,
     setApprovalTimeout,
     setEncryption,
+    setConcurrency,
   }
 }

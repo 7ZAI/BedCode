@@ -26,6 +26,13 @@ pub(crate) struct TransferSettings {
     /// 发送加密默认值（send 批参数携带；同时推送引擎全局开关兜底）
     #[serde(default)]
     pub encryption: bool,
+    /// 发送方向并发上限（1–8；随 send 批参数脉冲推送宿主并发闸门）
+    #[serde(default = "default_concurrency")]
+    pub concurrency: u8,
+}
+
+fn default_concurrency() -> u8 {
+    3
 }
 
 impl Default for TransferSettings {
@@ -35,8 +42,14 @@ impl Default for TransferSettings {
             approval_timeout_sec: 60,
             download_dir: None,
             encryption: false,
+            concurrency: default_concurrency(),
         }
     }
+}
+
+/// 钳制并发上限到合法区间（1–8，spec §7）
+pub(crate) fn clamp_concurrency(n: u8) -> u8 {
+    n.clamp(1, 8)
 }
 
 /// UI 词表 → 宿主策略词表
@@ -148,6 +161,9 @@ mod tests {
             self.pushed_policy.borrow_mut().push((mode.to_string(), timeout_secs));
             Ok(())
         }
+        fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
+        fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
+        fn peer_resume_all_transfers(&self) -> Result<u32, bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_set_shared_roots(&self, _dirs: &[serde_json::Value]) -> Result<(), bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_list_shared_roots(&self, _session: &str) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
         fn peer_browse_directory(&self, _session: &str, _dir_id: &str, _rel_path: &str) -> Result<serde_json::Value, bedcode_plugin_api::host::HostError> { unimplemented!() }
@@ -166,6 +182,7 @@ mod tests {
             approval_timeout_sec: 999,
             download_dir: Some("D:/dl".into()),
             encryption: true,
+            concurrency: 5,
         };
         save_and_push(&mut h, &s).unwrap();
         assert_eq!(h.pushed_policy.borrow().as_slice(), &[("always_accept".to_string(), 600u64)][..]);
@@ -173,6 +190,21 @@ mod tests {
         // 回读一致
         let loaded = load(&h).unwrap();
         assert_eq!(loaded, s);
+    }
+
+    #[test]
+    fn concurrency_defaults_to_3_and_clamps_into_range() {
+        // 旧 storage 无 concurrency 字段：缺省 3（向后兼容）
+        let h = MockHost::new();
+        h.storage_set(
+            SETTINGS_KEY,
+            &serde_json::json!({"receivingPolicy": "ask", "approvalTimeoutSec": 60, "encryption": false}),
+        )
+        .unwrap();
+        assert_eq!(load(&h).unwrap().concurrency, 3);
+        assert_eq!(clamp_concurrency(0), 1);
+        assert_eq!(clamp_concurrency(9), 8);
+        assert_eq!(clamp_concurrency(5), 5);
     }
 
     #[test]
@@ -187,6 +219,7 @@ mod tests {
             approval_timeout_sec: 30,
             download_dir: Some("D:/dl".into()),
             encryption: true,
+            concurrency: 3,
         }).unwrap()).unwrap();
         assert_eq!(load_or_migrate(&h).unwrap().receiving_policy, "reject");
     }

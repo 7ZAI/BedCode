@@ -40,7 +40,7 @@ function mapWireTask(raw: any): Task {
     size: raw.totalBytes ?? 0,
     offset: raw.transferredBytes ?? 0,
     rateBps: raw.rateBps ?? 0,
-    state: (status === 'running' ? 'transferring' : status) as TaskStateName,
+    state: mapState(status),
     reason: raw.detail ?? raw.rejectReason ?? null,
     initiator: 'me',
     batchId: raw.batchId ?? null,
@@ -105,6 +105,13 @@ function mapWireBatch(raw: any): PendingBatch {
     totalSize: raw.totalBytes ?? 0,
     createdAt: raw.createdAtMs ?? 0,
   }
+}
+
+/** 引擎状态 → 前端状态（running=传输中、pending=排队、paused=已暂停，其余终态直传） */
+function mapState(status: string): TaskStateName {
+  if (status === 'running' || status === 'transferring') return 'transferring'
+  if (status === 'pending' || status === 'paused') return status
+  return status as TaskStateName
 }
 
 export function useTasks(context: PluginContext) {
@@ -260,6 +267,19 @@ export function useTasks(context: PluginContext) {
   async function retry(id: string): Promise<void> {
     await context.commands.execute('file-transfer.retry', { taskId: id })
   }
+  /** 显式暂停（仅传输中 send 任务；任务保留可恢复） */
+  async function pause(id: string): Promise<void> {
+    await context.commands.execute('file-transfer.pause', { taskId: id })
+  }
+  /** 恢复单个暂停任务（入队经并发闸门，对端按偏移续传） */
+  async function resume(id: string): Promise<void> {
+    await context.commands.execute('file-transfer.resume', { taskId: id })
+  }
+  /** 恢复全部暂停任务，返回入队数 */
+  async function resumeAll(): Promise<number> {
+    const r = await context.commands.execute('file-transfer.resume-all', {})
+    return typeof r?.resumed === 'number' ? r.resumed : 0
+  }
   async function approveBatch(batchId: string): Promise<void> {
     try {
       await context.commands.execute('file-transfer.approve-batch', { batchId })
@@ -406,6 +426,9 @@ export function useTasks(context: PluginContext) {
     queryPeer,
     cancel,
     retry,
+    pause,
+    resume,
+    resumeAll,
     approveBatch,
     rejectBatch,
     cancelReceiving,

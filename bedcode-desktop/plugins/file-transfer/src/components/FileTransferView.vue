@@ -48,6 +48,9 @@ const {
   sendPickedFiles,
   cancel,
   retry,
+  pause,
+  resume,
+  resumeAll,
   start: startTasks,
   stop: stopTasks,
 } = useTasks(context)
@@ -75,6 +78,7 @@ const {
   setReceivingPolicy,
   setApprovalTimeoutSec,
   setEncryption,
+  setConcurrency,
 } = useSettings(context)
 /** 插件自身对等连接：存在任一已建立的对等连接（≠ 宿主主连接） */
 const peerConnected = computed(() => connectedIds.value.size > 0)
@@ -544,6 +548,9 @@ watch(
           :download-dir="settings.downloadDir"
           @cancel="cancel"
           @retry="retry"
+          @pause="pause"
+          @resume="resume"
+          @resume-all="resumeAll"
           @cancel-receiving="cancelReceiving"
           @clear-history="clearHistoryEntries"
           @open-folder="handleOpenFolder"
@@ -599,6 +606,7 @@ watch(
         @set-receiving-policy="setReceivingPolicy"
         @set-approval-timeout-sec="setApprovalTimeoutSec"
         @set-encryption="setEncryption"
+        @set-concurrency="setConcurrency"
         @close="showSettings = false"
       />
     </Transition>

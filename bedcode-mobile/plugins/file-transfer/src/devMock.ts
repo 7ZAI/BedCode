@@ -218,6 +218,20 @@ const devMock: DevMockWithPeer = {
       // 发送方向任务列表（file-transfer.list-tasks，仅进行中）
       queue: [
         {
+          batchId: 'demo-send-paused',
+          direction: 'send',
+          status: 'paused',
+          nodeId: NODE_XIAOMI,
+          peerName: '小米 14 Pro',
+          files: [{ path: '/DCIM/扫描文档_合集', size: 268_435_456 }],
+          totalBytes: 268_435_456,
+          transferredBytes: 134_217_728, // 50%
+          rateBps: 0,
+          createdAtMs: 0,
+          updatedAtMs: 0,
+          retryMeta: { kind: 'send', paths: ['/storage/emulated/0/DCIM/扫描文档_合集'] },
+        },
+        {
           batchId: 'demo-send-img-01',
           direction: 'send',
           nodeId: NODE_XIAOMI,

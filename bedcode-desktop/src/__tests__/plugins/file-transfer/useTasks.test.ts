@@ -182,6 +182,40 @@ describe('useTasks orchestration', () => {
     expect(env.calls).toContainEqual({ id: 'file-transfer.retry', args: { taskId: 'batch-9' } })
   })
 
+  it('paused and pending wire statuses map to model states (resumable queue entries)', async () => {
+    env.onCommand('file-transfer.list-tasks', () => [
+      makeWireTask({ batchId: 'b-pause', status: 'paused', rateBps: 0 }),
+      makeWireTask({ batchId: 'b-queued', status: 'pending', rateBps: 0 }),
+    ])
+    const tasks = useTasks(env.context)
+
+    await tasks.refresh()
+
+    const paused = tasks.tasks.value.find((tk) => tk.id === 'b-pause')
+    expect(paused?.state).toBe('paused')
+    expect(tasks.hasPaused.value).toBe(true)
+    // paused 保留已传字节（续传展示）
+    expect(paused?.offset).toBe(512)
+    // 暂停/排队不计入总速率
+    expect(tasks.totalSpeed.value).toBe(0)
+  })
+
+  it('pause/resume/resumeAll route commands and resumeAll returns the count', async () => {
+    env.onCommand('file-transfer.pause', () => ({ ok: true }))
+    env.onCommand('file-transfer.resume', () => ({ ok: true }))
+    env.onCommand('file-transfer.resume-all', () => ({ resumed: 2 }))
+    const tasks = useTasks(env.context)
+
+    await tasks.pause('batch-9')
+    await tasks.resume('batch-9')
+    const n = await tasks.resumeAll()
+
+    expect(env.calls).toContainEqual({ id: 'file-transfer.pause', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume-all', args: {} })
+    expect(n).toBe(2)
+  })
+
   it('sendPickedFiles refuses an empty picker result without enqueueing', async () => {
     env.onCommand('file-transfer.pick-files', () => [])
     env.onCommand('file-transfer.enqueue', () => ({}))

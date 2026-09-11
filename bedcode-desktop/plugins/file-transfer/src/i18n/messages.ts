@@ -147,6 +147,8 @@ export type MessageSchema = {
   'transfer.settings.concurrency': string
   'transfer.settings.concurrencyHint': string
   'transfer.settings.plainWarning': string
+  'transfer.settings.concurrencyMinus': string
+  'transfer.settings.concurrencyPlus': string
   'transfer.settings.receivingPolicy': string
   'transfer.settings.receivingPolicyAsk': string
   'transfer.settings.receivingPolicyAccept': string

@@ -19,7 +19,7 @@ export interface RootItem {
 export function useSettings(context: PluginContext) {
   const settings = ref<Settings>({
     downloadDir: '',
-    concurrency: 1,
+    concurrency: 3,
     receivingPolicy: 'ask',
     approvalTimeoutSec: 60,
     encryption: false,
@@ -53,6 +53,8 @@ export function useSettings(context: PluginContext) {
               ? r.ask_timeout_sec
               : (typeof r.askTimeoutSecs === 'number' ? r.askTimeoutSecs : 60),
           encryption: r.encryption ?? r.encryption_enabled ?? false,
+          concurrency:
+            typeof r.concurrency === 'number' ? Math.min(8, Math.max(1, Math.round(r.concurrency))) : 3,
         }
       }
     } catch (e) {
@@ -85,6 +87,14 @@ export function useSettings(context: PluginContext) {
   async function setEncryption(enabled: boolean): Promise<void> {
     await context.commands.execute('file-transfer.set-settings', { encryption: enabled })
     settings.value = { ...settings.value, encryption: enabled }
+  }
+
+  /** 设置发送方向并发上限（1–8 钳制；随下次发送载荷脉冲推送宿主闸门） */
+  async function setConcurrency(n: number): Promise<void> {
+    const clamped = Math.min(8, Math.max(1, Math.round(n)))
+    if (clamped === settings.value.concurrency) return
+    await context.commands.execute('file-transfer.set-settings', { concurrency: clamped })
+    settings.value = { ...settings.value, concurrency: clamped }
   }
 
   /** 添加共享目录（系统多目录选择器，一次可添加多个 → 注册表 + set-shared-roots；
@@ -143,5 +153,6 @@ export function useSettings(context: PluginContext) {
     setReceivingPolicy,
     setApprovalTimeoutSec,
     setEncryption,
+    setConcurrency,
   }
 }

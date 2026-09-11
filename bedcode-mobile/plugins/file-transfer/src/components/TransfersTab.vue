@@ -34,6 +34,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
+  (e: 'pause', id: string): void
+  (e: 'resume', id: string): void
+  (e: 'resumeAll'): void
   (e: 'cancel-receiving', sessionId: string): void
   (e: 'clear-history'): void
   (e: 'open-location', id: string): void
@@ -143,10 +146,21 @@ function taskActions(task: Task): TaskAction[] {
   if (task.state === 'failed' || task.state === 'rejected' || task.state === 'interrupted') {
     btns.push({ kind: 'retry', label: t('transfer.task.retry'), variant: 'tint' })
   }
+  if (task.state === 'transferring') {
+    btns.push({ kind: 'pause', label: t('transfer.task.pause'), variant: 'neutral' })
+  }
+  if (task.state === 'paused') {
+    btns.push({ kind: 'resume', label: t('transfer.task.resume'), variant: 'tint' })
+  }
   if (!isTerminalState(task.state)) {
     btns.push({ kind: 'cancel', label: t('transfer.task.cancel'), variant: 'neutral' })
   }
   return btns
+}
+
+/** 是否存在已暂停任务（「全部继续」按钮可见性） */
+function hasPaused(tasks: Task[]): boolean {
+  return tasks.some((task) => task.state === 'paused')
 }
 
 // ==================== 接收中（ReceivingTask → 卡片） ====================
@@ -257,6 +271,8 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
   switch (kind) {
     case 'cancel': emit('cancel', id); break
     case 'retry': emit('retry', id); break
+    case 'pause': emit('pause', id); break
+    case 'resume': emit('resume', id); break
     case 'cancel-receiving': emit('cancel-receiving', id); break
     case 'clear-history': emit('clear-history'); break
     case 'open-location': emit('open-location', id); break
@@ -277,6 +293,12 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
       >
         {{ t(f.labelKey) }}
         <span v-if="f.count > 0" class="fv2-filter-count">{{ f.count }}</span>
+      </button>
+    </div>
+    <!-- 全部继续（存在已暂停任务时；独立操作按钮） -->
+    <div v-if="hasPaused(tasks)" class="fv2-resume-all">
+      <button type="button" class="fv2-resume-all-btn" @click="emit('resumeAll')">
+        {{ t('transfer.task.resumeAll') }}
       </button>
     </div>
 

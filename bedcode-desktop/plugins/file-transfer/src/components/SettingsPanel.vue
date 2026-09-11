@@ -27,6 +27,7 @@ const emit = defineEmits<{
   (e: 'setReceivingPolicy', policy: 'ask' | 'accept' | 'reject'): void
   (e: 'setApprovalTimeoutSec', secs: number): void
   (e: 'setEncryption', enabled: boolean): void
+  (e: 'setConcurrency', n: number): void
   (e: 'close'): void
 }>()
 
@@ -45,6 +46,18 @@ const ENCRYPTION_OPTIONS: Array<{ value: boolean; key: string }> = [
   { value: true, key: 'transfer.settings.encryptionOn' },
 ]
 
+/** 并发上限（1–8，spec §7） */
+const MIN_CONCURRENCY = 1
+const MAX_CONCURRENCY = 8
+
+/** 步进：钳制在 1–8 后 emit */
+function stepConcurrency(delta: number): void {
+  const next = Math.min(
+    MAX_CONCURRENCY,
+    Math.max(MIN_CONCURRENCY, props.settings.concurrency + delta),
+  )
+  emit('setConcurrency', next)
+}
 /** 超时输入：数字键盘 + 失焦提交（钳制在 composable 内） */
 function onTimeoutBlur(e: Event): void {
   const v = Number((e.target as HTMLInputElement).value)
@@ -153,6 +166,31 @@ function onTimeoutBlur(e: Event): void {
               @blur="onTimeoutBlur"
             />
           </div>
+        </section>
+
+        <!-- 发送并发上限（同时传输任务数，1–8；增大占用更多带宽） -->
+        <section class="ft-settings-section">
+          <h3 class="ft-settings-section-title">{{ t('transfer.settings.concurrency') }}</h3>
+          <div class="ft-stepper" role="group" :aria-label="t('transfer.settings.concurrency')">
+            <button
+              class="ft-stepper-btn"
+              :disabled="settings.concurrency <= MIN_CONCURRENCY"
+              :aria-label="t('transfer.settings.concurrencyMinus')"
+              @click="stepConcurrency(-1)"
+            >
+              −
+            </button>
+            <span class="ft-stepper-value" aria-live="polite">{{ settings.concurrency }}</span>
+            <button
+              class="ft-stepper-btn"
+              :disabled="settings.concurrency >= MAX_CONCURRENCY"
+              :aria-label="t('transfer.settings.concurrencyPlus')"
+              @click="stepConcurrency(1)"
+            >
+              +
+            </button>
+          </div>
+          <p class="ft-settings-helper">{{ t('transfer.settings.concurrencyHint') }}</p>
         </section>
 
         <!-- 传输加密（默认关；发送侧生效，接收端经 Offer 头自动解密） -->

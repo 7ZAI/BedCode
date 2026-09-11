@@ -145,6 +145,8 @@ const en: MessageSchema = {
   'transfer.settings.concurrency': 'Concurrency',
   'transfer.settings.concurrencyHint':
     'Number of simultaneous transfers; increasing it may use more bandwidth',
+  'transfer.settings.concurrencyMinus': 'Decrease concurrency',
+  'transfer.settings.concurrencyPlus': 'Increase concurrency',
   'transfer.settings.plainWarning':
     'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
   'transfer.settings.receivingPolicy': 'Receiving policy',
