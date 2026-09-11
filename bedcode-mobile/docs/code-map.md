@@ -117,6 +117,20 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **pairing_service**：配对服务（与 `auth/pairing.rs` 协作）
 - **client_router / default_handler / traits**：客户端消息路由与处理 trait
 
+### 终端链路（TB v3 字节连续）— `src-tauri/src/terminal_link.rs` + `stores/terminalBuffer.ts`
+
+桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust，取代前端直连 WS）：
+
+- **terminal_link.rs（Rust 后端持有，真源 = Rust 缓存）**：每会话一个 tokio-tungstenite WS、JWT 认证、
+  TB v3 帧解析（start_offset 8LE + len 4LE）、会话级字节缓存（16MB LRU）、ack 水位 + 节流回发、
+  退避重连（保留游标 from_offset 重订阅）、双速 mode（realtime/batch）、一次性历史
+  （缓存优先，HTTP `/api/sessions/{id}/history` 回退增量拉取）；事件 `terminal-frame`/`terminal-state`；
+  命令 `terminal_subscribe/unsubscribe/remove/send_input/set_mode/ack_rendered/get_history/get_state`
+- **前端**：`stores/terminalBuffer.ts`（Rust 命令驱动 + 事件消费 + lastRenderedOffset 游标/去重/缺口
+  重拼接/截断清屏/跨帧裁剪；历史拼接完成后才消费实时帧）+ `useTerminalBuffer.ts`（写队列 rAF 合并 + 背压 ack）
+- **订阅生命周期**：会话启动即订阅（Rust 管理）、停止/删除取消、断开重建——见 useMobileConnection
+- 协议与架构细节：`docs/knowledge/pty-output-pipeline.md`、`.scratch/mobile-ws-rust/spec.md`
+
 ### 插件核心模块引导
 
 移动端插件系统与桌面端同架构（wasmtime 组件沙箱），并有移动端特有能力。做插件相关改动时按层定位：
@@ -186,9 +200,15 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 ### 前端终端链路 — `src/composables/` + `src/stores/`
 
-- **terminalBuffer store + useTerminalBuffer**：全局 ws_output 监听 + sessionId 分发，后台会话只维护 JS buffer，前台写入 xterm
+- **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/模式/输入/ack/历史），消费
+  `terminal-frame`/`terminal-state` 事件；lastRenderedOffset 字节游标 + 跨帧裁剪 + 缺口重拼接 + 截断清屏；
+  历史拼接（terminalGetHistory）完成才消费实时帧；双速模式（进页 realtime / 离页 batch）
 - **useTerminalScroll**：触摸滚动（含惯性）、自定义滚动条、长按选择模式
-- **useMobileConnection / useMobileCommands / useHttpApi**：连接初始化与事件同步、Tauri 命令封装、HTTP API（文件树、会话模式、任务队列）
+- **useMobileConnection / useMobileCommands / useHttpApi**：连接初始化与事件同步、Tauri 命令封装（含
+  `terminal_*`）、HTTP API（文件树、会话模式、任务队列）
+
+> 历史：终端 WS 曾由前端 `useTerminalSocket.ts` 直连桌面（TB v2 seq 语义），2026-09-12 已迁入 Rust
+>（`src-tauri/src/terminal_link.rs`）并升级 TB v3 字节偏移——useTerminalSocket.ts 已删除
 
 ### 自动化任务执行机制（移动端视角）
 
@@ -218,11 +238,12 @@ Desktop PTY → Claude Code
 | 功能 | 目录 |
 |------|------|
 | WebSocket 客户端 / 心跳 / 重连 | `src-tauri/src/connection/` |
+| 终端链路（Rust 持有：TB v3 / 缓存 / ack / 重连） | `src-tauri/src/terminal_link.rs` |
 | 消息路由 | `src-tauri/src/router/` |
 | WS 消息处理器 | `src-tauri/src/handler/` |
 | 认证 / 配对 | `src-tauri/src/auth/` |
 | 连接管理 (前端) | `src/composables/`（useMobileConnection/useMobileConnection 相关） |
-| 终端缓冲 / 触摸滚动 | `src/stores/terminalBuffer.ts 所在 stores/` + `src/composables/` |
+| 终端缓冲 / 触摸滚动 | `src/stores/terminalBuffer.ts 所在 stores/` + `src/composables/`（终端链路前端侧） |
 | 终端样式 / 主题 | `src/styles/`、`src/config/` |
 | 文件浏览 / 代码查看 | `src/composables/`（useFileTree/useCodeHighlight/useHttpApi）、`src/views/`（CodeExplorerView） |
 | mDNS 发现与广播 | `src-tauri/src/mdns/` + `src/composables/`（useMdnsDiscovery/useMdnsAdvertiser） |

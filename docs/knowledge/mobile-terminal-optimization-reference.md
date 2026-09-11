@@ -1,5 +1,12 @@
 # 移动端终端优化参考：桌面端输出管线优化全景 + 30ms 合并问题
 
+> ⚠️ **【2026-09-12 部分过时】**本文档主体写于 TB v2 时代（seq 真源 / TB v2 帧 /
+> 128 事件上限 / `min_seq > last_rendered+1`）。桌面端与移动端均已迁 **TB v3 字节
+> offset**（`start_offset/end_offset`、`acked_offset`、`min_offset > lastRenderedOffset`）。
+> 文内遗留的 `seq` / `TB v2` / `128 事件上限` 表述一律以 v3 语义为准；优化措施与参数
+>（rAF 合并、背压滞回、让出阈值、残影根因）不受帧格式影响，仍有效。协议细节见
+> [pty-output-pipeline.md](./pty-output-pipeline.md)（已 v3）与 `.scratch/pty-byte-history/spec.md`（标 ⚠️ 处）。
+
 > 目的：沉淀桌面端终端输出/渲染管线已落地的优化与踩坑，作为**移动端终端后续优化的参考**。
 > 适用对象：bedcode-mobile 终端（`useTerminalSocket` / `useTerminalBuffer` / `writeCoalescer` → xterm）的后续优化。
 > 协议细节见 [pty-output-pipeline.md](./pty-output-pipeline.md)，本文档只讲**优化措施、参数、与问题教训**。
@@ -13,8 +20,8 @@ PTY 进程输出
   ↓ (os pipe)
 PtyReader（std::thread）→ 有序队列（mpsc 16384 + 单消费者顺序 on_output，根治乱序）
   ↓
-SessionOutputManager（seq 真源）→ UnifiedOutputQueue（seq + 快照订阅）
-  ↓ forward_loop（TB v2 帧；flush_interval + max_buffer_size 合并）
+SessionOutputManager（seq 真源）→ UnifiedOutputQueue（seq + 快照订阅）【⚠️ 已改：字节 offset 真源（start_offset/min_offset/snapshot_offset）】
+  ↓ forward_loop（TB v2 帧；flush_interval + max_buffer_size 合并）【⚠️ 已改：TB v3 帧】
   ├→ WebSocket 路由（移动端/桌面端远程终端）：/ws/terminal/session/{id}，30ms/64KB 合并
   └→ Tauri Channel（桌面端本地终端）：终端流命令，ZERO 缓冲直通（无合并，天然无丢帧）
   ↓
@@ -28,7 +35,7 @@ xterm.js 6.0（DOM/WebGL 渲染器）
 - 桌面/移动远程终端：WebSocket（`terminal_ws.rs`），**移动端前端直连桌面端 `/ws/terminal/session/{id}`** —— 这条 WS 路径是移动端远程终端的传输层，不可删除。
 
 **服务端关键参数（forward.rs）**：
-- `flush_interval = 30ms`（WS 远程通道时间窗合并）、`max_buffer_size = 64KB`、TB v2 帧上限 128 事件。
+- `flush_interval = 30ms`（WS 远程通道时间窗合并）、`max_buffer_size = 64KB`、TB v2 帧上限 128 事件。【⚠️ 已改：v3 无事件数上限，仅字节窗+时间窗（batch 模式另按 batch_bytes）】
 - 时间窗 vs timeout 重计时的取舍（forward_loop 注释）：持续输出下 timeout 永不触发会退化成仅容量触发、慢速输出延迟 = 容量/速率（可达数百 ms）；**时间窗保证延迟恒 ≤ 30ms**，正确。
 - 背压（session_output.rs）：`BACKPRESSURE_HIGH_BYTES=64KB` / `BACKPRESSURE_RESUME_BYTES=8KB` 带滞回三态（`paused: AtomicBool`）。原 1MB 单阈值是 VS Code 10 倍且前端 64KB ack 永远到不了水位 → PTY 从不暂停 → WebKitGTK WS 缓冲（~64-256KB）溢出丢消息。参考 VS Code `HighWatermarkChars=100000 / LowWatermarkChars=5000 / CharCountAckSize=5000`。
 
@@ -38,7 +45,7 @@ xterm.js 6.0（DOM/WebGL 渲染器）
 - `MAX_WRITE_CHUNK=64KB`：单次 write 上限，超过拆块让 xterm parser 在块间让出主线程。
 - `WRITE_YIELD_THRESHOLD=256KB`：单次 flush 累计达到即让出主线程一次（宏任务），风暴期间渲染/输入可插入，防 UI 冻结。
 - `REPLAY_IDLE_MS=250ms` 回放静止补刷：订阅/重订阅后历史回放与渲染器冷启动竞态可能留中间态，回放完毕连续 250ms 无新数据 → 自动补一次全量重绘（等价用户点刷新）。
-- seq 级连续性守护：seq gap → 自动重订阅（新快照）；历史截断（min_seq > last_rendered+1）→ 清屏全量重播。
+- seq 级连续性守护：seq gap → 自动重订阅（新快照）；历史截断（min_seq > last_rendered+1）→ 清屏全量重播。【⚠️ 已改：offset gap（start_offset > lastRenderedOffset）→ 重订阅；截断判定 min_offset > lastRenderedOffset】
 
 ---
 
@@ -76,7 +83,7 @@ xterm.js 6.0（DOM/WebGL 渲染器）
 | 写入合并 | rAF + 100ms 兜底 + 64KB 分块 + **256KB 让出** | rAF + 100ms 兜底 + 64KB 分块 + **512KB 阈值** + **128KB 让出** | 512KB 阈值是移动端特有（弱 CPU + 大脉冲）；让出阈值按弱 CPU 减半（桌面 256KB → 128KB），见 §3.1 |
 | seq 守护 | gap → 重订阅；截断 → 清屏重播 | 同（useTerminalBuffer Store seq 状态机 + 历史缓存） | 已对齐 |
 | 回放补刷 | 250ms 静止补刷 | replayIdleTimers（useTerminalBuffer） | 已对齐 |
-| 背压 | 64KB/8KB 滞回（服务端）+ ack 反馈环 | **ack 已实现**（spec 04-06）：`ackRendered()` 64KB 节流 + 250ms 空闲兜底 → TB v2 ACK 帧 → 桌面端 `handle_ack_binary` → `GlobalOutputManager::ack` | 已对齐桌面端 useTerminalOutputStream 语义；两向接线完整 |
+| 背压 | 64KB/8KB 滞回（服务端）+ ack 反馈环 | **ack 已实现**（spec 04-06）：`ackRendered()` 64KB 节流 + 250ms 空闲兜底 → TB v3 ACK 帧（acked_offset）→ 桌面端 `handle_ack_binary` → `GlobalOutputManager::ack`【v2 头仅 ack 入站兼容】 | 已对齐桌面端 useTerminalOutputStream 语义；两向接线完整 |
 | 历史缓存 | — | `MAX_HISTORY_CACHE_BYTES` 字节上限 + shift 逐出 + 会话关闭 cleanup | 有界，无内存失控 |
 | 渲染器 | DOM（Linux）/ WebGL，透明/背景图强制 DOM | WebGL 动态加载 + 上下文丢失回退 DOM + atlas 预热 | 移动端主题纯色（terminalThemes.ts 无透明度），route B 决策不适用；context loss 回退已覆盖 |
 | 鼠标坐标 | 已修（去 CSS zoom，见 issue 06） | — | 移动端无全局 zoom，不适用；但若引入任何祖先 transform/zoom，xterm 鼠标 hit-test 坐标系会错位（issue 06 教训） |
