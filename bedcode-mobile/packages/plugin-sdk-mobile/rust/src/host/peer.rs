@@ -37,6 +37,9 @@ pub trait HostPeer {
     fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError>;
     /// 设置接收策略（引擎安全闸门配置原语）：mode = "ask" | "always_accept" | "always_deny"
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
+    fn peer_pause_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+    fn peer_resume_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+    fn peer_resume_all_transfers(&self) -> Result<u32, HostError>;
     /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（SAF 树 URI）
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
     /// 浏览对端共享根清单（仅 session 句柄寻址；断线自动重拨）

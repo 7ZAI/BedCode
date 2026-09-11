@@ -299,6 +299,18 @@ impl HostPeer for WasmHost {
             .map_err(|e| host_err("peer_set_receive_policy", e))
     }
 
+    fn peer_pause_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        host_peer::pause_transfer(batch_id).map_err(|e| host_err("peer_pause_transfer", e))
+    }
+
+    fn peer_resume_transfer(&self, batch_id: &str) -> Result<(), HostError> {
+        host_peer::resume_transfer(batch_id).map_err(|e| host_err("peer_resume_transfer", e))
+    }
+
+    fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
+        host_peer::resume_all_transfers().map_err(|e| host_err("peer_resume_all_transfers", e))
+    }
+
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
         let dirs_json =
             to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;

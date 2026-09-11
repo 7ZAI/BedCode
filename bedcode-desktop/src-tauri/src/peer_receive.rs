@@ -58,6 +58,8 @@ pub(crate) struct PeerTransferSettings {
     download_dir: Option<String>,
     /// 发送加密开关（应用层 AES-256-GCM；接收端经 Offer 头自动解密）
     pub(crate) encryption_enabled: bool,
+    /// 发送方向并发上限（1..=8；插件设置真源，随发送载荷脉冲推送闸门）
+    pub(crate) concurrency: u8,
 }
 
 impl Default for PeerTransferSettings {
@@ -67,7 +69,20 @@ impl Default for PeerTransferSettings {
             ask_timeout_secs: DEFAULT_ASK_TIMEOUT_SECS,
             download_dir: None,
             encryption_enabled: false,
+            concurrency: DEFAULT_CONCURRENCY,
         }
+    }
+}
+
+/// 发送方向并发默认值（spec §7：默认 3）
+pub const DEFAULT_CONCURRENCY: u8 = 3;
+
+/// 校验并发上限（1..=8，spec §7 上限初拟 8）
+pub fn validate_concurrency(n: u8) -> std::result::Result<(), String> {
+    if (1..=8).contains(&n) {
+        Ok(())
+    } else {
+        Err(format!("concurrency must be 1..=8, got {n}"))
     }
 }
 
@@ -100,6 +115,8 @@ pub struct PeerReceiveSettingsDto {
     pub download_dir: String,
     /// 发送加密开关
     pub encryption_enabled: bool,
+    /// 发送方向并发上限
+    pub concurrency: u8,
 }
 
 // ==================== 状态容器 ====================
@@ -718,6 +735,7 @@ pub async fn get_peer_receive_settings(
         ask_timeout_secs: settings.ask_timeout_secs,
         download_dir,
         encryption_enabled: settings.encryption_enabled,
+        concurrency: settings.concurrency,
     })
 }
 
@@ -777,6 +795,21 @@ pub async fn set_peer_transfer_encryption(app: AppHandle, enabled: bool) -> crat
     settings.encryption_enabled = enabled;
     apply_settings(&app, &settings).await;
     tracing::info!(enabled, "transfer encryption toggled");
+    Ok(())
+}
+
+/// 设置发送方向并发上限（持久化；仅影响后续排队调度，无需热更新运行时）
+#[tauri::command]
+pub async fn set_peer_transfer_concurrency(app: AppHandle, concurrency: u8) -> crate::Result<()> {
+    validate_concurrency(concurrency)
+        .map_err(crate::AppError::InvalidInput)?;
+    let mut settings = ensure_settings_loaded(&app).await;
+    if settings.concurrency == concurrency {
+        return Ok(());
+    }
+    settings.concurrency = concurrency;
+    apply_settings(&app, &settings).await;
+    tracing::info!(concurrency, "transfer concurrency updated");
     Ok(())
 }
 
@@ -862,6 +895,7 @@ mod tests {
             ask_timeout_secs: timeout,
             download_dir: None,
             encryption_enabled: false,
+            concurrency: DEFAULT_CONCURRENCY,
         }
     }
 
@@ -926,6 +960,27 @@ mod tests {
         let back: PeerTransferSettings = serde_json::from_value(json).expect("deserialize");
         assert!(back.encryption_enabled);
     }
+
+    #[test]
+    fn concurrency_field_roundtrips_and_defaults_to_3() {
+        // 旧版设置文件无 concurrency 字段：缺省反序列化为 3（向后兼容）
+        let legacy: PeerTransferSettings = serde_json::from_str(
+            r#"{ "policyMode": "ask", "askTimeoutSecs": 60, "downloadDir": null }"#,
+        )
+        .expect("legacy json");
+        assert_eq!(legacy.concurrency, DEFAULT_CONCURRENCY);
+
+        // roundtrip 保留并发值；校验边界 1..=8
+        let enabled = PeerTransferSettings { concurrency: 5, ..settings(POLICY_ASK, 60) };
+        let json = serde_json::to_value(&enabled).expect("serialize");
+        assert_eq!(json.get("concurrency"), Some(&serde_json::Value::Number(5.into())));
+        let back: PeerTransferSettings = serde_json::from_value(json).expect("deserialize");
+        assert_eq!(back.concurrency, 5);
+        assert!(validate_concurrency(1).is_ok());
+        assert!(validate_concurrency(8).is_ok());
+        assert!(validate_concurrency(0).is_err());
+        assert!(validate_concurrency(9).is_err());
+    }
     #[test]
     fn settings_file_roundtrips_and_rejects_future_version() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -934,6 +989,7 @@ mod tests {
             ask_timeout_secs: 120,
             download_dir: Some("D:/downloads/bedcode".to_string()),
             encryption_enabled: true,
+            concurrency: 4,
         };
         write_settings_file(dir.path(), &settings).expect("write");
         assert_eq!(read_settings_file(dir.path()).expect("read"), settings);

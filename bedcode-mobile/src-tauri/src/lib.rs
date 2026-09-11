@@ -280,6 +280,9 @@ pub fn run() {
             // Peer Transfer (issue 09 发送侧)
             peer_transfer::send_files_to_peer,
             peer_transfer::cancel_peer_transfer,
+            peer_transfer::pause_peer_transfer,
+            peer_transfer::resume_peer_transfer,
+            peer_transfer::resume_all_peer_transfers,
             peer_transfer::retry_peer_transfer,
             peer_transfer::list_peer_transfers,
             peer_transfer::clear_peer_transfer_history,
@@ -292,6 +295,7 @@ pub fn run() {
             peer_receive::get_peer_receive_settings,
             peer_receive::set_peer_receive_policy,
             peer_receive::set_peer_transfer_encryption,
+            peer_receive::set_peer_transfer_concurrency,
             peer_receive::clear_peer_receiving_history,
             // Peer Remote (issue 11 远端浏览/拉取)
             peer_remote::list_peer_shared_roots,

@@ -205,24 +205,37 @@ pub(crate) fn peer_send_files(
         Detailed {
             path: String,
             encrypt: Option<bool>,
+            /// 发送方向并发上限脉冲（插件设置真源，批级一致；首元素取值）
+            concurrency: Option<u8>,
         },
     }
     let entries: Vec<SendPathEntry> = serde_json::from_str(paths_json)
         .map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let mut paths = Vec::with_capacity(entries.len());
     let mut force_encrypt = false;
+    let mut concurrency: Option<u8> = None;
     for entry in entries {
         match entry {
             SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed { path, encrypt } => {
+            SendPathEntry::Detailed { path, encrypt, concurrency: c } => {
                 if encrypt == Some(true) {
                     force_encrypt = true;
+                }
+                if concurrency.is_none() {
+                    concurrency = c;
                 }
                 paths.push(path);
             }
         }
     }
-    let _ = require_app(host_ctx)?;
+    let app = require_app(host_ctx)?;
+    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
+    if let Some(n) = concurrency {
+        let _ = sync_result(block_on_async(crate::peer_receive::set_peer_transfer_concurrency(
+            app.clone(),
+            n,
+        )));
+    }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
     let dto = with_auto_redial(host_ctx, session, |node_id| {
@@ -264,6 +277,62 @@ pub(crate) fn peer_set_receive_policy(
     let app = require_app(host_ctx)?;
     let mode = mode.to_string();
     sync_result(block_on_async(crate::peer_receive::set_peer_receive_policy(app, mode, timeout_secs)))
+}
+
+/// 显式暂停进行中的发送批：中断会话连接，任务保留（含已传字节）不落历史。
+/// 仅本端发起的 running 批可暂停（服务侧供流任务不可暂停）。
+pub(crate) fn peer_pause_transfer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    batch_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let batch_id = batch_id.to_string();
+    let hit = sync_result(block_on_async(crate::peer_transfer::pause_peer_transfer(
+        app, batch_id,
+    )))?;
+    if !hit {
+        return Err("pause transfer: no running send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传。
+pub(crate) fn peer_resume_transfer(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    batch_id: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let batch_id = batch_id.to_string();
+    let hit = sync_result(block_on_async(crate::peer_transfer::resume_peer_transfer(
+        app, batch_id,
+    )))?;
+    if !hit {
+        return Err("resume transfer: no paused send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复全部暂停的发送批，返回入队数。
+pub(crate) fn peer_resume_all_transfers(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_all_transfers") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let n = sync_result(block_on_async(crate::peer_transfer::resume_all_peer_transfers(
+        app,
+    )))?;
+    Ok(n as u32)
 }
 
 pub(crate) fn peer_set_shared_roots(

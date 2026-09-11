@@ -53,6 +53,8 @@ pub(crate) struct PeerTransferSettings {
     /// 传输加密开关（发送侧新批生效；接收侧自动适配，默认关）。
     /// pub(crate)：发送侧（peer_transfer）发起批前读取
     pub(crate) encryption_enabled: bool,
+    /// 发送方向并发上限（1..=8；插件设置真源，随发送载荷脉冲推送闸门）
+    pub(crate) concurrency: u8,
 }
 
 impl Default for PeerTransferSettings {
@@ -61,7 +63,20 @@ impl Default for PeerTransferSettings {
             policy_mode: POLICY_ASK.to_string(),
             ask_timeout_secs: DEFAULT_ASK_TIMEOUT_SECS,
             encryption_enabled: false,
+            concurrency: DEFAULT_CONCURRENCY,
         }
+    }
+}
+
+/// 发送方向并发默认值（spec §7：默认 3）
+pub const DEFAULT_CONCURRENCY: u8 = 3;
+
+/// 校验并发上限（1..=8，spec §7 上限初拟 8）
+pub fn validate_concurrency(n: u8) -> std::result::Result<(), String> {
+    if (1..=8).contains(&n) {
+        Ok(())
+    } else {
+        Err(format!("concurrency must be 1..=8, got {n}"))
     }
 }
 
@@ -92,6 +107,8 @@ pub struct PeerReceiveSettingsDto {
     pub ask_timeout_secs: u64,
     /// 传输加密开关（发送侧语义；接收侧自动适配）
     pub encryption_enabled: bool,
+    /// 发送方向并发上限
+    pub concurrency: u8,
 }
 
 // ==================== 状态容器 ====================
@@ -671,6 +688,7 @@ pub async fn get_peer_receive_settings(
         policy_mode: settings.policy_mode,
         ask_timeout_secs: settings.ask_timeout_secs,
         encryption_enabled: settings.encryption_enabled,
+        concurrency: settings.concurrency,
     })
 }
 
@@ -712,6 +730,20 @@ pub async fn set_peer_transfer_encryption(app: AppHandle, enabled: bool) -> crat
     Ok(())
 }
 
+/// 设置发送方向并发上限（持久化；仅影响后续排队调度，无需热更新运行时）
+#[tauri::command]
+pub async fn set_peer_transfer_concurrency(app: AppHandle, concurrency: u8) -> crate::Result<()> {
+    validate_concurrency(concurrency).map_err(crate::AppError::InvalidInput)?;
+    let mut settings = ensure_settings_loaded(&app).await;
+    if settings.concurrency == concurrency {
+        return Ok(());
+    }
+    settings.concurrency = concurrency;
+    apply_settings(&app, &settings).await;
+    tracing::info!(concurrency, "transfer concurrency updated");
+    Ok(())
+}
+
 /// 应用新设置：持久化 + 运行中处理器热更新（以装配快照为基底只换策略）
 async fn apply_settings(app: &AppHandle, settings: &PeerTransferSettings) {
     let state = app.state::<PeerReceiveState>();
@@ -742,6 +774,7 @@ mod tests {
             policy_mode: mode.to_string(),
             ask_timeout_secs: timeout,
             encryption_enabled: false,
+            concurrency: DEFAULT_CONCURRENCY,
         }
     }
 
@@ -786,6 +819,7 @@ mod tests {
             policy_mode: POLICY_ALWAYS_DENY.to_string(),
             ask_timeout_secs: 120,
             encryption_enabled: true,
+            concurrency: 4,
         };
         write_settings_file(dir.path(), &settings).expect("write");
         assert_eq!(read_settings_file(dir.path()).expect("read"), settings);

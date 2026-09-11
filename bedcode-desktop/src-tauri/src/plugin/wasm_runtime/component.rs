@@ -297,6 +297,18 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
     }
 
+    fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer::peer_pause_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer::peer_resume_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn resume_all_transfers(&mut self) -> Result<u32, String> {
+        peer::peer_resume_all_transfers(&self.host_ctx, &self.plugin_id)
+    }
+
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
     }
