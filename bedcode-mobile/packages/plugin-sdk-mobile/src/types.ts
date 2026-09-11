@@ -41,6 +41,8 @@ export interface PluginManifest {
   rustLibrary?: string
   /** 启用前预授权目录（宿主 preauthorize 统一弹窗，支持 ${downloads} 模板） */
   preauthDirs?: string[]
+  /** 外网访问预授权 URL 声明（Egress L2 glob：`[scheme://][*.]host[:port][/path-prefix]`） */
+  preauthUrls?: string[]
 }
 
 /** 移动端扩展点声明 */
