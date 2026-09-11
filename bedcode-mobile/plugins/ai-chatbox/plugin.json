@@ -11,6 +11,13 @@
   "preauthDirs": [
     "${downloads}/ai-chatbox"
   ],
+  "preauthUrls": [
+    "https://api.deepseek.com/*",
+    "https://dashscope.aliyuncs.com/*",
+    "https://*.openai.com/*",
+    "https://api.anthropic.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
   "permissions": ["fs:read", "fs:write", "network:http", "storage", "ui:navtab", "ui:toolbox"],
   "contributes": {
     "commands": [
