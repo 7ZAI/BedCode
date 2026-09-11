@@ -5,13 +5,12 @@
 import { ref, computed, readonly } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
+import { listen } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
 import { completeStartupTask } from '@/composables/useAppStartup'
 import {
   wsConnect,
   wsDisconnect,
-  wsGetStatus,
   wsIsConnected,
   wsReconnect,
   wsAuthenticate,
@@ -20,7 +19,6 @@ import {
   wsVerifyPairingCode,
   wsSetToken,
   initMobileEventListeners,
-  cleanupMobileEventListeners,
   saveAuthCredentials,
   loadAuthCredentials,
   clearAuthCredentials,
@@ -53,8 +51,7 @@ let autoReconnectAttemptCount = 0
 // 用户主动连接/断开时设为 true，取消正在进行的自动重连
 let autoReconnectAborted = false
 
-// 意外断开监听器
-let unlistenUnexpectedDisconnect: UnlistenFn | null = null
+// 意外断开监听器（模块级注册，随连接生命周期存在）
 
 // 认证凭据
 const authCredentials = ref<AuthCredentials | null>(null)
@@ -190,10 +187,6 @@ async function init() {
 
       // 连接建立时确保全局监听器启动（订阅在 onPaired 认证成功后执行，
       // 因为桌面端要求先认证才能订阅会话输出）
-      const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener().catch((e) => {
-        logger.warn('[MobileConnection] Global listener start failed:', e)
-      })
     },
     onDisconnected: () => {
       clearConnectionTimeout()
@@ -230,17 +223,10 @@ async function init() {
       }
       autoStartForegroundService()
 
-      // 认证成功后重新订阅所有后台会话的终端输出
-      // 必须在 onPaired 而非 onConnected 中执行，因为桌面端要求先认证才能订阅
+      // 认证成功后恢复所有后台会话的终端订阅（订阅由 Rust 管理；断开期间
+      // Rust 链路已随 markAllUnsubscribed 关闭，此处全部重建）
       const bufferStore = useTerminalBufferStore()
-      bufferStore.startGlobalListener().catch((e) => {
-        logger.warn('[MobileConnection] Global listener start failed:', e)
-      })
       for (const [sid, buffer] of bufferStore.buffers.entries()) {
-        // 无条件重订阅（仅跳过已停止会话）：服务端订阅随连接关闭清理，
-        // subscribed 只是前端信念且可能残留（意外断开路径已由
-        // markAllUnsubscribed 兜底，但重订阅本身幂等——桌面端按
-        // (client_id, session_id) 替换订阅者，cursor 续传无重复帧）
         if (buffer.sessionStopped) continue
         bufferStore.subscribeSession(sid).catch((e) => {
           logger.warn(`[useMobileConnection] Resubscribe ${sid} failed:`, e)
@@ -391,7 +377,7 @@ async function init() {
   })
 
   // 监听意外断开事件（Rust 端 WsClient 检测到异常断开时发射）
-  unlistenUnexpectedDisconnect = await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
+  await listen<{ reason: string }>('ws_unexpected_disconnect', (event) => {
     logger.warn('[MobileConnection] Unexpected disconnect:', event.payload.reason)
     connectionStatus.value = 'disconnected'
     connectionError.value = 'common.notification.connectionDisconnected'
@@ -472,7 +458,7 @@ async function init() {
           logger.warn('[MobileConnection] Re-auth failed, need to pair again')
           // JWT 被拒绝，必须断开 WebSocket 连接，否则 Rust 端 WsClient 仍为 Connected
           // 后续用户点击历史连接时 conn.connect() 会误判 "Already connected" 拒绝新建
-          try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
+          try { await wsDisconnect() } catch { /* 忽略断开异常 */ }
           isConnecting.value = false
           connectionStatus.value = 'disconnected'
           connectionError.value = 'mobile.connection.reauthFailed'
@@ -481,7 +467,7 @@ async function init() {
       } catch (e) {
         logger.error('[MobileConnection] Re-auth error:', e)
         // 认证异常（超时/网络错误），同样断开 WebSocket 保持前后端状态一致
-        try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
+        try { await wsDisconnect() } catch { /* 忽略断开异常 */ }
         isConnecting.value = false
         connectionStatus.value = 'disconnected'
         connectionError.value = 'mobile.connection.reauthError'
@@ -489,7 +475,7 @@ async function init() {
     } else {
       logger.log('[MobileConnection] No credentials stored, need manual pairing')
       // 无凭据，断开 WebSocket，用户需要手动发起连接
-      try { await wsDisconnect() } catch (_) { /* 忽略断开异常 */ }
+      try { await wsDisconnect() } catch { /* 忽略断开异常 */ }
       isConnecting.value = false
       connectionStatus.value = 'disconnected'
       connectionError.value = 'mobile.connection.noCredentials'
@@ -633,7 +619,14 @@ function clearConnectionTimeout() {
  */
 async function autoStartForegroundService() {
   const savedSettings = localStorage.getItem('mobile-settings')
-  const settings = savedSettings ? JSON.parse(savedSettings) : {}
+  let settings: Record<string, unknown> = {}
+  if (savedSettings) {
+    try {
+      settings = JSON.parse(savedSettings)
+    } catch {
+      settings = {} // 损坏的本地设置按缺省处理，不阻断启动
+    }
+  }
   if (settings.keepAlive) {
     const { startService } = useForegroundService()
     await startService()
@@ -663,9 +656,14 @@ async function handleUnexpectedDisconnect(reason: string) {
 
   // 读取用户设置
   const savedSettings = localStorage.getItem('mobile-settings')
-  const settings = savedSettings
-    ? JSON.parse(savedSettings)
-    : { autoReconnect: true, reconnectInterval: 5 }
+  let settings: Record<string, unknown> = { autoReconnect: true, reconnectInterval: 5 }
+  if (savedSettings) {
+    try {
+      settings = JSON.parse(savedSettings)
+    } catch {
+      settings = { autoReconnect: true, reconnectInterval: 5 } // 损坏按默认
+    }
+  }
 
   // 检查是否启用自动重连
   if (!settings.autoReconnect) {
@@ -705,9 +703,12 @@ async function handleUnexpectedDisconnect(reason: string) {
   connectionError.value = null
 
   try {
-    // 使用用户设置的重连间隔
-    if (settings.reconnectInterval > 0) {
-      await new Promise(resolve => setTimeout(resolve, settings.reconnectInterval * 1000))
+    // 使用用户设置的重连间隔（秒）：localStorage 存量 JSON 类型收窄——
+    // 缺失/非数字按默认 5，显式 0 表示不等待立即重连
+    const stored = settings.reconnectInterval
+    const reconnectIntervalSec = typeof stored === 'number' ? stored : 5
+    if (reconnectIntervalSec > 0) {
+      await new Promise(resolve => setTimeout(resolve, reconnectIntervalSec * 1000))
       // 等待期间用户可能已发起新连接，检查取消标记
       if (autoReconnectAborted) {
         logger.log('[MobileConnection] Auto-reconnect aborted during delay wait')
@@ -886,13 +887,18 @@ export async function loadActiveSessions(): Promise<any[]> {
  */
 export async function startSession(
   configId: string,
-  sessionName?: string,
   size?: { cols: number; rows: number }
 ): Promise<{ sessionId: string; session?: any }> {
   const { httpStartSession } = useHttpApi()
   const result = await httpStartSession(configId, size)
   if (result.code === 0 && result.data) {
-    return { sessionId: result.data.sessionId, session: undefined }
+    const sessionId = result.data.sessionId
+    // 会话启动即订阅（用户需求 1：不再等进入终端页才订阅；订阅由 Rust 管理）
+    const bufferStore = useTerminalBufferStore()
+    bufferStore.subscribeSession(sessionId).catch((e) => {
+      logger.warn(`[MobileConnection] Subscribe on start ${sessionId} failed:`, e)
+    })
+    return { sessionId, session: undefined }
   }
   throw new Error(result.message || 'Failed to start session')
 }

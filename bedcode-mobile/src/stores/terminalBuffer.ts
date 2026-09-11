@@ -1,89 +1,110 @@
 /**
- * Terminal Buffer Store
+ * Terminal Buffer Store（Rust 后端持有终端 WS 后的重写）
  *
- * 移动端终端输出订阅状态（10 号票重写）— 每会话前端直连桌面端
- * /ws/terminal/session/{id}，输出为 TB v2 二进制帧 + JSON 控制帧。
+ * 移动端终端输出订阅（用户需求 1/2/3 落地）：
+ * - 订阅由 Rust 后端管理、前端触发：会话启动 → `terminalSubscribe`；停止 /
+ *   手动断开 → `terminalUnsubscribe`；意外断开 → Rust 自动退避重连重订阅
+ *   （保留字节游标），前端无需干预
+ * - 数据真源 = Rust 侧会话级字节缓存；前端只在进入终端页时获取「一次性历史」
+ *   （`terminalGetHistory`，缓存优先、淘汰时回退桌面 HTTP），拼接完历史后才
+ *   开始消费实时帧（`terminal-frame` 事件）——「拼完历史才通知前端消费」
+ * - 字节连续（TB v3）：游标 = lastRenderedOffset（已渲染区间末端）；去重 /
+ *   缺口（重拼接）/ 截断（minOffset 越过游标）/ 跨帧裁剪（overlap = 游标 -
+ *   startOffset）全部按字节区间运算
+ * - 渲染背压 ack：视图 onWriteParsed → `terminalAckRendered`（Rust 节流回发）
  *
- * 状态机（spec §6.3）：
- *   IDLE → connecting(auth) → auth_ok → subscribe → subscribe_ok{snapshot_seq}
- *     → HISTORY（帧 lastSeq ≤ snapshot_seq 写 xterm + 入历史缓存；
- *       > snapshot_seq 入实时缓冲）→ history_end → FLUSH → LIVE（直写 + 入缓存）
- *   seq 缺口（> lastRenderedSeq+1）→ 重发 subscribe（快照重播跳过 ≤ lastRenderedSeq）
- *   重连（WS 断开）→ 回到 connecting；快照重播跳过 ≤ lastRenderedSeq；
- *   minSeq > lastRenderedSeq+1（环形淘汰）→ 清屏 + onTruncated + 锚定重播
- *   页面重进（xterm 已销毁）→ 历史缓存立即回放 → 服务端帧按 seq 跳过（不双写）
+ * 状态机（对齐 Rust terminal_state 事件）：
+ *   idle → connecting → auth → history → live
+ *   history/live = 已订阅（subscribed）；页面只影响「是否消费事件」，不影响订阅
  */
 
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/frontendLogger'
 import { reactive, ref } from 'vue'
 import { emit } from '@tauri-apps/api/event'
+import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
-  createTerminalSocket,
-  type TerminalSocket,
-  type TerminalSocketFrame,
-  type SubscribeOkInfo,
-} from '@/composables/useTerminalSocket'
+  terminalGetHistory,
+  terminalSubscribe,
+  terminalUnsubscribe,
+  terminalUnsubscribeAll,
+  terminalRemove,
+  terminalSendInput,
+  terminalAckRendered,
+  terminalSetMode,
+} from '@/composables/useMobileCommands'
 
 // ==================== Types ====================
 
-export type { TerminalSocketFrame as OutputFrame } from '@/composables/useTerminalSocket'
-
-/** 订阅确认信息（subscribe_ok 帧的元数据，供调用方判断快照边界） */
-export interface SubscribeResultInfo {
-  /** 订阅时刻队列最新序号（历史边界） */
-  snapshotSeq: number
-  /** 队列最早存续事件序号（环形淘汰后推进） */
-  minSeq: number
-  historyCount: number
+/** 实时帧（Rust terminal-frame 事件载荷） */
+export interface OutputFrame {
+  data: Uint8Array
+  /** 帧内首字节的会话内累计偏移 */
+  startOffset: number
+  /** 帧内末字节偏移 = startOffset + len（游标推进基准） */
+  endOffset: number
+  isWaiting: boolean
 }
+
+export type { TerminalHistoryResult as TerminalHistoryInfo } from '@/composables/useMobileCommands'
+
+/** 订阅确认信息（subscribe 时的快照元数据；兼容旧 API 语义） */
+export interface SubscribeSnapshot {
+  snapshotOffset: number
+  minOffset: number
+  historyBytes: number
+}
+
+export type SubscribeResultInfo = SubscribeSnapshot
 
 /** 实时输出回调 — TerminalView 注册 */
 export interface RealtimeHandler {
-  onOutput: (data: Uint8Array, frame: TerminalSocketFrame) => void
-  /**
-   * 分片回放写入：写入一批合并字节，resolve 于 xterm 解析完成后
-   * （渲染高水位背压信号，回放循环据此节流）；缺省时回退 onOutput 同步逐帧写
-   */
+  onOutput: (data: Uint8Array, frame: OutputFrame) => void
+  /** 分片写入：resolve 于 xterm 解析完成后（历史拼接背压信号） */
   writeParsed?: (data: Uint8Array) => Promise<void>
-  /** 历史缓存分片回放完成（末批已解析），供视图做静止全量重绘兜底 */
+  /** 历史拼接完成（末批已解析） */
   onReplayDone?: () => void
-  /** 清屏（已渲染区域被环形淘汰需全量重播时） */
+  /** 清屏（驻留历史头部被淘汰，需全量重播时） */
   onClear?: () => void
-  /** 历史头部被淘汰提示（服务端 min_seq 越过游标或本地缓存头部被 LRU 裁剪时触发） */
-  onTruncated?: (minSeq: number) => void
+  /** 历史头部被淘汰提示 */
+  onTruncated?: (minOffset: number) => void
 }
 
 /** 单会话订阅状态 */
 export interface SessionBuffer {
-  /** 连接/订阅阶段：idle / connecting / auth / history / live */
+  /** 连接/订阅阶段（Rust terminal-state 事件同步）：idle/connecting/auth/history/live */
   phase: 'idle' | 'connecting' | 'auth' | 'history' | 'live'
   /** 已订阅后端（phase ∈ history/live；供视图判断） */
   subscribed: boolean
-  /** 连接建立中（供视图判断防重） */
+  /** 订阅建立中（Rust 连接握手未完成前） */
   subscribing: boolean
-  /** 已渲染到的帧末 seq（快照重播去重基准；null = 未渲染过） */
-  lastRenderedSeq: number | null
-  /** 本次订阅历史边界（subscribe_ok.snapshot_seq） */
-  snapshotSeq: number
-  /** 队列最早存续序号（subscribe_ok.min_seq） */
-  minSeq: number
+  /** 已渲染到的帧末字节偏移（快照/历史/实时共用游标） */
+  lastRenderedOffset: number | null
+  /** 本次订阅历史边界（Rust snapshot_offset） */
+  snapshotOffset: number
+  /** Rust 驻留最旧字节位置（min_offset） */
+  minOffset: number
   /** 会话是否已停止 */
   sessionStopped: boolean
-  /** 历史缓存（页面重进回放源；16MB 上限 LRU 淘汰） */
-  historyCache: TerminalSocketFrame[]
-  /** 历史缓存总字节数 */
-  historyBytes: number
-  /** 缓存头部曾被 LRU 裁剪（回放起点非流首，可能切断转义序列，消费方需提示） */
+  /** 历史缓存头部曾被淘汰（回放起点非流首，消费方需提示） */
   headTrimmed: boolean
-  /** history_end 前到达的实时帧（按 seq 入队，history_end 后按序写入） */
-  liveBuffer: TerminalSocketFrame[]
-  /** subscribe_ok 前到达的帧（防御缓冲；服务端同 actor 顺序下不应出现） */
-  pending: TerminalSocketFrame[]
+  /** 历史拼接中：实时帧缓冲待 FLUSH（拼完历史才消费） */
+  historyPreparing: boolean
+  /** 历史拼接完成前到达的实时帧（按序缓冲） */
+  bufferedLive: OutputFrame[]
   /** 缓冲帧总字节数（防御性上限） */
-  pendingBytes: number
+  bufferedBytes: number
   /** 截断提示已展示（每会话一次） */
   truncatedNotified: boolean
+}
+
+/** Rust 侧 phase 映射 */
+const PHASE_MAP: Record<string, SessionBuffer['phase']> = {
+  idle: 'idle',
+  connecting: 'connecting',
+  auth: 'auth',
+  history: 'history',
+  live: 'live',
 }
 
 // ==================== Store ====================
@@ -97,218 +118,116 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** sessionId → 实时回调（TerminalView 注册的） */
   const realtimeHandlers = reactive(new Map<string, RealtimeHandler>())
 
-  /** sessionId → 终端 socket（普通 Map：socket 对象无需响应式代理） */
-  const sockets = new Map<string, TerminalSocket>()
-
-  /** 历史缓存字节上限（LRU 淘汰） */
-  const MAX_HISTORY_CACHE_BYTES = 16 * 1024 * 1024
-  /**
-   * 分片回放高水位（字节）：单批累计达到即等待 xterm 解析完成再续写——
-   * 以移动端 xterm 实际消费速度节流历史回放，避免整段缓存（上限 16MB）
-   * 一次灌入冻结主线程、渲染长时间无响应
-   */
-  const REPLAY_HIGH_WATERMARK_BYTES = 256 * 1024
-  /** subscribe_ok 前缓冲帧上限（防御性） */
-  const MAX_PENDING_FRAME_BYTES = 8 * 1024 * 1024
-  /** 会话不存在（启动中/已停止）时的重试上限，超出后停止等待外部恢复 */
-  const MAX_SESSION_MISSING_STRIKES = 3
-  /** terminal_output_activity 通知节流（ms）：插件 TerminalOutput 触发频率上限 */
-  const ACTIVITY_THROTTLE_MS = 200
-
-  /** sessionId → 会话不存在连续重试计数 */
-  const sessionMissingStrikes = new Map<string, number>()
-  /** sessionId → 上次输出活动通知时间戳 */
-  const lastActivityAt = new Map<string, number>()
-
-  /**
-   * sessionId → 历史回放代数（注册/注销/清理时递增）：
-   * 在途分片回放循环每批检查代数，失效即放弃剩余批次——
-   * 防止重注册产生双循环交错写入同一 xterm
-   */
+  /** 历史拼接代数（注册/注销/清理时递增；在途拼接循环每批检查，失效即放弃） */
   const replayGenerations = new Map<string, number>()
 
   /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
   const preparedSessionId = ref<string | null>(null)
 
-  /** 标记预加载就绪：终端页挂载后可跳过 forceReplay，直接渲染已缓冲回放 */
-  function markPrepared(sessionId: string) {
-    preparedSessionId.value = sessionId
+  let frameUnlisten: UnlistenFn | null = null
+  let stateUnlisten: UnlistenFn | null = null
+
+  /** 拼接缺口重试冷却（ms） */
+  const GAP_RESPLICE_COOLDOWN_MS = 3000
+  /** 拼接完成前实时帧缓冲上限（字节，防御性） */
+  const MAX_BUFFERED_LIVE_BYTES = 8 * 1024 * 1024
+  /** 拼接缺口阶段最近一次重拼接时间 */
+  const lastGapRespliceAt = new Map<string, number>()
+  /** terminal_output_activity 通知节流（ms） */
+  const ACTIVITY_THROTTLE_MS = 200
+  /** 输出活动通知时间戳 */
+  const lastActivityAt = new Map<string, number>()
+
+  // ==================== 事件监听（Rust → 前端） ====================
+
+  /** 惰性注册全局事件监听（terminal-frame / terminal-state） */
+  async function ensureEventListeners() {
+    if (frameUnlisten && stateUnlisten) return
+    if (!frameUnlisten) {
+      frameUnlisten = await listen('terminal-frame', (event) => {
+        const payload = event.payload as {
+          session_id?: string
+          start_offset?: number
+          end_offset?: number
+          data_base64?: string
+        }
+        if (!payload.session_id) return
+        onFrameEvent(
+          payload as { session_id: string; start_offset: number; end_offset: number; data_base64: string },
+        )
+      })
+    }
+    if (!stateUnlisten) {
+      stateUnlisten = await listen('terminal-state', (event) => {
+        const payload = event.payload as {
+          session_id?: string
+          phase?: string
+          detail?: string
+          snapshot_offset?: number
+          min_offset?: number
+          cursor?: number
+        }
+        if (!payload.session_id) return
+        onStateEvent(payload as { session_id: string; phase?: string; detail?: string })
+      })
+    }
   }
 
-  /** 消费预加载标记（一次性）：返回就绪会话 ID 并复位 */
-  function consumePrepared(): string | null {
-    const id = preparedSessionId.value
-    preparedSessionId.value = null
-    return id
-  }
-
-  /** 使预加载标记失效：会话状态被重置后，已缓冲回放帧不可信 */
-  function invalidatePrepared(sessionId: string) {
-    if (preparedSessionId.value === sessionId) preparedSessionId.value = null
-  }
-
-  // ==================== Socket Lifecycle ====================
-
-  /** 每会话 socket 的 handlers 工厂（闭包持有 buffer） */
-  function createSocketForSession(sessionId: string): TerminalSocket {
-    const socket = createTerminalSocket({
-      onAuthed: () => {
-        // 认证成功：订阅帧由 socket 内部在 auth_ok 后自动发送（pendingSubscribe）
-      },
-      onSubscribed: (info: SubscribeOkInfo) => {
-        const buffer = buffers.get(sessionId)
-        if (!buffer) return
-        buffer.subscribing = false
-        buffer.snapshotSeq = info.snapshotSeq
-        buffer.minSeq = info.minSeq
-
-        // 截断检测：已渲染区域被环形淘汰（服务端最早存续 seq 已越过游标）→
-        // 清屏 + 提示 + 锚定到服务端可提供的最早 seq（避免重播首帧触发缺口循环）。
-        // 在途分片回放一并取消：屏幕即将清空、服务端从锚点重发，旧回放继续写只会污染
-        if (buffer.lastRenderedSeq !== null && info.minSeq > buffer.lastRenderedSeq + 1) {
-          replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
-          const handler = realtimeHandlers.get(sessionId)
-          handler?.onClear?.()
-          if (!buffer.truncatedNotified) {
-            buffer.truncatedNotified = true
-            handler?.onTruncated?.(info.minSeq)
-          }
-          buffer.lastRenderedSeq = info.minSeq - 1
-        }
-
-        buffer.phase = 'history'
-        buffer.subscribed = true
-        // 排空订阅确认前缓冲的帧（防御路径；正常协议序下为空）
-        const pending = buffer.pending
-        buffer.pending = []
-        buffer.pendingBytes = 0
-        for (const frame of pending) {
-          deliverFrame(sessionId, frame)
-        }
-      },
-      onHistoryEnd: (_snapshotSeq: number) => {
-        const buffer = buffers.get(sessionId)
-        if (!buffer) return
-        buffer.phase = 'live'
-        // FLUSH：实时缓冲按到达顺序写入（均 > snapshot_seq，与历史段无缝衔接）
-        const live = buffer.liveBuffer
-        buffer.liveBuffer = []
-        for (const frame of live) {
-          deliverFrame(sessionId, frame)
-        }
-      },
-      onFrame: (frame: TerminalSocketFrame) => {
-        deliverFrame(sessionId, frame)
-      },
-      onError: (code: string, message: string) => {
-        const buffer = buffers.get(sessionId)
-        logger.warn(`[terminalBuffer] session ${sessionId} error: ${code} - ${message}`)
-        if (code === 'SESSION_NOT_FOUND') {
-          // 会话启动中或已停止：有限重试后停止，等待消费者恢复
-          const strikes = (sessionMissingStrikes.get(sessionId) ?? 0) + 1
-          sessionMissingStrikes.set(sessionId, strikes)
-          if (strikes >= MAX_SESSION_MISSING_STRIKES) {
-            logger.warn(
-              `[terminalBuffer] session ${sessionId} not found after ${MAX_SESSION_MISSING_STRIKES} attempts, stopping`,
-            )
-            sockets.get(sessionId)?.stop()
-            if (buffer) {
-              buffer.phase = 'idle'
-              buffer.subscribed = false
-              buffer.subscribing = false
-            }
-            return
-          }
-        }
-        // 其他错误：断开重连（退避）
-        sockets.get(sessionId)?.reconnect()
-      },
-      onSessionStopped: (stoppedSessionId: string) => {
-        const buffer = buffers.get(sessionId)
-        if (!buffer) return
-        buffer.sessionStopped = true
-        buffer.phase = 'idle'
-        buffer.subscribed = false
-        buffer.subscribing = false
-        // 会话停止：不再自动重连，等外部（会话恢复运行）重新订阅
-        sockets.get(sessionId)?.stop()
-        void stoppedSessionId
-      },
-      onClose: () => {
-        const buffer = buffers.get(sessionId)
-        if (!buffer) return
-        // 连接断开：实时缓冲/防御缓冲失效；lastRenderedSeq 保留（重连快照重播跳过）
-        buffer.liveBuffer = []
-        buffer.pending = []
-        buffer.pendingBytes = 0
-        buffer.subscribing = false
-        // 会话不存在重试计数在每次连接建立时不清零（连续失败才停止）；
-        // 这里也不动 phase——重连成功后重新走 auth → subscribe 流程
-      },
-    })
-    return socket
-  }
-
-  /**
-   * 交付帧（状态机核心）：去重（跳过 ≤ lastRenderedSeq）→ 缺口检测（重发订阅）
-   * → 按 phase 分流（历史段写 xterm + 入缓存；实时段缓冲待 history_end 后 FLUSH）
-   */
-  function deliverFrame(sessionId: string, frame: TerminalSocketFrame) {
-    const buffer = buffers.get(sessionId)
+  /** 实时帧事件：历史拼接中缓冲，拼接完成按序 FLUSH；未拼接的分发渲染 */
+  function onFrameEvent(payload: { session_id: string; start_offset: number; end_offset: number; data_base64: string }) {
+    const buffer = buffers.get(payload.session_id)
     if (!buffer || buffer.sessionStopped) return
-
-    // 快照重播/重连后的去重：已渲染部分整帧跳过（重播帧与已渲染帧字节一致）
-    if (buffer.lastRenderedSeq !== null && frame.lastSeq <= buffer.lastRenderedSeq) return
-
-    // 连续性缺口：帧首 seq 越过游标（缺帧）→ 重新订阅拿快照（跳过 ≤ lastRenderedSeq）
-    if (buffer.lastRenderedSeq !== null && frame.seq > buffer.lastRenderedSeq + 1) {
-      logger.error(
-        `[terminalBuffer] seq gap: frame.start=${frame.seq}, last_rendered=${buffer.lastRenderedSeq}. Re-subscribing for snapshot`,
-      )
-      sockets.get(sessionId)?.subscribe()
-      return
+    const handler = realtimeHandlers.get(payload.session_id)
+    if (!handler) return // 页面未开：帧只进 Rust 缓存，前端丢弃（重进时经 getHistory 回补）
+    const frame: OutputFrame = {
+      data: base64ToBytes(payload.data_base64),
+      startOffset: payload.start_offset,
+      endOffset: payload.end_offset,
+      isWaiting: false,
     }
-
-    // 历史段内实时帧（订阅后新产出，未在历史快照内）：缓冲至 history_end 统一 FLUSH
-    if (buffer.phase === 'history' && frame.lastSeq > buffer.snapshotSeq) {
-      buffer.liveBuffer.push(frame)
-      return
-    }
-
-    writeFrame(sessionId, frame)
-  }
-
-  /** 写入路径：推进游标 + 入历史缓存（LRU）+ 通知插件 + 回调视图 */
-  function writeFrame(sessionId: string, frame: TerminalSocketFrame) {
-    const buffer = buffers.get(sessionId)
-    if (!buffer) return
-
-    buffer.historyCache.push(frame)
-    buffer.historyBytes += frame.data.byteLength
-    // LRU 淘汰：超出上限从头丢弃（缓存仅用于页面重进回放，丢最旧不影响实时）。
-    // 头部被裁剪过则标记——回放起点可能落在转义序列中段，消费方需提示历史不完整
-    while (buffer.historyBytes > MAX_HISTORY_CACHE_BYTES && buffer.historyCache.length > 0) {
-      const oldest = buffer.historyCache.shift()
-      if (oldest) {
-        buffer.historyBytes -= oldest.data.byteLength
-        buffer.headTrimmed = true
+    if (buffer.historyPreparing) {
+      buffer.bufferedLive.push(frame)
+      buffer.bufferedBytes += frame.data.byteLength
+      // 防御性上限：拼接期极端滞留（超大历史 + 慢消费）时丢弃最旧，防止内存失控
+      while (buffer.bufferedBytes > MAX_BUFFERED_LIVE_BYTES && buffer.bufferedLive.length > 0) {
+        const oldest = buffer.bufferedLive.shift()
+        if (oldest) buffer.bufferedBytes -= oldest.data.byteLength
       }
+      return
     }
-
-    buffer.lastRenderedSeq = frame.lastSeq
-
-    // 插件 TerminalOutput 通知（09 迁移后由前端在此触发，仅传 session_id；节流）
-    const now = Date.now()
-    const last = lastActivityAt.get(sessionId) ?? 0
-    if (now - last >= ACTIVITY_THROTTLE_MS) {
-      lastActivityAt.set(sessionId, now)
-      emit('terminal_output_activity', { session_id: sessionId }).catch(() => {})
-    }
-
-    realtimeHandlers.get(sessionId)?.onOutput(frame.data, frame)
+    deliverFrame(payload.session_id, frame)
   }
 
-  /** 确保会话有订阅状态，不存在则创建 */
+  /** Rust 链路状态事件：同步 phase/subscribed/停止等 */
+  function onStateEvent(payload: { session_id: string; phase?: string; detail?: string }) {
+    const buffer = buffers.get(payload.session_id)
+    if (!buffer) return
+    const phase = PHASE_MAP[payload.phase ?? ''] ?? buffer.phase
+    buffer.phase = phase
+    buffer.subscribed = phase === 'history' || phase === 'live'
+    if (phase === 'history' || phase === 'live') {
+      buffer.subscribing = false
+      buffer.sessionStopped = false
+    }
+    if (payload.detail === 'stopped' || payload.detail === 'session_missing') {
+      buffer.phase = 'idle'
+      buffer.subscribed = false
+      buffer.subscribing = false
+      buffer.sessionStopped = true
+      buffer.lastRenderedOffset = null
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
+    }
+    if (payload.detail === 'unsubscribed') {
+      buffer.subscribed = false
+      if (buffer.phase !== 'idle') buffer.phase = 'idle'
+      buffer.subscribing = false
+    }
+  }
+
+  // ==================== 辅助 ====================
+
   function ensureBuffer(sessionId: string): SessionBuffer {
     let buffer = buffers.get(sessionId)
     if (!buffer) {
@@ -316,16 +235,14 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         phase: 'idle',
         subscribed: false,
         subscribing: false,
-        lastRenderedSeq: null,
-        snapshotSeq: 0,
-        minSeq: 0,
+        lastRenderedOffset: null,
+        snapshotOffset: 0,
+        minOffset: 0,
         sessionStopped: false,
-        historyCache: [],
-        historyBytes: 0,
         headTrimmed: false,
-        liveBuffer: [],
-        pending: [],
-        pendingBytes: 0,
+        historyPreparing: false,
+        bufferedLive: [],
+        bufferedBytes: 0,
         truncatedNotified: false,
       }
       buffers.set(sessionId, buffer)
@@ -333,135 +250,258 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     return buffer
   }
 
-  // ==================== Subscription ====================
+  /** base64 → Uint8Array（Rust 事件/历史数据解码） */
+  function base64ToBytes(b64: string): Uint8Array {
+    if (typeof atob !== 'function') {
+      // 测试环境兜底
+      return new Uint8Array(0)
+    }
+    const bin = atob(b64)
+    const out = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+    return out
+  }
+
+  // ==================== 渲染/历史拼接 ====================
 
   /**
-   * 订阅会话（统一入口，幂等）— 页面进入 / 重连恢复 / 自愈全部收敛于此。
-   * 已连接且已订阅（phase history/live）时直接返回当前快照元数据
-   *
-   * @returns 订阅确认信息；连接失败时返回 null
+   * 交付实时帧（历史拼接完成后）：去重 → 缺口（重拼接）→ 跨帧裁剪 → 推进游标
    */
-  async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
-    const buffer = ensureBuffer(sessionId)
-    if (buffer.sessionStopped) return null
+  function deliverFrame(sessionId: string, frame: OutputFrame) {
+    const buffer = buffers.get(sessionId)
+    if (!buffer || buffer.sessionStopped) return
 
-    // 已订阅：直接返回当前快照元数据（页面存活重复调用）
-    if (buffer.subscribed) {
-      return {
-        snapshotSeq: buffer.snapshotSeq,
-        minSeq: buffer.minSeq,
-        historyCount: buffer.historyCache.length,
+    // 去重：整帧已渲染（endOffset ≤ 游标）跳过
+    if (buffer.lastRenderedOffset !== null && frame.endOffset <= buffer.lastRenderedOffset) return
+
+    // 缺口：帧首越过游标（Rust 缓存被淘汰/连接缺口）→ 从游标重新拼接历史补回
+    if (buffer.lastRenderedOffset !== null && frame.startOffset > buffer.lastRenderedOffset) {
+      const now = Date.now()
+      const last = lastGapRespliceAt.get(sessionId) ?? 0
+      if (now - last >= GAP_RESPLICE_COOLDOWN_MS) {
+        lastGapRespliceAt.set(sessionId, now)
+        logger.error(
+          `[terminalBuffer] offset gap: frame.start=${frame.startOffset}, last_rendered=${buffer.lastRenderedOffset}. Re-splicing history`,
+        )
+        forceReplay(sessionId)
+      }
+      return
+    }
+
+    // 跨帧裁剪：帧覆盖已渲染游标（重播首帧跨游标）→ 裁掉前半段，零重复
+    const cursor = buffer.lastRenderedOffset ?? frame.startOffset
+    let data = frame.data
+    if (cursor > frame.startOffset) {
+      const overlap = cursor - frame.startOffset
+      data = frame.data.subarray(overlap)
+    }
+    buffer.lastRenderedOffset = Math.max(buffer.lastRenderedOffset ?? 0, frame.endOffset)
+
+    // 插件 TerminalOutput 通知（仅传 session_id 语义；节流）
+    const now = Date.now()
+    const last = lastActivityAt.get(sessionId) ?? 0
+    if (now - last >= ACTIVITY_THROTTLE_MS) {
+      lastActivityAt.set(sessionId, now)
+      emit('terminal_output_activity', { session_id: sessionId }).catch(() => {})
+    }
+
+    realtimeHandlers.get(sessionId)?.onOutput(data, frame)
+  }
+
+  /**
+   * 历史拼接（registerRealtimeHandler 挂载时启动）：
+   * 一次性取 [from, snapshotOffset) 历史（Rust 缓存 / HTTP 回退）→ 写入 xterm →
+   * 完成后才开始消费实时帧——「拼接完历史才通知前端终端组件开始消费」
+   */
+  async function spliceHistory(sessionId: string, gen: number) {
+    const buffer = buffers.get(sessionId)
+    const handler = realtimeHandlers.get(sessionId)
+    if (!buffer || !handler) return
+
+    const from = buffer.lastRenderedOffset ?? 0
+    let result
+    try {
+      result = await terminalGetHistory(sessionId, from)
+    } catch (e: any) {
+      logger.warn(`[terminalBuffer] history fetch failed for ${sessionId}:`, e?.message || e)
+      buffer.historyPreparing = false
+      handler.onReplayDone?.()
+      return
+    }
+    if (replayGenerations.get(sessionId) !== gen) return
+
+    // 截断：驻留历史头部被淘汰（minOffset > 游标）→ 清屏 + 提示 + 锚定重播
+    if (buffer.lastRenderedOffset !== null && result.minOffset > buffer.lastRenderedOffset) {
+      handler.onClear?.()
+      buffer.lastRenderedOffset = null
+      buffer.headTrimmed = true
+      if (!buffer.truncatedNotified) {
+        buffer.truncatedNotified = true
+        handler.onTruncated?.(result.minOffset)
       }
     }
 
-    let socket = sockets.get(sessionId)
-    if (!socket) {
-      socket = createSocketForSession(sessionId)
-      sockets.set(sessionId, socket)
+    // 写入历史段（写解析完成才推进游标——写入管线确认）
+    const history = base64ToBytes(result.dataBase64)
+    if (history.byteLength > 0) {
+      if (handler.writeParsed) {
+        await handler.writeParsed(history)
+      } else {
+        handler.onOutput(history, {
+          data: history,
+          startOffset: Math.max(from, buffer.minOffset),
+          endOffset: result.snapshotOffset,
+          isWaiting: false,
+        })
+      }
+    }
+    if (replayGenerations.get(sessionId) !== gen) return
+
+    buffer.minOffset = result.minOffset
+    buffer.snapshotOffset = result.snapshotOffset
+    buffer.lastRenderedOffset = Math.max(buffer.lastRenderedOffset ?? 0, result.snapshotOffset)
+    if (result.minOffset > 0 && !buffer.headTrimmed) {
+      // 历史头部有淘汰（缓存 LL 或 Rust 16MB 上限）：回放起点非流首提示
+      buffer.headTrimmed = true
     }
 
-    // 连接已建立但未订阅（重连后待恢复）：直接发订阅帧
-    if (socket.isOpen()) {
-      buffer.subscribing = true
-      buffer.phase = 'auth'
-      socket.subscribe()
-      return null // 订阅确认经 socket 回调异步到达
+    buffer.historyPreparing = false
+    // FLUSH：拼接期缓冲的实时帧按序写入（游标去重/裁剪保序）
+    const live = buffer.bufferedLive
+    buffer.bufferedLive = []
+    buffer.bufferedBytes = 0
+    for (const frame of live) {
+      deliverFrame(sessionId, frame)
     }
+    handler.onReplayDone?.()
+  }
 
+  // ==================== Socket/订阅生命周期（Rust 驱动） ====================
+
+  /** 订阅会话（统一入口，幂等）：确保 Rust 链路订阅；页面进出不再控制订阅 */
+  async function subscribeSession(sessionId: string): Promise<SubscribeSnapshot | null> {
+    const buffer = ensureBuffer(sessionId)
+    if (buffer.sessionStopped) return null
+    await ensureEventListeners().catch((e) => {
+      logger.warn('[terminalBuffer] event listener init failed:', e)
+    })
+
+    // 已订阅：直接返回快照元数据（重复调用/页面存活）
+    if (buffer.subscribed) {
+      return {
+        snapshotOffset: buffer.snapshotOffset,
+        minOffset: buffer.minOffset,
+        historyBytes: 0,
+      }
+    }
     buffer.subscribing = true
     buffer.phase = 'connecting'
-    socket.start(sessionId)
-    socket.subscribe() // 挂起：auth_ok 后自动发送
-    return null
+    await terminalSubscribe(sessionId).catch((e) => {
+      logger.warn(`[terminalBuffer] subscribe ${sessionId} failed:`, e)
+      buffer.subscribing = false
+    })
+    return null // 订阅确认经 terminal-state 事件异步到达
   }
 
-  /** 会话不存在重试计数复位（订阅路径每次显式调用时清零） */
   function resetMissingStrikes(sessionId: string) {
-    sessionMissingStrikes.delete(sessionId)
+    // Rust 侧管理会话缺失重试；前端无需计数。保留签名兼容
+    void sessionId
   }
 
-  /** 强制全量重播：页面重进时 xterm 为全新实例，历史缓存已由
-   *  registerRealtimeHandler 回放并推进 lastRenderedSeq；此处仅重置
-   *  实时缓冲并在连接存活时重发订阅（服务端快照重播按 lastRenderedSeq
-   *  跳过已渲染部分，不双写） */
+  /** 强制重拼接：页面重进/缺口自愈——从当前游标重新取历史（幂等：from=游标） */
   function forceReplay(sessionId: string) {
     const buffer = ensureBuffer(sessionId)
-    buffer.liveBuffer = []
-    buffer.pending = []
-    buffer.pendingBytes = 0
-    sessionMissingStrikes.delete(sessionId)
-    const socket = sockets.get(sessionId)
-    if (socket?.isOpen()) {
-      buffer.subscribing = true
-      buffer.phase = 'auth'
-      socket.subscribe()
-    }
+    const gen = (replayGenerations.get(sessionId) ?? 0) + 1
+    replayGenerations.set(sessionId, gen)
+    buffer.bufferedLive = []
+    buffer.bufferedBytes = 0
+    buffer.historyPreparing = true
+    void spliceHistory(sessionId, gen)
   }
 
-  /** 获取会话订阅状态 */
   function getBuffer(sessionId: string): SessionBuffer | undefined {
     return buffers.get(sessionId)
   }
 
-  /** 标记已订阅后端（兼容旧 API；socket 回调已维护，仅防御） */
   function markSubscribed(sessionId: string) {
     const buffer = ensureBuffer(sessionId)
     buffer.subscribed = true
   }
 
-  /** 渲染背压 ack：转发到会话 socket（视图 onWriteParsed 门控后调用） */
+  /** 渲染背压 ack：推进 Rust 侧 ack 水位（Rust 节流回发桌面端） */
   function ackRendered(sessionId: string) {
-    sockets.get(sessionId)?.ackRendered()
+    const buffer = buffers.get(sessionId)
+    if (!buffer || buffer.lastRenderedOffset === null) return
+    terminalAckRendered(sessionId, buffer.lastRenderedOffset).catch((e) => {
+      logger.warn(`[terminalBuffer] ack failed for ${sessionId}:`, e)
+    })
   }
 
-  /** 标记未订阅（取消订阅时）：关 socket + 清实时/防御缓冲，保留游标与历史缓存 */
+  /** 退出终端页：清理前端消费态；Rust 订阅保持（会话未停），切批量传播 */
+  function markPageLeft(sessionId: string) {
+    const buffer = buffers.get(sessionId)
+    if (buffer) {
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
+    }
+    // 双速：回退 batch（满 batch_bytes 才转发——桌面端可配置），减少空转流量
+    terminalSetMode(sessionId, 'batch').catch(() => {})
+  }
+
+  /** 进入终端页：实时模式（读即传） */
+  function markPageEntered(sessionId: string) {
+    terminalSetMode(sessionId, 'realtime').catch(() => {})
+  }
+
+  /** 标记未订阅（手动取消）：取消 Rust 订阅 + 清实时缓冲，保留游标（重开可续） */
   function markUnsubscribed(sessionId: string) {
     invalidatePrepared(sessionId)
-    sockets.get(sessionId)?.stop()
+    terminalUnsubscribe(sessionId).catch(() => {})
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.subscribed = false
       buffer.phase = 'idle'
       buffer.subscribing = false
-      buffer.liveBuffer = []
-      buffer.pending = []
-      buffer.pendingBytes = 0
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
     }
   }
 
-  /** 标记所有 buffer 未订阅（连接断开时；socket 自动重连恢复） */
+  /** 全部未订阅（设备断开时；Rust 链路全部关闭，重连后由 onPaired 重新订阅） */
   function markAllUnsubscribed() {
+    terminalUnsubscribeAll().catch(() => {})
     for (const buffer of buffers.values()) {
       buffer.subscribed = false
       buffer.subscribing = false
-      buffer.liveBuffer = []
-      buffer.pending = []
-      buffer.pendingBytes = 0
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
     }
   }
 
-  /**
-   * 标记会话停止：订阅状态失效 + 关闭 socket。
-   * 会话重启后 seq 空间从 0 重建（新 SessionOutputManager），
-   * lastRenderedSeq 必须重置（旧流序号在新流中无意义）
-   */
+  /** 标记会话停止：取消 Rust 订阅 + 关链路；游标重置（同 id 重启新流坐标空间） */
   function markSessionStopped(sessionId: string) {
     invalidatePrepared(sessionId)
+    // 代数推进：中止在途历史拼接（其完成回调会重写游标/拼接态——停止语义下
+    // 游标重置必须占先；页面加载遮罩由视图层 HISTORY_SETTLE_TIMEOUT_MS 兜底）
+    replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
     const buffer = buffers.get(sessionId)
     if (buffer) {
       buffer.sessionStopped = true
       buffer.subscribed = false
       buffer.phase = 'idle'
       buffer.subscribing = false
-      buffer.lastRenderedSeq = null
-      buffer.liveBuffer = []
-      buffer.pending = []
-      buffer.pendingBytes = 0
+      buffer.lastRenderedOffset = null
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
     }
-    sockets.get(sessionId)?.stop()
+    terminalUnsubscribe(sessionId).catch(() => {})
   }
 
-  /** 标记会话恢复运行：复位 sessionStopped，等待订阅路径重建连接 */
+  /** 标记会话恢复运行：重新订阅（Rust 重建链路） */
   function markSessionRunning(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
@@ -469,156 +509,102 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.subscribed = false
       buffer.phase = 'idle'
       buffer.subscribing = false
-      buffer.lastRenderedSeq = null
-      buffer.liveBuffer = []
-      buffer.pending = []
-      buffer.pendingBytes = 0
+      buffer.lastRenderedOffset = null
+      buffer.bufferedLive = []
+      buffer.bufferedBytes = 0
+      buffer.historyPreparing = false
     }
+    void subscribeSession(sessionId)
   }
 
-  /** 清理单个会话订阅状态 */
+  /** 清理单个会话（会话删除时）：Rust 链路/缓存一并清 */
   function clearBuffer(sessionId: string) {
     invalidatePrepared(sessionId)
-    // 代数推进 + 计数清理：取消在途分片回放
     replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
-    sockets.get(sessionId)?.stop()
-    sockets.delete(sessionId)
+    terminalRemove(sessionId).catch(() => {})
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
-    sessionMissingStrikes.delete(sessionId)
+    lastGapRespliceAt.delete(sessionId)
     lastActivityAt.delete(sessionId)
   }
 
-  /** 清理所有订阅状态 */
+  /** 清理所有订阅状态（连接断开/退出） */
   function clearAllBuffers() {
     preparedSessionId.value = null
     replayGenerations.clear()
-    for (const socket of sockets.values()) socket.stop()
-    sockets.clear()
+    terminalUnsubscribeAll().catch(() => {})
     buffers.clear()
     realtimeHandlers.clear()
-    sessionMissingStrikes.clear()
+    lastGapRespliceAt.clear()
     lastActivityAt.clear()
+    if (frameUnlisten) {
+      frameUnlisten()
+      frameUnlisten = null
+    }
+    if (stateUnlisten) {
+      stateUnlisten()
+      stateUnlisten = null
+    }
   }
 
-  // ==================== Realtime Handler ====================
+  // ==================== Realtime Handler（TerminalView 挂载/卸载） ====================
 
-  /** 注册实时输出回调（TerminalView onMounted 时调用） */
+  /** 注册实时输出回调（TerminalView onMounted）：启动历史拼接，拼完才消费实时 */
   function registerRealtimeHandler(sessionId: string, handler: RealtimeHandler) {
+    const buffer = ensureBuffer(sessionId)
     realtimeHandlers.set(sessionId, handler)
-    // 回放代数推进：重注册使在途分片回放循环失效（防双循环交错写入同一 xterm）
+    // 代数推进：重注册使在途拼接循环失效（防双循环交错写入同一 xterm）
     const gen = (replayGenerations.get(sessionId) ?? 0) + 1
     replayGenerations.set(sessionId, gen)
 
-    // 注册时机 = xterm 全新实例（页面挂载）：历史缓存无条件回放，
-    // 随后服务端帧按 seq 跳过（不双写）。覆盖两个场景：
-    // - 页面重进：缓存即全部可见历史，回放后 lastRenderedSeq 推进到缓存末帧
-    // - 预加载：会话页订阅期间无 handler，帧已入缓存，挂载时一次回放
-    const buffer = buffers.get(sessionId)
-    if (!buffer || buffer.historyCache.length === 0) return
+    buffer.historyPreparing = true
+    buffer.bufferedLive = []
+    buffer.bufferedBytes = 0
+    markPageEntered(sessionId)
+    // 事件监听惰性注册（订阅成功后可能先于页面挂载；双保险幂等）
+    ensureEventListeners().catch((e) => {
+      logger.warn('[terminalBuffer] event listener init failed:', e)
+    })
 
-    // 游标先同步推进到缓存末帧（去重基准即刻生效）：回放期间到达的实时帧
-    // 按正常路径续写，与回放块在 xterm 内部 FIFO 写队列中保持全局有序；
-    // 回放本身的节奏由 replayHistoryCache 以消费方解析速度控制（高水位背压）
-    const last = buffer.historyCache[buffer.historyCache.length - 1]
-    buffer.lastRenderedSeq = last.lastSeq
-
-    void replayHistoryCache(sessionId, handler, gen)
+    void spliceHistory(sessionId, gen)
   }
 
-  /**
-   * 历史缓存分片回放：按高水位切批，每批等待 xterm 解析完成再续写，
-   * 让渲染/输入在批次间插入——以移动端 xterm 实际消费速度为高水位的背压，
-   * 替代旧实现的一次性同步灌入（16MB 缓存单宏任务写完 → 主线程长冻结）。
-   */
-  async function replayHistoryCache(sessionId: string, handler: RealtimeHandler, gen: number) {
-    const buffer = buffers.get(sessionId)
-    if (!buffer || buffer.sessionStopped) return
-
-    // 快照迭代：回放期间缓存仍会被实时帧追加 / 头部 LRU 裁剪，快照固定本轮回放边界
-    const frames = buffer.historyCache.slice()
-
-    const flushBatch = async (batch: TerminalSocketFrame[]) => {
-      if (batch.length === 0) return
-      if (handler.writeParsed) {
-        // 合并为单块一次写入：批量受高水位约束，合并避免逐帧 write 的调度开销
-        let total = 0
-        for (const f of batch) total += f.data.byteLength
-        const combined = new Uint8Array(total)
-        let offset = 0
-        for (const f of batch) {
-          combined.set(f.data, offset)
-          offset += f.data.byteLength
-        }
-        await handler.writeParsed(combined)
-      } else {
-        // 兜底：消费方无分片写入能力时保持旧契约（同步逐帧写）
-        for (const f of batch) handler.onOutput(f.data, f)
-      }
-    }
-
-    let batch: TerminalSocketFrame[] = []
-    let batchBytes = 0
-    for (const frame of frames) {
-      // 代数失效（重注册/注销/清理）或会话停止：放弃剩余批次
-      if (
-        replayGenerations.get(sessionId) !== gen ||
-        buffers.get(sessionId)?.sessionStopped
-      ) {
-        return
-      }
-      batch.push(frame)
-      batchBytes += frame.data.byteLength
-      if (batchBytes >= REPLAY_HIGH_WATERMARK_BYTES) {
-        await flushBatch(batch)
-        batch = []
-        batchBytes = 0
-      }
-    }
-    await flushBatch(batch)
-
-    // 本轮仍有效才收尾通知；本地头部被裁剪过 → 回放起点非流首（可能切断
-    // 转义序列），与服务端 min_seq 截断同语义提示消费方
-    if (replayGenerations.get(sessionId) !== gen) return
-    if (buffer.headTrimmed && frames.length > 0) {
-      handler.onTruncated?.(frames[0].seq)
-    }
-    handler.onReplayDone?.()
-  }
-
-  /** 注销实时输出回调（TerminalView onUnmounted 时调用） */
+  /** 注销实时输出回调（TerminalView onUnmounted）：停止消费；订阅保持，切 batch */
   function unregisterRealtimeHandler(sessionId: string) {
     realtimeHandlers.delete(sessionId)
-    // 代数推进：取消在途分片回放（闭包引用的 handler 已随注销失效）
     replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
+    markPageLeft(sessionId)
+  }
+
+  // ==================== Preload ====================
+
+  function markPrepared(sessionId: string) {
+    preparedSessionId.value = sessionId
+  }
+
+  function consumePrepared(): string | null {
+    const id = preparedSessionId.value
+    preparedSessionId.value = null
+    return id
+  }
+
+  function invalidatePrepared(sessionId: string) {
+    if (preparedSessionId.value === sessionId) preparedSessionId.value = null
   }
 
   // ==================== Input ====================
 
-  /** 发送终端输入（经终端 WS input 帧；替代旧 HTTP 输入路径） */
+  /** 发送终端输入（经 Rust 终端链路 → WS input 帧 → 桌面端 PTY） */
   function sendInput(sessionId: string, data: string, specialKey?: string): boolean {
     const buffer = buffers.get(sessionId)
     if (!buffer || !buffer.subscribed) {
       logger.warn(`[terminalBuffer] sendInput: session ${sessionId} not subscribed`)
       return false
     }
-    const socket = sockets.get(sessionId)
-    if (!socket?.isOpen()) {
-      logger.warn(`[terminalBuffer] sendInput: session ${sessionId} socket not open`)
-      return false
-    }
-    socket.sendInput(data, specialKey)
+    terminalSendInput(sessionId, data, specialKey ?? null).catch((e) => {
+      logger.warn(`[terminalBuffer] sendInput failed for ${sessionId}:`, e)
+    })
     return true
-  }
-
-  // ==================== Legacy Compatibility ====================
-
-  /**
-   * 旧全局 ws_output 监听启动（兼容 useMobileConnection 调用点）。
-   * 10 号票后输出经每会话终端 socket 直连，无全局事件监听——no-op
-   */
-  function startGlobalListener(): Promise<void> {
-    return Promise.resolve()
   }
 
   return {
@@ -631,6 +617,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     consumePrepared,
     markUnsubscribed,
     markAllUnsubscribed,
+    markPageEntered,
+    markPageLeft,
     markSessionStopped,
     markSessionRunning,
     forceReplay,
@@ -639,12 +627,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     clearAllBuffers,
     registerRealtimeHandler,
     unregisterRealtimeHandler,
-    startGlobalListener,
     subscribeSession,
     resetMissingStrikes,
     sendInput,
   }
 })
-
-// 供 composable 复用
-export { createTerminalSocket }

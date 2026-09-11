@@ -530,3 +530,77 @@ export function clearAuthCredentials() {
   localStorage.removeItem('auth_fingerprint')
   localStorage.removeItem('auth_session_token')
 }
+// ==================== Terminal Link（会话级终端 WS，Rust 后端持有） ====================
+
+/**
+ * 订阅会话终端输出（会话启动/恢复时触发；Rust 管理连接/缓存/意外断开重连）。
+ * 订阅不再由「进入终端页」触发——改成「会话启动」即订阅
+ */
+export async function terminalSubscribe(sessionId: string): Promise<void> {
+  return invoke('terminal_subscribe', { sessionId })
+}
+
+/** 取消订阅（会话停止 / 手动断开）：关闭 Rust 侧连接不再重连 */
+export async function terminalUnsubscribe(sessionId: string): Promise<void> {
+  return invoke('terminal_unsubscribe', { sessionId })
+}
+
+/** 全部取消订阅（设备手动断开 / 连接关闭） */
+export async function terminalUnsubscribeAll(): Promise<void> {
+  return invoke('terminal_unsubscribe_all')
+}
+
+/** 会话删除：清理 Rust 侧链路与缓存 */
+export async function terminalRemove(sessionId: string): Promise<void> {
+  return invoke('terminal_remove', { sessionId })
+}
+
+/** 发送终端输入（前端 → Rust → 桌面端 PTY） */
+export async function terminalSendInput(
+  sessionId: string,
+  data: string,
+  specialKey?: string | null,
+): Promise<void> {
+  return invoke('terminal_send_input', { sessionId, data, specialKey: specialKey ?? null })
+}
+
+/** 终端传播模式（双速）：realtime = 进终端页读即传；batch = 退出终端页（满 batch_bytes 才转发） */
+export async function terminalSetMode(sessionId: string, mode: 'realtime' | 'batch'): Promise<void> {
+  return invoke('terminal_set_mode', { sessionId, mode })
+}
+
+/** 渲染背压 ack：推进 Rust 侧 ack 水位（节流回发桌面端） */
+export async function terminalAckRendered(sessionId: string, offset: number): Promise<void> {
+  return invoke('terminal_ack_rendered', { sessionId, offset })
+}
+
+/** 官方历史查询结果（缓存优先；缓存头被淘汰时 Rust 侧回退桌面 HTTP 一次性拉取） */
+export interface TerminalHistoryResult {
+  from: number
+  minOffset: number
+  snapshotOffset: number
+  historyBytes: number
+  dataBase64: string
+}
+
+/** 一次性历史（Bytes）：[from, snapshotOffset) 区间，历史拼接后前端才开始消费实时帧 */
+export async function terminalGetHistory(sessionId: string, from: number): Promise<TerminalHistoryResult> {
+  return invoke('terminal_get_history', { sessionId, from })
+}
+
+/** Rust 侧链路状态（诊断/轮询） */
+export interface TerminalLinkState {
+  sessionId: string
+  phase: string
+  cursor: number
+  snapshotOffset: number
+  minOffset: number
+  acked: number
+  mode: string
+  stopped: boolean
+  historyBytes: number
+}
+
+export async function terminalGetState(sessionId: string): Promise<TerminalLinkState> {
+  return invoke('terminal_get_state', { sessionId })
+}

@@ -140,9 +140,9 @@ export function useTerminalBuffer() {
       replayIdleTimers.set(sessionId, timer)
     }
 
-    // 回放就绪信号：本地缓存分片回放完成（onReplayDone）时 resolve。
+    // 回放就绪信号：历史拼接完成（store.onReplayDone）时 resolve。
     // store 层 onReplayDone 最早也在 writeParsed 的异步链之后触发，
-    // 此处同步赋值 resolver 不会与回放收尾竞态
+    // 此处同步赋值 resolver 不会与拼接收尾竞态
     let resolveReplayDone: (() => void) | null = null
     const replayDone = new Promise<void>((resolve) => {
       resolveReplayDone = resolve
@@ -153,6 +153,9 @@ export function useTerminalBuffer() {
       resolveReplayDone = null
     }
 
+    // 历史拼接（store 内启动：一次性历史 + FLUSH 缓冲实时帧——拼完才消费）
+    // 完成后经 onReplayDone 收尾：服务端已就序（Rust 链路订阅在先），
+    // 空历史也会立即触发（无需本地缓存快照预判）
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         onRawOutput?.(data)
@@ -167,21 +170,14 @@ export function useTerminalBuffer() {
           terminal.clear()
         }
       },
-      onTruncated: (minSeq: number) => {
-        logger.warn(`[useTerminalBuffer] history truncated at min_seq=${minSeq}`)
+      onTruncated: (minOffset: number) => {
+        logger.warn(`[useTerminalBuffer] history truncated at min_offset=${minOffset}`)
       },
       onReplayDone: () => {
         armReplayIdleRefresh()
         settleReplayDone()
       },
     })
-
-    // 无本地缓存（mock 会话 / 首次进入尚未订阅）：分片回放不会启动，
-    // replayDone 立即完成——服务端历史段结束由视图按 phase 离开 'history' 推导
-    const buffer = store.getBuffer(sessionId)
-    if (!buffer || buffer.historyCache.length === 0) {
-      settleReplayDone()
-    }
 
     return { replayDone }
   }
@@ -197,25 +193,25 @@ export function useTerminalBuffer() {
   }
 
   /**
-   * 订阅会话 — 已订阅/在途则跳过；逻辑收敛到 store（socket 驱动 + 快照拼接），
-   * 所有订阅路径（页面进入 / 重连恢复）统一入口
+   * 订阅会话 — 确保 Rust 链路订阅（会话启动时已触发，此处幂等兜底）；
+   * 逻辑收敛到 store（Rust 命令驱动 + terminal-state 事件同步）
    *
    * @param sessionId - 会话 ID
-   * @returns 订阅确认信息（已订阅时）；连接建立中/失败时返回 null
+   * @returns 已订阅时的快照元数据；订阅建立中时返回 null
    */
   async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
     return store.subscribeSession(sessionId)
   }
 
   /**
-   * 取消订阅会话（页面卸载/会话停止/删除时调用）— 关闭终端 socket
+   * 退出终端页（页面卸载时调用）— 停止前端消费、切 batch 传播；
+   * Rust 订阅保持（会话未停），重进时 registerRealtimeHandler 重新拼接历史
    *
    * @param sessionId - 会话 ID
    */
   async function unsubscribeSession(sessionId: string) {
     clearReplayIdleTimer(sessionId)
     store.unregisterRealtimeHandler(sessionId)
-    store.markUnsubscribed(sessionId)
   }
 
   /**

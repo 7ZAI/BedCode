@@ -527,7 +527,7 @@ async function handleStartSession(config: SessionConfigSummary) {
     // 携带按设备屏幕预算的默认网格：主机 PTY 以此为初始尺寸创建，
     // 避免 120x40（主机桌面缺省）起步的首帧回绕；挂载后 fit 校准精确值
     const size = computeDeviceDefaultGridSize(assistStore.settings.terminalFontSize)
-    const result = await connection.startSession(config.id, config.name, size)
+    const result = await connection.startSession(config.id, size)
     if (result.sessionId) {
       // 如果返回了会话信息，添加到本地列表
       if (result.session) {

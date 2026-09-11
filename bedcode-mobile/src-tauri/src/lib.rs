@@ -19,6 +19,7 @@ pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
+pub mod terminal_link;
 
 // Re-export core types
 pub use system::config;
@@ -223,6 +224,16 @@ pub fn run() {
             commands::connection::ws_reconnect,
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
+            // Terminal Link（会话级终端 WS，Rust 后端持有）
+            terminal_link::terminal_subscribe,
+            terminal_link::terminal_unsubscribe,
+            terminal_link::terminal_unsubscribe_all,
+            terminal_link::terminal_remove,
+            terminal_link::terminal_send_input,
+            terminal_link::terminal_set_mode,
+            terminal_link::terminal_ack_rendered,
+            terminal_link::terminal_get_history,
+            terminal_link::terminal_get_state,
             // Auth Commands
             commands::auth::ws_get_auth_status,
             commands::auth::ws_authenticate,
