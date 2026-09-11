@@ -19,7 +19,7 @@ use crate::state::get_global_token;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 
-use crate::router::{AuthHandler, SyncHandler, SystemHandler, TerminalHandler};
+use crate::router::{AuthHandler, SyncHandler, SystemHandler};
 use crate::router::{ClientBusinessRouter, ClientRouteContext, MobileEvent};
 
 use crate::system::constants::connection::{
@@ -56,7 +56,6 @@ fn build_router(event_tx: broadcast::Sender<MobileEvent>) -> Result<ClientBusine
     let ctx = ClientRouteContext::new(event_tx);
     ClientBusinessRouter::builder()
         .context(ctx)
-        .route("Terminal", Arc::new(TerminalHandler))
         .route("Auth", Arc::new(AuthHandler))
         .route("SyncData", Arc::new(SyncHandler))
         .route("ServerClosed", Arc::new(SystemHandler))
