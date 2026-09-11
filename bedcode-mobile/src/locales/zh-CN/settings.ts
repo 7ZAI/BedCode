@@ -112,6 +112,18 @@ export default {
       pushSection: '通知',
       feedbackSection: '反馈',
     },
+    egress: {
+      title: '网络访问授权',
+      subtitle: '查看与撤销外网访问授权',
+      grantsSection: '已授权地址',
+      loading: '加载中…',
+      empty: '暂无授权记录',
+      allPaths: '全部路径',
+      revokeAll: '撤销全部授权',
+      revokeHint: '撤销后，之前放行的外部地址需要重新授权。',
+      revokeConfirmTitle: '撤销全部授权？',
+      revokeConfirmMessage: '此操作将清除所有已记忆的外部地址授权（含「不再询问」记录）。',
+    },
     about: {
       title: '关于',
       subtitle: '版本信息与更新',

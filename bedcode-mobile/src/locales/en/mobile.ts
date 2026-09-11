@@ -481,6 +481,16 @@ export default {
       fsAuthRemember: 'Remember this path for future access',
       fsAuthAllow: 'Allow',
       fsAuthDeny: 'Deny',
+      egress: {
+        title: 'External Network Access',
+        requestByHost: 'The app requests access to the following external address',
+        requestByPlugin: 'Plugin {plugin} requests access to the following external address',
+        requestByUnknown: '{source} requests access to the following external address',
+        targetUrl: 'Target address',
+        remember: "Don't ask again (remember this host)",
+        allow: 'Allow',
+        deny: 'Deny',
+      },
       aiChatbox: {
         noProvider: 'No model configured',
         configureModel: 'Configure Model',
