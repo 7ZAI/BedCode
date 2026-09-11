@@ -177,6 +177,18 @@
   overflow: hidden;
 }
 
+/* 网格取整余量消除：.xterm 高度 = rows × cellHeight（由内部 screen 撑开），
+ * 默认顶部对齐会在容器底部残留 0~1 行高的空带（最后一行文字与输入栏之间
+ * 露出终端底色，输入法避让/重新 fit 后余量任意化，间距时大时小）。
+ * 贴底对齐后最后一行文字紧贴输入栏顶边，余量转移到顶部由容器裁剪；
+ * viewport（absolute inset:0）仍随 .xterm 尺寸定位，滚动/触摸逻辑不受影响 */
+.xterm-container .xterm {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+}
+
 /* xterm 核心样式 */
 /* 调试验证：隐藏 xterm 6 自定义 slider 滚动条，验证右侧遮挡是否与其相关 */
 .xterm .xterm-scrollable-element > .scrollbar {

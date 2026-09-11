@@ -11,17 +11,23 @@
  * 移动端默认 DOM 渲染器对 resize 后的全量重绘开销小，钳制依然有效：
  * 避免无谓的 resize 事件风暴（旋转/键盘避让触发容器尺寸微调时）打乱网格。
  *
- * 因此：仅当目标网格与当前网格相差 > 1 列/行（真实尺寸变化）才触发
- * resize；±1 以内的测量漂移裁掉。代价是恰好只差 1 列时不立即生效
- * （视觉差异 <1 字符宽，无感），继续同向变化跨过 2 列差时正常触发。
+ * 因此：列方向仅当目标网格与当前网格相差 > 1 列才触发 resize（±1 以内漂移裁掉）；
+ * 行方向分向处理：缩小立即生效（最后一行被裁/底部空带残留肉眼可见，不值得
+ * 为防风暴而延迟，键盘避让/输入栏高度变化时终端必须紧跟容器高度），
+ * 增大仍保留 ±1 钳制（防测量漂移导致无谓 resize 风暴）。
+ * 代价：恰好只差 1 列或增大 1 行时不立即生效（视觉差异 <1 字符宽/行高，无感），
+ * 继续同向变化跨过 2 列/行差时正常触发。
  */
 
-/** 网格偏差在此阈值以内视为测量漂移，不触发 resize（列/行各自独立判定） */
+/** 网格偏差在此阈值以内视为测量漂移，不触发 resize（列方向；行方向缩小豁免） */
 export const RESIZE_GRID_TOLERANCE = 1
 
 /**
  * 判定目标网格是否值得触发 resize。
- * @returns true = 真实尺寸变化，应 resize；false = 测量漂移，保持当前网格
+ * 列方向：偏差 > 1 才触发（防 ±1 测量漂移）。
+ * 行方向：缩小（目标行数更少）时任何变化都触发——终端屏幕高度 = rows × cellHeight，
+ * 容器缩小而网格不缩会裁掉最后一行/在底部留下空带；增大仍保留 ±1 钳制防风暴。
+ * @returns true = 真实尺寸变化，应 resize；false = 测量漂移/钳制内，保持当前网格
  */
 export function shouldApplyGridResize(
   currentCols: number,
@@ -29,10 +35,12 @@ export function shouldApplyGridResize(
   targetCols: number,
   targetRows: number,
 ): boolean {
-  return (
-    Math.abs(targetCols - currentCols) > RESIZE_GRID_TOLERANCE ||
-    Math.abs(targetRows - currentRows) > RESIZE_GRID_TOLERANCE
-  )
+  const colDiff = Math.abs(targetCols - currentCols)
+  if (colDiff > RESIZE_GRID_TOLERANCE) return true
+  // 高度缩小：真实缩小立即生效（不再受 ±1 钳制延迟）
+  if (targetRows < currentRows) return targetRows !== currentRows
+  // 高度增大：保留 ±1 钳制（防测量漂移导致 resize 风暴）
+  return Math.abs(targetRows - currentRows) > RESIZE_GRID_TOLERANCE
 }
 
 /**

@@ -314,8 +314,10 @@
       </div>
     </Teleport>
 
-    <!-- 快捷键条 - 常驻显示最常用的快捷键和自定义命令 -->
-    <div v-if="quickBarItems.length > 0" class="quick-bar" @mousedown.prevent>
+    <!-- 快捷键条 - 聚焦时才显示最常用的快捷键和自定义命令：
+     * 失焦时整行收起，输入栏只留输入框，终端区与输入框贴合更紧
+     * （常驻显示会让输入栏始终高出一整行按钮，终端区被持续压缩） -->
+    <div v-if="isInputFocused && quickBarItems.length > 0" class="quick-bar" @mousedown.prevent>
       <button
         v-for="item in quickBarItems"
         :key="item.type + '-' + item.key"
@@ -954,7 +956,8 @@ onMounted(() => {
   background: var(--mobile-bg-secondary);
   backdrop-filter: blur(20px);
   border-top: 1px solid var(--mobile-border);
-  padding: 0.5rem 1rem;
+  /* 顶部内边距收紧到 0.25rem：终端区（面板收起时）与输入框上沿间距最小化 */
+  padding: 0.25rem 1rem 0.5rem;
   position: relative;
   /* paddingBottom 由 JS 动态设置（导航栏安全区域），不使用 CSS transition
    * padding 动画触发布局重排，与终端 xterm 重影问题同理 */
@@ -1298,7 +1301,6 @@ onMounted(() => {
   border-bottom: 1px solid var(--mobile-border);
   padding: 0.5rem 0.75rem 0.375rem;
   background: var(--mobile-bg-secondary);
-  backdrop-filter: blur(20px);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.15);
   z-index: 30;
   max-width: 100vw;
