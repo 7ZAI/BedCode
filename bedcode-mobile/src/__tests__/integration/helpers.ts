@@ -2,7 +2,7 @@
  * 集成测试公共工具（非测试文件，不被 vitest include 匹配）
  *
  * 与桌面端 `bedcode-desktop/src/__tests__/integration/*` 的模式对齐：
- * mock 三连（@tauri-apps/api/core + /event + /plugin-http + vue-sonner +
+ * mock 三连（@tauri-apps/api/core + /event + vue-sonner +
  * plugin-os）按桌面端惯例写在每个测试文件顶部（vi.mock 是 per-file 的），
  * 本文件只提供跨文件共享的纯工具函数。
  */
@@ -57,6 +57,29 @@ export function mockHttpResponse(data: unknown, ok = true): {
 } {
   const text = JSON.stringify(data)
   return { ok, json: async () => data, text: async () => text }
+}
+
+/**
+ * 构造 Rust HTTP 代理响应（ticket 03/07 收束后 http_request 的返回形状）
+ *
+ * useHttpApi 走 `invoke('http_request')` 统一代理——集成测试的
+ * HTTP mock 统一返回 `HttpProxyResponse { status, statusText, headers, bodyText }`。
+ *
+ * @param data - 业务 JSON 体（序列化为 bodyText）
+ * @param status - HTTP 状态码（默认 200）
+ */
+export function mockProxyResponse(data: unknown, status = 200): {
+  status: number
+  statusText: string
+  headers: Record<string, string>
+  bodyText: string
+} {
+  return {
+    status,
+    statusText: status === 200 ? 'OK' : 'Error',
+    headers: {},
+    bodyText: JSON.stringify(data),
+  }
 }
 
 /** 清空 localStorage（happy-dom 原生实现） */

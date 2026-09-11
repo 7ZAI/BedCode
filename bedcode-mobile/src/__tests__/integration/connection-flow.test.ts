@@ -7,7 +7,7 @@
  *
  * 测试 seam（与桌面端 integration 同模式）：
  * - 只 mock @tauri-apps/api 边界：core.invoke + event.listen（按事件名捕获
- *   回调，测试内手动触发模拟后端事件推送）+ plugin-http.fetch（HTTP API）
+ *   回调，测试内手动触发模拟后端事件推送）+ invoke(http_request) 代理（HTTP API）
  * - composables / store 内部逻辑全部真实执行，fixture 数据取自工厂
  * - 模块级单例经 loadFreshModule 每次用例重新加载（resetModules 清除
  *   init() 的 initialized 标志与全部模块级 ref）
@@ -35,7 +35,6 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
     eventHandlers[event] = (eventHandlers[event] || []).filter((h) => h !== handler)
   })
 })
-const mockFetch = vi.fn()
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -43,9 +42,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
-}))
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: (...args: any[]) => mockFetch(...args),
 }))
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -87,17 +83,19 @@ function installInvokeMock() {
         return Promise.resolve(true)
       case 'ws_verify_pairing_code':
         return Promise.resolve(makeAuthCredentials())
+      case 'egress_declare_desktop_target':
+        return Promise.resolve(null)
+      case 'http_request':
+        // 默认探测可达（probe /api/health）；业务端点测试各自覆盖
+        return Promise.resolve({
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          bodyText: JSON.stringify({ status: 'ok', port: 8765, uptime_secs: 120 }),
+        })
       default:
         return Promise.resolve(undefined)
     }
-  })
-}
-
-/** HTTP 探测可达 */
-function mockDesktopReachable(): void {
-  mockFetch.mockResolvedValue({
-    ok: true,
-    json: async () => ({ status: 'ok', port: 8765, uptime_secs: 120 }),
   })
 }
 
@@ -148,15 +146,17 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
     expect(conn.authCredentials.value?.sessionToken).toBe('test-jwt-token')
     expect(invokeCalls('ws_set_token')).toEqual([[{ token: 'test-jwt-token' }]])
 
-    mockDesktopReachable()
     await conn.connect(DEVICE)
     await flushAsync()
 
-    // HTTP 探测 URL 构造 + ws_connect 参数
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://192.168.1.100:8765/api/health',
-      expect.objectContaining({ method: 'GET', connectTimeout: 3000 }),
+    // HTTP 探测经统一代理（desktop 类 + 3 秒超时 + request_id）
+    const probeCall = invokeCalls('http_request').find(([args]) =>
+      (args as { url: string }).url.endsWith('/api/health'),
     )
+    expect(probeCall).toBeTruthy()
+    expect((probeCall![0] as { url: string }).url).toBe('http://192.168.1.100:8765/api/health')
+    expect((probeCall![0] as { kind?: string }).kind).toBe('desktop')
+    expect((probeCall![0] as { timeoutMs?: number }).timeoutMs).toBe(3000)
     expect(invokeCalls('ws_connect')).toEqual([[
       { address: DEVICE.address, port: DEVICE.port, name: DEVICE.name },
     ]])
@@ -190,7 +190,7 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
   })
 
   it('HTTP 探测不可达：快速失败（不调 ws_connect）+ 状态 error', async () => {
-    mockFetch.mockRejectedValue(new Error('Network error'))
+    mockInvoke.mockRejectedValue(new Error('Network error'))
 
     await expect(conn.connect(DEVICE)).rejects.toThrow('mobile.connection.unreachable')
     await flushAsync()
@@ -203,7 +203,6 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
 
   it('连接超时：12 秒未收到 ws_connected → timeoutToast + 状态 error', async () => {
     vi.useFakeTimers()
-    mockDesktopReachable()
 
     const p = conn.connect(DEVICE)
     await vi.advanceTimersByTimeAsync(0)
@@ -225,7 +224,6 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
   })
 
   it('取消连接：cancelConnection → 状态 disconnected + ws_disconnect', async () => {
-    mockDesktopReachable()
     const p = conn.connect(DEVICE)
     await flushAsync()
 
@@ -251,7 +249,6 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
 
     // 连接建立：onConnected 复位 aborted（本场景验证的修复点——
     // connect() 置位的取消标记在连接成功后必须复位，否则重连不可达）
-    mockDesktopReachable()
     await conn.connect(DEVICE)
     await flushAsync()
     await emit('ws_connected')
@@ -287,7 +284,6 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
       localStorage.setItem('auth_session_token', creds.sessionToken)
     })
 
-    mockDesktopReachable()
     const p = conn.connect(DEVICE)
     await flushAsync()
 

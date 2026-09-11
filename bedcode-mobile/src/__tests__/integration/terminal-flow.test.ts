@@ -20,7 +20,7 @@ import type { Terminal } from '@xterm/xterm'
 import type { RemoteDevice } from '@/composables/model'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import type { TerminalSocketHandlers } from '@/composables/useTerminalSocket'
-import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
+import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockProxyResponse } from './helpers'
 import { makeAuthCredentials } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri 边界 ====================
@@ -34,7 +34,6 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
     eventHandlers[event] = (eventHandlers[event] || []).filter((h) => h !== handler)
   })
 })
-const mockFetch = vi.fn()
 
 // fake 终端 socket：捕获 handlers，测试手动驱动
 let capturedHandlers: TerminalSocketHandlers | null = null
@@ -55,9 +54,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
   emit: vi.fn().mockResolvedValue(undefined),
-}))
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: (...args: any[]) => mockFetch(...args),
 }))
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -233,13 +229,18 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
       localStorage.setItem('auth_session_token', creds.sessionToken)
     })
 
-    // 连接建立（setApiBaseUrl 设置 HTTP 基址）；fetch 按路径分发：
-    // /api/health 为探测响应形状（status/port），其余为 HTTP API 响应形状（code/message）
-    mockFetch.mockImplementation((url: string) => {
-      if (url.endsWith('/api/health')) {
-        return Promise.resolve(mockHttpResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
+    // 连接建立（setApiBaseUrl 设置 HTTP 基址 + 声明桌面端目标）；http_request
+    // 按 URL 分发：/api/health 为探测响应形状（status/port），其余为 HTTP API 响应形状
+    mockInvoke.mockImplementation((cmd: string, args: any) => {
+      if (cmd === 'egress_declare_desktop_target') return Promise.resolve(null)
+      if (cmd === 'http_request') {
+        const url: string = args?.url || ''
+        if (url.endsWith('/api/health')) {
+          return Promise.resolve(mockProxyResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
+        }
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
       }
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
+      return Promise.resolve(undefined)
     })
     await conn.connect(DEVICE)
     await flushAsync()
@@ -248,12 +249,12 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     await conn.sendInput('s1', 'ls -la\n')
     await flushAsync()
 
-    const lastCall = mockFetch.mock.calls[mockFetch.mock.calls.length - 1]
-    expect(lastCall[0]).toBe('http://192.168.1.100:8765/api/sessions/s1/input')
-    expect(lastCall[1]).toMatchObject({
+    const lastCall = invokeCalls('http_request').pop()
+    expect((lastCall![0] as { url: string }).url).toBe('http://192.168.1.100:8765/api/sessions/s1/input')
+    expect(lastCall![0]).toMatchObject({
       method: 'POST',
       body: JSON.stringify({ data: 'ls -la\n', specialKey: null }),
-      headers: { Authorization: 'Bearer test-jwt-token' },
+      kind: 'desktop',
     })
     expect(invokeCalls('ws_send_input_async')).toHaveLength(0)
   })
