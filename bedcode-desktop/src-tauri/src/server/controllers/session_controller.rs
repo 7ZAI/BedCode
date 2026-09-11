@@ -12,7 +12,7 @@
 use crate::server::dtos::session_dto::*;
 use crate::server::dtos::ApiResponse;
 use crate::server::middleware::jwt_auth::get_claims_from_request;
-use crate::session::RendererSource;
+use crate::session::{GlobalOutputManager, RendererSource};
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
@@ -222,4 +222,36 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
     }
 
     HttpResponse::Ok().json(ApiResponse::ok())
+}
+
+/// GET /api/sessions/{id}/history
+///
+/// 一次性历史拉取（用户需求 3：历史不再走 WS 重播，按快照字节锚点一次性取回）。
+/// 从 `from`（缺省 0）起截取 `[from, snapshot_offset)` 字节（chunk 级跳过 +
+/// 半块 slice），携带字节三件套元数据供消费端做历史拼接/截断判定。
+/// 会话不存在 → 404；from 旧于 min_offset → 收敛到 min_offset 返回。
+pub async fn get_session_history(
+    path: web::Path<String>,
+    query: web::Query<SessionHistoryQuery>,
+) -> HttpResponse {
+    let session_id = path.into_inner();
+    let from = query.from.unwrap_or(0);
+    match GlobalOutputManager::global().snapshot_bytes(&session_id, from).await {
+        Some((data, min_offset, snapshot_offset, history_bytes)) => {
+            let response = SessionHistoryData {
+                min_offset,
+                snapshot_offset,
+                history_bytes,
+                data_base64: base64::Engine::encode(
+                    &base64::engine::general_purpose::STANDARD,
+                    &data,
+                ),
+            };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(response))
+        }
+        None => {
+            tracing::debug!(session_id = %session_id, "history fetch for unknown session");
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, "Session not found"))
+        }
+    }
 }

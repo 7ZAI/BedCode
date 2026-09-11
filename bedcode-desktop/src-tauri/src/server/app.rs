@@ -32,7 +32,7 @@ fn ws_frame_limit() -> usize {
 
 /// 每会话终端 WS 握手端点 — 连接创建即绑定 session_id（spec §5.1）
 ///
-/// 移动端前端直连（P2）：首消息 JWT 认证（§4.3 规则），输出帧为 TB v2
+/// 移动端前端直连（P2）：首消息 JWT 认证（§4.3 规则），输出帧为 TB v3
 /// 二进制（§5.3），订阅即连接（无多路复用）。会话不存在 → 认证通过后
 /// error(SESSION_NOT_FOUND) 并关闭。旧 /ws/terminal 兼容路由已随旧 v2.0.0
 /// 客户端下线删除（§7 D2）
@@ -274,6 +274,10 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .route(
                 "/sessions/{id}/input",
                 web::post().to(session_controller::send_session_input),
+            )
+            .route(
+                "/sessions/{id}/history",
+                web::get().to(session_controller::get_session_history),
             )
             .route(
                 "/sessions/{id}/remove",
