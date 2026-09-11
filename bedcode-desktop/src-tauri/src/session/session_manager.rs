@@ -331,8 +331,15 @@ impl SessionManager {
         };
         let session_id = pty_session.id().to_string();
 
-        // 启动 PTY 会话
-        pty_session.start().await?;
+        // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）之前：
+        // 注册晚于启动时，首帧输出经 GlobalOutputManager::on_output 以 "session not
+        // found" 丢弃——早期字节不进任何队列（移动端订阅/HTTP 历史同源），永久丢失。
+        // start 失败时回滚注册，防孤儿会话残留（无 PTY、无订阅者，后续无法注销）
+        self.register_output_manager(&session_id).await;
+        if let Err(e) = pty_session.start().await {
+            GlobalOutputManager::global().unregister_session(&session_id).await;
+            return Err(e);
+        }
 
         // 启动生命周期处理器
         self.start_lifecycle_handler(&session_id).await;
@@ -369,9 +376,6 @@ impl SessionManager {
         };
         self.canonical_renderer.set(&session_id, initial_canonical).await;
         self.session_info.insert(info).await;
-
-        // 注册到全局输出管理器（启用移动端订阅功能）
-        self.register_output_manager(&session_id).await;
 
         // 分发 Created 事件（异步通知）
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {

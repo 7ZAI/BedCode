@@ -682,35 +682,21 @@ impl SessionOutputManager {
             }
         }
 
-        // 第三步：排空 pending + 原子激活
-        // 先读锁检查 pending 是否为空，空则无需写锁，避免不必要地阻塞 on_output()
-        // 非空时升级为写锁，保证排空和激活之间不会有新事件进入 pending
+        // 第三步：排空 pending + 原子激活（统一写锁）
+        // 读锁检查 + 读锁激活分属两个临界区存在竞态：读锁下 on_output 同样能拿读锁
+        //（读读不互斥），可在「pending 空检查」与「activate」之间把新事件 push 进
+        // pending——激活后该事件永不排空 → 客户端字节缺口（依赖重订阅自愈，但造成
+        // 不必要的重拼接风暴）。统一写锁后 on_output 的读锁被阻塞，排空与激活之间
+        // 无新事件进入 pending（空 pending 的 drain 为 no-op，代价仅一个写锁临界区）
         {
-            let need_drain = {
-                let subscribers = self.subscribers.read().await;
-                match subscribers.get(client_id) {
-                    Some(sub) => !sub.pending.read().await.is_empty(),
-                    None => false,
-                }
-            };
+            let subscribers = self.subscribers.write().await;
+            if let Some(sub) = subscribers.get(client_id) {
+                // pending 全部为快照后事件（见 drain_pending 注释），无重叠无需跳过
+                sub.drain_pending().await;
 
-            if need_drain {
-                let subscribers = self.subscribers.write().await;
-                if let Some(sub) = subscribers.get(client_id) {
-                    // pending 全部为快照后事件（见 drain_pending 注释），无重叠无需跳过
-                    sub.drain_pending().await;
-
-                    // 读取最新 max_offset，此时 on_output 被写锁阻塞，max_offset 不会继续增长
-                    let current_max = self.output_queue.read().await.max_offset();
-                    sub.activate(current_max);
-                }
-            } else {
-                // pending 为空，只需读锁激活
-                let subscribers = self.subscribers.read().await;
-                if let Some(sub) = subscribers.get(client_id) {
-                    let current_max = self.output_queue.read().await.max_offset();
-                    sub.activate(current_max);
-                }
+                // 读取最新 max_offset，此时 on_output 被写锁阻塞，max_offset 不会继续增长
+                let current_max = self.output_queue.read().await.max_offset();
+                sub.activate(current_max);
             }
         }
 
