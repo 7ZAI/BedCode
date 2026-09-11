@@ -1,25 +1,27 @@
 /**
- * 桌面端本地 WS 输出流 Composable（快照模型，07 迁移）
+ * 桌面端本地 WS 输出流 Composable（快照模型，07 迁移 + TB v3 字节化）
  *
- * 通过本地环回 WebSocket（/ws/terminal/local）以 TB v2 二进制帧直取 PTY 原始字节。
+ * 通过本地环回 WebSocket（/ws/terminal/local）以 TB v3 二进制帧直取 PTY 原始字节。
  *
- * 快照模型（spec §5.2/§5.3，服务端契约）：
- * - 帧头 16B：magic "TB" + version=2 + flags + seq(8 LE) + len(4 LE)
- *   seq = 帧内首事件 index；flags bit0 = is_waiting，高 7 位 = 事件数 - 1
- *   （帧末 seq = seq + 事件数 - 1，消费端据此做 seq 级连续性校验与去重）
- * - 订阅响应 {min_seq, snapshot_seq(=wire max_seq), history_count}：快照元数据
- * - 历史段 = [min_seq .. snapshot_seq] → history_end → 实时段；本地通道零缓冲直通，
- *   每事件一帧，seq 严格 +1 连续
+ * 快照模型（spec §5.2/§5.3 + `.scratch/pty-byte-history/spec.md` 字节化）：
+ * - 帧头 16B：magic "TB" + version=3 + flags + start_offset(8 LE) + len(4 LE)
+ *   end_offset = start_offset + len 直接可导；高 7 位不再编码事件数
+ * - 订阅响应（旧路由 wire 字段名不变，值承载字节语义）：min_seq = min_offset、
+ *   max_seq = snapshot_offset、history_count = history_bytes
+ * - 历史段 = [min_offset .. snapshot_offset] → history_end → 实时段；本地通道
+ *   零缓冲直通，每事件一帧，字节区间严格连续铺满
  *
- * 恢复模型（07 从字节游标迁移）：
- * - last_rendered_seq（替代字节 cursor）：已渲染到的帧末 seq，跨重连保留
- * - 重订阅（缺口/断线）＝快照重订阅：重播时跳过 ≤ last_rendered_seq 的帧
- * - 截断判定：min_seq > last_rendered_seq + 1 说明已渲染区域被环形淘汰 → 清屏全量重播
- * - 连续性内幕：seq 缺口（frame.seq > last_rendered_seq + 1）→ 快照重订阅；
- *   直通模式无合并，正常流 frame.seq 恒 = last_rendered_seq + 1，缺口即丢帧
+ * 恢复模型（字节游标）：
+ * - last_rendered_offset（替代 last_rendered_seq）：已渲染到的帧末 endOffset，跨重连保留
+ * - 重订阅（缺口/断线）＝快照重订阅：重播时按字节区间去重 + 跨帧裁剪
+ * - 截断判定：min_offset > last_rendered_offset 说明已渲染区域被环形淘汰 → 清屏全量重播
+ * - 连续性内幕：offset 缺口（frame.start_offset > last_rendered_offset）→ 快照重订阅；
+ *   直通模式无合并，正常流恒连续，缺口即丢帧
+ * - 跨帧裁剪：overlap = cursor - frame.start_offset，渲染 data[overlap..]
+ *   （根治「重播帧跨游标 → 整帧重渲染」的重复输出缺陷）
  *
  * 生命周期（显式控制，terminal 就绪是订阅的前置条件）：
- * - start(sessionId)：断开旧连接并建立新连接（只握手，不订阅；seq 游标重置）
+ * - start(sessionId)：断开旧连接并建立新连接（只握手，不订阅；字节游标重置）
  * - subscribe()：发送订阅消息（terminal 就绪后调用；WS 断线重连后自动重发）
  * - stop()：断开并停止重连（组件卸载 / 会话停止）
  *
@@ -30,25 +32,24 @@
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
 
-/** TB v2 单帧解析结果 */
+/** TB v3 单帧解析结果 */
 export interface OutputStreamFrame {
   data: Uint8Array
-  /** 帧内首事件 seq */
-  seq: number
-  /** 帧内事件数（flags 高 7 位 + 1） */
-  eventCount: number
-  /** 帧末 seq = seq + eventCount - 1（游标推进基准） */
-  lastSeq: number
+  /** 帧内首字节的会话内累计偏移 */
+  startOffset: number
+  /** 帧内末字节偏移 = startOffset + len（游标推进基准） */
+  endOffset: number
   isWaiting: boolean
 }
 
-/** 快照订阅元数据（服务端 SubscribeResponse 的 min_seq/max_seq/history_count） */
+/** 快照订阅元数据（旧路由 wire min_seq/max_seq/history_count 承载字节语义值） */
 export interface StreamSnapshot {
-  /** 队列最早存续事件序号（环形淘汰后推进；> 0 表示历史头部被截断） */
-  minSeq: number
-  /** 订阅时刻队列最新序号（历史边界） */
-  snapshotSeq: number
-  historyCount: number
+  /** 队列最早存续字节位置（环形淘汰后推进；> 游标表示历史头部被截断） */
+  minOffset: number
+  /** 订阅时刻累计字节数（历史边界） */
+  snapshotOffset: number
+  /** 驻留历史总字节数 */
+  historyBytes: number
 }
 
 export interface TerminalStreamOptions {
@@ -56,18 +57,17 @@ export interface TerminalStreamOptions {
   onData: (frame: OutputStreamFrame) => void
   /** 历史截断需清屏全量重播（已渲染区域被环形淘汰）时清屏；回放随后到达 */
   onReset: () => void
-  /** 环形保留区间头部被淘汰（min_seq > 0）时提示，用于"历史被截断"文案 */
-  onTruncated?: (minSeq: number) => void
+  /** 环形保留区间头部被淘汰（min_offset > 0）时提示，用于"历史被截断"文案 */
+  onTruncated?: (minOffset: number) => void
 }
 
-// 帧头 16 字节：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE)
+// 帧头 16 字节：magic(2) + version(1) + flags(1) + start_offset(8 LE) + len(4 LE)
 const FRAME_HEADER_LEN = 16
 const FRAME_MAGIC = [0x54, 0x42] // "TB"
-const FRAME_VERSION = 2
+const FRAME_VERSION = 3
 const FRAME_FLAG_WAITING = 0x01
-const FRAME_FLAG_COUNT_SHIFT = 1
-// 背压 ack 标志位（仅客户端→服务端方向使用；服务端→客户端帧的 flags 低 2 位
-// 是 WAITING + 事件数编码，与服务端只认入站二进制帧作 ack 的解析互不冲突）
+// 背压 ack 标志位（仅客户端→服务端方向使用；服务端→客户端帧的 flags bit0
+// 是 WAITING 位，与服务端只认入站二进制帧作 ack 的解析互不冲突）
 const FRAME_FLAG_ACK = 0x02
 // ack 节流：累计待 ack 字节达阈值即回发（对齐上游 WATERMARK 节奏，风暴批发）
 const ACK_BYTES_THRESHOLD = 64 * 1024
@@ -88,7 +88,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   let ws: WebSocket | null = null
   let connecting = false
   let currentSession = ''
-  let lastRenderedSeq: number | null = null
+  let lastRenderedOffset: number | null = null
   let stopped = true
   let pendingSubscribe = false
   let reconnectAttempts = 0
@@ -99,25 +99,25 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   let pendingFrames: OutputStreamFrame[] = []
   let pendingBytes = 0
   let subscribed = false
-  // seq gap 处理：任何缺口立即触发快照重订阅补回缺失字节（缺失帧字节无法从
+  // offset gap 处理：任何缺口立即触发快照重订阅补回缺失字节（缺失帧字节无法从
   // 实时流恢复，跳过渲染会把残缺序列写进 buffer → parser 报错 + 字面残渣）。
   // 冷却防风暴：WebKitGTK WS 缓冲在输出风暴期可能丢弃整消息（单帧缺口），
   // 若每次缺口都重连会连环重订阅；冷却期内缺口帧不渲染、不推进游标（保持
-  // lastRenderedSeq），冷却结束重订阅后由全量重播一次性补回全部缺失字节。
+  // lastRenderedOffset），冷却结束重订阅后由全量重播一次性补回全部缺失字节。
   let lastGapResubscribeAt = 0
   const GAP_RESUBSCRIBE_COOLDOWN_MS = 3000
 
   // ==================== 背压 ack（渲染解析反馈环，spec 04-06） ====================
   // 写入解析完成（TerminalPreview onWriteParsed）后回发 ack 帧携已渲染到的
-  // last_rendered_seq；服务端据此暂停/恢复 PTY 读取，渲染速度反向钳制源头流速。
+  // last_rendered_offset；服务端据此暂停/恢复 PTY 读取，渲染速度反向钳制源头流速。
   // 节流：字节阈值（风暴批发）+ 空闲兜底（低频输出也最终 ack），避免逐帧刷屏
-  let ackedThroughSeq: number | null = null
+  let ackedThroughOffset: number | null = null
   let pendingAckBytes = 0
   let lastAckSentAt = 0
   let ackIdleTimer: ReturnType<typeof setTimeout> | null = null
 
-  /** 构造背压 ack 帧（复用 TB v2 帧头 + ACK 标志位 + acked_seq + session_id 负载） */
-  function buildAckFrame(sessionId: string, ackedSeq: number): ArrayBuffer {
+  /** 构造背压 ack 帧（TB v3 头 + ACK 标志位 + acked_offset + session_id 负载） */
+  function buildAckFrame(sessionId: string, ackedOffset: number): ArrayBuffer {
     const sessionBytes = new TextEncoder().encode(sessionId)
     const buf = new ArrayBuffer(FRAME_HEADER_LEN + sessionBytes.byteLength)
     const view = new DataView(buf)
@@ -125,7 +125,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     view.setUint8(1, FRAME_MAGIC[1])
     view.setUint8(2, FRAME_VERSION)
     view.setUint8(3, FRAME_FLAG_ACK)
-    view.setBigUint64(4, BigInt(ackedSeq), true)
+    view.setBigUint64(4, BigInt(ackedOffset), true)
     view.setUint32(12, sessionBytes.byteLength, true)
     new Uint8Array(buf, FRAME_HEADER_LEN).set(sessionBytes)
     return buf
@@ -134,13 +134,13 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
   /** 写入解析完成回调（TerminalPreview onWriteParsed 接线）：推进 ack 水位
    *
    * 语义：onWriteParsed 证明写入管线正在推进（有 write 被解析），此刻对
-   * 已交付游标 last_rendered_seq 回发 ack。注意该游标是「已交付」边界，可能
+   * 已交付游标 last_rendered_offset 回发 ack。注意该游标是「已交付」边界，可能
    * 略超前于实际解析完成（writeQueue 中待写帧）——本地环回下这是可接受的
    * 保守近似（低估的余量 = writeQueue 本身，正是要钳制的目标）；真机数据
    * 若有偏差再收紧为逐帧确认 */
   function confirmWriteParsed() {
     if (stopped || !ws || ws.readyState !== WebSocket.OPEN) return
-    if (lastRenderedSeq === null || ackedThroughSeq === lastRenderedSeq) return
+    if (lastRenderedOffset === null || ackedThroughOffset === lastRenderedOffset) return
     const now = Date.now()
     if (pendingAckBytes < ACK_BYTES_THRESHOLD && lastAckSentAt !== 0 && now - lastAckSentAt < ACK_MAX_IDLE_MS) {
       // 未到字节阈值也未到空闲兜底：挂起兜底计时器，后续批次或到点再回发
@@ -156,8 +156,8 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       clearTimeout(ackIdleTimer)
       ackIdleTimer = null
     }
-    ws.send(buildAckFrame(currentSession, lastRenderedSeq))
-    ackedThroughSeq = lastRenderedSeq
+    ws.send(buildAckFrame(currentSession, lastRenderedOffset))
+    ackedThroughOffset = lastRenderedOffset
     pendingAckBytes = 0
     lastAckSentAt = now
   }
@@ -204,9 +204,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     }
   }
 
-  /** 解析 TB v2 二进制帧；非法帧返回 null（打印错误日志，不中断流） */
-  /**
-   * 解析 TB v2 二进制消息内全部帧。一个 WS message 允许串联多个 TB v2 帧
+  /** 解析 TB v3 二进制消息内全部帧。一个 WS message 允许串联多个 TB v3 帧
    * （服务端有界合并策略会产生多帧串联），逐个解析避免只取首帧丢尾帧。
    * 非法帧（魔数/版本/长度越界）截断解析，不中断流；返回已解析帧列表。
    */
@@ -219,15 +217,13 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       if (view.getUint8(offset + 2) !== FRAME_VERSION) break
       const flags = view.getUint8(offset + 3)
       const isWaiting = (flags & FRAME_FLAG_WAITING) !== 0
-      const eventCount = (flags >> FRAME_FLAG_COUNT_SHIFT) + 1
-      const seq = Number(view.getBigUint64(offset + 4, true))
+      const startOffset = Number(view.getBigUint64(offset + 4, true))
       const len = view.getUint32(offset + 12, true)
       if (offset + FRAME_HEADER_LEN + len > buffer.byteLength) break
       frames.push({
         data: new Uint8Array(buffer, offset + FRAME_HEADER_LEN, len),
-        seq,
-        eventCount,
-        lastSeq: seq + eventCount - 1,
+        startOffset,
+        endOffset: startOffset + len,
         isWaiting,
       })
       offset += FRAME_HEADER_LEN + len
@@ -235,13 +231,19 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     return frames
   }
 
-  /** 交付帧：重播去重（跳过 ≤ last_rendered_seq）→ 连续性校验（seq 缺口）→ 推进游标 */
+  /**
+   * 交付帧：重播去重 → 跨帧裁剪 → 连续性校验（offset 缺口）→ 推进游标
+   *
+   * 跨帧裁剪（TB v3 根治重复渲染）：重订阅全量重播的首帧可能跨过已渲染游标
+   * （startOffset < cursor < endOffset），按帧内字节区间精确裁掉前半段：
+   * `overlap = cursor - startOffset`，渲染 `data[overlap..]`——游标恒为帧边界，
+   * 切片起点恒合法，不再整帧重渲染
+   */
   function deliverFrame(frame: OutputStreamFrame) {
-    // 快照重订阅/断线重连后的重播去重：已渲染部分整帧跳过
-    // （重播帧与已渲染帧字节完全一致，跳过不破坏终端状态）
-    if (lastRenderedSeq !== null && frame.lastSeq <= lastRenderedSeq) return
-    // 连续性内幕：首帧必须无缝衔接（直通模式帧末 + 1 = 下帧首 seq）
-    if (lastRenderedSeq !== null && frame.seq > lastRenderedSeq + 1) {
+    // 快照重订阅/断线重连后的重播去重：已渲染区间整帧跳过
+    if (lastRenderedOffset !== null && frame.endOffset <= lastRenderedOffset) return
+    // 连续性内幕：首帧必须无缝衔接（直通模式字节区间严格连续铺满）
+    if (lastRenderedOffset !== null && frame.startOffset > lastRenderedOffset) {
       // 缺口 = 字节永久缺失（服务端无丢弃日志，疑似 WebKitGTK WS 缓冲风暴溢出
       // 丢整消息）。正确做法：重订阅让服务端全量重播，跳过已渲染部分后缺失
       // 字节自然补回——而不是跳过缺失继续渲染（会把残缺序列写进 buffer 变成
@@ -250,7 +252,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       if (now - lastGapResubscribeAt >= GAP_RESUBSCRIBE_COOLDOWN_MS) {
         lastGapResubscribeAt = now
         logger.warn(
-          `[useTerminalOutputStream] seq gap, re-subscribing for snapshot (frame.start=${frame.seq}, last_rendered=${lastRenderedSeq})`,
+          `[useTerminalOutputStream] offset gap, re-subscribing for snapshot (frame.start=${frame.startOffset}, last_rendered=${lastRenderedOffset})`,
         )
         resubscribe()
         return
@@ -259,18 +261,24 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       // 冷却结束由全量重播一次性补回；避免把残缺字节写进终端
       return
     }
-    lastRenderedSeq = frame.lastSeq
+    // 跨帧裁剪：帧覆盖已渲染游标（重播首帧跨游标）→ 裁掉前半段，零重复
+    const cursor = lastRenderedOffset ?? frame.startOffset
+    if (cursor > frame.startOffset) {
+      const overlap = cursor - frame.startOffset
+      frame = { ...frame, data: frame.data.subarray(overlap) }
+    }
+    lastRenderedOffset = frame.endOffset
     // 背压记账：交付字节累计（onData 消费后由 confirmWriteParsed 在写解析完成时回发 ack）
     pendingAckBytes += frame.data.byteLength
     options.onData(frame)
   }
 
-  /** 快照重订阅：保留 last_rendered_seq，重播时跳过已渲染部分。
+  /** 快照重订阅：保留 last_rendered_offset，重播时按字节区间去重 + 跨帧裁剪。
    *
-   *  07 从增量重订阅（保字节游标续传）迁移：服务端快照协议恒全量重播
-   *  [min_seq .. snapshot_seq]，前端按帧跳过 ≤ last_rendered_seq 的部分——
-   *  无重复无遗漏（重播帧与已渲染帧内容一致），也免去服务端裁决三态。
-   *  仅当 min_seq > last_rendered_seq + 1（已渲染区被环形淘汰）才清屏全量重播 */
+   *  快照协议恒全量重播 [min_offset .. snapshot_offset]，前端按帧跳过
+   *  已渲染区间（end_offset ≤ last_rendered_offset）的部分——无重复无遗漏
+   *  （重播帧与已渲染帧内容一致），跨帧首段由 overlap 字节裁剪。
+   *  仅当 min_offset > last_rendered_offset（已渲染区被环形淘汰）才清屏全量重播 */
   function resubscribe() {
     subscribed = false
     // 重订阅本身是完整自愈：冷却从此刻重新起算（避免重播补回期间又被后续
@@ -291,22 +299,24 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     // 服务端消息为相邻标记格式：{"type":"terminal","payload":{...,"payload":{"action":{"type":...}}}}
     const action = msg?.payload?.payload?.action
     if (msg?.type === 'terminal' && action?.type === 'subscribe_response') {
+      // 旧路由 wire 字段名不变，值承载字节语义：min_seq = min_offset、
+      // max_seq = snapshot_offset、history_count = history_bytes
       const snapshot: StreamSnapshot = {
-        minSeq: action.min_seq ?? 0,
-        snapshotSeq: action.max_seq ?? 0, // wire max_seq = 05 快照协议的 snapshot_seq
-        historyCount: action.history_count ?? 0,
+        minOffset: action.min_seq ?? 0,
+        snapshotOffset: action.max_seq ?? 0,
+        historyBytes: action.history_count ?? 0,
       }
       subscribed = true
       // 历史头部被环形淘汰：已渲染区域不可恢复 → 清屏全量重播
-      if (lastRenderedSeq !== null && snapshot.minSeq > lastRenderedSeq + 1) {
+      if (lastRenderedOffset !== null && snapshot.minOffset > lastRenderedOffset) {
         logger.warn(
-          `[useTerminalOutputStream] history truncated: min_seq=${snapshot.minSeq} > last_rendered=${lastRenderedSeq}+1, full replay`,
+          `[useTerminalOutputStream] history truncated: min_offset=${snapshot.minOffset} > last_rendered=${lastRenderedOffset}, full replay`,
         )
-        lastRenderedSeq = null
+        lastRenderedOffset = null
         options.onReset()
       }
-      if (snapshot.minSeq > 0) {
-        options.onTruncated?.(snapshot.minSeq)
+      if (snapshot.minOffset > 0) {
+        options.onTruncated?.(snapshot.minOffset)
       }
       // 排空订阅确认前缓冲的回放帧（按到达顺序写入，保持连续）
       const frames = pendingFrames
@@ -372,7 +382,7 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
           handleControl(ev.data)
           return
         }
-        // 一个 WS message 可能串联多个 TB v2 帧（服务端合并策略），
+        // 一个 WS message 可能串联多个 TB v3 帧（服务端合并策略），
         // 逐帧解析交付；空/全非法返回空数组时下方按无帧处理
         const frames = parseFrames(ev.data as ArrayBuffer)
         if (frames.length === 0) {
@@ -409,15 +419,15 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
     }
   }
 
-  /** 建立新连接（只握手不订阅）；seq 游标重置——新会话坐标空间独立 */
+  /** 建立新连接（只握手不订阅）；字节游标重置——新会话坐标空间独立 */
   function start(sessionId: string) {
     if (!sessionId) return
     if (!stopped && ws && currentSession === sessionId) return // 已在运行
     closeWs()
     currentSession = sessionId
-    lastRenderedSeq = null
+    lastRenderedOffset = null
     // 新会话坐标空间独立：ack 水位一并重置
-    ackedThroughSeq = null
+    ackedThroughOffset = null
     pendingAckBytes = 0
     lastAckSentAt = 0
     stopped = false
@@ -445,8 +455,8 @@ export function useTerminalOutputStream(options: TerminalStreamOptions) {
       ackIdleTimer = null
     }
     closeWs()
-    lastRenderedSeq = null
-    ackedThroughSeq = null
+    lastRenderedOffset = null
+    ackedThroughOffset = null
     pendingAckBytes = 0
   }
 

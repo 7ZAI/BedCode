@@ -462,17 +462,17 @@ const terminalStreamOptions = {
       armReplayRefresh()
     }
   },
-  onTruncated: (minSeq: number) => {
+  onTruncated: (minOffset: number) => {
     if (historyTruncatedNotified) {
       // 已提示过：仅后台日志记录，不再弹 toast 打扰用户
       logger.warn(
-        `[TerminalPreview] 终端历史已被环形缓冲截断（已提示过，仅记录）：min_seq=${minSeq}`,
+        `[TerminalPreview] 终端历史已被环形缓冲截断（已提示过，仅记录）：min_offset=${minOffset}`,
       )
       return
     }
     historyTruncatedNotified = true
     logger.warn(
-      `[TerminalPreview] 终端历史已被环形缓冲截断：min_seq=${minSeq}，会话开头输出不可用`,
+      `[TerminalPreview] 终端历史已被环形缓冲截断：min_offset=${minOffset}，会话开头输出不可用`,
     )
     toast.warning(t('desktop.terminal.historyTruncated'))
   },
