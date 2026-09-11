@@ -7,6 +7,7 @@ pub mod enums;
 pub mod file_service;
 pub mod handler;
 pub mod mdns;
+pub mod egress;
 pub mod model;
 pub mod peer_migration;
 pub mod peer_net;
@@ -57,7 +58,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
@@ -87,6 +87,9 @@ pub fn run() {
 
             // 初始化移动端设置管理器 (JSON 文件存储)
             let app_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
+
+            // 初始化 Egress Policy（授权记忆持久层加载）
+            crate::egress::init(app_data_dir.clone());
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
@@ -204,6 +207,14 @@ pub fn run() {
             commands::connection::ws_clear_token,
             // Link Crypto Context（issue 09：事件 WS 链路加密桥）
             commands::connection::set_link_crypto_context,
+            // Egress Policy（外网授权弹窗回执 + 设置页查看/撤销 + 桌面端目标声明）
+            commands::egress::egress_consent_resolve,
+            commands::egress::egress_list_grants,
+            commands::egress::egress_revoke_grants,
+            commands::egress::egress_declare_desktop_target,
+            // HTTP 代理（ticket 03：统一请求出口，request_id 多路复用）
+            commands::http_proxy::http_request,
+            commands::http_proxy::http_cancel,
             // Connection Commands
             commands::connection::ws_connect,
             commands::connection::ws_disconnect,

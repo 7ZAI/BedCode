@@ -477,6 +477,16 @@ export default {
       fsAuthRemember: '记住此路径，下次自动放行',
       fsAuthAllow: '允许',
       fsAuthDeny: '拒绝',
+      egress: {
+        title: '外网访问授权',
+        requestByHost: '应用请求访问以下外部地址',
+        requestByPlugin: '插件 {plugin} 请求访问以下外部地址',
+        requestByUnknown: '来源 {source} 请求访问以下外部地址',
+        targetUrl: '访问地址',
+        remember: '不再询问（记住此域名）',
+        allow: '允许',
+        deny: '拒绝',
+      },
       aiChatbox: {
         noProvider: '未配置模型',
         configureModel: '配置模型',

@@ -306,6 +306,8 @@ impl PluginManager {
 
         let mut current_plugins = self.plugins.write().await;
         for (id, plugin) in plugins {
+            // Egress L2：收集插件 preauthUrls 静态声明（manifest 属性，加载即注册）
+            crate::egress::policy().register_plugin_urls(&id, &plugin.manifest.preauth_urls);
             current_plugins.insert(id, plugin);
         }
         drop(current_plugins);
@@ -972,6 +974,8 @@ impl PluginManager {
         // 移除 WASM 实例与插件记录
         self.wasm_plugins.write().await.remove(plugin_id);
         self.plugins.write().await.remove(plugin_id);
+        // Egress L2：移除插件 URL 声明
+        crate::egress::policy().unregister_plugin_urls(plugin_id);
 
         // 清理启用偏好、审批记录与插件存储
         let enabled_key = format!("{}{}", PLUGIN_ENABLED_KEY_PREFIX, plugin_id);
@@ -1257,6 +1261,7 @@ mod tests {
             wasm_hash: String::new(),
             rust_library: String::new(),
             preauth_dirs: vec![],
+            preauth_urls: vec![],
         };
         let mut plugins = manager.plugins.write().await;
         plugins.insert(

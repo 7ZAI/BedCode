@@ -113,6 +113,18 @@ export default {
       pushSection: 'Push',
       feedbackSection: 'Feedback',
     },
+    egress: {
+      title: 'Network Access',
+      subtitle: 'View and revoke external network grants',
+      grantsSection: 'Granted addresses',
+      loading: 'Loading…',
+      empty: 'No grants yet',
+      allPaths: 'All paths',
+      revokeAll: 'Revoke All',
+      revokeHint: 'After revocation, previously approved external addresses will need to be re-authorized.',
+      revokeConfirmTitle: 'Revoke all grants?',
+      revokeConfirmMessage: 'This clears every remembered external address grant, including "don\'t ask again" entries.',
+    },
     about: {
       title: 'About',
       subtitle: 'Version info and updates',

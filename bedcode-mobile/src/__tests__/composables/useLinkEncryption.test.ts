@@ -5,14 +5,31 @@
  * isChannelEncryptionActive = 主开关 ∧ 对应通道子开关 ∧ 已 pin。
  */
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   isChannelEncryptionActive,
   getPinnedKey,
   getPinnedFingerprint,
-  notePinFromAuthData,
+  initLinkCryptoPinSync,
+  syncLinkCryptoContextToNative,
   useLinkEncryptionSettings,
 } from '@/composables/useLinkEncryption'
+
+// 动态 import @tauri-apps/api/core（sync 桥），mock invoke 捕获推送参数
+const mockInvoke = vi.fn()
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: (...args: any[]) => mockInvoke(...args),
+}))
+// 动态 import @tauri-apps/api/event（initLinkCryptoPinSync），捕获 listen 回调以手动触发
+let pinHandler: ((payload: { kdPublicB64?: string | null; kdFingerprint?: string | null }) => void) | null = null
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn((_event: string, handler: (payload: unknown) => void) => {
+    pinHandler = handler as typeof pinHandler
+    return Promise.resolve(() => {
+      pinHandler = null
+    })
+  }),
+}))
 
 beforeEach(() => {
   localStorage.clear()
@@ -84,37 +101,63 @@ describe('useLinkEncryptionSettings', () => {
   })
 })
 
-describe('notePinFromAuthData', () => {
+describe('syncLinkCryptoContextToNative（set_link_crypto_context 推送）', () => {
+  it('推送参数含全部字段（enabled/strictMode/encryptWsEvent/encryptHttp/kdPublicB64）', async () => {
+    localStorage.setItem('link_kd_public_b64', 'cHVibGljLWtleQ==')
+    const { setEnabled, setStrictMode, setChannel } = useLinkEncryptionSettings()
+    setEnabled(true)
+    setStrictMode(true)
+    setChannel('http', false)
+    mockInvoke.mockResolvedValue(undefined)
+
+    await syncLinkCryptoContextToNative()
+
+    expect(mockInvoke).toHaveBeenCalledWith('set_link_crypto_context', {
+      enabled: true,
+      strictMode: true,
+      encryptWsEvent: true,
+      encryptHttp: false,
+      kdPublicB64: 'cHVibGljLWtleQ==',
+    })
+  })
+})
+
+describe('pin 落地（ws_link_crypto_pin 事件驱动 applyPin；HTTP 通道 pin 刷新已收束 Rust）', () => {
   // 合法 X25519 公钥（32 字节 0xAB 的 base64）：applyPin 写入前校验 32 字节，
   // 短/畸形公钥被拒绝——信任锚不应被污染
   const VALID_KID_B64 = 'q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6s='
 
-  it('auth 数据携带公钥+指纹时两者都写入', () => {
-    notePinFromAuthData({ kdPublicB64: VALID_KID_B64, kdFingerprint: 'aabbccdd' })
+  async function emitPin(payload: { kdPublicB64?: string | null; kdFingerprint?: string | null }) {
+    await initLinkCryptoPinSync()
+    // Tauri listen handler 收到 { payload } 事件形状（与真实事件一致）
+    pinHandler?.({ payload } as never)
+  }
+
+  it('事件携带公钥+指纹时两者都写入', async () => {
+    await emitPin({ kdPublicB64: VALID_KID_B64, kdFingerprint: 'aabbccdd' })
     expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
   })
 
-  it('指纹缺失时公钥仍写入且旧指纹被清除（换机后旧指纹是 false-positive 信任锚）', () => {
+  it('指纹缺失时公钥仍写入且旧指纹被清除（换机后旧指纹是 false-positive 信任锚）', async () => {
     localStorage.setItem('link_kd_fingerprint', 'stale-fingerprint')
-    notePinFromAuthData({ kdPublicB64: VALID_KID_B64 })
+    await emitPin({ kdPublicB64: VALID_KID_B64 })
     expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBeNull()
   })
 
-  it('畸形公钥（非 32 字节）拒绝写入，且不清除既有 pin', () => {
+  it('畸形公钥（非 32 字节）拒绝写入，且不清除既有 pin', async () => {
     localStorage.setItem('link_kd_public_b64', VALID_KID_B64)
     localStorage.setItem('link_kd_fingerprint', 'aabbccdd')
-    notePinFromAuthData({ kdPublicB64: 'cHVibGljLWtleQ==' /* 10 字节 */ })
+    await emitPin({ kdPublicB64: 'cHVibGljLWtleQ==' /* 10 字节 */ })
     expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
   })
 
-  it('无公钥不写任何 pin（防空串污染）', () => {
+  it('无公钥不写任何 pin（防空串污染；协商失败不清 pin 的信任锚语义）', async () => {
     localStorage.setItem('link_kd_public_b64', VALID_KID_B64)
     localStorage.setItem('link_kd_fingerprint', 'aabbccdd')
-    notePinFromAuthData({})
-    // 既有 pin 不被清空（协商失败不清 pin 的信任锚语义）
+    await emitPin({})
     expect(getPinnedKey()).toBe(VALID_KID_B64)
     expect(getPinnedFingerprint()).toBe('aabbccdd')
   })

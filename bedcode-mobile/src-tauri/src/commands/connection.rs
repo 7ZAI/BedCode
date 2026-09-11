@@ -177,17 +177,21 @@ pub fn ws_set_token(token: String) -> Result<()> {
 ///
 /// 常驻事件 WS 建连在 Rust 侧，而开关与 pin 存于 WebView localStorage——
 /// 本命令是两侧的桥。缺省全关：未推送前事件 WS 保持明文。
+/// `encrypt_http` 为可选参数：旧前端（HTTP 代理收束前）不推送，默认 true
+/// （与事件通道一致，主开关关着时无效）；新前端显式推送。
 #[tauri::command]
 pub fn set_link_crypto_context(
     enabled: bool,
     strict_mode: bool,
     encrypt_ws_event: bool,
+    encrypt_http: Option<bool>,
     kd_public_b64: Option<String>,
 ) -> Result<()> {
     crate::state::set_link_crypto_context(crate::state::LinkCryptoContext {
         enabled,
         strict_mode,
         encrypt_ws_event,
+        encrypt_http: encrypt_http.unwrap_or(true),
         kd_public_b64,
     });
     Ok(())

@@ -10,7 +10,7 @@
 
 use crate::{
     aes_gcm_decrypt, aes_gcm_encrypt, b64_decode, b64_encode, err, hkdf_sha256, ws_aad, ws_nonce,
-    Result, WS_FRAME_VERSION, WS_INFO_CLIENT_TO_SERVER, WS_INFO_SERVER_TO_CLIENT,
+    x25519_dh, Result, WS_FRAME_VERSION, WS_INFO_CLIENT_TO_SERVER, WS_INFO_SERVER_TO_CLIENT,
     WS_TRANSCRIPT_PREFIX,
 };
 
@@ -47,16 +47,6 @@ fn derive_direction_cipher(
     let mut nonce_prefix = [0u8; 4];
     nonce_prefix.copy_from_slice(&okm[32..36]);
     Ok(WsDirectionCipher { key, nonce_prefix })
-}
-
-/// X25519 DH（原始字节进出；错误即非法输入）
-fn x25519_dh(private: &[u8; 32], peer_public: &[u8; 32]) -> Result<[u8; 32]> {
-    let shared = x25519_dalek::x25519(*private, *peer_public);
-    // 全零输出是 x25519 的小子群约束失败信号（RFC 7748 §6.2 建议）
-    if shared == [0u8; 32] {
-        return err("x25519 all-zero shared secret");
-    }
-    Ok(shared)
 }
 
 /// 生成临时密钥对（返回 私钥, 公钥）

@@ -4,15 +4,15 @@
  * 与桌面端 `bedcode-desktop/src-tauri/src/server/link_crypto.rs` 协议互为镜像，
  * 以下字节级约定必须逐项一致（改动任何一侧必须同步另一侧并跑双端金样）：
  *
- * - HTTP 信封 JSON：{ v:1, n:<b64 12B>, ct:<b64 ct||tag> }
- * - HTTP AAD："v1" || dir(1B: req=0x01/resp=0x02) || u32be(pathLen) || path
- * - HTTP 密钥：shared = X25519(临时私钥, Kd公钥)；
- *   HKDF-SHA256(salt=pathASCII, info="bedcode-link-crypto/v1/http/request|response", 32B)
  * - WS 握手：IKM = ECDH(m,s) ‖ ECDH(m,Kd)，salt = "bc-link-crypto/v1" ‖ m_ek_b64 ‖ s_ek_b64；
  *   expand(c2s/s2c info, 36B) = key(32) + noncePrefix(4)
  * - WS 二进制帧：[ver=1][seq u64be][ct||tag]；nonce = prefix ‖ u64be(seq)；序号严格单调
  * - WS 文本帧信封：{ v:1, seq, n, ct }；WS AAD："v1" ‖ channelStr ‖ dir ‖ origin
  * - 算法库：@noble/curves(x25519) + @noble/ciphers(AES-256-GCM，密文尾部拼 tag) + @noble/hashes
+ *
+ * HTTP 信封能力已收束至 Rust（ticket 03/09：bedcode-link-crypto crate 字节级对齐
+ * 金样在 `packages/link-crypto` 单测，前端 HTTP 加解密已删除）；本文件仅保留
+ * WS 终端通道（useTerminalSocket 直连，终端 WS 搬迁见 spec §7 边界后续分支）。
  */
 
 // x25519 自 @noble/curves 1.9 起从 ./x25519 子路径移入 ./ed25519（该路径在 1.8.x 同样可用）
@@ -23,14 +23,10 @@ import { hkdf } from '@noble/hashes/hkdf'
 
 // ==================== 协议常量（与桌面端逐字节一致） ====================
 
-const HKDF_INFO_HTTP_REQUEST = 'bedcode-link-crypto/v1/http/request'
-const HKDF_INFO_HTTP_RESPONSE = 'bedcode-link-crypto/v1/http/response'
 const HKDF_INFO_WS_C2S = 'bedcode-link-crypto/v1/ws/c2s'
 const HKDF_INFO_WS_S2C = 'bedcode-link-crypto/v1/ws/s2c'
 const WS_TRANSCRIPT_PREFIX = 'bc-link-crypto/v1'
 
-const DIR_REQUEST = 0x01
-const DIR_RESPONSE = 0x02
 const DIR_C2S = 0x01
 const DIR_S2C = 0x02
 const ORIGIN_TEXT = 0x01
@@ -95,111 +91,29 @@ function randomBytes(len: number): Uint8Array {
   return out
 }
 
-// ==================== HTTP 单发加密 ====================
+// ==================== WS 会话加密 ====================
 
+/** AES-256-GCM 加密（密文尾部拼 tag；@noble gcm 语义） */
+function aesGcmEncrypt(key: Uint8Array, nonce: Uint8Array, plaintext: Uint8Array, aad: Uint8Array): Uint8Array {
+  return gcm(key, nonce, aad).encrypt(plaintext)
+}
+
+/** AES-256-GCM 解密（tag 校验失败抛错，fail-closed） */
+function aesGcmDecrypt(key: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array, aad: Uint8Array): Uint8Array {
+  return gcm(key, nonce, aad).decrypt(ciphertext)
+}
+
+/** X25519 临时密钥对（WS 握手与每请求临时密钥共用） */
 export interface EphemeralKeyPair {
   priv: Uint8Array
   pubB64: string
 }
 
-/** 每请求全新的临时 X25519 密钥对 */
+/** 生成临时 X25519 密钥对（WS 握手提案与 HTTP 请求信封共用） */
 export function generateEphemeral(): EphemeralKeyPair {
   const priv = x25519.utils.randomPrivateKey()
   return { priv, pubB64: bytesToBase64(x25519.getPublicKey(priv)) }
 }
-
-export interface HttpTrafficKeys {
-  request: Uint8Array
-  response: Uint8Array
-}
-
-/** 由临时私钥与 pin 的 Kd 公钥派生两方向会话密钥 */
-export function deriveHttpKeys(ephemeralPriv: Uint8Array, kdPublicB64: string, path: string): HttpTrafficKeys {
-  const kdPub = base64ToBytes(kdPublicB64)
-  if (kdPub.length !== 32) throw new Error(`kd public key length ${kdPub.length} != 32`)
-  const shared = x25519.getSharedSecret(ephemeralPriv, kdPub)
-  const salt = utf8(wirePath(path))
-  return {
-    request: hkdf(sha256, shared, salt, utf8(HKDF_INFO_HTTP_REQUEST), 32),
-    response: hkdf(sha256, shared, salt, utf8(HKDF_INFO_HTTP_RESPONSE), 32),
-  }
-}
-
-/**
- * 归一化 wire 路径：剥离 query string。桌面端服务端按 `req.path()`（不含
- * query）计算 HKDF salt 与 AAD，调用方（如 useHttpApi）传入的 path 可能带
- * query（GET 参数端点）——两端口径必须一致，否则带 query 端点的密钥派生与
- * GCM tag 校验全部失配（修复：GET/HEAD 空 body 协商上线后暴露的存量缺陷）
- */
-function wirePath(path: string): string {
-  const q = path.indexOf('?')
-  return q >= 0 ? path.slice(0, q) : path
-}
-
-function httpAad(direction: number, path: string): Uint8Array {
-  const pathBytes = utf8(wirePath(path))
-  const aad = new Uint8Array(7 + pathBytes.length)
-  aad.set(utf8('v1'), 0)
-  aad[2] = direction
-  new DataView(aad.buffer).setUint32(3, pathBytes.length, false)
-  aad.set(pathBytes, 7)
-  return aad
-}
-
-function aesGcmEncrypt(key: Uint8Array, nonce: Uint8Array, plaintext: Uint8Array, aad: Uint8Array): Uint8Array {
-  return gcm(key, nonce, aad).encrypt(plaintext)
-}
-
-function aesGcmDecrypt(key: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array, aad: Uint8Array): Uint8Array {
-  return gcm(key, nonce, aad).decrypt(ciphertext)
-}
-
-export interface SealedHttpRequest {
-  /** X-BedCode-Crypto 头值："v1 <ek_b64>" */
-  negotiation: string
-  /** 信封 JSON 文本（作为请求体发送） */
-  envelope: string
-  /** 响应解密所需的会话密钥（请求作用域） */
-  keys: HttpTrafficKeys
-}
-
-/** 加密一条请求：生成全新临时密钥对 + 随机 nonce（spec §3 无状态单发） */
-export function encryptRequest(kdPublicB64: string, path: string, plaintext: string): SealedHttpRequest {
-  const eph = generateEphemeral()
-  const keys = deriveHttpKeys(eph.priv, kdPublicB64, path)
-  const nonce = randomBytes(NONCE_LEN)
-  const ciphertext = aesGcmEncrypt(keys.request, nonce, utf8(plaintext), httpAad(DIR_REQUEST, path))
-  const envelope = JSON.stringify({ v: 1, n: bytesToBase64(nonce), ct: bytesToBase64(ciphertext) })
-  return { negotiation: `v1 ${eph.pubB64}`, envelope, keys }
-}
-
-export type HttpResponseCrypto =
-  | { kind: 'decrypted'; text: string }
-  | { kind: 'plaintext' }
-  | { kind: 'downgrade' }
-
-/** 解密响应体：桌面端带标记头且我方有请求作用域密钥 → 解信封；
- *  我方预期加密而响应明文 → downgrade（调用方按 strict 配置裁决） */
-export function decryptResponse(
-  keys: HttpTrafficKeys | null,
-  responseHasCryptoHeader: boolean,
-  bodyText: string,
-  path: string,
-): HttpResponseCrypto {
-  if (!responseHasCryptoHeader) {
-    return keys ? { kind: 'downgrade' } : { kind: 'plaintext' }
-  }
-  if (!keys) throw new Error('crypto response but no request-scoped keys')
-  const env = JSON.parse(bodyText) as { v: number; n: string; ct: string }
-  if (env.v !== 1) throw new Error(`unsupported envelope version ${env.v}`)
-  const nonce = base64ToBytes(env.n)
-  if (nonce.length !== NONCE_LEN) throw new Error(`nonce length ${nonce.length} != 12`)
-  const ciphertext = base64ToBytes(env.ct)
-  const plain = aesGcmDecrypt(keys.response, nonce, ciphertext, httpAad(DIR_RESPONSE, path))
-  return { kind: 'decrypted', text: new TextDecoder().decode(plain) }
-}
-
-// ==================== WS 会话加密 ====================
 
 export interface WsDirectionCipher {
   key: Uint8Array

@@ -90,6 +90,7 @@ mod tests {
                 wasm_hash: String::new(),
                 rust_library: String::new(),
                 preauth_dirs: vec![],
+                preauth_urls: vec![],
             }
         }
 

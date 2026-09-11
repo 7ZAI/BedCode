@@ -19,6 +19,9 @@
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
 
+    <!-- 外网访问授权弹窗（Egress L3，请求时懒触发，全局挂载） -->
+    <EgressConsentDialog />
+
     <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载）
          渲染哪个候选页由 config/splash.ts 的 ACTIVE_SPLASH_CANDIDATE 决定：
          'terminal' = 终端开机自检叙事动画（SplashScreen.vue，原开屏）；
@@ -43,6 +46,7 @@ import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
 import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-mobile/ui/plugin-global-dialog'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
+import EgressConsentDialog from '@/components/EgressConsentDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { syncLinkCryptoContextToNative, initLinkCryptoPinSync } from '@/composables/useLinkEncryption'
 import { useFontSize } from '@/composables/useFontSize'

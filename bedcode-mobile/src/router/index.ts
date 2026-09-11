@@ -74,6 +74,12 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
+      path: '/mobile/settings/egress',
+      name: 'mobile-settings-egress',
+      component: () => import('@/views/settings/EgressSettingsView.vue'),
+      meta: { standAlone: true },
+    },
+    {
       path: '/mobile/settings/appearance',
       name: 'mobile-settings-appearance',
       component: () => import('@/views/settings/AppearanceSettingsView.vue'),
