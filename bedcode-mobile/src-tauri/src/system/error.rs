@@ -40,6 +40,9 @@ pub enum AppError {
     #[error("Plugin error: {0}")]
     Plugin(String),
 
+    #[error("Egress error: {0}")]
+    Egress(String),
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 

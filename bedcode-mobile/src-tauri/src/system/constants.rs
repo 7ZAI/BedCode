@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod connection;
+pub mod egress;
 pub mod heartbeat;
 pub mod mdns;
 pub mod plugin;

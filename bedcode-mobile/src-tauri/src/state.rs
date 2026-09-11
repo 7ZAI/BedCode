@@ -140,23 +140,31 @@ pub struct LinkCryptoContext {
     pub strict_mode: bool,
     /// 事件通道子开关（对应桌面 encryptWsEvent）
     pub encrypt_ws_event: bool,
+    /// HTTP 通道子开关（对应桌面 encryptHttp；HTTP 代理收束后由 Rust 裁决）
+    pub encrypt_http: bool,
     /// 已 pin 的桌面端身份公钥（base64）；None = 未配对/未下发
     pub kd_public_b64: Option<String>,
 }
 
 impl Default for LinkCryptoContext {
     fn default() -> Self {
-        Self { enabled: false, strict_mode: false, encrypt_ws_event: true, kd_public_b64: None }
+        Self {
+            enabled: false,
+            strict_mode: false,
+            encrypt_ws_event: true,
+            encrypt_http: true,
+            kd_public_b64: None,
+        }
     }
 }
 
-static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> =
-    std::sync::RwLock::new(LinkCryptoContext {
-        enabled: false,
-        strict_mode: false,
-        encrypt_ws_event: true,
-        kd_public_b64: None,
-    });
+static LINK_CRYPTO_CONTEXT: std::sync::RwLock<LinkCryptoContext> = std::sync::RwLock::new(LinkCryptoContext {
+    enabled: false,
+    strict_mode: false,
+    encrypt_ws_event: true,
+    encrypt_http: true,
+    kd_public_b64: None,
+});
 
 /// 读取链路加密运行期上下文快照
 pub fn get_link_crypto_context() -> LinkCryptoContext {
@@ -183,4 +191,11 @@ pub fn update_link_crypto_pin(kd_public_b64: Option<String>) {
 pub fn is_event_encryption_active() -> bool {
     let ctx = get_link_crypto_context();
     ctx.enabled && ctx.encrypt_ws_event && ctx.kd_public_b64.is_some()
+}
+
+/// HTTP 通道是否应加密（HTTP 代理收束后由 Rust 裁决）：主开关 ∧ HTTP 子开关
+/// ∧ 已持有 pin——对齐前端 `isChannelEncryptionActive('http')` 的判定。
+pub fn is_http_encryption_active() -> bool {
+    let ctx = get_link_crypto_context();
+    ctx.enabled && ctx.encrypt_http && ctx.kd_public_b64.is_some()
 }
