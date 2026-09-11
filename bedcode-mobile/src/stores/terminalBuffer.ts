@@ -133,6 +133,18 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   const MAX_BUFFERED_LIVE_BYTES = 8 * 1024 * 1024
   /** 拼接缺口阶段最近一次重拼接时间 */
   const lastGapRespliceAt = new Map<string, number>()
+  /** 缺口冷却期丢帧兜底定时器：冷却到期且游标仍落后时主动重拼接（防流尾缺口无触发） */
+  const gapRetryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  /** spliceHistory 等待 phase=live 的超时（ms，对齐视图 HISTORY_SETTLE_TIMEOUT_MS） */
+  const SPLICE_WAIT_LIVE_TIMEOUT_MS = 8000
+  /** phase → live 等待者（key = sessionId → finish 回调列表；onStateEvent 唤醒/超时兜底） */
+  const liveWaiters = new Map<string, Array<(ok: boolean) => void>>()
+  /**
+   * 已知订阅阶段（key = sessionId → phase）：onStateEvent 在 buffer 未创建时
+   * 也记录——live 事件早于页面挂载（直接进页面路径）时若被丢弃，buffer 挂载后
+   * phase 停在 idle，spliceHistory 误等 live 8s。ensureBuffer 继承该值
+   */
+  const knownPhases = new Map<string, SessionBuffer['phase']>()
   /** terminal_output_activity 通知节流（ms） */
   const ACTIVITY_THROTTLE_MS = 200
   /** 输出活动通知时间戳 */
@@ -198,8 +210,57 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     deliverFrame(payload.session_id, frame)
   }
 
+  /**
+   * 等待 phase=live（WS 重播段全部入缓存）：history_end 帧落地前，TCP 有序保证
+   * 重播帧必已先到——这是「getHistory 缓存优先返回完整历史」的可靠边界。
+   * 初始即为 live / 会话已停止时立即返回；phase 唤醒 / 超时兜底。
+   */
+  function waitForLive(sessionId: string, timeoutMs: number): Promise<boolean> {
+    const buffer = buffers.get(sessionId)
+    if (buffer && (buffer.phase === 'live' || buffer.sessionStopped)) {
+      return Promise.resolve(buffer.phase === 'live')
+    }
+    return new Promise((resolve) => {
+      let settled = false
+      function finish(ok: boolean) {
+        if (settled) return
+        settled = true
+        const list = liveWaiters.get(sessionId)
+        if (list) {
+          const i = list.indexOf(finish)
+          if (i >= 0) list.splice(i, 1)
+          if (list.length === 0) liveWaiters.delete(sessionId)
+        }
+        resolve(ok)
+      }
+      liveWaiters.set(sessionId, [...(liveWaiters.get(sessionId) ?? []), finish])
+      setTimeout(() => finish(false), timeoutMs)
+    })
+  }
+
+  /** 唤醒全部等待者（phase=live / 停止短路）；等待者自行判定结果 */
+  function resolveLiveWaiters(sessionId: string) {
+    const list = liveWaiters.get(sessionId)
+    if (list) {
+      liveWaiters.delete(sessionId)
+      for (const f of list) f(true)
+    }
+  }
+
   /** Rust 链路状态事件：同步 phase/subscribed/停止等 */
   function onStateEvent(payload: { session_id: string; phase?: string; detail?: string }) {
+    // 唤醒 live 等待者须先于 buffer 守卫：清 buffer 后在途 spliceHistory 的等待
+    // 也需被唤醒短路（否则 await 悬挂泄漏）；判定在 spliceHistory 侧进行
+    const statePhase = PHASE_MAP[payload.phase ?? ''] ?? null
+    if (statePhase === 'live' || payload.detail === 'stopped' || payload.detail === 'session_missing') {
+      resolveLiveWaiters(payload.session_id)
+    }
+    // buffer 未创建（页面未挂载）时也记录最新订阅阶段：挂载时 ensureBuffer
+    // 继承，避免 live 事件早于页面被丢弃 → phase 停在 idle → spliceHistory 空等
+    if (statePhase) knownPhases.set(payload.session_id, statePhase)
+    if (payload.detail === 'stopped' || payload.detail === 'session_missing' || payload.detail === 'unsubscribed') {
+      knownPhases.delete(payload.session_id)
+    }
     const buffer = buffers.get(payload.session_id)
     if (!buffer) return
     const phase = PHASE_MAP[payload.phase ?? ''] ?? buffer.phase
@@ -231,8 +292,11 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function ensureBuffer(sessionId: string): SessionBuffer {
     let buffer = buffers.get(sessionId)
     if (!buffer) {
+      // 继承最近一次订阅阶段（页面挂载晚于订阅完成时，live 事件已由
+      // onStateEvent 记录到此 map）
+      const known = knownPhases.get(sessionId) ?? 'idle'
       buffer = {
-        phase: 'idle',
+        phase: known,
         subscribed: false,
         subscribing: false,
         lastRenderedOffset: null,
@@ -284,6 +348,11 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
           `[terminalBuffer] offset gap: frame.start=${frame.startOffset}, last_rendered=${buffer.lastRenderedOffset}. Re-splicing history`,
         )
         forceReplay(sessionId)
+      } else {
+        // 冷却期内：安排到期兜底重拼接——冷却期 gap 帧被跳过且不触发 forceReplay；
+        // 若之后无新 gap 帧（流恰在冷却期终止），尾部缺口将永久残留。定时器到期
+        // 主动补一次续传（from=游标），幂等且由 historyPreparing/代数守卫防重
+        scheduleGapRetry(sessionId, GAP_RESPLICE_COOLDOWN_MS - (now - last))
       }
       return
     }
@@ -318,6 +387,26 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     const handler = realtimeHandlers.get(sessionId)
     if (!buffer || !handler) return
 
+    // P1 竞态防护（spec D-A2 单一真源前提 = WS 重播段已全部入缓存）：
+    // phase ∈ {connecting/auth/history} 表示重播未完成，此刻 getHistory 缓存优先会
+    // 命中「部分缓存」→ 游标停在部分尾 → 剩余重播段 end ≤ snapshot 静默入缓存、
+    // 不推事件 → 缺口存在却无 gap 帧触发自愈（若会话恰无新输出则永久缺口）。
+    // 可靠边界 = phase=live（history_end 已收；TCP 有序保证重播帧先于其全部到达）。
+    // 订阅失败/超时：复位拼接态，之后实时帧经 deliverFrame 缺口 → forceReplay 自愈。
+    if (buffer.phase !== 'live') {
+      const ready = await waitForLive(sessionId, SPLICE_WAIT_LIVE_TIMEOUT_MS)
+      if (replayGenerations.get(sessionId) !== gen) return
+      // 重新读 map 拿最新状态（await 后 buffer 闭包被 TS 静态收窄，且 reactive
+      // 值已可能被 onStateEvent 推进）：订阅失败/被取消/停止 → 复位拼接态，
+      // 之后实时帧经 deliverFrame 缺口 → forceReplay 自愈
+      const current = buffers.get(sessionId)
+      if (!ready || !current || current.phase !== 'live' || current.sessionStopped) {
+        buffer.historyPreparing = false
+        handler.onReplayDone?.()
+        return
+      }
+    }
+
     const from = buffer.lastRenderedOffset ?? 0
     let result
     try {
@@ -345,7 +434,17 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     const history = base64ToBytes(result.dataBase64)
     if (history.byteLength > 0) {
       if (handler.writeParsed) {
-        await handler.writeParsed(history)
+        try {
+          await handler.writeParsed(history)
+        } catch (e: any) {
+          // 写入管线异常（极端时序下 xterm 已 dispose）：复位拼接态避免
+          // historyPreparing 永久卡死 → 实时帧永久缓冲；游标未推进，缺口由
+          // 后续实时帧 gap → forceReplay 自愈
+          logger.warn(`[terminalBuffer] history write failed for ${sessionId}:`, e?.message || e)
+          buffer.historyPreparing = false
+          handler.onReplayDone?.()
+          return
+        }
       } else {
         handler.onOutput(history, {
           data: history,
@@ -419,6 +518,33 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     void spliceHistory(sessionId, gen)
   }
 
+  /** gap 冷却期丢帧兜底：冷却期内的 gap 帧被跳过且不触发重拼接，若之后
+   *  无新 gap 帧（流恰在冷却期终止）尾部缺口将永久残留——安排冷却到期后
+   *  主动补一次续传重拼接（幂等：from=游标；breaks 由 historyPreparing / 代数守卫）
+   */
+  function scheduleGapRetry(sessionId: string, delayMs: number) {
+    if (gapRetryTimers.has(sessionId)) return
+    gapRetryTimers.set(
+      sessionId,
+      setTimeout(() => {
+        gapRetryTimers.delete(sessionId)
+        const buffer = buffers.get(sessionId)
+        if (!buffer || buffer.sessionStopped || buffer.historyPreparing || buffer.phase !== 'live') return
+        forceReplay(sessionId)
+      }, delayMs),
+    )
+  }
+
+  /** 进入终端页 = 全量重播：xterm 每次进入都是全新实例，保留旧游标只续传
+   *  [旧游标, tail) 会丢失 [0, 旧游标) 的 scrollback。由 TerminalView onMounted
+   *  在 registerRealtimeHandler（其内部 spliceHistory 立即读游标）之前调用；
+   *  gap 自愈路径的 forceReplay 不走这里——续传补缺口语义保持不变
+   */
+  function resetCursor(sessionId: string) {
+    const buffer = buffers.get(sessionId)
+    if (buffer) buffer.lastRenderedOffset = null
+  }
+
   function getBuffer(sessionId: string): SessionBuffer | undefined {
     return buffers.get(sessionId)
   }
@@ -457,6 +583,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 标记未订阅（手动取消）：取消 Rust 订阅 + 清实时缓冲，保留游标（重开可续） */
   function markUnsubscribed(sessionId: string) {
     invalidatePrepared(sessionId)
+    knownPhases.delete(sessionId)
     terminalUnsubscribe(sessionId).catch(() => {})
     const buffer = buffers.get(sessionId)
     if (buffer) {
@@ -472,6 +599,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 全部未订阅（设备断开时；Rust 链路全部关闭，重连后由 onPaired 重新订阅） */
   function markAllUnsubscribed() {
     terminalUnsubscribeAll().catch(() => {})
+    knownPhases.clear()
     for (const buffer of buffers.values()) {
       buffer.subscribed = false
       buffer.subscribing = false
@@ -484,6 +612,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 标记会话停止：取消 Rust 订阅 + 关链路；游标重置（同 id 重启新流坐标空间） */
   function markSessionStopped(sessionId: string) {
     invalidatePrepared(sessionId)
+    knownPhases.delete(sessionId)
     // 代数推进：中止在途历史拼接（其完成回调会重写游标/拼接态——停止语义下
     // 游标重置必须占先；页面加载遮罩由视图层 HISTORY_SETTLE_TIMEOUT_MS 兜底）
     replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
@@ -521,6 +650,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function clearBuffer(sessionId: string) {
     invalidatePrepared(sessionId)
     replayGenerations.set(sessionId, (replayGenerations.get(sessionId) ?? 0) + 1)
+    knownPhases.delete(sessionId)
+    const gapTimer = gapRetryTimers.get(sessionId)
+    if (gapTimer) {
+      clearTimeout(gapTimer)
+      gapRetryTimers.delete(sessionId)
+    }
     terminalRemove(sessionId).catch(() => {})
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
@@ -532,6 +667,9 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   function clearAllBuffers() {
     preparedSessionId.value = null
     replayGenerations.clear()
+    knownPhases.clear()
+    for (const t of gapRetryTimers.values()) clearTimeout(t)
+    gapRetryTimers.clear()
     terminalUnsubscribeAll().catch(() => {})
     buffers.clear()
     realtimeHandlers.clear()
@@ -622,6 +760,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     markSessionStopped,
     markSessionRunning,
     forceReplay,
+    resetCursor,
     ackRendered,
     clearBuffer,
     clearAllBuffers,

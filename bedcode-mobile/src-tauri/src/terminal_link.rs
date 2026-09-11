@@ -615,6 +615,16 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
     }
 }
 
+/// 重连后桌面端传播模式重置 realtime 的再同步：本端仍标记 batch 时返回
+/// 需补发的 mode 控制帧（否则 None——桌面端默认 realtime 与本端一致）
+fn batch_resync_message(mode: u8) -> Option<String> {
+    if mode == LinkMode::Batch.as_u8() {
+        Some(r#"{"type":"mode","mode":"batch"}"#.to_string())
+    } else {
+        None
+    }
+}
+
 /// 处理 JSON 控制帧（auth_ok / subscribe_ok / history_end / session_stopped / error）
 async fn handle_control_text(
     link: &Arc<TerminalLink>,
@@ -646,6 +656,14 @@ async fn handle_control_text(
         }
         Some("history_end") => {
             link.phase.store(LinkPhase::Live.as_u8(), Ordering::SeqCst);
+            // 重连后桌面端重订阅会把传播模式重置为 realtime（handle_session_subscribe
+            // mode.store(MODE_REALTIME)）：若本端已标记 batch（页面退出）则补发 mode 帧
+            // 恢复——否则 batch 语义在重连后静默失效，空转接收全量实时流量直到下次进页面
+            if let Some(msg) = batch_resync_message(link.mode.load(Ordering::SeqCst)) {
+                if ws_tx.send(WsMsg::Text(msg)).await.is_err() {
+                    return Err(LinkExit::Io);
+                }
+            }
             link.emit_state("live");
         }
         Some("session_stopped") => {
@@ -909,6 +927,13 @@ mod tests {
         out.extend_from_slice(&(data.len() as u32).to_le_bytes());
         out.extend_from_slice(data);
         out
+    }
+
+    #[test]
+    fn batch_resync_message_only_when_batch() {
+        assert_eq!(batch_resync_message(LinkMode::Realtime.as_u8()), None);
+        let msg = batch_resync_message(LinkMode::Batch.as_u8()).expect("batch link must resync");
+        assert_eq!(msg, r#"{"type":"mode","mode":"batch"}"#);
     }
 
     #[test]

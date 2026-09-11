@@ -1,9 +1,11 @@
 /**
  * Terminal Buffer Composable
  *
- * TerminalView 用的 composable — 管理会话终端 WS 订阅与实时输出写入。
- * 输出为 TB v2 二进制帧（前端直连桌面端终端会话路由），数据真源在服务端；
- * 前端维护 lastRenderedSeq（去重基准）+ 历史缓存（页面重进回放源）。
+ * TerminalView 用的 composable — 管理会话终端输出订阅与实时输出写入。
+ * 订阅由 Rust 链路持有（src-tauri/src/terminal_link.rs），前端消费 TB v3 字节帧
+ * （start_offset/end_offset 区间语义）；数据真源 = Rust 会话级字节缓存；前端维护
+ * lastRenderedOffset 字节游标（去重/缺口/截断基准）+ 一次性历史拼接（spliceHistory：
+ * 拼完历史才消费实时帧）。详见 docs/knowledge/pty-output-pipeline.md
  */
 
 import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'

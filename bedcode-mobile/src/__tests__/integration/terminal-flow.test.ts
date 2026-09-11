@@ -113,6 +113,11 @@ afterEach(() => {
 describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输入回传', () => {
   it('实时帧全链路：terminal-frame 事件 → writeCoalescer → terminal.write + 游标推进', async () => {
     const store = useTerminalBufferStore()
+    // 真实链路时序：会话启动订阅 + 已 live（页面挂载晚于订阅完成）；
+    // P1 修复后 spliceHistory 在 phase=live 前不会取历史
+    await store.subscribeSession('s1')
+    emitState('s1', 'live')
+    await flushAsync()
     const terminal = makeMockTerminal()
     const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
     const term = useTerminalBuffer()
@@ -143,6 +148,10 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     })
 
     const store = useTerminalBufferStore()
+    // 订阅已 live：spliceHistory 到 phase=live 才发 getHistory（P1 修复）
+    await store.subscribeSession('s1')
+    emitState('s1', 'live')
+    await flushAsync()
     const terminal = makeMockTerminal()
     const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
     const term = useTerminalBuffer()

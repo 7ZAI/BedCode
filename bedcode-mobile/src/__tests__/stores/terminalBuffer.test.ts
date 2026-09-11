@@ -71,7 +71,7 @@ async function flushAsync(n = 3) {
 describe('terminalBuffer store（Rust 驱动）', () => {
   let store: ReturnType<typeof useTerminalBufferStore>
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
     vi.clearAllMocks()
@@ -81,6 +81,11 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       eventHandlers[name] = cb
       return () => {}
     })
+    // 预注册事件监听：真实链路中 subscribeSession（会话启动）即 ensureEventListeners，
+    // 挂载/测试中 emitState/emitFrame 依赖监听已就位（惰性注册是异步的）
+    store.subscribeSession('s1').catch(() => {})
+    cmd.terminalSubscribe.mockClear()
+    await flushAsync()
     cmd.terminalGetHistory.mockImplementation(async (_s: string, _f: number) => ({
       from: 0,
       minOffset: 0,
@@ -130,6 +135,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
         historyBytes: 3,
         dataBase64: b64('abc'),
       })
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
       })
@@ -159,6 +165,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
         historyBytes: 6,
         dataBase64: b64('abcdef'),
       })
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
       })
@@ -195,6 +202,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
         historyBytes: 3,
         dataBase64: b64('abc'),
       })
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
       })
@@ -222,6 +230,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
         historyBytes: 3,
         dataBase64: b64('abc'),
       })
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
         onClear,
@@ -245,6 +254,162 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       // 锚定重播正常写入
       expect(outputs).toEqual(['abc', 'tuvwxyzxyz'])
       expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(30)
+    })
+
+    it('P1：重播未完成（phase≠live）时 spliceHistory 等待，history_end 到达后才取历史', async () => {
+      const outputs: string[] = []
+      // 注意此处不先 emitState('live')——正是测试等待路径
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      // 未到 live：getHistory 不得发起（WS 重播段未入缓存，缓存优先会命中部分历史）
+      await flushAsync()
+      expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+      // history_end 落地 → 等待被唤醒 → 全量拉取
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 0)
+      expect(outputs).toEqual(['abc'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+    })
+
+    it('P1：等不到 live（订阅失败/停止）→ 超时复位拼接态，不悬挂', async () => {
+      vi.useFakeTimers()
+      try {
+        const onReplayDone = vi.fn()
+        store.registerRealtimeHandler('s1', { onOutput: vi.fn(), onReplayDone })
+        // 越过 SPLICE_WAIT_LIVE_TIMEOUT_MS（8000）：超时兜底复位
+        await vi.advanceTimersByTimeAsync(8001)
+        expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+        expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+        expect(onReplayDone).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('P2：resetCursor 后重拼接 from=0 全量回放（重进页面语义，xterm 全新实例）', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      // 首次进入：历史 [0,6) 写入，游标 6
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 6,
+        historyBytes: 6,
+        dataBase64: b64('abcdef'),
+      })
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      expect(outputs).toEqual(['abcdef'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(6)
+
+      // 重进：resetCursor + forceReplay → from=0 全量回放（含 [0,6) 既有历史）
+      cmd.terminalGetHistory.mockClear()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 9,
+        historyBytes: 9,
+        dataBase64: b64('abcdefghi'),
+      })
+      store.resetCursor('s1')
+      store.forceReplay('s1')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 0)
+      expect(outputs).toEqual(['abcdef', 'abcdefghi'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(9)
+    })
+
+    it('P4：历史写入管线异常 → 复位拼接态不悬挂，后续实时帧正常消费', async () => {
+      const outputs: string[] = []
+      const onReplayDone = vi.fn()
+      emitState('s1', 'live')
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        writeParsed: () => Promise.reject(new Error('xterm disposed')),
+        onReplayDone,
+      })
+      await flushAsync()
+      // 写入失败：拼接态复位 + onReplayDone（不永久缓冲）；游标未推进（缺口自愈兜底）
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+      expect(onReplayDone).toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBeNull()
+      // 失败后可继续消费实时帧（不进入永久缓冲）
+      cmd.terminalGetHistory.mockClear()
+      emitFrame('s1', 3, 6, 'def')
+      expect(outputs).toEqual(['def'])
+    })
+
+    it('P5：缺口冷却期内无新 gap 帧 → 定时器到期主动续传补回（防流尾缺口永久）', async () => {
+      vi.useFakeTimers()
+      try {
+        const outputs: string[] = []
+        emitState('s1', 'live')
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 0,
+          minOffset: 0,
+          snapshotOffset: 3,
+          historyBytes: 3,
+          dataBase64: b64('abc'),
+        })
+        store.registerRealtimeHandler('s1', {
+          onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+        // 缺口帧（start 6 > 游标 3）：冷却期外 → 立即重拼接补 [3,9)
+        cmd.terminalGetHistory.mockClear()
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 3,
+          minOffset: 3,
+          snapshotOffset: 9,
+          historyBytes: 6,
+          dataBase64: b64('defghi'),
+        })
+        emitFrame('s1', 6, 9, 'ghi')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(outputs).toEqual(['abc', 'defghi'])
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(9)
+
+        // 再次缺口（冷却期内）：不立即重拼接；冷期结束后定时器主动补一次
+        cmd.terminalGetHistory.mockClear()
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 9,
+          minOffset: 9,
+          snapshotOffset: 12,
+          historyBytes: 3,
+          dataBase64: b64('jkl'),
+        })
+        emitFrame('s1', 12, 15, 'mno')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+        // 越过 GAP_RESPLICE_COOLDOWN_MS（3000）：定时器触发续传
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 9)
+        expect(outputs).toEqual(['abc', 'defghi', 'jkl'])
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(12)
+      } finally {
+        vi.useRealTimers()
+      }
     })
   })
 
@@ -313,6 +478,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
         historyBytes: 3,
         dataBase64: b64('abc'),
       })
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
       })
@@ -325,6 +491,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
 
   describe('双速传播（页面进出）', () => {
     it('注册 → realtime（进终端页读即传）；注销 → batch（退出页面满批才转发）', async () => {
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
       await flushAsync()
       expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'realtime')
@@ -338,6 +505,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
   describe('输出活动通知', () => {
     it('实时帧触发 terminal_output_activity（节流）', async () => {
       const outputs: string[] = []
+      emitState('s1', 'live')
       store.registerRealtimeHandler('s1', {
         onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
       })

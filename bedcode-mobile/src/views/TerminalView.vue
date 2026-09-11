@@ -818,6 +818,12 @@ onMounted(async () => {
   armServerHistoryWatcher()
   const historyGate = historySettled
 
+  // 进入终端页 = 全量重播：xterm 每次进入都是全新实例，旧游标续传会丢失历史
+  // （含后台期间已推进但从未渲染过的字节）。重置游标必须早于 initTerminal——
+  // 其内部 registerRealtimeHandler 的 spliceHistory 会立即读取游标作为 from；
+  // gap 自愈路径的 forceReplay 不重置游标（续传补缺口语义保持不变）
+  bufferStore.resetCursor(sessionId.value)
+
   await initTerminal()
 
   // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
@@ -833,8 +839,8 @@ onMounted(async () => {
     // 挂载时已写入 xterm）：跳过 forceReplay，避免清空已缓冲历史再次全量回放
     const prepared = bufferStore.consumePrepared() === sessionId.value
     if (!prepared) {
-      // xterm 每次进入都是全新实例：旧游标续传会丢失历史（含后台期间
-      // 已推进但从未渲染过的字节）→ 强制重置游标，服务端全量重播
+      // 全量重播已由上方 resetCursor（spliceHistory from=0）+ 下方重订阅承担；
+      // forceReplay 在此仅为兜底（幂等：from=游标，若 spliceHistory 未及完成则再跑一次）
       forceReplay(sessionId.value)
     }
     await subscribeWithRetry()
@@ -904,8 +910,9 @@ onUnmounted(async () => {
   }
   disposeTerminal()
 
-  // 页面卸载即取消订阅：后台期间的输出由服务端环形保留，
-  // 重新进入时强制全量重播（forceReplay + 服务端 reset 裁决）
+  // 页面卸载：停止前端消费 + 切 batch 传播（Rust 订阅保持，会话未停——
+  // 后台期间的输出由服务端队列 + Rust 缓存保留）；重新进入时由
+  // onMounted 的 resetCursor（全量重播）+ registerRealtimeHandler 拼接历史
   if (!isMockSession(mountedSessionId)) {
     await unsubscribeSession(mountedSessionId)
   }
@@ -1591,7 +1598,7 @@ async function refreshTerminal() {
     // 统一走串行队列（过滤未 fit 默认值 + 单通道保序），失败仅 console.warn
     queueResize(terminalRef.value.cols, terminalRef.value.rows)
     // 数据层兜底：渲染层恢复后内容仍缺失（violation 风暴期间帧被拒）时
-    // 强制全量重播（重置游标 + 重订阅，服务端 reset 裁决重新回放）
+    // 续传重拼接（forceReplay from=游标——同实例 scrollback 仍在，无需全量）
     if (!isMockSession(sessionId.value)) {
       forceReplay(sessionId.value)
       await subscribeWithRetry()
