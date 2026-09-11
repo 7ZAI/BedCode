@@ -10,7 +10,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 use tauri::Emitter;
 
-use crate::enums::{SessionControlPayload, SubscribeMode, TerminalPayload};
+use crate::enums::{SessionControlPayload, TerminalPayload};
 use crate::server::filter::{Direction, FilterContext, TrafficChannel, TrafficFilterChain};
 use crate::server::link_crypto;
 use crate::server::message::Message;
@@ -73,7 +73,7 @@ struct UnsubscribeResult {
 }
 
 /// 终端输出消息（从输出转发任务传回，二进制帧形态，供桌面端本地 WS 使用）
-/// `data` 为已编码的完整帧（含 16 字节 TB v2 帧头），直接 ctx.binary 发送
+/// `data` 为已编码的完整帧（含 16 字节 TB v3 帧头），直接 ctx.binary 发送
 #[derive(Message)]
 #[rtype(result = "()")]
 struct TerminalOutputBinary {
@@ -120,6 +120,12 @@ pub struct TerminalWs {
     /// 的帧）直接丢弃——与 abort 互补，杜绝旧流帧注入新订阅通道（移动端
     /// 字节游标错位 → 连续性违反 → 重订阅风暴的根源）
     stream_generations: std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
+    /// 订阅者实时传播模式（key = `client_id:session_id` → AtomicU8；双速，
+    /// 用户需求 3）：realtime（进终端页，读即传）/ batch（退出终端页但
+    /// 会话未停，满 terminal.batch_bytes 才转发）。由 SetMode 控制帧实时
+    /// 切换，forward_loop 每次循环读取；重订阅时重置为 realtime
+    subscriber_modes:
+        std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU8>>,
     /// 通道类型（注册时定死）：终端 I/O 路由 → Terminal；事件路由（ticket 02）→ Event
     channel_type: ChannelType,
     /// 链路加密待处理协商（issue 04）：auth 帧携带的客户端临时公钥，
@@ -138,6 +144,7 @@ impl TerminalWs {
             output_forwarders: std::collections::HashMap::new(),
             subscribe_tasks: std::collections::HashMap::new(),
             stream_generations: std::collections::HashMap::new(),
+            subscriber_modes: std::collections::HashMap::new(),
             channel_type: ChannelType::Terminal,
             pending_ws_crypto: None,
         }
@@ -145,7 +152,7 @@ impl TerminalWs {
 
     /// 每会话终端路由构造（spec §5.1）：连接创建即绑定 session_id，
     /// 订阅即连接（无 subscribed_sessions 多路复用），控制帧走简化
-    /// JSON 协议（无 message_id/expect_response），输出帧为 TB v2 二进制
+    /// JSON 协议（无 message_id/expect_response），输出帧为 TB v3 二进制
     pub fn new_for_session(addr: SocketAddr, session_id: String) -> Self {
         let mut ws = Self::new(addr);
         ws.bound_session = Some(session_id);
@@ -303,7 +310,7 @@ impl TerminalWs {
     }
 
     /// 出站二进制帧：经过滤链后写出（含 metrics 计数）；被拒 → 丢弃 + warn。
-    /// 承载 TB v2 终端输出流（spec §5.3），加密过滤器的主战场
+    /// 承载 TB v3 终端输出流（spec §5.3），加密过滤器的主战场
     fn send_binary_filtered(&self, data: Vec<u8>, ctx: &mut ws::WebsocketContext<Self>) {
         let chain = TrafficFilterChain::global();
         if chain.is_empty() {
@@ -424,6 +431,8 @@ impl Actor for TerminalWs {
         for (_, gen) in self.stream_generations.drain() {
             gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         }
+        // 订阅者模式原子随连接销毁（SetMode 仅存活于连接生命周期）
+        self.subscriber_modes.clear();
 
         // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录。
         // 离线判定（DEVICE_DISCONNECTED + 连接历史回填）迁入 async 块：
@@ -669,11 +678,17 @@ impl TerminalWs {
                 self.pending_ws_crypto = crypto;
                 self.handle_session_auth(token, ctx);
             }
-            control_frame::ClientFrame::Subscribe => {
+            control_frame::ClientFrame::Subscribe { from_offset } => {
                 if !self.require_session_auth(ctx) {
                     return;
                 }
-                self.handle_session_subscribe(ctx);
+                self.handle_session_subscribe(from_offset, ctx);
+            }
+            control_frame::ClientFrame::SetMode { mode } => {
+                if !self.require_session_auth(ctx) {
+                    return;
+                }
+                self.handle_session_mode(mode, ctx);
             }
             control_frame::ClientFrame::Input { data, special_key } => {
                 if !self.require_session_auth(ctx) {
@@ -743,16 +758,18 @@ impl TerminalWs {
     ///
     /// - 每会话 mpsc 容量 32768（spec §5.4 D7：远程通道背压余量，旧路由保持 8192）
     /// - subscribe_ok 经 oneshot 前置返回（05 模式：不被历史发送背压阻塞）
-    /// - forward_loop 输出 TB v2 二进制帧（spec §5.3），合并策略 30ms/64KB
-    /// - 重订阅（前端 seq 缺口自愈）abort 旧 forwarder + 流代数递增，防双流
-    fn handle_session_subscribe(&mut self, ctx: &mut ws::WebsocketContext<Self>) {
+    /// - forward_loop 输出 TB v3 二进制帧（spec §5.3），合并策略 30ms/64KB
+    /// - 重订阅（前端 offset 缺口自愈）abort 旧 forwarder + 流代数递增，防双流
+    /// 新路由订阅（/ws/terminal/session/{id}，spec §5.4）：
+    /// 控制帧 subscribe 可携带 from_offset（字节锚点）→ 历史按游标截取回放
+    fn handle_session_subscribe(&mut self, from_offset: Option<u64>, ctx: &mut ws::WebsocketContext<Self>) {
         let session_id = self.bound_session.clone().unwrap();
         let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
 
         // 替换订阅者前先中止旧转发任务（残留帧会与新生订阅流交错，
-        // 前端 seq 游标错位 → 重订阅风暴自持循环），语义与旧路由一致
+        // 前端字节游标错位 → 重订阅风暴自持循环），语义与旧路由一致
         let fwd_key = format!("{}:{}", client_id, session_id);
         if let Some(prev) = self.output_forwarders.remove(&fwd_key) {
             tracing::debug!("[TerminalWs] Aborting previous output forwarder: {}", fwd_key);
@@ -770,6 +787,15 @@ impl TerminalWs {
             .clone();
         let my_gen = generation.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
 
+        // 订阅者模式原子：重订阅/新建订阅重置为 realtime（进终端页即读即传）；
+        // 由 SetMode 控制帧实时切换为 batch（退出终端页），支持双速传播
+        let mode = self
+            .subscriber_modes
+            .entry(fwd_key.clone())
+            .or_insert_with(|| std::sync::Arc::new(std::sync::atomic::AtomicU8::new(forward::MODE_REALTIME)))
+            .clone();
+        mode.store(forward::MODE_REALTIME, std::sync::atomic::Ordering::SeqCst);
+
         // 每会话独立输出通道（spec §5.4）：容量 32768，大历史重播 + 实时
         // 并发到达时留足缓冲余量；on_output 保持 try_send 背压丢弃
         let (output_tx, output_rx) = tokio::sync::mpsc::channel::<OutputFrame>(32768);
@@ -783,7 +809,7 @@ impl TerminalWs {
         // 阻塞）；仅当会话不存在（已从认证时的快照移除）时走 None 分支
         let subscribe_handle = tokio::spawn(async move {
             let result = global_manager
-                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx))
+                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx), from_offset)
                 .await;
             if result.is_none() {
                 let _ = addr
@@ -808,12 +834,12 @@ impl TerminalWs {
             }
         });
 
-        // 输出转发任务：OutputEvent 流 → TB v2 二进制帧（spec §5.3）。
+        // 输出转发任务：OutputEvent 流 → TB v3 二进制帧（spec §5.3）。
         // 本地通道（桌面端环回）走小窗口合并（4ms）：直通（一帧一 message）在输出
         // 风暴期消息数爆炸（每秒上百条 WS 消息），WebKitGTK WS 接收缓冲溢出会丢
-        // 整消息 → seq 缺口 → 字节断裂残渣。合并后消息数降一个量级，缓冲不溢出；
+        // 整消息 → offset 缺口 → 字节断裂残渣。合并后消息数降一个量级，缓冲不溢出；
         // 4ms 窗口远低于远程 30ms，键盘回显无感知延迟。前端 parseFrames 已支持
-        // 解析合并 message 内全部 TB v2 帧（丢尾帧问题已修复）。
+        // 解析合并 message 内全部 TB v3 帧（丢尾帧问题已修复）。
         // 远程通道按 merge_output 开关决定合并/直通（语义与旧路由一致）。
         // 注意：此守卫与另一 forward 启动点（:1252 附近）语义必须保持一致。
         let addr = ctx.address();
@@ -831,6 +857,7 @@ impl TerminalWs {
             Duration::ZERO
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
+        let batch_bytes = config.terminal.batch_bytes;
         let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
             output_rx,
             out_tx,
@@ -838,6 +865,8 @@ impl TerminalWs {
             max_buffer_size,
             generation,
             my_gen,
+            mode,
+            batch_bytes,
         ));
         self.output_forwarders.insert(fwd_key, fwd_handle);
 
@@ -852,8 +881,10 @@ impl TerminalWs {
                             break;
                         }
                     }
-                    forward::ForwardOutput::HistoryEnd { snapshot_seq, .. } => {
-                        let frame = ServerFrame::HistoryEnd { snapshot_seq };
+                    forward::ForwardOutput::HistoryEnd {
+                        snapshot_offset, ..
+                    } => {
+                        let frame = ServerFrame::HistoryEnd { snapshot_offset };
                         if addr.send(SendTextMessage { text: frame.to_json() }).await.is_err() {
                             tracing::debug!("[OutputForwarder] Actor stopped, exiting loop");
                             break;
@@ -864,8 +895,25 @@ impl TerminalWs {
         });
     }
 
+    /// 新路由传播模式切换（双速，用户需求 3）：更新绑定会话订阅者的 mode 原子，
+    /// forward_loop 每次循环读取实现即时生效；未订阅（连接建立后未发 subscribe）
+    /// 时忽略（订阅时统一重置为 realtime）
+    fn handle_session_mode(&self, mode: control_frame::WatchMode, _ctx: &mut ws::WebsocketContext<Self>) {
+        let Some(session_id) = self.bound_session.clone() else {
+            return;
+        };
+        let client_id = self.session.addr.to_string();
+        let fwd_key = format!("{client_id}:{session_id}");
+        let Some(atomic) = self.subscriber_modes.get(&fwd_key) else {
+            tracing::debug!(fwd_key = %fwd_key, mode = ?mode, "SetMode before subscribe, ignored");
+            return;
+        };
+        atomic.store(mode.as_u8(), std::sync::atomic::Ordering::SeqCst);
+        tracing::debug!(fwd_key = %fwd_key, mode = ?mode, "terminal propagate mode updated");
+    }
+
     /// 处理客户端背压 ack 帧（spec 04-06 渲染反馈环）：解析后交给全局输出
-    /// 管理器推进该会话未 ack 记账（释放 ≤ last_rendered_seq 的输出字节），
+    /// 管理器推进该会话未 ack 记账（释放 ≤ last_rendered_offset 的输出字节），
     /// 使 PTY 读取得以恢复。非法帧（未知二进制）仅记日志，不中断连接——
     /// ack 尽力而为，丢失时由水位暂停兜底，不缺字节不丢帧
     ///
@@ -889,10 +937,10 @@ impl TerminalWs {
             }
         };
         match control_frame::parse_ack_frame(bytes) {
-            Ok((acked_seq, session_id)) => {
+            Ok((acked_offset, session_id)) => {
                 actix::spawn(async move {
                     GlobalOutputManager::global()
-                        .ack(&session_id, acked_seq, source)
+                        .ack(&session_id, acked_offset, source)
                         .await;
                 });
             }
@@ -1154,8 +1202,8 @@ impl TerminalWs {
                     }
                 }
             }
-            crate::enums::TerminalAction::Subscribe { start_seq } => {
-                self.handle_subscribe(session_id, start_seq, message_id, ctx);
+            crate::enums::TerminalAction::Subscribe => {
+                self.handle_subscribe(session_id, message_id, ctx);
             }
             crate::enums::TerminalAction::Unsubscribe => {
                 self.handle_unsubscribe(session_id, message_id, ctx);
@@ -1166,22 +1214,14 @@ impl TerminalWs {
 
     /// 订阅会话输出 — 使用 actix::spawn 桥接异步调用
     ///
-    /// 05 快照协议：wire start_seq 仅作兼容保留（恒忽略），历史全量重播
+    /// 05 快照协议：历史全量重播（wire 无游标参数；客户端按字节游标
+    /// min_offset 裁过去重回放段）
     fn handle_subscribe(
         &mut self,
         session_id: String,
-        start_seq: Option<u64>,
         message_id: String,
         ctx: &mut ws::WebsocketContext<Self>,
     ) {
-        // 05 快照协议忽略 wire start_seq（恒全量重播），留日志便于排查
-        if start_seq.is_some() {
-            tracing::debug!(
-                "[TerminalWs] 05 snapshot protocol ignores wire start_seq={:?}",
-                start_seq
-            );
-        }
-
         let global_manager = GlobalOutputManager::global();
         let client_id = self.session.addr.to_string();
         let addr = ctx.address();
@@ -1238,7 +1278,7 @@ impl TerminalWs {
         // 防止旧历史注入新订阅者通道造成客户端重复字节）
         let subscribe_handle = tokio::spawn(async move {
             let result = global_manager
-                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx))
+                .subscribe(&session_id_for_sub, &client_id, output_tx, Some(resp_tx), None)
                 .await;
             // 响应已通过 resp_tx 前置返回；此处仅处理会话不存在（resp_tx 已丢弃）
             if result.is_none() {
@@ -1266,8 +1306,8 @@ impl TerminalWs {
             }
         });
 
-        // 启动输出转发任务：将 OutputEvent 转为 TB v2 二进制帧发到 actor。
-        // 旧 /ws/terminal 兼容路由（base64 JSON 文本帧）已删除，仅剩 TB v2
+        // 启动输出转发任务：将 OutputEvent 转为 TB v3 二进制帧发到 actor。
+        // 旧 /ws/terminal 兼容路由（base64 JSON 文本帧）已删除，仅剩 TB v3 二进制帧
         let addr = ctx.address();
         let config = AppConfig::global();
         let flush_interval = Duration::from_millis(config.terminal.flush_interval_ms);
@@ -1287,6 +1327,7 @@ impl TerminalWs {
             Duration::ZERO
         };
         let (out_tx, mut out_rx) = tokio::sync::mpsc::channel::<forward::ForwardOutput>(64);
+        // 旧路由无 SetMode 控制帧（无双速语义）：恒 realtime（读即传合并）
         let fwd_handle = spawn_with_error_boundary("output_forward_loop", forward::forward_loop(
             output_rx,
             out_tx,
@@ -1294,6 +1335,8 @@ impl TerminalWs {
             max_buffer_size,
             generation,
             my_gen,
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(forward::MODE_REALTIME)),
+            config.terminal.batch_bytes,
         ));
         // 注册转发任务：替换订阅 / 取消订阅 / 断连时 abort
         self.output_forwarders.insert(fwd_key, fwd_handle);
@@ -1419,17 +1462,14 @@ impl Handler<SubscribeResult> for TerminalWs {
         match msg.result {
             Some(response) => {
                 self.session.subscribed_sessions.insert(msg.session_id.clone());
-                // 05 快照协议恒全量重播：mode 恒 Reset、offsets 恒 0，
-                // 合成常量保旧客户端（本地终端/移动端）wire 解析兼容；
-                // 06 新路由不走此路径（控制帧 subscribe_ok 无这些字段）
+                // 旧路由 wire 字段名（min_seq/max_seq/history_count）不变，值承载
+                // TB v3 字节语义（min_offset/snapshot_offset/history_bytes）；
+                // 06 新路由不走此路径（控制帧 subscribe_ok）
                 let ws_msg = Message::subscribe_response_with_request_id(
                     &msg.session_id,
-                    response.min_seq,
-                    response.snapshot_seq,
-                    response.history_count,
-                    SubscribeMode::Reset,
-                    0,
-                    0,
+                    response.min_offset,
+                    response.snapshot_offset,
+                    response.history_bytes as usize,
                     &msg.request_id,
                 );
                 if let Ok(json) = ws_msg.to_json() {
@@ -1461,9 +1501,10 @@ impl Handler<SessionSubscribeOutcome> for TerminalWs {
         match msg.result {
             Some(response) => {
                 let frame = ServerFrame::SubscribeOk {
-                    snapshot_seq: response.snapshot_seq,
-                    min_seq: response.min_seq,
-                    history_count: response.history_count,
+                    protocol: 3,
+                    snapshot_offset: response.snapshot_offset,
+                    min_offset: response.min_offset,
+                    history_bytes: response.history_bytes,
                 };
                 self.send_text_filtered(frame.to_json(), ctx);
             }

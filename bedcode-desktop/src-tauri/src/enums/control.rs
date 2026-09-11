@@ -38,10 +38,6 @@ pub enum SessionControlAction {
         #[serde(default)]
         force: bool,
     },
-    /// 加入会话，开始接收输出
-    JoinSession { session_id: String },
-    /// 离开会话，停止接收输出
-    LeaveSession { session_id: String },
     /// 会话变更通知 (created/stopped/removed)
     SessionChanged {
         change_type: String,
@@ -86,35 +82,17 @@ pub struct TerminalPayload {
 /// 终端动作
 ///
 /// 终端相关的所有操作类型：
-/// - Output: PTY 输出数据推送 (服务端 → 客户端)
 /// - Input: 客户端输入发送 (客户端 → 服务端)
 /// - Subscribe: 订阅会话输出 (客户端 → 服务端)
 /// - SubscribeResponse: 订阅响应 (服务端 → 客户端)
 /// - Unsubscribe: 取消订阅 (客户端 → 服务端)
 /// - UnsubscribeResponse: 取消订阅响应 (服务端 → 客户端)
+///
+/// PTY 输出不再经 JSON 文本帧（v2 base64 Output action 已随 JoinSession 链
+/// 删除），统一走 TB v3 二进制帧（server/ws/terminal_ws/forward.rs）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TerminalAction {
-    /// 输出消息 (服务端 → 客户端)
-    /// PTY 输出数据推送到客户端
-    Output {
-        /// Base64 编码的输出数据
-        data: String,
-        /// 是否等待输入
-        is_waiting: bool,
-        /// 合并消息的起始索引，用于去重和增量同步起点
-        index: usize,
-        /// 合并消息的结束索引，用于精确去重（合并多条事件时 index..=end_index）
-        #[serde(skip_serializing_if = "Option::is_none")]
-        end_index: Option<usize>,
-        /// 合并消息的起始字节偏移（会话流坐标），供字节级游标续传
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        start_offset: Option<u64>,
-        /// 合并消息的结束字节偏移（会话流坐标）
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        end_offset: Option<u64>,
-    },
-
     /// 输入消息 (客户端 → 服务端)
     /// 客户端发送输入到 PTY
     Input {
@@ -127,26 +105,19 @@ pub enum TerminalAction {
 
     /// 订阅输出 (客户端 → 服务端)
     /// 客户端订阅会话输出，实现增量同步
-    Subscribe {
-        /// 起始序号，不指定则从头补完
-        #[serde(skip_serializing_if = "Option::is_none")]
-        start_seq: Option<u64>,
-    },
+    Subscribe,
 
     /// 订阅响应 (服务端 → 客户端)
+    /// TB v3：字段名保留旧协议（增量演进），值承载字节语义——
+    /// min_seq = min_offset（最早存续字节）、max_seq = snapshot_offset（订阅时刻
+    /// 累计字节）、history_count = history_bytes（驻留历史总字节）
     SubscribeResponse {
-        /// 最小可用序号（用于判断数据是否被覆盖）
-        min_seq: u64,
-        /// 当前最大序号
-        max_seq: u64,
-        /// 历史消息数量
-        history_count: usize,
-        /// 订阅裁决：incremental = 从游标续传；reset = 清屏全量重播
-        mode: SubscribeMode,
         /// 环形保留区间最小字节偏移（更早头部已被淘汰）
-        min_offset: u64,
-        /// 环形保留区间最大字节偏移
-        max_offset: u64,
+        min_seq: u64,
+        /// 订阅时刻累计字节数（历史边界）
+        max_seq: u64,
+        /// 驻留历史总字节数
+        history_count: usize,
     },
 
     /// 取消订阅 (客户端 → 服务端)
@@ -154,14 +125,4 @@ pub enum TerminalAction {
 
     /// 取消订阅响应 (服务端 → 客户端)
     UnsubscribeResponse,
-}
-
-/// 订阅模式 — 服务端基于真源（输出队列保留区间）裁决，消费者零猜测
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SubscribeMode {
-    /// 游标在保留区间内：从游标字节级裁剪续传
-    Incremental,
-    /// 游标已失效（早于 min_offset / 晚于 max_offset / 首次订阅）：清屏全量重播
-    Reset,
 }

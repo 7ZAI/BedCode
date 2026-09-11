@@ -8,8 +8,8 @@
 //! 本模块保留 WS 环回代码不变，提供一条并行的 Channel 传输路径，由前端按
 //! `VITE_TERMINAL_TRANSPORT`（"ws" | "channel"）选择，便于 A/B 验证。
 //!
-//! 协议复用 WS 同款 TB v2 帧 + 快照 seq 语义：`subscribe_terminal_channel`
-//! 返回值携带快照元数据（min_seq / snapshot_seq / history_count / client_id），
+//! 协议复用 WS 同款 TB v3 帧 + 快照字节语义：`subscribe_terminal_channel`
+//! 返回值携带快照元数据（min_offset / snapshot_offset / history_bytes / client_id），
 //! 输出帧经 Channel 以 Raw 字节持续推送；背压 ack 走 `terminal_channel_ack`
 //! 命令（同 WS 的 ack 帧语义，source = Desktop）。
 //!
@@ -30,16 +30,16 @@ use crate::system::config::AppConfig;
 use crate::Result;
 
 /// 快照订阅元数据（Channel 传输的 subscribe 返回值；字段与 WS 控制帧
-/// subscribe_response 对齐，camelCase 供前端直接读取）
+/// subscribe_ok 对齐，camelCase 供前端直接读取，TB v3 字节三件套）
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChannelSubscribeResponse {
-    /// 队列最早存续事件序号（> 0 表示历史头部被环形淘汰）
-    pub min_seq: u64,
-    /// 订阅时刻队列最新序号（历史边界）
-    pub snapshot_seq: u64,
-    /// 历史事件数量
-    pub history_count: usize,
+    /// 队列最早存续字节位置（环形淘汰后推进；> 游标表示历史被截断）
+    pub min_offset: u64,
+    /// 订阅时刻累计字节数（历史边界）
+    pub snapshot_offset: u64,
+    /// 驻留历史总字节数
+    pub history_bytes: u64,
     /// 本次订阅的唯一 client_id（前端 stop / 重订阅时据此精确取消）
     pub client_id: String,
 }
@@ -78,6 +78,7 @@ pub async fn subscribe_terminal_channel(
     // 每次订阅独立 generation：仅本订阅使用该 forward_loop，无流代数替换，
     // my_gen=0 恒等于 generation，门控不生效（清理靠 abort）
     let generation = Arc::new(AtomicU64::new(0));
+    // Channel 路径为桌面本地环回（无 SetMode 双速语义）：恒 realtime
     let fwd_handle = tokio::spawn(forward::forward_loop(
         output_rx,
         out_tx,
@@ -85,6 +86,8 @@ pub async fn subscribe_terminal_channel(
         config.terminal.max_buffer_size,
         generation,
         0,
+        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(forward::MODE_REALTIME)),
+        config.terminal.batch_bytes,
     ));
 
     // 消费：ForwardOutput → Channel 推送。退出（out_rx 关闭）仅 abort forward，
@@ -103,7 +106,7 @@ pub async fn subscribe_terminal_channel(
                 }
                 forward::ForwardOutput::HistoryEnd { .. } => {
                     // 快照历史边界标记：Channel 路径经命令返回值已携带快照元数据，
-                    // 前端按 seq 去重跳过历史段，标记本身无需透传
+                    // 前端按字节区间跳过历史段（快照元数据已含边界），标记本身无需透传
                 }
             }
         }
@@ -116,7 +119,7 @@ pub async fn subscribe_terminal_channel(
     // 关闭 → forward_loop 退出 → out_tx 关闭 → consumer 退出（abort no-op），
     // 整条任务链自然回收，无需显式 abort（fwd_handle 已 move 进 consumer）
     let response = manager
-        .subscribe(&session_id, &client_id, output_tx, None)
+        .subscribe(&session_id, &client_id, output_tx, None, None)
         .await
         .ok_or_else(|| {
             crate::AppError::NotFound(format!(
@@ -126,9 +129,9 @@ pub async fn subscribe_terminal_channel(
         })?;
 
     Ok(ChannelSubscribeResponse {
-        min_seq: response.min_seq,
-        snapshot_seq: response.snapshot_seq,
-        history_count: response.history_count,
+        min_offset: response.min_offset,
+        snapshot_offset: response.snapshot_offset,
+        history_bytes: response.history_bytes,
         client_id,
     })
 }
@@ -147,12 +150,12 @@ pub async fn unsubscribe_terminal_channel(session_id: String, client_id: String)
 
 /// 终端输出 ack（Channel 路径的背压反馈环 Rust 侧入口）。
 ///
-/// 语义同 WS ack 帧：推进会话未 ack 记账（释放 ≤ acked_seq 的输出字节），
+/// 语义同 WS ack 帧：推进会话未 ack 记账（释放 ≤ acked_offset 的输出字节），
 /// 使 PTY 读取得以恢复。source 恒为 Desktop（本地 WebView 渲染端）。
 #[tauri::command]
-pub async fn terminal_channel_ack(session_id: String, acked_seq: u64) -> Result<()> {
+pub async fn terminal_channel_ack(session_id: String, acked_offset: u64) -> Result<()> {
     GlobalOutputManager::global()
-        .ack(&session_id, acked_seq, RendererSource::Desktop)
+        .ack(&session_id, acked_offset, RendererSource::Desktop)
         .await;
     Ok(())
 }

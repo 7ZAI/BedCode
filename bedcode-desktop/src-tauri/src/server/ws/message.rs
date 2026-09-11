@@ -13,7 +13,6 @@ use crate::enums::control::{
 };
 use crate::enums::special_key::KeyCombo;
 use crate::enums::summary::SessionSummary;
-use crate::enums::SubscribeMode;
 use crate::enums::SyncPayload;
 
 // ==================== Ack 响应代码常量 ====================
@@ -201,59 +200,6 @@ pub enum Message {
 // ==================== 辅助方法 ====================
 
 impl Message {
-    /// 创建终端输出消息
-    pub fn output(session_id: &str, data: &[u8], is_waiting: bool, index: usize) -> Self {
-        Message::Terminal {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.to_string(),
-            token: String::new(),
-            payload: TerminalPayload {
-                action: TerminalAction::Output {
-                    data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, data),
-                    is_waiting,
-                    index,
-                    end_index: None,
-                    start_offset: None,
-                    end_offset: None,
-                },
-            },
-        }
-    }
-
-    /// 创建终端输出消息（使用已编码的 Base64 数据）
-    /// 用于数据已经经过 Base64 编码的场景（如从 PTY 输出缓冲区转发）
-    /// end_index 在合并多条事件时提供结束索引，前端可用其精确更新去重游标
-    /// start_offset/end_offset 提供字节级游标（会话流坐标），供增量续传
-    pub fn output_from_base64(
-        session_id: &str,
-        data_base64: &str,
-        is_waiting: bool,
-        index: usize,
-        end_index: Option<usize>,
-        start_offset: Option<u64>,
-        end_offset: Option<u64>,
-    ) -> Self {
-        Message::Terminal {
-            message_id: generate_message_id(),
-            expect_response: false,
-            timestamp: Utc::now().timestamp_millis(),
-            session_id: session_id.to_string(),
-            token: String::new(),
-            payload: TerminalPayload {
-                action: TerminalAction::Output {
-                    data: data_base64.to_string(),
-                    is_waiting,
-                    index,
-                    end_index,
-                    start_offset,
-                    end_offset,
-                },
-            },
-        }
-    }
-
     /// 创建终端输入消息
     pub fn input(session_id: &str, data: &str, special_key: Option<KeyCombo>) -> Self {
         Message::Terminal {
@@ -290,7 +236,7 @@ impl Message {
     }
 
     /// 创建终端订阅消息
-    pub fn subscribe(session_id: &str, start_seq: Option<u64>) -> Self {
+    pub fn subscribe(session_id: &str) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: false,
@@ -298,13 +244,13 @@ impl Message {
             session_id: session_id.to_string(),
             token: String::new(),
             payload: TerminalPayload {
-                action: TerminalAction::Subscribe { start_seq },
+                action: TerminalAction::Subscribe,
             },
         }
     }
 
     /// 创建终端订阅消息（带响应期望）
-    pub fn subscribe_with_response(session_id: &str, start_seq: Option<u64>) -> Self {
+    pub fn subscribe_with_response(session_id: &str) -> Self {
         Message::Terminal {
             message_id: generate_message_id(),
             expect_response: true,
@@ -312,46 +258,20 @@ impl Message {
             session_id: session_id.to_string(),
             token: String::new(),
             payload: TerminalPayload {
-                action: TerminalAction::Subscribe { start_seq },
+                action: TerminalAction::Subscribe,
             },
         }
     }
 
-    /// 创建终端订阅响应消息
-    pub fn subscribe_response(
-        session_id: &str,
-        min_seq: u64,
-        max_seq: u64,
-        history_count: usize,
-        mode: SubscribeMode,
-        min_offset: u64,
-        max_offset: u64,
-    ) -> Self {
-        Self::subscribe_response_with_request_id(
-            session_id,
-            min_seq,
-            max_seq,
-            history_count,
-            mode,
-            min_offset,
-            max_offset,
-            &generate_message_id(),
-        )
-    }
-
     /// 创建终端订阅响应消息（携带原始 request_id）
     ///
-    /// 用于回复 `expect_response=true` 的订阅请求，使客户端能匹配 pending 请求
-    /// mode/min_offset/max_offset 为订阅裁决信息（见 SubscribeMode），
-    /// 消费者据此决定清屏重播（reset）或从游标续传（incremental）
+    /// 用于回复 `expect_response=true` 的订阅请求，使客户端能匹配 pending 请求；
+    /// 字段名保留旧协议（min_seq/max_seq/history_count），值承载 TB v3 字节语义
     pub fn subscribe_response_with_request_id(
         session_id: &str,
         min_seq: u64,
         max_seq: u64,
         history_count: usize,
-        mode: SubscribeMode,
-        min_offset: u64,
-        max_offset: u64,
         request_id: &str,
     ) -> Self {
         Message::Terminal {
@@ -365,9 +285,6 @@ impl Message {
                     min_seq,
                     max_seq,
                     history_count,
-                    mode,
-                    min_offset,
-                    max_offset,
                 },
             },
         }
@@ -913,81 +830,6 @@ mod tests {
     // ==================== 构造器 ====================
 
     #[test]
-    fn output_constructor_base64_encodes_payload() {
-        let m = Message::output("sess-1", b"hello", false, 5);
-        match &m {
-            Message::Terminal {
-                message_id,
-                expect_response,
-                timestamp,
-                session_id,
-                token,
-                payload:
-                    TerminalPayload {
-                        action:
-                            TerminalAction::Output {
-                                data,
-                                is_waiting,
-                                index,
-                                end_index,
-                                start_offset,
-                                end_offset,
-                            },
-                    },
-            } => {
-                assert_eq!(session_id, "sess-1");
-                assert_eq!(token, "");
-                assert!(!expect_response);
-                assert!(!message_id.is_empty());
-                assert_recent_timestamp(*timestamp);
-                // 真源：手工计算 "hello" 的 Base64 编码
-                assert_eq!(data, "aGVsbG8=");
-                assert!(!is_waiting);
-                assert_eq!(*index, 5);
-                assert!(end_index.is_none());
-                assert!(start_offset.is_none());
-                assert!(end_offset.is_none());
-                // 解码回原文，验证 Base64 载荷可逆
-                assert_eq!(
-                    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data).unwrap(),
-                    b"hello"
-                );
-            }
-            _ => panic!("期望 terminal 消息"),
-        }
-    }
-
-    #[test]
-    fn output_from_base64_constructor_preserves_cursors() {
-        let m = Message::output_from_base64("sess-1", "aGVsbG8=", true, 3, Some(7), Some(100), Some(200));
-        match &m {
-            Message::Terminal {
-                payload:
-                    TerminalPayload {
-                        action:
-                            TerminalAction::Output {
-                                data,
-                                is_waiting,
-                                index,
-                                end_index,
-                                start_offset,
-                                end_offset,
-                            },
-                    },
-                ..
-            } => {
-                assert_eq!(data, "aGVsbG8=");
-                assert!(*is_waiting);
-                assert_eq!(*index, 3);
-                assert_eq!(*end_index, Some(7));
-                assert_eq!(*start_offset, Some(100));
-                assert_eq!(*end_offset, Some(200));
-            }
-            _ => panic!("期望 output 动作"),
-        }
-    }
-
-    #[test]
     fn input_constructor_sets_data_without_response_expectation() {
         let m = Message::input("sess-1", "ls -la", None);
         assert!(!m.expect_response());
@@ -1030,39 +872,29 @@ mod tests {
     }
 
     #[test]
-    fn subscribe_constructors_carry_start_seq_and_expectation() {
-        let m = Message::subscribe("sess-1", Some(42));
+    fn subscribe_constructors_carry_no_seq_and_expectation() {
+        let m = Message::subscribe("sess-1");
         assert!(!m.expect_response());
-        let m2 = Message::subscribe_with_response("sess-1", None);
+        let m2 = Message::subscribe_with_response("sess-1");
         assert!(m2.expect_response());
-        match (&m, &m2) {
-            (
+        for msg in [&m, &m2] {
+            assert!(matches!(
+                msg,
                 Message::Terminal {
                     payload:
                         TerminalPayload {
-                            action: TerminalAction::Subscribe { start_seq },
+                            action: TerminalAction::Subscribe,
                         },
                     ..
-                },
-                Message::Terminal {
-                    payload:
-                        TerminalPayload {
-                            action: TerminalAction::Subscribe { start_seq: s2 },
-                        },
-                    ..
-                },
-            ) => {
-                assert_eq!(*start_seq, Some(42));
-                assert!(s2.is_none());
-            }
-            _ => panic!("期望 subscribe 动作"),
+                }
+            ));
         }
     }
 
     #[test]
-    fn subscribe_response_constructors_set_mode_and_request_id() {
-        let m = Message::subscribe_response("sess-1", 10, 20, 5, SubscribeMode::Incremental, 100, 200);
-        match &m {
+    fn subscribe_response_constructor_carries_offsets_and_request_id() {
+        let m2 = Message::subscribe_response_with_request_id("sess-1", 1, 2, 0, "req-7");
+        match &m2 {
             Message::Terminal {
                 payload:
                     TerminalPayload {
@@ -1071,28 +903,17 @@ mod tests {
                                 min_seq,
                                 max_seq,
                                 history_count,
-                                mode,
-                                min_offset,
-                                max_offset,
                             },
                     },
                 ..
             } => {
-                assert_eq!(*min_seq, 10);
-                assert_eq!(*max_seq, 20);
-                assert_eq!(*history_count, 5);
-                assert_eq!(*mode, SubscribeMode::Incremental);
-                assert_eq!(*min_offset, 100);
-                assert_eq!(*max_offset, 200);
+                assert_eq!(*min_seq, 1);
+                assert_eq!(*max_seq, 2);
+                assert_eq!(*history_count, 0);
             }
             _ => panic!("期望 subscribe_response 动作"),
         }
-        assert!(!m.expect_response());
-        // 无 request_id 版本使用生成的随机 ID
-        assert!(!m.message_id().unwrap().is_empty());
-
-        // 携带 request_id 版本把请求 ID 用作消息 ID，客户端据此匹配 pending 请求
-        let m2 = Message::subscribe_response_with_request_id("sess-1", 1, 2, 0, SubscribeMode::Reset, 0, 0, "req-7");
+        // 请求 ID 用作消息 ID，客户端据此匹配 pending 请求
         assert_eq!(m2.message_id(), Some("req-7"));
     }
 
@@ -1355,7 +1176,6 @@ mod tests {
     fn message_type_mapping_covers_all_variants() {
         // 逐变体验证类型名映射，防止序列化标签与调试名漂移
         let cases: Vec<(Message, &str)> = vec![
-            (Message::output("s", b"x", false, 0), "terminal"),
             (Message::auth(None, AuthPayload::default()), "auth"),
             (
                 Message::session_control(SessionControlAction::ListSessions, None),
@@ -1410,7 +1230,7 @@ mod tests {
     fn expect_response_accessor_is_false_for_one_way_notifications() {
         assert!(Message::input_with_response("s", "x", None).expect_response());
         assert!(!Message::input("s", "x", None).expect_response());
-        assert!(Message::subscribe_with_response("s", None).expect_response());
+        assert!(Message::subscribe_with_response("s").expect_response());
         assert!(Message::session_control_with_response(SessionControlAction::ListSessions, None).expect_response());
         assert!(Message::session_config_with_response(SessionConfigAction::ListSessionConfigs, None).expect_response());
         assert!(!Message::server_closed("r", false).expect_response());
@@ -1447,32 +1267,6 @@ mod tests {
 
     // ==================== 序列化 ====================
 
-    #[test]
-    fn to_json_output_message_serializes_known_fields() {
-        let m = Message::output("sess-1", b"hello", false, 5);
-        let v: Value = serde_json::from_str(&m.to_json().unwrap()).unwrap();
-        // 字段值与构造入参一一对应（"aGVsbG8=" 为手工计算的 Base64）。
-        // 注意 `content = "payload"` 会把除 type 外的所有字段包进 payload 对象，
-        // Terminal 自身的 payload 字段因此嵌套为 payload.payload
-        assert_eq!(v["type"], "terminal");
-        assert_eq!(v["payload"]["payload"]["action"]["type"], "output");
-        assert_eq!(v["payload"]["payload"]["action"]["data"], "aGVsbG8=");
-        assert_eq!(v["payload"]["payload"]["action"]["is_waiting"], false);
-        assert_eq!(v["payload"]["payload"]["action"]["index"], 5);
-        assert_eq!(v["payload"]["session_id"], "sess-1");
-        assert_eq!(v["payload"]["expect_response"], false);
-        assert_eq!(v["payload"]["token"], "");
-        // 未提供的游标字段不应出现在 JSON 中（skip_serializing_if）
-        assert!(v["payload"]["payload"]["action"].get("end_index").is_none());
-        assert!(v["payload"]["payload"]["action"].get("start_offset").is_none());
-        assert!(v["payload"]["payload"]["action"].get("end_offset").is_none());
-        // 生成的 ID/时间戳只验证存在性与类型
-        assert!(v["payload"]["message_id"]
-            .as_str()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false));
-        assert!(v["payload"]["timestamp"].as_i64().is_some());
-    }
 
     #[test]
     fn to_json_skips_absent_optional_fields() {
@@ -1499,7 +1293,7 @@ mod tests {
     fn from_json_parses_handwritten_terminal_message() {
         // 手工书写的线格式 JSON，字段值独立于构造器推导。
         // 除 type 外的全部字段（含 timestamp/session_id/token）都位于 payload 对象内
-        let json = r#"{"type":"terminal","payload":{"payload":{"action":{"type":"output","data":"aGVsbG8=","is_waiting":true,"index":7,"end_index":9,"start_offset":100,"end_offset":200}},"message_id":"m-1","expect_response":true,"timestamp":123456789,"session_id":"s1","token":"tok-1"}}"#;
+        let json = r#"{"type":"terminal","payload":{"payload":{"action":{"type":"input","data":"bHM="}},"message_id":"m-1","expect_response":true,"timestamp":123456789,"session_id":"s1","token":"tok-1"}}"#;
         let m = Message::from_json(json).unwrap();
         match &m {
             Message::Terminal {
@@ -1508,30 +1302,15 @@ mod tests {
                 timestamp,
                 session_id,
                 token,
-                payload:
-                    TerminalPayload {
-                        action:
-                            TerminalAction::Output {
-                                data,
-                                is_waiting,
-                                index,
-                                end_index,
-                                start_offset,
-                                end_offset,
-                            },
-                    },
+                payload: TerminalPayload { action: TerminalAction::Input { data, special_key } },
             } => {
                 assert_eq!(message_id, "m-1");
                 assert!(*expect_response);
                 assert_eq!(*timestamp, 123456789);
                 assert_eq!(session_id, "s1");
                 assert_eq!(token, "tok-1");
-                assert_eq!(data, "aGVsbG8=");
-                assert!(*is_waiting);
-                assert_eq!(*index, 7);
-                assert_eq!(*end_index, Some(9));
-                assert_eq!(*start_offset, Some(100));
-                assert_eq!(*end_offset, Some(200));
+                assert_eq!(data, "bHM=");
+                assert!(special_key.is_none());
             }
             _ => panic!("期望 terminal 消息"),
         }
@@ -1566,13 +1345,11 @@ mod tests {
     fn json_round_trip_preserves_all_variants() {
         // 构造器产物经 to_json/from_json 往返后，序列化结果应完全一致
         let cases = vec![
-            Message::output("s", b"abc", true, 1),
-            Message::output_from_base64("s", "YWJj", false, 2, Some(3), Some(4), Some(5)),
             Message::input("s", "ls", None),
             Message::input_with_response("s", "cd", Some(KeyCombo::parse("enter").unwrap())),
-            Message::subscribe("s", Some(9)),
-            Message::subscribe_with_response("s", None),
-            Message::subscribe_response_with_request_id("s", 1, 2, 3, SubscribeMode::Reset, 4, 5, "req-1"),
+            Message::subscribe("s"),
+            Message::subscribe_with_response("s"),
+            Message::subscribe_response_with_request_id("s", 1, 2, 3, "req-1"),
             Message::unsubscribe("s"),
             Message::unsubscribe_with_response("s"),
             Message::unsubscribe_response_with_request_id("s", "req-2"),

@@ -48,4 +48,4 @@ pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
 pub use input_line::{SessionInputListener, SubmittedLineTracker};
 
 // Re-export from enums
-pub use crate::enums::{SessionStatus, SessionType, SubscribeMode};
+pub use crate::enums::{SessionStatus, SessionType};

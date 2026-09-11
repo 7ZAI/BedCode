@@ -23,6 +23,8 @@ tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
+# 字节缓冲（输出历史 chunk 共享零拷贝 + 快照半块 slice；tokio 传递依赖，显式声明）
+bytes = "1"
 
 # 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
 libc = "0.2"

@@ -9,7 +9,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::enums::PtySessionStatus;
-use crate::pty::next_output_index;
 use crate::session::{GlobalOutputManager, OutputEvent};
 use crate::system::config::AppConfig;
 
@@ -89,7 +88,6 @@ impl PtyReader {
                     }
                     Ok(n) => {
                         let timestamp = chrono::Utc::now();
-                        let index = next_output_index();
                         let raw_bytes = buffer[..n].to_vec();
 
                         // 经有序队列顺序发送（单消费者顺序 on_output，消除 spawn 并发
@@ -97,7 +95,7 @@ impl PtyReader {
                         let output_event = OutputEvent::new(
                             session_id.clone(),
                             raw_bytes,
-                            index as u64,
+                            0, // start_offset 由 on_output 在串行临界区内按 max_offset 分配
                             timestamp.timestamp_millis(),
                             false,
                         );
