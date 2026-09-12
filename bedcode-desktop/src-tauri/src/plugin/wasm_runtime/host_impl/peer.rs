@@ -229,12 +229,20 @@ pub(crate) fn peer_send_files(
         }
     }
     let app = require_app(host_ctx)?;
-    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
+    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）。
+    // 同步失败不阻断本次发送（按旧上限放行），但禁止静默吞错——留 warn 痕迹
     if let Some(n) = concurrency {
-        let _ = sync_result(block_on_async(crate::peer_receive::set_peer_transfer_concurrency(
+        if let Err(e) = sync_result(block_on_async(crate::peer_receive::set_peer_transfer_concurrency(
             app.clone(),
             n,
-        )));
+        ))) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                concurrency = n,
+                error = %e,
+                "peer transfer concurrency pulse failed, host gate keeps previous limit"
+            );
+        }
     }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
