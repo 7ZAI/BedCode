@@ -1354,7 +1354,7 @@ struct DiscoveryRefreshHandler {
     app: AppHandle,
 }
 
-impl crate::plugin::message_bus::BusMessageHandler for DiscoveryRefreshHandler {
+impl crate::plugin::BusMessageHandler for DiscoveryRefreshHandler {
     fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
         let app = self.app.clone();
         crate::system::error_boundary::spawn_with_error_boundary(

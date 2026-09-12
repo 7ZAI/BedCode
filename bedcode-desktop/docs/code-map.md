@@ -101,22 +101,26 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 
 ## Core Modules（核心模块）
 
-### 插件系统 — `src-tauri/src/plugin/`（WASM 组件沙箱架构）
+### 插件系统 — `src-tauri/src/plugin/`（WASM 内核五模块，组件沙箱架构）
 
-基于 wasmtime Component Model 加载和执行插件，前端（`src/plugin/`）与 Rust 侧双层配合：
+基于 wasmtime Component Model 加载和执行插件，前端（`src/plugin/`）与 Rust 侧双层配合。
+Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外部消费方只经 facade 再导出引用）：
 
-- **api_bridge / api_registry**：插件 API 桥接与注册 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行
-- **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
-  （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
-- **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
-- **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
-  WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
-  events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
-  统一注册到 Linker
-- **approval / validation**：插件审批与校验
-- **message_bus**：插件间 Topic 消息总线（发布/订阅），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
-- **fs_auth**：文件系统访问三层校验（路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）
-- **permission / storage / types / watcher**：权限管理、插件存储、类型定义、开发模式热重载监听
+- **manager/（core-plugin-manager，核心）**：插件加载、注册、生命周期与运行时
+  - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行
+  - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
+    （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
+  - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
+  - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
+    WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
+    events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
+    统一注册到 Linker
+  - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
+- **security/（core-security）**：资源授权——approval（授权审批）、fs_auth（文件系统访问三层校验：
+  路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
+- **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
+- **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面、运行时指标埋点（骨架，见 `.scratch/wasm-core/`）
+- **permission**：共享词汇（bedcode-plugin-api 再导出）
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
 
@@ -162,7 +166,7 @@ AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转
   （重装即新身份，不做设备标识派生）；setup 阶段自动启动节点 + 发现守护；首连确认闸门经
   `peer-consent-requested` 事件桥接前端弹应用内确认框（迁移规则匹配在前端层，见插件 useConsent）
 - **插件入口（真入口）— WIT `host-peer`**：定义于 SDK `rust/wit/bedcode.wit`，宿主实现在
-  `plugin/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3 终态 13 原语）：`dial-peer`（按 endpoint
+  `plugin/manager/wasm_runtime/host_impl/peer.rs`（ADR 0022 v3 终态 13 原语）：`dial-peer`（按 endpoint
   拨号，返 session 句柄）、`close`（session/传输句柄统一关闭）、`respond-consent`、`list-trusted`、
   `revoke-trusted`、`send-files`、`respond-transfer`、`set-receive-policy`、`set-shared-roots`、
   `list-shared-roots`、`browse-directory`、`pull-files`、`set-download-dir`；
@@ -256,7 +260,7 @@ Claude Code (PTY)
 | 前端插件系统 | `src/plugin/` |
 | 插件源码 | `plugins/*/` |
 | 插件 SDK | `packages/plugin-sdk-desktop/` |
-| WASM 宿主能力 | `src-tauri/src/plugin/wasm_runtime/host_impl/` |
+| WASM 宿主能力 | `src-tauri/src/plugin/manager/wasm_runtime/host_impl/` |
 | 插件随包 CLI 安装/卸载 | `src-tauri/src/plugin/host/` |
 | 对等网络 | `src-tauri/src/peer_*.rs`（命令注册于 `lib.rs`） |
 | 链路加密 | `src-tauri/src/server/link_crypto.rs` |

@@ -8,7 +8,7 @@
 //! 兼容性约定：共享根 id 与插件的 FNV-1a 内容哈希算法一致（`root-<hex16>`），
 //! 用户对同一目录的重复添加天然去重。本模块计划随引擎停写收尾一并删除。
 
-use crate::plugin::storage::PluginStorage;
+use crate::plugin::PluginStorage;
 use serde_json::json;
 use std::path::PathBuf;
 use std::sync::Arc;
