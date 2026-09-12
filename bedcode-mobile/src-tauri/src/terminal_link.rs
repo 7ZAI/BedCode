@@ -263,6 +263,7 @@ enum LinkExit {
 }
 
 /// 出站帧（IO 任务与命令侧交互通道）
+#[derive(Debug)]
 enum Outbound {
     Subscribe { from_offset: u64 },
     Input { data: String, special_key: Option<String> },
@@ -328,7 +329,8 @@ impl TerminalLink {
         } else {
             "realtime"
         };
-        let _ = self.app.emit(
+        // 前端状态机唯一事件源：emit 失败必须留痕，否则 UI 静默停在旧状态无任何线索
+        if let Err(e) = self.app.emit(
             EVENT_TERMINAL_STATE,
             serde_json::json!({
                 "session_id": self.session_id,
@@ -339,7 +341,14 @@ impl TerminalLink {
                 "mode": mode,
                 "detail": detail,
             }),
-        );
+        ) {
+            tracing::warn!(
+                session_id = %self.session_id,
+                detail = %detail,
+                error = %e,
+                "terminal state event emit failed"
+            );
+        }
     }
 
     /// 缓存收帧 + 推进游标 + （live 段）事件推送 + ack 记账
@@ -348,7 +357,7 @@ impl TerminalLink {
         if frame.end > live_snapshot {
             // 实时帧：事件推送（历史段 [head, snapshot) 只入缓存不推送——前端
             // 经 terminal_get_history 一次性取；重连 WS 重播段同理静默入缓存）
-            let _ = self.app.emit(
+            if let Err(e) = self.app.emit(
                 EVENT_TERMINAL_FRAME,
                 serde_json::json!({
                     "session_id": self.session_id,
@@ -359,7 +368,15 @@ impl TerminalLink {
                         &frame.data,
                     ),
                 }),
-            );
+            ) {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    start_offset = frame.start,
+                    end_offset = frame.end,
+                    error = %e,
+                    "terminal frame event emit failed"
+                );
+            }
         }
         {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
@@ -386,9 +403,16 @@ impl TerminalLink {
         ))
     }
 
-    /// 发送出站帧（命令侧调用；连接未就绪时静默丢弃——重连后按状态机恢复）
+    /// 发送出站帧（命令侧调用）。通道关闭 = IO 任务已退出（链接死亡），此时
+    /// 命令随之丢弃必须留痕——重连恢复由状态机/重新订阅负责，不在此处重试
     async fn send_out(&self, out: Outbound) {
-        let _ = self.write_tx.send(out).await;
+        if let Err(e) = self.write_tx.send(out).await {
+            tracing::warn!(
+                session_id = %self.session_id,
+                out = ?e.0,
+                "terminal link io task exited, outbound command dropped"
+            );
+        }
     }
 }
 
@@ -444,8 +468,12 @@ impl TerminalLinkManager {
             link.emit_state("unsubscribed");
             // 唤醒 IO 任务优雅退出
             let tx = link.write_tx.clone();
+            let session_id = session_id.to_string();
             tauri::async_runtime::spawn(async move {
-                let _ = tx.send(Outbound::Close).await;
+                // send 失败 = IO 任务已先行退出（连接已断/已停止）：常规退路径，debug 留痕即可
+                if tx.send(Outbound::Close).await.is_err() {
+                    tracing::debug!(session_id = %session_id, "io task already exited, close signal skipped");
+                }
             });
         }
     }
@@ -525,7 +553,15 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
         if pending >= ACK_BYTES_THRESHOLD || (last != 0 && now.saturating_sub(last) >= ACK_MAX_IDLE_MS) {
             let frame = build_ack_frame(&link.session_id, acked);
             link.last_ack_at.store(now, Ordering::SeqCst);
-            let _ = futures_util::SinkExt::send(ws_sink, WsMsg::Binary(frame)).await;
+            // ack 回发失败 = 连接已坏：水位信息本次丢失，重连订阅后由游标重同步
+            if let Err(e) = futures_util::SinkExt::send(ws_sink, WsMsg::Binary(frame)).await {
+                tracing::warn!(
+                    session_id = %link.session_id,
+                    acked,
+                    error = %e,
+                    "terminal ack frame send failed, wait for reconnect"
+                );
+            }
         } else {
             // 未达阈值也未到空闲兜底：下次收帧时再判（节流 pending 保留）
             link.pending_ack_bytes.fetch_add(pending, Ordering::SeqCst);
@@ -598,7 +634,10 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
                         maybe_ack(link, &mut ws_tx).await;
                     }
                     WsMsg::Ping(p) => {
-                        let _ = ws_tx.send(WsMsg::Pong(p)).await;
+                        // pong 回发失败 = 连接已坏，由流错误路径收敛重连（keepalive 常规细节，debug 即可）
+                        if let Err(e) = ws_tx.send(WsMsg::Pong(p)).await {
+                            tracing::debug!(session_id = %link.session_id, error = %e, "terminal pong send failed");
+                        }
                     }
                     WsMsg::Pong(_) => {}
                     WsMsg::Close(_) => break,
@@ -694,11 +733,18 @@ async fn handle_control_text(
                 // 有限重试：服务端 error 后保持连接，等客户端重订阅——重连由连接
                 // 层兜底（Io 退出）；此处直接订阅重试
                 link.emit_state("retry");
-                let _ = futures_util::SinkExt::send(
+                if let Err(e) = futures_util::SinkExt::send(
                     ws_tx,
                     WsMsg::Binary(build_ack_frame(&link.session_id, link.acked.load(Ordering::SeqCst))),
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(
+                        session_id = %link.session_id,
+                        error = %e,
+                        "terminal ack frame send failed, wait for reconnect"
+                    );
+                }
                 link.send_out(Outbound::Subscribe { from_offset: link.cursor.load(Ordering::SeqCst) })
                     .await;
             }
