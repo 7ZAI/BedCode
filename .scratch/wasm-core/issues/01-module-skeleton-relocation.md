@@ -4,10 +4,14 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** claimed
+**Status:** resolved
 
-- [ ] 五个模块目录/入口建立，现有文件全部归位，无残留旧路径
-- [ ] 模块间只经 facade 或 trait 注入协作，无新增横向耦合
-- [ ] `cd bedcode-desktop/src-tauri && cargo test` 全绿（与搬迁前基线一致）
-- [ ] 外部消费方 import 不经模块内部路径（走 facade 再导出）
-- [ ] 无行为变化：不增删任何功能、日志、错误分支
+- [x] 五个模块目录/入口建立，现有文件全部归位，无残留旧路径
+- [x] 模块间只经 facade 或 trait 注入协作，无新增横向耦合
+- [x] `cd bedcode-desktop/src-tauri && cargo test` 全绿（与搬迁前基线一致）
+- [x] 外部消费方 import 不经模块内部路径（走 facade 再导出）
+- [x] 无行为变化：不增删任何功能、日志、错误分支
+
+## Comments
+
+- 2026-09-13 完成：commit fd031193e。五模块归位（security/manager/bus + config/monitor 骨架），facade 再导出，外部 4 处消费方改走 facade；cargo test 608 单测 + 全部集成测试绿；code-map 同步。

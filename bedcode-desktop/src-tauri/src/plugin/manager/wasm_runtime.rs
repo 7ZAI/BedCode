@@ -227,6 +227,10 @@ pub struct WasmPluginState {
     fuel_enabled: bool,
     /// 插件指标句柄（core-monitor 埋点入口）
     metrics: Arc<PluginMetrics>,
+    /// v11：可选导出 `events-binary#on-message-binary` 的动态探测句柄。
+    /// 旧插件（v10 及更早）不导出该函数 → None，二进制消息对其按
+    /// 「格式不匹配」拒绝（总线侧过滤，不会到达本字段为 None 的实例）
+    on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
 }
 
 impl WasmPluginState {
@@ -245,6 +249,8 @@ impl WasmPluginState {
             limits: spec.limits,
             fuel_enabled: spec.fuel_enabled,
             metrics: spec.metrics,
+            // v11：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
+            on_message_binary: None,
         }
     }
 }
@@ -1526,9 +1532,16 @@ mod tests {
                     .get(&plugin_id)
                     .ok_or_else(|| anyhow::anyhow!("TestInstanceDispatcher: no instance '{}'", plugin_id))?;
                 let mut plugin = plugin.lock().await;
-                plugin
-                    .on_message(&msg.topic, &msg.sender, &msg.payload)
-                    .map_err(|e| anyhow::Error::from(e))
+                // v11：按载荷格式路由（与生产 PluginHost 的 dispatch_to_wasm 同语义）
+                if let Some(bytes) = &msg.payload_binary {
+                    plugin
+                        .on_message_binary(&msg.topic, &msg.sender, bytes)
+                        .map_err(|e| anyhow::Error::from(e))
+                } else {
+                    plugin
+                        .on_message(&msg.topic, &msg.sender, &msg.payload)
+                        .map_err(|e| anyhow::Error::from(e))
+                }
             })
         }
 

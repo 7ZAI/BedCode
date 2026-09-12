@@ -66,7 +66,12 @@ interface host-log {
 
 interface host-bus {
     publish: func(topic: string, payload-json: string) -> result<_, string>;
+    /// v9：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
+    publish-binary: func(topic: string, payload: list<u8>) -> result<_, string>;
     subscribe: func(topic: string) -> result<_, string>;
+    /// v9：以二进制格式偏好订阅——只接收 publish-binary 投递，
+    /// JSON 消息对其按格式不匹配拒绝
+    subscribe-binary: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
 }
 
@@ -175,6 +180,16 @@ interface events {
     on-session-stopped: func(session-id: string) -> result<_, string>;
 }
 
+/// v9：二进制消息接收（可选导出，**不进 `plugin` world 的必选导出列表**）
+///
+/// 宿主在实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`：
+/// 旧插件（v8 及更早）不导出本接口 → 探测为 None，只接收 JSON 消息，
+/// 不影响加载；新插件（v9 SDK）由 `wasm_entry!` 宏无条件导出默认实现。
+/// 无返回值（观察型回调）：guest 内部失败经 host-log 记录，不打断宿主投递链
+interface events-binary {
+    on-message-binary: func(topic: string, sender: string, payload: list<u8>);
+}
+
 interface terminal-hooks {
     on-terminal-input: func(session-id: string, text: string) -> option<string>;
     on-terminal-output: func(session-id: string, data: string) -> option<string>;
@@ -188,6 +203,15 @@ interface manifest {
 /// 将来若需兼容旧产物，按桌面端模式补 form=0/1 即可）
 interface abi {
     version: func() -> u32;
+}
+
+/// v9：二进制消息接收专用 world（**仅 SDK 绑定用，宿主不实例化它**）
+///
+/// 宿主对 `plugin` world 的导出全部按必选实例化，旧插件（v8 及更早）不导出
+/// `events-binary`，因此它不能声明进 `plugin` world（否则旧插件无法加载）；
+/// 宿主改为实例化后动态探测。本 world 让 SDK 生成 events-binary 的 guest 绑定
+world plugin-binary {
+    export events-binary;
 }
 
 world plugin {

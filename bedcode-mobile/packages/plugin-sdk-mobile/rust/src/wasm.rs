@@ -50,6 +50,13 @@ pub trait WasmPlugin: Send + Sync + 'static {
 
     /// 收到总线消息回调（可选，默认忽略）
     fn on_bus_message(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
+
+    /// 收到总线二进制消息回调（v9，可选，默认忽略）
+    ///
+    /// 订阅方须以 `host-bus.subscribe-binary` 声明二进制格式偏好，宿主才把
+    /// `publish-binary` 载荷投递到本回调；否则按格式不匹配拒绝。
+    /// `msg.payload` 为 Null、`msg.payload_binary` 携带原始字节
+    fn on_message_binary(_msg: &crate::BusMessage) -> anyhow::Result<()> { Ok(()) }
 }
 
 #[cfg(all(test, feature = "wasm"))]
@@ -120,9 +127,11 @@ mod tests {
             topic: "t".into(),
             sender: "s".into(),
             payload: serde_json::Value::Null,
+            payload_binary: None,
             timestamp: 0,
         };
         assert!(TestWasmPlugin::on_bus_message(&msg).is_ok());
+        assert!(TestWasmPlugin::on_message_binary(&msg).is_ok());
     }
 }
 
@@ -247,6 +256,7 @@ macro_rules! wasm_entry {
                     topic,
                     sender: String::new(),
                     payload,
+                    payload_binary: None,
                     timestamp: 0,
                 };
                 match <$plugin_type as $crate::wasm::WasmPlugin>::on_bus_message(&msg) {
@@ -350,11 +360,36 @@ macro_rules! wasm_entry {
             }
         }
 
+        // ==================== events-binary（v9，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_binary::exports::bedcode::plugin::events_binary::Guest for $plugin_type {
+            fn on_message_binary(topic: String, sender: String, payload: Vec<u8>) {
+                // 字节列 → 类型化 BusMessage（payload 为 Null，payload_binary 携带原始字节）；
+                // 无返回值：处理失败经 host-log 记录（观察型回调，语义同 terminal-hooks）
+                let msg = $crate::BusMessage {
+                    topic,
+                    sender,
+                    payload: serde_json::Value::Null,
+                    payload_binary: Some(payload),
+                    timestamp: 0,
+                };
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_message_binary(&msg) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(
+                        &host,
+                        &format!("on_message_binary failed: {}", e),
+                    );
+                }
+            }
+        }
+
         // ==================== 组件导出 ====================
 
         // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 6 组接口的 cabi 导出）。
         // 宏展开处 `$crate` 为插件依赖的 SDK：绑定类型路径经 lib.rs 的
         // `pub use wasm::bedcode` re-export 定位（generate! 的 default_bindings_module）
         $crate::wasm::export!($plugin_type);
+        // v9：events-binary 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_binary::export!($plugin_type);
     };
 }

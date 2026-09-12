@@ -1159,7 +1159,13 @@ impl crate::plugin::message_bus::MessageDispatcher for PluginManagerDispatcher {
         };
 
         let mut loaded = wasm_plugin.lock().await;
-        Ok(loaded.on_bus_message(msg)?)
+        // v9：按载荷格式路由——二进制消息走可选导出 on_message_binary
+        // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
+        if let Some(bytes) = &msg.payload_binary {
+            Ok(loaded.on_message_binary(&msg.topic, &msg.sender, bytes)?)
+        } else {
+            Ok(loaded.on_bus_message(msg)?)
+        }
     }
 
     async fn is_activated(&self, plugin_id: &str) -> bool {

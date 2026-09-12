@@ -151,8 +151,18 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
         super::host_impl::bus_publish(self, &topic, &payload_json)
     }
 
+    /// v9：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
+    fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
+        super::host_impl::bus_publish_binary(self, &topic, payload)
+    }
+
     fn subscribe(&mut self, topic: String) -> Result<(), String> {
         super::host_impl::bus_subscribe(self, &topic)
+    }
+
+    /// v9：以二进制格式偏好订阅（只接收 publish-binary 投递）
+    fn subscribe_binary(&mut self, topic: String) -> Result<(), String> {
+        super::host_impl::bus_subscribe_binary(self, &topic)
     }
 
     fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
@@ -372,6 +382,8 @@ impl super::WasmRuntime {
             host_ctx,
             runtime_handle: self.runtime_handle.clone(),
             granted_permissions,
+            // v9：可选导出在实例化后动态探测（verify_abi 内写入）
+            on_message_binary: None,
         };
         let mut store = Store::new(&self.engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
@@ -456,6 +468,17 @@ impl LoadedComponentPlugin {
                 bedcode_plugin_api_mobile::abi::ABI_VERSION
             )));
         }
+
+        // v9：动态探测可选导出 events-binary#on-message-binary。该接口不声明进
+        // plugin world（旧插件必选导出会因缺失而实例化失败），此处按名探测，
+        // 缺失容忍为 None——旧插件只收 JSON，二进制消息由总线按格式不匹配拒绝
+        let on_message_binary = instance
+            .get_typed_func::<(String, String, Vec<u8>), ()>(
+                &mut *store,
+                "bedcode:plugin/events-binary#on-message-binary",
+            )
+            .ok();
+        store.data_mut().on_message_binary = on_message_binary;
         Ok(())
     }
 
@@ -578,6 +601,26 @@ impl LoadedComponentPlugin {
             },
             "on_bus_message",
         )
+    }
+
+    /// 调用插件的消息总线二进制消息接收导出（v9，可选导出动态探测）
+    ///
+    /// 仅当实例在实例化时探测到 `events-binary#on-message-binary` 导出才可调用；
+    /// 总线侧已按订阅者格式偏好过滤，正常不会对无导出的实例发起本调用，
+    /// 此处防御性拒绝（旧插件二进制 → 格式不匹配拒绝的语义由总线保证）
+    pub(crate) fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
+        // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
+        let Some(func) = self.store.data().on_message_binary.clone() else {
+            return Err(AppError::Plugin(format!(
+                "WASM plugin has no events-binary export (v9 required)"
+            )));
+        };
+        // 无返回值（观察型回调）：guest 内部失败经 host-log 记录；此处仅 trap 上抛
+        func.call(
+            &mut self.store,
+            (topic.to_string(), sender.to_string(), payload.to_vec()),
+        )
+        .map_err(|e| AppError::Plugin(format!("WASM on_message_binary() call failed: {}", e)))
     }
 
     /// 获取插件的 manifest JSON
@@ -871,6 +914,7 @@ pub(crate) mod tests {
                 host_ctx: host_ctx.clone(),
                 runtime_handle: plugin.store.data().runtime_handle.clone(),
                 granted_permissions: HashSet::from([PERMISSION_STORAGE.to_string()]),
+                on_message_binary: None,
             };
             let got =
                 bedcode::plugin::host_storage::Host::get(&mut state, "test-key".into()).expect("host_storage.get");
@@ -886,6 +930,7 @@ pub(crate) mod tests {
                 host_ctx,
                 runtime_handle: plugin.store.data().runtime_handle.clone(),
                 granted_permissions: HashSet::new(),
+                on_message_binary: None,
             };
             let denied = bedcode::plugin::host_storage::Host::get(&mut unauth, "test-key".into());
             assert!(denied.is_err(), "未授权 storage 访问必须被拒绝");
@@ -1010,6 +1055,7 @@ pub(crate) mod tests {
                     topic: "t".to_string(),
                     sender: "s".to_string(),
                     payload: serde_json::json!({}),
+                    payload_binary: None,
                     timestamp: 0,
                 })
                 .expect("on_bus_message");
@@ -1107,6 +1153,7 @@ pub(crate) mod tests {
                 host_ctx: host_ctx.clone(),
                 runtime_handle: tokio::runtime::Handle::current(),
                 granted_permissions: HashSet::new(),
+                on_message_binary: None,
             };
             assert_eq!(state.memory_growing(0, 256 * 1024 * 1024, None).unwrap(), true);
             assert_eq!(

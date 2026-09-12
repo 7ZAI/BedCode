@@ -240,6 +240,7 @@ mod tests {
             granted_permissions: HashSet::from([
                 bedcode_plugin_api_mobile::permission::PERMISSION_MDNS.to_string(),
             ]),
+            on_message_binary: None,
         }
     }
 

@@ -27,6 +27,23 @@ pub(crate) fn bus_publish(state: &WasmPluginState, topic: &str, payload_str: &st
     Ok(())
 }
 
+/// 逻辑层：发布二进制消息（v9）——字节列原样透传（零 JSON 编解码，
+/// 可传非 UTF-8 与大载荷）；权限语义与 JSON 发布一致
+pub(crate) fn bus_publish_binary(state: &WasmPluginState, topic: &str, payload: Vec<u8>) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
+    {
+        return Err("permission denied: bus".to_string());
+    }
+
+    state
+        .host_ctx
+        .message_bus
+        .publish_binary(topic, &state.plugin_id, payload);
+    Ok(())
+}
+
 /// 逻辑层：订阅 topic
 pub(crate) fn bus_subscribe(state: &WasmPluginState, topic: &str) -> Result<(), String> {
     if !state
@@ -40,6 +57,27 @@ pub(crate) fn bus_subscribe(state: &WasmPluginState, topic: &str) -> Result<(), 
             state
                 .runtime_handle
                 .block_on(state.host_ctx.message_bus.subscribe_wasm(&state.plugin_id, topic))
+        })
+    });
+    Ok(())
+}
+
+/// 逻辑层：以二进制格式偏好订阅（v9）——只接收 publish-binary 投递
+pub(crate) fn bus_subscribe_binary(state: &WasmPluginState, topic: &str) -> Result<(), String> {
+    if !state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_BUS)
+    {
+        return Err("permission denied: bus".to_string());
+    }
+    guarded_host_call(&state.plugin_id, "host_bus_subscribe_binary", (), || {
+        tokio::task::block_in_place(|| {
+            state.runtime_handle.block_on(
+                state
+                    .host_ctx
+                    .message_bus
+                    .subscribe_wasm_binary(&state.plugin_id, topic),
+            )
         })
     });
     Ok(())

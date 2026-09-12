@@ -329,7 +329,13 @@ impl crate::plugin::bus::MessageDispatcher for PluginHost {
             // 调用失败（trap/store 中毒）时自动重载恢复，见 with_wasm_plugin_call
             let msg = msg.clone();
             host.with_wasm_plugin_call(&plugin_id, move |plugin| {
-                plugin.on_message(&msg.topic, &msg.sender, &msg.payload)
+                // v11：按载荷格式路由——二进制消息走可选导出 on_message_binary
+                // （总线已按订阅者格式偏好过滤，不会对无导出的旧插件发二进制消息）
+                if let Some(bytes) = &msg.payload_binary {
+                    plugin.on_message_binary(&msg.topic, &msg.sender, bytes)
+                } else {
+                    plugin.on_message(&msg.topic, &msg.sender, &msg.payload)
+                }
             })
             .await
             .map_err(|e| anyhow::Error::from(e))

@@ -26,7 +26,13 @@
 //!   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 //!   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 //!   v8 插件二进制不受影响
-pub const ABI_VERSION: u32 = 10;
+//! - v10: host-peer WIT 收缩终态（ADR 0022 v3）：dial-peer 转正、删除
+//!   传输/设备清单等 17 个旧函数，host-peer 只保留能力原语；
+//!   移动端 ABI 7→8 同语义
+//! - v11: 消息总线二进制载荷（host-bus.publish-binary / subscribe-binary）：
+//!   零 JSON 编解码、可传非 UTF-8 与大载荷；新增可选导出 `events-binary`
+//!   （宿主实例化后动态探测，旧插件不导出则只收 JSON，不受影响）
+pub const ABI_VERSION: u32 = 11;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -40,10 +46,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v9() {
-        // 版本号序列与历史 core ABI 共用：v9 = host-peer 原语化收缩第一阶段
-        // （dial-peer-endpoint / close / set-shared-roots + host-mdns / host-platform）
-        assert_eq!(ABI_VERSION, 10);
+    fn test_abi_version_is_v11() {
+        // 版本号序列与历史 core ABI 共用：v11 = 消息总线二进制载荷
+        // （publish-binary / subscribe-binary + 可选导出 events-binary）
+        assert_eq!(ABI_VERSION, 11);
     }
 
     #[test]

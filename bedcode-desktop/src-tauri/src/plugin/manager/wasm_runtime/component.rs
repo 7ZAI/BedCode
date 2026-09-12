@@ -245,8 +245,18 @@ impl bedcode::plugin::host_bus::Host for WasmPluginState {
         bus::bus_publish(&self.host_ctx, &self.plugin_id, &topic, &payload_json)
     }
 
+    /// v11：二进制载荷发布（零 JSON 编解码，可传非 UTF-8 与大载荷）
+    fn publish_binary(&mut self, topic: String, payload: Vec<u8>) -> Result<(), String> {
+        bus::bus_publish_binary(&self.host_ctx, &self.plugin_id, &topic, payload)
+    }
+
     fn subscribe(&mut self, topic: String) -> Result<(), String> {
         bus::bus_subscribe(&self.host_ctx, &self.plugin_id, &topic)
+    }
+
+    /// v11：以二进制格式偏好订阅（只接收 publish-binary 投递）
+    fn subscribe_binary(&mut self, topic: String) -> Result<(), String> {
+        bus::bus_subscribe_binary(&self.host_ctx, &self.plugin_id, &topic)
     }
 
     fn unsubscribe(&mut self, topic: String) -> Result<(), String> {
@@ -540,6 +550,14 @@ impl LoadedWasmPlugin {
                 abi::ABI_VERSION
             )));
         }
+
+        // v11：动态探测可选导出 events-binary#on-message-binary。该接口不声明进
+        // plugin world（旧插件必选导出会因缺失而实例化失败），此处按名探测，
+        // 缺失容忍为 None——旧插件只收 JSON，二进制消息由总线按格式不匹配拒绝
+        let on_message_binary = instance
+            .get_typed_func::<(String, String, Vec<u8>), ()>(&mut *store, "bedcode:plugin/events-binary#on-message-binary")
+            .ok();
+        store.data_mut().on_message_binary = on_message_binary;
         Ok(())
     }
 
@@ -726,6 +744,27 @@ impl LoadedWasmPlugin {
                 Err(AppError::Plugin(format!("WASM on_message() call failed: {}", e)))
             }
         }
+    }
+
+    /// 调用插件的消息总线二进制消息接收导出（v11，可选导出动态探测）
+    ///
+    /// 仅当实例在实例化时探测到 `events-binary#on-message-binary` 导出才可调用；
+    /// 总线侧已按订阅者格式偏好过滤，正常不会对无导出的实例发起本调用，
+    /// 此处防御性拒绝（旧插件二进制 → 格式不匹配拒绝的语义由总线保证）
+    pub(crate) fn on_message_binary(&mut self, topic: &str, sender: &str, payload: &[u8]) -> crate::Result<()> {
+        let _timer = self.track_call();
+        // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
+        let Some(func) = self.store.data().on_message_binary.clone() else {
+            return Err(AppError::Plugin(format!(
+                "WASM plugin has no events-binary export (v11 required)"
+            )));
+        };
+        // 无返回值（观察型回调）：guest 内部失败经 host-log 记录；此处仅 trap 上抛
+        func.call(&mut self.store, (topic.to_string(), sender.to_string(), payload.to_vec()))
+            .map_err(|e| {
+                self.log_trap("on_message_binary", &e);
+                AppError::Plugin(format!("WASM on_message_binary() call failed: {}", e))
+            })
     }
 
     /// 调用插件的会话生命周期事件导出

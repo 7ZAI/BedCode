@@ -114,6 +114,10 @@ pub struct PluginMetrics {
     lifecycle_last_unix: [AtomicU64; 6],
     /// 授权决策计数（按 [`AuthzDecisionKind`] 索引：allow/deny/require_approval）
     authz_decisions: [AtomicU64; 3],
+    /// 消息总线丢弃计数（v11）：订阅者队列满时丢弃（背压保护）
+    bus_dropped_total: AtomicU64,
+    /// 消息总线格式不匹配拒绝计数（v11）：订阅方格式偏好与消息格式不符
+    bus_format_rejected_total: AtomicU64,
 }
 
 impl Default for PluginMetrics {
@@ -129,6 +133,8 @@ impl Default for PluginMetrics {
             lifecycle_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             lifecycle_last_unix: std::array::from_fn(|_| AtomicU64::new(0)),
             authz_decisions: std::array::from_fn(|_| AtomicU64::new(0)),
+            bus_dropped_total: AtomicU64::new(0),
+            bus_format_rejected_total: AtomicU64::new(0),
         }
     }
 }
@@ -187,6 +193,16 @@ impl PluginMetrics {
         };
         self.authz_decisions[idx].fetch_add(1, Ordering::Relaxed);
     }
+
+    /// 消息总线队列满丢弃记账（v11，背压保护）
+    pub fn record_bus_dropped(&self) {
+        self.bus_dropped_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// 消息总线格式不匹配拒绝记账（v11）
+    pub fn record_bus_format_rejected(&self) {
+        self.bus_format_rejected_total.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// 导出调用计时器（RAII）：drop 时把耗时记入指标
@@ -221,6 +237,8 @@ pub struct PluginMetricsSnapshot {
     pub lifecycle_last_unix: HashMap<String, u64>,
     /// 授权决策计数（allow / deny / require_approval）
     pub authz: HashMap<String, u64>,
+    /// 消息总线指标（v11）：dropped = 队列满丢弃；format_rejected = 格式不匹配拒绝
+    pub bus: HashMap<String, u64>,
 }
 
 impl PluginMetrics {
@@ -255,6 +273,13 @@ impl PluginMetrics {
                 (
                     "require_approval".to_string(),
                     self.authz_decisions[2].load(Ordering::Relaxed),
+                ),
+            ]),
+            bus: HashMap::from([
+                ("dropped".to_string(), self.bus_dropped_total.load(Ordering::Relaxed)),
+                (
+                    "format_rejected".to_string(),
+                    self.bus_format_rejected_total.load(Ordering::Relaxed),
                 ),
             ]),
         }
@@ -410,6 +435,7 @@ mod tests {
             "lifecycle",
             "lifecycle_last_unix",
             "authz",
+            "bus",
         ] {
             assert!(plugin.get(key).is_some(), "快照缺字段 {key}");
         }

@@ -427,6 +427,9 @@ impl PluginHost {
     pub async fn init_message_bus(&self) {
         let dispatcher: Arc<dyn crate::plugin::bus::MessageDispatcher> = Arc::new(self.clone());
         self.message_bus.set_dispatcher(dispatcher).await;
+        // v11：注入 core-monitor 注册表（订阅者队列满丢弃 / 格式不匹配拒绝计数）。
+        // 必须在首次订阅（插件激活）之前完成——激活流程在 PluginHost::new 之后
+        self.message_bus.set_monitor(self.wasm_runtime.monitor()).await;
         tracing::info!("[PluginHost] MessageBus dispatcher initialized");
     }
 

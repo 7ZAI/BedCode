@@ -30,8 +30,13 @@ pub struct BusMessage {
     pub topic: String,
     /// 发送者插件 ID
     pub sender: String,
-    /// 消息负载（任意 JSON）
+    /// 消息负载（任意 JSON）——二进制消息此字段恒为 Null
     pub payload: serde_json::Value,
+    /// 二进制负载（v11，仅 `publish-binary` 消息）：零 JSON 编解码，
+    /// 可传非 UTF-8 字节与大载荷（MB 级）；JSON 消息此字段为 None。
+    /// 消费方以 `payload_binary.is_some()` 区分载荷格式
+    #[serde(default)]
+    pub payload_binary: Option<Vec<u8>>,
     /// 时间戳（毫秒 Unix）
     pub timestamp: u64,
 }
@@ -39,7 +44,10 @@ pub struct BusMessage {
 #[cfg(feature = "wasm")]
 pub mod api_call;
 #[cfg(feature = "wasm")]
+#[cfg(feature = "wasm")]
 pub mod wasm;
+#[cfg(feature = "wasm")]
+pub mod wasm_binary;
 #[cfg(feature = "wasm")]
 pub mod wasm_host;
 // 组件导出宏（wasm_entry! 内 export!）的绑定类型路径：generate! 的
@@ -67,11 +75,13 @@ mod tests {
 
     #[test]
     fn test_bus_message_serde_round_trip() {
-        // 总线消息线协议：topic/sender/payload/timestamp 四字段，key 不做改名
+        // 总线消息线协议：topic/sender/payload/payload_binary/timestamp 五字段
+        // （payload_binary 为 v11 增量，serde(default) 保证老端 JSON 缺字段可解析）
         let msg = BusMessage {
             topic: "task:status-changed".to_string(),
             sender: "com.bedcode.demo".to_string(),
             payload: serde_json::json!({ "status": "in_progress" }),
+            payload_binary: None,
             timestamp: 1700000000123,
         };
         let json = serde_json::to_value(&msg).unwrap();
@@ -81,14 +91,26 @@ mod tests {
                 "topic": "task:status-changed",
                 "sender": "com.bedcode.demo",
                 "payload": { "status": "in_progress" },
+                "payload_binary": null,
                 "timestamp": 1700000000123_i64
             })
         );
+        // 老端形状（无 payload_binary 字段）仍可反序列化：增量字段演进原则
+        let legacy = serde_json::json!({
+            "topic": "task:status-changed",
+            "sender": "com.bedcode.demo",
+            "payload": { "status": "in_progress" },
+            "timestamp": 1700000000123_i64
+        });
+        let from_legacy: BusMessage = serde_json::from_value(legacy).unwrap();
+        assert_eq!(from_legacy.payload_binary, None);
+
         let back: BusMessage = serde_json::from_value(json).unwrap();
         assert_eq!(back.topic, "task:status-changed");
         assert_eq!(back.sender, "com.bedcode.demo");
         assert_eq!(back.timestamp, 1700000000123);
         assert_eq!(back.payload, serde_json::json!({ "status": "in_progress" }));
+        assert_eq!(back.payload_binary, None);
     }
 
     #[test]

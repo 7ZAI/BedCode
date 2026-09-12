@@ -121,6 +121,10 @@ pub struct WasmPluginState {
     runtime_handle: tokio::runtime::Handle,
     /// 插件已授予权限（来自 manifest.permissions，host function 调用前校验）
     granted_permissions: std::collections::HashSet<String>,
+    /// v9：可选导出 `events-binary#on-message-binary` 的动态探测句柄。
+    /// 旧插件（v8 及更早）不导出该函数 → None，二进制消息对其按
+    /// 「格式不匹配」拒绝（总线侧过滤，不会到达本字段为 None 的实例）
+    on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
 }
 
 /// 插件实例资源限制器

@@ -2,20 +2,11 @@
 
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
 
-/// 发布消息到 Topic（同步投递，总线内部异步派发）
-pub(crate) fn bus_publish(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    topic: &str,
-    payload_json: &str,
-) -> Result<(), String> {
-    let payload: serde_json::Value =
-        serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
-
-    // 互调门禁（ADR-0017 层 1）：`bedcode.api.<api>` 请求 topic 的目标 api
-    // 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
-    // `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
-    // 普通广播 topic 不校验，保持向后兼容。
+/// 互调门禁（ADR-0017 层 1，JSON 与二进制发布共用）：`bedcode.api.<api>` 请求
+/// topic 的目标 api 必须命中某已激活插件的声明清单（注册表只在激活态登记）；
+/// `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
+/// 普通广播 topic 不校验，保持向后兼容。
+fn check_api_gate(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
     if let Some(api) = topic.strip_prefix("bedcode.api.") {
         if !api.starts_with("reply.") {
             // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
@@ -30,7 +21,7 @@ pub(crate) fn bus_publish(
                     plugin_id = %plugin_id,
                     topic = %topic,
                     api = %api,
-                    "bus_publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
+                    "bus publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
                 );
                 return Err(format!(
                     "bus error: api '{}' is not declared by any activated plugin (gate)",
@@ -39,9 +30,38 @@ pub(crate) fn bus_publish(
             }
         }
     }
+    Ok(())
+}
+
+/// 发布 JSON 消息到 Topic（同步投递，总线内部异步派发）
+pub(crate) fn bus_publish(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    topic: &str,
+    payload_json: &str,
+) -> Result<(), String> {
+    let payload: serde_json::Value =
+        serde_json::from_str(payload_json).map_err(|e| format!("bus error: invalid JSON payload: {}", e))?;
+
+    check_api_gate(host_ctx, plugin_id, topic)?;
 
     let bus = host_ctx.message_bus.clone();
     bus.publish(topic, plugin_id, payload);
+    Ok(())
+}
+
+/// 发布二进制消息到 Topic（v11）：字节列原样透传（零 JSON 编解码，
+/// 可传非 UTF-8 与大载荷）；互调门禁语义与 JSON 发布一致（防绕过）
+pub(crate) fn bus_publish_binary(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    topic: &str,
+    payload: Vec<u8>,
+) -> Result<(), String> {
+    check_api_gate(host_ctx, plugin_id, topic)?;
+
+    let bus = host_ctx.message_bus.clone();
+    bus.publish_binary(topic, plugin_id, payload);
     Ok(())
 }
 
@@ -60,6 +80,22 @@ pub(crate) fn bus_subscribe(host_ctx: &WasmHostContext, plugin_id: &str, topic: 
     let t = topic.to_string();
     handle.spawn(async move {
         bus.subscribe_wasm(&pid, &t).await;
+    });
+    Ok(())
+}
+
+/// 以二进制格式偏好订阅（v11）：只接收 publish-binary 投递，
+/// JSON 消息对其按格式不匹配拒绝（与 subscribe 同因异步投递）
+pub(crate) fn bus_subscribe_binary(host_ctx: &WasmHostContext, plugin_id: &str, topic: &str) -> Result<(), String> {
+    let bus = host_ctx.message_bus.clone();
+    let Ok(handle) = tokio::runtime::Handle::try_current() else {
+        tracing::warn!(plugin_id = %plugin_id, topic = %topic, "bus_subscribe_binary: no runtime context, subscription dropped");
+        return Err("bus error: no runtime context".to_string());
+    };
+    let pid = plugin_id.to_string();
+    let t = topic.to_string();
+    handle.spawn(async move {
+        bus.subscribe_wasm_binary(&pid, &t).await;
     });
     Ok(())
 }

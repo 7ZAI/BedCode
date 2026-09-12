@@ -15,7 +15,12 @@
 ///   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 ///   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 ///   v6 插件二进制不受影响
-pub const ABI_VERSION: u32 = 8;
+/// - v8: host-peer WIT 收缩终态（ADR 0022 v3，与桌面 ABI 10 同语义）：
+///   dial-peer 转正、删除传输/设备清单等旧函数
+/// - v9: 消息总线二进制载荷（host-bus.publish-binary / subscribe-binary）：
+///   零 JSON 编解码、可传非 UTF-8 与大载荷；新增可选导出 `events-binary`
+///   （宿主实例化后动态探测，旧插件不导出则只收 JSON，不受影响）
+pub const ABI_VERSION: u32 = 9;
 
 #[cfg(test)]
 mod tests {
@@ -24,6 +29,7 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        assert_eq!(ABI_VERSION, 8);
+        // v9 = 消息总线二进制载荷（publish-binary / subscribe-binary + events-binary）
+        assert_eq!(ABI_VERSION, 9);
     }
 }

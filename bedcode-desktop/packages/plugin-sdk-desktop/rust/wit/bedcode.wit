@@ -49,9 +49,20 @@ interface host-events {
 }
 
 /// 消息总线（原 bus.rs：bus_publish/subscribe/unsubscribe）
+///
+/// 载荷格式（v11）：
+/// - `publish`（JSON 文本，v1 起）：结构化载荷，现有订阅方零回归；
+/// - `publish-binary`（字节列，v11 起）：零 JSON 编解码，可传非 UTF-8
+///   与大载荷（MB 级）。订阅方以 `subscribe-binary` 声明二进制格式偏好，
+///   格式不匹配的投递被宿主拒绝（不进入订阅者队列）并告警
 interface host-bus {
     publish: func(topic: string, payload-json: string) -> result<_, string>;
+    /// v11：二进制载荷发布（字节列原样透传）
+    publish-binary: func(topic: string, payload: list<u8>) -> result<_, string>;
     subscribe: func(topic: string) -> result<_, string>;
+    /// v11：以二进制格式偏好订阅——只接收 publish-binary 投递，
+    /// JSON 消息对其按格式不匹配拒绝
+    subscribe-binary: func(topic: string) -> result<_, string>;
     unsubscribe: func(topic: string) -> result<_, string>;
 }
 
@@ -282,6 +293,19 @@ interface events {
     on-process-done: func(payload-json: string) -> result<_, string>;
 }
 
+/// v11：二进制消息接收（可选导出，**不进 `plugin` world 的必选导出列表**）
+///
+/// 宿主在实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`：
+/// - 旧插件（v10 及更早，未用新 SDK 编译）不导出本接口 → 探测为 None，
+///   只接收 JSON 消息；二进制消息对其按「格式不匹配」拒绝，不影响加载；
+/// - 新插件（v11 SDK）由 `wasm_entry!` 宏无条件导出（默认空实现），
+///   订阅方以 `host-bus.subscribe-binary` 声明偏好后即可接收二进制投递
+///
+/// 无返回值（观察型回调，语义同 terminal-hooks）：guest 内部处理失败经
+/// host-log 记录，不打断宿主投递链；host 侧仅 trap 会上抛
+interface events-binary {
+    on-message-binary: func(topic: string, sender: string, payload: list<u8>);
+}
 /// 终端输入/输出钩子（原 on_terminal_input/on_terminal_output）
 interface terminal-hooks {
     on-terminal-input: func(session-id: string, text: string) -> option<string>;
@@ -294,6 +318,12 @@ interface manifest {
 }
 
 /// ABI 版本协商（原 __bedcode_abi_version + 阶段 A 新增 form 形态字段）
+///
+/// 版本演进：
+/// - v10：host-peer 原语化收缩第一阶段（dial-peer-endpoint / close /
+///   set-shared-roots + host-mdns / host-platform），纯增量
+/// - v11：消息总线二进制载荷（host-bus.publish-binary / subscribe-binary）
+///   + 可选导出 events-binary（宿主动态探测，旧插件不受影响）
 interface abi {
     version: func() -> u32;
     form: func() -> u32;
@@ -331,4 +361,16 @@ world plugin {
     export terminal-hooks;
     export manifest;
     export abi;
+}
+
+/// v11：二进制消息接收专用 world（**仅 SDK 绑定用，宿主不实例化它**）
+///
+/// 宿主对 `plugin` world 的导出全部按必选实例化，旧插件（v10 及更早）不导出
+/// `events-binary`，因此它不能声明进 `plugin` world（否则旧插件无法加载）；
+/// 宿主改为实例化后动态探测 `bedcode:plugin/events-binary#on-message-binary`。
+/// 本 world 让 SDK 的 `wasm_binary` 模块生成 events-binary 的 guest 绑定
+/// （Guest trait + export!），使 `wasm_entry!` 能无条件导出默认实现
+/// （空实现亦可被宿主动态探测命中）。
+world plugin-binary {
+    export events-binary;
 }
