@@ -1,0 +1,1321 @@
+/**
+ * Agent Hub 插件样式
+ *
+ * 宿主 Vite 构建只扫描宿主 src/（tailwind content），不会为插件 SFC 里的
+ * Tailwind 类生成样式，且插件 lib 构建产出的独立 CSS 文件不被宿主加载
+ * （build.js 仅拷贝 index.js）。因此本文件经 `?inline` 内联并在插件
+ * activate 时注入 style 标签，全部引用宿主 CSS 变量（bg / text / color /
+ * radius / shadow token），跟随宿主明暗主题，不写死主题色。
+ * 类名统一 `ah-` 前缀避免与宿主/其他插件冲突。
+ *
+ * 设计真源：用户评审定稿原型 `.scratch/agent-hub/prototype/index.html`
+ * （#variant=b 顶部分段导航）。
+ */
+
+/* 系统减弱动态效果时降级为瞬时（优先级最低，后续显式过渡类可覆盖） */
+@media (prefers-reduced-motion: reduce) {
+  .ah-view *,
+  .ah-view *::before,
+  .ah-view *::after {
+    transition-duration: 0.01ms;
+    animation-duration: 0.01ms;
+  }
+}
+
+/* ==================== 面板骨架 ==================== */
+
+.ah-view {
+  height: 100%;
+  overflow-y: auto;
+  padding: 20px;
+  box-sizing: border-box;
+}
+
+/* 顶部 pill 分段导航（变体 B） */
+.ah-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  margin-bottom: 18px;
+}
+
+.ah-tab {
+  height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    color 0.2s;
+}
+
+.ah-tab:hover {
+  background: var(--bg-hover);
+}
+
+.ah-tab.active {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-weight: 600;
+}
+
+.ah-tab.active:hover {
+  background: var(--color-primary-hover);
+}
+
+/* ==================== 通用元件 ==================== */
+
+.ah-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  padding: 14px 16px;
+}
+
+.ah-section-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-mono {
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  font-size: var(--font-size-tag);
+}
+
+.ah-btn {
+  height: 32px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-button);
+  font-size: var(--font-size-base);
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.2s,
+    border-color 0.2s,
+    opacity 0.2s;
+}
+
+.ah-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ah-btn-ghost {
+  background: transparent;
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.ah-btn-ghost:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+
+.ah-btn-sm {
+  height: 26px;
+  padding: 0 10px;
+  font-size: var(--font-size-tag);
+}
+
+/* 警告横幅（目录授权降级提示） */
+.ah-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.ah-banner-ic {
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.ah-banner-text {
+  min-width: 0;
+  flex: 1;
+}
+
+/* ==================== 概览 · 环境条 ==================== */
+
+.ah-env-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.ah-env-rows {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 24px;
+}
+
+.ah-env-row {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-env-label {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.ah-env-value {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ==================== 概览 · CLI 卡片网格 ==================== */
+
+.ah-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.ah-cli-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ah-cli-name {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-cli-name-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-cli-tag {
+  height: 24px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-tag.ok {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.ah-cli-tag.warn {
+  background: var(--color-warning-light);
+  color: var(--color-warning);
+}
+
+.ah-cli-tag.err {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.ah-cli-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.ah-cli-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+  color: var(--text-secondary);
+}
+
+.ah-cli-method {
+  height: 22px;
+  padding: 0 7px;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-tag);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-error {
+  margin-top: 8px;
+  color: var(--color-danger);
+  font-size: var(--font-size-tag);
+  word-break: break-all;
+}
+
+.ah-cli-dual {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-cli-path {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  word-break: break-all;
+}
+
+/* 品牌图标 chip：claude / pi 用品牌色低透明度派生底色，其余走中性 token */
+.ah-cli-ic {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: 9px;
+  background: var(--bg-hover);
+}
+
+.ah-cli-ic svg {
+  width: 58%;
+  height: 58%;
+}
+
+.ah-cli-ic.brand-claude {
+  background: rgba(217, 119, 87, 0.16);
+}
+
+.ah-cli-ic.brand-pi {
+  background: rgba(245, 158, 11, 0.16);
+}
+
+/* ==================== 安装与更新（票据 03） ==================== */
+
+.ah-inst {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ah-inst-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+/* 测速行（概览环境条内）：左计时右动作，窄面板允许换行 */
+.ah-speed-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-speed-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+}
+
+.ah-speed-vs {
+  color: var(--text-tertiary);
+}
+
+.ah-speed-tag {
+  margin-left: 4px;
+}
+
+.ah-speed-line-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 测速卡片（安装与更新页）：行式布局 + 推荐/还原动作区 */
+.ah-speed-rows {
+  display: grid;
+  gap: 6px 24px;
+}
+
+.ah-speed-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-speed-actions-btns {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* 两击确认态：警示描边提示二次点击 */
+.ah-btn-warn {
+  border-color: var(--color-warning);
+  color: var(--color-warning);
+}
+
+/* 临时镜像开关行 */
+.ah-mirror-tmp {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ah-mirror-tmp input {
+  accent-color: var(--color-primary);
+}
+
+/* CLI 安装/更新行：图标名 | 版本 → 最新 | 动作 */
+.ah-inst-rows {
+  display: flex;
+  flex-direction: column;
+}
+
+.ah-inst-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-inst-row + .ah-inst-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-inst-versions {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+.ah-inst-outdated {
+  color: var(--color-warning);
+  font-weight: 700;
+}
+
+.ah-inst-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.ah-inst-hint {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+}
+
+/* node 缺失降级行：白名单解析命令 + 复制按钮（占满第二行） */
+.ah-inst-degraded {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 10px;
+  border-radius: var(--radius-button);
+  background: var(--bg-hover);
+}
+
+.ah-inst-degraded-cmd {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+/* 主按钮（安装/更新主动作） */
+.ah-btn-primary {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.ah-btn-primary:hover:not(:disabled) {
+  background: var(--color-primary-hover);
+}
+
+/* 执行输出控制台：命令行 + 尾部回显，内部滚动贴底 */
+.ah-console-cmd {
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  word-break: break-all;
+}
+
+.ah-console {
+  height: 180px;
+  margin: 8px 0 0;
+  padding: 10px;
+  overflow-y: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ==================== Skills 管理（票据 04） ==================== */
+
+.ah-sk {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 状态 tag 行：规范库计数 + 各目标同步汇总 */
+.ah-sk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* GitHub 安装表单 */
+.ah-sk-github-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-sk-url {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-sk-url:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.ah-sk-url::placeholder {
+  color: var(--text-tertiary);
+}
+
+.ah-sk-github-hint {
+  margin-top: 8px;
+}
+
+/* 覆盖确认条（GitHub / 导入同名 skill） */
+.ah-sk-confirm {
+  margin-top: 10px;
+  margin-bottom: 0;
+}
+
+/* 导入 / GitHub 安装结果行（guest 状态回流） */
+.ah-sk-result {
+  padding: 8px 12px;
+  border-radius: var(--radius-button);
+  background: var(--color-success-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-body);
+}
+
+.ah-sk-result.err {
+  background: var(--color-danger-light);
+}
+
+.ah-sk-raw-error {
+  margin-top: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+  word-break: break-all;
+}
+
+/* 空态 */
+.ah-sk-empty {
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.ah-sk-empty-hint {
+  margin-top: 6px;
+}
+
+/* 技能行（列语义：技能+描述 | 分发状态 | 动作，窄面板自动换行） */
+.ah-sk-table-card {
+  padding: 4px 16px;
+}
+
+.ah-sk-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 0;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-sk-row + .ah-sk-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-sk-row-main {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ah-sk-row-name {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-sk-row-name-text {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-sk-row-dir {
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-sk-row-desc {
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.ah-sk-row-dist {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.ah-sk-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* ==================== Skill 编辑器（票据 04） ==================== */
+
+.ah-sk-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.ah-sk-loading {
+  padding: 24px 0;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.ah-sk-meta {
+  display: flex;
+  gap: 6px 24px;
+  flex-wrap: wrap;
+}
+
+.ah-sk-textarea {
+  width: 100%;
+  height: 320px;
+  padding: 10px;
+  box-sizing: border-box;
+  resize: vertical;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
+.ah-sk-textarea:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.ah-sk-preview-title {
+  margin-top: 4px;
+}
+
+/* diff 呈现：增删行用 success/danger 语义底色，上下文行中性 */
+.ah-sk-diff {
+  max-height: 260px;
+  padding: 8px 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  font-size: var(--font-size-tag);
+  line-height: 1.5;
+}
+
+.ah-sk-diff-line {
+  padding: 0 10px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.ah-sk-diff-line.add {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.ah-sk-diff-line.del {
+  background: var(--color-danger-light);
+  color: var(--color-danger);
+}
+
+.ah-sk-diff-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ==================== 供应商管理（票据 05） ==================== */
+
+.ah-pv {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 导入结果卡：掩码 key 行 */
+.ah-pv-import {
+  padding: 10px 16px;
+}
+
+.ah-pv-import-line {
+  margin-top: 4px;
+}
+
+.ah-pv-import-names {
+  font-weight: 600;
+}
+
+/* 表单字段行：label + 控件（窄面板换行） */
+.ah-pv-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.ah-pv-label {
+  width: 96px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.ah-pv-input {
+  max-width: 100%;
+  flex: 1;
+  min-width: 200px;
+}
+
+/* chip 选择组（目标 CLI / API 方言 / 模板快选） */
+.ah-pv-targets {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ah-pv-target {
+  cursor: pointer;
+  border: 1px solid transparent;
+  font-family: inherit;
+  transition:
+    background-color 0.2s,
+    color 0.2s,
+    border-color 0.2s;
+}
+
+.ah-pv-target:hover {
+  background: var(--bg-hover);
+}
+
+.ah-pv-target.active {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+/* key 三选一（radio 行） */
+.ah-pv-keymodes {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px 14px;
+  flex-wrap: wrap;
+}
+
+.ah-pv-keymode {
+  margin-bottom: 0;
+}
+
+/* 单选项行（key 模式三选一）：与镜像开关同布局的语义中立版 */
+.ah-pv-radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-body);
+  cursor: pointer;
+  user-select: none;
+}
+
+.ah-pv-radio input {
+  accent-color: var(--color-primary);
+}
+
+/* 模型列表 textarea（编辑器内，矮于 SKILL 编辑器） */
+.ah-pv-models {
+  height: 110px;
+  width: auto;
+  flex: 1;
+  min-width: 200px;
+}
+
+/* 应用/编辑器动作行 */
+.ah-pv-apply-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* claude 只读视图行距 */
+.ah-pv-claude-rows {
+  margin-top: 10px;
+}
+
+/* ==================== 分区占位 ==================== */
+
+.ah-placeholder {
+  padding: 28px 20px;
+  text-align: center;
+}
+
+.ah-placeholder-title {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-placeholder-hint {
+  margin-top: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-base);
+}
+
+/* ==================== 使用统计（票据 06，原型变体 B stats 页） ==================== */
+
+.ah-st-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.ah-st-totals {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.ah-st-total {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+}
+
+.ah-st-total-val {
+  font-size: var(--font-size-lg);
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+}
+
+.ah-st-total-label {
+  margin-top: 2px;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+.ah-st-dims {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+/* 每日 tokens 堆叠横条（输入/输出两段） */
+.ah-st-chart {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.ah-st-crow {
+  display: grid;
+  grid-template-columns: 52px 1fr 64px;
+  align-items: center;
+  gap: 10px;
+}
+
+.ah-st-clabel {
+  font-size: var(--font-size-tag);
+  color: var(--text-secondary);
+}
+
+.ah-st-cbar {
+  height: 12px;
+  border-radius: var(--radius-tag, 4px);
+  background: var(--bg-hover);
+  overflow: hidden;
+  display: flex;
+}
+
+.ah-st-cin {
+  background: var(--color-primary);
+  height: 100%;
+}
+
+.ah-st-cout {
+  background: var(--color-warning);
+  height: 100%;
+  opacity: 0.85;
+}
+
+.ah-st-cval {
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+  text-align: right;
+}
+
+.ah-st-legend {
+  display: flex;
+  gap: 14px;
+  font-size: var(--font-size-tag);
+  color: var(--text-secondary);
+  margin-top: 8px;
+}
+
+.ah-st-k {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -1px;
+}
+
+.ah-st-k.in {
+  background: var(--color-primary);
+}
+
+.ah-st-k.out {
+  background: var(--color-warning);
+  opacity: 0.85;
+}
+
+/* 汇总表 */
+.ah-st-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-body);
+  margin-top: 8px;
+}
+
+.ah-st-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.ah-st-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-primary);
+}
+
+.ah-st-table tr:last-child td {
+  border-bottom: none;
+}
+
+.ah-st-table .num {
+  text-align: right;
+}
+
+.ah-st-name {
+  color: var(--text-primary);
+}
+
+.ah-st-sub {
+  margin-top: 2px;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+/* 会话明细列表 */
+.ah-st-detail {
+  margin-top: 12px;
+}
+
+.ah-st-empty {
+  padding: 14px 4px;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-body);
+}
+
+.ah-st-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 4px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.ah-st-row:last-of-type {
+  border-bottom: none;
+}
+
+.ah-st-row:hover {
+  background: var(--bg-hover);
+}
+
+.ah-st-row-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-st-row-title {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-st-row-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  color: var(--text-tertiary);
+}
+
+.ah-st-row-project {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-st-more {
+  margin-top: 10px;
+  text-align: center;
+}
+
+/* ==================== 会话日志（票据 06，主从布局） ==================== */
+
+.ah-lg {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.ah-lg-list {
+  width: 268px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ah-lg-filters {
+  display: flex;
+  gap: 4px;
+}
+
+.ah-lg-item {
+  padding: 10px 12px;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.ah-lg-item.active {
+  border-color: var(--color-primary);
+  box-shadow: var(--shadow-card-hover);
+}
+
+.ah-lg-item-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-weight: 600;
+}
+
+.ah-lg-item-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+
+.ah-lg-item-sub {
+  margin-top: 4px;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+.ah-lg-view {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ah-lg-placeholder {
+  padding: 28px 20px;
+  text-align: center;
+  color: var(--text-tertiary);
+}
+
+.ah-lg-head-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ah-lg-head-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ah-lg-head-src {
+  margin-top: 6px;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-head-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 6px;
+  color: var(--text-secondary);
+}
+
+.ah-lg-warn {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-button);
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+}
+
+/* 归一事件流：时间列 + 角色 tag + 正文 */
+.ah-lg-evt {
+  display: flex;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: var(--font-size-body);
+}
+
+.ah-lg-evt:last-child {
+  border-bottom: none;
+}
+
+.ah-lg-evt-t {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+  width: 56px;
+  flex: none;
+  padding-top: 2px;
+}
+
+.ah-lg-evt-tx {
+  min-width: 0;
+  flex: 1;
+}
+
+.ah-lg-evt-text {
+  color: var(--text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ah-lg-evt-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+.ah-lg-tag {
+  flex: none;
+  height: fit-content;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-tag.user {
+  background: var(--color-primary-light);
+  color: var(--text-primary);
+}
+
+.ah-lg-tag.asst {
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+}
+
+.ah-lg-tag.tool,
+.ah-lg-tag.sys {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+}
+
+.ah-lg-tag.sys {
+  color: var(--text-tertiary);
+}
+
+/* 原始 JSONL 行视图 */
+.ah-lg-raw {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  padding: 12px 14px;
+  font-size: var(--font-size-tag);
+  line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-all;
+  max-height: 480px;
+  overflow-y: auto;
+  color: var(--text-secondary);
+}
+
+.ah-lg-raw-line {
+  border-bottom: 1px dashed var(--border);
+  padding: 2px 0;
+}
+
+.ah-lg-raw-line:last-child {
+  border-bottom: none;
+}
