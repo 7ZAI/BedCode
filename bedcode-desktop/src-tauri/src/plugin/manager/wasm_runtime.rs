@@ -391,6 +391,8 @@ pub struct WasmHostContext {
     /// 插件互调 api 注册表（ADR-0017）：激活登记 / 停用注销，
     /// `bus_publish` 对 `bedcode.api.*` 请求 topic 做目标校验
     api_registry: Arc<crate::plugin::security::api_registry::ApiRegistry>,
+    /// 统一授权框架（core-security）：三段决策管线 + 仲裁器注册表
+    security: crate::plugin::security::SecurityFramework,
 }
 
 /// 运行中的进程（记录 pid 供进程组 kill）
@@ -833,6 +835,16 @@ impl WasmHostContext {
         fs_auth: Arc<FsAuthChecker>,
         message_bus: Arc<crate::plugin::bus::MessageBus>,
     ) -> Self {
+        let api_registry = Arc::new(crate::plugin::security::api_registry::ApiRegistry::new());
+        // 统一授权框架：注册既有资源的仲裁器（fs 三层校验 / api-call 互调门）
+        let security = crate::plugin::security::SecurityFramework::new();
+        security.register(Arc::new(crate::plugin::security::framework::FsAuthorizer::new(
+            permission.clone(),
+            fs_auth.clone(),
+        )));
+        security.register(Arc::new(crate::plugin::security::framework::ApiCallAuthorizer::new(
+            api_registry.clone(),
+        )));
         Self {
             db,
             plugin_dbs,
@@ -845,7 +857,8 @@ impl WasmHostContext {
             message_bus,
             plugin_services: Arc::new(RwLock::new(None)),
             process_registry: Arc::new(ProcessRegistry::new()),
-            api_registry: Arc::new(crate::plugin::security::api_registry::ApiRegistry::new()),
+            api_registry,
+            security,
         }
     }
 
@@ -876,6 +889,11 @@ impl WasmHostContext {
     /// 获取插件互调 api 注册表引用（ADR-0017 门禁）
     pub fn api_registry(&self) -> &Arc<crate::plugin::security::api_registry::ApiRegistry> {
         &self.api_registry
+    }
+
+    /// 获取统一授权框架引用（core-security 三段决策管线）
+    pub fn security(&self) -> &crate::plugin::security::SecurityFramework {
+        &self.security
     }
 
     /// 获取 SessionManager 的 Arc 引用

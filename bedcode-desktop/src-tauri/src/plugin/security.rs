@@ -9,4 +9,7 @@
 
 pub mod api_registry;
 pub mod approval;
+pub mod framework;
 pub mod fs_auth;
+
+pub use framework::{AuthDecision, AuthRequest, ResourceAuthorizer, ResourceKind, SecurityFramework};

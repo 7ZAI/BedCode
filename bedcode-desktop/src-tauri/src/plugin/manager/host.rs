@@ -165,6 +165,10 @@ impl PluginHost {
             message_bus.clone(),
         ));
 
+        // core-security × core-monitor：决策计数埋点两阶段注入
+        // （monitor 生于 WasmRuntime，晚于宿主上下文构建）
+        wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
+
         // 1. 收集静态注册的 Rust 插件
         let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
             inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
@@ -1463,6 +1467,8 @@ mod tests {
             wasm_runtime.fs_auth().clone(),
             message_bus.clone(),
         ));
+
+        wasm_host_ctx.security().set_monitor(wasm_runtime.monitor());
 
         PluginHost {
             plugins: Arc::new(RwLock::new(HashMap::new())),

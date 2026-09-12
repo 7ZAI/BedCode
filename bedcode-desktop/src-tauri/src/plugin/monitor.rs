@@ -19,6 +19,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
+/// 授权决策类别（core-monitor 埋点维度；core-security 的 AuthDecision 映射到此）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthzDecisionKind {
+    Allow,
+    Deny,
+    RequireApproval,
+}
+
 // ==================== 生命周期事件 ====================
 
 /// 插件生命周期事件（计数维度）
@@ -104,6 +112,8 @@ pub struct PluginMetrics {
     lifecycle_counts: [AtomicU64; 6],
     /// 生命周期事件最近发生时间（unix 秒）
     lifecycle_last_unix: [AtomicU64; 6],
+    /// 授权决策计数（按 [`AuthzDecisionKind`] 索引：allow/deny/require_approval）
+    authz_decisions: [AtomicU64; 3],
 }
 
 impl Default for PluginMetrics {
@@ -118,6 +128,7 @@ impl Default for PluginMetrics {
             call_duration_buckets: std::array::from_fn(|_| AtomicU64::new(0)),
             lifecycle_counts: std::array::from_fn(|_| AtomicU64::new(0)),
             lifecycle_last_unix: std::array::from_fn(|_| AtomicU64::new(0)),
+            authz_decisions: std::array::from_fn(|_| AtomicU64::new(0)),
         }
     }
 }
@@ -166,6 +177,16 @@ impl PluginMetrics {
             .unwrap_or(0);
         self.lifecycle_last_unix[event.idx()].store(now, Ordering::Relaxed);
     }
+
+    /// 授权决策记账（core-security 决策管线的唯一埋点点）
+    pub fn record_authz_decision(&self, kind: AuthzDecisionKind) {
+        let idx = match kind {
+            AuthzDecisionKind::Allow => 0,
+            AuthzDecisionKind::Deny => 1,
+            AuthzDecisionKind::RequireApproval => 2,
+        };
+        self.authz_decisions[idx].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// 导出调用计时器（RAII）：drop 时把耗时记入指标
@@ -198,6 +219,8 @@ pub struct PluginMetricsSnapshot {
     pub lifecycle: HashMap<String, u64>,
     /// 生命周期事件最近发生时间 unix 秒（仅发生过的事件出现）
     pub lifecycle_last_unix: HashMap<String, u64>,
+    /// 授权决策计数（allow / deny / require_approval）
+    pub authz: HashMap<String, u64>,
 }
 
 impl PluginMetrics {
@@ -226,6 +249,14 @@ impl PluginMetrics {
                 .collect(),
             lifecycle,
             lifecycle_last_unix,
+            authz: HashMap::from([
+                ("allow".to_string(), self.authz_decisions[0].load(Ordering::Relaxed)),
+                ("deny".to_string(), self.authz_decisions[1].load(Ordering::Relaxed)),
+                (
+                    "require_approval".to_string(),
+                    self.authz_decisions[2].load(Ordering::Relaxed),
+                ),
+            ]),
         }
     }
 }
@@ -378,6 +409,7 @@ mod tests {
             "call_duration_buckets",
             "lifecycle",
             "lifecycle_last_unix",
+            "authz",
         ] {
             assert!(plugin.get(key).is_some(), "快照缺字段 {key}");
         }

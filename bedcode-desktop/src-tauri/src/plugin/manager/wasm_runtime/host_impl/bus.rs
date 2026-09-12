@@ -17,17 +17,26 @@ pub(crate) fn bus_publish(
     // `bedcode.api.reply.` 是响应通道（回复 topic 的调用方即为目标），免校验；
     // 普通广播 topic 不校验，保持向后兼容。
     if let Some(api) = topic.strip_prefix("bedcode.api.") {
-        if !api.starts_with("reply.") && !host_ctx.api_registry().contains(api) {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                topic = %topic,
-                api = %api,
-                "bus_publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
-            );
-            return Err(format!(
-                "bus error: api '{}' is not declared by any activated plugin (gate)",
-                api
-            ));
+        if !api.starts_with("reply.") {
+            // 互调门经 core-security 授权框架路由（三段管线；行为与直查注册表等价）
+            let req = crate::plugin::security::AuthRequest {
+                plugin_id,
+                resource: crate::plugin::security::ResourceKind::ApiCall,
+                operation: "invoke",
+                target: api,
+            };
+            if host_ctx.security().authorize(&req) != crate::plugin::security::AuthDecision::Allow {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    topic = %topic,
+                    api = %api,
+                    "bus_publish: api call to undeclared api rejected (inter-plugin call gate, ADR-0017)"
+                );
+                return Err(format!(
+                    "bus error: api '{}' is not declared by any activated plugin (gate)",
+                    api
+                ));
+            }
         }
     }
 
