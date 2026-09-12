@@ -22,7 +22,6 @@ import SkillsTab from './SkillsTab.vue'
 import ProvidersTab from './ProvidersTab.vue'
 import StatsTab from './StatsTab.vue'
 import SessionLogsTab from './SessionLogsTab.vue'
-import TabPlaceholder from './TabPlaceholder.vue'
 
 const context = inject<PluginContext>('pluginContext')!
 const {
@@ -109,12 +108,7 @@ function gotoLogs(sessionId: number) {
     />
     <SkillsTab v-else-if="activeTab === 'skills'" :detection="state" :skills="skills" />
     <ProvidersTab v-else-if="activeTab === 'providers'" :detection="state" :providers="providers" />
-    <StatsTab
-      v-else-if="activeTab === 'stats'"
-      :detection="state"
-      :usage="usage"
-      @goto-logs="gotoLogs"
-    />
+    <StatsTab v-else-if="activeTab === 'stats'" :usage="usage" @goto-logs="gotoLogs" />
     <SessionLogsTab v-else :usage="usage" />
   </div>
 </template>

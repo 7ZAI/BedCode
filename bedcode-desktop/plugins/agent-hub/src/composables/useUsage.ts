@@ -47,9 +47,19 @@ export function useUsage(context: PluginContext) {
     }
   }
 
+  /** 面板打开后自动扫描已触发过（idle 态只扫一次，防事件风暴下重复发起） */
+  let autoScanDone = false
+
   function applyState(next: UsageDomainState | null) {
     const syncing = state.value?.status === 'syncing'
     state.value = next
+    // spec §4.5「应用打开面板时增量扫描」：从未扫描（idle）时自动触发一次
+    // （auth-required 不自动触发——由用户经授权入口先授权）
+    if (next?.status === 'idle' && !autoScanDone) {
+      autoScanDone = true
+      void scan()
+      return
+    }
     // 扫描由本会话发起 → 完成后重拉看板与列表首屏（auth-required/error 无需）
     if (syncing && next?.status === 'ok') {
       void Promise.all([reloadStats(), reloadSessions()])
@@ -95,7 +105,7 @@ export function useUsage(context: PluginContext) {
     }
   }
 
-  /** 列表适配器过滤（'' = 全部）；切换即重拉 */
+  /** 列表适配器过滤（'' = 全部） */
   const listFilter = ref('')
 
   /** 加载更多（分页追加） */

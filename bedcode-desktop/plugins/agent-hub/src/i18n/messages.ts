@@ -207,4 +207,46 @@ export type MessageSchema = {
   'hub.pv.apply.conflict': string
   'hub.pv.apply.conflictConfirm': string
   'hub.pv.apply.failed': string
+  // ==================== 使用统计（票据 06） ====================
+  'hub.st.syncedTag': string
+  'hub.st.syncing': string
+  'hub.st.scanning': string
+  'hub.st.scanNow': string
+  'hub.st.totalSessions': string
+  'hub.st.totalTokens': string
+  'hub.st.totalDuration': string
+  'hub.st.totalCost': string
+  'hub.st.dim.day': string
+  'hub.st.dim.cli': string
+  'hub.st.dim.project': string
+  'hub.st.dim.model': string
+  'hub.st.dailyChart': string
+  'hub.st.dayTip': string
+  'hub.st.legendIn': string
+  'hub.st.legendOut': string
+  'hub.st.summaryBy': string
+  'hub.st.col.name': string
+  'hub.st.col.sessions': string
+  'hub.st.col.tokensIn': string
+  'hub.st.col.tokensOut': string
+  'hub.st.col.cost': string
+  'hub.st.modelMessages': string
+  'hub.st.noProject': string
+  'hub.st.sessionsTitle': string
+  'hub.st.empty': string
+  'hub.st.loadMore': string
+
+  // ==================== 会话日志（票据 06） ====================
+  'hub.lg.filterAll': string
+  'hub.lg.pickSession': string
+  'hub.lg.viewRaw': string
+  'hub.lg.viewEvents': string
+  'hub.lg.noSource': string
+  'hub.lg.eventsTruncated': string
+  'hub.lg.rawTruncated': string
+  'hub.lg.noEvents': string
+  'hub.lg.role.user': string
+  'hub.lg.role.assistant': string
+  'hub.lg.role.tool': string
+  'hub.lg.role.system': string
 }

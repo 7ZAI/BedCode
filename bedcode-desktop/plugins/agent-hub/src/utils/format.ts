@@ -28,17 +28,17 @@ export function formatDuration(ms: number | null | undefined): string {
   if (ms == null || !Number.isFinite(ms) || ms < 0) return '—'
   if (ms < 1000) return `${Math.round(ms)}ms`
   const s = ms / 1000
-  if (s < 60) return `${roundCeil(s, 0.1)}s`
+  if (s < 60) return `${roundCeil(s)}s`
   const min = s / 60
-  if (min < 60) return `${roundCeil(min, 0.1)}min`
+  if (min < 60) return `${roundCeil(min)}min`
   const h = min / 60
-  if (h < 24) return `${roundCeil(h, 0.1)}h`
+  if (h < 24) return `${roundCeil(h)}h`
   const d = h / 24
-  return `${roundCeil(d, 0.1)}d`
+  return `${roundCeil(d)}d`
 }
 
 /** 向上取整到 0.1 粒度并格式化（整数则不带小数点；-1e-9 抵消浮点误差） */
-function roundCeil(v: number, _step: number): string {
+function roundCeil(v: number): string {
   const scaled = Math.ceil(v * 10 - 1e-9) / 10
   return Number.isInteger(scaled) ? String(scaled) : scaled.toFixed(1)
 }

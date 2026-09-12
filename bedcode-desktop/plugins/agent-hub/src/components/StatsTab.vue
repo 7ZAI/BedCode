@@ -21,7 +21,6 @@ import {
 } from '../utils/format'
 
 const props = defineProps<{
-  detection: { authGranted: boolean } | null
   usage: UseUsageReturn
 }>()
 
@@ -133,7 +132,7 @@ function sessionLabel(s: UsageSessionRow): string {
   <div>
     <div class="ah-st-head">
       <span class="ah-cli-tag" :class="{ ok: !syncing }">
-        {{ syncing ? t('hub.st.syncing') : t('hub.st.syncedTag', { n: (state?.adapters.claude.parsed ?? 0) + (state?.adapters.pi.parsed ?? 0) }) }}
+        {{ syncing ? t('hub.st.syncing') : t('hub.st.syncedTag', { n: (state?.adapters?.claude?.parsed ?? 0) + (state?.adapters?.pi?.parsed ?? 0) }) }}
       </span>
       <button
         type="button"

@@ -335,10 +335,8 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
             slot.2 += 1;
             continue;
         }
-        let parsed = match section.as_str() {
-            "claude" => parse_claude_session(&content),
-            "pi" => parse_pi_session(&content),
-            _ => continue,
+        let Some(parsed) = parse_by_adapter(section, &content) else {
+            continue;
         };
         if parsed.skipped_lines > 0 {
             h.log_warn(&format!(
@@ -369,6 +367,18 @@ pub(crate) fn handle_scan_done(event: &ProcessDoneEvent) -> anyhow::Result<()> {
     emit_and_return(&h, &state).map(|_| ())
 }
 
+// ==================== 适配器分派 ====================
+
+/// 按适配器名分派解析（扫描回灌与会话日志打开共用；票据 07 新增适配器
+/// 在此与 SESSION_ROOTS/ADAPTERS 同步扩一行）
+fn parse_by_adapter(adapter: &str, content: &str) -> Option<ParsedSession> {
+    match adapter {
+        "claude" => Some(parse_claude_session(content)),
+        "pi" => Some(parse_pi_session(content)),
+        _ => None,
+    }
+}
+
 /// 水位判定：同 (adapter, path) 的已记录 size 与当前一致 → 无需重解析
 fn watermark_unchanged(h: &WasmHost, adapter: &str, path: &str, size: usize) -> bool {
     h.plugin_db_query_params(
@@ -385,17 +395,21 @@ fn watermark_unchanged(h: &WasmHost, adapter: &str, path: &str, size: usize) -> 
 
 /// 水位落库：先 UPDATE 后 INSERT（同 upsert_session 的单语句兼容策略）
 fn upsert_watermark(h: &WasmHost, adapter: &str, path: &str, size: usize, now: u64) {
+    let params = sql_params![adapter, path, size as i64, now as i64];
     let affected = h
         .plugin_db_execute_params(
             "UPDATE parse_watermark SET size = ?3, parsed_at = ?4 WHERE adapter = ?1 AND source_path = ?2",
-            &sql_params![adapter, path, size as i64, now as i64],
+            &params,
         )
         .unwrap_or(0);
     if affected == 0 {
-        let _ = h.plugin_db_execute_params(
+        // INSERT 失败仅影响下轮重解析（水位幂等性降级为「多算一轮」），warn 留痕
+        if let Err(e) = h.plugin_db_execute_params(
             "INSERT INTO parse_watermark (adapter, source_path, size, mtime, parsed_at) VALUES (?1, ?2, ?3, NULL, ?4)",
-            &sql_params![adapter, path, size as i64, now as i64],
-        );
+            &params,
+        ) {
+            h.log_warn(&format!("usage: watermark insert failed: {e}"));
+        }
     }
 }
 
@@ -418,6 +432,27 @@ fn upsert_session(
     let dominant = parsed.dominant_model().unwrap_or("unknown");
     let models_json = serde_json::to_string(&parsed.models).unwrap_or_else(|_| "[]".to_string());
     let cost = parsed.cost_total;
+    // UPDATE 与 INSERT 共用同一参数序列（?1..?17，INSERT 的 first_seen_at
+    // 与 updated_at 共用 ?17）
+    let params = sql_params![
+        adapter,
+        parsed.cli_session_id,
+        parsed.project,
+        parsed.title,
+        path,
+        started,
+        ended,
+        duration,
+        dominant,
+        models_json,
+        parsed.tokens.input,
+        parsed.tokens.output,
+        parsed.tokens.cache_read,
+        parsed.tokens.cache_write,
+        parsed.tokens.reasoning,
+        cost,
+        now as i64,
+    ];
 
     let affected = h
         .plugin_db_execute_params(
@@ -426,25 +461,7 @@ fn upsert_session(
                  tokens_in = ?11, tokens_out = ?12, tokens_cache_read = ?13, tokens_cache_write = ?14, \
                  tokens_reasoning = ?15, cost_total = ?16, updated_at = ?17 \
              WHERE adapter = ?1 AND cli_session_id = ?2",
-            &sql_params![
-                adapter,
-                parsed.cli_session_id,
-                parsed.project,
-                parsed.title,
-                path,
-                started,
-                ended,
-                duration,
-                dominant,
-                models_json,
-                parsed.tokens.input,
-                parsed.tokens.output,
-                parsed.tokens.cache_read,
-                parsed.tokens.cache_write,
-                parsed.tokens.reasoning,
-                cost,
-                now as i64,
-            ],
+            &params,
         )
         .unwrap_or(0);
     if affected > 0 {
@@ -457,25 +474,7 @@ fn upsert_session(
                  tokens_in, tokens_out, tokens_cache_read, tokens_cache_write, tokens_reasoning, \
                  cost_total, first_seen_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?17)",
-            &sql_params![
-                adapter,
-                parsed.cli_session_id,
-                parsed.project,
-                parsed.title,
-                path,
-                started,
-                ended,
-                duration,
-                dominant,
-                models_json,
-                parsed.tokens.input,
-                parsed.tokens.output,
-                parsed.tokens.cache_read,
-                parsed.tokens.cache_write,
-                parsed.tokens.reasoning,
-                cost,
-                now as i64,
-            ],
+            &params,
         )
         .unwrap_or(0);
     if inserted > 0 {
@@ -701,11 +700,8 @@ pub(crate) fn read_session(h: &WasmHost, args: &Value) -> anyhow::Result<Value> 
         .map_err(|e| anyhow::anyhow!("read-session: source unreadable: {e}"))?
         .unwrap_or_default();
 
-    let parsed = match adapter.as_str() {
-        "claude" => parse_claude_session(&content),
-        "pi" => parse_pi_session(&content),
-        _ => anyhow::bail!("read-session: unknown adapter {adapter}"),
-    };
+    let parsed = parse_by_adapter(&adapter, &content)
+        .ok_or_else(|| anyhow::anyhow!("read-session: unknown adapter {adapter}"))?;
 
     // 原始行视图：与事件流同源，上限独立计（超出截断并标注）
     let raw_truncated = content.lines().count() > RAW_LINE_CAP;
@@ -759,16 +755,6 @@ mod tests {
         assert!(win.contains(" & "));
     }
 
-    /// 水位判定语义：无记录 / 尺寸变更 → 需解析；依赖宿主 DB，这里锁定
-    /// 纯判定逻辑（None → false）在无宿主环境的行为等价
-    #[test]
-    fn watermark_semantics_documented() {
-        // watermark_unchanged 需要宿主 plugin_db；此处锁定 SQL 形状
-        let sql = "SELECT size FROM parse_watermark WHERE adapter = ?1 AND source_path = ?2";
-        assert!(sql.contains("adapter = ?1"));
-        assert!(sql.contains("source_path = ?2"));
-    }
-
     /// 状态默认形状：两适配器槽位齐备（opencode/codex 票据 07 补入）
     #[test]
     fn default_state_shape() {
@@ -777,14 +763,6 @@ mod tests {
         assert!(s["adapters"]["claude"].is_object());
         assert!(s["adapters"]["pi"].is_object());
         assert!(s["adapters"].get("opencode").is_none());
-    }
-
-    /// schema DDL 均为单语句（宿主 plugin_db_execute 多语句截断语义）
-    #[test]
-    fn schema_statements_single_statement() {
-        // 由 ensure_schema 的语句表锁定：无分号分隔的多语句形态
-        let stmts_check = |s: &str| s.trim_end_matches(';').matches(';').count() == 0;
-        assert!(stmts_check("CREATE TABLE IF NOT EXISTS t (a INTEGER)"));
     }
 
     /// 事件 → wire 形状：token 明细 camelCase、ts 透传

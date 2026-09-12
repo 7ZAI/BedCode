@@ -318,12 +318,9 @@ pub(crate) fn parse_claude_session(content: &str) -> ParsedSession {
                 .unwrap_or("")
                 .to_string();
         }
-        match ts {
-            Some(t) => {
-                session.started_at = Some(session.started_at.map_or(t, |cur| cur.min(t)));
-                session.ended_at = Some(session.ended_at.map_or(t, |cur| cur.max(t)));
-            }
-            None => {}
+        if let Some(t) = ts {
+            session.started_at = Some(session.started_at.map_or(t, |cur| cur.min(t)));
+            session.ended_at = Some(session.ended_at.map_or(t, |cur| cur.max(t)));
         }
 
         match kind {
@@ -448,10 +445,6 @@ pub(crate) fn parse_claude_session(content: &str) -> ParsedSession {
 
     session.title = title;
     session.project = project;
-    if session.cli_session_id.is_empty() {
-        // 无 sessionId 行的极端数据：以 0 占位由调用方决定丢弃
-        session.cli_session_id = String::new();
-    }
     session
 }
 
@@ -526,12 +519,9 @@ pub(crate) fn parse_pi_session(content: &str) -> ParsedSession {
             .get("timestamp")
             .and_then(|t| t.as_str())
             .and_then(parse_iso8601_ms);
-        match ts {
-            Some(t) => {
-                session.started_at = Some(session.started_at.map_or(t, |cur| cur.min(t)));
-                session.ended_at = Some(session.ended_at.map_or(t, |cur| cur.max(t)));
-            }
-            None => {}
+        if let Some(t) = ts {
+            session.started_at = Some(session.started_at.map_or(t, |cur| cur.min(t)));
+            session.ended_at = Some(session.ended_at.map_or(t, |cur| cur.max(t)));
         }
 
         match kind {

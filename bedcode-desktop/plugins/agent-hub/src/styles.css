@@ -964,7 +964,7 @@
 
 .ah-st-cbar {
   height: 12px;
-  border-radius: var(--radius-tag, 4px);
+  border-radius: var(--radius-tag);
   background: var(--bg-hover);
   overflow: hidden;
   display: flex;
