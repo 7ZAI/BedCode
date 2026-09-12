@@ -36,6 +36,7 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktrac
 // 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
 pub(crate) use crate::plugin::config::plugin_debug_mode;
 use crate::plugin::config::{CoreConfig, StoreLimits};
+use crate::plugin::monitor::{LifecycleEvent, MetricsRegistry, PluginMetrics};
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
 pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -191,6 +192,19 @@ pub struct WasmRuntime {
     /// 内核配置（core-config）：Engine 参数构建期固化，Store 上限每次实例化读快照
     /// （运行时覆盖只影响新建立的 Store）
     config: Arc<std::sync::RwLock<CoreConfig>>,
+    /// 指标注册表（core-monitor）：内核运行时埋点数据中心
+    monitor: Arc<MetricsRegistry>,
+}
+
+/// 实例化一个插件 Store 所需的全部配置与埋点句柄（core-config × core-monitor 交汇）
+#[derive(Clone)]
+pub(crate) struct StoreSpec {
+    /// Store 资源上限快照
+    pub(crate) limits: StoreLimits,
+    /// 燃料看门狗是否开启（Engine 级 consume_fuel 的投影；关闭时 set_fuel/get_fuel 不可用）
+    pub(crate) fuel_enabled: bool,
+    /// 插件指标句柄（core-monitor 埋点入口）
+    pub(crate) metrics: Arc<PluginMetrics>,
 }
 
 /// 单个 WASM 插件实例的状态
@@ -209,6 +223,10 @@ pub struct WasmPluginState {
     wasi_table: wasmtime::component::ResourceTable,
     /// Store 资源上限快照（实例化时自内核配置读取，见 core-config）
     limits: StoreLimits,
+    /// 燃料看门狗是否开启（见 [`StoreSpec::fuel_enabled`]）
+    fuel_enabled: bool,
+    /// 插件指标句柄（core-monitor 埋点入口）
+    metrics: Arc<PluginMetrics>,
 }
 
 impl WasmPluginState {
@@ -217,14 +235,16 @@ impl WasmPluginState {
         plugin_id: String,
         host_ctx: Arc<WasmHostContext>,
         wasi_ctx: wasmtime_wasi::WasiCtx,
-        limits: StoreLimits,
+        spec: StoreSpec,
     ) -> Self {
         Self {
             plugin_id,
             host_ctx,
             wasi_ctx,
             wasi_table: wasmtime::component::ResourceTable::new(),
-            limits,
+            limits: spec.limits,
+            fuel_enabled: spec.fuel_enabled,
+            metrics: spec.metrics,
         }
     }
 }
@@ -255,6 +275,8 @@ impl ResourceLimiter for WasmPluginState {
             );
             Ok(false)
         } else {
+            // core-monitor 记账：当前值/峰值（纯原子操作，不进日志）
+            self.metrics.record_memory_growth(desired);
             Ok(true)
         }
     }
@@ -619,6 +641,7 @@ impl WasmRuntime {
             fs_auth,
             aot_cache_dir,
             config: Arc::new(std::sync::RwLock::new(core_config)),
+            monitor: Arc::new(MetricsRegistry::new()),
         })
     }
 
@@ -634,6 +657,11 @@ impl WasmRuntime {
         }
         *self.config.write().expect("core config lock poisoned") = cfg;
         Ok(())
+    }
+
+    /// 指标注册表句柄（core-monitor）：生命周期事件记账与快照导出入口
+    pub fn monitor(&self) -> Arc<MetricsRegistry> {
+        self.monitor.clone()
     }
 
     /// 从字节流编译 WASM 组件（Component Model，迁移阶段 A）
@@ -756,7 +784,11 @@ impl WasmRuntime {
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
     ) -> crate::Result<LoadedWasmPlugin> {
-        let limits = self.config.read().expect("core config lock poisoned").store.clone();
+        let (limits, fuel_enabled) = {
+            let cfg = self.config.read().expect("core config lock poisoned");
+            (cfg.store.clone(), cfg.engine.consume_fuel)
+        };
+        let metrics = self.monitor.plugin(plugin_id);
         let plugin = component::LoadedWasmPlugin::new(
             &self.engine,
             &self.linker,
@@ -764,8 +796,13 @@ impl WasmRuntime {
             plugin_id,
             host_ctx,
             declared_preopen_dirs,
-            limits,
+            StoreSpec {
+                limits,
+                fuel_enabled,
+                metrics: metrics.clone(),
+            },
         )?;
+        metrics.record_lifecycle(LifecycleEvent::Instantiate);
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
         // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
         tracing::info!(
@@ -1803,6 +1840,53 @@ mod tests {
         let err = wasm_runtime.set_config(cfg).expect_err("zero fuel must be rejected");
         assert!(format!("{err}").contains("fuel_per_call"));
         assert_eq!(wasm_runtime.config(), CoreConfig::default());
+    }
+
+    /// 票据 03 验收：调用聚合（次数/燃料/耗时）+ 生命周期事件计数 + 内存记账
+    #[test]
+    fn test_monitor_metrics_end_to_end() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate test component");
+        let monitor = wasm_runtime.monitor();
+
+        plugin.activate().expect("activate");
+        plugin.invoke_command("test.echo", r#"{"n":1}"#).expect("invoke 1");
+        plugin.invoke_command("test.echo", r#"{"n":2}"#).expect("invoke 2");
+
+        // 内存记账：limiter 批准路径写入当前值/峰值（在真实增长之后注入，
+        // 避免后续真实增长把 current 刷回实际值——真实内存 ~1.1MiB < 2MiB）
+        {
+            let (store, _) = plugin.raw_store();
+            use wasmtime::ResourceLimiter;
+            store
+                .data_mut()
+                .memory_growing(0, 2 * 1024 * 1024, None)
+                .expect("within limit");
+        }
+
+        let snap = monitor.snapshot();
+        let m = &snap["plugins"][TEST_PLUGIN_ID];
+        assert_eq!(m["lifecycle"]["instantiate"].as_u64().unwrap(), 1);
+        assert_eq!(m["lifecycle"]["activate_ok"].as_u64().unwrap(), 1);
+        assert_eq!(m["calls_total"].as_u64().unwrap(), 3, "activate + 2×invoke = 3 次导出调用");
+        assert!(m["fuel_consumed_total"].as_u64().unwrap() > 0, "燃料消耗必须有记录");
+        assert_eq!(
+            m["call_duration_buckets"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|b| b.as_u64().unwrap())
+                .sum::<u64>(),
+            3,
+            "直方图桶计数必须等于调用数"
+        );
+        assert_eq!(m["memory_current_bytes"].as_u64().unwrap(), 2 * 1024 * 1024);
+        assert_eq!(m["memory_peak_bytes"].as_u64().unwrap(), 2 * 1024 * 1024);
     }
 
     /// 燃料耗尽必须 trap：绕过 exports() 的自动续费，直接以小预算调用导出

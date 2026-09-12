@@ -877,6 +877,13 @@ impl PluginHost {
                 loaded.activated_at = Some(Utc::now());
             }
         }
+        // core-monitor：启动初始化部分失败（Degraded 终态）埋点
+        if startup_failure.is_some() {
+            self.wasm_runtime
+                .monitor()
+                .plugin(plugin_id)
+                .record_lifecycle(crate::plugin::monitor::LifecycleEvent::Degraded);
+        }
 
         // 登记互调 api 清单（ADR-0017）：激活后 `bedcode.api.*` 请求可路由到本插件。
         // 未声明 api 的插件登记空清单，幂等无操作

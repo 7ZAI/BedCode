@@ -26,8 +26,9 @@ use super::host_impl::{
 };
 #[cfg(test)]
 use super::plugin_debug_mode;
-use super::{block_on_async, WasmHostContext, WasmPluginState};
+use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
 use crate::plugin::config::StoreLimits;
+use crate::plugin::monitor::LifecycleEvent;
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
@@ -456,19 +457,23 @@ impl LoadedWasmPlugin {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
-        limits: StoreLimits,
+        spec: StoreSpec,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
         // 目录 /data…；无声明/未授权时为空上下文
         let (wasi_ctx, preopened_dirs) = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
-        let fuel_budget = limits.fuel_budget();
-        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx, limits);
+        let fuel_budget = spec.limits.fuel_budget();
+        let fuel_enabled = spec.fuel_enabled;
+        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx, spec);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
-        store
-            .set_fuel(fuel_budget)
-            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
+        // （fuel 关闭时 set_fuel 不可用，整条注入链路跳过）
+        if fuel_enabled {
+            store
+                .set_fuel(fuel_budget)
+                .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
+        }
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
             AppError::Plugin(format!(
@@ -504,9 +509,12 @@ impl LoadedWasmPlugin {
     /// - `abi.form()` 必须为 1（component 形态）；0 是 core 形态的自研 ABI
     fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
-        store
-            .set_fuel(store.data().limits.fuel_budget())
-            .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
+        if store.data().fuel_enabled {
+            let budget = store.data().limits.fuel_budget();
+            store
+                .set_fuel(budget)
+                .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
+        }
         let exports = Plugin::new(&mut *store, instance)
             .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
         let abi_guest = exports.bedcode_plugin_abi();
@@ -538,14 +546,31 @@ impl LoadedWasmPlugin {
     /// 获取 world 导出绑定（每次调用重新索引导出，开销可忽略）
     ///
     /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
-    /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
+    /// 宿主调用阻塞不消耗燃料，见 core-config FUEL_PER_CALL 说明）；
+    /// 续费前把上一区间的燃料消耗记入 core-monitor
     fn exports(&mut self) -> crate::Result<Plugin> {
-        let fuel_budget = self.store.data().limits.fuel_budget();
-        self.store
-            .set_fuel(fuel_budget)
-            .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
+        let state = self.store.data();
+        let fuel_enabled = state.fuel_enabled;
+        let fuel_budget = state.limits.fuel_budget();
+        let metrics = state.metrics.clone();
+        if fuel_enabled {
+            if let Ok(remaining) = self.store.get_fuel() {
+                if remaining <= fuel_budget {
+                    metrics.record_fuel_consumed(fuel_budget - remaining);
+                }
+            }
+            self.store
+                .set_fuel(fuel_budget)
+                .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
+        }
         Plugin::new(&mut self.store, &self.instance)
             .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
+    }
+
+    /// 导出调用计时起点（core-monitor 埋点）：返回的 RAII 计时器在
+    /// 方法返回时落账（次数/耗时直方图）。每导出方法首行调用
+    fn track_call(&self) -> crate::plugin::monitor::CallTimer {
+        self.store.data().metrics.start_call()
     }
 
     /// WASM 导出调用 trap 的统一宿主日志入口
@@ -556,6 +581,7 @@ impl LoadedWasmPlugin {
     /// error 级日志保证崩溃证据落盘；AI agent grep error 日志即可定位
     /// 「哪个插件在哪个导出上崩了」。guest 自报失败（内层 Err）不经过此入口
     fn log_trap(&self, export: &str, err: &dyn std::fmt::Display) {
+        self.store.data().metrics.record_lifecycle(LifecycleEvent::Trap);
         tracing::error!(
             plugin_id = %self.plugin_id,
             export = export,
@@ -566,12 +592,20 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的 activate 导出
     pub(crate) fn activate(&mut self) -> crate::Result<i32> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_activate(&mut self.store) {
-            Ok(Ok(())) => Ok(0),
-            Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM activate() failed: {}", msg))),
+            Ok(Ok(())) => {
+                self.store.data().metrics.record_lifecycle(LifecycleEvent::ActivateOk);
+                Ok(0)
+            }
+            Ok(Err(msg)) => {
+                self.store.data().metrics.record_lifecycle(LifecycleEvent::ActivateFail);
+                Err(AppError::Plugin(format!("WASM activate() failed: {}", msg)))
+            }
             Err(e) => {
+                self.store.data().metrics.record_lifecycle(LifecycleEvent::ActivateFail);
                 self.log_trap("activate", &e);
                 Err(AppError::Plugin(format!("WASM activate() call failed: {}", e)))
             }
@@ -580,10 +614,14 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的 deactivate 导出
     pub(crate) fn deactivate(&mut self) -> crate::Result<i32> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_deactivate(&mut self.store) {
-            Ok(Ok(())) => Ok(0),
+            Ok(Ok(())) => {
+                self.store.data().metrics.record_lifecycle(LifecycleEvent::Deactivate);
+                Ok(0)
+            }
             Ok(Err(msg)) => Err(AppError::Plugin(format!("WASM deactivate() failed: {}", msg))),
             Err(e) => {
                 self.log_trap("deactivate", &e);
@@ -594,6 +632,7 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的 invoke_command 导出（JSON 载荷保留，语义与 core 路径 1:1）
     pub(crate) fn invoke_command(&mut self, command_name: &str, args_json: &str) -> crate::Result<String> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let cmd = exports.bedcode_plugin_command();
         match cmd.call_invoke(&mut self.store, command_name, args_json) {
@@ -608,6 +647,7 @@ impl LoadedWasmPlugin {
     /// 调用插件的 on_terminal_input 导出
     #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
     pub(crate) fn on_terminal_input(&mut self, session_id: &str, text: &str) -> crate::Result<Option<String>> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
         match hooks.call_on_terminal_input(&mut self.store, session_id, text) {
@@ -622,6 +662,7 @@ impl LoadedWasmPlugin {
     /// 调用插件的 on_terminal_output 导出
     #[allow(dead_code)] // 终端 hook 桥接：测试覆盖,生产侧调度尚未接入
     pub(crate) fn on_terminal_output(&mut self, session_id: &str, data: &str) -> crate::Result<Option<String>> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
         match hooks.call_on_terminal_output(&mut self.store, session_id, data) {
@@ -639,6 +680,7 @@ impl LoadedWasmPlugin {
     /// 内层 = guest 报告的启动初始化结果（v8 契约 `result<_, string>`）。
     /// 宿主据此区分「插件自报启动失败 → Degraded」与「调用故障」
     pub(crate) fn on_startup(&mut self) -> crate::Result<std::result::Result<(), String>> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_on_startup(&mut self.store) {
@@ -655,6 +697,7 @@ impl LoadedWasmPlugin {
     /// 双层 Result 语义同 [`Self::on_startup`]；停用流程对 guest 报告的
     /// 清理失败仅记录，不影响状态机
     pub(crate) fn on_shutdown(&mut self) -> crate::Result<std::result::Result<(), String>> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
         match lifecycle.call_on_shutdown(&mut self.store) {
@@ -668,6 +711,7 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的消息总线消息接收导出
     pub(crate) fn on_message(&mut self, topic: &str, sender: &str, payload: &serde_json::Value) -> crate::Result<()> {
+        let _timer = self.track_call();
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -686,6 +730,7 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的会话生命周期事件导出
     pub(crate) fn on_session_lifecycle(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
+        let _timer = self.track_call();
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -707,6 +752,7 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的提交输入行事件导出（纯观察通知，失败仅记录日志）
     pub(crate) fn on_input_submitted(&mut self, payload: &serde_json::Value) -> crate::Result<()> {
+        let _timer = self.track_call();
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
@@ -728,6 +774,7 @@ impl LoadedWasmPlugin {
 
     /// 调用插件的进程执行完成事件导出（host-process，v8）
     pub(crate) fn on_process_done(&mut self, payload_json: &str) -> crate::Result<()> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
         match events.call_on_process_done(&mut self.store, payload_json) {
@@ -746,6 +793,7 @@ impl LoadedWasmPlugin {
     /// 获取插件的 manifest JSON
     #[allow(dead_code)] // 测试覆盖,生产侧 manifest 走其他加载路径
     pub(crate) fn get_manifest(&mut self) -> crate::Result<String> {
+        let _timer = self.track_call();
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
         match manifest.call_get(&mut self.store) {
@@ -1033,7 +1081,11 @@ mod tests {
                 TEST_PLUGIN_ID,
                 host_ctx,
                 &[],
-                StoreLimits::default(),
+                StoreSpec {
+                    limits: StoreLimits::default(),
+                    fuel_enabled: true,
+                    metrics: crate::plugin::monitor::MetricsRegistry::new().plugin(TEST_PLUGIN_ID),
+                },
             )
             .expect("instantiate component");
 
