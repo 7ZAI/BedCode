@@ -31,76 +31,11 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktrac
 
 // ==================== Resource Limits & Interruption ====================
 
-/// 单次 wasm 导出调用允许消耗的燃料（指令数）——防失控/恶意插件无限执行
-///
-/// 用燃料（fuel）而非 epoch 墙钟窗口做看门狗：
-/// - 燃料只计 guest 指令数，宿主调用阻塞期间（授权弹窗、目录扫描、网络）
-///   guest 零消耗——慢宿主调用无论多久都不会被误杀；epoch 按墙钟计，
-///   宿主阻塞期间照走，正是历史上误杀慢调用的根因（见组件迁移期间
-///   filesrv_mount 阻塞 >2s 被 trap 的回归）
-/// - 纯 guest 死循环持续烧燃料，必然耗尽被 trap（确定性，不受宿主负载影响）
-/// - 每次导出调用前重置燃料（见 component::exports），预算只约束单次调用内
-///   guest 计算量，与宿主延迟彻底解耦
-///   64G 指令 ≈ 数十秒纯 guest 计算（wasm32 release 约 1-3G 指令/秒），
-///   覆盖大 JSON 解析等重活；死循环最迟烧完被 trap
-const FUEL_PER_CALL: u64 = 64_000_000_000;
-/// 插件调试模式（`BEDCODE_PLUGIN_DEBUG=1`）下燃料预算放大倍率
-///
-/// debug profile 的 wasm 产物不做优化，指令数与体积相对 release 成倍膨胀
-/// （典型 10-30 倍），同一逻辑在 debug 产物下烧燃料更快；若不放大，正常
-/// 插件调用可能被燃料看门狗误判为失控 trap。取 32 倍覆盖 debug 膨胀上界
-/// 并留余量；仅 [`plugin_debug_mode`] 为真时生效（`[`fuel_per_call`]`）
-const FUEL_DEBUG_MULTIPLIER: u64 = 32;
-/// 单插件线性内存上限（字节）——防失控/恶意插件耗尽宿主内存
-///
-/// 双重身份：既是 [`ResourceLimiter`] 的增长拒绝线，也是 Engine 层
-/// `memory_reservation` 预留量的估算依据（估算的最大线性内存）：实例化时按此值
-/// 一次性预留虚拟地址空间，guest 内存增长全程落在预留内（零系统调用、基址不搬移），
-/// 触及上限前已被 limiter 拒绝。预留只占虚拟地址空间，物理内存仍按实际触碰页提交。
-/// 两处必须严格一致：预留小于上限会让合法增长退化为搬移路径，
-/// 大于上限则白白放大 VA 占用
-const MAX_PLUGIN_MEMORY_BYTES: usize = 256 * 1024 * 1024;
-/// 单插件表元素上限
-const MAX_PLUGIN_TABLE_ENTRIES: usize = 1_000_000;
-/// Wasm 执行栈深度上限（字节）——guest 深度递归超限即确定性栈溢出 trap
-///
-/// 防递归打穿真实线程栈导致进程 abort。宿主函数栈帧不计入此预算但计入真实
-/// 线程栈，故该值必须显著小于调用方线程栈余量（tokio blocking / std 线程
-/// 默认 2MiB）。与 wasmtime 默认一致（512KiB），显式钉死防止上游默认漂移
-const MAX_WASM_STACK_BYTES: usize = 512 * 1024;
-/// 单 Store 核心实例数上限
-///
-/// 组件实例化会为 wit-component 嵌入的 adapter module 派生额外核心实例
-/// （正常插件 1-2 个），留余量的同时封顶防滥用；超限实例化直接报错
-const MAX_PLUGIN_INSTANCES_PER_STORE: usize = 8;
-/// 单 Store 线性内存数量上限
-///
-/// 每个线性内存独立预留 VA（上限 × ~288MiB 含 guard），多内存声明会线性
-/// 放大虚拟地址空间占用，WASI preview2 插件正常仅 1 个内存
-const MAX_PLUGIN_MEMORIES_PER_STORE: usize = 4;
-/// 单 Store 表数量上限——adapter module 自带间接调用表，正常插件个位数
-const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
-
-/// 插件调试模式是否开启（dev 构建下读 `BEDCODE_PLUGIN_DEBUG`，非空即开）
-///
-/// 仅 `cfg!(debug_assertions)` 生效：release 构建忽略该变量（调试产物不会
-/// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
-/// 调试模式是会话态开关，不新增持久化配置项。
-pub(crate) fn plugin_debug_mode() -> bool {
-    cfg!(debug_assertions) && std::env::var("BEDCODE_PLUGIN_DEBUG").map(|v| !v.is_empty()).unwrap_or(false)
-}
-
-/// 单次导出调用的燃料预算（debug 模式下按倍率放大，见 [`FUEL_DEBUG_MULTIPLIER`]）
-///
-/// 所有燃料注入点（实例化 / ABI 协商 / 每次导出调用前）统一走此函数，
-/// 避免调试模式与非调试模式语义分叉
-pub(crate) fn fuel_per_call() -> u64 {
-    if plugin_debug_mode() {
-        FUEL_PER_CALL * FUEL_DEBUG_MULTIPLIER
-    } else {
-        FUEL_PER_CALL
-    }
-}
+// 运行参数单一事实源在配置模块（core-config，见 `crate::plugin::config`）：
+// Engine 构建参数与 Store 资源上限的默认值即历史生产常量（`config::defaults`），
+// 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
+pub(crate) use crate::plugin::config::plugin_debug_mode;
+use crate::plugin::config::{CoreConfig, StoreLimits};
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
 pub fn panic_payload_to_string(panic: &Box<dyn std::any::Any + Send>) -> String {
@@ -253,6 +188,9 @@ pub struct WasmRuntime {
     /// （`Component::deserialize` 是 unsafe，假定数据可信）。
     /// 无 app_handle 时（无头/测试）为 None，禁用文件级 AOT 缓存。
     aot_cache_dir: Option<PathBuf>,
+    /// 内核配置（core-config）：Engine 参数构建期固化，Store 上限每次实例化读快照
+    /// （运行时覆盖只影响新建立的 Store）
+    config: Arc<std::sync::RwLock<CoreConfig>>,
 }
 
 /// 单个 WASM 插件实例的状态
@@ -269,16 +207,24 @@ pub struct WasmPluginState {
     wasi_ctx: wasmtime_wasi::WasiCtx,
     /// WASI 资源表（文件句柄 / 流等，随每个插件实例独立生命周期）
     wasi_table: wasmtime::component::ResourceTable,
+    /// Store 资源上限快照（实例化时自内核配置读取，见 core-config）
+    limits: StoreLimits,
 }
 
 impl WasmPluginState {
     /// 构建插件状态（wasi_ctx 由调用方按插件配置构建，见 component.rs）
-    pub(crate) fn new(plugin_id: String, host_ctx: Arc<WasmHostContext>, wasi_ctx: wasmtime_wasi::WasiCtx) -> Self {
+    pub(crate) fn new(
+        plugin_id: String,
+        host_ctx: Arc<WasmHostContext>,
+        wasi_ctx: wasmtime_wasi::WasiCtx,
+        limits: StoreLimits,
+    ) -> Self {
         Self {
             plugin_id,
             host_ctx,
             wasi_ctx,
             wasi_table: wasmtime::component::ResourceTable::new(),
+            limits,
         }
     }
 }
@@ -300,11 +246,11 @@ impl wasmtime_wasi::WasiView for WasmPluginState {
 /// 限制单插件线性内存与表大小，防止失控/恶意插件耗尽宿主内存。
 impl ResourceLimiter for WasmPluginState {
     fn memory_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > MAX_PLUGIN_MEMORY_BYTES {
+        if desired > self.limits.max_memory_bytes {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
                 desired_bytes = desired,
-                max_bytes = MAX_PLUGIN_MEMORY_BYTES,
+                max_bytes = self.limits.max_memory_bytes,
                 "WASM memory growth denied by resource limiter"
             );
             Ok(false)
@@ -314,11 +260,11 @@ impl ResourceLimiter for WasmPluginState {
     }
 
     fn table_growing(&mut self, _current: usize, desired: usize, _maximum: Option<usize>) -> wasmtime::Result<bool> {
-        if desired > MAX_PLUGIN_TABLE_ENTRIES {
+        if desired > self.limits.max_table_entries {
             tracing::warn!(
                 plugin_id = %self.plugin_id,
                 desired_entries = desired,
-                max_entries = MAX_PLUGIN_TABLE_ENTRIES,
+                max_entries = self.limits.max_table_entries,
                 "WASM table growth denied by resource limiter"
             );
             Ok(false)
@@ -328,15 +274,15 @@ impl ResourceLimiter for WasmPluginState {
     }
 
     fn instances(&self) -> usize {
-        MAX_PLUGIN_INSTANCES_PER_STORE
+        self.limits.max_instances
     }
 
     fn memories(&self) -> usize {
-        MAX_PLUGIN_MEMORIES_PER_STORE
+        self.limits.max_memories
     }
 
     fn tables(&self) -> usize {
-        MAX_PLUGIN_TABLES_PER_STORE
+        self.limits.max_tables
     }
 }
 
@@ -569,15 +515,44 @@ impl WasmRuntime {
     /// 而是通过 [`WasmHostContext`] 注入到每个插件实例的 Store state 中。
     /// `app_handle` 为 None 时（无头/测试上下文）依赖前端事件的宿主能力降级
     pub fn new(storage: Arc<PluginStorage>, app_handle: Option<Arc<tauri::AppHandle>>) -> crate::Result<Self> {
+        // 内核配置：编译期默认 < 配置文件 < 运行时覆盖（set_config）。
+        // 配置文件缺失/非法不阻断启动——记录 warn 并回落编译期默认
+        let core_config = app_handle
+            .as_ref()
+            .and_then(|h| h.path().app_config_dir().ok())
+            .map(|d| d.join(CoreConfig::FILE_NAME))
+            .map(|path| match CoreConfig::load_from(&path) {
+                Ok(cfg) => cfg,
+                Err(e) => {
+                    tracing::warn!(path = %path.display(), error = %e, "内核配置加载失败，回落编译期默认");
+                    CoreConfig::default()
+                }
+            })
+            .unwrap_or_default();
+        Self::with_config(storage, app_handle, core_config)
+    }
+
+    /// 以指定内核配置构建（测试与运行时覆盖路径；配置须先通过 [`CoreConfig::validate`]）
+    pub fn with_config(
+        storage: Arc<PluginStorage>,
+        app_handle: Option<Arc<tauri::AppHandle>>,
+        core_config: CoreConfig,
+    ) -> crate::Result<Self> {
+        if let Err(reason) = core_config.validate() {
+            return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
         let mut config = Config::new();
-        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 FUEL_PER_CALL）
-        config.consume_fuel(true);
+        // 燃料看门狗：guest 指令计数耗尽即 trap（宿主调用阻塞不消耗，见 config FUEL_PER_CALL）
+        config.consume_fuel(core_config.engine.consume_fuel);
         // WASM 内部调用栈：trap（panic/栈溢出/燃料耗尽/内存越界）错误串携带
         // 插件内部函数调用链（names section 函数名，release 构建即有），随
         // AppError::Plugin 进 error.log 与插件 Degraded 状态，AI agent 无需重跑
         // 即可定位插件内部故障点。wasmtime 47 的 backtrace 在 default features
         // 内（零编译成本），此处显式钉死 32 帧防止上游默认（20 帧）漂移
-        config.wasm_backtrace_max_frames(Some(std::num::NonZeroUsize::new(32).expect("32 > 0")));
+        config.wasm_backtrace_max_frames(Some(
+            std::num::NonZeroUsize::new(core_config.engine.wasm_backtrace_max_frames as usize)
+                .expect("backtrace frames > 0（配置校验保证）"),
+        ));
         // 行号解析：Environment 模式读 WASMTIME_BACKTRACE_DETAILS——无 DWARF 时
         // 零开销回退到函数名栈（release 插件无调试信息，不硬编码强制解析）；
         // 插件调试模式（BEDCODE_PLUGIN_DEBUG=1）下宿主先置该环境变量再构建
@@ -594,21 +569,23 @@ impl WasmRuntime {
         // 增长零系统调用、基址恒定；相比 64-bit 默认（4GiB 预留 + 32MiB guard/
         // 内存）大幅降低 VA 占用。GC 堆未显式配置时沿用同值（wasmtime 语义：
         // gc_heap_* 缺省继承 memory_* 配置）
-        config.memory_reservation(MAX_PLUGIN_MEMORY_BYTES as u64);
+        config.memory_reservation(core_config.engine.memory_reservation_bytes);
         // 预留即硬顶：初始分配与增长超出预留前均被 limiter 拒绝（memory_growing
         // 在物理分配前调用），内存永不搬移；编译器可静态假设基址不变做优化，
         // 同时杜绝任何路径触发重定位
         config.memory_may_move(false);
         // Wasm 执行栈深度上限：深度递归在 wasm 侧确定性栈溢出 trap，
         // 而非打穿真实线程栈导致进程 abort（见 MAX_WASM_STACK_BYTES）
-        config.max_wasm_stack(MAX_WASM_STACK_BYTES);
+        config.max_wasm_stack(core_config.store.max_wasm_stack_bytes);
         // 编译缓存：跨进程复用已编译产物（初始化失败降级为不缓存，不阻断运行时）
-        match Cache::new(CacheConfig::new()) {
-            Ok(cache) => {
-                config.cache(Some(cache));
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "WASM compile cache disabled");
+        if core_config.engine.compile_cache {
+            match Cache::new(CacheConfig::new()) {
+                Ok(cache) => {
+                    config.cache(Some(cache));
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "WASM compile cache disabled");
+                }
             }
         }
         let engine = Engine::new(&config)
@@ -641,7 +618,22 @@ impl WasmRuntime {
             linker,
             fs_auth,
             aot_cache_dir,
+            config: Arc::new(std::sync::RwLock::new(core_config)),
         })
+    }
+
+    /// 当前内核配置快照
+    pub fn config(&self) -> CoreConfig {
+        self.config.read().expect("core config lock poisoned").clone()
+    }
+
+    /// 运行时覆盖内核配置：只影响覆盖后新建立的 Store（Engine 参数构建期已固化）
+    pub fn set_config(&self, cfg: CoreConfig) -> crate::Result<()> {
+        if let Err(reason) = cfg.validate() {
+            return Err(crate::AppError::Config(format!("内核配置非法: {}", reason)));
+        }
+        *self.config.write().expect("core config lock poisoned") = cfg;
+        Ok(())
     }
 
     /// 从字节流编译 WASM 组件（Component Model，迁移阶段 A）
@@ -764,7 +756,16 @@ impl WasmRuntime {
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
     ) -> crate::Result<LoadedWasmPlugin> {
-        let plugin = component::LoadedWasmPlugin::new(&self.engine, &self.linker, component, plugin_id, host_ctx, declared_preopen_dirs)?;
+        let limits = self.config.read().expect("core config lock poisoned").store.clone();
+        let plugin = component::LoadedWasmPlugin::new(
+            &self.engine,
+            &self.linker,
+            component,
+            plugin_id,
+            host_ctx,
+            declared_preopen_dirs,
+            limits,
+        )?;
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
         // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
         tracing::info!(
@@ -916,8 +917,8 @@ mod tests {
     fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
         use crate::plugin::bus::MessageBus;
-        use crate::plugin::permission::PermissionManager;
         use crate::plugin::manager::storage::PluginStorage;
+        use crate::plugin::permission::PermissionManager;
         use crate::session::{SessionConfigManager, SessionManager};
         use crate::system::config::AppConfig;
 
@@ -1762,11 +1763,46 @@ mod tests {
                 store.get_fuel().expect("get fuel")
             };
             assert!(
-                after2 > FUEL_PER_CALL / 2,
+                after2 > StoreLimits::default().fuel_per_call / 2,
                 "fuel must be refilled per export call, got {}",
                 after2
             );
         });
+    }
+
+    /// 票据 02 验收：运行时覆盖生效——覆盖后新建立的 Store 按新上限运行；
+    /// 资源限制器行为等价：超限增长被拒绝，限额来自配置
+    #[test]
+    fn test_runtime_config_override_applies_to_new_stores() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+
+        // 覆盖：收紧内存上限到 4MiB（须高于测试组件最小内存 17 页 ≈ 1.1MiB）
+        let mut cfg = CoreConfig::default();
+        cfg.store.max_memory_bytes = 4 * 1024 * 1024;
+        wasm_runtime.set_config(cfg).expect("set config");
+
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .expect("instantiate under overridden limits");
+        let (store, _) = plugin.raw_store();
+        // 限额内允许、超限拒绝——限额来自运行时覆盖的配置
+        assert!(store.data_mut().memory_growing(0, 3 * 1024 * 1024, None).expect("within limit"));
+        assert!(!store.data_mut().memory_growing(0, 5 * 1024 * 1024, None).expect("over limit"));
+        assert_eq!(store.data().limits.max_memory_bytes, 4 * 1024 * 1024);
+    }
+
+    /// 票据 02 验收：非法配置（燃料为 0）被 set_config 拒绝且带上下文；旧配置不受影响
+    #[test]
+    fn test_set_config_rejects_invalid() {
+        let (wasm_runtime, _host_ctx) = setup_wasm_runtime();
+        let mut cfg = CoreConfig::default();
+        cfg.store.fuel_per_call = 0;
+        let err = wasm_runtime.set_config(cfg).expect_err("zero fuel must be rejected");
+        assert!(format!("{err}").contains("fuel_per_call"));
+        assert_eq!(wasm_runtime.config(), CoreConfig::default());
     }
 
     /// 燃料耗尽必须 trap：绕过 exports() 的自动续费，直接以小预算调用导出

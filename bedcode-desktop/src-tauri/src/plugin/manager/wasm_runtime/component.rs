@@ -21,12 +21,13 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform,
-    process, session, status, storage, terminal, timer,
+    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, session, status,
+    storage, terminal, timer,
 };
-use super::{block_on_async, fuel_per_call, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use super::plugin_debug_mode;
+use super::{block_on_async, WasmHostContext, WasmPluginState};
+use crate::plugin::config::StoreLimits;
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
@@ -455,16 +456,18 @@ impl LoadedWasmPlugin {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
+        limits: StoreLimits,
     ) -> crate::Result<Self> {
         // WASI 上下文：按 manifest 声明（wasiPreopenDirs，展开+授权过滤）预打开
         // 目录 /data…；无声明/未授权时为空上下文
         let (wasi_ctx, preopened_dirs) = build_wasi_ctx(&host_ctx, plugin_id, declared_preopen_dirs);
-        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx);
+        let fuel_budget = limits.fuel_budget();
+        let state = WasmPluginState::new(plugin_id.to_string(), host_ctx, wasi_ctx, limits);
         let mut store = Store::new(engine, state);
         store.limiter(|state| state as &mut dyn ResourceLimiter);
         // 实例化可能执行 guest 代码（静态构造器等），先注入单次调用燃料
         store
-            .set_fuel(fuel_per_call())
+            .set_fuel(fuel_budget)
             .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
 
         let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
@@ -502,7 +505,7 @@ impl LoadedWasmPlugin {
     fn verify_abi(store: &mut Store<WasmPluginState>, instance: &Instance) -> crate::Result<()> {
         // 本路径不经 exports()（实例化后立即校验），独立重置燃料
         store
-            .set_fuel(fuel_per_call())
+            .set_fuel(store.data().limits.fuel_budget())
             .map_err(|e| AppError::Plugin(format!("Failed to set fuel for ABI verification: {}", e)))?;
         let exports = Plugin::new(&mut *store, instance)
             .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
@@ -537,8 +540,9 @@ impl LoadedWasmPlugin {
     /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
     /// 宿主调用阻塞不消耗燃料，见 FUEL_PER_CALL 说明）
     fn exports(&mut self) -> crate::Result<Plugin> {
+        let fuel_budget = self.store.data().limits.fuel_budget();
         self.store
-            .set_fuel(fuel_per_call())
+            .set_fuel(fuel_budget)
             .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
         Plugin::new(&mut self.store, &self.instance)
             .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
@@ -881,9 +885,13 @@ mod tests {
     /// backtrace 配置同样与生产同步（wasm_backtrace_max_frames + Environment
     /// 详情），保证 trap 错误串在测试与生产形态一致
     fn test_engine() -> wasmtime::Engine {
+        let core_config = crate::plugin::config::CoreConfig::default();
         let mut config = wasmtime::Config::new();
-        config.consume_fuel(true);
-        config.wasm_backtrace_max_frames(Some(std::num::NonZeroUsize::new(32).expect("32 > 0")));
+        config.consume_fuel(core_config.engine.consume_fuel);
+        config.wasm_backtrace_max_frames(Some(
+            std::num::NonZeroUsize::new(core_config.engine.wasm_backtrace_max_frames as usize)
+                .expect("backtrace frames > 0"),
+        ));
         config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Environment);
         wasmtime::Engine::new(&config).expect("create test engine")
     }
@@ -1018,8 +1026,16 @@ mod tests {
                 .await
                 .expect("preset storage key");
 
-            let mut plugin = LoadedWasmPlugin::new(&engine, &linker, &component, TEST_PLUGIN_ID, host_ctx, &[])
-                .expect("instantiate component");
+            let mut plugin = LoadedWasmPlugin::new(
+                &engine,
+                &linker,
+                &component,
+                TEST_PLUGIN_ID,
+                host_ctx,
+                &[],
+                StoreLimits::default(),
+            )
+            .expect("instantiate component");
 
             // 生命周期（new 内已隐式通过 verify_abi：form=1 且 version<=ABI_VERSION）
             assert_eq!(plugin.activate().expect("activate"), 0);
@@ -1030,7 +1046,7 @@ mod tests {
                 let (store, _) = plugin.raw_store();
                 let remaining = store.get_fuel().expect("get fuel");
                 assert!(
-                    remaining < fuel_per_call(),
+                    remaining < StoreLimits::default().fuel_budget(),
                     "activate must consume fuel, remaining={}",
                     remaining
                 );
