@@ -374,3 +374,25 @@ world plugin {
 world plugin-binary {
     export events-binary;
 }
+
+/// 系统组件 world（**仅供系统组件构建绑定，宿主仍以 `plugin` world 实例化**）
+///
+/// 系统组件（manifest `type: "system"`，core-plugin-manager 票据 06）在
+/// `plugin` world 标准导出之外，追加导出其提供的能力接口——能力接口与宿主
+/// import 同形（复用 host-* 接口定义，不引入新的组件组合 world）。宿主按
+/// `plugin` world 实例化后动态探测能力接口导出（同 events-binary 模式），
+/// 命中即把该能力注册为「系统组件实例」提供者；未命中宿主 import 侧仍由
+/// 宿主原语直连，应用插件无感。
+///
+/// `plugin` world 本身不变（既有插件零迁移，ABI 版本无需 bump）。
+world plugin-system {
+    export command;
+    export lifecycle;
+    export events;
+    export terminal-hooks;
+    export manifest;
+    export abi;
+
+    /// 能力导出：宿主 KV 存储同形接口（装配框架首条路由能力）
+    export host-storage;
+}

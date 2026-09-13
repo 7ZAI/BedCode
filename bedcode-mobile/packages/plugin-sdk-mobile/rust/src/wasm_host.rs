@@ -227,8 +227,16 @@ impl HostBus for WasmHost {
         host_bus::publish(topic, &payload_str).map_err(|e| host_err("bus_publish", e))
     }
 
+    fn bus_publish_binary(&self, topic: &str, payload: &[u8]) -> Result<(), HostError> {
+        host_bus::publish_binary(topic, payload).map_err(|e| host_err("bus_publish_binary", e))
+    }
+
     fn bus_subscribe(&self, topic: &str) -> Result<(), HostError> {
         host_bus::subscribe(topic).map_err(|e| host_err("bus_subscribe", e))
+    }
+
+    fn bus_subscribe_binary(&self, topic: &str) -> Result<(), HostError> {
+        host_bus::subscribe_binary(topic).map_err(|e| host_err("bus_subscribe_binary", e))
     }
 
     fn bus_unsubscribe(&self, topic: &str) -> Result<(), HostError> {

@@ -1,6 +1,6 @@
 # WASM 核心（wasm-core）模块化改造规格
 
-Status: ready-for-agent
+Status: done（2026-09-13，01–06 六票据全部落地并验证：桌面 cargo test 643 单测 + 集成全绿，eslint 0 error，前端 614 全绿）
 Date: 2026-09-13
 关联文档: 终态愿景 `.scratch/platform-kernel/spec.md`（无业务内核）；渐进次序 `.scratch/plugin-kernel-roadmap/spec.md`；ADR 0017（互调门）/ 0019（wasmtime 双端锁死）/ 0022（host 接口裁剪线）；术语 `CONTEXT.md`
 

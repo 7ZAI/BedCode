@@ -153,6 +153,8 @@ mod tests {
             rust_library: "bedcode_test.wasm".to_string(),
             icon: None,
             wasi_preopen_dirs: vec![],
+            kind: bedcode_plugin_api::PluginKind::Application,
+            dependencies: vec![],
         }
     }
 

@@ -438,6 +438,10 @@ pub struct LoadedWasmPlugin {
     /// 早于实例化；重试激活时若当前实例未覆盖新授权目录则需重建（见 host.rs
     /// `rebuild_wasm_instance`），使 /data 挂载与授权状态一致。
     preopened_dirs: Vec<String>,
+    /// 实例化时探测到的可路由能力接口导出（core-plugin-manager，如
+    /// `host-storage`）；空 = 纯应用插件（不提供能力），非空者激活时由
+    /// PluginHost 注册进能力注册表（系统组件装配）
+    exported_capabilities: Vec<String>,
     /// 实例创建时刻（Drop 日志计算存活时长）
     created_at: std::time::Instant,
 }
@@ -494,11 +498,24 @@ impl LoadedWasmPlugin {
 
         Self::verify_abi(&mut store, &instance)?;
 
+        // core-plugin-manager：探测可路由能力接口导出（系统组件据此注册为
+        // 能力提供者；纯应用插件探测结果为空）
+        let exported_capabilities =
+            crate::plugin::manager::capability::probe_exported_capabilities(&instance, &mut store);
+        if !exported_capabilities.is_empty() {
+            tracing::info!(
+                plugin_id = %plugin_id,
+                capabilities = ?exported_capabilities,
+                "WASM component exports routable capabilities (system component)"
+            );
+        }
+
         Ok(Self {
             plugin_id: plugin_id.to_string(),
             instance,
             store,
             preopened_dirs,
+            exported_capabilities,
             created_at: std::time::Instant::now(),
         })
     }
@@ -553,20 +570,25 @@ impl LoadedWasmPlugin {
 
         // v11：动态探测可选导出 events-binary#on-message-binary。该接口不声明进
         // plugin world（旧插件必选导出会因缺失而实例化失败），此处按名探测，
-        // 缺失容忍为 None——旧插件只收 JSON，二进制消息由总线按格式不匹配拒绝
-        let on_message_binary = instance
-            .get_typed_func::<(String, String, Vec<u8>), ()>(&mut *store, "bedcode:plugin/events-binary#on-message-binary")
-            .ok();
+        // 缺失容忍为 None——旧插件只收 JSON，二进制消息由总线按格式不匹配拒绝。
+        // 必须用 ItemName 路径语法（`iface.func` 点号）：组件的接口导出是嵌套
+        // 实例形态，`iface#func` 平名字符串的 str 查找恒不命中（wasmtime 47 实证，
+        // 票据 06 修复——此前平名探测恒返回 None，二进制导出从未真正被发现）
+        let on_message_binary = "bedcode:plugin/events-binary.on-message-binary"
+            .parse::<wasmtime::component::wit_parser::ItemName>()
+            .ok()
+            .and_then(|item| {
+                instance
+                    .get_typed_func::<(String, String, Vec<u8>), ()>(&mut *store, &item)
+                    .ok()
+            });
         store.data_mut().on_message_binary = on_message_binary;
         Ok(())
     }
 
-    /// 获取 world 导出绑定（每次调用重新索引导出，开销可忽略）
-    ///
-    /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
-    /// 宿主调用阻塞不消耗燃料，见 core-config FUEL_PER_CALL 说明）；
+    /// 单次调用燃料预算续费（世界导出与能力转发调用共用）：
     /// 续费前把上一区间的燃料消耗记入 core-monitor
-    fn exports(&mut self) -> crate::Result<Plugin> {
+    fn refill_call_fuel(&mut self) -> crate::Result<()> {
         let state = self.store.data();
         let fuel_enabled = state.fuel_enabled;
         let fuel_budget = state.limits.fuel_budget();
@@ -581,8 +603,55 @@ impl LoadedWasmPlugin {
                 .set_fuel(fuel_budget)
                 .map_err(|e| AppError::Plugin(format!("WASM fuel refill failed: {}", e)))?;
         }
+        Ok(())
+    }
+
+    /// 获取 world 导出绑定（每次调用重新索引导出，开销可忽略）
+    ///
+    /// 所有导出调用都经过此处：顺带重置燃料预算（单次调用预算，
+    /// 宿主调用阻塞不消耗燃料，见 core-config FUEL_PER_CALL 说明）
+    fn exports(&mut self) -> crate::Result<Plugin> {
+        self.refill_call_fuel()?;
         Plugin::new(&mut self.store, &self.instance)
             .map_err(|e| AppError::Plugin(format!("WASM component exports access failed: {}", e)))
+    }
+
+    /// 能力导出调用（core-plugin-manager 装配框架）：按名动态获取组件的
+    /// 能力接口导出函数并调用，燃料预算续费语义同 [`Self::exports`]。
+    ///
+    /// 宿主侧转发专用：能力注册表命中系统组件提供者时，host_impl 宿主函数
+    /// 把应用插件的 import 调用经此方法转发到提供者的同形导出。
+    /// 外层 Err = trap/导出缺失等传输层错误；内层 `Results` 元组含 WIT
+    /// `result<T, string>` 本体（guest 自报错误），两层语义分离。
+    ///
+    /// `export_name` 用 `ItemName` 路径语法（`pkg:ns/iface.func`，组件接口
+    /// 导出为嵌套实例形态，平名 `iface#func` 无法命中）
+    pub(crate) fn call_capability_export<Params, Results>(
+        &mut self,
+        export_name: &str,
+        params: Params,
+    ) -> crate::Result<Results>
+    where
+        Params: wasmtime::component::ComponentNamedList + wasmtime::component::Lower,
+        Results: wasmtime::component::ComponentNamedList + wasmtime::component::Lift,
+    {
+        let _timer = self.track_call();
+        self.refill_call_fuel()?;
+        let item: wasmtime::component::wit_parser::ItemName = export_name.parse().map_err(|e| {
+            AppError::Plugin(format!("invalid capability export name: {} ({})", export_name, e))
+        })?;
+        let func = self
+            .instance
+            .get_typed_func::<Params, Results>(&mut self.store, &item)
+            .map_err(|e| AppError::Plugin(format!("capability export not found: {} ({})", export_name, e)))?;
+        func.call(&mut self.store, params)
+            .map_err(|e| AppError::Plugin(format!("capability call failed: {} ({})", export_name, e)))
+    }
+
+    /// 实例化时探测到的可路由能力接口导出（core-plugin-manager）；
+    /// 空 = 纯应用插件（不提供能力）
+    pub(crate) fn exported_capabilities(&self) -> &[String] {
+        &self.exported_capabilities
     }
 
     /// 导出调用计时起点（core-monitor 埋点）：返回的 RAII 计时器在
@@ -959,6 +1028,7 @@ pub(crate) fn resolve_preopen_dirs(
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
     // 复用 host_impl 测试基建（host_impl::tests 为 pub(super)，同子树可访问）
     use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};

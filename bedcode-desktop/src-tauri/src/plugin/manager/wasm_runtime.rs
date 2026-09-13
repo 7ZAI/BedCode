@@ -399,6 +399,9 @@ pub struct WasmHostContext {
     api_registry: Arc<crate::plugin::security::api_registry::ApiRegistry>,
     /// 统一授权框架（core-security）：三段决策管线 + 仲裁器注册表
     security: crate::plugin::security::SecurityFramework,
+    /// 能力注册表（core-plugin-manager 票据 06）：能力名 → 宿主原语/系统组件
+    /// 实例（二选一装配）；host_impl 宿主函数内经此路由
+    capabilities: crate::plugin::manager::capability::CapabilityRegistry,
 }
 
 /// 运行中的进程（记录 pid 供进程组 kill）
@@ -865,6 +868,7 @@ impl WasmHostContext {
             process_registry: Arc::new(ProcessRegistry::new()),
             api_registry,
             security,
+            capabilities: crate::plugin::manager::capability::CapabilityRegistry::new(),
         }
     }
 
@@ -900,6 +904,11 @@ impl WasmHostContext {
     /// 获取统一授权框架引用（core-security 三段决策管线）
     pub fn security(&self) -> &crate::plugin::security::SecurityFramework {
         &self.security
+    }
+
+    /// 获取能力注册表引用（core-plugin-manager：系统组件装配与能力路由）
+    pub fn capabilities(&self) -> &crate::plugin::manager::capability::CapabilityRegistry {
+        &self.capabilities
     }
 
     /// 获取 SessionManager 的 Arc 引用
@@ -1503,6 +1512,13 @@ mod tests {
                 r["error"]
             );
 
+            // v11 二进制回调（票据 06）：`wasm_entry!` 产物必须暴露可选导出
+            // events-binary，宿主按 ItemName 路径语法动态探测命中且调用成功
+            // （此前平名 `iface#func` 探测恒不命中，二进制回调实际从未接线）
+            plugin
+                .on_message_binary("binary-topic", "com.test.sender", b"\x00\xff\x01binary")
+                .expect("SDK component must expose events-binary on_message_binary export");
+
             // 终端钩子（宏生成的 terminal_hooks::Guest，大写转换语义）
             assert_eq!(
                 plugin.on_terminal_input("session-1", "sdk input").unwrap(),
@@ -1673,6 +1689,94 @@ mod tests {
                 r["error"].as_str().map(|e| e.contains("not declared")).unwrap_or(false),
                 "unregistered target must be rejected, got: {}",
                 result
+            );
+        });
+    }
+
+    /// v11 二进制总线端到端（票据 06 补齐 SDK 二进制发布/订阅缺口后覆盖）：
+    /// 同一 SDK 组件以两个实例加载——发布方经 SDK `bus_publish_binary` 发字节列，
+    /// 订阅方 activate 内以 SDK `bus_subscribe_binary` 声明二进制偏好；断言订阅方
+    /// `on_message_binary` 回调收到的 topic/sender/字节列与发布完全一致（含非
+    /// UTF-8）。覆盖「SDK 通道 → 总线格式过滤 → 宿主 dispatcher → guest
+    /// events-binary 回调」全链。
+    #[test]
+    fn test_sdk_plugin_binary_bus_roundtrip() {
+        const PUB_ID: &str = "com.bedcode.bin-pub";
+        const SUB_ID: &str = "com.bedcode.bin-sub";
+        const TOPIC: &str = "sdk:binary-topic";
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_sdk_test_component())
+            .expect("compile SDK test component");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let publisher = Arc::new(Mutex::new(
+                wasm_runtime
+                    .instantiate_component(&component, PUB_ID, host_ctx.clone(), &[])
+                    .expect("instantiate publisher"),
+            ));
+            let subscriber = Arc::new(Mutex::new(
+                wasm_runtime
+                    .instantiate_component(&component, SUB_ID, host_ctx.clone(), &[])
+                    .expect("instantiate subscriber"),
+            ));
+
+            let instances = Arc::new(RwLock::new(HashMap::from([
+                (PUB_ID.to_string(), publisher.clone()),
+                (SUB_ID.to_string(), subscriber.clone()),
+            ])));
+            host_ctx
+                .message_bus
+                .set_dispatcher(Arc::new(TestInstanceDispatcher { instances }))
+                .await;
+
+            // 激活：SDK activate 内以二进制偏好订阅 TOPIC（订阅为异步投递，稍候生效）
+            publisher.lock().await.activate().expect("publisher activate");
+            subscriber.lock().await.activate().expect("subscriber activate");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // 非 UTF-8 + 边界字节（0x00 / 0xff / 0x80）
+            let payload: Vec<u8> = vec![0x00, 0xff, 0x80, b'b', b'i', b'n', 0x7f];
+            let result = publisher
+                .lock()
+                .await
+                .invoke_command(
+                    "test_binary_publish",
+                    &serde_json::json!({ "topic": TOPIC, "bytes": payload }).to_string(),
+                )
+                .expect("test_binary_publish");
+            let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+            assert_eq!(r["published"], payload.len(), "publish result: {}", result);
+
+            // 总线投递为异步：轮询订阅方记录直到命中（上限 2s）
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let received = loop {
+                let result = subscriber
+                    .lock()
+                    .await
+                    .invoke_command("test_binary_received", "{}")
+                    .expect("test_binary_received");
+                let r: serde_json::Value = serde_json::from_str(&result).unwrap();
+                if !r["received"].is_null() {
+                    break r["received"].clone();
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "subscriber never received binary message, last: {}",
+                    result
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            };
+
+            assert_eq!(received["topic"], TOPIC, "got: {}", received);
+            assert_eq!(received["sender"], PUB_ID, "got: {}", received);
+            assert_eq!(
+                received["bytes"],
+                serde_json::json!(payload),
+                "guest-received bytes must match published payload exactly, got: {}",
+                received
             );
         });
     }

@@ -34,6 +34,26 @@ impl command::Guest for Guest {
             panic!("intentional panic for wasm backtrace test");
         }
 
+        // 能力路由验证命令（core-plugin-manager 票据 06）：按 args.key 调
+        // host_storage::get——宿主注册表命中系统组件提供者时，该 import 经
+        // Linker 路由转发到系统组件实例的同形导出，读到的值来源可区分
+        // （系统组件内存 KV vs 宿主 SQLite）
+        if name == "test.storage-get" {
+            let key = serde_json::from_str::<serde_json::Value>(&args)
+                .ok()
+                .and_then(|v| v.get("key").and_then(|k| k.as_str().map(String::from)))
+                .unwrap_or_default();
+            let mut out = serde_json::json!({ "name": name, "key": key });
+            match host_storage::get(&key) {
+                Ok(Some(v)) => {
+                    out["value"] = serde_json::from_str(&v).unwrap_or(serde_json::Value::String(v));
+                }
+                Ok(None) => out["value"] = serde_json::Value::Null,
+                Err(e) => out["storageError"] = serde_json::json!(e),
+            }
+            return serde_json::to_string(&out).unwrap_or_default();
+        }
+
         let mut out = serde_json::json!({
             "name": name,
             "args": args,

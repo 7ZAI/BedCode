@@ -17,6 +17,9 @@ export interface Disposable {
 /** 插件类型 */
 export type PluginType = 'rust' | 'rust-ts' | 'ts-only'
 
+/** 组件装配角色（manifest `type` 字段，core-plugin-manager）：系统组件 / 应用插件 */
+export type PluginKind = 'system' | 'application'
+
 /** 插件描述文件 (plugin.json) 结构 */
 export interface PluginManifest {
   id: string
@@ -33,6 +36,20 @@ export interface PluginManifest {
   icon?: string
   permissions: string[]
   contributes: PluginContributes
+  /**
+   * 组件装配角色：`system`（系统组件）/ `application`（应用插件，缺省）
+   *
+   * 系统组件内置、默认启用、只停不删、先于应用插件激活，其导出的 host-*
+   * 同形接口注册为能力提供者。缺省 application，旧插件零迁移。
+   */
+  type?: PluginKind
+  /**
+   * 能力依赖声明（应用插件消费的能力名，WIT host-* 接口名）
+   *
+   * 宿主激活时校验：每个依赖必须已有提供者（宿主原语或已激活系统组件），
+   * 缺失即激活失败并指明能力名。缺省空数组 = 无依赖。
+   */
+  dependencies?: string[]
 }
 
 /** 插件配置声明 */

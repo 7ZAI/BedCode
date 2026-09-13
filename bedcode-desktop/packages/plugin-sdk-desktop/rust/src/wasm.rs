@@ -126,7 +126,7 @@ pub trait WasmPlugin: Send + Sync + 'static {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginKind, PluginType};
 
     /// 最小 WASM 测试插件：仅实现必需方法，其余走 trait 默认
     struct TestWasmPlugin;
@@ -149,6 +149,9 @@ mod tests {
                 rust_library: String::new(),
                 api: vec![],
                 icon: None,
+                wasi_preopen_dirs: vec![],
+                kind: PluginKind::Application,
+                dependencies: vec![],
             }
         }
 

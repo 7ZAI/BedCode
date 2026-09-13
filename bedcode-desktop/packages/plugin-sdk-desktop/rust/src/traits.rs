@@ -106,7 +106,7 @@ mod tests {
 
     use super::*;
     use crate::test_utils::{block_on, MockEventEmitter, MockSessionQuery, MockStorage};
-    use crate::types::{PluginContributes, PluginType};
+    use crate::types::{PluginContributes, PluginKind, PluginType};
     use crate::PermissionManager;
     use std::sync::Arc;
 
@@ -132,6 +132,8 @@ mod tests {
                 api: vec![],
                 icon: None,
                 wasi_preopen_dirs: vec![],
+                kind: PluginKind::Application,
+                dependencies: vec![],
             }
         }
 

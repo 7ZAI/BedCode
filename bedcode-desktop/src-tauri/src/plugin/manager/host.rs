@@ -16,7 +16,7 @@ use crate::session::{
 };
 use crate::system::constants::event;
 use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
-use bedcode_plugin_api::PluginState;
+use bedcode_plugin_api::{PluginKind, PluginState};
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -308,7 +308,11 @@ impl PluginHost {
         // 注册 Rust 插件的 terminal handlers（inventory 静态注册）
         host.register_rust_terminal_handlers().await;
 
-        // 4. 根据持久化状态自动激活之前已激活的插件
+        // 4. 系统组件优先激活（core-plugin-manager）：内置、默认启用、先于
+        // 应用插件——其能力注册表装配必须先于应用插件激活时的依赖检查
+        host.activate_system_components().await;
+
+        // 5. 根据持久化状态自动激活之前已激活的插件
         tracing::info!("[PluginHost] Starting auto-activation from persisted state...");
         host.auto_activate_from_persisted_state().await;
 
@@ -680,6 +684,8 @@ impl PluginHost {
             api: Vec<String>,
             subscribes: Vec<String>,
             declared_preopen_dirs: Vec<String>,
+            kind: PluginKind,
+            dependencies: Vec<String>,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -731,8 +737,32 @@ impl PluginHost {
                 api: loaded.manifest.api.clone(),
                 subscribes: loaded.manifest.contributes.subscribes.clone(),
                 declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
+                kind: loaded.manifest.kind,
+                dependencies: loaded.manifest.dependencies.clone(),
             }
         };
+
+        // 阶段 1.5（无锁）：能力依赖装配检查（core-plugin-manager）——manifest
+        // `dependencies` 声明的每个能力必须已有提供者（宿主原语或已激活的
+        // 系统组件实例）；缺失即激活失败并指明能力名。系统组件先于应用插件
+        // 激活（见 PluginHost::new 的 activate_system_components），故此处的
+        // 注册表快照对应用插件而言已含全部系统组件提供者。
+        if !plan.dependencies.is_empty() {
+            let missing = self.wasm_host_ctx.capabilities().missing(&plan.dependencies);
+            if !missing.is_empty() {
+                let msg = format!(
+                    "plugin dependencies not satisfied, missing capabilities: {}",
+                    missing.join(", ")
+                );
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    missing = ?missing,
+                    "[PluginHost] 能力依赖未装配，激活失败"
+                );
+                self.mark_error(plugin_id, msg.clone()).await;
+                return Err(crate::AppError::Plugin(format!("Plugin {} activation failed: {}", plugin_id, msg)));
+            }
+        }
 
         // 阶段 2（无 map 锁）：执行 WASM activate + on_startup
         // 仅持单插件实例锁（避免重入死锁），失败置 Error 状态
@@ -896,6 +926,13 @@ impl PluginHost {
         // 未声明 api 的插件登记空清单，幂等无操作
         self.wasm_host_ctx.api_registry().register(plugin_id, &plan.api);
 
+        // core-plugin-manager：系统组件激活后装配能力注册表——实例化时探测到的
+        // 可路由能力导出（host-* 同形接口）注册为系统组件提供者，应用插件的
+        // 对应 import 自此经 Linker 路由转发到本组件实例（host-side 转发）
+        if plan.kind == PluginKind::System {
+            self.register_system_capabilities(plugin_id).await;
+        }
+
         // 注册 manifest 中声明的 topic 订阅
         if !plan.subscribes.is_empty() {
             let plugin_id_owned = plugin_id.to_string();
@@ -931,6 +968,46 @@ impl PluginHost {
         Ok(())
     }
 
+    /// 注册系统组件的能力提供者（core-plugin-manager）
+    ///
+    /// 读取实例化时探测到的可路由能力导出，逐项注册进能力注册表；
+    /// 导出缺失/不可路由的能力跳过并告警（不阻断激活——组件仍可提供
+    /// 其余能力，缺失能力由依赖检查在消费方激活时报错）。
+    async fn register_system_capabilities(&self, plugin_id: &str) {
+        let instance = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        };
+        let Some(instance) = instance else {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "[PluginHost] 系统组件无 WASM 实例，跳过能力注册（非 WASM 来源？）"
+            );
+            return;
+        };
+        let exported = instance.lock().await.exported_capabilities().to_vec();
+        if exported.is_empty() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "[PluginHost] 系统组件未导出任何可路由能力接口（manifest type=system 但无能力导出）"
+            );
+        }
+        for capability in exported {
+            if let Err(e) = self
+                .wasm_host_ctx
+                .capabilities()
+                .register_system_component(&capability, plugin_id, instance.clone())
+            {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    capability = %capability,
+                    error = %e,
+                    "[PluginHost] 系统组件能力注册失败"
+                );
+            }
+        }
+    }
+
     /// 重建 WASM 插件实例（load_plugin_from_file + 替换 map 条目）
     ///
     /// 激活路径：声明 WASI 预打开目录的插件首次授权后实例未覆盖新授权目录时
@@ -960,6 +1037,20 @@ impl PluginHost {
             .write()
             .await
             .insert(plugin_id.to_string(), Arc::new(Mutex::new(new_wasm_plugin)));
+
+        // core-plugin-manager：系统组件实例重建后，能力注册表中的旧实例句柄
+        // 已失效，按新实例重新装配（trap 自愈回落宿主原语的场景亦在此恢复）
+        let is_system = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .get(plugin_id)
+                .map(|p| p.manifest.kind == PluginKind::System)
+                .unwrap_or(false)
+        };
+        if is_system {
+            self.wasm_host_ctx.capabilities().revert_all_from(plugin_id);
+            self.register_system_capabilities(plugin_id).await;
+        }
         Ok(())
     }
 
@@ -1074,6 +1165,9 @@ impl PluginHost {
         self.permission.revoke_all(plugin_id);
         // 注销互调 api 清单（ADR-0017）：停用后目标调用被门禁拒绝
         self.wasm_host_ctx.api_registry().unregister(plugin_id);
+        // core-plugin-manager：系统组件停用即撤销其能力提供，能力回落宿主原语
+        // （二选一装配：注册表对消费方恒可用；条件回落防误撤重建后的新注册）
+        self.wasm_host_ctx.capabilities().revert_all_from(plugin_id);
 
         // 中止插件定时器（若有）：停用后不再到点回调
         self.abort_plugin_timer(plugin_id);
@@ -1261,6 +1355,12 @@ impl PluginHost {
             if loaded.source == PluginSource::StaticRegistry {
                 continue;
             }
+            // core-plugin-manager：系统组件默认启用、启动时无条件激活
+            // （activate_system_components），其启停不持久化——持久化真源是
+            // 「内置」而非用户状态，停用仅对当前会话生效
+            if loaded.manifest.kind == PluginKind::System {
+                continue;
+            }
             let is_active = matches!(
                 loaded.state,
                 PluginState::Activated | PluginState::Degraded(_)
@@ -1286,6 +1386,40 @@ impl PluginHost {
         }
         if let Err(e) = self.storage.save_activated_plugins(&activated_map).await {
             tracing::error!("[PluginHost] Failed to persist plugin activation state: {}", e);
+        }
+    }
+
+    /// 系统组件优先激活（core-plugin-manager，内置、默认启用、只停不删）
+    ///
+    /// 在持久化状态自动激活之前执行：系统组件激活时将其能力导出注册进
+    /// 能力注册表，后续应用插件激活的依赖检查才能命中。激活顺序按插件 ID
+    /// 排序（确定性）；单个失败不阻断其余（失败组件落 Error 态，其能力
+    /// 缺失由消费方激活时的依赖检查如实报错）。
+    async fn activate_system_components(&self) {
+        let mut ids: Vec<String> = {
+            let plugins = self.plugins.read().await;
+            plugins
+                .values()
+                .filter(|p| p.manifest.kind == PluginKind::System && p.source != PluginSource::StaticRegistry)
+                .map(|p| p.manifest.id.clone())
+                .collect()
+        };
+        ids.sort();
+        if ids.is_empty() {
+            return;
+        }
+        tracing::info!(
+            "[PluginHost] Activating {} system component(s) before application plugins",
+            ids.len()
+        );
+        for id in ids {
+            if let Err(e) = self.activate_plugin(&id, false).await {
+                tracing::error!(
+                    plugin_id = %id,
+                    error = %e,
+                    "[PluginHost] 系统组件激活失败（能力缺失将由消费方依赖检查报错）"
+                );
+            }
         }
     }
 
@@ -1509,6 +1643,8 @@ mod tests {
                 rust_library: String::new(),
                 icon: None,
                 wasi_preopen_dirs: vec![],
+                kind: bedcode_plugin_api::PluginKind::Application,
+                dependencies: vec![],
             },
             state,
             granted_permissions: HashSet::new(),
@@ -1542,6 +1678,8 @@ mod tests {
             rust_library: String::new(),
             icon: None,
             wasi_preopen_dirs: vec![],
+            kind: bedcode_plugin_api::PluginKind::Application,
+            dependencies: vec![],
         }
     }
 
@@ -2682,6 +2820,370 @@ mod tests {
                 "storage parse error indicates collector bug: {}",
                 e
             );
+        }
+    }
+
+    // ==================== 系统组件与能力装配（core-plugin-manager，票据 06） ====================
+
+    /// 系统组件 fixture 插件 ID（与 packages/plugin-system-test 的 manifest 一致）
+    const TEST_SYSTEM_PLUGIN_ID: &str = "com.bedcode.system-test";
+
+    /// 构建系统组件 fixture 并编码为组件（packages/plugin-system-test，
+    /// 与 build_test_component 同策略：mtime 新鲜度检查 + cargo build）
+    fn build_system_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-system-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let module_path = output_dir.join("bedcode_plugin_system_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+            if !needs_rebuild {
+                return encode_component(&std::fs::read(&module_path).expect("Failed to read system test module"));
+            }
+        }
+
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+                "--manifest-path",
+                plugin_dir.join("Cargo.toml").to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for system test component");
+        assert!(status.success(), "System test component WASM build failed");
+        encode_component(&std::fs::read(&module_path).expect("Failed to read system test module after build"))
+    }
+
+    /// 实例化系统组件 fixture 并注入宿主（kind=System，探测断言含 host-storage）
+    async fn setup_system_component(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
+        let component = host
+            .wasm_runtime()
+            .compile_component(&build_system_test_component())
+            .expect("compile system test component");
+        let plugin = host
+            .wasm_runtime()
+            .instantiate_component(&component, TEST_SYSTEM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[])
+            .expect("instantiate system test component");
+        // 实例化探测：plugin-system world 的 host-storage 导出应被识别为可路由能力
+        assert_eq!(
+            plugin.exported_capabilities(),
+            &["host-storage".to_string()],
+            "system component must export host-storage capability"
+        );
+
+        host.wasm_plugins
+            .write()
+            .await
+            .insert(TEST_SYSTEM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
+
+        let mut loaded = make_plugin(TEST_SYSTEM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
+        loaded.manifest.rust_library = "bedcode_plugin_system_test".to_string();
+        loaded.manifest.kind = bedcode_plugin_api::PluginKind::System;
+        loaded.extension_path = tmp_dir.path().to_string_lossy().to_string();
+        host.plugins
+            .write()
+            .await
+            .insert(TEST_SYSTEM_PLUGIN_ID.to_string(), loaded);
+
+        TEST_SYSTEM_PLUGIN_ID.to_string()
+    }
+
+    /// 装配闭环：系统组件注册能力 + 应用插件经 Linker 路由消费，
+    /// 读到的值来自系统组件实例私有 KV 而非宿主 SQLite（证明转发到达组件实例）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_system_component_capability_routing_end_to_end() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let sys_id = setup_system_component(&host, &tmp_dir).await;
+        let app_id = setup_wasm_plugin(&host, &tmp_dir).await;
+
+        // 应用插件声明能力依赖（激活时校验）
+        host.plugins
+            .write()
+            .await
+            .get_mut(&app_id)
+            .unwrap()
+            .manifest
+            .dependencies = vec!["host-storage".to_string()];
+
+        // 宿主 SQLite 预写对照值（若未路由，应用插件将读到它）
+        host.storage()
+            .set(&app_id, "component-test-key", json!({"k": "v"}))
+            .await
+            .expect("preset host storage key");
+
+        // 系统组件先激活 → 能力注册表切换为系统组件提供者
+        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            format!("system:{}", sys_id),
+            "host-storage must be provided by system component after activation"
+        );
+
+        // 应用插件后激活：依赖检查命中系统组件提供者
+        host.activate_plugin(&app_id, false).await.expect("activate app plugin");
+
+        // 预置系统组件实例的私有 KV（host-side 直接调用其能力导出）
+        let sys_inst = host.get_wasm_plugin(&sys_id).await.unwrap();
+        let set_result = sys_inst
+            .lock()
+            .await
+            .call_capability_export::<(String, String), (Result<(), String>,)>(
+                "bedcode:plugin/host-storage.set",
+                ("component-test-key".to_string(), r#"{"sys":"routed"}"#.to_string()),
+            )
+            .expect("capability set transport");
+        assert!(set_result.0.is_ok(), "capability set guest result: {:?}", set_result);
+
+        // 应用插件消费：invoke 内 host_storage::get("component-test-key") 应经
+        // Linker 路由转发到系统组件实例（读到系统组件私有值，而非宿主 SQLite）
+        let result = host
+            .invoke_rust_command(&app_id, "test.echo", json!({}))
+            .await
+            .expect("invoke app command");
+        assert_eq!(
+            result["stored"],
+            json!({"sys": "routed"}),
+            "routed read must return system component value, got: {}",
+            result
+        );
+
+        // 显式按键读取同样路由
+        let result = host
+            .invoke_rust_command(&app_id, "test.storage-get", json!({"key": "component-test-key"}))
+            .await
+            .expect("invoke storage-get");
+        assert_eq!(result["value"], json!({"sys": "routed"}), "got: {}", result);
+    }
+
+    /// 依赖缺失：应用插件声明未知能力名 → 激活失败，错误信息指明能力名
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_activation_fails_with_missing_dependency_named() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let app_id = setup_wasm_plugin(&host, &tmp_dir).await;
+
+        host.plugins
+            .write()
+            .await
+            .get_mut(&app_id)
+            .unwrap()
+            .manifest
+            .dependencies = vec!["host-no-such-cap".to_string()];
+
+        let err = host
+            .activate_plugin(&app_id, false)
+            .await
+            .expect_err("activation must fail on missing capability");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("host-no-such-cap"),
+            "error must name the missing capability, got: {}",
+            msg
+        );
+        // 失败落 Error 终态（不留悬挂 Activating）
+        let info = host.get_plugin(&app_id).await.unwrap();
+        assert!(
+            matches!(&info.state, PluginState::Error(e) if e.contains("host-no-such-cap")),
+            "expected Error state naming missing capability, got {:?}",
+            info.state
+        );
+
+        // 依赖宿主原语能力则放行（host-storage 恒由宿主原语/系统组件提供）
+        host.plugins
+            .write()
+            .await
+            .get_mut(&app_id)
+            .unwrap()
+            .manifest
+            .dependencies = vec!["host-storage".to_string()];
+        host.activate_plugin(&app_id, false)
+            .await
+            .expect("host primitive capability dependency must be satisfiable");
+    }
+
+    /// 系统组件 trap 隔离：转发调用中系统组件 panic，错误隔离为应用插件的
+    /// Err 返回（应用插件实例不中毒、可继续调用），能力回落宿主原语
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_system_component_trap_isolated_and_reverts_to_host() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let sys_id = setup_system_component(&host, &tmp_dir).await;
+        let app_id = setup_wasm_plugin(&host, &tmp_dir).await;
+
+        host.storage()
+            .set(&app_id, "component-test-key", json!({"k": "v"}))
+            .await
+            .expect("preset host storage key");
+        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        host.activate_plugin(&app_id, false).await.expect("activate app plugin");
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            format!("system:{}", sys_id)
+        );
+
+        // 触发系统组件 trap（sys-test.panic key）：应用插件的 invoke 不 trap，
+        // guest 收到 Err 并序列化进 storageError 字段（trap 不跨实例扩散）
+        let result = host
+            .invoke_rust_command(&app_id, "test.storage-get", json!({"key": "sys-test.panic"}))
+            .await
+            .expect("app plugin invoke must survive system component trap");
+        let storage_error = result["storageError"].as_str().unwrap_or("");
+        assert!(
+            storage_error.contains("system component capability call failed"),
+            "forwarded trap must surface as guest-visible error, got: {}",
+            result
+        );
+
+        // 能力自愈：trap 后回落宿主原语，后续调用读到宿主 SQLite 对照值
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            "host",
+            "capability must revert to host primitive after system component trap"
+        );
+        let result = host
+            .invoke_rust_command(&app_id, "test.storage-get", json!({"key": "component-test-key"}))
+            .await
+            .expect("app plugin must keep working after revert");
+        assert_eq!(result["value"], json!({"k": "v"}), "host primitive fallback, got: {}", result);
+    }
+
+    /// 系统组件停用（只停不删）：能力回落宿主原语；重新激活后再装配
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_deactivate_system_component_reverts_capability() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let sys_id = setup_system_component(&host, &tmp_dir).await;
+
+        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            format!("system:{}", sys_id)
+        );
+
+        host.deactivate_plugin(&sys_id, false)
+            .await
+            .expect("deactivate system component");
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            "host",
+            "capability must revert to host primitive on system component deactivation"
+        );
+
+        // 系统组件启停不持久化（默认启用语义：持久化真源是「内置」而非用户状态）
+        let persisted = host.get_activated_state().await;
+        assert!(
+            !persisted.contains_key(&sys_id),
+            "system component must be excluded from persisted activation state"
+        );
+
+        // 重新激活 → 能力再装配
+        host.activate_plugin(&sys_id, false).await.expect("re-activate system component");
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            format!("system:{}", sys_id)
+        );
+    }
+
+    /// 启动加载顺序（集成测试）：PluginHost::new 全路径——系统组件先于应用
+    /// 插件激活，应用插件（持久化启用 + 能力依赖）激活时注册表已含系统组件
+    /// 提供者；两者终态均 Activated
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_boot_activates_system_components_before_app_plugins() {
+        // AppConfig 初始化（与 setup_host 同策略，重复 init 幂等）
+        static CONFIG_INIT: std::sync::Once = std::sync::Once::new();
+        CONFIG_INIT.call_once(|| {
+            let mut config = AppConfig::default();
+            config.network.port = 8765;
+            AppConfig::init(config);
+        });
+
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let plugins_dir = tmp_dir.path().join("plugins");
+        let sys_id = "com.bedcode.system-test";
+        let app_id = "com.bedcode.component-test";
+
+        // 写两个插件包：系统组件（type=system）+ 应用插件（dependencies）
+        for (id, rust_lib, manifest_extra) in [
+            (sys_id, "bedcode_plugin_system_test", r#", "type": "system""#),
+            (app_id, "bedcode_plugin_component_test", r#", "dependencies": ["host-storage"]"#),
+        ] {
+            let dir = plugins_dir.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            let manifest = format!(
+                r#"{{"id": "{}", "name": "{}", "version": "0.1.0", "sandbox": "inline", "pluginType": "rust-ts", "rustLibrary": "{}", "permissions": ["storage"]{}}}"#,
+                id, id, rust_lib, manifest_extra
+            );
+            std::fs::write(dir.join("plugin.json"), manifest).unwrap();
+            let component = if id == sys_id {
+                build_system_test_component()
+            } else {
+                build_test_component()
+            };
+            std::fs::write(dir.join(format!("{}.wasm", rust_lib)), component).unwrap();
+        }
+
+        // 预置持久化启用状态：仅应用插件（系统组件默认启用、无需持久化）
+        let db = Arc::new(Mutex::new(Database::new(&std::path::PathBuf::from(":memory:")).unwrap()));
+        db.lock().await.init_schema().unwrap();
+        PluginStorage::new(db.clone())
+            .save_activated_plugins(&HashMap::from([(app_id.to_string(), true)]))
+            .await
+            .expect("seed persisted activation state");
+
+        let session_manager = Arc::new(SessionManager::from_database(
+            Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+            Arc::new(std::path::PathBuf::from(".")),
+        ));
+        let config_manager = Arc::new(SessionConfigManager::new(Arc::new(Mutex::new(
+            Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+        ))));
+
+        let host = PluginHost::new(db, &plugins_dir, session_manager, config_manager, None).await;
+
+        // 终态：两者均 Activated（应用插件的依赖检查在系统组件装配之后执行，
+        // 激活成功即顺序成立的语义断言）
+        let sys_info = host.get_plugin(sys_id).await.expect("system component present");
+        let app_info = host.get_plugin(app_id).await.expect("app plugin present");
+        assert_eq!(sys_info.state, PluginState::Activated, "system component state");
+        assert_eq!(app_info.state, PluginState::Activated, "app plugin state");
+
+        // 能力注册表：host-storage 由系统组件提供
+        assert_eq!(
+            host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
+            format!("system:{}", sys_id),
+            "host-storage must be assembled to system component at boot"
+        );
+
+        // 激活时序：系统组件不晚于应用插件（语义断言之上的时序佐证）
+        let (sys_at, app_at) = {
+            let plugins = host.plugins.read().await;
+            (
+                plugins.get(sys_id).and_then(|p| p.activated_at),
+                plugins.get(app_id).and_then(|p| p.activated_at),
+            )
+        };
+        match (sys_at, app_at) {
+            (Some(sys_at), Some(app_at)) => assert!(sys_at <= app_at, "system component must activate first"),
+            _ => panic!("both plugins must record activated_at"),
         }
     }
 }

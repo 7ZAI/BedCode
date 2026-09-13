@@ -28,3 +28,5 @@
   **测试**：桌面 bus.rs 新增 4 用例（非 UTF-8/MB 级 roundtrip、JSON↔二进制双向格式拒绝+计数、队列满丢弃守恒律 delivered+dropped==TOTAL）；移动端 message_bus.rs 新增 3 用例（同语义，内部计数）。两端 plugin-component-test 的 `abi.version()` 硬编码同步（桌面 11 / 移动 9）。
 
   **验证**：桌面 cargo test 634 全绿（含既有 JSON 路径全部用例）、移动端 cargo test 282 全绿（279+3 新）；SDK 双端 cargo test 全绿（桌面 75 / 移动 63）；fmt 自查改动区域干净（dev 基线 345 文件漂移不纳入）。
+
+- 2026-09-13 补记（票据 06 发现并修复）：本票据的二进制链路实际有三处断点，导致 v11 二进制 guest 回调此前**未真正接通**——(1) 宿主动态探测用平名 `iface#func`，`Instance::get_func` 的 str 查找恒不命中；(2) 双端 SDK `HostBus` 缺 `bus_publish_binary` / `bus_subscribe_binary`，而 `WasmPlugin::on_message_binary` 文档又要求用 `host-bus.subscribe-binary` 声明偏好，SDK 侧无从声明二进制订阅；(3) guest 侧端到端覆盖缺失。本票据 checklist「二进制 roundtrip」当时仅在总线层验证。修复与新增端到端用例见 `06-system-components.md`。

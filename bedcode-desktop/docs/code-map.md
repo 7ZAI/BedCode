@@ -41,6 +41,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── plugin-component-test/        # 测试用 WASM 插件 crate（Component Model 绑定验证与连通性测试，
 │   │                                 #   覆盖宿主调用路径，供宿主 wasm_runtime 测试套件做签名验证）
 │   ├── plugin-sdk-test/              # SDK 接口测试用插件 crate
+│   ├── plugin-system-test/           # 系统组件形态测试插件 crate（导出 host-* 同形能力接口，验证能力装配
+│   │                                 #   框架：注册表路由 / host-side 转发 / 依赖检查 / trap 隔离）
 │   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直写预打开目录）
 ├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
@@ -115,11 +117,16 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
     WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
     events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
     统一注册到 Linker
+  - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
+    能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
+    host-side 转发到系统组件同形导出；系统组件内置、默认启用、先于应用插件激活
   - **storage / types / validation / watcher**：插件存储、类型定义、校验、开发模式热重载监听
-- **security/（core-security）**：资源授权——approval（授权审批）、fs_auth（文件系统访问三层校验：
+- **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
+  声明/审批/强制，fs / api-call 资源实现）、approval（授权审批）、fs_auth（文件系统访问三层校验：
   路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
-- **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
-- **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面、运行时指标埋点（骨架，见 `.scratch/wasm-core/`）
+- **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
+- **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面（配置文件 + 运行时覆盖）、
+  运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
 - **permission**：共享词汇（bedcode-plugin-api 再导出）
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
@@ -213,7 +220,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (Rust) | `src-tauri/src/plugin/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
-| 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-wasi-test/` |
+| 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
 | 插件源码 | `plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |

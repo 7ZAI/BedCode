@@ -4,12 +4,12 @@
 //! - [`loader`] / [`registry`] / [`watcher`]：插件包加载、注册表、dev 监听
 //! - [`host`]：PluginHost 装配与命令面
 //! - [`wasm_runtime`]：wasmtime Engine/Linker/Store/Instance 生命周期
+//! - [`capability`]：能力注册表与系统组件装配（manifest type/dependencies、
+//!   host-* 能力路由与 host-side 转发，票据 06）
 //! - [`api_bridge`]：插件 API 桥接；[`storage`]：插件存储；[`types`] / [`validation`]：类型与校验
-//!
-//! 系统组件（system）与应用插件（application）的类型划分与能力装配
-//! 在票据 06 落地。
 
 pub mod api_bridge;
+pub(crate) mod capability;
 pub mod host;
 pub mod loader;
 pub mod registry;

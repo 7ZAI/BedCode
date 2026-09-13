@@ -59,6 +59,23 @@ pub struct PluginManifest {
     /// （既有 wasm32-unknown-unknown 插件不受影响）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub wasi_preopen_dirs: Vec<String>,
+    /// 组件类型：`system`（系统组件）/ `application`（应用插件）
+    ///
+    /// 系统组件：内置、默认启用、只停不删、先于应用插件激活，其导出
+    /// 的 host-* 同形接口注册进能力注册表作为能力提供者（host-side
+    /// 转发装配，见 core-plugin-manager）。缺省 `application`，旧插件
+    /// 零迁移。注意与 `pluginType`（产物形态 rust/rust-ts/ts-only）
+    /// 正交——本字段描述装配角色。
+    #[serde(rename = "type", default, skip_serializing_if = "PluginKind::is_application")]
+    pub kind: PluginKind,
+    /// 能力依赖声明（应用插件消费的能力名，WIT host-* 接口名，如
+    /// `host-storage`）
+    ///
+    /// 宿主在激活时校验：每个依赖必须已有提供者（宿主原语或已激活的
+    /// 系统组件实例），缺失即激活失败并指明能力名。缺省空数组 =
+    /// 无依赖（现有插件不受影响）。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependencies: Vec<String>,
 }
 
 fn default_sandbox() -> String {
@@ -69,7 +86,7 @@ fn default_plugin_type() -> PluginType {
     PluginType::TsOnly
 }
 
-/// 插件类型
+/// 插件产物形态类型
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum PluginType {
@@ -79,6 +96,27 @@ pub enum PluginType {
     RustTs,
     /// 纯 TypeScript 插件，仅前端组件
     TsOnly,
+}
+
+/// 组件装配角色（manifest `type` 字段，core-plugin-manager）
+///
+/// 与 [`PluginType`]（产物形态）正交：本枚举描述插件在能力装配中的角色。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginKind {
+    /// 应用插件（缺省）：消费能力，经 `dependencies` 声明依赖
+    #[default]
+    Application,
+    /// 系统组件：内置、默认启用、只停不删、先于应用插件激活，
+    /// 向能力注册表提供 host-* 同形接口能力
+    System,
+}
+
+impl PluginKind {
+    /// serde skip_serializing_if 钩子：缺省角色不写入序列化输出
+    pub fn is_application(&self) -> bool {
+        matches!(self, PluginKind::Application)
+    }
 }
 
 /// 插件配置声明
@@ -294,6 +332,38 @@ mod tests {
         // contributes 序列化时带全部字段（serde(default) 只影响反序列化）
         assert_eq!(back["contributes"]["commands"], serde_json::json!([]));
         assert_eq!(back["contributes"]["subscribes"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn test_manifest_parse_system_component_kind_and_dependencies() {
+        // core-plugin-manager：系统组件 manifest 声明 type=system + 能力依赖
+        let json = serde_json::json!({
+            "id": "com.bedcode.sys-store",
+            "name": "Sys Store",
+            "version": "1.0.0",
+            "type": "system",
+            "dependencies": ["host-storage", "host-log"]
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.kind, PluginKind::System);
+        assert_eq!(m.dependencies, vec!["host-storage", "host-log"]);
+        // 序列化回写：system 角色与依赖保留
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["type"], serde_json::json!("system"));
+        assert_eq!(back["dependencies"], serde_json::json!(["host-storage", "host-log"]));
+    }
+
+    #[test]
+    fn test_manifest_kind_and_dependencies_default_for_legacy() {
+        // 缺省兼容：旧插件 manifest 无 type/dependencies 字段 → application + 空依赖，
+        // 序列化回写时缺省值不落盘（skip_serializing_if）
+        let json = serde_json::json!({ "id": "com.bedcode.legacy", "name": "L", "version": "0.1.0" });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(m.kind, PluginKind::Application);
+        assert!(m.dependencies.is_empty());
+        let back = serde_json::to_value(&m).unwrap();
+        assert!(back.get("type").is_none(), "application 缺省角色不序列化");
+        assert!(back.get("dependencies").is_none(), "空依赖不序列化");
     }
 
     // ==================== PluginType / PluginState ====================

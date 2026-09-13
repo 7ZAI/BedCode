@@ -20,6 +20,14 @@ use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{BusMessage, plugin_api};
+use std::cell::RefCell;
+
+// 最近一次收到的二进制消息（v11 events-binary 回调）——SDK 链路字节完整性
+// 验证：`on_message_binary` 写入，命令 `test_binary_received` 读出供宿主断言
+// （含非 UTF-8、MB 级载荷；票据 06 补齐 SDK 二进制发布/订阅缺口后启用）
+thread_local! {
+    static LAST_BINARY: RefCell<Option<(String, String, Vec<u8>)>> = RefCell::new(None);
+}
 
 /// 插件互调 api 声明（issue 04）：trait 方法名 ↔ manifest.api 条目
 /// （`com.bedcode.sdk-test.<method>`），宏在编译期比对防漂移
@@ -57,6 +65,9 @@ impl WasmPlugin for SdkTestPlugin {
         // 订阅互调请求 topic（宏生成）：`bedcode.api.<api>` 逐个订阅，
         // 宿主订阅去重幂等
         SdkTestApiDispatcher::register()?;
+        // v11：以二进制格式偏好订阅（经 SDK HostBus，票据 06 补齐该能力）——
+        // 宿主 `publish_binary` 才会投递到 on_message_binary 回调
+        WasmHost.bus_subscribe_binary("sdk:binary-topic")?;
         Ok(())
     }
 
@@ -68,6 +79,16 @@ impl WasmPlugin for SdkTestPlugin {
     /// 其余消息保持原语义（本插件无其他订阅，直接忽略）
     fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
         SdkTestApiDispatcher::dispatch::<Self>(msg)?;
+        Ok(())
+    }
+
+    /// v11 二进制消息入口（票据 06 补齐 SDK 二进制订阅能力后启用）：
+    /// 记录最近一次 topic/sender/字节列，供宿主测试断言字节完整性
+    fn on_message_binary(msg: &BusMessage) -> anyhow::Result<()> {
+        let payload = msg.payload_binary.clone().unwrap_or_default();
+        LAST_BINARY.with(|slot| {
+            *slot.borrow_mut() = Some((msg.topic.clone(), msg.sender.clone(), payload));
+        });
         Ok(())
     }
 
@@ -122,6 +143,34 @@ impl WasmPlugin for SdkTestPlugin {
             "test_bus" => {
                 host.bus_publish("sdk:topic", &serde_json::json!({ "msg": "sdk-hello" }))?;
                 Ok(serde_json::json!({ "published": true }))
+            }
+            // v11：二进制发布（票据 06 补齐 SDK 能力）——args.bytes 为 0-255
+            // 数字数组，args.topic 缺省 sdk:binary-topic
+            "test_binary_publish" => {
+                let topic = args
+                    .get("topic")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("sdk:binary-topic");
+                let bytes: Vec<u8> = args
+                    .get("bytes")
+                    .and_then(|v| v.as_array())
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|x| x.as_u64().map(|n| n as u8))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                host.bus_publish_binary(topic, &bytes)?;
+                Ok(serde_json::json!({ "published": bytes.len() }))
+            }
+            // v11：读回 on_message_binary 最近一次收到的消息（宿主断言字节完整性）
+            "test_binary_received" => {
+                let received = LAST_BINARY.with(|slot| {
+                    slot.borrow().as_ref().map(|(topic, sender, payload)| {
+                        serde_json::json!({ "topic": topic, "sender": sender, "bytes": payload })
+                    })
+                });
+                Ok(serde_json::json!({ "received": received }))
             }
             // 无头测试上下文无 AppHandle：宿主 notify 返回错误，验证错误透传
             "test_notify" => {

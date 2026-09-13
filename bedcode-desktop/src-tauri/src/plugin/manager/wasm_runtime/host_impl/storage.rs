@@ -2,8 +2,14 @@
 //!
 //! `storage_get/set/delete`（权限校验 + 服务调用）供 Component Model 绑定
 //! （`wasm_runtime::component`）调用。
+//!
+//! 能力路由（core-plugin-manager）：`host-storage` 能力当前由系统组件提供时，
+//! 权限校验通过后转发到系统组件实例的同形导出（host-side 转发）；否则走
+//! 宿主原语（本文件现状路径）。转发结果与宿主原语共用同一返回形状
+//!（WIT `result<option<string>, string>` 载荷为 JSON 文本）。
 
 use crate::plugin::permission::PERMISSION_STORAGE;
+use crate::plugin::manager::capability;
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
 
 /// 获取值（权限校验 + 服务调用）
@@ -14,6 +20,10 @@ pub(crate) fn storage_get(
 ) -> Result<Option<serde_json::Value>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_get") {
         return Err("permission denied".to_string());
+    }
+    // 能力路由：系统组件提供者命中时转发（组件间不共享内存，WIT 边界序列化）
+    if let Some(result) = capability::forward_storage_get(host_ctx, plugin_id, key) {
+        return result.map(|opt| opt.map(|s| serde_json::from_str(&s).unwrap_or(serde_json::Value::String(s))));
     }
     let storage = host_ctx.storage.clone();
     block_on_async(storage.get(plugin_id, key)).map_err(|e| format!("storage error: {}", e))
@@ -29,6 +39,9 @@ pub(crate) fn storage_set(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_set") {
         return Err("permission denied".to_string());
     }
+    if let Some(result) = capability::forward_storage_set(host_ctx, plugin_id, key, &value.to_string()) {
+        return result;
+    }
     let storage = host_ctx.storage.clone();
     block_on_async(storage.set(plugin_id, key, value)).map_err(|e| format!("storage error: {}", e))
 }
@@ -37,6 +50,9 @@ pub(crate) fn storage_set(
 pub(crate) fn storage_delete(host_ctx: &WasmHostContext, plugin_id: &str, key: &str) -> Result<(), String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_storage_delete") {
         return Err("permission denied".to_string());
+    }
+    if let Some(result) = capability::forward_storage_delete(host_ctx, plugin_id, key) {
+        return result;
     }
     let storage = host_ctx.storage.clone();
     block_on_async(storage.delete(plugin_id, key)).map_err(|e| format!("storage error: {}", e))
