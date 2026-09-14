@@ -618,9 +618,6 @@ mod tests {
         // 按指纹关闭：正确解析并回填
         db.close_open_connection_event_by_fingerprint("fp-1").unwrap();
         let hist = db.get_connection_history(&pairing_id).unwrap();
-        assert!(
-            hist[0].disconnected_at.is_some(),
-            "按指纹关闭应回填 disconnected_at"
-        );
+        assert!(hist[0].disconnected_at.is_some(), "按指纹关闭应回填 disconnected_at");
     }
 }

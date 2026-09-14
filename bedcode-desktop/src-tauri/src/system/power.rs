@@ -96,9 +96,7 @@ impl PowerManager {
             }
             if inner.logind.is_some() {
                 inner.active = true;
-                tracing::info!(
-                    "PowerManager: system sleep prevention enabled (systemd-logind inhibitor)"
-                );
+                tracing::info!("PowerManager: system sleep prevention enabled (systemd-logind inhibitor)");
                 return;
             }
         }
@@ -120,9 +118,7 @@ impl PowerManager {
             match ns.start(NoSleepType::PreventUserIdleSystemSleep) {
                 Ok(()) => {
                     inner.active = true;
-                    tracing::info!(
-                        "PowerManager: system sleep prevention enabled (display sleep allowed)"
-                    );
+                    tracing::info!("PowerManager: system sleep prevention enabled (display sleep allowed)");
                 }
                 Err(e) => {
                     tracing::error!("PowerManager: failed to prevent system sleep: {}", e);
@@ -145,9 +141,7 @@ impl PowerManager {
         #[cfg(target_os = "linux")]
         {
             if inner.logind.take().is_some() {
-                tracing::info!(
-                    "PowerManager: system sleep prevention disabled (logind inhibitor released)"
-                );
+                tracing::info!("PowerManager: system sleep prevention disabled (logind inhibitor released)");
             }
         }
 
@@ -198,10 +192,10 @@ mod linux_logind {
             "Inhibit",
         )?;
         msg.append_all((
-            "sleep", // what：阻止系统休眠（不阻止屏幕熄灭）
-            "BedCode", // who：应用标识
+            "sleep",                                                // what：阻止系统休眠（不阻止屏幕熄灭）
+            "BedCode",                                              // who：应用标识
             "BedCode 服务器运行中，阻止系统休眠以保持远程终端在线", // why：人类可读原因
-            "block", // mode：强制阻塞
+            "block",                                                // mode：强制阻塞
         ));
         Ok(msg)
     }
@@ -218,8 +212,7 @@ mod linux_logind {
         ///
         /// 返回错误时调用方应回退其他实现（如 nosleep），错误信息需带操作上下文
         pub(super) fn acquire() -> Result<Self, String> {
-            let bus = Connection::new_system()
-                .map_err(|e| format!("connect system bus for logind inhibit: {e}"))?;
+            let bus = Connection::new_system().map_err(|e| format!("connect system bus for logind inhibit: {e}"))?;
             let reply = bus
                 .send_with_reply_and_block(build_inhibit_message()?, Duration::from_secs(5))
                 .map_err(|e| format!("call org.freedesktop.login1.Manager.Inhibit: {e}"))?;

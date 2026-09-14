@@ -157,17 +157,14 @@ pub async fn save_app_settings(
 /// 只替换现有配置的 log 段并持久化（避免前端整表保存时丢 log 字段）；
 /// 除 file_level 热调外的项（format/rotation/max_files/capacity_bytes）重启后生效。
 #[tauri::command]
-pub async fn save_log_settings(
-    app_handle: tauri::AppHandle,
-    log: crate::system::config::LogConfig,
-) -> Result<()> {
+pub async fn save_log_settings(app_handle: tauri::AppHandle, log: crate::system::config::LogConfig) -> Result<()> {
     let config_path = app_handle
         .path()
         .app_data_dir()
         .map(|p| p.join("config.properties"))
         .map_err(|e: tauri::Error| crate::AppError::Config(e.to_string()))?;
-    let mut config = crate::system::config::AppConfig::load(&config_path)
-        .map_err(|e| crate::AppError::Config(e.to_string()))?;
+    let mut config =
+        crate::system::config::AppConfig::load(&config_path).map_err(|e| crate::AppError::Config(e.to_string()))?;
     config.log = log;
     config.save(&config_path)?;
     tracing::info!("Log settings saved to {:?}", config_path);

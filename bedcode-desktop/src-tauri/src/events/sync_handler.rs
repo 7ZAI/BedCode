@@ -358,7 +358,6 @@ impl SyncEventHandler {
         self.broadcast_sync_data(payload, None).await;
     }
 
-
     /// 广播同步数据消息
     ///
     /// 如果指定了 exclude_device，则排除该设备后广播给其他客户端

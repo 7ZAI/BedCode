@@ -190,7 +190,13 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
             {
                 let db = ctx.db();
                 let db_guard = db.lock().await;
-                if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address), body.uid_hash.as_deref()) {
+                if let Err(e) = db_guard.add_pairing(
+                    &display_name,
+                    &fingerprint,
+                    "",
+                    Some(&address),
+                    body.uid_hash.as_deref(),
+                ) {
                     tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                 }
             }

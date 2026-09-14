@@ -217,11 +217,7 @@ mod tests {
 
     #[test]
     fn linux_uses_bash_and_sets_cwd_directly() {
-        let cmd = build_command(&config(
-            ExecutionEnvironment::Linux,
-            "echo hi",
-        ))
-        .unwrap();
+        let cmd = build_command(&config(ExecutionEnvironment::Linux, "echo hi")).unwrap();
 
         let argv = argv(&cmd);
         assert_eq!(argv[0], "bash");

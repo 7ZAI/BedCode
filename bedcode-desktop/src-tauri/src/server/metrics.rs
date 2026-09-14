@@ -227,18 +227,9 @@ impl MetricsCollector {
             ws_recv_rate: rate_ws_recv,
             cpu_usage_percent: cpu_percent,
             memory_usage_bytes: memory_bytes,
-            encrypted_frames: self
-                .inner
-                .encrypted_frames
-                .load(std::sync::atomic::Ordering::Relaxed),
-            decrypt_failures: self
-                .inner
-                .decrypt_failures
-                .load(std::sync::atomic::Ordering::Relaxed),
-            response_key_miss: self
-                .inner
-                .response_key_miss
-                .load(std::sync::atomic::Ordering::Relaxed),
+            encrypted_frames: self.inner.encrypted_frames.load(std::sync::atomic::Ordering::Relaxed),
+            decrypt_failures: self.inner.decrypt_failures.load(std::sync::atomic::Ordering::Relaxed),
+            response_key_miss: self.inner.response_key_miss.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 }

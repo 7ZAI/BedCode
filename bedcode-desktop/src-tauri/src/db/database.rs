@@ -66,8 +66,8 @@ impl Database {
         let Ok(table_sql) = sql else { return Ok(()) };
 
         // 旧约束只允许 windows/wsl2；如果新约束已生效则跳过
-        let needs_migration = table_sql.contains("environment IN ('windows', 'wsl2')")
-            && !table_sql.contains("'linux'");
+        let needs_migration =
+            table_sql.contains("environment IN ('windows', 'wsl2')") && !table_sql.contains("'linux'");
         if !needs_migration {
             return Ok(());
         }
@@ -138,17 +138,13 @@ mod tests {
             }
         }
         if !existing_columns.iter().any(|c| c == "connect_count") {
-            conn.execute(
-                "ALTER TABLE pairings ADD COLUMN connect_count INTEGER DEFAULT 1",
-                [],
-            )?;
+            conn.execute("ALTER TABLE pairings ADD COLUMN connect_count INTEGER DEFAULT 1", [])?;
         }
 
         // 与 Database::migrate_session_configs_check_constraint 保持一致
         let sql = session_configs_table_sql(conn);
         if let Some(s) = sql {
-            let needs = s.contains("environment IN ('windows', 'wsl2')")
-                && !s.contains("'linux'");
+            let needs = s.contains("environment IN ('windows', 'wsl2')") && !s.contains("'linux'");
             if needs {
                 conn.execute_batch(
                     "BEGIN;
@@ -226,20 +222,16 @@ mod tests {
         assert_eq!(count, 2);
 
         let env: String = conn
-            .query_row(
-                "SELECT environment FROM session_configs WHERE id = 'id-1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT environment FROM session_configs WHERE id = 'id-1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(env, "windows");
 
         let wsl_distro: Option<String> = conn
-            .query_row(
-                "SELECT wsl_distro FROM session_configs WHERE id = 'id-2'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT wsl_distro FROM session_configs WHERE id = 'id-2'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(wsl_distro.as_deref(), Some("Ubuntu"));
     }

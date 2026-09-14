@@ -76,8 +76,7 @@ where
     fn call(&self, req: ServiceRequest) -> Self::Future {
         // 快速路径在进入 async 块前判断，避免无谓的任务装箱开销：
         // WS 升级请求的帧级过滤在 WS 层做；HEAD 响应无 body；空链零介入
-        let skip_filtering =
-            req.path().starts_with("/ws") || req.method() == actix_web::http::Method::HEAD;
+        let skip_filtering = req.path().starts_with("/ws") || req.method() == actix_web::http::Method::HEAD;
 
         let chain = TrafficFilterChain::global();
         if skip_filtering || chain.is_empty() {
@@ -257,18 +256,17 @@ fn new_request_id(peer: &str) -> String {
 }
 
 #[cfg(test)]
-
-    #[test]
-    fn request_id_is_stable_format_and_unique_enough() {
-        let r1 = new_request_id("192.168.1.5:54321");
-        let r2 = new_request_id("192.168.1.5:54321");
-        // 格式：req-<peer 归一化>-<hex>
-        assert!(r1.starts_with("req-192-168-1-5-54321-"), "got: {r1}");
-        // 纳秒后缀：同 peer 连续调用几乎必然不同
-        assert_ne!(r1, r2);
-        // 未知 peer 也能生成（不 panic）
-        assert!(new_request_id("unknown").starts_with("req-unknown-"));
-    }
+#[test]
+fn request_id_is_stable_format_and_unique_enough() {
+    let r1 = new_request_id("192.168.1.5:54321");
+    let r2 = new_request_id("192.168.1.5:54321");
+    // 格式：req-<peer 归一化>-<hex>
+    assert!(r1.starts_with("req-192-168-1-5-54321-"), "got: {r1}");
+    // 纳秒后缀：同 peer 连续调用几乎必然不同
+    assert_ne!(r1, r2);
+    // 未知 peer 也能生成（不 panic）
+    assert!(new_request_id("unknown").starts_with("req-unknown-"));
+}
 mod tests {
     use super::*;
     use crate::server::filter::{TrafficFilter, Verdict};
@@ -325,10 +323,7 @@ mod tests {
                 .route("/echo", web::post().to(echo_handler)),
         )
         .await;
-        let req = test::TestRequest::post()
-            .uri("/echo")
-            .set_payload("hello")
-            .to_request();
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
         let res = test::call_service(&app, req).await;
         assert!(res.status().is_success());
 
@@ -336,10 +331,7 @@ mod tests {
         let body = test::read_body(res).await;
         let text = String::from_utf8_lossy(&body);
         assert!(text.contains("ENCRYPTED"), "响应体应经过出站过滤: {text}");
-        assert!(
-            text.contains("HELLO"),
-            "handler 应收到入站过滤后的大写请求体: {text}"
-        );
+        assert!(text.contains("HELLO"), "handler 应收到入站过滤后的大写请求体: {text}");
 
         chain.clear();
     }
@@ -357,10 +349,7 @@ mod tests {
                 .route("/echo", web::post().to(echo_handler)),
         )
         .await;
-        let req = test::TestRequest::post()
-            .uri("/echo")
-            .set_payload("hello")
-            .to_request();
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
         let res = test::call_service(&app, req).await;
 
         assert_eq!(res.status(), actix_web::http::StatusCode::BAD_REQUEST);
@@ -385,10 +374,7 @@ mod tests {
                 .route("/echo", web::post().to(echo_handler)),
         )
         .await;
-        let req = test::TestRequest::post()
-            .uri("/echo")
-            .set_payload("hello")
-            .to_request();
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
         let res = test::call_service(&app, req).await;
         assert!(res.status().is_success());
 
@@ -445,11 +431,7 @@ mod tests {
     #[allow(dead_code)] // 仅 cfg(test) 下被测试引用（见 block_on 注释）
     fn run_request_captured<S, R, B, E>(app: &S, buf: &Arc<Mutex<Vec<u8>>>, req: R)
     where
-        S: actix_web::dev::Service<
-            R,
-            Response = actix_web::dev::ServiceResponse<B>,
-            Error = E,
-        >,
+        S: actix_web::dev::Service<R, Response = actix_web::dev::ServiceResponse<B>, Error = E>,
         E: std::fmt::Debug,
     {
         let layer = tracing_subscriber::fmt::layer()
@@ -477,10 +459,7 @@ mod tests {
                 .route("/echo", web::post().to(echo_handler)),
         )
         .await;
-        let req = test::TestRequest::post()
-            .uri("/echo")
-            .set_payload("hello")
-            .to_request();
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
 
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         run_request_captured(&app, &buf, req);
@@ -516,10 +495,7 @@ mod tests {
         async fn boom() -> HttpResponse {
             HttpResponse::InternalServerError().finish()
         }
-        let app = test::init_service(
-            App::new().wrap(TrafficFilter).route("/boom", web::get().to(boom)),
-        )
-        .await;
+        let app = test::init_service(App::new().wrap(TrafficFilter).route("/boom", web::get().to(boom))).await;
         let req = test::TestRequest::get().uri("/boom").to_request();
 
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -549,10 +525,7 @@ mod tests {
                 .route("/echo", web::post().to(echo_handler)),
         )
         .await;
-        let req = test::TestRequest::post()
-            .uri("/echo")
-            .set_payload("hello")
-            .to_request();
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
 
         let buf: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         run_request_captured(&app, &buf, req);
@@ -560,8 +533,7 @@ mod tests {
 
         // 既有拒绝 warn 保留（rej 详情）
         assert!(
-            out.contains("HTTP inbound request rejected by traffic filter")
-                && out.contains("blocked by test"),
+            out.contains("HTTP inbound request rejected by traffic filter") && out.contains("blocked by test"),
             "rejection warn should be kept: {out}"
         );
         // 完成事件：400 → warn 级 + status 字段
