@@ -314,6 +314,7 @@ impl Clone for PluginHost {
             wasm_reload_throttle: self.wasm_reload_throttle.clone(),
             runtime_error_notify_throttle: self.runtime_error_notify_throttle.clone(),
             shutting_down: self.shutting_down.clone(),
+            user_plugins_dir: self.user_plugins_dir.clone(),
         }
     }
 }

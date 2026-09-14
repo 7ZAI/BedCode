@@ -10,11 +10,11 @@
 mod component;
 pub(crate) mod host_impl;
 
-pub use component::LoadedWasmPlugin;
-/// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
-pub(crate) use component::resolve_preopen_dirs;
 /// 声明展开（不过滤授权，preauthorize 收集弹窗候选用，见 host.rs `preauthorize_plugin`）
 pub(crate) use component::expand_preopen_declarations;
+/// WASI 预打开目录解析（激活时重建实例判定用，见 host.rs `rebuild_wasm_instance`）
+pub(crate) use component::resolve_preopen_dirs;
+pub use component::LoadedWasmPlugin;
 
 use crate::db::Database;
 use crate::plugin::fs_auth::FsAuthChecker;
@@ -87,7 +87,10 @@ const MAX_PLUGIN_TABLES_PER_STORE: usize = 16;
 /// 出现在 release 场景，见 `scripts/plugin-build.js` 与各插件 `build.js`）。
 /// 调试模式是会话态开关，不新增持久化配置项。
 pub(crate) fn plugin_debug_mode() -> bool {
-    cfg!(debug_assertions) && std::env::var("BEDCODE_PLUGIN_DEBUG").map(|v| !v.is_empty()).unwrap_or(false)
+    cfg!(debug_assertions)
+        && std::env::var("BEDCODE_PLUGIN_DEBUG")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
 }
 
 /// 单次导出调用的燃料预算（debug 模式下按倍率放大，见 [`FUEL_DEBUG_MULTIPLIER`]）
@@ -764,7 +767,14 @@ impl WasmRuntime {
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
     ) -> crate::Result<LoadedWasmPlugin> {
-        let plugin = component::LoadedWasmPlugin::new(&self.engine, &self.linker, component, plugin_id, host_ctx, declared_preopen_dirs)?;
+        let plugin = component::LoadedWasmPlugin::new(
+            &self.engine,
+            &self.linker,
+            component,
+            plugin_id,
+            host_ctx,
+            declared_preopen_dirs,
+        )?;
         // 实例创建日志：启动加载与热重载均经此路径，与 LoadedWasmPlugin::drop 的
         // 死亡日志成对，构成实例生命周期观测（plugin_id 键控）
         tracing::info!(
@@ -895,6 +905,19 @@ impl WasmHostContext {
 
         tracing::info!(plugin_id = %plugin_id, path = %db_path.display(), "Plugin database created/opened");
         Ok(db_arc)
+    }
+
+    /// 丢弃插件独立数据库的缓存连接（插件卸载时使用）
+    ///
+    /// 插件数据目录与用户插件安装目录共用 `app_data_dir/plugins/<plugin_id>`，
+    /// 目录文件删除由卸载流程负责；此处必须先释放缓存的 DB 连接：
+    /// Windows 下打开中的文件无法删除，且残留连接在重装同 id 插件后会继续指向
+    /// 已删除的旧文件（读写落到旧句柄）。未创建过数据库的插件调用为空操作。
+    pub async fn drop_plugin_db(&self, plugin_id: &str) {
+        let dropped = self.plugin_dbs.lock().await.remove(plugin_id).is_some();
+        if dropped {
+            tracing::debug!(plugin_id = %plugin_id, "Plugin database connection dropped");
+        }
     }
 }
 
@@ -1134,8 +1157,14 @@ mod tests {
             plugin
                 .on_input_submitted(&serde_json::json!({"sessionId": "s1"}))
                 .expect("on_input_submitted");
-            plugin.on_startup().expect("on_startup").expect("plugin on_startup returned Err");
-            plugin.on_shutdown().expect("on_shutdown").expect("plugin on_shutdown returned Err");
+            plugin
+                .on_startup()
+                .expect("on_startup")
+                .expect("plugin on_startup returned Err");
+            plugin
+                .on_shutdown()
+                .expect("on_shutdown")
+                .expect("plugin on_shutdown returned Err");
         });
     }
 
@@ -1715,7 +1744,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
-
     /// 燃料看门狗：guest 执行必须消耗燃料（组件形态下 fuel 生效），
     /// 且每次导出调用前重置预算（预算不跨调用累积）
     #[test]
@@ -1806,8 +1834,12 @@ mod tests {
             .expect("instantiate test component");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt
-            .block_on(async { plugin.invoke_command("test.panic", "{}").expect_err("panic must trap").to_string() });
+        let err = rt.block_on(async {
+            plugin
+                .invoke_command("test.panic", "{}")
+                .expect_err("panic must trap")
+                .to_string()
+        });
         assert!(
             err.contains("wasm backtrace:"),
             "trap error must include wasm backtrace marker, got: {}",
@@ -1863,8 +1895,12 @@ mod tests {
             .expect("instantiate debug test component");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let err = rt
-            .block_on(async { plugin.invoke_command("test.panic", "{}").expect_err("panic must trap").to_string() });
+        let err = rt.block_on(async {
+            plugin
+                .invoke_command("test.panic", "{}")
+                .expect_err("panic must trap")
+                .to_string()
+        });
         assert!(
             err.contains(".rs:"),
             "debug backtrace should include file:line symbols, got: {}",
@@ -1909,7 +1945,10 @@ mod tests {
         assert_eq!(fields.get("plugin_id"), Some(&TEST_PLUGIN_ID), "got: {:?}", fields);
         assert_eq!(fields.get("export"), Some(&"invoke_command"));
         assert!(
-            fields.get("trap").map(|t| t.contains("wasm backtrace:")).unwrap_or(false),
+            fields
+                .get("trap")
+                .map(|t| t.contains("wasm backtrace:"))
+                .unwrap_or(false),
             "trap field should carry wasm backtrace, got: {:?}",
             fields
         );
@@ -1935,11 +1974,7 @@ mod tests {
                 // 预写 storage key：guest on_startup 读到后返回 Err（见测试插件实现）
                 host_ctx
                     .storage
-                    .set(
-                        TEST_PLUGIN_ID,
-                        "component-test-fail-startup",
-                        serde_json::json!("x"),
-                    )
+                    .set(TEST_PLUGIN_ID, "component-test-fail-startup", serde_json::json!("x"))
                     .await
                     .expect("preset failing-startup key");
                 let mut plugin = wasm_runtime

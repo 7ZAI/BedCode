@@ -3,7 +3,7 @@
     <Transition name="modal">
       <div
         v-if="request"
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        class="fixed inset-0 z-[9999] flex items-center justify-center p-4"
         @click.self="deny"
       >
         <!-- Backdrop -->
@@ -99,6 +99,12 @@
  *
  * 监听 plugin:fs-auth-request 事件，显示授权请求弹窗，
  * 用户选择后通过 plugin_fs_auth_respond Tauri command 回调宿主
+ *
+ * 层级用 safe-stack Emergency 层（z-[9999]）：授权确认必须悬浮于任意
+ * overlay 之上可交互——插件启停遮罩 LoadingOverlay（z-50）显示期间，
+ * 插件 activate 内的 fs_request_auth（ADR 0007 激活期目录授权）会弹本
+ * 弹窗；同层级（z-50）时后挂载的遮罩会按 DOM 顺序覆盖本弹窗，导致
+ * 用户看不见授权框、30s 超时后授权被拒（回归测试见 FsAuthDialog.test.ts）
  */
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'

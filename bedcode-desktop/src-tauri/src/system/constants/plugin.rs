@@ -13,6 +13,21 @@ pub use bedcode_plugin_api::constants::{
 /// on_startup / on_shutdown 等插件回调的最大执行时间
 pub const PLUGIN_CALLBACK_TIMEOUT_SECS: u64 = 5;
 
+/// 插件包文件名（zip 安装约定）
+pub const PLUGIN_MANIFEST_FILE: &str = "plugin.json";
+
+/// WASM 模块文件扩展名
+pub const WASM_FILE_EXT: &str = ".wasm";
+
+/// 用户安装来源标记（写于插件目录，与移动端约定一致）
+pub const PLUGIN_SOURCE_MARKER: &str = ".bedcode-source";
+
+/// 来源标记值：本地 zip 安装
+pub const SOURCE_FILE_INSTALL: &str = "file-install";
+
+/// zip 安装临时目录（用户插件目录下，安装失败/完成后清理）
+pub const PLUGIN_DOWNLOAD_TEMP_DIR: &str = "plugins/_download_tmp";
+
 /// 插件热重载防抖时间（毫秒）
 ///
 /// 同一插件在防抖窗口内只触发一次重载，避免 cargo build 连续写入多次触发

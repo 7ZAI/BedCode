@@ -132,6 +132,7 @@ async fn init_test_app_context() {
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
+                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
                 session_manager.clone(),
                 config_manager.clone(),
                 None, // 无头/测试上下文无 AppHandle

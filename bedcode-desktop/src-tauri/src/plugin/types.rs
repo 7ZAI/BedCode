@@ -9,6 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// 已加载插件的内部表示
+#[derive(Clone)]
 pub struct LoadedPlugin {
     pub manifest: PluginManifest,
     pub state: PluginState,
@@ -28,6 +29,8 @@ pub enum PluginSource {
     FileScan,
     /// WASM 模块加载的 Rust+TS 插件
     Wasm,
+    /// 用户从 zip 安装的插件（位于 app_data_dir/plugins，可卸载）
+    UserInstalled,
 }
 
 impl PluginSource {
@@ -37,6 +40,7 @@ impl PluginSource {
             Self::StaticRegistry => "builtin",
             Self::FileScan => "scanned",
             Self::Wasm => "wasm",
+            Self::UserInstalled => "user-installed",
         }
     }
 }

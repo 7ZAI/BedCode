@@ -43,6 +43,9 @@ impl PluginHost {
 
         match source {
             PluginSource::Wasm => self.invoke_wasm_command(plugin_id, command_name, args).await,
+            // 用户 zip 安装的 rust-ts 插件：走 WASM 命令调用（与 Wasm 语义一致）；
+            // ts-only 用户插件无 Rust 命令，wasm 实例缺失时报错
+            PluginSource::UserInstalled => self.invoke_wasm_command(plugin_id, command_name, args).await,
             PluginSource::StaticRegistry => self.invoke_static_command(plugin_id, command_name, args).await,
             PluginSource::FileScan => Err(crate::AppError::Plugin(format!(
                 "Plugin {} is TS-only, cannot invoke Rust command",

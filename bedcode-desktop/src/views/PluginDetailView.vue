@@ -136,6 +136,26 @@
               >
                 {{ $t('desktop.plugin.goConfig') }}
               </span>
+              <!-- 卸载按钮（仅用户 zip 安装的插件可卸载；内置随包分发不可卸载。
+                   规则：未启用的插件才能卸载——实例运行中（含 Degraded）按钮禁用并提示先停用） -->
+              <button
+                v-if="plugin.source === 'user-installed'"
+                class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--color-danger)] transition-colors flex items-center justify-center disabled:opacity-50"
+                :class="
+                  canUninstall(plugin) && !togglingId && !uninstalling
+                    ? 'hover:bg-[var(--color-danger-light)]'
+                    : 'cursor-not-allowed'
+                "
+                :disabled="!!togglingId || uninstalling || !canUninstall(plugin)"
+                :title="
+                  canUninstall(plugin)
+                    ? $t('desktop.plugin.uninstall')
+                    : $t('desktop.plugin.uninstallDisabledHint')
+                "
+                @click="requestUninstall(plugin)"
+              >
+                {{ $t('desktop.plugin.uninstall') }}
+              </button>
             </div>
           </div>
 
@@ -317,6 +337,61 @@
         </div>
       </Transition>
     </Teleport>
+
+    <!-- ==================== 卸载确认弹窗（危险操作） ==================== -->
+    <Teleport to="body">
+      <Transition name="overlay">
+        <div
+          v-if="showUninstallConfirm && uninstallTarget"
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          @click.self="!uninstalling && (showUninstallConfirm = false)"
+        >
+          <div class="absolute inset-0 bg-black/50 backdrop-blur-sm"></div>
+          <div
+            class="relative w-full max-w-sm bg-[var(--bg-card)] border border-[var(--border)] rounded-xl shadow-2xl overflow-hidden"
+          >
+            <div class="p-6 pb-3">
+              <div class="flex items-center gap-2.5 mb-2">
+                <span
+                  class="w-4 h-4 flex items-center justify-center text-[var(--color-danger)] shrink-0"
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="1.75"
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"
+                    />
+                  </svg>
+                </span>
+                <h3 class="text-[calc(14px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
+                  {{ $t('desktop.plugin.uninstallConfirmTitle') }}
+                </h3>
+              </div>
+              <p class="text-[calc(12px*var(--ui-scale))] leading-relaxed text-[var(--text-secondary)]">
+                {{ $t('desktop.plugin.uninstallConfirmMessage', { name: uninstallTarget.name }) }}
+              </p>
+            </div>
+            <div class="flex gap-3 px-6 py-4">
+              <button
+                class="flex-1 h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
+                :disabled="uninstalling"
+                @click="showUninstallConfirm = false"
+              >
+                {{ $t('desktop.plugin.uninstallCancel') }}
+              </button>
+              <button
+                class="flex-1 h-8 rounded-[6px] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--color-primary-contrast)] bg-[var(--color-danger)] hover:opacity-90 disabled:opacity-50 transition-opacity flex items-center justify-center"
+                :disabled="uninstalling"
+                @click="confirmUninstall"
+              >
+                {{ uninstalling ? $t('desktop.plugin.installing') : $t('desktop.plugin.uninstall') }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -329,7 +404,7 @@
  */
 import { ref, onMounted, onActivated, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { pluginListLoaded, pluginPreauthorize } from '@/plugin/commands'
+import { pluginListLoaded, pluginPreauthorize, pluginUninstall } from '@/plugin/commands'
 import { useToast } from '@/composables/useToast'
 import i18n from '@/locales'
 import PluginIcon from '@/components/PluginIcon.vue'
@@ -359,6 +434,10 @@ const plugin = ref<PluginInfo | null>(null)
 const loading = ref(true)
 const togglingId = ref<string | null>(null)
 const togglingPluginInfo = ref<{ id: string; name: string; message: string } | null>(null)
+/** 卸载确认弹窗状态 */
+const showUninstallConfirm = ref(false)
+const uninstallTarget = ref<PluginInfo | null>(null)
+const uninstalling = ref(false)
 
 const TOGGLE_TIMEOUT_MS = 30000
 
@@ -441,6 +520,39 @@ async function copyPath(path: string): Promise<void> {
     toast.success(t('desktop.plugin.pathCopied'))
   } catch {
     toast.error(t('desktop.plugin.copyFailed'))
+  }
+}
+
+/** 卸载可用条件：仅未启用的插件可卸载（运行中、激活进行中均不可，与后端守卫一致） */
+function canUninstall(target: PluginInfo): boolean {
+  return !isRunning(target.state) && target.state.state !== 'Activating'
+}
+
+/** 请求卸载（弹确认框：删除插件所有数据，不可恢复） */
+function requestUninstall(target: PluginInfo): void {
+  // 规则兜底：运行中的插件不允许卸载（按钮已禁用，此处防止程序化调用绕过）
+  if (!canUninstall(target)) return
+  uninstallTarget.value = target
+  showUninstallConfirm.value = true
+}
+
+/** 确认卸载：后端删除插件所有数据（存储 + 安装目录），成功后返回列表 */
+async function confirmUninstall(): Promise<void> {
+  const target = uninstallTarget.value
+  if (!target) return
+  uninstalling.value = true
+  try {
+    await pluginUninstall(target.id)
+    toast.success(t('desktop.plugin.uninstallSuccess', { name: target.name }))
+    // 插件已删除，详情页无对象可展示，回列表页
+    goBack()
+  } catch (e: any) {
+    toast.error(t('desktop.plugin.uninstallFailed', { error: e.message || String(e) }))
+    showUninstallConfirm.value = false
+  } finally {
+    uninstalling.value = false
+    uninstallTarget.value = null
+    showUninstallConfirm.value = false
   }
 }
 

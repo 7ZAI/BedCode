@@ -37,10 +37,7 @@ pub async fn plugin_get_info(
 /// 不进入激活流程。`plugin_activate` 内部的 preauthorize 保留为兜底
 /// （启动 auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
 #[tauri::command]
-pub async fn plugin_preauthorize(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_preauthorize(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!(plugin_id = %plugin_id, "[API] plugin_preauthorize");
     let result = plugin_host.preauthorize_plugin(&plugin_id).await;
     if let Err(ref e) = result {
@@ -67,6 +64,28 @@ pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<Plu
     let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
         tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_deactivate failed");
+    }
+    result
+}
+
+/// 从本地 zip 插件包安装（用户插件目录）
+#[tauri::command]
+pub async fn plugin_install_from_file(path: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<String> {
+    tracing::info!("[API] plugin_install_from_file: {}", path);
+    let result = plugin_host.install_from_zip(&path).await;
+    if let Err(ref e) = result {
+        tracing::error!(error = %e, "[API] plugin_install_from_file failed");
+    }
+    result
+}
+
+/// 卸载用户插件（删除插件所有数据：存储 + 激活状态 + 安装目录）
+#[tauri::command]
+pub async fn plugin_uninstall(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_uninstall");
+    let result = plugin_host.uninstall_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_uninstall failed");
     }
     result
 }
@@ -347,13 +366,8 @@ mod tests {
     /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）
     #[tokio::test]
     async fn frontend_load_report_always_ok() {
-        let ok_report = super::plugin_frontend_load_report(
-            "com.bedcode.demo".into(),
-            "import".into(),
-            true,
-            None,
-        )
-        .await;
+        let ok_report =
+            super::plugin_frontend_load_report("com.bedcode.demo".into(), "import".into(), true, None).await;
         let fail_report = super::plugin_frontend_load_report(
             "com.bedcode.demo".into(),
             "activate".into(),
