@@ -49,6 +49,8 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 # sha2：SHA-256 摘要
 sha2 = "0.10"
+# zip：用户插件 zip 包解压安装（与移动端同版本 4.6）
+zip = "4.6"
 # hkdf：密钥派生（HKDF-SHA256）
 hkdf = "0.12"
 
