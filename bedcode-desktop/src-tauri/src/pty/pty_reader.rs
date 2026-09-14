@@ -113,7 +113,10 @@ impl PtyReader {
             }
 
             // Notify lifecycle subscribers that the process has exited
-            let _ = lifecycle_tx.send(exit_status);
+            // （发送失败 = 无订阅者，属正常终止路径；warn 保留可观测性）
+            if let Err(e) = lifecycle_tx.send(exit_status) {
+                tracing::warn!(session_id = %session_id, %e, "PTY lifecycle event dropped (no subscribers)");
+            }
         });
 
         Self { handle: Some(handle) }
@@ -247,5 +250,100 @@ mod tests {
 
         let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
         assert_eq!(status, PtySessionStatus::Stopped);
+    }
+
+    /// 数据投递断言（票据 04）：消费者任务硬编码 `GlobalOutputManager::global()`，
+    /// 因此用全局唯一 session_id 注册 + 订阅，验证字节完整到达 on_output。
+    #[test]
+    fn output_bytes_reach_global_manager_complete_and_in_order() {
+        use crate::session::{GlobalOutputManager, OutputFrame};
+        use tokio::sync::mpsc;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let sid = format!("itest-delivery-{}", std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos());
+            let manager = GlobalOutputManager::global();
+            manager.register_session(&sid).await;
+
+            // 订阅输出帧（须在 PtyReader 启动前，否则丢前几条）
+            let (tx, mut rx) = mpsc::channel::<OutputFrame>(64);
+            manager.subscribe(&sid, &format!("{sid}-sub"), tx, None, None).await;
+
+            let (lifecycle_tx, _rx) = broadcast::channel(8);
+            let running = Arc::new(AtomicBool::new(true));
+            let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
+            let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+                data: std::io::Cursor::new(payload.clone()),
+            });
+            let pty_reader = PtyReader::start(reader, lifecycle_tx, sid.clone(), running);
+            pty_reader.wait();
+
+            // 消费者任务是异步的：短暂排空后断言字节完整到达（顺序 + 完整）
+            let mut collected = Vec::new();
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            while collected.len() < payload.len() && std::time::Instant::now() < deadline {
+                match rx.try_recv() {
+                    Ok(OutputFrame::Output(ev)) => collected.extend_from_slice(&ev.data),
+                    Ok(_) => {}
+                    Err(_) => tokio::task::yield_now().await,
+                }
+            }
+            assert_eq!(collected, payload, "PTY 输出必须完整按序到达 on_output（票据 04）");
+
+            manager.unregister_session(&sid).await;
+        });
+    }
+
+    /// Err 分支（票据 04）：假 Reader 返回 Err → 生命周期事件为 Error
+    #[test]
+    fn reader_error_reports_error_lifecycle() {
+        struct ErrReader;
+        impl Read for ErrReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::new(std::io::ErrorKind::Other, "injected read error"))
+            }
+        }
+
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(true));
+        let reader: Box<dyn Read + Send + 'static> = Box::new(ErrReader);
+        let pty_reader = PtyReader::start(reader, lifecycle_tx, "err-session".to_string(), running);
+        pty_reader.wait();
+
+        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Error, "读错误应上报 Error 生命周期");
+    }
+
+    /// running=false 中途退出（票据 04）：运行标志打断读循环 → Stopped
+    #[test]
+    fn running_flag_cleared_mid_read_reports_stopped() {
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(true));
+        let paused = Arc::new(AtomicBool::new(true)); // 暂停读，给主线程清 running 的窗口
+        let pause_check: Arc<dyn Fn() -> bool + Send + Sync> = {
+            let paused = paused.clone();
+            Arc::new(move || paused.load(Ordering::SeqCst))
+        };
+        let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+            data: std::io::Cursor::new(b"never read".to_vec()),
+        });
+        let pty_reader = PtyReader::start_with_pause(
+            reader,
+            lifecycle_tx,
+            "stop-session".to_string(),
+            running.clone(),
+            Some(pause_check),
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        running.store(false, Ordering::SeqCst);
+        paused.store(false, Ordering::SeqCst);
+        pty_reader.wait();
+
+        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Stopped, "running=false 退出应报 Stopped");
     }
 }

@@ -390,21 +390,13 @@ impl Actor for TerminalWs {
             handle.abort();
         }
 
-        // 中止所有输出转发任务：连接已断开，残留缓冲帧不再需要投递
-        for (_, handle) in self.output_forwarders.drain() {
-            handle.abort();
-        }
-        // 中止所有订阅任务：连接已断开，旧任务的历史发送不再需要（其
-        // 占位订阅者残留也会随断连清理移除）
-        for (_, handle) in self.subscribe_tasks.drain() {
-            handle.abort();
-        }
-        // 流代数全部失效：abort 异步取消窗口内仍可能发出的残留帧直接丢弃
-        for (_, gen) in self.stream_generations.drain() {
-            gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        }
-        // 订阅者模式原子随连接销毁（SetMode 仅存活于连接生命周期）
-        self.subscriber_modes.clear();
+        // 中止所有输出转发/订阅任务 + 流代数全部失效 + 清空订阅者模式表
+        Self::cleanup_subscription_state(
+            &mut self.output_forwarders,
+            &mut self.subscribe_tasks,
+            &mut self.stream_generations,
+            &mut self.subscriber_modes,
+        );
 
         // 注销 WsSessionRegistry + 取消所有订阅 + 清理对端文件服务记录。
         // 离线判定（DEVICE_DISCONNECTED + 连接历史回填）迁入 async 块：
@@ -539,6 +531,34 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for TerminalWs {
 }
 
 impl TerminalWs {
+    /// 断连清理纯逻辑（stopping 前半段，供测试）：中止全部输出转发/订阅任务、
+    /// 流代数全部失效（+1）、清空订阅者模式表。返回后三个表均为空——abort 的
+    /// JoinHandle 在异步取消窗口内仍可能把残留帧投递到 actor 邮箱，代数递增与
+    /// abort 互补：旧代 forward_loop 校验代数后直接丢弃残留帧，杜绝旧流帧注入
+    /// 新订阅通道（移动端字节游标错位 → 连续性违反 → 重订阅风暴的根源）
+    pub(crate) fn cleanup_subscription_state(
+        output_forwarders: &mut std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
+        subscribe_tasks: &mut std::collections::HashMap<String, tokio::task::JoinHandle<()>>,
+        stream_generations: &mut std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU64>>,
+        subscriber_modes: &mut std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    ) {
+        // 中止所有输出转发任务：连接已断开，残留缓冲帧不再需要投递
+        for (_, handle) in output_forwarders.drain() {
+            handle.abort();
+        }
+        // 中止所有订阅任务：连接已断开，旧任务的历史发送不再需要（其
+        // 占位订阅者残留也会随断连清理移除）
+        for (_, handle) in subscribe_tasks.drain() {
+            handle.abort();
+        }
+        // 流代数全部失效：abort 异步取消窗口内仍可能发出的残留帧直接丢弃
+        for (_, gen) in stream_generations.drain() {
+            gen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        // 订阅者模式原子随连接销毁（SetMode 仅存活于连接生命周期）
+        subscriber_modes.clear();
+    }
+
     /// 处理文本消息（JSON 格式的 Message）
     fn handle_text_message(&mut self, text: String, ctx: &mut ws::WebsocketContext<Self>) {
         // 新路由（绑定单会话）：简化 JSON 控制帧协议（spec §5.3），
@@ -624,6 +644,21 @@ impl TerminalWs {
 
     /// 处理新路由控制帧（/ws/terminal/session/{id}，spec §5.3）
     ///
+    /// 控制帧认证需求判定（纯函数，供测试；分派契约的单一事实源）
+    ///
+    /// spec §4.3 拒绝对称：Auth 帧无需认证（首消息即认证握手），
+    /// Subscribe/SetMode/Input 必须在认证后发送
+    pub(crate) fn frame_needs_auth(frame: &control_frame::ClientFrame) -> bool {
+        !matches!(frame, control_frame::ClientFrame::Auth { .. })
+    }
+
+    /// 未认证连接收到业务帧 → 应拒绝（纯函数，供测试）
+    ///
+    /// 拒绝语义 = 该帧需要认证 且 本连接尚未认证
+    pub(crate) fn should_reject_unauthenticated(frame: &control_frame::ClientFrame, authenticated: bool) -> bool {
+        Self::frame_needs_auth(frame) && !authenticated
+    }
+
     /// 连接级状态机：auth（首消息 JWT，未认证前拒绝一切业务帧并关闭）→
     /// subscribe（无参快照订阅）→ 输出流；input 直通 PTY。
     /// 拒绝对称（spec §4.3）：未认证发业务帧 → error(AUTH_REQUIRED) + 关闭
@@ -640,6 +675,12 @@ impl TerminalWs {
                 return;
             }
         };
+
+        // 未认证 + 业务帧 → 拒绝对称：error(AUTH_REQUIRED) + 关闭（require_session_auth 内部处理）
+        if Self::should_reject_unauthenticated(&frame, self.session.authenticated) {
+            self.require_session_auth(ctx);
+            return;
+        }
 
         match frame {
             control_frame::ClientFrame::Auth { token, crypto } => {
@@ -911,34 +952,52 @@ impl TerminalWs {
         tracing::debug!(fwd_key = %fwd_key, mode = ?mode, "terminal propagate mode updated");
     }
 
+    /// ack 来源身份判定（纯函数，供测试）：远程通道（移动端）取认证时的
+    /// device_name——服务端据此做背压门控（仅正统渲染端的 ack 推进记账，见
+    /// GlobalOutputManager::ack）；未认证/本地环回通道视为 Desktop 源
+    pub(crate) fn ack_source_for(device_name: Option<&str>) -> RendererSource {
+        match device_name {
+            Some(name) => RendererSource::Mobile {
+                device_name: name.to_string(),
+            },
+            None => RendererSource::Desktop,
+        }
+    }
+
+    /// ack 帧处理结果（纯函数，供测试）：parse 成功 → Some((acked_offset,
+    /// session_id, source))；失败 → None。None 语义 = 调用方仅记日志不中断
+    /// 连接——ack 尽力而为，丢失时由水位暂停兜底，不缺字节不丢帧
+    pub(crate) fn ack_frame_outcome(
+        bytes: &[u8],
+        source: RendererSource,
+    ) -> Option<(u64, String, RendererSource)> {
+        control_frame::parse_ack_frame(bytes)
+            .ok()
+            .map(|(acked_offset, session_id)| (acked_offset, session_id, source))
+    }
+
     /// 处理客户端背压 ack 帧（spec 04-06 渲染反馈环）：解析后交给全局输出
     /// 管理器推进该会话未 ack 记账（释放 ≤ last_rendered_offset 的输出字节），
     /// 使 PTY 读取得以恢复。非法帧（未知二进制）仅记日志，不中断连接——
     /// ack 尽力而为，丢失时由水位暂停兜底，不缺字节不丢帧
-    ///
-    /// 来源身份：远程通道（移动端）取认证时的 device_name——服务端据此做
-    /// 背压门控（仅正统渲染端的 ack 推进记账，见 GlobalOutputManager::ack）
     fn handle_ack_binary(&self, bytes: &[u8], _ctx: &mut ws::WebsocketContext<Self>) {
         // 提前解析来源（actix::spawn 需要 'static）
-        let source = match self.session.device_name.clone() {
-            Some(name) => RendererSource::Mobile { device_name: name },
-            None => {
-                tracing::debug!(
-                    addr = %self.session.addr,
-                    "ack from unauthenticated remote channel, treating as Desktop source"
-                );
-                RendererSource::Desktop
-            }
-        };
-        match control_frame::parse_ack_frame(bytes) {
-            Ok((acked_offset, session_id)) => {
+        let source = Self::ack_source_for(self.session.device_name.as_deref());
+        if source.is_desktop() {
+            tracing::debug!(
+                addr = %self.session.addr,
+                "ack from unauthenticated remote channel, treating as Desktop source"
+            );
+        }
+        match Self::ack_frame_outcome(bytes, source) {
+            Some((acked_offset, session_id, source)) => {
                 actix::spawn(async move {
                     GlobalOutputManager::global()
                         .ack(&session_id, acked_offset, source)
                         .await;
                 });
             }
-            Err(()) => {
+            None => {
                 tracing::debug!(
                     addr = %self.session.addr,
                     len = bytes.len(),
@@ -994,10 +1053,7 @@ impl TerminalWs {
         let claims = match jwt_service.verify_token_with_expiry(token) {
             Ok(c) => c,
             Err(e) => {
-                let msg = match e {
-                    crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
-                    _ => "Invalid token",
-                };
+                let msg = crate::utils::auth::jwt::jwt_error_message(&e);
                 return Err(("AUTH_FAILED".to_string(), msg.to_string()));
             }
         };
@@ -1599,3 +1655,166 @@ impl Handler<SendTextMessage> for TerminalWs {
     }
 }
 pub(crate) mod forward;
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::server::ws::terminal_ws::forward::MODE_REALTIME;
+    use std::collections::HashMap;
+    use std::sync::atomic::{AtomicU64, AtomicU8};
+    use std::sync::Arc;
+
+    /// 构造合法 ack 帧（TB v3 布局：magic(2) + version(1) + flags(1) +
+    /// offset(8 LE) + len(4 LE) + session_id UTF-8）
+    fn build_ack(session_id: &str, offset: u64) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&[0x54, 0x42, 3, 0x02]);
+        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&(session_id.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(session_id.as_bytes());
+        bytes
+    }
+
+    // ==================== 分派契约（handle_session_control_frame 守卫） ====================
+
+    #[test]
+    fn frame_needs_auth_only_business_frames() {
+        // Auth 帧无需认证（首消息即认证握手）
+        let auth = control_frame::ClientFrame::Auth {
+            token: "jwt".to_string(),
+            crypto: None,
+        };
+        assert!(!TerminalWs::frame_needs_auth(&auth), "auth 帧不应要求已认证");
+
+        // 业务帧（subscribe / set_mode / input）必须认证后发送
+        let subscribe = control_frame::ClientFrame::Subscribe { from_offset: None };
+        let set_mode = control_frame::ClientFrame::SetMode {
+            mode: control_frame::WatchMode::Realtime,
+        };
+        let input = control_frame::ClientFrame::Input {
+            data: "aGk=".to_string(),
+            special_key: None,
+        };
+        for frame in [&subscribe, &set_mode, &input] {
+            assert!(TerminalWs::frame_needs_auth(frame), "业务帧必须要求已认证");
+        }
+    }
+
+    #[test]
+    fn should_reject_unauthenticated_only_when_both_conditions_hold() {
+        let subscribe = control_frame::ClientFrame::Subscribe { from_offset: None };
+        let auth = control_frame::ClientFrame::Auth {
+            token: "jwt".to_string(),
+            crypto: None,
+        };
+
+        // 未认证 + 业务帧 → 拒绝（拒绝对称 spec §4.3）
+        assert!(TerminalWs::should_reject_unauthenticated(&subscribe, false));
+        // 未认证 + auth 帧 → 放行（认证握手本身）
+        assert!(!TerminalWs::should_reject_unauthenticated(&auth, false));
+        // 已认证 + 业务帧 → 放行
+        assert!(!TerminalWs::should_reject_unauthenticated(&subscribe, true));
+        // 已认证 + auth 帧 → 放行（幂等忽略由 handle_session_control_frame 处理）
+        assert!(!TerminalWs::should_reject_unauthenticated(&auth, true));
+    }
+
+    // ==================== ack 帧处理（handle_ack_binary） ====================
+
+    #[test]
+    fn ack_source_for_remote_channel_uses_device_name() {
+        match TerminalWs::ack_source_for(Some("Pixel 9")) {
+            RendererSource::Mobile { device_name } => assert_eq!(device_name, "Pixel 9"),
+            other => panic!("expected Mobile source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ack_source_for_unauthenticated_falls_back_to_desktop() {
+        match TerminalWs::ack_source_for(None) {
+            RendererSource::Desktop => {}
+            other => panic!("expected Desktop source, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ack_frame_outcome_accepts_valid_ack_with_source() {
+        let bytes = build_ack("sv", 42);
+        let outcome = TerminalWs::ack_frame_outcome(&bytes, RendererSource::Desktop);
+        let (offset, session_id, source) = outcome.expect("合法 ack 帧应被接受");
+        assert_eq!(offset, 42);
+        assert_eq!(session_id, "sv");
+        assert!(source.is_desktop());
+    }
+
+    #[test]
+    fn ack_frame_outcome_ignores_malformed_frames() {
+        // 截断帧（不足 16 字节帧头）
+        assert!(TerminalWs::ack_frame_outcome(&[0x54, 0x42, 3, 0x02], RendererSource::Desktop).is_none());
+        // 错误 magic
+        let mut bad_magic = build_ack("sv", 1);
+        bad_magic[0] = 0x00;
+        assert!(TerminalWs::ack_frame_outcome(&bad_magic, RendererSource::Desktop).is_none());
+        // 错误版本（既非 v2 也非 v3）
+        let mut bad_version = build_ack("sv", 1);
+        bad_version[2] = 4;
+        assert!(TerminalWs::ack_frame_outcome(&bad_version, RendererSource::Desktop).is_none());
+        // 非 ack 标志（flags 不含 0x02）
+        let mut non_ack = build_ack("sv", 1);
+        non_ack[3] = 0x01;
+        assert!(TerminalWs::ack_frame_outcome(&non_ack, RendererSource::Desktop).is_none());
+        // 非 UTF-8 payload（0xFF 非法 UTF-8）
+        let mut bad_utf8 = Vec::new();
+        bad_utf8.extend_from_slice(&[0x54, 0x42, 3, 0x02]);
+        bad_utf8.extend_from_slice(&1u64.to_le_bytes());
+        bad_utf8.extend_from_slice(&1u32.to_le_bytes());
+        bad_utf8.push(0xFF);
+        assert!(TerminalWs::ack_frame_outcome(&bad_utf8, RendererSource::Desktop).is_none());
+    }
+
+    // ==================== 断连清理（stopping 前半段） ====================
+
+    #[tokio::test]
+    async fn cleanup_subscription_state_aborts_all_and_bumps_generation() {
+        let mut forwarders = HashMap::new();
+        let mut subscribe_tasks = HashMap::new();
+        let mut generations = HashMap::new();
+        let mut modes = HashMap::new();
+
+        // 两个订阅者（同/不同 session 的 key 形态），各挂一个永不完成的转发任务
+        let gen1 = Arc::new(AtomicU64::new(0));
+        let gen2 = Arc::new(AtomicU64::new(0));
+        for (key, gen) in [("c1:sv", &gen1), ("c2:sv2", &gen2)] {
+            let (fwd_handle, sub_handle) = (
+                tokio::spawn(std::future::pending::<()>()),
+                tokio::spawn(std::future::pending::<()>()),
+            );
+            forwarders.insert(key.to_string(), fwd_handle);
+            subscribe_tasks.insert(key.to_string(), sub_handle);
+            generations.insert(key.to_string(), Arc::clone(gen));
+            modes.insert(key.to_string(), Arc::new(AtomicU8::new(MODE_REALTIME)));
+        }
+
+        TerminalWs::cleanup_subscription_state(&mut forwarders, &mut subscribe_tasks, &mut generations, &mut modes);
+
+        // 三个任务表全清空 + 模式表清空
+        assert!(forwarders.is_empty(), "output_forwarders 必须全部清空");
+        assert!(subscribe_tasks.is_empty(), "subscribe_tasks 必须全部清空");
+        assert!(generations.is_empty(), "stream_generations 必须全部清空");
+        assert!(modes.is_empty(), "subscriber_modes 必须全部清空");
+        // 流代数全部 +1（残留帧校验依据）
+        assert_eq!(gen1.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(gen2.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn cleanup_subscription_state_empty_maps_is_noop() {
+        let mut forwarders = HashMap::new();
+        let mut subscribe_tasks = HashMap::new();
+        let mut generations = HashMap::new();
+        let mut modes = HashMap::new();
+        TerminalWs::cleanup_subscription_state(&mut forwarders, &mut subscribe_tasks, &mut generations, &mut modes);
+        assert!(forwarders.is_empty() && subscribe_tasks.is_empty() && generations.is_empty() && modes.is_empty());
+    }
+}

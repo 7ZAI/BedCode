@@ -100,3 +100,82 @@ impl SessionLaunchConfig {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ExecutionEnvironment 全变体 serde 往返（票据 23：跨端协议表面零覆盖）
+    #[test]
+    fn execution_environment_roundtrip_all_variants() {
+        let cases = vec![
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::Cmd,
+            },
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu".to_string(),
+            },
+            ExecutionEnvironment::Linux,
+        ];
+        for env in cases {
+            let json = serde_json::to_string(&env).unwrap();
+            let back: ExecutionEnvironment = serde_json::from_str(&json).unwrap();
+            // 无 PartialEq，用序列化等值断言
+            assert_eq!(serde_json::to_string(&back).unwrap(), json, "变体往返不一致: {json}");
+        }
+    }
+
+    /// WindowsShell wire 标签锁
+    #[test]
+    fn windows_shell_wire_labels_locked() {
+        assert_eq!(serde_json::to_string(&WindowsShell::PowerShell).unwrap(), "\"PowerShell\"");
+        assert_eq!(serde_json::to_string(&WindowsShell::Cmd).unwrap(), "\"Cmd\"");
+    }
+
+    /// Default 行为：Windows + PowerShell
+    #[test]
+    fn defaults_are_windows_powershell() {
+        assert_eq!(WindowsShell::default(), WindowsShell::PowerShell);
+        assert!(matches!(
+            ExecutionEnvironment::default(),
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell
+            }
+        ));
+    }
+
+    /// SessionLaunchConfig：serde 往返
+    #[test]
+    fn session_launch_config_roundtrip() {
+        let cfg = SessionLaunchConfig {
+            name: "dev".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/home/u".to_string(),
+            command: "bash".to_string(),
+            env_vars: {
+                let mut m = HashMap::new();
+                m.insert("FOO".to_string(), "bar".to_string());
+                m
+            },
+            cols: 120,
+            rows: 40,
+        };
+        let json = serde_json::to_string(&cfg).unwrap();
+        let back: SessionLaunchConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(serde_json::to_string(&back).unwrap(), json, "往返不一致: {json}");
+        assert_eq!(back.name, "dev");
+        assert_eq!(back.env_vars.get("FOO").map(String::as_str), Some("bar"));
+    }
+
+    /// 缺省字段反序列化：env_vars / cols / rows 有 serde default 兜底
+    #[test]
+    fn session_launch_config_missing_fields_default() {
+        let json = r#"{"name":"x","environment":{"type":"Linux"},"working_dir":"/tmp","command":"ls"}"#;
+        let cfg: SessionLaunchConfig = serde_json::from_str(json).unwrap();
+        assert!(cfg.env_vars.is_empty());
+        assert!(cfg.cols > 0 && cfg.rows > 0);
+    }
+}

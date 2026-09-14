@@ -231,8 +231,31 @@ pub fn set_terminal_bg_image(app_handle: tauri::AppHandle, source_path: Option<S
         return Ok(None);
     };
 
+    // 校验源路径：绝对路径 + 扩展名（§8 输入校验在 Rust 端；相对路径可越界复制）
+    let (src, ext) = validate_terminal_bg_source(&source)?;
+    let file_name = format!("{TERMINAL_BG_FILE_PREFIX}.{ext}");
+    let dest = data_dir.join(&file_name);
+    std::fs::copy(src, &dest)
+        .map_err(|e| crate::AppError::Config(format!("复制背景图片 {source} 到 {} 失败: {e}", dest.display())))?;
+
+    tracing::info!("终端背景图片已更新: {}", dest.display());
+    Ok(Some(file_name))
+}
+
+/// 校验终端背景图片来源路径（纯函数，可单测）
+///
+/// 约束：绝对路径（相对路径可越界复制到应用数据目录）、扩展名在白名单内、
+/// 文件存在且大小不超过上限。返回 `(源路径, 小写扩展名)`。
+fn validate_terminal_bg_source(source: &str) -> Result<(std::path::PathBuf, String)> {
+    // 绝对路径校验，防止相对路径穿越
+    let src = std::path::Path::new(source);
+    if !src.is_absolute() {
+        return Err(crate::AppError::InvalidInput(format!(
+            "背景图片必须是绝对路径: {source}"
+        )));
+    }
+
     // 校验扩展名，防止复制任意文件
-    let src = std::path::Path::new(&source);
     let ext = src
         .extension()
         .and_then(|e| e.to_str())
@@ -243,8 +266,8 @@ pub fn set_terminal_bg_image(app_handle: tauri::AppHandle, source_path: Option<S
     }
 
     // 限制文件大小，避免超大图片占用过多存储
-    let metadata =
-        std::fs::metadata(src).map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
+    let metadata = std::fs::metadata(src)
+        .map_err(|e| crate::AppError::Config(format!("读取图片文件信息失败 {source}: {e}")))?;
     if metadata.len() > TERMINAL_BG_MAX_BYTES {
         return Err(crate::AppError::InvalidInput(format!(
             "图片文件过大（{} 字节），上限 {} 字节",
@@ -253,16 +276,41 @@ pub fn set_terminal_bg_image(app_handle: tauri::AppHandle, source_path: Option<S
         )));
     }
 
-    std::fs::create_dir_all(&data_dir)
-        .map_err(|e| crate::AppError::Config(format!("创建应用数据目录失败 {}: {e}", data_dir.display())))?;
+    Ok((src.to_path_buf(), ext))
+}
 
-    let file_name = format!("{TERMINAL_BG_FILE_PREFIX}.{ext}");
-    let dest = data_dir.join(&file_name);
-    std::fs::copy(src, &dest)
-        .map_err(|e| crate::AppError::Config(format!("复制背景图片 {source} 到 {} 失败: {e}", dest.display())))?;
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    tracing::info!("终端背景图片已更新: {}", dest.display());
-    Ok(Some(file_name))
+    #[test]
+    fn validate_bg_source_rejects_relative_path() {
+        let err = validate_terminal_bg_source("images/bg.png").unwrap_err();
+        assert!(err.to_string().contains("绝对路径"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_bg_source_rejects_bad_extension() {
+        let err = validate_terminal_bg_source("/tmp/bg.exe").unwrap_err();
+        assert!(err.to_string().contains("不支持的图片格式"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_bg_source_rejects_missing_file() {
+        let err = validate_terminal_bg_source("/tmp/nonexistent-bg-xyz.png").unwrap_err();
+        assert!(err.to_string().contains("读取图片文件信息失败"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_bg_source_accepts_existing_absolute_file() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("bedcode-bg-test-{}.png", std::process::id()));
+        std::fs::write(&path, b"fake-png-bytes").unwrap();
+        let (src, ext) = validate_terminal_bg_source(path.to_str().unwrap()).unwrap();
+        assert_eq!(ext, "png");
+        assert!(src.is_absolute());
+        std::fs::remove_file(&path).unwrap();
+    }
 }
 
 // ==================== Utility Commands ====================

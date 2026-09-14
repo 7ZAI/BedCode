@@ -306,6 +306,21 @@ mod tests {
         }
     }
 
+    /// 拒绝型过滤器：出站一律拒绝（模拟加密链路裁决失败）
+    struct RejectOutboundFilter;
+
+    impl TrafficFilter for RejectOutboundFilter {
+        fn name(&self) -> &str {
+            "reject-outbound"
+        }
+        fn on_inbound(&self, _ctx: &mut FilterContext<'_>) -> Verdict {
+            Verdict::Continue
+        }
+        fn on_outbound(&self, _ctx: &mut FilterContext<'_>) -> Verdict {
+            Verdict::Reject("outbound cipher negotiation failed".to_string())
+        }
+    }
+
     async fn echo_handler(body: web::Bytes) -> HttpResponse {
         HttpResponse::Ok().json(serde_json::json!({ "received": String::from_utf8_lossy(&body) }))
     }
@@ -380,6 +395,87 @@ mod tests {
 
         let body = test::read_body(res).await;
         assert!(!String::from_utf8_lossy(&body).contains("ENCRYPTED"));
+    }
+
+    /// 出站拒绝分支（票据 12 盲区）：run_outbound 返回 Err → 500 响应，
+    /// 且不泄露下游 handler 的实际 body（加密链路静默降级防护）
+    #[actix_web::test]
+    async fn outbound_rejection_returns_500_and_hides_handler_body() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(RejectOutboundFilter));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::post().to(echo_handler)),
+        )
+        .await;
+        let req = test::TestRequest::post().uri("/echo").set_payload("hello").to_request();
+        let res = test::call_service(&app, req).await;
+
+        assert_eq!(res.status(), actix_web::http::StatusCode::INTERNAL_SERVER_ERROR);
+        let body = test::read_body(res).await;
+        let text = String::from_utf8_lossy(&body);
+        assert!(
+            text.contains("reject") && text.contains("outbound cipher negotiation failed"),
+            "500 响应应携带拒绝详情: {text}"
+        );
+        // 下游 handler 的真实 body（received 字段）不得泄露
+        assert!(
+            !text.contains("received") && !text.contains("HELLO"),
+            "拒绝响应不得泄露下游 handler 内容: {text}"
+        );
+
+        chain.clear();
+    }
+
+    /// /ws 前缀快速路径（票据 12 盲区）：不缓冲、不走过滤器链，直通下游
+    #[actix_web::test]
+    async fn ws_prefix_fast_path_skips_filtering() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(RejectAllFilter));
+
+        let app = test::init_service(
+            App::new().wrap(TrafficFilter).route("/ws/terminal", web::get().to(|| async {
+                HttpResponse::Ok().body("ws-upgrade-stub")
+            })),
+        )
+        .await;
+        let req = test::TestRequest::get().uri("/ws/terminal").to_request();
+        let res = test::call_service(&app, req).await;
+        // 即使链上挂着 RejectAllFilter，/ws 快速路径也应直通下游（不触发 400）
+        assert!(res.status().is_success(), "/ws 快速路径应跳过过滤: {}", res.status());
+        let body = test::read_body(res).await;
+        assert_eq!(String::from_utf8_lossy(&body), "ws-upgrade-stub");
+
+        chain.clear();
+    }
+
+    /// HEAD 方法快速路径（票据 12）：不缓冲无 body 响应
+    #[actix_web::test]
+    async fn head_method_skips_filtering() {
+        let _guard = GLOBAL_CHAIN_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let chain = TrafficFilterChain::global();
+        chain.clear();
+        chain.register(std::sync::Arc::new(RejectAllFilter));
+
+        let app = test::init_service(
+            App::new()
+                .wrap(TrafficFilter)
+                .route("/echo", web::head().to(|| async { HttpResponse::Ok().finish() })),
+        )
+        .await;
+        let req = test::TestRequest::with_uri("/echo")
+            .method(actix_web::http::Method::HEAD)
+            .to_request();
+        let res = test::call_service(&app, req).await;
+        assert!(res.status().is_success(), "HEAD 快速路径应跳过过滤: {}", res.status());
+
+        chain.clear();
     }
 
     // ==================== 01 完成事件日志 ====================

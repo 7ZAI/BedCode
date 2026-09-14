@@ -801,6 +801,7 @@ mod tests {
     use super::*;
     use crate::enums::auth::AuthStage;
     use crate::enums::special_key::KeyCode;
+    use crate::enums::summary::SessionConfigSummary;
     use serde_json::Value;
     // CloseCode 在 tungstenite 0.24 中不公开导出，需从 frame::coding 引入
     use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -1192,6 +1193,7 @@ mod tests {
                 "session_event",
             ),
             (Message::ack("req"), "ack"),
+            (Message::input("s", "x", None), "terminal"),
             (
                 Message::sync_data(SyncPayload::SessionModeChanged {
                     session_id: "s".to_string(),
@@ -1386,6 +1388,89 @@ mod tests {
                 task_id: Some("t1".to_string()),
                 status: Some("pending".to_string()),
             }),
+            // SyncPayload 其余变体（票据 12：原测试仅覆盖 TaskQueueChanged 一个代表）
+            Message::sync_data(SyncPayload::SessionCreated {
+                session: sample_session(),
+                source_device: "d1".to_string(),
+            }),
+            Message::sync_data(SyncPayload::SessionStatusChanged {
+                session_id: "s".to_string(),
+                old_status: "running".to_string(),
+                new_status: "stopped".to_string(),
+                session_name: "dev".to_string(),
+            }),
+            Message::sync_data(SyncPayload::SessionStopped {
+                session_id: "s".to_string(),
+                session_name: "dev".to_string(),
+            }),
+            Message::sync_data(SyncPayload::SessionRemoved {
+                session_id: "s".to_string(),
+                session_name: "dev".to_string(),
+            }),
+            Message::sync_data(SyncPayload::ConfigCreated {
+                config: SessionConfigSummary {
+                    id: "c1".to_string(),
+                    name: "dev".to_string(),
+                    environment: "linux".to_string(),
+                    wsl_distro: None,
+                    working_dir: "/home/u".to_string(),
+                    command: "bash".to_string(),
+                },
+                source_device: "d1".to_string(),
+            }),
+            Message::sync_data(SyncPayload::ConfigUpdated {
+                config: SessionConfigSummary {
+                    id: "c1".to_string(),
+                    name: "dev".to_string(),
+                    environment: "linux".to_string(),
+                    wsl_distro: Some("Ubuntu".to_string()),
+                    working_dir: "/home/u".to_string(),
+                    command: "bash".to_string(),
+                },
+                source_device: "d1".to_string(),
+            }),
+            Message::sync_data(SyncPayload::ConfigRemoved {
+                config_id: "c1".to_string(),
+                config_name: "dev".to_string(),
+            }),
+            Message::sync_data(SyncPayload::TaskStatusChanged {
+                session_id: "s".to_string(),
+                task_status: "asking".to_string(),
+                task_reason: Some("approval".to_string()),
+                task_questions: None,
+            }),
+            Message::sync_data(SyncPayload::SessionModeChanged {
+                session_id: "s".to_string(),
+                auto_approve: false,
+            }),
+            Message::sync_data(SyncPayload::TaskScheduledChanged {
+                job_id: "job-1".to_string(),
+                status: "pending".to_string(),
+                action: "create".to_string(),
+            }),
+            // SessionControlAction 其余变体
+            Message::session_control(
+                SessionControlAction::SessionList {
+                    sessions: vec![sample_session()],
+                },
+                None,
+            ),
+            Message::session_control(SessionControlAction::StartSession {
+                config_id: "cfg-1".to_string(),
+            }, None),
+            Message::session_control(SessionControlAction::StopSession {
+                session_id: "s".to_string(),
+            }, None),
+            Message::session_control(SessionControlAction::RemoveSession {
+                session_id: "s".to_string(),
+            }, None),
+            Message::session_control(
+                SessionControlAction::SessionChanged {
+                    change_type: "created".to_string(),
+                    session: sample_session(),
+                },
+                None,
+            ),
         ];
         for m in cases {
             let json = m.to_json().unwrap();

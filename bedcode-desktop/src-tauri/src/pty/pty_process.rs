@@ -396,4 +396,104 @@ mod tests {
         assert_ne!(a.id(), b.id());
         assert!(a.is_running());
     }
+
+    /// Linux 环境专用配置（真实 PTY spawn 往返，票据 03）
+    #[cfg(target_os = "linux")]
+    fn linux_config(command: &str) -> SessionLaunchConfig {
+        SessionLaunchConfig {
+            name: "itest-pty".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: std::env::temp_dir().to_string_lossy().into_owned(),
+            command: command.to_string(),
+            env_vars: HashMap::new(),
+            cols: 120,
+            rows: 40,
+        }
+    }
+
+    /// 真实 PTY：start 后 is_running + kill 后停止（票据 03）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn start_spawns_real_process_and_reports_running() {
+        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        session.start().await.expect("start should spawn real process");
+        assert!(session.is_running(), "start 后应 running");
+        assert_eq!(session.name().await, "itest-pty");
+        session.kill().await.expect("kill");
+        assert!(!session.is_running());
+    }
+
+    /// 真实 PTY：write_str 写入命令，输出经订阅读回（票据 03）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn write_str_reaches_process_output() {
+        use crate::session::{GlobalOutputManager, OutputFrame};
+
+        let sid = format!("itest-pty-write-{}", std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos());
+        let marker = format!("BEDCODE_PTY_WRITE_{sid}");
+        let session = PtySession::with_id(
+            sid.clone(),
+            linux_config(&format!("echo {marker}; sleep 5")),
+        )
+        .expect("openpty");
+
+        let manager = GlobalOutputManager::global();
+        manager.register_session(&sid).await;
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<OutputFrame>(64);
+        manager.subscribe(&sid, &format!("{sid}-sub"), tx, None, None).await;
+
+        session.start().await.expect("start");
+        session.write_str(&format!("echo {marker}\n")).await.expect("write_str");
+
+        let mut collected = String::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !collected.contains(&marker) && std::time::Instant::now() < deadline {
+            match rx.try_recv() {
+                Ok(OutputFrame::Output(ev)) => collected.push_str(&String::from_utf8_lossy(&ev.data)),
+                Ok(_) => {}
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        assert!(collected.contains(&marker), "write_str 的输出应被读回: {collected}");
+
+        session.kill().await.expect("kill");
+        manager.unregister_session(&sid).await;
+    }
+
+    /// resize 不 panic 且写入后仍可 kill（票据 03）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn resize_after_start_does_not_panic() {
+        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        session.start().await.expect("start");
+        session.resize(100, 30).await.expect("resize should succeed");
+        session.resize(80, 24).await.expect("resize idempotent");
+        assert!(session.is_running());
+        session.kill().await.expect("kill");
+    }
+
+    /// send_special_key：非法 key 报错（票据 03）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn send_special_key_invalid_key_errors() {
+        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        session.start().await.expect("start");
+        let err = session.send_special_key("not_a_real_key").await.unwrap_err();
+        assert!(err.to_string().contains("key"), "非法 key 应报错: {err}");
+        session.kill().await.expect("kill");
+    }
+
+    /// 8KB 大负载分块写入不失败（票据 03：CHUNK_SIZE=4000 分块约束）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn write_large_payload_chunks_without_failure() {
+        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        session.start().await.expect("start");
+        let big: Vec<u8> = vec![b'x'; 9000];
+        session.write(&big).await.expect("8KB 分块写入不应失败");
+        session.kill().await.expect("kill");
+    }
 }

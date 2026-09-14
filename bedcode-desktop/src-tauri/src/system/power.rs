@@ -36,6 +36,12 @@ struct PowerManagerInner {
     active: bool,
 }
 
+impl Default for PowerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PowerManager {
     /// 创建新的 PowerManager 实例
     pub fn new() -> Self {
@@ -63,6 +69,23 @@ impl PowerManager {
     /// 获取用户偏好开关状态
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 测试专用构造器：跳过平台初始化，直接以 active=true 起步
+    ///
+    /// 使状态机（enable 幂等 / set_enabled(false) 自动释放 / disable 清理）
+    /// 可在无 D-Bus/nosleep 的环境下单测，不触碰真实平台句柄（票据 28）
+    #[cfg(test)]
+    fn with_active() -> Self {
+        Self {
+            inner: Mutex::new(PowerManagerInner {
+                nosleep: None,
+                #[cfg(target_os = "linux")]
+                logind: None,
+                active: true,
+            }),
+            enabled: std::sync::atomic::AtomicBool::new(true),
+        }
     }
 
     /// 阻止系统休眠
@@ -263,4 +286,76 @@ static POWER_MANAGER: std::sync::LazyLock<PowerManager> = std::sync::LazyLock::n
 /// 获取全局 PowerManager 实例
 pub fn power_manager() -> &'static PowerManager {
     &POWER_MANAGER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_state_is_inactive_and_enabled() {
+        let pm = PowerManager::new();
+        assert!(!pm.is_active(), "初始不应阻止休眠");
+        assert!(pm.is_enabled(), "用户开关默认开");
+    }
+
+    #[test]
+    fn disable_when_inactive_is_noop() {
+        let pm = PowerManager::new();
+        pm.disable(); // 不 panic、状态不变
+        assert!(!pm.is_active());
+    }
+
+    #[test]
+    fn set_enabled_false_flips_switch() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        assert!(!pm.is_enabled());
+        pm.set_enabled(true);
+        assert!(pm.is_enabled());
+    }
+
+    #[test]
+    fn enable_when_user_disabled_skips() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        pm.enable(); // 用户关闭时跳过，不触碰平台
+        assert!(!pm.is_active(), "用户关闭时 enable 必须跳过");
+    }
+
+    #[test]
+    fn enable_when_already_active_skips() {
+        let pm = PowerManager::with_active();
+        pm.enable(); // 已激活时跳过（不重复 acquire）
+        assert!(pm.is_active(), "重复 enable 保持激活");
+    }
+
+    #[test]
+    fn set_enabled_false_releases_active_lock() {
+        let pm = PowerManager::with_active();
+        pm.set_enabled(false);
+        assert!(!pm.is_enabled());
+        assert!(!pm.is_active(), "用户关闭应立即释放已持有的锁");
+    }
+
+    #[test]
+    fn disable_clears_active_state() {
+        let pm = PowerManager::with_active();
+        pm.disable();
+        assert!(!pm.is_active());
+        // 幂等：再次 disable 不 panic
+        pm.disable();
+    }
+
+    #[test]
+    fn reenable_after_user_off_enables_again() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        pm.set_enabled(true);
+        assert!(pm.is_enabled());
+        // 重新开启后 enable 不再被开关挡住（平台层在测试环境可能失败，
+        // 但开关门控必须放行——不断言平台结果）
+        pm.enable();
+        assert!(pm.is_enabled());
+    }
 }

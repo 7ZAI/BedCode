@@ -357,3 +357,66 @@ impl PluginHost {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::session::SessionConfigManager;
+    use std::path::Path;
+
+    /// 构造最小 PluginHost（票据 32：路由错误分支测试）
+    ///
+    /// 空插件目录 + 内存 DB；wasmtime 初始化一次。auth_service 测试同模式。
+    async fn test_plugin_host() -> Arc<PluginHost> {
+        let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
+        db.lock().await.init_schema().expect("init schema");
+        let session_db = Database::new(Path::new(":memory:")).expect("session db");
+        session_db.init_schema().expect("session schema");
+        let sm = Arc::new(crate::session::SessionManager::from_database(
+            session_db,
+            Arc::new(std::path::PathBuf::from(".")),
+        ));
+        let cm = Arc::new(SessionConfigManager::new(db.clone()));
+        let dir = std::env::temp_dir().join(format!("bedcode-cmd-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+        host.init_message_bus().await;
+        Arc::new(host)
+    }
+
+    /// 未激活插件 → 拒绝（票据 32：路由首道门禁）
+    #[tokio::test]
+    async fn invoke_rust_command_rejects_inactive_plugin() {
+        let host = test_plugin_host().await;
+        let err = host
+            .invoke_rust_command("com.bedcode.nonexistent", "foo", serde_json::json!({}))
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not activated"), "实际: {err}");
+    }
+
+    /// list_rust_commands：返回的条目 plugin_id 非空（静态注册表可能含内置项）
+    #[tokio::test]
+    async fn list_rust_commands_entries_have_plugin_ids() {
+        let host = test_plugin_host().await;
+        let commands = host.list_rust_commands().await;
+        assert!(commands.iter().all(|c| !c.plugin_id.is_empty()));
+    }
+
+    /// 终端 handler 管道：无 handler 时输入原样透传（不 panic）
+    #[tokio::test]
+    async fn process_terminal_input_without_handlers_passthrough() {
+        let host = test_plugin_host().await;
+        let out = host.process_terminal_input("sess-1", "hello").await;
+        assert_eq!(out, "hello", "无 handler 时应原样返回输入");
+    }
+
+    /// 终端 handler 管道：输出处理无 handler 时原样返回
+    #[tokio::test]
+    async fn process_terminal_output_without_handlers_passthrough() {
+        let host = test_plugin_host().await;
+        let out = host.process_terminal_output("sess-1", "out-data").await;
+        assert_eq!(out, "out-data", "无 handler 时应原样返回输出");
+    }
+}

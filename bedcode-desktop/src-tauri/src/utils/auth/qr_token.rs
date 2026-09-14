@@ -40,6 +40,12 @@ pub struct QrTokenManager {
     current_token: Arc<Mutex<Option<QrToken>>>,
 }
 
+impl Default for QrTokenManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QrTokenManager {
     pub fn new() -> Self {
         Self {
@@ -155,5 +161,52 @@ mod tests {
         let token = manager.generate(0).await; // TTL=0, immediately expired
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         assert!(manager.verify(&token).await.is_err());
+    }
+
+    /// 并发单次使用（票据 29）：两个并发 verify 只允许一个成功
+    #[tokio::test]
+    async fn test_qr_token_concurrent_single_use() {
+        let manager = Arc::new(QrTokenManager::new());
+        let token = manager.generate(300).await;
+
+        let m1 = Arc::clone(&manager);
+        let t1 = token.clone();
+        let h1 = tokio::spawn(async move { m1.verify(&t1).await.is_ok() });
+        let m2 = Arc::clone(&manager);
+        let t2 = token.clone();
+        let h2 = tokio::spawn(async move { m2.verify(&t2).await.is_ok() });
+
+        let (r1, r2) = tokio::join!(h1, h2);
+        let ok_count = [r1.unwrap(), r2.unwrap()].iter().filter(|&&b| b).count();
+        assert_eq!(ok_count, 1, "并发 verify 必须恰好一个成功（单次使用语义）");
+    }
+
+    /// TTL 边界（票据 29）：`elapsed == ttl` 视为过期（is_expired 用 `>=`）
+    #[test]
+    fn test_qr_token_ttl_boundary_elapsed_equals_ttl() {
+        let token = QrToken::new(1);
+        // 模拟 1 秒后：elapsed >= ttl → 过期。真实等待 1.1s 验证边界语义
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        assert!(token.is_expired(), "elapsed == ttl 应视为过期（>= 语义）");
+    }
+
+    /// get_active 对已过期 token 返回 None（票据 29：当前只测 verify 路径的过期）
+    #[tokio::test]
+    async fn test_qr_token_get_active_returns_none_when_expired() {
+        let manager = QrTokenManager::new();
+        manager.generate(0).await; // 立即过期
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(manager.get_active().await.is_none(), "过期 token 不应出现在活跃列表");
+    }
+
+    /// get_active 返回剩余秒数（正值，未过期时）
+    #[tokio::test]
+    async fn test_qr_token_get_active_returns_remaining() {
+        let manager = QrTokenManager::new();
+        manager.generate(300).await;
+        let active = manager.get_active().await.expect("未过期 token 应活跃");
+        assert_eq!(active.0.len(), 32);
+        assert_eq!(active.1, 300);
+        assert!(active.2 <= 300, "剩余秒数应 ≤ TTL");
     }
 }

@@ -11,6 +11,18 @@ use crate::system::app_context::AppContext;
 
 // ==================== 插件动态 HTTP 端点代理 ====================
 
+/// 插件 HTTP 端点响应状态提取（纯函数，供测试）：`status` 字段缺失/非数字/越界
+/// → 默认 200；仅接受 actix 合法区间 100..=999（原实现 `as u16` 截断在 >65535
+/// 时会误放行截断后的合法码，此处用 try_from 拒绝截断）
+pub(crate) fn plugin_http_status(response: &serde_json::Value) -> u16 {
+    response
+        .get("status")
+        .and_then(|v| v.as_u64())
+        .and_then(|s| u16::try_from(s).ok())
+        .filter(|s| (100..=999).contains(s))
+        .unwrap_or(200)
+}
+
 /// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
@@ -59,7 +71,7 @@ pub async fn plugin_http_endpoint(
     match result {
         Ok(response) => {
             // 插件返回格式：{ status: number, body: any }
-            let status = response.get("status").and_then(|v| v.as_u64()).unwrap_or(200) as u16;
+            let status = plugin_http_status(&response);
             let response_body = response.get("body").cloned().unwrap_or(serde_json::Value::Null);
 
             HttpResponse::build(
@@ -79,5 +91,38 @@ pub async fn plugin_http_endpoint(
                 &format!("Plugin endpoint error: {}", e),
             ))
         }
+    }
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_http_status_accepts_valid_codes() {
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 200})), 200);
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 201})), 201);
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 599})), 599);
+    }
+
+    #[test]
+    fn plugin_http_status_defaults_when_missing_or_invalid() {
+        // 缺失 status / 非对象 → 默认 200
+        assert_eq!(plugin_http_status(&serde_json::json!({})), 200);
+        assert_eq!(plugin_http_status(&serde_json::json!({"body": 1})), 200);
+        // 非数字 → 200
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": "abc"})), 200);
+        // 小数 / 负数 → 200
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 200.5})), 200);
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": -1})), 200);
+        // 低于 actix 合法区间（from_u16 失败回退）→ 200
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 50})), 200);
+        // 超 u16 上限：原实现 `as u16` 截断可能误放行，try_from 拒绝 → 200
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 65536})), 200);
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 999999})), 200);
+        // 超 actix 区间上限 → 200
+        assert_eq!(plugin_http_status(&serde_json::json!({"status": 1000})), 200);
     }
 }

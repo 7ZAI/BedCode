@@ -3,12 +3,12 @@
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 真实
 //! tokio-tungstenite 客户端模拟移动端 → 直连 `/ws/terminal/session/{id}`，
 //! 覆盖：未认证拒绝对称、JWT 认证 + 会话存在性校验（SESSION_NOT_FOUND）、
-//! 快照订阅（subscribe_ok → history_end → 实时 TB v2 二进制帧）、
+//! 快照订阅（subscribe_ok → history_end → 实时 TB v3 二进制帧）、
 //! 会话停止通知（session_stopped 帧）。
 //!
 //! 会话存在性用 GlobalOutputManager::register_session 注册假会话（不启动
 //! 真实 PTY）：订阅 → 空历史 history_end → 手动 on_output 推帧 → 断言
-//! TB v2 帧头（magic/version/seq/len/data 与 flags 事件数编码）。
+//! TB v3 帧头（magic/version/start_offset/len/data）。
 //!
 //! 串行化：本文件只含一个 `#[tokio::test]`（场景子步骤严格串行）。
 //! tests/ 下每个文件是独立测试二进制 → 与其余集成测试进程隔离，

@@ -50,7 +50,7 @@ use bedcode_peer_net::{
     Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
     DiscoveryEvent, HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
     SharedDirEntry, SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent,
-    TrustEvent, TrustStore, CAP_FILE_TRANSFER,
+    TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -645,6 +645,25 @@ pub async fn respond_peer_consent(app: AppHandle, request_id: String, accepted: 
 
 /// 可信对端列表（设置面管理用；节点未启动仍可读——句柄独立于运行时存活）
 #[tauri::command]
+/// 可信条目 → DTO（纯函数，供测试）：展示名持久化名优先、在线缓存名兑底，
+/// 均缺为 None（前端以短指纹兑底）；短指纹取前 8 位；加入时刻转 RFC3339
+pub(crate) fn trust_entry_to_dto(
+    entry: &TrustedPeerEntry,
+    online_names: &HashMap<NodeId, String>,
+) -> TrustedPeerDto {
+    TrustedPeerDto {
+        display_name: entry
+            .display_name
+            .clone()
+            .or_else(|| online_names.get(&entry.node_id).cloned()),
+        node_id: entry.node_id.to_string(),
+        fingerprint_short: entry.node_id.short_fingerprint().to_string(),
+        added_at: entry.added_at.to_rfc3339(),
+    }
+}
+
+/// 可信对端列表（设置面管理用；节点未启动仍可读——句柄独立于运行时存活）
+#[tauri::command]
 pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeerDto>> {
     let trust = trust_handle(&app).await?;
     let state = app.state::<PeerNetState>();
@@ -665,12 +684,7 @@ pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeer
     Ok(trust
         .list_entries()
         .into_iter()
-        .map(|entry| TrustedPeerDto {
-            display_name: entry.display_name.or_else(|| online_names.get(&entry.node_id).cloned()),
-            node_id: entry.node_id.to_string(),
-            fingerprint_short: entry.node_id.short_fingerprint().to_string(),
-            added_at: entry.added_at.to_rfc3339(),
-        })
+        .map(|entry| trust_entry_to_dto(&entry, &online_names))
         .collect())
 }
 
@@ -740,21 +754,30 @@ pub async fn list_shared_directories(app: AppHandle) -> crate::Result<Vec<Shared
 ///
 /// 返回新条目（含注册表分配的 ID）。同根重复注册被拒绝。
 #[tauri::command]
+/// 共享目录展示名派生（纯函数，供测试）：显式名去除首尾空白后非空则用之；
+/// 否则回退路径末段目录名；路径无末段（如根目录）回退原路径
+pub(crate) fn derive_display_name(name: Option<String>, path: &str) -> String {
+    name.map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string())
+        })
+}
+
+/// 新增共享目录（桌面端：用户选择的文件夹路径；校验存在且为目录后落盘持久）
+///
+/// 返回新条目（含注册表分配的 ID）。同根重复注册被拒绝。
+#[tauri::command]
 pub async fn add_shared_directory(app: AppHandle, name: Option<String>, path: String) -> crate::Result<SharedDirDto> {
     if path.trim().is_empty() {
         return Err(crate::AppError::InvalidInput(
             "add shared directory: path must not be empty".to_string(),
         ));
     }
-    let display_name = name
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| {
-            Path::new(&path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.clone())
-        });
+    let display_name = derive_display_name(name, &path);
     let store = shared_handle(&app).await?;
     let entry = store
         .add(
@@ -1529,5 +1552,244 @@ mod dial_payload_tests {
         assert_eq!(payload["nodeId"], "aa");
         assert_eq!(payload["deviceName"], "Pixel 9");
         assert_eq!(payload["connected"], true);
+    }
+}
+
+#[cfg(test)]
+mod peer_net_tests {
+    use super::*;
+    use bedcode_peer_net::TrustedPeerEntry;
+    use chrono::Utc;
+
+    /// 64 位小写 hex 节点 ID（格式校验通过的最小形态）
+    fn node_id(suffix: u8) -> NodeId {
+        NodeId::parse(&format!("{:02x}{}", suffix, "ab".repeat(31))).unwrap()
+    }
+
+    // ==================== 可信条目 → DTO 转换（list_trusted_peers） ====================
+
+    #[test]
+    fn trust_entry_to_dto_prefers_persisted_name_over_online_name() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(1),
+            display_name: Some("persisted-name".to_string()),
+            added_at: Utc::now(),
+        };
+        let mut online_names = HashMap::new();
+        online_names.insert(entry.node_id.clone(), "online-name".to_string());
+
+        let dto = trust_entry_to_dto(&entry, &online_names);
+        // 持久化名优先，在线缓存名不得覆盖
+        assert_eq!(dto.display_name.as_deref(), Some("persisted-name"));
+        assert_eq!(dto.node_id, entry.node_id.as_str());
+        assert_eq!(dto.fingerprint_short.len(), 8, "短指纹固定 8 字符");
+        assert_eq!(dto.added_at, entry.added_at.to_rfc3339());
+    }
+
+    #[test]
+    fn trust_entry_to_dto_falls_back_to_online_name_when_persisted_missing() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(2),
+            display_name: None,
+            added_at: Utc::now(),
+        };
+        let mut online_names = HashMap::new();
+        online_names.insert(entry.node_id.clone(), "online-only".to_string());
+
+        let dto = trust_entry_to_dto(&entry, &online_names);
+        assert_eq!(dto.display_name.as_deref(), Some("online-only"));
+    }
+
+    #[test]
+    fn trust_entry_to_dto_returns_none_when_both_names_missing() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(3),
+            display_name: None,
+            added_at: Utc::now(),
+        };
+        let dto = trust_entry_to_dto(&entry, &HashMap::new());
+        assert_eq!(dto.display_name, None, "两处均缺 → None（前端以短指纹兜底）");
+        assert_eq!(dto.fingerprint_short, &entry.node_id.as_str()[..8]);
+    }
+
+    // ==================== 共享目录展示名派生（add_shared_directory） ====================
+
+    #[test]
+    fn derive_display_name_uses_explicit_name_after_trim() {
+        assert_eq!(derive_display_name(Some("  Projects  ".to_string()), "/tmp/a"), "Projects");
+        assert_eq!(derive_display_name(Some("Projects".to_string()), "/tmp/a"), "Projects");
+    }
+
+    #[test]
+    fn derive_display_name_falls_back_to_path_last_segment() {
+        // 显式名为空/纯空白 → 路径末段目录名
+        assert_eq!(derive_display_name(Some("   ".to_string()), "/data/videos"), "videos");
+        assert_eq!(derive_display_name(None, "/data/videos"), "videos");
+        // 末段带扩展名也原样取（目录名语义）
+        assert_eq!(derive_display_name(None, "/tmp/code.tar.gz"), "code.tar.gz");
+    }
+
+    #[test]
+    fn derive_display_name_root_path_falls_back_to_raw_path() {
+        // 根目录无末段 → 回退原路径
+        assert_eq!(derive_display_name(None, "/"), "/");
+        assert_eq!(derive_display_name(Some("".to_string()), "/"), "/");
+    }
+
+    // ==================== 发现事件 → 总线 topic（bus_topic_for） ====================
+
+    #[test]
+    fn bus_topic_for_maps_known_events() {
+        assert_eq!(bus_topic_for("peer-connected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-disconnected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-consent-requested"), Some("peer:consent"));
+        assert_eq!(bus_topic_for("peer-transfer-changed"), Some("peer:transfer"));
+        assert_eq!(bus_topic_for("peer-receive-changed"), Some("peer:receive"));
+    }
+
+    #[test]
+    fn bus_topic_for_unknown_event_is_none() {
+        assert_eq!(bus_topic_for("peer-devices-changed"), None, "设备列表已随缓存守护退役");
+        assert_eq!(bus_topic_for(""), None);
+    }
+
+    // ==================== DTO 转换（发现记录 / 共享目录条目） ====================
+
+    #[test]
+    fn discovered_peer_to_dto_carries_file_transfer_capability_bit() {
+        let record = |cap: u64| DiscoveredPeerRecord {
+            node_id: node_id(4),
+            addr: "127.0.0.1:47613".parse().unwrap(),
+            device_name: "Pixel".to_string(),
+            protocol_version: 1,
+            capabilities: cap,
+            last_seen: Instant::now(),
+        };
+        // 具备文件传输能力（bit0 置位）
+        let dto = DiscoveredPeerDto::from(&record(0b1));
+        assert_eq!(dto.node_id, node_id(4).as_str());
+        assert_eq!(dto.device_name, "Pixel");
+        assert_eq!(dto.addr, "127.0.0.1:47613");
+        assert!(dto.file_transfer, "cap bit0 置位 → file_transfer=true");
+        // 无该能力
+        assert!(!DiscoveredPeerDto::from(&record(0b10)).file_transfer, "仅 bit1 → 无文件传输能力");
+        assert!(!DiscoveredPeerDto::from(&record(0)).file_transfer);
+    }
+
+    #[test]
+    fn shared_dir_to_dto_maps_fs_and_saf_roots() {
+        let fs_entry = SharedDirEntry {
+            id: "abc".to_string(),
+            name: "Projects".to_string(),
+            root: SharedDirRoot::Fs {
+                path: PathBuf::from("/home/user/Projects"),
+            },
+        };
+        let fs_dto = SharedDirDto::from(&fs_entry);
+        assert_eq!(fs_dto.id, "abc");
+        assert_eq!(fs_dto.name, "Projects");
+        assert_eq!(fs_dto.kind, "fs");
+        assert_eq!(fs_dto.path.as_deref(), Some("/home/user/Projects"));
+        assert_eq!(fs_dto.tree_uri, None);
+        assert!(!fs_dto.builtin, "非内置条目 builtin=false");
+
+        let saf_entry = SharedDirEntry {
+            id: "xyz".to_string(),
+            name: "SafTree".to_string(),
+            root: SharedDirRoot::Saf {
+                tree_uri: "content://tree/abc".to_string(),
+            },
+        };
+        let saf_dto = SharedDirDto::from(&saf_entry);
+        assert_eq!(saf_dto.kind, "saf");
+        assert_eq!(saf_dto.tree_uri.as_deref(), Some("content://tree/abc"));
+        assert_eq!(saf_dto.path, None);
+    }
+
+    #[test]
+    fn shared_dir_to_dto_marks_builtin_downloads() {
+        let entry = SharedDirEntry {
+            id: bedcode_peer_net::BUILTIN_DOWNLOADS_ID.to_string(),
+            name: "Downloads".to_string(),
+            root: SharedDirRoot::Fs {
+                path: PathBuf::from("/tmp"),
+            },
+        };
+        assert!(SharedDirDto::from(&entry).builtin, "内置下载目录 builtin=true");
+    }
+
+    // ==================== 可信列表 CRUD（TrustStore，tempdir 隔离） ====================
+
+    #[test]
+    fn trust_store_crud_roundtrip_with_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = TrustStore::load_or_create(dir.path()).expect("load_or_create");
+        let id = node_id(5);
+
+        // 空列表起步
+        assert!(!store.list_entries().iter().any(|e| e.node_id == id));
+        // 带名新增 → true；重复新增 → false（已存在）
+        assert!(store.add_with_metadata(&id, Some("Pixel 9")).expect("add"));
+        assert!(!store.add_with_metadata(&id, Some("Pixel 9")).expect("dup add"));
+        // 列表可查，元数据落库
+        let entry = store
+            .list_entries()
+            .into_iter()
+            .find(|e| e.node_id == id)
+            .expect("entry persisted");
+        assert_eq!(entry.display_name.as_deref(), Some("Pixel 9"));
+        // 移除 → true；再移除 → false
+        assert!(store.remove(&id).expect("remove"));
+        assert!(!store.remove(&id).expect("remove again"));
+        assert!(!store.list_entries().iter().any(|e| e.node_id == id));
+    }
+
+    // ==================== 共享目录注册表 CRUD（SharedDirStore，tempdir 隔离） ====================
+
+    #[test]
+    fn shared_dir_store_crud_and_replace_all() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // 注册表要求 root 真实存在（add/replace_all 均校验），先建真实子目录
+        let real_root = dir.path().join("Projects");
+        std::fs::create_dir_all(&real_root).expect("mkdir");
+        let real_root_b = dir.path().join("B");
+        std::fs::create_dir_all(&real_root_b).expect("mkdir");
+        let store = SharedDirStore::load_or_create(dir.path()).expect("load_or_create");
+        assert!(store.list().is_empty());
+
+        let entry = store
+            .add(
+                "Projects",
+                SharedDirRoot::Fs {
+                    path: real_root.clone(),
+                },
+            )
+            .expect("add");
+        assert!(!entry.id.is_empty());
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].name, "Projects");
+
+        // 移除 → true；不存在 → false
+        assert!(store.remove(&entry.id).expect("remove"));
+        assert!(!store.remove(&entry.id).expect("remove again"));
+        assert!(store.list().is_empty());
+
+        // replace_all 幂等批量替换
+        let entries = vec![
+            SharedDirEntry {
+                id: "a".to_string(),
+                name: "A".to_string(),
+                root: SharedDirRoot::Fs { path: real_root.clone() },
+            },
+            SharedDirEntry {
+                id: "b".to_string(),
+                name: "B".to_string(),
+                root: SharedDirRoot::Fs { path: real_root_b.clone() },
+            },
+        ];
+        store.replace_all(&entries).expect("replace_all");
+        assert_eq!(store.list().len(), 2);
+        assert_eq!(store.list()[0].id, "a");
+        assert_eq!(store.list()[1].id, "b");
     }
 }

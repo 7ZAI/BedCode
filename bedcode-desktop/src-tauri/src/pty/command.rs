@@ -13,10 +13,13 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
         ExecutionEnvironment::Windows { shell } => {
             match shell {
                 crate::enums::WindowsShell::PowerShell => {
+                    // working_dir 来自移动端经 wire 下发（不可信输入），必须做 shell 转义：
+                    // PowerShell 单引号字面量内，`'` 用 `''` 转义；`&`/`;`/`$` 在单引号串内均为字面。
+                    let escaped_dir = config.working_dir.replace('\'', "''");
                     // 构建完整的 PowerShell 命令
                     let full_command = format!(
                         "chcp 65001 > $null; [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new(); Set-Location '{}'; Write-Host 'Working directory:' $PWD.Path; {}",
-                        config.working_dir,
+                        escaped_dir,
                         config.command
                     );
 
@@ -28,6 +31,14 @@ pub fn build_command(config: &SessionLaunchConfig) -> crate::Result<CommandBuild
                     cmd
                 }
                 crate::enums::WindowsShell::Cmd => {
+                    // CMD 无双引号内转义语义：`"` 内 `&|<>^` 仍可被解释为分隔符/重定向。
+                    // working_dir 不可信 → 含危险字符直接拒绝（输入校验在 Rust 端，§8 红线）。
+                    if config.working_dir.contains(['&', '|', '<', '>', '^', '"']) {
+                        return Err(crate::AppError::InvalidInput(format!(
+                            "工作目录包含 CMD 危险字符，已拒绝: {}",
+                            config.working_dir
+                        )));
+                    }
                     // 构建完整的 CMD 命令
                     let full_command = format!(
                         "@chcp 65001 > nul && cd /d \"{}\" && echo Working directory: %cd% && {}",
@@ -246,5 +257,60 @@ mod tests {
         let full = argv.iter().find(|a| a.contains("echo ok")).unwrap();
         // 单引号被转义为 '\''
         assert!(full.contains("cd '/tmp/o'\\''clock'"));
+    }
+
+    #[test]
+    fn powershell_escapes_single_quote_in_working_dir() {
+        // PowerShell 单引号串内 `'` 必须双写，闭合攻击不得逃逸（票据 02）
+        let mut c = config(
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell,
+            },
+            "echo ok",
+        );
+        c.working_dir = "D:\\x'; $env:BEDCODE_PWN='1; cmd /c powershell.exe -NoProfile -Command '; #".to_string();
+        let cmd = build_command(&c).unwrap();
+        let argv = argv(&cmd);
+        let full = argv.iter().find(|a| a.contains("echo ok")).unwrap();
+
+        // payload 里的每个 `'` 都被双写，单引号串不提前闭合；注入语句整体成为字面量
+        let escaped = c.working_dir.replace('\'', "''");
+        assert!(full.contains(&format!("Set-Location '{escaped}'")));
+        // 原始注入形态（未双写引号）不应出现在命令体里
+        assert!(!full.contains("$env:BEDCODE_PWN='1"));
+        // 转义后的 payload 尾部紧接格式串的闭合引号与下一条语句，证明未逃逸出字面量
+        assert!(full.contains("#'; Write-Host"));
+    }
+
+    #[test]
+    fn cmd_shell_rejects_dangerous_chars_in_working_dir() {
+        // CMD 无双引号内转义语义：`&` 可拼接任意命令，必须拒绝（票据 02）
+        let mut c = config(
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::Cmd,
+            },
+            "echo ok",
+        );
+        c.working_dir = "D:\\x\" & echo PWNED &".to_string();
+        let err = build_command(&c).unwrap_err();
+        assert!(err.to_string().contains("CMD 危险字符"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn cmd_shell_accepts_normal_and_spaced_paths() {
+        // 正常路径（含空格）不被拒绝
+        for dir in ["D:\\work", "C:\\Program Files", "D:\\My Documents\\code"] {
+            let mut c = config(
+                ExecutionEnvironment::Windows {
+                    shell: WindowsShell::Cmd,
+                },
+                "dir",
+            );
+            c.working_dir = dir.to_string();
+            let cmd = build_command(&c).unwrap();
+            let argv = argv(&cmd);
+            let full = argv.iter().find(|a| a.contains("dir")).unwrap();
+            assert!(full.contains(&format!("cd /d \"{dir}\"")));
+        }
     }
 }

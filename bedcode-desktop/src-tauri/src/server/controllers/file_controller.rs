@@ -14,12 +14,27 @@ use crate::system::constants::file::{
 };
 use actix_web::{web, HttpResponse};
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// 文件树最大递归深度
 const MAX_DEPTH: usize = FILE_TREE_MAX_DEPTH;
 /// 文件内容读取上限，防止传输过大文件
 const MAX_FILE_SIZE: u64 = FILE_CONTENT_MAX_SIZE_BYTES;
+
+
+/// 路径越界校验（票据 10 安全红线）：canonicalize 后必须位于 root 之下
+///
+/// 抽为纯函数供目录/文件两处复用 + 单测锁定 `../` 穿越拒绝语义。
+/// 返回 `true` 表示在 root 之内；调用方在 `false` 时映射为 403。
+fn is_within_root(root: &Path, target: &Path) -> bool {
+    let Ok(canonical_root) = root.canonicalize() else {
+        return false;
+    };
+    let Ok(canonical_target) = target.canonicalize() else {
+        return false;
+    };
+    canonical_target.starts_with(&canonical_root)
+}
 
 /// 解析 working_dir：id 可以是 session_id 或 config_id
 ///
@@ -120,17 +135,7 @@ pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) ->
         PathBuf::from(&working_dir).join(&relative)
     };
 
-    // 安全检查：目标目录必须在 working_dir 下
-    let canonical_working = match PathBuf::from(&working_dir).canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("Failed to resolve working dir: {}", e),
-            ));
-        }
-    };
-
+    // 安全检查：目标目录必须在 working_dir 下（票据 10：is_within_root 纯函数）
     if !target_dir.exists() || !target_dir.is_dir() {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
             404,
@@ -138,17 +143,7 @@ pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) ->
         ));
     }
 
-    let canonical_target = match target_dir.canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("Failed to resolve dir path: {}", e),
-            ));
-        }
-    };
-
-    if !canonical_target.starts_with(&canonical_working) {
+    if !is_within_root(Path::new(&working_dir), &target_dir) {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
             403,
             "Access denied: directory is outside working directory",
@@ -166,8 +161,8 @@ pub async fn get_file_tree_children(query: web::Query<FileTreeChildrenQuery>) ->
         .collect();
 
     let filters = build_exclude_filters(&exclude_dirs);
-    let root = canonical_working;
-    let dir = canonical_target;
+    let root = PathBuf::from(&working_dir);
+    let dir = target_dir.clone();
     let filters_clone = filters.clone();
 
     let result = tokio::task::spawn_blocking(move || scan_dir_single_level(&root, &dir, &filters_clone)).await;
@@ -386,17 +381,7 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
         PathBuf::from(&working_dir).join(&file_path)
     };
 
-    // 安全检查：路径必须在 working_dir 下，防止目录遍历
-    let canonical_working = match PathBuf::from(&working_dir).canonicalize() {
-        Ok(p) => p,
-        Err(e) => {
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("Failed to resolve working dir: {}", e),
-            ));
-        }
-    };
-
+    // 安全检查：路径必须在 working_dir 下，防止目录遍历（票据 10：is_within_root 纯函数）
     // 文件不存在时 canonicalize 会失败，先检查
     if !abs_path.exists() {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
@@ -405,22 +390,15 @@ pub async fn get_file_content(body: web::Json<FileContentRequest>) -> HttpRespon
         ));
     }
 
-    let canonical_path = match std::path::Path::canonicalize(&abs_path) {
-        Ok(p) => p,
-        Err(e) => {
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(
-                500,
-                &format!("Failed to resolve file path: {}", e),
-            ));
-        }
-    };
-
-    if !canonical_path.starts_with(&canonical_working) {
+    if !is_within_root(Path::new(&working_dir), &abs_path) {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(
             403,
             "Access denied: file is outside working directory",
         ));
     }
+
+    // 保留 canonical 路径供后续文件操作（判定已由 is_within_root 完成）
+    let canonical_path = std::path::Path::canonicalize(&abs_path).unwrap_or(abs_path.clone());
 
     if !canonical_path.is_file() {
         return HttpResponse::Ok().json(ApiResponse::<()>::error(400, "Path is not a file"));
@@ -827,4 +805,52 @@ fn parse_hunk_header(line: &str) -> Option<(u32, u32)> {
     let new_start: u32 = parts[1].trim_start_matches('+').split(',').next()?.parse().ok()?;
 
     Some((old_start, new_start))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_workspace() -> (std::path::PathBuf, tempfile::TempDir) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path().join("work");
+        std::fs::create_dir_all(&root).expect("create root");
+        (root, dir)
+    }
+
+    /// 票据 10 安全红线：`../` 路径穿越必须被拒绝（canonicalize 后越界）
+    #[test]
+    fn traversal_via_parent_chain_rejected() {
+        let (root, _dir) = temp_workspace();
+        let sub = root.join("sub");
+        std::fs::create_dir_all(&sub).expect("create sub");
+
+        // 目录树外（同级 sibling）→ 拒绝
+        let outside = root.parent().unwrap().join("evil");
+        std::fs::create_dir_all(&outside).expect("create outside");
+        assert!(!is_within_root(&root, &outside), "同级目录越界必须拒绝");
+
+        // 显式 ../ 穿越（符号路径在 canonicalize 前含 ..）→ 拒绝
+        let traversal = sub.join("../../evil");
+        assert!(!is_within_root(&root, &traversal), "../ 穿越必须拒绝");
+    }
+
+    /// 票据 10：root 内合法路径放行
+    #[test]
+    fn within_root_allowed() {
+        let (root, _dir) = temp_workspace();
+        let child = root.join("a").join("b.txt");
+        std::fs::create_dir_all(child.parent().unwrap()).expect("create parent");
+        std::fs::write(&child, b"x").expect("write file");
+        assert!(is_within_root(&root, &child), "root 内文件应放行");
+        assert!(is_within_root(&root, &root), "root 自身应放行");
+    }
+
+    /// 票据 10：不存在路径 → false（canonicalize 失败不 panic）
+    #[test]
+    fn nonexistent_path_rejected_without_panic() {
+        let (root, _dir) = temp_workspace();
+        let ghost = root.join("nope").join("ghost.txt");
+        assert!(!is_within_root(&root, &ghost), "不存在路径应拒绝");
+    }
 }

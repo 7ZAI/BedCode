@@ -491,10 +491,10 @@ async fn pty_session_chain_flow() {
         .expect("send input frame failed");
 
     // 2d. 轮询 + 宽容超时：PowerShell 启动与回显时序非确定，断言「最终包含」而非即时到达
-    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(20)).await;
+    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(10)).await;
     assert!(
         collected.contains(&marker),
-        "PTY echo output not observed within 20s; collected so far: {collected:?} \
+        "PTY echo output not observed within 10s; collected so far: {collected:?} \
          （空输出 = 环境问题（powershell 未启动/未读到输出）；有启动输出无 echo = 输入链路缺陷）"
     );
 
@@ -628,10 +628,10 @@ async fn pty_session_chain_flow() {
         ))
         .await
         .expect("send input frame failed");
-    let collected2 = collect_terminal_output_until(&mut stream_r, &marker2, Duration::from_secs(20)).await;
+    let collected2 = collect_terminal_output_until(&mut stream_r, &marker2, Duration::from_secs(10)).await;
     assert!(
         collected2.contains(&marker2),
-        "restarted session PTY echo not observed within 20s; collected: {collected2:?}"
+        "restarted session PTY echo not observed within 10s; collected: {collected2:?}"
     );
 
     let _ = sink_r.send(WsMsg::Close(None)).await;

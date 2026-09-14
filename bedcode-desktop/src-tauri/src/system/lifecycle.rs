@@ -325,3 +325,166 @@ pub fn register_window_close_hooks() {
         !has_running
     });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// 记录钩子执行顺序的共享状态
+    #[derive(Default)]
+    struct OrderLog {
+        order: Mutex<Vec<String>>,
+    }
+
+    impl OrderLog {
+        fn push(&self, name: &str) {
+            self.order.lock().unwrap().push(name.to_string());
+        }
+        fn snapshot(&self) -> Vec<String> {
+            self.order.lock().unwrap().clone()
+        }
+    }
+
+    #[tokio::test]
+    async fn startup_hooks_run_in_priority_order() {
+        let registry = LifecycleRegistry::new();
+        let log = Arc::new(OrderLog::default());
+        // 乱序注册，priority 升序执行
+        registry.on_startup("late", 100, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move { log.push("late") }
+            }
+        });
+        registry.on_startup("early", 10, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move { log.push("early") }
+            }
+        });
+        registry.on_startup("mid", 50, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move { log.push("mid") }
+            }
+        });
+
+        registry.run_startup_hooks().await;
+        assert_eq!(log.snapshot(), vec!["early", "mid", "late"]);
+    }
+
+    #[tokio::test]
+    async fn shutdown_hooks_run_in_priority_order() {
+        let registry = LifecycleRegistry::new();
+        let log = Arc::new(OrderLog::default());
+        registry.on_shutdown("b", 20, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move { log.push("b") }
+            }
+        });
+        registry.on_shutdown("a", 5, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move { log.push("a") }
+            }
+        });
+
+        registry.run_shutdown_hooks().await;
+        assert_eq!(log.snapshot(), vec!["a", "b"]);
+    }
+
+    #[tokio::test]
+    async fn same_priority_hooks_preserve_insertion_order() {
+        // sort_by_key 稳定排序：同 priority 保持插入顺序（当前语义显式化）
+        let registry = LifecycleRegistry::new();
+        let log = Arc::new(OrderLog::default());
+        for name in ["first", "second", "third"] {
+            registry.on_startup(name, 10, {
+                let log = Arc::clone(&log);
+                let name = name.to_string();
+                move || {
+                    let log = Arc::clone(&log);
+                    let name = name.clone();
+                    async move { log.push(&name) }
+                }
+            });
+        }
+        registry.run_startup_hooks().await;
+        assert_eq!(log.snapshot(), vec!["first", "second", "third"]);
+    }
+
+    #[tokio::test]
+    async fn hanging_hook_times_out_and_later_hooks_continue() {
+        // 超时保护：挂起钩子超时后继续执行后续钩子（票据 26）
+        let registry = LifecycleRegistry::new();
+        let executed = Arc::new(AtomicUsize::new(0));
+        registry.on_shutdown("hang", 10, || {
+            async { std::future::pending::<()>().await } // 永不完成
+        });
+        registry.on_shutdown("after", 20, {
+            let executed = Arc::clone(&executed);
+            move || {
+                let executed = Arc::clone(&executed);
+                async move {
+                    executed.fetch_add(1, Ordering::SeqCst);
+                }
+            }
+        });
+
+        // 超时预算按常量走，无法注入——用 tokio time pause 冻结时钟避免真等 5s
+        tokio::time::pause();
+        registry.run_shutdown_hooks().await;
+        tokio::time::resume();
+        assert_eq!(executed.load(Ordering::SeqCst), 1, "超时后后续钩子必须继续执行");
+    }
+
+    #[tokio::test]
+    async fn window_close_allows_when_all_agree() {
+        let registry = LifecycleRegistry::new();
+        registry.on_window_close_requested("a", 10, || async { true });
+        registry.on_window_close_requested("b", 20, || async { true });
+        assert!(registry.run_window_close_hooks().await);
+    }
+
+    #[tokio::test]
+    async fn window_close_blocked_by_any_false_and_stops() {
+        // 任一 false 阻止关闭；后续钩子不再执行
+        let registry = LifecycleRegistry::new();
+        let log = Arc::new(OrderLog::default());
+        registry.on_window_close_requested("allow", 10, || async { true });
+        registry.on_window_close_requested("deny", 20, || async { false });
+        registry.on_window_close_requested("after", 30, {
+            let log = Arc::clone(&log);
+            move || {
+                let log = Arc::clone(&log);
+                async move {
+                    log.push("after");
+                    true
+                }
+            }
+        });
+
+        assert!(!registry.run_window_close_hooks().await);
+        assert!(log.snapshot().is_empty(), "阻止后后续钩子不应执行");
+    }
+
+    #[tokio::test]
+    async fn window_close_with_no_hooks_allows() {
+        let registry = LifecycleRegistry::new();
+        assert!(registry.run_window_close_hooks().await);
+    }
+
+    /// 全局单例可达（不触碰其内容，仅验证装配函数可调用）
+    #[test]
+    fn global_registry_reachable() {
+        let _ = lifecycle_registry();
+    }
+}

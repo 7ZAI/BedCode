@@ -53,6 +53,18 @@ const LOCAL_FLUSH_INTERVAL_MS: u64 = 4;
 /// 不依赖覆盖语义（避免旧订阅清理误伤新订阅）
 static CHANNEL_CLIENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// 生成唯一 client_id：`channel-{session_id}-{n}`，n 单调递增
+///
+/// 提取为纯函数便于单测：分配逻辑被改坏（如 `fetch_add(0)` 导致所有订阅
+/// 同 ID）时测试失败（历史 bug：曾导致重订阅后输出流断、终端无回显，票据 19）
+pub fn next_client_id(session_id: &str) -> String {
+    format!(
+        "channel-{}-{}",
+        session_id,
+        CHANNEL_CLIENT_COUNTER.fetch_add(1, Ordering::SeqCst)
+    )
+}
+
 /// 订阅终端输出流（Channel 传输）：返回快照元数据 + client_id，输出帧经
 /// Channel 持续推送。会话不存在时返回 NotFound。
 ///
@@ -64,11 +76,7 @@ pub async fn subscribe_terminal_channel(
     channel: Channel<InvokeResponseBody>,
 ) -> Result<ChannelSubscribeResponse> {
     let manager = GlobalOutputManager::global();
-    let client_id = format!(
-        "channel-{}-{}",
-        session_id,
-        CHANNEL_CLIENT_COUNTER.fetch_add(1, Ordering::SeqCst)
-    );
+    let client_id = next_client_id(&session_id);
 
     // 每会话独立输出通道（容量与 WS forward 一致）
     let (output_tx, output_rx) = tokio::sync::mpsc::channel::<OutputFrame>(32768);
@@ -156,4 +164,103 @@ pub async fn terminal_channel_ack(session_id: String, acked_offset: u64) -> Resu
         .ack(&session_id, acked_offset, RendererSource::Desktop)
         .await;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// client_id 分配（票据 19 回归锁）：格式 + 单调递增唯一性
+    ///
+    /// 历史 bug：计数器被改坏（如 `fetch_add(0)`）→ 所有订阅同 ID → 旧订阅
+    /// 的 unsubscribe 误删新订阅 → 重订阅后输出流断、终端无回显。
+    #[test]
+    fn next_client_id_increments_and_formats() {
+        let a = next_client_id("sess-1");
+        let b = next_client_id("sess-1");
+        assert_eq!(a, "channel-sess-1-0", "首个 ID 应为 channel-{{session}}-0，实际: {a}");
+        assert_eq!(b, "channel-sess-1-1", "第二个 ID 应递增，实际: {b}");
+        assert_ne!(a, b, "连续分配必须唯一");
+        // 不同会话不混淆
+        let c = next_client_id("sess-2");
+        assert!(c.starts_with("channel-sess-2-"), "实际: {c}");
+        assert_ne!(c, b);
+    }
+
+    /// 会话不存在：subscribe 返回 None（命令层包装为 NotFound）
+    #[test]
+    fn subscribe_unknown_session_returns_none() {
+        let manager = GlobalOutputManager::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let (tx, _rx) = tokio::sync::mpsc::channel::<OutputFrame>(16);
+            let resp = manager
+                .subscribe("nonexistent", "channel-none-0", tx, None, None)
+                .await;
+            assert!(resp.is_none(), "不存在会话订阅必须返回 None");
+        });
+    }
+
+    /// 会话存在：subscribe 返回快照元数据（字段与 WS 订阅对齐）
+    #[test]
+    fn subscribe_existing_session_returns_snapshot() {
+        let manager = GlobalOutputManager::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            manager.register_session("sess-1").await;
+            let (tx, _rx) = tokio::sync::mpsc::channel::<OutputFrame>(16);
+            let resp = manager
+                .subscribe("sess-1", "channel-sess-1-0", tx, None, None)
+                .await
+                .expect("存在会话应返回快照");
+            assert!(resp.min_offset <= resp.snapshot_offset);
+            assert!(resp.history_bytes >= resp.min_offset);
+        });
+    }
+
+    /// ack 对不存在会话静默成功（不 panic、不报错；释放记账仅对存在会话生效）
+    #[test]
+    fn ack_unknown_session_is_silent_ok() {
+        let manager = GlobalOutputManager::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            // 不 panic 即通过（当前实现 debug 日志后忽略）
+            manager.ack("nonexistent", 42, RendererSource::Desktop).await;
+        });
+    }
+
+    /// 取消订阅后推送停止（票据 19 任务链回收）：unsubscribe 移除 subscriber 后
+    /// 不再收到输出帧
+    #[test]
+    fn unsubscribe_stops_delivery() {
+        let manager = GlobalOutputManager::new();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            manager.register_session("sess-1").await;
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<OutputFrame>(16);
+            manager
+                .subscribe("sess-1", "channel-sess-1-0", tx, None, None)
+                .await
+                .unwrap();
+            // 取消订阅
+            assert!(manager.unsubscribe("sess-1", "channel-sess-1-0").await);
+            // 排空订阅时已入队的历史帧（HistoryEnd 等属正常快照排空语义）
+            while let Ok(_) = rx.try_recv() {}
+            // 再推送输出：subscriber 已移除 → send_queue 关闭 → 通道 Disconnected
+            //（比 Empty 更强的证明：订阅链路已整体回收）
+            manager
+                .on_output(crate::session::OutputEvent {
+                    session_id: "sess-1".to_string(),
+                    data: b"hello".to_vec(),
+                    start_offset: 0,
+                    timestamp: 0,
+                    is_waiting: false,
+                })
+                .await;
+            match rx.try_recv() {
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => { /* 期望：链路已回收 */ }
+                other => panic!("unsubscribe 后通道应断开，实际: {other:?}"),
+            }
+        });
+    }
 }

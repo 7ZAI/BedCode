@@ -1879,13 +1879,15 @@ mod tests {
     /// 仅当宿主持有 `BEDCODE_PLUGIN_DEBUG=1` 时有效（此时构建链路以 debug
     /// profile 产出带 DWARF 的测试组件，WasmRuntime 也已置 WASMTIME_BACKTRACE_DETAILS
     /// 开行号解析）——断言 trap 错误串含 `file:line` 行号而非仅函数名。
-    /// 未设该开关的正常测试环境自动跳过（SKIP 输出，不失败）
+    ///
+    /// 无 `BEDCODE_PLUGIN_DEBUG` 时显式 `#[ignore]`（票据 31）：原实现是
+    /// 静默 `return` 空跑通过，回归不可见；ignore 语义下 `cargo test` 报告
+    /// ignored 计数，需要时以 `BEDCODE_PLUGIN_DEBUG=1 cargo test -- --ignored`
+    /// 显式运行，SKIP 可见且不混入通过数。
     #[test]
+    #[ignore = "requires BEDCODE_PLUGIN_DEBUG=1 (debug profile WASM + DWARF)"]
     fn test_debug_mode_trap_includes_line_info() {
-        if !plugin_debug_mode() {
-            eprintln!("SKIP: BEDCODE_PLUGIN_DEBUG 未设置，跳过行号冒烟（调试模式是手工开关）");
-            return;
-        }
+        assert!(plugin_debug_mode(), "BEDCODE_PLUGIN_DEBUG 必须设置才能运行本测试");
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
         let component = wasm_runtime
             .compile_component(&build_test_component())

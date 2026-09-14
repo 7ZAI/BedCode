@@ -207,5 +207,32 @@ mod tests {
         // 篡改签名应失败
         let bad_sig = base64::engine::general_purpose::STANDARD.encode(&raw[..63]);
         assert!(verify_biometric_signature(&spki_b64, message, &bad_sig).is_err());
+        // 错误公钥验签失败（票据 29：正确公钥以外的 key 不得通过）
+        let other_key = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
+        let other_spki = base64::engine::general_purpose::STANDARD.encode(
+            other_key.verifying_key().to_public_key_der().expect("encode other key").as_bytes(),
+        );
+        assert!(
+            verify_biometric_signature(&other_spki, message, &sig_b64).is_err(),
+            "错误公钥不得通过验签"
+        );
+    }
+
+    /// 并发消费（票据 29）：同一 nonce 并发验证仅一次成功
+    #[tokio::test]
+    async fn test_challenge_concurrent_single_consume() {
+        let manager = Arc::new(BiometricChallengeManager::new());
+        let nonce = manager.generate("127.0.0.1:1234").await;
+
+        let m1 = Arc::clone(&manager);
+        let n1 = nonce.clone();
+        let h1 = tokio::spawn(async move { m1.verify_and_consume("127.0.0.1:1234", &n1).await.is_ok() });
+        let m2 = Arc::clone(&manager);
+        let n2 = nonce.clone();
+        let h2 = tokio::spawn(async move { m2.verify_and_consume("127.0.0.1:1234", &n2).await.is_ok() });
+
+        let (r1, r2) = tokio::join!(h1, h2);
+        let ok_count = [r1.unwrap(), r2.unwrap()].iter().filter(|&&b| b).count();
+        assert_eq!(ok_count, 1, "并发消费必须恰好一次成功（单次使用语义）");
     }
 }

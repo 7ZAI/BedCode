@@ -17,6 +17,12 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// 测试专用：用已有 Connection 构造（迁移测试需先建旧表再跑生产迁移）
+    #[cfg(test)]
+    fn with_conn(conn: Connection) -> Self {
+        Self { conn }
+    }
+
     /// Initialize database schema
     pub fn init_schema(&self) -> crate::Result<()> {
         self.conn.execute_batch(include_str!("schema.sql"))?;
@@ -121,64 +127,19 @@ mod tests {
         .ok()
     }
 
-    /// 在给定 Connection 上完整跑一遍 init_schema + run_migrations 的 CHECK 迁移部分
-    /// （用 helper 避免在测试里复制生产代码全部逻辑）
-    fn init_and_migrate(conn: &Connection) -> rusqlite::Result<()> {
-        conn.execute_batch(include_str!("schema.sql"))?;
-
-        // 与 Database::run_migrations 中对 pairings 的列迁移保持一致
-        let existing_columns: Vec<String> = {
-            let mut stmt = conn.prepare("PRAGMA table_info(pairings)")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-            rows.collect::<std::result::Result<Vec<_>, _>>()?
-        };
-        for col in &["address", "session_token", "last_seen", "uid_hash"] {
-            if !existing_columns.iter().any(|c| c == col) {
-                conn.execute(&format!("ALTER TABLE pairings ADD COLUMN {col} TEXT"), [])?;
-            }
-        }
-        if !existing_columns.iter().any(|c| c == "connect_count") {
-            conn.execute("ALTER TABLE pairings ADD COLUMN connect_count INTEGER DEFAULT 1", [])?;
-        }
-
-        // 与 Database::migrate_session_configs_check_constraint 保持一致
-        let sql = session_configs_table_sql(conn);
-        if let Some(s) = sql {
-            let needs = s.contains("environment IN ('windows', 'wsl2')") && !s.contains("'linux'");
-            if needs {
-                conn.execute_batch(
-                    "BEGIN;
-                     CREATE TABLE session_configs_new (
-                         id TEXT PRIMARY KEY,
-                         name TEXT NOT NULL,
-                         environment TEXT NOT NULL CHECK(environment IN ('windows', 'wsl2', 'linux')),
-                         wsl_distro TEXT,
-                         working_dir TEXT NOT NULL,
-                         command TEXT NOT NULL,
-                         auto_start INTEGER DEFAULT 0,
-                         created_at TEXT NOT NULL,
-                         updated_at TEXT NOT NULL
-                     );
-                     INSERT INTO session_configs_new
-                         (id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at)
-                     SELECT id, name, environment, wsl_distro, working_dir, command, auto_start, created_at, updated_at
-                         FROM session_configs;
-                     DROP TABLE session_configs;
-                     ALTER TABLE session_configs_new RENAME TO session_configs;
-                     CREATE INDEX IF NOT EXISTS idx_session_configs_name ON session_configs(name);
-                     COMMIT;",
-                )?;
-            }
-        }
-        Ok(())
+    /// 打开内存库并跑生产初始化（票据 21 修复：不再复制迁移逻辑，
+    /// 直接调用 `init_schema`，使迁移被破坏时测试真实变红）
+    fn open_in_memory_and_init() -> Database {
+        let db = Database::new(Path::new(":memory:")).expect("open in-memory db");
+        db.init_schema().expect("init schema");
+        db
     }
 
     #[test]
     fn fresh_db_uses_new_check_constraint_with_linux() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_and_migrate(&conn).unwrap();
+        let db = open_in_memory_and_init();
 
-        let sql = session_configs_table_sql(&conn).expect("table should exist");
+        let sql = session_configs_table_sql(db.conn()).expect("table should exist");
         assert!(sql.contains("'linux'"), "新 schema 应允许 linux: {}", sql);
     }
 
@@ -205,9 +166,12 @@ mod tests {
         )
         .unwrap();
 
-        init_and_migrate(&conn).unwrap();
+        // 用生产迁移路径初始化（init_schema 内部跑 schema.sql + run_migrations）
+        let db = Database::with_conn(conn);
+        db.init_schema().unwrap();
+        let conn = &db.conn;
 
-        let sql = session_configs_table_sql(&conn).unwrap();
+        let sql = session_configs_table_sql(conn).unwrap();
         assert!(sql.contains("'linux'"), "迁移后应允许 linux: {}", sql);
         assert!(
             !sql.contains("environment IN ('windows', 'wsl2')"),
@@ -238,22 +202,22 @@ mod tests {
 
     #[test]
     fn migration_is_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
-        init_and_migrate(&conn).unwrap();
-        let first_sql = session_configs_table_sql(&conn).unwrap();
+        let db = open_in_memory_and_init();
+        let first_sql = session_configs_table_sql(db.conn()).unwrap();
 
         // 再跑一次迁移：应被识别为「已迁移」直接跳过
-        init_and_migrate(&conn).unwrap();
-        let second_sql = session_configs_table_sql(&conn).unwrap();
+        db.init_schema().unwrap();
+        let second_sql = session_configs_table_sql(db.conn()).unwrap();
         assert_eq!(first_sql, second_sql);
 
         // 数据仍可插入 linux
-        conn.execute(
-            "INSERT INTO session_configs (id, name, environment, working_dir, command, created_at, updated_at)
-             VALUES ('id-3', 'linux-cfg', 'linux', '/tmp', 'claude', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
-            [],
-        )
-        .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO session_configs (id, name, environment, working_dir, command, created_at, updated_at)
+                 VALUES ('id-3', 'linux-cfg', 'linux', '/tmp', 'claude', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
     }
 
     #[test]
@@ -274,13 +238,16 @@ mod tests {
             );",
         )
         .unwrap();
-        init_and_migrate(&conn).unwrap();
 
-        conn.execute(
-            "INSERT INTO session_configs (id, name, environment, working_dir, command, created_at, updated_at)
-             VALUES ('id-linux', 'n', 'linux', '/tmp', 'claude', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
-            [],
-        )
-        .expect("INSERT 'linux' should succeed after migration");
+        let db = Database::with_conn(conn);
+        db.init_schema().unwrap();
+
+        db.conn
+            .execute(
+                "INSERT INTO session_configs (id, name, environment, working_dir, command, created_at, updated_at)
+                 VALUES ('id-linux', 'n', 'linux', '/tmp', 'claude', '2024-01-01T00:00:00Z', '2024-01-01T00:00:00Z')",
+                [],
+            )
+            .expect("INSERT 'linux' should succeed after migration");
     }
 }

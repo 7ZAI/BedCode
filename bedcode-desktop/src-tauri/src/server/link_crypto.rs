@@ -1095,6 +1095,50 @@ mod tests {
         assert_ne!(a.response, other.response);
     }
 
+    /// HTTP 双方向密钥金样向量（票据 15 变异守卫）
+    ///
+    /// 固定 IKM `[7u8; 32]` + path `/api/sessions` 锁死派生输出字节：
+    /// 任何 HKDF info 常量 / salt / 参数改动（如交换 HTTP_INFO_REQUEST ↔
+    /// HTTP_INFO_RESPONSE）都会改变派生结果。roundtrip 自洽性无法捕获
+    /// 「方向语义反转」变异（request≠response 仍成立），金样是唯一守卫。
+    /// 移动端 TS 复刻（linkCrypto.ts）必须逐字节一致——协议兼容锚点。
+    #[test]
+    fn http_keys_gold_vector_locked() {
+        let ikm = [7u8; 32];
+        let keys = derive_http_traffic_keys(&ikm, "/api/sessions").unwrap();
+        // 锁死精确字节（协议兼容锚点）
+        assert_eq!(
+            hex::encode(keys.request),
+            "c2185a151191fbc451f5128a5fb7dc69bdf8f359d53d1165d03af67fd6fc8e8f"
+        );
+        assert_eq!(
+            hex::encode(keys.response),
+            "cb3ed775acff12da34c00b84919b44e76f9fd27b4248ba18768db22590d9e88e"
+        );
+    }
+
+    /// WS 方向密钥金样向量（票据 15）：锁死 c2s/s2c HKDF 派生输出
+    ///
+    /// 固定 ikm `[9u8; 64]` + salt，方向 info 常量被交换（变异）时断言失败。
+    /// 移动端 TS 复刻必须逐字节一致——协议兼容锚点。
+    #[test]
+    fn ws_session_ciphers_gold_vector_locked() {
+        use crate::utils::crypto::kdf::hkdf_sha256;
+        let ikm = [9u8; 64];
+        let salt = b"bedcode-ws-gold-vector".to_vec();
+        let c2s = hkdf_sha256(Some(&salt), &ikm, WS_INFO_CLIENT_TO_SERVER, 36).unwrap();
+        let s2c = hkdf_sha256(Some(&salt), &ikm, WS_INFO_SERVER_TO_CLIENT, 36).unwrap();
+        // 锁死精确字节；c2s ≠ s2c（方向隔离）
+        assert_eq!(
+            hex::encode(&c2s[..]),
+            "faa59b9f10b0a6f02943e76e3c894fd2a7de15882f27409e08bd9089bbe61ae40fce221d"
+        );
+        assert_eq!(
+            hex::encode(&s2c[..]),
+            "794e4ffee86bb924154f79f47cdcbdd41d723f6d6d8a473ecb0c6ca7afd0c49a004d687b"
+        );
+    }
+
     // ---------- WS 会话加密（issue 04） ----------
 
     /// 移动端 TS 侧的派生复刻：相同字节序列必须得到相同密钥（跨端兼容锚点）
@@ -1242,6 +1286,52 @@ mod tests {
         });
     }
 
+    /// WS 帧在 peer 未注册 ciphers 时的明文 fallback 分支（票据 11 盲区）：
+    /// 生产代码仅 on_inbound/on_outbound 内部触达，此前从未被测试覆盖。
+    #[test]
+    fn ws_frame_no_ciphers_fallback_branch() {
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = current_config();
+        // 确保该 peer 无 ciphers（每个测试进程独立，但防御性清理）
+        ws_remove_ciphers("192.168.1.60:5555");
+
+        // 正向：allow_plaintext_fallback=true → Continue 且数据不变
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            allow_plaintext_fallback: true,
+            ..LinkCryptoConfig::default()
+        });
+        let mut ctx = mk_ctx(TrafficChannel::WsTerminal, "192.168.1.60:5555", "text");
+        assert!(LinkEncryptionFilter::should_process(&ctx));
+        assert_eq!(LinkEncryptionFilter.on_inbound(&mut ctx), Verdict::Continue);
+        assert_eq!(ctx.data, b"payload", "明文 fallback 不得改写载荷");
+        let mut ctx2 = mk_ctx(TrafficChannel::WsEvent, "192.168.1.60:5555", "text");
+        assert_eq!(LinkEncryptionFilter.on_outbound(&mut ctx2), Verdict::Continue);
+
+        // 负向：allow_plaintext_fallback=false → Reject 且消息点名该开关
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            allow_plaintext_fallback: false,
+            ..LinkCryptoConfig::default()
+        });
+        let mut ctx3 = mk_ctx(TrafficChannel::WsTerminal, "192.168.1.60:5555", "binary");
+        let verdict = LinkEncryptionFilter.on_inbound(&mut ctx3);
+        match verdict {
+            Verdict::Reject(msg) => {
+                assert!(msg.contains("allow_plaintext_fallback"), "拒绝消息应点名开关: {msg}")
+            }
+            other => panic!("期望 Reject，实际: {other:?}"),
+        }
+        // 出站同样 fail-closed
+        let mut ctx4 = mk_ctx(TrafficChannel::WsEvent, "192.168.1.60:5555", "text");
+        assert!(matches!(
+            LinkEncryptionFilter.on_outbound(&mut ctx4),
+            Verdict::Reject(_)
+        ));
+
+        update_config(original);
+    }
+
     #[test]
     fn auth_and_health_routes_whitelisted_for_http_only() {
         let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -1311,6 +1401,45 @@ mod tests {
         assert!(!global_names.iter().any(|n| n == FILTER_NAME), "单元测试不得触碰全局链");
     }
 
+    #[test]
+    fn sync_registration_is_idempotent() {
+        // 同名节点重复注册会让链上出现重复项；swap 防护保证幂等
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = current_config();
+        // 用一个独立链替代全局链的注册目标不可行（sync_registration 固定用 global），
+        // 此处验证幂等机制本身：同一配置下重复同步不改变全局链节点数
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            ..LinkCryptoConfig::default()
+        });
+        let global = TrafficFilterChain::global();
+        let before = global.list_names().len();
+        sync_registration();
+        sync_registration();
+        sync_registration();
+        let after = global.list_names().len();
+        // 幂等：三次同步后节点数相对基线仅增加 1（首次注册），不重复累积
+        assert!(after <= before + 1, "重复 sync_registration 不得累积重复节点: {before} -> {after}");
+        sync_registration();
+        update_config(original);
+    }
+
+    #[test]
+    fn identity_corrupt_file_refuses_regeneration_and_keeps_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(IDENTITY_FILE), "{corrupt").unwrap();
+
+        let err = LinkIdentity::load_or_create(dir.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("corrupt") || msg.contains("refusing"),
+            "应明确拒绝重建而非静默换钥: {msg}"
+        );
+        // 拒绝重建后文件内容必须保持原样（未被覆盖为新身份）
+        let now = std::fs::read_to_string(dir.path().join(IDENTITY_FILE)).unwrap();
+        assert_eq!(now, "{corrupt", "拒绝路径不得改写损坏的身份文件");
+    }
+
     // ---------- HTTP 协议层（issue 02） ----------
 
     #[test]
@@ -1377,6 +1506,66 @@ mod tests {
         };
         assert!(!entry_expired(&fresh, now));
         assert!(entry_expired(&stale, now));
+    }
+
+    #[test]
+    fn request_key_cache_capacity_eviction_guard() {
+        // 容量护栏：超 HTTP_KEY_CACHE_MAX 时逐出最早项，map 保持有界
+        let keys = HttpTrafficKeys {
+            request: [1u8; 32],
+            response: [2u8; 32],
+        };
+        // 逐个写入超过上限的条目（peer 唯一、ek 唯一 → 全命中不同 key）
+        for i in 0..(HTTP_KEY_CACHE_MAX + 8) {
+            store_http_keys("cap-peer", &format!("EK{i:04}"), keys.clone());
+        }
+        let size = HTTP_KEY_CACHE.lock().unwrap().len();
+        assert!(size <= HTTP_KEY_CACHE_MAX, "容量护栏失效: {size} > {HTTP_KEY_CACHE_MAX}");
+        // 最早写入的条目应已被逐出，最新条目可命中
+        assert_eq!(take_http_keys("cap-peer", "EK0000"), None, "最早项应被逐出");
+        let last = format!("EK{:04}", HTTP_KEY_CACHE_MAX + 7);
+        assert!(take_http_keys("cap-peer", &last).is_some(), "最新条目应可命中");
+        // 只清理本测试写入的 key（全表 clear 会污染并行测试，票据 14 同类问题）
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            for i in 0..(HTTP_KEY_CACHE_MAX + 8) {
+                map.remove(&cache_key("cap-peer", &format!("EK{i:04}")));
+            }
+        }
+    }
+
+    #[test]
+    fn request_key_cache_ttl_sweep_on_store() {
+        // store 时顺带清扫过期项（插入时 retain）：先塞一条过期条目，再 store 新条目，
+        // 过期条目应被清掉而非占据容量
+        let keys = HttpTrafficKeys {
+            request: [3u8; 32],
+            response: [4u8; 32],
+        };
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            // 只移除本测试可能残留的 key，不动其它测试条目
+            map.remove(&cache_key("sweep-peer", "STALE=="));
+            map.remove(&cache_key("sweep-peer", "FRESH=="));
+            // 手工塞一条已过期条目（inserted_at 回溯超过 TTL）
+            map.insert(
+                cache_key("sweep-peer", "STALE=="),
+                CachedHttpKeys {
+                    keys: keys.clone(),
+                    inserted_at: Instant::now() - REQUEST_KEY_TTL - Duration::from_secs(1),
+                },
+            );
+        }
+        // store 新条目触发清扫
+        store_http_keys("sweep-peer", "FRESH==", keys);
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            assert!(!map.contains_key(&cache_key("sweep-peer", "STALE==")), "过期条目应在 store 时被清扫");
+            assert!(map.contains_key(&cache_key("sweep-peer", "FRESH==")), "新条目应保留");
+            // 只清理本测试写入的 key（全表 clear 会污染并行测试，票据 14 同类问题）
+            map.remove(&cache_key("sweep-peer", "STALE=="));
+            map.remove(&cache_key("sweep-peer", "FRESH=="));
+        }
     }
 
     #[test]
