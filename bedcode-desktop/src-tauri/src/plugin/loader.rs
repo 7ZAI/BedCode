@@ -7,6 +7,7 @@
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
 use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
+use crate::system::constants::plugin::PLUGIN_DOWNLOAD_TEMP_DIR;
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -57,7 +58,19 @@ impl PluginLoader {
 
             let manifest_path = path.join("plugin.json");
             if !manifest_path.exists() {
-                tracing::debug!("[PluginLoader] Skipping {:?}: no plugin.json", path);
+                // 下载临时区容器目录（user_plugins_dir/plugins/_download_tmp）不是插件
+                // 目录，静默跳过；其余无 plugin.json 的目录是孤儿残留（如历史安装遗留
+                // 的私有数据库 plugin.db），warn 提升可见性——这类目录会被安装查重误判
+                // 为已安装，卡住同 id 插件重装（install 时磁盘查重 final_dir.exists()）。
+                let temp_container = PLUGIN_DOWNLOAD_TEMP_DIR.split('/').next().unwrap_or("");
+                if path.file_name().and_then(|n| n.to_str()) == Some(temp_container) {
+                    tracing::debug!("[PluginLoader] Skipping download temp container: {:?}", path);
+                } else {
+                    tracing::warn!(
+                        dir = %path.display(),
+                        "[PluginLoader] Skipping dir without plugin.json (orphan residue; may block reinstall of same plugin id)"
+                    );
+                }
                 continue;
             }
 

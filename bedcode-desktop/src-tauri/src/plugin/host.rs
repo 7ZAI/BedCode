@@ -14,7 +14,7 @@ use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
 use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::constants::event;
-use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
+use crate::system::constants::plugin::{PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE};
 use bedcode_plugin_api::PluginState;
 use chrono::Utc;
 use serde_json::Value;
@@ -1272,6 +1272,35 @@ impl PluginHost {
         self.wasm_plugins.write().await.remove(plugin_id);
         self.plugins.write().await.remove(plugin_id);
 
+        // 顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录，如
+        // 历史安装/激活遗留的私有数据库 plugin.db）。这类目录不参与加载、UI 不可
+        // 见，卸载主流程按 extension_path 也够不着，但会卡住同 id 重装（install 的
+        // 磁盘查重会误判为已安装）。目录含 plugin.json 时视为另一来源的有效安装，
+        // 防御性保留不删；删除失败仅告警，不阻断卸载主流程。
+        let orphan_dir = self.user_plugins_dir.join(plugin_id);
+        if orphan_dir != plugin_dir
+            && orphan_dir.exists()
+            && !orphan_dir.join(PLUGIN_MANIFEST_FILE).exists()
+        {
+            match std::fs::remove_dir_all(&orphan_dir) {
+                Ok(()) => {
+                    tracing::info!(
+                        plugin_id = %plugin_id,
+                        dir = %orphan_dir.display(),
+                        "[PluginHost] Removed orphan residue dir on uninstall"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        dir = %orphan_dir.display(),
+                        "[PluginHost] Failed to remove orphan residue dir on uninstall"
+                    );
+                }
+            }
+        }
+
         // 清理插件存储（插件私有数据 + fs 授权 `fs_granted_paths` / 预授权 `preauth_paths`）
         if let Err(e) = self.storage.clear_all(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
@@ -2041,6 +2070,63 @@ mod tests {
 
         assert!(host.get_plugin(id).await.is_none());
         assert!(foreign_dir.exists());
+    }
+
+    /// 卸载时顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录，
+    /// 如历史安装/激活遗留的 plugin.db），避免残留目录卡住同 id 重装
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_removes_orphan_residue_in_user_dir() {
+        let mut host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        // 隔离：user_plugins_dir 指向本测试独有目录，避免与并行测试共享固定路径
+        host.user_plugins_dir = tmp.path().join("user-plugins");
+
+        let id = "com.test.orphan-uninstall";
+        // 已加载插件：extension_path 指向内置资源目录（与用户目录不同）
+        let builtin_dir = tmp.path().join("builtin").join(id);
+        std::fs::create_dir_all(&builtin_dir).unwrap();
+        std::fs::write(builtin_dir.join("plugin.json"), "{}").unwrap();
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = builtin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        // 用户目录存在同 id 孤儿残留（只有 plugin.db，无 plugin.json）
+        let orphan_dir = host.user_plugins_dir.join(id);
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        std::fs::write(orphan_dir.join("plugin.db"), b"orphan").unwrap();
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        // 孤儿残留目录随卸载一并清理
+        assert!(!orphan_dir.exists());
+    }
+
+    /// 用户目录下含 plugin.json 的同 id 目录视为另一来源的有效安装，卸载时防御性保留
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_keeps_valid_same_id_dir_in_user_dir() {
+        let mut host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        host.user_plugins_dir = tmp.path().join("user-plugins");
+
+        let id = "com.test.valid-same-id";
+        let builtin_dir = tmp.path().join("builtin").join(id);
+        std::fs::create_dir_all(&builtin_dir).unwrap();
+        std::fs::write(builtin_dir.join("plugin.json"), "{}").unwrap();
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = builtin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        // 用户目录存在含 plugin.json 的同 id 目录（有效安装副本）
+        let same_id_dir = host.user_plugins_dir.join(id);
+        std::fs::create_dir_all(&same_id_dir).unwrap();
+        std::fs::write(same_id_dir.join("plugin.json"), "{}").unwrap();
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        // 有效安装目录不被误删
+        assert!(same_id_dir.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]

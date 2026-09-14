@@ -131,13 +131,32 @@ impl PluginDownloader {
         // 拒绝覆盖已存在的同 id 插件：无签名链时无法区分「同作者更新」与
         // 「冒名顶替替换」，静默替换会让既有权限继续作用于被替换后的新代码，
         // 是权限门禁的旁路。升级需先卸载旧版本。
+        //
+        // 例外：目录内无 plugin.json 的「孤儿残留」不构成有效安装——这类目录
+        // 通常是历史安装/激活遗留的插件私有数据库（plugin.db），loader 因缺
+        // plugin.json 会跳过它（UI 不可见、卸载按 extension_path 也够不着），
+        // 但磁盘查重会误判为已安装，卡死同 id 重装。此处识别后清除再安装。
         let final_dir = user_plugins_dir.join(&plugin_id);
         if final_dir.exists() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Err(crate::AppError::Plugin(format!(
-                "Plugin '{}' is already installed. Uninstall it first to install a new version.",
-                plugin_id
-            )));
+            if final_dir.join(PLUGIN_MANIFEST_FILE).exists() {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin '{}' is already installed. Uninstall it first to install a new version.",
+                    plugin_id
+                )));
+            }
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                dir = %final_dir.display(),
+                "[PluginDownloader] Removing orphan residue dir (no plugin.json) before install"
+            );
+            std::fs::remove_dir_all(&final_dir).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to remove orphan dir '{}': {}",
+                    final_dir.display(),
+                    e
+                ))
+            })?;
         }
         std::fs::rename(&temp_dir, &final_dir)
             .map_err(|e| crate::AppError::Plugin(format!("Failed to move plugin into place: {}", e)))?;
@@ -267,6 +286,52 @@ mod tests {
         PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir).unwrap();
         let err = PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir).unwrap_err();
         assert!(err.to_string().contains("already installed"));
+    }
+
+    /// 孤儿残留目录（无 plugin.json，如历史安装遗留的私有数据库 plugin.db）不阻塞
+    /// 重装：安装前识别为无效安装，清除后继续安装新版本
+    #[test]
+    fn install_replaces_orphan_dir_without_plugin_json() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let id = "com.test.orphan-replace";
+
+        // 预置孤儿残留：只有私有数据库文件，无 plugin.json（loader 会跳过它）
+        let orphan_dir = plugins_dir.join(id);
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        std::fs::write(orphan_dir.join("plugin.db"), b"orphan db").unwrap();
+
+        let zip_path = build_plugin_zip(tmp.path(), id, false, false);
+        let installed = PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir).unwrap();
+        assert_eq!(installed, id);
+
+        // 孤儿残留被清除：plugin.db 消失，新插件文件就位
+        assert!(!orphan_dir.join("plugin.db").exists());
+        assert!(orphan_dir.join("plugin.json").exists());
+        assert!(orphan_dir.join("index.js").exists());
+    }
+
+    /// 有效安装目录（含 plugin.json）仍拒绝覆盖：无签名链时无法区分同作者更新与
+    /// 冒名顶替，静默替换是权限门禁旁路，升级必须先卸载
+    #[test]
+    fn install_still_rejects_valid_existing_install() {
+        let tmp = tempfile::tempdir().unwrap();
+        let plugins_dir = tmp.path().join("plugins");
+        let id = "com.test.valid-exists";
+
+        // 预置含 plugin.json 的同 id 安装目录（模拟已安装的旧版本）
+        let existing = plugins_dir.join(id);
+        std::fs::create_dir_all(&existing).unwrap();
+        std::fs::write(existing.join("plugin.json"), "{\"id\":\"com.test.valid-exists\"}").unwrap();
+        std::fs::write(existing.join("index.js"), "old").unwrap();
+
+        let zip_path = build_plugin_zip(tmp.path(), id, false, false);
+        let err = PluginDownloader::install_from_file(zip_path.to_str().unwrap(), &plugins_dir).unwrap_err();
+        assert!(err.to_string().contains("already installed"));
+
+        // 原安装目录保持原样，未被替换；临时目录已清理
+        assert_eq!(std::fs::read_to_string(existing.join("index.js")).unwrap(), "old");
+        assert!(!plugins_dir.join(PLUGIN_DOWNLOAD_TEMP_DIR).join(id).exists());
     }
 
     #[test]
