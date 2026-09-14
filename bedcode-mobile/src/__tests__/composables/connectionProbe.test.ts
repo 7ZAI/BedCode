@@ -83,13 +83,13 @@ describe('HTTP 探测 (httpProbe) 经统一代理', () => {
 
     const call = mockInvoke.mock.calls.find(([cmd]) => cmd === 'http_request')
     expect(call).toBeTruthy()
-    const args = call[1]
-    expect(args.url).toBe('http://192.168.1.100:9999/api/health')
-    expect(args.method).toBe('GET')
-    expect(args.kind).toBe('desktop')
-    expect(args.timeoutMs).toBe(3000)
-    expect(args.requestId).toBeTruthy()
-    expect(typeof args.requestId).toBe('string')
+    const args = call[1] as { request: Record<string, unknown> }
+    expect(args.request.url).toBe('http://192.168.1.100:9999/api/health')
+    expect(args.request.method).toBe('GET')
+    expect(args.request.kind).toBe('desktop')
+    expect(args.request.timeoutMs).toBe(3000)
+    expect(args.request.requestId).toBeTruthy()
+    expect(typeof args.request.requestId).toBe('string')
   })
 
   it('桌面端不可达（invoke 拒绝）时应返回 reachable=false', async () => {

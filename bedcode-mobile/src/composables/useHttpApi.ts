@@ -72,14 +72,26 @@ async function request<T = any>(
 
   try {
     logger.log('[HttpApi] Request:', options.method || 'GET', url)
+    // Rust 命令签名 http_request(request: HttpProxyRequest, ...)——tauri 按参数名
+    // 反序列化，必须嵌套 request 对象；平面传参会报 missing required key request
+    //
+    // 默认 application/json：桌面端 actix web::Json extractor 无此头即 400
+    // Content type error（HTTP 收束 Rust 代理 6d5eeb18b 时丢失的默认头）；
+    // 调用方显式指定（如 multipart / 自定义类型）时以显式值为准
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options.headers as Record<string, string>) || {}),
+    }
     const resp = await invoke<HttpProxyResponse>('http_request', {
-      requestId,
-      method: options.method || 'GET',
-      url,
-      headers: (options.headers as Record<string, string>) || {},
-      body,
-      timeoutMs: 30000,
-      kind: 'desktop',
+      request: {
+        requestId,
+        method: options.method || 'GET',
+        url,
+        headers,
+        body,
+        timeoutMs: 30000,
+        kind: 'desktop',
+      },
     })
 
     // HTTP 非 2xx：返回状态码（code=status，与迁移前语义一致）
@@ -122,13 +134,15 @@ export async function externalRequest(
 ): Promise<HttpProxyResponse> {
   const requestId = uuidv4()
   return invoke<HttpProxyResponse>('http_request', {
-    requestId,
-    method: options.method || 'GET',
-    url,
-    headers: options.headers || {},
-    body: null,
-    timeoutMs: 30000,
-    kind: 'external',
+    request: {
+      requestId,
+      method: options.method || 'GET',
+      url,
+      headers: options.headers || {},
+      body: null,
+      timeoutMs: 30000,
+      kind: 'external',
+    },
   })
 }
 
@@ -611,13 +625,15 @@ export async function httpProbe(address: string, port: number): Promise<ProbeRes
     // 声明目标（L1；probe 在 ws_connect 前，ConnectionManager.target 未设）
     await invoke('egress_declare_desktop_target', { address, port })
     const resp = await invoke<HttpProxyResponse>('http_request', {
-      requestId: uuidv4(),
-      method: 'GET',
-      url,
-      headers: {},
-      body: null,
-      timeoutMs: 3000,
-      kind: 'desktop',
+      request: {
+        requestId: uuidv4(),
+        method: 'GET',
+        url,
+        headers: {},
+        body: null,
+        timeoutMs: 3000,
+        kind: 'desktop',
+      },
     })
 
     if (resp.status !== 200) {

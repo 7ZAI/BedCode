@@ -109,6 +109,9 @@ fn client() -> &'static reqwest::Client {
             // 移动端只直连局域网桌面端/指定外网；系统代理会把局域网目标劫持走
             // （实测回环被代理返回 502，AuthHttpClient 同策略）
             .no_proxy()
+            // 跳转重校验：外网 302 → 内网/云元数据不经 L1/L2/L3（SSRF 面），
+            // 私有跳转仅放行已声明桌面端目标 / 同源 / 私网链（egress::redirect_policy）
+            .redirect(crate::egress::redirect_policy())
             .build()
             .expect("reqwest client build failed")
     })

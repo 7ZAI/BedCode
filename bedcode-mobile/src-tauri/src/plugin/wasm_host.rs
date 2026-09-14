@@ -174,6 +174,9 @@ pub async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(std::time::Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        // 跳转重校验：check_egress 只校验首跳，302 → 内网/云元数据须过同源/
+        // 桌面目标/私网链白名单（egress::redirect_policy）
+        .redirect(crate::egress::redirect_policy())
         .build()?;
     let mut req_builder = client.request(method.parse()?, url);
 
@@ -248,7 +251,10 @@ pub async fn execute_streaming_http(
     let body = request.get("body").and_then(|v| v.as_str());
     let sse_format = request.get("sseFormat").and_then(|v| v.as_str()).unwrap_or("");
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        // 跳转重校验（与 execute_http_request 同策略，见 egress::redirect_policy）
+        .redirect(crate::egress::redirect_policy())
+        .build()?;
     let mut req_builder = client.request(method.parse()?, url);
 
     if let Some(hdrs) = &headers {
