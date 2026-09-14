@@ -77,14 +77,21 @@ function flush() {
   if (entries.length === 0) return
   const batch = entries
   entries = []
-  invoke('report_frontend_log', { logs: batch }).catch(() => {
-    if (!reportedFailure) {
-      // 动态读取当前 console.warn：测试 spy 可捕获；reportedFailure 已保证只警告一次，
-      // 且警告本身经 console.warn 直调（非 logger）不会再次触发转发递归
-      reportedFailure = true
-      console.warn('[frontendLogger] 日志转发失败（仅 dev 生效，release 无此命令）')
-    }
-  })
+  // Promise.resolve 归一 + try 兜底：测试环境（vi 拆除/mock 重置）后 invoke 可能
+  // 不可用（绑定失效抛错）或返回非 Promise；定时器回调里的未捕获异常会被
+  // vitest 记为 unhandled error 污染整个测试运行的退出码，转发通道必须绝不反噬
+  try {
+    Promise.resolve(invoke('report_frontend_log', { logs: batch })).catch(() => {
+      if (!reportedFailure) {
+        // 动态读取当前 console.warn：测试 spy 可捕获；reportedFailure 已保证只警告一次，
+        // 且警告本身经 console.warn 直调（非 logger）不会再次触发转发递归
+        reportedFailure = true
+        console.warn('[frontendLogger] 日志转发失败（仅 dev 生效，release 无此命令）')
+      }
+    })
+  } catch {
+    // invoke 不可用时静默丢弃本批：转发失败不产生日志（防递归），也不外泄异常
+  }
 }
 
 /** 语义映射：loglevel 方法 → 后端级别（loglevel 的 log 即 debug 别名） */

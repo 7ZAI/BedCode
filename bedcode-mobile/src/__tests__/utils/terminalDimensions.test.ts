@@ -33,11 +33,12 @@ describe('getXtermScaledDimensions (DPR 感知)', () => {
     expect(r).toEqual({ cols: 99, rows: 25 })
   })
 
-  it('cell 高×DPR 为小数时 ceil：保证最后一行放得下', () => {
-    // cell 高 15px，DPR=1.5 → char高=ceil(22.5)=23（非 floor）
+  it('cell 高×DPR 为小数时不 ceil（原始值），最后一行仍放得下', () => {
+    // cell 高 15px，DPR=1.5 → char高=22.5（不 ceil）：rows=floor(750/22.5)=33
+    // 33×22.5=742.5 ≤ 750 物理可用高，最后一行完整不裁；ceil 反会高估每行
+    // 成本（23px）少算 1 行（32），贴底对齐时顶部露出多余空带
     const r = getXtermScaledDimensions({ ...base, cellHeightCss: 15, devicePixelRatio: 1.5 })
-    // 可用高=750，char高=ceil(22.5)=23 → rows=floor(750/23)=32
-    expect(r.rows).toBe(32)
+    expect(r.rows).toBe(33)
   })
 
   it('marginCols/marginRows 额外扣除格数', () => {

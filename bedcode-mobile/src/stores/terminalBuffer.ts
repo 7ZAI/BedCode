@@ -150,6 +150,65 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 输出活动通知时间戳 */
   const lastActivityAt = new Map<string, number>()
 
+  // ==================== 链路调试统计（终端字节对账，5s 节流） ====================
+
+  /** 会话级帧统计（非响应式，纯日志对账用，不进渲染路径） */
+  interface FrameStats {
+    /** 收到的 terminal-frame 事件数 */
+    framesReceived: number
+    /** 收流近似字节（base64 长度换算；精确口径见 bytesRendered） */
+    bytesReceivedApprox: number
+    /** 页面未挂载被丢弃的帧数（设计行为：Rust 缓存兜底，重进回补） */
+    framesNoHandler: number
+    /** 去重整帧跳过数 */
+    framesDeduped: number
+    /** 跨帧裁剪后实际交给渲染管线的字节（精确值） */
+    bytesRendered: number
+    lastLogAt: number
+    lastLogCursor: number
+  }
+
+  /** sessionId → 帧统计 */
+  const frameStats = new Map<string, FrameStats>()
+
+  /** 统计打点间隔（ms）：输出风暴期不逐帧刷日志 */
+  const FRAME_STATS_INTERVAL_MS = 5000
+
+  function statsFor(sessionId: string): FrameStats {
+    let s = frameStats.get(sessionId)
+    if (!s) {
+      s = {
+        framesReceived: 0,
+        bytesReceivedApprox: 0,
+        framesNoHandler: 0,
+        framesDeduped: 0,
+        bytesRendered: 0,
+        lastLogAt: 0,
+        lastLogCursor: -1,
+      }
+      frameStats.set(sessionId, s)
+    }
+    return s
+  }
+
+  /** 周期打点（5s 且游标有推进才打）：与 Rust terminal_link 收帧统计对账，
+   * bytesReceivedApprox ≈ bytesRendered + 去重/裁剪差值即无丢帧 */
+  function maybeLogFrameStats(sessionId: string) {
+    const s = frameStats.get(sessionId)
+    if (!s) return
+    const now = Date.now()
+    if (now - s.lastLogAt < FRAME_STATS_INTERVAL_MS) return
+    const cursor = buffers.get(sessionId)?.lastRenderedOffset ?? -1
+    if (cursor === s.lastLogCursor && s.lastLogAt !== 0) return
+    s.lastLogAt = now
+    s.lastLogCursor = cursor
+    logger.debug(
+      `[terminalBuffer] frame stats (${sessionId}): frames=${s.framesReceived} ` +
+        `bytesApprox=${s.bytesReceivedApprox} rendered=${s.bytesRendered} ` +
+        `deduped=${s.framesDeduped} noHandler=${s.framesNoHandler} cursor=${cursor}`,
+    )
+  }
+
   // ==================== 事件监听（Rust → 前端） ====================
 
   /** 惰性注册全局事件监听（terminal-frame / terminal-state） */
@@ -190,7 +249,16 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     const buffer = buffers.get(payload.session_id)
     if (!buffer || buffer.sessionStopped) return
     const handler = realtimeHandlers.get(payload.session_id)
-    if (!handler) return // 页面未开：帧只进 Rust 缓存，前端丢弃（重进时经 getHistory 回补）
+    // 链路调试对账：收流计数（base64 长度换算近似字节，无需解码）
+    const stats = statsFor(payload.session_id)
+    stats.framesReceived++
+    stats.bytesReceivedApprox += Math.floor((payload.data_base64?.length ?? 0) / 4) * 3
+    if (!handler) {
+      // 页面未开：帧只进 Rust 缓存，前端丢弃（重进时经 getHistory 回补）
+      stats.framesNoHandler++
+      maybeLogFrameStats(payload.session_id)
+      return
+    }
     const frame: OutputFrame = {
       data: base64ToBytes(payload.data_base64),
       startOffset: payload.start_offset,
@@ -264,6 +332,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     const buffer = buffers.get(payload.session_id)
     if (!buffer) return
     const phase = PHASE_MAP[payload.phase ?? ''] ?? buffer.phase
+    // 链路调试：订阅状态机迁移（低频事件，逐条可读）
+    if (phase !== buffer.phase) {
+      logger.debug(
+        `[terminalBuffer] state (${payload.session_id}): phase ${buffer.phase} -> ${phase}` +
+          `${payload.detail ? ` (${payload.detail})` : ''}`,
+      )
+    }
     buffer.phase = phase
     buffer.subscribed = phase === 'history' || phase === 'live'
     if (phase === 'history' || phase === 'live') {
@@ -336,7 +411,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (!buffer || buffer.sessionStopped) return
 
     // 去重：整帧已渲染（endOffset ≤ 游标）跳过
-    if (buffer.lastRenderedOffset !== null && frame.endOffset <= buffer.lastRenderedOffset) return
+    if (buffer.lastRenderedOffset !== null && frame.endOffset <= buffer.lastRenderedOffset) {
+      statsFor(sessionId).framesDeduped++
+      return
+    }
 
     // 缺口：帧首越过游标（Rust 缓存被淘汰/连接缺口）→ 从游标重新拼接历史补回
     if (buffer.lastRenderedOffset !== null && frame.startOffset > buffer.lastRenderedOffset) {
@@ -365,6 +443,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       data = frame.data.subarray(overlap)
     }
     buffer.lastRenderedOffset = Math.max(buffer.lastRenderedOffset ?? 0, frame.endOffset)
+
+    // 链路调试对账：裁剪后实际渲染字节 + 周期打点
+    statsFor(sessionId).bytesRendered += data.byteLength
+    maybeLogFrameStats(sessionId)
 
     // 插件 TerminalOutput 通知（仅传 session_id 语义；节流）
     const now = Date.now()
@@ -408,6 +490,8 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     }
 
     const from = buffer.lastRenderedOffset ?? 0
+    // 链路调试：拼接起点与等待相位（拼接期间实时帧将入 bufferedLive）
+    logger.debug(`[terminalBuffer] history splice start (${sessionId}): from=${from}, phase=${buffer.phase}`)
     let result
     try {
       result = await terminalGetHistory(sessionId, from)
@@ -421,6 +505,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
     // 截断：驻留历史头部被淘汰（minOffset > 游标）→ 清屏 + 提示 + 锚定重播
     if (buffer.lastRenderedOffset !== null && result.minOffset > buffer.lastRenderedOffset) {
+      // 链路调试（字节对账关键异常）：Rust 缓存/桌面端队列头部淘汰越过游标，
+      // [游标, minOffset) 字节两端都无法回补
+      logger.warn(
+        `[terminalBuffer] history truncated (${sessionId}): minOffset=${result.minOffset} > ` +
+          `cursor=${buffer.lastRenderedOffset}, clear + anchored replay`,
+      )
       handler.onClear?.()
       buffer.lastRenderedOffset = null
       buffer.headTrimmed = true
@@ -432,6 +522,13 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
     // 写入历史段（写解析完成才推进游标——写入管线确认）
     const history = base64ToBytes(result.dataBase64)
+    // 链路调试（字节对账）：历史段元数据 + 实际负载（payloadBytes 应等于
+    // snapshotOffset - max(from, minOffset)，偏差即历史供给环节丢字节）
+    logger.debug(
+      `[terminalBuffer] history fetched (${sessionId}): minOffset=${result.minOffset} ` +
+        `snapshotOffset=${result.snapshotOffset} historyBytes=${result.historyBytes} ` +
+        `payloadBytes=${history.byteLength}`,
+    )
     if (history.byteLength > 0) {
       if (handler.writeParsed) {
         try {
@@ -467,11 +564,18 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.historyPreparing = false
     // FLUSH：拼接期缓冲的实时帧按序写入（游标去重/裁剪保序）
     const live = buffer.bufferedLive
+    const flushedLiveBytes = live.reduce((sum, f) => sum + f.data.byteLength, 0)
     buffer.bufferedLive = []
     buffer.bufferedBytes = 0
     for (const frame of live) {
       deliverFrame(sessionId, frame)
     }
+    // 链路调试：拼接完成（此后实时帧直达渲染管线）；flushed 统计经
+    // deliverFrame 计入 frame stats，此处只报帧数
+    logger.debug(
+      `[terminalBuffer] history splice done (${sessionId}): cursor=${buffer.lastRenderedOffset}, ` +
+        `flushedLiveFrames=${live.length} (${flushedLiveBytes}B)`,
+    )
     handler.onReplayDone?.()
   }
 
@@ -659,6 +763,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     terminalRemove(sessionId).catch(() => {})
     buffers.delete(sessionId)
     realtimeHandlers.delete(sessionId)
+    frameStats.delete(sessionId)
     lastGapRespliceAt.delete(sessionId)
     lastActivityAt.delete(sessionId)
   }
@@ -673,6 +778,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     terminalUnsubscribeAll().catch(() => {})
     buffers.clear()
     realtimeHandlers.clear()
+    frameStats.clear()
     lastGapRespliceAt.clear()
     lastActivityAt.clear()
     if (frameUnlisten) {

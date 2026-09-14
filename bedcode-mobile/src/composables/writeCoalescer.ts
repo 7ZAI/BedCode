@@ -36,6 +36,7 @@
  * flush 内部依旧按 WRITE_YIELD_THRESHOLD 让出）。
  */
 
+import { logger } from '@/utils/frontendLogger'
 import type { Terminal } from '@xterm/xterm'
 
 /** rAF 合并开关（默认 true）：同帧多次 write 合并为一次渲染提交，消除 TUI
@@ -45,6 +46,11 @@ const ENABLE_RAF_COALESCE = true
 
 /** 单次 write 上限：超过则拆块（与桌面端一致） */
 const MAX_WRITE_CHUNK = 64 * 1024
+
+// ==================== 链路调试统计（渲染管线字节对账，2s 节流） ====================
+
+/** 统计打点间隔（ms）：输出风暴期不逐次刷日志 */
+const STATS_INTERVAL_MS = 2000
 
 /** 累积阈值（512KB）：超过立即 flush（移动端特殊处理）。抬到 512KB 的理由：
  * TUI 滚动重绘脉冲（一次逻辑屏幕更新）在 16ms 帧内可数百 KB，阈值过低会
@@ -90,6 +96,31 @@ export function createWriteCoalescer(
   // 数据，避免双写与数据滞留
   let flushing = false
 
+  // 链路调试统计（字节对账）：入队/合并 flush/兜底 flush/拆块/让出，
+  // 与 terminalBuffer bytesRendered 对账可验证渲染管线无滞留丢字节
+  let statsWrites = 0
+  let statsWriteBytes = 0
+  let statsFlushes = 0
+  let statsFlushBytes = 0
+  let statsMaxPending = 0
+  let statsImmediateFlush = 0
+  let statsFallbackFlush = 0
+  let statsSplits = 0
+  let statsYields = 0
+  let statsLastLogAt = 0
+
+  /** 周期打点（2s 节流）：渲染管线消费口径统计 */
+  function maybeLogStats() {
+    const now = Date.now()
+    if (now - statsLastLogAt < STATS_INTERVAL_MS) return
+    statsLastLogAt = now
+    logger.debug(
+      `[writeCoalescer] stats: writes=${statsWrites} writeBytes=${statsWriteBytes} ` +
+        `flushes=${statsFlushes} flushBytes=${statsFlushBytes} maxPending=${statsMaxPending} ` +
+        `immediate=${statsImmediateFlush} fallback=${statsFallbackFlush} splits=${statsSplits} yields=${statsYields}`,
+    )
+  }
+
   /** 写入单块字节（仅 rAF 合并关闭的调试直写路径使用；合并路径走 writeInChunks） */
   function writeBytes(data: Uint8Array) {
     // terminal 可能已 dispose（页面切换/会话关闭）：与合并路径 flush 的守卫一致
@@ -104,6 +135,7 @@ export function createWriteCoalescer(
    * （对齐桌面端 TerminalPreview.writeInChunks；阈值按弱 CPU 减半） */
   async function writeInChunks(buf: Uint8Array) {
     let written = 0
+    statsSplits++
     for (let i = 0; i < buf.length; i += MAX_WRITE_CHUNK) {
       // terminal 可能已 dispose（页面切换/会话关闭）：让出点期间也可能销毁
       if (!terminal.element) return
@@ -111,6 +143,7 @@ export function createWriteCoalescer(
       written += MAX_WRITE_CHUNK
       if (written >= WRITE_YIELD_THRESHOLD) {
         written = 0
+        statsYields++
         await new Promise((resolve) => setTimeout(resolve, 0))
       }
     }
@@ -159,6 +192,8 @@ export function createWriteCoalescer(
       // 直到 pending 清空（无滞留、无双写）。小数据路径全同步（flushPendingSync
       // 无 await），仅大数据分块路径在让出点 await——与测试/桌面端语义一致
       while ((combined = flushPendingSync()) !== null) {
+        statsFlushes++
+        statsFlushBytes += combined.byteLength
         if (combined.byteLength <= MAX_WRITE_CHUNK) {
           terminal.write(combined)
         } else {
@@ -183,6 +218,8 @@ export function createWriteCoalescer(
           cancelAnimationFrame(flushRaf)
           flushRaf = 0
         }
+        // rAF 暂停（后台/最小化）触发的兜底 flush：出现频次反映前台渲染状态
+        statsFallbackFlush++
         flush()
       }, FALLBACK_FLUSH_MS)
     }
@@ -190,6 +227,10 @@ export function createWriteCoalescer(
 
   function write(data: Uint8Array) {
     if (data.length === 0) return
+
+    // 链路调试对账：入队计数 + 待写积压高水位
+    statsWrites++
+    statsWriteBytes += data.byteLength
 
     if (!rafCoalesce) {
       // rAF 合并关闭（调试开关）：每个事件直接写入，不经合并管线
@@ -199,10 +240,12 @@ export function createWriteCoalescer(
 
     pending.push(data)
     totalBytes += data.byteLength
+    statsMaxPending = Math.max(statsMaxPending, totalBytes)
 
     if (totalBytes >= MAX_COALESCED_BYTES) {
       // 累积过大，立即 flush 避免 rAF 延迟影响响应（移动端特殊处理；
       // flush 内部按 WRITE_YIELD_THRESHOLD 让出，不阻塞主线程太久）
+      statsImmediateFlush++
       if (flushRaf) {
         cancelAnimationFrame(flushRaf)
         flushRaf = 0
@@ -211,6 +254,7 @@ export function createWriteCoalescer(
     } else {
       scheduleFlush()
     }
+    maybeLogStats()
   }
 
   function dispose() {
@@ -222,6 +266,13 @@ export function createWriteCoalescer(
       clearTimeout(flushTimer)
       flushTimer = null
     }
+    // 链路调试（字节对账）：生命周期终点汇总——writeBytes 与 flushBytes 差值
+    // 即 dispose 时被丢弃的未写入字节（截断清屏路径为预期行为）
+    logger.debug(
+      `[writeCoalescer] dispose: writes=${statsWrites} writeBytes=${statsWriteBytes} ` +
+        `flushes=${statsFlushes} flushBytes=${statsFlushBytes} maxPending=${statsMaxPending} ` +
+        `immediate=${statsImmediateFlush} fallback=${statsFallbackFlush} splits=${statsSplits} yields=${statsYields}`,
+    )
     pending = []
     totalBytes = 0
     // in-flight flush 的让出点醒来后由 terminal.element 守卫拦截（dispose 后

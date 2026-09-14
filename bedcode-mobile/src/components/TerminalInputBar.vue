@@ -314,10 +314,9 @@
       </div>
     </Teleport>
 
-    <!-- 快捷键条 - 聚焦时才显示最常用的快捷键和自定义命令：
-     * 失焦时整行收起，输入栏只留输入框，终端区与输入框贴合更紧
-     * （常驻显示会让输入栏始终高出一整行按钮，终端区被持续压缩） -->
-    <div v-if="isInputFocused && quickBarItems.length > 0" class="quick-bar" @mousedown.prevent>
+    <!-- 快捷键条 - 常驻显示最常用的快捷键和自定义命令：
+     * 固定显示，不随输入框焦点收起；只有快捷键面板（快捷键弹层）可手动开合 -->
+    <div v-if="quickBarItems.length > 0" class="quick-bar" @mousedown.prevent>
       <button
         v-for="item in quickBarItems"
         :key="item.type + '-' + item.key"
@@ -345,18 +344,16 @@
         </div>
       </transition>
       <div class="input-box" :class="{ 'input-box--expanded': isInputFocused }">
-        <!-- 输入框：占满整行宽度 -->
+        <!-- 输入框：占满整行宽度；显示高度只随内容换行数变化，聚焦不变高 -->
         <textarea
           ref="inputRef"
           v-model="inputText"
           class="input-field"
-          :class="{ 'input-field--expanded': isInputFocused }"
           :placeholder="placeholder"
           :disabled="disabled"
           rows="1"
           @focus="handleFocus"
           @blur="handleBlur"
-          @input="adjustTextareaHeight"
         ></textarea>
 
         <!-- 操作按钮行：输入框下方，不挤占输入宽度 -->
@@ -511,6 +508,11 @@ watch(inputText, () => {
     showShortcutsPanel.value = false
     emit('shortcutsPanelToggle', 0)
   }
+  // 高度跟随换行数。不能用 @input 事件驱动：v-model 的 input 监听器注册晚于
+  // @input（指令 created 钩子在 props 之后），事件处理器里读到的是上一次的
+  // value——换行增高永远滞后一个输入事件（连按回车时表现为不增高）。
+  // watch 在 ref 更新后触发，含软键盘输入/IME 提交/程序化填充全部路径
+  adjustTextareaHeight()
 }, { flush: 'sync' })
 
 const showCompletion = computed(() =>
@@ -751,9 +753,6 @@ function handleSubmit() {
   if (!text) return
   emit('submit', text)
   inputText.value = ''
-  if (inputRef.value) {
-    inputRef.value.style.height = 'auto'
-  }
 }
 
 function handleExecute() {
@@ -761,9 +760,6 @@ function handleExecute() {
   if (!text) return
   emit('execute', text)
   inputText.value = ''
-  if (inputRef.value) {
-    inputRef.value.style.height = 'auto'
-  }
 }
 
 // ==================== Execute Button Mode Toggle（长按切模式 / 短按触发）====================
@@ -881,42 +877,35 @@ function quickBarClass(category: string): string {
 
 function handleFocus() {
   isInputFocused.value = true
-  // 延迟调整高度，等键盘弹出后再计算
-  setTimeout(() => {
-    adjustTextareaHeight()
-  }, 300)
 }
 
 function handleBlur() {
   isInputFocused.value = false
-  // 延迟收缩，等键盘收起动画完成后再调整高度，避免跳变
-  setTimeout(() => {
-    if (!inputText.value.trim() && inputRef.value) {
-      inputRef.value.style.height = 'auto'
-    }
-  }, 300)
 }
 
+/**
+ * 输入框显示高度跟随「可视行数」（1~6 行，超出内部滚动）：
+ * 显式换行与超宽软折行都计入——先重置 height:auto 让 scrollHeight 反映
+ * 真实内容高度，再按行高换算行数（round 抵消 scrollHeight 的整数舍入，
+ * 否则 2 行内容 53px/26.46px 会被 ceil 成 3 行）。聚焦不变高；发送/清空
+ * 后回落单行。终端区随输入条变高同步收缩（flex + ResizeObserver 重新 fit）
+ */
 function adjustTextareaHeight() {
   const textarea = inputRef.value
   if (!textarea) return
-  textarea.style.height = 'auto'
   const lineHeight = parseFloat(getComputedStyle(textarea).lineHeight) || 21
-  // 聚焦时最小 3 行，失焦时最小 1 行；最大 6 行，超过后滚动
-  const minLines = isInputFocused.value ? 3 : 1
-  const maxLines = 6
-  const minHeight = lineHeight * minLines
-  const maxHeight = lineHeight * maxLines
-  const newHeight = Math.max(minHeight, Math.min(textarea.scrollHeight, maxHeight))
+  textarea.style.height = 'auto'
+  const visualLines = Math.round(textarea.scrollHeight / lineHeight)
+  const newHeight = Math.min(Math.max(visualLines, 1), 6) * lineHeight
   textarea.style.height = `${newHeight}px`
-  // 超过最大行数时滚动到底部
+  // 超过最大行数时滚动到底部（光标所在行保持可见）
   textarea.scrollTop = textarea.scrollHeight
 }
 
 // ==================== Expose（键盘收起时父组件退出编辑态） ====================
 // Android 返回键/下拉手势收起系统键盘时，WebView 的 textarea 仍保有焦点
-// （输入光标常驻、输入框保持 3 行展开、命令补全弹层不收起），由
-// TerminalView 检测到键盘偏移归零后调用 blurInput() 主动退出编辑态；
+// （输入光标常驻、命令补全弹层不收起），由 TerminalView 检测到键盘偏移
+// 归零后调用 blurInput() 主动退出编辑态；
 // isFocused() 供父组件判断输入框是否仍处于编辑态
 
 /** 判断输入框是否处于编辑态（聚焦中） */
@@ -924,7 +913,7 @@ function isFocused(): boolean {
   return isInputFocused.value
 }
 
-/** 主动 blur 输入框：光标消失、收缩回单行、命令补全弹层关闭 */
+/** 主动 blur 输入框：光标消失、命令补全弹层关闭（显示高度只随内容换行数，不受焦点影响） */
 function blurInput() {
   inputRef.value?.blur()
 }
@@ -1160,8 +1149,8 @@ onMounted(() => {
   resize: none;
   line-height: 1.5;
   min-height: 1.5rem;
-  /* 高度变化过渡：聚焦展开/失焦收缩时平滑动画 */
-  transition: min-height 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  /* 高度由 JS 按内容换行数设置（adjustTextareaHeight），仅换行/清空时变化 */
+  transition: height 0.15s ease;
   /* 6 行最大高度，超过后滚动 */
   max-height: calc(1.5em * 6);
   overflow-y: auto;
@@ -1171,11 +1160,6 @@ onMounted(() => {
 .input-field::-webkit-scrollbar {
   display: none;
   width: 0;
-}
-
-/* 聚焦时 textarea 展开到 3 行最小高度 */
-.input-field--expanded {
-  min-height: calc(1.5em * 3);
 }
 
 .input-field::placeholder {

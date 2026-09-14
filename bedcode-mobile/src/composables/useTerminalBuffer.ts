@@ -26,6 +26,13 @@ const REPLAY_IDLE_REFRESH_MS = 250
 /** sessionId → 回放静止全量重绘定时器（注销时清理，防页面卸载后僵尸刷新） */
 const replayIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// ==================== 链路调试统计（渲染背压 ack，2s 节流） ====================
+
+/** sessionId → ack 计数与上次打点时刻（非响应式，纯日志对账用） */
+const ackStats = new Map<string, { count: number; lastLogAt: number }>()
+/** ack 打点间隔（ms）：onWriteParsed 高频触发，不节流会刷屏 */
+const ACK_LOG_INTERVAL_MS = 2000
+
 /** 清理回放静止重绘定时器 */
 function clearReplayIdleTimer(sessionId: string) {
   const timer = replayIdleTimers.get(sessionId)
@@ -91,6 +98,8 @@ export function useTerminalBuffer() {
     terminal: Terminal,
     onRawOutput?: (data: Uint8Array) => void,
   ): RealtimeHandlerRegistration {
+    // 链路调试：渲染管线挂载（拼接历史 → 消费实时帧的入口）
+    logger.debug(`[useTerminalBuffer] register realtime handler (${sessionId})`)
     const writeCoalescer = createWriteCoalescer(terminal)
     // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
     // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
@@ -100,6 +109,19 @@ export function useTerminalBuffer() {
     // 超高位水 → PTY 读整体暂停 → 输出卡死（2.1.x 修复）。mock 会话/未连接时
     // store.ackRendered → socket.ackRendered 内部空转安全
     terminal.onWriteParsed(() => {
+      // 链路调试（背压对账）：onWriteParsed 触发即回发 ack——计数 + 节流打点，
+      // offset 与 Rust terminal_link ack 回发日志对照验证反馈环
+      const stats = ackStats.get(sessionId) ?? { count: 0, lastLogAt: 0 }
+      stats.count++
+      const now = Date.now()
+      if (now - stats.lastLogAt >= ACK_LOG_INTERVAL_MS) {
+        stats.lastLogAt = now
+        logger.debug(
+          `[useTerminalBuffer] render ack #${stats.count} (${sessionId}): ` +
+            `offset=${store.getBuffer(sessionId)?.lastRenderedOffset ?? '-'}`,
+        )
+      }
+      ackStats.set(sessionId, stats)
       store.ackRendered(sessionId)
     })
 
@@ -107,8 +129,10 @@ export function useTerminalBuffer() {
     // 的回调确认「已解析完成」，再让出一帧渲染才 resolve——回放节奏由本端
     // xterm 实际消费速度决定，历史回放期间渲染/触摸可插入，不再长冻结。
     // xterm 内部写队列 FIFO 保序：回放批与实时帧交错入队不破坏输出顺序
-    const writeParsed = (data: Uint8Array): Promise<void> =>
-      new Promise<void>((resolve) => {
+    const writeParsed = (data: Uint8Array): Promise<void> => {
+      // 链路调试（字节对账）：历史批写入负载（payloadBytes 对应 store 侧日志）
+      logger.debug(`[useTerminalBuffer] history batch write (${sessionId}): ${data.byteLength}B`)
+      return new Promise<void>((resolve) => {
         // terminal 可能已 dispose（页面切换/会话关闭）：与 writeCoalescer 守卫一致
         if (!terminal.element) {
           resolve()
@@ -121,6 +145,7 @@ export function useTerminalBuffer() {
         onRawOutput?.(data)
         terminal.write(data, () => resolve())
       }).then(() => yieldNextFrame())
+    }
 
     // 回放静止全量重绘兜底：历史起点若落在被 LRU 裁剪的转义序列中段，
     // 增量解析会残留脏屏（光标/属性错位）；连续静止窗口无新数据时补一次整屏
@@ -167,6 +192,8 @@ export function useTerminalBuffer() {
       },
       writeParsed,
       onClear: () => {
+        // 链路调试：清屏仅发生在截断重播路径（低频，出现即链路异常信号）
+        logger.debug(`[useTerminalBuffer] terminal clear for truncated replay (${sessionId})`)
         writeCoalescer.dispose()
         if (terminal) {
           terminal.clear()
@@ -190,6 +217,7 @@ export function useTerminalBuffer() {
    * @param sessionId - 会话 ID
    */
   function unregisterRealtimeHandler(sessionId: string) {
+    ackStats.delete(sessionId)
     clearReplayIdleTimer(sessionId)
     store.unregisterRealtimeHandler(sessionId)
   }

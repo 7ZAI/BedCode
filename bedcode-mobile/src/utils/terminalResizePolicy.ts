@@ -12,22 +12,31 @@
  * 避免无谓的 resize 事件风暴（旋转/键盘避让触发容器尺寸微调时）打乱网格。
  *
  * 因此：列方向仅当目标网格与当前网格相差 > 1 列才触发 resize（±1 以内漂移裁掉）；
- * 行方向分向处理：缩小立即生效（最后一行被裁/底部空带残留肉眼可见，不值得
- * 为防风暴而延迟，键盘避让/输入栏高度变化时终端必须紧跟容器高度），
- * 增大仍保留 ±1 钳制（防测量漂移导致无谓 resize 风暴）。
- * 代价：恰好只差 1 列或增大 1 行时不立即生效（视觉差异 <1 字符宽/行高，无感），
- * 继续同向变化跨过 2 列/行差时正常触发。
+ * 行方向任何真实变化都立即生效（缩小/增大同权）。
+ *
+ * 为什么行方向不再钳制（包括此前「增大 ±1 钳制」的取舍修正）：
+ * - 行缩小不钳制是既有语义（最后一行被裁/底部空带肉眼可见）；
+ * - 行增大同样不再钳制：终端网格贴底对齐后（.xterm-container .xterm bottom:0），
+ *   网格小于容器的缺额全部暴露在顶部——标题栏与首行文字之间出现空带。字体度量
+ *   就绪晚于首次 fit（charMeasure 初始估值偏大 → 行数偏少），若行增大被 ±1 钳制
+ *   挡住，网格会永久卡在比容器少 1~2 行的状态，且容器尺寸不变时 ResizeObserver
+ *   不会再触发重 fit，空带无法自愈（真机实测 40px ≈ 2.8 行空带）。
+ * - 风暴风险可控：行变化由 ResizeObserver 的真实容器高度变化驱动（键盘避让走
+ *   transform 不改变容器高度），±1 行的测量抖动几乎不会发生；防抖器对等值喂入
+ *   也直接忽略。
  */
 
-/** 网格偏差在此阈值以内视为测量漂移，不触发 resize（列方向；行方向缩小豁免） */
+/** 网格偏差在此阈值以内视为测量漂移，不触发 resize（仅列方向） */
 export const RESIZE_GRID_TOLERANCE = 1
 
 /**
  * 判定目标网格是否值得触发 resize。
- * 列方向：偏差 > 1 才触发（防 ±1 测量漂移）。
- * 行方向：缩小（目标行数更少）时任何变化都触发——终端屏幕高度 = rows × cellHeight，
- * 容器缩小而网格不缩会裁掉最后一行/在底部留下空带；增大仍保留 ±1 钳制防风暴。
- * @returns true = 真实尺寸变化，应 resize；false = 测量漂移/钳制内，保持当前网格
+ * 列方向：偏差 > 1 才触发（防 ±1 测量漂移，DPR 口径与当前网格存在 ±1~2 列
+ * 系统性偏差，每次精确比较都 resize 会在刷新时重建字符图集）。
+ * 行方向：任何真实变化都立即触发（双向同权）——终端高度 = rows × cellHeight，
+ * 网格与容器高度不一致时，贴底对齐会把缺额暴露在顶部（行偏少 → 顶部空带）或
+ * 裁掉最后一行（行偏多），都不值得为防风暴而延迟。
+ * @returns true = 真实尺寸变化，应 resize；false = 列测量漂移，保持当前网格
  */
 export function shouldApplyGridResize(
   currentCols: number,
@@ -37,10 +46,8 @@ export function shouldApplyGridResize(
 ): boolean {
   const colDiff = Math.abs(targetCols - currentCols)
   if (colDiff > RESIZE_GRID_TOLERANCE) return true
-  // 高度缩小：真实缩小立即生效（不再受 ±1 钳制延迟）
-  if (targetRows < currentRows) return targetRows !== currentRows
-  // 高度增大：保留 ±1 钳制（防测量漂移导致 resize 风暴）
-  return Math.abs(targetRows - currentRows) > RESIZE_GRID_TOLERANCE
+  // 行方向：任何真实变化立即生效（不再区分缩小/增大，取消 ±1 行增大钳制）
+  return targetRows !== currentRows
 }
 
 /**

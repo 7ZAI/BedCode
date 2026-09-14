@@ -48,7 +48,7 @@ export default {
       fontLarge: 'Large',
       fontXLarge: 'Extra Large',
       maxOpenTerminals: 'Max Open Terminals',
-      maxOpenTerminalsDesc: 'Terminal sessions kept open at the same time (1-20)',
+      maxOpenTerminalsDesc: 'Max concurrently running terminals; excess sessions are dropped when syncing',
       generalSection: 'General',
       displaySection: 'Display',
       terminalSection: 'Terminal',

@@ -789,3 +789,22 @@ html:not(.dark)[data-palette='violet'] .mobile-ui {
   --mobile-accent-secondary: rgba(109, 79, 198, 0.2);
   --mobile-text-on-accent: #fcfbfe;
 }
+
+/* ==================== 色板选择器色块（设置页「主色色板」展示用） ====================
+   default 跟随当前主题默认主色（深色 = 象牙白 / 浅色 = 近黑），
+   其余与上方同名 palette 主色同源（改色需双端同改）。 */
+:root {
+  --mobile-palette-swatch-default: #ECE8DC;
+  --mobile-palette-swatch-forest: #86c49b;
+  --mobile-palette-swatch-ocean: #5fd0e8;
+  --mobile-palette-swatch-sunset: #f5a383;
+  --mobile-palette-swatch-violet: #b9a6f7;
+}
+/* 浅色模式下色块使用浅色 palette 主色（与上方 light 变体同源） */
+html:not(.dark) .mobile-ui {
+  --mobile-palette-swatch-default: #1D1A14;
+  --mobile-palette-swatch-forest: #3e6b4f;
+  --mobile-palette-swatch-ocean: #0e7490;
+  --mobile-palette-swatch-sunset: #d9532a;
+  --mobile-palette-swatch-violet: #6d4fc6;
+}
