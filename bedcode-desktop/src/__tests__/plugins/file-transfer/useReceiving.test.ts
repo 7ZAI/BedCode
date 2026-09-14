@@ -25,6 +25,8 @@ function makeContext() {
   const calls: Array<{ id: string; args: any }> = []
   const handlers = new Map<string, EventHandler[]>()
   const responders = new Map<string, (args: any) => unknown>()
+  /** 已弹出的宿主全局弹窗（清空历史二次确认用例驱动用） */
+  const dialogs: Array<{ options: any; closed: boolean }> = []
 
   const context = {
     commands: {
@@ -54,6 +56,21 @@ function makeContext() {
     i18n: {
       t: (key: string) => key,
     },
+    // 宿主全局弹窗：记录 options 供用例点击动作（清空历史的二次确认）
+    ui: {
+      showDialog(options: any) {
+        const entry = { options, closed: false }
+        dialogs.push(entry)
+        return {
+          close: () => {
+            entry.closed = true
+          },
+          update: (next: any) => {
+            entry.options = { ...entry.options, ...next }
+          },
+        }
+      },
+    },
   } as unknown as PluginContext
 
   function emit(event: string, payload: unknown): void {
@@ -70,7 +87,22 @@ function makeContext() {
     return handlers.get(event)?.length ?? 0
   }
 
-  return { context, calls, emit, onCommand, listenerCount }
+  return { context, calls, emit, onCommand, listenerCount, dialogs }
+}
+
+/**
+ * 驱动清空历史确认弹窗：点击指定动作（默认「清空」）。
+ * i18n 桩返回 key，故按 key 定位动作按钮。
+ */
+function clickClearDialogAction(
+  env: ReturnType<typeof makeContext>,
+  actionKey = 'transfer.history.clear',
+): void {
+  const dialog = env.dialogs.at(-1)
+  expect(dialog, 'clear-history must open a confirm dialog').toBeTruthy()
+  const action = dialog!.options.actions.find((a: any) => a.label === actionKey)
+  expect(action, `confirm action ${actionKey} must exist`).toBeTruthy()
+  action.onClick()
 }
 
 /** 自持存储条目 wire 形状工厂（引擎 PeerTransferDto camelCase） */
@@ -139,6 +171,24 @@ describe('useReceiving orchestration', () => {
     expect(rec.history.value[0]).toMatchObject({ id: 'h-1', fileName: 'a.pdf' })
   })
 
+  it('receiving snapshot carries rate and paused status for the queue card', () => {
+    // 接收（下载）卡需要速率与暂停态：rateBps 不映射则卡上无速度可显示，
+    // paused 不直传则暂停任务卡无法呈现「继续」
+    const rec = useReceiving(env.context)
+    rec.start()
+
+    env.emit('plugin:file-transfer:receiving-changed', [
+      makeEntry({ batchId: 'r-2', status: 'paused', rateBps: 4096, transferredBytes: 256 }),
+    ])
+
+    expect(rec.receiving.value[0]).toMatchObject({
+      sessionId: 'r-2',
+      state: 'paused',
+      rateBps: 4096,
+      offset: 256,
+    })
+  })
+
   it('snapshot events replace the three lists wholesale', () => {
     const rec = useReceiving(env.context)
     rec.start()
@@ -199,12 +249,77 @@ describe('useReceiving orchestration', () => {
     await rec.approveBatch('pb-1')
     await rec.rejectBatch('pb-1')
     await rec.cancelReceiving('r-1')
-    await rec.clearHistory()
+    const clearing = rec.clearHistory()
+    clickClearDialogAction(env)
+    await clearing
 
     expect(env.calls).toContainEqual({ id: 'file-transfer.approve-batch', args: { batchId: 'pb-1' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.reject-batch', args: { batchId: 'pb-1' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.cancel-receiving', args: { sessionId: 'r-1' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.clear-history', args: {} })
+  })
+
+  it('clear-history re-pulls lists after the command so the panel cannot stay stale', async () => {
+    env.onCommand('file-transfer.clear-history', () => ({ cleared: 3 }))
+    env.onCommand('file-transfer.list-history', () => [])
+    const rec = useReceiving(env.context)
+    await rec.refresh()
+    const before = env.calls.length
+
+    const clearing = rec.clearHistory()
+    clickClearDialogAction(env)
+    await clearing
+
+    const after = env.calls.slice(before).map((c) => c.id)
+    // 清空命令之后必须重拉三列表（历史为空 → UI 立刻反映插件存储真源）
+    expect(after[0]).toBe('file-transfer.clear-history')
+    expect(after).toEqual(
+      expect.arrayContaining([
+        'file-transfer.list-batches',
+        'file-transfer.list-receiving',
+        'file-transfer.list-history',
+      ]),
+    )
+    expect(rec.history.value).toEqual([])
+  })
+
+  it('clear-history rejects and keeps local history when the command fails', async () => {
+    env.onCommand('file-transfer.list-history', () => [
+      makeEntry({ batchId: 'h-1', status: 'completed' }),
+    ])
+    const rec = useReceiving(env.context)
+    await rec.refresh()
+    expect(rec.history.value).toHaveLength(1)
+
+    env.onCommand('file-transfer.clear-history', () => {
+      throw new Error('Plugin com.bedcode.file-transfer is not activated')
+    })
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const clearing = rec.clearHistory()
+    clickClearDialogAction(env)
+    await expect(clearing).rejects.toThrow('is not activated')
+
+    // 失败不得伪装成成功：本地历史保持不变，且原因经 console.error 留痕
+    expect(spy).toHaveBeenCalled()
+    expect(rec.history.value).toHaveLength(1)
+    spy.mockRestore()
+  })
+
+  it('clear-history does nothing when the confirm dialog is cancelled', async () => {
+    env.onCommand('file-transfer.list-history', () => [
+      makeEntry({ batchId: 'h-1', status: 'completed' }),
+    ])
+    const rec = useReceiving(env.context)
+    await rec.refresh()
+
+    const clearing = rec.clearHistory()
+    clickClearDialogAction(env, 'transfer.task.cancel')
+    await clearing
+
+    // 反例：未确认不得下发破坏性命令，历史保持不变
+    expect(env.calls.some((c) => c.id === 'file-transfer.clear-history')).toBe(false)
+    expect(rec.history.value).toHaveLength(1)
   })
 
   it('batch-mode toast appears immediately and auto-dismisses after 5s', () => {
