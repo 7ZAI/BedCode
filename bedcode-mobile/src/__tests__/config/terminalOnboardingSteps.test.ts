@@ -21,23 +21,33 @@ function resolve(catalog: Record<string, unknown>, key: string): unknown {
 }
 
 describe('terminal onboarding steps i18n completeness', () => {
-  it('every step exposes a non-empty i18n key set', () => {
+  it('every step exposes non-empty required keys（targetSelector/titleKey/descKey）', () => {
     expect(TERMINAL_ONBOARDING_STEPS.length).toBeGreaterThanOrEqual(9)
     for (const step of TERMINAL_ONBOARDING_STEPS) {
-      expect(step.targetSelector).toBeTruthy()
-      expect(step.titleKey).toBeTruthy()
-      expect(step.descKey).toBeTruthy()
+      // 必填字段：非空字符串（toThrow 于空/缺 key 的步骤）
+      expect(step.targetSelector, `${step.titleKey} targetSelector`).toBeTruthy()
+      expect(step.titleKey, `titleKey`).toBeTruthy()
+      expect(step.descKey, `descKey`).toBeTruthy()
+      // 可选 tryHintKey：一旦声明必须是非空字符串（不允许空串占位）
+      if (step.tryHintKey !== undefined) {
+        expect(step.tryHintKey.length, `${step.titleKey} tryHintKey non-empty`).toBeGreaterThan(0)
+      }
     }
   })
 
   for (const [locale, catalog] of Object.entries(catalogs)) {
     it(`resolves all step keys in ${locale} under mobile.terminal`, () => {
       for (const step of TERMINAL_ONBOARDING_STEPS) {
-        for (const key of [step.titleKey, step.descKey, step.tryHintKey]) {
-          if (!key) continue
+        const keys = [step.titleKey, step.descKey]
+        // tryHintKey 可选：声明了才要求 i18n 可解析（不静默放行缺失 key）
+        if (step.tryHintKey) keys.push(step.tryHintKey)
+        for (const key of keys) {
           const value = resolve(catalog, `mobile.terminal.${key}`)
-          expect({ key, value: typeof value === 'string' ? value : undefined }, `${locale}: ${key}`).toBeDefined()
-          expect(typeof value === 'string' && value.length > 0, `${locale}: ${key} non-empty`).toBe(true)
+          expect(value, `${locale}: mobile.terminal.${key} 缺失`).toBeDefined()
+          expect(
+            typeof value === 'string' && value.length > 0,
+            `${locale}: mobile.terminal.${key} 非空`,
+          ).toBe(true)
         }
       }
     })

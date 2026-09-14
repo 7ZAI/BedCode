@@ -1418,4 +1418,205 @@ mod tests {
             "AuthSuccess 不应改变已激活插件状态（仅回调）"
         );
     }
+
+    // ==================== 审计 P0：init 失败 / 权限闸门 / uninstall 副作用 ====================
+
+    /// 构造非信任源（RemoteDownload）插件记录：approval 闸门对这类插件生效
+    async fn seed_user_plugin(
+        manager: &PluginManager,
+        pid: &str,
+        ext_dir: &std::path::Path,
+        permissions: Vec<String>,
+        plugin_type: bedcode_plugin_api_mobile::types::PluginType,
+    ) {
+        let manifest = bedcode_plugin_api_mobile::types::PluginManifest {
+            id: pid.to_string(),
+            name: pid.to_string(),
+            version: "0.1.0".to_string(),
+            description: String::new(),
+            author: String::new(),
+            main: String::new(),
+            plugin_type,
+            permissions,
+            contributes: bedcode_plugin_api_mobile::types::PluginContributes {
+                lifecycle: None,
+                ..Default::default()
+            },
+            icon: None,
+            wasm_hash: String::new(),
+            rust_library: String::new(),
+            preauth_dirs: vec![],
+            preauth_urls: vec![],
+        };
+        let mut plugins = manager.plugins.write().await;
+        plugins.insert(
+            pid.to_string(),
+            LoadedPlugin {
+                manifest,
+                state: PluginState::Loaded,
+                granted_permissions: HashSet::new(),
+                source: PluginSource::RemoteDownload,
+                extension_path: ext_dir.to_string_lossy().to_string(),
+            },
+        );
+    }
+
+    #[tokio::test]
+    async fn test_init_wasm_runtime_without_app_handle_errors() {
+        // app_handle=None 时公共入口（读 AOT cache 目录）必须快速失败，
+        // 而不是静默继续（变异：删除 ok_or_else 守卫 → 本测试失败）
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = StdArc::new(SettingsManager::new(&tmp.path().to_path_buf()).expect("settings"));
+        let plugin_db = StdArc::new(std::sync::Mutex::new(
+            rusqlite::Connection::open_in_memory().expect("in-memory sqlite"),
+        ));
+        let manager = PluginManager::new(
+            &tmp.path().to_path_buf(),
+            settings,
+            plugin_db,
+            None,
+        );
+        let err = manager
+            .init_wasm_runtime()
+            .await
+            .expect_err("app_handle=None 必须 Err");
+        assert!(
+            err.to_string().contains("app_handle missing"),
+            "err: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_activate_user_plugin_without_approval_rejected() {
+        // 权限闸门：未人工批准的 RemoteDownload 插件不得激活（防越权）
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-gate";
+        // 真实插件目录：verify_approval 需要 compute_dir_hash
+        let ext_dir = manager.plugins_dir().join(pid);
+        std::fs::create_dir_all(&ext_dir).expect("create plugin dir");
+        std::fs::write(ext_dir.join("plugin.json"), r#"{"id":"x"}"#).expect("write manifest");
+
+        seed_user_plugin(
+            &manager,
+            pid,
+            &ext_dir,
+            vec![],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+
+        let err = manager
+            .activate(pid)
+            .await
+            .expect_err("未批准必须拒绝激活");
+        assert!(
+            err.to_string().contains("requires user approval"),
+            "err: {err}"
+        );
+        let info = manager.get_info(pid).await.expect("info after gate reject");
+        assert_eq!(info.state, PluginState::NeedsApproval);
+    }
+
+    #[tokio::test]
+    async fn test_activate_approved_plugin_grants_effective_permissions() {
+        // 闸门正例：批准 ∩ manifest 请求 = 生效权限（storage 恒授予）
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-approve";
+        let ext_dir = manager.plugins_dir().join(pid);
+        std::fs::create_dir_all(&ext_dir).expect("create plugin dir");
+        std::fs::write(ext_dir.join("plugin.json"), r#"{"id":"x"}"#).expect("write manifest");
+        let hash = crate::plugin::approval::compute_dir_hash(&ext_dir).expect("dir hash");
+
+        // 用户批准 storage + session:read；manifest 额外请求 terminal:input（未批准）
+        manager
+            .approvals
+            .approve(
+                pid,
+                &["storage".to_string(), "session:read".to_string()],
+                &hash,
+                "0.1.0",
+            )
+            .await
+            .expect("approve");
+        seed_user_plugin(
+            &manager,
+            pid,
+            &ext_dir,
+            vec![
+                "storage".to_string(),
+                "session:read".to_string(),
+                "terminal:input".to_string(),
+            ],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+
+        manager.activate(pid).await.expect("approved 应激活成功");
+        let info = manager.get_info(pid).await.expect("info");
+        assert_eq!(info.state, PluginState::Activated);
+        let granted = manager
+            .plugins
+            .read()
+            .await
+            .get(pid)
+            .expect("plugin record")
+            .granted_permissions
+            .clone();
+        assert!(granted.contains("storage"), "storage 恒授予");
+        assert!(granted.contains("session:read"), "批准权限应生效");
+        assert!(
+            !granted.contains("terminal:input"),
+            "未批准权限不得生效（生效 = 批准 ∩ 请求）"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_uninstall_builtin_rejected() {
+        // 内置插件（ApkAsset）不可卸载：拒绝且记录保留
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-builtin";
+        seed_plugin(&manager, pid, PluginState::Activated).await;
+
+        let err = manager
+            .uninstall(pid)
+            .await
+            .expect_err("内置插件不可卸载");
+        assert!(
+            err.to_string().contains("cannot be uninstalled"),
+            "err: {err}"
+        );
+        assert!(manager.get_info(pid).await.is_some(), "内置插件记录保留");
+    }
+
+    #[tokio::test]
+    async fn test_uninstall_removes_records_and_dir() {
+        // 非内置插件卸载副作用：审批撤销 + 记录清除 + 插件目录删除
+        let (manager, _tmp) = setup_manager().await;
+        let pid = "com.bedcode.test.mgr-uninstall";
+        let ext_dir = manager.plugins_dir().join(pid);
+        std::fs::create_dir_all(&ext_dir).expect("create plugin dir");
+        std::fs::write(ext_dir.join("plugin.json"), r#"{"id":"x"}"#).expect("write manifest");
+        let hash = crate::plugin::approval::compute_dir_hash(&ext_dir).expect("dir hash");
+        manager
+            .approvals
+            .approve(pid, &[], &hash, "0.1.0")
+            .await
+            .expect("approve");
+        seed_user_plugin(
+            &manager,
+            pid,
+            &ext_dir,
+            vec![],
+            bedcode_plugin_api_mobile::types::PluginType::TsOnly,
+        )
+        .await;
+
+        manager.uninstall(pid).await.expect("uninstall");
+        assert!(manager.get_info(pid).await.is_none(), "插件记录已清除");
+        assert!(
+            manager.approvals.get(pid).await.expect("get approval").is_none(),
+            "审批记录已撤销"
+        );
+        assert!(!ext_dir.exists(), "插件目录已删除");
+    }
 }

@@ -276,7 +276,6 @@ async fn jwt_injection_and_auth_whitelist() {
     )
     .await
     .expect("desktop session request should pass");
-    eprintln!("DEBUG jwt-1: status={} body={}", resp.status, resp.body_text);
     assert_eq!(resp.status, 200);
     let cap = mock.capture("/api/sessions");
     assert_eq!(cap.authorization.as_deref(), Some("Bearer test-jwt-token"));

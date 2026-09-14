@@ -63,14 +63,16 @@ fn extract_table_names(sql: &str) -> Vec<String> {
     let mut tables = Vec::new();
 
     let patterns = [
-        r#"(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bINSERT\s+INTO\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bUPDATE\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bDELETE\s+FROM\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bFROM\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bJOIN\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bALTER\s+TABLE\s+[`"\[]?(\w+)[`"\]]?"#,
-        r#"(?i)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"\[]?(\w+)[`"\]]?"#,
+        // 标识符字符类排除引号/空白/分隔符（, ; ( ) [ ]），
+        // 支持 SQLite 带引号标识符中的连字符（如 `my-table`）——原 \w+ 会把 `my-table` 截断成 `my`
+        r#"(?i)\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bINSERT\s+INTO\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bUPDATE\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bDELETE\s+FROM\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bFROM\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bJOIN\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bALTER\s+TABLE\s+[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
+        r#"(?i)\bDROP\s+TABLE\s+(?:IF\s+EXISTS\s+)?[`"\[]?([^`\s"'(),;\[\]]+)[`"\]]?"#,
     ];
 
     for pattern in &patterns {
@@ -494,9 +496,28 @@ mod tests {
     }
 
     #[test]
-    fn test_sanitize_plugin_id() {
-        let sanitized = "com.example.my-plugin".replace('.', "_").replace('-', "_");
-        assert_eq!(sanitized, "com_example_my_plugin");
+    fn test_validate_sql_table_prefix_sanitizes_plugin_id() {
+        // 插件 id 中的 `.` 与 `-` 必须全部替换为 `_`，前缀按 plugin_<sanitized>_ 校验。
+        // 本测试引用真实实现（validate_sql_table_prefix）：若消毒逻辑遗漏任一字符，
+        // 合法表名会因前缀不符而失败（变异可杀，不复制实现逻辑到预期）。
+        let plugin_id = "com.example.my-plugin";
+        let ok = validate_sql_table_prefix(
+            plugin_id,
+            "INSERT INTO plugin_com_example_my_plugin_data (id) VALUES (1)",
+        );
+        assert!(ok.is_ok(), "消毒后前缀应放行合法表名");
+
+        // 未消毒的表名（保留 . 与 -）必须拒绝，且错误消息携带消毒后前缀
+        let err = validate_sql_table_prefix(
+            plugin_id,
+            "INSERT INTO plugin_com.example.my-plugin_data (id) VALUES (1)",
+        );
+        assert!(err.is_err(), "保留原字符的表名必须拒绝");
+        let msg = err.unwrap_err().to_string();
+        assert!(
+            msg.contains("plugin_com_example_my_plugin_"),
+            "错误消息应含消毒后前缀, got: {msg}"
+        );
     }
 
     #[test]
@@ -556,7 +577,32 @@ mod tests {
 
     #[test]
     fn test_extract_table_names_quoted() {
+        // 带引号标识符允许连字符：`my-table` 必须整体提取（原 \w+ 截断为 "my" 是 bug）
         let tables = extract_table_names("INSERT INTO `my-table` (id) VALUES (1)");
-        assert!(tables.contains(&"my".to_string()));
+        assert!(tables.contains(&"my-table".to_string()));
+        assert!(!tables.contains(&"my".to_string()));
+
+        // 双引号 / 方括号引号形式同样支持连字符
+        let double_quoted = extract_table_names("INSERT INTO \"user-data\" (id) VALUES (1)");
+        assert!(double_quoted.contains(&"user-data".to_string()));
+        let bracket = extract_table_names("INSERT INTO [my-table] (id) VALUES (1)");
+        assert!(bracket.contains(&"my-table".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_names_dml_ddl_keywords() {
+        // UPDATE / DELETE / ALTER / DROP 关键字独立覆盖（审计 P1）
+        assert!(extract_table_names("UPDATE plugin_x SET a = 1 WHERE id = 2").contains(&"plugin_x".to_string()));
+        assert!(extract_table_names("DELETE FROM plugin_x WHERE id = 1").contains(&"plugin_x".to_string()));
+        assert!(extract_table_names("ALTER TABLE plugin_x ADD COLUMN c TEXT").contains(&"plugin_x".to_string()));
+        assert!(extract_table_names("DROP TABLE IF EXISTS plugin_x").contains(&"plugin_x".to_string()));
+    }
+
+    #[test]
+    fn test_extract_table_names_comma_separated_stops_at_delimiter() {
+        // 逗号分隔的多表 FROM 只取关键字后第一个标识符（分隔符不得吞入表名）
+        let tables = extract_table_names("SELECT * FROM plugin_a, plugin_b WHERE 1");
+        assert!(tables.contains(&"plugin_a".to_string()));
+        assert!(!tables.contains(&"plugin_a,".to_string()));
     }
 }

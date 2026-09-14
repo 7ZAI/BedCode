@@ -141,8 +141,16 @@ describe('usePeerDevices orchestration (self-built cache)', () => {
     expect(b?.fileTransfer).toBe(false)
     // found 盖章后 restored 清除，recent 不再标注
     expect(b?.recent).toBe(false)
-    // 快照落盘被 debounce 调度（含两台设备）
-    await new Promise((r) => setTimeout(r, 2100))
+    // 快照落盘被 debounce 调度（含两台设备）。切换到 fake timers 推进 2s 窗口：
+    // 切换前真实时钟下已排队的旧定时器无法被 fake 接管，故再触发一次 mdns-found
+    // 让 debounce 定时器在 fake 时钟下重建，随后推进时钟触发落盘
+    vi.useFakeTimers()
+    try {
+      env.emit('plugin:file-transfer:mdns-found', makeFound(NODE_A, '设备-a'))
+      await vi.advanceTimersByTimeAsync(2100)
+    } finally {
+      vi.useRealTimers()
+    }
     expect(env.calls.some((c) => c.id === 'file-transfer.save-device-snapshot')).toBe(true)
   })
 

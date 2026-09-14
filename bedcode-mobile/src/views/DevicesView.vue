@@ -426,6 +426,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
 import { logger } from '@/utils/frontendLogger'
+import { classifyConnectionError } from '@/utils/connectionError'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
 import { useMobileSettings } from '@/composables/useMobileSettings'
@@ -785,13 +786,14 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     connectionError.value = String(error)
     logger.error('[DevicesView] startConnection failed:', error)
 
-    // 显示友好的错误提示
+    // 显示友好的错误提示（分类契约见 utils/connectionError.ts）
     const errorMsg = String(error)
-    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+    const errKind = classifyConnectionError(errorMsg)
+    if (errKind === 'timeout') {
       toast.error(t('mobile.connection.timeoutToast'))
-    } else if (errorMsg.includes('refused') || errorMsg.includes('rejected')) {
+    } else if (errKind === 'refused') {
       toast.error(t('mobile.connection.refusedToast'))
-    } else if (errorMsg.includes('unreachable') || errorMsg.includes('network')) {
+    } else if (errKind === 'unreachable') {
       toast.error(t('mobile.connection.unreachableToast'))
     } else {
       toast.error(t('mobile.connection.connectFailedToast', { error: errorMsg }))
@@ -856,11 +858,12 @@ async function connectFromScanResult() {
     logger.error('[DevicesView] QR connect failed:', error)
 
     const errorMsg = String(error)
-    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+    const errKind = classifyConnectionError(errorMsg)
+    if (errKind === 'timeout') {
       toast.error(t('mobile.connection.timeoutToast'))
-    } else if (errorMsg.includes('refused') || errorMsg.includes('rejected')) {
+    } else if (errKind === 'refused') {
       toast.error(t('mobile.connection.refusedToast'))
-    } else if (errorMsg.includes('unreachable') || errorMsg.includes('network')) {
+    } else if (errKind === 'unreachable') {
       toast.error(t('mobile.connection.unreachableToast'))
     } else {
       toast.error(errorMsg)
