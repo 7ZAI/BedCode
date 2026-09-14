@@ -1,0 +1,245 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "pi-subagents 架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/nicobailon/pi-subagents",
+      "revision": "6d371748ce9284896d0a72a6be6cd280b357e076"
+    },
+    "views": [
+      {
+        "id": "main-path",
+        "label": "主执行路径",
+        "focus": ["subagent_tool", "launch_planner", "foreground_runner", "observability"],
+        "note": "父会话调用 subagent 工具，经启动契约规划后在前台执行器内启动子会话，结果流式渲染。"
+      },
+      {
+        "id": "script-orchestration",
+        "label": "脚本编排",
+        "focus": ["subagent_tool", "workflow_runtime", "launch_planner", "detached_runner"],
+        "note": "workflowScript 在 Worker 线程沙箱中解析，经 runs.run / runs.all 分派到子会话。"
+      },
+      {
+        "id": "coordination",
+        "label": "协调与回传",
+        "focus": ["foreground_runner", "detached_runner", "intercom_channel", "wait_convergence", "parent_session"],
+        "note": "子会话通过协调通道向父会话发送 steering、supervisor 提问与完成通知。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "parent_session",
+      "type": "external",
+      "label": "Pi 父会话",
+      "sublabel": "用户回合 + TUI",
+      "tag": "宿主",
+      "pos": [40, 300],
+      "size": [140, 64]
+    },
+    {
+      "id": "subagent_tool",
+      "type": "backend",
+      "label": "subagent 工具",
+      "sublabel": "参数校验 + action 路由",
+      "tag": "入口",
+      "pos": [235, 300],
+      "size": [155, 64],
+      "sources": [
+        { "path": "src/extension/index.ts", "line": 762, "label": "registerTool" }
+      ]
+    },
+    {
+      "id": "agent_registry",
+      "type": "backend",
+      "label": "Agent 注册表",
+      "sublabel": "builtin + 自定义 + scope",
+      "tag": "发现",
+      "pos": [455, 100],
+      "size": [160, 64],
+      "sources": [
+        { "path": "src/agents/agents.ts", "line": 2892, "label": "discoverAgents" }
+      ]
+    },
+    {
+      "id": "workflow_runtime",
+      "type": "backend",
+      "label": "workflowScript 引擎",
+      "sublabel": "Worker 线程 + acorn",
+      "tag": "脚本",
+      "pos": [455, 300],
+      "size": [165, 64],
+      "sources": [
+        { "path": "src/workflows/scripted-workflow.ts", "line": 1917, "label": "runWorkflowScript" }
+      ]
+    },
+    {
+      "id": "launch_planner",
+      "type": "security",
+      "label": "启动契约",
+      "sublabel": "能力上限 / 预算 / 权限",
+      "tag": "授权",
+      "pos": [455, 500],
+      "size": [160, 64],
+      "sources": [
+        { "path": "src/runs/shared/child-launch.ts", "line": 188, "label": "buildInProcessChildLaunch" },
+        { "path": "src/runs/shared/capability-ceiling.ts", "line": 161, "label": "resolveCapabilityCeiling" },
+        { "path": "src/runs/shared/spawn-budget.ts", "line": 59, "label": "preflightSpawnBudget" }
+      ]
+    },
+    {
+      "id": "foreground_runner",
+      "type": "backend",
+      "label": "前台执行器",
+      "sublabel": "进程内 AgentSession",
+      "tag": "前台",
+      "pos": [680, 220],
+      "size": [165, 64],
+      "sources": [
+        { "path": "src/runs/foreground/subagent-executor.ts", "line": 4869, "label": "createSubagentExecutor" }
+      ]
+    },
+    {
+      "id": "detached_runner",
+      "type": "backend",
+      "label": "分离 Runner 进程",
+      "sublabel": "后台独立 Node 进程",
+      "tag": "后台",
+      "pos": [680, 420],
+      "size": [165, 64],
+      "sources": [
+        { "path": "src/runs/background/subagent-runner.ts", "line": 1956, "label": "runSubagent" },
+        { "path": "src/runs/background/subagent-runner.ts", "line": 5149, "label": "runConfiguredSubagent" }
+      ]
+    },
+    {
+      "id": "intercom_channel",
+      "type": "messagebus",
+      "label": "协调通道",
+      "sublabel": "supervisor / steering / 通知",
+      "tag": "通信",
+      "pos": [905, 320],
+      "size": [165, 64],
+      "sources": [
+        { "path": "src/intercom/native-supervisor-channel.ts", "line": 610, "label": "createNativeSupervisorChannel" }
+      ]
+    },
+    {
+      "id": "wait_convergence",
+      "type": "backend",
+      "label": "bg_wait 收敛",
+      "sublabel": "订阅 + auto-drain",
+      "tag": "等待",
+      "pos": [905, 500],
+      "size": [165, 64],
+      "sources": [
+        { "path": "src/runs/background/wait-tool.ts", "line": 8, "label": "registerWaitTool" }
+      ]
+    },
+    {
+      "id": "observability",
+      "type": "cloud",
+      "label": "可观测性",
+      "sublabel": "FleetView + JSONL 产物",
+      "tag": "观测",
+      "pos": [1110, 220],
+      "size": [155, 64],
+      "sources": [
+        { "path": "src/shared/artifacts.ts", "line": 156, "label": "getArtifactsDir" },
+        { "path": "src/runs/background/result-watcher.ts", "line": 199, "label": "createResultWatcher" }
+      ]
+    },
+    {
+      "id": "mission_store",
+      "type": "database",
+      "label": "Mission 存储",
+      "sublabel": "mission.json + 定时运行",
+      "tag": "持久",
+      "pos": [1110, 420],
+      "size": [155, 64],
+      "sources": [
+        { "path": "src/missions/store.ts", "line": 366, "label": "createMission" }
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Pi 父进程",
+      "wraps": [
+        "subagent_tool",
+        "agent_registry",
+        "workflow_runtime",
+        "launch_planner",
+        "foreground_runner",
+        "intercom_channel",
+        "wait_convergence",
+        "observability",
+        "mission_store"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "分离 Runner 进程",
+      "wraps": ["detached_runner"],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    { "from": "parent_session", "to": "subagent_tool", "label": "调用工具", "variant": "emphasis" },
+    { "from": "subagent_tool", "to": "agent_registry", "label": "发现 agent" },
+    { "from": "subagent_tool", "to": "workflow_runtime", "label": "执行脚本", "variant": "emphasis", "labelAt": [422.5, 360] },
+    { "from": "subagent_tool", "to": "launch_planner", "label": "规划启动", "fromSide": "bottom" },
+    { "from": "workflow_runtime", "to": "launch_planner", "label": "分派步骤", "variant": "dashed", "fromSide": "bottom", "toSide": "top" },
+    { "from": "launch_planner", "to": "foreground_runner", "label": "前台子会话", "variant": "emphasis" },
+    { "from": "launch_planner", "to": "detached_runner", "label": "分离 spawn", "variant": "emphasis", "labelAt": [600, 490] },
+    { "from": "foreground_runner", "to": "intercom_channel", "label": "steering", "variant": "dashed" },
+    { "from": "detached_runner", "to": "intercom_channel", "label": "结果回传", "variant": "dashed" },
+    { "from": "detached_runner", "to": "wait_convergence", "label": "完成事件", "variant": "dashed" },
+    { "from": "foreground_runner", "to": "observability", "label": "流式渲染", "variant": "dashed" },
+    { "from": "detached_runner", "to": "mission_store", "label": "mission.json", "variant": "dashed" },
+    {
+      "from": "intercom_channel",
+      "to": "parent_session",
+      "label": "唤醒父回合",
+      "variant": "emphasis",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "via": [[1270, 352], [1270, 600], [110, 600]],
+      "labelAt": [1270, 380]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "双轨执行",
+      "items": [
+        "前台子会话在父进程内运行，结果流式渲染回对话",
+        "后台任务分离为独立 Node 进程，父会话可先行返回",
+        "两条路径共用同一份启动契约：能力上限、工具预算、模型作用域"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "边界与授权",
+      "items": [
+        "启动契约集中仲裁能力上限、工具预算、权限与模型作用域",
+        "workflowScript 在 Worker 线程中经 acorn 解析后沙箱执行",
+        "子会话仅经协调通道与父会话通信，禁止跨会话直接耦合"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "收敛与可观测",
+      "items": [
+        "bg_wait 订阅完成事件，auto-drain 在回合结束前收敛后台任务",
+        "FleetView 与 fleet inspector 实时展示运行中的子任务",
+        "JSONL transcript 与 lifecycle artifacts 落盘为可审计证据"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "VS Code 终端实现架构",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1340, 630],
+    "views": [
+      {
+        "id": "render-path",
+        "label": "渲染进程内的解析链路",
+        "focus": ["xterm", "addon", "caps"],
+        "note": "xterm.js 写入后经解析器触发 OSC 序列处理，能力逐步升级。"
+      },
+      {
+        "id": "process-boundary",
+        "label": "进程边界与 RPC",
+        "focus": ["xterm", "ptyhostsrv", "ptyhost", "persistent"],
+        "note": "终端能力被拆到独立 pty host 进程，共享进程只做代理与心跳。"
+      },
+      {
+        "id": "os-and-shell",
+        "label": "PTY 与 Shell 接入",
+        "focus": ["persistent", "termproc", "injection", "ptydev", "shell"],
+        "note": "node-pty 负责 conpty 与 /dev/pts，脚本注入决定 shell integration 是否生效。"
+      }
+    ]
+  },
+  "components": [
+    { "id": "xterm", "type": "frontend", "label": "xterm.js Terminal", "sublabel": "终端面板渲染 widget", "pos": [28, 110], "size": [196, 68], "tag": "渲染进程" },
+    { "id": "addon", "type": "backend", "label": "ShellIntegrationAddon", "sublabel": "OSC 133 · 633 · 633;E", "pos": [28, 234], "size": [196, 68], "tag": "解析" },
+    { "id": "caps", "type": "messagebus", "label": "TerminalCapabilityStore", "sublabel": "Cwd · Command · ShellEnv", "pos": [28, 358], "size": [196, 68], "tag": "能力" },
+
+    { "id": "ptyhostsrv", "type": "backend", "label": "PtyHostService", "sublabel": "IPtyHostService · 心跳重启", "pos": [304, 234], "size": [180, 68], "tag": "共享进程" },
+
+    { "id": "ptyhost", "type": "backend", "label": "PtyService", "sublabel": "PtyHostMain · _ptys 表", "pos": [564, 110], "size": [190, 68], "tag": "pty host" },
+    { "id": "persistent", "type": "backend", "label": "PersistentTerminalProcess", "sublabel": "detach · 孤儿 · 序列化", "pos": [564, 234], "size": [190, 68], "tag": "生命周期" },
+    { "id": "termproc", "type": "backend", "label": "TerminalProcess", "sublabel": "node-pty · ITerminalChildProcess", "pos": [564, 358], "size": [190, 68], "tag": "进程" },
+    { "id": "injection", "type": "security", "label": "Shell Integration 注入", "sublabel": "bash · zsh · fish · pwsh · cmd", "pos": [564, 482], "size": [190, 68], "tag": "注入" },
+    { "id": "profiles", "type": "backend", "label": "TerminalProfiles", "sublabel": "默认 · 贡献 · 探测", "pos": [854, 110], "size": [158, 68], "tag": "配置" },
+    { "id": "recorder", "type": "database", "label": "TerminalRecorder", "sublabel": "ReplayEntry · 10 MB 上限", "pos": [854, 234], "size": [158, 68], "tag": "回放" },
+    { "id": "autoapprove", "type": "security", "label": "AutoApprove 解析器", "sublabel": "git · pwsh · sed · sort", "pos": [854, 482], "size": [158, 68], "tag": "安全" },
+
+    { "id": "ptydev", "type": "database", "label": "OS PTY", "sublabel": "conpty · /dev/pts", "pos": [1112, 358], "size": [172, 68], "tag": "内核" },
+    { "id": "shell", "type": "external", "label": "Shell", "sublabel": "bash · zsh · pwsh · cmd", "pos": [1112, 482], "size": [172, 68], "tag": "用户进程" }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "渲染进程（Browser Window）", "wraps": ["xterm", "addon", "caps"], "pad": 22 },
+    { "kind": "region", "label": "共享进程（Shared / Node）", "wraps": ["ptyhostsrv"], "pad": 22 },
+    { "kind": "region", "label": "Pty Host 进程（独立 Node 子进程）", "wraps": ["ptyhost", "persistent", "termproc", "injection", "profiles", "recorder", "autoapprove"], "pad": 22 },
+    { "kind": "region", "label": "操作系统层", "wraps": ["ptydev", "shell"], "pad": 22 }
+  ],
+  "connections": [
+    { "id": "xterm-write", "from": "xterm", "to": "addon", "label": "write() 写入解析", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [126, 206] },
+    { "id": "addon-osc", "from": "addon", "to": "caps", "label": "OSC 633; A/B/C/D/E", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [126, 330] },
+    { "id": "renderer-ipc", "from": "xterm", "to": "ptyhostsrv", "label": "input · resize · ack", "variant": "dashed", "fromSide": "right", "toSide": "left", "labelAt": [264, 206] },
+    { "id": "proxy-rpc", "from": "ptyhostsrv", "to": "ptyhost", "label": "IPtyService RPC 代理", "fromSide": "right", "toSide": "left", "via": [[524, 268], [524, 144]], "labelAt": [524, 206] },
+    { "id": "profiles-rpc", "from": "ptyhost", "to": "profiles", "label": "getProfiles", "fromSide": "right", "toSide": "left", "route": "straight", "labelAt": [804, 144] },
+    { "id": "host-owns", "from": "ptyhost", "to": "persistent", "label": "持有每个会话", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [659, 206] },
+    { "id": "persist-spawn", "from": "persistent", "to": "termproc", "label": "spawn / start / resize", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [659, 330] },
+    { "id": "inject-args", "from": "termproc", "to": "injection", "label": "改写 args 与 env", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [659, 454] },
+    { "id": "pty-spawn", "from": "termproc", "to": "ptydev", "label": "node-pty spawn()", "variant": "emphasis", "fromSide": "right", "toSide": "left", "route": "straight", "labelAt": [933, 392] },
+    { "id": "pty-fork", "from": "ptydev", "to": "shell", "label": "fork · exec · TTY", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [1198, 454] },
+    { "id": "record-replay", "from": "persistent", "to": "recorder", "label": "记录回放片段", "variant": "dashed", "fromSide": "right", "toSide": "left", "route": "straight", "labelAt": [804, 268] },
+    { "id": "automation-guard", "from": "injection", "to": "autoapprove", "label": "命令行安全性判定", "variant": "dashed", "fromSide": "right", "toSide": "left", "route": "straight", "labelAt": [804, 516] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "四段进程隔离",
+      "items": [
+        "渲染进程只持有 xterm.js 与能力解析，不直接接触系统 pty",
+        "共享进程仅做 IPtyService 代理，靠 HeartbeatService 检测并重启 pty host",
+        "PtyService 独立成进程，终端崩溃不会拖垮整个编辑器"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "数据面与控制面分离",
+      "items": [
+        "输出走 onProcessData 事件流，输入走 input() 命令式 RPC",
+        "resize、sendSignal、clearBuffer、getCwd 都经同一代理转发",
+        "acknowledgeDataEvent 用高低水位实现跨进程反压"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "能力是逐步升级的",
+      "items": [
+        "TerminalCapabilityStore 先挂 PartialCommandDetection，见到 OSC 后升级为 CommandDetection",
+        "脚本注入失败会记录具体原因而非静默降级",
+        "AutoApprove 解析器在自动化 profile 上把关是否可跳过 shell"
+      ]
+    }
+  ]
+}

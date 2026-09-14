@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "VS Code 终端数据流转",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 780],
+    "views": [
+      {
+        "id": "output-path",
+        "label": "输出主路径",
+        "focus": ["shell", "ptydev", "termproc", "bufferer", "ptyhostsrv", "xterm"],
+        "note": "从 shell 的 stdout 一路到 xterm.js 写入屏幕，每跨一段进程都会聚合。"
+      },
+      {
+        "id": "backpressure",
+        "label": "反压与回放",
+        "focus": ["recorder", "flowctrl", "xterm", "bufferer"],
+        "note": "客户端逐批确认已解析字符，未确认量过高时暂停 pty 读取。"
+      },
+      {
+        "id": "shell-integration",
+        "label": "Shell Integration 解析",
+        "focus": ["xterm", "addon", "caps"],
+        "note": "OSC 序列把提示符、命令、退出码结构化成能力对象。"
+      }
+    ]
+  },
+  "stages": [
+    { "label": "Shell 与 PTY" },
+    { "label": "Pty Host 进程" },
+    { "label": "聚合与流控" },
+    { "label": "共享进程" },
+    { "label": "渲染进程" }
+  ],
+  "nodes": [
+    { "id": "shell", "type": "external", "label": "Shell", "sublabel": "bash · zsh · pwsh · cmd", "stage": 0, "row": 0, "tag": "stdout" },
+    { "id": "ptydev", "type": "database", "label": "OS PTY", "sublabel": "conpty · /dev/pts", "stage": 0, "row": 2, "tag": "TTY" },
+
+    { "id": "termproc", "type": "backend", "label": "TerminalProcess", "sublabel": "node-pty 封装", "stage": 1, "row": 0, "tag": "NODE" },
+    { "id": "recorder", "type": "database", "label": "TerminalRecorder", "sublabel": "ReplayEntry · 10 MB", "stage": 1, "row": 4, "tag": "回放" },
+
+    { "id": "bufferer", "type": "backend", "label": "数据聚合器", "sublabel": "TerminalDataBufferer", "stage": 2, "row": 1, "tag": "5 ms" },
+    { "id": "flowctrl", "type": "backend", "label": "Flow Control", "sublabel": "高 100k / 低 5k", "stage": 2, "row": 4, "tag": "反压" },
+
+    { "id": "ptyhostsrv", "type": "backend", "label": "PtyHostService", "sublabel": "RPC 代理 · 心跳", "stage": 3, "row": 1, "tag": "IPC" },
+
+    { "id": "xterm", "type": "frontend", "label": "xterm.js", "sublabel": "渲染 · 解析器", "stage": 4, "row": 0, "tag": "渲染" },
+    { "id": "addon", "type": "messagebus", "label": "集成协议解析", "sublabel": "ShellIntegrationAddon", "stage": 4, "row": 2, "tag": "OSC" },
+    { "id": "caps", "type": "messagebus", "label": "能力存储", "sublabel": "TerminalCapabilityStore", "stage": 4, "row": 4, "tag": "能力" }
+  ],
+  "flows": [
+    { "id": "shell-pty", "from": "shell", "to": "ptydev", "label": "写入 TTY", "classification": "raw bytes", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [100, 271] },
+    { "id": "pty-read", "from": "ptydev", "to": "termproc", "label": "readable 分块", "classification": "escape 序列", "variant": "emphasis", "labelAt": [205, 268] },
+    { "id": "emit-data", "from": "termproc", "to": "bufferer", "label": "onProcessData", "classification": "string 事件", "variant": "emphasis", "labelAt": [466, 212] },
+    { "id": "record", "from": "termproc", "to": "recorder", "label": "记录可回放片段", "classification": "尺寸 + 数据", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [315, 385] },
+    { "id": "flush", "from": "bufferer", "to": "ptyhostsrv", "label": "flush() 合并块", "classification": "跨进程事件", "variant": "emphasis", "fromSide": "right", "toSide": "left", "route": "straight", "labelAt": [637, 271] },
+    { "id": "deliver", "from": "ptyhostsrv", "to": "xterm", "label": "onProcessData { id, data }", "classification": "渲染队列", "variant": "emphasis", "labelAt": [770, 196] },
+    { "id": "input", "from": "xterm", "to": "ptyhostsrv", "label": "input · resize · sendSignal", "classification": "命令式 RPC", "variant": "dashed", "labelAt": [770, 330] },
+    { "id": "parse", "from": "xterm", "to": "addon", "label": "parser.registerOscHandler", "classification": "OSC 分发", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [960, 271] },
+    { "id": "capability-upgrade", "from": "addon", "to": "caps", "label": "OSC 633; A/B/C/D/E", "classification": "结构化工件", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [960, 499] },
+    { "id": "ack", "from": "xterm", "to": "flowctrl", "label": "acknowledgeDataEvent(5000)", "classification": "已解析字符确认", "variant": "dashed", "fromSide": "left", "toSide": "right", "via": [[880, 157], [880, 613]], "labelAt": [705, 613] },
+    { "id": "pause", "from": "flowctrl", "to": "termproc", "label": "pty.pause() / resume()", "classification": "反压信号", "variant": "security", "fromSide": "left", "toSide": "top", "via": [[420, 613], [420, 90], [315, 90]], "labelAt": [420, 385] }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "输出路径逐段聚合",
+      "items": [
+        "shell 输出先经 node-pty 切块，再由 TerminalDataBufferer 用 5 ms 窗口合并",
+        "合并后才跨进程抛出 onProcessData，避免高频事件淹没 IPC 通道",
+        "跨进程代理不做 ProxyChannel 转发，防止多层代理丢事件"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "反压水位",
+      "items": [
+        "未确认字符超过 100000 时暂停 pty，客户端追回 5000 以内才恢复",
+        "客户端每累计 5000 字符回一次 acknowledgeDataEvent",
+        "回放路径由 TerminalRecorder 限量到 10 MB，重连时按 ReplayEntry 重放"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "能力解析在渲染端",
+      "items": [
+        "OSC 133 是通用 FinalTerm 协议，OSC 633 是 VS Code 自定义序列",
+        "633;A/B/C/D 标记提示符、命令开始、执行、结束及退出码",
+        "解析结果落到能力存储，驱动 Cwd 检测、ShellEnv 与命令标记"
+      ]
+    }
+  ]
+}
