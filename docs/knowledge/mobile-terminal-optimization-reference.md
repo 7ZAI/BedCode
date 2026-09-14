@@ -31,7 +31,7 @@ xterm.js 6.0（DOM/WebGL 渲染器）
 ```
 
 **传输层双轨（桌面端）**：
-- 桌面本地终端：Tauri Channel 原生 IPC（`commands/terminal_stream.rs` + `useTerminalOutputStreamChannel.ts`），经 `VITE_TERMINAL_TRANSPORT=channel` 启用。负载经 in-memory fetch 拉取，Rust 侧缓冲直到前端消费，**无 WS 缓冲溢出丢消息问题**。
+- 桌面本地终端：Tauri Channel 原生 IPC（`commands/terminal_stream.rs` + `useTerminalOutputStreamChannel.ts`），固定唯一路径（WS 环回 `/ws/terminal/local` 已下线删除）。负载经 in-memory fetch 拉取，Rust 侧缓冲直到前端消费，**无 WS 缓冲溢出丢消息问题**。
 - 桌面/移动远程终端：WebSocket（`terminal_ws.rs`），**移动端前端直连桌面端 `/ws/terminal/session/{id}`** —— 这条 WS 路径是移动端远程终端的传输层，不可删除。
 
 **服务端关键参数（forward.rs）**：
@@ -107,18 +107,19 @@ xterm.js 6.0（DOM/WebGL 渲染器）
 
 ---
 
-## 4. 桌面端旧 WS 本地传输实现删除评估（待 worktree 合并后执行）
+## 4. 桌面端旧 WS 本地传输实现删除评估（✅ 已执行）
 
 **背景**：桌面端本地终端原走 WS 环回（`/ws/terminal/local` + `useTerminalOutputStream.ts`），worktree 新增 Channel 传输后经 `TERMINAL_TRANSPORT` 三元选择（默认 ws、dev 用 channel）。
 
-**评估结论**：
-- **后端 WS 绝不能删**：`/ws/terminal/session/{id}` 是移动端远程终端的前端直连路由（`useTerminalSocket` 依赖），`terminal_ws.rs` / `forward.rs` 保留。
-- **可删（合并后）**：桌面端前端 WS 消费实现 `useTerminalOutputStream.ts` + TerminalPreview 的 `TERMINAL_TRANSPORT` 三元选择 + `env.d.ts` 的 `VITE_TERMINAL_TRANSPORT` 声明 + 对应测试（`useTerminalOutputStream.test.ts` 等）。理由：桌面本地终端唯一消费路径已切 Channel，双实现 ~400 行重复逻辑（seq 校验/重订阅/快照/ack）存在漂移风险。
-- **保留理由（删除前需权衡）**：
-  1. vite 浏览器调试场景（非 Tauri 运行时 Channel invoke 不可用）可回退 WS。
-  2. Channel 大负载传输依赖 in-memory fetch 拉取，远程/隧道场景不可用（本地环回才用）。
-  3. 双实现互为回归对照（A/B）。
-- **建议**：worktree（残影 + Channel）合并到 dev 后，评估删除前端 WS 消费实现；至少将 `useTerminalOutputStream.ts` 标注 legacy 不再维护。删除动作在合并后进行，避免扩大合并冲突面。
+**执行结论（已完成）**：
+- **后端 WS 未删**：`/ws/terminal/session/{id}` 是移动端远程终端的前端直连路由（`useTerminalSocket` 依赖），`terminal_ws.rs` / `forward.rs` / `control_frame.rs` 保留。
+- **已删**：桌面端前端 WS 消费实现 `useTerminalOutputStream.ts` + TerminalPreview 的 `TERMINAL_TRANSPORT` 选择 + `env.d.ts` 的 `VITE_TERMINAL_TRANSPORT` 声明 + 对应测试（`useTerminalOutputStream.test.ts`）+ 后端 `/ws/terminal/local` 路由与 `local_terminal_ws` handler + `LocalTokenManager`（`local_token.rs`）+ `get_local_ws_token` 命令 + `TrafficChannel::WsLocal` 变体（link_crypto 豁免分支）。终端流集成测试 `terminal-flow.test.ts` 改为 Channel 路径（MockChannel 桩）。桌面本地终端唯一消费路径已切 Channel，双实现 ~400 行重复逻辑（seq 校验/重订阅/快照/ack）漂移风险消除。
+- **保留权衡（原「保留理由」已不成立）**：
+  1. vite 浏览器调试场景：Channel invoke 在非 Tauri 运行时不可用，该场景（浏览器直开 dev server）不再支持桌面本地终端输出；调试走 Tauri dev 窗口（channel 可用）或移动端远程。
+  2. Channel 大负载传输依赖 in-memory fetch 拉取，远程/隧道场景不可用——桌面本地终端仅本地环回使用，无影响。
+  3. 双实现互为回归对照（A/B）：A/B 验证期已结束，Channel 经生产验证为稳定路径。
+
+---
 
 ---
 

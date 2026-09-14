@@ -12,6 +12,8 @@
 
 ## 全链路概览
 
+> 📊 交互式流程图：[桌面端 PTY 输出数据流](../diagrams/pty-output-flow-desktop.html) · [移动端终端 PTY 输出链路](../diagrams/pty-output-flow-mobile.html)
+
 ```text
 桌面端                                       移动端
 PTY 进程输出
@@ -27,7 +29,8 @@ UnifiedOutputQueue（字节块队列，50MB）
    │      → 字节缓存（16MB LRU，真源）                       （一次性历史，快照字节截取）
    │      → ack 节流回发 → 桌面端释放背压
    │      → 事件 terminal-frame / terminal-state → 前端
-   └─→ 桌面端: useTerminalOutputStream（本地 /ws/terminal/local）
+   └─→ 桌面端: useTerminalOutputStreamChannel（Tauri Channel 原生 IPC；
+         WS 环回链路 /ws/terminal/local 已下线删除）
 ```
 
 两个消费出口共享**同一真源**，走**同一套 TB v3 二进制协议**；历史获取渠道不同（移动端 HTTP 一次性拉取、桌面本地终端经订阅快照）。

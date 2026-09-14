@@ -5,9 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Features
+
+#### agent-hub Plugin — Central Credential Store
+- Provider presets now carry a central credential column (`provider_preset.api_key`): configure each provider's API key once and distribute it to multiple agents (claude / pi / opencode); keys are always masked in lists/state/import results (first 3 chars + length) and only logged by length — plaintext lives solely in the plugin DB (user decision 2026-09-14 to drop the "no key in hub storage" rule)
+- Reverse import now captures source CLI keys into the central store (instead of masks only); apply panel gains a fourth key mode `stored` (central store, default when a key exists); preset editor can set / clear the stored key
+
+#### Desktop Plugin Management — Zip Install & Uninstall
+- Uninstall is available on every plugin detail page regardless of source (built-in / file scan / zip install); it requires the plugin to be **disabled** (the button stays disabled with a "deactivate first" hint while the plugin runs) and clears everything the plugin owns: its install directory (taken from `extension_path`, including the private `plugin.db` next to it), key-value storage and fs grants, persisted activation state, cached DB connection and runtime throttling records. Built-in plugins live in the resource directory shipped with the app: removal fails loudly on a read-only install and the bundled copy reappears after the next build/update
+- Install plugins from a local zip package (unpacked into the user plugin directory, source `user-installed`)
+- Plugin list layout: the load-plugin button (primary color) moved to the right of the "Disabled" section title and stays reachable when no plugin is disabled; refresh moved to the far right of the toolbar
+
 ## [2.1.0] - 2026-09-11
 
-> 功能 / Features · 基础建设 / Platform & Infrastructure · 改进 / Improvements · 修复 / Fixes · 安全 / Security · 测试 / Tests & Quality · 文档 / Documentation
+> Features · Platform & Infrastructure · Improvements · Fixes · Security · Tests & Quality · Documentation
 
 ### Features
 

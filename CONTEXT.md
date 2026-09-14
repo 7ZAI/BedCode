@@ -167,8 +167,8 @@ _Avoid_: 斜杠命令、指令
 _Avoid_: 模型、Agent CLI（指移动端命令预设加载键时）
 
 **Agent CLI**:
-移动端输入面板命令预设的加载键（claude_code / pi / codex / opencode / generic）。移动端对会话配置的启动命令（command 字段）做关键词检测识别（claude/codex/opencode/pi），识别结果与用户手动覆盖存移动端本地 JSON（按会话配置 id 映射）；未识别（generic）不加载预设。与执行 agent（任务记录中的最终身份，桌面端启动命令检测）可同源但各属一端，互不依赖。
-_Avoid_: agent 类型、执行 agent（指桌面端任务记录时）
+被 BedCode 管理的第三方编码命令行智能体（claude / codex / opencode / pi 等）：安装、配置、Skills、使用统计均以 CLI 为归属对象，经 CLI 适配器按家区分。两端既有用法是其投影、各属一端互不依赖：移动端命令预设的加载键（对会话配置启动命令做关键词检测，识别结果与手动覆盖存移动端本地 JSON、按会话配置 id 映射，未识别 generic 不加载预设）；桌面端任务记录的执行 agent（会话创建时由启动命令检测得出）。
+_Avoid_: agent 类型、执行 agent（指桌面端任务记录时）、模型（CLI 身份 ≠ 模型）
 
 **常规自动任务 (Regular Auto Task)**:
 面向运行中会话的队列化自动执行：任务加入会话队列，当前任务终态后自动出队执行，队列非空时联动自动授权。是任务队列的调度语义，与定时自动任务并列。
@@ -229,6 +229,28 @@ _Avoid_: run-id（宿主进程标识，可重复、非唯一）、attempt 计数
 **结果哨兵 (Result Sentinel)**:
 节点输出发布完成的承诺文件（`<node>.output.done`）：内容为输出路径 + 写全时间 + 代际 token。它是下游读取输出的唯一许可，与两阶段结果提升的 rename 互补（哨兵 = 完成承诺，rename = 原子发布）。
 _Avoid_: 完成通知（指宿主进程事件，非文件）、done 标记（泛称）
+
+### Agent Hub
+
+**Agent Hub**:
+桌面端对 Agent CLI 的统一可视化管理：环境检测与一键安装、Skills 管理、供应商统一配置、使用统计；auto-task 能力的并入是既定演进方向。仅桌面端。
+_Avoid_: agent 管理器、CLI 管理器、面板（指功能整体时）
+
+**CLI 适配器 (CLI Adapter)**:
+单个 Agent CLI 的按家实现封装：安装方式（npm 全局或官方安装脚本）、配置文件读写、会话数据源解析（JSONL 转录或 SQLite，随家而异）、Skills 目录语义，四项能力各随家而异；新增一家 CLI 只新增适配器、不改框架。
+_Avoid_: driver、profile（auto-task 的 AGENT_PROFILES 用词）、provider（与供应商混淆）
+
+**Skill (技能)**:
+Agent CLI 可加载的能力单元：一个含 SKILL.md（frontmatter 至少 name/description）的目录，可存在于家目录共享库、各 CLI 私有目录与项目级目录；目录间的真源与分发关系是 Agent Hub 的管理对象。
+_Avoid_: 插件（与 BedCode 插件混淆）、扩展、命令
+
+**使用记录 (Usage Record)**:
+从 Agent CLI 本地会话数据解析出的单条使用事实：会话、时间、token 用量（输入/输出/缓存读写）、模型；统计聚合的最小单位。覆盖全部本地使用，与只覆盖经 BedCode 发起任务的任务记录并存不合并。
+_Avoid_: 日志（指解析产物时）、token 消耗（指记录整体时）
+
+**供应商预设 (Provider Preset)**:
+Agent Hub 中待应用的模型服务配置模板（名称/baseUrl/模型等），应用即写入目标 Agent CLI 的原生配置文件；配置真源始终是各 CLI 自己的配置文件。与 AI 对话域的「供应商」（已配置实例）区分。
+_Avoid_: 供应商（指 CLI 侧已写入配置时）、预设模板（AI 对话域同名词）
 
 ### AI 对话 (AI Chatbox)
 

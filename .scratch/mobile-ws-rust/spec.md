@@ -181,3 +181,82 @@ PTY 字节流
 - **D-A5 链路加密本轮明文 + JWT**（spec §5 风险项采纳降级方案），ws-terminal 协商留后续 ticket。
 - **D-A6 store 增补**：markSessionStopped 推进 replayGeneration（中止在途 splice 重写游标）；
   historyPreparing 期间实时帧 8MB 防御缓冲上限；缺口重拼接 3s 冷却——均为 spec 未细化的实现细节。
+
+## 7. 后续优化：历史回放相位感知批量（未实现，2026-09-12 记录）
+
+### 7.1 问题
+
+D-A2 选定 WS-first（历史走 WS 重播入 Rust 缓存），历史和实时共用 `forward_loop` 的同一套合并参数
+（远程 30ms / 64KB，本地 4ms / 64KB）。但历史回放**没有延迟要求**——它是一次性拉取，不是交互流。
+30ms 时间窗口在历史阶段是纯开销：事件突发到达时字节阈值通常先命中，但 PTY 输出碎片化时
+（小事件、低速率）时间窗口会真的等到 30ms 才 flush，拖慢整段历史的传输。
+
+### 7.2 量化
+
+桌面环形缓冲上限 50MB（`channels.global_queue_max_bytes`），移动端缓存上限 16MB。
+以 16MB 历史为例：
+
+| 批次大小 | 批次数 | WS 消息数 | 固定开销（消息序列化+TCP+解析+事件派发） |
+| --- | --- | --- | --- |
+| 64 KB（当前） | ~256 | 256 | 256 次 |
+| 256 KB | ~64 | 64 | 64 次 |
+| 1 MB | ~16 | 16 | 16 次 |
+| 4 MB | ~4 | 4 | 4 次 |
+
+固定开销差 16~64 倍。实时阶段 30ms 窗口不可动（键盘回显延迟），但历史阶段可以完全放开。
+
+### 7.3 方案
+
+`forward_loop` 用 `HistoryEnd` 控制帧作为相位分界线——它之前的所有帧都是历史，之后都是实时
+（协议保证：`subscribe()` 持读锁发历史 + HistoryEnd，`activate()` 之后才广播实时帧）。
+
+**方案 A（推荐，改动小）**：`forward_loop` 内部维护相位状态，HistoryEnd 之前用 bulk 参数
+（`max_buffer_size = 1MB`，`flush_interval = ZERO`），HistoryEnd 之后切回实时参数
+（64KB / 30ms）。遇到 HistoryEnd 时先按 bulk 参数 flush 残留缓冲，再透传标记
+（现有逻辑已做，只需切换参数组）。
+
+```rust
+// forward_loop 签名扩展
+fn forward_loop(
+    output_rx: Receiver<OutputFrame>,
+    out_tx: Sender<ForwardOutput>,
+    realtime_interval: Duration,   // 30ms（原 flush_interval）
+    realtime_max_bytes: usize,     // 64KB（原 max_buffer_size）
+    history_max_bytes: usize,      // 1MB（新）
+    ...
+) {
+    let mut in_history = true;
+    // ... 历史阶段：buffer.data.len() >= history_max_bytes 时 flush
+    // ... 收到 HistoryEnd：flush 残留 → in_history = false → 切实时参数
+}
+```
+
+**方案 B（更激进）**：在 `subscribe()` 里预打包——`snapshot_from` 返回的 `Vec<OutputEvent>`
+按 1MB 聚合为少量大 `OutputFrame` 后入队，`forward_loop` 无需改动（单个事件已超 64KB 阈值，
+不会被拆）。代价：需改 `OutputEvent` 构造逻辑，侵入面稍大。
+
+### 7.4 约束
+
+1. **forward→actor 通道容量**：`out_tx` 容量 64 × 批次大小 = 峰值缓冲。
+   当前 64 × 64KB = 4MB；改 1MB 后 64 × 1MB = 64MB。需减通道容量（如 8 × 1MB = 8MB）
+   或接受内存峰值。
+2. **移动端 WS message size**：`tokio_tungstenite::connect_async` 默认配置，
+   `max_incoming_frame_size` 限制单个 WS 帧（非 message），message 可跨帧重组。
+   单条消息超 64KB 不是协议问题（发送端自动分片），但需确认移动端帧重组路径
+   不被默认值卡住。
+3. **移动端 Rust 缓存**：`SessionCache` 上限 16MB / 4096 帧。大批次到达时
+   `ingest_terminal_frame` 逐帧入缓存，帧数减少但字节数不变，淘汰行为不变。
+
+### 7.5 与双速传播的关系
+
+D2 的双速是「进页面 realtime / 退页面 batch」——按消费端状态切换。本优化是
+「历史阶段 bulk / 实时阶段 realtime」——按数据阶段切换。两者正交，可叠加：
+页面存活 + 实时阶段 = 64KB/30ms；页面存活 + 历史阶段 = 1MB/0；退页面 = batch。
+
+### 7.6 预期收益
+
+- 长会话（>1MB 历史）重进终端页：历史传输总时间从「带宽 + 256×30ms 等待」
+  降至「纯带宽」
+- WS 消息数降一个量级：减少移动端 `terminal-frame` 事件派发次数
+- 实时延迟不变（历史阶段结束后切回 30ms 窗口）
+- 代码改动集中在 `forward_loop` 一处，无协议变更、无两端同步风险
