@@ -93,7 +93,7 @@ export async function pluginInstallFromFile(path: string): Promise<string> {
   return id
 }
 
-/** 卸载用户插件（删除插件所有数据：存储 + 安装目录） */
+/** 卸载插件（所有来源；删除插件所有数据：安装目录 + 存储 + 启用状态） */
 export async function pluginUninstall(pluginId: string): Promise<void> {
   logger.log(`[PluginCmd] pluginUninstall(${pluginId}) invoking...`)
   await invoke('plugin_uninstall', { pluginId })

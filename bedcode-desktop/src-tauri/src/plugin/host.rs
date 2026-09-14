@@ -118,10 +118,11 @@ pub struct PluginHost {
     /// 插件 deactivate 内的卸载动作（如 CLI 安装清理）据此跳过：
     /// 应用正常退出 ≠ 用户停用插件，随包 CLI 应保留（下次启动 activate 幂等重装）
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
-    /// 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地，可卸载
+    /// 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地
     ///
-    /// 与只读的内置目录（resource_dir/resources/plugins/desktop）分离：
-    /// 内置插件随安装包分发不可卸载，用户插件独立管理（加载/卸载/升级）
+    /// 与随安装包分发的内置目录（resource_dir/resources/plugins/desktop）分离：
+    /// 用户插件独立安装/升级，内置插件随构建产物更新；两者都可卸载
+    /// （见 [`PluginHost::uninstall_plugin`]，内置插件删的是资源目录下的安装目录）
     user_plugins_dir: PathBuf,
 }
 
@@ -1211,26 +1212,24 @@ impl PluginHost {
         Ok(plugin_id)
     }
 
-    /// 卸载用户插件：删除插件所有数据（存储 + 激活状态 + 安装目录 + 私有数据库）
+    /// 卸载插件：删除插件所有数据（存储 + 激活状态 + 安装目录 + 私有数据库）
     ///
-    /// 前置条件：插件存在、来源为 UserInstalled（内置插件随包分发，不可卸载），
-    /// 且**未启用**——运行中（Activated/Activating/Degraded）拒绝卸载，
+    /// 适用范围：**所有来源的插件**（内置随包 / 用户 zip 安装 / 文件扫描 / 静态注册）。
+    /// 前置条件：插件存在且**未启用**——运行中（Activated/Activating/Degraded）拒绝卸载，
     /// 由用户先在插件详情页停用（规则：未启用的插件才能卸载）。
-    /// 执行：停用（含 hooks 清理/总线退订/扩展点注销）→ 移除运行时实例 →
-    /// 清空插件存储（含 fs 授权/预授权路径）→ 清理持久化激活状态 →
-    /// 丢弃私有数据库连接 → 删除插件目录（安装文件与 plugin.db 同目录）。
+    /// 内置插件目录位于资源目录：随安装包分发，只读或被下次构建/更新还原时会删不掉，
+    /// 此时如实报错（数据与记录保持原样，插件仍可用）。
+    /// 执行：停用（含 hooks 清理/总线退订/扩展点注销）→ 丢弃私有数据库连接 →
+    /// 删除插件安装目录（含同目录 plugin.db）→ 移除运行时实例与记录 →
+    /// 清空插件存储（含 fs 授权/预授权路径）→ 清理持久化激活状态与限频簿记。
     pub async fn uninstall_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        {
+        // 安装目录取自插件自身的 extension_path：内置插件在资源目录、用户插件在
+        // app_data_dir/plugins，二者都是「插件自有的安装目录」，删除语义一致
+        let plugin_dir = {
             let plugins = self.plugins.read().await;
             let loaded = plugins
                 .get(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            if loaded.source != PluginSource::UserInstalled {
-                return Err(crate::AppError::Plugin(format!(
-                    "Builtin plugin cannot be uninstalled: {}",
-                    plugin_id
-                )));
-            }
             // 规则：仅未启用插件可卸载（Activating 是激活进行中的瞬时态，同样拒绝）
             if matches!(
                 loaded.state,
@@ -1241,10 +1240,35 @@ impl PluginHost {
                     plugin_id
                 )));
             }
-        }
+            PathBuf::from(&loaded.extension_path)
+        };
 
         // 停用（防御性：前置条件已保证未运行，此处只做残留资源清理，幂等）
         self.deactivate_plugin(plugin_id, true).await?;
+
+        // 丢弃私有数据库缓存连接：删除目录前释放文件句柄（Windows 下打开中的文件删不掉）
+        self.wasm_host_ctx.drop_plugin_db(plugin_id).await;
+
+        // 删除插件安装目录（插件文件与私有 plugin.db 同目录）。目录名须与插件 id
+        // 一致才删，防止 manifest 的异常 extension_path 指向非插件目录；静态注册
+        // 插件（随二进制分发，无独立目录）extension_path 为空 → 跳过
+        if plugin_dir.as_os_str().is_empty() {
+            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] No plugin dir to remove (static/builtin)");
+        } else if plugin_dir.file_name().and_then(|n| n.to_str()) != Some(plugin_id) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                path = %plugin_dir.display(),
+                "[PluginHost] Skip plugin dir removal: extension path does not match plugin id"
+            );
+        } else if plugin_dir.exists() {
+            std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
+                crate::AppError::Plugin(format!(
+                    "Failed to remove plugin dir '{}': {}",
+                    plugin_dir.display(),
+                    e
+                ))
+            })?;
+        }
 
         // 移除 WASM 实例与插件记录
         self.wasm_plugins.write().await.remove(plugin_id);
@@ -1256,9 +1280,7 @@ impl PluginHost {
         }
         self.persist_activation_state().await;
 
-        // 丢弃私有数据库缓存连接 + 限频簿记：目录删除前释放文件句柄（Windows 下
-        // 打开中的文件无法删除），并避免重装同 id 插件沿用旧连接/旧限频记录
-        self.wasm_host_ctx.drop_plugin_db(plugin_id).await;
+        // 清理限频簿记：避免重装同 id 插件沿用旧记录
         self.wasm_reload_throttle
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -1267,13 +1289,6 @@ impl PluginHost {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(plugin_id);
-
-        // 删除插件目录（安装文件，含同目录的私有 plugin.db）
-        let plugin_dir = self.user_plugins_dir.join(plugin_id);
-        if plugin_dir.exists() {
-            std::fs::remove_dir_all(&plugin_dir)
-                .map_err(|e| crate::AppError::Plugin(format!("Failed to remove plugin dir: {}", e)))?;
-        }
 
         tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin uninstalled");
         Ok(())
@@ -1967,6 +1982,48 @@ mod tests {
         // 卸载不存在的插件 → 报错
         let err = host.uninstall_plugin("com.test.ghost").await.unwrap_err();
         assert!(err.to_string().contains("not found"));
+    }
+
+    /// 卸载适用于所有来源：内置/扫描插件按 extension_path 删除其安装目录并清空存储
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_builtin_source_plugin() {
+        let host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        // 目录名与插件 id 一致（loader 约定：plugins_dir/<plugin-id>/）
+        let plugin_dir = tmp.path().join("com.test.builtin-dir");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("plugin.json"), "{}").unwrap();
+
+        let id = "com.test.builtin-dir";
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = plugin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+        host.storage.set(id, "k", json!("v")).await.unwrap();
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        assert!(!plugin_dir.exists());
+        assert!(host.storage.get(id, "k").await.unwrap().is_none());
+    }
+
+    /// 异常 extension_path（目录名与插件 id 不一致）不删目录，其余数据照常清理
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_skips_mismatched_extension_path() {
+        let host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let foreign_dir = tmp.path().join("not-the-plugin-id");
+        std::fs::create_dir_all(&foreign_dir).unwrap();
+
+        let id = "com.test.mismatch";
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = foreign_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        assert!(foreign_dir.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]

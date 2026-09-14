@@ -136,10 +136,9 @@
               >
                 {{ $t('desktop.plugin.goConfig') }}
               </span>
-              <!-- 卸载按钮（仅用户 zip 安装的插件可卸载；内置随包分发不可卸载。
+              <!-- 卸载按钮（所有来源的插件都可卸载：内置随包 / 文件扫描 / zip 安装。
                    规则：未启用的插件才能卸载——实例运行中（含 Degraded）按钮禁用并提示先停用） -->
               <button
-                v-if="plugin.source === 'user-installed'"
                 class="w-[76px] h-8 rounded-[6px] border border-[var(--border)] text-[calc(12px*var(--ui-scale))] font-medium text-[var(--color-danger)] transition-colors flex items-center justify-center disabled:opacity-50"
                 :class="
                   canUninstall(plugin) && !togglingId && !uninstalling

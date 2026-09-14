@@ -79,7 +79,8 @@ pub async fn plugin_install_from_file(path: String, plugin_host: State<'_, Arc<P
     result
 }
 
-/// 卸载用户插件（删除插件所有数据：存储 + 激活状态 + 安装目录）
+/// 卸载插件（所有来源：删除插件所有数据——存储 + 激活状态 + 安装目录；
+/// 要求插件未启用，运行中由前端置灰 + 后端拒绝）
 #[tauri::command]
 pub async fn plugin_uninstall(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!(plugin_id = %plugin_id, "[API] plugin_uninstall");
