@@ -167,7 +167,8 @@ function receivingPeerName(task: ReceivingTask | undefined): string {
   return task.peerId ? peerNameOf(task.peerId) : ''
 }
 
-/** 接收任务状态归一化：running/transferring → transferring，其余终态原样 */
+/** 接收任务状态归一化：running/transferring → transferring，paused 直传，
+ * 其余终态原样（暂停状态须如实呈现给接收卡按钮逻辑） */
 function receivingStateName(r: ReceivingTask | undefined): TaskStateName {
   const s = r?.state
   if (
@@ -179,6 +180,7 @@ function receivingStateName(r: ReceivingTask | undefined): TaskStateName {
   ) {
     return s
   }
+  if (s === 'paused') return 'paused'
   return 'transferring'
 }
 
@@ -420,7 +422,38 @@ function historyReason(entry: HistoryEntry): string {
                   />
                 </svg>
               </button>
-              <!-- 接收任务只可取消（spec §14.3：暂停/恢复仅限发起方） -->
+              <!-- 接收任务：传输中可暂停（拉取发起方可控），已暂停可继续（spec §14.3 暂停/恢复仅限发起方；拉取场景发起方即拉取方） -->
+              <button
+                v-if="receivingStateName(r) === 'transferring'"
+                class="ft-mini-btn"
+                :title="t('transfer.task.pause')"
+                @click="emit('pause', r.sessionId)"
+              >
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M10 4H6v16h4zM18 4h-4v16h4z"
+                  />
+                </svg>
+              </button>
+              <button
+                v-if="receivingStateName(r) === 'paused'"
+                class="ft-mini-btn"
+                :title="t('transfer.task.resume')"
+                @click="emit('resume', r.sessionId)"
+              >
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="2"
+                    d="M8 5v14l11-7z"
+                  />
+                </svg>
+              </button>
+              <!-- 接收任务可取消（取消始终可用；暂停态取消即终态） -->
               <button
                 class="ft-mini-btn"
                 :title="t('transfer.task.cancel')"
@@ -491,6 +524,37 @@ function historyReason(entry: HistoryEntry): string {
                       stroke-linejoin="round"
                       stroke-width="2"
                       d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+                    />
+                  </svg>
+                </button>
+                <!-- 接收任务（全部 tab 混排）：传输中可暂停，已暂停可继续 -->
+                <button
+                  v-if="receivingStateName(receivingById(item.id)) === 'transferring'"
+                  class="ft-mini-btn"
+                  :title="t('transfer.task.pause')"
+                  @click="emit('pause', item.id)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M10 4H6v16h4zM18 4h-4v16h4z"
+                    />
+                  </svg>
+                </button>
+                <button
+                  v-if="receivingStateName(receivingById(item.id)) === 'paused'"
+                  class="ft-mini-btn"
+                  :title="t('transfer.task.resume')"
+                  @click="emit('resume', item.id)"
+                >
+                  <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      stroke-width="2"
+                      d="M8 5v14l11-7z"
                     />
                   </svg>
                 </button>

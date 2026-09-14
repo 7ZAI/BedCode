@@ -19,15 +19,17 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use bedcode_peer_net::{
-    CancelToken, Connection, DiscoveredPeerRecord, FileMeta, NodeId, OutgoingFile, PeerNetNode,
-    TerminalState, TransferEvent,
+    CancelToken, Connection, DiscoveredPeerRecord, FileMeta, NodeId, OutgoingFile, PauseCmd,
+    PauseSlot, PeerNetNode, TerminalState, TransferEvent,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use tokio::sync::mpsc;
+
+use crate::system::error_boundary::spawn_with_error_boundary;
 
 // ==================== 常量 ====================
 
@@ -105,11 +107,14 @@ struct SendTask {
 /// - `inner` 单把 Mutex 串行化全部读写（临界区均为内存短操作），磁盘 IO 一律
 ///   锁外：首次惰性加载与终态落盘都经 spawn_blocking 移出异步上下文；
 /// - `sessions` 登记活跃会话的取消令牌与代次：重试换发新令牌并递增代次，
-///   陈旧会话迟到的事件按代次丢弃，防止覆盖新一轮状态。
+///   陈旧会话迟到的事件按代次丢弃，防止覆盖新一轮状态；
+/// - `pauses` 登记活跃会话的暂停句柄（wire Pause/Resume 门控）：暂停/恢复
+///   命令按 batch_id 下发，会话终态时摘除（生命周期与 sessions 同步）。
 #[derive(Default)]
 pub struct PeerTransferState {
     inner: Mutex<PeerTransferInner>,
     sessions: Mutex<HashMap<String, (CancelToken, u64)>>,
+    pauses: Mutex<HashMap<String, Arc<PauseSlot>>>,
 }
 
 #[derive(Default)]
@@ -162,6 +167,31 @@ impl PeerTransferState {
             .get(batch_id)
             .map(|(token, _)| token.clone())
     }
+    /// 登记会话暂停句柄（发送会话启动时挂载；暂停/恢复命令按 batch_id 下发）
+    fn register_pause(&self, batch_id: &str, slot: Arc<PauseSlot>) {
+        self.pauses
+            .lock()
+            .expect("peer transfer pauses poisoned")
+            .insert(batch_id.to_string(), slot);
+    }
+
+    /// 取会话暂停句柄（无句柄返回 None：发送会话未启动/已结算/非本端会话）
+    fn pause_slot_of(&self, batch_id: &str) -> Option<Arc<PauseSlot>> {
+        self.pauses
+            .lock()
+            .expect("peer transfer pauses poisoned")
+            .get(batch_id)
+            .cloned()
+    }
+
+    /// 会话结束/终态时摘除暂停句柄（与 unregister_session 同生命周期）
+    fn unregister_pause(&self, batch_id: &str) {
+        self.pauses
+            .lock()
+            .expect("peer transfer pauses poisoned")
+            .remove(batch_id);
+    }
+
 
     fn session_is_current(&self, batch_id: &str, epoch: u64) -> bool {
         self.sessions
@@ -251,13 +281,18 @@ pub async fn cancel_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
     }
 }
 
-/// 显式暂停进行中的发送任务：中断会话连接，任务保留（含已传字节），
-/// 状态置 `paused` 不落历史；接收端按已写偏移保留，恢复后续传。
+/// 显式暂停进行中的发送任务：数据面门控（wire Pause 帧 + 供方停推流），
+/// 连接保持不断开，任务保留（含已传字节）状态置 `paused` 不落历史；
+/// 对端任务经 Pause 帧同步为 paused，恢复续流无缝衔接。
+///
+/// 服务侧拉取记账任务（sources 空）经宿主 handler 按 serve batch_id 门控。
 #[tauri::command]
 pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<bool> {
+    // 非发送任务（拉取接收等）：回落接收方向暂停
+    if !send_task_exists(&app, &batch_id) {
+        return super::peer_receive::pause_peer_receiving(app, batch_id).await;
+    }
     let state = app.state::<PeerTransferState>();
-    // 先改状态再触发取消：会话终态事件（Cancelled/Failed）到达时
-    // apply_terminal 识别 paused 跳过终态结算（见 apply_terminal）
     let paused = {
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
         let Some(task) = inner
@@ -273,25 +308,50 @@ pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
         task.dto.status = "paused".to_string();
         task.dto.rate_bps = 0.0;
         task.dto.updated_at_ms = now_ms();
-        true
+        // 服务侧记账任务无发送会话：经 handler 门控 serve 会话
+        task.sources.is_empty()
     };
     if paused {
-        if let Some(token) = state.cancel_token_of(&batch_id) {
-            token.cancel();
+        // 门控暂停：写 Pause 帧并停推流（连接保持）；无活动会话回落取消令牌
+        let handled = if let Some(slot) = state.pause_slot_of(&batch_id) {
+            slot.send(PauseCmd::Pause).await
+        } else {
+            false
+        };
+        if !handled {
+            if let Some(token) = state.cancel_token_of(&batch_id) {
+                token.cancel();
+            }
         }
         publish(&app);
         // 暂停释放一个并发槽：推进队列中下一个 pending
         pump_send_queue(app.clone()).await;
         tracing::info!(batch_id = %batch_id, "peer transfer paused");
+        Ok(true)
+    } else {
+        // 服务侧拉取记账任务：经 handler 门控 serve 会话
+        match super::peer_receive::handler_and_config(&app).await {
+            Some((handler, _)) if handler.set_serve_paused(&batch_id, true).await => {
+                publish(&app);
+                tracing::info!(batch_id = %batch_id, "pull serve transfer paused");
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
     }
-    Ok(paused)
 }
 
-/// 恢复暂停的发送任务：入队（pending）并经并发闸门启动，接收端按已写
-/// 偏移续传（断点真源在落盘侧）；保留已传字节展示。
+
+/// 恢复暂停的发送任务：连接未断则直接续流（wire Resume 帧 + 供方续推流），
+/// 无活动会话（重启/断线后残留 paused）回落旧路径：入队（pending）并经并发
+/// 闸门重新拨号，接收端按已写偏移续传（断点真源在落盘侧）；保留已传字节。
 #[tauri::command]
 pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    let resumed = {
+    // 非发送任务（拉取接收等）：回落接收方向恢复
+    if !send_task_exists(&app, &batch_id) {
+        return super::peer_receive::resume_peer_receiving(app, batch_id).await;
+    }
+    let resume_mode = {
         let state = app.state::<PeerTransferState>();
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
         let Some(task) = inner
@@ -304,51 +364,150 @@ pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
         if task.dto.status != "paused" || task.dto.direction != "send" {
             return Ok(false);
         }
-        if task.sources.is_empty() {
-            return Ok(false);
-        }
-        task.dto.status = "pending".to_string();
-        task.dto.rate_bps = 0.0;
-        task.dto.detail = None;
-        task.dto.reject_reason = None;
         task.dto.updated_at_ms = now_ms();
-        true
+        // 服务侧记账任务（sources 空）走 serve 门控恢复；否则若活动会话仍在
+        // （连接保持），直接续流；会话已结算则回落重新拨号路径
+        if task.sources.is_empty() {
+            ResumeMode::Serve
+        } else if app
+            .state::<PeerTransferState>()
+            .pause_slot_of(&batch_id)
+            .is_some()
+        {
+            ResumeMode::Live
+        } else {
+            ResumeMode::Redial
+        }
     };
-    if resumed {
-        publish(&app);
-        pump_send_queue(app.clone()).await;
-        tracing::info!(batch_id = %batch_id, "peer transfer resume queued");
+    match resume_mode {
+        ResumeMode::Serve => {
+            match super::peer_receive::handler_and_config(&app).await {
+                Some((handler, _)) if handler.set_serve_paused(&batch_id, false).await => {
+                    set_running_status(&app, &batch_id).await;
+                    Ok(true)
+                }
+                _ => Ok(false),
+            }
+        }
+        ResumeMode::Live => {
+            if let Some(slot) = app.state::<PeerTransferState>().pause_slot_of(&batch_id) {
+                slot.send(PauseCmd::Resume).await;
+            }
+            set_running_status(&app, &batch_id).await;
+            Ok(true)
+        }
+        ResumeMode::Redial => {
+            let resumed = {
+                let state = app.state::<PeerTransferState>();
+                let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+                let Some(task) = inner
+                    .tasks
+                    .iter_mut()
+                    .find(|t| t.dto.batch_id == batch_id)
+                else {
+                    return Ok(false);
+                };
+                if task.sources.is_empty() {
+                    return Ok(false);
+                }
+                task.dto.status = "pending".to_string();
+                task.dto.rate_bps = 0.0;
+                task.dto.detail = None;
+                task.dto.reject_reason = None;
+                task.dto.updated_at_ms = now_ms();
+                true
+            };
+            if resumed {
+                publish(&app);
+                pump_send_queue(app.clone()).await;
+                tracing::info!(batch_id = %batch_id, "peer transfer resume queued");
+            }
+            Ok(resumed)
+        }
     }
-    Ok(resumed)
 }
+
+/// 发送方向任务是否存在（含历史）：pause/resume 的接收方向回落判据
+fn send_task_exists(app: &AppHandle, batch_id: &str) -> bool {
+    let state = app.state::<PeerTransferState>();
+    let inner = state.inner.lock().expect("peer transfer lock poisoned");
+    inner
+        .tasks
+        .iter()
+        .any(|t| t.dto.batch_id == batch_id && t.dto.direction == "send")
+}
+
+/// 恢复模式：serve 门控 / 活跃会话续流 / 重新拨号续传
+enum ResumeMode {
+    Serve,
+    Live,
+    Redial,
+}
+
+/// 任务状态置回 running 并推送（resume 的 Live/Serve 分支共用）
+async fn set_running_status(app: &AppHandle, batch_id: &str) {
+    let state = app.state::<PeerTransferState>();
+    {
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        if let Some(task) = inner
+            .tasks
+            .iter_mut()
+            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "paused")
+        {
+            task.dto.status = "running".to_string();
+            task.dto.updated_at_ms = now_ms();
+        }
+    }
+    publish(app);
+}
+
 
 /// 恢复全部暂停的发送任务（逐个入队，受并发闸门约束）。返回入队数。
 #[tauri::command]
 pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
-    let ids: Vec<String> = {
+    // 活跃会话（连接保持）直接续流；无会话的回落重新拨号入队
+    let mut live_ids: Vec<String> = Vec::new();
+    let queued_ids: Vec<String> = {
         let state = app.state::<PeerTransferState>();
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-        inner
+        let mut queued = Vec::new();
+        for task in inner
             .tasks
             .iter_mut()
-            .filter(|t| t.dto.direction == "send" && t.dto.status == "paused" && !t.sources.is_empty())
-            .map(|t| {
-                t.dto.status = "pending".to_string();
-                t.dto.rate_bps = 0.0;
-                t.dto.detail = None;
-                t.dto.reject_reason = None;
-                t.dto.updated_at_ms = now_ms();
-                t.dto.batch_id.clone()
-            })
-            .collect()
+            .filter(|t| t.dto.direction == "send" && t.dto.status == "paused")
+        {
+            if task.sources.is_empty() {
+                // serve 记账任务：不参与批量恢复（serve 会话由拉取方控制）
+                continue;
+            }
+            if state.pause_slot_of(&task.dto.batch_id).is_some() {
+                task.dto.updated_at_ms = now_ms();
+                live_ids.push(task.dto.batch_id.clone());
+            } else {
+                task.dto.status = "pending".to_string();
+                task.dto.rate_bps = 0.0;
+                task.dto.detail = None;
+                task.dto.reject_reason = None;
+                task.dto.updated_at_ms = now_ms();
+                queued.push(task.dto.batch_id.clone());
+            }
+        }
+        queued
     };
-    if !ids.is_empty() {
+    for bid in &live_ids {
+        if let Some(slot) = app.state::<PeerTransferState>().pause_slot_of(bid) {
+            slot.send(PauseCmd::Resume).await;
+        }
+        set_running_status(&app, bid).await;
+    }
+    if !queued_ids.is_empty() {
         publish(&app);
         pump_send_queue(app.clone()).await;
-        tracing::info!(count = ids.len(), "peer transfer resume all queued");
+        tracing::info!(count = queued_ids.len(), "peer transfer resume all queued");
     }
-    Ok(ids.len())
+    Ok(live_ids.len() + queued_ids.len())
 }
+
 
 
 /// 向一个可信对端推送一批文件/文件夹（扇出 = 前端对本命令的多节点调用）
@@ -381,7 +540,8 @@ pub(crate) async fn send_files_to_peer_with_policy(
         ));
     }
     ensure_history_loaded(&app).await?;
-    let Some((node, cache)) = super::peer_net::runtime_snapshot(&app).await else {
+    // `node` 仅用于确认节点已启动（runtime_snapshot 的可用性即启动判据）
+    let Some((_node, cache)) = super::peer_net::runtime_snapshot(&app).await else {
         return Err(crate::AppError::Internal(
             "peer transfer send failed: node not started".to_string(),
         ));
@@ -509,7 +669,7 @@ async fn pump_send_queue(app: AppHandle) {
 /// settle_failed → apply_terminal 的异步递归链，避免无限栈深）
 fn pump_after_settle(app: &AppHandle) {
     let app = app.clone();
-    tauri::async_runtime::spawn(async move {
+    spawn_with_error_boundary("peer_transfer_pump_after_settle", async move {
         pump_send_queue(app).await;
     });
 }
@@ -656,6 +816,12 @@ fn drive_send_session(
         // 通道随本闭包返回而关闭，转发循环随之自然退出
         let session_batch_id = batch_id.clone();
         let session_app = app.clone();
+        // 暂停句柄：会话启动即挂载（宿主暂停/恢复命令经它写 Pause/Resume 帧），
+        // 会话终态时摘除（与 sessions 生命周期同步）
+        let pause_slot = PauseSlot::new();
+        session_app
+            .state::<PeerTransferState>()
+            .register_pause(&session_batch_id, Arc::clone(&pause_slot));
         let session = tauri::async_runtime::spawn(async move {
             let conn: Connection = match dial_for_send(&node, &record).await {
                 Ok(conn) => conn,
@@ -675,6 +841,7 @@ fn drive_send_session(
                 events_tx,
                 cancel,
                 encrypt,
+                Some(pause_slot),
             )
             .await;
         });
@@ -695,13 +862,39 @@ fn drive_send_session(
                     }
                 }
                 TransferEvent::Terminal { batch_id: bid, state, remote: _ } => {
+                    app.state::<PeerTransferState>().unregister_pause(&bid);
                     apply_terminal(&app, &bid, state, epoch).await;
                     break;
+                }
+                // 对端暂停/恢复帧：同步本端发送任务状态（接收方暂停/恢复推送）
+                TransferEvent::Paused { batch_id: bid, .. } => {
+                    set_pause_status(&app, &bid, true).await;
+                }
+                TransferEvent::Resumed { batch_id: bid, .. } => {
+                    set_pause_status(&app, &bid, false).await;
                 }
             }
         }
         session.abort();
     });
+}
+
+/// 对端暂停/恢复事件 → 本端发送任务状态同步（paused ↔ running）
+async fn set_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
+    let state = app.state::<PeerTransferState>();
+    {
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        if let Some(task) = inner
+            .tasks
+            .iter_mut()
+            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
+        {
+            task.dto.status = if paused { "paused".to_string() } else { "running".to_string() };
+            task.dto.rate_bps = 0.0;
+            task.dto.updated_at_ms = now_ms();
+        }
+    }
+    publish(app);
 }
 
 /// 发送专用拨号（每次会话独立握手）：可信对端静默放行；拒绝/不可达归一为
@@ -841,9 +1034,34 @@ pub(crate) async fn drive_serve_events(app: AppHandle, mut rx: mpsc::Receiver<Tr
             TransferEvent::Terminal { batch_id, state, .. } => {
                 settle_serve_terminal(&app, &batch_id, state).await;
             }
+            // 拉取方暂停/恢复：同步服务侧记账任务状态（数据面门控在 serve 会话）
+            TransferEvent::Paused { batch_id, .. } => {
+                set_serve_pause_status(&app, &batch_id, true).await;
+            }
+            TransferEvent::Resumed { batch_id, .. } => {
+                set_serve_pause_status(&app, &batch_id, false).await;
+            }
             TransferEvent::OfferPending { .. } => {}
         }
     }
+}
+
+/// 服务侧记账任务暂停/恢复状态同步（拉取方 Pause/Resume 帧到达时）
+async fn set_serve_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
+    let state = app.state::<PeerTransferState>();
+    {
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        if let Some(task) = inner
+            .tasks
+            .iter_mut()
+            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
+        {
+            task.dto.status = if paused { "paused".to_string() } else { "running".to_string() };
+            task.dto.rate_bps = 0.0;
+            task.dto.updated_at_ms = now_ms();
+        }
+    }
+    publish(app);
 }
 
 /// 服务侧任务登记：解析对端展示名后插入 send 任务（服务侧不可重试：sources 空）
@@ -1251,61 +1469,6 @@ fn relay_upload_dest_name(display_name: &str) -> String {
     } else {
         name
     }
-}
-
-/// 选择待发送文件夹（桌面端单次单个，可多次累加；用户取消返回空数组）
-#[tauri::command]
-pub async fn peer_pick_folder(app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folder(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("peer_pick_folder: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(path)) => Ok(vec![path_to_string(path)?]),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "peer_pick_folder: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// 系统多目录选择器（一次可选多个；用户取消返回空数组）
-pub async fn peer_pick_folders(app_handle: AppHandle) -> crate::Result<Vec<String>> {
-    use tauri_plugin_dialog::DialogExt;
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app_handle.dialog().file().pick_folders(move |selection| {
-        if tx.send(selection).is_err() {
-            tracing::debug!("peer_pick_folders: receiver dropped before dialog completed");
-        }
-    });
-    match rx.await {
-        Ok(Some(paths)) => paths.into_iter().map(path_to_string).collect(),
-        // 用户取消选择
-        Ok(None) => Ok(Vec::new()),
-        Err(e) => Err(crate::AppError::Plugin(format!(
-            "peer_pick_folders: dialog channel closed: {e}"
-        ))),
-    }
-}
-
-/// Dialog FilePath → UTF-8 绝对路径串（非 UTF-8 路径显式报错而非静默丢弃）
-fn path_to_string(file_path: tauri_plugin_dialog::FilePath) -> crate::Result<String> {
-    let path = file_path.into_path().map_err(|e| {
-        crate::AppError::InvalidInput(format!(
-            "peer pick: failed to convert selected path: {e}"
-        ))
-    })?;
-    path.to_str()
-        .map(|s| s.to_string())
-        .ok_or_else(|| {
-            crate::AppError::InvalidInput(
-                "peer pick: selected path is not valid UTF-8".to_string(),
-            )
-        })
 }
 
 // ==================== 测试 ====================

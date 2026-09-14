@@ -47,11 +47,10 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
-    CAP_FILE_TRANSFER, Connection, ConnectionHandler, DiscoveryCache, DiscoveryConfig,
-    DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, HandlerFuture, NodeId, NodeIdentity,
-    PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
-    SharedDirRoot, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore, TransferConfig,
-    TransferEvent,
+    Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
+    DiscoveryEvent, HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
+    SharedDirEntry, SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent,
+    TrustEvent, TrustStore, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -256,7 +255,11 @@ pub async fn list_discovered_peers(app: AppHandle) -> crate::Result<Vec<Discover
         .map(|runtime| runtime.cache.list().iter().map(DiscoveredPeerDto::from).collect())
         .unwrap_or_default();
     // 诊断插桩：query-peer 是否被调用、缓存当时有几条（排查设备列表空可见性盲区）
-    tracing::info!(count = peers.len(), started = guard.is_some(), "list_discovered_peers queried");
+    tracing::info!(
+        count = peers.len(),
+        started = guard.is_some(),
+        "list_discovered_peers queried"
+    );
     Ok(peers)
 }
 
@@ -281,9 +284,9 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
     // 锁内只取快照与句柄：mTLS 握手可达秒级，不得跨 await 持锁阻塞 start/stop
     let (record, node) = {
         let guard = state.runtime.lock().await;
-        let runtime = guard.as_ref().ok_or_else(|| {
-            crate::AppError::Internal("peer-net dial failed: node not started".to_string())
-        })?;
+        let runtime = guard
+            .as_ref()
+            .ok_or_else(|| crate::AppError::Internal("peer-net dial failed: node not started".to_string()))?;
         match runtime.cache.get(&parsed) {
             Some(record) => (record, runtime.node.clone()),
             None => {
@@ -308,7 +311,10 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
                 .expect("connections table lock poisoned")
                 .insert(
                     parsed.to_string(),
-                    OutboundSession { close: session_close, id: session_id },
+                    OutboundSession {
+                        close: session_close,
+                        id: session_id,
+                    },
                 )
             {
                 let _ = old.close.send(true);
@@ -338,11 +344,17 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
         }
         Err(PeerNetError::DialDeniedByPeer { .. }) => {
             tracing::info!(node_id = %parsed, "peer dial denied by remote");
-            Ok(DialPeerResultDto { status: "denied".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "denied".to_string(),
+                device_name: Some(device_name),
+            })
         }
         Err(e) => {
             tracing::warn!(node_id = %parsed, "peer dial unreachable: {e}");
-            Ok(DialPeerResultDto { status: "unreachable".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "unreachable".to_string(),
+                device_name: Some(device_name),
+            })
         }
     }
 }
@@ -370,10 +382,7 @@ pub struct DialEndpoint {
 /// 复用其展示名；未命中则回退短指纹占位，并观察一条回退记录进缓存——过渡期
 /// 桥接：数据面函数（send/browse/pull）内部仍按 node-id 寻址且依赖缓存解析
 /// 元数据，Phase 4 数据面全面句柄化后此观察分支随旧路径一并退役。
-pub async fn dial_peer_endpoint(
-    app: AppHandle,
-    endpoint: DialEndpoint,
-) -> crate::Result<DialPeerResultDto> {
+pub async fn dial_peer_endpoint(app: AppHandle, endpoint: DialEndpoint) -> crate::Result<DialPeerResultDto> {
     let parsed = parse_node_id(&endpoint.node_id)?;
     let addr: SocketAddr = format!("{}:{}", endpoint.addr.trim(), endpoint.port)
         .parse()
@@ -394,9 +403,7 @@ pub async fn dial_peer_endpoint(
         let guard = state.runtime.lock().await;
         let runtime = guard
             .as_ref()
-            .ok_or_else(|| {
-                crate::AppError::Internal("peer-net dial failed: node not started".to_string())
-            })?;
+            .ok_or_else(|| crate::AppError::Internal("peer-net dial failed: node not started".to_string()))?;
         (runtime.node.clone(), runtime.cache.get(&parsed))
     };
     let cache_miss = cached_record.is_none();
@@ -404,7 +411,10 @@ pub async fn dial_peer_endpoint(
     let device_name = cached_record
         .map(|r| r.device_name)
         .unwrap_or_else(|| format!("node-{}", parsed.short_fingerprint()));
-    let static_record = StaticPeerRecord { node_id: parsed.clone(), addr };
+    let static_record = StaticPeerRecord {
+        node_id: parsed.clone(),
+        addr,
+    };
     match node.dial(&static_record).await {
         Ok(connection) => {
             // 会话连接移交常驻活性泵（同 dial_peer：对端断开泵感知，本机断开
@@ -417,7 +427,10 @@ pub async fn dial_peer_endpoint(
                 .expect("connections table lock poisoned")
                 .insert(
                     parsed.to_string(),
-                    OutboundSession { close: session_close, id: session_id },
+                    OutboundSession {
+                        close: session_close,
+                        id: session_id,
+                    },
                 )
             {
                 let _ = old.close.send(true);
@@ -460,11 +473,17 @@ pub async fn dial_peer_endpoint(
         }
         Err(PeerNetError::DialDeniedByPeer { .. }) => {
             tracing::info!(node_id = %parsed, "peer dial denied by remote");
-            Ok(DialPeerResultDto { status: "denied".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "denied".to_string(),
+                device_name: Some(device_name),
+            })
         }
         Err(e) => {
             tracing::warn!(node_id = %parsed, "peer dial unreachable: {e}");
-            Ok(DialPeerResultDto { status: "unreachable".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "unreachable".to_string(),
+                device_name: Some(device_name),
+            })
         }
     }
 }
@@ -477,10 +496,7 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     let parsed = parse_node_id(&node_id)?;
     let state = app.state::<PeerNetState>();
     let removed = {
-        let mut sessions = state
-            .connections
-            .lock()
-            .expect("connections table lock poisoned");
+        let mut sessions = state.connections.lock().expect("connections table lock poisoned");
         sessions.remove(&parsed.to_string())
     };
     if let Some(session) = &removed {
@@ -500,7 +516,11 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     }
     if removed.is_some() || inbound_closed.is_some() {
         tracing::info!(node_id = %parsed, "peer connection dropped by user");
-        emit_json(&app, "peer-disconnected", serde_json::json!({ "nodeId": parsed.as_str(), "connected": false }));
+        emit_json(
+            &app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": parsed.as_str(), "connected": false }),
+        );
     }
     Ok(removed.is_some())
 }
@@ -548,10 +568,7 @@ async fn session_watch(
     drop(conn);
     let state = app.state::<PeerNetState>();
     let owned = {
-        let mut sessions = state
-            .connections
-            .lock()
-            .expect("connections table lock poisoned");
+        let mut sessions = state.connections.lock().expect("connections table lock poisoned");
         let owned = matches!(sessions.get(&node_id), Some(s) if s.id == session_id);
         if owned {
             sessions.remove(&node_id);
@@ -593,11 +610,7 @@ pub(crate) fn current_node_id(app: &AppHandle) -> Option<String> {
 /// 建立时可信条目已带元数据（设置面立即可见名称）。返回是否成功送达回执——
 /// false 表示请求已超时/已应答/ID 未知（前端应关闭对应弹窗）。
 #[tauri::command]
-pub async fn respond_peer_consent(
-    app: AppHandle,
-    request_id: String,
-    accepted: bool,
-) -> crate::Result<bool> {
+pub async fn respond_peer_consent(app: AppHandle, request_id: String, accepted: bool) -> crate::Result<bool> {
     let state = app.state::<PeerNetState>();
     let pending = state
         .consents
@@ -653,9 +666,7 @@ pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeer
         .list_entries()
         .into_iter()
         .map(|entry| TrustedPeerDto {
-            display_name: entry
-                .display_name
-                .or_else(|| online_names.get(&entry.node_id).cloned()),
+            display_name: entry.display_name.or_else(|| online_names.get(&entry.node_id).cloned()),
             node_id: entry.node_id.to_string(),
             fingerprint_short: entry.node_id.short_fingerprint().to_string(),
             added_at: entry.added_at.to_rfc3339(),
@@ -666,8 +677,8 @@ pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeer
 /// 撤销可信对端（返回该 ID 原本是否存在；撤销后对端重连重新走首连确认）
 #[tauri::command]
 pub async fn revoke_trusted_peer(app: AppHandle, node_id: String) -> crate::Result<bool> {
-    let parsed = NodeId::parse(&node_id)
-        .map_err(|e| crate::AppError::Internal(format!("invalid peer node id: {e}")))?;
+    let parsed =
+        NodeId::parse(&node_id).map_err(|e| crate::AppError::Internal(format!("invalid peer node id: {e}")))?;
     let trust = trust_handle(&app).await?;
     let removed = trust.remove(&parsed).map_err(map_peer_net_error)?;
     // 撤销信任的同时断开与该节点的活跃连接（出站/入站均关停）：信任撤销只影响
@@ -704,11 +715,7 @@ pub struct SharedDirDto {
 impl From<&SharedDirEntry> for SharedDirDto {
     fn from(entry: &SharedDirEntry) -> Self {
         let (kind, path, tree_uri) = match &entry.root {
-            SharedDirRoot::Fs { path } => (
-                "fs",
-                Some(path.to_string_lossy().into_owned()),
-                None,
-            ),
+            SharedDirRoot::Fs { path } => ("fs", Some(path.to_string_lossy().into_owned()), None),
             SharedDirRoot::Saf { tree_uri } => ("saf", None, Some(tree_uri.clone())),
         };
         Self {
@@ -733,11 +740,7 @@ pub async fn list_shared_directories(app: AppHandle) -> crate::Result<Vec<Shared
 ///
 /// 返回新条目（含注册表分配的 ID）。同根重复注册被拒绝。
 #[tauri::command]
-pub async fn add_shared_directory(
-    app: AppHandle,
-    name: Option<String>,
-    path: String,
-) -> crate::Result<SharedDirDto> {
+pub async fn add_shared_directory(app: AppHandle, name: Option<String>, path: String) -> crate::Result<SharedDirDto> {
     if path.trim().is_empty() {
         return Err(crate::AppError::InvalidInput(
             "add shared directory: path must not be empty".to_string(),
@@ -754,7 +757,12 @@ pub async fn add_shared_directory(
         });
     let store = shared_handle(&app).await?;
     let entry = store
-        .add(display_name, SharedDirRoot::Fs { path: PathBuf::from(&path) })
+        .add(
+            display_name,
+            SharedDirRoot::Fs {
+                path: PathBuf::from(&path),
+            },
+        )
         .map_err(map_peer_net_error)?;
     tracing::info!(dir_id = %entry.id, path = %path, "shared directory added (desktop)");
     Ok(SharedDirDto::from(&entry))
@@ -849,10 +857,7 @@ impl ConnectionHandler for InboundConnectionBridge {
         //（2026-09-07 实机实证：数据面短连接 churn 造成移动端仍显示未连接）
         let is_first_connection = {
             let state = self.app.state::<PeerNetState>();
-            let mut peers = state
-                .inbound_peers
-                .lock()
-                .expect("inbound peers lock poisoned");
+            let mut peers = state.inbound_peers.lock().expect("inbound peers lock poisoned");
             let count = peers.entry(node_id.as_str().to_string()).or_default();
             *count += 1;
             let has_outbound = state
@@ -886,10 +891,8 @@ impl ConnectionHandler for InboundConnectionBridge {
             // 内层 handler 放入独立任务并登记 JoinHandle：disconnect_peer /
             // stop_locked 据此按节点中止（连接随任务 drop 关闭，对端活性泵经
             // EOF 感知）。handler 以 EOF/错误结束时本清算路径发 peer-disconnected
-            let join = crate::system::error_boundary::spawn_with_error_boundary(
-                "peer_inbound_handler",
-                inner.handle(conn),
-            );
+            let join =
+                crate::system::error_boundary::spawn_with_error_boundary("peer_inbound_handler", inner.handle(conn));
             {
                 let state = app.state::<PeerNetState>();
                 state
@@ -906,10 +909,7 @@ impl ConnectionHandler for InboundConnectionBridge {
             //（会话连接与数据面短连接并存时，短连接结束不得摘除连接态）
             let was_last_inbound = {
                 let state = app.state::<PeerNetState>();
-                let mut peers = state
-                    .inbound_peers
-                    .lock()
-                    .expect("inbound peers lock poisoned");
+                let mut peers = state.inbound_peers.lock().expect("inbound peers lock poisoned");
                 match peers.entry(node_id.as_str().to_string()) {
                     std::collections::hash_map::Entry::Occupied(mut e) => {
                         let count = e.get_mut();
@@ -988,15 +988,12 @@ async fn start_locked(
 
     // 占位 bind 固定默认端口（防火墙规则友好），被占回退 :0；占位句柄移交节点
     // 消除端口竞态（Decision 4）
-    let listener =
-        TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, DEFAULT_PEER_PORT)))
-            .or_else(|_| TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))))
-            .map_err(|e| {
-                crate::AppError::Internal(format!("bind peer-net listener failed: {e}"))
-            })?;
-    let bind_addr = listener.local_addr().map_err(|e| {
-        crate::AppError::Internal(format!("read peer-net listener addr failed: {e}"))
-    })?;
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, DEFAULT_PEER_PORT)))
+        .or_else(|_| TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))))
+        .map_err(|e| crate::AppError::Internal(format!("bind peer-net listener failed: {e}")))?;
+    let bind_addr = listener
+        .local_addr()
+        .map_err(|e| crate::AppError::Internal(format!("read peer-net listener addr failed: {e}")))?;
 
     let node = PeerNetNode::new(PeerNetNodeConfig {
         bind_addr,
@@ -1037,8 +1034,13 @@ async fn start_locked(
         chunk_size: 64 * 1024,
         landing: None,
     };
-    let handler =
-        Arc::new(SharedDirHandler::new(shared, None, config.clone(), transfer_tx, serve_tx));
+    let handler = Arc::new(SharedDirHandler::new(
+        shared,
+        None,
+        config.clone(),
+        transfer_tx,
+        serve_tx,
+    ));
     // 接收侧登记句柄与配置快照（设置热更新/按批取消入口），并按持久化
     // 设置纠正首份策略与落点；事件消费任务随后启动
     super::peer_receive::register_handler(app, Arc::clone(&handler), config).await;
@@ -1075,29 +1077,25 @@ async fn start_locked(
     // 引擎广播 daemon 同绑 5353 端口互抢多播包——真机实证「只发现自己、发现
     // 不了对端」；收回引擎单守护即恢复（多播包只进一个守护，广播+浏览必须同
     // 守护才能既收对端响应又回自己的广播）。
-    let (discovery_tx, mut discovery_rx) =
-        tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_mdns_bridge",
-        async move {
-            // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
-            // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
-            // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
-            // 同款形态已实机验证可靠。
-            loop {
-                match discovery_rx.try_recv() {
-                    Ok(event) => forward_discovery_event(event),
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-                    // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        tracing::debug!("peer mDNS bus bridge exited");
-                        break;
-                    }
+    let (discovery_tx, mut discovery_rx) = tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
+    crate::system::error_boundary::spawn_with_error_boundary("peer_net_mdns_bridge", async move {
+        // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
+        // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
+        // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
+        // 同款形态已实机验证可靠。
+        loop {
+            match discovery_rx.try_recv() {
+                Ok(event) => forward_discovery_event(event),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    tracing::debug!("peer mDNS bus bridge exited");
+                    break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
-        },
-    );
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    });
 
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
@@ -1125,7 +1123,14 @@ async fn start_locked(
     spawn_discovery_refresh_subscriber(app.clone());
     Ok(PeerNodeStatus {
         started: true,
-        node_id: state.runtime.lock().await.as_ref().expect("just stored").node_id.clone(),
+        node_id: state
+            .runtime
+            .lock()
+            .await
+            .as_ref()
+            .expect("just stored")
+            .node_id
+            .clone(),
         listen_addr: listen_addr.to_string(),
     })
 }
@@ -1155,7 +1160,11 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
     let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (node_id, session) in drained {
         let _ = session.close.send(true);
-        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
+        emit_json(
+            app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": node_id, "connected": false }),
+        );
         emitted.insert(node_id);
     }
     // 入站连接随节点关停一并终结：中止内层 handler（连接随任务 drop 关闭，
@@ -1184,7 +1193,11 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
         if emitted.contains(&node_id) {
             continue;
         }
-        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
+        emit_json(
+            app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": node_id, "connected": false }),
+        );
     }
     let runtime = state.runtime.lock().await.take();
     match runtime {
@@ -1193,11 +1206,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             // 远端拉取队列同步中止（issue 11）
             super::peer_receive::clear_handler(app).await;
             super::peer_remote::clear_state(app).await;
-            runtime
-                .daemon
-                .stop()
-                .await
-                .map_err(map_peer_net_error)?;
+            runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
@@ -1212,11 +1221,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
 /// `peer-consent-requested` 事件。应答经 `respond_peer_consent` 命令回流；
 /// 30s 内无应答由 crate 闸门按拒绝结算（`CONFIRM_TIMEOUT`），弹窗超时语义
 /// 与之天然对齐（前端按同值倒计时收起）。
-async fn drive_gate(
-    mut events: tokio::sync::mpsc::Receiver<TrustEvent>,
-    cache: Arc<DiscoveryCache>,
-    app: AppHandle,
-) {
+async fn drive_gate(mut events: tokio::sync::mpsc::Receiver<TrustEvent>, cache: Arc<DiscoveryCache>, app: AppHandle) {
     while let Some(event) = events.recv().await {
         match event {
             TrustEvent::ConfirmRequested { node_id, reply } => {
@@ -1226,13 +1231,13 @@ async fn drive_gate(
                 let request_id = uuid::Uuid::new_v4().to_string();
                 {
                     let state = app.state::<PeerNetState>();
-                    let mut pending = state
-                        .consents
-                        .lock()
-                        .expect("consent table lock poisoned");
+                    let mut pending = state.consents.lock().expect("consent table lock poisoned");
                     pending.insert(
                         request_id.clone(),
-                        PendingConsent { node_id: node_id.clone(), reply },
+                        PendingConsent {
+                            node_id: node_id.clone(),
+                            reply,
+                        },
                     );
                 }
                 tracing::info!(
@@ -1276,12 +1281,10 @@ async fn shared_handle(app: &AppHandle) -> crate::Result<Arc<SharedDirStore>> {
 async fn shared_handle_at(data_dir: &Path) -> crate::Result<Arc<SharedDirStore>> {
     let dir = data_dir.to_path_buf();
     // crate 的 load_or_create 为同步阻塞 IO：移出异步上下文
-    let store = tauri::async_runtime::spawn_blocking(move || {
-        SharedDirStore::load_or_create(&dir)
-    })
-    .await
-    .map_err(|e| crate::AppError::Internal(format!("join shared dirs load failed: {e}")))?
-    .map_err(map_peer_net_error)?;
+    let store = tauri::async_runtime::spawn_blocking(move || SharedDirStore::load_or_create(&dir))
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("join shared dirs load failed: {e}")))?
+        .map_err(map_peer_net_error)?;
     Ok(Arc::new(store))
 }
 
@@ -1301,8 +1304,7 @@ pub(crate) fn map_peer_net_error(e: PeerNetError) -> crate::AppError {
 
 /// 节点 ID hex 字符串解析（issue 08 命令面共用）：统一错误上下文
 pub(crate) fn parse_node_id(node_id: &str) -> crate::Result<NodeId> {
-    NodeId::parse(node_id)
-        .map_err(|e| crate::AppError::Internal(format!("peer-net invalid node id '{node_id}': {e}")))
+    NodeId::parse(node_id).map_err(|e| crate::AppError::Internal(format!("peer-net invalid node id '{node_id}': {e}")))
 }
 
 /// 向前端发 JSON 载荷事件（失败只记日志不上抛：窗口缺失/前端未就绪属预期场景）。
@@ -1357,12 +1359,9 @@ struct DiscoveryRefreshHandler {
 impl crate::plugin::message_bus::BusMessageHandler for DiscoveryRefreshHandler {
     fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
         let app = self.app.clone();
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "peer_net_discovery_refresh_handler",
-            async move {
-                handle_discovery_refresh(app).await;
-            },
-        );
+        crate::system::error_boundary::spawn_with_error_boundary("peer_net_discovery_refresh_handler", async move {
+            handle_discovery_refresh(app).await;
+        });
         Ok(())
     }
 }
@@ -1425,34 +1424,30 @@ async fn handle_discovery_refresh(app: AppHandle) {
 /// 挂载刷新请求静态订阅：节点由插件激活驱动启动，注册时插件管理器可能
 /// 尚未进全局态，轮询等就绪后再注册（进程内仅注册一次）
 /// 注册护栏：peer 节点重启会重入 start_locked，静态订阅只挂一次
-static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn spawn_discovery_refresh_subscriber(app: AppHandle) {
     use std::sync::atomic::Ordering;
     if DISCOVERY_REFRESH_SUBSCRIBED.swap(true, Ordering::SeqCst) {
         return;
     }
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_discovery_refresh_subscriber",
-        async move {
-            loop {
-                if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-                    ctx.plugin_host()
-                        .message_bus()
-                        .subscribe_static(
-                            DISCOVERY_REFRESH_SUBSCRIBER,
-                            DISCOVERY_REFRESH_TOPIC,
-                            Box::new(DiscoveryRefreshHandler { app }),
-                        )
-                        .await;
-                    tracing::info!("peer discovery refresh subscriber registered");
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    crate::system::error_boundary::spawn_with_error_boundary("peer_net_discovery_refresh_subscriber", async move {
+        loop {
+            if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+                ctx.plugin_host()
+                    .message_bus()
+                    .subscribe_static(
+                        DISCOVERY_REFRESH_SUBSCRIBER,
+                        DISCOVERY_REFRESH_TOPIC,
+                        Box::new(DiscoveryRefreshHandler { app }),
+                    )
+                    .await;
+                tracing::info!("peer discovery refresh subscriber registered");
+                return;
             }
-        },
-    );
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
 }
 
 /// 前端事件名 → 插件总线 topic 映射（非对等事件返回 None 不桥接）
@@ -1480,9 +1475,7 @@ fn dial_connected_payload(node_id: &str, device_name: &str) -> serde_json::Value
 /// 运行时句柄快照（issue 09 发送编排用）：节点句柄 + 发现缓存
 ///
 /// 锁内仅 Clone 廉价句柄，不跨 await 持锁；节点未启动返回 None。
-pub(crate) async fn runtime_snapshot(
-    app: &AppHandle,
-) -> Option<(PeerNetNode, Arc<DiscoveryCache>)> {
+pub(crate) async fn runtime_snapshot(app: &AppHandle) -> Option<(PeerNetNode, Arc<DiscoveryCache>)> {
     let state = app.state::<PeerNetState>();
     let guard = state.runtime.lock().await;
     guard.as_ref().map(|r| (r.node.clone(), r.cache.clone()))

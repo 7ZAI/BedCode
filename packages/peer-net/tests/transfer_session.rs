@@ -252,7 +252,7 @@ async fn always_accept_pushes_single_file_end_to_end() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("send session io");
@@ -297,7 +297,7 @@ async fn always_deny_rejects_offer_without_touching_disk() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("send session io");
@@ -355,7 +355,7 @@ async fn ask_policy_accept_after_explicit_reply() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     ));
 
     // 询问事件携带批清单与总大小（询问弹窗的知情依据）
@@ -402,7 +402,7 @@ async fn ask_policy_reject_after_explicit_reply() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     ));
 
     match rx.events.recv().await.expect("offer pending event") {
@@ -451,7 +451,7 @@ async fn ask_timeout_auto_rejects_and_sender_receives_terminal_state() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("send session io");
@@ -507,6 +507,7 @@ async fn sender_cancel_mid_transfer_lands_correct_terminals_both_sides() {
         tx,
         cancel_a.clone(),
         false,
+        None,
     ));
 
     // 观察到首个进度事件即取消（此刻必然仍在传输中）
@@ -589,7 +590,7 @@ async fn receiver_cancel_mid_transfer_lands_correct_terminals_both_sides() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     ));
 
     // 观察接收端进度后触发宿主取消入口
@@ -676,7 +677,7 @@ async fn receiver_written_offset_is_resume_truth_source() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("send session io");
@@ -950,7 +951,7 @@ async fn connection_drop_mid_file_resumes_and_content_matches() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("leg2 send io");
@@ -1070,7 +1071,7 @@ async fn receiver_process_restart_resumes_from_disk_truth() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("leg2 send io");
@@ -1156,7 +1157,7 @@ async fn multi_file_batch_retry_supplements_only_missing_files() {
         tx,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("leg2 send io");
@@ -1204,6 +1205,7 @@ async fn sender_cancel_then_retry_resumes_from_kept_part() {
         tx,
         cancel_a.clone(),
         false,
+        None,
     ));
     match tokio::time::timeout(Duration::from_secs(10), a_events.recv()).await {
         Ok(Some(TransferEvent::Progress { .. })) => {}
@@ -1236,7 +1238,7 @@ async fn sender_cancel_then_retry_resumes_from_kept_part() {
         tx2,
         CancelToken::new(),
         false,
-
+        None,
     )
     .await
     .expect("leg2 send io");
@@ -1253,4 +1255,118 @@ async fn sender_cancel_then_retry_resumes_from_kept_part() {
     let (first, max) = progress_bounds(&mut a_events2).await;
     assert!(first >= partial_len, "retry must start at kept-part baseline");
     assert_eq!(max, total as u64);
+}
+
+/// 发送方 wire 暂停/恢复（issue 07 之后 file-transfer 暂停/恢复协议）：
+/// 发送端经 PauseSlot 写 Pause 帧 → 接收端收到 Paused 事件且推流门控停滞；
+/// 发送端 Resume → 接收端收到 Resumed 事件并最终双双 Completed。
+/// 断言只看外部行为：事件序列 + 落盘内容完整（暂停不丢字节）。
+#[tokio::test]
+async fn sender_pause_then_resume_completes_both_sides_with_full_content() {
+    use bedcode_peer_net::{PauseCmd, PauseSlot};
+
+    let (a, b, mut rx) = spawn_pair(ReceivePolicy::AlwaysAccept).await;
+    let (source, content) = make_source_file(a.dir.path(), "pause-resume.bin", 8 * 1024 * KIB);
+
+    let conn = dial_trusted(&a, &b).await;
+    let (tx, mut a_events) = mpsc::channel(2);
+    let a_drain = tokio::spawn(async move {
+        let mut seen = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(15), a_events.recv()).await {
+                Ok(Some(event)) => {
+                    let terminal = matches!(event, TransferEvent::Terminal { .. });
+                    seen.push(event);
+                    if terminal {
+                        break;
+                    }
+                }
+                _ => break,
+            }
+        }
+        seen
+    });
+
+    let pause_slot = PauseSlot::new();
+    let sender = tokio::spawn(send_batch(
+        conn,
+        "batch-pause-resume".to_string(),
+        vec![OutgoingFile {
+            source,
+            remote_path: "pause-resume.bin".to_string(),
+        }],
+        tx,
+        CancelToken::new(),
+        false,
+        Some(pause_slot.clone()),
+    ));
+
+    // 等接收端进度过半后暂停：推流门控 + wire Pause 帧
+    let mut observed = 0u64;
+    let mut got_paused = false;
+    let mut got_resumed = false;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.events.recv()).await {
+            Ok(Some(TransferEvent::Progress { transferred, .. })) => {
+                observed = transferred;
+                if observed >= 4 * 1024 * KIB as u64 {
+                    break;
+                }
+            }
+            Ok(Some(_)) => continue,
+            other => panic!("expected progress, got {other:?}"),
+        }
+    }
+    pause_slot.send(PauseCmd::Pause).await;
+    // 暂停后应收到 Paused 事件（在途数据块可能先到，容忍少量 Progress）；
+    // 门控有效性：暂停期间不产生任何终态（传输挂起而非完成/取消）
+    let mut paused_seen = false;
+    let pause_window = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            match rx.events.recv().await {
+                Some(TransferEvent::Paused { .. }) => break,
+                Some(TransferEvent::Terminal { .. }) => {
+                    panic!("terminal while paused: transfer must stay suspended")
+                }
+                Some(_) => continue,
+                None => panic!("receiver events closed while paused"),
+            }
+        }
+    })
+    .await;
+    assert!(pause_window.is_ok(), "Paused event must arrive after pause");
+    paused_seen = true;
+    // 暂停已生效：短暂窗口内不应有终态（也不应自行完成）
+    let no_terminal = tokio::time::timeout(Duration::from_millis(400), rx.events.recv()).await;
+    match no_terminal {
+        Ok(Some(TransferEvent::Terminal { .. })) => {
+            panic!("transfer reached terminal while paused")
+        }
+        _ => {}
+    }
+    pause_slot.send(PauseCmd::Resume).await;
+
+    // 恢复后应观察到 Resumed 事件与最终 Completed（发送端与接收端双侧）
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.events.recv()).await {
+            Ok(Some(TransferEvent::Paused { .. })) => got_paused = true,
+            Ok(Some(TransferEvent::Resumed { .. })) => got_resumed = true,
+            Ok(Some(TransferEvent::Terminal { state, .. })) => {
+                assert_eq!(state, TerminalState::Completed, "receiver terminal after resume");
+                break;
+            }
+            Ok(Some(_)) => continue,
+            other => panic!("expected resumed/terminal, got {other:?}"),
+        }
+    }
+    let _ = sender.await.expect("sender join");
+    let _ = a_drain.await.expect("sender drain join");
+    assert!(paused_seen, "receiver must observe Paused event");
+    assert!(got_resumed, "receiver must observe Resumed event");
+
+    let downloaded = b.dir.path().join("downloads").join("pause-resume.bin");
+    assert_eq!(
+        std::fs::read(&downloaded).expect("read paused-resumed file"),
+        content
+    );
 }

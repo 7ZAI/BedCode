@@ -184,6 +184,95 @@ impl CancelToken {
     }
 }
 
+// ==================== 暂停门控（wire Pause/Resume） ====================
+
+/// 宿主 → 会话的数据面指令（经 [`PauseSlot`] 通道下发）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PauseCmd {
+    /// 暂停：会话写 Pause 帧并（供方）停止推流
+    Pause,
+    /// 恢复：会话写 Resume 帧并（供方）继续推流
+    Resume,
+}
+
+/// 会话暂停控制句柄：宿主创建后传入会话循环，宿主侧保留 Arc 供按 batch
+/// 暂停/恢复（命令经有界通道下发，循环侧取走 Receiver）。
+///
+/// - 供方（发送端 / pull serve）收到命令后写 Pause/Resume 帧并门控自身推流；
+/// - 消费方（接收端）收到命令后仅写 Pause/Resume 帧（数据面门控在对端，
+///   本端读循环天然空闲故永不停止读——保证对端 Resume 帧可达）；
+/// - 任一方向收到对端 Pause/Resume 帧：仅置位门控并抬发
+///   [`TransferEvent::Paused`] / `Resumed`（宿主据以同步对端任务状态），不写回。
+#[derive(Debug)]
+pub struct PauseSlot {
+    paused: Arc<std::sync::atomic::AtomicBool>,
+    cmd_tx: mpsc::Sender<PauseCmd>,
+    cmd_rx: tokio::sync::Mutex<Option<mpsc::Receiver<PauseCmd>>>,
+}
+
+impl PauseSlot {
+    /// 新建句柄（通道容量 8；命令量极小，满则发送失败由宿主按返回 bool 处理）
+    pub fn new() -> Arc<Self> {
+        let (cmd_tx, cmd_rx) = mpsc::channel::<PauseCmd>(8);
+        Arc::new(Self {
+            paused: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            cmd_tx,
+            cmd_rx: tokio::sync::Mutex::new(Some(cmd_rx)),
+        })
+    }
+
+    /// 会话循环侧取走命令接收端（单次；无命令通道时返回 None）
+    pub(crate) async fn take_receiver(&self) -> Option<mpsc::Receiver<PauseCmd>> {
+        self.cmd_rx.lock().await.take()
+    }
+
+    /// 是否处于暂停态（供方数据面门控判据）
+    pub fn is_paused(&self) -> bool {
+        self.paused.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 本地指令：置门控位 + 下发命令（会话循环据此写 Pause/Resume 帧）
+    pub async fn send(&self, cmd: PauseCmd) -> bool {
+        match cmd {
+            PauseCmd::Pause => self.paused.store(true, std::sync::atomic::Ordering::SeqCst),
+            PauseCmd::Resume => self.paused.store(false, std::sync::atomic::Ordering::SeqCst),
+        }
+        self.cmd_tx.send(cmd).await.is_ok()
+    }
+
+    /// 对端帧置位（会话循环在收到对端 Pause/Resume 时调用；不写回）
+    pub fn set_from_peer(&self, paused: bool) {
+        self.paused.store(paused, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// 会话内部挂载的暂停上下文（候选编译期区分挂载与否）
+pub(crate) enum SessionPause {
+    /// 未挂暂停控制
+    None,
+    /// 已挂暂停控制（slot 供门控读取，cmd_rx 供 select 分支消费命令）
+    Armed {
+        slot: Arc<PauseSlot>,
+        cmd_rx: mpsc::Receiver<PauseCmd>,
+    },
+}
+
+impl SessionPause {
+    /// 由宿主传入的可选句柄装配（取走命令接收端；会话循环单次消费）
+    pub(crate) async fn from_optional(slot: Option<Arc<PauseSlot>>) -> Self {
+        match slot {
+            Some(slot) => match slot.take_receiver().await {
+                Some(cmd_rx) => SessionPause::Armed {
+                    slot: Arc::clone(&slot),
+                    cmd_rx,
+                },
+                None => SessionPause::None,
+            },
+            None => SessionPause::None,
+        }
+    }
+}
+
 // ==================== 事件与终态 ====================
 
 /// 会话终态（双端共用；宿主据此驱动 UI 与历史记录）
@@ -262,6 +351,20 @@ pub enum TransferEvent {
         batch_id: String,
         /// 终态
         state: TerminalState,
+    },
+    /// 对端发来暂停帧：宿主据以把本端对应任务置 paused（数据面门控在对端）
+    Paused {
+        /// 对端节点 ID
+        remote: NodeId,
+        /// 批 ID
+        batch_id: String,
+    },
+    /// 对端发来恢复帧：宿主据以把本端对应任务置回 running
+    Resumed {
+        /// 对端节点 ID
+        remote: NodeId,
+        /// 批 ID
+        batch_id: String,
     },
 }
 
@@ -435,14 +538,20 @@ pub(crate) fn proto_violation(role: &'static str, detail: impl Into<String>) -> 
 /// 为何必须排空：「带未读数据关闭连接」会让内核回 RST，RST 会把对端尚未
 /// 读取的缓冲（包括刚发出的 Cancel 帧）一并丢弃——对端因此误落 Failed 而
 /// 不是 Cancelled{by_peer}。EOF 或宽限期到即停止等待。
-async fn send_cancel_then_drain(
-    conn: &mut crate::transport::Connection,
+///
+/// 读写已拆分（接收会话为同时读帧与写暂停帧拆成两半），排空在读半上进行。
+async fn send_cancel_then_drain_half<R, W>(
+    wr: &mut W,
+    rd: &mut R,
     by: CancelOrigin,
-) {
-    let _ = message::write_control(conn, &TransferFrame::Cancel { by }).await;
+) where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let _ = message::write_control(wr, &TransferFrame::Cancel { by }).await;
     let _ = tokio::time::timeout(Duration::from_millis(200), async {
         loop {
-            match message::read_frame(conn).await {
+            match message::read_frame(rd).await {
                 Ok(IncomingFrame::Data(_)) => continue,
                 // 对端停发（EOF）或到达控制帧即结束
                 _ => break,
@@ -450,7 +559,15 @@ async fn send_cancel_then_drain(
         }
     })
     .await;
-    let _ = tokio::io::AsyncWriteExt::shutdown(conn).await;
+    let _ = tokio::io::AsyncWriteExt::shutdown(wr).await;
+}
+
+/// 暂停命令分支：无暂停控制时永久挂起（select 分支自然失效）
+pub(crate) async fn next_pause_cmd(pause: &mut SessionPause) -> Option<PauseCmd> {
+    match pause {
+        SessionPause::None => std::future::pending().await,
+        SessionPause::Armed { cmd_rx, .. } => cmd_rx.recv().await,
+    }
 }
 
 /// 写一条批协商应答（`enc_pub_key`：对加密 Offer 放行时携带的回执头，明文会话为 None）
@@ -639,6 +756,7 @@ pub(crate) async fn run_receive(
         &files,
         total_size,
         cipher,
+        SessionPause::None,
     )
     .await
 }
@@ -652,7 +770,7 @@ pub(crate) async fn run_receive(
 /// （pull 是用户主动获取，恒放行）。`cipher`：加密协商成立时由调用方传入的
 /// 会话密码上下文——本函数只负责对每个数据帧自动解密后落盘。
 pub(crate) async fn receive_files_after_accept(
-    mut conn: crate::transport::Connection,
+    conn: crate::transport::Connection,
     config: &TransferConfig,
     events: &mpsc::Sender<TransferEvent>,
     cancel: &CancelToken,
@@ -661,6 +779,7 @@ pub(crate) async fn receive_files_after_accept(
     files: &[FileMeta],
     total_size: u64,
     cipher: Option<crypto::SessionCipher>,
+    pause: SessionPause,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "receiver";
 
@@ -668,6 +787,16 @@ pub(crate) async fn receive_files_after_accept(
     tokio::fs::create_dir_all(&config.download_dir)
         .await
         .map_err(|e| sess_io(ROLE, e))?;
+
+    // 暂停控制：拆读写两半——暂停命令分支需独立写半（与读半无借用冲突）。
+    // 消费方（本端）永不停止读：对端门控推流后本循环天然空闲，保证对端
+    // Resume/Cancel 帧始终可达；对端 Pause/Resume 帧仅置位门控并抬发事件。
+    let mut pause = pause;
+    let pause_slot = match &pause {
+        SessionPause::Armed { slot, .. } => Some(Arc::clone(slot)),
+        SessionPause::None => None,
+    };
+    let (mut rd, mut wr) = tokio::io::split(conn);
 
     let mut transferred_total: u64 = 0;
     // 会话内全局数据块序号：与发送端推流侧锁步计数一致，参与 nonce 构造
@@ -723,7 +852,7 @@ pub(crate) async fn receive_files_after_accept(
             }
         };
 
-        message::write_control(&mut conn, &TransferFrame::StartFile { index, offset })
+        message::write_control(&mut wr, &TransferFrame::StartFile { index, offset })
             .await
             .map_err(|e| sess_io(ROLE, e))?;
 
@@ -746,7 +875,7 @@ pub(crate) async fn receive_files_after_accept(
         if completed {
             // 正常路径 rename 已消耗 .part；此处残留仅见于异常竞态，尽力清埋
             let _ = tokio::fs::remove_file(&tmp).await;
-            message::write_control(&mut conn, &TransferFrame::FileDone { index })
+            message::write_control(&mut wr, &TransferFrame::FileDone { index })
                 .await
                 .map_err(|e| sess_io(ROLE, e))?;
             continue;
@@ -770,10 +899,33 @@ pub(crate) async fn receive_files_after_accept(
                 _ = cancel.cancelled() => {
                     // 接收方取消：告知对端并排空在途数据（防 RST 吞帧）、
                     // 保留 .part（断点真源）、落本端取消
-                    send_cancel_then_drain(&mut conn, CancelOrigin::Receiver).await;
+                    send_cancel_then_drain_half(&mut wr, &mut rd, CancelOrigin::Receiver).await;
                     return Ok(TerminalState::Cancelled { by_peer: false });
                 }
-                frame = message::read_frame(&mut conn) => frame.map_err(|e| sess_io(ROLE, e))?,
+                cmd = next_pause_cmd(&mut pause) => {
+                    // 本端暂停/恢复：写 Pause/Resume 帧告知数据供方门控推流
+                    match cmd {
+                        Some(PauseCmd::Pause) => {
+                            message::write_control(
+                                &mut wr,
+                                &TransferFrame::Pause { batch_id: batch_id.to_string() },
+                            )
+                            .await
+                            .map_err(|e| sess_io(ROLE, e))?;
+                        }
+                        Some(PauseCmd::Resume) => {
+                            message::write_control(
+                                &mut wr,
+                                &TransferFrame::Resume { batch_id: batch_id.to_string() },
+                            )
+                            .await
+                            .map_err(|e| sess_io(ROLE, e))?;
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
+                frame = message::read_frame(&mut rd) => frame.map_err(|e| sess_io(ROLE, e))?,
             };
             match frame {
                 IncomingFrame::Data(bytes) => {
@@ -820,6 +972,33 @@ pub(crate) async fn receive_files_after_accept(
                         // 发送方取消：保留 .part，落对端取消终态
                         return Ok(TerminalState::Cancelled { by_peer: true });
                     }
+                    TransferFrame::Pause { .. } => {
+                        // 数据供方暂停：本端任务同步 paused；门控在对端（不写回）
+                        if let Some(slot) = &pause_slot {
+                            slot.set_from_peer(true);
+                        }
+                        emit(
+                            events,
+                            TransferEvent::Paused {
+                                remote: remote.clone(),
+                                batch_id: batch_id.to_string(),
+                            },
+                        )
+                        .await;
+                    }
+                    TransferFrame::Resume { .. } => {
+                        if let Some(slot) = &pause_slot {
+                            slot.set_from_peer(false);
+                        }
+                        emit(
+                            events,
+                            TransferEvent::Resumed {
+                                remote: remote.clone(),
+                                batch_id: batch_id.to_string(),
+                            },
+                        )
+                        .await;
+                    }
                     other => {
                         return Err(proto_violation(
                             ROLE,
@@ -860,12 +1039,12 @@ pub(crate) async fn receive_files_after_accept(
             landing.landed(&target, &display_name);
         }
 
-        message::write_control(&mut conn, &TransferFrame::FileDone { index })
+        message::write_control(&mut wr, &TransferFrame::FileDone { index })
             .await
             .map_err(|e| sess_io(ROLE, e))?;
     }
 
-    message::write_control(&mut conn, &TransferFrame::BatchDone {})
+    message::write_control(&mut wr, &TransferFrame::BatchDone {})
         .await
         .map_err(|e| sess_io(ROLE, e))?;
     tracing::info!(batch_id = %batch_id, "transfer batch received completely");
@@ -906,6 +1085,9 @@ impl OutgoingFile {
 /// `encrypt`：应用层加密开关（宿主设置面持久化，默认关）。开启后本会话
 /// 生成临时 X25519 密钥对、Offer 携带加密请求头；接收端未回加密回执头
 /// （旧版不支持）则 fail-fast，禁止静默明文降级。
+///
+/// `pause`：暂停控制句柄（宿主创建）；暂停时门控本端推流（连接保持），
+/// 对端暂停帧到达时同样置位门控并抬发 Paused/Resumed 事件。
 pub async fn send_batch(
     conn: crate::transport::Connection,
     batch_id: String,
@@ -913,9 +1095,21 @@ pub async fn send_batch(
     events: mpsc::Sender<TransferEvent>,
     cancel: CancelToken,
     encrypt: bool,
+    pause: Option<Arc<PauseSlot>>,
 ) -> crate::Result<TerminalState> {
     let remote = conn.peer_node_id().clone();
-    let state = match run_send(conn, &batch_id, files, &events, &cancel, remote.clone(), encrypt).await
+    let session_pause = SessionPause::from_optional(pause).await;
+    let state = match run_send(
+        conn,
+        &batch_id,
+        files,
+        &events,
+        &cancel,
+        remote.clone(),
+        encrypt,
+        session_pause,
+    )
+    .await
     {
         Ok(state) => state,
         Err(e) => {
@@ -972,6 +1166,7 @@ async fn run_send(
     cancel: &CancelToken,
     remote: NodeId,
     encrypt: bool,
+    pause: SessionPause,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "sender";
 
@@ -1037,6 +1232,7 @@ async fn run_send(
         remote,
         &mut frame_rx,
         ephemeral,
+        pause,
     )
     .await;
     reader_task.abort();
@@ -1068,8 +1264,16 @@ async fn drive_send(
     remote: NodeId,
     frame_rx: &mut mpsc::Receiver<std::io::Result<IncomingFrame>>,
     ephemeral: Option<crate::transfer::crypto::EphemeralKeys>,
+    mut pause: SessionPause,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "sender";
+
+    // 暂停门控：供方侧门控自身推流（暂停时不再读源写网络，连接保持，
+    // 仍读对端帧——对端 Resume/Cancel 必须可达）；命令分支负责写帧。
+    let pause_slot = match &pause {
+        SessionPause::Armed { slot, .. } => Some(Arc::clone(slot)),
+        SessionPause::None => None,
+    };
 
     // ---- 批协商应答（含加密回执头结算）----
     let decision = next_frame_or_cancel(frame_rx, cancel).await?;
@@ -1170,6 +1374,7 @@ async fn drive_send(
 
         let mut remaining = meta.size - offset;
         while remaining > 0 {
+            let paused = pause_slot.as_ref().map(|s| s.is_paused()).unwrap_or(false);
             tokio::select! {
                 biased;
                 _ = cancel.cancelled() => {
@@ -1181,8 +1386,29 @@ async fn drive_send(
                     .await;
                     return Ok(TerminalState::Cancelled { by_peer: false });
                 }
+                cmd = next_pause_cmd(&mut pause) => {
+                    // 本端暂停/恢复：写 Pause/Resume 帧并（供方）停/续推流
+                    match cmd {
+                        Some(PauseCmd::Pause) => {
+                            let _ = message::write_control(
+                                wr,
+                                &TransferFrame::Pause { batch_id: batch_id.to_string() },
+                            )
+                            .await;
+                        }
+                        Some(PauseCmd::Resume) => {
+                            let _ = message::write_control(
+                                wr,
+                                &TransferFrame::Resume { batch_id: batch_id.to_string() },
+                            )
+                            .await;
+                        }
+                        None => {}
+                    }
+                    continue;
+                }
                 frame = frame_rx.recv() => {
-                    // 推流期间只接受对端取消；其余帧均为乱序违规
+                    // 推流期间只接受对端取消/暂停/恢复；其余帧均为乱序违规
                     let incoming = match frame {
                         Some(result) => result.map_err(|e| sess_io(ROLE, e))?,
                         None => {
@@ -1200,6 +1426,32 @@ async fn drive_send(
                             TransferFrame::Cancel { .. } => {
                                 return Ok(TerminalState::Cancelled { by_peer: true });
                             }
+                            TransferFrame::Pause { .. } => {
+                                if let Some(slot) = &pause_slot {
+                                    slot.set_from_peer(true);
+                                }
+                                emit(
+                                    events,
+                                    TransferEvent::Paused {
+                                        remote: remote.clone(),
+                                        batch_id: batch_id.to_string(),
+                                    },
+                                )
+                                .await;
+                            }
+                            TransferFrame::Resume { .. } => {
+                                if let Some(slot) = &pause_slot {
+                                    slot.set_from_peer(false);
+                                }
+                                emit(
+                                    events,
+                                    TransferEvent::Resumed {
+                                        remote: remote.clone(),
+                                        batch_id: batch_id.to_string(),
+                                    },
+                                )
+                                .await;
+                            }
                             other => {
                                 return Err(proto_violation(
                                     ROLE,
@@ -1212,7 +1464,7 @@ async fn drive_send(
                         }
                     }
                 }
-                read = tokio::io::AsyncReadExt::read(&mut source, &mut buf) => {
+                read = tokio::io::AsyncReadExt::read(&mut source, &mut buf), if !paused => {
                     let n = read.map_err(|e| sess_io(ROLE, e))?;
                     if n == 0 {
                         return Err(sess_io(

@@ -28,7 +28,10 @@ fn fnv1a(data: &str) -> u64 {
 
 /// 迁移入口（setup 阶段调用一次；任何失败仅记日志不阻断启动——迁移是
 /// best-effort 兼容路径，用户始终可在插件设置里手动重建）
-pub(crate) fn migrate_legacy_peer_data(app: &tauri::AppHandle, db: &Arc<tauri::async_runtime::Mutex<crate::db::Database>>) {
+pub(crate) fn migrate_legacy_peer_data(
+    app: &tauri::AppHandle,
+    db: &Arc<tauri::async_runtime::Mutex<crate::db::Database>>,
+) {
     let storage = Arc::new(PluginStorage::new(db.clone()));
     let dir = match crate::peer_net::app_data_dir(app) {
         Ok(dir) => dir,
@@ -135,13 +138,11 @@ fn migrate_shared_roots(storage: &PluginStorage, dir: &PathBuf) -> anyhow::Resul
                     "path": p,
                 }))
             }
-            SharedRootKind::Saf { tree_uri } => {
-                Some(json!({
-                    "id": format!("root-{:016x}", fnv1a(&tree_uri)),
-                    "name": d.name,
-                    "path": tree_uri,
-                }))
-            }
+            SharedRootKind::Saf { tree_uri } => Some(json!({
+                "id": format!("root-{:016x}", fnv1a(&tree_uri)),
+                "name": d.name,
+                "path": tree_uri,
+            })),
         })
         .collect();
     if entries.is_empty() {

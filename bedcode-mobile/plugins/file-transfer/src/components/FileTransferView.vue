@@ -147,6 +147,8 @@ async function downloadSelected(): Promise<void> {
     if ((result?.count ?? 0) > 0) {
       context.dialogs.showToast(t('transfer.saveTo.enqueued'), 'success')
       fs.clearSelection()
+      // 下载已入队：自动切到传输页展示任务（与上传 uploadFile 一致）
+      tab.value = 'transfers'
     }
   } catch (e) {
     console.error('[File Transfer] pull-files failed:', e)

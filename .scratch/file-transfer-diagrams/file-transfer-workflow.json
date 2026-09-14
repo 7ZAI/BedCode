@@ -1,0 +1,239 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "文件传输插件 · 从发现到完成的流程",
+    "locale": "zh-CN",
+    "output": "file-transfer-workflow.html",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "happy-path",
+        "label": "上传到落位",
+        "focus": ["d_announce", "m_discover", "d_trust", "m_stream", "d_io", "d_landing", "m_done"],
+        "note": "跟着一次上传走完：广播 → 发现拨号 → 信任放行 → Offer 协商 → StartFile 声明偏移 → 数据帧 → 原子落位。"
+      },
+      {
+        "id": "pull-path",
+        "label": "下载同构",
+        "focus": ["d_announce", "m_stream", "d_io", "d_landing", "m_done"],
+        "note": "下载复用同一协议族：角色互换，桌面端 serve 共享根推流，移动端恒为接收方，线协议无任何指向暴露端的写语义。"
+      },
+      {
+        "id": "control-path",
+        "label": "暂停与续传",
+        "focus": ["m_stream", "d_io", "q_pause", "q_cancel"],
+        "note": "暂停只冻结进度不丢偏移，取消保留 .part，重试以同 batch_id 重发 Offer 从接收端已写字节续传。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "mobile", "label": "移动端 · 插件前端 + WASM crate" },
+    { "id": "desktop", "label": "桌面端 · 宿主引擎 + 接收/共享" },
+    { "id": "control", "label": "中断与续传", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "phase-discover", "label": "发现与建连", "fromCol": 0, "toCol": 1 },
+    { "id": "phase-negotiate", "label": "协商与推流", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "phase-land", "label": "落位与完成", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "groups": [
+    { "id": "grp-mobile", "label": "移动端发起", "lane": "mobile", "fromCol": 1, "toCol": 3 },
+    { "id": "grp-desktop", "label": "桌面端接收与落位", "lane": "desktop", "fromCol": 0, "toCol": 5, "variant": "security" },
+    { "id": "grp-ctrl", "label": "暂停 / 取消 / 重试", "lane": "control", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": ["d_announce", "m_discover", "d_trust", "m_stream", "d_io", "d_landing", "m_done"],
+  "nodes": [
+    {
+      "id": "d_announce",
+      "lane": "desktop",
+      "col": 0,
+      "type": "external",
+      "label": "广播与共享根",
+      "sublabel": "announce · set-shared-roots",
+      "width": 130
+    },
+    {
+      "id": "m_discover",
+      "lane": "mobile",
+      "col": 1,
+      "type": "frontend",
+      "label": "发现与拨号",
+      "sublabel": "browse → dial-peer",
+      "width": 130
+    },
+    {
+      "id": "d_trust",
+      "lane": "desktop",
+      "col": 2,
+      "type": "security",
+      "label": "信任与策略闸门",
+      "sublabel": "TLS 1.3 指纹 · TrustStore",
+      "tag": "approve / auto / deny",
+      "width": 130
+    },
+    {
+      "id": "m_stream",
+      "lane": "mobile",
+      "col": 3,
+      "type": "backend",
+      "label": "发起与推流",
+      "sublabel": "Offer → Data* 64KB",
+      "width": 130
+    },
+    {
+      "id": "d_io",
+      "lane": "desktop",
+      "col": 4,
+      "type": "database",
+      "label": "接收与写盘",
+      "sublabel": "StartFile 偏移 · .part",
+      "width": 130
+    },
+    {
+      "id": "q_pause",
+      "lane": "control",
+      "col": 4,
+      "type": "messagebus",
+      "label": "暂停 / 恢复",
+      "sublabel": "peer:pause · 不丢偏移",
+      "width": 130
+    },
+    {
+      "id": "d_landing",
+      "lane": "desktop",
+      "col": 5,
+      "type": "backend",
+      "label": "原子落位",
+      "sublabel": "rename · FileLanding 钩子",
+      "width": 130
+    },
+    {
+      "id": "q_cancel",
+      "lane": "control",
+      "col": 5,
+      "type": "security",
+      "label": "取消 / 重试",
+      "sublabel": "Cancel 帧 · 同 batch_id 续传",
+      "width": 130
+    },
+    {
+      "id": "m_done",
+      "lane": "mobile",
+      "col": 5,
+      "type": "messagebus",
+      "label": "完成与进度",
+      "sublabel": "BatchDone · 进度快照",
+      "width": 130
+    }
+  ],
+  "edges": [
+    {
+      "id": "announce-discover",
+      "from": "d_announce",
+      "to": "m_discover",
+      "label": "announce + browse",
+      "variant": "dashed",
+      "role": "async"
+    },
+    {
+      "id": "discover-trust",
+      "from": "m_discover",
+      "to": "d_trust",
+      "label": "dial → accept",
+      "variant": "security"
+    },
+    {
+      "id": "trust-stream",
+      "from": "d_trust",
+      "to": "m_stream",
+      "label": "信任放行",
+      "variant": "emphasis",
+      "role": "return"
+    },
+    {
+      "id": "offer-io",
+      "from": "m_stream",
+      "to": "d_io",
+      "label": "Offer{files, total_size} → Decision",
+      "variant": "emphasis"
+    },
+    {
+      "id": "stream-pause",
+      "from": "m_stream",
+      "to": "q_pause",
+      "label": "暂停冻结",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "io-landing",
+      "from": "d_io",
+      "to": "d_landing",
+      "label": "StartFile 偏移 → Data* → rename",
+      "variant": "emphasis"
+    },
+    {
+      "id": "io-cancel",
+      "from": "d_io",
+      "to": "q_cancel",
+      "label": "取消 · .part 保留",
+      "variant": "security",
+      "role": "error"
+    },
+    {
+      "id": "landing-done",
+      "from": "d_landing",
+      "to": "m_done",
+      "label": "BatchDone 完成",
+      "variant": "default",
+      "role": "return"
+    },
+    {
+      "id": "pause-cancel",
+      "from": "q_pause",
+      "to": "q_cancel",
+      "label": "恢复 / 重试续传",
+      "variant": "dashed",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "发现只负责看见",
+      "items": [
+        "mDNS 独立服务类型 _bedcode-peer._tcp.local.，与终端链路错开",
+        "TXT 携带协议版本与能力位图；TTL 120s + 5s 清扫，goodby 即时移除",
+        "设备缓存由插件前端自持，插件 crate 只透传 mdns:* 并持久化快照"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "信任与策略是两道闸门",
+      "items": [
+        "拨号侧按 NodeId 精确钉扎证书 SPKI 指纹，不符在 TLS 层即拒绝",
+        "应用层再查 TrustStore：未信任节点仍可见，等 confirm-connection 放行",
+        "接收策略单开关粒度，批准超时默认自动拒绝，不区分对端"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "接收端已写字节是唯一真源",
+      "items": [
+        "接收端先发 StartFile 声明起点偏移，发送端必须从该偏移起推",
+        "取消与中断一律保留 .part，重试以同 batch_id 重发 Offer 即续传",
+        "单连接 = 单批：BatchDone 之后双方落 Completed 终态"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "上传下载同构",
+      "items": [
+        "下载复用 push 的接收半程：桌面端 serve 共享根，移动端恒为接收方",
+        "路径安全由服务端 resolve_rel_path 强制，线协议无指向暴露端的写语义",
+        "落位钩子失败不改变会话终态，私有副本保留即天然回退"
+      ]
+    }
+  ]
+}

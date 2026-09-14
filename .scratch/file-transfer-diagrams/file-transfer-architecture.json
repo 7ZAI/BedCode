@@ -1,0 +1,424 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "BedCode 文件传输插件 · 双端架构",
+    "locale": "zh-CN",
+    "output": "file-transfer-architecture.html",
+    "quality_profile": "showcase",
+    "viewBox": [
+      1210,
+      650
+    ],
+    "views": [
+      {
+        "id": "mobile-upload-path",
+        "label": "手机上传路径",
+        "focus": [
+          "mobile_ui",
+          "mobile_plugin",
+          "mobile_engine",
+          "tls_link",
+          "desktop_engine",
+          "desktop_plugin"
+        ],
+        "note": "移动端选择文件后，命令穿过插件编排层与宿主引擎原语，经 TLS 直连落到桌面端插件的任务队列。"
+      },
+      {
+        "id": "desktop-serve-path",
+        "label": "桌面共享与浏览",
+        "focus": [
+          "desktop_ui",
+          "desktop_plugin",
+          "desktop_engine",
+          "peer_net_crate",
+          "tls_link",
+          "mobile_engine"
+        ],
+        "note": "桌面端开启共享目录后经 peer_net 的 shared 会话族被移动端浏览与拉取，服务端强制路径安全。"
+      },
+      {
+        "id": "discovery-trust",
+        "label": "发现与信任边界",
+        "focus": [
+          "mdns_channel",
+          "peer_net_crate",
+          "tls_link",
+          "desktop_engine",
+          "mobile_engine"
+        ],
+        "note": "mDNS 只负责看见对端，TLS 证书指纹钉扎与 TrustStore 才决定能不能传。"
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "desktop_db",
+      "type": "database",
+      "label": "插件私有库",
+      "sublabel": "plugin-database SQLite",
+      "pos": [
+        30,
+        44
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "desktop_ui",
+      "type": "frontend",
+      "label": "桌面端前端",
+      "sublabel": "Vue 3 · 共享目录 / 接收审批",
+      "pos": [
+        256,
+        44
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "desktop_plugin",
+      "type": "backend",
+      "label": "文件传输插件",
+      "sublabel": "WASM · 业务自持：设备缓存 / 任务队列",
+      "tag": "plugin-sdk",
+      "pos": [
+        256,
+        210
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "desktop_engine",
+      "type": "backend",
+      "label": "桌面宿主引擎",
+      "sublabel": "peer_net + 传输 / 接收 / 共享",
+      "pos": [
+        256,
+        376
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "mdns_channel",
+      "type": "external",
+      "label": "mDNS 多播信道",
+      "sublabel": "_bedcode-peer._tcp.local.",
+      "tag": "TXT 能力位图",
+      "pos": [
+        504,
+        44
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "peer_net_crate",
+      "type": "backend",
+      "label": "bedcode-peer-net",
+      "sublabel": "discovery / transport / tls / transfer",
+      "tag": "双端共享 crate",
+      "pos": [
+        504,
+        210
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "tls_link",
+      "type": "security",
+      "label": "TLS 1.3 直连",
+      "sublabel": "双向 TLS · 证书指纹即身份",
+      "tag": "证书指纹即身份",
+      "pos": [
+        504,
+        500
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "mobile_ui",
+      "type": "frontend",
+      "label": "移动端前端",
+      "sublabel": "Vue 3 · DevicesTab / TransfersTab",
+      "pos": [
+        752,
+        44
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "mobile_plugin",
+      "type": "backend",
+      "label": "文件传输插件",
+      "sublabel": "WASM · transfer_store / 接收策略真源",
+      "tag": "plugin-sdk",
+      "pos": [
+        752,
+        210
+      ],
+      "size": [
+        190,
+        66
+      ]
+    },
+    {
+      "id": "mobile_db",
+      "type": "database",
+      "label": "插件私有库",
+      "sublabel": "SQLite + SAF 共享根",
+      "pos": [
+        1018,
+        210
+      ],
+      "size": [
+        150,
+        66
+      ]
+    },
+    {
+      "id": "mobile_engine",
+      "type": "backend",
+      "label": "移动宿主引擎",
+      "sublabel": "peer_net + SAF / 落位钩子",
+      "pos": [
+        752,
+        376
+      ],
+      "size": [
+        190,
+        66
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "桌面端主机 · Tauri 2 Desktop",
+      "wraps": [
+        "desktop_db",
+        "desktop_ui",
+        "desktop_plugin",
+        "desktop_engine"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "LAN 共享层 · 无业务语义",
+      "wraps": [
+        "mdns_channel",
+        "peer_net_crate",
+        "tls_link"
+      ],
+      "pad": 18
+    },
+    {
+      "kind": "region",
+      "label": "移动端主机 · Tauri 2 Android",
+      "wraps": [
+        "mobile_ui",
+        "mobile_plugin",
+        "mobile_db",
+        "mobile_engine"
+      ],
+      "pad": 18
+    }
+  ],
+  "connections": [
+    {
+      "id": "desktop-invoke",
+      "from": "desktop_ui",
+      "to": "desktop_plugin",
+      "label": "invoke plugin command",
+      "variant": "emphasis",
+      "labelAt": [
+        351,
+        160
+      ]
+    },
+    {
+      "id": "desktop-persist",
+      "from": "desktop_plugin",
+      "to": "desktop_db",
+      "label": "storage 真源",
+      "variant": "dashed"
+    },
+    {
+      "id": "desktop-host-calls",
+      "from": "desktop_plugin",
+      "to": "desktop_engine",
+      "label": "HostPeer 引擎原语",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        351,
+        326
+      ]
+    },
+    {
+      "id": "desktop-engine-crate",
+      "from": "desktop_engine",
+      "to": "peer_net_crate",
+      "label": "peer_net::* crate",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [
+        [
+          475,
+          409
+        ],
+        [
+          475,
+          243
+        ]
+      ]
+    },
+    {
+      "id": "desktop-engine-link",
+      "from": "desktop_engine",
+      "to": "tls_link",
+      "label": "dial / accept",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "left",
+      "via": [
+        [
+          351,
+          533
+        ]
+      ]
+    },
+    {
+      "id": "mobile-invoke",
+      "from": "mobile_ui",
+      "to": "mobile_plugin",
+      "label": "invoke plugin command",
+      "variant": "emphasis",
+      "labelAt": [
+        847,
+        160
+      ]
+    },
+    {
+      "id": "mobile-persist",
+      "from": "mobile_plugin",
+      "to": "mobile_db",
+      "label": "storage 真源",
+      "variant": "dashed"
+    },
+    {
+      "id": "mobile-host-calls",
+      "from": "mobile_plugin",
+      "to": "mobile_engine",
+      "label": "HostPeer 引擎原语",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        847,
+        326
+      ]
+    },
+    {
+      "id": "mobile-engine-crate",
+      "from": "mobile_engine",
+      "to": "peer_net_crate",
+      "label": "peer_net::* crate",
+      "fromSide": "left",
+      "toSide": "right",
+      "via": [
+        [
+          723,
+          409
+        ],
+        [
+          723,
+          243
+        ]
+      ]
+    },
+    {
+      "id": "mobile-engine-link",
+      "from": "mobile_engine",
+      "to": "tls_link",
+      "label": "dial / accept",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "right",
+      "via": [
+        [
+          847,
+          533
+        ]
+      ]
+    },
+    {
+      "id": "crate-mdns",
+      "from": "peer_net_crate",
+      "to": "mdns_channel",
+      "label": "announce + browse",
+      "variant": "dashed",
+      "fromSide": "top",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "插件接管业务状态",
+      "items": [
+        "设备缓存、任务队列、共享根注册表、接收策略均由插件 WASM 自持",
+        "任务历史归档进插件私有 SQLite，重启标注 interrupted 并回放 retryMeta",
+        "节点与 mDNS 生命周期由宿主 activate/deactivate 外壳驱动，插件不建第二守护；TXT 携带能力位图"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "宿主只剩引擎原语",
+      "items": [
+        "宿主只暴露进程 / 网络 / 存储 / 安全 / 通信五类无业务语义原语",
+        "peer_* 调用在 WASM 边界即校验 TrustStore 闸门，未信任节点直接拒绝",
+        "文件系统访问走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "一次握手定信任",
+      "items": [
+        "拨号侧按发现记录持有的 NodeId 精确钉扎服务端证书 SPKI 指纹",
+        "信任放行发生在应用层查 TrustStore：未信任节点仍可见，等 confirm-connection",
+        "凭据与证书指纹只记长度不落明文，日志与存储同规"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "传输协议与状态真源",
+      "items": [
+        "控制帧 JSON 与数据块帧共用一条连接：[u32 BE len][u8 kind][payload]",
+        "接收端 StartFile 声明起点偏移：接收端已写字节即断点真源",
+        "Pause 冻结进度 / Cancel 关闭会话保留 .part，同 batch_id 重发 Offer 即续传"
+      ]
+    }
+  ]
+}

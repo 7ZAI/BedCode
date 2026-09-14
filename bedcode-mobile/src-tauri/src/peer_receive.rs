@@ -140,7 +140,7 @@ fn short_fingerprint(node_id: &str) -> String {
 }
 
 fn is_terminal(task: &PeerTransferDto) -> bool {
-    !matches!(task.status.as_str(), "pending" | "running")
+    !matches!(task.status.as_str(), "pending" | "running" | "paused")
 }
 
 // ==================== 设置持久化 ====================
@@ -296,6 +296,13 @@ pub(crate) async fn drive_receive_events(app: AppHandle, mut rx: mpsc::Receiver<
             TransferEvent::Terminal { batch_id, state, .. } => {
                 settle_terminal(&app, &batch_id, state);
             }
+            // 数据供方暂停/恢复：本端接收任务状态同步（对端门控推流）
+            TransferEvent::Paused { batch_id, .. } => {
+                set_receive_pause_status(&app, &batch_id, true).await;
+            }
+            TransferEvent::Resumed { batch_id, .. } => {
+                set_receive_pause_status(&app, &batch_id, false).await;
+            }
             // 服务侧拉取事件走独立 serve 通道（peer_transfer::drive_serve_events），
             // 本接收通道理论上收不到；防御性忽略
             TransferEvent::PullServed { .. } => {}
@@ -447,22 +454,16 @@ fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, total: u64
 fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
     let (status, detail, reject_reason) = match &terminal {
         TerminalState::Completed => ("completed".to_string(), None, None),
-        TerminalState::Rejected { reason } => (
-            "rejected".to_string(),
-            None,
-            Some(reason.as_str().to_string()),
-        ),
+        TerminalState::Rejected { reason } => ("rejected".to_string(), None, Some(reason.as_str().to_string())),
         TerminalState::Cancelled { by_peer } => (
             "cancelled".to_string(),
             // 机器可读原因码（前端 i18n 映射；兼容映射旧本地化文本），
             // 禁止把人类文案直接落 wire
-            Some(
-                if *by_peer {
-                    "cancelled-by-sender".to_string()
-                } else {
-                    "cancelled-by-self".to_string()
-                },
-            ),
+            Some(if *by_peer {
+                "cancelled-by-sender".to_string()
+            } else {
+                "cancelled-by-self".to_string()
+            }),
             None,
         ),
         TerminalState::Failed { detail } => ("failed".to_string(), Some(detail.clone()), None),
@@ -480,6 +481,11 @@ fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
             .iter_mut()
             .find(|t| t.batch_id == batch_id && !is_terminal(t))
         {
+            // 用户暂停分支：会话终态只是中断确认——不落终态、不覆盖进度展示
+            if task.status == "paused" {
+                tracing::info!(batch_id = %batch_id, state = ?terminal, "receive session ended while paused (kept for resume)");
+                return;
+            }
             task.status = status;
             // 完成结算：最后一条 Progress 可能略低于总量，归整为满额
             if task.status == "completed" {
@@ -494,6 +500,31 @@ fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
     tracing::info!(batch_id = %batch_id, state = ?terminal, "peer receive session ended");
     publish(app);
 }
+
+/// 接收任务暂停/恢复状态同步（对端 Pause/Resume 帧到达，或本端命令置位）
+pub(crate) async fn set_receive_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
+    {
+        let state = app.state::<PeerReceiveState>();
+        let mut inner = state.inner.lock().expect("peer receive lock poisoned");
+        if let Some(task) = inner
+            .tasks
+            .iter_mut()
+            .find(|t| t.batch_id == batch_id && !is_terminal(t))
+        {
+            if task.status == "running" || (paused && task.status == "pending") {
+                task.status = if paused {
+                    "paused".to_string()
+                } else {
+                    "running".to_string()
+                };
+                task.rate_bps = 0.0;
+                task.updated_at_ms = now_ms();
+            }
+        }
+    }
+    publish(app);
+}
+
 
 /// 节点停止收尾：全部活跃接收落 failed 并推送
 fn fail_active_transfers(app: &AppHandle, detail: &str) {
@@ -674,6 +705,31 @@ pub async fn clear_peer_receiving_history(app: AppHandle) -> crate::Result<usize
     }
     tracing::info!(count = removed, "peer receiving history cleared");
     Ok(removed)
+}
+
+/// 暂停接收任务：拉取会话经 wire Pause 帧门控数据供方推流（连接保持），
+/// 任务置 paused 不落终态；push 接收批（供方为对端发送会话）由对端自己
+/// 门控，本端仅经 Pause 帧请求对端暂停。返回是否命中任务。
+#[tauri::command]
+pub async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
+    // 拉取会话：经暂停句柄写 Pause 帧（供方 serve 会话门控推流）
+    let hit = super::peer_remote::pause_pull(&app, &batch_id).await;
+    if hit {
+        set_receive_pause_status(&app, &batch_id, true).await;
+    }
+    tracing::debug!(batch_id = %batch_id, hit, "pause receiving requested");
+    Ok(hit)
+}
+
+/// 恢复暂停的接收任务：写 Resume 帧续流（供方 serve 会话解除门控）
+#[tauri::command]
+pub async fn resume_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
+    let hit = super::peer_remote::resume_pull(&app, &batch_id).await;
+    if hit {
+        set_receive_pause_status(&app, &batch_id, false).await;
+    }
+    tracing::debug!(batch_id = %batch_id, hit, "resume receiving requested");
+    Ok(hit)
 }
 
 // ==================== 设置命令面 ====================
