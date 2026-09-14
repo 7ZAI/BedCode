@@ -707,29 +707,82 @@ pub async fn clear_peer_receiving_history(app: AppHandle) -> crate::Result<usize
     Ok(removed)
 }
 
-/// 暂停接收任务：拉取会话经 wire Pause 帧门控数据供方推流（连接保持），
-/// 任务置 paused 不落终态；push 接收批（供方为对端发送会话）由对端自己
-/// 门控，本端仅经 Pause 帧请求对端暂停。返回是否命中任务。
+/// 暂停接收任务：两条路径都经 wire Pause 帧请求对端数据供方门控推流
+/// （连接保持、断点不丢），任务置 paused 不落终态：
+///
+/// - 拉取会话（本端是拉取发起方，对端 serve 供流）：经 pull 暂停句柄下发；
+/// - push 接收批（对端是发送方）：经接收会话暂停句柄下发。
+///
+/// 双端对同一传输任务对称：本端收/本端供两个视角都能本地暂停。返回是否命中。
 #[tauri::command]
 pub async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    // 拉取会话：经暂停句柄写 Pause 帧（供方 serve 会话门控推流）
-    let hit = super::peer_remote::pause_pull(&app, &batch_id).await;
-    if hit {
-        set_receive_pause_status(&app, &batch_id, true).await;
+    // 顺序关键：先把任务落 paused 再下发 wire 命令。引擎终态事件（对端中断/
+    // 会话失败）可能在命令生效前后到达，若任务仍是 running，settle_terminal
+    // 会把它结算成 failed 并归档历史——真机现象「点暂停，任务直接变历史」。
+    set_receive_pause_status(&app, &batch_id, true).await;
+    // 拉取会话：经 pull 暂停句柄写 Pause 帧（对端 serve 会话门控推流）
+    let mut hit = super::peer_remote::pause_pull(&app, &batch_id).await;
+    if !hit {
+        // push 接收批：经接收会话暂停句柄写 Pause 帧（对端发送会话门控推流）
+        hit = pause_receive_session(&app, &batch_id, true).await;
+    }
+    if !hit {
+        // 无活动会话（已终态/会话未建立）：还原状态，避免呈现假暂停
+        set_receive_pause_status(&app, &batch_id, false).await;
     }
     tracing::debug!(batch_id = %batch_id, hit, "pause receiving requested");
     Ok(hit)
 }
 
-/// 恢复暂停的接收任务：写 Resume 帧续流（供方 serve 会话解除门控）
+/// 恢复暂停的接收任务：写 Resume 帧续流（对端数据供方解除门控）
 #[tauri::command]
 pub async fn resume_peer_receiving(app: AppHandle, batch_id: String) -> crate::Result<bool> {
-    let hit = super::peer_remote::resume_pull(&app, &batch_id).await;
+    let mut hit = super::peer_remote::resume_pull(&app, &batch_id).await;
+    if !hit {
+        hit = pause_receive_session(&app, &batch_id, false).await;
+    }
     if hit {
         set_receive_pause_status(&app, &batch_id, false).await;
     }
     tracing::debug!(batch_id = %batch_id, hit, "resume receiving requested");
     Ok(hit)
+}
+
+/// 经接收会话暂停句柄下发暂停/恢复（push 接收批：本端写 Pause/Resume 帧
+/// 请求对端发送会话门控推流）。
+async fn pause_receive_session(app: &AppHandle, batch_id: &str, paused: bool) -> bool {
+    let handler = {
+        let state = app.state::<PeerReceiveState>();
+        let guard = state.runtime.lock().await;
+        guard.as_ref().map(|(handler, _)| Arc::clone(handler))
+    };
+    match handler {
+        Some(handler) => handler.set_receive_paused(batch_id, paused).await,
+        None => false,
+    }
+}
+
+/// 恢复全部暂停的接收任务（逐条经 wire Resume 帧续流；无活动会话的保持
+/// paused 等待取消/重试）。返回实际恢复数。由「全部继续」入口调用，使该
+/// 按钮对发送/接收两方向的任务一致生效。
+pub(crate) async fn resume_all_peer_receiving(app: &AppHandle) -> usize {
+    let ids: Vec<String> = {
+        let state = app.state::<PeerReceiveState>();
+        let inner = state.inner.lock().expect("peer receive lock poisoned");
+        inner
+            .tasks
+            .iter()
+            .filter(|t| t.status == "paused")
+            .map(|t| t.batch_id.clone())
+            .collect()
+    };
+    let mut resumed = 0usize;
+    for batch_id in ids {
+        if resume_peer_receiving(app.clone(), batch_id).await.unwrap_or(false) {
+            resumed += 1;
+        }
+    }
+    resumed
 }
 
 // ==================== 设置命令面 ====================

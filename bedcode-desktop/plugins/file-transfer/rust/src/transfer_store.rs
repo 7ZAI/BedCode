@@ -232,12 +232,13 @@ pub(crate) fn active_send_entries(entries: &[TransferEntry]) -> Vec<&TransferEnt
         .collect()
 }
 
-/// 接收视图（receiving-changed / list-receiving 共用）：仅正在接收的
-/// running 条目；pending 归待应答（batches），终态归历史视图。
+/// 接收视图（receiving-changed / list-receiving 共用）：正在接收的
+/// running 条目 + 用户暂停的 paused 条目（暂停也是活跃态，须留在接收队列里
+/// 供继续/取消）；pending 归待应答（batches），终态归历史视图。
 pub(crate) fn active_receive_entries(entries: &[TransferEntry]) -> Vec<&TransferEntry> {
     entries
         .iter()
-        .filter(|e| e.direction == "receive" && e.status == "running")
+        .filter(|e| e.direction == "receive" && matches!(e.status.as_str(), "running" | "paused"))
         .collect()
 }
 
@@ -420,6 +421,28 @@ mod tests {
         let send_ids: Vec<&str> =
             active_send_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
         assert_eq!(send_ids, vec!["s-run", "s-pause"]);
+    }
+
+    #[test]
+    fn active_receive_view_keeps_paused_and_excludes_other_states() {
+        // 用户暂停的接收任务（下载/拉取）必须留在接收队列（可继续/取消）；
+        // pending 归待应答、终态归历史，均不得出现在接收视图
+        let mk = |id: &str, status: &str| {
+            serde_json::from_value::<TransferEntry>(json!({
+                "batchId": id, "direction": "receive", "status": status,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("r-run", "running"),
+            mk("r-pause", "paused"),
+            mk("r-pend", "pending"),
+            mk("r-done", "completed"),
+            mk("r-fail", "failed"),
+        ];
+        let recv_ids: Vec<&str> =
+            active_receive_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(recv_ids, vec!["r-run", "r-pause"]);
     }
 
     #[test]

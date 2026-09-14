@@ -256,6 +256,11 @@ pub async fn cancel_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
             Ok(true)
         }
         None => {
+            // 服务侧拉取记账任务（本端供流）：经 handler 按 serve batch_id
+            // 取消——会话写 Cancel 帧告知拉取方并停供流，双端各自落 Cancelled
+            if cancel_serve_session(&app, &batch_id).await {
+                return Ok(true);
+            }
             // 无活动会话：pending 排队任务直接乐观结算为 cancelled（引擎终态
             // 不会再到来）；paused 任务保留（用户稍后可恢复/重试）
             let mut hit = false;
@@ -293,7 +298,7 @@ pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
         return super::peer_receive::pause_peer_receiving(app, batch_id).await;
     }
     let state = app.state::<PeerTransferState>();
-    let paused = {
+    let route = {
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
         let Some(task) = inner
             .tasks
@@ -308,36 +313,65 @@ pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
         task.dto.status = "paused".to_string();
         task.dto.rate_bps = 0.0;
         task.dto.updated_at_ms = now_ms();
-        // 服务侧记账任务无发送会话：经 handler 门控 serve 会话
-        task.sources.is_empty()
+        pause_route(task.sources.is_empty())
     };
-    if paused {
-        // 门控暂停：写 Pause 帧并停推流（连接保持）；无活动会话回落取消令牌
-        let handled = if let Some(slot) = state.pause_slot_of(&batch_id) {
-            slot.send(PauseCmd::Pause).await
-        } else {
-            false
-        };
-        if !handled {
-            if let Some(token) = state.cancel_token_of(&batch_id) {
-                token.cancel();
-            }
-        }
-        publish(&app);
-        // 暂停释放一个并发槽：推进队列中下一个 pending
-        pump_send_queue(app.clone()).await;
-        tracing::info!(batch_id = %batch_id, "peer transfer paused");
-        Ok(true)
-    } else {
-        // 服务侧拉取记账任务：经 handler 门控 serve 会话
-        match super::peer_receive::handler_and_config(&app).await {
+    match route {
+        // 服务侧拉取记账任务（sources 空）：门控入口在 SharedDirHandler 的
+        // serve 暂停注册表（会话内写 Pause 帧 + 停供流）
+        PauseRoute::Serve => match super::peer_receive::handler_and_config(&app).await {
             Some((handler, _)) if handler.set_serve_paused(&batch_id, true).await => {
                 publish(&app);
                 tracing::info!(batch_id = %batch_id, "pull serve transfer paused");
                 Ok(true)
             }
-            _ => Ok(false),
+            _ => {
+                // 无活动 serve 会话（对端已断开/会话已结束）：还原状态，避免假暂停
+                set_running_status(&app, &batch_id).await;
+                tracing::debug!(batch_id = %batch_id, "pause transfer miss: no live serve session");
+                Ok(false)
+            }
+        },
+        // 本端发起的发送会话：门控暂停（写 Pause 帧并停推流，连接保持）；
+        // 无活动会话回落取消令牌
+        PauseRoute::SendSession => {
+            let handled = if let Some(slot) = state.pause_slot_of(&batch_id) {
+                slot.send(PauseCmd::Pause).await
+            } else {
+                false
+            };
+            if !handled {
+                if let Some(token) = state.cancel_token_of(&batch_id) {
+                    token.cancel();
+                }
+            }
+            publish(&app);
+            // 暂停释放一个并发槽：推进队列中下一个 pending
+            pump_send_queue(app.clone()).await;
+            tracing::info!(batch_id = %batch_id, "peer transfer paused");
+            Ok(true)
         }
+    }
+}
+
+/// 暂停路由：暂停的目标会话类型
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PauseRoute {
+    /// 服务侧拉取记账任务（本端在对端拉取中供流）
+    Serve,
+    /// 本端发起的发送会话
+    SendSession,
+}
+
+/// 纯函数：暂停路由裁决（回归护栏）
+///
+/// 这两个分支曾经写反：serve 记账任务落进「发送会话」分支 → 查不到发送暂停
+/// 句柄、也没有取消令牌 → 什么都没门控却返回成功，表现为真机现象
+/// 「本端显示已暂停，对端仍在持续传输」。
+fn pause_route(sources_empty: bool) -> PauseRoute {
+    if sources_empty {
+        PauseRoute::Serve
+    } else {
+        PauseRoute::SendSession
     }
 }
 
@@ -480,11 +514,14 @@ async fn set_running_status(app: &AppHandle, batch_id: &str) {
 }
 
 
-/// 恢复全部暂停的发送任务（逐个入队，受并发闸门约束）。返回入队数。
+/// 恢复全部暂停的传输任务：发送方向逐个入队（受并发闸门约束）+ 同端已暂停的
+/// 接收任务经 wire Resume 帧续流。返回恢复数。
 #[tauri::command]
 pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
-    // 活跃会话（连接保持）直接续流；无会话的回落重新拨号入队
+    // 活跃会话（连接保持）直接续流；无会话的回落重新拨号入队；serve
+    // 记账任务经 handler 门控恢复（本端暂停的供流批同样要能被「全部继续」拉起）
     let mut live_ids: Vec<String> = Vec::new();
+    let mut serve_ids: Vec<String> = Vec::new();
     let queued_ids: Vec<String> = {
         let state = app.state::<PeerTransferState>();
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
@@ -495,7 +532,8 @@ pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
             .filter(|t| t.dto.direction == "send" && t.dto.status == "paused")
         {
             if task.sources.is_empty() {
-                // serve 记账任务：不参与批量恢复（serve 会话由拉取方控制）
+                task.dto.updated_at_ms = now_ms();
+                serve_ids.push(task.dto.batch_id.clone());
                 continue;
             }
             if state.pause_slot_of(&task.dto.batch_id).is_some() {
@@ -518,12 +556,27 @@ pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
         }
         set_running_status(&app, bid).await;
     }
+    // serve 门控恢复：成功才置回 running（无活动会话保持 paused，等取消/重试）
+    let mut resumed_serve = 0usize;
+    for bid in &serve_ids {
+        let resumed = match super::peer_receive::handler_and_config(&app).await {
+            Some((handler, _)) => handler.set_serve_paused(bid, false).await,
+            None => false,
+        };
+        if resumed {
+            set_running_status(&app, bid).await;
+            resumed_serve += 1;
+        }
+    }
     if !queued_ids.is_empty() {
         publish(&app);
         pump_send_queue(app.clone()).await;
         tracing::info!(count = queued_ids.len(), "peer transfer resume all queued");
     }
-    Ok(live_ids.len() + queued_ids.len())
+    // 接收方向（拉取 / push 接收）暂停任务：与单条恢复同路径（wire Resume 帧
+    // 请求对端数据供方解除门控）；「全部继续」按钮对双方向一致生效
+    let resumed_receive = super::peer_receive::resume_all_peer_receiving(&app).await;
+    Ok(live_ids.len() + queued_ids.len() + resumed_serve + resumed_receive)
 }
 
 
@@ -1535,6 +1588,15 @@ mod tests {
             created_at_ms,
             updated_at_ms: created_at_ms,
         }
+    }
+
+    /// 回归护栏（真机：本端显示已暂停、对端仍在传输）：serve 记账任务
+    /// （sources 空）必须路由到 serve 门控，本端发送会话才走发送暂停句柄。
+    /// 两分支写反时本用例转红。
+    #[test]
+    fn pause_route_splits_serve_accounting_from_send_sessions() {
+        assert_eq!(pause_route(true), PauseRoute::Serve);
+        assert_eq!(pause_route(false), PauseRoute::SendSession);
     }
 
     #[test]

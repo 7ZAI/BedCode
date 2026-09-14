@@ -370,39 +370,77 @@ pub enum TransferEvent {
 
 // ==================== 内部辅助 ====================
 
-/// 瞬时速率采样器：滑动窗口 = 相邻两次采样的字节增量 / 时间增量
+/// 速率采样窗口（秒）：窗口内累计字节 / 窗口时长 = 窗口平均速率
+///
+/// 逐块采样（相邻两次采样之间只隔一个数据块）会在快网上产生亚毫秒窗口，
+/// 把 64 KiB / 0.15 ms 放大成数百 MB/s 的假值；且两端各自采样时刻不同，
+/// 屏幕上会出现「同一传输两侧速率差两个数量级」。窗口平均把采样抖动
+/// 摊平到秒级，两端观测到的是同一段时间的同一批字节，数值自然对齐。
+const RATE_WINDOW: Duration = Duration::from_millis(500);
+
+/// 速率采样器：窗口平均速率（B/s）
 #[derive(Debug)]
 pub(crate) struct RateTracker {
-    last_instant: std::time::Instant,
-    last_bytes: u64,
+    /// 本窗口起点（上次产出速率值的时刻）
+    window_start: std::time::Instant,
+    /// 本窗口起点时的累计字节
+    window_bytes: u64,
+    /// 上一次窗口速率（窗口未满时沿用，避免逐块返回 0 抖动）
+    last_rate: f64,
+    /// 最小窗口时长（测试可注入更短窗口）
+    window: Duration,
 }
 
 impl RateTracker {
     pub(crate) fn new() -> Self {
+        Self::with_window(RATE_WINDOW)
+    }
+
+    /// 指定窗口时长的采样器（测试专用：无需 sleep 即可驱动窗口边界）
+    pub(crate) fn with_window(window: Duration) -> Self {
         Self {
-            last_instant: std::time::Instant::now(),
-            last_bytes: 0,
+            window_start: std::time::Instant::now(),
+            window_bytes: 0,
+            last_rate: 0.0,
+            window,
         }
     }
 
-    /// 采样当前累计字节数，返回自上次采样起的瞬时速率（B/s）
+    /// 采样当前累计字节数，返回窗口平均速率（B/s）
+    ///
+    /// 窗口未满时返回上次窗口速率（首个窗口返回 0）——累计字节持续喂入，
+    /// 满窗后一次性产出「窗口增量 / 窗口时长」。
     pub(crate) fn sample(&mut self, total_bytes: u64) -> f64 {
-        let now = std::time::Instant::now();
-        let dt = now.saturating_duration_since(self.last_instant).as_secs_f64();
-        let db = total_bytes.saturating_sub(self.last_bytes);
-        self.last_instant = now;
-        self.last_bytes = total_bytes;
-        if dt <= 0.0 {
-            return 0.0;
-        }
-        db as f64 / dt
+        self.sample_at(total_bytes, std::time::Instant::now())
     }
 
-    /// 吸收续传基线跳变：把一次性入账的偏移并入上次采样基线，
-    /// 使后续 sample 只度量本会话实际推流的增量（防速率尖峰失真）
+    /// 带显式时刻的采样（纯函数式内核：单测以合成时刻驱动窗口边界）
+    pub(crate) fn sample_at(&mut self, total_bytes: u64, now: std::time::Instant) -> f64 {
+        let elapsed = now
+            .saturating_duration_since(self.window_start)
+            .as_secs_f64();
+        if elapsed < self.window.as_secs_f64() {
+            return self.last_rate;
+        }
+        let delta = total_bytes.saturating_sub(self.window_bytes);
+        let rate = delta as f64 / elapsed;
+        self.window_start = now;
+        self.window_bytes = total_bytes;
+        self.last_rate = rate;
+        rate
+    }
+
+    /// 吸收续传基线跳变：把一次性入账的偏移并入窗口基线，
+    /// 使后续窗口只度量本会话实际推流的增量（防速率尖峰失真）
     pub(crate) fn sync_base(&mut self, total_bytes: u64) {
-        self.last_instant = std::time::Instant::now();
-        self.last_bytes = total_bytes;
+        self.sync_base_at(total_bytes, std::time::Instant::now());
+    }
+
+    /// 带显式时刻的基线重置（纯函数式内核：单测以合成时刻驱动窗口边界）
+    pub(crate) fn sync_base_at(&mut self, total_bytes: u64, now: std::time::Instant) {
+        self.window_start = now;
+        self.window_bytes = total_bytes;
+        self.last_rate = 0.0;
     }
 }
 
@@ -491,6 +529,9 @@ impl crate::transport::ConnectionHandler for TransferReceiveHandler {
                 &cancel,
                 remote.clone(),
                 &mut batch_slot,
+                // 独立接收处理器无 batch 注册表：暂停入口由上层装配提供
+                // （生产装配走 SharedDirHandler，见 crate::shared）
+                None,
                 None,
             )
             .await
@@ -539,27 +580,75 @@ pub(crate) fn proto_violation(role: &'static str, detail: impl Into<String>) -> 
 /// 读取的缓冲（包括刚发出的 Cancel 帧）一并丢弃——对端因此误落 Failed 而
 /// 不是 Cancelled{by_peer}。EOF 或宽限期到即停止等待。
 ///
-/// 读写已拆分（接收会话为同时读帧与写暂停帧拆成两半），排空在读半上进行。
-async fn send_cancel_then_drain_half<R, W>(
+/// 排空消费读半任务的帧通道（读半由独立任务持有，主循环不再直接读流）。
+async fn send_cancel_then_drain_half<W>(
     wr: &mut W,
-    rd: &mut R,
+    frame_rx: &mut mpsc::Receiver<std::io::Result<IncomingFrame>>,
     by: CancelOrigin,
 ) where
-    R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
     let _ = message::write_control(wr, &TransferFrame::Cancel { by }).await;
     let _ = tokio::time::timeout(Duration::from_millis(200), async {
-        loop {
-            match message::read_frame(rd).await {
-                Ok(IncomingFrame::Data(_)) => continue,
-                // 对端停发（EOF）或到达控制帧即结束
-                _ => break,
-            }
-        }
+        // 数据块继续读掉（排空内核缓冲）；控制帧 / 通道关闭 / 读错误即停
+        while let Some(Ok(IncomingFrame::Data(_))) = frame_rx.recv().await {}
     })
     .await;
     let _ = tokio::io::AsyncWriteExt::shutdown(wr).await;
+}
+
+/// 连接读半的帧转发通道容量（帧平均 64 KiB，16 帧 ≈ 1 MiB 在途上限；
+/// 通道满即背压读半任务，不会无界缓存）
+pub(crate) const FRAME_CHANNEL_CAP: usize = 16;
+
+/// 启动读半转发任务：`read_frame` 内部是两个 `read_exact`，**不是取消安全的**
+/// ——若被 `select!` 抢先取消，已从流中取走的半截帧字节会永久丢失，后续所有
+/// 帧边界错位（对端随后读到 `unknown transfer frame kind 0xXX` 而整场失败）。
+/// 故凡是「读帧要与其他分支竞速」的会话，都必须由本任务独占读半、只经通道
+/// 向主循环交付**完整帧**；主循环侧的 `recv()` 是取消安全的。
+pub(crate) fn spawn_frame_reader<R>(
+    mut rd: R,
+) -> (
+    mpsc::Receiver<std::io::Result<IncomingFrame>>,
+    tokio::task::JoinHandle<()>,
+)
+where
+    R: tokio::io::AsyncRead + Unpin + Send + 'static,
+{
+    let (frame_tx, frame_rx) = mpsc::channel::<std::io::Result<IncomingFrame>>(FRAME_CHANNEL_CAP);
+    let task = tokio::spawn(async move {
+        loop {
+            match message::read_frame(&mut rd).await {
+                Ok(frame) => {
+                    if frame_tx.send(Ok(frame)).await.is_err() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    let _ = frame_tx.send(Err(e)).await;
+                    break;
+                }
+            }
+        }
+    });
+    (frame_rx, task)
+}
+
+/// 读半任务守卫：会话函数任意出口（含 `?` 提前返回）都中止读半任务，
+/// 避免会话结束后后台任务继续读已移交的连接
+pub(crate) struct ReaderTaskGuard(tokio::task::JoinHandle<()>);
+
+impl ReaderTaskGuard {
+    /// 接管句柄（drop 即 abort）
+    pub(crate) fn new(task: tokio::task::JoinHandle<()>) -> Self {
+        Self(task)
+    }
+}
+
+impl Drop for ReaderTaskGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 /// 暂停命令分支：无暂停控制时永久挂起（select 分支自然失效）
@@ -595,6 +684,11 @@ where
 /// 经 StartFile 告知发送端；取消/中断一律保留 `.part`；同 batch_id 重发
 /// Offer 即续传，批内已完成文件跳过。
 ///
+/// `pause`：接收侧本地暂停句柄（宿主按 batch_id 创建并登记）。挂载后本端作为
+/// 数据消费方也能发起暂停/恢复——命令经会话循环写 Pause/Resume 帧请求对端
+/// 发送会话门控推流（本端永不停止读，保证对端 Resume/Cancel 帧始终可达）。
+/// 这补齐了「双端对同一传输任务对称暂停」：此前仅发送端/供流端能本地门控。
+///
 /// `pre_read`：上层分发器（issue 07 [`crate::shared::SharedDirHandler`]）已
 /// 预读首帧做会话分流时传入该帧（必须为 Offer），独立接收端传 `None`。
 pub(crate) async fn run_receive(
@@ -604,6 +698,7 @@ pub(crate) async fn run_receive(
     cancel: &CancelToken,
     remote: NodeId,
     batch_slot: &mut Option<String>,
+    pause: Option<Arc<PauseSlot>>,
     pre_read: Option<IncomingFrame>,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "receiver";
@@ -756,7 +851,7 @@ pub(crate) async fn run_receive(
         &files,
         total_size,
         cipher,
-        SessionPause::None,
+        SessionPause::from_optional(pause).await,
     )
     .await
 }
@@ -796,7 +891,12 @@ pub(crate) async fn receive_files_after_accept(
         SessionPause::Armed { slot, .. } => Some(Arc::clone(slot)),
         SessionPause::None => None,
     };
-    let (mut rd, mut wr) = tokio::io::split(conn);
+    let (rd, mut wr) = tokio::io::split(conn);
+    // 读半由独立任务独占：read_frame 不是取消安全的，本循环的 select 若直接
+    // 读流，暂停命令分支抢先时会吞掉半截帧 → 帧边界错位（对端报 unknown
+    // transfer frame kind）。任务经通道只交付完整帧，通道接收取消安全。
+    let (mut frame_rx, reader_task) = spawn_frame_reader(rd);
+    let _reader_guard = ReaderTaskGuard::new(reader_task);
 
     let mut transferred_total: u64 = 0;
     // 会话内全局数据块序号：与发送端推流侧锁步计数一致，参与 nonce 构造
@@ -899,7 +999,7 @@ pub(crate) async fn receive_files_after_accept(
                 _ = cancel.cancelled() => {
                     // 接收方取消：告知对端并排空在途数据（防 RST 吞帧）、
                     // 保留 .part（断点真源）、落本端取消
-                    send_cancel_then_drain_half(&mut wr, &mut rd, CancelOrigin::Receiver).await;
+                    send_cancel_then_drain_half(&mut wr, &mut frame_rx, CancelOrigin::Receiver).await;
                     return Ok(TerminalState::Cancelled { by_peer: false });
                 }
                 cmd = next_pause_cmd(&mut pause) => {
@@ -925,7 +1025,21 @@ pub(crate) async fn receive_files_after_accept(
                     }
                     continue;
                 }
-                frame = message::read_frame(&mut rd) => frame.map_err(|e| sess_io(ROLE, e))?,
+                // 读半任务交付完整帧（通道接收取消安全）：暂停/取消分支抢先
+                // 不会丢弃半截帧，帧边界恒对齐
+                frame = frame_rx.recv() => match frame {
+                    Some(Ok(frame)) => frame,
+                    Some(Err(e)) => return Err(sess_io(ROLE, e)),
+                    None => {
+                        return Err(sess_io(
+                            ROLE,
+                            std::io::Error::new(
+                                std::io::ErrorKind::UnexpectedEof,
+                                "peer closed connection mid-transfer",
+                            ),
+                        ))
+                    }
+                },
             };
             match frame {
                 IncomingFrame::Data(bytes) => {
@@ -1098,7 +1212,10 @@ pub async fn send_batch(
     pause: Option<Arc<PauseSlot>>,
 ) -> crate::Result<TerminalState> {
     let remote = conn.peer_node_id().clone();
-    let session_pause = SessionPause::from_optional(pause).await;
+    // 宿主未挂暂停句柄时会话内自建：对端（接收方）发来的 Pause/Resume 帧
+    // 必须总能门控本端推流。句柄缺位曾被静默吞掉——接收方按暂停，发送方
+    // 没有门控落点，数据照传（真机现象「一端显示已暂停、对端仍在传输」）。
+    let session_pause = SessionPause::from_optional(Some(pause.unwrap_or_else(PauseSlot::new))).await;
     let state = match run_send(
         conn,
         &batch_id,
@@ -1152,6 +1269,98 @@ pub(crate) async fn next_frame_or_cancel(
                 Ok(Some(result)) => result.map_err(|e| sess_io(ROLE, e)),
             }
         } => frame.map(Some),
+    }
+}
+
+/// 控制相等待（会话级暂停面）：等待「本阶段期待的帧」的同时处理暂停面——
+///
+/// 1. **消费本地暂停命令**：暂停/恢复在任何阶段按下都要下发到对端（写
+///    Pause/Resume 帧；本端数据面门控由 `PauseSlot::send` 先行置位）；
+/// 2. **容忍并处理对端暂停帧**：置位门控 + 抬发 [`TransferEvent::Paused`] /
+///    [`TransferEvent::Resumed`]，然后继续等本阶段真正期待的帧。
+///
+/// 为什么必须容忍：暂停是会话级信号，用户可能在「推流中」以外的任何时点按下
+/// （等 StartFile / 等 FileDone / 等 BatchDone；对端拉取也可能恰好在数据块
+/// 全推完、等 FileDone 时暂停）。历史实现把这些阶段收到的 Pause 帧判为协议
+/// 违规并整场 Failed——真机现象「一端按暂停，对端会话直接失败」。
+///
+/// 返回值语义与 [`next_frame_or_cancel`] 一致（None = 本端取消）。
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn next_frame_handling_pause<W>(
+    wr: &mut W,
+    frame_rx: &mut mpsc::Receiver<std::io::Result<IncomingFrame>>,
+    cancel: &CancelToken,
+    pause: &mut SessionPause,
+    pause_slot: &Option<Arc<PauseSlot>>,
+    events: &mpsc::Sender<TransferEvent>,
+    remote: &NodeId,
+    batch_id: &str,
+) -> crate::Result<Option<IncomingFrame>>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Ok(None),
+            cmd = next_pause_cmd(pause) => {
+                // 本地暂停/恢复：写帧告知对端（门控已由 slot 置位）
+                match cmd {
+                    Some(PauseCmd::Pause) => {
+                        let _ = message::write_control(
+                            wr,
+                            &TransferFrame::Pause { batch_id: batch_id.to_string() },
+                        )
+                        .await;
+                    }
+                    Some(PauseCmd::Resume) => {
+                        let _ = message::write_control(
+                            wr,
+                            &TransferFrame::Resume { batch_id: batch_id.to_string() },
+                        )
+                        .await;
+                    }
+                    None => {}
+                }
+                continue;
+            }
+            frame = next_frame_or_cancel(frame_rx, cancel) => {
+                match frame? {
+                    Some(IncomingFrame::Control(boxed)) => match *boxed {
+                        TransferFrame::Pause { .. } => {
+                            if let Some(slot) = pause_slot {
+                                slot.set_from_peer(true);
+                            }
+                            emit(
+                                events,
+                                TransferEvent::Paused {
+                                    remote: remote.clone(),
+                                    batch_id: batch_id.to_string(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        TransferFrame::Resume { .. } => {
+                            if let Some(slot) = pause_slot {
+                                slot.set_from_peer(false);
+                            }
+                            emit(
+                                events,
+                                TransferEvent::Resumed {
+                                    remote: remote.clone(),
+                                    batch_id: batch_id.to_string(),
+                                },
+                            )
+                            .await;
+                            continue;
+                        }
+                        other => return Ok(Some(IncomingFrame::Control(Box::new(other)))),
+                    },
+                    other => return Ok(other),
+                }
+            }
+        }
     }
 }
 
@@ -1276,7 +1485,18 @@ async fn drive_send(
     };
 
     // ---- 批协商应答（含加密回执头结算）----
-    let decision = next_frame_or_cancel(frame_rx, cancel).await?;
+    // 协商应答等待同样处理暂停面：暂停在任一阶段按下都要下发给对端
+    let decision = next_frame_handling_pause(
+        wr,
+        frame_rx,
+        cancel,
+        &mut pause,
+        &pause_slot,
+        events,
+        &remote,
+        batch_id,
+    )
+    .await?;
     let Some(IncomingFrame::Control(boxed)) = decision else {
         return Err(proto_violation(ROLE, "expected decision frame"));
     };
@@ -1331,7 +1551,17 @@ async fn drive_send(
         let index = index as u32;
 
         // ---- 等接收端声明起点（断点真源）----
-        let start = next_frame_or_cancel(frame_rx, cancel).await?;
+        let start = next_frame_handling_pause(
+            wr,
+            frame_rx,
+            cancel,
+            &mut pause,
+            &pause_slot,
+            events,
+            &remote,
+            batch_id,
+        )
+        .await?;
         let Some(IncomingFrame::Control(boxed)) = start else {
             return Err(proto_violation(ROLE, "expected start_file frame"));
         };
@@ -1505,7 +1735,17 @@ async fn drive_send(
         }
 
         // ---- 等该文件落位确认 ----
-        let done = next_frame_or_cancel(frame_rx, cancel).await?;
+        let done = next_frame_handling_pause(
+            wr,
+            frame_rx,
+            cancel,
+            &mut pause,
+            &pause_slot,
+            events,
+            &remote,
+            batch_id,
+        )
+        .await?;
         match done {
             None => {
                 let _ = message::write_control(
@@ -1534,7 +1774,17 @@ async fn drive_send(
     }
 
     // ---- 批完成确认 ----
-    let done = next_frame_or_cancel(frame_rx, cancel).await?;
+    let done = next_frame_handling_pause(
+        wr,
+        frame_rx,
+        cancel,
+        &mut pause,
+        &pause_slot,
+        events,
+        &remote,
+        batch_id,
+    )
+    .await?;
     match done {
         Some(IncomingFrame::Control(boxed)) if matches!(*boxed, TransferFrame::BatchDone {}) => {
             tracing::info!(batch_id = %batch_id, "transfer batch sent completely");
@@ -1552,5 +1802,320 @@ async fn drive_send(
             .await;
             Ok(TerminalState::Cancelled { by_peer: false })
         }
+    }
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::pin::Pin;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+    use tokio::io::AsyncRead;
+
+    // ==================== 假流：按测试节奏喂字节（模拟真实链路分段到达） ====================
+
+    #[derive(Default)]
+    struct PipeState {
+        data: Vec<u8>,
+        pos: usize,
+        waker: Option<std::task::Waker>,
+        closed: bool,
+    }
+
+    /// 可增量喂入的假读流：无数据即挂起（不自行唤醒），由测试显式喂字节唤醒
+    struct PipeReader {
+        state: Arc<Mutex<PipeState>>,
+    }
+
+    impl PipeReader {
+        fn new(state: Arc<Mutex<PipeState>>) -> Self {
+            Self { state }
+        }
+
+        /// 追加字节并唤醒挂起的读（模拟对端继续推流）
+        fn feed(state: &Arc<Mutex<PipeState>>, bytes: &[u8]) {
+            let waker = {
+                let mut guard = state.lock().expect("pipe state lock");
+                guard.data.extend_from_slice(bytes);
+                guard.waker.take()
+            };
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
+
+        fn close(state: &Arc<Mutex<PipeState>>) {
+            let waker = {
+                let mut guard = state.lock().expect("pipe state lock");
+                guard.closed = true;
+                guard.waker.take()
+            };
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
+    }
+
+    impl AsyncRead for PipeReader {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let mut guard = self.state.lock().expect("pipe state lock");
+            if guard.pos >= guard.data.len() {
+                if guard.closed {
+                    return std::task::Poll::Ready(Ok(())); // EOF
+                }
+                guard.waker = Some(cx.waker().clone());
+                return std::task::Poll::Pending;
+            }
+            let n = (guard.data.len() - guard.pos).min(buf.remaining());
+            let (start, end) = (guard.pos, guard.pos + n);
+            buf.put_slice(&guard.data[start..end]);
+            guard.pos = end;
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// 编码若干控制帧为线字节
+    async fn encode_frames(frames: &[TransferFrame]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        for frame in frames {
+            message::write_control(&mut buf, frame).await.expect("encode frame");
+        }
+        buf
+    }
+
+    /// 取消安全的读帧前提（线上「unknown transfer frame kind 0xXX」的机制）：
+    /// `read_frame` 内部是两个 `read_exact`——帧读到一半被取消（`select!` 分支
+    /// 抢先 / 丢弃 future）时，已从流中取走的字节永久丢失，后续帧边界错位。
+    /// 反例断言：取消后继续读，**不可能**再得到原本的下一帧。
+    #[tokio::test]
+    async fn direct_read_frame_cancelled_mid_frame_loses_bytes() {
+        let first = TransferFrame::FileDone { index: 2 };
+        let second = TransferFrame::BatchDone {};
+        let bytes = encode_frames(&[first, second.clone()]).await;
+
+        let state = Arc::new(Mutex::new(PipeState::default()));
+        let mut stream = PipeReader::new(Arc::clone(&state));
+        // 只喂前 3 字节（不足 u32 长度前缀）→ 读帧挂起在帧中
+        PipeReader::feed(&state, &bytes[..3]);
+        let cancelled =
+            tokio::time::timeout(Duration::from_millis(50), message::read_frame(&mut stream)).await;
+        assert!(cancelled.is_err(), "半截帧必须挂起，才能覆盖被取消的窗口");
+
+        // 补齐剩余字节：被取消的读已吞掉前 3 字节 → 帧边界错位
+        PipeReader::feed(&state, &bytes[3..]);
+        let next =
+            tokio::time::timeout(Duration::from_millis(200), message::read_frame(&mut stream))
+                .await;
+        match next {
+            Ok(Err(_)) => {}
+            Ok(Ok(frame)) => panic!("misaligned stream must not decode a frame, got {frame:?}"),
+            Err(_elapsed) => panic!("misaligned stream must not hang"),
+        }
+    }
+
+    /// 正例（本修复的契约）：读半任务交付**完整帧**，消费侧取消（暂停/恢复
+    /// 命令分支抢先唤醒）不会丢失帧内字节，帧序与内容逐条保持。
+    #[tokio::test]
+    async fn frame_reader_keeps_frames_intact_across_consumer_cancellation() {
+        let first = TransferFrame::FileDone { index: 2 };
+        let second = TransferFrame::BatchDone {};
+        let bytes = encode_frames(&[first.clone(), second.clone()]).await;
+        let first_len = encode_frames(std::slice::from_ref(&first)).await.len();
+        assert!(first_len > 2 && first_len < bytes.len());
+
+        let state = Arc::new(Mutex::new(PipeState::default()));
+        let (mut frame_rx, reader_task) = spawn_frame_reader(PipeReader::new(Arc::clone(&state)));
+        let _guard = ReaderTaskGuard::new(reader_task);
+
+        // 第一帧差 2 字节：读半任务挂在帧中
+        PipeReader::feed(&state, &bytes[..first_len - 2]);
+        // 消费侧「被取消」：短暂等待完整帧，超时即丢弃 recv（通道接收取消安全）
+        let none_yet = tokio::time::timeout(Duration::from_millis(50), frame_rx.recv()).await;
+        assert!(none_yet.is_err(), "半截帧不得提前交付");
+
+        PipeReader::feed(&state, &bytes[first_len - 2..]);
+        let got_first = tokio::time::timeout(Duration::from_millis(200), frame_rx.recv())
+            .await
+            .expect("first frame must arrive")
+            .expect("channel open")
+            .expect("frame decodes");
+        assert_eq!(got_first, IncomingFrame::Control(Box::new(first)));
+
+        PipeReader::close(&state);
+        let got_second = tokio::time::timeout(Duration::from_millis(200), frame_rx.recv())
+            .await
+            .expect("second frame must arrive")
+            .expect("channel open")
+            .expect("frame decodes");
+        assert_eq!(got_second, IncomingFrame::Control(Box::new(second)));
+    }
+
+
+    /// 会话级暂停面契约（回归：真机「一端按暂停，对端会话直接失败」）：
+    /// 控制相等待期间必须同时做两件事——消费本端暂停命令（下发帧）与容忍
+    /// 对端 Pause/Resume 帧（置位门控 + 抬发事件），且不得吞掉终态帧。
+    #[tokio::test]
+    async fn control_wait_handles_pause_plane_on_both_sides() {
+        let state = Arc::new(Mutex::new(PipeState::default()));
+        let (mut frame_rx, reader_task) = spawn_frame_reader(PipeReader::new(Arc::clone(&state)));
+        let _guard = ReaderTaskGuard::new(reader_task);
+        let cancel = CancelToken::new();
+        let (events_tx, mut events_rx) = mpsc::channel::<TransferEvent>(8);
+        let remote = NodeId::parse(&"a".repeat(64)).expect("node id");
+        let slot = PauseSlot::new();
+        let mut pause = SessionPause::from_optional(Some(Arc::clone(&slot))).await;
+        let pause_slot = Some(Arc::clone(&slot));
+        let mut out: Vec<u8> = Vec::new();
+
+        // 本端暂停（在等待控制帧期间按下）+ 对端 Resume + 本阶段期待的 BatchDone
+        slot.send(PauseCmd::Pause).await;
+        let peer_resume = TransferFrame::Resume {
+            batch_id: "b-1".to_string(),
+        };
+        let peer_pause = TransferFrame::Pause {
+            batch_id: "b-1".to_string(),
+        };
+        let expected = TransferFrame::BatchDone {};
+        PipeReader::feed(
+            &state,
+            &encode_frames(&[peer_resume, peer_pause, expected.clone()]).await,
+        );
+
+        let got = next_frame_handling_pause(
+            &mut out,
+            &mut frame_rx,
+            &cancel,
+            &mut pause,
+            &pause_slot,
+            &events_tx,
+            &remote,
+            "b-1",
+        )
+        .await
+        .expect("wait must not fail")
+        .expect("frame present");
+        assert_eq!(got, IncomingFrame::Control(Box::new(expected)));
+
+        // 本端暂停已即时下发（写半恰有一条 Pause 帧）
+        let mut sink: &[u8] = &out;
+        match message::read_frame(&mut sink).await.expect("decode outbound") {
+            IncomingFrame::Control(boxed) => assert_eq!(
+                *boxed,
+                TransferFrame::Pause {
+                    batch_id: "b-1".to_string()
+                }
+            ),
+            other => panic!("expected outbound pause frame, got {other:?}"),
+        }
+        assert!(sink.is_empty(), "exactly one outbound frame expected");
+
+        // 对端 Resume / Pause 均被消费：抬发 Resumed → Paused 事件，门控位随帧同步
+        assert!(matches!(
+            events_rx.try_recv().expect("resumed event"),
+            TransferEvent::Resumed { .. }
+        ));
+        assert!(matches!(
+            events_rx.try_recv().expect("paused event"),
+            TransferEvent::Paused { .. }
+        ));
+        assert!(slot.is_paused(), "peer pause must set local gate");
+
+        // 反例：终态帧不得被暂停面吞掉（调用方仍需按 Cancel 裁决）
+        let peer_cancel = TransferFrame::Cancel {
+            by: CancelOrigin::Sender,
+        };
+        PipeReader::feed(
+            &state,
+            &encode_frames(std::slice::from_ref(&peer_cancel)).await,
+        );
+        let got = next_frame_handling_pause(
+            &mut out,
+            &mut frame_rx,
+            &cancel,
+            &mut pause,
+            &pause_slot,
+            &events_tx,
+            &remote,
+            "b-1",
+        )
+        .await
+        .expect("wait must not fail")
+        .expect("frame present");
+        assert_eq!(got, IncomingFrame::Control(Box::new(peer_cancel)));
+    }
+
+    /// 速率必须按窗口平均：单块到达不得立刻产出速率（线上 bug：64 KiB / 0.15 ms
+    /// 被逐块采样放大成数百 MB/s，双端各自采样时刻不同 → 两侧速率差两个数量级）
+    #[test]
+    fn rate_is_window_averaged_not_per_chunk() {
+        let mut rate = RateTracker::with_window(Duration::from_millis(500));
+        let base = Instant::now();
+
+        // 首块：窗口（500ms）远未满 → 不得产出速率（防首窗尖峰）
+        assert_eq!(
+            rate.sample_at(64 * 1024, base + Duration::from_micros(150)),
+            0.0
+        );
+        // 同窗口内连续喂块（快网上一个窗口能喂进大量块）→ 仍不产出速率
+        assert_eq!(
+            rate.sample_at(8 * 1024 * 1024, base + Duration::from_millis(100)),
+            0.0
+        );
+        // 窗口满：rate = 窗口增量 / 窗口时长，是平均而非瞬时
+        let rate_1s = rate.sample_at(16 * 1024 * 1024, base + Duration::from_millis(500));
+        assert!(
+            (rate_1s - 32.0 * 1024.0 * 1024.0).abs() < 1024.0,
+            "expected ~32 MiB/s window average, got {rate_1s}"
+        );
+
+        // 窗口重置：下一窗口只计窗口内增量（旧累计不重复计入）
+        let rate_2s = rate.sample_at(24 * 1024 * 1024, base + Duration::from_millis(1000));
+        assert!(
+            (rate_2s - 16.0 * 1024.0 * 1024.0).abs() < 1024.0,
+            "second window must count only its own delta, got {rate_2s}"
+        );
+    }
+
+    /// 续传基线跳变（接收端声明的已写偏移一次性入账）不得被当成窗口内流量
+    #[test]
+    fn rate_sync_base_absorbs_resume_offset_jump() {
+        let mut rate = RateTracker::with_window(Duration::from_millis(500));
+        let base = Instant::now();
+        rate.sample_at(1024, base + Duration::from_millis(600));
+
+        // 续传：累计字节从 1 KiB 跳到 64 MiB，窗口基线随之重置
+        rate.sync_base_at(64 * 1024 * 1024, base + Duration::from_millis(1100));
+        assert_eq!(
+            rate.sample_at(64 * 1024 * 1024, base + Duration::from_millis(1100)),
+            0.0,
+            "resume baseline jump must not become a rate spike"
+        );
+        let after = rate.sample_at(65 * 1024 * 1024, base + Duration::from_millis(1600));
+        assert!(
+            (after - (1024.0 * 1024.0 / 0.5)).abs() < 1024.0,
+            "post-resume window counts only new bytes, got {after}"
+        );
+    }
+
+    /// 窗口未满时沿用上次窗口速率（避免速率字段在窗口内反复跳 0/非 0）
+    #[test]
+    fn rate_holds_last_value_until_window_fills() {
+        let mut rate = RateTracker::with_window(Duration::from_millis(500));
+        let base = Instant::now();
+        rate.sample_at(0, base);
+        let first = rate.sample_at(1024 * 1024, base + Duration::from_millis(500));
+        assert!(first > 0.0);
+        // 窗口内：沿用上一窗口速率（非 0、非瞬时重算）
+        assert_eq!(
+            rate.sample_at(2 * 1024 * 1024, base + Duration::from_millis(600)),
+            first
+        );
     }
 }
