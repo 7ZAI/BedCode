@@ -109,7 +109,8 @@ export function attachRowBackgroundClipper(container: HTMLElement): RowBackgroun
     if (fullPending) {
       fullPending = false
       dirtyRows.clear()
-      scanRowBackgroundOverflow(rowsEl)
+      // rowsEl 已在挂接入口 guard（null 时早退），此处仅闭包内 TS 收窄失效
+      scanRowBackgroundOverflow(rowsEl!)
     } else {
       for (const row of dirtyRows) {
         if (row.isConnected) {
