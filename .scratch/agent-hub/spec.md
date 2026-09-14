@@ -10,7 +10,7 @@
 
 ## 2. 范围
 
-**v1 做**：桌面端插件，四 CLI 适配；安装/版本检测/一键更新；npm 镜像测速与换源；Skills 浏览/编辑/分发/GitHub 安装/本地导入；供应商预设与应用（不存 key）；使用统计（增量扫描、会话/天/项目/模型维度、无 $ 成本）；会话日志解析视图（会话列表 → 归一事件流 + 原始行切换）。
+**v1 做**：桌面端插件，四 CLI 适配；安装/版本检测/一键更新；npm 镜像测速与换源；Skills 浏览/编辑/分发/GitHub 安装/本地导入；供应商预设与应用（**v2 起中心凭据库存 key**，见 §4.4）；使用统计（增量扫描、会话/天/项目/模型维度、无 $ 成本）；会话日志解析视图（会话列表 → 归一事件流 + 原始行切换）。
 
 **v1 不做**：移动端任何部分（无协议改动）；auto-task 并入；CLI 卸载；$ 成本估算；实时 tail；Skills 启用/禁用/删除（v2 按家适配）；AI Chatbox 供应商打通（预设模板后续可复用）。
 
@@ -88,9 +88,10 @@
 
 ### 4.4 供应商统一管理
 
-- **供应商预设**：CRUD（名称/baseUrl/api 方言/模型列表），**不存 key**（见 §6 安全）。内置模板复用 chatbox 四套（DeepSeek/通义/OpenAI/Anthropic）+ 自定义。
-- **反向导入**：读取各 CLI 现有配置生成预设——pi（`models.json` providers + `auth.json`）、opencode（`opencode.json` provider.*）、claude（settings.json env / 桥接现状只读展示）。
-- **应用**：写入目标 CLI 原生配置文件（真源始终是 CLI 自己的配置）；key 现场输入，或从源 CLI 配置**内存直拷**到目标（不落 hub 存储/日志）；UI 一律掩码（前 3 字符 + 长度）。
+- **供应商预设**：CRUD（名称/baseUrl/api 方言/模型列表 + **中心凭据 key**）。内置模板复用 chatbox 四套（DeepSeek/通义/OpenAI/Anthropic）+ 自定义。
+- **中心凭据库（v2，2026-09-14 用户决策：删除「key 不落 hub」红线）**：`provider_preset.api_key` 明文存插件库——一处配置 key、分发到多个 agent（claude/pi/opencode；codex 待格式校准后开放）。key 明文只落本库：列表/状态/导入结果只出掩码（前 3 字符 + 长度），日志只记长度。
+- **反向导入**：读取各 CLI 现有配置生成预设并**把源 key 一并收进中心凭据库**——pi（`models.json` providers + `auth.json`）、opencode（`opencode.json` provider.*）、claude（settings.json env / 桥接现状只读展示，不生成预设）。
+- **应用**：写入目标 CLI 原生配置文件（真源始终是 CLI 自己的配置）；key 来源四选一——**stored 中心库**（预设已有 key 时默认）/ inline 现场输入 / source 内存直拷 / none 保留目标既有凭据。
 - **claude 特例**：写 `~/.claude/settings.json` 的 `env` 块（`ANTHROPIC_BASE_URL/AUTH_TOKEN/MODEL`）；检测到现有 `provider-config.sh`/`anthropic-bridge.mjs` 桥接体系时提示冲突、不覆盖，由用户选择。
 - 应用后提示该 CLI 需重启会话生效。
 
@@ -119,8 +120,9 @@ usage_session(id INTEGER PK, adapter TEXT, cli_session_id TEXT, project TEXT, ti
               cost_total REAL,            -- 可空，不估算
               first_seen_at INTEGER, updated_at INTEGER,
               UNIQUE(adapter, cli_session_id))
--- 供应商预设（无 key 列，刻意）
+-- 供应商预设（v2 起含中心凭据列 api_key，见 §6 修订）
 provider_preset(id INTEGER PK, name TEXT, base_url TEXT, api_style TEXT, models_json TEXT,
+                api_key TEXT NOT NULL DEFAULT '',  -- v2 中心凭据（明文，用户决策删红线）
                 notes TEXT, created_at INTEGER, updated_at INTEGER)
 ```
 
@@ -129,7 +131,7 @@ hub 设置（镜像偏好、测速缓存等）走 host-storage KV。
 ## 6. 安全与合规
 
 - `process:run` 为高危权限：命令仅限 recipe 白名单 + `--version` 探测；输出落盘路径固定于插件数据目录。
-- **key 全链路**：hub 存储/日志/统计表均无 key；UI 掩码；反向导入内存直拷；写目标 CLI 配置时遵守「凭据只记长度不落明文」（日志仅 `key.len()` 模式）。
+- **key 存储（2026-09-14 修订，用户决策删除「hub 存储面不落 key」红线）**：`provider_preset.api_key` 明文存插件库（中心凭据库，一处配置分发多 agent）。**保留**的纪律：UI/状态/导入结果只出掩码（前 3 字符 + 长度）；日志只记 `key.len()`（`preset key set (name = …, key_len = …)` 模式）；claude 只读视图 token 掩码；`PresetDraft` Debug 掩码化防误打日志/断言泄漏。明文落库风险已知且与各 CLI 原生配置同等：pi `auth.json` / claude `settings.json` env / opencode `opencode.json` 本身即明文存 key，插件库不新增额外暴露面。
 - 读取含密文件（`auth.json`/`opencode.json`/`~/.npmrc`）解析结果即掩码，不整份透传前端。
 - 日志遵守 §8：结构化字段（`session_id`/`adapter` 等 `key = %value`）、级别语义、`spawn_with_error_boundary`。
 

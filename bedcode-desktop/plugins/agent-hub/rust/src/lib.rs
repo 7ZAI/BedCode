@@ -78,6 +78,27 @@ pub(crate) fn is_windows() -> bool {
         .unwrap_or_else(|| cfg!(windows))
 }
 
+/// POSIX shell 单引号包裹转义：`'` → `'\''`。
+///
+/// 用户可控路径（add-source 自定义来源 / import 目录）进枚举脚本前必须经此
+/// 转义：单引号内 `"` / `$()` / 反引号 / `;` 全部中和，杜绝 shell 注入。
+/// 路径为绝对路径（校验于 add_source / import_local），不存在前导 `-` 被
+/// find 当作选项解释的面。
+pub(crate) fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// 路径进 shell 脚本前的双平台统一兜底校验：拒绝控制字符（含换行——会破坏
+/// `== 分段 ==` 标记解析）、双引号与 `%`。
+///
+/// 双引号会逃出 Windows cmd 的双引号包裹；`%` 在 cmd 命令行上下文无法转义
+/// （caret 不覆盖 %，`%%` 折叠是 batch 文件语义）——%VAR% 展开会把枚举根
+/// 重定向，故在入口直接拒绝（合法 Windows 路径含 % 的极少，可接受）。
+/// POSIX 单引号转义后本可承载这些字符，双平台统一收紧。
+pub(crate) fn path_rejected_for_script(path: &str) -> bool {
+    path.chars().any(|c| c.is_control() || c == '"' || c == '%')
+}
+
 /// 进程启动三要素按平台分派（纯函数，双平台可测）：
 /// unix 登录 shell（`-lc`，bashrc/nvm PATH 注入，与宿主 PTY 命令构建同模式）；
 /// Windows `cmd /C`（GUI 进程 PATH 来自注册表用户环境，npm shim 经 PATHEXT 解析）
@@ -90,7 +111,9 @@ pub(crate) fn shell_invocation(script: String, windows: bool) -> (String, Vec<St
 }
 
 /// 批量授权目录清单：全部为家目录绝对路径前缀；`~/.claude` 走宿主路径
-/// 白名单免审，不在申请列（fs_auth 对含 `.claude/` 段的路径直接放行）
+/// 白名单免审，不在申请列（fs_auth 对含 `.claude/` 段的路径直接放行）；
+/// `~/.claude.json` 是文件且不含 `.claude/` 段，白名单不覆盖，需单独申请
+/// （同意后 usage 扫描可读配置提取「正在使用的项目会话」）。
 fn auth_dirs(home: &str) -> Vec<String> {
     vec![
         format!("{home}/.codex"),
@@ -99,6 +122,7 @@ fn auth_dirs(home: &str) -> Vec<String> {
         format!("{home}/.local/share/opencode"),
         format!("{home}/.agents"),
         format!("{home}/.npmrc"),
+        format!("{home}/.claude.json"),
     ]
 }
 
@@ -110,6 +134,13 @@ fn request_auth(h: &WasmHost, home: &str) -> bool {
         AUTH_KEY,
         &serde_json::json!(if granted { "granted" } else { "declined" }),
     );
+    // 同步持久化 authGranted 到 detection：get-state 直接读 storage，若
+    // 不写回，前端横幅恒显示"尚未授权"（push_state 只在事件 payload 更新、
+    // 从不落库，实测 auth 键已 granted 但 detection.authGranted 恒 false）
+    if let Ok(Some(mut state)) = h.storage_get(STATE_KEY) {
+        state["authGranted"] = serde_json::json!(granted);
+        let _ = h.storage_set(STATE_KEY, &state);
+    }
     if granted {
         h.log_info("directory authorization granted");
     } else {
@@ -197,6 +228,8 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.get-install-state" => install::get_state(&h),
             "agent-hub.speed-test" => install::speed_test(&h),
             "agent-hub.apply-mirror" => install::apply_mirror(&h, &args),
+            "agent-hub.add-custom-source" => install::add_custom_source(&h, &args),
+            "agent-hub.remove-custom-source" => install::remove_custom_source(&h, &args),
             "agent-hub.restore-npmrc" => install::restore_npmrc(&h),
             "agent-hub.check-updates" => install::check_updates(&h),
             "agent-hub.install" => install::start(&h, &args),
@@ -221,6 +254,9 @@ impl WasmPlugin for AgentHubPlugin {
             "agent-hub.get-usage-state" => usage::get_state(&h),
             "agent-hub.scan-usage" => usage::scan(&h),
             "agent-hub.get-usage-stats" => usage::get_stats(&h),
+            "agent-hub.list-usage-sources" => usage::list_sources(&h),
+            "agent-hub.add-usage-source" => usage::add_source(&h, &args),
+            "agent-hub.remove-usage-source" => usage::remove_source(&h, &args),
             "agent-hub.list-usage-sessions" => usage::list_sessions(&h, &args),
             "agent-hub.read-usage-session" => usage::read_session(&h, &args),
             other => Err(anyhow::anyhow!("unknown command: {other}")),
@@ -262,11 +298,13 @@ mod tests {
     #[test]
     fn auth_dirs_cover_cli_homes() {
         let dirs = auth_dirs("/home/u");
-        assert_eq!(dirs.len(), 6);
+        assert_eq!(dirs.len(), 7);
         assert!(dirs.iter().all(|d| d.starts_with("/home/u/")));
         assert!(dirs.iter().any(|d| d.ends_with("/.codex")));
         assert!(dirs.iter().any(|d| d.ends_with("/.pi")));
-        assert!(dirs.iter().all(|d| !d.contains(".claude")));
+        // ~/.claude 目录走白名单免审；仅 .claude.json 文件需授权（白名单不含文件）
+        assert!(dirs.iter().any(|d| d.ends_with("/.claude.json")));
+        assert!(dirs.iter().all(|d| !d.contains("/.claude/")));
     }
 
     /// shell 分派纯函数：unix 登录 shell / Windows cmd /C（两端形态锁定）
@@ -285,6 +323,26 @@ mod tests {
             args,
             vec!["/C".to_string(), "npm install -g pi".to_string()]
         );
+    }
+
+    /// POSIX 单引号转义：双引号 / $() / 反引号 / 分号均被包裹中和；
+    /// 单引号自身经 '\'' 转义不逃逸
+    #[test]
+    fn sh_quote_neutralizes_shell_metachars() {
+        assert_eq!(sh_quote("/tmp/a;$(x)"), "'/tmp/a;$(x)'");
+        assert_eq!(sh_quote("/tmp/it's"), "'/tmp/it'\\''s'");
+        assert_eq!(sh_quote("plain"), "'plain'");
+    }
+
+    /// 脚本入口拒绝集：控制字符（含换行）/ 双引号 / %（双平台统一收紧，
+    /// Windows cmd 无法在命令行上下文转义 %，引号会逃出双引号包裹）
+    #[test]
+    fn path_rejected_for_script_set() {
+        assert!(!path_rejected_for_script("/tmp/normal dir/with space"));
+        assert!(path_rejected_for_script("/tmp/a\nb"));
+        assert!(path_rejected_for_script("/tmp/a\"b"));
+        assert!(path_rejected_for_script("/tmp/100%"));
+        assert!(path_rejected_for_script("/tmp/\u{1}"));
     }
 }
 

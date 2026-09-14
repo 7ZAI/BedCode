@@ -14,6 +14,7 @@
 import { computed, ref, watch } from 'vue'
 import { inject } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import MarkdownEditor from '@binblink/bedcode-plugin-sdk-desktop/ui/markdown-editor'
 import { diffLines, diffStats } from '../utils/diff'
 import type { SkillDetail } from '../types'
 import type { UseSkillsReturn } from '../composables/useSkills'
@@ -195,13 +196,10 @@ async function reloadFromDisk() {
 
       <!-- 编辑态 / 保存预览态 -->
       <template v-else>
-        <textarea
-          v-model="draft"
-          class="ah-sk-textarea ah-mono"
-          :disabled="previewing || saving"
-          spellcheck="false"
-          data-testid="skill-editor-textarea"
-        ></textarea>
+        <!-- 编辑区：占满面板剩余高度（ah-sk-editor-body flex:1），底部内容不贴边（组件内 padding） -->
+        <div class="ah-sk-editor-body">
+          <MarkdownEditor v-model="draft" :disabled="previewing || saving" />
+        </div>
 
         <!-- 保存前 diff 预览（两击确认第一击后出现） -->
         <template v-if="previewing">

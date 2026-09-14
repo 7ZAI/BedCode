@@ -68,6 +68,18 @@ export type MessageSchema = {
   'hub.speed.current': string
   'hub.speed.fail': string
   'hub.speed.goto': string
+  'hub.speed.recommended': string
+  'hub.speed.currentTag': string
+  'hub.speed.select': string
+  'hub.speed.addCustom': string
+  'hub.speed.addCustomPlaceholder': string
+  'hub.speed.removeCustom': string
+  'hub.speed.source.npmmirror': string
+  'hub.speed.source.npmjs': string
+  'hub.speed.source.huawei': string
+  'hub.speed.source.tencent': string
+  'hub.speed.source.yarn': string
+  'hub.speed.source.custom': string
   'hub.mirror.persist': string
   'hub.mirror.persistConfirm': string
   'hub.mirror.restore': string
@@ -189,6 +201,12 @@ export type MessageSchema = {
   'hub.pv.editor.nameExists': string
   'hub.pv.editor.save': string
   'hub.pv.editor.cancel': string
+  'hub.pv.editor.key': string
+  'hub.pv.editor.keyNew': string
+  'hub.pv.editor.keyPlaceholder': string
+  'hub.pv.editor.keyHint': string
+  'hub.pv.editor.keyClear': string
+  'hub.pv.editor.keyKeep': string
 
   // ==================== 供应商 · 应用（票据 05） ====================
   'hub.pv.apply.title': string
@@ -197,6 +215,8 @@ export type MessageSchema = {
   'hub.pv.apply.targetNameHint': string
   'hub.pv.apply.codexUnsupported': string
   'hub.pv.apply.keyMode': string
+  'hub.pv.apply.keyStored': string
+  'hub.pv.apply.keyStoredHint': string
   'hub.pv.apply.keyInline': string
   'hub.pv.apply.keySource': string
   'hub.pv.apply.keySourceMask': string
@@ -236,11 +256,48 @@ export type MessageSchema = {
   'hub.st.empty': string
   'hub.st.loadMore': string
 
-  // ==================== 会话日志（票据 06） ====================
-  'hub.lg.filterAll': string
-  'hub.lg.pickSession': string
-  'hub.lg.viewRaw': string
-  'hub.lg.viewEvents': string
+  // ==================== 会话日志（改版：来源 / 查询 / 分页 / 详情） ====================
+  'hub.lg.sources.title': string
+  'hub.lg.sources.builtin': string
+  'hub.lg.sources.custom': string
+  'hub.lg.sources.scan': string
+  'hub.lg.sources.add': string
+  'hub.lg.sources.addName': string
+  'hub.lg.sources.addPath': string
+  'hub.lg.sources.confirm': string
+  'hub.lg.sources.cancel': string
+  'hub.lg.sources.remove': string
+  'hub.lg.sources.noScan': string
+  'hub.lg.sources.sessions': string
+  'hub.lg.sources.addFailed': string
+  'hub.lg.sources.removeFailed': string
+  'hub.lg.filter.agent': string
+  'hub.lg.filter.all': string
+  'hub.lg.filter.keyword': string
+  'hub.lg.filter.keywordPh': string
+  'hub.lg.filter.from': string
+  'hub.lg.filter.to': string
+  'hub.lg.filter.query': string
+  'hub.lg.filter.reset': string
+  'hub.lg.col.agent': string
+  'hub.lg.col.session': string
+  'hub.lg.col.project': string
+  'hub.lg.col.started': string
+  'hub.lg.col.duration': string
+  'hub.lg.col.tokens': string
+  'hub.lg.row.open': string
+  /** 正在使用的项目会话徽标（扫描时按配置/最新会话标记） */
+  'hub.lg.row.current': string
+  /** 当前行 title 提示 */
+  'hub.lg.row.currentTip': string
+  'hub.lg.noMatch': string
+  'hub.lg.pager.total': string
+  'hub.lg.pager.page': string
+  'hub.lg.pager.prev': string
+  'hub.lg.pager.next': string
+  'hub.lg.detail.back': string
+  'hub.lg.detail.tabChat': string
+  'hub.lg.detail.tabRaw': string
   'hub.lg.noSource': string
   'hub.lg.eventsTruncated': string
   'hub.lg.rawTruncated': string

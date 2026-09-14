@@ -25,6 +25,10 @@
 /* ==================== 面板骨架 ==================== */
 
 .ah-view {
+  /* flex 列：编辑态由 .ah-sk → .ah-sk-editor → .ah-sk-editor-body 链式撑满到底边；
+     列表态各 tab 根为普通块级 div，flex 布局下高度仍为内容高，滚动行为不变 */
+  display: flex;
+  flex-direction: column;
   height: 100%;
   overflow-y: auto;
   padding: 20px;
@@ -407,6 +411,94 @@
   color: var(--color-warning);
 }
 
+/* ==================== 测速候选源表格 + 自定义源（多源选择，票 03 扩展） ==================== */
+
+/* 测速结果：无框四列表格（源名称/地址/测速/操作，左对齐，不加表头） */
+.ah-speed-table {
+  display: grid;
+  gap: 2px;
+  margin-top: 2px;
+}
+
+.ah-speed-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+}
+
+/* 当前生效源行高亮 */
+.ah-speed-row.active {
+  background: var(--bg-hover);
+}
+
+/* 源名称列：名 + 紧凑标记 */
+.ah-speed-name {
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* 地址列：弹性截断，左对齐 */
+.ah-speed-url {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+/* 测速列：与操作列同列对齐 */
+.ah-speed-ms {
+  color: var(--text-primary);
+  white-space: nowrap;
+}
+
+/* 列表内紧凑标记（推荐 / 当前） */
+.ah-speed-mini {
+  height: 18px;
+  padding: 0 6px;
+  font-size: var(--font-size-tag);
+}
+
+/* 自定义源输入 + 添加 */
+.ah-speed-custom {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.ah-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  transition:
+    border-color 0.2s,
+    background-color 0.2s;
+}
+
+.ah-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+  background: var(--bg-hover);
+}
+
+.ah-input::placeholder {
+  color: var(--text-secondary);
+}
+
 /* 临时镜像开关行 */
 .ah-mirror-tmp {
   display: inline-flex;
@@ -530,6 +622,12 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* 编辑态撑满：仅编辑 SKILL.md 时压缩到视口剩余高度（列表态不拉伸，内容流高度回归原行为） */
+.ah-sk--editing {
+  flex: 1;
+  min-height: 0;
 }
 
 /* 状态 tag 行：规范库计数 + 各目标同步汇总 */
@@ -689,6 +787,20 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+  /* 编辑态：占满面板剩余高度（列表态无此元素，不受影响） */
+  flex: 1;
+  min-height: 0;
+}
+
+/* 编辑区外层：把剩余高度交给 MarkdownEditor（其根 .mde 为 height:100% 的 flex 列）。
+   height: calc(100vh - 260px) 是确定性兜底（definite，.mde 的 height:100% 可解析）：
+   宿主 flex 高度链正常时 flex-grow 拉伸占满剩余；异常时也保持视口剩余高度，
+   编辑区不会塌成内容高（260 = padding+tabs+inst-head+meta+diff-actions 估算） */
+.ah-sk-editor-body {
+  flex: 1 0 auto;
+  height: calc(100vh - 260px);
+  display: flex;
+  flex-direction: column;
 }
 
 .ah-sk-loading {
@@ -833,7 +945,7 @@
   color: var(--color-primary-contrast);
 }
 
-/* key 三选一（radio 行） */
+/* key 四选一（radio 行，v2 起含中心库 stored） */
 .ah-pv-keymodes {
   display: inline-flex;
   align-items: center;
@@ -864,6 +976,15 @@
 .ah-pv-models {
   height: 110px;
   width: auto;
+  flex: 1;
+  min-width: 200px;
+}
+
+/* 编辑器 key 行：输入框 + 清空切换（v2 中心凭据） */
+.ah-pv-keyrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   flex: 1;
   min-width: 200px;
 }
@@ -1118,81 +1239,313 @@
   text-align: center;
 }
 
-/* ==================== 会话日志（票据 06，主从布局） ==================== */
+/* ==================== 会话日志（改版：来源 / 查询 / 分页 / 二级详情） ==================== */
 
 .ah-lg {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-}
-
-.ah-lg-list {
-  width: 268px;
-  flex: none;
+  /* 占满面板剩余高度（链：.ah-view(flex col) → .ah-lg(flex:1)），
+     一级页表格、二级页事件/原始视图内部各自滚动，外层面板不滚动 */
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
 }
 
-.ah-lg-filters {
+/* ---------- 日志来源区（默认折叠） ---------- */
+.ah-lg-sources-toggle {
+  align-self: flex-start;
+  gap: 6px;
+}
+
+.ah-lg-sources-chev {
+  display: inline-block;
+  transition: transform 0.2s;
+  color: var(--text-secondary);
+}
+
+.ah-lg-sources-chev.open {
+  transform: rotate(90deg);
+}
+
+.ah-lg-sources-count {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-sources-body {
   display: flex;
-  gap: 4px;
-}
-
-.ah-lg-item {
+  flex-direction: column;
+  gap: 6px;
   padding: 10px 12px;
-  cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
 }
 
-.ah-lg-item.active {
-  border-color: var(--color-primary);
-  box-shadow: var(--shadow-card-hover);
-}
-
-.ah-lg-item-top {
+.ah-lg-source-row {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  font-weight: 600;
+  padding: 4px 2px;
 }
 
-.ah-lg-item-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.ah-lg-source-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  flex: none;
+}
+
+.ah-lg-source-type {
+  flex: none;
+  padding: 0 8px;
+  border-radius: var(--radius-tag);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-source-type.builtin {
+  background: var(--color-primary-light);
   color: var(--text-primary);
 }
 
-.ah-lg-item-sub {
+.ah-lg-source-type.custom {
+  background: var(--color-warning-light);
+  color: var(--text-primary);
+}
+
+.ah-lg-source-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+
+.ah-lg-source-scan {
+  flex: none;
+  color: var(--text-secondary);
+}
+
+.ah-lg-source-remove {
+  flex: none;
+  min-width: 24px;
+  padding: 0 6px;
+}
+
+.ah-lg-sources-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+.ah-lg-sources-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+/* ---------- 查询条件条（Agent / 关键词 / 时间范围） ---------- */
+.ah-lg-filter {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+}
+
+.ah-lg-filter-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.ah-lg-filter-q {
+  flex: 1;
+  min-width: 200px;
+}
+
+.ah-lg-filter-label {
   font-size: var(--font-size-tag);
   color: var(--text-tertiary);
 }
 
-.ah-lg-view {
-  flex: 1;
-  min-width: 0;
+.ah-lg-filter-actions {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  margin-left: auto;
 }
 
-.ah-lg-placeholder {
-  padding: 28px 20px;
-  text-align: center;
+/* 通用表单控件（宿主无既有类，token 绑定新建；InstallTab 仍用 ah-input） */
+.ah-input {
+  height: 30px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-size: var(--font-size-tag);
+  font-family: inherit;
+}
+
+.ah-input:focus {
+  outline: none;
+  border-color: var(--color-primary);
+}
+
+.ah-input::placeholder {
   color: var(--text-tertiary);
 }
 
-.ah-lg-head-row {
+/* ---------- 分页表格（Agent | 会话 | 项目 | 开始时间 | 时长 | Tokens） ---------- */
+.ah-lg-table {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.ah-lg-table-head,
+.ah-lg-row {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1.6fr) minmax(0, 1fr) 130px 70px 90px 24px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 16px;
+}
+
+.ah-lg-table-head {
+  flex: none;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+  border-bottom: 1px solid var(--border);
+}
+
+.ah-lg-table-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.ah-lg-row {
+  cursor: pointer;
+  transition: background-color 0.15s;
+}
+
+.ah-lg-row:hover {
+  background: var(--bg-hover);
+}
+
+.ah-lg-row + .ah-lg-row {
+  border-top: 1px solid var(--border);
+}
+
+.ah-lg-cell-agent {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
-.ah-lg-head-title {
+.ah-lg-cell-agent-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
+
+/* 正在使用的项目会话（扫描时按配置/最新会话标记）：左缘主色描边 + 当前徽标 */
+.ah-lg-row-active {
+  box-shadow: inset 2px 0 0 var(--color-primary);
+}
+
+.ah-lg-badge-current {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 600;
+}
+
+.ah-lg-cell-title {
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-cell-sub {
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ah-lg-col-time,
+.ah-lg-col-dur,
+.ah-lg-col-tokens {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+}
+
+.ah-lg-col-go {
+  color: var(--text-tertiary);
+  text-align: center;
+}
+
+.ah-lg-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+}
+
+.ah-lg-pager-info {
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+}
+
+/* ---------- 二级详情（页签：聊天记录 / 原始 JSONL） ---------- */
+.ah-lg-detail {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 详情头卡固定不参与高度伸缩，剩余高度全交给事件/原始视图 */
+.ah-lg-detail-head {
+  flex: none;
+}
+
+.ah-lg-detail-head-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.ah-lg-detail-back {
+  flex: none;
+}
+
+.ah-lg-detail-title {
   flex: 1;
   min-width: 0;
   overflow: hidden;
@@ -1200,6 +1553,65 @@
   white-space: nowrap;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.ah-lg-detail-tabs {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+  flex: none;
+  padding: 2px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-button);
+}
+
+.ah-lg-tab {
+  height: 26px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--font-size-tag);
+  font-family: inherit;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.ah-lg-tab:hover {
+  background: var(--bg-hover);
+}
+
+.ah-lg-tab.active {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-weight: 600;
+}
+
+/* ---------- Agent 官方图标（claude / pi + 字母徽标回退） ---------- */
+.ah-agent-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.ah-agent-ic svg {
+  width: 100%;
+  height: 100%;
+}
+
+.ah-agent-ic-letter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+  color: #fff;
+  font-weight: 700;
 }
 
 .ah-lg-head-src {
@@ -1228,86 +1640,219 @@
   font-size: var(--font-size-tag);
 }
 
-/* 归一事件流：时间列 + 角色 tag + 正文 */
-.ah-lg-evt {
+/* 事件卡：与 .ah-sk-editor-body 同款确定性兑底（flex 链正常时 flex-grow 拉伸，
+   异常时保持视口剩余高度，聊天区不会塌成内容高） */
+.ah-lg-events {
+  flex: 1 0 auto;
+  min-height: 0;
+  height: calc(100vh - 320px);
   display: flex;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px dashed var(--border);
-  font-size: var(--font-size-body);
+  flex-direction: column;
+  padding: 12px 14px;
 }
 
-.ah-lg-evt:last-child {
-  border-bottom: none;
-}
-
-.ah-lg-evt-t {
-  color: var(--text-tertiary);
-  font-size: var(--font-size-tag);
-  width: 56px;
-  flex: none;
-  padding-top: 2px;
-}
-
-.ah-lg-evt-tx {
-  min-width: 0;
+/* 聊天式只读会话记录（类 zcode/trae 桌面 agent 对话，无输入框） */
+.ah-chat {
+  display: flex;
+  flex-direction: column;
   flex: 1;
+  min-height: 0;
 }
 
-.ah-lg-evt-text {
+.ah-chat-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 4px 8px;
+}
+
+/* 单条消息：头行（角色/模型/时间）+ 内容气泡 */
+.ah-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 88%;
+  min-width: 0;
+}
+
+.ah-msg-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: var(--font-size-tag);
+  color: var(--text-tertiary);
+}
+
+.ah-msg-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.ah-msg-role {
+  font-weight: 600;
+}
+
+.ah-msg-model {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-tertiary);
+}
+
+.ah-msg-time {
+  color: var(--text-tertiary);
+}
+
+.ah-msg-body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ah-msg-text {
   color: var(--text-primary);
   white-space: pre-wrap;
   word-break: break-word;
+  line-height: 1.65;
 }
 
-.ah-lg-evt-meta {
+.ah-msg-meta {
   display: flex;
   gap: 10px;
-  margin-top: 2px;
   font-size: var(--font-size-tag);
   color: var(--text-tertiary);
 }
 
-.ah-lg-tag {
-  flex: none;
-  height: fit-content;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: var(--font-size-tag);
+/* 用户：右侧气泡（primary 强调色 + 对比文字，明暗主题均成立） */
+.ah-msg.role-user {
+  align-self: flex-end;
+  align-items: flex-end;
+  max-width: 78%;
 }
 
-.ah-lg-tag.user {
-  background: var(--color-primary-light);
-  color: var(--text-primary);
+.ah-msg.role-user .ah-msg-body {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  border-radius: var(--radius-card);
+  border-bottom-right-radius: 4px;
+  padding: 8px 12px;
 }
 
-.ah-lg-tag.asst {
-  background: var(--color-warning-light);
-  color: var(--text-primary);
+.ah-msg.role-user .ah-msg-text {
+  color: inherit;
 }
 
-.ah-lg-tag.tool,
-.ah-lg-tag.sys {
-  background: var(--bg-hover);
+.ah-msg.role-user .ah-msg-meta {
   color: var(--text-secondary);
 }
 
-.ah-lg-tag.sys {
+/* 助手：左侧气泡（弱化底 + 边框） */
+.ah-msg.role-assistant {
+  align-self: flex-start;
+  align-items: flex-start;
+}
+
+.ah-msg.role-assistant .ah-msg-body {
+  background: var(--bg-hover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  border-bottom-left-radius: 4px;
+  padding: 10px 14px;
+}
+
+/* 工具：全宽紧凑卡片（左侧竖条区分），正文等宽小字 */
+.ah-msg.role-tool {
+  align-self: stretch;
+  max-width: none;
+}
+
+.ah-msg.role-tool .ah-msg-head {
+  color: var(--text-secondary);
+}
+
+.ah-msg.role-tool .ah-msg-body {
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--border-strong);
+  border-radius: var(--radius-button);
+  padding: 6px 10px;
+}
+
+.ah-msg.role-tool .ah-msg-text {
+  font-size: var(--font-size-tag);
+  font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* 系统：居中提示，无气泡 */
+.ah-msg.role-system {
+  align-self: center;
+  align-items: center;
+  max-width: 70%;
+}
+
+.ah-msg.role-system .ah-msg-head {
+  display: none;
+}
+
+.ah-msg.role-system .ah-msg-body {
+  align-items: center;
+  text-align: center;
+  color: var(--text-tertiary);
+  font-size: var(--font-size-tag);
+  padding: 2px 10px;
+  background: var(--bg-hover);
+  border-radius: 999px;
+}
+
+/* 角色标识色（与既有 role tag 配色一致：用户 primary / 助手 warning / 工具 success） */
+.ah-msg.role-user .ah-msg-dot,
+.ah-msg.role-user .ah-msg-role {
+  color: var(--color-primary);
+}
+
+.ah-msg.role-assistant .ah-msg-dot,
+.ah-msg.role-assistant .ah-msg-role {
+  color: var(--color-warning);
+}
+
+.ah-msg.role-tool .ah-msg-dot,
+.ah-msg.role-tool .ah-msg-role {
+  color: var(--color-success);
+}
+
+.ah-msg.role-system .ah-msg-dot,
+.ah-msg.role-system .ah-msg-role {
   color: var(--text-tertiary);
 }
 
-/* 原始 JSONL 行视图 */
+/* 原始 JSONL 行视图：卡片占满剩余高度，行区内部滚动 */
+.ah-lg-raw-card {
+  flex: 1 0 auto;
+  min-height: 0;
+  height: calc(100vh - 320px);
+  display: flex;
+  flex-direction: column;
+  padding: 10px 12px;
+}
+
 .ah-lg-raw {
-  background: var(--bg-sidebar);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-card);
-  padding: 12px 14px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   font-size: var(--font-size-tag);
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-all;
-  max-height: 480px;
-  overflow-y: auto;
   color: var(--text-secondary);
 }
 

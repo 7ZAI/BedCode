@@ -9,6 +9,10 @@ import { messages } from './i18n'
 import styles from './styles.css?inline'
 import { watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import hubDevMock from './devMock'
+
+// dev-shell 领域种子数据（SDK PluginDevMock 协议；真实宿主忽略）
+export const devMock = hubDevMock
 
 // ==================== UI 注册（标题随宿主语言切换重注册） ====================
 

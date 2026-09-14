@@ -34,7 +34,25 @@ const envRows = computed(() => {
 const speed = computed(() => props.installState?.mirror?.speed ?? null)
 const speedDone = computed(() => speed.value?.status === 'ok')
 const speedFailed = computed(() => speed.value?.status === 'error')
-const recommendMirror = computed(() => speedDone.value && speed.value?.recommend === 'npmmirror')
+
+/** 内置源展示名（i18n；自定义源统一 "hub.speed.source.custom"） */
+const SOURCE_LABELS: Record<string, string> = {
+  npmmirror: 'hub.speed.source.npmmirror',
+  npmjs: 'hub.speed.source.npmjs',
+  huawei: 'hub.speed.source.huawei',
+  tencent: 'hub.speed.source.tencent',
+  yarn: 'hub.speed.source.yarn',
+}
+function sourceLabel(id: string): string {
+  return t(SOURCE_LABELS[id] ?? 'hub.speed.source.custom')
+}
+
+/** 推荐源（最快可达者，来自多源测速列表） */
+const recommended = computed(() => {
+  if (!speedDone.value || !speed.value?.recommend) return null
+  return (speed.value.sources ?? []).find((s) => s.id === speed.value?.recommend) ?? null
+})
+const recommendMirror = computed(() => speed.value?.recommend === 'npmmirror')
 </script>
 
 <template>
@@ -68,10 +86,9 @@ const recommendMirror = computed(() => speedDone.value && speed.value?.recommend
 
       <!-- npm 源测速（原型 b-ov：两源计时 + 推荐；动作在安装与更新页） -->
       <div class="ah-speed-line">
-        <span v-if="speedDone" class="ah-speed-text">
-          {{ t('hub.speed.official') }} <b class="ah-mono">{{ speed?.npmjsMs ?? '—' }} ms</b>
-          <span class="ah-speed-vs">vs</span>
-          {{ t('hub.speed.mirror') }} <b class="ah-mono">{{ speed?.npmmirrorMs ?? '—' }} ms</b>
+        <span v-if="speedDone && recommended" class="ah-speed-text">
+          {{ t('hub.speed.recommended') }}
+          <b class="ah-mono">{{ sourceLabel(recommended.id) }} {{ recommended.ms ?? '—' }} ms</b>
           <span class="ah-cli-tag ah-speed-tag" :class="recommendMirror ? 'warn' : 'ok'">
             <span class="ah-cli-dot"></span>{{ recommendMirror ? t('hub.speed.recommendMirror') : t('hub.speed.recommendOfficial') }}
           </span>

@@ -41,3 +41,5 @@
 - Windows 实机：探测/安装走 `cmd /C` 分派、npm shim 可用、路径规范化展示（spec §3.1 遗留验证项）
 
 **已知事项**：① fs 授权弹窗的「记住」语义由宿主 fs_auth 决定（parent-prefix 持久化），插件按 `authGranted` 置灰降级，未改宿主；② vitest worker 偶发 `ERR_IPC_CHANNEL_CLOSED` 沿袭票 02 记录，复跑即绿。
+
+**多源选择改造（2026-09-14，用户要求）**：测速换源从「两源二选一自动推荐」改为「**多源测速列表 + 用户手动选择** + 自定义源」。① 后端 `MIRROR_SOURCES` 5 源白名单（npmmirror/npmjs/华为云/腾讯云/Yarn，2026-09-14 实测 `/semver/latest` 200 可用）；`speed_test` 测全部候选（内置+自定义）按耗时升序、sources 最多前 10、recommend=最快可达；`apply-mirror` 白名单扩为内置+自定义 URL（不拼接用户输入）。② 自定义源：新命令 `add-custom-source` / `remove-custom-source`（install 状态 `mirror.customSources` 持久化）；URL 校验 `validate_custom_source_url`——http(s):// 协议白名单、先 trim 再查中间空白/换行/`=`（防 npmrc 注入，trim 吞首尾 \r\n 属粘贴常态）。③ 前端 InstallTab 测速区改候选源列表（i18n 源名 + 耗时 + 推荐/当前标记 + 两击确认切换按钮）+ 自定义源输入/添加/删除（添加就地报错）；OverviewTab 测速行改推荐源展示。④ 兼容：旧 storage speed 形状（npmjsMs）前端容错为不显示列表，重新测速覆盖。插件 crate 87/87（新增白名单结构/排序/URL 校验单测）、前端 22/22、tsc 0 error、eslint 0 error。wasm 1039160B / index.js 122.4kB 双目录同步。生效需重启插件或 App。

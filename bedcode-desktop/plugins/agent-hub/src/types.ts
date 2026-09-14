@@ -33,6 +33,8 @@ export interface AgentHubState {
   envError?: string | null
   env: EnvInfo | null
   clis: Record<CliId, CliDetectInfo>
+  /** 状态推送序号（探测期间多次推送全量状态，前端按序过滤乱序旧事件） */
+  seq?: number
 }
 
 /** 面板分区（变体 B：顶部 pill 六段） */
@@ -40,17 +42,31 @@ export type HubTab = 'overview' | 'install' | 'skills' | 'providers' | 'stats' |
 
 // ==================== 安装/更新与镜像域（票据 03，guest install.rs 同构） ====================
 
-/** 换源目标（白名单两源，与 guest 端 NPMJS/NPMMIRROR 对应） */
-export type MirrorTarget = 'npmmirror' | 'npmjs'
+/** 换源目标：候选源 URL（内置白名单 + 用户自定义，guest 端校验） */
+export type MirrorTarget = string
 
-/** npm 源测速状态 */
+/** 单个源测速结果（guest 端按耗时升序，最多前 10） */
+export interface MirrorSourceSpeed {
+  id: string
+  url: string
+  ms: number | null
+  reachable: boolean
+}
+
+/** npm 源测速状态（多源列表，推荐 = 最快可达源） */
 export interface SpeedTestState {
   status: 'idle' | 'testing' | 'ok' | 'error'
-  npmjsMs: number | null
-  npmmirrorMs: number | null
-  recommend: MirrorTarget | null
+  sources: MirrorSourceSpeed[]
+  recommend: string | null
   error: string | null
   testedAt: number | null
+}
+
+/** 用户自定义源（前端可增删，测速/换源白名单一并纳入） */
+export interface CustomMirrorSource {
+  id: string
+  url: string
+  addedAt?: number | null
 }
 
 /** ~/.npmrc 持久换源状态（文件内容不回传，仅 registry 值与备份标记） */
@@ -102,6 +118,8 @@ export interface InstallDomainState {
   mirror: {
     speed: SpeedTestState
     npmrc: NpmrcState
+    /** 用户自定义源（add-custom-source / remove-custom-source 维护） */
+    customSources?: CustomMirrorSource[]
   }
 }
 
@@ -211,13 +229,15 @@ export type ApiStyle = 'openai' | 'anthropic' | 'gemini' | 'custom'
 /** 应用目标（codex config.toml 官方格式未校准，v1 不开放） */
 export type ProviderTarget = 'claude' | 'pi' | 'opencode'
 
-/** 供应商预设（guest provider_preset 表同构；刻意无 key 字段） */
+/** 供应商预设（guest provider_preset 表同构；key 只以掩码 keyMask 出现） */
 export interface ProviderPreset {
   id: number
   name: string
   baseUrl: string
   apiStyle: ApiStyle
   models: string[]
+  /** key 掩码（前 3 字符 + 长度；"—" 表示未存 key）。明文只存 guest 插件库 */
+  keyMask: string
   /** 来源标注（如 `pi:sensenova` / `opencode:gmi`），手工创建为 null */
   notes: string | null
   createdAt: number
@@ -260,11 +280,12 @@ export interface ApplyProviderResult {
 }
 
 /**
- * key 提供方式（apply 时三选一）；claude 桥接确认走独立的顶层 force 标志，
- * 不占用 kind（guest 端 force 与 key 模式正交）
+ * key 提供方式（apply 时四选一）：stored 中心库已存 / inline 现场输入 /
+ * source 内存直拷 / none 保留目标既有凭据；claude 桥接确认走独立的顶层
+ * force 标志，不占用 kind（guest 端 force 与 key 模式正交）
  */
 export interface ApplyKeySpec {
-  kind: 'inline' | 'source' | 'none'
+  kind: 'inline' | 'stored' | 'source' | 'none'
   value?: string
   cli?: string
   provider?: string
@@ -317,7 +338,22 @@ export interface UsageDomainState {
   authGranted: boolean
   /** 用户主目录（项目路径 ~ 折叠展示用） */
   home: string
-  adapters: Record<'claude' | 'pi', UsageAdapterStat>
+  adapters: Record<'claude' | 'pi', UsageAdapterStat> & Record<string, UsageAdapterStat>
+  /** 日志来源清单（内置只读 + 自定义增删；含各来源扫描计数） */
+  sources: UsageSource[]
+  /** 正在使用的项目会话（扫描时计算：claude 读 ~/.claude.json 配置权威，
+   *  pi 取最新会话；键=适配器，null=无） */
+  activeSessions?: Partial<Record<string, { project: string | null; session_id: string } | null>>
+}
+
+/** 日志来源条目（wire 与 list-usage-sources 返回行同构） */
+export interface UsageSource {
+  name: string
+  /** 绝对路径（展示时前端折叠 ~ 前缀） */
+  path: string
+  builtin: boolean
+  /** 扫描计数（与 adapters[name] 同源，list-usage-sources 合并注入） */
+  scan?: UsageAdapterStat
 }
 
 /** 会话聚合记录（usage_session 表行，wire 为 DB 列名 snake_case） */
@@ -337,6 +373,10 @@ export interface UsageSessionRow {
   tokens_cache_write: number
   tokens_reasoning: number
   cost_total: number | null
+  /** 是否正在使用的项目会话（扫描时按配置/最新会话标记；仅列表接口注入） */
+  active?: boolean
+  /** 仅 read-usage-session 返回（列表接口不带）；源 JSONL 路径 */
+  source_path?: string | null
 }
 
 /** 看板聚合（get-usage-stats 返回；day/project/model 为分组行） */
@@ -353,7 +393,7 @@ export interface UsageStats {
   }
   byDay: { day: string; sessions: number; tokens_in: number; tokens_out: number }[]
   byCli: (GroupStatRow & { adapter: string })[]
-  byProject: (GroupStatRow & { project: string })[]
+  byProject: (GroupStatRow & { project: string | null })[]
   byModel: {
     model: string
     sessions: number

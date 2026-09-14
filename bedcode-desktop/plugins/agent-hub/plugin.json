@@ -10,6 +10,7 @@
   "rustLibrary": "bedcode_plugin_agent_hub",
   "icon": "icon.svg",
   "permissions": [
+    "broadcast",
     "fs:read",
     "fs:write",
     "network:http",
@@ -20,16 +21,16 @@
   "contributes": {
     "commands": [
       {
-        "id": "agent-hub.detect",
-        "title": "Agent Hub: Detect CLIs"
-      },
-      {
         "id": "agent-hub.get-state",
         "title": "Agent Hub: Get State"
       },
       {
         "id": "agent-hub.request-auth",
         "title": "Agent Hub: Request Directory Authorization"
+      },
+      {
+        "id": "agent-hub.detect",
+        "title": "Agent Hub: Detect CLIs"
       },
       {
         "id": "agent-hub.get-install-state",
@@ -42,6 +43,14 @@
       {
         "id": "agent-hub.apply-mirror",
         "title": "Agent Hub: Apply Registry Persistently"
+      },
+      {
+        "id": "agent-hub.add-custom-source",
+        "title": "agent-hub.add-custom-source"
+      },
+      {
+        "id": "agent-hub.remove-custom-source",
+        "title": "agent-hub.remove-custom-source"
       },
       {
         "id": "agent-hub.restore-npmrc",
@@ -116,12 +125,12 @@
         "title": "Agent Hub: Apply Provider Preset to CLI"
       },
       {
-        "id": "agent-hub.scan-usage",
-        "title": "Agent Hub: Scan Usage Sessions"
-      },
-      {
         "id": "agent-hub.get-usage-state",
         "title": "Agent Hub: Get Usage State"
+      },
+      {
+        "id": "agent-hub.scan-usage",
+        "title": "Agent Hub: Scan Usage Sessions"
       },
       {
         "id": "agent-hub.get-usage-stats",
@@ -130,6 +139,18 @@
       {
         "id": "agent-hub.list-usage-sessions",
         "title": "Agent Hub: List Usage Sessions"
+      },
+      {
+        "id": "agent-hub.list-usage-sources",
+        "title": "Agent Hub: List Usage Sources"
+      },
+      {
+        "id": "agent-hub.add-usage-source",
+        "title": "Agent Hub: Add Usage Source"
+      },
+      {
+        "id": "agent-hub.remove-usage-source",
+        "title": "Agent Hub: Remove Usage Source"
       },
       {
         "id": "agent-hub.read-usage-session",
@@ -142,7 +163,8 @@
         "type": "sidebar",
         "title": "Agent Hub",
         "component": "AgentHubView",
-        "icon": "M12 2L2 12l10 10 10-10L12 2zm0 5.2l4.8 4.8-4.8 4.8L7.2 12l4.8-4.8z"
+        "icon": "M12 2L2 12l10 10 10-10L12 2zm0 5.2l4.8 4.8-4.8 4.8L7.2 12l4.8-4.8z",
+        "order": 240
       }
     ],
     "configuration": {

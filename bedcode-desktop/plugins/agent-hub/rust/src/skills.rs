@@ -22,7 +22,7 @@
 //! 状态为单一真源（host-storage `skills` 键，读-改-写），每次变更全量 emit
 //! `plugin:agent-hub:skills` 推送前端。
 
-use super::{host, is_windows, pending, shell_invocation, PendingRun, DATA_DIR, HOME};
+use super::{host, is_windows, path_rejected_for_script, pending, sh_quote, shell_invocation, PendingRun, DATA_DIR, HOME};
 use crate::install::now_ms;
 use bedcode_plugin_api::events::ProcessDoneEvent;
 use bedcode_plugin_api::host::{
@@ -435,6 +435,11 @@ pub(crate) fn raw_file_url(owner: &str, repo: &str, ref_: &str, path: &str) -> S
 /// 目录列举脚本：分段标记输出各根的文件清单。unix `find -type f`；
 /// Windows `dir /s /b /a:-d`（/a:-d 排除目录项，dir /s /b 会混入目录行）。
 /// 根缺失属常态：错误回显走 stderr 抑制，exit code 不作判据（超时除外）。
+///
+/// 安全：unix 根路径经 `sh_quote` 单引号转义（import 目录是用户可控输入，
+/// 未经转义直接插双引号即可被 `$()` / 反引号注入命令）；Windows 保留双引号
+/// 包裹（cmd 引号内 & | < > 按字面处理），`"` 与 `%` 已在 import_local 入口
+/// 拒绝（见 `path_rejected_for_script`）。
 pub(crate) fn scan_script(sections: &[(&str, String)], windows: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     for (key, root) in sections {
@@ -444,7 +449,8 @@ pub(crate) fn scan_script(sections: &[(&str, String)], windows: bool) -> String 
             ));
         } else {
             parts.push(format!(
-                "echo '== {key} =='\nfind \"{root}\" -type f 2>/dev/null\n"
+                "echo '== {key} =='\nfind {} -type f 2>/dev/null\n",
+                sh_quote(root)
             ));
         }
     }
@@ -1042,6 +1048,11 @@ pub(crate) fn import_local(h: &WasmHost, args: &Value) -> anyhow::Result<Value> 
     };
     // 规范化分隔符（Windows 反斜杠路径）后取 basename 作为入库目录名
     let normalized = path.replace('\\', "/");
+    if path_rejected_for_script(&path) {
+        return Err(anyhow::anyhow!(
+            "import: path contains characters unsupported by scan scripts"
+        ));
+    }
     let Some(name) = basename(&normalized) else {
         return Err(anyhow::anyhow!(
             "import: cannot derive skill name from {path}"
@@ -1457,10 +1468,24 @@ mod tests {
         let sections = vec![("lib", "/home/u/.agents/skills".to_string())];
         let unix = scan_script(&sections, false);
         assert!(unix.contains("== lib =="));
-        assert!(unix.contains("find \"/home/u/.agents/skills\" -type f 2>/dev/null"));
+        assert!(unix.contains("find '/home/u/.agents/skills' -type f 2>/dev/null"));
 
         let win = scan_script(&sections, true);
         assert!(win.contains("echo == lib =="));
         assert!(win.contains("dir /s /b /a:-d \"/home/u/.agents/skills\" 2>nul"));
+    }
+
+    /// 注入防护：import 来源路径进单引号后仅作为 find 参数；单引号转义不逃逸
+    #[test]
+    fn scan_script_quotes_import_root() {
+        let unix = scan_script(&[("src", "/tmp/$(rm -rf ~);x".to_string())], false);
+        // $() 序列整体被单引号包裹：脚本输出逐字节比对，证明序列未逃逸
+        assert_eq!(
+            unix,
+            "echo '== src =='\nfind '/tmp/$(rm -rf ~);x' -type f 2>/dev/null\n"
+        );
+
+        let quoted = scan_script(&[("src", "/tmp/a'b".to_string())], false);
+        assert!(quoted.contains("find '/tmp/a'\\''b' -type f 2>/dev/null"));
     }
 }

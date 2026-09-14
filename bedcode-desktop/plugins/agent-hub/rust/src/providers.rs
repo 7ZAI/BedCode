@@ -1,15 +1,19 @@
-//! 供应商统一管理域（票据 05）
+//! 供应商统一管理域（票据 05 / v2 中心凭据库）
 //!
 //! 职责：
-//! - **预设 CRUD**：`provider_preset` 表（插件独立库，host-plugin-database），
-//!   刻意无 key 列（spec §5/§6）——hub 存储面（表/状态/日志）任何位置不落 key
-//! - **反向导入**：读各 CLI 现有配置生成预设——pi（`models.json` providers +
-//!   `auth.json` 键存在性掩码）、opencode（`opencode.json` `provider.*`）；
-//!   claude 只读展示（settings.json env 掩码 + 桥接文件存在性），不生成预设
+//! - **预设 CRUD**：`provider_preset` 表（插件独立库，host-plugin-database）。
+//!   v2（2026-09-14 用户决策删除「key 不落 hub」红线）起含 `api_key` 列——
+//!   中心凭据库：一处配置 key、分发到多个 agent；明文只落本库（与各 CLI
+//!   原生配置同等的明文暴露面），UI/状态/日志一律掩码（前 3 字符 + 长度）
+//! - **反向导入**：读各 CLI 现有配置生成预设并把源 key 一并收进中心凭据库——
+//!   pi（`models.json` providers + `auth.json`）、opencode（`opencode.json`
+//!   `provider.*`）；claude 只读展示（settings.json env 掩码 + 桥接文件
+//!   存在性），不生成预设
 //! - **应用**：写入目标 CLI 原生配置文件（真源始终是 CLI 自己的配置）——
 //!   claude 写 `settings.json` 的 `env` 块；pi 写 `models.json` providers 条目 +
 //!   `auth.json` 键条目；opencode 写 `opencode.json` `provider.*` 条目。
-//!   key 现场输入或从源 CLI 配置**内存直拷**（应用时现读现写，不落 hub 存储/日志）
+//!   key 来源四选一：stored 中心库（默认）/ inline 现场输入 / source 内存直拷
+//!   / none 保留目标既有凭据
 //! - **claude 桥接冲突**：检测到 `provider-config.sh` / `anthropic-bridge.mjs`
 //!   时阻止写入并提示（force = 用户确认后仅写 env 块，桥接文件永不触碰）
 //!
@@ -18,8 +22,11 @@
 //! 原样保留——不做整文件反序列化重写，只在目标条目 span 上做替换/插入，
 //! 其余字节逐字保留。读路径统一走 `parse_jsonc`（剥注释 + 尾逗号）。
 //!
-//! key 纪律：掩码函数是 key 与 UI 的唯一交界面（前 3 字符 + 长度）；应用成功
-//! 后的状态/日志只记 `key` 是否提供与长度，不记内容。
+//! key 纪律（删红线后保留的「不落明文于 UI/日志」层）：掩码函数 `mask_key` 是
+//! key 与 UI 的唯一交界面（前 3 字符 + 长度）；导入结果/预设 wire/状态/日志
+//! 均不含明文——应用成功后的状态与日志只记 `key` 是否提供与长度。
+
+use std::fmt;
 
 use super::HOME;
 use crate::install::now_ms;
@@ -580,17 +587,34 @@ pub(crate) fn opencode_npm_of(style: &str) -> &'static str {
 
 // ==================== 反向导入提取（纯函数） ====================
 
-/// 导入草稿（写库前的中间形态；不含 key，只有掩码——掩码随改名走，
-/// 同名去重改名的预设其掩码仍能对上）
-#[derive(Debug, PartialEq)]
+/// 导入草稿（写库前的中间形态；v2 起携带源 key 明文——导入直接入中心凭据库；
+/// 掩码随改名走，同名去重改名的预设其掩码仍能对上）
+#[derive(PartialEq)]
 pub(crate) struct PresetDraft {
     pub name: String,
     pub base_url: String,
     pub api_style: String,
     pub models: Vec<String>,
     pub notes: String,
-    /// 源 key 掩码（无 key 可直拷为 "—"）
+    /// 源 key 明文（无 key 为空串；仅导入入库用，永不进 wire/日志）
+    pub key: String,
+    /// 源 key 掩码（无 key 可直拷为 "—"；导入结果回显用）
     pub key_mask: String,
+}
+
+/// Debug 掩码化草稿 key：任何 `{:?}` 输出（测试断言/误打的调试日志）不泄明文
+impl fmt::Debug for PresetDraft {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PresetDraft")
+            .field("name", &self.name)
+            .field("base_url", &self.base_url)
+            .field("api_style", &self.api_style)
+            .field("models", &self.models)
+            .field("notes", &self.notes)
+            .field("key", &mask_key(&self.key))
+            .field("key_mask", &self.key_mask)
+            .finish()
+    }
 }
 
 /// pi 配置 → 预设草稿（掩码内嵌）。models.json providers.<key>：
@@ -622,13 +646,21 @@ pub(crate) fn presets_from_pi(models: &Value, auth: &Value) -> Vec<PresetDraft> 
                     .collect()
             })
             .unwrap_or_default();
+        // v2：源 key 明文收进中心凭据库（掩码随行供导入结果回显）
+        let raw_key = auth
+            .get(key)
+            .and_then(|p| p.get("key"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         drafts.push(PresetDraft {
             name: key.clone(),
             base_url,
             api_style,
             models,
             notes: format!("pi:{key}"),
-            key_mask: auth_mask_of(auth, key),
+            key: raw_key.clone(),
+            key_mask: mask_key(&raw_key),
         });
     }
     drafts
@@ -659,31 +691,24 @@ pub(crate) fn presets_from_opencode(cfg: &Value) -> Vec<PresetDraft> {
             .and_then(|v| v.as_object())
             .map(|m| m.keys().cloned().collect())
             .unwrap_or_default();
-        let key_mask = p
+        // v2：源 key 明文收进中心凭据库（掩码随行供导入结果回显）
+        let raw_key = p
             .get("options")
             .and_then(|o| o.get("apiKey"))
             .and_then(|v| v.as_str())
-            .map(mask_key)
-            .unwrap_or_else(|| "—".to_string());
+            .unwrap_or("")
+            .to_string();
         drafts.push(PresetDraft {
             name: key.clone(),
             base_url,
             api_style,
             models,
             notes: format!("opencode:{key}"),
-            key_mask,
+            key: raw_key.clone(),
+            key_mask: mask_key(&raw_key),
         });
     }
     drafts
-}
-
-/// auth.json 中某 provider 的 key 掩码（无 key / 解析失败 → "—"）
-fn auth_mask_of(auth: &Value, provider: &str) -> String {
-    auth.get(provider)
-        .and_then(|p| p.get("key"))
-        .and_then(|v| v.as_str())
-        .map(mask_key)
-        .unwrap_or_else(|| "—".to_string())
 }
 
 /// 同名去重计划：已存在同名 → 试 `{name}-{source}`；仍存在 → 跳过
@@ -824,7 +849,8 @@ pub(crate) fn claude_env_view(settings: &Value) -> Value {
 
 // ==================== 插件库：provider_preset 表 ====================
 
-/// 建表（幂等）。宿主 `plugin_db_execute` 为单语句版本，schema 不拆分（单表无索引）
+/// 建表 + 幂等迁移。宿主 `plugin_db_execute` 为单语句版本，schema 不拆分
+/// （单表无索引）；v2 列迁移走 PRAGMA 存在性检查，旧库重跑安全
 pub(crate) fn ensure_schema(h: &WasmHost) -> anyhow::Result<()> {
     h.plugin_db_execute(
         "CREATE TABLE IF NOT EXISTS provider_preset (\
@@ -833,15 +859,35 @@ pub(crate) fn ensure_schema(h: &WasmHost) -> anyhow::Result<()> {
          base_url TEXT NOT NULL DEFAULT '', \
          api_style TEXT NOT NULL DEFAULT 'openai', \
          models_json TEXT NOT NULL DEFAULT '[]', \
+         api_key TEXT NOT NULL DEFAULT '', \
          notes TEXT, \
          created_at INTEGER NOT NULL, \
          updated_at INTEGER NOT NULL)",
     )
     .map_err(|e| anyhow::anyhow!("providers: ensure schema failed: {e}"))?;
+    // 幂等迁移：v1 库无 api_key 列（旧 schema 刻意无 key 列），检测到缺列才补
+    let cols = h
+        .plugin_db_query("PRAGMA table_info(provider_preset)")
+        .map_err(|e| anyhow::anyhow!("providers: pragma failed: {e}"))?
+        .unwrap_or(Value::Array(Vec::new()));
+    let has_api_key = cols
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .any(|c| c.get("name").and_then(|v| v.as_str()) == Some("api_key"))
+        })
+        .unwrap_or(false);
+    if !has_api_key {
+        h.plugin_db_execute(
+            "ALTER TABLE provider_preset ADD COLUMN api_key TEXT NOT NULL DEFAULT ''",
+        )
+        .map_err(|e| anyhow::anyhow!("providers: migrate api_key failed: {e}"))?;
+    }
     Ok(())
 }
 
-/// 库行 → wire JSON（models_json 反序列化；刻意无 key 字段——AC1 单测锁定）
+/// 库行 → wire JSON（models_json 反序列化；key 只以掩码 keyMask 出现——
+/// 明文只存库，状态载荷/前端永不接触）
 fn preset_row_to_json(row: &Value) -> Option<Value> {
     let models = row
         .get("models_json")
@@ -849,12 +895,14 @@ fn preset_row_to_json(row: &Value) -> Option<Value> {
         .and_then(|s| serde_json::from_str::<Value>(s).ok())
         .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
+    let key = row.get("api_key").and_then(|v| v.as_str()).unwrap_or("");
     Some(json!({
         "id": row.get("id")?,
         "name": row.get("name")?,
         "baseUrl": row.get("base_url")?.as_str().unwrap_or(""),
         "apiStyle": row.get("api_style")?.as_str().unwrap_or("openai"),
         "models": models,
+        "keyMask": mask_key(key),
         "notes": row.get("notes").cloned().unwrap_or(Value::Null),
         "createdAt": row.get("created_at")?,
         "updatedAt": row.get("updated_at")?,
@@ -864,7 +912,7 @@ fn preset_row_to_json(row: &Value) -> Option<Value> {
 fn list_presets(h: &WasmHost) -> anyhow::Result<Vec<Value>> {
     let rows = h
         .plugin_db_query(
-            "SELECT id, name, base_url, api_style, models_json, notes, created_at, updated_at \
+            "SELECT id, name, base_url, api_style, models_json, api_key, notes, created_at, updated_at \
              FROM provider_preset ORDER BY name",
         )
         .map_err(|e| anyhow::anyhow!("providers: list failed: {e}"))?
@@ -873,6 +921,25 @@ fn list_presets(h: &WasmHost) -> anyhow::Result<Vec<Value>> {
         .as_array()
         .map(|arr| arr.iter().filter_map(preset_row_to_json).collect())
         .unwrap_or_default())
+}
+
+/// 读预设已存 key 明文（guest 内部专用：stored 应用 / 保存保留与清空判断）。
+/// 返回值永不进 wire 与日志——调用方只做长度统计或写入目标配置
+fn preset_key_of(h: &WasmHost, id: i64) -> anyhow::Result<String> {
+    let rows = h
+        .plugin_db_query_params(
+            "SELECT api_key FROM provider_preset WHERE id = ?1",
+            &sql_params![id],
+        )
+        .map_err(|e| anyhow::anyhow!("providers: read key failed: {e}"))?
+        .unwrap_or(Value::Array(Vec::new()));
+    Ok(rows
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|r| r.get("api_key"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string())
 }
 
 fn preset_names(h: &WasmHost) -> anyhow::Result<Vec<String>> {
@@ -997,7 +1064,8 @@ fn validate_preset_payload(args: &Value) -> Result<(String, String, String, Vec<
 }
 
 /// 新建/更新预设（id 缺省 = 新建）。同名冲突返回 `nameExists`（前端提示）。
-/// 表结构无 key 列，载荷也不接受任何 key 字段（多余字段被忽略，不入库）
+/// v2 中心凭据：载荷可选 `apiKey`——缺省 = 保留库内既有；`""` = 清空；
+/// 非空 = 设置新 key。key 明文只进库（掩码函数是 UI 交界面），日志只记长度
 pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let (name, base_url, api_style, models) =
@@ -1005,6 +1073,11 @@ pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     let models_json = serde_json::to_string(&models).unwrap_or_else(|_| "[]".to_string());
     let now = now_ms(h).unwrap_or(0);
     let id = args.get("id").and_then(|v| v.as_i64());
+    // apiKey 语义：缺省（None）= 保留既有；Some("") = 清空；Some(非空) = 设置
+    let api_key: Option<String> = args
+        .get("apiKey")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string());
 
     if let Some(id) = id {
         // 更新：同名冲突只允许撞到自己
@@ -1015,26 +1088,48 @@ pub(crate) fn save_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
         if conflict {
             return Ok(json!({ "saved": false, "nameExists": true }));
         }
+        let next_key = match &api_key {
+            Some(k) if !k.is_empty() => k.clone(),
+            Some(_) => String::new(),
+            None => preset_key_of(h, id)?,
+        };
         h.plugin_db_execute_params(
             "UPDATE provider_preset SET name = ?1, base_url = ?2, api_style = ?3, \
-             models_json = ?4, updated_at = ?5 WHERE id = ?6",
-            &sql_params![name, base_url, api_style, models_json, now, id],
+             models_json = ?4, api_key = ?5, updated_at = ?6 WHERE id = ?7",
+            &sql_params![name, base_url, api_style, models_json, next_key, now, id],
         )
         .map_err(|e| anyhow::anyhow!("save-preset: update failed: {e}"))?;
     } else {
         if preset_names(h)?.iter().any(|n| n == &name) {
             return Ok(json!({ "saved": false, "nameExists": true }));
         }
+        let key0 = api_key.clone().unwrap_or_default();
         h.plugin_db_execute_params(
-            "INSERT INTO provider_preset (name, base_url, api_style, models_json, notes, \
-             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5)",
-            &sql_params![name, base_url, api_style, models_json, now],
+            "INSERT INTO provider_preset (name, base_url, api_style, models_json, api_key, notes, \
+             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?6)",
+            &sql_params![name, base_url, api_style, models_json, key0, now],
         )
         .map_err(|e| anyhow::anyhow!("save-preset: insert failed: {e}"))?;
     }
+    log_key_change(h, &name, &api_key);
     h.log_info(&format!("preset saved (name = {name}, id = {id:?})"));
     let state = build_state(h)?;
     emit_and_return(h, &state)
+}
+
+/// key 变更日志纪律：只记长度/清空，不记内容（删的是「存储面不落 key」红线，
+/// 「日志不落明文」纪律保留）
+fn log_key_change(h: &WasmHost, name: &str, api_key: &Option<String>) {
+    match api_key {
+        Some(k) if !k.is_empty() => {
+            h.log_info(&format!(
+                "preset key set (name = {name}, key_len = {})",
+                k.chars().count()
+            ));
+        }
+        Some(_) => h.log_info(&format!("preset key cleared (name = {name})")),
+        None => {}
+    }
 }
 
 pub(crate) fn delete_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
@@ -1055,9 +1150,9 @@ pub(crate) fn delete_preset(h: &WasmHost, args: &Value) -> anyhow::Result<Value>
 
 // ==================== 命令：反向导入 ====================
 
-/// 反向导入（同步命令）：pi（models.json + auth.json 掩码）与 opencode
-/// （opencode.json）各生成预设；同名去重见 `plan_inserts`；claude 只读展示
-/// 不生成预设。key 只以掩码形态出现在导入结果里
+/// 反向导入（同步命令）：pi（models.json + auth.json）与 opencode
+/// （opencode.json）各生成预设并把源 key 一并收进中心凭据库；同名去重见
+/// `plan_inserts`；claude 只读展示不生成预设。导入结果只回掩码 keys
 pub(crate) fn import_providers(h: &WasmHost) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let home = HOME
@@ -1101,9 +1196,9 @@ pub(crate) fn import_providers(h: &WasmHost) -> anyhow::Result<Value> {
     for d in to_create {
         let models_json = serde_json::to_string(&d.models).unwrap_or_else(|_| "[]".to_string());
         h.plugin_db_execute_params(
-            "INSERT INTO provider_preset (name, base_url, api_style, models_json, notes, \
-             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-            &sql_params![d.name, d.base_url, d.api_style, models_json, d.notes, now],
+            "INSERT INTO provider_preset (name, base_url, api_style, models_json, api_key, notes, \
+             created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+            &sql_params![d.name, d.base_url, d.api_style, models_json, d.key, d.notes, now],
         )
         .map_err(|e| anyhow::anyhow!("import: insert preset failed: {e}"))?;
         // 掩码以最终（可能被去重改名的）预设名为键，前端按 preset.name 取用
@@ -1189,9 +1284,10 @@ enum Extract {
     ClaudeEnv,
 }
 
-/// 应用预设到目标 CLI（同步命令）。key 来源三选一：inline 现场输入 /
-/// source 内存直拷（现读源配置）/ none 不带 key（pi 的 auth.json 与既有
-/// apiKey 均保留）。claude 桥接冲突时阻止（force = 用户确认，仅写 env 块）
+/// 应用预设到目标 CLI（同步命令）。key 来源四选一：stored 中心库已存（默认）/
+/// inline 现场输入 / source 内存直拷（现读源配置）/ none 不带 key（pi 的
+/// auth.json 与既有 apiKey 均保留）。claude 桥接冲突时阻止（force = 用户
+/// 确认，仅写 env 块）
 pub(crate) fn apply_provider(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
     ensure_schema(h)?;
     let id = args
@@ -1261,6 +1357,15 @@ pub(crate) fn apply_provider(h: &WasmHost, args: &Value) -> anyhow::Result<Value
                 .ok_or_else(|| anyhow::anyhow!("apply: inline key empty"))?
                 .to_string(),
         ),
+        "stored" => {
+            let k = preset_key_of(h, id)?;
+            if k.is_empty() {
+                return Err(anyhow::anyhow!(
+                    "apply: preset has no stored key (save one first)"
+                ));
+            }
+            Some(k)
+        }
         "source" => {
             let cli = args
                 .get("key")
@@ -1676,10 +1781,14 @@ mod tests {
         assert_eq!(amd.api_style, "openai");
         // 掩码回显：前 3 字符 + 长度，raw key 不出现（掩码内嵌草稿，随改名走）
         assert_eq!(sen.key_mask, "sen…(33)");
+        // v2：源 key 明文收进中心凭据库（draft.key 承载；Debug 掩码化）
+        assert_eq!(sen.key, "sensenova-raw-key-000111222333444");
+        let amd = drafts.iter().find(|d| d.name == "amd").unwrap();
+        assert_eq!(amd.key, "amd-raw-key-000111222333444555666777888");
         let all = format!("{drafts:?}");
         assert!(
             !all.contains("sensenova-raw-key"),
-            "raw key must not leak into drafts"
+            "raw key must not leak into drafts Debug"
         );
     }
 
@@ -1718,6 +1827,11 @@ mod tests {
         assert_eq!(ant.api_style, "anthropic");
         assert_eq!(gmi.key_mask, "gmi…(42)");
         assert_eq!(ant.key_mask, "—");
+        // v2：无 apiKey 的条目 key 为空串；有 key 的进中心凭据库
+        assert_eq!(gmi.key, "gmi-raw-key-000111222333444555666777888999");
+        assert_eq!(ant.key, "");
+        let all = format!("{drafts:?}");
+        assert!(!all.contains("gmi-raw-key"), "Debug 必须掩码草稿 key");
     }
 
     /// 同名去重：pi 先建 sensenova，opencode 的同名 → `sensenova-opencode`；
@@ -1732,6 +1846,7 @@ mod tests {
                 api_style: "openai".to_string(),
                 models: vec![],
                 notes: "opencode:sensenova".to_string(),
+                key: String::new(),
                 key_mask: "gmi…(42)".to_string(),
             },
             PresetDraft {
@@ -1740,6 +1855,7 @@ mod tests {
                 api_style: "openai".to_string(),
                 models: vec![],
                 notes: "opencode:gmi".to_string(),
+                key: String::new(),
                 key_mask: "—".to_string(),
             },
         ];
@@ -1758,6 +1874,7 @@ mod tests {
             api_style: "openai".to_string(),
             models: vec![],
             notes: "opencode:sensenova".to_string(),
+            key: String::new(),
             key_mask: "—".to_string(),
         }];
         let (create, skipped) = plan_inserts(&existing, drafts);
@@ -1875,25 +1992,29 @@ mod tests {
 
     // ==================== AC1：库与状态无 key 明文 ====================
 
-    /// 预设 wire 形状：无 key/apiKey 字段（表结构无 key 列的守门断言）
+    /// 预设 wire 形状：key 只以掩码 keyMask 出现（明文永不序列化进状态）
     #[test]
-    fn preset_row_shape_has_no_key_field() {
+    fn preset_row_masks_key() {
         let row = json!({
             "id": 1, "name": "sensenova", "base_url": "https://u/v1",
             "api_style": "openai", "models_json": "[\"m1\"]",
-            "notes": "pi:sensenova", "created_at": 1, "updated_at": 2,
+            "api_key": "super-secret-raw-0123456789", "notes": "pi:sensenova",
+            "created_at": 1, "updated_at": 2,
         });
         let p = preset_row_to_json(&row).expect("row maps");
         assert!(p.get("key").is_none());
         assert!(p.get("apiKey").is_none());
+        assert_eq!(p["keyMask"], "sup…(27)");
         assert!(
             p.get("models_json").is_none(),
             "models_json 已解码为 models"
         );
         assert_eq!(p["models"], json!(["m1"]));
         assert_eq!(p["notes"], "pi:sensenova");
-        // 模型列表里的字符串键不携带任何 key 形态字段
-        assert!(!p.to_string().to_lowercase().contains("apikey"));
+        assert!(
+            !p.to_string().contains("super-secret-raw"),
+            "明文不得进入 wire 形状"
+        );
     }
 
     /// 应用结果状态（apply.last）：key 只出现长度（keyLen），不出现内容

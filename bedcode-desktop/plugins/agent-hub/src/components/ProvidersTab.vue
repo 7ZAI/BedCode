@@ -1,11 +1,13 @@
 <script setup lang="ts">
 /**
- * 供应商管理分区（票据 05）：预设列表 + 内置模板新建 + 反向导入 + 应用入口
+ * 供应商管理分区（票据 05 / v2 中心凭据库）：预设列表 + 内置模板新建 + 反向
+ * 导入 + 应用入口
  *
- * 预设真源在插件库 `provider_preset` 表（无 key 列）；key 全链路不落 hub——
- * 列表/导入结果只见掩码（前 3 字符 + 长度），应用时经 ProviderApply 面板
- * 现场输入或内存直拷。claude 只读卡展示 settings.json env 现状（掩码）与
- * 桥接文件存在性（桥接冲突在应用面板处理）。
+ * 预设真源在插件库 `provider_preset` 表；v2 起 `api_key` 列为中心凭据库——
+ * 一处配置 key、分发到各 CLI。列表/导入结果只见掩码（前 3 字符 + 长度），
+ * 编辑处可直接设/清 key（明文仅在 save 命令在途），应用时经 ProviderApply
+ * 面板选 stored（中心库，默认）/ inline / source / none。claude 只读卡展示
+ * settings.json env 现状（掩码）与桥接文件存在性（桥接冲突在应用面板处理）。
  *
  * 设计真源：原型 `.scratch/agent-hub/prototype/index.html` #a-pv（页头双动作 +
  * 安全横幅 + 预设表格 + 应用卡）。
@@ -48,11 +50,22 @@ const formName = ref('')
 const formBaseUrl = ref('')
 const formApiStyle = ref<string>('openai')
 const formModels = ref('')
+/** v2 中心凭据：编辑器输入的新 key（明文仅在 save 命令在途） */
+const formKey = ref('')
+/** 清空已存 key（与 formKey 互斥：输入新 key 时忽略此标志） */
+const clearKey = ref(false)
+/** 编辑态既有 key 掩码（新建态为 null；占位/清空按钮显示用） */
+const editingKeyMask = computed(() => {
+  if (editingId.value === null) return null
+  return presets.value.find((p) => p.id === editingId.value)?.keyMask ?? null
+})
 /** 同名冲突（guest 返回 nameExists 后呈现） */
 const nameExists = ref(false)
 
 function openEditor(preset: ProviderPreset | null, templateId?: string) {
   nameExists.value = false
+  formKey.value = ''
+  clearKey.value = false
   if (preset) {
     editingId.value = preset.id
     formName.value = preset.name
@@ -83,12 +96,16 @@ async function save() {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
+  const keyInput = formKey.value.trim()
+  // apiKey 语义：输入新 key → 设置；否则 clearKey 勾选 → 清空；都没 → 保留
+  const apiKey = keyInput ? keyInput : clearKey.value ? '' : undefined
   const result = await props.providers.savePreset({
     id: editingId.value ?? undefined,
     name,
     baseUrl: formBaseUrl.value.trim(),
     apiStyle: formApiStyle.value,
     models,
+    apiKey,
   })
   if (result === null) return
   if (result.nameExists) {
@@ -256,6 +273,9 @@ function sourceTag(preset: ProviderPreset): string {
             <span class="ah-cli-tag" :class="sourceFromNotes(preset.notes) ? 'ok' : ''">
               <span class="ah-cli-dot"></span>{{ sourceTag(preset) }}
             </span>
+            <span class="ah-cli-tag ah-mono" :data-testid="`preset-keymask-${preset.name}`">
+              {{ t('hub.pv.keyMask', { mask: preset.keyMask }) }}
+            </span>
           </div>
           <div class="ah-sk-row-actions">
             <button
@@ -341,6 +361,34 @@ function sourceTag(preset: ProviderPreset): string {
           <span class="ah-pv-label">{{ t('hub.pv.editor.models') }}</span>
           <textarea v-model="formModels" class="ah-sk-textarea ah-pv-models ah-mono" spellcheck="false" data-testid="preset-models"></textarea>
         </div>
+
+        <!-- v2 中心凭据：新 key 输入 / 清空切换（明文仅在 save 命令在途） -->
+        <div class="ah-pv-field">
+          <span class="ah-pv-label">{{ t('hub.pv.editor.key') }}</span>
+          <span class="ah-pv-keyrow">
+            <input
+              v-model="formKey"
+              class="ah-sk-url ah-pv-input ah-mono"
+              type="password"
+              autocomplete="new-password"
+              spellcheck="false"
+              :placeholder="editingKeyMask ? t('hub.pv.editor.keyPlaceholder', { mask: editingKeyMask }) : t('hub.pv.editor.keyNew')"
+              data-testid="preset-key"
+            />
+            <button
+              v-if="editingKeyMask"
+              type="button"
+              class="ah-btn ah-btn-ghost ah-btn-sm"
+              :class="{ 'ah-btn-warn': clearKey }"
+              :disabled="busy"
+              data-testid="preset-key-clear"
+              @click="clearKey = !clearKey"
+            >
+              {{ clearKey ? t('hub.pv.editor.keyKeep') : t('hub.pv.editor.keyClear') }}
+            </button>
+          </span>
+        </div>
+        <div class="ah-inst-hint">{{ t('hub.pv.editor.keyHint') }}</div>
 
         <div v-if="nameExists" class="ah-cli-error">{{ t('hub.pv.editor.nameExists') }}</div>
 

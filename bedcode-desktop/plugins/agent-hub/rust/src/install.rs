@@ -30,6 +30,60 @@ use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 /// npm 官方源与 npmmirror（spec §4.2 固定两源）
 pub(crate) const NPMJS: &str = "https://registry.npmjs.org";
 pub(crate) const NPMMIRROR: &str = "https://registry.npmmirror.com";
+/// 可切换 npm 源白名单（id, url）：测速列表 + apply-mirror 白名单共用，
+/// 不拼接用户输入。列表已实测连通（2026-09-14，GET /semver/latest 200）；
+/// id 供前端 i18n 映射展示名（hub.speed.source.<id>）。用户自定义源
+/// （mirror.customSources）在测速/换源时追加到本表之后。
+pub(crate) const MIRROR_SOURCES: [(&str, &str); 5] = [
+    ("npmmirror", "https://registry.npmmirror.com"),
+    ("npmjs", "https://registry.npmjs.org"),
+    ("huawei", "https://mirrors.huaweicloud.com/repository/npm/"),
+    ("tencent", "https://mirrors.cloud.tencent.com/npm/"),
+    ("yarn", "https://registry.yarnpkg.com"),
+];
+
+/// 自定义源 URL 校验：http(s):// 协议白名单 + 无中间空白/换行/`=`（防 npmrc 注入），
+/// 返回去除首尾空白后的 URL。注意先 trim 再查控制字符：trim 会移除首尾
+/// \r\n/空格（用户粘贴常见），中间残留的控制字符才是注入面
+pub(crate) fn validate_custom_source_url(url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return Err("custom source: empty url".to_string());
+    }
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err("custom source: must start with http(s)://".to_string());
+    }
+    if trimmed.contains([' ', '\t', '\n', '\r', '=']) {
+        return Err("custom source: url contains invalid characters".to_string());
+    }
+    Ok(trimmed.to_string())
+}
+
+/// 读用户自定义源 [(id, url)]（install 状态 mirror.customSources）
+fn custom_sources(state: &Value) -> Vec<(String, String)> {
+    state["mirror"]["customSources"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| {
+                    let id = v["id"].as_str()?.to_string();
+                    let url = v["url"].as_str()?.to_string();
+                    Some((id, url))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// 全部候选源（内置 + 自定义）：(id, url)
+fn all_sources(state: &Value) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = MIRROR_SOURCES
+        .iter()
+        .map(|(id, url)| (id.to_string(), url.to_string()))
+        .collect();
+    out.extend(custom_sources(state));
+    out
+}
 /// 测速样本包：元数据小、两端长期存在，`/<pkg>/latest` 形态稳定
 const PROBE_PKG: &str = "semver";
 /// 安装/更新超时：npm 全局安装含完整依赖下载，15 分钟上限（host 默认 10 分钟）
@@ -66,13 +120,14 @@ fn default_mirror() -> Value {
     json!({
         "speed": {
             "status": "idle",
-            "npmjsMs": null,
-            "npmmirrorMs": null,
+            "sources": [],
             "recommend": null,
             "error": null,
             "testedAt": null,
         },
         "npmrc": { "backupExists": false, "fileRegistry": null },
+        // 用户自定义源（前端可增删；测速与换源白名单一并纳入）
+        "customSources": [],
     })
 }
 
@@ -213,13 +268,13 @@ fn probe_registry(h: &WasmHost, url: &str) -> Result<u64, String> {
     Ok(t1.saturating_sub(t0).max(1))
 }
 
-/// 测速并给出换源推荐：npmjs 失败或 npmmirror 更快 → 推荐 npmmirror
+/// 测速全部候选源并给出推荐：sources 数组（可达按耗时升序、不可达置后）+ recommend
+/// （最快可达源的 id）。只测速不切换——切换由用户在列表中选择（apply-mirror 白名单）。
 pub(crate) fn speed_test(h: &WasmHost) -> anyhow::Result<Value> {
     let mut state = read_state(h);
     state["mirror"]["speed"] = json!({
         "status": "testing",
-        "npmjsMs": null,
-        "npmmirrorMs": null,
+        "sources": [],
         "recommend": null,
         "error": null,
         "testedAt": null,
@@ -228,43 +283,54 @@ pub(crate) fn speed_test(h: &WasmHost) -> anyhow::Result<Value> {
     emit(h, &state);
     h.log_info("registry speed test started");
 
-    let npmjs = probe_registry(h, &format!("{NPMJS}/{PROBE_PKG}/latest"));
-    let mirror = probe_registry(h, &format!("{NPMMIRROR}/{PROBE_PKG}/latest"));
+    // wasm 单线程阻塞式 http_fetch：顺序测速（候选源少，耗时叠加可接受）
+    let candidates = all_sources(&state);
+    let mut results: Vec<Value> = Vec::new();
+    for (id, url) in &candidates {
+        let ms = probe_registry(h, &format!("{url}/{PROBE_PKG}/latest")).ok();
+        results.push(json!({
+            "id": id,
+            "url": url,
+            "ms": ms,
+            "reachable": ms.is_some(),
+        }));
+    }
+    results.sort_by(compare_source);
+    // 推荐：全部候选里最快可达者（排序后首位可达）
+    let recommend = results
+        .iter()
+        .find(|r| r["reachable"] == json!(true))
+        .map(|r| r["id"].clone());
+    let error = if recommend.is_none() {
+        Some("all registries unreachable".to_string())
+    } else {
+        None
+    };
     let tested_at = now_ms(h).unwrap_or(0);
-
-    let (npmjs_ms, npmjs_err) = split_probe(&npmjs);
-    let (mirror_ms, mirror_err) = split_probe(&mirror);
-    let recommend = match (&npmjs, &mirror) {
-        // 官方源失败而镜像可达 → 镜像；两者可达比快；仅官方可达 → 官方
-        (Err(_), Ok(_)) => Some("npmmirror"),
-        (Ok(n), Ok(m)) => Some(if m < n { "npmmirror" } else { "npmjs" }),
-        (Ok(_), Err(_)) => Some("npmjs"),
-        (Err(_), Err(_)) => None,
-    };
-    let error = match (&npmjs_err, &mirror_err) {
-        (Some(a), Some(b)) => Some(format!("both registries unreachable: {a}; {b}")),
-        _ => None,
-    };
 
     state["mirror"]["speed"] = json!({
         "status": if recommend.is_some() { "ok" } else { "error" },
-        "npmjsMs": npmjs_ms,
-        "npmmirrorMs": mirror_ms,
+        // 供选择的候选：按速度排序，最多前 10（用户诉求：列出前 5/前 10 供选择）
+        "sources": results.into_iter().take(10).collect::<Vec<_>>(),
         "recommend": recommend,
         "error": error,
         "testedAt": tested_at,
     });
     write_state(h, &state);
     h.log_info(&format!(
-        "registry speed test done (npmjs_ms={npmjs_ms:?}, npmmirror_ms={mirror_ms:?}, recommend={recommend:?})"
+        "registry speed test done ({} candidates, recommend={recommend:?})",
+        candidates.len()
     ));
     emit_and_return(h, &state)
 }
 
-fn split_probe(r: &Result<u64, String>) -> (Option<u64>, Option<String>) {
-    match r {
-        Ok(ms) => (Some(*ms), None),
-        Err(e) => (None, Some(e.clone())),
+/// sources 排序：可达按耗时升序在前，不可达置后
+fn compare_source(a: &Value, b: &Value) -> Ordering {
+    match (a["ms"].as_u64(), b["ms"].as_u64()) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => Ordering::Equal,
     }
 }
 
@@ -386,11 +452,16 @@ pub(crate) fn extract_registry(content: &str) -> Option<String> {
 /// 持久切换：备份（仅在无备份时——保留用户原始文件，镜像改写后的内容不得
 /// 覆盖备份）→ 改写 → 持久化推送。target 白名单仅两源
 pub(crate) fn apply_mirror(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
-    let target = match args.get("target").and_then(|v| v.as_str()) {
-        Some("npmmirror") => NPMMIRROR,
-        Some("npmjs") => NPMJS,
-        _ => return Err(anyhow::anyhow!("apply-mirror: invalid target")),
-    };
+    let target = args
+        .get("target")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("apply-mirror: missing target"))?;
+    // URL 白名单：仅接受候选源表内地址（内置 + 用户自定义），不拼接用户输入
+    let target_url = all_sources(&read_state(h))
+        .iter()
+        .find(|(_, url)| url == target)
+        .map(|(_, url)| url.clone())
+        .ok_or_else(|| anyhow::anyhow!("apply-mirror: target not in mirror whitelist"))?;
     let path = npmrc_path()?;
     let backup = npmrc_backup_path()?;
     let existing = h
@@ -407,20 +478,70 @@ pub(crate) fn apply_mirror(h: &WasmHost, args: &Value) -> anyhow::Result<Value> 
         h.log_info("npmrc backed up before registry rewrite");
     }
 
-    let (new_content, changed) = rewrite_registry(existing.as_deref().unwrap_or(""), target);
+    let (new_content, changed) = rewrite_registry(existing.as_deref().unwrap_or(""), &target_url);
     h.fs_write(&path, &new_content)
         .map_err(|e| anyhow::anyhow!("apply-mirror: write npmrc failed: {e}"))?;
 
     let mut state = read_state(h);
     state["mirror"]["npmrc"] = json!({
         "backupExists": h.fs_exists(&backup).unwrap_or(false),
-        "fileRegistry": target,
+        "fileRegistry": target_url,
         "appliedAt": now_ms(h).unwrap_or(0),
     });
     write_state(h, &state);
     h.log_info(&format!(
-        "npmrc registry rewritten (changed={changed}, target={target})"
+        "npmrc registry rewritten (changed={changed}, target={target_url})"
     ));
+    emit_and_return(h, &state)
+}
+
+/// 添加自定义源：URL 校验 + 去重；成功落库并推送（测速/换源白名单自动纳入）
+pub(crate) fn add_custom_source(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
+    let url = args
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("add-custom-source: missing url"))?;
+    let url = validate_custom_source_url(url).map_err(anyhow::Error::msg)?;
+    let mut state = read_state(h);
+    if custom_sources(&state).iter().any(|(_, u)| *u == url) {
+        // 已存在：幂等返回当前状态
+        return emit_and_return(h, &state);
+    }
+    let mut customs = custom_sources(&state);
+    let id = format!("custom-{}", customs.len() + 1);
+    customs.push((id, url.clone()));
+    state["mirror"]["customSources"] = json!(customs
+        .iter()
+        .map(|(id, url)| json!({
+            "id": id,
+            "url": url,
+            "addedAt": now_ms(h).unwrap_or(0),
+        }))
+        .collect::<Vec<_>>());
+    write_state(h, &state);
+    h.log_info(&format!("custom registry source added (url_len={})", url.len()));
+    emit_and_return(h, &state)
+}
+
+/// 删除自定义源（按 url 精确匹配）
+pub(crate) fn remove_custom_source(h: &WasmHost, args: &Value) -> anyhow::Result<Value> {
+    let url = args
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("remove-custom-source: missing url"))?;
+    let mut state = read_state(h);
+    let kept: Vec<Value> = state["mirror"]["customSources"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter(|v| v["url"].as_str() != Some(url))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    state["mirror"]["customSources"] = json!(kept);
+    write_state(h, &state);
+    h.log_info("custom registry source removed");
     emit_and_return(h, &state)
 }
 
@@ -719,6 +840,54 @@ fn output_tail(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 候选源白名单：id/url 唯一、npmmirror 在列、URL 以 https:// 开头
+    #[test]
+    fn mirror_sources_whitelist_wellformed() {
+        assert_eq!(MIRROR_SOURCES.len(), 5);
+        let ids: Vec<&str> = MIRROR_SOURCES.iter().map(|(id, _)| *id).collect();
+        let urls: Vec<&str> = MIRROR_SOURCES.iter().map(|(_, url)| *url).collect();
+        let mut uniq_ids = ids.clone();
+        let mut uniq_urls = urls.clone();
+        uniq_ids.sort_unstable();
+        uniq_urls.sort_unstable();
+        uniq_ids.dedup();
+        uniq_urls.dedup();
+        assert_eq!(uniq_ids.len(), ids.len(), "duplicate source id");
+        assert_eq!(uniq_urls.len(), urls.len(), "duplicate source url");
+        assert!(ids.contains(&"npmmirror"));
+        assert!(urls.contains(&"https://registry.npmmirror.com"));
+        assert!(urls.iter().all(|u| u.starts_with("https://")));
+    }
+
+    /// sources 排序：可达按耗时升序在前，不可达置后
+    #[test]
+    fn compare_source_sorts_reachable_first() {
+        let slow = json!({ "id": "a", "ms": 500, "reachable": true });
+        let fast = json!({ "id": "b", "ms": 120, "reachable": true });
+        let down = json!({ "id": "c", "ms": null, "reachable": false });
+        let mut v = vec![slow.clone(), down.clone(), fast.clone()];
+        v.sort_by(compare_source);
+        assert_eq!(v[0]["id"], json!("b"));
+        assert_eq!(v[1]["id"], json!("a"));
+        assert_eq!(v[2]["id"], json!("c"));
+    }
+
+    /// 自定义源 URL 校验：http(s):// 白名单协议、无空白/换行；其余拒绝
+    #[test]
+    fn custom_source_url_validation() {
+        assert!(validate_custom_source_url("https://registry.example.com/").is_ok());
+        assert!(validate_custom_source_url("http://mirror.local:8081/npm/").is_ok());
+        // 首尾空白（粘贴常见）容忍：trim 后干净 URL 写入无注入面
+        assert!(validate_custom_source_url("  https://registry.example.com/  ").is_ok());
+        assert!(validate_custom_source_url("https://registry.example.com/\r").is_ok());
+        assert!(validate_custom_source_url("ftp://bad.example.com").is_err());
+        assert!(validate_custom_source_url("registry.example.com").is_err());
+        // 中间换行/`=`：npmrc 注入面，拒绝
+        assert!(validate_custom_source_url("https://evil.com/\nregistry=https://x").is_err());
+        assert!(validate_custom_source_url("https://evil.com/?a=b").is_err());
+        assert!(validate_custom_source_url("").is_err());
+    }
 
     /// recipe 白名单：npm 类 CLI 双平台同命令；镜像追加 --registry
     #[test]

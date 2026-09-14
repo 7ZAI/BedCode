@@ -1,12 +1,13 @@
 /**
- * Agent Hub 供应商管理域编排（票据 05）
+ * Agent Hub 供应商管理域编排（票据 05 / v2 中心凭据库）
  *
  * - 挂载时拉取状态（guest 组装：插件库 presets + claude 只读视图 + 导入/应用
  *   回执），此后 guest 每次变更全量 emit `plugin:agent-hub:providers` 覆盖
  * - CRUD / 导入 / 应用均为同步命令（纯 fs + 插件库，无异步进程）；本地瞬态
  *   busy 遮罩区分三类动作
- * - key 全链路不经过前端：导入结果只带掩码，应用时 key 以参数直传 guest
- *   （inline 现场输入 / source 内存直拷），不落任何本地状态
+ * - v2 key 中心存储：save-preset 可选带 `apiKey` 入中心凭据库（明文只在
+ *   save 命令在途），状态永远只回掩码；apply 的 stored 模式不发明文
+ *   （guest 现读库内 key），inline / source / none 语义不变
  */
 import { onMounted, onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
@@ -20,13 +21,15 @@ import type {
 
 export type UseProvidersReturn = ReturnType<typeof useProviders>
 
-/** 保存预设载荷（id 缺省 = 新建） */
+/** 保存预设载荷（id 缺省 = 新建）；apiKey 缺省 = 保留既有、'' = 清空、非空 = 设置 */
 export interface PresetPayload {
   id?: number
   name: string
   baseUrl: string
   apiStyle: string
   models: string[]
+  /** v2 中心凭据（明文仅在 save 命令在途，不落前端状态） */
+  apiKey?: string
 }
 
 export function useProviders(context: PluginContext) {
@@ -90,7 +93,7 @@ export function useProviders(context: PluginContext) {
   }
 
   /**
-   * 应用预设到目标 CLI；keySpec 三选一（inline / source / none）；
+   * 应用预设到目标 CLI；keySpec 四选一（stored 中心库 / inline / source / none）；
    * force 仅用于 claude 桥接冲突的二次确认（guest 顶层读取，与 key 分离）
    */
   async function applyProvider(

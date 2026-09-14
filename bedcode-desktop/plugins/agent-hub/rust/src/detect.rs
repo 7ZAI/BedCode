@@ -1,7 +1,9 @@
 //! CLI 探测域（票据 02）
 //!
 //! 经 host-process 平台分派采集（Windows / Linux 双兼容）：
-//! - unix：登录 shell `bash -lc`（保住 nvm 等 PATH 注入），`which -a` 全命中
+//! - unix：登录 shell `bash -lc` + PATH 引导（登录 shell 不读 `~/.bashrc`，
+//!   nvm 等 PATH 注入由交互子 shell 提取，见 `path_bootstrap_unix`），
+//!   `which -a` 全命中
 //! - Windows：`cmd /C` 链式命令（GUI 进程 PATH 来自注册表用户环境，npm shim
 //!   经 PATHEXT 解析），`where` 全命中
 //! - 每个 CLI：全部 PATH 命中（→ 双安装检测）+ `--version`
@@ -26,6 +28,8 @@ pub(crate) const CLI_KINDS: [&str; 4] = ["claude", "codex", "opencode", "pi"];
 const TIMEOUT_MS: u64 = 20_000;
 
 static RUN_SEQ: AtomicU32 = AtomicU32::new(0);
+/// 状态推送序号（push_state 单调自增，前端按 seq 过滤乱序旧事件）
+static STATE_SEQ: AtomicU32 = AtomicU32::new(0);
 
 // ==================== 状态（读-改-写） ====================
 
@@ -72,6 +76,10 @@ pub(crate) fn push_state(h: &WasmHost) {
     if let Some(auth) = h.storage_get(AUTH_KEY).ok().flatten() {
         state["authGranted"] = json!(auth == json!("granted"));
     }
+    // 单调递增序号：探测期间多次推送全量状态，前端按 seq 过滤乱序旧事件，
+    // 只接受最新全量——避免中间态（某探测项仍 detecting）覆盖最终态，
+    // 导致 UI 永久"检测中"（实测复现：storage 已 ok，界面卡 detecting）
+    state["seq"] = json!(STATE_SEQ.fetch_add(1, Ordering::Relaxed) + 1);
     h.emit_event("plugin:agent-hub:detection", &state);
 }
 
@@ -207,6 +215,8 @@ fn apply_output(state: &mut Value, kind: &str, output: &str) {
     if kind == ENV_KIND {
         state["envStatus"] = json!("ok");
         state["env"] = parse_env(output);
+        // 清除历史失败残留（如修复前探测的 exit=127 envError），避免 UI 混淆
+        state["envError"] = Value::Null;
     } else {
         let mut info = parse_cli(kind, output);
         info["status"] = json!(if info["installed"] == json!(true) {
@@ -236,17 +246,31 @@ fn detection_script(kind: &str) -> String {
     }
 }
 
+/// unix PATH 引导前缀：登录 shell 不读 `~/.bashrc`（其交互守卫
+/// `case $- in *i*)` 在非交互 shell 下直接 return，`~/.profile` 的 source
+/// 同样被拦截），nvm 等 PATH 注入因而失效，node/npm/pnpm 探测全部
+/// not found。改为从交互子 shell 提取 PATH（`2>/dev/null` 吞无 tty 的
+/// ioctl 警告；`tail -n 1` 取末行，防 rc 启动输出污染），再在当前非交互
+/// shell 继续采集——两侧段标记契约不受影响。
+fn path_bootstrap_unix() -> &'static str {
+    "export PATH=\"$(bash -ic 'printf \"%s\\n\" \"$PATH\"' 2>/dev/null | tail -n 1)\"\n"
+}
+
 /// unix 单 CLI 采集：`which -a` 全部 PATH 命中 + 版本行；未安装时 paths 为空、
 /// version 段只有 shell 报错行 → not-installed
 fn cli_script_unix(kind: &str) -> String {
     format!(
-        "echo '== paths =='\nwhich -a {kind} 2>/dev/null\necho '== version =='\n{kind} --version 2>&1 | head -n 2\n"
+        "{}echo '== paths =='\nwhich -a {kind} 2>/dev/null\necho '== version =='\n{kind} --version 2>&1 | head -n 2\n",
+        path_bootstrap_unix()
     )
 }
 
 /// unix 环境采集：node / npm / pnpm 版本 + 当前 npm registry
 fn env_script_unix() -> String {
-    "echo '== node =='\nnode --version 2>&1\necho '== npm =='\nnpm --version 2>&1\necho '== pnpm =='\npnpm --version 2>&1\necho '== registry =='\nnpm config get registry 2>&1\n".to_string()
+    format!(
+        "{}echo '== node =='\nnode --version 2>&1\necho '== npm =='\nnpm --version 2>&1\necho '== pnpm =='\npnpm --version 2>&1\necho '== registry =='\nnpm config get registry 2>&1\n",
+        path_bootstrap_unix()
+    )
 }
 
 // ==================== 输出解析 ====================
@@ -540,6 +564,16 @@ mod tests {
             "== paths ==\nC:\\Users\\u\\.opencode\\bin\\opencode.exe\n== version ==\n1.18.30\n";
         let info = parse_cli("opencode", out);
         assert_eq!(info["method"], json!("standalone"));
+    }
+
+    /// 脚本以 PATH 引导开头（登录 shell 不读 ~/.bashrc，nvm 注入依赖引导），
+    /// 段标记保持后端解析契约不变
+    #[test]
+    fn scripts_carry_path_bootstrap() {
+        assert!(env_script_unix().starts_with(path_bootstrap_unix()));
+        assert!(cli_script_unix("pi").starts_with(path_bootstrap_unix()));
+        assert!(env_script_unix().contains("== registry =="));
+        assert!(cli_script_unix("pi").contains("== version =="));
     }
 
     /// Windows cmd：pnpm 未装的报错行（'pnpm' is not recognized）不算版本

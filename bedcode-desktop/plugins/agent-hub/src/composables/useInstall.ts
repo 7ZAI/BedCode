@@ -9,7 +9,7 @@
  */
 import { onUnmounted, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import type { InstallDomainState, MirrorTarget } from '../types'
+import type { InstallDomainState } from '../types'
 
 const POLL_INTERVAL_MS = 1200
 
@@ -72,8 +72,8 @@ export function useInstall(context: PluginContext) {
     }
   }
 
-  /** 持久切换 npm 源（改写 ~/.npmrc，guest 端先备份）；结果经事件回流 */
-  async function applyMirror(target: MirrorTarget) {
+  /** 持久切换 npm 源（改写 ~/.npmrc，guest 端先备份）；target 为候选源 URL */
+  async function applyMirror(target: string) {
     try {
       await context.commands.execute('agent-hub.apply-mirror', { target })
     } catch (e) {

@@ -1,10 +1,12 @@
 <script setup lang="ts">
 /**
- * 预设应用面板（票据 05）：选目标 CLI → key 三选一 → 写入目标配置文件
+ * 预设应用面板（票据 05 / v2 中心凭据库）：选目标 CLI → key 四选一 → 写入
+ * 目标配置文件
  *
- * key 纪律：inline 现场输入（不持久化）、source 内存直拷（guest 应用时现读
- * 源 CLI 配置）、none 保留目标既有凭据；源信息来自预设 notes（反向导入标注），
- * 源值只以掩码回显（导入结果的 keys）。
+ * key 纪律：stored 用中心库已存 key（guest 现读库内明文，前端不接触）、
+ * inline 现场输入（不持久化）、source 内存直拷（guest 应用时现读源 CLI 配置）、
+ * none 保留目标既有凭据；源信息来自预设 notes（反向导入标注），源值只以
+ * 掩码回显（导入结果的 keys）。预设已有 stored key 时默认选中。
  * claude 桥接冲突：guest 检测到 provider-config.sh / anthropic-bridge.mjs 时
  * 拒绝写入返回 bridgeConflict，面板呈现冲突说明，用户确认后携 force 重试——
  * 桥接文件永不触碰，仅写 settings.json 的 env 块。
@@ -13,7 +15,7 @@
  */
 import { computed, inject, ref } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import type { ProviderPreset } from '../types'
+import type { ApplyKeySpec, ProviderPreset } from '../types'
 import { APPLY_TARGETS, sourceFromNotes } from '../utils/providers'
 import type { UseProvidersReturn } from '../composables/useProviders'
 
@@ -37,8 +39,16 @@ const TARGET_PATHS: Record<string, string> = {
 
 const target = ref<string>('pi')
 const targetName = ref(props.preset.name)
-const keyMode = ref<'inline' | 'source' | 'none'>(
-  sourceFromNotes(props.preset.notes) ? 'source' : 'inline',
+/** stored = 中心库已存 key（预设 keyMask 非 "—" 时默认）；否则退回 source/inline */
+const storedKey = computed(
+  () => !!props.preset.keyMask && props.preset.keyMask !== '—',
+)
+const keyMode = ref<'inline' | 'stored' | 'source' | 'none'>(
+  storedKey.value
+    ? 'stored'
+    : sourceFromNotes(props.preset.notes)
+      ? 'source'
+      : 'inline',
 )
 const keyValue = ref('')
 
@@ -62,12 +72,14 @@ const appliedFiles = ref<string[] | null>(null)
 async function apply(force: boolean) {
   error.value = null
   conflict.value = null
-  const key =
+  const key: ApplyKeySpec =
     keyMode.value === 'inline'
       ? { kind: 'inline', value: keyValue.value }
-      : keyMode.value === 'source' && source.value
-        ? { kind: 'source', cli: source.value.cli, provider: source.value.provider }
-        : { kind: 'none' }
+      : keyMode.value === 'stored'
+        ? { kind: 'stored' }
+        : keyMode.value === 'source' && source.value
+          ? { kind: 'source', cli: source.value.cli, provider: source.value.provider }
+          : { kind: 'none' }
   const result = await props.providers.applyProvider(
     props.preset.id,
     target.value,
@@ -131,10 +143,14 @@ async function apply(force: boolean) {
       </div>
       <div class="ah-inst-hint">{{ t('hub.pv.apply.targetNameHint', { target }) }}</div>
 
-      <!-- key 三选一 -->
+      <!-- key 四选一 -->
       <div class="ah-pv-field">
         <span class="ah-pv-label">{{ t('hub.pv.apply.keyMode') }}</span>
         <span class="ah-pv-keymodes">
+          <label v-if="storedKey" class="ah-pv-radio ah-pv-keymode">
+            <input v-model="keyMode" type="radio" value="stored" />
+            {{ t('hub.pv.apply.keyStored', { mask: props.preset.keyMask }) }}
+          </label>
           <label class="ah-pv-radio ah-pv-keymode">
             <input v-model="keyMode" type="radio" value="inline" />
             {{ t('hub.pv.apply.keyInline') }}
@@ -157,6 +173,9 @@ async function apply(force: boolean) {
         autocomplete="off"
         data-testid="apply-key-input"
       />
+      <div v-if="keyMode === 'stored'" class="ah-inst-hint ah-mono">
+        {{ t('hub.pv.apply.keyStoredHint', { mask: props.preset.keyMask }) }}
+      </div>
       <div v-if="keyMode === 'source' && sourceMask" class="ah-inst-hint ah-mono">
         {{ t('hub.pv.apply.keySourceMask', { mask: sourceMask }) }}
       </div>

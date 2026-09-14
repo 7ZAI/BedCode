@@ -8,7 +8,7 @@
  */
 import { computed, inject, nextTick, ref, watch } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
-import type { AgentHubState, CliDetectInfo, CliId, CliUpdateInfo, InstallDomainState, MirrorTarget } from '../types'
+import type { AgentHubState, CliDetectInfo, CliId, CliUpdateInfo, InstallDomainState } from '../types'
 import CliIcon from './CliIcon.vue'
 
 const props = defineProps<{
@@ -21,7 +21,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'speed-test': []
-  'apply-mirror': [target: MirrorTarget]
+  'apply-mirror': [target: string]
   restore: []
   'check-updates': []
   install: [cli: CliId, useMirror: boolean]
@@ -50,9 +50,6 @@ const nodeReady = computed(() => !!props.detection?.env?.node)
 
 /** 本次安装临时镜像（spec：默认临时 --registry=npmmirror） */
 const useMirror = ref(true)
-/** 持久切换两击确认（避免引入 ui:dialog 权限；4s 未确认自动复位） */
-const confirmPending = ref(false)
-let confirmTimer: ReturnType<typeof setTimeout> | null = null
 
 /**
  * node 缺失降级：每家的展示用命令经 guest `describe-install` 解析
@@ -95,6 +92,8 @@ async function copyCommand(cli: CliId, command: string) {
 
 const speed = computed(() => props.state?.mirror?.speed ?? null)
 const npmrc = computed(() => props.state?.mirror?.npmrc ?? null)
+/** 用户自定义源列表（可增删，测速/换源白名单一并纳入） */
+const customSources = computed(() => props.state?.mirror?.customSources ?? [])
 const activeRun = computed(() => props.state?.active ?? null)
 const lastRun = computed(() => props.state?.last ?? null)
 
@@ -104,30 +103,58 @@ const currentRegistry = computed(() => props.detection?.env?.registry ?? npmrc.v
 const speedDone = computed(() => speed.value?.status === 'ok')
 const speedFailed = computed(() => speed.value?.status === 'error')
 
-const recommendLabel = computed(() => {
-  if (!speedDone.value) return null
-  return speed.value?.recommend === 'npmmirror'
-    ? t('hub.speed.recommendMirror')
-    : t('hub.speed.recommendOfficial')
-})
+/** 内置源展示名（i18n；自定义源统一 "hub.speed.source.custom"） */
+const SOURCE_LABELS: Record<string, string> = {
+  npmmirror: 'hub.speed.source.npmmirror',
+  npmjs: 'hub.speed.source.npmjs',
+  huawei: 'hub.speed.source.huawei',
+  tencent: 'hub.speed.source.tencent',
+  yarn: 'hub.speed.source.yarn',
+}
+function sourceLabel(id: string): string {
+  return t(SOURCE_LABELS[id] ?? 'hub.speed.source.custom')
+}
 
-/** 持久切换仅在测速推荐 npmmirror 且文件源尚未是 npmmirror 时可用 */
-const persistVisible = computed(
-  () => speedDone.value && speed.value?.recommend === 'npmmirror' && npmrc.value?.fileRegistry !== 'https://registry.npmmirror.com',
-)
+/** 列表选择确认（两击防误触改 npmrc；4s 未确认自动复位） */
+const confirmUrl = ref<string | null>(null)
+let confirmTimer: ReturnType<typeof setTimeout> | null = null
 
-function onPersistClick() {
-  if (!confirmPending.value) {
-    confirmPending.value = true
+function onSelectSource(url: string) {
+  if (confirmUrl.value !== url) {
+    confirmUrl.value = url
     if (confirmTimer) clearTimeout(confirmTimer)
     confirmTimer = setTimeout(() => {
-      confirmPending.value = false
+      confirmUrl.value = null
     }, 4000)
     return
   }
-  confirmPending.value = false
+  confirmUrl.value = null
   if (confirmTimer) clearTimeout(confirmTimer)
-  emit('apply-mirror', 'npmmirror')
+  emit('apply-mirror', url)
+}
+
+/** 自定义源输入：URL 校验在 guest 端，失败就地提示 */
+const customUrl = ref('')
+const customError = ref<string | null>(null)
+
+async function onAddCustom() {
+  const url = customUrl.value.trim()
+  if (!url) return
+  try {
+    await context.commands.execute('agent-hub.add-custom-source', { url })
+    customUrl.value = ''
+    customError.value = null
+  } catch (e) {
+    customError.value = (e as Error)?.message ?? String(e)
+  }
+}
+
+async function onRemoveCustom(url: string) {
+  try {
+    await context.commands.execute('agent-hub.remove-custom-source', { url })
+  } catch (e) {
+    console.error('[Agent Hub] remove-custom-source failed', e)
+  }
 }
 
 // ==================== CLI 行状态机 ====================
@@ -240,35 +267,78 @@ watch(
           <span class="ah-env-label">{{ t('hub.speed.current') }}</span>
           <span class="ah-env-value ah-mono">{{ currentRegistry ?? '—' }}</span>
         </div>
-        <div v-if="speed?.npmjsMs != null || speedFailed" class="ah-env-row">
-          <span class="ah-env-label">{{ t('hub.speed.official') }}</span>
-          <span class="ah-env-value ah-mono">{{ speed?.npmjsMs != null ? `${speed.npmjsMs} ms` : t('hub.speed.fail') }}</span>
+
+        <!-- 测速结果：无框四列表格（源名称/地址/测速/操作，左对齐，不加表头） -->
+        <div v-if="speed?.sources?.length" class="ah-speed-table">
+          <div
+            v-for="s in speed.sources"
+            :key="s.id"
+            class="ah-speed-row"
+            :class="{ active: s.url === currentRegistry }"
+          >
+            <span class="ah-speed-name">
+              {{ sourceLabel(s.id) }}
+              <span v-if="s.id === speed?.recommend" class="ah-cli-tag ok ah-speed-mini">
+                <span class="ah-cli-dot"></span>{{ t('hub.speed.recommended') }}
+              </span>
+              <span v-if="s.url === currentRegistry" class="ah-cli-tag ah-speed-mini">
+                <span class="ah-cli-dot"></span>{{ t('hub.speed.currentTag') }}
+              </span>
+            </span>
+            <span class="ah-speed-url ah-mono" :title="s.url">{{ s.url }}</span>
+            <span class="ah-speed-ms ah-mono">{{ s.reachable ? `${s.ms} ms` : t('hub.speed.fail') }}</span>
+            <button
+              type="button"
+              class="ah-btn ah-btn-ghost ah-btn-sm"
+              :class="{ 'ah-btn-warn': confirmUrl === s.url }"
+              :disabled="!authGranted || s.url === currentRegistry"
+              @click="onSelectSource(s.url)"
+            >
+              {{ confirmUrl === s.url ? t('hub.mirror.persistConfirm') : t('hub.speed.select') }}
+            </button>
+          </div>
         </div>
-        <div v-if="speed?.npmmirrorMs != null || speedFailed" class="ah-env-row">
-          <span class="ah-env-label">{{ t('hub.speed.mirror') }}</span>
-          <span class="ah-env-value ah-mono">{{ speed?.npmmirrorMs != null ? `${speed.npmmirrorMs} ms` : t('hub.speed.fail') }}</span>
+        <div v-else-if="speedFailed" class="ah-cli-error">{{ speed?.error ?? t('hub.speed.fail') }}</div>
+
+        <!-- 用户自定义源：添加 / 管理 -->
+        <div class="ah-speed-custom">
+          <input
+            v-model="customUrl"
+            class="ah-input ah-mono"
+            type="text"
+            :placeholder="t('hub.speed.addCustomPlaceholder')"
+            @keyup.enter="onAddCustom"
+          />
+          <button
+            type="button"
+            class="ah-btn ah-btn-ghost ah-btn-sm"
+            :disabled="!customUrl.trim()"
+            @click="onAddCustom"
+          >
+            {{ t('hub.speed.addCustom') }}
+          </button>
         </div>
+        <div v-for="c in customSources" :key="c.id" class="ah-speed-row">
+          <span class="ah-speed-name">{{ sourceLabel(c.id) }}</span>
+          <span class="ah-speed-url ah-mono" :title="c.url">{{ c.url }}</span>
+          <span class="ah-speed-ms"></span>
+          <button
+            type="button"
+            class="ah-btn ah-btn-ghost ah-btn-sm"
+            :disabled="!authGranted"
+            @click="onRemoveCustom(c.url)"
+          >
+            {{ t('hub.speed.removeCustom') }}
+          </button>
+        </div>
+        <div v-if="customError" class="ah-cli-error">{{ customError }}</div>
       </div>
 
       <div v-if="speed?.error" class="ah-cli-error">{{ speed.error }}</div>
 
       <div v-if="speedDone || npmrc?.backupExists" class="ah-speed-actions">
-        <span v-if="recommendLabel" class="ah-cli-tag" :class="speed?.recommend === 'npmmirror' ? 'warn' : 'ok'">
-          <span class="ah-cli-dot"></span>{{ recommendLabel }}
-        </span>
-        <span class="ah-speed-actions-btns">
+        <span v-if="npmrc?.backupExists" class="ah-speed-actions-btns">
           <button
-            v-if="persistVisible"
-            type="button"
-            class="ah-btn ah-btn-ghost ah-btn-sm"
-            :class="{ 'ah-btn-warn': confirmPending }"
-            :disabled="!authGranted"
-            @click="onPersistClick"
-          >
-            {{ confirmPending ? t('hub.mirror.persistConfirm') : t('hub.mirror.persist') }}
-          </button>
-          <button
-            v-if="npmrc?.backupExists"
             type="button"
             class="ah-btn ah-btn-ghost ah-btn-sm"
             :disabled="!authGranted"
