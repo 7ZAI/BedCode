@@ -296,6 +296,9 @@ importers:
       magic-string:
         specifier: ^0.30.21
         version: 0.30.21
+      marked:
+        specifier: ^18.0.11
+        version: 18.0.11
       vite:
         specifier: ^8.0.0
         version: 8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
@@ -318,6 +321,34 @@ importers:
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/node@20.19.43)(@vitest/browser@3.2.7)(@vitest/ui@3.2.7)(happy-dom@13.10.1)(lightningcss@1.33.0)(supports-color@10.2.2)(terser@5.51.2)
+
+  plugins/agent-hub:
+    dependencies:
+      '@binblink/bedcode-plugin-sdk-desktop':
+        specifier: file:../../packages/plugin-sdk-desktop
+        version: link:../../packages/plugin-sdk-desktop
+    devDependencies:
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.0
+        version: 6.0.8(vite@8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))(vue@3.5.42(typescript@5.9.3))
+      terser:
+        specifier: ^5.0.0
+        version: 5.51.2
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+      vite:
+        specifier: ^8.0.0
+        version: 8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
+      vite-plugin-css-injected-by-js:
+        specifier: ^5.0.2
+        version: 5.0.2(vite@8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))
+      vue:
+        specifier: ^3.4.0
+        version: 3.5.42(typescript@5.9.3)
+      vue-i18n:
+        specifier: ^9.0.0
+        version: 9.14.5(vue@3.5.42(typescript@5.9.3))
 
   plugins/ai-chatbox:
     dependencies:
@@ -4283,6 +4314,11 @@ packages:
     resolution: {integrity: sha512-EbKSKh+bh1E1IFxeO0pg1n4dvoOTt0UDiXMd/qn++r98+jPO1xtJilvXldeuQ8giIB5IkpjCgMleHMNEsGH6pg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
     hasBin: true
+
+  vite-plugin-css-injected-by-js@5.0.2:
+    resolution: {integrity: sha512-Hvg48QfYsCL53ju9T5zTC0Ofg90XLa8t5zhhKmPYbayoMQieNcQDkkRX8pv4TAcKPZwVisLFiwDy5uBjOn+3Ow==}
+    peerDependencies:
+      vite: '>8.0.0-0'
 
   vite@5.4.21:
     resolution: {integrity: sha512-o5a9xKjbtuhY6Bi5S3+HvbRERmouabWbyUcpXXUA1u+GNUKoROi9byOJ8M0nHbHYHkYICiMlqxkg1KkYmm25Sw==}
@@ -8515,6 +8551,10 @@ snapshots:
       - sugarss
       - supports-color
       - terser
+
+  vite-plugin-css-injected-by-js@5.0.2(vite@8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)):
+    dependencies:
+      vite: 8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
 
   vite@5.4.21(@types/node@20.19.43)(lightningcss@1.33.0)(terser@5.51.2):
     dependencies:

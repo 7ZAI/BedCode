@@ -59,6 +59,10 @@
       "types": "./src/ui/plugin-global-dialog.d.ts",
       "import": "./src/ui/PluginGlobalDialog.vue"
     },
+    "./ui/markdown-editor": {
+      "types": "./src/ui/markdown-editor.d.ts",
+      "import": "./src/ui/MarkdownEditor.vue"
+    },
     "./types": {
       "types": "./dist/types.d.ts",
       "import": "./dist/types.js"
@@ -66,7 +70,8 @@
     "./package.json": "./package.json"
   },
   "dependencies": {
-    "magic-string": "^0.30.21"
+    "magic-string": "^0.30.21",
+    "marked": "^18.0.11"
   },
   "peerDependencies": {
     "vite": "^8.0.0",
