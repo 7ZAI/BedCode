@@ -501,3 +501,33 @@ cd <project>/src-tauri && cargo build
 | 前端测试 | `<project>` | `pnpm run test:run` | 终端输出 |
 | Rust 测试 | `<project>/src-tauri` | `cargo test` | 终端输出 |
 | Rust 检查 | `<project>/src-tauri` | `cargo check` | 编译检查 |
+
+---
+
+## pi session 归档（scripts/pi-session-archive.sh）
+
+将本项目 `.pi/sessions/` 中**距离最新 session 超过 N 天**的 session jsonl 日志（含复合 session 目录）移动到 pi 安装目录的 session 归档区。归档文件夹以项目全路径命名（`/` 替换为 `-`，前后加 `--`，与 pi 自身约定一致）：
+
+```
+项目 /home/binblink/project/tauriProject/BedCode
+  → ~/.pi/agent/sessions/--home-binblink-project-tauriProject-BedCode--
+```
+
+- **基准日期** = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天），早于（基准 − N 天）的视为过期；默认 N=15
+- 只处理顶层 `*.jsonl` 与 `YYYY-MM-DDThh-mm-ss-msZ_<ulid>` 形式的 session 目录；`sol-pi` / `subagent-artifacts` 等非 session 目录绝不触碰
+- 目标已有同名条目时跳过并警告，绝不覆盖
+- 脚本由 `scripts/` 位置推导项目根，天然只在项目范围内生效；可在任意目录用绝对路径执行
+
+```bash
+# 实际归档（默认 15 天）
+scripts/pi-session-archive.sh
+
+# 只预览不移动（推荐先跑）
+scripts/pi-session-archive.sh -n
+
+# 自定义阈值（如 30 天）
+scripts/pi-session-archive.sh -d 30
+
+# 覆盖 pi 安装目录（默认 ~/.pi/agent）
+PI_AGENT_DIR=/custom/pi scripts/pi-session-archive.sh -n
+```
