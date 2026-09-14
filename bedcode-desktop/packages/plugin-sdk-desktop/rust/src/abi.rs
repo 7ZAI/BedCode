@@ -26,7 +26,13 @@
 //!   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 //!   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 //!   v8 插件二进制不受影响
-pub const ABI_VERSION: u32 = 10;
+//! - v10: host-peer WIT 收缩 ADR 0022 v3 终态（commit 56ee094cb）：host-peer
+//!   桌面终态 13 函数定稿（dial-peer 转正、send-files 返回传输句柄、删除
+//!   旧式寻址函数集）。破坏性收缩，旧插件二进制须重编译
+//! - v11: host-peer 传输控制三原语（`pause-transfer` / `resume-transfer` /
+//!   `resume-all-transfers`），支撑暂停/恢复（issue 14）。纯增量变更，
+//!   v10 插件二进制不受影响
+pub const ABI_VERSION: u32 = 11;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -40,10 +46,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v9() {
-        // 版本号序列与历史 core ABI 共用：v9 = host-peer 原语化收缩第一阶段
-        // （dial-peer-endpoint / close / set-shared-roots + host-mdns / host-platform）
-        assert_eq!(ABI_VERSION, 10);
+    fn test_abi_version_is_v11() {
+        // 版本号序列与历史 core ABI 共用：v11 = host-peer 传输控制三原语
+        // （pause-transfer / resume-transfer / resume-all-transfers）
+        assert_eq!(ABI_VERSION, 11);
     }
 
     #[test]
