@@ -309,7 +309,6 @@ pub fn run() {
             peer_transfer::list_peer_transfers,
             peer_transfer::clear_peer_transfer_history,
             peer_transfer::peer_pick_files,
-            peer_transfer::peer_pick_folder,
             // Peer Receive (issue 10 接收侧)
             peer_receive::list_peer_receiving,
             peer_receive::respond_peer_transfer,
