@@ -113,6 +113,38 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/{plugin-id}/
 └── {lib}.wasm      # Rust WASM 后端
 ```
 
+**两端插件统一打包（zip 分发包，release 独立产物）**：
+
+```bash
+# 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（仓库根目录执行）
+node scripts/package-plugins.mjs
+
+# 只看将打包的插件清单（不构建不打包）
+node scripts/package-plugins.mjs --list
+
+# 只打包指定插件（--only 忽略配置文件列表；--plugin 为追加，--exclude 为排除）
+node scripts/package-plugins.mjs --only agent-hub
+node scripts/package-plugins.mjs --exclude auto-task --target all
+
+# 跳过构建，只打包已有产物；指定 zip 版本号
+node scripts/package-plugins.mjs --skip-build --version 2.1.0
+```
+
+- **插件列表**：默认 `scripts/plugin-package-list.json`（`{desktop:[], mobile:[]}`），增删插件改该文件即可；也可用 `--config <file>` 换列表文件
+- **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，与移动端 SDK `bedcode-plugin package` 分发格式一致）
+- **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip 到 release（详见 `docs/knowledge/release-workflow.md`）
+
+**桌面端加载 / 卸载插件（zip 分发包）**：
+
+```bash
+# 打包脚本产出的 zip 可直接在桌面端「插件」页安装：
+# 工具栏「加载插件」→ 选择 zip 包（产物 dist/plugin-packages/desktop/<id>.zip）
+```
+
+- 安装落盘：`app_data_dir/plugins/<id>/`（用户插件目录，独立于只读的内置目录）
+- 加载校验：manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性（声明时），拒绝覆盖已安装同 id（升级需先卸载）
+- 卸载：插件详情页「卸载」按钮（仅用户安装插件显示）→ 危险确认弹窗 → 删除插件所有数据（存储 + 激活状态 + 安装目录）
+
 ---
 
 ## bedcode-mobile

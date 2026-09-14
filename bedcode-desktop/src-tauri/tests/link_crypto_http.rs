@@ -10,8 +10,7 @@ use base64::Engine as _;
 
 use bedcode_lib::server::filter::TrafficFilterChain;
 use bedcode_lib::server::link_crypto::{
-    self, derive_http_traffic_keys, encrypt_http_body, decrypt_http_body, LinkCryptoConfig,
-    NEGOTIATION_HEADER,
+    self, decrypt_http_body, derive_http_traffic_keys, encrypt_http_body, LinkCryptoConfig, NEGOTIATION_HEADER,
 };
 use bedcode_lib::utils::crypto::x25519::{x25519_diffie_hellman, x25519_generate};
 
@@ -78,10 +77,7 @@ impl ClientCtx {
 /// 序列复刻（spec §3 固定格式：b"v1" || dir || u32be(len) || path），并断言与
 /// 单元测试一致；若协议变更此处会先红。
 mod crate_aad_shim {
-    pub fn http_aad_shim(
-        direction: bedcode_lib::server::filter::Direction,
-        path: &str,
-    ) -> Vec<u8> {
+    pub fn http_aad_shim(direction: bedcode_lib::server::filter::Direction, path: &str) -> Vec<u8> {
         let mut aad = Vec::with_capacity(7 + path.len());
         aad.extend_from_slice(b"v1");
         aad.push(match direction {
