@@ -18,8 +18,10 @@ export interface CliDetectInfo {
   error: string | null
 }
 
-/** 开发环境采集（node/npm/pnpm 版本 + 当前 registry） */
+/** 开发环境采集（系统平台 + node/npm/pnpm 版本 + 当前 registry） */
 export interface EnvInfo {
+  /** 宿主平台名（std::env::consts::OS 值域：linux / windows / macos / …） */
+  os: string | null
   node: string | null
   npm: string | null
   pnpm: string | null

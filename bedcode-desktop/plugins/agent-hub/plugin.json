@@ -137,10 +137,6 @@
         "title": "Agent Hub: Get Usage Stats"
       },
       {
-        "id": "agent-hub.list-usage-sessions",
-        "title": "Agent Hub: List Usage Sessions"
-      },
-      {
         "id": "agent-hub.list-usage-sources",
         "title": "Agent Hub: List Usage Sources"
       },
@@ -151,6 +147,10 @@
       {
         "id": "agent-hub.remove-usage-source",
         "title": "Agent Hub: Remove Usage Source"
+      },
+      {
+        "id": "agent-hub.list-usage-sessions",
+        "title": "Agent Hub: List Usage Sessions"
       },
       {
         "id": "agent-hub.read-usage-session",

@@ -21,9 +21,28 @@ const t = (key: string) => context.i18n.t(key)
 
 const CLI_IDS: CliId[] = ['claude', 'codex', 'opencode', 'pi']
 
+/** 平台名（std::env::consts::OS 值域）→ 展示名；未知值回退原样 */
+const OS_LABELS: Record<string, string> = {
+  linux: 'Linux',
+  windows: 'Windows',
+  macos: 'macOS',
+  android: 'Android',
+  ios: 'iOS',
+  freebsd: 'FreeBSD',
+  openbsd: 'OpenBSD',
+  netbsd: 'NetBSD',
+  dragonfly: 'DragonFly BSD',
+  solaris: 'Solaris',
+}
+function osLabel(os: string | null | undefined): string | null {
+  if (!os) return null
+  return OS_LABELS[os] ?? os
+}
+
 const envRows = computed(() => {
   const env = props.state?.env
   return [
+    { label: t('hub.env.os'), value: osLabel(env?.os) },
     { label: t('hub.env.node'), value: env?.node },
     { label: t('hub.env.npm'), value: env?.npm },
     { label: t('hub.env.pnpm'), value: env?.pnpm },

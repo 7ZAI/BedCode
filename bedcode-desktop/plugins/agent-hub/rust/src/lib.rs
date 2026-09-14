@@ -78,6 +78,16 @@ pub(crate) fn is_windows() -> bool {
         .unwrap_or_else(|| cfg!(windows))
 }
 
+/// 宿主平台名（`std::env::consts::OS` 值域：linux / windows / macos / …）。
+/// wasm 目标下取 activate 缓存的 `os.platform`；native 编译（单测）回退编译期。
+/// 概览环境条「系统」行的唯一来源——不经 shell 采集。
+pub(crate) fn os_platform() -> String {
+    OS_PLATFORM
+        .get()
+        .cloned()
+        .unwrap_or_else(|| std::env::consts::OS.to_string())
+}
+
 /// POSIX shell 单引号包裹转义：`'` → `'\''`。
 ///
 /// 用户可控路径（add-source 自定义来源 / import 目录）进枚举脚本前必须经此

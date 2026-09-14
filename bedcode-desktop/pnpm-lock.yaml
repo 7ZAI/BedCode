@@ -327,6 +327,9 @@ importers:
       '@binblink/bedcode-plugin-sdk-desktop':
         specifier: file:../../packages/plugin-sdk-desktop
         version: link:../../packages/plugin-sdk-desktop
+      '@vuepic/vue-datepicker':
+        specifier: ^9.0.3
+        version: 9.0.3(vue@3.5.42(typescript@5.9.3))
     devDependencies:
       '@vitejs/plugin-vue':
         specifier: ^6.0.0

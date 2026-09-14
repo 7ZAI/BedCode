@@ -30,6 +30,7 @@ const devMock: AgentHubDevMock = {
     envStatus: 'ok',
     envError: null,
     env: {
+      os: 'linux',
       node: 'v22.14.0',
       npm: '10.9.2',
       pnpm: '12.2.1',

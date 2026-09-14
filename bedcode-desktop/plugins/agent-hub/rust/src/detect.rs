@@ -34,14 +34,28 @@ static STATE_SEQ: AtomicU32 = AtomicU32::new(0);
 // ==================== 状态（读-改-写） ====================
 
 fn read_state(h: &WasmHost) -> Value {
-    h.storage_get(STATE_KEY).ok().flatten().unwrap_or_else(|| {
+    let mut state = h.storage_get(STATE_KEY).ok().flatten().unwrap_or_else(|| {
         json!({
             "authGranted": false,
             "envStatus": "idle",
             "env": null,
             "clis": default_clis(),
         })
-    })
+    });
+    // env.os 回填：旧库环境块缺该字段时补当前平台（读取即修正，后续 write 落库）
+    if let Some(env) = state.get_mut("env") {
+        ensure_env_os(env);
+    }
+    state
+}
+
+/// 环境块 `os` 字段保证：缺失时注入当前平台名，已有值不覆盖。
+/// os 由宿主导入（`os.platform` 激活时缓存，见 lib.rs::os_platform），
+/// 不经 shell 采集，解析层段标记契约不含该段
+fn ensure_env_os(env: &mut Value) {
+    if env.is_object() && env.get("os").is_none() {
+        env["os"] = json!(super::os_platform());
+    }
 }
 
 fn default_clis() -> Value {
@@ -215,6 +229,8 @@ fn apply_output(state: &mut Value, kind: &str, output: &str) {
     if kind == ENV_KIND {
         state["envStatus"] = json!("ok");
         state["env"] = parse_env(output);
+        // 系统环境行：平台名由宿主导入（os.platform，激活时缓存），非 shell 采集
+        ensure_env_os(&mut state["env"]);
         // 清除历史失败残留（如修复前探测的 exit=127 envError），避免 UI 混淆
         state["envError"] = Value::Null;
     } else {
@@ -539,6 +555,32 @@ mod tests {
         let out = "== node ==\nv24.20.0\n== npm ==\n12.0.2\n== pnpm ==\nbash: pnpm: command not found\n== registry ==\nhttps://registry.npmjs.org/\n";
         let env = parse_env(out);
         assert_eq!(env["pnpm"], json!(null));
+    }
+
+    /// env.os 字段：缺失时回填平台名，已有值不被覆盖（宿主注入，非 shell 采集）
+    #[test]
+    fn ensure_env_os_backfills_without_overriding() {
+        let mut env = json!({ "node": "v24.20.0" });
+        ensure_env_os(&mut env);
+        assert!(env["os"].as_str().is_some_and(|s| !s.is_empty()));
+
+        env["os"] = json!("windows");
+        ensure_env_os(&mut env);
+        assert_eq!(env["os"], json!("windows"));
+    }
+
+    /// apply_output 注入 os：探测完成后 env 块携带平台名，envStatus=ok
+    #[test]
+    fn apply_output_env_injects_os() {
+        let mut state = json!({});
+        apply_output(
+            &mut state,
+            ENV_KIND,
+            "== node ==\nv24.20.0\n== npm ==\n12.0.2\n== pnpm ==\n12.2.1\n== registry ==\nhttps://registry.npmjs.org/\n",
+        );
+        assert_eq!(state["envStatus"], json!("ok"));
+        assert_eq!(state["env"]["node"], json!("v24.20.0"));
+        assert!(state["env"]["os"].as_str().is_some_and(|s| !s.is_empty()));
     }
 
     /// Windows 形态：where 反斜杠输出规范化 + 盘符路径识别；npm 全局

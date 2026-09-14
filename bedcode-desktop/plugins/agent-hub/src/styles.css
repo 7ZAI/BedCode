@@ -997,6 +997,50 @@
   margin-top: 2px;
 }
 
+/* ==================== 弹窗（Teleport 到 body，遮罩 + 居中面板） ==================== */
+
+/* 全屏遮罩：宿主 Modal 同款背板（黑 50% + 轻微模糊），z-index 高于宿主内容 */
+.ah-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+/* 面板：复用 .ah-card 材质；宽度/高度受限，内容超高时面板内滚动 */
+.ah-modal-panel {
+  width: min(560px, 100%);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
+/* 进出场：整体淡入 + 面板轻微上浮/缩放（无动画偏好时被全局 reduce 规则降级） */
+.ah-modal-enter-active,
+.ah-modal-leave-active {
+  transition: opacity 0.2s ease;
+}
+
+.ah-modal-enter-from,
+.ah-modal-leave-to {
+  opacity: 0;
+}
+
+.ah-modal-enter-active .ah-modal-panel,
+.ah-modal-leave-active .ah-modal-panel {
+  transition: transform 0.2s ease;
+}
+
+.ah-modal-enter-from .ah-modal-panel,
+.ah-modal-leave-to .ah-modal-panel {
+  transform: translateY(8px) scale(0.97);
+}
+
 /* claude 只读视图行距 */
 .ah-pv-claude-rows {
   margin-top: 10px;
@@ -1366,6 +1410,12 @@
 
 .ah-lg-filter-q {
   flex: 1;
+  min-width: 200px;
+}
+
+/* 日期选择器字段（@vuepic/vue-datepicker）：与关键词输入同宽，宿主控件规格
+   由 index.ts 注入的 dp 主题覆盖接管 */
+.ah-lg-filter-date {
   min-width: 200px;
 }
 

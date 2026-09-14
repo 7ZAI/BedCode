@@ -10,9 +10,10 @@
  * 数据流：列表分页与统计明细共用 useUsage 同一查询域；打开会话经
  * read-usage-session 按需解析（单会话一次读盘双消费）。
  */
-import { computed, inject, ref, watch } from 'vue'
+import { computed, inject, ref, watch, onBeforeUnmount } from 'vue'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import Select from '@binblink/bedcode-plugin-sdk-desktop/ui'
+import Datepicker from '@vuepic/vue-datepicker'
 import type { NormalizedEventView, UsageSource } from '../types'
 import type { UseUsageReturn } from '../composables/useUsage'
 import {
@@ -97,8 +98,32 @@ async function onRemoveSource(name: string) {
 // ==================== 查询条件（Agent / 关键词 / 时间范围） ====================
 const filterAgent = ref(usage.listFilter.value)
 const keyword = ref(usage.searchText.value)
-const fromInput = ref('')
-const toInput = ref('')
+const fromInput = ref<Date | null>(null)
+const toInput = ref<Date | null>(null)
+
+/**
+ * 日期选择器（@vuepic/vue-datepicker，与 auto-task 同款）：
+ * 深色模式跟随宿主（documentElement.dark class），MutationObserver 监听主题切换联动 dark prop
+ */
+const isDark = ref(document.documentElement.classList.contains('dark'))
+let themeObserver: MutationObserver | null = null
+
+/** 输入/回填格式（date-fns token），与表格「开始时间」列显示习惯一致 */
+const dateFormat = 'yyyy-MM-dd HH:mm'
+
+/** 跟随宿主语言（zh-CN / en），渲染对应语言的日历与星期/月份文案 */
+const dateLocale = computed(() => context.i18n.getI18n()?.global?.locale?.value ?? 'zh-CN')
+
+/** Datepicker 底部操作按钮文本：v9 默认英文（Select/Cancel/Now），不跟随 locale，需按当前语言传入 */
+const dpSelectText = computed(() => t('hub.lg.filter.dpSelect'))
+const dpCancelText = computed(() => t('hub.lg.filter.dpCancel'))
+const dpNowLabel = computed(() => t('hub.lg.filter.dpNow'))
+
+themeObserver = new MutationObserver(() => {
+  isDark.value = document.documentElement.classList.contains('dark')
+})
+themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] })
+onBeforeUnmount(() => themeObserver?.disconnect())
 
 /** Agent 下拉选项（SDK Select，与宿主表单控件同源） */
 const agentOptions = computed(() => [
@@ -110,8 +135,8 @@ const agentOptions = computed(() => [
 async function applyQuery() {
   usage.listFilter.value = filterAgent.value
   usage.searchText.value = keyword.value
-  usage.rangeFrom.value = fromInput.value ? new Date(fromInput.value).getTime() : null
-  usage.rangeTo.value = toInput.value ? new Date(toInput.value).getTime() : null
+  usage.rangeFrom.value = fromInput.value?.getTime() ?? null
+  usage.rangeTo.value = toInput.value?.getTime() ?? null
   await usage.reloadSessions()
 }
 
@@ -119,8 +144,8 @@ async function applyQuery() {
 async function applyReset() {
   filterAgent.value = ''
   keyword.value = ''
-  fromInput.value = ''
-  toInput.value = ''
+  fromInput.value = null
+  toInput.value = null
   await usage.resetQuery()
 }
 
@@ -238,20 +263,38 @@ function tokenMeta(e: NormalizedEventView): string {
             @keydown.enter="applyQuery"
           />
         </label>
-        <label class="ah-lg-filter-field">
+        <label class="ah-lg-filter-field ah-lg-filter-date">
           <span class="ah-lg-filter-label">{{ t('hub.lg.filter.from') }}</span>
-          <input
+          <Datepicker
             v-model="fromInput"
-            type="datetime-local"
-            class="w-full h-[var(--input-height)] rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] px-4 text-[var(--text-primary)] outline-none transition-all duration-200 shadow-xs focus:border-brand focus:shadow-input-focus dark:shadow-none"
+            :format="dateFormat"
+            :locale="dateLocale"
+            :dark="isDark"
+            :clearable="true"
+            :enable-time-picker="true"
+            :select-text="dpSelectText"
+            :cancel-text="dpCancelText"
+            :now-button-label="dpNowLabel"
+            :teleport="'body'"
+            :placeholder="t('hub.lg.filter.fromPh')"
+            data-testid="filter-from"
           />
         </label>
-        <label class="ah-lg-filter-field">
+        <label class="ah-lg-filter-field ah-lg-filter-date">
           <span class="ah-lg-filter-label">{{ t('hub.lg.filter.to') }}</span>
-          <input
+          <Datepicker
             v-model="toInput"
-            type="datetime-local"
-            class="w-full h-[var(--input-height)] rounded-input border border-[var(--border-input)] bg-[var(--bg-input)] px-4 text-[var(--text-primary)] outline-none transition-all duration-200 shadow-xs focus:border-brand focus:shadow-input-focus dark:shadow-none"
+            :format="dateFormat"
+            :locale="dateLocale"
+            :dark="isDark"
+            :clearable="true"
+            :enable-time-picker="true"
+            :select-text="dpSelectText"
+            :cancel-text="dpCancelText"
+            :now-button-label="dpNowLabel"
+            :teleport="'body'"
+            :placeholder="t('hub.lg.filter.toPh')"
+            data-testid="filter-to"
           />
         </label>
         <div class="ah-lg-filter-actions">

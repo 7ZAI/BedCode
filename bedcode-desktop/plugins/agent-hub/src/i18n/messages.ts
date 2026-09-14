@@ -31,6 +31,7 @@ export type MessageSchema = {
 
   // ==================== 概览 · 环境条 ====================
   'hub.env.title': string
+  'hub.env.os': string
   'hub.env.node': string
   'hub.env.npm': string
   'hub.env.pnpm': string
@@ -277,6 +278,11 @@ export type MessageSchema = {
   'hub.lg.filter.keywordPh': string
   'hub.lg.filter.from': string
   'hub.lg.filter.to': string
+  'hub.lg.filter.fromPh': string
+  'hub.lg.filter.toPh': string
+  'hub.lg.filter.dpSelect': string
+  'hub.lg.filter.dpCancel': string
+  'hub.lg.filter.dpNow': string
   'hub.lg.filter.query': string
   'hub.lg.filter.reset': string
   'hub.lg.col.agent': string

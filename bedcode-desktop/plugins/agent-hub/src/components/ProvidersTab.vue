@@ -310,103 +310,125 @@ function sourceTag(preset: ProviderPreset): string {
         </div>
       </div>
 
-      <!-- 新建/编辑表单 -->
-      <div v-if="showEditor" class="ah-card ah-pv-editor" data-testid="preset-editor">
-        <div class="ah-inst-head">
-          <span class="ah-section-title">
-            {{ editingId === null ? t('hub.pv.editor.titleNew') : t('hub.pv.editor.titleEdit') }}
-          </span>
-        </div>
-
-        <!-- 模板快选（仅新建态） -->
-        <div v-if="editingId === null" class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.template') }}</span>
-          <span class="ah-pv-targets">
-            <button
-              v-for="tpl in PROVIDER_TEMPLATES"
-              :key="tpl.id"
-              type="button"
-              class="ah-cli-tag ah-pv-target"
-              @click="pickTemplate(tpl.id)"
-            >
-              {{ tpl.id === 'custom' ? t('hub.pv.style.custom') : tpl.name }}
-            </button>
-          </span>
-        </div>
-
-        <div class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.name') }}</span>
-          <input v-model="formName" class="ah-sk-url ah-pv-input" type="text" spellcheck="false" data-testid="preset-name" />
-        </div>
-        <div class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.baseUrl') }}</span>
-          <input v-model="formBaseUrl" class="ah-sk-url ah-pv-input ah-mono" type="text" spellcheck="false" data-testid="preset-baseurl" />
-        </div>
-        <div class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.apiStyle') }}</span>
-          <span class="ah-pv-targets">
-            <button
-              v-for="style in API_STYLES"
-              :key="style"
-              type="button"
-              class="ah-cli-tag ah-pv-target"
-              :class="{ active: formApiStyle === style }"
-              @click="formApiStyle = style"
-            >
-              {{ styleLabel(style) }}
-            </button>
-          </span>
-        </div>
-        <div class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.models') }}</span>
-          <textarea v-model="formModels" class="ah-sk-textarea ah-pv-models ah-mono" spellcheck="false" data-testid="preset-models"></textarea>
-        </div>
-
-        <!-- v2 中心凭据：新 key 输入 / 清空切换（明文仅在 save 命令在途） -->
-        <div class="ah-pv-field">
-          <span class="ah-pv-label">{{ t('hub.pv.editor.key') }}</span>
-          <span class="ah-pv-keyrow">
-            <input
-              v-model="formKey"
-              class="ah-sk-url ah-pv-input ah-mono"
-              type="password"
-              autocomplete="new-password"
-              spellcheck="false"
-              :placeholder="editingKeyMask ? t('hub.pv.editor.keyPlaceholder', { mask: editingKeyMask }) : t('hub.pv.editor.keyNew')"
-              data-testid="preset-key"
-            />
-            <button
-              v-if="editingKeyMask"
-              type="button"
-              class="ah-btn ah-btn-ghost ah-btn-sm"
-              :class="{ 'ah-btn-warn': clearKey }"
-              :disabled="busy"
-              data-testid="preset-key-clear"
-              @click="clearKey = !clearKey"
-            >
-              {{ clearKey ? t('hub.pv.editor.keyKeep') : t('hub.pv.editor.keyClear') }}
-            </button>
-          </span>
-        </div>
-        <div class="ah-inst-hint">{{ t('hub.pv.editor.keyHint') }}</div>
-
-        <div v-if="nameExists" class="ah-cli-error">{{ t('hub.pv.editor.nameExists') }}</div>
-
-        <div class="ah-pv-apply-actions">
-          <button
-            type="button"
-            class="ah-btn ah-btn-primary ah-btn-sm"
-            :disabled="busy || !formName.trim()"
-            data-testid="preset-save"
-            @click="save"
+      <!-- 新建/编辑表单（弹窗：Teleport 到 body；遮罩点击 / Esc / ✕ / 取消均可关闭） -->
+      <Teleport to="body">
+        <Transition name="ah-modal">
+          <div
+            v-if="showEditor"
+            class="ah-modal"
+            role="dialog"
+            aria-modal="true"
+            @click.self="showEditor = false"
+            @keydown.esc="showEditor = false"
           >
-            {{ t('hub.pv.editor.save') }}
-          </button>
-          <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" @click="showEditor = false">
-            {{ t('hub.pv.editor.cancel') }}
-          </button>
-        </div>
-      </div>
+            <div class="ah-modal-panel ah-card" data-testid="preset-editor">
+              <div class="ah-inst-head">
+                <span class="ah-section-title">
+                  {{ editingId === null ? t('hub.pv.editor.titleNew') : t('hub.pv.editor.titleEdit') }}
+                </span>
+                <button
+                  type="button"
+                  class="ah-btn ah-btn-ghost ah-btn-sm"
+                  aria-label="close"
+                  data-testid="preset-editor-close"
+                  @click="showEditor = false"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <!-- 模板快选（仅新建态） -->
+              <div v-if="editingId === null" class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.template') }}</span>
+                <span class="ah-pv-targets">
+                  <button
+                    v-for="tpl in PROVIDER_TEMPLATES"
+                    :key="tpl.id"
+                    type="button"
+                    class="ah-cli-tag ah-pv-target"
+                    @click="pickTemplate(tpl.id)"
+                  >
+                    {{ tpl.id === 'custom' ? t('hub.pv.style.custom') : tpl.name }}
+                  </button>
+                </span>
+              </div>
+
+              <div class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.name') }}</span>
+                <input v-model="formName" class="ah-sk-url ah-pv-input" type="text" spellcheck="false" autofocus data-testid="preset-name" />
+              </div>
+              <div class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.baseUrl') }}</span>
+                <input v-model="formBaseUrl" class="ah-sk-url ah-pv-input ah-mono" type="text" spellcheck="false" data-testid="preset-baseurl" />
+              </div>
+              <div class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.apiStyle') }}</span>
+                <span class="ah-pv-targets">
+                  <button
+                    v-for="style in API_STYLES"
+                    :key="style"
+                    type="button"
+                    class="ah-cli-tag ah-pv-target"
+                    :class="{ active: formApiStyle === style }"
+                    @click="formApiStyle = style"
+                  >
+                    {{ styleLabel(style) }}
+                  </button>
+                </span>
+              </div>
+              <div class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.models') }}</span>
+                <textarea v-model="formModels" class="ah-sk-textarea ah-pv-models ah-mono" spellcheck="false" data-testid="preset-models"></textarea>
+              </div>
+
+              <!-- v2 中心凭据：新 key 输入 / 清空切换（明文仅在 save 命令在途） -->
+              <div class="ah-pv-field">
+                <span class="ah-pv-label">{{ t('hub.pv.editor.key') }}</span>
+                <span class="ah-pv-keyrow">
+                  <input
+                    v-model="formKey"
+                    class="ah-sk-url ah-pv-input ah-mono"
+                    type="password"
+                    autocomplete="new-password"
+                    spellcheck="false"
+                    :placeholder="editingKeyMask ? t('hub.pv.editor.keyPlaceholder', { mask: editingKeyMask }) : t('hub.pv.editor.keyNew')"
+                    data-testid="preset-key"
+                  />
+                  <button
+                    v-if="editingKeyMask"
+                    type="button"
+                    class="ah-btn ah-btn-ghost ah-btn-sm"
+                    :class="{ 'ah-btn-warn': clearKey }"
+                    :disabled="busy"
+                    data-testid="preset-key-clear"
+                    @click="clearKey = !clearKey"
+                  >
+                    {{ clearKey ? t('hub.pv.editor.keyKeep') : t('hub.pv.editor.keyClear') }}
+                  </button>
+                </span>
+              </div>
+              <div class="ah-inst-hint">{{ t('hub.pv.editor.keyHint') }}</div>
+
+              <div v-if="nameExists" class="ah-cli-error">{{ t('hub.pv.editor.nameExists') }}</div>
+
+              <div class="ah-pv-apply-actions">
+                <button
+                  type="button"
+                  class="ah-btn ah-btn-primary ah-btn-sm"
+                  :disabled="busy || !formName.trim()"
+                  data-testid="preset-save"
+                  @click="save"
+                >
+                  {{ t('hub.pv.editor.save') }}
+                </button>
+                <button type="button" class="ah-btn ah-btn-ghost ah-btn-sm" @click="showEditor = false">
+                  {{ t('hub.pv.editor.cancel') }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </Transition>
+      </Teleport>
     </template>
   </div>
 </template>
