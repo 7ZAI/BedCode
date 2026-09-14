@@ -102,6 +102,11 @@ const peerDisplayName = computed(() => {
 
 const selectedCount = computed(() => fs.selectedNames.value.length)
 
+/** 队列合计速率：发送方向 + 接收方向（下载中接收任务同样计入） */
+const panelTotalSpeed = computed(
+  () => totalSpeed.value + receiving.value.reduce((sum, r) => sum + (r.rateBps ?? 0), 0),
+)
+
 /** 对端名映射（peerId → 展示名，批卡/接收任务展示用） */
 const peerNames = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
@@ -539,7 +544,7 @@ watch(
         <TaskPanel
           v-if="queueVisible"
           :tasks="tasks"
-          :total-speed="totalSpeed"
+          :total-speed="panelTotalSpeed"
           :receiving="receiving"
           :history="history"
           :peer-names="peerNames"
@@ -552,6 +557,7 @@ watch(
           @cancel-receiving="cancelReceiving"
           @clear-history="clearHistoryEntries"
           @open-folder="handleOpenFolder"
+          @close="queueVisible = false"
         />
       </Transition>
     </div>

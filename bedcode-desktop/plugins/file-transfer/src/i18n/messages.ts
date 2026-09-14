@@ -88,6 +88,7 @@ export type MessageSchema = {
   // ==================== 队列面板 ====================
   'transfer.queue.title': string
   'transfer.queue.count': string
+  'transfer.queue.close': string
 
   // ==================== 队列分类 tabs（v2） ====================
   'transfer.queue.all': string
@@ -171,6 +172,8 @@ export type MessageSchema = {
   // ==================== 传输历史（v2） ====================
   'transfer.history.title': string
   'transfer.history.clear': string
+  'transfer.history.clearConfirmTitle': string
+  'transfer.history.clearConfirmBody': string
   'transfer.history.empty': string
   'transfer.history.openFolder': string
   'transfer.history.results.completed': string
