@@ -881,10 +881,9 @@ mod tests {
             assert!(matches!(
                 msg,
                 Message::Terminal {
-                    payload:
-                        TerminalPayload {
-                            action: TerminalAction::Subscribe,
-                        },
+                    payload: TerminalPayload {
+                        action: TerminalAction::Subscribe,
+                    },
                     ..
                 }
             ));
@@ -1267,7 +1266,6 @@ mod tests {
 
     // ==================== 序列化 ====================
 
-
     #[test]
     fn to_json_skips_absent_optional_fields() {
         let e = Message::error("E_BAD", "bad thing");
@@ -1302,7 +1300,10 @@ mod tests {
                 timestamp,
                 session_id,
                 token,
-                payload: TerminalPayload { action: TerminalAction::Input { data, special_key } },
+                payload:
+                    TerminalPayload {
+                        action: TerminalAction::Input { data, special_key },
+                    },
             } => {
                 assert_eq!(message_id, "m-1");
                 assert!(*expect_response);

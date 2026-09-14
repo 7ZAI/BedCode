@@ -822,7 +822,10 @@ mod tests {
 
         // batch 下 3 字节 < 64KB 阈值：不发
         tx.send(OutputFrame::Output(event("s", b"abc", 0))).await.unwrap();
-        assert!(matches!(out_rx.try_recv(), Err(tokio::sync::mpsc::error::TryRecvError::Empty)));
+        assert!(matches!(
+            out_rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
 
         // 切到 realtime：空闲超时（虚拟时钟提前）触发时间窗 flush
         mode.store(MODE_REALTIME, Ordering::SeqCst);

@@ -1,12 +1,13 @@
-//! 桌面端本地终端输出流的 Channel 传输命令（与 WS 环回并行的替代方案）
+//! 桌面端本地终端输出流的 Channel 传输命令（唯一路径；WS 环回已下线）
 //!
 //! 背景：WS 环回（`useTerminalOutputStream` → `/ws/terminal/local`）在输出
 //! 风暴期会因 WebKitGTK WS 接收缓冲溢出丢整消息（opencode 滚动残渣 + Parsing
 //! error 的根因）。Tauri Channel 走 WebView 原生 IPC（大负载经 in-memory
 //! fetch 拉取），数据在 Rust 侧缓冲直到前端拉取，天然无丢消息。
 //!
-//! 本模块保留 WS 环回代码不变，提供一条并行的 Channel 传输路径，由前端按
-//! `VITE_TERMINAL_TRANSPORT`（"ws" | "channel"）选择，便于 A/B 验证。
+//! WS 环回链路（`local_terminal_ws` / `LocalTokenManager` / `get_local_ws_token`）
+//! 已整体删除，桌面本地终端输出只经本命令面：`subscribe_terminal_channel` 订阅、
+//! `terminal_channel_ack` 背压 ack、`unsubscribe_terminal_channel` 取消订阅。
 //!
 //! 协议复用 WS 同款 TB v3 帧 + 快照字节语义：`subscribe_terminal_channel`
 //! 返回值携带快照元数据（min_offset / snapshot_offset / history_bytes / client_id），
@@ -27,6 +28,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use crate::server::ws::terminal_ws::forward;
 use crate::session::{GlobalOutputManager, OutputFrame, RendererSource};
 use crate::system::config::AppConfig;
+use crate::system::spawn_with_error_boundary;
 use crate::Result;
 
 /// 快照订阅元数据（Channel 传输的 subscribe 返回值；字段与 WS 控制帧
@@ -79,20 +81,23 @@ pub async fn subscribe_terminal_channel(
     // my_gen=0 恒等于 generation，门控不生效（清理靠 abort）
     let generation = Arc::new(AtomicU64::new(0));
     // Channel 路径为桌面本地环回（无 SetMode 双速语义）：恒 realtime
-    let fwd_handle = tokio::spawn(forward::forward_loop(
-        output_rx,
-        out_tx,
-        Duration::from_millis(LOCAL_FLUSH_INTERVAL_MS),
-        config.terminal.max_buffer_size,
-        generation,
-        0,
-        std::sync::Arc::new(std::sync::atomic::AtomicU8::new(forward::MODE_REALTIME)),
-        config.terminal.batch_bytes,
-    ));
+    let fwd_handle = spawn_with_error_boundary(
+        "terminal_channel_forward",
+        forward::forward_loop(
+            output_rx,
+            out_tx,
+            Duration::from_millis(LOCAL_FLUSH_INTERVAL_MS),
+            config.terminal.max_buffer_size,
+            generation,
+            0,
+            std::sync::Arc::new(std::sync::atomic::AtomicU8::new(forward::MODE_REALTIME)),
+            config.terminal.batch_bytes,
+        ),
+    );
 
     // 消费：ForwardOutput → Channel 推送。退出（out_rx 关闭）仅 abort forward，
     // 不 unsubscribe（由前端显式取消；见模块文档）
-    tokio::spawn(async move {
+    spawn_with_error_boundary("terminal_channel_consumer", async move {
         let mut out_rx = out_rx;
         while let Some(out) = out_rx.recv().await {
             match out {
@@ -121,12 +126,7 @@ pub async fn subscribe_terminal_channel(
     let response = manager
         .subscribe(&session_id, &client_id, output_tx, None, None)
         .await
-        .ok_or_else(|| {
-            crate::AppError::NotFound(format!(
-                "subscribe_terminal_channel: 会话 {} 不存在",
-                session_id
-            ))
-        })?;
+        .ok_or_else(|| crate::AppError::NotFound(format!("subscribe_terminal_channel: 会话 {} 不存在", session_id)))?;
 
     Ok(ChannelSubscribeResponse {
         min_offset: response.min_offset,
@@ -142,9 +142,7 @@ pub async fn subscribe_terminal_channel(
 /// 整条链路自然回收，不误伤其他订阅。
 #[tauri::command]
 pub async fn unsubscribe_terminal_channel(session_id: String, client_id: String) -> Result<()> {
-    GlobalOutputManager::global()
-        .unsubscribe(&session_id, &client_id)
-        .await;
+    GlobalOutputManager::global().unsubscribe(&session_id, &client_id).await;
     Ok(())
 }
 

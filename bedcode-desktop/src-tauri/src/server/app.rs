@@ -10,18 +10,17 @@ use serde_json::json;
 use std::time::Duration;
 
 use crate::server::controllers::{
-        auth_controller, config_controller, file_controller, git_controller, plugin_controller,
-    session_controller,
+    auth_controller, config_controller, file_controller, git_controller, plugin_controller, session_controller,
 };
 use crate::server::ws::terminal_ws::TerminalWs;
 use crate::system::constants::server::{
-    API_HEALTH_PATH, BIND_ADDRESS, CORS_MAX_AGE_SECS, LOCAL_WS_TERMINAL_PATH, PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH,
+    API_HEALTH_PATH, BIND_ADDRESS, CORS_MAX_AGE_SECS, PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH,
 };
 
 /// WS 帧/消息大小上限（字节）
 ///
 /// max_size 同时限制 frame 和 message 大小，取两者中较大的值；
-/// 三条 WS 路由（session / local / event）共用同一计算
+/// 两条 WS 路由（session / event）共用同一计算
 fn ws_frame_limit() -> usize {
     let config = crate::system::config::AppConfig::global();
     std::cmp::max(
@@ -45,42 +44,6 @@ async fn session_terminal_ws(
         .peer_addr()
         .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
     let ws_actor = TerminalWs::new_for_session(addr, path.into_inner());
-    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
-        .frame_size(ws_frame_limit())
-        .start()
-}
-
-/// 本地 WS 握手端点 — 仅供桌面端 WebView 直连
-///
-/// 双重防线：
-/// 1. 环回地址校验：服务器绑定 0.0.0.0 供移动端访问，本地通道必须显式限定环回
-/// 2. 短期一次性令牌校验（?token=）：防止本机其他进程（恶意网页/脚本）连本地端口
-async fn local_terminal_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let addr = req
-        .peer_addr()
-        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    if !addr.ip().is_loopback() {
-        tracing::warn!(addr = %addr, "Local WS rejected: peer is not loopback");
-        return Ok(HttpResponse::Forbidden().finish());
-    }
-
-    // 校验短期一次性令牌（由 get_local_ws_token command 签发）
-    let token = req.query_string().split('&').find_map(|kv| {
-        let mut parts = kv.split('=');
-        match (parts.next(), parts.next()) {
-            (Some("token"), Some(v)) if !v.is_empty() => Some(v.to_string()),
-            _ => None,
-        }
-    });
-    match token {
-        Some(t) if crate::server::local_token::LocalTokenManager::global().verify_and_consume(&t) => {}
-        _ => {
-            tracing::warn!(addr = %addr, "Local WS rejected: missing or invalid token");
-            return Ok(HttpResponse::Forbidden().finish());
-        }
-    }
-
-    let ws_actor = TerminalWs::new_local(addr);
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(ws_frame_limit())
         .start()
@@ -198,9 +161,6 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
     cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
 
-    // 本地 WebSocket 终端端点（桌面端 WebView 直连，环回校验 + 免 JWT + 二进制帧）
-    cfg.route(LOCAL_WS_TERMINAL_PATH, web::get().to(local_terminal_ws));
-
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
 
@@ -259,10 +219,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 "/auth/biometric-verify",
                 web::post().to(auth_controller::biometric_verify),
             )
-            .route(
-                "/auth/biometric-bind",
-                web::post().to(auth_controller::biometric_bind),
-            )
+            .route("/auth/biometric-bind", web::post().to(auth_controller::biometric_bind))
             // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))

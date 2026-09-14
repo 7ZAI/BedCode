@@ -9,7 +9,6 @@ pub mod controllers;
 pub mod dtos;
 pub mod filter;
 pub mod link_crypto;
-pub mod local_token;
 pub mod message;
 pub mod metrics;
 pub mod middleware;
@@ -21,7 +20,5 @@ pub mod ws;
 pub use crate::enums::control::SessionControlAction;
 pub use client_info::ClientInfo;
 pub use connection_types::*;
-pub use filter::{
-    Direction, FilterContext, Rejection, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict,
-};
+pub use filter::{Direction, FilterContext, Rejection, TrafficChannel, TrafficFilter, TrafficFilterChain, Verdict};
 pub use message::*;

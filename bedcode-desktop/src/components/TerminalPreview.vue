@@ -162,7 +162,6 @@ import Button from '@/components/Button.vue'
 import Modal from '@/components/Modal.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
-import { useTerminalOutputStream } from '@/composables/useTerminalOutputStream'
 import { useTerminalOutputStreamChannel } from '@/composables/useTerminalOutputStreamChannel'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
@@ -441,13 +440,8 @@ function enqueueOutput(data: Uint8Array) {
 //   仅首次提示一次，后续重连/重订阅触发时仅后台日志记录，避免反复打扰
 let historyTruncatedNotified = false
 
-// 终端输出传输层开关：默认 "ws"（WebSocket 环回，现有行为）；
-// "channel"（Tauri Channel 原生 IPC，规避 WebKitGTK WS 缓冲溢出丢消息）。
-// 经 VITE_TERMINAL_TRANSPORT 环境变量选择，便于 A/B 验证两种方案并行。
-const TERMINAL_TRANSPORT: 'ws' | 'channel' =
-  import.meta.env.VITE_TERMINAL_TRANSPORT === 'channel' ? 'channel' : 'ws'
-
-// 两种传输层的公共选项（接口一致，onData 帧已通过 seq 连续性校验/重播去重）
+// 终端输出传输层：固定走 Tauri Channel（原生 IPC，规避 WebKitGTK WS 缓冲
+// 溢出丢消息）；WS 环回链路（/ws/terminal/local）已整体下线
 const terminalStreamOptions = {
   onData: ({ data }: { data: Uint8Array }) => {
     enqueueOutput(data)
@@ -478,10 +472,7 @@ const terminalStreamOptions = {
   },
 }
 
-const terminalStream =
-  TERMINAL_TRANSPORT === 'channel'
-    ? useTerminalOutputStreamChannel(terminalStreamOptions)
-    : useTerminalOutputStream(terminalStreamOptions)
+const terminalStream = useTerminalOutputStreamChannel(terminalStreamOptions)
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
