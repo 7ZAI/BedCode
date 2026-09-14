@@ -1264,11 +1264,7 @@ impl PluginHost {
             );
         } else if plugin_dir.exists() {
             std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
-                crate::AppError::Plugin(format!(
-                    "Failed to remove plugin dir '{}': {}",
-                    plugin_dir.display(),
-                    e
-                ))
+                crate::AppError::Plugin(format!("Failed to remove plugin dir '{}': {}", plugin_dir.display(), e))
             })?;
         }
 
