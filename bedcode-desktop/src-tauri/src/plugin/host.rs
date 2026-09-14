@@ -5,6 +5,7 @@
 //! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 WASM 模块（Rust+TS 插件）
 
 use crate::db::Database;
+use crate::plugin::approval::PluginApprovalStore;
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
@@ -1221,7 +1222,8 @@ impl PluginHost {
     /// 此时如实报错（数据与记录保持原样，插件仍可用）。
     /// 执行：停用（含 hooks 清理/总线退订/扩展点注销）→ 丢弃私有数据库连接 →
     /// 删除插件安装目录（含同目录 plugin.db）→ 移除运行时实例与记录 →
-    /// 清空插件存储（含 fs 授权/预授权路径）→ 清理持久化激活状态与限频簿记。
+    /// 清空插件存储（含 fs 授权 `fs_granted_paths` / 预授权 `preauth_paths`）→
+    /// 撤销该插件的持久化审批记录 → 清理持久化激活状态与限频簿记。
     pub async fn uninstall_plugin(&self, plugin_id: &str) -> crate::Result<()> {
         // 安装目录取自插件自身的 extension_path：内置插件在资源目录、用户插件在
         // app_data_dir/plugins，二者都是「插件自有的安装目录」，删除语义一致
@@ -1274,9 +1276,18 @@ impl PluginHost {
         self.wasm_plugins.write().await.remove(plugin_id);
         self.plugins.write().await.remove(plugin_id);
 
-        // 清理插件存储（插件私有数据）与持久化激活状态（该 id 记录随 map 移除）
+        // 清理插件存储（插件私有数据 + fs 授权 `fs_granted_paths` / 预授权 `preauth_paths`）
         if let Err(e) = self.storage.clear_all(plugin_id).await {
             tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
+        }
+        // 撤销持久化审批/授权记录：审批 map（批准权限集 + 内容哈希钉扎）按插件 id
+        // 存在 `__system__` 空间，位于插件自身存储行之外，clear_all 清不到
+        if let Err(e) = PluginApprovalStore::new(self.storage.clone()).revoke(plugin_id).await {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                error = %e,
+                "Failed to revoke plugin approval on uninstall"
+            );
         }
         self.persist_activation_state().await;
 
@@ -2000,11 +2011,21 @@ mod tests {
         host.plugins.write().await.insert(id.to_string(), plugin);
         host.storage.set(id, "k", json!("v")).await.unwrap();
 
+        // 审批/授权记录存在 `__system__` 空间的 plugin_approvals map（按插件 id 为 key）
+        let approvals = PluginApprovalStore::new(host.storage.clone());
+        approvals
+            .approve(id, &["storage".to_string()], "deadbeef", "1.0.0")
+            .await
+            .unwrap();
+        assert!(approvals.get(id).await.unwrap().is_some());
+
         host.uninstall_plugin(id).await.unwrap();
 
         assert!(host.get_plugin(id).await.is_none());
         assert!(!plugin_dir.exists());
         assert!(host.storage.get(id, "k").await.unwrap().is_none());
+        // 持久化授权随卸载一并撤销（不残留可复用的批准记录）
+        assert!(approvals.get(id).await.unwrap().is_none());
     }
 
     /// 异常 extension_path（目录名与插件 id 不一致）不删目录，其余数据照常清理

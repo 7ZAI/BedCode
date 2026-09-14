@@ -41,11 +41,25 @@
 
         <!-- ==================== ENABLED / DISABLED 分区 ==================== -->
         <template v-else>
-          <!-- ENABLED 分区 -->
+          <!-- ENABLED 分区（分区头承载「加载插件」入口：该分区渲染时它就是页面第一个标题，
+               入口固定在第一个标题右侧，不随分区内容增减跳动） -->
           <section v-if="enabledPlugins.length > 0" class="mb-6">
-            <h2 class="wb-section-title">
-              {{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}
-            </h2>
+            <div class="plugin-section-header flex items-center justify-between mb-2">
+              <h2 class="wb-section-title">
+                {{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}
+              </h2>
+              <button class="wb-btn-primary" :disabled="installing" @click="showInstallSheet = true">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.75"
+                    d="M12 4v7m0 0l-3-3m3 3l3-3M5 14v3a2 2 0 002 2h10a2 2 0 002-2v-3"
+                  />
+                </svg>
+                {{ $t('desktop.plugin.loadPlugin') }}
+              </button>
+            </div>
             <div
               class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden"
             >
@@ -159,13 +173,18 @@
             </div>
           </section>
 
-          <!-- DISABLED 分区（分区头常显：承载「加载插件」入口，无未启用插件时也可安装） -->
+          <!-- DISABLED 分区（分区头常显：无已启用插件时它成为页面第一个标题，承接同一入口） -->
           <section>
             <div class="plugin-section-header flex items-center justify-between mb-2">
               <h2 class="wb-section-title">
                 {{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}
               </h2>
-              <button class="wb-btn-primary" :disabled="installing" @click="showInstallSheet = true">
+              <button
+                v-if="enabledPlugins.length === 0"
+                class="wb-btn-primary"
+                :disabled="installing"
+                @click="showInstallSheet = true"
+              >
                 <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
                     stroke-linecap="round"
