@@ -215,29 +215,54 @@ export function useReceiving(context: PluginContext) {
   // ==================== 命令封装 ====================
 
   async function refresh(): Promise<void> {
-    try {
-      const [b, r, h] = await Promise.all([
-        context.commands.execute('file-transfer.list-batches', {}),
-        context.commands.execute('file-transfer.list-receiving', {}),
-        context.commands.execute('file-transfer.list-history', {}),
-      ])
-      applyBatches(Array.isArray(b) ? b : [])
-      applyReceiving(Array.isArray(r) ? r : [])
-      applyHistory(Array.isArray(h) ? h : [])
-    } catch (e) {
-      console.error('[File Transfer] receiving/history refresh failed:', e)
+    // 三个列表命令分别结算：单个失败不拖垮其余列表（部分成功也渲染）
+    const [b, r, h] = await Promise.allSettled([
+      context.commands.execute('file-transfer.list-batches', {}),
+      context.commands.execute('file-transfer.list-receiving', {}),
+      context.commands.execute('file-transfer.list-history', {}),
+    ])
+    if (b.status === 'fulfilled') applyBatches(Array.isArray(b.value) ? b.value : [])
+    if (r.status === 'fulfilled') applyReceiving(Array.isArray(r.value) ? r.value : [])
+    if (h.status === 'fulfilled') applyHistory(Array.isArray(h.value) ? h.value : [])
+    for (const [name, res] of [
+      ['list-batches', b],
+      ['list-receiving', r],
+      ['list-history', h],
+    ] as const) {
+      if (res.status === 'rejected') console.error(`[File Transfer] ${name} failed:`, res.reason)
     }
   }
 
-  async function approveBatch(batchId: string): Promise<void> {
-    await context.commands.execute('file-transfer.approve-batch', { batchId })
+  /** 批准批请求：成功返回 true；失败记日志返回 false（调用方据此决定是否开队列） */
+  async function approveBatch(batchId: string): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.approve-batch', { batchId })
+      return true
+    } catch (e) {
+      console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+      return false
+    }
   }
-  async function rejectBatch(batchId: string): Promise<void> {
-    await context.commands.execute('file-transfer.reject-batch', { batchId })
+  /** 拒绝批请求：成功返回 true；失败记日志返回 false */
+  async function rejectBatch(batchId: string): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.reject-batch', { batchId })
+      return true
+    } catch (e) {
+      console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
+      return false
+    }
   }
   async function cancelReceiving(sessionId: string): Promise<void> {
     await context.commands.execute('file-transfer.cancel-receiving', { sessionId })
   }
+  /**
+   * 清空历史（破坏性操作，插件侧只删终态条目）
+   *
+   * 命令成功后本地重拉三列表：以插件持久层为准刷新 UI，不依赖单一事件送达
+   * （事件丢失/组件重挂会表现为「点了没反应」）。失败时记录并**向上抛**——
+   * 宿主全局 unhandledrejection 处理器会把原因写进 frontend 日志，避免静默。
+   */
   async function clearHistory(): Promise<void> {
     await context.commands.execute('file-transfer.clear-history', {})
   }

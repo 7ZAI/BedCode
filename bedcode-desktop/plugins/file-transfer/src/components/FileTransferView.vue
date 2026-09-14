@@ -114,20 +114,14 @@ const peerNames = computed<Record<string, string>>(() => {
   return map
 })
 
-/** 批请求应答：批准接收后弹出传输队列展示接收任务（与上传/下载 handleUpload/handleDownload 一致） */
+/** 批请求应答：批准成功才弹出传输队列展示接收任务（失败无副作用，不误开队列） */
 function handleBatchApprove(batchId: string): void {
-  approveBatch(batchId)
-    .then(() => {
-      queueVisible.value = true
-    })
-    .catch((e: unknown) => {
-      console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
-    })
+  void approveBatch(batchId).then((ok) => {
+    if (ok) queueVisible.value = true
+  })
 }
 function handleBatchReject(batchId: string): void {
-  rejectBatch(batchId).catch((e: unknown) => {
-    console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
-  })
+  void rejectBatch(batchId)
 }
 
 const peerStatusLabel = computed(() => {

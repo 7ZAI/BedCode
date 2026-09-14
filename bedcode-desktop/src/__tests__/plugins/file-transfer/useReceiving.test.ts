@@ -157,6 +157,38 @@ describe('useReceiving orchestration', () => {
     expect(rec.history.value.map((h) => h.id)).toEqual(['h-1'])
   })
 
+  it('refresh renders the lists that succeeded even when one command fails (Bug 9)', async () => {
+    env.onCommand('file-transfer.list-batches', () => [
+      {
+        batchId: 'pb-1', nodeId: 'node-a', peerName: '设备-a',
+        direction: 'receive', status: 'pending',
+        files: [{ path: 'docs/a.pdf', size: 10 }], totalBytes: 10,
+        transferredBytes: 0, rateBps: 0, createdAtMs: 1, updatedAtMs: 2,
+      },
+    ])
+    env.onCommand('file-transfer.list-receiving', () => Promise.reject(new Error('wasm dead')))
+    env.onCommand('file-transfer.list-history', () => [
+      makeEntry({ batchId: 'h-1', status: 'completed' }),
+    ])
+    const rec = useReceiving(env.context)
+
+    await rec.refresh()
+
+    // 部分成功也渲染：失败命令只影响其对应列表，不拖垮其余
+    expect(rec.batches.value).toHaveLength(1)
+    expect(rec.receiving.value).toEqual([])
+    expect(rec.history.value).toHaveLength(1)
+  })
+
+  it('approve/reject report false when the command rejects (Bug 8)', async () => {
+    env.onCommand('file-transfer.approve-batch', () => Promise.reject(new Error('boom')))
+    env.onCommand('file-transfer.reject-batch', () => Promise.reject(new Error('boom')))
+    const rec = useReceiving(env.context)
+
+    await expect(rec.approveBatch('pb-1')).resolves.toBe(false)
+    await expect(rec.rejectBatch('pb-1')).resolves.toBe(false)
+  })
+
   it('approve / reject / cancel-receiving / clear-history route commands', async () => {
     env.onCommand('file-transfer.approve-batch', () => true)
     env.onCommand('file-transfer.reject-batch', () => true)

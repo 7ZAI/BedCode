@@ -375,36 +375,58 @@ pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
             }
         }
         ResumeMode::Live => {
-            if let Some(slot) = app.state::<PeerTransferState>().pause_slot_of(&batch_id) {
-                slot.send(PauseCmd::Resume).await;
+            let sent = match app.state::<PeerTransferState>().pause_slot_of(&batch_id) {
+                Some(slot) => slot.send(PauseCmd::Resume).await,
+                None => false,
+            };
+            if !sent {
+                // 会话已死（slot 存在但命令通道已关，或 slot 已被摘除）：
+                // 摘除残留 slot 并回落重新拨号续传，避免下次恢复仍误判活跃
+                app.state::<PeerTransferState>().unregister_pause(&batch_id);
+                tracing::debug!(batch_id = %batch_id, "resume live miss: session dead, redial fallback");
+                return Ok(resume_via_redial(&app, &batch_id).await);
             }
             set_running_status(&app, &batch_id).await;
             Ok(true)
         }
-        ResumeMode::Redial => {
-            let resumed = {
-                let state = app.state::<PeerTransferState>();
-                let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-                let Some(task) = inner.tasks.iter_mut().find(|t| t.dto.batch_id == batch_id) else {
-                    return Ok(false);
-                };
-                if task.sources.is_empty() {
-                    return Ok(false);
-                }
-                task.dto.status = "pending".to_string();
-                task.dto.rate_bps = 0.0;
-                task.dto.detail = None;
-                task.dto.reject_reason = None;
-                task.dto.updated_at_ms = now_ms();
-                true
-            };
-            if resumed {
-                publish(&app);
-                pump_send_queue(app.clone()).await;
-                tracing::info!(batch_id = %batch_id, "peer transfer resume queued");
-            }
-            Ok(resumed)
+        ResumeMode::Redial => Ok(resume_via_redial(&app, &batch_id).await),
+    }
+}
+
+/// 重新拨号恢复（Live 失败回落 / Redial 分支共用）：入队 pending，
+/// 由并发闸门重新拨号，接收端按已写偏移续传（断点真源在落盘侧）；
+/// 保留已传字节（引擎 Progress 首帧会重设为偏移）。
+async fn resume_via_redial(app: &AppHandle, batch_id: &str) -> bool {
+    let resumed = {
+        let state = app.state::<PeerTransferState>();
+        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
+        let Some(task) = inner.tasks.iter_mut().find(|t| t.dto.batch_id == batch_id) else {
+            return false;
+        };
+        if task.sources.is_empty() {
+            return false;
         }
+        task.dto.status = "pending".to_string();
+        task.dto.rate_bps = 0.0;
+        task.dto.detail = None;
+        task.dto.reject_reason = None;
+        task.dto.updated_at_ms = now_ms();
+        true
+    };
+    if resumed {
+        publish(app);
+        pump_send_queue(app.clone()).await;
+        tracing::info!(batch_id = %batch_id, "peer transfer resume queued");
+    }
+    resumed
+}
+
+/// 经 handler 取消服务侧拉取会话（本端在对端拉取中供流）：会话按 serve
+/// batch_id（= 传输任务行 ID）寻址，命中即写 Cancel 帧并停供流。
+async fn cancel_serve_session(app: &AppHandle, batch_id: &str) -> bool {
+    match super::peer_receive::handler_and_config(app).await {
+        Some((handler, _)) => handler.cancel_serve_transfer(batch_id),
+        None => false,
     }
 }
 
@@ -740,21 +762,28 @@ pub async fn retry_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
                 "peer transfer retry sources unavailable (task created before restart): {batch_id}"
             )));
         }
-        // 置排队态，由并发闸门在槽位空出时启动
-        task.dto.status = "pending".to_string();
-        task.dto.transferred_bytes = 0;
-        task.dto.rate_bps = 0.0;
-        task.dto.detail = None;
-        task.dto.reject_reason = None;
-        task.dto.updated_at_ms = now_ms();
-        task.encrypt = None; // 重试加密回落当前全局开关
-        task.dto.clone()
+        // 置排队态，由并发闸门在槽位空出时启动；
+        // 保留 transferred_bytes——接收端 .part 断点是真源，引擎 Progress
+        // 首帧会重设为偏移；重置会在续传前造成 UI 0% 视觉断层
+        prepare_retry_task(task)
     };
 
     publish(&app);
     pump_send_queue(app.clone()).await;
     tracing::info!(batch_id = %batch_id, "peer transfer retry queued");
     Ok(dto)
+}
+
+/// 重试前重置（纯函数）：置排队态、清速率/明细、回落加密开关；
+/// 保留已传字节（断点真源在接收端 .part，引擎 Progress 首帧会重设为偏移）
+fn prepare_retry_task(task: &mut SendTask) -> PeerTransferDto {
+    task.dto.status = "pending".to_string();
+    task.dto.rate_bps = 0.0;
+    task.dto.detail = None;
+    task.dto.reject_reason = None;
+    task.dto.updated_at_ms = now_ms();
+    task.encrypt = None; // 重试加密回落当前全局开关
+    task.dto.clone()
 }
 
 // ==================== 会话驱动 ====================
@@ -789,6 +818,11 @@ fn drive_send_session(
             let conn: Connection = match dial_for_send(&node, &record).await {
                 Ok(conn) => conn,
                 Err(detail) => {
+                    // 摘除暂停句柄：dial 失败不进入事件循环，Terminal 分支的
+                    // unregister_pause 不会执行；残留 slot 会让后续 resume 误判活跃
+                    session_app
+                        .state::<PeerTransferState>()
+                        .unregister_pause(&session_batch_id);
                     settle_failed(&session_app, &session_batch_id, &detail, epoch).await;
                     return;
                 }
@@ -856,15 +890,27 @@ async fn set_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
     let state = app.state::<PeerTransferState>();
     {
         let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-        if let Some(task) = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
-        {
-            task.dto.status = if paused { "paused".to_string() } else { "running".to_string() };
-            task.dto.rate_bps = 0.0;
-            task.dto.updated_at_ms = now_ms();
+        let Some(task) = inner.tasks.iter_mut().find(|t| t.dto.batch_id == batch_id) else {
+            tracing::debug!(batch_id = %batch_id, "set_pause_status: task not found, ignored");
+            return;
+        };
+        if task.dto.status != "running" {
+            // 对端 Pause/Resume 帧迟到/状态错乱：尊重本端状态，不覆盖终态/暂停意图
+            tracing::debug!(
+                batch_id = %batch_id,
+                current = %task.dto.status,
+                paused,
+                "set_pause_status: task not in running state, ignored"
+            );
+            return;
         }
+        task.dto.status = if paused {
+            "paused".to_string()
+        } else {
+            "running".to_string()
+        };
+        task.dto.rate_bps = 0.0;
+        task.dto.updated_at_ms = now_ms();
     }
     publish(app);
 }
@@ -1473,6 +1519,28 @@ mod tests {
         assert!(retryable("rejected"));
         assert!(!retryable("running"));
         assert!(!retryable("completed"));
+    }
+
+    /// Bug 5 回归：重试重置保留 transferred_bytes（断点真源在接收端 .part，
+    /// 引擎 Progress 首帧会重设为偏移；重置会导致续传前 UI 0% 视觉断层）
+    #[test]
+    fn prepare_retry_task_keeps_transferred_bytes() {
+        let mut task = SendTask {
+            dto: dto("failed", 42),
+            sources: Vec::new(),
+            encrypt: Some(true),
+        };
+        task.dto.transferred_bytes = 5000;
+        let prepared = prepare_retry_task(&mut task);
+        assert_eq!(prepared.status, "pending");
+        assert_eq!(
+            prepared.transferred_bytes, 5000,
+            "transferred must be kept for resumable retry"
+        );
+        assert_eq!(prepared.rate_bps, 0.0);
+        assert!(prepared.detail.is_none());
+        assert!(prepared.reject_reason.is_none());
+        assert!(task.encrypt.is_none(), "retry falls back to global encryption");
     }
 
     #[test]
