@@ -17,7 +17,7 @@
 
 ## 架构
 
-> 📊 架构图：[architecture.html](./docs/architecture.html)
+> 📊 架构图：[plugin-ai-chatbox-mobile.html](../../../docs/diagrams/plugin-ai-chatbox-mobile.html)
 
 - **Rust WASM 层**：HTTP 请求透传（`client.rs`，协议方言知识在前端）、JSONL 对话日志落盘（`store.rs`）、命令路由（`commands.rs`）、数据目录集中授权（宿主 `fs_auth` 弹窗）
 - **TS 前端**：协议适配层 `src/adapters/`（openai / anthropic / gemini 方言的请求构建与 SSE 解析，`registry.ts` 按 `apiStyle` 分派）、对话 UI（`ChatView` + `ConversationList`）、供应商配置（`ProviderConfigPage` / `ProviderForm` / `ProviderAvatar` / `ModelListEditor`）、设置弹层（`PluginSettingsSheet`）

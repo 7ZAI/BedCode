@@ -18,7 +18,7 @@
 
 ## 架构
 
-> 📊 架构图：[architecture.html](./docs/architecture.html)
+> 📊 架构图：[plugin-auto-task-mobile.html](../../../docs/diagrams/plugin-auto-task-mobile.html)
 
 - **Rust WASM 层**：`manifest()` 从 `plugin.json` 读取（单一事实来源）；`activate` / `deactivate` 仅日志；`invoke_command` 显式拒绝所有命令（业务走 TS/HTTP）
 - **TS 前端**：`index.ts` 入口（i18n 注册、面板挂载、工具箱注册、会话/连接 `watch`、工具栏可见性）；`api.ts` 业务 API 封装；`AutoTaskToolboxView` / `AutoTaskPanelHost`（队列面板）、`ScheduledJobsTab`（定时任务）、`TaskHistoryTab`（任务记录）、composables（`useScheduledJobs` / `useTaskHistory`）
