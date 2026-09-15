@@ -1,0 +1,227 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "自动任务自动化链路：桌面 WASM 调度 → Agent 执行 → 移动端同步",
+    "locale": "zh-CN",
+    "viewBox": [960, 720],
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    { "label": "桌面宿主" },
+    { "label": "WASM 插件调度" },
+    { "label": "Agent 执行 / 事件总线" },
+    { "label": "移动端" }
+  ],
+  "nodes": [
+    {
+      "id": "http_proxy",
+      "type": "backend",
+      "label": "HTTP 代理",
+      "sublabel": "PluginRuntimeManager",
+      "stage": 0,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "desktop_ui",
+      "type": "frontend",
+      "label": "桌面端 UI",
+      "sublabel": "AutoTaskModal",
+      "stage": 0,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "host_timer",
+      "type": "backend",
+      "label": "宿主定时器",
+      "sublabel": "scheduler-tick 1s",
+      "stage": 0,
+      "row": 3,
+      "width": 150
+    },
+    {
+      "id": "plugin_core",
+      "type": "backend",
+      "label": "WASM 插件内核",
+      "sublabel": "queue · scheduled · state",
+      "stage": 1,
+      "row": 2,
+      "width": 172
+    },
+    {
+      "id": "event_bus",
+      "type": "messagebus",
+      "label": "宿主事件总线",
+      "sublabel": "SyncEventHandler",
+      "stage": 2,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "agent_pty",
+      "type": "external",
+      "label": "PTY Agent 会话",
+      "sublabel": "shell.clear + prompt",
+      "stage": 2,
+      "row": 2,
+      "width": 150
+    },
+    {
+      "id": "hook_script",
+      "type": "external",
+      "label": "Agent Hook 脚本",
+      "sublabel": "claude · pi · opencode · codex",
+      "stage": 2,
+      "row": 3,
+      "width": 150
+    },
+    {
+      "id": "mobile_rust",
+      "type": "backend",
+      "label": "移动端 Rust",
+      "sublabel": "WsEventHandler",
+      "stage": 3,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "mobile_ui",
+      "type": "frontend",
+      "label": "移动端工具箱 UI",
+      "sublabel": "AutoTaskToolboxView",
+      "stage": 3,
+      "row": 3,
+      "width": 150
+    }
+  ],
+  "flows": [
+    {
+      "id": "desktop_enqueue",
+      "from": "desktop_ui",
+      "to": "http_proxy",
+      "label": "入队请求",
+      "classification": "c-trigger",
+      "labelAt": [100, 214]
+    },
+    {
+      "id": "http_proxy_dispatch",
+      "from": "http_proxy",
+      "to": "plugin_core",
+      "label": "命令派发",
+      "classification": "c-trigger",
+      "labelAt": [207.5, 330]
+    },
+    {
+      "id": "scheduler_tick",
+      "from": "host_timer",
+      "to": "plugin_core",
+      "label": "scheduler-tick",
+      "classification": "c-trigger",
+      "fromSide": "right",
+      "toSide": "left",
+      "via": [[195, 499], [195, 385]],
+      "labelAt": [195, 442]
+    },
+    {
+      "id": "emit_event",
+      "from": "plugin_core",
+      "to": "event_bus",
+      "label": "emit_event",
+      "classification": "c-sync",
+      "fromSide": "top",
+      "toSide": "bottom",
+      "via": [[315, 214], [530, 214]],
+      "labelAt": [422.5, 214]
+    },
+    {
+      "id": "pty_write",
+      "from": "plugin_core",
+      "to": "agent_pty",
+      "label": "pty_write",
+      "classification": "c-execute",
+      "labelAt": [428, 340]
+    },
+    {
+      "id": "hook_callback",
+      "from": "agent_pty",
+      "to": "hook_script",
+      "label": "钩子回调",
+      "classification": "c-execute",
+      "labelAt": [530, 442]
+    },
+    {
+      "id": "hook_status_back",
+      "from": "hook_script",
+      "to": "plugin_core",
+      "label": "POST task-status",
+      "classification": "c-execute",
+      "fromSide": "bottom",
+      "toSide": "bottom",
+      "via": [[530, 556], [315, 556]],
+      "labelAt": [422.5, 556]
+    },
+    {
+      "id": "ws_broadcast",
+      "from": "event_bus",
+      "to": "mobile_rust",
+      "label": "WS SyncData",
+      "classification": "c-sync",
+      "labelAt": [637.5, 214]
+    },
+    {
+      "id": "app_dispatch",
+      "from": "mobile_rust",
+      "to": "mobile_ui",
+      "label": "app.emit",
+      "classification": "c-sync",
+      "labelAt": [745, 385]
+    },
+    {
+      "id": "mobile_read",
+      "from": "mobile_ui",
+      "to": "http_proxy",
+      "label": "HTTP 重拉",
+      "classification": "c-sync",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[880, 499], [880, 110], [100, 110]],
+      "labelAt": [880, 300]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "调度器：终态推送驱动",
+      "items": [
+        "plugins/auto-task/rust/src/queue.rs::try_dispatch_next",
+        "waiting→running 迁移、队列空→非空、终态推送（completed/interrupted）三处触发；延迟 clear 按 1/2/3s 递增窗口后才下发 prompt。"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "状态迁移：乱序与幂等保护",
+      "items": [
+        "plugins/auto-task/rust/src/state.rs::handle_update_task_status",
+        "event_time 丢弃过期事件；终态 completed/interrupted 不可被 running/waiting 回退；重复 POST 去重。"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "跨端广播：宿主事件总线",
+      "items": [
+        "src-tauri/src/events/sync_handler.rs；bedcode-mobile/src/router/event.rs",
+        "WASM emit_event → SyncPayload → WS Message::sync_data；移动端 app.emit 转为 ws_sync_task_{queue,status,scheduled}_changed。"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "移动端：零本地队列状态",
+      "items": [
+        "docs/adr/0012-mobile-auto-task-toolbox-read-view.md；useTaskHistory.ts",
+        "三个 WS 事件 500ms 去抖后全量 HTTP 重拉；下拉刷新与重连重拉兜底断线期丢失。"
+      ]
+    }
+  ]
+}

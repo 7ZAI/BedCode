@@ -316,6 +316,30 @@ pub async fn plugin_fs_auth_respond(
 
 // ==================== Tests ====================
 
+/// 从本地 zip 分发包安装插件（dev 合入）
+///
+/// 仅接收已下载的本地文件路径：解压与身份/路径校验在 Rust 端完成
+#[tauri::command]
+pub async fn plugin_install_from_file(path: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<String> {
+    tracing::info!("[API] plugin_install_from_file: {}", path);
+    let result = plugin_host.install_from_zip(&path).await;
+    if let Err(ref e) = result {
+        tracing::error!(error = %e, "[API] plugin_install_from_file failed");
+    }
+    result
+}
+
+/// 卸载插件（所有来源；要求插件未启用，dev 合入）
+#[tauri::command]
+pub async fn plugin_uninstall(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_uninstall");
+    let result = plugin_host.uninstall_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_uninstall failed");
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     //! 本模块（Tauri commands 桥）大部分不可单测的原因：

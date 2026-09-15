@@ -175,4 +175,48 @@ describe('pluginLoader.loadAll 启动加载门禁', () => {
     expect(degradedWarn).toBeTruthy()
     expect(degradedWarn!).toContain(DEGRADED_REASON)
   })
+
+  it('isEnabled=false 意图门禁：跳过前端加载（spec §3.5 核心裁决）', async () => {
+    // 同一批插件中：启用者放行、未启用者跳过——意图（持久化）优先于运行时状态
+    const enabledMap: Record<string, boolean> = {
+      'com.bedcode.gate-on': true,
+      'com.bedcode.gate-off': false,
+      'com.bedcode.gate-off-loaded': false,
+    }
+
+    mockInvoke.mockImplementation((cmd: string, args: any) => {
+      if (cmd === 'plugin_list_loaded') {
+        return Promise.resolve([
+          // 已激活且启用 → 放行
+          makePluginInfo({ id: 'com.bedcode.gate-on', name: 'Gate On', state: { state: 'Activated' } }),
+          // 已激活但意图关闭 → 跳过（即使运行时是 Activated）
+          makePluginInfo({ id: 'com.bedcode.gate-off', name: 'Gate Off', state: { state: 'Activated' } }),
+          // Loaded 但意图关闭 → 跳过（意图优先：重启不自动挂载）
+          makePluginInfo({ id: 'com.bedcode.gate-off-loaded', name: 'Gate Off Loaded', state: { state: 'Loaded' } }),
+        ])
+      }
+      if (cmd === 'plugin_is_enabled') {
+        const pid = (args as { pluginId?: string })?.pluginId ?? ''
+        return Promise.resolve(enabledMap[pid] ?? true)
+      }
+      return Promise.resolve(undefined)
+    })
+
+    await pluginLoader.loadAll()
+    await new Promise((r) => setTimeout(r, 0))
+    await new Promise((r) => setTimeout(r, 0))
+
+    // 仅启用插件走到 loadFrontend（vitest 内动态 import 必失败 → markError 1 次）
+    expect(markErrorCount('com.bedcode.gate-on')).toBe(1)
+    // 意图关闭者零加载尝试
+    expect(markErrorCount('com.bedcode.gate-off')).toBe(0)
+    expect(markErrorCount('com.bedcode.gate-off-loaded')).toBe(0)
+
+    // plugin_is_enabled 按插件 id 查询（参数契约）
+    const enabledCalls = mockInvoke.mock.calls
+      .filter(([c]) => c === 'plugin_is_enabled')
+      .map(([, a]) => (a as { pluginId?: string })?.pluginId)
+    expect(enabledCalls).toContain('com.bedcode.gate-off')
+    expect(enabledCalls).toContain('com.bedcode.gate-off-loaded')
+  })
 })

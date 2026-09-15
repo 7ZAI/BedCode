@@ -38,6 +38,7 @@ use bedcode_lib::server::app::start_http_server;
 use bedcode_lib::server::message::{AuthPayload, AuthStage, Message, SessionControlAction, SessionControlPayload};
 use bedcode_lib::server::services::pairing_service::PairingService;
 use bedcode_lib::session::{SessionConfigManager, SessionManager};
+use bedcode_lib::system::app_context::AppContext;
 use bedcode_lib::system::app_context::AppContextBuilder;
 use bedcode_lib::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
 use bedcode_lib::system::info::SystemInfo;
@@ -100,7 +101,11 @@ async fn init_test_app_context() -> String {
 
         // 预置会话配置：环境按宿主机平台选择（Windows → PowerShell / Linux → bash），
         // 启动命令输出固定 marker（区分「环境就绪但输入链路断」与「PTY 起不来」两种失败形态）
-        let test_env = if cfg!(target_os = "windows") { "windows" } else { "linux" };
+        let test_env = if cfg!(target_os = "windows") {
+            "windows"
+        } else {
+            "linux"
+        };
         let config = SessionConfig::new(
             "itest-pty".to_string(),
             test_env.to_string(),
@@ -118,6 +123,7 @@ async fn init_test_app_context() -> String {
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
+                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
                 session_manager.clone(),
                 config_manager.clone(),
                 None, // 无头/测试上下文无 AppHandle
@@ -485,10 +491,10 @@ async fn pty_session_chain_flow() {
         .expect("send input frame failed");
 
     // 2d. 轮询 + 宽容超时：PowerShell 启动与回显时序非确定，断言「最终包含」而非即时到达
-    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(20)).await;
+    let collected = collect_terminal_output_until(&mut stream_t, &marker, Duration::from_secs(10)).await;
     assert!(
         collected.contains(&marker),
-        "PTY echo output not observed within 20s; collected so far: {collected:?} \
+        "PTY echo output not observed within 10s; collected so far: {collected:?} \
          （空输出 = 环境问题（powershell 未启动/未读到输出）；有启动输出无 echo = 输入链路缺陷）"
     );
 
@@ -578,6 +584,60 @@ async fn pty_session_chain_flow() {
         }
         other => panic!("expected Error(AUTH_REQUIRED) response, got: {other:?}"),
     }
+
+    // ==================== 场景 5：restart 后输出链路仍可用（回归：重启丢输出管理器注册） ====================
+    // 前端「输入新任务」→ restart_session：remove_session 会注销 GlobalOutputManager，
+    // 重启必须重新注册输出管理器，否则订阅返回 error(SESSION_NOT_FOUND)、PTY 输出
+    // 被 on_output 以 "session not found" 丢弃（桌面端打开终端窗口空白）。
+    // 回归断言：restart 后订阅拿到 subscribe_ok（而非 SESSION_NOT_FOUND），
+    // 写入 echo 能收到输出（输出链路真实往返）。
+    let manager = AppContext::global().session_manager();
+    let restarted_id = manager
+        .restart_session(&session_id)
+        .await
+        .expect("restart_session must succeed");
+    assert_eq!(restarted_id, session_id, "restart must keep same session id");
+
+    // 重启后重新订阅终端通道：auth → subscribe → subscribe_ok
+    let (mut sink_r, mut stream_r, _addr_r) = connect_ws(port, &format!("/ws/terminal/session/{session_id}")).await;
+    sink_r
+        .send(WsMsg::Text(format!(r#"{{"type":"auth","token":"{token}"}}"#).into()))
+        .await
+        .expect("send auth frame failed");
+    let auth_ok = recv_frame_json(&mut stream_r).await;
+    assert_eq!(auth_ok["type"], "auth_ok", "restarted session route must auth with JWT");
+
+    sink_r
+        .send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
+        .await
+        .expect("send subscribe frame failed");
+    // subscribe_ok 或 error(SESSION_NOT_FOUND)：修复前必现后者，回归断言不许出现
+    let sub_resp = recv_frame_json(&mut stream_r).await;
+    assert_eq!(
+        sub_resp["type"], "subscribe_ok",
+        "restarted session must subscribe (regression: SESSION_NOT_FOUND = output manager \
+         not re-registered), got: {sub_resp}"
+    );
+
+    // 写入 echo → 轮询收到回显（输出链路真实往返）
+    let marker2 = format!("BEDCODE_PTY_RESTART_ECHO_{session_id}");
+    let input_b64 = base64::engine::general_purpose::STANDARD.encode(format!("echo {marker2}{line_end}").as_bytes());
+    sink_r
+        .send(WsMsg::Text(
+            format!(r#"{{"type":"input","data":"{input_b64}"}}"#).into(),
+        ))
+        .await
+        .expect("send input frame failed");
+    let collected2 = collect_terminal_output_until(&mut stream_r, &marker2, Duration::from_secs(10)).await;
+    assert!(
+        collected2.contains(&marker2),
+        "restarted session PTY echo not observed within 10s; collected: {collected2:?}"
+    );
+
+    let _ = sink_r.send(WsMsg::Close(None)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), stream_r.next()).await;
+    drop(sink_r);
+    drop(stream_r);
 
     // ==================== 收尾：显式关闭连接 + 优雅停机 + 清理 ====================
 

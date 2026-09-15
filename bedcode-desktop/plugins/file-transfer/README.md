@@ -19,7 +19,7 @@
 侧边栏「文件传输」→ 刷新发现设备 → 选择在线对端（首次需完成 consent 确认）→ 浏览远程目录拉取或本机选文件直发 → 加入传输队列；下载目录、并发数、接收策略与加密开关在设置面板调整。
 
 ## 架构
-> 📊 架构图：[architecture.html](./docs/architecture.html)
+> 📊 架构图：[plugin-file-transfer-desktop.html](../../../docs/diagrams/plugin-file-transfer-desktop.html)
 
 - **Rust WASM 层**（业务自持，宿主仅提供无业务语义的引擎原语）：
   - `lib.rs` — WASM 入口 + 命令路由 + `on_message` 事件编排（`mdns:*` 透传、`peer:consent` / `peer:connection` / `peer:transfer` / `peer:receive` 派发）

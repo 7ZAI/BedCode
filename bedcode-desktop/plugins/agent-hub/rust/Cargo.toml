@@ -1,0 +1,21 @@
+[package]
+name = "bedcode-plugin-agent-hub"
+version = "0.1.0"
+description = "Agent Hub Plugin — Agent CLI 统一管理台"
+authors = ["BedCode"]
+edition = "2021"
+
+[features]
+default = ["native"]
+native = []
+wasm = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../../../packages/plugin-sdk-desktop/rust", features = ["wasm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+tracing = "0.1"

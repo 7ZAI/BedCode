@@ -173,10 +173,7 @@ mod tests {
         }
 
         // 携带加密协商的 auth 帧
-        let frame = parse_client_frame(
-            r#"{"type":"auth","token":"t","crypto":{"v":1,"ek":"QUJDREVG"}}"#,
-        )
-        .unwrap();
+        let frame = parse_client_frame(r#"{"type":"auth","token":"t","crypto":{"v":1,"ek":"QUJDREVG"}}"#).unwrap();
         match frame {
             ClientFrame::Auth { token, crypto } => {
                 assert_eq!(token, "t");
@@ -196,14 +193,24 @@ mod tests {
 
         // 带字节锚点（TB v3 快照截取）
         let frame = parse_client_frame(r#"{"type":"subscribe","from_offset":4096}"#).unwrap();
-        assert!(matches!(frame, ClientFrame::Subscribe { from_offset: Some(4096) }));
+        assert!(matches!(
+            frame,
+            ClientFrame::Subscribe {
+                from_offset: Some(4096)
+            }
+        ));
     }
 
     #[test]
     fn parse_set_mode_frame() {
         // realtime（进终端页，读即传）
         let frame = parse_client_frame(r#"{"type":"mode","mode":"realtime"}"#).unwrap();
-        assert!(matches!(frame, ClientFrame::SetMode { mode: WatchMode::Realtime }));
+        assert!(matches!(
+            frame,
+            ClientFrame::SetMode {
+                mode: WatchMode::Realtime
+            }
+        ));
 
         // batch（退出终端页但会话未停，满 batch_bytes 才转发）
         let frame = parse_client_frame(r#"{"type":"mode","mode":"batch"}"#).unwrap();
@@ -276,15 +283,17 @@ mod tests {
     #[test]
     fn serialize_auth_ok_and_error() {
         // 无协商：crypto 省略，老客户端报文形状不变
-        let plain: serde_json::Value =
-            serde_json::from_str(&ServerFrame::AuthOk { crypto: None }.to_json()).unwrap();
+        let plain: serde_json::Value = serde_json::from_str(&ServerFrame::AuthOk { crypto: None }.to_json()).unwrap();
         assert_eq!(plain["type"], "auth_ok");
         assert!(plain.get("crypto").is_none());
 
         // 带协商回执
         let negotiated: serde_json::Value = serde_json::from_str(
             &ServerFrame::AuthOk {
-                crypto: Some(CryptoEcho { v: 1, ek: "QUJDREVG".to_string() }),
+                crypto: Some(CryptoEcho {
+                    v: 1,
+                    ek: "QUJDREVG".to_string(),
+                }),
             }
             .to_json(),
         )

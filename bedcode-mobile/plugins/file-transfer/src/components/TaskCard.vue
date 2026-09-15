@@ -56,10 +56,15 @@ const progressWidth = computed(() => {
   return Math.max(0, Math.min(100, props.progress))
 })
 
-/** 进度条 class：indeterminate 走 fv2-progress-indeterminate 动画 */
+/**
+ * 进度条 class：底色 class 恒生效，indeterminate 只叠加呼吸动画
+ *
+ * 历史实现把 indeterminate 与底色二选一，导致不确定态下填充无背景色——
+ * 视觉上只剩灰色轨道，被读成「进度条是灰的」。
+ */
 const progressBarClass = computed(() => {
-  if (props.indeterminate) return 'fv2-progress-indeterminate'
-  return props.progressClass ?? 'ft-progress-active'
+  const colorClass = props.progressClass ?? 'ft-progress-active'
+  return props.indeterminate ? [colorClass, 'fv2-progress-indeterminate'] : colorClass
 })
 
 function onAction(kind: TaskAction['kind']): void {

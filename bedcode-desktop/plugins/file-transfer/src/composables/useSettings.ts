@@ -27,6 +27,8 @@ export function useSettings(context: PluginContext) {
   /** roots 带条目 id（宿主 DTO），与 Settings.roots（展示名列表）并行维护 */
   const rootItems = ref<RootItem[]>([]) as Ref<RootItem[]>
   const loading = ref(false)
+  /** 设置加载失败（get-settings 抛错时置位；SettingsPanel 渲染错误提示 + 重试） */
+  const loadError = ref(false)
 
   /** 拉取设置并归一化 */
   async function load(): Promise<void> {
@@ -34,6 +36,7 @@ export function useSettings(context: PluginContext) {
     try {
       const r = await context.commands.execute('file-transfer.get-settings', {})
       if (r) {
+        // policyMode / encryption_enabled 为兼容旧版后端的死 fallback（当前只返 snake_case）
         const policy = r.policy_mode ?? r.policyMode ?? 'ask'
         const normalized =
           policy === 'always_accept' ? 'accept' : policy === 'always_deny' ? 'reject' : 'ask'
@@ -51,13 +54,16 @@ export function useSettings(context: PluginContext) {
           approvalTimeoutSec:
             typeof r.ask_timeout_sec === 'number'
               ? r.ask_timeout_sec
-              : (typeof r.askTimeoutSecs === 'number' ? r.askTimeoutSecs : 60),
+              : (typeof r.askTimeoutSec === 'number' ? r.askTimeoutSec : 60),
+          // encryption_enabled 为旧版后端兼容 fallback（当前只返 encryption）
           encryption: r.encryption ?? r.encryption_enabled ?? false,
           concurrency:
             typeof r.concurrency === 'number' ? Math.min(8, Math.max(1, Math.round(r.concurrency))) : 3,
         }
       }
+      loadError.value = false
     } catch (e) {
+      loadError.value = true
       console.error('[File Transfer] get-settings failed:', e)
     } finally {
       loading.value = false
@@ -145,6 +151,7 @@ export function useSettings(context: PluginContext) {
     settings,
     rootItems,
     loading,
+    loadError,
     hasRoots,
     load,
     addRoot,

@@ -60,14 +60,21 @@ describe('启动任务注册表', () => {
   })
 
   it('重复打点幂等:首打点时刻不被覆盖', async () => {
-    const m = await loadModule()
-    const id = SPLASH_CONFIG.lines[0].id
-    m.completeStartupTask(id)
-    const first = m.taskCompletedAt[id]
-    expect(first).not.toBeNull()
-    await new Promise((r) => setTimeout(r, 3))
-    m.completeStartupTask(id)
-    expect(m.taskCompletedAt[id]).toBe(first)
+    vi.useFakeTimers()
+    try {
+      const m = await loadModule()
+      const id = SPLASH_CONFIG.lines[0].id
+      m.completeStartupTask(id)
+      const first = m.taskCompletedAt[id]
+      expect(first).not.toBeNull()
+      // 推进虚拟时钟 1 分钟：若实现用新时间戳覆盖，此断言即失败
+      vi.setSystemTime(vi.getMockedSystemTime()!.getTime() + 60_000)
+      await vi.advanceTimersByTimeAsync(0)
+      m.completeStartupTask(id)
+      expect(m.taskCompletedAt[id]).toBe(first)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('全部任务完成后 startupReady 为真且 readyAt 非空', async () => {

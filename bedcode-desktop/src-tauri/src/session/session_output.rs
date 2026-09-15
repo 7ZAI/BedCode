@@ -7,9 +7,9 @@
 //! 帧头"第几个事件" → "累计第几个字节"；游标/缺口/去重/ack/快照收敛到
 //! `[start_offset, end_offset)` 区间运算。
 
-use bytes::Bytes;
 use crate::session::RendererSource;
 use crate::system::config::AppConfig;
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -236,12 +236,7 @@ impl UnifiedOutputQueue {
                 });
             }
         }
-        (
-            events,
-            self.min_offset,
-            self.max_offset,
-            self.total_bytes,
-        )
+        (events, self.min_offset, self.max_offset, self.total_bytes)
     }
 
     /// 截取 `[from, to)` 字节区间（HTTP 一次性历史）；越界端自动收敛到驻留范围，
@@ -325,6 +320,21 @@ const BACKPRESSURE_RESUME_BYTES: u64 = 8 * 1024;
 /// unacked 保持近满态触发暂停（保守），ack 弹出后自动恢复精确记账
 const UNACKED_FIFO_CAP: usize = 8192;
 
+// ==================== 链路调试节流（终端字节对账） ====================
+
+/// 产出统计打点间隔（有新产出才打；不打逐帧日志，防输出风暴期日志淹没链路）
+const PRODUCE_STATS_INTERVAL_MS: u64 = 5000;
+/// ack 推进打点间隔（ack 本身已被移动端 64KB/250ms 节流，多端并发时收敛到 1s）
+const ACK_LOG_INTERVAL_MS: u64 = 1000;
+
+/// 当前 Unix 毫秒（日志节流打点用）
+fn system_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 impl SubscriberState {
     pub fn new(client_id: String, send_queue: mpsc::Sender<OutputFrame>) -> Self {
         Self {
@@ -396,6 +406,13 @@ pub struct SessionOutputManager {
     /// 与 offset 顺序错乱（60 先于 59 到达 forward_loop）→ 帧 offset 错乱/空洞 →
     /// 前端误判 gap。串行后 offset 顺序 = 广播顺序，根治该竞态。
     output_serial: tokio::sync::Mutex<()>,
+    // ==================== 链路调试统计（终端字节对账） ====================
+    /// 上次产出统计打点时刻（PRODUCE_STATS_INTERVAL_MS 节流）
+    last_produce_stats_ms: AtomicU64,
+    /// 累计产出事件数（对账用）
+    produced_events: AtomicU64,
+    /// 上次 ack 推进打点时刻（ACK_LOG_INTERVAL_MS 节流）
+    last_ack_log_ms: AtomicU64,
 }
 
 impl SessionOutputManager {
@@ -408,6 +425,9 @@ impl SessionOutputManager {
             unacked_fifo: std::sync::Mutex::new(std::collections::VecDeque::new()),
             paused: AtomicBool::new(false),
             output_serial: tokio::sync::Mutex::new(()),
+            last_produce_stats_ms: AtomicU64::new(0),
+            produced_events: AtomicU64::new(0),
+            last_ack_log_ms: AtomicU64::new(0),
         }
     }
 
@@ -438,11 +458,12 @@ impl SessionOutputManager {
         // 按会话连续后缺口检测只在真实丢帧（背压 / 占位 pending 溢出）时命中，
         // 由重订阅 → 按游标锚点重播 → 按游标裁过去重自愈补回
         let mut event = event;
-        {
+        let (queue_min, queue_max, queue_bytes) = {
             let mut queue = self.output_queue.write().await;
             event.start_offset = queue.max_offset();
             event = queue.push(event);
-        }
+            (queue.min_offset(), queue.max_offset(), queue.history_bytes())
+        };
 
         // 背压记账：产出字节累加 + FIFO 登记（ack 按序弹出精减）。FIFO 满表示
         // ack 严重停滞 → 冻结记账：unacked 保持近满态触发暂停（保守方向），
@@ -457,6 +478,30 @@ impl SessionOutputManager {
                 self.unacked_bytes.fetch_add(event_bytes, Ordering::SeqCst);
                 fifo.push_back((event.end_offset(), event_bytes));
             }
+        }
+
+        // 链路调试（终端字节对账）：产出统计周期打点（5s 且有新产出才打）。
+        // produced_bytes 与移动端 terminal_link 收帧统计对齐——比对两端累计字节
+        // 可定位丢字节环节；不打逐帧日志，防输出风暴期日志风暴
+        self.produced_events.fetch_add(1, Ordering::SeqCst);
+        let now_ms = system_now_ms();
+        let last_stats = self.last_produce_stats_ms.load(Ordering::SeqCst);
+        if now_ms.saturating_sub(last_stats) >= PRODUCE_STATS_INTERVAL_MS
+            && self
+                .last_produce_stats_ms
+                .compare_exchange(last_stats, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            tracing::debug!(
+                session_id = %self.session_id,
+                produced_events = self.produced_events.load(Ordering::SeqCst),
+                produced_bytes = queue_max,
+                queue_min_offset = queue_min,
+                queue_resident_bytes = queue_bytes,
+                unacked_bytes = self.unacked_bytes.load(Ordering::SeqCst),
+                paused = self.paused.load(Ordering::SeqCst),
+                "pty output produce stats (periodic)"
+            );
         }
 
         let subscribers = self.subscribers.read().await;
@@ -555,12 +600,34 @@ impl SessionOutputManager {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
+        let mut released = 0u64;
         while let Some(&(end_offset, bytes)) = fifo.front() {
             if end_offset <= acked_offset {
                 fifo.pop_front();
+                released += bytes;
                 self.unacked_bytes.fetch_sub(bytes, Ordering::SeqCst);
             } else {
                 break;
+            }
+        }
+        // 链路调试（背压对账）：ack 推进释放记账（1s 节流）。acked_offset 应与
+        // 移动端 Rust ack 水位一致，偏差即背压环异常
+        if released > 0 {
+            let now_ms = system_now_ms();
+            let last = self.last_ack_log_ms.load(Ordering::SeqCst);
+            if now_ms.saturating_sub(last) >= ACK_LOG_INTERVAL_MS
+                && self
+                    .last_ack_log_ms
+                    .compare_exchange(last, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    acked_offset,
+                    released_bytes = released,
+                    unacked_bytes = self.unacked_bytes.load(Ordering::SeqCst),
+                    "output ack released unacked accounting"
+                );
             }
         }
     }
@@ -578,6 +645,14 @@ impl SessionOutputManager {
             // 已暂停：降到低水位才恢复（滞回下沿）
             if unacked <= BACKPRESSURE_RESUME_BYTES {
                 self.paused.store(false, Ordering::SeqCst);
+                // 链路调试（背压对账）：仅状态迁移点打日志（判定本身 5ms 高频轮询，
+                // 逐次打会刷屏）；暂停/恢复时刻与 ack 推进日志对照可验证反馈环
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    unacked_bytes = unacked,
+                    resume_water_bytes = BACKPRESSURE_RESUME_BYTES,
+                    "pty read backpressure resumed"
+                );
                 return false;
             }
             return true;
@@ -585,6 +660,13 @@ impl SessionOutputManager {
         // 未暂停：超高位水才暂停（滞回上沿）
         if unacked > BACKPRESSURE_HIGH_BYTES {
             self.paused.store(true, Ordering::SeqCst);
+            // 链路调试（背压对账）：暂停 = PTY 读停等，数据留内核管道（零丢失）
+            tracing::debug!(
+                session_id = %self.session_id,
+                unacked_bytes = unacked,
+                high_water_bytes = BACKPRESSURE_HIGH_BYTES,
+                "pty read backpressure paused"
+            );
             return true;
         }
         false
@@ -898,11 +980,7 @@ impl GlobalOutputManager {
     }
 
     /// 截取驻留历史字节区间（HTTP 一次性历史；会话不存在 → None）
-    pub async fn snapshot_bytes(
-        &self,
-        session_id: &str,
-        from: u64,
-    ) -> Option<(Vec<u8>, u64, u64, u64)> {
+    pub async fn snapshot_bytes(&self, session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
             Some(manager.snapshot_bytes(from).await)
@@ -1520,10 +1598,14 @@ mod tests {
         assert!(!manager.should_pause("session-bp-cap"));
 
         // 超限 ack：FIFO 内全部弹出，unacked 归零，不因冻结期欠记而变负
-        manager.ack("session-bp-cap", 999_999_999, RendererSource::Desktop).await;
+        manager
+            .ack("session-bp-cap", 999_999_999, RendererSource::Desktop)
+            .await;
         assert!(!manager.should_pause("session-bp-cap"));
         // 重复 ack：空 FIFO 无匹配，no-op，不越界
-        manager.ack("session-bp-cap", 999_999_999, RendererSource::Desktop).await;
+        manager
+            .ack("session-bp-cap", 999_999_999, RendererSource::Desktop)
+            .await;
     }
 
     #[tokio::test]
@@ -1608,11 +1690,7 @@ mod tests {
             let m = sessions.get("session-wait").unwrap();
             let subs = m.subscribers.read().await;
             let sub = subs.get("client-wait").unwrap();
-            assert_eq!(
-                sub.dropped.load(Ordering::SeqCst),
-                0,
-                "有界等待场景不得丢弃任何事件"
-            );
+            assert_eq!(sub.dropped.load(Ordering::SeqCst), 0, "有界等待场景不得丢弃任何事件");
         }
     }
 
@@ -1849,25 +1927,18 @@ mod tests {
 
         // 推送 3 个 4 字节事件 → [0,12)
         for i in 0..3 {
-            manager
-                .on_output(make_session_event("session-http", 0))
-                .await;
+            manager.on_output(make_session_event("session-http", 0)).await;
         }
 
-        let (data, min, snapshot, history_bytes) = manager
-            .snapshot_bytes("session-http", 4)
-            .await
-            .expect("session exists");
+        let (data, min, snapshot, history_bytes) =
+            manager.snapshot_bytes("session-http", 4).await.expect("session exists");
         assert_eq!(min, 0);
         assert_eq!(snapshot, 12);
         assert_eq!(history_bytes, 12);
         assert_eq!(data, b"testtest");
 
         // from 旧于 min_offset：以 min_offset 为起点
-        let (data, _, _, _) = manager
-            .snapshot_bytes("session-http", 0)
-            .await
-            .unwrap();
+        let (data, _, _, _) = manager.snapshot_bytes("session-http", 0).await.unwrap();
         assert_eq!(data, b"testtesttest");
 
         // 会话不存在 → None
@@ -1888,10 +1959,7 @@ mod tests {
             manager.on_output(make_session_event("session-http-evict", 0)).await;
         }
         // 12B > 6B：while 淘汰至 6B 内（4B 块每次淘汰一块）→ 仅驻留 [8,12)
-        let (data, min, snapshot, history_bytes) = manager
-            .snapshot_bytes("session-http-evict", 0)
-            .await
-            .unwrap();
+        let (data, min, snapshot, history_bytes) = manager.snapshot_bytes("session-http-evict", 0).await.unwrap();
         assert_eq!(min, 8);
         assert_eq!(snapshot, 12);
         assert_eq!(history_bytes, 4);

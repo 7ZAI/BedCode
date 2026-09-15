@@ -151,12 +151,14 @@ describe('连接流：useMobileConnection × useHttpApi × terminalBuffer store'
 
     // HTTP 探测经统一代理（desktop 类 + 3 秒超时 + request_id）
     const probeCall = invokeCalls('http_request').find(([args]) =>
-      (args as { url: string }).url.endsWith('/api/health'),
+      (args as { request: { url: string } }).request.url.endsWith('/api/health'),
     )
     expect(probeCall).toBeTruthy()
-    expect((probeCall![0] as { url: string }).url).toBe('http://192.168.1.100:8765/api/health')
-    expect((probeCall![0] as { kind?: string }).kind).toBe('desktop')
-    expect((probeCall![0] as { timeoutMs?: number }).timeoutMs).toBe(3000)
+    expect((probeCall![0] as { request: { url: string } }).request.url).toBe(
+      'http://192.168.1.100:8765/api/health',
+    )
+    expect((probeCall![0] as { request: { kind?: string } }).request.kind).toBe('desktop')
+    expect((probeCall![0] as { request: { timeoutMs?: number } }).request.timeoutMs).toBe(3000)
     expect(invokeCalls('ws_connect')).toEqual([[
       { address: DEVICE.address, port: DEVICE.port, name: DEVICE.name },
     ]])

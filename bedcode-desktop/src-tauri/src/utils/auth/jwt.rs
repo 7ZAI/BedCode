@@ -178,6 +178,16 @@ impl std::fmt::Display for JwtError {
 
 impl std::error::Error for JwtError {}
 
+/// JWT 错误 → 用户可读消息（纯函数，供测试；WS 认证与 HTTP 重认证共用，防文案漂移）
+///
+/// 过期与其余错误区分提示；其余错误统一「Invalid token」不透出内部细节
+pub fn jwt_error_message(e: &JwtError) -> &'static str {
+    match e {
+        JwtError::TokenExpired => "Token expired",
+        _ => "Invalid token",
+    }
+}
+
 /// 生成设备认证 JWT 的便捷函数
 pub fn generate_device_token(
     device_id: String,
@@ -232,5 +242,15 @@ mod tests {
         // 过期 60 秒内的 token 仍会通过，无法表达本测试的意图
         let result = service.verify_token_with_expiry(&token);
         assert!(matches!(result, Err(JwtError::TokenExpired)));
+    }
+
+    #[test]
+    fn jwt_error_message_distinguishes_expiry_only() {
+        assert_eq!(jwt_error_message(&JwtError::TokenExpired), "Token expired");
+        // 其余错误统一不区分（不透出内部细节）
+        assert_eq!(jwt_error_message(&JwtError::InvalidToken), "Invalid token");
+        assert_eq!(jwt_error_message(&JwtError::InvalidSignature), "Invalid token");
+        assert_eq!(jwt_error_message(&JwtError::EncodeError("x".to_string())), "Invalid token");
+        assert_eq!(jwt_error_message(&JwtError::VerifyError("x".to_string())), "Invalid token");
     }
 }

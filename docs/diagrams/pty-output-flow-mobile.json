@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "移动端终端 PTY 输出链路",
+    "locale": "zh-CN",
+    "output": "docs/diagrams/pty-output-flow-mobile.html",
+    "viewBox": [1080, 940],
+    "quality_profile": "showcase"
+  },
+  "stages": [
+    { "label": "本地 PTY" },
+    { "label": "会话汇聚" },
+    { "label": "编码与传输" },
+    { "label": "移动端接收" },
+    { "label": "前端渲染" }
+  ],
+  "nodes": [
+    { "id": "pty", "type": "external", "label": "PTY 进程", "sublabel": "pty_reader.rs · 256KB / 50ms", "stage": 0, "row": 1, "width": 150, "tag": "desktop host" },
+    { "id": "session_mgr", "type": "backend", "label": "SessionOutputManager", "sublabel": "unacked 64KB→pause · 8KB→resume", "stage": 1, "row": 1, "width": 150, "tag": "backpressure" },
+    { "id": "forward_loop", "type": "backend", "label": "OutputBuffer", "sublabel": "forward_loop · 30ms / 64KB", "stage": 2, "row": 1, "width": 150, "tag": "TB v3 encode" },
+    { "id": "terminal_ws", "type": "backend", "label": "TerminalWs actor", "sublabel": "TB v3 帧 · 出站过滤", "stage": 2, "row": 3, "width": 150, "tag": "actix-web" },
+    { "id": "terminal_link", "type": "backend", "label": "TerminalLink", "sublabel": "TB v3 解析 · ack 节流", "stage": 3, "row": 1, "width": 150, "tag": "mobile Rust" },
+    { "id": "session_cache", "type": "database", "label": "SessionCache", "sublabel": "16MB LRU · 历史回放", "stage": 3, "row": 3, "width": 150, "tag": "mobile Rust" },
+    { "id": "frontend_buf", "type": "frontend", "label": "terminalBuffer", "sublabel": "splice 历史 · 去重", "stage": 4, "row": 0, "width": 150, "tag": "Vue store" },
+    { "id": "coalescer", "type": "frontend", "label": "writeCoalescer", "sublabel": "rAF 合并 · 64KB 拆块", "stage": 4, "row": 2, "width": 150, "tag": "composable" },
+    { "id": "xterm", "type": "frontend", "label": "xterm.js", "sublabel": "terminal.write() · canvas", "stage": 4, "row": 4, "width": 150, "tag": "WebView" }
+  ],
+  "flows": [
+    { "from": "pty", "to": "session_mgr", "label": "OutputEvent", "classification": "start_offset · is_waiting", "variant": "emphasis", "labelDy": 54 },
+    { "from": "session_mgr", "to": "forward_loop", "label": "OutputFrame", "classification": "mpsc ×32768 · try_send", "variant": "emphasis", "labelDy": 54 },
+    { "from": "forward_loop", "to": "terminal_ws", "label": "TB v3 帧", "classification": "16B 帧头 + payload", "labelDy": 24, "labelDx": 10 },
+    { "from": "terminal_ws", "to": "terminal_link", "label": "WS 二进制", "classification": "/ws/terminal/session/{id}", "variant": "emphasis" },
+    { "from": "terminal_link", "to": "frontend_buf", "label": "terminal-frame", "classification": "live 帧推送", "variant": "emphasis", "labelDx": 52 },
+    { "from": "terminal_link", "to": "session_cache", "label": "缓存入队", "classification": "offset-keyed · LRU", "labelDy": 24 },
+    { "from": "session_cache", "to": "frontend_buf", "label": "get_history 回放", "classification": "进页一次性拼接", "variant": "dashed" },
+    { "from": "frontend_buf", "to": "coalescer", "label": "atob → Uint8Array", "classification": "解码", "labelDx": -12, "labelDy": 144 },
+    { "from": "coalescer", "to": "xterm", "label": "terminal.write()", "classification": "64KB 拆块 · 128KB 让出", "labelDy": 24 },
+    { "from": "terminal_link", "to": "session_mgr", "label": "ack 帧 64KB / 250ms", "classification": "onWriteParsed 渲染游标", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[745, 104], [315, 104]], "labelDy": -12 },
+    { "from": "session_mgr", "to": "pty", "label": "暂停 / 恢复 PTY 读", "classification": "unacked 64KB → 8KB 水位", "variant": "security", "fromSide": "top", "toSide": "top", "via": [[315, 100], [100, 100]], "labelAt": [200, 100] }
+  ],
+  "cards": [
+    { "dot": "rose", "title": "背压与 ack 反馈环", "items": [
+      "PTY 读取按会话整体记账：unacked 超 64KB 暂停该会话 PTY 读，降到 8KB 恢复",
+      "桌面端订阅通道满时 try_send 丢弃（2s 超时），慢订阅者不阻塞 on_output",
+      "ack 起点是 WebView 渲染游标（onWriteParsed），经 TerminalLink 节流后回发"
+    ] },
+    { "dot": "cyan", "title": "两级合并与拆块", "items": [
+      "桌面端 OutputBuffer 有界延迟合并：30ms 时间窗或 64KB 先到先发",
+      "移动端 writeCoalescer rAF 合并同帧写入，消除 TUI 滚动残影",
+      "写入按 64KB 拆块，每 128KB 让出主线程，防输出风暴冻结触摸"
+    ] },
+    { "dot": "emerald", "title": "字节游标与历史回放", "items": [
+      "TB v3 帧头 16 字节：magic 'TB' + version 3 + flags + start_offset(8LE) + len(4LE)",
+      "live 帧（end > snapshot_offset）才推 terminal-frame 事件；历史段只入 16MB LRU 缓存",
+      "进终端页一次性拉取历史拼接，重连按 from_offset 增量续传，游标缺口即告警"
+    ] }
+  ]
+}

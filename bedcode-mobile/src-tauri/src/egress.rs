@@ -559,6 +559,60 @@ pub fn init(app_data_dir: PathBuf) {
     );
 }
 
+// ==================== 跳转（redirect）重校验 ====================
+
+/// 跳转目标是否为私网/回环/链路本地 IP（字面量判定）。
+///
+/// 主机名无法解析为 IP 时按公网处理：首跳已过 L1/L2/L3，DNS 内网不在本
+/// 策略面（阻断面聚焦「302 → 内网 IP / 云元数据 169.254.x.x」的经典 SSRF）。
+fn is_private_ip(host: &str) -> bool {
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| match ip {
+            std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_loopback() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unicast_link_local(),
+        })
+        .unwrap_or(false)
+}
+
+/// 跳转裁决（纯函数，供 `redirect_policy` 与单测共用）：
+///
+/// reqwest 默认跟随 10 跳且不重过 egress L1/L2/L3——外部 API 302 到内网/
+/// 云元数据即直连（SSRF 面）。同步策略上下文无法弹窗，故私有目标跳转按
+/// 白名单 fail-closed：
+/// - 公网目标：跟随（首跳已过 L1/L2/L3 校验，公网→公网无新增面）；
+/// - 已声明桌面端目标（L1）：跟随（本机 LAN 服务站内跳转）；
+/// - 与链上前序 URL 同源：跟随（同 host:port 跳转不变更目标面）；
+/// - 其余私有目标：Stop（调用方拿到 3xx 自行处理）。
+pub fn redirect_decision(next_url: &str, previous: &[&str]) -> bool {
+    let Some(parsed) = parse_url_lite(next_url) else {
+        return false; // 非法跳转目标 fail-closed
+    };
+    if !is_private_ip(&parsed.host) {
+        return true;
+    }
+    if policy().is_desktop_target(&parsed.host, parsed.port) {
+        return true;
+    }
+    let prev: Vec<LiteUrl> = previous.iter().filter_map(|u| parse_url_lite(u)).collect();
+    if prev.iter().any(|p| p.host == parsed.host && p.port == parsed.port) {
+        return true; // 同源跳转
+    }
+    // 前序全为私有地址：私网→私网链路（如 NAS 服务跳转），维持跟随
+    !prev.is_empty() && prev.iter().all(|p| is_private_ip(&p.host))
+}
+
+/// reqwest 跳转策略：`redirect_decision` 的适配层（同步裁决，见其文档）
+pub fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let prev: Vec<&str> = attempt.previous().iter().map(|u| u.as_str()).collect();
+        if redirect_decision(attempt.url().as_str(), &prev) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
 // ==================== 单元测试 ====================
 
 #[cfg(test)]
@@ -654,6 +708,64 @@ mod tests {
             EgressDecision::NeedConsent(_)
         ));
         p.clear_desktop_targets();
+    }
+
+    // ==================== 跳转重校验 ====================
+
+    /// 公网跳转：跟随（首跳已过 L1/L2/L3，公网→公网无新增面）
+    #[test]
+    fn redirect_public_followed() {
+        assert!(redirect_decision(
+            "https://cdn.example.com/file",
+            &["https://api.github.com/x"],
+        ));
+        assert!(redirect_decision("https://a.com", &[]));
+    }
+
+    /// SSRF 阻断：外网 302 → 内网/回环/链路本地（云元数据 169.254.169.254）Stop
+    #[test]
+    fn redirect_public_to_private_stopped() {
+        assert!(!redirect_decision(
+            "http://192.168.1.5:9999/api",
+            &["https://api.example.com/x"],
+        ));
+        assert!(!redirect_decision(
+            "http://127.0.0.1:8000/meta",
+            &["https://api.example.com/x"],
+        ));
+        assert!(!redirect_decision(
+            "http://169.254.169.254/latest/meta-data",
+            &["https://api.example.com/x"],
+        ));
+        // 非法跳转目标 fail-closed
+        assert!(!redirect_decision("not-a-url", &["https://api.example.com/x"]));
+    }
+
+    /// 私网合法跳转放行：已声明桌面端目标 / 同源 / 私网→私网链
+    #[test]
+    fn redirect_private_whitelisted() {
+        // 已声明桌面端目标
+        policy().add_desktop_target("192.168.1.5", 4455);
+        assert!(redirect_decision(
+            "http://192.168.1.5:4455/api/other",
+            &["https://api.example.com/x"],
+        ));
+        // 同源跳转（desktop 目标站内 302 到自身其它路径）
+        assert!(redirect_decision(
+            "http://192.168.1.5:4455/api/b",
+            &["http://192.168.1.5:4455/api/a"],
+        ));
+        // 私网→私网链（NAS 站内跳转）
+        assert!(redirect_decision(
+            "http://192.168.1.9/x",
+            &["http://192.168.1.5:4455/a"],
+        ));
+        // 公网链中存在私网前序仍阻断（混合链 fail-closed）
+        assert!(!redirect_decision(
+            "http://192.168.1.9/x",
+            &["http://192.168.1.5:4455/a", "https://api.example.com/y"],
+        ));
+        policy().clear_desktop_targets();
     }
 
     /// L2 插件声明：注册后放行；卸载后拒绝

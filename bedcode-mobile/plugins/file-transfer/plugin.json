@@ -77,6 +77,18 @@
         "title": "Retry Transfer"
       },
       {
+        "id": "file-transfer.pause",
+        "title": "file-transfer.pause"
+      },
+      {
+        "id": "file-transfer.resume",
+        "title": "file-transfer.resume"
+      },
+      {
+        "id": "file-transfer.resume-all",
+        "title": "file-transfer.resume-all"
+      },
+      {
         "id": "file-transfer.remove-task",
         "title": "Remove Task"
       },

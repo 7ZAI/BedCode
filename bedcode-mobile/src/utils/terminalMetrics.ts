@@ -35,6 +35,21 @@ export const TERMINAL_SCROLLBAR_GUTTER_PX = 6
  */
 export const TERMINAL_LINE_END_MARGIN_COLS = 1
 
+/**
+ * 移动端终端行高倍率（唯一真源，TerminalView 构造选项与网格预估共用）：
+ *
+ * 为什么 1.2：小屏上 CJK 满屏输出（opencode/pi 等中文 TUI）在 lineHeight 1 下
+ * 行间近乎贴死，可读性差；1.2 提供行间呼吸感。取值需真机验证 TUI box-drawing
+ * 边框的跨行连接（DOM 渲染器不拉伸字形，垂直线依赖字体墨迹跨行补连——
+ * terminal.css 已放开行级 overflow，多数字体可连上；若真机出现边框断裂，
+ * 优先下调此值而非回退 1）。
+ *
+ * 三处消费方必须同源：TerminalView 的 Terminal 构造 lineHeight 选项 /
+ * measureCellSize（cell 高度随 lineHeight 放大）/ computeGridSize 调用链。
+ * 不一致会导致「预估网格 ≠ 实际渲染网格」，表现为顶部空带或行数偏差。
+ */
+export const TERMINAL_LINE_HEIGHT = 1.2
+
 /** 字体网格尺寸（与 xterm renderService.dimensions.css.cell 同源） */
 export interface CellSize {
   width: number
@@ -52,9 +67,16 @@ export const FONT_FAMILY =
 
 /**
  * 测量字体网格：32 个 'W' 的隐藏行内元素（与 xterm _measureElement 同法）。
+ * lineHeight 与 Terminal 构造选项同源（TERMINAL_LINE_HEIGHT），测得的
+ * offsetHeight 即「cell 高度 ≈ 字符高 × 行高倍率」的预估，与 xterm 渲染器
+ * 的 css.cell.height 口径一致（亚像素舍入差异由 fit 收敛循环吸收）。
  * 字体未就绪时返回 0 尺寸，调用方回退默认值。
  */
-export function measureCellSize(fontSize: number, fontFamily: string): CellSize {
+export function measureCellSize(
+  fontSize: number,
+  fontFamily: string,
+  lineHeight: number = TERMINAL_LINE_HEIGHT,
+): CellSize {
   const el = document.createElement('div')
   el.style.cssText = [
     'position:absolute',
@@ -63,7 +85,7 @@ export function measureCellSize(fontSize: number, fontFamily: string): CellSize 
     'top:0',
     `font-size:${fontSize}px`,
     `font-family:${fontFamily}`,
-    'line-height:1',
+    `line-height:${lineHeight}`,
     'white-space:nowrap',
   ].join(';')
   el.textContent = 'W'.repeat(32)
@@ -85,6 +107,7 @@ export function measureCellSize(fontSize: number, fontFamily: string): CellSize 
  *
  * @param marginCols - 列尾额外预留的格数（默认 2）
  * @param marginRows - 行尾额外预留的格数（默认 1）
+ * @param lineHeight - 行高倍率（默认 TERMINAL_LINE_HEIGHT，与渲染口径同源）
  * @returns 网格尺寸；字体未就绪（cell 尺寸为 0）时返回 { cols: 0, rows: 0 }
  */
 export function computeGridSize(
@@ -93,8 +116,9 @@ export function computeGridSize(
   fontFamily: string,
   marginCols = 2,
   marginRows = 1,
+  lineHeight: number = TERMINAL_LINE_HEIGHT,
 ): { cols: number; rows: number } {
-  const cell = measureCellSize(fontSize, fontFamily)
+  const cell = measureCellSize(fontSize, fontFamily, lineHeight)
   if (cell.width <= 0 || cell.height <= 0) return { cols: 0, rows: 0 }
   // 滚动条：scrollback > 0 时 FitAddon 扣除 overviewRuler.width（见常量注释）
   const width = container.clientWidth - TERMINAL_SCROLLBAR_GUTTER_PX - cell.width * marginCols

@@ -46,6 +46,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直写预打开目录）
 ├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
+│   ├── agent-hub/                    # Agent Hub 插件：Agent CLI 统一管理台——环境检测与一键安装、
+│   │                                 #   Skills 管理（浏览/编辑/分发/GitHub 安装/本地导入）、
+│   │                                 #   供应商统一配置、使用统计与会话日志解析
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端，
 │   │                                 #   聊天 UI、供应商配置、提示词优化
 │   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，
@@ -109,6 +112,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外部消费方只经 facade 再导出引用）：
 
 - **manager/（core-plugin-manager，核心）**：插件加载、注册、生命周期与运行时
+  - **downloader**（dev 合入，暂挂 `plugin/downloader.rs`）：插件 zip 包本地安装——
+    解压 → manifest/身份校验 → 路径穿越防护 → wasm 存在性校验 → 写来源标记 →
+    移动到 `app_data_dir/plugins`（按五模块划分应归位 manager，后续一并迁移）
   - **api_bridge**：插件 API 桥接 — 前端 PluginContext 的 API 调用经 Tauri invoke 到达此层，Rust 端权限校验后执行
   - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
     （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
@@ -221,7 +227,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

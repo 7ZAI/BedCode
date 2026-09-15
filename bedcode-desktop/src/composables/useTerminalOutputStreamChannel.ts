@@ -1,16 +1,14 @@
 /**
- * 桌面端本地终端输出流 Composable（Channel 传输，与 WS 环回并行）
+ * 桌面端本地终端输出流 Composable（Tauri Channel 传输，唯一路径）
  *
  * 通过 Tauri Channel（`subscribe_terminal_channel` 命令）以 TB v3 二进制帧
- * 直取 PTY 原始字节。与 `useTerminalOutputStream`（WS 环回）协议/字节游标/快照
- * 语义完全一致，仅传输层不同：Channel 走 WebView 原生 IPC，大负载经
- * in-memory fetch 拉取，Rust 侧缓冲直到前端消费，天然无丢消息——规避
- * WebKitGTK WS 接收缓冲风暴溢出（opencode 滚动残渣 + Parsing error 根因）。
+ * 直取 PTY 原始字节。WS 环回链路（/ws/terminal/local）已整体下线，桌面本地
+ * 终端输出只走本路径：Channel 走 WebView 原生 IPC，大负载经 in-memory fetch
+ * 拉取，Rust 侧缓冲直到前端消费，天然无丢消息——规避 WebKitGTK WS 接收缓冲
+ * 风暴溢出（opencode 滚动残渣 + Parsing error 根因）。
  *
- * 由 `VITE_TERMINAL_TRANSPORT`（"ws" | "channel"）选择；默认 "ws" 保持原
- * 行为。快照元数据经命令返回值同步获取（替代 WS subscribe_response 控制帧），
- * 帧在 invoke resolve 前先缓冲（pendingFrames），收到快照后按序排空——
- * 与 WS `subscribed`/`pendingFrames` 语义对齐。
+ * 快照元数据经命令返回值同步获取（替代 WS subscribe_response 控制帧），帧在
+ * invoke resolve 前先缓冲（pendingFrames），收到快照后按序排空。
  *
  * TB v3 字节语义（`.scratch/pty-byte-history/spec.md`）：连续性以累计字节偏移
  * 表达；帧头 start_offset(8 LE) + len(4 LE)，end_offset = start_offset + len；

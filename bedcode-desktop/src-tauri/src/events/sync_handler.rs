@@ -17,7 +17,31 @@ use std::sync::Arc;
 pub struct SyncEventHandler {
     session_manager: Arc<SessionManager>,
     config_manager: Arc<SessionConfigManager>,
-    ws_manager: &'static WebSocketManager,
+    ws_manager: &'static (dyn SyncBroadcaster + Send + Sync),
+}
+
+/// 同步广播抽象（票据 22）：把 `WebSocketManager` 的广播能力抽为 trait，
+/// 测试注入 Fake 记录广播调用，覆盖 11 个 handle_* 分支的事件→消息映射。
+///
+/// 生产实现 `WebSocketManager`（`&'static` 单例），`&'static WebSocketManager`
+/// 自动 coerce 到 `&'static dyn SyncBroadcaster`，调用点零改动。
+#[async_trait::async_trait]
+pub trait SyncBroadcaster: Send + Sync {
+    /// 向所有已认证客户端广播
+    async fn broadcast(&self, message: &Message) -> crate::Result<()>;
+    /// 向除指定设备外的所有已认证客户端广播（基于设备名称）
+    async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &Message) -> crate::Result<()>;
+}
+
+#[async_trait::async_trait]
+impl SyncBroadcaster for crate::server::ws::WebSocketManager {
+    async fn broadcast(&self, message: &Message) -> crate::Result<()> {
+        crate::server::ws::WebSocketManager::broadcast(self, message).await
+    }
+
+    async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &Message) -> crate::Result<()> {
+        crate::server::ws::WebSocketManager::broadcast_sync_to_others(self, exclude_device_name, message).await
+    }
 }
 
 impl SyncEventHandler {
@@ -27,6 +51,7 @@ impl SyncEventHandler {
         config_manager: Arc<SessionConfigManager>,
         ws_manager: &'static WebSocketManager,
     ) -> Self {
+        let ws_manager: &'static (dyn SyncBroadcaster + Send + Sync) = ws_manager;
         Self {
             session_manager,
             config_manager,
@@ -358,7 +383,6 @@ impl SyncEventHandler {
         self.broadcast_sync_data(payload, None).await;
     }
 
-
     /// 广播同步数据消息
     ///
     /// 如果指定了 exclude_device，则排除该设备后广播给其他客户端
@@ -402,5 +426,243 @@ impl EventHandler<DesktopSyncEvent> for SyncEventHandler {
             };
             handler.process_event(event).await;
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::events::DesktopSyncEvent;
+    use crate::server::ws::message::Message;
+    use std::path::Path;
+    use std::sync::Mutex;
+
+    /// Fake 广播器：记录所有广播调用（票据 22）
+    struct FakeBroadcaster {
+        calls: Mutex<Vec<BroadcastCall>>,
+    }
+
+    #[derive(Debug, Clone)]
+    struct BroadcastCall {
+        exclude_device: Option<String>,
+        payload: SyncPayload,
+    }
+
+    impl FakeBroadcaster {
+        fn new() -> Self {
+            Self {
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn take_calls(&self) -> Vec<BroadcastCall> {
+            self.calls.lock().unwrap().drain(..).collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SyncBroadcaster for FakeBroadcaster {
+        async fn broadcast(&self, message: &Message) -> crate::Result<()> {
+            if let Message::SyncData { payload, .. } = message {
+                self.calls.lock().unwrap().push(BroadcastCall {
+                    exclude_device: None,
+                    payload: payload.clone(),
+                });
+            }
+            Ok(())
+        }
+
+        async fn broadcast_sync_to_others(&self, exclude_device_name: &str, message: &Message) -> crate::Result<()> {
+            if let Message::SyncData { payload, .. } = message {
+                self.calls.lock().unwrap().push(BroadcastCall {
+                    exclude_device: Some(exclude_device_name.to_string()),
+                    payload: payload.clone(),
+                });
+            }
+            Ok(())
+        }
+    }
+
+    /// 构造 handler：cm 与 sm 共用同一 db（config 落库后两处可见）；Fake 泄漏为 &'static
+    async fn test_handler() -> (Arc<SyncEventHandler>, &'static FakeBroadcaster, Arc<tokio::sync::Mutex<crate::db::Database>>) {
+        let shared_db = Arc::new(tokio::sync::Mutex::new(crate::db::Database::new(Path::new(":memory:")).expect("shared db")));
+        shared_db.lock().await.init_schema().expect("init schema");
+        let storage = Arc::new(crate::session::SessionStorage::new(Arc::clone(&shared_db)));
+        let sm = Arc::new(SessionManager::new(
+            storage,
+            Arc::new(std::path::PathBuf::from(".")),
+        ));
+        let cm = Arc::new(SessionConfigManager::new(Arc::clone(&shared_db)));
+        let fake_static: &'static FakeBroadcaster = Box::leak(Box::new(FakeBroadcaster::new()));
+        let ws: &'static (dyn SyncBroadcaster + Send + Sync) = fake_static;
+        let handler = Arc::new(SyncEventHandler {
+            session_manager: sm,
+            config_manager: cm,
+            ws_manager: ws,
+        });
+        (handler, fake_static, shared_db)
+    }
+
+    /// 预置一个会话（config 落库后 create_session_no_start，不 spawn PTY）
+    async fn seed_session(shared_db: &Arc<tokio::sync::Mutex<crate::db::Database>>, sm: &SessionManager) -> String {
+        let config = crate::db::SessionConfig::new(
+            "itest-sync".to_string(),
+            "linux".to_string(),
+            "/tmp".to_string(),
+            "bash".to_string(),
+        );
+        {
+            let guard = shared_db.lock().await;
+            guard.create_session_config(&config).expect("create config");
+        }
+        sm.create_session_no_start(&config.id).await.expect("create session")
+    }
+
+    /// SessionCreated → 广播 SyncPayload::SessionCreated（票据 22）
+    #[tokio::test]
+    async fn session_created_event_broadcasts_session_created() {
+        let (handler, fake, shared_db) = test_handler().await;
+        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        handler
+            .process_event(DesktopSyncEvent::SessionCreated {
+                session_id: sid.clone(),
+                source_device: Some("d1".to_string()),
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert_eq!(calls.len(), 1, "应广播一次: {calls:?}");
+        assert!(matches!(calls[0].payload, SyncPayload::SessionCreated { .. }), "实际: {:?}", calls[0].payload);
+        assert_eq!(calls[0].exclude_device.as_deref(), Some("d1"), "来源设备应被排除");
+    }
+
+    /// SessionStopped → 广播 SyncPayload::SessionStopped（排除来源设备）
+    #[tokio::test]
+    async fn session_stopped_event_broadcasts_session_stopped() {
+        let (handler, fake, shared_db) = test_handler().await;
+        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        handler
+            .process_event(DesktopSyncEvent::SessionStopped {
+                session_id: sid.clone(),
+                source_device: Some("d2".to_string()),
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(calls[0].payload, SyncPayload::SessionStopped { .. }), "实际: {:?}", calls[0].payload);
+        assert_eq!(calls[0].exclude_device.as_deref(), Some("d2"));
+    }
+
+    /// SessionRemoved → 广播 SessionRemoved（排除来源设备）
+    #[tokio::test]
+    async fn session_removed_event_broadcasts_session_removed() {
+        let (handler, fake, shared_db) = test_handler().await;
+        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        handler
+            .process_event(DesktopSyncEvent::SessionRemoved {
+                session_id: sid.clone(),
+                source_device: Some("d3".to_string()),
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(calls[0].payload, SyncPayload::SessionRemoved { .. }), "实际: {:?}", calls[0].payload);
+        assert_eq!(calls[0].exclude_device.as_deref(), Some("d3"));
+    }
+
+    /// SessionStatusChanged → 广播（无来源设备 → 全量广播）
+    #[tokio::test]
+    async fn session_status_changed_broadcasts_to_all() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::SessionStatusChanged {
+                session_id: "s-any".to_string(),
+                old_status: crate::enums::SessionStatus::Running,
+                new_status: crate::enums::SessionStatus::Stopped,
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(calls[0].payload, SyncPayload::SessionStatusChanged { .. }));
+        assert!(calls[0].exclude_device.is_none(), "状态变更应全量广播");
+    }
+
+    /// ConfigRemoved → 广播 ConfigRemoved（携带 config_name）
+    #[tokio::test]
+    async fn config_removed_event_broadcasts_config_removed() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::ConfigRemoved {
+                config_id: "cfg-1".to_string(),
+                config_name: "dev".to_string(),
+                source_device: Some("d4".to_string()),
+            })
+            .await;
+        let calls = fake.take_calls();
+        match &calls[0].payload {
+            SyncPayload::ConfigRemoved { config_id, config_name } => {
+                assert_eq!(config_id, "cfg-1");
+                assert_eq!(config_name, "dev", "config_name 必须透传");
+            }
+            other => panic!("期望 ConfigRemoved，实际: {other:?}"),
+        }
+        assert_eq!(calls[0].exclude_device.as_deref(), Some("d4"));
+    }
+
+    /// SessionModeChanged → 广播 SessionModeChanged
+    #[tokio::test]
+    async fn session_mode_changed_broadcasts() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::SessionModeChanged {
+                session_id: "s-1".to_string(),
+                auto_approve: true,
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(calls[0].payload, SyncPayload::SessionModeChanged { auto_approve: true, .. }));
+        assert!(calls[0].exclude_device.is_none());
+    }
+
+    /// TaskQueueChanged → 广播 TaskQueueChanged
+    #[tokio::test]
+    async fn task_queue_changed_broadcasts() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::TaskQueueChanged {
+                session_id: "s-1".to_string(),
+                queue_count: 3,
+                action: "add".to_string(),
+                task_id: Some("t1".to_string()),
+                status: Some("pending".to_string()),
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(calls[0].payload, SyncPayload::TaskQueueChanged { queue_count: 3, .. }));
+    }
+
+    /// TaskScheduledChanged → 广播 TaskScheduledChanged
+    #[tokio::test]
+    async fn task_scheduled_changed_broadcasts() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::TaskScheduledChanged {
+                job_id: "job-1".to_string(),
+                status: "pending".to_string(),
+                action: "create".to_string(),
+            })
+            .await;
+        let calls = fake.take_calls();
+        assert!(matches!(&calls[0].payload, SyncPayload::TaskScheduledChanged { job_id, .. } if job_id == "job-1"));
+    }
+
+    /// 未知会话的 SessionCreated：不广播（会话不存在 → 直接返回）
+    #[tokio::test]
+    async fn session_created_for_unknown_session_skips_broadcast() {
+        let (handler, fake, shared_db) = test_handler().await;
+        handler
+            .process_event(DesktopSyncEvent::SessionCreated {
+                session_id: "ghost".to_string(),
+                source_device: None,
+            })
+            .await;
+        assert!(fake.take_calls().is_empty(), "会话不存在不应广播");
     }
 }

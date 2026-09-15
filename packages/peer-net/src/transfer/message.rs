@@ -149,6 +149,24 @@ pub enum TransferFrame {
         /// 暴露中的共享根（id 供后续 Browse/Pull 寻址，name 为展示名）
         dirs: Vec<crate::shared::SharedRootMeta>,
     },
+    /// 任一侧 → 对端：暂停本批数据面（pause 门控，不关连接、不弃断点）
+    ///
+    /// 语义（双端同步部署，见 file-transfer 暂停/恢复协议）：
+    /// - 数据供方（发送端 / pull serve）收到 Pause 后停止推流（门控自身写），
+    ///   连接保持；数据消费方（接收端）收到 Pause 后任务置 paused 并静待，
+    ///   不停止读（对端已停发，读循环自然空闲）——恢复必须先到消费方。
+    /// - 恢复以 [`TransferFrame::Resume`] 同向续流；取消仍走 \[`TransferFrame::Cancel`]。
+    /// - 暂停/恢复可由任一侧发起（暂停者自行门控己方数据面并通知对端），
+    ///   对端按本帧同步任务状态；两端各自展示 paused/running。
+    Pause {
+        /// 批 ID（与 Offer/PullServed 同源）
+        batch_id: String,
+    },
+    /// 任一侧 → 对端：恢复此前 [`TransferFrame::Pause`] 暂停的批
+    Resume {
+        /// 批 ID（与 Offer/PullServed 同源）
+        batch_id: String,
+    },
 }
 
 /// 取消发起方（wire snake_case）

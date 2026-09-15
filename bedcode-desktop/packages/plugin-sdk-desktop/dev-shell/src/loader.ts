@@ -16,8 +16,9 @@ import {
 } from './registry'
 
 // 领域命令 mock（纯通用接线）：浏览器中 WASM 后端不可用，按插件 devMock
-// 种子子域（peer / transfer）判断是否注入，不感知具体插件身份
+// 种子子域判断是否注入，不感知具体插件身份
 import { registerFileTransferMock } from './mock/file-transfer'
+import { registerAgentHubMock } from './mock/agent-hub'
 
 export const ready = ref(false)
 
@@ -60,6 +61,16 @@ export async function loadPlugins(): Promise<void> {
         // 是否注入由插件 devMock 的领域种子子域决定，dev-shell 不写死插件清单
         if (module.devMock?.peer || module.devMock?.transfer) {
           record.mockDisposable = registerFileTransferMock(context, pluginId)
+          pushLog('info', pluginId, '已注册领域命令 mock（通用接线，种子来自插件 devMock）')
+        }
+        if (
+          module.devMock?.detection ||
+          module.devMock?.install ||
+          module.devMock?.skills ||
+          module.devMock?.providers ||
+          module.devMock?.usage
+        ) {
+          record.mockDisposable = registerAgentHubMock(context, pluginId)
           pushLog('info', pluginId, '已注册领域命令 mock（通用接线，种子来自插件 devMock）')
         }
         if (typeof module.activate === 'function') {

@@ -547,6 +547,8 @@ pub(crate) fn clear_history(h: &WasmHost) -> Result<serde_json::Value> {
     let mut guard = ensure_loaded(h);
     let cleared = transfer_store::clear_terminal(&mut guard);
     flush(h, guard, cleared > 0);
+    // 破坏性操作留痕：真机「点了没反应」需要能区分「命令没到」与「到了没清」
+    h.log_info(&format!("clear-history cleared {cleared} terminal entries"));
     Ok(serde_json::json!({ "cleared": cleared }))
 }
 

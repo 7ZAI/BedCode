@@ -68,8 +68,6 @@ pub enum TrafficChannel {
     WsTerminal,
     /// WS 事件通道（设备在线判定 + 同步广播 /ws/event）
     WsEvent,
-    /// WS 本地环回通道（桌面端 WebView 直连 /ws/terminal/local）
-    WsLocal,
 }
 
 impl TrafficChannel {
@@ -79,7 +77,6 @@ impl TrafficChannel {
             TrafficChannel::Http => "http",
             TrafficChannel::WsTerminal => "ws-terminal",
             TrafficChannel::WsEvent => "ws-event",
-            TrafficChannel::WsLocal => "ws-local",
         }
     }
 }
@@ -176,12 +173,10 @@ pub struct TrafficFilterChain {
 impl TrafficFilterChain {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<TrafficFilterChain> = std::sync::LazyLock::new(|| {
-            TrafficFilterChain {
-                inner: Inner {
-                    filters: RwLock::new(Vec::new()),
-                },
-            }
+        static INSTANCE: std::sync::LazyLock<TrafficFilterChain> = std::sync::LazyLock::new(|| TrafficFilterChain {
+            inner: Inner {
+                filters: RwLock::new(Vec::new()),
+            },
         });
         &INSTANCE
     }
@@ -404,7 +399,11 @@ mod tests {
 
         assert_eq!(
             chain.list_names(),
-            vec!["observer".to_string(), "shift-cipher".to_string(), "observer".to_string()]
+            vec![
+                "observer".to_string(),
+                "shift-cipher".to_string(),
+                "observer".to_string()
+            ]
         );
 
         // 入站：ShiftCipher 把每字节 -1（b'c' → b'b'）
@@ -442,7 +441,9 @@ mod tests {
     fn reject_short_circuits_chain_with_details() {
         let chain = TrafficFilterChain::new();
         let observer = Observer::new();
-        chain.register(Arc::new(RouteBlocker { blocked_route: "/api/secret" }));
+        chain.register(Arc::new(RouteBlocker {
+            blocked_route: "/api/secret",
+        }));
         chain.register(observer.clone());
 
         // 命中阻断路由：第一个过滤器拒绝，第二个不被调用

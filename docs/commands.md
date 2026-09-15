@@ -113,6 +113,76 @@ bedcode-desktop/src-tauri/resources/plugins/desktop/{plugin-id}/
 └── {lib}.wasm      # Rust WASM 后端
 ```
 
+**两端插件统一打包（zip 分发包，release 独立产物）**：
+
+```bash
+# 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（仓库根目录执行）
+node scripts/package-plugins.mjs
+
+# 只看将打包的插件清单（不构建不打包）
+node scripts/package-plugins.mjs --list
+
+# 只打包一端：--target desktop | mobile | all（默认 all）
+node scripts/package-plugins.mjs --target mobile
+
+# 只打包指定插件（--only 忽略配置列表；--plugin 追加；--exclude 排除；
+# 同名插件两端自动匹配）
+node scripts/package-plugins.mjs --only agent-hub
+node scripts/package-plugins.mjs --plugin file-transfer --exclude ai-chatbox
+
+# 跳过构建直接打包已有产物；指定 zip 版本号；只构建收集产物、不打 zip
+node scripts/package-plugins.mjs --skip-build --version 2.1.0
+node scripts/package-plugins.mjs --no-zip
+```
+
+- **插件列表**：默认 `scripts/plugin-package-list.json`
+  （desktop: `agent-hub`/`ai-chatbox`/`auto-task`/`file-transfer`，
+  mobile: `ai-chatbox`/`auto-task`/`file-transfer`），增删插件改该文件即可；
+  也可用 `--config <file>` 换列表文件
+- **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，
+  与移动端 SDK `bedcode-plugin package` 分发格式一致）；`--out <dir>` 可改输出目录
+- **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip
+  到 release（详见 `docs/knowledge/release-workflow.md`）
+
+**两端 SDK 统一打包（npm tarball + crates.io 产物，release 独立附件）**：
+
+```bash
+# 构建两端 SDK（TS 构建 + vitest + cargo check）并打包 npm / cargo 产物（仓库根目录执行）
+node scripts/package-sdks.mjs
+
+# 只看将打包的 SDK 与版本（不构建不打包）
+node scripts/package-sdks.mjs --list
+
+# 只打包一端：--target desktop | mobile | all（默认 all）
+node scripts/package-sdks.mjs --target desktop
+
+# 跳过 vitest / 跳过构建仅重新打包 / 追加 wasm32 guest 编译检查（CI 默认开启）
+node scripts/package-sdks.mjs --skip-tests
+node scripts/package-sdks.mjs --skip-build
+node scripts/package-sdks.mjs --rust-wasm
+```
+
+- **产物**：`dist/sdk-packages/<target>/`（按端分目录）：
+  - `*.tgz`：`pnpm pack` 的 npm 包（TS 前端 + CLI + template + dev-shell）
+  - `*.crate`：`cargo package --no-verify` 的 crates.io 包（per crate：desktop 含
+    `bedcode-plugin-api` 与 `bedcode-plugin-api-macros`，mobile 含 `bedcode-plugin-api-mobile`）
+  - `SHA256SUMS`：全部产物校验和
+  - `<sdk>-<ver>.zip`：聚合包（上述产物 + README + WIT 契约 + index.md 说明）
+- **版本**：产物以各自 SDK 自身版本命名（npm package.json 与 Cargo.toml 必须一致，
+  校验不一致即失败），与应用版本无关
+- **CI**：`.github/workflows/release.yml` 的 `package-sdks` job 构建并上传全部 SDK 产物到 release（详见 `docs/knowledge/release-workflow.md`）
+
+**桌面端加载 / 卸载插件（zip 分发包）**：
+
+```bash
+# 打包脚本产出的 zip 可直接在桌面端「插件」页安装：
+# 工具栏「加载插件」→ 选择 zip 包（产物 dist/plugin-packages/desktop/<id>.zip）
+```
+
+- 安装落盘：`app_data_dir/plugins/<id>/`（用户插件目录，独立于只读的内置目录）
+- 加载校验：manifest 必填字段 + id 反向域名 + 路径穿越防护 + wasm 存在性（声明时），拒绝覆盖已安装同 id（升级需先卸载）
+- 卸载：插件详情页「卸载」按钮（仅用户安装插件显示）→ 危险确认弹窗 → 删除插件所有数据（存储 + 激活状态 + 安装目录）
+
 ---
 
 ## bedcode-mobile
@@ -469,3 +539,33 @@ cd <project>/src-tauri && cargo build
 | 前端测试 | `<project>` | `pnpm run test:run` | 终端输出 |
 | Rust 测试 | `<project>/src-tauri` | `cargo test` | 终端输出 |
 | Rust 检查 | `<project>/src-tauri` | `cargo check` | 编译检查 |
+
+---
+
+## pi session 归档（scripts/pi-session-archive.sh）
+
+将本项目 `.pi/sessions/` 中**距离最新 session 超过 N 天**的 session jsonl 日志（含复合 session 目录）移动到 pi 安装目录的 session 归档区。归档文件夹以项目全路径命名（`/` 替换为 `-`，前后加 `--`，与 pi 自身约定一致）：
+
+```
+项目 /home/binblink/project/tauriProject/BedCode
+  → ~/.pi/agent/sessions/--home-binblink-project-tauriProject-BedCode--
+```
+
+- **基准日期** = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天），早于（基准 − N 天）的视为过期；默认 N=15
+- 只处理顶层 `*.jsonl` 与 `YYYY-MM-DDThh-mm-ss-msZ_<ulid>` 形式的 session 目录；`sol-pi` / `subagent-artifacts` 等非 session 目录绝不触碰
+- 目标已有同名条目时跳过并警告，绝不覆盖
+- 脚本由 `scripts/` 位置推导项目根，天然只在项目范围内生效；可在任意目录用绝对路径执行
+
+```bash
+# 实际归档（默认 15 天）
+scripts/pi-session-archive.sh
+
+# 只预览不移动（推荐先跑）
+scripts/pi-session-archive.sh -n
+
+# 自定义阈值（如 30 天）
+scripts/pi-session-archive.sh -d 30
+
+# 覆盖 pi 安装目录（默认 ~/.pi/agent）
+PI_AGENT_DIR=/custom/pi scripts/pi-session-archive.sh -n
+```

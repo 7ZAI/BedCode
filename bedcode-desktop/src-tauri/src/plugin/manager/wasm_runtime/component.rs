@@ -984,7 +984,19 @@ pub(crate) fn build_wasi_ctx(
 /// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
 /// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
 pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[String]) -> Vec<String> {
-    let home = dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string());
+    expand_preopen_declarations_with_home(plugin_id, declared_dirs, None)
+}
+
+/// [`expand_preopen_declarations`] 的可注入 home 变体（测试用临时目录构造伪 HOME，
+/// 避免依赖真实 `$HOME` 导致的无主目录环境静默跳过，dev 合入）
+fn expand_preopen_declarations_with_home(
+    plugin_id: &str,
+    declared_dirs: &[String],
+    home_override: Option<&std::path::Path>,
+) -> Vec<String> {
+    let home = home_override
+        .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
+        .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string()));
     declared_dirs
         .iter()
         .filter_map(|raw| {
@@ -1015,10 +1027,20 @@ pub(crate) fn resolve_preopen_dirs(
     plugin_id: &str,
     declared_dirs: &[String],
 ) -> Vec<String> {
+    resolve_preopen_dirs_with_home(host_ctx, plugin_id, declared_dirs, None)
+}
+
+/// [`resolve_preopen_dirs`] 的可注入 home 变体（测试用临时目录构造伪 HOME，dev 合入）
+fn resolve_preopen_dirs_with_home(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+    home_override: Option<&std::path::Path>,
+) -> Vec<String> {
     if tokio::runtime::Handle::try_current().is_err() {
         return Vec::new();
     }
-    expand_preopen_declarations(plugin_id, declared_dirs)
+    expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
         .into_iter()
         .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir)))
         .collect()

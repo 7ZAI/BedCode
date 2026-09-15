@@ -48,7 +48,7 @@ export default {
       fontLarge: '大',
       fontXLarge: '超大',
       maxOpenTerminals: '最大可打开终端数量',
-      maxOpenTerminalsDesc: '可同时保持打开的终端会话数（1-20）',
+      maxOpenTerminalsDesc: '同时运行的终端会话上限；桌面端同步时超出部分丢弃',
       generalSection: '通用',
       displaySection: '显示',
       terminalSection: '终端',

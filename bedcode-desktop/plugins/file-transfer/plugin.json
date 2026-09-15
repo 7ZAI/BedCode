@@ -22,9 +22,9 @@
     "system:open",
     "timer:schedule",
     "transfer",
+    "ui:dialog",
     "ui:sidebar",
-    "ui:statusbar",
-    "ui:dialog"
+    "ui:statusbar"
   ],
   "contributes": {
     "commands": [
@@ -75,6 +75,18 @@
       {
         "id": "file-transfer.retry",
         "title": "Retry Transfer"
+      },
+      {
+        "id": "file-transfer.pause",
+        "title": "file-transfer.pause"
+      },
+      {
+        "id": "file-transfer.resume",
+        "title": "file-transfer.resume"
+      },
+      {
+        "id": "file-transfer.resume-all",
+        "title": "file-transfer.resume-all"
       },
       {
         "id": "file-transfer.remove-task",
@@ -156,10 +168,6 @@
         "title": "文件传输",
         "component": "FileTransferView",
         "icon": "M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
-      },
-      {
-        "type": "statusbar",
-        "id": "file-transfer.consent"
       }
     ],
     "configuration": {

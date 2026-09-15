@@ -47,11 +47,10 @@ use std::time::Instant;
 use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
-    CAP_FILE_TRANSFER, Connection, ConnectionHandler, DiscoveryCache, DiscoveryConfig,
-    DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, HandlerFuture, NodeId, NodeIdentity,
-    PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode, SharedDirEntry, SharedDirHandler,
-    SharedDirRoot, SharedDirStore, StaticPeerRecord, TrustEvent, TrustStore, TransferConfig,
-    TransferEvent,
+    Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
+    DiscoveryEvent, HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
+    SharedDirEntry, SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent,
+    TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
@@ -256,7 +255,11 @@ pub async fn list_discovered_peers(app: AppHandle) -> crate::Result<Vec<Discover
         .map(|runtime| runtime.cache.list().iter().map(DiscoveredPeerDto::from).collect())
         .unwrap_or_default();
     // 诊断插桩：query-peer 是否被调用、缓存当时有几条（排查设备列表空可见性盲区）
-    tracing::info!(count = peers.len(), started = guard.is_some(), "list_discovered_peers queried");
+    tracing::info!(
+        count = peers.len(),
+        started = guard.is_some(),
+        "list_discovered_peers queried"
+    );
     Ok(peers)
 }
 
@@ -281,9 +284,9 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
     // 锁内只取快照与句柄：mTLS 握手可达秒级，不得跨 await 持锁阻塞 start/stop
     let (record, node) = {
         let guard = state.runtime.lock().await;
-        let runtime = guard.as_ref().ok_or_else(|| {
-            crate::AppError::Internal("peer-net dial failed: node not started".to_string())
-        })?;
+        let runtime = guard
+            .as_ref()
+            .ok_or_else(|| crate::AppError::Internal("peer-net dial failed: node not started".to_string()))?;
         match runtime.cache.get(&parsed) {
             Some(record) => (record, runtime.node.clone()),
             None => {
@@ -308,7 +311,10 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
                 .expect("connections table lock poisoned")
                 .insert(
                     parsed.to_string(),
-                    OutboundSession { close: session_close, id: session_id },
+                    OutboundSession {
+                        close: session_close,
+                        id: session_id,
+                    },
                 )
             {
                 let _ = old.close.send(true);
@@ -338,11 +344,17 @@ pub async fn dial_peer(app: AppHandle, node_id: String) -> crate::Result<DialPee
         }
         Err(PeerNetError::DialDeniedByPeer { .. }) => {
             tracing::info!(node_id = %parsed, "peer dial denied by remote");
-            Ok(DialPeerResultDto { status: "denied".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "denied".to_string(),
+                device_name: Some(device_name),
+            })
         }
         Err(e) => {
             tracing::warn!(node_id = %parsed, "peer dial unreachable: {e}");
-            Ok(DialPeerResultDto { status: "unreachable".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "unreachable".to_string(),
+                device_name: Some(device_name),
+            })
         }
     }
 }
@@ -370,10 +382,7 @@ pub struct DialEndpoint {
 /// 复用其展示名；未命中则回退短指纹占位，并观察一条回退记录进缓存——过渡期
 /// 桥接：数据面函数（send/browse/pull）内部仍按 node-id 寻址且依赖缓存解析
 /// 元数据，Phase 4 数据面全面句柄化后此观察分支随旧路径一并退役。
-pub async fn dial_peer_endpoint(
-    app: AppHandle,
-    endpoint: DialEndpoint,
-) -> crate::Result<DialPeerResultDto> {
+pub async fn dial_peer_endpoint(app: AppHandle, endpoint: DialEndpoint) -> crate::Result<DialPeerResultDto> {
     let parsed = parse_node_id(&endpoint.node_id)?;
     let addr: SocketAddr = format!("{}:{}", endpoint.addr.trim(), endpoint.port)
         .parse()
@@ -394,9 +403,7 @@ pub async fn dial_peer_endpoint(
         let guard = state.runtime.lock().await;
         let runtime = guard
             .as_ref()
-            .ok_or_else(|| {
-                crate::AppError::Internal("peer-net dial failed: node not started".to_string())
-            })?;
+            .ok_or_else(|| crate::AppError::Internal("peer-net dial failed: node not started".to_string()))?;
         (runtime.node.clone(), runtime.cache.get(&parsed))
     };
     let cache_miss = cached_record.is_none();
@@ -404,7 +411,10 @@ pub async fn dial_peer_endpoint(
     let device_name = cached_record
         .map(|r| r.device_name)
         .unwrap_or_else(|| format!("node-{}", parsed.short_fingerprint()));
-    let static_record = StaticPeerRecord { node_id: parsed.clone(), addr };
+    let static_record = StaticPeerRecord {
+        node_id: parsed.clone(),
+        addr,
+    };
     match node.dial(&static_record).await {
         Ok(connection) => {
             // 会话连接移交常驻活性泵（同 dial_peer：对端断开泵感知，本机断开
@@ -417,7 +427,10 @@ pub async fn dial_peer_endpoint(
                 .expect("connections table lock poisoned")
                 .insert(
                     parsed.to_string(),
-                    OutboundSession { close: session_close, id: session_id },
+                    OutboundSession {
+                        close: session_close,
+                        id: session_id,
+                    },
                 )
             {
                 let _ = old.close.send(true);
@@ -460,11 +473,17 @@ pub async fn dial_peer_endpoint(
         }
         Err(PeerNetError::DialDeniedByPeer { .. }) => {
             tracing::info!(node_id = %parsed, "peer dial denied by remote");
-            Ok(DialPeerResultDto { status: "denied".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "denied".to_string(),
+                device_name: Some(device_name),
+            })
         }
         Err(e) => {
             tracing::warn!(node_id = %parsed, "peer dial unreachable: {e}");
-            Ok(DialPeerResultDto { status: "unreachable".to_string(), device_name: Some(device_name) })
+            Ok(DialPeerResultDto {
+                status: "unreachable".to_string(),
+                device_name: Some(device_name),
+            })
         }
     }
 }
@@ -477,10 +496,7 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     let parsed = parse_node_id(&node_id)?;
     let state = app.state::<PeerNetState>();
     let removed = {
-        let mut sessions = state
-            .connections
-            .lock()
-            .expect("connections table lock poisoned");
+        let mut sessions = state.connections.lock().expect("connections table lock poisoned");
         sessions.remove(&parsed.to_string())
     };
     if let Some(session) = &removed {
@@ -500,7 +516,11 @@ pub async fn disconnect_peer(app: AppHandle, node_id: String) -> crate::Result<b
     }
     if removed.is_some() || inbound_closed.is_some() {
         tracing::info!(node_id = %parsed, "peer connection dropped by user");
-        emit_json(&app, "peer-disconnected", serde_json::json!({ "nodeId": parsed.as_str(), "connected": false }));
+        emit_json(
+            &app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": parsed.as_str(), "connected": false }),
+        );
     }
     Ok(removed.is_some())
 }
@@ -548,10 +568,7 @@ async fn session_watch(
     drop(conn);
     let state = app.state::<PeerNetState>();
     let owned = {
-        let mut sessions = state
-            .connections
-            .lock()
-            .expect("connections table lock poisoned");
+        let mut sessions = state.connections.lock().expect("connections table lock poisoned");
         let owned = matches!(sessions.get(&node_id), Some(s) if s.id == session_id);
         if owned {
             sessions.remove(&node_id);
@@ -593,11 +610,7 @@ pub(crate) fn current_node_id(app: &AppHandle) -> Option<String> {
 /// 建立时可信条目已带元数据（设置面立即可见名称）。返回是否成功送达回执——
 /// false 表示请求已超时/已应答/ID 未知（前端应关闭对应弹窗）。
 #[tauri::command]
-pub async fn respond_peer_consent(
-    app: AppHandle,
-    request_id: String,
-    accepted: bool,
-) -> crate::Result<bool> {
+pub async fn respond_peer_consent(app: AppHandle, request_id: String, accepted: bool) -> crate::Result<bool> {
     let state = app.state::<PeerNetState>();
     let pending = state
         .consents
@@ -632,6 +645,25 @@ pub async fn respond_peer_consent(
 
 /// 可信对端列表（设置面管理用；节点未启动仍可读——句柄独立于运行时存活）
 #[tauri::command]
+/// 可信条目 → DTO（纯函数，供测试）：展示名持久化名优先、在线缓存名兑底，
+/// 均缺为 None（前端以短指纹兑底）；短指纹取前 8 位；加入时刻转 RFC3339
+pub(crate) fn trust_entry_to_dto(
+    entry: &TrustedPeerEntry,
+    online_names: &HashMap<NodeId, String>,
+) -> TrustedPeerDto {
+    TrustedPeerDto {
+        display_name: entry
+            .display_name
+            .clone()
+            .or_else(|| online_names.get(&entry.node_id).cloned()),
+        node_id: entry.node_id.to_string(),
+        fingerprint_short: entry.node_id.short_fingerprint().to_string(),
+        added_at: entry.added_at.to_rfc3339(),
+    }
+}
+
+/// 可信对端列表（设置面管理用；节点未启动仍可读——句柄独立于运行时存活）
+#[tauri::command]
 pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeerDto>> {
     let trust = trust_handle(&app).await?;
     let state = app.state::<PeerNetState>();
@@ -652,22 +684,15 @@ pub async fn list_trusted_peers(app: AppHandle) -> crate::Result<Vec<TrustedPeer
     Ok(trust
         .list_entries()
         .into_iter()
-        .map(|entry| TrustedPeerDto {
-            display_name: entry
-                .display_name
-                .or_else(|| online_names.get(&entry.node_id).cloned()),
-            node_id: entry.node_id.to_string(),
-            fingerprint_short: entry.node_id.short_fingerprint().to_string(),
-            added_at: entry.added_at.to_rfc3339(),
-        })
+        .map(|entry| trust_entry_to_dto(&entry, &online_names))
         .collect())
 }
 
 /// 撤销可信对端（返回该 ID 原本是否存在；撤销后对端重连重新走首连确认）
 #[tauri::command]
 pub async fn revoke_trusted_peer(app: AppHandle, node_id: String) -> crate::Result<bool> {
-    let parsed = NodeId::parse(&node_id)
-        .map_err(|e| crate::AppError::Internal(format!("invalid peer node id: {e}")))?;
+    let parsed =
+        NodeId::parse(&node_id).map_err(|e| crate::AppError::Internal(format!("invalid peer node id: {e}")))?;
     let trust = trust_handle(&app).await?;
     let removed = trust.remove(&parsed).map_err(map_peer_net_error)?;
     // 撤销信任的同时断开与该节点的活跃连接（出站/入站均关停）：信任撤销只影响
@@ -704,11 +729,7 @@ pub struct SharedDirDto {
 impl From<&SharedDirEntry> for SharedDirDto {
     fn from(entry: &SharedDirEntry) -> Self {
         let (kind, path, tree_uri) = match &entry.root {
-            SharedDirRoot::Fs { path } => (
-                "fs",
-                Some(path.to_string_lossy().into_owned()),
-                None,
-            ),
+            SharedDirRoot::Fs { path } => ("fs", Some(path.to_string_lossy().into_owned()), None),
             SharedDirRoot::Saf { tree_uri } => ("saf", None, Some(tree_uri.clone())),
         };
         Self {
@@ -733,28 +754,38 @@ pub async fn list_shared_directories(app: AppHandle) -> crate::Result<Vec<Shared
 ///
 /// 返回新条目（含注册表分配的 ID）。同根重复注册被拒绝。
 #[tauri::command]
-pub async fn add_shared_directory(
-    app: AppHandle,
-    name: Option<String>,
-    path: String,
-) -> crate::Result<SharedDirDto> {
+/// 共享目录展示名派生（纯函数，供测试）：显式名去除首尾空白后非空则用之；
+/// 否则回退路径末段目录名；路径无末段（如根目录）回退原路径
+pub(crate) fn derive_display_name(name: Option<String>, path: &str) -> String {
+    name.map(|n| n.trim().to_string())
+        .filter(|n| !n.is_empty())
+        .unwrap_or_else(|| {
+            Path::new(path)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.to_string())
+        })
+}
+
+/// 新增共享目录（桌面端：用户选择的文件夹路径；校验存在且为目录后落盘持久）
+///
+/// 返回新条目（含注册表分配的 ID）。同根重复注册被拒绝。
+#[tauri::command]
+pub async fn add_shared_directory(app: AppHandle, name: Option<String>, path: String) -> crate::Result<SharedDirDto> {
     if path.trim().is_empty() {
         return Err(crate::AppError::InvalidInput(
             "add shared directory: path must not be empty".to_string(),
         ));
     }
-    let display_name = name
-        .map(|n| n.trim().to_string())
-        .filter(|n| !n.is_empty())
-        .unwrap_or_else(|| {
-            Path::new(&path)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.clone())
-        });
+    let display_name = derive_display_name(name, &path);
     let store = shared_handle(&app).await?;
     let entry = store
-        .add(display_name, SharedDirRoot::Fs { path: PathBuf::from(&path) })
+        .add(
+            display_name,
+            SharedDirRoot::Fs {
+                path: PathBuf::from(&path),
+            },
+        )
         .map_err(map_peer_net_error)?;
     tracing::info!(dir_id = %entry.id, path = %path, "shared directory added (desktop)");
     Ok(SharedDirDto::from(&entry))
@@ -849,10 +880,7 @@ impl ConnectionHandler for InboundConnectionBridge {
         //（2026-09-07 实机实证：数据面短连接 churn 造成移动端仍显示未连接）
         let is_first_connection = {
             let state = self.app.state::<PeerNetState>();
-            let mut peers = state
-                .inbound_peers
-                .lock()
-                .expect("inbound peers lock poisoned");
+            let mut peers = state.inbound_peers.lock().expect("inbound peers lock poisoned");
             let count = peers.entry(node_id.as_str().to_string()).or_default();
             *count += 1;
             let has_outbound = state
@@ -886,10 +914,8 @@ impl ConnectionHandler for InboundConnectionBridge {
             // 内层 handler 放入独立任务并登记 JoinHandle：disconnect_peer /
             // stop_locked 据此按节点中止（连接随任务 drop 关闭，对端活性泵经
             // EOF 感知）。handler 以 EOF/错误结束时本清算路径发 peer-disconnected
-            let join = crate::system::error_boundary::spawn_with_error_boundary(
-                "peer_inbound_handler",
-                inner.handle(conn),
-            );
+            let join =
+                crate::system::error_boundary::spawn_with_error_boundary("peer_inbound_handler", inner.handle(conn));
             {
                 let state = app.state::<PeerNetState>();
                 state
@@ -906,10 +932,7 @@ impl ConnectionHandler for InboundConnectionBridge {
             //（会话连接与数据面短连接并存时，短连接结束不得摘除连接态）
             let was_last_inbound = {
                 let state = app.state::<PeerNetState>();
-                let mut peers = state
-                    .inbound_peers
-                    .lock()
-                    .expect("inbound peers lock poisoned");
+                let mut peers = state.inbound_peers.lock().expect("inbound peers lock poisoned");
                 match peers.entry(node_id.as_str().to_string()) {
                     std::collections::hash_map::Entry::Occupied(mut e) => {
                         let count = e.get_mut();
@@ -988,15 +1011,12 @@ async fn start_locked(
 
     // 占位 bind 固定默认端口（防火墙规则友好），被占回退 :0；占位句柄移交节点
     // 消除端口竞态（Decision 4）
-    let listener =
-        TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, DEFAULT_PEER_PORT)))
-            .or_else(|_| TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))))
-            .map_err(|e| {
-                crate::AppError::Internal(format!("bind peer-net listener failed: {e}"))
-            })?;
-    let bind_addr = listener.local_addr().map_err(|e| {
-        crate::AppError::Internal(format!("read peer-net listener addr failed: {e}"))
-    })?;
+    let listener = TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, DEFAULT_PEER_PORT)))
+        .or_else(|_| TcpListener::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0))))
+        .map_err(|e| crate::AppError::Internal(format!("bind peer-net listener failed: {e}")))?;
+    let bind_addr = listener
+        .local_addr()
+        .map_err(|e| crate::AppError::Internal(format!("read peer-net listener addr failed: {e}")))?;
 
     let node = PeerNetNode::new(PeerNetNodeConfig {
         bind_addr,
@@ -1037,8 +1057,13 @@ async fn start_locked(
         chunk_size: 64 * 1024,
         landing: None,
     };
-    let handler =
-        Arc::new(SharedDirHandler::new(shared, None, config.clone(), transfer_tx, serve_tx));
+    let handler = Arc::new(SharedDirHandler::new(
+        shared,
+        None,
+        config.clone(),
+        transfer_tx,
+        serve_tx,
+    ));
     // 接收侧登记句柄与配置快照（设置热更新/按批取消入口），并按持久化
     // 设置纠正首份策略与落点；事件消费任务随后启动
     super::peer_receive::register_handler(app, Arc::clone(&handler), config).await;
@@ -1075,29 +1100,25 @@ async fn start_locked(
     // 引擎广播 daemon 同绑 5353 端口互抢多播包——真机实证「只发现自己、发现
     // 不了对端」；收回引擎单守护即恢复（多播包只进一个守护，广播+浏览必须同
     // 守护才能既收对端响应又回自己的广播）。
-    let (discovery_tx, mut discovery_rx) =
-        tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_mdns_bridge",
-        async move {
-            // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
-            // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
-            // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
-            // 同款形态已实机验证可靠。
-            loop {
-                match discovery_rx.try_recv() {
-                    Ok(event) => forward_discovery_event(event),
-                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-                    // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
-                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                        tracing::debug!("peer mDNS bus bridge exited");
-                        break;
-                    }
+    let (discovery_tx, mut discovery_rx) = tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
+    crate::system::error_boundary::spawn_with_error_boundary("peer_net_mdns_bridge", async move {
+        // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
+        // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
+        // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
+        // 同款形态已实机验证可靠。
+        loop {
+            match discovery_rx.try_recv() {
+                Ok(event) => forward_discovery_event(event),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
+                // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    tracing::debug!("peer mDNS bus bridge exited");
+                    break;
                 }
-                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             }
-        },
-    );
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        }
+    });
 
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
@@ -1125,7 +1146,14 @@ async fn start_locked(
     spawn_discovery_refresh_subscriber(app.clone());
     Ok(PeerNodeStatus {
         started: true,
-        node_id: state.runtime.lock().await.as_ref().expect("just stored").node_id.clone(),
+        node_id: state
+            .runtime
+            .lock()
+            .await
+            .as_ref()
+            .expect("just stored")
+            .node_id
+            .clone(),
         listen_addr: listen_addr.to_string(),
     })
 }
@@ -1155,7 +1183,11 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
     let mut emitted: std::collections::HashSet<String> = std::collections::HashSet::new();
     for (node_id, session) in drained {
         let _ = session.close.send(true);
-        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
+        emit_json(
+            app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": node_id, "connected": false }),
+        );
         emitted.insert(node_id);
     }
     // 入站连接随节点关停一并终结：中止内层 handler（连接随任务 drop 关闭，
@@ -1184,7 +1216,11 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
         if emitted.contains(&node_id) {
             continue;
         }
-        emit_json(app, "peer-disconnected", serde_json::json!({ "nodeId": node_id, "connected": false }));
+        emit_json(
+            app,
+            "peer-disconnected",
+            serde_json::json!({ "nodeId": node_id, "connected": false }),
+        );
     }
     let runtime = state.runtime.lock().await.take();
     match runtime {
@@ -1193,11 +1229,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             // 远端拉取队列同步中止（issue 11）
             super::peer_receive::clear_handler(app).await;
             super::peer_remote::clear_state(app).await;
-            runtime
-                .daemon
-                .stop()
-                .await
-                .map_err(map_peer_net_error)?;
+            runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
@@ -1212,11 +1244,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
 /// `peer-consent-requested` 事件。应答经 `respond_peer_consent` 命令回流；
 /// 30s 内无应答由 crate 闸门按拒绝结算（`CONFIRM_TIMEOUT`），弹窗超时语义
 /// 与之天然对齐（前端按同值倒计时收起）。
-async fn drive_gate(
-    mut events: tokio::sync::mpsc::Receiver<TrustEvent>,
-    cache: Arc<DiscoveryCache>,
-    app: AppHandle,
-) {
+async fn drive_gate(mut events: tokio::sync::mpsc::Receiver<TrustEvent>, cache: Arc<DiscoveryCache>, app: AppHandle) {
     while let Some(event) = events.recv().await {
         match event {
             TrustEvent::ConfirmRequested { node_id, reply } => {
@@ -1226,13 +1254,13 @@ async fn drive_gate(
                 let request_id = uuid::Uuid::new_v4().to_string();
                 {
                     let state = app.state::<PeerNetState>();
-                    let mut pending = state
-                        .consents
-                        .lock()
-                        .expect("consent table lock poisoned");
+                    let mut pending = state.consents.lock().expect("consent table lock poisoned");
                     pending.insert(
                         request_id.clone(),
-                        PendingConsent { node_id: node_id.clone(), reply },
+                        PendingConsent {
+                            node_id: node_id.clone(),
+                            reply,
+                        },
                     );
                 }
                 tracing::info!(
@@ -1276,12 +1304,10 @@ async fn shared_handle(app: &AppHandle) -> crate::Result<Arc<SharedDirStore>> {
 async fn shared_handle_at(data_dir: &Path) -> crate::Result<Arc<SharedDirStore>> {
     let dir = data_dir.to_path_buf();
     // crate 的 load_or_create 为同步阻塞 IO：移出异步上下文
-    let store = tauri::async_runtime::spawn_blocking(move || {
-        SharedDirStore::load_or_create(&dir)
-    })
-    .await
-    .map_err(|e| crate::AppError::Internal(format!("join shared dirs load failed: {e}")))?
-    .map_err(map_peer_net_error)?;
+    let store = tauri::async_runtime::spawn_blocking(move || SharedDirStore::load_or_create(&dir))
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("join shared dirs load failed: {e}")))?
+        .map_err(map_peer_net_error)?;
     Ok(Arc::new(store))
 }
 
@@ -1301,8 +1327,7 @@ pub(crate) fn map_peer_net_error(e: PeerNetError) -> crate::AppError {
 
 /// 节点 ID hex 字符串解析（issue 08 命令面共用）：统一错误上下文
 pub(crate) fn parse_node_id(node_id: &str) -> crate::Result<NodeId> {
-    NodeId::parse(node_id)
-        .map_err(|e| crate::AppError::Internal(format!("peer-net invalid node id '{node_id}': {e}")))
+    NodeId::parse(node_id).map_err(|e| crate::AppError::Internal(format!("peer-net invalid node id '{node_id}': {e}")))
 }
 
 /// 向前端发 JSON 载荷事件（失败只记日志不上抛：窗口缺失/前端未就绪属预期场景）。
@@ -1357,12 +1382,9 @@ struct DiscoveryRefreshHandler {
 impl crate::plugin::BusMessageHandler for DiscoveryRefreshHandler {
     fn on_message(&self, _msg: &bedcode_plugin_api::BusMessage) -> anyhow::Result<()> {
         let app = self.app.clone();
-        crate::system::error_boundary::spawn_with_error_boundary(
-            "peer_net_discovery_refresh_handler",
-            async move {
-                handle_discovery_refresh(app).await;
-            },
-        );
+        crate::system::error_boundary::spawn_with_error_boundary("peer_net_discovery_refresh_handler", async move {
+            handle_discovery_refresh(app).await;
+        });
         Ok(())
     }
 }
@@ -1425,34 +1447,30 @@ async fn handle_discovery_refresh(app: AppHandle) {
 /// 挂载刷新请求静态订阅：节点由插件激活驱动启动，注册时插件管理器可能
 /// 尚未进全局态，轮询等就绪后再注册（进程内仅注册一次）
 /// 注册护栏：peer 节点重启会重入 start_locked，静态订阅只挂一次
-static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static DISCOVERY_REFRESH_SUBSCRIBED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 fn spawn_discovery_refresh_subscriber(app: AppHandle) {
     use std::sync::atomic::Ordering;
     if DISCOVERY_REFRESH_SUBSCRIBED.swap(true, Ordering::SeqCst) {
         return;
     }
-    crate::system::error_boundary::spawn_with_error_boundary(
-        "peer_net_discovery_refresh_subscriber",
-        async move {
-            loop {
-                if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-                    ctx.plugin_host()
-                        .message_bus()
-                        .subscribe_static(
-                            DISCOVERY_REFRESH_SUBSCRIBER,
-                            DISCOVERY_REFRESH_TOPIC,
-                            Box::new(DiscoveryRefreshHandler { app }),
-                        )
-                        .await;
-                    tracing::info!("peer discovery refresh subscriber registered");
-                    return;
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    crate::system::error_boundary::spawn_with_error_boundary("peer_net_discovery_refresh_subscriber", async move {
+        loop {
+            if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+                ctx.plugin_host()
+                    .message_bus()
+                    .subscribe_static(
+                        DISCOVERY_REFRESH_SUBSCRIBER,
+                        DISCOVERY_REFRESH_TOPIC,
+                        Box::new(DiscoveryRefreshHandler { app }),
+                    )
+                    .await;
+                tracing::info!("peer discovery refresh subscriber registered");
+                return;
             }
-        },
-    );
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        }
+    });
 }
 
 /// 前端事件名 → 插件总线 topic 映射（非对等事件返回 None 不桥接）
@@ -1480,9 +1498,7 @@ fn dial_connected_payload(node_id: &str, device_name: &str) -> serde_json::Value
 /// 运行时句柄快照（issue 09 发送编排用）：节点句柄 + 发现缓存
 ///
 /// 锁内仅 Clone 廉价句柄，不跨 await 持锁；节点未启动返回 None。
-pub(crate) async fn runtime_snapshot(
-    app: &AppHandle,
-) -> Option<(PeerNetNode, Arc<DiscoveryCache>)> {
+pub(crate) async fn runtime_snapshot(app: &AppHandle) -> Option<(PeerNetNode, Arc<DiscoveryCache>)> {
     let state = app.state::<PeerNetState>();
     let guard = state.runtime.lock().await;
     guard.as_ref().map(|r| (r.node.clone(), r.cache.clone()))
@@ -1536,5 +1552,244 @@ mod dial_payload_tests {
         assert_eq!(payload["nodeId"], "aa");
         assert_eq!(payload["deviceName"], "Pixel 9");
         assert_eq!(payload["connected"], true);
+    }
+}
+
+#[cfg(test)]
+mod peer_net_tests {
+    use super::*;
+    use bedcode_peer_net::TrustedPeerEntry;
+    use chrono::Utc;
+
+    /// 64 位小写 hex 节点 ID（格式校验通过的最小形态）
+    fn node_id(suffix: u8) -> NodeId {
+        NodeId::parse(&format!("{:02x}{}", suffix, "ab".repeat(31))).unwrap()
+    }
+
+    // ==================== 可信条目 → DTO 转换（list_trusted_peers） ====================
+
+    #[test]
+    fn trust_entry_to_dto_prefers_persisted_name_over_online_name() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(1),
+            display_name: Some("persisted-name".to_string()),
+            added_at: Utc::now(),
+        };
+        let mut online_names = HashMap::new();
+        online_names.insert(entry.node_id.clone(), "online-name".to_string());
+
+        let dto = trust_entry_to_dto(&entry, &online_names);
+        // 持久化名优先，在线缓存名不得覆盖
+        assert_eq!(dto.display_name.as_deref(), Some("persisted-name"));
+        assert_eq!(dto.node_id, entry.node_id.as_str());
+        assert_eq!(dto.fingerprint_short.len(), 8, "短指纹固定 8 字符");
+        assert_eq!(dto.added_at, entry.added_at.to_rfc3339());
+    }
+
+    #[test]
+    fn trust_entry_to_dto_falls_back_to_online_name_when_persisted_missing() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(2),
+            display_name: None,
+            added_at: Utc::now(),
+        };
+        let mut online_names = HashMap::new();
+        online_names.insert(entry.node_id.clone(), "online-only".to_string());
+
+        let dto = trust_entry_to_dto(&entry, &online_names);
+        assert_eq!(dto.display_name.as_deref(), Some("online-only"));
+    }
+
+    #[test]
+    fn trust_entry_to_dto_returns_none_when_both_names_missing() {
+        let entry = TrustedPeerEntry {
+            node_id: node_id(3),
+            display_name: None,
+            added_at: Utc::now(),
+        };
+        let dto = trust_entry_to_dto(&entry, &HashMap::new());
+        assert_eq!(dto.display_name, None, "两处均缺 → None（前端以短指纹兜底）");
+        assert_eq!(dto.fingerprint_short, &entry.node_id.as_str()[..8]);
+    }
+
+    // ==================== 共享目录展示名派生（add_shared_directory） ====================
+
+    #[test]
+    fn derive_display_name_uses_explicit_name_after_trim() {
+        assert_eq!(derive_display_name(Some("  Projects  ".to_string()), "/tmp/a"), "Projects");
+        assert_eq!(derive_display_name(Some("Projects".to_string()), "/tmp/a"), "Projects");
+    }
+
+    #[test]
+    fn derive_display_name_falls_back_to_path_last_segment() {
+        // 显式名为空/纯空白 → 路径末段目录名
+        assert_eq!(derive_display_name(Some("   ".to_string()), "/data/videos"), "videos");
+        assert_eq!(derive_display_name(None, "/data/videos"), "videos");
+        // 末段带扩展名也原样取（目录名语义）
+        assert_eq!(derive_display_name(None, "/tmp/code.tar.gz"), "code.tar.gz");
+    }
+
+    #[test]
+    fn derive_display_name_root_path_falls_back_to_raw_path() {
+        // 根目录无末段 → 回退原路径
+        assert_eq!(derive_display_name(None, "/"), "/");
+        assert_eq!(derive_display_name(Some("".to_string()), "/"), "/");
+    }
+
+    // ==================== 发现事件 → 总线 topic（bus_topic_for） ====================
+
+    #[test]
+    fn bus_topic_for_maps_known_events() {
+        assert_eq!(bus_topic_for("peer-connected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-disconnected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-consent-requested"), Some("peer:consent"));
+        assert_eq!(bus_topic_for("peer-transfer-changed"), Some("peer:transfer"));
+        assert_eq!(bus_topic_for("peer-receive-changed"), Some("peer:receive"));
+    }
+
+    #[test]
+    fn bus_topic_for_unknown_event_is_none() {
+        assert_eq!(bus_topic_for("peer-devices-changed"), None, "设备列表已随缓存守护退役");
+        assert_eq!(bus_topic_for(""), None);
+    }
+
+    // ==================== DTO 转换（发现记录 / 共享目录条目） ====================
+
+    #[test]
+    fn discovered_peer_to_dto_carries_file_transfer_capability_bit() {
+        let record = |cap: u64| DiscoveredPeerRecord {
+            node_id: node_id(4),
+            addr: "127.0.0.1:47613".parse().unwrap(),
+            device_name: "Pixel".to_string(),
+            protocol_version: 1,
+            capabilities: cap,
+            last_seen: Instant::now(),
+        };
+        // 具备文件传输能力（bit0 置位）
+        let dto = DiscoveredPeerDto::from(&record(0b1));
+        assert_eq!(dto.node_id, node_id(4).as_str());
+        assert_eq!(dto.device_name, "Pixel");
+        assert_eq!(dto.addr, "127.0.0.1:47613");
+        assert!(dto.file_transfer, "cap bit0 置位 → file_transfer=true");
+        // 无该能力
+        assert!(!DiscoveredPeerDto::from(&record(0b10)).file_transfer, "仅 bit1 → 无文件传输能力");
+        assert!(!DiscoveredPeerDto::from(&record(0)).file_transfer);
+    }
+
+    #[test]
+    fn shared_dir_to_dto_maps_fs_and_saf_roots() {
+        let fs_entry = SharedDirEntry {
+            id: "abc".to_string(),
+            name: "Projects".to_string(),
+            root: SharedDirRoot::Fs {
+                path: PathBuf::from("/home/user/Projects"),
+            },
+        };
+        let fs_dto = SharedDirDto::from(&fs_entry);
+        assert_eq!(fs_dto.id, "abc");
+        assert_eq!(fs_dto.name, "Projects");
+        assert_eq!(fs_dto.kind, "fs");
+        assert_eq!(fs_dto.path.as_deref(), Some("/home/user/Projects"));
+        assert_eq!(fs_dto.tree_uri, None);
+        assert!(!fs_dto.builtin, "非内置条目 builtin=false");
+
+        let saf_entry = SharedDirEntry {
+            id: "xyz".to_string(),
+            name: "SafTree".to_string(),
+            root: SharedDirRoot::Saf {
+                tree_uri: "content://tree/abc".to_string(),
+            },
+        };
+        let saf_dto = SharedDirDto::from(&saf_entry);
+        assert_eq!(saf_dto.kind, "saf");
+        assert_eq!(saf_dto.tree_uri.as_deref(), Some("content://tree/abc"));
+        assert_eq!(saf_dto.path, None);
+    }
+
+    #[test]
+    fn shared_dir_to_dto_marks_builtin_downloads() {
+        let entry = SharedDirEntry {
+            id: bedcode_peer_net::BUILTIN_DOWNLOADS_ID.to_string(),
+            name: "Downloads".to_string(),
+            root: SharedDirRoot::Fs {
+                path: PathBuf::from("/tmp"),
+            },
+        };
+        assert!(SharedDirDto::from(&entry).builtin, "内置下载目录 builtin=true");
+    }
+
+    // ==================== 可信列表 CRUD（TrustStore，tempdir 隔离） ====================
+
+    #[test]
+    fn trust_store_crud_roundtrip_with_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let store = TrustStore::load_or_create(dir.path()).expect("load_or_create");
+        let id = node_id(5);
+
+        // 空列表起步
+        assert!(!store.list_entries().iter().any(|e| e.node_id == id));
+        // 带名新增 → true；重复新增 → false（已存在）
+        assert!(store.add_with_metadata(&id, Some("Pixel 9")).expect("add"));
+        assert!(!store.add_with_metadata(&id, Some("Pixel 9")).expect("dup add"));
+        // 列表可查，元数据落库
+        let entry = store
+            .list_entries()
+            .into_iter()
+            .find(|e| e.node_id == id)
+            .expect("entry persisted");
+        assert_eq!(entry.display_name.as_deref(), Some("Pixel 9"));
+        // 移除 → true；再移除 → false
+        assert!(store.remove(&id).expect("remove"));
+        assert!(!store.remove(&id).expect("remove again"));
+        assert!(!store.list_entries().iter().any(|e| e.node_id == id));
+    }
+
+    // ==================== 共享目录注册表 CRUD（SharedDirStore，tempdir 隔离） ====================
+
+    #[test]
+    fn shared_dir_store_crud_and_replace_all() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // 注册表要求 root 真实存在（add/replace_all 均校验），先建真实子目录
+        let real_root = dir.path().join("Projects");
+        std::fs::create_dir_all(&real_root).expect("mkdir");
+        let real_root_b = dir.path().join("B");
+        std::fs::create_dir_all(&real_root_b).expect("mkdir");
+        let store = SharedDirStore::load_or_create(dir.path()).expect("load_or_create");
+        assert!(store.list().is_empty());
+
+        let entry = store
+            .add(
+                "Projects",
+                SharedDirRoot::Fs {
+                    path: real_root.clone(),
+                },
+            )
+            .expect("add");
+        assert!(!entry.id.is_empty());
+        assert_eq!(store.list().len(), 1);
+        assert_eq!(store.list()[0].name, "Projects");
+
+        // 移除 → true；不存在 → false
+        assert!(store.remove(&entry.id).expect("remove"));
+        assert!(!store.remove(&entry.id).expect("remove again"));
+        assert!(store.list().is_empty());
+
+        // replace_all 幂等批量替换
+        let entries = vec![
+            SharedDirEntry {
+                id: "a".to_string(),
+                name: "A".to_string(),
+                root: SharedDirRoot::Fs { path: real_root.clone() },
+            },
+            SharedDirEntry {
+                id: "b".to_string(),
+                name: "B".to_string(),
+                root: SharedDirRoot::Fs { path: real_root_b.clone() },
+            },
+        ];
+        store.replace_all(&entries).expect("replace_all");
+        assert_eq!(store.list().len(), 2);
+        assert_eq!(store.list()[0].id, "a");
+        assert_eq!(store.list()[1].id, "b");
     }
 }

@@ -13,6 +13,8 @@ export default {
     './plugins/auto-task/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/scheduler/src/**/*.{vue,js,ts,jsx,tsx}',
+    // agent-hub：会话日志查询条控件使用宿主 Input/Select 同源 Tailwind 类
+    './plugins/agent-hub/src/**/*.{vue,js,ts,jsx,tsx}',
     // 共享 SDK 组件：宿主/插件共用（@binblink/bedcode-plugin-sdk-desktop/ui 的 Select 等），
     // 不含此路径则组件的 fixed/max-h 等布局类缺失，面板定位异常
     './packages/plugin-sdk-desktop/src/**/*.{vue,js,ts,jsx,tsx}',

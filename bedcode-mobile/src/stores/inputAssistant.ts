@@ -62,6 +62,8 @@ export interface InputAssistantSettings {
   terminalTheme: string | null
   /** 用户是否手动指定了终端主题（false 时跟随外观设置） */
   isTerminalThemeUserSet: boolean
+  /** 终端新手引导待展示：首次进入终端页自动弹出教程，展示后置 false；设置里可重新打开 */
+  terminalOnboardingPending: boolean
 }
 
 const DEFAULT_SETTINGS: InputAssistantSettings = {
@@ -79,6 +81,7 @@ const DEFAULT_SETTINGS: InputAssistantSettings = {
   terminalFontSize: 12,
   terminalTheme: null,
   isTerminalThemeUserSet: false,
+  terminalOnboardingPending: true,
 }
 
 const STORAGE_KEY_STATS = 'terminal_shortcut_stats'

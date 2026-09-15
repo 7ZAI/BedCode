@@ -28,6 +28,8 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
 
+use crate::system::error_boundary::spawn_with_error_boundary;
+
 // ==================== 常量 ====================
 
 /// 重连退避（ms）：500 → 1000 → 2000 → 4000 → 8000 封顶（对齐原前端 socket）
@@ -51,6 +53,13 @@ const TB_MAGIC: [u8; 2] = [0x54, 0x42];
 const TB_VERSION_V3: u8 = 3;
 /// 客户端 ack 标志位
 const TB_FLAG_ACK: u8 = 0x02;
+
+// ==================== 链路调试节流（终端字节对账） ====================
+
+/// 收帧统计打点间隔（有新数据才打；不打逐帧日志，防输出风暴期日志淹没链路）
+const INGEST_STATS_INTERVAL_MS: u64 = 5000;
+/// 缺口告警节流：真实缺口时后续每条 WS 消息都会持续 gap，逐条告警会刷屏
+const GAP_LOG_INTERVAL_MS: u64 = 2000;
 
 // ==================== 事件名（前端 listen） ====================
 
@@ -155,21 +164,25 @@ impl SessionCache {
         }
     }
 
-    /// 收帧入缓存（区间连续；防御性容忍间隙——重订阅后不一致由 snapshot 元数据纠正）
-    fn push(&mut self, start: u64, data: Vec<u8>) {
+    /// 收帧入缓存（区间连续；防御性容忍间隙——重订阅后不一致由 snapshot 元数据纠正）。
+    /// 返回本次 LRU 淘汰的最旧字节数（对账口径：淘汰字节无法再经缓存供给前端）
+    fn push(&mut self, start: u64, data: Vec<u8>) -> u64 {
         let end = start + data.len() as u64;
         // 淘汰：超出上限丢最旧（均摊 O(1)）；新帧无论如何保留
         self.entries.push_back(CacheEntry { start, end, data });
         self.bytes += end - start;
+        let mut evicted = 0u64;
         while self.bytes > self.max_bytes {
             if let Some(front) = self.entries.pop_front() {
                 self.bytes -= front.end - front.start;
+                evicted += front.end - front.start;
                 self.head = front.end;
             } else {
                 break;
             }
         }
         self.tail = end;
+        evicted
     }
 
     /// 指定 from 起的历史快照：`(min 可用起点, 快照尾(=tail), 驻留字节, 区间字节)`
@@ -263,6 +276,7 @@ enum LinkExit {
 }
 
 /// 出站帧（IO 任务与命令侧交互通道）
+#[derive(Debug)]
 enum Outbound {
     Subscribe { from_offset: u64 },
     Input { data: String, special_key: Option<String> },
@@ -279,7 +293,11 @@ pub struct TerminalLink {
     /// 出站通道（命令侧 → IO 任务）
     write_tx: mpsc::Sender<Outbound>,
     /// IO 任务句柄（manual stop 时 abort）
-    handle: Mutex<Option<tauri::async_runtime::JoinHandle<()>>>,
+    ///
+    /// 类型为 `tokio::task::JoinHandle`（`spawn_with_error_boundary` 返回值）：
+    /// tauri async_runtime 的 spawn 底层同为 tokio（移动端无 spawn_local 分派），
+    /// 包装层仅加 panic 边界，不改变 runtime 归属。
+    handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     /// 阶段（LinkPhase）
     phase: AtomicU8,
     /// 本次订阅的历史边界（subscribe_ok.snapshot_offset；end ≤ 该值的帧为历史段）
@@ -298,6 +316,24 @@ pub struct TerminalLink {
     /// 会话不存在连续重试计数
     session_missing: AtomicU32,
     cache: Mutex<SessionCache>,
+    // ==================== 链路调试统计（终端字节对账） ====================
+    /// 累计收帧数 / 收字节数（WS 二进制消息解析后）
+    frames_received: AtomicU64,
+    bytes_received: AtomicU64,
+    /// 实时段帧（end > snapshot，经事件推送前端）/ 历史段帧（只入缓存）
+    frames_live_emitted: AtomicU64,
+    bytes_live_emitted: AtomicU64,
+    frames_cache_only: AtomicU64,
+    bytes_cache_only: AtomicU64,
+    /// TB 解析残渣字节（帧边界损坏/未知版本截断，本环节丢失）
+    parse_residue_bytes: AtomicU64,
+    /// 缓存 LRU 累计淘汰字节（16MB 上限，淘汰段前端经 get_history 无法回补）
+    cache_evicted_bytes: AtomicU64,
+    /// 收帧统计打点时刻与当时游标（节流 + 无新数据不打）
+    last_stats_ms: AtomicU64,
+    last_stats_cursor: AtomicU64,
+    /// 缺口告警上次打点时刻（节流）
+    last_gap_log_ms: AtomicU64,
 }
 
 impl TerminalLink {
@@ -318,6 +354,17 @@ impl TerminalLink {
             stopped: AtomicBool::new(true),
             session_missing: AtomicU32::new(0),
             cache: Mutex::new(SessionCache::new()),
+            frames_received: AtomicU64::new(0),
+            bytes_received: AtomicU64::new(0),
+            frames_live_emitted: AtomicU64::new(0),
+            bytes_live_emitted: AtomicU64::new(0),
+            frames_cache_only: AtomicU64::new(0),
+            bytes_cache_only: AtomicU64::new(0),
+            parse_residue_bytes: AtomicU64::new(0),
+            cache_evicted_bytes: AtomicU64::new(0),
+            last_stats_ms: AtomicU64::new(0),
+            last_stats_cursor: AtomicU64::new(0),
+            last_gap_log_ms: AtomicU64::new(0),
         })
     }
 
@@ -328,7 +375,8 @@ impl TerminalLink {
         } else {
             "realtime"
         };
-        let _ = self.app.emit(
+        // 前端状态机唯一事件源：emit 失败必须留痕，否则 UI 静默停在旧状态无任何线索
+        if let Err(e) = self.app.emit(
             EVENT_TERMINAL_STATE,
             serde_json::json!({
                 "session_id": self.session_id,
@@ -339,16 +387,28 @@ impl TerminalLink {
                 "mode": mode,
                 "detail": detail,
             }),
-        );
+        ) {
+            tracing::warn!(
+                session_id = %self.session_id,
+                detail = %detail,
+                error = %e,
+                "terminal state event emit failed"
+            );
+        }
     }
 
     /// 缓存收帧 + 推进游标 + （live 段）事件推送 + ack 记账
     fn ingest_frame(&self, frame: ParsedFrame) {
+        let frame_bytes = frame.end - frame.start;
+        self.frames_received.fetch_add(1, Ordering::SeqCst);
+        self.bytes_received.fetch_add(frame_bytes, Ordering::SeqCst);
         let live_snapshot = self.live_snapshot.load(Ordering::SeqCst);
         if frame.end > live_snapshot {
+            self.frames_live_emitted.fetch_add(1, Ordering::SeqCst);
+            self.bytes_live_emitted.fetch_add(frame_bytes, Ordering::SeqCst);
             // 实时帧：事件推送（历史段 [head, snapshot) 只入缓存不推送——前端
             // 经 terminal_get_history 一次性取；重连 WS 重播段同理静默入缓存）
-            let _ = self.app.emit(
+            if let Err(e) = self.app.emit(
                 EVENT_TERMINAL_FRAME,
                 serde_json::json!({
                     "session_id": self.session_id,
@@ -359,16 +419,97 @@ impl TerminalLink {
                         &frame.data,
                     ),
                 }),
-            );
+            ) {
+                tracing::warn!(
+                    session_id = %self.session_id,
+                    start_offset = frame.start,
+                    end_offset = frame.end,
+                    error = %e,
+                    "terminal frame event emit failed"
+                );
+            }
+        } else {
+            // 历史段：对账口径——这部分字节经 terminal_get_history 供给前端
+            self.frames_cache_only.fetch_add(1, Ordering::SeqCst);
+            self.bytes_cache_only.fetch_add(frame_bytes, Ordering::SeqCst);
         }
-        {
+        let evicted = {
             let mut cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
-            cache.push(frame.start, frame.data);
+            cache.push(frame.start, frame.data)
+        };
+        if evicted > 0 {
+            self.cache_evicted_bytes.fetch_add(evicted, Ordering::SeqCst);
         }
         self.cursor.store(frame.end.max(self.cursor.load(Ordering::SeqCst)), Ordering::SeqCst);
         // 缓存游标推进即视为已消费（背压锚点到 Rust 缓存），随时可回发 ack
         self.acked.store(self.cursor.load(Ordering::SeqCst), Ordering::SeqCst);
-        self.pending_ack_bytes.fetch_add(frame.end - frame.start, Ordering::SeqCst);
+        self.pending_ack_bytes.fetch_add(frame_bytes, Ordering::SeqCst);
+    }
+
+    /// 缺口告警（节流）：帧首越过收帧游标 = 流字节缺口。min_offset 越过游标的
+    /// 截断场景（服务端历史淘汰）也满足该条件，字段一并携带供判别
+    fn log_offset_gap(&self, cursor_before: u64, frame_start: u64) {
+        let now = now_millis();
+        let last = self.last_gap_log_ms.load(Ordering::SeqCst);
+        if now.saturating_sub(last) < GAP_LOG_INTERVAL_MS {
+            return;
+        }
+        if self
+            .last_gap_log_ms
+            .compare_exchange(last, now, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        tracing::warn!(
+            session_id = %self.session_id,
+            cursor_before,
+            frame_start,
+            missing_bytes = frame_start - cursor_before,
+            min_offset = self.min_offset.load(Ordering::SeqCst),
+            "terminal stream offset gap detected"
+        );
+    }
+
+    /// 收帧统计周期打点（5s 且游标有推进才打）：与桌面端产出/转发统计对齐，
+    /// 比对累计字节可定位丢字节环节
+    fn maybe_log_ingest_stats(&self) {
+        let now = now_millis();
+        let last = self.last_stats_ms.load(Ordering::SeqCst);
+        let cursor = self.cursor.load(Ordering::SeqCst);
+        if now.saturating_sub(last) < INGEST_STATS_INTERVAL_MS
+            || (last != 0 && cursor == self.last_stats_cursor.load(Ordering::SeqCst))
+        {
+            return;
+        }
+        if self
+            .last_stats_ms
+            .compare_exchange(last, now, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return;
+        }
+        self.last_stats_cursor.store(cursor, Ordering::SeqCst);
+        let cache = self.cache.lock().unwrap_or_else(|p| p.into_inner());
+        tracing::debug!(
+            session_id = %self.session_id,
+            cursor,
+            acked = self.acked.load(Ordering::SeqCst),
+            pending_ack_bytes = self.pending_ack_bytes.load(Ordering::SeqCst),
+            frames_received = self.frames_received.load(Ordering::SeqCst),
+            bytes_received = self.bytes_received.load(Ordering::SeqCst),
+            frames_live = self.frames_live_emitted.load(Ordering::SeqCst),
+            bytes_live_emitted = self.bytes_live_emitted.load(Ordering::SeqCst),
+            frames_cached = self.frames_cache_only.load(Ordering::SeqCst),
+            bytes_cached = self.bytes_cache_only.load(Ordering::SeqCst),
+            cache_head = cache.head,
+            cache_tail = cache.tail,
+            cache_bytes = cache.bytes,
+            cache_entries = cache.entries.len(),
+            cache_evicted_bytes = self.cache_evicted_bytes.load(Ordering::SeqCst),
+            parse_residue_bytes = self.parse_residue_bytes.load(Ordering::SeqCst),
+            "terminal link ingest stats (periodic)"
+        );
     }
 
     /// 查询历史（缓存优先）：`(min, snapshot, history_bytes, data_base64)`
@@ -386,9 +527,16 @@ impl TerminalLink {
         ))
     }
 
-    /// 发送出站帧（命令侧调用；连接未就绪时静默丢弃——重连后按状态机恢复）
+    /// 发送出站帧（命令侧调用）。通道关闭 = IO 任务已退出（链接死亡），此时
+    /// 命令随之丢弃必须留痕——重连恢复由状态机/重新订阅负责，不在此处重试
     async fn send_out(&self, out: Outbound) {
-        let _ = self.write_tx.send(out).await;
+        if let Err(e) = self.write_tx.send(out).await {
+            tracing::warn!(
+                session_id = %self.session_id,
+                out = ?e.0,
+                "terminal link io task exited, outbound command dropped"
+            );
+        }
     }
 }
 
@@ -427,7 +575,7 @@ impl TerminalLinkManager {
         link.stopped.store(false, Ordering::SeqCst);
         link.phase.store(LinkPhase::Connecting.as_u8(), Ordering::SeqCst);
         link.emit_state("subscribing");
-        let handle = tauri::async_runtime::spawn(link_io(link.clone(), write_rx));
+        let handle = spawn_with_error_boundary("terminal_link_io", link_io(link.clone(), write_rx));
         *link.handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(handle);
         links.insert(session_id, link);
     }
@@ -444,8 +592,12 @@ impl TerminalLinkManager {
             link.emit_state("unsubscribed");
             // 唤醒 IO 任务优雅退出
             let tx = link.write_tx.clone();
-            tauri::async_runtime::spawn(async move {
-                let _ = tx.send(Outbound::Close).await;
+            let session_id = session_id.to_string();
+            spawn_with_error_boundary("terminal_unsubscribe_close", async move {
+                // send 失败 = IO 任务已先行退出（连接已断/已停止）：常规退路径，debug 留痕即可
+                if tx.send(Outbound::Close).await.is_err() {
+                    tracing::debug!(session_id = %session_id, "io task already exited, close signal skipped");
+                }
             });
         }
     }
@@ -525,7 +677,23 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
         if pending >= ACK_BYTES_THRESHOLD || (last != 0 && now.saturating_sub(last) >= ACK_MAX_IDLE_MS) {
             let frame = build_ack_frame(&link.session_id, acked);
             link.last_ack_at.store(now, Ordering::SeqCst);
-            let _ = futures_util::SinkExt::send(ws_sink, WsMsg::Binary(frame)).await;
+            // 链路调试（背压对账）：ack 回发推进桌面端 unacked 释放——与桌面端
+            // on_ack 日志对照验证反馈环；ack 已节流（64KB/250ms），无风暴风险
+            tracing::debug!(
+                session_id = %link.session_id,
+                acked,
+                pending_bytes = pending,
+                "terminal ack frame sent (release desktop unacked accounting)"
+            );
+            // ack 回发失败 = 连接已坏：水位信息本次丢失，重连订阅后由游标重同步
+            if let Err(e) = futures_util::SinkExt::send(ws_sink, WsMsg::Binary(frame)).await {
+                tracing::warn!(
+                    session_id = %link.session_id,
+                    acked,
+                    error = %e,
+                    "terminal ack frame send failed, wait for reconnect"
+                );
+            }
         } else {
             // 未达阈值也未到空闲兜底：下次收帧时再判（节流 pending 保留）
             link.pending_ack_bytes.fetch_add(pending, Ordering::SeqCst);
@@ -542,6 +710,12 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
                         return Ok(());
                     }
                     Outbound::Subscribe { from_offset } => {
+                        // 链路调试：订阅锚点（重连续传关键参数，控制帧低频）
+                        tracing::debug!(
+                            session_id = %link.session_id,
+                            from_offset,
+                            "terminal subscribe frame sent"
+                        );
                         let msg = if from_offset > 0 {
                             format!(r#"{{"type":"subscribe","from_offset":{}}}"#, from_offset)
                         } else {
@@ -592,13 +766,47 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
                         handle_control_text(link, &text, &mut ws_tx).await?;
                     }
                     WsMsg::Binary(bin) => {
-                        for frame in parse_tb_frames(&bin) {
+                        let frames = parse_tb_frames(&bin);
+                        // 解析残渣对账：帧边界损坏/未知版本截断时尾部字节既不进缓存
+                        // 也不推事件（本环节丢字节），必须留痕
+                        let parsed_bytes: usize = frames
+                            .iter()
+                            .map(|f| TB_FRAME_HEADER_LEN + f.data.len())
+                            .sum();
+                        if parsed_bytes != bin.len() {
+                            link.parse_residue_bytes
+                                .fetch_add((bin.len() - parsed_bytes) as u64, Ordering::SeqCst);
+                            tracing::warn!(
+                                session_id = %link.session_id,
+                                message_bytes = bin.len(),
+                                parsed_bytes,
+                                "tb frame parse residue bytes dropped at parse stage"
+                            );
+                        }
+                        // 缺口检测：帧首越过收帧游标 = 流字节缺口（每条消息只记首处，
+                        // 告警节流，防真实缺口期间风暴）
+                        let mut gap: Option<(u64, u64)> = None;
+                        for frame in &frames {
+                            let cur = link.cursor.load(Ordering::SeqCst);
+                            if cur > 0 && frame.start > cur {
+                                gap = Some((cur, frame.start));
+                                break;
+                            }
+                        }
+                        if let Some((cursor_before, frame_start)) = gap {
+                            link.log_offset_gap(cursor_before, frame_start);
+                        }
+                        for frame in frames {
                             link.ingest_frame(frame);
                         }
+                        link.maybe_log_ingest_stats();
                         maybe_ack(link, &mut ws_tx).await;
                     }
                     WsMsg::Ping(p) => {
-                        let _ = ws_tx.send(WsMsg::Pong(p)).await;
+                        // pong 回发失败 = 连接已坏，由流错误路径收敛重连（keepalive 常规细节，debug 即可）
+                        if let Err(e) = ws_tx.send(WsMsg::Pong(p)).await {
+                            tracing::debug!(session_id = %link.session_id, error = %e, "terminal pong send failed");
+                        }
                     }
                     WsMsg::Pong(_) => {}
                     WsMsg::Close(_) => break,
@@ -642,19 +850,27 @@ async fn handle_control_text(
             link.send_out(Outbound::Subscribe { from_offset: from }).await;
         }
         Some("subscribe_ok") => {
-            link.live_snapshot.store(
-                msg.get("snapshot_offset").and_then(|v| v.as_u64()).unwrap_or(0),
-                Ordering::SeqCst,
+            let snapshot = msg.get("snapshot_offset").and_then(|v| v.as_u64()).unwrap_or(0);
+            let min = msg.get("min_offset").and_then(|v| v.as_u64()).unwrap_or(0);
+            // 链路调试（字节对账）：快照锚点与桌面端 subscribe_ok 发送侧日志对照
+            tracing::debug!(
+                session_id = %link.session_id,
+                snapshot_offset = snapshot,
+                min_offset = min,
+                "subscribe_ok received, replaying history segment into cache"
             );
-            link.min_offset.store(
-                msg.get("min_offset").and_then(|v| v.as_u64()).unwrap_or(0),
-                Ordering::SeqCst,
-            );
+            link.live_snapshot.store(snapshot, Ordering::SeqCst);
+            link.min_offset.store(min, Ordering::SeqCst);
             link.phase.store(LinkPhase::History.as_u8(), Ordering::SeqCst);
             link.session_missing.store(0, Ordering::SeqCst);
             link.emit_state("subscribed");
         }
         Some("history_end") => {
+            tracing::debug!(
+                session_id = %link.session_id,
+                cursor = link.cursor.load(Ordering::SeqCst),
+                "history_end received, entering live phase"
+            );
             link.phase.store(LinkPhase::Live.as_u8(), Ordering::SeqCst);
             // 重连后桌面端重订阅会把传播模式重置为 realtime（handle_session_subscribe
             // mode.store(MODE_REALTIME)）：若本端已标记 batch（页面退出）则补发 mode 帧
@@ -694,11 +910,18 @@ async fn handle_control_text(
                 // 有限重试：服务端 error 后保持连接，等客户端重订阅——重连由连接
                 // 层兜底（Io 退出）；此处直接订阅重试
                 link.emit_state("retry");
-                let _ = futures_util::SinkExt::send(
+                if let Err(e) = futures_util::SinkExt::send(
                     ws_tx,
                     WsMsg::Binary(build_ack_frame(&link.session_id, link.acked.load(Ordering::SeqCst))),
                 )
-                .await;
+                .await
+                {
+                    tracing::warn!(
+                        session_id = %link.session_id,
+                        error = %e,
+                        "terminal ack frame send failed, wait for reconnect"
+                    );
+                }
                 link.send_out(Outbound::Subscribe { from_offset: link.cursor.load(Ordering::SeqCst) })
                     .await;
             }
@@ -830,6 +1053,17 @@ pub async fn terminal_get_history(
     // TerminalHistoryResult 接口——Tauri invoke 只对请求参数做 camelCase
     // 转换，返回值原样传递，键名必须在 Rust 侧与前端契约一致
     if let Some((min, snapshot, history_bytes, data_b64)) = link.cached_history(from) {
+        // 链路调试（字节对账）：缓存命中路径——payload_bytes 为 base64 长度
+        //（略大于原始字节），与 dataBase64 一同供前端拼接对账
+        tracing::debug!(
+            session_id = %session_id,
+            from_offset = from,
+            min_offset = min,
+            snapshot_offset = snapshot,
+            history_bytes,
+            payload_b64_bytes = data_b64.len(),
+            "terminal history served from rust cache"
+        );
         return Ok(serde_json::json!({
             "from": from,
             "minOffset": min,
@@ -839,8 +1073,13 @@ pub async fn terminal_get_history(
         }));
     }
 
-    // 缓存未命中（空/头被淘汰）：一次性 HTTP 拉取历史。桌面端返回统一
-    // ApiResponse 信封 {code, message, data:{min_offset, snapshot_offset,
+    // 缓存未命中（空/头被淘汰）：一次性 HTTP 拉取历史
+    tracing::debug!(
+        session_id = %session_id,
+        from_offset = from,
+        "terminal history cache miss, falling back to desktop http"
+    );
+    // 桌面端返回统一 ApiResponse 信封 {code, message, data:{min_offset, snapshot_offset,
     // history_bytes, data_base64}}——此处剥信封、code!=0 视为错误、转 camelCase
     let conn = crate::state::get_connection_manager();
     let target = conn
@@ -875,10 +1114,34 @@ pub async fn terminal_get_history(
         return Err(format!("history fetch failed: code {code} {message}"));
     }
     let data = parsed.get("data").cloned().unwrap_or(parsed);
-    let min_offset = data.get("min_offset").and_then(|v| v.as_u64()).unwrap_or(from);
-    let snapshot_offset = data.get("snapshot_offset").and_then(|v| v.as_u64()).unwrap_or(from);
-    let history_bytes = data.get("history_bytes").and_then(|v| v.as_u64()).unwrap_or(0);
-    let data_base64 = data.get("data_base64").and_then(|v| v.as_str()).unwrap_or("");
+    // 桌面端 `SessionHistoryData` 带 `#[serde(rename_all = "camelCase")]`：线上
+    // 键名是 minOffset/snapshotOffset/historyBytes/dataBase64。此前读 snake_case
+    // 四键全 miss，静默落到默认值（min_offset→from、history_bytes→0），LRU 淘汰
+    // 后 HTTP 回退拼不出历史且截断信号丢失。
+    let min_offset = data.get("minOffset").and_then(|v| v.as_u64()).unwrap_or(from);
+    let snapshot_offset = data
+        .get("snapshotOffset")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(from);
+    let history_bytes = data
+        .get("historyBytes")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let data_base64 = data
+        .get("dataBase64")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    // 链路调试（字节对账）：HTTP 回取路径——min_offset > from 说明桌面端历史
+    // 头也被淘汰（前端需清屏重播），与桌面端 history served 日志对照
+    tracing::debug!(
+        session_id = %session_id,
+        from_offset = from,
+        min_offset,
+        snapshot_offset,
+        history_bytes,
+        payload_b64_bytes = data_base64.len(),
+        "terminal history fetched via desktop http"
+    );
     Ok(serde_json::json!({
         "from": from,
         "minOffset": min_offset,

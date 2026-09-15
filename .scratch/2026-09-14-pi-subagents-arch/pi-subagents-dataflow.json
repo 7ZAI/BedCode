@@ -1,0 +1,238 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "pi-subagents 数据流",
+    "locale": "zh-CN",
+    "viewBox": [1080, 760],
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "foreground-path",
+        "label": "前台主路径",
+        "focus": ["parent_turn", "subagent_call", "launch_contract", "foreground_session", "tool_result"],
+        "note": "父会话经启动契约在前台启动子会话，结果流式渲染回对话。"
+      },
+      {
+        "id": "background-path",
+        "label": "后台分离路径",
+        "focus": ["launch_contract", "detached_session", "completion_events", "tool_result", "artifacts"],
+        "note": "后台任务分离为独立进程，完成事件经 bg_wait 收敛后交付，产物落盘。"
+      },
+      {
+        "id": "script-orchestration",
+        "label": "脚本编排",
+        "focus": ["subagent_call", "workflow_worker", "launch_contract"],
+        "note": "workflowScript 在 Worker 线程沙箱中解析，经 runs.run / runs.all 分派子会话。"
+      }
+    ]
+  },
+  "stages": [
+    { "label": "调用" },
+    { "label": "解析授权" },
+    { "label": "执行" },
+    { "label": "协调" },
+    { "label": "交付" }
+  ],
+  "nodes": [
+    {
+      "id": "parent_turn",
+      "type": "frontend",
+      "label": "父会话回合",
+      "sublabel": "用户 + 父 agent",
+      "tag": "入口",
+      "stage": 0,
+      "row": 0
+    },
+    {
+      "id": "subagent_call",
+      "type": "backend",
+      "label": "subagent 参数",
+      "sublabel": "agent / task / script",
+      "tag": "工具调用",
+      "stage": 0,
+      "row": 1
+    },
+    {
+      "id": "agent_config",
+      "type": "backend",
+      "label": "Agent 配置",
+      "sublabel": "builtin + 自定义 + scope",
+      "tag": "发现",
+      "stage": 1,
+      "row": 0
+    },
+    {
+      "id": "launch_contract",
+      "type": "security",
+      "label": "启动契约",
+      "sublabel": "能力上限 / 预算 / 权限",
+      "tag": "授权",
+      "stage": 1,
+      "row": 1
+    },
+    {
+      "id": "workflow_worker",
+      "type": "backend",
+      "label": "脚本沙箱",
+      "sublabel": "Worker + acorn",
+      "tag": "编排",
+      "stage": 2,
+      "row": 0
+    },
+    {
+      "id": "foreground_session",
+      "type": "backend",
+      "label": "前台子会话",
+      "sublabel": "进程内 AgentSession",
+      "tag": "前台",
+      "stage": 2,
+      "row": 1
+    },
+    {
+      "id": "detached_session",
+      "type": "backend",
+      "label": "分离子会话",
+      "sublabel": "独立 Node 进程",
+      "tag": "后台",
+      "stage": 2,
+      "row": 2
+    },
+    {
+      "id": "completion_events",
+      "type": "messagebus",
+      "label": "完成事件",
+      "sublabel": "结果文件 + notify",
+      "tag": "协调",
+      "stage": 3,
+      "row": 2
+    },
+    {
+      "id": "tool_result",
+      "type": "backend",
+      "label": "工具结果",
+      "sublabel": "返回父回合",
+      "tag": "交付",
+      "stage": 4,
+      "row": 1
+    },
+    {
+      "id": "artifacts",
+      "type": "database",
+      "label": "落盘产物",
+      "sublabel": "JSONL + mission.json",
+      "tag": "持久",
+      "stage": 4,
+      "row": 3
+    }
+  ],
+  "flows": [
+    {
+      "from": "parent_turn",
+      "to": "subagent_call",
+      "label": "工具调用",
+      "classification": "同步调用",
+      "variant": "emphasis",
+      "labelAt": [100, 200]
+    },
+    {
+      "from": "subagent_call",
+      "to": "agent_config",
+      "label": "agent 发现",
+      "classification": "配置解析"
+    },
+    {
+      "from": "agent_config",
+      "to": "launch_contract",
+      "label": "能力继承",
+      "classification": "授权决策",
+      "variant": "dashed",
+      "labelAt": [315, 200]
+    },
+    {
+      "from": "launch_contract",
+      "to": "workflow_worker",
+      "label": "runs.run / runs.all",
+      "classification": "脚本分派",
+      "variant": "dashed",
+      "labelAt": [430, 200]
+    },
+    {
+      "from": "launch_contract",
+      "to": "foreground_session",
+      "label": "前台启动",
+      "classification": "进程内会话",
+      "variant": "emphasis",
+      "labelAt": [460, 330]
+    },
+    {
+      "from": "launch_contract",
+      "to": "detached_session",
+      "label": "分离 spawn",
+      "classification": "独立进程",
+      "variant": "emphasis",
+      "labelAt": [530, 430]
+    },
+    {
+      "from": "foreground_session",
+      "to": "tool_result",
+      "label": "流式渲染",
+      "classification": "实时输出",
+      "variant": "emphasis",
+      "route": "straight"
+    },
+    {
+      "from": "detached_session",
+      "to": "completion_events",
+      "label": "结果 + notify",
+      "classification": "异步通知",
+      "variant": "emphasis",
+      "labelAt": [637, 320]
+    },
+    {
+      "from": "completion_events",
+      "to": "tool_result",
+      "label": "bg_wait 收敛",
+      "classification": "事件订阅",
+      "variant": "emphasis"
+    },
+    {
+      "from": "detached_session",
+      "to": "artifacts",
+      "label": "JSONL 落盘",
+      "classification": "持久化产物",
+      "variant": "dashed",
+      "route": "bottom-channel",
+      "labelAt": [745, 460]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "主路径",
+      "items": [
+        "数据从左到右穿越调用、解析授权、执行、协调、交付五个阶段",
+        "前台与后台两条执行路径在启动契约处分叉",
+        "前台路径直接流式渲染结果回父回合"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "安全边界",
+      "items": [
+        "启动契约是所有子会话的必经授权点",
+        "能力上限、工具预算、模型作用域在此集中仲裁",
+        "脚本沙箱在 Worker 线程中隔离执行 workflowScript"
+      ]
+    },
+    {
+      "dot": "orange",
+      "title": "后台收敛",
+      "items": [
+        "分离 Runner 进程独立运行，父会话可先行返回",
+        "完成事件与结果文件通过协调通道回传",
+        "bg_wait 订阅完成事件，auto-drain 在回合结束前收敛"
+      ]
+    }
+  ]
+}

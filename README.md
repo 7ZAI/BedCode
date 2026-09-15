@@ -76,11 +76,11 @@ vue-i18n 完整支持（zh-CN / en），设置页语言切换并持久化；错�
 
 Monorepo 双独立项目，各自包含 `src/`（前端）+ `src-tauri/`（Rust 后端）：
 
-<a href="docs/architecture/BedCode.architecture.html" target="_blank">
-  <img src="docs/architecture/bedcode-architecture.png" alt="BedCode 架构图 — 桌面主机 · 移动端远程 · WASM 插件沙箱">
+<a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">
+  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode 架构图 — 桌面主机 · 移动端远程 · WASM 插件沙箱">
 </a>
 
-<sub>📈 交互式版本：支持深色 / 浅色主题、节点聚焦、路由追踪、导出分享卡 —— <a href="docs/architecture/BedCode.architecture.html" target="_blank">打开</a> · 源文件：<a href="docs/architecture/BedCode.architecture.json">archify JSON IR</a>（<a href="https://github.com/tt-a1i/archify">Archify</a> 渲染）</sub>
+<sub>📈 交互式版本：支持深色 / 浅色主题、节点聚焦、路由追踪、导出分享卡 —— <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">打开</a> · 源文件：<a href="docs/diagrams/bedcode-overall-architecture.json">archify JSON IR</a>（<a href="https://github.com/tt-a1i/archify">Archify</a> 渲染）</sub>
 
 <table>
 <thead>

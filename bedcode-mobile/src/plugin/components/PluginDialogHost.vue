@@ -129,9 +129,7 @@ function cancel(): void {
                     'flex-1 rounded-xl py-2.5 text-sm font-medium text-[var(--mobile-text-on-accent)] active:opacity-70',
                     item.options.variant === 'danger'
                       ? 'bg-[var(--mobile-danger-solid-bg)]'
-                      : item.options.variant === 'warning'
-                        ? 'bg-[var(--mobile-warning)]'
-                        : 'bg-[var(--mobile-accent)]',
+                      : 'bg-[var(--mobile-accent)]',
                   ]"
                   @click="confirm(item)"
                 >

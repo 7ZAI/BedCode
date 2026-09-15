@@ -255,6 +255,7 @@ async fn fs_root_browse_lists_sorted_and_pull_lands_identical_content() {
         },
         conn_a_events_tx,
         CancelToken::new(),
+        None,
     )
     .await
     .expect("pull session io");
@@ -406,6 +407,7 @@ async fn saf_root_flows_through_host_seam_for_browse_and_pull() {
         },
         tx,
         CancelToken::new(),
+        None,
     )
     .await
     .expect("pull session io");
@@ -622,4 +624,102 @@ async fn traversal_and_absolute_pull_requests_are_rejected_readonly() {
     // 路径清洗纯函数与线协议行为同源
     assert!(resolve_rel_path("../escaped.txt").is_none());
     assert!(resolve_rel_path("/abs/path.txt").is_none());
+}
+
+/// 拉取（pull serve）暂停/恢复：拉取方经 PauseSlot 门控数据供方推流，
+/// serve 侧停滞且不落终态；恢复后完整落盘（暂停不丢字节）。
+#[tokio::test]
+async fn pull_pause_then_resume_serves_full_content() {
+    use bedcode_peer_net::{PauseCmd, PauseSlot};
+
+    let shared_root = tempfile::tempdir().expect("shared root tempdir");
+    let (source, content) = make_source_file(shared_root.path(), "big-pull.bin", 8 * 1024 * KIB);
+    let file_name = "big-pull.bin".to_string();
+
+    let store = Arc::new(SharedDirStore::in_memory());
+    let entry = store
+        .add(
+            "shared",
+            SharedDirRoot::Fs {
+                path: shared_root.path().to_path_buf(),
+            },
+        )
+        .expect("register fs shared dir");
+
+    let (a, b, mut rx) = spawn_pair(store, None, TransferConfig::default()).await;
+    let downloads = a.dir.path().join("downloads");
+    let (conn_a_events_tx, mut conn_a_events) = mpsc::channel::<TransferEvent>(64);
+    let conn = dial_trusted(&a, &b).await;
+    let pause_slot = PauseSlot::new();
+    let batch_id = "pull-pause-test-1";
+
+    let puller = tokio::spawn({
+        let downloads = downloads.clone();
+        let pause_slot = pause_slot.clone();
+        async move {
+            bedcode_peer_net::pull_shared_file(
+                conn,
+                &entry.id,
+                &file_name,
+                batch_id,
+                TransferConfig {
+                    policy: bedcode_peer_net::ReceivePolicy::AlwaysAccept,
+                    download_dir: downloads,
+                    ..TransferConfig::default()
+                },
+                conn_a_events_tx,
+                CancelToken::new(),
+                Some(pause_slot),
+            )
+            .await
+        }
+    });
+
+    // 等过半进度后暂停（事件通道 cap-64：过半后起后台排空，避免 puller emit 阻塞
+    // 阻断暂停命令处理）
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), conn_a_events.recv()).await {
+            Ok(Some(TransferEvent::Progress { transferred, .. })) => {
+                if transferred >= 4 * 1024 * KIB as u64 {
+                    break;
+                }
+            }
+            Ok(Some(_)) => continue,
+            other => panic!("expected pull progress, got {other:?}"),
+        }
+    }
+    let drain = tokio::spawn(async move {
+        let mut terminal_seen = false;
+        loop {
+            match conn_a_events.recv().await {
+                Some(TransferEvent::Terminal { .. }) => {
+                    terminal_seen = true;
+                    break;
+                }
+                Some(_) => continue,
+                None => break,
+            }
+        }
+        terminal_seen
+    });
+    pause_slot.send(PauseCmd::Pause).await;
+    // 暂停生效：serve 停滞——短暂窗口内不应出现终态（传输挂起而非完成/取消）
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    assert!(!drain.is_finished(), "pull reached terminal while paused");
+
+    pause_slot.send(PauseCmd::Resume).await;
+    let state = puller.await.expect("puller join").expect("pull session io");
+    assert_eq!(state, TerminalState::Completed, "pull must complete after resume");
+    assert!(drain.await.expect("drain join"), "puller must report a terminal");
+
+    let pulled = downloads.join("big-pull.bin");
+    assert_eq!(
+        std::fs::read(&pulled).expect("read pulled file"),
+        content,
+        "pulled content must be byte-identical after pause/resume"
+    );
+    assert!(
+        source.exists(),
+        "shared source must be untouched by pull pause"
+    );
 }

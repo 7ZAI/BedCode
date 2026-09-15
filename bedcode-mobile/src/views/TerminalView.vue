@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="terminalViewRef"
     class="terminal-view"
     :style="terminalViewStyle"
   >
@@ -24,8 +25,9 @@
 
     <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
     <div class="movable-clip">
-      <!-- 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移 -->
-      <div class="movable-area" :style="movableAreaStyle">
+      <!-- 可移动区域：终端内容 + 输入栏，随根容器高度收缩（键盘避让由
+           terminal-view bottom 收缩承担，见 terminalViewStyle） -->
+      <div class="movable-area">
         <!-- Main Content: Terminal + Sidebar overlay -->
         <div class="main-content">
           <div class="terminal-output-area">
@@ -112,6 +114,7 @@
       :quick-bar-count="assistStore.settings.quickBarCount"
       :toolbar-items="assistStore.settings.headerToolbarItems || ['folder']"
       :all-toolbar-items="ALL_TOOLBAR_ITEMS"
+      :onboarding-pending="assistStore.settings.terminalOnboardingPending"
       :safe-area-style="settingsModalStyle"
       @confirm="handleSettingsConfirm"
       @cancel="showSettings = false"
@@ -161,6 +164,12 @@
   <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
   <!-- 便捷功能教程弹窗（标题栏 ? 入口） -->
   <TerminalHelpModal :visible="showHelp" @close="showHelp = false" />
+  <!-- 新手引导（聚光灯分步导览：首次进入自动展示；「查看完整教程」接帮助弹窗） -->
+  <TerminalOnboardingTour
+    :visible="showOnboarding"
+    @close="handleOnboardingClose"
+    @open-help="handleOnboardingOpenHelp"
+  />
 </template>
 
 <script setup lang="ts">
@@ -180,9 +189,10 @@
  *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
  * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
  * - 键盘避让：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道检测，
- *   movable-area 纯 transform 直接跟随（配合 AndroidManifest adjustNothing），
- *   无 settle 延迟、无自绘过渡动画——键盘系统动画即视觉过渡，输入区实时
- *   贴合键盘顶缘，且不会因过渡属性启停反复提升/降出合成层产生旧帧残留
+ *   terminal-view 根容器 bottom 收缩压缩终端显示区高度（resize 语义，配合
+ *   AndroidManifest adjustNothing）——行数实时重算并同步 PTY，TUI 完整
+ *   重排可见；布局视口与可视区等高，无聚焦呈现视口 pan 空间；
+ *   逐事件应用无 settle 延迟，键盘系统动画即视觉过渡
  * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
  */
 defineOptions({ name: 'TerminalView' })
@@ -207,9 +217,11 @@ import { useTheme } from '@/composables/useTheme'
 import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
-import { computeGridSize, FONT_FAMILY as METRICS_FONT_FAMILY, TERMINAL_SCROLLBAR_GUTTER_PX, TERMINAL_LINE_END_MARGIN_COLS } from '@/utils/terminalMetrics'
+import { computeGridSize, FONT_FAMILY as METRICS_FONT_FAMILY, TERMINAL_LINE_HEIGHT, TERMINAL_SCROLLBAR_GUTTER_PX, TERMINAL_LINE_END_MARGIN_COLS } from '@/utils/terminalMetrics'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { shouldApplyGridResize, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
+import { attachRowBackgroundClipper, type RowBackgroundClipper } from '@/utils/terminalRowClip'
+import { attachViewportPanGuard, type ViewportPanGuard } from '@/composables/useViewportPanGuard'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { useTuiCompat } from '@/composables/useTuiCompat'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
@@ -222,9 +234,10 @@ import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import TerminalHelpModal from '@/components/TerminalHelpModal.vue'
+import TerminalOnboardingTour from '@/components/TerminalOnboardingTour.vue'
 import { useToast } from '@/composables/useToast'
 import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
-import { TERMINAL_THEMES } from '@/config/terminalThemes'
+import { resolveTerminalTheme } from '@/config/terminalThemes'
 import type { PresetTask } from '@/composables/model'
 
 // ====================================================================================
@@ -280,6 +293,11 @@ const scrollContainer = ref<HTMLDivElement | null>(null)
 const isTerminalReady = ref(false)
 const terminalRef = ref<Terminal | null>(null)
 const fitAddonRef = ref<FitAddon | null>(null)
+// 行尾背景盒裁切器（DOM 渲染器 CJK 漂移止血，见 terminalRowClip 模块注释）
+const rowClipperRef = ref<RowBackgroundClipper | null>(null)
+// 页面 pan 守卫：阻断「整页被拖向键盘」的可视视口平移（标题/输入条滑出）
+const terminalViewRef = ref<HTMLElement | null>(null)
+const panGuardRef = ref<ViewportPanGuard | null>(null)
 const resizeObserverRef = ref<ResizeObserver | null>(null)
 // ResizeObserver rAF 节流句柄：同一帧内多次 fit 只执行一次
 let resizeRaf = 0
@@ -372,6 +390,9 @@ const showSidebar = ref(false)
 const showShortcutConfig = ref(false)
 // 标题栏 ? 按钮：终端输入组件便捷功能教程弹窗
 const showHelp = ref(false)
+// 新手引导：首次进入终端页自动展示（terminalOnboardingPending），展示后清除；
+// 设置里可重新开启（下次进入再显示）
+const showOnboarding = ref(false)
 
 // 侧栏「插入引用」待填入路径：TerminalInputBar 消费后置回 null
 const pendingRefPath = ref<string | null>(null)
@@ -385,6 +406,17 @@ const terminalSettings = ref({
       : settingsStore.settings.ui.theme) as string,
   isThemeUserSet: assistStore.settings.isTerminalThemeUserSet,
 })
+
+/**
+ * 当前生效的具体色板：'system' 解析为 dark/light（xterm 只接受可解析颜色，
+ * var() 串会落回内置默认色）。同时供 xterm theme 选项与容器底色 CSS 变量
+ * （--terminal-canvas-bg）共用：网格贴合后顶部 0~1 行余量、右侧行尾余量区
+ * （约 1 列 + 滚动条预留宽）显示的是容器底色，必须与画布同色——此前容器
+ * 用 App 主题 token（浅色取暖白），深色 TUI 下顶部/右侧露出浅色带。
+ */
+const resolvedTerminalTheme = computed(() =>
+  resolveTerminalTheme(terminalSettings.value.theme, isSystemDark.value),
+)
 
 // 弹窗安全区域样式
 const settingsModalStyle = computed(() => ({
@@ -552,28 +584,28 @@ watch(keyboardOffset, (offset, prev) => {
   }
 })
 
-// terminal-view 只负责安全区域，不参与键盘避让动画
+// terminal-view 负责安全区域 + 键盘避让：键盘弹出时收缩根容器高度
+// （bottom = keyboardOffset），布局视口与可视区等高 → docH == visualViewport
+// 高度 → WebView 的聚焦呈现（visual viewport pan）无空间触发——此前用
+// movable-area padding 挤压内容：布局内抬起后，WebView 在键盘动画早期已把
+// 可视视口 pan 到最大（棘轮不回弹），双重补偿把输入条悬在键盘上方一段空白
+// （真机实测 offsetTop == docH - vvH == padding 量）。
+// 终端区高度随根容器收缩 → ResizeObserver 触发重新 fit → 行数实时减少并
+// 同步 PTY（resize 语义保留）；双通道检测（vv 优先、插件兜底）不变
 const terminalViewStyle = computed(() => ({
   paddingTop: `${safeAreaTop.value}px`,
+  '--terminal-canvas-bg': resolvedTerminalTheme.value.background,
+  // 键盘避让：高度 = 全高 - 键盘遮挡。不能只写 bottom——CSS 里 height:100vh
+  // 与 top 同时存在时 bottom 被忽略（over-constrained），收缩不生效
+  height: keyboardOffset.value > 0 ? `calc(100vh - ${keyboardOffset.value}px)` : '100vh',
 }))
 
-// 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
-// 纯 transform 直接跟随（无 settle 延迟、无自绘过渡）：transform 只走 GPU 合成
-// 不触发布局重排，逐事件应用零成本——键盘自身的系统动画就是视觉过渡。
-// 旧的「稳定 250ms 后一次性播放 250ms 过渡」方案有双重代价：
-// ① 输入区在键盘已完全弹出后仍滞留原位 ~500ms 才动（体感卡顿/迟滞）；
-// ② transition 属性临时启停把 movable-area 反复提升/降出合成层，降层重光栅化
-//    产生旧帧分块残留（米白横带/底部间隔），事后被迫再做整屏 refresh +
-//    强制重合成补丁。直接跟随从根上消除这两个问题，无需事后重绘
-//
-// 配合 AndroidManifest adjustNothing：
-// 系统不调整 WebView 大小，完全由 JS 控制偏移；
-// 双通道检测（vv 优先、插件兜底），兼容不同 WebView 的 visualViewport 行为
-const movableAreaStyle = computed(() => ({
-  transform: keyboardOffset.value > 0
-    ? `translateY(-${keyboardOffset.value}px)`
-    : 'translateY(0)',
-}))
+// 可移动区域：终端内容 + 输入栏。键盘避让由 terminal-view 根容器高度收缩
+// 承担（见上方 terminalViewStyle 注释）：终端区（flex:1）与输入栏随根容器
+// 等比压缩/还原，ResizeObserver 触发重新 fit → 行数实时变化并同步 PTY。
+// 此处的 movable-area 不再做任何避让变换/内边距——历史上先后用过
+// translateY 整体平移与 padding-bottom 挤压，前者行数不变顶部被裁、后者
+// 会与 WebView 聚焦呈现的视口 pan 叠加（双重补偿），均已废弃
 
 /** 选择操作栏定位：避让选区和屏幕边界 */
 const selectionBarStyle = computed(() => {
@@ -686,6 +718,7 @@ function handleSettingsConfirm(settings: TerminalSettings) {
     terminalFontSize: terminalSettings.value.fontSize,
     terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
     isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
+    terminalOnboardingPending: settings.onboardingPending,
   })
 
   applyTerminalTheme()
@@ -702,6 +735,23 @@ function handleSettingsConfirm(settings: TerminalSettings) {
 }
 
 // ==================== Misc Handlers ====================
+
+/** 新手引导关闭：清除待展示标记（本设备已展示过一次） */
+function handleOnboardingClose() {
+  showOnboarding.value = false
+  if (assistStore.settings.terminalOnboardingPending) {
+    assistStore.saveSettings({ terminalOnboardingPending: false })
+  }
+}
+
+/** 新手引导跳转完整教程：清除标记并打开帮助弹窗 */
+function handleOnboardingOpenHelp() {
+  showOnboarding.value = false
+  if (assistStore.settings.terminalOnboardingPending) {
+    assistStore.saveSettings({ terminalOnboardingPending: false })
+  }
+  showHelp.value = true
+}
 
 /** 侧边栏设置面板输入框聚焦/失焦时，控制键盘避让 */
 function handleSettingsInputFocus(focused: boolean) {
@@ -794,10 +844,20 @@ async function subscribeWithRetry() {
 let disposed = false
 
 onMounted(async () => {
+  // 链路调试（布局/渲染排查）：挂载起点 + 视口基线（与 fit 日志对照定位布局异常）
+  logger.debug(
+    `[TerminalView] mounted (session=${sessionId.value}): dpr=${window.devicePixelRatio}, ` +
+      `viewport=${window.innerWidth}x${window.innerHeight}`,
+  )
   // 监听 visualViewport 变化，获取键盘弹出/收起的实际偏移
   if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', handleVisualViewportChange)
     window.visualViewport.addEventListener('scroll', handleVisualViewportChange)
+  }
+
+  // 页面 pan 守卫：阻断整页拖动（标题/输入条滑出键盘上方露出空白）
+  if (terminalViewRef.value) {
+    panGuardRef.value = attachViewportPanGuard(terminalViewRef.value)
   }
 
   // 通道 2: 监听插件 safeAreaChanged 事件
@@ -860,9 +920,15 @@ onMounted(async () => {
   // 全部满足；任一环节卡死由 HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
   // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
   // 避免遮罩半透明期间透出逐批写入的闪烁过程
+  let settledByTimeout = false
   await Promise.race([
     historyGate,
-    new Promise<void>((resolve) => { gateTimeoutTimer = setTimeout(resolve, HISTORY_SETTLE_TIMEOUT_MS) }),
+    new Promise<void>((resolve) => {
+      gateTimeoutTimer = setTimeout(() => {
+        settledByTimeout = true
+        resolve()
+      }, HISTORY_SETTLE_TIMEOUT_MS)
+    }),
   ])
   if (gateTimeoutTimer !== null) {
     clearTimeout(gateTimeoutTimer)
@@ -870,6 +936,17 @@ onMounted(async () => {
   }
   await nextPaintFrame()
   isTerminalReady.value = true
+  // 新手引导：终端就绪后按持久化标记展示一次（关闭或打开完整教程即清除）
+  if (assistStore.settings.terminalOnboardingPending) {
+    showOnboarding.value = true
+  }
+  // 链路调试（布局/渲染排查）：就绪路径（gate 正常 or 超时兜底）+ 终端网格尺寸，
+  // 超时兜底说明订阅/历史/fit 某环节卡死（对照 terminalBuffer/useTerminalBuffer 日志）
+  logger.debug(
+    `[TerminalView] ready (session=${sessionId.value}): ` +
+      `${settledByTimeout ? 'gate TIMEOUT fallback' : 'gate settled'}, ` +
+      `term=${terminalRef.value?.cols ?? '?'}x${terminalRef.value?.rows ?? '?'}`,
+  )
 
   // 入场渲染收尾（等价手动刷新按钮的渲染半段）：首次 fit/历史回放/遮罩淡出
   // 过渡期间真机 WebView 合成器可能缓存旧帧分块，表现为终端区底部与输入栏
@@ -882,6 +959,8 @@ onMounted(async () => {
 })
 
 onUnmounted(async () => {
+  // 链路调试：渲染管线卸载（writeCoalescer dispose 汇总日志随后输出）
+  logger.debug(`[TerminalView] unmounted (session=${mountedSessionId})`)
   disposed = true
   clearSubscribeRetry()
 
@@ -987,9 +1066,8 @@ const {
 
 // ==================== Watchers ====================
 
-// 键盘收起（偏移回落到 0）：内容回落后滚动到最新行——键盘弹出期间用户可能
-// 已向上查看历史或视口停在中间，收起后回到底部跟随输出。纯轻量状态复位，
-// 无重绘/重合成开销（transform 直接跟随不产生旧帧残留）
+// 键盘收起（偏移回落到 0）：终端显示区高度还原、行数增多后滚动到最新行——
+// 键盘弹出期间用户可能已向上查看历史或视口停在中间，收起后回到底部跟随输出
 watch(keyboardOffset, (offset, prev) => {
   if (offset === 0 && (prev ?? 0) > 0) {
     scrollToBottomManual()
@@ -1094,7 +1172,7 @@ const FONT_FAMILY = METRICS_FONT_FAMILY
 function computeInitialSize(): { cols: number; rows: number } {
   const container = xtermContainer.value
   if (!container) return { cols: 80, rows: 24 }
-  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0)
+  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0, TERMINAL_LINE_HEIGHT)
   // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
   if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
   return grid
@@ -1240,7 +1318,9 @@ async function initTerminal() {
     rows: initial.rows,
     fontSize: terminalSettings.value.fontSize,
     fontFamily: FONT_FAMILY,
-    lineHeight: 1,
+    // 行高倍率（唯一真源 TERMINAL_LINE_HEIGHT）：小屏 CJK 满屏输出行间呼吸感；
+    // 与 measureCellSize/computeGridSize 同源，保证预估网格与渲染口径一致
+    lineHeight: TERMINAL_LINE_HEIGHT,
     // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
     // 自绘滚动条预留宽（唯一真源 TERMINAL_SCROLLBAR_GUTTER_PX）：xterm 6 内部
@@ -1262,8 +1342,8 @@ async function initTerminal() {
     // 桌面端键盘输入流（onData → PTY）无法在移动端复现，输入统一由底部
     // TerminalInputBar 承担，避免软键盘误弹与焦点抢占
     disableStdin: true,
-    // 主题
-    theme: TERMINAL_THEMES[terminalSettings.value.theme],
+    // 主题（'system' 已解析为具体色板，禁止把 var() 串传给 xterm）
+    theme: resolvedTerminalTheme.value,
     allowProposedApi: true,
   })
 
@@ -1284,6 +1364,11 @@ async function initTerminal() {
   term.unicode.activeVersion = '11'
 
   term.open(xtermContainer.value)
+
+  // 行尾背景盒裁切：opencode 等 TUI 的行尾背景填充 span 因 CJK advance 累计
+  // 漂移被推出行界，背景盒溢出画进余量区形成「色块入侵/漂移」——在行界处
+  // 裁掉纯空白背景 span（含文字 span 的墨迹溢出保护不受影响）
+  rowClipperRef.value = attachRowBackgroundClipper(xtermContainer.value)
 
   if (USE_WEBGL_RENDERER) {
     // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
@@ -1314,21 +1399,46 @@ async function initTerminal() {
   //   必须无条件挂载，否则触摸滚动/历史查看永久失效
   // - fitWithMargin 幂等（FitAddon 在字体测量未就绪时无操作），轮询重试直至
   //   校准生效；尺寸变化经 onResize → 串行队列发送（自动合并最新值）
+  //
+  // 收敛语义（修顶部落差）：不“首次变化即停”，而是连续多次无变化才算稳定。
+  // 原因：charMeasure 字体度量就绪晚于首次 fit（初始估值偏大 → 行数偏少），
+  // 首次 fit 从默认 80×24 变化即停会锁定偏小网格；容器尺寸此后不变时
+  // ResizeObserver 不再触发，顶部空带（标题栏与首行之间）无法自愈。
+  // 网格贴底对齐后（.xterm bottom:0），行偏少的缺额全部暴露在顶部。
+  // 配合 terminalResizePolicy 行双向即时生效，网格收敛到 floor(容器高/行高)。
   setTimeout(() => {
     setupViewportScroll()
-    let fitAttempts = 0
+    // 连续无变化次数达到阈值即视为收敛（字体度量已稳定）
+    const STABLE_FITS = 3
+    // 总重试上限：50ms 间隔 × 40 ≈ 2s，超时放行遮罩门控（防异常态无限循环）
+    const MAX_TOTAL_ATTEMPTS = 40
+    let stableCount = 0
+    let totalAttempts = 0
+    // 是否已发生过至少一次成功校准：字体度量未就绪时 fit 是 no-op（无变化），
+    // 不能据此提前收敛（会把网格锁死在默认 80×24），必须先有一次真实校准
+    let everChanged = false
     const tryInitialFit = () => {
       if (!terminalRef.value) return
-      if (fitWithMargin()) {
-        // 校准生效：补发一次实际尺寸（队列合并，防 onResize 门控漏发）
+      const changed = fitWithMargin()
+      if (changed) {
+        // 校准生效：补发一次实际尺寸（队列合并，防 onResize 门控漏发），
+        // 并重置稳定计数——尺寸仍在变化（字体度量未稳），继续收敛
         syncTerminalSizeToHost()
-        settleFirstFit?.()
-        settleFirstFit = null
-      } else if (fitAttempts++ < 20) {
-        // 字体测量未就绪：50ms 后重试，最多 ~1s（超时后由 ResizeObserver 兜底）
+        everChanged = true
+        stableCount = 0
+      } else {
+        stableCount++
+        if (everChanged && stableCount >= STABLE_FITS) {
+          // 已成功校准过且连续多次 fit 无变化：网格已收敛，放行遮罩门控
+          settleFirstFit?.()
+          settleFirstFit = null
+          return
+        }
+      }
+      if (++totalAttempts < MAX_TOTAL_ATTEMPTS) {
         setTimeout(tryInitialFit, 50)
       } else {
-        // 重试上限内始终未生效：放弃校准并放行遮罩门控（后续尺寸由 ResizeObserver 兜底）
+        // 收敛超时：放弃继续校准并放行遮罩门控（后续尺寸由 ResizeObserver 兜底）
         settleFirstFit?.()
         settleFirstFit = null
       }
@@ -1490,6 +1600,14 @@ async function queueResize(cols: number, rows: number, force = false) {
 }
 
 function disposeTerminal() {
+  if (panGuardRef.value) {
+    panGuardRef.value.dispose()
+    panGuardRef.value = null
+  }
+  if (rowClipperRef.value) {
+    rowClipperRef.value.dispose()
+    rowClipperRef.value = null
+  }
   if (resizeObserverRef.value) {
     resizeObserverRef.value.disconnect()
     resizeObserverRef.value = null
@@ -1532,8 +1650,7 @@ function disposeTerminal() {
 
 function applyTerminalTheme() {
   if (!terminalRef.value) return
-  const theme = TERMINAL_THEMES[terminalSettings.value.theme]
-  terminalRef.value.options.theme = theme
+  terminalRef.value.options.theme = resolvedTerminalTheme.value
   fitWithMargin()
 }
 

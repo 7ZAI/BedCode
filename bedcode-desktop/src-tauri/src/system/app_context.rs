@@ -182,7 +182,6 @@ impl AppContextBuilder {
         self
     }
 
-
     pub fn pairing_service(mut self, ps: Arc<PairingService>) -> Self {
         self.pairing_service = Some(ps);
         self

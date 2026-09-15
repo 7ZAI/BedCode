@@ -49,6 +49,8 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 # sha2：SHA-256 摘要
 sha2 = "0.10"
+# zip：用户插件 zip 包解压安装（与移动端同版本 4.6）
+zip = "4.6"
 # hkdf：密钥派生（HKDF-SHA256）
 hkdf = "0.12"
 
@@ -160,6 +162,8 @@ serde_json = "1"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
 # （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
 wit-component = "=0.256.0"
+# mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
+flume = "0.12"
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

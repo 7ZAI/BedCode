@@ -30,10 +30,10 @@
         <button
           class="flex-shrink-0 p-2 -mr-2 rounded-lg transition-colors active:opacity-80"
           style="color: var(--mobile-accent)"
-          :class="{ 'opacity-50': connection.isConnecting.value }"
+          :class="{ 'opacity-50': connection.isConnecting.value, 'bg-[var(--mobile-accent-muted)]': showDiscovery }"
           :disabled="connection.isConnecting.value"
           :title="t('mobile.connection.discoverDevices')"
-          @click="$router.push({ name: 'mobile-discover' })"
+          @click="toggleDiscovery"
         >
           <!-- 雷达扫描图标：完整同心圆 + 45° 扫描射线 + 中心点（声呐式） -->
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -66,7 +66,7 @@
       </div>
       </Transition>
 
-      <!-- Connected: Session Configs -->
+      <!-- Connected: 当前设备（会话配置已迁移到会话页） -->
       <div v-if="isConnected" class="pb-8">
         <div class="pt-2 space-y-3">
           <!-- Connected device info + disconnect（同行，断开按钮位于卡片右侧） -->
@@ -94,65 +94,95 @@
             </div>
           </div>
 
-          <!-- Session Configs header -->
-          <div class="flex items-center justify-between pt-2">
-            <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">{{ t('mobile.connection.sessionConfig') }}</span>
-            <button
-              class="p-2 rounded-lg transition-colors active:opacity-80"
-              style="color: var(--mobile-text-muted)"
-              :class="{ 'opacity-50': isRefreshing }"
-              :disabled="isRefreshing"
-              @click="refreshConfigs"
-              :title="t('mobile.connection.refreshConfig')"
-            >
-              <svg
-                class="w-5 h-5"
-                :class="{ 'animate-spin': isRefreshing }"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-              </svg>
-            </button>
-          </div>
+        </div>
+      </div>
 
-          <!-- Loading -->
-          <div v-if="isLoadingConfigs && !hasLoadedConfigs" class="space-y-3">
-            <div v-for="i in 3" :key="i" class="bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 animate-pulse">
-              <div class="flex items-start gap-3">
-                <div class="w-12 h-12 rounded-xl" style="background: var(--mobile-chip-zinc-bg)"></div>
-                <div class="flex-1">
-                  <div class="h-4 w-32 rounded mb-2" style="background: var(--mobile-chip-zinc-bg)"></div>
-                  <div class="h-3 w-48 rounded" style="background: var(--mobile-chip-zinc-bg)"></div>
-                </div>
+      <!-- Not Connected: 内嵌扫描面板（扫描整合进连接页，替代独立扫描页） -->
+      <div v-else-if="showScanner" class="pb-8">
+        <ScanPanel @close="showScanner = false" @scan-result="handleScanResult" />
+      </div>
+
+      <!-- Not Connected: mDNS 扫描发现（融合进连接页：点击页头扫描按钮展开，扫描动画+结果在此展示，区域可关闭） -->
+      <div v-else-if="showDiscovery" class="pb-8 pt-2">
+        <!-- 区域头部：扫描发现 + × 关闭（页面标题保持「连接配对」不变，无跳转） -->
+        <div class="flex items-center justify-between pb-2">
+          <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
+            {{ t('mobile.discover.title') }}
+            <span v-if="discoveredServices.length > 0" class="ml-1 px-1.5 py-0.5 rounded-full text-xs" style="background: var(--mobile-bg-elevated); color: var(--mobile-text-secondary)">{{ discoveredServices.length }}</span>
+          </span>
+          <button
+            class="p-2 -mr-2 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
+            style="color: var(--mobile-text-muted)"
+            :title="t('common.button.close')"
+            @click="closeDiscovery"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        <!-- Scanning status（扫描动画：spinner + 状态文字 + 已发现数） -->
+        <div v-if="isScanning" class="pb-3 flex items-center gap-3">
+          <div class="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" style="color: var(--mobile-accent)" />
+          <span class="group-row-sub">{{ t('mobile.discover.scanning') }}</span>
+          <span v-if="discoveredServices.length > 0" class="text-sm font-medium ml-auto" style="color: var(--mobile-accent)">
+            {{ t('mobile.discover.deviceFound', { count: discoveredServices.length }) }}
+          </span>
+        </div>
+
+        <!-- 空态（未扫描且无设备） -->
+        <div v-if="discoveredServices.length === 0 && !isScanning" class="flex flex-col items-center justify-center py-12">
+          <svg class="w-12 h-12 mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0" />
+          </svg>
+          <p class="group-row-sub mb-1">{{ t('mobile.discover.noDevices') }}</p>
+          <p class="text-sm" style="color: var(--mobile-text-disabled)">{{ t('mobile.discover.noDevicesHint') }}</p>
+        </div>
+
+        <!-- 扫描空态动画（雷达扫射） -->
+        <div v-if="discoveredServices.length === 0 && isScanning" class="flex flex-col items-center justify-center py-12">
+          <div class="relative mb-6">
+            <div class="w-28 h-28 rounded-full relative" style="border: 2px solid color-mix(in srgb, var(--mobile-accent) 20%, transparent)">
+              <div class="absolute inset-2 rounded-full" style="border: 1px solid color-mix(in srgb, var(--mobile-accent) 10%, transparent)"></div>
+              <div class="absolute inset-4 rounded-full" style="border: 1px solid color-mix(in srgb, var(--mobile-accent) 5%, transparent)"></div>
+              <div class="absolute inset-0 animate-[spin_3s_linear_infinite] origin-center">
+                <div class="w-1/2 h-0.5 absolute top-1/2 left-1/2 -translate-y-1/2" style="background: linear-gradient(to right, var(--mobile-accent), transparent)"></div>
               </div>
+              <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-3 h-3 rounded-full" style="background: var(--mobile-accent)"></div>
             </div>
           </div>
+          <p class="group-row-sub">{{ t('mobile.discover.scanning') }}</p>
+        </div>
 
-          <!-- Empty（垂直居中占满剩余空间，避免大片空白） -->
-          <div v-else-if="!isLoadingConfigs && sessionConfigs.length === 0 && hasLoadedConfigs" class="min-h-[45vh] flex flex-col items-center justify-center text-center">
-            <svg class="w-14 h-14 mx-auto mb-4" style="color: var(--mobile-text-disabled)" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
-            </svg>
-            <p class="group-row-sub">{{ t('mobile.connection.noConfig') }}</p>
-            <p class="text-sm mt-2" style="color: var(--mobile-text-disabled)">{{ t('mobile.connection.noConfigHint') }}</p>
+        <!-- 扫描结果（发现的设备列表） -->
+        <div v-if="discoveredServices.length > 0" class="group-card">
+          <div
+            v-for="service in discoveredServices"
+            :key="service.instance_name"
+            class="group-row device-row"
+            :class="isDiscoverCurrentDevice(service) ? 'is-connected' : 'group-row-btn cursor-pointer'"
+            @click="handleDiscoverConnect(service)"
+          >
+            <span class="device-chip chip-cyan">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+              </svg>
+            </span>
+            <div class="flex-1 min-w-0">
+              <div class="flex items-center gap-2 min-w-0">
+                <span class="device-name truncate">{{ service.device_name }}</span>
+                <span
+                  class="status-badge ml-auto"
+                  :class="isDiscoverCurrentDevice(service) ? 'badge-emerald' : 'badge-cyan'"
+                >
+                  <span v-if="isDiscoverCurrentDevice(service)" class="status-dot dot-emerald"></span>
+                  {{ isDiscoverCurrentDevice(service) ? t('mobile.discover.connected') : t('mobile.discover.connectToDevice') }}
+                </span>
+              </div>
+              <div class="device-addr font-mono truncate">{{ service.address }}:{{ service.port }}</div>
+            </div>
           </div>
-
-          <!-- Config List -->
-          <TransitionGroup name="config-list" tag="div" class="space-y-3">
-            <SessionConfigCard
-              v-for="config in sessionConfigs"
-              :key="config.id"
-              :config="config"
-              :active-sessions="activeSessions"
-              :is-starting="startingConfigId === config.id"
-              @start="handleStartSession"
-              @navigate-to-files="handleNavigateToFiles"
-              @session-click="handleSessionClick"
-              @stop-session="handleStopSession"
-            />
-          </TransitionGroup>
         </div>
       </div>
 
@@ -212,36 +242,102 @@
               </div>
             </button>
           </TransitionGroup>
+
+          <!-- 扫描结果：与连接历史同级别的独立区块（识别到二维码停止扫描后出现），可关闭 -->
+          <div v-if="scanResult" class="pt-4">
+            <div class="flex items-center justify-between pb-2">
+              <span class="text-sm font-semibold text-[var(--mobile-text-muted)]">
+                {{ t('mobile.scan.scanResult') }}
+              </span>
+              <button
+                class="p-2 -mr-2 rounded-lg transition-colors active:opacity-80 flex-shrink-0"
+                style="color: var(--mobile-text-muted)"
+                :title="t('common.button.close')"
+                @click="scanResult = null"
+              >
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <button
+              class="w-full bg-[var(--mobile-bg-card)] border border-[var(--mobile-border)] rounded-xl p-4 text-left cursor-pointer transition-[border-color,opacity] duration-300 active:opacity-90 hover:border-[var(--mobile-border-hover)]"
+              :disabled="connection.isConnecting.value"
+              :class="{ 'opacity-50 pointer-events-none': connection.isConnecting.value }"
+              @click="connectFromScanResult"
+            >
+              <div class="flex items-center gap-3">
+                <span class="device-icon chip-emerald">
+                  <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.75" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
+                  </svg>
+                </span>
+                <div class="flex-1 min-w-0">
+                  <div class="text-base font-medium text-[var(--mobile-text-primary)] truncate">Desktop</div>
+                  <p class="text-xs mt-1 font-mono text-[var(--mobile-text-muted)]">{{ scanResult.host }}:{{ scanResult.port }}</p>
+                </div>
+              </div>
+            </button>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- Action Buttons (when not connected) -->
+    <!-- Action Buttons (when not connected)：mDNS 扫描发现 / 二维码扫描 / 默认 三种模式互斥 -->
     <div v-if="!isConnected" class="flex-shrink-0 p-4 space-y-3" style="padding-bottom: max(1rem, var(--safe-area-bottom, 0px))">
+      <!-- mDNS 扫描发现：扫描中「停止扫描」/ 已停止「重新扫描」 -->
       <button
-        class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
-        style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+        v-if="showDiscovery"
+        class="w-full h-11 rounded-xl text-sm font-medium transition-colors active:opacity-80"
+        style="background: var(--mobile-group-bg); border: 1px solid var(--mobile-group-border); color: var(--mobile-text-secondary)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
-        @click="$router.push({ name: 'mobile-scan' })"
+        @click="toggleMdnsScan"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
-        </svg>
-        {{ t('mobile.connection.scanConnect') }}
+        {{ isScanning ? t('mobile.discover.stopScan') : t('mobile.discover.restartScan') }}
       </button>
+
+      <!-- 二维码扫描：启动后按钮切换为「停止扫描」（红色） -->
       <button
+        v-else-if="showScanner"
         class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
-        style="background: var(--mobile-group-bg); color: var(--mobile-text-secondary); border: 1px solid var(--mobile-group-border)"
+        style="background: var(--mobile-chip-red-bg); color: var(--mobile-chip-red); border: 1px solid color-mix(in srgb, var(--mobile-chip-red) 25%, transparent)"
         :class="{ 'opacity-50': connection.isConnecting.value }"
         :disabled="connection.isConnecting.value"
-        @click="showManualConnect = true"
+        @click="toggleScanner"
       >
-        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+        <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
+          <rect x="6" y="6" width="12" height="12" rx="2" />
         </svg>
-        {{ t('mobile.connection.manualConnect') }}
+        {{ t('mobile.scan.stopScan') }}
       </button>
+
+      <template v-else>
+        <button
+          class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+          style="background: var(--mobile-accent); color: var(--mobile-text-on-accent)"
+          :class="{ 'opacity-50': connection.isConnecting.value }"
+          :disabled="connection.isConnecting.value"
+          @click="toggleScanner"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2m0 0H8m4 0h4m-4-8a1 1 0 011-1h1.586a1 1 0 01.707.293l3.828 3.828a1 1 0 01.293.707V17a1 1 0 01-1 1H8a1 1 0 01-1-1V7a1 1 0 011-1z" />
+          </svg>
+          {{ t('mobile.connection.scanConnect') }}
+        </button>
+        <button
+          class="w-full h-11 rounded-xl text-base font-medium transition-colors active:opacity-80 flex items-center justify-center gap-2"
+          style="background: var(--mobile-group-bg); color: var(--mobile-text-secondary); border: 1px solid var(--mobile-group-border)"
+          :class="{ 'opacity-50': connection.isConnecting.value }"
+          :disabled="connection.isConnecting.value"
+          @click="showManualConnect = true"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+          </svg>
+          {{ t('mobile.connection.manualConnect') }}
+        </button>
+      </template>
     </div>
 
     <!-- Manual Connect Dialog -->
@@ -287,19 +383,6 @@
       </template>
     </Modal>
 
-    <!-- Stop Confirmation Modal -->
-    <Modal v-model="showStopConfirm" :title="t('mobile.connection.confirmStop')" size="sm">
-      <p style="color: var(--mobile-text-disabled)">
-        {{ t('mobile.connection.confirmStopMsg', { name: pendingSession?.name || pendingSession?.id }) }}
-      </p>
-      <template #footer>
-        <div class="flex justify-end gap-3">
-          <Button variant="ghost" @click="showStopConfirm = false">{{ t('common.button.cancel') }}</Button>
-          <Button variant="danger" :loading="isStopping" @click="confirmStop">{{ t('common.button.stop') }}</Button>
-        </div>
-      </template>
-    </Modal>
-
     <!-- Disconnect Confirmation Modal -->
     <Modal v-model="showDisconnectConfirm" :title="t('mobile.connection.disconnect')" size="sm">
       <p style="color: var(--mobile-text-disabled)">
@@ -337,22 +420,18 @@
         : t('mobile.connection.connectingPlain')"
     />
 
-    <!-- Loading Dialog: 终端准备中（就绪后才跳转，弹窗展示在连接页） -->
-    <LoadingDialog :visible="isNavigating" :message="t('mobile.terminal.preparing')" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onActivated, watch } from 'vue'
+import { ref, computed, onMounted, onActivated, onDeactivated, watch } from 'vue'
 import { logger } from '@/utils/frontendLogger'
-import { useRouter, useRoute } from 'vue-router'
+import { classifyConnectionError } from '@/utils/connectionError'
 import { useI18n } from 'vue-i18n'
 import { useMobileConnection, type RemoteDevice } from '@/composables/useMobileConnection'
 import { useMobileSettings } from '@/composables/useMobileSettings'
-import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
-import { useInputAssistantStore } from '@/stores/inputAssistant'
-import { computeDeviceDefaultGridSize } from '@/utils/terminalMetrics'
-import { wsGetBiometricKeyStatus } from '@/composables/useMobileCommands'
+import { useMdnsDiscovery, type DiscoveredService } from '@/composables/useMdnsDiscovery'
+import { wsGetBiometricKeyStatus, wsAuthenticateWithQr } from '@/composables/useMobileCommands'
 import { useToast } from '@/composables/useToast'
 import BottomSheet from '@/components/BottomSheet.vue'
 import PairingInput from '@/components/PairingInput.vue'
@@ -360,64 +439,32 @@ import BiometricAuthDialog from '@/components/BiometricAuthDialog.vue'
 import Modal from '@/components/Modal.vue'
 import Button from '@/components/Button.vue'
 import LoadingDialog from '@/components/LoadingDialog.vue'
-import SessionConfigCard, { type SessionConfigSummary } from '@/components/SessionConfigCard.vue'
+import ScanPanel from '@/components/ScanPanel.vue'
 
-const router = useRouter()
 const connection = useMobileConnection()
-const { prepareSession } = useTerminalBuffer()
-const assistStore = useInputAssistantStore()
 const { settings: mobileSettings } = useMobileSettings()
 const toast = useToast()
 const { t } = useI18n()
 
 // 使用全局状态
-const activeSessions = connection.activeSessions
-const sessionConfigs = connection.sessionConfigs
 const connectionHistory = connection.connectionHistory
-const isLoadingConfigs = connection.isLoadingConfigs
-const hasLoadedConfigs = connection.hasLoadedConfigs
 
-// 点击会话跳转到终端：先准备（订阅输出）再跳转，loading 以弹窗展示在本页
-const isNavigating = ref(false)
+// 内嵌扫描面板开关（扫描整合进连接页；连接成功后视图自动切换，面板随之卸载）
+const showScanner = ref(false)
 
-async function handleSessionClick(session: any) {
-  if (isNavigating.value) return
-  isNavigating.value = true
-  connection.activeSessionId.value = session.id
+// mDNS 扫描发现开关（融合进连接页：点击页头扫描按钮展开，扫描动画+结果在当前页展示，区域可关闭）
+const showDiscovery = ref(false)
 
-  // 订阅输出（回放帧缓冲在 store），就绪后才跳转，终端页挂载即渲染历史；
-  // 失败/超时不阻塞跳转，由终端页走原有 forceReplay + 订阅重试路径
-  await prepareSession(session.id)
+// mDNS 发现状态（全局单例 composable，扫描状态跨页面共享）
+const { discoveredServices, isScanning, startDiscovery, stopDiscovery } = useMdnsDiscovery()
 
-  router.push({
-    name: 'mobile-terminal',
-    params: { id: session.id },
-  })
+// 扫描结果：识别到有效二维码后停止扫描，结果以卡片展示在连接历史下方（同级别区块，可关闭）
+interface QrScanResult {
+  host: string
+  port: number
+  token: string
 }
-
-// 停止会话（带确认弹窗）
-const showStopConfirm = ref(false)
-const pendingSession = ref<any>(null)
-const isStopping = ref(false)
-
-function handleStopSession(session: any) {
-  pendingSession.value = session
-  showStopConfirm.value = true
-}
-
-async function confirmStop() {
-  if (!pendingSession.value) return
-  isStopping.value = true
-  try {
-    await connection.stopSession(pendingSession.value.id)
-    showStopConfirm.value = false
-    pendingSession.value = null
-  } catch (e) {
-    logger.error('[DevicesView] Failed to stop session:', e)
-  } finally {
-    isStopping.value = false
-  }
-}
+const scanResult = ref<QrScanResult | null>(null)
 
 const showManualConnect = ref(false)
 const showPairing = ref(false)
@@ -432,9 +479,6 @@ const showBiometricDialog = ref(false)
 const authBiometricAvailable = ref(false)
 const authDialogError = ref('')
 const authDialogLoading = ref(false)
-
-const isRefreshing = ref(false)
-const startingConfigId = ref<string | null>(null)
 
 // Current device being connected
 const pendingDevice = ref<RemoteDevice | null>(null)
@@ -508,81 +552,22 @@ function formatLastConnected(iso?: string): string {
   return `${String(d.getFullYear())}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-// 刷新会话配置
-async function refreshConfigs() {
-  isRefreshing.value = true
-  try {
-    await connection.loadSessionConfigs()
-  } finally {
-    isRefreshing.value = false
-  }
-}
-
-// Start session from config
-async function handleStartSession(config: SessionConfigSummary) {
-  if (!isConnected.value || startingConfigId.value) return
-
-  startingConfigId.value = config.id
-  try {
-    // 携带按设备屏幕预算的默认网格：主机 PTY 以此为初始尺寸创建，
-    // 避免 120x40（主机桌面缺省）起步的首帧回绕；挂载后 fit 校准精确值
-    const size = computeDeviceDefaultGridSize(assistStore.settings.terminalFontSize)
-    const result = await connection.startSession(config.id, size)
-    if (result.sessionId) {
-      // 如果返回了会话信息，添加到本地列表
-      if (result.session) {
-        activeSessions.value.push(result.session)
-      } else {
-        // 如果没有返回会话信息，手动加载
-        await connection.loadActiveSessions()
-      }
-
-      // 启动成功，显示 toast 提示
-      toast.success(t('mobile.connection.sessionStarted', { name: config.name }))
-
-      // 切换到滑动容器的会话页面（page 1），而非导航到独立路由
-      // 导航到 mobile-sessions 会卸载 MobileSwipeContainer，导致左右滑动失效
-      router.push({ name: 'mobile-home', query: { page: '1' } })
-    } else {
-      logger.error('Failed to start session: no session_id returned')
-      toast.error(t('mobile.connection.startFailedNoId'))
-    }
-  } catch (e) {
-    logger.error('Failed to start session:', e)
-    toast.error(t('mobile.connection.startFailed', { error: String(e) }))
-  } finally {
-    startingConfigId.value = null
-  }
-}
-
-// 从扫描等页面返回时重新加载连接历史（force=true，因为 ScanView 可能更新了 localStorage）
+// 从 Discover/终端等页面返回时重新加载连接历史（force=true，本地状态可能在其它页面更新）
 onActivated(() => {
-  // 从终端返回时重置导航状态
-  isNavigating.value = false
   connection.loadConnectionHistory(true)
-
-  // 从 DiscoverView 跳转回来时，自动连接 mDNS 发现的设备
-  // keep-alive 激活时 onMounted 不会重新触发，需在 onActivated 中处理
-  const mdnsDevice = history.state?.mdnsDevice as RemoteDevice | undefined
-  if (mdnsDevice) {
-    history.replaceState({}, '')
-    connection.clearSessionConfigs()
-    connection.clearActiveSessions()
-    startConnection(mdnsDevice, true)
+  // 切回连接页时若扫描发现区仍展开，恢复扫描（keep-alive 激活时 onMounted 不会重新触发）
+  if (showDiscovery.value) {
+    startMdnsScan()
   }
 })
 
-onMounted(async () => {
+onMounted(() => {
   connection.loadConnectionHistory()
+})
 
-  // 首次挂载时也检查 mDNS 设备（非 keep-alive 场景）
-  const mdnsDevice = history.state?.mdnsDevice as RemoteDevice | undefined
-  if (mdnsDevice) {
-    history.replaceState({}, '')
-    connection.clearSessionConfigs()
-    connection.clearActiveSessions()
-    startConnection(mdnsDevice, true)
-  }
+// 切走连接页时停掉 mDNS 扫描（keep-alive 缓存页面，避免后台持续扫描）
+onDeactivated(() => {
+  stopMdnsScan()
 })
 
 // 监听连接状态变化，认证完成时加载会话数据
@@ -596,6 +581,14 @@ watch([isConnected, connection.connectionStatus], async ([connected, status], [o
       await connection.loadSessionConfigs()
       await connection.loadActiveSessions()
     }
+  }
+})
+
+// 连接成功后收起两个扫描视图（二维码 / mDNS），断开后回到历史列表布局
+watch(isConnected, (connected) => {
+  if (connected) {
+    showScanner.value = false
+    showDiscovery.value = false
   }
 })
 
@@ -652,6 +645,86 @@ async function handleConnectManual(address: string) {
 
   // 手动连接，必须走配对流程
   await startConnection(device, false)
+}
+
+// 切换二维码扫描：非扫描态点击「扫码连接」打开内嵌相机；扫描中点击「停止扫描」收起，
+// 若已识别到二维码则下方出现扫描结果卡片（与 mDNS 发现互斥）
+function toggleScanner() {
+  showScanner.value = !showScanner.value
+  if (showScanner.value) {
+    showDiscovery.value = false
+  }
+}
+
+/** ScanPanel 识别到有效二维码：关闭扫描视图，结果以卡片展示在连接历史下方 */
+function handleScanResult(result: QrScanResult) {
+  scanResult.value = result
+  showScanner.value = false
+}
+
+// ==================== mDNS 扫描发现（融合进连接页） ====================
+
+/** 切换 mDNS 扫描发现区（页头雷达按钮）：展开自动开始扫描，收起停止扫描 */
+function toggleDiscovery() {
+  showDiscovery.value = !showDiscovery.value
+  if (showDiscovery.value) {
+    showScanner.value = false
+    startMdnsScan()
+  } else {
+    stopMdnsScan()
+  }
+}
+
+/** 关闭扫描发现区（× 按钮） */
+function closeDiscovery() {
+  showDiscovery.value = false
+  stopMdnsScan()
+}
+
+/** 开始/重新开始 mDNS 扫描 */
+async function startMdnsScan() {
+  try {
+    await startDiscovery()
+  } catch (e) {
+    logger.error('[DevicesView] mDNS start failed:', e)
+  }
+}
+
+/** 停止 mDNS 扫描 */
+async function stopMdnsScan() {
+  await stopDiscovery()
+}
+
+/** 操作栏按钮：扫描中「停止扫描」/ 已停止「重新扫描」 */
+function toggleMdnsScan() {
+  if (isScanning.value) {
+    stopMdnsScan()
+  } else {
+    startMdnsScan()
+  }
+}
+
+/** 点击发现的设备：直接走页面级连接流程（融合后不再经路由 state 传递） */
+function handleDiscoverConnect(service: DiscoveredService) {
+  if (connection.isConnected.value && connection.currentDevice.value?.address === service.address) return
+  if (connection.isConnecting.value) return
+
+  const device: RemoteDevice = {
+    id: `${service.address}:${service.port}`,
+    name: service.device_name,
+    address: service.address,
+    port: service.port,
+    isPaired: false,
+  }
+
+  connection.clearSessionConfigs()
+  connection.clearActiveSessions()
+  startConnection(device, true)
+}
+
+/** 该发现设备是否为当前已连接的设备（连接态行样式 + 点击守卫） */
+function isDiscoverCurrentDevice(service: DiscoveredService): boolean {
+  return connection.isConnected.value && connection.currentDevice.value?.address === service.address
 }
 
 // Start connection flow
@@ -713,13 +786,14 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     connectionError.value = String(error)
     logger.error('[DevicesView] startConnection failed:', error)
 
-    // 显示友好的错误提示
+    // 显示友好的错误提示（分类契约见 utils/connectionError.ts）
     const errorMsg = String(error)
-    if (errorMsg.includes('timeout') || errorMsg.includes('超时')) {
+    const errKind = classifyConnectionError(errorMsg)
+    if (errKind === 'timeout') {
       toast.error(t('mobile.connection.timeoutToast'))
-    } else if (errorMsg.includes('refused') || errorMsg.includes('rejected')) {
+    } else if (errKind === 'refused') {
       toast.error(t('mobile.connection.refusedToast'))
-    } else if (errorMsg.includes('unreachable') || errorMsg.includes('network')) {
+    } else if (errKind === 'unreachable') {
       toast.error(t('mobile.connection.unreachableToast'))
     } else {
       toast.error(t('mobile.connection.connectFailedToast', { error: errorMsg }))
@@ -733,6 +807,73 @@ async function startConnection(device: RemoteDevice, skipPairing: boolean = fals
     connection.isConnecting.value = false
     showConnectLoading.value = false  // 确保在任何情况下都隐藏 loading
     showPairingLoading.value = false  // 确保在任何情况下都隐藏 loading
+  }
+}
+
+// 从扫描结果卡片发起连接：WebSocket 连接 + QR token 认证（原 ScanPanel 内逻辑迁入，统一走页面级 loading 与错误提示）
+async function connectFromScanResult() {
+  const result = scanResult.value
+  if (!result || connection.isConnecting.value) return
+
+  const device: RemoteDevice = {
+    id: `qr-${Date.now()}`,
+    name: 'Desktop',
+    address: result.host,
+    port: result.port,
+    isPaired: false,
+  }
+
+  pendingDevice.value = device
+  connectionError.value = ''
+  connection.isConnecting.value = true
+  showConnectLoading.value = true
+
+  try {
+    // Step 1: 建立 WebSocket 连接
+    await connection.connect(device)
+
+    // 等待连接建立完成（解决竞态问题）
+    const maxWaitTime = 10000 // 最多等待 10 秒
+    const checkInterval = 200 // 每 200ms 检查一次
+    const startTime = Date.now()
+    while (!connection.isConnected.value) {
+      if (Date.now() - startTime > maxWaitTime) {
+        throw new Error(t('mobile.scan.timeout'))
+      }
+      await new Promise(resolve => setTimeout(resolve, checkInterval))
+    }
+
+    // Step 2: 发送 QR token 认证
+    logger.log('[DevicesView] QR connect, auth with token...')
+    const creds = await wsAuthenticateWithQr(result.token)
+    if (!creds) {
+      throw new Error(t('mobile.scan.qrExpired'))
+    }
+    connection.saveCredentials(creds)
+    connection.addToConnectionHistory(`${device.address}:${device.port}`, device.name)
+    scanResult.value = null
+    pendingDevice.value = null
+  } catch (error) {
+    connectionError.value = String(error)
+    logger.error('[DevicesView] QR connect failed:', error)
+
+    const errorMsg = String(error)
+    const errKind = classifyConnectionError(errorMsg)
+    if (errKind === 'timeout') {
+      toast.error(t('mobile.connection.timeoutToast'))
+    } else if (errKind === 'refused') {
+      toast.error(t('mobile.connection.refusedToast'))
+    } else if (errKind === 'unreachable') {
+      toast.error(t('mobile.connection.unreachableToast'))
+    } else {
+      toast.error(errorMsg)
+    }
+
+    // 连接失败时确保前后端状态一致：断开后端连接 + 重置前端状态
+    await connection.disconnect()
+  } finally {
+    connection.isConnecting.value = false
+    showConnectLoading.value = false
   }
 }
 
@@ -894,14 +1035,6 @@ async function confirmDisconnect() {
   connection.clearActiveSessions()
 }
 
-// 工程目录导航：优先使用 sessionId，否则使用 configId
-function handleNavigateToFiles(config: SessionConfigSummary) {
-  const session = activeSessions.value.find(
-    (s: any) => s.config_id === config.id || s.configId === config.id
-  )
-  const id = session?.id || config.id
-  router.push({ name: 'mobile-files', params: { id } })
-}
 </script>
 
 <style scoped>
@@ -951,5 +1084,51 @@ function handleNavigateToFiles(config: SessionConfigSummary) {
 
 .config-list-move {
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ==================== mDNS 发现设备列表（融合自原扫描页 DiscoverView） ==================== */
+
+.device-row {
+  gap: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem);
+  padding: clamp(0.5rem, 0.625rem + (100vw - 360px) / 840 * 2, 0.75rem) 0.75rem;
+  min-height: 3rem;
+}
+
+.device-chip {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 4, 2rem);
+  height: clamp(1.5rem, 1.75rem + (100vw - 360px) / 840 * 4, 2rem);
+  border-radius: clamp(0.375rem, 0.4375rem + (100vw - 360px) / 840, 0.5rem);
+  flex-shrink: 0;
+}
+
+.device-name {
+  font-size: var(--font-size-base);
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--mobile-row-title);
+}
+
+.device-addr {
+  margin-top: 0.125rem;
+  font-size: var(--font-size-sm);
+  line-height: 1.2;
+  color: var(--mobile-row-sub);
+}
+
+/* 已连接设备：非交互行，无按压反馈 */
+.device-row.is-connected {
+  cursor: default;
+}
+
+.device-row.is-connected:active {
+  background: none;
+}
+
+.device-row.is-connected .device-chip {
+  color: var(--mobile-chip-emerald);
+  background: var(--mobile-chip-emerald-bg);
 }
 </style>

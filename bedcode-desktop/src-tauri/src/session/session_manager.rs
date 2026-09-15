@@ -11,9 +11,10 @@ use crate::session::{
     event_bus::{DefaultSessionEventBus, SessionEventBus},
     input_line::{SessionInputListener, SubmittedLineTracker},
     session_components::{
-        CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
-        DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
-        PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector, resolve_initial_size,
+        resolve_initial_size, CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry,
+        DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry,
+        DefaultStatusDetector, NamingService, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry,
+        StatusDetector,
     },
     session_lifecycle::SessionLifecycleListener,
     session_output::GlobalOutputManager,
@@ -606,8 +607,15 @@ impl SessionManager {
         // 启动生命周期处理器
         self.start_lifecycle_handler(session_id).await;
 
-        // 启动 PTY
-        pty_session.start().await?;
+        // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）之前：
+        // remove_session 已注销本会话，此处必须重新注册，否则 PTY 输出经
+        // GlobalOutputManager::on_output 以 "session not found" 丢弃，订阅返回
+        // SESSION_NOT_FOUND（前端终端空白）。start 失败时回滚注册，防孤儿会话残留。
+        self.register_output_manager(session_id).await;
+        if let Err(e) = pty_session.start().await {
+            GlobalOutputManager::global().unregister_session(session_id).await;
+            return Err(e);
+        }
 
         // 创建会话信息
         let info = SessionInfo {
@@ -998,10 +1006,7 @@ mod tests {
             device_name: "Redmi-K70".to_string(),
         };
         // 预置归属：当前正统为 Pixel-9
-        manager
-            .canonical_renderer
-            .set("s1", current.clone())
-            .await;
+        manager.canonical_renderer.set("s1", current.clone()).await;
 
         // 他端未 force：返回 NeedsConfirmation，且不调用底层 resize（无会话也不报 NotFound）
         let outcome = manager
@@ -1015,10 +1020,7 @@ mod tests {
             }
         );
         // 归属未被移动端请求方抢占
-        assert_eq!(
-            manager.canonical_renderer_of("s1").await,
-            Some(current.clone())
-        );
+        assert_eq!(manager.canonical_renderer_of("s1").await, Some(current.clone()));
 
         // force：尝试应用（无真实会话 → NotFound，证明已越过裁决进入底层调用）
         let err = manager
@@ -1037,10 +1039,7 @@ mod tests {
         let desktop = RendererSource::Desktop;
         manager.canonical_renderer.set("s2", renderer_desktop()).await;
 
-        let err = manager
-            .resize_session("s2", 120, 30, desktop, false)
-            .await
-            .unwrap_err();
+        let err = manager.resize_session("s2", 120, 30, desktop, false).await.unwrap_err();
         assert!(matches!(err, crate::AppError::NotFound(_)));
     }
 

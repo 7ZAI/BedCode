@@ -33,11 +33,7 @@ fn denied() -> String {
 }
 
 /// 浏览某服务类型：铸造 browser-id（`mdnsbr-<uuid>`）并启动事件透传循环
-pub(crate) fn mdns_browse(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    service_type: &str,
-) -> Result<String, String> {
+pub(crate) fn mdns_browse(host_ctx: &WasmHostContext, plugin_id: &str, service_type: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_browse") {
         return Err(denied());
     }
@@ -45,8 +41,7 @@ pub(crate) fn mdns_browse(
     if service_type.is_empty() {
         return Err("mdns browse: service type must not be empty".to_string());
     }
-    let daemon = ServiceDaemon::new()
-        .map_err(|e| format!("mdns browse: daemon start failed: {e}"))?;
+    let daemon = ServiceDaemon::new().map_err(|e| format!("mdns browse: daemon start failed: {e}"))?;
     bedcode_peer_net::disable_virtual_interfaces(&daemon);
     let receiver = daemon
         .browse(&service_type)
@@ -105,10 +100,7 @@ pub(crate) fn mdns_browse(
                     );
                 }
                 ServiceEvent::ServiceRemoved(_, fullname) => {
-                    publish_mdns(
-                        "mdns:lost",
-                        serde_json::json!({ "instanceName": fullname }),
-                    );
+                    publish_mdns("mdns:lost", serde_json::json!({ "instanceName": fullname }));
                 }
                 _ => {}
             }
@@ -116,23 +108,21 @@ pub(crate) fn mdns_browse(
         tracing::debug!(browser_id = %browser_id, "mdns browse loop exited");
     });
 
-    BROWSERS
-        .lock()
-        .expect("mdns browser table lock poisoned")
-        .insert(
-            browser_id.clone(),
-            BrowserEntry { daemon, service_type: service_type.clone(), task, owner: plugin_id.to_string() },
-        );
+    BROWSERS.lock().expect("mdns browser table lock poisoned").insert(
+        browser_id.clone(),
+        BrowserEntry {
+            daemon,
+            service_type: service_type.clone(),
+            task,
+            owner: plugin_id.to_string(),
+        },
+    );
     tracing::info!(browser_id = %browser_id, service_type = %service_type, plugin = %plugin_id, "mdns browse started");
     Ok(browser_id)
 }
 
 /// 停止浏览并回收句柄：退订 → 后台关停守护线程；事件循环随 channel 断开退出
-pub(crate) fn mdns_stop_browse(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    browser_id: &str,
-) -> Result<bool, String> {
+pub(crate) fn mdns_stop_browse(host_ctx: &WasmHostContext, plugin_id: &str, browser_id: &str) -> Result<bool, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_MDNS, "host_mdns_stop_browse") {
         return Err(denied());
     }

@@ -926,6 +926,17 @@ impl WasmHostContext {
         &self.capabilities
     }
 
+    /// 丢弃插件独立数据库连接（卸载时调用，dev 合入的卸载完整性）
+    ///
+    /// 仅从连接池移除（不删库文件）：删除插件目录前须先释放文件句柄，
+    /// 否则在部分平台（Windows）会因文件仍被占用而删不掉
+    pub async fn drop_plugin_db(&self, plugin_id: &str) {
+        let dropped = self.plugin_dbs.lock().await.remove(plugin_id).is_some();
+        if dropped {
+            tracing::debug!(plugin_id = %plugin_id, "Plugin database connection dropped");
+        }
+    }
+
     /// 获取 SessionManager 的 Arc 引用
     pub fn session_manager_arc(&self) -> Arc<SessionManager> {
         self.session_manager.clone()

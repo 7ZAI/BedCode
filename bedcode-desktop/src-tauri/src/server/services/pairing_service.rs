@@ -121,3 +121,62 @@ impl Default for PairingService {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 单次使用（票据 09）：同一 code 连续调用两次，第二次必须 false
+    #[tokio::test]
+    async fn verify_and_consume_code_is_single_use() {
+        let svc = PairingService::new();
+        let code = svc.generate_code().await;
+        assert!(svc.verify_and_consume_code(&code.code).await, "首次验证应成功");
+        assert!(
+            !svc.verify_and_consume_code(&code.code).await,
+            "验证成功后 code 已消耗，二次必须失败"
+        );
+    }
+
+    /// 无配对码时返回 false
+    #[tokio::test]
+    async fn verify_without_code_returns_false() {
+        let svc = PairingService::new();
+        assert!(!svc.verify_and_consume_code("whatever").await);
+    }
+
+    /// 错误 code 不消耗（可重试正确 code）
+    #[tokio::test]
+    async fn wrong_code_does_not_consume() {
+        let svc = PairingService::new();
+        let code = svc.generate_code().await;
+        assert!(!svc.verify_and_consume_code("wrong-code").await);
+        // 错误尝试后正确 code 仍可用（未被误消耗）
+        assert!(svc.verify_and_consume_code(&code.code).await);
+    }
+
+    /// 过期 code 被清除（票据 09）：get_current_code 返回 None
+    #[tokio::test]
+    async fn expired_code_cleared_and_unverifiable() {
+        let svc = PairingService::new();
+        // TTL=0 立即过期
+        let code = svc.generate_code_with_ttl(0).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(svc.get_current_code().await.is_none(), "过期 code 不应可获取");
+        assert!(
+            !svc.verify_and_consume_code(&code.code).await,
+            "过期 code 验证必须失败"
+        );
+    }
+
+    /// get_current_code 过滤过期、返回未过期
+    #[tokio::test]
+    async fn get_current_code_returns_fresh_only() {
+        let svc = PairingService::new();
+        let code = svc.generate_code_with_ttl(300).await;
+        let current = svc.get_current_code().await.expect("未过期 code 应可获取");
+        assert_eq!(current.code, code.code);
+        // 未验证前不消耗
+        assert!(svc.get_current_code().await.is_some());
+    }
+}

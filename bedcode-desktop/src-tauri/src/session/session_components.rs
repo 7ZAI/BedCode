@@ -448,7 +448,10 @@ mod tests {
         };
         let json: serde_json::Value = serde_json::to_value(&outcome).unwrap();
         assert_eq!(json["status"], "needsConfirmation");
-        assert!(json.get("currentCanonical").is_some(), "field must be camelCase: {json}");
+        assert!(
+            json.get("currentCanonical").is_some(),
+            "field must be camelCase: {json}"
+        );
         assert!(json.get("current_canonical").is_none());
         assert_eq!(json["currentCanonical"]["kind"], "mobile");
         assert_eq!(json["currentCanonical"]["deviceName"], "Pixel-9");

@@ -99,8 +99,9 @@ function installProxyMock(): void {
   mockInvoke.mockImplementation((cmd: string, args: any) => {
     if (cmd === 'egress_declare_desktop_target') return Promise.resolve(null)
     if (cmd === 'http_request') {
-      const url: string = args?.url || ''
-      const method: string = args?.method || 'GET'
+      // 与真实 tauri 反序列化一致：命令签名 http_request(request: HttpProxyRequest)
+      const url: string = args?.request?.url || ''
+      const method: string = args?.request?.method || 'GET'
       if (url.endsWith('/api/health')) {
         return Promise.resolve(mockProxyResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
       }
@@ -191,10 +192,10 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await flushAsync()
     expect(result.sessionId).toBe('session-1')
     const startCall = invokeCalls('http_request').find(([args]) =>
-      (args as { url: string }).url.endsWith('/api/sessions/start'),
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/start'),
     )!
-    expect((startCall[0] as { method: string }).method).toBe('POST')
-    expect((startCall[0] as { body: string }).body).toBe(
+    expect((startCall[0] as { request: { method: string } }).request.method).toBe('POST')
+    expect((startCall[0] as { request: { body: string } }).request.body).toBe(
       JSON.stringify({ configId: 'config-1' }),
     )
 
@@ -256,9 +257,9 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await flushAsync()
     expect(conn.activeSessions.value[0].status).toBe('stopped')
     const stopCall = invokeCalls('http_request').find(([args]) =>
-      (args as { url: string }).url.endsWith('/api/sessions/session-1/stop'),
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/stop'),
     )!
-    expect((stopCall[0] as { method: string }).method).toBe('POST')
+    expect((stopCall[0] as { request: { method: string } }).request.method).toBe('POST')
 
     // 桌面端广播停止事件（另一条通道）→ 保留记录显示灰色 + buffer 停止标记
     await emit('ws_sync_session_stopped', makeSyncSessionStopped({ session_id: 'session-1' }))
@@ -282,9 +283,9 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(0)
     const removeCall = invokeCalls('http_request').find(([args]) =>
-      (args as { url: string }).url.endsWith('/api/sessions/session-1/remove'),
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/remove'),
     )!
-    expect((removeCall[0] as { method: string }).method).toBe('DELETE')
+    expect((removeCall[0] as { request: { method: string } }).request.method).toBe('DELETE')
 
     // 桌面端广播删除事件 → buffer 清理（会话记录不残留）
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1' })))

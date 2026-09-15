@@ -400,14 +400,24 @@ impl FsAuthChecker {
             _ => Vec::new(),
         };
 
-        // 提取路径的父目录作为前缀（更通用的授权范围）
+        // 授权粒度精确化：目录 → 目录本身；已存在文件 → 文件本身；不存在路径
+        // （将写入/创建）→ 父目录。不再无条件提取父目录——预授权 home 直子目录
+        // （~/.codex、~/.pi、~/.npmrc 等）时父目录为 home 根，一次授权覆盖整个
+        // home，架空"访问未授权目录按需弹窗"的兜底（实测 fs_granted_paths 落
+        // home 根，任何访问均前缀命中"已授权"、永不弹窗）
         let prefix = if path.is_empty() {
             String::new()
         } else {
-            Path::new(path)
-                .parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.to_string())
+            let p = Path::new(path);
+            if p.is_dir() {
+                p.to_string_lossy().to_string()
+            } else if p.exists() {
+                p.to_string_lossy().to_string()
+            } else {
+                p.parent()
+                    .map(|pp| pp.to_string_lossy().to_string())
+                    .unwrap_or_else(|| path.to_string())
+            }
         };
 
         if !prefix.is_empty() {

@@ -7,8 +7,9 @@
  * 行列数会因 CSS 像素与物理像素换算偏差而不精确，导致文字模糊或行尾截断。
  *
  * 纯逻辑模块（Seam A）：零 DOM/零 GPU 依赖，仅数值计算；cols/rows 的换算
- * 完全可单测（100%/150%/200% 缩放）。ceil 行高、floor 列宽保证网格不溢出：
- * 列宽向下取整避免行尾截断，行高向上取整避免最后一行放不下被裁切。
+ * 完全可单测（100%/150%/200% 缩放）。列宽 floor 防行尾截断；行高不做向上
+ * 取整（xterm 画布按原始 cell×dpr 渲染，ceil 会让高 DPR 下少算行数、网格
+ * 贴底对齐时顶部露出空带，详见函数头注释），rows×cell ≤ 容器高恒成立。
  *
  * 移动端口径与 fitWithMargin 对齐（FitAddon 裸 fit：仅扣自绘滚动条预留宽
  * TERMINAL_SCROLLBAR_GUTTER_PX、无行列余量）：默认 marginCols=0 /
@@ -39,11 +40,17 @@ export interface XtermScaledDimensionsInput {
  * 按 devicePixelRatio 精确计算终端网格 cols/rows。
  *
  * 换算口径与 VS Code 一致：容器宽高 × DPR 得到可用物理像素；cell 宽 × DPR
- * 得到物理字符宽度（BedCode 无 letterSpacing，缺省为 0）；cell 高 × DPR 向上
- * ceil 后作为物理行高基准。列宽 floor、行数线性 floor，分别防截断与防溢出。
+ * 得到物理字符宽度（BedCode 无 letterSpacing，缺省为 0）。列宽 floor、行数
+ * floor，分别防截断与防溢出。
  * 滚动条预留宽在 DPR 归一到物理像素的可用宽度内扣除（与 computeGridSize
  * 滚动条扣除逻辑一致，量纲对齐）。余量（marginCols/rows）可额外扣除，
  * 默认对齐 FitAddon 裸 fit 为 0。
+ *
+ * 行高为什么不做 ceil（修正）：实测 xterm 渲染器的画布/屏幕高度 = rows ×
+ * cellHeightCss（原始 cell，非向上取整的物理行高）——高 DPR 下 ceil 会把每行
+ * 成本高估最多 1 物理像素（如 cell×dpr=37.02→38），整数 floor 后整屏少算
+ * 1~2 行，网格贴底对齐时缺额暴露为顶部空带（真机/模拟器实测 30~40px）。
+ * floor(H×dpr / (cell×dpr)) 恒有 rows×cell ≤ 容器高，最后一行不会被裁。
  *
  * @returns 恒为合法维度（≥1）；入参退化（≤0/非有限数）时返回 {1,1} 兜底，
  *          与调用方 applyDprFit 的优雅降级（回退 fitAddon.fit()）互补。
@@ -77,8 +84,8 @@ export function getXtermScaledDimensions(
 
   // 物理字符宽度：cell 宽 × DPR（+ letterSpacing，BedCode 为 0）
   const scaledCharWidth = cellWidthCss * dpr
-  // 物理字符高度：cell 高 × DPR 向上取整→ceil 行高保证最后一行放得下不被裁切
-  const scaledCharHeight = Math.ceil(cellHeightCss * dpr)
+  // 物理字符高度：cell 高 × DPR（原始值，不做 ceil——见函数头注释）
+  const scaledCharHeight = cellHeightCss * dpr
 
   // 可用物理像素 = CSS 像素 × DPR；扣除滚动条预留宽与行列余量（全部归一物理像素）
   const scrollbarScaled = TERMINAL_SCROLLBAR_GUTTER_PX * dpr
@@ -86,7 +93,7 @@ export function getXtermScaledDimensions(
     containerWidthCss * dpr - scrollbarScaled - marginCols * scaledCharWidth
   const scaledHeightAvailable = containerHeightCss * dpr - marginRows * scaledCharHeight
 
-  // 列宽向下取整防行尾截断；行数线性 floor 防溢出
+  // 列宽向下取整防行尾截断；行数线性 floor 防溢出（rows × cell ≤ 容器高恒成立）
   const cols = Math.max(Math.floor(scaledWidthAvailable / scaledCharWidth), 1)
   const rows = Math.max(Math.floor(scaledHeightAvailable / scaledCharHeight), 1)
 

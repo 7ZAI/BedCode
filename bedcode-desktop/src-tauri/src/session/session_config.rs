@@ -301,3 +301,214 @@ impl SessionConfigManager {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    /// 构造独立内存库的管理器（测试隔离：不触碰全局单例）
+    async fn manager() -> SessionConfigManager {
+        let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
+        db.lock().await.init_schema().expect("init schema");
+        SessionConfigManager::new(db)
+    }
+
+    /// 创建一条配置并返回
+    async fn create_one(m: &SessionConfigManager, name: &str) -> SessionConfig {
+        m.create_config(
+            name.to_string(),
+            "linux".to_string(),
+            "/home/u".to_string(),
+            "bash".to_string(),
+        )
+        .await
+        .expect("create config")
+    }
+
+    #[tokio::test]
+    async fn create_config_returns_config_with_generated_id() {
+        let m = manager().await;
+        let cfg = create_one(&m, "dev").await;
+        assert!(!cfg.id.is_empty(), "配置应生成非空 id");
+        assert_eq!(cfg.name, "dev");
+        assert_eq!(cfg.environment, "linux");
+        assert_eq!(cfg.working_dir, "/home/u");
+        // 落库可查
+        let fetched = m.get_config(&cfg.id).await.unwrap().expect("config persisted");
+        assert_eq!(fetched.id, cfg.id);
+    }
+
+    #[tokio::test]
+    async fn create_config_full_internal_ignores_wsl_distro_and_auto_start() {
+        // 锁定当前契约：_wsl_distro/_auto_start 是下划线前缀（有意丢弃）
+        let m = manager().await;
+        let cfg = m
+            .create_config_with_source(
+                "dev".to_string(),
+                "linux".to_string(),
+                Some("Ubuntu".to_string()),
+                "/home/u".to_string(),
+                "bash".to_string(),
+                true,
+                Some("d1".to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(cfg.wsl_distro, None, "wsl_distro 参数被有意丢弃");
+        assert!(!cfg.auto_start, "auto_start 参数被有意丢弃");
+    }
+
+    #[tokio::test]
+    async fn get_config_missing_returns_none() {
+        let m = manager().await;
+        assert!(m.get_config("nonexistent").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn update_config_missing_returns_not_found() {
+        let m = manager().await;
+        let err = m
+            .update_config("nonexistent", Some("x".into()), None, None, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(err, crate::AppError::NotFound(_)), "实际: {err}");
+    }
+
+    #[tokio::test]
+    async fn update_config_partial_fields_preserves_existing() {
+        let m = manager().await;
+        let cfg = create_one(&m, "dev").await;
+        // 只更新 name，其余字段保留
+        let updated = m
+            .update_config(&cfg.id, Some("renamed".into()), None, None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(updated.name, "renamed");
+        assert_eq!(updated.environment, "linux", "未指定字段应保留");
+        assert_eq!(updated.working_dir, "/home/u");
+        assert_eq!(updated.command, "bash");
+        assert_eq!(updated.id, cfg.id, "id 不变");
+        // 落库确认
+        let fetched = m.get_config(&cfg.id).await.unwrap().unwrap();
+        assert_eq!(fetched.name, "renamed");
+    }
+
+    #[tokio::test]
+    async fn delete_config_removes_from_db() {
+        let m = manager().await;
+        let cfg = create_one(&m, "dev").await;
+        m.delete_config(&cfg.id).await.unwrap();
+        assert!(m.get_config(&cfg.id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_config_missing_still_returns_ok() {
+        // 锁定当前契约：删除不存在配置不报错
+        let m = manager().await;
+        assert!(m.delete_config("ghost").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn delete_config_with_source_emits_config_removed_with_name() {
+        let m = manager().await;
+        let cfg = create_one(&m, "toBeDeleted").await;
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(8);
+        m.set_sync_tx(tx).await;
+
+        m.delete_config_with_source(&cfg.id, Some("d1".to_string())).await.unwrap();
+        let event = rx.recv().await.expect("应收到 ConfigRemoved 事件");
+        match event {
+            DesktopSyncEvent::ConfigRemoved { config_id, config_name, source_device } => {
+                assert_eq!(config_id, cfg.id);
+                assert_eq!(config_name, "toBeDeleted", "事件应携带删除前读到的名字");
+                assert_eq!(source_device.as_deref(), Some("d1"));
+            }
+            other => panic!("期望 ConfigRemoved，实际: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_config_with_sync_tx_emits_config_created() {
+        let m = manager().await;
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(8);
+        m.set_sync_tx(tx).await;
+
+        m.create_config_with_source(
+            "dev".to_string(),
+            "linux".to_string(),
+            None,
+            "/home/u".to_string(),
+            "bash".to_string(),
+            false,
+            Some("d2".to_string()),
+        )
+        .await
+        .unwrap();
+        let event = rx.recv().await.expect("应收到 ConfigCreated 事件");
+        match event {
+            DesktopSyncEvent::ConfigCreated { config_id, source_device } => {
+                assert!(!config_id.is_empty());
+                assert_eq!(source_device.as_deref(), Some("d2"));
+            }
+            other => panic!("期望 ConfigCreated，实际: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn create_config_without_sync_tx_does_not_panic() {
+        // sync_tx=None 时静默跳过（不 panic）
+        let m = manager().await;
+        let cfg = create_one(&m, "dev").await;
+        assert!(!cfg.id.is_empty());
+    }
+
+    #[tokio::test]
+    async fn update_config_emits_config_updated_with_source_device() {
+        let m = manager().await;
+        let cfg = create_one(&m, "dev").await;
+        let (tx, mut rx) = tokio::sync::broadcast::channel::<DesktopSyncEvent>(8);
+        m.set_sync_tx(tx).await;
+
+        m.update_config_with_source(&cfg.id, Some("v2".into()), None, None, None, None, None, Some("d3".into()))
+            .await
+            .unwrap();
+        let event = rx.recv().await.expect("应收到 ConfigUpdated 事件");
+        match event {
+            DesktopSyncEvent::ConfigUpdated { config_id, source_device } => {
+                assert_eq!(config_id, cfg.id);
+                assert_eq!(source_device.as_deref(), Some("d3"));
+            }
+            other => panic!("期望 ConfigUpdated，实际: {other:?}"),
+        }
+    }
+
+    // ---- validate_config ----
+
+    #[test]
+    fn validate_rejects_empty_name() {
+        assert!(SessionConfigManager::validate_config("", "linux", "/tmp", "bash").is_err());
+        assert!(SessionConfigManager::validate_config("  ", "linux", "/tmp", "bash").is_err());
+    }
+
+    #[test]
+    fn validate_rejects_empty_environment() {
+        assert!(SessionConfigManager::validate_config("dev", "", "/tmp", "bash").is_err());
+    }
+
+    #[test]
+    fn validate_accepts_all_known_environments() {
+        for env in ["powershell", "cmd", "wsl2", "windows", "linux"] {
+            assert!(
+                SessionConfigManager::validate_config("dev", env, "/tmp", "bash").is_ok(),
+                "应接受 {env}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_allows_unknown_env_with_warning() {
+        // 锁定当前宽松语义：未知环境仅 warn 不拒绝
+        assert!(SessionConfigManager::validate_config("dev", "bogus-env", "/tmp", "bash").is_ok());
+    }
+}

@@ -7,6 +7,7 @@ import { logger } from '@/utils/frontendLogger'
 import i18n from '@/locales'
 import { listen } from '@tauri-apps/api/event'
 import { useToast } from '@/composables/useToast'
+import { useMobileSettings, defaultMobileSettings } from '@/composables/useMobileSettings'
 import { completeStartupTask } from '@/composables/useAppStartup'
 import {
   wsConnect,
@@ -315,9 +316,16 @@ async function init() {
     },
     onSyncSessionCreated: (data) => {
       logger.log('[MobileConnection] SyncSessionCreated:', data.session.id, 'source:', data.source_device)
+      // 数量限制：运行中会话已达上限时，增量同步的新运行会话直接丢弃（占位槽位不增加）
+      const session = data.session
+      const isRunning = session.status === 'running' || session.status === 'waiting_input'
+      if (isRunning && runningSessionCount() >= maxOpenTerminalsLimit()) {
+        logger.warn(`[MobileConnection] Session limit (${maxOpenTerminalsLimit()}) reached, drop synced session ${session.id}`)
+        return
+      }
       // 添加新会话到列表
-      if (!activeSessions.value.find(s => s.id === data.session.id)) {
-        activeSessions.value.push(data.session)
+      if (!activeSessions.value.find(s => s.id === session.id)) {
+        activeSessions.value.push(session)
       }
     },
     onSyncSessionStatusChanged: (data) => {
@@ -865,15 +873,52 @@ export async function loadSessionConfigs(): Promise<any[]> {
   }
 }
 
+// ==================== 终端数量限制（外观设置 maxOpenTerminals） ====================
+
+/** 当前占用槽位的运行中会话数（running / waiting_input 计入，stopped 为历史记录不占槽位） */
+function runningSessionCount(): number {
+  return activeSessions.value.filter(s => s.status === 'running' || s.status === 'waiting_input').length
+}
+
+/** 读取「最大可打开终端数量」设置（1-20，非法值回退默认） */
+function maxOpenTerminalsLimit(): number {
+  const v = Number(useMobileSettings().settings.value.maxOpenTerminals)
+  return Number.isFinite(v) && v > 0
+    ? Math.min(20, Math.max(1, Math.round(v)))
+    : defaultMobileSettings.maxOpenTerminals
+}
+
 /**
- * 加载活跃会话列表
+ * 加载活跃会话列表（同步桌面端）
+ *
+ * 数量限制：只同步前 N 个运行中的会话，超出的运行会话丢弃（stopped 会话不占槽位全保留），
+ * 有丢弃时 toast 通知用户
  */
 export async function loadActiveSessions(): Promise<any[]> {
   const { httpListSessions } = useHttpApi()
   const result = await httpListSessions()
   if (result.code === 0 && result.data) {
-    activeSessions.value = result.data.sessions || []
-    return result.data.sessions
+    const sessions = result.data.sessions || []
+    const limit = maxOpenTerminalsLimit()
+
+    // 保持原列表顺序，仅丢弃超出上限的「运行中」会话
+    const kept: any[] = []
+    let runningKept = 0
+    for (const s of sessions) {
+      const isRunning = s.status === 'running' || s.status === 'waiting_input'
+      if (isRunning && runningKept >= limit) continue
+      if (isRunning) runningKept++
+      kept.push(s)
+    }
+
+    const dropped = sessions.length - kept.length
+    if (dropped > 0) {
+      const toast = useToast()
+      toast.warning(i18n.global.t('mobile.session.maxSyncLimited', { max: limit, dropped }))
+    }
+
+    activeSessions.value = kept
+    return kept
   }
   logger.warn('[MobileConnection] Failed to load sessions via HTTP:', result.message)
   return []
@@ -889,6 +934,12 @@ export async function startSession(
   configId: string,
   size?: { cols: number; rows: number }
 ): Promise<{ sessionId: string; session?: any }> {
+  // 数量限制：运行中会话已达上限时拒绝启动（错误由调用方 toast 提示）
+  const limit = maxOpenTerminalsLimit()
+  if (runningSessionCount() >= limit) {
+    throw new Error(i18n.global.t('mobile.session.maxReached', { max: limit }))
+  }
+
   const { httpStartSession } = useHttpApi()
   const result = await httpStartSession(configId, size)
   if (result.code === 0 && result.data) {

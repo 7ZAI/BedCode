@@ -85,6 +85,7 @@ const en: MessageSchema = {
   // ==================== Queue panel ====================
   'transfer.queue.title': 'Transfer queue',
   'transfer.queue.count': '{count} tasks',
+  'transfer.queue.close': 'Hide transfer queue',
 
   // ==================== Queue tabs (v2) ====================
   'transfer.queue.all': 'All',
@@ -174,6 +175,8 @@ const en: MessageSchema = {
   // ==================== Transfer history (v2) ====================
   'transfer.history.title': 'History',
   'transfer.history.clear': 'Clear history',
+  'transfer.history.clearConfirmTitle': 'Clear transfer history?',
+  'transfer.history.clearConfirmBody': 'All completed, failed and cancelled records will be deleted (in-progress tasks are unaffected). This cannot be undone.',
   'transfer.history.empty': 'No transfer history',
   'transfer.history.openFolder': 'Show in folder',
   'transfer.history.results.completed': 'Completed',

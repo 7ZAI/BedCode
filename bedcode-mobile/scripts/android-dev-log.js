@@ -68,11 +68,16 @@ const stripAnsi = (s) =>
     .replace(/\r/g, '')
 
 console.log(`[dev-log] 电脑端日志落盘: ${logFile}`)
+console.log('[dev-log] 已启用 verbose（BEDCODE_DEV_VERBOSE=1）：logcat 转发含 Debug 级别（Rust debug! 日志可见）')
 
 const IS_WIN = process.platform === 'win32'
+// BEDCODE_DEV_VERBOSE=1 → dev-run.js 给 turi android dev 追加 -v：CLI 的 logcat
+// 转发默认 Polite→Info 过滤，Rust debug!（D 级，如 terminal_link 收帧统计）
+// 不开 -v 永远进不了控制台与本落盘文件。:dev:log 模式定位就是排查落盘，默认开启
 const child = spawn(IS_WIN ? 'pnpm.cmd' : 'pnpm', ['run', 'tauri:android:dev'], {
   stdio: ['inherit', 'pipe', 'pipe'],
   shell: IS_WIN,
+  env: { ...process.env, BEDCODE_DEV_VERBOSE: '1' },
   // POSIX：detached 让子进程自成进程组，信号处理可对整个组（含 dev-run.js 及其
   // 全部 watch/宿主子树）一次性回收；Ctrl+C 不再直送子进程，由下方 handler 转发
   detached: !IS_WIN,

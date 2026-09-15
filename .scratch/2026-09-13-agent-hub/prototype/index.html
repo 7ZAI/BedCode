@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<!-- ============================================================
+  PROTOTYPE（用后即弃）· Agent Hub UI 原型
+  问题：「Agent Hub 页面的四分区应该长什么样？」
+  形态：BedCode 桌面外壳模拟（TitleBar + Sidebar）内三套结构迥异的变体，
+        底部悬浮条 / ← → 方向键 / URL hash 切换，右上工具按钮切明暗主题。
+  变体：
+    A 二级侧栏分区 —— hub 内左侧子导航，右区单焦点内容
+    B 顶部分段导航 —— 顶部 pill tabs，概览 2×2 卡片网格 + 安装流式日志
+    C 单页下钻     —— 无分区导航，纵向聚合仪表盘 + 各块「管理」下钻
+  数据全部为本机实查快照（2026-09-13），静态 mock，无任何真实调用。
+  真源：.scratch/agent-hub/spec.md；设计 token 拷贝自 bedcode-desktop/src/style.css
+============================================================ -->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Hub UI 原型（BedCode）</title>
+<style>
+/* ==================== Design Tokens（拷贝自 src/style.css，warm 色板） ==================== */
+:root {
+  color-scheme: light;
+  font-family: 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Display', Inter, system-ui, sans-serif;
+  line-height: 1.5; font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+  --bg-page: #f5f4f0; --bg-sidebar: #efede7; --bg-card: #fdfcfa; --bg-hover: #e7e4dc; --bg-input: #fdfcfa;
+  --text-primary: #26231b; --text-secondary: #7c7565; --text-tertiary: #aba492;
+  --border: #e4e1d8; --border-strong: #d6d2c4;
+  --color-primary: #1d1a14; --color-primary-hover: #0f0d09; --color-primary-light: #efede5; --color-primary-contrast: #fdfcfa;
+  --color-success: #22c55e; --color-success-light: rgba(34,197,94,.14);
+  --color-warning: #f59e0b; --color-warning-light: rgba(245,158,11,.16);
+  --color-danger: #ef4444; --color-danger-light: rgba(239,68,68,.12);
+  --radius-card: 10px; --radius-button: 8px; --radius-tag: 6px; --radius-nav: 8px;
+  --shadow-card: 0 1px 2px rgba(38,35,27,.04); --shadow-card-hover: 0 4px 16px rgba(38,35,27,.08);
+  --sidebar-width: 240px; --header-height: 48px; --page-padding: 24px;
+  --font-size-xs: 9px; --font-size-sm: 10px; --font-size-base: 12px; --font-size-lg: 14px; --font-size-xl: 16px;
+  --font-size-body: 13px; --font-size-tag: 11px;
+  --input-height: 36px; --button-height: 32px; --tag-height: 24px; --nav-item-height: 40px;
+  --mono: ui-monospace, 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+}
+:root.dark {
+  color-scheme: dark;
+  --bg-page: #15130f; --bg-sidebar: #191712; --bg-card: #1d1a15; --bg-hover: #2a261e; --bg-input: #1d1a15;
+  --text-primary: #ece8dc; --text-secondary: #9c9482; --text-tertiary: #6b6455;
+  --border: #2e2a22; --border-strong: #3c372b;
+  --color-primary: #ece8dc; --color-primary-hover: #f5f2ea; --color-primary-light: #2a261e; --color-primary-contrast: #1d1a15;
+  --color-success-light: rgba(34,197,94,.18); --color-warning-light: rgba(245,158,11,.2); --color-danger-light: rgba(239,68,68,.16);
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: var(--bg-page); color: var(--text-primary); font-size: var(--font-size-base); overflow: hidden; }
+
+/* ==================== 外壳（TitleBar + Sidebar，非评审对象） ==================== */
+.titlebar { height: var(--header-height); display: flex; align-items: center; padding: 0 16px; gap: 10px;
+  background: var(--bg-sidebar); border-bottom: 1px solid var(--border); user-select: none; }
+.titlebar .logo { width: 18px; height: 18px; border-radius: 5px; background: var(--color-primary); color: var(--color-primary-contrast);
+  display: grid; place-items: center; font-size: 10px; font-weight: 700; }
+.titlebar .title { font-size: var(--font-size-base); color: var(--text-secondary); }
+.shell { display: flex; height: calc(100vh - var(--header-height)); }
+.sidebar { width: var(--sidebar-width); flex: none; background: var(--bg-sidebar); border-right: 1px solid var(--border);
+  padding: 12px 10px; display: flex; flex-direction: column; gap: 2px; }
+.nav-item { height: var(--nav-item-height); display: flex; align-items: center; gap: 10px; padding: 0 12px;
+  border-radius: var(--radius-nav); color: var(--text-secondary); font-size: var(--font-size-body); cursor: default; }
+.nav-item .ico { width: 16px; text-align: center; opacity: .75; }
+.nav-item.active { background: var(--bg-hover); color: var(--text-primary); font-weight: 600; }
+.nav-item.dimmer { opacity: .55; }
+.sidebar .spacer { flex: 1; }
+main { flex: 1; overflow-y: auto; }
+
+/* ==================== 通用组件 ==================== */
+.page { padding: var(--page-padding); }
+.page-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 16px; }
+.page-head h1 { font-size: var(--font-size-xl); font-weight: 700; }
+.page-head .sub { color: var(--text-secondary); font-size: var(--font-size-base); }
+.section-title { font-size: var(--font-size-lg); font-weight: 600; margin: 20px 0 10px; display: flex; align-items: center; gap: 8px; }
+.section-title:first-child { margin-top: 0; }
+.section-title .hint { font-weight: 400; color: var(--text-tertiary); font-size: var(--font-size-tag); }
+.card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card); padding: 14px 16px; }
+.card.hoverable:hover { box-shadow: var(--shadow-card-hover); }
+.btn { height: var(--button-height); padding: 0 14px; border-radius: var(--radius-button); border: 1px solid transparent;
+  font-size: var(--font-size-base); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+.btn.primary { background: var(--color-primary); color: var(--color-primary-contrast); }
+.btn.primary:hover { background: var(--color-primary-hover); }
+.btn.ghost { background: transparent; border-color: var(--border-strong); color: var(--text-primary); }
+.btn.ghost:hover { background: var(--bg-hover); }
+.btn.sm { height: 26px; padding: 0 10px; font-size: var(--font-size-tag); }
+.tag { height: var(--tag-height); padding: 0 8px; display: inline-flex; align-items: center; gap: 4px;
+  border-radius: var(--radius-tag); font-size: var(--font-size-tag); background: var(--bg-hover); color: var(--text-secondary); }
+.tag.ok { background: var(--color-success-light); color: var(--color-success); }
+.tag.warn { background: var(--color-warning-light); color: var(--color-warning); }
+.tag.err { background: var(--color-danger-light); color: var(--color-danger); }
+.tag.brand { background: var(--color-primary-light); color: var(--text-primary); }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.dot.ok { background: var(--color-success); } .dot.warn { background: var(--color-warning); }
+.dot.err { background: var(--color-danger); } .dot.idle { background: var(--text-tertiary); }
+.row { display: flex; align-items: center; gap: 8px; }
+.muted { color: var(--text-secondary); } .faint { color: var(--text-tertiary); }
+.mono { font-family: var(--mono); font-size: var(--font-size-tag); }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+input[type=text] { height: var(--input-height); border: 1px solid var(--border-strong); border-radius: var(--radius-button);
+  background: var(--bg-input); color: var(--text-primary); padding: 0 10px; font-size: var(--font-size-base); width: 100%; }
+.table { width: 100%; border-collapse: collapse; font-size: var(--font-size-body); }
+.table th { text-align: left; font-weight: 500; color: var(--text-tertiary); font-size: var(--font-size-tag);
+  padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.table td { padding: 8px 10px; border-bottom: 1px solid var(--border); }
+.table tr:last-child td { border-bottom: none; }
+.logbox { background: #14120e; color: #d8d2c2; border-radius: var(--radius-card); padding: 12px 14px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.7; white-space: pre-wrap; }
+.logbox .cmd { color: #8fd6a0; } .logbox .ok { color: #22c55e; } .logbox .warn { color: #f59e0b; } .logbox .dim { color: #6b6455; }
+.banner { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius-button);
+  background: var(--color-warning-light); color: var(--text-primary); font-size: var(--font-size-body); }
+.banner .ic { color: var(--color-warning); }
+.chart { display: flex; flex-direction: column; gap: 5px; }
+.chart .crow { display: grid; grid-template-columns: 64px 1fr 70px; align-items: center; gap: 10px; }
+.chart .cbar { height: 12px; border-radius: 4px; background: var(--bg-hover); overflow: hidden; display: flex; }
+.chart .in { background: var(--color-primary); height: 100%; }
+.chart .out { background: var(--color-warning); height: 100%; opacity: .85; }
+.chart .clabel { font-size: var(--font-size-tag); color: var(--text-secondary); }
+.chart .cval { font-size: var(--font-size-tag); color: var(--text-tertiary); text-align: right; }
+.legend { display: flex; gap: 14px; font-size: var(--font-size-tag); color: var(--text-secondary); margin-top: 8px; }
+.legend .k { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+
+/* CLI 官方图标 chip（claude/openai/opencode 官方标，pi 手绘 π） */
+.cli-ic { width: 34px; height: 34px; border-radius: 9px; display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.cli-ic svg { width: 19px; height: 19px; }
+.cli-ic.sm { width: 24px; height: 24px; border-radius: 7px; }
+.cli-ic.sm svg { width: 14px; height: 14px; }
+.ic-claude { background: rgba(217,119,87,.16); color: #d97757; }
+.ic-openai { background: var(--bg-hover); color: var(--text-primary); }
+.ic-oc { background: rgba(59,130,246,.14); color: #3b82f6; }
+.ic-pi { background: rgba(245,158,11,.16); color: #b45309; }
+:root.dark .ic-pi { color: #f59e0b; }
+
+/* 会话日志（JSONL 解析）：会话列表 + 归一事件流 + 原始行切换 */
+.lg { display: flex; gap: 12px; align-items: flex-start; }
+.lg-list { width: 268px; flex: none; display: flex; flex-direction: column; gap: 8px; }
+.lg-item { padding: 10px 12px; cursor: pointer; }
+.lg-item.active { border-color: var(--color-primary); box-shadow: var(--shadow-card-hover); }
+.lg-item .li-top { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.lg-item .li-sub { font-size: var(--font-size-tag); color: var(--text-tertiary); margin-top: 4px; }
+.lg-view { flex: 1; min-width: 0; }
+.evt { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px dashed var(--border); font-size: var(--font-size-body); }
+.evt:last-child { border-bottom: none; }
+.evt .t { color: var(--text-tertiary); font-family: var(--mono); font-size: 10px; width: 56px; flex: none; padding-top: 2px; }
+.evt .tx { min-width: 0; }
+.evt .meta { font-size: 10px; color: var(--text-tertiary); margin-top: 2px; font-family: var(--mono); }
+.tag.user { background: var(--color-primary-light); color: var(--text-primary); }
+.tag.asst { background: rgba(217,119,87,.14); color: #b45309; }
+:root.dark .tag.asst { color: #d97757; }
+.tag.tool { background: var(--bg-hover); color: var(--text-secondary); }
+.tag.sys { background: var(--bg-hover); color: var(--text-tertiary); }
+
+/* ==================== 变体 A：二级侧栏分区 ==================== */
+.hub-a { display: flex; height: 100%; }
+.hub-a .subnav { width: 148px; flex: none; border-right: 1px solid var(--border); padding: 16px 8px;
+  display: flex; flex-direction: column; gap: 2px; background: var(--bg-card); }
+.hub-a .subnav .sn { height: 36px; display: flex; align-items: center; gap: 8px; padding: 0 12px;
+  border-radius: var(--radius-nav); color: var(--text-secondary); cursor: pointer; font-size: var(--font-size-body); }
+.hub-a .subnav .sn:hover { background: var(--bg-hover); }
+.hub-a .subnav .sn.active { background: var(--bg-hover); color: var(--text-primary); font-weight: 600; }
+.hub-a .content { flex: 1; overflow-y: auto; padding: var(--page-padding); }
+
+/* ==================== 变体 B：顶部分段导航 ==================== */
+.hub-b { padding: var(--page-padding); }
+.tabs { display: inline-flex; gap: 4px; background: var(--bg-sidebar); border: 1px solid var(--border);
+  border-radius: var(--radius-button); padding: 3px; margin-bottom: 18px; }
+.tabs .tb { height: 30px; padding: 0 16px; border-radius: 6px; border: none; background: transparent;
+  color: var(--text-secondary); font-size: var(--font-size-body); cursor: pointer; }
+.tabs .tb.active { background: var(--color-primary); color: var(--color-primary-contrast); font-weight: 600; }
+.tabpane { display: none; } .tabpane.active { display: block; }
+.pane { display: none; } .pane.active { display: block; }
+
+/* ==================== 变体 C：单页下钻 ==================== */
+.hub-c { padding: var(--page-padding); max-width: 1080px; }
+.hub-c .cli-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 6px; }
+.hub-c .mini { text-align: left; padding: 12px 14px; cursor: pointer; }
+.hub-c details { border: 1px solid var(--border); border-radius: var(--radius-card); background: var(--bg-card);
+  margin-top: 12px; overflow: hidden; }
+.hub-c summary { list-style: none; display: flex; align-items: center; gap: 10px; padding: 13px 16px; cursor: pointer;
+  font-size: var(--font-size-lg); font-weight: 600; }
+.hub-c summary::-webkit-details-marker { display: none; }
+.hub-c summary .goto { margin-left: auto; font-size: var(--font-size-tag); font-weight: 400; color: var(--text-secondary); }
+.hub-c .body { padding: 0 16px 16px; }
+
+/* ==================== 原型工具条（非评审对象） ==================== */
+.proto-bar { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 50;
+  display: flex; align-items: center; gap: 10px; background: #14120e; color: #ece8dc; border-radius: 999px;
+  padding: 8px 10px 8px 6px; box-shadow: 0 8px 30px rgba(0,0,0,.35); border: 1px solid #3c372b; }
+.proto-bar button { height: 30px; min-width: 30px; border-radius: 50%; border: none; cursor: pointer;
+  background: #2a261e; color: #ece8dc; font-size: 14px; }
+.proto-bar button:hover { background: #3c372b; }
+.proto-bar .vlabel { font-size: 12px; min-width: 150px; text-align: center; }
+.proto-bar .theme { font-size: 11px; border-radius: 999px; padding: 0 12px; min-width: 0; }
+.proto-note { position: fixed; top: 56px; right: 14px; z-index: 50; font-size: 10px; color: #ece8dc; background: #14120eee;
+  border: 1px solid #3c372b; padding: 6px 10px; border-radius: 8px; }
+</style>
+</head>
+<body>
+
+<!-- 品牌图标：claude / openai / opencode 取自 simple-icons（CC0），pi 为官方标（用户提供，evenodd 镂空） -->
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg">
+  <symbol id="ic-claude" viewBox="0 0 24 24"><path fill="currentColor" d="m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-.3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-.4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2.4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3.0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.2853 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.3279h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2.3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.7164-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9064-1.3114Z"/></symbol>
+  <symbol id="ic-openai" viewBox="0 0 24 24"><path fill="currentColor" d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></symbol>
+  <symbol id="ic-oc" viewBox="0 0 24 24"><path fill="currentColor" d="M22 24H2V0h20zM17 4.8H7v14.4h10z"/></symbol>
+  <symbol id="ic-pi" viewBox="165.29 165.29 469.43 469.43"><path fill="currentColor" fill-rule="evenodd" d="M165.29 165.29H517.36V400H400V517.36H282.65V634.72H165.29Z M282.65 282.65V400H400V282.65Z"/><path fill="currentColor" d="M517.36 400H634.72V634.72H517.36Z"/></symbol>
+</svg>
+
+<header class="titlebar">
+  <div class="logo">B</div>
+  <span class="title">BedCode · Agent Hub（原型）</span>
+</header>
+
+<div class="shell">
+  <aside class="sidebar">
+    <div class="nav-item"><span class="ico">▣</span>设备</div>
+    <div class="nav-item"><span class="ico">⌘</span>会话</div>
+    <div class="nav-item active"><span class="ico">◆</span>Agent Hub</div>
+    <div class="nav-item dimmer"><span class="ico">▦</span>插件</div>
+    <div class="spacer"></div>
+    <div class="nav-item dimmer"><span class="ico">⚙</span>设置</div>
+  </aside>
+
+  <main>
+
+  <!-- ==================== 变体 A：二级侧栏分区 ==================== -->
+  <section class="variant" data-variant="a">
+    <div class="hub-a">
+      <nav class="subnav">
+        <div class="sn active" data-goto="a-ov">概览与安装</div>
+        <div class="sn" data-goto="a-sk">Skills</div>
+        <div class="sn" data-goto="a-pv">供应商</div>
+        <div class="sn" data-goto="a-st">使用统计</div>
+        <div class="sn" data-goto="a-lg">会话日志</div>
+      </nav>
+      <div class="content">
+
+        <div class="pane active" id="a-ov">
+          <div class="page-head">
+            <h1>概览与安装</h1><span class="sub">4 个 Agent CLI · 环境 Node v24.20.0 · npm 12.0.2</span>
+          </div>
+
+          <div class="card" style="margin-bottom:14px">
+            <div class="row" style="justify-content:space-between; margin-bottom:8px">
+              <strong style="font-size:var(--font-size-body)">npm 源测速</strong>
+              <span class="tag warn">官方源偏慢</span>
+            </div>
+            <div class="row" style="gap:24px">
+              <span class="muted">registry.npmjs.org <b class="mono" style="color:var(--color-warning)">1.06s</b></span>
+              <span class="muted">registry.npmmirror.com <b class="mono" style="color:var(--color-success)">0.18s</b> · 推荐</span>
+              <span class="row" style="margin-left:auto">
+                <button class="btn ghost sm">本次安装用镜像</button>
+                <button class="btn ghost sm">持久切换源…</button>
+              </span>
+            </div>
+          </div>
+
+          <div class="grid2">
+            <div class="card hoverable">
+              <div class="row" style="justify-content:space-between">
+                <span class="row" style="gap:9px"><span class="cli-ic ic-claude"><svg viewBox="0 0 24 24"><use href="#ic-claude"/></svg></span><strong>Claude Code</strong></span><span class="tag ok"><span class="dot ok"></span>已装</span>
+              </div>
+              <div class="row muted" style="margin:8px 0 4px"><span class="mono">v2.1.263</span>·<span>最新 2.1.263</span>·<span class="tag">native</span></div>
+              <div class="row faint" style="font-size:var(--font-size-tag)">Skills 32 个 · 已同步 · 供应商走 settings.json env</div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost sm">检查更新</button><button class="btn ghost sm">详情</button></div>
+            </div>
+            <div class="card hoverable">
+              <div class="row" style="justify-content:space-between">
+                <span class="row" style="gap:9px"><span class="cli-ic ic-openai"><svg viewBox="0 0 24 24"><use href="#ic-openai"/></svg></span><strong>Codex CLI</strong></span><span class="tag warn"><span class="dot warn"></span>已装 · 未初始化</span>
+              </div>
+              <div class="row muted" style="margin:8px 0 4px"><span class="mono">v0.153.4</span>·<span class="tag">npm 全局</span></div>
+              <div class="row faint" style="font-size:var(--font-size-tag)">~/.codex 为空 · 首次使用需初始化配置</div>
+              <div class="row" style="margin-top:10px"><button class="btn primary sm">初始化引导</button><button class="btn ghost sm">详情</button></div>
+            </div>
+            <div class="card hoverable">
+              <div class="row" style="justify-content:space-between">
+                <span class="row" style="gap:9px"><span class="cli-ic ic-oc"><svg viewBox="0 0 24 24"><use href="#ic-oc"/></svg></span><strong>OpenCode</strong></span><span class="tag warn"><span class="dot warn"></span>双安装</span>
+              </div>
+              <div class="row muted" style="margin:8px 0 4px"><span class="mono">v1.18.30</span>·<span>最新 1.18.30</span>·<span class="tag">standalone</span></div>
+              <div class="banner" style="margin-top:8px"><span class="ic">⚠</span><span>检测到 npm 全局 1.18.27 并存，PATH 生效的是 standalone。建议卸载 npm 版本以免混淆。</span></div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost sm">查看 PATH</button><button class="btn ghost sm">详情</button></div>
+            </div>
+            <div class="card hoverable">
+              <div class="row" style="justify-content:space-between">
+                <span class="row" style="gap:9px"><span class="cli-ic ic-pi"><svg viewBox="0 0 24 24"><use href="#ic-pi"/></svg></span><strong>Pi</strong></span><span class="tag ok"><span class="dot ok"></span>已装</span>
+              </div>
+              <div class="row muted" style="margin:8px 0 4px"><span class="mono">v0.85.1</span>·<span>最新 0.85.1</span>·<span class="tag">npm 全局</span></div>
+              <div class="row faint" style="font-size:var(--font-size-tag)">Skills 30 个 · 2 个分发落后</div>
+              <div class="row" style="margin-top:10px"><button class="btn ghost sm">检查更新</button><button class="btn ghost sm">详情</button></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane" id="a-sk">
+          <div class="page-head"><h1>Skills</h1>
+            <span class="row"><button class="btn primary sm">从 GitHub 安装</button><button class="btn ghost sm">导入本地目录</button></span>
+          </div>
+          <div class="row" style="margin-bottom:12px; gap:14px">
+            <span class="tag brand">规范库 ~/.agents/skills · 32 个</span>
+            <span class="tag ok">claude 已同步</span>
+            <span class="tag warn">pi · 2 落后</span>
+            <span class="tag idle">opencode 无 skills 目录</span>
+          </div>
+          <div class="card" style="padding:0">
+            <table class="table">
+              <tr><th>技能</th><th>描述</th><th>分发状态</th><th></th></tr>
+              <tr><td><b>ctx7</b></td><td class="muted">Fetch up-to-date library documentation…</td><td><span class="tag ok">claude ✓ pi ✓</span></td>
+                  <td class="row"><button class="btn ghost sm">编辑</button><button class="btn ghost sm">分发</button></td></tr>
+              <tr><td><b>code-review</b></td><td class="muted">Review changes along Standards and Spec axes…</td><td><span class="tag warn">pi 落后</span></td>
+                  <td class="row"><button class="btn ghost sm">编辑</button><button class="btn primary sm">重新分发</button></td></tr>
+              <tr><td><b>archify</b></td><td class="muted">Architecture capture and structuring…</td><td><span class="tag warn">pi 落后</span></td>
+                  <td class="row"><button class="btn ghost sm">编辑</button><button class="btn primary sm">重新分发</button></td></tr>
+              <tr><td><b>grill-with-docs</b></td><td class="muted">A relentless interview that also creates docs…</td><td><span class="tag idle">仅规范库</span></td>
+                  <td class="row"><button class="btn ghost sm">编辑</button><button class="btn ghost sm">分发</button></td></tr>
+            </table>
+          </div>
+        </div>
+
+        <div class="pane" id="a-pv">
+          <div class="page-head"><h1>供应商</h1>
+            <span class="row"><button class="btn primary sm">新建预设</button><button class="btn ghost sm">从 CLI 反向导入</button></span>
+          </div>
+          <div class="card" style="margin-bottom:12px">
+            <div class="banner"><span class="ic">🔐</span><span>API key 不落 Agent Hub 存储：应用时现场输入，或从已配置的 CLI 内存直拷。列表中一律掩码显示。</span></div>
+          </div>
+          <div class="card" style="padding:0">
+            <table class="table">
+              <tr><th>预设</th><th>Base URL</th><th>模型</th><th>来源</th><th></th></tr>
+              <tr><td><b>sensenova</b></td><td class="mono">https://token.sensenova.cn/v1</td><td class="mono">SenseNova-V6-5</td><td><span class="tag">反向导入 · pi</span></td>
+                  <td class="row"><button class="btn primary sm">应用到…</button><button class="btn ghost sm">编辑</button></td></tr>
+              <tr><td><b>gmi</b></td><td class="mono">https://api.gmi-serving.com/v1</td><td class="mono">MiniMax-M3</td><td><span class="tag">反向导入 · opencode</span></td>
+                  <td class="row"><button class="btn primary sm">应用到…</button><button class="btn ghost sm">编辑</button></td></tr>
+              <tr><td><b>amd</b></td><td class="mono">https://rpc.amd.ai/v1</td><td class="mono">Llama-4-Maverick</td><td><span class="tag">反向导入 · pi</span></td>
+                  <td class="row"><button class="btn primary sm">应用到…</button><button class="btn ghost sm">编辑</button></td></tr>
+              <tr><td><b>DeepSeek 官方</b></td><td class="mono">https://api.deepseek.com/v1</td><td class="mono">deepseek-chat · reasoner</td><td><span class="tag brand">内置模板</span></td>
+                  <td class="row"><button class="btn primary sm">应用到…</button></td></tr>
+            </table>
+          </div>
+          <div class="card" style="margin-top:12px">
+            <div class="section-title" style="margin-top:0">应用「sensenova」→ Pi <span class="hint">写入 ~/.pi/agent/{models.json, auth.json}</span></div>
+            <div class="row" style="margin-bottom:8px"><span class="muted" style="width:90px">API Key</span>
+              <input type="text" value="sk-••••••••••••••••••••（35 位，从 pi 内存直拷）" readonly></div>
+            <div class="banner"><span class="ic">⚠</span><span>检测到 claude 存在自建桥接（provider-config.sh / anthropic-bridge.mjs）。对 claude 应用预设不会覆盖你的桥接，将改写 settings.json 的 env 块并提示确认。</span></div>
+            <div class="row" style="margin-top:12px"><button class="btn primary sm">写入配置</button><button class="btn ghost sm">取消</button></div>
+          </div>
+        </div>
+
+        <div class="pane" id="a-st">
+          <div class="page-head"><h1>使用统计</h1>
+            <span class="row"><span class="tag">增量水位：4/4 适配器已同步</span><button class="btn ghost sm">立即扫描</button></span>
+          </div>
+          <div class="row" style="margin-bottom:12px; gap:6px">
+            <button class="btn ghost sm" style="background:var(--color-primary-light)">近 14 天</button>
+            <button class="btn ghost sm">按 CLI</button><button class="btn ghost sm">按项目</button><button class="btn ghost sm">按模型</button>
+          </div>
+          <div class="grid2">
+            <div class="card">
+              <div class="section-title" style="margin-top:0">每日 tokens <span class="hint">输入 / 输出</span></div>
+              <div class="chart" id="chart-a"></div>
+              <div class="legend"><span><span class="k" style="background:var(--color-primary)"></span>输入</span>
+                <span><span class="k" style="background:var(--color-warning)"></span>输出</span></div>
+            </div>
+            <div class="card">
+              <div class="section-title" style="margin-top:0">按 CLI 汇总 <span class="hint">近 14 天</span></div>
+              <table class="table">
+                <tr><th>CLI</th><th>会话</th><th>时长</th><th>tokens</th></tr>
+                <tr><td>Claude Code</td><td>47</td><td>21.4h</td><td class="mono">8.42M</td></tr>
+                <tr><td>Pi</td><td>12</td><td>3.1h</td><td class="mono">1.05M</td></tr>
+                <tr><td>OpenCode</td><td>12</td><td>2.6h</td><td class="mono">0.61M</td></tr>
+                <tr><td>Codex</td><td>0</td><td>—</td><td class="mono">—</td></tr>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane" id="a-lg">
+          <div class="page-head"><h1>会话日志</h1><span class="sub">解析各 CLI 本地会话数据（JSONL / SQLite）→ 归一事件流</span></div>
+          <div class="logpane-slot"></div>
+        </div>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 变体 B：顶部分段导航 ==================== -->
+  <section class="variant" data-variant="b" hidden>
+    <div class="hub-b">
+      <div class="page-head"><h1>Agent Hub</h1><span class="sub">概览 · 4 个 CLI · Node v24.20.0</span></div>
+      <div class="tabs">
+        <button class="tb active" data-goto="b-ov">概览</button>
+        <button class="tb" data-goto="b-in">安装与更新</button>
+        <button class="tb" data-goto="b-sk">Skills</button>
+        <button class="tb" data-goto="b-pv">供应商</button>
+        <button class="tb" data-goto="b-st">使用统计</button>
+        <button class="tb" data-goto="b-lg">会话日志</button>
+      </div>
+
+      <div class="tabpane active" id="b-ov">
+        <div class="grid4">
+          <div class="card hoverable"><span class="row" style="gap:8px; margin-bottom:8px"><span class="cli-ic ic-claude"><svg viewBox="0 0 24 24"><use href="#ic-claude"/></svg></span><strong>Claude Code</strong></span>
+            <div class="row" style="margin:8px 0"><span class="tag ok"><span class="dot ok"></span>2.1.263</span><span class="tag">native</span></div>
+            <div class="faint" style="font-size:var(--font-size-tag)">已同步 · 无更新</div></div>
+          <div class="card hoverable"><span class="row" style="gap:8px; margin-bottom:8px"><span class="cli-ic ic-openai"><svg viewBox="0 0 24 24"><use href="#ic-openai"/></svg></span><strong>Codex CLI</strong></span>
+            <div class="row" style="margin:8px 0"><span class="tag warn"><span class="dot warn"></span>0.153.4</span><span class="tag">npm</span></div>
+            <div class="faint" style="font-size:var(--font-size-tag)">未初始化</div></div>
+          <div class="card hoverable"><span class="row" style="gap:8px; margin-bottom:8px"><span class="cli-ic ic-oc"><svg viewBox="0 0 24 24"><use href="#ic-oc"/></svg></span><strong>OpenCode</strong></span>
+            <div class="row" style="margin:8px 0"><span class="tag warn"><span class="dot warn"></span>1.18.30</span><span class="tag">standalone</span></div>
+            <div class="faint" style="font-size:var(--font-size-tag)">⚠ npm 1.18.27 并存</div></div>
+          <div class="card hoverable"><span class="row" style="gap:8px; margin-bottom:8px"><span class="cli-ic ic-pi"><svg viewBox="0 0 24 24"><use href="#ic-pi"/></svg></span><strong>Pi</strong></span>
+            <div class="row" style="margin:8px 0"><span class="tag ok"><span class="dot ok"></span>0.85.1</span><span class="tag">npm</span></div>
+            <div class="faint" style="font-size:var(--font-size-tag)">Skills 2 落后</div></div>
+        </div>
+        <div class="section-title">环境 <span class="hint">Node v24.20.0 · npm 12.0.2 · pnpm 12.2.1</span></div>
+        <div class="card row" style="justify-content:space-between">
+          <span class="muted">npm 源：<span class="mono">registry.npmjs.org</span> <b class="mono" style="color:var(--color-warning)">1.06s</b>
+            vs 镜像 <b class="mono" style="color:var(--color-success)">0.18s</b></span>
+          <button class="btn ghost sm">测速并推荐源…</button>
+        </div>
+      </div>
+
+      <div class="tabpane" id="b-in">
+        <div class="section-title">安装 Codex CLI <span class="hint">npm install -g @openai/codex</span></div>
+        <div class="card" style="margin-bottom:12px">
+          <div class="row" style="justify-content:space-between; margin-bottom:8px">
+            <span class="muted">镜像加速 <b style="color:var(--color-success)">已启用</b>（官方源 1.06s → 镜像 0.18s）</span>
+            <span class="row"><button class="btn ghost sm">改用官方源</button><button class="btn ghost sm">持久切换…</button></span>
+          </div>
+          <div class="logbox"><span class="dim">$</span> <span class="cmd">npm install -g @openai/codex --registry=https://registry.npmmirror.com</span>
+⠙ resolving packages…
+<span class="dim">added 1 package in 14s</span>
+<span class="dim">$</span> <span class="cmd">codex --version</span>
+<span class="ok">codex-cli 0.153.4 ✓ 安装完成</span></div>
+          <div class="row" style="margin-top:12px; justify-content:space-between">
+            <span class="tag ok"><span class="dot ok"></span>已完成 · 14s</span>
+            <span class="row"><button class="btn ghost sm">在终端打开</button><button class="btn primary sm">完成</button></span>
+          </div>
+        </div>
+        <div class="section-title">更新队列 <span class="hint">检测于 2 分钟前</span></div>
+        <div class="card" style="padding:0">
+          <table class="table">
+            <tr><th>CLI</th><th>当前</th><th>最新</th><th></th></tr>
+            <tr><td>全部四家</td><td class="mono">—</td><td class="mono">—</td><td class="muted">全部为最新版本</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="tabpane" id="b-sk">
+        <div class="row" style="justify-content:space-between; margin-bottom:12px">
+          <span class="row" style="gap:14px">
+            <span class="tag brand">规范库 · 32 个</span><span class="tag ok">claude ✓</span><span class="tag warn">pi · 2 落后</span>
+          </span>
+          <span class="row"><button class="btn primary sm">GitHub 安装</button><button class="btn ghost sm">导入目录</button></span>
+        </div>
+        <div class="card" style="padding:0">
+          <table class="table">
+            <tr><th>技能</th><th>分发状态</th><th></th></tr>
+            <tr><td><b>ctx7</b> <span class="faint">— Fetch up-to-date library documentation</span></td><td><span class="tag ok">全同步</span></td>
+                <td class="row"><button class="btn ghost sm">编辑</button><button class="btn ghost sm">分发</button></td></tr>
+            <tr><td><b>code-review</b> <span class="faint">— Review changes along Standards and Spec axes</span></td><td><span class="tag warn">pi 落后</span></td>
+                <td class="row"><button class="btn ghost sm">编辑</button><button class="btn primary sm">重新分发</button></td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div class="tabpane" id="b-pv">
+        <div class="row" style="justify-content:space-between; margin-bottom:12px">
+          <span class="tag brand">3 个预设 · key 不落存储</span>
+          <span class="row"><button class="btn primary sm">新建预设</button><button class="btn ghost sm">从 CLI 反向导入</button></span>
+        </div>
+        <div class="grid2">
+          <div class="card hoverable"><div class="row" style="justify-content:space-between"><strong>sensenova</strong><span class="tag">来自 pi</span></div>
+            <div class="mono muted" style="margin:6px 0">https://token.sensenova.cn/v1</div>
+            <button class="btn primary sm">应用到…</button></div>
+          <div class="card hoverable"><div class="row" style="justify-content:space-between"><strong>gmi</strong><span class="tag">来自 opencode</span></div>
+            <div class="mono muted" style="margin:6px 0">https://api.gmi-serving.com/v1</div>
+            <button class="btn primary sm">应用到…</button></div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="b-st">
+        <div class="grid2">
+          <div class="card">
+            <div class="section-title" style="margin-top:0">每日 tokens</div>
+            <div class="chart" id="chart-b"></div>
+            <div class="legend"><span><span class="k" style="background:var(--color-primary)"></span>输入</span>
+              <span><span class="k" style="background:var(--color-warning)"></span>输出</span></div>
+          </div>
+          <div class="card">
+            <div class="section-title" style="margin-top:0">按项目 <span class="hint">近 14 天</span></div>
+            <table class="table">
+              <tr><th>项目</th><th>会话</th><th>tokens</th></tr>
+              <tr><td class="mono" style="font-size:var(--font-size-tag)">~/p/tauriProject/BedCode</td><td>52</td><td class="mono">8.9M</td></tr>
+              <tr><td class="mono" style="font-size:var(--font-size-tag)">~/p/rust/side-project</td><td>9</td><td class="mono">0.8M</td></tr>
+              <tr><td class="mono" style="font-size:var(--font-size-tag)">~/（无项目）</td><td>10</td><td class="mono">0.4M</td></tr>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="b-lg">
+        <div class="logpane-slot"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== 变体 C：单页下钻 ==================== -->
+  <section class="variant" data-variant="c" hidden>
+    <div class="hub-c">
+      <div class="page-head"><h1>Agent Hub</h1><span class="sub">上次扫描 2 分钟前 · Node v24.20.0</span></div>
+
+      <div class="cli-strip">
+        <div class="card mini hoverable"><div class="row" style="justify-content:space-between"><span class="row" style="gap:8px"><span class="cli-ic sm ic-claude"><svg viewBox="0 0 24 24"><use href="#ic-claude"/></svg></span><b>Claude Code</b></span><span class="dot ok"></span></div>
+          <div class="mono muted" style="margin-top:4px">2.1.263 native</div></div>
+        <div class="card mini hoverable"><div class="row" style="justify-content:space-between"><span class="row" style="gap:8px"><span class="cli-ic sm ic-openai"><svg viewBox="0 0 24 24"><use href="#ic-openai"/></svg></span><b>Codex</b></span><span class="dot warn"></span></div>
+          <div class="mono muted" style="margin-top:4px">0.153.4 未初始化</div></div>
+        <div class="card mini hoverable"><div class="row" style="justify-content:space-between"><span class="row" style="gap:8px"><span class="cli-ic sm ic-oc"><svg viewBox="0 0 24 24"><use href="#ic-oc"/></svg></span><b>OpenCode</b></span><span class="dot warn"></span></div>
+          <div class="mono muted" style="margin-top:4px">1.18.30 ⚠双安装</div></div>
+        <div class="card mini hoverable"><div class="row" style="justify-content:space-between"><span class="row" style="gap:8px"><span class="cli-ic sm ic-pi"><svg viewBox="0 0 24 24"><use href="#ic-pi"/></svg></span><b>Pi</b></span><span class="dot ok"></span></div>
+          <div class="mono muted" style="margin-top:4px">0.85.1 npm</div></div>
+      </div>
+
+      <details open>
+        <summary>使用统计 <span class="tag" style="margin-left:4px">近 14 天 · 71 会话 · 10.1M tokens</span><span class="goto">收起</span></summary>
+        <div class="body">
+          <div class="grid2">
+            <div>
+              <div class="chart" id="chart-c"></div>
+              <div class="legend"><span><span class="k" style="background:var(--color-primary)"></span>输入</span>
+                <span><span class="k" style="background:var(--color-warning)"></span>输出</span></div>
+            </div>
+            <div>
+              <table class="table">
+                <tr><th>CLI</th><th>会话</th><th>时长</th><th>tokens</th></tr>
+                <tr><td>Claude Code</td><td>47</td><td>21.4h</td><td class="mono">8.42M</td></tr>
+                <tr><td>Pi</td><td>12</td><td>3.1h</td><td class="mono">1.05M</td></tr>
+                <tr><td>OpenCode</td><td>12</td><td>2.6h</td><td class="mono">0.61M</td></tr>
+              </table>
+              <div class="section-title" style="margin:12px 0 6px; font-size:var(--font-size-body)">最近会话</div>
+              <table class="table" style="font-size:var(--font-size-tag)">
+                <tr><td class="mono">09-12 21:47</td><td>Claude</td><td class="mono">BedCode</td><td>38m</td><td class="mono">214k</td></tr>
+                <tr><td class="mono">09-12 19:02</td><td>Pi</td><td class="mono">BedCode</td><td>12m</td><td class="mono">48k</td></tr>
+                <tr><td class="mono">09-12 15:30</td><td>OpenCode</td><td class="mono">side-project</td><td>9m</td><td class="mono">31k</td></tr>
+              </table>
+            </div>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary>安装与环境 <span class="tag warn" style="margin-left:4px">1 项建议</span><span class="goto">展开</span></summary>
+        <div class="body">
+          <div class="banner" style="margin-bottom:10px"><span class="ic">⚠</span><span>OpenCode 存在双安装（standalone 1.18.30 生效 / npm 1.18.27 并存）。</span></div>
+          <div class="row" style="gap:24px">
+            <span class="muted">npm 源 npmjs <b class="mono" style="color:var(--color-warning)">1.06s</b></span>
+            <span class="muted">镜像 <b class="mono" style="color:var(--color-success)">0.18s</b></span>
+            <button class="btn ghost sm">持久切换源…</button>
+            <button class="btn primary sm">安装 Codex / 引导初始化</button>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary>Skills <span class="tag" style="margin-left:4px">32 个 · pi 2 落后</span><span class="goto">展开</span></summary>
+        <div class="body">
+          <div class="row" style="justify-content:space-between">
+            <span class="muted">规范库 ~/.agents/skills 为真源，分发到 claude / pi 私有目录</span>
+            <span class="row"><button class="btn primary sm">GitHub 安装</button><button class="btn ghost sm">导入</button><button class="btn ghost sm">查看全部</button></span>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary>供应商 <span class="tag" style="margin-left:4px">3 个预设 · 2 个来自反向导入</span><span class="goto">展开</span></summary>
+        <div class="body">
+          <div class="row" style="gap:10px; flex-wrap:wrap">
+            <span class="tag brand">sensenova ← pi</span><span class="tag brand">gmi ← opencode</span><span class="tag brand">amd ← pi</span>
+            <button class="btn ghost sm">管理预设与应用…</button>
+          </div>
+        </div>
+      </details>
+
+      <details>
+        <summary>会话日志 <span class="tag" style="margin-left:4px">JSONL / SQLite 解析 · 归一事件流</span><span class="goto">展开</span></summary>
+        <div class="body">
+          <div class="logpane-slot"></div>
+        </div>
+      </details>
+
+    </div>
+  </section>
+
+  </main>
+</div>
+
+<div class="proto-note">PROTOTYPE · 用后即弃 · 数据为本机快照 mock</div>
+<div class="proto-bar">
+  <button id="prev" title="上一个变体">←</button>
+  <span class="vlabel" id="vlabel">A · 二级侧栏分区</span>
+  <button id="next" title="下一个变体">→</button>
+  <button class="theme" id="theme">主题</button>
+</div>
+
+<script>
+// ==================== 原型工具条 ====================
+const VARIANTS = [
+  { key: 'a', label: 'A · 二级侧栏分区' },
+  { key: 'b', label: 'B · 顶部分段导航' },
+  { key: 'c', label: 'C · 单页下钻' },
+];
+function currentVariant() {
+  const k = (location.hash.match(/variant=([abc])/) || [])[1] || 'a';
+  return VARIANTS.find(v => v.key === k) || VARIANTS[0];
+}
+function showVariant(key) {
+  document.querySelectorAll('.variant').forEach(el => {
+    el.hidden = el.dataset.variant !== key;
+  });
+  document.getElementById('vlabel').textContent = VARIANTS.find(v => v.key === key).label;
+  history.replaceState(null, '', '#variant=' + key);
+  document.querySelector('main').scrollTop = 0;
+}
+function cycle(dir) {
+  const i = VARIANTS.findIndex(v => v.key === currentVariant().key);
+  showVariant(VARIANTS[(i + dir + VARIANTS.length) % VARIANTS.length].key);
+}
+document.getElementById('prev').onclick = () => cycle(-1);
+document.getElementById('next').onclick = () => cycle(1);
+document.getElementById('theme').onclick = () => document.documentElement.classList.toggle('dark');
+document.addEventListener('keydown', e => {
+  const t = e.target;
+  if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+  if (e.key === 'ArrowLeft') cycle(-1);
+  if (e.key === 'ArrowRight') cycle(1);
+});
+window.addEventListener('hashchange', () => showVariant(currentVariant().key));
+
+// ==================== 变体内部分区切换（A 二级侧栏 / B 顶部 tabs） ====================
+document.addEventListener('click', e => {
+  const trigger = e.target.closest('[data-goto]');
+  if (!trigger) return;
+  const paneId = trigger.dataset.goto;
+  const variant = trigger.closest('.variant');
+  variant.querySelectorAll('.sn, .tb').forEach(el => el.classList.toggle('active', el === trigger));
+  variant.querySelectorAll('.pane, .tabpane').forEach(el => el.classList.toggle('active', el.id === paneId));
+});
+
+// ==================== mock 图表（近 14 天 tokens，单位 k） ====================
+const DAYS = [
+  ['08-30', 320, 95], ['08-31', 410, 120], ['09-01', 0, 0], ['09-02', 380, 90], ['09-03', 520, 150],
+  ['09-04', 240, 70], ['09-05', 610, 210], ['09-06', 90, 30], ['09-07', 450, 130], ['09-08', 700, 260],
+  ['09-09', 830, 310], ['09-10', 460, 140], ['09-11', 590, 190], ['09-12', 880, 340],
+];
+for (const id of ['chart-a', 'chart-b', 'chart-c']) {
+  const box = document.getElementById(id);
+  if (!box) continue;
+  const max = Math.max(...DAYS.map(d => d[1] + d[2]));
+  box.innerHTML = DAYS.map(([d, i, o]) => {
+    if (!i && !o) return `<div class="crow"><span class="clabel">${d}</span><div class="cbar"></div><span class="cval">—</span></div>`;
+    return `<div class="crow" title="输入 ${i}k · 输出 ${o}k">
+      <span class="clabel">${d}</span>
+      <div class="cbar"><div class="in" style="width:${(i / max) * 100}%"></div><div class="out" style="width:${(o / max) * 100}%"></div></div>
+      <span class="cval">${((i + o) / 1000).toFixed(2)}M</span></div>`;
+  }).join('');
+}
+
+// ==================== 会话日志（JSONL / SQLite 解析）mock ====================
+const SESSIONS = [
+  {
+    name: 'Claude Code', icon: 'claude', time: '09-12 21:47', dur: '38m', tokens: '214k',
+    project: '~/p/tauriProject/BedCode', adapter: 'claude · JSONL 适配器',
+    src: '~/.claude/projects/-home-binblink-project-tauriProject-BedCode/afada21d-….jsonl',
+    events: [
+      { t: '21:47:02', role: '用户', cls: 'user', text: '把 file-transfer 的断点续传水位改成落盘方持有' },
+      { t: '21:47:09', role: '助手', cls: 'asst', meta: 'opus-4.6 · ↑ 12.4k ↓ 1.8k ⚡ 96k', text: '好的，先看 transfer_store.rs 的水位写入路径，确认断点真源……' },
+      { t: '21:48:15', role: '工具', cls: 'tool', text: 'Read · src-tauri/src/peer/transfer_store.rs（142 行）' },
+      { t: '21:52:40', role: '助手', cls: 'asst', meta: 'opus-4.6 · ↑ 3.1k ↓ 0.9k ⚡ 110k', text: '水位真源移到接收端，发送侧改为对账。给出两处改动：' },
+      { t: '21:53:02', role: '工具', cls: 'tool', text: 'Edit · peer/transfer_store.rs  +38 −12' },
+      { t: '22:25:11', role: '系统', cls: 'sys', text: 'cost-state · totalCostUSD 0.94 · totalAPIDuration 6m12s' },
+    ],
+    raw: [
+      '{"type":"user","sessionId":"afada21d-…","timestamp":"2026-09-12T21:47:02.311Z","cwd":"/home/binblink/project/tauriProject/BedCode","message":{"role":"user","content":"把 file-transfer 的断点续传水位改成落盘方持有"}}',
+      '{"type":"assistant","timestamp":"2026-09-12T21:47:09.882Z","message":{"model":"claude-opus-4-6","usage":{"input_tokens":12388,"output_tokens":1804,"cache_read_input_tokens":96224}}}  // 后续行省略',
+    ],
+  },
+  {
+    name: 'Pi', icon: 'pi', time: '09-12 19:02', dur: '12m', tokens: '48k',
+    project: '~/p/tauriProject/BedCode', adapter: 'pi · JSONL 适配器',
+    src: '~/.pi/agent/sessions/--home-binblink-…--/2026-09-12T19-02-11-….jsonl',
+    events: [
+      { t: '19:02:11', role: '用户', cls: 'user', text: '读一下 agent-hub spec，给出 M1 排期建议' },
+      { t: '19:02:14', role: '助手', cls: 'asst', meta: 'SenseNova-V6-5 · ↑ 8.2k ↓ 0.6k ⚡ 0', text: '按 M1–M4 里程碑拆，M1 建议 2 天：骨架 + 探测先行……' },
+      { t: '19:14:02', role: '系统', cls: 'sys', text: 'session 结束 · stopReason end_turn' },
+    ],
+    raw: [
+      '{"type":"session","id":"01a068f5-…","cwd":"/home/binblink/project/tauriProject/BedCode","timestamp":"2026-09-12T19:02:11.204Z","version":"0.85.1"}',
+      '{"type":"message","message":{"role":"assistant","model":"sensenova-v6-5","usage":{"input":8211,"output":612,"cacheRead":0}}}  // 后续行省略',
+    ],
+  },
+];
+
+const LOG_TPL = '<div class="lg"><div class="lg-list"></div><div class="lg-view"></div></div>';
+
+function renderLog(root) {
+  root.innerHTML = LOG_TPL;
+  const list = root.querySelector('.lg-list');
+  const view = root.querySelector('.lg-view');
+  let raw = false;
+  const draw = (s) => {
+    view.innerHTML = `
+      <div class="card" style="margin-bottom:10px">
+        <div class="row" style="justify-content:space-between">
+          <div class="row" style="min-width:0">
+            <span class="tag brand">${s.adapter}</span>
+            <span class="mono muted" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${s.src}</span>
+          </div>
+          <button class="btn ghost sm lg-raw">${raw ? '← 解析视图' : '原始 JSONL'}</button>
+        </div>
+      </div>
+      <div class="card">${raw
+        ? '<div class="logbox">' + s.raw.join('\n\n') + '</div>'
+        : s.events.map(e => `
+            <div class="evt">
+              <span class="t">${e.t}</span>
+              <span class="tag ${e.cls}">${e.role}</span>
+              <div class="tx">${e.text}${e.meta ? '<div class="meta">' + e.meta + '</div>' : ''}</div>
+            </div>`).join('')}
+      </div>`;
+    view.querySelector('.lg-raw').onclick = () => { raw = !raw; draw(s); };
+  };
+  list.innerHTML = SESSIONS.map((s, i) => `
+    <div class="card lg-item${i === 0 ? ' active' : ''}" data-i="${i}">
+      <div class="li-top"><span class="cli-ic sm ic-${s.icon}"><svg viewBox="0 0 24 24"><use href="#ic-${s.icon}"/></svg></span>${s.name}</div>
+      <div class="li-sub">${s.time} · ${s.dur} · ${s.tokens} tokens</div>
+      <div class="li-sub mono">${s.project}</div>
+    </div>`).join('');
+  list.querySelectorAll('.lg-item').forEach(el => {
+    el.onclick = () => {
+      list.querySelectorAll('.lg-item').forEach(x => x.classList.toggle('active', x === el));
+      raw = false;
+      draw(SESSIONS[+el.dataset.i]);
+    };
+  });
+  draw(SESSIONS[0]);
+}
+document.querySelectorAll('.logpane-slot').forEach(renderLog);
+
+showVariant(currentVariant().key);
+</script>
+</body>
+</html>

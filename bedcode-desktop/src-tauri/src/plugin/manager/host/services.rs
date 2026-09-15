@@ -314,6 +314,7 @@ impl Clone for PluginHost {
             wasm_reload_throttle: self.wasm_reload_throttle.clone(),
             runtime_error_notify_throttle: self.runtime_error_notify_throttle.clone(),
             shutting_down: self.shutting_down.clone(),
+            user_plugins_dir: self.user_plugins_dir.clone(),
         }
     }
 }
@@ -355,3 +356,47 @@ impl crate::plugin::bus::MessageDispatcher for PluginHost {
 }
 
 // ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::Database;
+    use crate::session::SessionConfigManager;
+    use std::path::Path;
+    use tokio::sync::Mutex;
+
+    /// 构造最小 PluginHost（与 commands.rs 测试同模式）
+    async fn test_plugin_host() -> Arc<PluginHost> {
+        let db = Arc::new(Mutex::new(Database::new(Path::new(":memory:")).expect("in-memory db")));
+        db.lock().await.init_schema().expect("init schema");
+        let session_db = Database::new(Path::new(":memory:")).expect("session db");
+        session_db.init_schema().expect("session schema");
+        let sm = Arc::new(crate::session::SessionManager::from_database(
+            session_db,
+            Arc::new(std::path::PathBuf::from(".")),
+        ));
+        let cm = Arc::new(SessionConfigManager::new(db.clone()));
+        let dir = std::env::temp_dir().join(format!("bedcode-svc-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let host = PluginHost::new(db, &dir, &dir, sm, cm, None).await;
+        host.init_message_bus().await;
+        Arc::new(host)
+    }
+
+    /// 未激活插件分发事件：静默丢弃（不 panic，票据 32）
+    #[test]
+    fn dispatch_lifecycle_to_inactive_plugin_is_silent() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let host = rt.block_on(test_plugin_host());
+        // 不 panic 即通过（未激活插件门禁静默丢弃）
+        host.dispatch_lifecycle_to_plugin("com.bedcode.nonexistent", &serde_json::json!({}));
+    }
+
+    /// 未激活插件分发输入：静默丢弃（不 panic，票据 32）
+    #[test]
+    fn dispatch_input_to_inactive_plugin_is_silent() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let host = rt.block_on(test_plugin_host());
+        host.dispatch_input_to_plugin("com.bedcode.nonexistent", &serde_json::json!({}));
+    }
+}

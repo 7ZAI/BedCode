@@ -82,6 +82,7 @@ const zhCN: MessageSchema = {
   // ==================== 队列面板 ====================
   'transfer.queue.title': '传输队列',
   'transfer.queue.count': '{count} 项任务',
+  'transfer.queue.close': '收起传输队列',
 
   // ==================== 队列分类 tabs（v2） ====================
   'transfer.queue.all': '全部',
@@ -166,6 +167,8 @@ const zhCN: MessageSchema = {
   // ==================== 传输历史（v2） ====================
   'transfer.history.title': '历史',
   'transfer.history.clear': '清空历史',
+  'transfer.history.clearConfirmTitle': '清空传输历史？',
+  'transfer.history.clearConfirmBody': '将删除全部已完成、失败与被取消的记录（进行中的任务不受影响），此操作不可撤销。',
   'transfer.history.empty': '暂无传输历史',
   'transfer.history.openFolder': '打开所在文件夹',
   'transfer.history.results.completed': '已完成',

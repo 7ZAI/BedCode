@@ -35,8 +35,9 @@ impl AbiGuest for ComponentTestPlugin {
         {
             return 999;
         }
-        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步（=9，v9 = 总线二进制载荷）
-        9
+        // 与 SDK bedcode_plugin_api_mobile::abi::ABI_VERSION 同步
+        // （=10，v10 = 总线二进制载荷，叠加 v9 host-peer 传输控制三原语）
+        10
     }
 }
 

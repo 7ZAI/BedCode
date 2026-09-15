@@ -36,6 +36,12 @@ struct PowerManagerInner {
     active: bool,
 }
 
+impl Default for PowerManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PowerManager {
     /// 创建新的 PowerManager 实例
     pub fn new() -> Self {
@@ -63,6 +69,23 @@ impl PowerManager {
     /// 获取用户偏好开关状态
     pub fn is_enabled(&self) -> bool {
         self.enabled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// 测试专用构造器：跳过平台初始化，直接以 active=true 起步
+    ///
+    /// 使状态机（enable 幂等 / set_enabled(false) 自动释放 / disable 清理）
+    /// 可在无 D-Bus/nosleep 的环境下单测，不触碰真实平台句柄（票据 28）
+    #[cfg(test)]
+    fn with_active() -> Self {
+        Self {
+            inner: Mutex::new(PowerManagerInner {
+                nosleep: None,
+                #[cfg(target_os = "linux")]
+                logind: None,
+                active: true,
+            }),
+            enabled: std::sync::atomic::AtomicBool::new(true),
+        }
     }
 
     /// 阻止系统休眠
@@ -96,9 +119,7 @@ impl PowerManager {
             }
             if inner.logind.is_some() {
                 inner.active = true;
-                tracing::info!(
-                    "PowerManager: system sleep prevention enabled (systemd-logind inhibitor)"
-                );
+                tracing::info!("PowerManager: system sleep prevention enabled (systemd-logind inhibitor)");
                 return;
             }
         }
@@ -120,9 +141,7 @@ impl PowerManager {
             match ns.start(NoSleepType::PreventUserIdleSystemSleep) {
                 Ok(()) => {
                     inner.active = true;
-                    tracing::info!(
-                        "PowerManager: system sleep prevention enabled (display sleep allowed)"
-                    );
+                    tracing::info!("PowerManager: system sleep prevention enabled (display sleep allowed)");
                 }
                 Err(e) => {
                     tracing::error!("PowerManager: failed to prevent system sleep: {}", e);
@@ -145,9 +164,7 @@ impl PowerManager {
         #[cfg(target_os = "linux")]
         {
             if inner.logind.take().is_some() {
-                tracing::info!(
-                    "PowerManager: system sleep prevention disabled (logind inhibitor released)"
-                );
+                tracing::info!("PowerManager: system sleep prevention disabled (logind inhibitor released)");
             }
         }
 
@@ -198,10 +215,10 @@ mod linux_logind {
             "Inhibit",
         )?;
         msg.append_all((
-            "sleep", // what：阻止系统休眠（不阻止屏幕熄灭）
-            "BedCode", // who：应用标识
+            "sleep",                                                // what：阻止系统休眠（不阻止屏幕熄灭）
+            "BedCode",                                              // who：应用标识
             "BedCode 服务器运行中，阻止系统休眠以保持远程终端在线", // why：人类可读原因
-            "block", // mode：强制阻塞
+            "block",                                                // mode：强制阻塞
         ));
         Ok(msg)
     }
@@ -218,8 +235,7 @@ mod linux_logind {
         ///
         /// 返回错误时调用方应回退其他实现（如 nosleep），错误信息需带操作上下文
         pub(super) fn acquire() -> Result<Self, String> {
-            let bus = Connection::new_system()
-                .map_err(|e| format!("connect system bus for logind inhibit: {e}"))?;
+            let bus = Connection::new_system().map_err(|e| format!("connect system bus for logind inhibit: {e}"))?;
             let reply = bus
                 .send_with_reply_and_block(build_inhibit_message()?, Duration::from_secs(5))
                 .map_err(|e| format!("call org.freedesktop.login1.Manager.Inhibit: {e}"))?;
@@ -270,4 +286,76 @@ static POWER_MANAGER: std::sync::LazyLock<PowerManager> = std::sync::LazyLock::n
 /// 获取全局 PowerManager 实例
 pub fn power_manager() -> &'static PowerManager {
     &POWER_MANAGER
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn initial_state_is_inactive_and_enabled() {
+        let pm = PowerManager::new();
+        assert!(!pm.is_active(), "初始不应阻止休眠");
+        assert!(pm.is_enabled(), "用户开关默认开");
+    }
+
+    #[test]
+    fn disable_when_inactive_is_noop() {
+        let pm = PowerManager::new();
+        pm.disable(); // 不 panic、状态不变
+        assert!(!pm.is_active());
+    }
+
+    #[test]
+    fn set_enabled_false_flips_switch() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        assert!(!pm.is_enabled());
+        pm.set_enabled(true);
+        assert!(pm.is_enabled());
+    }
+
+    #[test]
+    fn enable_when_user_disabled_skips() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        pm.enable(); // 用户关闭时跳过，不触碰平台
+        assert!(!pm.is_active(), "用户关闭时 enable 必须跳过");
+    }
+
+    #[test]
+    fn enable_when_already_active_skips() {
+        let pm = PowerManager::with_active();
+        pm.enable(); // 已激活时跳过（不重复 acquire）
+        assert!(pm.is_active(), "重复 enable 保持激活");
+    }
+
+    #[test]
+    fn set_enabled_false_releases_active_lock() {
+        let pm = PowerManager::with_active();
+        pm.set_enabled(false);
+        assert!(!pm.is_enabled());
+        assert!(!pm.is_active(), "用户关闭应立即释放已持有的锁");
+    }
+
+    #[test]
+    fn disable_clears_active_state() {
+        let pm = PowerManager::with_active();
+        pm.disable();
+        assert!(!pm.is_active());
+        // 幂等：再次 disable 不 panic
+        pm.disable();
+    }
+
+    #[test]
+    fn reenable_after_user_off_enables_again() {
+        let pm = PowerManager::new();
+        pm.set_enabled(false);
+        pm.set_enabled(true);
+        assert!(pm.is_enabled());
+        // 重新开启后 enable 不再被开关挡住（平台层在测试环境可能失败，
+        // 但开关门控必须放行——不断言平台结果）
+        pm.enable();
+        assert!(pm.is_enabled());
+    }
 }

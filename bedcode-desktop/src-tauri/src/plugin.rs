@@ -18,6 +18,10 @@ pub mod manager;
 pub mod monitor;
 pub mod permission;
 pub mod security;
+/// 插件 zip 分发包解压安装（dev 合入）：按本分支结构应归位 `manager`
+/// （core-plugin-manager 的安装职责），当前保留 dev 路径以免改动引用方
+/// （`manager/host.rs` 以 `crate::plugin::downloader` 引用），后续一并归位。
+pub mod downloader;
 
 // ==================== Facade 再导出 ====================
 // 外部消费方（Tauri 命令层、system、peer 等）只经 facade 引用，

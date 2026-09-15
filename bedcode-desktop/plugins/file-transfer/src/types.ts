@@ -106,6 +106,8 @@ export interface ReceivingTask {
   relPath?: string | null
   size: number
   offset?: number
+  /** 接收方向即时速率（B/s；任务卡与总速率展示用，0 = 无采样） */
+  rateBps?: number
   state: string
   reason: string | null
   peerId: string

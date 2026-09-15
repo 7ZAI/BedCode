@@ -99,3 +99,84 @@ impl Default for AuthPayload {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个 AuthStage 变体序列化 → 反序列化 → 等值（跨端协议表面，票据 23）
+    #[test]
+    fn auth_stage_serde_roundtrip_all_variants() {
+        let stages = [
+            AuthStage::ExchangeCertificate,
+            AuthStage::BiometricRequest,
+            AuthStage::BiometricChallenge,
+            AuthStage::BiometricVerify,
+            AuthStage::Authenticated,
+            AuthStage::Reauthenticate,
+            AuthStage::Failed,
+        ];
+        for stage in stages {
+            let json = serde_json::to_string(&stage).unwrap();
+            let back: AuthStage = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, stage, "变体往返不一致: {json}");
+        }
+    }
+
+    /// snake_case 标签锁（跨端契约：移动端 TS 依赖这些字面量）
+    #[test]
+    fn auth_stage_wire_labels_locked() {
+        assert_eq!(serde_json::to_string(&AuthStage::Authenticated).unwrap(), "\"authenticated\"");
+        assert_eq!(
+            serde_json::to_string(&AuthStage::ExchangeCertificate).unwrap(),
+            "\"exchange_certificate\""
+        );
+        assert_eq!(serde_json::to_string(&AuthStage::Reauthenticate).unwrap(), "\"reauthenticate\"");
+    }
+
+    /// 未知 variant 反序列化拒绝（协议错位不得静默吞掉）
+    #[test]
+    fn auth_stage_unknown_variant_rejected() {
+        assert!(serde_json::from_str::<AuthStage>("\"bogus_stage\"").is_err());
+    }
+
+    #[test]
+    fn auth_payload_roundtrip_full_fields() {
+        let payload = AuthPayload {
+            stage: AuthStage::BiometricVerify,
+            device_id: Some("d1".to_string()),
+            device_name: Some("Pixel 8".to_string()),
+            device_fingerprint: Some("abc123".to_string()),
+            public_key: Some("SPKI-BASE64".to_string()),
+            challenge_nonce: Some("nonce-1".to_string()),
+            signature: Some("sig-1".to_string()),
+            auth_method: Some("biometric".to_string()),
+            crypto: Some(CryptoProposal {
+                v: 1,
+                ek: "EK==".to_string(),
+            }),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&payload).unwrap();
+        let back: AuthPayload = serde_json::from_str(&json).unwrap();
+        // 无 PartialEq 派生，逐字段断言关键字段
+        assert_eq!(back.stage, AuthStage::BiometricVerify);
+        assert_eq!(back.device_id.as_deref(), Some("d1"));
+        assert_eq!(back.public_key.as_deref(), Some("SPKI-BASE64"));
+        assert_eq!(back.crypto.as_ref().map(|c| c.ek.as_str()), Some("EK=="));
+        // 空字段被 skip 掉（默认序列化紧凑形态）
+        assert!(!json.contains("pairing_code"), "空字段应被跳过: {json}");
+    }
+
+    #[test]
+    fn crypto_proposal_camel_case_wire_labels() {
+        // camelCase 标签锁（crypto 协商字段，移动端 TS 同构）
+        let json = serde_json::to_string(&CryptoProposal {
+            v: 1,
+            ek: "EK==".to_string(),
+        })
+        .unwrap();
+        assert!(json.contains("\"ek\""), "camelCase ek 标签: {json}");
+        assert!(!json.contains("ek_"), "不得出现 snake_case 标签: {json}");
+    }
+}

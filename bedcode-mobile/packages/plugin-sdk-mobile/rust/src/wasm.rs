@@ -353,7 +353,7 @@ macro_rules! wasm_entry {
         // ==================== abi（原 __bedcode_abi_version） ====================
 
         impl $crate::wasm::exports::bedcode::plugin::abi::Guest for $plugin_type {
-            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v6）完全一致。
+            /// ABI 版本：语义与 `abi::ABI_VERSION`（当前 v9）完全一致。
             /// 无 form 字段：项目未发布、一次性切割，不存在 core 形态共存
             fn version() -> u32 {
                 $crate::abi::ABI_VERSION as u32

@@ -75,6 +75,7 @@ pnpm exec eslint .
 - **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
 - **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档里提及测试/构建/安装命令，**必须**用本节字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止旧 `npm` / `npm run test` 字眼；审计文档时若发现不一致，先改文档再继续
 - 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`
+- **测试后清理进程**：每次跑完测试（`cargo test` / `pnpm run test:run` / `gradlew` 等）后，必须检查并关闭测试开启的后台进程/监听端口（如 cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon 等），避免残留进程占用端口或 CPU
 - 桌面 `tauri:build` 自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env`），未配置时自动禁用升级包，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（`docs/knowledge/release-workflow.md`）
 
 ---
@@ -84,6 +85,7 @@ pnpm exec eslint .
 | 任务 | 动手前必读 |
 | --- | --- |
 | 改前端 UI / 样式 / 布局（组件、CSS、token、动画、主题、响应式） | **先加载 `frontend-styles` skill**（`.agents/skills/frontend-styles/SKILL.md`，强制）+ 对应端 code-map |
+| 写 / 改 / 审查单元测试 | **先加载 `unit-test-discipline` skill**（`.agents/skills/unit-test-discipline/SKILL.md`，强制） |
 | 改 Rust 后端（任意模块） | 对应端 code-map → 模块目录 → §6 Rust 规范 + 相关 ADR（docs/adr/） |
 | 改插件 | §7 插件检查清单 + WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
@@ -124,6 +126,11 @@ pnpm exec eslint .
 - **禁止用 viewport 宽度 / UA 字符串推断平台**；平台判断统一走 Tauri API（如 `@tauri-apps/plugin-os` 的 `platform()`），两端渲染容器不一致时以 API 为准
 - **前端错误处理**：统一 `logger`（`logger.error/info` 带上下文），禁止静默 `catch`；用户可见错误/状态文案一律走 i18n，禁止 composable / 组件内硬编码中文字符串
 - **i18n**：文件位于两端 `src/locales/{zh-CN,en}/`；新增/修改 key 必须同步出现在 zh-CN 与 en 两文件，命名跟随既有分组；复数/日期/数字走 vue-i18n 机制
+
+### 单元测试（Unit Test Discipline）
+
+- **单元测试的开发、编写、审查必须先加载 `unit-test-discipline` skill 并以其规范为准**：行为契约 → 测试矩阵 → 硬性门禁 G1-G6 → 实际运行 → 变异自检
+- 禁止交付无断言 / 恒真断言 / 只测 mock / 快照替代行为断言 / 只为覆盖率（完整反模式清单见 skill）
 
 ### 注释与命名（通用）
 
@@ -211,6 +218,7 @@ pnpm exec eslint .
 - i18n key 同步出现在 zh-CN 和 en
 - 公开项有文档注释；错误处理用 `AppError` 而非裸字符串
 - 前端 UI 改动通过 `frontend-styles` 自查（token-bound、无原生控件外观、无反模式）
+- 单元测试改动通过 `unit-test-discipline` 自查（契约 / 正反例 / 变异）
 - pi agent：收尾 `lens_diagnostics mode=all` 无 blocker（🔴 blocker 未清前不算 done）
 
 CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.yml`（两端 cargo test + vitest）。

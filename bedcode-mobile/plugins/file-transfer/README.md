@@ -18,7 +18,7 @@
 
 ## 架构
 
-> 📊 架构图：[architecture.html](./docs/architecture.html)
+> 📊 架构图：[plugin-file-transfer-mobile.html](../../../docs/diagrams/plugin-file-transfer-mobile.html)
 
 - **Rust WASM 层**：WASM 入口与命令路由（`lib.rs`）、设备发现桥接与快照持久化（`device_bridge.rs`）、共享根注册表（`roots_registry.rs`）、任务/历史自持存储（`transfer_store.rs`）、接收策略设置（`settings_store.rs`）、数据面命令编排（`peer.rs`）
 - **TS 前端**：`FileTransferView`（三段式主视图：传输/浏览/设备）+ Tab 子组件（`TransfersTab` / `BrowseTab` / `DevicesTab`）、卡片与工具（`TaskCard` / `PeerHeader` / `SummaryBar` / `TabBar` / `FileTypeIcon` / `EmptyState`）、审批与信任（`BatchRequestDialog` / `TrustedPeersSection`）、设置（`SettingsPage` / `SettingsSection`）、工具箱入口（`ToolboxEntry`）
