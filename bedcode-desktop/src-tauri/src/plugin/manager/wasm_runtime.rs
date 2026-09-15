@@ -36,6 +36,7 @@ use wasmtime::{Cache, CacheConfig, Config, Engine, ResourceLimiter, WasmBacktrac
 // 支持配置文件加载与运行时覆盖；燃料看门狗的语义说明随默认值一并迁入。
 pub(crate) use crate::plugin::config::plugin_debug_mode;
 use crate::plugin::config::{CoreConfig, StoreLimits};
+use bedcode_plugin_api::ResourceOverrides;
 use crate::plugin::monitor::{LifecycleEvent, MetricsRegistry, PluginMetrics};
 
 /// 从 catch_unwind 的 panic 载荷提取人类可读消息（统一 panic 诊断文案）
@@ -776,28 +777,42 @@ impl WasmRuntime {
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
+        resource_overrides: Option<&ResourceOverrides>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let bytes = std::fs::read(path).map_err(|e| {
             crate::AppError::Plugin(format!("Failed to read WASM artifact '{}': {}", path.display(), e))
         })?;
         let component = self.compile_component(&bytes)?;
-        self.instantiate_component(&component, plugin_id, host_ctx, declared_preopen_dirs)
+        self.instantiate_component(
+            &component,
+            plugin_id,
+            host_ctx,
+            declared_preopen_dirs,
+            resource_overrides,
+        )
     }
 
     /// 实例化 WASM 组件
     ///
     /// 创建 Store + WasmPluginState，通过 linker 实例化，
     /// 校验 ABI 版本与形态字段（见 [`component::LoadedWasmPlugin::new`]）
+    ///
+    /// `resource_overrides` 为插件 manifest 的资源覆盖请求，经安全模块仲裁后
+    /// 作为本 Store 的限额（见 [`crate::plugin::security::SecurityFramework::resolve_store_limits`]）。
     pub fn instantiate_component(
         &self,
         component: &wasmtime::component::Component,
         plugin_id: &str,
         host_ctx: Arc<WasmHostContext>,
         declared_preopen_dirs: &[String],
+        resource_overrides: Option<&ResourceOverrides>,
     ) -> crate::Result<LoadedWasmPlugin> {
         let (limits, fuel_enabled) = {
             let cfg = self.config.read().expect("core config lock poisoned");
-            (cfg.store.clone(), cfg.engine.consume_fuel)
+            (
+                host_ctx.security().resolve_store_limits(plugin_id, &cfg.store, resource_overrides),
+                cfg.engine.consume_fuel,
+            )
         };
         let metrics = self.monitor.plugin(plugin_id);
         let plugin = component::LoadedWasmPlugin::new(
@@ -1147,7 +1162,7 @@ mod tests {
                 .expect("preset storage key");
 
             let mut plugin = wasm_runtime
-                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
                 .expect("instantiate test component");
 
             // 生命周期
@@ -1355,7 +1370,7 @@ mod tests {
             // 实例化：组件导入 wasi 接口，宿主按声明（授权过滤后）preopen /data
             let declared = vec![dir.path().to_string_lossy().to_string()];
             let plugin = wasm_runtime
-                .instantiate_component(&component, pid, host_ctx.clone(), &declared)
+                .instantiate_component(&component, pid, host_ctx.clone(), &declared, None)
                 .expect("instantiate wasi test component");
             (plugin, dir)
         });
@@ -1434,7 +1449,7 @@ mod tests {
         }
         let (wasm_runtime, host_ctx) = setup_wasm_runtime();
         let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx, &[])
+            .load_plugin_from_file(&wasm_path, "com.bedcode.ai-chatbox", host_ctx, &[], None)
             .expect("load wasip2 ai-chatbox: all imports must resolve");
         // manifest 往返（无副作用导出，验证 bindgen 接口工作）
         let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
@@ -1453,7 +1468,7 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         rt.block_on(async {
             let mut plugin = wasm_runtime
-                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+                .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
                 .expect("instantiate SDK test component");
 
             // 生命周期（宏生成的 lifecycle::Guest）
@@ -1596,12 +1611,12 @@ mod tests {
         rt.block_on(async {
             let target = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, TARGET_ID, host_ctx.clone(), &[])
+                    .instantiate_component(&component, TARGET_ID, host_ctx.clone(), &[], None)
                     .expect("instantiate target"),
             ));
             let caller = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, CALLER_ID, host_ctx.clone(), &[])
+                    .instantiate_component(&component, CALLER_ID, host_ctx.clone(), &[], None)
                     .expect("instantiate caller"),
             ));
 
@@ -1714,12 +1729,12 @@ mod tests {
         rt.block_on(async {
             let publisher = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, PUB_ID, host_ctx.clone(), &[])
+                    .instantiate_component(&component, PUB_ID, host_ctx.clone(), &[], None)
                     .expect("instantiate publisher"),
             ));
             let subscriber = Arc::new(Mutex::new(
                 wasm_runtime
-                    .instantiate_component(&component, SUB_ID, host_ctx.clone(), &[])
+                    .instantiate_component(&component, SUB_ID, host_ctx.clone(), &[], None)
                     .expect("instantiate subscriber"),
             ));
 
@@ -1791,7 +1806,7 @@ mod tests {
         std::fs::write(&wasm_path, build_test_component()).unwrap();
 
         let mut plugin = wasm_runtime
-            .load_plugin_from_file(&wasm_path, TEST_PLUGIN_ID, host_ctx, &[])
+            .load_plugin_from_file(&wasm_path, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("load_plugin_from_file should load component");
         // 加载成功即可调用：激活 + manifest 往返验证组件路径
         assert_eq!(plugin.activate().expect("activate"), 0);
@@ -1846,7 +1861,7 @@ mod tests {
 
         for c in [component, cached] {
             wasm_runtime
-                .instantiate_component(&c, TEST_PLUGIN_ID, host_ctx.clone(), &[])
+                .instantiate_component(&c, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
                 .expect("component from cache should instantiate");
         }
 
@@ -1882,7 +1897,7 @@ mod tests {
             .compile_component_from_file(&wasm_path)
             .expect("invalid cache should fall back to full compile");
         wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("component from full compile should instantiate");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
@@ -1898,7 +1913,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
 
         // 调用前剩余燃料 ≈ 单次预算（实例化/ABI 校验的消耗可忽略）
@@ -1957,7 +1972,7 @@ mod tests {
         wasm_runtime.set_config(cfg).expect("set config");
 
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate under overridden limits");
         let (store, _) = plugin.raw_store();
         // 限额内允许、超限拒绝——限额来自运行时覆盖的配置
@@ -1977,6 +1992,52 @@ mod tests {
         assert_eq!(wasm_runtime.config(), CoreConfig::default());
     }
 
+    /// 票据 07 验收：manifest 资源覆盖经安全模块仲裁后作用于新建 Store——
+    /// 收紧请求生效（限额来自仲裁结果）、放宽请求钳回内核配置
+    #[test]
+    fn test_plugin_resource_overrides_apply_to_new_stores() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile test component");
+        let base = StoreLimits::default();
+
+        // 收紧请求：内存上限 4MiB（须高于测试组件最小内存 17 页 ≈ 1.1MiB）→ 生效
+        let tightened = ResourceOverrides {
+            max_memory_bytes: Some(4 * 1024 * 1024),
+            ..ResourceOverrides::default()
+        };
+        let mut plugin = wasm_runtime
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[], Some(&tightened))
+            .expect("instantiate with tightened limits");
+        {
+            let (store, _) = plugin.raw_store();
+            assert_eq!(
+                store.data().limits.max_memory_bytes,
+                4 * 1024 * 1024,
+                "Store 限额必须来自仲裁后的插件覆盖值"
+            );
+            // 限额内允许、超限拒绝——限额来自仲裁结果
+            assert!(store.data_mut().memory_growing(0, 3 * 1024 * 1024, None).expect("within limit"));
+            assert!(!store.data_mut().memory_growing(0, 5 * 1024 * 1024, None).expect("over limit"));
+        }
+
+        // 放宽请求：钳回内核配置（插件不得借 manifest 突破运维上限）
+        let relaxed = ResourceOverrides {
+            max_memory_bytes: Some(base.max_memory_bytes * 2),
+            ..ResourceOverrides::default()
+        };
+        let mut relaxed_plugin = wasm_runtime
+            .instantiate_component(&component, "com.bedcode.relaxed", host_ctx, &[], Some(&relaxed))
+            .expect("instantiate with relaxed limits");
+        let (store, _) = relaxed_plugin.raw_store();
+        assert_eq!(
+            store.data().limits.max_memory_bytes,
+            base.max_memory_bytes,
+            "放宽请求必须被钳回内核配置值"
+        );
+    }
+
     /// 票据 03 验收：调用聚合（次数/燃料/耗时）+ 生命周期事件计数 + 内存记账
     #[test]
     fn test_monitor_metrics_end_to_end() {
@@ -1985,7 +2046,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
         let monitor = wasm_runtime.monitor();
 
@@ -2032,7 +2093,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
 
         let (store, instance) = plugin.raw_store();
@@ -2057,7 +2118,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2084,7 +2145,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
         let rt = tokio::runtime::Runtime::new().unwrap();
         let echo = rt.block_on(async {
@@ -2114,7 +2175,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile debug test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate debug test component");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
@@ -2141,7 +2202,7 @@ mod tests {
             .compile_component(&build_test_component())
             .expect("compile test component");
         let mut plugin = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("instantiate test component");
 
         let captured = capture(|| {
@@ -2198,7 +2259,7 @@ mod tests {
                     .await
                     .expect("preset failing-startup key");
                 let mut plugin = wasm_runtime
-                    .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[])
+                    .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
                     .expect("instantiate test component");
                 capture(|| {
                     let result = plugin.on_startup();
@@ -2229,7 +2290,7 @@ mod tests {
 
         // 1. 实例 A：制造一次 trap（燃料耗尽）
         let mut plugin_a = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
             .expect("instantiate component A");
         {
             let (store, instance) = plugin_a.raw_store();
@@ -2259,7 +2320,7 @@ mod tests {
 
         // 3. 重新实例化（等价宿主 reload_wasm_plugin 的重建）→ 新实例正常可用
         let mut plugin_b = wasm_runtime
-            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[])
+            .instantiate_component(&component, TEST_PLUGIN_ID, host_ctx, &[], None)
             .expect("re-instantiate after trap");
         let rt = tokio::runtime::Runtime::new().unwrap();
         let echo = rt.block_on(async {

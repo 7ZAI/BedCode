@@ -10,6 +10,7 @@
 //! 单插件资源覆盖的「请求 + 安全上限钳制」在票据 04（安全模块）落地；
 //! 本模块提供钳制机制 [`StoreLimits::clamped_within`]。
 
+use bedcode_plugin_api::ResourceOverrides;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -145,10 +146,38 @@ impl StoreLimits {
     /// 所有燃料注入点（实例化 / ABI 协商 / 每次导出调用前）统一走此方法，
     /// 避免调试模式与非调试模式语义分叉
     pub(crate) fn fuel_budget(&self) -> u64 {
-        if plugin_debug_mode() {
+        self.fuel_budget_for(plugin_debug_mode())
+    }
+
+    /// 燃料预算的纯逻辑形态：按 `debug_mode` 决定是否应用放大倍率
+    ///
+    /// 独立于 [`plugin_debug_mode`]（环境变量 + 构建形态）以便单测直接覆盖
+    /// 倍率分支，不依赖进程级环境变量（测试并行安全）
+    pub(crate) fn fuel_budget_for(&self, debug_mode: bool) -> u64 {
+        if debug_mode {
             self.fuel_per_call * self.fuel_debug_multiplier
         } else {
             self.fuel_per_call
+        }
+    }
+
+    /// 应用插件 manifest 的资源覆盖请求：`None` 字段继承内核配置
+    ///
+    /// 仅做「请求合并」，不做仲裁——越界请求的钳制由安全模块负责
+    /// （[`crate::plugin::security::SecurityFramework::resolve_store_limits`]），
+    /// 保证「谁声明谁合并、谁仲裁谁钳制」的职责边界。`max_wasm_stack_bytes`
+    /// 不在可请求面（Engine 构建期参数，见字段注释），恒继承配置。
+    pub(crate) fn apply_overrides(&self, request: &ResourceOverrides) -> StoreLimits {
+        StoreLimits {
+            fuel_per_call: request.fuel_per_call.unwrap_or(self.fuel_per_call),
+            // debug 放大倍率不在请求面（全局调试开关参数），恒继承配置
+            fuel_debug_multiplier: self.fuel_debug_multiplier,
+            max_memory_bytes: request.max_memory_bytes.unwrap_or(self.max_memory_bytes),
+            max_table_entries: request.max_table_entries.unwrap_or(self.max_table_entries),
+            max_wasm_stack_bytes: self.max_wasm_stack_bytes,
+            max_instances: request.max_instances.unwrap_or(self.max_instances),
+            max_memories: request.max_memories.unwrap_or(self.max_memories),
+            max_tables: request.max_tables.unwrap_or(self.max_tables),
         }
     }
 
@@ -308,6 +337,62 @@ mod tests {
         assert!(msg.contains("解析内核配置文件"), "错误须带操作上下文: {msg}");
         assert!(msg.contains("wasm-core.json"), "错误须带文件路径: {msg}");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 票据 02 验收：配置文件含非法值（fuel=0）→ 加载报错且带操作上下文；
+    /// 同一文件里的合法字段不掩盖错误（整体拒绝，不静默回落）
+    #[test]
+    fn load_invalid_value_reports_context() {
+        let dir = std::env::temp_dir().join(format!("wasm-core-cfg-invalid-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("wasm-core.json");
+        std::fs::write(&path, r#"{"store":{"fuel_per_call":0}}"#).unwrap();
+        let err = CoreConfig::load_from(&path).expect_err("非法值配置必须报错");
+        let msg = format!("{err}");
+        assert!(msg.contains("内核配置文件"), "错误须带操作上下文: {msg}");
+        assert!(msg.contains("非法"), "错误须标明校验失败: {msg}");
+        assert!(msg.contains("fuel_per_call"), "错误须指明非法字段: {msg}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 票据 02 验收：调试模式燃料放大倍率可配置——debug 模式按倍率放大、
+    /// 非 debug 原样返回（纯逻辑分支，不依赖进程环境变量）
+    #[test]
+    fn fuel_budget_for_applies_debug_multiplier() {
+        let limits = StoreLimits::default();
+        assert_eq!(limits.fuel_budget_for(false), limits.fuel_per_call, "非 debug 不得放大");
+        assert_eq!(
+            limits.fuel_budget_for(true),
+            limits.fuel_per_call * limits.fuel_debug_multiplier,
+            "debug 模式须按倍率放大（防 debug 产物被燃料看门狗误杀）"
+        );
+        // 边界：倍率为 1（合法最小值，validate 允许）时与非 debug 等价
+        let no_op = StoreLimits {
+            fuel_debug_multiplier: 1,
+            ..StoreLimits::default()
+        };
+        assert_eq!(no_op.fuel_budget_for(true), no_op.fuel_per_call);
+    }
+
+    /// 票据 07：插件覆盖请求的合并语义——`Some` 字段取请求值、`None` 字段继承配置；
+    /// `max_wasm_stack_bytes` 不在请求面（Engine 构建期参数）恒继承
+    #[test]
+    fn apply_overrides_takes_request_and_inherits_unset_fields() {
+        let cfg = StoreLimits::default();
+        let request = ResourceOverrides {
+            max_memory_bytes: Some(1024),
+            fuel_per_call: Some(42),
+            ..ResourceOverrides::default()
+        };
+        let merged = cfg.apply_overrides(&request);
+        assert_eq!(merged.max_memory_bytes, 1024, "请求字段须生效");
+        assert_eq!(merged.fuel_per_call, 42);
+        assert_eq!(merged.max_tables, cfg.max_tables, "未请求字段须继承配置");
+        assert_eq!(merged.max_memories, cfg.max_memories);
+        assert_eq!(
+            merged.max_wasm_stack_bytes, cfg.max_wasm_stack_bytes,
+            "栈深为 Engine 参数，恒继承配置"
+        );
     }
 
     #[test]

@@ -152,6 +152,7 @@ mod tests {
                 wasi_preopen_dirs: vec![],
                 kind: PluginKind::Application,
                 dependencies: vec![],
+                resource_overrides: None,
             }
         }
 

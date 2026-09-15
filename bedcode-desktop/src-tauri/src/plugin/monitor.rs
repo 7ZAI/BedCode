@@ -394,6 +394,36 @@ mod tests {
         assert_eq!(snap.call_duration_us_max, 20_000_000);
     }
 
+    /// 授权决策计数：三类决策分别落到 authz.allow / deny / require_approval，
+    /// 累加正确且互不串位（core-security 管线的唯一埋点入口）
+    #[test]
+    fn authz_decisions_counted_by_kind() {
+        let m = PluginMetrics::default();
+        m.record_authz_decision(AuthzDecisionKind::Allow);
+        m.record_authz_decision(AuthzDecisionKind::Allow);
+        m.record_authz_decision(AuthzDecisionKind::Deny);
+        m.record_authz_decision(AuthzDecisionKind::RequireApproval);
+        m.record_authz_decision(AuthzDecisionKind::RequireApproval);
+        m.record_authz_decision(AuthzDecisionKind::RequireApproval);
+        let snap = m.snapshot();
+        assert_eq!(snap.authz["allow"], 2);
+        assert_eq!(snap.authz["deny"], 1, "deny 不得记入 allow/require_approval 桶");
+        assert_eq!(snap.authz["require_approval"], 3);
+    }
+
+    /// 总线计数：队列满丢弃与格式不匹配拒绝分别累计，互不影响
+    /// （票据 05 背压/格式过滤的监控落点）
+    #[test]
+    fn bus_dropped_and_format_rejected_counted_separately() {
+        let m = PluginMetrics::default();
+        m.record_bus_dropped();
+        m.record_bus_dropped();
+        m.record_bus_format_rejected();
+        let snap = m.snapshot();
+        assert_eq!(snap.bus["dropped"], 2);
+        assert_eq!(snap.bus["format_rejected"], 1, "格式拒绝不得计入 dropped");
+    }
+
     #[test]
     fn lifecycle_counts_and_last_timestamp() {
         let m = PluginMetrics::default();

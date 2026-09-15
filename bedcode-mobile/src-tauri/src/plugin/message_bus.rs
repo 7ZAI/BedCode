@@ -456,25 +456,46 @@ mod tests {
         assert_eq!(bus.format_rejected_total(), 2);
     }
 
-    /// 队列满丢弃（背压保护）：慢 worker 消费时队列满则丢弃 + 计数
+    /// 队列满丢弃（背压保护）：慢 worker 消费时队列满则丢弃 + 计数；
+    /// 守恒律成立——每条消息要么被投递要么被计数丢弃（不得静默消失）
     #[tokio::test]
     async fn queue_full_drops_with_count() {
+        const TOTAL: usize = 70;
+
         let bus = Arc::new(MessageBus::new());
-        let (tx, _rx) = mpsc::unbounded_channel();
+        let (tx, mut rx) = mpsc::unbounded_channel();
         bus.set_dispatcher(Arc::new(SlowDispatcher(tx, Duration::from_millis(5))))
             .await;
         bus.subscribe_wasm("plugin-b", "topic:flood").await;
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        for i in 0..70 {
+        for i in 0..TOTAL {
             bus.publish("topic:flood", "plugin-a", serde_json::json!(i));
         }
 
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        // 收齐全部投递（每条 5ms；静默 150ms 视为投递结束）
+        let mut delivered = 0;
+        while tokio::time::timeout(Duration::from_millis(150), rx.recv())
+            .await
+            .is_ok()
+        {
+            delivered += 1;
+        }
+        let dropped = bus.dropped_total() as usize;
+
+        assert_eq!(
+            delivered + dropped,
+            TOTAL,
+            "守恒：投递 {} + 丢弃 {} == 总数 {}",
+            delivered,
+            dropped,
+            TOTAL
+        );
         assert!(
-            bus.dropped_total() > 0,
-            "慢 worker 场景必须出现队列满丢弃（容量 {} < 70）",
-            BUS_QUEUE_CAPACITY
+            dropped > 0,
+            "慢 worker 场景必须出现队列满丢弃（容量 {} < {}）",
+            BUS_QUEUE_CAPACITY,
+            TOTAL
         );
     }
 }

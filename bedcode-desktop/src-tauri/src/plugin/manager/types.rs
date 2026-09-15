@@ -155,6 +155,7 @@ mod tests {
             wasi_preopen_dirs: vec![],
             kind: bedcode_plugin_api::PluginKind::Application,
             dependencies: vec![],
+            resource_overrides: None,
         }
     }
 

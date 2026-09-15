@@ -244,7 +244,13 @@ impl PluginHost {
                 }
 
                 // 阶段 A 共存入口：按产物格式自动选择 core module / component
-                match wasm_runtime.load_plugin_from_file(&wasm_path, &id, wasm_host_ctx.clone(), &loaded.manifest.wasi_preopen_dirs) {
+                match wasm_runtime.load_plugin_from_file(
+                    &wasm_path,
+                    &id,
+                    wasm_host_ctx.clone(),
+                    &loaded.manifest.wasi_preopen_dirs,
+                    loaded.manifest.resource_overrides.as_ref(),
+                ) {
                     Ok(wasm_plugin) => {
                         tracing::info!(
                             "WASM plugin loaded: {} v{} (module: {})",
@@ -1014,7 +1020,7 @@ impl PluginHost {
     /// 重建，使 /data 挂载与授权一致；热重载路径同样复用（停用 → 重建 → 重注册）。
     /// 失败上抛（原实例保留，激活流程走既有错误分支置 Error 态）。
     async fn rebuild_wasm_instance(&self, plugin_id: &str) -> crate::Result<()> {
-        let (rust_library, extension_path, declared_preopen_dirs) = {
+        let (rust_library, extension_path, declared_preopen_dirs, resource_overrides) = {
             let plugins = self.plugins.read().await;
             let loaded = plugins
                 .get(plugin_id)
@@ -1023,6 +1029,7 @@ impl PluginHost {
                 loaded.manifest.rust_library.clone(),
                 loaded.extension_path.clone(),
                 loaded.manifest.wasi_preopen_dirs.clone(),
+                loaded.manifest.resource_overrides,
             )
         };
 
@@ -1032,7 +1039,13 @@ impl PluginHost {
 
         let new_wasm_plugin = self
             .wasm_runtime
-            .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone(), &declared_preopen_dirs)?;
+            .load_plugin_from_file(
+                &wasm_path,
+                plugin_id,
+                self.wasm_host_ctx.clone(),
+                &declared_preopen_dirs,
+                resource_overrides.as_ref(),
+            )?;
         self.wasm_plugins
             .write()
             .await
@@ -1645,6 +1658,7 @@ mod tests {
                 wasi_preopen_dirs: vec![],
                 kind: bedcode_plugin_api::PluginKind::Application,
                 dependencies: vec![],
+                resource_overrides: None,
             },
             state,
             granted_permissions: HashSet::new(),
@@ -1680,6 +1694,7 @@ mod tests {
             wasi_preopen_dirs: vec![],
             kind: bedcode_plugin_api::PluginKind::Application,
             dependencies: vec![],
+            resource_overrides: None,
         }
     }
 
@@ -2419,7 +2434,7 @@ mod tests {
             .expect("compile test component");
         let plugin = host
             .wasm_runtime()
-            .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[])
+            .instantiate_component(&component, TEST_WASM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[], None)
             .expect("instantiate test component");
 
         host.storage()
@@ -2880,7 +2895,7 @@ mod tests {
             .expect("compile system test component");
         let plugin = host
             .wasm_runtime()
-            .instantiate_component(&component, TEST_SYSTEM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[])
+            .instantiate_component(&component, TEST_SYSTEM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[], None)
             .expect("instantiate system test component");
         // 实例化探测：plugin-system world 的 host-storage 导出应被识别为可路由能力
         assert_eq!(

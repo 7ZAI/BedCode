@@ -4,9 +4,9 @@
 //! 发行版 Stopped 时 UNC 路径不可达，自动改用 wsl.exe 桥接访问。
 
 use super::wsl_fs;
-use crate::plugin::security::fs_auth::FsOp;
-use crate::plugin::permission::{PERMISSION_FS_READ, PERMISSION_FS_WRITE};
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::PERMISSION_FS_READ;
+use crate::plugin::security::fs_auth::FsOp;
 
 /// 读取文本文件（WSL UNC 路径走 wsl.exe 桥接）
 fn read_text_file(path: &str) -> std::io::Result<String> {
@@ -29,7 +29,39 @@ fn write_text_file(path: &str, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)
 }
 
+/// fs 资源授权：统一经 core-security 三段决策管线（wasm-core 票据 08）
+///
+/// 替代改造前的手工内联链（`super::check_permission` + `fs_auth.check`）：
+/// 语义等价（声明 → 审批 → 强制，fs 三层校验为框架的 fs 资源实现），
+/// 对外错误文案保持 `"permission denied"`（插件契约与既有用例锁定）。
+///
+/// 差异仅在可观测性：决策进 core-monitor `authz` 埋点——fs 是插件最活跃的
+/// 资源路径，改造前不进监控（框架的唯一生产接入点是总线互调门）。
+/// 授权拒绝属「可恢复异常/过滤拒绝」，按日志红线走 warn + 结构化字段。
+fn authorize_fs(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, operation: &str) -> Result<(), String> {
+    let req = crate::plugin::security::AuthRequest {
+        plugin_id,
+        resource: crate::plugin::security::ResourceKind::Fs,
+        operation,
+        target: path,
+    };
+    if host_ctx.security().authorize(&req) != crate::plugin::security::AuthDecision::Allow {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            path = %path,
+            operation = %operation,
+            "fs: access denied by security framework"
+        );
+        return Err("permission denied".to_string());
+    }
+    Ok(())
+}
+
 /// 批量请求目录授权（权限 + fs_auth 批量弹窗校验）
+///
+/// 注：批量预授权（一次弹窗覆盖多路径，`check_batch` 语义）**不并入单路径
+/// 授权函数**——管线 fs 资源实现的强制段是单路径 `check`，批量语义不同，
+/// 强行合并会改变弹窗次数与用户交互，故保留原手工链（见票据 08）。
 ///
 /// paths-json 为 JSON 字符串数组；返回是否全部同意（拒绝/超时均为 false）
 pub(crate) fn fs_request_auth(host_ctx: &WasmHostContext, plugin_id: &str, paths_json: &str) -> Result<bool, String> {
@@ -103,15 +135,7 @@ fn delete_file(path: &str) -> std::io::Result<()> {
 
 /// 读取文本文件（权限 + 三层访问校验）
 pub(crate) fn fs_read(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_read") {
-        return Err("permission denied".to_string());
-    }
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Read));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_read: access denied by fs_auth");
-        return Err("permission denied".to_string());
-    }
+    authorize_fs(host_ctx, plugin_id, path, "read")?;
     read_text_file(path).map(Some).or_else(|e| {
         // SDK HostFs 契约：文件不存在返回 Ok(None)（store.rs 等插件依赖此语义处理新建文件）
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -124,67 +148,27 @@ pub(crate) fn fs_read(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -
 
 /// 写入文本文件（权限 + 三层访问校验）
 pub(crate) fn fs_write(host_ctx: &WasmHostContext, plugin_id: &str, path: &str, data: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_write") {
-        return Err("permission denied".to_string());
-    }
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Write));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_write: access denied by fs_auth");
-        return Err("permission denied".to_string());
-    }
+    authorize_fs(host_ctx, plugin_id, path, "write")?;
     write_text_file(path, data).map_err(|e| format!("fs error: file write failed: {}", e))
 }
 
 /// 复制文件（读源 + 写目标双授权）
 pub(crate) fn fs_copy(host_ctx: &WasmHostContext, plugin_id: &str, src: &str, dst: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_copy") {
-        return Err("permission denied".to_string());
-    }
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_copy") {
-        return Err("permission denied".to_string());
-    }
-    // 访问校验（源文件读、目标文件写）
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(async {
-        let read_ok = fs_auth.check(plugin_id, src, FsOp::Read).await;
-        if !read_ok {
-            return false;
-        }
-        fs_auth.check(plugin_id, dst, FsOp::Write).await
-    });
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, src = %src, dst = %dst, "fs_copy: access denied by fs_auth");
-        return Err("permission denied".to_string());
-    }
+    // 双授权：源读 + 目标写（与改造前一致，逐路径经授权管线）
+    authorize_fs(host_ctx, plugin_id, src, "read")?;
+    authorize_fs(host_ctx, plugin_id, dst, "write")?;
     copy_file(src, dst).map_err(|e| format!("fs error: file copy failed: {}", e))
 }
 
 /// 删除文件（权限 + 三层访问校验；文件不存在视为成功，幂等）
 pub(crate) fn fs_delete(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<(), String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_WRITE, "host_fs_delete") {
-        return Err("permission denied".to_string());
-    }
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Write));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_delete: access denied by fs_auth");
-        return Err("permission denied".to_string());
-    }
+    authorize_fs(host_ctx, plugin_id, path, "write")?;
     delete_file(path).map_err(|e| format!("fs error: file delete failed: {}", e))
 }
 
 /// 检查文件是否存在（权限 + 三层访问校验，支持 WSL UNC 路径）
 pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<bool, String> {
-    if !super::check_permission(host_ctx, plugin_id, PERMISSION_FS_READ, "host_fs_exists") {
-        return Err("permission denied".to_string());
-    }
-    let fs_auth = host_ctx.fs_auth.clone();
-    let allowed = block_on_async(fs_auth.check(plugin_id, path, FsOp::Read));
-    if !allowed {
-        tracing::warn!(plugin_id = %plugin_id, path = %path, "fs_exists: access denied by fs_auth");
-        return Err("permission denied".to_string());
-    }
+    authorize_fs(host_ctx, plugin_id, path, "read")?;
     // 支持 WSL UNC 路径
     if let Some((distro, wsl_path)) = wsl_fs::parse_wsl_unc_path(path) {
         return wsl_fs::exists_via_wsl(&distro, &wsl_path).map_err(|e| format!("fs error: WSL check failed: {}", e));
@@ -198,6 +182,9 @@ pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str)
 mod tests {
     use super::*;
     use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+    use crate::plugin::monitor::MetricsRegistry;
+    use crate::plugin::permission::PERMISSION_FS_WRITE;
+    use std::sync::Arc;
 
     const PLUGIN: &str = "test-plugin";
 
@@ -400,5 +387,97 @@ mod tests {
             .expect("read ok")
             .expect("value");
         assert_eq!(content, "payload");
+    }
+
+    // ==================== 票据 08：fs 授权经统一框架 + 决策埋点 ====================
+
+    /// 埋点：无权限的 fs 访问被框架拒绝 → 决策进 `authz.deny` 计数
+    /// （改造前 fs 走手工链、不进监控；这是本次的核心可观测性收益）
+    #[tokio::test]
+    async fn fs_denied_decision_counted_into_monitor() {
+        let ctx = build_host_ctx();
+        let monitor = Arc::new(MetricsRegistry::new());
+        ctx.security().set_monitor(monitor.clone());
+
+        let err = fs_read(&ctx, PLUGIN, "/tmp/denied").unwrap_err();
+        assert_eq!(err, "permission denied", "对外错误文案须保持不变");
+
+        let authz = &monitor.snapshot()["plugins"][PLUGIN]["authz"];
+        assert_eq!(authz["deny"], 1, "拒绝决策必须进监控埋点");
+        assert_eq!(authz["allow"], 0);
+    }
+
+    /// 埋点：白名单路径放行 → 决策进 `authz.allow` 计数
+    #[tokio::test]
+    async fn fs_allowed_decision_counted_into_monitor() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let monitor = Arc::new(MetricsRegistry::new());
+        ctx.security().set_monitor(monitor.clone());
+
+        let (_dir, root) = claude_temp_root("fs-monitor-allow");
+        let path = root.join("f.txt");
+        // 白名单路径放行（文件不存在按 SDK 契约返回 Ok(None)）
+        assert!(fs_read(&ctx, PLUGIN, path.to_str().unwrap())
+            .expect("read ok")
+            .is_none());
+
+        let authz = &monitor.snapshot()["plugins"][PLUGIN]["authz"];
+        assert_eq!(authz["allow"], 1, "放行决策必须进监控埋点");
+        assert_eq!(authz["deny"], 0);
+    }
+
+    /// 等价性：operation 映射 —— 只授 fs:read 时 fs_write 仍被拒绝
+    /// （框架 FsAuthorizer 的 read/write → 权限映射正确，无越权升格）
+    #[tokio::test]
+    async fn fs_write_denied_when_only_read_permission_granted() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let (_dir, root) = claude_temp_root("fs-write-gate");
+        let path = root.join("f.txt");
+
+        assert_eq!(
+            fs_write(&ctx, PLUGIN, path.to_str().unwrap(), "x").unwrap_err(),
+            "permission denied",
+            "read 权限不得用于写操作"
+        );
+    }
+
+    /// 等价性：fs_copy 双路径双权限 —— 缺写权限时拒绝（即便源路径可读）
+    #[tokio::test]
+    async fn fs_copy_requires_read_and_write_permissions() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let (_dir, root) = claude_temp_root("fs-copy-gate");
+        let src = root.join("a.txt");
+        let dst = root.join("b.txt");
+
+        assert_eq!(
+            fs_copy(&ctx, PLUGIN, src.to_str().unwrap(), dst.to_str().unwrap()).unwrap_err(),
+            "permission denied",
+            "copy 须同时具备源读与目标写授权"
+        );
+    }
+
+    /// 等价性：已声明权限但路径未授权（无头无弹窗）→ 强制段拒绝且计数
+    /// （改造未放宽安全边界：三层校验仍生效）
+    #[tokio::test]
+    async fn fs_ungranted_path_denied_by_enforce_stage() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_FS_READ]);
+        let monitor = Arc::new(MetricsRegistry::new());
+        ctx.security().set_monitor(monitor.clone());
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("plain").join("f.txt");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, "x").unwrap();
+
+        assert_eq!(
+            fs_read(&ctx, PLUGIN, path.to_str().unwrap()).unwrap_err(),
+            "permission denied",
+            "非白名单且无授权的路径必须被拒绝"
+        );
+        assert_eq!(monitor.snapshot()["plugins"][PLUGIN]["authz"]["deny"], 1);
     }
 }

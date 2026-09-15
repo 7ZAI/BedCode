@@ -718,10 +718,12 @@ mod tests {
         assert_eq!(p["dropped"], 0);
     }
 
-    /// 二进制格式偏好的订阅者收不到 JSON 消息（对称拒绝）
+    /// 二进制格式偏好的订阅者收不到 JSON 消息（对称拒绝 + 对称计数）
     #[tokio::test(flavor = "multi_thread")]
     async fn test_binary_subscriber_rejects_json_message() {
         let bus = MessageBus::new();
+        let monitor = Arc::new(MetricsRegistry::new());
+        bus.set_monitor(monitor.clone()).await;
         let (dispatcher, rx) = test_dispatcher(&["plugin-b"]);
         bus.set_dispatcher(dispatcher).await;
         bus.subscribe_wasm_binary("plugin-b", "topic:mixed").await;
@@ -732,6 +734,10 @@ mod tests {
             wait_delivery(&rx, Duration::from_millis(300)).is_err(),
             "二进制订阅者不得收到 JSON 消息"
         );
+        // 对称方向同样进 format_rejected 计数（与 JSON 订阅者拒二进制一致）
+        let p = &monitor.snapshot()["plugins"]["plugin-b"]["bus"];
+        assert_eq!(p["format_rejected"], 1, "二进制订阅者拒绝 JSON 同样须计数");
+        assert_eq!(p["dropped"], 0);
     }
 
     /// 队列满丢弃（背压保护）：慢订阅者队列满时消息丢弃、丢弃计数进监控，

@@ -76,6 +76,37 @@ pub struct PluginManifest {
     /// 无依赖（现有插件不受影响）。
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub dependencies: Vec<String>,
+    /// 单插件 Store 资源覆盖请求（core-config × core-security，wasm-core 票据 07）
+    ///
+    /// 重型插件（大 JSON 解析等）可请求更大的燃料预算/线性内存；`None`
+    /// 字段继承内核配置。最终值由宿主安全模块仲裁：逐字段取 min（请求值、
+    /// 内核配置值、编译期硬上限）——插件只能自我收紧，放宽请求被钳回上限。
+    /// 缺省 None = 完全继承内核配置（现有插件零迁移）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_overrides: Option<ResourceOverrides>,
+}
+
+/// 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）
+///
+/// 字段可选：`None` = 继承内核配置（`CoreConfig.store` 对应项）；
+/// `Some(v)` = 请求值，宿主仲裁后生效（见 [`PluginManifest::resource_overrides`]）。
+/// 字段语义与 [`crate`] 宿主侧 `StoreLimits` 同名项一致（燃料预算 / 线性
+/// 内存字节 / 表元素 / 实例数 / 内存数 / 表数）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct ResourceOverrides {
+    /// 单次导出调用燃料预算（指令数）；None = 继承
+    pub fuel_per_call: Option<u64>,
+    /// 线性内存上限（字节）；None = 继承
+    pub max_memory_bytes: Option<usize>,
+    /// 表元素上限；None = 继承
+    pub max_table_entries: Option<usize>,
+    /// 单 Store 核心实例数上限；None = 继承
+    pub max_instances: Option<usize>,
+    /// 单 Store 线性内存数量上限；None = 继承
+    pub max_memories: Option<usize>,
+    /// 单 Store 表数量上限；None = 继承
+    pub max_tables: Option<usize>,
 }
 
 fn default_sandbox() -> String {
@@ -367,6 +398,54 @@ mod tests {
     }
 
     // ==================== PluginType / PluginState ====================
+
+    /// core-config × core-security（票据 07）：manifest `resourceOverrides`
+    /// 解析 + 未声明字段为 None（继承内核配置）+ 序列化回写
+    #[test]
+    fn test_manifest_parse_resource_overrides() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.heavy",
+            "name": "Heavy",
+            "version": "1.0.0",
+            "resourceOverrides": {
+                "fuelPerCall": 128_000_000_000u64,
+                "maxMemoryBytes": 512 * 1024 * 1024
+            }
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        let overrides = m.resource_overrides.expect("resourceOverrides must be parsed");
+        assert_eq!(overrides.fuel_per_call, Some(128_000_000_000));
+        assert_eq!(overrides.max_memory_bytes, Some(512 * 1024 * 1024));
+        // 未声明字段为 None → 宿主侧继承内核配置
+        assert_eq!(overrides.max_table_entries, None);
+        // 序列化回写：camelCase 键名保留
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["resourceOverrides"]["fuelPerCall"], serde_json::json!(128_000_000_000u64));
+        assert_eq!(
+            back["resourceOverrides"]["maxMemoryBytes"],
+            serde_json::json!(512 * 1024 * 1024)
+        );
+    }
+
+    /// 票据 07 缺省兼容：旧 manifest 无 resourceOverrides → None，且序列化不落盘
+    #[test]
+    fn test_manifest_resource_overrides_default_none_for_legacy() {
+        let json = serde_json::json!({
+            "id": "com.bedcode.legacy",
+            "name": "Legacy",
+            "version": "1.0.0"
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert!(
+            m.resource_overrides.is_none(),
+            "旧 manifest 无该字段 → None（继承内核配置，零迁移）"
+        );
+        let back = serde_json::to_value(&m).unwrap();
+        assert!(
+            back.get("resourceOverrides").is_none(),
+            "缺省值不得写入序列化输出: {back}"
+        );
+    }
 
     #[test]
     fn test_plugin_type_kebab_case() {

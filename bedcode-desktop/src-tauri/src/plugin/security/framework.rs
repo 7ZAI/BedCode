@@ -21,8 +21,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 
+use crate::plugin::config::StoreLimits;
 use crate::plugin::monitor::{AuthzDecisionKind, MetricsRegistry};
 use crate::plugin::permission::{PermissionManager, PERMISSION_FS_READ, PERMISSION_FS_WRITE};
+use bedcode_plugin_api::ResourceOverrides;
 
 use super::api_registry::ApiRegistry;
 use super::fs_auth::{FsAuthChecker, FsOp};
@@ -260,6 +262,40 @@ impl ResourceAuthorizer for ApiCallAuthorizer {
     }
 }
 
+// ==================== 资源覆盖仲裁 ====================
+
+impl SecurityFramework {
+    /// 单插件 Store 资源覆盖的仲裁（core-config × core-security，票据 07）
+    ///
+    /// 插件只能自我收紧：最终值逐字段取 `min`（请求值、内核配置值、编译期
+    /// 硬上限）——放宽请求被钳回上限并 warn（结构化字段 `plugin_id`）。
+    /// 无请求（旧插件 / 未声明 `resourceOverrides`）时原样返回内核配置，
+    /// 行为与票据 07 之前完全一致（零迁移）。
+    ///
+    /// 仲裁点在安全模块而非配置模块：资源上限属于安全边界，与授权决策同源
+    /// （spec 配置模块决策：per-plugin 覆盖由安全模块钳制在安全上限内）。
+    pub fn resolve_store_limits(
+        &self,
+        plugin_id: &str,
+        config: &StoreLimits,
+        request: Option<&ResourceOverrides>,
+    ) -> StoreLimits {
+        let Some(req) = request else {
+            return config.clone();
+        };
+        let merged = config.apply_overrides(req);
+        // 双重天花板：不得突破运维配置值（配置覆盖有效），也不得突破编译期硬上限
+        let granted = merged.clamped_within(config).clamped_within(&StoreLimits::default());
+        if granted != merged {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "[SecurityFramework] 插件资源覆盖请求超出上限，已钳制（插件只能自我收紧）"
+            );
+        }
+        granted
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -359,6 +395,38 @@ mod tests {
         assert_eq!(*a.calls.lock().unwrap(), vec!["declared", "approved", "enforce"]);
     }
 
+    /// 决策矩阵：阶段 3 拒绝是最终仲裁——允许×允许×拒绝 → 拒绝，
+    /// 且拒绝原因来自 enforce（而非被前两段放行掩盖）
+    #[test]
+    fn pipeline_surfaces_enforce_deny_as_final_denial() {
+        let (_a, fw) = fake(
+            AuthDecision::Allow,
+            AuthDecision::Allow,
+            AuthDecision::Deny("运行时强制拒绝".into()),
+        );
+        let decision = fw.authorize(&req());
+        assert!(
+            matches!(&decision, AuthDecision::Deny(m) if m == "运行时强制拒绝"),
+            "enforce 段拒绝必须成为最终决策: {decision:?}"
+        );
+    }
+
+    /// 决策矩阵：弹窗后强制拒绝 —— 允许×弹窗×拒绝 → 拒绝
+    /// （RequireApproval 不中止管线，弹窗结果由 enforce 段最终裁决）
+    #[test]
+    fn pipeline_surfaces_enforce_deny_after_require_approval() {
+        let (_a, fw) = fake(
+            AuthDecision::Allow,
+            AuthDecision::RequireApproval,
+            AuthDecision::Deny("弹窗被拒".into()),
+        );
+        let decision = fw.authorize(&req());
+        assert!(
+            matches!(&decision, AuthDecision::Deny(m) if m == "弹窗被拒"),
+            "弹窗后的强制拒绝必须成为最终决策: {decision:?}"
+        );
+    }
+
     #[test]
     fn unregistered_resource_defaults_to_deny() {
         let fw = SecurityFramework::new();
@@ -386,6 +454,231 @@ mod tests {
         assert_eq!(
             snap["plugins"]["com.bedcode.test"]["authz"]["deny"].as_u64().unwrap(),
             2
+        );
+    }
+
+    // ==================== FsAuthorizer（fs 资源适配，票据 04） ====================
+
+    /// fs 资源测试环境：真实 PermissionManager + FsAuthChecker（无头，弹窗层不可用）；
+    /// 返回 (permission, storage, authorizer, framework)——authorizer 供单阶段直调，
+    /// framework 已注册同一实例供管线端到端；storage 供预置持久授权记录
+    #[allow(clippy::type_complexity)]
+    fn fs_environment() -> (
+        Arc<PermissionManager>,
+        Arc<crate::plugin::manager::storage::PluginStorage>,
+        Arc<FsAuthorizer>,
+        SecurityFramework,
+    ) {
+        let db = crate::db::Database::new(&std::path::Path::new(":memory:")).expect("in-memory db");
+        db.init_schema().expect("init schema");
+        let storage = Arc::new(crate::plugin::manager::storage::PluginStorage::new(Arc::new(
+            tokio::sync::Mutex::new(db),
+        )));
+        let permission = Arc::new(PermissionManager::new());
+        let fs_auth = Arc::new(FsAuthChecker::new(storage.clone(), None));
+        let authorizer = Arc::new(FsAuthorizer::new(permission.clone(), fs_auth));
+        let fw = SecurityFramework::new();
+        fw.register(authorizer.clone());
+        (permission, storage, authorizer, fw)
+    }
+
+    fn fs_req<'a>(plugin_id: &'a str, operation: &'a str, target: &'a str) -> AuthRequest<'a> {
+        AuthRequest {
+            plugin_id,
+            resource: ResourceKind::Fs,
+            operation,
+            target,
+        }
+    }
+
+    /// 阶段 1 映射：read/write 分别查 fs:read / fs:write 声明；未知操作拒绝且指明操作名
+    #[test]
+    fn fs_declared_stage_maps_operation_to_permission() {
+        let (permission, _storage, authorizer, _fw) = fs_environment();
+
+        // 未声明权限：read → Deny 并指出 fs:read；write → Deny 并指出 fs:write
+        let deny_read = authorizer.check_declared(&fs_req("com.test.p", "read", "/tmp/x"));
+        assert!(
+            matches!(&deny_read, AuthDecision::Deny(m) if m.contains(PERMISSION_FS_READ)),
+            "deny reason must name the missing permission: {deny_read:?}"
+        );
+        let deny_write = authorizer.check_declared(&fs_req("com.test.p", "write", "/tmp/x"));
+        assert!(
+            matches!(&deny_write, AuthDecision::Deny(m) if m.contains(PERMISSION_FS_WRITE)),
+            "{deny_write:?}"
+        );
+
+        // 只授 fs:read：read 放行、write 仍拒绝（权限粒度隔离，防越权升格）
+        permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
+        assert_eq!(
+            authorizer.check_declared(&fs_req("com.test.p", "read", "/tmp/x")),
+            AuthDecision::Allow
+        );
+        assert!(matches!(
+            authorizer.check_declared(&fs_req("com.test.p", "write", "/tmp/x")),
+            AuthDecision::Deny(_)
+        ));
+
+        // 未知操作：拒绝且指明操作名（防未映射操作溜过声明段）
+        let unknown = authorizer.check_declared(&fs_req("com.test.p", "exec", "/tmp/x"));
+        assert!(
+            matches!(&unknown, AuthDecision::Deny(m) if m.contains("exec")),
+            "{unknown:?}"
+        );
+    }
+
+    /// 端到端：白名单路径（.claude 目录段）在有 fs:read 声明时经三层校验放行
+    #[tokio::test]
+    async fn fs_whitelisted_path_allowed_end_to_end() {
+        let (permission, _storage, _authorizer, fw) = fs_environment();
+        permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join(".claude").join("sub").join("f.txt");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "x").unwrap();
+
+        assert_eq!(
+            fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+            AuthDecision::Allow,
+            "whitelist path must pass the full pipeline"
+        );
+    }
+
+    /// 端到端反例：无 fs:read 声明时，即便路径命中白名单也拒绝
+    /// （声明段是管线第一道闸门，权限不足优先于路径白名单）
+    #[tokio::test]
+    async fn fs_undeclared_permission_denied_even_for_whitelisted_path() {
+        let (_permission, _storage, _authorizer, fw) = fs_environment();
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join(".claude").join("f.txt");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "x").unwrap();
+
+        assert!(
+            matches!(
+                fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap())),
+                AuthDecision::Deny(_)
+            ),
+            "undeclared permission must be denied before path checks"
+        );
+    }
+
+    /// 端到端反例：有声明但路径非白名单且无持久授权、无头弹窗不可用 → 拒绝
+    /// （enforce 段最终仲裁，错误文案与手工链一致）
+    #[tokio::test]
+    async fn fs_headless_ungranted_path_denied_end_to_end() {
+        let (permission, _storage, _authorizer, fw) = fs_environment();
+        permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let target = tmp.path().join("plain").join("f.txt");
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        std::fs::write(&target, "x").unwrap();
+
+        let decision = fw.authorize(&fs_req("com.test.p", "read", target.to_str().unwrap()));
+        assert!(
+            matches!(&decision, AuthDecision::Deny(m) if m.contains("fs 三层校验拒绝")),
+            "headless ungranted fs access must be denied by enforce stage: {decision:?}"
+        );
+    }
+
+    /// 端到端：持久化授权前缀命中（check_approved 段 Allow）→ 管线整体放行，
+    /// 且授权前缀之外的兄弟目录不被误放行（前缀边界语义）
+    #[tokio::test]
+    async fn fs_persisted_grant_prefix_allowed_end_to_end() {
+        let (permission, storage, _authorizer, fw) = fs_environment();
+        permission.grant_permissions("com.test.p", &[PERMISSION_FS_READ.to_string()]);
+
+        let tmp = tempfile::TempDir::new().unwrap();
+        let granted_root = tmp.path().join("shared");
+        std::fs::create_dir_all(&granted_root).unwrap();
+        storage
+            .set(
+                "com.test.p",
+                "fs_granted_paths",
+                serde_json::json!([granted_root.to_str().unwrap()]),
+            )
+            .await
+            .expect("seed persisted grant");
+
+        let inside = granted_root.join("data.jsonl");
+        std::fs::write(&inside, "x").unwrap();
+        assert_eq!(
+            fw.authorize(&fs_req("com.test.p", "read", inside.to_str().unwrap())),
+            AuthDecision::Allow,
+            "persisted grant prefix must allow the path"
+        );
+
+        // 授权前缀的相邻目录（shared-other）不误匹配
+        let sibling = tmp.path().join("shared-other").join("data.jsonl");
+        std::fs::create_dir_all(sibling.parent().unwrap()).unwrap();
+        std::fs::write(&sibling, "x").unwrap();
+        assert!(
+            matches!(
+                fw.authorize(&fs_req("com.test.p", "read", sibling.to_str().unwrap())),
+                AuthDecision::Deny(_)
+            ),
+            "sibling directory of a granted prefix must not be allowed"
+        );
+    }
+
+    // ==================== 资源覆盖仲裁（票据 07） ====================
+
+    /// 无请求（旧插件 / 未声明 resourceOverrides）：原样返回内核配置（零迁移）
+    #[test]
+    fn resolve_store_limits_without_request_returns_config() {
+        let fw = SecurityFramework::new();
+        let cfg = StoreLimits::default();
+        let granted = fw.resolve_store_limits("com.bedcode.legacy", &cfg, None);
+        assert_eq!(granted, cfg, "无请求时必须与内核配置完全一致");
+    }
+
+    /// 仲裁：收紧请求保留（插件自我约束合法）；放宽请求钳回内核配置值
+    #[test]
+    fn resolve_store_limits_clamps_relaxed_request_and_keeps_tighter_one() {
+        let fw = SecurityFramework::new();
+        let cfg = StoreLimits::default();
+
+        // 放宽：请求值超过内核配置 → 钳回配置值（插件不得突破运维设定）
+        let relaxed = ResourceOverrides {
+            max_memory_bytes: Some(cfg.max_memory_bytes * 2),
+            fuel_per_call: Some(cfg.fuel_per_call * 2),
+            ..ResourceOverrides::default()
+        };
+        let granted = fw.resolve_store_limits("com.bedcode.heavy", &cfg, Some(&relaxed));
+        assert_eq!(granted.max_memory_bytes, cfg.max_memory_bytes, "放宽请求须被钳回");
+        assert_eq!(granted.fuel_per_call, cfg.fuel_per_call);
+
+        // 收紧：请求值低于内核配置 → 保留（自我约束）
+        let tightened = ResourceOverrides {
+            max_memory_bytes: Some(1024),
+            ..ResourceOverrides::default()
+        };
+        let granted = fw.resolve_store_limits("com.bedcode.tight", &cfg, Some(&tightened));
+        assert_eq!(granted.max_memory_bytes, 1024, "收紧请求须保留");
+        // 未请求字段继承配置
+        assert_eq!(granted.max_tables, cfg.max_tables);
+    }
+
+    /// 运行时配置覆盖优先于插件请求：运维把上限降到 4MiB，插件请求 8MiB → 钳到 4MiB
+    /// （否则插件可借 manifest 绕过运维的运行时覆盖）
+    #[test]
+    fn resolve_store_limits_clamps_below_runtime_config_override() {
+        let fw = SecurityFramework::new();
+        let mut cfg = StoreLimits::default();
+        cfg.max_memory_bytes = 4 * 1024 * 1024;
+
+        let request = ResourceOverrides {
+            max_memory_bytes: Some(8 * 1024 * 1024),
+            ..ResourceOverrides::default()
+        };
+        let granted = fw.resolve_store_limits("com.bedcode.heavy", &cfg, Some(&request));
+        assert_eq!(
+            granted.max_memory_bytes,
+            4 * 1024 * 1024,
+            "插件请求不得突破运维的运行时配置覆盖"
         );
     }
 
