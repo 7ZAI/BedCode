@@ -50,6 +50,35 @@ export interface PluginManifest {
    * 缺失即激活失败并指明能力名。缺省空数组 = 无依赖。
    */
   dependencies?: string[]
+  /**
+   * 单插件 Store 资源上限覆盖请求（core-config × core-security）
+   *
+   * 重型插件可请求更大的燃料预算/线性内存；未设置的字段继承内核配置。
+   * 最终值由宿主安全模块仲裁：逐字段取 min（请求值、内核配置值、编译期
+   * 硬上限）——插件只能自我收紧，放宽请求被钳回上限。缺省 = 全部继承。
+   */
+  resourceOverrides?: ResourceOverrides
+}
+
+/**
+ * 单插件 Store 资源上限覆盖请求（manifest `resourceOverrides`）
+ *
+ * 字段可选：未设置即继承内核配置；设置即请求值，宿主仲裁后生效
+ * （见 `PluginManifest.resourceOverrides`）。
+ */
+export interface ResourceOverrides {
+  /** 单次导出调用燃料预算（指令数） */
+  fuelPerCall?: number
+  /** 线性内存上限（字节） */
+  maxMemoryBytes?: number
+  /** 表元素上限 */
+  maxTableEntries?: number
+  /** 单 Store 核心实例数上限 */
+  maxInstances?: number
+  /** 单 Store 线性内存数量上限 */
+  maxMemories?: number
+  /** 单 Store 表数量上限 */
+  maxTables?: number
 }
 
 /** 插件配置声明 */
