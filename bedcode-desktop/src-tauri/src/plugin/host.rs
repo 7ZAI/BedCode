@@ -224,8 +224,10 @@ impl PluginHost {
             all_plugins.insert(plugin_id, loaded);
         }
 
-        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定；内置目录优先，
-        // 用户目录同名插件因先到先得被拒绝，防冒名顶替——与 loader 内去重语义一致）
+        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）。内置目录与用户
+        // 目录同名插件合并时以用户目录副本为准（用户可覆盖升级内置插件，zip
+        // 更新/重装即走此路径）；覆盖后来源随之变为 UserInstalled，其 wasm
+        // 生命周期由 has_wasm_backend 保障（激活/停用仍执行 guest 回调）
         let mut wasm_plugins_map: HashMap<String, Arc<Mutex<LoadedWasmPlugin>>> = HashMap::new();
 
         // 内置目录与用户目录共用同一 wasm 实例化逻辑：先内置后用户，
@@ -698,6 +700,7 @@ impl PluginHost {
             api: Vec<String>,
             subscribes: Vec<String>,
             declared_preopen_dirs: Vec<String>,
+            rust_library: String,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -749,6 +752,7 @@ impl PluginHost {
                 api: loaded.manifest.api.clone(),
                 subscribes: loaded.manifest.contributes.subscribes.clone(),
                 declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
+                rust_library: loaded.manifest.rust_library.clone(),
             }
         };
 
@@ -756,7 +760,7 @@ impl PluginHost {
         // 仅持单插件实例锁（避免重入死锁），失败置 Error 状态
         // on_startup 的 guest 自报失败记录于此，phase 3 据此写 Degraded 终态
         let mut startup_failure: Option<String> = None;
-        if plan.source == PluginSource::Wasm {
+        if plan.source.has_wasm_backend(&plan.rust_library) {
             // WASI 预打开目录漂移检测：声明了预打开目录的插件，激活前先核对当前
             // 实例是否已覆盖「现在已授权」的目录。首次启用时授权经 activate() 内
             // fs_request_auth 弹窗才落库（早于实例化），实例预打开为空；重试激活
@@ -1018,11 +1022,14 @@ impl PluginHost {
         // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
         crate::plugin::wasm_runtime::host_impl::mdns::purge_browsers_for_plugin(plugin_id);
 
-        // WASM 插件：调用 on_shutdown + __bedcode_deactivate
+        // WASM 插件：调用 on_shutdown + __bedcode_deactivate。
+        // has_wasm_backend：内置 wasm 插件恒纳入；用户 zip 安装的 rust-ts 插件
+        // 同样调 guest 生命周期（否则与命令分发 invoke_wasm_command 不对称——
+        // 未激活实例的 guest 状态永远残留）、TS-only 用户插件维持原语义跳过。
         {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
-                if loaded.source == PluginSource::Wasm {
+                if loaded.source.has_wasm_backend(&loaded.manifest.rust_library) {
                     let wasm_plugins = self.wasm_plugins.read().await;
                     if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
                         drop(wasm_plugins);
@@ -1364,7 +1371,7 @@ impl PluginHost {
             let loaded = plugins
                 .get(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            if loaded.source != PluginSource::Wasm {
+            if !loaded.source.has_wasm_backend(&loaded.manifest.rust_library) {
                 return Err(crate::AppError::Plugin(format!(
                     "Plugin {} is not a WASM plugin, cannot hot-reload",
                     plugin_id
@@ -2696,6 +2703,17 @@ mod tests {
     /// `component-test-key`。extension_path 指向临时目录（invoke 的
     /// resource_dir 注入断言用）。
     async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
+        self::setup_wasm_plugin_with_source(host, tmp_dir, PluginSource::Wasm).await
+    }
+
+    /// [`setup_wasm_plugin`] 的来源参数版本：内置 wasm（`Wasm`）或用户 zip 安装的
+    /// rust-ts（`UserInstalled`）共用同一实例化/注入逻辑；来源不同决定宿主
+    /// 激活是否执行 guest 生命周期（has_wasm_backend）
+    async fn setup_wasm_plugin_with_source(
+        host: &PluginHost,
+        tmp_dir: &tempfile::TempDir,
+        source: PluginSource,
+    ) -> String {
         let component = host
             .wasm_runtime()
             .compile_component(&build_test_component())
@@ -2716,7 +2734,7 @@ mod tests {
             .await
             .insert(TEST_WASM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
 
-        let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
+        let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, source, PluginState::Loaded);
         loaded.manifest.rust_library = "bedcode_plugin_component_test".to_string();
         loaded.extension_path = extension_path;
         host.plugins
@@ -2776,6 +2794,77 @@ mod tests {
             .expect("deactivate after recovery ok");
         let info = host.get_plugin(&pid).await.unwrap();
         assert_eq!(info.state, PluginState::Deactivated);
+    }
+
+    /// 用户 zip 安装的 rust-ts 插件（`UserInstalled` + 声明 rust_library）：
+    /// 激活必须执行 guest activate + on_startup（与内置 wasm 插件一致）。
+    ///
+    /// 此前宿主在 `source == Wasm` 分支才调 guest 生命周期，而命令分发
+    /// （invoke_wasm_command）对 UserInstalled 仍路由到 wasm 实例——guest 的
+    /// 激活态（OnceLock 数据目录等）永不初始化，复现 agent-hub「detect:
+    /// data dir unavailable (activate incomplete)」。本测试用 fail-startup
+    /// 开关验证：终态落 Degraded 即证明 guest 生命周期真实执行过。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_installed_wasm_plugin_runs_guest_lifecycle() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let pid = setup_wasm_plugin_with_source(&host, &tmp_dir, PluginSource::UserInstalled).await;
+
+        // 预置启动失败开关：激活调用本身成功，但终态必须如实落 Degraded
+        host.storage()
+            .set(&pid, "component-test-fail-startup", json!(true))
+            .await
+            .expect("preset fail-startup switch");
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("activation call must succeed even when on_startup reports failure");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert!(
+            matches!(&info.state, PluginState::Degraded(reason) if reason.contains("simulated startup init failure")),
+            "user-installed wasm plugin must run guest lifecycle, expected Degraded, got {:?}",
+            info.state
+        );
+
+        // 移除开关重试 → Activated；停用干净回落（guest deactivate 亦须执行）
+        host.storage()
+            .delete(&pid, "component-test-fail-startup")
+            .await
+            .expect("clear fail-startup switch");
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("retry activation must succeed");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(info.state, PluginState::Activated);
+
+        host.deactivate_plugin(&pid, false)
+            .await
+            .expect("deactivate after recovery ok");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(info.state, PluginState::Deactivated);
+    }
+
+    /// 用户 zip 安装的 TS-only 插件（`UserInstalled` + 无 rust_library、无 wasm
+    /// 实例）：激活不触碰 guest 生命周期，正常落 Activated。
+    /// 防止把 has_wasm_backend 误放过宽（所有 UserInstalled 都走 guest 调用），
+    /// 那会让无实例插件在激活时命中「WASM module not loaded」而置 Error。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_installed_ts_only_plugin_skips_guest_lifecycle() {
+        let host = setup_host().await;
+        let pid = TEST_PLUGIN_ID.to_string();
+
+        // TS-only：无 wasm 实例（wasm_plugins 不插）、rust_library 为空
+        let loaded = make_plugin(&pid, PluginSource::UserInstalled, PluginState::Loaded);
+        host.plugins.write().await.insert(pid.clone(), loaded);
+
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("ts-only user plugin activation must succeed");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(
+            info.state,
+            PluginState::Activated,
+            "ts-only user plugin must not attempt guest lifecycle"
+        );
     }
 
     /// 持久化写入路径：persist=true 时 Degraded 以 true 落库（用户意图语义）

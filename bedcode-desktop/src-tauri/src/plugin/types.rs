@@ -43,6 +43,22 @@ impl PluginSource {
             Self::UserInstalled => "user-installed",
         }
     }
+
+    /// 插件是否携带 WASM 后端（需要执行 guest 生命周期回调）。
+    ///
+    /// 内置 wasm 插件恒真；用户 zip 安装（`UserInstalled`）仅当 manifest 声明
+    /// `rust_library` 时有 wasm 实例。区分意义：激活/停用/热重载的 guest 调用
+    /// 必须以「有实例」为准，否则用户安装的 rust-ts 插件会在**未运行 guest
+    /// activate** 的实例上执行命令——guest 侧 OnceLock 激活态（数据目录等）
+    /// 永不初始化，典型报错 `activate incomplete`（agent-hub 票据复现）。
+    /// TS-only 用户插件无实例，维持原语义（跳过 guest 生命周期）。
+    pub fn has_wasm_backend(&self, rust_library: &str) -> bool {
+        match self {
+            Self::Wasm => true,
+            Self::UserInstalled => !rust_library.is_empty(),
+            Self::StaticRegistry | Self::FileScan => false,
+        }
+    }
 }
 
 /// 插件信息（返回给前端的精简版本）
