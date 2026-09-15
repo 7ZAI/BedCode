@@ -44,6 +44,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   └── plugin-wasi-test/             # WASI preopen 测试插件（wasm32-wasip2，std::fs 直写预打开目录）
 ├── plugins/                          # 插件源码目录（每个插件独立 package：plugin.json 元数据 +
 │                                     #   rust/ WASM 后端 + src/ TS 前端 + vite.config.ts 独立构建）
+│   ├── agent-hub/                    # Agent Hub 插件：Agent CLI 统一管理台——环境检测与一键安装、
+│   │                                 #   Skills 管理（浏览/编辑/分发/GitHub 安装/本地导入）、
+│   │                                 #   供应商统一配置、使用统计与会话日志解析
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端，
 │   │                                 #   聊天 UI、供应商配置、提示词优化
 │   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，
@@ -109,6 +112,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 - **host / host/**：插件生命周期管理（加载/激活/停用）；host/ 子模块负责插件随包 CLI 的安装/卸载
   （bin 解析、PATH 条目维护、平台注册）及 commands/listeners/services 拆分
 - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
+- **downloader**：插件 zip 包本地安装（选择 → 解压 → manifest/身份校验 → 路径穿越防护 →
+  wasm 存在性校验 → 写来源标记 → 移动到 app_data_dir/plugins；参考移动端 downloader.rs）
 - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
   WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
   events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
@@ -210,7 +215,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

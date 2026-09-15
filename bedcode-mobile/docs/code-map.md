@@ -142,6 +142,8 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 管理（`component.rs`
   为 WASM 组件模式接线）；宿主能力实现按功能域拆分于 host_impl/
   （storage/db/fs/http/mdns/terminal/event/bus/config/notify/peer/support/platform）
+- **wasm_host**：WASM Host Function 通用工具函数（SQL 表名前缀校验、数据库列类型转换、
+  HTTP 代理执行），从原 `host_context.rs` 迁移的核心逻辑
 - **downloader**：插件远程下载 + SHA256 校验 + 安装到 app_data_dir
 - **approval / validation**：权限审批与内容钉扎、插件身份校验（目录名与 manifest id 一致性，防冒名）
 - **saf_io / saf_path**：SAF 存储访问抽象（`SafIo` trait 主 seam，Kotlin `SafTransferPlugin` 实现）
