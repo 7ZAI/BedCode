@@ -673,4 +673,78 @@ mod tests {
         assert_eq!(format!("mdns:found.{}", "plugin-a"), "mdns:found.plugin-a");
         assert_eq!(format!("mdns:lost.{}", "plugin-a"), "mdns:lost.plugin-a");
     }
+
+    /// 集成：双插件同服务类型 browse 隔离（ticket 08，需求①物理隔离）
+    ///
+    /// 物理隔离 = 句柄级（BROWSERS 按 owner 独立）+ topic 级（事件定向
+    /// `mdns:found.<owner>`）+ 总线精确 topic 分发（bus.rs dispatch_publish
+    /// 按 `subscribers.get(&topic)` 精确匹配，既有测试覆盖）三层组合：
+    /// A 的事件 topic 集合（`mdns:found.A`）不含 B 的实例消息——B 订阅
+    /// `mdns:found.B` 物理上收不到 A 的定向事件。此处断言句柄表与 topic
+    /// 构造两层（总线层为 bus.rs 既有测试契约）
+    #[test]
+    fn browse_owner_isolation_across_plugins() {
+        let owner_a = test_owner("iso-a");
+        let owner_b = test_owner("iso-b");
+        let bid_a = format!("mdnsbr-{}", uuid::Uuid::new_v4());
+        let bid_b = format!("mdnsbr-{}", uuid::Uuid::new_v4());
+        // A、B 各 browse 同一服务类型（spec §4.2：重复浏览同一类型允许）
+        fake_browser(&owner_a, &bid_a, "_iso._cp.local.");
+        fake_browser(&owner_b, &bid_b, "_iso._cp.local.");
+        {
+            let table = BROWSERS.lock().unwrap();
+            assert_eq!(table.get(&bid_a).map(|e| e.owner.as_str()), Some(owner_a.as_str()));
+            assert_eq!(table.get(&bid_b).map(|e| e.owner.as_str()), Some(owner_b.as_str()));
+            assert_ne!(bid_a, bid_b, "distinct browser handles");
+        }
+        // A 的定向 topic 集合与 B 的互斥（物理隔离的 topic 层）
+        assert_eq!(format!("mdns:found.{owner_a}"), "mdns:found.test-plugin-iso-a");
+        assert_ne!(format!("mdns:found.{owner_a}"), format!("mdns:found.{owner_b}"));
+        assert_ne!(format!("mdns:lost.{owner_a}"), format!("mdns:lost.{owner_b}"));
+        // purge A 只回收 A 的句柄，B 的浏览不受影响
+        assert_eq!(super::purge_for_plugin(&owner_a), 1);
+        {
+            let table = BROWSERS.lock().unwrap();
+            assert!(!table.contains_key(&bid_a), "A purged");
+            assert!(table.contains_key(&bid_b), "B survives plugin A purge");
+        }
+        let _ = super::stop_browser(&owner_b, &bid_b);
+    }
+
+    /// 集成：host（owner=host）与插件 advertise 共存于单守护（ticket 08）
+    ///
+    /// 共享守护上宿主节点身份广播与插件广播并行登记，互不注销对方：
+    /// - 插件 purge / stop 只碰自己，host 登记存活；
+    /// - stop_host_service（节点停机）只移除 host 登记，插件广播存活
+    #[test]
+    fn host_and_plugin_advertise_coexist_on_shared_daemon() {
+        let plugin = test_owner("coexist");
+        let host_aid = format!("mdnsad-{}", uuid::Uuid::new_v4());
+        let plugin_aid = format!("mdnsad-{}", uuid::Uuid::new_v4());
+        // host 登记（register_host_service 同源：owner=host）
+        let host_reg = super::register_host_service("_co._cp.local.", "h._co._cp.local.")
+            .expect("host registration books handle");
+        fake_advertiser(&plugin, &plugin_aid, "_co._cp.local.", "p._co._cp.local.");
+        {
+            let table = ADVERTISERS.lock().unwrap();
+            assert!(table.contains_key(&host_reg), "host row present");
+            assert!(table.contains_key(&plugin_aid), "plugin row present");
+        }
+        // 插件 purge 只回收本人，host 登记不动
+        assert_eq!(super::purge_for_plugin(&plugin), 1);
+        {
+            let table = ADVERTISERS.lock().unwrap();
+            assert!(table.contains_key(&host_reg), "host registration survives plugin purge");
+        }
+        // 宿主停机（stop_host_service）只移除 host 登记；插件行保留（重插后断言）
+        fake_advertiser(&plugin, &plugin_aid, "_co._cp.local.", "p._co._cp.local.");
+        assert!(super::stop_host_service(&host_reg).expect("host registration removable"));
+        {
+            let table = ADVERTISERS.lock().unwrap();
+            assert!(!table.contains_key(&host_reg), "host row removed on node stop");
+            assert!(table.contains_key(&plugin_aid), "plugin advertise survives host stop");
+        }
+        let _ = super::stop_advertise(&plugin, &plugin_aid);
+        let _ = super::stop_host_service(&host_aid);
+    }
 }
