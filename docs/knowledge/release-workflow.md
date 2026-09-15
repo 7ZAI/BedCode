@@ -71,6 +71,7 @@ git push origin dev --tags
 - **build-windows**: ~10-15 分钟
 - **build-android**: ~15-25 分钟（依赖 Windows Job 完成）
 - **package-plugins**: 构建两端全部插件（前端 + WASM）并为每个插件各打一个 zip（独立 job，与平台构建并行）
+- **package-sdks**: 构建两端插件 SDK（TS 前端 + Rust crate）并打包 npm tarball / crates.io 产物（独立 job，与平台构建并行）
 
 ### 4. 审核并发布 Release
 
@@ -81,6 +82,8 @@ git push origin dev --tags
    - `*.apk`（Android）
    - `dist/plugin-packages/{desktop,mobile}/*.zip`（插件 zip 分发包，见 `docs/commands.md`；
      打包范围由 `scripts/plugin-package-list.json` 控制，增删插件改该文件即可）
+   - `dist/sdk-packages/{desktop,mobile}/*`（两端 SDK 发布包：npm `.tgz` + crates.io `.crate`
+     + 聚合 zip + SHA256SUMS，见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
 2. 编辑 Release Body（可选）
 3. 点击 **Publish release** 发布
 

@@ -465,12 +465,78 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # ==================== SDK 发布包（独立产物 job） ====================
+  # 构建两端插件 SDK（TS 前端 + Rust crate）并打包为 release 附件：
+  #   dist/sdk-packages/<target>/{*.tgz, *.crate, SHA256SUMS, <sdk>-<ver>.zip}
+  # 构建/打包逻辑见 scripts/package-sdks.mjs；与平台构建 / 插件打包 job 并行执行。
+  # 产物以 SDK 自身版本命名（package.json，与 Cargo.toml 一致性由脚本校验），与应用版本无关。
+  package-sdks:
+    needs: prepare-release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.2.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: |
+            bedcode-desktop/pnpm-lock.yaml
+            bedcode-mobile/packages/plugin-sdk-mobile/pnpm-lock.yaml
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # package-sdks.mjs --rust-wasm 的 guest 编译检查需要 wasm32-unknown-unknown
+          targets: wasm32-unknown-unknown
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./bedcode-desktop/packages/plugin-sdk-desktop/rust -> target
+            ./bedcode-desktop/packages/plugin-sdk-desktop/rust-macros -> target
+            ./bedcode-mobile/packages/plugin-sdk-mobile/rust -> target
+
+      # desktop SDK 是 bedcode-desktop workspace 成员（devDeps 随根安装，tsup 落 SDK 自身 node_modules）
+      - name: Install desktop dependencies
+        working-directory: bedcode-desktop
+        run: pnpm install --frozen-lockfile
+
+      # mobile SDK 是独立 workspace（自有 pnpm-workspace.yaml + pnpm-lock.yaml），需单独安装
+      - name: Install mobile SDK dependencies
+        working-directory: bedcode-mobile/packages/plugin-sdk-mobile
+        run: pnpm install --frozen-lockfile
+
+      # 构建（TS 构建 + vitest + cargo check 宿主/wasm guest）并打包（pnpm pack / cargo package），
+      # 输出 dist/sdk-packages/<target>/：原始 .tgz / .crate + SHA256SUMS + 聚合 zip
+      - name: Build & package SDKs (npm + crates -> dist/sdk-packages)
+        run: node scripts/package-sdks.mjs --rust-wasm
+
+      # 上传到同一 draft release（与 package-plugins 一致）；原始产物与聚合 zip 一并上传
+      - name: Upload SDK packages to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ needs.prepare-release.outputs.version }}
+          draft: true
+          files: |
+            dist/sdk-packages/desktop/*
+            dist/sdk-packages/mobile/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # ==================== Finalize Release ====================
   # 所有平台 build + 插件打包完成后的单 job 收尾：同步 release body + 校验 latest.json。
   # 之前这两步挂在 build-windows / build-linux 里各自跑一遍，并行重复调用 GitHub API，
   # 是 GITHUB_TOKEN rate limit（1000/hr）被打爆的主因之一；收敛到单 job 从根上砍掉重复调用。
   finalize-release:
-    needs: [prepare-release, build-windows, build-linux, build-android, package-plugins]
+    needs: [prepare-release, build-windows, build-linux, build-android, package-plugins, package-sdks]
     runs-on: ubuntu-latest
     steps:
       # tauri-action 只在创建 release 时写入 body；若 draft 已存在（重跑、手动预建等），

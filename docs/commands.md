@@ -122,17 +122,55 @@ node scripts/package-plugins.mjs
 # 只看将打包的插件清单（不构建不打包）
 node scripts/package-plugins.mjs --list
 
-# 只打包指定插件（--only 忽略配置文件列表；--plugin 为追加，--exclude 为排除）
-node scripts/package-plugins.mjs --only agent-hub
-node scripts/package-plugins.mjs --exclude auto-task --target all
+# 只打包一端：--target desktop | mobile | all（默认 all）
+node scripts/package-plugins.mjs --target mobile
 
-# 跳过构建，只打包已有产物；指定 zip 版本号
+# 只打包指定插件（--only 忽略配置列表；--plugin 追加；--exclude 排除；
+# 同名插件两端自动匹配）
+node scripts/package-plugins.mjs --only agent-hub
+node scripts/package-plugins.mjs --plugin file-transfer --exclude ai-chatbox
+
+# 跳过构建直接打包已有产物；指定 zip 版本号；只构建收集产物、不打 zip
 node scripts/package-plugins.mjs --skip-build --version 2.1.0
+node scripts/package-plugins.mjs --no-zip
 ```
 
-- **插件列表**：默认 `scripts/plugin-package-list.json`（`{desktop:[], mobile:[]}`），增删插件改该文件即可；也可用 `--config <file>` 换列表文件
-- **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，与移动端 SDK `bedcode-plugin package` 分发格式一致）
-- **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip 到 release（详见 `docs/knowledge/release-workflow.md`）
+- **插件列表**：默认 `scripts/plugin-package-list.json`
+  （desktop: `agent-hub`/`ai-chatbox`/`auto-task`/`file-transfer`，
+  mobile: `ai-chatbox`/`auto-task`/`file-transfer`），增删插件改该文件即可；
+  也可用 `--config <file>` 换列表文件
+- **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，
+  与移动端 SDK `bedcode-plugin package` 分发格式一致）；`--out <dir>` 可改输出目录
+- **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip
+  到 release（详见 `docs/knowledge/release-workflow.md`）
+
+**两端 SDK 统一打包（npm tarball + crates.io 产物，release 独立附件）**：
+
+```bash
+# 构建两端 SDK（TS 构建 + vitest + cargo check）并打包 npm / cargo 产物（仓库根目录执行）
+node scripts/package-sdks.mjs
+
+# 只看将打包的 SDK 与版本（不构建不打包）
+node scripts/package-sdks.mjs --list
+
+# 只打包一端：--target desktop | mobile | all（默认 all）
+node scripts/package-sdks.mjs --target desktop
+
+# 跳过 vitest / 跳过构建仅重新打包 / 追加 wasm32 guest 编译检查（CI 默认开启）
+node scripts/package-sdks.mjs --skip-tests
+node scripts/package-sdks.mjs --skip-build
+node scripts/package-sdks.mjs --rust-wasm
+```
+
+- **产物**：`dist/sdk-packages/<target>/`（按端分目录）：
+  - `*.tgz`：`pnpm pack` 的 npm 包（TS 前端 + CLI + template + dev-shell）
+  - `*.crate`：`cargo package --no-verify` 的 crates.io 包（per crate：desktop 含
+    `bedcode-plugin-api` 与 `bedcode-plugin-api-macros`，mobile 含 `bedcode-plugin-api-mobile`）
+  - `SHA256SUMS`：全部产物校验和
+  - `<sdk>-<ver>.zip`：聚合包（上述产物 + README + WIT 契约 + index.md 说明）
+- **版本**：产物以各自 SDK 自身版本命名（npm package.json 与 Cargo.toml 必须一致，
+  校验不一致即失败），与应用版本无关
+- **CI**：`.github/workflows/release.yml` 的 `package-sdks` job 构建并上传全部 SDK 产物到 release（详见 `docs/knowledge/release-workflow.md`）
 
 **桌面端加载 / 卸载插件（zip 分发包）**：
 
