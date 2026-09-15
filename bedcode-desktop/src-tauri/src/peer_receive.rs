@@ -477,6 +477,44 @@ async fn register_offer(
     );
 }
 
+/// 纯函数：暂停/恢复状态迁移判定（running/pending → paused；paused → running）。
+/// 返回目标状态；状态无需改变（已处于目标态/终态）时返回 None。
+/// 恢复必须命中 paused——否则对端 Resume 帧到达后任务卡在 paused。
+fn receive_pause_target(status: &str, paused: bool) -> Option<&'static str> {
+    if paused {
+        matches!(status, "running" | "pending").then_some("paused")
+    } else if status == "paused" {
+        Some("running")
+    } else {
+        None
+    }
+}
+
+/// 纯函数：传输是否已完成（字节已满且总量已知；total==0 视为未知不可判）
+fn receive_transfer_complete(total: u64, transferred: u64) -> bool {
+    total > 0 && transferred >= total
+}
+
+/// 纯函数：暂停中的任务是否实为已完成（UI 滞后场景：状态 paused 但字节已满），
+/// 用于 settle_terminal 结算 completed 而非 kept for resume
+fn receive_full_completed(status: &str, transferred: u64, total: u64, terminal_completed: bool) -> bool {
+    status == "paused" && terminal_completed && receive_transfer_complete(total, transferred)
+}
+
+/// 纯函数：进度入账（paused 不覆盖为 running——残留 Progress 事件会把按钮
+/// 从「恢复」弹回「暂停」；字节/速率照常更新供恢复后进度衔接）
+fn apply_receive_progress(task: &mut PeerTransferDto, transferred: u64, total: u64, rate_bps: f64, ts: u64) {
+    if task.status != "paused" {
+        task.status = "running".to_string();
+    }
+    task.transferred_bytes = transferred;
+    if total > 0 {
+        task.total_bytes = total;
+    }
+    task.rate_bps = rate_bps;
+    task.updated_at_ms = ts;
+}
+
 /// 进度入账（pending → running：AlwaysAccept 策略无询问阶段直接进数据面）
 ///
 /// `total` 为引擎批内总大小真源：远端拉取任务预登记时大小未知（pull spec
@@ -490,13 +528,7 @@ fn update_progress(app: &AppHandle, batch_id: &str, transferred: u64, total: u64
         .iter_mut()
         .find(|t| t.batch_id == batch_id && !is_terminal(t))
     {
-        task.status = "running".to_string();
-        task.transferred_bytes = transferred;
-        if total > 0 {
-            task.total_bytes = total;
-        }
-        task.rate_bps = rate_bps;
-        task.updated_at_ms = now_ms();
+        apply_receive_progress(task, transferred, total, rate_bps, now_ms());
     }
 }
 
@@ -535,8 +567,16 @@ fn settle_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
             .iter_mut()
             .find(|t| t.batch_id == batch_id && !is_terminal(t))
         {
-            // 用户暂停分支：会话终态只是中断确认——不落终态、不覆盖进度展示
-            if task.status == "paused" {
+            // 用户暂停分支：会话终态只是中断确认——不落终态、不覆盖进度展示。
+            // 例外：Completed 且字节已满（UI 滞后时点暂停的已完成任务）——
+            // 结算 completed 而不是卡在 paused（真机现象：已传完仍可点暂停）
+            let full_completed = receive_full_completed(
+                &task.status,
+                task.transferred_bytes,
+                task.total_bytes,
+                matches!(terminal, TerminalState::Completed),
+            );
+            if task.status == "paused" && !full_completed {
                 tracing::info!(batch_id = %batch_id, state = ?terminal, "receive session ended while paused (kept for resume)");
                 return;
             }
@@ -565,12 +605,11 @@ pub(crate) async fn set_receive_pause_status(app: &AppHandle, batch_id: &str, pa
             .iter_mut()
             .find(|t| t.batch_id == batch_id && !is_terminal(t))
         {
-            if task.status == "running" || (paused && task.status == "pending") {
-                task.status = if paused {
-                    "paused".to_string()
-                } else {
-                    "running".to_string()
-                };
+            // 暂停：running/pending → paused；恢复：paused → running。
+            // 恢复必须命中 paused——否则对端 Resume 帧到达后任务卡在 paused
+            // （真机现象：移动端恢复后桌面端任务状态不再同步）
+            if let Some(target) = receive_pause_target(&task.status, paused) {
+                task.status = target.to_string();
                 task.rate_bps = 0.0;
                 task.updated_at_ms = now_ms();
             }
@@ -754,6 +793,20 @@ pub async fn pause_peer_receiving(app: AppHandle, batch_id: String) -> crate::Re
     // 顺序关键：先把任务落 paused 再下发 wire 命令。引擎终态事件（对端中断/
     // 会话失败）可能在命令生效前后到达，若任务仍是 running，settle_terminal
     // 会把它结算成 failed 并归档历史——真机现象「点暂停，任务直接变历史」。
+    // 已完成校验：字节已满的任务不允许暂停（UI 可能滞后显示未完成，实际已
+    // 传完落盘），直接结算 completed，避免误标 paused 卡住后续恢复
+    let already_complete = {
+        let state = app.state::<PeerReceiveState>();
+        let inner = state.inner.lock().expect("peer receive lock poisoned");
+        inner.tasks.iter().any(|t| {
+            t.batch_id == batch_id && !is_terminal(t) && receive_transfer_complete(t.total_bytes, t.transferred_bytes)
+        })
+    };
+    if already_complete {
+        settle_terminal(&app, &batch_id, TerminalState::Completed);
+        tracing::debug!(batch_id = %batch_id, "pause skipped: receive transfer already complete");
+        return Ok(true);
+    }
     set_receive_pause_status(&app, &batch_id, true).await;
     let mut hit = super::peer_remote::pause_pull(&app, &batch_id).await;
     if !hit {
@@ -1130,5 +1183,98 @@ mod tests {
         assert_eq!(terminals, RECEIVE_TERMINAL_CAP);
         assert!(!tasks.iter().any(|t| t.batch_id == "b-0"), "oldest evicted");
         assert!(tasks.iter().any(|t| t.batch_id == "b-active"), "active kept");
+    }
+
+    // ==================== 暂停/恢复状态迁移（Bug：暂停成功仍显暂停） ====================
+
+    /// 接收侧暂停/恢复目标状态映射：running/pending → paused；paused → running
+    #[test]
+    fn receive_pause_target_maps_run_and_pending_to_paused() {
+        assert_eq!(receive_pause_target("running", true), Some("paused"));
+        assert_eq!(receive_pause_target("pending", true), Some("paused"));
+        // 已暂停/终态不再变化
+        assert_eq!(receive_pause_target("paused", true), None);
+        assert_eq!(receive_pause_target("completed", true), None);
+    }
+
+    /// 恢复必须命中 paused——否则 Resume 帧到达后任务卡在 paused（真机现象）
+    #[test]
+    fn receive_pause_target_resume_hits_only_paused() {
+        assert_eq!(receive_pause_target("paused", false), Some("running"));
+        assert_eq!(receive_pause_target("running", false), None);
+        assert_eq!(receive_pause_target("pending", false), None);
+        assert_eq!(receive_pause_target("completed", false), None);
+    }
+
+    /// 已完成判定：总量已知且字节已满（total==0 不可判）
+    #[test]
+    fn receive_transfer_complete_requires_known_total_and_full_bytes() {
+        assert!(receive_transfer_complete(100, 100));
+        assert!(receive_transfer_complete(100, 120), "overshoot defensive");
+        assert!(!receive_transfer_complete(100, 99));
+        assert!(!receive_transfer_complete(0, 0), "unknown total");
+        assert!(!receive_transfer_complete(0, 50), "unknown total with bytes");
+    }
+
+    /// full_completed：仅 paused+Completed+满字节 判定为已完成（否则 kept for resume）
+    #[test]
+    fn receive_full_completed_only_for_paused_completed_full() {
+        assert!(receive_full_completed("paused", 100, 100, true));
+        assert!(!receive_full_completed("paused", 99, 100, true), "not full");
+        assert!(
+            !receive_full_completed("paused", 100, 100, false),
+            "non-completed terminal"
+        );
+        assert!(!receive_full_completed("running", 100, 100, true), "running not paused");
+        assert!(!receive_full_completed("paused", 0, 0, true), "unknown total");
+    }
+
+    /// 进度入账：paused 保持暂停（不被打回 running）、字节照常更新
+    #[test]
+    fn apply_receive_progress_keeps_paused_but_updates_bytes() {
+        let mut task = PeerTransferDto {
+            batch_id: "b".to_string(),
+            node_id: "a".repeat(64),
+            peer_name: "Peer".to_string(),
+            direction: "receive".to_string(),
+            status: "paused".to_string(),
+            files: Vec::new(),
+            total_bytes: 100,
+            transferred_bytes: 40,
+            rate_bps: 0.0,
+            detail: None,
+            reject_reason: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        apply_receive_progress(&mut task, 55, 100, 3.5, 2);
+        assert_eq!(task.status, "paused", "暂停期间不得被打回 running");
+        assert_eq!(task.transferred_bytes, 55);
+        assert_eq!(task.rate_bps, 3.5);
+        assert_eq!(task.updated_at_ms, 2);
+    }
+
+    /// 进度入账：running 任务照常推进（total 首次补正）
+    #[test]
+    fn apply_receive_progress_advances_running_and_backfills_total() {
+        let mut task = PeerTransferDto {
+            batch_id: "b".to_string(),
+            node_id: "a".repeat(64),
+            peer_name: "Peer".to_string(),
+            direction: "receive".to_string(),
+            status: "running".to_string(),
+            files: Vec::new(),
+            total_bytes: 0,
+            transferred_bytes: 0,
+            rate_bps: 0.0,
+            detail: None,
+            reject_reason: None,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+        };
+        apply_receive_progress(&mut task, 10, 200, 1.0, 2);
+        assert_eq!(task.status, "running");
+        assert_eq!(task.transferred_bytes, 10);
+        assert_eq!(task.total_bytes, 200, "首个 Progress 补正总量");
     }
 }

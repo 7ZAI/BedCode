@@ -310,6 +310,17 @@ pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
         if task.dto.status != "running" || task.dto.direction != "send" {
             return Ok(false);
         }
+        // 已完成校验：字节已满的发送任务不允许暂停（UI 滞后显示未完成，
+        // 实际已全部传输），直接结算 completed，避免误标 paused
+        if transfer_complete(task.dto.total_bytes, task.dto.transferred_bytes) {
+            task.dto.status = "completed".to_string();
+            task.dto.rate_bps = 0.0;
+            task.dto.updated_at_ms = now_ms();
+            drop(inner);
+            publish(&app);
+            tracing::debug!(batch_id = %batch_id, "pause skipped: send transfer already complete");
+            return Ok(true);
+        }
         task.dto.status = "paused".to_string();
         task.dto.rate_bps = 0.0;
         task.dto.updated_at_ms = now_ms();
@@ -1149,7 +1160,7 @@ async fn set_serve_pause_status(app: &AppHandle, batch_id: &str, paused: bool) {
         if let Some(task) = inner
             .tasks
             .iter_mut()
-            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
+            .find(|t| t.dto.batch_id == batch_id && serve_status_tracked(&t.dto.status))
         {
             task.dto.status = if paused { "paused".to_string() } else { "running".to_string() };
             task.dto.rate_bps = 0.0;
@@ -1202,6 +1213,16 @@ async fn register_serve_task(
     );
 }
 
+/// 纯函数：传输是否已完成（字节已满且总量已知；total==0 视为未知不可判）
+fn transfer_complete(total: u64, transferred: u64) -> bool {
+    total > 0 && transferred >= total
+}
+
+/// 纯函数：serve 记账任务终态/暂停恢复可同步状态（running/paused 才允许改）
+fn serve_status_tracked(status: &str) -> bool {
+    matches!(status, "running" | "paused")
+}
+
 /// 服务侧任务终态结算：状态映射与发送侧 apply_terminal 同构（无 epoch——
 /// 服务侧批单次会话；取消码 -receiver 指拉取发起方取消，-self 指本端中止）
 async fn settle_serve_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState) {
@@ -1232,7 +1253,7 @@ async fn settle_serve_terminal(app: &AppHandle, batch_id: &str, terminal: Termin
         if let Some(task) = inner
             .tasks
             .iter_mut()
-            .find(|t| t.dto.batch_id == batch_id && t.dto.status == "running")
+            .find(|t| t.dto.batch_id == batch_id && serve_status_tracked(&t.dto.status))
         {
             task.dto.status = status;
             // 完成结算：最后一条 Progress 可能略低于总量，归整为满额
@@ -1821,5 +1842,29 @@ mod tests {
         assert!(!is_terminal_status("pending"));
         assert!(!is_terminal_status("paused"));
         assert!(!is_terminal_status("running"));
+    }
+
+    // ==================== 暂停/恢复状态迁移（Bug：暂停成功仍显暂停 / 取消不同步） ====================
+
+    /// 发送侧已完成判定：总量已知且字节已满（total==0 不可判）——暂停前校验依赖
+    #[test]
+    fn transfer_complete_requires_known_total_and_full_bytes() {
+        assert!(transfer_complete(100, 100));
+        assert!(transfer_complete(100, 120), "overshoot defensive");
+        assert!(!transfer_complete(100, 99));
+        assert!(!transfer_complete(0, 0), "unknown total");
+        assert!(!transfer_complete(0, 42), "unknown total with bytes");
+    }
+
+    /// serve 记账任务可同步状态：running/paused 才允许终态结算或暂停/恢复改写
+    /// （取消不同步根因：paused 的 serve 任务不被 settle_serve_terminal 命中）
+    #[test]
+    fn serve_status_tracked_covers_run_and_paused_only() {
+        assert!(serve_status_tracked("running"));
+        assert!(serve_status_tracked("paused"));
+        assert!(!serve_status_tracked("pending"));
+        assert!(!serve_status_tracked("completed"));
+        assert!(!serve_status_tracked("cancelled"));
+        assert!(!serve_status_tracked("failed"));
     }
 }
