@@ -816,8 +816,9 @@ impl PluginManager {
     }
 
     async fn deactivate_inner(&self, plugin_id: &str) -> Result<()> {
-        // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
-        crate::plugin::wasm_runtime::host_impl::purge_browsers_for_plugin(plugin_id);
+        // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
+        // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
+        crate::plugin::wasm_runtime::host_impl::purge_for_plugin(plugin_id);
 
         // 1. 检查状态与插件类型（短锁）
         let plugin_type = {
