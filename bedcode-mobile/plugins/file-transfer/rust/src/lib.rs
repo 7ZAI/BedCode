@@ -13,7 +13,7 @@
 //!
 //! 双写期（Phase 3）：旧命令面保持可用；`peer:devices` 订阅降级为日志对账源。
 
-use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostPeer, HostPlatform};
+use bedcode_plugin_api_mobile::host::{HostBus, HostEvents, HostLog, HostMdns, HostPeer, HostPlatform};
 use bedcode_plugin_api_mobile::types::PluginManifest;
 use bedcode_plugin_api_mobile::wasm_host::WasmHost;
 use bedcode_plugin_api_mobile::{BusMessage, WasmPlugin};
@@ -27,6 +27,46 @@ mod settings_store;
 mod transfer_store;
 
 pub(crate) use peer::PLUGIN_ID;
+
+/// 对等网络 mDNS 服务类型（与 peer-net crate `SERVICE_TYPE` 同值；插件不直接
+/// 依赖 peer-net crate，此处常量对齐 spec v2 §4.2）
+const PEER_MDNS_SERVICE_TYPE: &str = "_bedcode-peer._tcp.local.";
+
+/// 定向发现事件 topic（spec v2 §5.2：事件按属主投递，owner = 本插件 id）。
+/// LazyLock 而非 concat!：PLUGIN_ID 是 const `&str` 而非字面量，concat! 只收
+/// 字面量，故运行时拼一次（bus_subscribe / on_message 每消息复用它）
+static MDNS_FOUND_TOPIC: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("mdns:found.{PLUGIN_ID}"));
+static MDNS_LOST_TOPIC: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| format!("mdns:lost.{PLUGIN_ID}"));
+
+/// 自建 browse 句柄（host-mdns，spec v2 / ticket 07：本插件自建浏览、事件
+/// 定向投递 `mdns:found.<PLUGIN_ID>`；None = 未激活/降级态）
+static MDNS_BROWSER: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+
+fn mdns_browser() -> &'static Mutex<Option<String>> {
+    MDNS_BROWSER.get_or_init(|| Mutex::new(None))
+}
+
+/// 自建 mDNS browse（幂等：已有句柄不动；失败降级返回 None，刷新时补建）
+fn ensure_mdns_browse(h: &WasmHost) -> Option<String> {
+    let mut slot = mdns_browser().lock().expect("mdns browser slot lock");
+    if slot.is_some() {
+        return slot.clone();
+    }
+    match h.mdns_browse(PEER_MDNS_SERVICE_TYPE) {
+        Ok(id) => {
+            h.log_info(&format!("mdns self-browse started: {id}"));
+            *slot = Some(id.clone());
+            Some(id)
+        }
+        Err(e) => {
+            // 引擎未就绪/停用降级：空列表 + 提示，不阻断插件激活（spec v2 §9）
+            h.log_info(&format!("mdns self-browse deferred (non-fatal): {e}"));
+            None
+        }
+    }
+}
 
 /// 当前选中的对端节点 ID（单对端 UX：移动端 ⇄ 桌面端）
 static ACTIVE_NODE: OnceLock<Mutex<String>> = OnceLock::new();
@@ -52,12 +92,13 @@ impl WasmPlugin for FileTransferPlugin {
     fn activate() -> anyhow::Result<()> {
         let h = host();
         h.log_info("File Transfer plugin activating (self-hosted, mobile)");
-        // 发现事件（mdns:*）由引擎单守护浏览后经宿主总线直推，本插件不自建
-        // mDNS browse（Phase 4 回归修复：插件自建 daemon 与引擎广播 daemon
-        // 同绑 5353 端口互抢多播包，真机实证「只发现自己、发现不了对端」）
+        // 发现事件（mdns:*）改经 host-mdns 自建 browse 收定向 topic（spec v2 /
+        // ticket 07，D2 一期迁移）：不再订阅全局 `mdns:found` / `mdns:lost`
+        // （全局桥接已退役 D1）——本插件自建浏览、事件按属主投递到
+        // `mdns:found.<PLUGIN_ID>` / `mdns:lost.<PLUGIN_ID>`
         for topic in [
-            "mdns:found",
-            "mdns:lost",
+            MDNS_FOUND_TOPIC.as_str(),
+            MDNS_LOST_TOPIC.as_str(),
             "peer:devices",
             "peer:transfer",
             "peer:receive",
@@ -66,6 +107,9 @@ impl WasmPlugin for FileTransferPlugin {
         ] {
             let _ = h.bus_subscribe(topic);
         }
+        // 自建 browse 对等网络服务类型（共享守护，事件定向投递）；引擎未就绪
+        // 时降级（空列表 + 提示），刷新命令补建
+        ensure_mdns_browse(&h);
         // 引擎电源：节点/mDNS 生命周期由宿主 activate/deactivate 外壳直接驱动
         // （plugin/manager.rs 接线 ensure_node_started），插件侧无需声明
         Ok(())
@@ -73,9 +117,12 @@ impl WasmPlugin for FileTransferPlugin {
 
     fn deactivate() -> anyhow::Result<()> {
         let h = host();
-        // 关闭插件 = 服务下线：先断开全部活跃对等连接（对端即时感知断开，
-        // 否则 TLS 连接残留、对端仍显示在线——「关闭插件 对方无感知」），
-        // 再清空句柄表与订阅
+        // 关闭插件 = 服务下线：先自建 browse 回收句柄（宿主 purge 兜底不泄漏）
+        if let Some(id) = mdns_browser().lock().expect("mdns browser slot lock").take() {
+            let _ = h.mdns_stop_browse(&id);
+        }
+        // 再断开全部活跃对等连接（对端即时感知断开，否则 TLS 连接残留、对端
+        // 仍显示在线——「关闭插件 对方无感知」），再清空句柄表与订阅
         for handle in device_bridge::drain_sessions() {
             if let Err(e) = h.peer_close(&handle) {
                 h.log_info(&format!("deactivate: peer_close {handle} failed (non-fatal): {e}"));
@@ -83,8 +130,8 @@ impl WasmPlugin for FileTransferPlugin {
         }
         device_bridge::clear_peer_state();
         for topic in [
-            "mdns:found",
-            "mdns:lost",
+            MDNS_FOUND_TOPIC.as_str(),
+            MDNS_LOST_TOPIC.as_str(),
             "peer:devices",
             "peer:transfer",
             "peer:receive",
@@ -106,6 +153,10 @@ impl WasmPlugin for FileTransferPlugin {
             // 「探索发现」直达后端：经总线请求宿主即时重查 + 缓存/连接态重发
             // （宿主 peer_net 静态订阅 peer:discovery-refresh 消费）
             "file-transfer.refresh-devices" => {
+                // 确保自建 browse 存活（激活时引擎未就绪则在此补建）后经总线请求
+                // 宿主即时重查 + 连接态重发（mdns:found 缓存重发已退役 D1，
+                // 设备列表由自建 browse 的定向事件流自行收敛）
+                ensure_mdns_browse(&h);
                 h.bus_publish(
                     "peer:discovery-refresh",
                     &serde_json::json!({ "requestedBy": PLUGIN_ID }),
@@ -212,8 +263,11 @@ impl WasmPlugin for FileTransferPlugin {
         let h = host();
 
         // 发现事件原样透传（wire 形状不过翻译）；设备缓存状态机在前端
-        if msg.topic == "mdns:found" || msg.topic == "mdns:lost" {
-            let event = if msg.topic == "mdns:found" { "mdns-found" } else { "mdns-lost" };
+        // 定向发现事件透传（wire 形状不过翻译）；设备缓存状态机在前端。
+        // 注：payload 增量追加 serviceType / browserId（spec v2 §5.2），
+        // 前端按「忽略未知字段」增量原则兼容，这里原样透传
+        if msg.topic == *MDNS_FOUND_TOPIC || msg.topic == *MDNS_LOST_TOPIC {
+            let event = if msg.topic == *MDNS_FOUND_TOPIC { "mdns-found" } else { "mdns-lost" };
             h.emit_event(&format!("plugin:file-transfer:{event}"), &msg.payload);
             return Ok(());
         }
