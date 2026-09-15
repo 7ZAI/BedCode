@@ -27,6 +27,13 @@ use serde_json::{json, Value};
 // 复用 WS 协议 mock（resolve_base_url happy path 需真实建连保存 target）
 mod common;
 
+/// 全局串行闸：AuthManager 经 apply_auth_success 写入的全局 token
+/// （`state::get_global_token` / `clear_global_token`）是进程级共享。本文件的
+/// 编排层用例断言「成功用例写入 token / 拒绝用例不写 token」，并发执行时会互相
+/// 污染——先跑的成功用例写进 token，后跑的拒绝用例便断言失败（CI 上表现为 flake）。
+/// 触碰全局 token 的用例必须持锁串行；与 http_proxy_flow.rs 的 SERIAL 同构。
+static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// mock 桌面端签发的配对码
 const MOCK_PAIRING_CODE: &str = "654321";
 /// verify/qr 签发的 token
@@ -523,6 +530,8 @@ async fn biometric_bind_http_shape() {
 
 #[tokio::test]
 async fn resolve_base_url_happy_path_with_target() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     // 复用 WS mock：connect_without_emit 保存 target 成功建连，在 disconnect
     // （清 target）之前解析 base URL
     let ws_server = common::MockDesktopServer::start().await;
@@ -555,6 +564,8 @@ async fn manager_with_target(port: u16) -> (Arc<AuthManager>, Arc<ConnectionMana
 
 #[tokio::test]
 async fn auth_manager_pairing_verify_full_flow() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     let mock = MockDesktop::start(MockMode::Happy).await;
     let (am, _conn) = manager_with_target(mock.addr.port()).await;
 
@@ -585,6 +596,8 @@ async fn auth_manager_pairing_verify_full_flow() {
 
 #[tokio::test]
 async fn auth_manager_verify_rejection_returns_false() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     let mock = MockDesktop::start(MockMode::VerifyRejected).await;
     let (am, _conn) = manager_with_target(mock.addr.port()).await;
 
@@ -610,6 +623,8 @@ async fn auth_manager_verify_rejection_returns_false() {
 
 #[tokio::test]
 async fn auth_manager_reauth_refreshes_token() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     let mock = MockDesktop::start(MockMode::Happy).await;
     let (am, _conn) = manager_with_target(mock.addr.port()).await;
 
@@ -632,6 +647,8 @@ async fn auth_manager_reauth_refreshes_token() {
 
 #[tokio::test]
 async fn auth_manager_reauth_rejection_returns_err() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     let mock = MockDesktop::start(MockMode::ReauthRejected).await;
     let (am, _conn) = manager_with_target(mock.addr.port()).await;
 
@@ -648,6 +665,8 @@ async fn auth_manager_reauth_rejection_returns_err() {
 
 #[tokio::test]
 async fn auth_manager_no_target_is_error() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     // 未设置 target：任何认证请求都应在发网络请求前失败（快速失败）
     let conn = ConnectionManager::new();
     let am = AuthManager::new(conn);
@@ -661,6 +680,8 @@ async fn auth_manager_no_target_is_error() {
 
 #[tokio::test]
 async fn auth_manager_transport_failure_marks_failed() {
+    let _serial = SERIAL.lock().unwrap();
+    clear_global_token();
     // target 指向无监听端口：网络故障 → Err + Failed 状态（不写凭据）
     let conn = ConnectionManager::new();
     let am = AuthManager::new(conn.clone());
