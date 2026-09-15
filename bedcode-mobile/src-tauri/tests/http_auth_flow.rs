@@ -18,8 +18,9 @@ use std::sync::{Arc, Mutex};
 
 use actix_web::{web, App, HttpResponse, HttpServer};
 use bedcode_lib::auth::http::{resolve_base_url, AuthHttpClient, DeviceAuthContext};
+use bedcode_lib::auth::{AuthManager, AuthStatus};
 use bedcode_lib::connection::manager::ConnectionManager;
-use bedcode_lib::state::clear_global_token;
+use bedcode_lib::state::{clear_global_token, get_global_token};
 use bedcode_lib::AppError;
 use serde_json::{json, Value};
 
@@ -536,5 +537,137 @@ async fn resolve_base_url_happy_path_with_target() {
     assert_eq!(base, format!("http://127.0.0.1:{}", ws_server.addr.port()));
 
     manager.disconnect().await;
+    clear_global_token();
+}
+
+// ==================== AuthManager 编排层（审计 P0：authenticate/refresh 主路径） ====================
+//
+// AuthHttpClient 层已在上方覆盖六端点 wire shape；此处验证 AuthManager 的状态机/
+// 凭据/全局 token 收尾（apply_auth_success），补 audit 标红的「manager.rs 生产路径零覆盖」。
+// 生物 challenge/verify 的本地签名依赖 Kotlin bridge，HTTP 形状由场景 ⑥ 覆盖。
+
+async fn manager_with_target(port: u16) -> (Arc<AuthManager>, Arc<ConnectionManager>) {
+    let conn = ConnectionManager::new();
+    let am = AuthManager::new(conn.clone());
+    conn.set_target("127.0.0.1".to_string(), port, None).await;
+    (am, conn)
+}
+
+#[tokio::test]
+async fn auth_manager_pairing_verify_full_flow() {
+    let mock = MockDesktop::start(MockMode::Happy).await;
+    let (am, _conn) = manager_with_target(mock.addr.port()).await;
+
+    // request_pairing → WaitingPairingCode
+    am.request_pairing().await.expect("pairing should succeed");
+    assert_eq!(am.get_status().await, AuthStatus::WaitingPairingCode);
+    let body = mock.last_body("/api/auth/pairing");
+    assert!(!body["deviceId"].as_str().unwrap_or("").is_empty(), "应携带设备 ID");
+    assert!(!body["fingerprint"].as_str().unwrap_or("").is_empty(), "应携带指纹");
+
+    // verify → Authenticated + 凭据/全局 token 落地
+    let ok = am
+        .verify_pairing_code(MOCK_PAIRING_CODE)
+        .await
+        .expect("verify should not error");
+    assert!(ok, "配对码有效应返回 true");
+    assert_eq!(am.get_status().await, AuthStatus::Authenticated);
+    let creds = am.get_credentials().await.expect("凭据已持久化");
+    assert_eq!(creds.session_token, MOCK_TOKEN);
+    assert_eq!(get_global_token(), MOCK_TOKEN, "全局 token 应同步");
+    let body = mock.last_body("/api/auth/verify");
+    assert_eq!(body["pairingCode"], MOCK_PAIRING_CODE);
+    assert_eq!(body["address"], "127.0.0.1");
+
+    mock.shutdown().await;
+    clear_global_token();
+}
+
+#[tokio::test]
+async fn auth_manager_verify_rejection_returns_false() {
+    let mock = MockDesktop::start(MockMode::VerifyRejected).await;
+    let (am, _conn) = manager_with_target(mock.addr.port()).await;
+
+    // 业务拒绝（1005）→ Ok(false) + Failed 状态，不写凭据
+    let ok = am
+        .verify_pairing_code("000000")
+        .await
+        .expect("业务拒绝是 Ok(false) 而非 Err");
+    assert!(!ok, "无效配对码应返回 false");
+    match am.get_status().await {
+        AuthStatus::Failed(msg) => {
+            assert!(msg.contains("1005"), "Failed 状态应携带业务码, got: {msg}");
+            assert!(msg.contains("Invalid or expired pairing code"), "err: {msg}");
+        }
+        other => panic!("期望 Failed 状态, got {other:?}"),
+    }
+    assert!(am.get_credentials().await.is_none(), "拒绝不得写凭据");
+    assert!(get_global_token().is_empty(), "拒绝不得写全局 token");
+
+    mock.shutdown().await;
+    clear_global_token();
+}
+
+#[tokio::test]
+async fn auth_manager_reauth_refreshes_token() {
+    let mock = MockDesktop::start(MockMode::Happy).await;
+    let (am, _conn) = manager_with_target(mock.addr.port()).await;
+
+    // reauth（断线重连）→ 签发刷新后的新 token，覆盖旧凭据
+    let ok = am
+        .authenticate_with_token(MOCK_TOKEN)
+        .await
+        .expect("reauth should succeed");
+    assert!(ok);
+    assert_eq!(am.get_status().await, AuthStatus::Authenticated);
+    let creds = am.get_credentials().await.expect("凭据已持久化");
+    assert_eq!(creds.session_token, MOCK_REAUTH_TOKEN, "refresh 语义：新 token 写回");
+    assert_eq!(get_global_token(), MOCK_REAUTH_TOKEN);
+    let body = mock.last_body("/api/auth/reauth");
+    assert_eq!(body["sessionToken"], MOCK_TOKEN, "请求体应带旧 token");
+
+    mock.shutdown().await;
+    clear_global_token();
+}
+
+#[tokio::test]
+async fn auth_manager_reauth_rejection_returns_err() {
+    let mock = MockDesktop::start(MockMode::ReauthRejected).await;
+    let (am, _conn) = manager_with_target(mock.addr.port()).await;
+
+    let err = am
+        .authenticate_with_token(MOCK_TOKEN)
+        .await
+        .expect_err("1001 应返回 Err");
+    assert!(err.to_string().contains("1001"), "err: {err}");
+    assert_eq!(am.get_status().await, AuthStatus::Failed(err.to_string()));
+
+    mock.shutdown().await;
+    clear_global_token();
+}
+
+#[tokio::test]
+async fn auth_manager_no_target_is_error() {
+    // 未设置 target：任何认证请求都应在发网络请求前失败（快速失败）
+    let conn = ConnectionManager::new();
+    let am = AuthManager::new(conn);
+    let err = am.request_pairing().await.expect_err("无 target 应 Err");
+    match &err {
+        AppError::Auth(msg) => assert!(msg.contains("No target device"), "err: {msg}"),
+        other => panic!("expected AppError::Auth, got {other:?}"),
+    }
+    clear_global_token();
+}
+
+#[tokio::test]
+async fn auth_manager_transport_failure_marks_failed() {
+    // target 指向无监听端口：网络故障 → Err + Failed 状态（不写凭据）
+    let conn = ConnectionManager::new();
+    let am = AuthManager::new(conn.clone());
+    conn.set_target("127.0.0.1".to_string(), 1, None).await;
+
+    let err = am.request_pairing().await.expect_err("连接拒绝应 Err");
+    assert_eq!(am.get_status().await, AuthStatus::Failed(err.to_string()));
+    assert!(am.get_credentials().await.is_none());
     clear_global_token();
 }

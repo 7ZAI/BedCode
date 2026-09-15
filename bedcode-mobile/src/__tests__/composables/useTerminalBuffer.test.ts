@@ -1,62 +1,56 @@
 /**
- * useTerminalBuffer 单元测试（10 号票重写）
+ * useTerminalBuffer 单元测试（Rust 后端持有终端 WS 后的重写）
  *
- * 覆盖：subscribeSession（socket 驱动 + subscribe_ok 确认）、
- * unsubscribeSession（关闭订阅不通知后端——命令已删）、prepareSession 轮询、
- * handleDisconnect/handleSessionStopped/markSessionRunning/handleSessionRemoved、
- * registerRealtimeHandler 写队列。
+ * 覆盖：subscribeSession（terminalSubscribe 触发 + terminal-state 事件确认）、
+ * unsubscribeSession（退出页面 = 注销 handler + 切 batch，订阅保持）、
+ * prepareSession 轮询、handleDisconnect/handleSessionStopped/markSessionRunning/
+ * handleSessionRemoved、registerRealtimeHandler 写队列（onClear / onRawOutput /
+ * writeParsed 历史拼接）。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
+const eventHandlers: Record<string, ((payload: unknown) => void) | null> = {}
+const listenMock = vi.fn()
+const emitMock = vi.fn().mockResolvedValue(undefined)
+
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(),
-  emit: vi.fn().mockResolvedValue(undefined),
+  listen: (...args: unknown[]) => (listenMock as (...a: unknown[]) => unknown)(...args),
+  emit: (...args: unknown[]) => (emitMock as (...a: unknown[]) => unknown)(...args),
 }))
 
-// mock 终端 socket
-let capturedHandlers: Record<string, any> | null = null
-let fakeSocket: {
-  start: ReturnType<typeof vi.fn>
-  subscribe: ReturnType<typeof vi.fn>
-  sendInput: ReturnType<typeof vi.fn>
-  stop: ReturnType<typeof vi.fn>
-  reconnect: ReturnType<typeof vi.fn>
-  isOpen: ReturnType<typeof vi.fn>
-}
-const createTerminalSocketMock = vi.fn()
-vi.mock('@/composables/useTerminalSocket', () => ({
-  createTerminalSocket: (...args: unknown[]) => createTerminalSocketMock(...args),
+const cmd = vi.hoisted(() => ({
+  terminalSubscribe: vi.fn(async () => {}),
+  terminalUnsubscribe: vi.fn(async () => {}),
+  terminalUnsubscribeAll: vi.fn(async () => {}),
+  terminalRemove: vi.fn(async () => {}),
+  terminalSendInput: vi.fn(async () => {}),
+  terminalAckRendered: vi.fn(async () => {}),
+  terminalSetMode: vi.fn(async () => {}),
+  terminalGetHistory: vi.fn(async (_s: string, _f: number) => ({
+    from: 0,
+    minOffset: 0,
+    snapshotOffset: 0,
+    historyBytes: 0,
+    dataBase64: '',
+  })),
 }))
-
-vi.mock('@/composables/useMobileCommands', () => ({
-  getTerminalWsInfo: vi.fn().mockResolvedValue({ url: 'ws://host:8765/ws/terminal/session/s1', token: 'jwt' }),
-}))
+vi.mock('@/composables/useMobileCommands', () => cmd)
 
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
 import type { Terminal } from '@xterm/xterm'
 
-function setupSocket() {
-  fakeSocket = {
-    start: vi.fn(),
-    subscribe: vi.fn(),
-    sendInput: vi.fn(),
-    stop: vi.fn(),
-    reconnect: vi.fn(),
-    isOpen: vi.fn(() => false),
-    ackRendered: vi.fn(),
-  }
-  capturedHandlers = null
-  createTerminalSocketMock.mockImplementation((handlers: unknown) => {
-    capturedHandlers = handlers as Record<string, any>
-    return fakeSocket
-  })
-  return fakeSocket
+function emitState(sessionId: string, phase: string, detail?: string) {
+  eventHandlers['terminal-state']!({ payload: { session_id: sessionId, phase, detail } })
 }
 
-describe('useTerminalBuffer.subscribeSession', () => {
+async function flushAsync(n = 3) {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0))
+}
+
+describe('useTerminalBuffer（Rust 驱动）', () => {
   let store: ReturnType<typeof useTerminalBufferStore>
   let terminalBuffer: ReturnType<typeof useTerminalBuffer>
 
@@ -65,86 +59,96 @@ describe('useTerminalBuffer.subscribeSession', () => {
     store = useTerminalBufferStore()
     terminalBuffer = useTerminalBuffer()
     vi.clearAllMocks()
-    setupSocket()
+    eventHandlers['terminal-frame'] = null
+    eventHandlers['terminal-state'] = null
+    ;(vi.mocked(listenMock).mockImplementation as any)(async (name: string, cb: (p: unknown) => void) => {
+      eventHandlers[name] = cb
+      return () => {}
+    })
   })
 
-  it('首次订阅：建 socket + 发订阅帧；subscribe_ok 后标记已订阅', async () => {
+  it('首次订阅：触发 terminalSubscribe；terminal-state 事件确认已订阅', async () => {
     await terminalBuffer.subscribeSession('s1')
+    await flushAsync()
 
-    expect(fakeSocket.start).toHaveBeenCalledWith('s1')
-    expect(fakeSocket.subscribe).toHaveBeenCalled()
-    // subscribe_ok 异步到达后置 subscribed
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
+    expect(store.getBuffer('s1')!.subscribed).toBe(false)
+
+    emitState('s1', 'history')
     expect(store.getBuffer('s1')!.subscribed).toBe(true)
     expect(store.getBuffer('s1')!.phase).toBe('history')
   })
 
-  it('已订阅会话跳过：直接返回快照元数据，不重复建连', async () => {
+  it('已订阅会话重复订阅：直接返回快照，不重复触发', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-    fakeSocket.start.mockClear()
-
+    emitState('s1', 'live')
+    cmd.terminalSubscribe.mockClear()
     const result = await terminalBuffer.subscribeSession('s1')
-    expect(result).toEqual({ snapshotSeq: 10, minSeq: 0, historyCount: 0 })
-    expect(fakeSocket.start).not.toHaveBeenCalled()
+    expect(result).toBeTruthy()
+    expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
   })
 
-  it('unsubscribeSession：注销 handler + 标记未订阅 + 停 socket', async () => {
+  it('unsubscribeSession：注销 handler + 切 batch；Rust 订阅保持（页面退出语义）', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    emitState('s1', 'live')
     store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+    await flushAsync()
 
     await terminalBuffer.unsubscribeSession('s1')
+    await flushAsync()
 
-    expect(fakeSocket.stop).toHaveBeenCalled()
-    const buf = store.getBuffer('s1')!
-    expect(buf.subscribed).toBe(false)
+    // 页面退出：注销 handler + batch 模式；不取消 Rust 链路
     expect(store.realtimeHandlers.has('s1')).toBe(false)
+    expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'batch')
+    expect(cmd.terminalUnsubscribe).not.toHaveBeenCalled()
+    expect(store.getBuffer('s1')!.subscribed).toBe(true)
   })
 
-  it('handleDisconnect：标记所有 buffer 未订阅', async () => {
+  it('handleDisconnect：标记所有 buffer 未订阅 + 全量取消 Rust 链路', async () => {
     await terminalBuffer.subscribeSession('s1')
-    await terminalBuffer.subscribeSession('s2')
-
+    emitState('s1', 'live')
     terminalBuffer.handleDisconnect()
-
+    await flushAsync()
+    expect(cmd.terminalUnsubscribeAll).toHaveBeenCalled()
     expect(store.getBuffer('s1')!.subscribed).toBe(false)
-    expect(store.getBuffer('s2')!.subscribed).toBe(false)
   })
 
-  it('handleSessionStopped：标记停止 + 停 socket（handler 保留供重启渲染）', async () => {
+  it('handleSessionStopped：标记停止 + 取消订阅（handler 保留供重启渲染）', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    emitState('s1', 'live')
     store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
 
     await terminalBuffer.handleSessionStopped('s1')
+    await flushAsync()
 
+    expect(cmd.terminalUnsubscribe).toHaveBeenCalledWith('s1')
     expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
     expect(store.getBuffer('s1')!.subscribed).toBe(false)
-    expect(store.getBuffer('s1')!.lastRenderedSeq).toBeNull()
+    expect(store.getBuffer('s1')!.lastRenderedOffset).toBeNull()
     // handler 生命周期归视图：会话停止不注销
     expect(store.realtimeHandlers.has('s1')).toBe(true)
   })
 
-  it('markSessionRunning：复位 sessionStopped（同 id 重启后可重新订阅）', async () => {
+  it('markSessionRunning：复位 sessionStopped + 重新订阅', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
     store.markSessionStopped('s1')
     const buf = store.getBuffer('s1')!
 
     terminalBuffer.markSessionRunning('s1')
+    await flushAsync()
 
     expect(buf.sessionStopped).toBe(false)
-    expect(buf.subscribed).toBe(false)
+    expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
   })
 
-  it('handleSessionRemoved：清理 buffer 与 handler', async () => {
+  it('handleSessionRemoved：清理 buffer 与 handler + terminalRemove', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
     store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
 
     await terminalBuffer.handleSessionRemoved('s1')
+    await flushAsync()
 
+    expect(cmd.terminalRemove).toHaveBeenCalledWith('s1')
     expect(store.buffers.has('s1')).toBe(false)
     expect(store.realtimeHandlers.has('s1')).toBe(false)
   })
@@ -154,11 +158,11 @@ describe('useTerminalBuffer.subscribeSession', () => {
       clear: vi.fn(),
       write: vi.fn(),
       dispose: vi.fn(),
-      // 渲染背压接线（registerRealtimeHandler 挂 onWriteParsed）
       onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
     } as unknown as Terminal
 
     terminalBuffer.registerRealtimeHandler('s1', terminal)
+    await flushAsync()
     const handler = store.realtimeHandlers.get('s1')!
     handler.onClear?.()
 
@@ -167,9 +171,9 @@ describe('useTerminalBuffer.subscribeSession', () => {
 
   it('prepareSession：订阅确认到达 → 标记就绪（终端页 consumePrepared 消费）', async () => {
     const readyPromise = terminalBuffer.prepareSession('s1')
-    // 轮询期间 subscribe_ok 到达
+    // 轮询期间 Rust 链路状态到 live
     setTimeout(() => {
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+      emitState('s1', 'live')
     }, 50)
 
     const ready = await readyPromise
@@ -190,17 +194,18 @@ describe('useTerminalBuffer.subscribeSession', () => {
     }
   })
 
-  it('registerRealtimeHandler：历史回放路径同样喂 onRawOutput（TUI 嗅探不丢历史中的 DECSET 1006h）', async () => {
-    // 场景：进入终端页前 opencode 已启用 SGR 鼠标上报，1006h 只存在于
-    // 历史缓存中——回放若绕过原始字节钩子，嗅探器丢失该状态 → isTuiMode
-    // 误判关闭 → 备用屏幕上触摸滚动完全失效
+  it('registerRealtimeHandler：历史拼接路径同样喂 onRawOutput（TUI 嗅探不丢历史中的 DECSET 1006h）', async () => {
+    // 场景：进入终端页前 opencode 已启用 SGR 鼠标上报，1006h 只存在于历史中
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-    capturedHandlers!.onHistoryEnd(10)
-    // 视图未挂载（无 handler）：帧仅入历史缓存
-    const tuiBytes = new TextEncoder().encode('prompt\x1b[?1049h\x1b[?1006h')
-    capturedHandlers!.onFrame({ data: tuiBytes, seq: 11, eventCount: 1, lastSeq: 11, isWaiting: false })
-    expect(store.getBuffer('s1')!.historyCache.length).toBe(1)
+    emitState('s1', 'live')
+    // 历史承载 TUI 状态字节（含 1006h）
+    cmd.terminalGetHistory.mockImplementationOnce(async () => ({
+      from: 0,
+      minOffset: 0,
+      snapshotOffset: 20,
+      historyBytes: 20,
+      dataBase64: btoa('prompt\x1b[?1049h\x1b[?1006h'),
+    }))
 
     const rawFed: Uint8Array[] = []
     const written: Uint8Array[] = []
@@ -224,14 +229,12 @@ describe('useTerminalBuffer.subscribeSession', () => {
     expect(fedText).toContain('\x1b[?1006h')
   })
 
-  it('sendInput：转发到 store（socket 输入帧）', async () => {
+  it('sendInput：转发到 store（terminalSendInput 命令）', async () => {
     await terminalBuffer.subscribeSession('s1')
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-    capturedHandlers!.onHistoryEnd(10)
-    fakeSocket.isOpen.mockReturnValue(true)
-
+    emitState('s1', 'live')
     const ok = terminalBuffer.sendInput('s1', 'echo hi', 'enter')
     expect(ok).toBe(true)
-    expect(fakeSocket.sendInput).toHaveBeenCalledWith('echo hi', 'enter')
+    await flushAsync()
+    expect(cmd.terminalSendInput).toHaveBeenCalledWith('s1', 'echo hi', 'enter')
   })
 })

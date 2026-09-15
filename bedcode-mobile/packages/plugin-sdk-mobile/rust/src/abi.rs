@@ -15,7 +15,13 @@
 ///   `dial-peer-endpoint` / `close` / `set-shared-roots` 三原语与旧函数并存；
 ///   新增 `host-mdns`（browse-only）与 `host-platform` 接口。纯增量变更，
 ///   v6 插件二进制不受影响
-pub const ABI_VERSION: u32 = 8;
+/// - v8: host-peer WIT 收缩 ADR 0022 v3 终态（commit 56ee094cb）：host-peer
+///   移动终态 12 函数定稿（dial-peer 转正、send-files 返回传输句柄、删除
+///   旧式寻址函数集）。破坏性收缩，旧插件二进制须重编译
+/// - v9: host-peer 传输控制三原语（`pause-transfer` / `resume-transfer` /
+///   `resume-all-transfers`），支撑暂停/恢复（issue 14）。纯增量变更，
+///   v8 插件二进制不受影响
+pub const ABI_VERSION: u32 = 9;
 
 #[cfg(test)]
 mod tests {
@@ -24,6 +30,6 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        assert_eq!(ABI_VERSION, 8);
+        assert_eq!(ABI_VERSION, 9);
     }
 }

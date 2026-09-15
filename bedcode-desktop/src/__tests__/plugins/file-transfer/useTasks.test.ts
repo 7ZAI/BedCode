@@ -182,6 +182,79 @@ describe('useTasks orchestration', () => {
     expect(env.calls).toContainEqual({ id: 'file-transfer.retry', args: { taskId: 'batch-9' } })
   })
 
+  it('cancel reports false when backend ok=false (no matching task / no change)', async () => {
+    // Bug 6 回归：cancel 不检查 {ok} 时用户点取消无感知（任务仍在）
+    env.onCommand('file-transfer.cancel', () => ({ ok: false }))
+    const tasks = useTasks(env.context)
+
+    await expect(tasks.cancel('ghost')).resolves.toBe(false)
+  })
+
+  it('direction mapping accepts both wire spellings (send/download) as upload/download', async () => {
+    // Bug 2 回归：旧实现只显式匹配 'receive'，后端返 'download' 会被误判 upload
+    env.onCommand('file-transfer.list-tasks', () => [
+      makeWireTask({ batchId: 'b-down', direction: 'download' }),
+      makeWireTask({ batchId: 'b-send', direction: 'send' }),
+      makeWireTask({ batchId: 'b-up', direction: 'upload' }),
+    ])
+    const tasks = useTasks(env.context)
+
+    await tasks.refresh()
+
+    expect(tasks.tasks.value.find((t) => t.id === 'b-down')?.direction).toBe('download')
+    expect(tasks.tasks.value.find((t) => t.id === 'b-send')?.direction).toBe('upload')
+    expect(tasks.tasks.value.find((t) => t.id === 'b-up')?.direction).toBe('upload')
+  })
+
+  it('unknown wire status falls back to failed instead of passing through unchecked', async () => {
+    // Bug 17 回归：兜底断言不再放行未知状态（未来后端新状态不再静默渲染）
+    env.onCommand('file-transfer.list-tasks', () => [
+      makeWireTask({ batchId: 'b-unknown', status: 'unknown' }),
+    ])
+    const tasks = useTasks(env.context)
+
+    await tasks.refresh()
+
+    expect(tasks.tasks.value[0]?.state).toBe('failed')
+  })
+
+  it('paused and pending wire statuses map to model states (resumable queue entries)', async () => {
+    env.onCommand('file-transfer.list-tasks', () => [
+      makeWireTask({ batchId: 'b-pause', status: 'paused', rateBps: 0 }),
+      makeWireTask({ batchId: 'b-queued', status: 'pending', rateBps: 0 }),
+    ])
+    const tasks = useTasks(env.context)
+
+    await tasks.refresh()
+
+    const paused = tasks.tasks.value.find((tk) => tk.id === 'b-pause')
+    expect(paused?.state).toBe('paused')
+    expect(tasks.hasPaused.value).toBe(true)
+    // paused 保留已传字节（续传展示）
+    expect(paused?.offset).toBe(512)
+    // 暂停/排队不计入总速率
+    expect(tasks.totalSpeed.value).toBe(0)
+  })
+
+  it('pause/resume/resumeAll route commands and resumeAll returns the count', async () => {
+    env.onCommand('file-transfer.pause', () => true)
+    env.onCommand('file-transfer.resume', () => true)
+    env.onCommand('file-transfer.resume-all', () => ({ resumed: 2 }))
+    const tasks = useTasks(env.context)
+
+    await tasks.pause('batch-9')
+    await tasks.resume('batch-9')
+    const n = await tasks.resumeAll()
+
+    expect(env.calls).toContainEqual({ id: 'file-transfer.pause', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume-all', args: {} })
+    expect(n).toBe(2)
+    // 命令布尔返回透传（resume Live 失败回落 redial 时后端返 false）
+    await expect(tasks.pause('batch-9')).resolves.toBe(true)
+    await expect(tasks.resume('batch-9')).resolves.toBe(true)
+  })
+
   it('sendPickedFiles refuses an empty picker result without enqueueing', async () => {
     env.onCommand('file-transfer.pick-files', () => [])
     env.onCommand('file-transfer.enqueue', () => ({}))

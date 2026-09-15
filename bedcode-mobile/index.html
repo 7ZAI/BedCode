@@ -4,10 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <!-- 移动端视口配置 -->
+    <!-- 移动端视口配置
+      interactive-widget=resizes-content（Chromium 108+）：软键盘弹出时收缩
+      初始包含块（ICB），布局视口与可视区等高——消除 visual viewport 可平移
+      空间（用户上滑把输入条拖离键盘露出空白），并让 window.innerHeight/
+      ResizeObserver 直接感知键盘高度；不支持的 WebView 忽略该参数，回退
+      JS 键盘避让（TerminalView 双通道检测 + 根容器收缩） -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <!-- iOS 状态栏样式 -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

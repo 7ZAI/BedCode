@@ -40,6 +40,38 @@ describe('PluginIcon', () => {
     expect(wrapper.text()).toContain('🧩')
   })
 
+  it('SVG 消毒：script 注入被移除（XSS 纵深防御）', () => {
+    const wrapper = mountIcon('<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><script>alert("xss")</script></svg>')
+    // 消毒后 <script> 整体移除，恶意载荷不进入 DOM
+    expect(wrapper.find('script').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain('alert')
+    // 合法 path 保留
+    expect(wrapper.find('svg path').exists()).toBe(true)
+  })
+
+  it('SVG 消毒：事件属性（onclick）被移除', () => {
+    const wrapper = mountIcon('<svg viewBox="0 0 24 24" onclick="alert(1)"><path d="M4 4h16v16H4z"/></svg>')
+    const svg = wrapper.find('svg')
+    expect(svg.attributes('onclick')).toBeUndefined()
+    expect(wrapper.html()).not.toContain('alert(1)')
+  })
+
+  it('SVG 消毒：javascript: href 被移除', () => {
+    const wrapper = mountIcon('<svg viewBox="0 0 24 24"><a href="javascript:alert(1)"><path d="M4 4h16v16H4z"/></a></svg>')
+    expect(wrapper.html()).not.toContain('javascript:')
+    // 链接元素仍在但危险 href 已被清空
+    const anchor = wrapper.find('a')
+    expect(anchor.exists()).toBe(true)
+    expect(anchor.attributes('href')).toBeUndefined()
+  })
+
+  it('SVG 消毒：foreignObject 注入被移除', () => {
+    const wrapper = mountIcon('<svg viewBox="0 0 24 24"><foreignObject><body xmlns="http://www.w3.org/1999/xhtml">xss</body></foreignObject><path d="M4 4h16v16H4z"/></svg>')
+    expect(wrapper.find('foreignObject').exists()).toBe(false)
+    expect(wrapper.html()).not.toContain('xss')
+    expect(wrapper.find('svg path').exists()).toBe(true)
+  })
+
   it('无 icon 时回退到字母头像', () => {
     const wrapper = mountIcon('')
     expect(wrapper.find('.letter-avatar').exists()).toBe(true)

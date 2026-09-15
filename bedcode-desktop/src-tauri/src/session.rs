@@ -28,9 +28,9 @@ pub use storage::{SessionStorage, SessionStore};
 
 // 从 session_components 重导出
 pub use session_components::{
-    CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry, DefaultConfigMapper,
-    DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector, NamingService,
-    PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector, resolve_initial_size,
+    resolve_initial_size, CanonicalRendererRegistry, ConfigMapper, DefaultCanonicalRendererRegistry,
+    DefaultConfigMapper, DefaultNamingService, DefaultPtyRegistry, DefaultSessionInfoRegistry, DefaultStatusDetector,
+    NamingService, PtyRegistry, RendererSource, ResizeOutcome, SessionInfoRegistry, StatusDetector,
 };
 
 // 从 event_bus 重导出
@@ -48,4 +48,4 @@ pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
 pub use input_line::{SessionInputListener, SubmittedLineTracker};
 
 // Re-export from enums
-pub use crate::enums::{SessionStatus, SessionType, SubscribeMode};
+pub use crate::enums::{SessionStatus, SessionType};

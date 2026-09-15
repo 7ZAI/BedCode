@@ -211,6 +211,9 @@ describe('useTasks orchestration', () => {
     env.onCommand('file-transfer.approve-batch', () => true)
     env.onCommand('file-transfer.reject-batch', () => true)
     env.onCommand('file-transfer.cancel-receiving', () => true)
+    env.onCommand('file-transfer.pause', () => true)
+    env.onCommand('file-transfer.resume', () => true)
+    env.onCommand('file-transfer.resume-all', () => ({ resumed: 2 }))
     const tasks = useTasks(env.context)
 
     await tasks.cancel('batch-9')
@@ -219,10 +222,17 @@ describe('useTasks orchestration', () => {
     await tasks.rejectBatch('pb-1')
     await tasks.cancelReceiving('r-1')
 
+    await tasks.pause('batch-9')
+    await tasks.resume('batch-9')
+    await tasks.resumeAll()
+
     expect(env.calls).toContainEqual({ id: 'file-transfer.cancel', args: { taskId: 'batch-9' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.retry', args: { taskId: 'batch-9' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.approve-batch', args: { batchId: 'pb-1' } })
     expect(env.calls).toContainEqual({ id: 'file-transfer.reject-batch', args: { batchId: 'pb-1' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.pause', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume', args: { taskId: 'batch-9' } })
+    expect(env.calls).toContainEqual({ id: 'file-transfer.resume-all', args: {} })
     expect(env.calls).toContainEqual({
       id: 'file-transfer.cancel-receiving',
       args: { sessionId: 'r-1' },

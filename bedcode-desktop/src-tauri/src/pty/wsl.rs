@@ -15,20 +15,13 @@ pub struct WslDistro {
     pub version: u8,
 }
 
-/// 列出已安装的 WSL 发行版
-pub fn list_distributions() -> Result<Vec<WslDistro>> {
-    // 尝试使用 UTF-8 编码，如果失败则使用系统默认编码
-    let output = create_command("cmd.exe")
-        .args(["/c", "chcp 65001 >nul 2>&1 && wsl --list --verbose"])
-        .output()?;
-
-    if !output.status.success() {
-        return Ok(vec![]);
-    }
-
+/// 解码 `wsl --list --verbose` 原始输出字节为可解析文本
+///
+/// 解码回退链：UTF-8 → UTF-16LE（Windows 原生编码，实际输出恒为 UTF-16LE）→ GBK。
+/// UTF-16LE 解码结果会夹带 `\x00` 空字节，此处一并清除。
+fn decode_wsl_output(stdout: &[u8]) -> String {
     // 尝试 UTF-8 解码，失败则尝试 UTF-16LE，最后回退到 GBK
-    // 注意：wsl --list --verbose 输出的是 UTF-16LE 编码
-    let stdout = match String::from_utf8(output.stdout.clone()) {
+    match String::from_utf8(stdout.to_vec()) {
         Ok(s) => {
             // 检查是否包含空字节（UTF-16 特征）
             if s.contains('\x00') {
@@ -39,18 +32,25 @@ pub fn list_distributions() -> Result<Vec<WslDistro>> {
         }
         Err(_) => {
             // 先尝试 UTF-16LE（Windows 原生编码）
-            let (decoded, _, had_errors) = UTF_16LE.decode(&output.stdout);
+            let (decoded, _, had_errors) = UTF_16LE.decode(stdout);
             if !had_errors {
                 // 移除 UTF-16LE 解码后的空字节
                 decoded.to_string().replace('\x00', "")
             } else {
                 // 回退到 GBK
-                let mutgbk = encoding_rs::GBK;
-                let (gbk_decoded, _, _) = mutgbk.decode(&output.stdout);
+                let gbk = encoding_rs::GBK;
+                let (gbk_decoded, _, _) = gbk.decode(stdout);
                 gbk_decoded.to_string()
             }
         }
-    };
+    }
+}
+
+/// 解析 `wsl --list --verbose` 输出文本为发行版列表（纯函数，可单测）
+///
+/// 首行为表头，跳过；每行结构：`[*] 名字 状态 版本`。
+/// 版本列解析失败时回退 2（默认 WSL2）。
+pub fn parse_wsl_list_output(stdout: &str) -> Vec<WslDistro> {
     let mut distros = Vec::new();
 
     for line in stdout.lines().skip(1) {
@@ -77,7 +77,20 @@ pub fn list_distributions() -> Result<Vec<WslDistro>> {
         }
     }
 
-    Ok(distros)
+    distros
+}
+
+/// 列出已安装的 WSL 发行版
+pub fn list_distributions() -> Result<Vec<WslDistro>> {
+    let output = create_command("cmd.exe")
+        .args(["/c", "chcp 65001 >nul 2>&1 && wsl --list --verbose"])
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(vec![]);
+    }
+
+    Ok(parse_wsl_list_output(&decode_wsl_output(&output.stdout)))
 }
 
 /// 在 WSL 中执行命令
@@ -107,31 +120,28 @@ pub fn execute_command(distro: &str, command: &str, working_dir: Option<&str>) -
 /// \\wsl$\Ubuntu\home -> /home
 /// \\wsl.localhost\Ubuntu\home -> /home (WSL2 新格式)
 pub fn windows_to_wsl_path(path: &str) -> String {
+    // 先把正斜杠统一为反斜杠，使 / 与 \ 两种写法走同一套解析（末尾分支会转回）
+    let path = path.replace('/', "\\");
+
     // 检查是否是 WSL 路径 (\\wsl$\... 或 \\wsl.localhost\...)
-    // 支持两种格式：
-    // - \\wsl$\Ubuntu\home\user (旧格式)
-    // - \\wsl.localhost\Ubuntu\home\user (新格式，WSL2 1903+)
-    if path.starts_with("\\\\wsl.localhost\\") || path.starts_with("//wsl.localhost/") {
-        // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user
-        let path = path.trim_start_matches('\\').trim_start_matches('/');
-        let path = path
-            .trim_start_matches("wsl.localhost")
-            .trim_start_matches('\\')
-            .trim_start_matches('/');
-        let parts: Vec<&str> = path.splitn(2, '\\').collect();
+    if path.starts_with("\\\\wsl.localhost\\") {
+        // 新格式: \\wsl.localhost\Ubuntu\home\user -> /home/user（WSL2 1903+）
+        let rest = path.trim_start_matches('\\').trim_start_matches("wsl.localhost\\");
+        let parts: Vec<&str> = rest.splitn(2, '\\').collect();
         if parts.len() >= 2 {
             return format!("/{}", parts[1].replace('\\', "/"));
         }
-        return path.replace('\\', "/");
+        return rest.replace('\\', "/");
     }
 
-    if path.starts_with("\\\\wsl$") || path.starts_with("//wsl$") {
-        let path = path.trim_start_matches('\\').trim_start_matches('/');
-        let parts: Vec<&str> = path.splitn(3, '\\').collect();
+    if path.starts_with("\\\\wsl$") {
+        // 旧格式: \\wsl$\Ubuntu\home\user -> /home/user
+        let rest = path.trim_start_matches('\\');
+        let parts: Vec<&str> = rest.splitn(3, '\\').collect();
         if parts.len() >= 3 {
             return format!("/{}", parts[2].replace('\\', "/"));
         }
-        return path.replace('\\', "/");
+        return rest.replace('\\', "/");
     }
 
     // 检查是否是 Windows 驱动器路径 (C:\...)
@@ -197,6 +207,66 @@ mod tests {
     }
 
     #[test]
+    fn test_windows_to_wsl_path_forward_slash_forms() {
+        // 正斜杠形式必须与反斜杠形式等价（票据 01：曾解析出发行版名残留）
+        assert_eq!(
+            windows_to_wsl_path("//wsl.localhost/Ubuntu/home/user"),
+            "/home/user"
+        );
+        assert_eq!(windows_to_wsl_path("//wsl$/Ubuntu/home/user"), "/home/user");
+        // 正斜杠磁盘路径同样归一化
+        assert_eq!(windows_to_wsl_path("C:/Users/test"), "/mnt/c/Users/test");
+        // 类 Unix 路径透传不受归一化影响
+        assert_eq!(windows_to_wsl_path("/home/user"), "/home/user");
+    }
+
+    #[test]
+    fn test_parse_wsl_list_output_default_marker_and_state() {
+        // `*` 前缀 → is_default=true，名字干净无星号；状态列、版本列解析
+        let out = "  NAME      STATE           VERSION\n* Ubuntu    Running         2\n Debian     Stopped         1\n";
+        let distros = parse_wsl_list_output(out);
+        assert_eq!(distros.len(), 2);
+        assert!(distros[0].is_default);
+        assert_eq!(distros[0].name, "Ubuntu");
+        assert_eq!(distros[0].state, "Running");
+        assert_eq!(distros[0].version, 2);
+        assert!(!distros[1].is_default);
+        assert_eq!(distros[1].name, "Debian");
+        assert_eq!(distros[1].version, 1);
+    }
+
+    #[test]
+    fn test_parse_wsl_list_output_version_fallback_and_line_skips() {
+        // 版本列非法 → 回退 2；首行表头 / 空行 / 少于 3 列的行跳过
+        let out = "  NAME      STATE           VERSION\n\n* Unknown   Running         ???\n    OnlyName\n  Two      Cols\n";
+        let distros = parse_wsl_list_output(out);
+        assert_eq!(distros.len(), 1);
+        assert_eq!(distros[0].name, "Unknown");
+        assert!(distros[0].is_default);
+        assert_eq!(distros[0].version, 2);
+    }
+
+    #[test]
+    fn test_parse_wsl_list_output_empty() {
+        assert!(parse_wsl_list_output("").is_empty());
+        assert!(parse_wsl_list_output("  NAME      STATE           VERSION\n").is_empty());
+    }
+
+    #[test]
+    fn test_decode_wsl_output_utf16le_strips_nul_bytes() {
+        // UTF-16LE 编码样本（含 \x00），解码后空字节被清除
+        let utf16: Vec<u8> = b"* Ubuntu Running 2\n".iter().flat_map(|&b| [b, 0]).collect();
+        let decoded = decode_wsl_output(&utf16);
+        assert_eq!(decoded, "* Ubuntu Running 2\n");
+    }
+
+    #[test]
+    fn test_decode_wsl_output_utf8_passthrough() {
+        let decoded = decode_wsl_output(b"* Ubuntu Running 2\n");
+        assert_eq!(decoded, "* Ubuntu Running 2\n");
+    }
+
+    #[test]
     fn test_wsl_to_windows_path() {
         assert_eq!(wsl_to_windows_path("/mnt/c/Users/test", None), "C:\\Users\\test");
         assert_eq!(
@@ -205,59 +275,4 @@ mod tests {
         );
     }
 
-    /// 测试获取 WSL2 发行版列表
-    /// 运行方式: cargo test --package bedcode_lib --lib pty::wsl::tests::test_list_wsl_distributions -- --nocapture
-    #[test]
-    fn test_list_wsl_distributions() {
-        println!("\n========== Testing WSL Distribution List ==========");
-
-        // 检查 WSL 是否可用
-        let available = is_wsl_available();
-        println!("WSL Available: {}", available);
-
-        if !available {
-            println!("WSL is not installed or not enabled. Skipping test.");
-            return;
-        }
-
-        // 获取发行版列表
-        let result = list_distributions();
-        match result {
-            Ok(distros) => {
-                println!("Found {} distribution(s):", distros.len());
-                for distro in &distros {
-                    println!(
-                        "  - {} (default: {}, state: {}, version: {})",
-                        distro.name, distro.is_default, distro.state, distro.version
-                    );
-                }
-
-                // 验证至少有一个发行版
-                assert!(!distros.is_empty(), "Expected at least one WSL distribution");
-
-                // 验证默认发行版
-                let has_default = distros.iter().any(|d| d.is_default);
-                assert!(has_default, "Expected a default WSL distribution");
-            }
-            Err(e) => {
-                panic!("Failed to list distributions: {}", e);
-            }
-        }
-
-        // 测试获取默认发行版
-        let default_result = get_default_distro();
-        match default_result {
-            Ok(Some(default)) => {
-                println!("Default distribution: {}", default);
-            }
-            Ok(None) => {
-                println!("No default distribution found");
-            }
-            Err(e) => {
-                println!("Failed to get default distribution: {}", e);
-            }
-        }
-
-        println!("========== Test Completed ==========\n");
-    }
 }

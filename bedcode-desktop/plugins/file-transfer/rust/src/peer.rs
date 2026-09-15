@@ -122,21 +122,40 @@ fn load_entries(h: &WasmHost) -> Result<Vec<TransferEntry>> {
         .collect())
 }
 
-/// 全量回写（快照规模 ≤200 + 进行中条目，SQLite 本地写开销可接受）
-fn persist_entries(h: &WasmHost, entries: &[TransferEntry]) {
-    let _ = h.plugin_db_execute("DELETE FROM transfer_entries");
-    for e in entries {
-        let payload = serde_json::to_string(e).unwrap_or_default();
-        let _ = h.plugin_db_execute_params(
-            "INSERT INTO transfer_entries (batch_id, direction, status, payload) VALUES (?1, ?2, ?3, ?4)",
-            &[
-                serde_json::Value::String(e.batch_id.clone()),
-                serde_json::Value::String(e.direction.clone()),
-                serde_json::Value::String(e.status.clone()),
-                serde_json::Value::String(payload),
-            ],
-        );
+/// 全量回写（快照规模 ≤200 + 进行中条目）
+///
+/// **单事务**包裹 DELETE + N INSERT。此前逐条独立事务 ⇒ 每次 flush 触发 N+1 次
+/// 日志写入与 fsync，并长时间持有插件库写锁；真机实证：传输中插件库持续处于
+/// EXCLUSIVE 锁（每秒数百次 write()），期间 `list-*` 全被阻塞 —— 表现即
+/// 「传输面板没有任务卡片」。事务化后每次 flush 只提交一次。
+///
+/// 失败即 ROLLBACK：半写状态（DELETE 已生效、INSERT 缺失）等于整段历史丢失。
+fn persist_entries<H: bedcode_plugin_api::host::HostPluginDatabase>(h: &H, entries: &[TransferEntry]) {
+    if h.plugin_db_execute("BEGIN IMMEDIATE").is_err() {
+        return;
     }
+    let mut ok = h.plugin_db_execute("DELETE FROM transfer_entries").is_ok();
+    if ok {
+        for e in entries {
+            let payload = serde_json::to_string(e).unwrap_or_default();
+            let inserted = h
+                .plugin_db_execute_params(
+                    "INSERT INTO transfer_entries (batch_id, direction, status, payload) VALUES (?1, ?2, ?3, ?4)",
+                    &[
+                        serde_json::Value::String(e.batch_id.clone()),
+                        serde_json::Value::String(e.direction.clone()),
+                        serde_json::Value::String(e.status.clone()),
+                        serde_json::Value::String(payload),
+                    ],
+                )
+                .is_ok();
+            if !inserted {
+                ok = false;
+                break;
+            }
+        }
+    }
+    let _ = h.plugin_db_execute(if ok { "COMMIT" } else { "ROLLBACK" });
 }
 
 /// 变更后统一出口：持久化 + 四路视图派发（tasks/receiving 仅进行中，
@@ -326,7 +345,9 @@ pub(crate) fn disconnect_peer(h: &WasmHost, args: &serde_json::Value) -> Result<
 fn send_payload(settings: &TransferSettings, paths: &[String]) -> Vec<serde_json::Value> {
     paths
         .iter()
-        .map(|p| serde_json::json!({ "path": p, "encrypt": settings.encryption }))
+        .map(|p| {
+            serde_json::json!({ "path": p, "encrypt": settings.encryption, "concurrency": settings.concurrency })
+        })
         .collect()
 }
 
@@ -415,6 +436,33 @@ pub(crate) fn cancel_task(h: &WasmHost, args: &serde_json::Value) -> Result<serd
     let changed = transfer_store::mark_cancelled(&mut guard, &batch_id);
     flush(h, guard, changed);
     Ok(serde_json::json!({ "ok": hit || changed }))
+}
+
+/// 显式暂停：宿主中断会话（任务保留含已传字节、不落历史），本地乐观标记
+/// paused 供前端即时反馈；引擎快照随后以 paused 状态合并确认。
+pub(crate) fn pause_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_pause_transfer(&batch_id)?;
+    let mut guard = ensure_loaded(h);
+    let changed = transfer_store::mark_paused(&mut guard, &batch_id);
+    flush(h, guard, changed);
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 恢复单个暂停任务：宿主入队并经并发闸门启动（接收端按已写偏移续传）。
+pub(crate) fn resume_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde_json::Value> {
+    let batch_id =
+        args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    h.peer_resume_transfer(&batch_id)?;
+    // 状态推进由引擎快照事件（pending → running）接管，本地无需乐观改写
+    Ok(serde_json::json!({ "ok": true }))
+}
+
+/// 恢复全部暂停任务，返回入队数。
+pub(crate) fn resume_all_tasks(h: &WasmHost) -> Result<serde_json::Value> {
+    let n = h.peer_resume_all_transfers()?;
+    Ok(serde_json::json!({ "resumed": n }))
 }
 
 /// 重试 = 批元数据回放重调原语（issue 13 步骤 3）：
@@ -535,6 +583,8 @@ pub(crate) fn clear_history(h: &WasmHost) -> Result<serde_json::Value> {
     let mut guard = ensure_loaded(h);
     let cleared = transfer_store::clear_terminal(&mut guard);
     flush(h, guard, cleared > 0);
+    // 破坏性操作留痕：真机「点了没反应」需要能区分「命令没到」与「到了没清」
+    h.log_info(&format!("clear-history cleared {cleared} terminal entries"));
     Ok(serde_json::json!({ "cleared": cleared }))
 }
 
@@ -641,7 +691,7 @@ pub(crate) fn get_settings(h: &WasmHost) -> Result<serde_json::Value> {
         "ask_timeout_sec": settings_store::clamp_timeout(s.approval_timeout_sec),
         "download_dir": s.download_dir.unwrap_or_default(),
         "encryption": s.encryption,
-        "concurrency": 1,
+        "concurrency": s.concurrency,
     }))
 }
 
@@ -659,6 +709,9 @@ pub(crate) fn set_settings(h: &WasmHost, args: &serde_json::Value) -> Result<ser
     }
     if let Some(enabled) = args.get("encryption").and_then(|v| v.as_bool()) {
         s.encryption = enabled;
+    }
+    if let Some(n) = args.get("concurrency").and_then(|v| v.as_u64()) {
+        s.concurrency = settings_store::clamp_concurrency(n as u8);
     }
     settings_store::save_and_push(h, &s)?;
     h.log_info("set-settings: policy/download-dir applied (plugin-sourced)");
@@ -767,7 +820,7 @@ pub(crate) fn update_roots(
 mod tests {
     use super::{load_preauth_paths, mount_local, roots_registry, update_roots};
     use bedcode_plugin_api::host::{HostError, HostPeer, HostPlatform, HostPluginDatabase, HostStorage};
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
 
     /// 历史视图口径：仅终态条目、按 updatedAtMs 降序（list-history 初始快照与
     /// flush 的 history-changed 派发共用本函数，防两路口径漂移）
@@ -815,6 +868,10 @@ mod tests {
         pushed_roots: RefCell<Vec<serde_json::Value>>,
         /// platform_pick_folders 预设返回值（多选目录对话框桩）
         picked: RefCell<Vec<String>>,
+        /// 全部 SQL 调用序列（persist_entries 事务形态断言用）
+        sql_log: RefCell<Vec<String>>,
+        /// 参数化执行故障注入（回滚路径断言用）
+        fail_params: Cell<bool>,
     }
 
     impl MockHost {
@@ -824,8 +881,11 @@ mod tests {
                 rows: RefCell::new(vec![]),
                 pushed_roots: RefCell::new(vec![]),
                 picked: RefCell::new(vec![]),
+                sql_log: RefCell::new(vec![]),
+                fail_params: Cell::new(false),
             }
         }
+
 
         fn preauth(&self) -> Vec<String> {
             load_preauth_paths(self).unwrap()
@@ -848,6 +908,7 @@ mod tests {
 
     impl HostPluginDatabase for MockHost {
         fn plugin_db_execute(&self, sql: &str) -> Result<i32, HostError> {
+            self.sql_log.borrow_mut().push(sql.to_string());
             if sql.contains("CREATE TABLE IF NOT EXISTS shared_roots") {
                 // 建表幂等：不触碰已有行（load_all 每次都会调 ensure_table）
                 return Ok(0);
@@ -865,6 +926,13 @@ mod tests {
             Ok(None)
         }
         fn plugin_db_execute_params(&self, sql: &str, params: &[serde_json::Value]) -> Result<i32, HostError> {
+            self.sql_log.borrow_mut().push(sql.to_string());
+            if self.fail_params.get() {
+                return Err(HostError {
+                    code: -1,
+                    message: "injected failure".to_string(),
+                });
+            }
             if sql.contains("INSERT INTO shared_roots") {
                 self.rows.borrow_mut().push(serde_json::json!({
                     "id": params[0],
@@ -904,6 +972,15 @@ mod tests {
             unimplemented!()
         }
         fn peer_respond_transfer(&self, _batch_id: &str, _accept: bool) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_pause_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_resume_transfer(&self, _batch_id: &str) -> Result<(), HostError> {
+            unimplemented!()
+        }
+        fn peer_resume_all_transfers(&self) -> Result<u32, HostError> {
             unimplemented!()
         }
         fn peer_set_receive_policy(&self, _mode: &str, _timeout_secs: u64) -> Result<(), HostError> {
@@ -1021,5 +1098,66 @@ mod tests {
         let out = update_roots(&h, &serde_json::json!({ "remove": "root-deadbeef" })).unwrap();
         assert_eq!(out["removed"], false);
         assert_eq!(h.preauth(), vec!["/tmp/share-c".to_string()]);
+    }
+
+    /// 构造持久化用条目（事务形态断言只需最小字段集）
+    fn entry_for(batch_id: &str) -> super::TransferEntry {
+        serde_json::from_value::<super::TransferEntry>(serde_json::json!({
+            "batchId": batch_id, "direction": "send", "status": "running",
+        }))
+        .unwrap()
+    }
+
+    /// 持久化事务形态：`BEGIN IMMEDIATE` → `DELETE` → N×`INSERT` → `COMMIT`，
+    /// 提交恰一次（回归：逐条独立事务 ⇒ 每次 flush N+1 次提交并长持写锁，
+    /// 真机表现为插件库 EXCLUSIVE 锁导致传输面板拿不到任务卡片）
+    #[test]
+    fn persist_entries_wraps_delete_and_inserts_in_single_transaction() {
+        let h = MockHost::new();
+        super::persist_entries(&h, &[entry_for("batch-a"), entry_for("batch-b")]);
+        let log = h.sql_log.borrow().clone();
+        assert_eq!(
+            log.first().map(String::as_str),
+            Some("BEGIN IMMEDIATE"),
+            "首条语句必须显式开启事务"
+        );
+        assert_eq!(
+            log.last().map(String::as_str),
+            Some("COMMIT"),
+            "末条语句必须提交"
+        );
+        assert_eq!(
+            log.iter().filter(|s| s.as_str() == "DELETE FROM transfer_entries").count(),
+            1,
+            "DELETE 恰一次（全量回写不是逐条删除）"
+        );
+        assert_eq!(
+            log.iter().filter(|s| s.contains("INSERT INTO transfer_entries")).count(),
+            2,
+            "每个条目一条 INSERT，且全部在事务内"
+        );
+        assert!(
+            !log.iter().any(|s| s.as_str() == "ROLLBACK"),
+            "成功路径不得出现 ROLLBACK"
+        );
+    }
+
+    /// 故障注入：任一 INSERT 失败必须 ROLLBACK 且绝不 COMMIT
+    /// （半写状态 = DELETE 已生效、INSERT 缺失，等于整段历史丢失）
+    #[test]
+    fn persist_entries_rolls_back_when_an_insert_fails() {
+        let h = MockHost::new();
+        h.fail_params.set(true);
+        super::persist_entries(&h, &[entry_for("batch-a")]);
+        let log = h.sql_log.borrow().clone();
+        assert_eq!(
+            log.last().map(String::as_str),
+            Some("ROLLBACK"),
+            "写入失败必须以回滚收尾"
+        );
+        assert!(
+            !log.iter().any(|s| s.as_str() == "COMMIT"),
+            "写入失败不得提交半成品"
+        );
     }
 }

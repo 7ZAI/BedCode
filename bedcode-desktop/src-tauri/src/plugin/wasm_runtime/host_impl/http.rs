@@ -15,6 +15,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        .redirect(redirect_policy())
         .build()
         .unwrap_or_default()
 });
@@ -23,6 +24,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
 static HTTP_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .redirect(redirect_policy())
         .build()
         .unwrap_or_default()
 });
@@ -44,6 +46,32 @@ fn is_private_target(url: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// 跳转裁决（纯函数，供 `redirect_policy` 与单测共用）：
+///
+/// reqwest 默认跟随 10 跳且不重校验目标——公网插件 API 302 到内网/云元数据
+/// 在无系统代理环境（直连）下即 SSRF。规则：
+/// - 公网目标：跟随；
+/// - 私网目标：仅当链上前序 URL 全为私网时跟随（局域网文件服务站内跳转）；
+///   其余（公网 → 私网）Stop，调用方拿到 3xx 自行处理。
+fn redirect_decision(next_url: &str, previous: &[&str]) -> bool {
+    if !is_private_target(next_url) {
+        return true;
+    }
+    !previous.iter().any(|p| !is_private_target(p))
+}
+
+/// reqwest 跳转策略：`redirect_decision` 的适配层（同步裁决，见其文档）
+fn redirect_policy() -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(|attempt| {
+        let prev: Vec<&str> = attempt.previous().iter().map(|u| u.as_str()).collect();
+        if redirect_decision(attempt.url().as_str(), &prev) {
+            attempt.follow()
+        } else {
+            attempt.stop()
+        }
+    })
+}
+
 /// 直连客户端（禁系统代理）：私网目标（局域网文件服务）专用，
 /// 配置与对应默认 client 一致（超时/响应上限语义不变）
 static HTTP_DIRECT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
@@ -51,6 +79,7 @@ static HTTP_DIRECT_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
         .no_proxy()
         .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
         .timeout(Duration::from_secs(PLUGIN_HTTP_TIMEOUT_SECS))
+        .redirect(redirect_policy())
         .build()
         .unwrap_or_default()
 });
@@ -60,6 +89,7 @@ static HTTP_DIRECT_STREAM_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .no_proxy()
         .connect_timeout(Duration::from_secs(PLUGIN_HTTP_CONNECT_TIMEOUT_SECS))
+        .redirect(redirect_policy())
         .build()
         .unwrap_or_default()
 });
@@ -547,5 +577,38 @@ mod tests {
         assert!(!is_private_target("http://8.8.8.8/"));
         // 无 host 的畸形 URL → false（默认走代理，行为保守）
         assert!(!is_private_target("not a url"));
+    }
+
+    /// 跳转裁决：公网→私网阻断（无系统代理环境直连即 SSRF）；私网→私网放行
+    #[test]
+    fn redirect_decision_blocks_public_to_private() {
+        // 公网跳转：跟随
+        assert!(redirect_decision(
+            "https://cdn.example.com/file",
+            &["https://api.github.com/x"],
+        ));
+        // 外网 302 → 内网 / 回环 / 云元数据：Stop
+        assert!(!redirect_decision(
+            "http://192.168.1.5:8080/x",
+            &["https://api.example.com/y"],
+        ));
+        assert!(!redirect_decision(
+            "http://127.0.0.1:8000/meta",
+            &["https://api.example.com/y"],
+        ));
+        assert!(!redirect_decision(
+            "http://169.254.169.254/latest/meta-data",
+            &["https://api.example.com/y"],
+        ));
+        // 私网→私网（局域网文件服务站内跳转）：跟随
+        assert!(redirect_decision(
+            "http://192.168.1.9/x",
+            &["http://192.168.1.5:8080/a"],
+        ));
+        // 混合链（私网前序 + 公网）跳私网：Stop
+        assert!(!redirect_decision(
+            "http://192.168.1.9/x",
+            &["http://192.168.1.5:8080/a", "https://api.example.com/y"],
+        ));
     }
 }

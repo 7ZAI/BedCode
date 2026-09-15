@@ -82,6 +82,7 @@ const zhCN: MessageSchema = {
   // ==================== 队列面板 ====================
   'transfer.queue.title': '传输队列',
   'transfer.queue.count': '{count} 项任务',
+  'transfer.queue.close': '收起传输队列',
 
   // ==================== 队列分类 tabs（v2） ====================
   'transfer.queue.all': '全部',
@@ -141,6 +142,8 @@ const zhCN: MessageSchema = {
   'transfer.settings.concurrency': '并发数',
   'transfer.settings.concurrencyHint': '同时传输的任务数量，增大可能占用更多带宽',
   'transfer.settings.plainWarning': '文件在本局域网内明文传输，请仅在受信任的 WiFi 网络中使用',
+  'transfer.settings.concurrencyMinus': '减少并发数',
+  'transfer.settings.concurrencyPlus': '增加并发数',
   'transfer.settings.receivingPolicy': '接收策略',
   'transfer.settings.receivingPolicyAsk': '每次询问',
   'transfer.settings.receivingPolicyAccept': '直接接收',
@@ -164,6 +167,8 @@ const zhCN: MessageSchema = {
   // ==================== 传输历史（v2） ====================
   'transfer.history.title': '历史',
   'transfer.history.clear': '清空历史',
+  'transfer.history.clearConfirmTitle': '清空传输历史？',
+  'transfer.history.clearConfirmBody': '将删除全部已完成、失败与被取消的记录（进行中的任务不受影响），此操作不可撤销。',
   'transfer.history.empty': '暂无传输历史',
   'transfer.history.openFolder': '打开所在文件夹',
   'transfer.history.results.completed': '已完成',

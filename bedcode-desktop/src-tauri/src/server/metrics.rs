@@ -64,6 +64,24 @@ pub struct MetricsCollector {
     inner: std::sync::Arc<MetricsInner>,
 }
 
+impl Default for MetricsInner {
+    fn default() -> Self {
+        Self {
+            start_time: std::sync::Mutex::new(std::time::Instant::now()),
+            http_requests: std::sync::atomic::AtomicU64::new(0),
+            ws_sent: std::sync::atomic::AtomicU64::new(0),
+            ws_received: std::sync::atomic::AtomicU64::new(0),
+            encrypted_frames: std::sync::atomic::AtomicU64::new(0),
+            decrypt_failures: std::sync::atomic::AtomicU64::new(0),
+            response_key_miss: std::sync::atomic::AtomicU64::new(0),
+            last_http_requests: std::sync::atomic::AtomicU64::new(0),
+            last_ws_sent: std::sync::atomic::AtomicU64::new(0),
+            last_ws_received: std::sync::atomic::AtomicU64::new(0),
+            last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
+        }
+    }
+}
+
 struct MetricsInner {
     /// 启动时间（Mutex 保护以支持 reset）
     start_time: std::sync::Mutex<std::time::Instant>,
@@ -92,22 +110,20 @@ struct MetricsInner {
 impl MetricsCollector {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<MetricsCollector> = std::sync::LazyLock::new(|| MetricsCollector {
-            inner: std::sync::Arc::new(MetricsInner {
-                start_time: std::sync::Mutex::new(std::time::Instant::now()),
-                http_requests: std::sync::atomic::AtomicU64::new(0),
-                ws_sent: std::sync::atomic::AtomicU64::new(0),
-                ws_received: std::sync::atomic::AtomicU64::new(0),
-                encrypted_frames: std::sync::atomic::AtomicU64::new(0),
-                decrypt_failures: std::sync::atomic::AtomicU64::new(0),
-                response_key_miss: std::sync::atomic::AtomicU64::new(0),
-                last_http_requests: std::sync::atomic::AtomicU64::new(0),
-                last_ws_sent: std::sync::atomic::AtomicU64::new(0),
-                last_ws_received: std::sync::atomic::AtomicU64::new(0),
-                last_sample_time: std::sync::Mutex::new(std::time::Instant::now()),
-            }),
-        });
+        static INSTANCE: std::sync::LazyLock<MetricsCollector> =
+            std::sync::LazyLock::new(MetricsCollector::new);
         &INSTANCE
+    }
+
+    /// 创建独立实例（测试隔离用；生产代码应使用 [`global`]）
+    ///
+    /// 全局单例在 lib test binary 内跨模块共享同一实例，`link_crypto` 等
+    /// 模块的测试经真实代码路径写入计数器会污染依赖 `global()` 的测试
+    /// （metrics flaky，票据 14）。独立实例使测试与并行调度解耦。
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(MetricsInner::default()),
+        }
     }
 
     /// 递增 HTTP 请求计数
@@ -227,18 +243,9 @@ impl MetricsCollector {
             ws_recv_rate: rate_ws_recv,
             cpu_usage_percent: cpu_percent,
             memory_usage_bytes: memory_bytes,
-            encrypted_frames: self
-                .inner
-                .encrypted_frames
-                .load(std::sync::atomic::Ordering::Relaxed),
-            decrypt_failures: self
-                .inner
-                .decrypt_failures
-                .load(std::sync::atomic::Ordering::Relaxed),
-            response_key_miss: self
-                .inner
-                .response_key_miss
-                .load(std::sync::atomic::Ordering::Relaxed),
+            encrypted_frames: self.inner.encrypted_frames.load(std::sync::atomic::Ordering::Relaxed),
+            decrypt_failures: self.inner.decrypt_failures.load(std::sync::atomic::Ordering::Relaxed),
+            response_key_miss: self.inner.response_key_miss.load(std::sync::atomic::Ordering::Relaxed),
         }
     }
 }
@@ -247,12 +254,11 @@ impl MetricsCollector {
 mod tests {
     use super::*;
 
-    /// MetricsCollector 是全局单例且无私有构造器，全部断言收敛在
-    /// 单个测试函数内，避免并行测试互相污染计数器
+    /// MetricsCollector 支持 `new()` 构造独立实例（票据 14）：测试用独立实例
+    /// 而非全局单例，避免 link_crypto 等模块经真实链路污染计数器。
     #[test]
     fn reset_and_sample_report_totals_and_sliding_window_rates() {
-        let collector = MetricsCollector::global();
-        collector.reset();
+        let collector = MetricsCollector::new();
 
         // 等待足够时间，让窗口速率可被观测（Instant 精度下限）
         std::thread::sleep(std::time::Duration::from_millis(50));

@@ -77,11 +77,11 @@ Full vue-i18n support (zh-CN / en) with persistent language switcher in settings
 
 Monorepo with two independent projects, each containing `src/` (frontend) + `src-tauri/` (Rust backend):
 
-<a href="docs/architecture/BedCode.architecture.html" target="_blank">
-  <img src="docs/architecture/bedcode-architecture.png" alt="BedCode architecture — desktop host · mobile client · WASM plugin sandbox">
+<a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">
+  <img src="docs/diagrams/bedcode-overall-architecture.png" alt="BedCode architecture — desktop host · mobile client · WASM plugin sandbox">
 </a>
 
-<sub>📈 Interactive version: dark / light themes, node focus, route tracing, share-card export —— <a href="docs/architecture/BedCode.architecture.html" target="_blank">Open</a> · Source: <a href="docs/architecture/BedCode.architecture.json">archify JSON IR</a> (rendered by <a href="https://github.com/tt-a1i/archify">Archify</a>)</sub>
+<sub>📈 Interactive version: dark / light themes, node focus, route tracing, share-card export —— <a href="docs/diagrams/bedcode-overall-architecture.html" target="_blank">Open</a> · Source: <a href="docs/diagrams/bedcode-overall-architecture.json">archify JSON IR</a> (rendered by <a href="https://github.com/tt-a1i/archify">Archify</a>)</sub>
 
 <table>
 <thead>

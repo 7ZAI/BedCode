@@ -19,30 +19,37 @@
     <!-- 文件系统授权弹窗（插件目录授权，全局挂载） -->
     <FsAuthDialog />
 
-    <!-- 开屏动画（启动就绪/兜底时长后淡出并卸载）
-         渲染哪个候选页由 config/splash.ts 的 ACTIVE_SPLASH_CANDIDATE 决定：
-         'terminal' = 终端开机自检叙事动画（SplashScreen.vue，原开屏）；
-         'native'   = 原生系统开屏样式复刻（SplashScreenNative.vue，当前默认）。
-         两个候选组件均保留，将来切换开屏样式只改配置一处，无需改 App.vue。 -->
+    <!-- 外网访问授权弹窗（Egress L3，请求时懒触发，全局挂载） -->
+    <EgressConsentDialog />
+
+    <!-- 开屏组件已禁用（2026-09-13 排查：启动期存在两层前端开屏——index.html 静态首屏
+         与本处的 Vue 开屏组件，现仅保留静态首屏 + Android 原生纯色开屏底）。
+         恢复方式：取消下方两个组件标签的注释，并同步恢复 script 中的
+         SplashScreen / SplashScreenNative / ACTIVE_SPLASH_CANDIDATE 导入、
+         showSplash / splashIsNative 声明及 vue 导入里的 ref；
+         渲染候选页仍由 config/splash.ts 的 ACTIVE_SPLASH_CANDIDATE 决定。
     <SplashScreen v-if="!splashIsNative && showSplash" @closed="showSplash = false" />
     <SplashScreenNative v-else-if="showSplash" @closed="showSplash = false" />
+    -->
   </div>
 </template>
 
 <script setup lang="ts">
-import { provide, ref, computed, onMounted, onUnmounted } from 'vue'
+import { provide, computed, onMounted, onUnmounted } from 'vue'
 import { logger } from '@/utils/frontendLogger'
 import { Toaster } from 'vue-sonner'
 import MobileLayout from '@/components/MobileLayout.vue'
-import SplashScreen from '@/components/SplashScreen.vue'
-import SplashScreenNative from '@/components/SplashScreenNative.vue'
-import { ACTIVE_SPLASH_CANDIDATE } from '@/config/splash'
+// 开屏组件已禁用（恢复说明见模板注释块）
+// import SplashScreen from '@/components/SplashScreen.vue'
+// import SplashScreenNative from '@/components/SplashScreenNative.vue'
+// import { ACTIVE_SPLASH_CANDIDATE } from '@/config/splash'
 import { usePlatform } from '@/composables/usePlatform'
 import { useOrientation } from '@/composables/useOrientation'
 import { useEdgeToEdge } from '@/composables/useEdgeToEdge'
 import PluginDialogHost from '@/plugin/components/PluginDialogHost.vue'
 import PluginGlobalDialog from '@binblink/bedcode-plugin-sdk-mobile/ui/plugin-global-dialog'
 import FsAuthDialog from '@/components/FsAuthDialog.vue'
+import EgressConsentDialog from '@/components/EgressConsentDialog.vue'
 import { useTheme } from '@/composables/useTheme'
 import { syncLinkCryptoContextToNative, initLinkCryptoPinSync } from '@/composables/useLinkEncryption'
 import { useFontSize } from '@/composables/useFontSize'
@@ -63,10 +70,10 @@ const { setupFontSize } = useFontSize()
 const settingsStore = useSettingsStore()
 const toasterTheme = computed(() => settingsStore.settings.ui.theme as 'light' | 'dark' | 'system')
 
-// 开屏动画:淡出动画结束后卸载;候选页由 ACTIVE_SPLASH_CANDIDATE 决定
-const showSplash = ref(true)
-/** 当前候选是否为原生系统开屏样式复刻(候选 2);false 即终端叙事动画(候选 1) */
-const splashIsNative = ACTIVE_SPLASH_CANDIDATE === 'native'
+// 开屏动画状态已随组件一并禁用（恢复说明见模板注释块）
+// const showSplash = ref(true)
+// /** 当前候选是否为原生系统开屏样式复刻(候选 2);false 即终端叙事动画(候选 1) */
+// const splashIsNative = ACTIVE_SPLASH_CANDIDATE === 'native'
 // const { startAdvertise, stopAdvertise } = useMdnsAdvertiser()
 
 onMounted(async () => {

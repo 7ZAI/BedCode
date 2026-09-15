@@ -42,9 +42,8 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("channels.status_broadcast_capacity", "会话状态变更广播容量 - 用于通知状态更新"),
     ("channels.restart_broadcast_capacity", "会话重启事件广播容量 - 用于通知会话重启"),
     ("channels.event_broadcast_capacity", "统一事件广播容量 - 整合所有事件类型"),
-    ("channels.pty_subscription_capacity", "PTY 订阅广播容量 - 用于移动端订阅输出"),
-    ("channels.global_queue_capacity", "全局输出队列容量 - 存储历史输出供移动端回放"),
-    ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件"),
+    ("channels.global_queue_max_bytes", "全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3，默认 50MB）"),
+    ("channels.global_queue_max_chunks", "全局输出队列最大字节块数 - 防御性条目上限，抗极小块风暴（默认 65536）"),
     ("channels.history_start_mode", "历史回放起点模式（min=严格从队首 / snapshot=最近清屏快照点，默认 min；snapshot 模式待实现）"),
     ("channels.ws_event_capacity", "WebSocket 事件广播容量 - 业务层事件分发"),
     ("channels.lifecycle_capacity", "生命周期事件广播容量 - PTY 进程状态变更"),
@@ -53,6 +52,7 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("terminal.flush_interval_ms", "远程通道输出缓冲刷新间隔（毫秒）- 合并开关开启时生效；桌面本地通道零缓冲直通"),
     ("terminal.merge_output", "服务端输出合并开关（true/false）- 开启后远程通道按 flush_interval_ms 合并输出减少 WS 消息数；默认开启（移动端弱网/高频输出防消息风暴），桌面本地通道恒为零缓冲直通"),
     ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新"),
+    ("terminal.batch_bytes", "采集批次传输阈值（字节）- 订阅者处于 batch（退出终端页）模式时满该值才转发一帧（默认 64KB）"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
     ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
     ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
@@ -115,9 +115,8 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "channels.status_broadcast_capacity",
             "channels.restart_broadcast_capacity",
             "channels.event_broadcast_capacity",
-            "channels.pty_subscription_capacity",
-            "channels.global_queue_capacity",
             "channels.global_queue_max_bytes",
+            "channels.global_queue_max_chunks",
             "channels.history_start_mode",
             "channels.ws_event_capacity",
             "channels.lifecycle_capacity",
@@ -131,6 +130,7 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "terminal.flush_interval_ms",
             "terminal.merge_output",
             "terminal.max_buffer_size",
+            "terminal.batch_bytes",
             "terminal.read_buffer_size",
         ],
     ),
@@ -390,7 +390,7 @@ impl Default for UiConfig {
 /// 历史回放起点模式
 ///
 /// 控制新订阅者订阅时刻的历史回放起点：
-/// - `Min`：严格从队首（min_seq）起播全部保留事件（默认，行为确定）
+/// - `Min`：严格从队首（min_offset）起播全部保留字节（默认，行为确定）
 /// - `Snapshot`：从最近一次清屏快照点起播（减少全屏 TUI 清屏前的重复重绘）
 ///   该模式尚未实现，配置后回退为 Min 行为（见 subscribe 内 warn 日志）
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -412,12 +412,10 @@ pub struct ChannelsConfig {
     pub restart_broadcast_capacity: usize,
     /// 统一事件广播容量 - 整合所有事件类型
     pub event_broadcast_capacity: usize,
-    /// PTY 订阅广播容量 - 用于移动端订阅输出
-    pub pty_subscription_capacity: usize,
-    /// 全局输出队列容量 - 存储历史输出供移动端回放
-    pub global_queue_capacity: usize,
-    /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧事件
+    /// 全局输出队列最大字节数 - 限制总内存占用，超出后丢弃最旧字节块（TB v3）
     pub global_queue_max_bytes: u64,
+    /// 全局输出队列最大字节块数 - 防御性条目上限，抗极小块风暴（TB v3）
+    pub global_queue_max_chunks: usize,
     /// 历史回放起点模式（min = 严格从队首；snapshot = 最近清屏快照点，待实现）
     pub history_start_mode: HistoryStartMode,
     /// WebSocket 事件广播容量 - 业务层事件分发
@@ -432,9 +430,8 @@ impl Default for ChannelsConfig {
             status_broadcast_capacity: 64,
             restart_broadcast_capacity: 64,
             event_broadcast_capacity: 256,
-            pty_subscription_capacity: 1024,
-            global_queue_capacity: 100_000,
-            global_queue_max_bytes: 64 * 1024 * 1024, // 64MB
+            global_queue_max_bytes: 50 * 1024 * 1024, // 50MB（TB v3 字节块队列软上限）
+            global_queue_max_chunks: 65_536,
             history_start_mode: HistoryStartMode::Min,
             ws_event_capacity: 1024,
             lifecycle_capacity: 16,
@@ -459,6 +456,9 @@ pub struct TerminalConfig {
     pub merge_output: bool,
     /// 最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新
     pub max_buffer_size: usize,
+    /// 采集批次传输阈值（字节）- 订阅者处于 batch（退出终端页）模式时，累计
+    /// 满该值才转发一帧（双速传播；默认 64KB，可配置）
+    pub batch_bytes: usize,
     /// PTY 读取缓冲区大小（字节）- 单次读取的最大字节数
     pub read_buffer_size: usize,
 }
@@ -471,6 +471,7 @@ impl Default for TerminalConfig {
             flush_interval_ms: 30,
             merge_output: true,
             max_buffer_size: 64 * 1024,
+            batch_bytes: 64 * 1024,
             read_buffer_size: 4096,
         }
     }
@@ -667,9 +668,8 @@ impl AppConfig {
                 status_broadcast_capacity: parse_value(props, "channels.status_broadcast_capacity", 64),
                 restart_broadcast_capacity: parse_value(props, "channels.restart_broadcast_capacity", 64),
                 event_broadcast_capacity: parse_value(props, "channels.event_broadcast_capacity", 256),
-                pty_subscription_capacity: parse_value(props, "channels.pty_subscription_capacity", 1024),
-                global_queue_capacity: parse_value(props, "channels.global_queue_capacity", 100_000),
-                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 64 * 1024 * 1024),
+                global_queue_max_bytes: parse_value(props, "channels.global_queue_max_bytes", 50 * 1024 * 1024),
+                global_queue_max_chunks: parse_value(props, "channels.global_queue_max_chunks", 65_536),
                 // 快照模式尚未实现，此处先解析字符串枚举，行为回退见 subscribe 内 warn
                 history_start_mode: match parse_value::<String>(props, "channels.history_start_mode", "min".to_string())
                     .as_str()
@@ -687,6 +687,7 @@ impl AppConfig {
                 flush_interval_ms: parse_value(props, "terminal.flush_interval_ms", 30),
                 merge_output: parse_value(props, "terminal.merge_output", true),
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
+                batch_bytes: parse_value(props, "terminal.batch_bytes", 64 * 1024),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
             },
             log: LogConfig {
@@ -826,16 +827,12 @@ impl AppConfig {
             self.channels.event_broadcast_capacity.to_string(),
         );
         map.insert(
-            "channels.pty_subscription_capacity".to_string(),
-            self.channels.pty_subscription_capacity.to_string(),
-        );
-        map.insert(
-            "channels.global_queue_capacity".to_string(),
-            self.channels.global_queue_capacity.to_string(),
-        );
-        map.insert(
             "channels.global_queue_max_bytes".to_string(),
             self.channels.global_queue_max_bytes.to_string(),
+        );
+        map.insert(
+            "channels.global_queue_max_chunks".to_string(),
+            self.channels.global_queue_max_chunks.to_string(),
         );
         map.insert(
             "channels.history_start_mode".to_string(),
@@ -871,6 +868,10 @@ impl AppConfig {
         map.insert(
             "terminal.max_buffer_size".to_string(),
             self.terminal.max_buffer_size.to_string(),
+        );
+        map.insert(
+            "terminal.batch_bytes".to_string(),
+            self.terminal.batch_bytes.to_string(),
         );
         map.insert(
             "terminal.read_buffer_size".to_string(),

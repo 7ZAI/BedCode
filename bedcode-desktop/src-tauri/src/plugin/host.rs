@@ -5,22 +5,21 @@
 //! 支持静态注册（Rust 插件 via inventory）、文件扫描（TS-only 插件）和 WASM 模块（Rust+TS 插件）
 
 use crate::db::Database;
+use crate::plugin::approval::PluginApprovalStore;
 use crate::plugin::loader::PluginLoader;
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::registry::PluginRegistry;
 use crate::plugin::storage::PluginStorage;
 use crate::plugin::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
-use crate::session::{
-    SessionConfigManager, SessionManager,
-};
+use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::constants::event;
-use crate::system::constants::plugin::PLUGIN_CALLBACK_TIMEOUT_SECS;
+use crate::system::constants::plugin::{PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE};
 use bedcode_plugin_api::PluginState;
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
@@ -120,6 +119,12 @@ pub struct PluginHost {
     /// 插件 deactivate 内的卸载动作（如 CLI 安装清理）据此跳过：
     /// 应用正常退出 ≠ 用户停用插件，随包 CLI 应保留（下次启动 activate 幂等重装）
     shutting_down: Arc<std::sync::atomic::AtomicBool>,
+    /// 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地
+    ///
+    /// 与随安装包分发的内置目录（resource_dir/resources/plugins/desktop）分离：
+    /// 用户插件独立安装/升级，内置插件随构建产物更新；两者都可卸载
+    /// （见 [`PluginHost::uninstall_plugin`]，内置插件删的是资源目录下的安装目录）
+    user_plugins_dir: PathBuf,
 }
 
 impl PluginHost {
@@ -134,13 +139,18 @@ impl PluginHost {
     pub async fn new(
         db: Arc<Mutex<Database>>,
         plugins_dir: &Path,
+        user_plugins_dir: &Path,
         session_manager: Arc<SessionManager>,
         config_manager: Arc<SessionConfigManager>,
         // Option 化：无头/测试上下文无 AppHandle（与 WasmRuntime/WasmHostContext 同策略），
         // 依赖前端事件的宿主能力在调用处降级
         app_handle: Option<Arc<tauri::AppHandle>>,
     ) -> Self {
-        tracing::info!("[PluginHost] Initializing with plugins_dir: {:?}", plugins_dir);
+        tracing::info!(
+            "[PluginHost] Initializing with plugins_dir: {:?}, user_plugins_dir: {:?}",
+            plugins_dir,
+            user_plugins_dir
+        );
 
         let permission = Arc::new(PermissionManager::new());
         let registry = Arc::new(PluginRegistry::new());
@@ -175,9 +185,13 @@ impl PluginHost {
             static_plugins.len()
         );
 
-        // 2. 扫描文件系统中的 TS-only 和 WASM 插件
-        let file_plugins = PluginLoader::load_all(plugins_dir, &permission);
+        // 2. 扫描文件系统中的 TS-only 和 WASM 插件（内置目录，只读）
+        let file_plugins = PluginLoader::load_all(plugins_dir, &permission, None);
         tracing::info!("[PluginHost] Found {} file-based plugin(s)", file_plugins.len());
+
+        // 2b. 扫描用户插件目录（app_data_dir/plugins，zip 安装，可卸载）
+        let user_plugins = PluginLoader::load_all(user_plugins_dir, &permission, Some(PluginSource::UserInstalled));
+        tracing::info!("[PluginHost] Found {} user-installed plugin(s)", user_plugins.len());
 
         // 3. 合并所有插件
         let mut all_plugins: HashMap<String, LoadedPlugin> = HashMap::new();
@@ -210,10 +224,18 @@ impl PluginHost {
             all_plugins.insert(plugin_id, loaded);
         }
 
-        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）
+        // 添加文件扫描的插件（包含 TS-only 和 WASM 来源判定）。内置目录与用户
+        // 目录同名插件合并时以用户目录副本为准（用户可覆盖升级内置插件，zip
+        // 更新/重装即走此路径）；覆盖后来源随之变为 UserInstalled，其 wasm
+        // 生命周期由 has_wasm_backend 保障（激活/停用仍执行 guest 回调）
         let mut wasm_plugins_map: HashMap<String, Arc<Mutex<LoadedWasmPlugin>>> = HashMap::new();
 
-        for (id, loaded) in file_plugins {
+        // 内置目录与用户目录共用同一 wasm 实例化逻辑：先内置后用户，
+        // 重复 id 已被 load_all 的 seen_ids 拒绝，此处直接插入
+        let mut all_file_plugins: Vec<(String, LoadedPlugin)> = file_plugins.into_iter().collect();
+        all_file_plugins.extend(user_plugins);
+
+        for (id, loaded) in all_file_plugins {
             // 如果 manifest 声明了 rust_library，尝试加载 WASM 模块
             if !loaded.manifest.rust_library.is_empty() {
                 let plugin_dir = Path::new(&loaded.extension_path);
@@ -240,7 +262,12 @@ impl PluginHost {
                 }
 
                 // 阶段 A 共存入口：按产物格式自动选择 core module / component
-                match wasm_runtime.load_plugin_from_file(&wasm_path, &id, wasm_host_ctx.clone(), &loaded.manifest.wasi_preopen_dirs) {
+                match wasm_runtime.load_plugin_from_file(
+                    &wasm_path,
+                    &id,
+                    wasm_host_ctx.clone(),
+                    &loaded.manifest.wasi_preopen_dirs,
+                ) {
                     Ok(wasm_plugin) => {
                         tracing::info!(
                             "WASM plugin loaded: {} v{} (module: {})",
@@ -289,6 +316,7 @@ impl PluginHost {
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            user_plugins_dir: user_plugins_dir.to_path_buf(),
         };
 
         // 两阶段初始化：将 PluginHost（作为 PluginServices 实现）注入 WasmHostContext
@@ -574,7 +602,9 @@ impl PluginHost {
     /// `preauth_paths` 数组读(file-transfer mount-local 同步写入);
     /// 另并入 manifest `wasiPreopenDirs` 展开后的声明目录(如 ai-chatbox
     /// 数据目录)——插件 activate 内 fs_request_auth 的弹窗晚于前端 loading
-    /// 遮罩,声明目录必须提前到本阶段统一弹窗。
+    /// 遮罩,声明目录必须提前到本阶段统一弹窗;未声明路径的激活期弹窗
+    /// (如 agent-hub CLI 配置目录)无法前置,由前端 FsAuthDialog 置顶
+    /// (z-[9999])保证在遮罩之上可交互。
     /// 路径为空 → 直接放行(启用先行:file-transfer 首次启用/全部目录移除后
     /// 均可空目录激活,共享目录配置由插件设置面板引导;硬拒绝会造成
     /// 「配置需激活 → 激活需先配置」死锁)。
@@ -584,10 +614,7 @@ impl PluginHost {
         if paths.is_empty() {
             if let Ok(Some(value)) = self.storage.get(plugin_id, PREAUTH_PATHS_STORAGE_KEY).await {
                 if let Value::Array(arr) = value {
-                    paths = arr
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
+                    paths = arr.into_iter().filter_map(|v| v.as_str().map(String::from)).collect();
                 }
             }
         }
@@ -673,6 +700,7 @@ impl PluginHost {
             api: Vec<String>,
             subscribes: Vec<String>,
             declared_preopen_dirs: Vec<String>,
+            rust_library: String,
         }
         let plan = {
             let mut plugins = self.plugins.write().await;
@@ -724,6 +752,7 @@ impl PluginHost {
                 api: loaded.manifest.api.clone(),
                 subscribes: loaded.manifest.contributes.subscribes.clone(),
                 declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
+                rust_library: loaded.manifest.rust_library.clone(),
             }
         };
 
@@ -731,7 +760,7 @@ impl PluginHost {
         // 仅持单插件实例锁（避免重入死锁），失败置 Error 状态
         // on_startup 的 guest 自报失败记录于此，phase 3 据此写 Degraded 终态
         let mut startup_failure: Option<String> = None;
-        if plan.source == PluginSource::Wasm {
+        if plan.source.has_wasm_backend(&plan.rust_library) {
             // WASI 预打开目录漂移检测：声明了预打开目录的插件，激活前先核对当前
             // 实例是否已覆盖「现在已授权」的目录。首次启用时授权经 activate() 内
             // fs_request_auth 弹窗才落库（早于实例化），实例预打开为空；重试激活
@@ -775,8 +804,7 @@ impl PluginHost {
             let Some(wasm_plugin) = wasm_plugin else {
                 tracing::error!(plugin_id = %plugin_id, "WASM plugin not found in wasm_plugins map");
                 // phase 1 已置 Activating 中间态：失败路径必须落终态，不留悬挂
-                self.mark_error(plugin_id, "WASM module not loaded".to_string())
-                    .await;
+                self.mark_error(plugin_id, "WASM module not loaded".to_string()).await;
                 return Err(crate::AppError::Plugin(format!(
                     "Plugin {} WASM module not loaded",
                     plugin_id
@@ -939,9 +967,12 @@ impl PluginHost {
         let wasm_filename = format!("{}.wasm", rust_library);
         let wasm_path = plugin_dir.join(&wasm_filename);
 
-        let new_wasm_plugin = self
-            .wasm_runtime
-            .load_plugin_from_file(&wasm_path, plugin_id, self.wasm_host_ctx.clone(), &declared_preopen_dirs)?;
+        let new_wasm_plugin = self.wasm_runtime.load_plugin_from_file(
+            &wasm_path,
+            plugin_id,
+            self.wasm_host_ctx.clone(),
+            &declared_preopen_dirs,
+        )?;
         self.wasm_plugins
             .write()
             .await
@@ -991,11 +1022,14 @@ impl PluginHost {
         // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
         crate::plugin::wasm_runtime::host_impl::mdns::purge_browsers_for_plugin(plugin_id);
 
-        // WASM 插件：调用 on_shutdown + __bedcode_deactivate
+        // WASM 插件：调用 on_shutdown + __bedcode_deactivate。
+        // has_wasm_backend：内置 wasm 插件恒纳入；用户 zip 安装的 rust-ts 插件
+        // 同样调 guest 生命周期（否则与命令分发 invoke_wasm_command 不对称——
+        // 未激活实例的 guest 状态永远残留）、TS-only 用户插件维持原语义跳过。
         {
             let plugins = self.plugins.read().await;
             if let Some(loaded) = plugins.get(plugin_id) {
-                if loaded.source == PluginSource::Wasm {
+                if loaded.source.has_wasm_backend(&loaded.manifest.rust_library) {
                     let wasm_plugins = self.wasm_plugins.read().await;
                     if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
                         drop(wasm_plugins);
@@ -1094,6 +1128,236 @@ impl PluginHost {
         Ok(())
     }
 
+    /// 从本地 zip 插件包安装（用户插件目录）
+    ///
+    /// 1. 委托 downloader 解压安装（manifest/身份/路径安全校验）
+    /// 2. 拦截与已加载插件（含内置）同 id 的冲突：zip 已落盘但 loader 先到先得
+    ///    会拒绝它，这里直接清理目录并报错，避免留下不可加载的孤立目录
+    /// 3. 重新扫描用户目录，将新插件加载进 registry（含 WASM 实例化）
+    ///
+    /// 返回安装后的 plugin_id
+    pub async fn install_from_zip(&self, zip_path: &str) -> crate::Result<String> {
+        let plugin_id =
+            crate::plugin::downloader::PluginDownloader::install_from_file(zip_path, &self.user_plugins_dir)?;
+
+        if self.plugins.read().await.contains_key(&plugin_id) {
+            let dir = self.user_plugins_dir.join(&plugin_id);
+            if dir.exists() {
+                std::fs::remove_dir_all(&dir)
+                    .map_err(|e| crate::AppError::Plugin(format!("Failed to rollback plugin dir: {}", e)))?;
+            }
+            return Err(crate::AppError::Plugin(format!(
+                "Plugin '{}' is already installed. Uninstall it first to install a new version.",
+                plugin_id
+            )));
+        }
+
+        // 重新扫描用户目录，加载新插件（含 WASM 实例化，与 new() 初始化路径一致）
+        let loaded_map = PluginLoader::load_all(
+            &self.user_plugins_dir,
+            &self.permission,
+            Some(PluginSource::UserInstalled),
+        );
+        let Some(loaded) = loaded_map.get(&plugin_id).cloned() else {
+            return Err(crate::AppError::Plugin(format!(
+                "Plugin installed but failed to load: {}",
+                plugin_id
+            )));
+        };
+
+        let wasm_plugin = if !loaded.manifest.rust_library.is_empty() {
+            let wasm_path = Path::new(&loaded.extension_path).join(format!(
+                "{}{}",
+                loaded.manifest.rust_library,
+                crate::system::constants::plugin::WASM_FILE_EXT
+            ));
+            match self.wasm_runtime.load_plugin_from_file(
+                &wasm_path,
+                &plugin_id,
+                self.wasm_host_ctx.clone(),
+                &loaded.manifest.wasi_preopen_dirs,
+            ) {
+                Ok(wasm_plugin) => Some(Arc::new(Mutex::new(wasm_plugin))),
+                Err(e) => {
+                    tracing::error!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        "[PluginHost] Failed to load WASM for newly installed plugin"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        // 写入 plugins / wasm_plugins map（WASM 实例化失败时插件以 Error 态入表，
+        // 保证列表可见可诊断，与 new() 初始化语义一致）
+        {
+            let mut plugins = self.plugins.write().await;
+            plugins.insert(
+                plugin_id.clone(),
+                if wasm_plugin.is_some() || loaded.manifest.rust_library.is_empty() {
+                    loaded.clone()
+                } else {
+                    LoadedPlugin {
+                        state: PluginState::Error(format!("WASM load failed: {}", loaded.extension_path)),
+                        ..loaded.clone()
+                    }
+                },
+            );
+        }
+        if let Some(wp) = wasm_plugin {
+            self.wasm_plugins.write().await.insert(plugin_id.clone(), wp);
+        }
+        // 注册 manifest contributes 扩展点（commands/views/fileHandlers 等）
+        self.register_plugin_contributions(&plugin_id).await;
+
+        tracing::info!(
+            plugin_id = %plugin_id,
+            "[PluginHost] Plugin installed from zip and registered"
+        );
+        Ok(plugin_id)
+    }
+
+    /// 卸载插件：删除插件所有数据（存储 + 激活状态 + 安装目录 + 私有数据库）
+    ///
+    /// 适用范围：**所有来源的插件**（内置随包 / 用户 zip 安装 / 文件扫描 / 静态注册）。
+    /// 前置条件：插件存在且**未启用**——运行中（Activated/Activating/Degraded）拒绝卸载，
+    /// 由用户先在插件详情页停用（规则：未启用的插件才能卸载）。
+    /// 内置插件目录位于资源目录：随安装包分发，只读或被下次构建/更新还原时会删不掉，
+    /// 此时如实报错（数据与记录保持原样，插件仍可用）。
+    /// 执行：停用（含 hooks 清理/总线退订/扩展点注销）→ 丢弃私有数据库连接 →
+    /// 删除插件安装目录（含同目录 plugin.db）→ 移除运行时实例与记录 →
+    /// 清空插件存储（含 fs 授权 `fs_granted_paths` / 预授权 `preauth_paths`）→
+    /// 撤销该插件的持久化审批记录 → 清理持久化激活状态与限频簿记。
+    pub async fn uninstall_plugin(&self, plugin_id: &str) -> crate::Result<()> {
+        // 安装目录取自插件自身的 extension_path：内置插件在资源目录、用户插件在
+        // app_data_dir/plugins，二者都是「插件自有的安装目录」，删除语义一致
+        let plugin_dir = {
+            let plugins = self.plugins.read().await;
+            let loaded = plugins
+                .get(plugin_id)
+                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
+            // 规则：仅未启用插件可卸载（Activating 是激活进行中的瞬时态，同样拒绝）
+            if matches!(
+                loaded.state,
+                PluginState::Activated | PluginState::Activating | PluginState::Degraded(_)
+            ) {
+                return Err(crate::AppError::Plugin(format!(
+                    "Plugin is running, deactivate it before uninstalling: {}",
+                    plugin_id
+                )));
+            }
+            PathBuf::from(&loaded.extension_path)
+        };
+
+        // 停用（防御性：前置条件已保证未运行，此处只做残留资源清理，幂等）
+        self.deactivate_plugin(plugin_id, true).await?;
+
+        // 丢弃私有数据库缓存连接：删除目录前释放文件句柄（Windows 下打开中的文件删不掉）
+        self.wasm_host_ctx.drop_plugin_db(plugin_id).await;
+
+        // 删除插件安装目录（插件文件与私有 plugin.db 同目录）。目录名须与插件 id
+        // 一致才删，防止 manifest 的异常 extension_path 指向非插件目录；静态注册
+        // 插件（随二进制分发，无独立目录）extension_path 为空 → 跳过
+        if plugin_dir.as_os_str().is_empty() {
+            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] No plugin dir to remove (static/builtin)");
+        } else if plugin_dir.file_name().and_then(|n| n.to_str()) != Some(plugin_id) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                path = %plugin_dir.display(),
+                "[PluginHost] Skip plugin dir removal: extension path does not match plugin id"
+            );
+        } else if plugin_dir.exists() {
+            std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
+                crate::AppError::Plugin(format!("Failed to remove plugin dir '{}': {}", plugin_dir.display(), e))
+            })?;
+        }
+
+        // 移除 WASM 实例与插件记录
+        self.wasm_plugins.write().await.remove(plugin_id);
+        self.plugins.write().await.remove(plugin_id);
+
+        // 顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录，如
+        // 历史安装/激活遗留的私有数据库 plugin.db）。这类目录不参与加载、UI 不可
+        // 见，卸载主流程按 extension_path 也够不着，但会卡住同 id 重装（install 的
+        // 磁盘查重会误判为已安装）。目录含 plugin.json 时视为另一来源的有效安装，
+        // 防御性保留不删；删除失败仅告警，不阻断卸载主流程。
+        let orphan_dir = self.user_plugins_dir.join(plugin_id);
+        if orphan_dir != plugin_dir
+            && orphan_dir.exists()
+            && !orphan_dir.join(PLUGIN_MANIFEST_FILE).exists()
+        {
+            match std::fs::remove_dir_all(&orphan_dir) {
+                Ok(()) => {
+                    tracing::info!(
+                        plugin_id = %plugin_id,
+                        dir = %orphan_dir.display(),
+                        "[PluginHost] Removed orphan residue dir on uninstall"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        plugin_id = %plugin_id,
+                        error = %e,
+                        dir = %orphan_dir.display(),
+                        "[PluginHost] Failed to remove orphan residue dir on uninstall"
+                    );
+                }
+            }
+        }
+
+        // 清理插件存储（插件私有数据 + fs 授权 `fs_granted_paths` / 预授权 `preauth_paths`）
+        if let Err(e) = self.storage.clear_all(plugin_id).await {
+            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
+        }
+        // 撤销持久化审批/授权记录：审批 map（批准权限集 + 内容哈希钉扎）按插件 id
+        // 存在 `__system__` 空间，位于插件自身存储行之外，clear_all 清不到
+        if let Err(e) = PluginApprovalStore::new(self.storage.clone()).revoke(plugin_id).await {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                error = %e,
+                "Failed to revoke plugin approval on uninstall"
+            );
+        }
+        self.persist_activation_state().await;
+
+        // 清理限频簿记：避免重装同 id 插件沿用旧记录
+        self.wasm_reload_throttle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(plugin_id);
+        self.runtime_error_notify_throttle
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(plugin_id);
+
+        tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin uninstalled");
+        Ok(())
+    }
+
+    /// 注册单个插件的 manifest contributes 扩展点（install_from_zip 用）
+    async fn register_plugin_contributions(&self, plugin_id: &str) {
+        let loaded = self.plugins.read().await.get(plugin_id).cloned();
+        let Some(loaded) = loaded else {
+            return;
+        };
+        let m = &loaded.manifest;
+        self.registry.register_commands(&m.id, &m.contributes.commands).await;
+        self.registry.register_views(&m.id, &m.contributes.views).await;
+        if let Some(ref term) = m.contributes.terminal {
+            self.registry
+                .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
+                .await;
+        }
+        self.registry
+            .register_tool_providers(&m.id, &m.contributes.tool_providers)
+            .await;
+        self.registry
+            .register_file_handlers(&m.id, &m.contributes.file_handlers)
+            .await;
+    }
 
     /// 热重载 WASM 插件（开发模式）
     ///
@@ -1107,7 +1371,7 @@ impl PluginHost {
             let loaded = plugins
                 .get(plugin_id)
                 .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            if loaded.source != PluginSource::Wasm {
+            if !loaded.source.has_wasm_backend(&loaded.manifest.rust_library) {
                 return Err(crate::AppError::Plugin(format!(
                     "Plugin {} is not a WASM plugin, cannot hot-reload",
                     plugin_id
@@ -1247,10 +1511,7 @@ impl PluginHost {
             if loaded.source == PluginSource::StaticRegistry {
                 continue;
             }
-            let is_active = matches!(
-                loaded.state,
-                PluginState::Activated | PluginState::Degraded(_)
-            );
+            let is_active = matches!(loaded.state, PluginState::Activated | PluginState::Degraded(_));
             map.insert(id.clone(), is_active);
         }
         tracing::debug!(
@@ -1387,7 +1648,9 @@ mod tests {
     use crate::plugin::wasm_runtime::PluginServices;
     use crate::session::{SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener};
     use crate::system::config::AppConfig;
-    use bedcode_plugin_api::{PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler};
+    use bedcode_plugin_api::{
+        PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler,
+    };
     use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;
@@ -1472,6 +1735,7 @@ mod tests {
             wasm_reload_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             runtime_error_notify_throttle: Arc::new(std::sync::Mutex::new(HashMap::new())),
             shutting_down: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            user_plugins_dir: std::env::temp_dir().join("bedcode-test-user-plugins"),
         }
     }
 
@@ -1540,14 +1804,14 @@ mod tests {
         Box::pin(async { Ok(()) })
     }
 
-    fn synthetic_noop_lifecycle(
-        _ctx: RustPluginContext,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+    fn synthetic_noop_lifecycle(_ctx: RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
         Box::pin(async { Ok(()) })
     }
 
     fn synthetic_commands() -> Vec<PluginCommand> {
-        vec![PluginCommand::new("ping", |_args| async move { Ok(json!({ "pong": true })) })]
+        vec![PluginCommand::new("ping", |_args| async move {
+            Ok(json!({ "pong": true }))
+        })]
     }
 
     fn synthetic_terminal_handlers() -> Vec<Box<dyn TerminalHandler>> {
@@ -1626,9 +1890,16 @@ mod tests {
         host.register_rust_command_handlers().await;
         host.plugins.write().await.insert(
             SYNTHETIC_STATIC_ID.to_string(),
-            make_plugin(SYNTHETIC_STATIC_ID, PluginSource::StaticRegistry, PluginState::Activated),
+            make_plugin(
+                SYNTHETIC_STATIC_ID,
+                PluginSource::StaticRegistry,
+                PluginState::Activated,
+            ),
         );
-        assert!(host.invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({})).await.is_ok());
+        assert!(host
+            .invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({}))
+            .await
+            .is_ok());
 
         // 停用：回落 Deactivated，命令门禁重新关闭
         host.deactivate_plugin(SYNTHETIC_STATIC_ID, false).await.unwrap();
@@ -1637,7 +1908,10 @@ mod tests {
             host.get_plugin(SYNTHETIC_STATIC_ID).await.unwrap().state,
             PluginState::Deactivated
         );
-        assert!(host.invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({})).await.is_err());
+        assert!(host
+            .invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({}))
+            .await
+            .is_err());
 
         // 重启：activate_plugin 对 StaticRegistry 跳过 WASM phase 直接置回 Activated，命令恢复路由
         host.activate_plugin(SYNTHETIC_STATIC_ID, false).await.unwrap();
@@ -1690,6 +1964,176 @@ mod tests {
         assert!(host.get_plugin("com.missing").await.is_none());
         let info = host.get_plugin(TEST_PLUGIN_ID).await.unwrap();
         assert_eq!(info.id, TEST_PLUGIN_ID);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_install_and_uninstall_user_plugin() {
+        use std::io::Write;
+
+        let host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let zip_path = tmp.path().join("manual.zip");
+
+        // 构造一个 ts-only 插件 zip（plugin.json + index.js）
+        {
+            let file = std::fs::File::create(&zip_path).unwrap();
+            let mut writer = zip::ZipWriter::new(file);
+            let manifest = json!({
+                "id": "com.test.manual-install",
+                "name": "Manual Install",
+                "version": "1.0.0",
+                "main": "index.js",
+                "pluginType": "ts-only",
+                "permissions": [],
+                "contributes": {}
+            })
+            .to_string();
+            writer
+                .start_file("plugin.json", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(manifest.as_bytes()).unwrap();
+            writer
+                .start_file("index.js", zip::write::SimpleFileOptions::default())
+                .unwrap();
+            writer.write_all(b"console.log('x')").unwrap();
+            writer.finish().unwrap();
+        }
+
+        // 安装：列表可见 + 来源标记 user-installed
+        let id = host.install_from_zip(zip_path.to_str().unwrap()).await.unwrap();
+        assert_eq!(id, "com.test.manual-install");
+        let info = host.get_plugin(&id).await.unwrap();
+        assert_eq!(info.source, "user-installed");
+
+        // 重复安装被拒（升级需先卸载）
+        let err = host.install_from_zip(zip_path.to_str().unwrap()).await.unwrap_err();
+        assert!(err.to_string().contains("already installed"));
+
+        // 规则校验：运行中的插件拒绝卸载（仅未启用可卸载），拒绝时不动任何数据
+        host.plugins.write().await.get_mut(&id).unwrap().state = PluginState::Activated;
+        let err = host.uninstall_plugin(&id).await.unwrap_err();
+        assert!(err.to_string().contains("running"));
+        assert!(host.get_plugin(&id).await.is_some());
+        assert!(host.user_plugins_dir.join(&id).exists());
+
+        // 停用后可卸载：列表消失 + 安装目录删除
+        host.deactivate_plugin(&id, false).await.unwrap();
+        host.uninstall_plugin(&id).await.unwrap();
+        assert!(host.get_plugin(&id).await.is_none());
+        assert!(!host.user_plugins_dir.join(&id).exists());
+
+        // 卸载不存在的插件 → 报错
+        let err = host.uninstall_plugin("com.test.ghost").await.unwrap_err();
+        assert!(err.to_string().contains("not found"));
+    }
+
+    /// 卸载适用于所有来源：内置/扫描插件按 extension_path 删除其安装目录并清空存储
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_builtin_source_plugin() {
+        let host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        // 目录名与插件 id 一致（loader 约定：plugins_dir/<plugin-id>/）
+        let plugin_dir = tmp.path().join("com.test.builtin-dir");
+        std::fs::create_dir_all(&plugin_dir).unwrap();
+        std::fs::write(plugin_dir.join("plugin.json"), "{}").unwrap();
+
+        let id = "com.test.builtin-dir";
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = plugin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+        host.storage.set(id, "k", json!("v")).await.unwrap();
+
+        // 审批/授权记录存在 `__system__` 空间的 plugin_approvals map（按插件 id 为 key）
+        let approvals = PluginApprovalStore::new(host.storage.clone());
+        approvals
+            .approve(id, &["storage".to_string()], "deadbeef", "1.0.0")
+            .await
+            .unwrap();
+        assert!(approvals.get(id).await.unwrap().is_some());
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        assert!(!plugin_dir.exists());
+        assert!(host.storage.get(id, "k").await.unwrap().is_none());
+        // 持久化授权随卸载一并撤销（不残留可复用的批准记录）
+        assert!(approvals.get(id).await.unwrap().is_none());
+    }
+
+    /// 异常 extension_path（目录名与插件 id 不一致）不删目录，其余数据照常清理
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_skips_mismatched_extension_path() {
+        let host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        let foreign_dir = tmp.path().join("not-the-plugin-id");
+        std::fs::create_dir_all(&foreign_dir).unwrap();
+
+        let id = "com.test.mismatch";
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = foreign_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        assert!(foreign_dir.exists());
+    }
+
+    /// 卸载时顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录，
+    /// 如历史安装/激活遗留的 plugin.db），避免残留目录卡住同 id 重装
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_removes_orphan_residue_in_user_dir() {
+        let mut host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        // 隔离：user_plugins_dir 指向本测试独有目录，避免与并行测试共享固定路径
+        host.user_plugins_dir = tmp.path().join("user-plugins");
+
+        let id = "com.test.orphan-uninstall";
+        // 已加载插件：extension_path 指向内置资源目录（与用户目录不同）
+        let builtin_dir = tmp.path().join("builtin").join(id);
+        std::fs::create_dir_all(&builtin_dir).unwrap();
+        std::fs::write(builtin_dir.join("plugin.json"), "{}").unwrap();
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = builtin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        // 用户目录存在同 id 孤儿残留（只有 plugin.db，无 plugin.json）
+        let orphan_dir = host.user_plugins_dir.join(id);
+        std::fs::create_dir_all(&orphan_dir).unwrap();
+        std::fs::write(orphan_dir.join("plugin.db"), b"orphan").unwrap();
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        // 孤儿残留目录随卸载一并清理
+        assert!(!orphan_dir.exists());
+    }
+
+    /// 用户目录下含 plugin.json 的同 id 目录视为另一来源的有效安装，卸载时防御性保留
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_uninstall_keeps_valid_same_id_dir_in_user_dir() {
+        let mut host = setup_host().await;
+        let tmp = tempfile::tempdir().unwrap();
+        host.user_plugins_dir = tmp.path().join("user-plugins");
+
+        let id = "com.test.valid-same-id";
+        let builtin_dir = tmp.path().join("builtin").join(id);
+        std::fs::create_dir_all(&builtin_dir).unwrap();
+        std::fs::write(builtin_dir.join("plugin.json"), "{}").unwrap();
+        let mut plugin = make_plugin(id, PluginSource::FileScan, PluginState::Deactivated);
+        plugin.extension_path = builtin_dir.to_string_lossy().to_string();
+        host.plugins.write().await.insert(id.to_string(), plugin);
+
+        // 用户目录存在含 plugin.json 的同 id 目录（有效安装副本）
+        let same_id_dir = host.user_plugins_dir.join(id);
+        std::fs::create_dir_all(&same_id_dir).unwrap();
+        std::fs::write(same_id_dir.join("plugin.json"), "{}").unwrap();
+
+        host.uninstall_plugin(id).await.unwrap();
+
+        assert!(host.get_plugin(id).await.is_none());
+        // 有效安装目录不被误删
+        assert!(same_id_dir.exists());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2259,6 +2703,17 @@ mod tests {
     /// `component-test-key`。extension_path 指向临时目录（invoke 的
     /// resource_dir 注入断言用）。
     async fn setup_wasm_plugin(host: &PluginHost, tmp_dir: &tempfile::TempDir) -> String {
+        self::setup_wasm_plugin_with_source(host, tmp_dir, PluginSource::Wasm).await
+    }
+
+    /// [`setup_wasm_plugin`] 的来源参数版本：内置 wasm（`Wasm`）或用户 zip 安装的
+    /// rust-ts（`UserInstalled`）共用同一实例化/注入逻辑；来源不同决定宿主
+    /// 激活是否执行 guest 生命周期（has_wasm_backend）
+    async fn setup_wasm_plugin_with_source(
+        host: &PluginHost,
+        tmp_dir: &tempfile::TempDir,
+        source: PluginSource,
+    ) -> String {
         let component = host
             .wasm_runtime()
             .compile_component(&build_test_component())
@@ -2279,7 +2734,7 @@ mod tests {
             .await
             .insert(TEST_WASM_PLUGIN_ID.to_string(), Arc::new(Mutex::new(plugin)));
 
-        let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, PluginSource::Wasm, PluginState::Loaded);
+        let mut loaded = make_plugin(TEST_WASM_PLUGIN_ID, source, PluginState::Loaded);
         loaded.manifest.rust_library = "bedcode_plugin_component_test".to_string();
         loaded.extension_path = extension_path;
         host.plugins
@@ -2339,6 +2794,77 @@ mod tests {
             .expect("deactivate after recovery ok");
         let info = host.get_plugin(&pid).await.unwrap();
         assert_eq!(info.state, PluginState::Deactivated);
+    }
+
+    /// 用户 zip 安装的 rust-ts 插件（`UserInstalled` + 声明 rust_library）：
+    /// 激活必须执行 guest activate + on_startup（与内置 wasm 插件一致）。
+    ///
+    /// 此前宿主在 `source == Wasm` 分支才调 guest 生命周期，而命令分发
+    /// （invoke_wasm_command）对 UserInstalled 仍路由到 wasm 实例——guest 的
+    /// 激活态（OnceLock 数据目录等）永不初始化，复现 agent-hub「detect:
+    /// data dir unavailable (activate incomplete)」。本测试用 fail-startup
+    /// 开关验证：终态落 Degraded 即证明 guest 生命周期真实执行过。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_installed_wasm_plugin_runs_guest_lifecycle() {
+        let tmp_dir = tempfile::TempDir::new().unwrap();
+        let host = setup_host().await;
+        let pid = setup_wasm_plugin_with_source(&host, &tmp_dir, PluginSource::UserInstalled).await;
+
+        // 预置启动失败开关：激活调用本身成功，但终态必须如实落 Degraded
+        host.storage()
+            .set(&pid, "component-test-fail-startup", json!(true))
+            .await
+            .expect("preset fail-startup switch");
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("activation call must succeed even when on_startup reports failure");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert!(
+            matches!(&info.state, PluginState::Degraded(reason) if reason.contains("simulated startup init failure")),
+            "user-installed wasm plugin must run guest lifecycle, expected Degraded, got {:?}",
+            info.state
+        );
+
+        // 移除开关重试 → Activated；停用干净回落（guest deactivate 亦须执行）
+        host.storage()
+            .delete(&pid, "component-test-fail-startup")
+            .await
+            .expect("clear fail-startup switch");
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("retry activation must succeed");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(info.state, PluginState::Activated);
+
+        host.deactivate_plugin(&pid, false)
+            .await
+            .expect("deactivate after recovery ok");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(info.state, PluginState::Deactivated);
+    }
+
+    /// 用户 zip 安装的 TS-only 插件（`UserInstalled` + 无 rust_library、无 wasm
+    /// 实例）：激活不触碰 guest 生命周期，正常落 Activated。
+    /// 防止把 has_wasm_backend 误放过宽（所有 UserInstalled 都走 guest 调用），
+    /// 那会让无实例插件在激活时命中「WASM module not loaded」而置 Error。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_user_installed_ts_only_plugin_skips_guest_lifecycle() {
+        let host = setup_host().await;
+        let pid = TEST_PLUGIN_ID.to_string();
+
+        // TS-only：无 wasm 实例（wasm_plugins 不插）、rust_library 为空
+        let loaded = make_plugin(&pid, PluginSource::UserInstalled, PluginState::Loaded);
+        host.plugins.write().await.insert(pid.clone(), loaded);
+
+        host.activate_plugin(&pid, false)
+            .await
+            .expect("ts-only user plugin activation must succeed");
+        let info = host.get_plugin(&pid).await.unwrap();
+        assert_eq!(
+            info.state,
+            PluginState::Activated,
+            "ts-only user plugin must not attempt guest lifecycle"
+        );
     }
 
     /// 持久化写入路径：persist=true 时 Degraded 以 true 落库（用户意图语义）
@@ -2550,11 +3076,7 @@ mod tests {
     async fn preauthorize_empty_paths_passes() {
         let host = setup_host().await;
         let result = host.preauthorize_plugin(TEST_PLUGIN_ID).await;
-        assert!(
-            result.is_ok(),
-            "empty preauth paths must pass, got: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "empty preauth paths must pass, got: {:?}", result.err());
     }
 
     /// file-transfer 共享目录未配置:放行(启用先行)。
@@ -2563,9 +3085,7 @@ mod tests {
     #[tokio::test]
     async fn preauthorize_file_transfer_empty_shared_roots_passes() {
         let host = setup_host().await;
-        let result = host
-            .preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID)
-            .await;
+        let result = host.preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID).await;
         assert!(
             result.is_ok(),
             "file-transfer with empty shared_roots must pass (enable-first), got: {:?}",
@@ -2623,11 +3143,7 @@ mod tests {
             .manifest
             .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
         host.storage
-            .set(
-                TEST_PLUGIN_ID,
-                "fs_granted_paths",
-                json!([expanded]),
-            )
+            .set(TEST_PLUGIN_ID, "fs_granted_paths", json!([expanded]))
             .await
             .unwrap();
 
@@ -2661,8 +3177,7 @@ mod tests {
         // 接受 Ok 或 Err(无头上下文拒绝)— 但不能是 storage 解析错误
         if let Err(e) = &result {
             assert!(
-                !e.to_string().contains("parse")
-                    && !e.to_string().contains("deserialize"),
+                !e.to_string().contains("parse") && !e.to_string().contains("deserialize"),
                 "storage parse error indicates collector bug: {}",
                 e
             );

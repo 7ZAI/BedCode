@@ -150,13 +150,20 @@ fn fetch_branches(working_dir: &str) -> crate::Result<GitBranchesResponseData> {
     })
 }
 
+/// 分支名白名单校验（纯函数，供测试）：只允许字母/数字/`-`/`_`/`/`/`.`，
+/// 拒绝一切 shell 元字符与路径穿越形态——命令注入安全红线（AGENTS.md §8）。
+/// 空串拒绝（all() 对空迭代器恒真，须显式排除）
+pub(crate) fn is_valid_branch_name(branch: &str) -> bool {
+    !branch.is_empty()
+        && branch
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
+}
+
 /// 执行 git checkout
 fn run_git_checkout(working_dir: &str, branch: &str) -> crate::Result<String> {
     // 校验分支名，防止命令注入（只允许字母、数字、-、_、/、.）
-    if !branch
-        .chars()
-        .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.')
-    {
+    if !is_valid_branch_name(branch) {
         return Err(crate::AppError::InvalidInput(format!(
             "Invalid branch name: {}",
             branch
@@ -208,4 +215,51 @@ fn check_git_status(working_dir: &str) -> crate::Result<GitStatusResponseData> {
         has_changes: changed_count > 0,
         changed_count,
     })
+}
+
+// ==================== Tests ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn branch_name_whitelist_accepts_normal_names() {
+        for name in ["main", "feature/login", "v2.0.1", "hotfix_1", "release/2026-09", "a"] {
+            assert!(is_valid_branch_name(name), "合法分支名 {name} 应通过白名单");
+        }
+    }
+
+    #[test]
+    fn branch_name_whitelist_rejects_injection_forms() {
+        // shell 元字符 / 命令拼接 / 空白——命令注入安全红线。
+        // 注：`../..` 与 Unicode 字母属白名单字符集（git 自会拒绝无效 ref，
+        // argv 数组执行不经 shell，无注入风险），故不在反例之列
+        for name in [
+            "main;rm -rf /",
+            "main && echo pwned",
+            "--upload-pack=touch /tmp/x",
+            "$(id)",
+            "main`id`",
+            "a b",
+            "feature\\login",
+            "main|sh",
+        ] {
+            assert!(!is_valid_branch_name(name), "注入形态 {name} 必须被拒绝");
+        }
+    }
+
+    #[test]
+    fn branch_name_whitelist_rejects_empty() {
+        // all() 对空迭代器恒真，空分支名必须显式拒绝（变异点：去掉 is_empty 检查则失败）
+        assert!(!is_valid_branch_name(""));
+    }
+
+    #[test]
+    fn branch_name_whitelist_rejects_non_ascii_control_chars() {
+        // 控制字符不在白名单（Unicode 字母属 alphanumeric 白名单——git 支持
+        // Unicode 分支名，argv 执行无 shell 风险，故仅断言控制字符被拒）
+        assert!(!is_valid_branch_name("main\u{0000}"));
+        assert!(!is_valid_branch_name("main\u{001b}"));
+    }
 }

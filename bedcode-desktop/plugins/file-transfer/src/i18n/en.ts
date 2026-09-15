@@ -85,6 +85,7 @@ const en: MessageSchema = {
   // ==================== Queue panel ====================
   'transfer.queue.title': 'Transfer queue',
   'transfer.queue.count': '{count} tasks',
+  'transfer.queue.close': 'Hide transfer queue',
 
   // ==================== Queue tabs (v2) ====================
   'transfer.queue.all': 'All',
@@ -145,6 +146,8 @@ const en: MessageSchema = {
   'transfer.settings.concurrency': 'Concurrency',
   'transfer.settings.concurrencyHint':
     'Number of simultaneous transfers; increasing it may use more bandwidth',
+  'transfer.settings.concurrencyMinus': 'Decrease concurrency',
+  'transfer.settings.concurrencyPlus': 'Increase concurrency',
   'transfer.settings.plainWarning':
     'Files are transferred unencrypted on your local network. Only use this on trusted WiFi.',
   'transfer.settings.receivingPolicy': 'Receiving policy',
@@ -172,6 +175,8 @@ const en: MessageSchema = {
   // ==================== Transfer history (v2) ====================
   'transfer.history.title': 'History',
   'transfer.history.clear': 'Clear history',
+  'transfer.history.clearConfirmTitle': 'Clear transfer history?',
+  'transfer.history.clearConfirmBody': 'All completed, failed and cancelled records will be deleted (in-progress tasks are unaffected). This cannot be undone.',
   'transfer.history.empty': 'No transfer history',
   'transfer.history.openFolder': 'Show in folder',
   'transfer.history.results.completed': 'Completed',

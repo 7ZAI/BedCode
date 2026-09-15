@@ -119,8 +119,22 @@ mod tests {
 
     #[test]
     fn test_local_ip_addresses() {
-        // 无网环境可为空列表，但不应 panic
-        let _ = local_ip_addresses();
+        // 无网环境可为空列表，但不应 panic；非空时逐项验证过滤契约
+        let addrs = local_ip_addresses();
+        for addr in &addrs {
+            let ip: std::net::IpAddr = addr.parse().expect("local_ip_addresses 应返回合法 IP 文本");
+            let ipv4 = match ip {
+                std::net::IpAddr::V4(v4) => v4,
+                std::net::IpAddr::V6(_) => panic!("local_ip_addresses 只应返回 IPv4, got {addr}"),
+            };
+            assert!(!ipv4.is_loopback(), "不得包含环回地址: {addr}");
+            assert!(!ipv4.is_link_local(), "不得包含链路本地地址: {addr}");
+        }
+        // 去重后长度一致（无重复条目）
+        let mut dedup = addrs.clone();
+        dedup.sort();
+        dedup.dedup();
+        assert_eq!(dedup.len(), addrs.len(), "本地地址列表不应含重复项");
     }
 
     #[test]
@@ -166,9 +180,12 @@ mod tests {
             .expect("create runtime")
             .block_on(SystemInfo::collect());
         assert!(!info.os_name.is_empty());
+        // 非 Android 平台 os_name 应等于编译目标 OS（强断言而非仅非空）
+        assert_eq!(info.os_name, std::env::consts::OS);
         assert!(!info.app_version.is_empty());
         assert_eq!(info.app_version, env!("CARGO_PKG_VERSION"));
-        // 非 Android 平台设备名 = hostname（或默认值），不为空
+        // 非 Android 平台设备名 = hostname（或默认值），不为空且不含空白/换行
         assert!(!info.device_name.is_empty());
+        assert!(!info.device_name.chars().any(|c| c.is_whitespace() || c == '\n'));
     }
 }

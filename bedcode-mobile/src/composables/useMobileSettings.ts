@@ -43,18 +43,18 @@ export const defaultMobileSettings: MobileSettings = {
   preferredAuthMethod: 'pairing_code',
 }
 
-/** 字体大小映射到终端字体大小（正常 = 旧版“中”，向上提供大、超大两档） */
+/** 字体大小映射到终端字体大小（正常 = 旧版“中”；三档跨度加大：14/18/22，大小档差异更明显） */
 const fontSizeMap = {
   normal: 14,
-  large: 16,
-  xlarge: 18,
+  large: 18,
+  xlarge: 22,
 }
 
-/** UI 字号缩放系数：作用于 --font-size-* 变量（与终端字号档位一致的比例） */
+/** UI 字号缩放系数：作用于 --font-size-* 变量（与终端字号档位比例一致；跨度加大：1/1.15/1.35） */
 const uiFontScaleMap = {
   normal: 1,
-  large: 1.125,
-  xlarge: 1.25,
+  large: 1.15,
+  xlarge: 1.35,
 } as const
 
 /** 旧版三档字体大小迁移到新档位 */

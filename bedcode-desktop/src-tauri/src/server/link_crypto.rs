@@ -38,10 +38,10 @@ use crate::system::error::{AppError, Result};
 use bedcode_link_crypto as proto;
 
 pub use proto::{
-    b64_decode, b64_encode, decrypt_http_body, encrypt_http_body, parse_negotiation, HttpEnvelope,
-    WsDirectionCipher, WsTextEnvelope, NEGOTIATION_HEADER, ORIGIN_BINARY, ORIGIN_TEXT,
-    PROTOCOL_VERSION, WS_BINARY_HEADER_LEN, WS_FRAME_VERSION, WS_TRANSCRIPT_PREFIX,
-    HTTP_INFO_REQUEST, HTTP_INFO_RESPONSE, WS_INFO_CLIENT_TO_SERVER, WS_INFO_SERVER_TO_CLIENT,
+    b64_decode, b64_encode, decrypt_http_body, encrypt_http_body, parse_negotiation, HttpEnvelope, WsDirectionCipher,
+    WsTextEnvelope, HTTP_INFO_REQUEST, HTTP_INFO_RESPONSE, NEGOTIATION_HEADER, ORIGIN_BINARY, ORIGIN_TEXT,
+    PROTOCOL_VERSION, WS_BINARY_HEADER_LEN, WS_FRAME_VERSION, WS_INFO_CLIENT_TO_SERVER, WS_INFO_SERVER_TO_CLIENT,
+    WS_TRANSCRIPT_PREFIX,
 };
 
 // ==================== 常量 ====================
@@ -105,19 +105,15 @@ impl Default for LinkCryptoConfig {
 }
 
 /// 运行期配置快照（单例）：过滤器热路径只做一次读锁克隆，无注册/注销抖动
-static CONFIG_SNAPSHOT: LazyLock<RwLock<LinkCryptoConfig>> =
-    LazyLock::new(|| RwLock::new(LinkCryptoConfig::default()));
+static CONFIG_SNAPSHOT: LazyLock<RwLock<LinkCryptoConfig>> = LazyLock::new(|| RwLock::new(LinkCryptoConfig::default()));
 
 /// 读取当前配置快照
 pub fn current_config() -> LinkCryptoConfig {
-    CONFIG_SNAPSHOT
-        .read()
-        .map(|guard| guard.clone())
-        .unwrap_or_else(|_| {
-            // 锁中毒退化为默认值（全关），可用性优先；中毒方已记 error
-            tracing::error!("link crypto config snapshot lock poisoned, using default");
-            LinkCryptoConfig::default()
-        })
+    CONFIG_SNAPSHOT.read().map(|guard| guard.clone()).unwrap_or_else(|_| {
+        // 锁中毒退化为默认值（全关），可用性优先；中毒方已记 error
+        tracing::error!("link crypto config snapshot lock poisoned, using default");
+        LinkCryptoConfig::default()
+    })
 }
 
 /// 更新配置快照（调用方负责先持久化成功再更新内存态）
@@ -203,15 +199,14 @@ impl LinkIdentity {
         };
         let json = serde_json::to_string_pretty(&file)
             .map_err(|e| AppError::Internal(format!("serialize link identity failed: {e}")))?;
-        std::fs::write(&path, json)
-            .map_err(|e| AppError::Internal(format!("write {}: {e}", path.display())))?;
+        std::fs::write(&path, json).map_err(|e| AppError::Internal(format!("write {}: {e}", path.display())))?;
         tracing::info!(file = %path.display(), "link crypto identity generated");
         Self::from_keypair(keypair)
     }
 
     fn load(path: &Path) -> Result<Self> {
-        let json = std::fs::read_to_string(path)
-            .map_err(|e| AppError::Internal(format!("read {}: {e}", path.display())))?;
+        let json =
+            std::fs::read_to_string(path).map_err(|e| AppError::Internal(format!("read {}: {e}", path.display())))?;
         let file: IdentityFile = serde_json::from_str(&json).map_err(|e| {
             AppError::Internal(format!(
                 "link identity {} is corrupt, refusing to regenerate (pins would break): {e}",
@@ -225,21 +220,16 @@ impl LinkIdentity {
             )));
         }
         let mut private = [0u8; crate::utils::crypto::x25519::KEY_LEN];
-        hex::decode_to_slice(&file.x25519_private_hex, &mut private).map_err(|e| {
-            AppError::Internal(format!("link identity private key invalid hex: {e}"))
-        })?;
-        let keypair =
-            crate::utils::crypto::x25519::X25519KeyPair::from_private(&private);
+        hex::decode_to_slice(&file.x25519_private_hex, &mut private)
+            .map_err(|e| AppError::Internal(format!("link identity private key invalid hex: {e}")))?;
+        let keypair = crate::utils::crypto::x25519::X25519KeyPair::from_private(&private);
         Self::from_keypair(keypair)
     }
 
     fn from_keypair(keypair: crate::utils::crypto::x25519::X25519KeyPair) -> Result<Self> {
         // 指纹先于 move 计算：keypair 随结构体构造被消费
         let fingerprint = fingerprint_of(keypair.public());
-        Ok(Self {
-            keypair,
-            fingerprint,
-        })
+        Ok(Self { keypair, fingerprint })
     }
 
     /// 公钥（base64，配对响应下发用，issue 03 消费）
@@ -297,8 +287,7 @@ pub fn identity_parts() -> Option<(&'static str, String)> {
 
 /// 身份私钥访问（02/04 内部派生用；未初始化返回 None，调用方 fail-closed）
 #[allow(dead_code)] // 预留：ADR 02/04 内部派生路径尚未接入
-pub(crate) fn identity_keypair(
-) -> Option<&'static crate::utils::crypto::x25519::X25519KeyPair> {
+pub(crate) fn identity_keypair() -> Option<&'static crate::utils::crypto::x25519::X25519KeyPair> {
     IDENTITY.get().map(|i| i.keypair())
 }
 
@@ -320,8 +309,7 @@ pub struct HttpTrafficKeys {
 pub fn derive_http_traffic_keys(shared_ikm: &[u8], http_path: &str) -> Result<HttpTrafficKeys> {
     let salt = http_path.as_bytes();
     let req = crate::utils::crypto::kdf::hkdf_sha256(Some(salt), shared_ikm, HTTP_INFO_REQUEST, 32)?;
-    let resp =
-        crate::utils::crypto::kdf::hkdf_sha256(Some(salt), shared_ikm, HTTP_INFO_RESPONSE, 32)?;
+    let resp = crate::utils::crypto::kdf::hkdf_sha256(Some(salt), shared_ikm, HTTP_INFO_RESPONSE, 32)?;
     let to_arr = |v: Vec<u8>| {
         let mut out = [0u8; 32];
         out.copy_from_slice(&v);
@@ -383,8 +371,7 @@ pub fn derive_ws_session_ciphers(client_ek_b64: &str) -> Result<WsHandshake> {
 
 // ---------- 连接密码表（actor 注册 / 过滤器消费，keyed by 对端 addr） ----------
 
-static WS_CIPHERS: LazyLock<Mutex<HashMap<String, WsSessionCiphers>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static WS_CIPHERS: LazyLock<Mutex<HashMap<String, WsSessionCiphers>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 握手完成后注册连接密码（此后该连接所有帧进入加密模式）；重复注册覆盖
 pub fn ws_register_ciphers(addr: &str, ciphers: WsSessionCiphers) {
@@ -426,36 +413,50 @@ fn ws_aad(channel_str: &str, direction: Direction, origin: u8) -> Vec<u8> {
 // 保持既有模块路径可见；字段形状逐字节一致。
 
 /// 加密一条出站文本帧（JSON → 信封 JSON 字符串），并推进发送序号
-pub(crate) fn ws_encrypt_outbound_text(
-    addr: &str,
-    channel_str: &str,
-    text: &str,
-) -> Result<Vec<u8>> {
-    let mut map = WS_CIPHERS.lock().map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
-    let c = map.get_mut(addr).ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
+pub(crate) fn ws_encrypt_outbound_text(addr: &str, channel_str: &str, text: &str) -> Result<Vec<u8>> {
+    let mut map = WS_CIPHERS
+        .lock()
+        .map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
+    let c = map
+        .get_mut(addr)
+        .ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
     let seq = c.s2c_next_seq;
     let aad = ws_aad(channel_str, Direction::Outbound, ORIGIN_TEXT);
     let sealed = encrypt_ws_payload(&c.server_to_client, seq, text.as_bytes(), &aad)?;
-    c.s2c_next_seq = seq.checked_add(1).ok_or_else(|| AppError::Internal("ws seq overflow".into()))?;
-    let envelope = WsTextEnvelope { v: WS_FRAME_VERSION, seq, n: b64_encode(&sealed.nonce), ct: b64_encode(&sealed.ciphertext) };
+    c.s2c_next_seq = seq
+        .checked_add(1)
+        .ok_or_else(|| AppError::Internal("ws seq overflow".into()))?;
+    let envelope = WsTextEnvelope {
+        v: WS_FRAME_VERSION,
+        seq,
+        n: b64_encode(&sealed.nonce),
+        ct: b64_encode(&sealed.ciphertext),
+    };
     Ok(serde_json::to_vec(&envelope)?)
 }
 
 /// 解密一条入站文本帧（信封 JSON → 原 JSON 字符串），严格校验接收序号
 pub(crate) fn ws_decrypt_inbound_text(addr: &str, channel_str: &str, body: &[u8]) -> Result<String> {
-    let envelope: WsTextEnvelope = serde_json::from_slice(body)
-        .map_err(|e| AppError::Internal(format!("ws text envelope malformed: {e}")))?;
+    let envelope: WsTextEnvelope =
+        serde_json::from_slice(body).map_err(|e| AppError::Internal(format!("ws text envelope malformed: {e}")))?;
     if envelope.v != WS_FRAME_VERSION {
-        return Err(AppError::Internal(format!("unsupported ws frame version {}", envelope.v)));
+        return Err(AppError::Internal(format!(
+            "unsupported ws frame version {}",
+            envelope.v
+        )));
     }
     let nonce_v = b64_decode(&envelope.n)?;
-    let nonce: [u8; 12] = nonce_v.try_into().map_err(|v: Vec<u8>| {
-        AppError::Internal(format!("nonce length mismatch: {}", v.len()))
-    })?;
+    let nonce: [u8; 12] = nonce_v
+        .try_into()
+        .map_err(|v: Vec<u8>| AppError::Internal(format!("nonce length mismatch: {}", v.len())))?;
     let ciphertext = b64_decode(&envelope.ct)?;
 
-    let mut map = WS_CIPHERS.lock().map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
-    let c = map.get_mut(addr).ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
+    let mut map = WS_CIPHERS
+        .lock()
+        .map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
+    let c = map
+        .get_mut(addr)
+        .ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
     if envelope.seq != c.c2s_expected_seq {
         return Err(AppError::Internal(format!(
             "ws seq mismatch: expected {}, got {}",
@@ -472,32 +473,31 @@ pub(crate) fn ws_decrypt_inbound_text(addr: &str, channel_str: &str, body: &[u8]
     String::from_utf8(plain).map_err(|e| AppError::Internal(format!("decrypted text not utf-8: {e}")))
 }
 
-struct SealedPayload { nonce: [u8; 12], ciphertext: Vec<u8> }
+struct SealedPayload {
+    nonce: [u8; 12],
+    ciphertext: Vec<u8>,
+}
 
-fn encrypt_ws_payload(
-    cipher: &WsDirectionCipher,
-    seq: u64,
-    plaintext: &[u8],
-    aad: &[u8],
-) -> Result<SealedPayload> {
+fn encrypt_ws_payload(cipher: &WsDirectionCipher, seq: u64, plaintext: &[u8], aad: &[u8]) -> Result<SealedPayload> {
     let nonce = ws_nonce(&cipher.nonce_prefix, seq);
-    let ciphertext =
-        crate::utils::crypto::aes_gcm::encrypt(&cipher.key, &nonce, plaintext, Some(aad))?;
+    let ciphertext = crate::utils::crypto::aes_gcm::encrypt(&cipher.key, &nonce, plaintext, Some(aad))?;
     Ok(SealedPayload { nonce, ciphertext })
 }
 
 /// 加密一条出站二进制帧（原帧 → ver+seq+ct），并推进发送序号
-pub(crate) fn ws_encrypt_outbound_binary(
-    addr: &str,
-    channel_str: &str,
-    data: &[u8],
-) -> Result<Vec<u8>> {
-    let mut map = WS_CIPHERS.lock().map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
-    let c = map.get_mut(addr).ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
+pub(crate) fn ws_encrypt_outbound_binary(addr: &str, channel_str: &str, data: &[u8]) -> Result<Vec<u8>> {
+    let mut map = WS_CIPHERS
+        .lock()
+        .map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
+    let c = map
+        .get_mut(addr)
+        .ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
     let seq = c.s2c_next_seq;
     let aad = ws_aad(channel_str, Direction::Outbound, ORIGIN_BINARY);
     let sealed = encrypt_ws_payload(&c.server_to_client, seq, data, &aad)?;
-    c.s2c_next_seq = seq.checked_add(1).ok_or_else(|| AppError::Internal("ws seq overflow".into()))?;
+    c.s2c_next_seq = seq
+        .checked_add(1)
+        .ok_or_else(|| AppError::Internal("ws seq overflow".into()))?;
     let mut frame = Vec::with_capacity(WS_BINARY_HEADER_LEN + sealed.ciphertext.len());
     frame.push(WS_FRAME_VERSION);
     frame.extend_from_slice(&seq.to_be_bytes());
@@ -506,16 +506,9 @@ pub(crate) fn ws_encrypt_outbound_binary(
 }
 
 /// 解密一条入站二进制帧（ver+seq+ct → 原帧），严格校验接收序号
-pub(crate) fn ws_decrypt_inbound_binary(
-    addr: &str,
-    channel_str: &str,
-    data: &[u8],
-) -> Result<Vec<u8>> {
+pub(crate) fn ws_decrypt_inbound_binary(addr: &str, channel_str: &str, data: &[u8]) -> Result<Vec<u8>> {
     if data.len() < WS_BINARY_HEADER_LEN {
-        return Err(AppError::Internal(format!(
-            "ws binary frame too short: {}",
-            data.len()
-        )));
+        return Err(AppError::Internal(format!("ws binary frame too short: {}", data.len())));
     }
     if data[0] != WS_FRAME_VERSION {
         return Err(AppError::Internal(format!("unsupported ws frame version {}", data[0])));
@@ -523,8 +516,12 @@ pub(crate) fn ws_decrypt_inbound_binary(
     let seq = u64::from_be_bytes(data[1..9].try_into().expect("seq slice is 8 bytes"));
     let ciphertext = &data[WS_BINARY_HEADER_LEN..];
 
-    let mut map = WS_CIPHERS.lock().map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
-    let c = map.get_mut(addr).ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
+    let mut map = WS_CIPHERS
+        .lock()
+        .map_err(|_| AppError::Internal("ws cipher lock poisoned".into()))?;
+    let c = map
+        .get_mut(addr)
+        .ok_or_else(|| AppError::Internal("no ws cipher for addr".into()))?;
     if seq != c.c2s_expected_seq {
         return Err(AppError::Internal(format!(
             "ws seq mismatch: expected {}, got {}",
@@ -542,12 +539,7 @@ pub(crate) fn ws_decrypt_inbound_binary(
 }
 
 /// 过滤器统一分发：按帧来源选择文本/二进制编解码路径
-fn ws_decrypt_inbound_text_binary(
-    addr: &str,
-    channel_str: &str,
-    origin: u8,
-    data: &[u8],
-) -> Result<Vec<u8>> {
+fn ws_decrypt_inbound_text_binary(addr: &str, channel_str: &str, origin: u8, data: &[u8]) -> Result<Vec<u8>> {
     if origin == ORIGIN_TEXT {
         ws_decrypt_inbound_text(addr, channel_str, data).map(String::into_bytes)
     } else {
@@ -555,15 +547,10 @@ fn ws_decrypt_inbound_text_binary(
     }
 }
 
-fn ws_encrypt_outbound_text_binary(
-    addr: &str,
-    channel_str: &str,
-    origin: u8,
-    plaintext: &[u8],
-) -> Result<Vec<u8>> {
+fn ws_encrypt_outbound_text_binary(addr: &str, channel_str: &str, origin: u8, plaintext: &[u8]) -> Result<Vec<u8>> {
     if origin == ORIGIN_TEXT {
-        let text = std::str::from_utf8(plaintext)
-            .map_err(|e| AppError::Internal(format!("outbound text not utf-8: {e}")))?;
+        let text =
+            std::str::from_utf8(plaintext).map_err(|e| AppError::Internal(format!("outbound text not utf-8: {e}")))?;
         ws_encrypt_outbound_text(addr, channel_str, text)
     } else {
         ws_encrypt_outbound_binary(addr, channel_str, plaintext)
@@ -615,8 +602,7 @@ struct CachedHttpKeys {
     inserted_at: Instant,
 }
 
-static HTTP_KEY_CACHE: LazyLock<Mutex<HashMap<String, CachedHttpKeys>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static HTTP_KEY_CACHE: LazyLock<Mutex<HashMap<String, CachedHttpKeys>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn cache_key(peer: &str, ek_b64: &str) -> String {
     // \u{1} 作分隔符：peer 与 ek 各自不含该控制字符，杜绝拼接歧义
@@ -679,14 +665,10 @@ fn parse_peer(peer: &str) -> Option<std::net::SocketAddr> {
 }
 
 /// 本地豁免判定（spec §4，硬约束不受开关影响）：
-/// ① WsLocal 通道（桌面 WebView 本地终端，构造侧已标）；
-/// ② 环回对端（hook 脚本调 /api/plugin/*、本机工具直连 REST）；
-/// ③ 配对引导白名单路由。
+/// ① 环回对端（hook 脚本调 /api/plugin/*、本机工具直连 REST）；
+/// ② 配对引导白名单路由。
 /// peer 无法解析时视为远端（fail-safe：宁多过滤不放行）。
 fn is_exempt(ctx: &FilterContext<'_>) -> bool {
-    if matches!(ctx.channel, TrafficChannel::WsLocal) {
-        return true;
-    }
     if parse_peer(ctx.peer).is_some_and(|addr| addr.ip().is_loopback()) {
         return true;
     }
@@ -707,8 +689,6 @@ impl LinkEncryptionFilter {
             TrafficChannel::Http => config.encrypt_http,
             TrafficChannel::WsTerminal => config.encrypt_ws_terminal,
             TrafficChannel::WsEvent => config.encrypt_ws_event,
-            // 豁免分支已拦截，此处不可达；保守放行
-            TrafficChannel::WsLocal => false,
         }
     }
 
@@ -721,20 +701,19 @@ impl LinkEncryptionFilter {
                 Verdict::Continue
             } else {
                 Verdict::Reject(
-                    "link encryption required by server policy (allow_plaintext_fallback=false)"
-                        .to_string(),
+                    "link encryption required by server policy (allow_plaintext_fallback=false)".to_string(),
                 )
             };
         }
-        let origin = if ctx.route == "binary" { ORIGIN_BINARY } else { ORIGIN_TEXT };
+        let origin = if ctx.route == "binary" {
+            ORIGIN_BINARY
+        } else {
+            ORIGIN_TEXT
+        };
         let channel_str = ctx.channel.as_str();
         let result = match ctx.direction {
-            Direction::Inbound => {
-                ws_decrypt_inbound_text_binary(ctx.peer, channel_str, origin, &ctx.data)
-            }
-            Direction::Outbound => {
-                ws_encrypt_outbound_text_binary(ctx.peer, channel_str, origin, &ctx.data)
-            }
+            Direction::Inbound => ws_decrypt_inbound_text_binary(ctx.peer, channel_str, origin, &ctx.data),
+            Direction::Outbound => ws_encrypt_outbound_text_binary(ctx.peer, channel_str, origin, &ctx.data),
         };
         match result {
             Ok(sealed) => {
@@ -763,8 +742,7 @@ impl LinkEncryptionFilter {
                 Verdict::Continue
             } else {
                 Verdict::Reject(
-                    "link encryption required by server policy (allow_plaintext_fallback=false)"
-                        .to_string(),
+                    "link encryption required by server policy (allow_plaintext_fallback=false)".to_string(),
                 )
             };
         };
@@ -778,26 +756,17 @@ impl LinkEncryptionFilter {
         let had_body = !ctx.data.is_empty();
         let result = (|| -> Result<()> {
             let ek_raw = b64_decode(ek_b64)?;
-            let peer_public: [u8; crate::utils::crypto::x25519::KEY_LEN] = ek_raw
-                .try_into()
-                .map_err(|v: Vec<u8>| {
-                    AppError::Internal(format!(
-                        "negotiation key length mismatch: expected 32, got {}",
-                        v.len()
-                    ))
+            let peer_public: [u8; crate::utils::crypto::x25519::KEY_LEN] =
+                ek_raw.try_into().map_err(|v: Vec<u8>| {
+                    AppError::Internal(format!("negotiation key length mismatch: expected 32, got {}", v.len()))
                 })?;
-            let shared =
-                crate::utils::crypto::x25519::x25519_diffie_hellman(identity.keypair(), &peer_public)?;
+            let shared = crate::utils::crypto::x25519::x25519_diffie_hellman(identity.keypair(), &peer_public)?;
             let keys = derive_http_traffic_keys(shared.as_bytes(), ctx.route)?;
             // GET/HEAD 空 body：无载荷可解，协商仅用于响应加密（密钥派生已足以
             // 证明对端持有临时私钥）——空 body 直接通过，不尝试解信封
             if had_body {
                 let request_key = keys.request;
-                let plaintext = decrypt_http_body(
-                    &request_key,
-                    &ctx.data,
-                    &http_aad(Direction::Inbound, ctx.route),
-                )?;
+                let plaintext = decrypt_http_body(&request_key, &ctx.data, &http_aad(Direction::Inbound, ctx.route))?;
                 ctx.data = plaintext;
             }
             store_http_keys(ctx.peer, ek_b64, keys);
@@ -846,10 +815,8 @@ impl LinkEncryptionFilter {
                 // 识别加密响应并解信封；值必须带 "v" 前缀（与请求侧
                 // parse_negotiation 的 `format!("v{PROTOCOL_VERSION}")` 同源），
                 // 裸 `1` 会被移动端 `respHeader === 'v1'` 判为不匹配 → 误报降级
-                ctx.outbound_headers.push((
-                    NEGOTIATION_HEADER.to_string(),
-                    format!("v{PROTOCOL_VERSION}"),
-                ));
+                ctx.outbound_headers
+                    .push((NEGOTIATION_HEADER.to_string(), format!("v{PROTOCOL_VERSION}")));
                 Verdict::Continue
             }
             Err(e) => {
@@ -877,8 +844,6 @@ impl TrafficFilter for LinkEncryptionFilter {
         match ctx.channel {
             TrafficChannel::Http => Self::on_http_inbound(ctx),
             TrafficChannel::WsTerminal | TrafficChannel::WsEvent => Self::on_ws_frame(ctx),
-            // 豁免分支已拦截，不可达
-            TrafficChannel::WsLocal => Verdict::Continue,
         }
     }
 
@@ -889,7 +854,6 @@ impl TrafficFilter for LinkEncryptionFilter {
         match ctx.channel {
             TrafficChannel::Http => Self::on_http_outbound(ctx),
             TrafficChannel::WsTerminal | TrafficChannel::WsEvent => Self::on_ws_frame(ctx),
-            TrafficChannel::WsLocal => Verdict::Continue,
         }
     }
 }
@@ -948,18 +912,13 @@ pub async fn init_at_startup(app_handle: &tauri::AppHandle) {
         load_config_from_db(&guard)
     };
     if config.enabled && !identity_ready {
-        tracing::warn!(
-            "trafficEncryption enabled in settings but identity unavailable, forcing off this boot"
-        );
+        tracing::warn!("trafficEncryption enabled in settings but identity unavailable, forcing off this boot");
         config.enabled = false;
     }
 
     update_config(config);
     sync_registration();
-    tracing::info!(
-        enabled = current_config().enabled,
-        "link crypto initialized"
-    );
+    tracing::info!(enabled = current_config().enabled, "link crypto initialized");
 }
 
 /// 命令层懒初始化：已初始化直接返指纹；否则从 app 数据目录建身份后返回
@@ -968,9 +927,10 @@ pub async fn ensure_identity_fingerprint(app_handle: &tauri::AppHandle) -> Resul
         return Ok(fp.to_string());
     }
     use tauri::Manager;
-    let dir = app_handle.path().app_data_dir().map_err(|e| {
-        AppError::Internal(format!("app data dir unavailable for link identity: {e}"))
-    })?;
+    let dir = app_handle
+        .path()
+        .app_data_dir()
+        .map_err(|e| AppError::Internal(format!("app data dir unavailable for link identity: {e}")))?;
     Ok(init_identity(&dir)?.to_string())
 }
 
@@ -1001,11 +961,7 @@ mod tests {
         out
     }
 
-    fn mk_ctx<'a>(
-        channel: TrafficChannel,
-        peer: &'a str,
-        route: &'a str,
-    ) -> FilterContext<'a> {
+    fn mk_ctx<'a>(channel: TrafficChannel, peer: &'a str, route: &'a str) -> FilterContext<'a> {
         FilterContext {
             channel,
             direction: Direction::Inbound,
@@ -1139,6 +1095,50 @@ mod tests {
         assert_ne!(a.response, other.response);
     }
 
+    /// HTTP 双方向密钥金样向量（票据 15 变异守卫）
+    ///
+    /// 固定 IKM `[7u8; 32]` + path `/api/sessions` 锁死派生输出字节：
+    /// 任何 HKDF info 常量 / salt / 参数改动（如交换 HTTP_INFO_REQUEST ↔
+    /// HTTP_INFO_RESPONSE）都会改变派生结果。roundtrip 自洽性无法捕获
+    /// 「方向语义反转」变异（request≠response 仍成立），金样是唯一守卫。
+    /// 移动端 TS 复刻（linkCrypto.ts）必须逐字节一致——协议兼容锚点。
+    #[test]
+    fn http_keys_gold_vector_locked() {
+        let ikm = [7u8; 32];
+        let keys = derive_http_traffic_keys(&ikm, "/api/sessions").unwrap();
+        // 锁死精确字节（协议兼容锚点）
+        assert_eq!(
+            hex::encode(keys.request),
+            "c2185a151191fbc451f5128a5fb7dc69bdf8f359d53d1165d03af67fd6fc8e8f"
+        );
+        assert_eq!(
+            hex::encode(keys.response),
+            "cb3ed775acff12da34c00b84919b44e76f9fd27b4248ba18768db22590d9e88e"
+        );
+    }
+
+    /// WS 方向密钥金样向量（票据 15）：锁死 c2s/s2c HKDF 派生输出
+    ///
+    /// 固定 ikm `[9u8; 64]` + salt，方向 info 常量被交换（变异）时断言失败。
+    /// 移动端 TS 复刻必须逐字节一致——协议兼容锚点。
+    #[test]
+    fn ws_session_ciphers_gold_vector_locked() {
+        use crate::utils::crypto::kdf::hkdf_sha256;
+        let ikm = [9u8; 64];
+        let salt = b"bedcode-ws-gold-vector".to_vec();
+        let c2s = hkdf_sha256(Some(&salt), &ikm, WS_INFO_CLIENT_TO_SERVER, 36).unwrap();
+        let s2c = hkdf_sha256(Some(&salt), &ikm, WS_INFO_SERVER_TO_CLIENT, 36).unwrap();
+        // 锁死精确字节；c2s ≠ s2c（方向隔离）
+        assert_eq!(
+            hex::encode(&c2s[..]),
+            "faa59b9f10b0a6f02943e76e3c894fd2a7de15882f27409e08bd9089bbe61ae40fce221d"
+        );
+        assert_eq!(
+            hex::encode(&s2c[..]),
+            "794e4ffee86bb924154f79f47cdcbdd41d723f6d6d8a473ecb0c6ca7afd0c49a004d687b"
+        );
+    }
+
     // ---------- WS 会话加密（issue 04） ----------
 
     /// 移动端 TS 侧的派生复刻：相同字节序列必须得到相同密钥（跨端兼容锚点）
@@ -1154,10 +1154,7 @@ mod tests {
         // 客户端复算：eph-eph ‖ eph-Kd，transcript salt 相同
         let (_, kd_pub_b64) = identity_parts().unwrap();
         let kd_pub: [u8; 32] = b64_decode(&kd_pub_b64).unwrap().try_into().unwrap();
-        let s_pub: [u8; 32] = b64_decode(&handshake.server_ek_b64)
-            .unwrap()
-            .try_into()
-            .unwrap();
+        let s_pub: [u8; 32] = b64_decode(&handshake.server_ek_b64).unwrap().try_into().unwrap();
         let eph_eph = x25519_diffie_hellman(&client_eph, &s_pub).unwrap();
         let auth = x25519_diffie_hellman(&client_eph, &kd_pub).unwrap();
         let mut ikm = [0u8; 64];
@@ -1169,20 +1166,8 @@ mod tests {
             handshake.server_ek_b64.as_bytes(),
         ]
         .concat();
-        let c2s = crate::utils::crypto::kdf::hkdf_sha256(
-            Some(&salt),
-            &ikm,
-            WS_INFO_CLIENT_TO_SERVER,
-            36,
-        )
-        .unwrap();
-        let s2c = crate::utils::crypto::kdf::hkdf_sha256(
-            Some(&salt),
-            &ikm,
-            WS_INFO_SERVER_TO_CLIENT,
-            36,
-        )
-        .unwrap();
+        let c2s = crate::utils::crypto::kdf::hkdf_sha256(Some(&salt), &ikm, WS_INFO_CLIENT_TO_SERVER, 36).unwrap();
+        let s2c = crate::utils::crypto::kdf::hkdf_sha256(Some(&salt), &ikm, WS_INFO_SERVER_TO_CLIENT, 36).unwrap();
 
         assert_eq!(&c2s[..32], &handshake.ciphers.client_to_server.key);
         assert_eq!(&c2s[32..], &handshake.ciphers.client_to_server.nonce_prefix);
@@ -1194,8 +1179,7 @@ mod tests {
     fn ws_frame_codec_roundtrip_and_seq_discipline() {
         init_identity(tempfile::tempdir().unwrap().path()).unwrap();
         let client_eph = crate::utils::crypto::x25519::x25519_generate();
-        let handshake =
-            derive_ws_session_ciphers(&b64_encode(client_eph.public())).unwrap();
+        let handshake = derive_ws_session_ciphers(&b64_encode(client_eph.public())).unwrap();
 
         // 注册前克隆客户端视角的两把方向密钥（容器含私有序号不可整体克隆）
         let c2s_cipher = handshake.ciphers.client_to_server.clone();
@@ -1206,40 +1190,33 @@ mod tests {
         // 客户端侧封帧助手：与移动端 TS 公式一致（c2s 密钥 + Inbound AAD）。
         // 单机测试必须双端模拟：服务端入站解密只认 c2s，拿 s2c 加密的
         // 出站帧回灌必然 AEAD 失败（方向隔离本就是协议设计）。
-        let seal_client_text =
-            |seq: u64, channel: &str, text: &str| -> Vec<u8> {
-                let sealed = encrypt_ws_payload(
-                    &c2s_cipher,
-                    seq,
-                    text.as_bytes(),
-                    &ws_aad(channel, Direction::Inbound, ORIGIN_TEXT),
-                )
-                .unwrap();
-                serde_json::to_vec(&WsTextEnvelope {
-                    v: WS_FRAME_VERSION,
-                    seq,
-                    n: b64_encode(&sealed.nonce),
-                    ct: b64_encode(&sealed.ciphertext),
-                })
-                .unwrap()
-            };
+        let seal_client_text = |seq: u64, channel: &str, text: &str| -> Vec<u8> {
+            let sealed = encrypt_ws_payload(
+                &c2s_cipher,
+                seq,
+                text.as_bytes(),
+                &ws_aad(channel, Direction::Inbound, ORIGIN_TEXT),
+            )
+            .unwrap();
+            serde_json::to_vec(&WsTextEnvelope {
+                v: WS_FRAME_VERSION,
+                seq,
+                n: b64_encode(&sealed.nonce),
+                ct: b64_encode(&sealed.ciphertext),
+            })
+            .unwrap()
+        };
 
         // 文本往返（客户端 → 服务端）
         let control = r#"{"type":"subscribe"}"#;
         let sealed = seal_client_text(0, "ws-terminal", control);
-        assert_eq!(
-            ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).unwrap(),
-            control
-        );
+        assert_eq!(ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).unwrap(), control);
 
         // 重放上一帧 → seq mismatch 拒绝
         assert!(ws_decrypt_inbound_text("t:1", "ws-terminal", &sealed).is_err());
 
         // 篡改密文 → 解密失败（合法新序号帧上翻转 ct 末字节）
-        let mut tampered: WsTextEnvelope = serde_json::from_slice(
-            &seal_client_text(1, "ws-event", "x"),
-        )
-        .unwrap();
+        let mut tampered: WsTextEnvelope = serde_json::from_slice(&seal_client_text(1, "ws-event", "x")).unwrap();
         let mut ct = b64_decode(&tampered.ct).unwrap();
         let last = ct.len() - 1;
         ct[last] ^= 0xFF;
@@ -1264,10 +1241,7 @@ mod tests {
         enc.extend_from_slice(&bin_seq.to_be_bytes());
         enc.extend_from_slice(&ciphertext);
         assert_eq!(enc[0], 1, "帧头版本字节");
-        assert_eq!(
-            ws_decrypt_inbound_binary("t:1", "ws-terminal", &enc).unwrap(),
-            frame
-        );
+        assert_eq!(ws_decrypt_inbound_binary("t:1", "ws-terminal", &enc).unwrap(), frame);
 
         // 服务端出站帧可被持有 s2c 密钥的客户端解开（跨端兼容锚点）
         let outbound = ws_encrypt_outbound_binary("t:1", "ws-terminal", &frame).unwrap();
@@ -1288,13 +1262,10 @@ mod tests {
     // ---------- 过滤器豁免与开关判定 ----------
 
     #[test]
-    fn ws_local_channel_always_exempt() {
-        let mut ctx = mk_ctx(TrafficChannel::WsLocal, "203.0.113.9:5000", "text");
+    fn loopback_peer_always_exempt() {
+        let mut ctx = mk_ctx(TrafficChannel::Http, "127.0.0.1:5000", "/api/plugin/foo");
         assert!(!LinkEncryptionFilter::should_process(&ctx));
-        assert_eq!(
-            LinkEncryptionFilter.on_inbound(&mut ctx),
-            Verdict::Continue
-        );
+        assert_eq!(LinkEncryptionFilter.on_inbound(&mut ctx), Verdict::Continue);
         assert_eq!(ctx.data, b"payload", "豁免流量不得改写");
     }
 
@@ -1315,20 +1286,58 @@ mod tests {
         });
     }
 
+    /// WS 帧在 peer 未注册 ciphers 时的明文 fallback 分支（票据 11 盲区）：
+    /// 生产代码仅 on_inbound/on_outbound 内部触达，此前从未被测试覆盖。
+    #[test]
+    fn ws_frame_no_ciphers_fallback_branch() {
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = current_config();
+        // 确保该 peer 无 ciphers（每个测试进程独立，但防御性清理）
+        ws_remove_ciphers("192.168.1.60:5555");
+
+        // 正向：allow_plaintext_fallback=true → Continue 且数据不变
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            allow_plaintext_fallback: true,
+            ..LinkCryptoConfig::default()
+        });
+        let mut ctx = mk_ctx(TrafficChannel::WsTerminal, "192.168.1.60:5555", "text");
+        assert!(LinkEncryptionFilter::should_process(&ctx));
+        assert_eq!(LinkEncryptionFilter.on_inbound(&mut ctx), Verdict::Continue);
+        assert_eq!(ctx.data, b"payload", "明文 fallback 不得改写载荷");
+        let mut ctx2 = mk_ctx(TrafficChannel::WsEvent, "192.168.1.60:5555", "text");
+        assert_eq!(LinkEncryptionFilter.on_outbound(&mut ctx2), Verdict::Continue);
+
+        // 负向：allow_plaintext_fallback=false → Reject 且消息点名该开关
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            allow_plaintext_fallback: false,
+            ..LinkCryptoConfig::default()
+        });
+        let mut ctx3 = mk_ctx(TrafficChannel::WsTerminal, "192.168.1.60:5555", "binary");
+        let verdict = LinkEncryptionFilter.on_inbound(&mut ctx3);
+        match verdict {
+            Verdict::Reject(msg) => {
+                assert!(msg.contains("allow_plaintext_fallback"), "拒绝消息应点名开关: {msg}")
+            }
+            other => panic!("期望 Reject，实际: {other:?}"),
+        }
+        // 出站同样 fail-closed
+        let mut ctx4 = mk_ctx(TrafficChannel::WsEvent, "192.168.1.60:5555", "text");
+        assert!(matches!(
+            LinkEncryptionFilter.on_outbound(&mut ctx4),
+            Verdict::Reject(_)
+        ));
+
+        update_config(original);
+    }
+
     #[test]
     fn auth_and_health_routes_whitelisted_for_http_only() {
         let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for route in [
-            "/api/auth/pairing",
-            "/api/auth/qr-connect",
-            "/health",
-            "/api/health",
-        ] {
+        for route in ["/api/auth/pairing", "/api/auth/qr-connect", "/health", "/api/health"] {
             let ctx = mk_ctx(TrafficChannel::Http, "192.168.1.50:4444", route);
-            assert!(
-                !LinkEncryptionFilter::should_process(&ctx),
-                "白名单路由 {route} 应豁免"
-            );
+            assert!(!LinkEncryptionFilter::should_process(&ctx), "白名单路由 {route} 应豁免");
         }
         // 白名单只对 HTTP 生效；WS 帧类别叫 "text"/"binary"，天然不命中前缀。
         // WS 非豁免路径会读快照，先临时开启避免依赖其它用例留下的状态
@@ -1348,10 +1357,7 @@ mod tests {
             assert!(LinkEncryptionFilter::should_process(&ctx));
             // 骨架期直通不改数据
             let mut mutable = ctx;
-            assert_eq!(
-                LinkEncryptionFilter.on_inbound(&mut mutable),
-                Verdict::Continue
-            );
+            assert_eq!(LinkEncryptionFilter.on_inbound(&mut mutable), Verdict::Continue);
             assert_eq!(mutable.data, b"payload");
 
             let term = mk_ctx(TrafficChannel::WsTerminal, "192.168.1.50:4444", "binary");
@@ -1392,10 +1398,46 @@ mod tests {
         assert_eq!(chain.list_names(), vec![FILTER_NAME.to_string()]);
         // 独立实例互不干扰；全局单例不被本测试污染
         let global_names = TrafficFilterChain::global().list_names();
+        assert!(!global_names.iter().any(|n| n == FILTER_NAME), "单元测试不得触碰全局链");
+    }
+
+    #[test]
+    fn sync_registration_is_idempotent() {
+        // 同名节点重复注册会让链上出现重复项；swap 防护保证幂等
+        let _guard = SNAPSHOT_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let original = current_config();
+        // 用一个独立链替代全局链的注册目标不可行（sync_registration 固定用 global），
+        // 此处验证幂等机制本身：同一配置下重复同步不改变全局链节点数
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            ..LinkCryptoConfig::default()
+        });
+        let global = TrafficFilterChain::global();
+        let before = global.list_names().len();
+        sync_registration();
+        sync_registration();
+        sync_registration();
+        let after = global.list_names().len();
+        // 幂等：三次同步后节点数相对基线仅增加 1（首次注册），不重复累积
+        assert!(after <= before + 1, "重复 sync_registration 不得累积重复节点: {before} -> {after}");
+        sync_registration();
+        update_config(original);
+    }
+
+    #[test]
+    fn identity_corrupt_file_refuses_regeneration_and_keeps_file_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(IDENTITY_FILE), "{corrupt").unwrap();
+
+        let err = LinkIdentity::load_or_create(dir.path()).unwrap_err();
+        let msg = err.to_string();
         assert!(
-            !global_names.iter().any(|n| n == FILTER_NAME),
-            "单元测试不得触碰全局链"
+            msg.contains("corrupt") || msg.contains("refusing"),
+            "应明确拒绝重建而非静默换钥: {msg}"
         );
+        // 拒绝重建后文件内容必须保持原样（未被覆盖为新身份）
+        let now = std::fs::read_to_string(dir.path().join(IDENTITY_FILE)).unwrap();
+        assert_eq!(now, "{corrupt", "拒绝路径不得改写损坏的身份文件");
     }
 
     // ---------- HTTP 协议层（issue 02） ----------
@@ -1442,7 +1484,10 @@ mod tests {
 
     #[test]
     fn request_key_cache_is_take_once_and_ttl_bounded() {
-        let keys = HttpTrafficKeys { request: [1u8; 32], response: [2u8; 32] };
+        let keys = HttpTrafficKeys {
+            request: [1u8; 32],
+            response: [2u8; 32],
+        };
         store_http_keys("peer-a", "EK==", keys.clone());
         // 命中即取走
         assert_eq!(take_http_keys("peer-a", "EK=="), Some(keys.clone()));
@@ -1451,10 +1496,76 @@ mod tests {
 
         // TTL 判定纯函数
         let now = Instant::now();
-        let fresh = CachedHttpKeys { keys: keys.clone(), inserted_at: now };
-        let stale = CachedHttpKeys { keys, inserted_at: now - REQUEST_KEY_TTL };
+        let fresh = CachedHttpKeys {
+            keys: keys.clone(),
+            inserted_at: now,
+        };
+        let stale = CachedHttpKeys {
+            keys,
+            inserted_at: now - REQUEST_KEY_TTL,
+        };
         assert!(!entry_expired(&fresh, now));
         assert!(entry_expired(&stale, now));
+    }
+
+    #[test]
+    fn request_key_cache_capacity_eviction_guard() {
+        // 容量护栏：超 HTTP_KEY_CACHE_MAX 时逐出最早项，map 保持有界
+        let keys = HttpTrafficKeys {
+            request: [1u8; 32],
+            response: [2u8; 32],
+        };
+        // 逐个写入超过上限的条目（peer 唯一、ek 唯一 → 全命中不同 key）
+        for i in 0..(HTTP_KEY_CACHE_MAX + 8) {
+            store_http_keys("cap-peer", &format!("EK{i:04}"), keys.clone());
+        }
+        let size = HTTP_KEY_CACHE.lock().unwrap().len();
+        assert!(size <= HTTP_KEY_CACHE_MAX, "容量护栏失效: {size} > {HTTP_KEY_CACHE_MAX}");
+        // 最早写入的条目应已被逐出，最新条目可命中
+        assert_eq!(take_http_keys("cap-peer", "EK0000"), None, "最早项应被逐出");
+        let last = format!("EK{:04}", HTTP_KEY_CACHE_MAX + 7);
+        assert!(take_http_keys("cap-peer", &last).is_some(), "最新条目应可命中");
+        // 只清理本测试写入的 key（全表 clear 会污染并行测试，票据 14 同类问题）
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            for i in 0..(HTTP_KEY_CACHE_MAX + 8) {
+                map.remove(&cache_key("cap-peer", &format!("EK{i:04}")));
+            }
+        }
+    }
+
+    #[test]
+    fn request_key_cache_ttl_sweep_on_store() {
+        // store 时顺带清扫过期项（插入时 retain）：先塞一条过期条目，再 store 新条目，
+        // 过期条目应被清掉而非占据容量
+        let keys = HttpTrafficKeys {
+            request: [3u8; 32],
+            response: [4u8; 32],
+        };
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            // 只移除本测试可能残留的 key，不动其它测试条目
+            map.remove(&cache_key("sweep-peer", "STALE=="));
+            map.remove(&cache_key("sweep-peer", "FRESH=="));
+            // 手工塞一条已过期条目（inserted_at 回溯超过 TTL）
+            map.insert(
+                cache_key("sweep-peer", "STALE=="),
+                CachedHttpKeys {
+                    keys: keys.clone(),
+                    inserted_at: Instant::now() - REQUEST_KEY_TTL - Duration::from_secs(1),
+                },
+            );
+        }
+        // store 新条目触发清扫
+        store_http_keys("sweep-peer", "FRESH==", keys);
+        {
+            let mut map = HTTP_KEY_CACHE.lock().unwrap();
+            assert!(!map.contains_key(&cache_key("sweep-peer", "STALE==")), "过期条目应在 store 时被清扫");
+            assert!(map.contains_key(&cache_key("sweep-peer", "FRESH==")), "新条目应保留");
+            // 只清理本测试写入的 key（全表 clear 会污染并行测试，票据 14 同类问题）
+            map.remove(&cache_key("sweep-peer", "STALE=="));
+            map.remove(&cache_key("sweep-peer", "FRESH=="));
+        }
     }
 
     #[test]
@@ -1475,9 +1586,12 @@ mod tests {
 
             // ---- 入站：加密请求体 → 过滤器解密为明文 ----
             let req_plain = br#"{"q":"list sessions"}"#.to_vec();
-            let req_sealed =
-                encrypt_http_body(&keys.request, &req_plain, &http_aad(Direction::Inbound, "/api/sessions"))
-                    .unwrap();
+            let req_sealed = encrypt_http_body(
+                &keys.request,
+                &req_plain,
+                &http_aad(Direction::Inbound, "/api/sessions"),
+            )
+            .unwrap();
             let mut inbound = FilterContext {
                 channel: TrafficChannel::Http,
                 direction: Direction::Inbound,
@@ -1511,9 +1625,12 @@ mod tests {
                 vec![(NEGOTIATION_HEADER.to_string(), format!("v{PROTOCOL_VERSION}"))],
                 "加密响应应注入 X-BedCode-Crypto: v1 标记头"
             );
-            let decrypted =
-                decrypt_http_body(&keys.response, &outbound.data, &http_aad(Direction::Outbound, "/api/sessions"))
-                    .unwrap();
+            let decrypted = decrypt_http_body(
+                &keys.response,
+                &outbound.data,
+                &http_aad(Direction::Outbound, "/api/sessions"),
+            )
+            .unwrap();
             assert_eq!(decrypted, resp_plain);
 
             // ---- 缓存一次性：第二个同 peer/ek 响应无密钥可取 → 明文直通 ----
@@ -1540,7 +1657,11 @@ mod tests {
         let original = current_config();
 
         // ① 强加密模式（fallback=false）：未协商请求直接拒绝
-        update_config(LinkCryptoConfig { enabled: true, allow_plaintext_fallback: false, ..LinkCryptoConfig::default() });
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            allow_plaintext_fallback: false,
+            ..LinkCryptoConfig::default()
+        });
         let mut no_neg = mk_ctx(TrafficChannel::Http, "192.168.1.9:55002", "/api/sessions");
         assert!(matches!(
             LinkEncryptionFilter.on_inbound(&mut no_neg),
@@ -1548,7 +1669,10 @@ mod tests {
         ));
 
         // ② 已协商但载荷损坏 → Reject 且原因含 decrypt failed
-        update_config(LinkCryptoConfig { enabled: true, ..LinkCryptoConfig::default() });
+        update_config(LinkCryptoConfig {
+            enabled: true,
+            ..LinkCryptoConfig::default()
+        });
         let client_eph = crate::utils::crypto::x25519::x25519_generate();
         let negotiation = format!("v1 {}", b64_encode(client_eph.public()));
         let mut garbage = FilterContext {
@@ -1575,7 +1699,10 @@ mod tests {
             data: vec![0u8; 16],
             outbound_headers: Vec::new(),
         };
-        assert!(matches!(LinkEncryptionFilter.on_inbound(&mut bad_key), Verdict::Reject(_)));
+        assert!(matches!(
+            LinkEncryptionFilter.on_inbound(&mut bad_key),
+            Verdict::Reject(_)
+        ));
 
         update_config(original);
     }
@@ -1628,9 +1755,12 @@ mod tests {
                 outbound.outbound_headers,
                 vec![(NEGOTIATION_HEADER.to_string(), format!("v{PROTOCOL_VERSION}"))]
             );
-            let decrypted =
-                decrypt_http_body(&keys.response, &outbound.data, &http_aad(Direction::Outbound, "/api/sessions"))
-                    .unwrap();
+            let decrypted = decrypt_http_body(
+                &keys.response,
+                &outbound.data,
+                &http_aad(Direction::Outbound, "/api/sessions"),
+            )
+            .unwrap();
             assert_eq!(decrypted, resp_plain);
         });
     }

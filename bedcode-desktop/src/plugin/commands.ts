@@ -82,6 +82,24 @@ export async function pluginMarkError(pluginId: string, error: string): Promise<
   return await invoke('plugin_mark_error', { pluginId, error })
 }
 
+/** 从本地 zip 插件包安装（安装到用户插件目录，来源 user-installed）
+ *
+ * @returns 安装后的 plugin_id
+ */
+export async function pluginInstallFromFile(path: string): Promise<string> {
+  logger.log(`[PluginCmd] pluginInstallFromFile(${path}) invoking...`)
+  const id = await invoke<string>('plugin_install_from_file', { path })
+  logger.log(`[PluginCmd] pluginInstallFromFile() installed: ${id}`)
+  return id
+}
+
+/** 卸载插件（所有来源；删除插件所有数据：安装目录 + 存储 + 启用状态） */
+export async function pluginUninstall(pluginId: string): Promise<void> {
+  logger.log(`[PluginCmd] pluginUninstall(${pluginId}) invoking...`)
+  await invoke('plugin_uninstall', { pluginId })
+  logger.log(`[PluginCmd] pluginUninstall(${pluginId}) succeeded`)
+}
+
 /** 上报前端模块加载诊断（宿主内部诊断通道，仅写 tracing 不改状态，spec §3.7 / issue 04）
  *
  * @param stage 失败/成功发生的步骤：import（动态导入）或 activate（前端 activate()）

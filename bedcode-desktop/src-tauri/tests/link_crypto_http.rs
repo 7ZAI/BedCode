@@ -10,8 +10,7 @@ use base64::Engine as _;
 
 use bedcode_lib::server::filter::TrafficFilterChain;
 use bedcode_lib::server::link_crypto::{
-    self, derive_http_traffic_keys, encrypt_http_body, decrypt_http_body, LinkCryptoConfig,
-    NEGOTIATION_HEADER,
+    self, decrypt_http_body, derive_http_traffic_keys, encrypt_http_body, LinkCryptoConfig, NEGOTIATION_HEADER,
 };
 use bedcode_lib::utils::crypto::x25519::{x25519_diffie_hellman, x25519_generate};
 
@@ -78,10 +77,7 @@ impl ClientCtx {
 /// 序列复刻（spec §3 固定格式：b"v1" || dir || u32be(len) || path），并断言与
 /// 单元测试一致；若协议变更此处会先红。
 mod crate_aad_shim {
-    pub fn http_aad_shim(
-        direction: bedcode_lib::server::filter::Direction,
-        path: &str,
-    ) -> Vec<u8> {
+    pub fn http_aad_shim(direction: bedcode_lib::server::filter::Direction, path: &str) -> Vec<u8> {
         let mut aad = Vec::with_capacity(7 + path.len());
         aad.extend_from_slice(b"v1");
         aad.push(match direction {
@@ -192,9 +188,61 @@ async fn tampered_envelope_rejected_with_400() {
     link_crypto::update_config(LinkCryptoConfig::default());
 }
 
+/// GCM 密文层字节篡改（票据 13：真正的攻击路径——信封 JSON 结构完好，
+/// 仅密文被翻转，AES-GCM 认证必须失败且响应 400）
 #[actix_web::test]
-async fn strict_policy_rejects_unnegotiated_requests() {
+async fn gcm_ciphertext_tamper_rejected_with_400() {
     let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    init_identity_once();
+
+    link_crypto::update_config(LinkCryptoConfig {
+        enabled: true,
+        ..LinkCryptoConfig::default()
+    });
+    let chain = TrafficFilterChain::global();
+    chain.clear();
+    link_crypto::register_into(&chain);
+
+    let app = test::init_service(test_app()).await;
+    let client = make_client("/echo");
+    let (mut sealed, negotiation) = client.seal_request(b"hello");
+
+    // 解析信封 JSON，定位 base64 密文字段并翻转其末尾字节（GCM tag/密文层篡改）
+    let envelope: serde_json::Value = serde_json::from_slice(&sealed).expect("envelope is valid JSON");
+    let ct_b64 = envelope["ct"].as_str().expect("ct field exists");
+    let mut ct = base64::engine::general_purpose::STANDARD
+        .decode(ct_b64)
+        .expect("ct is base64");
+    let last = ct.len() - 1;
+    ct[last] ^= 0xFF;
+    let tampered_ct = base64::engine::general_purpose::STANDARD.encode(&ct);
+    // 重建信封：仅替换 ct，其余结构原样
+    let mut obj = envelope.as_object().cloned().unwrap();
+    obj.insert("ct".to_string(), serde_json::Value::String(tampered_ct));
+    sealed = serde_json::to_vec(&serde_json::Value::Object(obj)).unwrap();
+
+    let req = test::TestRequest::post()
+        .uri("/echo")
+        .insert_header((NEGOTIATION_HEADER, negotiation.as_str()))
+        .set_payload(sealed)
+        .to_request();
+    let res = test::call_service(&app, req).await;
+    assert_eq!(res.status(), actix_web::http::StatusCode::BAD_REQUEST);
+    let text = test::read_body(res).await;
+    // GCM 认证失败应可观测（decrypt / auth 特征），且不泄露明文 hello
+    assert!(
+        text.windows(7).any(|w| w == b"decrypt") || text.windows(9).any(|w| w == b"malformed"),
+        "GCM 篡改应报解密失败: {}",
+        String::from_utf8_lossy(&text)
+    );
+    assert!(!String::from_utf8_lossy(&text).contains("hello"), "不得泄露明文");
+
+    chain.clear();
+    link_crypto::update_config(LinkCryptoConfig::default());
+}
+
+#[actix_web::test]
+async fn strict_policy_rejects_unnegotiated_requests() {    let _guard = GLOBAL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     init_identity_once();
 
     // allowPlaintextFallback=false：未携带协商头的非豁免请求一律拒绝

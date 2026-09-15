@@ -8,9 +8,11 @@
 /** 任务方向（wire lowercase） */
 export type TaskDirection = 'download' | 'upload'
 
-/** 任务状态（宿主托管后仅存在传输中与终态；interrupted = 插件重启恢复标注） */
+/** 任务状态（宿主托管后：传输中/排队/已暂停 + 终态；interrupted = 插件重启恢复标注） */
 export type TaskStateName =
   | 'transferring'
+  | 'pending'
+  | 'paused'
   | 'completed'
   | 'failed'
   | 'rejected'
@@ -77,6 +79,11 @@ export function isTerminalState(state: TaskStateName): boolean {
   )
 }
 
+/** 是否活跃非终态（传输中/排队/已暂停——显示在队列，可操作） */
+export function isActiveState(state: TaskStateName): boolean {
+  return state === 'transferring' || state === 'pending' || state === 'paused'
+}
+
 /** 传输历史条目状态（含插件重启标注的 interrupted） */
 export type HistoryState = 'completed' | 'failed' | 'rejected' | 'cancelled' | 'interrupted'
 
@@ -99,6 +106,8 @@ export interface ReceivingTask {
   relPath?: string | null
   size: number
   offset?: number
+  /** 接收方向即时速率（B/s；任务卡与总速率展示用，0 = 无采样） */
+  rateBps?: number
   state: string
   reason: string | null
   peerId: string

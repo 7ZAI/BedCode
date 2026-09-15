@@ -1,7 +1,7 @@
 //! Session Control Service
 //!
 //! 处理会话启动/停止/缩放等控制逻辑
-//! JoinSession/LeaveSession 通过 GlobalOutputManager 管理输出订阅
+//! 终端输出订阅统一走 TerminalAction::Subscribe 路径（JoinSession 链已删除）
 
 use crate::server::message::{Message, SessionControlAction, SessionSummary};
 use crate::session::{GlobalOutputManager, RendererSource, SessionManager};
@@ -156,152 +156,6 @@ pub async fn handle_control(
             Ok(None)
         }
 
-        SessionControlAction::JoinSession { session_id } => {
-            // 检查会话是否存在
-            let sessions = session_manager.list_sessions().await;
-            if !sessions.iter().any(|s| s.id == session_id) {
-                return Ok(Some(Message::error_with_id(
-                    &request_message_id,
-                    "SESSION_NOT_FOUND",
-                    &format!("Session not found: {}", session_id),
-                )));
-            }
-
-            // 通过 GlobalOutputManager 订阅会话输出
-            // 使用 mpsc 通道 + WS actor 转发，与 TerminalAction::Subscribe 路径一致
-            let client_id = addr.to_string();
-            let global_manager = GlobalOutputManager::global();
-
-            if !global_manager.has_session(&session_id).await {
-                tracing::warn!(session_id = %session_id, addr = %addr, "JoinSession: session not registered in GlobalOutputManager");
-                return Ok(Some(Message::error_with_id(
-                    &request_message_id,
-                    "SESSION_NOT_FOUND",
-                    &format!("Session {} output not available", session_id),
-                )));
-            }
-
-            let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<crate::session::OutputFrame>(256);
-            let subscribe_result = global_manager.subscribe(&session_id, &client_id, output_tx, None).await;
-
-            match subscribe_result {
-                Some(response) => {
-                    tracing::info!(
-                        session_id = %session_id,
-                        addr = %addr,
-                        history_count = response.history_count,
-                        "Client joined session via SessionControl"
-                    );
-
-                    // 启动输出转发任务：将 OutputEvent 编码为 WS 消息发送给客户端
-                    let ws_manager = crate::server::ws::WebSocketManager::global();
-                    let session_id_for_fwd = session_id.clone();
-                    let config = crate::system::config::AppConfig::global();
-                    let flush_interval = std::time::Duration::from_millis(config.terminal.flush_interval_ms);
-                    let max_buffer_size = config.terminal.max_buffer_size;
-
-                    tokio::spawn(async move {
-                        let mut buffer = OutputBuffer::new();
-
-                        loop {
-                            match tokio::time::timeout(flush_interval, output_rx.recv()).await {
-                                Ok(Some(frame)) => {
-                                    match frame {
-                                        crate::session::OutputFrame::Output(event) => {
-                                            buffer.append(&event);
-                                            if buffer.data.len() >= max_buffer_size {
-                                                let text = buffer.flush(&session_id_for_fwd);
-                                                let message =
-                                                    match crate::server::ws::message::Message::from_json(&text) {
-                                                        Ok(m) => m,
-                                                        Err(_) => break,
-                                                    };
-                                                let _ = ws_manager.send_to_client(&client_id, &message).await;
-                                            }
-                                        }
-                                        // 历史结束标记：先 flush 残留缓冲，再吞掉
-                                        // （旧路由 SessionControl 客户端无此信号；06 新路由编码控制帧）
-                                        crate::session::OutputFrame::HistoryEnd { .. } => {
-                                            if !buffer.is_empty() {
-                                                let text = buffer.flush(&session_id_for_fwd);
-                                                let message =
-                                                    match crate::server::ws::message::Message::from_json(&text) {
-                                                        Ok(m) => m,
-                                                        Err(_) => break,
-                                                    };
-                                                let _ = ws_manager.send_to_client(&client_id, &message).await;
-                                            }
-                                        }
-                                    }
-                                }
-                                Ok(None) => {
-                                    // channel 关闭（会话结束或服务器停机）
-                                    if !buffer.is_empty() {
-                                        let text = buffer.flush(&session_id_for_fwd);
-                                        let message = match crate::server::ws::message::Message::from_json(&text) {
-                                            Ok(m) => m,
-                                            Err(_) => break,
-                                        };
-                                        let _ = ws_manager.send_to_client(&client_id, &message).await;
-                                    }
-                                    break;
-                                }
-                                Err(_) => {
-                                    // 超时，flush 缓冲区
-                                    if !buffer.is_empty() {
-                                        let text = buffer.flush(&session_id_for_fwd);
-                                        let message = match crate::server::ws::message::Message::from_json(&text) {
-                                            Ok(m) => m,
-                                            Err(_) => break,
-                                        };
-                                        let _ = ws_manager.send_to_client(&client_id, &message).await;
-                                    }
-                                }
-                            }
-                        }
-                    });
-
-                    Ok(Some(Message::SessionControl {
-                        message_id: request_message_id,
-                        expect_response: false,
-                        session_id: Some(session_id.clone()),
-                        timestamp: chrono::Utc::now().timestamp_millis(),
-                        token: String::new(),
-                        payload: crate::server::message::SessionControlPayload {
-                            action: SessionControlAction::JoinSession { session_id },
-                        },
-                    }))
-                }
-                None => {
-                    tracing::warn!(session_id = %session_id, addr = %addr, "JoinSession: GlobalOutputManager.subscribe returned None");
-                    Ok(Some(Message::error_with_id(
-                        &request_message_id,
-                        "SESSION_NOT_FOUND",
-                        &format!("Session {} not found", session_id),
-                    )))
-                }
-            }
-        }
-
-        SessionControlAction::LeaveSession { session_id } => {
-            // 通过 GlobalOutputManager 取消输出订阅
-            let global_manager = GlobalOutputManager::global();
-            global_manager.unsubscribe(&session_id, &addr.to_string()).await;
-
-            tracing::info!(session_id = %session_id, addr = %addr, "Client left session via SessionControl");
-
-            Ok(Some(Message::SessionControl {
-                message_id: request_message_id,
-                expect_response: false,
-                session_id: Some(session_id.clone()),
-                timestamp: chrono::Utc::now().timestamp_millis(),
-                token: String::new(),
-                payload: crate::server::message::SessionControlPayload {
-                    action: SessionControlAction::LeaveSession { session_id },
-                },
-            }))
-        }
-
         _ => Ok(None),
     }
 }
@@ -322,8 +176,6 @@ pub async fn handle_control_message(
         | SessionControlAction::StartSession { .. }
         | SessionControlAction::StopSession { .. }
         | SessionControlAction::ResizeSession { .. }
-        | SessionControlAction::JoinSession { .. }
-        | SessionControlAction::LeaveSession { .. }
         | SessionControlAction::RemoveSession { .. } => {
             if let Some(sm) = session_manager {
                 let result = handle_control(action.clone(), message_id, sm, addr, device_name.clone()).await?;
@@ -374,68 +226,3 @@ pub async fn handle_control_message(
 }
 
 // ==================== Output Buffer ====================
-
-/// 输出缓冲区 — 累积多条 PTY 输出，减少 WS 消息数量
-///
-/// 05 seq 化后事件不再携带字节偏移，用订阅内合成游标生成连续 [start,end)
-struct OutputBuffer {
-    data: Vec<u8>,
-    start_index: u64,
-    end_index: u64,
-    start_offset: u64,
-    end_offset: u64,
-    offset_cursor: u64,
-    last_is_waiting: bool,
-}
-
-impl OutputBuffer {
-    fn new() -> Self {
-        Self {
-            data: Vec::new(),
-            start_index: 0,
-            end_index: 0,
-            start_offset: 0,
-            end_offset: 0,
-            offset_cursor: 0,
-            last_is_waiting: false,
-        }
-    }
-
-    fn append(&mut self, event: &crate::session::OutputEvent) {
-        if self.data.is_empty() {
-            self.start_index = event.index;
-            // 本批起始 = 订阅内累计字节位置（合成游标）
-            self.start_offset = self.offset_cursor;
-        }
-        self.end_index = event.index;
-        self.offset_cursor += event.data.len() as u64;
-        self.end_offset = self.offset_cursor;
-        self.data.extend_from_slice(&event.data);
-        self.last_is_waiting = event.is_waiting;
-    }
-
-    fn is_empty(&self) -> bool {
-        self.data.is_empty()
-    }
-
-    /// Flush 缓冲区为 WS 消息 JSON
-    fn flush(&mut self, session_id: &str) -> String {
-        let data_base64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data);
-        let end_index = if self.end_index > self.start_index {
-            Some(self.end_index as usize)
-        } else {
-            None
-        };
-        let message = crate::server::ws::message::Message::output_from_base64(
-            session_id,
-            &data_base64,
-            self.last_is_waiting,
-            self.start_index as usize,
-            end_index,
-            Some(self.start_offset),
-            Some(self.end_offset),
-        );
-        self.data.clear();
-        message.to_json().unwrap_or_default()
-    }
-}

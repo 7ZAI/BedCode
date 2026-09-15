@@ -5,10 +5,8 @@
 pub mod auth;
 pub mod sync;
 pub mod system;
-pub mod terminal;
 
 // Re-export handlers
 pub use auth::AuthHandler;
 pub use sync::SyncHandler;
 pub use system::SystemHandler;
-pub use terminal::TerminalHandler;

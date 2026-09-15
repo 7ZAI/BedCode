@@ -1,10 +1,15 @@
 //! Session Output
 //!
 //! PTY 输出相关的组件：统一输出队列、会话输出管理、全局输出管理
+//!
+//! TB v3 字节连续语义（`.scratch/pty-byte-history/spec.md`）：
+//! 连续性以会话内累计字节偏移（start_offset/end_offset）表达，取代事件 index；
+//! 帧头"第几个事件" → "累计第几个字节"；游标/缺口/去重/ack/快照收敛到
+//! `[start_offset, end_offset)` 区间运算。
 
 use crate::session::RendererSource;
 use crate::system::config::AppConfig;
-use serde::{Deserialize, Serialize};
+use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -17,171 +22,256 @@ use tokio::sync::{mpsc, RwLock};
 ///
 /// HistoryEnd 使消费端（forward 层）明确知道历史边界——旧路由（05 过渡）
 /// 无可编码帧、直接吞掉；06 新路由编码为 `{"type":"history_end"}` JSON 控制帧
+///
+/// 字节化（TB v3）：连续性以累计字节偏移表达，快照元数据为字节三件套
+///（snapshot_offset / min_offset / history_bytes）
 #[derive(Debug, Clone)]
 pub enum OutputFrame {
     Output(OutputEvent),
     HistoryEnd {
-        /// 订阅时刻队列最新序号（可能因后续 push 继续增长）
-        snapshot_seq: u64,
-        /// 队列中最早存续事件序号
-        min_seq: u64,
-        /// 历史事件数量
-        history_count: usize,
+        /// 订阅时刻队列累计字节数（历史边界，可能因后续 push 继续增长）
+        snapshot_offset: u64,
+        /// 队列中最早存续字节位置（环形淘汰后推进）
+        min_offset: u64,
+        /// 驻留历史总字节数
+        history_bytes: u64,
     },
 }
 
 // ==================== Unified Output Queue ====================
 
-/// 输出事件
+/// 输出事件（= 历史保存/回放的最小字节块，每次 PTY read 一块）
 ///
-/// `data` 存储原始字节数据，在发送到 WebSocket 时才进行 Base64 编码
-/// 避免在缓冲合并时多次编解码
+/// `data` 存储原始字节数据，在发送到 WebSocket 时才编码为 TB v3 二进制帧
+///（见 server/ws/terminal_ws/forward.rs）
 ///
-/// `index` 为会话级序号：写入路径（SessionOutputManager::on_output）按会话内
-/// 单调连续分配（队列 max_seq + 1），实时流不含跨会话空洞；入队前的全局计数
-///（next_output_index）仅作路由/日志唯一标记
+/// `start_offset` 为会话内累计字节偏移（写入路径 SessionOutputManager::on_output
+/// 在串行临界区内分配 = 队列 max_offset），事件字节区间为
+/// `[start_offset, start_offset + data.len())`。连续性不变量：
+/// 同流事件区间按序铺满字节空间，无重叠无空洞
 #[derive(Debug, Clone)]
 pub struct OutputEvent {
     pub session_id: String,
     pub data: Vec<u8>,
-    pub index: u64,
-    pub timestamp: i64,
-    pub is_waiting: bool,
-}
-
-/// 用于 JSON 序列化的临时结构（包含 Base64 编码的数据）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct OutputEventSerialized {
-    pub session_id: String,
-    pub data: String,
-    pub index: u64,
+    pub start_offset: u64,
     pub timestamp: i64,
     pub is_waiting: bool,
 }
 
 impl OutputEvent {
-    pub fn new(session_id: String, data: Vec<u8>, index: u64, timestamp: i64, is_waiting: bool) -> Self {
+    pub fn new(session_id: String, data: Vec<u8>, start_offset: u64, timestamp: i64, is_waiting: bool) -> Self {
         Self {
             session_id,
             data,
-            index,
+            start_offset,
             timestamp,
             is_waiting,
         }
     }
 
-    /// 编码为可序列化的结构（用于 WebSocket 发送）
-    pub fn to_serialized(&self) -> OutputEventSerialized {
-        OutputEventSerialized {
-            session_id: self.session_id.clone(),
-            data: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data),
-            index: self.index,
-            timestamp: self.timestamp,
-            is_waiting: self.is_waiting,
-        }
-    }
-
-    /// 获取 Base64 编码的数据
-    pub fn data_base64(&self) -> String {
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &self.data)
+    /// 事件字节区间末端（start_offset + len）
+    pub fn end_offset(&self) -> u64 {
+        self.start_offset + self.data.len() as u64
     }
 }
 
-/// 统一输出队列（环形缓冲区）
+/// 历史保存字节块（队列元素）
 ///
-/// 双重容量限制：
-/// - `capacity`: 最大事件条数（条目级限制）
-/// - `max_total_bytes`: 最大总字节数（内存级限制）
-/// 任一限制超出时丢弃最旧事件，与前端 buffer 逻辑一致
+/// `Bytes` Arc 共享：订阅者转发帧 / HTTP 历史截取零拷贝复用同一底层缓冲；
+/// `slice()` 支持半块切（按 offset 截取快照起播 / 精调淘汰的基础）
+#[derive(Debug, Clone)]
+pub struct OutputChunk {
+    /// 块在会话输出流中的起始位置（累计字节数）
+    pub start_offset: u64,
+    /// 块字节（Arc 共享，slice 半块切）
+    pub bytes: Bytes,
+    /// 保留尾部事件的 waiting 语义（等待提示）
+    pub end_is_waiting: bool,
+}
+
+impl OutputChunk {
+    pub fn end_offset(&self) -> u64 {
+        self.start_offset + self.bytes.len() as u64
+    }
+}
+
+/// 统一输出队列（字节块环形队列，TB v3）
 ///
-/// 序号语义：写入路径按会话连续分配 index（on_output 取队列 max_seq + 1），
-/// 实时流无跨会话空洞；队列层保持 index 无关（防御性容忍任意单调 index），
-/// 不变量仅保证「push 序 == index 单调序，段内无重无缺」——
-/// 历史回放恒为整体重播，min_seq/max_seq 仅作元数据供响应携带（见 get_events 注释）
+/// 双重容量限制（均为字节/条目级软上限）：
+/// - `max_total_bytes`: 最大总驻留字节（默认 50MB，配置化）
+/// - `max_chunks`: 防御性条目上限（默认 65536，抗极小块风暴；覆盖旧 capacity 语义）
+/// 任一限制超出时丢弃最旧块，min_offset 推进。
+///
+/// 偏移语义：`max_offset` = 产出端游标（会话内累计产字节），push 分配 start_offset
+/// 并推进；块区间按序铺满字节空间：`chunks[i+1].start_offset == chunks[i].end_offset()`。
+/// 队列层不依赖 offset 来源，仅保证「push 序 == 区间单调序，段内无重无缺」——
+/// 历史回放可 from_offset 起播（chunk 跳过 + 半块 slice）
 pub struct UnifiedOutputQueue {
-    buffer: std::collections::VecDeque<OutputEvent>,
-    capacity: usize,
-    max_total_bytes: u64,
+    chunks: std::collections::VecDeque<OutputChunk>,
+    /// 驻留最旧字节位置（front chunk 起点；空队列 = max_offset）
+    min_offset: u64,
+    /// 产出端游标（= 全量累计字节）
+    max_offset: u64,
+    /// 驻留字节（淘汰基准）
     total_bytes: u64,
-    max_seq: AtomicU64,
-    min_seq: AtomicU64,
+    /// 字节上限（软上限；多订阅者 Arc 共享时实际驻留可能短暂超限——设计预期）
+    max_total_bytes: u64,
+    /// 防御性条目上限（抗极小块风暴）
+    max_chunks: usize,
+    /// 累计产出事件数（调试/审计字段，回放不依赖）
     total_produced: AtomicU64,
 }
 
 impl UnifiedOutputQueue {
-    pub fn new(capacity: usize) -> Self {
+    /// 创建指定字节上限的队列（条目上限取 config max_chunks）
+    pub fn with_max_bytes(max_total_bytes: u64) -> Self {
         let config = AppConfig::global();
-        Self::with_max_bytes(capacity, config.channels.global_queue_max_bytes)
+        Self::with_limits(max_total_bytes, config.channels.global_queue_max_chunks)
     }
 
-    /// 创建指定字节上限的队列
-    pub fn with_max_bytes(capacity: usize, max_total_bytes: u64) -> Self {
+    /// 创建指定字节/条目双上限的队列
+    pub fn with_limits(max_total_bytes: u64, max_chunks: usize) -> Self {
         Self {
-            buffer: std::collections::VecDeque::with_capacity(capacity),
-            capacity,
-            max_total_bytes,
+            chunks: std::collections::VecDeque::with_capacity(max_chunks.min(4096)),
+            min_offset: 0,
+            max_offset: 0,
             total_bytes: 0,
-            max_seq: AtomicU64::new(0),
-            min_seq: AtomicU64::new(0),
+            max_total_bytes,
+            max_chunks,
             total_produced: AtomicU64::new(0),
         }
     }
 
-    pub fn max_seq(&self) -> u64 {
-        self.max_seq.load(Ordering::SeqCst)
+    /// 驻留最旧字节位置（front chunk 起点；空队列 = max_offset）
+    pub fn min_offset(&self) -> u64 {
+        self.min_offset
     }
 
-    pub fn min_seq(&self) -> u64 {
-        self.min_seq.load(Ordering::SeqCst)
+    /// 产出端游标（全量累计字节）
+    pub fn max_offset(&self) -> u64 {
+        self.max_offset
     }
 
     pub fn len(&self) -> usize {
-        self.buffer.len()
+        self.chunks.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.chunks.is_empty()
     }
 
-    /// 推入新事件，返回完整事件（供调用方转发给订阅者）
+    /// 驻留历史总字节（回放/响应元数据）
+    pub fn history_bytes(&self) -> u64 {
+        self.total_bytes
+    }
+
+    /// 推入新事件（字节块），返回完整事件（供调用方广播给订阅者）
     ///
-    /// 双重容量检查：条目数和总字节数任一超出时丢弃最旧事件。
-    /// index 由 SessionOutputManager::on_output 按会话连续分配（max_seq + 1），
-    /// push 只登记 max_seq/min_seq
-    pub fn push(&mut self, event: OutputEvent) -> OutputEvent {
-        self.max_seq.store(event.index, Ordering::SeqCst);
-        self.total_produced.fetch_add(1, Ordering::SeqCst);
+    /// start_offset 由 on_output 在串行临界区内分配（max_offset）；此处防御性
+    /// 兜底重赋。双重容量检查：字节数与块条目数任一超限时淘汰最旧块。
+    pub fn push(&mut self, mut event: OutputEvent) -> OutputEvent {
+        // 防御性兜底：生产路径 on_output 已分配 start_offset = max_offset
+        event.start_offset = self.max_offset;
+        let len = event.data.len() as u64;
+        self.total_bytes += len;
 
-        let event_bytes = event.data.len() as u64;
-        self.total_bytes += event_bytes;
-
-        // 条目数或总字节数超出时，丢弃最旧事件直到满足限制
-        while (self.buffer.len() >= self.capacity || self.total_bytes > self.max_total_bytes) && !self.buffer.is_empty()
+        // 字节/条目上限淘汰最旧块（均摊 O(1)）；min_offset 推进到新队首
+        while (self.total_bytes > self.max_total_bytes || self.chunks.len() >= self.max_chunks)
+            && !self.chunks.is_empty()
         {
-            if let Some(old) = self.buffer.pop_front() {
-                self.total_bytes -= old.data.len() as u64;
-                self.min_seq.store(old.index + 1, Ordering::SeqCst);
+            if let Some(front) = self.chunks.pop_front() {
+                self.total_bytes -= front.bytes.len() as u64;
             }
         }
+        // min_offset = 驻留最旧字节位置；队列被清空（超限单块）时回退为该块起点
+        match self.chunks.front() {
+            Some(front) => self.min_offset = front.start_offset,
+            None => self.min_offset = event.start_offset,
+        }
 
-        self.buffer.push_back(event);
-        self.buffer.back().unwrap().clone()
+        self.chunks.push_back(OutputChunk {
+            start_offset: event.start_offset,
+            bytes: Bytes::copy_from_slice(&event.data),
+            end_is_waiting: event.is_waiting,
+        });
+        self.max_offset += len;
+        self.total_produced.fetch_add(1, Ordering::SeqCst);
+        event
     }
 
-    /// 获取缓冲内全部事件（FIFO 序，整段克隆，无裁剪/范围语义）
+    /// 按字节锚点截取历史快照（TB v3）
     ///
-    /// 写入路径按会话连续分配 index（见 on_output），缓冲内默认无跨会话空洞；
-    /// 队列层不依赖 index 来源、保持整段 FIFO 返回——历史回放恒为整体重播，
-    /// min_seq/snapshot_seq 仅作元数据供响应携带
-    pub fn get_events(&self) -> Vec<OutputEvent> {
-        self.buffer.iter().cloned().collect()
+    /// - `from_offset = None`：全量回放（自 min_offset 起，兼容旧客户端）
+    /// - `Some(from)`：自 >= from 的字节位置起播——chunk 级跳过 + 末块
+    ///   `Bytes::slice` 半块裁头；`end_is_waiting` 由各块自带
+    ///
+    /// 返回 `(快照事件列表, min_offset, snapshot_offset, history_bytes)`
+    pub fn snapshot_from(&self, from_offset: Option<u64>) -> (Vec<OutputEvent>, u64, u64, u64) {
+        let mut events = Vec::with_capacity(self.chunks.len().min(8192));
+        let from = from_offset.unwrap_or(self.min_offset);
+        for chunk in &self.chunks {
+            let chunk_end = chunk.end_offset();
+            if chunk_end <= from {
+                continue; // chunk 级跳过
+            }
+            if chunk.start_offset < from {
+                // 半块切片：起点落在块内
+                let cut = (from - chunk.start_offset) as usize;
+                let data = chunk.bytes.slice(cut..).to_vec();
+                events.push(OutputEvent {
+                    session_id: String::new(),
+                    data,
+                    start_offset: from,
+                    timestamp: 0,
+                    is_waiting: chunk.end_is_waiting,
+                });
+            } else {
+                let data = chunk.bytes.to_vec();
+                events.push(OutputEvent {
+                    session_id: String::new(),
+                    data,
+                    start_offset: chunk.start_offset,
+                    timestamp: 0,
+                    is_waiting: chunk.end_is_waiting,
+                });
+            }
+        }
+        (events, self.min_offset, self.max_offset, self.total_bytes)
+    }
+
+    /// 截取 `[from, to)` 字节区间（HTTP 一次性历史）；越界端自动收敛到驻留范围，
+    /// from >= to 或无可返回字节时返回空
+    pub fn range(&self, from: u64, to: u64) -> Vec<u8> {
+        if to <= from {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for chunk in &self.chunks {
+            let chunk_end = chunk.end_offset();
+            if chunk_end <= from {
+                continue;
+            }
+            if chunk.start_offset >= to {
+                break;
+            }
+            let lo = from.saturating_sub(chunk.start_offset) as usize;
+            let hi = to.saturating_sub(chunk.start_offset) as usize;
+            let hi = hi.min(chunk.bytes.len());
+            if lo < hi {
+                out.extend_from_slice(&chunk.bytes[lo..hi]);
+            }
+        }
+        out
     }
 }
 
 impl Default for UnifiedOutputQueue {
     fn default() -> Self {
         let config = AppConfig::global();
-        Self::new(config.channels.global_queue_capacity)
+        Self::with_limits(
+            config.channels.global_queue_max_bytes,
+            config.channels.global_queue_max_chunks,
+        )
     }
 }
 
@@ -192,7 +282,7 @@ pub struct SubscriberState {
     pub client_id: String,
     /// 订阅是否活跃（历史发送完成后才标记为 true）
     pub active: AtomicBool,
-    pub sent_seq: AtomicU64,
+    pub sent_offset: AtomicU64,
     /// 独立发送通道（绑定该客户端的 WebSocket，承载 OutputFrame 流）
     pub send_queue: mpsc::Sender<OutputFrame>,
     /// inactive 期间的待发送缓冲，消除历史发送→激活之间的丢失窗口
@@ -230,12 +320,27 @@ const BACKPRESSURE_RESUME_BYTES: u64 = 8 * 1024;
 /// unacked 保持近满态触发暂停（保守），ack 弹出后自动恢复精确记账
 const UNACKED_FIFO_CAP: usize = 8192;
 
+// ==================== 链路调试节流（终端字节对账） ====================
+
+/// 产出统计打点间隔（有新产出才打；不打逐帧日志，防输出风暴期日志淹没链路）
+const PRODUCE_STATS_INTERVAL_MS: u64 = 5000;
+/// ack 推进打点间隔（ack 本身已被移动端 64KB/250ms 节流，多端并发时收敛到 1s）
+const ACK_LOG_INTERVAL_MS: u64 = 1000;
+
+/// 当前 Unix 毫秒（日志节流打点用）
+fn system_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 impl SubscriberState {
     pub fn new(client_id: String, send_queue: mpsc::Sender<OutputFrame>) -> Self {
         Self {
             client_id,
             active: AtomicBool::new(false),
-            sent_seq: AtomicU64::new(0),
+            sent_offset: AtomicU64::new(0),
             send_queue,
             pending: RwLock::new(Vec::new()),
             dropped: AtomicU64::new(0),
@@ -246,16 +351,16 @@ impl SubscriberState {
         self.active.load(Ordering::SeqCst)
     }
 
-    pub fn activate(&self, sent_seq: u64) {
-        self.sent_seq.store(sent_seq, Ordering::SeqCst);
+    pub fn activate(&self, sent_offset: u64) {
+        self.sent_offset.store(sent_offset, Ordering::SeqCst);
         self.active.store(true, Ordering::SeqCst);
     }
 
     /// 排空 pending 缓冲并发送为 Output 帧
     ///
     /// 占位期内 on_output() 缓存的事件均在快照（subscribe 持队列读锁收集历史）
-    /// 之后 push，index 必然 > 快照时 snapshot_seq——历史与 pending 无重叠，
-    /// 无需跳过（旧版按 index 去重是因快照与 pending 存在竞态窗口）
+    /// 之后 push，start_offset 必然 >= 快照时 snapshot_offset——历史与 pending
+    /// 无重叠，无需跳过（旧版按 seq 去重是因快照与 pending 存在竞态窗口）
     async fn drain_pending(&self) {
         let mut pending = self.pending.write().await;
         for event in pending.drain(..) {
@@ -270,15 +375,15 @@ impl SubscriberState {
     }
 }
 
-/// 订阅响应
+/// 订阅响应（TB v3 字节三件套）
 #[derive(Debug, Clone)]
 pub struct SubscribeResponse {
-    /// 队列中最早存续事件序号（元数据，环形淘汰后推进）
-    pub min_seq: u64,
-    /// 订阅时刻的快照序号（= 当时队列 max_seq，历史边界元数据）
-    pub snapshot_seq: u64,
-    /// 历史事件数量
-    pub history_count: usize,
+    /// 队列中最早存续字节位置（环形淘汰后推进；客户端游标 < min_offset → 截断）
+    pub min_offset: u64,
+    /// 订阅时刻的累计字节数（= 当时队列 max_offset，历史边界元数据）
+    pub snapshot_offset: u64,
+    /// 驻留历史总字节数
+    pub history_bytes: u64,
 }
 
 /// 单个 PTY 会话的输出管理，包括输出队列和订阅者管理
@@ -289,18 +394,25 @@ pub struct SessionOutputManager {
     /// 背压记账：已产出未 ack 的字节数（渲染反馈环，前端 onWriteParsed 后
     /// 回发 ack；超水位 → 暂停该会话 PTY 读取）
     unacked_bytes: AtomicU64,
-    /// 未 ack 事件 FIFO（index → bytes）：ack 按序弹出精减 unacked_bytes；
+    /// 未 ack 事件 FIFO（end_offset → bytes）：ack 按序弹出精减 unacked_bytes；
     /// std Mutex 仅作短临界区（无 await 保持），热路径成本低
     unacked_fifo: std::sync::Mutex<std::collections::VecDeque<(u64, u64)>>,
     /// 背压暂停滞回状态：true = 已暂停（等 unacked 降到低水位才恢复）。
     /// 由 PTY 读线程经 should_pause() 同步读写，纯原子无锁；会话新建为 false
     paused: AtomicBool,
-    /// 输出入队串行锁：串行化 on_output 的「index 分配 + 入队 + 广播」整段
-    /// 临界区。PtyReader 用 spawn 并发调 on_output，多个任务并发时 index
+    /// 输出入队串行锁：串行化 on_output 的「offset 分配 + 入队 + 广播」整段
+    /// 临界区。PtyReader 用 spawn 并发调 on_output，多个任务并发时 offset
     /// 分配（写锁）与广播（读锁）之间可被其他任务插入，导致 send_queue 顺序
-    /// 与 index 顺序错乱（60 先于 59 到达 forward_loop）→ 帧 seq 错乱/空洞 →
-    /// 前端误判 gap。串行后 index 顺序 = 广播顺序，根治该竞态。
+    /// 与 offset 顺序错乱（60 先于 59 到达 forward_loop）→ 帧 offset 错乱/空洞 →
+    /// 前端误判 gap。串行后 offset 顺序 = 广播顺序，根治该竞态。
     output_serial: tokio::sync::Mutex<()>,
+    // ==================== 链路调试统计（终端字节对账） ====================
+    /// 上次产出统计打点时刻（PRODUCE_STATS_INTERVAL_MS 节流）
+    last_produce_stats_ms: AtomicU64,
+    /// 累计产出事件数（对账用）
+    produced_events: AtomicU64,
+    /// 上次 ack 推进打点时刻（ACK_LOG_INTERVAL_MS 节流）
+    last_ack_log_ms: AtomicU64,
 }
 
 impl SessionOutputManager {
@@ -313,6 +425,9 @@ impl SessionOutputManager {
             unacked_fifo: std::sync::Mutex::new(std::collections::VecDeque::new()),
             paused: AtomicBool::new(false),
             output_serial: tokio::sync::Mutex::new(()),
+            last_produce_stats_ms: AtomicU64::new(0),
+            produced_events: AtomicU64::new(0),
+            last_ack_log_ms: AtomicU64::new(0),
         }
     }
 
@@ -322,8 +437,8 @@ impl SessionOutputManager {
 
     /// 处理新输出
     ///
-    /// 先入队再用事件广播给订阅者；事件不携带偏移，
-    /// 订阅者侧按订阅内连续流自洽（见 forward 层合成游标）
+    /// 先入队再用事件广播给订阅者；事件的 start_offset 在此串行临界区内分配
+    /// （= 队列 max_offset），订阅者按订阅内连续字节流自洽（见 forward 层合成游标）
     ///
     /// 背压保护：同步 try_send 而非 await send——慢订阅者（移动端弱网，
     /// 8192 事件通道 + 有界合并 + 转发通道逐级排满）不能阻塞 on_output，
@@ -331,23 +446,24 @@ impl SessionOutputManager {
     /// 停摆。满时丢弃该事件：客户端重订阅全量重播整体回补，事件仍保留
     /// 在输出队列中
     pub async fn on_output(&self, event: OutputEvent) {
-        // 串行化整个「index 分配 + 入队 + 广播」临界区：PtyReader 用 spawn
-        // 并发调 on_output，若不串行，多个任务在 index 分配（写锁）与广播
-        // （读锁）之间互相插入，send_queue 顺序与 index 顺序错乱（60 先于 59）
-        // → forward_loop 帧 seq 错乱/空洞 → 前端误判 gap。串行后顺序一致。
+        // 串行化整个「offset 分配 + 入队 + 广播」临界区：PtyReader 用 spawn
+        // 并发调 on_output，若不串行，多个任务在 offset 分配（写锁）与广播
+        // （读锁）之间互相插入，send_queue 顺序与 offset 顺序错乱（60 先于 59）
+        // → forward_loop 帧 offset 错乱/空洞 → 前端误判 gap。串行后顺序一致。
         let _guard = self.output_serial.lock().await;
 
-        // 序号按会话连续分配（队列 max_seq + 1），替代跨会话全局计数器（next_output_index）：
-        // 消除「多会话并发 → 会话内实时帧 seq 带跨会话空洞 → 客户端 `seq > last_rendered + 1 →
-        // 重订阅` 缺口检测被误触发 → 反复重订阅风暴」（桌面端 opencode 会话输入时后台日志
-        // 反复「连/订阅/断」刷屏即此根因）。按会话连续后缺口检测只在真实丢帧
-        // （背压 / 占位 pending 溢出）时命中，由重订阅 → 全量重播 → 按游标跳过去重自愈补回
+        // 字节偏移按会话连续分配（队列 max_offset），替代跨会话全局计数器
+        // （next_output_index）：消除「多会话并发 → 会话内实时帧带跨会话空洞 → 客户端
+        // `start_offset > cursor → 重订阅` 缺口检测被误触发 → 反复重订阅风暴」。
+        // 按会话连续后缺口检测只在真实丢帧（背压 / 占位 pending 溢出）时命中，
+        // 由重订阅 → 按游标锚点重播 → 按游标裁过去重自愈补回
         let mut event = event;
-        {
+        let (queue_min, queue_max, queue_bytes) = {
             let mut queue = self.output_queue.write().await;
-            event.index = queue.max_seq() + 1;
+            event.start_offset = queue.max_offset();
             event = queue.push(event);
-        }
+            (queue.min_offset(), queue.max_offset(), queue.history_bytes())
+        };
 
         // 背压记账：产出字节累加 + FIFO 登记（ack 按序弹出精减）。FIFO 满表示
         // ack 严重停滞 → 冻结记账：unacked 保持近满态触发暂停（保守方向），
@@ -360,8 +476,32 @@ impl SessionOutputManager {
             };
             if fifo.len() < UNACKED_FIFO_CAP {
                 self.unacked_bytes.fetch_add(event_bytes, Ordering::SeqCst);
-                fifo.push_back((event.index, event_bytes));
+                fifo.push_back((event.end_offset(), event_bytes));
             }
+        }
+
+        // 链路调试（终端字节对账）：产出统计周期打点（5s 且有新产出才打）。
+        // produced_bytes 与移动端 terminal_link 收帧统计对齐——比对两端累计字节
+        // 可定位丢字节环节；不打逐帧日志，防输出风暴期日志风暴
+        self.produced_events.fetch_add(1, Ordering::SeqCst);
+        let now_ms = system_now_ms();
+        let last_stats = self.last_produce_stats_ms.load(Ordering::SeqCst);
+        if now_ms.saturating_sub(last_stats) >= PRODUCE_STATS_INTERVAL_MS
+            && self
+                .last_produce_stats_ms
+                .compare_exchange(last_stats, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            tracing::debug!(
+                session_id = %self.session_id,
+                produced_events = self.produced_events.load(Ordering::SeqCst),
+                produced_bytes = queue_max,
+                queue_min_offset = queue_min,
+                queue_resident_bytes = queue_bytes,
+                unacked_bytes = self.unacked_bytes.load(Ordering::SeqCst),
+                paused = self.paused.load(Ordering::SeqCst),
+                "pty output produce stats (periodic)"
+            );
         }
 
         let subscribers = self.subscribers.read().await;
@@ -391,14 +531,14 @@ impl SessionOutputManager {
                                 let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
                                 if n <= 3 || n % 100 == 0 {
                                     tracing::warn!(
-                                        "[SessionOutputManager] Subscriber {} send stalled >{}s, dropped event #{} (index={})",
+                                        "[SessionOutputManager] Subscriber {} send stalled >{}s, dropped event #{} (start_offset={})",
                                         subscriber.client_id,
                                         SEND_BACKPRESSURE_TIMEOUT.as_secs(),
                                         n,
-                                        event.index
+                                        event.start_offset
                                     );
                                 }
-                                self.revert_unacked(event.index, event.data.len() as u64);
+                                self.revert_unacked(event.end_offset(), event.data.len() as u64);
                             }
                         }
                     }
@@ -410,24 +550,24 @@ impl SessionOutputManager {
                 // inactive 期间缓存事件，激活时排空，消除历史发送→激活的丢失窗口。
                 // 有界保护：占位窗口（历史排空）可能因慢链路持续很久，pending 无上限
                 // 会持续吃内存；超出容量丢弃并冲正记账（丢的事件不产生 ack，不冲正
-                // 会导致 unacked_bytes 虚高），缺口由客户端重订阅全量重播自愈
+                // 会导致 unacked_bytes 虚高），缺口由客户端重订阅按游标重播自愈
                 //
                 // 握手期间 drain_pending 持 pending 写锁是短暂窗口（毫秒级历史回放），
-                // 退化为阻塞 write().await 等待持锁方释放——避免序号已分配但帧永久丢失
-                // （try_write 失败时静默丢弃会让客户端 seq 缺口、触发不必要的重订阅）。
+                // 退化为阻塞 write().await 等待持锁方释放——避免 offset 已分配但帧永久丢失
+                // （try_write 失败时静默丢弃会让客户端字节缺口、触发不必要的重订阅）。
                 // 该等待不持有 self.output_queue / subscribers 锁，不会与其他锁路径死锁
                 let mut pending = subscriber.pending.write().await;
                 if pending.len() >= PENDING_EVENT_CAP {
                     let n = subscriber.dropped.fetch_add(1, Ordering::SeqCst) + 1;
                     if n <= 3 || n % 100 == 0 {
                         tracing::warn!(
-                            "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{} (index={})",
+                            "[SessionOutputManager] Subscriber {} pending overflow, dropped event #{} (start_offset={})",
                             subscriber.client_id,
                             n,
-                            event.index
+                            event.start_offset
                         );
                     }
-                    self.revert_unacked(event.index, event.data.len() as u64);
+                    self.revert_unacked(event.end_offset(), event.data.len() as u64);
                 } else {
                     pending.push(event.clone());
                 }
@@ -438,34 +578,56 @@ impl SessionOutputManager {
     /// 冲正未 ack 记账：事件被丢弃（发送超时/pending 溢出）后永远不会收到 ack，
     /// 将其从 FIFO 移除并回减 unacked_bytes，防止永久虚高导致背压水位永久暂停
     /// （饥饿）。FIFO 上限 8K，retain 线性扫描可接受（std Mutex 仅短临界区无 await）
-    fn revert_unacked(&self, index: u64, bytes: u64) {
+    fn revert_unacked(&self, end_offset: u64, bytes: u64) {
         let mut fifo = match self.unacked_fifo.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
         let before = fifo.len();
-        fifo.retain(|(i, _)| *i != index);
+        fifo.retain(|(e, _)| *e != end_offset);
         if fifo.len() != before {
             self.unacked_bytes.fetch_sub(bytes, Ordering::SeqCst);
         }
     }
 
-    /// 客户端 ack：释放 ≤ last_rendered_seq 的未 ack 字节（渲染反馈环回调）
+    /// 客户端 ack：释放 end_offset <= acked_offset 的未 ack 字节（渲染反馈环回调）
     ///
-    /// seq 单调前进（前端只对已渲染帧回发）；比当前水位陈旧或超出已产出
+    /// offset 单调前进（前端只对已渲染区间回发）；比当前水位陈旧或超出已产出
     ///（重订阅竞态/陈旧客户端）的 ack 被 FIFO 弹出条件天然忽略——只弹
-    /// index ≤ seq 的条目，无匹配即不动，unacked 不会越界减为负
-    pub fn on_ack(&self, last_rendered_seq: u64) {
+    /// end_offset <= offset 的条目，无匹配即不动，unacked 不会越界减为负
+    pub fn on_ack(&self, acked_offset: u64) {
         let mut fifo = match self.unacked_fifo.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        while let Some(&(index, bytes)) = fifo.front() {
-            if index <= last_rendered_seq {
+        let mut released = 0u64;
+        while let Some(&(end_offset, bytes)) = fifo.front() {
+            if end_offset <= acked_offset {
                 fifo.pop_front();
+                released += bytes;
                 self.unacked_bytes.fetch_sub(bytes, Ordering::SeqCst);
             } else {
                 break;
+            }
+        }
+        // 链路调试（背压对账）：ack 推进释放记账（1s 节流）。acked_offset 应与
+        // 移动端 Rust ack 水位一致，偏差即背压环异常
+        if released > 0 {
+            let now_ms = system_now_ms();
+            let last = self.last_ack_log_ms.load(Ordering::SeqCst);
+            if now_ms.saturating_sub(last) >= ACK_LOG_INTERVAL_MS
+                && self
+                    .last_ack_log_ms
+                    .compare_exchange(last, now_ms, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+            {
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    acked_offset,
+                    released_bytes = released,
+                    unacked_bytes = self.unacked_bytes.load(Ordering::SeqCst),
+                    "output ack released unacked accounting"
+                );
             }
         }
     }
@@ -483,6 +645,14 @@ impl SessionOutputManager {
             // 已暂停：降到低水位才恢复（滞回下沿）
             if unacked <= BACKPRESSURE_RESUME_BYTES {
                 self.paused.store(false, Ordering::SeqCst);
+                // 链路调试（背压对账）：仅状态迁移点打日志（判定本身 5ms 高频轮询，
+                // 逐次打会刷屏）；暂停/恢复时刻与 ack 推进日志对照可验证反馈环
+                tracing::debug!(
+                    session_id = %self.session_id,
+                    unacked_bytes = unacked,
+                    resume_water_bytes = BACKPRESSURE_RESUME_BYTES,
+                    "pty read backpressure resumed"
+                );
                 return false;
             }
             return true;
@@ -490,36 +660,45 @@ impl SessionOutputManager {
         // 未暂停：超高位水才暂停（滞回上沿）
         if unacked > BACKPRESSURE_HIGH_BYTES {
             self.paused.store(true, Ordering::SeqCst);
+            // 链路调试（背压对账）：暂停 = PTY 读停等，数据留内核管道（零丢失）
+            tracing::debug!(
+                session_id = %self.session_id,
+                unacked_bytes = unacked,
+                high_water_bytes = BACKPRESSURE_HIGH_BYTES,
+                "pty read backpressure paused"
+            );
             return true;
         }
         false
     }
 
-    /// 订阅会话输出（05 快照协议）
+    /// 订阅会话输出（05 快照协议 + TB v3 字节锚点）
     ///
     /// 帧流顺序：`[历史 Output × N] → HistoryEnd → [实时 Output]`，
     /// 历史完成后才标记 active（实时帧绝不先于 HistoryEnd 到达）
     ///
     /// 锁序（queue → subscribers 固定，勿调换）：
     /// 1. 写锁插入 active=false 的 subscriber（占位）
-    /// 2. 读锁读取快照元数据 + 全段历史——持锁期间 on_output 写锁被阻塞，
+    /// 2. 读锁读取快照元数据 + 历史段——持锁期间 on_output 写锁被阻塞，
     ///    保证快照与历史严格一致；随后 drop 队列读锁
+    ///    （from_offset 起播：chunk 级跳过 + 半块 slice，见 snapshot_from）
     /// 3. 读 `history_start_mode` 配置：snapshot 模式尚未实现，恒回退 min
     /// 4. response 经 oneshot 前置返回（不被历史背压阻塞，避免客户端 10s 订阅
     ///    超时误判失败——订阅实际已建立，重复订阅产生孤儿任务 → 重复流）
     /// 5. subscribers 读锁内逐条发送历史（持读锁发送防止订阅者在历史发送中
     ///    被替换导致旧任务历史注入新通道）
-    /// 6. 同一读锁作用域内发送 HistoryEnd 帧
+    /// 6. 同一读锁作用域内发送 HistoryEnd 帧（字节三件套）
     /// 7. 写锁排空 pending + 原子激活（on_output 被阻塞，排空与激活之间无新事件）
     ///
     /// 占位期间 on_output() 看到该 subscriber 但 active=false → 缓存到 pending；
-    /// pending 中事件 index 必 > 快照 seq（第 2 步持读锁时的 max_seq），
-    /// 排空与激活同锁完成，保证零丢失、顺序正确、无重无漏
+    /// pending 中事件 start_offset 必 >= 快照 snapshot_offset（第 2 步持读锁时的
+    /// max_offset），与历史衔接无缝；排空与激活同锁完成，零丢失、顺序正确
     pub async fn subscribe(
         &self,
         client_id: &str,
         ws_sender: mpsc::Sender<OutputFrame>,
         response_tx: Option<tokio::sync::oneshot::Sender<SubscribeResponse>>,
+        from_offset: Option<u64>,
     ) -> SubscribeResponse {
         let subscriber = SubscriberState::new(client_id.to_string(), ws_sender);
 
@@ -529,24 +708,21 @@ impl SessionOutputManager {
         // 第二步：读取历史并发送（不持锁，不阻塞 on_output）
         // 持读锁期间 on_output 的写锁被阻塞 → 快照与历史严格一致
         let queue = self.output_queue.read().await;
-        let min_seq = queue.min_seq();
-        let snapshot_seq = queue.max_seq();
-        // 全段重播（不裁剪不跳段）；seq 为全局计数器可能有跨会话空洞，禁止范围算术
-        let history = queue.get_events();
+        let (history, min_offset, snapshot_offset, history_bytes) = queue.snapshot_from(from_offset);
         drop(queue);
 
-        // 历史回放起点模式：snapshot（2J 清屏快照点 seq 化记录）尚未实现，
+        // 历史回放起点模式：snapshot（2J 清屏快照点 offset 化记录）尚未实现，
         // 恒回退 min 严格回放；快照机制随后续 ticket 引入
         if AppConfig::global().channels.history_start_mode == crate::system::config::HistoryStartMode::Snapshot {
             tracing::warn!(
-                "[SessionOutputManager] history_start_mode=snapshot 未实现（快照回放延后），回退 min_seq 严格回放"
+                "[SessionOutputManager] history_start_mode=snapshot 未实现（快照回放延后），回退 min_offset 严格回放"
             );
         }
 
         let response = SubscribeResponse {
-            min_seq,
-            snapshot_seq,
-            history_count: history.len(),
+            min_offset,
+            snapshot_offset,
+            history_bytes,
         };
 
         // 订阅响应前置：历史入队可能被通道背压阻塞（容量 8192 + 大历史 +
@@ -573,9 +749,9 @@ impl SessionOutputManager {
                 if sub
                     .send_queue
                     .send(OutputFrame::HistoryEnd {
-                        snapshot_seq,
-                        min_seq,
-                        history_count: history.len(),
+                        snapshot_offset,
+                        min_offset,
+                        history_bytes,
                     })
                     .await
                     .is_err()
@@ -588,42 +764,29 @@ impl SessionOutputManager {
             }
         }
 
-        // 第三步：排空 pending + 原子激活
-        // 先读锁检查 pending 是否为空，空则无需写锁，避免不必要地阻塞 on_output()
-        // 非空时升级为写锁，保证排空和激活之间不会有新事件进入 pending
+        // 第三步：排空 pending + 原子激活（统一写锁）
+        // 读锁检查 + 读锁激活分属两个临界区存在竞态：读锁下 on_output 同样能拿读锁
+        //（读读不互斥），可在「pending 空检查」与「activate」之间把新事件 push 进
+        // pending——激活后该事件永不排空 → 客户端字节缺口（依赖重订阅自愈，但造成
+        // 不必要的重拼接风暴）。统一写锁后 on_output 的读锁被阻塞，排空与激活之间
+        // 无新事件进入 pending（空 pending 的 drain 为 no-op，代价仅一个写锁临界区）
         {
-            let need_drain = {
-                let subscribers = self.subscribers.read().await;
-                match subscribers.get(client_id) {
-                    Some(sub) => !sub.pending.read().await.is_empty(),
-                    None => false,
-                }
-            };
+            let subscribers = self.subscribers.write().await;
+            if let Some(sub) = subscribers.get(client_id) {
+                // pending 全部为快照后事件（见 drain_pending 注释），无重叠无需跳过
+                sub.drain_pending().await;
 
-            if need_drain {
-                let subscribers = self.subscribers.write().await;
-                if let Some(sub) = subscribers.get(client_id) {
-                    // pending 全部为快照后事件（见 drain_pending 注释），无重叠无需跳过
-                    sub.drain_pending().await;
-
-                    // 读取最新 max_seq，此时 on_output 被写锁阻塞，max_seq 不会继续增长
-                    let current_max = self.output_queue.read().await.max_seq();
-                    sub.activate(current_max);
-                }
-            } else {
-                // pending 为空，只需读锁激活
-                let subscribers = self.subscribers.read().await;
-                if let Some(sub) = subscribers.get(client_id) {
-                    let current_max = self.output_queue.read().await.max_seq();
-                    sub.activate(current_max);
-                }
+                // 读取最新 max_offset，此时 on_output 被写锁阻塞，max_offset 不会继续增长
+                let current_max = self.output_queue.read().await.max_offset();
+                sub.activate(current_max);
             }
         }
 
         tracing::info!(
             client_id = %client_id,
             session_id = %self.session_id,
-            history_count = history.len(),
+            history_bytes = history_bytes,
+            from_offset = ?from_offset,
             "[SessionOutputManager] Client subscribed"
         );
 
@@ -682,6 +845,21 @@ impl SessionOutputManager {
 
     pub async fn active_subscriber_count(&self) -> usize {
         self.subscribers.read().await.values().filter(|s| s.is_active()).count()
+    }
+
+    /// 截取驻留历史字节区间（HTTP 一次性历史，TB v3 字节锚点）
+    ///
+    /// 返回 `(data_bytes, min_offset, snapshot_offset, history_bytes)`；
+    /// from 旧于 min_offset 时自 min_offset 起（客户端游标落后于驻留头部时
+    /// 以 min_offset 为准，由消费端按 response 做截断处理）
+    pub async fn snapshot_bytes(&self, from: u64) -> (Vec<u8>, u64, u64, u64) {
+        let queue = self.output_queue.read().await;
+        let min_offset = queue.min_offset();
+        let snapshot_offset = queue.max_offset();
+        let history_bytes = queue.history_bytes();
+        let from = from.max(min_offset);
+        let data = queue.range(from, snapshot_offset);
+        (data, min_offset, snapshot_offset, history_bytes)
     }
 }
 
@@ -755,7 +933,7 @@ impl GlobalOutputManager {
     }
 
     /// 客户端 ack（背压反馈环 Rust 侧入口）：推进会话未 ack 记账，释放
-    /// `last_rendered_seq` 及之前的输出字节；会话不存在时忽略
+    /// `acked_offset`（= 已渲染区间末端）及之前的输出字节；会话不存在时忽略
     ///
     /// 背压水位按会话整体记账（每产出事件 +bytes，不区分订阅者），因此任何
     /// 已认证订阅端的渲染确认都应推进记账。此前实现有正统门控（仅 current
@@ -767,34 +945,46 @@ impl GlobalOutputManager {
     /// 成立（订阅端收到的都是同一 PTY 字节流，消费确认即释放）；多端并发时
     /// 慢端 ack 只落后不加速，快端 ack 照常推进，无拖垮风险。
     /// 自 2.1.x 起放开：非正统端 ack 同样推进记账（`_source` 保留签名，供日志/审计）
-    pub async fn ack(&self, session_id: &str, last_rendered_seq: u64, _source: RendererSource) {
+    pub async fn ack(&self, session_id: &str, acked_offset: u64, _source: RendererSource) {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
-            manager.on_ack(last_rendered_seq);
+            manager.on_ack(acked_offset);
             tracing::trace!(
                 session_id,
-                last_rendered_seq,
+                acked_offset,
                 unacked_bytes = manager.unacked_bytes.load(Ordering::SeqCst),
                 "output ack applied"
             );
         } else {
-            tracing::debug!(session_id, last_rendered_seq, "ack for unknown session ignored");
+            tracing::debug!(session_id, acked_offset, "ack for unknown session ignored");
         }
     }
 
-    /// 订阅会话输出（05 快照协议：全量历史 + HistoryEnd 标记，无 start_seq）
+    /// 订阅会话输出（TB v3 快照协议：按 from_offset 字节锚点截取回放 + HistoryEnd
+    /// 标记；from_offset = None 时全量回放，兼容旧客户端）
     pub async fn subscribe(
         &self,
         session_id: &str,
         client_id: &str,
         ws_sender: mpsc::Sender<OutputFrame>,
         response_tx: Option<tokio::sync::oneshot::Sender<SubscribeResponse>>,
+        from_offset: Option<u64>,
     ) -> Option<SubscribeResponse> {
         let sessions = self.sessions.read().await;
         if let Some(manager) = sessions.get(session_id) {
-            Some(manager.subscribe(client_id, ws_sender, response_tx).await)
+            Some(manager.subscribe(client_id, ws_sender, response_tx, from_offset).await)
         } else {
             tracing::warn!(session_id = %session_id, "[GlobalOutputManager] Session not found for subscribe");
+            None
+        }
+    }
+
+    /// 截取驻留历史字节区间（HTTP 一次性历史；会话不存在 → None）
+    pub async fn snapshot_bytes(&self, session_id: &str, from: u64) -> Option<(Vec<u8>, u64, u64, u64)> {
+        let sessions = self.sessions.read().await;
+        if let Some(manager) = sessions.get(session_id) {
+            Some(manager.snapshot_bytes(from).await)
+        } else {
             None
         }
     }
@@ -834,7 +1024,6 @@ impl Default for GlobalOutputManager {
         Self::new()
     }
 }
-
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -843,11 +1032,12 @@ mod tests {
     use chrono::Utc;
     use std::sync::Arc;
 
-    fn make_event(index: u64) -> OutputEvent {
+    /// 数据为固定 4 字节 "test"，start_offset 直接传入（on_output 路径会重新分配）
+    fn make_event(start_offset: u64) -> OutputEvent {
         OutputEvent::new(
             "test".to_string(),
             b"test".to_vec(),
-            index,
+            start_offset,
             Utc::now().timestamp_millis(),
             false,
         )
@@ -862,116 +1052,145 @@ mod tests {
         frames
     }
 
-    /// 解包 Output 帧的 index（HistoryEnd 视为断言失败）
-    fn output_index(frame: &OutputFrame) -> u64 {
+    /// 解包 Output 帧的 start_offset（HistoryEnd 视为断言失败）
+    fn output_start(frame: &OutputFrame) -> u64 {
         match frame {
-            OutputFrame::Output(e) => e.index,
+            OutputFrame::Output(e) => e.start_offset,
             _ => panic!("expected Output frame, got HistoryEnd"),
         }
     }
 
-    /// push 后 get_events 整段返回全部事件（FIFO 序）
+    // ==================== 字节块队列 ====================
+
+    /// push 后快照整段返回全部字节区间（FIFO 序，start_offset 连续铺满）
     #[test]
-    fn test_push_and_get_events() {
-        let mut queue = UnifiedOutputQueue::new(10);
+    fn test_push_and_snapshot_full() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
 
         for i in 0..5 {
             queue.push(make_event(i));
         }
 
-        let events = queue.get_events();
+        let (events, _, snapshot_offset, history_bytes) = queue.snapshot_from(None);
         assert_eq!(events.len(), 5);
-        assert_eq!(events[0].index, 0);
-        assert_eq!(events[4].index, 4);
+        assert_eq!(events[0].start_offset, 0);
+        assert_eq!(events[4].start_offset, 16);
+        assert_eq!(events[4].end_offset(), 20);
+        assert_eq!(snapshot_offset, 20);
+        assert_eq!(history_bytes, 20);
+        // 连续不变量：区间按序铺满，无重无缺
+        for w in events.windows(2) {
+            assert_eq!(w[1].start_offset, w[0].end_offset());
+        }
     }
 
-    /// 环形淘汰推进 min_seq，max_seq 为最新 push 的 index
+    /// 条目上限（max_chunks）淘汰推进 min_offset
     #[test]
-    fn test_overflow_updates_min_seq() {
-        let mut queue = UnifiedOutputQueue::new(3);
+    fn test_chunk_cap_updates_min_offset() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 3);
 
         for i in 0..5 {
             queue.push(make_event(i));
         }
 
-        assert_eq!(queue.min_seq(), 2);
-        assert_eq!(queue.max_seq(), 4);
+        assert_eq!(queue.min_offset(), 8);
+        assert_eq!(queue.max_offset(), 20);
         assert_eq!(queue.len(), 3);
 
-        let events = queue.get_events();
+        let (events, _, _, _) = queue.snapshot_from(None);
         assert_eq!(events.len(), 3);
-        assert_eq!(events[0].index, 2);
+        assert_eq!(events[0].start_offset, 8);
     }
 
-    /// get_events 整段克隆无裁剪：index 含跨会话空洞也原样返回（禁止范围算术）
-    #[test]
-    fn test_get_events_full_no_trim() {
-        let mut queue = UnifiedOutputQueue::new(10);
-
-        // 模拟跨会话全局计数器空洞（如 A 会话 = [0,2,4]）
-        for i in [0u64, 2, 4, 100] {
-            queue.push(make_event(i));
-        }
-
-        let events = queue.get_events();
-        assert_eq!(events.len(), 4);
-        assert_eq!(
-            events.iter().map(|e| e.index).collect::<Vec<_>>(),
-            vec![0, 2, 4, 100],
-            "整段 FIFO 返回，不得做范围算术/裁剪"
-        );
-    }
-
-    /// 淘汰后 min_seq 推进到队首事件 index + 1；min_seq/max_seq 为纯元数据
-    #[test]
-    fn test_eviction_advances_min_seq() {
-        let mut queue = UnifiedOutputQueue::new(2);
-
-        queue.push(make_event(0));
-        queue.push(make_event(1));
-        queue.push(make_event(2));
-
-        assert_eq!(queue.min_seq(), 1);
-        assert_eq!(queue.max_seq(), 2);
-        assert_eq!(queue.len(), 2);
-    }
-
-    /// 字节上限超限时淘汰最旧事件
+    /// 字节上限超限时淘汰最旧块（min_offset 推进到新队首）
     #[test]
     fn test_max_bytes_limit_evicts_oldest() {
-        let mut queue = UnifiedOutputQueue::with_max_bytes(100, 10);
+        let mut queue = UnifiedOutputQueue::with_limits(10, 100);
         queue.push(make_event(0));
         queue.push(make_event(1));
         queue.push(make_event(2));
 
+        // 3×4B = 12B > 10B → 淘汰最旧 1 块 → 剩 8B
         assert_eq!(queue.len(), 2);
-        assert_eq!(queue.min_seq(), 1);
-        assert_eq!(queue.max_seq(), 2);
+        assert_eq!(queue.min_offset(), 4);
+        assert_eq!(queue.max_offset(), 12);
+        assert_eq!(queue.history_bytes(), 8);
     }
 
-    /// push 推进 max_seq（不再分配字节偏移）
+    /// push 推进 max_offset（产出端游标 = 全量累计字节）
     #[test]
-    fn test_push_advances_max_seq() {
-        let mut queue = UnifiedOutputQueue::new(10);
+    fn test_push_advances_max_offset() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
 
         queue.push(make_event(0));
         queue.push(make_event(1));
         queue.push(make_event(2));
 
-        assert_eq!(queue.max_seq(), 2);
+        assert_eq!(queue.max_offset(), 12);
         assert_eq!(queue.len(), 3);
     }
 
-    /// 单条事件超过字节上限时仍保留（不能丢弃刚 push 的事件）
+    /// 单块超过字节上限时仍保留（不能丢弃刚 push 的块；min_offset 为该块起点）
     #[test]
-    fn test_max_bytes_single_event_exceeds_limit() {
-        let mut queue = UnifiedOutputQueue::with_max_bytes(100, 2);
+    fn test_max_bytes_single_chunk_exceeds_limit() {
+        let mut queue = UnifiedOutputQueue::with_limits(2, 100);
         queue.push(make_event(0));
         assert_eq!(queue.len(), 1);
         assert_eq!(queue.total_bytes, 4);
+        assert_eq!(queue.min_offset(), 0);
+        assert_eq!(queue.max_offset(), 4);
     }
 
-    // ==================== 快照协议订阅 ====================
+    /// from_offset 快照：chunk 级跳过 + 半块 slice 起播
+    #[test]
+    fn test_snapshot_from_offset_slices_half_chunk() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
+        // 三个 4 字节块：区间 [0,4) [4,8) [8,12)
+        queue.push(make_event(0));
+        queue.push(make_event(1));
+        queue.push(make_event(2));
+
+        // 锚点落在块边界：自 [4,12) 起播
+        let (events, min, snapshot, bytes) = queue.snapshot_from(Some(4));
+        assert_eq!(min, 0);
+        assert_eq!(snapshot, 12);
+        assert_eq!(bytes, 12);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].start_offset, 4);
+        assert_eq!(events[0].data, b"test");
+        assert_eq!(events[1].start_offset, 8);
+
+        // 锚点落在块内：半块切片（[6,12) = "st" + "test"）
+        let (events, _, _, _) = queue.snapshot_from(Some(6));
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].start_offset, 6);
+        assert_eq!(events[0].data, b"st");
+        assert_eq!(events[1].start_offset, 8);
+        assert_eq!(events[1].data, b"test");
+        // 拼接后区间连续
+        assert_eq!(events[0].end_offset(), events[1].start_offset);
+
+        // 锚点超出驻留范围：空快照
+        let (events, _, _, _) = queue.snapshot_from(Some(100));
+        assert!(events.is_empty());
+    }
+
+    /// range(from, to)：HTTP 一次性历史的字节区间截取（含半块裁头/截尾）
+    #[test]
+    fn test_range_bytes() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
+        queue.push(make_event(0)); // [0,4) "test"
+        queue.push(make_event(1)); // [4,8)
+        queue.push(make_event(2)); // [8,12)
+
+        assert_eq!(queue.range(0, 12), b"testtesttest");
+        assert_eq!(queue.range(5, 9), b"estt".to_vec()); // [5,9)：块1尾 3 字节 + 块2头 1 字节
+        assert_eq!(queue.range(2, 6), b"stte".to_vec());
+        assert_eq!(queue.range(6, 4), b"".to_vec()); // from >= to → 空
+        assert_eq!(queue.range(100, 200), b"".to_vec());
+    }
+
+    // ==================== 快照协议订阅（TB v3 字节语义） ====================
 
     /// 订阅帧流严格顺序：[历史 Output × N] → [HistoryEnd] → [实时 Output]
     #[tokio::test]
@@ -983,34 +1202,34 @@ mod tests {
         }
 
         let (tx, mut rx) = mpsc::channel(100);
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.min_seq, 0);
-        assert_eq!(response.snapshot_seq, 2);
-        assert_eq!(response.history_count, 3);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.min_offset, 0);
+        assert_eq!(response.snapshot_offset, 12);
+        assert_eq!(response.history_bytes, 12);
 
-        // 历史 3 帧
-        for i in 0..3 {
+        // 历史 3 帧（start_offset 0/4/8）
+        for expect in [0u64, 4, 8] {
             let frame = rx.recv().await.unwrap();
-            assert_eq!(output_index(&frame), i);
+            assert_eq!(output_start(&frame), expect);
         }
-        // HistoryEnd 标记（携带 snapshot_seq/min_seq/history_count）
+        // HistoryEnd 标记（字节三件套）
         let marker = rx.recv().await.unwrap();
         match marker {
             OutputFrame::HistoryEnd {
-                snapshot_seq,
-                min_seq,
-                history_count,
+                snapshot_offset,
+                min_offset,
+                history_bytes,
             } => {
-                assert_eq!(snapshot_seq, 2);
-                assert_eq!(min_seq, 0);
-                assert_eq!(history_count, 3);
+                assert_eq!(snapshot_offset, 12);
+                assert_eq!(min_offset, 0);
+                assert_eq!(history_bytes, 12);
             }
             _ => panic!("expected HistoryEnd after history"),
         }
-        // 实时帧在标记之后
+        // 实时帧在标记之后（on_output 分配 start_offset = 12）
         manager.on_output(make_event(3)).await;
         let live = rx.recv().await.unwrap();
-        assert_eq!(output_index(&live), 3);
+        assert_eq!(output_start(&live), 12);
     }
 
     /// 空队列订阅：无历史帧，直接 [HistoryEnd]
@@ -1019,19 +1238,19 @@ mod tests {
         let manager = SessionOutputManager::new("test-session");
 
         let (tx, mut rx) = mpsc::channel(100);
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.history_count, 0);
-        assert_eq!(response.snapshot_seq, 0);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.history_bytes, 0);
+        assert_eq!(response.snapshot_offset, 0);
 
         let marker = rx.recv().await.unwrap();
         match marker {
             OutputFrame::HistoryEnd {
-                snapshot_seq,
-                history_count,
+                snapshot_offset,
+                history_bytes,
                 ..
             } => {
-                assert_eq!(snapshot_seq, 0);
-                assert_eq!(history_count, 0);
+                assert_eq!(snapshot_offset, 0);
+                assert_eq!(history_bytes, 0);
             }
             _ => panic!("expected HistoryEnd only"),
         }
@@ -1039,50 +1258,57 @@ mod tests {
         assert!(rx.try_recv().is_err());
     }
 
-    /// 淘汰后（min_seq > 0）订阅：覆盖全部现存事件（长期会话重订阅）
+    /// from_offset 订阅：客户端带字节游标重订阅（重连自愈路径），
+    /// 历史从游标处起播，已渲染区间不再重发
     #[tokio::test]
-    async fn test_subscribe_full_history_snapshot() {
+    async fn test_subscribe_from_offset_skips_rendered() {
         let manager = SessionOutputManager::new("test-session");
 
-        // 换小容量队列（2）：push 3 条 → index 0 淘汰，min_seq=1
-        *manager.output_queue.write().await = UnifiedOutputQueue::new(2);
+        for i in 0..3 {
+            manager.output_queue.write().await.push(make_event(i));
+        }
+
+        let (tx, mut rx) = mpsc::channel(100);
+        // 客户端已渲染到 6（半块内）→ 服务端从 6 起播
+        let response = manager.subscribe("client-1", tx, None, Some(6)).await;
+        assert_eq!(response.min_offset, 0);
+        assert_eq!(response.snapshot_offset, 12);
+
+        // 历史从 6 起：半块 "st"（[6,8)）+ 完整块 "test"（[8,12)）
+        let f1 = rx.recv().await.unwrap();
+        assert_eq!(output_start(&f1), 6);
+        let f2 = rx.recv().await.unwrap();
+        assert_eq!(output_start(&f2), 8);
+        let marker = rx.recv().await.unwrap();
+        assert!(matches!(marker, OutputFrame::HistoryEnd { .. }));
+
+        // 实时续流：从 snapshot_offset=12 起，无缝衔接
+        manager.on_output(make_event(9)).await;
+        let live = rx.recv().await.unwrap();
+        assert_eq!(output_start(&live), 12);
+    }
+
+    /// 淘汰后（min_offset > 0）订阅：覆盖全部现存字节（长期会话重订阅）
+    #[tokio::test]
+    async fn test_subscribe_full_snapshot_after_eviction() {
+        let manager = SessionOutputManager::new("test-session");
+
+        // 换小上限队列：push 3 条 → [0,4) 淘汰，min_offset=4
+        *manager.output_queue.write().await = UnifiedOutputQueue::with_limits(10, 100);
         manager.output_queue.write().await.push(make_event(0));
         manager.output_queue.write().await.push(make_event(1));
         manager.output_queue.write().await.push(make_event(2));
 
         let (tx, mut rx) = mpsc::channel(100);
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.min_seq, 1);
-        assert_eq!(response.snapshot_seq, 2);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.min_offset, 4);
+        assert_eq!(response.snapshot_offset, 12);
 
-        // 全量现存（[1,2] 按 FIFO）
+        // 全量现存（[4,12) 按 FIFO，start_offset 4/8）
         let f1 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f1), 1);
+        assert_eq!(output_start(&f1), 4);
         let f2 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f2), 2);
-        let marker = rx.recv().await.unwrap();
-        assert!(matches!(marker, OutputFrame::HistoryEnd { .. }));
-    }
-
-    /// 队列层 index 无关性（防御性）：直接 push 任意单调 index（模拟极端/历史数据），
-    /// get_events 仍整段返回；生产路径 on_output 已按会话分配连续 seq，不会产生此空洞
-    #[tokio::test]
-    async fn test_subscribe_with_global_seq_gaps() {
-        let manager = SessionOutputManager::new("test-session");
-
-        // 模拟多会话并发：本会话事件 index = [0, 2, 4, 100]（含跨会话空洞）
-        for i in [0u64, 2, 4, 100] {
-            manager.output_queue.write().await.push(make_event(i));
-        }
-
-        let (tx, mut rx) = mpsc::channel(100);
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.history_count, 4);
-
-        for expect in [0u64, 2, 4, 100] {
-            let f = rx.recv().await.unwrap();
-            assert_eq!(output_index(&f), expect);
-        }
+        assert_eq!(output_start(&f2), 8);
         let marker = rx.recv().await.unwrap();
         assert!(matches!(marker, OutputFrame::HistoryEnd { .. }));
     }
@@ -1103,7 +1329,7 @@ mod tests {
         // subscribe 后台执行：占位 → 快照(3) → 发历史（第 1 帧占满缓冲后挂起）
         let sub_handle = tokio::spawn({
             let manager = manager.clone();
-            async move { manager.subscribe("client-race", tx, None).await }
+            async move { manager.subscribe("client-race", tx, None, None).await }
         });
 
         // 让出调度，等待 subscribe 已插入占位 subscriber（历史第一帧占满通道挂起）
@@ -1127,8 +1353,8 @@ mod tests {
         let collect_handle = tokio::spawn(collect_frames(rx));
 
         let response = sub_handle.await.unwrap();
-        assert_eq!(response.snapshot_seq, 2);
-        assert_eq!(response.history_count, 3);
+        assert_eq!(response.snapshot_offset, 12);
+        assert_eq!(response.history_bytes, 12);
 
         // 关闭通道（unsubscribe 释放订阅者 send_queue），让收集任务退出
         manager.unsubscribe("client-race").await;
@@ -1137,20 +1363,20 @@ mod tests {
             .expect("collector finished within timeout")
             .unwrap();
 
-        // 严格顺序：[历史 0,1,2] → HistoryEnd → [pending 3,4]，无重无漏
-        let indices: Vec<u64> = frames
+        // 严格顺序：[历史 0,4,8] → HistoryEnd → [pending 12,16]，无重无漏
+        let offsets: Vec<u64> = frames
             .iter()
             .map(|f| match f {
-                OutputFrame::Output(e) => e.index,
+                OutputFrame::Output(e) => e.start_offset,
                 OutputFrame::HistoryEnd { .. } => u64::MAX, // 标记占位
             })
             .collect();
-        assert_eq!(indices, vec![0, 1, 2, u64::MAX, 3, 4]);
+        assert_eq!(offsets, vec![0, 4, 8, u64::MAX, 12, 16]);
         // HistoryEnd 位于历史之后、pending 之前
         assert!(matches!(frames[3], OutputFrame::HistoryEnd { .. }));
     }
 
-    /// 基础订阅 + 实时输出：响应携带快照元数据，帧流顺序被正确维持
+    /// 基础订阅 + 实时输出：响应携带字节元数据，帧流顺序被正确维持
     #[tokio::test]
     async fn test_subscribe_and_on_output() {
         let manager = SessionOutputManager::new("test-session");
@@ -1160,21 +1386,21 @@ mod tests {
         manager.output_queue.write().await.push(make_event(0));
         manager.output_queue.write().await.push(make_event(1));
 
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.min_seq, 0);
-        assert_eq!(response.snapshot_seq, 1);
-        assert_eq!(response.history_count, 2);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.min_offset, 0);
+        assert_eq!(response.snapshot_offset, 8);
+        assert_eq!(response.history_bytes, 8);
 
         let f1 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f1), 0);
+        assert_eq!(output_start(&f1), 0);
         let f2 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f2), 1);
+        assert_eq!(output_start(&f2), 4);
         let marker = rx.recv().await.unwrap();
         assert!(matches!(marker, OutputFrame::HistoryEnd { .. }));
 
         manager.on_output(make_event(2)).await;
         let f3 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f3), 2);
+        assert_eq!(output_start(&f3), 8);
     }
 
     /// 多订阅者：同一事件广播给所有订阅者
@@ -1187,8 +1413,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(100);
         let (tx2, mut rx2) = mpsc::channel(100);
 
-        manager.subscribe("client-1", tx1, None).await;
-        manager.subscribe("client-2", tx2, None).await;
+        manager.subscribe("client-1", tx1, None, None).await;
+        manager.subscribe("client-2", tx2, None, None).await;
 
         // 两个订阅者各自先排空空历史（HistoryEnd）
         assert!(matches!(rx1.recv().await.unwrap(), OutputFrame::HistoryEnd { .. }));
@@ -1198,9 +1424,9 @@ mod tests {
 
         let f1 = rx1.recv().await.unwrap();
         let f2 = rx2.recv().await.unwrap();
-        // on_output 按会话连续分配：空队列首事件 seq = max_seq(0) + 1 = 1
-        assert_eq!(output_index(&f1), 1);
-        assert_eq!(output_index(&f2), 1);
+        // on_output 按会话连续分配：空队列首块 start_offset = 0
+        assert_eq!(output_start(&f1), 0);
+        assert_eq!(output_start(&f2), 0);
     }
 
     #[tokio::test]
@@ -1208,18 +1434,18 @@ mod tests {
         let manager = SessionOutputManager::new("test-session");
 
         let (tx, _rx) = mpsc::channel(100);
-        manager.subscribe("client-1", tx, None).await;
+        manager.subscribe("client-1", tx, None, None).await;
 
         manager.unsubscribe("client-1").await;
 
         assert!(!manager.is_subscribed("client-1").await);
     }
 
-    fn make_session_event(session_id: &str, index: u64) -> OutputEvent {
+    fn make_session_event(session_id: &str, start_offset: u64) -> OutputEvent {
         OutputEvent {
             session_id: session_id.to_string(),
             data: b"test".to_vec(),
-            index,
+            start_offset,
             timestamp: Utc::now().timestamp_millis(),
             is_waiting: false,
         }
@@ -1232,7 +1458,7 @@ mod tests {
         manager.register_session("session-1").await;
 
         let (tx, mut rx) = mpsc::channel(100);
-        manager.subscribe("session-1", "client-1", tx, None).await;
+        manager.subscribe("session-1", "client-1", tx, None, None).await;
 
         // 空历史：先收 HistoryEnd
         assert!(matches!(rx.recv().await.unwrap(), OutputFrame::HistoryEnd { .. }));
@@ -1244,8 +1470,9 @@ mod tests {
             panic!("expected output frame");
         };
         assert_eq!(e.session_id, "session-1");
-        // on_output 按会话连续分配：本会话首个事件 seq = 队列 max_seq(0) + 1 = 1
-        assert_eq!(e.index, 1);
+        // on_output 按会话连续分配：本会话首个事件 start_offset = 0，end = 4
+        assert_eq!(e.start_offset, 0);
+        assert_eq!(e.end_offset(), 4);
     }
 
     #[tokio::test]
@@ -1254,7 +1481,7 @@ mod tests {
         manager.register_session("session-bp").await;
 
         let (tx, mut rx) = mpsc::channel(1000);
-        manager.subscribe("session-bp", "client-ack", tx, None).await;
+        manager.subscribe("session-bp", "client-ack", tx, None, None).await;
         let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
 
         // 每个事件 8KB；16 事件 = 128KB > 高位水 64KB → 暂停读
@@ -1264,7 +1491,7 @@ mod tests {
                 .on_output(OutputEvent {
                     session_id: "session-bp".to_string(),
                     data: big.clone(),
-                    index: 0,
+                    start_offset: 0,
                     timestamp: Utc::now().timestamp_millis(),
                     is_waiting: false,
                 })
@@ -1273,30 +1500,32 @@ mod tests {
         // 16×8KB = 128KB > 64KB 高位水 → 暂停读
         assert!(manager.should_pause("session-bp"), "burst should pause");
 
-        // 收集事件 seq（订阅通道 16 帧；on_output 按会话连续分配 1..16）
-        let mut seqs = Vec::new();
+        // 收集事件 start_offset（订阅通道 16 帧；on_output 按会话连续分配 0..122880）
+        let mut offsets = Vec::new();
         while let Ok(OutputFrame::Output(e)) = rx.try_recv() {
-            seqs.push(e.index);
+            offsets.push(e.start_offset);
         }
-        assert_eq!(seqs.len(), 16);
-        assert_eq!(seqs[0], 1);
+        assert_eq!(offsets.len(), 16);
+        assert_eq!(offsets[0], 0);
+        assert_eq!(offsets[15], 15 * 8192);
 
-        // ack 到 seq 14：剩余 2×8KB = 16KB，仍在 (8KB, 64KB] 滞回区间 → 保持暂停
-        manager.ack("session-bp", 14, RendererSource::Desktop).await;
+        // ack 到事件 14 末端（14×8KB = 114688）：剩余 2×8KB = 16KB，仍在
+        // (8KB, 64KB] 滞回区间 → 保持暂停
+        manager.ack("session-bp", 14 * 8192, RendererSource::Desktop).await;
         assert!(
             manager.should_pause("session-bp"),
             "hysteresis should hold pause while unacked in (low, high]"
         );
 
-        // ack 到 seq 15：剩余 1×8KB = 8KB ≤ 低水位 8KB → 恢复读
-        manager.ack("session-bp", 15, RendererSource::Desktop).await;
+        // ack 到事件 15 末端（15×8KB = 122880）：剩余 1×8KB = 8KB ≤ 低水位 → 恢复
+        manager.ack("session-bp", 15 * 8192, RendererSource::Desktop).await;
         assert!(
             !manager.should_pause("session-bp"),
             "ack below low watermark should resume"
         );
 
-        // 一次性 ack 超限 seq：全部释放，unacked 不为负
-        manager.ack("session-bp", 9999, RendererSource::Desktop).await;
+        // 一次性 ack 超限 offset：全部释放，unacked 不为负
+        manager.ack("session-bp", 999_999_999, RendererSource::Desktop).await;
         assert!(!manager.should_pause("session-bp"));
 
         // 会话不存在：ack 静默忽略，不 panic
@@ -1313,7 +1542,7 @@ mod tests {
         manager.register_session("session-nc").await;
 
         let (tx, mut rx) = mpsc::channel(1000);
-        manager.subscribe("session-nc", "client-mobile", tx, None).await;
+        manager.subscribe("session-nc", "client-mobile", tx, None, None).await;
         let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
 
         // 每事件 8KB；16 事件 = 128KB > 64KB 高位水 → 暂停读
@@ -1323,7 +1552,7 @@ mod tests {
                 .on_output(OutputEvent {
                     session_id: "session-nc".to_string(),
                     data: big.clone(),
-                    index: 0,
+                    start_offset: 0,
                     timestamp: Utc::now().timestamp_millis(),
                     is_waiting: false,
                 })
@@ -1335,7 +1564,7 @@ mod tests {
         manager
             .ack(
                 "session-nc",
-                99999,
+                999_999_999,
                 RendererSource::Mobile {
                     device_name: "observer-phone".to_string(),
                 },
@@ -1359,7 +1588,7 @@ mod tests {
                 .on_output(OutputEvent {
                     session_id: "session-bp-cap".to_string(),
                     data: tiny.clone(),
-                    index: 0,
+                    start_offset: 0,
                     timestamp: Utc::now().timestamp_millis(),
                     is_waiting: false,
                 })
@@ -1369,10 +1598,14 @@ mod tests {
         assert!(!manager.should_pause("session-bp-cap"));
 
         // 超限 ack：FIFO 内全部弹出，unacked 归零，不因冻结期欠记而变负
-        manager.ack("session-bp-cap", 99999, RendererSource::Desktop).await;
+        manager
+            .ack("session-bp-cap", 999_999_999, RendererSource::Desktop)
+            .await;
         assert!(!manager.should_pause("session-bp-cap"));
         // 重复 ack：空 FIFO 无匹配，no-op，不越界
-        manager.ack("session-bp-cap", 99999, RendererSource::Desktop).await;
+        manager
+            .ack("session-bp-cap", 999_999_999, RendererSource::Desktop)
+            .await;
     }
 
     #[tokio::test]
@@ -1385,8 +1618,8 @@ mod tests {
         let (tx1, mut rx1) = mpsc::channel(100);
         let (tx2, mut rx2) = mpsc::channel(100);
 
-        manager.subscribe("session-1", "client-1", tx1, None).await;
-        manager.subscribe("session-2", "client-2", tx2, None).await;
+        manager.subscribe("session-1", "client-1", tx1, None, None).await;
+        manager.subscribe("session-2", "client-2", tx2, None, None).await;
 
         manager.on_output(make_session_event("session-1", 0)).await;
         manager.on_output(make_session_event("session-2", 0)).await;
@@ -1429,7 +1662,7 @@ mod tests {
 
         // 容量 1：第 2 个事件起 try_send 必 Full → 内部 await send 等待
         let (tx, mut rx) = mpsc::channel(1);
-        manager.subscribe("session-wait", "client-wait", tx, None).await;
+        manager.subscribe("session-wait", "client-wait", tx, None, None).await;
         let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
 
         // 并发消费者：腾出通道空间让 on_output 的等待发送完成
@@ -1457,11 +1690,7 @@ mod tests {
             let m = sessions.get("session-wait").unwrap();
             let subs = m.subscribers.read().await;
             let sub = subs.get("client-wait").unwrap();
-            assert_eq!(
-                sub.dropped.load(Ordering::SeqCst),
-                0,
-                "有界等待场景不得丢弃任何事件"
-            );
+            assert_eq!(sub.dropped.load(Ordering::SeqCst), 0, "有界等待场景不得丢弃任何事件");
         }
     }
 
@@ -1474,7 +1703,7 @@ mod tests {
         manager.register_session("session-stall").await;
 
         let (tx, mut rx) = mpsc::channel(1);
-        manager.subscribe("session-stall", "client-stall", tx, None).await;
+        manager.subscribe("session-stall", "client-stall", tx, None, None).await;
         let _ = rx.recv().await.unwrap(); // 空历史 HistoryEnd
 
         // 事件 1 入队成功（占满容量 1），之后不再消费 → 事件 2 等待超时
@@ -1491,7 +1720,8 @@ mod tests {
 
         let sessions = manager.sessions.read().await;
         let m = sessions.get("session-stall").unwrap().clone();
-        drop(sessions);        {
+        drop(sessions);
+        {
             let subscribers = m.subscribers.read().await;
             let sub = subscribers.get("client-stall").unwrap();
             assert_eq!(sub.dropped.load(Ordering::SeqCst), 1, "超时应丢弃一次");
@@ -1501,7 +1731,7 @@ mod tests {
         {
             let fifo = m.unacked_fifo.lock().unwrap();
             assert_eq!(fifo.len(), 1, "FIFO 仅保留事件 1");
-            assert_eq!(fifo[0], (1, 4), "事件 1 index=1, 4 字节");
+            assert_eq!(fifo[0], (4, 4), "事件 1 end_offset=4, 4 字节");
         }
         assert_eq!(m.unacked_bytes.load(Ordering::SeqCst), 4, "冲正后 unacked 回落");
         // 未 ack 已低于水位 → 不暂停（冲正防止背压永久暂停）
@@ -1509,7 +1739,7 @@ mod tests {
     }
 
     /// inactive 占位期 pending 溢出：丢弃并冲正记账（缺口由客户端重订阅
-    /// 全量重播自愈，但不允许 unacked 虚高饿死背压）
+    /// 按游标重播自愈，但不允许 unacked 虚高饿死背压）
     #[tokio::test]
     async fn test_pending_overflow_drops_with_revert() {
         let manager = GlobalOutputManager::new();
@@ -1529,13 +1759,13 @@ mod tests {
         }
         m.subscribers.write().await.insert("client-pending".to_string(), sub);
 
-        // 溢出事件（index 由 on_output 分配）：丢弃 + 冲正
+        // 溢出事件（start_offset 由 on_output 分配）：丢弃 + 冲正
         m.on_output(make_event(0)).await;
 
         let subs = m.subscribers.read().await;
         let sub2 = subs.get("client-pending").unwrap();
         assert_eq!(sub2.dropped.load(Ordering::SeqCst), 1, "pending 溢出丢弃一次");
-        // 正常时间事件的所有未 ack 记账已被冲正 → unacked 为 0（不虚高）
+        // 全部未 ack 记账已被冲正 → unacked 为 0（不虚高）
         assert_eq!(m.unacked_bytes.load(Ordering::SeqCst), 0, "冲正后无虚高");
         let fifo = m.unacked_fifo.lock().unwrap();
         assert_eq!(fifo.len(), 0);
@@ -1553,20 +1783,20 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
 
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.history_count, 5);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.history_bytes, 20);
 
-        // 历史 0-4 + HistoryEnd
-        for i in 0..5 {
+        // 历史 0/4/8/12/16 + HistoryEnd
+        for expect in [0u64, 4, 8, 12, 16] {
             let f = rx.recv().await.unwrap();
-            assert_eq!(output_index(&f), i);
+            assert_eq!(output_start(&f), expect);
         }
         assert!(matches!(rx.recv().await.unwrap(), OutputFrame::HistoryEnd { .. }));
 
         // subscribe 完成后，on_output 正常接收
         manager.on_output(make_event(5)).await;
         let f = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f), 5);
+        assert_eq!(output_start(&f), 20);
     }
 
     /// 排空 pending 发送全部事件（无 skip：pending 全部为快照后事件）
@@ -1581,9 +1811,9 @@ mod tests {
         sub.drain_pending().await;
 
         let f1 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f1), 3);
+        assert_eq!(output_start(&f1), 3);
         let f2 = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f2), 4);
+        assert_eq!(output_start(&f2), 4);
         assert!(rx.try_recv().is_err());
     }
 
@@ -1607,16 +1837,19 @@ mod tests {
             .insert("client-1".to_string(), subscriber);
 
         // 模拟 subscribe 第二步：占位后先发历史快照（与 subscribe 实现一致），
-        // 否则接收端只收到 pending [3,4]，收不到历史 [0,1,2]，断言顺序不成立
+        // 否则接收端只收到 pending [12,16]，收不到历史 [0,4,8]
         {
             let subs = manager.subscribers.read().await;
             let sub = subs.get("client-1").unwrap();
             for i in 0..3 {
-                sub.send_queue.send(OutputFrame::Output(make_event(i))).await.unwrap();
+                sub.send_queue
+                    .send(OutputFrame::Output(make_event(i * 4)))
+                    .await
+                    .unwrap();
             }
         }
 
-        // inactive 期间 on_output 应缓存到 pending
+        // inactive 期间 on_output 应缓存到 pending（连续分配 12/16）
         manager.on_output(make_event(3)).await;
         manager.on_output(make_event(4)).await;
 
@@ -1626,8 +1859,8 @@ mod tests {
             let sub = subs.get("client-1").unwrap();
             let pending = sub.pending.read().await;
             assert_eq!(pending.len(), 2);
-            assert_eq!(pending[0].index, 3);
-            assert_eq!(pending[1].index, 4);
+            assert_eq!(pending[0].start_offset, 12);
+            assert_eq!(pending[1].start_offset, 16);
         }
 
         // 排空 pending 并激活（持写锁，与 subscribe 实际逻辑一致）
@@ -1639,26 +1872,22 @@ mod tests {
                 sub.send_queue.send(OutputFrame::Output(event)).await.unwrap();
             }
             drop(pending);
-            let current_max = manager.output_queue.read().await.max_seq();
+            let current_max = manager.output_queue.read().await.max_offset();
             sub.activate(current_max);
         }
 
         // 收到历史 + pending 事件（此测试手动模拟 subscribe 两步，
         // 不发送 HistoryEnd 标记；直接验证后续 on_output 正常送达）
-        for i in 0..5 {
-            let f = rx.recv().await.unwrap();
-            assert_eq!(output_index(&f), i);
+        let mut seen = Vec::new();
+        while let Ok(OutputFrame::Output(e)) = rx.try_recv() {
+            seen.push(e.start_offset);
         }
-
-        // 激活后 on_output 正常发送
-        manager.on_output(make_event(5)).await;
-        let f = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f), 5);
+        assert_eq!(seen, vec![0, 4, 8, 12, 16]);
     }
 
-    /// activate 使用最新 max_seq：订阅结束前 on_output 推入的真实值
+    /// activate 使用最新 max_offset：订阅结束前 on_output 推入的真实值
     #[tokio::test]
-    async fn test_activate_uses_current_max_seq() {
+    async fn test_activate_uses_current_max_offset() {
         let manager = SessionOutputManager::new("test-session");
 
         for i in 0..3 {
@@ -1667,26 +1896,73 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel(100);
 
-        let response = manager.subscribe("client-1", tx, None).await;
-        assert_eq!(response.snapshot_seq, 2);
+        let response = manager.subscribe("client-1", tx, None, None).await;
+        assert_eq!(response.snapshot_offset, 12);
 
-        // 验证 subscriber 的 sent_seq 是最新的
+        // 验证 subscriber 的 sent_offset 是最新的
         {
             let subs = manager.subscribers.read().await;
             let sub = subs.get("client-1").unwrap();
             assert!(sub.is_active());
-            assert_eq!(sub.sent_seq.load(Ordering::SeqCst), 2);
+            assert_eq!(sub.sent_offset.load(Ordering::SeqCst), 12);
         }
 
         // 排空 subscribe 阶段的历史与标记，聚焦验证后续 on_output 无重复无丢失
-        for i in 0..3 {
+        for expect in [0u64, 4, 8] {
             let f = rx.recv().await.unwrap();
-            assert_eq!(output_index(&f), i);
+            assert_eq!(output_start(&f), expect);
         }
         assert!(matches!(rx.recv().await.unwrap(), OutputFrame::HistoryEnd { .. }));
 
         manager.on_output(make_event(3)).await;
         let f = rx.recv().await.unwrap();
-        assert_eq!(output_index(&f), 3);
+        assert_eq!(output_start(&f), 12);
+    }
+
+    /// snapshot_bytes：HTTP 一次性历史（按 from 字节锚点截取 + 元数据三件套）
+    #[tokio::test]
+    async fn test_snapshot_bytes_http() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-http").await;
+
+        // 推送 3 个 4 字节事件 → [0,12)
+        for i in 0..3 {
+            manager.on_output(make_session_event("session-http", 0)).await;
+        }
+
+        let (data, min, snapshot, history_bytes) =
+            manager.snapshot_bytes("session-http", 4).await.expect("session exists");
+        assert_eq!(min, 0);
+        assert_eq!(snapshot, 12);
+        assert_eq!(history_bytes, 12);
+        assert_eq!(data, b"testtest");
+
+        // from 旧于 min_offset：以 min_offset 为起点
+        let (data, _, _, _) = manager.snapshot_bytes("session-http", 0).await.unwrap();
+        assert_eq!(data, b"testtesttest");
+
+        // 会话不存在 → None
+        assert!(manager.snapshot_bytes("no-such", 0).await.is_none());
+    }
+
+    /// 全局快照截取 + 淘汰联动：from 越过驻留头部后返回空
+    #[tokio::test]
+    async fn test_snapshot_bytes_after_eviction() {
+        let manager = GlobalOutputManager::new();
+        manager.register_session("session-http-evict").await;
+        {
+            let sessions = manager.sessions.read().await;
+            let m = sessions.get("session-http-evict").unwrap();
+            *m.output_queue.write().await = UnifiedOutputQueue::with_limits(6, 100);
+        }
+        for _ in 0..3 {
+            manager.on_output(make_session_event("session-http-evict", 0)).await;
+        }
+        // 12B > 6B：while 淘汰至 6B 内（4B 块每次淘汰一块）→ 仅驻留 [8,12)
+        let (data, min, snapshot, history_bytes) = manager.snapshot_bytes("session-http-evict", 0).await.unwrap();
+        assert_eq!(min, 8);
+        assert_eq!(snapshot, 12);
+        assert_eq!(history_bytes, 4);
+        assert_eq!(data, b"test");
     }
 }

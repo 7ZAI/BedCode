@@ -110,6 +110,9 @@ interface host-peer {
     /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
     /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    pause-transfer: func(batch-id: string) -> result<_, string>;
+    resume-transfer: func(batch-id: string) -> result<_, string>;
+    resume-all-transfers: func() -> result<u32, string>;
     /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
     /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
     /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝

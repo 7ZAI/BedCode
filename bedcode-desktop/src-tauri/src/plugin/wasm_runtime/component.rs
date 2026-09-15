@@ -21,12 +21,12 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform,
-    process, session, status, storage, terminal, timer,
+    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, session, status,
+    storage, terminal, timer,
 };
-use super::{block_on_async, fuel_per_call, WasmHostContext, WasmPluginState};
 #[cfg(test)]
 use super::plugin_debug_mode;
+use super::{block_on_async, fuel_per_call, WasmHostContext, WasmPluginState};
 use crate::AppError;
 use bedcode_plugin_api::abi;
 use std::sync::Arc;
@@ -297,6 +297,18 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         peer::peer_set_receive_policy(&self.host_ctx, &self.plugin_id, &mode, timeout_secs)
     }
 
+    fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer::peer_pause_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        peer::peer_resume_transfer(&self.host_ctx, &self.plugin_id, &batch_id)
+    }
+
+    fn resume_all_transfers(&mut self) -> Result<u32, String> {
+        peer::peer_resume_all_transfers(&self.host_ctx, &self.plugin_id)
+    }
+
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         peer::peer_set_shared_roots(&self.host_ctx, &self.plugin_id, &dirs_json)
     }
@@ -306,23 +318,11 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 
     fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
-        peer::peer_browse_directory(
-            &self.host_ctx,
-            &self.plugin_id,
-            &session,
-            &dir_id,
-            &rel_path,
-        )
+        peer::peer_browse_directory(&self.host_ctx, &self.plugin_id, &session, &dir_id, &rel_path)
     }
 
     fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
-        peer::peer_pull_files(
-            &self.host_ctx,
-            &self.plugin_id,
-            &session,
-            &dir_id,
-            &files_json,
-        )
+        peer::peer_pull_files(&self.host_ctx, &self.plugin_id, &session, &dir_id, &files_json)
     }
 
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
@@ -612,7 +612,10 @@ impl LoadedWasmPlugin {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_output", &e);
-                Err(AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
+                Err(AppError::Plugin(format!(
+                    "WASM on_terminal_output() call failed: {}",
+                    e
+                )))
             }
         }
     }
@@ -773,7 +776,11 @@ pub(crate) fn build_wasi_ctx(
         .enumerate()
     {
         // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
-        let guest_path = if i == 0 { "/data".to_string() } else { format!("/data{}", i) };
+        let guest_path = if i == 0 {
+            "/data".to_string()
+        } else {
+            format!("/data{}", i)
+        };
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!(
                 plugin_id = %plugin_id,
@@ -812,7 +819,19 @@ pub(crate) fn build_wasi_ctx(
 /// tokio 运行时——preauthorize 阶段用它收集「需弹窗授权」的路径候选
 /// （`resolve_preopen_dirs` 在此基础上再过滤未授权项）。
 pub(crate) fn expand_preopen_declarations(plugin_id: &str, declared_dirs: &[String]) -> Vec<String> {
-    let home = dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string());
+    expand_preopen_declarations_with_home(plugin_id, declared_dirs, None)
+}
+
+/// [`expand_preopen_declarations`] 的可注入 home 变体（测试用临时目录构造伪 HOME，
+/// 避免依赖真实 `$HOME` 导致的无主目录环境静默跳过，票据 31）
+fn expand_preopen_declarations_with_home(
+    plugin_id: &str,
+    declared_dirs: &[String],
+    home_override: Option<&std::path::Path>,
+) -> Vec<String> {
+    let home = home_override
+        .map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string())
+        .or_else(|| dirs::home_dir().map(|p| p.to_string_lossy().trim_end_matches(['/', '\\']).to_string()));
     declared_dirs
         .iter()
         .filter_map(|raw| {
@@ -843,10 +862,20 @@ pub(crate) fn resolve_preopen_dirs(
     plugin_id: &str,
     declared_dirs: &[String],
 ) -> Vec<String> {
+    resolve_preopen_dirs_with_home(host_ctx, plugin_id, declared_dirs, None)
+}
+
+/// [`resolve_preopen_dirs`] 的可注入 home 变体（测试用临时目录构造伪 HOME，票据 31）
+fn resolve_preopen_dirs_with_home(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    declared_dirs: &[String],
+    home_override: Option<&std::path::Path>,
+) -> Vec<String> {
     if tokio::runtime::Handle::try_current().is_err() {
         return Vec::new();
     }
-    expand_preopen_declarations(plugin_id, declared_dirs)
+    expand_preopen_declarations_with_home(plugin_id, declared_dirs, home_override)
         .into_iter()
         .filter(|dir| block_on_async(host_ctx.fs_auth.is_granted(plugin_id, dir)))
         .collect()
@@ -1109,14 +1138,13 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_preopen_dirs_expands_home_variable() {
-        let Some(home) = dirs::home_dir() else {
-            return; // 无主目录环境跳过
-        };
+        // 用临时目录构造伪 HOME，不依赖真实 `$HOME`（无主目录环境也不再静默跳过，票据 31）
+        let home_dir = tempfile::tempdir().expect("tempdir");
         let (ctx, _dir) = preopen_ctx("com.bedcode.test").await;
         let pid = "com.bedcode.test";
 
-        // 在主目录下建真实目录并授权，验证 ${home} 展开 + 授权过滤联合生效
-        let probe = home.join(".bedcode-wasi-preopen-test");
+        // 在伪 HOME 下建真实目录并授权，验证 ${home} 展开 + 授权过滤联合生效
+        let probe = home_dir.path().join(".bedcode-wasi-preopen-test");
         std::fs::create_dir_all(&probe).unwrap();
         crate::plugin::wasm_runtime::host_impl::storage::storage_set(
             &ctx,
@@ -1126,7 +1154,12 @@ mod tests {
         )
         .expect("seed granted path");
 
-        let out = resolve_preopen_dirs(&ctx, pid, &["${home}/.bedcode-wasi-preopen-test".to_string()]);
+        let out = resolve_preopen_dirs_with_home(
+            &ctx,
+            pid,
+            &["${home}/.bedcode-wasi-preopen-test".to_string()],
+            Some(home_dir.path()),
+        );
         assert_eq!(out.len(), 1);
         assert!(out[0].ends_with(".bedcode-wasi-preopen-test"));
         std::fs::remove_dir_all(&probe).ok();
@@ -1137,19 +1170,19 @@ mod tests {
     /// check_batch 弹窗），与 resolve_preopen_dirs 的授权过滤形成对照
     #[test]
     fn expand_preopen_declarations_expands_and_keeps_ungranted() {
-        let Some(home) = dirs::home_dir() else {
-            return; // 无主目录环境跳过
-        };
-        let home_str = home.to_string_lossy().trim_end_matches('/').to_string();
+        // 用临时目录构造伪 HOME，不依赖真实 `$HOME`（票据 31）
+        let home_dir = tempfile::tempdir().expect("tempdir");
+        let home_str = home_dir.path().to_string_lossy().trim_end_matches('/').to_string();
 
-        let out = expand_preopen_declarations(
+        let out = expand_preopen_declarations_with_home(
             "com.bedcode.test",
             &[
                 "${home}/.bedcode/ai-chatbox".to_string(),
-                format!(" {}/trailing/ ", home_str),
+                format!(" {home_str}/trailing/ "),
                 "   ".to_string(),
                 String::new(),
             ],
+            Some(home_dir.path()),
         );
         assert_eq!(out.len(), 2, "实际: {:?}", out);
         assert!(out[0].ends_with("/.bedcode/ai-chatbox"), "实际: {:?}", out);

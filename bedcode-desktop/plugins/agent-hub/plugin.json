@@ -1,0 +1,175 @@
+{
+  "id": "com.bedcode.agent-hub",
+  "name": "Agent Hub",
+  "version": "0.1.0",
+  "description": "Agent CLI 统一管理台：环境检测与一键安装、Skills 管理、供应商统一配置、使用统计与会话日志解析。\n使用：侧边栏「Agent Hub」→ 概览查看各 CLI 安装状态与环境；安装与更新在「安装与更新」页操作；Skills 浏览/编辑/分发/GitHub 安装/本地导入在「Skills」页操作。",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_agent_hub",
+  "icon": "icon.svg",
+  "permissions": [
+    "broadcast",
+    "fs:read",
+    "fs:write",
+    "network:http",
+    "process:run",
+    "storage",
+    "ui:sidebar"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "id": "agent-hub.get-state",
+        "title": "Agent Hub: Get State"
+      },
+      {
+        "id": "agent-hub.request-auth",
+        "title": "Agent Hub: Request Directory Authorization"
+      },
+      {
+        "id": "agent-hub.detect",
+        "title": "Agent Hub: Detect CLIs"
+      },
+      {
+        "id": "agent-hub.get-install-state",
+        "title": "Agent Hub: Get Install State"
+      },
+      {
+        "id": "agent-hub.speed-test",
+        "title": "Agent Hub: Speed Test Registries"
+      },
+      {
+        "id": "agent-hub.apply-mirror",
+        "title": "Agent Hub: Apply Registry Persistently"
+      },
+      {
+        "id": "agent-hub.add-custom-source",
+        "title": "agent-hub.add-custom-source"
+      },
+      {
+        "id": "agent-hub.remove-custom-source",
+        "title": "agent-hub.remove-custom-source"
+      },
+      {
+        "id": "agent-hub.restore-npmrc",
+        "title": "Agent Hub: Restore npmrc Backup"
+      },
+      {
+        "id": "agent-hub.check-updates",
+        "title": "Agent Hub: Check CLI Updates"
+      },
+      {
+        "id": "agent-hub.install",
+        "title": "Agent Hub: Install / Update CLI"
+      },
+      {
+        "id": "agent-hub.describe-install",
+        "title": "Agent Hub: Describe Install Command"
+      },
+      {
+        "id": "agent-hub.get-run-output",
+        "title": "Agent Hub: Get Run Output"
+      },
+      {
+        "id": "agent-hub.cancel-run",
+        "title": "Agent Hub: Cancel Running Install"
+      },
+      {
+        "id": "agent-hub.get-skills-state",
+        "title": "Agent Hub: Get Skills State"
+      },
+      {
+        "id": "agent-hub.scan-skills",
+        "title": "Agent Hub: Scan Skills"
+      },
+      {
+        "id": "agent-hub.read-skill",
+        "title": "Agent Hub: Read Skill"
+      },
+      {
+        "id": "agent-hub.save-skill",
+        "title": "Agent Hub: Save Skill"
+      },
+      {
+        "id": "agent-hub.distribute-skill",
+        "title": "Agent Hub: Distribute Skill"
+      },
+      {
+        "id": "agent-hub.install-github-skill",
+        "title": "Agent Hub: Install Skill from GitHub"
+      },
+      {
+        "id": "agent-hub.import-skill",
+        "title": "Agent Hub: Import Skill from Local Directory"
+      },
+      {
+        "id": "agent-hub.get-providers-state",
+        "title": "Agent Hub: Get Providers State"
+      },
+      {
+        "id": "agent-hub.save-preset",
+        "title": "Agent Hub: Save Provider Preset"
+      },
+      {
+        "id": "agent-hub.delete-preset",
+        "title": "Agent Hub: Delete Provider Preset"
+      },
+      {
+        "id": "agent-hub.import-providers",
+        "title": "Agent Hub: Import Providers from CLIs"
+      },
+      {
+        "id": "agent-hub.apply-provider",
+        "title": "Agent Hub: Apply Provider Preset to CLI"
+      },
+      {
+        "id": "agent-hub.get-usage-state",
+        "title": "Agent Hub: Get Usage State"
+      },
+      {
+        "id": "agent-hub.scan-usage",
+        "title": "Agent Hub: Scan Usage Sessions"
+      },
+      {
+        "id": "agent-hub.get-usage-stats",
+        "title": "Agent Hub: Get Usage Stats"
+      },
+      {
+        "id": "agent-hub.list-usage-sources",
+        "title": "Agent Hub: List Usage Sources"
+      },
+      {
+        "id": "agent-hub.add-usage-source",
+        "title": "Agent Hub: Add Usage Source"
+      },
+      {
+        "id": "agent-hub.remove-usage-source",
+        "title": "Agent Hub: Remove Usage Source"
+      },
+      {
+        "id": "agent-hub.list-usage-sessions",
+        "title": "Agent Hub: List Usage Sessions"
+      },
+      {
+        "id": "agent-hub.read-usage-session",
+        "title": "Agent Hub: Read Usage Session"
+      }
+    ],
+    "views": [
+      {
+        "id": "agent-hub.sidebar",
+        "type": "sidebar",
+        "title": "Agent Hub",
+        "component": "AgentHubView",
+        "icon": "M12 2L2 12l10 10 10-10L12 2zm0 5.2l4.8 4.8-4.8 4.8L7.2 12l4.8-4.8z",
+        "order": 240
+      }
+    ],
+    "configuration": {
+      "title": "Agent Hub Settings",
+      "properties": {}
+    }
+  }
+}

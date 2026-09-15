@@ -190,7 +190,13 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
             {
                 let db = ctx.db();
                 let db_guard = db.lock().await;
-                if let Err(e) = db_guard.add_pairing(&display_name, &fingerprint, "", Some(&address), body.uid_hash.as_deref()) {
+                if let Err(e) = db_guard.add_pairing(
+                    &display_name,
+                    &fingerprint,
+                    "",
+                    Some(&address),
+                    body.uid_hash.as_deref(),
+                ) {
                     tracing::warn!(device_name = %device_name, error = %e, "Failed to record pairing");
                 }
             }
@@ -331,10 +337,7 @@ pub async fn reauthenticate(body: web::Json<ReauthRequest>) -> HttpResponse {
                     tracing::warn!(error = %e, "Failed to record connection history");
                 }
             }
-            let msg = match e {
-                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired",
-                _ => "Invalid token",
-            };
+            let msg = crate::utils::auth::jwt::jwt_error_message(&e);
             HttpResponse::Ok().json(ApiResponse::<()>::error(1001, msg))
         }
     }
@@ -497,11 +500,8 @@ pub async fn biometric_bind(body: web::Json<BiometricBindRequest>) -> HttpRespon
         Ok(claims) => claims,
         Err(e) => {
             tracing::warn!(fingerprint = %fingerprint, error = ?e, "Biometric bind JWT verification failed");
-            let msg = match e {
-                crate::utils::auth::jwt::JwtError::TokenExpired => "Token expired".to_string(),
-                _ => "Invalid token".to_string(),
-            };
-            return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, &msg));
+            let msg = crate::utils::auth::jwt::jwt_error_message(&e);
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(1001, msg));
         }
     };
 

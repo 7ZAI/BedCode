@@ -84,10 +84,19 @@ pub struct ServerSupervisor {
     inner: Arc<RwLock<SupervisorInner>>,
 }
 
+impl Default for ServerSupervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ServerSupervisor {
-    /// 获取全局单例
-    pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<ServerSupervisor> = std::sync::LazyLock::new(|| ServerSupervisor {
+    /// 创建独立实例（测试隔离用；生产代码应使用 [`global`]）
+    ///
+    /// 全局单例在 lib test binary 内跨模块共享（票据 14/16 规范）：
+    /// 需要隔离状态的测试应构造独立实例，避免并行调度下状态污染。
+    pub fn new() -> Self {
+        Self {
             inner: Arc::new(RwLock::new(SupervisorInner {
                 status: ServerStatus::Stopped,
                 metrics: ServerMetrics::default(),
@@ -98,7 +107,12 @@ impl ServerSupervisor {
                 sys: Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
                 metrics_task_cancel: Arc::new(AtomicBool::new(false)),
             })),
-        });
+        }
+    }
+
+    /// 获取全局单例
+    pub fn global() -> &'static Self {
+        static INSTANCE: std::sync::LazyLock<ServerSupervisor> = std::sync::LazyLock::new(ServerSupervisor::new);
         &INSTANCE
     }
 

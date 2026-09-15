@@ -41,8 +41,9 @@ use crate::transfer::message::{
     self, CancelOrigin, IncomingFrame, TransferFrame, TRANSFER_PROTOCOL_VERSION,
 };
 use crate::transfer::{
-    emit, next_frame_or_cancel, proto_violation, receive_files_after_accept, run_receive, sess_io,
-    CancelToken, FileMeta, RateTracker, TerminalState, TransferConfig, TransferEvent,
+    emit, next_frame_handling_pause, next_pause_cmd, proto_violation, receive_files_after_accept,
+    run_receive, sess_io, CancelToken, FileMeta, PauseCmd, RateTracker, SessionPause, TerminalState,
+    TransferConfig, TransferEvent,
 };
 use crate::transport::{Connection, ConnectionHandler, HandlerFuture};
 
@@ -135,6 +136,19 @@ struct SharedHandlerInner {
     cancel: CancelToken,
     /// 活动会话登记表（batch_id/dir_id → 子取消令牌）：按批取消入口
     sessions: std::sync::Mutex<HashMap<String, CancelToken>>,
+    /// 服务侧拉取会话暂停登记表（serve batch_id → 暂停句柄）：按批暂停/恢复入口
+    pauses: Arc<std::sync::Mutex<HashMap<String, Arc<crate::transfer::PauseSlot>>>>,
+    /// push 接收会话暂停登记表（接收 batch_id → 暂停句柄）：接收方本地暂停入口
+    ///
+    /// 与 `pauses` 分表：两者是同一任务的两端视角（本端收 vs 本端供），
+    /// 但寻址的 batch_id 各自独立，合表会产生键碰撞时的错误路由。
+    receive_pauses: Arc<std::sync::Mutex<HashMap<String, Arc<crate::transfer::PauseSlot>>>>,
+    /// 服务侧拉取会话取消登记表（serve batch_id → 会话子令牌）
+    ///
+    /// 与 `sessions` 分表：`sessions` 以**请求键**登记（pull 用 dir_id，供
+    /// 会话生命周期与急停使用），本表以**服务批 ID** 登记，供宿主按传输任务
+    /// 行取消——两者寻址空间不同，合表会让宿主按 batch_id 取消时静默落空。
+    serve_cancels: Arc<std::sync::Mutex<HashMap<String, CancelToken>>>,
 }
 
 impl SharedDirHandler {
@@ -154,6 +168,9 @@ impl SharedDirHandler {
                 transfer: std::sync::RwLock::new(transfer),
                 cancel: CancelToken::new(),
                 sessions: std::sync::Mutex::new(HashMap::new()),
+                pauses: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                receive_pauses: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                serve_cancels: Arc::new(std::sync::Mutex::new(HashMap::new())),
             }),
             events,
             serve_events,
@@ -196,6 +213,109 @@ impl SharedDirHandler {
                 true
             }
             None => false,
+        }
+    }
+
+    /// 按批 ID 暂停/恢复一条服务侧拉取会话（返回是否命中）：命令经会话
+    /// 循环写 Pause/Resume 帧并门控推流（pause=true 暂停 / false 恢复）。
+    pub async fn set_serve_paused(&self, batch_id: &str, paused: bool) -> bool {
+        let slot = self
+            .inner
+            .pauses
+            .lock()
+            .expect("serve pause table lock poisoned")
+            .get(batch_id)
+            .cloned();
+        match slot {
+            Some(slot) => {
+                let cmd = if paused {
+                    crate::transfer::PauseCmd::Pause
+                } else {
+                    crate::transfer::PauseCmd::Resume
+                };
+                tracing::info!(batch_id = %batch_id, paused, "serve transfer pause cmd by host");
+                slot.send(cmd).await;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 按批 ID 取消一条服务侧拉取会话（返回是否命中）：会话收到取消即写
+    /// Cancel 帧告知拉取方并停供流，双端各自落 Cancelled 终态。
+    ///
+    /// 与 [`Self::cancel_transfer`] 的分工：后者按请求键（pull 用 dir_id）
+    /// 寻址、覆盖会话生命周期语义；本方法按服务批 ID 寻址，服务宿主按
+    /// 传输任务行取消时使用（此前该路径静默落空 ⇒ 「供流方点取消没反应」）。
+    pub fn cancel_serve_transfer(&self, batch_id: &str) -> bool {
+        let token = self
+            .inner
+            .serve_cancels
+            .lock()
+            .expect("serve cancel table lock poisoned")
+            .get(batch_id)
+            .cloned();
+        match token {
+            Some(token) => {
+                tracing::info!(batch_id = %batch_id, "cancelling pull serve by host");
+                token.cancel();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 按批 ID 暂停/恢复一条 push 接收会话（返回是否命中）：命令经会话循环
+    /// 写 Pause/Resume 帧，请求对端发送会话门控推流（本端作为消费方永不停止
+    /// 读，保证对端 Resume/Cancel 帧可达）。
+    ///
+    /// 这是「双端对同一传输任务对称暂停」的接收侧一半：此前接收方只能取消
+    /// （掐断连接），本地暂停无法回压对端发送会话。
+    pub async fn set_receive_paused(&self, batch_id: &str, paused: bool) -> bool {
+        let slot = self
+            .inner
+            .receive_pauses
+            .lock()
+            .expect("receive pause table lock poisoned")
+            .get(batch_id)
+            .cloned();
+        match slot {
+            Some(slot) => {
+                let cmd = if paused {
+                    crate::transfer::PauseCmd::Pause
+                } else {
+                    crate::transfer::PauseCmd::Resume
+                };
+                tracing::info!(batch_id = %batch_id, paused, "receive transfer pause cmd by host");
+                slot.send(cmd).await;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// 按批登记表守卫：构造时把 (key → value) 写入共享表，drop 时摘除
+/// （会话正常终态、协议失败、宿主取消三条退出路径统一覆盖）
+struct TableGuard<T> {
+    table: Arc<std::sync::Mutex<HashMap<String, T>>>,
+    key: String,
+}
+
+impl<T> TableGuard<T> {
+    fn new(table: Arc<std::sync::Mutex<HashMap<String, T>>>, key: String, value: T) -> Self {
+        table
+            .lock()
+            .expect("registration table lock poisoned")
+            .insert(key.clone(), value);
+        Self { table, key }
+    }
+}
+
+impl<T> Drop for TableGuard<T> {
+    fn drop(&mut self) {
+        if let Ok(mut table) = self.table.lock() {
+            table.remove(&self.key);
         }
     }
 }
@@ -273,6 +393,14 @@ impl ConnectionHandler for SharedDirHandler {
                         batch_slot = Some(batch_id.clone());
                         let _guard =
                             SessionGuard::new(Arc::clone(&inner), batch_id.clone(), cancel.clone());
+                        // 接收侧本地暂停句柄：会话存续期登记（守卫 drop 摘除），
+                        // 宿主可对 push 接收批按 batch_id 下发暂停/恢复
+                        let receive_pause = crate::transfer::PauseSlot::new();
+                        let _pause_guard = TableGuard::new(
+                            Arc::clone(&inner.receive_pauses),
+                            batch_id.clone(),
+                            Arc::clone(&receive_pause),
+                        );
                         // 原样回传预读 Offer（加密请求头一并透传），接收管线内部完成版本校验与批登记
                         let pre = IncomingFrame::Control(Box::new(TransferFrame::Offer {
                             protocol_version,
@@ -289,6 +417,7 @@ impl ConnectionHandler for SharedDirHandler {
                             &cancel,
                             remote.clone(),
                             &mut batch_slot,
+                            Some(receive_pause),
                             Some(pre),
                         )
                         .await
@@ -338,6 +467,8 @@ impl ConnectionHandler for SharedDirHandler {
                             protocol_version,
                             &dir_id,
                             &rel_path,
+                            inner.pauses.clone(),
+                            inner.serve_cancels.clone(),
                         )
                         .await
                         {
@@ -576,6 +707,8 @@ async fn serve_pull(
     protocol_version: u32,
     dir_id: &str,
     rel_path: &str,
+    pauses: Arc<std::sync::Mutex<HashMap<String, Arc<crate::transfer::PauseSlot>>>>,
+    serve_cancels: Arc<std::sync::Mutex<HashMap<String, CancelToken>>>,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "share-sender";
 
@@ -604,6 +737,24 @@ async fn serve_pull(
             .map(|d| d.as_nanos())
             .unwrap_or(0)
     );
+
+    // 服务侧暂停句柄：登记（宿主按 serve batch_id 暂停/恢复），会话结束摘除
+    let pause_slot = crate::transfer::PauseSlot::new();
+    pauses
+        .lock()
+        .expect("serve pause table lock poisoned")
+        .insert(batch_id.clone(), Arc::clone(&pause_slot));
+    // 服务侧按批取消登记：宿主按同一 batch_id 取消本会话（守卫 drop 摘除）
+    let _cancel_guard = TableGuard::new(
+        Arc::clone(&serve_cancels),
+        batch_id.clone(),
+        cancel.clone(),
+    );
+    let session_pause =
+        crate::transfer::SessionPause::from_optional(Some(Arc::clone(&pause_slot))).await;
+    // 会话级暂停面：控制相等待（等 StartFile）期间同样消费本地暂停命令、
+    // 容忍对端 Pause/Resume 帧（见 next_frame_handling_pause 文档）
+    let mut session_pause = session_pause;
 
     // ---- 标准 Offer（拉取免协商：对端收到即进入放行数据面）----
     message::write_control(
@@ -655,49 +806,80 @@ async fn serve_pull(
     // ---- 等接收端声明起点（断点真源）；错误同样收进 outcome，保证
     //      PullServed 之后必然上报一次 Terminal（服务侧任务不会悬挂 running）----
     let outcome: crate::Result<TerminalState> = async {
-        let start = next_frame_or_cancel(&mut frame_rx, cancel).await?;
-        match start {
-            None => {
-                let _ = message::write_control(
-                    &mut wr,
-                    &TransferFrame::Cancel { by: CancelOrigin::Sender },
-                )
-                .await;
-                Ok(TerminalState::Cancelled { by_peer: false })
-            }
-            Some(IncomingFrame::Control(boxed)) => match *boxed {
-                TransferFrame::StartFile { index: 0, offset } if offset <= resolved.size => {
-                    stream_pull_source(
+        // 暂停/恢复帧可能在推流前到达（拉取方快速暂停）：会话级暂停面统一
+        // 处理（消费本地命令 + 容忍对端帧），本循环只裁决起点/取消/违规
+        loop {
+            let start = next_frame_handling_pause(
+                &mut wr,
+                &mut frame_rx,
+                cancel,
+                &mut session_pause,
+                &Some(Arc::clone(&pause_slot)),
+                serve_events,
+                &remote,
+                &batch_id,
+            )
+            .await?;
+            match start {
+                None => {
+                    let _ = message::write_control(
                         &mut wr,
-                        &mut frame_rx,
-                        resolved.source,
-                        offset,
-                        &meta,
-                        &batch_id,
-                        resolved.size,
-                        serve_events,
-                        cancel,
-                        remote.clone(),
+                        &TransferFrame::Cancel { by: CancelOrigin::Sender },
                     )
-                    .await
+                    .await;
+                    break Ok(TerminalState::Cancelled { by_peer: false });
                 }
-                TransferFrame::StartFile { index: 0, offset } => Err(proto_violation(
-                    ROLE,
-                    format!("peer reported offset {offset} beyond declared size {}", resolved.size),
-                )),
-                TransferFrame::Cancel { .. } => Ok(TerminalState::Cancelled { by_peer: true }),
-                other => Err(proto_violation(
-                    ROLE,
-                    format!("expected start_file for pull, got {other:?}"),
-                )),
-            },
-            Some(IncomingFrame::Data(_)) => Err(proto_violation(
-                ROLE,
-                "data frame is receiver-to-sender only",
-            )),
+                Some(IncomingFrame::Control(boxed)) => match *boxed {
+                    TransferFrame::StartFile { index: 0, offset } if offset <= resolved.size => {
+                        break stream_pull_source(
+                            &mut wr,
+                            &mut frame_rx,
+                            resolved.source,
+                            offset,
+                            &meta,
+                            &batch_id,
+                            resolved.size,
+                            serve_events,
+                            cancel,
+                            remote.clone(),
+                            session_pause,
+                        )
+                        .await;
+                    }
+                    TransferFrame::StartFile { index: 0, offset } => {
+                        break Err(proto_violation(
+                            ROLE,
+                            format!(
+                                "peer reported offset {offset} beyond declared size {}",
+                                resolved.size
+                            ),
+                        ));
+                    }
+                    TransferFrame::Cancel { .. } => {
+                        break Ok(TerminalState::Cancelled { by_peer: true });
+                    }
+                    other => {
+                        break Err(proto_violation(
+                            ROLE,
+                            format!("expected start_file for pull, got {other:?}"),
+                        ));
+                    }
+                },
+                Some(IncomingFrame::Data(_)) => {
+                    break Err(proto_violation(
+                        ROLE,
+                        "data frame is receiver-to-sender only",
+                    ));
+                }
+            }
         }
     }
     .await;
+
+    pauses
+        .lock()
+        .expect("serve pause table lock poisoned")
+        .remove(&batch_id);
 
     reader_task.abort();
 
@@ -845,11 +1027,20 @@ async fn stream_pull_source<W>(
     events: &mpsc::Sender<TransferEvent>,
     cancel: &CancelToken,
     remote: NodeId,
+    pause: SessionPause,
 ) -> crate::Result<TerminalState>
 where
     W: tokio::io::AsyncWrite + Unpin + Send,
 {
     const ROLE: &str = "share-sender";
+
+    // 暂停门控：供方侧门控自身推流（暂停时不再读源写网络，连接保持，
+    // 仍读对端帧——对端 Resume/Cancel 必须可达）；命令分支负责写帧。
+    let mut pause = pause;
+    let pause_slot = match &pause {
+        SessionPause::Armed { slot, .. } => Some(Arc::clone(slot)),
+        SessionPause::None => None,
+    };
 
     let chunk_capacity = 64 * 1024usize; // 与缺省 chunk_size 一致；仅作读缓冲上限
     let mut buf = vec![0u8; chunk_capacity];
@@ -860,6 +1051,7 @@ where
     let mut offset = start_offset;
     let mut remaining = total_size - start_offset;
     while remaining > 0 {
+        let paused = pause_slot.as_ref().map(|s| s.is_paused()).unwrap_or(false);
         tokio::select! {
             biased;
             _ = cancel.cancelled() => {
@@ -870,6 +1062,27 @@ where
                 )
                 .await;
                 return Ok(TerminalState::Cancelled { by_peer: false });
+            }
+            cmd = next_pause_cmd(&mut pause) => {
+                // 本端暂停/恢复：写 Pause/Resume 帧并（供方）停/续推流
+                match cmd {
+                    Some(PauseCmd::Pause) => {
+                        let _ = message::write_control(
+                            wr,
+                            &TransferFrame::Pause { batch_id: batch_id.to_string() },
+                        )
+                        .await;
+                    }
+                    Some(PauseCmd::Resume) => {
+                        let _ = message::write_control(
+                            wr,
+                            &TransferFrame::Resume { batch_id: batch_id.to_string() },
+                        )
+                        .await;
+                    }
+                    None => {}
+                }
+                continue;
             }
             frame = frame_rx.recv() => {
                 let incoming = match frame {
@@ -889,7 +1102,33 @@ where
                         TransferFrame::Cancel { .. } => {
                             return Ok(TerminalState::Cancelled { by_peer: true });
                         }
-                    other => {
+                        TransferFrame::Pause { .. } => {
+                            if let Some(slot) = &pause_slot {
+                                slot.set_from_peer(true);
+                            }
+                            emit(
+                                events,
+                                TransferEvent::Paused {
+                                    remote: remote.clone(),
+                                    batch_id: batch_id.to_string(),
+                                },
+                            )
+                            .await;
+                        }
+                        TransferFrame::Resume { .. } => {
+                            if let Some(slot) = &pause_slot {
+                                slot.set_from_peer(false);
+                            }
+                            emit(
+                                events,
+                                TransferEvent::Resumed {
+                                    remote: remote.clone(),
+                                    batch_id: batch_id.to_string(),
+                                },
+                            )
+                            .await;
+                        }
+                        other => {
                             return Err(proto_violation(
                                 ROLE,
                                 format!("unexpected control frame while streaming: {other:?}"),
@@ -901,7 +1140,7 @@ where
                     }
                 }
             }
-            read = source.read_chunk(&mut buf, offset) => {
+            read = source.read_chunk(&mut buf, offset), if !paused => {
                 let n = read.map_err(|e| sess_io(ROLE, e))?;
                 if n == 0 {
                     return Err(sess_io(
@@ -934,7 +1173,18 @@ where
     }
 
     // ---- 等落位确认 ----
-    let done = next_frame_or_cancel(frame_rx, cancel).await?;
+    // 会话级暂停面：此阶段对端按暂停（或本端暂停）都要正确处理而不是判违规
+    let done = next_frame_handling_pause(
+        wr,
+        frame_rx,
+        cancel,
+        &mut pause,
+        &pause_slot,
+        events,
+        &remote,
+        batch_id,
+    )
+    .await?;
     match done {
         None => {
             let _ = message::write_control(
@@ -962,7 +1212,17 @@ where
     }
 
     // ---- 批完成确认 ----
-    let done = next_frame_or_cancel(frame_rx, cancel).await?;
+    let done = next_frame_handling_pause(
+        wr,
+        frame_rx,
+        cancel,
+        &mut pause,
+        &pause_slot,
+        events,
+        &remote,
+        batch_id,
+    )
+    .await?;
     match done {
         Some(IncomingFrame::Control(boxed)) if matches!(*boxed, TransferFrame::BatchDone {}) => {
             Ok(TerminalState::Completed)
@@ -1098,20 +1358,30 @@ pub async fn pull_shared_file(
     config: TransferConfig,
     events: mpsc::Sender<TransferEvent>,
     cancel: CancelToken,
+    pause: Option<Arc<crate::transfer::PauseSlot>>,
 ) -> crate::Result<TerminalState> {
     let remote = conn.peer_node_id().clone();
 
-    let state =
-        match run_pull_session(conn, dir_id, rel_path, batch_id, &config, &events, &cancel).await
-        {
-            Ok(state) => state,
-            Err(e) => {
-                tracing::warn!("pull session failed: {e}");
-                TerminalState::Failed {
-                    detail: e.to_string(),
-                }
+    let state = match run_pull_session(
+        conn,
+        dir_id,
+        rel_path,
+        batch_id,
+        &config,
+        &events,
+        &cancel,
+        pause,
+    )
+    .await
+    {
+        Ok(state) => state,
+        Err(e) => {
+            tracing::warn!("pull session failed: {e}");
+            TerminalState::Failed {
+                detail: e.to_string(),
             }
-        };
+        }
+    };
     emit(
         &events,
         TransferEvent::Terminal {
@@ -1133,6 +1403,7 @@ async fn run_pull_session(
     config: &TransferConfig,
     events: &mpsc::Sender<TransferEvent>,
     cancel: &CancelToken,
+    pause: Option<Arc<crate::transfer::PauseSlot>>,
 ) -> crate::Result<TerminalState> {
     const ROLE: &str = "puller";
     let remote = conn.peer_node_id().clone();
@@ -1200,6 +1471,7 @@ async fn run_pull_session(
         total_size,
         // 拉取路径暂无应用层加密：对端 pull 服务 Offer 不携带加密头
         None,
+        crate::transfer::SessionPause::from_optional(pause).await,
     )
     .await
 }

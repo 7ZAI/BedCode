@@ -97,6 +97,20 @@ const devMock: FileTransferDevMock = {
     // （running/pending）；终态演示条目归 history（与引擎视图口径一致）
     tasks: [
       {
+        batchId: 'mock-task-paused',
+        nodeId: NODE_PIXEL,
+        peerName: 'Pixel 9',
+        direction: 'send' as const,
+        status: 'paused' as const,
+        files: [{ path: '素材库/婚礼精修图集', size: 2_147_483_648 }],
+        totalBytes: 2_147_483_648,
+        transferredBytes: 1_073_741_824, // 50%
+        rateBps: 0,
+        detail: null,
+        createdAtMs: Date.now() - 900_000,
+        updatedAtMs: Date.now() - 30_000,
+      },
+      {
         batchId: 'mock-task-1',
         nodeId: NODE_XIAOMI,
         peerName: '小米 14 Pro',

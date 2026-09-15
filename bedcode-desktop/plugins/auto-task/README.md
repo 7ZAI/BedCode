@@ -29,7 +29,7 @@ Claude Code 会话创建时自动安装项目 hooks 同步任务状态；终端�
 
 ## 架构
 
-> 📊 架构图：[architecture.html](./docs/architecture.html)
+> 📊 架构图：[plugin-auto-task-desktop.html](../../../docs/diagrams/plugin-auto-task-desktop.html)
 
 - **Rust WASM 层**：全部业务逻辑（任务状态管理、队列调度、hooks 管理、数据库操作、定时调度）
 - **TS 前端**：UI 渲染与用户交互，通过 Tauri invoke 调用 Rust 命令

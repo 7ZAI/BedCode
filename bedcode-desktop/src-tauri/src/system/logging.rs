@@ -266,8 +266,9 @@ pub fn bootstrap_init(log_dir: &Path) -> crate::Result<()> {
         return Ok(());
     }
     std::fs::create_dir_all(log_dir)?;
-    let (writer, guard) = NonBlockingBuilder::default()
-        .finish(BootstrapFileWriter { log_dir: log_dir.to_path_buf() });
+    let (writer, guard) = NonBlockingBuilder::default().finish(BootstrapFileWriter {
+        log_dir: log_dir.to_path_buf(),
+    });
     match BOOTSTRAP.set(BootstrapLogger { _guard: guard, writer }) {
         Ok(()) => {
             bootstrap_log(
@@ -496,8 +497,7 @@ pub fn build_logging(
     };
     // RUST_LOG 环境变量优先级最高，其次使用配置值；关闭时 "off" 全关
     let console_filter = if console_on {
-        EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter))
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(&log_config.console_filter))
     } else {
         EnvFilter::new("off")
     };
@@ -744,8 +744,14 @@ mod tests {
         drop(setup); // worker guard drop → flush 剩余日志后才断言
 
         let runtime = read_log_file(&dir, "runtime");
-        assert!(runtime.contains("info line lands"), "runtime should have info: {runtime}");
-        assert!(runtime.contains("error line lands"), "runtime should have error: {runtime}");
+        assert!(
+            runtime.contains("info line lands"),
+            "runtime should have info: {runtime}"
+        );
+        assert!(
+            runtime.contains("error line lands"),
+            "runtime should have error: {runtime}"
+        );
         assert!(
             !runtime.contains("debug line must not land"),
             "runtime at info level must not contain debug: {runtime}"
@@ -828,8 +834,8 @@ mod tests {
 
         let runtime = read_log_file(&dir, "runtime");
         assert!(!runtime.is_empty(), "runtime json file should be written");
-        let first: serde_json::Value = serde_json::from_str(runtime.lines().next().unwrap())
-            .expect("runtime line should be valid JSON");
+        let first: serde_json::Value =
+            serde_json::from_str(runtime.lines().next().unwrap()).expect("runtime line should be valid JSON");
         assert_eq!(first["level"], "INFO", "json should carry level field: {first}");
         assert_eq!(
             first["fields"]["session_id"], 42,
@@ -844,8 +850,8 @@ mod tests {
 
         let error_log = read_log_file(&dir, "error");
         assert!(!error_log.is_empty(), "error json file should be written");
-        let err_line: serde_json::Value = serde_json::from_str(error_log.lines().next().unwrap())
-            .expect("error line should be valid JSON");
+        let err_line: serde_json::Value =
+            serde_json::from_str(error_log.lines().next().unwrap()).expect("error line should be valid JSON");
         assert_eq!(err_line["level"], "ERROR", "error file only ERROR: {err_line}");
         drop_dir(&dir);
     }
@@ -872,8 +878,8 @@ mod tests {
 
         // error 文件只收 ERROR 事件（FilterFn 语义不变），且该行带 span 链
         let error_log = read_log_file(&dir, "error");
-        let err_line: serde_json::Value = serde_json::from_str(error_log.lines().next().unwrap())
-            .expect("error line should be valid JSON");
+        let err_line: serde_json::Value =
+            serde_json::from_str(error_log.lines().next().unwrap()).expect("error line should be valid JSON");
         assert_eq!(err_line["level"], "ERROR", "error file only ERROR: {err_line}");
         // span 链：json() 全链默认输出 `spans` 数组（root→leaf），并在 `span` 键
         // 带当前 span 对象；断言全链数组内 request_id 可检索
@@ -914,8 +920,14 @@ mod tests {
         assert!(content.contains("bootstrap line one"), "first line: {content}");
         assert!(content.contains("bootstrap line two"), "second line: {content}");
         // 行结构：UTC 时间戳 + 级别 + 消息
-        assert!(content.lines().any(|l| l.contains(" INFO bootstrap line one")), "level+msg: {content}");
-        assert!(content.lines().any(|l| l.contains("ERROR bootstrap line two")), "level+msg: {content}");
+        assert!(
+            content.lines().any(|l| l.contains(" INFO bootstrap line one")),
+            "level+msg: {content}"
+        );
+        assert!(
+            content.lines().any(|l| l.contains("ERROR bootstrap line two")),
+            "level+msg: {content}"
+        );
 
         // dev reset 语义：删除后下一次写重建文件
         std::fs::remove_file(&path).expect("remove bootstrap.log");
@@ -1020,8 +1032,14 @@ mod tests {
 
         let runtime = read_log_file(&dir, "runtime");
         // Full 文本格式默认打印当前 span 链（含名称与字段）
-        assert!(runtime.contains("http_request"), "runtime should show outer span: {runtime}");
-        assert!(runtime.contains("session_create"), "runtime should show inner span: {runtime}");
+        assert!(
+            runtime.contains("http_request"),
+            "runtime should show outer span: {runtime}"
+        );
+        assert!(
+            runtime.contains("session_create"),
+            "runtime should show inner span: {runtime}"
+        );
         assert!(runtime.contains("req-1"), "span fields should be printed: {runtime}");
 
         // ErrorLayer + span 上下文：error 行携带所属 span 链，可定位请求/会话
@@ -1060,17 +1078,26 @@ mod tests {
         drop(setup);
 
         let runtime = read_log_file(&dir, "runtime");
-        assert!(runtime.contains("before reload: info lands"), "info at initial level: {runtime}");
+        assert!(
+            runtime.contains("before reload: info lands"),
+            "info at initial level: {runtime}"
+        );
         assert!(
             !runtime.contains("before reload: debug must not land"),
             "debug filtered at info level: {runtime}"
         );
-        assert!(runtime.contains("after reload: debug lands"), "debug after reload to debug: {runtime}");
+        assert!(
+            runtime.contains("after reload: debug lands"),
+            "debug after reload to debug: {runtime}"
+        );
         assert!(
             !runtime.contains("after reload: warn must not land"),
             "warn filtered after reload to error: {runtime}"
         );
-        assert!(runtime.contains("after reload: error lands"), "error after reload to error: {runtime}");
+        assert!(
+            runtime.contains("after reload: error lands"),
+            "error after reload to error: {runtime}"
+        );
         drop_dir(&dir);
     }
 

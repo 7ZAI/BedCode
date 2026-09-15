@@ -13,10 +13,10 @@
  *   node scripts/dev-run.js --host-cmd "<命令>"   # 覆盖宿主命令（按空格拆分）
  */
 
-import { spawn, execFileSync } from 'node:child_process'
-import { readFileSync, openSync, readSync, closeSync, existsSync, renameSync, copyFileSync, chmodSync } from 'node:fs'
+import { spawn, spawnSync, execFileSync } from 'node:child_process'
+import { readFileSync, openSync, readSync, closeSync, existsSync, renameSync, copyFileSync, chmodSync, readdirSync, statSync } from 'node:fs'
 import net from 'node:net'
-import { resolve, dirname, join } from 'node:path'
+import { resolve, dirname, join, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -164,27 +164,33 @@ const PKG_MGR_CLI =
 const PLUGIN_WATCH_CMDS = [
   {
     dir: 'plugins/ai-chatbox',
+    id: 'com.bedcode.ai-chatbox',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
       'build', '--watch',
       '--resources-dir', '../../src-tauri/resources/plugins/mobile',
     ],
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
     dir: 'plugins/auto-task',
+    id: 'com.bedcode.auto-task',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
       'build', '--watch',
       '--resources-dir', '../../src-tauri/resources/plugins/mobile',
     ],
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm',
   },
   {
     dir: 'plugins/file-transfer',
+    id: 'com.bedcode.file-transfer',
     args: [
       resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
       'build', '--watch',
       '--resources-dir', '../../src-tauri/resources/plugins/mobile',
     ],
+    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
   },
 ]
 
@@ -210,10 +216,108 @@ function isNativeBinary(p) {
   }
 }
 
-/** 宿主 dev 命令（可用 --host-cmd 覆盖） */
+/**
+ * 宿主 dev 命令（可用 --host-cmd 覆盖）
+ *
+ * BEDCODE_DEV_VERBOSE=1 时追加 -v：tauri CLI 的 logcat 转发级别由 noise_level
+ * 决定——默认 Polite 映射 FilterLevel::Info，Rust debug!（tracing → logcat
+ * D 级）会被 CLI 过滤，控制台/.dev-logs 只剩 INFO+。-v 映射 LoudAndProud →
+ * Debug。android-dev-log.js（:dev:log 落盘排查模式）设置该 env 自动开启。
+ */
+const HOST_BASE_ARGS = ['run', 'tauri', 'android', 'dev']
+if (process.env.BEDCODE_DEV_VERBOSE === '1') HOST_BASE_ARGS.push('-v')
 const DEFAULT_HOST_CMD = isNativeBinary(PKG_MGR_CLI)
-  ? [PKG_MGR_CLI, ['run', 'tauri', 'android', 'dev']]
-  : [process.execPath, [PKG_MGR_CLI, 'run', 'tauri', 'android', 'dev']]
+  ? [PKG_MGR_CLI, HOST_BASE_ARGS]
+  : [process.execPath, [PKG_MGR_CLI, ...HOST_BASE_ARGS]]
+
+/** 宿主插件产物目录（子目录名 = 插件 id，与 SDK CLI 复制目标一致） */
+const RESOURCES_BASE = resolve(ROOT, 'src-tauri/resources/plugins/mobile')
+
+// ==================== WASM 新鲜度预检 + 自动补建 ====================
+
+/**
+ * 各插件 WASM 产物缺失或过期时串行补建一次（--rust-only 快速路径）。
+ *
+ * dev watch 只构建前端（见 PLUGIN_WATCH_CMDS 注释），WASM 靠一次性全量构建
+ * 产出——资源目录里的旧产物不会被自动重建，会造成「新前端 + 旧 WASM」静默
+ * 错配（历史事故：file-transfer 暂停按钮报 unsupported: transfer lifecycle
+ * is plugin-store managed，见 .scratch/file-transfer-pause-concurrency）。
+ * 这里在启动 watch 前检测：
+ *   - resources/{id}/ 下 .wasm 缺失 → 补建
+ *   - Rust 源码（插件 rust/ + SDK rust/）最新 mtime 晚于产物 → 补建
+ * 补建失败 fail-fast：宿主起来只会报 WASM 加载失败，早停给手动指引更可排查。
+ */
+function ensurePluginWasm() {
+  for (const { dir, id, wasmFile } of PLUGIN_WATCH_CMDS) {
+    if (!wasmFile) continue
+    const pluginRoot = resolve(ROOT, dir)
+    const wasmDest = resolve(RESOURCES_BASE, id, basename(wasmFile))
+    const reason = wasmStaleReason(pluginRoot, wasmDest)
+    if (!reason) continue
+    console.warn(`[dev-run] ⚠ 插件 ${dir} WASM 需要补建：${reason}`)
+    const args = [
+      resolve(ROOT, 'packages/plugin-sdk-mobile/bin/cli.js'),
+      'build', '--rust-only',
+      '--resources-dir', '../../src-tauri/resources/plugins/mobile',
+    ]
+    console.log(`[dev-run] 自动补建 WASM：node ${args.join(' ')}`)
+    const res = spawnSync(process.execPath, args, { cwd: pluginRoot, stdio: 'inherit' })
+    if (res.status !== 0) {
+      console.error(`[dev-run] ✗ WASM 补建失败（${dir}）。请手动执行后重试：`)
+      console.error(`[dev-run]   cd ${pluginRoot} && pnpm run build`)
+      process.exit(res.status ?? 1)
+    }
+  }
+}
+
+/** 返回 wasm 需要补建的原因（null = 产物最新，无需动作） */
+function wasmStaleReason(pluginRoot, wasmDest) {
+  let wasmStat
+  try {
+    wasmStat = statSync(wasmDest)
+  } catch {
+    return `产物缺失：${wasmDest}`
+  }
+  const newestSrc = Math.max(
+    latestSourceMtime(join(pluginRoot, 'rust')),
+    latestSourceMtime(join(ROOT, 'packages/plugin-sdk-mobile/rust')),
+  )
+  if (newestSrc > wasmStat.mtimeMs) return 'Rust 源码比产物新（需重建）'
+  return null
+}
+
+/**
+ * 目录下所有文件的最新 mtime（ms）；跳过构建产物目录（target/dist/node_modules），
+ * 避免 cargo 增量产物 / vite 输出的 mtime 干扰源码新鲜度判断。
+ */
+function latestSourceMtime(root) {
+  let latest = 0
+  const skip = new Set(['target', 'dist', 'node_modules'])
+  const stack = [root]
+  while (stack.length) {
+    const dir = stack.pop()
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue // 目录缺失/不可读：无源码，视为 0
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (skip.has(e.name)) continue
+        stack.push(join(dir, e.name))
+      } else {
+        try {
+          const m = statSync(join(dir, e.name)).mtimeMs
+          if (m > latest) latest = m
+        } catch {
+          // 单文件 stat 失败忽略
+        }
+      }
+    }
+  }
+  return latest
+}
 
 // ==================== 进程管理 ====================
 
@@ -313,7 +417,11 @@ ensureAdbFd0Shim()
 await precheckDevPort()
 await precheckAdbReverse()
 
-// 1. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
+// 1. 插件 WASM 新鲜度预检 + 自动补建（串行同步，完成后才启动 watch / 宿主，
+//    防止「新前端 + 旧 WASM」静默错配）
+ensurePluginWasm()
+
+// 2. 插件前端 watch（先行启动，产物在宿主 resources 同步前就绪）
 for (const { dir, args } of PLUGIN_WATCH_CMDS) {
   const child = start(process.execPath, args, resolve(ROOT, dir))
   // 插件 watch 异常退出 → 整组回收（fail fast，避免宿主运行在过期产物上）
@@ -325,7 +433,7 @@ for (const { dir, args } of PLUGIN_WATCH_CMDS) {
   })
 }
 
-// 2. 宿主 dev 进程
+// 3. 宿主 dev 进程
 const host = start(hostCmd[0], hostCmd[1], ROOT)
 host.on('exit', (code) => {
   if (!shuttingDown) {
