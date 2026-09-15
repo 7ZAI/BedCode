@@ -364,6 +364,18 @@ impl bedcode::plugin::host_mdns::Host for WasmPluginState {
     fn stop_browse(&mut self, browser_id: String) -> Result<bool, String> {
         mdns::mdns_stop_browse(&self.host_ctx, &self.plugin_id, &browser_id)
     }
+
+    fn advertise(&mut self, config_json: String) -> Result<String, String> {
+        mdns::mdns_advertise(&self.host_ctx, &self.plugin_id, &config_json)
+    }
+
+    fn stop_advertise(&mut self, advertise_id: String) -> Result<bool, String> {
+        mdns::mdns_stop_advertise(&self.host_ctx, &self.plugin_id, &advertise_id)
+    }
+
+    fn is_advertising(&mut self, advertise_id: String) -> Result<bool, String> {
+        mdns::mdns_is_advertising(&self.host_ctx, &self.plugin_id, &advertise_id)
+    }
 }
 
 impl bedcode::plugin::host_platform::Host for WasmPluginState {

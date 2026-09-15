@@ -50,7 +50,7 @@ mod tls;
 pub use cert::{CertDer, generate_self_signed_cert, verify_cert_matches_node_id};
 pub use discovery::{
     CAP_FILE_TRANSFER, DISCOVERY_PROTOCOL_VERSION, DiscoveryAdvertiser, DiscoveryCache,
-    DiscoveryConfig, DiscoveryDaemon, DiscoveryEvent, DiscoveredPeerRecord, PEER_DISCOVERY_TTL,
+    DiscoveryConfig, DiscoveryDaemon, DiscoveredPeerRecord, PEER_DISCOVERY_TTL,
     SERVICE_TYPE, SWEEP_INTERVAL, disable_virtual_interfaces, spawn_peer_mdns_advertiser,
     spawn_peer_mdns_daemon,
 };

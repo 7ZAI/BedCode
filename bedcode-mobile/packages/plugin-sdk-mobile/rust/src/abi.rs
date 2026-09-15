@@ -26,7 +26,11 @@
 ///   （宿主实例化后动态探测，旧插件不导出则只收 JSON，不受影响）。
 ///   注：v10 为 dev（v9 host-peer 三原语）与本分支（总线二进制）合并后的
 ///   版本，宿主能力为两者超集，声明 v9 及以下的插件二进制仍可加载
-pub const ABI_VERSION: u32 = 10;
+/// - v11: host-mdns v2（mDNS 基础能力服务契约）：新增
+///   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
+///   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
+///   serviceType / browserId 字段）。纯增量变更，v10 插件二进制不受影响
+pub const ABI_VERSION: u32 = 11;
 
 #[cfg(test)]
 mod tests {
@@ -35,8 +39,8 @@ mod tests {
     #[test]
     fn test_abi_version_is_contract() {
         // 宿主加载时与组件 abi.version() 导出比对，漂移导致拒绝加载（高 ABI 拒绝测试依赖）
-        // v10 = 消息总线二进制载荷（publish-binary / subscribe-binary + events-binary），
-        // 叠加 v9 host-peer 传输控制三原语（dev 分支合入后的能力超集）
-        assert_eq!(ABI_VERSION, 10);
+        // v11 = host-mdns v2（advertise 三原语 + 浏览事件定向投递），
+        // 叠加 v10 总线二进制载荷与 v9 host-peer 传输控制三原语（能力超集）
+        assert_eq!(ABI_VERSION, 11);
     }
 }

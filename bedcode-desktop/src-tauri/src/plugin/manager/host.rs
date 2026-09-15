@@ -1338,8 +1338,9 @@ impl PluginHost {
     async fn deactivate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
         tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] deactivate_plugin");
 
-        // ADR 0022 v2：插件停用即回收其全部 mDNS 浏览句柄（host-mdns 生命周期随属主）
-        crate::plugin::manager::wasm_runtime::host_impl::mdns::purge_browsers_for_plugin(plugin_id);
+        // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
+        // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
+        crate::plugin::manager::wasm_runtime::host_impl::mdns::purge_for_plugin(plugin_id);
 
         // WASM 插件：调用 on_shutdown + __bedcode_deactivate
         {

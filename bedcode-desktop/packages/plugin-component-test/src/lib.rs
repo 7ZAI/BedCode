@@ -192,10 +192,10 @@ impl manifest::Guest for Guest {
 }
 
 impl abi::Guest for Guest {
-    // 与 SDK abi::ABI_VERSION（当前 v12 = 总线二进制载荷）保持一致；
+    // 与 SDK abi::ABI_VERSION（当前 v13 = mDNS 基础能力服务）保持一致；
     // 宿主按 `abi.form()==1` 识别组件形态
     fn version() -> u32 {
-        12
+        13
     }
 
     fn form() -> u32 {

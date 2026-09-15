@@ -496,6 +496,18 @@ impl HostMdns for WasmHost {
     fn mdns_stop_browse(&self, browser_id: &str) -> Result<bool, HostError> {
         host_mdns::stop_browse(browser_id).map_err(|e| host_err("mdns_stop_browse", e))
     }
+
+    fn mdns_advertise(&self, config_json: &str) -> Result<String, HostError> {
+        host_mdns::advertise(config_json).map_err(|e| host_err("mdns_advertise", e))
+    }
+
+    fn mdns_stop_advertise(&self, advertise_id: &str) -> Result<bool, HostError> {
+        host_mdns::stop_advertise(advertise_id).map_err(|e| host_err("mdns_stop_advertise", e))
+    }
+
+    fn mdns_is_advertising(&self, advertise_id: &str) -> Result<bool, HostError> {
+        host_mdns::is_advertising(advertise_id).map_err(|e| host_err("mdns_is_advertising", e))
+    }
 }
 
 // ==================== host-platform（ADR 0022 v2）====================

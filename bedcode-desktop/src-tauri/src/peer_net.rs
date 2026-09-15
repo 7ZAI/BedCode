@@ -48,7 +48,7 @@ use tokio::io::AsyncReadExt;
 
 use bedcode_peer_net::{
     Connection, ConnectionHandler, DiscoveredPeerRecord, DiscoveryCache, DiscoveryConfig, DiscoveryDaemon,
-    DiscoveryEvent, HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
+    HandlerFuture, NodeId, NodeIdentity, PeerNetError, PeerNetNode, PeerNetNodeConfig, RunningNode,
     SharedDirEntry, SharedDirHandler, SharedDirRoot, SharedDirStore, StaticPeerRecord, TransferConfig, TransferEvent,
     TrustEvent, TrustStore, TrustedPeerEntry, CAP_FILE_TRANSFER,
 };
@@ -92,9 +92,10 @@ struct PeerNetRuntime {
     node: PeerNetNode,
     /// TCP 监听运行句柄（优雅关停入口）
     running: RunningNode,
-    /// mDNS 发现守护句柄（优雅关停入口）
     /// mDNS 发现守护句柄（优雅关停入口；广播+浏览同守护，见 start_locked）
     daemon: DiscoveryDaemon,
+    /// 宿主身份广播登记句柄（MdnsService ADVERTISERS owner=host；停机时注销）
+    host_adv: String,
     /// 在线缓存句柄（list 命令读取；闸门桥接解析对端设备名共用同一实例）
     cache: Arc<DiscoveryCache>,
     /// 本节点 ID（状态摘要展示用）
@@ -1094,48 +1095,38 @@ async fn start_locked(
         .map_err(map_peer_net_error)?;
     let listen_addr = running.local_addr();
 
-    // 发现事件桥接：引擎单守护（广播+浏览同进程唯一 ServiceDaemon）实时推送
-    // mdns:found / mdns:lost 到插件总线（载荷 = host-mdns wire 形状，插件前端
-    // 直接消费）。回归背景：Phase 4 把浏览改到插件 host-mdns 自建 daemon，与
-    // 引擎广播 daemon 同绑 5353 端口互抢多播包——真机实证「只发现自己、发现
-    // 不了对端」；收回引擎单守护即恢复（多播包只进一个守护，广播+浏览必须同
-    // 守护才能既收对端响应又回自己的广播）。
-    let (discovery_tx, mut discovery_rx) = tokio::sync::mpsc::channel::<DiscoveryEvent>(64);
-    crate::system::error_boundary::spawn_with_error_boundary("peer_net_mdns_bridge", async move {
-        // 轮询转发（400ms 粒度，与发现事件秒级节奏匹配）。曾用 recv().await
-        // 纯唤醒驱动——真机上引擎 found 已 send 成功、桥接却从未 publish
-        // （waker 疑似未唤醒，2026-09-06 实证）；轮询不依赖 waker，桌面端
-        // 同款形态已实机验证可靠。
-        loop {
-            match discovery_rx.try_recv() {
-                Ok(event) => forward_discovery_event(event),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {}
-                // 全部 sender 已 drop（守护随节点停机）→ 桥接收尾
-                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    tracing::debug!("peer mDNS bus bridge exited");
-                    break;
-                }
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
-        }
-    });
-
+    // ===== mDNS 基础能力服务收敛（spec v2 / ticket 04）=====
+    // 节点发现接入 MdnsService 全局共享守护：不再自建 daemon（消灭双 daemon
+    // 同绑 5353 互抢多播包的历史病灶）。节点身份广播（owner=host）在基础服务
+    // 登记——TXT/ServiceInfo 仍由引擎构造（D3），本处只做句柄登记；全局
+    // `mdns:found` / `mdns:lost` 桥接与缓存重发通道已退役（D1）——插件发现
+    // 改经 host-mdns 自建 browse 收定向事件（file-transfer 一期同迁，D2）
+    let mdns_daemon =
+        crate::plugin::manager::wasm_runtime::host_impl::mdns::shared_daemon();
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,
         DiscoveryConfig {
             device_name,
             capabilities: CAP_FILE_TRANSFER,
-            events_tx: Some(discovery_tx),
         },
+        mdns_daemon,
     )
     .map_err(map_peer_net_error)?;
+    // 宿主身份广播登记（owner=host）：节点停机时随 runtime 注销（stop_host_service）
+    let host_adv =
+        crate::plugin::manager::wasm_runtime::host_impl::mdns::register_host_service(
+            bedcode_peer_net::SERVICE_TYPE,
+            daemon.service_fullname(),
+        )
+        .map_err(|e| crate::AppError::Plugin(format!("mdns host service registration failed: {e}")))?;
 
     let node_id = node.node_id().to_string();
     *state.runtime.lock().await = Some(PeerNetRuntime {
         node,
         running,
         daemon,
+        host_adv,
         cache,
         node_id,
     });
@@ -1229,7 +1220,11 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             // 远端拉取队列同步中止（issue 11）
             super::peer_receive::clear_handler(app).await;
             super::peer_remote::clear_state(app).await;
+            // 引擎 daemon 停：退订浏览 + 注销自身广播（共享守护不 shutdown）
             runtime.daemon.stop().await.map_err(map_peer_net_error)?;
+            // 注销宿主身份广播登记（owner=host，MdnsService ADVERTISERS）
+            let _ = crate::plugin::manager::wasm_runtime::host_impl::mdns::
+                stop_host_service(&runtime.host_adv);
             runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
@@ -1347,24 +1342,15 @@ pub(crate) fn emit_json(app: &AppHandle, event: &str, payload: serde_json::Value
     }
 }
 
-/// 引擎发现事件直推插件总线（`mdns:found` / `mdns:lost`，载荷 = host-mdns
-/// wire 形状原样透传）。与 [`emit_json`] 的桥接区别：发现事件无前端事件名，
-/// 仅插件消费，直接 publish 不经 app.emit。
+/// 引擎发现事件直推插件总线（`mdns:found` / `mdns:lost`）——已退役（spec v2
+/// D1：全局发现桥接整体退役，插件改经 host-mdns 自建 browse 收定向事件）。
+/// 本函数仅保留 `peer:*` topic 的直推（拨号/传输状态，与 mDNS 无关）
 pub(crate) fn publish_mdns_bus(topic: &str, payload: serde_json::Value) {
     // 诊断插桩：与 peer 事件同口径 INFO-only
-    tracing::info!(topic, "mdns event pushed to plugin bus");
+    tracing::info!(topic, "peer event pushed to plugin bus");
     if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
         ctx.plugin_host().message_bus().publish(topic, "host", payload);
     }
-}
-
-/// 单条引擎发现事件转发插件总线（found/lost 主题映射，载荷原样透传）
-fn forward_discovery_event(event: DiscoveryEvent) {
-    let (topic, payload) = match event {
-        DiscoveryEvent::Found(payload) => ("mdns:found", payload),
-        DiscoveryEvent::Lost(payload) => ("mdns:lost", payload),
-    };
-    publish_mdns_bus(topic, payload);
 }
 
 // ==================== 插件「探索发现」直达路径 ====================
@@ -1418,14 +1404,14 @@ async fn handle_discovery_refresh(app: AppHandle) {
             .cloned(),
     );
     drop(guard);
-    // 连接态重发前预取 node_id → 展示名映射（snapshot 随后被消费）
+    // 设备名映射（连接态重发携带；记录已随 requery 事件流刷入插件定向 browse）
+    // 注意：不再逐条重发 mdns:found（spec v2 D1 缓存重发通道退役）——requery
+    // 触发引擎重新 browse，插件自建 browse 的 receiver 会收到 mdns-sd 缓存
+    // 重放（含新发现），设备列表各端自行收敛
     let device_names: std::collections::HashMap<String, String> = snapshot
         .iter()
         .map(|record| (record.node_id.as_str().to_string(), record.device_name.clone()))
         .collect();
-    for record in snapshot {
-        publish_mdns_bus("mdns:found", record.found_wire_payload());
-    }
     // 连接态重发：本机主动拨号的存活连接逐个以 peer:connection 重推
     // （入站连接的连接态由 accept 时刻的实时事件维护）。插件前端挂载晚于
     // 连接建立时，连接徽标/状态胶囊首屏即真，不再误用宿主主连接状态。
@@ -1441,7 +1427,7 @@ async fn handle_discovery_refresh(app: AppHandle) {
             }),
         );
     }
-    tracing::info!("peer discovery snapshot republished after refresh request");
+    tracing::info!("peer discovery requery + connection state republished after refresh request");
 }
 
 /// 挂载刷新请求静态订阅：节点由插件激活驱动启动，注册时插件管理器可能

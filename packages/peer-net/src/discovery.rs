@@ -140,24 +140,6 @@ impl DiscoveredPeerRecord {
             addr: self.addr,
         }
     }
-
-    /// 转为 `mdns:found` wire 载荷（宿主快照重发用：插件请求刷新时把当前
-    /// 缓存逐条重推，前端 parseFoundPayload 直接消费，与实时事件同形状）
-    pub fn found_wire_payload(&self) -> serde_json::Value {
-        let short = self.node_id.short_fingerprint();
-        let instance_name = format!("{INSTANCE_PREFIX}{short}.{SERVICE_TYPE}");
-        serde_json::json!({
-            "instanceName": instance_name,
-            "addresses": [self.addr.ip().to_string()],
-            "port": self.addr.port(),
-            "txtRecords": {
-                (TXT_KEY_ID): self.node_id.as_str(),
-                (TXT_KEY_NAME): self.device_name,
-                (TXT_KEY_VER): self.protocol_version.to_string(),
-                (TXT_KEY_CAP): format!("{:x}", self.capabilities),
-            },
-        })
-    }
 }
 
 /// `NodeId` 的序列化辅助：输出 64 位小写 hex 字符串
@@ -361,21 +343,6 @@ fn is_expired(last_seen: Instant, now: Instant) -> bool {
 
 // ==================== 守护任务 ====================
 
-/// 发现事件（供宿主桥接插件总线 `mdns:found` / `mdns:lost`）
-///
-/// 载荷即 host-mdns `mdns:found` / `mdns:lost` 的 wire 形状，宿主原样转发：
-/// 插件前端 deviceState.ts 直接消费，两端宿主不再自建第二 ServiceDaemon
-/// （双 daemon 同绑 5353 端口在 SO_REUSEPORT 下互抢多播包——真机实证：
-/// 只发现自己、发现不了对端，回归到单 daemon 常开浏览即恢复）。
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-pub enum DiscoveryEvent {
-    /// 解析到对端：`{ instanceName, addresses, port, txtRecords }`
-    Found(serde_json::Value),
-    /// 对端离开：`{ instanceName }`
-    Lost(serde_json::Value),
-}
-
 /// 发现守护配置：广播自身时携带的本机元数据
 #[derive(Debug, Clone)]
 pub struct DiscoveryConfig {
@@ -383,9 +350,6 @@ pub struct DiscoveryConfig {
     pub device_name: String,
     /// 本机能力位图（写入 TXT `cap`）
     pub capabilities: u64,
-    /// 可选：发现事件推送通道（found/lost 实时事件，宿主桥接插件总线）。
-    /// advertise-only 守护忽略该字段。
-    pub events_tx: Option<tokio::sync::mpsc::Sender<DiscoveryEvent>>,
 }
 
 /// mDNS 发现守护句柄：持有优雅关闭的全部凭据
@@ -419,7 +383,16 @@ impl std::fmt::Debug for DiscoveryDaemon {
 }
 
 impl DiscoveryDaemon {
-    /// 优雅关停：退订浏览 → 注销广播（让对端即时移除本机）→ 关停守护线程 → join
+    /// 本机广播的完整实例名（宿主登记 owner=host 用）
+    pub fn service_fullname(&self) -> &str {
+        &self.fullname
+    }
+
+    /// 优雅关停：退订浏览 → 注销广播（让对端即时移除本机）→ join
+    ///
+    /// 共享守护收敛后（spec v2 / ticket 04）守护线程归 MdnsService 所有，
+    /// 本句柄**不** shutdown 共享 daemon——只退订自己的浏览、注销自己的
+    /// 广播，其余插件浏览/广播不受影响。
     ///
     /// 清理中途遇到的首个错误会延迟到最后返回：半关闭状态下泄漏一个 mDNS
     /// 守护线程比返回部分错误更难排查，剩余清理步骤必须继续执行完。
@@ -431,6 +404,7 @@ impl DiscoveryDaemon {
         }
 
         let mut first_err: Option<PeerNetError> = None;
+        // 共享守护克隆（不 shutdown；drop 后仅释放本句柄对 daemon 的引用）
         if let Some(daemon) = self.daemon.take() {
             // ② 退订浏览：browse channel 发送端随订阅销毁，事件循环随即看到断连
             if let Err(source) = daemon.stop_browse(SERVICE_TYPE) {
@@ -449,18 +423,6 @@ impl DiscoveryDaemon {
                 },
                 Err(source) => {
                     first_err.get_or_insert(PeerNetError::MdnsUnregister { source });
-                }
-            }
-            // ④ 关停守护线程并等待退出确认
-            match daemon.shutdown() {
-                Ok(status) => match status.recv_async().await {
-                    Ok(status) => {
-                        tracing::debug!(status = ?status, "mDNS daemon shutdown acknowledged")
-                    }
-                    Err(e) => tracing::warn!("shutdown status channel closed before reply: {e}"),
-                },
-                Err(source) => {
-                    first_err.get_or_insert(PeerNetError::MdnsShutdown { source });
                 }
             }
         }
@@ -687,6 +649,7 @@ pub fn spawn_peer_mdns_daemon(
     node: &PeerNetNode,
     running: &RunningNode,
     config: DiscoveryConfig,
+    daemon: ServiceDaemon,
 ) -> Result<DiscoveryDaemon> {
     let own_node_id = node.node_id().clone();
     let short = own_node_id.short_fingerprint();
@@ -697,10 +660,9 @@ pub fn spawn_peer_mdns_daemon(
 
     let cache = node.discovery().ok_or(PeerNetError::DiscoveryNotAttached)?;
 
-    let daemon =
-        ServiceDaemon::new().map_err(|source| PeerNetError::MdnsDaemon { source })?;
-    disable_virtual_interfaces(&daemon);
-
+    // mDNS 基础能力服务收敛（spec v2 / ticket 04）：不再自建 ServiceDaemon，
+    // 使用宿主 MdnsService 的全局共享守护（register / browse / cache 逻辑不动）；
+    // disable_virtual_interfaces 由 MdnsService 初始化执行一次，此处不重复
     let properties = encode_txt_properties(
         &own_node_id,
         &config.device_name,
@@ -735,7 +697,6 @@ pub fn spawn_peer_mdns_daemon(
         cache,
         own_node_id,
         shutdown_rx.clone(),
-        config.events_tx,
         swap_rx,
     ));
     // 周期 re-announce：mdns-sd 注册后不主动周期广播，须手动续期（见常量注释）
@@ -755,7 +716,7 @@ pub fn spawn_peer_mdns_daemon(
         service = %fullname,
         port = listen_port,
         device = %config.device_name,
-        "peer mDNS discovery daemon started"
+        "peer mDNS discovery daemon started (shared daemon)"
     );
     Ok(DiscoveryDaemon {
         daemon: Some(daemon),
@@ -815,12 +776,14 @@ async fn run_reannounce_loop(
 /// 浏览 receiver 支持换绑（`swap_rx`）：周期重查任务重新 browse 时把新
 /// receiver 移交过来（mdns-sd 同类型重复 browse 覆盖内部 querier，旧
 /// receiver 随之失效）。
+///
+/// 事件只进引擎内部 DiscoveryCache（spec v2 D1：面向插件的全局发现桥接
+/// 已退役——插件改经 host-mdns 自建 browse 收定向事件）
 async fn run_discovery_loop(
     mut receiver: mdns_sd::Receiver<ServiceEvent>,
     cache: Arc<DiscoveryCache>,
     own_node_id: NodeId,
     mut shutdown_rx: watch::Receiver<bool>,
-    events_tx: Option<tokio::sync::mpsc::Sender<DiscoveryEvent>>,
     mut swap_rx: tokio::sync::mpsc::Receiver<mdns_sd::Receiver<ServiceEvent>>,
 ) {
     let mut last_sweep = Instant::now();
@@ -852,13 +815,7 @@ async fn run_discovery_loop(
             event = tokio::time::timeout(SWEEP_INTERVAL, receiver.recv_async()) => {
                 match event {
                     Ok(Ok(event)) => {
-                        let event_out = handle_browse_event(&cache, &own_node_id, event);
-                        if let (Some(ev), Some(tx)) = (event_out, events_tx.as_ref()) {
-                            // 推送失败（宿主消费者已退出/通道满）只记日志：发现缓存仍自持
-                            if let Err(e) = tx.send(ev).await {
-                                tracing::debug!("peer mDNS discovery event send failed: {e}");
-                            }
-                        }
+                        handle_browse_event(&cache, &own_node_id, event);
                         // 高频事件流下 Timeout 分支可能长期不触发，清扫按墙钟到期兜底
                         let now = Instant::now();
                         if now.duration_since(last_sweep) >= SWEEP_INTERVAL {
@@ -940,19 +897,16 @@ fn handle_browse_event(
     cache: &DiscoveryCache,
     own_node_id: &NodeId,
     event: ServiceEvent,
-) -> Option<DiscoveryEvent> {
+) {
     match event {
         ServiceEvent::SearchStarted(ty) => {
             tracing::debug!(service_type = %ty, "peer mDNS search started");
-            None
         }
         ServiceEvent::SearchStopped(ty) => {
             tracing::debug!(service_type = %ty, "peer mDNS search stopped");
-            None
         }
         ServiceEvent::ServiceFound(_, fullname) => {
             tracing::debug!(instance = %fullname, "peer mDNS instance found, waiting for resolve");
-            None
         }
         ServiceEvent::ServiceResolved(info) => {
             let Some(ip) = info
@@ -966,12 +920,12 @@ fn handle_browse_event(
                     instance = %info.get_fullname(),
                     "resolved peer record carries no address, skipped"
                 );
-                return None;
+                return;
             };
             let addr = SocketAddr::new(ip, info.get_port());
             let Some(instance) = instance_from_fullname(info.get_fullname()) else {
                 tracing::warn!(fullname = %info.get_fullname(), "unexpected peer mDNS fullname shape, skipped");
-                return None;
+                return;
             };
             let properties: HashMap<String, String> = info
                 .get_properties()
@@ -982,7 +936,7 @@ fn handle_browse_event(
                 Some(record) => {
                     // 自播回显过滤：本机的广播也会被自己的浏览收到
                     if record.node_id == *own_node_id {
-                        return None;
+                        return;
                     }
                     tracing::info!(
                         name = %record.device_name,
@@ -993,14 +947,12 @@ fn handle_browse_event(
                         "peer discovered"
                     );
                     cache.observe(record);
-                    Some(DiscoveryEvent::Found(found_wire(&info, &properties)))
                 }
                 None => {
                     tracing::warn!(
                         instance = %info.get_fullname(),
                         "peer TXT payload lacks valid node id, record skipped"
                     );
-                    None
                 }
             }
         }
@@ -1019,44 +971,13 @@ fn handle_browse_event(
                     "goodbye for unknown or already swept instance"
                 ),
             }
-            // 无论缓存是否命中都转发：前端按实例名短指纹幂等移除，冗余 goodbye 无害
-            Some(DiscoveryEvent::Lost(
-                serde_json::json!({ "instanceName": fullname }),
-            ))
         }
         // ServiceEvent 标记 #[non_exhaustive]：上游新增变体时先忽略并留痕，
         // 避免未来版本升级在事件热路径上 panic
         other => {
             tracing::debug!(event = ?other, "unhandled peer mDNS event variant");
-            None
         }
     }
-}
-
-/// 解析结果 → `mdns:found` wire 载荷：`{ instanceName, addresses, port, txtRecords }`
-///
-/// 与 host-mdns 的透传形状对齐（IPv4 优先，与引擎拨号寻址口径一致），
-/// 宿主原样桥接插件总线，插件前端 parseFoundPayload 直接消费。
-fn found_wire(info: &mdns_sd::ResolvedService, txt: &HashMap<String, String>) -> serde_json::Value {
-    // 与 host-mdns 透传循环同款管道（IPv4 优先，同族保持库序）
-    let all: Vec<_> = info.get_addresses().iter().collect();
-    let mut v4: Vec<_> = all
-        .iter()
-        .filter(|a| a.is_ipv4())
-        .map(|a| a.to_ip_addr().to_string())
-        .collect();
-    let rest: Vec<_> = all
-        .iter()
-        .filter(|a| !a.is_ipv4())
-        .map(|a| a.to_ip_addr().to_string())
-        .collect();
-    v4.extend(rest);
-    serde_json::json!({
-        "instanceName": info.get_fullname(),
-        "addresses": v4,
-        "port": info.get_port(),
-        "txtRecords": txt,
-    })
 }
 
 // ==================== inline 测试 ====================

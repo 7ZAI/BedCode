@@ -38,7 +38,11 @@
 //!   注：v12 为 dev（v11 host-peer 三原语）与本分支（总线二进制）合并后的
 //!   版本——两边曾各自把 v11 用于不同语义，合并后宿主能力为两者超集，
 //!   声明 v11 及以下的插件二进制仍可加载（后续统一重编译再对齐）
-pub const ABI_VERSION: u32 = 12;
+//! - v13: host-mdns v2（mDNS 基础能力服务契约）：新增
+//!   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
+//!   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
+//!   serviceType / browserId 字段）。纯增量变更，v12 插件二进制不受影响
+pub const ABI_VERSION: u32 = 13;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -52,11 +56,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v12() {
-        // 版本号序列与历史 core ABI 共用：v12 = 消息总线二进制载荷
-        // （publish-binary / subscribe-binary + 可选导出 events-binary），
-        // 叠加 v11 host-peer 传输控制三原语（dev 分支合入后的能力超集）
-        assert_eq!(ABI_VERSION, 12);
+    fn test_abi_version_is_v13() {
+        // 版本号序列与历史 core ABI 共用：v13 = host-mdns v2（mDNS 基础能力
+        // 服务契约：advertise 三原语 + 浏览事件定向投递），叠加 v12 总线二进制
+        // 载荷与 v11 host-peer 传输控制三原语（能力超集）
+        assert_eq!(ABI_VERSION, 13);
     }
 
     #[test]
