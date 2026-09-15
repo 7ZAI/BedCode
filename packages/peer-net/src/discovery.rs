@@ -356,7 +356,8 @@ pub struct DiscoveryConfig {
 ///
 /// 由 [`spawn_peer_mdns_daemon`] 产出；drop 句柄**不会**停止守护（任务已移交
 /// 运行时），显式关停必须调用 [`DiscoveryDaemon::stop`]（Graceful Shutdown
-/// 架构决策：退订浏览 → 注销广播 → 关停守护线程 → join 事件循环）。
+/// 架构决策：退订浏览 → 注销广播 → join 事件循环；共享守护归 MdnsService，
+/// 本句柄不 shutdown——见 stop() 文档）。
 pub struct DiscoveryDaemon {
     /// 底层 mdns-sd 守护句柄；stop 中 take 掉，drop 最终触发守护线程退出
     daemon: Option<ServiceDaemon>,

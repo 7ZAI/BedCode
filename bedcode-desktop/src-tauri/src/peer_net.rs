@@ -1101,8 +1101,7 @@ async fn start_locked(
     // 登记——TXT/ServiceInfo 仍由引擎构造（D3），本处只做句柄登记；全局
     // `mdns:found` / `mdns:lost` 桥接与缓存重发通道已退役（D1）——插件发现
     // 改经 host-mdns 自建 browse 收定向事件（file-transfer 一期同迁，D2）
-    let mdns_daemon =
-        crate::plugin::manager::wasm_runtime::host_impl::mdns::shared_daemon();
+    let mdns_daemon = crate::plugin::manager::wasm_runtime::host_impl::mdns::shared_daemon();
     let daemon = bedcode_peer_net::spawn_peer_mdns_daemon(
         &node,
         &running,
@@ -1114,12 +1113,11 @@ async fn start_locked(
     )
     .map_err(map_peer_net_error)?;
     // 宿主身份广播登记（owner=host）：节点停机时随 runtime 注销（stop_host_service）
-    let host_adv =
-        crate::plugin::manager::wasm_runtime::host_impl::mdns::register_host_service(
-            bedcode_peer_net::SERVICE_TYPE,
-            daemon.service_fullname(),
-        )
-        .map_err(|e| crate::AppError::Plugin(format!("mdns host service registration failed: {e}")))?;
+    let host_adv = crate::plugin::manager::wasm_runtime::host_impl::mdns::register_host_service(
+        bedcode_peer_net::SERVICE_TYPE,
+        daemon.service_fullname(),
+    )
+    .map_err(|e| crate::AppError::Plugin(format!("mdns host service registration failed: {e}")))?;
 
     let node_id = node.node_id().to_string();
     *state.runtime.lock().await = Some(PeerNetRuntime {
@@ -1224,8 +1222,7 @@ async fn stop_locked(state: &tauri::State<'_, PeerNetState>, app: &AppHandle) ->
             runtime.daemon.stop().await.map_err(map_peer_net_error)?;
             // 注销宿主身份广播登记（owner=host，MdnsService ADVERTISERS）
             let _ = crate::plugin::manager::wasm_runtime::host_impl::mdns::
-                stop_host_service(&runtime.host_adv);
-            runtime.running.shutdown().await;
+                stop_host_service(&runtime.host_adv);            runtime.running.shutdown().await;
             tracing::info!("peer-net node stopped");
             Ok(())
         }

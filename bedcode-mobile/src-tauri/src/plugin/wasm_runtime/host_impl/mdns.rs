@@ -37,9 +37,7 @@ fn init_daemon() -> ServiceDaemon {
     // spawn；非 Android 平台 stub 立即返回，同走 spawn 保持单一代码路径（可测）
     tauri::async_runtime::spawn(async {
         if let Err(e) = multicast_lock_acquire().await {
-            tracing::warn!(
-                "mdns daemon: multicast lock acquire failed ({e}); receive may be degraded"
-            );
+            tracing::warn!("mdns daemon: multicast lock acquire failed ({e}); receive may be degraded");
         }
     });
     daemon
@@ -80,10 +78,8 @@ struct AdvertiserEntry {
     owner: String,
 }
 
-static BROWSERS: LazyLock<Mutex<HashMap<String, BrowserEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
-static ADVERTISERS: LazyLock<Mutex<HashMap<String, AdvertiserEntry>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+static BROWSERS: LazyLock<Mutex<HashMap<String, BrowserEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static ADVERTISERS: LazyLock<Mutex<HashMap<String, AdvertiserEntry>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// 非属主操作的统一拒绝文案（属主仲裁，spec v2 §5.1）
 const NOT_OWNER: &str = "not owner of mdns handle";
@@ -94,7 +90,9 @@ fn denied() -> String {
 
 /// 权限门（manifest granted_permissions 仲裁，与桌面 check_permission 同语义）
 fn check_permission(state: &WasmPluginState) -> bool {
-    state.granted_permissions.contains(bedcode_plugin_api_mobile::permission::PERMISSION_MDNS)
+    state
+        .granted_permissions
+        .contains(bedcode_plugin_api_mobile::permission::PERMISSION_MDNS)
 }
 
 /// 取全局共享守护句柄（clone 廉价）：peer-net 引擎接线用（ticket 06）
@@ -252,8 +250,8 @@ pub(crate) fn mdns_advertise(state: &WasmPluginState, config_json: &str) -> Resu
     if !check_permission(state) {
         return Err(denied());
     }
-    let config: AdvertiseConfig = serde_json::from_str(config_json)
-        .map_err(|e| format!("mdns advertise: invalid config: {e}"))?;
+    let config: AdvertiseConfig =
+        serde_json::from_str(config_json).map_err(|e| format!("mdns advertise: invalid config: {e}"))?;
     let service_type = config.service_type.trim().to_string();
     if service_type.is_empty() {
         return Err("mdns advertise: service type must not be empty".to_string());
@@ -297,18 +295,15 @@ fn advertise_inner(owner: &str, service_type: String, service_info: ServiceInfo)
 
     let advertise_id = format!("mdnsad-{}", uuid::Uuid::new_v4());
     let reannounce_task = tauri::async_runtime::spawn(run_reannounce_loop(daemon().clone(), service_info));
-    ADVERTISERS
-        .lock()
-        .expect("mdns advertiser table lock poisoned")
-        .insert(
-            advertise_id.clone(),
-            AdvertiserEntry {
-                service_type,
-                fullname: fullname.clone(),
-                reannounce_task,
-                owner: owner.to_string(),
-            },
-        );
+    ADVERTISERS.lock().expect("mdns advertiser table lock poisoned").insert(
+        advertise_id.clone(),
+        AdvertiserEntry {
+            service_type,
+            fullname: fullname.clone(),
+            reannounce_task,
+            owner: owner.to_string(),
+        },
+    );
     tracing::info!(advertise_id = %advertise_id, instance = %fullname, owner = %owner, "mdns advertise registered");
     Ok(advertise_id)
 }
@@ -399,18 +394,15 @@ pub(crate) fn mdns_is_advertising(state: &WasmPluginState, advertise_id: &str) -
 /// 循环负责，本登记行不挂续期任务，避免双续期
 pub(crate) fn register_host_service(service_type: &str, fullname: &str) -> Result<String, String> {
     let advertise_id = format!("mdnsad-{}", uuid::Uuid::new_v4());
-    ADVERTISERS
-        .lock()
-        .expect("mdns advertiser table lock poisoned")
-        .insert(
-            advertise_id.clone(),
-            AdvertiserEntry {
-                service_type: service_type.to_string(),
-                fullname: fullname.to_string(),
-                reannounce_task: tauri::async_runtime::spawn(async {}),
-                owner: "host".to_string(),
-            },
-        );
+    ADVERTISERS.lock().expect("mdns advertiser table lock poisoned").insert(
+        advertise_id.clone(),
+        AdvertiserEntry {
+            service_type: service_type.to_string(),
+            fullname: fullname.to_string(),
+            reannounce_task: tauri::async_runtime::spawn(async {}),
+            owner: "host".to_string(),
+        },
+    );
     tracing::info!(advertise_id = %advertise_id, instance = %fullname, "host mdns service registered (owner=host)");
     Ok(advertise_id)
 }
@@ -533,9 +525,7 @@ mod tests {
                 status_reporter,
             )),
             runtime_handle: runtime_handle.clone(),
-            granted_permissions: HashSet::from([
-                bedcode_plugin_api_mobile::permission::PERMISSION_MDNS.to_string(),
-            ]),
+            granted_permissions: HashSet::from([bedcode_plugin_api_mobile::permission::PERMISSION_MDNS.to_string()]),
             on_message_binary: None,
         }
     }
@@ -583,10 +573,8 @@ mod tests {
         let state = mdns_enabled_state(&plugin_id, &handle);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             rt.block_on(async {
-                let joined = tokio::spawn(async move {
-                    mdns_browse(&state, "_bedcode-selftest-worker._tcp.local.")
-                })
-                .await;
+                let joined =
+                    tokio::spawn(async move { mdns_browse(&state, "_bedcode-selftest-worker._tcp.local.") }).await;
                 joined.expect("mdns_browse must not panic inside runtime worker")
             })
         }));
@@ -612,10 +600,7 @@ mod tests {
             let _ = mdns_browse(&state, "_bedcode-selftest-plain._tcp.local.");
         }));
         purge_for_plugin(&plugin_id);
-        assert!(
-            result.is_ok(),
-            "mdns_browse must not panic outside any runtime context"
-        );
+        assert!(result.is_ok(), "mdns_browse must not panic outside any runtime context");
     }
 
     /// 属主仲裁：非属主 stop / is-advertising 拒绝；属主可操作
@@ -628,8 +613,14 @@ mod tests {
         fake_browser(owner, &bid, "_t1._cp.local.");
         fake_advertiser(owner, &aid, "_t1._cp.local.", "x._t1._cp.local.");
 
-        assert_eq!(super::stop_browser(other, &bid).expect_err("cross stop-browse"), super::NOT_OWNER);
-        assert_eq!(super::stop_advertise(other, &aid).expect_err("cross stop-advertise"), super::NOT_OWNER);
+        assert_eq!(
+            super::stop_browser(other, &bid).expect_err("cross stop-browse"),
+            super::NOT_OWNER
+        );
+        assert_eq!(
+            super::stop_advertise(other, &aid).expect_err("cross stop-advertise"),
+            super::NOT_OWNER
+        );
         {
             let table = ADVERTISERS.lock().unwrap();
             assert!(table.contains_key(&aid), "rejected stop must not consume handle");
@@ -662,13 +653,22 @@ mod tests {
         assert_eq!(super::purge_for_plugin(victim), 3);
         {
             let ads = ADVERTISERS.lock().unwrap();
-            assert!(ads.contains_key(&host_aid), "host registration must survive plugin purge");
-            assert!(ads.contains_key(&bystander_aid), "third-party registration must survive");
+            assert!(
+                ads.contains_key(&host_aid),
+                "host registration must survive plugin purge"
+            );
+            assert!(
+                ads.contains_key(&bystander_aid),
+                "third-party registration must survive"
+            );
             assert!(!ads.contains_key(&aid), "victim advertise purged");
         }
         {
             let bro = BROWSERS.lock().unwrap();
-            assert!(!bro.contains_key(&bid1) && !bro.contains_key(&bid2), "victim browsers purged");
+            assert!(
+                !bro.contains_key(&bid1) && !bro.contains_key(&bid2),
+                "victim browsers purged"
+            );
             assert!(bro.contains_key(&bid3), "bystander browser survives");
         }
         let _ = super::stop_browser(bystander, &bid3);
@@ -698,7 +698,10 @@ mod tests {
         let b = super::default_instance_name("com.bedcode.other");
         assert_eq!(a1, a2, "same plugin deterministic");
         assert_ne!(a1, b, "different plugins distinct");
-        assert!(a1.starts_with("com.bedcode.file-transfer-"), "prefix shape {{plugin}}-{{short}}");
+        assert!(
+            a1.starts_with("com.bedcode.file-transfer-"),
+            "prefix shape {{plugin}}-{{short}}"
+        );
     }
 
     /// 集成：双插件同服务类型 browse 隔离（ticket 08，需求①物理隔离）
@@ -746,8 +749,8 @@ mod tests {
         let host_aid = format!("mdnsad-{}", uuid::Uuid::new_v4());
         let plugin_aid = format!("mdnsad-{}", uuid::Uuid::new_v4());
         // host 登记（register_host_service 同源：owner=host）
-        let host_reg = super::register_host_service("_co._cp.local.", "h._co._cp.local.")
-            .expect("host registration books handle");
+        let host_reg =
+            super::register_host_service("_co._cp.local.", "h._co._cp.local.").expect("host registration books handle");
         fake_advertiser(plugin, &plugin_aid, "_co._cp.local.", "p._co._cp.local.");
         {
             let table = ADVERTISERS.lock().unwrap();
@@ -794,7 +797,10 @@ mod tests {
             let Ok(id) = mdns_browse(&state, "_bedcode-selftest-cycle._tcp.local.") else {
                 continue;
             };
-            assert!(mdns_stop_browse(&state, &id).expect("stop browse"), "cycle {i}: fresh handle must report stopped");
+            assert!(
+                mdns_stop_browse(&state, &id).expect("stop browse"),
+                "cycle {i}: fresh handle must report stopped"
+            );
             assert!(
                 !mdns_stop_browse(&state, &id).expect("stop browse again"),
                 "cycle {i}: repeat stop must be idempotent false"
