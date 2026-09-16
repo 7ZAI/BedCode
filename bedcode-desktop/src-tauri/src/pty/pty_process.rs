@@ -423,11 +423,11 @@ mod tests {
         assert!(!session.is_running());
     }
 
-    /// 真实 PTY：write_str 写入命令，输出经订阅读回（票据 03）
+    /// 真实 PTY：write_str 写入命令，输出落入会话环（票据 03 + 拉取模型）
     #[cfg(target_os = "linux")]
     #[tokio::test]
     async fn write_str_reaches_process_output() {
-        use crate::session::{GlobalOutputManager, OutputFrame};
+        use crate::session::GlobalOutputManager;
 
         let sid = format!("itest-pty-write-{}", std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -442,22 +442,24 @@ mod tests {
 
         let manager = GlobalOutputManager::global();
         manager.register_session(&sid).await;
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<OutputFrame>(64);
-        manager.subscribe(&sid, &format!("{sid}-sub"), tx, None, None).await;
 
         session.start().await.expect("start");
         session.write_str(&format!("echo {marker}\n")).await.expect("write_str");
 
+        let session_output = manager.session(&sid).await.expect("会话管理器");
         let mut collected = String::new();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
         while !collected.contains(&marker) && std::time::Instant::now() < deadline {
-            match rx.try_recv() {
-                Ok(OutputFrame::Output(ev)) => collected.push_str(&String::from_utf8_lossy(&ev.data)),
-                Ok(_) => {}
-                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            let ring_arc = session_output.ring();
+            let ring = ring_arc.read().await;
+            let (min, max) = ring.watermarks();
+            collected = String::from_utf8_lossy(&ring.range(min, max)).into_owned();
+            drop(ring);
+            if !collected.contains(&marker) {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         }
-        assert!(collected.contains(&marker), "write_str 的输出应被读回: {collected}");
+        assert!(collected.contains(&marker), "write_str 的输出应落入会话环: {collected}");
 
         session.kill().await.expect("kill");
         manager.unregister_session(&sid).await;

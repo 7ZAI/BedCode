@@ -17,6 +17,7 @@
  */
 
 import { Channel, invoke } from '@tauri-apps/api/core'
+import { logger } from '@/utils/frontendLogger'
 
 /** TB v3 单帧解析结果（与 WS 路径字段一致） */
 export interface OutputStreamFrame {
@@ -67,14 +68,19 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
   let currentSession = ''
   let stopped = true
   let lastRenderedOffset: number | null = null
-  let channel: Channel<ArrayBuffer> | null = null
+  // 输出帧为 ArrayBuffer（Raw）；控制帧（重同步/终止）为 JSON 体
+  let channel: Channel<ArrayBuffer | string> | null = null
   let subscribing = false
-  // 当前订阅的唯一 client_id（Rust 侧分配；stop / 重订阅时精确取消）
+  // 当前订阅的唯一 client_id（Rust 侧分配；stop / 重订阅时精确取消；ack 回传）
   let clientId: string | null = null
   // invoke resolve 前缓冲帧（快照元数据未到，不能按 offset 去重/截断判定）
   let subscribed = false
   let pendingFrames: OutputStreamFrame[] = []
   let pendingBytes = 0
+  // 同一订阅者一次截断只提示一次（重同步控制帧可能连续到达）
+  let resyncNotified = false
+  // 服务端回收订阅后的延迟重订定时器（防重订风暴）
+  let fatalRetryTimer: ReturnType<typeof setTimeout> | null = null
 
   // offset gap 处理：任何缺口立即重订阅补回（与 WS 路径同语义，带冷却防风暴）
   let lastGapResubscribeAt = 0
@@ -126,7 +132,7 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
       const now = Date.now()
       if (now - lastGapResubscribeAt >= GAP_RESUBSCRIBE_COOLDOWN_MS) {
         lastGapResubscribeAt = now
-        console.warn(
+        logger.warn(
           `[useTerminalOutputStreamChannel] offset gap, re-subscribing (frame.start=${frame.startOffset}, last_rendered=${lastRenderedOffset})`,
         )
         resubscribe()
@@ -145,6 +151,83 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
     options.onData(frame)
   }
 
+  /**
+   * 重同步控制帧处理（spec §4.7）：服务端已把本订阅者重锚到 `min_offset` 并
+   * 即将从该点连续重播 → 清屏 + 游标重锚 + 提示（同一订阅者只提示一次）。
+   *
+   * 相比「缺口 → 重订阅 → 重播」的间接自愈路径，显式信号少一次往返，且不会
+   * 在冷却期内把残缺字节写进终端。
+   */
+  function handleResync(minOffset: number) {
+    logger.warn(
+      `[useTerminalOutputStreamChannel] resync: server re-anchored at min_offset=${minOffset}, clearing and replaying`,
+    )
+    options.onReset()
+    // 游标重锚到驻留起点：随后到达的重播帧恰从 minOffset 起，无缺口、无重复
+    lastRenderedOffset = minOffset
+    // 已渲染区间视作已消化（被淘汰的字节不再需要），避免窗口长期驻留
+    ackedThroughOffset = minOffset
+    pendingAckBytes = 0
+    pendingFrames = []
+    pendingBytes = 0
+    if (!resyncNotified) {
+      resyncNotified = true
+      options.onTruncated?.(minOffset)
+    }
+  }
+
+  /** 控制帧分发（非二进制体：重同步 / 服务端 error） */
+  function handleControlMessage(msg: unknown) {
+    let parsed: unknown = msg
+    if (typeof msg === 'string') {
+      try {
+        parsed = JSON.parse(msg)
+      } catch {
+        logger.warn('[useTerminalOutputStreamChannel] unparsable control frame:', msg)
+        return
+      }
+    }
+    if (typeof parsed !== 'object' || parsed === null) return
+    const frame = parsed as { type?: string; min_offset?: number; code?: string; message?: string }
+    switch (frame.type) {
+      case 'resync':
+        handleResync(Number(frame.min_offset ?? 0))
+        break
+      case 'error':
+        // 订阅者被服务端回收（如僵尸判定）：本链路已终止。释放 Rust 侧句柄
+        // （不泄漏）并延迟重订一次——新订阅从当前游标起步，若游标已被环淘汰
+        // 会收到 resync 自愈；重订有冷却，避免「客户端确实已死」时形成紧循环
+        logger.warn(
+          `[useTerminalOutputStreamChannel] server error: code=${frame.code} message=${frame.message}, releasing subscription`,
+        )
+        handleFatalError()
+        break
+      default:
+        break
+    }
+  }
+
+  /**
+   * 服务端终止本订阅链路（§4.8 僵尸回收）：释放旧订阅 + 延迟重订
+   *
+   * 不无限重试：重订走 `GAP_RESUBSCRIBE_COOLDOWN_MS` 冷却，且链路真正不可用时
+   * 服务端会再次回收——症状在日志中可见（server error / 重订时间点），
+   * 不会像「静默冻结」那样无从定位
+   */
+  function handleFatalError() {
+    const now = Date.now()
+    unsubscribeCurrent()
+    subscribed = false
+    dropChannel()
+    if (fatalRetryTimer) return
+    fatalRetryTimer = setTimeout(() => {
+      fatalRetryTimer = null
+      if (stopped || !currentSession) return
+      if (now - lastGapResubscribeAt < GAP_RESUBSCRIBE_COOLDOWN_MS) return
+      void doSubscribe()
+    }, GAP_RESUBSCRIBE_COOLDOWN_MS)
+  }
+
   /** 快照重订阅：保留 last_rendered_offset，重播按字节区间去重 + 跨帧裁剪。
    *
    *  先精确取消旧订阅（避免固定 client_id 覆盖语义误删新订阅），再建新订阅 */
@@ -159,9 +242,10 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
   /** 精确取消当前订阅（best-effort，不阻塞后续建立新订阅） */
   function unsubscribeCurrent() {
     if (clientId && currentSession) {
-      invoke('unsubscribe_terminal_channel', { sessionId: currentSession, clientId }).catch(
-        () => {},
-      )
+      invoke('unsubscribe_terminal_channel', { sessionId: currentSession, clientId }).catch((e) => {
+        // 取消失败不阻塞后续（服务端会在连接断开时整体清理）；仅留痕便于排障
+        logger.warn('[useTerminalOutputStreamChannel] unsubscribe failed:', e)
+      })
       clientId = null
     }
   }
@@ -183,8 +267,14 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
       clearTimeout(ackIdleTimer)
       ackIdleTimer = null
     }
-    invoke('terminal_channel_ack', { sessionId: currentSession, ackedOffset: lastRenderedOffset }).catch((e) => {
-      console.warn('[useTerminalOutputStreamChannel] ack failed:', e)
+    // clientId 精确指定「哪个订阅者」的私有 ack 水位（同一会话可有多个订阅者：
+    // 桌面本地 + 移动端；无 clientId 无法定位）
+    invoke('terminal_channel_ack', {
+      sessionId: currentSession,
+      clientId,
+      ackedOffset: lastRenderedOffset,
+    }).catch((e) => {
+      logger.warn('[useTerminalOutputStreamChannel] ack failed:', e)
     })
     ackedThroughOffset = lastRenderedOffset
     pendingAckBytes = 0
@@ -202,11 +292,16 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
     subscribing = true
     const sessionAtStart = currentSession
     try {
-      const ch = new Channel<ArrayBuffer>()
+      const ch = new Channel<ArrayBuffer | string>()
       ch.onmessage = (msg) => {
+        // 控制帧（重同步/终止）为 JSON 体；输出帧为 Raw 字节（ArrayBuffer）
+        if (!(msg instanceof ArrayBuffer)) {
+          handleControlMessage(msg)
+          return
+        }
         const frames = parseFrames(msg)
         if (frames.length === 0) {
-          console.error('[useTerminalOutputStreamChannel] invalid binary frame received')
+          logger.error('[useTerminalOutputStreamChannel] invalid binary frame received')
           return
         }
         for (const frame of frames) {
@@ -215,7 +310,7 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
             pendingFrames.push(frame)
             pendingBytes += frame.data.byteLength
             if (pendingBytes > MAX_PENDING_FRAME_BYTES) {
-              console.error('[useTerminalOutputStreamChannel] pending frame overflow, re-subscribing')
+              logger.error('[useTerminalOutputStreamChannel] pending frame overflow, re-subscribing')
               resubscribe()
               return
             }
@@ -234,7 +329,7 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
       clientId = snapshot.clientId
       // 历史头部被环形淘汰：已渲染区域不可恢复 → 清屏全量重播
       if (lastRenderedOffset !== null && snapshot.minOffset > lastRenderedOffset) {
-        console.warn(
+        logger.warn(
           `[useTerminalOutputStreamChannel] history truncated: min_offset=${snapshot.minOffset} > last_rendered=${lastRenderedOffset}, full replay`,
         )
         lastRenderedOffset = null
@@ -252,7 +347,7 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
         deliverFrame(frame)
       }
     } catch (e) {
-      console.warn('[useTerminalOutputStreamChannel] subscribe failed:', e)
+      logger.warn('[useTerminalOutputStreamChannel] subscribe failed:', e)
     } finally {
       subscribing = false
     }
@@ -274,6 +369,7 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
     subscribed = false
     pendingFrames = []
     pendingBytes = 0
+    resyncNotified = false
   }
 
   /** 发送订阅（terminal 就绪后调用）：实际建立 Channel 流（幂等：已订阅不重复） */
@@ -291,6 +387,10 @@ export function useTerminalOutputStreamChannel(options: TerminalStreamOptions) {
     if (ackIdleTimer) {
       clearTimeout(ackIdleTimer)
       ackIdleTimer = null
+    }
+    if (fatalRetryTimer) {
+      clearTimeout(fatalRetryTimer)
+      fatalRetryTimer = null
     }
     lastRenderedOffset = null
     ackedThroughOffset = null

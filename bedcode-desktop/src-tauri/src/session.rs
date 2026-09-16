@@ -38,8 +38,8 @@ pub use event_bus::{DefaultSessionEventBus, SessionEvent, SessionEventBus};
 
 // 从 session_output 重导出
 pub use session_output::{
-    GlobalOutputManager, OutputEvent, OutputFrame, SessionOutputManager, SubscribeResponse, SubscriberState,
-    UnifiedOutputQueue,
+    GlobalOutputManager, OutputEvent, PullSubscriber, RingSlice, SessionOutputManager, SubscribeResponse,
+    SubscriberHandle, SubscriberStats, UnifiedOutputQueue, MODE_BATCH, MODE_REALTIME,
 };
 
 pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
