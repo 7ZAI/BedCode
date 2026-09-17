@@ -141,10 +141,34 @@ export function useTerminalScroll(
   function computeCellHeight(): number {
     if (!terminalRef.value?.element) return 0
     const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
-    if (viewport && terminalRef.value.rows > 0) {
+    if (viewport && terminalRef.value.rows > 0 && viewport.clientHeight > 0) {
       return viewport.clientHeight / terminalRef.value.rows
     }
+    // 回退：viewport 尚未布局（高度 0 / 祖先被折叠）时直接量首行行盒
+    const firstRow = terminalRef.value.element.querySelector('.xterm-rows > div') as HTMLElement | null
+    if (firstRow && firstRow.offsetHeight > 0) return firstRow.offsetHeight
     return 0
+  }
+
+  /**
+   * 单元格高度兜底重算。
+   *
+   * cellHeight 只在 `setupViewportScroll()`（挂载后 50ms 一次）与 `onResize`
+   * （xterm 真实 resize 才触发）里赋值：初始化时若容器未布局测得 0，且此后
+   * 行列不再变化（初始预估网格恰好等于 fit 结果时不会触发 resize），cellHeight
+   * 会永久为 0 → onTouchMove/onTouchEnd 直接 return → 触摸滚动、惯性、长按选择
+   * 整体失效且无自愈路径。手势入口处主动补算即可消除该静默失效。
+   *
+   * @returns 是否已取得可用行高
+   */
+  function ensureCellHeight(): boolean {
+    if (cellHeight.value > 0) return true
+    const h = computeCellHeight()
+    if (h > 0) {
+      cellHeight.value = h
+      return true
+    }
+    return false
   }
 
   /** 是否已滚动到缓冲区底部（对齐桌面端推导公式） */
@@ -249,7 +273,7 @@ export function useTerminalScroll(
    */
   function touchToCell(clientX: number, clientY: number): { col: number; row: number } {
     const term = terminalRef.value
-    if (!term?.element || cellHeight.value <= 0) return { col: 1, row: 1 }
+    if (!term?.element || !ensureCellHeight()) return { col: 1, row: 1 }
     const viewport = term.element.querySelector('.xterm-viewport') as HTMLElement
     if (!viewport) return { col: 1, row: 1 }
     const rect = viewport.getBoundingClientRect()
@@ -357,7 +381,7 @@ export function useTerminalScroll(
       }
     }
 
-    if (!terminalRef.value || cellHeight.value <= 0) return
+    if (!terminalRef.value || !ensureCellHeight()) return
 
     const touch = e.touches[0]
     const deltaY = touch.clientY - touchState.lastY
@@ -401,7 +425,7 @@ export function useTerminalScroll(
       return
     }
 
-    if (!terminalRef.value || cellHeight.value <= 0) {
+    if (!terminalRef.value || !ensureCellHeight()) {
       touchActive.value = false
       disableGpuHint()
       return
@@ -613,7 +637,7 @@ export function useTerminalScroll(
   }
 
   function selectLineAtTouchPos(clientX: number, clientY: number) {
-    if (!terminalRef.value?.element || cellHeight.value <= 0) return
+    if (!terminalRef.value?.element || !ensureCellHeight()) return
 
     const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
     if (!viewport) return
@@ -635,7 +659,7 @@ export function useTerminalScroll(
   }
 
   function extendSelectionToTouch(touch: Touch) {
-    if (!terminalRef.value?.element || cellHeight.value <= 0) return
+    if (!terminalRef.value?.element || !ensureCellHeight()) return
 
     const viewport = terminalRef.value.element.querySelector('.xterm-viewport') as HTMLElement
     if (!viewport) return

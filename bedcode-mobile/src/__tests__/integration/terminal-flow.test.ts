@@ -6,11 +6,12 @@
  * xterm Terminal（stub，遵循 writeCoalescer.test.ts 的项目惯例） + useMobileCommands（真实模块，
  * 其 invoke 走 mock 的 @tauri-apps/api/core）。
  *
- * 测试 seam：mock Tauri invoke（terminal_get_history / terminal_send_input 等命令面）+ mockListen
- * 捕获 terminal-frame / terminal-state 事件并手动驱动——模拟移动端 Rust 后端（terminal_link.rs）
- * 的帧/状态推送。
+ * 测试 seam：mock Tauri invoke（terminal_page_subscribe / terminal_get_history / terminal_send_input
+ * 等命令面）+ mockListen 捕获 terminal-state 事件并手动驱动——模拟移动端 Rust 后端
+ * （terminal_link.rs）的状态推送；输出帧则经页面级 Tauri Channel（从 terminal_page_subscribe
+ * 调用参数取回通道，投喂 TB v3 二进制帧）。
  *
- * 覆盖：terminal-frame 事件 → writeCoalescer → terminal.write 全链路 + lastRenderedOffset 推进；
+ * 覆盖：Channel 帧 → writeCoalescer → terminal.write 全链路 + lastRenderedOffset 推进；
  * 历史拼接期间实时帧缓冲 → 历史写完 FLUSH（快照拼接无缝隙）；输入回传（sendInput →
  * terminal_send_input 命令，不再走旧 HTTP POST / WS socket）。
  */
@@ -36,6 +37,10 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => p,
+  // 段2 推送通道替身：真实实现构造时依赖 WebView 注入的 __TAURI_INTERNALS__
+  Channel: class ChannelMock<T> {
+    onmessage: ((message: T) => void) | null = null
+  },
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
@@ -44,6 +49,8 @@ vi.mock('@tauri-apps/api/event', () => ({
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
 }))
+// i18n 文案与本集成用例断言无关（断言的是写入字节与命令调用）
+vi.mock('@/locales', () => ({ default: { global: { t: (key: string) => key } } }))
 vi.mock('@tauri-apps/plugin-os', () => ({}))
 
 // ==================== 测试基建 ====================
@@ -59,16 +66,46 @@ function makeMockTerminal() {
   } as unknown as Terminal
 }
 
-/** base64 编码（构造 terminal-frame 事件载荷） */
+/** base64 编码（构造 terminal_get_history 历史载荷） */
 function b64(text: string): string {
   return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-/** 模拟移动端 Rust 推送实时帧事件（与 terminal_link.rs emit 键一致） */
+/** 取某会话最近一次经 terminal_page_subscribe 交给 Rust 的页面通道（真实链路同款出口） */
+function pageChannel(sessionId: string) {
+  const call = mockInvoke.mock.calls
+    .filter(([c, args]) => c === 'terminal_page_subscribe' && (args as any)?.sessionId === sessionId)
+    .pop()
+  const channel = (call?.[1] as any)?.channel as
+    | { onmessage: ((m: ArrayBuffer) => void) | null }
+    | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+  return channel
+}
+
+/**
+ * 模拟移动端 Rust 经段2 Channel 推送一帧输出（TB v3 二进制帧，与
+ * `terminal_link::encode_data_frame` 同布局）：
+ * magic 'TB' + version 3 + flags 0 + start_offset(8 LE) + len(4 LE) + payload
+ */
 function emitFrame(sessionId: string, start: number, end: number, data: string) {
-  for (const h of eventHandlers['terminal-frame'] ?? []) {
-    h({ payload: { session_id: sessionId, start_offset: start, end_offset: end, data_base64: b64(data) } })
+  const channel = pageChannel(sessionId)
+  const payload = new TextEncoder().encode(data)
+  const len = end - start
+  if (len !== payload.byteLength) {
+    throw new Error(`frame length mismatch: end-start=${len}, payload=${payload.byteLength}`)
   }
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, len, true)
+  frame.set(payload, 16)
+  // 真实路径经 Channel<ArrayBuffer> 投递（Rust 侧 InvokeResponseBody::Raw）
+  channel.onmessage(frame.buffer)
 }
 
 /** 模拟移动端 Rust 链路状态事件 */
@@ -111,7 +148,7 @@ afterEach(() => {
 })
 
 describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输入回传', () => {
-  it('实时帧全链路：terminal-frame 事件 → writeCoalescer → terminal.write + 游标推进', async () => {
+  it('实时帧全链路：段2 Channel 帧 → writeCoalescer → terminal.write + 游标推进', async () => {
     const store = useTerminalBufferStore()
     // 真实链路时序：会话启动订阅 + 已 live（页面挂载晚于订阅完成）；
     // P1 修复后 spliceHistory 在 phase=live 前不会取历史
@@ -159,7 +196,7 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     await flushAsync(1)
 
     // 拼接期间实时帧到达（start ≥ snapshot）：缓冲不落 xterm
-    emitFrame('s1', 10, 15, 'live')
+    emitFrame('s1', 10, 14, 'live')
     await flushAsync()
     expect(terminal.write).not.toHaveBeenCalled()
 
@@ -174,7 +211,8 @@ describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输�
     await flushAsync()
 
     expect(writtenText(terminal)).toBe('hislive')
-    expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(15)
+    // 游标推进到实时帧末偏移（history [0,10) → live [10,14)）
+    expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(14)
   })
 
   it('输入回传：sendInput → terminal_send_input 命令（Rust → WS → 桌面 PTY）', async () => {

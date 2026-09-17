@@ -19,6 +19,15 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: (...args: unknown[]) => emitMock(...args),
 }))
 
+// mock Tauri Channel：实例由 store 在 markPageEntered 创建并交给被 mock 的
+// terminalPageSubscribe（可经 mock.calls 取回），测试据此注入 TB v3 二进制帧
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async () => {}),
+  Channel: class ChannelMock<T> {
+    onmessage: ((message: T) => void) | null = null
+  },
+}))
+
 // mock Rust 命令面（terminal_* 全部可观测）
 const cmd = vi.hoisted(() => ({
   terminalSubscribe: vi.fn(async () => {}),
@@ -28,12 +37,25 @@ const cmd = vi.hoisted(() => ({
   terminalSendInput: vi.fn(async () => {}),
   terminalAckRendered: vi.fn(async () => {}),
   terminalSetMode: vi.fn(async () => {}),
+  terminalPageSubscribe: vi.fn(async () => {}),
+  terminalPageUnsubscribe: vi.fn(async () => {}),
   terminalGetHistory: vi.fn(async (_s: string, _f: number) => ({
     from: 0,
     minOffset: 0,
     snapshotOffset: 0,
     historyBytes: 0,
     dataBase64: '',
+  })),
+  terminalGetState: vi.fn(async (sessionId: string) => ({
+    sessionId,
+    phase: 'idle',
+    cursor: 0,
+    snapshotOffset: 0,
+    minOffset: 0,
+    acked: 0,
+    mode: 'realtime',
+    stopped: false,
+    historyBytes: 0,
   })),
 }))
 vi.mock('@/composables/useMobileCommands', () => cmd)
@@ -45,16 +67,34 @@ function b64(text: string): string {
   return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-/** 模拟 Rust 推送实时帧事件（Tauri 事件形状 { payload }） */
+/**
+ * 模拟 Rust 经段2 Channel 推送一帧输出（TB v3 二进制帧，与
+ * `terminal_link::encode_data_frame` 同布局）：
+ * magic 'TB' + version 3 + flags 0 + start_offset(8 LE) + len(4 LE) + payload
+ */
 function emitFrame(sessionId: string, start: number, end: number, data: string) {
-  eventHandlers['terminal-frame']!({
-    payload: {
-      session_id: sessionId,
-      start_offset: start,
-      end_offset: end,
-      data_base64: b64(data),
-    },
-  })
+  const call = cmd.terminalPageSubscribe.mock.calls
+    .filter((c) => c[0] === sessionId)
+    .pop()
+  const channel = call?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+
+  const payload = new TextEncoder().encode(data)
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const len = end - start
+  if (len !== payload.byteLength) {
+    throw new Error(`frame length mismatch: end-start=${len}, payload=${payload.byteLength}`)
+  }
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, len, true)
+  frame.set(payload, 16)
+  // 真实路径经 Channel<ArrayBuffer> 投递（Rust 侧 InvokeResponseBody::Raw）
+  channel.onmessage(frame.buffer)
 }
 
 /** 模拟 Rust 推送链路状态事件 */
@@ -75,8 +115,8 @@ describe('terminalBuffer store（Rust 驱动）', () => {
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
     vi.clearAllMocks()
-    eventHandlers['terminal-frame'] = null
     eventHandlers['terminal-state'] = null
+    eventHandlers['terminal-resync'] = null
     listenMock.mockImplementation(async (name: string, cb: (p: unknown) => void) => {
       eventHandlers[name] = cb
       return () => {}
@@ -121,6 +161,172 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       expect(result).toEqual({ snapshotOffset: 0, minOffset: 0, historyBytes: 0 })
       expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
       expect(store.getBuffer('s1')!.subscribed).toBe(true)
+    })
+  })
+
+  describe('订阅信念收敛（Rust 幂等订阅不发事件 → 必须主动对账）', () => {
+    it('链路已 live 而前端信念为假：对账后置真并放行输入', async () => {
+      // Rust 侧链路已在运行：终端的 terminal_subscribe 幂等静默返回，无任何事件
+      cmd.terminalGetState.mockResolvedValueOnce({
+        sessionId: 's2',
+        phase: 'live',
+        cursor: 120,
+        snapshotOffset: 120,
+        minOffset: 0,
+        acked: 120,
+        mode: 'realtime',
+        stopped: false,
+        historyBytes: 120,
+      })
+
+      await store.subscribeSession('s2')
+
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s2')
+      const buffer = store.getBuffer('s2')!
+      expect(buffer.phase).toBe('live')
+      expect(buffer.subscribed).toBe(true)
+      expect(buffer.subscribing).toBe(false)
+      // 输入门控放行（修复前永久 false → 输入无反应）
+      expect(store.sendInput('s2', 'ls')).toBe(true)
+      expect(cmd.terminalSendInput).toHaveBeenCalledWith('s2', 'ls', null)
+    })
+
+    it('Rust 侧仍未订阅（idle）：对账不得把信念置真、输入被拒', async () => {
+      await store.subscribeSession('s3')
+
+      const buffer = store.getBuffer('s3')!
+      expect(buffer.subscribed).toBe(false)
+      expect(store.sendInput('s3', 'ls')).toBe(false)
+      expect(cmd.terminalSendInput).not.toHaveBeenCalledWith('s3', 'ls', null)
+    })
+
+    it('对账只前进不回退：晚到的陈旧 idle 响应不覆盖已 live 的 phase', async () => {
+      await store.subscribeSession('s4')
+      emitState('s4', 'live')
+      expect(store.getBuffer('s4')!.phase).toBe('live')
+
+      // 命令响应晚于状态事件到达（陈旧快照）
+      await store.reconcileState('s4')
+
+      expect(store.getBuffer('s4')!.phase).toBe('live')
+      expect(store.getBuffer('s4')!.subscribed).toBe(true)
+    })
+
+    it('对账检出 stopped：标记会话停止并清订阅信念', async () => {
+      await store.subscribeSession('s5')
+      emitState('s5', 'live')
+      cmd.terminalGetState.mockResolvedValueOnce({
+        sessionId: 's5',
+        phase: 'idle',
+        cursor: 0,
+        snapshotOffset: 0,
+        minOffset: 0,
+        acked: 0,
+        mode: 'realtime',
+        stopped: true,
+        historyBytes: 0,
+      })
+
+      await store.reconcileState('s5')
+
+      const buffer = store.getBuffer('s5')!
+      expect(buffer.sessionStopped).toBe(true)
+      expect(buffer.subscribed).toBe(false)
+      expect(store.sendInput('s5', 'ls')).toBe(false)
+    })
+
+    it('对账命令异常：保留既有信念（不误判为未订阅）', async () => {
+      await store.subscribeSession('s6')
+      emitState('s6', 'live')
+      cmd.terminalGetState.mockRejectedValueOnce(new Error('link command failed'))
+
+      await store.reconcileState('s6')
+
+      expect(store.getBuffer('s6')!.subscribed).toBe(true)
+    })
+  })
+
+  describe('running 广播不得破坏存活会话', () => {
+    it('未停止的 buffer：markSessionRunning 不清订阅信念与渲染游标', async () => {
+      await store.subscribeSession('s7')
+      emitState('s7', 'live')
+      const buffer = store.getBuffer('s7')!
+      buffer.lastRenderedOffset = 256
+      cmd.terminalSubscribe.mockClear()
+
+      store.markSessionRunning('s7')
+      await flushAsync()
+
+      expect(buffer.subscribed).toBe(true)
+      expect(buffer.phase).toBe('live')
+      expect(buffer.lastRenderedOffset).toBe(256)
+      expect(store.sendInput('s7', 'ls')).toBe(true)
+      // 已订阅：不重建链路
+      expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
+    })
+
+    it('已停止的 buffer：markSessionRunning 复位游标与信念并重新订阅', async () => {
+      await store.subscribeSession('s8')
+      emitState('s8', 'live')
+      store.getBuffer('s8')!.lastRenderedOffset = 256
+      store.markSessionStopped('s8')
+      cmd.terminalSubscribe.mockClear()
+
+      store.markSessionRunning('s8')
+      await flushAsync()
+
+      const buffer = store.getBuffer('s8')!
+      expect(buffer.sessionStopped).toBe(false)
+      expect(buffer.lastRenderedOffset).toBeNull()
+      expect(buffer.subscribed).toBe(false)
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s8')
+    })
+  })
+
+  describe('历史跨洞（Rust 缓存检出丢帧字节洞）', () => {
+    it('检出字节洞：清屏 + 锚定重播 + 一次性提示历史不完整', async () => {
+      await store.subscribeSession('s9')
+      emitState('s9', 'live')
+      store.getBuffer('s9')!.lastRenderedOffset = 64
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 64,
+        minOffset: 0,
+        snapshotOffset: 128,
+        historyBytes: 64,
+        dataBase64: b64('xy'),
+        gapDetected: true,
+      })
+
+      store.registerRealtimeHandler('s9', { onOutput: vi.fn(), onClear, onTruncated })
+      await flushAsync()
+
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(store.getBuffer('s9')!.headTrimmed).toBe(true)
+      // 清屏后按快照重新锚定游标
+      expect(store.getBuffer('s9')!.lastRenderedOffset).toBe(128)
+    })
+
+    it('无洞（gapDetected 缺省）：不清屏', async () => {
+      await store.subscribeSession('s10')
+      emitState('s10', 'live')
+      store.getBuffer('s10')!.lastRenderedOffset = 64
+      const onClear = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 64,
+        minOffset: 0,
+        snapshotOffset: 128,
+        historyBytes: 64,
+        dataBase64: b64('xy'),
+      })
+
+      store.registerRealtimeHandler('s10', { onOutput: vi.fn(), onClear })
+      await flushAsync()
+
+      expect(onClear).not.toHaveBeenCalled()
+      expect(store.getBuffer('s10')!.lastRenderedOffset).toBe(128)
     })
   })
 
@@ -254,6 +460,53 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       // 锚定重播正常写入
       expect(outputs).toEqual(['abc', 'tuvwxyzxyz'])
       expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(30)
+    })
+
+    it('重同步信号：清屏 + 游标重锚到 min_offset + 提示一次；重播帧按重锚游标无缺口接收', async () => {
+      const outputs: string[] = []
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        onClear,
+        onTruncated,
+      })
+      await flushAsync()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+      // 桌面端显式重同步：驻留起点 20（游标 3 已被环淘汰）→ 清屏 + 重锚 + 提示
+      eventHandlers['terminal-resync']!({
+        payload: { session_id: 's1', min_offset: 20, snapshot_offset: 30 },
+      })
+      await flushAsync()
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledWith(20)
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(20)
+      expect(store.getBuffer('s1')!.minOffset).toBe(20)
+
+      // 重播帧恰从 20 起（Rust 重锚后作为实时帧直达）：无缺口判定，直接交付
+      emitFrame('s1', 20, 23, 'tuv')
+      await flushAsync()
+      expect(outputs).toEqual(['abc', 'tuv'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(23)
+
+      // 重复重同步：清屏继续，但同一订阅者只提示一次
+      eventHandlers['terminal-resync']!({
+        payload: { session_id: 's1', min_offset: 40, snapshot_offset: 50 },
+      })
+      await flushAsync()
+      expect(onClear).toHaveBeenCalledTimes(2)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(40)
     })
 
     it('P1：重播未完成（phase≠live）时 spliceHistory 等待，history_end 到达后才取历史', async () => {
@@ -499,6 +752,31 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       store.unregisterRealtimeHandler('s1')
       await flushAsync()
       expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'batch')
+    })
+
+    it('段2 订阅与页面进出严格配对：注册 → page_subscribe；注销 → page_unsubscribe', async () => {
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+      await flushAsync()
+      expect(cmd.terminalPageSubscribe).toHaveBeenCalledWith('s1', expect.any(Object))
+      expect(cmd.terminalPageUnsubscribe).not.toHaveBeenCalled()
+
+      store.unregisterRealtimeHandler('s1')
+      await flushAsync()
+      expect(cmd.terminalPageUnsubscribe).toHaveBeenCalledWith('s1')
+    })
+
+    it('段1 订阅（会话级）不经页面进出触发：注册/注销不新增 terminalSubscribe', async () => {
+      // beforeEach 已按「会话启动」语义订阅过一次（预注册事件监听），故以次数
+      // 增量为准：页面进出不得再次触发段1 订阅、也不得取消段1
+      const before = cmd.terminalSubscribe.mock.calls.length
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+      await flushAsync()
+      store.unregisterRealtimeHandler('s1')
+      await flushAsync()
+      expect(cmd.terminalSubscribe.mock.calls.length).toBe(before)
+      expect(cmd.terminalUnsubscribe).not.toHaveBeenCalled()
     })
   })
 

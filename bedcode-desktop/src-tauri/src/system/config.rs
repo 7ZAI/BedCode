@@ -54,6 +54,22 @@ static PROPERTY_COMMENTS: &[(&str, &str)] = &[
     ("terminal.max_buffer_size", "最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新"),
     ("terminal.batch_bytes", "采集批次传输阈值（字节）- 订阅者处于 batch（退出终端页）模式时满该值才转发一帧（默认 64KB）"),
     ("terminal.read_buffer_size", "PTY 读取缓冲区大小（字节）- 单次读取的最大字节数"),
+    (
+        "terminal.subscriber_high_water_bytes",
+        "拉取订阅者窗口高位水（字节）- 已发游标 − 客户端 ack 达该值则该订阅者驻留等待（只停自己）；须满足 客户端 ack 阈值 ≤ 低位水 < 高位水 且 高位水 − ack 阈值 ≤ 低位水",
+    ),
+    (
+        "terminal.subscriber_low_water_bytes",
+        "拉取订阅者窗口低位水（字节，滞回下沿）- 驻留后窗口降到该值以下解除",
+    ),
+    (
+        "terminal.subscriber_park_poll_ms",
+        "拉取订阅者驻留兜底轮询间隔（毫秒）- 与 ack 唤醒配合，防丢失唤醒/僵尸永久驻留",
+    ),
+    (
+        "terminal.subscriber_zombie_timeout_ms",
+        "僵尸订阅者判定（毫秒）- 窗口持续不降超过该时长则回收连接（只影响该订阅者）",
+    ),
     ("log.file_level", "运行时日志文件级别（trace / debug / info / warn / error）"),
     ("log.console_filter", "控制台日志过滤器（支持 EnvFilter 语法，如 bedcode_lib=debug,actix_web=info）"),
     ("log.rotation", "日志文件轮转策略（daily / hourly / never）"),
@@ -132,6 +148,10 @@ static PROPERTY_GROUPS: &[(&str, &[&str])] = &[
             "terminal.max_buffer_size",
             "terminal.batch_bytes",
             "terminal.read_buffer_size",
+            "terminal.subscriber_high_water_bytes",
+            "terminal.subscriber_low_water_bytes",
+            "terminal.subscriber_park_poll_ms",
+            "terminal.subscriber_zombie_timeout_ms",
         ],
     ),
     (
@@ -452,7 +472,8 @@ pub struct TerminalConfig {
     /// 桌面本地（环回）通道零缓冲直通，不受此值影响
     pub flush_interval_ms: u64,
     /// 服务端输出合并开关：开启后远程通道按 flush_interval_ms 合并输出
-    /// 减少 WS 消息数；默认关闭（所有通道零缓冲直通，延迟最优）
+    /// 减少 WS 消息数；**默认开启**（移动端弱网/高频输出防消息风暴）。
+    /// 关闭后远程订阅者零缓冲直通（每块即发）
     pub merge_output: bool,
     /// 最大输出缓冲大小（字节）- 合并开关开启时达到此大小立即刷新
     pub max_buffer_size: usize,
@@ -461,6 +482,51 @@ pub struct TerminalConfig {
     pub batch_bytes: usize,
     /// PTY 读取缓冲区大小（字节）- 单次读取的最大字节数
     pub read_buffer_size: usize,
+    /// 拉取订阅者窗口高位水（字节）：`已发游标 − 客户端 ack ≥ 该值` → 该订阅者
+    /// 驻留等待 ack（只停自己，不影响源产出与其他订阅者）
+    pub subscriber_high_water_bytes: u64,
+    /// 拉取订阅者窗口低位水（字节，滞回下沿）：驻留后窗口降到该值以下解除
+    pub subscriber_low_water_bytes: u64,
+    /// 拉取订阅者驻留兜底轮询间隔（毫秒）：与 ack 唤醒配合，防丢失唤醒/僵尸永久驻留
+    pub subscriber_park_poll_ms: u64,
+    /// 僵尸订阅者判定（毫秒）：窗口持续不降超过该时长 → 回收该订阅者连接
+    pub subscriber_zombie_timeout_ms: u64,
+}
+
+/// 客户端 ack 节流阈值（字节）——桌面 `useTerminalOutputStreamChannel` 与移动端
+/// `terminal_link` 的 ACK_BYTES_THRESHOLD 必须一致；订阅者水位预算的输入之一
+/// （见 `TerminalConfig::subscriber_budget_violation`）
+pub const CLIENT_ACK_BYTES_THRESHOLD: u64 = 64 * 1024;
+
+impl TerminalConfig {
+    /// 订阅者水位预算关系校验（ticket 06），返回违反的约束描述（None = 合法）
+    ///
+    /// 三段缓冲的解锁前提（禁止单独抬高/压低任一阈值）：
+    /// 1. `ack 阈值 ≤ 低位水 < 高位水`，且 `高位水 − ack 阈值 ≤ 低位水`：
+    ///    驻留后**一次 ack** 必须能把窗口压到低位水以下解锁；若 ack 阈值 ≥ 高位水，
+    ///    订阅者永远等不到能解锁的 ack → 驻留到僵尸回收
+    /// 2. `高位水 < 会话环驻留上限`：上游缓存必须大于下游窗口，否则下游还没驻留
+    ///    就已被上游淘汰（无谓截断 → 用户看到清屏重播）
+    pub fn subscriber_budget_violation(&self, ring_max_bytes: u64) -> Option<String> {
+        let high = self.subscriber_high_water_bytes;
+        let low = self.subscriber_low_water_bytes;
+        let ack = CLIENT_ACK_BYTES_THRESHOLD;
+        if high == 0 || low == 0 {
+            return Some("subscriber watermarks 必须非零".to_string());
+        }
+        if ack > low || low >= high {
+            return Some(format!("需满足 ack({ack}) ≤ low({low}) < high({high})"));
+        }
+        if high.saturating_sub(ack) > low {
+            return Some(format!(
+                "需满足 high({high}) − ack({ack}) ≤ low({low})（否则一次 ack 无法解除驻留）"
+            ));
+        }
+        if high >= ring_max_bytes {
+            return Some(format!("需满足 high({high}) < ring({ring_max_bytes})（上游缓存须大于下游窗口）"));
+        }
+        None
+    }
 }
 
 impl Default for TerminalConfig {
@@ -473,6 +539,12 @@ impl Default for TerminalConfig {
             max_buffer_size: 64 * 1024,
             batch_bytes: 64 * 1024,
             read_buffer_size: 4096,
+            // 窗口 128KB / 64KB：客户端 ack 阈值 64KB → 一次 ack 即 128→64 ≤ low，
+            // 立刻解锁；高位水远小于会话环 50MB（上游缓存大于下游）
+            subscriber_high_water_bytes: 128 * 1024,
+            subscriber_low_water_bytes: 64 * 1024,
+            subscriber_park_poll_ms: 200,
+            subscriber_zombie_timeout_ms: 30_000,
         }
     }
 }
@@ -689,6 +761,18 @@ impl AppConfig {
                 max_buffer_size: parse_value(props, "terminal.max_buffer_size", 65536),
                 batch_bytes: parse_value(props, "terminal.batch_bytes", 64 * 1024),
                 read_buffer_size: parse_value(props, "terminal.read_buffer_size", 4096),
+                subscriber_high_water_bytes: parse_value(
+                    props,
+                    "terminal.subscriber_high_water_bytes",
+                    128 * 1024,
+                ),
+                subscriber_low_water_bytes: parse_value(props, "terminal.subscriber_low_water_bytes", 64 * 1024),
+                subscriber_park_poll_ms: parse_value(props, "terminal.subscriber_park_poll_ms", 200),
+                subscriber_zombie_timeout_ms: parse_value(
+                    props,
+                    "terminal.subscriber_zombie_timeout_ms",
+                    30_000,
+                ),
             },
             log: LogConfig {
                 file_level: parse_value(props, "log.file_level", default_log_file_level()),
@@ -876,6 +960,22 @@ impl AppConfig {
         map.insert(
             "terminal.read_buffer_size".to_string(),
             self.terminal.read_buffer_size.to_string(),
+        );
+        map.insert(
+            "terminal.subscriber_high_water_bytes".to_string(),
+            self.terminal.subscriber_high_water_bytes.to_string(),
+        );
+        map.insert(
+            "terminal.subscriber_low_water_bytes".to_string(),
+            self.terminal.subscriber_low_water_bytes.to_string(),
+        );
+        map.insert(
+            "terminal.subscriber_park_poll_ms".to_string(),
+            self.terminal.subscriber_park_poll_ms.to_string(),
+        );
+        map.insert(
+            "terminal.subscriber_zombie_timeout_ms".to_string(),
+            self.terminal.subscriber_zombie_timeout_ms.to_string(),
         );
         map.insert("log.file_level".to_string(), self.log.file_level.clone());
         map.insert("log.console_filter".to_string(), self.log.console_filter.clone());

@@ -11,6 +11,8 @@
 import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
 import { logger } from '@/utils/frontendLogger'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
+import { useToast } from '@/composables/useToast'
+import i18n from '@/locales'
 import type { Terminal } from '@xterm/xterm'
 
 /** 会话页预加载的超时上限（毫秒）：超时不再等待，直接跳转由终端页自行重试 */
@@ -26,12 +28,21 @@ const REPLAY_IDLE_REFRESH_MS = 250
 /** sessionId → 回放静止全量重绘定时器（注销时清理，防页面卸载后僵尸刷新） */
 const replayIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+/** sessionId → xterm onWriteParsed 订阅句柄（注销时释放，防同一实例重复注册叠加监听） */
+const writeParsedDisposables = new Map<string, { dispose(): void }>()
+
 // ==================== 链路调试统计（渲染背压 ack，2s 节流） ====================
 
 /** sessionId → ack 计数与上次打点时刻（非响应式，纯日志对账用） */
 const ackStats = new Map<string, { count: number; lastLogAt: number }>()
 /** ack 打点间隔（ms）：onWriteParsed 高频触发，不节流会刷屏 */
 const ACK_LOG_INTERVAL_MS = 2000
+
+/** 释放 xterm onWriteParsed 订阅（注销/删除路径必调，防监听泄漏） */
+function disposeWriteParsed(sessionId: string) {
+  writeParsedDisposables.get(sessionId)?.dispose()
+  writeParsedDisposables.delete(sessionId)
+}
 
 /** 清理回放静止重绘定时器 */
 function clearReplayIdleTimer(sessionId: string) {
@@ -84,6 +95,7 @@ export interface RealtimeHandlerRegistration {
 
 export function useTerminalBuffer() {
   const store = useTerminalBufferStore()
+  const toast = useToast()
 
   /**
    * 注册实时输出 handler — 服务端回放（历史）与实时推送统一经 rAF 合并写入 xterm
@@ -108,7 +120,8 @@ export function useTerminalBuffer() {
     // 会话、手机观看」等 resize 未 applied 场景 ack 永不回发 → 服务端 unacked
     // 超高位水 → PTY 读整体暂停 → 输出卡死（2.1.x 修复）。mock 会话/未连接时
     // store.ackRendered → socket.ackRendered 内部空转安全
-    terminal.onWriteParsed(() => {
+    writeParsedDisposables.get(sessionId)?.dispose()
+    writeParsedDisposables.set(sessionId, terminal.onWriteParsed(() => {
       // 链路调试（背压对账）：onWriteParsed 触发即回发 ack——计数 + 节流打点，
       // offset 与 Rust terminal_link ack 回发日志对照验证反馈环
       const stats = ackStats.get(sessionId) ?? { count: 0, lastLogAt: 0 }
@@ -123,7 +136,7 @@ export function useTerminalBuffer() {
       }
       ackStats.set(sessionId, stats)
       store.ackRendered(sessionId)
-    })
+    }))
 
     // 分片回放高水位写入（store 回放循环的背压信号）：合并批经 terminal.write
     // 的回调确认「已解析完成」，再让出一帧渲染才 resolve——回放节奏由本端
@@ -201,6 +214,9 @@ export function useTerminalBuffer() {
       },
       onTruncated: (minOffset: number) => {
         logger.warn(`[useTerminalBuffer] history truncated at min_offset=${minOffset}`)
+        // 用户可见后果是「画面被清空 + 重播」（截断或检出字节洞时）：必须给出
+        // 原因提示，否则看起来像凭空丢内容
+        toast.warning(i18n.global.t('mobile.terminal.historyTruncated'))
       },
       onReplayDone: () => {
         armReplayIdleRefresh()
@@ -219,6 +235,7 @@ export function useTerminalBuffer() {
   function unregisterRealtimeHandler(sessionId: string) {
     ackStats.delete(sessionId)
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
   }
 
@@ -241,6 +258,7 @@ export function useTerminalBuffer() {
    */
   async function unsubscribeSession(sessionId: string) {
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
   }
 
@@ -315,6 +333,7 @@ export function useTerminalBuffer() {
    */
   async function handleSessionRemoved(sessionId: string) {
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
     store.clearBuffer(sessionId)
   }

@@ -38,7 +38,22 @@ pub async fn handle_input(
         if let Some(ref key_combo) = special_key {
             match key_combo.to_pty_bytes() {
                 Some(key_bytes) => {
-                    if let Err(e) = sm.write_input(session_id, &String::from_utf8_lossy(&key_bytes)).await {
+                    // 按键序列是字节级契约：非 UTF-8 不得 lossy 替换（会向 PTY 写入
+                    // U+FFFD 垃圾字节），显式告警并丢弃该按键。当前按键集合
+                    //（ASCII 控制符 / CSI 序列）均为合法 UTF-8，异常仅来自未来扩展
+                    let key_text = match String::from_utf8(key_bytes) {
+                        Ok(text) => text,
+                        Err(e) => {
+                            tracing::warn!(
+                                session_id = %session_id,
+                                key = %key_combo.to_str(),
+                                error = %e,
+                                "[TerminalService] special key bytes not valid UTF-8, dropped"
+                            );
+                            return Ok(None);
+                        }
+                    };
+                    if let Err(e) = sm.write_input(session_id, &key_text).await {
                         tracing::error!(
                             "[TerminalService] Failed to write special key to session {}: {}",
                             session_id,

@@ -32,6 +32,7 @@ import {
 } from '@/composables/useTerminalOutputStreamChannel'
 import { useSessionStore } from '@/stores/session'
 import { useTerminalInputMarkers } from '@/composables/useTerminalInputMarkers'
+import { logger } from '@/utils/frontendLogger'
 import { makeSessionInfo } from '@/__tests__/fixtures/index'
 
 // ==================== mock Tauri invoke + Channel 边界 ====================
@@ -42,7 +43,7 @@ const { mockInvoke, MockChannel } = vi.hoisted(() => {
   /** Channel mock：记录实例，onmessage 由测试手动触发注入帧（IPC 推送边界桩） */
   class MockChannel {
     static instances: MockChannel[] = []
-    onmessage: ((msg: ArrayBuffer) => void) | null = null
+    onmessage: ((msg: ArrayBuffer | string) => void) | null = null
     constructor() {
       MockChannel.instances.push(this)
     }
@@ -262,8 +263,10 @@ describe('终端流：xterm × useTerminalOutputStreamChannel × useSessionStore
     expect(bufferLineText(term, 0)).toBe('hi')
     expect(bufferLineText(term, 1)).toBe('bye')
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 统一 logger（loglevel）：在 logger 方法上打桩（模块初始化时已绑定 console，
+    // 直接 spy console 抓不到）
+    const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
 
     // 缺口：startOffset=99 ≠ 游标(7)（字节 7..98 丢失）→ 立即快照重订阅补回
     // （缺口帧不渲染不推进游标——缺失字节无法从实时流恢复，跳过会把残缺序列
@@ -343,6 +346,88 @@ describe('终端流：xterm × useTerminalOutputStreamChannel × useSessionStore
     await flushAsync()
     expect(bufferLineText(term, 0)).toBe('hi')
 
+    stream.stop()
+  })
+
+  it('重同步控制帧：清屏 + 游标重锚到 min_offset + 提示一次（陈旧帧被丢弃，重播无缺口）', async () => {
+    const term = createTerminal()
+    vi.spyOn(term, 'clear').mockImplementation(() => {})
+    const resets: unknown[] = []
+    const truncated: number[] = []
+    const frames: OutputStreamFrame[] = []
+    const stream = useTerminalOutputStreamChannel({
+      onData: (frame) => {
+        frames.push(frame)
+        term.write(frame.data)
+      },
+      onReset: () => {
+        resets.push(true)
+        term.clear()
+      },
+      onTruncated: (minOffset) => truncated.push(minOffset),
+    })
+
+    stream.start('session-1')
+    await flushAsync()
+    stream.subscribe()
+    await flushAsync()
+    const ch = MockChannel.instances[0]
+
+    // 已渲染 [0,7)（游标 = 7）
+    ch.onmessage?.(frameBuffer([104, 105, 10], 0))
+    ch.onmessage?.(frameBuffer([98, 121, 101, 10], 3))
+    await flushAsync()
+    expect(frames).toHaveLength(2)
+
+    // 服务端显式重同步（驻留起点 200：游标 7 已被环形淘汰）
+    ch.onmessage?.('{"type":"resync","min_offset":200,"snapshot_offset":300}')
+    await flushAsync()
+    expect(resets).toHaveLength(1) // 清屏
+    expect(truncated).toEqual([200]) // 提示一次
+
+    // 陈旧在飞帧（重锚前的区间，[7,9)）：游标已重锚到 200 → 整帧丢弃，不写终端
+    ch.onmessage?.(frameBuffer([120, 120], 7))
+    await flushAsync()
+    expect(frames).toHaveLength(2)
+
+    // 重锚后的重播帧恰从 200 起：无缺口判定、正常交付并推进游标
+    ch.onmessage?.(frameBuffer([122, 13], 200))
+    await flushAsync()
+    expect(frames).toHaveLength(3)
+    expect(frames[2]).toMatchObject({ startOffset: 200, endOffset: 202 })
+
+    // 重复重同步：清屏继续，但同一订阅者只提示一次
+    ch.onmessage?.('{"type":"resync","min_offset":300,"snapshot_offset":300}')
+    await flushAsync()
+    expect(resets).toHaveLength(2)
+    expect(truncated).toEqual([200])
+
+    stream.stop()
+  })
+
+  it('服务端回收订阅（error 控制帧）：释放旧订阅（防句柄泄漏）并标记待重订', async () => {
+    const term = createTerminal()
+    const stream = useTerminalOutputStreamChannel({
+      onData: ({ data }) => term.write(data),
+      onReset: () => {},
+    })
+    stream.start('session-1')
+    await flushAsync()
+    stream.subscribe()
+    await flushAsync()
+    const ch = MockChannel.instances[0]
+
+    const warnSpy = vi.spyOn(logger, 'warn').mockImplementation(() => {})
+    ch.onmessage?.('{"type":"error","code":"lag_truncated","message":"subscriber stalled"}')
+    await flushAsync()
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringMatching(/lag_truncated/))
+    // 释放 Rust 侧句柄（否则被回收的订阅者句柄会一直挂在管理器上）
+    expect(invokeCalls('unsubscribe_terminal_channel')).toEqual([
+      [{ sessionId: 'session-1', clientId: 'channel-session-1-1' }],
+    ])
+
+    warnSpy.mockRestore()
     stream.stop()
   })
 

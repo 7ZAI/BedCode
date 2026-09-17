@@ -7,6 +7,8 @@ export default defineConfig({
   test: {
     environment: 'happy-dom',
     globals: true,
+    // 全局装：Tauri core 的 Channel 替身（见 setup.ts 说明）
+    setupFiles: ['src/__tests__/setup.ts'],
     include: ['src/__tests__/**/*.test.ts'],
     exclude: ['node_modules', 'dist'],
     coverage: {
