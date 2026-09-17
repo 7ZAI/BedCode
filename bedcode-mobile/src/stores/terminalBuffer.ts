@@ -896,6 +896,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     // 段2 订阅：与页面进出严格配对（进入订阅 / 退出取消）。幂等且不依赖段1
     // 链路已建立——通道与订阅意愿先于链路记录，链路建立后即生效。
     // 先注册通道再 invoke：invoke 在途时若有帧到达，也不会因缺 onmessage 而丢
+    // 重复进入（未配对 markPageLeft，如快速进出/路由恢复）时先作废上一代通道：
+    // 其 onmessage 仍指向本会话，在途帧会写进已被丢弃的 xterm 实例
+    const previousChannel = pageChannels.get(sessionId)
+    if (previousChannel) previousChannel.onmessage = () => {}
     const channel = new Channel<ArrayBuffer>()
     channel.onmessage = (message) => onChannelMessage(sessionId, message)
     pageChannels.set(sessionId, channel)
