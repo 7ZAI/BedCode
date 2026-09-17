@@ -36,6 +36,14 @@ window.addEventListener('unhandledrejection', (event) => {
   useToast().error(i18n.global.t('desktop.plugin.runtimeUnexpected'))
 })
 
+// 正式版（release）禁用右键默认菜单：Windows WebView2 / macOS WKWebView 可由 JS
+// preventDefault 抑制；Linux 由 Rust 端 GTK context-menu 信号处理（此处无效果但无害）。
+// dev 构建保留右键菜单，便于开发调试（检查元素等）。capture 阶段确保先于页面内
+// 任意处理器（含 xterm.js）执行；preventDefault 不阻断事件继续传播，不影响既有行为。
+if (!import.meta.env.DEV) {
+  window.addEventListener('contextmenu', (event) => event.preventDefault(), { capture: true })
+}
+
 app.use(createPinia())
 app.use(router)
 app.use(i18n)
