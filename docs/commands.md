@@ -4,6 +4,46 @@
 
 ---
 
+## 自适应构建（跨平台，可选包装器）
+
+构建/测试命令启动前自动采样系统资源（CPU 负载 / 可用内存 / swap 抖动），按双指标
+分档注入编译参数：CPU 空闲且内存充裕 → 并行；任一指标紧张 → 降档串行（防 OOM 优先）。
+内存为硬约束：cargo jobs 恒 ≤ min(核数, 可用内存GiB ÷ 1.5)。
+
+```bash
+# 在对应应用目录执行（脚本位于仓库根 scripts/，cwd 继承保证子命令在应用目录运行），
+# -- 之后接任意原生命令，不改变原命令行为
+cd bedcode-desktop && node ../scripts/adaptive-run.mjs -- pnpm run tauri:build
+cd bedcode-mobile && node ../scripts/adaptive-run.mjs -- pnpm run tauri:android:build
+cd bedcode-desktop/src-tauri && node ../../scripts/adaptive-run.mjs -- cargo test
+
+# 仓库根目录跑根测试命令
+node scripts/adaptive-run.mjs -- pnpm run test:run
+```
+
+注入的编译参数（env，自动透传给 cargo / gradle / Node）：
+
+| 变量 | 说明 |
+| --- | --- |
+| `CARGO_BUILD_JOBS` | cargo 并行数（覆盖根 `.cargo/config.toml` 的 `jobs=4`） |
+| `GRADLE_OPTS` | 追加/替换 `-Dorg.gradle.workers.max=N`（gradle 工作线程） |
+| `NODE_OPTIONS` | 原位替换/追加 `--max-old-space-size`，保留其他参数 |
+
+档位：`parallel`（cargo jobs 全开 / gradle 4 worker / Node 堆 4G）、`balanced`（jobs≤2 /
+worker 2 / 堆 1.5G）、`serial`（jobs=1 / worker 1 / 堆 1G）。
+
+覆盖与逃生阀（env，`BEDCODE_*` 前缀）：
+
+| 变量 | 作用 |
+| --- | --- |
+| `BEDCODE_BUILD_PROFILE=parallel \| balanced \| serial \| auto` | 手动强制档位（默认 auto） |
+| `BEDCODE_ADAPTIVE=0` | 完全禁用自适应，行为等同原生命令 |
+| `BEDCODE_JOBS_PER_GIB=1.5` | 每 GiB 可用内存的 rustc 并发预算 |
+
+平台：Linux 完整指标（/proc）；macOS / Windows 经 `os.loadavg` /
+PowerShell `Win32_Processor.LoadPercentage`（PowerShell 不可用时仅按内存分档，多保守一档）。
+测试：`pnpm run test:run`（仓库根目录，`node --test` 零依赖）。
+
 ## bedcode-desktop
 
 ### 开发模式
@@ -43,6 +83,9 @@ cd bedcode-desktop
 # macOS → DMG 镜像
 # Linux → .deb（tauri.conf.json 的 bundle.targets 为 ["nsis", "deb"]）
 pnpm run tauri:build
+
+# 自适应构建（按当前资源分档并行度，不改变默认构建行为；见「自适应构建」章节）
+node ../scripts/adaptive-run.mjs -- pnpm run tauri:build
 
 # 仅构建 Linux DEB 安装包（--bundles 后的参数原样透传给 tauri CLI）
 pnpm run tauri:build -- --bundles deb
@@ -233,6 +276,9 @@ pnpm run tauri:android:init
 # 构建 Debug APK（仅 arm64）
 pnpm run tauri:android:build
 
+# 自适应构建（按当前资源分档并行度，不改变默认构建行为；见「自适应构建」章节）
+node ../scripts/adaptive-run.mjs -- pnpm run tauri:android:build
+
 # 模拟器构建（x86_64）
 pnpm run tauri:android:build:emulator
 
@@ -389,6 +435,9 @@ pnpm run test
 
 # 单次运行
 pnpm run test:run
+
+# 自适应测试（按资源调 Node 堆，见「自适应构建」章节）
+node ../scripts/adaptive-run.mjs -- pnpm run test:run
 
 # 带覆盖率报告
 pnpm run test:coverage
