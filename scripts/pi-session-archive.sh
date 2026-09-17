@@ -9,14 +9,14 @@
 #
 # 规则：
 #   - 基准日期 = 本项目 .pi/sessions/ 中最新 session 的时间戳（非今天）
-#   - 早于（基准 - N 天）的 session 视为过期并移动；默认 N=15，可参数覆盖
+#   - 早于（基准 - N 天）的 session 视为过期并移动；默认 N=10，可参数覆盖
 #   - 只处理顶层 *.jsonl 与形如 YYYY-MM-DDThh-mm-ss-msZ_<ulid> 的 session 目录；
 #     sol-pi / subagent-artifacts 等非 session 目录绝不触碰
 #   - 目标目录已存在同名条目时跳过并警告，绝不覆盖
 #   - 本脚本由项目 scripts/ 位置推导项目根，天然只在项目范围内生效
 #
 # 用法：
-#   scripts/pi-session-archive.sh            # 实际移动（默认 15 天）
+#   scripts/pi-session-archive.sh            # 实际移动（默认 10 天）
 #   scripts/pi-session-archive.sh -n         # dry-run，只打印不移动
 #   scripts/pi-session-archive.sh -d 30      # 阈值改为 30 天
 #   PI_AGENT_DIR=/custom/pi scripts/pi-session-archive.sh -n   # 覆盖 pi 安装目录
@@ -36,7 +36,7 @@ ARCHIVE_DIR="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
 # ---------- 参数 ----------
 DRY_RUN=0
-DAYS=15
+DAYS=10
 while [ $# -gt 0 ]; do
   case "$1" in
     -n|--dry-run) DRY_RUN=1 ;;
