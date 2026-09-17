@@ -75,6 +75,38 @@
   background: var(--color-primary-hover);
 }
 
+/* ==================== 页面切换过渡动画 ==================== */
+
+/* 各分区（tab）切换过渡：AgentHubView 用 <Transition mode="out-in"> 包裹，
+   旧分区先淡出、新分区再淡入，避免切换时生硬跳变；
+   时长/位移与宿主路由过渡 .page-*（style.css）保持一致 */
+.ah-page-enter-active {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease;
+}
+.ah-page-leave-active {
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+.ah-page-enter-from {
+  opacity: 0;
+  transform: translateY(8px);
+}
+.ah-page-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* 本处显式过渡类优先级高于文件顶部减弱动态兜底，需单独覆盖回瞬时 */
+@media (prefers-reduced-motion: reduce) {
+  .ah-page-enter-active,
+  .ah-page-leave-active {
+    transition-duration: 0.01ms !important;
+  }
+}
+
 /* ==================== 通用元件 ==================== */
 
 .ah-card {

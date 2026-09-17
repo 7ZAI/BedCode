@@ -80,7 +80,8 @@ function gotoLogs(sessionId: number) {
       </button>
     </div>
 
-    <OverviewTab
+    <Transition name="ah-page" mode="out-in">
+      <OverviewTab
       v-if="activeTab === 'overview'"
       :state="state"
       :detecting="detecting"
@@ -110,5 +111,6 @@ function gotoLogs(sessionId: number) {
     <ProvidersTab v-else-if="activeTab === 'providers'" :detection="state" :providers="providers" />
     <StatsTab v-else-if="activeTab === 'stats'" :usage="usage" @goto-logs="gotoLogs" />
     <SessionLogsTab v-else :usage="usage" />
+    </Transition>
   </div>
 </template>
