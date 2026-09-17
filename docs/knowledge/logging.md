@@ -17,6 +17,7 @@
 | --- | --- |
 | 桌面端 | 始终写文件 `%LOCALAPPDATA%\com.bedcode.app\logs\`：`runtime.*.log` 全级别（dev 强制 debug）/ `error.*.log` 仅 ERROR / `frontend.*.log` 仅 dev，按天轮转 |
 | 移动端 | `pnpm run tauri:android:dev:log` 落盘 `bedcode-mobile/.dev-logs/android-dev.YYYY-MM-DD.log`（可 grep）；release 走 logcat |
+| 移动端落盘过滤 | `:dev:log` 脚本默认过滤非业务噪音：wasmtime/cranelift JIT 内部、`mdns_sd::`、Android 框架 tag（按本方 tag 白名单，`BedCode*` 前缀 + 崩溃关键 tag 保留）、主机侧 Gradle/Vite 构建进展；业务与链路日志（`bedcode_lib::*`、`reqwest::connect` 等）全保留；控制台与落盘同一套过滤；退出时打印过滤统计；`BEDCODE_LOG_NO_FILTER=1` 关闭过滤 |
 
 **前端 console 日志（仅 debug）**：`logger.*` → `report_frontend_log` → tracing（target=`frontend`），release 自动剥离。
 
