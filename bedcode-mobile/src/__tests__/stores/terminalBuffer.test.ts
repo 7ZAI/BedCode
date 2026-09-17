@@ -97,6 +97,53 @@ function emitFrame(sessionId: string, start: number, end: number, data: string) 
   channel.onmessage(frame.buffer)
 }
 
+/** 取会话最近一次经 terminal_page_subscribe 交给 Rust 的页面通道 */
+function pageChannel(sessionId: string) {
+  const call = cmd.terminalPageSubscribe.mock.calls
+    .filter((c) => c[0] === sessionId)
+    .pop()
+  const channel = call?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+  return channel
+}
+
+/**
+ * 构造 TB v3 数据帧（与 `terminal_link::encode_data_frame` 同布局）。
+ * @param patch 用于注入帧头异常（magic / version / len）的就地修改钩子
+ */
+function makeFrame(start: number, data: string, patch?: (frame: Uint8Array) => void): Uint8Array {
+  const payload = new TextEncoder().encode(data)
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, payload.byteLength, true)
+  frame.set(payload, 16)
+  patch?.(frame)
+  return frame
+}
+
+/** 拼接多条帧为「一条 Channel 消息」（补投切片的真实形态） */
+function concatFrames(...frames: Uint8Array[]): Uint8Array {
+  const total = frames.reduce((sum, f) => sum + f.byteLength, 0)
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const f of frames) {
+    merged.set(f, offset)
+    offset += f.byteLength
+  }
+  return merged
+}
+
+/** 向页面通道投递原始字节（一条消息可承载多帧；用于帧解析边界用例） */
+function sendChannelBytes(sessionId: string, bytes: Uint8Array) {
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  pageChannel(sessionId).onmessage!(buf)
+}
+
 /** 模拟 Rust 推送链路状态事件 */
 function emitState(sessionId: string, phase: string, detail?: string) {
   eventHandlers['terminal-state']!({
@@ -798,6 +845,98 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       await flushAsync()
       emitFrame('s1', 0, 2, 'ab')
       expect(emitMock).toHaveBeenCalledWith('terminal_output_activity', { session_id: 's1' })
+    })
+  })
+
+  describe('段2 Channel 帧解析（onChannelMessage）', () => {
+    it('一条消息承载多帧：按 16B 帧头逐帧解析并按序交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 补投切片形态：单条消息内含两帧（[0,2) 与 [2,4)）
+      sendChannelBytes('s1', concatFrames(makeFrame(0, 'ab'), makeFrame(2, 'cd')))
+      await flushAsync()
+
+      expect(outputs).toEqual(['ab', 'cd'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(4)
+    })
+
+    it('帧头 magic 不符：停止解析整条消息且不交付（残渣不可解释）', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 首帧 magic 损坏；其后即使跟着一帧合法帧也不得被解析（停止解析，非跳过）
+      sendChannelBytes(
+        's1',
+        concatFrames(makeFrame(0, 'ab', (f) => { f[0] = 0x00 }), makeFrame(2, 'cd')),
+      )
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(0)
+    })
+
+    it('未知版本号：停止解析且不交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      sendChannelBytes('s1', makeFrame(0, 'ab', (f) => { f[2] = 9 }))
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+    })
+
+    it('声明长度越界（残缺帧）：停止解析且不交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 帧头声明 2 字节负载，实际只剩 1 字节（IPC 截断）
+      sendChannelBytes('s1', makeFrame(0, 'ab').slice(0, 17))
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+    })
+
+    it('重复进入页面（未配对退出）：上一代通道作废，在途帧不写进已丢弃的 handler', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      const firstChannel = pageChannel('s1')
+
+      // 再次进入（模拟快速进出/路由恢复）：store 重新登记通道
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 旧通道仍可能收到 Rust 侧在途帧：不得再触发 onmessage 交付
+      firstChannel.onmessage!(makeFrame(0, 'ab').buffer as ArrayBuffer)
+      await flushAsync()
+      expect(outputs).toEqual([])
+
+      // 新通道正常交付
+      emitFrame('s1', 0, 2, 'ab')
+      await flushAsync()
+      expect(outputs).toEqual(['ab'])
     })
   })
 })
