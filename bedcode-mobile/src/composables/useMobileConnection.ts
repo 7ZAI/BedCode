@@ -336,10 +336,16 @@ async function init() {
         activeSessions.value[index].status = data.new_status
       }
       // 会话重新运行：复位 buffer 的 sessionStopped（停止→重启同 id 场景，
-      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）
+      // 不复位则 ws_output 监听器永久丢弃新流帧 → 终端只有旧历史、无实时）。
+      // 只处理「未跟踪 / 已停止」的会话：running 广播可能重复且无状态迁移，
+      // 对存活 buffer 执行复位会清零订阅信念与游标 → 输入被门控永久拒绝、
+      // 历史以 from=0 叠加重播（P0-1 现场：运行中输入无反应 + 格式错乱）
       if (data.new_status === 'running') {
         const bufferStore = useTerminalBufferStore()
-        bufferStore.markSessionRunning(data.session_id)
+        const buffer = bufferStore.getBuffer(data.session_id)
+        if (!buffer || buffer.sessionStopped) {
+          bufferStore.markSessionRunning(data.session_id)
+        }
       }
     },
     onSyncSessionStopped: (data) => {
