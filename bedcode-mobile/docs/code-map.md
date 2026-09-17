@@ -47,7 +47,10 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   终端输入栏/头部/设置/确认弹窗、快捷键面板、图标
 │   ├── composables/                  # 业务逻辑 composable：连接管理、HTTP API、文件树、代码高亮、
 │   │                                 #   终端缓冲/滚动、mDNS 发现/广播、预设任务、系统通知、
-│   │                                 #   前台服务、边到边显示、屏幕方向、更新检查等
+│   │                                 #   前台服务、边到边显示、屏幕方向、更新检查等；
+│   │                                 #   terminal/ 下为终端内核域（模板内核上下文 + 渲染器/resize/
+│   │                                 #   键盘避让/订阅，TerminalView 拆分产物，经 terminalKernel
+│   │                                 #   交换实例与回调）
 │   ├── stores/                       # Pinia 全局状态：代码查看器、输入助手、设置、终端缓冲、i18n
 │   ├── views/                        # 页面：代码浏览器、设备、mDNS 发现、插件、扫码、会话、
 │   │                                 #   设置（views/settings/ 下按领域拆分子页：外观/连接/认证/
@@ -117,18 +120,26 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **pairing_service**：配对服务（与 `auth/pairing.rs` 协作）
 - **client_router / default_handler / traits**：客户端消息路由与处理 trait
 
-### 终端链路（TB v3 字节连续）— `src-tauri/src/terminal_link.rs` + `stores/terminalBuffer.ts`
+### 终端链路（TB v3 字节连续 + 两段订阅）— `src-tauri/src/terminal_link.rs` + `stores/terminalBuffer.ts`
 
-桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust，取代前端直连 WS）：
+桌面端 PTY 输出的移动端消费链路（2026-09-12 迁入 Rust 取代前端直连 WS；2026-09-17 拆两段订阅 + 两段背压）：
 
+- **两段订阅（生命周期彼此独立）**：
+  - **段1 会话级**（Rust ↔ 桌面端）：会话 WS 连接成功后 `terminal_subscribe`，会话停止/设备断开
+    `terminal_unsubscribe`；背压水位 `acked` 锚定 Rust 缓存游标（收帧即消化）
+  - **段2 页面级**（前端 ↔ Rust）：进入终端页 `terminal_page_subscribe(sessionId, channel)`、退出
+    `terminal_page_unsubscribe`（与 `set_mode realtime/batch` 配对）；帧经**页面级 Tauri Channel**
+    投递（TB v3 二进制 Raw，一条消息可含多帧；状态/重锚仍走事件），背压水位 `frontend_rendered`
+    锚定前端渲染游标——未渲染窗口越高位水停推，**ack 推进即补投**一批（≤256KB，节奏由消费端掌控）
 - **terminal_link.rs（Rust 后端持有，真源 = Rust 缓存）**：每会话一个 tokio-tungstenite WS、JWT 认证、
-  TB v3 帧解析（start_offset 8LE + len 4LE）、会话级字节缓存（16MB LRU）、ack 水位 + 节流回发、
-  退避重连（保留游标 from_offset 重订阅）、双速 mode（realtime/batch）、一次性历史
-  （缓存优先，HTTP `/api/sessions/{id}/history` 回退增量拉取）；事件 `terminal-frame`/`terminal-state`；
-  命令 `terminal_subscribe/unsubscribe/remove/send_input/set_mode/ack_rendered/get_history/get_state`
+  TB v3 帧解析（start_offset 8LE + len 4LE）、会话级字节缓存（16MB LRU + `contiguous_runs` 按洞切分）、
+  ack 水位 + 节流回发（含空闲轮询兜底）、退避重连（保留游标 from_offset 重订阅）、双速 mode、一次性历史
+  （缓存优先，HTTP `/api/sessions/{id}/history` 回退增量拉取）；帧出口 = 页面 Channel（`encode_data_frame`），
+  状态事件 `terminal-state`/`terminal-resync`；
+  命令 `terminal_subscribe/unsubscribe` · `terminal_page_subscribe/unsubscribe` ·
+  `remove/send_input/set_mode/ack_rendered/get_history/get_state`
 - **前端**：`stores/terminalBuffer.ts`（Rust 命令驱动 + 事件消费 + lastRenderedOffset 游标/去重/缺口
   重拼接/截断清屏/跨帧裁剪；历史拼接完成后才消费实时帧）+ `useTerminalBuffer.ts`（写队列 rAF 合并 + 背压 ack）
-- **订阅生命周期**：会话启动即订阅（Rust 管理）、停止/删除取消、断开重建——见 useMobileConnection
 - 协议与架构细节：`docs/knowledge/pty-output-pipeline.md`、`.scratch/mobile-ws-rust/spec.md`
 
 ### 插件核心模块引导
@@ -200,17 +211,30 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 - **业务归属**：传输 UI 与业务逻辑在 file-transfer 插件（`rust/src/peer.rs`、`usePeerDevices`、
   `useConsent` 等，经 `HostPeer` trait 调宿主原语）；`peer_migration.rs` 把引擎侧旧数据幂等迁入插件存储键
 
-### 前端终端链路 — `src/composables/` + `src/stores/`
+### 前端终端链路 — `src/composables/`（含 `terminal/`）+ `src/stores/`
 
-- **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/模式/输入/ack/历史），消费
-  `terminal-frame`/`terminal-state` 事件；lastRenderedOffset 字节游标 + 跨帧裁剪 + 缺口重拼接 + 截断清屏；
+- **views/TerminalView.vue**：编排层（xterm 实例生命周期 / 输入栏与工具栏 / 弹窗 / agent 预设接线）
+- **composables/terminal/**（TerminalView 拆分产物，范式参考桌面端 `composables/terminal/`，
+  共享实例与回调经 `terminalKernel` 上下文交换）：
+  - **useTerminalRenderer**：网格测量与构造期预估、DPR 感知 fit（列 ±1 漂移钳制）、WebGL 可选加载与
+    context-loss 恢复、字符图集预热（仅 WebGL 生效）、DPR 变化监听
+  - **useTerminalResize**：PTY 尺寸串行队列 + 服务端正统渲染端裁决（覆盖确认弹窗）
+  - **useTerminalKeyboardAvoidance**：visualViewport + 插件 safeAreaChanged 双通道键盘检测、
+    根容器高度收缩避让、页面 pan 守卫
+  - **useTerminalSubscription**：订阅失败重试 + 历史渲染就绪门控（加载遮罩放行三信号）
+- **terminalBuffer store + useTerminalBuffer**：Rust 命令驱动（订阅/模式/输入/ack/历史），帧消费 =
+  页面 Channel（`onChannelMessage` 按 16B 头逐帧解析 TB v3，与 `handleFrame` 共用投递路径）+ 状态事件
+  `terminal-state`/`terminal-resync`；lastRenderedOffset 字节游标 + 跨帧裁剪 + 缺口重拼接 + 截断清屏；
   历史拼接（terminalGetHistory）完成才消费实时帧；双速模式（进页 realtime / 离页 batch）
 - **useTerminalScroll**：触摸滚动（含惯性）、自定义滚动条、长按选择模式
+- **utils/terminal***：resize 触发策略（`resolveGridResize` 列漂移钳制）、分层防抖、网格测量、滚动历史行数
 - **useMobileConnection / useMobileCommands / useHttpApi**：连接初始化与事件同步、Tauri 命令封装（含
   `terminal_*`）、HTTP API（文件树、会话模式、任务队列）
 
 > 历史：终端 WS 曾由前端 `useTerminalSocket.ts` 直连桌面（TB v2 seq 语义），2026-09-12 已迁入 Rust
->（`src-tauri/src/terminal_link.rs`）并升级 TB v3 字节偏移——useTerminalSocket.ts 已删除
+>（`src-tauri/src/terminal_link.rs`）并升级 TB v3 字节偏移——useTerminalSocket.ts 已删除；2026-09-18
+> `TerminalView.vue` 按域拆分为 `composables/terminal/`（同批修复键盘避让连带 ±1 列漂移触发整缓冲重排）；
+> 同日夜段2 修背压死锁（ack 驱动补投，优化文档 §17）+ 输出帧改页面 Channel（§18，删除 `terminal-frame` 事件）
 
 ### 自动化任务执行机制（移动端视角）
 
