@@ -19,6 +19,15 @@ vi.mock('@tauri-apps/api/event', () => ({
   emit: (...args: unknown[]) => emitMock(...args),
 }))
 
+// mock Tauri Channel：实例由 store 在 markPageEntered 创建并交给被 mock 的
+// terminalPageSubscribe（可经 mock.calls 取回），测试据此注入 TB v3 二进制帧
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async () => {}),
+  Channel: class ChannelMock<T> {
+    onmessage: ((message: T) => void) | null = null
+  },
+}))
+
 // mock Rust 命令面（terminal_* 全部可观测）
 const cmd = vi.hoisted(() => ({
   terminalSubscribe: vi.fn(async () => {}),
@@ -58,16 +67,34 @@ function b64(text: string): string {
   return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-/** 模拟 Rust 推送实时帧事件（Tauri 事件形状 { payload }） */
+/**
+ * 模拟 Rust 经段2 Channel 推送一帧输出（TB v3 二进制帧，与
+ * `terminal_link::encode_data_frame` 同布局）：
+ * magic 'TB' + version 3 + flags 0 + start_offset(8 LE) + len(4 LE) + payload
+ */
 function emitFrame(sessionId: string, start: number, end: number, data: string) {
-  eventHandlers['terminal-frame']!({
-    payload: {
-      session_id: sessionId,
-      start_offset: start,
-      end_offset: end,
-      data_base64: b64(data),
-    },
-  })
+  const call = cmd.terminalPageSubscribe.mock.calls
+    .filter((c) => c[0] === sessionId)
+    .pop()
+  const channel = call?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+
+  const payload = new TextEncoder().encode(data)
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const len = end - start
+  if (len !== payload.byteLength) {
+    throw new Error(`frame length mismatch: end-start=${len}, payload=${payload.byteLength}`)
+  }
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, len, true)
+  frame.set(payload, 16)
+  // 真实路径经 Channel<ArrayBuffer> 投递（Rust 侧 InvokeResponseBody::Raw）
+  channel.onmessage(frame.buffer)
 }
 
 /** 模拟 Rust 推送链路状态事件 */
@@ -88,7 +115,6 @@ describe('terminalBuffer store（Rust 驱动）', () => {
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
     vi.clearAllMocks()
-    eventHandlers['terminal-frame'] = null
     eventHandlers['terminal-state'] = null
     eventHandlers['terminal-resync'] = null
     listenMock.mockImplementation(async (name: string, cb: (p: unknown) => void) => {
@@ -732,7 +758,7 @@ describe('terminalBuffer store（Rust 驱动）', () => {
       emitState('s1', 'live')
       store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
       await flushAsync()
-      expect(cmd.terminalPageSubscribe).toHaveBeenCalledWith('s1')
+      expect(cmd.terminalPageSubscribe).toHaveBeenCalledWith('s1', expect.any(Object))
       expect(cmd.terminalPageUnsubscribe).not.toHaveBeenCalled()
 
       store.unregisterRealtimeHandler('s1')

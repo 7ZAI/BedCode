@@ -14,8 +14,8 @@
 //!  段2  前端 ↔ Rust 缓存/实时流（页面级）
 //!       订阅时机：进入终端页
 //!       取消时机：退出终端页
-//!       载体：`terminal_page_subscribe` / `terminal_page_unsubscribe`
-//!       产物：`terminal-frame` 事件推送开关——未订阅时只入缓存不推事件
+//!       载体：`terminal_page_subscribe`（携带页面级 Tauri Channel）/ `terminal_page_unsubscribe`
+//!       产物：段2 推送开关 + 页面通道——未订阅时只入缓存不推帧
 //!             （IPC 零空转），重进页面经 `terminal_get_history` 回补
 //! ```
 //!
@@ -25,7 +25,8 @@
 //!
 //! ## 其余契约
 //!
-//! - 终端数据真源 = 会话级字节缓存：WS 收帧 → 缓存 → （段2 已订阅时）事件转发；
+//! - 终端数据真源 = 会话级字节缓存：WS 收帧 → 缓存 → （段2 已订阅且通道就绪时）
+//!   经页面 Channel 推给前端；
 //!   渲染 backpressure ack 由本模块持字节水位回发（`terminal_ack_rendered` 提升
 //!   水位）；输入经 `terminal_send_input` → WS input 帧 → 桌面端 PTY。意外断开
 //!   由本模块自动退避重连 + 按字节游标（from_offset）重订阅；手动断开不再重连。
@@ -33,8 +34,8 @@
 //!   历史 = 缓存区间（[head, snapshot)），一次性位移数据经 `terminal_get_history`
 //!   提供（缓存优先，缓存头被淘汰时回退桌面 HTTP
 //!   `GET /api/sessions/{id}/history` 一次性拉取）；实时帧（start ≥ snapshot）
-//!   经 `terminal-frame` 事件推送——前端「拼完历史才消费实时」（契约见
-//!   useTerminalBuffer 改造）。
+//!   经段2 页面 Channel 推送（TB v3 二进制 Raw）——前端「拼完历史才消费实时」
+//!   （契约见 useTerminalBuffer 改造）。
 //!
 //! 链路加密：本版本 JWT 认证 + 明文帧（桌面端接受明文；与 v2 时代明文终端
 //! WS 同安全位）。链路加密（ws-terminal 协商）后续 ticket 接入，见
@@ -46,6 +47,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMsg;
@@ -83,7 +85,7 @@ const ACK_IDLE_TICK_MS: u64 = ACK_MAX_IDLE_MS / 2;
 
 // ==================== 段2 背压水位（Rust → 前端） ====================
 
-/// 段2 未渲染窗口高位水：`cursor - 前端已渲染游标` 超过该值即暂停事件推送
+/// 段2 未渲染窗口高位水：`cursor - 前端已渲染游标` 超过该值即暂停帧推送
 /// （帧继续入缓存，零丢失——缓存即段2 的「内核管道」）。
 ///
 /// 取值理由：段1 高位水 64KB 太小——段2 的消费端是 WebView（需 base64 解码 +
@@ -94,6 +96,14 @@ const SEG2_HIGH_WATER_BYTES: u64 = 1024 * 1024;
 /// 段2 未渲染窗口低位水：降到该值以下才解除暂停并补推滞留区间（滞回下沿，
 /// 避免单阈值在临界点反复抖振）。补推量恒 ≤ 该值，单轮开销可控
 const SEG2_LOW_WATER_BYTES: u64 = 256 * 1024;
+/// 段2 ack 驱动的单次补投上限（字节）。
+///
+/// 为什么需要上限：消费端 ack 推进了渲染游标即视为「已腾出窗口」，必须补投其后的
+/// 滞留字节——否则消费端等帧、生产端等窗口回落，永久互等（真机现场：长历史拼接
+/// 完成后输入无回显，`cursor` 持续增长而 `frames_live=0`）。但积压可能达数 MB，
+/// 一次全灌会淹没 WebView 的 base64 解码 + xterm 解析（正是段2 背压要防的事），
+/// 故单轮只投一段，由消费端渲染后再次 ack 推动下一批——投递节奏由消费端掌控
+const SEG2_ACK_PUSH_CHUNK_BYTES: u64 = SEG2_LOW_WATER_BYTES;
 
 /// TB v3 帧头长度
 const TB_FRAME_HEADER_LEN: usize = 16;
@@ -101,6 +111,8 @@ const TB_MAGIC: [u8; 2] = [0x54, 0x42];
 const TB_VERSION_V3: u8 = 3;
 /// 客户端 ack 标志位
 const TB_FLAG_ACK: u8 = 0x02;
+/// 数据帧标志位（段2 Channel 推给前端的输出帧；ACK 帧反方向使用 TB_FLAG_ACK）
+const TB_FLAG_DATA: u8 = 0x00;
 
 // ==================== 链路调试节流（终端字节对账） ====================
 
@@ -110,9 +122,13 @@ const INGEST_STATS_INTERVAL_MS: u64 = 5000;
 const GAP_LOG_INTERVAL_MS: u64 = 2000;
 
 // ==================== 事件名（前端 listen） ====================
+//
+// 分工（刻意，对齐桌面端 Channel 路径的取舍）：**输出帧走段2 专用 Tauri Channel**
+// （`terminal_page_subscribe` 随命令携带，TB v3 二进制、高频大负载、页面生命周期），
+// **状态/重锚走全局事件**（低频，多会话同源状态机按 session_id 分发；页面卸载后
+// 仍需收敛 UI）。桌面端把控制帧也放在 Channel（Json 体）；移动端状态事件是全局
+// 状态机的唯一事件源，保留事件更稳，且帧与控制面解耦后互不影响。
 
-/// 实时输出帧（仅 phase=live 且 end_offset > snapshot 的帧）
-pub(crate) const EVENT_TERMINAL_FRAME: &str = "terminal-frame";
 /// 状态变更（phase / reconnect / truncated / stopped / session_missing）
 pub(crate) const EVENT_TERMINAL_STATE: &str = "terminal-state";
 /// 重同步（桌面端把本订阅者重锚到 min_offset 并重播，spec §4.7）：
@@ -387,8 +403,9 @@ fn parse_tb_frames(bytes: &[u8]) -> Vec<ParsedFrame> {
 ///   `terminal_get_history` 结果重叠/错位
 /// - `frontend_subscribed`：段2 已订阅（终端页在前台消费）。未订阅时只入缓存：
 ///   页面关闭期间的输出无人消费，逐帧 IPC 是纯空转——重进页面由历史拼接回补
-/// - `!seg2_paused`：段2 未渲染窗口未越高位水（背压解压中）。越界即停推，
-///   字节留在缓存——恢复时由 `seg2_drain` 一次性补推（不丢帧、不产生缺口）
+/// - `!seg2_paused`：段2 未渲染窗口未越高位水。越界即停推，字节留在缓存——前端每次
+///   `terminal_ack_rendered` 推进渲染游标即由 `seg2_drain` 补投一批（不丢帧、
+///   不产生缺口；投递节奏由消费端掌控，见 `seg2_mark_rendered`）
 ///
 /// 独立成纯函数：判据分属协议边界（历史/实时）、握手状态、页面生命周期与段2
 /// 背压水位，任一被改动都直接决定「前端是否丢帧」，必须可单测锁定
@@ -414,6 +431,26 @@ fn seg2_paused_after(unrendered_bytes: u64, paused: bool) -> bool {
     } else {
         unrendered_bytes > SEG2_HIGH_WATER_BYTES
     }
+}
+
+/// ack 驱动的段2 补投决策（纯函数，Seam A）。
+///
+/// 契约：消费端 ack **推进了**渲染游标 = 「已腾出窗口」→ 必须补投其后的滞留字节；
+/// 无推进（陈旧/重复 ack）或无待投递字节时返回 None（不补投，避免空转与重推）。
+/// 单次补投量以 `max_bytes` 钳制并由 `cursor` 收口——消费端不可能渲染未收到的字节，
+/// 越界值会让窗口算小（背压永不触发 + 补推起点错位）。
+///
+/// @returns `Some((from, to))` = 本次应补投 `[from, to)`；`None` = 无需补投
+fn ack_backlog_push_range(
+    rendered_before: u64,
+    rendered_after: u64,
+    cursor: u64,
+    max_bytes: u64,
+) -> Option<(u64, u64)> {
+    if max_bytes == 0 || rendered_after <= rendered_before || cursor <= rendered_after {
+        return None;
+    }
+    Some((rendered_after, rendered_after.saturating_add(max_bytes).min(cursor)))
 }
 
 /// ack 回发节流判定（64KB 阈值 + 250ms 空闲兜底）。
@@ -445,6 +482,22 @@ fn build_ack_frame(session_id: &str, acked_offset: u64) -> Vec<u8> {
     frame.extend_from_slice(&acked_offset.to_le_bytes());
     frame.extend_from_slice(&(payload.len() as u32).to_le_bytes());
     frame.extend_from_slice(payload);
+    frame
+}
+
+/// 构造发往前端的 TB v3 数据帧（段2 Channel 的载荷）。
+///
+/// 布局与段1 wire 协议一致（magic 2B + version 1B + flags 1B + start_offset 8 LE +
+/// len 4 LE + payload，end = start + len）：前端复用同一解析口径（与 `parse_tb_frames`
+/// 互逆），帧语义只有一份真源，也便于后续两端共享编解码。
+fn encode_data_frame(start: u64, data: &[u8]) -> Vec<u8> {
+    let mut frame = Vec::with_capacity(TB_FRAME_HEADER_LEN + data.len());
+    frame.extend_from_slice(&TB_MAGIC);
+    frame.push(TB_VERSION_V3);
+    frame.push(TB_FLAG_DATA);
+    frame.extend_from_slice(&start.to_le_bytes());
+    frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
+    frame.extend_from_slice(data);
     frame
 }
 
@@ -499,6 +552,11 @@ pub struct TerminalLink {
     /// 段2 订阅态（前端是否正在消费本链路的输出）——与管理器共享同一 `Arc`：
     /// 链路被重建时沿用同一份订阅态，页面存活期间的终端不会因链路重建而断流
     frontend_subscribed: Arc<AtomicBool>,
+    /// 段2 推送通道槽（页面级 Tauri Channel，帧的唯一出口）——同样与管理器共享
+    /// 同一 `Arc`：链路重建沿用同一通道，页面存活期间不会静默失联。
+    /// `None` = 页面未订阅/已卸载（帧只入缓存，重进经 `terminal_get_history` 回补）；
+    /// 发送失败即「消费端已离去」，就地清空避免后续每次补投都失败刷日志
+    seg2_channel: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
     /// 段2 已渲染水位（前端 `terminal_ack_rendered` 推进）：段2 未渲染窗口 =
     /// `cursor - frontend_rendered`。与段1 的 `acked` 分开记账——段1 锚定到
     /// Rust 缓存（收帧即视为缓存已消化，桌面端不必为渲染速度停摆），段2 锚定
@@ -523,7 +581,7 @@ pub struct TerminalLink {
     /// 累计收帧数 / 收字节数（WS 二进制消息解析后）
     frames_received: AtomicU64,
     bytes_received: AtomicU64,
-    /// 实时段帧（end > snapshot，经事件推送前端）/ 历史段帧（只入缓存）
+    /// 实时段帧（end > snapshot，经段2 页面 Channel 推送前端）/ 历史段帧（只入缓存）
     frames_live_emitted: AtomicU64,
     bytes_live_emitted: AtomicU64,
     frames_cache_only: AtomicU64,
@@ -545,6 +603,7 @@ impl TerminalLink {
         app: AppHandle,
         write_tx: mpsc::Sender<Outbound>,
         frontend_subscribed: Arc<AtomicBool>,
+        seg2_channel: Arc<Mutex<Option<Channel<InvokeResponseBody>>>>,
     ) -> Arc<Self> {
         Arc::new(Self {
             session_id,
@@ -561,6 +620,7 @@ impl TerminalLink {
             mode: AtomicU8::new(LinkMode::Realtime.as_u8()),
             stopped: AtomicBool::new(true),
             frontend_subscribed,
+            seg2_channel,
             frontend_rendered: AtomicU64::new(0),
             seg2_paused: AtomicBool::new(false),
             session_missing: AtomicU32::new(0),
@@ -610,33 +670,32 @@ impl TerminalLink {
         }
     }
 
-    /// 推送一帧到前端（`terminal-frame` 事件）。
+    /// 推送一帧到前端（段2 专用 Tauri Channel，TB v3 二进制帧）。
     ///
-    /// 实时帧直推与段2 背压恢复补推（`seg2_drain`）共用同一入口：两条路径的帧
-    /// 语义完全一致（字节区间 + base64 负载），合并出口避免补推路径漏掉统计与
-    /// emit 失败留痕
+    /// 实时帧直推与段2 补投（`seg2_drain`）共用同一入口：两条路径的帧语义完全一致
+    /// （字节区间 + 原始负载），合并出口避免补投路径漏掉统计与失败留痕。
+    ///
+    /// 与旧实现（全局事件 + base64 JSON）相比：通道是 per-page 的，没有广播与事件名
+    /// 匹配开销；负载走 Raw 字节，省掉 base64（-33% 体积）与 JSON 序列化/解析/解码。
+    /// 通道缺失或发送失败（页面已卸载 / WebView 侧已释放）时只记统计不推送，并就地
+    /// 清空引用——字节仍在缓存，重进页面经 `terminal_get_history` 回补，零丢失
     fn emit_frame(&self, start: u64, end: u64, data: &[u8]) {
         self.frames_live_emitted.fetch_add(1, Ordering::SeqCst);
         self.bytes_live_emitted.fetch_add(data.len() as u64, Ordering::SeqCst);
-        if let Err(e) = self.app.emit(
-            EVENT_TERMINAL_FRAME,
-            serde_json::json!({
-                "session_id": self.session_id,
-                "start_offset": start,
-                "end_offset": end,
-                "data_base64": base64::Engine::encode(
-                    &base64::engine::general_purpose::STANDARD,
-                    data,
-                ),
-            }),
-        ) {
+        let mut slot = self.seg2_channel.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(channel) = slot.as_ref() else {
+            return;
+        };
+        let frame = encode_data_frame(start, data);
+        if let Err(e) = channel.send(InvokeResponseBody::Raw(frame)) {
             tracing::warn!(
                 session_id = %self.session_id,
                 start_offset = start,
                 end_offset = end,
                 error = %e,
-                "terminal frame event emit failed"
+                "terminal frame channel send failed, detaching consumer channel"
             );
+            *slot = None;
         }
     }
 
@@ -647,7 +706,7 @@ impl TerminalLink {
             .saturating_sub(self.frontend_rendered.load(Ordering::SeqCst))
     }
 
-    /// 缓存收帧 + 推进游标 + （段2 门控）事件推送 + ack 记账
+    /// 缓存收帧 + 推进游标 + （段2 门控）经 Channel 推送 + ack 记账
     fn ingest_frame(&self, frame: ParsedFrame) {
         let frame_bytes = frame.end - frame.start;
         self.frames_received.fetch_add(1, Ordering::SeqCst);
@@ -710,25 +769,24 @@ impl TerminalLink {
         self.pending_ack_bytes.fetch_add(frame_bytes, Ordering::SeqCst);
     }
 
-    /// 段2 背压恢复：窗口回落到低位水 → 解除暂停并**一次性补推**滞留区间。
+    /// ack 驱动的段2 补投：把 `[frontend_rendered, …)` 的连续段按 `max_bytes` 上限
+    /// 逐段 emit（补推按缓存的连续段切分，跨洞不合并；段间洞由前端既有「帧首越过
+    /// 游标 = 缺口」自愈路径处理）。
     ///
-    /// 为什么必须补推：暂停期间字节只进缓存，消费端（前端）看不见——它既没有
-    /// 触发「帧首越过游标」的缺口帧，也不会主动重新拉取历史。若此后没有新输出，
-    /// 前端将永久停在陈旧画面（与段1 的「数据留内核管道、读线程恢复即自然续读」
-    /// 不同，缓存对消费端不可见，必须由生产端主动投递）。
+    /// 为什么必须补推：暂停期间字节只进缓存，消费端（前端）看不见——它既没有触发
+    /// 「帧首越过游标」的缺口帧，也不会主动重新拉取历史。若此后没有新输出，前端将
+    /// 永久停在陈旧画面（与段1 的「数据留内核管道、读线程恢复即自然续读」不同，
+    /// 缓存对消费端不可见，必须由生产端主动投递）。
     ///
-    /// 补推按缓存的连续段切分（跨洞不合并），段间洞由前端既有「帧首越过游标 =
-    /// 缺口」自愈路径处理
-    fn seg2_drain(&self) {
+    /// 为什么由 ack 驱动而不是「窗口回落到低位水才补投」：`frontend_rendered` 单调
+    /// 不减、`cursor` 单调增 ⇒ 窗口只增不减，低位水恢复分支在真实运行中不可达；
+    /// 而消费端推进窗口的唯一手段就是**收到帧**——把补投条件写成「先降回低位水」
+    /// 必然互等。真机现场（长历史会话）：`terminal_page_subscribe` → 历史段冲刷使
+    /// 窗口越过 1MB 高位水 → 暂停 → 16MB 历史拼接完成时 ack 只把窗口降到 2.7MB
+    /// （仍 > 256KB 低位水）→ 旧实现不补投也不解除 → 前端再无帧可渲染、再无 ack，
+    /// 输入回显字节永留缓存（用户可见症状：输入无回显，`frames_live=0`）。
+    fn seg2_drain(&self, max_bytes: u64) {
         if !self.frontend_subscribed.load(Ordering::SeqCst) {
-            return;
-        }
-        let was_paused = self.seg2_paused.load(Ordering::SeqCst);
-        if !was_paused {
-            return;
-        }
-        let unrendered = self.seg2_unrendered_bytes();
-        if seg2_paused_after(unrendered, was_paused) {
             return;
         }
         self.seg2_paused.store(false, Ordering::SeqCst);
@@ -738,17 +796,35 @@ impl TerminalLink {
             cache.contiguous_runs(from)
         };
         let mut pushed = 0u64;
-        for (start, data) in runs {
-            let end = start + data.len() as u64;
-            pushed += data.len() as u64;
-            self.emit_frame(start, end, &data);
+        'push: for (start, data) in runs {
+            let mut offset = start;
+            let mut rest: &[u8] = &data;
+            while !rest.is_empty() {
+                let budget = max_bytes.saturating_sub(pushed);
+                if budget == 0 {
+                    break 'push;
+                }
+                // 单段可能远超额度：按字节切（前端按 offset 连续拼接写入，转义序列
+                // 跨块安全——与实时帧按 WS 帧大小切分同源）
+                let take = (rest.len() as u64).min(budget) as usize;
+                self.emit_frame(offset, offset + take as u64, &rest[..take]);
+                offset += take as u64;
+                pushed += take as u64;
+                rest = &rest[take..];
+            }
         }
+        // 补投后按最新窗口重估暂停态（等价于「未暂停时」的滞回判定）：仍超高位水则
+        // 继续暂停，等下一次 ack 再解锁；已追平则恢复正常直推
+        let unrendered = self.seg2_unrendered_bytes();
+        self.seg2_paused
+            .store(unrendered > SEG2_HIGH_WATER_BYTES, Ordering::SeqCst);
         tracing::debug!(
             session_id = %self.session_id,
             from_offset = from,
-            unrendered_bytes = unrendered,
             drained_bytes = pushed,
-            "seg2 backpressure released, buffered range re-pushed"
+            unrendered_bytes = unrendered,
+            paused = self.seg2_paused.load(Ordering::SeqCst),
+            "seg2 backlog pushed on render ack"
         );
     }
 
@@ -767,13 +843,25 @@ impl TerminalLink {
     ///
     /// 上界钳到收帧游标：前端不可能渲染未收到的字节，越界值（陈旧/错乱 ack）
     /// 会把窗口算小 → 背压永不触发且补推起点错位
+    ///
+    /// ack **推进**即「消费端已腾出窗口」→ 补投一批（决策见 `ack_backlog_push_range`，
+    /// 投递见 `seg2_drain`）。这是段2 滞留字节唯一的投递路径：缺了它，长历史会话在
+    /// 背压介入后会永久停推，表现为「输入无回显」（现场与推导见 `seg2_drain` 注释）
     fn seg2_mark_rendered(&self, offset: u64) {
-        let clamped = offset.min(self.cursor.load(Ordering::SeqCst));
-        let cur = self.frontend_rendered.load(Ordering::SeqCst);
-        if clamped > cur {
+        let cursor = self.cursor.load(Ordering::SeqCst);
+        let clamped = offset.min(cursor);
+        let before = self.frontend_rendered.load(Ordering::SeqCst);
+        if clamped > before {
             self.frontend_rendered.store(clamped, Ordering::SeqCst);
         }
-        self.seg2_drain();
+        // 区间由纯函数给出（from == 刚写入的 frontend_rendered），额度取区间长度，
+        // 避免 drain 内二次读取水位造成两套口径
+        let Some((from, to)) =
+            ack_backlog_push_range(before, clamped, cursor, SEG2_ACK_PUSH_CHUNK_BYTES)
+        else {
+            return;
+        };
+        self.seg2_drain(to - from);
     }
 
     /// 重同步落地（spec §4.7 / M3）：桌面端已把本订阅者重锚到 `min_offset`
@@ -942,6 +1030,11 @@ pub struct TerminalLinkManager {
     /// 入口处（页面挂载早于链路建立）也必须能记录订阅意愿：`page_subscribe`
     /// 只写开关、不依赖链路存在，链路建立时读取当前值即可。
     consumers: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// 段2 推送通道槽（页面级）：与 `consumers` 同款共享方式（`Arc` 由管理器持有、
+    /// 链路重建后沿用同一份），`page_subscribe` 写入、`page_unsubscribe`/会话删除清空。
+    /// 链路建立时取同一 `Arc` 交给 `TerminalLink`，故「页面挂载早于链路建立」与
+    /// 「链路重建而页面常开」两种时序都不会静默失联
+    page_channels: Mutex<HashMap<String, Arc<Mutex<Option<Channel<InvokeResponseBody>>>>>>,
 }
 
 static MANAGER: OnceLock<Arc<TerminalLinkManager>> = OnceLock::new();
@@ -952,6 +1045,7 @@ pub fn terminal_link_manager() -> Arc<TerminalLinkManager> {
             Arc::new(TerminalLinkManager {
                 links: Mutex::new(HashMap::new()),
                 consumers: Mutex::new(HashMap::new()),
+                page_channels: Mutex::new(HashMap::new()),
             })
         })
         .clone()
@@ -970,14 +1064,34 @@ impl TerminalLinkManager {
             .clone()
     }
 
-    /// 段2 订阅（进入终端页）：开启实时帧事件推送，并重置段2 背压基线。
+    /// 取会话的段2 推送通道槽（不存在则创建，初值 `None`）。
     ///
-    /// 幂等；链路尚未建立也生效（订阅意愿先于链路记录，链路建立后即生效——
-    /// 新链路以初始基线启动，与新消费者首次历史拼接一致）
-    pub fn page_subscribe(&self, session_id: &str) {
+    /// 与 `consumer_flag` 同款语义：同一会话始终返回同一 `Arc`，链路重建时复用，
+    /// 页面在链路重建前后都能收到帧
+    fn consumer_channel(&self, session_id: &str) -> Arc<Mutex<Option<Channel<InvokeResponseBody>>>> {
+        let mut channels = self.page_channels.lock().unwrap_or_else(|p| p.into_inner());
+        channels
+            .entry(session_id.to_string())
+            .or_insert_with(|| Arc::new(Mutex::new(None)))
+            .clone()
+    }
+
+    /// 段2 订阅（进入终端页）：登记前端推送通道 + 开启实时帧推送，并重置段2 背压基线。
+    ///
+    /// 幂等；链路尚未建立也生效（通道与订阅意愿先于链路记录——链路建立时取同一
+    /// `Arc` 槽即可；新链路以初始基线启动，与新消费者首次历史拼接一致）。
+    ///
+    /// 加锁顺序：`page_channels` → `consumers` → `links`（与 `subscribe` 同序，
+    /// 避免与管理器其它路径锁序不一致导致互等）
+    pub fn page_subscribe(&self, session_id: &str, channel: Channel<InvokeResponseBody>) {
         if session_id.is_empty() {
             return;
         }
+        // 通道槽先登记（新消费者换代）：上一代页面实例的通道被覆盖即自然失效
+        *self
+            .consumer_channel(session_id)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = Some(channel);
         let was = self.consumer_flag(session_id).swap(true, Ordering::SeqCst);
         // 新消费者换代：渲染基线与暂停态必须一并重置——沿用上一代的低水位会
         // 在与缓存游标的差值上算出巨大假窗口 → 一进页面就暂停推送（终端空屏）
@@ -992,12 +1106,16 @@ impl TerminalLinkManager {
         }
     }
 
-    /// 段2 取消订阅（退出终端页）：停止实时帧事件推送，收帧与缓存继续
+    /// 段2 取消订阅（退出终端页）：清空推送通道 + 停止实时帧推送，收帧与缓存继续
     /// （段1 不受影响——桌面端输出照常入 Rust 缓存，重进页面经历史拼接回补）
     pub fn page_unsubscribe(&self, session_id: &str) {
         if session_id.is_empty() {
             return;
         }
+        *self
+            .consumer_channel(session_id)
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = None;
         let was = self.consumer_flag(session_id).swap(false, Ordering::SeqCst);
         if was {
             tracing::debug!(session_id = %session_id, "terminal page unsubscribe (frontend consumer detached, cache keeps filling)");
@@ -1025,6 +1143,9 @@ impl TerminalLinkManager {
         // 锁之前取：避免 `links` → `consumers` 嵌套加锁（另一路径
         // `page_subscribe` 是 consumers → links 顺序，锁序不一致即有死锁风险）
         let frontend_subscribed = self.consumer_flag(&session_id);
+        // 段2 推送通道槽同理（同序在 `links` 之前取）：链路重建时沿用同一份通道，
+        // 页面存活期间不会因链路重建而静默失联
+        let seg2_channel = self.consumer_channel(&session_id);
         let mut links = self.links.lock().unwrap_or_else(|p| p.into_inner());
         if let Some(existing) = links.get(&session_id) {
             if !existing.stopped.load(Ordering::SeqCst) {
@@ -1038,7 +1159,13 @@ impl TerminalLinkManager {
             }
         }
         let (write_tx, write_rx) = mpsc::channel::<Outbound>(256);
-        let link = TerminalLink::new(session_id.clone(), app, write_tx, frontend_subscribed);
+        let link = TerminalLink::new(
+            session_id.clone(),
+            app,
+            write_tx,
+            frontend_subscribed,
+            seg2_channel,
+        );
         link.stopped.store(false, Ordering::SeqCst);
         link.phase.store(LinkPhase::Connecting.as_u8(), Ordering::SeqCst);
         link.emit_state("subscribing");
@@ -1080,7 +1207,8 @@ impl TerminalLinkManager {
         }
     }
 
-    /// 会话删除：清链路 + 缓存 + 段2 订阅态（会话已不存在，页面订阅意愿一并作废）
+    /// 会话删除：清链路 + 缓存 + 段2 订阅态与推送通道
+    /// （会话已不存在，页面订阅意愿一并作废）
     pub fn remove(&self, session_id: &str) {
         self.unsubscribe(session_id);
         {
@@ -1089,6 +1217,9 @@ impl TerminalLinkManager {
         }
         let mut consumers = self.consumers.lock().unwrap_or_else(|p| p.into_inner());
         consumers.remove(session_id);
+        // 通道槽一并移除：持有已卸载页面的 Channel 无意义，且会阻止其内部资源回收
+        let mut channels = self.page_channels.lock().unwrap_or_else(|p| p.into_inner());
+        channels.remove(session_id);
     }
 
     pub fn get(&self, session_id: &str) -> Option<Arc<TerminalLink>> {
@@ -1249,7 +1380,7 @@ async fn connect_once(link: &Arc<TerminalLink>, write_rx: &mut mpsc::Receiver<Ou
                     WsMsg::Binary(bin) => {
                         let frames = parse_tb_frames(&bin);
                         // 解析残渣对账：帧边界损坏/未知版本截断时尾部字节既不进缓存
-                        // 也不推事件（本环节丢字节），必须留痕
+                        // 也不推给前端（本环节丢字节），必须留痕
                         let parsed_bytes: usize = frames
                             .iter()
                             .map(|f| TB_FRAME_HEADER_LEN + f.data.len())
@@ -1498,20 +1629,23 @@ pub async fn terminal_unsubscribe(session_id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// 段2 订阅（进入终端页）：开启 `terminal-frame` 事件推送。
+/// 段2 订阅（进入终端页）：登记页面通道并开启帧推送。
 ///
-/// 幂等；不依赖链路存在——链路未建立时先记录订阅意愿，链路建立后即生效
+/// 幂等；不依赖链路存在——链路未建立时先记录订阅意愿与通道，链路建立后即生效
 /// （页面挂载早于会话订阅完成的场景不会丢流）
 #[tauri::command]
-pub async fn terminal_page_subscribe(session_id: String) -> Result<(), String> {
+pub async fn terminal_page_subscribe(
+    session_id: String,
+    channel: Channel<InvokeResponseBody>,
+) -> Result<(), String> {
     if session_id.is_empty() {
         return Err("session_id is empty".to_string());
     }
-    terminal_link_manager().page_subscribe(&session_id);
+    terminal_link_manager().page_subscribe(&session_id, channel);
     Ok(())
 }
 
-/// 段2 取消订阅（退出终端页）：停止事件推送，段1 收帧与缓存照常
+/// 段2 取消订阅（退出终端页）：清空页面通道并停止帧推送，段1 收帧与缓存照常
 /// （重进页面经 `terminal_get_history` 回补页面关闭期间的输出）
 #[tauri::command]
 pub async fn terminal_page_unsubscribe(session_id: String) -> Result<(), String> {
@@ -1944,6 +2078,65 @@ mod tests {
         assert!(!seg2_paused_after(0, true));
     }
 
+    /// 段2 数据帧编解码互逆：`encode_data_frame` 产出的帧必须能被 `parse_tb_frames`
+    /// 还原出同一字节区间与负载（前端按同一布局解析，两端只有一份帧语义）
+    #[test]
+    fn encode_data_frame_round_trips_through_parser() {
+        let payload = b"\x1b[32mhello\x1b[0m";
+        let encoded = encode_data_frame(4096, payload);
+        assert_eq!(encoded.len(), TB_FRAME_HEADER_LEN + payload.len());
+        assert_eq!(&encoded[0..2], &TB_MAGIC);
+        assert_eq!(encoded[2], TB_VERSION_V3);
+        assert_eq!(encoded[3], TB_FLAG_DATA);
+
+        let frames = parse_tb_frames(&encoded);
+        assert_eq!(frames.len(), 1, "单帧编码只应解析出一帧");
+        assert_eq!(frames[0].start, 4096);
+        assert_eq!(frames[0].end, 4096 + payload.len() as u64, "end 必须等于 start + len");
+        assert_eq!(frames[0].data, payload);
+
+        // 多帧拼接（通道单条消息可能承载多帧）：偏移连续且互不串扰
+        let mut two = encode_data_frame(0, b"aa");
+        two.extend_from_slice(&encode_data_frame(2, b"bb"));
+        let frames = parse_tb_frames(&two);
+        assert_eq!(frames.len(), 2);
+        assert_eq!((frames[0].start, frames[0].end), (0, 2));
+        assert_eq!((frames[1].start, frames[1].end), (2, 4));
+    }
+
+    /// ack 驱动的段2 补投决策
+    ///
+    /// 契约：ack 推进渲染游标 → 必须给出补投区间（长历史拼接后窗口仍高于低位水时
+    /// 亦然——这正是「输入无回显」死锁的解药）；无推进 / 无待投递 → 不补投。
+    #[test]
+    fn ack_backlog_push_requires_advance_and_backlog() {
+        let max = SEG2_ACK_PUSH_CHUNK_BYTES;
+        let cursor = 4 * 1024 * 1024;
+
+        // 正例：ack 推进且有滞留 → 从推进后的游标起补投一段
+        assert_eq!(
+            ack_backlog_push_range(1024, 2048, cursor, max),
+            Some((2048, 2048 + max)),
+            "ack 推进必须补投其后滞留字节"
+        );
+
+        // 反例：ack 未推进（陈旧/重复 ack）→ 无新窗口，不补投
+        assert_eq!(ack_backlog_push_range(2048, 2048, cursor, max), None);
+        assert_eq!(ack_backlog_push_range(4096, 2048, cursor, max), None);
+
+        // 反例：已追平（无待投递字节）→ 不补投（避免空转/重推）
+        assert_eq!(ack_backlog_push_range(0, 4096, 4096, max), None);
+
+        // 边界：剩余滞留不足一段 → 收口到 cursor（不得越界推未收到的字节）
+        assert_eq!(ack_backlog_push_range(0, 4096, 4096 + max / 2, max), Some((4096, 4096 + max / 2)));
+
+        // 边界：额度为 0（未配置）→ 不补投
+        assert_eq!(ack_backlog_push_range(1024, 2048, cursor, 0), None);
+
+        // 边界：钳到 cursor 后恰等于起点 → 不补投
+        assert_eq!(ack_backlog_push_range(1024, cursor, cursor, max), None);
+    }
+
     /// 连续段切分：段内连续、段间有洞必须切开——跨洞合成一帧会让消费端按
     /// 帧头区间推导的负载与真实负载错位（转义序列接在半途）
     #[test]
@@ -1992,27 +2185,38 @@ mod tests {
         assert_eq!(runs[0].1, b"fghij");
     }
 
-    /// 段2 订阅态挂在管理器上（独立于链路）：链路未建立也记录订阅意愿，
-    /// 同一会话始终返回同一份开关（链路重建后沿用）
+    /// 段2 订阅态与推送通道槽挂在管理器上（独立于链路）：链路未建立也记录订阅意愿，
+    /// 同一会话始终返回同一份开关/通道（链路重建后沿用）；取消订阅与会话删除
+    /// 必须一并清空通道，否则补投会持续往已卸载的页面发
     #[test]
     fn manager_page_subscription_is_session_scoped_and_persistent() {
         let manager = TerminalLinkManager {
             links: Mutex::new(HashMap::new()),
             consumers: Mutex::new(HashMap::new()),
+            page_channels: Mutex::new(HashMap::new()),
         };
+        let channel: Channel<InvokeResponseBody> = Channel::new(|_| Ok(()));
+
         // 初始未订阅（含未记录过的会话）
         assert!(!manager.is_page_subscribed("s1"));
 
-        manager.page_subscribe("s1");
+        manager.page_subscribe("s1", channel.clone());
         assert!(manager.is_page_subscribed("s1"));
         let flag = manager.consumer_flag("s1");
         assert!(flag.load(Ordering::SeqCst));
 
-        // 同一会话多次 get-or-create 返回同一 Arc（链路重建后沿用订阅态）
+        // 同一会话多次 get-or-create 返回同一 Arc（链路重建后沿用订阅态 + 通道槽）
         assert!(Arc::ptr_eq(&flag, &manager.consumer_flag("s1")));
+        let slot = manager.consumer_channel("s1");
+        assert!(
+            slot.lock().unwrap().is_some(),
+            "段2 订阅必须登记推送通道（帧的唯一出口）"
+        );
+        assert!(Arc::ptr_eq(&slot, &manager.consumer_channel("s1")));
 
-        // 会话隔离
+        // 会话隔离：另一会话既不订阅、也没有通道
         assert!(!manager.is_page_subscribed("s2"));
+        assert!(manager.consumer_channel("s2").lock().unwrap().is_none());
 
         manager.page_unsubscribe("s1");
         assert!(!manager.is_page_subscribed("s1"));
@@ -2020,11 +2224,16 @@ mod tests {
             !flag.load(Ordering::SeqCst),
             "取消订阅必须作用在同一份开关上（链路持有的 Arc 同步可见）"
         );
+        assert!(
+            manager.consumer_channel("s1").lock().unwrap().is_none(),
+            "退出页面必须清空推送通道"
+        );
 
-        // 会话删除：订阅态一并作废
-        manager.page_subscribe("s1");
+        // 会话删除：订阅态与通道一并作废
+        manager.page_subscribe("s1", channel);
         manager.remove("s1");
         assert!(!manager.is_page_subscribed("s1"));
+        assert!(manager.consumer_channel("s1").lock().unwrap().is_none());
     }
 
     fn push_data(cache: &mut SessionCache, start: u64, data: &[u8]) {

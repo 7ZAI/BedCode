@@ -225,8 +225,12 @@ pub fn run() {
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
             // Terminal Link（会话级终端 WS，Rust 后端持有）
+            // 段1：Rust ↔ 桌面端（会话级）
             terminal_link::terminal_subscribe,
             terminal_link::terminal_unsubscribe,
+            // 段2：前端 ↔ Rust（页面级）
+            terminal_link::terminal_page_subscribe,
+            terminal_link::terminal_page_unsubscribe,
             terminal_link::terminal_unsubscribe_all,
             terminal_link::terminal_remove,
             terminal_link::terminal_send_input,

@@ -323,3 +323,139 @@ metadata:
 「一次 ack 即解锁」关系已成立，放宽到 256KB 反而要求桌面高位水同步抬到 ≥320KB
 （更接近 WebKit/WS 缓冲上界），收益（少发 ack 帧）不足以抵消风险。三段容量预算表
 见 `docs/knowledge/pty-output-pipeline.md` §1.6。
+
+### 16. 键盘避让连带 ±1 列漂移 → 整缓冲重排 + 多余整屏重绘（2026-09-18）
+
+**症状**：会话有较长历史输出时，每次键盘弹出/收起（避让）后终端都像被"刷新"了一下；
+历史短时几乎无感，长历史时肉眼可见。
+
+**取证**（真机 dev 日志，双源时间轴对齐）：
+
+- 原生 `[EdgeToEdge] WindowInsets Keyboard:true(822)` / `false(0)` 与前端 `onResize` 严格一一对应：
+  弹出 `97x31`、收起 `96x52`——**列在 96↔97 之间翻转**（DPR 口径下应恒为 96）
+- 每次键盘事件各触发一次 `send resize to PTY`
+- 日志中无 `[TerminalView] fit:` 行 → 确认走 ResizeObserver → `applyResize` 路径（非 fit 轮询路径）
+
+**根因（三层叠加）**：
+
+1. 键盘避让 = 根容器高度收缩 → 行数变化 → `term.resize()`。xterm 内部 resize 本身必然整屏重绘
+   （`RenderService.handleResize → _fullRefresh`），这一步无法避免（可见行确实变了）
+2. `shouldApplyGridResize` 的「行变化立即生效」是提前 `return true` 的短路，把本应裁掉的 ±1 列
+   测量漂移**一并写进网格**；而 xterm `Buffer._reflow` 以「列是否变化」为唯一开关
+   （`if (this._cols === newCols) return`），列一变即走 `reflowLarger/reflowSmaller` 遍历并重写
+   **整个 scrollback**（移动端 10000 行；`_isReflowEnabled` 依赖 `_hasScrollback`，故仅 normal
+   buffer 的长时间历史付这份成本）→ 历史越长，每次键盘避让越重
+3. `scheduleAtlasPreheat` 无条件排一次 700ms 后的整屏 refresh——它只服务 WebGL 字符图集，
+   而移动端 `USE_WEBGL_RENDERER = false`（DOM 渲染器无图集），属纯多余的第二次全屏重绘
+
+**修复**：
+
+- `utils/terminalResizePolicy.ts`：`shouldApplyGridResize`（布尔）→ `resolveGridResize`（返回目标
+  网格）：列偏差 ≤1 保持当前列、>1 采用目标列；行任意变化立即生效；结果与当前网格一致返回 null
+  （调用方不 resize）。语义与原实现的触发条件一致，只把「被钳制的漂移」挡在写入值之外
+- `composables/terminal/useTerminalRenderer.ts`：`scheduleAtlasPreheat` 门控 webglAddon 非空
+  （对齐桌面端同款"无图集即 no-op"语义）
+- 同批把 `TerminalView.vue` 按域拆分为 `composables/terminal/`
+  （terminalKernel + 渲染器 / resize / 键盘避让 / 订阅），组件退化为编排层；
+  范式参考桌面端 `composables/terminal/`
+
+**Why**：列漂移是测量口径差（DPR 换算 + 每次 resize 后 xterm 重测字体的 subpixel 偏差），
+钳制它本来就是策略本意；行变化必须生效（网格与容器高度不一致会露顶部空带或裁掉末行）。
+二者必须在"写入值"层面分离，否则容差形同虚设。
+
+**How to apply**：任何「容差钳制」都要先回答「钳制的是触发条件还是写入值」——触发条件放宽、
+写入值照抄目标，会把本应丢弃的漂移重新引入（本例即每次键盘避让白付一次整缓冲重排）。
+
+**回归护栏**：`resolveGridResize` 12 例（列 ±1 且行不变 / 列 ±1 且行变化保持当前列 / 行双向 /
+列偏差 >1 / 完全一致 / 常量）。验证：移动端 `pnpm run test:run` 461 绿、
+`vue-tsc --noEmit` 0 错、根 `pnpm exec eslint .` 0 error。
+
+**遗留观察**：列 96↔97 的输入侧来源（容器 `clientWidth` 变化还是 xterm 重测的 `css.cell.width`
+漂移）未最终定位；本次按"不写进网格"处理即消除其代价（reflow）。需继续追查时在 `applyDprFit`
+打点 `containerWidth / cellWidth / targetCols`（已保留钳制后的 `applyDprFit:` debug 日志可对照）。
+
+### 17. 段2 背压死锁：长历史拼接后「输入无回显」（2026-09-18）
+
+**症状**：进入有长历史的会话 → 历史显示正常 → **输入字符终端无回显**。
+
+**根因链条**（真机日志 `android-dev.2026-09-18.log`，Rust 段2 状态与前端 ack 双源时间轴对齐）：
+
+1. `terminal_page_subscribe` 后，历史段冲刷使段2 未渲染窗口越过高位水 → `seg2_paused=true`
+   （日志仅此一条状态变更）
+2. 前端拼接 16MB 历史耗时约 4s，期间 `cursor` 涨到 ~36.8MB；拼接完成时 ack(34.1MB)（`snapshotOffset`）
+3. 旧 `seg2_drain()` 要求窗口**已回落到低位水**才补投 → 此刻窗口仍 2.7MB → 直接 return：
+   不补投、也不解除暂停
+4. 消费端推进窗口的唯一手段是**收到帧**，而帧被暂停 → 前端再无帧、再无 ack → 永久停推。
+   `frames_live=0` 恰好印证「从未 emit 过任何帧」（历史走 `terminal_get_history` 命令，不受段2 门控）
+
+时间轴：`02:46:38.106 paused=true` → `02:46:45.551 history splice start` →
+`02:46:49.736 render ack #1` + `history splice done: cursor=34104984, flushedLiveFrames=0 (0B)` →
+之后 `frames_live=0` 持续到日志结束。
+
+**修复**（`src-tauri/src/terminal_link.rs`）：
+
+- 新增常量 `SEG2_ACK_PUSH_CHUNK_BYTES = SEG2_LOW_WATER_BYTES`：单次补投上限，防一次灌数 MB
+  淹没 IPC 与 WebView 解析（正是段2 背压要防的事）
+- 新增纯函数 `ack_backlog_push_range(rendered_before, rendered_after, cursor, max_bytes)`：
+  **ack 推进**才补投、按 `cursor` 收口、按额度切片
+- `seg2_drain(max_bytes)` 重写为 **ack 驱动**：无条件解除暂停 → 按字节额度切片补投
+  `contiguous_runs(frontend_rendered)` → 推完按 `unrendered > SEG2_HIGH_WATER_BYTES` 重估暂停态
+  （仍超则继续暂停，等下一次 ack 再解锁——投递节奏由消费端掌控）
+- `seg2_mark_rendered()` 用纯函数决定是否补投；新增 debug 日志
+  `seg2 backlog pushed on render ack`（from_offset / drained_bytes / unrendered_bytes / paused）
+
+**Why**：段2 的窗口只能由「消费端收到帧」推动（`frontend_rendered` 单调不减、`cursor` 单调增
+⇒ 滞回下沿在真实运行中永不触发）。把补投条件写成「先降回低位水」必然互等：消费端等帧、
+生产端等窗口回落。补投必须由 ack 驱动，才能既不淹没 WebView 又不空等。
+
+**回归护栏**：`ack_backlog_push_requires_advance_and_backlog`（正例：ack 推进且有滞留 → 给出
+`[from, from+max)`；反例：无推进 / 无滞留 / `max_bytes=0` → `None`）；`cargo test --lib terminal_link`
+33 绿。`seg2_paused_after` 及其单测**刻意保留**（它决定新帧是否直推），注释已写明
+「回落低位水恢复」分支在新实现下不可达。
+
+**待办**：真机复测——长历史会话进入后输入应即时回显，日志应出现若干条
+`seg2 backlog pushed on render ack` 并最终 `paused=false`。
+
+### 18. 段2 帧出口改 Tauri IPC Channel（TB v3 二进制 Raw 帧，2026-09-18）
+
+**背景**：段2 输出帧此前走全局 `terminal-frame` 事件（`emit` + base64 载荷），开销 =
+事件全局广播 + JSON 序列化 + base64 编解码（+33% 体积）。
+
+**分工（已定，勿再摇摆）**：**帧（高频大负载）走页面级 Channel + TB v3 二进制；状态/重锚
+（低频）保留全局事件**。与桌面端 `subscribe_terminal_channel` 同构；差异是移动端把控制面留在
+事件里（`terminal-state` / `terminal-resync` 是全局状态机，页面卸载后仍需收敛 UI）。
+
+**TB v3 帧布局（两端同源，改布局必须两端同步）**：
+`magic 'T','B'(2) + version 3(1) + flags(1，数据帧 0x00 / ACK 0x02) + start_offset(8 LE) + len(4 LE) + payload`，
+`end = start + len`。一条 Channel 消息**可承载多帧**（补投切片只落在字节边界），故前端按 16B
+帧头循环解析而非「一条消息一帧」——与段1 wire 协议同一口径，帧语义只留一份真源。
+
+**实现要点**：
+
+- **Rust**（`terminal_link.rs`）：`emit_frame` 改为 `channel.send(InvokeResponseBody::Raw(encode_data_frame(..)))`；
+  发送失败即「消费端已离去」→ 记 warn + 就地清空槽位。`seg2_channel`
+  （`Arc<Mutex<Option<Channel<InvokeResponseBody>>>>`）与订阅态同由**管理器**持有 → 链路重建沿用
+  （避免「链路重建即静默失联」）；`page_subscribe(session_id, channel)` 登记、`page_unsubscribe`
+  与 `remove` 一并清空；锁序固定 `page_channels → consumers → links`（注释已写明）
+- **前端**（`stores/terminalBuffer.ts`）：`markPageEntered` 新建 `Channel<ArrayBuffer>`、**先挂
+  `onmessage` 再 invoke**（invoke 在途时到达的帧不会因缺回调而丢）；`markPageLeft` **先把
+  `onmessage` 换成空操作**再 `terminal_page_unsubscribe`；`onChannelMessage` 按 16B 头逐帧解析
+  （magic / 版本 / 长度越界即告警停止解析，交缺口自愈路径重拼接），负载用 `slice()` 切开与整条
+  消息视图的关联；已删除 `terminal-frame` 监听（`terminal-state` / `terminal-resync` 保留）
+- **为何不能 `channel.onmessage = null`**：真实 `Channel` 的 `onmessage` 类型不可空，其调度处直接
+  `this.#onmessage.call(...)`——置 null 会让「取消订阅瞬间的在途帧」抛 TypeError（vue-tsc 也报错）；
+  空操作回调语义等价且安全（真实实现构造时就以 `onmessage || (() => {})` 兜底）
+- **测试接缝**：`src/__tests__/setup.ts` 提供全局 `@tauri-apps/api/core` 替身（真实 `Channel` 构造
+  依赖 WebView 注入的 `__TAURI_INTERNALS__.transformCallback`）；store / 集成测试从
+  `terminal_page_subscribe` 的调用参数取回通道，投喂真实 TB v3 字节（测试内断言
+  `end − start` 必须等于负载长度，即用例本身充当协议校验）
+
+**取舍**：省掉 base64 与 JSON，负载 −33% 且免解析；per-page 通道无全局广播开销。代价是输出帧
+不再能经事件名旁路消费（当前无此需求），调试期需从 Channel 统计日志
+（`[terminalBuffer] frame stats`）而非事件名过滤。页面卸载后 Rust 发送失败自动清槽——订阅态与
+通道生命周期严格绑页面，无需额外握手。
+
+**验证**：移动端 `pnpm run test:run` 461 绿、`vue-tsc --noEmit` 0 错、根 `pnpm exec eslint .` 0 error；
+Rust `cargo test --lib terminal_link` 33 绿。
+
+**待办**：真机复测（Rust 与前端必须同版本）。
