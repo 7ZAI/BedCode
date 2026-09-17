@@ -56,16 +56,21 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   └── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
 │                                     #   切换、共享目录浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID
 │                                     #   重发即断点续传）、接收策略与历史归档、本地目录挂载供对端访问
-├── src/                              # Vue 3 前端（扁平化结构）
+├── src/                              # Vue 3 前端（扁平化结构 + 领域子目录）
 │   ├── components/                   # UI 组件：桌面布局、会话卡片/表单/列表、侧边栏、终端预览、
-│   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件
+│   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件；
+│   │                                 #   settings/ 下为设置页分组子组件（外观/配对/链路加密/会话/系统/日志/关于）
 │   ├── composables/                  # 业务逻辑 composable：桌面命令、网络、配对、插件管理、PTY 输出、
-│   │                                 #   全局终端、快捷键、主题、字体、WSL、更新检查等
+│   │                                 #   全局终端、快捷键、主题、字体、WSL、更新检查等；
+│   │                                 #   terminal/ 下为终端内核域（写入管线/渲染器/resize/设置同步/滚动，
+│   │                                 #   TerminalPreview 拆分产物，经 terminalKernel 交换实例与回调）；
+│   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话/设备/设置/事件监听），
+│   │                                 #   useDesktopCommands 为聚合层 re-export
 │   ├── stores/                       # Pinia 全局状态：设备、会话、设置、输入助手、快捷操作、WSL、i18n
-│   ├── views/                        # 页面：设备、插件、插件配置、会话管理/配置、设置、终端窗口、服务器
+│   ├── views/                        # 页面：设备、插件、插件配置、会话管理/配置、设置（编排层）、终端窗口、服务器
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
-│   │                                 #   共享模块运行时；components/ 下为插件 UI 宿主组件
-│   ├── utils/                        # 工具函数（Tauri invoke 封装等）
+│   │                                 #   共享模块运行时、运行时事件监听（runtime-listeners）；components/ 下为插件 UI 宿主组件
+│   ├── utils/                        # 工具函数（Tauri invoke 封装、终端主题数据 terminalThemes、格式化 format 等）
 │   ├── locales/                      # 国际化（zh-CN / en，各含 common / desktop / settings）
 │   ├── router/                       # 路由
 │   ├── dev/                          # 开发调试资源：终端 mock、PTY 输出 dump

@@ -129,63 +129,56 @@
     </Modal>
   </div>
 </template>
-
 <script setup lang="ts">
 /**
  * 终端预览组件 — 桌面端终端渲染内核（xterm.js）
  *
  * 设计目标：VS Code 终端体验 — 输出渲染正确无重影、滚动流畅、高吞吐性能。
- * 分层职责：
- * - 写入管线：实时输出合并为单次 write（DEC 2026 同步输出包裹），
- *   渲染器缓存所有变更到下一帧统一绘制，避免逐块绘制的撕裂/重影
- * - 渲染：WebGL addon（context loss 自动回退），滚动/重绘完全交给
- *   xterm 渲染循环，不做手动全量 refresh 补丁
- * - 滚动：onScroll 仅驱动"是否在底部"状态，scrollToBottom 经 rAF 合并，
- *   同一帧内多次输出只滚动一次
- * - 尺寸：ResizeObserver + 分层防抖 fit（垂直立即 / 水平 100ms 合并；
- *   小缓冲 <200 行免防抖立即应用）+ DPR 感知行列计算，cols/rows 实际变化
- *   才全量重绘与同步 PTY；0 尺寸（最小化）忽略不缩 PTY，恢复可见时 flush
- *   一次兑现挂起防抖
+ * 本组件为编排层：复杂逻辑按域拆分到 src/composables/terminal/ 下，
+ * 共享状态经 terminalKernel 上下文交换（各域创建顺序无关）：
+ * - useTerminalWritePipeline：写入管线（rAF 合并 / 分片背压 / 回放静止补刷）+ 本地 WS 输出流
+ * - useTerminalRenderer：WebGL/DOM 渲染器决策、重建（spec D-1）、atlas 预热、DPR fit
+ * - useTerminalResize：正统渲染端 resize 裁决（needsConfirmation 弹窗）
+ * - useTerminalSettingsSync：字号 / 主题 / 背景图片同步（防抖持久化）
+ * - useTerminalScroll：滚动状态 / 滚动到底 / 清屏 / 刷新
  *
  * 终端窗口模式（TerminalWindowView）下 show-header=false，工具栏由外层
  * 统一管理；本组件仅通过 defineExpose 暴露主题/字号/清屏/刷新等能力。
  */
 import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
-import { logger } from '@/utils/frontendLogger'
 import { useI18n } from 'vue-i18n'
 import type { SessionInfo } from '@/stores/session'
 import { useSessionStore } from '@/stores/session'
 import { useSettingsStore } from '@/stores/settings'
 import { useToast } from '@/composables/useToast'
-import type { RendererSource } from '@/composables/useDesktopCommands'
+import { logger } from '@/utils/frontendLogger'
 import Button from '@/components/Button.vue'
 import Modal from '@/components/Modal.vue'
 import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
-import { useTerminalOutputStreamChannel } from '@/composables/useTerminalOutputStreamChannel'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
 import { computeDesktopInitialTerminalSize } from '@/utils/terminalInitialSize'
-import { shouldApplyGridResize } from '@/utils/terminalResizePolicy'
 import {
-  decideRenderer,
-  decideAtlasRefreshFrames,
-  ATLAS_PREHEAT_FRAME_BUDGET,
-} from '@/utils/terminalRendererPolicy'
-import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
+  LINUX_FONT_STACK,
+  DEFAULT_FONT_STACK,
+  TERMINAL_FONT_SIZES,
+  TERMINAL_THEME_NAMES,
+} from '@/utils/terminalThemes'
 import { attachLinuxImeGuard, type LinuxImeGuard } from '@/utils/terminalLinuxImeGuard'
 import { initPlatform } from '@/composables/usePlatform'
-import { PLATFORM_UI_SCALE } from '@/composables/useFontSize'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
-import { WebglAddon } from '@xterm/addon-webgl'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { on as pluginEventOn, emit as pluginEventEmit, clearPluginEvents } from '@/plugin/events'
-import { invoke } from '@tauri-apps/api/core'
+import { createTerminalKernel } from '@/composables/terminal/terminalKernel'
+import { useTerminalWritePipeline } from '@/composables/terminal/useTerminalWritePipeline'
+import { useTerminalScroll } from '@/composables/terminal/useTerminalScroll'
+import { useTerminalRenderer } from '@/composables/terminal/useTerminalRenderer'
+import { useTerminalResize } from '@/composables/terminal/useTerminalResize'
+import { useTerminalSettingsSync } from '@/composables/terminal/useTerminalSettingsSync'
 import '@xterm/xterm/css/xterm.css'
-
-/** XP 会话本地 WS 订阅（快照模型，07）：min_seq/max_seq/history_count 元数据 + TB v2 帧 */
 
 interface Props {
   session?: SessionInfo | null
@@ -205,274 +198,26 @@ const toast = useToast()
 const sessionStore = useSessionStore()
 const settingsStore = useSettingsStore()
 const terminalHostRef = ref<HTMLElement | null>(null)
-const fontSize = ref(settingsStore.settings.ui.terminal_font_size)
-const terminalTheme = ref<string>(settingsStore.settings.ui.terminal_theme || 'dracula')
 
-// Linux 平台优化：isLinux 在 onMounted 中 await initPlatform() 后确定（消除
-// setup 时 platform 尚未解析的竞态）；仅 Linux 启用 IME 去重与专用字体栈
-const isLinux = ref(false)
+// ==================== 内核与域实例化 ====================
+// 共享内核：xterm 实例、平台标记、模板挂载点与跨域回调统一经 ctx 交换
+// （回调调用时解析，域创建顺序无关；详见 terminalKernel.ts）
+const kernel = createTerminalKernel(() => props.session, terminalHostRef)
+const settings = useTerminalSettingsSync(kernel)
+const pipeline = useTerminalWritePipeline(kernel)
+const scroll = useTerminalScroll(kernel)
+const renderer = useTerminalRenderer(kernel)
+const resize = useTerminalResize(kernel)
 
-// 终端视觉字号：去 zoom 后（issue 06）Linux 按 PLATFORM_UI_SCALE 放大，视觉字号
-// = 设置值 × 1.15，等效原 zoom；用户设置值（terminal_font_size）与下拉显示保持原值不乘
-const effectiveFontSize = computed(() =>
-  isLinux.value ? fontSize.value * PLATFORM_UI_SCALE : fontSize.value,
-)
-
-// Linux 专用等宽字体栈：优先系统自带、hint 较强的等宽字体（DejaVu Sans Mono /
-// Liberation Mono 对 canvas fillText 的像素对齐更好，Ubuntu Mono 笔画偏软），确保
-// WebKitGTK 用真实系统等宽字体渲染，避免默认栈（Cascadia Mono 等 Windows 字体）
-// 在 Linux 上回退非等宽字体导致的字符间距过大/模糊；Windows/macOS 保持原有字体栈
-const LINUX_FONT_STACK =
-  "'DejaVu Sans Mono', 'Liberation Mono', 'Ubuntu Mono', 'Noto Sans Mono', 'Noto Mono', 'Cascadia Mono', 'Consolas', 'Courier New', monospace"
-const DEFAULT_FONT_STACK = 'Cascadia Mono, Consolas, Monaco, Courier New, monospace'
-// Linux WebKitGTK 终端渲染器选择：WebGL 字形图集在 dpr=1 时按 Math.floor(advance)
-// 切格 + LINEAR 采样，文字比原生终端发蒙；DOM(canvas) 渲染器逐字形 fillText，
-// 边缘更清晰（对齐 VS Code Linux 默认关 GPU 加速的做法）。置 false 可切回 WebGL 对比。
-const LINUX_USE_DOM_RENDERER = true
-// 背景图片：设置中存原始文件名（仅用于判断是否启用与回显），
-// 实际图片由本地服务器 /static/terminal-bg 端点提供
-const bgImage = ref<string>(settingsStore.settings.ui.terminal_bg_image || '')
-const bgOpacity = ref<number>(settingsStore.settings.ui.terminal_bg_opacity ?? 30)
-const bgImageUrl = ref('')
-
-// 渲染器/透明度决策（spec D-1 / D-2，route 默认 'B'）：背景图开启时强制 DOM
-// 渲染器（透明天然正确，一次切断 alpha 帧缓冲 + 无条件透明 viewport 两条残影
-// 通路）；Linux 无画布场景保持既有 LINUX_USE_DOM_RENDERER 事实选择；其余场景
-// WebGL（高吞吐）。isLinux 在 onMounted 中 await initPlatform() 后才确定，而
-// initTerminal 在之后调用，故此 computed 首次被消费时输入已就绪
-const rendererDecision = computed(() =>
-  decideRenderer({
-    isLinux: isLinux.value,
-    hasBackgroundImage: !!bgImageUrl.value,
-    linuxUseDomRenderer: LINUX_USE_DOM_RENDERER,
-  }),
-)
-
-// ==================== xterm 实例 ====================
-
-let terminal: Terminal | null = null
-let fitAddon: FitAddon | null = null
-// Linux 平台 IME 防护（WebKitGTK 输入法多层去重 + textarea 提交后清空，仅
-// Linux 启用；三层缓解的完整说明见 utils/terminalLinuxImeGuard.ts）
-let imeGuard: LinuxImeGuard | null = null
-// WebGL resize 后字符图集重建的补刷（atlas 预热）：rAF 有界迭代补全量重绘，
-// 让 idle 分片异步光栅化的非 ASCII 字形逐步上屏（替代固定延时猜数，见
-// scheduleAtlasPreheat）。0 表示当前无迭代在跑
-let atlasPreheatRaf = 0
-let webglAddon: WebglAddon | null = null
-// 渲染器重建序列号（spec D-1 竞态守卫）：每次透明度状态切换重建渲染器时递增，
-// context-loss 的 1s 异步恢复回调比对序列号，旧序列号（被更新的重建覆盖的
-// addon 周期）的回调一律丢弃——快速连续切背景图时只有最新一次重建的 addon 存活，
-// 对齐 VS Code _webglAddonLoadId 递增守卫（xtermTerminal.ts:901 / :1039）
-let rendererRebuildSeq = 0
-let resizeObserver: ResizeObserver | null = null
-// resize 分层防抖：垂直立即 / 水平 100ms 合并（对齐 VS Code TerminalResizeDebouncer）
-let resizeDebouncer: TerminalResizeDebouncer | null = null
-// 前台 flush 监听（对齐 VS Code 切回前台时对 debouncer 的 flush 语义）：
-// 后台/最小化期间的尺寸变化挂起防抖，恢复可见时以最终尺寸一次性兑现
-let windowVisibleHandler: (() => void) | null = null
-// DPR 变化监听（跨屏拖动 / 系统缩放变化）：matchMedia 递归注册，卸载时移除
-let dprMediaQuery: MediaQueryList | null = null
-let dprChangeHandler: ((e: MediaQueryListEvent) => void) | null = null
-
-// 滚动状态追踪
-const isUserScrolling = ref(false)
-
-// rAF 节流：同一帧内多次 scrollToBottom 调用只执行一次
-let pendingScrollRaf = 0
-
-// xterm onScroll 取消监听（IDisposable 接口）
-let scrollDisposable: import('@xterm/xterm').IDisposable | null = null
-
-// 选区状态：有选区时 Ctrl+C 应复制而非发送中断（VS Code 终端行为）
-let hasSelection = false
-
-// Ctrl+滚轮缩放监听（passive:false），卸载时移除
-let wheelHandler: ((e: WheelEvent) => void) | null = null
-
-// 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
-let currentLineBuffer = ''
+// 模板同名绑定（域返回值解构，template 零改动）
+const { terminalTheme, fontSize, themeSelectOptions, fontSizeSelectOptions } = settings
+const { bgImageUrl, bgOpacity, containerBgColor } = settings
+const { isUserScrolling, clearTerminal, refreshTerminal, scrollToBottomManual } = scroll
+const { rendererDecision } = renderer
+const { showRendererOverrideModal, rendererOverrideTarget, confirmRendererOverride, cancelRendererOverride } =
+  resize
 
 const sessionId = computed(() => props.session?.id || '')
-
-// ==================== 本地 WS 二进制输出流 ====================
-// 单一通道（历史回放 + 实时推送），seq 级连续性由 composable 守护：
-// - onData：去重/连续性校验通过后的原始字节帧，直接入 rAF 写入管线
-// - onReset：快照重订阅遇到历史截断（min_seq > last_rendered_seq + 1）时清屏，
-//   重播帧随后全量流式写入
-// - onTruncated:min_seq > 0 说明会话开头输出已不可恢复，提示用户
-
-// ==================== 写入管线 ====================
-// 实时输出合并：同一渲染帧内的多个输出事件合并为一次 write（2026 包裹），
-// 渲染器只刷新一次，高频输出（spinner/进度条/日志洪流）时吞吐显著提升。
-// 为什么用 rAF 而不是 queueMicrotask：Tauri 事件每个都是独立 macrotask，
-// 微任务会在每个事件后立即 flush，无法跨事件合并；rAF 才能把同一帧内
-// 到达的所有事件合为一次 write。窗口最小化时 rAF 暂停，由兜底定时器保证
-// 队列最终被清空。
-
-let writeQueue: Uint8Array[] = []
-let writeQueueBytes = 0
-let flushRaf = 0
-let flushTimer: ReturnType<typeof setTimeout> | null = null
-
-// 回放静止补刷：订阅/重订阅后的历史回放与渲染器冷启动时序竞态，可能留下
-// 未被后续帧覆盖的中间态（字符残缺/错位，用户需手动点刷新才恢复）。
-// 机制：订阅后置补刷标记，每次有数据入队重置静止计时器；回放完毕连续
-// REPLAY_IDLE_MS 无新数据 → 自动补一次全量重绘（等价用户点击刷新，
-// glyph 缓存全部命中，无副作用；实时持续输出时计时器不断重置不会触发）
-const REPLAY_IDLE_MS = 250
-let replayRefreshTimer: ReturnType<typeof setTimeout> | null = null
-let pendingReplayRefresh = false
-
-// 单次 write 上限：超过则拆块，让 xterm parser 在块间让出主线程，
-// 避免单帧解析超大字符串导致 UI 卡顿
-const MAX_WRITE_CHUNK = 64 * 1024
-
-// 写入策略：rAF 合并同帧事件为一次 write（对齐 VS Code 行为，xterm.js 内部再统一调度渲染）；
-// 大块（> MAX_WRITE_CHUNK）经 writeInChunks 分片，每 WRITE_YIELD_THRESHOLD 让出主线程一次。
-
-let flushing = false
-// 写入水线阈值（对齐 VS Code high-water 思想）：单次 flush 累计写入达到该值即让出
-// 主线程一次（宏任务），使渲染/输入能在历史回放或输出风暴期间插入，避免 UI 冻结。
-// 仅控制"写节奏"，不限制总量——积压数据仍在 writeQueue，下个 while 轮次继续写。
-const WRITE_YIELD_THRESHOLD = 256 * 1024
-
-async function flushWriteQueue() {
-  // 避免重入：已有 flush 在跑（其 while 轮次会消费新入队数据），直接返回
-  if (flushing) return
-  flushing = true
-  // 清掉 rAF / timer 标记（本次 flush 接管调度）
-  flushRaf = 0
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimer = null
-  }
-  try {
-    while (writeQueue.length > 0) {
-      if (!terminal) {
-        // 终端未就绪：丢弃（数据已进全局缓存，可从历史恢复）
-        writeQueue = []
-        writeQueueBytes = 0
-        return
-      }
-      const chunks = writeQueue
-      const totalBytes = writeQueueBytes
-      writeQueue = []
-      writeQueueBytes = 0
-
-      // 合并同帧所有事件为单块字节，一次 write
-      const combined = new Uint8Array(totalBytes)
-      let offset = 0
-      for (const chunk of chunks) {
-        combined.set(chunk, offset)
-        offset += chunk.byteLength
-      }
-
-      if (totalBytes <= MAX_WRITE_CHUNK) {
-        terminal.write(combined)
-      } else {
-        await writeInChunks(combined)
-      }
-    }
-  } finally {
-    flushing = false
-  }
-}
-
-/** 分片写入：按 MAX_WRITE_CHUNK 拆块写，每累积 WRITE_YIELD_THRESHOLD 让出主线程一次 */
-async function writeInChunks(buf: Uint8Array) {
-  // 防御：调用方 flushWriteQueue 已保证 terminal 非空，此处收窄类型（并发 agent 新增函数）
-  if (!terminal) return
-  let written = 0
-  for (let i = 0; i < buf.length; i += MAX_WRITE_CHUNK) {
-    terminal.write(buf.subarray(i, i + MAX_WRITE_CHUNK))
-    written += MAX_WRITE_CHUNK
-    if (written >= WRITE_YIELD_THRESHOLD) {
-      written = 0
-      // 宏任务让出：风暴期间允许渲染/输入插入，防 UI 冻结
-      await new Promise((r) => setTimeout(r, 0))
-    }
-  }
-}
-
-function armReplayRefresh() {
-  pendingReplayRefresh = true
-  if (replayRefreshTimer) clearTimeout(replayRefreshTimer)
-  replayRefreshTimer = setTimeout(() => {
-    replayRefreshTimer = null
-    if (!pendingReplayRefresh) return
-    pendingReplayRefresh = false
-    // xterm 已销毁（element 已脱离 DOM）则不再重绘
-    if (terminal && terminal.element?.isConnected) {
-      terminal.refresh(0, terminal.rows - 1)
-    }
-  }, REPLAY_IDLE_MS)
-}
-
-/** 入队输出：合并到下一渲染帧统一写入 */
-function enqueueOutput(data: Uint8Array) {
-  if (data.length === 0) return
-  writeQueue.push(data)
-  writeQueueBytes += data.byteLength
-  // 数据继续到达 = 回放/输出仍在进行：重置静止补刷计时器（仅在补刷待命期）
-  if (pendingReplayRefresh) {
-    armReplayRefresh()
-  }
-  if (flushRaf) return
-  // rAF 合并同帧事件；100ms 兜底：窗口最小化（rAF 暂停）时也能及时清空队列
-  flushRaf = requestAnimationFrame(flushWriteQueue)
-  if (!flushTimer) {
-    flushTimer = setTimeout(() => {
-      flushTimer = null
-      if (flushRaf) {
-        cancelAnimationFrame(flushRaf)
-        flushRaf = 0
-      }
-      void flushWriteQueue()
-    }, 100)
-  }
-}
-
-// 本地 WS 输出流（快照模型）:
-// - onData 帧已通过 seq 连续性校验/重播去重，直接写入（无去重/无补序）
-// - onReset 时清屏：快照重订阅遇到历史截断（已渲染区被环形淘汰）后全量重播
-// - onTruncated（min_seq > 0，参数即 min_seq）：会话开头输出已不可恢复，
-//   仅首次提示一次，后续重连/重订阅触发时仅后台日志记录，避免反复打扰
-let historyTruncatedNotified = false
-
-// 终端输出传输层：固定走 Tauri Channel（原生 IPC，规避 WebKitGTK WS 缓冲
-// 溢出丢消息）；WS 环回链路（/ws/terminal/local）已整体下线
-const terminalStreamOptions = {
-  onData: ({ data }: { data: Uint8Array }) => {
-    enqueueOutput(data)
-    if (!isUserScrolling.value) {
-      scrollToBottom()
-    }
-  },
-  onReset: () => {
-    if (terminal) {
-      terminal.clear()
-      // 清屏后即将全量重播：重播结束静止时补刷一次（防重播中间态残留）
-      armReplayRefresh()
-    }
-  },
-  onTruncated: (minOffset: number) => {
-    if (historyTruncatedNotified) {
-      // 已提示过：仅后台日志记录，不再弹 toast 打扰用户
-      logger.warn(
-        `[TerminalPreview] 终端历史已被环形缓冲截断（已提示过，仅记录）：min_offset=${minOffset}`,
-      )
-      return
-    }
-    historyTruncatedNotified = true
-    logger.warn(
-      `[TerminalPreview] 终端历史已被环形缓冲截断：min_offset=${minOffset}，会话开头输出不可用`,
-    )
-    toast.warning(t('desktop.terminal.historyTruncated'))
-  },
-}
-
-const terminalStream = useTerminalOutputStreamChannel(terminalStreamOptions)
 
 const statusColor = computed(() => {
   if (!props.session) return 'bg-slate-400 dark:bg-dark-500'
@@ -493,353 +238,35 @@ const statusColor = computed(() => {
   }
 })
 
-// 终端主题集合
-const terminalThemes: Record<string, object> = {
-  default: {
-    background: '#000000',
-    foreground: '#ffffff',
-    cursor: '#ffffff',
-    cursorAccent: '#000000',
-    selectionBackground: '#4d4d4d',
-    black: '#000000',
-    red: '#cd0000',
-    green: '#00cd00',
-    yellow: '#cdcd00',
-    blue: '#0000ee',
-    magenta: '#cd00cd',
-    cyan: '#00cdcd',
-    white: '#e5e5e5',
-    brightBlack: '#7f7f7f',
-    brightRed: '#ff0000',
-    brightGreen: '#00ff00',
-    brightYellow: '#ffff00',
-    brightBlue: '#5c5cff',
-    brightMagenta: '#ff00ff',
-    brightCyan: '#00ffff',
-    brightWhite: '#ffffff',
-  },
-  dracula: {
-    background: '#1e1e2e',
-    foreground: '#f8f8f2',
-    cursor: '#f8f8f2',
-    cursorAccent: '#1e1e2e',
-    selectionBackground: '#44475a',
-    black: '#000000',
-    red: '#ff5555',
-    green: '#50fa7b',
-    yellow: '#f1fa8c',
-    blue: '#bd93f9',
-    magenta: '#ff79c6',
-    cyan: '#8be9fd',
-    white: '#bbbbbb',
-    brightBlack: '#555555',
-    brightRed: '#ff5555',
-    brightGreen: '#50fa7b',
-    brightYellow: '#f1fa8c',
-    brightBlue: '#bd93f9',
-    brightMagenta: '#ff79c6',
-    brightCyan: '#8be9fd',
-    brightWhite: '#ffffff',
-  },
-  oneDark: {
-    background: '#282c34',
-    foreground: '#abb2bf',
-    cursor: '#528bff',
-    cursorAccent: '#282c34',
-    selectionBackground: '#3e4451',
-    black: '#282c34',
-    red: '#e06c75',
-    green: '#98c379',
-    yellow: '#e5c07b',
-    blue: '#61afef',
-    magenta: '#c678dd',
-    cyan: '#56b6c2',
-    white: '#abb2bf',
-    brightBlack: '#545862',
-    brightRed: '#e06c75',
-    brightGreen: '#98c379',
-    brightYellow: '#e5c07b',
-    brightBlue: '#61afef',
-    brightMagenta: '#c678dd',
-    brightCyan: '#56b6c2',
-    brightWhite: '#ffffff',
-  },
-  solarizedDark: {
-    background: '#002b36',
-    foreground: '#839496',
-    cursor: '#839496',
-    cursorAccent: '#002b36',
-    selectionBackground: '#073642',
-    black: '#073642',
-    red: '#dc322f',
-    green: '#859900',
-    yellow: '#b58900',
-    blue: '#268bd2',
-    magenta: '#d33682',
-    cyan: '#2aa198',
-    white: '#eee8d5',
-    brightBlack: '#002b36',
-    brightRed: '#cb4b16',
-    brightGreen: '#586e75',
-    brightYellow: '#657b83',
-    brightBlue: '#839496',
-    brightMagenta: '#6c71c4',
-    brightCyan: '#93a1a1',
-    brightWhite: '#fdf6e3',
-  },
-  solarizedLight: {
-    background: '#fdf6e3',
-    foreground: '#657b83',
-    cursor: '#657b83',
-    cursorAccent: '#fdf6e3',
-    selectionBackground: '#eee8d5',
-    black: '#073642',
-    red: '#dc322f',
-    green: '#859900',
-    yellow: '#b58900',
-    blue: '#268bd2',
-    magenta: '#d33682',
-    cyan: '#2aa198',
-    white: '#eee8d5',
-    brightBlack: '#002b36',
-    brightRed: '#cb4b16',
-    brightGreen: '#586e75',
-    brightYellow: '#657b83',
-    brightBlue: '#839496',
-    brightMagenta: '#6c71c4',
-    brightCyan: '#93a1a1',
-    brightWhite: '#fdf6e3',
-  },
-  ubuntu: {
-    background: '#300a24',
-    foreground: '#cccccc',
-    cursor: '#cccccc',
-    cursorAccent: '#300a24',
-    selectionBackground: '#5a3a72',
-    black: '#300a24',
-    red: '#e95420',
-    green: '#3eb33f',
-    yellow: '#ffb73b',
-    blue: '#77216f',
-    magenta: '#c748ba',
-    cyan: '#23c7c7',
-    white: '#cccccc',
-    brightBlack: '#300a24',
-    brightRed: '#e95420',
-    brightGreen: '#3eb33f',
-    brightYellow: '#ffb73b',
-    brightBlue: '#77216f',
-    brightMagenta: '#c748ba',
-    brightCyan: '#23c7c7',
-    brightWhite: '#ffffff',
-  },
-}
+// ==================== 生命周期编排状态（仅本组件使用） ====================
 
-const themeNames: Record<string, string> = {
-  default: 'Default',
-  dracula: 'Dracula',
-  oneDark: 'One Dark',
-  solarizedDark: 'Solarized Dark',
-  solarizedLight: 'Solarized Light',
-  ubuntu: 'Ubuntu',
-}
-
-// 主题/字号下拉选项：与原生 <option> 一一对应，供共享 Select 使用
-const themeSelectOptions = computed(() =>
-  Object.entries(themeNames).map(([value, label]) => ({ value, label })),
-)
-const fontSizeSelectOptions = computed(() =>
-  [8, 10, 12, 14, 16, 18, 20].map((size) => ({ value: size, label: `${size}px` })),
-)
-
-function getTheme() {
-  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
-  // 背景图片启用时终端背景设为全透明，让图片层透出
-  if (bgImageUrl.value) {
-    return { ...base, background: 'rgba(0, 0, 0, 0)' }
-  }
-  return base
-}
-
-/** 终端容器底色：背景图片启用时 xterm 背景透明，由容器补上主题背景色 */
-const containerBgColor = computed(() => {
-  const base = terminalThemes[terminalTheme.value] || terminalThemes.default
-  return (base as { background: string }).background
-})
-
-/** 解析背景图片 URL：本地服务器静态端点提供图片（先查实际运行端口，?t= 时间戳防缓存） */
-async function resolveBgImageUrl() {
-  if (!bgImage.value) {
-    bgImageUrl.value = ''
-    return
-  }
-  try {
-    const status = await invoke<{ port: number }>('get_server_status')
-    // 端口为 0 表示服务器尚未启动，回退到配置端口（服务器可能稍后启动）
-    const port = status.port || settingsStore.settings.network.port
-    const url = `http://127.0.0.1:${port}/static/terminal-bg?t=${Date.now()}`
-    // 预加载校验：图片不可达（服务器未启动/404 等）时不启用透明主题，
-    // 避免终端背景已切为全透明、图片却加载不出来，看起来像丢失了背景色
-    await new Promise<void>((resolve, reject) => {
-      const probe = new Image()
-      probe.onload = () => resolve()
-      probe.onerror = () => reject(new Error(`background image not loadable: ${url}`))
-      probe.src = url
-    })
-    bgImageUrl.value = url
-  } catch (e) {
-    logger.error('[TerminalPreview] Failed to resolve background image URL:', e)
-    bgImageUrl.value = ''
-  }
-}
-
-// 外部设置变化同步背景图片配置
-watch(
-  () => settingsStore.settings.ui.terminal_bg_image,
-  (v) => {
-    bgImage.value = v || ''
-  },
-)
-watch(
-  () => settingsStore.settings.ui.terminal_bg_opacity,
-  (v) => {
-    if (v != null) bgOpacity.value = v
-  },
-)
-
-// 背景图片变化：重新解析 URL 并刷新终端主题（透明/不透明切换）
-watch(bgImage, () => {
-  resolveBgImageUrl()
-})
-watch([bgImageUrl, bgOpacity], (newVals, oldVals) => {
-  if (!terminal) return
-  const [newUrl] = newVals as [string, number]
-  const [oldUrl] = oldVals as [string, number]
-  // 透明度有无切换以 bgImageUrl 有无为准（背景图开关 = 透明开关）。
-  // 为什么必须重建而非只改 options：addon-webgl 0.19.0 不监听
-  // allowTransparency 的运行时变化（_setTransparency 是零调用的死代码），
-  // 渲染层 alpha 标志与 canvas 的 { alpha } 属性在 getContext 之后不可变——
-  // 只改 options + refresh 会让“无图→开图”后透明背景被 premultiply 成黑色
-  // （背景图不可见）、“开图→关图”后 alpha 残留留下透明洞（spec D-1）
-  if (!!newUrl !== !!oldUrl) {
-    rebuildRenderer()
-    return
-  }
-  // 仅不透明度变化：透明状态未切换，无需重建；theme 重设 + 重绘一次即可
-  // （背景图透明度由图片层 CSS opacity 实时控制，xterm 侧无额外状态）
-  terminal.options.theme = getTheme()
-  terminal.refresh(0, terminal.rows - 1)
-})
-
-// ==================== 初始化 ====================
-
-/**
- * WebGL 渲染器：加载并处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建）。
- *
- * seq：initWebGL 调用时刻的渲染器重建序列号（rebuildRenderer / context-loss
- * 恢复之间的竞态守卫）。恢复回调触发时若序列号已变（期间经历过渲染器重建），
- * 说明本次恢复属于已被覆盖的旧 addon 周期，直接丢弃，避免旧 addon 的异步
- * 恢复覆盖新 addon（对齐 VS Code _webglAddonLoadId 守卫）。
- */
-function initWebGL(term: Terminal, seq: number): boolean {
-  try {
-    webglAddon = new WebglAddon()
-    webglAddon.onContextLoss(() => {
-      logger.warn('[TerminalPreview] WebGL context lost, attempting recovery')
-      webglAddon?.dispose()
-      webglAddon = null
-      // 上下文丢失时恢复 DOM 光标
-      term.element?.classList.remove('xterm-hidden-cursor')
-      // 延迟 1s 后尝试重新创建 WebGL 渲染器
-      setTimeout(() => {
-        // 恢复回调的竞态守卫：期间若有新 addon 已激活（webglAddon 非空）、
-        // 渲染器被重建过（序列号漂移）或终端已销毁，本次恢复均属残留周期，
-        // 直接丢弃，避免覆盖新渲染器的上下文
-        if (!term || webglAddon || seq !== rendererRebuildSeq) return
-        try {
-          const newAddon = new WebglAddon()
-          newAddon.onContextLoss(() => {
-            logger.warn('[TerminalPreview] WebGL context lost again')
-            newAddon.dispose()
-            if (webglAddon === newAddon) webglAddon = null
-            term.element?.classList.remove('xterm-hidden-cursor')
-          })
-          term.loadAddon(newAddon)
-          webglAddon = newAddon
-          // 恢复后重新隐藏 DOM 光标
-          term.element?.classList.add('xterm-hidden-cursor')
-          // WebGL 渲染器 cell 尺寸与 DOM 渲染器不同（VS Code 在 webgl 加载后同样
-          // 触发刷新重测网格），恢复后重算一次避免行列差 1 的漂移
-          applyResize()
-          logger.info('[TerminalPreview] WebGL context recovered')
-        } catch (e) {
-          logger.warn('[TerminalPreview] WebGL recovery failed, using canvas fallback:', e)
-          webglAddon = null
-        }
-      }, 1000)
-    })
-    term.loadAddon(webglAddon)
-    return true
-  } catch (e) {
-    logger.warn('[TerminalPreview] WebGL not supported:', e)
-    webglAddon = null
-    return false
-  }
-}
-
-/**
- * 透明度状态（背景图开/关）切换时重建渲染器（spec D-1）：
- * dispose 现有 WebGL addon → 重设 allowTransparency → 按 decideRenderer 结果
- * 重新 initWebGL 或保持 DOM → 重设 theme → 重算尺寸 → 全量重绘。
- *
- * 为什么必须重建而非只改 options：addon-webgl 0.19.0 中 _setTransparency 是零
- * 调用的死代码，渲染层 alpha 标志与 canvas 的 { alpha } 属性在 getContext 之后
- * 不可变。先 dispose 再 loadAddon 避免泄漏 WebGL context（对齐 VS Code
- * _enableWebglRenderer “Dispose of existing addon before creating a new one
- * to avoid leaking WebGL contexts”）。WebGL 与 DOM 渲染器 cell 尺寸不同，
- * 重建后必须重算行列（context-loss 恢复路径同款处理）；重建期间同步
- * xterm-hidden-cursor 类的加/删，避免双光标或光标消失。
- *
- * DOM 渲染器分支无 addon 可重建：xterm 6.0 的 DOM(canvas) 渲染器透明由 DOM 层
- * 实现（canvas 恒为 alpha），重设选项 + theme 即生效，此处走同路径保证两条
- * 残影通路（alpha 帧缓冲 / 无条件透明 viewport）一致的收敛状态。
- */
-function rebuildRenderer() {
-  if (!terminal) return
-  // 重建序列号递增：从这一刻起，previous 周期（含其 1s 恢复回调）作废
-  const seq = ++rendererRebuildSeq
-  const decision = rendererDecision.value
-  if (webglAddon) {
-    webglAddon.dispose()
-    webglAddon = null
-  }
-  // 透明度是渲染器构造时读一次的选项，必须在重建渲染器之前重设
-  terminal.options.allowTransparency = decision.allowTransparency
-  if (decision.useWebgl) {
-    const loaded = initWebGL(terminal, seq)
-    // WebGL 激活后隐藏 DOM 层光标，避免双光标（与 initTerminal 同款处理）；
-    // 加载失败回退 DOM 渲染器时恢复 DOM 光标
-    terminal.element?.classList.toggle('xterm-hidden-cursor', loaded)
-  } else {
-    // DOM 渲染器：DOM 层光标可见（不再由 WebGL 层替代）
-    terminal.element?.classList.remove('xterm-hidden-cursor')
-  }
-  terminal.options.theme = getTheme()
-  applyResize()
-  // 全量重绘：applyResize 仅在 cols/rows 变化时重绘，而重建后必须无条件整屏
-  // 重绘一次，清除旧渲染模式（alpha toggle / 渲染器切换）的残留帧
-  terminal.refresh(0, terminal.rows - 1)
-}
+// Linux 平台 IME 防护（WebKitGTK 输入法多层去重 + textarea 提交后清空，仅
+// Linux 启用；三层缓解的完整说明见 utils/terminalLinuxImeGuard.ts）
+let imeGuard: LinuxImeGuard | null = null
+let resizeObserver: ResizeObserver | null = null
+// resize 分层防抖：垂直立即 / 水平 100ms 合并（对齐 VS Code TerminalResizeDebouncer）
+let resizeDebouncer: TerminalResizeDebouncer | null = null
+// 前台 flush 监听（对齐 VS Code 切回前台时对 debouncer 的 flush 语义）：
+// 后台/最小化期间的尺寸变化挂起防抖，恢复可见时以最终尺寸一次性兑现
+let windowVisibleHandler: (() => void) | null = null
+// 选区状态：有选区时 Ctrl+C 应复制而非发送中断（VS Code 终端行为）
+let hasSelection = false
+// Ctrl+滚轮缩放监听（passive:false），卸载时移除
+let wheelHandler: ((e: WheelEvent) => void) | null = null
+// 追踪当前行输入（MVP：仅追踪可打印字符和退格，供 AI 插件读取）
+let currentLineBuffer = ''
+// 首次挂载（terminal 未就绪）只握手不订阅，订阅由 onMounted 触发
+let streamMounted = false
 
 function initTerminal() {
   if (!terminalHostRef.value) return
 
-  terminal = new Terminal({
+  const terminal = new Terminal({
     // 字体与尺寸
-    fontSize: effectiveFontSize.value,
+    fontSize: settings.effectiveFontSize.value,
     // Linux 用系统等宽字体栈（优先 Ubuntu Mono/DejaVu Sans Mono 等系统自带等宽字体），
     // 其余平台保持 VS Code 终端默认字体栈（Windows 11 自带 Cascadia Mono）不变
-    fontFamily: isLinux.value ? LINUX_FONT_STACK : DEFAULT_FONT_STACK,
+    fontFamily: kernel.isLinux.value ? LINUX_FONT_STACK : DEFAULT_FONT_STACK,
     lineHeight: 1,
     // 滚动历史行数（与后端事件队列容量对齐）
     scrollback: TERMINAL_SCROLLBACK,
@@ -884,17 +311,19 @@ function initTerminal() {
     scrollSensitivity: 1,
     fastScrollSensitivity: 5,
     // 主题
-    theme: getTheme(),
+    theme: kernel.callbacks.getTheme(),
     // 透明度与渲染器由 decideRenderer 统一决策（spec D-1/D-2，route 默认 'B'）：
     // 仅背景图开启时透明（让图片透出）；其余场景关闭透明，避免 WebGL alpha 帧
     // 缓冲滚动不清帧导致的残影/行入侵；背景图场景同时强制 DOM 渲染器，透明
     // 天然正确。allowTransparency 在渲染器创建时一次性生效，运行时的透明度
     // 状态变化由 rebuildRenderer（dispose + 重建）处理，不能只改 options
-    allowTransparency: rendererDecision.value.allowTransparency,
+    allowTransparency: renderer.rendererDecision.value.allowTransparency,
     allowProposedApi: true,
   })
+  kernel.terminalRef.value = terminal
 
-  fitAddon = new FitAddon()
+  const fitAddon = new FitAddon()
+  kernel.fitAddonRef.value = fitAddon
   terminal.loadAddon(fitAddon)
   terminal.loadAddon(new WebLinksAddon())
 
@@ -907,13 +336,9 @@ function initTerminal() {
 
   terminal.open(terminalHostRef.value)
 
-  // 渲染器选择由 decideRenderer 决策（Linux 无画布 / 背景图 → DOM，其余 WebGL）；
-  // initTerminal 时机 isLinux 已 await 解析，输入稳定。DOM 渲染器下 webglAddon
-  // 为 null，后续 clearTextureAtlas / xterm-hidden-cursor 分支天然跳过。
-  // 传入当前重建序列号，作为 context-loss 恢复回调的竞态基线
-  if (rendererDecision.value.useWebgl) {
-    initWebGL(terminal, rendererRebuildSeq)
-  }
+  // 渲染器初始化：按 decideRenderer 决策加载 WebGL（或保持 DOM）并同步
+  // DOM 层光标状态（DOM 渲染器下 webglAddon 为 null，后续分支天然跳过）
+  renderer.initRenderer(terminal)
 
   // Linux WebKitGTK IME 防护（仅 Linux；Windows/macOS 走 xterm 原生路径不变）：
   //   1) 关闭 keydown(229) 遗留差值补发路径（_handleAnyTextareaChanges）
@@ -923,7 +348,7 @@ function initTerminal() {
   //      value.substring(旧起点) = 上一轮已提交文本 + 本轮文本 整体发出，即
   //      「按空格提交中文后随机重复之前输入的字符」的根因；清空后起点恒为 0，
   //      拼接型重复不再产生。细节见 utils/terminalLinuxImeGuard.ts。
-  if (isLinux.value) {
+  if (kernel.isLinux.value) {
     imeGuard = attachLinuxImeGuard(terminal)
   }
 
@@ -931,20 +356,14 @@ function initTerminal() {
   // WebGL 与 DOM 渲染器均不再绘制（TUI 程序主动发送 \x1b[?25h 时除外）
   terminal.write('\x1b[?25l')
 
-  // WebGL 渲染器激活后，隐藏 DOM 层光标避免双光标问题
-  // 只隐藏 DOM 层，保留 WebGL 层光标（WebGL 光标更流畅且不会出现双光标）
-  if (webglAddon) {
-    terminal.element?.classList.add('xterm-hidden-cursor')
-  }
-
-  applyDprFit()
-  syncTerminalSize()
+  renderer.applyDprFit()
+  resize.syncTerminalSize()
 
   // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到后端会话
   // （经正统渲染端裁决：本端非正统时服务端返回需要确认，由弹窗处理）
   terminal.onResize(({ cols, rows }) => {
     if (props.session) {
-      requestResize(cols, rows)
+      resize.requestResize(cols, rows)
     }
   })
 
@@ -954,8 +373,8 @@ function initTerminal() {
   // 新终端/输出少的 shell reflow 便宜，拖窗时网格即时反应不滞后；
   // buffer 行数不可得时保守防抖（terminal 未就绪场景）
   resizeDebouncer = new TerminalResizeDebouncer({
-    onApply: applyResize,
-    getBufferLength: () => (terminal ? terminal.buffer.active.length : null),
+    onApply: () => resize.applyResize(),
+    getBufferLength: () => (kernel.terminalRef.value ? kernel.terminalRef.value.buffer.active.length : null),
     // 窗口不可见（最小化/切后台）时挂起 resize 应用，恢复可见时 flush 一次性兑现
     // （spec D-6，对齐 VS Code runWhenWindowIdle 分支；模块内不读 document 的
     // Seam A 约定由注入满足，与下方 windowVisibleHandler 的 flush 语义一致）
@@ -980,41 +399,43 @@ function initTerminal() {
 
   // DPR 动态变化监听（跨屏拖动 / 系统缩放变化时窗口尺寸可能不变，
   // ResizeObserver 不触发）：matchMedia 只能匹配固定 dppx 值，变化后需按新值递归注册
-  watchDprChanges()
+  renderer.watchDprChanges()
 
   // 滚动状态：xterm onScroll API（比 DOM addEventListener 更可靠，
   // 不会因 xterm 内部 DOM 重建而丢失监听）；仅更新"是否在底部"状态，
   // 重绘完全交给 xterm 渲染循环，不做手动 refresh 补丁
-  scrollDisposable = terminal.onScroll(() => {
-    if (!terminal) return
-    const buffer = terminal.buffer.active
-    const viewportBottom = buffer.viewportY + terminal.rows
-    isUserScrolling.value = viewportBottom < buffer.length - 1
-  })
+  scroll.setScrollDisposable(
+    terminal.onScroll(() => {
+      const t = kernel.terminalRef.value
+      if (!t) return
+      const buffer = t.buffer.active
+      const viewportBottom = buffer.viewportY + t.rows
+      kernel.isUserScrolling.value = viewportBottom < buffer.length - 1
+    }),
+  )
 
   // 输出解析完成（每次 write 后触发，覆盖输出/清屏/TUI 切换场景）：
   // 作为背压 ack 的写解析完成信号（确认已渲染到的 last_rendered_seq）
   terminal.onWriteParsed(() => {
-    if (!terminal) return
-    terminalStream.confirmWriteParsed()
+    if (!kernel.terminalRef.value) return
+    pipeline.terminalStream.confirmWriteParsed()
   })
 
   // 选区状态跟踪：有选区时 Ctrl+C 复制（VS Code 终端行为），不发送 SIGINT
   terminal.onSelectionChange(() => {
-    hasSelection = !!terminal?.getSelection()
+    hasSelection = !!kernel.terminalRef.value?.getSelection()
   })
 
   // Ctrl+滚轮缩放字号（VS Code 终端行为）；passive:false 才能阻止默认滚动
   wheelHandler = (e: WheelEvent) => {
     if (!e.ctrlKey) return
     e.preventDefault()
-    const sizes = [8, 10, 12, 14, 16, 18, 20]
-    const idx = sizes.indexOf(fontSize.value)
+    const idx = TERMINAL_FONT_SIZES.indexOf(settings.fontSize.value)
     const next = Math.min(
-      sizes.length - 1,
+      TERMINAL_FONT_SIZES.length - 1,
       Math.max(0, idx < 0 ? 0 : idx + (e.deltaY < 0 ? 1 : -1)),
     )
-    fontSize.value = sizes[next]
+    settings.fontSize.value = TERMINAL_FONT_SIZES[next]
   }
   terminalHostRef.value.addEventListener('wheel', wheelHandler, { passive: false })
 
@@ -1030,7 +451,7 @@ function initTerminal() {
 
     // 有选区时 Ctrl+C 仅复制（VS Code 终端行为），不向 PTY 发送中断
     if (data === '\x03' && hasSelection) {
-      const sel = terminal?.getSelection()
+      const sel = kernel.terminalRef.value?.getSelection()
       if (sel) {
         navigator.clipboard?.writeText(sel).catch(() => {})
       }
@@ -1060,370 +481,46 @@ function initTerminal() {
   })
 }
 
-// ==================== 正统渲染端 resize 裁决交互 ====================
-// 桌面端与移动端共用同一 PTY 尺寸：服务端裁决本端是否正统渲染端。
-// 非正统时 resize 返回 needsConfirmation（未应用），此处弹窗确认，
-// 确认后 force 重发覆盖；取消则记下被拒尺寸，防 RO/resize 事件风暴。
-
-/** 用户拒绝覆盖的尺寸（成功后清空；同尺寸不再重发） */
-let rejectedSize: { cols: number; rows: number } | null = null
-
-/** 待确认的覆盖目标（弹窗内容源） */
-const rendererOverrideTarget = ref<{
-  cols: number
-  rows: number
-  rendererName: string
-} | null>(null)
-const showRendererOverrideModal = ref(false)
-
-/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名；source 异常时兜底，避免弹窗崩溃 */
-function rendererDisplayName(source?: RendererSource | null): string {
-  if (!source || source.kind === 'desktop') return t('desktop.terminal.rendererDesktop')
-  return source.deviceName || t('desktop.terminal.rendererMobile')
-}
-
-/**
- * 请求调整会话尺寸（经服务端正统渲染端裁决）
- *
- * force=false：本端非正统且用户未确认前，服务端不改底层 PTY；
- * needsConfirmation 时弹出确认框。用户拒绝过的同尺寸直接忽略，
- * 避免拖窗/RO 事件持续触发弹窗风暴。
- */
-async function requestResize(cols: number, rows: number, force = false) {
-  if (!props.session) return
-  // 用户刚拒绝过的相同尺寸：抑制（每次成功应用后清空）
-  if (!force && rejectedSize && rejectedSize.cols === cols && rejectedSize.rows === rows) return
-  // 相同尺寸已在确认弹窗中：避免并发弹窗
-  if (rendererOverrideTarget.value && rendererOverrideTarget.value.cols === cols && rendererOverrideTarget.value.rows === rows) {
-    return
-  }
-  const outcome = await sessionStore.resizeSession(props.session.id, cols, rows, force)
-  if (outcome.status === 'applied') {
-    rejectedSize = null
-    return
-  }
-  // needsConfirmation：当前有另一个端在渲染，弹窗确认是否覆盖
-  rendererOverrideTarget.value = {
-    cols,
-    rows,
-    rendererName: rendererDisplayName(outcome.currentCanonical),
-  }
-  showRendererOverrideModal.value = true
-}
-
-/** 用户确认覆盖：force 重发（尺寸移交服务端正统归属） */
-async function confirmRendererOverride() {
-  const target = rendererOverrideTarget.value
-  showRendererOverrideModal.value = false
-  rendererOverrideTarget.value = null
-  if (target) await requestResize(target.cols, target.rows, true)
-}
-
-/** 用户拒绝覆盖：记录被拒尺寸，同尺寸不再打扰 */
-function cancelRendererOverride() {
-  const target = rendererOverrideTarget.value
-  showRendererOverrideModal.value = false
-  rendererOverrideTarget.value = null
-  if (target) rejectedSize = { cols: target.cols, rows: target.rows }
-}
-
-/** 同步当前终端尺寸到后端会话（PTY cols/rows） */
-function syncTerminalSize() {
-  if (!terminal || !props.session) return
-  const cols = terminal.cols
-  const rows = terminal.rows
-  if (cols > 0 && rows > 0) {
-    requestResize(cols, rows)
-  }
-}
-
-/**
- * resize 实际应用（防抖器 onApply 接线）：DPR 感知 fit + 仅 cols/rows
- * 实际变化才全量重绘 + PTY 同步。subpixel 抖动（容器尺寸微调但行列不变）
- * 不触发多余重绘，避免拖动窗口时每帧全量重绘的浪费
- */
-function applyResize() {
-  if (!terminal) return
-  const cols = terminal.cols
-  const rows = terminal.rows
-  applyDprFit()
-  if (terminal.cols !== cols || terminal.rows !== rows) {
-    terminal.refresh(0, terminal.rows - 1)
-    syncTerminalSize()
-  }
-}
-
-/** 读取 xterm 实测 cell CSS 尺寸（DPR 感知计算的输入）；不可用时返回 null */
-function measureCellSize(): { width: number; height: number } | null {
-  if (!terminal) return null
-  // addon-fit 0.11 内部即此访问路径（FitAddon.proposeDimensions）；
-  // 私有 API 无类型声明，逐级防御，任一环节缺失即回退 fitAddon.fit()
-  const core = (terminal as unknown as { _core?: unknown })._core as
-    | { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } }
-    | undefined
-  const cell = core?._renderService?.dimensions?.css?.cell
-  if (!cell || cell.width <= 0 || cell.height <= 0) return null
-  return { width: cell.width, height: cell.height }
-}
-
-/**
- * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算设备像素后计算 cols/rows
- * （行高 ceil、列宽 floor），替换 fitAddon.fit() 的裸 DPR 不感知计算。
- * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
- *
- * 触发 resize 前经 shouldApplyGridResize 锌制 ±1 列/行测量漂移：applyDprFit 的
- * 尺寸口径（clientWidth × 渲染器 css.cell）与当前网格存在 ±1~2 列系统性偏差，
- * 每次精确比较都 resize 会让 WebGL 在点“刷新”时重建整个字符图集（非 ASCII
- * 字形按 idle 分片异步重新光栅化），表现为前几次刷新格式乱、图集预热完才正常。
- * 真实 resize（拖窗/字号变化）后 scheduleAtlasPreheat 补刷收尾。
- */
-function applyDprFit() {
-  if (!terminal || !fitAddon) return
-  const host = terminalHostRef.value
-  const cell = measureCellSize()
-  if (!host || host.clientWidth <= 0 || host.clientHeight <= 0 || !cell) {
-    fitAddon.fit()
-    return
-  }
-  const { cols, rows } = getXtermScaledDimensions({
-    containerWidthCss: host.clientWidth,
-    containerHeightCss: host.clientHeight,
-    cellWidthCss: cell.width,
-    cellHeightCss: cell.height,
-    devicePixelRatio: window.devicePixelRatio,
-  })
-  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
-  // 变化时经 ±1 漂移锌制，仅在真实变化时 resize
-  if (terminal.cols !== cols || terminal.rows !== rows) {
-    if (!shouldApplyGridResize(terminal.cols, terminal.rows, cols, rows)) {
-      return
-    }
-    terminal.resize(cols, rows)
-    scheduleAtlasPreheat()
-  }
-}
-
-/**
- * WebGL atlas 预热补刷：resize 重建字符图集后，非 ASCII 字形（中文/box-drawing/
- * emoji）按 requestIdleCallback 分片异步光栅化（warmUp 只预热 ASCII 33-126）。
- *
- * 为什么用 rAF 有界迭代而非固定延时：atlas 页合并时 beginFrame() 会触发全量重绘，
- * 迭代刷新能自然跟上光栅化进度（spec D-4，替代 ATLAS_PREHEAT_DELAY_MS=700 猜数——
- * 低配机不够、高性能机浪费）。每帧补一次全量 refresh，直到帧预算 0 或元素脱离 DOM。
- *
- * 无 atlas 的场景（DOM 渲染器：Linux / 背景图强制 DOM）直接 no-op——refresh 在那里
- * 只是重建 DOM 行，由渲染循环自身驱动，无需预热。同窗口多次 resize 不重复启动。
- * rAF 在窗口最小化时暂停，恢复可见后继续跑完剩余预算是可接受语义（预算在隐藏期
- * 不消耗，可见后仍会补完）。
- */
-function scheduleAtlasPreheat() {
-  if (!terminal || !webglAddon || atlasPreheatRaf !== 0) return
-  let budget = ATLAS_PREHEAT_FRAME_BUDGET
-  const step = () => {
-    atlasPreheatRaf = 0
-    // xterm 已销毁（element 已脱离 DOM）则不再重绘
-    if (!terminal || !terminal.element?.isConnected) return
-    terminal.refresh(0, terminal.rows - 1)
-    // 帧预算递减：decideAtlasRefreshFrames 返回 0 表示停止（也防御负数/残留回调）
-    const next = decideAtlasRefreshFrames(budget)
-    if (next > 0) {
-      budget = next
-      atlasPreheatRaf = requestAnimationFrame(step)
-    }
-  }
-  atlasPreheatRaf = requestAnimationFrame(step)
-}
-
-/**
- * Linux 首帧模糊修复：WebKitGTK 的 document.fonts 不追踪系统字体（DejaVu 等经
- * fontconfig 解析），fonts.ready 会提前 resolve——首次 measure 可能仍用回退字体/
- * 旧指标，导致字符尺寸按错指标光栅化 → 整屏文字发蒙。挂载并跑完首帧后延迟重测
- * + 全量重绘一次，消除首帧模糊残留。DOM 渲染器重绘即重建行；WebGL 渲染器还会
- * 重建字形图集（clearTextureAtlas 在 DOM 渲染器下为 no-op）。
- */
-function scheduleInitialFontRemeasure() {
-  if (!isLinux.value) return
-  setTimeout(() => {
-    if (!terminal || !terminal.element?.isConnected) return
-    // 强制重测字符尺寸（等价 xterm open/resize 时的 measure；私有路径与
-    // measureCellSize 同源，缺失时优雅跳过，refresh 仍保证重绘一次）
-    const core = (terminal as unknown as {
-      _core?: { _charSizeService?: { measure?: () => void } }
-    })._core
-    core?._charSizeService?.measure?.()
-    // WebGL 图集按新指标重建；DOM 渲染器下 clearTextureAtlas 为 no-op
-    if (webglAddon) {
-      terminal.clearTextureAtlas()
-    }
-    terminal.refresh(0, terminal.rows - 1)
-  }, 300)
-}
-
-/**
- * 监听 DPR 变化并应用新尺寸：matchMedia 只匹配固定 dppx 值，
- * 每次命中后按新 DPR 重新注册（递归），直到组件卸载
- */
-function watchDprChanges() {
-  if (dprMediaQuery && dprChangeHandler) {
-    dprMediaQuery.removeEventListener('change', dprChangeHandler)
-  }
-  dprChangeHandler = () => {
-    // DPI 变化后重新 fit + 条件重绘/同步（窗口尺寸可能未变，ResizeObserver 不触发）
-    applyResize()
-    watchDprChanges()
-  }
-  dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
-  dprMediaQuery.addEventListener('change', dprChangeHandler)
-}
-
-/**
- * fit 后强制全量重绘：WebGL 渲染器在容器尺寸变化（全屏/滚动触发布局微变/字号变化）
- * 后不会自动重绘可见区域，旧纹理残留导致字符错位与格式错乱，故 fit 后立即
- * refresh 整屏修正。覆盖 resize 与字号变化两类重绘场景（刷新按钮不经过此处，
- * 见 refreshTerminal 的“为什么不 fit”说明）。
- */
-function fitAndRefresh() {
-  if (!fitAddon || !terminal) return
-  applyDprFit()
-  terminal.refresh(0, terminal.rows - 1)
-}
-
-/**
- * 刷新格式：纯重绘 + 同步 PTY，不清除内容、**不重算尺寸**。
- *
- * 为什么不在这里 fit：尺寸已由三条路径维护——ResizeObserver（容器变化）、
- * 字号 watcher、DPR 监听；而 applyDprFit 的口径（clientWidth × 渲染器 css.cell）
- * 与当前网格存在 ±1~2 列恒定测量偏差，点击时重算几乎必然触发一次 resize →
- * WebGL 重建整个字符图集（非 ASCII 字形重新光栅化）→ 当次显示混乱，再点才
- * 恢复。刷新按钮的语义就是“重绘一次”，fit 在这里只会帮倒忙（尺寸偏差已由
- * 防抖器经 shouldApplyGridResize 鉗制兜底，偏差 >1 才可能真触发 resize）。
- */
-function refreshTerminal() {
-  if (!terminal || !props.session) return
-  terminal.refresh(0, terminal.rows - 1)
-  syncTerminalSize()
-}
-
-/** 滚动到底：rAF 合并，同一帧内多次调用只执行一次 */
-function scrollToBottom() {
-  if (!pendingScrollRaf) {
-    pendingScrollRaf = requestAnimationFrame(() => {
-      pendingScrollRaf = 0
-      terminal?.scrollToBottom()
-    })
-  }
-}
-
-/** 用户点击"回到底部"按钮：重置滚动状态并滚到底 */
-function scrollToBottomManual() {
-  isUserScrolling.value = false
-  terminal?.scrollToBottom()
-}
-
-function clearTerminal() {
-  if (!terminal) return
-  terminal.clear()
-}
-
-// ==================== 设置同步 ====================
-
-// 字体大小变化
-let fontSizeSaveTimeout: ReturnType<typeof setTimeout> | null = null
-watch(fontSize, (newSize) => {
-  if (!terminal) return
-  terminal.options.fontSize = effectiveFontSize.value
-  if (fitAddon) {
-    fitAndRefresh()
-  }
-  nextTick(() => syncTerminalSize())
-  if (fontSizeSaveTimeout) clearTimeout(fontSizeSaveTimeout)
-  fontSizeSaveTimeout = setTimeout(() => {
-    settingsStore.saveSettings({
-      ui: { ...settingsStore.settings.ui, terminal_font_size: newSize },
-    })
-  }, 300)
-})
-
-watch(
-  () => settingsStore.settings.ui.terminal_font_size,
-  (newSize) => {
-    if (fontSize.value !== newSize) {
-      fontSize.value = newSize
-      if (terminal) {
-        terminal.options.fontSize = effectiveFontSize.value
-        if (fitAddon) fitAndRefresh()
-        nextTick(() => syncTerminalSize())
-      }
-    }
-  },
-  { immediate: true },
-)
-
-// 主题变化：更新终端 + 持久化
-let themeSaveTimeout: ReturnType<typeof setTimeout> | null = null
-watch(terminalTheme, (newTheme) => {
-  if (terminal) {
-    terminal.options.theme = getTheme()
-  }
-  if (themeSaveTimeout) clearTimeout(themeSaveTimeout)
-  themeSaveTimeout = setTimeout(() => {
-    settingsStore.saveSettings({
-      ui: { ...settingsStore.settings.ui, terminal_theme: newTheme },
-    })
-  }, 300)
-})
-
-// 外部设置变化同步主题
-watch(
-  () => settingsStore.settings.ui.terminal_theme,
-  (newTheme) => {
-    if (newTheme && terminalTheme.value !== newTheme) {
-      terminalTheme.value = newTheme
-    }
-  },
-)
-
-// 会话变化
-// 游标重置（新会话坐标空间独立），断开旧流并连接新流；
+// 会话变化：游标重置（新会话坐标空间独立），断开旧流并连接新流；
 // 历史回放由服务端裁决后以二进制帧流式送达（无需 invoke 拉取）。
 // 首次挂载（terminal 未就绪）只握手不订阅，订阅由 onMounted 触发
-let streamMounted = false
 watch(
   sessionId,
   async (newId, oldId) => {
     if (newId !== oldId) {
       if (oldId) {
-        clearTerminal()
+        scroll.clearTerminal()
       }
 
       if (newId) {
         await nextTick()
 
-        if (terminal) {
-          syncTerminalSize()
+        if (kernel.terminalRef.value) {
+          resize.syncTerminalSize()
         }
 
         // 新会话：重置历史截断提示标记，允许再次提示
-        historyTruncatedNotified = false
+        pipeline.resetTruncatedNotified()
 
         if (props.session?.status === 'starting') {
           // 延迟启动第二阶段：终端已挂载传当前实际网格；否则按当前终端窗口
           // 实际尺寸精确预测（widthRatio=1，本组件只存在于终端窗口内），
           // spawn 前 resize PTY，子进程从正确行列起步
+          const t = kernel.terminalRef.value
           const size =
-            terminal != null
-              ? { cols: terminal.cols, rows: terminal.rows }
-              : await computeDesktopInitialTerminalSize(effectiveFontSize.value)
+            t != null
+              ? { cols: t.cols, rows: t.rows }
+              : await computeDesktopInitialTerminalSize(settings.effectiveFontSize.value)
           await sessionStore.startSession(newId, size ?? undefined)
         }
 
-        terminalStream.start(newId)
-        armReplayRefresh()
+        pipeline.terminalStream.start(newId)
+        pipeline.armReplayRefresh()
         if (streamMounted) {
-          terminalStream.subscribe()
+          pipeline.terminalStream.subscribe()
         }
       } else {
-        terminalStream.stop()
+        pipeline.terminalStream.stop()
       }
     }
   },
@@ -1436,11 +533,11 @@ watch(
   (status) => {
     if (!sessionId.value) return
     if (status === 'stopped' || status === 'error') {
-      terminalStream.stop()
+      pipeline.terminalStream.stop()
     } else if (status === 'running') {
-      terminalStream.start(sessionId.value)
-      armReplayRefresh()
-      terminalStream.subscribe()
+      pipeline.terminalStream.start(sessionId.value)
+      pipeline.armReplayRefresh()
+      pipeline.terminalStream.subscribe()
     }
   },
 )
@@ -1451,12 +548,12 @@ onMounted(async () => {
   // 确定运行平台：await 已 memoized 的 initPlatform()（main.ts 启动前已发起，
   // 此处最多一个 microtask 即返回），消除 setup 时平台尚未解析的竞态
   const platform = await initPlatform()
-  isLinux.value = platform?.isLinux === true
+  kernel.isLinux.value = platform?.isLinux === true
 
   // Linux：等待系统字体加载完成再初始化终端，避免 WebKitGTK 在字体未就绪时
   // 用回退字体测量字符尺寸，导致字符间距过大/模糊；带超时兜底不阻塞首帧。
   // Windows/macOS 保持原有行为（字体即装即用，无需等待）。
-  if (isLinux.value && typeof document !== 'undefined' && 'fonts' in document) {
+  if (kernel.isLinux.value && typeof document !== 'undefined' && 'fonts' in document) {
     try {
       await Promise.race([
         document.fonts.ready,
@@ -1471,20 +568,21 @@ onMounted(async () => {
 
   // 初始化背景图片（在 initTerminal 之后，仅影响后续主题刷新；
   // 首次挂载时若已有背景图，通过一次主题刷新生效）
-  await resolveBgImageUrl()
+  await settings.resolveBgImageUrl()
+  const terminal = kernel.terminalRef.value
   if (terminal) {
-    terminal.options.theme = getTheme()
+    terminal.options.theme = kernel.callbacks.getTheme()
   }
 
   // Linux：首帧后重测字符尺寸 + 全量重绘（见 scheduleInitialFontRemeasure），
   // 消除 WebKitGTK 首次 measure 用回退字体指标导致的模糊
-  scheduleInitialFontRemeasure()
+  renderer.scheduleInitialFontRemeasure()
 
   // 渲染链路诊断（排查模糊/回退问题时日志可见 renderer 与 DPR）
   logger.info(
-    `[TerminalPreview] renderer=${webglAddon ? 'webgl' : 'dom'} ` +
-      `dpr=${window.devicePixelRatio} fontSize=${fontSize.value} ` +
-      `isLinux=${isLinux.value}`,
+    `[TerminalPreview] renderer=${kernel.webglAddonRef.value ? 'webgl' : 'dom'} ` +
+      `dpr=${window.devicePixelRatio} fontSize=${settings.fontSize.value} ` +
+      `isLinux=${kernel.isLinux.value}`,
   )
 
   // 监听 AI 插件请求当前终端输入
@@ -1496,26 +594,23 @@ onMounted(async () => {
   })
 
   // terminal 就绪后启动本地 WS 输出流：历史回放 + 实时推送同通道流式到达
-  terminalStream.start(sessionId.value)
-  armReplayRefresh()
-  terminalStream.subscribe()
+  pipeline.terminalStream.start(sessionId.value)
+  pipeline.armReplayRefresh()
+  pipeline.terminalStream.subscribe()
   streamMounted = true
 
-  terminal?.focus()
+  kernel.terminalRef.value?.focus()
 })
 
 onUnmounted(() => {
   // 断开本地 WS 输出流（停止重连）
-  terminalStream.stop()
+  pipeline.terminalStream.stop()
 
   // 清理 AI 插件事件监听
   clearPluginEvents('__host__')
 
-  // 清理 xterm onScroll 监听
-  if (scrollDisposable) {
-    scrollDisposable.dispose()
-    scrollDisposable = null
-  }
+  // 清理 xterm onScroll 监听与待处理的滚动 rAF
+  scroll.disposeScroll()
 
   // 清理 Ctrl+滚轮缩放监听
   if (wheelHandler && terminalHostRef.value) {
@@ -1523,36 +618,11 @@ onUnmounted(() => {
     wheelHandler = null
   }
 
-  // 清理待处理的滚动 rAF
-  if (pendingScrollRaf) {
-    cancelAnimationFrame(pendingScrollRaf)
-    pendingScrollRaf = 0
-  }
+  // 清理写入队列（未 flush 的数据仍存于服务端环形，重开窗口可恢复）与回放补刷定时器
+  pipeline.disposePipeline()
 
-  // 清理写入队列（未 flush 的数据仍存于服务端环形，重开窗口可恢复）
-  if (flushRaf) {
-    cancelAnimationFrame(flushRaf)
-    flushRaf = 0
-  }
-  if (flushTimer) {
-    clearTimeout(flushTimer)
-    flushTimer = null
-  }
-  writeQueue.length = 0
-  writeQueueBytes = 0
-
-  // 清理回放静止补刷定时器
-  if (replayRefreshTimer) {
-    clearTimeout(replayRefreshTimer)
-    replayRefreshTimer = null
-    pendingReplayRefresh = false
-  }
-
-  // 清理 WebGL atlas 预热迭代（rAF 句柄非 0 时取消；回调内已做 isConnected 检查）
-  if (atlasPreheatRaf) {
-    cancelAnimationFrame(atlasPreheatRaf)
-    atlasPreheatRaf = 0
-  }
+  // 清理 WebGL atlas 预热迭代（rAF 句柄非 0 时取消）与 DPR 监听
+  renderer.disposeRenderer()
 
   // 清理前台 flush 监听
   if (windowVisibleHandler) {
@@ -1567,22 +637,8 @@ onUnmounted(() => {
     resizeDebouncer = null
   }
 
-  // 清理 DPR 变化监听
-  if (dprMediaQuery && dprChangeHandler) {
-    dprMediaQuery.removeEventListener('change', dprChangeHandler)
-    dprMediaQuery = null
-    dprChangeHandler = null
-  }
-
   // 清理设置保存定时器
-  if (fontSizeSaveTimeout) {
-    clearTimeout(fontSizeSaveTimeout)
-    fontSizeSaveTimeout = null
-  }
-  if (themeSaveTimeout) {
-    clearTimeout(themeSaveTimeout)
-    themeSaveTimeout = null
-  }
+  settings.disposeSettingsSync()
 
   if (resizeObserver) {
     resizeObserver.disconnect()
@@ -1593,10 +649,10 @@ onUnmounted(() => {
   imeGuard?.dispose()
   imeGuard = null
 
-  if (terminal) {
-    terminal.dispose()
-    terminal = null
-    webglAddon = null
+  if (kernel.terminalRef.value) {
+    kernel.terminalRef.value.dispose()
+    kernel.terminalRef.value = null
+    kernel.webglAddonRef.value = null
   }
 })
 
@@ -1604,13 +660,13 @@ onUnmounted(() => {
 
 /** 暴露给父组件：终端窗口模式下外层 header 需要访问的响应式状态和方法 */
 defineExpose({
-  fontSize,
-  terminalTheme,
-  themeNames,
-  isUserScrolling,
-  clearTerminal,
-  refreshTerminal,
-  scrollToBottomManual,
+  fontSize: settings.fontSize,
+  terminalTheme: settings.terminalTheme,
+  themeNames: TERMINAL_THEME_NAMES,
+  isUserScrolling: scroll.isUserScrolling,
+  clearTerminal: scroll.clearTerminal,
+  refreshTerminal: scroll.refreshTerminal,
+  scrollToBottomManual: scroll.scrollToBottomManual,
 })
 </script>
 

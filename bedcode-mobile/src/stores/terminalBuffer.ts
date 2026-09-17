@@ -7,7 +7,7 @@
  *   （保留字节游标），前端无需干预
  * - 数据真源 = Rust 侧会话级字节缓存；前端只在进入终端页时获取「一次性历史」
  *   （`terminalGetHistory`，缓存优先、淘汰时回退桌面 HTTP），拼接完历史后才
- *   开始消费实时帧（`terminal-frame` 事件）——「拼完历史才通知前端消费」
+ *   开始消费实时帧（段2 页面级 Channel 的 TB v3 二进制帧）——「拼完历史才通知前端消费」
  * - 字节连续（TB v3）：游标 = lastRenderedOffset（已渲染区间末端）；去重 /
  *   缺口（重拼接）/ 截断（minOffset 越过游标）/ 跨帧裁剪（overlap = 游标 -
  *   startOffset）全部按字节区间运算
@@ -21,10 +21,12 @@
 import { defineStore } from 'pinia'
 import { logger } from '@/utils/frontendLogger'
 import { reactive, ref } from 'vue'
+import { Channel } from '@tauri-apps/api/core'
 import { emit } from '@tauri-apps/api/event'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import {
   terminalGetHistory,
+  terminalGetState,
   terminalSubscribe,
   terminalUnsubscribe,
   terminalUnsubscribeAll,
@@ -32,11 +34,14 @@ import {
   terminalSendInput,
   terminalAckRendered,
   terminalSetMode,
+  terminalPageSubscribe,
+  terminalPageUnsubscribe,
+  type TerminalLinkState,
 } from '@/composables/useMobileCommands'
 
 // ==================== Types ====================
 
-/** 实时帧（Rust terminal-frame 事件载荷） */
+/** 实时帧（段2 Channel 帧解码产物，见 `onChannelMessage`） */
 export interface OutputFrame {
   data: Uint8Array
   /** 帧内首字节的会话内累计偏移 */
@@ -107,6 +112,20 @@ const PHASE_MAP: Record<string, SessionBuffer['phase']> = {
   live: 'live',
 }
 
+/** 订阅阶段推进序（对账时只前进不回退：命令响应可能晚于更新的状态事件到达） */
+const PHASE_RANK: Record<SessionBuffer['phase'], number> = {
+  idle: 0,
+  connecting: 1,
+  auth: 2,
+  history: 3,
+  live: 4,
+}
+
+/** 已订阅语义（phase ∈ history/live）：subscribed 信念的唯一判据 */
+function isSubscribedPhase(phase: SessionBuffer['phase']): boolean {
+  return phase === 'history' || phase === 'live'
+}
+
 // ==================== Store ====================
 
 export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
@@ -124,8 +143,16 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   /** 预加载已就绪的会话（会话页 prepareSession 成功后标记，终端页挂载时消费一次） */
   const preparedSessionId = ref<string | null>(null)
 
-  let frameUnlisten: UnlistenFn | null = null
   let stateUnlisten: UnlistenFn | null = null
+  let resyncUnlisten: UnlistenFn | null = null
+  /**
+   * 段2 推送通道（页面级 Tauri Channel，输出帧的唯一出口）。
+   *
+   * 与页面进出严格配对：`markPageEntered` 创建并随 `terminal_page_subscribe` 交给
+   * Rust，`markPageLeft` 先作废 `onmessage` 再通知 Rust 取消订阅。Rust 侧持有同一
+   * 通道的克隆，页面卸载后发送会失败（Rust 就地清槽并停止推送）——不依赖额外的前端握手
+   */
+  const pageChannels = new Map<string, Channel<ArrayBuffer>>()
 
   /** 拼接缺口重试冷却（ms） */
   const GAP_RESPLICE_COOLDOWN_MS = 3000
@@ -154,10 +181,10 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   /** 会话级帧统计（非响应式，纯日志对账用，不进渲染路径） */
   interface FrameStats {
-    /** 收到的 terminal-frame 事件数 */
+    /** 收到的 Channel 数据帧数 */
     framesReceived: number
-    /** 收流近似字节（base64 长度换算；精确口径见 bytesRendered） */
-    bytesReceivedApprox: number
+    /** 收流字节（Channel 走 Raw 字节，与 bytesRendered 同口径） */
+    bytesReceived: number
     /** 页面未挂载被丢弃的帧数（设计行为：Rust 缓存兜底，重进回补） */
     framesNoHandler: number
     /** 去重整帧跳过数 */
@@ -179,7 +206,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     if (!s) {
       s = {
         framesReceived: 0,
-        bytesReceivedApprox: 0,
+        bytesReceived: 0,
         framesNoHandler: 0,
         framesDeduped: 0,
         bytesRendered: 0,
@@ -192,7 +219,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
   }
 
   /** 周期打点（5s 且游标有推进才打）：与 Rust terminal_link 收帧统计对账，
-   * bytesReceivedApprox ≈ bytesRendered + 去重/裁剪差值即无丢帧 */
+   * bytesReceived ≈ bytesRendered + 去重/裁剪差值即无丢帧 */
   function maybeLogFrameStats(sessionId: string) {
     const s = frameStats.get(sessionId)
     if (!s) return
@@ -204,30 +231,21 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     s.lastLogCursor = cursor
     logger.debug(
       `[terminalBuffer] frame stats (${sessionId}): frames=${s.framesReceived} ` +
-        `bytesApprox=${s.bytesReceivedApprox} rendered=${s.bytesRendered} ` +
+        `bytesReceived=${s.bytesReceived} rendered=${s.bytesRendered} ` +
         `deduped=${s.framesDeduped} noHandler=${s.framesNoHandler} cursor=${cursor}`,
     )
   }
 
   // ==================== 事件监听（Rust → 前端） ====================
 
-  /** 惰性注册全局事件监听（terminal-frame / terminal-state） */
+  /**
+   * 惰性注册全局事件监听（terminal-state / terminal-resync）。
+   *
+   * 输出帧不在此列：段2 帧经页面级 Tauri Channel 投递（见 `pageChannels`），
+   * 全局事件只承载低频的状态机迁移与重锚信号——两者解耦后互不影响
+   */
   async function ensureEventListeners() {
-    if (frameUnlisten && stateUnlisten) return
-    if (!frameUnlisten) {
-      frameUnlisten = await listen('terminal-frame', (event) => {
-        const payload = event.payload as {
-          session_id?: string
-          start_offset?: number
-          end_offset?: number
-          data_base64?: string
-        }
-        if (!payload.session_id) return
-        onFrameEvent(
-          payload as { session_id: string; start_offset: number; end_offset: number; data_base64: string },
-        )
-      })
-    }
+    if (stateUnlisten && resyncUnlisten) return
     if (!stateUnlisten) {
       stateUnlisten = await listen('terminal-state', (event) => {
         const payload = event.payload as {
@@ -242,29 +260,125 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
         onStateEvent(payload as { session_id: string; phase?: string; detail?: string })
       })
     }
+    if (!resyncUnlisten) {
+      resyncUnlisten = await listen('terminal-resync', (event) => {
+        const payload = event.payload as {
+          session_id?: string
+          min_offset?: number
+          snapshot_offset?: number
+        }
+        if (!payload.session_id) return
+        onResyncEvent(
+          payload as { session_id: string; min_offset: number; snapshot_offset: number },
+        )
+      })
+    }
   }
 
-  /** 实时帧事件：历史拼接中缓冲，拼接完成按序 FLUSH；未拼接的分发渲染 */
-  function onFrameEvent(payload: { session_id: string; start_offset: number; end_offset: number; data_base64: string }) {
+  /**
+   * 重同步事件（spec §4.7）：桌面端已把本订阅者重锚到 `min_offset` 并从该点
+   * 重播（Rust 侧已重锚缓存与水位，重播帧按实时帧直达）。
+   *
+   * 前端动作：清屏 + 游标重锚到 min_offset + 一次性提示。重锚后到达的重播帧
+   * 恰从 min_offset 起 → 无缺口、无重复。既有「帧首越过游标 → forceReplay」
+   * 间接路径保留为兜底（老端/信号缺失时行为不变）。
+   */
+  function onResyncEvent(payload: { session_id: string; min_offset: number; snapshot_offset: number }) {
     const buffer = buffers.get(payload.session_id)
     if (!buffer || buffer.sessionStopped) return
     const handler = realtimeHandlers.get(payload.session_id)
-    // 链路调试对账：收流计数（base64 长度换算近似字节，无需解码）
-    const stats = statsFor(payload.session_id)
+    logger.warn(
+      `[terminalBuffer] resync (${payload.session_id}): re-anchor at minOffset=${payload.min_offset}, ` +
+        `snapshot=${payload.snapshot_offset}, clear + anchored replay`,
+    )
+    // 在途历史拼接失效：缓存已重锚，旧拼接结果（[旧游标, 旧快照)）会把
+    // 已淘汰区间的字节重新写进终端（重复内容/错位）
+    replayGenerations.set(payload.session_id, (replayGenerations.get(payload.session_id) ?? 0) + 1)
+    buffer.historyPreparing = false
+    buffer.bufferedLive = []
+    buffer.bufferedBytes = 0
+    handler?.onClear?.()
+    if (!buffer.truncatedNotified) {
+      buffer.truncatedNotified = true
+      handler?.onTruncated?.(payload.min_offset)
+    }
+    buffer.lastRenderedOffset = payload.min_offset
+    buffer.minOffset = payload.min_offset
+    buffer.snapshotOffset = payload.snapshot_offset
+    buffer.headTrimmed = true
+    knownPhases.set(payload.session_id, 'live')
+    if (PHASE_RANK[buffer.phase] < PHASE_RANK.live) buffer.phase = 'live'
+    buffer.subscribed = true
+  }
+
+  // ==================== 段2 Channel 帧入口 ====================
+
+  /**
+   * TB v3 帧头长度：magic 2B + version 1B + flags 1B + start_offset 8LE + len 4LE
+   * （与 Rust `terminal_link::encode_data_frame` 同源，改布局必须两端同步）
+   */
+  const TB_FRAME_HEADER_LEN = 16
+  /** TB v3 magic（'T','B'） */
+  const TB_MAGIC_T = 0x54
+  const TB_MAGIC_B = 0x42
+  const TB_VERSION_V3 = 3
+
+  /**
+   * 段2 Channel 消息入口：解析 TB v3 数据帧并逐帧投递。
+   *
+   * 为什么在前端分帧而不是让 Rust 一条消息一帧：补投路径会把连续段按额度切片，
+   * 单条消息可能承载多帧（切片只落在字节边界）。按 16B 头驱动解析与段1 wire 协议
+   * 同一口径——帧语义只有一份真源，也使两端可共享编解码。
+   *
+   * 帧头异常（magic 不符/未知版本/长度越界）时停止解析并告警：残渣不可解释，
+   * 继续猜测只会写出错位内容（后续由缺口自愈路径重拼接）
+   */
+  function onChannelMessage(sessionId: string, payload: ArrayBuffer | Uint8Array) {
+    const bytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload)
+    let offset = 0
+    while (offset + TB_FRAME_HEADER_LEN <= bytes.byteLength) {
+      if (bytes[offset] !== TB_MAGIC_T || bytes[offset + 1] !== TB_MAGIC_B) {
+        logger.warn(`[terminalBuffer] channel frame magic mismatch at ${offset} (${sessionId})`)
+        return
+      }
+      const view = new DataView(bytes.buffer, bytes.byteOffset + offset, TB_FRAME_HEADER_LEN)
+      const version = view.getUint8(2)
+      if (version !== TB_VERSION_V3) {
+        logger.warn(`[terminalBuffer] channel frame unknown version=${version} (${sessionId})`)
+        return
+      }
+      const start = Number(view.getBigUint64(4, true))
+      const len = view.getUint32(12, true)
+      const bodyStart = offset + TB_FRAME_HEADER_LEN
+      if (bodyStart + len > bytes.byteLength) {
+        logger.warn(
+          `[terminalBuffer] truncated channel frame at ${offset}: len=${len}, remain=${bytes.byteLength - bodyStart} (${sessionId})`,
+        )
+        return
+      }
+      // slice 而非 subarray：帧负载会被写入队列/背压统计长期持有，切开与整条
+      // 通道消息（可能承载多帧）的视图关联，避免 parent buffer 被意外拖住
+      handleFrame(sessionId, start, start + len, bytes.slice(bodyStart, bodyStart + len))
+      offset = bodyStart + len
+    }
+  }
+
+  /** 单帧投递：历史拼接中缓冲，拼接完成按序 FLUSH；未拼接的分发渲染 */
+  function handleFrame(sessionId: string, startOffset: number, endOffset: number, data: Uint8Array) {
+    const buffer = buffers.get(sessionId)
+    if (!buffer || buffer.sessionStopped) return
+    const handler = realtimeHandlers.get(sessionId)
+    // 链路调试对账：收流计数（Channel 走 Raw 字节，无需再按 base64 长度估算）
+    const stats = statsFor(sessionId)
     stats.framesReceived++
-    stats.bytesReceivedApprox += Math.floor((payload.data_base64?.length ?? 0) / 4) * 3
+    stats.bytesReceived += data.byteLength
     if (!handler) {
       // 页面未开：帧只进 Rust 缓存，前端丢弃（重进时经 getHistory 回补）
       stats.framesNoHandler++
-      maybeLogFrameStats(payload.session_id)
+      maybeLogFrameStats(sessionId)
       return
     }
-    const frame: OutputFrame = {
-      data: base64ToBytes(payload.data_base64),
-      startOffset: payload.start_offset,
-      endOffset: payload.end_offset,
-      isWaiting: false,
-    }
+    const frame: OutputFrame = { data, startOffset, endOffset, isWaiting: false }
     if (buffer.historyPreparing) {
       buffer.bufferedLive.push(frame)
       buffer.bufferedBytes += frame.data.byteLength
@@ -275,7 +389,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       }
       return
     }
-    deliverFrame(payload.session_id, frame)
+    deliverFrame(sessionId, frame)
   }
 
   /**
@@ -372,7 +486,9 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       const known = knownPhases.get(sessionId) ?? 'idle'
       buffer = {
         phase: known,
-        subscribed: false,
+        // 信念由 phase 派生：订阅完成事件早于页面挂载时，新 buffer 必须直接
+        // 继承「已订阅」，否则输入会被 subscribed 门控误拒（P0-1）
+        subscribed: isSubscribedPhase(known),
         subscribing: false,
         lastRenderedOffset: null,
         snapshotOffset: 0,
@@ -520,6 +636,25 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       }
     }
 
+    // 跨洞历史（Rust 缓存检出上游丢帧）：快照是跨洞拼接产物，其声明区间与
+    // 真实负载不符——直接上屏会把转义序列切在半途、内容错位。走与截断相同的
+    // 清屏 + 锚定重播路径，并一次性提示历史不完整（P1-4）
+    if (result.gapDetected === true) {
+      logger.warn(
+        `[terminalBuffer] history gap detected (${sessionId}): minOffset=${result.minOffset} ` +
+          `snapshot=${result.snapshotOffset}, clear + anchored replay`,
+      )
+      if (buffer.lastRenderedOffset !== null) {
+        handler.onClear?.()
+        buffer.lastRenderedOffset = null
+      }
+      buffer.headTrimmed = true
+      if (!buffer.truncatedNotified) {
+        buffer.truncatedNotified = true
+        handler.onTruncated?.(result.minOffset)
+      }
+    }
+
     // 写入历史段（写解析完成才推进游标——写入管线确认）
     const history = base64ToBytes(result.dataBase64)
     // 链路调试（字节对账）：历史段元数据 + 实际负载（payloadBytes 应等于
@@ -556,6 +691,12 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     buffer.minOffset = result.minOffset
     buffer.snapshotOffset = result.snapshotOffset
     buffer.lastRenderedOffset = Math.max(buffer.lastRenderedOffset ?? 0, result.snapshotOffset)
+    // 历史段已写入 xterm（writeParsed 的写入回调已确认解析完成）→ 立即回发渲染
+    // ack。不能只依赖 onWriteParsed：该事件在本批回放期间触发时游标尚未推进
+    //（此刻仍为 null），回放字节就不会产生任何渲染 ack；若桌面端恰在回放前已
+    // 进入背压暂停态，则再无 ack 能让它恢复 PTY 读（现场：运行中滑不动 + 输入
+    // 无回显）。ackRendered 内部对游标为 null 短路，此处游标必然已就绪
+    ackRendered(sessionId)
     if (result.minOffset > 0 && !buffer.headTrimmed) {
       // 历史头部有淘汰（缓存 LL 或 Rust 16MB 上限）：回放起点非流首提示
       buffer.headTrimmed = true
@@ -581,6 +722,57 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
 
   // ==================== Socket/订阅生命周期（Rust 驱动） ====================
 
+  /**
+   * 应用 Rust 链路状态快照（`terminal_get_state`）：收敛前端订阅信念。
+   *
+   * 为什么需要：Rust `terminal_subscribe` 是幂等的——链路已在运行时**不发任何
+   * 状态事件**，前端仅靠事件会永久停在「未订阅」：输入被 `sendInput` 的
+   * subscribed 门控拒绝、订阅重试循环空转（P0-1 现场）。对账是唯一兜底。
+   *
+   * 只前进不回退：命令响应与状态事件分属两条通道，响应可能晚于更新的
+   * 事件到达，回退会把已推进的 phase 冲掉。
+   */
+  function applyLinkState(sessionId: string, state: TerminalLinkState | null | undefined) {
+    // 异常/空状态（命令异常或无返回值）不得污染既有信念
+    if (!state) return
+    const incoming = PHASE_MAP[state.phase ?? ''] ?? null
+    const buffer = buffers.get(sessionId)
+    if (state.stopped) {
+      // 链路已停止（会话结束/手动取消）：与 stopped 事件同语义
+      knownPhases.delete(sessionId)
+      if (buffer) {
+        buffer.sessionStopped = true
+        buffer.subscribed = false
+        buffer.subscribing = false
+        buffer.phase = 'idle'
+      }
+      return
+    }
+    if (!incoming) return
+    // 只前进不回退：陈旧快照不得覆盖更新的状态事件，也不得写入 knownPhases
+    if (buffer && PHASE_RANK[incoming] < PHASE_RANK[buffer.phase]) return
+    knownPhases.set(sessionId, incoming)
+    if (!buffer) return
+    buffer.phase = incoming
+    buffer.subscribed = isSubscribedPhase(incoming)
+    if (buffer.subscribed) {
+      buffer.subscribing = false
+      buffer.sessionStopped = false
+    }
+  }
+
+  /** 主动拉取 Rust 链路状态并对账（订阅/刷新路径的收敛兜底） */
+  async function reconcileState(sessionId: string): Promise<void> {
+    try {
+      const state = await terminalGetState(sessionId)
+      // 对账期间 buffer 可能已被清理（会话删除）：重新取一次
+      if (!buffers.has(sessionId)) return
+      applyLinkState(sessionId, state)
+    } catch (e: any) {
+      logger.warn(`[terminalBuffer] state reconcile failed for ${sessionId}:`, e?.message || e)
+    }
+  }
+
   /** 订阅会话（统一入口，幂等）：确保 Rust 链路订阅；页面进出不再控制订阅 */
   async function subscribeSession(sessionId: string): Promise<SubscribeSnapshot | null> {
     const buffer = ensureBuffer(sessionId)
@@ -599,11 +791,17 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     }
     buffer.subscribing = true
     buffer.phase = 'connecting'
+    let invoked = true
     await terminalSubscribe(sessionId).catch((e) => {
       logger.warn(`[terminalBuffer] subscribe ${sessionId} failed:`, e)
-      buffer.subscribing = false
+      invoked = false
     })
-    return null // 订阅确认经 terminal-state 事件异步到达
+    // 幂等订阅不发事件：调用成功后主动对账一次，保证信念必然收敛
+    if (invoked) await reconcileState(sessionId)
+    // 调用失败且未订阅：复位订阅中标志，交由调用方重试（成功路径保持
+    // subscribing=true 直到状态事件/对账落定，避免重试路径误判失败）
+    if (!invoked && !buffer.subscribed) buffer.subscribing = false
+    return null // 订阅确认经 terminal-state 事件/状态对账异步到达
   }
 
   function resetMissingStrikes(sessionId: string) {
@@ -667,7 +865,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     })
   }
 
-  /** 退出终端页：清理前端消费态；Rust 订阅保持（会话未停），切批量传播 */
+  /** 退出终端页：清理前端消费态 + 段2 取消订阅；段1（Rust ↔ 桌面端）保持 */
   function markPageLeft(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
@@ -675,12 +873,35 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
       buffer.bufferedBytes = 0
       buffer.historyPreparing = false
     }
+    // 通道随即失效：先把 onmessage 换成空操作（在途帧不得写进已卸载的 xterm），
+    // 再交给 Rust 清空槽位（清槽失败也无妨——Rust 侧发送失败会自动清）。
+    // 不能用 null：真实 Channel 的 onmessage 是不可空回调，其调度处直接
+    // `this.#onmessage.call(...)`——置 null 会让订阅取消瞬间的在途帧抛 TypeError
+    const channel = pageChannels.get(sessionId)
+    if (channel) {
+      channel.onmessage = () => {}
+      pageChannels.delete(sessionId)
+    }
+    // 段2 取消订阅：Rust 停止向本端推实时帧（页面关闭期间逐帧 IPC 是纯空转），
+    // 段1 收帧与缓存照常——重进页面经历史拼接回补
+    terminalPageUnsubscribe(sessionId).catch((e) => {
+      logger.warn(`[terminalBuffer] page unsubscribe ${sessionId} failed:`, e)
+    })
     // 双速：回退 batch（满 batch_bytes 才转发——桌面端可配置），减少空转流量
     terminalSetMode(sessionId, 'batch').catch(() => {})
   }
 
-  /** 进入终端页：实时模式（读即传） */
+  /** 进入终端页：段2 订阅（开启事件推送）+ 实时模式（读即传） */
   function markPageEntered(sessionId: string) {
+    // 段2 订阅：与页面进出严格配对（进入订阅 / 退出取消）。幂等且不依赖段1
+    // 链路已建立——通道与订阅意愿先于链路记录，链路建立后即生效。
+    // 先注册通道再 invoke：invoke 在途时若有帧到达，也不会因缺 onmessage 而丢
+    const channel = new Channel<ArrayBuffer>()
+    channel.onmessage = (message) => onChannelMessage(sessionId, message)
+    pageChannels.set(sessionId, channel)
+    terminalPageSubscribe(sessionId, channel).catch((e) => {
+      logger.warn(`[terminalBuffer] page subscribe ${sessionId} failed:`, e)
+    })
     terminalSetMode(sessionId, 'realtime').catch(() => {})
   }
 
@@ -734,18 +955,28 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     terminalUnsubscribe(sessionId).catch(() => {})
   }
 
-  /** 标记会话恢复运行：重新订阅（Rust 重建链路） */
+  /** 标记会话恢复运行：重新订阅（Rust 重建链路）
+   *
+   * 仅当本地确实处于「已停止」态才重置订阅信念/游标——重置是破坏性的：
+   * `subscribed=false` 会让输入被门控拒绝，`lastRenderedOffset=null` 会让下一轮
+   * 历史拼接以 from=0 全量重播并叠加在现有画面上（格式错乱）。桌面端重复广播
+   * running（无状态迁移）时绝不能触发（P0-1）。
+   */
   function markSessionRunning(sessionId: string) {
     const buffer = buffers.get(sessionId)
     if (buffer) {
+      const wasStopped = buffer.sessionStopped
       buffer.sessionStopped = false
-      buffer.subscribed = false
-      buffer.phase = 'idle'
-      buffer.subscribing = false
-      buffer.lastRenderedOffset = null
-      buffer.bufferedLive = []
-      buffer.bufferedBytes = 0
-      buffer.historyPreparing = false
+      if (wasStopped) {
+        // 真实「停止 → 运行」迁移：偏移空间从 0 重建，必须整体复位
+        buffer.subscribed = false
+        buffer.phase = 'idle'
+        buffer.subscribing = false
+        buffer.lastRenderedOffset = null
+        buffer.bufferedLive = []
+        buffer.bufferedBytes = 0
+        buffer.historyPreparing = false
+      }
     }
     void subscribeSession(sessionId)
   }
@@ -781,13 +1012,20 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     frameStats.clear()
     lastGapRespliceAt.clear()
     lastActivityAt.clear()
-    if (frameUnlisten) {
-      frameUnlisten()
-      frameUnlisten = null
+    // 段2 推送通道随全部缓冲区一并作废（页面已不存在，Rust 侧槽位由
+    // terminal_unsubscribe_all / 会话删除清理）；置空操作回调而非 null，理由同
+    // markPageLeft（真实 Channel 的 onmessage 不可为空）
+    for (const channel of pageChannels.values()) {
+      channel.onmessage = () => {}
     }
+    pageChannels.clear()
     if (stateUnlisten) {
       stateUnlisten()
       stateUnlisten = null
+    }
+    if (resyncUnlisten) {
+      resyncUnlisten()
+      resyncUnlisten = null
     }
   }
 
@@ -873,6 +1111,7 @@ export const useTerminalBufferStore = defineStore('terminalBuffer', () => {
     registerRealtimeHandler,
     unregisterRealtimeHandler,
     subscribeSession,
+    reconcileState,
     resetMissingStrikes,
     sendInput,
   }

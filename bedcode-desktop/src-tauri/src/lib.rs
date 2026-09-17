@@ -209,6 +209,22 @@ pub fn run() {
                 }
             }
 
+            // 正式版（release）禁用右键原生菜单：WebKitGTK 的 context-menu 信号
+            // 处理器返回 true 阻止默认菜单弹出（JS preventDefault 在 Linux 上无效，
+            // 见 wry#30）；dev 构建保留右键菜单，便于开发调试（检查元素等）。
+            #[cfg(all(target_os = "linux", not(debug_assertions)))]
+            {
+                use webkit2gtk::WebViewExt;
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) = win.with_webview(|platform_webview| {
+                        platform_webview.inner().connect_context_menu(|_, _, _, _| true);
+                    }) {
+                        // 仅释放开关功能失败，不影响启动；失败时右键菜单保持默认行为
+                        tracing::warn!(error = %e, "禁用右键菜单失败（WebKitGTK context-menu 信号连接失败）");
+                    }
+                }
+            }
+
             let app_handle = app.handle();
 
             // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志

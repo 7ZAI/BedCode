@@ -28,6 +28,8 @@ const cmd = vi.hoisted(() => ({
   terminalSendInput: vi.fn(async () => {}),
   terminalAckRendered: vi.fn(async () => {}),
   terminalSetMode: vi.fn(async () => {}),
+  terminalPageSubscribe: vi.fn(async () => {}),
+  terminalPageUnsubscribe: vi.fn(async () => {}),
   terminalGetHistory: vi.fn(async (_s: string, _f: number) => ({
     from: 0,
     minOffset: 0,
@@ -35,8 +37,26 @@ const cmd = vi.hoisted(() => ({
     historyBytes: 0,
     dataBase64: '',
   })),
+  // Rust 链路状态对账（订阅幂等无事件路径的收敛兜底）：默认未订阅
+  terminalGetState: vi.fn(async (sessionId: string) => ({
+    sessionId,
+    phase: 'idle',
+    cursor: 0,
+    snapshotOffset: 0,
+    minOffset: 0,
+    acked: 0,
+    mode: 'realtime',
+    stopped: false,
+    historyBytes: 0,
+  })),
 }))
 vi.mock('@/composables/useMobileCommands', () => cmd)
+
+// 用户可见提示（历史截断/跨洞通知）与 i18n 与本用例断言的链路行为无关，按项目惯例替身化
+vi.mock('@/composables/useToast', () => ({
+  useToast: () => ({ success: vi.fn(), error: vi.fn(), warning: vi.fn(), info: vi.fn() }),
+}))
+vi.mock('@/locales', () => ({ default: { global: { t: (key: string) => key } } }))
 
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
@@ -59,7 +79,6 @@ describe('useTerminalBuffer（Rust 驱动）', () => {
     store = useTerminalBufferStore()
     terminalBuffer = useTerminalBuffer()
     vi.clearAllMocks()
-    eventHandlers['terminal-frame'] = null
     eventHandlers['terminal-state'] = null
     ;(vi.mocked(listenMock).mockImplementation as any)(async (name: string, cb: (p: unknown) => void) => {
       eventHandlers[name] = cb

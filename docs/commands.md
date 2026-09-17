@@ -200,8 +200,10 @@ pnpm run tauri:android:dev
 
 # Android 开发模式 + 电脑端日志落盘
 # 普通 tauri:android:dev 只打控制台；本命令额外把 Tauri CLI 转发的 logcat
-# 实时写入 .dev-logs/android-dev.YYYY-MM-DD.log（UTC 日期，无 ANSI 码，可 grep）。
-# 每次启动清空当天日志文件（跨天按 UTC 轮转新文件）；Ctrl+C 退出前 flush 落盘
+# 实时写入 .dev-logs/android-dev.YYYY-MM-DD.log（本地日期轮转，无 ANSI 码，可 grep）。
+# 每次启动清空当天日志文件；Ctrl+C 退出前 flush 落盘；退出时打印过滤统计。
+# 落盘内容默认过滤非业务噪音（wasmtime/cranelift·框架 tag·Gradle/Vite 构建进展），
+# 业务与链路日志全保留；控制台与落盘同一套过滤（BEDCODE_LOG_NO_FILTER=1 可关闭看全量）
 pnpm run tauri:android:dev:log
 
 # 仅 Rust 编译检查
@@ -533,7 +535,7 @@ cd <project>/src-tauri && cargo build
 | 插件构建（桌面） | `bedcode-desktop` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/desktop/` |
 | 插件构建（移动） | `bedcode-mobile` | `pnpm run plugins:build` | 产物复制到 `src-tauri/resources/plugins/mobile/` |
 | Android 开发 | `bedcode-mobile` | `pnpm run tauri:android:dev` | 真机/模拟器 + 热更新 |
-| Android 开发（日志落盘） | `bedcode-mobile` | `pnpm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log` |
+| Android 开发（日志落盘） | `bedcode-mobile` | `pnpm run tauri:android:dev:log` | logcat 写入 `.dev-logs/android-dev.*.log`（默认过滤非业务噪音，`BEDCODE_LOG_NO_FILTER=1` 关闭） |
 | Android APK | `bedcode-mobile` | `pnpm run tauri:android:build` | `.apk` |
 | Android 快速构建 | `bedcode-mobile` | `pnpm run tauri:android:build:fast` | Debug `.apk` |
 | 前端测试 | `<project>` | `pnpm run test:run` | 终端输出 |
@@ -551,13 +553,13 @@ cd <project>/src-tauri && cargo build
   → ~/.pi/agent/sessions/--home-binblink-project-tauriProject-BedCode--
 ```
 
-- **基准日期** = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天），早于（基准 − N 天）的视为过期；默认 N=15
+- **基准日期** = 本项目 `.pi/sessions/` 中最新 session 的时间戳（非今天），早于（基准 − N 天）的视为过期；默认 N=10
 - 只处理顶层 `*.jsonl` 与 `YYYY-MM-DDThh-mm-ss-msZ_<ulid>` 形式的 session 目录；`sol-pi` / `subagent-artifacts` 等非 session 目录绝不触碰
 - 目标已有同名条目时跳过并警告，绝不覆盖
 - 脚本由 `scripts/` 位置推导项目根，天然只在项目范围内生效；可在任意目录用绝对路径执行
 
 ```bash
-# 实际归档（默认 15 天）
+# 实际归档（默认 10 天）
 scripts/pi-session-archive.sh
 
 # 只预览不移动（推荐先跑）

@@ -1,489 +1,71 @@
-//! Desktop Commands - Rust 后端命令封装
+//! Desktop Commands - Rust 后端命令封装（聚合层）
 //!
-//! 所有桌面端可用的 Tauri 命令调用
-
-import { invoke } from '@tauri-apps/api/core'
-import { logger } from '@/utils/frontendLogger'
-import { invokeWithTimeout } from '@/utils/invoke'
-import { listen, type UnlistenFn } from '@tauri-apps/api/event'
-
-// ==================== Types ====================
-
-import type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo } from './model'
-export type { WslDistro, SessionInfo, SessionConfig, DeviceConnectionInfo }
-
-// ==================== Pairing Types ====================
-
-/**
- * 配对码信息
- */
-export interface PairingCodeInfo {
-  code: string
-  created_at: string
-  expires_in: number
-}
-
-// ==================== WSL Commands ====================
-
-/**
- * 获取已安装的 WSL 发行版列表
- */
-export async function listWslDistributions(): Promise<WslDistro[]> {
-  return await invoke('list_wsl_distributions')
-}
-
-/**
- * 检查 WSL 是否可用
- */
-export async function isWslAvailable(): Promise<boolean> {
-  return await invoke('is_wsl_available')
-}
-
-// ==================== Session Commands ====================
-
-/** 终端网格尺寸（启动时作为 PTY 初始 cols/rows） */
-export interface TerminalSize {
-  cols: number
-  rows: number
-}
-
-/**
- * 启动会话（含超时）
- *
- * size：本端终端组件默认网格，PTY 以该尺寸创建（缺省用服务端配置默认值）
- */
-export async function startSession(configId: string, size?: TerminalSize): Promise<string> {
-  return await invokeWithTimeout('start_session', {
-    configId,
-    cols: size?.cols,
-    rows: size?.rows,
-  })
-}
-
-/**
- * 创建会话但不启动 PTY（含超时）
- * 返回 sessionId，前端准备好后可调用 startExistingSession 启动
- */
-export async function createSessionNoStart(configId: string): Promise<string> {
-  return await invokeWithTimeout('create_session_no_start', { configId })
-}
-
-/**
- * 启动已存在的会话（含超时，用于延迟启动场景）
- *
- * size：spawn 前按该尺寸调整 PTY（两阶段启动的第二阶段传入）
- */
-export async function startExistingSession(sessionId: string, size?: TerminalSize): Promise<void> {
-  return await invokeWithTimeout('start_existing_session', {
-    sessionId,
-    cols: size?.cols,
-    rows: size?.rows,
-  })
-}
-
-/**
- * 获取会话列表
- */
-export async function listSessions(): Promise<SessionInfo[]> {
-  return await invoke('list_sessions')
-}
-
-/**
- * 获取单个会话信息
- */
-export async function getSession(sessionId: string): Promise<SessionInfo | null> {
-  return await invoke('get_session', { sessionId })
-}
-
-/**
- * 终止会话
- */
-export async function killSession(sessionId: string): Promise<void> {
-  return await invoke('kill_session', { sessionId })
-}
-
-/**
- * 删除会话
- */
-export async function deleteSession(sessionId: string): Promise<void> {
-  return await invoke('delete_session', { sessionId })
-}
-
-/**
- * 重启会话
- */
-export async function restartSession(sessionId: string): Promise<void> {
-  return await invoke('restart_session', { sessionId })
-}
-
-/**
- * 调整终端大小
- */
-export type RendererSource = { kind: 'desktop' } | { kind: 'mobile'; deviceName: string }
-
-/** resize 裁决结果（与 Rust 侧 ResizeOutcome serde 形状对齐） */
-export type ResizeOutcome =
-  | { status: 'applied'; canonical: RendererSource }
-  | { status: 'needsConfirmation'; currentCanonical: RendererSource }
-
-/**
- * 调整会话终端大小（正统渲染端裁决）
- *
- * force=false：本端非当前正统渲染端时返回 needsConfirmation（未应用），
- * 由调用方弹窗确认后以 force=true 重发覆盖。
- */
-export async function resizeSession(
-  sessionId: string,
-  cols: number,
-  rows: number,
-  force = false,
-): Promise<ResizeOutcome> {
-  return await invoke('resize_session', { sessionId, cols, rows, force })
-}
-
-/**
- * 发送输入到会话
- */
-export async function writeToSession(sessionId: string, data: string): Promise<void> {
-  return await invoke('write_to_session', { sessionId, data })
-}
-
-/**
- * 发送特殊键
- */
-export async function sendSpecialKey(sessionId: string, key: string): Promise<void> {
-  return await invoke('send_special_key', { sessionId, key })
-}
-
-// ==================== Device Commands ====================
-
-/**
- * 获取已连接的移动设备列表
- */
-export async function getConnectedDevices(): Promise<DeviceConnectionInfo[]> {
-  return await invoke('get_connected_devices')
-}
-
-// ==================== Config Commands ====================
-
-/**
- * 创建会话配置
- */
-export async function createSessionConfig(config: {
-  name: string
-  environment: string
-  working_dir?: string
-  command?: string
-  wsl_distro?: string
-}): Promise<SessionConfig> {
-  logger.log('[createSessionConfig] calling backend with:', {
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir || '',
-    command: config.command || '',
-    wsl_distro: config.wsl_distro,
-  })
-
-  const result = await invoke('create_session_config', {
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir || '',
-    command: config.command || '',
-    wsl_distro: config.wsl_distro,
-  })
-
-  logger.log('[createSessionConfig] backend returned:', result)
-  return result as SessionConfig
-}
-
-/**
- * 获取会话配置列表
- */
-export async function listSessionConfigs(): Promise<SessionConfig[]> {
-  return await invoke('list_session_configs')
-}
-
-/**
- * 获取单个会话配置
- */
-export async function getSessionConfig(configId: string): Promise<SessionConfig | null> {
-  return await invoke('get_session_config', { id: configId })
-}
-
-/**
- * 删除会话配置
- */
-export async function deleteSessionConfig(configId: string): Promise<void> {
-  return await invoke('delete_session_config', { id: configId })
-}
-
-/**
- * 更新会话配置
- */
-export async function updateSessionConfig(config: {
-  id: string
-  name: string
-  environment: string
-  working_dir: string
-  command: string
-  wsl_distro?: string
-  auto_start?: boolean
-}): Promise<void> {
-  logger.log('[updateSessionConfig] calling with:', config)
-  return await invoke('update_session_config', {
-    id: config.id,
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir,
-    command: config.command,
-    wsl_distro: config.wsl_distro,
-    auto_start: config.auto_start,
-  })
-}
-
-// ==================== Pairing Commands ====================
-
-/**
- * 生成配对码
- * 返回完整的配对码信息（包含 code、创建时间、有效期）
- */
-export async function generatePairingCode(): Promise<PairingCodeInfo> {
-  return await invoke('generate_pairing_code')
-}
-
-/**
- * 获取配对码有效期（秒）
- */
-export async function getPairingCodeTtl(): Promise<number> {
-  return await invoke('get_pairing_code_ttl')
-}
-
-/**
- * 设置配对码有效期（秒）
- */
-export async function setPairingCodeTtl(ttl: number): Promise<void> {
-  return await invoke('set_pairing_code_ttl', { ttl })
-}
-
-/**
- * 获取当前配对码
- */
-export async function getCurrentPairingCode(): Promise<PairingCodeInfo | null> {
-  return await invoke('get_current_pairing_code')
-}
-
-/**
- * 验证配对码
- */
-export async function verifyPairingCode(code: string): Promise<boolean> {
-  return await invoke('verify_pairing_code', { code })
-}
-
-/**
- * 清除配对码
- */
-export async function clearPairingCode(): Promise<void> {
-  return await invoke('clear_pairing_code')
-}
-
-/**
- * 获取已配对设备列表
- */
-export async function listPairedDevices(): Promise<any[]> {
-  return await invoke('list_paired_devices')
-}
-
-/**
- * 移除已配对设备
- */
-export async function removePairedDevice(deviceId: string): Promise<void> {
-  return await invoke('remove_paired_device', { id: deviceId })
-}
-
-// ==================== Connection History Commands ====================
-
-/**
- * 获取设备连接历史
- */
-export async function listConnectionHistory(deviceId: string): Promise<ConnectionHistoryEntry[]> {
-  return await invoke('list_connection_history', { deviceId })
-}
-
-/**
- * 删除设备连接历史
- */
-export async function deleteConnectionHistory(deviceId: string): Promise<void> {
-  return await invoke('delete_connection_history', { deviceId })
-}
-
-/**
- * 设备连接历史条目（与后端 ConnectionHistory 序列化字段对应）
- */
-export interface ConnectionHistoryEntry {
-  id: number
-  deviceId: string
-  authMethod: string
-  result: string
-  address: string | null
-  connectedAt: string
-  disconnectedAt: string | null
-}
-
-// ==================== QR Commands ====================
-
-/**
- * 生成二维码连接信息
- */
-export async function generateQrCode(): Promise<string> {
-  return await invoke('generate_qr_code')
-}
-
-/**
- * 清除二维码
- */
-export async function clearQrCode(): Promise<void> {
-  return await invoke('clear_qr_code')
-}
-
-/**
- * 获取二维码连接信息
- */
-export async function getQrConnectionInfo(host?: string): Promise<any> {
-  return await invoke('get_qr_connection_info', { host })
-}
-
-/**
- * 获取 QR Token TTL
- */
-export async function getQrTokenTtl(): Promise<number> {
-  return await invoke('get_qr_token_ttl')
-}
-
-/**
- * 设置 QR Token TTL
- */
-export async function setQrTokenTtl(ttl: number): Promise<void> {
-  return await invoke('set_qr_token_ttl', { ttl })
-}
-
-// ==================== Quick Actions ====================
-
-/**
- * 获取快捷操作列表
- */
-export async function listQuickActions(): Promise<any[]> {
-  return await invoke('list_quick_actions')
-}
-
-/**
- * 创建快捷操作
- */
-export async function createQuickAction(action: any): Promise<string> {
-  return await invoke('create_quick_action', { action })
-}
-
-/**
- * 更新快捷操作
- */
-export async function updateQuickAction(action: any): Promise<void> {
-  return await invoke('update_quick_action', { action })
-}
-
-/**
- * 删除快捷操作
- */
-export async function deleteQuickAction(actionId: string): Promise<void> {
-  return await invoke('delete_quick_action', { actionId })
-}
-
-// ==================== Settings Commands ====================
-
-/**
- * 获取所有数据库设置
- */
-export async function getAllDbSettings(): Promise<Record<string, any>> {
-  return await invoke('get_all_db_settings')
-}
-
-/**
- * 设置数据库项
- */
-export async function setDbSetting(key: string, value: any): Promise<void> {
-  return await invoke('set_db_setting', { key, value })
-}
-
-/**
- * 获取应用设置
- */
-export async function getAppSettings(): Promise<any> {
-  return await invoke('get_app_settings')
-}
-
-/**
- * 保存应用设置
- */
-export async function saveAppSettings(settings: any): Promise<void> {
-  return await invoke('save_app_settings', { settings })
-}
-
-// ==================== System Commands ====================
-
-/**
- * Ping 命令，用于测试连接
- */
-export async function ping(): Promise<string> {
-  return await invoke('ping')
-}
-
-/**
- * 获取应用版本
- */
-export async function getAppVersion(): Promise<string> {
-  return await invoke('get_app_version')
-}
-
-/**
- * 获取应用启动时间
- */
-export async function getStartupTime(): Promise<number> {
-  return await invoke('get_startup_time')
-}
-
-/**
- * 获取本地 IP 地址列表
- */
-export async function getLocalIpAddresses(): Promise<string[]> {
-  return await invoke('get_local_ip_addresses')
-}
-
-// ==================== Event Listeners ====================
-
-let unlistenDeviceConnected: UnlistenFn | null = null
-let unlistenDeviceDisconnected: UnlistenFn | null = null
-
-/**
- * 监听设备连接事件
- */
-export async function onDeviceConnected(callback: (event: any) => void): Promise<() => void> {
-  unlistenDeviceConnected = await listen('device-connected', callback)
-  return unlistenDeviceConnected
-}
-
-/**
- * 监听设备断开事件
- */
-export async function onDeviceDisconnected(callback: (event: any) => void): Promise<() => void> {
-  unlistenDeviceDisconnected = await listen('device-disconnected', callback)
-  return unlistenDeviceDisconnected
-}
-
-/**
- * 清理所有事件监听
- */
-export function cleanupEventListeners() {
-  unlistenDeviceConnected?.()
-  unlistenDeviceDisconnected?.()
-}
+//! 所有桌面端可用的 Tauri 命令调用。命令实现已按领域拆分到
+//! src/composables/commands/ 下，本文件仅聚合 re-export 并保留
+//! useDesktopCommands() composable 兼容既有调用方：
+//! - sessionCommands：WSL 探测 + 会话生命周期 + 会话配置 CRUD
+//! - deviceCommands：设备 / 配对 / 连接历史 / QR / 快捷操作
+//! - settingsCommands：设置 / 系统
+//! - eventListeners：设备连接事件监听与清理
+
+export * from './commands/sessionCommands'
+export * from './commands/deviceCommands'
+export * from './commands/settingsCommands'
+export * from './commands/eventListeners'
+
+import {
+  listWslDistributions,
+  isWslAvailable,
+  startSession,
+  createSessionNoStart,
+  startExistingSession,
+  listSessions,
+  getSession,
+  killSession,
+  deleteSession,
+  restartSession,
+  resizeSession,
+  writeToSession,
+  sendSpecialKey,
+  createSessionConfig,
+  listSessionConfigs,
+  getSessionConfig,
+  deleteSessionConfig,
+  updateSessionConfig,
+} from './commands/sessionCommands'
+import {
+  getConnectedDevices,
+  generatePairingCode,
+  getCurrentPairingCode,
+  verifyPairingCode,
+  clearPairingCode,
+  getPairingCodeTtl,
+  setPairingCodeTtl,
+  listPairedDevices,
+  removePairedDevice,
+  listConnectionHistory,
+  deleteConnectionHistory,
+  generateQrCode,
+  clearQrCode,
+  getQrConnectionInfo,
+  getQrTokenTtl,
+  setQrTokenTtl,
+  listQuickActions,
+  createQuickAction,
+  updateQuickAction,
+  deleteQuickAction,
+} from './commands/deviceCommands'
+import {
+  getAllDbSettings,
+  setDbSetting,
+  getAppSettings,
+  saveAppSettings,
+  ping,
+  getAppVersion,
+  getStartupTime,
+  getLocalIpAddresses,
+} from './commands/settingsCommands'
+import { onDeviceConnected, onDeviceDisconnected, cleanupEventListeners } from './commands/eventListeners'
 
 // ==================== Desktop Commands Composable ====================
 

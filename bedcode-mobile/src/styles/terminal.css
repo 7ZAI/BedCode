@@ -400,16 +400,32 @@
   will-change: auto !important;
 }
 
-/* 行尾字形防裁切：DOM 渲染器给每行注入 width=网格宽 + overflow:hidden（内联样式），
- * 但行内 span 是浏览器按字体真实 advance 的流式排布——CJK 回退字体 advance ≠
- * 精确 2× 等宽格宽，亚像素误差逐字符累积，满行最后一个字的墨迹会超出行宂数 px
- * 被本行裁掉右半（pi 等中文满行输出必现）。放开行级裁切，让溢出墨迹画进行尾
- * 安全余量区（TERMINAL_LINE_END_MARGIN_COLS 预留 1 列 + 滚动条 gutter 6px），
- * 区域背景与终端同色、视觉无感。!important 用于覆盖渲染器的内联 overflow:hidden；
- * 若未来切到 WebGL 渲染器（逐格绘制无此问题），此规则自然失效无害
- * ⚠️ 配套补丁（terminalRowClip）：TUI 应用（opencode）的行尾背景填充 span
- * 会因同一漂移被推出行界，纯空白背景盒溢出在余量区形成「色块入侵/漂移」——
- * 由该补丁在行界处 clip-path 裁掉（空白无墨迹零损失），两者必须同时存在 */
+/* 行尾软裁切（DOM 渲染器 CJK advance 累计漂移的静态止血；2026-09-15 重做，
+ * 取代已停用的 terminalRowClip JS 补丁）：
+ *
+ * 问题（真机 CDP 实测）：xterm 内联给每行注入 width=网格宽 + overflow:hidden
+ * （行级硬裁），而行内 span 依浏览器真实 advance 流式排布——CJK 回退字体
+ * advance ≠ 精确 2× 格宽，亚像素误差逐字符累积，于是：
+ *   (a) 满行末字墨迹溢出网格右界「数 px」→ 被硬裁右半（pi 等中文满行输出必现）
+ *   (b) TUI（opencode）用「背景色 + 空格」填充面板时，背景盒被推出网格右界
+ *       7~22px → 行尾余量区出现随内容重绘左右摆动的色块（右侧视觉抖动来源）
+ *
+ * 方案：保留 overflow:visible 解除行级硬裁（(a) 得以落墨进行尾余量区），再用
+ * **静态** `clip-path: inset(0 -6px 0 0)` 把行界裁切统一右扩 6px
+ * （= 滚动条 gutter 宽，terminalMetrics.TERMINAL_SCROLLBAR_GUTTER_PX）：
+ *   - (a) 末字超格数 px 落在 6px 内 → 完整可见
+ *   - (b) 背景盒超出 6px 的部分被裁掉，且裁切线是**固定常量**、不随内容/重绘
+ *         变化 → 色块不再摆动；6px 落在 gutter 区内，视觉等价于「面板铺到
+ *         滚动条线」，余量区其余部分仍是主题底色（与画布同色，视觉无感）
+ *
+ * 为什么静态裁切不会像旧补丁那样抖：
+ *   - 裁切量是 CSS 常量，**零逐帧样式写入**——不存在「漂移量在 1px 容差阈值
+ *     两侧振荡 → clip-path 反复写/清」触发的合成层/重绘抖动
+ *   - 无 MutationObserver/ResizeObserver 回调，无 getBoundingClientRect 强制布局
+ *   - 纯 paint 级裁切，不新增 GPU 合成层（与下方 .xterm-screen will-change:auto
+ *     约束一致——合成层会导致 scrollToLine 新旧帧同显的重影）
+ *   - 若未来切到 WebGL/canvas 渲染器（逐格绘制无漂移），本规则自然失效无害 */
 .xterm-rows > div {
   overflow: visible !important;
+  clip-path: inset(0 -6px 0 0);
 }

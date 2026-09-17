@@ -269,31 +269,15 @@ export function isErrorState(state: PluginState): boolean {
   return state.state === 'Error'
 }
 
-/** 获取错误信息 */
+/** 错误信息 */
 export function getErrorMessage(state: PluginState): string {
   return state.state === 'Error' ? state.error || '' : ''
 }
 
-/** 字节数格式化 */
-export function formatBytes(bytes: number): string {
-  if (!bytes || bytes <= 0) return '—'
-  const units = ['B', 'KB', 'MB', 'GB']
-  let value = bytes
-  let unit = 0
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024
-    unit++
-  }
-  return `${value >= 100 || unit === 0 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`
-}
-
-/** unix 毫秒时间戳格式化，缺失时显示 '—' */
-export function formatTime(ms?: number): string {
-  if (!ms) return '—'
-  const d = new Date(ms)
-  const pad = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
+// 字节数 / 时间戳格式化已收敛到 @/utils/format，此处 import + re-export
+// 保持既有调用（模块内与 PluginDetailView 等）不断链
+import { formatBytes, formatTime } from '@/utils/format'
+export { formatBytes, formatTime }
 
 /** 插件是否有可配置项（实例运行中 + 有 configuration 声明；Degraded 放行——用户可能正是要改配置修复启动失败） */
 export function hasConfiguration(plugin: PluginInfo): boolean {

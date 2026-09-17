@@ -2,7 +2,8 @@
  * useTuiCompat 单测（ADR-0013：移动端 TUI 滚动兼容）
  *
  * 覆盖：
- * 1. createMouseSgrSniffer — 1006h 启用 / 1006l 关闭 / CSI 跨 chunk 切分 / 无关序列忽略 / reset
+ * 1. createMouseSgrSniffer — 1006h 启用 / 1006l 关闭 / CSI 跨 chunk 切分 / 无关序列忽略 /
+ *    多参数合并序列（ESC[?1000;1006h）/ 上报模式显式关闭后以真实开关为准 / reset
  * 2. createSgrWheelSequence — 方向映射（>0 下滚 65，<0 上滚 64）/ 坐标 / 单次上限
  * 3. useTuiCompat — 双条件门控 / 灵敏度折算（1/3）/ 节流合并 / inflight 丢弃 /
  *    小数余量保留 / 非 TUI 模式不发送
@@ -65,6 +66,49 @@ describe('createMouseSgrSniffer', () => {
     const sniffer = createMouseSgrSniffer()
     sniffer.feed(enc('\x1b[?1002h\x1b[?1000h'))
     expect(sniffer.enabled).toBe(false)
+  })
+
+  it('多参数合并序列 ESC[?1000;1006h 同时启用上报与 SGR', () => {
+    const sniffer = createMouseSgrSniffer()
+    sniffer.feed(enc('\x1b[?1000;1006h'))
+    expect(sniffer.enabled).toBe(true)
+  })
+
+  it('多参数合并序列 ESC[?1000;1006l 同时复位', () => {
+    const sniffer = createMouseSgrSniffer()
+    sniffer.feed(enc('\x1b[?1000;1006h'))
+    expect(sniffer.enabled).toBe(true)
+    sniffer.feed(enc('\x1b[?1000;1006l'))
+    expect(sniffer.enabled).toBe(false)
+  })
+
+  it('跨 chunk 切分的多参数序列仍能识别', () => {
+    const sniffer = createMouseSgrSniffer()
+    sniffer.feed(enc('\x1b[?1000;10'))
+    expect(sniffer.enabled).toBe(false)
+    sniffer.feed(enc('06h'))
+    expect(sniffer.enabled).toBe(true)
+  })
+
+  it('观察到上报模式后以其真实开关为准：1006 仍在但上报关闭 → 不可滚动', () => {
+    const sniffer = createMouseSgrSniffer()
+    sniffer.feed(enc('\x1b[?1000h\x1b[?1006h'))
+    expect(sniffer.enabled).toBe(true)
+    // 应用显式关闭上报（1000l）而 1006 仍置位：滚轮事件不再被接收
+    sniffer.feed(enc('\x1b[?1000l'))
+    expect(sniffer.enabled).toBe(false)
+    // 重新开启上报即恢复可滚动
+    sniffer.feed(enc('\x1b[?1000h'))
+    expect(sniffer.enabled).toBe(true)
+  })
+
+  it('reset 清空上报模式记忆（回到 1006 单条件判定）', () => {
+    const sniffer = createMouseSgrSniffer()
+    sniffer.feed(enc('\x1b[?1000l\x1b[?1006h'))
+    expect(sniffer.enabled).toBe(false)
+    sniffer.reset()
+    sniffer.feed(enc('\x1b[?1006h'))
+    expect(sniffer.enabled).toBe(true)
   })
 
   it('reset 复位状态', () => {

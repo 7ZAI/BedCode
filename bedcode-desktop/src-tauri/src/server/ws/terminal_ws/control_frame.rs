@@ -21,7 +21,7 @@ pub enum WatchMode {
 }
 
 impl WatchMode {
-    /// forward_loop 模式原子取值（对齐 forward::MODE_REALTIME / MODE_BATCH）
+    /// 订阅者执行体模式原子取值（对齐 forward::MODE_REALTIME / MODE_BATCH）
     pub fn as_u8(self) -> u8 {
         match self {
             WatchMode::Realtime => crate::server::ws::terminal_ws::forward::MODE_REALTIME,
@@ -90,6 +90,11 @@ pub enum ServerFrame {
     },
     /// 历史段结束标记（此后为实时帧；空历史也必发）
     HistoryEnd { snapshot_offset: u64 },
+    /// 重同步信号（spec §4.7）：订阅者游标早于环驻留起点 → 客户端清屏 +
+    /// 以 `min_offset` 重锚；随后服务端从 `min_offset` 连续重播，历史边界为
+    /// `snapshot_offset`（该值同时是随后 HistoryEnd 的边界）。
+    /// 只增不改：老客户端忽略未知控制帧后退化为既有「缺口 → 重拼接」自愈路径
+    Resync { min_offset: u64, snapshot_offset: u64 },
     /// 会话停止通知（服务端主动推送，此后连接不再有输出）
     SessionStopped { session_id: String },
     /// 错误（code 语义与旧路由 error 消息一致）
@@ -270,6 +275,19 @@ mod tests {
         assert_eq!(v["snapshot_offset"], 42);
         assert_eq!(v["min_offset"], 0);
         assert_eq!(v["history_bytes"], 42);
+    }
+
+    #[test]
+    fn serialize_resync() {
+        let json = ServerFrame::Resync {
+            min_offset: 4096,
+            snapshot_offset: 8192,
+        }
+        .to_json();
+        let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(v["type"], "resync");
+        assert_eq!(v["min_offset"], 4096);
+        assert_eq!(v["snapshot_offset"], 8192);
     }
 
     #[test]
