@@ -16,7 +16,7 @@
 
 BedCode 是一个局域网远程终端应用：桌面端作为主机运行终端会话（Pi、Opencode 等 Agent CLI），手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管你的终端。任意命令行程序（含 TUI 应用）都可以在桌面端启动、从手机远程操作。
 
-插件系统是另一核心能力：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Auto Task（Agent 任务队列）、File Transfer（局域网文件互传）三个开箱即用的插件，让宿主能力可自由扩展一样自由。
+插件系统是另一核心能力：插件以 WASM 组件形态运行在 wasmtime 沙箱内（Component Model + wit ABI 桥接），资源受限、内存隔离，崩溃不影响宿主；双端均可热插拔、即启即用。配套完整的插件开发工具链 —— TypeScript / Rust 双侧 SDK、脚手架 CLI 与浏览器 dev-shell 开发环境；内置 AI Chatbox（多供应商大模型对话）、Auto Task（Agent 任务队列）、File Transfer（局域网文件互传）三个开箱即用的插件。
 
 > 使用场景：如应用名所述，躺床上编程；或在家务、带孩子、睡觉的同时处理或监控开发编程任务。
 
@@ -201,16 +201,16 @@ cd bedcode-desktop/src-tauri && cargo test      # Rust
 
 **正在开发（未发布）**
 
-- **桌面端代码查看器** — 桌面端终端窗口新增左侧代码查看器面板（对齐移动端已有能力）：项目文件树浏览 + 多标签代码视图 + shiki 语法高亮（VS Code 同源，双主题 CSS 变量）+ 会话 working_dir 自动锚定 + 大文件 / 二进制 / 权限错误拦截 + 终端宽度动态分配。后端 `commands/code_viewer.rs` 提供 `list_code_dir` / `read_code_file` / `stat_code_file` 三个命令，路径穿越 / 编码检测 / 权限错误全链路防御（16 内联单测）；前端状态层 `useCodeViewer` + 高亮 `useCodeHighlighter` + 面板组件 `CodeViewerPanel` / `FileTree` / `CodeTabs`，i18n zh/en 同步。当前 feature/code-viewer 分支完成，随下一版本发布
-- **磁盘清理插件** — 桌面端内置 WASI 组件，面向 Windows `%USERPROFILE%\AppData\Local` 与 Linux `$XDG_CACHE_HOME` 的个人缓存与用户域系统残留，对标 CCleaner 类工具的缓存清理能力。零 WIT 改动、零 ABI bump：插件经 manifest `wasiPreopenDirs: ["${cacheRoot}"]` 挂载用户级缓存根，宿主按平台解析挂载点，插件只感知固定挂载点；删除动作 = move 到隔离区 + 惰性过期，不绕过隔离区。多轮 issue 迭代完成（骨架 → 规则 → 硬黑名单 → 隔离区 → 批次还原 → 惰性过期 → Linux 平台适配 → i18n 字典）
+- **wasm核心改造** — 插件子系统重构为 WASM 内核五模块骨架（`core-config` / `core-monitor` / `core-security` / `core-bus` / `core-plugin-manager`），mDNS 等基础能力下沉为 `host-*` 原语；WIT 契约双端同步演进（ABI 桌面 10→11 / 移动 8→9），旧插件保持兼容。当前 `wasm核心改造` 分支推进中
+- **Agent Hub 插件** — 多个 Agent CLI（claude / codex / opencode / pi）的统一可视化管理：环境检测与一键安装、Skills 管理、供应商统一配置、使用统计；auto-task 能力将来并入。磁盘清理插件暂停开发，位置由 Agent Hub 顶替
 
 **规划中**
 
 - **内网穿透扩展支持** — 桌面端以插件形式实现内网穿透：经用户自购云服务器（中继，LE 证书 TLS 终止）让外网移动端像在内网一样使用（终端 WS + 文件服务 HTTP + 插件 HTTP 端点全穿透，协议无关透明管道）；含安全加固：JWT 密钥随机化、双层限速、128-bit 隧道 ID 即凭据、首次配对仅限局域网、暴露控制 kill switch + 默认 8h 自动关闭 + 并发设备上限。采用可信中继 TLS 模型，不做端到端加密（搁置到有钱买服务器为止😭）
-- **AI Agent CLI UI 化管理** — 把当前仅通过终端会话操作的 Agent CLI（Claude Code / pi / opencode / Codex）扩展为桌面端图形化管理面板：Agent 版本检测与配置（模型供应商、系统提示、权限预设、上下文策略）、任务编排（预设 / 定时 / 依赖图）、并发队列与授权代管、对话日志 JSONL 检索与回放、执行状态可视（token / 成本 / 时长）、失败重试与人工介入。基于现有 Auto Task 插件的会话桥接能力，UI 层下沉到插件沙箱，宿主仅提供 Agent CLI 生命周期钩子
 
 **架构演进**
 
+- **wasm核心改造后的架构调整** — 底座向无业务内核收敛：内核收束为进程 / 网络 / 存储 / 安全 / 通信五类引擎原语 + wasmtime 运行时，能力经 `host-*` 原语下沉到插件层，业务编排一律在插件（ADR 0022 裁剪线）。路线见 `.scratch/plugin-kernel-roadmap`，终态见 `.scratch/platform-kernel`
 - **Wasmtime 微内核 · 插件化演进** — 宿主持续向微内核收敛：wasmtime 沙箱 + 组件加载器 + 认证通信是不可切割的核心，其余能力（终端、文件服务、AI Chatbox、Auto Task、File Transfer、磁盘清理）均以 WASM 插件形态热插拔。插件运行于 WASM Component Model + wasmtime 沙箱之上，已接入 WASI preview2（文件系统 / 预打开目录）。随 WASI 标准完善（网络、时钟、进程等系统接口标准化），插件将在安全沙箱内获得近原生系统能力，且保持跨宿主可移植、跨语言、跨平台开发——宿主无需重编译即可引入新能力
 
 ## 插件化+AI 有没有搞头？
