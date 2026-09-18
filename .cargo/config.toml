@@ -1,5 +1,5 @@
 # ==================== 编译资源限制（防 CPU 满载 / 防 OOM） ====================
-# 依据：开发机 16 核 / 13GiB 内存 / 无 swap。cargo 默认 build.jobs = 逻辑核心数（16），
+# 依据：开发机 16 核 / 13GiB 内存 / 23GiB swap（swap 抖动同样拖慢构建，见下方自适应指引）。cargo 默认 build.jobs = 逻辑核心数（16），
 # 而本项目依赖图含 wasmtime / cranelift / actix 等巨型 crate，单个 rustc 进程峰值约 1~2GiB，
 # 16 路并发需要 20GiB+ —— 无 swap 时内核直接 OOM kill rustc（历史事故：桌面 dev 构建
 # 0xc0000409「页面文件被禁用」崩溃、移动端 Android 全量构建 `memory allocation ... failed`
@@ -15,6 +15,12 @@
 #     CARGO_BUILD_JOBS=3 pnpm run tauri:android:dev
 #   内存 >= 32GiB 的机器想提速（本机永久生效，无需改本文件）：
 #     在 ~/.cargo/config.toml 写 [build] jobs = 8
+#
+# 动态自适应（推荐）：构建/测试前自动采样系统资源并注入 CARGO_BUILD_JOBS（跨平台，
+#   含档位阈值与逃生阀 BEDCODE_BUILD_PROFILE / BEDCODE_ADAPTIVE=0），
+#   见 scripts/adaptive-run.mjs。本文件 jobs=4 是静态兜底，被 env 覆盖时自动让位。
+#
+
 #
 # 与 profile 级内存措施互补（profile 段只能写在 src-tauri/Cargo.toml，cargo config 不支持）：
 #   release: lto = "thin" + codegen-units = 16  —— 弃用 fat LTO + 单 codegen unit，峰值 8GiB+ → 数 GiB
