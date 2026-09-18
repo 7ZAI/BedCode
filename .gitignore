@@ -148,6 +148,9 @@ temp/
 *.p12
 *.pfx
 
+# CodeBuddy 工具配置目录（memory/rules，非项目文件）
+.codebuddy/
+
 # Android/iOS signing keys (NEVER commit these!)
 *.keystore
 *.jks

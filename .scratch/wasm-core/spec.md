@@ -153,7 +153,7 @@ CoreConfig 加载 → Engine 构建 → Monitor 注册表初始化
 ## Out of Scope
 
 - **业务下沉**：会话/终端/设备连接/对等网络引擎全部留宿主侧（roadmap 阶段 1–3 各自另行立项，本规格只做内核运行时层）。
-- **现有 Rust 引擎逐个替换为 WASM 系统组件**：http 服务器/db/mDNS 的真实 WASM 化各自立项（mDNS 见 `.scratch/mdns-service-plugin/spec.md` 试点）；本规格只交付「系统组件类型 + 能力注册表 + 装配框架」，并用一个 fake 系统组件 fixture 证明闭环。
+- **现有 Rust 引擎逐个替换为 WASM 系统组件**：http 服务器/db 的真实 WASM 化各自立项（mDNS 已改判为宿主基础能力服务，不再 WASM 化，见 `.scratch/2026-09-10-mdns-service-plugin/spec-basic-capability-service.md`）；本规格只交付「系统组件类型 + 能力注册表 + 装配框架」，并用一个 fake 系统组件 fixture 证明闭环。
 - **wasmtime 原生组件组合（composition）**：二期方向，本规格一期用 host-side 转发。
 - **前端诊断页**：监控快照 API 的消费 UI 另行立项。
 - **移动端内核移植**：WIT 契约变更双端同步演进（ADR 0019；移动端契约独立演进见 ADR 0018），但移动端运行时模块化移植另行立项。
@@ -162,7 +162,7 @@ CoreConfig 加载 → Engine 构建 → Monitor 注册表初始化
 
 ## Further Notes
 
-- **与愿景/路线图的关系**：platform-kernel/spec.md 是终点（无业务内核 + 全业务插件化），plugin-kernel-roadmap/spec.md 是渐进次序（业务下沉的阶段划分）。本规格不重叠两者——它落地的是愿景中「**运行时层 + 内核扩展点**」的模块化：配置/监控/安全/插件管理/总线五块是内核的「自我修养」，无论业务下沉到哪个阶段都需要。系统组件类型为路线图阶段 1（mDNS 服务插件）及后续「服务插件」提供正式挂载形态。
+- **与愿景/路线图的关系**：platform-kernel/spec.md 是终点（无业务内核 + 全业务插件化），plugin-kernel-roadmap/spec.md 是渐进次序（业务下沉的阶段划分）。本规格不重叠两者——它落地的是愿景中「**运行时层 + 内核扩展点**」的模块化：配置/监控/安全/插件管理/总线五块是内核的「自我修养」，无论业务下沉到哪个阶段都需要。系统组件类型为「内置 WASM 能力组件」提供正式挂载形态——mDNS 已改判为基础服务留内核（见 v2 spec，不再插件化），该类型仍为后续引擎能力 WASM 化（如 http/db）保留装配位。
 - **术语对齐**：「系统组件」即愿景中的「服务插件」（内置 WASM 组件，提供能力）；「应用插件」即现有插件形态。文档与代码注释沿用 CONTEXT.md 词汇（插件契约、启用/激活、内置插件只停不删）。
 - **用户原始诉求中的「wasmtimer」即 wasmtime**（项目技术栈中的运行时，两端锁 47）。
 - **风险提示**：系统组件「host-side 转发」路径会让能力调用多一跳 guest→host→guest 序列化开销。一期可接受（能力调用非热路径；热路径红线如 PTY 输出分发本就不进 WASM）。若未来某能力成为热路径，再评估 wasmtime 原生组件组合。

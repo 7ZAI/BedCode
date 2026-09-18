@@ -1,6 +1,8 @@
 # mDNS 服务插件（完全插件化试点）实施规格
 
-Status: ready-for-agent
+> **⚠️ 本规格已作废（2026-09-15）**：mDNS **不再完全插件化**，改判为**内核基础能力服务 `MdnsService`**——与 host-http / host-database 同构，经 WIT 原语（browse / advertise / stop-advertise / is-advertising）供插件调用，事件按属主定向投递。现行规格见同目录 `spec-basic-capability-service.md`（v2，Status: implemented，双端落地并验收）。本文保留作历史档案，不再实施。
+
+Status: superseded（v2 现行，见 `spec-basic-capability-service.md`）
 Date: 2026-09-10
 决策来源: 架构探索会话（同日）。裁剪线依据 `docs/adr/0022-plugin-host-interface-primitive-boundary.md`，插件互调 `docs/adr/0017-plugin-inter-plugin-call-gate.md`，wasmtime 锁版 `docs/adr/0019-wasmtime-version-locked-across-ends.md`。术语以 `CONTEXT.md` 为准。
 
