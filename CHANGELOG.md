@@ -5,18 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.1.1] - 2026-09-18
+
+> Features · Platform & Infrastructure · Improvements · Fixes · Security · Tests & Quality · Documentation
 
 ### Features
 
-#### agent-hub Plugin — Central Credential Store
-- Provider presets now carry a central credential column (`provider_preset.api_key`): configure each provider's API key once and distribute it to multiple agents (claude / pi / opencode); keys are always masked in lists/state/import results (first 3 chars + length) and only logged by length — plaintext lives solely in the plugin DB (user decision 2026-09-14 to drop the "no key in hub storage" rule)
-- Reverse import now captures source CLI keys into the central store (instead of masks only); apply panel gains a fourth key mode `stored` (central store, default when a key exists); preset editor can set / clear the stored key
+#### Terminal Output Pipeline — TB v3 Byte Stream & Ring Buffer (desktop + mobile)
+- Desktop PTY output rewritten to a byte-continuous pipeline (TB v3): bytes-block queue, v3 frames, byte cursor with dual-speed propagation; slow consumers drain from a ring buffer with per-subscriber pull cursors, so backpressure never blocks the producer; `session_output` link debug statistics (produce/ack throttling instrumentation)
+- Desktop: one-shot history endpoint `GET /api/sessions/{id}/history`; frontend terminal output stream adapted to the v3 byte cursor over both WS and Channel paths
+- Mobile: terminal output link moved into the Rust backend (`terminal_link` + frontend wiring); legacy TB v2 frames and the old `ws_event` channel terminal code removed
+- Mobile: segment-2 backpressure reworked to ack-driven resend; output frames moved to a page-level Channel
+- Desktop: legacy WS loopback terminal link removed (`local_token` / loopback WS / old output stream)
 
 #### Desktop Plugin Management — Zip Install & Uninstall
 - Uninstall is available on every plugin detail page regardless of source (built-in / file scan / zip install); it requires the plugin to be **disabled** (the button stays disabled with a "deactivate first" hint while the plugin runs) and clears everything the plugin owns: its install directory (taken from `extension_path`, including the private `plugin.db` next to it), key-value storage, persisted filesystem grants (`fs_granted_paths` / `preauth_paths`), the persisted approval record (`__system__`-scoped `plugin_approvals` entry: approved permissions + content hash pinning), persisted activation state, cached DB connection and runtime throttling records. Built-in plugins live in the resource directory shipped with the app: removal fails loudly on a read-only install and the bundled copy reappears after the next build/update
 - Install plugins from a local zip package (unpacked into the user plugin directory, source `user-installed`)
 - Plugin list layout: the load-plugin button (primary color) moved to the right of the "Disabled" section title and stays reachable when no plugin is disabled; refresh moved to the far right of the toolbar
+- Uninstall integrity: the persisted approval record is revoked on uninstall and the plugin entry is located via its own loader path; orphan residual directories are cleaned up so reinstall after uninstall no longer stalls on disk dedup
+- `fs_auth` grant granularity refined to a three-state model (directory / file / parent directory)
+
+#### Mobile HTTP — Rust Proxy & Fail-Closed Egress Policy
+- Mobile HTTP consolidated into a single Rust proxy with a fail-closed three-layer Egress policy; all frontend HTTP (`useHttpApi` / UpdateChecker / LinkEncryption) now goes through it and the `@tauri-apps/plugin-http` JS dependency was removed
+- Egress authorization dialog plus an authorization viewer/revoker in settings
+- Redirect revalidation guards against SSRF on both platforms (mobile Egress and desktop plugin HTTP)
+- SDK: `link-crypto` gained HTTP key derivation; SDK manifest `preauthUrls` declarations
+
+#### file-transfer Plugin — Explicit Pause/Resume & Concurrency
+- Host-side concurrency gate plus explicit pause/resume, identical on both platforms; plugin `paused` semantics with frontend pause/continue/resume-all controls and concurrency settings
+- Explicit pause/resume wire protocol with data-plane gating (dual-platform, built on `peer-net`)
+- Desktop receive queue: per-card transfer rate / ETA, clear-history double-confirmation, panel aggregate rate
+- Mobile task cards show a theme-colored active progress bar (paused/queued no longer misleading gray)
+- Pause/resume/cancel state kept in sync across platforms (wire + data-plane gating + single-transaction persist)
+
+#### Mobile Terminal Experience
+- Terminal UX bundle: QR scan integration, first-run guide, keyboard avoidance, input bar, themes, help docs
+- Font-size range widened; session count limit added
+- TUI mouse-report sniffing supports multi-parameter DECSET and real report switches
+- TerminalView decomposed into an orchestration layer with domain modules (row-tail static clipping, grid write funnel)
+- `peer_pick_folder` command removed (SAF tree URIs now unified for folder picking)
+
+#### Plugin SDK
+- `host-peer` transfer-control primitives (pause / resume / resume-all) added to the ABI contract; `plugin-component-test` fixture ABI bumped to 9
+- `MarkdownEditor` component: `marked` rendering with raw-HTML escaping and syntax highlighting
+- Both-platform SDKs packaged as GitHub Release attachments (npm tarball / crate / aggregated zip + SHA256SUMS)
+
+### Platform & Infrastructure
+
+- Adaptive build wrapper `adaptive-run` + `build-profile`: samples CPU load / available memory / swap pressure and injects compile parallelism (`CARGO_BUILD_JOBS`, Gradle `workers.max`, `NODE_OPTIONS` heap); usage in `docs/commands.md`
+- CI release pipeline packages every plugin into zip dists and generates a bilingual release body
+- Mobile dev log defaults to verbose so logcat includes Rust `debug!` output
+- App name unified to **BedCode** on mobile; static splash animation disabled, Android launch screen switched to a solid color
+- pi session archive script (archive threshold default 15 → 10 days); doc-tracking policy: `docs/` tracked on every branch, protected paths reduced to protected config files
+
+### Improvements
+
+#### Desktop
+- Giant frontend components split into domain modules: TerminalPreview → orchestration layer + terminal composables, SettingsView → grouped settings sub-components, useDesktopCommands → domain command modules (session / device / settings / events)
+
+#### Mobile
+- Dev logging filters non-business noise with identical rules for console and file output
+
+### Fixes
+
+- **Terminal**: output-manager registration order (registered before PTY start, rolled back on start failure); subscription activation race; pty history/realtime splice race and re-entry cursor semantics; duplicate terminal entry now invalidates the previous segment-2 push channel; terminal display area / input bar spacing; `terminal_link` silent-error points now log; non-UTF-8 special-key bytes discarded with a warning
+- **Desktop plugins**: user-installed rust-ts plugins run the full guest lifecycle; plugin concurrency-gate pulse failures no longer silently swallowed (warn log); right-click native context menu disabled in release builds; DEB rename regex escaping fixed in `tauri-build.js`
+- **file-transfer**: pause/resume/cancel state desync between platforms; issue 16/17 defects (pause-resume/rate calculation, silent frontend failure)
+- **Mobile**: `terminalRowClip` non-null assertion narrowing fix (vue-tsc); `http_auth_flow` global-token test serialization gate (parallel flake); touch-scroll cell-height fallback recalculation; running-state broadcast no longer resets a live session's buffer
+
+### Security
+
+- Redirect revalidation on both platforms (desktop plugin HTTP `redirect_decision`, mobile Egress) closes SSRF paths
+- Mobile HTTP now fail-closed under the three-layer Egress policy
+
+### Tests & Quality
+
+- Desktop unit-test audit: 32 tickets landed (lib baseline 615 → 784)
+- Mobile test audit: 3 P0 lanes fully landed, P1 partially
+- New tests: segment-2 channel frame parsing, file-transfer clear-history double-confirmation dialog (driven + failure/cancel negatives), task-card active-state theming
+- `unit-test-discipline` skill added to AGENTS.md task routing
+
+### Documentation
+
+- `docs/commands.md`: adaptive-build section (`adaptive-run` usage) and build-profile dynamic override guidance
+- pty output pipeline TB v3 architecture docs (`docs/knowledge/pty-output-pipeline.md`) + pty-byte-history task records
+- Mobile terminal link code-map additions with TB v3 annotations; mobile-ws-rust design/review/leftover records
+- Architecture diagrams migrated to `docs/diagrams` (archify deliverables, README link)
+- Feature-branch isolation spec (task-scheduler / OCR / code-viewer) and scratch records for file-transfer concurrency & pause/resume
+- Obsolete implementation-plans and skills-course learning docs removed
 
 ## [2.1.0] - 2026-09-11
 
@@ -428,6 +504,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Description |
 |---------|------|-------------|
+| 2.1.1 | 2026-09-18 | Terminal output pipeline TB v3 + ring buffer, zip plugin install/uninstall, mobile HTTP Rust proxy + fail-closed Egress, file-transfer pause/resume, mobile terminal UX, SDK host-peer primitives, adaptive build wrapper |
 | 2.1.0 | 2026-09-11 | Peer network (`packages/peer-net` + `link-crypto`) with TLS 1.3 mTLS and trust store, file-transfer peer rewrite, JWT + persistent event WebSocket, terminal output pipeline rewrite, unified frontend logging, WASM trap logging, E2E + CI gate, SDK rename to `@binblink/bedcode-plugin-sdk-*` |
 | 2.0.0 | 2026-08-16 | WASM Component Model plugin platform, auto-task / file-transfer / ai-chatbox plugins, mobile plugin system, biometric auth, UI redesign |
 | 1.1.0 | 2026-07-05 | Plugin system, mobile terminal refactor, i18n, Actix Web server |

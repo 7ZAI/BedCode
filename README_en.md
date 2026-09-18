@@ -6,7 +6,7 @@
 
 **Control your desktop Agent CLI from your phone — from bed**
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
@@ -18,7 +18,7 @@ English | [简体中文](README.md)
 
 BedCode is a LAN remote terminal application: the desktop app acts as the host running terminal sessions (Agent CLI such as Pi, Opencode, etc.), while your phone becomes a remote terminal with an optimized touch interface — take over your terminal from anywhere on the same WiFi. Any command-line program (including TUI apps) can be started on the desktop and operated remotely from your phone.
 
-The plugin system is another core capability: plugins run as WASM components inside the wasmtime sandbox (Component Model + wit ABI bridging), resource-limited and memory-isolated — a crash doesn't affect the host; both ends are hot-pluggable and ready out of the box. A full plugin development toolchain comes with it — TypeScript / Rust dual-side SDKs, a scaffolding CLI, and a browser dev-shell development environment; three built-in plugins (AI Chatbox for multi-vendor LLM chat, Auto Task for agent task queues, File Transfer for LAN file exchange) let host capabilities grow freely like browser extensions.
+The plugin system is another core capability: plugins run as WASM components inside the wasmtime sandbox (Component Model + wit ABI bridging), resource-limited and memory-isolated — a crash doesn't affect the host; both ends are hot-pluggable and ready out of the box. A full plugin development toolchain comes with it — TypeScript / Rust dual-side SDKs, a scaffolding CLI, and a browser dev-shell development environment; three built-in plugins (AI Chatbox for multi-vendor LLM chat, Auto Task for agent task queues, File Transfer for LAN file exchange).
 
 > Use cases: as the name suggests — coding from bed; or handling programming tasks in parallel with chores, childcare, or sleep at home.
 
@@ -197,16 +197,16 @@ Desktop plugins are built on the **wasmtime runtime (WASM Component Model)**: pl
 
 **In development (unreleased)**
 
-- **Desktop Code Viewer** — adds a left-side code viewer panel to the desktop terminal window (aligning with the mobile side's existing capability): project file tree browsing + multi-tab code view + shiki syntax highlighting (VS Code–sourced, dual-theme CSS variables) + auto-anchoring to the session's working_dir + large-file / binary / permission-error interception + dynamic terminal width allocation. Backend `commands/code_viewer.rs` exposes `list_code_dir` / `read_code_file` / `stat_code_file` with full-chain defense against path traversal, encoding detection, and permission errors (16 inline unit tests); frontend state layer `useCodeViewer` + highlighter `useCodeHighlighter` + panel components `CodeViewerPanel` / `FileTree` / `CodeTabs`, with zh/en i18n synchronized. Complete on the `feature/code-viewer` branch; shipping in the next release.
-- **Disk Cleaner Plugin** — a desktop built-in WASI component targeting Windows `%USERPROFILE%\AppData\Local` and Linux `$XDG_CACHE_HOME` for personal cache and user-scope system residue, matching CCleaner-class cache cleaning. Zero WIT changes, zero ABI bumps: the plugin mounts the user cache root via manifest `wasiPreopenDirs: ["${cacheRoot}"]`, the host resolves the mount point per platform, and the plugin only sees a fixed mount point; deletion = move to quarantine + lazy expiry, never bypassing quarantine. Multi-round issue iteration complete (skeleton → rules → hard blacklist → quarantine → batch restore → lazy expiry → Linux platform adaptation → i18n dictionaries).
+- **wasm-core rework** — plugin subsystem reframed into a five-module WASM kernel skeleton (`core-config` / `core-monitor` / `core-security` / `core-bus` / `core-plugin-manager`); base capabilities (mDNS first) sink to `host-*` primitives; WIT contracts evolve in lockstep on both ends (ABI desktop 10→11 / mobile 8→9) while existing plugins stay compatible. In progress on the `wasm核心改造` branch.
+- **Agent Hub plugin** — unified visual management for Agent CLIs (claude / codex / opencode / pi): environment detection & one-click install, Skills management, unified provider configuration, usage statistics; auto-task capabilities to be merged later. Takes over the paused disk-cleaner plugin's slot.
 
 **Planned**
 
 - **NAT traversal / internet access** — realized as a desktop-side plugin (requirements confirmed, pending scheduling; see `.scratch/remote-tunnel/` and `docs/adr/0026`): route through a user-owned cloud relay (TLS termination with LE certificates) so a remote mobile device works exactly like on-LAN (terminal WS + file-service HTTP + plugin HTTP endpoints all tunneled through a protocol-agnostic pipe), with security hardening: randomized JWT secret, two-tier rate limiting, high-entropy 128-bit tunnel IDs as credentials, first-pairing LAN-only, and a kill switch with 8h auto-close by default plus a concurrent-device cap. Trusted-relay TLS model, no end-to-end encryption (shelved until a server budget exists 😭)
-- **AI Agent CLI UI management** — extends the currently terminal-session-only Agent CLIs (Claude Code / pi / opencode / Codex) into a graphical management panel on the desktop: Agent version detection and configuration (model provider, system prompt, permission presets, context strategy), task orchestration (presets / schedules / dependency graphs), concurrent queue with authorization delegation, JSONL log retrieval and replay, execution state visualization (tokens / cost / duration), and failure retry with manual intervention. Builds on the existing Auto Task plugin's session bridging; the UI layer sinks into the plugin sandbox, with the host only providing Agent CLI lifecycle hooks.
 
 **Architecture evolution**
 
+- **Post-wasm-core architecture adjustment** — progressive convergence toward a businessless base kernel: the kernel shrinks to five generic engine primitives (process / network / storage / security / communication) + the wasmtime runtime; capabilities sink to plugins via `host-*` primitives, with all business orchestration living in plugins (ADR 0022 trim line). Roadmap in `.scratch/plugin-kernel-roadmap`, end-state vision in `.scratch/platform-kernel`.
 - **Wasmtime microkernel · plugin-driven evolution** — the host continues to converge toward a microkernel: the wasmtime sandbox + component loader + auth/communication form the irreducible core, and everything else (terminal, file service, AI Chatbox, Auto Task, File Transfer, Disk Cleaner) is a hot-pluggable WASM plugin. Plugins run on the WASM Component Model + wasmtime sandbox and now include WASI preview2 (filesystem / preopened directories). As WASI standardizes further (networking, clocks, processes, and other system interfaces), plugins gain near-native system capabilities inside a secure sandbox while staying portable across hosts, languages, and platforms — no host recompilation required to introduce a new capability.
 
 ## Does Plugin-Based + AI Deliver?

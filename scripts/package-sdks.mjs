@@ -266,12 +266,28 @@ function buildRust(t) {
     const manifest = join(dir, c.manifest)
     run(['cargo', 'check', '--manifest-path', manifest], { cwd: ROOT, label: `${labelPrefix} ${c.name} 编译检查（宿主 target）` })
     if (args.rustWasm) {
-      run(
-        ['cargo', 'check', '--manifest-path', manifest, '--features', 'wasm', '--target', 'wasm32-unknown-unknown'],
-        { cwd: ROOT, label: `${labelPrefix} ${c.name} 编译检查（wasm guest / wasm feature）` },
-      )
+      // wasm guest 检查要求 crate 声明 [features] wasm；proc-macro crate（如 rust-macros）
+      // 只在宿主编译、无需 guest 产物，未声明时跳过而非硬性 --features wasm 报错
+      if (hasFeature(manifest, 'wasm')) {
+        run(
+          ['cargo', 'check', '--manifest-path', manifest, '--features', 'wasm', '--target', 'wasm32-unknown-unknown'],
+          { cwd: ROOT, label: `${labelPrefix} ${c.name} 编译检查（wasm guest / wasm feature）` },
+        )
+      } else {
+        console.log(`[package-sdks] ${labelPrefix} ${c.name} 未声明 wasm feature，跳过 wasm guest 检查`)
+      }
     }
   }
+}
+
+/** Cargo.toml 是否声明 [features] 下的指定 feature（按名精确匹配，兼容带引号写法） */
+function hasFeature(manifest, feature) {
+  const text = readFileSync(manifest, 'utf8')
+  // features 段终止于下一个行首 `[`（新 section 头）；逐行捕获避免被值里的 [] 截断
+  const section = text.match(/^\[features\]\r?\n((?:^[^\[\r].*\r?\n?)*)/m)
+  if (!section) return false
+  const names = ['"' + feature + '"', feature]
+  return names.some((n) => new RegExp(`^\\s*${n}\\s*=`, 'm').test(section[1]))
 }
 
 if (!args.skipBuild) {

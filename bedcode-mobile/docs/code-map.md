@@ -213,9 +213,16 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 
 ### 前端终端链路 — `src/composables/`（含 `terminal/`）+ `src/stores/`
 
-- **views/TerminalView.vue**：编排层（xterm 实例生命周期 / 输入栏与工具栏 / 弹窗 / agent 预设接线）
+- **views/TerminalView.vue**：编排层——只留 Vue 生命周期接线（`onMounted` / `onUnmounted` /
+  `watch`）+ 模板 ref/computed 与跨一步的模板事件薄封装
 - **composables/terminal/**（TerminalView 拆分产物，范式参考桌面端 `composables/terminal/`，
-  共享实例与回调经 `terminalKernel` 上下文交换）：
+  共享实例与回调经 `terminalKernel` 上下文交换）。按**大颗粒主题**分组（2026-09-18 二次拆分）：
+  - **useTerminalDisplay**（终端显示）：xterm 实例装配与销毁（构造选项/addon/ResizeObserver/
+    首帧 fit 收敛/DPR 监听）、主题解析与网格重排、清屏 / 手动刷新 / 合成层强制重绘、
+    选择操作栏定位
+  - **useTerminalInput**（终端输入）：输入栏回传（文本 / 执行 / 特殊键）、预设任务发送与执行、
+    命令面板预设识别（config_id 反查）、侧栏「插入引用」填充
+  - **useTerminalPanels**（功能栏）：标题栏 / 侧边栏 / 弹窗开关状态、工具栏动作分发、新手引导
   - **useTerminalRenderer**：网格测量与构造期预估、DPR 感知 fit（列 ±1 漂移钳制）、WebGL 可选加载与
     context-loss 恢复、字符图集预热（仅 WebGL 生效）、DPR 变化监听
   - **useTerminalResize**：PTY 尺寸串行队列 + 服务端正统渲染端裁决（覆盖确认弹窗）
@@ -234,7 +241,9 @@ bedcode-mobile/                       # 移动端项目 (Tauri 2.0 + Vue 3)
 > 历史：终端 WS 曾由前端 `useTerminalSocket.ts` 直连桌面（TB v2 seq 语义），2026-09-12 已迁入 Rust
 >（`src-tauri/src/terminal_link.rs`）并升级 TB v3 字节偏移——useTerminalSocket.ts 已删除；2026-09-18
 > `TerminalView.vue` 按域拆分为 `composables/terminal/`（同批修复键盘避让连带 ±1 列漂移触发整缓冲重排）；
-> 同日夜段2 修背压死锁（ack 驱动补投，优化文档 §17）+ 输出帧改页面 Channel（§18，删除 `terminal-frame` 事件）
+> 同日夜段2 修背压死锁（ack 驱动补投，优化文档 §17）+ 输出帧改页面 Channel（§18，删除 `terminal-frame` 事件）；
+> 2026-09-18 二次拆分按大颗粒主题重排为 显示 / 输入 / 功能栏 三域（原先过细的
+> 主题/动作/实例/选择栏/预设域并入这三域），组件退化为纯编排层
 
 ### 自动化任务执行机制（移动端视角）
 
