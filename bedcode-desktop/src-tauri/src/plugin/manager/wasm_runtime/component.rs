@@ -34,7 +34,7 @@ use bedcode_plugin_api::abi;
 use std::sync::Arc;
 use wasmtime::component::{bindgen, Component, Instance, Linker};
 use wasmtime::{ResourceLimiter, Store};
-use wasmtime_wasi::{p2, DirPerms, FilePerms, WasiCtxBuilder};
+use wasmtime_wasi::{p2, FsPerms, WasiCtxBuilder};
 
 bindgen!({
     path: "../packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
@@ -967,7 +967,7 @@ pub(crate) fn build_wasi_ctx(
             );
             continue;
         }
-        match builder.preopened_dir(&dir, &guest_path, DirPerms::all(), FilePerms::all()) {
+        match builder.preopened_dir(&dir, &guest_path, FsPerms::ReadWrite) {
             Ok(_) => {
                 tracing::info!(
                     plugin_id = %plugin_id,

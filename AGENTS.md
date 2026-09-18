@@ -36,7 +36,7 @@ BedCode：局域网远程终端应用——桌面端作为主机运行终端会�
 | Node | LTS（CI 用 `lts/*`；无 `.nvmrc`，本地对齐 LTS） | CI workflows |
 | Rust | stable + edition 2021（无 `rust-toolchain.toml`，与 CI `dtolnay/rust-toolchain@stable` 对齐） | CI workflows |
 | Tauri | 2（两端） | src-tauri/Cargo.toml |
-| wasmtime | **47，两端锁死**，升级必须双端同步（ADR 0019） | src-tauri/Cargo.toml |
+| wasmtime | **桌面 48（LTS）/ 移动 47（临时分叉）**：升级必须双端同步（ADR 0019），当前桌面 48.0.x 先行、移动端暂留 47（2026-09-18 分叉，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`） | src-tauri/Cargo.toml |
 | 版本号 | 桌面/移动 package.json 与 Cargo.toml **同步维护**；变更记录根 `CHANGELOG.md` | 仓库现状 |
 | Android | JDK/Gradle 由 `gen/android` 分发包维护；SDK/NDK 随其管理 | — |
 
@@ -147,7 +147,7 @@ pnpm exec eslint .
 
 - [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 47 两端锁死）
+- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）
 - [ ] 宿主能力经 `host-*` 原语访问（进程/网络/存储/安全/通信），能力**不得携带业务语义**（ADR 0022）
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）

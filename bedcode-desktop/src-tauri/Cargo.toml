@@ -90,8 +90,9 @@ notify = "6"
 regex = "1"
 
 # WASM runtime for plugin system
-# 47：Android aarch64 平台 JIT/缓存稳定性修复（46 曾现 SIGILL 崩溃）
-wasmtime = "47"
+# 48（LTS，2026-08-24）：47 非 LTS 支持期将尽（48 发布后 ~2026-10）；48 为 12 倍数 LTS（支持 24 个月）。
+# 升级范围：仅桌面端（移动端保持 47，临时分叉，ADR 0019 显式偏离，见 .scratch/2026-09-18-wasmtime-48-upgrade/spec.md）
+wasmtime = "48"
 
 # HTTP client (WASM plugin HTTP proxy)
 reqwest = { version = "0.12", features = ["stream"] }
@@ -137,7 +138,7 @@ actix-files = "0.6"
 
 # PTY management
 portable-pty = "0.8"
-wasmtime-wasi = "47"
+wasmtime-wasi = "48"
 
 # Windows：WM_SETTINGCHANGE 广播（CLI PATH 注册后通知新终端/agent 进程生效）
 # + 文件定位 COM API（SHOpenFolderAndSelectItems / ShellExecuteExW，见 commands/opener.rs）
