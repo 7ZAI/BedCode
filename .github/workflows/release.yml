@@ -227,11 +227,13 @@ jobs:
           distribution: zulu
           java-version: 17
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
+      # runner 镜像预装 Android SDK（ANDROID_HOME/ANDROID_SDK_ROOT=/usr/local/lib/android/sdk，licenses 已接受，
+      # 含 android-36 platform 与 build-tools 36/37，见 runner-images 文档）；不再用
+      # android-actions/setup-android@v3（其默认安装 'tools' 包，新 sdkmanager 已移除该包导致失败）
       - name: Setup Android NDK
-        run: sdkmanager "ndk;27.0.12077973"
+        run: |
+          SDKMANAGER="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/cmdline-tools/latest/bin/sdkmanager"
+          echo "y" | "$SDKMANAGER" "ndk;27.0.12077973"
 
       - name: Configure Android signing
         run: |
