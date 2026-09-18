@@ -4,7 +4,7 @@
 
 **BedCode 的移动端远程终端** — 手机变成带优化触控界面的远程终端，在同一 WiFi 下随时接管桌面端运行的 Agent CLI / 终端会话（Claude Code、pi、opencode、Codex 等）。躺床上也能编程。
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)
