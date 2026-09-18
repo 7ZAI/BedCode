@@ -23,6 +23,38 @@ pub(crate) fn plugin_http_status(response: &serde_json::Value) -> u16 {
         .unwrap_or(200)
 }
 
+/// 调用方请求 headers 白名单（票据 04）：只透传业务相关头，
+/// 避免透传全部请求头带来的凭据泄露与枚举面。
+/// 凭据类头（authorization / cookie / proxy-authorization 等）一律不透传。
+const PLUGIN_HEADER_WHITELIST: &[&str] = &["content-type", "accept", "x-request-id"];
+
+/// 按白名单过滤调用方请求 headers（纯函数，供测试）
+///
+/// 返回插件可读的 headers 对象；白名单外（含全部凭据头）不进入结果。
+pub(crate) fn filter_plugin_request_headers(
+    headers: &actix_web::http::header::HeaderMap,
+) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    for (key, value) in headers.iter() {
+        let name = key.as_str().to_ascii_lowercase();
+        if PLUGIN_HEADER_WHITELIST.contains(&name.as_str()) {
+            if let Ok(v) = value.to_str() {
+                out.insert(name, serde_json::Value::String(v.to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// 插件响应 content-type 提取（票据 04）：`contentType` 字段指定响应类型；
+/// 缺失/非法时返回 None（调用方保持默认 application/json）。
+pub(crate) fn plugin_http_content_type(response: &serde_json::Value) -> Option<String> {
+    response
+        .get("contentType")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+}
+
 /// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
@@ -54,11 +86,34 @@ pub async fn plugin_http_endpoint(
         ));
     }
 
-    // 构造请求参数：包含 method、path、body、query
+    // 端点注册治理（票据 03）：插件已声明（manifest contributes.toolProviders）时
+    // 做精确路径匹配，未注册路径 404；未声明插件保持旧前缀 ANY 行为
+    // （auto-task 等既有插件零迁移的过渡策略）。
+    let declared = plugin_host.registry().list_http_endpoint_paths(&plugin_id).await;
+    if !declared.is_empty() {
+        let full_path = format!("/api/plugin/{}/{}", plugin_id, endpoint_path);
+        let matched = declared.iter().any(|p| *p == full_path);
+        if !matched {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                path = %full_path,
+                "plugin http endpoint not registered (exact match required)"
+            );
+            return HttpResponse::NotFound().json(ApiResponse::<()>::error(
+                CODE_INVALID_REQUEST,
+                &format!("Plugin endpoint '{}' is not registered", full_path),
+            ));
+        }
+    }
+
+    // 构造请求参数：method、path、白名单 headers、body、query
+    // headers 字段为票据 04 增量追加——老插件忽略未知字段（字段演进增量原则）
     let method = req.method().as_str();
+    let request_headers = filter_plugin_request_headers(req.headers());
     let request_args = serde_json::json!({
         "method": method,
         "path": endpoint_path,
+        "headers": request_headers,
         "body": body.map(|b| b.into_inner()).unwrap_or(serde_json::Value::Null),
         "query": query.into_inner(),
     });
@@ -70,14 +125,18 @@ pub async fn plugin_http_endpoint(
 
     match result {
         Ok(response) => {
-            // 插件返回格式：{ status: number, body: any }
+            // 插件返回格式：{ status: number, body: any, contentType?: string }
             let status = plugin_http_status(&response);
             let response_body = response.get("body").cloned().unwrap_or(serde_json::Value::Null);
 
-            HttpResponse::build(
+            // contentType 可选：插件可指定（如 text/plain / image/png），默认 application/json
+            let mut builder = HttpResponse::build(
                 actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK),
-            )
-            .json(response_body)
+            );
+            if let Some(content_type) = plugin_http_content_type(&response) {
+                builder.insert_header((actix_web::http::header::CONTENT_TYPE, content_type));
+            }
+            builder.json(response_body)
         }
         Err(e) => {
             tracing::error!(
@@ -124,5 +183,56 @@ mod tests {
         assert_eq!(plugin_http_status(&serde_json::json!({"status": 999999})), 200);
         // 超 actix 区间上限 → 200
         assert_eq!(plugin_http_status(&serde_json::json!({"status": 1000})), 200);
+    }
+
+    /// 请求头白名单（票据 04）：白名单内透传（小写），凭据/白名单外丢弃
+    #[test]
+    fn filter_plugin_request_headers_whitelist_only() {
+        use actix_web::http::header::{HeaderMap, HeaderName, HeaderValue};
+        let mut headers = HeaderMap::new();
+        // HeaderName 仅接受小写（http crate 规范）
+        headers.insert(
+            HeaderName::from_static("content-type"),
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert(HeaderName::from_static("accept"), HeaderValue::from_static("*/*"));
+        headers.insert(
+            HeaderName::from_static("x-request-id"),
+            HeaderValue::from_static("req-1"),
+        );
+        // 凭据与无关头：一律不透传
+        headers.insert(
+            HeaderName::from_static("authorization"),
+            HeaderValue::from_static("Bearer secret"),
+        );
+        headers.insert(
+            HeaderName::from_static("cookie"),
+            HeaderValue::from_static("session=abc"),
+        );
+        headers.insert(HeaderName::from_static("x-custom"), HeaderValue::from_static("no"));
+
+        let filtered = filter_plugin_request_headers(&headers);
+        assert_eq!(
+            filtered.get("content-type").and_then(|v| v.as_str()),
+            Some("application/json")
+        );
+        assert_eq!(filtered.get("accept").and_then(|v| v.as_str()), Some("*/*"));
+        assert_eq!(filtered.get("x-request-id").and_then(|v| v.as_str()), Some("req-1"));
+        assert!(filtered.get("authorization").is_none(), "凭据头不得透传");
+        assert!(filtered.get("cookie").is_none(), "Cookie 不得透传");
+        assert!(filtered.get("x-custom").is_none(), "白名单外头不得透传");
+    }
+
+    /// 插件响应 contentType：缺失返回 None（默认 application/json），指定则原样返回
+    #[test]
+    fn plugin_http_content_type_extracted_or_default() {
+        assert_eq!(plugin_http_content_type(&serde_json::json!({})), None);
+        assert_eq!(plugin_http_content_type(&serde_json::json!({"body": 1})), None);
+        assert_eq!(
+            plugin_http_content_type(&serde_json::json!({"contentType": "text/plain"})),
+            Some("text/plain".to_string())
+        );
+        // 非字符串 contentType → None（保持默认）
+        assert_eq!(plugin_http_content_type(&serde_json::json!({"contentType": 123})), None);
     }
 }

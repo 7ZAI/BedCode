@@ -1,11 +1,11 @@
 //! HTTP 代理域宿主实现（宿主代发请求，支持 SSE 流式推流）
 
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::PERMISSION_NETWORK_HTTP;
 use crate::system::constants::plugin::{
     PLUGIN_HTTP_CONNECT_TIMEOUT_SECS, PLUGIN_HTTP_RESPONSE_BODY_LIMIT_BYTES, PLUGIN_HTTP_TIMEOUT_SECS,
 };
 use futures_util::StreamExt;
-use serde::Deserialize;
 use std::sync::LazyLock;
 use std::time::Duration;
 use tauri::Emitter;
@@ -134,6 +134,14 @@ pub(crate) fn http_fetch(
     plugin_id: &str,
     request_json: &str,
 ) -> Result<Option<String>, String> {
+    // 权限仲裁：未声明 network:http 的插件（WASM 路径）在宿主侧直接拒绝。
+    // 前端 TS 路径已 fast-fail，此处是 Rust 端最终仲裁（安全边界，AGENTS.md §8）。
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_NETWORK_HTTP, "host_http_fetch") {
+        return Err(format!(
+            "http error: permission denied: plugin '{}' does not declare network:http",
+            plugin_id
+        ));
+    }
     let request: serde_json::Value =
         serde_json::from_str(request_json).map_err(|e| format!("http error: invalid request JSON: {}", e))?;
 
@@ -187,27 +195,7 @@ pub(crate) fn http_fetch(
     }
 }
 
-// ==================== SSE Parsing Structures ====================
-
-/// OpenAI SSE 流式响应结构
-#[derive(Debug, Deserialize)]
-struct OpenAiSseResponse {
-    choices: Vec<OpenAiSseChoice>,
-    /// 流末尾的用量信息（部分供应商在最后一个 chunk 携带，缺失时为 None）
-    usage: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiSseChoice {
-    delta: OpenAiSseDelta,
-}
-
-#[derive(Debug, Deserialize)]
-struct OpenAiSseDelta {
-    content: Option<String>,
-}
-
-// ==================== HTTP Proxy Execution ====================
+// ==================== Streaming Execution ====================
 
 /// 执行非流式 HTTP 请求
 ///
@@ -220,7 +208,7 @@ async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<ser
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing 'url' in HTTP request"))?;
-    let headers = request.get("headers").and_then(|v| as_string_map(v));
+    let headers = request.get("headers").and_then(as_string_map);
     let body = request.get("body").and_then(|v| v.as_str());
 
     let mut req_builder = client_for(url).request(method.parse()?, url);
@@ -279,8 +267,9 @@ async fn execute_http_request(request: &serde_json::Value) -> anyhow::Result<ser
 /// 宿主 spawn tokio 任务执行 HTTP 请求，逐 chunk 通过 emit_event 推送到前端
 /// 插件通过监听 streamEvent 事件接收流式数据
 ///
-/// 当请求中包含 `sseFormat` 字段时，宿主解析 SSE 事件并提取 content delta 后 emit，
-/// 否则 emit 原始 chunk 数据
+/// `sseFormat` 不再有供应商语义（票据 02 宿主零业务语义）：空串 = raw 模式
+/// （逐网络 chunk 透传原始字节，消费侧自行切分）；非空 = 通用 SSE 模式（按事件
+/// 分隔符切分、透传 data 行原文）。OpenAI/Anthropic 等格式解析全部由插件消费侧自管。
 async fn execute_streaming_http(
     request: &serde_json::Value,
     app_handle: &tauri::AppHandle,
@@ -292,7 +281,7 @@ async fn execute_streaming_http(
         .get("url")
         .and_then(|v| v.as_str())
         .ok_or_else(|| anyhow::anyhow!("Missing 'url' in streaming HTTP request"))?;
-    let headers = request.get("headers").and_then(|v| as_string_map(v));
+    let headers = request.get("headers").and_then(as_string_map);
     let body = request.get("body").and_then(|v| v.as_str());
     let sse_format = request.get("sseFormat").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -334,7 +323,7 @@ async fn execute_streaming_http(
 
     let mut emitted_events: usize = 0;
     if sse_format.is_empty() {
-        // 原始模式：逐 chunk emit 原始字节
+        // 原始模式：逐 chunk emit 原始字节（消费侧自行切分 SSE 事件）
         let mut stream = response.bytes_stream();
         while let Some(chunk_result) = stream.next().await {
             match chunk_result {
@@ -361,7 +350,8 @@ async fn execute_streaming_http(
             }
         }
     } else {
-        // SSE 解析模式：缓冲并按格式解析 SSE 事件，提取 content delta 后 emit
+        // 通用 SSE 模式：按事件分隔符切分、透传 data 行原文（票据 02 宿主零业务语义）。
+        // 不做任何供应商格式解析（OpenAI/Anthropic 等语义由插件消费侧自管）。
         let mut stream = response.bytes_stream();
         let mut buffer = String::new();
 
@@ -369,8 +359,13 @@ async fn execute_streaming_http(
             match chunk_result {
                 Ok(chunk) => {
                     buffer.push_str(&String::from_utf8_lossy(&chunk));
-                    let events = parse_and_emit_sse(&mut buffer, sse_format, app_handle, stream_event);
-                    emitted_events += events;
+                    for data in extract_sse_data_lines(&mut buffer) {
+                        emitted_events += 1;
+                        let _ = app_handle.emit(
+                            stream_event,
+                            serde_json::json!({ "chunk": data, "done": false }),
+                        );
+                    }
                 }
                 Err(e) => {
                     tracing::error!(
@@ -398,23 +393,15 @@ async fn execute_streaming_http(
     Ok(())
 }
 
-/// 解析 SSE 事件并提取 content delta 推送到前端
+/// 通用 SSE 事件切分与 data 提取（宿主零业务语义，票据 02）
 ///
-/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，
-/// 取缓冲区中最先出现的分隔符切分（部分服务端使用 CRLF 行尾）；
-/// 根据 format 解析 data 行中的 JSON，
-/// 提取文本增量后以 `{ chunk, done: false }` 格式 emit
-/// 解析 SSE 事件并提取 content delta 推送到前端
-///
-/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，
-/// 取缓冲区中最先出现的分隔符切分（部分服务端使用 CRLF 行尾）；
-/// 根据 format 解析 data 行中的 JSON，
-/// 提取文本增量后以 `{ chunk, done: false }` 格式 emit。
-///
-/// 返回本次解析 emit 的事件数（供调用方统计可观测性）。
-fn parse_and_emit_sse(buffer: &mut String, format: &str, app_handle: &tauri::AppHandle, stream_event: &str) -> usize {
-    let mut last_usage: Option<serde_json::Value> = None;
-    let mut emitted = 0usize;
+/// SSE 规范允许 `\n\n`、`\r\n\r\n`、`\r\r` 三种事件分隔符，取缓冲区中最先出现的
+/// 切分（部分服务端使用 CRLF 行尾）；每条完整事件抽取 `data:` 行原文透传，
+/// 不做任何供应商格式解析（chunk 内容 JSON 语义由插件消费侧自管）。
+/// 跨 chunk 缓冲：未闭合的半截事件留在缓冲区，下次追加后补齐。
+/// 返回本次提取的 data 行内容列表（无完整事件时为空）。
+fn extract_sse_data_lines(buffer: &mut String) -> Vec<String> {
+    let mut out = Vec::new();
     loop {
         // 查找最先出现的事件分隔符：(位置, 分隔符字节长度)
         let separator = [
@@ -436,43 +423,13 @@ fn parse_and_emit_sse(buffer: &mut String, format: &str, app_handle: &tauri::App
         for line in event_text.lines() {
             if let Some(data) = line.strip_prefix("data: ") {
                 let data = data.trim();
-                if data == "[DONE]" {
-                    // done 事件携带最后一次出现的 usage（无则省略，向后兼容）
-                    let mut payload = serde_json::Map::new();
-                    payload.insert("done".to_string(), serde_json::Value::Bool(true));
-                    if let Some(usage) = last_usage.take() {
-                        payload.insert("usage".to_string(), usage);
-                    }
-                    let _ = app_handle.emit(stream_event, serde_json::Value::Object(payload));
-                    emitted += 1;
-                    return emitted;
-                }
-
-                match format {
-                    "openai" => {
-                        if let Ok(parsed) = serde_json::from_str::<OpenAiSseResponse>(data) {
-                            if parsed.usage.is_some() {
-                                last_usage = parsed.usage.clone();
-                            }
-                            if let Some(content) = parsed.choices.first().and_then(|c| c.delta.content.as_ref()) {
-                                if !content.is_empty() {
-                                    let _ = app_handle
-                                        .emit(stream_event, serde_json::json!({ "chunk": content, "done": false }));
-                                    emitted += 1;
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        // 未知格式：emit 原始 data
-                        let _ = app_handle.emit(stream_event, serde_json::json!({ "chunk": data, "done": false }));
-                        emitted += 1;
-                    }
+                if !data.is_empty() {
+                    out.push(data.to_string());
                 }
             }
         }
     }
-    emitted
+    out
 }
 
 /// 将 serde_json::Value 转换为 HashMap<String, String>
@@ -533,6 +490,54 @@ mod tests {
         assert_eq!(resp["body"], "{\"ok\":true}");
     }
 
+    /// 未声明 network:http 的插件调用 host-http.fetch：宿主侧直接拒绝（Rust 端最终仲裁）。
+    /// 错误消息含明确原因，与请求类错误可区分（审计 H1 修复）。
+    #[test]
+    fn http_fetch_permission_denied_rejected() {
+        let ctx = super::super::tests::build_host_ctx();
+        // 未授予任何权限（含 network:http）
+        let err = http_fetch(&ctx, "p1", r#"{"url":"http://127.0.0.1:1/x"}"#)
+            .expect_err("unpermissioned fetch must be rejected");
+        assert!(
+            err.contains("permission denied") && err.contains("network:http"),
+            "error should state permission reason, got: {}",
+            err
+        );
+    }
+
+    /// 声明 network:http 后放行：请求进入执行阶段（此处以缺 url 的请求 JSON 验证
+    /// 错误从「权限拒绝」变为「请求错误」，证明权限检查通过且未碰网络）。
+    #[test]
+    fn http_fetch_permission_granted_passes() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        // 权限已放行 → 错误是请求解析/执行类，不再是 permission denied
+        let err = http_fetch(&ctx, "p1", r#"{"method":"GET"}"#).expect_err("missing url is a request error");
+        assert!(
+            err.contains("Missing 'url'") || err.contains("http error"),
+            "after permission, error should be request-level, got: {}",
+            err
+        );
+        assert!(
+            !err.contains("permission denied"),
+            "permissioned plugin should not hit permission denial, got: {}",
+            err
+        );
+    }
+
+    /// 非法请求 JSON：权限放行后仍是解析错误（错误分类保持：权限拒绝 ≠ 请求错误）
+    #[test]
+    fn http_fetch_invalid_json_is_request_error_not_permission() {
+        let ctx = super::super::tests::build_host_ctx();
+        super::super::tests::grant_permissions(&ctx, "p1", &[PERMISSION_NETWORK_HTTP]);
+        let err = http_fetch(&ctx, "p1", "not-json").expect_err("invalid JSON is a request error");
+        assert!(
+            err.contains("invalid request JSON"),
+            "error should be parse-level, got: {}",
+            err
+        );
+    }
+
     /// 超限响应体：立即拒绝并报错引导 stream:true，绝不把大载荷交给 guest
     /// （保证 guest 侧 serde 解析工作量有界 → 不可能耗尽 fuel 预算被 trap）
     #[tokio::test]
@@ -555,6 +560,39 @@ mod tests {
             "error should guide to streaming mode, got: {}",
             err
         );
+    }
+
+    /// 通用 SSE 事件切分（票据 02 宿主零业务语义）：三种分隔符都能切分并提取 data 行原文
+    #[test]
+    fn sse_extract_supports_all_separators() {
+        let mut buf = "data: a\n\ndata: b\r\n\r\ndata: c\r\r".to_string();
+        let events = extract_sse_data_lines(&mut buf);
+        assert_eq!(events, ["a", "b", "c"]);
+        assert!(buf.is_empty());
+    }
+
+    /// 跨 chunk 缓冲：半截事件留在缓冲区，下次追加后补齐
+    #[test]
+    fn sse_extract_buffers_across_chunks() {
+        let mut buf = "data: hel".to_string();
+        assert!(extract_sse_data_lines(&mut buf).is_empty());
+        buf.push_str("lo\n\n");
+        assert_eq!(extract_sse_data_lines(&mut buf), ["hello"]);
+        assert!(buf.is_empty());
+    }
+
+    /// 无 data 行的事件（注释/仅 event 字段）：忽略，不产出
+    #[test]
+    fn sse_extract_ignores_events_without_data() {
+        let mut buf = ": keep-alive\n\ndata: ok\n\n".to_string();
+        assert_eq!(extract_sse_data_lines(&mut buf), ["ok"]);
+    }
+
+    /// 供应商标记（如 [DONE]）按 data 原文透传，宿主不做任何供应商语义解析（票据 02）
+    #[test]
+    fn sse_extract_passes_through_vendor_markers_raw() {
+        let mut buf = "data: [DONE]\n\n".to_string();
+        assert_eq!(extract_sse_data_lines(&mut buf), ["[DONE]"]);
     }
 
     /// 私网目标判定：局域网/回环/链路本地 → 直连（不走系统代理）

@@ -4,7 +4,14 @@
 
 use crate::plugin::permission::PERMISSION_STORAGE;
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::system::constants::plugin::{
+    PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS, PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS,
+    PLUGIN_DB_STATEMENT_TIMEOUT_SECS,
+};
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 // ==================== 逻辑层（Component Model 绑定调用） ====================
 
@@ -16,31 +23,96 @@ fn parse_params_json(params_json: &str) -> Result<Vec<serde_json::Value>, String
     serde_json::from_str(params_json).map_err(|e| format!("invalid params JSON array: {}", e))
 }
 
-/// 主库执行 SQL（权限 + 表名前缀校验），返回受影响行数
+/// SQL 执行超时护栏：连接上安装 SQLite progress handler，运行 `f` 后（含 panic 路径）
+/// 经 Drop 守卫自动移除 handler。
+///
+/// SQLite progress handler 每 `num_ops`（1000）次虚拟机步回调一次；超时即返回 true
+/// （中断），后续 `sqlite3_step` 返回 SQLITE_INTERRUPT → 映射为「查询超时」错误。
+/// 主库是内核与全部插件共用的单一连接（全局 Mutex），慢查询会阻塞配对/会话配置/
+/// 设置等全部内核 DB 读写——本护栏是内核可用性保护（票据 05）。
+/// 超时上限不可由插件调整（安全边界）；触发记结构化 warn!（plugin_id 字段）。
+fn with_statement_timeout<T>(
+    plugin_id: &str,
+    conn: &rusqlite::Connection,
+    timeout: Duration,
+    f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let deadline = Instant::now();
+    let timed_out = Arc::new(AtomicBool::new(false));
+    let flag = timed_out.clone();
+    conn.progress_handler(
+        1000,
+        Some(move || {
+            if deadline.elapsed() > timeout {
+                flag.store(true, Ordering::Relaxed);
+                true
+            } else {
+                false
+            }
+        }),
+    );
+    let _guard = ProgressHandlerGuard { conn };
+    let result = f(conn);
+    if timed_out.load(Ordering::Relaxed) {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            timeout_secs = timeout.as_secs(),
+            "plugin SQL statement timed out and was interrupted"
+        );
+        Err(format!(
+            "database error: statement timed out after {}s (limit: {}s)",
+            timeout.as_secs(),
+            PLUGIN_DB_STATEMENT_TIMEOUT_SECS
+        ))
+    } else {
+        result
+    }
+}
+
+/// progress handler 生命周期守卫：作用域结束（含 panic 展开）时移除 handler，
+/// 避免超时 handler 残留在共享主库连接上误中断内核自身的 DB 读写
+struct ProgressHandlerGuard<'a> {
+    conn: &'a rusqlite::Connection,
+}
+
+impl Drop for ProgressHandlerGuard<'_> {
+    fn drop(&mut self) {
+        self.conn.progress_handler(0, None::<fn() -> bool>);
+    }
+}
+
+/// 主库执行 SQL（权限 + 表名前缀校验 + 超时护栏），返回受影响行数
 pub(crate) fn db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<u32, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute") {
         return Err("permission denied".to_string());
     }
+    reject_bare_transaction_control(sql)?;
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let db = host_ctx.db.clone();
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        db.conn().execute(sql, []).map_err(|e| e.to_string())
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            conn.execute(sql, []).map_err(|e| e.to_string())
+        })
     })
     .map(|affected| affected as u32)
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 主库查询（权限 + 表名前缀校验），返回行数组 JSON 字符串
+/// 主库查询（权限 + 表名前缀校验 + 超时护栏），返回行数组 JSON 字符串
 pub(crate) fn db_query(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_query") {
         return Err("permission denied".to_string());
     }
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let db = host_ctx.db.clone();
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db = db.lock().await;
-        query_to_json(db.conn(), sql)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            query_to_json(plugin_id, conn, sql)
+        })
     })
     .map_err(|e| format!("database error: {}", e))?;
     serde_json::to_string(&value)
@@ -48,23 +120,27 @@ pub(crate) fn db_query(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 插件独立库执行 SQL（权限校验，无表名前缀校验）
+/// 插件独立库执行 SQL（权限校验 + 超时护栏，无表名前缀校验）
 pub(crate) fn plugin_db_execute(host_ctx: &WasmHostContext, plugin_id: &str, sql: &str) -> Result<u32, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute") {
         return Err("permission denied".to_string());
     }
+    reject_bare_transaction_control(sql)?;
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db_arc = host_ctx
             .get_or_create_plugin_db(plugin_id)
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
-        db.conn().execute(sql, []).map(|n| n as u32).map_err(|e| e.to_string())
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            conn.execute(sql, []).map(|n| n as u32).map_err(|e| e.to_string())
+        })
     })
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 插件独立库查询（权限校验，无表名前缀校验）
+/// 插件独立库查询（权限校验 + 超时护栏，无表名前缀校验）
 pub(crate) fn plugin_db_query(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -73,13 +149,16 @@ pub(crate) fn plugin_db_query(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_query") {
         return Err("permission denied".to_string());
     }
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db_arc = host_ctx
             .get_or_create_plugin_db(plugin_id)
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
-        query_to_json(db.conn(), sql)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            query_to_json(plugin_id, conn, sql)
+        })
     })
     .map_err(|e| format!("database error: {}", e))?;
     serde_json::to_string(&value)
@@ -87,7 +166,7 @@ pub(crate) fn plugin_db_query(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 主库执行参数绑定 SQL（权限 + 表名前缀校验）
+/// 主库执行参数绑定 SQL（权限 + 表名前缀校验 + 超时护栏）
 pub(crate) fn db_execute_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -97,18 +176,22 @@ pub(crate) fn db_execute_params(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_params") {
         return Err("permission denied".to_string());
     }
+    reject_bare_transaction_control(sql)?;
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let params = parse_params_json(params_json)?;
     let db = host_ctx.db.clone();
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        execute_with_params(db.conn(), sql, &params)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            execute_with_params(conn, sql, &params)
+        })
     })
     .map(|affected| affected as u32)
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 主库参数绑定查询（权限 + 表名前缀校验）
+/// 主库参数绑定查询（权限 + 表名前缀校验 + 超时护栏）
 pub(crate) fn db_query_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -121,9 +204,12 @@ pub(crate) fn db_query_params(
     validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
     let params = parse_params_json(params_json)?;
     let db = host_ctx.db.clone();
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db = db.lock().await;
-        query_with_params_to_json(db.conn(), sql, &params)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            query_with_params_to_json(plugin_id, conn, sql, &params)
+        })
     })
     .map_err(|e| format!("database error: {}", e))?;
     serde_json::to_string(&value)
@@ -131,7 +217,7 @@ pub(crate) fn db_query_params(
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
 }
 
-/// 插件独立库执行参数绑定 SQL（权限校验，无表名前缀校验）
+/// 插件独立库执行参数绑定 SQL（权限校验 + 超时护栏，无表名前缀校验）
 pub(crate) fn plugin_db_execute_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -141,19 +227,23 @@ pub(crate) fn plugin_db_execute_params(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_params") {
         return Err("permission denied".to_string());
     }
+    reject_bare_transaction_control(sql)?;
     let params = parse_params_json(params_json)?;
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db_arc = host_ctx
             .get_or_create_plugin_db(plugin_id)
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
-        execute_with_params(db.conn(), sql, &params).map(|n| n as u32)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            execute_with_params(conn, sql, &params).map(|n| n as u32)
+        })
     })
     .map_err(|e| format!("database error: {}", e))
 }
 
-/// 插件独立库参数绑定查询（权限校验，无表名前缀校验）
+/// 插件独立库参数绑定查询（权限校验 + 超时护栏，无表名前缀校验）
 pub(crate) fn plugin_db_query_params(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -164,18 +254,160 @@ pub(crate) fn plugin_db_query_params(
         return Err("permission denied".to_string());
     }
     let params = parse_params_json(params_json)?;
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     let value = block_on_async(async {
         let db_arc = host_ctx
             .get_or_create_plugin_db(plugin_id)
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
-        query_with_params_to_json(db.conn(), sql, &params)
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            query_with_params_to_json(plugin_id, conn, sql, &params)
+        })
     })
     .map_err(|e| format!("database error: {}", e))?;
     serde_json::to_string(&value)
         .map(Some)
         .map_err(|e| format!("database error: JSON serialization failed: {}", e))
+}
+
+// ==================== 事务批次执行（票据 06）：execute-batch ====================
+
+/// 解析 execute-batch 的 sqls-json（SQL 字符串数组）
+fn parse_sqls_json(sqls_json: &str) -> Result<Vec<String>, String> {
+    serde_json::from_str::<Vec<String>>(sqls_json).map_err(|e| format!("invalid sqls JSON array: {}", e))
+}
+
+/// 事务控制语句白名单检测：拒绝以裸事务控制语句开头/结尾的 execute（票据 06）
+///
+/// 跨调用裸事务（BEGIN → 多次 execute → COMMIT）期间，连接 Mutex 按语句释放，
+/// 内核自己的写入会插进插件事务窗口，插件 ROLLBACK 会一并丢弃内核写入——
+/// execute-batch 是唯一受支持的事务入口（单次调用内持有事务）。
+///
+/// 尽力而为的检测：去除首尾空白与前导注释后取首/末 token 匹配白名单，
+/// 覆盖 BEGIN/COMMIT/END/ROLLBACK/SAVEPOINT/RELEASE 常见形态，不做完整 SQL 解析。
+fn reject_bare_transaction_control(sql: &str) -> Result<(), String> {
+    let mut s = sql.trim();
+    // 剥离前导注释（-- 行注释 / /* 块注释），最多剥 8 层防病态输入
+    for _ in 0..8 {
+        if let Some(rest) = s.strip_prefix("--") {
+            s = rest
+                .split_once('\n')
+                .map(|(_, after)| after)
+                .unwrap_or("")
+                .trim_start();
+        } else if let Some(rest) = s.strip_prefix("/*") {
+            s = rest
+                .split_once("*/")
+                .map(|(_, after)| after)
+                .unwrap_or("")
+                .trim_start();
+        } else {
+            break;
+        }
+    }
+    let first = s.split_whitespace().next().map(normalize_sql_token);
+    let last = s.split_whitespace().next_back().map(normalize_sql_token);
+    let is_bare_transaction =
+        matches!(first.as_deref(), Some("begin" | "commit" | "end" | "rollback" | "savepoint" | "release"))
+            || matches!(last.as_deref(), Some("commit" | "rollback" | "end" | "release"));
+    if is_bare_transaction {
+        return Err(
+            "database error: bare transaction control statements are rejected at execute level \
+             (use execute-batch for multi-statement transactions)"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// 归一化 SQL token：去尾分号 + 小写（用于事务控制白名单匹配）
+fn normalize_sql_token(t: &str) -> String {
+    t.trim_end_matches(';').to_lowercase()
+}
+
+/// 事务内顺序执行多语句：任一句失败整体回滚，返回受影响行数合计（票据 06）
+///
+/// 经 `unchecked_transaction`（rusqlite 0.32 安全 API，运行时检查嵌套，调用方持有
+/// 数据库全局锁独占连接，无并发风险）在 `&Connection` 上开启事务；事务对象 Drop 时
+/// 未提交自动回滚。超时护栏由外层 `with_statement_timeout` 覆盖整个批次——
+/// progress handler 挂在连接上，事务内所有语句的 VM 步受同一超时约束（长事务不会
+/// 无限期阻塞内核 DB）。
+fn execute_batch_on_conn(conn: &rusqlite::Connection, sqls: &[String]) -> Result<u32, String> {
+    let tx = conn
+        .unchecked_transaction()
+        .map_err(|e| format!("begin transaction: {}", e))?;
+    let mut total_affected: u32 = 0;
+    for sql in sqls {
+        let affected = tx
+            .execute(sql.as_str(), [])
+            .map_err(|e| format!("execute '{}': {}", sql, e))?;
+        total_affected = total_affected
+            .checked_add(affected as u32)
+            .ok_or_else(|| "database error: execute-batch affected row count overflow".to_string())?;
+    }
+    tx.commit().map_err(|e| format!("commit transaction: {}", e))?;
+    Ok(total_affected)
+}
+
+/// 主库事务批次执行（权限 + 表名前缀 + 语句数上限 + 超时护栏）
+pub(crate) fn db_execute_batch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sqls_json: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_batch") {
+        return Err("permission denied".to_string());
+    }
+    let sqls = parse_sqls_json(sqls_json)?;
+    if sqls.len() > PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS {
+        return Err(format!(
+            "database error: execute-batch exceeds {} statements limit",
+            PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS
+        ));
+    }
+    for sql in &sqls {
+        validate_sql_table_prefix(plugin_id, sql).map_err(|e| e.to_string())?;
+    }
+    let db = host_ctx.db.clone();
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
+    block_on_async(async {
+        let db = db.lock().await;
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            execute_batch_on_conn(conn, &sqls)
+        })
+    })
+    .map_err(|e| format!("database error: {}", e))
+}
+
+/// 插件独立库事务批次执行（权限 + 语句数上限 + 超时护栏，无表名前缀校验）
+pub(crate) fn plugin_db_execute_batch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sqls_json: &str,
+) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_plugin_db_execute_batch") {
+        return Err("permission denied".to_string());
+    }
+    let sqls = parse_sqls_json(sqls_json)?;
+    if sqls.len() > PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS {
+        return Err(format!(
+            "database error: execute-batch exceeds {} statements limit",
+            PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS
+        ));
+    }
+    let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
+    block_on_async(async {
+        let db_arc = host_ctx
+            .get_or_create_plugin_db(plugin_id)
+            .await
+            .map_err(|e| e.to_string())?;
+        let db = db_arc.lock().await;
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
+            execute_batch_on_conn(conn, &sqls)
+        })
+    })
+    .map_err(|e| format!("database error: {}", e))
 }
 
 // ==================== 参数绑定辅助 ====================
@@ -210,8 +442,49 @@ fn execute_with_params(conn: &rusqlite::Connection, sql: &str, params: &[serde_j
     stmt.raw_execute().map_err(|e| format!("execute: {}", e))
 }
 
-/// 参数绑定查询 → JSON 行数组
+/// 结果集护栏：行数 / 序列化字节双上限逐行检查（票据 05）
+///
+/// 上限常量不可由插件调整（安全边界）；触发记结构化 warn!（plugin_id 字段），
+/// 错误消息指明上限并引导插件加 LIMIT 或分批。行数上限先于字节测量判断，
+/// 避免对超出行数的额外行做无谓序列化。
+fn push_row_capped(
+    plugin_id: &str,
+    rows_out: &mut Vec<serde_json::Value>,
+    total_bytes: &mut usize,
+    row: serde_json::Value,
+) -> Result<(), String> {
+    if rows_out.len() >= PLUGIN_DB_QUERY_MAX_ROWS {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            limit = PLUGIN_DB_QUERY_MAX_ROWS,
+            "plugin query result exceeded row limit"
+        );
+        return Err(format!(
+            "database error: query result exceeds {} rows limit (add LIMIT or batch)",
+            PLUGIN_DB_QUERY_MAX_ROWS
+        ));
+    }
+    *total_bytes += serde_json::to_vec(&row)
+        .map_err(|e| format!("serialize row to measure size: {}", e))?
+        .len();
+    if *total_bytes > PLUGIN_DB_QUERY_MAX_BYTES {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            limit = PLUGIN_DB_QUERY_MAX_BYTES,
+            "plugin query result exceeded byte limit"
+        );
+        return Err(format!(
+            "database error: query result exceeds {} bytes limit (add LIMIT or batch)",
+            PLUGIN_DB_QUERY_MAX_BYTES
+        ));
+    }
+    rows_out.push(row);
+    Ok(())
+}
+
+/// 参数绑定查询 → JSON 行数组（含结果集护栏：行数/字节上限）
 fn query_with_params_to_json(
+    plugin_id: &str,
     conn: &rusqlite::Connection,
     sql: &str,
     params: &[serde_json::Value],
@@ -229,22 +502,25 @@ fn query_with_params_to_json(
         .collect();
 
     let mut rows_out: Vec<serde_json::Value> = Vec::new();
+    let mut total_bytes: usize = 0;
     let mut rows = stmt.raw_query();
     while let Some(row) = rows.next().map_err(|e| format!("next: {}", e))? {
         let mut map = serde_json::Map::new();
         for (i, col_name) in column_names.iter().enumerate() {
             map.insert(col_name.clone(), column_to_json(row, i));
         }
-        rows_out.push(serde_json::Value::Object(map));
+        push_row_capped(plugin_id, &mut rows_out, &mut total_bytes, serde_json::Value::Object(map))?;
     }
 
     Ok(serde_json::Value::Array(rows_out))
 }
 
-/// 执行查询并将结果集转换为 JSON 行数组
+/// 执行查询并将结果集转换为 JSON 行数组（含结果集护栏：行数/字节上限）
 ///
-/// 主库与插件库查询共用，消除原先两份重复的列名提取 + query_map 逻辑
-fn query_to_json(conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::Value, String> {
+/// 主库与插件库查询共用，消除原先两份重复的列名提取 + query_map 逻辑；
+/// 逐行计数而非全量物化，超限立即截断报错（避免无上限结果集拷入 guest 内存
+/// 耗尽单次调用 fuel 预算触发 trap 污染 Store）。
+fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::Value, String> {
     let mut stmt = conn.prepare(sql).map_err(|e| format!("prepare: {}", e))?;
 
     let column_count = stmt.column_count();
@@ -256,7 +532,9 @@ fn query_to_json(conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::V
         })
         .collect();
 
-    let rows: Vec<serde_json::Map<String, serde_json::Value>> = stmt
+    let mut rows_out: Vec<serde_json::Value> = Vec::new();
+    let mut total_bytes: usize = 0;
+    let mut rows = stmt
         .query_map([], |row| {
             let mut map = serde_json::Map::new();
             for (i, col_name) in column_names.iter().enumerate() {
@@ -265,13 +543,13 @@ fn query_to_json(conn: &rusqlite::Connection, sql: &str) -> Result<serde_json::V
             }
             Ok(map)
         })
-        .map_err(|e| format!("query_map: {}", e))?
-        .filter_map(|r| r.ok())
-        .collect();
+        .map_err(|e| format!("query_map: {}", e))?;
+    while let Some(row) = rows.next() {
+        let map = row.map_err(|e| format!("row: {}", e))?;
+        push_row_capped(plugin_id, &mut rows_out, &mut total_bytes, serde_json::Value::Object(map))?;
+    }
 
-    Ok(serde_json::Value::Array(
-        rows.into_iter().map(serde_json::Value::Object).collect(),
-    ))
+    Ok(serde_json::Value::Array(rows_out))
 }
 
 // ==================== SQL Table Name Validation ====================
@@ -454,5 +732,207 @@ mod tests {
     fn test_extract_table_names_quoted() {
         let tables = extract_table_names("INSERT INTO `my-table` (id) VALUES (1)");
         assert!(tables.contains(&"my".to_string()));
+    }
+
+    // ==================== 执行护栏（票据 05）：超时 / 行数上限 / 字节上限 ====================
+
+    /// 内存连接 + n 行数据（事务内批量插入，测试用）
+    fn mem_conn_with_rows(n: usize) -> rusqlite::Connection {
+        let mut conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
+        {
+            let tx = conn.transaction().unwrap();
+            for i in 0..n {
+                tx.execute("INSERT INTO t (x) VALUES (?1)", rusqlite::params![i as i64])
+                    .unwrap();
+            }
+            tx.commit().unwrap();
+        }
+        conn
+    }
+
+    /// 慢查询（大跨连）被超时护栏硬中断：超时错误与 SQL 错误可区分
+    #[test]
+    fn statement_timeout_interrupts_slow_query() {
+        let conn = mem_conn_with_rows(5000);
+        let err = with_statement_timeout("p1", &conn, Duration::from_millis(20), |c| {
+            // 5000×5000 = 2500 万行结果，远超 20ms
+            query_to_json("p1", c, "SELECT count(*) FROM t a CROSS JOIN t b")
+        })
+        .expect_err("slow query must be interrupted by timeout guard");
+        assert!(
+            err.contains("timed out"),
+            "timeout error should be distinguishable, got: {}",
+            err
+        );
+    }
+
+    /// 约束/表缺失错误 ≠ 超时（错误分类保持：超时/超限 ≠ SQL 错误 ≠ 权限拒绝）
+    #[test]
+    fn sql_error_not_aliased_as_timeout() {
+        let conn = mem_conn_with_rows(10);
+        let err = with_statement_timeout("p1", &conn, Duration::from_secs(5), |c| {
+            query_to_json("p1", c, "SELECT * FROM nope")
+        })
+        .expect_err("missing table must surface as SQL error");
+        assert!(
+            !err.contains("timed out") && err.contains("nope"),
+            "SQL error should not be disguised as timeout, got: {}",
+            err
+        );
+    }
+
+    /// 快查询在超时窗口内放行；结果行数与字节均在上限内
+    #[test]
+    fn statement_within_timeout_and_limits_passes() {
+        let conn = mem_conn_with_rows(100);
+        let value = with_statement_timeout("p1", &conn, Duration::from_secs(5), |c| {
+            query_to_json("p1", c, "SELECT x FROM t ORDER BY x")
+        })
+        .expect("fast small query must pass");
+        assert_eq!(value.as_array().unwrap().len(), 100);
+    }
+
+    /// 结果集行数超上限：截断并报错（引导插件加 LIMIT 或分批）
+    #[test]
+    fn query_exceeding_row_limit_rejected() {
+        let conn = mem_conn_with_rows(PLUGIN_DB_QUERY_MAX_ROWS + 1);
+        let err = query_to_json("p1", &conn, "SELECT x FROM t")
+            .expect_err("result over row limit must be rejected");
+        assert!(
+            err.contains("rows limit") && err.contains("LIMIT"),
+            "error should state row limit and guidance, got: {}",
+            err
+        );
+    }
+
+    /// 结果集序列化字节超上限（单行大字段）：截断并报错
+    #[test]
+    fn query_exceeding_byte_limit_rejected() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE t (x TEXT)").unwrap();
+        let big = "a".repeat(PLUGIN_DB_QUERY_MAX_BYTES + 1);
+        conn.execute("INSERT INTO t (x) VALUES (?1)", rusqlite::params![big.as_str()])
+            .unwrap();
+        let err = query_to_json("p1", &conn, "SELECT x FROM t")
+            .expect_err("oversized row must be rejected by byte guard");
+        assert!(
+            err.contains("bytes limit"),
+            "error should state byte limit, got: {}",
+            err
+        );
+    }
+
+    /// 入口级回归：主库 execute/query/参数绑定经护栏全链路（权限 + 前缀 + 超时/上限）
+    #[test]
+    fn db_entry_execute_and_query_with_guards() {
+        use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
+        let ctx = host_tests::build_host_ctx();
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        db_execute(&ctx, "p1", "CREATE TABLE plugin_p1_t (x INTEGER)").expect("create table");
+        for i in 0..3i64 {
+            let params = format!("[{}]", i);
+            db_execute_params(&ctx, "p1", "INSERT INTO plugin_p1_t (x) VALUES (?1)", &params)
+                .expect("insert with params");
+        }
+        let out = db_query(&ctx, "p1", "SELECT x FROM plugin_p1_t ORDER BY x")
+            .expect("query")
+            .expect("query result json");
+        assert_eq!(out, "[{\"x\":0},{\"x\":1},{\"x\":2}]");
+        let out_params = db_query_params(
+            &ctx,
+            "p1",
+            "SELECT x FROM plugin_p1_t WHERE x >= ?1 ORDER BY x",
+            "[1]",
+        )
+        .expect("query params")
+        .expect("query params json");
+        assert_eq!(out_params, "[{\"x\":1},{\"x\":2}]");
+    }
+
+    // ==================== 事务批次（票据 06）：execute-batch ====================
+
+    /// 事务批次语义：全部成功才提交；任一句失败整体回滚（前序语句一并回滚）
+    #[test]
+    fn execute_batch_commits_all_or_rolls_back_all() {
+        use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
+        let ctx = host_tests::build_host_ctx();
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        db_execute(&ctx, "p1", "CREATE TABLE plugin_p1_batch (id INTEGER PRIMARY KEY, v TEXT)")
+            .expect("create table");
+
+        // 成功批次：全部提交
+        let affected = db_execute_batch(
+            &ctx,
+            "p1",
+            r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (1,'a')",
+                "INSERT INTO plugin_p1_batch (id,v) VALUES (2,'b')",
+                "INSERT INTO plugin_p1_batch (id,v) VALUES (3,'c')"]"#,
+        )
+        .expect("batch must commit");
+        assert_eq!(affected, 3);
+        let out = db_query(&ctx, "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "[{\"n\":3}]");
+
+        // 失败批次（第二句主键冲突）：整体回滚，已执行的第一句也不算数
+        let err = db_execute_batch(
+            &ctx,
+            "p1",
+            r#"["INSERT INTO plugin_p1_batch (id,v) VALUES (4,'d')",
+                "INSERT INTO plugin_p1_batch (id,v) VALUES (1,'dup')"]"#,
+        )
+        .expect_err("conflicting statements must roll back the whole batch");
+        assert!(err.contains("UNIQUE") || err.contains("duplicate"), "got: {}", err);
+        let out = db_query(&ctx, "p1", "SELECT count(*) AS n FROM plugin_p1_batch")
+            .unwrap()
+            .unwrap();
+        assert_eq!(out, "[{\"n\":3}]", "failed batch must roll back prior statements");
+    }
+
+    /// 语句数上限：超限批次在执行前被拒（不放行）
+    #[test]
+    fn execute_batch_statement_count_capped() {
+        use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
+        let ctx = host_tests::build_host_ctx();
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        let many: Vec<String> = (0..PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS + 1)
+            .map(|i| format!("INSERT INTO plugin_p1_x VALUES ({})", i))
+            .collect();
+        let sqls = serde_json::to_string(&many).unwrap();
+        let err = db_execute_batch(&ctx, "p1", &sqls).expect_err("over-limit batch must be rejected");
+        assert!(err.contains("statements limit"), "got: {}", err);
+    }
+
+    /// 跨调用裸事务被拒：execute 级 BEGIN/COMMIT/SAVEPOINT 等引导 execute-batch
+    #[test]
+    fn bare_transaction_control_rejected_at_execute() {
+        use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
+        let ctx = host_tests::build_host_ctx();
+        host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
+        for sql in [
+            "BEGIN",
+            "BEGIN TRANSACTION",
+            "COMMIT;",
+            "ROLLBACK",
+            "SAVEPOINT sp1",
+            "RELEASE sp1",
+            "END TRANSACTION",
+        ] {
+            let err = db_execute(&ctx, "p1", sql).expect_err(&format!("'{}' must be rejected", sql));
+            assert!(err.contains("execute-batch"), "'{}' err: {}", sql, err);
+        }
+    }
+
+    /// 白名单检测正反例：正常 DML/DDL 放行；前导注释/尾部 COMMIT 形态也能识别
+    #[test]
+    fn transaction_control_whitelist_allows_normal_sql() {
+        assert!(reject_bare_transaction_control("INSERT INTO t (x) VALUES ('begin')").is_ok());
+        assert!(reject_bare_transaction_control("UPDATE t SET x = 'commit' WHERE id = 1").is_ok());
+        assert!(reject_bare_transaction_control("SELECT 1").is_ok());
+        assert!(reject_bare_transaction_control("-- 注释\nBEGIN").is_err());
+        assert!(reject_bare_transaction_control("/* 注释 */ SELECT 1").is_ok());
+        assert!(reject_bare_transaction_control("INSERT INTO t VALUES (1); COMMIT").is_err());
     }
 }

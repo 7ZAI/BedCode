@@ -170,9 +170,22 @@ impl PluginRegistry {
 
     // ==================== HTTP Endpoints ====================
 
-    /// 注册 HTTP 端点
-    pub async fn register_http_endpoint(&self, plugin_id: &str, path: &str) {
+    /// 注册 HTTP 端点（票据 03 接线治理面：路径冲突检测）
+    ///
+    /// 同路径被其他插件占用 → Err（携带占用者）；同插件重复注册 → Ok（幂等，
+    /// reload/重复 activate 不产生歧义）。注册表此前只登记不仲裁（死代码），
+    /// 路由 `plugin_http_endpoint` 查表后按声明匹配。
+    pub async fn register_http_endpoint(&self, plugin_id: &str, path: &str) -> Result<(), String> {
         let mut map = self.http_endpoints.write().await;
+        if let Some(existing) = map.get(path) {
+            if existing.plugin_id != plugin_id {
+                return Err(format!(
+                    "http endpoint path '{}' is already registered by plugin '{}'",
+                    path, existing.plugin_id
+                ));
+            }
+            return Ok(()); // 同插件重复注册幂等
+        }
         map.insert(
             path.to_string(),
             HttpEndpointEntry {
@@ -180,6 +193,7 @@ impl PluginRegistry {
                 path: path.to_string(),
             },
         );
+        Ok(())
     }
 
     /// 查找注册的 HTTP 端点
@@ -187,22 +201,40 @@ impl PluginRegistry {
         self.http_endpoints.read().await.get(path).cloned()
     }
 
+    /// 列出指定插件声明的 HTTP 端点完整路径（空 = 未声明）
+    ///
+    /// 路由侧用于「声明 → 精确匹配；未声明 → 前缀内放行」的过渡策略（票据 03）：
+    /// 已声明端点的插件收到未注册路径请求时返回 404；未声明插件保持旧前缀 ANY 行为
+    /// （auto-task 等既有插件零迁移）。
+    pub async fn list_http_endpoint_paths(&self, plugin_id: &str) -> Vec<String> {
+        self.http_endpoints
+            .read()
+            .await
+            .values()
+            .filter(|e| e.plugin_id == plugin_id)
+            .map(|e| e.path.clone())
+            .collect()
+    }
+
     /// 注册外部工具端点（从 manifest contributes.toolProviders）
+    ///
+    /// 声明冲突（同路径被其他插件占用）记 warn! 而非致命——toolProviders 是 manifest
+    /// 声明面，冲突时该声明不生效，插件本身仍可激活（票据 03）。
     pub async fn register_tool_providers(&self, plugin_id: &str, providers: &[ToolProviderContribution]) {
-        let mut map = self.http_endpoints.write().await;
         for provider in providers {
             let full_path = format!(
                 "/api/plugin/{}/{}",
                 plugin_id,
                 provider.endpoint.trim_start_matches('/')
             );
-            map.insert(
-                full_path.clone(),
-                HttpEndpointEntry {
-                    plugin_id: plugin_id.to_string(),
-                    path: full_path,
-                },
-            );
+            if let Err(e) = self.register_http_endpoint(plugin_id, &full_path).await {
+                tracing::warn!(
+                    plugin_id = %plugin_id,
+                    path = %full_path,
+                    error = %e,
+                    "tool provider endpoint registration conflict"
+                );
+            }
         }
     }
 
@@ -537,5 +569,90 @@ mod tests {
             assert!(entry.get("pluginId").is_some());
             assert!(entry.get("command_id").is_none());
         }
+    }
+
+    // ==================== HTTP 端点注册治理（票据 03） ====================
+
+    /// 路径冲突：同路径被其他插件占用 → Err（携带占用者）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoint_conflict_rejected() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_http_endpoint("p1", "/api/plugin/p1/x")
+            .await
+            .expect("first registration");
+        let err = registry
+            .register_http_endpoint("p2", "/api/plugin/p1/x")
+            .await
+            .expect_err("same path by another plugin must be rejected");
+        assert!(err.contains("p1"), "conflict error should name the owner, got: {}", err);
+        // 冲突后仍属首个注册者
+        let found = registry.find_http_endpoint("/api/plugin/p1/x").await.expect("kept");
+        assert_eq!(found.plugin_id, "p1");
+    }
+
+    /// 同插件重复注册路径：幂等 Ok，不产生重复条目
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoint_same_plugin_repeat_is_idempotent() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_http_endpoint("p1", "/api/plugin/p1/x")
+            .await
+            .expect("first");
+        registry
+            .register_http_endpoint("p1", "/api/plugin/p1/x")
+            .await
+            .expect("repeat by same plugin is idempotent");
+    }
+
+    /// list_http_endpoint_paths 按插件过滤；unregister 后清空（属主回收）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoint_list_and_owner_reclaim() {
+        // 直接写 map（模拟 toolProviders 声明路径）
+        let registry = PluginRegistry::new();
+        registry
+            .register_http_endpoint("p1", "/api/plugin/p1/a")
+            .await
+            .unwrap();
+        registry
+            .register_http_endpoint("p1", "/api/plugin/p1/b")
+            .await
+            .unwrap();
+        registry
+            .register_http_endpoint("p2", "/api/plugin/p2/c")
+            .await
+            .unwrap();
+
+        let p1 = registry.list_http_endpoint_paths("p1").await;
+        assert_eq!(p1.len(), 2);
+        assert!(p1.contains(&"/api/plugin/p1/a".to_string()));
+        assert!(p1.contains(&"/api/plugin/p1/b".to_string()));
+        assert_eq!(registry.list_http_endpoint_paths("no-such").await.len(), 0);
+
+        // 属主回收：unregister 后 p1 路径全部消失
+        registry.unregister_plugin("p1").await;
+        assert_eq!(registry.list_http_endpoint_paths("p1").await.len(), 0);
+        assert_eq!(registry.list_http_endpoint_paths("p2").await.len(), 1);
+    }
+
+    /// toolProviders 批量登记：生成 /api/plugin/{id}/{endpoint} 全路径（自家命名空间），
+    /// 正常登记不冲突；跨命名空间声明（防御性冲突路径）时 p1 的注册保留
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_tool_provider_registration_namespaced() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_tool_providers("p1", &[tool_provider("t1", "/tools/a")])
+            .await;
+        // p1 的端点登记在自家命名空间
+        let found = registry
+            .find_http_endpoint("/api/plugin/p1/tools/a")
+            .await
+            .expect("p1 endpoint registered");
+        assert_eq!(found.plugin_id, "p1");
+        // 其他插件不共享 p1 的路径（命名空间隔离）
+        assert!(registry
+            .find_http_endpoint("/api/plugin/p2/tools/a")
+            .await
+            .is_none());
     }
 }

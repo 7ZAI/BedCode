@@ -111,6 +111,13 @@ impl Database {
     pub fn conn(&self) -> &Connection {
         &self.conn
     }
+
+    /// 获取可变连接引用（事务/批量场景需要 `&mut Connection`）
+    ///
+    /// 调用方必须保证独占访问（宿主 DB 域持有全局 Mutex 锁时使用）
+    pub fn conn_mut(&mut self) -> &mut Connection {
+        &mut self.conn
+    }
 }
 
 #[cfg(test)]

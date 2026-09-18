@@ -30,7 +30,8 @@ bytes = "1"
 libc = "0.2"
 
 # Database
-rusqlite = { version = "0.32", features = ["bundled"] }
+# hooks feature：SQLite progress handler（宿主侧硬中断慢查询，DB 执行护栏票据 05）
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
 
 # Security
 rand = "0.8"
