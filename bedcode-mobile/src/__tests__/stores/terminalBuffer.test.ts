@@ -1,328 +1,942 @@
 /**
- * terminalBuffer store 单元测试（10 号票重写）
+ * terminalBuffer store 单元测试（Rust 后端持有终端 WS 后的重写）
  *
- * 覆盖：终端 WS 状态机（HISTORY 拼接 → history_end FLUSH → LIVE）、
- * 快照重播去重（跳过 ≤ lastRenderedSeq）、seq 缺口重订阅、
- * 环形淘汰截断（清屏 + 锚定）、重连恢复、历史缓存回放、输入帧发送。
+ * 覆盖：terminalSubscribe 触发、terminal-state 事件同步 phase/subscribed、
+ * 历史拼接（terminalGetHistory → 写完历史才消费实时帧）、跨帧裁剪、
+ * offset 缺口重拼接、截断（清屏 + 锚定）、生命周期（停止/恢复/删除）、
+ * 输入、渲染背压 ack、双速模式切换。
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-// mock Tauri 事件（terminal_output_activity 通知）
+// mock Tauri 事件：捕获 listen 回调（按事件名），emit 记录
 const emitMock = vi.fn().mockResolvedValue(undefined)
+const listenMock = vi.fn()
+const eventHandlers: Record<string, ((payload: unknown) => void) | null> = {}
 vi.mock('@tauri-apps/api/event', () => ({
-  listen: vi.fn(),
+  listen: (...args: unknown[]) => listenMock(...args),
   emit: (...args: unknown[]) => emitMock(...args),
 }))
 
-// mock 终端 socket：测试持有 handlers 引用，手动驱动状态机
-let capturedHandlers: Record<string, any> | null = null
-let fakeSocket: {
-  start: ReturnType<typeof vi.fn>
-  subscribe: ReturnType<typeof vi.fn>
-  sendInput: ReturnType<typeof vi.fn>
-  stop: ReturnType<typeof vi.fn>
-  reconnect: ReturnType<typeof vi.fn>
-  isOpen: ReturnType<typeof vi.fn>
-}
-const createTerminalSocketMock = vi.fn()
-vi.mock('@/composables/useTerminalSocket', () => ({
-  createTerminalSocket: (...args: unknown[]) => createTerminalSocketMock(...args),
+// mock Tauri Channel：实例由 store 在 markPageEntered 创建并交给被 mock 的
+// terminalPageSubscribe（可经 mock.calls 取回），测试据此注入 TB v3 二进制帧
+vi.mock('@tauri-apps/api/core', () => ({
+  invoke: vi.fn(async () => {}),
+  Channel: class ChannelMock<T> {
+    onmessage: ((message: T) => void) | null = null
+  },
 }))
+
+// mock Rust 命令面（terminal_* 全部可观测）
+const cmd = vi.hoisted(() => ({
+  terminalSubscribe: vi.fn(async () => {}),
+  terminalUnsubscribe: vi.fn(async () => {}),
+  terminalUnsubscribeAll: vi.fn(async () => {}),
+  terminalRemove: vi.fn(async () => {}),
+  terminalSendInput: vi.fn(async () => {}),
+  terminalAckRendered: vi.fn(async () => {}),
+  terminalSetMode: vi.fn(async () => {}),
+  terminalPageSubscribe: vi.fn(async () => {}),
+  terminalPageUnsubscribe: vi.fn(async () => {}),
+  terminalGetHistory: vi.fn(async (_s: string, _f: number) => ({
+    from: 0,
+    minOffset: 0,
+    snapshotOffset: 0,
+    historyBytes: 0,
+    dataBase64: '',
+  })),
+  terminalGetState: vi.fn(async (sessionId: string) => ({
+    sessionId,
+    phase: 'idle',
+    cursor: 0,
+    snapshotOffset: 0,
+    minOffset: 0,
+    acked: 0,
+    mode: 'realtime',
+    stopped: false,
+    historyBytes: 0,
+  })),
+}))
+vi.mock('@/composables/useMobileCommands', () => cmd)
 
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 
-/** 构造 TB v2 帧对象（store 消费的解析结果） */
-function frame(seq: number, eventCount = 1, data = `data-${seq}`) {
-  return {
-    data: new TextEncoder().encode(data),
-    seq,
-    eventCount,
-    lastSeq: seq + eventCount - 1,
-    isWaiting: false,
-  }
+/** base64 编码辅助（构造事件载荷） */
+function b64(text: string): string {
+  return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_')
 }
 
-/** 新建 fake socket 并捕获 handlers；返回 [socket, handlers] */
-function setupSocket() {
-  fakeSocket = {
-    start: vi.fn(),
-    subscribe: vi.fn(),
-    sendInput: vi.fn(),
-    stop: vi.fn(),
-    reconnect: vi.fn(),
-    isOpen: vi.fn(() => false),
-    ackRendered: vi.fn(),
+/**
+ * 模拟 Rust 经段2 Channel 推送一帧输出（TB v3 二进制帧，与
+ * `terminal_link::encode_data_frame` 同布局）：
+ * magic 'TB' + version 3 + flags 0 + start_offset(8 LE) + len(4 LE) + payload
+ */
+function emitFrame(sessionId: string, start: number, end: number, data: string) {
+  const call = cmd.terminalPageSubscribe.mock.calls
+    .filter((c) => c[0] === sessionId)
+    .pop()
+  const channel = call?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+
+  const payload = new TextEncoder().encode(data)
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const len = end - start
+  if (len !== payload.byteLength) {
+    throw new Error(`frame length mismatch: end-start=${len}, payload=${payload.byteLength}`)
   }
-  capturedHandlers = null
-  createTerminalSocketMock.mockImplementation((handlers: unknown) => {
-    capturedHandlers = handlers as Record<string, any>
-    return fakeSocket
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, len, true)
+  frame.set(payload, 16)
+  // 真实路径经 Channel<ArrayBuffer> 投递（Rust 侧 InvokeResponseBody::Raw）
+  channel.onmessage(frame.buffer)
+}
+
+/** 取会话最近一次经 terminal_page_subscribe 交给 Rust 的页面通道 */
+function pageChannel(sessionId: string) {
+  const call = cmd.terminalPageSubscribe.mock.calls
+    .filter((c) => c[0] === sessionId)
+    .pop()
+  const channel = call?.[1] as { onmessage: ((m: ArrayBuffer) => void) | null } | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+  return channel
+}
+
+/**
+ * 构造 TB v3 数据帧（与 `terminal_link::encode_data_frame` 同布局）。
+ * @param patch 用于注入帧头异常（magic / version / len）的就地修改钩子
+ */
+function makeFrame(start: number, data: string, patch?: (frame: Uint8Array) => void): Uint8Array {
+  const payload = new TextEncoder().encode(data)
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, payload.byteLength, true)
+  frame.set(payload, 16)
+  patch?.(frame)
+  return frame
+}
+
+/** 拼接多条帧为「一条 Channel 消息」（补投切片的真实形态） */
+function concatFrames(...frames: Uint8Array[]): Uint8Array {
+  const total = frames.reduce((sum, f) => sum + f.byteLength, 0)
+  const merged = new Uint8Array(total)
+  let offset = 0
+  for (const f of frames) {
+    merged.set(f, offset)
+    offset += f.byteLength
+  }
+  return merged
+}
+
+/** 向页面通道投递原始字节（一条消息可承载多帧；用于帧解析边界用例） */
+function sendChannelBytes(sessionId: string, bytes: Uint8Array) {
+  const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer
+  pageChannel(sessionId).onmessage!(buf)
+}
+
+/** 模拟 Rust 推送链路状态事件 */
+function emitState(sessionId: string, phase: string, detail?: string) {
+  eventHandlers['terminal-state']!({
+    payload: { session_id: sessionId, phase, detail },
   })
-  return fakeSocket
 }
 
-async function flushAsync() {
-  await new Promise((r) => setTimeout(r, 0))
-  await new Promise((r) => setTimeout(r, 0))
+async function flushAsync(n = 3) {
+  for (let i = 0; i < n; i++) await new Promise((r) => setTimeout(r, 0))
 }
 
-describe('terminalBuffer store', () => {
+describe('terminalBuffer store（Rust 驱动）', () => {
   let store: ReturnType<typeof useTerminalBufferStore>
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setActivePinia(createPinia())
     store = useTerminalBufferStore()
-    emitMock.mockClear()
-    setupSocket()
+    vi.clearAllMocks()
+    eventHandlers['terminal-state'] = null
+    eventHandlers['terminal-resync'] = null
+    listenMock.mockImplementation(async (name: string, cb: (p: unknown) => void) => {
+      eventHandlers[name] = cb
+      return () => {}
+    })
+    // 预注册事件监听：真实链路中 subscribeSession（会话启动）即 ensureEventListeners，
+    // 挂载/测试中 emitState/emitFrame 依赖监听已就位（惰性注册是异步的）
+    store.subscribeSession('s1').catch(() => {})
+    cmd.terminalSubscribe.mockClear()
+    await flushAsync()
+    cmd.terminalGetHistory.mockImplementation(async (_s: string, _f: number) => ({
+      from: 0,
+      minOffset: 0,
+      snapshotOffset: 0,
+      historyBytes: 0,
+      dataBase64: '',
+    }))
   })
 
-  describe('订阅状态机', () => {
-    it('完整流：subscribe_ok → HISTORY 写历史 → history_end → LIVE 直写实时', async () => {
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
-      await store.subscribeSession('s1')
+  describe('订阅触发（会话启动即订阅，前端只触发）', () => {
+    it('subscribeSession 触发 terminalSubscribe；terminal-state 事件同步 subscribed', async () => {
+      const p = store.subscribeSession('s1')
+      await flushAsync()
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
+      expect(store.getBuffer('s1')!.subscribing).toBe(true)
+      expect(store.getBuffer('s1')!.subscribed).toBe(false)
 
-      // 连接建立：start + subscribe 挂起（auth_ok 后由 socket 内部发送）
-      expect(fakeSocket.start).toHaveBeenCalledWith('s1')
-      expect(fakeSocket.subscribe).toHaveBeenCalled()
-
-      // subscribe_ok：进入 HISTORY
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-
-      // 历史帧（lastSeq ≤ snapshotSeq）：写入 + 入缓存
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onFrame(frame(2))
-      expect(outputs).toEqual(['data-1', 'data-2'])
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(2)
-
-      // history_end → LIVE
-      capturedHandlers!.onHistoryEnd(10)
-      capturedHandlers!.onFrame(frame(3))
-      expect(outputs).toEqual(['data-1', 'data-2', 'data-3'])
-      expect(store.getBuffer('s1')!.phase).toBe('live')
+      // Rust 链路事件：连接 → 已订阅
+      emitState('s1', 'connecting')
+      emitState('s1', 'history')
+      await flushAsync()
+      expect(store.getBuffer('s1')!.subscribed).toBe(true)
+      expect(store.getBuffer('s1')!.phase).toBe('history')
+      await p
     })
 
-    it('实时帧先于 history_end 到达：缓冲后统一 FLUSH（按序写入）', async () => {
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
+    it('已订阅会话重复订阅：直接返回快照、不重复建连', async () => {
       await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-
-      // 历史段内实时帧（> snapshotSeq）：入实时缓冲，不写入
-      capturedHandlers!.onFrame(frame(12))
-      capturedHandlers!.onFrame(frame(13))
-      expect(outputs).toEqual([])
-
-      // history_end：FLUSH 缓冲帧
-      capturedHandlers!.onHistoryEnd(10)
-      expect(outputs).toEqual(['data-12', 'data-13'])
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(13)
-    })
-
-    it('已订阅会话重复订阅：直接返回快照元数据，不重建连接', async () => {
+      emitState('s1', 'history')
       await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onHistoryEnd(10)
-
-      fakeSocket.start.mockClear()
+      cmd.terminalSubscribe.mockClear()
       const result = await store.subscribeSession('s1')
-      expect(result).toEqual({ snapshotSeq: 10, minSeq: 0, historyCount: 0 })
-      expect(fakeSocket.start).not.toHaveBeenCalled()
+      expect(result).toEqual({ snapshotOffset: 0, minOffset: 0, historyBytes: 0 })
+      expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
       expect(store.getBuffer('s1')!.subscribed).toBe(true)
     })
   })
 
-  describe('快照重播去重与缺口', () => {
-    it('重播帧跳过 ≤ lastRenderedSeq，不双写', async () => {
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1, 3)) // 1-3
-      capturedHandlers!.onFrame(frame(4, 3)) // 4-6
-      capturedHandlers!.onHistoryEnd(10)
+  describe('订阅信念收敛（Rust 幂等订阅不发事件 → 必须主动对账）', () => {
+    it('链路已 live 而前端信念为假：对账后置真并放行输入', async () => {
+      // Rust 侧链路已在运行：终端的 terminal_subscribe 幂等静默返回，无任何事件
+      cmd.terminalGetState.mockResolvedValueOnce({
+        sessionId: 's2',
+        phase: 'live',
+        cursor: 120,
+        snapshotOffset: 120,
+        minOffset: 0,
+        acked: 120,
+        mode: 'realtime',
+        stopped: false,
+        historyBytes: 120,
+      })
 
-      // 快照重播（重连后）：帧与已渲染区重叠 → 整帧跳过
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1, 3))
-      capturedHandlers!.onFrame(frame(4, 3))
-      expect(outputs).toEqual(['data-1', 'data-4'])
+      await store.subscribeSession('s2')
 
-      // 未渲染部分正常写入
-      capturedHandlers!.onFrame(frame(7))
-      expect(outputs).toEqual(['data-1', 'data-4', 'data-7'])
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s2')
+      const buffer = store.getBuffer('s2')!
+      expect(buffer.phase).toBe('live')
+      expect(buffer.subscribed).toBe(true)
+      expect(buffer.subscribing).toBe(false)
+      // 输入门控放行（修复前永久 false → 输入无反应）
+      expect(store.sendInput('s2', 'ls')).toBe(true)
+      expect(cmd.terminalSendInput).toHaveBeenCalledWith('s2', 'ls', null)
     })
 
-    it('seq 缺口（> lastRenderedSeq+1）：重发订阅，帧不写入', async () => {
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onHistoryEnd(10)
+    it('Rust 侧仍未订阅（idle）：对账不得把信念置真、输入被拒', async () => {
+      await store.subscribeSession('s3')
 
-      fakeSocket.subscribe.mockClear()
-      capturedHandlers!.onFrame(frame(5)) // 缺口：2-4 缺失
-      expect(fakeSocket.subscribe).toHaveBeenCalled()
-      expect(outputs).toEqual(['data-1'])
+      const buffer = store.getBuffer('s3')!
+      expect(buffer.subscribed).toBe(false)
+      expect(store.sendInput('s3', 'ls')).toBe(false)
+      expect(cmd.terminalSendInput).not.toHaveBeenCalledWith('s3', 'ls', null)
     })
 
-    it('环形淘汰截断：清屏 + onTruncated 一次 + 锚定重播', async () => {
-      const outputs: string[] = []
-      const onClear = vi.fn()
-      const onTruncated = vi.fn()
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)), onClear, onTruncated })
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1, 3))
-      capturedHandlers!.onHistoryEnd(10)
+    it('对账只前进不回退：晚到的陈旧 idle 响应不覆盖已 live 的 phase', async () => {
+      await store.subscribeSession('s4')
+      emitState('s4', 'live')
+      expect(store.getBuffer('s4')!.phase).toBe('live')
 
-      // 重订阅：min_seq 已越过游标（已渲染区被淘汰）
-      capturedHandlers!.onSubscribed({ snapshotSeq: 30, minSeq: 20, historyCount: 5 })
-      expect(onClear).toHaveBeenCalledTimes(1)
-      expect(onTruncated).toHaveBeenCalledWith(20)
+      // 命令响应晚于状态事件到达（陈旧快照）
+      await store.reconcileState('s4')
 
-      // 锚定后重播帧（seq 20 起）正常写入，不再触发截断提示
-      capturedHandlers!.onFrame(frame(20))
-      capturedHandlers!.onFrame(frame(21))
-      expect(outputs).toEqual(['data-1', 'data-20', 'data-21'])
-      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(store.getBuffer('s4')!.phase).toBe('live')
+      expect(store.getBuffer('s4')!.subscribed).toBe(true)
+    })
+
+    it('对账检出 stopped：标记会话停止并清订阅信念', async () => {
+      await store.subscribeSession('s5')
+      emitState('s5', 'live')
+      cmd.terminalGetState.mockResolvedValueOnce({
+        sessionId: 's5',
+        phase: 'idle',
+        cursor: 0,
+        snapshotOffset: 0,
+        minOffset: 0,
+        acked: 0,
+        mode: 'realtime',
+        stopped: true,
+        historyBytes: 0,
+      })
+
+      await store.reconcileState('s5')
+
+      const buffer = store.getBuffer('s5')!
+      expect(buffer.sessionStopped).toBe(true)
+      expect(buffer.subscribed).toBe(false)
+      expect(store.sendInput('s5', 'ls')).toBe(false)
+    })
+
+    it('对账命令异常：保留既有信念（不误判为未订阅）', async () => {
+      await store.subscribeSession('s6')
+      emitState('s6', 'live')
+      cmd.terminalGetState.mockRejectedValueOnce(new Error('link command failed'))
+
+      await store.reconcileState('s6')
+
+      expect(store.getBuffer('s6')!.subscribed).toBe(true)
     })
   })
 
-  describe('重连与生命周期', () => {
-    it('onClose 后重连：重新 subscribe_ok → 快照重播按 lastRenderedSeq 跳过', async () => {
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onHistoryEnd(10)
+  describe('running 广播不得破坏存活会话', () => {
+    it('未停止的 buffer：markSessionRunning 不清订阅信念与渲染游标', async () => {
+      await store.subscribeSession('s7')
+      emitState('s7', 'live')
+      const buffer = store.getBuffer('s7')!
+      buffer.lastRenderedOffset = 256
+      cmd.terminalSubscribe.mockClear()
 
-      capturedHandlers!.onClose()
-      expect(store.getBuffer('s1')!.subscribing).toBe(false)
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(1) // 游标保留
+      store.markSessionRunning('s7')
+      await flushAsync()
 
-      // 重连后快照重播：重叠帧跳过，新帧写入
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onFrame(frame(2))
-      capturedHandlers!.onHistoryEnd(10)
-      expect(outputs).toEqual(['data-1', 'data-2'])
+      expect(buffer.subscribed).toBe(true)
+      expect(buffer.phase).toBe('live')
+      expect(buffer.lastRenderedOffset).toBe(256)
+      expect(store.sendInput('s7', 'ls')).toBe(true)
+      // 已订阅：不重建链路
+      expect(cmd.terminalSubscribe).not.toHaveBeenCalled()
     })
 
-    it('session_stopped：停 socket、置 idle；恢复运行后重新订阅', async () => {
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
+    it('已停止的 buffer：markSessionRunning 复位游标与信念并重新订阅', async () => {
+      await store.subscribeSession('s8')
+      emitState('s8', 'live')
+      store.getBuffer('s8')!.lastRenderedOffset = 256
+      store.markSessionStopped('s8')
+      cmd.terminalSubscribe.mockClear()
 
-      capturedHandlers!.onSessionStopped('s1')
-      expect(fakeSocket.stop).toHaveBeenCalled()
+      store.markSessionRunning('s8')
+      await flushAsync()
+
+      const buffer = store.getBuffer('s8')!
+      expect(buffer.sessionStopped).toBe(false)
+      expect(buffer.lastRenderedOffset).toBeNull()
+      expect(buffer.subscribed).toBe(false)
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s8')
+    })
+  })
+
+  describe('历史跨洞（Rust 缓存检出丢帧字节洞）', () => {
+    it('检出字节洞：清屏 + 锚定重播 + 一次性提示历史不完整', async () => {
+      await store.subscribeSession('s9')
+      emitState('s9', 'live')
+      store.getBuffer('s9')!.lastRenderedOffset = 64
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 64,
+        minOffset: 0,
+        snapshotOffset: 128,
+        historyBytes: 64,
+        dataBase64: b64('xy'),
+        gapDetected: true,
+      })
+
+      store.registerRealtimeHandler('s9', { onOutput: vi.fn(), onClear, onTruncated })
+      await flushAsync()
+
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(store.getBuffer('s9')!.headTrimmed).toBe(true)
+      // 清屏后按快照重新锚定游标
+      expect(store.getBuffer('s9')!.lastRenderedOffset).toBe(128)
+    })
+
+    it('无洞（gapDetected 缺省）：不清屏', async () => {
+      await store.subscribeSession('s10')
+      emitState('s10', 'live')
+      store.getBuffer('s10')!.lastRenderedOffset = 64
+      const onClear = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 64,
+        minOffset: 0,
+        snapshotOffset: 128,
+        historyBytes: 64,
+        dataBase64: b64('xy'),
+      })
+
+      store.registerRealtimeHandler('s10', { onOutput: vi.fn(), onClear })
+      await flushAsync()
+
+      expect(onClear).not.toHaveBeenCalled()
+      expect(store.getBuffer('s10')!.lastRenderedOffset).toBe(128)
+    })
+  })
+
+  describe('历史拼接（terminalGetHistory → 拼完才消费实时帧）', () => {
+    it('完整流：历史段写入后 FLUSH 拼接期缓冲的实时帧，无重复', async () => {
+      const outputs: string[] = []
+      // 历史 [0,3)="abc" 在注册时拼接
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+
+      // 历史拼接完成前到达的实时帧：缓冲不写入（拼完才消费）
+      emitFrame('s1', 3, 6, 'def')
+      emitFrame('s1', 6, 9, 'ghi')
+      expect(outputs).toEqual([])
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(true)
+
+      // 拼接完成：写入历史 + 游标推进 + FLUSH 缓冲帧（按序、无重复）
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 0)
+      expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'realtime')
+      expect(outputs).toEqual(['abc', 'def', 'ghi'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(9)
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+    })
+
+    it('重拼接从游标续补（Rust 端按 from 切片）；实时帧跨游标时裁剪前半段', async () => {
+      const outputs: string[] = []
+      // 历史 [0,6)="abcdef" 在注册时拼接
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 6,
+        historyBytes: 6,
+        dataBase64: b64('abcdef'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      expect(outputs).toEqual(['abcdef'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(6)
+
+      // 重拼接（forceReplay）：from=游标 6，Rust 返回 [6,10)="ghij"——不重叠
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 6,
+        minOffset: 6,
+        snapshotOffset: 10,
+        historyBytes: 4,
+        dataBase64: b64('ghij'),
+      })
+      store.forceReplay('s1')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 6)
+      expect(outputs).toEqual(['abcdef', 'ghij'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(10)
+
+      // 实时帧跨游标（服务端重发 [8,14)，游标 10）→ 裁掉前半段 [8,10)，零重复
+      emitFrame('s1', 8, 14, 'ijklmn')
+      expect(outputs).toEqual(['abcdef', 'ghij', 'klmn'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(14)
+    })
+
+    it('offset 缺口：帧首越过游标 → 重拼接补回（带冷却）', async () => {
+      const outputs: string[] = []
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+      // 缺口：字节 3-5 缺失（缓存被淘汰），帧从 6 起 → 从游标 3 重拼接
+      emitFrame('s1', 6, 9, 'ghi')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 3)
+      // 冷却期内再次缺口：不重复重拼接
+      emitFrame('s1', 9, 12, 'jkl')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledTimes(2)
+    })
+
+    it('截断：minOffset > 游标 → 清屏 + onTruncated 一次 + 锚定重播', async () => {
+      const outputs: string[] = []
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        onClear,
+        onTruncated,
+      })
+      await flushAsync()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+      // 重拼接：Rust 驻留头部已推进到 20（游标 3 已不可恢复）→ 清屏 + 提示
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 3,
+        minOffset: 20,
+        snapshotOffset: 30,
+        historyBytes: 10,
+        dataBase64: b64('tuvwxyzxyz'),
+      })
+      store.forceReplay('s1')
+      await flushAsync()
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledWith(20)
+      // 锚定重播正常写入
+      expect(outputs).toEqual(['abc', 'tuvwxyzxyz'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(30)
+    })
+
+    it('重同步信号：清屏 + 游标重锚到 min_offset + 提示一次；重播帧按重锚游标无缺口接收', async () => {
+      const outputs: string[] = []
+      const onClear = vi.fn()
+      const onTruncated = vi.fn()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        onClear,
+        onTruncated,
+      })
+      await flushAsync()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+      // 桌面端显式重同步：驻留起点 20（游标 3 已被环淘汰）→ 清屏 + 重锚 + 提示
+      eventHandlers['terminal-resync']!({
+        payload: { session_id: 's1', min_offset: 20, snapshot_offset: 30 },
+      })
+      await flushAsync()
+      expect(onClear).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(onTruncated).toHaveBeenCalledWith(20)
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(20)
+      expect(store.getBuffer('s1')!.minOffset).toBe(20)
+
+      // 重播帧恰从 20 起（Rust 重锚后作为实时帧直达）：无缺口判定，直接交付
+      emitFrame('s1', 20, 23, 'tuv')
+      await flushAsync()
+      expect(outputs).toEqual(['abc', 'tuv'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(23)
+
+      // 重复重同步：清屏继续，但同一订阅者只提示一次
+      eventHandlers['terminal-resync']!({
+        payload: { session_id: 's1', min_offset: 40, snapshot_offset: 50 },
+      })
+      await flushAsync()
+      expect(onClear).toHaveBeenCalledTimes(2)
+      expect(onTruncated).toHaveBeenCalledTimes(1)
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(40)
+    })
+
+    it('P1：重播未完成（phase≠live）时 spliceHistory 等待，history_end 到达后才取历史', async () => {
+      const outputs: string[] = []
+      // 注意此处不先 emitState('live')——正是测试等待路径
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      // 未到 live：getHistory 不得发起（WS 重播段未入缓存，缓存优先会命中部分历史）
+      await flushAsync()
+      expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+      // history_end 落地 → 等待被唤醒 → 全量拉取
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 0)
+      expect(outputs).toEqual(['abc'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+    })
+
+    it('P1：等不到 live（订阅失败/停止）→ 超时复位拼接态，不悬挂', async () => {
+      vi.useFakeTimers()
+      try {
+        const onReplayDone = vi.fn()
+        store.registerRealtimeHandler('s1', { onOutput: vi.fn(), onReplayDone })
+        // 越过 SPLICE_WAIT_LIVE_TIMEOUT_MS（8000）：超时兜底复位
+        await vi.advanceTimersByTimeAsync(8001)
+        expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+        expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+        expect(onReplayDone).toHaveBeenCalled()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('P2：resetCursor 后重拼接 from=0 全量回放（重进页面语义，xterm 全新实例）', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      // 首次进入：历史 [0,6) 写入，游标 6
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 6,
+        historyBytes: 6,
+        dataBase64: b64('abcdef'),
+      })
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      expect(outputs).toEqual(['abcdef'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(6)
+
+      // 重进：resetCursor + forceReplay → from=0 全量回放（含 [0,6) 既有历史）
+      cmd.terminalGetHistory.mockClear()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 9,
+        historyBytes: 9,
+        dataBase64: b64('abcdefghi'),
+      })
+      store.resetCursor('s1')
+      store.forceReplay('s1')
+      await flushAsync()
+      expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 0)
+      expect(outputs).toEqual(['abcdef', 'abcdefghi'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(9)
+    })
+
+    it('P4：历史写入管线异常 → 复位拼接态不悬挂，后续实时帧正常消费', async () => {
+      const outputs: string[] = []
+      const onReplayDone = vi.fn()
+      emitState('s1', 'live')
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        writeParsed: () => Promise.reject(new Error('xterm disposed')),
+        onReplayDone,
+      })
+      await flushAsync()
+      // 写入失败：拼接态复位 + onReplayDone（不永久缓冲）；游标未推进（缺口自愈兜底）
+      expect(store.getBuffer('s1')!.historyPreparing).toBe(false)
+      expect(onReplayDone).toHaveBeenCalled()
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBeNull()
+      // 失败后可继续消费实时帧（不进入永久缓冲）
+      cmd.terminalGetHistory.mockClear()
+      emitFrame('s1', 3, 6, 'def')
+      expect(outputs).toEqual(['def'])
+    })
+
+    it('P5：缺口冷却期内无新 gap 帧 → 定时器到期主动续传补回（防流尾缺口永久）', async () => {
+      vi.useFakeTimers()
+      try {
+        const outputs: string[] = []
+        emitState('s1', 'live')
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 0,
+          minOffset: 0,
+          snapshotOffset: 3,
+          historyBytes: 3,
+          dataBase64: b64('abc'),
+        })
+        store.registerRealtimeHandler('s1', {
+          onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+        })
+        await vi.advanceTimersByTimeAsync(0)
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(3)
+
+        // 缺口帧（start 6 > 游标 3）：冷却期外 → 立即重拼接补 [3,9)
+        cmd.terminalGetHistory.mockClear()
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 3,
+          minOffset: 3,
+          snapshotOffset: 9,
+          historyBytes: 6,
+          dataBase64: b64('defghi'),
+        })
+        emitFrame('s1', 6, 9, 'ghi')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(outputs).toEqual(['abc', 'defghi'])
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(9)
+
+        // 再次缺口（冷却期内）：不立即重拼接；冷期结束后定时器主动补一次
+        cmd.terminalGetHistory.mockClear()
+        cmd.terminalGetHistory.mockResolvedValueOnce({
+          from: 9,
+          minOffset: 9,
+          snapshotOffset: 12,
+          historyBytes: 3,
+          dataBase64: b64('jkl'),
+        })
+        emitFrame('s1', 12, 15, 'mno')
+        await vi.advanceTimersByTimeAsync(0)
+        expect(cmd.terminalGetHistory).not.toHaveBeenCalled()
+        // 越过 GAP_RESPLICE_COOLDOWN_MS（3000）：定时器触发续传
+        await vi.advanceTimersByTimeAsync(3000)
+        expect(cmd.terminalGetHistory).toHaveBeenCalledWith('s1', 9)
+        expect(outputs).toEqual(['abc', 'defghi', 'jkl'])
+        expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(12)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+  })
+
+  describe('生命周期（订阅由 Rust 管理，前端触发取消）', () => {
+    it('markSessionStopped：terminalUnsubscribe + 游标重置；恢复运行重新订阅', async () => {
+      await store.subscribeSession('s1')
+      emitState('s1', 'live')
+      store.markSessionStopped('s1')
+      await flushAsync()
+      expect(cmd.terminalUnsubscribe).toHaveBeenCalledWith('s1')
       expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
       expect(store.getBuffer('s1')!.subscribed).toBe(false)
 
       store.markSessionRunning('s1')
+      await flushAsync()
+      expect(cmd.terminalSubscribe).toHaveBeenCalledWith('s1')
       expect(store.getBuffer('s1')!.sessionStopped).toBe(false)
     })
 
-    it('SESSION_NOT_FOUND 错误：有限重试后停止；其他错误走 reconnect', async () => {
+    it('Rust 推 stopped 状态：同步会话停止', async () => {
       await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-
-      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
-      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
-      expect(fakeSocket.reconnect).toHaveBeenCalledTimes(2)
-      capturedHandlers!.onError('SESSION_NOT_FOUND', 'not found')
-      expect(fakeSocket.stop).toHaveBeenCalled()
+      emitState('s1', 'live')
+      emitState('s1', 'idle', 'stopped')
+      await flushAsync()
+      expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
       expect(store.getBuffer('s1')!.subscribed).toBe(false)
     })
 
-    it('markSessionStopped：重置游标 + 停 socket（会话重启后 seq 空间重建）', async () => {
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
+    it('markAllUnsubscribed：全量 terminalUnsubscribeAll（设备断开）', async () => {
+      store.markAllUnsubscribed()
+      await flushAsync()
+      expect(cmd.terminalUnsubscribeAll).toHaveBeenCalled()
+    })
 
-      store.markSessionStopped('s1')
-      expect(fakeSocket.stop).toHaveBeenCalled()
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBeNull()
-      expect(store.getBuffer('s1')!.sessionStopped).toBe(true)
+    it('clearBuffer：terminalRemove（会话删除）', async () => {
+      await store.subscribeSession('s1')
+      store.clearBuffer('s1')
+      await flushAsync()
+      expect(cmd.terminalRemove).toHaveBeenCalledWith('s1')
+      expect(store.buffers.has('s1')).toBe(false)
     })
   })
 
-  describe('历史缓存与页面重进', () => {
-    it('无 handler 时帧入缓存；registerRealtimeHandler 回放全部并推进游标', async () => {
-      // 预加载：无 handler 订阅（会话页 prepareSession）
+  describe('输入与背压（前端 → Rust）', () => {
+    it('已订阅会话 sendInput 经 terminalSendInput 发送', async () => {
       await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onFrame(frame(2, 2)) // 2-3
-      capturedHandlers!.onHistoryEnd(10)
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(3) // 无 handler 也推进游标
-      expect(store.getBuffer('s1')!.historyCache).toHaveLength(2)
-
-      // 终端页挂载：回放缓存（lastRenderedSeq 为 null 的场景 = 页面重进 forceReplay 后）
-      store.forceReplay('s1')
-      const outputs: string[] = []
-      store.registerRealtimeHandler('s1', { onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)) })
-      expect(outputs).toEqual(['data-1', 'data-2'])
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(3)
-
-      // 后续 live 帧（seq > 3）正常写入，不双写
-      capturedHandlers!.onFrame(frame(4))
-      expect(outputs).toEqual(['data-1', 'data-2', 'data-4'])
-    })
-
-    it('历史缓存 LRU：超出 16MB 淘汰最旧帧', async () => {
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 100, minSeq: 0, historyCount: 5 })
-      // 每帧 1MB：写入 20 帧（超 16MB 上限）
-      const bigFrame = (seq: number) => ({
-        data: new Uint8Array(1024 * 1024),
-        seq,
-        eventCount: 1,
-        lastSeq: seq,
-        isWaiting: false,
-      })
-      for (let i = 1; i <= 20; i++) {
-        capturedHandlers!.onFrame(bigFrame(i))
-      }
-      const buffer = store.getBuffer('s1')!
-      expect(buffer.historyBytes).toBeLessThanOrEqual(16 * 1024 * 1024)
-      // 最旧帧被淘汰，最新帧保留
-      const firstSeq = buffer.historyCache[0].seq
-      expect(firstSeq).toBeGreaterThan(1)
-      expect(buffer.historyCache[buffer.historyCache.length - 1].seq).toBe(20)
-    })
-  })
-
-  describe('输入发送', () => {
-    it('已订阅会话 sendInput 经 socket 发送', async () => {
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onHistoryEnd(10)
-      fakeSocket.isOpen.mockReturnValue(true)
-
+      emitState('s1', 'live')
       const ok = store.sendInput('s1', 'ls -la', 'enter')
       expect(ok).toBe(true)
-      expect(fakeSocket.sendInput).toHaveBeenCalledWith('ls -la', 'enter')
+      await flushAsync()
+      expect(cmd.terminalSendInput).toHaveBeenCalledWith('s1', 'ls -la', 'enter')
     })
 
     it('未订阅会话 sendInput 拒绝', async () => {
       const ok = store.sendInput('s1', 'ls')
       expect(ok).toBe(false)
-      expect(fakeSocket.sendInput).not.toHaveBeenCalled()
+      expect(cmd.terminalSendInput).not.toHaveBeenCalled()
+    })
+
+    it('ackRendered：按 lastRenderedOffset 推进 Rust 水位', async () => {
+      const outputs: string[] = []
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 3,
+        historyBytes: 3,
+        dataBase64: b64('abc'),
+      })
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      store.ackRendered('s1')
+      await flushAsync()
+      expect(cmd.terminalAckRendered).toHaveBeenCalledWith('s1', 3)
+    })
+  })
+
+  describe('双速传播（页面进出）', () => {
+    it('注册 → realtime（进终端页读即传）；注销 → batch（退出页面满批才转发）', async () => {
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+      await flushAsync()
+      expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'realtime')
+
+      store.unregisterRealtimeHandler('s1')
+      await flushAsync()
+      expect(cmd.terminalSetMode).toHaveBeenCalledWith('s1', 'batch')
+    })
+
+    it('段2 订阅与页面进出严格配对：注册 → page_subscribe；注销 → page_unsubscribe', async () => {
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+      await flushAsync()
+      expect(cmd.terminalPageSubscribe).toHaveBeenCalledWith('s1', expect.any(Object))
+      expect(cmd.terminalPageUnsubscribe).not.toHaveBeenCalled()
+
+      store.unregisterRealtimeHandler('s1')
+      await flushAsync()
+      expect(cmd.terminalPageUnsubscribe).toHaveBeenCalledWith('s1')
+    })
+
+    it('段1 订阅（会话级）不经页面进出触发：注册/注销不新增 terminalSubscribe', async () => {
+      // beforeEach 已按「会话启动」语义订阅过一次（预注册事件监听），故以次数
+      // 增量为准：页面进出不得再次触发段1 订阅、也不得取消段1
+      const before = cmd.terminalSubscribe.mock.calls.length
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', { onOutput: vi.fn() })
+      await flushAsync()
+      store.unregisterRealtimeHandler('s1')
+      await flushAsync()
+      expect(cmd.terminalSubscribe.mock.calls.length).toBe(before)
+      expect(cmd.terminalUnsubscribe).not.toHaveBeenCalled()
     })
   })
 
   describe('输出活动通知', () => {
-    it('每帧触发 terminal_output_activity（节流窗口内合并）', async () => {
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1))
-      capturedHandlers!.onFrame(frame(2))
+    it('实时帧触发 terminal_output_activity（节流）', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      cmd.terminalGetHistory.mockResolvedValueOnce({
+        from: 0,
+        minOffset: 0,
+        snapshotOffset: 0,
+        historyBytes: 0,
+        dataBase64: '',
+      })
+      await flushAsync()
+      emitFrame('s1', 0, 2, 'ab')
       expect(emitMock).toHaveBeenCalledWith('terminal_output_activity', { session_id: 's1' })
-      expect(emitMock.mock.calls.length).toBeGreaterThanOrEqual(1)
+    })
+  })
+
+  describe('段2 Channel 帧解析（onChannelMessage）', () => {
+    it('一条消息承载多帧：按 16B 帧头逐帧解析并按序交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 补投切片形态：单条消息内含两帧（[0,2) 与 [2,4)）
+      sendChannelBytes('s1', concatFrames(makeFrame(0, 'ab'), makeFrame(2, 'cd')))
+      await flushAsync()
+
+      expect(outputs).toEqual(['ab', 'cd'])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(4)
+    })
+
+    it('帧头 magic 不符：停止解析整条消息且不交付（残渣不可解释）', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 首帧 magic 损坏；其后即使跟着一帧合法帧也不得被解析（停止解析，非跳过）
+      sendChannelBytes(
+        's1',
+        concatFrames(makeFrame(0, 'ab', (f) => { f[0] = 0x00 }), makeFrame(2, 'cd')),
+      )
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+      expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(0)
+    })
+
+    it('未知版本号：停止解析且不交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      sendChannelBytes('s1', makeFrame(0, 'ab', (f) => { f[2] = 9 }))
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+    })
+
+    it('声明长度越界（残缺帧）：停止解析且不交付', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 帧头声明 2 字节负载，实际只剩 1 字节（IPC 截断）
+      sendChannelBytes('s1', makeFrame(0, 'ab').slice(0, 17))
+      await flushAsync()
+
+      expect(outputs).toEqual([])
+    })
+
+    it('重复进入页面（未配对退出）：上一代通道作废，在途帧不写进已丢弃的 handler', async () => {
+      const outputs: string[] = []
+      emitState('s1', 'live')
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+      const firstChannel = pageChannel('s1')
+
+      // 再次进入（模拟快速进出/路由恢复）：store 重新登记通道
+      store.registerRealtimeHandler('s1', {
+        onOutput: (d: Uint8Array) => outputs.push(new TextDecoder().decode(d)),
+      })
+      await flushAsync()
+
+      // 旧通道仍可能收到 Rust 侧在途帧：不得再触发 onmessage 交付
+      firstChannel.onmessage!(makeFrame(0, 'ab').buffer as ArrayBuffer)
+      await flushAsync()
+      expect(outputs).toEqual([])
+
+      // 新通道正常交付
+      emitFrame('s1', 0, 2, 'ab')
+      await flushAsync()
+      expect(outputs).toEqual(['ab'])
     })
   })
 })

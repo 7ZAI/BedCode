@@ -7,6 +7,7 @@ pub mod enums;
 pub mod file_service;
 pub mod handler;
 pub mod mdns;
+pub mod egress;
 pub mod model;
 pub mod peer_migration;
 pub mod peer_net;
@@ -18,6 +19,7 @@ pub mod router;
 pub mod session;
 pub mod state;
 pub mod system;
+pub mod terminal_link;
 
 // Re-export core types
 pub use system::config;
@@ -57,7 +59,6 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_os::init())
         .plugin(tauri_plugin_edge_to_edge::init())
-        .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_machine_uid::init())
         .plugin(crate::plugin::android_plugins::asset_extractor_plugin())
         .plugin(crate::plugin::android_plugins::foreground_service_plugin())
@@ -87,6 +88,9 @@ pub fn run() {
 
             // 初始化移动端设置管理器 (JSON 文件存储)
             let app_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
+
+            // 初始化 Egress Policy（授权记忆持久层加载）
+            crate::egress::init(app_data_dir.clone());
             let settings_manager = Arc::new(SettingsManager::new(&app_data_dir)?);
             app.manage(settings_manager.clone());
 
@@ -204,6 +208,14 @@ pub fn run() {
             commands::connection::ws_clear_token,
             // Link Crypto Context（issue 09：事件 WS 链路加密桥）
             commands::connection::set_link_crypto_context,
+            // Egress Policy（外网授权弹窗回执 + 设置页查看/撤销 + 桌面端目标声明）
+            commands::egress::egress_consent_resolve,
+            commands::egress::egress_list_grants,
+            commands::egress::egress_revoke_grants,
+            commands::egress::egress_declare_desktop_target,
+            // HTTP 代理（ticket 03：统一请求出口，request_id 多路复用）
+            commands::http_proxy::http_request,
+            commands::http_proxy::http_cancel,
             // Connection Commands
             commands::connection::ws_connect,
             commands::connection::ws_disconnect,
@@ -212,6 +224,20 @@ pub fn run() {
             commands::connection::ws_reconnect,
             commands::connection::get_ws_token,
             commands::connection::get_ws_url,
+            // Terminal Link（会话级终端 WS，Rust 后端持有）
+            // 段1：Rust ↔ 桌面端（会话级）
+            terminal_link::terminal_subscribe,
+            terminal_link::terminal_unsubscribe,
+            // 段2：前端 ↔ Rust（页面级）
+            terminal_link::terminal_page_subscribe,
+            terminal_link::terminal_page_unsubscribe,
+            terminal_link::terminal_unsubscribe_all,
+            terminal_link::terminal_remove,
+            terminal_link::terminal_send_input,
+            terminal_link::terminal_set_mode,
+            terminal_link::terminal_ack_rendered,
+            terminal_link::terminal_get_history,
+            terminal_link::terminal_get_state,
             // Auth Commands
             commands::auth::ws_get_auth_status,
             commands::auth::ws_authenticate,
@@ -280,11 +306,13 @@ pub fn run() {
             // Peer Transfer (issue 09 发送侧)
             peer_transfer::send_files_to_peer,
             peer_transfer::cancel_peer_transfer,
+            peer_transfer::pause_peer_transfer,
+            peer_transfer::resume_peer_transfer,
+            peer_transfer::resume_all_peer_transfers,
             peer_transfer::retry_peer_transfer,
             peer_transfer::list_peer_transfers,
             peer_transfer::clear_peer_transfer_history,
             peer_transfer::peer_pick_files,
-            peer_transfer::peer_pick_folder,
             // Peer Receive (issue 10 接收侧)
             peer_receive::list_peer_receiving,
             peer_receive::respond_peer_transfer,
@@ -292,6 +320,7 @@ pub fn run() {
             peer_receive::get_peer_receive_settings,
             peer_receive::set_peer_receive_policy,
             peer_receive::set_peer_transfer_encryption,
+            peer_receive::set_peer_transfer_concurrency,
             peer_receive::clear_peer_receiving_history,
             // Peer Remote (issue 11 远端浏览/拉取)
             peer_remote::list_peer_shared_roots,

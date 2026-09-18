@@ -219,10 +219,7 @@ mod tests {
     /// channel recv——同步阻塞会连 runtime 线程一起堵死，超时无从触发），但能兜住
     /// 所有 await 挂点（轮询循环 / 通道等待 / IO）。与根因修复（block_on_async
     /// current_thread 分支改跑 ambient runtime）互补：根因修复治本，此处是保险网。
-    async fn with_test_timeout<T>(
-        fut: impl std::future::Future<Output = T> + Send,
-        secs: u64,
-    ) -> T {
+    async fn with_test_timeout<T>(fut: impl std::future::Future<Output = T> + Send, secs: u64) -> T {
         tokio::time::timeout(std::time::Duration::from_secs(secs), fut)
             .await
             .unwrap_or_else(|_| panic!("test exceeded {secs}s deadline (possible deadlock)"))
@@ -302,17 +299,14 @@ mod tests {
             async move {
                 let ctx = build_host_ctx();
                 grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-                let dir = std::env::temp_dir()
-                    .join(format!("bedcode-proc-run-{}", Uuid::new_v4()));
+                let dir = std::env::temp_dir().join(format!("bedcode-proc-run-{}", Uuid::new_v4()));
                 let out = dir.join("nested").join("deeper").join("out.log");
                 let (cmd, args) = if cfg!(target_os = "windows") {
                     ("cmd", vec!["/C", "echo hello-from-process"])
                 } else {
                     ("sh", vec!["-c", "echo hello-from-process"])
                 };
-                let run_id =
-                    process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-                        .expect("run ok");
+                let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
                 assert_eq!(run_id.len(), 36);
 
                 // 等待后台任务完成（输出落盘 + 注册表移除）
@@ -344,8 +338,7 @@ mod tests {
             async move {
                 let ctx = build_host_ctx();
                 grant_permissions(&ctx, PLUGIN, &[PERMISSION_PROCESS]);
-                let dir = std::env::temp_dir()
-                    .join(format!("bedcode-proc-kill-{}", Uuid::new_v4()));
+                let dir = std::env::temp_dir().join(format!("bedcode-proc-kill-{}", Uuid::new_v4()));
                 std::fs::create_dir_all(&dir).expect("create temp dir");
                 let out = dir.join("out.log");
                 let (cmd, args) = if cfg!(target_os = "windows") {
@@ -355,9 +348,7 @@ mod tests {
                     // sh 拉起 sleep（进程组：sh → sleep），kill 组须连带终止
                     ("sh", vec!["-c", "sleep 60"])
                 };
-                let run_id =
-                    process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap()))
-                        .expect("run ok");
+                let run_id = process_run(&ctx, PLUGIN, &request(cmd, args, out.to_str().unwrap())).expect("run ok");
 
                 // 等待注册完成，确认进程在跑
                 let registry = ctx.process_registry().clone();

@@ -193,6 +193,18 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
         super::host_impl::peer_set_receive_policy(self, &mode, timeout_secs)
     }
 
+    fn pause_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        super::host_impl::peer_pause_transfer(self, &batch_id)
+    }
+
+    fn resume_transfer(&mut self, batch_id: String) -> Result<(), String> {
+        super::host_impl::peer_resume_transfer(self, &batch_id)
+    }
+
+    fn resume_all_transfers(&mut self) -> Result<u32, String> {
+        super::host_impl::peer_resume_all_transfers(self)
+    }
+
     fn set_shared_roots(&mut self, dirs_json: String) -> Result<(), String> {
         super::host_impl::peer_set_shared_roots(self, &dirs_json)
     }

@@ -14,9 +14,9 @@
  */
 
 import { spawn, spawnSync, execFileSync } from 'node:child_process'
-import { readFileSync, existsSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import net from 'node:net'
-import { resolve, basename, dirname } from 'node:path'
+import { resolve, basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -119,23 +119,26 @@ const PKG_MGR_CLI =
 const PLUGIN_WATCH_CMDS = [
   {
     dir: 'plugins/ai-chatbox',
+    id: 'com.bedcode.ai-chatbox',
     args: ['scripts/build.js', '--watch'],
     // ai-chatbox 已迁移 wasm32-wasip2（WASI 预打开文件访问），与另两插件的 unknown-unknown 不同
     wasmFile: 'rust/target/wasm32-wasip2/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
     dir: 'plugins/auto-task',
+    id: 'com.bedcode.auto-task',
     args: ['scripts/build.js', '--watch'],
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm',
   },
   {
     dir: 'plugins/file-transfer',
+    id: 'com.bedcode.file-transfer',
     args: ['scripts/build.js', '--watch'],
     wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_file_transfer.wasm',
   },
 ]
 
-/** 宿主插件产物目录（各插件子目录名 = dir 的最后一段，即插件 id） */
+/** 宿主插件产物目录（各插件子目录名 = 插件 id，来自 plugin.json，与构建脚本复制目标一致） */
 const RESOURCES_BASE = resolve(ROOT, 'src-tauri/resources/plugins/desktop')
 
 /** 宿主 dev 命令（可用 --host-cmd 覆盖）
@@ -236,24 +239,29 @@ function shutdown(code) {
 // ==================== WASM 缺失自动补建 ====================
 
 /**
- * 各插件产物目录缺 .wasm 时串行补建一次。
+ * 各插件 WASM 产物缺失或过期时串行补建一次。
  *
- * dev watch 只构建前端（见 plugin-watch.js），WASM 靠此前一次性全量构建产出——
- * 全新 clone 或清理过 resources 后直接 tauri:dev，宿主激活插件必报
- * "WASM module not loaded"。这里在启动 watch 前检测并自动补齐：
+ * dev watch 只构建前端（见 PLUGIN_WATCH_CMDS 注释），WASM 靠一次性全量构建
+ * 产出——资源目录里的旧产物不会被自动重建，会造成「新前端 + 旧 WASM」静默
+ * 错配（历史事故：file-transfer 暂停按钮报 unsupported: transfer lifecycle
+ * is plugin-store managed，见 .scratch/file-transfer-pause-concurrency）。
+ * 这里在启动 watch 前检测：
+ *   - resources/{id}/ 下 .wasm 缺失 → 补建
+ *   - Rust 源码（插件 rust/ + SDK rust/）最新 mtime 晚于产物 → 补建
  *   - dist/index.js 已存在 → node scripts/build.js --rust-only（跳过 vite，最快路径）
  *   - 全新目录（dist 也没有）→ node scripts/build.js 全量构建一次（含前端），
  *     其后 watch 接管前端增量
  * 补建失败 fail-fast：宿主起来也只会报加载失败，早停并给手动指引更可排查。
  */
 function ensurePluginWasm() {
-  for (const { dir, wasmFile } of PLUGIN_WATCH_CMDS) {
+  for (const { dir, id, wasmFile } of PLUGIN_WATCH_CMDS) {
     if (!wasmFile) continue
     const pluginRoot = resolve(ROOT, dir)
-    const wasmDest = resolve(RESOURCES_BASE, basename(dir), basename(wasmFile))
-    if (existsSync(wasmDest)) continue
+    const wasmDest = resolve(RESOURCES_BASE, id, basename(wasmFile))
+    const reason = wasmStaleReason(pluginRoot, wasmDest)
+    if (!reason) continue
 
-    console.warn(`[dev-run] ⚠ 插件 ${dir} 缺少 WASM 产物：${wasmDest}`)
+    console.warn(`[dev-run] ⚠ 插件 ${dir} WASM 需要补建：${reason}`)
     const hasFrontend = existsSync(resolve(pluginRoot, 'dist', 'index.js'))
     const script = hasFrontend ? ['scripts/build.js', '--rust-only'] : ['scripts/build.js']
     console.log(`[dev-run] 自动补建 WASM（${hasFrontend ? '--rust-only' : '全量'}）：node ${script.join(' ')}`)
@@ -264,6 +272,55 @@ function ensurePluginWasm() {
       process.exit(res.status ?? 1)
     }
   }
+}
+
+/** 返回 wasm 需要补建的原因（null = 产物最新，无需动作） */
+function wasmStaleReason(pluginRoot, wasmDest) {
+  let wasmStat
+  try {
+    wasmStat = statSync(wasmDest)
+  } catch {
+    return `产物缺失：${wasmDest}`
+  }
+  const newestSrc = Math.max(
+    latestSourceMtime(join(pluginRoot, 'rust')),
+    latestSourceMtime(join(ROOT, 'packages/plugin-sdk-desktop/rust')),
+  )
+  if (newestSrc > wasmStat.mtimeMs) return 'Rust 源码比产物新（需重建）'
+  return null
+}
+
+/**
+ * 目录下所有文件的最新 mtime（ms）；跳过构建产物目录（target/dist/node_modules），
+ * 避免 cargo 增量产物 / vite 输出的 mtime 干扰源码新鲜度判断。
+ */
+function latestSourceMtime(root) {
+  let latest = 0
+  const skip = new Set(['target', 'dist', 'node_modules'])
+  const stack = [root]
+  while (stack.length) {
+    const dir = stack.pop()
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch {
+      continue // 目录缺失/不可读：无源码，视为 0
+    }
+    for (const e of entries) {
+      if (e.isDirectory()) {
+        if (skip.has(e.name)) continue
+        stack.push(join(dir, e.name))
+      } else {
+        try {
+          const m = statSync(join(dir, e.name)).mtimeMs
+          if (m > latest) latest = m
+        } catch {
+          // 单文件 stat 失败忽略
+        }
+      }
+    }
+  }
+  return latest
 }
 
 // ==================== 启动 ====================

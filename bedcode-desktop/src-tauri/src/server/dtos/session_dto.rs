@@ -69,3 +69,25 @@ pub struct SessionInputRequest {
     #[serde(default)]
     pub special_key: Option<String>,
 }
+
+/// GET /api/sessions/{id}/history query（TB v3 字节锚点；缺省 from=0 = min_offset 起）
+#[derive(Debug, Clone, Deserialize)]
+pub struct SessionHistoryQuery {
+    /// 起始字节偏移（历史一次性拉取的游标；旧于 min_offset 时收敛到 min_offset）
+    #[serde(default)]
+    pub from: Option<u64>,
+}
+
+/// GET /api/sessions/{id}/history response data（字节三件套 + 一次性历史字节）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionHistoryData {
+    /// 队列最早存续字节位置（环形淘汰后推进；客户端游标 < minOffset → 截断）
+    pub min_offset: u64,
+    /// 拉取时刻累计字节数（历史边界）
+    pub snapshot_offset: u64,
+    /// 驻留历史总字节数
+    pub history_bytes: u64,
+    /// `[from, snapshot_offset)` 字节（Base64；半块在 chunk 边界内精确切片）
+    pub data_base64: String,
+}

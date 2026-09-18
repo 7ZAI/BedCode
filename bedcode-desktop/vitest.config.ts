@@ -10,9 +10,10 @@ export default defineConfig({
     include: [
       'src/__tests__/**/*.test.ts',
       'packages/plugin-sdk-desktop/__tests__/**/*.test.ts',
-      // 计划任务插件（scheduler）只读面板测试：插件侧无独立 vitest 依赖（离线），
-      // 复用宿主 vitest 运行（vitest 按工作区 hoisting 解析插件依赖）
+      // 插件侧无独立 vitest 依赖（离线），复用宿主 vitest 运行（vitest 按工作区
+      // hoisting 解析插件依赖）：scheduler 只读面板 + agent-hub diff 纯函数
       'plugins/scheduler/src/__tests__/**/*.test.ts',
+      'plugins/agent-hub/src/__tests__/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
     coverage: {

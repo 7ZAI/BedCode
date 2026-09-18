@@ -74,6 +74,12 @@ const router = createRouter({
       meta: { standAlone: true },
     },
     {
+      path: '/mobile/settings/egress',
+      name: 'mobile-settings-egress',
+      component: () => import('@/views/settings/EgressSettingsView.vue'),
+      meta: { standAlone: true },
+    },
+    {
       path: '/mobile/settings/appearance',
       name: 'mobile-settings-appearance',
       component: () => import('@/views/settings/AppearanceSettingsView.vue'),
@@ -90,16 +96,6 @@ const router = createRouter({
       name: 'mobile-plugins',
       component: () => import('@/views/PluginView.vue'),
       meta: { standAlone: true },
-    },
-    {
-      path: '/mobile/scan',
-      name: 'mobile-scan',
-      component: () => import('@/views/ScanView.vue'),
-    },
-    {
-      path: '/mobile/discover',
-      name: 'mobile-discover',
-      component: () => import('@/views/DiscoverView.vue'),
     },
   ],
 })

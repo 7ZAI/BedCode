@@ -93,6 +93,15 @@
             </button>
           </div>
         </div>
+
+        <!-- 新手引导开关：开启后下次进入终端页重新展示引导 -->
+        <div class="settings-section onboarding-row">
+          <div class="min-w-0">
+            <label class="settings-label">{{ t('mobile.terminal.onboardingToggle') }}</label>
+            <p class="settings-hint">{{ t('mobile.terminal.onboardingToggleHint') }}</p>
+          </div>
+          <Toggle v-model="tempOnboardingPending" class="flex-shrink-0" />
+        </div>
       </div>
       </template>
 
@@ -120,6 +129,7 @@ import { useI18n } from 'vue-i18n'
 import { useTheme } from '@/composables/useTheme'
 import { useSwipeTabs } from '@/composables/useSwipeTabs'
 import { TERMINAL_THEMES, resolveThemeLabel } from '@/config/terminalThemes'
+import Toggle from '@/components/Toggle.vue'
 
 /** 设置分组 Tab：外观（字体/主题）与杂项配置（快捷栏/工具栏） */
 type SettingsTab = 'appearance' | 'misc'
@@ -130,6 +140,8 @@ export interface TerminalSettings {
   isThemeUserSet: boolean
   quickBarCount: number
   toolbarItems: string[]
+  /** 终端新手引导待展示：开启后下次进入终端页重新弹出 */
+  onboardingPending: boolean
 }
 
 export interface ToolbarItemConfig {
@@ -146,6 +158,7 @@ const props = defineProps<{
   quickBarCount: number
   toolbarItems: string[]
   allToolbarItems: ToolbarItemConfig[]
+  onboardingPending: boolean
   safeAreaStyle: Record<string, string>
 }>()
 
@@ -161,6 +174,7 @@ const tempFontSize = ref(props.fontSize)
 const tempTheme = ref<string>(props.isThemeUserSet ? props.theme : 'system')
 const tempQuickBarCount = ref(props.quickBarCount)
 const tempToolbarItems = ref<string[]>([...props.toolbarItems])
+const tempOnboardingPending = ref(props.onboardingPending)
 const activeTab = ref<SettingsTab>('appearance')
 
 // 内容区左右滑动切换 Tab：左滑 → 杂项配置，右滑 → 外观
@@ -176,6 +190,7 @@ watch(() => props.visible, (visible) => {
     tempTheme.value = props.isThemeUserSet ? props.theme : 'system'
     tempQuickBarCount.value = props.quickBarCount
     tempToolbarItems.value = [...props.toolbarItems]
+    tempOnboardingPending.value = props.onboardingPending
     // 每次打开回到「外观」页，避免停留在上一回的分组
     activeTab.value = 'appearance'
   }
@@ -218,6 +233,7 @@ function handleConfirm() {
     isThemeUserSet,
     quickBarCount: tempQuickBarCount.value,
     toolbarItems: tempToolbarItems.value,
+    onboardingPending: tempOnboardingPending.value,
   })
 }
 </script>
@@ -458,6 +474,22 @@ function handleConfirm() {
   background: var(--mobile-accent-muted);
   color: var(--mobile-accent);
   font-weight: 600;
+}
+
+/* 新手引导开关行：文案左、开关右（44px 触控目标由 Toggle 自身保证） */
+.onboarding-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.onboarding-row .settings-label {
+  margin-bottom: 0.25rem;
+}
+
+.onboarding-row .settings-hint {
+  margin: 0;
 }
 
 .settings-footer {

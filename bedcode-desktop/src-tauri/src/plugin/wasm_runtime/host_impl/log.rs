@@ -275,8 +275,8 @@ pub(crate) mod capture {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::capture::*;
+    use super::*;
 
     // ==================== plugin_log_metadata ====================
 

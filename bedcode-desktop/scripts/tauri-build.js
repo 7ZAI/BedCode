@@ -165,8 +165,10 @@ function renameDebWithReleaseSuffix() {
   const debDir = join(projectRoot, 'src-tauri/target/release/bundle/deb')
   if (!existsSync(debDir)) return
 
+  // 注意：模板字符串里的正则转义必须双反斜杠——`\w` 会被字符串字面量吃掉变成
+  // 字面量 w，导致架构名永远匹配不上、重命名静默空转（与上方 NSIS 分支一致）。
   const pattern = new RegExp(
-    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\w+)\.deb$`,
+    `^${escapeRegExp(productName)}_${escapeRegExp(version)}_(\\w+)\\.deb$`,
   )
   for (const file of readdirSync(debDir)) {
     const match = file.match(pattern)

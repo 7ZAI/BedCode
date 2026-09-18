@@ -1,6 +1,6 @@
 [package]
 name = "bedcode-desktop"
-version = "2.1.0"
+version = "2.1.1"
 description = "BedCode Desktop - Remote control for Claude Code via mobile devices"
 authors = ["binblink"]
 edition = "2021"
@@ -23,6 +23,8 @@ tauri-plugin-process = "2"
 
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util", "process", "test-util"] }
+# 字节缓冲（输出历史 chunk 共享零拷贝 + 快照半块 slice；tokio 传递依赖，显式声明）
+bytes = "1"
 
 # 进程组信号（kill_process_group unix 分支：直接系统调用，避免外部 kill 命令引入的 SIGCHLD reaper 竞争）
 libc = "0.2"
@@ -47,6 +49,8 @@ x25519-dalek = { version = "2", features = ["static_secrets"] }
 rsa = { version = "0.9", features = ["sha2", "pem"] }
 # sha2：SHA-256 摘要
 sha2 = "0.10"
+# zip：用户插件 zip 包解压安装（与移动端同版本 4.6）
+zip = "4.6"
 # hkdf：密钥派生（HKDF-SHA256）
 hkdf = "0.12"
 
@@ -145,6 +149,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_UI_Wi
 # 相比 nosleep 只支持 GNOME SessionManager，logind 与桌面环境无关（见 system/power.rs）
 [target.'cfg(target_os = "linux")'.dependencies]
 dbus = "0.9"
+# 正式版禁用右键原生菜单（WebKitGTK context-menu 信号）所需；版本与 wry 锁定
+# 的 =2.0.2 一致（tauri-runtime-wry → wry 传递依赖，声明为直接依赖不改变解析）
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 # WDIO E2E 测试插件：仅 debug 构建编译/注册（release 不含测试插件，见 lib.rs 的 cfg(debug_assertions) 注册）
 [target.'cfg(debug_assertions)'.dependencies]
@@ -158,6 +165,8 @@ serde_json = "1"
 # 测试组件编码：将 wit-bindgen 产出的 core module 编码为组件
 # （等价于 `wasm-tools component new`；=0.256.0 与移动端 componentize 工具对齐，2025-08）
 wit-component = "=0.256.0"
+# mDNS 测试 Fake 构造 flume channel（与 mdns-sd 0.20 内部使用的 flume 同源，仅测试用）
+flume = "0.12"
 
 [profile.release]
 # unwind：panic 可被 catch_unwind（错误边界/插件宿主）捕获，插件业务 panic

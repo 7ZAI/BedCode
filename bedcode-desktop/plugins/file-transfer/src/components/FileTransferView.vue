@@ -48,6 +48,9 @@ const {
   sendPickedFiles,
   cancel,
   retry,
+  pause,
+  resume,
+  resumeAll,
   start: startTasks,
   stop: stopTasks,
 } = useTasks(context)
@@ -75,6 +78,7 @@ const {
   setReceivingPolicy,
   setApprovalTimeoutSec,
   setEncryption,
+  setConcurrency,
 } = useSettings(context)
 /** 插件自身对等连接：存在任一已建立的对等连接（≠ 宿主主连接） */
 const peerConnected = computed(() => connectedIds.value.size > 0)
@@ -98,6 +102,11 @@ const peerDisplayName = computed(() => {
 
 const selectedCount = computed(() => fs.selectedNames.value.length)
 
+/** 队列合计速率：发送方向 + 接收方向（下载中接收任务同样计入） */
+const panelTotalSpeed = computed(
+  () => totalSpeed.value + receiving.value.reduce((sum, r) => sum + (r.rateBps ?? 0), 0),
+)
+
 /** 对端名映射（peerId → 展示名，批卡/接收任务展示用） */
 const peerNames = computed<Record<string, string>>(() => {
   const map: Record<string, string> = {}
@@ -110,16 +119,14 @@ const peerNames = computed<Record<string, string>>(() => {
   return map
 })
 
-/** 批请求应答（fire-and-forget） */
+/** 批请求应答：批准成功才弹出传输队列展示接收任务（失败无副作用，不误开队列） */
 function handleBatchApprove(batchId: string): void {
-  approveBatch(batchId).catch((e: unknown) => {
-    console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+  void approveBatch(batchId).then((ok) => {
+    if (ok) queueVisible.value = true
   })
 }
 function handleBatchReject(batchId: string): void {
-  rejectBatch(batchId).catch((e: unknown) => {
-    console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
-  })
+  void rejectBatch(batchId)
 }
 
 const peerStatusLabel = computed(() => {
@@ -537,16 +544,20 @@ watch(
         <TaskPanel
           v-if="queueVisible"
           :tasks="tasks"
-          :total-speed="totalSpeed"
+          :total-speed="panelTotalSpeed"
           :receiving="receiving"
           :history="history"
           :peer-names="peerNames"
           :download-dir="settings.downloadDir"
           @cancel="cancel"
           @retry="retry"
+          @pause="pause"
+          @resume="resume"
+          @resume-all="resumeAll"
           @cancel-receiving="cancelReceiving"
           @clear-history="clearHistoryEntries"
           @open-folder="handleOpenFolder"
+          @close="queueVisible = false"
         />
       </Transition>
     </div>
@@ -599,6 +610,7 @@ watch(
         @set-receiving-policy="setReceivingPolicy"
         @set-approval-timeout-sec="setApprovalTimeoutSec"
         @set-encryption="setEncryption"
+        @set-concurrency="setConcurrency"
         @close="showSettings = false"
       />
     </Transition>

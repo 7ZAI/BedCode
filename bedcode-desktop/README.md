@@ -6,7 +6,7 @@
 
 **BedCode 的桌面端主机** — 在 Windows / Linux 上运行多个 Agent CLI / 终端会话（Claude Code、pi、opencode、Codex 等），供手机在同一 WiFi 下远程接管。
 
-[![Version](https://img.shields.io/badge/version-2.1.0-blue.svg)](https://github.com/7ZAI/BedCode)
+[![Version](https://img.shields.io/badge/version-2.1.1-blue.svg)](https://github.com/7ZAI/BedCode)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](../LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri-2.0-orange.svg)](https://v2.tauri.app/)
 [![Wasmtime](https://img.shields.io/badge/wasmtime-47-%232F6FED.svg)](https://wasmtime.dev/)

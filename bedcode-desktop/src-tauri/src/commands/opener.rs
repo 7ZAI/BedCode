@@ -83,9 +83,8 @@ pub fn open_log_dir() -> crate::Result<()> {
             dir.display()
         )));
     }
-    reveal_in_dir_platform(dir).map_err(|e| {
-        crate::AppError::Internal(format!("open log directory '{}' failed: {e}", dir.display()))
-    })
+    reveal_in_dir_platform(dir)
+        .map_err(|e| crate::AppError::Internal(format!("open log directory '{}' failed: {e}", dir.display())))
 }
 
 /// 平台分发：仅目标平台分支参与编译（避免未使用函数告警）

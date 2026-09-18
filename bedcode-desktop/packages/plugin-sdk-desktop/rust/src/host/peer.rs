@@ -37,6 +37,13 @@ pub trait HostPeer {
     fn peer_respond_transfer(&self, batch_id: &str, accept: bool) -> Result<(), HostError>;
     /// 设置接收策略（引擎安全闸门配置原语）：mode = "ask" | "always_accept" | "always_deny"
     fn peer_set_receive_policy(&self, mode: &str, timeout_secs: u64) -> Result<(), HostError>;
+    /// 显式暂停进行中的发送批（batch-id 寻址）：中断会话，任务保留（含已传
+    /// 字节）不落历史；无命中报错。暂停释放一个并发槽位
+    fn peer_pause_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+    /// 恢复暂停的发送批：入队经并发闸门启动，接收端按已写偏移续传
+    fn peer_resume_transfer(&self, batch_id: &str) -> Result<(), HostError>;
+    /// 恢复全部暂停的发送批，返回入队数（0 = 无暂停批）
+    fn peer_resume_all_transfers(&self) -> Result<u32, HostError>;
     /// 全量幂等替换引擎广播源：条目 `[{ id, name, path }]`（移动端 safTreeUri）
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError>;
     /// 浏览对端共享根清单（仅 session 句柄寻址；断线自动重拨）

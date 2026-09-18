@@ -7,7 +7,8 @@
  *
  * 机制（ADR-0013）：
  * - 双条件门控：xterm 处于备用屏幕（buffer.active.type === 'alternate'）
- *   且应用启用了 SGR 鼠标上报（输出流嗅探 DECSET 1006h）才视为 TUI 模式
+ *   且应用启用了 SGR 鼠标上报（输出流嗅探 DECSET 1006 + 上报模式
+ *   9/1000/1001/1002/1003，支持多参数合并序列 `ESC[?1000;1006h`）才视为 TUI 模式
  * - TUI 模式下触摸拖动/惯性翻译成 SGR 滚轮序列（ESC[<64/65;col;rowM），
  *   经既有 WS 通道（ws_send_input_async）原样写入主机 PTY，由应用自行滚动
  * - 灵敏度折算：主流 TUI 把单个滚轮事件放大为 ~3 行滚动（终端惯例），
@@ -72,23 +73,43 @@ const MAX_WHEEL_EVENTS_PER_WINDOW = 2
  */
 const MAX_PENDING_DELTA = 120
 
-/** 输出流嗅探尾部保留长度：`ESC[?1006l` 最长 9 字符，留足跨 chunk 切分余量 */
-const TAIL_KEEP_CHARS = 16
+/** 输出流嗅探尾部保留长度：`ESC[?1000;1006l` 最长 14 字符，留足跨 chunk 切分余量 */
+const TAIL_KEEP_CHARS = 20
 
-/** DECSET 模式序列匹配：ESC [ ? <数字> <h|l> */
-const DECSET_QUESTION_RE = /\x1b\[\?(\d+)([hl])/g
+/**
+ * DECSET 模式序列匹配：ESC [ ? <数字>[;<数字>...] <h|l>
+ *
+ * 必须支持**多参数合并**写法（`ESC[?1000;1006h`）：部分 TUI 框架把多个模式
+ * 合并进一条序列，只匹配单参数会整体漏判 → isTuiMode 恒 false → 手势走 xterm
+ * 滚动，而备用屏幕没有 scrollback → 完全滚不动（真机症状：TUI 里滑不动）。
+ */
+const DECSET_QUESTION_RE = /\x1b\[\?([0-9;]+)([hl])/g
+
+/**
+ * 鼠标上报模式集合（X10=9 / 普通=1000 / 高亮=1001 / 按钮事件=1002 / 任意事件=1003）：
+ * 滚轮事件只有这些模式开启时才会被应用接收。
+ */
+const MOUSE_TRACKING_MODES = [9, 1000, 1001, 1002, 1003]
+
+/** SGR 坐标编码模式（1006）：决定滚轮序列的字节形态，非滚轮上报的使能开关 */
+const MOUSE_SGR_MODE = 1006
 
 // ==================== 纯函数（可单测） ====================
 
 /**
- * SGR 鼠标上报嗅探器：跟踪输出流中应用启用的 DECSET 1006（SGR 坐标格式）。
+ * SGR 鼠标上报嗅探器：跟踪输出流中应用启用的 DECSET 模式——SGR 编码（1006）
+ * 与鼠标上报（9/1000/1001/1002/1003）。
+ *
+ * 双条件缺一不可：只置 1006 时应用并不接收滚轮事件（把滚轮序列发过去无人处理，
+ * 表现为「模拟 TUI 模式下滚不动」）；只置上报模式时序列字节形态又不是 SGR。
+ * 两者同时成立才算真正可滚动。
  *
  * 输出被 WS/合并管线切成任意 chunk，CSI 序列可能跨 chunk——内部保留尾部
  * 片段（TAIL_KEEP_CHARS），下一 chunk 到达时拼接后重新扫描。
- * 1006 关闭序列（1006l）一并跟踪，退出时复位。
+ * 关闭序列（`...l`）一并跟踪，退出时复位。
  */
 export interface MouseSgrSniffer {
-  /** 应用当前是否启用了 SGR 鼠标上报 */
+  /** 应用当前是否启用了 SGR 鼠标上报（可接收 SGR 滚轮事件） */
   readonly enabled: boolean
   /** 喂入一段输出字节（写入 xterm 前调用） */
   feed(data: Uint8Array): void
@@ -98,27 +119,50 @@ export interface MouseSgrSniffer {
 
 export function createMouseSgrSniffer(): MouseSgrSniffer {
   let tail = ''
-  let mouseSgrEnabled = false
+  /** 各鼠标上报模式的当前开关（后到的 DECSET 覆盖前者） */
+  const tracking = new Map<number, boolean>()
+  /** 是否观察到过上报模式开关（决定 1006 是否可单独作为判据） */
+  let trackingSeen = false
+  let sgr = false
   const decoder = new TextDecoder()
+
+  /**
+   * 上报是否可用：
+   * - 未观察到任何上报模式开关 → 以 1006 为准（历史兼容：部分应用只声明编码）
+   * - 观察到过 → 以真实开关为准。这修的是反向漏判：应用启用鼠标上报后又显式
+   *   关闭（`1000l` 等）但 1006 仍置位时，旧实现会长期停在 TUI 模式，手势持续
+   *   发送被应用忽略的滚轮事件（表现为「滚不动」）
+   */
+  const mouseReportingActive = () =>
+    !trackingSeen || MOUSE_TRACKING_MODES.some((mode) => tracking.get(mode) === true)
 
   return {
     get enabled() {
-      return mouseSgrEnabled
+      return sgr && mouseReportingActive()
     },
     feed(data: Uint8Array) {
       const text = tail + decoder.decode(data)
       for (const m of text.matchAll(DECSET_QUESTION_RE)) {
-        const mode = Number(m[1])
         const on = m[2] === 'h'
-        if (mode === 1006) {
-          mouseSgrEnabled = on
+        // 多参数：逐模式应用（ESC[?1000;1006h 同时开上报与 SGR 编码）
+        for (const part of m[1].split(';')) {
+          const mode = Number(part)
+          if (!Number.isFinite(mode)) continue
+          if (mode === MOUSE_SGR_MODE) {
+            sgr = on
+          } else if (MOUSE_TRACKING_MODES.includes(mode)) {
+            trackingSeen = true
+            tracking.set(mode, on)
+          }
         }
       }
       tail = text.slice(-TAIL_KEEP_CHARS)
     },
     reset() {
       tail = ''
-      mouseSgrEnabled = false
+      tracking.clear()
+      trackingSeen = false
+      sgr = false
     },
   }
 }

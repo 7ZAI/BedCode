@@ -5,6 +5,21 @@ use crate::Result;
 use std::sync::Arc;
 use tauri::{Manager, State};
 
+/// QR token TTL 上限（24 小时），防超大值误配
+pub const QR_TOKEN_TTL_MAX_SECS: u64 = 86_400;
+
+/// 校验 QR token TTL 边界（纯函数，可单测）
+///
+/// `0` 会生成立即过期的 token（移动端扫码即失败），超大值无意义，均拒绝。
+pub fn validate_qr_token_ttl(ttl: u64) -> std::result::Result<(), crate::AppError> {
+    if ttl == 0 || ttl > QR_TOKEN_TTL_MAX_SECS {
+        return Err(crate::AppError::InvalidInput(format!(
+            "qr_token_ttl 必须在 1..={QR_TOKEN_TTL_MAX_SECS} 秒之间，收到 {ttl}"
+        )));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct QrConnectionInfo {
     pub token: String,
@@ -89,7 +104,32 @@ pub async fn get_qr_token_ttl(db: State<'_, Arc<tokio::sync::Mutex<crate::db::Da
 
 #[tauri::command]
 pub async fn set_qr_token_ttl(db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>, ttl: u64) -> Result<()> {
+    validate_qr_token_ttl(ttl)?;
     let db = db.lock().await;
     db.set_setting("qr_token_ttl", &ttl.to_string())
         .map_err(|e| crate::AppError::Config(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_qr_token_ttl_accepts_bounds() {
+        assert!(validate_qr_token_ttl(1).is_ok());
+        assert!(validate_qr_token_ttl(300).is_ok());
+        assert!(validate_qr_token_ttl(QR_TOKEN_TTL_MAX_SECS).is_ok());
+    }
+
+    #[test]
+    fn validate_qr_token_ttl_rejects_zero() {
+        let err = validate_qr_token_ttl(0).unwrap_err();
+        assert!(err.to_string().contains("qr_token_ttl 必须在"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn validate_qr_token_ttl_rejects_overflow() {
+        let err = validate_qr_token_ttl(QR_TOKEN_TTL_MAX_SECS + 1).unwrap_err();
+        assert!(err.to_string().contains("qr_token_ttl 必须在"), "unexpected: {err}");
+    }
 }

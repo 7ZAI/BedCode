@@ -19,12 +19,22 @@ function displayName(files: unknown): string {
   return extra > 0 ? `${name} +${extra}` : name
 }
 
+/** 引擎状态 → 前端状态（running=传输中、pending=排队、paused=已暂停，其余终态直传；
+ * 未知状态回落 failed——避免新状态静默渲染成无法识别的 chip） */
+function mapState(status: string): TaskStateName {
+  if (status === 'running' || status === 'transferring') return 'transferring'
+  if (['pending', 'paused', 'completed', 'failed', 'rejected', 'cancelled', 'interrupted'].includes(status)) {
+    return status as TaskStateName
+  }
+  return 'failed'
+}
+
 /** 将自有存储条目（camelCase TransferEntry）映射为前端内部模型 */
 function mapWireTask(raw: any): Task {
   const status = String(raw.status ?? '')
   return {
     id: raw.batchId ?? '',
-    direction: raw.direction === 'receive' ? 'download' : 'upload',
+    direction: ['receive', 'download'].includes(raw.direction) ? 'download' : 'upload',
     peer: {
       deviceId: raw.nodeId ?? '',
       name: raw.peerName ?? '',
@@ -33,7 +43,7 @@ function mapWireTask(raw: any): Task {
     size: raw.totalBytes ?? 0,
     offset: raw.transferredBytes ?? 0,
     rateBps: raw.rateBps ?? 0,
-    state: (status === 'running' ? 'transferring' : status) as TaskStateName,
+    state: mapState(status),
     reason: raw.detail ?? raw.rejectReason ?? null,
     initiator: 'me',
     batchId: raw.batchId ?? null,
@@ -99,12 +109,59 @@ export function useTasks(context: PluginContext) {
     }
   }
 
-  async function cancel(id: string): Promise<void> {
-    await context.commands.execute('file-transfer.cancel', { taskId: id })
+  /** 取消任务：命令成功且实际生效返回 true（ok=false = 任务已移除/终态，无变更） */
+  async function cancel(id: string): Promise<boolean> {
+    try {
+      const r = await context.commands.execute('file-transfer.cancel', { taskId: id })
+      return r?.ok === true
+    } catch (e) {
+      console.error(`[File Transfer] cancel failed for "${id}":`, e)
+      return false
+    }
   }
-  async function retry(id: string): Promise<void> {
-    await context.commands.execute('file-transfer.retry', { taskId: id })
+  /** 重试任务：入队成功返回 true */
+  async function retry(id: string): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.retry', { taskId: id })
+      return true
+    } catch (e) {
+      console.error(`[File Transfer] retry failed for "${id}":`, e)
+      return false
+    }
   }
+  /** 显式暂停（仅传输中 send 任务；任务保留可恢复），命令生效返回 true */
+  async function pause(id: string): Promise<boolean> {
+    try {
+      const r = await context.commands.execute('file-transfer.pause', { taskId: id })
+      return r === true
+    } catch (e) {
+      console.error(`[File Transfer] pause failed for "${id}":`, e)
+      return false
+    }
+  }
+  /** 恢复单个暂停任务（入队经并发闸门，对端按偏移续传），命令生效返回 true */
+  async function resume(id: string): Promise<boolean> {
+    try {
+      const r = await context.commands.execute('file-transfer.resume', { taskId: id })
+      return r === true
+    } catch (e) {
+      console.error(`[File Transfer] resume failed for "${id}":`, e)
+      return false
+    }
+  }
+  /** 恢复全部暂停任务，返回入队数 */
+  async function resumeAll(): Promise<number> {
+    try {
+      const r = await context.commands.execute('file-transfer.resume-all', {})
+      return typeof r?.resumed === 'number' ? r.resumed : 0
+    } catch (e) {
+      console.error('[File Transfer] resume-all failed:', e)
+      return 0
+    }
+  }
+
+  /** 是否存在已暂停任务（「全部继续」按钮可见性） */
+  const hasPaused = computed(() => tasks.value.some((t) => t.state === 'paused'))
 
   // ==================== 派生状态 ====================
 
@@ -146,6 +203,10 @@ export function useTasks(context: PluginContext) {
     sendPickedFiles,
     cancel,
     retry,
+    pause,
+    resume,
+    resumeAll,
+    hasPaused,
     start,
     stop,
   }

@@ -10,7 +10,11 @@
  * 只更新计数不重复弹（spec §14.4）。
  */
 import { ref, type Ref } from 'vue'
-import type { Disposable, PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
+import type {
+  Disposable,
+  PluginContext,
+  PluginDialogHandle,
+} from '@binblink/bedcode-plugin-sdk-desktop'
 import {
   isPermissionGranted,
   requestPermission,
@@ -77,6 +81,8 @@ function mapReceivingTask(raw: any): ReceivingTask {
     relPath: firstRelPath(raw.files),
     size: raw.totalBytes ?? 0,
     offset: raw.transferredBytes ?? 0,
+    // 速率随快照下发（接收卡缺失会导致下载方向无速度可显示）
+    rateBps: raw.rateBps ?? 0,
     state: status === 'running' ? 'transferring' : status,
     reason: raw.detail ?? null,
     peerId: raw.nodeId ?? '',
@@ -215,31 +221,102 @@ export function useReceiving(context: PluginContext) {
   // ==================== 命令封装 ====================
 
   async function refresh(): Promise<void> {
-    try {
-      const [b, r, h] = await Promise.all([
-        context.commands.execute('file-transfer.list-batches', {}),
-        context.commands.execute('file-transfer.list-receiving', {}),
-        context.commands.execute('file-transfer.list-history', {}),
-      ])
-      applyBatches(Array.isArray(b) ? b : [])
-      applyReceiving(Array.isArray(r) ? r : [])
-      applyHistory(Array.isArray(h) ? h : [])
-    } catch (e) {
-      console.error('[File Transfer] receiving/history refresh failed:', e)
+    // 三个列表命令分别结算：单个失败不拖垮其余列表（部分成功也渲染）
+    const [b, r, h] = await Promise.allSettled([
+      context.commands.execute('file-transfer.list-batches', {}),
+      context.commands.execute('file-transfer.list-receiving', {}),
+      context.commands.execute('file-transfer.list-history', {}),
+    ])
+    if (b.status === 'fulfilled') applyBatches(Array.isArray(b.value) ? b.value : [])
+    if (r.status === 'fulfilled') applyReceiving(Array.isArray(r.value) ? r.value : [])
+    if (h.status === 'fulfilled') applyHistory(Array.isArray(h.value) ? h.value : [])
+    for (const [name, res] of [
+      ['list-batches', b],
+      ['list-receiving', r],
+      ['list-history', h],
+    ] as const) {
+      if (res.status === 'rejected') console.error(`[File Transfer] ${name} failed:`, res.reason)
     }
   }
 
-  async function approveBatch(batchId: string): Promise<void> {
-    await context.commands.execute('file-transfer.approve-batch', { batchId })
+  /** 批准批请求：成功返回 true；失败记日志返回 false（调用方据此决定是否开队列） */
+  async function approveBatch(batchId: string): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.approve-batch', { batchId })
+      return true
+    } catch (e) {
+      console.error(`[File Transfer] approve-batch failed for "${batchId}":`, e)
+      return false
+    }
   }
-  async function rejectBatch(batchId: string): Promise<void> {
-    await context.commands.execute('file-transfer.reject-batch', { batchId })
+  /** 拒绝批请求：成功返回 true；失败记日志返回 false */
+  async function rejectBatch(batchId: string): Promise<boolean> {
+    try {
+      await context.commands.execute('file-transfer.reject-batch', { batchId })
+      return true
+    } catch (e) {
+      console.error(`[File Transfer] reject-batch failed for "${batchId}":`, e)
+      return false
+    }
   }
   async function cancelReceiving(sessionId: string): Promise<void> {
     await context.commands.execute('file-transfer.cancel-receiving', { sessionId })
   }
+  /**
+   * 清空历史二次确认（宿主全局弹窗渲染）：返回是否确认。
+   *
+   * 破坏性且不可撤销 ⇒ 与移动端同构补确认（桌面先例：TrustedPeersSection
+   * 撤销确认）；遮罩/Escape 关闭等同取消。
+   */
+  function confirmClearHistory(): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let handle: PluginDialogHandle | null = null
+      let settled = false
+      const finish = (confirmed: boolean): void => {
+        if (settled) return
+        settled = true
+        handle?.close()
+        handle = null
+        resolve(confirmed)
+      }
+      handle = context.ui.showDialog({
+        // 警告三角（Heroicons outline exclamation-triangle）
+        icon: 'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z',
+        title: context.i18n.t('transfer.history.clearConfirmTitle'),
+        message: context.i18n.t('transfer.history.clearConfirmBody'),
+        actions: [
+          {
+            label: context.i18n.t('transfer.task.cancel'),
+            kind: 'default',
+            onClick: () => finish(false),
+          },
+          {
+            label: context.i18n.t('transfer.history.clear'),
+            kind: 'danger',
+            onClick: () => finish(true),
+          },
+        ],
+        onClose: () => finish(false),
+      })
+    })
+  }
+
+  /**
+   * 清空历史（破坏性操作，插件侧只删终态条目）
+   *
+   * 命令成功后本地重拉三列表：以插件持久层为准刷新 UI，不依赖单一事件送达
+   * （事件丢失/组件重挂会表现为「点了没反应」）。失败时记录并**向上抛**——
+   * 宿主全局 unhandledrejection 处理器会把原因写进 frontend 日志，避免静默。
+   */
   async function clearHistory(): Promise<void> {
-    await context.commands.execute('file-transfer.clear-history', {})
+    if (!(await confirmClearHistory())) return
+    try {
+      await context.commands.execute('file-transfer.clear-history', {})
+      await refresh()
+    } catch (e) {
+      console.error('[File Transfer] clear-history failed:', e)
+      throw e
+    }
   }
 
   // ==================== 生命周期 ====================

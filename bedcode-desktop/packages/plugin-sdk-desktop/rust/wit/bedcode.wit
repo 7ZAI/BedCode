@@ -95,6 +95,15 @@ interface host-peer {
     /// 设置接收策略（引擎安全闸门配置原语，ADR 0022 v3）：mode = "ask" |
     /// "always_accept" | "always_deny"；产品真源在插件侧，经本原语推送宿主闸门
     set-receive-policy: func(mode: string, timeout-secs: u64) -> result<_, string>;
+    /// 显式暂停进行中的发送批（batch-id 寻址）：中断会话连接，任务保留
+    /// （含已传字节）不落历史，接收端按已写偏移保留待续传；仅本端发起的
+    /// running 批可暂停，暂停释放一个并发槽位。无命中返回错误
+    pause-transfer: func(batch-id: string) -> result<_, string>;
+    /// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传
+    /// （断点真源在落盘侧）；无命中返回错误
+    resume-transfer: func(batch-id: string) -> result<_, string>;
+    /// 恢复全部暂停的发送批，返回入队数（0 = 无暂停批）
+    resume-all-transfers: func() -> result<u32, string>;
     /// 全量幂等替换引擎广播源（ADR 0022 v2）：条目 `[{ id, name, path }]`
     /// （camelCase JSON；移动端 SAF 树以 `safTreeUri` 字段替代 `path`）。
     /// 注册表 CRUD 真源在插件侧，本函数只同步暴露面镜像；任一条目非法整批拒绝

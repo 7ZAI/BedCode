@@ -3,12 +3,12 @@
 //! 原理：进程内真实启动 Actix HTTP+WS 服务器（OS 分配端口）→ 真实
 //! tokio-tungstenite 客户端模拟移动端 → 直连 `/ws/terminal/session/{id}`，
 //! 覆盖：未认证拒绝对称、JWT 认证 + 会话存在性校验（SESSION_NOT_FOUND）、
-//! 快照订阅（subscribe_ok → history_end → 实时 TB v2 二进制帧）、
+//! 快照订阅（subscribe_ok → history_end → 实时 TB v3 二进制帧）、
 //! 会话停止通知（session_stopped 帧）。
 //!
 //! 会话存在性用 GlobalOutputManager::register_session 注册假会话（不启动
 //! 真实 PTY）：订阅 → 空历史 history_end → 手动 on_output 推帧 → 断言
-//! TB v2 帧头（magic/version/seq/len/data 与 flags 事件数编码）。
+//! TB v3 帧头（magic/version/start_offset/len/data）。
 //!
 //! 串行化：本文件只含一个 `#[tokio::test]`（场景子步骤严格串行）。
 //! tests/ 下每个文件是独立测试二进制 → 与其余集成测试进程隔离，
@@ -79,6 +79,7 @@ async fn init_test_app_context() {
             PluginHost::new(
                 db.clone(),
                 &plugins_dir,
+                &plugins_dir, // user_plugins_dir：测试上下文无用户插件，复用同一空目录
                 session_manager.clone(),
                 config_manager.clone(),
                 None,
@@ -154,19 +155,18 @@ async fn expect_ws_close(recv: &mut WsRecv, what: &str) {
     }
 }
 
-/// 校验 TB v2 帧头（spec §5.3：magic "TB" + version=2 + flags + seq(8 LE) + len(4 LE) + data）
-/// 返回 (seq, event_count, is_waiting, data)
-fn check_tb_v2_frame<'a>(frame: &'a [u8], what: &str) -> (u64, usize, bool, &'a [u8]) {
+/// 校验 TB v3 帧头（spec §5.3 字节化：magic "TB" + version=3 + flags + start_offset(8 LE) + len(4 LE) + data）
+/// 返回 (start_offset, is_waiting, data)；高 7 位无事件数编码，len 即字节数
+fn check_tb_v3_frame<'a>(frame: &'a [u8], what: &str) -> (u64, bool, &'a [u8]) {
     assert!(frame.len() >= 16, "{what}: frame too short: {} bytes", frame.len());
     assert_eq!(&frame[0..2], b"TB", "{what}: bad magic");
-    assert_eq!(frame[2], 2, "{what}: bad version");
+    assert_eq!(frame[2], 3, "{what}: bad version");
     let flags = frame[3];
     let is_waiting = flags & 0x01 != 0;
-    let event_count = ((flags >> 1) as usize) + 1;
-    let seq = u64::from_le_bytes(frame[4..12].try_into().unwrap());
+    let start_offset = u64::from_le_bytes(frame[4..12].try_into().unwrap());
     let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
     assert_eq!(len, frame.len() - 16, "{what}: len field mismatch");
-    (seq, event_count, is_waiting, &frame[16..])
+    (start_offset, is_waiting, &frame[16..])
 }
 
 /// 签发测试 JWT（JwtService 内部固定密钥，验证端同一把密钥）
@@ -262,26 +262,26 @@ async fn session_terminal_route_full_flow() {
             expect_ws_close(&mut bad_recv, "after AUTH_FAILED").await;
         }
 
-        // 订阅 → subscribe_ok（快照元数据）+ history_end（空历史）
+        // 订阅 → subscribe_ok（快照字节三件套）+ history_end（空历史）
         send.send(WsMsg::Text(r#"{"type":"subscribe"}"#.into()))
             .await
             .expect("send subscribe failed");
         let msg = recv_text_json(&mut recv, "subscribe_ok").await;
         assert_eq!(msg["type"], "subscribe_ok");
-        let snapshot_seq = msg["snapshot_seq"].as_u64().expect("snapshot_seq");
-        assert_eq!(msg["min_seq"], snapshot_seq, "empty history: min == snapshot");
-        assert_eq!(msg["history_count"], 0);
+        let snapshot_offset = msg["snapshot_offset"].as_u64().expect("snapshot_offset");
+        assert_eq!(msg["min_offset"], snapshot_offset, "empty history: min == snapshot");
+        assert_eq!(msg["history_bytes"], 0);
 
         let msg = recv_text_json(&mut recv, "history_end").await;
         assert_eq!(msg["type"], "history_end");
-        assert_eq!(msg["snapshot_seq"], snapshot_seq);
+        assert_eq!(msg["snapshot_offset"], snapshot_offset);
 
-        // 实时输出：手动推两条事件 → TB v2 二进制帧（seq = 首事件 index）
+        // 实时输出：手动推两条事件 → TB v3 二进制帧（start_offset = 累计字节）
         output_manager
             .on_output(OutputEvent {
                 session_id: session_id.to_string(),
                 data: b"hello ".to_vec(),
-                index: snapshot_seq + 1,
+                start_offset: 0, // 由 on_output 按 max_offset 分配
                 timestamp: 0,
                 is_waiting: false,
             })
@@ -290,28 +290,27 @@ async fn session_terminal_route_full_flow() {
             .on_output(OutputEvent {
                 session_id: session_id.to_string(),
                 data: b"world".to_vec(),
-                index: snapshot_seq + 2,
+                start_offset: 0,
                 timestamp: 0,
                 is_waiting: true,
             })
             .await;
 
-        let frame = match recv_msg(&mut recv, "TB v2 output frame").await {
+        let frame = match recv_msg(&mut recv, "TB v3 output frame").await {
             WsMsg::Binary(b) => b,
             other => panic!("expected binary output frame, got {other:?}"),
         };
-        let (seq, event_count, is_waiting, data) = check_tb_v2_frame(&frame, "merged live frame");
-        assert_eq!(seq, snapshot_seq + 1, "seq = first event index");
-        // 两条小事件可能合并（30ms 窗）或拆分（直通）——事件数 ∈ [1,2]，
-        // 且字节内容 = 按序拼接
-        assert!(event_count <= 2, "at most 2 events merged: {event_count}");
-        let expected: Vec<u8> = if event_count == 2 {
+        let (start_offset, is_waiting, data) = check_tb_v3_frame(&frame, "merged live frame");
+        assert_eq!(start_offset, snapshot_offset, "start_offset = first byte offset");
+        // 两条小事件可能合并（30ms 窗）或拆分（直通）——字节内容 = 按序拼接
+        // 的空历史下首事件 offset = 0；合并后总长 11（"hello world"）/ 拆分 6
+        let expected: Vec<u8> = if data.len() == 11 {
             b"hello world".to_vec()
         } else {
             b"hello ".to_vec()
         };
         assert_eq!(data, expected.as_slice());
-        assert_eq!(is_waiting, event_count == 2, "is_waiting = last event's flag");
+        assert_eq!(is_waiting, data.len() == 11, "is_waiting = last event's flag");
     }
 
     // ---------- 场景 4：会话停止 → session_stopped 帧 ----------

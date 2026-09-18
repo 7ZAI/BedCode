@@ -1,27 +1,26 @@
 /**
- * 终端流组合集成测试（L2 场景 3，10 号票重写）
+ * 终端流组合集成测试（store × useTerminalBuffer × writeCoalescer × xterm × 输入回传）
  *
- * 协作实体：terminalBuffer store（终端 WS 状态机 + lastRenderedSeq） +
- * useTerminalBuffer（实时 handler 注册） + writeCoalescer（rAF 合并写入管线） +
- * xterm Terminal（stub，遵循 writeCoalescer.test.ts 的项目惯例） +
- * useMobileConnection.sendInput（HTTP 输入回传 + JWT 注入）。
+ * 协作实体：terminalBuffer store（Rust 命令驱动 + terminal-* 事件消费 + 字节游标） +
+ * useTerminalBuffer（实时 handler 注册 / 历史拼接 writeParsed）+ writeCoalescer（rAF 合并写入） +
+ * xterm Terminal（stub，遵循 writeCoalescer.test.ts 的项目惯例） + useMobileCommands（真实模块，
+ * 其 invoke 走 mock 的 @tauri-apps/api/core）。
  *
- * 测试 seam：mock createTerminalSocket（fake socket 捕获 handlers 回调）+
- * 手动驱动 onSubscribed/onFrame/onHistoryEnd，模拟桌面端新路由帧流。
+ * 测试 seam：mock Tauri invoke（terminal_page_subscribe / terminal_get_history / terminal_send_input
+ * 等命令面）+ mockListen 捕获 terminal-state 事件并手动驱动——模拟移动端 Rust 后端
+ * （terminal_link.rs）的状态推送；输出帧则经页面级 Tauri Channel（从 terminal_page_subscribe
+ * 调用参数取回通道，投喂 TB v3 二进制帧）。
  *
- * 覆盖：TB v2 帧 → handler → terminal.write 全链路 + lastRenderedSeq 推进；
- * 历史段实时帧缓冲 → history_end FLUSH；输入回传（HTTP URL/body 构造 +
- * Authorization JWT 注入协作）。
+ * 覆盖：Channel 帧 → writeCoalescer → terminal.write 全链路 + lastRenderedOffset 推进；
+ * 历史拼接期间实时帧缓冲 → 历史写完 FLUSH（快照拼接无缝隙）；输入回传（sendInput →
+ * terminal_send_input 命令，不再走旧 HTTP POST / WS socket）。
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { Terminal } from '@xterm/xterm'
-import type { RemoteDevice } from '@/composables/model'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
-import type { TerminalSocketHandlers } from '@/composables/useTerminalSocket'
-import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
-import { makeAuthCredentials } from '@/__tests__/fixtures/index'
+import { flushAsync } from './helpers'
 
 // ==================== mock Tauri 边界 ====================
 
@@ -34,126 +33,114 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
     eventHandlers[event] = (eventHandlers[event] || []).filter((h) => h !== handler)
   })
 })
-const mockFetch = vi.fn()
-
-// fake 终端 socket：捕获 handlers，测试手动驱动
-let capturedHandlers: TerminalSocketHandlers | null = null
-let fakeSocket: {
-  start: ReturnType<typeof vi.fn>
-  subscribe: ReturnType<typeof vi.fn>
-  sendInput: ReturnType<typeof vi.fn>
-  stop: ReturnType<typeof vi.fn>
-  reconnect: ReturnType<typeof vi.fn>
-  isOpen: ReturnType<typeof vi.fn>
-}
-const createTerminalSocketMock = vi.fn()
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
   convertFileSrc: (p: string) => p,
+  // 段2 推送通道替身：真实实现构造时依赖 WebView 注入的 __TAURI_INTERNALS__
+  Channel: class ChannelMock<T> {
+    onmessage: ((message: T) => void) | null = null
+  },
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
   emit: vi.fn().mockResolvedValue(undefined),
 }))
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: (...args: any[]) => mockFetch(...args),
-}))
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
 }))
+// i18n 文案与本集成用例断言无关（断言的是写入字节与命令调用）
+vi.mock('@/locales', () => ({ default: { global: { t: (key: string) => key } } }))
 vi.mock('@tauri-apps/plugin-os', () => ({}))
-vi.mock('@/composables/useTerminalSocket', () => ({
-  createTerminalSocket: (...args: any[]) => createTerminalSocketMock(...args),
-}))
-vi.mock('@/composables/useMobileCommands', async (importOriginal) => {
-  const mod = await importOriginal<typeof import('@/composables/useMobileCommands')>()
-  return {
-    ...mod,
-    getTerminalWsInfo: vi.fn().mockResolvedValue({ url: 'ws://192.168.1.100:8765/ws/terminal/session/s1', token: 'jwt' }),
-  }
-})
 
 // ==================== 测试基建 ====================
 
-const DEVICE: RemoteDevice = {
-  id: 'dev-1',
-  name: 'DESKTOP-1',
-  address: '192.168.1.100',
-  port: 8765,
-  isPaired: false,
-}
-
-type ConnectionModule = typeof import('@/composables/useMobileConnection')
-
-/** stub xterm（项目惯例：writeCoalescer.test.ts 同款；writeBytes 守卫 element） */
+/** stub xterm（项目惯例：writeCoalescer.test.ts 同款；write 回调驱动 writeParsed 背压） */
 function makeMockTerminal() {
   return {
     element: {},
-    write: vi.fn(),
+    write: vi.fn((_data: unknown, cb?: () => void) => cb?.()),
     clear: vi.fn(),
     // 渲染背压接线（registerRealtimeHandler 挂 onWriteParsed）
     onWriteParsed: vi.fn(() => ({ dispose: vi.fn() })),
   } as unknown as Terminal
 }
 
-/** 构造 TB v2 帧对象（store 消费的解析结果） */
-function frame(seq: number, eventCount = 1, data?: string) {
-  return {
-    data: new TextEncoder().encode(data ?? `data-${seq}`),
-    seq,
-    eventCount,
-    lastSeq: seq + eventCount - 1,
-    isWaiting: false,
+/** base64 编码（构造 terminal_get_history 历史载荷） */
+function b64(text: string): string {
+  return btoa(unescape(encodeURIComponent(text))).replace(/\+/g, '-').replace(/\//g, '_')
+}
+
+/** 取某会话最近一次经 terminal_page_subscribe 交给 Rust 的页面通道（真实链路同款出口） */
+function pageChannel(sessionId: string) {
+  const call = mockInvoke.mock.calls
+    .filter(([c, args]) => c === 'terminal_page_subscribe' && (args as any)?.sessionId === sessionId)
+    .pop()
+  const channel = (call?.[1] as any)?.channel as
+    | { onmessage: ((m: ArrayBuffer) => void) | null }
+    | undefined
+  if (!channel?.onmessage) throw new Error(`no page channel for ${sessionId}`)
+  return channel
+}
+
+/**
+ * 模拟移动端 Rust 经段2 Channel 推送一帧输出（TB v3 二进制帧，与
+ * `terminal_link::encode_data_frame` 同布局）：
+ * magic 'TB' + version 3 + flags 0 + start_offset(8 LE) + len(4 LE) + payload
+ */
+function emitFrame(sessionId: string, start: number, end: number, data: string) {
+  const channel = pageChannel(sessionId)
+  const payload = new TextEncoder().encode(data)
+  const len = end - start
+  if (len !== payload.byteLength) {
+    throw new Error(`frame length mismatch: end-start=${len}, payload=${payload.byteLength}`)
+  }
+  const frame = new Uint8Array(16 + payload.byteLength)
+  frame[0] = 0x54 // 'T'
+  frame[1] = 0x42 // 'B'
+  frame[2] = 3 // TB v3
+  frame[3] = 0x00 // 数据帧
+  const view = new DataView(frame.buffer)
+  view.setBigUint64(4, BigInt(start), true)
+  view.setUint32(12, len, true)
+  frame.set(payload, 16)
+  // 真实路径经 Channel<ArrayBuffer> 投递（Rust 侧 InvokeResponseBody::Raw）
+  channel.onmessage(frame.buffer)
+}
+
+/** 模拟移动端 Rust 链路状态事件 */
+function emitState(sessionId: string, phase: string, detail?: string) {
+  for (const h of eventHandlers['terminal-state'] ?? []) {
+    h({ payload: { session_id: sessionId, phase, detail } })
   }
 }
 
-function setupSocket() {
-  fakeSocket = {
-    start: vi.fn(),
-    subscribe: vi.fn(),
-    sendInput: vi.fn(),
-    stop: vi.fn(),
-    reconnect: vi.fn(),
-    isOpen: vi.fn(() => false),
-    ackRendered: vi.fn(),
-  }
-  capturedHandlers = null
-  createTerminalSocketMock.mockImplementation((handlers: TerminalSocketHandlers) => {
-    capturedHandlers = handlers
-    return fakeSocket
-  })
-  return fakeSocket
+/** 汇总 xterm.write 收到的全部字节（rAF 合并可能把同帧事件并成一次 write） */
+function writtenText(terminal: Terminal): string {
+  const sink = terminal as unknown as { write: ReturnType<typeof vi.fn> }
+  return sink.write.mock.calls.map(([d]) => new TextDecoder().decode(d as Uint8Array)).join('')
 }
 
 function installInvokeMock() {
-  mockInvoke.mockImplementation((cmd: string) => {
-    switch (cmd) {
-      case 'ws_connect':
-        return Promise.resolve({ address: DEVICE.address, port: DEVICE.port, status: 'connected' })
-      default:
-        return Promise.resolve(undefined)
+  // 默认：terminal_get_history 空历史；其余命令 no-op
+  mockInvoke.mockImplementation((cmd: string, args: any) => {
+    if (cmd === 'terminal_get_history') {
+      return Promise.resolve({
+        from: args?.from ?? 0,
+        minOffset: 0,
+        snapshotOffset: 0,
+        historyBytes: 0,
+        dataBase64: '',
+      })
     }
+    return Promise.resolve(undefined)
   })
-}
-
-let conn: ReturnType<ConnectionModule['useMobileConnection']>
-
-async function freshConnection(preset?: () => void): Promise<void> {
-  clearEventHandlers(eventHandlers)
-  resetLocalStorage()
-  preset?.()
-  const mod = await loadFreshModule<ConnectionModule>('@/composables/useMobileConnection')
-  conn = mod.useMobileConnection()
-  await flushAsync()
 }
 
 beforeEach(async () => {
   vi.clearAllMocks()
   installInvokeMock()
   setActivePinia(createPinia())
-  setupSocket()
-  await freshConnection()
 })
 
 afterEach(() => {
@@ -161,101 +148,94 @@ afterEach(() => {
 })
 
 describe('终端流：terminalBuffer store × useTerminalBuffer × xterm × 输入回传', () => {
-  it('socket 帧全链路：TB v2 帧 → 实时 handler → terminal.write + lastRenderedSeq 推进', async () => {
+  it('实时帧全链路：段2 Channel 帧 → writeCoalescer → terminal.write + 游标推进', async () => {
     const store = useTerminalBufferStore()
+    // 真实链路时序：会话启动订阅 + 已 live（页面挂载晚于订阅完成）；
+    // P1 修复后 spliceHistory 在 phase=live 前不会取历史
+    await store.subscribeSession('s1')
+    emitState('s1', 'live')
+    await flushAsync()
     const terminal = makeMockTerminal()
     const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
     const term = useTerminalBuffer()
     term.registerRealtimeHandler('s1', terminal)
 
-    // 订阅：fake socket 建连 + 订阅帧
-    await store.subscribeSession('s1')
-    expect(fakeSocket.start).toHaveBeenCalledWith('s1')
-
-    // 桌面端帧流：subscribe_ok → 历史帧 → history_end → 实时帧
-    capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-    capturedHandlers!.onFrame(frame(1, 1, 'hello'))
-    capturedHandlers!.onHistoryEnd(10)
+    // 等历史拼接（空历史）完成——此后实时帧直接写入
     await flushAsync()
 
-    // 直写管线（ENABLE_RAF_COALESCE=false）：事件回调内立即写入
-    expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('hello'))
-    // lastRenderedSeq 推进
-    expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(1)
+    emitFrame('s1', 0, 5, 'hello')
+    emitFrame('s1', 5, 10, 'world')
+    await flushAsync()
+
+    expect(writtenText(terminal)).toBe('helloworld')
+    // 字节游标推进（lastRenderedOffset = 已渲染帧末）
+    expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(10)
   })
 
-  it('历史段实时帧缓冲 → history_end FLUSH 写入 terminal（快照拼接无缝隙）', async () => {
-    // writeCoalescer 默认 rAF 合并（见 writeCoalescer.ts 头注释）：在测试里
-    // 捕获并手动执行挂起的 rAF 回调，模拟渲染帧推进，不依赖 jsdom 时序
-    const rafCallbacks: FrameRequestCallback[] = []
-    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
-      rafCallbacks.push(cb)
-      return rafCallbacks.length
-    })
-    vi.stubGlobal('cancelAnimationFrame', () => {})
-    const flushRaf = () => {
-      while (rafCallbacks.length) rafCallbacks.shift()!(0)
-    }
-    try {
-      const store = useTerminalBufferStore()
-      const terminal = makeMockTerminal()
-      const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
-      const term = useTerminalBuffer()
-      term.registerRealtimeHandler('s1', terminal)
-
-      await store.subscribeSession('s1')
-      capturedHandlers!.onSubscribed({ snapshotSeq: 10, minSeq: 0, historyCount: 5 })
-      capturedHandlers!.onFrame(frame(1, 10, 'his')) // 历史帧覆盖到 snapshot 边界（1-10）
-      flushRaf()
-      expect(terminal.write).toHaveBeenCalledTimes(1)
-
-      // 历史段内实时帧（> snapshot_seq）：缓冲不写入
-      capturedHandlers!.onFrame(frame(11, 1, 'live'))
-      flushRaf()
-      expect(terminal.write).toHaveBeenCalledTimes(1)
-
-      // history_end：FLUSH 实时缓冲
-      capturedHandlers!.onHistoryEnd(10)
-      flushRaf()
-      expect(terminal.write).toHaveBeenCalledWith(new TextEncoder().encode('live'))
-      expect(store.getBuffer('s1')!.lastRenderedSeq).toBe(11)
-    } finally {
-      vi.unstubAllGlobals()
-    }
-  })
-
-  it('输入回传：sendInput → HTTP POST 参数构造 + JWT 注入协作', async () => {
-    // 预置凭据：useHttpApi 的 request() 应为非 auth 路径注入 Authorization
-    await freshConnection(() => {
-      const creds = makeAuthCredentials()
-      localStorage.setItem('auth_pairing_id', creds.pairingId)
-      localStorage.setItem('auth_fingerprint', creds.fingerprint)
-      localStorage.setItem('auth_session_token', creds.sessionToken)
-    })
-
-    // 连接建立（setApiBaseUrl 设置 HTTP 基址）；fetch 按路径分发：
-    // /api/health 为探测响应形状（status/port），其余为 HTTP API 响应形状（code/message）
-    mockFetch.mockImplementation((url: string) => {
-      if (url.endsWith('/api/health')) {
-        return Promise.resolve(mockHttpResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
+  it('历史拼接期间实时帧缓冲 → 历史写完 FLUSH（快照拼接无缝隙）', async () => {
+    // 挂起 terminal_get_history：控制历史拼接时序
+    let resolveHistory!: (v: unknown) => void
+    mockInvoke.mockImplementation((cmd: string) => {
+      if (cmd === 'terminal_get_history') {
+        return new Promise((resolve) => {
+          resolveHistory = resolve
+        })
       }
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
+      return Promise.resolve(undefined)
     })
-    await conn.connect(DEVICE)
+
+    const store = useTerminalBufferStore()
+    // 订阅已 live：spliceHistory 到 phase=live 才发 getHistory（P1 修复）
+    await store.subscribeSession('s1')
+    emitState('s1', 'live')
+    await flushAsync()
+    const terminal = makeMockTerminal()
+    const { useTerminalBuffer } = await import('@/composables/useTerminalBuffer')
+    const term = useTerminalBuffer()
+    term.registerRealtimeHandler('s1', terminal)
+    await flushAsync(1)
+
+    // 拼接期间实时帧到达（start ≥ snapshot）：缓冲不落 xterm
+    emitFrame('s1', 10, 14, 'live')
+    await flushAsync()
+    expect(terminal.write).not.toHaveBeenCalled()
+
+    // 历史返回：先写历史段再 FLUSH 实时缓冲——顺序无缝隙
+    resolveHistory({
+      from: 0,
+      minOffset: 0,
+      snapshotOffset: 10,
+      historyBytes: 10,
+      dataBase64: b64('his'),
+    })
     await flushAsync()
 
-    // 发送输入 → HTTP POST /api/sessions/s1/input
-    await conn.sendInput('s1', 'ls -la\n')
+    expect(writtenText(terminal)).toBe('hislive')
+    // 游标推进到实时帧末偏移（history [0,10) → live [10,14)）
+    expect(store.getBuffer('s1')!.lastRenderedOffset).toBe(14)
+  })
+
+  it('输入回传：sendInput → terminal_send_input 命令（Rust → WS → 桌面 PTY）', async () => {
+    const store = useTerminalBufferStore()
+
+    // 订阅 + 链路 live
+    await store.subscribeSession('s1')
+    emitState('s1', 'live')
     await flushAsync()
 
-    const lastCall = mockFetch.mock.calls[mockFetch.mock.calls.length - 1]
-    expect(lastCall[0]).toBe('http://192.168.1.100:8765/api/sessions/s1/input')
-    expect(lastCall[1]).toMatchObject({
-      method: 'POST',
-      body: JSON.stringify({ data: 'ls -la\n', specialKey: null }),
-      headers: { Authorization: 'Bearer test-jwt-token' },
-    })
-    expect(invokeCalls('ws_send_input_async')).toHaveLength(0)
+    const ok = store.sendInput('s1', 'ls -la\n', 'enter')
+    expect(ok).toBe(true)
+    await flushAsync()
+    expect(invokeCalls('terminal_send_input')).toContainEqual([
+      { sessionId: 's1', data: 'ls -la\n', specialKey: 'enter' },
+    ])
+    // 旧链路不再被使用：无 HTTP POST / WS socket 通道
+    expect(invokeCalls('http_request')).toHaveLength(0)
+
+    // 未订阅会话输入被拒（不发送）
+    const rejected = store.sendInput('s2', 'x')
+    expect(rejected).toBe(false)
+    expect(invokeCalls('terminal_send_input')).toHaveLength(1)
   })
 })
 

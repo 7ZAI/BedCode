@@ -1,0 +1,239 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "BedCode 桌面端 PTY 输出数据流",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [1080, 720],
+    "output": "docs/diagrams/pty-output-flow-desktop.html"
+  },
+  "stages": [
+    { "label": "进程与伪终端" },
+    { "label": "PTY 读取" },
+    { "label": "会话输出管理" },
+    { "label": "编码与通道" },
+    { "label": "前端渲染" }
+  ],
+  "nodes": [
+    {
+      "id": "shell",
+      "type": "external",
+      "label": "shell 子进程",
+      "sublabel": "bash · git · opencode",
+      "tag": "ANSI 输出源",
+      "stage": 0,
+      "row": 0,
+      "width": 130
+    },
+    {
+      "id": "pty_master",
+      "type": "backend",
+      "label": "PTY master fd",
+      "sublabel": "内核伪终端主端",
+      "tag": "内核管道缓冲",
+      "stage": 0,
+      "row": 1,
+      "width": 120
+    },
+    {
+      "id": "pty_reader",
+      "type": "backend",
+      "label": "PtyReader",
+      "sublabel": "BufReader 8KB 阻塞读",
+      "tag": "独立 OS 线程",
+      "stage": 1,
+      "row": 3,
+      "width": 130
+    },
+    {
+      "id": "session_output",
+      "type": "backend",
+      "label": "SessionOutputManager",
+      "sublabel": "on_output 分配 start_offset",
+      "tag": "on_ack 记账",
+      "stage": 2,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "queue",
+      "type": "database",
+      "label": "UnifiedOutputQueue",
+      "sublabel": "Bytes Arc 环形 · 50MB",
+      "tag": "min/max_offset",
+      "stage": 2,
+      "row": 1,
+      "width": 150
+    },
+    {
+      "id": "subscribers",
+      "type": "messagebus",
+      "label": "SubscriberState",
+      "sublabel": "send_queue mpsc 32768",
+      "tag": "try_send 背压丢弃",
+      "stage": 2,
+      "row": 2,
+      "width": 130
+    },
+    {
+      "id": "forward",
+      "type": "backend",
+      "label": "forward_loop",
+      "sublabel": "TB v3 编码 · 合并窗口",
+      "tag": "每订阅者一实例",
+      "stage": 3,
+      "row": 3,
+      "width": 140
+    },
+    {
+      "id": "channel",
+      "type": "messagebus",
+      "label": "Tauri Channel",
+      "sublabel": "Raw ArrayBuffer · 本地唯一路径",
+      "tag": "4ms / 64KB",
+      "stage": 3,
+      "row": 4,
+      "width": 170
+    },
+    {
+      "id": "composable",
+      "type": "frontend",
+      "label": "输出流 Composable",
+      "sublabel": "字节游标 · 去重 + 跨帧裁剪",
+      "tag": "useTerminalOutputStreamChannel",
+      "stage": 4,
+      "row": 0,
+      "width": 150
+    },
+    {
+      "id": "xterm",
+      "type": "frontend",
+      "label": "xterm.js",
+      "sublabel": "write → 屏幕缓冲",
+      "tag": "渲染端",
+      "stage": 4,
+      "row": 1
+    }
+  ],
+  "flows": [
+    {
+      "from": "shell",
+      "to": "pty_master",
+      "label": "ANSI 原始字节",
+      "classification": "stdout + stderr 合并",
+      "labelAt": [100, 200]
+    },
+    {
+      "from": "pty_master",
+      "to": "pty_reader",
+      "label": "read() 阻塞读",
+      "classification": "BufReader 8KB 缓冲"
+    },
+    {
+      "from": "pty_reader",
+      "to": "session_output",
+      "label": "OutputEvent",
+      "classification": "data · is_waiting · start_offset",
+      "labelAt": [250, 556]
+    },
+    {
+      "from": "session_output",
+      "to": "queue",
+      "label": "push 写锁",
+      "classification": "start_offset = max_offset",
+      "labelAt": [530, 220]
+    },
+    {
+      "from": "queue",
+      "to": "subscribers",
+      "label": "try_send OutputFrame",
+      "classification": "历史回放 + 实时帧",
+      "labelAt": [530, 330]
+    },
+    {
+      "from": "subscribers",
+      "to": "forward",
+      "label": "OutputFrame 流",
+      "classification": "mpsc 32768"
+    },
+    {
+      "from": "forward",
+      "to": "channel",
+      "label": "TB v3 二进制帧",
+      "classification": "4ms 窗口 / 64KB 上限",
+      "labelAt": [745, 542]
+    },
+    {
+      "from": "channel",
+      "to": "composable",
+      "label": "Raw ArrayBuffer",
+      "classification": "in-memory fetch · 无丢消息"
+    },
+    {
+      "from": "composable",
+      "to": "xterm",
+      "label": "write",
+      "classification": "去重 + 跨帧裁剪",
+      "labelAt": [960, 200]
+    },
+    {
+      "from": "xterm",
+      "to": "session_output",
+      "label": "ack lastRenderedOffset",
+      "classification": "64KB 或 250ms 节流",
+      "variant": "dashed",
+      "fromSide": "right",
+      "toSide": "top",
+      "via": [[1040, 271], [1040, 100], [530, 100]],
+      "labelAt": [930, 110]
+    },
+    {
+      "from": "session_output",
+      "to": "pty_reader",
+      "label": "should_pause",
+      "classification": "64KB 暂停 / 8KB 恢复",
+      "variant": "dashed",
+      "route": "top-channel",
+      "channelY": 84
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "字节连续性",
+      "items": [
+        "每次 PTY read 是一个 OutputEvent，start_offset 在串行临界区内取队列 max_offset，同流区间按序铺满无重无缺",
+        "TB v3 帧头 16 字节：magic + version + flags + start_offset(8LE) + len(4LE)，end_offset = start_offset + len 直接可导",
+        "前端游标 = 已渲染末字节：整帧已渲染则跳过，帧跨越游标则裁掉前半段，根治重播重复渲染"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "背压反馈环",
+      "items": [
+        "产出字节按 end_offset 登记进 unacked_fifo，前端 ack 推进水位后按序弹出释放未确认记账",
+        "should_pause 滞回：unacked > 64KB 暂停读、≤ 8KB 恢复读，区间内保持现状避免临界抖振",
+        "暂停时数据留在内核 PTY 管道（零丢失），恢复后连续补读；ack 丢失由水位兜底，不缺字节"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "历史回放与截断",
+      "items": [
+        "队列是 Bytes Arc 环形缓冲（默认 50MB / 65536 块），任一超限淘汰最旧块并推进 min_offset",
+        "订阅时持读锁取快照三件套（min_offset / snapshot_offset / history_bytes），随后逐条回放历史再接 HistoryEnd",
+        "min_offset 越过游标说明已渲染区被环形淘汰 → 清屏全量重播；offset 缺口触发冷却期重订阅补回"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "传输双通道",
+      "items": [
+        "本地终端唯一路径是 Tauri Channel（4ms 合并窗口），走 WebView 原生 IPC，Rust 侧缓冲直到前端消费",
+        "远程移动端订阅 /ws/terminal/session/{id}，同一 forward_loop 以 30ms / 64KB 窗口出帧，二进制帧 + 控制帧",
+        "WS 环回（/ws/terminal/local）已下线：WebKitGTK 接收缓冲在输出风暴期会丢整消息，故不再复用"
+      ]
+    }
+  ]
+}

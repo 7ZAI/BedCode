@@ -37,10 +37,7 @@ pub async fn plugin_get_info(
 /// 不进入激活流程。`plugin_activate` 内部的 preauthorize 保留为兜底
 /// （启动 auto-activate 无头场景 + 已授权路径短路无二次弹窗）。
 #[tauri::command]
-pub async fn plugin_preauthorize(
-    plugin_id: String,
-    plugin_host: State<'_, Arc<PluginHost>>,
-) -> crate::Result<()> {
+pub async fn plugin_preauthorize(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
     tracing::info!(plugin_id = %plugin_id, "[API] plugin_preauthorize");
     let result = plugin_host.preauthorize_plugin(&plugin_id).await;
     if let Err(ref e) = result {
@@ -67,6 +64,29 @@ pub async fn plugin_deactivate(plugin_id: String, plugin_host: State<'_, Arc<Plu
     let result = plugin_host.deactivate_plugin(&plugin_id, true).await;
     if let Err(ref e) = result {
         tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_deactivate failed");
+    }
+    result
+}
+
+/// 从本地 zip 插件包安装（用户插件目录）
+#[tauri::command]
+pub async fn plugin_install_from_file(path: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<String> {
+    tracing::info!("[API] plugin_install_from_file: {}", path);
+    let result = plugin_host.install_from_zip(&path).await;
+    if let Err(ref e) = result {
+        tracing::error!(error = %e, "[API] plugin_install_from_file failed");
+    }
+    result
+}
+
+/// 卸载插件（所有来源：删除插件所有数据——存储 + 激活状态 + 安装目录；
+/// 要求插件未启用，运行中由前端置灰 + 后端拒绝）
+#[tauri::command]
+pub async fn plugin_uninstall(plugin_id: String, plugin_host: State<'_, Arc<PluginHost>>) -> crate::Result<()> {
+    tracing::info!(plugin_id = %plugin_id, "[API] plugin_uninstall");
+    let result = plugin_host.uninstall_plugin(&plugin_id).await;
+    if let Err(ref e) = result {
+        tracing::error!(plugin_id = %plugin_id, error = %e, "[API] plugin_uninstall failed");
     }
     result
 }
@@ -126,6 +146,26 @@ pub async fn plugin_frontend_load_report(
 
 // ==================== Plugin Storage ====================
 
+/// 插件命令权限门禁（纯函数，可单测）：激活 + 权限双重校验
+///
+/// 门禁是桥接层独有的生产逻辑（host.rs 透传前必须拦住未激活/未授权调用），
+/// 任何分支被误删/短路都会让权限绕过上线——抽取为纯函数锁定 2×2 分支语义。
+fn check_plugin_gate(plugin_id: &str, activated: bool, permitted: bool, permission: &str) -> crate::Result<()> {
+    if !activated {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} is not activated",
+            plugin_id
+        )));
+    }
+    if !permitted {
+        return Err(crate::AppError::Plugin(format!(
+            "Plugin {} has no {permission} permission",
+            plugin_id
+        )));
+    }
+    Ok(())
+}
+
 /// 插件存储：获取值
 ///
 /// 校验调用者身份：plugin_id 对应的插件必须处于 Activated 状态
@@ -135,18 +175,12 @@ pub async fn plugin_storage_get(
     key: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<Option<serde_json::Value>> {
-    if !plugin_host.is_activated(&plugin_id).await {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated",
-            plugin_id
-        )));
-    }
-    if !plugin_host.permission().check(&plugin_id, "storage") {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission",
-            plugin_id
-        )));
-    }
+    check_plugin_gate(
+        &plugin_id,
+        plugin_host.is_activated(&plugin_id).await,
+        plugin_host.permission().check(&plugin_id, "storage"),
+        "storage",
+    )?;
     plugin_host.storage().get(&plugin_id, &key).await
 }
 
@@ -158,18 +192,12 @@ pub async fn plugin_storage_set(
     value: serde_json::Value,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    if !plugin_host.is_activated(&plugin_id).await {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated",
-            plugin_id
-        )));
-    }
-    if !plugin_host.permission().check(&plugin_id, "storage") {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission",
-            plugin_id
-        )));
-    }
+    check_plugin_gate(
+        &plugin_id,
+        plugin_host.is_activated(&plugin_id).await,
+        plugin_host.permission().check(&plugin_id, "storage"),
+        "storage",
+    )?;
     plugin_host.storage().set(&plugin_id, &key, value).await
 }
 
@@ -180,18 +208,12 @@ pub async fn plugin_storage_delete(
     key: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    if !plugin_host.is_activated(&plugin_id).await {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated",
-            plugin_id
-        )));
-    }
-    if !plugin_host.permission().check(&plugin_id, "storage") {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no storage permission",
-            plugin_id
-        )));
-    }
+    check_plugin_gate(
+        &plugin_id,
+        plugin_host.is_activated(&plugin_id).await,
+        plugin_host.permission().check(&plugin_id, "storage"),
+        "storage",
+    )?;
     plugin_host.storage().delete(&plugin_id, &key).await
 }
 
@@ -205,18 +227,12 @@ pub async fn plugin_terminal_send_input(
     text: String,
     plugin_host: State<'_, Arc<PluginHost>>,
 ) -> crate::Result<()> {
-    if !plugin_host.is_activated(&plugin_id).await {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} is not activated",
-            plugin_id
-        )));
-    }
-    if !plugin_host.permission().check(&plugin_id, "terminal:input") {
-        return Err(crate::AppError::Plugin(format!(
-            "Plugin {} has no terminal:input permission",
-            plugin_id
-        )));
-    }
+    check_plugin_gate(
+        &plugin_id,
+        plugin_host.is_activated(&plugin_id).await,
+        plugin_host.permission().check(&plugin_id, "terminal:input"),
+        "terminal:input",
+    )?;
     let ctx = crate::system::app_context::AppContext::global();
     ctx.session_manager().write_input(&session_id, &text).await
 }
@@ -328,32 +344,57 @@ mod tests {
     //! 2. 启用 `tauri` 的 `test` feature（`tauri::test::mock_builder`）可
     //!    模拟运行时，但需要修改 Cargo.toml（本任务约束：只加测试模块），
     //!    且桥接函数体全部是「权限门禁 + 委托给 PluginHost / FsAuthChecker」
-    //!    的薄封装，无独立纯逻辑可提取。
-    //! 3. 门禁逻辑（`is_activated` / `permission().check`）与委托目标
-    //!    （`list_plugins` / `activate_plugin` / `invoke_rust_command` /
-    //!    `storage()` 等）均已在 `host.rs` 测试中直接覆盖（含错误分支的
-    //!    错误字符串断言），桥接层只是透传。
-    //!
-    //! 结论：不硬造测试；桥接层行为由 host.rs 的宿主测试 + 前端集成测试
-    //! 覆盖。`plugin_terminal_send_input` 的成功路径还依赖
-    //! `AppContext::global()`（未初始化即 panic），同样无法在无头测试构造。
-    //!
-    //! 若未来启用 tauri test feature，可在此处为 `plugin_storage_*` /
-    //! `plugin_terminal_send_input` 的门禁错误分支补测试。
+    //!    的薄封装。
+    //! 3. 门禁逻辑（`is_activated` / `permission().check`）已抽为纯函数
+    //!    `check_plugin_gate`（票据 30）：激活/未激活 × 有/无权限 2×2 分支
+    //!    在下方测试锁定，桥接层退化为薄封装；委托目标（`list_plugins` /
+    //!    `activate_plugin` / `invoke_rust_command` / `storage()` 等）均在
+    //!    `host.rs` 测试中直接覆盖。
     //!
     //! 例外：`plugin_frontend_load_report` 不依赖任何 State 参数（纯日志透传），
     //! 可直接调用测试。
 
+    use super::*;
+
+    /// 门禁 2×2 分支（票据 30 P0）：激活 × 权限四象限
+    #[test]
+    fn gate_rejects_inactive_plugin_even_with_permission() {
+        let err = check_plugin_gate("com.bedcode.test", false, true, "storage").unwrap_err();
+        assert!(
+            err.to_string().contains("not activated"),
+            "未激活必须拒绝，实际: {err}"
+        );
+    }
+
+    #[test]
+    fn gate_rejects_missing_permission_even_when_active() {
+        let err = check_plugin_gate("com.bedcode.test", true, false, "terminal:input").unwrap_err();
+        assert!(
+            err.to_string().contains("no terminal:input permission"),
+            "缺权限必须拒绝并点名权限，实际: {err}"
+        );
+    }
+
+    #[test]
+    fn gate_rejects_inactive_without_permission() {
+        let err = check_plugin_gate("com.bedcode.test", false, false, "storage").unwrap_err();
+        assert!(err.to_string().contains("not activated"), "实际: {err}");
+    }
+
+    #[test]
+    fn gate_allows_active_with_permission() {
+        assert!(check_plugin_gate("com.bedcode.test", true, true, "storage").is_ok());
+        // 权限名参与错误消息（terminal:input 与 storage 消息不串）
+        let err = check_plugin_gate("com.bedcode.test", true, false, "storage").unwrap_err();
+        assert!(err.to_string().contains("no storage permission"), "实际: {err}");
+        assert!(!err.to_string().contains("terminal:input"));
+    }
+
     /// 诊断上报命令：ok/error 两条路径都只写 tracing，恒返回 Ok（issue 04）
     #[tokio::test]
     async fn frontend_load_report_always_ok() {
-        let ok_report = super::plugin_frontend_load_report(
-            "com.bedcode.demo".into(),
-            "import".into(),
-            true,
-            None,
-        )
-        .await;
+        let ok_report =
+            super::plugin_frontend_load_report("com.bedcode.demo".into(), "import".into(), true, None).await;
         let fail_report = super::plugin_frontend_load_report(
             "com.bedcode.demo".into(),
             "activate".into(),

@@ -85,6 +85,13 @@ pub struct PluginManifest {
     /// 如 `{AppDownloadsDir}/ai-chatbox`）。
     #[serde(default)]
     pub preauth_dirs: Vec<String>,
+    /// 外网访问预授权 URL 声明（Egress L2，glob：`[scheme://][*.]host[:port][/path-prefix]`）
+    ///
+    /// 宿主在插件加载时收集进 Egress Policy 静态声明层，声明命中直接放行；
+    /// 未声明的外网 URL（如用户自定义 baseUrl）走 L3 授权弹窗（fail-closed）。
+    /// 仿 `preauthDirs` 先例。
+    #[serde(default)]
+    pub preauth_urls: Vec<String>,
 }
 
 /// 插件扩展点声明
@@ -268,6 +275,27 @@ mod tests {
         assert_eq!(m.icon, None);
         assert_eq!(m.wasm_hash, "");
         assert_eq!(m.rust_library, "");
+        assert_eq!(m.preauth_dirs, Vec::<String>::new());
+        assert_eq!(m.preauth_urls, Vec::<String>::new());
+    }
+
+    #[test]
+    fn test_manifest_preauth_urls_parse() {
+        // preauthUrls（Egress L2 声明，camelCase）解析 + 缺失默认空数组
+        let json = serde_json::json!({
+            "id": "com.bedcode.ai-chatbox",
+            "name": "AI Chatbox",
+            "version": "1.0.0",
+            "preauthUrls": ["https://*.openai.com/*", "https://api.deepseek.com/*"]
+        });
+        let m: PluginManifest = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            m.preauth_urls,
+            vec!["https://*.openai.com/*".to_string(), "https://api.deepseek.com/*".to_string()]
+        );
+        // 序列化回写保持 camelCase
+        let back = serde_json::to_value(&m).unwrap();
+        assert_eq!(back["preauthUrls"], serde_json::json!(["https://*.openai.com/*", "https://api.deepseek.com/*"]));
     }
 
     #[test]

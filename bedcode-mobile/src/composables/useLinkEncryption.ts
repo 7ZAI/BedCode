@@ -98,6 +98,7 @@ export async function syncLinkCryptoContextToNative(): Promise<void> {
       enabled: settings.value.enabled,
       strictMode: settings.value.strictMode,
       encryptWsEvent: settings.value.encryptWsEvent,
+      encryptHttp: settings.value.encryptHttp,
       kdPublicB64: getPinnedKey(),
     })
   } catch (e) {
@@ -128,20 +129,8 @@ export function getPinnedFingerprint(): string | null {
 }
 
 /**
- * 从 auth 响应数据中提取并刷新 pin（qr-connect / verify / reauth 均携带）。
- * 由 useHttpApi 统一拦截调用，调用方无需感知；
- * 配对/重认证主路径为 Rust invoke（wsVerifyPairingCode 等），经事件
- * `ws_link_crypto_pin`（initLinkCryptoPinSync）落地，此处保留供 HTTP 通道接入。
+ * pin 写入统一入口：公钥必存（加密协商信任锚），指纹随带（仅展示用途）
  */
-export function notePinFromAuthData(data: unknown): void {
-  if (!data || typeof data !== 'object') return
-  applyPin(
-    (data as Record<string, unknown>).kdPublicB64,
-    (data as Record<string, unknown>).kdFingerprint,
-  )
-}
-
-/** pin 写入统一入口：公钥必存（加密协商信任锚），指纹随带（仅展示用途） */
 function applyPin(kdPublicB64: unknown, kdFingerprint: unknown): void {
   if (typeof kdPublicB64 !== 'string' || kdPublicB64.length === 0) return
   // 公钥必须可解为 32 字节：畸形值写入会让 HTTP 侧每次 deriveHttpKeys 抛错

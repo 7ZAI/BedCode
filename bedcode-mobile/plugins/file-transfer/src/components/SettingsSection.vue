@@ -112,6 +112,17 @@ async function handleSetEncryption(enabled: boolean): Promise<void> {
   }
 }
 
+/** 并发上限（1–8，spec §7）；步进钳制后即时保存 */
+async function stepConcurrency(delta: number): Promise<void> {
+  const cur = props.settingsApi.settings.value.concurrency ?? 3
+  const next = Math.min(8, Math.max(1, cur + delta))
+  if (next === cur) return
+  const ok = await props.settingsApi.setConcurrency(next)
+  if (ok && context) {
+    context.dialogs.showToast(t('transfer.settings.saved'), 'success')
+  }
+}
+
 /** 同意超时输入（秒，10–600；仅 ask 策略显示）。原生数字输入外观完全自绘 */
 const timeoutInput = ref('')
 
@@ -294,6 +305,26 @@ watch(() => props.settingsApi.settings.value.approvalTimeoutSec, syncTimeoutInpu
             >
               {{ t(opt.labelKey) }}
             </button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== 发送并发上限 ==================== -->
+    <section class="space-y-2">
+      <h2 class="settings-section-title">{{ t('transfer.settings.concurrency') }}</h2>
+      <div class="settings-group">
+        <div class="settings-row">
+          <div class="min-w-0 flex-1">
+            <div class="settings-label">{{ t('transfer.settings.concurrencyHint') }}</div>
+            <div class="settings-desc">1–8</div>
+          </div>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            <button class="ft-step-btn" @click="stepConcurrency(-1)">−</button>
+            <span class="ft-step-value" aria-live="polite">
+              {{ settingsApi?.settings.value.concurrency ?? 3 }}
+            </span>
+            <button class="ft-step-btn" @click="stepConcurrency(1)">+</button>
           </div>
         </div>
       </div>

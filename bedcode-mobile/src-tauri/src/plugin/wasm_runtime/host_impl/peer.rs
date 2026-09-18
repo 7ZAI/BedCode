@@ -224,22 +224,36 @@ pub(crate) fn peer_send_files(
         Detailed {
             path: String,
             encrypt: Option<bool>,
+            /// 发送方向并发上限脉冲（插件设置真源，批级一致；首元素取值）
+            concurrency: Option<u8>,
         },
     }
     let entries: Vec<SendPathEntry> = serde_json::from_str(paths_json)
         .map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let mut paths = Vec::with_capacity(entries.len());
     let mut force_encrypt = false;
+    let mut concurrency: Option<u8> = None;
     for entry in entries {
         match entry {
             SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed { path, encrypt } => {
+            SendPathEntry::Detailed { path, encrypt, concurrency: c } => {
                 if encrypt == Some(true) {
                     force_encrypt = true;
+                }
+                if concurrency.is_none() {
+                    concurrency = c;
                 }
                 paths.push(path);
             }
         }
+    }
+    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
+    if let Some(n) = concurrency {
+        let _ = run(
+            state,
+            "host_peer_set_concurrency",
+            crate::peer_receive::set_peer_transfer_concurrency(require_app(state)?, n),
+        );
     }
     let dto = with_auto_redial(state, session, |node_id| {
         run(
@@ -281,6 +295,45 @@ pub(crate) fn peer_set_receive_policy(
         "host_peer_set_receive_policy",
         crate::peer_receive::set_peer_receive_policy(require_app(state)?, mode.to_string(), timeout_secs),
     )
+}
+
+/// 显式暂停进行中的发送批：中断会话连接，任务保留（含已传字节）不落历史。
+pub(crate) fn peer_pause_transfer(state: &WasmPluginState, batch_id: &str) -> Result<(), String> {
+    require_peer_permission(state)?;
+    let hit = run(
+        state,
+        "host_peer_pause_transfer",
+        crate::peer_transfer::pause_peer_transfer(require_app(state)?, batch_id.to_string()),
+    )?;
+    if !hit {
+        return Err("pause transfer: no running send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传。
+pub(crate) fn peer_resume_transfer(state: &WasmPluginState, batch_id: &str) -> Result<(), String> {
+    require_peer_permission(state)?;
+    let hit = run(
+        state,
+        "host_peer_resume_transfer",
+        crate::peer_transfer::resume_peer_transfer(require_app(state)?, batch_id.to_string()),
+    )?;
+    if !hit {
+        return Err("resume transfer: no paused send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复全部暂停的发送批，返回入队数。
+pub(crate) fn peer_resume_all_transfers(state: &WasmPluginState) -> Result<u32, String> {
+    require_peer_permission(state)?;
+    let n = run(
+        state,
+        "host_peer_resume_all_transfers",
+        crate::peer_transfer::resume_all_peer_transfers(require_app(state)?),
+    )?;
+    Ok(n as u32)
 }
 
 /// 全量幂等替换引擎广播源：条目 `[{ id, name, safTreeUri }]`（camelCase JSON，

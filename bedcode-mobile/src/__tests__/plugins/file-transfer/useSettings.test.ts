@@ -65,7 +65,7 @@ describe('useSettings orchestration', () => {
       receivingPolicy: 'reject',
       approvalTimeoutSec: 90,
       downloadDir: 'MediaStore/Downloads',
-      concurrency: 1, // 移动端并发固定
+      concurrency: 3, // 默认并发数（引擎并发闸门默认值）
     })
     expect(settings.settings.value.roots[0]).toMatchObject({ kind: 'private_downloads', authorized: true })
     expect(settings.settings.value.roots[1]).toMatchObject({

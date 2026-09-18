@@ -89,8 +89,8 @@ fn with_auto_redial<T>(
     handle: &str,
     op: impl Fn(&str) -> Result<T, String>,
 ) -> Result<T, String> {
-    let entry = with_handles(|t| t.resolve_session(handle))
-        .ok_or_else(|| format!("invalid session handle: {handle}"))?;
+    let entry =
+        with_handles(|t| t.resolve_session(handle)).ok_or_else(|| format!("invalid session handle: {handle}"))?;
     match op(&entry.node_id) {
         Ok(v) => Ok(v),
         Err(e) if e.contains("discovery cache") || e.contains("not in discovery cache") => {
@@ -115,8 +115,8 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_dial") {
         return Err(denied());
     }
-    let endpoint: crate::peer_net::DialEndpoint = serde_json::from_str(endpoint_json)
-        .map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
+    let endpoint: crate::peer_net::DialEndpoint =
+        serde_json::from_str(endpoint_json).map_err(|e| format!("dial endpoint: invalid json: {e}"))?;
     let app = require_app(host_ctx)?;
     // 注意：node_id 必须 clone 而非 take——take 会把 endpoint.node_id 置空，
     // dial_peer_endpoint 对空 node_id 报 "invalid node id ''" 静默失败
@@ -127,9 +127,7 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     let port = endpoint.port;
     let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
     match dto.status.as_str() {
-        "connected" => Ok(with_handles(|t| {
-            t.mint_session(SessionEntry { node_id, addr, port })
-        })),
+        "connected" => Ok(with_handles(|t| t.mint_session(SessionEntry { node_id, addr, port }))),
         other => Err(format!("dial endpoint failed: peer {other}")),
     }
 }
@@ -152,7 +150,10 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
         return cancelled;
     }
     // ③ 接收侧句柄（batch-id）→ 取消/拒绝接收批（pending 即拒）
-    sync_result(block_on_async(crate::peer_receive::cancel_peer_receiving(app, handle.to_string())))
+    sync_result(block_on_async(crate::peer_receive::cancel_peer_receiving(
+        app,
+        handle.to_string(),
+    )))
 }
 
 pub(crate) fn peer_respond_consent(
@@ -166,7 +167,9 @@ pub(crate) fn peer_respond_consent(
     }
     let app = require_app(host_ctx)?;
     let request_id = request_id.to_string();
-    sync_result(block_on_async(crate::peer_net::respond_peer_consent(app, request_id, accepted)))
+    sync_result(block_on_async(crate::peer_net::respond_peer_consent(
+        app, request_id, accepted,
+    )))
 }
 
 pub(crate) fn peer_list_trusted(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
@@ -205,24 +208,49 @@ pub(crate) fn peer_send_files(
         Detailed {
             path: String,
             encrypt: Option<bool>,
+            /// 发送方向并发上限脉冲（插件设置真源，批级一致；首元素取值）
+            concurrency: Option<u8>,
         },
     }
-    let entries: Vec<SendPathEntry> = serde_json::from_str(paths_json)
-        .map_err(|e| format!("send files: invalid paths json: {e}"))?;
+    let entries: Vec<SendPathEntry> =
+        serde_json::from_str(paths_json).map_err(|e| format!("send files: invalid paths json: {e}"))?;
     let mut paths = Vec::with_capacity(entries.len());
     let mut force_encrypt = false;
+    let mut concurrency: Option<u8> = None;
     for entry in entries {
         match entry {
             SendPathEntry::Plain(path) => paths.push(path),
-            SendPathEntry::Detailed { path, encrypt } => {
+            SendPathEntry::Detailed {
+                path,
+                encrypt,
+                concurrency: c,
+            } => {
                 if encrypt == Some(true) {
                     force_encrypt = true;
+                }
+                if concurrency.is_none() {
+                    concurrency = c;
                 }
                 paths.push(path);
             }
         }
     }
-    let _ = require_app(host_ctx)?;
+    let app = require_app(host_ctx)?;
+    // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）。
+    // 同步失败不阻断本次发送（按旧上限放行），但禁止静默吞错——留 warn 痕迹
+    if let Some(n) = concurrency {
+        if let Err(e) = sync_result(block_on_async(crate::peer_receive::set_peer_transfer_concurrency(
+            app.clone(),
+            n,
+        ))) {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                concurrency = n,
+                error = %e,
+                "peer transfer concurrency pulse failed, host gate keeps previous limit"
+            );
+        }
+    }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
     let dto = with_auto_redial(host_ctx, session, |node_id| {
@@ -248,7 +276,9 @@ pub(crate) fn peer_respond_transfer(
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let _hit = sync_result(block_on_async(crate::peer_receive::respond_peer_transfer(app, batch_id, accept)))?;
+    let _hit = sync_result(block_on_async(crate::peer_receive::respond_peer_transfer(
+        app, batch_id, accept,
+    )))?;
     Ok(())
 }
 
@@ -263,7 +293,52 @@ pub(crate) fn peer_set_receive_policy(
     }
     let app = require_app(host_ctx)?;
     let mode = mode.to_string();
-    sync_result(block_on_async(crate::peer_receive::set_peer_receive_policy(app, mode, timeout_secs)))
+    sync_result(block_on_async(crate::peer_receive::set_peer_receive_policy(
+        app,
+        mode,
+        timeout_secs,
+    )))
+}
+
+/// 显式暂停进行中的发送批：中断会话连接，任务保留（含已传字节）不落历史。
+/// 仅本端发起的 running 批可暂停（服务侧供流任务不可暂停）。
+pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, batch_id: &str) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_pause_transfer") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let batch_id = batch_id.to_string();
+    let hit = sync_result(block_on_async(crate::peer_transfer::pause_peer_transfer(app, batch_id)))?;
+    if !hit {
+        return Err("pause transfer: no running send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复暂停的发送批：入队并经并发闸门启动，接收端按已写偏移续传。
+pub(crate) fn peer_resume_transfer(host_ctx: &WasmHostContext, plugin_id: &str, batch_id: &str) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_transfer") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let batch_id = batch_id.to_string();
+    let hit = sync_result(block_on_async(crate::peer_transfer::resume_peer_transfer(
+        app, batch_id,
+    )))?;
+    if !hit {
+        return Err("resume transfer: no paused send batch with that id".to_string());
+    }
+    Ok(())
+}
+
+/// 恢复全部暂停的发送批，返回入队数。
+pub(crate) fn peer_resume_all_transfers(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<u32, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_resume_all_transfers") {
+        return Err(denied());
+    }
+    let app = require_app(host_ctx)?;
+    let n = sync_result(block_on_async(crate::peer_transfer::resume_all_peer_transfers(app)))?;
+    Ok(n as u32)
 }
 
 pub(crate) fn peer_set_shared_roots(
@@ -280,14 +355,16 @@ pub(crate) fn peer_set_shared_roots(
         name: String,
         path: String,
     }
-    let seeds: Vec<SharedRootSeed> = serde_json::from_str(dirs_json)
-        .map_err(|e| format!("set shared roots: invalid dirs json: {e}"))?;
+    let seeds: Vec<SharedRootSeed> =
+        serde_json::from_str(dirs_json).map_err(|e| format!("set shared roots: invalid dirs json: {e}"))?;
     let entries = seeds
         .into_iter()
         .map(|s| bedcode_peer_net::SharedDirEntry {
             id: s.id,
             name: s.name,
-            root: bedcode_peer_net::SharedDirRoot::Fs { path: std::path::PathBuf::from(s.path) },
+            root: bedcode_peer_net::SharedDirRoot::Fs {
+                path: std::path::PathBuf::from(s.path),
+            },
         })
         .collect();
     let app = require_app(host_ctx)?;
@@ -304,7 +381,10 @@ pub(crate) fn peer_list_shared_roots(
     }
     let roots = with_auto_redial(host_ctx, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_remote::list_peer_shared_roots(app, node_id.to_string())))
+        sync_result(block_on_async(crate::peer_remote::list_peer_shared_roots(
+            app,
+            node_id.to_string(),
+        )))
     })?;
     serde_json::to_string(&roots).map_err(|e| format!("serialize shared roots failed: {e}"))
 }
@@ -347,8 +427,7 @@ pub(crate) fn peer_pull_files(
     let files_json_owned = files_json.to_string();
     with_auto_redial(host_ctx, session, |node_id| {
         let files: Vec<crate::peer_remote::RemotePullFileDto> =
-            serde_json::from_str(&files_json_owned)
-                .map_err(|e| format!("pull files: invalid files json: {e}"))?;
+            serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
         let app = require_app(host_ctx)?;
         sync_result(block_on_async(crate::peer_remote::pull_peer_files(
             app,
@@ -376,7 +455,11 @@ mod tests {
     use super::{PeerHandleTable, SessionEntry};
 
     fn entry(node: &str) -> SessionEntry {
-        SessionEntry { node_id: node.to_string(), addr: "192.168.1.5".to_string(), port: 47821 }
+        SessionEntry {
+            node_id: node.to_string(),
+            addr: "192.168.1.5".to_string(),
+            port: 47821,
+        }
     }
 
     #[test]

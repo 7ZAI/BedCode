@@ -53,7 +53,10 @@ fn reset_today_logs(log_dir: &std::path::Path) {
             ),
             Err(e) => system::logging::bootstrap_log(
                 tracing::Level::ERROR,
-                format!("[logging] dev reset: failed to replace {}: {e}", bootstrap_path.display()),
+                format!(
+                    "[logging] dev reset: failed to replace {}: {e}",
+                    bootstrap_path.display()
+                ),
             ),
         }
     }
@@ -94,8 +97,7 @@ fn init_logging(app_handle: &tauri::AppHandle, log_config: &system::config::LogC
     // 构建日志订阅器：文件层非阻塞写盘 + 控制台层。
     // 过滤语义与旧实现一致（error 固定 ERROR、runtime 按级别、frontend 仅 dev），
     // 全部收敛于 system::logging::build_logging，便于独立单测（见该模块测试）
-    let (setup, subscriber) =
-        system::logging::build_logging(&log_dir, log_config, cfg!(debug_assertions))?;
+    let (setup, subscriber) = system::logging::build_logging(&log_dir, log_config, cfg!(debug_assertions))?;
     install_subscriber(subscriber);
 
     // 保存句柄到进程级全局：worker guard 存活到进程退出（drop 时 flush 剩余日志）；
@@ -159,7 +161,8 @@ pub fn run() {
         builder = builder.plugin(tauri_plugin_wdio::init());
     }
 
-    let app = builder.setup(move |app| {
+    let app = builder
+        .setup(move |app| {
             app.manage(app_start);
 
             // 平台条件默认窗口尺寸：tauri.conf.json 全局默认 1300×900 适配
@@ -188,20 +191,12 @@ pub fn run() {
                         // 物理像素计算，语义与 tauri 内部 calculate_window_center_position
                         // 一致（work_area 居中，避开 Dock / 任务栏）
                         let target_phys = target.to_physical::<u32>(scale);
-                        let x = (work_area.size.width as i32
-                            - target_phys.width as i32)
-                            / 2
-                            + work_area.position.x;
-                        let y = (work_area.size.height as i32
-                            - target_phys.height as i32)
-                            / 2
-                            + work_area.position.y;
+                        let x = (work_area.size.width as i32 - target_phys.width as i32) / 2 + work_area.position.x;
+                        let y = (work_area.size.height as i32 - target_phys.height as i32) / 2 + work_area.position.y;
                         if let Err(e) = win.set_size(target) {
                             tracing::warn!(error = %e, "Linux 默认窗口尺寸调整失败，沿用全局默认");
                         }
-                        if let Err(e) =
-                            win.set_position(tauri::PhysicalPosition::new(x, y))
-                        {
+                        if let Err(e) = win.set_position(tauri::PhysicalPosition::new(x, y)) {
                             // 定位失败不阻断启动：仅记录，窗口回落 WM 默认放置
                             tracing::warn!(error = %e, "Linux 默认窗口居中定位失败，沿用窗口管理器默认位置");
                         }
@@ -214,15 +209,28 @@ pub fn run() {
                 }
             }
 
+            // 正式版（release）禁用右键原生菜单：WebKitGTK 的 context-menu 信号
+            // 处理器返回 true 阻止默认菜单弹出（JS preventDefault 在 Linux 上无效，
+            // 见 wry#30）；dev 构建保留右键菜单，便于开发调试（检查元素等）。
+            #[cfg(all(target_os = "linux", not(debug_assertions)))]
+            {
+                use webkit2gtk::WebViewExt;
+                if let Some(win) = app.get_webview_window("main") {
+                    if let Err(e) = win.with_webview(|platform_webview| {
+                        platform_webview.inner().connect_context_menu(|_, _, _, _| true);
+                    }) {
+                        // 仅释放开关功能失败，不影响启动；失败时右键菜单保持默认行为
+                        tracing::warn!(error = %e, "禁用右键菜单失败（WebKitGTK context-menu 信号连接失败）");
+                    }
+                }
+            }
+
             let app_handle = app.handle();
 
             // 启动早期日志通道：build_logging 之前（config 复制/加载、dev reset）的日志
             // 写入 bootstrap.log（release 构建启动失败证据不丢），init_logging 之后由
             // runtime 文件接管；初始化失败仅降级为控制台（eprintln），不阻断启动
-            let log_dir = app_handle
-                .path()
-                .app_log_dir()
-                .expect("Failed to get log directory");
+            let log_dir = app_handle.path().app_log_dir().expect("Failed to get log directory");
             if let Err(e) = system::logging::bootstrap_init(&log_dir) {
                 eprintln!("[logging] bootstrap channel init failed: {e}");
             }
@@ -333,10 +341,7 @@ pub fn run() {
             // 对等网络节点身份：目录与 DB 同源解析自 app_data_dir（决策 D3 宿主只
             // 注入目录），node_identity.json 与 bedcode.db 并列存放；错误经 ? 上抛
             // 走既有启动失败路径——静默换身份会让对端可信列表全部失效（D3）
-            let peer_net_data_dir = app_handle
-                .path()
-                .app_data_dir()
-                .expect("Failed to get app data dir");
+            let peer_net_data_dir = app_handle.path().app_data_dir().expect("Failed to get app data dir");
             crate::peer_net::init_node_identity(&peer_net_data_dir)?;
 
             // 对等网络节点状态容器（ticket 03）：节点生命周期随文件传输插件
@@ -366,9 +371,17 @@ pub fn run() {
             let config_manager = Arc::new(session::SessionConfigManager::new(db.clone()));
             // app_handle_arc 需在 plugin_host 之前创建，因为 PluginHost::new() 需要它构建 HostContextFns
             let app_handle_arc = Arc::new(app_handle.clone());
+            // 用户插件目录（app_data_dir/plugins）：zip 安装的插件所在地（可卸载），
+            // 与只读的内置目录（resource_dir/resources/plugins/desktop）分离
+            let user_plugins_dir = app_handle
+                .path()
+                .app_data_dir()
+                .expect("Failed to get app data dir")
+                .join("plugins");
             let plugin_host = Arc::new(tauri::async_runtime::block_on(plugin::PluginHost::new(
                 db.clone(),
                 &plugins_dir,
+                &user_plugins_dir,
                 session_manager.clone(),
                 config_manager.clone(),
                 Some(app_handle_arc.clone()),
@@ -420,9 +433,9 @@ pub fn run() {
             // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
             // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——
             // 装配完成后按最终插件状态补对账
-            if let Err(e) = tauri::async_runtime::block_on(
-                crate::peer_net::sync_node_with_plugin_state(&app_handle_arc),
-            ) {
+            if let Err(e) =
+                tauri::async_runtime::block_on(crate::peer_net::sync_node_with_plugin_state(&app_handle_arc))
+            {
                 tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
             }
 
@@ -661,6 +674,8 @@ pub fn run() {
             commands::plugin::plugin_preauthorize,
             commands::plugin::plugin_activate,
             commands::plugin::plugin_deactivate,
+            commands::plugin::plugin_install_from_file,
+            commands::plugin::plugin_uninstall,
             commands::plugin::plugin_mark_error,
             commands::plugin::plugin_frontend_load_report,
             commands::plugin::plugin_get_activated_state,
@@ -681,7 +696,6 @@ pub fn run() {
             commands::server::server_stop,
             commands::server::server_restart,
             commands::server::get_server_status,
-            commands::server::get_local_ws_token,
             commands::server::get_server_metrics,
             commands::server::get_server_network_config,
             commands::server::update_server_port,

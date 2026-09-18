@@ -1,21 +1,28 @@
 /**
  * HTTP API Client Composable
  *
- * 移动端直接调用桌面端 HTTP REST API
- * 使用 @tauri-apps/plugin-http 替代浏览器 fetch，绕过 CORS 和网络限制
- * JWT token 自动注入到 Authorization header
+ * 移动端直接调用桌面端 HTTP REST API（ticket 03/07 收束：HTTP 全部经 Rust 统一代理）
+ * - 所有请求走 `invoke('http_request')`，request_id 多路复用（D1/D3）
+ * - JWT 注入 / 链路加密信封 / 超时 / 取消 / 日志全部在 Rust 端（前端只渲染）
+ * - Egress：desktop 类请求经 L1 桌面端目标放行（setApiBaseUrl/httpProbe 时声明目标）
  */
 
 import { ref } from 'vue'
+import { v4 as uuidv4 } from 'uuid'
+import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
-import { fetch as tauriFetch } from '@tauri-apps/plugin-http'
-import { useMobileConnection } from './useMobileConnection'
-import { isChannelEncryptionActive, notePinFromAuthData, getPinnedKey, useLinkEncryptionSettings } from './useLinkEncryption'
-import { decryptResponse, encryptRequest, type HttpTrafficKeys } from '../services/linkCrypto'
 
 // ==================== Config ====================
 
 const API_BASE_URL = ref<string>('')
+
+/** http_request 响应形状（Rust 侧 HttpProxyResponse） */
+interface HttpProxyResponse {
+  status: number
+  statusText: string
+  headers: Record<string, string>
+  bodyText: string
+}
 
 // ==================== Core HTTP Client ====================
 
@@ -45,7 +52,6 @@ async function request<T = any>(
   path: string,
   options: RequestInit = {}
 ): Promise<ApiResult<T>> {
-  const { authCredentials } = useMobileConnection()
   const baseUrl = API_BASE_URL.value
 
   if (!baseUrl) {
@@ -54,106 +60,90 @@ async function request<T = any>(
   }
 
   const url = `http://${baseUrl}${path}`
+  const requestId = uuidv4()
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string>),
-  }
-
-  // 注入 JWT token（auth 路由除外）
-  if (!path.startsWith('/api/auth/') && authCredentials.value?.sessionToken) {
-    headers['Authorization'] = `Bearer ${authCredentials.value.sessionToken}`
-  }
-
-  // 链路加密（issue 06）：非 auth 路径且已 pin 且主开关开 → 请求体信封化 + 协商头；
-  // 加密失败不静默降级为明文发送（fail-closed）。
-  // GET/HEAD 无请求体（HTTP 语义禁止 body）：仍发协商头 + 派生响应密钥
-  // （响应加密不受影响），但信封不进 body——否则 fetch 构造直接失败。
-  const encryptionActive = !path.startsWith('/api/auth/') && isChannelEncryptionActive('http')
-  let requestKeys: HttpTrafficKeys | null = null
-  let effectiveOptions = options
-  if (encryptionActive) {
-    const pinnedKey = getPinnedKey()
-    if (!pinnedKey) {
-      logger.error('[HttpApi] encryption active but no pinned key:', path)
-      return { code: -1, message: 'LINK_ENCRYPTION_NO_PIN' }
-    }
-    try {
-      const method = (options.method || 'GET').toUpperCase()
-      const hasRequestBody = method !== 'GET' && method !== 'HEAD'
-      let bodyText = ''
-      if (hasRequestBody) {
-        bodyText = typeof options.body === 'string' ? options.body : options.body ? JSON.stringify(options.body) : ''
-      }
-      const sealed = encryptRequest(pinnedKey, path, bodyText)
-      headers['X-BedCode-Crypto'] = sealed.negotiation
-      requestKeys = sealed.keys
-      if (hasRequestBody) {
-        effectiveOptions = { ...options, body: sealed.envelope }
-      }
-    } catch (e: any) {
-      logger.error('[HttpApi] encrypt request failed:', path, e?.message || e)
-      return { code: -1, message: 'LINK_ENCRYPTION_SEAL_FAILED' }
-    }
-  }
+  // body 归一化：字符串原样，对象 JSON.stringify（与 httpRequest 通道一致）
+  const body =
+    typeof options.body === 'string'
+      ? options.body
+      : options.body !== undefined && options.body !== null
+        ? JSON.stringify(options.body)
+        : null
 
   try {
-    logger.log('[HttpApi] Request:', options.method || 'GET', url, encryptionActive ? '(encrypted)' : '')
-    const response = await tauriFetch(url, {
-      ...effectiveOptions,
-      headers,
-      connectTimeout: 30000,
+    logger.log('[HttpApi] Request:', options.method || 'GET', url)
+    // Rust 命令签名 http_request(request: HttpProxyRequest, ...)——tauri 按参数名
+    // 反序列化，必须嵌套 request 对象；平面传参会报 missing required key request
+    //
+    // 默认 application/json：桌面端 actix web::Json extractor 无此头即 400
+    // Content type error（HTTP 收束 Rust 代理 6d5eeb18b 时丢失的默认头）；
+    // 调用方显式指定（如 multipart / 自定义类型）时以显式值为准
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      ...((options.headers as Record<string, string>) || {}),
+    }
+    const resp = await invoke<HttpProxyResponse>('http_request', {
+      request: {
+        requestId,
+        method: options.method || 'GET',
+        url,
+        headers,
+        body,
+        timeoutMs: 30000,
+        kind: 'desktop',
+      },
     })
 
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      logger.error('[HttpApi] HTTP error:', response.status, response.statusText, text)
-      return { code: response.status, message: `HTTP ${response.status}: ${response.statusText}` }
+    // HTTP 非 2xx：返回状态码（code=status，与迁移前语义一致）
+    if (resp.status < 200 || resp.status >= 300) {
+      const text = resp.bodyText || ''
+      logger.error('[HttpApi] HTTP error:', resp.status, resp.statusText, text)
+      return { code: resp.status, message: `HTTP ${resp.status}: ${resp.statusText}` }
     }
 
-    const rawText = await response.text()
-    let bodyText = rawText
-
-    if (encryptionActive && requestKeys) {
-      const respHeader = response.headers.get('X-BedCode-Crypto')
-      const outcome = decryptResponse(requestKeys, respHeader === 'v1', rawText, path)
-      if (outcome.kind === 'decrypted') {
-        bodyText = outcome.text
-      } else if (outcome.kind === 'downgrade') {
-        // 预期加密而响应明文：strict 断连报错；非 strict 明文续跑 + 提示态（UI 层映射）
-        const { settings } = useLinkEncryptionSettings()
-        if (settings.value.strictMode) {
-          logger.error('[HttpApi] strict mode: encryption downgrade detected on', path)
-          return { code: -1, message: 'LINK_ENCRYPTION_DOWNGRADE' }
-        }
-        logger.warn('[HttpApi] response unencrypted (downgrade tolerated):', path)
-      }
-    }
-
-    // pin 刷新：auth 响应携带 kdPublicB64/kdFingerprint 时自动更新（issue 03/05）
-    try {
-      const parsedForPin = JSON.parse(bodyText)
-      notePinFromAuthData(parsedForPin?.data)
-    } catch {
-      /* 非 JSON 响应不阻断 */
-    }
-
-    const result = JSON.parse(bodyText)
+    // JWT / 加密信封 / pin 刷新均由 Rust 代理完成（bodyText 已解密）
+    const result = JSON.parse(resp.bodyText)
     logger.log('[HttpApi] Response OK:', path, 'code=', result.code)
     return result
   } catch (e: any) {
+    // invoke 拒绝 = Egress 拒绝（EXTERNAL_URL_*）/ 加密失败（LINK_ENCRYPTION_*）/
+    // 取消（REQUEST_CANCELED）/ 网络错误——message 携带 Rust 侧错误码
     logger.error('[HttpApi] Fetch failed:', path, e?.message || e)
     return { code: -1, message: e?.message || String(e) }
   }
 }
 
 // ==================== 通用请求通道（插件 shared runtime mobileApi 用） ====================
-
-/** 通用对端 REST 请求选项（插件经 mobileApi.httpRequest 访问；body 支持对象或字符串） */
+/**
+ * 通用对端 REST 请求选项（插件经 mobileApi.httpRequest 访问；body 支持对象或字符串） */
 export interface MobileHttpRequestOptions {
   method?: string
   body?: unknown
   headers?: Record<string, string>
+}
+
+/**
+ * 外部 URL 请求（Egress external 类：L1/L2/L3 全层判定，未声明 → 弹窗）
+ *
+ * 供 useUpdateChecker（GitHub API 经宿主内置 L2 声明放行）等外网调用面使用；
+ * 返回 Rust `HttpProxyResponse` 形状（调用方自行解析 bodyText）。
+ */
+export async function externalRequest(
+  url: string,
+  options: MobileHttpRequestOptions = {},
+): Promise<HttpProxyResponse> {
+  const requestId = uuidv4()
+  return invoke<HttpProxyResponse>('http_request', {
+    request: {
+      requestId,
+      method: options.method || 'GET',
+      url,
+      headers: options.headers || {},
+      body: null,
+      timeoutMs: 30000,
+      kind: 'external',
+    },
+  })
 }
 
 /**
@@ -602,6 +592,11 @@ export async function httpGitCheckout(sessionId: string, branch: string) {
 
 export function setApiBaseUrl(address: string, port: number) {
   API_BASE_URL.value = `${address}:${port}`
+  // Egress L1：声明桌面端目标（httpProbe 在 ws_connect 前执行，target 未设——
+  // 此处提前声明使 probe/会话内 desktop 类请求放行，时序见 ticket 03 方案 a）
+  invoke('egress_declare_desktop_target', { address, port }).catch(() => {
+    // 声明失败（如测试环境无后端）不阻断；L1 判定在 Rust 端兜底
+  })
 }
 
 // ==================== Connectivity Probe ====================
@@ -620,22 +615,32 @@ export interface ProbeResult {
  *
  * 在 WS 连接前调用，3 秒超时快速判断网络连通性。
  * 失败时立即返回而非等待 10 秒 WS 超时。
+ * 经统一代理（desktop 类 + L1 放行）；Rust 端先行声明目标。
  */
 export async function httpProbe(address: string, port: number): Promise<ProbeResult> {
   const url = `http://${address}:${port}/api/health`
   logger.log('[HttpApi] Probing:', url)
 
   try {
-    const response = await tauriFetch(url, {
-      method: 'GET',
-      connectTimeout: 3000,
+    // 声明目标（L1；probe 在 ws_connect 前，ConnectionManager.target 未设）
+    await invoke('egress_declare_desktop_target', { address, port })
+    const resp = await invoke<HttpProxyResponse>('http_request', {
+      request: {
+        requestId: uuidv4(),
+        method: 'GET',
+        url,
+        headers: {},
+        body: null,
+        timeoutMs: 3000,
+        kind: 'desktop',
+      },
     })
 
-    if (!response.ok) {
-      return { reachable: false, error: `HTTP ${response.status}` }
+    if (resp.status !== 200) {
+      return { reachable: false, error: `HTTP ${resp.status}` }
     }
 
-    const data = await response.json()
+    const data = JSON.parse(resp.bodyText)
     logger.log('[HttpApi] Probe success:', data)
     return {
       reachable: true,

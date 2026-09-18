@@ -7,7 +7,7 @@ The mobile input bar bundles all convenience features: shortcut panel, custom sh
 The input bar sits at the bottom of the terminal, in three parts:
 
 - **Quick Bar**: always-visible shortcuts and commands (auto-sorted by usage frequency), tap to send
-- **Input box**: type your prompt; multi-line supported (expands to 3 lines on focus, max 6 lines)
+- **Input box**: type your prompt; multi-line supported (grows with newlines or soft-wrapped lines, max 6 lines then scrolls)
 - **Action buttons**: shortcut panel toggle, Send/Execute dual-mode button (paper-plane icon)
 
 > Send vs Execute (one button, two modes): **Send** puts the text into the terminal input line **without pressing Enter** (e.g. skill prefix completion); **Execute** sends the text plus Enter to run it immediately.

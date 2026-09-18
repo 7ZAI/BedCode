@@ -15,8 +15,8 @@ pub mod sync;
 // Re-export all public types
 pub use auth::{AuthPayload, AuthStage};
 pub use control::{
-    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, SubscribeMode,
-    TerminalAction, TerminalPayload,
+    SessionConfigAction, SessionConfigPayload, SessionControlAction, SessionControlPayload, TerminalAction,
+    TerminalPayload,
 };
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;

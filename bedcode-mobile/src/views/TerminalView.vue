@@ -1,5 +1,6 @@
 <template>
   <div
+    ref="terminalViewRef"
     class="terminal-view"
     :style="terminalViewStyle"
   >
@@ -18,14 +19,15 @@
       :visible-items="visibleToolbarItems"
       :all-items="ALL_TOOLBAR_ITEMS"
       :show-sidebar="showSidebar"
-      @back="handleBack"
+      @back="router.back()"
       @action="handleToolbarAction"
     />
 
     <!-- 裁剪容器：限制上移区域不突破 Header 底部 -->
     <div class="movable-clip">
-      <!-- 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移 -->
-      <div class="movable-area" :style="movableAreaStyle">
+      <!-- 可移动区域：终端内容 + 输入栏，随根容器高度收缩（键盘避让由
+           terminal-view bottom 收缩承担，见 terminalViewStyle） -->
+      <div class="movable-area">
         <!-- Main Content: Terminal + Sidebar overlay -->
         <div class="main-content">
           <div class="terminal-output-area">
@@ -112,6 +114,7 @@
       :quick-bar-count="assistStore.settings.quickBarCount"
       :toolbar-items="assistStore.settings.headerToolbarItems || ['folder']"
       :all-toolbar-items="ALL_TOOLBAR_ITEMS"
+      :onboarding-pending="assistStore.settings.terminalOnboardingPending"
       :safe-area-style="settingsModalStyle"
       @confirm="handleSettingsConfirm"
       @cancel="showSettings = false"
@@ -122,7 +125,7 @@
       :visible="showClearConfirm"
       :message="t('mobile.terminal.clearScreen') + '?'"
       :safe-area-style="confirmModalStyle"
-      @confirm="clearTerminal"
+      @confirm="handleClearConfirm"
       @cancel="showClearConfirm = false"
     />
 
@@ -161,11 +164,32 @@
   <ShortcutConfigModal :visible="showShortcutConfig" @close="showShortcutConfig = false" />
   <!-- 便捷功能教程弹窗（标题栏 ? 入口） -->
   <TerminalHelpModal :visible="showHelp" @close="showHelp = false" />
+  <!-- 新手引导（聚光灯分步导览：首次进入自动展示；「查看完整教程」接帮助弹窗） -->
+  <TerminalOnboardingTour
+    :visible="showOnboarding"
+    @close="handleOnboardingClose"
+    @open-help="handleOnboardingOpenHelp"
+  />
 </template>
 
 <script setup lang="ts">
 /**
- * 终端视图（移动端）— xterm.js 渲染内核 + 移动端输入/键盘避让
+ * 终端视图（移动端）— 编排层：Vue 生命周期接线（onMounted / onUnmounted / watch）
+ *
+ * 业务函数按**大颗粒度主题**拆分到 `src/composables/terminal/`（范式参考桌面端
+ * `bedcode-desktop/src/composables/terminal/`），共享实例与跨域回调经 terminalKernel
+ * 交换（回调在调用时解析，域创建顺序无关）：
+ * - **useTerminalDisplay**（终端显示）：xterm 实例装配与销毁、主题解析与网格重排、
+ *   清屏 / 手动刷新 / 合成层强制重绘、选择操作栏定位
+ * - **useTerminalInput**（终端输入）：输入栏回传（文本/执行/特殊键）、预设任务
+ *   发送与执行、命令面板预设识别、侧栏「插入引用」填充
+ * - **useTerminalPanels**（功能栏）：标题栏/侧边栏/弹窗开关状态、工具栏动作分发、
+ *   新手引导
+ * - useTerminalRenderer（渲染器）/ useTerminalResize（PTY 尺寸裁决与正统端确认）/
+ *   useTerminalKeyboardAvoidance（键盘避让）/ useTerminalSubscription（订阅重试与
+ *   历史门控）——2026-09-18 首轮拆出，职责与边界见各自文件头
+ * 写入管线（useTerminalBuffer / writeCoalescer）与触摸滚动（useTerminalScroll）
+ * 保持既有拆分不变。
  *
  * 渲染与滚动架构对齐桌面端 TerminalPreview.vue（VS Code 终端体验）：
  * - 写入管线：同帧输出经 rAF 合并 + 64KB 拆块（writeCoalescer），
@@ -180,9 +204,9 @@
  *   输入统一由底部 TerminalInputBar 承担（命令/特殊键/快捷键面板）
  * - 触摸滚动接管：自定义触摸滚动 + 惯性 + 长按选择复制（useTerminalScroll）
  * - 键盘避让：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道检测，
- *   movable-area 纯 transform 直接跟随（配合 AndroidManifest adjustNothing），
- *   无 settle 延迟、无自绘过渡动画——键盘系统动画即视觉过渡，输入区实时
- *   贴合键盘顶缘，且不会因过渡属性启停反复提升/降出合成层产生旧帧残留
+ *   terminal-view 根容器高度收缩压缩终端显示区高度（resize 语义，配合
+ *   AndroidManifest adjustNothing）——行数实时重算并同步 PTY，TUI 完整
+ *   重排可见；布局视口与可视区等高，无聚焦呈现视口 pan 空间
  * - Unicode11 addon：TUI 应用 box-drawing 字符列宽计算正确性
  */
 defineOptions({ name: 'TerminalView' })
@@ -191,45 +215,37 @@ import { ref, computed, inject, type Ref, onMounted, onUnmounted, watch, nextTic
 import { logger } from '@/utils/frontendLogger'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Terminal } from '@xterm/xterm'
-import { FitAddon } from '@xterm/addon-fit'
-import { WebLinksAddon } from '@xterm/addon-web-links'
-import { Unicode11Addon } from '@xterm/addon-unicode11'
 import '@xterm/xterm/css/xterm.css'
 import '@/styles/terminal.css'
 import { useMobileConnection } from '@/composables/useMobileConnection'
 import { isMockSession, useMockTerminal } from '@/composables/useMockTerminal'
 import { useTerminalBuffer } from '@/composables/useTerminalBuffer'
-import { httpResizeSession, type RendererSource } from '@/composables/useHttpApi'
 import ConfirmDialog from '@/components/ConfirmDialog.vue'
 import { useOrientation } from '@/composables/useOrientation'
-import { useTheme } from '@/composables/useTheme'
-import { useSettingsStore } from '@/stores/settings'
 import { useInputAssistantStore } from '@/stores/inputAssistant'
 import { useTerminalScroll } from '@/composables/useTerminalScroll'
-import { computeGridSize, FONT_FAMILY as METRICS_FONT_FAMILY, TERMINAL_SCROLLBAR_GUTTER_PX, TERMINAL_LINE_END_MARGIN_COLS } from '@/utils/terminalMetrics'
-import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
-import { shouldApplyGridResize, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
-import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
 import { useTuiCompat } from '@/composables/useTuiCompat'
-import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
+import { createTerminalKernel } from '@/composables/terminal/terminalKernel'
+import { useTerminalRenderer } from '@/composables/terminal/useTerminalRenderer'
+import { useTerminalResize } from '@/composables/terminal/useTerminalResize'
+import { useTerminalKeyboardAvoidance } from '@/composables/terminal/useTerminalKeyboardAvoidance'
+import { useTerminalSubscription } from '@/composables/terminal/useTerminalSubscription'
+import { useTerminalDisplay } from '@/composables/terminal/useTerminalDisplay'
+import { useTerminalInput } from '@/composables/terminal/useTerminalInput'
+import { useTerminalPanels } from '@/composables/terminal/useTerminalPanels'
+import { nextPaintFrame } from '@/utils/nextPaintFrame'
+import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
 import TerminalHeader from '@/components/TerminalHeader.vue'
 import TerminalSettingsModal from '@/components/TerminalSettingsModal.vue'
-import type { ToolbarItemConfig, TerminalSettings } from '@/components/TerminalSettingsModal.vue'
 import TerminalConfirmModal from '@/components/TerminalConfirmModal.vue'
 import TerminalInputBar from '@/components/TerminalInputBar.vue'
 import FileSidebar from '@/components/FileSidebar.vue'
 import TaskPickerModal from '@/components/TaskPickerModal.vue'
 import ShortcutConfigModal from '@/components/ShortcutConfigModal.vue'
 import TerminalHelpModal from '@/components/TerminalHelpModal.vue'
-import { useToast } from '@/composables/useToast'
-import { usePresetTasks, executeTask, sendTask } from '@/composables/usePresetTasks'
-import { TERMINAL_THEMES } from '@/config/terminalThemes'
-import type { PresetTask } from '@/composables/model'
+import TerminalOnboardingTour from '@/components/TerminalOnboardingTour.vue'
+import { usePresetTasks } from '@/composables/usePresetTasks'
 
-// ====================================================================================
-// 功能逻辑层（业务）：路由与状态 / 命令预设 / 键盘避让 / 输入与工具栏 / 设置 / 订阅与生命周期
-// ====================================================================================
 // ==================== Props & Route ====================
 
 const router = useRouter()
@@ -237,11 +253,8 @@ const route = useRoute()
 const { t } = useI18n()
 const connection = useMobileConnection()
 const mockTerminal = useMockTerminal()
-const toast = useToast()
 const { isLandscape } = useOrientation()
-const { isSystemDark } = useTheme()
 const { store: bufferStore, registerRealtimeHandler, unregisterRealtimeHandler, subscribeSession, unsubscribeSession, forceReplay, handleDisconnect, handleSessionStopped, markSessionRunning, sendInput } = useTerminalBuffer()
-const settingsStore = useSettingsStore()
 const assistStore = useInputAssistantStore()
 const sessionId = computed(() => route.params.id as string)
 // 挂载时固定会话 ID：卸载时路由导航已完成、route.params 已失效（undefined），
@@ -252,10 +265,7 @@ const mountedSessionId = sessionId.value
 // 安全区域从 App.vue inject
 const safeArea = inject<Ref<{ top: number; bottom: number }>>('safeArea')!
 
-// ==================== Task Picker ====================
-
 const { tasks: presetTasks } = usePresetTasks()
-const showTaskPicker = ref(false)
 
 // ==================== Header Toolbar Config ====================
 
@@ -273,131 +283,15 @@ const visibleToolbarItems = computed(() => {
   return ALL_TOOLBAR_ITEMS.filter(item => items.includes(item.key))
 })
 
-// ==================== State ====================
+// ==================== State（模板 ref 与页面级开关） ====================
 
 const xtermContainer = ref<HTMLDivElement | null>(null)
 const scrollContainer = ref<HTMLDivElement | null>(null)
 const isTerminalReady = ref(false)
-const terminalRef = ref<Terminal | null>(null)
-const fitAddonRef = ref<FitAddon | null>(null)
-const resizeObserverRef = ref<ResizeObserver | null>(null)
-// ResizeObserver rAF 节流句柄：同一帧内多次 fit 只执行一次
-let resizeRaf = 0
-// resize 分层防抖器（对齐桌面端 TerminalPreview）：垂直立即 / 水平 100ms 合并
-let resizeDebouncer: TerminalResizeDebouncer | null = null
-// WebGL atlas 重建后字符图集预热的补刷定时器（DOM 渲染器下无害，纯 refresh）
-let atlasPreheatTimer: ReturnType<typeof setTimeout> | null = null
-// DPR 变化监听（matchMedia 递归注册）；屏幕旋转/DPI 变化时窗口尺寸可能不变，
-// ResizeObserver 不触发，须显式重新 fit
-let dprMediaQuery: MediaQueryList | null = null
-let dprChangeHandler: ((this: MediaQueryList, ev: MediaQueryListEvent) => void) | null = null
+// 根容器模板 ref：安全区 padding / 键盘避让高度收缩 / 页面 pan 守卫（keyboard 域消费）
+const terminalViewRef = ref<HTMLElement | null>(null)
 
-// ==================== History Render Gate ====================
-// 加载遮罩放行门控：等「历史输出渲染完成」再撤遮罩，避免用户看到内容
-// 逐批蹦出的闪烁过程。三条件 AND（全部满足才放行）：
-//   ① 本地缓存分片回放完成（registerRealtimeHandler 的 replayDone）
-//   ② 服务端历史段结束：phase 到达 'live'（history_end 帧落地）。
-//      'connecting'/'auth'/'history' 为中间态继续等待——防止首次订阅
-//      失败重试期间遮罩提前撤除、历史随后才逐批蹦出
-//   ③ 首次 fit 校准生效（tryInitialFit 成功或重试放弃）
-// 任一环节卡死（订阅失败/会话停止/极端慢）由 HISTORY_SETTLE_TIMEOUT_MS 兜底。
-const HISTORY_SETTLE_TIMEOUT_MS = 8000
-
-let historySettled: Promise<void> = Promise.resolve()
-let settleReplay: (() => void) | null = null
-let settleServerHistory: (() => void) | null = null
-let settleFirstFit: (() => void) | null = null
-
-/** 挂载时布防：重建三信号 promise（onUnmounted 后不再复用） */
-function armHistoryGate() {
-  historySettled = new Promise<void>((resolve) => {
-    let replayDone = false
-    let serverDone = false
-    let fitDone = false
-    const tryResolve = () => {
-      if (replayDone && serverDone && fitDone) resolve()
-    }
-    settleReplay = () => { replayDone = true; tryResolve() }
-    settleServerHistory = () => { serverDone = true; tryResolve() }
-    settleFirstFit = () => { fitDone = true; tryResolve() }
-  })
-}
-
-/**
- * 服务端历史段监听：phase 到达 'live' 即放行；中间态继续等待；
- * 连续 HISTORY_SETTLE_TIMEOUT_MS 未到 live（订阅失败重试中/会话停止/
- * 无输出会话）强制放行，避免遮罩悬挂。watch 随组件作用域自动清理，
- * 兜底定时器由 unmount 清理
- */
-let serverGateFallbackTimer: ReturnType<typeof setTimeout> | null = null
-/** 门控整体超时兜底定时器（race 结束后清理，防僵尸 timer） */
-let gateTimeoutTimer: ReturnType<typeof setTimeout> | null = null
-
-/** 让出下一帧渲染（末批内容 commit 上屏后再撤遮罩；无 rAF 的测试环境立即继续） */
-function nextPaintFrame(): Promise<void> {
-  return new Promise((resolve) => {
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => resolve())
-    } else {
-      resolve()
-    }
-  })
-}
-
-function armServerHistoryWatcher() {
-  let stop: (() => void) | null = null
-  const settle = () => {
-    settleServerHistory?.()
-    settleServerHistory = null
-    if (serverGateFallbackTimer) {
-      clearTimeout(serverGateFallbackTimer)
-      serverGateFallbackTimer = null
-    }
-    stop?.()
-    stop = null
-  }
-  stop = watch(
-    () => bufferStore.getBuffer(sessionId.value)?.phase,
-    (phase) => {
-      if (phase === 'live') settle()
-    },
-    { immediate: true },
-  )
-  serverGateFallbackTimer = setTimeout(settle, HISTORY_SETTLE_TIMEOUT_MS)
-}
-
-const showSettings = ref(false)
-const showClearConfirm = ref(false)
-const showSidebar = ref(false)
-const showShortcutConfig = ref(false)
-// 标题栏 ? 按钮：终端输入组件便捷功能教程弹窗
-const showHelp = ref(false)
-
-// 侧栏「插入引用」待填入路径：TerminalInputBar 消费后置回 null
-const pendingRefPath = ref<string | null>(null)
-
-// 终端主题设置：theme 存储当前生效的主题名，isThemeUserSet 标记是否由用户手动指定
-const terminalSettings = ref({
-  fontSize: assistStore.settings.terminalFontSize,
-  theme: assistStore.settings.terminalTheme
-    ?? (settingsStore.settings.ui.theme === 'system'
-      ? (isSystemDark.value ? 'dark' : 'light')
-      : settingsStore.settings.ui.theme) as string,
-  isThemeUserSet: assistStore.settings.isTerminalThemeUserSet,
-})
-
-// 弹窗安全区域样式
-const settingsModalStyle = computed(() => ({
-  paddingTop: `${safeArea.value.top}px`,
-  paddingBottom: `${safeArea.value.bottom}px`,
-}))
-
-const confirmModalStyle = computed(() => ({
-  paddingTop: `${safeArea.value.top}px`,
-  paddingBottom: `${safeArea.value.bottom}px`,
-}))
-
-// ==================== Computed ====================
+// ==================== Computed（会话与连接投影） ====================
 
 const isConnected = computed(() =>
   connection.connectionStatus.value === 'connected' ||
@@ -411,65 +305,9 @@ const session = computed(() => {
   return connection.activeSessions.value.find(s => s.id === sessionId.value)
 })
 
-// ==================== Agent CLI 预设（命令面板） ====================
-// 预设识别需要会话的 config_id（activeSessions）与对应配置的启动命令
-// （sessionConfigs）。两条数据源在通知跳转/路由恢复等直接进入终端页的路径上
-// 都可能未就绪（loadActiveSessions 仅 DevicesView/SessionsView 调用），
-// 故识别时按需补齐：会话缺失则按 sessionId 拉取会话列表反查 config_id，
-// 配置缺失则现场拉取配置列表；识别结果需随会话切换更新，由 watch 响应式触发。
-// 识别为 generic（未识别）时面板仅保留用户自定义命令。
 // 会话的 config_id：WS 事件推送的会话对象为 camelCase（configId），
 // HTTP /api/sessions 响应为 snake_case（config_id），两端来源需兼容（同 DevicesView 等）
 const sessionConfigId = computed(() => session.value?.config_id ?? session.value?.configId)
-
-let agentOverridesLoaded = false
-// 按需拉取标记：并发触发（watch immediate + 数据到位）时只拉一次
-let sessionsFetchStarted = false
-let configsFetchStarted = false
-
-/** 识别并应用当前会话的命令预设；数据未就绪时按需补齐（会话列表/配置列表）后重试 */
-async function applyAgentPreset() {
-  if (isMockSession(sessionId.value)) return // mock 会话无配置，不加载预设
-  if (!agentOverridesLoaded) {
-    await assistStore.loadAgentTypeOverrides()
-    agentOverridesLoaded = true
-  }
-  // 会话未就绪：按会话 id 拉取会话列表（GET /api/sessions 自带 config_id）反查
-  if (!sessionConfigId.value && !sessionsFetchStarted) {
-    sessionsFetchStarted = true
-    await connection.loadActiveSessions()
-  }
-  const configId = sessionConfigId.value
-  if (!configId) {
-    const found = connection.activeSessions.value.find(s => s.id === sessionId.value)
-    logger.warn('[TerminalView] applyAgentPreset: 会话未就绪（无 config_id）', JSON.stringify({
-      sessionId: sessionId.value,
-      activeSessionsCount: connection.activeSessions.value.length,
-      foundSession: found,
-    }))
-    return // 列表拉取失败或会话确实无配置，保留用户自定义命令
-  }
-  let config = connection.sessionConfigs.value.find(c => c.id === configId)
-  // 配置列表未加载（DevicesView 之外的进入路径）：主动拉取一次，仍失败则等 watch 重触发
-  if (!config && !configsFetchStarted) {
-    configsFetchStarted = true
-    await connection.loadSessionConfigs().catch(() => {})
-    config = connection.sessionConfigs.value.find(c => c.id === configId)
-  }
-  if (!config) {
-    logger.warn('[TerminalView] applyAgentPreset: 配置列表无匹配 config_id，预设不加载', { configId })
-    return
-  }
-  const agentType = assistStore.getEffectiveAgentType(configId, config.command)
-  assistStore.setAgentPreset(agentType)
-}
-
-// session/config 任一就绪或切换即重新识别（deep：SyncConfigCreated push 也能触发）
-watch(
-  [() => sessionConfigId.value, () => connection.sessionConfigs.value],
-  () => { applyAgentPreset() },
-  { immediate: true, deep: true },
-)
 
 const sessionName = computed(() => session.value?.name || sessionId.value || t('desktop.terminal.title'))
 
@@ -485,475 +323,44 @@ const inputPlaceholder = computed(() => {
 
 const safeAreaTop = computed(() => safeArea.value.top || 0)
 
-// ==================== Keyboard Avoidance ====================
-//
-// 双通道键盘检测，兼容不同 Android WebView 实现：
-// - 通道 1 (visualViewport): 部分 WebView 在键盘弹出时 visualViewport.height 缩小，
-//   通过 resize/scroll 事件检测，计算 fullLayoutHeight - viewportHeight 得到偏移量
-// - 通道 2 (插件 keyboardHeight): 部分 WebView 的 visualViewport 不触发事件，
-//   通过 tauri-plugin-edge-to-edge 的 safeAreaChanged 事件获取插件报告的键盘高度
-//
-// 最终偏移量取两个通道中较大的值，确保在所有设备上都能正确避让
-
-// 通道 1: visualViewport
-const fullLayoutHeight = ref(window.innerHeight)
-const viewportHeight = ref(window.visualViewport?.height ?? window.innerHeight)
-
-// 通道 2: 插件报告的键盘高度
-const pluginKeyboardHeight = ref(0)
-
-// 侧边栏设置面板输入框聚焦时，禁用键盘避让
-const settingsInputFocused = ref(false)
-
-// TerminalInputBar 组件引用：键盘被系统收起时通知其退出编辑态（blur 输入框）
-const inputBarRef = ref<InstanceType<typeof TerminalInputBar> | null>(null)
-
-// 最终键盘偏移量：visualViewport 优先（逐帧跟踪真实遮挡高度），插件高度兜底
-// （部分 WebView 的 vv 不触发事件）。不用 Math.max：插件在键盘动画 onStart 即
-// 上报最终高度，取大值会让偏移在动画开始瞬间跳到终态——输入条先于键盘到位，
-// 底部短暂露出背景空隙；vv 可用时它就是当前真实遮挡量
-const keyboardOffset = computed(() => {
-  // 侧边栏设置面板输入框聚焦时，禁用键盘避让偏移
-  if (settingsInputFocused.value) return 0
-  const vvOffset = fullLayoutHeight.value - viewportHeight.value
-  if (vvOffset > 10) return vvOffset
-  return pluginKeyboardHeight.value > 10 ? pluginKeyboardHeight.value : 0
-})
-function handleVisualViewportChange() {
-  const vv = window.visualViewport
-  if (!vv) return
-  // 无键盘时更新基准高度
-  if (!keyboardOffset.value) {
-    fullLayoutHeight.value = window.innerHeight
-  }
-  viewportHeight.value = vv.height
-}
-
-// 通道 2 回调：插件 safeAreaChanged 事件
-function handlePluginSafeAreaChange(e: Event) {
-  const detail = (e as CustomEvent).detail as {
-    keyboardHeight: number
-    keyboardVisible: boolean
-  }
-  pluginKeyboardHeight.value = detail.keyboardVisible ? detail.keyboardHeight : 0
-}
-
-// 键盘隐藏时退出编辑态：Android 返回键/下拉手势收起系统键盘时，WebView 的
-// textarea 仍保有焦点（输入光标常驻在整个编辑态里），这里在双通道检测的键盘
-// 偏移从可见（>10）归零的瞬间主动 blur 输入框——光标消失、输入框收缩回单行、
-// 命令补全弹层关闭，与用户手动收起键盘的预期一致。
-// 偏移归零且 prev 不可见（首次挂载/键盘从未弹起）时不触发；输入框已失焦时
-// blur 为 no-op，无需额外状态同步
-watch(keyboardOffset, (offset, prev) => {
-  const wasVisible = (prev ?? 0) > 10
-  const nowHidden = offset <= 10
-  if (wasVisible && nowHidden && inputBarRef.value?.isFocused()) {
-    inputBarRef.value.blurInput()
-  }
-})
-
-// terminal-view 只负责安全区域，不参与键盘避让动画
-const terminalViewStyle = computed(() => ({
-  paddingTop: `${safeAreaTop.value}px`,
+// 弹窗安全区域样式
+const settingsModalStyle = computed(() => ({
+  paddingTop: `${safeArea.value.top}px`,
+  paddingBottom: `${safeArea.value.bottom}px`,
 }))
 
-// 可移动区域：终端内容 + 输入栏，键盘弹出时整体上移
-// 纯 transform 直接跟随（无 settle 延迟、无自绘过渡）：transform 只走 GPU 合成
-// 不触发布局重排，逐事件应用零成本——键盘自身的系统动画就是视觉过渡。
-// 旧的「稳定 250ms 后一次性播放 250ms 过渡」方案有双重代价：
-// ① 输入区在键盘已完全弹出后仍滞留原位 ~500ms 才动（体感卡顿/迟滞）；
-// ② transition 属性临时启停把 movable-area 反复提升/降出合成层，降层重光栅化
-//    产生旧帧分块残留（米白横带/底部间隔），事后被迫再做整屏 refresh +
-//    强制重合成补丁。直接跟随从根上消除这两个问题，无需事后重绘
-//
-// 配合 AndroidManifest adjustNothing：
-// 系统不调整 WebView 大小，完全由 JS 控制偏移；
-// 双通道检测（vv 优先、插件兜底），兼容不同 WebView 的 visualViewport 行为
-const movableAreaStyle = computed(() => ({
-  transform: keyboardOffset.value > 0
-    ? `translateY(-${keyboardOffset.value}px)`
-    : 'translateY(0)',
+const confirmModalStyle = computed(() => ({
+  paddingTop: `${safeArea.value.top}px`,
+  paddingBottom: `${safeArea.value.bottom}px`,
 }))
 
-/** 选择操作栏定位：避让选区和屏幕边界 */
-const selectionBarStyle = computed(() => {
-  const BAR_MARGIN = 10
-  const EDGE_PADDING = 12
+// ==================== 终端内核与域 ====================
+// 共享内核：xterm 实例 / addon 实例 / 模板挂载点经 ctx 交换，跨域回调在调用时
+// 解析（域创建顺序无关；详见 composables/terminal/terminalKernel.ts）
+const kernel = createTerminalKernel(
+  xtermContainer,
+  () => sessionId.value,
+  () => isConnected.value,
+  () => isSessionActive.value,
+)
+const { terminalRef } = kernel
+const renderer = useTerminalRenderer(kernel)
+const resize = useTerminalResize(kernel)
+const subscription = useTerminalSubscription(kernel, { bufferStore, subscribeSession })
 
-  const container = scrollContainer.value
-  if (!container) return {}
+// 模板同名绑定（域返回值解构，template 零改动）
+const {
+  rendererOverrideTarget,
+  showRendererOverrideDialog,
+  confirmRendererOverride,
+  cancelRendererOverride,
+} = resize
 
-  const rect = container.getBoundingClientRect()
-  const estimatedBarWidth = 240
-  const estimatedBarHeight = 40
-
-  // 选区在容器内的像素范围（通过 viewport 行号 × 行高计算）
-  let selTop = 0
-  let selBottom = 0
-  if (cellHeight.value > 0) {
-    const topRow = Math.max(0, selectionViewportRange.topRow)
-    const bottomRow = Math.min(terminalRef.value?.rows ?? topRow, selectionViewportRange.bottomRow + 1)
-    selTop = topRow * cellHeight.value
-    selBottom = bottomRow * cellHeight.value
-  }
-
-  // 水平：以长按位置为中心，限制不超出容器
-  const relX = longPressTriggerPos.x - rect.left
-  let left = relX - estimatedBarWidth / 2
-  left = Math.max(EDGE_PADDING, Math.min(left, rect.width - estimatedBarWidth - EDGE_PADDING))
-
-  // 垂直：优先选区上方，空间不足则选区下方，都不行则就近边缘
-  let top: number
-  const aboveTop = selTop - estimatedBarHeight - BAR_MARGIN
-  const belowTop = selBottom + BAR_MARGIN
-
-  if (aboveTop >= EDGE_PADDING) {
-    top = aboveTop
-  } else if (belowTop + estimatedBarHeight <= rect.height - EDGE_PADDING) {
-    top = belowTop
-  } else if (selTop < rect.height / 2) {
-    // 选区偏上，操作栏放底部
-    top = rect.height - estimatedBarHeight - EDGE_PADDING
-  } else {
-    // 选区偏下，操作栏放顶部
-    top = EDGE_PADDING
-  }
-
-  return {
-    top: `${top}px`,
-    left: `${left}px`,
-  }
-})
-
-// ==================== Input Handlers ====================
-// 输入统一由 TerminalInputBar 承担（xterm 原生输入已禁用），
-// 命令经终端 WS input 帧发送到主机会话（10 号票：替代旧 HTTP 输入路径），
-// 特殊键以按键组合名形式发送
-
-function handleInputSubmit(text: string) {
-  if (!terminalRef.value) return
-  if (isMockSession(sessionId.value)) return
-  if (isConnected.value && isSessionActive.value) {
-    if (!sendInput(sessionId.value, text)) {
-      toast.error(t('mobile.connection.connectFailed'))
-    }
-  }
-}
-
-async function handleInputExecute(text: string) {
-  if (!terminalRef.value) return
-  if (isMockSession(sessionId.value)) return
-  if (isConnected.value && isSessionActive.value) {
-    if (!sendInput(sessionId.value, text, 'enter')) {
-      toast.error(t('mobile.connection.connectFailed'))
-    }
-  }
-}
-
-function handleSpecialKey(key: string) {
-  if (isMockSession(sessionId.value)) return
-  if (isConnected.value && isSessionActive.value) {
-    if (!sendInput(sessionId.value, '', key)) {
-      toast.error(t('mobile.connection.connectFailed'))
-    }
-  }
-}
-
-// ==================== Toolbar Actions ====================
-
-function handleToolbarAction(key: string) {
-  switch (key) {
-    case 'task': showTaskPicker.value = true; break
-    case 'shortcut': showShortcutConfig.value = true; break
-    case 'clear': showClearConfirm.value = true; break
-    case 'refresh': refreshTerminal(); break
-    case 'settings': showSettings.value = true; break
-    case 'folder': showSidebar.value = !showSidebar.value; break
-    case 'help': showHelp.value = true; break
-  }
-}
-
-// ==================== Settings ====================
-
-function handleSettingsConfirm(settings: TerminalSettings) {
-  terminalSettings.value.fontSize = settings.fontSize
-  terminalSettings.value.theme = settings.theme
-  terminalSettings.value.isThemeUserSet = settings.isThemeUserSet
-
-  assistStore.saveSettings({
-    quickBarCount: settings.quickBarCount,
-    headerToolbarItems: settings.toolbarItems,
-    terminalFontSize: terminalSettings.value.fontSize,
-    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
-    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
-  })
-
-  applyTerminalTheme()
-  // 字号变更后重排：显式更新 xterm 字号 + 走统一口径 refit（fitWithMargin →
-  // applyDprFit，DPR 感知 + 行尾安全余量），不再走裸 fitAddon.fit()；
-  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽
-  if (terminalRef.value) {
-    terminalRef.value.options.fontSize = settings.fontSize
-  }
-  setTimeout(() => {
-    if (fitWithMargin()) syncTerminalSizeToHost()
-  }, 50)
-  showSettings.value = false
-}
-
-// ==================== Misc Handlers ====================
-
-/** 侧边栏设置面板输入框聚焦/失焦时，控制键盘避让 */
-function handleSettingsInputFocus(focused: boolean) {
-  settingsInputFocused.value = focused
-}
-
-/** 侧栏「插入引用」：把 @路径 传给输入条填充，并收起侧栏露出输入区 */
-function handleInsertRef(path: string) {
-  pendingRefPath.value = path
-  showSidebar.value = false
-}
-
-function handleBack() {
-  router.back()
-}
-
-async function onTaskSend(task: PresetTask) {
-  if (!isConnected.value || !isSessionActive.value) {
-    toast.error(t('mobile.connection.connectFailed'))
-    return
-  }
-  try {
-    await sendTask(task, sessionId.value)
-  } catch {
-    toast.error(t('mobile.toolbox.sendFailed'))
-  }
-}
-
-async function onTaskExecute(task: PresetTask) {
-  if (!isConnected.value || !isSessionActive.value) {
-    toast.error(t('mobile.connection.connectFailed'))
-    return
-  }
-  try {
-    await executeTask(task, sessionId.value)
-  } catch {
-    toast.error(t('mobile.toolbox.sendFailed'))
-  }
-}
-
-// ==================== Subscribe with Retry ====================
-//
-// 订阅失败（弱网/桌面端重启/超时）时终端会静默空白且无重试路径，
-// 这里做 toast 提示 + 3s 定时重试，成功或页面卸载/断连后停止。
-
-let subscribeRetryTimer: ReturnType<typeof setTimeout> | null = null
-let subscribeRetryToasted = false
-
-function clearSubscribeRetry() {
-  if (subscribeRetryTimer) {
-    clearTimeout(subscribeRetryTimer)
-    subscribeRetryTimer = null
-  }
-}
-
-/** 订阅 + 失败自动重试（页面存活且会话活跃期间有效） */
-async function subscribeWithRetry() {
-  if (isMockSession(sessionId.value)) return
-  const result = await subscribeSession(sessionId.value)
-  const buffer = bufferStore.getBuffer(sessionId.value)
-
-  // 已订阅（成功或此前已订阅）：复位重试状态
-  if (result || buffer?.subscribed) {
-    subscribeRetryToasted = false
-    return
-  }
-  // 订阅请求仍在途（防重早退）：不提示，稍后重试
-  if (buffer?.subscribing) {
-    clearSubscribeRetry()
-    subscribeRetryTimer = setTimeout(subscribeWithRetry, 3000)
-    return
-  }
-
-  // 订阅失败：首次失败提示一次，随后静默重试
-  if (!subscribeRetryToasted) {
-    subscribeRetryToasted = true
-    toast.error(t('mobile.terminal.subscribeFailed'))
-  }
-  clearSubscribeRetry()
-  subscribeRetryTimer = setTimeout(async () => {
-    subscribeRetryTimer = null
-    if (disposed) return
-    if (!isConnected.value || !isSessionActive.value) return
-    await subscribeWithRetry()
-  }, 3000)
-}
-
-// ==================== Lifecycle ====================
-
-let disposed = false
-
-onMounted(async () => {
-  // 监听 visualViewport 变化，获取键盘弹出/收起的实际偏移
-  if (window.visualViewport) {
-    window.visualViewport.addEventListener('resize', handleVisualViewportChange)
-    window.visualViewport.addEventListener('scroll', handleVisualViewportChange)
-  }
-
-  // 通道 2: 监听插件 safeAreaChanged 事件
-  window.addEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
-
-  // 兜底加载会话配置：DevicesView 之外的进入路径（通知跳转/路由恢复）从未调用过
-  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别。
-  // 会话列表（activeSessions）不在此兜底——由 applyAgentPreset 按 sessionId 按需反查。
-  if (!connection.hasLoadedConfigs.value && !connection.isLoadingConfigs.value) {
-    connection.loadSessionConfigs().catch(() => {})
-  }
-
-  await nextTick()
-
-  // 历史渲染就绪门控布防：先于 initTerminal（回放完成信号在 handler 注册时
-  // 即接线）与订阅路径（phase 监听需捕获 subscribe_ok 后 history 段全程）
-  armHistoryGate()
-  armServerHistoryWatcher()
-  const historyGate = historySettled
-
-  await initTerminal()
-
-  // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
-  if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
-    // mock 会话无服务端历史段：立即放行该门控条件（否则只能等超时兜底）
-    settleServerHistory?.()
-    settleServerHistory = null
-    if (terminalRef.value) {
-      mockTerminal.startOutput(terminalRef.value)
-    }
-  } else if (isSessionActive.value && isConnected.value) {
-    // 会话页预加载已就绪（全量回放已在订阅期间缓冲，registerRealtimeHandler
-    // 挂载时已写入 xterm）：跳过 forceReplay，避免清空已缓冲历史再次全量回放
-    const prepared = bufferStore.consumePrepared() === sessionId.value
-    if (!prepared) {
-      // xterm 每次进入都是全新实例：旧游标续传会丢失历史（含后台期间
-      // 已推进但从未渲染过的字节）→ 强制重置游标，服务端全量重播
-      forceReplay(sessionId.value)
-    }
-    await subscribeWithRetry()
-  } else {
-    // 非活跃/未连接：本次挂载不会发起订阅，无服务端历史段可等，立即放行；
-    // 本地缓存仍由 replayDone 门控（重进展示最后已知内容）
-    settleServerHistory?.()
-    settleServerHistory = null
-  }
-
-  // 无条件同步一次尺寸（内部按 isConnected 门控）：会话状态 stale 时
-  // 上方 isSessionActive 分支可能被跳过，不兜底会令 PTY 停留在桌面端
-  // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
-  syncTerminalSizeToHost()
-
-  // 等历史输出渲染完成再撤遮罩：缓存回放 + 服务端历史段 + 首次 fit 三条件
-  // 全部满足；任一环节卡死由 HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
-  // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
-  // 避免遮罩半透明期间透出逐批写入的闪烁过程
-  await Promise.race([
-    historyGate,
-    new Promise<void>((resolve) => { gateTimeoutTimer = setTimeout(resolve, HISTORY_SETTLE_TIMEOUT_MS) }),
-  ])
-  if (gateTimeoutTimer !== null) {
-    clearTimeout(gateTimeoutTimer)
-    gateTimeoutTimer = null
-  }
-  await nextPaintFrame()
-  isTerminalReady.value = true
-
-  // 入场渲染收尾（等价手动刷新按钮的渲染半段）：首次 fit/历史回放/遮罩淡出
-  // 过渡期间真机 WebView 合成器可能缓存旧帧分块，表现为终端区底部与输入栏
-  // 之间出现一段背景色空白间隔（点击刷新后消失的现场）。全量重绘 + 强制
-  // 重合成一次清除（仅此一次，幂等低成本）
-  if (terminalRef.value && terminalRef.value.rows > 0) {
-    terminalRef.value.refresh(0, terminalRef.value.rows - 1)
-  }
-  forceCompositorRepaint()
-})
-
-onUnmounted(async () => {
-  disposed = true
-  clearSubscribeRetry()
-
-  if (panelRepaintTimer) {
-    clearTimeout(panelRepaintTimer)
-    panelRepaintTimer = null
-  }
-  // 门控定时器清理（遮罩已放行时为 null，防御未走完 onMounted 的卸载竞态）
-  if (serverGateFallbackTimer) {
-    clearTimeout(serverGateFallbackTimer)
-    serverGateFallbackTimer = null
-  }
-  if (gateTimeoutTimer) {
-    clearTimeout(gateTimeoutTimer)
-    gateTimeoutTimer = null
-  }
-  // 移除 visualViewport 事件监听
-  if (window.visualViewport) {
-    window.visualViewport.removeEventListener('resize', handleVisualViewportChange)
-    window.visualViewport.removeEventListener('scroll', handleVisualViewportChange)
-  }
-  window.removeEventListener('safeAreaChanged', handlePluginSafeAreaChange as EventListener)
-
-  if (isMockSession(mountedSessionId)) {
-    mockTerminal.stopOutput()
-  }
-  disposeTerminal()
-
-  // 页面卸载即取消订阅：后台期间的输出由服务端环形保留，
-  // 重新进入时强制全量重播（forceReplay + 服务端 reset 裁决）
-  if (!isMockSession(mountedSessionId)) {
-    await unsubscribeSession(mountedSessionId)
-  }
-})
-
-watch(isSessionActive, async (active, prevActive) => {
-  if (!sessionId.value || isMockSession(sessionId.value)) return
-  if (active && !prevActive) {
-    // 会话恢复运行（含同 id 重启）：复位 sessionStopped，否则 ws_output
-    // 监听器会永久丢弃新流帧（事件路径 SyncSessionStatusChanged 已复位，
-    // 此处兜底防事件丢失场景）
-    markSessionRunning(sessionId.value)
-    // 会话停止/重启后偏移空间从 0 重建，游标已被 markSessionStopped 重置，
-    // 此处订阅即全量重播；页面存活场景走增量续传
-    await subscribeWithRetry()
-    // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
-    syncTerminalSizeToHost()
-  } else if (!active && prevActive) {
-    await handleSessionStopped(sessionId.value)
-  }
-})
-
-watch(isConnected, async (connected) => {
-  if (!sessionId.value || isMockSession(sessionId.value)) return
-  if (!connected) {
-    handleDisconnect()
-    clearSubscribeRetry()
-  } else {
-    if (isSessionActive.value) {
-      // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
-      await subscribeWithRetry()
-    }
-    // 无论会话状态是否 stale 都重发尺寸（服务端 404 无害），
-    // 避免 PTY 停留在桌面端宽度导致移动端行尾截断
-    syncTerminalSizeToHost()
-  }
-})
-// ====================================================================================
-// 渲染输出层（终端显示）：xterm 实例 / 输出写入 / 触摸滚动 / 尺寸同步 / 清屏与重绘
-// ====================================================================================
-// ==================== TUI 兼容 ====================
-// TUI 模式（alt screen + SGR 鼠标上报）下手势转滚轮事件转发给应用内部滚动；
-// 由 useTuiCompat 持有检测/发送，useTerminalScroll 仅注入模式门控分流
-
+// TUI 兼容：alt screen + SGR 鼠标上报双条件门控（嗅探器持有检测/发送，
+// useTerminalScroll 仅注入模式门控分流）
 const { isTuiMode, attach: attachTuiCompat, feedOutput: feedTuiOutput, sendWheel: sendTuiWheel, dispose: disposeTuiCompat } = useTuiCompat(sessionId.value)
 
-// ==================== Terminal Scroll ====================
-
+// 触摸滚动接管（含惯性/长按选择/自绘滚动条）
 const {
   currentLine,
   isSelectionMode,
@@ -965,9 +372,7 @@ const {
   shortcutsPanelHeight,
   isUserScrolling,
   cellHeight,
-  scrollToBottom,
   scrollToBottomManual,
-  fitTerminal,
   setupViewportScroll,
   exitSelectionMode,
   copySelection,
@@ -978,16 +383,148 @@ const {
   selectionViewportRange,
 } = useTerminalScroll(terminalRef, scrollContainer, { isTuiMode, sendWheel: sendTuiWheel })
 
+// 终端显示域（实例装配/销毁 + 主题 + 清屏/刷新/重绘 + 选择操作栏定位）
+const {
+  terminalSettings,
+  resolvedTerminalTheme,
+  applyTerminalTheme,
+  initTerminal,
+  disposeTerminal,
+  forceCompositorRepaint,
+  clearTerminal,
+  refreshTerminal,
+  selectionBarStyle,
+} = useTerminalDisplay(kernel, {
+  renderer,
+  resize,
+  subscription,
+  bufferStore,
+  registerRealtimeHandler,
+  unregisterRealtimeHandler,
+  setupViewportScroll,
+  attachTuiCompat,
+  feedTuiOutput,
+  disposeTuiCompat,
+  disposeScroll,
+  forceReplay,
+  currentLine,
+  isUserScrolling,
+  cellHeight,
+  selectionViewportRange,
+  longPressTriggerPos,
+  scrollContainerRef: scrollContainer,
+  mountedSessionId,
+  setReady: (ready) => { isTerminalReady.value = ready },
+})
+
+// 终端输入域（输入回传 + 预设任务 + 命令面板预设识别 + 侧栏引用填充）
+const {
+  pendingRefPath,
+  handleInputSubmit,
+  handleInputExecute,
+  handleSpecialKey,
+  onTaskSend,
+  onTaskExecute,
+  applyAgentPreset,
+  handleInsertRef: fillPendingRef,
+} = useTerminalInput(kernel, { sendInput, getConfigId: () => sessionConfigId.value })
+
+// 功能栏域（弹窗/侧边栏开关 + 工具栏动作分发 + 新手引导）
+const {
+  showSettings,
+  showClearConfirm,
+  showSidebar,
+  showTaskPicker,
+  showShortcutConfig,
+  showHelp,
+  showOnboarding,
+  handleToolbarAction,
+  closeSidebar,
+  handleOnboardingClose,
+  handleOnboardingOpenHelp,
+} = useTerminalPanels({ refreshTerminal })
+
+// 键盘避让域（移动端特有）：visualViewport 优先 + 插件 safeAreaChanged 兜底双通道
+// 检测，terminal-view 根容器高度收缩承担避让（行数实时重算并同步 PTY）。
+// onKeyboardHide 在键盘收起（偏移从可见归零）瞬间回调：先退出输入编辑态
+// （光标消失、输入框收缩回单行、命令补全弹层关闭），再滚回最新行（键盘弹出期间
+// 用户可能已上翻历史）。回调体内引用的 inputBarRef / scrollToBottomManual 由
+// watch 在 setup 完成后触发解析，无 TDZ 问题
+const inputBarRef = ref<InstanceType<typeof TerminalInputBar> | null>(null)
+const keyboard = useTerminalKeyboardAvoidance({
+  rootRef: terminalViewRef,
+  safeAreaTop: () => safeAreaTop.value,
+  canvasBackground: () => resolvedTerminalTheme.value.background,
+  onKeyboardHide: () => {
+    if (inputBarRef.value?.isFocused()) inputBarRef.value.blurInput()
+    scrollToBottomManual()
+  },
+})
+const { terminalViewStyle } = keyboard
+
+// 可移动区域：终端内容 + 输入栏。键盘避让由 terminal-view 根容器高度收缩
+// 承担（见上方 terminalViewStyle 注释）：终端区（flex:1）与输入栏随根容器
+// 等比压缩/还原，ResizeObserver 触发重新 fit → 行数实时变化并同步 PTY。
+// 此处的 movable-area 不再做任何避让变换/内边距——历史上先后用过
+// translateY 整体平移与 padding-bottom 挤压，前者行数不变顶部被裁、后者
+// 会与 WebView 聚焦呈现的视口 pan 叠加（双重补偿），均已废弃
+
+// ==================== 模板事件接线（薄封装：跨两个域的一步操作） ====================
+
+/** 侧栏「插入引用」：填充输入条 + 收起侧栏露出输入区 */
+function handleInsertRef(path: string) {
+  fillPendingRef(path)
+  closeSidebar()
+}
+
+/** 清屏确认：清屏 + 关闭确认弹窗 */
+function handleClearConfirm() {
+  clearTerminal()
+  showClearConfirm.value = false
+}
+
+/** 设置确认：持久化 + 应用主题 + 字号变更后重排并同步 PTY */
+function handleSettingsConfirm(settings: TerminalSettings) {
+  terminalSettings.value.fontSize = settings.fontSize
+  terminalSettings.value.theme = settings.theme
+  terminalSettings.value.isThemeUserSet = settings.isThemeUserSet
+
+  assistStore.saveSettings({
+    quickBarCount: settings.quickBarCount,
+    headerToolbarItems: settings.toolbarItems,
+    terminalFontSize: terminalSettings.value.fontSize,
+    terminalTheme: terminalSettings.value.isThemeUserSet ? terminalSettings.value.theme : null,
+    isTerminalThemeUserSet: terminalSettings.value.isThemeUserSet,
+    terminalOnboardingPending: settings.onboardingPending,
+  })
+
+  applyTerminalTheme()
+  // 字号变更后重排：显式更新 xterm 字号 + 走统一口径 refit（fitWithMargin →
+  // applyDprFit，DPR 感知 + 行尾安全余量），不再走裸 fitAddon.fit()；
+  // 字体度量需重新测量，延迟与原实现一致；尺寸变化须同步 PTY 重排行宽
+  if (terminalRef.value) {
+    terminalRef.value.options.fontSize = settings.fontSize
+  }
+  setTimeout(() => {
+    if (renderer.fitWithMargin()) resize.syncTerminalSizeToHost()
+  }, 50)
+  showSettings.value = false
+}
+
+/** 侧边栏设置面板输入框聚焦/失焦时，控制键盘避让 */
+function handleSettingsInputFocus(focused: boolean) {
+  keyboard.setSettingsInputFocused(focused)
+}
+
 // ==================== Watchers ====================
 
-// 键盘收起（偏移回落到 0）：内容回落后滚动到最新行——键盘弹出期间用户可能
-// 已向上查看历史或视口停在中间，收起后回到底部跟随输出。纯轻量状态复位，
-// 无重绘/重合成开销（transform 直接跟随不产生旧帧残留）
-watch(keyboardOffset, (offset, prev) => {
-  if (offset === 0 && (prev ?? 0) > 0) {
-    scrollToBottomManual()
-  }
-})
+// 命令面板预设：session/config 任一就绪或切换即重新识别
+// （deep：SyncConfigCreated push 也能触发）
+watch(
+  [() => sessionConfigId.value, () => connection.sessionConfigs.value],
+  () => { applyAgentPreset() },
+  { immediate: true, deep: true },
+)
 
 // 快捷键面板收起后强制重绘：xterm 容器经 translateY(-h) 上移后还原时，真机
 // WebView 合成层会残留旧帧分块（错位/露出主题背景色，实测表现为终端区出现
@@ -1007,597 +544,156 @@ watch(shortcutsPanelHeight, (height) => {
   }, 320)
 })
 
-watch(() => settingsStore.settings.ui.theme, (uiTheme) => {
-  if (terminalSettings.value.isThemeUserSet) return
-  const resolved = uiTheme === 'system'
-    ? (isSystemDark.value ? 'dark' : 'light')
-    : uiTheme
-  if (terminalSettings.value.theme !== resolved) {
-    terminalSettings.value.theme = resolved as string
-    applyTerminalTheme()
+watch(isSessionActive, async (active, prevActive) => {
+  if (!sessionId.value || isMockSession(sessionId.value)) return
+  if (active && !prevActive) {
+    // 会话恢复运行（含同 id 重启）：复位 sessionStopped，否则 ws_output
+    // 监听器会永久丢弃新流帧（事件路径 SyncSessionStatusChanged 已复位，
+    // 此处兜底防事件丢失场景）
+    markSessionRunning(sessionId.value)
+    // 会话停止/重启后偏移空间从 0 重建，游标已被 markSessionStopped 重置，
+    // 此处订阅即全量重播；页面存活场景走增量续传
+    await subscription.subscribeWithRetry()
+    // 会话激活（含重连后）时 PTY 可能仍是默认尺寸，主动同步一次
+    resize.syncTerminalSizeToHost()
+  } else if (!active && prevActive) {
+    await handleSessionStopped(sessionId.value)
   }
 })
 
-watch(isSystemDark, () => {
-  if (terminalSettings.value.isThemeUserSet) return
-  if (settingsStore.settings.ui.theme !== 'system') return
-  terminalSettings.value.theme = isSystemDark.value ? 'dark' : 'light'
-  applyTerminalTheme()
+watch(isConnected, async (connected) => {
+  if (!sessionId.value || isMockSession(sessionId.value)) return
+  if (!connected) {
+    handleDisconnect()
+    subscription.clearSubscribeRetry()
+  } else {
+    if (isSessionActive.value) {
+      // 重连成功后 PTY 重建为默认 80x24，需主动同步当前尺寸
+      await subscription.subscribeWithRetry()
+    }
+    // 无论会话状态是否 stale 都重发尺寸（服务端 404 无害），
+    // 避免 PTY 停留在桌面端宽度导致移动端行尾截断
+    resize.syncTerminalSizeToHost()
+  }
 })
 
-// ==================== Terminal Setup ====================
+// ==================== Lifecycle ====================
 
-/**
- * 渲染器开关：移动端默认 WebGL（与桌面端 TerminalPreview 对齐）——
- * Android WebView 的 WebGL 常为软件渲染（SwiftShader），双缓冲纹理交换
- * 在 TUI 全屏重绘（opencode/vim 每帧清屏+重绘）时可能闪烁/撕裂；
- * WebGL 不可用（context loss / 初始化失败）时自动回退 DOM 渲染器。
- * 切换为 false 即禁用 WebGL addon，仅影响移动端；桌面端不受此开关影响。
- *
- * 默认关闭：addon-webgl 0.19 无公开调优 API（DPR 强制跟随设备、图集页数无上限、
- * 新字符动态光栅化），长会话下 GPU 显存膨胀 + 图集光栅化卡顿 + context loss 重建
- * 是移动端越用越卡的来源之一。内置 DOM 渲染器（canvas 2D 行渲染）对 ~40 行可视区
- * 性能足够，且无上述开销；如需验证可临时切回 true 做 A/B 对比。
- */
-const USE_WEBGL_RENDERER = false
+onMounted(async () => {
+  // 链路调试（布局/渲染排查）：挂载起点 + 视口基线（与 fit 日志对照定位布局异常）
+  logger.debug(
+    `[TerminalView] mounted (session=${sessionId.value}): dpr=${window.devicePixelRatio}, ` +
+      `viewport=${window.innerWidth}x${window.innerHeight}`,
+  )
+  // 键盘避让双通道监听（visualViewport / 插件 safeAreaChanged）+ 页面 pan 守卫
+  keyboard.attach()
 
-/**
- * WebGL 渲染器：动态加载（移动端包体积/启动优化），
- * 处理上下文丢失（丢失时回退 DOM 渲染，1s 后尝试重建）
- */
-async function initWebGL(term: Terminal): Promise<boolean> {
-  try {
-    const { WebglAddon } = await import('@xterm/addon-webgl')
-    const addon = new WebglAddon()
-    addon.onContextLoss(() => {
-      logger.warn('[TerminalView] WebGL context lost, disposing renderer')
-      addon.dispose()
-      // 上下文丢失时恢复 DOM 层光标
-      term.element?.classList.remove('xterm-hidden-cursor')
-      // 延迟 1s 后尝试重新创建 WebGL 渲染器
-      setTimeout(() => {
-        if (terminalRef.value !== term) return
-        try {
-          const newAddon = new WebglAddon()
-          newAddon.onContextLoss(() => {
-            logger.warn('[TerminalView] WebGL context lost again')
-            newAddon.dispose()
-            term.element?.classList.remove('xterm-hidden-cursor')
-          })
-          term.loadAddon(newAddon)
-          term.element?.classList.add('xterm-hidden-cursor')
-          logger.info('[TerminalView] WebGL context recovered')
-        } catch (e) {
-          logger.warn('[TerminalView] WebGL recovery failed, using canvas fallback:', e)
-        }
-      }, 1000)
-    })
-    term.loadAddon(addon)
-    return true
-  } catch {
-    // WebGL 不可用时回退到 canvas 渲染器
-    return false
+  // 兜底加载会话配置：DevicesView 之外的进入路径（通知跳转/路由恢复）从未调用过
+  // loadSessionConfigs，预设识别需要其中的启动命令；加载完成后由上方 watch 触发识别。
+  // 会话列表（activeSessions）不在此兜底——由 applyAgentPreset 按 sessionId 按需反查。
+  if (!connection.hasLoadedConfigs.value && !connection.isLoadingConfigs.value) {
+    connection.loadSessionConfigs().catch(() => {})
   }
-}
-// 终端字体栈：唯一真源在 utils/terminalMetrics（启动尺寸预估共用），此处仅导入
-const FONT_FAMILY = METRICS_FONT_FAMILY
-
-/** 创建前预计算终端网格：容器尺寸 ÷ 字体网格（与 FitAddon 一致，仅扣自绘
- * 滚动条预留宽 + 行尾安全余量 1 列，高度不增减） */
-function computeInitialSize(): { cols: number; rows: number } {
-  const container = xtermContainer.value
-  if (!container) return { cols: 80, rows: 24 }
-  const grid = computeGridSize(container, terminalSettings.value.fontSize ?? 14, FONT_FAMILY, TERMINAL_LINE_END_MARGIN_COLS, 0)
-  // 字体未就绪（0 尺寸）时回退默认值：发送路径的 80x24 过滤 + fit 后校准兜底
-  if (grid.cols <= 0 || grid.rows <= 0) return { cols: 80, rows: 24 }
-  return grid
-}
-
-/**
- * 尺寸适配（初始校准 / 主题切换 / 手动刷新入口）：委托 applyDprFit 统一口径
- * （DPR 感知 + 滚动条预留宽 + 行尾安全余量），不再裸调 FitAddon.fit()——
- * 裸 fit 无行尾余量，行尾字符贴画布右缘被削半。
- * applyDprFit 在字体测量未就绪时降级裸 fit（幂等无操作），由就绪轮询重试。
- * @returns 是否实际发生了尺寸变化
- */
-function fitWithMargin(): boolean {
-  const term = terminalRef.value
-  if (!term || !fitAddonRef.value) return false
-  const beforeCols = term.cols
-  const beforeRows = term.rows
-  applyDprFit()
-  if (term.cols !== beforeCols || term.rows !== beforeRows) {
-    // 调试验证：记录 fit 导致的尺寸变化轨迹（排查行尾裁切/右侧遮挡）
-    logger.debug(`[TerminalView] fit: ${beforeCols}x${beforeRows} -> ${term.cols}x${term.rows}`)
+  // 会话列表兜底：直接进入终端页（通知跳转/路由恢复）时 activeSessions 可能为空，
+  // 会使 isSessionActive=false → 输入条禁用、输入被丢弃。主动拉一次会话列表。
+  if (!connection.activeSessions.value.some(s => s.id === sessionId.value)) {
+    connection.loadActiveSessions().catch(() => {})
   }
-  return term.cols !== beforeCols || term.rows !== beforeRows
-}
 
-/** 读取 xterm 实测 cell CSS 尺寸（DPR 感知计算的输入）；不可用时返回 null */
-function measureCellSize(): { width: number; height: number } | null {
-  const term = terminalRef.value
-  if (!term) return null
-  // addon-fit 0.11 内部即此访问路径（FitAddon.proposeDimensions）；
-  // 私有 API 无类型声明，逐级防御，任一环节缺失即回退 fitAddon.fit()
-  const core = (term as unknown as { _core?: unknown })._core as
-    | { _renderService?: { dimensions?: { css?: { cell?: { width: number; height: number } } } } }
-    | undefined
-  const cell = core?._renderService?.dimensions?.css?.cell
-  if (!cell || cell.width <= 0 || cell.height <= 0) return null
-  return { width: cell.width, height: cell.height }
-}
+  await nextTick()
 
-/**
- * DPR 感知 fit：容器 CSS 尺寸 × devicePixelRatio 换算物理像素后计算 cols/rows
- * （行高 ceil、列宽 floor；仅扣自绘滚动条预留宽 + 行尾安全余量 1 列），
- * 替代裸 fitAddon.fit() 的 DPR 不感知计算（Android 高 DPR 下网格更精确、无字模）。
- * 容器/cell 尺寸不可用时优雅降级回 fitAddon.fit()，不炸。
- *
- * 触发 resize 前经 shouldApplyGridResize 钳制 ±1 列/行测量漂移：DPR 感知吞吐
- * 口径与当前网格存在 ±1~2 列系统性偏差，每次精确比较都 resize 会在旋转/键盘
- * 避让触发的尺寸微调下产生 resize 风暴；真实尺寸变化后 scheduleAtlasPreheat 补刷。
- */
-function applyDprFit() {
-  const term = terminalRef.value
-  if (!term || !fitAddonRef.value) return
-  const container = xtermContainer.value
-  const cell = measureCellSize()
-  if (!container || container.clientWidth <= 0 || container.clientHeight <= 0 || !cell) {
-    fitAddonRef.value.fit()
-    // 降级 fit 后同步变化（不重绘——由调用方统一处理）
-    return
-  }
-  const { cols, rows } = getXtermScaledDimensions({
-    containerWidthCss: container.clientWidth,
-    containerHeightCss: container.clientHeight,
-    cellWidthCss: cell.width,
-    cellHeightCss: cell.height,
-    devicePixelRatio: window.devicePixelRatio,
-    marginCols: TERMINAL_LINE_END_MARGIN_COLS,
-  })
-  // 与 FitAddon.fit() 一致：尺寸不变不动（避免无谓 resize 事件），
-  // 变化时经 ±1 漂移钳制，仅在真实变化时 resize
-  if (term.cols !== cols || term.rows !== rows) {
-    if (!shouldApplyGridResize(term.cols, term.rows, cols, rows)) {
-      return
+  // 历史渲染就绪门控布防：先于 initTerminal（回放完成信号在 handler 注册时
+  // 即接线）与订阅路径（phase 监听需捕获 subscribe_ok 后 history 段全程）
+  subscription.armGate()
+
+  // 进入终端页 = 全量重播：xterm 每次进入都是全新实例，旧游标续传会丢失历史
+  // （含后台期间已推进但从未渲染过的字节）。重置游标必须早于 initTerminal——
+  // 其内部 registerRealtimeHandler 的 spliceHistory 会立即读取游标作为 from；
+  // gap 自愈路径的 forceReplay 不重置游标（续传补缺口语义保持不变）
+  bufferStore.resetCursor(sessionId.value)
+
+  await initTerminal()
+
+  // DEV 前缀：生产构建常量折叠为 false，整个 mock 分支（含 startOutput 调用）被 tree-shake
+  if (import.meta.env.DEV && isMockSession(sessionId.value) && mockTerminal.isDev) {
+    // mock 会话无服务端历史段：立即放行该门控条件（否则只能等超时兜底）
+    subscription.settleServerHistoryNow()
+    if (terminalRef.value) {
+      mockTerminal.startOutput(terminalRef.value)
     }
-    term.resize(cols, rows)
-    scheduleAtlasPreheat()
-  }
-}
-
-/**
- * 字符图集重建后的补刷：resize 后等 idle 分片把非 ASCII 字形（中文/box-drawing/
- * emoji）基本光栅化完成，补一次全量重绘，让屏幕一次恢复完整。DOM 渲染器下无害
- * （refresh 只是重建 DOM 行）；WebGL 渲染器（USE_WEBGL_RENDERER 开启时）则必要
- * （避免「前几次乱，第三次好」）。同一次 resize 合并为一次（重置计时器）。
- */
-function scheduleAtlasPreheat() {
-  if (atlasPreheatTimer) clearTimeout(atlasPreheatTimer)
-  atlasPreheatTimer = setTimeout(() => {
-    atlasPreheatTimer = null
-    // xterm 已销毁（element 已脱离 DOM）则不再重绘
-    if (terminalRef.value && terminalRef.value.element?.isConnected) {
-      terminalRef.value.refresh(0, terminalRef.value.rows - 1)
+  } else if (isSessionActive.value && isConnected.value) {
+    // 会话页预加载已就绪（全量回放已在订阅期间缓冲，registerRealtimeHandler
+    // 挂载时已写入 xterm）：跳过 forceReplay，避免清空已缓冲历史再次全量回放
+    const prepared = bufferStore.consumePrepared() === sessionId.value
+    if (!prepared) {
+      // 全量重播已由上方 resetCursor（spliceHistory from=0）+ 下方重订阅承担；
+      // forceReplay 在此仅为兜底（幂等：from=游标，若 spliceHistory 未及完成则再跑一次）
+      forceReplay(sessionId.value)
     }
-  }, ATLAS_PREHEAT_DELAY_MS)
-}
-
-/**
- * resize 实际应用（防抖器 onApply 接线）：DPR 感知 fit + 仅 cols/rows 实际变化
- * 才全量重绘 + PTY 同步（走串行队列）。subpixel 抖动（容器尺寸微调但行列不变）
- * 不触发多余重绘，避免旋转/键盘避让时每帧全量重绘的浪费。
- */
-function applyResize() {
-  const term = terminalRef.value
-  if (!term || !fitAddonRef.value) return
-  const beforeCols = term.cols
-  const beforeRows = term.rows
-  applyDprFit()
-  if (term.cols !== beforeCols || term.rows !== beforeRows) {
-    // 仅行列真实变化才重绘 + 同步 PTY；不变时 fitAddon 不重排、无多余开销
-    term.refresh(0, term.rows - 1)
-    syncTerminalSizeToHost()
-  }
-}
-
-/**
- * 监听 DPR 变化并应用新尺寸：matchMedia 只匹配固定 dppx 值，每次命中后按新
- * DPR 重新注册（递归），直到组件卸载。屏幕旋转/DPI 变化时窗口尺寸可能不变，
- * ResizeObserver 不触发，须显式重新 fit（桌面端同路径）。
- */
-function watchDprChanges() {
-  if (dprMediaQuery && dprChangeHandler) {
-    dprMediaQuery.removeEventListener('change', dprChangeHandler)
-  }
-  dprChangeHandler = () => {
-    // DPI 变化后重新 fit + 条件重绘/同步（窗口尺寸可能未变，ResizeObserver 不触发）
-    applyResize()
-    watchDprChanges()
-  }
-  dprMediaQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`)
-  dprMediaQuery.addEventListener('change', dprChangeHandler)
-}
-
-async function initTerminal() {
-  if (!xtermContainer.value) return
-
-  // 创建前预测量：直接以适配屏幕的行列值构造，不再经过默认 80x24 阶段
-  const initial = computeInitialSize()
-
-  const term = new Terminal({
-    // 渲染器：默认 DOM（xterm 内置 canvas）；USE_WEBGL_RENDERER 开启时
-    // WebGL addon 加载成功后自动接管渲染，失败则保持 DOM
-    // 字体与尺寸（对齐桌面端，VS Code 终端默认字体栈 + 跨平台回退）
-    cols: initial.cols,
-    rows: initial.rows,
-    fontSize: terminalSettings.value.fontSize,
-    fontFamily: FONT_FAMILY,
-    lineHeight: 1,
-    // 滚动历史行数（与桌面主机服务端事件队列容量对齐）
-    scrollback: TERMINAL_SCROLLBACK,
-    // 自绘滚动条预留宽（唯一真源 TERMINAL_SCROLLBAR_GUTTER_PX）：xterm 6 内部
-    // verticalScrollbarSize 与 FitAddon 可用宽扣除同源取此值（缺省 14px，
-    // 原生滚动条已被 CSS 隐藏却仍按 14px 预留 → 右侧固定空白竖条）。
-    // 设为自绘指示线足迹后，画布右缘与滚动条零重叠且死区收窄到 6px
-    overviewRuler: { width: TERMINAL_SCROLLBAR_GUTTER_PX },
-    // 默认即时滚动：关闭平滑滚动，避免滚动动画期间合成器缓存旧帧导致重影；
-    // 仅在惯性甩动时由 useTerminalScroll 临时开启（smoothScrollDuration）
-    // 做单次平滑滑行，滑行结束立即复位为 0
-    smoothScrollDuration: 0,
-    // VS Code 风格块光标：移动端保留光标（标记输入落点与 TUI 光标位置），
-    // DOM 渲染器自带光标层，无需额外处理
-    cursorBlink: true,
-    cursorStyle: 'block',
-    cursorWidth: 1,
-    drawBoldTextInBrightColors: true,
-    // 移动端特殊处理：禁用 xterm 原生输入。
-    // 桌面端键盘输入流（onData → PTY）无法在移动端复现，输入统一由底部
-    // TerminalInputBar 承担，避免软键盘误弹与焦点抢占
-    disableStdin: true,
-    // 主题
-    theme: TERMINAL_THEMES[terminalSettings.value.theme],
-    allowProposedApi: true,
-  })
-
-  terminalRef.value = term
-
-  // 挂载 addon（对齐桌面端顺序：addon 先于 open）
-  const addon = new FitAddon()
-  fitAddonRef.value = addon
-  term.loadAddon(addon)
-  term.loadAddon(new WebLinksAddon())
-
-  // Unicode11 addon（移动端特殊处理）：启用 Unicode 11 字符宽度计算。
-  // TUI 应用（opencode 等）大量使用 box-drawing 字符（╔═╗║╚╝）和 emoji，
-  // 不加载此 addon 时 xterm 默认字符宽度表为 Unicode 5，
-  // 部分新字符的列宽计算错误会导致光标位置漂移、上一个写入的字符部分残留（重影）
-  const unicode11 = new Unicode11Addon()
-  term.loadAddon(unicode11)
-  term.unicode.activeVersion = '11'
-
-  term.open(xtermContainer.value)
-
-  if (USE_WEBGL_RENDERER) {
-    // WebGL 渲染器激活后隐藏 DOM 层光标（保留 WebGL 层光标，避免双光标）
-    const webglActive = await initWebGL(term)
-    if (webglActive) {
-      term.element?.classList.add('xterm-hidden-cursor')
-    }
+    await subscription.subscribeWithRetry()
+  } else {
+    // 非活跃/未连接：本次挂载不会发起订阅，无服务端历史段可等，立即放行；
+    // 本地缓存仍由 replayDone 门控（重进展示最后已知内容）
+    subscription.settleServerHistoryNow()
   }
 
-  // 注册实时 handler — 历史分片回放（高水位节流，见 useTerminalBuffer）与
-  // 实时推送同通道写入；背压 ack 由 useTerminalBuffer 无条件回发（onWriteParsed
-  // 即证明本端在消费，不依赖正统归属，见 composable 注释）
-  // 回放完成信号接入加载遮罩门控：末批解析完成后才允许撤遮罩
-  const { replayDone } = registerRealtimeHandler(sessionId.value, term, feedTuiOutput)
-  void replayDone.then(() => settleReplay?.())
+  // 无条件同步一次尺寸（内部按 isConnected 门控）：会话状态 stale 时
+  // 上方 isSessionActive 分支可能被跳过，不兜底会令 PTY 停留在桌面端
+  // 宽度 → 移动端行尾截断；活跃时也由此处统一发送（避免重复调用）
+  resize.syncTerminalSizeToHost()
 
-  // 本地历史缓存曾被头部 LRU 裁剪（超 16MB）：本次回放起点非流首，可能切断
-  // 转义序列，提示历史不完整（渲染残留由 composable 的回放静止全量重绘兜底）
-  if (bufferStore.getBuffer(sessionId.value)?.headTrimmed) {
-    toast.warning(t('mobile.terminal.historyTruncated'))
+  // 等历史输出渲染完成再撤遮罩：缓存回放 + 服务端历史段 + 首次 fit 三条件
+  // 全部满足；任一环节卡死由 HISTORY_SETTLE_TIMEOUT_MS 超时兜底。
+  // 放行后再让出一帧渲染，末批内容 commit 上屏后才淡出遮罩，
+  // 避免遮罩半透明期间透出逐批写入的闪烁过程
+  const gateResult = await subscription.waitForHistoryGate()
+  await nextPaintFrame()
+  isTerminalReady.value = true
+  // 新手引导：终端就绪后按持久化标记展示一次（关闭或打开完整教程即清除）
+  if (assistStore.settings.terminalOnboardingPending) {
+    showOnboarding.value = true
   }
+  // 链路调试（布局/渲染排查）：就绪路径（gate 正常 or 超时兜底）+ 终端网格尺寸，
+  // 超时兜底说明订阅/历史/fit 某环节卡死（对照 terminalBuffer/useTerminalBuffer 日志）
+  logger.debug(
+    `[TerminalView] ready (session=${sessionId.value}): ` +
+      `${gateResult === 'timeout' ? 'gate TIMEOUT fallback' : 'gate settled'}, ` +
+      `term=${terminalRef.value?.cols ?? '?'}x${terminalRef.value?.rows ?? '?'}`,
+  )
 
-  // TUI 兼容：挂接 onWriteParsed 检测备用屏幕（与嗅探器构成双条件门控）
-  attachTuiCompat(term)
-
-  // 触摸滚动接管 + 首帧校准 fit：
-  // - setupViewportScroll 不依赖字体测量（viewport 在 open 后即存在于 DOM），
-  //   必须无条件挂载，否则触摸滚动/历史查看永久失效
-  // - fitWithMargin 幂等（FitAddon 在字体测量未就绪时无操作），轮询重试直至
-  //   校准生效；尺寸变化经 onResize → 串行队列发送（自动合并最新值）
-  setTimeout(() => {
-    setupViewportScroll()
-    let fitAttempts = 0
-    const tryInitialFit = () => {
-      if (!terminalRef.value) return
-      if (fitWithMargin()) {
-        // 校准生效：补发一次实际尺寸（队列合并，防 onResize 门控漏发）
-        syncTerminalSizeToHost()
-        settleFirstFit?.()
-        settleFirstFit = null
-      } else if (fitAttempts++ < 20) {
-        // 字体测量未就绪：50ms 后重试，最多 ~1s（超时后由 ResizeObserver 兜底）
-        setTimeout(tryInitialFit, 50)
-      } else {
-        // 重试上限内始终未生效：放弃校准并放行遮罩门控（后续尺寸由 ResizeObserver 兜底）
-        settleFirstFit?.()
-        settleFirstFit = null
-      }
-    }
-    tryInitialFit()
-  }, 50)
-
-  // ResizeObserver — 接入分层防抖（对齐桌面端 TerminalPreview / VS Code）：
-  // 垂直 resize（行数变化）立即应用，仅宽度变化 100ms 防抖合并，避免旋转/键盘
-  // 避让触发容器尺寸微调时每帧整屏 reflow；0/非法尺寸（隐藏/过渡中 RO 报 0）被
-  // 防抖器忽略，避免把 PTY 缩成 1×1 打乱 shell。小缓冲（<200 行，VS Code
-  // StartDebouncingThreshold）连宽度变化也立即应用。flush() 保证防抖窗口内最后
-  // 一次尺寸必达。仅 cols/rows 实际变化才同步 PTY（见 applyResize）。
-  resizeDebouncer = new TerminalResizeDebouncer({
-    onApply: applyResize,
-    getBufferLength: () => {
-      const t = terminalRef.value
-      return t ? t.buffer.active.length : null
-    },
-  })
-  resizeObserverRef.value = new ResizeObserver((entries) => {
-    const rect = entries[0]?.contentRect
-    if (rect) {
-      // rAF 聚合同一帧的多次回调，再喂给防抖器（采集侧节流，防抖器负责应用侧调度）
-      if (resizeRaf) return
-      resizeRaf = requestAnimationFrame(() => {
-        resizeRaf = 0
-        resizeDebouncer?.resize(rect.width, rect.height)
-      })
-    }
-  })
-  resizeObserverRef.value.observe(xtermContainer.value)
-
-  // DPR 动态变化监听（跨 DPI 旋转 / 系统缩放变化时窗口尺寸可能不变，
-  // ResizeObserver 不触发）：matchMedia 只能匹配固定 dppx 值，变化后按新值递归注册
-  watchDprChanges()
-
-  // PTY 尺寸同步：xterm 内部 resize（含 fit 触发）时同步到主机会话。
-  // 统一走 HTTP 串行队列（queueResize）：HTTP 与 WS 双通道并发会把不同
-  // 尺寸的请求乱序送达服务端——fit 前的 80x24 默认值若后到会覆盖实际
-  // 尺寸，PTY 停在 80x24 → opencode 按 24 行渲染，显示区下半黑（半屏黑）
-  term.onResize(({ cols, rows }) => {
-    // 调试验证：记录 xterm 每次尺寸变化（fit/容器变化/字号变化）
-    logger.debug(`[TerminalView] onResize: ${cols}x${rows}`)
-    queueResize(cols, rows)
-  })
-}
-
-// ==================== Resize 串行队列 ====================
-// 所有 resize 请求收敛到 HTTP 单通道串行发送：同一时刻仅一个在途请求，
-// 期间到达的新尺寸合并为最新值（丢弃中间态），保证服务端最终收到的是
-// 最后请求的尺寸，杜绝多通道/并发乱序覆盖
-
-let resizeInFlight = false
-let pendingResize: { cols: number; rows: number; force: boolean } | null = null
-
-// ==================== 正统渲染端裁决交互 ====================
-// 桌面端与移动端共用同一 PTY 尺寸：服务段裁决本端是否正统渲染端。
-// 非正统时 resize 响应 needsConfirmation（未应用），此处弹窗确认，
-// 确认后 force 重发覆盖；取消则记下被拒尺寸防旋转/RO 弹窗风暴。
-
-/** 用户拒绝覆盖的尺寸（成功后清空；同尺寸不再重发） */
-let rejectedSize: { cols: number; rows: number } | null = null
-
-/** 待确认覆盖目标（弹窗内容源） */
-const rendererOverrideTarget = ref<{
-  cols: number
-  rows: number
-  rendererName: string
-} | null>(null)
-const showRendererOverrideDialog = ref(false)
-
-/**
- * 本端是否为当前会话的正统渲染端。
- * resize 响应 applied（请求方即位正统）后置 true；needsConfirmation 置 false。
- * 决定渲染背压 ack 是否发送（非正统时服务端丢弃 ack，不浪费流量）
- */
-const isCanonicalRenderer = ref(false)
-
-/** 渲染端显示名：桌面端用 i18n 标签，移动端用设备名；source 异常时兜底，避免弹窗崩溃 */
-function rendererDisplayName(source?: RendererSource | null): string {
-  if (!source || source.kind === 'desktop') return t('mobile.terminal.rendererDesktop')
-  return source.deviceName || t('mobile.terminal.rendererMobile')
-}
-
-/** 用户确认覆盖：force 重发（尺寸移交服务端正统归属） */
-async function confirmRendererOverride() {
-  const target = rendererOverrideTarget.value
-  showRendererOverrideDialog.value = false
-  rendererOverrideTarget.value = null
-  if (target) await queueResize(target.cols, target.rows, true)
-}
-
-/** 用户拒绝覆盖：记录被拒尺寸，同尺寸不再打扰 */
-function cancelRendererOverride() {
-  const target = rendererOverrideTarget.value
-  showRendererOverrideDialog.value = false
-  rendererOverrideTarget.value = null
-  if (target) rejectedSize = { cols: target.cols, rows: target.rows }
-}
-
-async function queueResize(cols: number, rows: number, force = false) {
-  if (cols <= 0 || rows <= 0) return
-  if (isMockSession(sessionId.value)) return
-  const sid = sessionId.value
-  if (!sid) return
-  // 未 fit 的 xterm 默认尺寸（80x24）：跳过，等 fit 后发送真实尺寸
-  if (cols === 80 && rows === 24) return
-  // 用户刚拒绝过的相同尺寸：抑制（force 重发绕过，确认覆盖是明确意图）
-  if (!force && rejectedSize && rejectedSize.cols === cols && rejectedSize.rows === rows) return
-  // 相同尺寸已在确认弹窗中：不再重复入队（防弹窗期间 RO 事件叠加）
-  if (
-    rendererOverrideTarget.value &&
-    rendererOverrideTarget.value.cols === cols &&
-    rendererOverrideTarget.value.rows === rows
-  ) {
-    return
-  }
-
-  pendingResize = { cols, rows, force }
-  if (resizeInFlight) return
-  resizeInFlight = true
-  try {
-    while (pendingResize) {
-      const next = pendingResize
-      pendingResize = null
-      if (!isConnected.value) break
-      // 调试验证：记录实际发送给主机 PTY 的尺寸
-      logger.debug(`[TerminalView] send resize to PTY: ${next.cols}x${next.rows}${next.force ? ' (force)' : ''}`)
-      const result = await httpResizeSession(sid, next.cols, next.rows, next.force)
-      if (result.code !== 0) {
-        logger.warn('[TerminalView] Queue resize failed:', result.message)
-        continue
-      }
-      const outcome = result.data
-      if (!outcome) {
-        // 服务端未返回裁决数据（异常响应）：按失败处理，下次触发时重试
-        logger.warn('[TerminalView] Resize response missing outcome data')
-        continue
-      }
-      if (outcome.status === 'applied') {
-        // 已应用：本端即位正统渲染端（请求方即正统），清空抑制记录
-        rejectedSize = null
-        isCanonicalRenderer.value = true
-      } else if (outcome.status === 'needsConfirmation') {
-        // 另一端正渲染输出：弹窗确认是否覆盖（未应用，PTY 尺寸保持对方设置）
-        isCanonicalRenderer.value = false
-        rendererOverrideTarget.value = {
-          cols: next.cols,
-          rows: next.rows,
-          rendererName: rendererDisplayName(outcome.currentCanonical),
-        }
-        showRendererOverrideDialog.value = true
-      }
-    }
-  } finally {
-    resizeInFlight = false
-  }
-}
-
-function disposeTerminal() {
-  if (resizeObserverRef.value) {
-    resizeObserverRef.value.disconnect()
-    resizeObserverRef.value = null
-  }
-  if (resizeRaf) {
-    cancelAnimationFrame(resizeRaf)
-    resizeRaf = 0
-  }
-  // 清理 resize 分层防抖器（去不触发挂起应用）
-  resizeDebouncer?.dispose()
-  resizeDebouncer = null
-  // 清理 atlas 预热补刷定时器
-  if (atlasPreheatTimer) {
-    clearTimeout(atlasPreheatTimer)
-    atlasPreheatTimer = null
-  }
-  // 移除 DPR 变化监听（matchMedia 递归注册的当前句柄）
-  if (dprMediaQuery && dprChangeHandler) {
-    dprMediaQuery.removeEventListener('change', dprChangeHandler)
-    dprMediaQuery = null
-    dprChangeHandler = null
-  }
-
-  // 卸载时 route.params 已失效（undefined），须用挂载时固定的会话 ID，
-  // 否则 handler 注销被守卫跳过 → 残留闭包引用已 dispose 的 xterm
-  if (mountedSessionId) {
-    unregisterRealtimeHandler(mountedSessionId)
-  }
-
-  disposeTuiCompat()
-  disposeScroll()
-
-  if (terminalRef.value) {
-    terminalRef.value.dispose()
-    terminalRef.value = null
-    fitAddonRef.value = null
-  }
-  isTerminalReady.value = false
-}
-
-function applyTerminalTheme() {
-  if (!terminalRef.value) return
-  const theme = TERMINAL_THEMES[terminalSettings.value.theme]
-  terminalRef.value.options.theme = theme
-  fitWithMargin()
-}
-
-// ==================== Clear Terminal ====================
-
-function clearTerminal() {
-  if (!terminalRef.value) return
-  terminalRef.value.clear()
-  currentLine.value = 0
-  isUserScrolling.value = false
-  showClearConfirm.value = false
-}
-
-// ==================== Refresh Terminal ====================
-
-/** 主动同步当前终端尺寸到主机 PTY（走 queueResize 串行队列，无响应确认；
- * 失败仅 console.warn，由下次触发重试）
- * 重连/会话激活后 PTY 重建为默认 80x24，容器尺寸未变化时 fit/onResize 都不会触发，
- * 必须显式同步一次，否则输出按错误宽度换行导致格式混乱。
- * 不依赖会话状态门控：会话列表状态可能 stale，只要 WS 已连接就同步
- * （会话不存在时服务端 404 无害）——错过同步会让 PTY 停留在桌面端宽度，
- * 移动端行尾文字被截断 */
-async function syncTerminalSizeToHost() {
-  if (!terminalRef.value || isMockSession(sessionId.value)) {
-    return
-  }
-  if (!isConnected.value) {
-    return
-  }
-  const { cols, rows } = terminalRef.value
-  // 统一走串行队列：过滤 80x24 默认尺寸 + 单通道保序，避免覆盖竞态
-  queueResize(cols, rows)
-}
-
-/** 合成层强制重绘：1px transform 往返抖动，迫使 WebView 合成器重新合成 canvas 层。
- * xterm 渲染管线挂起（脏区跳过等）时 refresh() 不生效，
- * DOM transform 变化能绕过渲染管线直接触发合成器重绘（实测：键盘避让后黑屏恢复） */
-function forceCompositorRepaint() {
-  const el = xtermContainer.value
-  if (!el) return
-  // 读取当前生效 transform（xtermContainerStyle 可能已有值），往返后还原
-  const current = getComputedStyle(el).transform
-  el.style.transform = 'translateY(1px)'
-  requestAnimationFrame(() => {
-    el.style.transform = current
-  })
-}
-
-async function refreshTerminal() {
-  if (!fitAddonRef.value || !terminalRef.value) return
-
-  fitWithMargin()
-  // 强制重绘可见区：fit 尺寸不变时不触发重排，WebGL 渲染残留需要手动刷新
-  if (terminalRef.value.rows > 0) {
+  // 入场渲染收尾（等价手动刷新按钮的渲染半段）：首次 fit/历史回放/遮罩淡出
+  // 过渡期间真机 WebView 合成器可能缓存旧帧分块，表现为终端区底部与输入栏
+  // 之间出现一段背景色空白间隔（点击刷新后消失的现场）。全量重绘 + 强制
+  // 重合成一次清除（仅此一次，幂等低成本）
+  if (terminalRef.value && terminalRef.value.rows > 0) {
     terminalRef.value.refresh(0, terminalRef.value.rows - 1)
   }
-  // 合成层强制重绘：xterm 渲染管线挂起时 refresh() 不生效，
-  // transform 往返迫使合成器重新合成 canvas（渲染层恢复）
   forceCompositorRepaint()
+})
 
-  if (isConnected.value && isSessionActive.value) {
-    // 统一走串行队列（过滤未 fit 默认值 + 单通道保序），失败仅 console.warn
-    queueResize(terminalRef.value.cols, terminalRef.value.rows)
-    // 数据层兜底：渲染层恢复后内容仍缺失（violation 风暴期间帧被拒）时
-    // 强制全量重播（重置游标 + 重订阅，服务端 reset 裁决重新回放）
-    if (!isMockSession(sessionId.value)) {
-      forceReplay(sessionId.value)
-      await subscribeWithRetry()
-    }
+onUnmounted(async () => {
+  // 链路调试：渲染管线卸载（writeCoalescer dispose 汇总日志随后输出）
+  logger.debug(`[TerminalView] unmounted (session=${mountedSessionId})`)
+  // 订阅重试定时器 + 门控兜底定时器（遮罩已放行时为 null，防御未走完 onMounted 的卸载竞态）
+  subscription.disposeSubscription()
+
+  if (panelRepaintTimer) {
+    clearTimeout(panelRepaintTimer)
+    panelRepaintTimer = null
   }
-  toast.success(t('mobile.terminal.refreshed'))
-}
+  // 键盘避让双通道监听 + 页面 pan 守卫
+  keyboard.dispose()
 
+  if (isMockSession(mountedSessionId)) {
+    mockTerminal.stopOutput()
+  }
+  disposeTerminal()
+
+  // 页面卸载：停止前端消费 + 切 batch 传播（Rust 订阅保持，会话未停——
+  // 后台期间的输出由服务端队列 + Rust 缓存保留）；重新进入时由
+  // onMounted 的 resetCursor（全量重播）+ registerRealtimeHandler 拼接历史
+  if (!isMockSession(mountedSessionId)) {
+    await unsubscribeSession(mountedSessionId)
+  }
+})
 </script>

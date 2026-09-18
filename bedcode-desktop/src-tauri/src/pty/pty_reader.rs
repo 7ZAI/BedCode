@@ -1,21 +1,21 @@
 //! PTY Output Reader
 //!
-//! PTY 输出读取线程，使用 broadcast channel 通知监听器
+//! PTY 输出读取线程：`read → 有序队列 → 单消费者入环`。
+//!
+//! **源零等待（spec §4.1/§4.6 背压下移）**：读取路径不含任何暂停/水位判定，
+//! 也不感知任何订阅者。数据量超出会话环容量时由环淘汰最旧（订阅者各自按
+//! 游标拉取），慢订阅者的节流只发生在它自己的订阅者执行体里——单个慢消费者
+//! 不再能冻结源产出（历史教训：会话级共享水位 + 源侧暂停 = 多订阅者场景下
+//! 一个端 ack 滞留就冻结整条链路）。
 
 use std::io::{BufReader, Read};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
 use crate::enums::PtySessionStatus;
-use crate::pty::next_output_index;
 use crate::session::{GlobalOutputManager, OutputEvent};
 use crate::system::config::AppConfig;
-
-/// 背压暂停轮询间隔：暂停读期间每 5ms 重查一次水位/运行标志，latency 与
-/// 忙等开销平衡（本地环回场景可感知的恢复延迟可忽略）
-const BACKPRESSURE_POLL_INTERVAL: Duration = Duration::from_millis(5);
 
 /// PTY 输出读取器
 pub struct PtyReader {
@@ -35,30 +35,15 @@ impl PtyReader {
         session_id: String,
         running: Arc<AtomicBool>,
     ) -> Self {
-        Self::start_with_pause(reader, lifecycle_tx, session_id, running, None)
-    }
-
-    /// 带可注入背压判定的读取器启动（默认走 GlobalOutputManager 未 ack
-    /// 水位）；测试注入可控闭包驱动暂停/恢复，验证「暂停零读取、恢复全量
-    /// 无丢失」的背压契约
-    pub fn start_with_pause(
-        reader: Box<dyn Read + Send + 'static>,
-        lifecycle_tx: tokio::sync::broadcast::Sender<PtySessionStatus>,
-        session_id: String,
-        running: Arc<AtomicBool>,
-        pause_check: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
-    ) -> Self {
-        let pause = pause_check.unwrap_or_else(|| {
-            let sid = session_id.clone();
-            Arc::new(move || GlobalOutputManager::global().should_pause(&sid))
-        });
         let mut buf_reader = BufReader::new(reader);
         let read_buffer_size = AppConfig::global().terminal.read_buffer_size;
 
         // 有序输出队列：PTY 读线程按 read 顺序 blocking_send，单消费者任务顺序
         // on_output——根治「spawn 并发 on_output 乱序」竞态（多任务在 index 分配
         // 与广播之间互相插入 → 队列 push/broadcast 顺序与事件产生顺序错乱 → 字节
-        // 错位残渣）。队列满时 blocking_send 阻塞读线程（背压：数据留 PTY 内核管道）。
+        // 错位残渣）。队列满时 blocking_send 阻塞读线程——这是唯一残留的源侧
+        // 等待，仅在入环消费者彻底停摆时发生（正常路径 on_output 只做入环 + 通告
+        // 水印，无 await 等待任何订阅者）
         let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<OutputEvent>(16384);
         let consumer_session_id = session_id.clone();
         tauri::async_runtime::spawn(async move {
@@ -74,13 +59,6 @@ impl PtyReader {
             let mut exit_status = PtySessionStatus::Stopped;
 
             while running.load(Ordering::SeqCst) {
-                // 背压门：未 ack 字节超水位 → 暂停读。暂停只发生在两次 read 之间
-                //（绝不中断半途 read）→ 零字节丢失；期间 PTY 内核管道缓冲积聚，
-                // 子进程写满即自然阻塞——这是真正的背压向产生端传导
-                if pause() {
-                    thread::sleep(BACKPRESSURE_POLL_INTERVAL);
-                    continue;
-                }
                 match buf_reader.read(&mut buffer) {
                     Ok(0) => {
                         // EOF - process exited
@@ -89,7 +67,6 @@ impl PtyReader {
                     }
                     Ok(n) => {
                         let timestamp = chrono::Utc::now();
-                        let index = next_output_index();
                         let raw_bytes = buffer[..n].to_vec();
 
                         // 经有序队列顺序发送（单消费者顺序 on_output，消除 spawn 并发
@@ -97,7 +74,7 @@ impl PtyReader {
                         let output_event = OutputEvent::new(
                             session_id.clone(),
                             raw_bytes,
-                            index as u64,
+                            0, // start_offset 由 on_output 在串行临界区内按 max_offset 分配
                             timestamp.timestamp_millis(),
                             false,
                         );
@@ -115,7 +92,10 @@ impl PtyReader {
             }
 
             // Notify lifecycle subscribers that the process has exited
-            let _ = lifecycle_tx.send(exit_status);
+            // （发送失败 = 无订阅者，属正常终止路径；warn 保留可观测性）
+            if let Err(e) = lifecycle_tx.send(exit_status) {
+                tracing::warn!(session_id = %session_id, %e, "PTY lifecycle event dropped (no subscribers)");
+            }
         });
 
         Self { handle: Some(handle) }
@@ -154,7 +134,7 @@ mod tests {
         }
     }
 
-    /// 记录每次 read 实际读入字节数的 Reader（背压暂停判定用）
+    /// 记录每次 read 实际读入字节数的 Reader
     struct RecordingReader {
         data: Vec<u8>,
         pos: usize,
@@ -171,6 +151,35 @@ mod tests {
             self.pos += n;
             self.reads.lock().unwrap().push(n);
             Ok(n)
+        }
+    }
+
+    /// 全局唯一会话 ID（避免测试间通过全局单例互相干扰）
+    fn unique_session_id(prefix: &str) -> String {
+        format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// 轮询会话环直至累计字节达到期望值（消费者任务是异步的）
+    async fn drain_ring_until(session: &Arc<crate::session::SessionOutputManager>, want: usize) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let ring_arc = session.ring();
+            let ring = ring_arc.read().await;
+            let (min, max) = ring.watermarks();
+            if max.saturating_sub(min) as usize >= want {
+                return ring.range(min, max);
+            }
+            drop(ring);
+            if std::time::Instant::now() >= deadline {
+                return Vec::new();
+            }
+            tokio::task::yield_now().await;
         }
     }
 
@@ -194,48 +203,6 @@ mod tests {
     }
 
     #[test]
-    fn backpressure_pause_blocks_reads_and_resume_drains_without_loss() {
-        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
-        let running = Arc::new(AtomicBool::new(true));
-        let paused = Arc::new(AtomicBool::new(true)); // 初始暂停（模拟未 ack 超水位）
-        let pause_check: Arc<dyn Fn() -> bool + Send + Sync> = {
-            let paused = paused.clone();
-            Arc::new(move || paused.load(Ordering::SeqCst))
-        };
-
-        // 负载超过 read_buffer_size（4096）→ 多次 read
-        let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
-        let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
-        let reader: Box<dyn Read + Send + 'static> = Box::new(RecordingReader {
-            data: payload.clone(),
-            pos: 0,
-            reads: reads.clone(),
-        });
-
-        let pty_reader = PtyReader::start_with_pause(
-            reader,
-            lifecycle_tx,
-            "test-session".to_string(),
-            running.clone(),
-            Some(pause_check),
-        );
-
-        // 暂停中：等过多个轮询间隔（5ms），不得发生任何 read
-        std::thread::sleep(std::time::Duration::from_millis(30));
-        assert_eq!(reads.lock().unwrap().len(), 0, "paused reader must not read");
-        assert!(running.load(Ordering::SeqCst));
-
-        // 恢复（ack 推进）：全量字节被读入（零字节丢失），EOF 后线程退出
-        paused.store(false, Ordering::SeqCst);
-        pty_reader.wait();
-
-        let total: usize = reads.lock().unwrap().iter().sum();
-        assert_eq!(total, payload.len(), "resume must drain all bytes without loss");
-        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
-        assert_eq!(status, PtySessionStatus::Stopped);
-    }
-
-    #[test]
     fn empty_input_exits_with_stopped_lifecycle() {
         let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
         let running = Arc::new(AtomicBool::new(true));
@@ -249,5 +216,84 @@ mod tests {
 
         let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
         assert_eq!(status, PtySessionStatus::Stopped);
+    }
+
+    /// 数据投递断言（票据 04 + 拉取模型）：消费者任务硬编码
+    /// `GlobalOutputManager::global()`，用全局唯一 session_id 注册；产出字节
+    /// 必须完整按序落入该会话输出环（订阅者随后按游标从环上拉取）。
+    ///
+    /// 零订阅者场景同时是「源不依赖消费者」的回归护栏：没有任何订阅者时
+    /// 产出照常全量入环。
+    #[test]
+    fn output_bytes_reach_session_ring_complete_and_in_order_without_subscribers() {
+        use crate::session::GlobalOutputManager;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let sid = unique_session_id("itest-delivery");
+            let manager = GlobalOutputManager::global();
+            manager.register_session(&sid).await;
+
+            let (lifecycle_tx, _rx) = broadcast::channel(8);
+            let running = Arc::new(AtomicBool::new(true));
+            let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
+            let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+                data: std::io::Cursor::new(payload.clone()),
+            });
+            let pty_reader = PtyReader::start(reader, lifecycle_tx, sid.clone(), running);
+            pty_reader.wait();
+
+            // 无任何订阅者：产出仍须完整按序入环
+            let session = manager.session(&sid).await.expect("会话管理器");
+            assert_eq!(
+                session.pull_subscriber_count().await,
+                0,
+                "本用例刻意零订阅者（源产出不得依赖消费者）"
+            );
+            let collected = drain_ring_until(&session, payload.len()).await;
+            assert_eq!(collected, payload, "PTY 输出必须完整按序落入会话环（票据 04）");
+
+            manager.unregister_session(&sid).await;
+        });
+    }
+
+    /// Err 分支（票据 04）：假 Reader 返回 Err → 生命周期事件为 Error
+    #[test]
+    fn reader_error_reports_error_lifecycle() {
+        struct ErrReader;
+        impl Read for ErrReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("injected read error"))
+            }
+        }
+
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(true));
+        let reader: Box<dyn Read + Send + 'static> = Box::new(ErrReader);
+        let pty_reader = PtyReader::start(reader, lifecycle_tx, "err-session".to_string(), running);
+        pty_reader.wait();
+
+        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Error, "读错误应上报 Error 生命周期");
+    }
+
+    /// running=false（启动即退出）：读线程不读任何字节，生命周期报 Stopped
+    #[test]
+    fn running_flag_cleared_before_read_exits_without_reading() {
+        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let running = Arc::new(AtomicBool::new(false));
+        let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let reader: Box<dyn Read + Send + 'static> = Box::new(RecordingReader {
+            data: b"never read".to_vec(),
+            pos: 0,
+            reads: reads.clone(),
+        });
+
+        let pty_reader = PtyReader::start(reader, lifecycle_tx, "stop-session".to_string(), running);
+        pty_reader.wait();
+
+        assert!(reads.lock().unwrap().is_empty(), "running=false 时不得发生任何 read");
+        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(status, PtySessionStatus::Stopped, "running=false 退出应报 Stopped");
     }
 }

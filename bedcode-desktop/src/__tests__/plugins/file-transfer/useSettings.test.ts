@@ -110,6 +110,23 @@ describe('useSettings orchestration', () => {
     await expect(settings.load()).resolves.toBeUndefined()
     expect(settings.settings.value.receivingPolicy).toBe('ask')
     expect(settings.loading.value).toBe(false)
+    // Bug 4 回归：加载失败暴露 loadError（SettingsPanel 据此渲染错误提示 + 重试）
+    expect(settings.loadError.value).toBe(true)
+  })
+
+  it('load falls back to camelCase askTimeoutSec when snake_case key absent', async () => {
+    // Bug 1 回归：旧 fallback 拼写 askTimeoutSecs（多一个 s）永不命中，
+    // 若后端改返 camelCase askTimeoutSec 会误退默认 60
+    env.onCommand('file-transfer.get-settings', () => ({
+      policy_mode: 'ask',
+      askTimeoutSec: 120,
+    }))
+    const settings = useSettings(env.context)
+
+    await settings.load()
+
+    expect(settings.settings.value.approvalTimeoutSec).toBe(120)
+    expect(settings.loadError.value).toBe(false)
   })
 
   it('setReceivingPolicy routes set-settings and syncs local state on success', async () => {

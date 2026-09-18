@@ -1,14 +1,18 @@
 /**
  * Terminal Buffer Composable
  *
- * TerminalView 用的 composable — 管理会话终端 WS 订阅与实时输出写入。
- * 输出为 TB v2 二进制帧（前端直连桌面端终端会话路由），数据真源在服务端；
- * 前端维护 lastRenderedSeq（去重基准）+ 历史缓存（页面重进回放源）。
+ * TerminalView 用的 composable — 管理会话终端输出订阅与实时输出写入。
+ * 订阅由 Rust 链路持有（src-tauri/src/terminal_link.rs），前端消费 TB v3 字节帧
+ * （start_offset/end_offset 区间语义）；数据真源 = Rust 会话级字节缓存；前端维护
+ * lastRenderedOffset 字节游标（去重/缺口/截断基准）+ 一次性历史拼接（spliceHistory：
+ * 拼完历史才消费实时帧）。详见 docs/knowledge/pty-output-pipeline.md
  */
 
 import { useTerminalBufferStore, type SubscribeResultInfo } from '@/stores/terminalBuffer'
 import { logger } from '@/utils/frontendLogger'
 import { createWriteCoalescer } from '@/composables/writeCoalescer'
+import { useToast } from '@/composables/useToast'
+import i18n from '@/locales'
 import type { Terminal } from '@xterm/xterm'
 
 /** 会话页预加载的超时上限（毫秒）：超时不再等待，直接跳转由终端页自行重试 */
@@ -23,6 +27,22 @@ const REPLAY_IDLE_REFRESH_MS = 250
 
 /** sessionId → 回放静止全量重绘定时器（注销时清理，防页面卸载后僵尸刷新） */
 const replayIdleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+/** sessionId → xterm onWriteParsed 订阅句柄（注销时释放，防同一实例重复注册叠加监听） */
+const writeParsedDisposables = new Map<string, { dispose(): void }>()
+
+// ==================== 链路调试统计（渲染背压 ack，2s 节流） ====================
+
+/** sessionId → ack 计数与上次打点时刻（非响应式，纯日志对账用） */
+const ackStats = new Map<string, { count: number; lastLogAt: number }>()
+/** ack 打点间隔（ms）：onWriteParsed 高频触发，不节流会刷屏 */
+const ACK_LOG_INTERVAL_MS = 2000
+
+/** 释放 xterm onWriteParsed 订阅（注销/删除路径必调，防监听泄漏） */
+function disposeWriteParsed(sessionId: string) {
+  writeParsedDisposables.get(sessionId)?.dispose()
+  writeParsedDisposables.delete(sessionId)
+}
 
 /** 清理回放静止重绘定时器 */
 function clearReplayIdleTimer(sessionId: string) {
@@ -75,6 +95,7 @@ export interface RealtimeHandlerRegistration {
 
 export function useTerminalBuffer() {
   const store = useTerminalBufferStore()
+  const toast = useToast()
 
   /**
    * 注册实时输出 handler — 服务端回放（历史）与实时推送统一经 rAF 合并写入 xterm
@@ -89,6 +110,8 @@ export function useTerminalBuffer() {
     terminal: Terminal,
     onRawOutput?: (data: Uint8Array) => void,
   ): RealtimeHandlerRegistration {
+    // 链路调试：渲染管线挂载（拼接历史 → 消费实时帧的入口）
+    logger.debug(`[useTerminalBuffer] register realtime handler (${sessionId})`)
     const writeCoalescer = createWriteCoalescer(terminal)
     // 渲染背压（spec 04-06）：写入解析完成 → 回发 ack，让服务端按本端实际
     // 消费速度推进 unacked 记账（64KB 阈值 + 250ms 空闲节流在 socket 内部）。
@@ -97,16 +120,32 @@ export function useTerminalBuffer() {
     // 会话、手机观看」等 resize 未 applied 场景 ack 永不回发 → 服务端 unacked
     // 超高位水 → PTY 读整体暂停 → 输出卡死（2.1.x 修复）。mock 会话/未连接时
     // store.ackRendered → socket.ackRendered 内部空转安全
-    terminal.onWriteParsed(() => {
+    writeParsedDisposables.get(sessionId)?.dispose()
+    writeParsedDisposables.set(sessionId, terminal.onWriteParsed(() => {
+      // 链路调试（背压对账）：onWriteParsed 触发即回发 ack——计数 + 节流打点，
+      // offset 与 Rust terminal_link ack 回发日志对照验证反馈环
+      const stats = ackStats.get(sessionId) ?? { count: 0, lastLogAt: 0 }
+      stats.count++
+      const now = Date.now()
+      if (now - stats.lastLogAt >= ACK_LOG_INTERVAL_MS) {
+        stats.lastLogAt = now
+        logger.debug(
+          `[useTerminalBuffer] render ack #${stats.count} (${sessionId}): ` +
+            `offset=${store.getBuffer(sessionId)?.lastRenderedOffset ?? '-'}`,
+        )
+      }
+      ackStats.set(sessionId, stats)
       store.ackRendered(sessionId)
-    })
+    }))
 
     // 分片回放高水位写入（store 回放循环的背压信号）：合并批经 terminal.write
     // 的回调确认「已解析完成」，再让出一帧渲染才 resolve——回放节奏由本端
     // xterm 实际消费速度决定，历史回放期间渲染/触摸可插入，不再长冻结。
     // xterm 内部写队列 FIFO 保序：回放批与实时帧交错入队不破坏输出顺序
-    const writeParsed = (data: Uint8Array): Promise<void> =>
-      new Promise<void>((resolve) => {
+    const writeParsed = (data: Uint8Array): Promise<void> => {
+      // 链路调试（字节对账）：历史批写入负载（payloadBytes 对应 store 侧日志）
+      logger.debug(`[useTerminalBuffer] history batch write (${sessionId}): ${data.byteLength}B`)
+      return new Promise<void>((resolve) => {
         // terminal 可能已 dispose（页面切换/会话关闭）：与 writeCoalescer 守卫一致
         if (!terminal.element) {
           resolve()
@@ -119,6 +158,7 @@ export function useTerminalBuffer() {
         onRawOutput?.(data)
         terminal.write(data, () => resolve())
       }).then(() => yieldNextFrame())
+    }
 
     // 回放静止全量重绘兜底：历史起点若落在被 LRU 裁剪的转义序列中段，
     // 增量解析会残留脏屏（光标/属性错位）；连续静止窗口无新数据时补一次整屏
@@ -140,9 +180,9 @@ export function useTerminalBuffer() {
       replayIdleTimers.set(sessionId, timer)
     }
 
-    // 回放就绪信号：本地缓存分片回放完成（onReplayDone）时 resolve。
+    // 回放就绪信号：历史拼接完成（store.onReplayDone）时 resolve。
     // store 层 onReplayDone 最早也在 writeParsed 的异步链之后触发，
-    // 此处同步赋值 resolver 不会与回放收尾竞态
+    // 此处同步赋值 resolver 不会与拼接收尾竞态
     let resolveReplayDone: (() => void) | null = null
     const replayDone = new Promise<void>((resolve) => {
       resolveReplayDone = resolve
@@ -153,6 +193,9 @@ export function useTerminalBuffer() {
       resolveReplayDone = null
     }
 
+    // 历史拼接（store 内启动：一次性历史 + FLUSH 缓冲实时帧——拼完才消费）
+    // 完成后经 onReplayDone 收尾：服务端已就序（Rust 链路订阅在先），
+    // 空历史也会立即触发（无需本地缓存快照预判）
     store.registerRealtimeHandler(sessionId, {
       onOutput: (data: Uint8Array) => {
         onRawOutput?.(data)
@@ -162,26 +205,24 @@ export function useTerminalBuffer() {
       },
       writeParsed,
       onClear: () => {
+        // 链路调试：清屏仅发生在截断重播路径（低频，出现即链路异常信号）
+        logger.debug(`[useTerminalBuffer] terminal clear for truncated replay (${sessionId})`)
         writeCoalescer.dispose()
         if (terminal) {
           terminal.clear()
         }
       },
-      onTruncated: (minSeq: number) => {
-        logger.warn(`[useTerminalBuffer] history truncated at min_seq=${minSeq}`)
+      onTruncated: (minOffset: number) => {
+        logger.warn(`[useTerminalBuffer] history truncated at min_offset=${minOffset}`)
+        // 用户可见后果是「画面被清空 + 重播」（截断或检出字节洞时）：必须给出
+        // 原因提示，否则看起来像凭空丢内容
+        toast.warning(i18n.global.t('mobile.terminal.historyTruncated'))
       },
       onReplayDone: () => {
         armReplayIdleRefresh()
         settleReplayDone()
       },
     })
-
-    // 无本地缓存（mock 会话 / 首次进入尚未订阅）：分片回放不会启动，
-    // replayDone 立即完成——服务端历史段结束由视图按 phase 离开 'history' 推导
-    const buffer = store.getBuffer(sessionId)
-    if (!buffer || buffer.historyCache.length === 0) {
-      settleReplayDone()
-    }
 
     return { replayDone }
   }
@@ -192,30 +233,33 @@ export function useTerminalBuffer() {
    * @param sessionId - 会话 ID
    */
   function unregisterRealtimeHandler(sessionId: string) {
+    ackStats.delete(sessionId)
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
   }
 
   /**
-   * 订阅会话 — 已订阅/在途则跳过；逻辑收敛到 store（socket 驱动 + 快照拼接），
-   * 所有订阅路径（页面进入 / 重连恢复）统一入口
+   * 订阅会话 — 确保 Rust 链路订阅（会话启动时已触发，此处幂等兜底）；
+   * 逻辑收敛到 store（Rust 命令驱动 + terminal-state 事件同步）
    *
    * @param sessionId - 会话 ID
-   * @returns 订阅确认信息（已订阅时）；连接建立中/失败时返回 null
+   * @returns 已订阅时的快照元数据；订阅建立中时返回 null
    */
   async function subscribeSession(sessionId: string): Promise<SubscribeResultInfo | null> {
     return store.subscribeSession(sessionId)
   }
 
   /**
-   * 取消订阅会话（页面卸载/会话停止/删除时调用）— 关闭终端 socket
+   * 退出终端页（页面卸载时调用）— 停止前端消费、切 batch 传播；
+   * Rust 订阅保持（会话未停），重进时 registerRealtimeHandler 重新拼接历史
    *
    * @param sessionId - 会话 ID
    */
   async function unsubscribeSession(sessionId: string) {
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
-    store.markUnsubscribed(sessionId)
   }
 
   /**
@@ -289,6 +333,7 @@ export function useTerminalBuffer() {
    */
   async function handleSessionRemoved(sessionId: string) {
     clearReplayIdleTimer(sessionId)
+    disposeWriteParsed(sessionId)
     store.unregisterRealtimeHandler(sessionId)
     store.clearBuffer(sessionId)
   }

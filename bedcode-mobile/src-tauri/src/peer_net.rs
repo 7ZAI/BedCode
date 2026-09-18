@@ -1913,3 +1913,67 @@ mod dial_payload_tests {
         assert_eq!(payload["connected"], true);
     }
 }
+
+/// 审计 P0：非法 peer id 拒绝 / 错误映射 / 事件桥映射（纯函数契约）
+#[cfg(test)]
+mod peer_net_contract_tests {
+    use super::*;
+    use bedcode_peer_net::error::PeerNetError;
+
+    const VALID_NODE_ID: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[test]
+    fn parse_node_id_accepts_64_lowercase_hex() {
+        let id = parse_node_id(VALID_NODE_ID).expect("合法 node id 应解析成功");
+        assert_eq!(id.as_str(), VALID_NODE_ID);
+    }
+
+    #[test]
+    fn parse_node_id_rejects_invalid_formats() {
+        // 空串
+        let err = parse_node_id("").expect_err("空串必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        // 长度不足（63 位）
+        let err = parse_node_id(&VALID_NODE_ID[..63]).expect_err("长度不足必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        // 大写 hex：格式契约要求小写
+        let upper = VALID_NODE_ID.to_uppercase();
+        let err = parse_node_id(&upper).expect_err("大写 hex 必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+        // 非 hex 字符（长度 64 但含 'g'）
+        let bad = format!("{}g", &VALID_NODE_ID[..63]);
+        let err = parse_node_id(&bad).expect_err("非 hex 字符必须拒绝");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+    }
+
+    #[test]
+    fn map_peer_net_error_is_internal_with_context() {
+        // 非法 node id
+        let err = map_peer_net_error(PeerNetError::InvalidNodeId { value: "zz".into() });
+        assert!(err.to_string().contains("peer-net operation failed"), "err: {err}");
+        assert!(err.to_string().contains("invalid node id"), "err: {err}");
+
+        // 握手期错误（连接建立失败路径）：错误消息必须保留对端指纹，便于排障
+        let node = NodeId::parse(VALID_NODE_ID).expect("parse node id");
+        let err = map_peer_net_error(PeerNetError::DialDeniedByPeer { node_id: node.clone() });
+        assert!(err.to_string().contains("dial denied by peer"), "err: {err}");
+        let err = map_peer_net_error(PeerNetError::ConfirmTimeout { node_id: node.clone() });
+        assert!(err.to_string().contains("confirmation timed out"), "err: {err}");
+        let err = map_peer_net_error(PeerNetError::UnknownPeer { node_id: node });
+        assert!(err.to_string().contains("unexpected peer node"), "err: {err}");
+    }
+
+    #[test]
+    fn bus_topic_for_maps_peer_events_only() {
+        // 对等连接事件 → 插件总线 topic（file-transfer 经 host-peer 感知状态）
+        assert_eq!(bus_topic_for("peer-connected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-disconnected"), Some("peer:connection"));
+        assert_eq!(bus_topic_for("peer-consent-requested"), Some("peer:consent"));
+        assert_eq!(bus_topic_for("peer-transfer-changed"), Some("peer:transfer"));
+        assert_eq!(bus_topic_for("peer-receive-changed"), Some("peer:receive"));
+        // 非对等事件不桥接（返回 None，emit_json 提前 return）
+        assert_eq!(bus_topic_for("plugin:error"), None);
+        assert_eq!(bus_topic_for("session-created"), None);
+        assert_eq!(bus_topic_for(""), None);
+    }
+}

@@ -30,7 +30,6 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
     eventHandlers[event] = (eventHandlers[event] || []).filter((h) => h !== handler)
   })
 })
-const mockFetch = vi.fn()
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -38,9 +37,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
-}))
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: (...args: any[]) => mockFetch(...args),
 }))
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -77,6 +73,15 @@ function installInvokeMock() {
         return Promise.resolve({ address: DEVICE.address, port: DEVICE.port, status: 'connected' })
       case 'ws_verify_pairing_code':
         return Promise.resolve(makeAuthCredentials({ fingerprint: 'fp-desktop-1', pairingId: 'pairing-1' }))
+      case 'egress_declare_desktop_target':
+        return Promise.resolve(null)
+      case 'http_request':
+        return Promise.resolve({
+          status: 200,
+          statusText: 'OK',
+          headers: {},
+          bodyText: JSON.stringify({ status: 'ok' }),
+        })
       default:
         return Promise.resolve(undefined)
     }
@@ -108,7 +113,6 @@ afterEach(() => {
 describe('配对流：useMobileConnection 配对状态机 × 凭据持久化', () => {
   it('配对全链路：验证配对码 → 凭据保存 → ws_pairing_verified/ws_paired → 已配对设备持久化', async () => {
     // 连接建立
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ status: 'ok' }) })
     await conn.connect(DEVICE)
     await flushAsync()
 
@@ -155,7 +159,6 @@ describe('配对流：useMobileConnection 配对状态机 × 凭据持久化', (
   })
 
   it('重复配对同一设备：指纹唯一，连接次数递增而非重复记录', async () => {
-    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ status: 'ok' }) })
     await conn.connect(DEVICE)
     await flushAsync()
 

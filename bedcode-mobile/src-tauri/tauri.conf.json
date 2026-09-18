@@ -1,7 +1,7 @@
 {
-  "productName": "BedCode Mobile",
+  "productName": "BedCode",
   "identifier": "com.bedcode.mobile",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "build": {
     "beforeDevCommand": "pnpm run dev",
     "devUrl": "http://localhost:1423",
@@ -12,7 +12,7 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "BedCode Mobile",
+        "title": "BedCode",
         "width": 400,
         "height": 800,
         "resizable": true,

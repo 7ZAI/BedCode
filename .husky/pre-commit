@@ -1,5 +1,5 @@
-# 文档跟踪：uat/master 提交前从 index 剔除文档文件（仅 index，工作区磁盘文件保留），防止入库。
-# dev/feature 分支不干预，文档正常跟踪。不删除任何磁盘文件。
+# 受保护配置跟踪：uat/master 提交前从 index 剔除受保护配置文件（仅 index，工作区磁盘文件保留），
+# 防止入库。docs/ 全分支正常跟踪（含 uat/master）。dev/feature 分支不干预。不删除任何磁盘文件。
 # 用 || true 避免 husky 的 sh -e 因 doc-tracking 非零退出而阻断提交。
 sh "$(git rev-parse --show-toplevel)/scripts/doc-tracking.sh" untrack pre-commit || true
 

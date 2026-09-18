@@ -4,10 +4,15 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" href="/favicon.png" />
-    <!-- 移动端视口配置 -->
+    <!-- 移动端视口配置
+      interactive-widget=resizes-content（Chromium 108+）：软键盘弹出时收缩
+      初始包含块（ICB），布局视口与可视区等高——消除 visual viewport 可平移
+      空间（用户上滑把输入条拖离键盘露出空白），并让 window.innerHeight/
+      ResizeObserver 直接感知键盘高度；不支持的 WebView 忽略该参数，回退
+      JS 键盘避让（TerminalView 双通道检测 + 根容器收缩） -->
     <meta
       name="viewport"
-      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+      content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
     />
     <!-- iOS 状态栏样式 -->
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -19,6 +24,13 @@
            颜色与前端开屏(SplashScreen.vue)首帧同源:深色为默认,
            浅色由下方 prefers-color-scheme:light 分支覆盖。
            此时设计 token 尚未加载,只能跟随系统深浅色,读不到应用内手动主题设置 -->
+      <!-- 静态首屏(开屏动画)已注释(2026-09-15):前端 Vue 开屏组件
+           (SplashScreen.vue / SplashScreenNative.vue)已随 App.vue 一并禁用,
+           此处 index.html 静态首屏是最后一处开屏动画,按要求注释停用。
+           恢复方式:取消本注释块,并在 App.vue 中恢复 SplashScreen 组件引用
+           (见 App.vue 模板注释块中的恢复说明)。
+           注意:注释后 Vue 挂载前 #app 为空、body 为默认白底,存在短暂
+           白屏窗口(本地打包资源同机,间隙极小)。
       <style>
         .splash {
           display: flex;
@@ -119,6 +131,7 @@
         </svg>
         <div class="word">BEDCODE</div>
       </div>
+      -->
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

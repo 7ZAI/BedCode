@@ -837,7 +837,12 @@
 }
 
 .ft-resume-all {
-  margin-left: auto;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ft-resume-all .ft-btn {
+  padding: 3px 10px;
   font-size: 11px;
 }
 
@@ -1570,6 +1575,48 @@
 .ft-timeout-input:focus {
   outline: none;
   border-color: var(--color-primary);
+}
+
+/* 并发数步进器：自绘 − / 值 / +（token-bound，44px 触控目标） */
+.ft-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+.ft-stepper-btn {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-btn);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.ft-stepper-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  background: var(--bg-card);
+}
+
+.ft-stepper-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.ft-stepper-value {
+  min-width: 44px;
+  text-align: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 
 /* ==================== 可信对端管理（TrustedPeersSection，spec 决策 8） ==================== */

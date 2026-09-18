@@ -5,6 +5,7 @@
 pub mod api_bridge;
 pub mod api_registry;
 pub mod approval;
+pub mod downloader;
 pub mod fs_auth;
 pub mod host;
 pub mod loader;

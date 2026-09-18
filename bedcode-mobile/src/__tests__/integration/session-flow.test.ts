@@ -6,7 +6,7 @@
  * terminalBuffer store（状态变更时的 buffer 联动：markSessionRunning /
  * markSessionStopped / clearBuffer）。
  *
- * 测试 seam：mock invoke + plugin-http.fetch（HTTP 按 URL 分发）+ 脚本化
+ * 测试 seam：mock invoke（http_request 按 URL 分发）+ 脚本化
  * ws_sync_* 事件驱动状态联动。
  *
  * 契约注意：HTTP API 响应为 camelCase（wslDistro / workingDir，来自桌面端
@@ -22,7 +22,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import type { RemoteDevice } from '@/composables/model'
-import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockHttpResponse } from './helpers'
+import { flushAsync, loadFreshModule, resetLocalStorage, clearEventHandlers, mockProxyResponse } from './helpers'
 import { useTerminalBufferStore } from '@/stores/terminalBuffer'
 import {
   makeSessionSummary,
@@ -47,7 +47,6 @@ const mockListen = vi.fn((event: string, handler: (payload: unknown) => void) =>
     eventHandlers[event] = (eventHandlers[event] || []).filter((h) => h !== handler)
   })
 })
-const mockFetch = vi.fn()
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (...args: any[]) => mockInvoke(...args),
@@ -55,9 +54,6 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 vi.mock('@tauri-apps/api/event', () => ({
   listen: (...args: any[]) => mockListen(...args),
-}))
-vi.mock('@tauri-apps/plugin-http', () => ({
-  fetch: (...args: any[]) => mockFetch(...args),
 }))
 vi.mock('vue-sonner', () => ({
   toast: { error: vi.fn(), success: vi.fn(), warning: vi.fn(), info: vi.fn(), message: vi.fn() },
@@ -82,6 +78,10 @@ async function emit(name: string, payload?: unknown): Promise<void> {
   }
 }
 
+function invokeCalls(cmd: string): unknown[][] {
+  return mockInvoke.mock.calls.filter(([c]) => c === cmd).map((call) => call.slice(1))
+}
+
 /** HTTP API 响应形状（camelCase，桌面端 HTTP 层契约） */
 function httpConfig(cfg: ReturnType<typeof makeSessionConfigSummary>) {
   return {
@@ -94,30 +94,36 @@ function httpConfig(cfg: ReturnType<typeof makeSessionConfigSummary>) {
   }
 }
 
-/** fetch 按 URL 分发：/api/health 探测 + HTTP API 响应 */
-function installFetchMock(): void {
-  mockFetch.mockImplementation((url: string, options: { method?: string; body?: string }) => {
-    const method = options?.method || 'GET'
-    if (url.endsWith('/api/health')) {
-      return Promise.resolve(mockHttpResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
+/** http_request 按 URL 分发（invoke；返回 HttpProxyResponse 形状） */
+function installProxyMock(): void {
+  mockInvoke.mockImplementation((cmd: string, args: any) => {
+    if (cmd === 'egress_declare_desktop_target') return Promise.resolve(null)
+    if (cmd === 'http_request') {
+      // 与真实 tauri 反序列化一致：命令签名 http_request(request: HttpProxyRequest)
+      const url: string = args?.request?.url || ''
+      const method: string = args?.request?.method || 'GET'
+      if (url.endsWith('/api/health')) {
+        return Promise.resolve(mockProxyResponse({ status: 'ok', port: 8765, uptime_secs: 120 }))
+      }
+      // 会话列表 / 配置列表
+      if (url.endsWith('/api/configs') && method === 'GET') {
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { configs: [httpConfig(makeSessionConfigSummary())] } }))
+      }
+      if (url.endsWith('/api/sessions') && method === 'GET') {
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { sessions: [] } }))
+      }
+      if (url.endsWith('/api/sessions/start') && method === 'POST') {
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } }))
+      }
+      if (url.includes('/stop') && method === 'POST') {
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
+      }
+      if (url.includes('/remove') && method === 'DELETE') {
+        return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
+      }
+      return Promise.resolve(mockProxyResponse({ code: 0, message: 'ok' }))
     }
-    // 会话列表 / 配置列表
-    if (url.endsWith('/api/configs') && method === 'GET') {
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { configs: [httpConfig(makeSessionConfigSummary())] } }))
-    }
-    if (url.endsWith('/api/sessions') && method === 'GET') {
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { sessions: [] } }))
-    }
-    if (url.endsWith('/api/sessions/start') && method === 'POST') {
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok', data: { sessionId: 'session-1', status: 'running' } }))
-    }
-    if (url.includes('/stop') && method === 'POST') {
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
-    }
-    if (url.includes('/remove') && method === 'DELETE') {
-      return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
-    }
-    return Promise.resolve(mockHttpResponse({ code: 0, message: 'ok' }))
+    return Promise.resolve(undefined)
   })
 }
 
@@ -144,8 +150,7 @@ async function connectAndPair(): Promise<void> {
 
 beforeEach(async () => {
   vi.clearAllMocks()
-  installFetchMock()
-  mockInvoke.mockResolvedValue(undefined)
+  installProxyMock()
   setActivePinia(createPinia())
   await freshConnection()
 })
@@ -186,9 +191,12 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     const result = await conn.startSession('config-1')
     await flushAsync()
     expect(result.sessionId).toBe('session-1')
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://192.168.1.100:8765/api/sessions/start',
-      expect.objectContaining({ method: 'POST', body: JSON.stringify({ configId: 'config-1' }) }),
+    const startCall = invokeCalls('http_request').find(([args]) =>
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/start'),
+    )!
+    expect((startCall[0] as { request: { method: string } }).request.method).toBe('POST')
+    expect((startCall[0] as { request: { body: string } }).request.body).toBe(
+      JSON.stringify({ configId: 'config-1' }),
     )
 
     // 桌面端广播会话创建（sync 事件）→ 活跃会话列表联动
@@ -248,10 +256,10 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await conn.stopSession('session-1')
     await flushAsync()
     expect(conn.activeSessions.value[0].status).toBe('stopped')
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://192.168.1.100:8765/api/sessions/session-1/stop',
-      expect.objectContaining({ method: 'POST' }),
-    )
+    const stopCall = invokeCalls('http_request').find(([args]) =>
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/stop'),
+    )!
+    expect((stopCall[0] as { request: { method: string } }).request.method).toBe('POST')
 
     // 桌面端广播停止事件（另一条通道）→ 保留记录显示灰色 + buffer 停止标记
     await emit('ws_sync_session_stopped', makeSyncSessionStopped({ session_id: 'session-1' }))
@@ -274,10 +282,10 @@ describe('会话流：useMobileConnection 会话管理 × useHttpApi × sync 事
     await conn.removeSession('session-1')
     await flushAsync()
     expect(conn.activeSessions.value).toHaveLength(0)
-    expect(mockFetch).toHaveBeenCalledWith(
-      'http://192.168.1.100:8765/api/sessions/session-1/remove',
-      expect.objectContaining({ method: 'DELETE' }),
-    )
+    const removeCall = invokeCalls('http_request').find(([args]) =>
+      (args as { request: { url: string } }).request.url.endsWith('/api/sessions/session-1/remove'),
+    )!
+    expect((removeCall[0] as { request: { method: string } }).request.method).toBe('DELETE')
 
     // 桌面端广播删除事件 → buffer 清理（会话记录不残留）
     await emit('ws_sync_session_created', makeSyncSessionCreated(makeSessionSummary({ id: 'session-1' })))

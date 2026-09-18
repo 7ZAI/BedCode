@@ -2,7 +2,7 @@
 //!
 //! 所有移动端可用的 Tauri 命令调用
 
-import { invoke } from '@tauri-apps/api/core'
+import { invoke, type Channel } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 
@@ -529,4 +529,117 @@ export function clearAuthCredentials() {
   localStorage.removeItem('auth_pairing_id')
   localStorage.removeItem('auth_fingerprint')
   localStorage.removeItem('auth_session_token')
+}
+// ==================== Terminal Link（会话级终端 WS，Rust 后端持有） ====================
+// 两段订阅：
+//   段1 Rust ↔ 桌面端（会话级）— terminalSubscribe/terminalUnsubscribe
+//   段2 前端 ↔ Rust（页面级）— terminalPageSubscribe/terminalPageUnsubscribe
+
+/**
+ * 段1：订阅会话终端输出（会话 WS 连接成功后触发；Rust 管理连接/缓存/意外断开重连）。
+ * 会话级生命周期——与终端页进出无关
+ */
+export async function terminalSubscribe(sessionId: string): Promise<void> {
+  return invoke('terminal_subscribe', { sessionId })
+}
+
+/** 段1：取消订阅（会话停止 / 手动断开）：关闭 Rust 侧连接不再重连 */
+export async function terminalUnsubscribe(sessionId: string): Promise<void> {
+  return invoke('terminal_unsubscribe', { sessionId })
+}
+
+/**
+ * 段2：订阅（进入终端页）— 携带页面级 Tauri Channel，Rust 经它以 TB v3 **二进制帧**
+ * 推送实时输出（帧的唯一出口；状态/重锚仍走全局事件）。
+ *
+ * 幂等，且不依赖段1 链路是否已建立（通道与订阅意愿先于链路记录，链路建立后即生效）。
+ * 未订阅期间 Rust 照常收帧入缓存，重进页面由历史拼接回补。
+ *
+ * 为什么用 Channel 而非全局事件：per-page 通道没有全局广播与事件名匹配开销，负载走
+ * Raw 字节省掉 base64（-33% 体积）与 JSON 序列化/解析（与桌面端终端输出同路径）
+ */
+export async function terminalPageSubscribe(
+  sessionId: string,
+  channel: Channel<ArrayBuffer>,
+): Promise<void> {
+  return invoke('terminal_page_subscribe', { sessionId, channel })
+}
+
+/** 段2：取消订阅（退出终端页）— 清空推送通道，段1 收帧与缓存照常 */
+export async function terminalPageUnsubscribe(sessionId: string): Promise<void> {
+  return invoke('terminal_page_unsubscribe', { sessionId })
+}
+
+/** 全部取消订阅（设备手动断开 / 连接关闭） */
+export async function terminalUnsubscribeAll(): Promise<void> {
+  return invoke('terminal_unsubscribe_all')
+}
+
+/** 会话删除：清理 Rust 侧链路与缓存 */
+export async function terminalRemove(sessionId: string): Promise<void> {
+  return invoke('terminal_remove', { sessionId })
+}
+
+/** 发送终端输入（前端 → Rust → 桌面端 PTY） */
+export async function terminalSendInput(
+  sessionId: string,
+  data: string,
+  specialKey?: string | null,
+): Promise<void> {
+  return invoke('terminal_send_input', { sessionId, data, specialKey: specialKey ?? null })
+}
+
+/** 终端传播模式（双速）：realtime = 进终端页读即传；batch = 退出终端页（满 batch_bytes 才转发） */
+export async function terminalSetMode(sessionId: string, mode: 'realtime' | 'batch'): Promise<void> {
+  return invoke('terminal_set_mode', { sessionId, mode })
+}
+
+/** 渲染背压 ack：推进 Rust 侧 ack 水位（节流回发桌面端） */
+export async function terminalAckRendered(sessionId: string, offset: number): Promise<void> {
+  return invoke('terminal_ack_rendered', { sessionId, offset })
+}
+
+/** 官方历史查询结果（缓存优先；缓存头被淘汰时 Rust 侧回退桌面 HTTP 一次性拉取） */
+export interface TerminalHistoryResult {
+  from: number
+  minOffset: number
+  snapshotOffset: number
+  historyBytes: number
+  dataBase64: string
+  /**
+   * 返回区间内检出字节洞（上游丢帧）——快照是跨洞拼接产物，其声明区间与真实
+   * 负载不符，消费端必须清屏后锚定重播而非直接上屏（可选以兼容旧载荷）
+   */
+  gapDetected?: boolean
+}
+
+/** 一次性历史（Bytes）：[from, snapshotOffset) 区间，历史拼接后前端才开始消费实时帧 */
+export async function terminalGetHistory(sessionId: string, from: number): Promise<TerminalHistoryResult> {
+  return invoke('terminal_get_history', { sessionId, from })
+}
+
+/** Rust 侧链路状态（诊断/轮询） */
+export interface TerminalLinkState {
+  sessionId: string
+  phase: string
+  cursor: number
+  snapshotOffset: number
+  minOffset: number
+  /** 段1 水位：桌面端按此释放未 ack 记账（锚定 Rust 缓存游标） */
+  acked: number
+  mode: string
+  stopped: boolean
+  historyBytes: number
+  /** 段2 订阅态（终端页是否在前台消费） */
+  frontendSubscribed?: boolean
+  /** 段2 水位：前端已渲染游标 */
+  frontendRendered?: number
+  /** 段2 未渲染窗口（背压判定输入） */
+  seg2UnrenderedBytes?: number
+  /** 段2 背压暂停态（窗口越高位水 → 停推，字节留缓存） */
+  seg2Paused?: boolean
+}
+
+export async function terminalGetState(sessionId: string): Promise<TerminalLinkState> {
+  return invoke('terminal_get_state', { sessionId })
 }

@@ -1,263 +1,180 @@
-//! 输出转发层 — 将 OutputEvent 流编码为 TB v2 二进制帧并转发
+//! 输出转发层 — 合帧决策与 TB v3 二进制帧编码
 //!
 //! 从 `terminal_ws` 拆出的纯逻辑部分：不依赖 actor 状态，独立可测。
-//! 合并/直通时序语义由 `forward_loop` 统一保证（见其文档注释与内联测试）。
+//! 合帧决策（`OutputBuffer::should_flush` / 连续性切批）是**纯决策单元**，
+//! 由订阅者执行体（`super::subscriber`）在拉取模型下统一调用——历史上它由
+//! 推送模型的 `forward_loop` 驱动，该循环已随「背压下移」重构下线。
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 use std::time::Duration;
-
-use crate::session::OutputFrame;
 
 // ==================== Output Buffer ====================
 
-/// 转发输出形态：TB v2 二进制帧或历史标记
+/// 转发输出形态：TB v3 二进制帧或控制帧（历史边界 / 重同步 / 终止）
 #[derive(Debug)]
 pub(crate) enum ForwardOutput {
     Binary(Vec<u8>),
     /// 历史边界标记（05 快照协议）：新路由编码 JSON 控制帧 / 旧路由无帧直接吞掉
-    /// min_seq/history_count 为 05 透传元数据（wire 上由 subscribe_ok 携带），
+    /// min_offset/history_bytes 为 05 透传元数据（wire 上由 subscribe_ok 携带），
     /// 保留以备未来 wire 需要（如历史截断提示）
     #[allow(dead_code)]
     HistoryEnd {
-        snapshot_seq: u64,
-        min_seq: u64,
-        history_count: usize,
+        snapshot_offset: u64,
+        min_offset: u64,
+        history_bytes: u64,
+    },
+    /// 重同步信号（spec §4.7）：订阅者游标早于环驻留起点 → 客户端清屏 +
+    /// 以 `min_offset` 重锚，随后服务端从 `min_offset` 连续重播。
+    /// 只增不改：老客户端忽略未知控制帧后退化为既有「缺口 → 重拼接」自愈路径
+    Resync {
+        /// 环当前驻留起点（客户端重锚点）
+        min_offset: u64,
+        /// 重锚后的历史边界（此后 HistoryEnd 以此为界）
+        snapshot_offset: u64,
+    },
+    /// 终止该订阅链路（僵尸订阅者回收）：先尽力下发 error 控制帧，再关闭连接
+    Terminate {
+        code: String,
+        message: String,
     },
 }
 
-/// TB v2 帧头：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE) = 16 字节
-// ==================== TB v2（spec §5.3，本地环回 + 新远程通道） ====================
+// ==================== TB v3（spec §5.3，本地环回 + 新远程通道） ====================
 
-/// TB v2 帧头：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE) = 16 字节
-const V2_FRAME_HEADER_LEN: usize = 16;
-const V2_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
-const V2_FRAME_VERSION: u8 = 2;
+/// TB v3 帧头：magic(2) + version(1) + flags(1) + start_offset(8 LE) + len(4 LE) = 16 字节
+pub(crate) const V3_FRAME_HEADER_LEN: usize = 16;
+const V3_FRAME_MAGIC: [u8; 2] = [0x54, 0x42]; // "TB"
+const V3_FRAME_VERSION: u8 = 3;
 /// flags bit0 = is_waiting（spec §5.3）
-const V2_FRAME_FLAG_WAITING: u8 = 0x01;
-/// flags 高 7 位编码「帧内事件数 - 1」：
-///
-/// 16B 帧头只有单条 seq（8B）+ len（4B）。合并帧含多条事件，消费端若无法
-/// 得知帧内事件数，则无法推导帧末 seq——seq 缺口检测（丢帧自愈）与重播
-/// 去重（跳过 ≤ last_rendered_seq 的帧）都会因合并批次边界误判。
-/// 约定：`seq` = 帧内首事件 index，帧内事件数 = `(flags >> 1) + 1`，
-/// 帧末 seq = `seq + count - 1`。单事件帧高 7 位 = 0，帧头与 spec 原义逐字节一致。
-const V2_FRAME_FLAG_COUNT_SHIFT: u8 = 1;
-/// 单帧事件数上限：flags 高 7 位 = count - 1，最大 128；超出拆分 flush
-const V2_FRAME_MAX_EVENTS: usize = 128;
+const V3_FRAME_FLAG_WAITING: u8 = 0x01;
 
-/// 编码 TB v2 输出帧（spec §5.3：`magic "TB" + version=2 + flags + seq(8 LE) + len(4 LE) + data`）
+// ==================== 双速传播模式（用户需求 3：实时/批次两档） ====================
+
+/// 订阅者传播模式常量定义在 session 层（订阅者状态的一部分），此处重导出
+/// 以保持既有引用点（control_frame / terminal_ws）不变
+pub(crate) use crate::session::{MODE_BATCH, MODE_REALTIME};
+
+/// 编码 TB v3 输出帧（spec §5.3 字节化：`magic "TB" + version=3 + flags + start_offset(8 LE) + len(4 LE) + data`）
 ///
-/// `seq` = 帧内首事件 index；`event_count` = 帧内事件数（1..=128）；
-/// `len` = data 字节数（与 WS 帧边界一致，供解析器快速定位 data 长度）
-fn encode_output_frame_v2(seq: u64, event_count: usize, is_waiting: bool, data: &[u8]) -> Vec<u8> {
-    debug_assert!((1..=V2_FRAME_MAX_EVENTS).contains(&event_count));
-    let flags =
-        ((event_count - 1) as u8) << V2_FRAME_FLAG_COUNT_SHIFT | if is_waiting { V2_FRAME_FLAG_WAITING } else { 0 };
-    let mut frame = Vec::with_capacity(V2_FRAME_HEADER_LEN + data.len());
-    frame.extend_from_slice(&V2_FRAME_MAGIC);
-    frame.push(V2_FRAME_VERSION);
+/// `start_offset` = 帧内首字节的会话内累计偏移；`end_offset = start_offset + len`
+/// 直接可导——高 7 位不再编码事件数（payload 字节长即数量），消费端按字节区间
+/// 做连续性校验（= 游标）、缺口检测（>）与跨帧裁剪（<，根治重复渲染）
+pub(crate) fn encode_output_frame_v3(start_offset: u64, is_waiting: bool, data: &[u8]) -> Vec<u8> {
+    let flags = if is_waiting { V3_FRAME_FLAG_WAITING } else { 0 };
+    let mut frame = Vec::with_capacity(V3_FRAME_HEADER_LEN + data.len());
+    frame.extend_from_slice(&V3_FRAME_MAGIC);
+    frame.push(V3_FRAME_VERSION);
     frame.push(flags);
-    frame.extend_from_slice(&seq.to_le_bytes());
+    frame.extend_from_slice(&start_offset.to_le_bytes());
     frame.extend_from_slice(&(data.len() as u32).to_le_bytes());
     frame.extend_from_slice(data);
     frame
 }
 
-struct OutputBuffer {
+/// 合帧缓冲（纯决策 + 编码单元，无 IO）
+///
+/// 订阅者执行体（环拉取路径）使用：
+/// - 并入（`append_slice` / `append`）+ 连续性切批判定（`is_contiguous_with`）
+/// - 合帧触发判定（`should_flush`：字节窗 / 时间窗 / 双速模式）
+/// - 帧编码（`flush` → TB v3 帧头区间 = 负载）
+///
+/// 把「合帧决策」从循环时序里剥出来，是为了让双速语义与帧区间契约
+/// 可以脱离通道/计时器被单测（见模块内 tests）。
+pub(crate) struct OutputBuffer {
     data: Vec<u8>,
-    /// 帧内首事件 index（TB v2 帧头 seq 来源）
-    start_index: u64,
-    end_index: u64,
+    /// 帧内首个字节的会话内偏移（TB v3 帧头 start_offset 来源）
+    pub(crate) start_offset: u64,
+    /// 帧内末尾字节偏移（end_offset = start_offset + len）
+    pub(crate) end_offset: u64,
     last_is_waiting: bool,
-    /// 帧内事件数（TB v2 帧头 flags 高 7 位来源）
-    event_count: usize,
 }
 
 impl OutputBuffer {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             data: Vec::new(),
-            start_index: 0,
-            end_index: 0,
+            start_offset: 0,
+            end_offset: 0,
             last_is_waiting: false,
-            event_count: 0,
         }
     }
 
-    fn append(&mut self, event: &crate::session::OutputEvent) {
+    /// 按事件并入（生产路径走 `append_slice`；此处供单测构造区间语义一致的批次）
+    #[cfg(test)]
+    pub(crate) fn append(&mut self, event: &crate::session::OutputEvent) {
+        self.append_slice(event.start_offset, &event.data, event.is_waiting);
+    }
+
+    /// 按字节区间并入一段负载（环上 `read_at` 返回的单块视图直接可用）
+    pub(crate) fn append_slice(&mut self, start_offset: u64, data: &[u8], end_is_waiting: bool) {
         if self.data.is_empty() {
-            self.start_index = event.index;
+            self.start_offset = start_offset;
         }
-        // 始终更新 end_index 为最新事件的 index
-        self.end_index = event.index;
-        self.data.extend_from_slice(&event.data);
-        self.last_is_waiting = event.is_waiting;
-        self.event_count += 1;
+        // 始终更新 end_offset 为最新并入区间末
+        self.end_offset = start_offset + data.len() as u64;
+        self.data.extend_from_slice(data);
+        self.last_is_waiting = end_is_waiting;
     }
 
-    fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.data.is_empty()
     }
 
-    /// 合并帧事件数是否已达 TB v2 单帧上限（128）
-    fn at_max_events(&self) -> bool {
-        self.event_count >= V2_FRAME_MAX_EVENTS
+    /// 帧内负载字节数（合帧阈值判定依据）
+    pub(crate) fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// 事件/切片是否与当前批次连续（可安全并入同一帧）。
+    ///
+    /// 判据：缓冲区为空（恒可并入）；或区间首 == 缓冲尾（首尾相接）。
+    /// 带洞（区间首越过缓冲尾——上游丢块 / 截断重播）与重叠（早于缓冲尾）
+    /// 都必须切批：合并后帧头仅记录 `start_offset` 与 `len`，消费端据此
+    /// 推导的区间会与真实负载错位 → 跨帧裁剪/去重静默丢字节、转义序列
+    /// 被切在半途（渲染错位、空白间隔）。
+    pub(crate) fn is_contiguous_with(&self, start_offset: u64) -> bool {
+        self.data.is_empty() || start_offset == self.end_offset
+    }
+
+    /// 合帧触发判定（纯函数，新旧路径共用同一语义）
+    ///
+    /// - `flush_interval = ZERO`：零缓冲直通，恒立即 flush（本地环回通道）
+    /// - batch：仅字节窗（满 `batch_bytes`，无时间窗）
+    /// - realtime：字节窗（`max_buffer_size`）或时间窗（距上次 flush ≥ `flush_interval`）
+    pub(crate) fn should_flush(
+        &self,
+        mode: u8,
+        batch_bytes: usize,
+        max_buffer_size: usize,
+        since_last_flush: Duration,
+        flush_interval: Duration,
+    ) -> bool {
+        if self.data.is_empty() {
+            return false;
+        }
+        if flush_interval.is_zero() {
+            return true;
+        }
+        if mode == MODE_BATCH {
+            return self.data.len() >= batch_bytes;
+        }
+        self.data.len() >= max_buffer_size || since_last_flush >= flush_interval
     }
 
     /// Flush 缓冲区为转发输出
     ///
-    /// 二进制形态（RemoteV2）：帧头 seq = 首事件 index + flags 编码事件数（spec §5.3）
-    fn flush(&mut self) -> ForwardOutput {
-        let frame = encode_output_frame_v2(self.start_index, self.event_count, self.last_is_waiting, &self.data);
+    /// 二进制形态（RemoteV3）：帧头 start_offset = 首字节偏移，payload 转义字节（spec §5.3）
+    pub(crate) fn flush(&mut self) -> ForwardOutput {
+        let frame = encode_output_frame_v3(self.start_offset, self.last_is_waiting, &self.data);
         self.clear();
         ForwardOutput::Binary(frame)
     }
 
     /// 清空缓冲（重置批次元数据）
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         self.data.clear();
-        self.start_index = 0;
-        self.end_index = 0;
-        self.event_count = 0;
-    }
-}
-
-/// 输出转发循环 — 将 OutputEvent 流编码为 ForwardOutput 经 out_tx 送出
-///
-/// 两种模式：
-/// - `flush_interval = ZERO`：零缓冲直通，每条事件立即转发（本地环回通道 / 合并开关关闭）
-/// - 有界延迟合并：字节达 `max_buffer_size` 或距上次 flush 超过 `flush_interval` 时
-///   flush（先到先发），持续输出下延迟恒 ≤ flush_interval。不能用 timeout 重计时代替
-///   时间窗——持续输出时 timeout 永不触发，flush 会退化成仅容量触发，慢速输出
-///   延迟 = 容量/速率（可达数百 ms）
-///
-/// 流代数（stream generation）门控：
-/// 订阅者被替换/取消订阅时旧 forward_loop 被 abort——但 abort 是异步信号，
-/// 任务可能在 await 点之间已把帧投递到 actor 邮箱，Handler 仍会将其发出，
-/// 旧流尾帧与新生订阅帧交错到达 → 客户端字节游标错位 → 连续性违反 → 重订阅风暴。
-/// 每次转发前校验代数：订阅/取消订阅时代数递增，旧代 forward_loop 的残留帧
-/// 直接丢弃，从根源杜绝旧流帧注入新订阅通道
-pub(crate) async fn forward_loop(
-    mut output_rx: tokio::sync::mpsc::Receiver<OutputFrame>,
-    out_tx: tokio::sync::mpsc::Sender<ForwardOutput>,
-    flush_interval: Duration,
-    max_buffer_size: usize,
-    stream_generation: Arc<AtomicU64>,
-    my_gen: u64,
-) {
-    let mut buffer = OutputBuffer::new();
-
-    if flush_interval.is_zero() {
-        // 零缓冲直通：每条事件立即转发，不等待
-        while let Some(frame) = output_rx.recv().await {
-            if stream_generation.load(Ordering::SeqCst) != my_gen {
-                break;
-            }
-            match frame {
-                OutputFrame::Output(event) => {
-                    buffer.append(&event);
-                    if out_tx.send(buffer.flush()).await.is_err() {
-                        break;
-                    }
-                }
-                OutputFrame::HistoryEnd {
-                    snapshot_seq,
-                    min_seq,
-                    history_count,
-                } => {
-                    // 历史边界：先 flush 残留缓冲（保证历史字节完整落盘），
-                    // 再透传标记——标记必须严格保持在历史帧之后（快照协议顺序）
-                    if !buffer.is_empty() && out_tx.send(buffer.flush()).await.is_err() {
-                        break;
-                    }
-                    if out_tx
-                        .send(ForwardOutput::HistoryEnd {
-                            snapshot_seq,
-                            min_seq,
-                            history_count,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-        }
-        return;
-    }
-
-    // 有界延迟合并：时间窗 / 字节窗双条件，先到先发
-    let mut last_flush = tokio::time::Instant::now();
-    loop {
-        match tokio::time::timeout(flush_interval, output_rx.recv()).await {
-            Ok(Some(frame)) => {
-                // 流代数失效（订阅被替换/取消）：残留帧直接丢弃，不转发
-                if stream_generation.load(Ordering::SeqCst) != my_gen {
-                    break;
-                }
-                match frame {
-                    OutputFrame::Output(event) => {
-                        buffer.append(&event);
-                        if buffer.data.len() >= max_buffer_size
-                            || buffer.at_max_events()
-                            || last_flush.elapsed() >= flush_interval
-                        {
-                            if out_tx.send(buffer.flush()).await.is_err() {
-                                break;
-                            }
-                            last_flush = tokio::time::Instant::now();
-                        }
-                    }
-                    OutputFrame::HistoryEnd {
-                        snapshot_seq,
-                        min_seq,
-                        history_count,
-                    } => {
-                        // 历史结束标记：先 flush 残留缓冲，再透传标记（顺序严格）
-                        if !buffer.is_empty() {
-                            if out_tx.send(buffer.flush()).await.is_err() {
-                                break;
-                            }
-                            last_flush = tokio::time::Instant::now();
-                        }
-                        if out_tx
-                            .send(ForwardOutput::HistoryEnd {
-                                snapshot_seq,
-                                min_seq,
-                                history_count,
-                            })
-                            .await
-                            .is_err()
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-            Ok(None) => {
-                // channel 关闭，最终 flush
-                if !buffer.is_empty() {
-                    let _ = out_tx.send(buffer.flush()).await;
-                }
-                break;
-            }
-            Err(_) => {
-                // 空闲超时，flush 缓冲区；仅在确有内容发出时重置时间窗——
-                // 空 buffer 也重置会把持续输出场景的时间窗进度抹掉（timeout 与
-                // 事件同时就绪时 Err 分支先执行，内容 flush 将永远等不到）
-                if !buffer.is_empty() {
-                    if stream_generation.load(Ordering::SeqCst) != my_gen {
-                        break;
-                    }
-                    if out_tx.send(buffer.flush()).await.is_err() {
-                        break;
-                    }
-                    last_flush = tokio::time::Instant::now();
-                }
-            }
-        }
+        self.start_offset = 0;
+        self.end_offset = 0;
+        self.last_is_waiting = false;
     }
 }
 
@@ -267,40 +184,41 @@ pub(crate) async fn forward_loop(
 mod tests {
     use super::*;
 
-    fn event(session_id: &str, data: &[u8], index: u64) -> crate::session::OutputEvent {
+    fn event(session_id: &str, data: &[u8], start_offset: u64) -> crate::session::OutputEvent {
         crate::session::OutputEvent {
             session_id: session_id.to_string(),
             data: data.to_vec(),
-            index,
+            start_offset,
             timestamp: 0,
             is_waiting: false,
         }
     }
 
-    /// TB v2 二进制帧形态：帧头随事件并入批
+    /// TB v3 二进制帧形态：帧头 start_offset 随事件并入批，字节区间自洽
     #[test]
-    fn test_output_buffer_binary_flush_carries_seq_and_data() {
+    fn test_output_buffer_binary_flush_carries_offset_and_data() {
         let mut buf = OutputBuffer::new();
-        buf.append(&event("s", b"ab", 3));
-        buf.append(&event("s", b"cd", 4));
+        buf.append(&event("s", b"ab", 100));
+        buf.append(&event("s", b"cd", 102));
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {
             panic!("expected binary output");
         };
-        // TB v2 帧头：magic(2) + version(1) + flags(1) + seq(8 LE) + len(4 LE)
+        // TB v3 帧头：magic(2) + version(1) = 3 + flags(1) + start_offset(8 LE) + len(4 LE)
         assert_eq!(&frame[0..2], b"TB");
-        assert_eq!(frame[2], 2);
-        // flags：count-1 = 1 → 高 7 位编码 1
-        assert_eq!(frame[3], 2);
-        let seq = u64::from_le_bytes(frame[4..12].try_into().unwrap());
-        assert_eq!(seq, 3);
+        assert_eq!(frame[2], 3);
+        assert_eq!(frame[3], 0); // 非等待、无事件数位
+        let start_offset = u64::from_le_bytes(frame[4..12].try_into().unwrap());
+        assert_eq!(start_offset, 100);
         let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
         assert_eq!(len, 4);
         assert_eq!(&frame[16..16 + len], b"abcd");
+        // end_offset = start_offset + len 直接可导
+        assert_eq!(start_offset + len as u64, 104);
     }
 
-    /// 单事件 flush：count = 1，seq 为事件索引
+    /// 单事件 flush：start_offset 为首事件偏移，len = payload 字节长
     #[test]
     fn test_output_buffer_single_event_flush() {
         let mut buf = OutputBuffer::new();
@@ -311,348 +229,108 @@ mod tests {
             panic!("expected binary output");
         };
         assert_eq!(&frame[0..2], b"TB");
-        assert_eq!(frame[2], 2);
-        assert_eq!(frame[3], 0); // count-1 = 0
-        let seq = u64::from_le_bytes(frame[4..12].try_into().unwrap());
-        assert_eq!(seq, 7);
+        assert_eq!(frame[2], 3);
+        assert_eq!(frame[3], 0); // 单事件非等待：高 7 位无事件数语义
+        let start_offset = u64::from_le_bytes(frame[4..12].try_into().unwrap());
+        assert_eq!(start_offset, 7);
         let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
         assert_eq!(len, 6);
         assert_eq!(&frame[16..16 + len], b"single");
     }
 
-    // ==================== forward_loop 转发循环（合并时序语义） ====================
+    // ==================== 批次连续性（帧区间必须与负载一致） ====================
 
-    /// 启动 forward_loop 并返回 (事件发送端, 输出接收端)
-    fn spawn_forward(
-        flush_interval: Duration,
-        max_buffer_size: usize,
-    ) -> (
-        tokio::sync::mpsc::Sender<OutputFrame>,
-        tokio::sync::mpsc::Receiver<ForwardOutput>,
-        tokio::task::JoinHandle<()>,
-        Arc<AtomicU64>,
-    ) {
-        let (tx, rx) = tokio::sync::mpsc::channel::<OutputFrame>(128);
-        let (out_tx, out_rx) = tokio::sync::mpsc::channel::<ForwardOutput>(128);
-        let generation = Arc::new(AtomicU64::new(0));
-        let fwd = tokio::spawn(forward_loop(
-            rx,
-            out_tx,
-            flush_interval,
-            max_buffer_size,
-            generation.clone(),
-            0,
-        ));
-        (tx, out_rx, fwd, generation)
-    }
-
-    /// 持续输出（事件间隔 < flush_interval）：合并生效且首条消息延迟有界（≤ 时间窗）
-    ///
-    /// 使用 tokio 虚拟时钟（start_paused）精确控制事件节奏，避免真实定时器
-    /// 精度（Windows 上 ~15ms 抖动）干扰批次断言；消费任务与发送并行，
-    /// 记录的是消息实际发出的时刻而非测试开始接收的时刻
-    #[tokio::test(start_paused = true)]
-    async fn test_forward_loop_sustained_output_bounded_delay_and_merging() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(20), 64 * 1024);
-
-        let start = tokio::time::Instant::now();
-        let (res_tx, mut res_rx) = tokio::sync::mpsc::channel::<(usize, Option<Duration>)>(4);
-        // 并行消费：记录每条消息的实际发出时刻（虚拟时钟）
-        let collector = tokio::spawn(async move {
-            let mut messages = 0;
-            let mut first_at: Option<Duration> = None;
-            while let Some(out) = out_rx.recv().await {
-                if first_at.is_none() {
-                    first_at = Some(start.elapsed());
-                }
-                let ForwardOutput::Binary(_) = out else {
-                    panic!("expected text output");
-                };
-                messages += 1;
-            }
-            let _ = res_tx.send((messages, first_at)).await;
-        });
-
-        // 每 5ms 一条小事件，共 30 条（持续 150ms，间隔远小于 20ms 时间窗）
-        for i in 0..30u64 {
-            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        drop(tx);
-
-        let (messages, first_at) = res_rx.recv().await.expect("collector finished");
-        let _ = collector.await;
-        let _ = fwd.await;
-
-        // 合并生效：30 条事件按 20ms 窗聚合成 ~7-8 批（5ms 间隔 → 每批 4-5 条）
-        assert!(messages < 12, "expected merging, got {messages} messages");
-        // 有界延迟：首批事件累积满 20ms 时间窗时发出（虚拟时钟精确）
-        let first = first_at.expect("at least one message");
-        assert!(
-            first >= Duration::from_millis(15) && first <= Duration::from_millis(25),
-            "first message delayed {first:?}, expected ~20ms"
-        );
-    }
-
-    /// 字节窗：单条大事件 ≥ max_buffer_size 时立即 flush，不等待时间窗
-    #[tokio::test(start_paused = true)]
-    async fn test_forward_loop_byte_window_flushes_immediately() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(500), 8);
-
-        let start = tokio::time::Instant::now();
-        tx.send(OutputFrame::Output(event("s", b"0123456789", 0)))
-            .await
-            .unwrap(); // 10 字节 > 8
-        drop(tx);
-
-        let out = tokio::time::timeout(Duration::from_millis(50), out_rx.recv())
-            .await
-            .expect("byte window must flush immediately")
-            .expect("forward_loop exited");
-        // 立即 flush：虚拟时间几乎未流逝，不等到 500ms 时间窗
-        assert!(start.elapsed() < Duration::from_millis(100));
-
-        let ForwardOutput::Binary(frame) = out else {
-            panic!("expected binary output");
-        };
-        // TB v2 帧头解析：seq = 首事件 index，payload 为原始字节
-        let seq = u64::from_le_bytes(frame[4..12].try_into().unwrap());
-        let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
-        assert_eq!(seq, 0);
-        assert_eq!(&frame[16..16 + len], b"0123456789");
-        let _ = fwd.await;
-    }
-
-    /// 空闲 flush：单条小事件后无后续，≤ flush_interval 后发出（不无限滞留）
-    ///
-    /// 注意保持 sender 存活：drop 会触发 final flush 路径（立即发出），
-    /// 而非空闲超时路径
-    #[tokio::test(start_paused = true)]
-    async fn test_forward_loop_idle_flush_within_interval() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(30), 64 * 1024);
-
-        let start = tokio::time::Instant::now();
-        tx.send(OutputFrame::Output(event("s", b"hi", 0))).await.unwrap();
-
-        let out = tokio::time::timeout(Duration::from_millis(80), out_rx.recv())
-            .await
-            .expect("idle flush within interval")
-            .expect("forward_loop exited");
-        // 空闲 flush 由时间窗触发：虚拟时间 ≈30ms（而非无限滞留）
-        let elapsed = start.elapsed();
-        assert!(
-            (Duration::from_millis(25)..=Duration::from_millis(60)).contains(&elapsed),
-            "idle flush elapsed: {elapsed:?}"
-        );
-        assert!(matches!(out, ForwardOutput::Binary(_)));
-
-        drop(tx); // 关闭通道，让循环退出
-        let _ = fwd.await;
-    }
-
-    /// 零间隔（直通模式）：每条事件立即转发，消息数 = 事件数，无合并
-    #[tokio::test]
-    async fn test_forward_loop_zero_interval_passthrough() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024);
-
-        for i in 0..5u64 {
-            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
-        }
-        drop(tx);
-
-        let mut messages = 0;
-        while let Some(out) = out_rx.recv().await {
-            let ForwardOutput::Binary(_) = out else {
-                panic!("expected text output");
-            };
-            messages += 1;
-        }
-        let _ = fwd.await;
-        assert_eq!(messages, 5, "passthrough must forward each event unchanged");
-    }
-
-    /// 通道关闭：未达时间窗/字节窗的残留缓冲最终 flush（合并语义收尾）
-    #[tokio::test]
-    async fn test_forward_loop_final_flush_on_channel_close() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024);
-
-        tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
-        tx.send(OutputFrame::Output(event("s", b"cd", 1))).await.unwrap();
-        drop(tx); // 未达时间窗/字节窗 → 关闭时合并两条最终发出
-
-        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
-            .await
-            .expect("final flush on channel close")
-            .expect("forward_loop exited");
-        let ForwardOutput::Binary(frame) = out else {
-            panic!("expected binary output");
-        };
-        // 合并帧：seq = 首事件 index(0)，count = 2（flags 高 7 位 = 1），payload = abcd
-        let seq = u64::from_le_bytes(frame[4..12].try_into().unwrap());
-        let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
-        assert_eq!(seq, 0);
-        assert_eq!(frame[3], 2, "merged two events");
-        assert_eq!(&frame[16..16 + len], b"abcd");
-
-        // 循环在关闭后退出：recv 返回 Ok(None)（通道关闭）而非超时
-        assert!(
-            matches!(
-                tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
-                Ok(None)
-            ),
-            "forward_loop must exit after channel close"
-        );
-        let _ = fwd.await;
-    }
-
-    /// 流代数门控：代数递增（订阅被替换/取消）后，旧 forward_loop 的残留帧
-    /// 不再转发——abort 是异步信号，旧任务在 await 点之间仍可能拿到帧，
-    /// 代数校验保证这些帧被丢弃，杜绝旧流注入新订阅通道（移动端连续性
-    /// 违反风暴的根源）
-    #[tokio::test]
-    async fn test_forward_loop_generation_gate_drops_stale_frames() {
-        let (tx, mut out_rx, fwd, generation) = spawn_forward(Duration::from_millis(20), 64 * 1024);
-
-        // 订阅被替换：代数递增，旧 forward_loop 立即失效
-        generation.fetch_add(1, Ordering::SeqCst);
-
-        tx.send(OutputFrame::Output(event("s", b"stale", 0))).await.unwrap();
-        drop(tx);
-
-        // 旧代 forward_loop 应丢弃残留帧并退出：无任何消息发出
-        assert!(
-            matches!(
-                tokio::time::timeout(Duration::from_millis(100), out_rx.recv()).await,
-                Ok(None)
-            ),
-            "stale forward_loop must drop buffered frames"
-        );
-        let _ = fwd.await;
-    }
-
-    /// 代数未变：正常转发不受影响（门控仅在替换/取消订阅时生效）
-    #[tokio::test]
-    async fn test_forward_loop_generation_gate_passthrough_when_current() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::ZERO, 64 * 1024);
-
-        tx.send(OutputFrame::Output(event("s", b"live", 0))).await.unwrap();
-        drop(tx);
-
-        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
-            .await
-            .expect("current generation must forward")
-            .expect("forward_loop exited");
-        assert!(matches!(out, ForwardOutput::Binary(_)));
-        let _ = fwd.await;
-    }
-
-    /// HistoryEnd 到达时先 flush 残留缓冲，标记严格保持在历史帧之后（快照协议顺序）
-    #[tokio::test]
-    async fn test_forward_loop_history_end_flushes_and_orders() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024);
-
-        // 两条历史事件未达时间窗/字节窗，残留于缓冲
-        tx.send(OutputFrame::Output(event("s", b"ab", 0))).await.unwrap();
-        tx.send(OutputFrame::Output(event("s", b"cd", 1))).await.unwrap();
-        tx.send(OutputFrame::HistoryEnd {
-            snapshot_seq: 1,
-            min_seq: 0,
-            history_count: 2,
-        })
-        .await
-        .unwrap();
-        drop(tx);
-
-        // 第一条 = 残留历史帧（ab+cd 合并，合成游标 [0,4)）
-        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
-            .await
-            .expect("history must flush before marker")
-            .expect("forward_loop exited");
-        let ForwardOutput::Binary(frame) = out else {
-            panic!("expected binary output");
-        };
-        // 残留历史两事件合并为一帧（ab+cd，count=2）
-        let len = u32::from_le_bytes(frame[12..16].try_into().unwrap()) as usize;
-        assert_eq!(frame[3], 2, "two events merged");
-        assert_eq!(&frame[16..16 + len], b"abcd");
-
-        // 第二条 = HistoryEnd 标记，严格在历史帧后且携带正确元数据
-        let marker = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
-            .await
-            .expect("history end marker")
-            .expect("forward_loop exited");
-        match marker {
-            ForwardOutput::HistoryEnd {
-                snapshot_seq,
-                min_seq,
-                history_count,
-            } => {
-                assert_eq!(snapshot_seq, 1);
-                assert_eq!(min_seq, 0);
-                assert_eq!(history_count, 2);
-            }
-            _ => panic!("expected HistoryEnd marker"),
-        }
-
-        // 标记后无更多帧（通道已关闭）
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
-            Ok(None)
-        ));
-        let _ = fwd.await;
-    }
-
-    // ==================== TB v2（spec §5.3，新远程通道） ====================
-
-    /// 帧头布局：magic(2) + version(1)=2 + flags(1) + seq(8 LE) + len(4 LE) + payload
+    /// 连续性判定：空缓冲恒连续；首尾相接连续；带洞/重叠均不连续
     #[test]
-    fn test_encode_output_frame_v2_header() {
-        let frame = encode_output_frame_v2(100, 1, true, b"hello");
+    fn output_buffer_contiguity_check() {
+        let mut buf = OutputBuffer::new();
+        assert!(buf.is_contiguous_with(100), "空缓冲恒可并入");
+        buf.append(&event("s", b"ab", 100)); // [100,102)
+        assert!(buf.is_contiguous_with(102), "区间首 == 缓冲尾：连续");
+        assert!(!buf.is_contiguous_with(104), "越过缓冲尾（带洞）：不得并入");
+        assert!(!buf.is_contiguous_with(101), "早于缓冲尾（重叠）：不得并入");
+    }
+
+    /// 合帧触发纯决策：零间隔恒直通 / batch 仅字节窗 / realtime 字节窗或时间窗
+    #[test]
+    fn output_buffer_should_flush_decision_matrix() {
+        let mut buf = OutputBuffer::new();
+        // 空缓冲恒不 flush（避免空帧）
+        assert!(!buf.should_flush(
+            MODE_REALTIME,
+            8,
+            8,
+            Duration::from_secs(99),
+            Duration::from_millis(30)
+        ));
+
+        buf.append_slice(0, b"abc", false); // 3 字节
+        // 零缓冲直通：恒立即 flush（本地环回通道，模式无关）
+        assert!(buf.should_flush(MODE_BATCH, 8, 8, Duration::ZERO, Duration::ZERO));
+        // batch：未满 batch_bytes 不 flush（不受时间窗影响）
+        assert!(!buf.should_flush(MODE_BATCH, 8, 8, Duration::from_secs(99), Duration::from_millis(30)));
+        // realtime：未达字节窗但已达时间窗 → flush
+        assert!(buf.should_flush(
+            MODE_REALTIME,
+            8,
+            8,
+            Duration::from_millis(31),
+            Duration::from_millis(30)
+        ));
+        // realtime：时间窗未到且字节窗未达 → 不 flush
+        assert!(!buf.should_flush(
+            MODE_REALTIME,
+            8,
+            8,
+            Duration::from_millis(1),
+            Duration::from_millis(30)
+        ));
+        // 字节窗达标：立即 flush（不等时间窗）
+        assert!(buf.should_flush(MODE_REALTIME, 8, 3, Duration::ZERO, Duration::from_millis(30)));
+        assert!(buf.should_flush(MODE_BATCH, 3, usize::MAX, Duration::ZERO, Duration::from_millis(30)));
+    }
+
+    // ==================== TB v3（spec §5.3，新远程通道） ====================
+
+    /// 帧头布局：magic(2) + version(1)=3 + flags(1) + start_offset(8 LE) + len(4 LE) + payload
+    #[test]
+    fn test_encode_output_frame_v3_header() {
+        let frame = encode_output_frame_v3(100, true, b"hello");
 
         assert_eq!(&frame[0..2], b"TB");
-        assert_eq!(frame[2], 2); // version
-        assert_eq!(frame[3], V2_FRAME_FLAG_WAITING); // 单事件帧：is_waiting
+        assert_eq!(frame[2], 3); // version
+        assert_eq!(frame[3], V3_FRAME_FLAG_WAITING); // is_waiting
         assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 100);
         assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 5); // len
         assert_eq!(&frame[16..], b"hello");
-        assert_eq!(frame.len(), V2_FRAME_HEADER_LEN + 5);
+        assert_eq!(frame.len(), V3_FRAME_HEADER_LEN + 5);
+        // end_offset 直接可导：100 + 5
+        assert_eq!(100 + 5, 105);
     }
 
-    /// 合并帧 flags 高 7 位编码事件数 - 1（帧末 seq = seq + count - 1）
+    /// 连续字节偏移：帧内首字节偏移即 start_offset，字节区间随批次拼接
     #[test]
-    fn test_encode_output_frame_v2_event_count_flags() {
-        let frame = encode_output_frame_v2(5, 4, false, b"abcd");
-        // 4 事件 → (4-1) << 1 = 0b110 = 6；非等待 → bit0 = 0
-        assert_eq!(frame[3], 6);
-        let frame = encode_output_frame_v2(5, 128, true, b"x");
-        // 128 事件 → (128-1) << 1 = 254；等待 → bit0 = 1 → 255
-        assert_eq!(frame[3], 255);
-    }
-
-    /// TB v2 合并 flush：seq = 首事件 index，flags 编码事件数，data 为拼接字节
-    #[test]
-    fn test_output_buffer_v2_flush_merges_with_seq() {
+    fn test_output_buffer_v3_flush_merges_with_offsets() {
         let mut buf = OutputBuffer::new();
         buf.append(&event("s", b"ab", 7));
-        buf.append(&event("s", b"cd", 8));
-        buf.append(&event("s", b"ef", 9));
+        buf.append(&event("s", b"cd", 9));
+        buf.append(&event("s", b"ef", 11));
 
         let out = buf.flush();
         let ForwardOutput::Binary(frame) = out else {
             panic!("expected binary frame");
         };
-        assert_eq!(frame[2], 2);
-        // 3 事件 → (3-1) << 1 = 4
-        assert_eq!(frame[3], 4);
+        assert_eq!(frame[2], 3);
+        assert_eq!(frame[3], 0); // v3 无事件数位
         assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 7);
         assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 6);
         assert_eq!(&frame[16..], b"abcdef");
         assert!(buf.is_empty()); // flush 后清空
     }
 
-    /// TB v2 单事件帧：flags 仅 is_waiting（与 spec 原义逐字节一致）
+    /// TB v3 单事件帧：flags 仅 is_waiting
     #[test]
-    fn test_output_buffer_v2_single_event_flush() {
+    fn test_output_buffer_v3_single_event_flush() {
         let mut buf = OutputBuffer::new();
         buf.append(&event("s", b"single", 3));
 
@@ -660,42 +338,10 @@ mod tests {
         let ForwardOutput::Binary(frame) = out else {
             panic!("expected binary frame");
         };
-        assert_eq!(frame[2], 2);
+        assert_eq!(frame[2], 3);
         assert_eq!(frame[3], 0); // 单事件、非等待
         assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 3);
         assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 6);
         assert_eq!(&frame[16..], b"single");
-    }
-
-    /// 事件数上限：合并批次达到 128 条立即 flush（即使未达字节/时间窗）
-    #[tokio::test(start_paused = true)]
-    async fn test_forward_loop_v2_event_count_cap_flushes() {
-        let (tx, mut out_rx, fwd, _gen) = spawn_forward(Duration::from_millis(60_000), 64 * 1024);
-
-        // 连续发送 128 条小事件（时间窗 60s 未到、字节窗 64KB 未到）
-        for i in 0..128u64 {
-            tx.send(OutputFrame::Output(event("s", b"x", i))).await.unwrap();
-        }
-        drop(tx);
-
-        let out = tokio::time::timeout(Duration::from_millis(100), out_rx.recv())
-            .await
-            .expect("event count cap must flush immediately")
-            .expect("forward_loop exited");
-        let ForwardOutput::Binary(frame) = out else {
-            panic!("expected binary frame");
-        };
-        // 128 事件 → flags 高 7 位 = 127（0b1111111 << 1 = 254）
-        assert_eq!(frame[3], 254);
-        assert_eq!(u64::from_le_bytes(frame[4..12].try_into().unwrap()), 0);
-        assert_eq!(u32::from_le_bytes(frame[12..16].try_into().unwrap()), 128);
-        assert_eq!(&frame[16..], vec![b'x'; 128].as_slice());
-
-        // 事件数清零：批次后通道关闭 → 无残留帧，forward_loop 退出
-        assert!(matches!(
-            tokio::time::timeout(Duration::from_millis(50), out_rx.recv()).await,
-            Ok(None)
-        ));
-        let _ = fwd.await;
     }
 }

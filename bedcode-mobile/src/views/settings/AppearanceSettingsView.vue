@@ -21,19 +21,21 @@
             </div>
           </div>
           <div class="settings-row">
-            <span class="settings-label settings-row-label">{{ $t('settings.appearance.palette') }}</span>
-            <div class="settings-segment" role="group" :aria-label="$t('settings.appearance.palette')">
-              <button
-                v-for="opt in paletteOptions"
-                :key="opt.value"
-                type="button"
-                class="settings-segment-btn"
-                :class="{ active: paletteMode === opt.value }"
-                @click="paletteMode = opt.value"
-              >
-                {{ opt.label }}
-              </button>
-            </div>
+            <span class="settings-label">{{ $t('settings.appearance.palette') }}</span>
+          </div>
+          <!-- 主色色板：小屏放不下 5 个并排按钮，改为全宽换行的色块选择器（色块 + 文字标签，非纯色传达） -->
+          <div class="palette-picker" role="group" :aria-label="$t('settings.appearance.palette')">
+            <button
+              v-for="opt in paletteOptions"
+              :key="opt.value"
+              type="button"
+              class="palette-picker-btn"
+              :class="{ active: paletteMode === opt.value }"
+              @click="paletteMode = opt.value"
+            >
+              <span class="palette-swatch" :style="{ background: `var(--mobile-palette-swatch-${opt.value})` }"></span>
+              <span>{{ opt.label }}</span>
+            </button>
           </div>
           <div class="settings-row">
             <span class="settings-label settings-row-label">{{ $t('settings.appearance.language') }}</span>
@@ -280,6 +282,52 @@ onMounted(loadSettings)
   color: var(--mobile-text-on-accent);
   font-weight: 500;
   box-shadow: 0 1px 4px color-mix(in srgb, var(--mobile-accent) 40%, transparent);
+}
+
+/* ==================== 主色色板选择器（全宽换行色块 + 文字标签） ==================== */
+
+.palette-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.75rem 1rem 0.875rem;
+  border-top: 1px solid var(--mobile-border);
+  border-bottom: 1px solid var(--mobile-border);
+}
+
+.palette-picker-btn {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem; /* 44px 触控目标 */
+  padding: 0.375rem 0.75rem;
+  border-radius: 0.75rem;
+  border: 1px solid var(--mobile-border);
+  background: var(--mobile-bg-elevated);
+  color: var(--mobile-text-secondary);
+  font-size: clamp(0.5625rem, 0.625rem + (100vw - 360px) / 840, 0.6875rem);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+}
+
+.palette-picker-btn:active {
+  opacity: 0.8;
+}
+
+.palette-picker-btn.active {
+  border-color: var(--mobile-accent);
+  background: var(--mobile-accent-muted);
+  color: var(--mobile-accent);
+  font-weight: 500;
+}
+
+.palette-swatch {
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--mobile-border-active) 60%, transparent);
+  flex-shrink: 0;
 }
 
 /* ==================== 字体大小滑块（3 档，自绘外观） ==================== */

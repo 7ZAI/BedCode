@@ -12,7 +12,7 @@
 use crate::server::dtos::session_dto::*;
 use crate::server::dtos::ApiResponse;
 use crate::server::middleware::jwt_auth::get_claims_from_request;
-use crate::session::RendererSource;
+use crate::session::{GlobalOutputManager, RendererSource};
 use crate::system::app_context::AppContext;
 use actix_web::{web, HttpRequest, HttpResponse};
 use tauri::Emitter;
@@ -129,7 +129,11 @@ pub async fn stop_session(req: HttpRequest, path: web::Path<String>) -> HttpResp
 /// 正统渲染端裁决：来源身份取自 JWT claims 的 device_name（移动端）；
 /// 无 claims（未认证/桌面回退）视为 Desktop。裁决不通过时返回
 /// ResizeOutcome::NeedsConfirmation（未应用），客户端弹窗确认后带 force 重发。
-pub async fn resize_session(req: HttpRequest, path: web::Path<String>, body: web::Json<ResizeSessionRequest>) -> HttpResponse {
+pub async fn resize_session(
+    req: HttpRequest,
+    path: web::Path<String>,
+    body: web::Json<ResizeSessionRequest>,
+) -> HttpResponse {
     let session_id = path.into_inner();
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
@@ -222,4 +226,41 @@ pub async fn send_session_input(path: web::Path<String>, body: web::Json<Session
     }
 
     HttpResponse::Ok().json(ApiResponse::ok())
+}
+
+/// GET /api/sessions/{id}/history
+///
+/// 一次性历史拉取（用户需求 3：历史不再走 WS 重播，按快照字节锚点一次性取回）。
+/// 从 `from`（缺省 0）起截取 `[from, snapshot_offset)` 字节（chunk 级跳过 +
+/// 半块 slice），携带字节三件套元数据供消费端做历史拼接/截断判定。
+/// 会话不存在 → 404；from 旧于 min_offset → 收敛到 min_offset 返回。
+pub async fn get_session_history(path: web::Path<String>, query: web::Query<SessionHistoryQuery>) -> HttpResponse {
+    let session_id = path.into_inner();
+    let from = query.from.unwrap_or(0);
+    match GlobalOutputManager::global().snapshot_bytes(&session_id, from).await {
+        Some((data, min_offset, snapshot_offset, history_bytes)) => {
+            // 链路调试（终端字节对账）：移动端缓存头被淘汰时经此接口增量补历史，
+            // 字节三件套与移动端 terminal_get_history 日志对照
+            tracing::debug!(
+                session_id = %session_id,
+                from_offset = from,
+                min_offset,
+                snapshot_offset,
+                history_bytes,
+                payload_bytes = data.len(),
+                "session history served via http"
+            );
+            let response = SessionHistoryData {
+                min_offset,
+                snapshot_offset,
+                history_bytes,
+                data_base64: base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data),
+            };
+            HttpResponse::Ok().json(ApiResponse::ok_with_data(response))
+        }
+        None => {
+            tracing::debug!(session_id = %session_id, "history fetch for unknown session");
+            HttpResponse::Ok().json(ApiResponse::<()>::error(1002, "Session not found"))
+        }
+    }
 }

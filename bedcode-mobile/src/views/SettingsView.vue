@@ -157,6 +157,13 @@ const categoryGroups: SettingsGroup[] = [
         route: 'mobile-settings-authentication',
         iconPath: 'M12 11c0 3.517-1.009 6.799-2.753 9.571m-3.44-2.04l.054-.09A13.916 13.916 0 008 8a4 4 0 118 0c0 1.017-.07 2.019-.203 3m-2.118 6.844A21.88 21.88 0 0015.171 17m3.839 1.132c.645-2.266.99-4.659.99-7.132A8 8 0 008 4.07M3 15.364c.64-1.319 1-2.8 1-4.364 0-1.457.39-2.823 1.07-4',
       },
+      {
+        key: 'egress',
+        labelKey: 'settings.egress.title',
+        descKey: 'settings.egress.subtitle',
+        route: 'mobile-settings-egress',
+        iconPath: 'M12 21a9 9 0 100-18 9 9 0 000 18zm0 0a8.949 8.949 0 01-3-5.618m3 5.618a8.949 8.949 0 013-5.618M12 3c2.5 2.9 4 6.3 4 9s-1.5 6.1-4 9m-4-9c0-2.7 1.5-6.1 4-9',
+      },
     ],
   },
   {

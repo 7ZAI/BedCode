@@ -257,6 +257,26 @@ export const TERMINAL_THEMES: Record<string, TerminalTheme> = {
 const I18N_PREFIX = 'settings.appearance.'
 
 /**
+ * 解析「可传给 xterm 的具体色板」：
+ *
+ * 'system' 条目的颜色值是 var(--mobile-*) 字符串——CSS 变量在样式表里可用，
+ * 但 xterm 只接受可解析的颜色字面量（传 var() 串会落入内部默认色 #2e3440，
+ * 与 App 实际明暗脱节）。凡是要把色板交给 xterm / 写入内联样式的场景，
+ * 都必须先经此函数把 'system' 解析为 dark/light 具体色板；
+ * 仅读取 label 做展示的场景不需要。
+ *
+ * @param themeName - 终端主题名（TERMINAL_THEMES 的 key）
+ * @param isSystemDark - 系统当前是否深色（system 主题的解析依据）
+ * @returns 具体色板；未知主题名回退 dark（与 xterm 默认深色观感一致）
+ */
+export function resolveTerminalTheme(themeName: string, isSystemDark: boolean): TerminalTheme {
+  if (themeName === 'system') {
+    return isSystemDark ? TERMINAL_THEMES.dark : TERMINAL_THEMES.light
+  }
+  return TERMINAL_THEMES[themeName] ?? TERMINAL_THEMES.dark
+}
+
+/**
  * 解析主题显示标签
  *
  * label 为 i18n key（如 'settings.appearance.lightMode'）时通过 t() 解析，

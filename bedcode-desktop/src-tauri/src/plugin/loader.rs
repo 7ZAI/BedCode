@@ -7,6 +7,7 @@
 use crate::plugin::permission::PermissionManager;
 use crate::plugin::types::{LoadedPlugin, PluginSource};
 use crate::plugin::validation::{validate_dir_binding, validate_plugin_id};
+use crate::system::constants::plugin::PLUGIN_DOWNLOAD_TEMP_DIR;
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -20,7 +21,14 @@ impl PluginLoader {
     ///
     /// 目录约定：`plugins/desktop/{plugin-id}/plugin.json`
     /// 解析失败的插件跳过并记录警告，不影响其他插件
-    pub fn load_all(plugins_dir: &Path, permission_mgr: &PermissionManager) -> HashMap<String, LoadedPlugin> {
+    ///
+    /// `source` 参数：内置目录传 None（按 rust_library 推断 Wasm/FileScan），
+    /// 用户插件目录传 Some(PluginSource::UserInstalled)（zip 安装的可卸载插件）
+    pub fn load_all(
+        plugins_dir: &Path,
+        permission_mgr: &PermissionManager,
+        source: Option<PluginSource>,
+    ) -> HashMap<String, LoadedPlugin> {
         tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
 
         if !plugins_dir.exists() {
@@ -50,7 +58,19 @@ impl PluginLoader {
 
             let manifest_path = path.join("plugin.json");
             if !manifest_path.exists() {
-                tracing::debug!("[PluginLoader] Skipping {:?}: no plugin.json", path);
+                // 下载临时区容器目录（user_plugins_dir/plugins/_download_tmp）不是插件
+                // 目录，静默跳过；其余无 plugin.json 的目录是孤儿残留（如历史安装遗留
+                // 的私有数据库 plugin.db），warn 提升可见性——这类目录会被安装查重误判
+                // 为已安装，卡住同 id 插件重装（install 时磁盘查重 final_dir.exists()）。
+                let temp_container = PLUGIN_DOWNLOAD_TEMP_DIR.split('/').next().unwrap_or("");
+                if path.file_name().and_then(|n| n.to_str()) == Some(temp_container) {
+                    tracing::debug!("[PluginLoader] Skipping download temp container: {:?}", path);
+                } else {
+                    tracing::warn!(
+                        dir = %path.display(),
+                        "[PluginLoader] Skipping dir without plugin.json (orphan residue; may block reinstall of same plugin id)"
+                    );
+                }
                 continue;
             }
 
@@ -101,11 +121,18 @@ impl PluginLoader {
                     // 授权并过滤非法权限
                     let granted = permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
 
-                    // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan
-                    let source = if !manifest.rust_library.is_empty() {
-                        PluginSource::Wasm
-                    } else {
-                        PluginSource::FileScan
+                    // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
+                    // 用户插件目录（zip 安装）显式标 UserInstalled，不参与推断。
+                    // clone：source 在循环内被逐插件消费，参数本身不可移动
+                    let source = match source.clone() {
+                        Some(s) => s,
+                        None => {
+                            if !manifest.rust_library.is_empty() {
+                                PluginSource::Wasm
+                            } else {
+                                PluginSource::FileScan
+                            }
+                        }
                     };
 
                     tracing::info!(

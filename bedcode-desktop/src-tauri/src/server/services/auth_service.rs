@@ -158,4 +158,194 @@ mod tests {
     fn test_display_name_without_port_keeps_address() {
         assert_eq!(format_device_display_name("Phone", "myhost"), "Phone (myhost)");
     }
+
+    // ==================== 生物认证核心逻辑（票据 09） ====================
+
+    /// 本组测试构造独立 AppContext（内存 DB + 真实 challenge manager），
+    /// 用全局锁串行化——AppContext 是进程级 OnceLock，首个 init 者胜出，
+    /// 且 lib 单测内无其他模块构造 AppContext（grep 确认），故可独占。
+    /// 依赖 wasmtime 的 PluginHost 初始化较慢，仅构造一次复用。
+    use crate::db::{Database, Pairing};
+    use crate::events::DesktopSyncEvent;
+    use crate::mdns::advertiser::MdnsAdvertiser;
+    use crate::plugin::PluginHost;
+    use crate::server::services::pairing_service::PairingService;
+    use crate::session::{SessionConfigManager, SessionManager};
+    use crate::system::app_context::AppContextBuilder;
+    use crate::system::constants::network::SYNC_EVENT_BROADCAST_CAPACITY;
+    use crate::system::info::SystemInfo;
+    use crate::utils::auth::QrTokenManager;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    static APP_CTX_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 构造全局 AppContext（幂等：OnceLock 已初始化则复用）
+    fn ensure_app_ctx() -> &'static AppContext {
+        static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        INIT.get_or_init(|| {
+            let db = Arc::new(tokio::sync::Mutex::new(
+                Database::new(std::path::Path::new(":memory:")).expect("in-memory db"),
+            ));
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                db.lock().await.init_schema().expect("init schema");
+            });
+            let plugins_dir =
+                std::env::temp_dir().join(format!("bedcode-authsvc-plugins-{}", std::process::id()));
+            std::fs::create_dir_all(&plugins_dir).expect("temp plugins dir");
+
+            let session_db = Database::new(std::path::Path::new(":memory:")).expect("session db");
+            session_db.init_schema().expect("session schema");
+            let session_manager = Arc::new(SessionManager::from_database(
+                session_db,
+                Arc::new(PathBuf::from(".")),
+            ));
+            let config_manager = Arc::new(SessionConfigManager::new(db.clone()));
+            let plugin_host = Arc::new(rt.block_on(PluginHost::new(
+                db.clone(),
+                &plugins_dir,
+                &plugins_dir,
+                session_manager.clone(),
+                config_manager.clone(),
+                None,
+            )));
+            rt.block_on(async { plugin_host.init_message_bus().await });
+
+            let pairing_service = Arc::new(PairingService::new());
+            let qr_manager = Arc::new(QrTokenManager::new());
+            let mdns_advertiser = Arc::new(tokio::sync::RwLock::new(MdnsAdvertiser::new()));
+            let (sync_tx, _) =
+                tokio::sync::broadcast::channel::<DesktopSyncEvent>(SYNC_EVENT_BROADCAST_CAPACITY);
+            let system_info = Arc::new(SystemInfo::collect());
+
+            AppContextBuilder::new()
+                .db(db.clone())
+                .session_manager(session_manager.clone())
+                .config_manager(config_manager.clone())
+                .plugin_host(plugin_host.clone())
+                .pairing_service(pairing_service.clone())
+                .qr_manager(qr_manager.clone())
+                .mdns_advertiser(mdns_advertiser.clone())
+                .app_handle(None)
+                .sync_tx(sync_tx)
+                .resource_dir(Arc::new(PathBuf::from(".")))
+                .system_info(system_info)
+                .build_and_init();
+        });
+        AppContext::global()
+    }
+
+    /// 预置已绑定公钥的配对记录
+    fn seed_pairing(fingerprint: &str, public_key: &str) -> Pairing {
+        let ctx = ensure_app_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let db = ctx.db();
+            {
+                let guard = db.lock().await;
+                guard
+                    .add_pairing("itest-device", fingerprint, public_key, Some("127.0.0.1:9000"), None)
+                    .expect("add pairing");
+            }
+            let guard = db.lock().await;
+            guard.get_pairing_by_fingerprint(fingerprint).expect("fetch pairing").unwrap()
+        })
+    }
+
+    #[test]
+    fn issue_challenge_empty_fingerprint_returns_not_bound() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async { issue_biometric_challenge("").await.unwrap_err() });
+        assert!(matches!(err, BiometricAuthError::CredentialNotBound));
+    }
+
+    #[test]
+    fn issue_challenge_unpaired_device_returns_not_bound() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_app_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async { issue_biometric_challenge("fp-unknown-zzz").await.unwrap_err() });
+        assert!(matches!(err, BiometricAuthError::CredentialNotBound));
+    }
+
+    #[test]
+    fn issue_challenge_paired_without_key_returns_not_bound() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 已配对但未绑定公钥
+        seed_pairing("fp-plain", "");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async { issue_biometric_challenge("fp-plain").await.unwrap_err() });
+        assert!(matches!(err, BiometricAuthError::CredentialNotBound));
+    }
+
+    #[test]
+    fn issue_challenge_paired_with_key_returns_nonce() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        seed_pairing("fp-bound", "fake-spki-base64");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let nonce = rt.block_on(async { issue_biometric_challenge("fp-bound").await.unwrap() });
+        assert_eq!(nonce.len(), 32, "挑战值应为 32 字节 hex");
+    }
+
+    #[test]
+    fn verify_consumes_nonce_single_use() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        seed_pairing("fp-consume", "fake-key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let nonce = issue_biometric_challenge("fp-consume").await.unwrap();
+            // 无有效签名：首次调用应因签名失败而报 SignatureInvalid（但 nonce 已消费）
+            let first = verify_biometric_challenge("fp-consume", &nonce, "bad-sig").await;
+            assert!(matches!(first, Err(BiometricAuthError::SignatureInvalid(_))));
+            // 同一 nonce 二次使用：挑战已消费 → ChallengeInvalid
+            let second = verify_biometric_challenge("fp-consume", &nonce, "bad-sig").await;
+            assert!(matches!(second, Err(BiometricAuthError::ChallengeInvalid(_))));
+        });
+    }
+
+    #[test]
+    fn verify_unpaired_fingerprint_returns_not_paired() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_app_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async {
+            verify_biometric_challenge("fp-ghost", "nonce", "sig").await.unwrap_err()
+        });
+        assert!(matches!(err, BiometricAuthError::ChallengeInvalid(_)), "未配对设备无挑战，消费即失败");
+    }
+
+    #[test]
+    fn bind_empty_key_unbinds() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let pairing = seed_pairing("fp-bind", "original-key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let binding = rt.block_on(async { bind_biometric_credential("fp-bind", "").await.unwrap() });
+        assert!(!binding, "空串 = 解绑，应返回 false");
+        // 解绑后 challenge 下发被拒
+        let err = rt.block_on(async { issue_biometric_challenge("fp-bind").await.unwrap_err() });
+        assert!(matches!(err, BiometricAuthError::CredentialNotBound));
+        let _ = pairing;
+    }
+
+    #[test]
+    fn bind_valid_key_binds() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        seed_pairing("fp-bind2", "old-key");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let binding = rt.block_on(async {
+            bind_biometric_credential("fp-bind2", "new-spki-key").await.unwrap()
+        });
+        assert!(binding, "非空串 = 绑定，应返回 true");
+    }
+
+    #[test]
+    fn bind_unpaired_returns_not_paired() {
+        let _guard = APP_CTX_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        ensure_app_ctx();
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let err = rt.block_on(async { bind_biometric_credential("fp-nopair", "key").await.unwrap_err() });
+        assert!(matches!(err, BiometricAuthError::NotPaired));
+    }
 }

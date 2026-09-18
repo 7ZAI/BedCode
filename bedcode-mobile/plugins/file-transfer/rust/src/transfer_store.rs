@@ -108,9 +108,9 @@ impl TransferEntry {
         )
     }
 
-    /// 是否进行中（含接收待应答）
+    /// 是否进行中（含接收待应答与用户暂停）
     pub(crate) fn is_active(&self) -> bool {
-        matches!(self.status.as_str(), "running" | "pending")
+        matches!(self.status.as_str(), "running" | "pending" | "paused")
     }
 }
 
@@ -184,10 +184,11 @@ pub(crate) fn prune_absent(
 
 /// 重启恢复标注：载入持久层后把 running/pending 改标 `interrupted`。
 /// 与 prune_absent 不同，它不依赖快照（activate 时快照未到先渲染）。
+/// paused 同样标注——宿主会话已随进程消亡，保留 paused 会永久卡死。
 pub(crate) fn mark_interrupted_on_load(entries: &mut [TransferEntry]) -> usize {
     let mut marked = 0;
     for e in entries.iter_mut() {
-        if e.status == "running" || e.status == "pending" {
+        if e.status == "running" || e.status == "pending" || e.status == "paused" {
             e.status = "interrupted".to_string();
             e.rate_bps = 0.0;
             marked += 1;
@@ -240,12 +241,13 @@ pub(crate) fn active_send_entries(entries: &[TransferEntry]) -> Vec<&TransferEnt
         .collect()
 }
 
-/// 接收视图（receiving-changed / list-receiving 共用）：仅正在接收的
-/// running 条目；pending 归待应答（batches），终态归历史视图。
+/// 接收视图（receiving-changed / list-receiving 共用）：正在接收的
+/// running 条目 + 用户暂停的 paused 条目（暂停也是活跃态，须留在接收队列里
+/// 供继续/取消）；pending 归待应答（batches），终态归历史视图。
 pub(crate) fn active_receive_entries(entries: &[TransferEntry]) -> Vec<&TransferEntry> {
     entries
         .iter()
-        .filter(|e| e.direction == "receive" && e.status == "running")
+        .filter(|e| e.direction == "receive" && matches!(e.status.as_str(), "running" | "paused"))
         .collect()
 }
 
@@ -255,6 +257,18 @@ pub(crate) fn mark_cancelled(entries: &mut [TransferEntry], batch_id: &str) -> b
     for e in entries.iter_mut() {
         if e.batch_id == batch_id && e.is_active() {
             e.status = "cancelled".to_string();
+            e.rate_bps = 0.0;
+            return true;
+        }
+    }
+    false
+}
+
+/// 暂停乐观标记：running 条目改标 paused（引擎快照随后确认；暂停释放并发槽）。
+pub(crate) fn mark_paused(entries: &mut [TransferEntry], batch_id: &str) -> bool {
+    for e in entries.iter_mut() {
+        if e.batch_id == batch_id && e.status == "running" {
+            e.status = "paused".to_string();
             e.rate_bps = 0.0;
             return true;
         }
@@ -369,6 +383,75 @@ mod tests {
         assert_eq!(entries[0].status, "interrupted");
         assert_eq!(entries[1].status, "interrupted");
         assert_eq!(entries[2].status, "completed");
+    }
+
+    #[test]
+    fn mark_interrupted_covers_paused_too() {
+        // 宿主会话随进程消亡：paused 任务同样标注 interrupted（保留会卡死）
+        let mut entries = vec![serde_json::from_value::<TransferEntry>(
+            json!({ "batchId": "pz", "direction": "send", "status": "paused" }),
+        )
+        .unwrap()];
+        assert_eq!(mark_interrupted_on_load(&mut entries), 1);
+        assert_eq!(entries[0].status, "interrupted");
+    }
+
+    #[test]
+    fn mark_paused_hits_running_only_and_keeps_progress() {
+        let mut store = vec![
+            serde_json::from_value::<TransferEntry>(dto("run", "send", "running", 1)).unwrap(),
+            serde_json::from_value::<TransferEntry>(dto("pend", "send", "pending", 2)).unwrap(),
+        ];
+        store[0].transferred_bytes = 1024;
+        assert!(mark_paused(&mut store, "run"));
+        assert!(!mark_paused(&mut store, "pend"));
+        assert!(!mark_paused(&mut store, "zz"));
+        assert_eq!(store[0].status, "paused");
+        // 暂停保留已传字节（恢复后续传展示）
+        assert_eq!(store[0].transferred_bytes, 1024);
+        assert_eq!(store[0].rate_bps, 0.0);
+    }
+
+    #[test]
+    fn active_views_include_paused_send_entries() {
+        // paused 显示在「正在发送」队列（用户可继续/取消）
+        let mk = |id: &str, direction: &str, status: &str| {
+            serde_json::from_value::<TransferEntry>(json!({
+                "batchId": id, "direction": direction, "status": status,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("s-run", "send", "running"),
+            mk("s-pause", "send", "paused"),
+            mk("s-done", "send", "completed"),
+            mk("r-pend", "receive", "pending"),
+        ];
+        let send_ids: Vec<&str> =
+            active_send_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(send_ids, vec!["s-run", "s-pause"]);
+    }
+
+    #[test]
+    fn active_receive_view_keeps_paused_and_excludes_other_states() {
+        // 用户暂停的接收任务（下载/拉取）必须留在接收队列（可继续/取消）；
+        // pending 归待应答、终态归历史，均不得出现在接收视图
+        let mk = |id: &str, status: &str| {
+            serde_json::from_value::<TransferEntry>(json!({
+                "batchId": id, "direction": "receive", "status": status,
+            }))
+            .unwrap()
+        };
+        let store = vec![
+            mk("r-run", "running"),
+            mk("r-pause", "paused"),
+            mk("r-pend", "pending"),
+            mk("r-done", "completed"),
+            mk("r-fail", "failed"),
+        ];
+        let recv_ids: Vec<&str> =
+            active_receive_entries(&store).iter().map(|e| e.batch_id.as_str()).collect();
+        assert_eq!(recv_ids, vec!["r-run", "r-pause"]);
     }
 
     #[test]

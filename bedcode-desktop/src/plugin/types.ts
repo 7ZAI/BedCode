@@ -151,7 +151,7 @@ export interface PluginInfo {
   contributes: PluginContributes
   /** 插件图标（manifest.icon 透传，可为空） */
   icon?: string
-  /** 插件来源：builtin / scanned / wasm */
+  /** 插件来源：builtin / scanned / wasm / user-installed（zip 安装）——所有来源均可卸载 */
   source: string
   /** 插件目录总大小（字节） */
   sizeBytes: number

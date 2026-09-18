@@ -17,7 +17,7 @@ pub mod ws;
 
 pub use ws::{
     derive_server_handshake, generate_ephemeral, ClientWsCrypto, Direction, ServerHandshake,
-    WsDirectionCipher, WsTextEnvelope,
+    WsDirectionCipher, WsTextEnvelope, X25519_KEY_LEN,
 };
 
 use base64::Engine as _;
@@ -91,6 +91,19 @@ pub fn fingerprint_of(public: &[u8; 32]) -> String {
 
 fn hex_encode(data: &[u8]) -> String {
     data.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// X25519 DH（原始字节进出；错误即非法输入）
+pub(crate) fn x25519_dh(
+    private: &[u8; X25519_KEY_LEN],
+    peer_public: &[u8; X25519_KEY_LEN],
+) -> Result<[u8; X25519_KEY_LEN]> {
+    let shared = x25519_dalek::x25519(*private, *peer_public);
+    // 全零输出是 x25519 的小子群约束失败信号（RFC 7748 §6.2 建议）
+    if shared == [0u8; X25519_KEY_LEN] {
+        return err("x25519 all-zero shared secret");
+    }
+    Ok(shared)
 }
 
 /// HKDF-SHA256 单次 expand（OKM 长度 ≤ 255*32B，本协议只用 32/36B）
@@ -224,6 +237,44 @@ pub struct HttpEnvelope {
     pub ct: String,
 }
 
+/// HTTP 双方向会话密钥（单请求作用域；与前端 `deriveHttpKeys` 逐字节一致）
+pub struct HttpTrafficKeys {
+    /// 请求方向 AES-256-GCM 密钥
+    pub request: [u8; X25519_KEY_LEN],
+    /// 响应方向 AES-256-GCM 密钥
+    pub response: [u8; X25519_KEY_LEN],
+}
+
+/// 归一化 wire 路径：剥离 query string。桌面端服务端按 `req.path()`（不含
+/// query）计算 HKDF salt 与 AAD；调用方传入的 path 可能带 query（GET 参数
+/// 端点），两端口径必须一致——对齐前端 `linkCrypto.ts` 的 `wirePath`。
+fn wire_path(path: &str) -> &str {
+    match path.find('?') {
+        Some(q) => &path[..q],
+        None => path,
+    }
+}
+
+/// 由临时私钥与 pin 的 Kd 公钥派生两方向会话密钥（字节级对齐前端
+/// `deriveHttpKeys`）：`shared = X25519(eph_priv, kd_public)`；HKDF salt =
+/// `wirePath(path)`（剥 query）；request/response 分别以
+/// `HTTP_INFO_REQUEST` / `HTTP_INFO_RESPONSE` 派生 32B 密钥。
+pub fn derive_http_keys(
+    ephemeral_private: &[u8; X25519_KEY_LEN],
+    kd_public: &[u8; X25519_KEY_LEN],
+    path: &str,
+) -> Result<HttpTrafficKeys> {
+    let shared = x25519_dh(ephemeral_private, kd_public)?;
+    let salt = wire_path(path).as_bytes();
+    let request = hkdf_sha256(Some(salt), &shared, HTTP_INFO_REQUEST, X25519_KEY_LEN)?;
+    let response = hkdf_sha256(Some(salt), &shared, HTTP_INFO_RESPONSE, X25519_KEY_LEN)?;
+    let mut request_key = [0u8; X25519_KEY_LEN];
+    request_key.copy_from_slice(&request);
+    let mut response_key = [0u8; X25519_KEY_LEN];
+    response_key.copy_from_slice(&response);
+    Ok(HttpTrafficKeys { request: request_key, response: response_key })
+}
+
 /// 明文 → 信封 JSON 字节（随机 nonce；HTTP 密钥每次请求全新，无 nonce 复用风险）
 pub fn encrypt_http_body(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
     let mut nonce_bytes = [0u8; AES_NONCE_LEN];
@@ -306,5 +357,28 @@ mod tests {
         let fp = fingerprint_of(&[0xABu8; 32]);
         assert_eq!(fp.len(), 16);
         assert!(fp.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    }
+
+    /// derive_http_keys 金样：固定向量来自真实前端 linkCrypto.ts（@noble
+    /// 实现）——断言 Rust 派生逐字节一致；带 query 的 path 与不带 query
+    /// 结果一致（wirePath 剥 query 对齐）。
+    #[test]
+    fn derive_http_keys_matches_frontend_golden() {
+        let eph_priv: [u8; X25519_KEY_LEN] = core::array::from_fn(|i| (i as u8) + 1);
+        let kd_pub: [u8; X25519_KEY_LEN] = core::array::from_fn(|i| (i as u8) + 0x21);
+        let keys = derive_http_keys(&eph_priv, &kd_pub, "/api/sessions").unwrap();
+        assert_eq!(
+            hex_encode(&keys.request),
+            "0dad8fe94a247193ddab92476e47ac0025999f9891dcccd8a264f2706fe54092"
+        );
+        assert_eq!(
+            hex_encode(&keys.response),
+            "420470007109d9ace723eb7b64b635e40073839d384dfa7b2f3832049621daac"
+        );
+        // 剥 query：带 query 的 path 派生与不带 query 一致
+        let with_query =
+            derive_http_keys(&eph_priv, &kd_pub, "/api/sessions?offset=0&limit=10").unwrap();
+        assert_eq!(with_query.request, keys.request);
+        assert_eq!(with_query.response, keys.response);
     }
 }

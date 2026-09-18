@@ -65,9 +65,7 @@ pub async fn start_existing_session(
         (Some(c), Some(r)) if c > 0 && r > 0 => Some((c, r)),
         _ => None,
     };
-    let result = session_manager
-        .start_existing_session(&session_id, initial_size)
-        .await;
+    let result = session_manager.start_existing_session(&session_id, initial_size).await;
     match result {
         Ok(_) => {
             tracing::info!(session_id = %session_id, "Session started successfully");

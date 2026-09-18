@@ -1,6 +1,6 @@
 <template>
   <div class="h-full flex flex-col bg-[var(--bg-page)]">
-    <!-- ==================== 工具栏页头：左标题+计数，右刷新 ==================== -->
+    <!-- ==================== 工具栏页头：左标题+计数，右插件工具栏+刷新（最右） ==================== -->
     <div class="wb-toolbar">
       <div class="flex items-center gap-2.5">
         <h1 class="text-[calc(13px*var(--ui-scale))] font-semibold text-[var(--text-primary)]">
@@ -11,18 +11,20 @@
           {{ $t('desktop.plugin.enabledSection') }}</span
         >
       </div>
-      <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
-        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            stroke-width="1.75"
-            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-          />
-        </svg>
-        {{ $t('desktop.plugin.refresh') }}
-      </button>
-      <PluginPageToolbar target="plugins" />
+      <div class="flex items-center gap-2">
+        <PluginPageToolbar target="plugins" />
+        <button class="wb-btn-ghost" :disabled="loading" @click="loadPlugins()">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              stroke-width="1.75"
+              d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+            />
+          </svg>
+          {{ $t('desktop.plugin.refresh') }}
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-auto p-5">
@@ -37,23 +39,27 @@
           </div>
         </div>
 
-        <!-- ==================== 空态 ==================== -->
-        <div v-else-if="!loading && plugins.length === 0" class="py-16 text-center">
-          <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">
-            {{ $t('desktop.plugin.noPlugins') }}
-          </p>
-          <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-1">
-            {{ $t('desktop.plugin.noPluginsHint') }}
-          </p>
-        </div>
-
         <!-- ==================== ENABLED / DISABLED 分区 ==================== -->
         <template v-else>
-          <!-- ENABLED 分区 -->
+          <!-- ENABLED 分区（分区头承载「加载插件」入口：该分区渲染时它就是页面第一个标题，
+               入口固定在第一个标题右侧，不随分区内容增减跳动） -->
           <section v-if="enabledPlugins.length > 0" class="mb-6">
-            <h2 class="wb-section-title">
-              {{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}
-            </h2>
+            <div class="plugin-section-header flex items-center justify-between mb-2">
+              <h2 class="wb-section-title">
+                {{ $t('desktop.plugin.enabledSection') }} · {{ enabledPlugins.length }}
+              </h2>
+              <button class="wb-btn-primary" :disabled="installing" @click="showInstallSheet = true">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.75"
+                    d="M12 4v7m0 0l-3-3m3 3l3-3M5 14v3a2 2 0 002 2h10a2 2 0 002-2v-3"
+                  />
+                </svg>
+                {{ $t('desktop.plugin.loadPlugin') }}
+              </button>
+            </div>
             <div
               class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden"
             >
@@ -167,12 +173,43 @@
             </div>
           </section>
 
-          <!-- DISABLED 分区 -->
-          <section v-if="disabledPlugins.length > 0">
-            <h2 class="wb-section-title">
-              {{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}
-            </h2>
+          <!-- DISABLED 分区（分区头常显：无已启用插件时它成为页面第一个标题，承接同一入口） -->
+          <section>
+            <div class="plugin-section-header flex items-center justify-between mb-2">
+              <h2 class="wb-section-title">
+                {{ $t('desktop.plugin.disabledSection') }} · {{ disabledPlugins.length }}
+              </h2>
+              <button
+                v-if="enabledPlugins.length === 0"
+                class="wb-btn-primary"
+                :disabled="installing"
+                @click="showInstallSheet = true"
+              >
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    stroke-width="1.75"
+                    d="M12 4v7m0 0l-3-3m3 3l3-3M5 14v3a2 2 0 002 2h10a2 2 0 002-2v-3"
+                  />
+                </svg>
+                {{ $t('desktop.plugin.loadPlugin') }}
+              </button>
+            </div>
+
+            <!-- 无任何插件：空态提示（分区头与安装入口保留，不随列表为空消失） -->
+            <div v-if="plugins.length === 0" class="py-12 text-center">
+              <p class="text-[calc(13px*var(--ui-scale))] font-medium text-[var(--text-primary)]">
+                {{ $t('desktop.plugin.noPlugins') }}
+              </p>
+              <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mt-1">
+                {{ $t('desktop.plugin.noPluginsHint') }}
+              </p>
+            </div>
+
+            <!-- 未启用插件列表 -->
             <div
+              v-else-if="disabledPlugins.length > 0"
               class="bg-[var(--bg-card)] border border-[var(--border)] rounded-[10px] divide-y divide-[var(--border)] overflow-hidden"
             >
               <div v-for="plugin in disabledPlugins" :key="plugin.id" class="plugin-row">
@@ -284,6 +321,45 @@
 
     <!-- ==================== 启停遮罩弹窗（通用 LoadingOverlay 组件） ==================== -->
     <LoadingOverlay :visible="!!togglingPluginInfo" :message="togglingPluginInfo?.message" />
+
+    <!-- ==================== 加载插件弹窗（从 zip 安装） ==================== -->
+    <Modal v-model="showInstallSheet" size="sm" :title="$t('desktop.plugin.loadPluginSheetTitle')">
+      <p class="text-[calc(12px*var(--ui-scale))] text-[var(--text-secondary)] mb-4 leading-relaxed">
+        {{ $t('desktop.plugin.loadPluginHint') }}
+      </p>
+      <button
+        class="w-full flex items-center gap-3 px-4 py-3 rounded-[8px] border border-dashed border-[var(--border-strong)] text-left transition-colors hover:bg-[var(--bg-hover)] disabled:opacity-50"
+        :disabled="installing"
+        @click="handleInstallFile"
+      >
+        <svg class="w-4 h-4 text-[var(--color-primary)] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            stroke-width="1.75"
+            d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"
+          />
+        </svg>
+        <span
+          class="text-[calc(12px*var(--ui-scale))] font-medium"
+          :class="installing ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-primary)]'"
+        >
+          {{ installing ? $t('desktop.plugin.installing') : $t('desktop.plugin.installFromFile') }}
+        </span>
+      </button>
+      <p class="text-[calc(11px*var(--ui-scale))] text-[var(--text-tertiary)] mt-2">
+        {{ $t('desktop.plugin.installFromFileDesc') }}
+      </p>
+      <template #footer>
+        <button
+          class="w-full py-2 text-[calc(12px*var(--ui-scale))] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors"
+          :disabled="installing"
+          @click="showInstallSheet = false"
+        >
+          {{ $t('desktop.plugin.installCancel') }}
+        </button>
+      </template>
+    </Modal>
   </div>
 </template>
 
@@ -295,12 +371,17 @@
  * 卡片主体点击进入详情页，chevron 展开简介折叠区。
  * 启停操作显示全页遮罩弹窗，防反复点击。
  */
-import { computed, onActivated, onMounted, reactive } from 'vue'
+import { computed, onActivated, onMounted, reactive, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { usePluginManager } from '@/composables/usePluginManager'
 import LoadingOverlay from '@/components/LoadingOverlay.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import PluginIcon from '@/components/PluginIcon.vue'
+import Modal from '@/components/Modal.vue'
+import { open } from '@tauri-apps/plugin-dialog'
+import { pluginInstallFromFile } from '@/plugin/commands'
+import { useToast } from '@/composables/useToast'
+import i18n from '@/locales'
 import {
   getContributionChips,
   getStateKey,
@@ -315,6 +396,34 @@ import {
 const router = useRouter()
 const { plugins, loading, togglingId, togglingPluginInfo, loadPlugins, togglePlugin } =
   usePluginManager()
+const toast = useToast()
+const t = i18n.global.t
+
+/** 加载插件弹窗状态 */
+const showInstallSheet = ref(false)
+const installing = ref(false)
+
+/** 从文件安装：文件选择器选 zip 插件包 → 后端安装 → 刷新列表 */
+async function handleInstallFile(): Promise<void> {
+  try {
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Plugin', extensions: ['zip'] }],
+    })
+    if (typeof selected !== 'string') return
+    installing.value = true
+    const pluginId = await pluginInstallFromFile(selected)
+    toast.success(t('desktop.plugin.installSuccess', { name: pluginId }))
+    await loadPlugins()
+  } catch (e: any) {
+    toast.error(t('desktop.plugin.installFailed', { error: e.message || String(e) }))
+  } finally {
+    installing.value = false
+    // 无论成功失败都收起弹窗（成功时列表已刷新，失败时 toast 已提示）
+    showInstallSheet.value = false
+  }
+}
 
 /** 简介折叠状态（每个插件独立控制） */
 const descExpanded = reactive<Record<string, boolean>>({})
@@ -358,6 +467,16 @@ onActivated(() => {
 .overlay-enter-from,
 .overlay-leave-to {
   opacity: 0;
+}
+
+/* ==================== 未启用分区头（标题 + 加载插件按钮同行） ==================== */
+/*
+ * wb-section-title 自带 margin-bottom: 8px，在同行布局里会撑高行盒、让标题文字
+ * 相对按钮偏心；用更高优先级的后代选择器归零（Tailwind 的 mb-0 工具类在打包
+ * 产物中先于该普通规则输出，覆盖不掉）。
+ */
+.plugin-section-header .wb-section-title {
+  margin-bottom: 0;
 }
 
 /* ==================== 启停开关 ==================== */

@@ -34,6 +34,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'cancel', id: string): void
   (e: 'retry', id: string): void
+  (e: 'pause', id: string): void
+  (e: 'resume', id: string): void
+  (e: 'resumeAll'): void
   (e: 'cancel-receiving', sessionId: string): void
   (e: 'clear-history'): void
   (e: 'open-location', id: string): void
@@ -143,18 +146,30 @@ function taskActions(task: Task): TaskAction[] {
   if (task.state === 'failed' || task.state === 'rejected' || task.state === 'interrupted') {
     btns.push({ kind: 'retry', label: t('transfer.task.retry'), variant: 'tint' })
   }
+  if (task.state === 'transferring') {
+    btns.push({ kind: 'pause', label: t('transfer.task.pause'), variant: 'neutral' })
+  }
+  if (task.state === 'paused') {
+    btns.push({ kind: 'resume', label: t('transfer.task.resume'), variant: 'tint' })
+  }
   if (!isTerminalState(task.state)) {
     btns.push({ kind: 'cancel', label: t('transfer.task.cancel'), variant: 'neutral' })
   }
   return btns
 }
 
+/** 是否存在已暂停任务（「全部继续」按钮可见性） */
+function hasPaused(tasks: Task[]): boolean {
+  return tasks.some((task) => task.state === 'paused')
+}
+
 // ==================== 接收中（ReceivingTask → 卡片） ====================
 
-/** 接收中状态文案（running/transferring → 正在接收；终态 → 结果文案） */
+/** 接收中状态文案（running/transferring → 正在接收；paused → 已暂停；终态 → 结果文案） */
 function receivingStateKey(task: ReceivingTask): string {
   if (task.state === 'running' || task.state === 'transferring') return 'transfer.task.receiving'
   switch (task.state) {
+    case 'paused': return 'transfer.task.state.paused'
     case 'completed': return 'transfer.history.results.completed'
     case 'failed': return 'transfer.history.results.failed'
     case 'rejected': return 'transfer.history.results.rejected'
@@ -165,6 +180,7 @@ function receivingStateKey(task: ReceivingTask): string {
 
 function receivingStateClass(task: ReceivingTask): string {
   if (task.state === 'running' || task.state === 'transferring') return 'ft-color-active'
+  if (task.state === 'paused') return 'ft-color-paused'
   if (task.state === 'completed') return 'ft-color-completed'
   if (task.state === 'cancelled') return 'ft-color-cancelled'
   return 'ft-color-failed'
@@ -200,6 +216,22 @@ function historyStateClass(state: string): string {
   if (state === 'completed') return 'ft-color-completed'
   if (state === 'cancelled') return 'ft-color-cancelled'
   return 'ft-color-failed'
+}
+
+/** 接收任务操作：传输中可暂停（拉取发起方门控对端推流），已暂停可继续，
+ * 非终态可取消（与发送方向同语义；push 接收由对端发送会话门控） */
+function receivingActions(task: ReceivingTask): TaskAction[] {
+  const btns: TaskAction[] = []
+  if (task.state === 'running' || task.state === 'transferring') {
+    btns.push({ kind: 'pause', label: t('transfer.task.pause'), variant: 'neutral' })
+  }
+  if (task.state === 'paused') {
+    btns.push({ kind: 'resume', label: t('transfer.task.resume'), variant: 'tint' })
+  }
+  if (!RECEIVING_TERMINAL.has(task.state)) {
+    btns.push({ kind: 'cancel-receiving', label: t('transfer.task.cancel'), variant: 'neutral' })
+  }
+  return btns
 }
 
 /** 取消原因码 → i18n（兼容旧引擎本地化文本 wire：'cancelled by sender' 等） */
@@ -257,6 +289,8 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
   switch (kind) {
     case 'cancel': emit('cancel', id); break
     case 'retry': emit('retry', id); break
+    case 'pause': emit('pause', id); break
+    case 'resume': emit('resume', id); break
     case 'cancel-receiving': emit('cancel-receiving', id); break
     case 'clear-history': emit('clear-history'); break
     case 'open-location': emit('open-location', id); break
@@ -277,6 +311,12 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
       >
         {{ t(f.labelKey) }}
         <span v-if="f.count > 0" class="fv2-filter-count">{{ f.count }}</span>
+      </button>
+    </div>
+    <!-- 全部继续（存在已暂停任务时；独立操作按钮） -->
+    <div v-if="hasPaused(tasks)" class="fv2-resume-all">
+      <button type="button" class="fv2-resume-all-btn" @click="emit('resumeAll')">
+        {{ t('transfer.task.resumeAll') }}
       </button>
     </div>
 
@@ -315,9 +355,7 @@ function onCardAction(kind: TaskAction['kind'], id: string): void {
             progress-class="ft-progress-active"
             :indeterminate="(task.state === 'running' || task.state === 'transferring') && (task.offset ?? 0) === 0"
             :reason="receivingReason(task)"
-            :actions="task.state === 'running' || task.state === 'transferring'
-              ? [{ kind: 'cancel-receiving', label: t('transfer.task.cancel'), variant: 'neutral' }]
-              : []"
+            :actions="receivingActions(task)"
             @action="onCardAction"
           />
         </template>

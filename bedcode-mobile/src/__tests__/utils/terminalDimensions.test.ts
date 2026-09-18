@@ -4,6 +4,7 @@
  */
 import { describe, it, expect } from 'vitest'
 import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
+import { TERMINAL_SCROLLBAR_GUTTER_PX } from '@/utils/terminalMetrics'
 
 const base = {
   containerWidthCss: 1000,
@@ -33,11 +34,12 @@ describe('getXtermScaledDimensions (DPR 感知)', () => {
     expect(r).toEqual({ cols: 99, rows: 25 })
   })
 
-  it('cell 高×DPR 为小数时 ceil：保证最后一行放得下', () => {
-    // cell 高 15px，DPR=1.5 → char高=ceil(22.5)=23（非 floor）
+  it('cell 高×DPR 为小数时不 ceil（原始值），最后一行仍放得下', () => {
+    // cell 高 15px，DPR=1.5 → char高=22.5（不 ceil）：rows=floor(750/22.5)=33
+    // 33×22.5=742.5 ≤ 750 物理可用高，最后一行完整不裁；ceil 反会高估每行
+    // 成本（23px）少算 1 行（32），贴底对齐时顶部露出多余空带
     const r = getXtermScaledDimensions({ ...base, cellHeightCss: 15, devicePixelRatio: 1.5 })
-    // 可用高=750，char高=ceil(22.5)=23 → rows=floor(750/23)=32
-    expect(r.rows).toBe(32)
+    expect(r.rows).toBe(33)
   })
 
   it('marginCols/marginRows 额外扣除格数', () => {
@@ -58,6 +60,30 @@ describe('getXtermScaledDimensions (DPR 感知)', () => {
     expect(r.cols).toBeGreaterThan(0)
     expect(r.rows).toBeGreaterThan(0)
     expect(Number.isFinite(r.cols)).toBe(true)
+    // 兜底精确语义：DPR=0 与 DPR=1 计算结果完全一致（变异：把 <=0 改为 <0 → 本断言失败）
+    expect(r).toEqual(getXtermScaledDimensions({ ...base, devicePixelRatio: 1 }))
+    // 负数 DPR 同样按 1 兜底
+    expect(getXtermScaledDimensions({ ...base, devicePixelRatio: -2 })).toEqual(
+      getXtermScaledDimensions({ ...base, devicePixelRatio: 1 }),
+    )
+  })
+
+  it('可用物理宽 ≤ 0（容器 ≤ 滚动条预留宽）→ cols 钳制为 1', () => {
+    // 容器宽恰好等于滚动条预留宽：扣减后可用物理宽 = 0 → floor 得 0 → Math.max(...,1)
+    const exactly = getXtermScaledDimensions({
+      ...base,
+      devicePixelRatio: 1,
+      containerWidthCss: TERMINAL_SCROLLBAR_GUTTER_PX,
+    })
+    expect(exactly.cols).toBe(1)
+    // 容器宽小于预留宽：可用物理宽为负 → 仍钳制为 1（行数不受影响）
+    const negative = getXtermScaledDimensions({
+      ...base,
+      devicePixelRatio: 1,
+      containerWidthCss: TERMINAL_SCROLLBAR_GUTTER_PX - 1,
+    })
+    expect(negative.cols).toBe(1)
+    expect(negative.rows).toBeGreaterThan(1)
   })
 
   it('恒为非零合法维度（极小容器也拿 1 行 1 列）', () => {

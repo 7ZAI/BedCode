@@ -6,7 +6,7 @@
  */
 
 import { ref } from 'vue'
-import { fetch } from '@tauri-apps/plugin-http'
+import { externalRequest } from './useHttpApi'
 import i18n from '@/locales'
 
 /** 更新状态 */
@@ -75,16 +75,18 @@ async function checkForUpdate(): Promise<UpdateInfo | null> {
   updateInfo.value = null
 
   try {
-    const response = await fetch(GITHUB_API_LATEST, {
+    // 经 Rust 统一代理发出（external 类）：GitHub API 命中宿主内置 L2 声明直接放行；
+    // 响应体由 Rust 解码（bodyText），状态码非 2xx 视为失败
+    const resp = await externalRequest(GITHUB_API_LATEST, {
       method: 'GET',
       headers: { Accept: 'application/vnd.github+json' },
     })
 
-    if (!response.ok) {
-      throw new Error(`GitHub API returned ${response.status}`)
+    if (resp.status !== 200) {
+      throw new Error(`GitHub API returned ${resp.status}`)
     }
 
-    const release: GitHubRelease = await response.json()
+    const release: GitHubRelease = JSON.parse(resp.bodyText)
     const remoteVersion = release.tag_name
     const localVersion = __APP_VERSION__
 

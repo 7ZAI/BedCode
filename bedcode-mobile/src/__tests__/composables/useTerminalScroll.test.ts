@@ -203,10 +203,11 @@ describe('useTerminalScroll', () => {
     scroll.handleShortcutsPanelToggle(120)
     expect(scroll.shortcutsPanelHeight.value).toBe(120)
 
-    // 向上滚动后 → 忽略面板高度（不遮当前行）
+    // 向上滚动后 → 忽略面板高度（不遮当前行）；传入新值 500 断言旧值保留，
+    // 可杀死「忘记 isAtBottom 守卫而无条件赋值」的变异
     state.viewportY = 1
     onScrollCb.cb!(1)
-    scroll.handleShortcutsPanelToggle(120)
+    scroll.handleShortcutsPanelToggle(500)
     expect(scroll.shortcutsPanelHeight.value).toBe(120) // 保持旧值，不覆盖
 
     // 面板收起 → 归零
