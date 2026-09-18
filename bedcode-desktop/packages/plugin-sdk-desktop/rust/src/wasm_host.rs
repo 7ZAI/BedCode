@@ -128,6 +128,13 @@ impl HostDatabase for WasmHost {
             None => Ok(None),
         }
     }
+
+    fn db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+        let sqls_str = serde_json::to_string(sqls).map_err(|e| HostError::custom(-1, format!("db_execute_batch: serialize failed: {}", e)))?;
+        host_database::execute_batch(&sqls_str)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("db_execute_batch", e))
+    }
 }
 
 impl HostPluginDatabase for WasmHost {
@@ -167,6 +174,15 @@ impl HostPluginDatabase for WasmHost {
             Some(s) => parse_json("plugin_db_query_params", s).map(Some),
             None => Ok(None),
         }
+    }
+
+    fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+        let sqls_str = serde_json::to_string(sqls).map_err(|e| {
+            HostError::custom(-1, format!("plugin_db_execute_batch: serialize failed: {}", e))
+        })?;
+        host_plugin_database::execute_batch(&sqls_str)
+            .map(|n| n as i32)
+            .map_err(|e| host_err("plugin_db_execute_batch", e))
     }
 }
 

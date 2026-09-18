@@ -333,11 +333,17 @@ interface host-session {
 }
 
 /// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）
+///
+/// v14 内纯增量追加 `execute-batch`（ABI 版本惯例：函数级追加不 bump，旧插件不受影响）：
+/// 单次调用内宿主持有连接锁、事务内顺序执行多语句，任一句失败整体回滚。
+/// 禁止跨调用裸 BEGIN/COMMIT（宿主对 execute/execute-params 做事务控制语句白名单检测）。
 interface host-database {
     execute: func(sql: string) -> result<u32, string>;
     query: func(sql: string) -> result<option<string>, string>;
     execute-params: func(sql: string, params-json: string) -> result<u32, string>;
     query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+    /// 事务内顺序执行多语句（sqls-json 为 SQL 字符串数组），返回受影响行数合计
+    execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
 /// 插件独立数据库（原 database.rs：plugin_db_*）
@@ -346,6 +352,8 @@ interface host-plugin-database {
     query: func(sql: string) -> result<option<string>, string>;
     execute-params: func(sql: string, params-json: string) -> result<u32, string>;
     query-params: func(sql: string, params-json: string) -> result<option<string>, string>;
+    /// 事务内顺序执行多语句（sqls-json 为 SQL 字符串数组），返回受影响行数合计
+    execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================

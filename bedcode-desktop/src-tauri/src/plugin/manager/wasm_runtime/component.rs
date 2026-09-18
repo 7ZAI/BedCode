@@ -113,6 +113,10 @@ impl bedcode::plugin::host_database::Host for WasmPluginState {
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
         database::db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
     }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        database::db_execute_batch(&self.host_ctx, &self.plugin_id, &sqls_json)
+    }
 }
 
 impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
@@ -130,6 +134,10 @@ impl bedcode::plugin::host_plugin_database::Host for WasmPluginState {
 
     fn query_params(&mut self, sql: String, params_json: String) -> Result<Option<String>, String> {
         database::plugin_db_query_params(&self.host_ctx, &self.plugin_id, &sql, &params_json)
+    }
+
+    fn execute_batch(&mut self, sqls_json: String) -> Result<u32, String> {
+        database::plugin_db_execute_batch(&self.host_ctx, &self.plugin_id, &sqls_json)
     }
 }
 
@@ -330,23 +338,11 @@ impl bedcode::plugin::host_peer::Host for WasmPluginState {
     }
 
     fn browse_directory(&mut self, session: String, dir_id: String, rel_path: String) -> Result<String, String> {
-        peer::peer_browse_directory(
-            &self.host_ctx,
-            &self.plugin_id,
-            &session,
-            &dir_id,
-            &rel_path,
-        )
+        peer::peer_browse_directory(&self.host_ctx, &self.plugin_id, &session, &dir_id, &rel_path)
     }
 
     fn pull_files(&mut self, session: String, dir_id: String, files_json: String) -> Result<u32, String> {
-        peer::peer_pull_files(
-            &self.host_ctx,
-            &self.plugin_id,
-            &session,
-            &dir_id,
-            &files_json,
-        )
+        peer::peer_pull_files(&self.host_ctx, &self.plugin_id, &session, &dir_id, &files_json)
     }
 
     fn set_download_dir(&mut self, path: String) -> Result<(), String> {
@@ -1100,7 +1096,11 @@ pub(crate) fn build_wasi_ctx(
         .enumerate()
     {
         // 首个声明挂载到 /data（WASI 插件约定根），后续依次 /data1、/data2…
-        let guest_path = if i == 0 { "/data".to_string() } else { format!("/data{}", i) };
+        let guest_path = if i == 0 {
+            "/data".to_string()
+        } else {
+            format!("/data{}", i)
+        };
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!(
                 plugin_id = %plugin_id,
