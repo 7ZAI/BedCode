@@ -47,6 +47,8 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── agent-hub/                    # Agent Hub 插件：Agent CLI 统一管理台——环境检测与一键安装、
 │   │                                 #   Skills 管理（浏览/编辑/分发/GitHub 安装/本地导入）、
 │   │                                 #   供应商统一配置、使用统计与会话日志解析
+│   │                                 #   ⚠ 暂不参与发布：未收录于根 scripts/plugin-package-list.json（zip 附件）
+│   │                                 #   与 scripts/plugin-build.js 的 PLUGINS（随包内置插件）；源码保留供开发
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端，
 │   │                                 #   聊天 UI、供应商配置、提示词优化
 │   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，

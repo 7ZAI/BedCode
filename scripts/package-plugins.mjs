@@ -34,7 +34,7 @@
  *
  * 本地示例：
  *   node scripts/package-plugins.mjs --list
- *   node scripts/package-plugins.mjs --target desktop --plugin agent-hub
+ *   node scripts/package-plugins.mjs --target desktop --only file-transfer
  *   node scripts/package-plugins.mjs --target all --exclude auto-task --version 2.1.0
  */
 

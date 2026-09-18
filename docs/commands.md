@@ -170,8 +170,8 @@ node scripts/package-plugins.mjs --target mobile
 
 # 只打包指定插件（--only 忽略配置列表；--plugin 追加；--exclude 排除；
 # 同名插件两端自动匹配）
-node scripts/package-plugins.mjs --only agent-hub
-node scripts/package-plugins.mjs --plugin file-transfer --exclude ai-chatbox
+node scripts/package-plugins.mjs --only ai-chatbox
+node scripts/package-plugins.mjs --plugin file-transfer --exclude auto-task
 
 # 跳过构建直接打包已有产物；指定 zip 版本号；只构建收集产物、不打 zip
 node scripts/package-plugins.mjs --skip-build --version 2.1.0
@@ -179,9 +179,12 @@ node scripts/package-plugins.mjs --no-zip
 ```
 
 - **插件列表**：默认 `scripts/plugin-package-list.json`
-  （desktop: `agent-hub`/`ai-chatbox`/`auto-task`/`file-transfer`，
-  mobile: `ai-chatbox`/`auto-task`/`file-transfer`），增删插件改该文件即可；
+  （desktop 与 mobile 同：`ai-chatbox`/`auto-task`/`file-transfer`），增删插件改该文件即可；
   也可用 `--config <file>` 换列表文件
+- **agent-hub 不参与发布**：源码仍在 `bedcode-desktop/plugins/agent-hub/`（dev 分支持续开发），
+  但已移出发布清单——不进 release 的 zip 附件；CI 的 `plugins:build`（生成随包内置插件
+  `resources/plugins/desktop/`）使用的 `bedcode-desktop/scripts/plugin-build.js` 的 PLUGINS 本就未收录它。
+  恢复发布只需把它加回 `scripts/plugin-package-list.json` 的 desktop 数组
 - **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，
   与移动端 SDK `bedcode-plugin package` 分发格式一致）；`--out <dir>` 可改输出目录
 - **CI**：`.github/workflows/release.yml` 的 `package-plugins` job 构建并上传全部插件 zip
