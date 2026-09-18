@@ -41,7 +41,7 @@ const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
 const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
 const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
 
-/// 宿主原语能力清单（18 组 host-* WIT 接口，与 Linker 接线一一对应）
+/// 宿主原语能力清单（19 组 host-* WIT 接口，与 Linker 接线一一对应）
 ///
 /// 注册表启动即全量登记为宿主原语提供者：能力对依赖检查恒可用，
 /// 系统组件激活时可按名替换为 WASM 提供者。
@@ -64,6 +64,7 @@ const HOST_PRIMITIVE_CAPABILITIES: &[&str] = &[
     "host-timer",
     "host-process",
     "host-app",
+    "host-websocket",
 ];
 
 /// 可路由能力表：能力名 → 该能力接口要求组件导出的全部函数

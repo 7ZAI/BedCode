@@ -30,6 +30,7 @@ pub(super) mod status;
 pub(super) mod storage;
 pub(super) mod terminal;
 pub(super) mod timer;
+pub(crate) mod ws;
 mod wsl_fs;
 
 use crate::plugin::manager::wasm_runtime::WasmHostContext;

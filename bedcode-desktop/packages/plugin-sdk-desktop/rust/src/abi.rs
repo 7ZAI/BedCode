@@ -42,7 +42,12 @@
 //!   `advertise` / `stop-advertise` / `is-advertising` 三原语 + 浏览事件
 //!   定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增
 //!   serviceType / browserId 字段）。纯增量变更，v12 插件二进制不受影响
-pub const ABI_VERSION: u32 = 13;
+//! - v14: host-websocket 基础能力服务（WS 传输原语）：新增
+//!   `host-websocket`（客户端域 connect/send-text/send-binary/close/
+//!   is-connected + 服务端域 register-endpoint/收发/广播/踢出/注销/清单）
+//!   与可选导出 `events-ws`（宿主动态探测，未导出 → 消息帧丢弃 + 首次
+//!   warn + 计数）。纯增量变更，v13 插件二进制不受影响
+pub const ABI_VERSION: u32 = 14;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -56,11 +61,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v13() {
-        // 版本号序列与历史 core ABI 共用：v13 = host-mdns v2（mDNS 基础能力
-        // 服务契约：advertise 三原语 + 浏览事件定向投递），叠加 v12 总线二进制
-        // 载荷与 v11 host-peer 传输控制三原语（能力超集）
-        assert_eq!(ABI_VERSION, 13);
+    fn test_abi_version_is_v14() {
+        // 版本号序列与历史 core ABI 共用：v14 = host-websocket 基础能力服务
+        // （WS 传输原语 + 可选导出 events-ws），叠加 v13 host-mdns v2、
+        // v12 总线二进制载荷与 v11 host-peer 传输控制三原语（能力超集）
+        assert_eq!(ABI_VERSION, 14);
     }
 
     #[test]

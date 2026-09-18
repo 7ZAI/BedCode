@@ -1,0 +1,26 @@
+{
+  "id": "com.bedcode.ws-test",
+  "name": "WS Test Plugin",
+  "version": "0.1.0",
+  "description": "host-websocket（ABI v14）fixture：出站连接 + 入站端点 + owner 作用域状态事件 + events-ws 帧回调",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_ws_test",
+  "permissions": [
+    "storage",
+    "ws:client",
+    "ws:server"
+  ],
+  "api": [],
+  "contributes": {
+    "commands": [],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}

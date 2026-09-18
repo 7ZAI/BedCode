@@ -384,8 +384,7 @@ pub(crate) async fn subscriber_loop(
         // ---------- 等唤醒：新数据（watch）/ ack / 时间窗到 / 统计打点 ----------
         // realtime 且缓冲有残留：时间窗到即 flush（延迟有界 ≤ flush_interval）；
         // batch 不因时间窗 flush（纯批次语义，未满批次的数据按设计滞留环中）
-        let flush_deadline = if !planner.is_empty() && last_mode == MODE_REALTIME && !cfg.flush_interval.is_zero()
-        {
+        let flush_deadline = if !planner.is_empty() && last_mode == MODE_REALTIME && !cfg.flush_interval.is_zero() {
             Some(last_flush + cfg.flush_interval)
         } else {
             None
@@ -854,7 +853,7 @@ mod tests {
         }
 
         h.push(b"aaaabbbb").await; // 驻留 [0,8)，游标推进到 8（窗口 8 → 驻留）
-        // 继续产出：环淘汰最旧 → min_offset 推进越过驻留中的游标 8
+                                   // 继续产出：环淘汰最旧 → min_offset 推进越过驻留中的游标 8
         h.push(b"ccccdddd").await; // 淘汰 [0,8) → min=8, max=16
         h.push(b"eeeeffff").await; // 淘汰 [8,16) → min=16, max=24
         h.push(b"gggghhhh").await; // 淘汰 [16,24) → min=24, max=32
@@ -1075,10 +1074,7 @@ mod tests {
             .expect("退订后任务必须退出（不能停留在驻留等待）")
             .expect("任务正常结束");
         // 安静退出：无终止帧（僵尸路径才发）、无额外控制帧
-        assert!(
-            h.recv_control().await.is_none(),
-            "退订退出不得下发 Terminate/错误帧"
-        );
+        assert!(h.recv_control().await.is_none(), "退订退出不得下发 Terminate/错误帧");
     }
 
     /// 会话产出端结束（watch 发送端 drop）：驻留中的任务安静退出，不算僵尸

@@ -28,6 +28,7 @@ pub mod session;
 pub mod storage;
 pub mod terminal;
 pub mod timer;
+pub mod ws;
 
 pub use app::HostApp;
 pub use bus::HostBus;
@@ -45,6 +46,7 @@ pub use session::HostSession;
 pub use storage::HostStorage;
 pub use terminal::HostTerminal;
 pub use timer::HostTimer;
+pub use ws::{ws_event_topic, HostWebsocket, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_ERROR, WS_OPEN};
 
 /// 宿主调用错误
 ///
@@ -166,6 +168,7 @@ pub trait HostApi:
     + HostTimer
     + HostProcess
     + HostApp
+    + HostWebsocket
 {
 }
 
@@ -187,5 +190,6 @@ impl<T> HostApi for T where
         + HostTimer
         + HostProcess
         + HostApp
+        + HostWebsocket
 {
 }

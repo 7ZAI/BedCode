@@ -96,6 +96,29 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    /// 接收 WS 客户端域消息帧（v14，可选，默认忽略）
+    ///
+    /// 由宿主 host-websocket 出站连接任务投递（`events-ws` 可选导出，宿主
+    /// 实例化后动态探测）；`kind` = `"text"` | `"binary"`，`payload` 统一字节列
+    /// （text 为 UTF-8 字节，零 JSON 转义）；**同一连接内按到达序投递**（保序）。
+    /// 无返回值（观察型回调）：处理失败经 `host-log` 记录，不中断后续帧投递。
+    /// 状态事件请另行在 activate 期订阅 `ws:open/error/close.<owner>`（host-bus）。
+    fn on_ws_message(_handle: &str, _kind: &str, _payload: &[u8]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    /// 接收 WS 服务端域（插件端点）对端消息帧（v14，可选，默认忽略）
+    ///
+    /// 语义同 [`WasmPlugin::on_ws_message`]，标识为端点句柄 + 对端 client-id。
+    fn on_ws_client_message(
+        _endpoint_id: &str,
+        _client_id: &str,
+        _kind: &str,
+        _payload: &[u8],
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// 接收会话生命周期事件（可选，默认忽略）
     ///
     /// 由宿主 SessionManager 直接分发，不走消息总线。
@@ -446,6 +469,34 @@ macro_rules! wasm_entry {
             }
         }
 
+        // ==================== events-ws（v14，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_ws::exports::bedcode::plugin::events_ws::Guest for $plugin_type {
+            /// 客户端域消息帧（handle = `wsc-<uuid>`）
+            fn on_message(handle: String, kind: String, payload: Vec<u8>) {
+                // 无返回值（观察型回调）：处理失败经 host-log 记录，宿主不断开连接
+                if let Err(e) =
+                    <$plugin_type as $crate::wasm::WasmPlugin>::on_ws_message(&handle, &kind, &payload)
+                {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(&host, &format!("on_ws_message failed: {}", e));
+                }
+            }
+
+            /// 服务端域消息帧（endpoint-id = `wse-<uuid>`，client-id 为对端连接 id）
+            fn on_client_message(endpoint_id: String, client_id: String, kind: String, payload: Vec<u8>) {
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_ws_client_message(
+                    &endpoint_id,
+                    &client_id,
+                    &kind,
+                    &payload,
+                ) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(&host, &format!("on_ws_client_message failed: {}", e));
+                }
+            }
+        }
+
         // ==================== 组件导出 ====================
 
         // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 5 组接口的 cabi 导出）。
@@ -454,5 +505,7 @@ macro_rules! wasm_entry {
         $crate::wasm::export!($plugin_type);
         // v11：events-binary 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
         $crate::wasm_binary::export!($plugin_type);
+        // v14：events-ws 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_ws::export!($plugin_type);
     };
 }

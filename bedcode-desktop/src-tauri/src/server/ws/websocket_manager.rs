@@ -179,6 +179,20 @@ impl WebSocketManager {
     /// 调用 `ServerHandle::stop(true)` 优雅停机，等待所有 WS actor 的 stopping() 回调完成
     /// actor stopping() 中已负责 unregister + unsubscribe，此处仅做防御性清理残留
     pub async fn stop(&self) -> Result<()> {
+        // 插件端点客户端：优雅停机前统一下发 Close(1001)（spec §4.5 停机关闭码）。
+        // 此刻 actor 仍在运行 → 消息送达 → 通道层照常上报 client-disconnect
+        // （「恰好一次」的停机路径），随后 stop(true) 等待其 stopping() 收尾
+        let registry = WsSessionRegistry::global();
+        let closed = registry
+            .disconnect_all_endpoint_clients(1001, "server shutting down")
+            .await;
+        if closed > 0 {
+            tracing::info!(
+                clients = closed,
+                "plugin endpoint clients notified before server shutdown"
+            );
+        }
+
         // 优雅停机 — stop(true) 会等待所有连接关闭，actor stopping() 在此期间完成
         {
             let mut handle_lock = self.inner.server_handle.write().await;
@@ -189,7 +203,6 @@ impl WebSocketManager {
         }
 
         // 防御性清理：actor stopping() 应已清理，此处处理异常残留
-        let registry = WsSessionRegistry::global();
         let clients = registry.list_clients().await;
         if !clients.is_empty() {
             tracing::warn!(
@@ -380,7 +393,7 @@ impl WebSocketManager {
 
     /// 更新客户端认证状态
     pub async fn set_authenticated(&self, _addr: &SocketAddr, client_id: Option<String>, fingerprint: Option<String>) {
-        // TerminalWs actor 认证时已通过 WsSessionRegistry 更新
+        // WsConnBase（WS 连接骨架）认证时已通过 WsSessionRegistry 更新
         // 此方法保留用于 auth_service 等外部调用者的兼容性
         if let Some(cid) = client_id {
             let registry = WsSessionRegistry::global();

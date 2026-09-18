@@ -26,6 +26,28 @@ const SUBSCRIBER_QUEUE_CAPACITY: usize = 64;
 
 // ==================== MessageDispatcher Trait ====================
 
+/// WS 帧投递请求（ABI v14 `events-ws` 可选导出域）
+///
+/// 与总线消息平行：WS 帧天然文本/二进制双形态且需保序，经 JSON 总线必然
+/// base64 膨胀，故走独立导出回调（spec §2.2 D2）；状态事件仍走总线 topic。
+#[derive(Debug, Clone)]
+pub enum WsFrameDispatch {
+    /// 客户端域：连接句柄 + 帧类型（"text" / "binary"）+ 载荷
+    /// （text 为 UTF-8 字节，零 JSON 转义）
+    Client {
+        handle: String,
+        kind: String,
+        payload: Vec<u8>,
+    },
+    /// 服务端域：端点句柄 + 对端 client-id + 帧类型 + 载荷
+    EndpointClient {
+        endpoint_id: String,
+        client_id: String,
+        kind: String,
+        payload: Vec<u8>,
+    },
+}
+
 /// 消息投递器 — MessageBus 通过此 trait 将消息投递给插件
 ///
 /// 由 PluginHost 实现，避免 MessageBus 与 PluginHost 循环引用
@@ -34,6 +56,18 @@ pub trait MessageDispatcher: Send + Sync + 'static {
     fn dispatch_to_wasm(&self, plugin_id: &str, msg: &BusMessage) -> anyhow::Result<()>;
     /// 检查插件是否已激活
     fn is_activated(&self, plugin_id: &str) -> bool;
+
+    /// 投递 WS 帧给插件的 `events-ws` 可选导出（ABI v14）
+    ///
+    /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 插件未导出该接口
+    /// （调用方按 spec §2.2 降级：丢弃 + 首次 warn + 计数，宿主不缓存）；
+    /// `Err` = 投递失败（trap / 实例不可用）。
+    ///
+    /// 默认实现返回 `Ok(false)`：非生产投递器（测试替身）未接 WS 通道时
+    /// 视为「无导出」，不影响既有实现与用例。
+    fn dispatch_ws_frame(&self, _plugin_id: &str, _frame: &WsFrameDispatch) -> anyhow::Result<bool> {
+        Ok(false)
+    }
 }
 
 // ==================== BusMessageHandler Trait ====================
@@ -124,6 +158,14 @@ impl MessageBus {
     pub async fn set_dispatcher(&self, dispatcher: Arc<dyn MessageDispatcher>) {
         let mut d = self.dispatcher.write().await;
         *d = Some(dispatcher);
+    }
+
+    /// 取当前投递器（未注入 → None：两阶段初始化的中间态）
+    ///
+    /// 供**非总线路径**的定向投递使用：host-websocket（ABI v14）的 `events-ws`
+    /// 帧回灌不经 topic 订阅，直接按属主寻址投给插件实例
+    pub async fn dispatcher(&self) -> Option<Arc<dyn MessageDispatcher>> {
+        self.dispatcher.read().await.clone()
     }
 
     /// 注入 core-monitor 注册表（订阅者队列满丢弃 / 格式不匹配拒绝计数落点；

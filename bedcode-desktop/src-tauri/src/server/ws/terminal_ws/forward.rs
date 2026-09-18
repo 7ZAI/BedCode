@@ -256,16 +256,10 @@ mod tests {
     fn output_buffer_should_flush_decision_matrix() {
         let mut buf = OutputBuffer::new();
         // 空缓冲恒不 flush（避免空帧）
-        assert!(!buf.should_flush(
-            MODE_REALTIME,
-            8,
-            8,
-            Duration::from_secs(99),
-            Duration::from_millis(30)
-        ));
+        assert!(!buf.should_flush(MODE_REALTIME, 8, 8, Duration::from_secs(99), Duration::from_millis(30)));
 
         buf.append_slice(0, b"abc", false); // 3 字节
-        // 零缓冲直通：恒立即 flush（本地环回通道，模式无关）
+                                            // 零缓冲直通：恒立即 flush（本地环回通道，模式无关）
         assert!(buf.should_flush(MODE_BATCH, 8, 8, Duration::ZERO, Duration::ZERO));
         // batch：未满 batch_bytes 不 flush（不受时间窗影响）
         assert!(!buf.should_flush(MODE_BATCH, 8, 8, Duration::from_secs(99), Duration::from_millis(30)));
@@ -278,13 +272,7 @@ mod tests {
             Duration::from_millis(30)
         ));
         // realtime：时间窗未到且字节窗未达 → 不 flush
-        assert!(!buf.should_flush(
-            MODE_REALTIME,
-            8,
-            8,
-            Duration::from_millis(1),
-            Duration::from_millis(30)
-        ));
+        assert!(!buf.should_flush(MODE_REALTIME, 8, 8, Duration::from_millis(1), Duration::from_millis(30)));
         // 字节窗达标：立即 flush（不等时间窗）
         assert!(buf.should_flush(MODE_REALTIME, 8, 3, Duration::ZERO, Duration::from_millis(30)));
         assert!(buf.should_flush(MODE_BATCH, 3, usize::MAX, Duration::ZERO, Duration::from_millis(30)));

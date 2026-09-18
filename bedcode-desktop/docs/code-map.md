@@ -126,7 +126,7 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
   - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
     WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
-    events/http/mdns/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
+    events/http/mdns/ws/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
     统一注册到 Linker
   - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
@@ -139,6 +139,29 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
 - **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面（配置文件 + 运行时覆盖）、
   运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
 - **permission**：共享词汇（bedcode-plugin-api 再导出）
+
+### 宿主能力实现域 · WebSocket 基础能力服务 — `host-websocket`（ABI v14）
+
+WIT 契约 `host-websocket`（14 函数，SDK `rust/wit/bedcode.wit`）、可选导出 `events-ws`、
+ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务代码红线（ADR 0022）**：
+宿主只做引擎原语（连接生命周期 / 帧收发 / 句柄登记 / 属主仲裁 / 按属主回收 / 事件定向投递），
+消息格式、房间、协议、重连策略一律归插件。权限按域拆 `ws:client`（出站暴露面）/ `ws:server`（入站暴露面）。
+
+- **客户端域（出站）**：`ws_connect`（同步阻塞至握手完成，仅 `ws://`，`wss://` 显式拒绝）→
+  句柄 `wsc-<uuid>`；`send-text` / `send-binary`（有界队列，满 → fail-visible `Err`）、
+  `close`、`is-connected`；每连接读写任务，帧经可选导出 `events-ws` 回灌，**不自动重连**；
+  单插件连接数上限 `PLUGIN_WS_MAX_CONNS_PER_PLUGIN`；
+- **服务端域（入站）**：`register-endpoint` 在宿主 WS 服务器挂载 `/ws/plugin/<plugin-id>/<path>`
+  （命名空间段由宿主注入，插件只给后缀 → 插件间不存在路径抢占）；认证策略 `auth: none | jwt`
+  （后者校验首消息 `{"type":"auth","token":"<jwt>"}`，超时 / 失败 close 4001）；
+  收发原语 `send-text-to-client` / `send-binary-to-client` / `broadcast-text` / `broadcast-binary`、
+  踢出 `close-client`（缺省 4004）、注销 `unregister-endpoint`（含下线全部客户端 4005）、
+  清单 `list-clients` / `list-endpoints`（丢失事件后的自愈快照）；
+- **端点注册表**：`server/ws/endpoint.rs`（端点句柄 → 属主 / 挂载路径 / 认证策略 / 上限 / 事件总线）；
+- **双通道投递**：状态事件走消息总线 **owner 作用域 topic**（`ws:open|error|close.<owner>`、
+  `ws:client-connect|client-disconnect.<owner>`，标识在 payload，非属主物理上订阅不到）；
+  消息帧走 `events-ws` 回调（未导出 → 丢弃 + 首次 `warn` + 计数，宿主不缓存）；
+- **回收**：插件停用 → `ws::purge_for_plugin` 关闭并摘除其全部出站连接与入站端点（只碰本人，4005）。
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
 
@@ -154,8 +177,22 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   握手与帧编解码；以 LinkEncryptionFilter 注册进全局链生效；配置域
   trafficEncryption 全部默认关（opt-in），get/set 命令供设置页调用
 - **services/**：业务服务（认证、配对、会话配置/控制、终端服务）
-- **ws/**：WebSocket 终端链路（消息类型、连接注册表、WS actor、管理器）
-- **app.rs / supervisor.rs**：路由配置与服务器启动、服务器生命周期管理；另有端口检查、指标
+- **ws/**：全部 WS 服务层（连接骨架 + 通道处理器 + 注册表 + 端点表 + 终端转发子模块）
+  - **conn.rs**：**通用连接骨架**（零业务语义）——心跳（5s ping / 45s 超时）、首消息认证策略
+    `AuthMode{Required,None}` 与认证窗口、帧级流量过滤链（inbound / outbound）、注册表登记与
+    离线判定、连接终止原因（`CloseOutcome`）透出、优雅关闭；`ChannelHandler` trait 是通道协议
+    的唯一切口（`auth_mode` / `auth_timeout_close_code` / 各生命周期回调）；
+  - **channel/{terminal,event,plugin}.rs**：三个通道实现——`/ws/terminal/session/{id}`（控制帧协议）、
+    `/ws/event`（旧 `Message` 兼容面）、`/ws/plugin/{plugin_id}/{path}`（插件端点：认证策略由端点
+    声明、帧转投属主插件、接入/断开事件上报）。**新增通道 = 新增一个实现 + 路由构造点，不改骨架**；
+  - **subscription.rs**：输出订阅原语（订阅/退订/传播模式 + 背压 ack + 桥接任务）；
+  - **endpoint.rs**：插件端点注册表（属主 + 挂载路径 + 认证策略 + 上限 + 总线；只碰本人的回收）；
+  - **registry.rs**：连接注册表（`ChannelKind{Terminal,Event,Plugin}` + owner/endpoint_id，
+    广播过滤、在线判定、端点域寻址与属主回收）；
+  - **terminal_ws/**（control_frame / forward / subscriber）与 **message.rs**（移动端兼容红线）、
+    **websocket_manager.rs**（生命周期与优雅停机；停机前对插件端点客户端下发 1001）、**session.rs**
+- **app.rs / supervisor.rs**：路由配置（含插件端点通配路由 `/ws/plugin/{plugin_id}/{path:.*}`，
+  未注册 / 属主未激活 404、连接数超限升级前 503）与服务器启动、服务器生命周期管理；另有端口检查、指标
 
 ### 会话管理 — `src-tauri/src/session/`
 

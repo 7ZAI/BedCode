@@ -23,6 +23,8 @@ const VALID_PERMISSIONS = new Set([
   'storage',
   'broadcast',
   'peer',
+  'ws:client',
+  'ws:server',
 ])
 
 /** 权限到 API 方法的映射 */
@@ -44,6 +46,9 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'system:open': ['system.revealInDir'],
   // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   peer: [],
+  // ws:* 为 WASM-only 权限（host-websocket 原语），无前端 API 方法映射
+  'ws:client': [],
+  'ws:server': [],
 }
 
 /** 检查权限是否合法 */

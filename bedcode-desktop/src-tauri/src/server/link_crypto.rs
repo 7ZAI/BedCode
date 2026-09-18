@@ -689,6 +689,8 @@ impl LinkEncryptionFilter {
             TrafficChannel::Http => config.encrypt_http,
             TrafficChannel::WsTerminal => config.encrypt_ws_terminal,
             TrafficChannel::WsEvent => config.encrypt_ws_event,
+            // 插件端点帧不进链路加密：对端是第三方客户端，无成对密钥协商语义
+            TrafficChannel::WsPlugin => false,
         }
     }
 
@@ -843,7 +845,7 @@ impl TrafficFilter for LinkEncryptionFilter {
         }
         match ctx.channel {
             TrafficChannel::Http => Self::on_http_inbound(ctx),
-            TrafficChannel::WsTerminal | TrafficChannel::WsEvent => Self::on_ws_frame(ctx),
+            TrafficChannel::WsTerminal | TrafficChannel::WsEvent | TrafficChannel::WsPlugin => Self::on_ws_frame(ctx),
         }
     }
 
@@ -853,7 +855,7 @@ impl TrafficFilter for LinkEncryptionFilter {
         }
         match ctx.channel {
             TrafficChannel::Http => Self::on_http_outbound(ctx),
-            TrafficChannel::WsTerminal | TrafficChannel::WsEvent => Self::on_ws_frame(ctx),
+            TrafficChannel::WsTerminal | TrafficChannel::WsEvent | TrafficChannel::WsPlugin => Self::on_ws_frame(ctx),
         }
     }
 }
@@ -1275,6 +1277,20 @@ mod tests {
             let ctx = mk_ctx(TrafficChannel::Http, peer, "/api/sessions");
             assert!(!LinkEncryptionFilter::should_process(&ctx), "环回 {peer} 应豁免");
         }
+    }
+
+    /// 插件端点通道抵消「环回豁免」以外的所有放行条件后**仍恒定跳过**（spec D9）：
+    /// 主开关全开 + peer 为远端 + 路由不在明文白名单，也一律不进链路加密
+    /// （对端是第三方客户端，无成对密钥协商语义）
+    #[test]
+    fn ws_plugin_channel_never_encrypted() {
+        with_all_enabled(|| {
+            let ctx = mk_ctx(TrafficChannel::WsPlugin, "192.168.1.42:5001", "text");
+            assert!(
+                !LinkEncryptionFilter::should_process(&ctx),
+                "插件端点不参与链路加密（spec D9）"
+            );
+        });
     }
 
     #[test]

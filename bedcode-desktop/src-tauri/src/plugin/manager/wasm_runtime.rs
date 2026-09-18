@@ -148,6 +148,11 @@ where
             // 上 AMBIENT_RT.block_on。ambient runtime 是 multi_thread + enable_all，
             // IO/process/time 驱动齐全，multi_thread 的 block_on 契约本就允许任意
             // 线程调用（future 在调用线程内执行、spawned 任务进线程池）。
+            //
+            // ⚠️ 本分支会阻塞调用线程直到 future 完成：**调用方必须是「不驱动
+            // future 所依赖资源」的线程**。actix arbiter 是反例——宿主 WS 原语要
+            // await arbiter 上的连接 actor，投递任务若在 arbiter 线程上同步等待即
+            // 自锁（见 `ambient_handle` 说明）。
             std::thread::scope(|s| {
                 s.spawn(|| AMBIENT_RT.block_on(fut))
                     .join()
@@ -168,6 +173,18 @@ where
     F: std::future::Future + Send,
 {
     AMBIENT_RT.block_on(fut)
+}
+
+/// ambient runtime 句柄：在「调用方线程不可被占用」的场景派生后台任务
+///
+/// 典型场景是 **actix arbiter**：它是 `current_thread` 运行时、由本线程独占驱动，
+/// 而插件投递用的是同步桥 [`block_on_async`]（会阻塞调用线程）。若投递任务跑在
+/// arbiter 上，客人回调里的宿主原语（如 WS 端点的 `send-text-to-client`）需要
+/// await arbiter 上的连接 actor —— arbiter 被投递自己占住，双方互等形成自锁
+/// （实证：插件端点回显帧）。故此类投递改在 ambient runtime 上派生，arbiter 保持
+/// 空闲以推进 actor。
+pub(crate) fn ambient_handle() -> tokio::runtime::Handle {
+    AMBIENT_RT.handle().clone()
 }
 
 ///
@@ -232,6 +249,12 @@ pub struct WasmPluginState {
     /// 旧插件（v10 及更早）不导出该函数 → None，二进制消息对其按
     /// 「格式不匹配」拒绝（总线侧过滤，不会到达本字段为 None 的实例）
     on_message_binary: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
+    /// v14：可选导出 `events-ws#on-message`（客户端域帧回调）的探测句柄。
+    /// 未导出 → None：宿主按 spec §2.2 降级（消息帧丢弃 + 首次 warn + 计数，
+    /// 不缓存），状态事件仍经消息总线照常投递
+    on_ws_message: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
+    /// v14：可选导出 `events-ws#on-client-message`（服务端域帧回调）的探测句柄
+    on_ws_client_message: Option<wasmtime::component::TypedFunc<(String, String, String, Vec<u8>), ()>>,
 }
 
 impl WasmPluginState {
@@ -250,8 +273,10 @@ impl WasmPluginState {
             limits: spec.limits,
             fuel_enabled: spec.fuel_enabled,
             metrics: spec.metrics,
-            // v11：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
+            // v11 / v14：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
             on_message_binary: None,
+            on_ws_message: None,
+            on_ws_client_message: None,
         }
     }
 }
@@ -1236,6 +1261,1097 @@ mod tests {
         });
     }
 
+    /// v14：`events-ws` 可选导出的探测与投递
+    ///
+    /// - SDK 产物（`wasm_entry!` 无条件导出 `events-ws`）→ 探测命中：
+    ///   `on_ws_frame` 投递成功（`Ok(true)`），客户端域与服务端域两条回调都可达；
+    /// - 手写绑定产物（`plugin-component-test`，未导出 `events-ws`）→ 探测为
+    ///   None：`on_ws_frame` 返回 `Ok(false)`（调用方按 spec §2.2 降级：丢弃 +
+    ///   首次 warn + 计数，宿主不缓存），**不影响加载与其余导出**
+    #[test]
+    fn test_ws_events_export_probe_and_dispatch() {
+        use crate::plugin::bus::WsFrameDispatch;
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let sdk_component = wasm_runtime
+            .compile_component(&build_sdk_test_component())
+            .expect("compile SDK test component");
+        let legacy_component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile component-test");
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut sdk_plugin = wasm_runtime
+                .instantiate_component(&sdk_component, TEST_PLUGIN_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate SDK component");
+            let client_frame = WsFrameDispatch::Client {
+                handle: "wsc-test".to_string(),
+                kind: "text".to_string(),
+                payload: b"hello ws".to_vec(),
+            };
+            assert!(
+                sdk_plugin.on_ws_frame(&client_frame).expect("deliver client frame"),
+                "SDK 产物必须导出 events-ws（wasm_entry! 无条件导出）"
+            );
+            // 同一接口的第二个函数：服务端域回调同样命中
+            let server_frame = WsFrameDispatch::EndpointClient {
+                endpoint_id: "wse-test".to_string(),
+                client_id: "wsc-peer".to_string(),
+                kind: "binary".to_string(),
+                payload: vec![0xff, 0x00, 0x7f],
+            };
+            assert!(
+                sdk_plugin.on_ws_frame(&server_frame).expect("deliver server frame"),
+                "服务端域回调必须可投递"
+            );
+
+            // 旧产物（v13 及更早，未导出 events-ws）：探测 None → 降级 Ok(false)
+            let mut legacy_plugin = wasm_runtime
+                .instantiate_component(
+                    &legacy_component,
+                    "com.bedcode.component-test",
+                    host_ctx.clone(),
+                    &[],
+                    None,
+                )
+                .expect("未导出 events-ws 的产物不得影响加载");
+            assert!(
+                !legacy_plugin.on_ws_frame(&client_frame).expect("legacy probe"),
+                "未导出 events-ws 的产物必须走降级路径（Ok(false)）"
+            );
+            // 降级不得影响其余导出
+            assert!(legacy_plugin.get_manifest().is_ok(), "降级后其余导出照常");
+        });
+    }
+
+    // ==================== host-websocket 客户端域端到端（ABI v14） ====================
+
+    /// host-websocket fixture e2e 串行锁
+    ///
+    /// 三个用例共用 fixture 常量属主 id（`com.bedcode.ws-test`，宿主侧连接表 / 端点表 /
+    /// 事件 topic 均按属主**进程级全局**登记），彼此 `purge_for_plugin` 会清掉对方的
+    /// 连接与端点（并行时现象：握手 404、连接被回收）。libtest 并行执行下必须串行。
+    static WS_FIXTURE_E2E_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取得 fixture e2e 串行锁（跨用例共享全局表；中毒后取回内部值继续）
+    fn lock_ws_fixture_e2e() -> std::sync::MutexGuard<'static, ()> {
+        WS_FIXTURE_E2E_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// fixture e2e 兜底超时：把「挂起（疑似死锁）」变成明确失败
+    ///
+    /// 历史踩点：插件投递任务占住 actix arbiter → 用例无限挂起（无超时则整轮
+    /// `cargo test` 永不返回）。上限取 60s（正常用例秒级完成）。
+    const WS_E2E_TIMEOUT_SECS: u64 = 60;
+
+    /// 以兜底超时驱动 e2e 主体
+    async fn ws_e2e_guard<F>(label: &str, fut: F) -> F::Output
+    where
+        F: std::future::Future,
+    {
+        match tokio::time::timeout(std::time::Duration::from_secs(WS_E2E_TIMEOUT_SECS), fut).await {
+            Ok(out) => out,
+            Err(_) => panic!(
+                "{label}: 超过 {WS_E2E_TIMEOUT_SECS}s 未完成（疑似死锁；检查投递任务是否占住 actix arbiter）"
+            ),
+        }
+    }
+
+    /// 读 fixture 的 `ws-state` 快照（锁在返回前释放，避免阻塞帧投递）
+    async fn ws_fixture_state(plugin: &Arc<Mutex<LoadedWasmPlugin>>) -> serde_json::Value {
+        let raw = {
+            let mut guard = plugin.lock().await;
+            guard.invoke_command("ws-state", "{}").expect("ws-state")
+        };
+        serde_json::from_str(&raw).expect("ws-state json")
+    }
+
+    /// 轮询快照直到谓词命中或超时（帧与事件均为异步投递，不能单次读取断言）
+    async fn ws_poll_state(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        pred: impl Fn(&serde_json::Value) -> bool,
+        timeout: std::time::Duration,
+    ) -> serde_json::Value {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let state = ws_fixture_state(plugin).await;
+            if pred(&state) || std::time::Instant::now() >= deadline {
+                return state;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// 快照中是否含指定 kind 的帧（`text` 为 Some 时要求文本一致）
+    fn ws_has_frame(state: &serde_json::Value, kind: &str, text: Option<&str>) -> bool {
+        state["frames"]
+            .as_array()
+            .map(|frames| {
+                frames
+                    .iter()
+                    .any(|f| f["kind"] == kind && text.map(|t| f["text"] == t).unwrap_or(true))
+            })
+            .unwrap_or(false)
+    }
+
+    /// 快照中首个指定 kind 帧的载荷长度
+    fn ws_frame_len(state: &serde_json::Value, kind: &str) -> Option<u64> {
+        state["frames"]
+            .as_array()?
+            .iter()
+            .find(|f| f["kind"] == kind)?
+            .get("len")?
+            .as_u64()
+    }
+
+    /// 快照中指定 topic 的事件 payload
+    fn ws_event_payload(state: &serde_json::Value, topic: &str) -> Option<serde_json::Value> {
+        state["events"]
+            .as_array()?
+            .iter()
+            .find(|e| e["topic"] == topic)
+            .map(|e| e["payload"].clone())
+    }
+
+    /// host-websocket 客户端域端到端（ABI v14）
+    ///
+    /// fixture 插件（`packages/plugin-ws-test`）→ 宿主 `connect`（**真握手**）→
+    /// 文本 / 二进制回文经 `events-ws` 回灌 → owner 作用域状态事件
+    /// （`ws:open` / `ws:close`）经 host-bus 投递 → `close` 后 `is-connected`
+    /// 立即为 false（spec D3 时序）。
+    ///
+    /// mock echo 服务**进程内**（随机端口 + `accept_async`），不引入外部进程，
+    /// 测试结束随 runtime 关闭（无残留进程与端口）。
+    /// 总线与帧投递共用 `TestInstanceDispatcher`（生产 = PluginHost）。
+    ///
+    /// 运行时形态与同文件其它用例一致（`Runtime::new()` + `block_on`）：
+    /// guest 调用需在 `block_on` 体内执行，`host_impl` 的 `block_on_async`
+    /// 桥在这一形态下已验证可用（如 `test_session_list`）。
+    #[test]
+    fn test_ws_client_outbound_roundtrip() {
+        // `setup_wasm_runtime` 内部自建 runtime 并 block_on（建库/建上下文），
+        // 必须在 `rt.block_on` **之外**调用：嵌套 block_on 会 panic
+        // `Cannot start a runtime from within a runtime`
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let _e2e_guard = lock_ws_fixture_e2e();
+        let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+        rt.block_on(ws_e2e_guard("ws 客户端域 e2e", async {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+
+        const PLUGIN_ID: &str = "com.bedcode.ws-test";
+        let open_topic = format!("ws:open.{PLUGIN_ID}");
+        let close_topic = format!("ws:close.{PLUGIN_ID}");
+
+        // ==================== mock echo server（进程内） ====================
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind in-process echo server");
+        let port = listener.local_addr().expect("local addr").port();
+        let echo = tokio::spawn(async move {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else {
+                return;
+            };
+            while let Some(Ok(msg)) = ws.next().await {
+                match msg {
+                    Message::Text(text) => {
+                        if ws.send(Message::Text(text)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Binary(payload) => {
+                        if ws.send(Message::Binary(payload)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Message::Close(_) => {
+                        // 对端 Close 的应答：tungstenite 收到 Close 时已把回帧（echo 收到的 code）
+                        // 排入 `additional_send`，用 `SinkExt::close` 驱动 flush 即完成握手。
+                        // 注意：不能用 `WebSocketStream::close(Some(..))`——其内部走
+                        // `write(Message::Close)`，而在 `ClosedByPeer` 状态下
+                        // `WebSocketContext::write` 直接返回 `SendAfterClosing`，回帧不会发出，
+                        // 对端只能读到 EOF（wasClean 判定因此失真）。
+                        let _ = futures_util::SinkExt::close(&mut ws).await;
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+        });
+
+        // ==================== 加载 fixture 并接线 dispatcher ====================
+        // 单测不走 manifest 授权路径：显式授予（storage 由 SDK 默认授予）
+        host_ctx
+            .permission
+            .grant_permissions(PLUGIN_ID, &["storage".to_string(), "ws:client".to_string()]);
+        let component = wasm_runtime
+            .compile_component(&build_ws_test_component())
+            .expect("compile ws fixture component");
+        let plugin = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, PLUGIN_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate ws fixture"),
+        ));
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::new(RwLock::new(HashMap::from([(
+                    PLUGIN_ID.to_string(),
+                    plugin.clone(),
+                )]))),
+            }))
+            .await;
+
+        plugin.lock().await.activate().expect("activate = 0");
+        // 订阅为异步投递（bus_subscribe 内部 spawn）：等其落地再发 connect
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // ==================== connect（同步阻塞至握手完成） ====================
+        let connected = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "ws-connect",
+                &serde_json::json!({ "url": format!("ws://127.0.0.1:{port}/") }).to_string(),
+            )
+            .expect("ws-connect");
+        let handle = serde_json::from_str::<serde_json::Value>(&connected).expect("connect json")["handle"]
+            .as_str()
+            .expect("handle")
+            .to_string();
+        assert!(handle.starts_with("wsc-"), "连接句柄形状应为 wsc-<uuid>，got: {handle}");
+
+        // ws:open（owner 作用域 topic，activate 期已订阅）必须投递且带 handle
+        let state = ws_poll_state(&plugin, |s| ws_event_payload(s, &open_topic).is_some(), std::time::Duration::from_secs(3)).await;
+        let open_payload = ws_event_payload(&state, &open_topic).unwrap_or_else(|| panic!("ws:open 必须投递，got: {state}"));
+        assert_eq!(open_payload["handle"], handle, "ws:open payload 应带连接句柄");
+        assert!(
+            open_payload["url"].as_str().unwrap_or_default().starts_with("ws://127.0.0.1:"),
+            "ws:open payload 应带 url，got: {open_payload}"
+        );
+
+        let connected_state = plugin
+            .lock()
+            .await
+            .invoke_command("ws-is-connected", &serde_json::json!({ "handle": handle }).to_string())
+            .expect("ws-is-connected");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&connected_state).unwrap()["connected"],
+            true,
+            "握手完成后 is-connected 必须为 true"
+        );
+
+        // ==================== 文本回文（events-ws 回灌） ====================
+        plugin
+            .lock()
+            .await
+            .invoke_command(
+                "ws-send-text",
+                &serde_json::json!({ "handle": handle, "text": "ping-text" }).to_string(),
+            )
+            .expect("ws-send-text");
+        let state = ws_poll_state(
+            &plugin,
+            |s| ws_has_frame(s, "text", Some("ping-text")),
+            std::time::Duration::from_secs(3),
+        )
+        .await;
+        assert!(
+            ws_has_frame(&state, "text", Some("ping-text")),
+            "文本回文必须经 events-ws 回灌，got: {state}"
+        );
+
+        // ==================== 二进制回文（含非 UTF-8 字节） ====================
+        let bytes = serde_json::json!([0, 1, 255, 254]);
+        plugin
+            .lock()
+            .await
+            .invoke_command(
+                "ws-send-binary",
+                &serde_json::json!({ "handle": handle, "bytes": bytes }).to_string(),
+            )
+            .expect("ws-send-binary");
+        let state = ws_poll_state(
+            &plugin,
+            |s| ws_frame_len(s, "binary") == Some(4),
+            std::time::Duration::from_secs(3),
+        )
+        .await;
+        assert_eq!(
+            ws_frame_len(&state, "binary"),
+            Some(4),
+            "二进制回文长度一致（非 UTF-8 直通，零 JSON 转义），got: {state}"
+        );
+        assert!(
+            state["frames"]
+                .as_array()
+                .map(|frames| frames.iter().all(|f| f["target"] == handle))
+                .unwrap_or(false),
+            "客户端域帧标识即连接句柄，got: {state}"
+        );
+
+        // ==================== close → ws:close（对端回 1000 → wasClean=true） ====================
+        let closed = plugin
+            .lock()
+            .await
+            .invoke_command(
+                "ws-close",
+                &serde_json::json!({ "handle": handle, "code": 1000 }).to_string(),
+            )
+            .expect("ws-close");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&closed).unwrap()["hit"],
+            true,
+            "close 应命中句柄"
+        );
+        let state = ws_poll_state(
+            &plugin,
+            |s| ws_event_payload(s, &close_topic).is_some(),
+            std::time::Duration::from_secs(3),
+        )
+        .await;
+        let close_payload = ws_event_payload(&state, &close_topic).unwrap_or_else(|| panic!("ws:close 必须上报，got: {state}"));
+        assert_eq!(
+            close_payload["wasClean"], true,
+            "对端回复 Close(1000) → wasClean=true（spec §4.5 / D11），got: {close_payload}"
+        );
+        assert_eq!(close_payload["handle"], handle, "ws:close payload 应带连接句柄");
+
+        // 关闭后 is-connected 立即 false（快照自愈路径）
+        let after = plugin
+            .lock()
+            .await
+            .invoke_command("ws-is-connected", &serde_json::json!({ "handle": handle }).to_string())
+            .expect("ws-is-connected");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&after).unwrap()["connected"],
+            false,
+            "关闭后 is-connected 必须为 false"
+        );
+
+        plugin.lock().await.deactivate().expect("deactivate = 0");
+        echo.abort();
+        }));
+    }
+
+    // ==================== host-websocket 服务端域端到端（ABI v14，票 05） ====================
+
+    /// WS 客户端类型（tokio-tungstenite 直连 ws://，与集成测试同构）
+    type WsTestClient = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+    /// 探测空闲端口（OS 分配后立即释放，交给宿主服务器绑定）
+    fn ws_pick_free_port() -> u16 {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("probe free port");
+        listener.local_addr().expect("probed port").port()
+    }
+
+    /// 读客户端下一条业务帧（跳过心跳帧），超时返回 `None`
+    async fn ws_client_recv(client: &mut WsTestClient, timeout: std::time::Duration) -> Option<tokio_tungstenite::tungstenite::Message> {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::tungstenite::Message;
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            match tokio::time::timeout(remaining, client.next()).await {
+                Ok(Some(Ok(msg))) => match msg {
+                    Message::Ping(_) | Message::Pong(_) | Message::Frame(_) => continue,
+                    other => return Some(other),
+                },
+                _ => return None,
+            }
+        }
+    }
+
+    /// 轮询 `ws-list-clients` 直到在线客户端数达到期望（注册表登记为异步）
+    async fn ws_wait_clients(
+        plugin: &Arc<Mutex<LoadedWasmPlugin>>,
+        endpoint_id: &str,
+        expected: usize,
+    ) -> Vec<serde_json::Value> {
+        let args = serde_json::json!({ "endpointId": endpoint_id }).to_string();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let raw = {
+                let mut guard = plugin.lock().await;
+                guard.invoke_command("ws-list-clients", &args).expect("ws-list-clients")
+            };
+            let clients: Vec<serde_json::Value> = serde_json::from_str::<serde_json::Value>(&raw)
+                .expect("ws-list-clients json")["clients"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default();
+            if clients.len() == expected || std::time::Instant::now() >= deadline {
+                return clients;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    /// host-websocket 服务端域端到端（ABI v14，票 05）
+    ///
+    /// 真实宿主 WS 服务器（进程内随机端口）+ 真实 tokio-tungstenite 客户端 +
+    /// fixture 插件（`packages/plugin-ws-test`）一次贯通：
+    ///
+    /// 1. `register-endpoint`（`auth: none`，`maxClients: 1`）→ 通配路由挂载
+    ///    `/ws/plugin/<owner>/echo`；
+    /// 2. 客户端连入 → `ws:client-connect` 事件（先于首帧）+ `list-clients` 认证态；
+    /// 3. 入站文本 / 二进制帧经 `events-ws` 投给插件 → 插件回显原样回客户端
+    ///    （宿主零业务语义，回显是插件行为）；
+    /// 4. 单播 / 广播 / 踢出（缺省 4004）/ 注销端点（4005）逐条验证，并在
+    ///    `ws:client-disconnect` 上核对 code 与 `wasClean`；
+    /// 5. 上限与门禁：`maxClients` 超限在升级前 503、注销后握手 404；
+    /// 6. 关闭码与「恰好一次」：每次断开都有且仅有一条 disconnect 事件。
+    ///
+    /// 运行时形态与同文件其它用例一致（`Runtime::new()` + `block_on`）。
+    #[test]
+    fn test_ws_endpoint_server_domain_roundtrip() {
+        // `setup_wasm_runtime` 内部自建 runtime 并 block_on：必须在 `rt.block_on` 之外
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let _e2e_guard = lock_ws_fixture_e2e();
+        let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+        rt.block_on(ws_e2e_guard("ws 服务端域 e2e", async {
+            use futures_util::SinkExt;
+            use tokio_tungstenite::tungstenite::Message;
+
+            const PLUGIN_ID: &str = "com.bedcode.ws-test";
+            let connect_topic = format!("ws:client-connect.{PLUGIN_ID}");
+            let disconnect_topic = format!("ws:client-disconnect.{PLUGIN_ID}");
+
+            // ==================== 宿主服务器 + fixture 装载 ====================
+            let (server_handle, server_task, port) = {
+                let config = crate::system::config::AppConfig::default().network;
+                let port = ws_pick_free_port();
+                let (handle, server) = crate::server::app::start_http_server(port, &config)
+                    .await
+                    .expect("start host http+ws server");
+                (handle, tokio::spawn(server), port)
+            };
+
+            host_ctx
+                .permission
+                .grant_permissions(PLUGIN_ID, &["storage".to_string(), "ws:server".to_string()]);
+            let component = wasm_runtime
+                .compile_component(&build_ws_test_component())
+                .expect("compile ws fixture component");
+            let plugin = Arc::new(Mutex::new(
+                wasm_runtime
+                    .instantiate_component(&component, PLUGIN_ID, host_ctx.clone(), &[], None)
+                    .expect("instantiate ws fixture"),
+            ));
+            host_ctx
+                .message_bus
+                .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                    instances: Arc::new(RwLock::new(HashMap::from([(
+                        PLUGIN_ID.to_string(),
+                        plugin.clone(),
+                    )]))),
+                }))
+                .await;
+            plugin.lock().await.activate().expect("activate = 0");
+            // 订阅为异步投递（bus_subscribe 内部 spawn）：等其落地再注册端点
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+            // ==================== 1. 注册端点 + 打开回显 ====================
+            let endpoint_id = {
+                let mut guard = plugin.lock().await;
+                let raw = guard
+                    .invoke_command("ws-register-endpoint", r#"{"path":"echo","maxClients":1}"#)
+                    .expect("register-endpoint");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("register json")["endpointId"]
+                    .as_str()
+                    .expect("endpointId")
+                    .to_string()
+            };
+            assert!(endpoint_id.starts_with("wse-"), "端点句柄前缀，got: {endpoint_id}");
+            plugin
+                .lock()
+                .await
+                .invoke_command("ws-endpoint-echo", r#"{"enabled":true}"#)
+                .expect("echo on");
+
+            // 端点清单：注册即可见（clientCount 0）
+            {
+                let raw = plugin.lock().await.invoke_command("ws-list-endpoints", "{}").expect("list-endpoints");
+                let listed: serde_json::Value = serde_json::from_str(&raw).expect("list json");
+                let entries = listed["endpoints"].as_array().expect("endpoints array");
+                assert_eq!(entries.len(), 1, "本插件恰好一个端点，got: {listed}");
+                assert_eq!(entries[0]["path"], "echo");
+                assert_eq!(entries[0]["clientCount"], 0);
+            }
+
+            // ==================== 2. 客户端连入 → 接入事件 + 认证态 ====================
+            let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/echo");
+            let (mut client_a, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("client A connect via host route");
+
+            let clients = ws_wait_clients(&plugin, &endpoint_id, 1).await;
+            assert_eq!(clients.len(), 1, "client A 应出现在 list-clients");
+            let client_a_id = clients[0]["clientId"].as_str().expect("clientId").to_string();
+            assert_eq!(
+                clients[0]["authenticated"], false,
+                "auth:none 下注册表认证态保持 false（连接可用 ≠ 已认证）"
+            );
+            assert!(clients[0]["addr"].as_str().is_some_and(|a| !a.is_empty()));
+
+            let state = ws_poll_state(
+                &plugin,
+                |s| ws_event_payload(s, &connect_topic).is_some(),
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            let connect = ws_event_payload(&state, &connect_topic).expect("ws:client-connect 事件");
+            assert_eq!(connect["endpointId"], endpoint_id);
+            assert_eq!(connect["clientId"], client_a_id, "事件标识与 list-clients 同源");
+
+            // ==================== 3. 入站帧 → 插件回显（文本 + 二进制） ====================
+            client_a
+                .send(Message::Text("hello-endpoint".to_string()))
+                .await
+                .expect("send text");
+            let state = ws_poll_state(
+                &plugin,
+                |s| ws_has_frame(s, "text", Some("hello-endpoint")),
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            let frame = state["frames"]
+                .as_array()
+                .and_then(|f| f.iter().find(|f| f["text"] == "hello-endpoint"))
+                .cloned()
+                .expect("fixture 应收到入站文本帧");
+            assert!(
+                frame["target"]
+                    .as_str()
+                    .is_some_and(|t| t.starts_with(&format!("{endpoint_id}/"))),
+                "服务端域帧标识应为 endpoint/client，got: {}",
+                frame["target"]
+            );
+            match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+                Some(Message::Text(text)) => assert_eq!(text, "hello-endpoint", "插件回显原样回客户端"),
+                other => panic!("期望文本回显，got: {other:?}"),
+            }
+
+            let binary_payload: Vec<u8> = vec![0x00, 0xff, 0x7f, 0x41];
+            client_a
+                .send(Message::Binary(binary_payload.clone()))
+                .await
+                .expect("send binary");
+            let state = ws_poll_state(
+                &plugin,
+                |s| ws_has_frame(s, "binary", None),
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            assert_eq!(
+                ws_frame_len(&state, "binary"),
+                Some(binary_payload.len() as u64),
+                "非 UTF-8 二进制帧长度必须一致（零 JSON 转义）"
+            );
+            match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+                Some(Message::Binary(bytes)) => assert_eq!(bytes, binary_payload, "二进制原样回显"),
+                other => panic!("期望二进制回显，got: {other:?}"),
+            }
+
+            // ==================== 4. 广播 + 上限（升级前 503） ====================
+            let sent = {
+                let args = serde_json::json!({ "endpointId": endpoint_id, "text": "broadcast" }).to_string();
+                let raw = plugin.lock().await.invoke_command("ws-broadcast-text", &args).expect("broadcast");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("broadcast json")["sent"]
+                    .as_u64()
+                    .expect("sent")
+            };
+            assert_eq!(sent, 1, "广播成功入队数 = 在线客户端数");
+            match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+                Some(Message::Text(text)) => assert_eq!(text, "broadcast"),
+                other => panic!("期望广播文本，got: {other:?}"),
+            }
+
+            // maxClients=1 已满：第二条连接在协议升级前被拒（503，不产生连接事件）
+            let rejected = tokio_tungstenite::connect_async(&url).await;
+            assert!(rejected.is_err(), "超限连接必须在升级前被拒");
+
+            // ==================== 5. 踢出（缺省 4004）====================
+            let hit = {
+                let args = serde_json::json!({ "endpointId": endpoint_id, "clientId": client_a_id }).to_string();
+                let raw = plugin.lock().await.invoke_command("ws-close-client", &args).expect("close-client");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("close json")["hit"]
+                    .as_bool()
+                    .expect("hit")
+            };
+            assert!(hit, "踢出应命中在线客户端");
+            match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+                Some(Message::Close(Some(frame))) => {
+                    assert_eq!(u16::from(frame.code), 4004, "踢出缺省关闭码 4004（spec §4.5）");
+                }
+                other => panic!("期望 Close(4004)，got: {other:?}"),
+            }
+            let state = ws_poll_state(
+                &plugin,
+                |s| ws_event_payload(s, &disconnect_topic).is_some(),
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            let disconnect = ws_event_payload(&state, &disconnect_topic).expect("ws:client-disconnect 事件");
+            assert_eq!(disconnect["clientId"], client_a_id);
+            assert_eq!(disconnect["code"], 4004, "宿主主动断开须上报关闭码");
+            assert_eq!(
+                disconnect["wasClean"], false,
+                "宿主主动断开恒 wasClean=false（spec §4.5）"
+            );
+            assert!(
+                ws_wait_clients(&plugin, &endpoint_id, 0).await.is_empty(),
+                "踢出后句柄已回收"
+            );
+            // 每次断开恰好一条 disconnect 事件（再做一次投递等待后计数）
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let state = ws_fixture_state(&plugin).await;
+            let disconnect_events = state["events"]
+                .as_array()
+                .map(|events| events.iter().filter(|e| e["topic"] == disconnect_topic.as_str()).count())
+                .unwrap_or(0);
+            assert_eq!(disconnect_events, 1, "断开事件每连接恰好一次");
+
+            // ==================== 6. 注销端点（4005）→ 握手 404 ====================
+            let (mut client_b, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("client B connect after slot freed");
+            let clients = ws_wait_clients(&plugin, &endpoint_id, 1).await;
+            assert_eq!(clients.len(), 1, "腾出名额后新连接可接入");
+
+            let unregistered = {
+                let args = serde_json::json!({ "endpointId": endpoint_id }).to_string();
+                let raw = plugin
+                    .lock()
+                    .await
+                    .invoke_command("ws-unregister-endpoint", &args)
+                    .expect("unregister-endpoint");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("unregister json")["hit"]
+                    .as_bool()
+                    .expect("hit")
+            };
+            assert!(unregistered, "注销命中已注册端点");
+            match ws_client_recv(&mut client_b, std::time::Duration::from_secs(5)).await {
+                Some(Message::Close(Some(frame))) => {
+                    assert_eq!(u16::from(frame.code), 4005, "端点注销关闭码 4005");
+                }
+                other => panic!("期望 Close(4005)，got: {other:?}"),
+            }
+
+            // 端点已摘除 → 清单空 + 新握手 404（未注册端点）
+            let raw = plugin.lock().await.invoke_command("ws-list-endpoints", "{}").expect("list-endpoints");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&raw).expect("list json")["endpoints"],
+                serde_json::json!([]),
+                "注销后本插件无端点"
+            );
+            assert!(
+                tokio_tungstenite::connect_async(&url).await.is_err(),
+                "未注册端点的握手必须被拒（404）"
+            );
+
+            // ==================== 7. 属主停用路径（4005 + 恰好一次）====================
+            // 重挂同一后缀端点 → 新客户端连入 → 模拟宿主停用回收
+            // （生产调用点：`PluginHost::deactivate_plugin_inner` → `ws::purge_for_plugin`）
+            let endpoint_id = {
+                let mut guard = plugin.lock().await;
+                let raw = guard
+                    .invoke_command("ws-register-endpoint", r#"{"path":"echo"}"#)
+                    .expect("re-register endpoint after unregister");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("register json")["endpointId"]
+                    .as_str()
+                    .expect("endpointId")
+                    .to_string()
+            };
+            plugin
+                .lock()
+                .await
+                .invoke_command("ws-endpoint-echo", r#"{"enabled":true}"#)
+                .expect("echo on");
+            let (mut client_c, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("client C connect before deactivation");
+            let clients = ws_wait_clients(&plugin, &endpoint_id, 1).await;
+            assert_eq!(clients.len(), 1, "client C 已登记");
+            let client_c_id = clients[0]["clientId"].as_str().expect("clientId").to_string();
+
+            crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_ID);
+
+            match ws_client_recv(&mut client_c, std::time::Duration::from_secs(5)).await {
+                Some(Message::Close(Some(frame))) => {
+                    assert_eq!(u16::from(frame.code), 4005, "属主停用关闭码 4005");
+                }
+                other => panic!("期望 Close(4005)，got: {other:?}"),
+            }
+            assert!(
+                crate::server::ws::endpoint::get(&endpoint_id).is_none(),
+                "停用回收端点表条目（只碰本人）"
+            );
+            // 停用路径同样恰好一条 disconnect 事件
+            //
+            // 同一 topic 上多条事件共存（A 踢出 4004 / B 注销 4005 / C 停用 4005），
+            // 轮询与计数都必须按 clientId 收敛：只按 code 计数会被前一条同码事件
+            // （B 的注销）提前满足，形成竞态误判
+            let disconnect_events_for = |s: &serde_json::Value, client_id: &str| -> Vec<serde_json::Value> {
+                s["events"]
+                    .as_array()
+                    .map(|events| {
+                        events
+                            .iter()
+                            .filter(|e| {
+                                e["topic"] == disconnect_topic.as_str() && e["payload"]["clientId"] == client_id
+                            })
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            };
+            let state = ws_poll_state(
+                &plugin,
+                |s| disconnect_events_for(s, &client_c_id).len() == 1,
+                std::time::Duration::from_secs(5),
+            )
+            .await;
+            let deactivated_disconnects = disconnect_events_for(&state, &client_c_id);
+            assert_eq!(
+                deactivated_disconnects.len(),
+                1,
+                "停用断开事件恰好一次，got: {state}"
+            );
+            assert_eq!(
+                deactivated_disconnects[0]["payload"]["code"], 4005,
+                "属主停用关闭码 4005，got: {}",
+                deactivated_disconnects[0]
+            );
+            assert_eq!(
+                deactivated_disconnects[0]["payload"]["wasClean"], false,
+                "宿主主动断开恒 wasClean=false（spec §4.5）"
+            );
+
+            // ==================== 8. auth:"jwt"：未认证帧丢弃 + 认证失败 4001 ====================
+            // `none` 路径已在上文贯通；本段补 jwt 策略的失败分支与「未认证连接不产生
+            // 接入事件」契约（jwt 成功分支需真实签发 token，属遗留项，见票 05 Comments）
+            let secure_endpoint = {
+                let mut guard = plugin.lock().await;
+                let raw = guard
+                    .invoke_command(
+                        "ws-register-endpoint",
+                        r#"{"path":"secure","auth":"jwt","maxClients":1}"#,
+                    )
+                    .expect("register jwt endpoint");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("register json")["endpointId"]
+                    .as_str()
+                    .expect("endpointId")
+                    .to_string()
+            };
+            let secure_url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_ID}/secure");
+            let (mut client_d, _) = tokio_tungstenite::connect_async(&secure_url)
+                .await
+                .expect("jwt endpoint connect");
+            let clients = ws_wait_clients(&plugin, &secure_endpoint, 1).await;
+            assert_eq!(clients.len(), 1, "jwt 端点连接已登记");
+            assert_eq!(clients[0]["authenticated"], false, "未认证期注册表认证态为 false");
+
+            // 未认证期业务帧：丢弃 + warn（不缓存，spec §4.3）→ 插件不得收到
+            client_d
+                .send(Message::Text("before-auth".to_string()))
+                .await
+                .expect("send pre-auth frame");
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let state = ws_fixture_state(&plugin).await;
+            assert!(
+                !ws_has_frame(&state, "text", Some("before-auth")),
+                "未认证期业务帧必须丢弃（不缓存），got: {state}"
+            );
+
+            // 非法 token → 认证失败 → close 4001
+            client_d
+                .send(Message::Text(r#"{"type":"auth","token":"not-a-jwt"}"#.to_string()))
+                .await
+                .expect("send bad auth frame");
+            match ws_client_recv(&mut client_d, std::time::Duration::from_secs(5)).await {
+                Some(Message::Close(Some(frame))) => {
+                    assert_eq!(u16::from(frame.code), 4001, "认证失败关闭码 4001（spec D8）");
+                }
+                other => panic!("期望 Close(4001)，got: {other:?}"),
+            }
+
+            // 认证失败的连接从未「接入」→ 不得产生 client-connect 事件
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            let state = ws_fixture_state(&plugin).await;
+            let secure_connect_events = state["events"]
+                .as_array()
+                .map(|events| {
+                    events
+                        .iter()
+                        .filter(|e| {
+                            e["topic"] == connect_topic.as_str()
+                                && e["payload"]["endpointId"] == secure_endpoint.as_str()
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            assert_eq!(
+                secure_connect_events, 0,
+                "认证失败连接不得产生 client-connect 事件，got: {state}"
+            );
+
+            // ==================== 收尾：优雅停机 + 实例停用 ====================
+            server_handle.stop(true).await;
+            server_task.abort();
+            plugin.lock().await.deactivate().expect("deactivate = 0");
+            // 全局端点表在本进程内跨用例共享：显式清理（deactivate 不触达宿主侧回收）
+            crate::server::ws::endpoint::purge_for_plugin(PLUGIN_ID);
+        }));
+    }
+
+    /// 票据 06 双 fixture 隔离 demo：A 挂入站端点、B 连外部服务
+    ///
+    /// 一次贯通两组隔离断言：
+    ///
+    /// - **零可见**：B 的 `list-endpoints` / `list-clients` 看不到 A 的端点；
+    ///   A 对 B 的出站句柄调用被拒（跨插件属主仲裁）；
+    /// - **零影响**：A 停用回收（`purge_for_plugin(A)`）后 B 的外部连接仍然在线，
+    ///   而 A 的入站对端收到 4005 下线关闭帧。
+    #[test]
+    fn test_ws_two_plugin_isolation() {
+        // `setup_wasm_runtime` 内部自建 runtime 并 block_on（建库/建上下文），
+        // 必须在 `rt.block_on` **之外**调用：嵌套 block_on 会 panic
+        // `Cannot start a runtime from within a runtime`
+        let (runtime_a, ctx_a) = setup_wasm_runtime();
+        let (runtime_b, ctx_b) = setup_wasm_runtime();
+        let _e2e_guard = lock_ws_fixture_e2e();
+        let rt = tokio::runtime::Runtime::new().expect("tokio multi-thread runtime");
+        rt.block_on(ws_e2e_guard("ws 双 fixture 隔离 e2e", async {
+            use futures_util::StreamExt;
+            use tokio_tungstenite::tungstenite::Message;
+
+            const PLUGIN_A: &str = "com.bedcode.ws-test";
+            // 第二个实例用独立 id：属主域完全隔离（端点命名空间 / 句柄 / 事件 topic）
+            const PLUGIN_B: &str = "com.bedcode.ws-test.peer";
+
+            // ==================== B 的外部对端（进程内 mock echo） ====================
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind mock peer");
+            let peer_port = listener.local_addr().expect("peer addr").port();
+            let peer = tokio::spawn(async move {
+                let Ok((stream, _)) = listener.accept().await else { return };
+                let Ok(mut ws) = tokio_tungstenite::accept_async(stream).await else { return };
+                while let Some(Ok(msg)) = ws.next().await {
+                    if matches!(msg, Message::Close(_)) {
+                        break;
+                    }
+                }
+            });
+
+            // ==================== 两个独立宿主上下文（各自的 bus 与实例表） ====================
+            // A 两个域都授权：跨插件负向断言必须先过权限门，才落到属主仲裁
+            ctx_a.permission.grant_permissions(
+                PLUGIN_A,
+                &["storage".to_string(), "ws:server".to_string(), "ws:client".to_string()],
+            );
+            let component = runtime_a
+                .compile_component(&build_ws_test_component())
+                .expect("compile ws fixture component");
+            let plugin_a = Arc::new(Mutex::new(
+                runtime_a
+                    .instantiate_component(&component, PLUGIN_A, ctx_a.clone(), &[], None)
+                    .expect("instantiate plugin A"),
+            ));
+            ctx_a
+                .message_bus
+                .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                    instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_A.to_string(), plugin_a.clone())]))),
+                }))
+                .await;
+            plugin_a.lock().await.activate().expect("activate A");
+
+            // B 同样两个域都授权：跨插件负向断言必须落在**属主仲裁**而非权限门，
+            // 否则 B 对 A 端点的调用会被 `permission denied: ws:server` 短路，
+            // 证明不了属主隔离（B 实际只需出站能力，此处为断言口径而授权）
+            ctx_b.permission.grant_permissions(
+                PLUGIN_B,
+                &["storage".to_string(), "ws:client".to_string(), "ws:server".to_string()],
+            );
+            // B 必须用 runtime_b 自己编译的组件：wasmtime 不支持跨 `Engine` 实例化
+            let component_b = runtime_b
+                .compile_component(&build_ws_test_component())
+                .expect("compile ws fixture component for B");
+            let plugin_b = Arc::new(Mutex::new(
+                runtime_b
+                    .instantiate_component(&component_b, PLUGIN_B, ctx_b.clone(), &[], None)
+                    .expect("instantiate plugin B"),
+            ));
+            ctx_b
+                .message_bus
+                .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                    instances: Arc::new(RwLock::new(HashMap::from([(PLUGIN_B.to_string(), plugin_b.clone())]))),
+                }))
+                .await;
+            plugin_b.lock().await.activate().expect("activate B");
+
+            // ==================== A 挂端点 + B 连外部服务（互不相干） ====================
+            let (server_handle, server_task, port) = {
+                let config = crate::system::config::AppConfig::default().network;
+                let port = ws_pick_free_port();
+                let (handle, server) = crate::server::app::start_http_server(port, &config)
+                    .await
+                    .expect("start host http+ws server");
+                (handle, tokio::spawn(server), port)
+            };
+
+            let endpoint_a = {
+                let mut guard = plugin_a.lock().await;
+                let raw = guard
+                    .invoke_command("ws-register-endpoint", r#"{"path":"iso"}"#)
+                    .expect("register endpoint on A");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("register json")["endpointId"]
+                    .as_str()
+                    .expect("endpointId")
+                    .to_string()
+            };
+            let handle_b = {
+                let args = serde_json::json!({ "url": format!("ws://127.0.0.1:{peer_port}/") }).to_string();
+                let raw = plugin_b
+                    .lock()
+                    .await
+                    .invoke_command("ws-connect", &args)
+                    .expect("B connect outbound");
+                serde_json::from_str::<serde_json::Value>(&raw).expect("connect json")["handle"]
+                    .as_str()
+                    .expect("handle")
+                    .to_string()
+            };
+
+            let url = format!("ws://127.0.0.1:{port}/ws/plugin/{PLUGIN_A}/iso");
+            let (mut client_a, _) = tokio_tungstenite::connect_async(&url)
+                .await
+                .expect("inbound client connects to A endpoint");
+            let clients = ws_wait_clients(&plugin_a, &endpoint_a, 1).await;
+            assert_eq!(clients.len(), 1, "A 的端点客户端已登记");
+
+            // ==================== 零可见 ====================
+            assert_eq!(
+                crate::plugin::manager::wasm_runtime::host_impl::ws::ws_list_endpoints(&ctx_b, PLUGIN_B).unwrap(),
+                "[]",
+                "B 看不到 A 的端点"
+            );
+            assert_eq!(
+                crate::plugin::manager::wasm_runtime::host_impl::ws::ws_list_clients(&ctx_b, PLUGIN_B, &endpoint_a)
+                    .unwrap_err(),
+                "not owner of ws endpoint",
+                "B 不得查询 A 的端点客户端"
+            );
+            assert_eq!(
+                crate::plugin::manager::wasm_runtime::host_impl::ws::ws_is_connected(&ctx_a, PLUGIN_A, &handle_b)
+                    .unwrap_err(),
+                "not owner of ws handle",
+                "A 不得操作 B 的出站句柄"
+            );
+
+            // ==================== A 停用回收：零影响 B；A 的对端收到 4005 ====================
+            crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_A);
+            match ws_client_recv(&mut client_a, std::time::Duration::from_secs(5)).await {
+                Some(Message::Close(Some(frame))) => {
+                    assert_eq!(u16::from(frame.code), 4005, "属主停用关闭码 4005");
+                }
+                other => panic!("期望 Close(4005)，got: {other:?}"),
+            }
+            assert!(
+                crate::server::ws::endpoint::get(&endpoint_a).is_none(),
+                "A 的端点随停用回收"
+            );
+            assert!(
+                crate::plugin::manager::wasm_runtime::host_impl::ws::ws_is_connected(&ctx_b, PLUGIN_B, &handle_b)
+                    .expect("B 句柄仍可查询"),
+                "A 停用不得影响 B 的外部连接"
+            );
+            // B 的对端仍在线：可继续发送（fail-visible 之外的正向断言）
+            assert!(
+                crate::plugin::manager::wasm_runtime::host_impl::ws::ws_send_text(&ctx_b, PLUGIN_B, &handle_b, "still-alive")
+                    .is_ok(),
+                "A 停用后 B 仍可发送"
+            );
+
+            // ==================== 收尾 ====================
+            server_handle.stop(true).await;
+            server_task.abort();
+            plugin_a.lock().await.deactivate().expect("deactivate A");
+            plugin_b.lock().await.deactivate().expect("deactivate B");
+            crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_A);
+            crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(PLUGIN_B);
+            crate::server::ws::endpoint::purge_for_plugin(PLUGIN_A);
+            crate::server::ws::endpoint::purge_for_plugin(PLUGIN_B);
+            peer.abort();
+        }));
+    }
+
+    /// 构建 host-websocket fixture 插件（packages/plugin-ws-test）并编码为组件
+    ///
+    /// 源码变更检测覆盖 fixture 与 SDK 的 host-websocket 链路文件
+    fn build_ws_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-ws-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let module_path = output_dir.join("bedcode_plugin_ws_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_ws.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/host/ws.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return encode_component(
+                    &std::fs::read(&module_path).expect("Failed to read ws fixture component module"),
+                );
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .args([
+                "build",
+                "--target",
+                "wasm32-unknown-unknown",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for ws fixture component");
+        assert!(status.success(), "ws fixture component WASM build failed");
+
+        encode_component(
+            &std::fs::read(&module_path).expect("Failed to read ws fixture component after build"),
+        )
+    }
+
     /// 构建 SDK 组件形态测试插件（packages/plugin-sdk-test）并编码为组件
     ///
     /// 与 build_test_component 的区别：插件经真实 SDK（wasm_entry! 宏 + WasmHost）
@@ -1584,6 +2700,27 @@ mod tests {
                         .on_message(&msg.topic, &msg.sender, &msg.payload)
                         .map_err(|e| anyhow::Error::from(e))
                 }
+            })
+        }
+
+
+        /// ABI v14：WS 帧投递（`events-ws`）——与 `dispatch_to_wasm` 同桥，
+        /// 生产环境由 PluginHost 实现（本实现等价：查实例表加锁调用）
+        fn dispatch_ws_frame(
+            &self,
+            plugin_id: &str,
+            frame: &crate::plugin::bus::WsFrameDispatch,
+        ) -> anyhow::Result<bool> {
+            let instances = self.instances.clone();
+            let plugin_id = plugin_id.to_string();
+            let frame = frame.clone();
+            block_on_async(async move {
+                let instances = instances.read().await;
+                let plugin = instances
+                    .get(&plugin_id)
+                    .ok_or_else(|| anyhow::anyhow!("TestInstanceDispatcher: no instance '{}'", plugin_id))?;
+                let mut plugin = plugin.lock().await;
+                plugin.on_ws_frame(&frame).map_err(anyhow::Error::from)
             })
         }
 

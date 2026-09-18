@@ -21,25 +21,47 @@ pub fn spawn_with_error_boundary<F>(task_name: &'static str, future: F) -> tokio
 where
     F: Future<Output = ()> + Send + 'static,
 {
-    tokio::spawn(async move {
-        let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
+    tokio::spawn(error_guarded(task_name, future))
+}
 
-        if let Err(panic_err) = result {
-            let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
-                s.to_string()
-            } else if let Some(s) = panic_err.downcast_ref::<String>() {
-                s.clone()
-            } else {
-                "Unknown panic".to_string()
-            };
-            tracing::error!(
-                target: "error_boundary",
-                task = %task_name,
-                error = %msg,
-                "Task panicked and was caught by error boundary",
-            );
-        }
-    })
+/// 同 [`spawn_with_error_boundary`]，但在**指定运行时句柄**上派生任务
+///
+/// 用于「调用方线程不能被占用」的场景：actix arbiter 是 `current_thread` 运行时
+/// 且由本线程独占驱动，若把「需要 arbiter 自身推进 actor」的任务派生回 arbiter，
+/// 该线程同步等待任务完成即自锁（实证：插件 WS 端点回显帧）。
+pub fn spawn_with_error_boundary_on<F>(
+    handle: &tokio::runtime::Handle,
+    task_name: &'static str,
+    future: F,
+) -> tokio::task::JoinHandle<()>
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    handle.spawn(error_guarded(task_name, future))
+}
+
+/// 错误边界包装体：panic 被捕获并记录，任务不静默崩溃
+async fn error_guarded<F>(task_name: &'static str, future: F)
+where
+    F: Future<Output = ()> + Send + 'static,
+{
+    let result = std::panic::AssertUnwindSafe(future).catch_unwind().await;
+
+    if let Err(panic_err) = result {
+        let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic_err.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        tracing::error!(
+            target: "error_boundary",
+            task = %task_name,
+            error = %msg,
+            "Task panicked and was caught by error boundary",
+        );
+    }
 }
 
 #[cfg(test)]

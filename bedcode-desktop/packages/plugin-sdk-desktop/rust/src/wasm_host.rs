@@ -17,12 +17,12 @@
 use crate::host::{
     ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
     HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess,
-    HostSession, HostStorage, HostTerminal,
+    HostSession, HostStorage, HostTerminal, HostWebsocket,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_bus, host_config, host_database, host_events, host_fs,
     host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
-    host_session, host_storage, host_terminal, host_timer,
+    host_session, host_storage, host_terminal, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -507,6 +507,74 @@ impl HostMdns for WasmHost {
 
     fn mdns_is_advertising(&self, advertise_id: &str) -> Result<bool, HostError> {
         host_mdns::is_advertising(advertise_id).map_err(|e| host_err("mdns_is_advertising", e))
+    }
+}
+
+// ==================== host-websocket（ABI v14）====================
+
+impl HostWebsocket for WasmHost {
+    fn ws_connect(&self, config_json: &str) -> Result<String, HostError> {
+        host_websocket::connect(config_json).map_err(|e| host_err("ws_connect", e))
+    }
+
+    fn ws_send_text(&self, handle: &str, text: &str) -> Result<(), HostError> {
+        host_websocket::send_text(handle, text).map_err(|e| host_err("ws_send_text", e))
+    }
+
+    fn ws_send_binary(&self, handle: &str, payload: &[u8]) -> Result<(), HostError> {
+        host_websocket::send_binary(handle, payload).map_err(|e| host_err("ws_send_binary", e))
+    }
+
+    fn ws_close(&self, handle: &str, close_json: &str) -> Result<bool, HostError> {
+        host_websocket::close(handle, close_json).map_err(|e| host_err("ws_close", e))
+    }
+
+    fn ws_is_connected(&self, handle: &str) -> Result<bool, HostError> {
+        host_websocket::is_connected(handle).map_err(|e| host_err("ws_is_connected", e))
+    }
+
+    fn ws_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
+        host_websocket::register_endpoint(config_json).map_err(|e| host_err("ws_register_endpoint", e))
+    }
+
+    fn ws_send_text_to_client(&self, endpoint_id: &str, client_id: &str, text: &str) -> Result<(), HostError> {
+        host_websocket::send_text_to_client(endpoint_id, client_id, text)
+            .map_err(|e| host_err("ws_send_text_to_client", e))
+    }
+
+    fn ws_send_binary_to_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        payload: &[u8],
+    ) -> Result<(), HostError> {
+        host_websocket::send_binary_to_client(endpoint_id, client_id, payload)
+            .map_err(|e| host_err("ws_send_binary_to_client", e))
+    }
+
+    fn ws_broadcast_text(&self, endpoint_id: &str, text: &str) -> Result<u32, HostError> {
+        host_websocket::broadcast_text(endpoint_id, text).map_err(|e| host_err("ws_broadcast_text", e))
+    }
+
+    fn ws_broadcast_binary(&self, endpoint_id: &str, payload: &[u8]) -> Result<u32, HostError> {
+        host_websocket::broadcast_binary(endpoint_id, payload).map_err(|e| host_err("ws_broadcast_binary", e))
+    }
+
+    fn ws_close_client(&self, endpoint_id: &str, client_id: &str, close_json: &str) -> Result<bool, HostError> {
+        host_websocket::close_client(endpoint_id, client_id, close_json)
+            .map_err(|e| host_err("ws_close_client", e))
+    }
+
+    fn ws_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
+        host_websocket::unregister_endpoint(endpoint_id).map_err(|e| host_err("ws_unregister_endpoint", e))
+    }
+
+    fn ws_list_clients(&self, endpoint_id: &str) -> Result<String, HostError> {
+        host_websocket::list_clients(endpoint_id).map_err(|e| host_err("ws_list_clients", e))
+    }
+
+    fn ws_list_endpoints(&self) -> Result<String, HostError> {
+        host_websocket::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
     }
 }
 

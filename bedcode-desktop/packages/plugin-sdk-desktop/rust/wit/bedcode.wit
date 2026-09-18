@@ -218,6 +218,78 @@ interface host-app {
     uninstall-cli: func(payload-json: string) -> result<_, string>;
 }
 
+/// WebSocket 基础能力服务（ADR 0022）：宿主 WS 传输原语，插件零业务语义。
+///
+/// 客户端域（出站）：连接外部 WS 服务器，连接句柄寻址。
+/// 服务端域（入站）：在宿主 WS 服务器挂载插件端点；挂载路径由宿主按调用方
+/// 插件注入命名空间段 —— `/ws/plugin/<plugin-id>/<path>`（D5）。
+///
+/// 属主隔离（spec §2.3 / D6）：**全部函数仅属主可调**（他人句柄/端点 → Err，
+/// `not owner of ws handle`）；插件停用时宿主自动回收其全部句柄与端点。
+/// 权限：客户端域需 `ws:client`，服务端域需 `ws:server`。
+///
+/// 事件投递（D2/D3）：状态事件经 host-bus 订阅，topic **内嵌 owner**
+/// （非属主物理上订阅不到），标识在 payload：
+///   客户端域  `ws:open.<owner>` / `ws:error.<owner>` / `ws:close.<owner>`
+///   服务端域  `ws:client-connect.<owner>` / `ws:client-disconnect.<owner>`
+/// 插件**须在 activate 期（或首次 connect/register-endpoint 之前）完成订阅**：
+/// 宿主不缓冲、不重放，晚订阅期间的事件永久丢失；丢失自愈靠
+/// `is-connected` / `list-clients` / `list-endpoints` 查询原语。
+/// 消息帧（text + binary）经可选导出 `events-ws` 回调投递。
+interface host-websocket {
+    // ==================== 客户端域（出站连接） ====================
+    /// 建立出站 WS 连接：**同步阻塞至握手完成**（上限 connect-timeout-secs，
+    /// 与 host-http 非流式模式同款 block_on 语义，D4）。
+    /// config-json（camelCase）纯引擎参数：
+    /// `{ url, headers?, protocols?, connect-timeout-secs?, max-message-bytes? }`
+    /// url **仅接受 `ws://`**（`wss://` 本期不支持，返回明确错误，D7）。
+    /// 成功 → 返回连接句柄 `wsc-<uuid>` 并发布 `ws:open.<owner>`；
+    /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）。
+    connect: func(config-json: string) -> result<string, string>;
+    /// 发送文本帧（UTF-8）；连接不存在/已关闭/发送队列满 → 错误（D10）
+    send-text: func(handle: string, text: string) -> result<_, string>;
+    /// 发送二进制帧；错误语义同 send-text
+    send-binary: func(handle: string, payload: list<u8>) -> result<_, string>;
+    /// 主动关闭连接（close-json：`{ code?, reason? }`，缺省 1000）；返回是否命中。
+    /// 该连接的 `ws:close.<owner>` 随即上报（wasClean=true 当且仅当 code ∈ {1000,1001}）
+    close: func(handle: string, close-json: string) -> result<bool, string>;
+    /// 查询连接是否处于 open 态（握手完成且未关闭）；仅属主可查。
+    /// 供插件在丢失状态事件后自愈（D3）
+    is-connected: func(handle: string) -> result<bool, string>;
+
+    // ==================== 服务端域（入站端点） ====================
+    /// 在宿主 WS 服务器挂载插件端点（实际路径 `/ws/plugin/<plugin-id>/<path>`，
+    /// 命名空间段由宿主注入，插件只提供后缀，D5）。
+    /// config-json（camelCase）纯引擎参数：
+    /// `{ path, auth?, max-message-bytes?, max-clients? }`
+    /// auth = "none"（默认：跳过首消息认证状态机，插件自管认证）
+    ///      | "jwt"（宿主校验首消息 `{"type":"auth","token":"<jwt>"}`，D8）。
+    /// path 非法（空、含 `/`、含 `.`、超长）或与本插件已注册端点冲突 → 错误
+    /// （跨插件不冲突：路径含 plugin-id 段）。返回端点句柄 `wse-<uuid>`。
+    /// 端点存在期间的每一帧都经宿主流过滤器链（D9）
+    register-endpoint: func(config-json: string) -> result<string, string>;
+    /// 向端点的指定客户端发文本帧；客户端不存在/队列满 → 错误（D10）
+    send-text-to-client: func(endpoint-id: string, client-id: string, text: string) -> result<_, string>;
+    /// 向端点的指定客户端发二进制帧
+    send-binary-to-client: func(endpoint-id: string, client-id: string, payload: list<u8>) -> result<_, string>;
+    /// 向端点全部客户端广播文本帧 → 成功入队客户端数（部分失败不回滚，D10）
+    broadcast-text: func(endpoint-id: string, text: string) -> result<u32, string>;
+    /// 向端点全部客户端广播二进制帧 → 成功入队客户端数
+    broadcast-binary: func(endpoint-id: string, payload: list<u8>) -> result<u32, string>;
+    /// 主动踢出端点的单个客户端（close-json：`{ code?, reason? }`，缺省 4004）；
+    /// 返回是否命中；随后该客户端经 `ws:client-disconnect.<owner>` 上报
+    close-client: func(endpoint-id: string, client-id: string, close-json: string) -> result<bool, string>;
+    /// 关闭端点并回收句柄（含下线全部客户端，close code 4005）；返回是否存在该端点
+    unregister-endpoint: func(endpoint-id: string) -> result<bool, string>;
+    /// 端点在线的客户端清单 → JSON 数组
+    /// `[{ clientId, addr, authenticated, connectedAt }]`（camelCase）；
+    /// 供插件在丢失 client-connect 事件后自愈（D3）；仅属主可查
+    list-clients: func(endpoint-id: string) -> result<string, string>;
+    /// 本插件已注册端点清单 → JSON 数组 `[{ endpointId, path, clientCount }]`；
+    /// 仅属主可查
+    list-endpoints: func() -> result<string, string>;
+}
+
 /// 文件系统访问（原 fs.rs：fs_read/write/copy/delete/exists）
 interface host-fs {
     read: func(path: string) -> result<option<string>, string>;
@@ -331,13 +403,18 @@ interface manifest {
 
 /// ABI 版本协商（原 __bedcode_abi_version + 阶段 A 新增 form 形态字段）
 ///
-/// 版本演进：
+/// 版本演进（与 SDK `abi.rs` 的 ABI_VERSION 序列逐条对应，不得漂移）：
 /// - v10：host-peer 原语化收缩第一阶段（dial-peer-endpoint / close /
 ///   set-shared-roots + host-mdns / host-platform），纯增量
-/// - v11：消息总线二进制载荷（host-bus.publish-binary / subscribe-binary）
+/// - v11：host-peer 传输控制三原语（pause-transfer / resume-transfer /
+///   resume-all-transfers），纯增量
+/// - v12：消息总线二进制载荷（host-bus.publish-binary / subscribe-binary）
 ///   + 可选导出 events-binary（宿主动态探测，旧插件不受影响）
-/// - v12：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
+/// - v13：host-mdns v2（advertise / stop-advertise / is-advertising 原语 +
 ///   事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`），纯增量
+/// - v14：host-websocket 基础能力服务（客户端域 connect/send/close/
+///   is-connected + 服务端域 register-endpoint/收发/广播/踢出/注销/清单）
+///   + 可选导出 events-ws（宿主动态探测），纯增量，v13 插件不受影响
 interface abi {
     version: func() -> u32;
     form: func() -> u32;
@@ -368,6 +445,7 @@ world plugin {
     import host-timer;
     import host-process;
     import host-app;
+    import host-websocket;
 
     export command;
     export lifecycle;
@@ -387,6 +465,33 @@ world plugin {
 /// （空实现亦可被宿主动态探测命中）。
 world plugin-binary {
     export events-binary;
+}
+
+/// v14：WS 消息帧接收（可选导出，**不进 `plugin` world 必选导出列表**——同 events-binary）
+///
+/// 宿主实例化后动态探测 `bedcode:plugin/events-ws`；未导出则：状态事件照收（bus），
+/// 消息帧丢弃并首次 `warn!` + 计数（宿主不缓存）。
+/// kind = "text" | "binary"，payload 统一列表（text 为 UTF-8 字节——零 JSON 转义、
+/// 非 UTF-8 直通）。分片 / 压缩 / opcode 已在宿主侧归一，**同一连接内的帧按到达序
+/// 投递**（保序，D2）。
+/// 无返回值（观察型回调，同 terminal-hooks / events-binary）：插件处理失败经
+/// host-log 记录；宿主仅 `error!` 记录 trap（含 endpoint-id / client-id 字段）并计数，
+/// 不断开连接、不中断后续帧投递。
+interface events-ws {
+    /// 客户端域：handle 为连接句柄 `wsc-<uuid>`
+    on-message: func(handle: string, kind: string, payload: list<u8>);
+    /// 服务端域：endpoint-id 为端点句柄、client-id 为对端连接 id
+    on-client-message: func(endpoint-id: string, client-id: string, kind: string, payload: list<u8>);
+}
+
+/// v14：events-ws 绑定专用 world（**仅 SDK 绑定用，宿主不实例化它**）——同 plugin-binary
+///
+/// 宿主对 `plugin` world 的导出全部按必选实例化，未导出 `events-ws` 的插件不能
+/// 因此加载失败，故该接口不声明进 `plugin` world；宿主改为实例化后动态探测。
+/// 本 world 让 SDK 生成 events-ws 的 guest 绑定（Guest trait + export!），
+/// 使 `wasm_entry!` 能无条件导出默认实现（空实现亦可被宿主动态探测命中）。
+world plugin-ws {
+    export events-ws;
 }
 
 /// 系统组件 world（**仅供系统组件构建绑定，宿主仍以 `plugin` world 实例化**）

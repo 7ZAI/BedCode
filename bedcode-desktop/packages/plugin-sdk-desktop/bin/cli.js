@@ -424,6 +424,8 @@ const VALID_PERMISSIONS = new Set([
   'storage',
   'broadcast',
   'peer',
+  'ws:client',
+  'ws:server',
 ])
 
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])

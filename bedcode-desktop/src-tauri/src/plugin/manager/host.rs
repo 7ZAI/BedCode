@@ -1342,6 +1342,10 @@ impl PluginHost {
         // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
         crate::plugin::manager::wasm_runtime::host_impl::mdns::purge_for_plugin(plugin_id);
 
+        // WS 基础能力服务（ABI v14，spec §2.3）：插件停用即回收其全部出站连接
+        // （只碰本人；服务端端点双表回收随票 05 一并接入）
+        crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(plugin_id);
+
         // WASM 插件：调用 on_shutdown + __bedcode_deactivate
         {
             let plugins = self.plugins.read().await;

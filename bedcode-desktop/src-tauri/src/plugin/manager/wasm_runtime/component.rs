@@ -22,7 +22,7 @@
 
 use super::host_impl::{
     api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, session, status,
-    storage, terminal, timer,
+    storage, terminal, timer, ws,
 };
 #[cfg(test)]
 use super::plugin_debug_mode;
@@ -392,6 +392,75 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     }
 }
 
+// ==================== host-websocket（ABI v14，spec `.scratch/2026-09-18-ws-base-service/`） ====================
+
+impl bedcode::plugin::host_websocket::Host for WasmPluginState {
+    // ==================== 客户端域（出站） ====================
+
+    fn connect(&mut self, config_json: String) -> Result<String, String> {
+        ws::ws_connect(&self.host_ctx, &self.plugin_id, &config_json)
+    }
+
+    fn send_text(&mut self, handle: String, text: String) -> Result<(), String> {
+        ws::ws_send_text(&self.host_ctx, &self.plugin_id, &handle, &text)
+    }
+
+    fn send_binary(&mut self, handle: String, payload: Vec<u8>) -> Result<(), String> {
+        ws::ws_send_binary(&self.host_ctx, &self.plugin_id, &handle, &payload)
+    }
+
+    fn close(&mut self, handle: String, close_json: String) -> Result<bool, String> {
+        ws::ws_close(&self.host_ctx, &self.plugin_id, &handle, &close_json)
+    }
+
+    fn is_connected(&mut self, handle: String) -> Result<bool, String> {
+        ws::ws_is_connected(&self.host_ctx, &self.plugin_id, &handle)
+    }
+
+    // ==================== 服务端域（入站；本票只定稿契约，实现见票 05） ====================
+
+    fn register_endpoint(&mut self, config_json: String) -> Result<String, String> {
+        ws::ws_register_endpoint(&self.host_ctx, &self.plugin_id, &config_json)
+    }
+
+    fn send_text_to_client(&mut self, endpoint_id: String, client_id: String, text: String) -> Result<(), String> {
+        ws::ws_send_text_to_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &text)
+    }
+
+    fn send_binary_to_client(
+        &mut self,
+        endpoint_id: String,
+        client_id: String,
+        payload: Vec<u8>,
+    ) -> Result<(), String> {
+        ws::ws_send_binary_to_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &payload)
+    }
+
+    fn broadcast_text(&mut self, endpoint_id: String, text: String) -> Result<u32, String> {
+        ws::ws_broadcast_text(&self.host_ctx, &self.plugin_id, &endpoint_id, &text)
+    }
+
+    fn broadcast_binary(&mut self, endpoint_id: String, payload: Vec<u8>) -> Result<u32, String> {
+        ws::ws_broadcast_binary(&self.host_ctx, &self.plugin_id, &endpoint_id, &payload)
+    }
+
+    fn close_client(&mut self, endpoint_id: String, client_id: String, close_json: String) -> Result<bool, String> {
+        ws::ws_close_client(&self.host_ctx, &self.plugin_id, &endpoint_id, &client_id, &close_json)
+    }
+
+    fn unregister_endpoint(&mut self, endpoint_id: String) -> Result<bool, String> {
+        ws::ws_unregister_endpoint(&self.host_ctx, &self.plugin_id, &endpoint_id)
+    }
+
+    fn list_clients(&mut self, endpoint_id: String) -> Result<String, String> {
+        ws::ws_list_clients(&self.host_ctx, &self.plugin_id, &endpoint_id)
+    }
+
+    fn list_endpoints(&mut self) -> Result<String, String> {
+        ws::ws_list_endpoints(&self.host_ctx, &self.plugin_id)
+    }
+}
+
 // ==================== Component Linker 组装 ====================
 
 /// 将已接线的 import 接口注册到 component linker
@@ -419,6 +488,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_peer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -595,6 +665,30 @@ impl LoadedWasmPlugin {
                     .ok()
             });
         store.data_mut().on_message_binary = on_message_binary;
+
+        // v14：动态探测可选导出 events-ws（两条回调分别探测，缺失容忍为 None）。
+        // 语义与 events-binary 同构：未导出 → 状态事件照收（bus），消息帧丢弃 +
+        // 首次 warn + 计数（宿主不缓存，spec §2.2 D2）；旧插件加载零回归。
+        // 同样必须用 ItemName 路径语法（`iface.func` 点号），理由同上
+        let on_ws_message = "bedcode:plugin/events-ws.on-message"
+            .parse::<wasmtime::component::wit_parser::ItemName>()
+            .ok()
+            .and_then(|item| {
+                instance
+                    .get_typed_func::<(String, String, Vec<u8>), ()>(&mut *store, &item)
+                    .ok()
+            });
+        let on_ws_client_message = "bedcode:plugin/events-ws.on-client-message"
+            .parse::<wasmtime::component::wit_parser::ItemName>()
+            .ok()
+            .and_then(|item| {
+                instance
+                    .get_typed_func::<(String, String, String, Vec<u8>), ()>(&mut *store, &item)
+                    .ok()
+            });
+        let data = store.data_mut();
+        data.on_ws_message = on_ws_message;
+        data.on_ws_client_message = on_ws_client_message;
         Ok(())
     }
 
@@ -649,9 +743,9 @@ impl LoadedWasmPlugin {
     {
         let _timer = self.track_call();
         self.refill_call_fuel()?;
-        let item: wasmtime::component::wit_parser::ItemName = export_name.parse().map_err(|e| {
-            AppError::Plugin(format!("invalid capability export name: {} ({})", export_name, e))
-        })?;
+        let item: wasmtime::component::wit_parser::ItemName = export_name
+            .parse()
+            .map_err(|e| AppError::Plugin(format!("invalid capability export name: {} ({})", export_name, e)))?;
         let func = self
             .instance
             .get_typed_func::<Params, Results>(&mut self.store, &item)
@@ -768,7 +862,10 @@ impl LoadedWasmPlugin {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_output", &e);
-                Err(AppError::Plugin(format!("WASM on_terminal_output() call failed: {}", e)))
+                Err(AppError::Plugin(format!(
+                    "WASM on_terminal_output() call failed: {}",
+                    e
+                )))
             }
         }
     }
@@ -841,11 +938,57 @@ impl LoadedWasmPlugin {
             )));
         };
         // 无返回值（观察型回调）：guest 内部失败经 host-log 记录；此处仅 trap 上抛
-        func.call(&mut self.store, (topic.to_string(), sender.to_string(), payload.to_vec()))
-            .map_err(|e| {
-                self.log_trap("on_message_binary", &e);
-                AppError::Plugin(format!("WASM on_message_binary() call failed: {}", e))
-            })
+        func.call(
+            &mut self.store,
+            (topic.to_string(), sender.to_string(), payload.to_vec()),
+        )
+        .map_err(|e| {
+            self.log_trap("on_message_binary", &e);
+            AppError::Plugin(format!("WASM on_message_binary() call failed: {}", e))
+        })
+    }
+
+    /// 调用插件的 WS 帧接收导出（v14，可选导出动态探测）
+    ///
+    /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 该回调未导出——调用方按 spec §2.2
+    /// 降级（丢弃 + 首次 warn + 计数，宿主不缓存）。无返回值（观察型回调）：
+    /// guest 内部失败经 host-log 记录；此处仅 trap 上抛
+    pub(crate) fn on_ws_frame(&mut self, frame: &crate::plugin::bus::WsFrameDispatch) -> crate::Result<bool> {
+        use crate::plugin::bus::WsFrameDispatch;
+        let _timer = self.track_call();
+        match frame {
+            WsFrameDispatch::Client { handle, kind, payload } => {
+                // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
+                let Some(func) = self.store.data().on_ws_message.clone() else {
+                    return Ok(false);
+                };
+                func.call(&mut self.store, (handle.clone(), kind.clone(), payload.clone()))
+                    .map_err(|e| {
+                        self.log_trap("on_ws_message", &e);
+                        AppError::Plugin(format!("WASM on_ws_message() call failed: {}", e))
+                    })?;
+                Ok(true)
+            }
+            WsFrameDispatch::EndpointClient {
+                endpoint_id,
+                client_id,
+                kind,
+                payload,
+            } => {
+                let Some(func) = self.store.data().on_ws_client_message.clone() else {
+                    return Ok(false);
+                };
+                func.call(
+                    &mut self.store,
+                    (endpoint_id.clone(), client_id.clone(), kind.clone(), payload.clone()),
+                )
+                .map_err(|e| {
+                    self.log_trap("on_ws_client_message", &e);
+                    AppError::Plugin(format!("WASM on_ws_client_message() call failed: {}", e))
+                })?;
+                Ok(true)
+            }
+        }
     }
 
     /// 调用插件的会话生命周期事件导出

@@ -343,6 +343,32 @@ impl crate::plugin::bus::MessageDispatcher for PluginHost {
         })
     }
 
+    /// 投递 WS 帧给插件的 `events-ws` 可选导出（ABI v14）
+    ///
+    /// 与 `dispatch_to_wasm` 同桥（block_on_async + with_wasm_plugin_call）：
+    /// trap 走自动重载恢复。返回 `Ok(false)` = 插件未导出该接口（调用方降级）
+    fn dispatch_ws_frame(
+        &self,
+        plugin_id: &str,
+        frame: &crate::plugin::bus::WsFrameDispatch,
+    ) -> anyhow::Result<bool> {
+        let host = self.clone();
+        let plugin_id = plugin_id.to_string();
+        let frame = frame.clone();
+        crate::plugin::manager::wasm_runtime::block_on_async(async move {
+            let delivered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let flag = delivered.clone();
+            host.with_wasm_plugin_call(&plugin_id, move |plugin| {
+                let ok = plugin.on_ws_frame(&frame)?;
+                flag.store(ok, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .map_err(anyhow::Error::from)?;
+            Ok(delivered.load(std::sync::atomic::Ordering::SeqCst))
+        })
+    }
+
     fn is_activated(&self, plugin_id: &str) -> bool {
         let plugins = self.plugins.clone();
         crate::plugin::manager::wasm_runtime::block_on_async(async move {

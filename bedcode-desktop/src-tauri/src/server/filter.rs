@@ -68,6 +68,12 @@ pub enum TrafficChannel {
     WsTerminal,
     /// WS 事件通道（设备在线判定 + 同步广播 /ws/event）
     WsEvent,
+    /// WS 插件端点通道（`/ws/plugin/{plugin_id}/{path}`，插件入站端点帧）
+    ///
+    /// 参与流量过滤链（帧级 inbound / outbound），但不参与链路加密
+    /// （`LinkEncryptionFilter::should_process` 对本品恒 `false`）——链路加密是
+    /// 移动端配对设备专用协商协议，插件端点的第三方客户端不参与
+    WsPlugin,
 }
 
 impl TrafficChannel {
@@ -77,6 +83,7 @@ impl TrafficChannel {
             TrafficChannel::Http => "http",
             TrafficChannel::WsTerminal => "ws-terminal",
             TrafficChannel::WsEvent => "ws-event",
+            TrafficChannel::WsPlugin => "ws-plugin",
         }
     }
 }
@@ -386,6 +393,42 @@ mod tests {
         let mut ctx = http_ctx("/api/sessions", b"payload");
         assert!(chain.run_inbound(&mut ctx).is_ok());
         assert_eq!(ctx.data, b"payload");
+    }
+
+    /// 插件端点通道（`TrafficChannel::WsPlugin`）参与帧级过滤链：inbound / outbound
+    /// 均执行（spec §4.6 / 票 05 checklist），且通道名稳定（日志字段）
+    #[test]
+    fn ws_plugin_channel_runs_both_directions() {
+        assert_eq!(TrafficChannel::WsPlugin.as_str(), "ws-plugin");
+
+        let chain = TrafficFilterChain::new();
+        let observer = Observer::new();
+        chain.register(observer.clone());
+
+        let mut in_ctx = FilterContext {
+            channel: TrafficChannel::WsPlugin,
+            direction: Direction::Inbound,
+            peer: "192.168.1.42:5001",
+            route: "text",
+            negotiation: "",
+            data: b"hello".to_vec(),
+            outbound_headers: Vec::new(),
+        };
+        assert!(chain.run_inbound(&mut in_ctx).is_ok());
+        assert_eq!(in_ctx.data, b"hello", "无转换型过滤器时载荷原样透传");
+        assert_eq!(observer.inbound_calls(), 1, "插件端点入站帧必须过链");
+
+        let mut out_ctx = FilterContext {
+            channel: TrafficChannel::WsPlugin,
+            direction: Direction::Outbound,
+            peer: "192.168.1.42:5001",
+            route: "binary",
+            negotiation: "",
+            data: b"hello".to_vec(),
+            outbound_headers: Vec::new(),
+        };
+        assert!(chain.run_outbound(&mut out_ctx).is_ok());
+        assert_eq!(observer.outbound_calls(), 1, "插件端点出站帧必须过链");
     }
 
     #[test]

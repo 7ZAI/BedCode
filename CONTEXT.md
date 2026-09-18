@@ -94,6 +94,24 @@ _Avoid_: logo（与品牌 logo 混淆）、头像（与用户头像混用时）
 单个插件的二级页面，展示 Hero、扩展点、权限、详细信息折叠区；配置在独立配置页，详情页提供入口按钮（仅激活且有配置项时可点）。与配置页是扁平两兄弟页，都直接返回列表页，非嵌套父子。
 _Avoid_: 插件信息页、插件设置页（与配置页混用时）
 
+### 插件宿主能力 (Plugin Host Capabilities)
+
+**连接句柄 (Connection Handle)**:
+客户端域（出站）WS 连接的寻址标识，形如 `wsc-<uuid>`，由宿主在握手成功后签发。句柄按属主登记：只有创建它的插件能收发/查询/关闭（他人调用返回「非属主」错误且不消费句柄），插件停用即随属主回收（close 4005）。句柄是插件侧寻址出站连接的**唯一**凭据。
+_Avoid_: 连接 id、连接对象、session（与终端会话混淆）
+
+**端点句柄 (Endpoint Handle)**:
+服务端域（入站）WS 端点的寻址标识，形如 `wse-<uuid>`。插件只提供路径**后缀**，宿主按调用方注入属主命名空间段（实际挂载 `/ws/plugin/<plugin-id>/<path>`），因此插件之间不存在路径抢占。同一端点在线的每个对端另有**对端客户端标识**（client-id，取对端地址字符串），与端点句柄一起用于单发/踢出；端点注销或属主停用即回收并下线其全部对端（4005）。
+_Avoid_: 端点 id（与对端 client-id 混淆）、路由、挂载路径（指句柄时）
+
+**属主作用域 topic (Owner-scoped Topic)**:
+宿主向插件投递 WS 状态事件的总线 topic 形态 `ws:<event>.<owner>`（open / error / close / client-connect / client-disconnect），**标识（句柄、端点、client-id）在 payload 内**，一个 topic 承载该插件全部同类事件。topic 内嵌属主，非属主因总线精确 topic 匹配而物理上订阅不到。宿主不缓冲、不重放：插件须在 activate 期完成订阅，晚订阅期间的事件永久丢失，丢失自愈靠快照查询（`is-connected` / `list-clients` / `list-endpoints`）。
+_Avoid_: 事件频道、订阅通道（指 topic 名时）
+
+**事件帧双通道 (Dual-channel Event Delivery)**:
+WS 相关事件分两条通道投递，职责互补：**状态事件**（稀疏、一次性状态迁移）走 host-bus 的属主作用域 topic（JSON，可靠但可丢失、可自愈）；**消息帧**（高频数据面，text + binary）走可选导出 `events-ws` 回调（零 JSON 转义、非 UTF-8 直通、同连接内保序）。未导出 `events-ws` 的插件照收状态事件，消息帧则丢弃 + 首次 `warn!` + 计数（宿主不缓存）。
+_Avoid_: 事件通道（与移动端 `/ws/event` 通道混淆）、回调总线
+
 ### 认证与设备 (Authentication & Devices)
 
 **认证方式 (Auth Method)**:

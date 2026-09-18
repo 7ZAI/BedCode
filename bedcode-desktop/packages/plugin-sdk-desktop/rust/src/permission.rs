@@ -40,6 +40,14 @@ pub const PERMISSION_APP_CLI: &str = "app:cli";
 pub const PERMISSION_PEER: &str = "peer";
 /// mDNS 基础能力服务（host-mdns v2）：浏览 + 广播原语，事件按属主定向投递
 pub const PERMISSION_MDNS: &str = "mdns";
+/// WebSocket 客户端域（host-websocket 出站连接：connect / 收发 / 关闭 / 状态查询）
+///
+/// 与 `ws:server` 分域：出站连接是 SSRF 面（插件可代宿主访问任意 `ws://` 地址），
+/// 入站端点是在局域网新增暴露面——单权限通吃会让「只需出站」的插件被动获得
+/// 入站监听能力（spec D6）
+pub const PERMISSION_WS_CLIENT: &str = "ws:client";
+/// WebSocket 服务端域（host-websocket 入站端点：注册 / 收发 / 广播 / 踢出 / 注销 / 清单）
+pub const PERMISSION_WS_SERVER: &str = "ws:server";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -64,6 +72,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_APP_CLI,
     PERMISSION_PEER,
     PERMISSION_MDNS,
+    PERMISSION_WS_CLIENT,
+    PERMISSION_WS_SERVER,
 ];
 
 /// 权限到 API 方法的映射
@@ -123,6 +133,24 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "mdns.advertise",
         "mdns.stopAdvertise",
         "mdns.isAdvertising",
+    ]),
+    (PERMISSION_WS_CLIENT, &[
+        "ws.connect",
+        "ws.sendText",
+        "ws.sendBinary",
+        "ws.close",
+        "ws.isConnected",
+    ]),
+    (PERMISSION_WS_SERVER, &[
+        "ws.registerEndpoint",
+        "ws.sendTextToClient",
+        "ws.sendBinaryToClient",
+        "ws.broadcastText",
+        "ws.broadcastBinary",
+        "ws.closeClient",
+        "ws.unregisterEndpoint",
+        "ws.listClients",
+        "ws.listEndpoints",
     ]),
 ];
 

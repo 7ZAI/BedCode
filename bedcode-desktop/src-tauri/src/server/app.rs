@@ -12,7 +12,9 @@ use std::time::Duration;
 use crate::server::controllers::{
     auth_controller, config_controller, file_controller, git_controller, plugin_controller, session_controller,
 };
-use crate::server::ws::terminal_ws::TerminalWs;
+use crate::server::ws::channel::plugin::PluginChannel;
+use crate::server::ws::conn::{ConnSpec, WsConnBase};
+use crate::server::ws::registry::{ChannelKind, WsSessionRegistry};
 use crate::system::constants::server::{
     API_HEALTH_PATH, BIND_ADDRESS, CORS_MAX_AGE_SECS, PLACEHOLDER_PEER_ADDR, WS_EVENT_PATH,
 };
@@ -21,7 +23,10 @@ use crate::system::constants::server::{
 ///
 /// max_size 同时限制 frame 和 message 大小，取两者中较大的值；
 /// 两条 WS 路由（session / event）共用同一计算
-fn ws_frame_limit() -> usize {
+///
+/// `pub(crate)`：host-websocket（ABI v14）客户端域/服务端域的帧上限
+/// 与终端链路取同一事实源（spec §4.4）
+pub(crate) fn ws_frame_limit() -> usize {
     let config = crate::system::config::AppConfig::global();
     std::cmp::max(
         config.network.ws_max_frame_size_kb * 1024,
@@ -43,7 +48,7 @@ async fn session_terminal_ws(
     let addr = req
         .peer_addr()
         .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    let ws_actor = TerminalWs::new_for_session(addr, path.into_inner());
+    let ws_actor = WsConnBase::new_for_session(addr, path.into_inner());
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(ws_frame_limit())
         .start()
@@ -57,10 +62,89 @@ async fn event_ws(req: HttpRequest, stream: web::Payload) -> Result<HttpResponse
     let addr = req
         .peer_addr()
         .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
-    let ws_actor = TerminalWs::new_event(addr);
+    let ws_actor = WsConnBase::new_event(addr);
     actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
         .frame_size(ws_frame_limit())
         .start()
+}
+
+/// 插件端点 WS 握手端点 — `/ws/plugin/{plugin_id}/{path}`（spec D5）
+///
+/// 通配单点分发（不依赖 actix 动态加路由）：路径 → 端点表反查 → 未注册端点 /
+/// 属主未激活 → 404；入站客户端数超上限 → 503（**协议升级前**拒绝，不产生
+/// 连接事件，spec §4.4）。与 `/ws/event` 一样落在 `/api` scope 之外，
+/// 不经 HTTP JWT 中间件——认证策略由端点声明（`auth: none | jwt`，spec D8）。
+async fn plugin_endpoint_ws(
+    path: web::Path<(String, String)>,
+    req: HttpRequest,
+    stream: web::Payload,
+) -> Result<HttpResponse, Error> {
+    let (plugin_id, suffix) = path.into_inner();
+    let mount = crate::server::ws::endpoint::mount_path(&plugin_id, &suffix);
+    let Some(entry) = crate::server::ws::endpoint::find_by_mount(&mount) else {
+        tracing::debug!(mount_path = %mount, "plugin ws endpoint not registered, rejecting 404");
+        return Ok(HttpResponse::NotFound().finish());
+    };
+
+    // 属主未激活 → 404（停用流程已回收端点，此处为防御性门禁）
+    if !endpoint_owner_activated(&plugin_id).await {
+        tracing::debug!(
+            plugin_id = %plugin_id,
+            mount_path = %mount,
+            "plugin ws endpoint owner is not activated, rejecting 404"
+        );
+        return Ok(HttpResponse::NotFound().finish());
+    }
+
+    // 入站连接数上限：升级前拒绝（503，不产生连接事件）
+    let online = WsSessionRegistry::global()
+        .endpoint_client_count(&entry.endpoint_id)
+        .await;
+    if online >= entry.max_clients {
+        tracing::warn!(
+            plugin_id = %plugin_id,
+            endpoint_id = %entry.endpoint_id,
+            online,
+            limit = entry.max_clients,
+            "plugin ws endpoint client limit reached, rejecting before upgrade (503)"
+        );
+        return Ok(HttpResponse::ServiceUnavailable().finish());
+    }
+
+    let addr = req
+        .peer_addr()
+        .unwrap_or_else(|| PLACEHOLDER_PEER_ADDR.parse().unwrap());
+    let channel = PluginChannel::new(&entry, addr);
+    let ws_actor = WsConnBase::new(
+        ConnSpec {
+            owner: Some(entry.owner.clone()),
+            endpoint_id: Some(entry.endpoint_id.clone()),
+            ..ConnSpec::new(addr, ChannelKind::Plugin)
+        },
+        Box::new(channel),
+    );
+    actix_ws::WsResponseBuilder::new(ws_actor, &req, stream)
+        .frame_size(entry.max_message_bytes)
+        .start()
+}
+
+/// 属主插件是否处于激活态
+///
+/// 跳过闸门的两种情形（端点本身只可能由运行中的插件注册，端点表存在性已是
+/// 最强证据；停用流程会 `purge_for_plugin` 回收端点，本闸门只是防御性兜底）：
+/// - 无 `AppContext` 的运行上下文（库级测试 / 初始化中间态）；
+/// - 宿主对该 `plugin_id` **没有任何记录**——此时无从判定，且说明该 id 从未
+///   在本进程注册过（测试替身宿主 / 外来上下文注入的全局 AppContext）。
+///   仅当宿主有记录且状态非激活时否决。
+async fn endpoint_owner_activated(plugin_id: &str) -> bool {
+    let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
+        return true;
+    };
+    let host = ctx.plugin_host();
+    if host.get_plugin(plugin_id).await.is_none() {
+        return true;
+    }
+    host.is_activated(plugin_id).await
 }
 
 /// 健康检查端点 — 移动端 WS 连接前探测桌面端是否可达
@@ -160,6 +244,13 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
     // WebSocket 事件通道端点（常驻，在线判定 + 广播接收，认证在 WS 首消息完成）
     cfg.route(WS_EVENT_PATH, web::get().to(event_ws));
+
+    // 插件端点通配路由（spec D5）：命名空间段 `{plugin_id}` 由宿主注入，
+    // 插件只给后缀；未注册 / 属主未激活 → 404，连接数超限 → 503
+    cfg.route(
+        "/ws/plugin/{plugin_id}/{path:.*}",
+        web::get().to(plugin_endpoint_ws),
+    );
 
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));

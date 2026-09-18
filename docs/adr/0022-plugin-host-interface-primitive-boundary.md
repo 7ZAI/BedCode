@@ -83,6 +83,21 @@ interface host-mdns {
 | `retry-transfer` | UX 动作 → 插件记录批元数据后重调 send/pull 原语（带续传偏移） |
 | `get-receive-settings` / `set-receive-policy` / `set-download-dir` / `set-transfer-encryption` | 产品设置项 → host-storage 持久化；涉及落盘路径与加密的部分经原语参数传入 |
 
+### 新增 host-websocket（WS 基础能力服务，2026-09-18）
+
+WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/握手、帧编解码、连接生命周期），但**消息语义不是**：谁跟谁连、消息怎么拼、房间/重连/心跳策略都是插件的活。据此新增 `host-websocket`
+（14 函数：客户端域 5 + 服务端域 9）+ 可选导出 `events-ws`，ABI desktop 13 → **14**（mobile 保持 11，ADR 0019 双端各自演进）。
+
+裁决要点（spec：`.scratch/2026-09-18-ws-base-service/spec.md`）：
+
+1. **零业务代码红线（D1）**：宿主只做引擎原语——连接生命周期、帧收发、句柄登记、属主仲裁、按属主回收、事件定向投递。宿主不拼装、不解读任何业务字段（同 host-mdns v2 的尺子）；
+2. **属主作用域事件 topic（D3）**：状态事件 topic 内嵌属主——客户端域 `ws:open|error|close.<owner>`、服务端域 `ws:client-connect|client-disconnect.<owner>`，连接/对端标识放 payload。**理由**：消息总线是精确匹配、无重放无缓冲的，若按宿主生成句柄做 topic，插件必须先拿到句柄才能订阅 → 必然丢「连接已建立」事件；属主作用域 topic 让插件在 activate 期即可订阅（丢失时的自愈靠 `is-connected` / `list-clients` / `list-endpoints` 快照查询）；
+3. **端点命名空间由宿主注入（D5）**：插件只提供路径后缀，完整挂载路径为 `/ws/plugin/<plugin-id>/<path>`。**理由**：属主段进路径后，插件之间物理上不存在路径抢占，宿主也不需要维护跨插件冲突表；
+4. **权限按域拆分（D6）**：`ws:client`（出站，SSRF 暴露面）与 `ws:server`（入站，对外暴露面）互相独立，按最小必要授予。**理由**：两域的风险方向不同，合并成一个 `ws` 权限会使「只想连外部服务的插件」被迫获得「在局域网开端口」的能力；
+5. **过滤链参与、链路加密排除（D9）**：插件端点帧走 `TrafficChannel::WsPlugin` 进入 `TrafficFilterChain`（inbound / outbound 均执行），但 `LinkEncryptionFilter::should_process` 对该通道恒 `false`。**理由**：链路加密是移动端配对设备的专用协商协议（双 ECDH + 密钥表按连接标识键控），插件端点的第三方客户端不参与该握手，且过滤链是宿主的统一审计/改写入口，能力不应绕过；
+6. **本期仅 `ws://`（D7）**：`wss://` 显式拒绝。**理由**：`tokio-tungstenite` 未启用 TLS feature，接受 `wss://` 会以「握手失败」掩盖真实原因；TLS 客户端支持单独立项；
+7. **发送队列满即 `Err`（D10）**：宿主不做无界缓冲与背压等待，fail-visible 优于静默丢弃；踢出/注销/停用/停机的关闭码固定（4004 / 4005 / 1001），`wasClean` 仅在对端主动 Close 且 code ∈ {1000,1001} 时为 true（D11）。
+
 ## Considered Options
 
 - **维持全量命令面投影（现状）**：切换成本最低，但五处同步税、双份 DTO 翻译与 ABI 不稳定随每个功能持续付费。
@@ -107,4 +122,5 @@ interface host-mdns {
 - **2026-08-26 v1**：初版裁决——host-peer 27 → 约 15（任务/历史/设置等业务面下沉）。
 - **2026-08-26 v2**：同一裁剪线二次收紧——① 共享目录 CRUD 三函数 → `set-shared-roots` 全量推送；② `disconnect-peer` + `cancel` 合并为统一 `close(handle)`，对端寻址全面句柄化；③ `pick-files`/`pick-folder` 移交新 `host-platform`；④ `list-devices` 拆分为 `host-mdns` browse-only 纯能力（自我广播留宿主自动生命周期）；⑤ 纠错：`respond-transfer` 从下沉清单改判安全闸门应答原语（无它则 ask 模式无法放行单个接收批）。最终 host-peer = 11 个函数。本修订仅定契约，代码尚未实施（WIT 现状仍为 27 函数全量投影）。
 - **2026-08-26 v3（当前）**：Phase 1–2 已实施（新原语并存、ABI desktop v9 / mobile v7），Phase 3–4 规格落成时发现本 ADR 内部张力：Consequences 段「插件的策略设置只是预配置该闸门的参数」暗示存在配置通道，v2 退役表却将 `set-receive-policy` / `set-download-dir` 列入下沉。经裁决修正：二者是「引擎安全闸门/落盘配置」而非业务编排，符合本文裁剪线，保留为终态原语；`get-receive-settings`（读接口）维持下沉。**host-peer 终态 = 13 个函数**（11 + 二配置原语）；上文「最终 host-peer = 11 个函数」为 v2 时点表述，以本修订为准。实施规划见 `.scratch/peer-network/spec-plugin-self-hosting.md`。
-- **2026-09-15 v4（当前）**：host-mdns 升级为 mDNS 基础能力服务（见「host-mdns v2」节）：新增 advertise / stop-advertise / is-advertising 三原语（config-json 纯引擎参数）、浏览事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增 serviceType/browserId）、单守护收敛（全局唯一 ServiceDaemon，peer-net 与插件共享）、双表属主仲裁与按属主回收、宿主身份广播登记（owner=host，零业务代码红线 D3）、Android 多播锁随单守护常驻获取；全局发现桥接与缓存重发通道退役（D1），file-transfer 双端一期迁移（D2）。ABI desktop 12→13 / mobile 10→11（ADR 0019 双端同版）。实施验收后落 ADR（D5 定案）。
+- **2026-09-15 v4**：host-mdns 升级为 mDNS 基础能力服务（见「host-mdns v2」节）：新增 advertise / stop-advertise / is-advertising 三原语（config-json 纯引擎参数）、浏览事件定向投递 `mdns:found.<owner>` / `mdns:lost.<owner>`（payload 增 serviceType/browserId）、单守护收敛（全局唯一 ServiceDaemon，peer-net 与插件共享）、双表属主仲裁与按属主回收、宿主身份广播登记（owner=host，零业务代码红线 D3）、Android 多播锁随单守护常驻获取；全局发现桥接与缓存重发通道退役（D1），file-transfer 双端一期迁移（D2）。ABI desktop 12→13 / mobile 10→11（ADR 0019 双端同版）。实施验收后落 ADR（D5 定案）。
+- **2026-09-18 v5（当前）**：新增 host-websocket（见「新增 host-websocket」节）：客户端域（connect / send-text / send-binary / close / is-connected）+ 服务端域（register-endpoint / 收发 / 广播 / 踢出 / 注销 / 清单）共 14 函数 + 可选导出 `events-ws`（宿主动态探测，未导出则帧丢弃 + 首次 warn + 计数）；状态事件改 **owner 作用域 topic**（`ws:<event>.<owner>`，标识在 payload，D3）；插件端点挂载 `/ws/plugin/<plugin-id>/<path>`（命名空间由宿主注入，D5）；权限按域拆 `ws:client` / `ws:server`（D6）；插件端点帧过流量过滤链但不参与链路加密（`TrafficChannel::WsPlugin`，D9）；本期仅 `ws://`（D7）。ABI desktop 13→**14**（mobile 11 不变，ADR 0019 双端各自演进）。
