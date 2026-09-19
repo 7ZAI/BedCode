@@ -25,6 +25,7 @@ const VALID_PERMISSIONS = new Set([
   'peer',
   'ws:client',
   'ws:server',
+  'auth',
 ])
 
 /** 权限到 API 方法的映射 */
@@ -49,6 +50,8 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   // ws:* 为 WASM-only 权限（host-websocket 原语），无前端 API 方法映射
   'ws:client': [],
   'ws:server': [],
+  // auth 为 WASM-only 权限（v15 secret-store），无前端 API 方法映射
+  auth: [],
 }
 
 /** 检查权限是否合法 */

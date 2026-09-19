@@ -104,10 +104,15 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
-          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
-          targets: wasm32-unknown-unknown, wasm32-wasip2
+          # 票 03：桌面插件全量 wasm32-wasip3（构建经 pinned nightly，见下方 wasip3
+          # 工具链步骤）；宿主构建用宿主 target。wasm32-wasip2 仅 plugin-wasi-test 需要。
+          targets: wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2
@@ -326,9 +331,15 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主构建用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2）
-          targets: wasm32-unknown-unknown, wasm32-wasip2
+          # 票 03：桌面插件全量 wasm32-wasip3（构建经 pinned nightly，见下方 wasip3
+          # 工具链步骤）；宿主构建用宿主 target。wasm32-wasip2 仅 plugin-wasi-test 需要。
+          targets: wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh；stable 1.99 后移除 nightly pin
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
 
       - name: Rust cache
         uses: swatinem/rust-cache@v2

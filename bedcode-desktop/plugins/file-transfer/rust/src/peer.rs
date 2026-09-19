@@ -950,6 +950,13 @@ mod tests {
         ) -> Result<Option<serde_json::Value>, HostError> {
             Ok(None)
         }
+        fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
+            // 事务批：逐条记日志（与 plugin_db_execute 同口径），不触碰行数据
+            for sql in sqls {
+                self.sql_log.borrow_mut().push(sql.clone());
+            }
+            Ok(0)
+        }
     }
 
     impl HostPeer for MockHost {

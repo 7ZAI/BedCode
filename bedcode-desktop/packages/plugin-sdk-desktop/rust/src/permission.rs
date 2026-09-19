@@ -48,6 +48,11 @@ pub const PERMISSION_MDNS: &str = "mdns";
 pub const PERMISSION_WS_CLIENT: &str = "ws:client";
 /// WebSocket 服务端域（host-websocket 入站端点：注册 / 收发 / 广播 / 踢出 / 注销 / 清单）
 pub const PERMISSION_WS_SERVER: &str = "ws:server";
+/// 密钥托管（host-auth / secret-store，v15）：属主隔离的凭据读写
+///
+/// 认证中心语义下沉的基础权限——声明即信任宿主代管凭据（JWT 密钥 / 配对种子），
+/// 插件间互不可见；密钥明文不落日志、持久化于主库 plugin_secrets 表
+pub const PERMISSION_AUTH: &str = "auth";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -74,6 +79,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_MDNS,
     PERMISSION_WS_CLIENT,
     PERMISSION_WS_SERVER,
+    PERMISSION_AUTH,
 ];
 
 /// 权限到 API 方法的映射

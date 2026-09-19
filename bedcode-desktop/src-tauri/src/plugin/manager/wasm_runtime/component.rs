@@ -21,8 +21,8 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, session, status,
-    storage, terminal, timer, ws,
+    api, app, auth, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process,
+    session, status, storage, terminal, timer, ws,
 };
 #[cfg(test)]
 use super::plugin_debug_mode;
@@ -34,11 +34,17 @@ use bedcode_plugin_api::abi;
 use std::sync::Arc;
 use wasmtime::component::{bindgen, Component, Instance, Linker};
 use wasmtime::{ResourceLimiter, Store};
-use wasmtime_wasi::{p2, FsPerms, WasiCtxBuilder};
+use wasmtime_wasi::{p2, p3, FsPerms, WasiCtxBuilder};
 
 bindgen!({
     path: "../packages/plugin-sdk-desktop/rust/wit/bedcode.wit",
     world: "plugin",
+    // 票 02 宿主 async 化门禁：全部导出绑定生成 async 变体（call_* → async fn，
+    // 内部走 TypedFunc::call_async）。wasip3 组件实例化后 Store 为 async-required，
+    // 同步 call 会报 "store configuration requires that `*_async` functions are used"；
+    // 统一 async 化让既有 wasip2/unknown-unknown 插件与 wasip3 走同一条调用路径
+    // （同步组件在 async 路径下行为等价，见 /tmp/wasip3-probe 场景 1/4 实证）。
+    exports: { default: async },
 });
 
 // ==================== Host trait 实现（import 接口） ====================
@@ -62,6 +68,29 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
         storage::storage_delete(&self.host_ctx, &self.plugin_id, &key)
     }
 }
+
+// ==================== host-auth（v15 secret-store） ====================
+// 属主 = 调用方插件实例的 plugin_id（本 impl 自 store state 派生，guest 无法
+// 伪造）；权限门 + 主库持久化 + 明文不落日志全部在 host_impl/auth.rs 内实现
+
+impl bedcode::plugin::host_auth::Host for WasmPluginState {
+    fn secret_get(&mut self, key: String) -> Result<Option<String>, String> {
+        auth::auth_secret_get(&self.host_ctx, &self.plugin_id, &key)
+    }
+
+    fn secret_set(&mut self, key: String, value: String) -> Result<(), String> {
+        auth::auth_secret_set(&self.host_ctx, &self.plugin_id, &key, &value)
+    }
+
+    fn secret_delete(&mut self, key: String) -> Result<(), String> {
+        auth::auth_secret_delete(&self.host_ctx, &self.plugin_id, &key)
+    }
+
+    fn secret_keys(&mut self) -> Result<Vec<String>, String> {
+        auth::auth_secret_keys(&self.host_ctx, &self.plugin_id)
+    }
+}
+
 
 impl bedcode::plugin::host_log::Host for WasmPluginState {
     fn info(&mut self, message: String) {
@@ -467,6 +496,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
     type D = wasmtime::component::HasSelf<WasmPluginState>;
     for iface in [
         bedcode::plugin::host_app::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_auth::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_storage::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_log::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_config::add_to_linker::<WasmPluginState, D>,
@@ -491,10 +521,20 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
     }
     // WASI preview2（wasm32-wasip2 插件经 std::fs 直接访问文件所需的全部接口：
     // clock/random/cli/filesystem/io/sockets）。
-    // 未导入 wasi 的既有插件（wasm32-unknown-unknown 产物）不受影响——
+    // 不导入 wasi 的插件（unknown-unknown 既有产物 / 未来无 wasi 需求者）不受影响——
     // linker 中无对应 import 的注册是惰性的。
-    p2::add_to_linker_sync(linker)
+    // 票 02：同步 adapter（add_to_linker_sync）在 async store 下调用线进入
+    // tokio runtime 上下文后其内部 ambient block_on 会重入 panic
+    // （"Cannot start a runtime from within a runtime"，实证 wasi preopen e2e），
+    // 改使 async adapter（fiber 内原生 await，与 wasip3 p3 同机制）。
+    p2::add_to_linker_async(linker)
         .map_err(|e| AppError::Plugin(format!("Failed to register WASI preview2 interfaces: {}", e)))?;
+    // WASI 0.3（wasm32-wasip3 插件）：p3 模块提供 wasi:cli@0.3.0 / clocks / random /
+    // filesystem / sockets，接口版本与 p2（wasi:cli@0.2.0 等）不同名可共存；
+    // 内部以 func_wrap_async 注册（CM_ASYNC 并发模型），仅 wasip3 组件消费，
+    // 既有插件不导入 wasi0.3 则注册惰性无效。
+    p3::add_to_linker(linker)
+        .map_err(|e| AppError::Plugin(format!("Failed to register WASI 0.3 (p3) interfaces: {}", e)))?;
     Ok(())
 }
 
@@ -567,7 +607,14 @@ impl LoadedWasmPlugin {
                 .map_err(|e| AppError::Plugin(format!("Failed to set fuel for plugin '{}': {}", plugin_id, e)))?;
         }
 
-        let instance = component_linker.instantiate(&mut store, component).map_err(|e| {
+        // 票 02：CM_ASYNC 引擎下实例化必须走 async 入口（wasip3 组件导入 async
+        // wasi 0.3 函数，同步 instantiate 报 async-required）；同步组件在
+        // instantiate_async 下行为等价。block_on_async 驱动 fiber（既有多线程/
+        // current_thread/无 runtime 三路径重入安全，见 wasm_runtime.rs）。
+        let instance = block_on_async(async {
+            component_linker.instantiate_async(&mut store, component).await
+        })
+        .map_err(|e| {
             AppError::Plugin(format!(
                 "Failed to instantiate WASM component for plugin '{}': {}",
                 plugin_id, e
@@ -624,11 +671,9 @@ impl LoadedWasmPlugin {
             .map_err(|e| AppError::Plugin(format!("WASM component missing required exports: {}", e)))?;
         let abi_guest = exports.bedcode_plugin_abi();
 
-        let version = abi_guest
-            .call_version(&mut *store)
+        let version = block_on_async(async { abi_guest.call_version(&mut *store).await })
             .map_err(|e| AppError::Plugin(format!("WASM component abi.version() call failed: {}", e)))?;
-        let form = abi_guest
-            .call_form(&mut *store)
+        let form = block_on_async(async { abi_guest.call_form(&mut *store).await })
             .map_err(|e| AppError::Plugin(format!("WASM component abi.form() call failed: {}", e)))?;
 
         if form != abi::FORM_COMPONENT {
@@ -734,8 +779,10 @@ impl LoadedWasmPlugin {
         params: Params,
     ) -> crate::Result<Results>
     where
-        Params: wasmtime::component::ComponentNamedList + wasmtime::component::Lower,
-        Results: wasmtime::component::ComponentNamedList + wasmtime::component::Lift,
+        Params: wasmtime::component::ComponentNamedList + wasmtime::component::Lower + Send,
+        // async 调用经 block_on_async 驱动：未来输出（Results）需 'static + Send，
+        // Params 移入未来需 Send（能力转发代调用方均为 'static 元组，见 capability.rs）
+        Results: wasmtime::component::ComponentNamedList + wasmtime::component::Lift + Send + 'static,
     {
         let _timer = self.track_call();
         self.refill_call_fuel()?;
@@ -746,7 +793,7 @@ impl LoadedWasmPlugin {
             .instance
             .get_typed_func::<Params, Results>(&mut self.store, &item)
             .map_err(|e| AppError::Plugin(format!("capability export not found: {} ({})", export_name, e)))?;
-        func.call(&mut self.store, params)
+        block_on_async(async { func.call_async(&mut self.store, params).await })
             .map_err(|e| AppError::Plugin(format!("capability call failed: {} ({})", export_name, e)))
     }
 
@@ -784,7 +831,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        match lifecycle.call_activate(&mut self.store) {
+        match block_on_async(async { lifecycle.call_activate(&mut self.store).await }) {
             Ok(Ok(())) => {
                 self.store.data().metrics.record_lifecycle(LifecycleEvent::ActivateOk);
                 Ok(0)
@@ -806,7 +853,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        match lifecycle.call_deactivate(&mut self.store) {
+        match block_on_async(async { lifecycle.call_deactivate(&mut self.store).await }) {
             Ok(Ok(())) => {
                 self.store.data().metrics.record_lifecycle(LifecycleEvent::Deactivate);
                 Ok(0)
@@ -824,7 +871,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let cmd = exports.bedcode_plugin_command();
-        match cmd.call_invoke(&mut self.store, command_name, args_json) {
+        match block_on_async(async { cmd.call_invoke(&mut self.store, command_name, args_json).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("invoke_command", &e);
@@ -839,7 +886,9 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        match hooks.call_on_terminal_input(&mut self.store, session_id, text) {
+        match block_on_async(async {
+            hooks.call_on_terminal_input(&mut self.store, session_id, text).await
+        }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_input", &e);
@@ -854,7 +903,9 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        match hooks.call_on_terminal_output(&mut self.store, session_id, data) {
+        match block_on_async(async {
+            hooks.call_on_terminal_output(&mut self.store, session_id, data).await
+        }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_output", &e);
@@ -875,7 +926,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        match lifecycle.call_on_startup(&mut self.store) {
+        match block_on_async(async { lifecycle.call_on_startup(&mut self.store).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_startup", &e);
@@ -892,7 +943,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let lifecycle = exports.bedcode_plugin_lifecycle();
-        match lifecycle.call_on_shutdown(&mut self.store) {
+        match block_on_async(async { lifecycle.call_on_shutdown(&mut self.store).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_shutdown", &e);
@@ -907,7 +958,9 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match events.call_on_message(&mut self.store, topic, sender, &payload_str) {
+        match block_on_async(async {
+            events.call_on_message(&mut self.store, topic, sender, &payload_str).await
+        }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_message() failed: {}", msg);
@@ -934,10 +987,13 @@ impl LoadedWasmPlugin {
             )));
         };
         // 无返回值（观察型回调）：guest 内部失败经 host-log 记录；此处仅 trap 上抛
-        func.call(
-            &mut self.store,
-            (topic.to_string(), sender.to_string(), payload.to_vec()),
-        )
+        block_on_async(async {
+            func.call_async(
+                &mut self.store,
+                (topic.to_string(), sender.to_string(), payload.to_vec()),
+            )
+            .await
+        })
         .map_err(|e| {
             self.log_trap("on_message_binary", &e);
             AppError::Plugin(format!("WASM on_message_binary() call failed: {}", e))
@@ -958,11 +1014,17 @@ impl LoadedWasmPlugin {
                 let Some(func) = self.store.data().on_ws_message.clone() else {
                     return Ok(false);
                 };
-                func.call(&mut self.store, (handle.clone(), kind.clone(), payload.clone()))
-                    .map_err(|e| {
-                        self.log_trap("on_ws_message", &e);
-                        AppError::Plugin(format!("WASM on_ws_message() call failed: {}", e))
-                    })?;
+                block_on_async(async {
+                    func.call_async(
+                        &mut self.store,
+                        (handle.clone(), kind.clone(), payload.clone()),
+                    )
+                    .await
+                })
+                .map_err(|e| {
+                    self.log_trap("on_ws_message", &e);
+                    AppError::Plugin(format!("WASM on_ws_message() call failed: {}", e))
+                })?;
                 Ok(true)
             }
             WsFrameDispatch::EndpointClient {
@@ -974,10 +1036,13 @@ impl LoadedWasmPlugin {
                 let Some(func) = self.store.data().on_ws_client_message.clone() else {
                     return Ok(false);
                 };
-                func.call(
-                    &mut self.store,
-                    (endpoint_id.clone(), client_id.clone(), kind.clone(), payload.clone()),
-                )
+                block_on_async(async {
+                    func.call_async(
+                        &mut self.store,
+                        (endpoint_id.clone(), client_id.clone(), kind.clone(), payload.clone()),
+                    )
+                    .await
+                })
                 .map_err(|e| {
                     self.log_trap("on_ws_client_message", &e);
                     AppError::Plugin(format!("WASM on_ws_client_message() call failed: {}", e))
@@ -993,7 +1058,9 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match events.call_on_session_lifecycle(&mut self.store, &payload_str) {
+        match block_on_async(async {
+            events.call_on_session_lifecycle(&mut self.store, &payload_str).await
+        }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_session_lifecycle() failed: {}", msg);
@@ -1015,7 +1082,9 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match events.call_on_input_submitted(&mut self.store, &payload_str) {
+        match block_on_async(async {
+            events.call_on_input_submitted(&mut self.store, &payload_str).await
+        }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_input_submitted() failed: {}", msg);
@@ -1036,7 +1105,9 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match events.call_on_process_done(&mut self.store, payload_json) {
+        match block_on_async(async {
+            events.call_on_process_done(&mut self.store, payload_json).await
+        }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_process_done() failed: {}", msg);
@@ -1055,7 +1126,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let manifest = exports.bedcode_plugin_manifest();
-        match manifest.call_get(&mut self.store) {
+        match block_on_async(async { manifest.call_get(&mut self.store).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("get_manifest", &e);
@@ -1230,19 +1301,6 @@ mod tests {
         wasmtime::Engine::new(&config).expect("create test engine")
     }
 
-    /// 将 wit-bindgen 产出的 core module 编码为组件
-    ///
-    /// 等价于 `wasm-tools component new`（WIT 元数据已由 wit-bindgen
-    /// 嵌入 core module 的 component-type 自定义段）；与 wasm_runtime.rs
-    /// 测试的 encode_component 同实现，测试模块间不共享故在此复制
-    fn encode_component(module: &[u8]) -> Vec<u8> {
-        let encoder = wit_component::ComponentEncoder::default();
-        encoder
-            .module(module)
-            .expect("component encoder module")
-            .encode()
-            .expect("component encoder encode")
-    }
 
     /// 构建测试用组件插件并编码为组件
     ///
@@ -1259,7 +1317,7 @@ mod tests {
         let plugin_dir = packages_dir.join("plugin-component-test");
 
         let profile = if plugin_debug_mode() { "debug" } else { "release" };
-        let output_dir = plugin_dir.join(format!("target/wasm32-unknown-unknown/{}", profile));
+        let output_dir = plugin_dir.join(format!("target/wasm32-wasip3/{}", profile));
         let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
 
         if module_path.exists() {
@@ -1279,23 +1337,24 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return encode_component(&std::fs::read(&module_path).expect("Failed to read test component module"));
+                return std::fs::read(&module_path).expect("Failed to read test component module");
             }
         }
 
         let manifest_path = plugin_dir.join("Cargo.toml");
-        let mut args = vec!["build", "--target", "wasm32-unknown-unknown"];
+        let mut args = vec!["build", "--target", "wasm32-wasip3"];
         if profile == "release" {
             args.push("--release");
         }
         args.extend(["--manifest-path", manifest_path.to_str().unwrap()]);
         let status = std::process::Command::new("cargo")
+            .env("RUSTUP_TOOLCHAIN", crate::plugin::manager::wasm_runtime::WASIP3_NIGHTLY)
             .args(&args)
             .status()
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        encode_component(&std::fs::read(&module_path).expect("Failed to read test component after build"))
+        std::fs::read(&module_path).expect("Failed to read test component after build")
     }
 
     /// 14 组 import 接口全部注册成功（add_to_linker 是纯接线代码，

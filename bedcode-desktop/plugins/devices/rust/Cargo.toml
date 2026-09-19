@@ -1,0 +1,30 @@
+[package]
+name = "bedcode-plugin-devices"
+version = "0.1.0"
+description = "Device Auth Center — pairing/trust/consent orchestration (headless, wasip3)"
+authors = ["BedCode"]
+edition = "2021"
+
+[features]
+default = ["native"]
+native = []
+wasm = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../../../packages/plugin-sdk-desktop/rust", features = ["wasm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# 票 07 pairing 模块（与宿主 utils/auth 语义层行为等价，spec §3）：
+# - HS256 自实现（jsonwebtoken 因 ring 不可 wasm 编译）：hmac + sha2
+# - base64url（URL_SAFE_NO_PAD）：base64
+# - 随机熵（配对码/QR token/密钥生成）：getrandom 0.4（wasip3 → wasi:random，票 01 已证）
+# - hex 编码（QR token 32 hex / 密钥落库表示）：hex
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.21"
+hex = "0.4"
+getrandom = "0.4"

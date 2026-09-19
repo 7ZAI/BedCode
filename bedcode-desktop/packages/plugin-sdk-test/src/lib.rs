@@ -10,8 +10,8 @@
 //!   + 调用方 client + 构建期防漂移比对（trait 方法 vs 本目录 plugin.json 的
 //!   `api` 字段，不一致构建失败）
 //!
-//! 宿主测试构建本 crate 后以 `wit_component::ComponentEncoder` 编码为组件
-//! （等价于 `wasm-tools component new`，生产插件构建脚本内置同一编码步骤）。
+//! 宿主测试以 pinned nightly + wasm32-wasip3 构建本 crate：cdylib 直出组件
+//! （magic \0asm 0d，免 ComponentEncoder/componentize，见票 03）。
 
 use bedcode_plugin_api::host::{
     ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
@@ -20,14 +20,13 @@ use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::{BusMessage, plugin_api};
-use std::cell::RefCell;
 
 // 最近一次收到的二进制消息（v11 events-binary 回调）——SDK 链路字节完整性
 // 验证：`on_message_binary` 写入，命令 `test_binary_received` 读出供宿主断言
 // （含非 UTF-8、MB 级载荷；票据 06 补齐 SDK 二进制发布/订阅缺口后启用）
-thread_local! {
-    static LAST_BINARY: RefCell<Option<(String, String, Vec<u8>)>> = RefCell::new(None);
-}
+// 实例级全局（票 03：wasip3 thread_local 按宿主调用线程隔离，投递线程写 /
+// 查询线程读会读空；wasm 单线程内 Mutex 无竞争）
+static LAST_BINARY: std::sync::Mutex<Option<(String, String, Vec<u8>)>> = std::sync::Mutex::new(None);
 
 /// 插件互调 api 声明（issue 04）：trait 方法名 ↔ manifest.api 条目
 /// （`com.bedcode.sdk-test.<method>`），宏在编译期比对防漂移
@@ -86,9 +85,7 @@ impl WasmPlugin for SdkTestPlugin {
     /// 记录最近一次 topic/sender/字节列，供宿主测试断言字节完整性
     fn on_message_binary(msg: &BusMessage) -> anyhow::Result<()> {
         let payload = msg.payload_binary.clone().unwrap_or_default();
-        LAST_BINARY.with(|slot| {
-            *slot.borrow_mut() = Some((msg.topic.clone(), msg.sender.clone(), payload));
-        });
+        *LAST_BINARY.lock().unwrap() = Some((msg.topic.clone(), msg.sender.clone(), payload));
         Ok(())
     }
 
@@ -165,11 +162,9 @@ impl WasmPlugin for SdkTestPlugin {
             }
             // v11：读回 on_message_binary 最近一次收到的消息（宿主断言字节完整性）
             "test_binary_received" => {
-                let received = LAST_BINARY.with(|slot| {
-                    slot.borrow().as_ref().map(|(topic, sender, payload)| {
-                        serde_json::json!({ "topic": topic, "sender": sender, "bytes": payload })
-                    })
-                });
+                let received = LAST_BINARY.lock().unwrap().as_ref().map(
+                    |(topic, sender, payload)| serde_json::json!({ "topic": topic, "sender": sender, "bytes": payload }),
+                );
                 Ok(serde_json::json!({ "received": received }))
             }
             // 无头测试上下文无 AppHandle：宿主 notify 返回错误，验证错误透传
@@ -229,6 +224,60 @@ impl WasmPlugin for SdkTestPlugin {
             "test_schedule_undeclared" => {
                 let client = SdkTestApiClient::new("com.bedcode.scheduler").with_timeout(800);
                 match client.call_json("ghost", serde_json::json!([])) {
+                    Ok(v) => Ok(serde_json::json!({ "unexpected": v })),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                }
+            }
+            // ==================== 认证中心互调闭环（票 09） ====================
+            // caller 角色指向 com.bedcode.devices（宿主测试加载真实 devices 产物）：
+            // `decide-consent` 两阶段决策流 + `list-trusted-devices` 统一视图 + 未声明
+            // api 门禁拒绝（ADR 0017）。消费方参数经 args 传入（宿主测试断言 wire 形状）。
+
+            // 阶段 1：仅传 peer 信息（无用户意向）→ 已信任免确认 / 未知 → ask
+            "test_devices_decide_consent" => {
+                let peer = args.get("peerInfo").cloned().unwrap_or(serde_json::json!({
+                    "requestId": "req-consent-1",
+                    "nodeId": "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344",
+                    "fingerprintShort": "aabbccdd",
+                    "deviceName": "消费方模拟对端",
+                }));
+                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
+                match client.call_json("decide-consent", peer) {
+                    Ok(v) => Ok(serde_json::json!({ "decision": v })),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                }
+            }
+            // 阶段 2：回传用户意向（accept / deny / one_time）→ 最终决策。
+            // peerInfo 经 args 传入（宿主测试断言 wire 形状），userDecision 单独
+            // 传入并合并进请求（peerInfo 缺省时用内置默认对端）
+            "test_devices_decide_consent_explicit" => {
+                let mut peer = args.get("peerInfo").cloned().unwrap_or(serde_json::json!({
+                    "requestId": "req-consent-2",
+                    "nodeId": "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344",
+                }));
+                if let Some(ud) = args.get("userDecision").and_then(|v| v.as_str()) {
+                    if let Some(obj) = peer.as_object_mut() {
+                        obj.insert("userDecision".to_string(), serde_json::json!(ud));
+                    }
+                }
+                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
+                match client.call_json("decide-consent", peer) {
+                    Ok(v) => Ok(serde_json::json!({ "decision": v })),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                }
+            }
+            // 统一信任视图（零参 api）
+            "test_devices_list_trusted" => {
+                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
+                match client.call_json("list-trusted-devices", serde_json::Value::Null) {
+                    Ok(v) => Ok(v),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                }
+            }
+            // 未声明 api（com.bedcode.devices.ghost-api 不在 manifest）：宿主门禁拒绝
+            "test_devices_undeclared" => {
+                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(2000);
+                match client.call_json("ghost-api", serde_json::Value::Null) {
                     Ok(v) => Ok(serde_json::json!({ "unexpected": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }

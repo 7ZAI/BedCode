@@ -357,6 +357,15 @@ pub fn run() {
 
             let db = Arc::new(Mutex::new(db));
 
+            // 宿主密钥托管（票 05）：注入主库句柄并预生成 JWT 密钥（首启随机
+            // 生成 + 持久化，重启稳定）。预生成失败直接上抛阻断启动——若此处
+            // 静默降级，运行时签发 token 将因密钥未落库而在重启后全部失效
+            crate::utils::auth::host_secrets::init(db.clone());
+            crate::utils::auth::host_secrets::get_or_generate(
+                crate::utils::auth::jwt::JWT_SECRET_KEY_ID,
+                crate::utils::auth::jwt::JWT_SECRET_KEY_LEN,
+            )?;
+
             // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
             crate::peer_migration::migrate_legacy_peer_data(&app_handle, &db);
 

@@ -15,12 +15,12 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostApp, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
+    ConfigKey, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
     HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess,
     HostSession, HostStorage, HostTerminal, HostWebsocket,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_bus, host_config, host_database, host_events, host_fs,
+    host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs,
     host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
     host_session, host_storage, host_terminal, host_timer, host_websocket,
 };
@@ -68,6 +68,26 @@ mod tests {
         assert_eq!(e.code, -1);
         assert!(e.message.contains("session_get"), "got: {}", e.message);
         assert!(e.message.contains("invalid JSON from host"));
+    }
+}
+
+// ==================== HostAuth（v15 secret-store） ====================
+
+impl HostAuth for WasmHost {
+    fn auth_secret_get(&self, key: &str) -> Result<Option<String>, HostError> {
+        host_auth::secret_get(key).map_err(|e| host_err("auth_secret_get", e))
+    }
+
+    fn auth_secret_set(&self, key: &str, value: &str) -> Result<(), HostError> {
+        host_auth::secret_set(key, value).map_err(|e| host_err("auth_secret_set", e))
+    }
+
+    fn auth_secret_delete(&self, key: &str) -> Result<(), HostError> {
+        host_auth::secret_delete(key).map_err(|e| host_err("auth_secret_delete", e))
+    }
+
+    fn auth_secret_keys(&self) -> Result<Vec<String>, HostError> {
+        host_auth::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
     }
 }
 
@@ -593,6 +613,7 @@ impl HostWebsocket for WasmHost {
         host_websocket::list_endpoints().map_err(|e| host_err("ws_list_endpoints", e))
     }
 }
+
 
 // ==================== host-platform（ADR 0022 v2）====================
 

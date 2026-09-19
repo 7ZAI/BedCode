@@ -31,6 +31,7 @@ pub struct QrConnectionInfo {
 
 #[tauri::command]
 pub async fn generate_qr_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
     qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
     db: State<'_, Arc<tokio::sync::Mutex<crate::db::Database>>>,
 ) -> Result<String> {
@@ -43,29 +44,36 @@ pub async fn generate_qr_code(
             .unwrap_or(300)
     };
 
-    let token = qr_manager.generate(ttl).await;
+    // 票 11 命令面桥接：认证中心激活时经互调生成（TTL 传入宿主配置值），否则降级
+    let token = crate::utils::auth::auth_center::generate_qr_code(host.wasm_host_ctx(), &qr_manager, ttl).await?;
     tracing::info!("QR code generated, TTL: {}s", ttl);
     Ok(token)
 }
 
 #[tauri::command]
-pub async fn clear_qr_code(qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>) -> Result<()> {
-    qr_manager.clear().await;
+pub async fn clear_qr_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
+    qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
+) -> Result<()> {
+    crate::utils::auth::auth_center::clear_qr_code(host.wasm_host_ctx(), &qr_manager).await?;
     tracing::info!("QR code cleared");
     Ok(())
 }
 
 #[tauri::command]
 pub async fn get_qr_connection_info(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
     qr_manager: State<'_, Arc<crate::utils::auth::QrTokenManager>>,
     app_handle: tauri::AppHandle,
-    host: Option<String>,
+    host_override: Option<String>,
 ) -> Result<Option<QrConnectionInfo>> {
-    let active = qr_manager.get_active().await;
+    // 票 11 命令面桥接：认证中心激活时经互调取 token 状态，否则降级宿主；
+    // 宿主/端口组装（局域网 IP / 端口配置）保留在命令层（宿主引擎配置域）
+    let active = crate::utils::auth::auth_center::qr_conn_info(host.wasm_host_ctx(), &qr_manager).await?;
     match active {
         None => Ok(None),
-        Some((token, _ttl, remaining)) => {
-            let host = host
+        Some((token, remaining)) => {
+            let host_addr = host_override
                 .or_else(|| {
                     crate::commands::system::get_local_ip_addresses()
                         .into_iter()
@@ -85,7 +93,7 @@ pub async fn get_qr_connection_info(
 
             Ok(Some(QrConnectionInfo {
                 token,
-                host,
+                host: host_addr,
                 port,
                 remaining_secs: remaining,
             }))

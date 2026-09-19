@@ -2604,14 +2604,6 @@ mod tests {
 
     /// 将 wit-bindgen 产出的 core module 编码为组件
     /// （与 wasm_runtime.rs 测试同策略，等价于 `wasm-tools component new`）
-    fn encode_component(module: &[u8]) -> Vec<u8> {
-        let encoder = wit_component::ComponentEncoder::default();
-        encoder
-            .module(module)
-            .expect("component encoder module")
-            .encode()
-            .expect("component encoder encode")
-    }
 
     /// 构建测试用组件插件并编码为组件（packages/plugin-component-test）
     fn build_test_component() -> Vec<u8> {
@@ -2619,7 +2611,7 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-component-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
         let module_path = output_dir.join("bedcode_plugin_component_test.wasm");
 
         if module_path.exists() {
@@ -2639,16 +2631,17 @@ mod tests {
             });
 
             if !needs_rebuild {
-                return encode_component(&std::fs::read(&module_path).expect("Failed to read test component module"));
+                return std::fs::read(&module_path).expect("Failed to read test component module");
             }
         }
 
         let manifest_path = plugin_dir.join("Cargo.toml");
         let status = std::process::Command::new("cargo")
+            .env("RUSTUP_TOOLCHAIN", crate::plugin::manager::wasm_runtime::WASIP3_NIGHTLY)
             .args([
                 "build",
                 "--target",
-                "wasm32-unknown-unknown",
+                "wasm32-wasip3",
                 "--release",
                 "--manifest-path",
                 manifest_path.to_str().unwrap(),
@@ -2657,7 +2650,7 @@ mod tests {
             .expect("Failed to run cargo build for test component");
         assert!(status.success(), "Test component WASM build failed");
 
-        encode_component(&std::fs::read(&module_path).expect("Failed to read test component after build"))
+        std::fs::read(&module_path).expect("Failed to read test component after build")
     }
 
     /// 将组件形态测试插件实例化并注入宿主（plugins + wasm_plugins 双表）
@@ -3088,7 +3081,7 @@ mod tests {
         let packages_dir = manifest_dir.join("../packages");
         let plugin_dir = packages_dir.join("plugin-system-test");
 
-        let output_dir = plugin_dir.join("target/wasm32-unknown-unknown/release");
+        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
         let module_path = output_dir.join("bedcode_plugin_system_test.wasm");
 
         if module_path.exists() {
@@ -3106,15 +3099,16 @@ mod tests {
                     .unwrap_or(true)
             });
             if !needs_rebuild {
-                return encode_component(&std::fs::read(&module_path).expect("Failed to read system test module"));
+                return std::fs::read(&module_path).expect("Failed to read system test module");
             }
         }
 
         let status = std::process::Command::new("cargo")
+            .env("RUSTUP_TOOLCHAIN", crate::plugin::manager::wasm_runtime::WASIP3_NIGHTLY)
             .args([
                 "build",
                 "--target",
-                "wasm32-unknown-unknown",
+                "wasm32-wasip3",
                 "--release",
                 "--manifest-path",
                 plugin_dir.join("Cargo.toml").to_str().unwrap(),
@@ -3122,7 +3116,7 @@ mod tests {
             .status()
             .expect("Failed to run cargo build for system test component");
         assert!(status.success(), "System test component WASM build failed");
-        encode_component(&std::fs::read(&module_path).expect("Failed to read system test module after build"))
+        std::fs::read(&module_path).expect("Failed to read system test module after build")
     }
 
     /// 实例化系统组件 fixture 并注入宿主（kind=System，探测断言含 host-storage）

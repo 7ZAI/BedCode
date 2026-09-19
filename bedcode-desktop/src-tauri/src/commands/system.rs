@@ -33,8 +33,12 @@ pub struct RunningSessionInfo {
 // ==================== Pairing Commands ====================
 
 /// 生成配对码（有效期取数据库中的 pairing_code_ttl，缺省回退常量）
+///
+/// 票 11 命令面桥接：认证中心激活时经互调转发（状态以认证中心为准），
+/// 否则降级宿主 PairingService（双轨并存期无单点）。TTL 配置仍读宿主 DB。
 #[tauri::command]
 pub async fn generate_pairing_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
     pairing_service: State<'_, Arc<PairingService>>,
     db: State<'_, Arc<Mutex<Database>>>,
 ) -> Result<PairingCode> {
@@ -46,7 +50,7 @@ pub async fn generate_pairing_code(
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(crate::system::constants::auth::PAIRING_CODE_TTL_SECS)
     };
-    Ok(pairing_service.generate_code_with_ttl(ttl).await)
+    crate::utils::auth::auth_center::generate_pairing_code(host.wasm_host_ctx(), &pairing_service, ttl).await
 }
 
 /// 获取配对码有效期（秒）
@@ -68,22 +72,38 @@ pub async fn set_pairing_code_ttl(db: State<'_, Arc<Mutex<Database>>>, ttl: u64)
 }
 
 /// 获取当前配对码
+///
+/// 票 11 命令面桥接：认证中心激活时经互调取状态，否则降级宿主实现。
 #[tauri::command]
-pub async fn get_current_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<Option<PairingCode>> {
-    Ok(pairing_service.get_current_code().await)
+pub async fn get_current_pairing_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
+    pairing_service: State<'_, Arc<PairingService>>,
+) -> Result<Option<PairingCode>> {
+    crate::utils::auth::auth_center::current_pairing_code(host.wasm_host_ctx(), &pairing_service).await
 }
 
 /// 验证配对码
+///
+/// 票 11 命令面桥接：认证中心激活时经互调验证（一次性消费在认证中心侧），
+/// 否则降级宿主实现。
 #[tauri::command]
-pub async fn verify_pairing_code(pairing_service: State<'_, Arc<PairingService>>, code: String) -> Result<bool> {
-    Ok(pairing_service.verify_and_consume_code(&code).await)
+pub async fn verify_pairing_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
+    pairing_service: State<'_, Arc<PairingService>>,
+    code: String,
+) -> Result<bool> {
+    crate::utils::auth::auth_center::verify_pairing_code(host.wasm_host_ctx(), &pairing_service, &code).await
 }
 
 /// 清除当前配对码
+///
+/// 票 11 命令面桥接：认证中心激活时经互调清除，否则降级宿主实现。
 #[tauri::command]
-pub async fn clear_pairing_code(pairing_service: State<'_, Arc<PairingService>>) -> Result<()> {
-    pairing_service.clear_code().await;
-    Ok(())
+pub async fn clear_pairing_code(
+    host: State<'_, Arc<crate::plugin::PluginHost>>,
+    pairing_service: State<'_, Arc<PairingService>>,
+) -> Result<()> {
+    crate::utils::auth::auth_center::clear_pairing_code(host.wasm_host_ctx(), &pairing_service).await
 }
 
 /// 获取已配对设备

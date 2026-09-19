@@ -31,7 +31,21 @@ pub async fn request_pairing(body: web::Json<PairingRequest>) -> HttpResponse {
     let ctx = AppContext::global();
     let pairing_service = ctx.pairing_service();
 
-    let code = pairing_service.generate_code().await;
+    // 票 11 命令面桥接：配对码生成经认证中心（激活时，状态以认证中心为准），
+    // 未激活降级宿主；TTL 沿用端点既有默认值（与迁移前 generate_code 等价）
+    let code = match crate::utils::auth::auth_center::generate_pairing_code(
+        ctx.plugin_host().wasm_host_ctx(),
+        &ctx.pairing_service(),
+        crate::system::constants::auth::PAIRING_CODE_TTL_SECS,
+    )
+    .await
+    {
+        Ok(code) => code,
+        Err(e) => {
+            tracing::error!(error = %e, "auth center pairing code generate failed");
+            pairing_service.generate_code().await
+        }
+    };
 
     // 通知桌面端前端显示配对码（无头/测试上下文无 AppHandle：跳过）
     if let Some(handle) = ctx.app_handle() {
@@ -59,9 +73,21 @@ pub async fn request_pairing(body: web::Json<PairingRequest>) -> HttpResponse {
 /// 验证配对码，成功返回 JWT token
 pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpResponse {
     let ctx = AppContext::global();
-    let pairing_service = ctx.pairing_service();
 
-    let is_valid = pairing_service.verify_and_consume_code(&body.pairing_code).await;
+    // 票 11 命令面桥接：验证经认证中心（激活时，与生成同源），未激活降级宿主
+    let is_valid = match crate::utils::auth::auth_center::verify_pairing_code(
+        ctx.plugin_host().wasm_host_ctx(),
+        &ctx.pairing_service(),
+        &body.pairing_code,
+    )
+    .await
+    {
+        Ok(valid) => valid,
+        Err(e) => {
+            tracing::error!(error = %e, "auth center pairing code verify failed");
+            false
+        }
+    };
 
     if !is_valid {
         tracing::warn!(device_name = ?body.device_name, "Pairing code verification failed");
@@ -78,7 +104,19 @@ pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpR
                 tracing::warn!(error = %e, "Failed to record connection history");
             }
         }
-        let current_code = pairing_service.get_current_code().await;
+        // 「是否有当前码」与验证同源（认证中心激活时取认证中心状态）
+        let current_code = match crate::utils::auth::auth_center::current_pairing_code(
+            ctx.plugin_host().wasm_host_ctx(),
+            &ctx.pairing_service(),
+        )
+        .await
+        {
+            Ok(code) => code,
+            Err(e) => {
+                tracing::error!(error = %e, "auth center pairing code status failed");
+                None
+            }
+        };
         let msg = if current_code.is_none() {
             "No pairing code available. Please generate a new code."
         } else {
@@ -158,9 +196,27 @@ pub async fn verify_pairing_code(body: web::Json<VerifyPairingRequest>) -> HttpR
 /// QR 码认证，成功返回 JWT token
 pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
     let ctx = AppContext::global();
-    let qr_manager = ctx.qr_manager();
 
-    match qr_manager.verify(&body.qr_token).await {
+    // 票 11 命令面桥接：QR token 验证经认证中心（激活时，与生成同源），未激活
+    // 降级宿主 QrTokenManager；拒绝携带区分原因（过期/已用/未生成）
+    let verify_result: std::result::Result<(), String> =
+        match crate::utils::auth::auth_center::verify_qr_token(
+            ctx.plugin_host().wasm_host_ctx(),
+            &ctx.qr_manager(),
+            &body.qr_token,
+        )
+        .await
+        {
+            Ok(crate::utils::auth::auth_center::QrVerifyOutcome::Valid) => Ok(()),
+            Ok(crate::utils::auth::auth_center::QrVerifyOutcome::Rejected(reason)) => Err(reason),
+            Err(e) => {
+                tracing::error!(error = %e, "auth center qr token verify failed");
+                return HttpResponse::Ok()
+                    .json(ApiResponse::<()>::error(1006, "二维码验证服务不可用，请稍后重试"));
+            }
+        };
+
+    match verify_result {
         Ok(()) => {
             // 无头/测试上下文无 AppHandle：跳过前端事件
             if let Some(handle) = ctx.app_handle() {
@@ -237,8 +293,8 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
             };
             HttpResponse::Ok().json(ApiResponse::ok_with_data(data))
         }
-        Err(e) => {
-            tracing::warn!(error = %e, "QR token verification failed");
+        Err(error_msg) => {
+            tracing::warn!(error = %error_msg, "QR token verification failed");
             // 记录连接历史（QR 认证失败）
             {
                 let db = ctx.db();
@@ -252,16 +308,8 @@ pub async fn qr_connect(body: web::Json<QrConnectRequest>) -> HttpResponse {
                     tracing::warn!(error = %e, "Failed to record connection history");
                 }
             }
-            let error_msg = e.to_string();
-            let user_msg = if error_msg.contains("expired") {
-                "二维码已过期，请重新生成"
-            } else if error_msg.contains("already used") {
-                "二维码已绑定其他设备，请重新扫描"
-            } else if error_msg.contains("No active QR token") {
-                "请先在桌面端生成二维码"
-            } else {
-                &error_msg
-            };
+            // 用户提示分类与既有 contains 子串逻辑一致（单点维护见 auth_center 桥接层）
+            let user_msg = crate::utils::auth::auth_center::qr_failure_user_message(&error_msg);
             HttpResponse::Ok().json(ApiResponse::<()>::error(1006, user_msg))
         }
     }

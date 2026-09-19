@@ -356,6 +356,28 @@ interface host-plugin-database {
     execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
+/// 密钥托管（secret-store，v15）：宿主托管的凭据存储，按插件属主隔离
+///
+/// 认证中心语义下沉的基础原语（ADR 0022 裁剪线内：离宿主无法实现、零业务
+/// 语义）。约定与红线：
+/// - **属主隔离**：属主 = 调用方插件实例的 plugin_id（宿主自 store state 派生，
+///   guest 无法伪造/旁路）；A 不能读/改/删 B 命名空间的密钥，越权由命名空间
+///   隔离天然拒绝（权限门之外的第二道闸）
+/// - **明文不落日志**：宿主日志/告警只记密钥长度（`value.len()` 模式），
+///   禁止打印值本身；存储于主库 plugin_secrets 表（schema.sql）
+/// - 持久化：重启后密钥稳定（DB 为真源）；set 覆盖写、delete 幂等
+interface host-auth {
+    /// 读取属主密钥；键不存在返回 `ok(none)`
+    secret-get: func(key: string) -> result<option<string>, string>;
+    /// 写入/覆盖属主密钥
+    secret-set: func(key: string, value: string) -> result<_, string>;
+    /// 删除属主密钥（键不存在也视为成功）
+    secret-delete: func(key: string) -> result<_, string>;
+    /// 列举属主密钥名（供诊断/清理；不返回值本身）
+    secret-keys: func() -> result<list<string>, string>;
+}
+
+
 // ==================== 插件导出（原 __bedcode_* 导出函数） ====================
 
 /// 命令入口（原 invoke_command，JSON 载荷保留）
@@ -423,6 +445,8 @@ interface manifest {
 /// - v14：host-websocket 基础能力服务（客户端域 connect/send/close/
 ///   is-connected + 服务端域 register-endpoint/收发/广播/踢出/注销/清单）
 ///   + 可选导出 events-ws（宿主动态探测），纯增量，v13 插件不受影响
+/// - v15：host-auth 密钥托管原语（secret-store 四函数 + 主库 plugin_secrets
+///   持久化），纯增量，v14 插件不受影响
 interface abi {
     version: func() -> u32;
     form: func() -> u32;
@@ -454,6 +478,7 @@ world plugin {
     import host-process;
     import host-app;
     import host-websocket;
+    import host-auth;
 
     export command;
     export lifecycle;

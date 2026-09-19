@@ -9,6 +9,7 @@ import { cpSync, mkdirSync, existsSync, rmSync } from 'fs'
 import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { startPluginWatch } from '../../../scripts/plugin-watch.js'
+import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-config.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -21,7 +22,7 @@ const RUST_LIB_NAME = 'bedcode_plugin_auto_task'
 // cfg!(debug_assertions) 兜底，见 wasm_runtime.rs plugin_debug_mode）
 const DEBUG_MODE = !!process.env.BEDCODE_PLUGIN_DEBUG
 const WASM_PROFILE = DEBUG_MODE ? 'debug' : 'release'
-const WASM_PROFILE_DIR = `rust/target/wasm32-unknown-unknown/${WASM_PROFILE}`
+const WASM_PROFILE_DIR = `rust/target/${WASM_TARGET}/${WASM_PROFILE}`
 
 // 产物目标目录
 const RESOURCES_DIR = resolve(ROOT, '../../src-tauri/resources/plugins/desktop', PLUGIN_ID)
@@ -43,19 +44,11 @@ function buildFrontend() {
 
 function buildRust() {
   console.log('\n[build] ====== Building Rust backend (WASM) ======')
+  // 票 03：桌面插件统一 wasm32-wasip3（pinned nightly 提供 std；产物 cdylib 直出
+  // Component，免 componentize 编码步骤）。wasip3 实例化需宿主 async store（票 02）。
   run(
-    `cargo build --target wasm32-unknown-unknown --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
-  )
-  // 迁移阶段 B：将 wit-bindgen 产出的 core module 编码为 Component Model 组件
-  // （等价 wasm-tools component new；工具幂等——产物已是组件时直接复制）
-  console.log('\n[build] ====== Componentizing WASM (Component Model) ======')
-  const componentizeManifest = resolve(
-    ROOT,
-    '../../packages/plugin-sdk-desktop/rust/tools/componentize/Cargo.toml',
-  )
-  const wasmPath = resolve(ROOT, WASM_PROFILE_DIR, `${RUST_LIB_NAME}.wasm`)
-  run(
-    `cargo run --release --manifest-path "${componentizeManifest}" -- "${wasmPath}" -o "${wasmPath}"`,
+    `cargo build --target ${WASM_TARGET} --no-default-features --features wasm --manifest-path rust/Cargo.toml${DEBUG_MODE ? '' : ' --release'}`,
+    { env: wasip3CargoEnv() },
   )
 }
 
@@ -91,7 +84,7 @@ function copyArtifacts() {
     const fallbackProfile = DEBUG_MODE ? 'release' : 'debug'
     const fallbackWasmPath = resolve(
       ROOT,
-      `rust/target/wasm32-unknown-unknown/${fallbackProfile}`,
+      `rust/target/${WASM_TARGET}/${fallbackProfile}`,
       `${RUST_LIB_NAME}.wasm`,
     )
     if (!existsSync(fallbackWasmPath)) {

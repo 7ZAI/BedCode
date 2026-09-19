@@ -17,7 +17,9 @@
 //!   `on_ws_client_message` 会把收到的帧原样回给该客户端（端点回显闭环载体）；
 //! - `events-ws` 回调（`on_ws_message` / `on_ws_client_message`）收集收到的帧，
 //!   经 `ws-state` 命令读出，供宿主断言回文与保序；
-//! - 总线事件与帧都存 thread_local（组件实例单线程，无跨线程共享需求）。
+//! - 总线事件与帧都存实例级全局（票 03：wasm32-wasip3 的 thread_local 是
+//!   真 TLS——按宿主调用线程隔离，「投递线程记录 / 查询线程读取」跨线程时
+//!   读空；改静态 Mutex，wasm 单线程内无竞争）。
 
 use bedcode_plugin_api::host::{
     ws_event_topic, HostBus, HostLog, HostWebsocket, WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT, WS_CLOSE, WS_ERROR,
@@ -27,17 +29,14 @@ use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
 use bedcode_plugin_api::wasm_host::WasmHost;
 use bedcode_plugin_api::BusMessage;
-use std::cell::{Cell, RefCell};
 
-thread_local! {
-    /// 收到的 WS 帧：`(标识, kind, payload)`——客户端域标识为 `wsc-<uuid>`，
-    /// 服务端域为 `wse-<uuid>/wsc-<uuid>`（端点/对端）
-    static FRAMES: RefCell<Vec<(String, String, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
-    /// 收到的总线状态事件 payload（owner 作用域 topic 的投递内容）
-    static EVENTS: RefCell<Vec<serde_json::Value>> = const { RefCell::new(Vec::new()) };
-    /// 端点回显开关（`ws-endpoint-echo` 命令控制；false = 只收集不回显）
-    static ECHO_ENABLED: Cell<bool> = const { Cell::new(false) };
-}
+/// 收到的 WS 帧：`(标识, kind, payload)`——客户端域标识为 `wsc-<uuid>`，
+/// 服务端域为 `wse-<uuid>/wsc-<uuid>`（端点/对端）。实例级全局（见文件头注释）
+static FRAMES: std::sync::Mutex<Vec<(String, String, Vec<u8>)>> = std::sync::Mutex::new(Vec::new());
+/// 收到的总线状态事件 payload（owner 作用域 topic 的投递内容）
+static EVENTS: std::sync::Mutex<Vec<serde_json::Value>> = std::sync::Mutex::new(Vec::new());
+/// 端点回显开关（`ws-endpoint-echo` 命令控制；false = 只收集不回显）
+static ECHO_ENABLED: std::sync::Mutex<bool> = std::sync::Mutex::new(false);
 
 /// WS fixture 插件
 pub struct WsTestPlugin;
@@ -211,31 +210,31 @@ impl WasmPlugin for WsTestPlugin {
             // 端点回显开关（打开后 on_ws_client_message 原样回给该客户端）
             "ws-endpoint-echo" => {
                 let enabled = args.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
-                ECHO_ENABLED.with(|e| e.set(enabled));
+                *ECHO_ENABLED.lock().unwrap() = enabled;
                 Ok(serde_json::json!({ "enabled": enabled }))
             }
             // 快照：收到的帧 + 收到的状态事件（宿主测试的轮询入口）
             "ws-state" => {
-                let frames: Vec<serde_json::Value> = FRAMES.with(|f| {
-                    f.borrow()
-                        .iter()
-                        .map(|(target, kind, payload)| {
-                            serde_json::json!({
-                                "target": target,
-                                "kind": kind,
-                                "len": payload.len(),
-                                "text": String::from_utf8(payload.clone()).ok(),
-                            })
+                let frames: Vec<serde_json::Value> = FRAMES
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .map(|(target, kind, payload)| {
+                        serde_json::json!({
+                            "target": target,
+                            "kind": kind,
+                            "len": payload.len(),
+                            "text": String::from_utf8(payload.clone()).ok(),
                         })
-                        .collect()
-                });
-                let events = EVENTS.with(|e| e.borrow().clone());
+                    })
+                    .collect();
+                let events = EVENTS.lock().unwrap().clone();
                 Ok(serde_json::json!({ "frames": frames, "events": events }))
             }
             // 清空收集缓冲（多次断言之间隔离）
             "ws-reset" => {
-                FRAMES.with(|f| f.borrow_mut().clear());
-                EVENTS.with(|e| e.borrow_mut().clear());
+                FRAMES.lock().unwrap().clear();
+                EVENTS.lock().unwrap().clear();
                 Ok(serde_json::json!({ "ok": true }))
             }
             other => Err(anyhow::anyhow!("Unknown command: {other}")),
@@ -244,22 +243,20 @@ impl WasmPlugin for WsTestPlugin {
 
     /// 总线消息入口：记录状态事件（本插件只订阅 `ws:*.<owner>` 三个 topic）
     fn on_message(msg: &BusMessage) -> anyhow::Result<()> {
-        EVENTS.with(|e| {
-            e.borrow_mut().push(serde_json::json!({
-                "topic": msg.topic,
-                "sender": msg.sender,
-                "payload": msg.payload,
-            }));
-        });
+        EVENTS.lock().unwrap().push(serde_json::json!({
+            "topic": msg.topic,
+            "sender": msg.sender,
+            "payload": msg.payload,
+        }));
         Ok(())
     }
 
     /// 客户端域帧回调（handle = `wsc-<uuid>`）
     fn on_ws_message(handle: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
-        FRAMES.with(|f| {
-            f.borrow_mut()
-                .push((handle.to_string(), kind.to_string(), payload.to_vec()));
-        });
+        FRAMES
+            .lock()
+            .unwrap()
+            .push((handle.to_string(), kind.to_string(), payload.to_vec()));
         Ok(())
     }
 
@@ -268,14 +265,12 @@ impl WasmPlugin for WsTestPlugin {
     /// 回显开关打开时把收到的帧原样回给该客户端（端点回显闭环；宿主零业务语义，
     /// 回不回、怎么回完全由插件决定）
     fn on_ws_client_message(endpoint_id: &str, client_id: &str, kind: &str, payload: &[u8]) -> anyhow::Result<()> {
-        FRAMES.with(|f| {
-            f.borrow_mut().push((
-                format!("{endpoint_id}/{client_id}"),
-                kind.to_string(),
-                payload.to_vec(),
-            ));
-        });
-        if ECHO_ENABLED.with(|e| e.get()) {
+        FRAMES.lock().unwrap().push((
+            format!("{endpoint_id}/{client_id}"),
+            kind.to_string(),
+            payload.to_vec(),
+        ));
+        if *ECHO_ENABLED.lock().unwrap() {
             let host = WasmHost;
             let echoed = match kind {
                 "text" => {

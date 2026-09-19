@@ -3,19 +3,52 @@
 //! 提供 JWT token 生成和验证功能
 
 use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::system::constants::auth::JWT_ISSUER;
+use crate::utils::auth::host_secrets;
 
 /// 默认 JWT 过期时间（7 天）
 pub const DEFAULT_TOKEN_EXPIRY_SECS: u64 = 7 * 24 * 60 * 60;
 
-/// JWT 密钥（硬编码，请根据需要修改）
-const JWT_SECRET: &[u8] = b"BedCode_Secure_JWT_Key_2024_Change_In_Production";
+/// JWT 密钥在 secret-store 中的键名（宿主命名空间，见 host_secrets 模块）
+pub const JWT_SECRET_KEY_ID: &str = "jwt.key";
+
+/// JWT 密钥长度（字节）。HS256 要求 ≥32 字节（256 bit）
+pub const JWT_SECRET_KEY_LEN: usize = 32;
 
 /// JWT 算法
 const JWT_ALGORITHM: Algorithm = Algorithm::HS256;
+
+/// 解析 JWT 密钥：secret-store 托管（首启随机生成 + 持久化，重启稳定）；
+/// 未托管环境（单测 / 主库不可用）回退进程内随机密钥。
+///
+/// 进程内只解析一次（OnceLock）：同一进程所有 JwtService 实例必须共享同一
+/// 密钥，否则签发/验签跨实例即失效；回退密钥进程内同样稳定（重启后失效，
+/// 仅在非生产路径命中，生产在 lib.rs setup 预生成并落库）。
+fn resolve_secret() -> Vec<u8> {
+    static JWT_KEY: OnceLock<Vec<u8>> = OnceLock::new();
+    JWT_KEY
+        .get_or_init(|| match host_secrets::get_or_generate(JWT_SECRET_KEY_ID, JWT_SECRET_KEY_LEN) {
+            Ok(v) => v,
+            Err(e) => {
+                // 明文不落日志：只记错误原因，不记密钥
+                tracing::error!(
+                    error = %e,
+                    key_len = JWT_SECRET_KEY_LEN,
+                    "jwt: secret store unavailable, falling back to process-random key (tokens invalidate on restart)"
+                );
+                let mut buf = vec![0u8; JWT_SECRET_KEY_LEN];
+                OsRng.fill_bytes(&mut buf);
+                buf
+            }
+        })
+        .clone()
+}
 
 /// JWT Claims 结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,10 +117,14 @@ pub struct JwtService {
 
 impl JwtService {
     /// 创建新的 JWT 服务
+    ///
+    /// 密钥来自 secret-store（host_secrets 模块）：首启随机生成 + 持久化，
+    /// 重启后稳定；进程内只解析一次，所有实例共享同一密钥。
     pub fn new() -> Self {
+        let secret = resolve_secret();
         Self {
-            decoding_key: DecodingKey::from_secret(JWT_SECRET),
-            encoding_key: EncodingKey::from_secret(JWT_SECRET),
+            decoding_key: DecodingKey::from_secret(&secret),
+            encoding_key: EncodingKey::from_secret(&secret),
             default_expiry_secs: DEFAULT_TOKEN_EXPIRY_SECS,
         }
     }
@@ -252,5 +289,73 @@ mod tests {
         assert_eq!(jwt_error_message(&JwtError::InvalidSignature), "Invalid token");
         assert_eq!(jwt_error_message(&JwtError::EncodeError("x".to_string())), "Invalid token");
         assert_eq!(jwt_error_message(&JwtError::VerifyError("x".to_string())), "Invalid token");
+    }
+
+    /// 进程内所有 JwtService 实例共享同一密钥：A 签发 → B 验签必须通过
+    /// （OnceLock 缓存；若逐实例随机密钥，token 立即可验失败）
+    #[test]
+    fn all_service_instances_share_same_key() {
+        let token = JwtService::new()
+            .generate_token("device-shared".to_string(), None, None)
+            .unwrap();
+        let claims = JwtService::new().verify_token_with_expiry(&token).unwrap();
+        assert_eq!(claims.sub, "device-shared");
+    }
+
+    /// 便捷函数（generate_device_token / verify_device_token）与直接服务
+    /// 构造走同一密钥源（票 05 密钥治理：改读 secret-store 后无行为回退）
+    #[test]
+    fn convenience_fns_share_key_with_service() {
+        let token = generate_device_token("device-conv".to_string(), None, None).unwrap();
+        let claims = verify_device_token(&token).unwrap();
+        assert_eq!(claims.sub, "device-conv");
+        // 与 JwtService 直构实例交叉验证
+        let claims2 = JwtService::new().verify_token_with_expiry(&token).unwrap();
+        assert_eq!(claims2.sub, "device-conv");
+    }
+
+    /// 对照测试（票 07 pairing）：宿主 jsonwebtoken 9.3.1 与认证中心插件
+    /// HS256 自实现「同一输入同输出」。固定 key（32B 0x00..=0x1f）+ 固定 claims
+    /// （注入 iat/exp）→ 期望 token 与插件侧
+    /// `plugins/devices/rust/src/pairing/jwt.rs::plugin_token_matches_host_jsonwebtoken_vector`
+    /// 断言的是**同一常量**（签名段为插件实现产出；算法锚点 = RFC 7515 §A.1 官方向量）。
+    /// 任一侧实现漂移（header 字段顺序 / claims 序列化顺序 / HMAC）双端立即红。
+    #[test]
+    fn host_jsonwebtoken_matches_plugin_fixed_vector() {
+        let key: Vec<u8> = (0u8..=0x1f).collect();
+        let claims = JwtClaims {
+            sub: "device-1".to_string(),
+            iss: "BedCode".to_string(),
+            iat: 1700000000,
+            exp: 1700604800,
+            device_name: Some("My Phone".to_string()),
+            fingerprint: Some("fp-abc".to_string()),
+        };
+        // 插件侧断言同一 token 串（注意：Header::new(HS256) 序列化为
+        // {"typ":"JWT","alg":"HS256"}，插件侧常量 HS256_HEADER_JSON 逐字节一致）
+        let expected = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZXZpY2UtMSIsImlzcyI6IkJlZENvZGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDYwNDgwMCwiZGV2aWNlX25hbWUiOiJNeSBQaG9uZSIsImZpbmdlcnByaW50IjoiZnAtYWJjIn0.F_jY264ZZ74_BzyVaZBPPPF9H-4K-DYEVJj_bdTLgX8";
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(&key),
+        )
+        .expect("jsonwebtoken encode");
+        assert_eq!(token, expected, "宿主 jsonwebtoken 与插件 HS256 实现必须产出同一 token");
+
+        // 反向验签插件 token（固定 key）：签名有效 + claims 一致
+        // （固定向量 exp 已过（1700604800 < now），只验签名与结构，关闭 exp 校验）
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.validate_exp = false;
+        let data = decode::<JwtClaims>(
+            expected,
+            &DecodingKey::from_secret(&key),
+            &validation,
+        )
+        .expect("jsonwebtoken 必须能验签插件签发的 token");
+        assert_eq!(data.claims.sub, "device-1");
+        assert_eq!(data.claims.iss, "BedCode");
+        assert_eq!(data.claims.device_name, Some("My Phone".to_string()));
+        assert_eq!(data.claims.fingerprint, Some("fp-abc".to_string()));
     }
 }

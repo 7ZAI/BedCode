@@ -22,6 +22,11 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{oneshot, Mutex};
 
+/// 宿主侧互调调用方身份（票 11 命令面桥接）：宿主不是插件，reply topic 路由
+/// `bedcode.api.reply.<caller>.<request-id>` 需要稳定身份；互调门禁（层 1）
+/// 只校验目标 api 声明、不校验调用方，宿主身份同样受注册表约束（未激活 → 拒绝）。
+pub const HOST_API_CALLER_ID: &str = "bedcode-host";
+
 /// 回复订阅处理器：收到回复即投递到 oneshot 通道（仅取第一条）
 ///
 /// Sender 包在 `Arc<Mutex<Option<_>>>` 中：`take()` 保证只消费一条回复

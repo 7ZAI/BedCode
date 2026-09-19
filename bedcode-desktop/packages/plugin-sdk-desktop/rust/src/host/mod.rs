@@ -13,6 +13,7 @@
 //! 详细错误原因记录在宿主日志（完整错误透传见 ABI v2 计划）。
 
 pub mod app;
+pub mod auth;
 pub mod bus;
 pub mod config;
 pub mod database;
@@ -31,6 +32,7 @@ pub mod timer;
 pub mod ws;
 
 pub use app::HostApp;
+pub use auth::HostAuth;
 pub use bus::HostBus;
 pub use config::{ConfigKey, HostConfig};
 pub use database::{HostDatabase, HostPluginDatabase};

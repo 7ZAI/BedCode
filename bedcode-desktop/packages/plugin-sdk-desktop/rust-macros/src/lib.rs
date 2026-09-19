@@ -72,19 +72,34 @@ fn result_ok_ty(ty: &Type, span: proc_macro2::Span) -> syn::Result<Type> {
 }
 
 /// 从方法属性中取 `#[api("name")]` 覆盖名
+///
+/// 文档形态为括号列表 `#[api("override.name")]`（Meta::List，括号内单个
+/// 字符串字面量）；兼容 `#[api = "override.name"]`（Meta::NameValue）。
+/// 2026-09-19 票 09 修复：此前仅支持 NameValue，括号形态（文档所载）解析
+/// 为 List 永远不命中——覆盖名退化为 snake_case ident。
 fn method_name_override(attrs: &[Attribute]) -> Option<String> {
     for attr in attrs {
         if !attr.path().is_ident("api") {
             continue;
         }
-        if let syn::Meta::NameValue(nv) = &attr.meta {
-            if let syn::Expr::Lit(syn::ExprLit {
-                lit: syn::Lit::Str(s),
-                ..
-            }) = &nv.value
-            {
-                return Some(s.value());
+        match &attr.meta {
+            // 文档形态：#[api("override.name")]
+            syn::Meta::List(_) => {
+                if let Ok(s) = attr.parse_args::<syn::LitStr>() {
+                    return Some(s.value());
+                }
             }
+            // 兼容形态：#[api = "override.name"]
+            syn::Meta::NameValue(nv) => {
+                if let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+                {
+                    return Some(s.value());
+                }
+            }
+            _ => {}
         }
     }
     None
@@ -107,7 +122,6 @@ fn parse_methods(trait_item: &mut ItemTrait) -> syn::Result<Vec<ApiMethod>> {
                 "plugin_api trait 仅支持方法定义",
             ));
         };
-        f.attrs.retain(|a| !a.path().is_ident("api"));
         if f.sig.receiver().is_some() {
             return Err(Error::new(
                 f.sig.span(),
@@ -144,7 +158,11 @@ fn parse_methods(trait_item: &mut ItemTrait) -> syn::Result<Vec<ApiMethod>> {
                 ))
             }
         };
+        // 先读 `#[api("override")]` 覆盖名再剥离元属性：覆盖名必须在 retain 之前
+        // 读取（否则属性已被移除、覆盖永远不生效——2026-09-19 票 09 修复，附
+        // parse_methods 回归测试 method_attr_override_participates_in_api_derivation）
         let method_name = method_name_override(&f.attrs).unwrap_or_else(|| f.sig.ident.to_string());
+        f.attrs.retain(|a| !a.path().is_ident("api"));
         methods.push(ApiMethod {
             ident: f.sig.ident.clone(),
             method_name,
@@ -587,5 +605,35 @@ mod tests {
         m.method_name = "schedule.list".to_string();
         check_drift(&path, &[m]).expect("override name must match manifest");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（2026-09-19 票 09）：`#[api("...")]` 属性必须参与 `parse_methods` 的
+    /// api 名推导——此前 retain 先于读取剥离属性，覆盖名永远不生效（方法名
+    /// 只能退化为 snake_case ident）。本测试走真实 trait 解析路径。
+    #[test]
+    fn method_attr_override_participates_in_api_derivation() {
+        let item: syn::ItemTrait = syn::parse_str(
+            r#"
+            trait Api {
+                #[api("decide-consent")]
+                fn decide_consent() -> Result<(), String>;
+                fn plain() -> Result<(), String>;
+            }
+            "#,
+        )
+        .expect("parse trait");
+        let mut item = item;
+        let methods = parse_methods(&mut item).expect("parse methods");
+        assert_eq!(methods.len(), 2);
+        let decide = methods.iter().find(|m| m.ident == "decide_consent").expect("decide_consent");
+        assert_eq!(
+            decide.method_name, "decide-consent",
+            "#[api] 覆盖名必须生效（retain 不得先于读取）"
+        );
+        let plain = methods.iter().find(|m| m.ident == "plain").expect("plain");
+        assert_eq!(plain.method_name, "plain", "无覆盖时退化为方法 ident");
+        // 覆盖属性已从输出 trait 剥离（编译器不认识 #[api]）
+        let trait_str = quote::quote!(#item).to_string();
+        assert!(!trait_str.contains("decide-consent"), "#[api] 属性必须剥离出输出 trait");
     }
 }

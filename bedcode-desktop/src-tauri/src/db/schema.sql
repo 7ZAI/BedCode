@@ -77,3 +77,15 @@ CREATE TABLE IF NOT EXISTS plugin_storage (
     updated_at TEXT NOT NULL,
     PRIMARY KEY (plugin_id, key)
 );
+
+-- 密钥托管（v15 host-auth secret-store，按插件属主隔离）
+-- 明文不落日志（宿主只记长度）；本表是凭据的唯一指定存储位（AGENTS.md §8
+-- 「日志与存储中凭据只记长度不落明文」的例外/指定位——secret-store 的用途即
+-- 可读回凭据，其余任何存储/日志位置禁止出现值本身）
+CREATE TABLE IF NOT EXISTS plugin_secrets (
+    plugin_id  TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (plugin_id, key)
+);

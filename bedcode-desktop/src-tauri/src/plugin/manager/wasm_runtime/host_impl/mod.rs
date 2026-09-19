@@ -13,6 +13,7 @@
 
 pub(super) mod api;
 pub(super) mod app;
+pub(super) mod auth;
 pub(super) mod bus;
 pub(super) mod config;
 pub(super) mod database;

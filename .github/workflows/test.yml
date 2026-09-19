@@ -56,10 +56,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # 插件 wasm 产物（resources/plugins/）需 wasm32 target；宿主测试用宿主 target。
-          # wasip2：ai-chatbox 已迁移 WASI preview2（scripts/build.js 用 --target wasm32-wasip2），
-          # 不装该 target 时 plugins:build 直接失败；auto-task/file-transfer 用 unknown-unknown
-          targets: wasm32-unknown-unknown, wasm32-wasip2
+          # 票 03：桌面插件/fixture 已全量 wasm32-wasip3（构建经 pinned nightly，
+          # 见下方 wasip3 工具链步骤）；宿主测试仍用 stable。wasm32-wasip2 仅
+          # plugin-wasi-test（WASI preopen E2E）需要；wasm32-unknown-unknown 已无消费者。
+          targets: wasm32-wasip2
+
+      - name: Install wasip3 toolchain (pinned nightly + wasm32-wasip3)
+        # 单一事实来源 scripts/wasip3-toolchain.sh（WASIP3_NIGHTLY）；
+        # stable 1.99（预计 2026-10 中）发布后移除本步骤与插件构建的 RUSTUP_TOOLCHAIN 注入
+        run: |
+          rustup toolchain install nightly-2026-09-16 --profile minimal
+          rustup target add wasm32-wasip3 --toolchain nightly-2026-09-16
 
       - uses: Swatinem/rust-cache@v2
         with:

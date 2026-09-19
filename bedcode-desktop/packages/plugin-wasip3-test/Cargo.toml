@@ -1,0 +1,22 @@
+[package]
+name = "bedcode-plugin-wasip3-test"
+version = "0.1.0"
+description = "wasip3 编译链测试插件 — wasm32-wasip3 target，cdylib 直出 Component（仅供宿主测试套件与 wasip3 工具链健康基线使用）"
+authors = ["binblink"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust", features = ["wasm"] }
+serde_json = "1"
+anyhow = "1"
+# wasip3 熵源：getrandom 0.4 支持 target_env = "p3"（走 wasi:random/random 的
+# async get-random-bytes）——票 02 A1「async 随机字节返回熵」闭环验证用
+getrandom = "0.4"
+
+[profile.release]
+# 与 plugin-component-test 对齐：wasm 产物尺寸优先（宿主测试加载）
+opt-level = "s"
+lto = true

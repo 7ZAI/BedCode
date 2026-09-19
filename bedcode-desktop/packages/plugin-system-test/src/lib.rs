@@ -24,14 +24,13 @@ wit_bindgen::generate!({
 use crate::exports::bedcode::plugin::{
     abi, command, events, host_storage, lifecycle, manifest, terminal_hooks,
 };
-use std::cell::RefCell;
 use std::collections::HashMap;
 
-thread_local! {
-    /// 组件实例私有 KV（验证「组件间不共享内存」：宿主/应用插件侧的同名
-    /// key 与本表互不可见）
-    static KV: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
-}
+/// 组件实例私有 KV（验证「组件间不共享内存」：宿主/应用插件侧的同名
+/// key 与本表互不可见）。实例级全局（票 03：wasip3 thread_local 按宿主调用
+/// 线程隔离，能力路由「转发线程写 / 断言线程读」跨线程会读空）
+static KV: std::sync::LazyLock<std::sync::Mutex<HashMap<String, String>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 
 /// trap 隔离测试开关：get 命中此 key 时故意 panic（wasm32 上即
 /// unreachable trap），宿主应把错误隔离为调用方的 Err 返回
@@ -44,16 +43,16 @@ impl host_storage::Guest for Guest {
         if key == PANIC_KEY {
             panic!("intentional system component panic for trap isolation test");
         }
-        Ok(KV.with(|kv| kv.borrow().get(&key).cloned()))
+        Ok(KV.lock().unwrap().get(&key).cloned())
     }
 
     fn set(key: String, value: String) -> Result<(), String> {
-        KV.with(|kv| kv.borrow_mut().insert(key, value));
+        KV.lock().unwrap().insert(key, value);
         Ok(())
     }
 
     fn delete(key: String) -> Result<(), String> {
-        KV.with(|kv| kv.borrow_mut().remove(&key));
+        KV.lock().unwrap().remove(&key);
         Ok(())
     }
 }

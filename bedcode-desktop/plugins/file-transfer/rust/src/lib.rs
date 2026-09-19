@@ -20,6 +20,7 @@ use bedcode_plugin_api::{BusMessage, WasmPlugin};
 use std::sync::Mutex;
 use std::sync::OnceLock;
 
+mod auth_center;
 mod device_bridge;
 mod peer;
 mod roots_registry;
@@ -233,14 +234,21 @@ impl WasmPlugin for FileTransferPlugin {
             "file-transfer.cancel-receiving" => peer::cancel_receiving(&h, &args),
             "file-transfer.clear-history" => peer::clear_history(&h),
 
-            // ==================== 信任层（原语直通） ====================
+            // ==================== 信任层（票 10 起经认证中心决策） ====================
+            // consent / 信任列表改经互调认证中心（auth.decide-consent /
+            // auth.list-trusted-devices）；认证中心不可用时双轨降级直答宿主
+            // （迁移前行为，见 auth_center 模块文档）。撤销无互调 api，维持宿主
+            // 原语直通（与认证中心 peer 段共享同一宿主 trust store，数据一致）。
             "file-transfer.respond-consent" => {
                 let request_id = require_str(&args, "requestId")?;
                 let accepted = args.get("accepted").and_then(|v| v.as_bool()).unwrap_or(false);
-                let hit = h.peer_respond_consent(&request_id, accepted)?;
+                let hit = auth_center::decide_and_respond(&h, &request_id, accepted)
+                    .map_err(anyhow::Error::msg)?;
                 Ok(serde_json::json!({ "hit": hit }))
             }
-            "file-transfer.list-trusted" => Ok(h.peer_list_trusted()?),
+            "file-transfer.list-trusted" => {
+                auth_center::list_trusted(&h).map_err(anyhow::Error::msg)
+            }
             "file-transfer.revoke-trusted" => {
                 let node_id = require_str(&args, "nodeId")?;
                 let removed = h.peer_revoke_trusted(&node_id)?;
@@ -274,8 +282,13 @@ impl WasmPlugin for FileTransferPlugin {
             return Ok(());
         }
 
-        // 首连确认 / 连接态：原样转发；断开同时摘除会话句柄映射
+        // 首连确认：决策权归认证中心（票 10，auth.decide-consent 阶段 1 信任
+        // 预检）。已信任 → 免确认自动放行（不弹窗）；未知 peer / 认证中心不可用
+        // → 照旧转发前端弹窗询问（双轨兜底与迁移前行为等价）。
         if msg.topic == "peer:consent" {
+            if auth_center::evaluate_and_maybe_respond(&h, &msg.payload) {
+                return Ok(());
+            }
             h.emit_event("plugin:file-transfer:consent-requested", &msg.payload);
             return Ok(());
         }
