@@ -533,11 +533,17 @@ impl SessionManager {
         tokio::spawn(async move {
             if let Some(session) = pty_registry.get(&sid).await {
                 let mut lifecycle_rx = session.subscribe_lifecycle();
-                if let Ok(status) = lifecycle_rx.recv().await {
-                    let session_status = match status {
+                if let Ok(terminated) = lifecycle_rx.recv().await {
+                    let session_status = match terminated.status {
                         crate::pty::PtySessionStatus::Error => SessionStatus::Error(None),
                         _ => SessionStatus::Stopped,
                     };
+                    tracing::debug!(
+                        session_id = %sid,
+                        exit_code = ?terminated.exit_code,
+                        killed = terminated.killed,
+                        "PTY 终态（业务会话线仅取状态）"
+                    );
 
                     // PTY 已退出：清理该会话的输入行缓冲区（残余内容不补发，见 ADR 0001）
                     line_tracker.remove_session(&sid);

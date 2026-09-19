@@ -49,9 +49,15 @@
 //!   warn + 计数）。纯增量变更，v13 插件二进制不受影响
 //! - v15: 密钥托管原语（host-auth / secret-store）：`get/set/delete/keys` 四函数，
 //!   属主隔离 + 权限门（PERMISSION_AUTH）+ 持久化（plugin_secrets 表）+
-//!   明文不落日志。认证中心语义下沉的宿主侧前置（v16 由 host-pty 线取用）。新接口走 bump，
+//!   明文不落日志。认证中心语义下沉的宿主侧前置（host-pty 线让位 v16，
+//!   见 .scratch/2026-09-19-pty-base-service/spec.md D7）。新接口走 bump，
 //!   v14 及以下的插件二进制仍可加载（`version > 当前 → 拒绝` 语义）
-pub const ABI_VERSION: u32 = 15;
+//! - v16: 插件私有伪终端原语（host-pty）：`spawn/write/resize/kill/ring-fetch/
+//!   is-running` 六函数 + `pty:exit.<owner>` 事件（spec D7）。输出面为
+//!   「单生产者环形缓冲 + 插件拉取游标」纯拉取模型（无 push 回调，D3）；
+//!   属主隔离 + 权限两域（pty:spawn / pty:io）。纯增量新接口，v15 及以下
+//!   插件二进制不受影响
+pub const ABI_VERSION: u32 = 16;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -65,11 +71,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v15() {
-        // 版本号序列与历史 core ABI 共用：v15 = 密钥托管原语（host-auth / secret-store），
-        // 叠加 v14 host-websocket、v13 host-mdns v2、v12 总线二进制载荷与 v11
-        // host-peer 传输控制三原语（能力超集）
-        assert_eq!(ABI_VERSION, 15);
+    fn test_abi_version_is_v16() {
+        // 版本号序列与历史 core ABI 共用：v16 = 插件私有伪终端原语（host-pty），
+        // 叠加 v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
+        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
+        assert_eq!(ABI_VERSION, 16);
     }
 
     #[test]

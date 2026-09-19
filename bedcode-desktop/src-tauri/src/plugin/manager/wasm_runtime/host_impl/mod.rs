@@ -26,6 +26,7 @@ pub(crate) mod mdns;
 pub(super) mod peer;
 pub(super) mod platform;
 pub(super) mod process;
+pub(crate) mod pty;
 pub(super) mod session;
 pub(super) mod status;
 pub(super) mod storage;

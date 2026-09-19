@@ -426,6 +426,8 @@ const VALID_PERMISSIONS = new Set([
   'peer',
   'ws:client',
   'ws:server',
+  'pty:spawn',
+  'pty:io',
 ])
 
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])

@@ -90,7 +90,7 @@ pnpm exec eslint .
 | 改插件 | §7 插件检查清单 + WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）+ ADR 0017/0019/0022 |
 | 改数据库 / schema | §9 数据规范 + `bedcode-desktop/src-tauri/src/db/` |
 | 改跨端协议（HTTP/WS/QR/认证） | §9 协议规范 + `docs/knowledge/mobile-desktop-auth.md`，两端同步评估 |
-| 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `.scratch/adb-fd0-bug/bug-report.md` |
+| 排查日志 / 无日志问题 | `docs/knowledge/logging.md` + `.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
 | 启动多任务 / 需要规划 | `.scratch/<task>/` 记录（项目未设计 GitHub PR 流程，开发过程文档走这里） |
 | 定位代码 | §12 代码查找纪律 |
 
@@ -98,7 +98,7 @@ pnpm exec eslint .
 
 ## 5. 架构硬约束
 
-**目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `.scratch/plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/platform-kernel/spec.md`。
+**目标：无业务内核（Businessless Kernel）**——底座内核只含「应用无关的通用引擎」：进程（PTY）、网络（HTTP/WS/mDNS）、存储（SQLite/文件）、安全（JWT/密钥/TLS/信任）、通信（消息总线/插件互调）+ wasmtime 运行时。一切产品概念（会话、终端、设备连接、文件传输、AI……）都是插件。演进路线的阶段划分见 `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`；终态愿景见 `.scratch/2026-09-10-platform-kernel/spec.md`。
 
 **架构红线（强制）：**
 
@@ -147,8 +147,8 @@ pnpm exec eslint .
 
 - [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）
-- [ ] 宿主能力经 `host-*` 原语访问（进程/网络/存储/安全/通信），能力**不得携带业务语义**（ADR 0022）
+- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15）、`host-pty`（v16）只在 desktop WIT/ABI/SDK 演进；当前 desktop **v16**、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复条件见同一节）
+- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 20 组：进程 = `host-pty`（交互式）/ `host-process`（非交互），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`），拆分后五同步点必须同步落（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门，漏一处即漂移锁翻红）
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
@@ -285,9 +285,9 @@ CI 门禁（合并到 master/uat 时）：`lint.yml`（eslint 0 error）+ `test.
 | Issue tracker | issues 为 `.scratch/` 下的 markdown，见 `docs/agents/issue-tracker.md` |
 | Triage 标签 | needs-triage / needs-info / ready-for-agent / ready-for-human / wontfix，见 `docs/agents/triage-labels.md` |
 | 发布流程 | `docs/knowledge/release-workflow.md`（桌面 updater / 移动发布）、`docs/knowledge/sdk-publish.md`（SDK 发布） |
-| 日志 / 排障 | `docs/knowledge/logging.md`、`.scratch/adb-fd0-bug/bug-report.md` |
-| 插件 WASM 日志 spec | `.scratch/plugin-wasm-logging/spec.md` |
-| 架构路线 | `.scratch/plugin-kernel-roadmap/spec.md`、`.scratch/platform-kernel/spec.md` |
+| 日志 / 排障 | `docs/knowledge/logging.md`、`.scratch/2026-09-07-adb-fd0-bug/bug-report.md` |
+| 插件 WASM 日志 spec | `.scratch/2026-09-09-plugin-wasm-logging/spec.md` |
+| 架构路线 | `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`、`.scratch/2026-09-10-platform-kernel/spec.md` |
 | pi 工具手册 | `docs/agents/pi-tools.md`（附录） |
 
 ---

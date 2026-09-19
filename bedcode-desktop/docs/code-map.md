@@ -126,7 +126,7 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   - **loader / registry**：文件扫描 + WASM 组件加载、插件注册表
   - **wasm_runtime + wasm_runtime/host_impl/**：wasmtime Engine/Store/Instance 生命周期管理（含 component.rs
     WASI preview2 接线）；宿主能力实现按功能域拆分于 host_impl/（api/app/storage/database/terminal/session/
-    events/http/mdns/ws/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
+    events/http/mdns/ws/pty/log/fs/config/bus/lifecycle/process/timer/peer/status/platform/wsl_fs），
     统一注册到 Linker
   - **capability**：能力注册表与系统组件装配（manifest `type: system|application` + `dependencies`）——
     能力名 → 宿主原语 / WASM 系统组件实例二选一装配；应用插件的 host-* import 由 Linker 经此
@@ -162,6 +162,34 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
   `ws:client-connect|client-disconnect.<owner>`，标识在 payload，非属主物理上订阅不到）；
   消息帧走 `events-ws` 回调（未导出 → 丢弃 + 首次 `warn` + 计数，宿主不缓存）；
 - **回收**：插件停用 → `ws::purge_for_plugin` 关闭并摘除其全部出站连接与入站端点（只碰本人，4005）。
+
+### 宿主能力实现域 · PTY 基础能力服务 — `host-pty`（ABI v16）
+
+WIT 契约 `host-pty`（6 函数，SDK `rust/wit/bedcode.wit`）、**无可选导出**（push 输出模型已被
+spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟演，见 ADR 0022「双端偏离」）；
+宿实现 `plugin/manager/wasm_runtime/host_impl/pty.rs`，引擎侧 `src-tauri/src/pty/`
+（`pty_process.rs` / `pty_reader.rs` / `output_sink.rs` / `lifecycle.rs` / `pty_ring.rs`）。
+**零业务代码红线（ADR 0022）**：只给裸伪终端原语，业务会话线（`host-terminal` / `host-session` /
+`terminal-hooks`）与本接口互不转发——插件 PTY 不进 `SessionComponents`、不注册 `GlobalOutputManager`。
+
+- **创建域（`pty:spawn`）**：`spawn` 收 config-json `{command, args?, env?, workingDir?, cols?, rows?, ringBytes?}`
+  （裸 argv exec，宿主不做 shell 包装 / WSL 转换 / 危险字符校验）→ 句柄 `pty-<uuid>` 并登记属主；
+  `kill`（优雅 Ctrl-C → 兜底强杀）；每插件在册条数上限 `PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN`；
+- **数据域（`pty:io`）**：`write`（单次准入上限 `PLUGIN_PTY_MAX_WRITE_BYTES`，超限零写入）、
+  `resize`（透传 winsize，不承诺同步生效时序）、`ring-fetch`（游标拉取，单次截到
+  `PLUGIN_PTY_RING_FETCH_MAX_BYTES`，`truncated` 即 resync 信号）、`is-running`（自愈快照，
+  判据 = `running && !output_terminated`）；
+- **输出面**：每句柄一条 `PtyRing`（单生产者 + 全局偏移 + 字节/条目双上限，容量是 spawn 的插件声明
+  参数，宿主以 `PLUGIN_PTY_RING_MAX_BYTES` 仲裁）；读线程经 `PtyRingSink`（`PtyOutputSink` 实现）
+  投递，源侧零等待；
+- **生命周期**：唯一事件 `pty:exit.<owner>`（payload `{ptyId, reason: stopped|killed|error, exitCode?}`），
+  由 spawn 时起动的退出监听在 `PtyTerminationGate`（EOF + 子进程回收）齐备后发布，**exit 即摘除句柄与环**；
+  终止 / 摘除 / 发布遵循单一发布者不变量（只有 `remove` 成功者发布，故三条路径恰好一条事件）；
+- **回收**：插件停用 → `pty::purge_for_plugin`（`host.rs::deactivate_plugin_inner`，紧邻 mdns / ws
+  回收、先于订阅注销）kill 并摘除本人全部 PTY、逐条补发 killed 事件；
+- **属主隔离**：六函数一律先过权限门再查属主，他人句柄 `not owner of pty handle`，摘除后
+  `pty handle not found`；fixture 闭环见 `packages/plugin-pty-test`（wasm32-wasip3）与
+  `wasm_runtime.rs` 的 `test_pty_*` 矩阵。
 
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
 
@@ -204,7 +232,12 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
 
 ### PTY 管理 — `src-tauri/src/pty/`
 
-PTY 进程生命周期（启动时注入 `BEDCODE_SESSION_ID` 环境变量）、输出读取与前端输出分发、命令构建、WSL 支持。
+PTY 进程生命周期、输出读取与分发、命令构建、WSL 支持。引擎按两条消费线做参数化（互不可见）：
+业务会话线（默认 sink = `SessionOutputSink` → `GlobalOutputManager`、`PtyCommandSource::Business`
+含 `bash -lic` 包装与 `BEDCODE_SESSION_ID` 注入、`PtySlaveFdPolicy::Hold`）与 host-pty 插件私有
+PTY（`PtyRingSink` → `PtyRing` 游标环、`PtyCommandSource::Raw` 裸 argv、`ReleaseOnSpawn` 使自然
+退出可观测）。终态由 `PtyTerminationGate` 汇聚「读线程 EOF + 子进程回收」两路信号，恰好一条
+`PtyTerminated{status, exit_code, killed}`（回收走专属 OS 线程阻塞 `wait()`，无轮询）。
 
 ### 全局事件系统 — `src-tauri/src/events/`
 

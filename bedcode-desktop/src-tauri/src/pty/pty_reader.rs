@@ -1,6 +1,9 @@
 //! PTY Output Reader
 //!
-//! PTY 输出读取线程：`read → 有序队列 → 单消费者入环`。
+//! PTY 输出读取线程：`read → 有序队列 → 单消费者入输出汇`。
+//!
+//! **投递目标可注入**（`PtyOutputSink`）：读取线程不感知字节最终落在业务会话环
+//! 还是插件自备缓冲——业务链路与插件私有 PTY 共用同一条读线程语义。
 //!
 //! **源零等待（spec §4.1/§4.6 背压下移）**：读取路径不含任何暂停/水位判定，
 //! 也不感知任何订阅者。数据量超出会话环容量时由环淘汰最旧（订阅者各自按
@@ -14,7 +17,8 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 
 use crate::enums::PtySessionStatus;
-use crate::session::{GlobalOutputManager, OutputEvent};
+use crate::pty::lifecycle::PtyTerminationGate;
+use crate::pty::output_sink::PtyOutputSink;
 use crate::system::config::AppConfig;
 
 /// PTY 输出读取器
@@ -26,12 +30,14 @@ impl PtyReader {
     /// 创建并启动输出读取线程
     ///
     /// - `reader`: PTY 读取器
-    /// - `lifecycle_tx`: 生命周期事件发送器
-    /// - `session_id`: 会话 ID
+    /// - `sink`: 输出投递目标（业务总线 / 插件自备缓冲）
+    /// - `gate`: 终态汇聚门（读线程关闭 = 终态信号 ①）
+    /// - `session_id`: 会话 ID（日志与终态事件寻址）
     /// - `running`: 运行标志
     pub fn start(
         reader: Box<dyn Read + Send + 'static>,
-        lifecycle_tx: tokio::sync::broadcast::Sender<PtySessionStatus>,
+        sink: Arc<dyn PtyOutputSink>,
+        gate: Arc<PtyTerminationGate>,
         session_id: String,
         running: Arc<AtomicBool>,
     ) -> Self {
@@ -39,17 +45,16 @@ impl PtyReader {
         let read_buffer_size = AppConfig::global().terminal.read_buffer_size;
 
         // 有序输出队列：PTY 读线程按 read 顺序 blocking_send，单消费者任务顺序
-        // on_output——根治「spawn 并发 on_output 乱序」竞态（多任务在 index 分配
+        // on_bytes——根治「spawn 并发 on_output 乱序」竞态（多任务在 index 分配
         // 与广播之间互相插入 → 队列 push/broadcast 顺序与事件产生顺序错乱 → 字节
         // 错位残渣）。队列满时 blocking_send 阻塞读线程——这是唯一残留的源侧
-        // 等待，仅在入环消费者彻底停摆时发生（正常路径 on_output 只做入环 + 通告
+        // 等待，仅在入环消费者彻底停摆时发生（正常路径 on_bytes 只做入环 + 通告
         // 水印，无 await 等待任何订阅者）
-        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<OutputEvent>(16384);
+        let (output_tx, mut output_rx) = tokio::sync::mpsc::channel::<(Vec<u8>, i64)>(16384);
         let consumer_session_id = session_id.clone();
         tauri::async_runtime::spawn(async move {
-            let global_manager = GlobalOutputManager::global();
-            while let Some(event) = output_rx.recv().await {
-                global_manager.on_output(event).await;
+            while let Some((bytes, timestamp_ms)) = output_rx.recv().await {
+                sink.on_bytes(bytes, timestamp_ms).await;
             }
             tracing::debug!(session_id = %consumer_session_id, "PTY output consumer exited");
         });
@@ -69,16 +74,12 @@ impl PtyReader {
                         let timestamp = chrono::Utc::now();
                         let raw_bytes = buffer[..n].to_vec();
 
-                        // 经有序队列顺序发送（单消费者顺序 on_output，消除 spawn 并发
+                        // 经有序队列顺序发送（单消费者顺序投递，消除 spawn 并发
                         // 乱序）。队列关闭 = 消费者已退出（应用关闭中），读循环退出
-                        let output_event = OutputEvent::new(
-                            session_id.clone(),
-                            raw_bytes,
-                            0, // start_offset 由 on_output 在串行临界区内按 max_offset 分配
-                            timestamp.timestamp_millis(),
-                            false,
-                        );
-                        if output_tx.blocking_send(output_event).is_err() {
+                        if output_tx
+                            .blocking_send((raw_bytes, timestamp.timestamp_millis()))
+                            .is_err()
+                        {
                             tracing::debug!("PTY output queue closed, reader exiting");
                             break;
                         }
@@ -91,11 +92,9 @@ impl PtyReader {
                 }
             }
 
-            // Notify lifecycle subscribers that the process has exited
-            // （发送失败 = 无订阅者，属正常终止路径；warn 保留可观测性）
-            if let Err(e) = lifecycle_tx.send(exit_status) {
-                tracing::warn!(session_id = %session_id, %e, "PTY lifecycle event dropped (no subscribers)");
-            }
+            // 终态信号 ①：尾帧已投递完毕；退出码要等子进程回收，事件由门齐备后发出
+            // （发送失败 = 无订阅者，属正常终止路径；门内 warn 保留可观测性）
+            gate.mark_reader_closed(exit_status);
         });
 
         Self { handle: Some(handle) }
@@ -118,6 +117,9 @@ impl PtyReader {
 mod tests {
     use super::*;
     use crate::enums::PtySessionStatus;
+    use crate::pty::lifecycle::PtyTerminated;
+    use crate::pty::output_sink::test_support::CollectingSink;
+    use crate::pty::output_sink::SessionOutputSink;
     use std::io::Read;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
@@ -183,44 +185,99 @@ mod tests {
         }
     }
 
-    #[test]
-    fn reads_output_and_reports_stopped_on_eof() {
-        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
-        let running = Arc::new(AtomicBool::new(true));
+    /// 轮询自备 sink 直至累计字节达到期望值（消费者任务是异步的）
+    async fn drain_sink_until(sink: &Arc<CollectingSink>, want: usize) -> Vec<u8> {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let collected = sink.collected();
+            if collected.len() >= want {
+                return collected;
+            }
+            if std::time::Instant::now() >= deadline {
+                return collected;
+            }
+            tokio::task::yield_now().await;
+        }
+    }
 
-        // 负载超过默认 read_buffer_size（4096）→ 强制分多次 read → 多轮输出
-        let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
-        let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
+    /// 测试用终态门（回收侧由 `mark_reaped` 手动补上，本模块只测读线程）
+    fn test_gate(session_id: &str) -> (Arc<PtyTerminationGate>, broadcast::Receiver<PtyTerminated>) {
+        let (tx, rx) = broadcast::channel(8);
+        let gate = Arc::new(PtyTerminationGate::new(
+            session_id.to_string(),
+            tx,
+            Arc::new(AtomicBool::new(false)),
+        ));
+        (gate, rx)
+    }
+
+    /// 负载超过默认 read_buffer_size（4096）→ 强制分多次 read → 多轮输出
+    fn oversized_payload() -> Vec<u8> {
+        (0..9000u32).map(|i| (i % 251) as u8).collect()
+    }
+
+    fn memory_reader(payload: Vec<u8>) -> Box<dyn Read + Send + 'static> {
+        Box::new(MemoryReader {
             data: std::io::Cursor::new(payload),
-        });
+        })
+    }
 
-        let pty_reader = PtyReader::start(reader, lifecycle_tx, "test-session".to_string(), running);
+    /// EOF → 读线程关闭：退出码未就位前不得发出终态事件，回收后补发 Stopped
+    #[test]
+    fn eof_marks_reader_closed_and_emits_stopped_only_after_reap() {
+        let (gate, mut lifecycle_rx) = test_gate("test-session");
+        let running = Arc::new(AtomicBool::new(true));
+        let sink = CollectingSink::new();
+
+        let pty_reader = PtyReader::start(
+            memory_reader(oversized_payload()),
+            sink,
+            gate.clone(),
+            "test-session".to_string(),
+            running,
+        );
         pty_reader.wait(); // EOF 后线程自行退出，join 返回
 
-        // 生命周期：EOF → Stopped
-        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
-        assert_eq!(status, PtySessionStatus::Stopped);
+        assert_eq!(
+            lifecycle_rx.try_recv().unwrap_err(),
+            broadcast::error::TryRecvError::Empty,
+            "读线程单独关闭时不得发出终态事件（退出码尚不可用）"
+        );
+
+        gate.mark_reaped(Some(0));
+        let terminated = lifecycle_rx.try_recv().expect("读线程关闭 + 回收齐备后应发出终态事件");
+        assert_eq!(terminated.status, PtySessionStatus::Stopped);
+        assert_eq!(terminated.exit_code, Some(0));
     }
 
+    /// 零字节输入（进程未产出任何输出即退出）也走完整终止路径
     #[test]
     fn empty_input_exits_with_stopped_lifecycle() {
-        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let (gate, mut lifecycle_rx) = test_gate("empty");
         let running = Arc::new(AtomicBool::new(true));
 
-        let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
-            data: std::io::Cursor::new(Vec::new()),
-        });
-
-        let pty_reader = PtyReader::start(reader, lifecycle_tx, "empty".to_string(), running);
+        let pty_reader = PtyReader::start(
+            memory_reader(Vec::new()),
+            CollectingSink::new(),
+            gate.clone(),
+            "empty".to_string(),
+            running,
+        );
         pty_reader.wait();
+        assert_eq!(
+            lifecycle_rx.try_recv().unwrap_err(),
+            broadcast::error::TryRecvError::Empty,
+            "回收未就位前不得发出终态事件"
+        );
 
-        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
-        assert_eq!(status, PtySessionStatus::Stopped);
+        gate.mark_reaped(None);
+        let terminated = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(terminated.status, PtySessionStatus::Stopped);
+        assert_eq!(terminated.exit_code, None, "无退出码时事件仍须发出且缺省");
     }
 
-    /// 数据投递断言（票据 04 + 拉取模型）：消费者任务硬编码
-    /// `GlobalOutputManager::global()`，用全局唯一 session_id 注册；产出字节
-    /// 必须完整按序落入该会话输出环（订阅者随后按游标从环上拉取）。
+    /// 业务总线投递（票据 04 + 拉取模型）：产出字节必须完整按序落入会话输出环
+    /// （订阅者随后按游标从环上拉取）。
     ///
     /// 零订阅者场景同时是「源不依赖消费者」的回归护栏：没有任何订阅者时
     /// 产出照常全量入环。
@@ -234,13 +291,16 @@ mod tests {
             let manager = GlobalOutputManager::global();
             manager.register_session(&sid).await;
 
-            let (lifecycle_tx, _rx) = broadcast::channel(8);
+            let (gate, _rx) = test_gate(&sid);
             let running = Arc::new(AtomicBool::new(true));
-            let payload: Vec<u8> = (0..9000u32).map(|i| (i % 251) as u8).collect();
-            let reader: Box<dyn Read + Send + 'static> = Box::new(MemoryReader {
-                data: std::io::Cursor::new(payload.clone()),
-            });
-            let pty_reader = PtyReader::start(reader, lifecycle_tx, sid.clone(), running);
+            let payload = oversized_payload();
+            let pty_reader = PtyReader::start(
+                memory_reader(payload.clone()),
+                Arc::new(SessionOutputSink::new(&sid)),
+                gate,
+                sid.clone(),
+                running,
+            );
             pty_reader.wait();
 
             // 无任何订阅者：产出仍须完整按序入环
@@ -257,6 +317,44 @@ mod tests {
         });
     }
 
+    /// 自备 sink 投递（票据 01 输出汇可注入）：同一条读线程把字节投递到业务总线
+    /// 之外的目标——内容、分块与顺序均不得变化，业务会话环不得留痕
+    #[test]
+    fn output_bytes_reach_private_sink_in_order_without_touching_session_bus() {
+        use crate::session::GlobalOutputManager;
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let sid = unique_session_id("itest-private-sink");
+            let manager = GlobalOutputManager::global();
+            manager.register_session(&sid).await;
+
+            let (gate, _rx) = test_gate(&sid);
+            let running = Arc::new(AtomicBool::new(true));
+            let payload = oversized_payload();
+            let sink = CollectingSink::new();
+            let pty_reader = PtyReader::start(memory_reader(payload.clone()), sink.clone(), gate, sid.clone(), running);
+            pty_reader.wait();
+
+            let collected = drain_sink_until(&sink, payload.len()).await;
+            assert_eq!(collected, payload, "自备 sink 必须收到完整按序字节");
+            assert!(
+                sink.chunks().len() > 1,
+                "负载应经多次 read 分块投递（否则未验证顺序契约）: {:?}",
+                sink.chunks().len()
+            );
+
+            let session = manager.session(&sid).await.expect("会话管理器");
+            let ring_arc = session.ring();
+            let ring = ring_arc.read().await;
+            let (min, max) = ring.watermarks();
+            assert_eq!(max - min, 0, "插件私有输出不得进入业务会话环（业务线零感知）");
+            drop(ring);
+
+            manager.unregister_session(&sid).await;
+        });
+    }
+
     /// Err 分支（票据 04）：假 Reader 返回 Err → 生命周期事件为 Error
     #[test]
     fn reader_error_reports_error_lifecycle() {
@@ -267,20 +365,31 @@ mod tests {
             }
         }
 
-        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let (gate, mut lifecycle_rx) = test_gate("err-session");
         let running = Arc::new(AtomicBool::new(true));
         let reader: Box<dyn Read + Send + 'static> = Box::new(ErrReader);
-        let pty_reader = PtyReader::start(reader, lifecycle_tx, "err-session".to_string(), running);
+        let pty_reader = PtyReader::start(
+            reader,
+            CollectingSink::new(),
+            gate.clone(),
+            "err-session".to_string(),
+            running,
+        );
         pty_reader.wait();
+        gate.mark_reaped(None);
 
-        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
-        assert_eq!(status, PtySessionStatus::Error, "读错误应上报 Error 生命周期");
+        let terminated = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(
+            terminated.status,
+            PtySessionStatus::Error,
+            "读错误应上报 Error 生命周期"
+        );
     }
 
     /// running=false（启动即退出）：读线程不读任何字节，生命周期报 Stopped
     #[test]
     fn running_flag_cleared_before_read_exits_without_reading() {
-        let (lifecycle_tx, mut lifecycle_rx) = broadcast::channel(8);
+        let (gate, mut lifecycle_rx) = test_gate("stop-session");
         let running = Arc::new(AtomicBool::new(false));
         let reads = Arc::new(std::sync::Mutex::new(Vec::new()));
         let reader: Box<dyn Read + Send + 'static> = Box::new(RecordingReader {
@@ -289,11 +398,23 @@ mod tests {
             reads: reads.clone(),
         });
 
-        let pty_reader = PtyReader::start(reader, lifecycle_tx, "stop-session".to_string(), running);
+        let pty_reader = PtyReader::start(
+            reader,
+            CollectingSink::new(),
+            gate.clone(),
+            "stop-session".to_string(),
+            running,
+        );
         pty_reader.wait();
+        gate.mark_reaped(Some(3));
 
         assert!(reads.lock().unwrap().is_empty(), "running=false 时不得发生任何 read");
-        let status = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
-        assert_eq!(status, PtySessionStatus::Stopped, "running=false 退出应报 Stopped");
+        let terminated = lifecycle_rx.try_recv().expect("lifecycle event should be sent");
+        assert_eq!(
+            terminated.status,
+            PtySessionStatus::Stopped,
+            "running=false 退出应报 Stopped"
+        );
+        assert_eq!(terminated.exit_code, Some(3));
     }
 }

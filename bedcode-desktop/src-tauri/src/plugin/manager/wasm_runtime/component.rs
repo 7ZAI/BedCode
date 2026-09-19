@@ -21,7 +21,7 @@
 //! - 内存搬运由绑定层处理，无需 (ptr,len) 配对与 alloc/dealloc
 
 use super::host_impl::{
-    api, app, auth, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process,
+    api, app, auth, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, pty,
     session, status, storage, terminal, timer, ws,
 };
 #[cfg(test)]
@@ -91,6 +91,46 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
     }
 }
 
+// ==================== host-pty（v16 插件私有伪终端） ====================
+// 属主 = 调用方插件实例的 plugin_id（自 store state 派生，guest 无法伪造）；
+// 权限两域 + 环形缓冲游标拉取全部在 host_impl/pty.rs 内实现
+
+impl bedcode::plugin::host_pty::Host for WasmPluginState {
+    fn spawn(&mut self, config_json: String) -> Result<String, String> {
+        pty::pty_spawn(&self.host_ctx, &self.plugin_id, &config_json)
+    }
+
+    fn write(&mut self, pty_id: String, data: Vec<u8>) -> Result<(), String> {
+        pty::pty_write(&self.host_ctx, &self.plugin_id, &pty_id, &data)
+    }
+
+    fn resize(&mut self, pty_id: String, cols: u16, rows: u16) -> Result<(), String> {
+        pty::pty_resize(&self.host_ctx, &self.plugin_id, &pty_id, cols, rows)
+    }
+
+    fn kill(&mut self, pty_id: String) -> Result<(), String> {
+        pty::pty_kill(&self.host_ctx, &self.plugin_id, &pty_id)
+    }
+
+    fn ring_fetch(
+        &mut self,
+        pty_id: String,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<bedcode::plugin::host_pty::RingFetchResult>, String> {
+        pty::pty_ring_fetch(&self.host_ctx, &self.plugin_id, &pty_id, from_offset, max_bytes).map(|fetched| {
+            fetched.map(|ring| bedcode::plugin::host_pty::RingFetchResult {
+                data: ring.data,
+                next_offset: ring.next_offset,
+                truncated: ring.truncated,
+            })
+        })
+    }
+
+    fn is_running(&mut self, pty_id: String) -> Result<bool, String> {
+        pty::pty_is_running(&self.host_ctx, &self.plugin_id, &pty_id)
+    }
+}
 
 impl bedcode::plugin::host_log::Host for WasmPluginState {
     fn info(&mut self, message: String) {
@@ -504,6 +544,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_plugin_database::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_process::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_pty::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_session::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_timer::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_events::add_to_linker::<WasmPluginState, D>,

@@ -16,13 +16,13 @@
 
 use crate::host::{
     ConfigKey, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
-    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess,
-    HostSession, HostStorage, HostTerminal, HostWebsocket,
+    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty,
+    HostSession, HostStorage, HostTerminal, HostWebsocket, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs,
     host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
-    host_session, host_storage, host_terminal, host_timer, host_websocket,
+    host_pty, host_session, host_storage, host_terminal, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -614,6 +614,41 @@ impl HostWebsocket for WasmHost {
     }
 }
 
+// ==================== host-pty（ABI v16 插件私有伪终端）====================
+
+impl HostPty for WasmHost {
+    fn pty_spawn(&self, config_json: &str) -> Result<String, HostError> {
+        host_pty::spawn(config_json).map_err(|e| host_err("pty_spawn", e))
+    }
+
+    fn pty_write(&self, pty_id: &str, data: &[u8]) -> Result<(), HostError> {
+        host_pty::write(pty_id, data).map_err(|e| host_err("pty_write", e))
+    }
+
+    fn pty_resize(&self, pty_id: &str, cols: u16, rows: u16) -> Result<(), HostError> {
+        host_pty::resize(pty_id, cols, rows).map_err(|e| host_err("pty_resize", e))
+    }
+
+    fn pty_kill(&self, pty_id: &str) -> Result<(), HostError> {
+        host_pty::kill(pty_id).map_err(|e| host_err("pty_kill", e))
+    }
+
+    fn pty_ring_fetch(&self, pty_id: &str, from_offset: u64, max_bytes: u32) -> Result<Option<PtyRingFetch>, HostError> {
+        host_pty::ring_fetch(pty_id, from_offset, max_bytes)
+            .map(|result| {
+                result.map(|r| PtyRingFetch {
+                    data: r.data,
+                    next_offset: r.next_offset,
+                    truncated: r.truncated,
+                })
+            })
+            .map_err(|e| host_err("pty_ring_fetch", e))
+    }
+
+    fn pty_is_running(&self, pty_id: &str) -> Result<bool, HostError> {
+        host_pty::is_running(pty_id).map_err(|e| host_err("pty_is_running", e))
+    }
+}
 
 // ==================== host-platform（ADR 0022 v2）====================
 

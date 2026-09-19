@@ -110,5 +110,42 @@ pub const PLUGIN_WS_AUTH_TIMEOUT_SECS: u64 = 10;
 /// 插件端点 path 段长度上限（字符）：防超长路径占用路由匹配（spec §4.2）
 pub const PLUGIN_WS_ENDPOINT_PATH_MAX_LEN: usize = 64;
 
+// ==================== host-pty（ABI v16，spec `.scratch/2026-09-19-pty-base-service/`） ====================
+
+/// 每插件在册私有 PTY 数量上限：超限 `spawn` 直接 `Err`（fail-visible，不排队、
+/// 不静默淘汰自己已有的句柄，spec D9）
+///
+/// 取值依据：一条私有 PTY 的资源画像 = 一个子进程 + 一对 fd + 一条读线程 + 一块
+/// 输出环，与 `PLUGIN_WS_MAX_CONNS_PER_PLUGIN`（出站连接 8 条）同档；8 条够
+/// 「多 shell 并发」型插件的常态用量，且越界不牵连同宿主其他插件的配额。
+pub const PLUGIN_PTY_MAX_SESSIONS_PER_PLUGIN: usize = 8;
+
+/// 插件私有 PTY 输出环的**默认**容量（字节）：spawn config 未声明 `ringBytes` 时取本值
+///
+/// 满则淘汰最旧字节（消费者以 `truncated` 感知缺口）——**淘汰只发生在插件自己的
+/// 历史上，绝不把背压踢回 PTY 读取端**（spec D3）。刻意不与业务会话环
+/// （`channels.global_queue_max_bytes`，每会话 50 MB 档）同档：插件环随 pty 句柄
+/// 存活、每插件可有多条，256 KB 已够一个 TUI 全屏重绘数十帧。需要更深历史的插件
+/// 在 spawn 时自行声明 `ringBytes`（上限见 [`PLUGIN_PTY_RING_MAX_BYTES`]）。
+pub const PLUGIN_PTY_RING_BYTES: u64 = 256 * 1024;
+
+/// 插件可声明的 `ringBytes` 上限：超过即 `spawn` 返回 `Err`
+///
+/// **不夹取到上限**——静默降级会让插件按自己声明的深度规划上下文、实际却少得多，
+/// 与「配额失败要可见」的分级一致（spec D9）。取值依据：单插件 8 条 PTY 全开即
+/// 32 MiB 常驻上界，仍显著小于业务线单条会话队列的 50 MB 档。
+pub const PLUGIN_PTY_RING_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// 单次 `ring-fetch` 返回字节上限：限制一次 wasm 边界拷贝的量
+/// （插件传入的 `max-bytes` 超过本值即**截断**——读侧是数据面，截断不是错误，
+/// 余下字节按 `next-offset` 续拉即可，spec D9）
+pub const PLUGIN_PTY_RING_FETCH_MAX_BYTES: u32 = 16 * 1024;
+
+/// 单次 `write` 字节上限：超限直接 `Err`（fail-visible，不静默截断，spec D6/D9）
+///
+/// 与引擎侧 4000 字节分块 + 逐块让出（`PtySession::write`）协调：本值是「一次调用」
+/// 的准入上限，分块是上限之内的投递节奏。取值 64 KiB ≈ 16 个分块，够一次粘贴级输入。
+pub const PLUGIN_PTY_MAX_WRITE_BYTES: usize = 64 * 1024;
+
 /// 环境变量：BedCode PTY 会话 ID
 pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";

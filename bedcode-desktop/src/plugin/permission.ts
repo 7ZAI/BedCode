@@ -26,6 +26,8 @@ const VALID_PERMISSIONS = new Set([
   'ws:client',
   'ws:server',
   'auth',
+  'pty:spawn',
+  'pty:io',
 ])
 
 /** 权限到 API 方法的映射 */
@@ -52,6 +54,9 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ws:server': [],
   // auth 为 WASM-only 权限（v15 secret-store），无前端 API 方法映射
   auth: [],
+  // pty:* 为 WASM-only 权限（v16 host-pty 原语：创建域 / 数据域），无前端 API 方法映射
+  'pty:spawn': [],
+  'pty:io': [],
 }
 
 /** 检查权限是否合法 */

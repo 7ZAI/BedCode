@@ -1,0 +1,26 @@
+{
+  "id": "com.bedcode.pty-test",
+  "name": "PTY Test Plugin",
+  "version": "0.1.0",
+  "description": "host-pty（ABI v16）fixture：插件私有裸 PTY 创建 + 环形缓冲游标拉取 + owner 作用域 pty:exit 订阅",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_pty_test",
+  "permissions": [
+    "storage",
+    "pty:spawn",
+    "pty:io"
+  ],
+  "api": [],
+  "contributes": {
+    "commands": [],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}

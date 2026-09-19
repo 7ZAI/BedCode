@@ -3,21 +3,57 @@
 //! 封装 portable-pty，提供跨平台的 PTY 管理功能
 //! 核心职责：PTY 会话的生命周期管理（创建、启动、终止、resize）
 
-use crate::enums::{PtySessionStatus, SessionLaunchConfig};
+use crate::enums::SessionLaunchConfig;
 use crate::process::create_command;
 use crate::pty::command::build_command;
+use crate::pty::lifecycle::{PtyTerminated, PtyTerminationGate};
+use crate::pty::output_sink::{PtyOutputSink, SessionOutputSink};
 use crate::pty::pty_reader::PtyReader;
 use crate::system::config::AppConfig;
 use crate::system::constants::plugin::ENV_BEDCODE_SESSION_ID;
 use crate::Result;
 
-use portable_pty::{native_pty_system, PtyPair, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtyPair, PtySize, SlavePty};
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use tokio::sync::{broadcast, Mutex};
 use uuid::Uuid;
+
+/// PTY slave fd 生命周期策略
+///
+/// **为什么需要它**：父进程只要还持有 slave fd，内核就不会让 master 侧读返回 EOF——
+/// 「子进程自然退出」因此在读线程上是不可观测的（读线程会永久阻塞在 `read()`，
+/// 每会话泄漏一条线程）。释放 slave 后，子进程一退出就读到 EOF，
+/// 「读线程关闭」才成为可靠的输出终结信号（实证见 2026-09-19 票 01 记录）。
+///
+/// 业务终端会话线维持 `Hold`（现役语义：终态事件只在 kill/销毁时到达），
+/// 插件私有 PTY 用 `ReleaseOnSpawn`（host-pty 的 `pty:exit` 事件依赖它）。
+/// 统一为 `ReleaseOnSpawn` 会让业务会话在自然退出时开始翻 Stopped 并下发状态事件，
+/// 属跨线行为修正，登记在票 07 的抽取候选，不在本期做。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PtySlaveFdPolicy {
+    /// spawn 后继续持有 slave fd（业务会话现役语义）
+    Hold,
+    /// spawn 后立即释放 slave fd（插件私有 PTY：退出可观测）
+    ReleaseOnSpawn,
+}
+
+/// PTY 子进程命令来源
+///
+/// **为什么要两条命令线**：业务终端会话的命令必须经 [`build_command`]——shell 包装
+/// （`bash -lic` / PowerShell `-Command` / CMD `/K`）、WSL 路径转换、cwd 兜底与
+/// `BEDCODE_SESSION_ID` 注入都是**业务会话语义**。插件私有 PTY 恰恰要避开这些：
+/// 它只需要「exec 我给的 argv」（spec D5 裁剪线，包装归插件层）。
+/// 票 01 把输出汇做成可注入，本类型把命令来源也做成可注入，二者合起来才让
+/// 两条线共用同一个 `PtySession`（同一套读线程 / 回收 / 终态门语义）。
+pub enum PtyCommandSource {
+    /// 业务线：`SessionLaunchConfig` 经 `build_command`，并注入 `BEDCODE_SESSION_ID`
+    Business(SessionLaunchConfig),
+    /// 插件私有线：调用方构造好的 builder 原样 exec，宿主不做任何加工
+    Raw(CommandBuilder),
+}
 
 /// PTY 会话内部状态
 ///
@@ -27,16 +63,18 @@ pub struct PtySessionState {
     pub id: String,
     /// 会话名称
     pub name: String,
-    /// 启动配置
-    pub config: SessionLaunchConfig,
     /// 运行标志
     pub running: Arc<AtomicBool>,
-    /// PTY pair (portable-pty 的核心结构)
+    /// 未启动前的完整 PTY pair（`start()` 取 slave 侧 spawn 子进程）
     pub pair: Option<PtyPair>,
+    /// 未启动前的命令来源（`start()` 取走并构造 `CommandBuilder`，一次性）
+    pub command: Option<PtyCommandSource>,
+    /// 启动后的 master（resize / 读取端克隆来源）
+    pub master: Option<Box<dyn MasterPty + Send>>,
+    /// 启动后仍保有的 slave 句柄；`ReleaseOnSpawn` 策略下为 `None`
+    pub slave_hold: Option<Box<dyn SlavePty + Send>>,
     /// 写入器
     pub writer: Option<Box<dyn Write + Send>>,
-    /// 生命周期事件发送器（进程退出、错误等）
-    pub lifecycle_tx: broadcast::Sender<PtySessionStatus>,
     /// 读取线程句柄
     pub reader_handle: Option<JoinHandle<()>>,
     /// 进程 ID（用于强制终止）
@@ -50,54 +88,144 @@ pub struct PtySession {
     state: Arc<Mutex<PtySessionState>>,
     /// 运行标志的共享引用（用于快速检查）
     running: Arc<AtomicBool>,
-    /// 生命周期事件发送器的共享引用
-    lifecycle_tx: broadcast::Sender<PtySessionStatus>,
+    /// 本会话是否被 `kill()` 主动终止（终态事件据此区分被杀与自然退出）
+    kill_requested: Arc<AtomicBool>,
+    /// 终态汇聚门（读线程关闭 + 子进程回收两路信号齐备后发出一条事件）
+    gate: Arc<PtyTerminationGate>,
     /// 会话 ID 的缓存（避免频繁加锁）
     id: String,
+    /// 输出投递目标（业务会话环 / 插件自备缓冲）
+    sink: Arc<dyn PtyOutputSink>,
+    /// slave fd 生命周期策略
+    slave_policy: PtySlaveFdPolicy,
 }
 
 // 自动派生 Send + Sync，因为所有内部字段都是线程安全的
 // Arc<Mutex<T>> 是 Send + Sync (当 T: Send)
 // Arc<AtomicBool> 是 Send + Sync
-// broadcast::Sender 是 Send + Sync
+// Arc<dyn PtyOutputSink> / Arc<PtyTerminationGate> 由 trait 的 Send + Sync 约束保证
 // String 是 Send + Sync
 
 impl PtySession {
-    /// 创建新的 PTY 会话
+    /// 创建新的 PTY 会话（业务终端会话线：默认输出总线 sink + `Hold`）
     pub fn new(config: SessionLaunchConfig) -> Result<Self> {
         let id = Uuid::new_v4().to_string();
         Self::with_id(id, config)
     }
 
     /// 使用指定 ID 创建 PTY 会话（用于重启时复用旧 ID）
+    ///
+    /// 输出投递到业务会话输出总线（`SessionOutputSink`）——宿主业务终端会话线。
     pub fn with_id(id: String, config: SessionLaunchConfig) -> Result<Self> {
+        let sink = Arc::new(SessionOutputSink::new(&id));
+        Self::build_from_config(id, config, sink, PtySlaveFdPolicy::Hold)
+    }
+
+    /// 使用指定 ID 与**自备输出汇**创建插件私有 PTY 会话
+    ///
+    /// 插件私有 PTY（host-pty）走这条入口：输出投递到插件自己的缓冲，
+    /// 不注册 `GlobalOutputManager`、不进业务会话链路（ADR 0022 业务隔离）；
+    /// 并在 spawn 后释放 slave fd，使「进程退出」在读线程上以 EOF 形式可观测
+    /// （`pty:exit` 事件与 ring 摘除依赖它，见 [`PtySlaveFdPolicy`]）。
+    ///
+    /// 命令仍走业务线 `build_command`（shell 包装）；需要裸 argv exec 的
+    /// host-pty 用 [`PtySession::with_private_command`]。
+    pub fn with_private_sink(id: String, config: SessionLaunchConfig, sink: Arc<dyn PtyOutputSink>) -> Result<Self> {
+        Self::build_from_config(id, config, sink, PtySlaveFdPolicy::ReleaseOnSpawn)
+    }
+
+    /// 插件私有 PTY + **裸命令**（host-pty 的 spawn 入口，spec D5）
+    ///
+    /// `command` 由调用方以 `CommandBuilder::new(argv0)` + args/env/cwd 直接构造：
+    /// `start()` 原样 exec，**不经过** `build_command`——无 shell 包装、无 WSL 路径
+    /// 转换、无危险字符校验，也不注入业务 `BEDCODE_SESSION_ID`（插件私有 PTY
+    /// 无业务会话身份）。尺寸等其余语义与业务线共用同一套引擎。
+    pub fn with_private_command(
+        id: String,
+        cols: u16,
+        rows: u16,
+        command: CommandBuilder,
+        sink: Arc<dyn PtyOutputSink>,
+    ) -> Result<Self> {
+        // 名称仅用于日志/诊断：裸命令取 argv[0]（业务线的 name 是产品语义，不进本线）
+        let name = command
+            .get_argv()
+            .first()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .unwrap_or_else(|| id.clone());
+        Self::build(
+            id,
+            name,
+            cols,
+            rows,
+            PtyCommandSource::Raw(command),
+            sink,
+            PtySlaveFdPolicy::ReleaseOnSpawn,
+        )
+    }
+
+    /// 由 `SessionLaunchConfig` 构造（业务线命令来源；cols/rows/name 取自配置）
+    fn build_from_config(
+        id: String,
+        config: SessionLaunchConfig,
+        sink: Arc<dyn PtyOutputSink>,
+        slave_policy: PtySlaveFdPolicy,
+    ) -> Result<Self> {
+        let (name, cols, rows) = (config.name.clone(), config.cols, config.rows);
+        Self::build(
+            id,
+            name,
+            cols,
+            rows,
+            PtyCommandSource::Business(config),
+            sink,
+            slave_policy,
+        )
+    }
+
+    fn build(
+        id: String,
+        name: String,
+        cols: u16,
+        rows: u16,
+        command: PtyCommandSource,
+        sink: Arc<dyn PtyOutputSink>,
+        slave_policy: PtySlaveFdPolicy,
+    ) -> Result<Self> {
         let pty_system = native_pty_system();
 
         let pair = pty_system
             .openpty(PtySize {
-                rows: config.rows,
-                cols: config.cols,
+                rows,
+                cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| crate::AppError::Pty(e.to_string()))?;
+            .map_err(|e| crate::AppError::Pty(format!("打开伪终端失败 (session {}): {}", id, e)))?;
 
         let writer = pair
             .master
             .take_writer()
-            .map_err(|e| crate::AppError::Pty(e.to_string()))?;
+            .map_err(|e| crate::AppError::Pty(format!("获取 PTY 写入器失败 (session {}): {}", id, e)))?;
         let (lifecycle_tx, _) = broadcast::channel(AppConfig::global().channels.lifecycle_capacity);
 
         let running = Arc::new(AtomicBool::new(true));
+        let kill_requested = Arc::new(AtomicBool::new(false));
+        let gate = Arc::new(PtyTerminationGate::new(
+            id.clone(),
+            lifecycle_tx,
+            kill_requested.clone(),
+        ));
 
         let state = PtySessionState {
             id: id.clone(),
-            name: config.name.clone(),
-            config,
+            name,
             pair: Some(pair),
+            command: Some(command),
+            master: None,
+            slave_hold: None,
             writer: Some(writer),
             running: running.clone(),
-            lifecycle_tx: lifecycle_tx.clone(),
             reader_handle: None,
             process_id: None,
         };
@@ -105,8 +233,11 @@ impl PtySession {
         Ok(Self {
             state: Arc::new(Mutex::new(state)),
             running,
-            lifecycle_tx,
+            kill_requested,
+            gate,
             id,
+            sink,
+            slave_policy,
         })
     }
 
@@ -126,17 +257,28 @@ impl PtySession {
     pub async fn start(&self) -> Result<()> {
         let (cmd, pair) = {
             let mut state = self.state.lock().await;
-            let mut cmd = build_command(&state.config)?;
-
-            // 注入 BedCode session ID 到进程环境变量，
-            // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
-            cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
+            let command_source = state.command.take().ok_or_else(|| {
+                crate::AppError::Pty(format!("PTY 命令来源已消耗，无法重复启动 (session {})", self.id))
+            })?;
+            let cmd = match command_source {
+                PtyCommandSource::Business(config) => {
+                    let mut cmd = build_command(&config)?;
+                    // 注入 BedCode session ID 到进程环境变量，
+                    // 让 Claude Code hooks 能关联到 BedCode 的 PTY 会话
+                    // （业务会话语义，现役行为不变）
+                    cmd.env(ENV_BEDCODE_SESSION_ID, &self.id);
+                    cmd
+                }
+                // 插件私有 PTY：调用方给的 argv 原样 exec，宿主不加任何环境变量
+                // （spec D5——环境变量也是插件自己声明的面）
+                PtyCommandSource::Raw(builder) => builder,
+            };
 
             // 从 state 中取出 pair
             let pair = state
                 .pair
                 .take()
-                .ok_or_else(|| crate::AppError::Pty("PTY pair already used".to_string()))?;
+                .ok_or_else(|| crate::AppError::Pty(format!("PTY pair already used (session {})", self.id)))?;
 
             (cmd, pair)
         };
@@ -144,17 +286,30 @@ impl PtySession {
         let child = pair
             .slave
             .spawn_command(cmd)
-            .map_err(|e| crate::AppError::Pty(e.to_string()))?;
+            .map_err(|e| crate::AppError::Pty(format!("启动 PTY 子进程失败 (session {}): {}", self.id, e)))?;
 
         // 获取进程 ID 用于后续强制终止
         let pid = child.process_id();
 
-        // 将 pair 放回 state，并保存进程 ID
+        // 拆分 pair：master 常驻（resize / 读取端来源），slave 按策略决定去留
+        let PtyPair { slave, master } = pair;
         {
             let mut state = self.state.lock().await;
-            state.pair = Some(pair);
+            state.master = Some(master);
+            state.slave_hold = match self.slave_policy {
+                PtySlaveFdPolicy::Hold => Some(slave),
+                // 丢掉 slave 即关闭父进程侧 slave fd：子进程退出后 master 读才会返回 EOF
+                PtySlaveFdPolicy::ReleaseOnSpawn => {
+                    drop(slave);
+                    None
+                }
+            };
             state.process_id = pid;
         }
+
+        // 子进程句柄交给回收线程：阻塞 wait() 回收进程并带出退出码
+        // （此前直接 drop 会让进程沦为僵尸，且退出码无从取得）
+        self.gate.spawn_reaper(child);
 
         // 启动输出读取线程
         self.start_output_reader().await?;
@@ -216,26 +371,29 @@ impl PtySession {
     /// 调整终端大小
     pub async fn resize(&self, cols: u16, rows: u16) -> Result<()> {
         let mut state = self.state.lock().await;
-        let pair = state
-            .pair
+        let master = state
+            .master
             .as_mut()
-            .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
+            .ok_or_else(|| crate::AppError::Pty(format!("PTY master 不可用（会话未启动或已销毁 {}）", self.id)))?;
 
-        pair.master
+        master
             .resize(PtySize {
                 rows,
                 cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
-            .map_err(|e| crate::AppError::Pty(e.to_string()))?;
+            .map_err(|e| crate::AppError::Pty(format!("调整 PTY 尺寸失败 (session {}): {}", self.id, e)))?;
 
         Ok(())
     }
 
     /// 订阅生命周期事件（进程退出、错误等）
-    pub fn subscribe_lifecycle(&self) -> broadcast::Receiver<PtySessionStatus> {
-        self.lifecycle_tx.subscribe()
+    ///
+    /// 恰好收到一条 [`PtyTerminated`]：读线程关闭与子进程回收两者齐备后才发出，
+    /// 因此 `exit_code` 与「输出已终结」在同一事件里保证一致。
+    pub fn subscribe_lifecycle(&self) -> broadcast::Receiver<PtyTerminated> {
+        self.gate.subscribe()
     }
 
     /// 获取会话状态
@@ -243,9 +401,23 @@ impl PtySession {
         self.running.load(Ordering::SeqCst)
     }
 
+    /// 输出是否已终结（读线程已见到 EOF / 读错误）
+    ///
+    /// **为什么需要它**：`running` 标志只在 `kill()`/`Drop` 时被翻下，子进程**自然退出**
+    /// 时它仍是 true——业务线的 `Hold` 策略下这不可观测（拿不到 EOF），也就无人读取；
+    /// 但插件私有 PTY 用 `ReleaseOnSpawn`，EOF 就是进程退出的可靠信号，host-pty 的
+    /// `is-running` 必须如实回答「已经死了」。故本方法只加判据、不改 `running` 语义，
+    /// 业务链路零感知。
+    pub fn output_terminated(&self) -> bool {
+        self.gate.reader_closed()
+    }
+
     /// 终止会话
     pub async fn kill(&self) -> Result<()> {
         self.running.store(false, Ordering::SeqCst);
+        // 终态事件据此给出 killed=true：portable-pty 的 ExitStatus 不区分
+        // 信号终止与 exit 1，只能由宿主侧记录「是谁要求它结束的」
+        self.kill_requested.store(true, Ordering::SeqCst);
 
         // 获取进程 ID
         let pid = {
@@ -254,9 +426,13 @@ impl PtySession {
             state.process_id
         };
 
-        // 先尝试优雅退出
-        let _ = self.send_special_key("ctrl_c").await;
-        let _ = self.write_str("\nexit\n").await;
+        // 先尝试优雅退出（失败属预期：进程可能已自行结束）
+        if let Err(e) = self.send_special_key("ctrl_c").await {
+            tracing::debug!(session_id = %self.id, error = %e, "优雅终止首选手法不可用，继续强杀");
+        }
+        if let Err(e) = self.write_str("\nexit\n").await {
+            tracing::debug!(session_id = %self.id, error = %e, "退出写入不可用，继续强杀");
+        }
 
         // 如果有进程 ID，强制终止进程树
         if let Some(pid) = pid {
@@ -274,9 +450,23 @@ impl PtySession {
 
             #[cfg(not(target_os = "windows"))]
             {
-                let _ = std::process::Command::new("kill")
+                let delivered = std::process::Command::new("kill")
                     .args(["-9", &pid.to_string()])
                     .output();
+                match delivered {
+                    Ok(o) => tracing::debug!(
+                        session_id = %self.id,
+                        pid = %pid,
+                        stderr = %String::from_utf8_lossy(&o.stderr).trim(),
+                        "SIGKILL 已投递"
+                    ),
+                    Err(e) => tracing::error!(
+                        session_id = %self.id,
+                        pid = %pid,
+                        error = %e,
+                        "kill -9 执行失败，进程可能残留"
+                    ),
+                }
             }
         } else {
             tracing::warn!(session_id = %self.id, "No process_id available");
@@ -290,17 +480,23 @@ impl PtySession {
     async fn start_output_reader(&self) -> Result<()> {
         let reader = {
             let mut state = self.state.lock().await;
-            let pair = state
-                .pair
+            let master = state
+                .master
                 .as_mut()
-                .ok_or_else(|| crate::AppError::Pty("PTY pair not available".to_string()))?;
+                .ok_or_else(|| crate::AppError::Pty(format!("PTY master not available (session {})", self.id)))?;
 
-            pair.master
+            master
                 .try_clone_reader()
-                .map_err(|e| crate::AppError::Pty(e.to_string()))?
+                .map_err(|e| crate::AppError::Pty(format!("克隆 PTY 读取器失败 (session {}): {}", self.id, e)))?
         };
 
-        let pty_reader = PtyReader::start(reader, self.lifecycle_tx.clone(), self.id.clone(), self.running.clone());
+        let pty_reader = PtyReader::start(
+            reader,
+            self.sink.clone(),
+            self.gate.clone(),
+            self.id.clone(),
+            self.running.clone(),
+        );
 
         // 保存线程句柄
         {
@@ -317,8 +513,11 @@ impl Clone for PtySession {
         Self {
             state: self.state.clone(),
             running: self.running.clone(),
-            lifecycle_tx: self.lifecycle_tx.clone(),
+            kill_requested: self.kill_requested.clone(),
+            gate: self.gate.clone(),
             id: self.id.clone(),
+            sink: self.sink.clone(),
+            slave_policy: self.slave_policy,
         }
     }
 }
@@ -328,6 +527,8 @@ impl Drop for PtySession {
         // Only stop if this is the last reference
         if Arc::strong_count(&self.state) == 1 {
             self.running.store(false, Ordering::SeqCst);
+            // 与 kill() 同语义：本会话是主动终止方，终态事件不得报成自然退出
+            self.kill_requested.store(true, Ordering::SeqCst);
 
             // 尝试终止进程（同步方式，因为 Drop 不能是 async）
             if let Ok(state) = self.state.try_lock() {
@@ -355,6 +556,8 @@ impl Drop for PtySession {
 mod tests {
     use super::*;
     use crate::enums::{ExecutionEnvironment, WindowsShell};
+    #[cfg(target_os = "linux")]
+    use crate::pty::output_sink::test_support::CollectingSink;
     use std::collections::HashMap;
 
     /// 最小启动配置（不 start，仅验证创建/属性/订阅/终止路径）
@@ -497,5 +700,132 @@ mod tests {
         let big: Vec<u8> = vec![b'x'; 9000];
         session.write(&big).await.expect("8KB 分块写入不应失败");
         session.kill().await.expect("kill");
+    }
+
+    /// 全局唯一会话 ID（避免测试间通过全局单例互相干扰）
+    #[cfg(target_os = "linux")]
+    fn unique_sid(prefix: &str) -> String {
+        format!(
+            "{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        )
+    }
+
+    /// 插件私有 PTY（自备 sink + 释放 slave fd）
+    #[cfg(target_os = "linux")]
+    fn private_session(command: &str) -> (PtySession, Arc<CollectingSink>) {
+        let sink = CollectingSink::new();
+        let session = PtySession::with_private_sink(unique_sid("itest-private"), linux_config(command), sink.clone())
+            .expect("openpty");
+        (session, sink)
+    }
+
+    /// 等待终态事件（真 PTY 路径，超时防挂死）
+    #[cfg(target_os = "linux")]
+    async fn recv_termination(rx: &mut tokio::sync::broadcast::Receiver<PtyTerminated>) -> PtyTerminated {
+        tokio::time::timeout(std::time::Duration::from_secs(15), rx.recv())
+            .await
+            .expect("15s 内应收到 PTY 终态事件")
+            .expect("终态事件不得丢失")
+    }
+
+    /// 真 PTY 自然退出（释放 slave fd）：退出码随终态事件带出（票据 01 地基能力 ①）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn natural_exit_reports_exit_code_in_termination_event() {
+        use crate::enums::PtySessionStatus;
+
+        let (session, _sink) = private_session("exit 7");
+        let mut lifecycle_rx = session.subscribe_lifecycle();
+        session.start().await.expect("start");
+
+        let terminated = recv_termination(&mut lifecycle_rx).await;
+        assert_eq!(terminated.exit_code, Some(7), "短命命令的退出码必须随终态事件带出");
+        assert_eq!(terminated.status, PtySessionStatus::Stopped, "EOF 终态应为 Stopped");
+        assert!(!terminated.killed, "自然退出不得标记 killed");
+    }
+
+    /// 真 PTY 成功退出：退出码 0（与「取不到退出码」的 None 区分开）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn successful_exit_reports_zero_code_not_none() {
+        let (session, _sink) = private_session("true");
+        let mut lifecycle_rx = session.subscribe_lifecycle();
+        session.start().await.expect("start");
+
+        assert_eq!(recv_termination(&mut lifecycle_rx).await.exit_code, Some(0));
+    }
+
+    /// 真 PTY + 自备 sink（票据 01 地基能力 ②）：输出投递到调用方给的缓冲，
+    /// 业务会话总线完全不参与（宿主业务线零感知）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn session_with_private_sink_bypasses_business_output_bus() {
+        use crate::session::GlobalOutputManager;
+
+        let sid = unique_sid("itest-private-sink-pty");
+        let marker = format!("BEDCODE_PTY_PRIVATE_{sid}");
+        let sink = CollectingSink::new();
+        let session = PtySession::with_private_sink(sid.clone(), linux_config(&format!("echo {marker}")), sink.clone())
+            .expect("openpty");
+        let mut lifecycle_rx = session.subscribe_lifecycle();
+
+        session.start().await.expect("start");
+        let terminated = recv_termination(&mut lifecycle_rx).await;
+        assert_eq!(terminated.exit_code, Some(0), "echo 正常退出退出码应为 0");
+
+        let collected = String::from_utf8_lossy(&sink.collected()).into_owned();
+        assert!(collected.contains(&marker), "自备 sink 应收到进程输出: {collected}");
+        assert!(
+            !GlobalOutputManager::global().has_session(&sid).await,
+            "自备 sink 路径不得注册业务会话总线"
+        );
+    }
+
+    /// 业务会话线（`Hold`）现役语义回归锁：子进程自然退出**不产生**终态事件
+    /// （父进程持有 slave fd → master 读无 EOF），必须等 kill/销毁才翻终态。
+    ///
+    /// 这条断言冻结的是「票 01 业务链路零变化」：若有人把默认策略改成
+    /// `ReleaseOnSpawn`，本用例会失败并强制其评估业务会话状态机影响。
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn hold_policy_keeps_natural_exit_unobserved_until_killed() {
+        let session = PtySession::new(linux_config("exit 7")).expect("openpty");
+        let mut lifecycle_rx = session.subscribe_lifecycle();
+        session.start().await.expect("start");
+
+        assert!(
+            matches!(
+                tokio::time::timeout(std::time::Duration::from_millis(500), lifecycle_rx.recv()).await,
+                Err(_elapsed)
+            ),
+            "Hold 策略下自然退出不得发出终态事件（业务线现役语义）"
+        );
+
+        session.kill().await.expect("kill");
+        let terminated = recv_termination(&mut lifecycle_rx).await;
+        assert!(terminated.killed, "kill 后必须带出 killed=true");
+    }
+
+    /// 真 PTY 被 kill：终态事件与自然退出可区分（killed=true）
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn kill_marks_termination_event_as_killed() {
+        use crate::enums::PtySessionStatus;
+
+        let session = PtySession::new(linux_config("sleep 30")).expect("openpty");
+        let mut lifecycle_rx = session.subscribe_lifecycle();
+        session.start().await.expect("start");
+        assert!(session.is_running(), "kill 前应仍在运行");
+
+        session.kill().await.expect("kill");
+
+        let terminated = recv_termination(&mut lifecycle_rx).await;
+        assert!(terminated.killed, "kill 终止必须标记 killed（信号终止无退出码可判）");
+        assert_eq!(terminated.status, PtySessionStatus::Stopped);
+        assert!(!session.is_running());
     }
 }

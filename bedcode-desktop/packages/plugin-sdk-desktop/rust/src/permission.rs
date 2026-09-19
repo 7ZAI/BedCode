@@ -53,6 +53,14 @@ pub const PERMISSION_WS_SERVER: &str = "ws:server";
 /// 认证中心语义下沉的基础权限——声明即信任宿主代管凭据（JWT 密钥 / 配对种子），
 /// 插件间互不可见；密钥明文不落日志、持久化于主库 plugin_secrets 表
 pub const PERMISSION_AUTH: &str = "auth";
+/// 插件私有伪终端·创建域（host-pty，v16）：`spawn` / `kill`
+///
+/// 与 `pty:io` 分域：spawn 是「在宿主机器上执行任意命令」的高风险面
+/// （与 `process:run` 同信任域），kill 决定进程生死；数据面（读写/尺寸/
+/// 游标拉取/存活查询）单独一域，便于「只做输出观测」的插件最小授权
+pub const PERMISSION_PTY_SPAWN: &str = "pty:spawn";
+/// 插件私有伪终端·数据域（host-pty，v16）：`write` / `resize` / `ring-fetch` / `is-running`
+pub const PERMISSION_PTY_IO: &str = "pty:io";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -80,6 +88,8 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_WS_CLIENT,
     PERMISSION_WS_SERVER,
     PERMISSION_AUTH,
+    PERMISSION_PTY_SPAWN,
+    PERMISSION_PTY_IO,
 ];
 
 /// 权限到 API 方法的映射
@@ -158,6 +168,8 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
         "ws.listClients",
         "ws.listEndpoints",
     ]),
+    (PERMISSION_PTY_SPAWN, &["pty.spawn", "pty.kill"]),
+    (PERMISSION_PTY_IO, &["pty.write", "pty.resize", "pty.ringFetch", "pty.isRunning"]),
 ];
 
 /// 权限管理器
