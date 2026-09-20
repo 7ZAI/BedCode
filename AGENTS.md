@@ -75,6 +75,7 @@ pnpm exec eslint .
 - **Kotlin 独立工具链**：上述 gradlew 命令是 `gen/android` 下 Kotlin 改动的唯一验证（`cargo test` 与前端测试均不覆盖）
 - **文档命令字眼必须随工具链迁移**：spec / issue / scratch / 知识库文档里提及测试/构建/安装命令，**必须**用本节字眼（`pnpm run test:run`、`pnpm run tauri:dev`、`cargo test` 等），禁止旧 `npm` / `npm run test` 字眼；审计文档时若发现不一致，先改文档再继续
 - 构建前检查 `src-tauri/target` 大小，超 15GB 执行 `cargo clean`
+- **测试内 fixture 构建依赖 rustup shim**：宿主 wasm 闭环用例会在测试内 `cargo build --target wasm32-wasip3` 构建 fixture（component/sdk/pty/ws/wasip3-test），并显式注入 `RUSTUP_TOOLCHAIN=nightly-2026-09-16`（单一事实来源 `scripts/wasip3-toolchain.sh`）。因此**必须用 rustup shim 的 `cargo`（`~/.cargo/bin/cargo`）跑测试**，禁止把 `~/.rustup/toolchains/*/bin` 前置进 PATH——绕过 shim 会让注入的 `RUSTUP_TOOLCHAIN` 失效（raw toolchain cargo 忽略该变量）→ 依赖 fixture 的用例成批失败（现象：`Test component WASM build failed` / `WASI test component WASM build failed`，一次红约 39 项，与代码无关）
 - **测试后清理进程**：每次跑完测试（`cargo test` / `pnpm run test:run` / `gradlew` 等）后，必须检查并关闭测试开启的后台进程/监听端口（如 cargo 测试 spawn 的 mock server、vitest worker 残留、gradle daemon 等），避免残留进程占用端口或 CPU
 - 桌面 `tauri:build` 自动解析 updater 签名密钥（`TAURI_SIGNING_PRIVATE_KEY(_FILE)` / `.env`），未配置时自动禁用升级包，本地构建无需私钥；正式发布由 GitHub Actions Secrets 签名（`docs/knowledge/release-workflow.md`）
 
@@ -147,8 +148,8 @@ pnpm exec eslint .
 
 - [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15）、`host-pty`（v16）只在 desktop WIT/ABI/SDK 演进；当前 desktop **v16**、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复条件见同一节）
-- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 20 组：进程 = `host-pty`（交互式）/ `host-process`（非交互），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`），拆分后五同步点必须同步落（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门，漏一处即漂移锁翻红）
+- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 / v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server 认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）只在 desktop WIT/ABI/SDK 演进；当前 desktop **v19**、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 / 注解槽 / 连接清单四组），别拿批次号当函数号数
+- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 20 组（清点：进程 2 + 网络 4 + 存储 4 + 宿主面 8 + 互调 2）：进程 = `host-pty`（交互式）/ `host-process`（非交互），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`），拆分后五同步点必须同步落（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门，漏一处即漂移锁翻红）
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
@@ -160,7 +161,7 @@ pnpm exec eslint .
 ### 安全红线（不可违反）
 
 - **禁止提交密钥/凭据**：仓库内唯一例外是签名真源 `bedcode.keystore`（私有仓库设计，见 §9 Android）；新增的任何密钥、token、密码禁止入库、禁止进日志、禁止写进文档/备注；API token 泄露按仓库规范删除重建
-- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）
+- 认证链路（JWT / 设备指纹 / 二维码 / 生物凭证）只走既有 auth 模块，禁止旁路；**日志与存储中凭据只记长度不落明文**（`token.length()` 模式）。**分层口径（ADR 0022 会话语义下沉批次）**：配对码 / QR 的**编排与 TTL 策略**真源在 `com.bedcode.session` 插件，而**签发、验签执行点、密钥托管（host-auth secret-store）、`pairings` / `connection_history` 表**留宿主——宿主命令面经 `utils/auth/auth_center.rs` 桥接调用插件，插件未激活 / 探活超时（5s）时回退宿主实现并 `warn` 留痕，该回退是 D7 设计的降级路径，**不算旁路**；新代码不得绕过 auth_center 桥接与宿主门面自行签发或验签
 - 输入校验与权限仲裁在 Rust 端，前端校验仅是 UX；WebSocket/HTTP 接入必须过认证与过滤链（TrafficFilterChain）
 
 ### 日志红线

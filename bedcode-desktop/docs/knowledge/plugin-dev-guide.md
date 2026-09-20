@@ -145,6 +145,7 @@ plugins/desktop/com.example.my-plugin/
     "views": [],                        // 视图注册
     "terminal": null,                   // 终端扩展
     "toolProviders": [],                // 外部工具端点
+    "httpEndpoints": [],                // _http_endpoint 的路径白名单（见下）
     "fileHandlers": [],                 // 文件处理器
     "configuration": null,              // 配置声明
     "lifecycle": null                   // 生命周期钩子
@@ -208,6 +209,30 @@ plugins/desktop/com.example.my-plugin/
   }
 ]
 ```
+
+#### httpEndpoints — 插件 HTTP 端点清单（票 16）
+
+插件实现 `_http_endpoint` 命令对外提供 HTTP 面时，用本字段**完整声明端点清单**。
+条目是不含前缀的相对路径段，宿主登记为 `/api/plugin/{plugin-id}/{条目}`：
+
+```json
+"httpEndpoints": ["task-status", "session-mode", "task-queue/add"]
+```
+
+判定规则（宿主 `plugin_controller`，两处共用同一判据，实现在 `plugin_http_path_allowed`）：
+
+| 声明状态 | 行为 |
+| --- | --- |
+| 声明了清单 | 只按完整路径**精确匹配**；未注册路径直接 404，请求不到达插件 |
+| 缺省 / 空数组 | **未声明** → 前缀内 ANY 方法全部转发给插件，404 由插件自判（票据 03 的过渡策略，既有插件零迁移） |
+
+- 请求到达插件 `_http_endpoint` 时 `path` 字段即去掉前缀的相对段（与声明条目逐字一致），
+  因此插件内部按 `path.strip_prefix("task-queue/")` 一类方式分派即可。
+- 与 `toolProviders` 共用同一张注册表（跨插件路径冲突按先到者属主仲裁，冲突只 `warn!`
+  不阻断激活），但**语义不同**：`toolProviders` 是「外部工具提供者」，会在插件管理页
+  显示为「工具提供者 (N)」；纯业务 HTTP 端点用 `httpEndpoints`，不要塞进 `toolProviders`。
+- 清单应与插件源码里的分派表同源（建议实现为插件侧常量 + 契约用例锁死 manifest），
+  否则会出现「声明放行但插件答 404」的审计歧义。
 
 #### fileHandlers — 文件处理器
 
@@ -282,6 +307,7 @@ TS-only 插件通过监听 `lifecycle:startup` / `lifecycle:shutdown` Tauri 事�
 | `ui:sidebar` | `ui.registerSidebarPanel` | 注册侧边栏面板 |
 | `ui:toolbox` | `ui.registerToolboxPage` | 注册工具箱页面 |
 | `ui:statusbar` | `ui.registerStatusBarItem`, `ui.registerTitleBarItem` | 注册状态栏/标题栏项 |
+| `ui:settings` | `ui.registerSettingsSection` | 往宿主设置页贡献配置分组（组件只渲染卡片正文，标题与外层容器由宿主渲染） |
 | `ui:input` | `ui.registerInputExtension`, `ui.registerTerminalToolbarItem` | 注册输入扩展/终端工具栏 |
 | `network:http` | `http.registerEndpoint` | 注册 HTTP 端点 |
 | `storage` | `storage.get`, `storage.set`, `storage.delete` | 插件持久化存储 |
@@ -452,7 +478,7 @@ bedcode_plugin_api::wasm_entry!(MyPlugin);
 | 配置 | `config_get` |
 | 事件 | `emit_event` / `broadcast_sync` / 消息总线 |
 
-> 完整示例参考官方插件：`plugins/auto-task`、`plugins/ai-chatbox`、`plugins/file-transfer`（`rust/src/`）。
+> 完整示例参考官方插件：`plugins/session`、`plugins/ai-chatbox`、`plugins/file-transfer`（`rust/src/`）。
 
 ## 8. PluginContext API 参考
 
@@ -721,7 +747,7 @@ export default defineConfig({
 })
 ```
 
-> **重要**：`bedcodePlugin()` 会自动将 `vue`、`vue-i18n`、`pinia` 标记为外部依赖，并在构建后将 `import` 语句替换为从宿主全局变量读取。**不要**在插件 vite 配置中手动内联这些模块，否则 `provide`/`inject` 会跨 Vue 实例失效。
+> **重要**：`bedcodePlugin()` 会自动将 `vue`、`vue-i18n`、`pinia`、`vue-sonner` 标记为外部依赖，并在构建后将 `import` 语句替换为从宿主全局变量读取。**不要**在插件 vite 配置中手动内联这些模块，否则 `provide`/`inject` 会跨 Vue 实例失效（`vue-sonner` 自带第二份则 toast 入自家队列、宿主 `<Toaster>` 收不到）。
 
 ### Rust+TS 插件构建
 

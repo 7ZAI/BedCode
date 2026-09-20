@@ -5,6 +5,56 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+> Desktop-only work (roadmap stage 2 + stage 3-session part, executed as one merged
+> batch). **Mobile code is untouched and its version number does not move** — see
+> Documentation for the recorded cross-platform exemption and the mobile impact list.
+
+### Features
+
+#### Terminal Session Center Plugin — Device / Session / Task merged into one built-in plugin (desktop)
+- New built-in plugin `com.bedcode.session` (Application kind, `rust-ts`, wasip3 component) owns the three product domains that used to be split across the kernel, `com.bedcode.devices` and `com.bedcode.auto-task`: pairing & trust & consent orchestration, session config CRUD with lifecycle orchestration, and the Agent task domain (queue state machine, scheduled jobs, agent hook installation)
+- `com.bedcode.devices` and `com.bedcode.auto-task` retired; their modules, sidebar views, terminal toolbar item, task modal, i18n tables and bundled hook scripts moved into the merged plugin, regrouped by domain instead of file-by-file copy
+- Contribution UI switched owner, not pixels (spec D6): four sidebar panels (device pairing 100 / connection history 101 / sessions 200 / agent tasks 210), a settings-page section contributed via the new `ui.registerSettingsSection` extension point, and a terminal toolbar button; host built-in entries yield to the plugin when it is `Activated` and fall back to host shells otherwise
+- Kernel de-businessed: the four task fields are removed from the session struct and replaced by an opaque annotation slot (`session-id -> map<string,string>`, kernel transports and never interprets keys); wire protocol shape (`taskStatus` etc.) is unchanged, so old clients need zero changes
+- Task history survives upgrade: a one-shot, best-effort, idempotent host-side migration moves the six task tables out of the retired plugin's private database into the merged plugin's, copying by column-name intersection and stamping a ledger row so a restart never duplicates
+
+### Platform & Infrastructure
+
+#### Plugin ABI desktop 16 → 19 (function-level appends to existing interfaces; mobile stays at 11)
+- v18 `host-auth` record face: `trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set` return raw kernel records; ordering, filtering and derived views belong to the plugin
+- v19 `host-session` session face: config CRUD (`session:config`), `create-with-spec` (plugin computes the launch spec, host only does shell wrapping / WSL translation / size defaults / id pre-allocation), `restart` / `remove` / `rename` / `resize` (canonical-renderer decision rules in the plugin, registry fact in the kernel), `annotate`, `connections-list`; plus `host-platform.wsl-distros`
+- No new host channel: all three domains run on the existing 20 `host-*` primitive groups; output subscription / ack primitive explicitly rejected (per-frame output must not enter WASM)
+- `manifest-gen` command policy tightened: a manifest that already declares `contributes.commands` is treated as a hand-curated user-facing surface, so the generator reports the arm/declaration delta instead of overwriting it (release builds are now idempotent for this plugin)
+
+### Improvements
+
+#### Desktop
+- Legacy HTTP prefix `com.bedcode.auto-task/*` is answered by the merged plugin through an explicit host alias table (only when the legacy plugin is absent); the cut-over verdict and its cost comparison are recorded in the ticket rather than left implicit
+- Plugin private-DB table names unified by domain prefix (`task_*` / `session_*`) with a reversible rename ledger and a rollback path, plus a source-scan guard so a missed SQL statement fails the build
+
+### Security
+
+#### Desktop
+- Built-in `fs_auth` trusted-plugin whitelist seed retargeted from `com.bedcode.auto-task` to `com.bedcode.session` (the merged plugin is what writes agent integration files into user projects; leaving the seed behind would silently downgrade it to per-directory prompts)
+- Auth layering documented and enforced in one place: pairing / QR orchestration lives in the plugin, while signing, verification execution, key custody (host-auth secret store) and the `pairings` / `connection_history` tables stay in the kernel; the host->plugin bridge falls back to the host implementation with a `warn` when the plugin is not active — a designed degradation path, not a bypass
+- Credentials still logged by length only; plugin permission list narrowed to 15 entries with every bit traced to a real consumer (two spec-listed bits with no call site were deliberately not declared)
+
+### Tests & Quality
+
+#### Desktop
+- Line-protocol regression ran with zero assertion changes: `pty_session_chain`, `ws_session_route`, `ws_auth_rules`, `http_auth_biometric`, `server_integration`, `link_crypto_http`, `broadcast_shutdown`, `build_manifest_smoke` (S2 seam files show no diff against the pre-batch commit)
+- Fault-radius acceptance is behavior-tested: contributions removed as a group on `Error` and restored on re-activation, host built-in entries yielding/returning on the same predicate, settings sections falling back to the built-in-only layout, and the pairing bridge degrading to the host service
+- Migrated task UI got its first frontend test surface (the retired plugin had none): modal lazy-load gating, enqueue/clear/toggle command contracts, history view load and filter parity, plus call-site guards that every command name resolves to a Rust dispatch arm and every `t()` key exists in both locale tables
+
+### Documentation
+
+- ADR 0022 v8: session-semantic sink-down batch (v18/v19 function table, annotation slot, settings-section extension point, 15-bit permission list, batch number in the dual-platform deviation table)
+- Roadmap updated: stage 2 marked landed with the merged-form verdict, stage 3 marked partially landed (session done, terminal deliberately untouched), the merge decision with its cost table and the deliberate exception to the incrementality principles recorded, and the mobile impact list M1–M5 moved out of a single spec directory into the roadmap
+- AGENTS.md §7 ABI counts and capability enumeration corrected, §8 auth wording reworded for the plugin/kernel split; `docs/knowledge/plugin-http-endpoint-trust.md` records the legacy-prefix verdict; desktop code-map and command docs retargeted
+- Explicitly out of scope: mobile client adaptation, `com.bedcode.terminal`, moving the terminal window or output pipeline into a plugin
+
 ## [2.1.1] - 2026-09-18
 
 > Features · Platform & Infrastructure · Improvements · Fixes · Security · Tests & Quality · Documentation

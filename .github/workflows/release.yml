@@ -39,37 +39,42 @@ jobs:
           # 这里改为状态机：命中版本头后跳过该行，遇到下一个版本头即停止；
           # index() 按字面匹配，避免版本号中的 . 被当作正则通配符；过滤段落间的 --- 分隔线。
           
-          # 提取英文 changelog
+          # 提取英文 changelog；首个 ### 章节标题转成带锚点的 <h3 id="en-V">（中英文切换跳转用，
+          # 参照 deepseek-harness 的 release body 写法）
           CHANGELOG_EN=$(awk -v v="$VERSION" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && /^## \[/ { exit }
             found && !started && $0 == "" { next }
+            found && !anchored && /^### / { print "<h3 id=\"en-" v "\">" substr($0, 5) "</h3>"; anchored = 1; next }
             found && $0 != "---" { started = 1; print }
           ' CHANGELOG.md)
           if [ -z "$CHANGELOG_EN" ]; then
             CHANGELOG_EN=$(cat CHANGELOG.md)
           fi
           
-          # 提取中文 changelog
+          # 提取中文 changelog；首个 ### 章节标题转成带锚点的 <h3 id="cn-V">（同英文侧）
           CHANGELOG_ZH=$(awk -v v="$VERSION" '
             index($0, "## [" v "]") == 1 { found = 1; next }
             found && /^## \[/ { exit }
             found && !started && $0 == "" { next }
+            found && !anchored && /^### / { print "<h3 id=\"cn-" v "\">" substr($0, 5) "</h3>"; anchored = 1; next }
             found && $0 != "---" { started = 1; print }
           ' CHANGELOG_zh.md)
           if [ -z "$CHANGELOG_ZH" ]; then
             CHANGELOG_ZH=$(cat CHANGELOG_zh.md)
           fi
           
-          # 合并为双语 release body：英文在前，中文在后，用分隔符隔开
+          # 合并为双语 release body：参照 deepseek-harness —— 顶部放中英文切换锚点链接，
+          # 中文版在前、英文版在后，切换锚点挂在各自语言块的首个章节标题上
+          # （<h3 id="cn-V"> / <h3 id="en-V">），语言块之间用分隔线隔开
           {
-            echo "$CHANGELOG_EN"
+            echo "[中文](#cn-$VERSION) | [English](#en-$VERSION)"
+            echo ""
+            echo "$CHANGELOG_ZH"
             echo ""
             echo "---"
             echo ""
-            echo "## 🇨🇳 中文版"
-            echo ""
-            echo "$CHANGELOG_ZH"
+            echo "$CHANGELOG_EN"
           } > /tmp/changelog.txt
           
           {

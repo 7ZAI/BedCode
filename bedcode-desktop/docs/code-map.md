@@ -51,13 +51,11 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   供应商统一配置、使用统计与会话日志解析
 │   ├── ai-chatbox/                   # AI Chatbox 插件：多供应商 OpenAI 兼容客户端，
 │   │                                 #   聊天 UI、供应商配置、提示词优化
-│   ├── auto-task/                    # Auto Task 插件：Claude Code 任务状态同步与自动授权，
-│   │                                 #   含 hooks 管理、任务状态/队列、HTTP 端点、Hook 脚本
-│   └── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
+│   ├── file-transfer/                # 文件传输插件：基于对等网络（peer_* 宿主模块）的在线对端发现与
 │                                     #   切换、共享目录浏览、多任务并发传输（暂停/恢复/取消/重试，同批 ID
 │                                     #   重发即断点续传）、接收策略与历史归档、本地目录挂载供对端访问
 ├── src/                              # Vue 3 前端（扁平化结构 + 领域子目录）
-│   ├── components/                   # UI 组件：桌面布局、会话卡片/表单/列表、侧边栏、终端预览、
+│   ├── components/                   # UI 组件：桌面布局、侧边栏、终端预览、
 │   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件；
 │   │                                 #   settings/ 下为设置页分组子组件（外观/配对/链路加密/会话/系统/日志/关于）
 │   ├── composables/                  # 业务逻辑 composable：桌面命令、网络、配对、插件管理、PTY 输出、
@@ -67,7 +65,9 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话/设备/设置/事件监听），
 │   │                                 #   useDesktopCommands 为聚合层 re-export
 │   ├── stores/                       # Pinia 全局状态：设备、会话、设置、输入助手、快捷操作、WSL、i18n
-│   ├── views/                        # 页面：设备、插件、插件配置、会话管理/配置、设置（编排层）、终端窗口、服务器
+│   ├── views/                        # 页面：设备、插件、插件配置、会话兜底壳（会话页由
+│   │                                 #   com.bedcode.session 插件贡献，见 plugins/session/）、
+│   │                                 #   设置（编排层）、终端窗口、服务器
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
 │   │                                 #   共享模块运行时、运行时事件监听（runtime-listeners）；components/ 下为插件 UI 宿主组件
 │   ├── utils/                        # 工具函数（Tauri invoke 封装、终端主题数据 terminalThemes、格式化 format 等）
@@ -162,6 +162,25 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
   `ws:client-connect|client-disconnect.<owner>`，标识在 payload，非属主物理上订阅不到）；
   消息帧走 `events-ws` 回调（未导出 → 丢弃 + 首次 `warn` + 计数，宿主不缓存）；
 - **回收**：插件停用 → `ws::purge_for_plugin` 关闭并摘除其全部出站连接与入站端点（只碰本人，4005）。
+
+### 宿主能力实现域 · 认证记录面 — `host-auth`（ABI v18）
+
+WIT 契约 `host-auth`（v15 密钥托管四函数 + v18 记录面四函数，SDK `rust/wit/bedcode.wit`）、
+**无可选导出**，ABI desktop 17 → 18（mobile 不跟演，见 ADR 0022「双端偏离」）；宿实现
+`plugin/manager/wasm_runtime/host_impl/auth.rs`。**裁剪线（ADR 0022）**：宿主只给
+「读原始记录 / 软删撤销 / 白名单设置写入」，排序、`is-active` 过滤、解读与展示组织全部归插件。
+
+- **`trusted-devices-list`**：内核 `pairings` 表**全表**原始记录（含 `is_active = 0` 的软删行，
+  不排序）。全量返回是刻意的——撤销检测依赖「已撤销记录仍可见」，只回活跃集合会让
+  「已撤销」与「从未配对」不可区分（判定退化为 fail-open）。JSON 元素
+  `{id, deviceName, deviceFingerprint, address?, pairedAt, lastSeen?, connectCount, isActive}`；
+- **`trusted-device-revoke`**：内核 `remove_pairing` 语义（`is_active = 0` 软删 + 连带删除该设备
+  连接历史），返回是否命中；未知 id 幂等 `false`，已软删记录再撤销仍 `true`（不重复写）。
+  **不做**断开在线连接（宿主现状语义）；
+- **`connection-history-list(device-id)`**：内核 `connection_history` 原始记录（`device_id` = `pairings.id`）；
+- **`auth-setting-set(key, value)`**：内核 `settings` 表写入，键白名单 `pairing_code_ttl` /
+  `qr_token_ttl` + 正整数校验（宿主命令面据此取 TTL；读取走宿主配置 / 命令面）；
+- **凭据红线（AGENTS §8）**：`pairings.session_token` / `public_key` 不出口，日志只记长度。
 
 ### 宿主能力实现域 · PTY 基础能力服务 — `host-pty`（ABI v16）
 
@@ -302,7 +321,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/auto-task/`、`plugins/file-transfer/` |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域，票 17 起顶替旧 `com.bedcode.auto-task` 插件） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |
@@ -313,12 +332,12 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 
 ### 自动化任务执行机制（跨端链路概览）
 
-BedCode 通过 Auto Task 插件（WASM）+ HTTP API + WebSocket 事件链路实现移动端远程自动执行多个任务：
+BedCode 通过 `com.bedcode.session` 插件的任务域（WASM）+ HTTP API + WebSocket 事件链路实现移动端远程自动执行多个任务：
 
 ```
-Claude Code Hook (Python, plugins/auto-task/scripts/)
-    ↓ HTTP POST /api/plugin/com.bedcode.auto-task/...
-Auto Task WASM 插件（任务状态/队列/模式，经 plugin_controller.rs 动态代理路由）
+Claude Code Hook (Python/TS, plugins/session/scripts/ 随包)
+    ↓ HTTP POST /api/plugin/com.bedcode.session/...（旧 auto-task 前缀由宿主别名表应答）
+com.bedcode.session WASM 任务域（任务状态/队列/模式，经 plugin_controller.rs 声明式端点路由）
     ↓ DesktopSyncEvent → sync_handler → WebSocket broadcast
 Mobile Tauri Event → useAutoExecutor 状态机（移动端）
     ↓ sendInput / HTTP API
@@ -332,7 +351,7 @@ Claude Code (PTY)
 - **生命周期扩展**：插件经 `SessionLifecycleListener` 在 Creating 阶段注入 hooks、Stopped 阶段清理
 - **输入扩展点**：插件经 `SessionInputListener` 观察提交的输入行
 
-涉及目录：`plugins/auto-task/`、`src-tauri/src/plugin/`、`src-tauri/src/server/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
+涉及目录：`plugins/session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
 
 ### 按类型查找
 
