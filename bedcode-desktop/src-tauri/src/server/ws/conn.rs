@@ -496,6 +496,22 @@ impl WsConnBase {
             }
         };
 
+        // 票 12 C3：验签后取认证中心策略（验签执行留宿主中间件——密码学引擎
+        // 不移动；策略 = claims 结构/时效 + 信任撤销检查，经 auth-policy 能力
+        // 导出取认证中心）。认证中心未激活/调用失败 → 宿主策略回退（验签通过
+        // 即放行），无单点。无 AppContext（无头/单测）→ 宿主策略。
+        if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
+            if let Err(reason) = crate::utils::auth::auth_center::enforce_connection_policy(ctx.plugin_host(), token) {
+                tracing::warn!(
+                    addr = %self.session.addr.to_string(),
+                    device_id = %claims.sub,
+                    %reason,
+                    "WS connection denied by auth center policy"
+                );
+                return Err(("POLICY_DENIED".to_string(), reason));
+            }
+        }
+
         self.session.authenticated = true;
         self.session.device_id = Some(claims.sub.clone());
         self.session.device_name = claims.device_name.clone();

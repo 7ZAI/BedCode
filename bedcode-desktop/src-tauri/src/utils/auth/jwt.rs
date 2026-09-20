@@ -37,7 +37,13 @@ fn resolve_secret() -> Vec<u8> {
             Ok(v) => v,
             Err(e) => {
                 // 明文不落日志：只记错误原因，不记密钥
-                tracing::error!(
+                //
+                // 级别 = warn（AGENTS.md §8：可恢复降级）：secret-store 未注入是
+                // 无宿主上下文（单测 / headless）的**设计内**路径，见
+                // `host_secrets` 模块文档——生产在 lib.rs setup 主库就绪后 init 并
+                // 预生成，本分支不影响功能，用 error 会把测试上下文的常态噪音
+                // 记成故障（broadcast_shutdown 的「停机零 error」门禁即被此误伤）。
+                tracing::warn!(
                     error = %e,
                     key_len = JWT_SECRET_KEY_LEN,
                     "jwt: secret store unavailable, falling back to process-random key (tokens invalidate on restart)"
@@ -287,8 +293,14 @@ mod tests {
         // 其余错误统一不区分（不透出内部细节）
         assert_eq!(jwt_error_message(&JwtError::InvalidToken), "Invalid token");
         assert_eq!(jwt_error_message(&JwtError::InvalidSignature), "Invalid token");
-        assert_eq!(jwt_error_message(&JwtError::EncodeError("x".to_string())), "Invalid token");
-        assert_eq!(jwt_error_message(&JwtError::VerifyError("x".to_string())), "Invalid token");
+        assert_eq!(
+            jwt_error_message(&JwtError::EncodeError("x".to_string())),
+            "Invalid token"
+        );
+        assert_eq!(
+            jwt_error_message(&JwtError::VerifyError("x".to_string())),
+            "Invalid token"
+        );
     }
 
     /// 进程内所有 JwtService 实例共享同一密钥：A 签发 → B 验签必须通过
@@ -314,10 +326,10 @@ mod tests {
         assert_eq!(claims2.sub, "device-conv");
     }
 
-    /// 对照测试（票 07 pairing）：宿主 jsonwebtoken 9.3.1 与认证中心插件
-    /// HS256 自实现「同一输入同输出」。固定 key（32B 0x00..=0x1f）+ 固定 claims
+    /// 对照测试（票 07 pairing，票 06 改指会话中心）：宿主 jsonwebtoken 9.3.1 与
+    /// 会话中心插件 pairing 域 HS256 自实现「同一输入同输出」。固定 key（32B 0x00..=0x1f）+ 固定 claims
     /// （注入 iat/exp）→ 期望 token 与插件侧
-    /// `plugins/devices/rust/src/pairing/jwt.rs::plugin_token_matches_host_jsonwebtoken_vector`
+    /// `plugins/session/rust/src/pairing/jwt.rs::plugin_token_matches_host_jsonwebtoken_vector`
     /// 断言的是**同一常量**（签名段为插件实现产出；算法锚点 = RFC 7515 §A.1 官方向量）。
     /// 任一侧实现漂移（header 字段顺序 / claims 序列化顺序 / HMAC）双端立即红。
     #[test]
@@ -335,24 +347,16 @@ mod tests {
         // {"typ":"JWT","alg":"HS256"}，插件侧常量 HS256_HEADER_JSON 逐字节一致）
         let expected = "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJkZXZpY2UtMSIsImlzcyI6IkJlZENvZGUiLCJpYXQiOjE3MDAwMDAwMDAsImV4cCI6MTcwMDYwNDgwMCwiZGV2aWNlX25hbWUiOiJNeSBQaG9uZSIsImZpbmdlcnByaW50IjoiZnAtYWJjIn0.F_jY264ZZ74_BzyVaZBPPPF9H-4K-DYEVJj_bdTLgX8";
 
-        let token = encode(
-            &Header::new(Algorithm::HS256),
-            &claims,
-            &EncodingKey::from_secret(&key),
-        )
-        .expect("jsonwebtoken encode");
+        let token = encode(&Header::new(Algorithm::HS256), &claims, &EncodingKey::from_secret(&key))
+            .expect("jsonwebtoken encode");
         assert_eq!(token, expected, "宿主 jsonwebtoken 与插件 HS256 实现必须产出同一 token");
 
         // 反向验签插件 token（固定 key）：签名有效 + claims 一致
         // （固定向量 exp 已过（1700604800 < now），只验签名与结构，关闭 exp 校验）
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_exp = false;
-        let data = decode::<JwtClaims>(
-            expected,
-            &DecodingKey::from_secret(&key),
-            &validation,
-        )
-        .expect("jsonwebtoken 必须能验签插件签发的 token");
+        let data = decode::<JwtClaims>(expected, &DecodingKey::from_secret(&key), &validation)
+            .expect("jsonwebtoken 必须能验签插件签发的 token");
         assert_eq!(data.claims.sub, "device-1");
         assert_eq!(data.claims.iss, "BedCode");
         assert_eq!(data.claims.device_name, Some("My Phone".to_string()));

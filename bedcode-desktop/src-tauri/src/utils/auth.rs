@@ -11,5 +11,5 @@ pub use pairing::*;
 pub use qr_token::*;
 pub mod biometric;
 pub use biometric::*;
-pub mod host_secrets;
 pub mod auth_center;
+pub mod host_secrets;

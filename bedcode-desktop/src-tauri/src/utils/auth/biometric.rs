@@ -210,7 +210,11 @@ mod tests {
         // 错误公钥验签失败（票据 29：正确公钥以外的 key 不得通过）
         let other_key = p256::ecdsa::SigningKey::random(&mut rand::thread_rng());
         let other_spki = base64::engine::general_purpose::STANDARD.encode(
-            other_key.verifying_key().to_public_key_der().expect("encode other key").as_bytes(),
+            other_key
+                .verifying_key()
+                .to_public_key_der()
+                .expect("encode other key")
+                .as_bytes(),
         );
         assert!(
             verify_biometric_signature(&other_spki, message, &sig_b64).is_err(),

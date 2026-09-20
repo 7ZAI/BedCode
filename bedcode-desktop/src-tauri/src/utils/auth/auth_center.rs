@@ -1,22 +1,36 @@
-//! 认证中心宿主桥接（票 11 C2 —— 宿主命令面桥接）
+//! 认证中心宿主桥接（票 11 C2 落地 → 终端会话中心票 04/05 改指）
 //!
-//! 双轨并存期的桥接层：认证中心（`com.bedcode.devices`）激活时，配对码 / QR
-//! token 生命周期操作经互调 api（ADR 0017、JSON-RPC 2.0 over host-bus）转发
-//! 认证中心实现（状态以认证中心为准）；认证中心未激活或互调失败时**降级宿主
-//! 实现**（迁移前行为，无单点）。
+//! 双轨并存期的桥接层：认证语义生效时，配对码 / QR token 生命周期操作经互调
+//! api（ADR 0017、JSON-RPC 2.0 over host-bus）转发插件实现（状态以插件为准）；
+//! 插件未激活或互调失败时**降级宿主实现**（迁移前行为，无单点 —— D7）。
+//!
+//! **票 04 改指 pairing（expand 步）**：配对码 / QR token 语义搬入合并插件
+//! `com.bedcode.session`。
+//!
+//! **票 05 收敛（本文件的目标常量收敛为一个）**：trust / consent / `auth-policy`
+//! 亦已搬入会话中心，故旧认证中心的 `AUTH_CENTER_PLUGIN_ID` / `AUTH_CENTER_MARKER_API`
+//! 与 `auth_center_active()` 一并删除——转发目标与探活锚点统一为
+//! [`SESSION_PLUGIN_ID`] / [`SESSION_MARKER_API`]（`com.bedcode.session.trust-list`）。
+//! 锚点取 trust 域只读 api：它是「插件已激活且互调面已登记」的稳定判据，且不与
+//! 任何即将演进/退役的域绑定（旧口径用 pairing-code-status 探 trust 面，属借来的判据）。
+//! **票 06 退役**：独立认证中心插件已整体删除（认证语义全部归会话中心），本文件是
+//! 认证语义的唯一桥接门。模块名 `auth_center` 作为历史命名保留——重命名要牵动 server
+//! 中间件 / 命令面 / 端点多处调用点，无行为收益。
 //!
 //! 消费方：
 //! - Tauri 命令面：`commands/system.rs`（配对码）、`commands/qr.rs`（QR）
 //! - server 配对端点：`controllers/auth_controller.rs`（/api/auth/pairing ·
 //!   /verify · /qr-connect）——移动端验签与前端展示必须同源，否则生成与验证
 //!   落在不同状态存储上会破坏配对流程
+//! - server 认证中间件：WS 终端/事件通道 + HTTP 网关取 `auth-policy` 策略
 //!
-//! 边界（本票）：
-//! - TTL 配置（`pairing_code_ttl` / `qr_token_ttl`）留宿主 DB 设置（配置域；
-//!   生成命令把配置值传插件），TTL get/set 命令不转发
-//! - 连接历史 / 已配对设备表（DB pairings）/ 在线设备列表（WS 注册表）留宿主
-//!   内核存储（spec §3「不动」表；插件 trust 为独立镜像，转发会造成数据分叉
-//!   回归），归票 13 退役时随数据源整合一并处理
+//! 边界：
+//! - TTL 配置（`pairing_code_ttl` / `qr_token_ttl`）留宿主 DB 设置（配置域；生成
+//!   命令把配置值传插件），TTL get/set 命令不转发。票 05 起插件可经 host-auth
+//!   `auth-setting-set` 写这两项（白名单 + 正整数校验），读取仍走宿主配置 / 命令面
+//! - 连接历史 / 已配对设备表（DB `pairings`）/ 在线设备列表（WS 注册表）留宿主
+//!   内核存储（spec D3「不动」表）；票 05 起插件经 host-auth 记录面**读原始记录 +
+//!   撤销**，宿主/插件不再是两套账本
 //!
 //! 互调调用约定：请求 topic `bedcode.api.<plugin-id>.<method>`，回复 topic
 //! `bedcode.api.reply.<caller>.<request-id>`；caller 为宿主虚拟身份
@@ -28,17 +42,32 @@ use crate::server::services::pairing_service::PairingService;
 use crate::utils::auth::{PairingCode, QrTokenManager};
 use crate::{AppError, Result};
 
-/// 认证中心插件 ID
-pub const AUTH_CENTER_PLUGIN_ID: &str = "com.bedcode.devices";
-/// 桥接探活锚点 api：注册表含它 ⇔ 认证中心已激活且互调面已声明
-/// （激活登记 / 停用注销，见 ApiRegistry）
-pub const AUTH_CENTER_MARKER_API: &str = "com.bedcode.devices.pairing-code-status";
+// 票 12 C3：认证策略取认证中心 capability 导出（验签执行留宿主中间件）
+use crate::plugin::manager::capability::{CAP_AUTH_POLICY, EXPORT_AUTH_VERIFY_DEVICE_TOKEN};
+use crate::plugin::manager::host::PluginHost;
+use crate::plugin::manager::wasm_runtime::block_on_async;
+
+/// 终端会话中心插件 ID（票 04 起为配对 / QR 语义的权威实现方，票 05 起兼管
+/// trust / consent / 认证策略）
+pub const SESSION_PLUGIN_ID: &str = "com.bedcode.session";
+/// 桥接探活锚点（票 05 收敛后的唯一锚点）：注册表含它 ⇔ 会话中心已激活且互调面
+/// 已声明（激活登记 / 停用注销，见 ApiRegistry）。
+///
+/// 取 trust 域只读 api 而非 pairing-code-status：锚点是「插件可用」的判据，绑在
+/// 即将退役的域上会随该域消失而静默失效（旧口径正是拿配对码状态探 trust 面）。
+pub const SESSION_MARKER_API: &str = "com.bedcode.session.trust-list";
+
 /// 宿主→插件互调超时（毫秒）：单次操作远快于此，超时视为故障走降级
 pub const AUTH_CENTER_TIMEOUT_MS: u64 = 5_000;
 
-/// 认证中心是否激活（api 注册表只含激活态插件的声明）
-pub fn auth_center_active(host_ctx: &WasmHostContext) -> bool {
-    host_ctx.api_registry().contains(AUTH_CENTER_MARKER_API)
+/// api 注册表是否含该锚点（锚点只由激活态插件登记，故等价于「插件可用」）
+fn api_registered(host_ctx: &WasmHostContext, marker_api: &str) -> bool {
+    host_ctx.api_registry().contains(marker_api)
+}
+
+/// 会话中心是否可用（配对 / QR / trust / policy 四条桥接路径的**同一**桥接门）
+pub fn session_active(host_ctx: &WasmHostContext) -> bool {
+    api_registered(host_ctx, SESSION_MARKER_API)
 }
 
 /// 宿主互调请求 id 计数器（全局单调；宿主多线程并发调用，reply topic 含
@@ -56,7 +85,7 @@ fn next_host_request_id() -> String {
 /// wire 形状与 SDK `api_call` 约定一致（spec §9.3）：请求
 /// `{jsonrpc, id, method, params}`，响应 `{jsonrpc, id, result | error}`；
 /// SDK api_call 模块被 `wasm` feature 门禁（guest 侧），宿主按同一约定本地实现。
-fn call_api(host_ctx: &WasmHostContext, api: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+pub(crate) fn call_api(host_ctx: &WasmHostContext, api: &str, params: serde_json::Value) -> Result<serde_json::Value> {
     let request_topic = format!("bedcode.api.{api}");
     // JSON-RPC `method` 字段 = 短方法名（与 SDK client 同约定：topic 全限定、
     // payload 短名——插件宏分派 `match req.method` 按短名匹配）
@@ -87,28 +116,72 @@ fn call_api(host_ctx: &WasmHostContext, api: &str, params: serde_json::Value) ->
         .ok_or_else(|| AppError::Plugin(format!("auth center api '{api}' reply missing result/error")))
 }
 
-/// 认证中心不可用时记录降级（结构化字段；认证中心未激活是常态，静默跳过）
+/// 插件侧不可用时记录降级（结构化字段；双轨并存期未激活是常态，静默跳过）
 fn log_fallback(api: &str, err: &AppError) {
     tracing::warn!(
         api = %api,
         error = %err,
-        "auth center unavailable, fallback to host implementation"
+        "plugin auth surface unavailable, fallback to host implementation"
     );
+}
+
+// ==================== server 认证策略（票 12 C3） ====================
+
+/// server 连接建立认证策略：**验签执行留宿主中间件**（密码学引擎不移动，spec
+/// §3「不动」表——中间件已用宿主 `JwtService` 验签），验签通过后经认证中心
+/// capability 导出（`auth-policy.verify-device-token`）取策略裁决（claims 结构/
+/// 时效 + 信任撤销检查，见会话中心插件 `policy` 模块）。
+///
+/// 降级语义（无单点）：
+/// - 认证中心未激活（api 注册表无标记）→ 宿主策略（迁移前行为：验签通过即放行）
+/// - 认证中心策略放行 → `Ok(())`（调用方保留自身验签 claims 作为连接身份）
+/// - 认证中心策略拒绝（guest 自报 Err）→ 上抛拒绝原因（调用方拒绝连接）
+/// - 能力调用传输失败（实例缺失/trap）→ 宿主策略回退（防认证中心故障误杀全部连接）
+///
+/// 调用方：`server/ws/conn.rs::authenticate_jwt`（WS 终端/事件通道首消息认证）+
+/// `server/middleware/jwt_auth.rs::extract_and_verify_jwt`（HTTP /api 网关）。
+pub fn enforce_connection_policy(plugin_host: &PluginHost, token: &str) -> std::result::Result<(), String> {
+    let host_ctx = plugin_host.wasm_host_ctx();
+    if !session_active(host_ctx) {
+        // 会话中心未激活：宿主策略回退（迁移前行为），无单点
+        return Ok(());
+    }
+    let token = token.to_string();
+    let result = block_on_async(async move {
+        plugin_host
+            .call_plugin_capability_export::<(String,), (std::result::Result<String, String>,)>(
+                SESSION_PLUGIN_ID,
+                CAP_AUTH_POLICY,
+                EXPORT_AUTH_VERIFY_DEVICE_TOKEN,
+                (token,),
+            )
+            .await
+    });
+    match result {
+        Ok((Ok(_claims_json),)) => Ok(()), // 认证中心策略放行（claims 以宿主验签结果为准）
+        Ok((Err(reason),)) => Err(reason), // 认证中心策略拒绝 → 上抛原因
+        Err(e) => {
+            // 能力调用传输失败（实例缺失/trap）：宿主策略回退，防认证中心故障
+            // 误杀全部连接（无单点）
+            log_fallback("auth-policy.verify-device-token", &e);
+            Ok(())
+        }
+    }
 }
 
 // ==================== 配对码 ====================
 
-/// 生成配对码：认证中心激活 → 互调 `pairing-code-generate`（TTL 传入宿主配置值）；
+/// 生成配对码：会话中心激活 → 互调 `pairing-code-generate`（TTL 传入宿主配置值）；
 /// 降级 → 宿主 `PairingService`（迁移前行为）。返回宿主 `PairingCode` DTO 形状。
 pub async fn generate_pairing_code(
     host_ctx: &WasmHostContext,
     pairing_service: &PairingService,
     ttl: u64,
 ) -> Result<PairingCode> {
-    if auth_center_active(host_ctx) {
+    if session_active(host_ctx) {
         match call_api(
             host_ctx,
-            "com.bedcode.devices.pairing-code-generate",
+            "com.bedcode.session.pairing-code-generate",
             serde_json::json!(ttl),
         ) {
             Ok(v) => return serde_json::from_value(v).map_err(AppError::Serialization),
@@ -118,17 +191,17 @@ pub async fn generate_pairing_code(
     Ok(pairing_service.generate_code_with_ttl(ttl).await)
 }
 
-/// 当前配对码（过滤过期）：认证中心激活 → 互调 `pairing-code-status`；降级 →
+/// 当前配对码（过滤过期）：会话中心激活 → 互调 `pairing-code-status`；降级 →
 /// 宿主 `PairingService`。`None`（验证路径的消息分类依赖「是否有当前码」）必须
 /// 与验证走同一权威——验证失败分支据此区分「无码」/「码错或过期」。
 pub async fn current_pairing_code(
     host_ctx: &WasmHostContext,
     pairing_service: &PairingService,
 ) -> Result<Option<PairingCode>> {
-    if auth_center_active(host_ctx) {
+    if session_active(host_ctx) {
         match call_api(
             host_ctx,
-            "com.bedcode.devices.pairing-code-status",
+            "com.bedcode.session.pairing-code-status",
             serde_json::Value::Null,
         ) {
             Ok(v) => {
@@ -143,17 +216,17 @@ pub async fn current_pairing_code(
     Ok(pairing_service.get_current_code().await)
 }
 
-/// 验证配对码（一次性消费）：认证中心激活 → 互调 `pairing-code-verify`；降级 →
+/// 验证配对码（一次性消费）：会话中心激活 → 互调 `pairing-code-verify`；降级 →
 /// 宿主 `PairingService::verify_and_consume_code`。
 pub async fn verify_pairing_code(
     host_ctx: &WasmHostContext,
     pairing_service: &PairingService,
     code: &str,
 ) -> Result<bool> {
-    if auth_center_active(host_ctx) {
+    if session_active(host_ctx) {
         match call_api(
             host_ctx,
-            "com.bedcode.devices.pairing-code-verify",
+            "com.bedcode.session.pairing-code-verify",
             serde_json::json!(code),
         ) {
             Ok(v) => {
@@ -167,12 +240,12 @@ pub async fn verify_pairing_code(
     Ok(pairing_service.verify_and_consume_code(code).await)
 }
 
-/// 清除当前配对码：认证中心激活 → 互调 `pairing-code-clear`；降级 → 宿主。
+/// 清除当前配对码：会话中心激活 → 互调 `pairing-code-clear`；降级 → 宿主。
 pub async fn clear_pairing_code(host_ctx: &WasmHostContext, pairing_service: &PairingService) -> Result<()> {
-    if auth_center_active(host_ctx) {
+    if session_active(host_ctx) {
         match call_api(
             host_ctx,
-            "com.bedcode.devices.pairing-code-clear",
+            "com.bedcode.session.pairing-code-clear",
             serde_json::Value::Null,
         ) {
             Ok(_) => return Ok(()),
@@ -185,11 +258,11 @@ pub async fn clear_pairing_code(host_ctx: &WasmHostContext, pairing_service: &Pa
 
 // ==================== QR token ====================
 
-/// 生成 QR token：认证中心激活 → 互调 `qr-code-generate`（TTL 传入宿主配置值）；
+/// 生成 QR token：会话中心激活 → 互调 `qr-code-generate`（TTL 传入宿主配置值）；
 /// 降级 → 宿主 `QrTokenManager`。返回 token 字符串。
 pub async fn generate_qr_code(host_ctx: &WasmHostContext, qr_manager: &QrTokenManager, ttl: u64) -> Result<String> {
-    if auth_center_active(host_ctx) {
-        match call_api(host_ctx, "com.bedcode.devices.qr-code-generate", serde_json::json!(ttl)) {
+    if session_active(host_ctx) {
+        match call_api(host_ctx, "com.bedcode.session.qr-code-generate", serde_json::json!(ttl)) {
             Ok(v) => {
                 return v
                     .get("token")
@@ -203,12 +276,12 @@ pub async fn generate_qr_code(host_ctx: &WasmHostContext, qr_manager: &QrTokenMa
     Ok(qr_manager.generate(ttl).await)
 }
 
-/// 当前 QR token 连接信息 `(token, remaining_secs)`：认证中心激活 → 互调
+/// 当前 QR token 连接信息 `(token, remaining_secs)`：会话中心激活 → 互调
 /// `qr-code-status`；降级 → 宿主。host/port 组装（局域网 IP / 端口配置）留命令层
 /// （宿主引擎配置域）。
 pub async fn qr_conn_info(host_ctx: &WasmHostContext, qr_manager: &QrTokenManager) -> Result<Option<(String, u64)>> {
-    if auth_center_active(host_ctx) {
-        match call_api(host_ctx, "com.bedcode.devices.qr-code-status", serde_json::Value::Null) {
+    if session_active(host_ctx) {
+        match call_api(host_ctx, "com.bedcode.session.qr-code-status", serde_json::Value::Null) {
             Ok(v) => {
                 if v.is_null() {
                     return Ok(None);
@@ -239,15 +312,16 @@ pub enum QrVerifyOutcome {
     Rejected(String),
 }
 
-/// 验证 QR token（一次性消费）：认证中心激活 → 互调 `qr-code-verify`（拒绝携带
-/// reason 分类）；降级 → 宿主 `QrTokenManager::verify`（错误文本透传）。
+/// 验证 QR token（一次性消费）：会话中心激活 → 互调 `qr-code-verify`（拒绝携带
+/// reason 分类）；降级 → 宿主 `QrTokenManager::verify`（原因经 [`qr_reject_reason`]
+/// 归一后与插件轨逐字相等）。
 pub async fn verify_qr_token(
     host_ctx: &WasmHostContext,
     qr_manager: &QrTokenManager,
     token: &str,
 ) -> Result<QrVerifyOutcome> {
-    if auth_center_active(host_ctx) {
-        match call_api(host_ctx, "com.bedcode.devices.qr-code-verify", serde_json::json!(token)) {
+    if session_active(host_ctx) {
+        match call_api(host_ctx, "com.bedcode.session.qr-code-verify", serde_json::json!(token)) {
             Ok(v) => {
                 let valid = v.get("valid").and_then(|b| b.as_bool()).unwrap_or(false);
                 if valid {
@@ -265,14 +339,25 @@ pub async fn verify_qr_token(
     }
     match qr_manager.verify(token).await {
         Ok(()) => Ok(QrVerifyOutcome::Valid),
-        Err(e) => Ok(QrVerifyOutcome::Rejected(e.to_string())),
+        Err(e) => Ok(QrVerifyOutcome::Rejected(qr_reject_reason(&e))),
     }
 }
 
-/// 清除当前 QR token：认证中心激活 → 互调 `qr-code-clear`；降级 → 宿主。
+/// 降级轨的拒绝原因归一：宿主 `AppError::Auth` 的 Display 带
+/// `Authentication error: ` 前缀，插件轨（guest 无 AppError）直接回传内层文案。
+/// 桥接对两轨必须输出同一形状，否则「同一输入同输出」在双轨并存期即分叉
+/// （票 04 双轨对照测试抓出的差异）；`qr_failure_user_message` 的子串分类不受影响。
+fn qr_reject_reason(err: &AppError) -> String {
+    match err {
+        AppError::Auth(message) => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// 清除当前 QR token：会话中心激活 → 互调 `qr-code-clear`；降级 → 宿主。
 pub async fn clear_qr_code(host_ctx: &WasmHostContext, qr_manager: &QrTokenManager) -> Result<()> {
-    if auth_center_active(host_ctx) {
-        match call_api(host_ctx, "com.bedcode.devices.qr-code-clear", serde_json::Value::Null) {
+    if session_active(host_ctx) {
+        match call_api(host_ctx, "com.bedcode.session.qr-code-clear", serde_json::Value::Null) {
             Ok(_) => return Ok(()),
             Err(e) => log_fallback("qr-code-clear", &e),
         }
@@ -339,6 +424,26 @@ mod tests {
         assert_eq!(qr_failure_user_message("No active QR token"), "请先在桌面端生成二维码");
         // 未命中分类：原文透传（宿主 Invalid QR token 等）
         assert_eq!(qr_failure_user_message("Invalid QR token"), "Invalid QR token");
+    }
+
+    /// 降级轨原因归一：宿主 `AppError::Auth` 的 Display 前缀必须剥掉，才能与插件轨
+    /// 逐字相等（票 04 双轨对照测试抓出的分叉点）；非 Auth 变体保留完整上下文
+    #[test]
+    fn qr_reject_reason_strips_host_error_prefix() {
+        assert_eq!(
+            qr_reject_reason(&AppError::Auth("Invalid QR token".to_string())),
+            "Invalid QR token"
+        );
+        assert_eq!(
+            qr_reject_reason(&AppError::Auth("No active QR token".to_string())),
+            "No active QR token"
+        );
+        let other = qr_reject_reason(&AppError::Config("qr state unreadable".to_string()));
+        assert!(
+            other.contains("qr state unreadable"),
+            "非 Auth 变体不得吞上下文: {other}"
+        );
+        assert_ne!(other, "qr state unreadable", "非 Auth 变体保留 Display 全貌");
     }
 
     /// QR status JSON → (token, remaining) 提取（桥接映射核心）
