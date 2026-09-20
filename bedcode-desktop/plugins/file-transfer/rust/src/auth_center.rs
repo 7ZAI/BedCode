@@ -175,6 +175,16 @@ pub(crate) trait SessionCenterApi {
     fn session_rename(draft: serde_json::Value) -> Result<serde_json::Value, String>;
     #[api("session-resize")]
     fn session_resize(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+
+    // ============ 票 02/03/07 下沉追加（宿主命令面消费；本插件不消费） ============
+    // session 插件 manifest 新增的 api 条目，仅承载构建期防漂移比对；
+    // 宿主侧经原始 JSON-RPC 调用，不经本 client。
+    #[api("quick-actions-import")]
+    fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("annotate")]
+    fn annotate(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("devices-connect-list")]
+    fn devices_connect_list() -> Result<serde_json::Value, String>;
 }
 
 // ==================== 可注入面（native 单测驱动编排） ====================
