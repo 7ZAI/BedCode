@@ -15,9 +15,10 @@
 //! trait 签名（`host/*` 定义）保持不变，插件业务代码零改动。
 
 use crate::host::{
-    ConfigKey, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError, HostEvents, HostFs,
-    HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase, HostProcess, HostPty,
-    HostSession, HostStorage, HostTerminal, HostWebsocket, PtyRingFetch,
+    ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError,
+    HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
+    HostProcess, HostPty, HostSession, HostStorage, HostTerminal, HostWebsocket, ProcessSyncResult,
+    PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
@@ -116,6 +117,60 @@ impl HostAuth for WasmHost {
     fn auth_connection_history_clear(&self, device_id: &str) -> Result<bool, HostError> {
         host_auth::connection_history_clear(device_id)
             .map_err(|e| host_err("auth_connection_history_clear", e))
+    }
+
+    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
+
+    fn auth_trusted_device_upsert(&self, record_json: &str) -> Result<String, HostError> {
+        host_auth::trusted_device_upsert(record_json)
+            .map_err(|e| host_err("auth_trusted_device_upsert", e))
+    }
+
+    fn auth_trusted_device_touch(&self, fingerprint: &str) -> Result<(), HostError> {
+        host_auth::trusted_device_touch(fingerprint).map_err(|e| host_err("auth_trusted_device_touch", e))
+    }
+
+    fn auth_connection_history_record(&self, record_json: &str) -> Result<(), HostError> {
+        host_auth::connection_history_record(record_json)
+            .map_err(|e| host_err("auth_connection_history_record", e))
+    }
+
+    fn auth_biometric_credential_bound(&self, fingerprint: &str) -> Result<bool, HostError> {
+        host_auth::biometric_credential_bound(fingerprint)
+            .map_err(|e| host_err("auth_biometric_credential_bound", e))
+    }
+
+    fn auth_biometric_verify_signature(
+        &self,
+        fingerprint: &str,
+        message: &str,
+        signature: &str,
+    ) -> Result<bool, HostError> {
+        host_auth::biometric_verify_signature(fingerprint, message, signature)
+            .map_err(|e| host_err("auth_biometric_verify_signature", e))
+    }
+
+    fn auth_link_identity_parts(&self) -> Result<Option<serde_json::Value>, HostError> {
+        host_auth::link_identity_parts()
+            .map_err(|e| host_err("auth_link_identity_parts", e))
+            .and_then(|v| match v {
+                Some(s) => parse_json("auth_link_identity_parts", s).map(Some),
+                None => Ok(None),
+            })
+    }
+
+    fn auth_biometric_credential_bind(&self, fingerprint: &str, public_key: &str) -> Result<bool, HostError> {
+        host_auth::biometric_credential_bind(fingerprint, public_key)
+            .map_err(|e| host_err("auth_biometric_credential_bind", e))
+    }
+
+    fn auth_device_token_issue(&self, sub: &str, device_name: &str, fingerprint: &str) -> Result<String, HostError> {
+        host_auth::device_token_issue(sub, device_name, fingerprint)
+            .map_err(|e| host_err("auth_device_token_issue", e))
+    }
+
+    fn auth_device_token_verify(&self, token: &str) -> Result<String, HostError> {
+        host_auth::device_token_verify(token).map_err(|e| host_err("auth_device_token_verify", e))
     }
 }
 
@@ -364,6 +419,12 @@ impl HostProcess for WasmHost {
     fn process_kill(&self, run_id: &str) -> Result<(), HostError> {
         host_process::kill(run_id).map_err(|e| host_err("process_kill", e))
     }
+
+    fn process_run_sync(&self, request_json: &str) -> Result<ProcessSyncResult, HostError> {
+        let json = host_process::run_sync(request_json).map_err(|e| host_err("process_run_sync", e))?;
+        serde_json::from_str(&json)
+            .map_err(|e| HostError::custom(-1, format!("process_run_sync: decode failed: {}", e)))
+    }
 }
 
 // ==================== HostApp ====================
@@ -443,6 +504,28 @@ impl HostFs for WasmHost {
             HostError::custom(-1, format!("fs_request_auth: serialize failed: {}", e))
         })?;
         host_fs::request_auth(&paths_json).map_err(|e| host_err("fs_request_auth", e))
+    }
+
+    // ==================== v19 追加（票 03 文件浏览域） ====================
+
+    fn fs_read_dir(&self, path: &str) -> Result<Vec<FsDirEntry>, HostError> {
+        let json = host_fs::read_dir(path).map_err(|e| host_err("fs_read_dir", e))?;
+        serde_json::from_str(&json)
+            .map_err(|e| HostError::custom(-1, format!("fs_read_dir: decode failed: {}", e)))
+    }
+
+    fn fs_canonicalize(&self, path: &str) -> Result<Option<String>, HostError> {
+        host_fs::canonicalize(path).map_err(|e| host_err("fs_canonicalize", e))
+    }
+
+    fn fs_stat(&self, path: &str) -> Result<Option<FsStat>, HostError> {
+        let json = match host_fs::stat(path).map_err(|e| host_err("fs_stat", e))? {
+            Some(json) => json,
+            None => return Ok(None),
+        };
+        serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|e| HostError::custom(-1, format!("fs_stat: decode failed: {}", e)))
     }
 }
 

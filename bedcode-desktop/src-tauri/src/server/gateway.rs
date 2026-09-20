@@ -60,6 +60,8 @@ pub enum BusinessDomain {
     FileBrowse,
     /// 工作区 git
     Git,
+    /// 认证链（票 07：公开路由，编排归插件）
+    Auth,
 }
 
 impl BusinessDomain {
@@ -69,6 +71,7 @@ impl BusinessDomain {
             BusinessDomain::QuickAction => "quick-action",
             BusinessDomain::FileBrowse => "file-browse",
             BusinessDomain::Git => "git",
+            BusinessDomain::Auth => "auth",
         }
     }
 }
@@ -80,6 +83,17 @@ pub enum FallbackPolicy {
     HostImplementation,
     /// contract 后：宿主实现与宿主数据面已退役，明确报「插件未激活」
     PluginRequired,
+}
+
+/// 别名的认证前置（票 07）：大多数业务端点要求宿主已验签（JWT 中间件先行），
+/// `/api/auth/*` 是**公开路由**——它们本身在 JWT 之前（移动端拿 token 的入口），
+/// 必须免验签转发给插件（验签执行点在插件 auth 域 + host-auth 原语）
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteAuth {
+    /// 宿主 JWT 中间件验签通过后才可转发（默认；claims 派生设备上下文随转发注入）
+    Authenticated,
+    /// 公开路由：无 JWT 前置，直接按别名判定转发（`/api/auth/*` 专用）
+    Public,
 }
 
 /// 一条业务 URL 别名
@@ -95,6 +109,8 @@ pub struct BusinessRoute {
     pub methods: &'static [&'static str],
     pub domain: BusinessDomain,
     pub fallback: FallbackPolicy,
+    /// 认证前置（票 07）：Authenticated = 需宿主验签；Public = 免验签转发
+    pub auth: RouteAuth,
 }
 
 impl BusinessRoute {
@@ -120,7 +136,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "configs",
         methods: &["GET"],
         domain: BusinessDomain::SessionConfig,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 02 contract：会话配置查询面真源已下沉插件，宿主不再持有业务副本
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/quick-actions",
@@ -128,7 +146,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "quick-actions",
         methods: &["GET"],
         domain: BusinessDomain::QuickAction,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 02 contract：快捷指令真源已下沉插件（私有库），宿主旧表契约退役
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/file-tree",
@@ -136,7 +156,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "file-tree",
         methods: &["POST"],
         domain: BusinessDomain::FileBrowse,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 03 contract：文件浏览真源已下沉插件（host-fs + host-process）
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/file-tree-children",
@@ -144,7 +166,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "file-tree-children",
         methods: &["GET"],
         domain: BusinessDomain::FileBrowse,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 03 contract
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/file-content",
@@ -152,7 +176,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "file-content",
         methods: &["POST"],
         domain: BusinessDomain::FileBrowse,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 03 contract
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/diff-tree",
@@ -160,7 +186,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "diff-tree",
         methods: &["POST"],
         domain: BusinessDomain::FileBrowse,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 03 contract
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/file-diff",
@@ -168,7 +196,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "file-diff",
         methods: &["POST"],
         domain: BusinessDomain::FileBrowse,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 03 contract
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/git/branches",
@@ -176,7 +206,10 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "git/branches",
         methods: &["GET"],
         domain: BusinessDomain::Git,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 04 contract：git 分支查询面真源下沉插件（host-process run-sync 执行），
+        // 宿主 git_controller 已退役
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/git/status",
@@ -184,7 +217,9 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "git/status",
         methods: &["GET"],
         domain: BusinessDomain::Git,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 04 contract：工作区状态面同上退役
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
     },
     BusinessRoute {
         path: "/api/git/checkout",
@@ -192,7 +227,73 @@ pub const BUSINESS_ROUTES: &[BusinessRoute] = &[
         endpoint: "git/checkout",
         methods: &["POST"],
         domain: BusinessDomain::Git,
-        fallback: FallbackPolicy::HostImplementation,
+        // 票 04 contract：checkout 编排（含分支名白名单）随插件走
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Authenticated,
+    },
+    // ==================== 票 07：认证链（公开路由——JWT 之前的入口） ====================
+    BusinessRoute {
+        path: "/api/auth/pairing",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/pairing",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/verify",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/verify",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/qr-connect",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/qr-connect",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/reauth",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/reauth",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/biometric-challenge",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/biometric-challenge",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/biometric-verify",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/biometric-verify",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
+    },
+    BusinessRoute {
+        path: "/api/auth/biometric-bind",
+        plugin_id: SESSION_PLUGIN,
+        endpoint: "auth/biometric-bind",
+        methods: &["POST"],
+        domain: BusinessDomain::Auth,
+        fallback: FallbackPolicy::PluginRequired,
+        auth: RouteAuth::Public,
     },
 ];
 
@@ -233,7 +334,10 @@ pub fn decide<'a>(
     declared: &[String],
 ) -> GatewayDecision<'a> {
     let target = route.declared_path();
-    if verified && activated && declared.contains(&target) {
+    // 认证前置：Authenticated 条目要求宿主已验签；Public 条目（/api/auth/*）
+    // 本身在 JWT 之前，跳过该前置——验签执行点在插件 auth 域 + host-auth 原语
+    let verified_ok = verified || route.auth == RouteAuth::Public;
+    if verified_ok && activated && declared.contains(&target) {
         GatewayDecision::Forward(route)
     } else {
         match route.fallback {
@@ -329,14 +433,25 @@ where
         return next.call(req).await.map(|res| res.map_into_boxed_body());
     };
 
-    // 转发前置①：宿主必须已验签（claims 在 extensions 里）。拿不到就是没验签或
-    // 中间件顺序被打乱——原样交回链条，绝不把业务请求递给插件。
+    // 转发前置①：Authenticated 条目要求宿主已验签（claims 在 extensions 里），
+    // 拿不到就是没验签或中间件顺序被打乱——原样交回链条，绝不把业务请求递给插件。
+    // Public 条目（票 07 /api/auth/*）在 JWT 之前，无此前置，device 上下文为 None。
     let device = device_context(req.request());
     // 转发前置②：目标插件在位且已声明该业务端点。无 AppContext（无头 / 库级测试 /
-    // 初始化中间态）= 插件面不可判定 → 同样走旧实现。
-    let decision = match device.as_ref() {
-        None => GatewayDecision::HostFallback,
-        Some(_) => match AppContext::try_global() {
+    // 初始化中间态）= 插件面不可判定 → Authenticated 条目走旧实现，Public 条目按
+    // 其 fallback 策略处置（auth 面已 contract：明确报插件未激活）。
+    let decision = match (device.as_ref(), route.auth) {
+        (None, RouteAuth::Authenticated) => GatewayDecision::HostFallback,
+        (None, RouteAuth::Public) => match AppContext::try_global() {
+            None => GatewayDecision::HostFallback,
+            Some(ctx) => {
+                let host = ctx.plugin_host();
+                let activated = host.is_activated(route.plugin_id).await;
+                let declared = host.registry().list_http_endpoint_paths(route.plugin_id).await;
+                decide(route, true, activated, &declared)
+            }
+        },
+        (Some(_), _) => match AppContext::try_global() {
             None => GatewayDecision::HostFallback,
             Some(ctx) => {
                 let host = ctx.plugin_host();
@@ -475,6 +590,55 @@ mod tests {
                     &["POST"][..],
                     "git"
                 ),
+                (
+                    "/api/auth/pairing",
+                    SESSION_PLUGIN,
+                    "auth/pairing",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/verify",
+                    SESSION_PLUGIN,
+                    "auth/verify",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/qr-connect",
+                    SESSION_PLUGIN,
+                    "auth/qr-connect",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/reauth",
+                    SESSION_PLUGIN,
+                    "auth/reauth",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/biometric-challenge",
+                    SESSION_PLUGIN,
+                    "auth/biometric-challenge",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/biometric-verify",
+                    SESSION_PLUGIN,
+                    "auth/biometric-verify",
+                    &["POST"][..],
+                    "auth"
+                ),
+                (
+                    "/api/auth/biometric-bind",
+                    SESSION_PLUGIN,
+                    "auth/biometric-bind",
+                    &["POST"][..],
+                    "auth"
+                ),
             ]
         );
     }
@@ -504,7 +668,9 @@ mod tests {
     /// 引擎端点绝不被收编（spec 决策 2：`/api/sessions` 保持宿主壳形态）
     #[test]
     fn engine_endpoints_are_never_aliased() {
-        for prefix in ["/api/auth/", "/api/sessions", "/api/health", "/api/plugin/", "/static/"] {
+        // /api/auth/* 自票 07 起随用户裁定进业务别名表（认证编排归插件）：
+        // 免验签的「公开路由」语义由 `RouteAuth::Public` 显式声明，不再是引擎面
+        for prefix in ["/api/sessions", "/api/health", "/api/plugin/", "/static/"] {
             for r in BUSINESS_ROUTES {
                 assert!(!r.path.starts_with(prefix), "引擎端点不得进业务别名表, got: {}", r.path);
             }
@@ -529,7 +695,8 @@ mod tests {
                 BusinessDomain::SessionConfig
                 | BusinessDomain::QuickAction
                 | BusinessDomain::FileBrowse
-                | BusinessDomain::Git => SESSION_PLUGIN,
+                | BusinessDomain::Git
+                | BusinessDomain::Auth => SESSION_PLUGIN,
             };
             assert_eq!(
                 r.plugin_id,
@@ -545,17 +712,32 @@ mod tests {
     ///
     /// 网关是「加一层」而不是「换路由」——降级分支依赖旧路由原样存在。这条静态扫描把依赖
     /// 关系钉死：删宿主路由而没同时删别名表条目，立刻红。
+    ///
+    /// 双轨期（HostImplementation）条目必须有宿主路由——降级分支才有落点；
+    /// contract（PluginRequired）条目必须**没有**宿主路由——真源已在插件，
+    /// 宿主再挂同路径 handler 就是死业务面（票 02/03/04 contract 的反向守护）。
     #[test]
     fn every_alias_still_has_a_host_route() {
         const APP_RS: &str = include_str!("app.rs");
         for r in BUSINESS_ROUTES {
             let literal = format!("\"{}\"", r.path.strip_prefix("/api").expect("/api/ 前缀"));
-            assert!(
-                APP_RS.contains(&literal),
-                "{} 的宿主路由（{}）必须存在，降级分支才有落点",
-                r.path,
-                literal
-            );
+            match r.fallback {
+                FallbackPolicy::HostImplementation => {
+                    assert!(
+                        APP_RS.contains(&literal),
+                        "{} 的宿主路由（{}）必须存在，降级分支才有落点",
+                        r.path,
+                        literal
+                    );
+                }
+                FallbackPolicy::PluginRequired => {
+                    assert!(
+                        !APP_RS.contains(&literal),
+                        "{} 已 contract（PluginRequired），宿主路由必须注销（真源在插件，宿主不该再挂同路径 handler）",
+                        r.path
+                    );
+                }
+            }
         }
     }
 
@@ -567,7 +749,7 @@ mod tests {
     #[test]
     fn business_handlers_are_only_mounted_on_aliased_paths() {
         const APP_RS: &str = include_str!("app.rs");
-        const BUSINESS_HANDLERS: &[&str] = &["config_controller::", "file_controller::", "git_controller::"];
+        const BUSINESS_HANDLERS: &[&str] = &["git_controller::", "auth_controller::"];
         let mut offenders = Vec::new();
         for marker in BUSINESS_HANDLERS {
             for (idx, _) in find_all(APP_RS, marker) {
@@ -627,9 +809,22 @@ mod tests {
     }
 
     /// 双轨判定：只有「已验签 + 在位 + 已声明」三者齐备才切插件
+    ///
+    /// 判定语义与具体条目的 contract 状态无关，故用**合成的** HostImplementation
+    /// 条目验证降级分支（表内条目已全部随票 02/03/04 contract 翻 PluginRequired，
+    /// 由 [`retired_host_implementation_reports_plugin_required`] 覆盖该形态）。
     #[test]
     fn decide_forwards_only_when_verified_activated_and_declared() {
-        let r = route("/api/configs", "GET");
+        const DUAL_TRACK: BusinessRoute = BusinessRoute {
+            path: "/api/git/branches",
+            plugin_id: SESSION_PLUGIN,
+            endpoint: "git/branches",
+            methods: &["GET"],
+            domain: BusinessDomain::Git,
+            fallback: FallbackPolicy::HostImplementation,
+            auth: RouteAuth::Authenticated,
+        };
+        let r = &DUAL_TRACK;
         let declared = vec![r.declared_path()];
 
         assert_eq!(decide(r, true, true, &declared), GatewayDecision::Forward(r));
@@ -666,6 +861,7 @@ mod tests {
             methods: &["GET"],
             domain: BusinessDomain::SessionConfig,
             fallback: FallbackPolicy::PluginRequired,
+            auth: RouteAuth::Authenticated,
         };
         assert_eq!(
             decide(&RETIRED, true, false, &[]),

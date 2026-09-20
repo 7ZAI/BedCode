@@ -31,6 +31,9 @@
 
 /// 会话动作域（票 10）：重启 / 移除 / 改名编排 + 尺寸正统端裁决
 mod actions;
+/// 认证链 HTTP 编排域（票 07）：/api/auth/* 七端点 + JWT 签发 + 挑战状态机
+/// （密钥托管与信任表留宿主，经 host-auth 原语回调统一认证，见模块文档）
+pub mod auth_http;
 /// 会话配置域（票 08）：真源在本插件私有库，见模块文档
 pub mod config;
 mod consent;
@@ -43,8 +46,12 @@ mod devices;
 mod environment;
 /// 会话创建编排（票 09）：命名唯一化 / config→launch spec 映射 / 两阶段启动决策
 mod launch;
+/// 文件浏览域（票 03）：文件树 / 内容 / diff（host-fs + host-process，见模块文档）
+pub mod file_browse;
 mod pairing;
 mod policy;
+/// 快捷指令域（票 02 第 4 域）：私有库持久化 + HTTP 查询面 + 迁移导入
+pub mod quick_actions;
 /// 私有库表名域前缀统一与幂等重命名迁移（票 16 / spec D5）
 pub mod schema;
 /// 任务域（票 15-16）：Agent 集成与会话状态 + 队列/定时后端（见模块文档）
@@ -141,6 +148,15 @@ pub trait SessionApi {
     /// 配置删除 → 是否命中（未知 id 幂等 false）
     #[api("config-delete")]
     fn config_delete(id: String) -> Result<bool, String>;
+
+    // ==================== 票 02：快捷指令域（第 4 域，私有库真源） ====================
+
+    /// 一次性幂等导入（宿主 handoff 推送的 legacy 主库行）→ `ImportReport`
+    /// （`{alreadyMigrated, imported, skippedExisting}`）。marker 已在 → 整体跳过
+    /// （一次性语义，否则插件侧删除会被 legacy 行复活）。这是宿主侧
+    /// `quick_actions_migration` 的唯一写入通道（spec 决策 6：不新增 host 原语）。
+    #[api("quick-actions-import")]
+    fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String>;
 
     // ==================== 票 09：会话创建编排（命名唯一化 + launch spec + 两阶段） ====================
 
@@ -268,6 +284,12 @@ impl SessionApi for SessionPlugin {
 
     fn config_delete(id: String) -> Result<bool, String> {
         config::delete_via_host(&id)
+    }
+
+    // ==================== 票 02：快捷指令域（第 4 域） ====================
+
+    fn quick_actions_import(rows: serde_json::Value) -> Result<serde_json::Value, String> {
+        quick_actions::import_via_host(rows)
     }
 
     // ==================== 票 09：会话创建编排 ====================
@@ -452,6 +474,16 @@ impl WasmPlugin for SessionPlugin {
             },
             Err(e) => host.log_warn(&format!(
                 "session config schema init failed at activate (config face degraded): {}",
+                e
+            )),
+        }
+        // 票 02：快捷指令域（第 4 域）建表（幂等）。与配置面同口径——失败只降级
+        // 快捷指令面：配对 / 信任 / 会话 / 任务必须照常工作。迁移数据由宿主侧
+        // handoff（quick_actions_migration）经互调 api 推送，不在此拉取。
+        match quick_actions::ensure_schema_via_host() {
+            Ok(()) => host.log_info("quick action store ready (private table quick_actions)"),
+            Err(e) => host.log_warn(&format!(
+                "quick action schema init failed at activate (quick action face degraded): {}",
                 e
             )),
         }
@@ -1282,14 +1314,15 @@ impl WasmPlugin for SessionPlugin {
             // ==================== 票 16：HTTP 端点入口（path 段与旧插件逐字一致） ====
             // 宿主 `ANY /api/plugin/com.bedcode.session/{path}` 命中后调本命令，
             // `path` 即去掉前缀的相对段。分派表与 manifest `contributes.httpEndpoints`
-            // 声明清单同源（`task::HTTP_ENDPOINTS`，契约用例锁死）。
+            // 声明清单同源（task::HTTP_ENDPOINTS + [BUSINESS_HTTP_ENDPOINTS]，契约
+            // 用例锁死）。
             "_http_endpoint" => {
                 let a = CommandArgs::new(args);
                 let method = a.str_or("method", "");
                 let path = a.str_or("path", "");
                 let body = a.value_owned("body").unwrap_or(serde_json::Value::Null);
                 let query = a.value_owned("query").unwrap_or_else(|| serde_json::json!({}));
-                Ok(task::handle_http_via_host(
+                Ok(handle_http_endpoint(
                     &WasmHost, &method, &path, &body, &query,
                 ))
             }
@@ -1361,6 +1394,122 @@ fn broadcast_queue_after(
     task::queue::broadcast_queue_changed(&host, session_id, count, action, task_id, status);
 }
 
+// ==================== 票 02：业务域 HTTP 端点（configs / quick-actions） ====================
+
+/// 业务域 HTTP 端点清单（票 02）：`configs`（会话配置查询面）与 `quick-actions`
+/// （快捷指令查询面）的插件侧实现。宿主网关别名表（`server/gateway.rs`
+/// `BUSINESS_ROUTES`）按 manifest `contributes.httpEndpoints` 逐字声明才转发，
+/// 因此本清单 = 网关 /api/configs 与 /api/quick-actions 的接管声明。
+/// 与 [`task::HTTP_ENDPOINTS`] 一起构成 plugin.json `httpEndpoints` 的单一事实源
+/// （契约用例锁死）。
+pub const BUSINESS_HTTP_ENDPOINTS: &[&str] = &["configs", "quick-actions"];
+
+/// 文件浏览域 + 工作区 git 域 HTTP 端点（票 03/04）：网关别名表
+/// （/api/file-* 等 5 条 + /api/git/* 3 条）的插件接管声明。
+/// `file_browse::HTTP_ENDPOINTS` = 5 条文件端点 + 3 条 git 端点（同域模块承载）
+pub const FILE_BROWSE_HTTP_ENDPOINTS: &[&str] = file_browse::HTTP_ENDPOINTS;
+
+/// 工作区 git 域 HTTP 端点（票 04）：网关 /api/git/* 的插件接管声明
+/// （[`FILE_BROWSE_HTTP_ENDPOINTS`] 的 git 子集视图，供并集测试分域计数）
+pub const GIT_HTTP_ENDPOINTS: &[&str] = &["git/branches", "git/status", "git/checkout"];
+
+/// 认证链 HTTP 端点（票 07）：网关 /api/auth/* 七条公开路由的插件接管声明
+pub const AUTH_HTTP_ENDPOINTS: &[&str] = auth_http::AUTH_HTTP_ENDPOINTS;
+
+/// 业务域 HTTP 分派入口（先业务域后任务域，路径全等匹配）
+///
+/// 返回体形状固定为 `{status, body, contentType?}`（`http_response` 辅助），
+/// 宿主 `plugin_controller` 提取。未知业务路径落任务域由它自答 404。
+fn handle_http_endpoint(
+    host: &WasmHost,
+    method: &str,
+    path: &str,
+    body: &serde_json::Value,
+    query: &serde_json::Value,
+) -> serde_json::Value {
+    match path {
+        // GET /api/configs（网关别名）→ 配置真源列表，wire 与宿主 ConfigItem 同形
+        "configs" => handle_configs_http(host, method, body, query),
+        // GET /api/quick-actions（网关别名）→ 快捷指令真源列表
+        "quick-actions" => handle_quick_actions_http(host, method, body, query),
+        // 票 03/04：文件浏览域 + 工作区 git 域（file-tree / file-tree-children /
+        // file-content / diff-tree / file-diff / git/branches / git/status /
+        // git/checkout）——网关别名表同源，未知业务路径落任务域自答 404
+        "file-tree" | "file-tree-children" | "file-content" | "diff-tree" | "file-diff"
+        | "git/branches" | "git/status" | "git/checkout" => {
+            file_browse::handle_http_endpoint(host, method, path, body, query)
+        }
+        // 票 07：认证链（公开路由，JWT 之前的入口——编排归插件，经 host-auth
+        // 原语回调宿主统一认证）
+        "auth/pairing"
+        | "auth/verify"
+        | "auth/qr-connect"
+        | "auth/reauth"
+        | "auth/biometric-challenge"
+        | "auth/biometric-verify"
+        | "auth/biometric-bind" => auth_http::handle_http_endpoint(host, method, path, body, query),
+        _ => task::handle_http_via_host(host, method, path, body, query),
+    }
+}
+
+/// `GET configs`：配置真源（私有库）→ `{configs: ConfigItem[]}`
+///
+/// 形状与宿主 `config_controller::list_configs` 逐字节一致（双轨对照测试锚点）：
+/// `{code: 0, message: "ok", data: {configs: [...]}}`，条目只含 6 个 wire 字段且
+/// `wslDistro` 显式 null。排序沿用配置域业务排序（name 升序，宿主旧实现同序）。
+fn handle_configs_http(
+    host: &WasmHost,
+    method: &str,
+    _body: &serde_json::Value,
+    _query: &serde_json::Value,
+) -> serde_json::Value {
+    if method != "GET" {
+        return bedcode_plugin_api::http_response::error(
+            405,
+            &format!("Method not allowed: {method}"),
+        );
+    }
+    let items = match crate::config::list_http_items_via_host() {
+        Ok(items) => items,
+        Err(e) => {
+            host.log_warn(&format!("configs http: {}", e));
+            return bedcode_plugin_api::http_response::error(500, "config store unavailable");
+        }
+    };
+    bedcode_plugin_api::http_response::ok_with_data(serde_json::json!({
+        "configs": items
+    }))
+}
+
+/// `GET quick-actions`：快捷指令真源（私有库）→ `{actions: QuickActionItem[]}`
+///
+/// 形状与宿主 `config_controller::list_quick_actions` 逐字节一致（双轨对照测试锚点）：
+/// `{code: 0, message: "ok", data: {actions: [...]}}`，条目只含 5 个 wire 字段且
+/// `icon` / `color` 显式 null。排序沿用 `sort_order` 升序（宿主旧实现同序）。
+fn handle_quick_actions_http(
+    host: &WasmHost,
+    method: &str,
+    _body: &serde_json::Value,
+    _query: &serde_json::Value,
+) -> serde_json::Value {
+    if method != "GET" {
+        return bedcode_plugin_api::http_response::error(
+            405,
+            &format!("Method not allowed: {method}"),
+        );
+    }
+    let items = match quick_actions::list_http_items_via_host() {
+        Ok(items) => items,
+        Err(e) => {
+            host.log_warn(&format!("quick-actions http: {}", e));
+            return bedcode_plugin_api::http_response::error(500, "quick action store unavailable");
+        }
+    };
+    bedcode_plugin_api::http_response::ok_with_data(serde_json::json!({
+        "actions": items
+    }))
+}
+
 bedcode_plugin_api::wasm_entry!(SessionPlugin);
 
 #[cfg(test)]
@@ -1415,6 +1564,9 @@ mod tests {
                 "fs:read".to_string(),
                 "fs:write".to_string(),
                 "peer".to_string(),
+                // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并
+                // 捕获输出；与 process:run 同信任域——执行任意命令，声明即信任）
+                "process:run".to_string(),
                 // 票 08：`session:read`（config-list 精简列表 + get 登记事实）+
                 // `session:config`（config-get 全量行 + 后续写入）
                 // ——迁移读 legacy 主库的唯一通道
@@ -1436,8 +1588,8 @@ mod tests {
                 // 票 14：`ui:sidebar`（票 13 起运行期注册侧边栏目录实际需要，此前漏
                 // 声明）、`ui:settings`（设置页配对分组贡献面）同为纯前端贡献面权限
             ],
-            "spec D2 权限表：认证 auth/peer + 会话 session:read/session:config/session:write \
-             + storage + ui:input/ui:sidebar/ui:settings"
+            "spec D2 权限表：认证 auth/peer + 进程 process:run（票 03 git）+ 会话 \
+             session:read/session:config/session:write + storage + ui:input/ui:sidebar/ui:settings"
         );
         let mut expected = SessionApiDispatcher::API_NAMES
             .iter()
@@ -1449,10 +1601,10 @@ mod tests {
         assert_eq!(actual, expected, "manifest api 必须与 trait 声明一致");
         assert_eq!(
             manifest.api.len(),
-            21,
+            22,
             "pairing 八项 + trust 两项（list/revoke）+ consent 一项（decide）+ config 三项 + \
              session-create 一项（票 09）+ 会话动作四项（票 10 restart/remove/rename/resize）\
-             + 票 11 annotate + devices-connect-list 两项"
+             + 票 11 annotate + devices-connect-list 两项 + 票 02 quick-actions-import 一项"
         );
     }
 

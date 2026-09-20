@@ -12,7 +12,7 @@
  *   不手写共享模块全局——出现即评审退回
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import * as entry from '../index'
@@ -59,7 +59,7 @@ describe('C1 插件身份五处一致', () => {
     expect(cargoToml).toContain('crate-type = ["cdylib"]')
   })
 
-  it('票 05/08/09/10/11 + 票 15/16/17 能力面：八域廿一项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
+  it('票 05/08/09/10/11 + 票 15/16/17 + 票 02 能力面：八域廿二项 api + auth/peer/storage/session:*/terminal:*/ui:* 权限', () => {
     // 权限清单与 D2 能力映射一一对应：auth = host-auth（密钥托管 + 认证记录面）、
     // peer = host-peer（consent 取可信集 / trust 的 peer 段）、
     // storage = host-plugin-database（票 08 配置真源私有库）、
@@ -83,6 +83,8 @@ describe('C1 插件身份五处一致', () => {
       'fs:read',
       'fs:write',
       'peer',
+      // 票 03：文件浏览域 git diff 经 host-process run-sync（同步执行并捕获输出）
+      'process:run',
       'session:config',
       'session:read',
       'session:write',
@@ -109,6 +111,8 @@ describe('C1 插件身份五处一致', () => {
       'com.bedcode.session.config-list',
       'com.bedcode.session.config-upsert',
       'com.bedcode.session.config-delete',
+      // 票 02：快捷指令迁移导入（宿主 handoff 经互调推送 legacy 行）
+      'com.bedcode.session.quick-actions-import',
       'com.bedcode.session.session-create',
       'com.bedcode.session.session-restart',
       'com.bedcode.session.session-remove',
@@ -163,10 +167,30 @@ describe('C1 插件身份五处一致', () => {
       'session.task.scheduled-reset',
     ])
     // 票 16：HTTP 端点声明清单与后端分派表同源（单一事实源 = rust/src/task/mod.rs 的
-    // HTTP_ENDPOINTS）。宿主对已声明插件走完整路径精确匹配：漏一项即该端点被宿主
+    // HTTP_ENDPOINTS + rust/src/lib.rs 的 BUSINESS_HTTP_ENDPOINTS（票 02））。
+    // 宿主对已声明插件走完整路径精确匹配：漏一项即该端点被宿主
     // 404（移动端与项目里的 hook 静默失效），多一项即放行到插件里才 404（审计歧义）。
     const httpEndpoints = manifest.contributes.httpEndpoints as string[]
     expect(httpEndpoints).toEqual([
+      'configs',
+      'quick-actions',
+      'file-tree',
+      'file-tree-children',
+      'file-content',
+      'diff-tree',
+      'file-diff',
+      // 票 04：工作区 git 域（与文件浏览域同在 file_browse 模块承载）
+      'git/branches',
+      'git/status',
+      'git/checkout',
+      // 票 07：认证链七端点（公开路由——JWT 之前的入口，编排归插件）
+      'auth/pairing',
+      'auth/verify',
+      'auth/qr-connect',
+      'auth/reauth',
+      'auth/biometric-challenge',
+      'auth/biometric-verify',
+      'auth/biometric-bind',
       'task-status',
       'session-mode',
       'session-settings',
@@ -185,16 +209,25 @@ describe('C1 插件身份五处一致', () => {
       'scheduled-jobs/remove',
       'scheduled-jobs/reset',
     ])
-    expect(httpEndpoints.length).toBe(17)
+    expect(httpEndpoints.length).toBe(34)
     // 条目必须是相对段（不带前导斜杠、不带插件前缀），否则宿主拼出的全路径匹配不上
     for (const endpoint of httpEndpoints) {
       expect(endpoint).not.toMatch(/^\//)
       expect(endpoint).not.toContain('api/plugin')
     }
-    // 声明清单必须能在 Rust 侧分派表里找到同名条目（两侧同源，缺一即红）
+    // 声明清单必须能在 Rust 侧分派表里找到同名条目（两侧同源，缺一即红）：
+    // 任务域在 task/mod.rs，业务域（configs / quick-actions）与文件浏览域（票 03）
+    // 在 lib.rs / file_browse/mod.rs
     const taskSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/task/mod.rs'), 'utf-8')
+    const libSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/lib.rs'), 'utf-8')
+    const fileBrowseSource = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/file_browse/mod.rs'), 'utf-8')
     for (const endpoint of httpEndpoints) {
-      expect(taskSource, `HTTP_ENDPOINTS 缺 ${endpoint}`).toContain(`"${endpoint}"`)
+      expect(
+        taskSource.includes(`"${endpoint}"`)
+          || libSource.includes(`"${endpoint}"`)
+          || fileBrowseSource.includes(`"${endpoint}"`),
+        `分派表缺 ${endpoint}`,
+      ).toBe(true)
     }
   })
 })

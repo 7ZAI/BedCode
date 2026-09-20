@@ -114,6 +114,22 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
     (if m <= 2 { y + 1 } else { y }, m, d)
 }
 
+// ==================== HTTP wire 映射（纯函数，native 可测） ====================
+
+/// 配置 → HTTP wire 条目（与宿主 `ConfigItem` 同形：只留 6 个 wire 字段，
+/// `wslDistro` 为 **显式 null**——宿主 DTO 无 skip_serializing_if，移动端 `?? 空串`
+/// 依赖这一格，插件模型自身的 skip_serializing_if 形状不得泄漏到 HTTP 面）
+pub fn to_http_item(config: &SessionConfig) -> serde_json::Value {
+    serde_json::json!({
+        "id": config.id,
+        "name": config.name,
+        "environment": config.environment,
+        "wslDistro": config.wsl_distro,
+        "workingDir": config.working_dir,
+        "command": config.command,
+    })
+}
+
 /// 生成新配置 id（UUID v4 形态字符串）
 pub fn new_config_id() -> Result<String, String> {
     let mut bytes = [0u8; 16];

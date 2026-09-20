@@ -176,6 +176,78 @@ pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str)
     Ok(std::path::Path::new(path).exists())
 }
 
+// ==================== v19 追加（票 03 文件浏览域） ====================
+
+/// 目录直读（v19 追加）：`[{name, nodeType}]`（JSON 字符串）
+///
+/// `nodeType` 由 `DirEntry::file_type` 判定：目录 → "folder"、文件 → "file"、
+/// 其余（symlink / 特殊条目）→ "other"——与宿主 file_controller::scan_dir
+/// 「跳过非目录非文件条目」的语义对齐（symlink 不进文件树）。
+/// 权限 `fs:read` + fs_auth 三层校验；不支持 WSL UNC（与宿主 file_controller
+/// 的 std::fs 语义一致，working_dir 是宿主路径）。
+pub(crate) fn fs_read_dir(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<String, String> {
+    authorize_fs(host_ctx, plugin_id, path, "read")?;
+    let read_dir = std::fs::read_dir(path)
+        .map_err(|e| format!("fs error: read dir '{}' failed: {}", path, e))?;
+    let mut entries = Vec::new();
+    for entry in read_dir {
+        let entry = entry.map_err(|e| format!("fs error: read dir entry failed: {}", e))?;
+        let name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("fs error: dir entry file type failed: {}", e))?;
+        let node_type = if file_type.is_dir() {
+            "folder"
+        } else if file_type.is_file() {
+            "file"
+        } else {
+            "other"
+        };
+        entries.push(serde_json::json!({ "name": name, "nodeType": node_type }));
+    }
+    serde_json::to_string(&entries).map_err(|e| format!("fs error: read dir serialize failed: {}", e))
+}
+
+/// canonicalize 绝对路径（v19 追加）；路径不存在返回 `Ok(None)`
+///
+/// 供 `../` 穿越与 symlink 逃逸的 containment 判定（宿主 file_controller
+/// 的 `is_within_root` 同语义：canonicalize 后 `starts_with`）。
+pub(crate) fn fs_canonicalize(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    authorize_fs(host_ctx, plugin_id, path, "read")?;
+    match std::fs::canonicalize(path) {
+        Ok(canonical) => Ok(Some(canonical.to_string_lossy().to_string())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("fs error: canonicalize '{}' failed: {}", path, e)),
+    }
+}
+
+/// 文件元数据（v19 追加）：`{size, isFile, isDir}`；路径不存在返回 `Ok(None)`
+///
+/// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
+pub(crate) fn fs_stat(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    authorize_fs(host_ctx, plugin_id, path, "read")?;
+    match std::fs::metadata(path) {
+        Ok(meta) => Ok(Some(
+            serde_json::json!({
+                "size": meta.len(),
+                "isFile": meta.is_file(),
+                "isDir": meta.is_dir(),
+            })
+            .to_string(),
+        )),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("fs error: stat '{}' failed: {}", path, e)),
+    }
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]

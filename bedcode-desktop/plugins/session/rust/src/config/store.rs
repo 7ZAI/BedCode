@@ -6,8 +6,8 @@
 //!
 //! 表结构（插件私有库，无主库 `plugin_<id>_` 前缀约束）：
 //! - `session_configs`：列与主库旧表同形（便于迁移逐字段搬运与宿主投影）
-//! - `plugin_meta`：键值元数据（迁移 marker；范式同宿主 `peer_migration.rs`
-//!   的「键存在性 = 版本戳」，避免引入 schema_version 框架）
+//! - `plugin_meta`：键值元数据（迁移 marker；键存在性即版本戳，避免引入
+//!   schema_version 框架）
 
 use super::model::SessionConfig;
 

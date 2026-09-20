@@ -30,3 +30,7 @@ sha2 = "0.10"
 base64 = "0.21"
 hex = "0.4"
 getrandom = "0.4"
+
+[dev-dependencies]
+# 文件浏览域单测（票 03）：临时工作区构造（宿主同样用 tempfile）
+tempfile = "3"

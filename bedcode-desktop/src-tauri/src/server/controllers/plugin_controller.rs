@@ -55,6 +55,19 @@ pub(crate) fn plugin_http_content_type(response: &serde_json::Value) -> Option<S
         .map(|s| s.to_string())
 }
 
+/// 插件响应附加头提取（票 03）：`headers` 字段为 `{ "Header-Name": "value" }`
+/// 字符串映射（如 file-tree-children 的 `Cache-Control`）；缺失/非法条目忽略。
+/// 值只接受字符串——宿主不替插件解释或转换头值。
+pub(crate) fn plugin_http_headers(response: &serde_json::Value) -> Vec<(String, String)> {
+    let Some(headers) = response.get("headers").and_then(|v| v.as_object()) else {
+        return Vec::new();
+    };
+    headers
+        .iter()
+        .filter_map(|(k, v)| v.as_str().map(|value| (k.clone(), value.to_string())))
+        .collect()
+}
+
 // ==================== 路由判定（纯函数，供测试固化） ====================
 
 /// 声明式路径匹配（票 16 固化票据 03 的两条判据）
@@ -166,6 +179,17 @@ pub(crate) async fn forward_to_plugin(owner: &str, req: &PluginHttpRequest<'_>) 
             );
             if let Some(content_type) = plugin_http_content_type(&response) {
                 builder.insert_header((actix_web::http::header::CONTENT_TYPE, content_type));
+            }
+            // headers 可选（票 03）：插件透传附加响应头（如 Cache-Control）
+            for (name, value) in plugin_http_headers(&response) {
+                match actix_web::http::header::HeaderName::try_from(name.clone()) {
+                    Ok(header_name) => {
+                        builder.insert_header((header_name, value));
+                    }
+                    Err(_) => {
+                        tracing::warn!(header = %name, "plugin http endpoint: invalid response header name, skipped");
+                    }
+                }
             }
             builder.json(response_body)
         }

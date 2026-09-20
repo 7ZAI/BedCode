@@ -368,6 +368,14 @@ pub async fn clear_qr_code(host_ctx: &WasmHostContext, qr_manager: &QrTokenManag
 
 /// QR 验证失败的用户提示（移动端可见）：分类与 auth_controller 既有 contains
 /// 子串逻辑一致（`expired` / `already used` / `No active QR token`），单点维护。
+/// 格式化设备显示名称：名称 + 首次连接 IP（原 `auth_service` 同名函数，
+/// 票 07 后 WS 重认证路径仍在宿主使用——HTTP 路径的同构实现在插件 auth_http）
+pub fn format_device_display_name(device_name: &str, address: &str) -> String {
+    // address 格式为 "IP:PORT"，提取 IP 部分
+    let ip = address.rsplit_once(':').map(|(ip, _)| ip).unwrap_or(address);
+    format!("{} ({})", device_name, ip)
+}
+
 pub fn qr_failure_user_message(reason: &str) -> &str {
     if reason.contains("expired") {
         "二维码已过期，请重新生成"

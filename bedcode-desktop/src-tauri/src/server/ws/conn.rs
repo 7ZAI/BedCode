@@ -530,7 +530,7 @@ impl WsConnBase {
         // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
         let fingerprint = claims.fingerprint.clone();
         let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
-            crate::server::services::auth_service::format_device_display_name(n, &self.session.addr.to_string())
+            crate::utils::auth::auth_center::format_device_display_name(n, &self.session.addr.to_string())
         });
         actix::spawn(async move {
             if let Some(fp) = fingerprint {

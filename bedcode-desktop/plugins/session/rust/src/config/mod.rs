@@ -46,6 +46,19 @@ pub fn list_via_host() -> Result<serde_json::Value, String> {
     serde_json::to_value(configs).map_err(|e| format!("config serialize failed: {}", e))
 }
 
+/// HTTP wire 列表（票 02）：真源 → `ConfigItem[]`（只含 6 个 wire 字段，
+/// `wslDistro` 显式 null）——网关 /api/configs 的插件侧应答形状
+#[cfg(target_arch = "wasm32")]
+pub fn list_http_items_via_host() -> Result<Vec<serde_json::Value>, String> {
+    let configs = ops::list(&WasmHost)?;
+    Ok(configs.iter().map(model::to_http_item).collect())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_http_items_via_host() -> Result<Vec<serde_json::Value>, String> {
+    Err("config http list unavailable outside wasm runtime".to_string())
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 pub fn list_via_host() -> Result<serde_json::Value, String> {
     Err("config list unavailable outside wasm runtime".to_string())

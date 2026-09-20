@@ -9,9 +9,7 @@ use actix_web_actors::ws as actix_ws;
 use serde_json::json;
 use std::time::Duration;
 
-use crate::server::controllers::{
-    auth_controller, config_controller, file_controller, git_controller, plugin_controller, session_controller,
-};
+use crate::server::controllers::{plugin_controller, session_controller};
 use crate::server::ws::channel::plugin::PluginChannel;
 use crate::server::ws::conn::{ConnSpec, WsConnBase};
 use crate::server::ws::registry::{ChannelKind, WsSessionRegistry};
@@ -270,21 +268,8 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
             .wrap(actix_web::middleware::from_fn(
                 crate::server::middleware::jwt_auth::jwt_gateway,
             ))
-            // 公开路由（配对/认证）— 中间件按路径放行
-            .route("/auth/pairing", web::post().to(auth_controller::request_pairing))
-            .route("/auth/verify", web::post().to(auth_controller::verify_pairing_code))
-            .route("/auth/qr-connect", web::post().to(auth_controller::qr_connect))
-            .route("/auth/reauth", web::post().to(auth_controller::reauthenticate))
-            // 生物认证端点同样落在 /api/auth/ 前缀下，中间件 is_public_path 自动放行
-            .route(
-                "/auth/biometric-challenge",
-                web::post().to(auth_controller::biometric_challenge),
-            )
-            .route(
-                "/auth/biometric-verify",
-                web::post().to(auth_controller::biometric_verify),
-            )
-            .route("/auth/biometric-bind", web::post().to(auth_controller::biometric_bind))
+            // 票 07 contract：/api/auth/* 七端点编排已下沉 session 插件（公开路由——
+            // JWT 之前的入口经网关免验签转发），宿主不再注册认证业务路由
             // 受 JWT 保护的业务路由
             .route("/sessions", web::get().to(session_controller::list_sessions))
             .route("/sessions/start", web::post().to(session_controller::start_session))
@@ -305,19 +290,9 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
                 "/sessions/{id}/remove",
                 web::delete().to(session_controller::remove_session),
             )
-            .route("/configs", web::get().to(config_controller::list_configs))
-            .route("/quick-actions", web::get().to(config_controller::list_quick_actions))
-            .route("/file-tree", web::post().to(file_controller::get_file_tree))
-            .route(
-                "/file-tree-children",
-                web::get().to(file_controller::get_file_tree_children),
-            )
-            .route("/file-content", web::post().to(file_controller::get_file_content))
-            .route("/diff-tree", web::post().to(file_controller::get_diff_tree))
-            .route("/file-diff", web::post().to(file_controller::get_file_diff))
-            .route("/git/branches", web::get().to(git_controller::get_branches))
-            .route("/git/status", web::get().to(git_controller::get_status))
-            .route("/git/checkout", web::post().to(git_controller::checkout))
+            // 票 02/03/04 contract：/api/configs / /api/quick-actions / 文件浏览五端点 /
+            // /api/git/* 三端点真源已全部下沉 session 插件，宿主不再注册任何业务路由
+            // （网关别名表接管：插件激活即转发，未激活返回明确错误而非假数据）
             // 插件动态 HTTP 端点代理 — 中间件允许 JWT 或 plugin token
             .route(
                 "/plugin/{plugin_id}/{path:.*}",

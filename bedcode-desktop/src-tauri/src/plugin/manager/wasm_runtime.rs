@@ -3830,6 +3830,8 @@ mod tests {
                 "fs:read",
                 "fs:write",
                 "peer",
+                // 票 03：文件浏览域 git diff 经 host-process run-sync
+                "process:run",
                 "session:config",
                 "session:read",
                 "session:write",
@@ -3858,9 +3860,10 @@ mod tests {
             .collect();
         assert_eq!(
             declared_api.len(),
-            21,
+            22,
             "pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项（票 09）+ \
-             会话动作四项（票 10）+ annotate + devices-connect-list 两项（票 11）, got: {declared_api:?}"
+             会话动作四项（票 10）+ annotate + devices-connect-list 两项（票 11）\
+             + quick-actions-import 一项（票 02）, got: {declared_api:?}"
         );
         // 票 08：宿主配置命令面转发依赖这三项（缺一即静默降级到只读投影）
         for consumed in [
@@ -5355,6 +5358,427 @@ mod tests {
             );
 
             session.lock().await.deactivate().expect("final deactivate");
+        });
+    }
+
+    /// 票 02/03 双轨对照闭环（真实 session 产物 + 真实宿主原语）
+    ///
+    /// 业务端点插件面输出与宿主旧 DTO 形状**逐字节一致**（configs /
+    /// quick-actions / file-tree / file-tree-children / file-content），并验证
+    /// 迁移 handoff（legacy 主库 → 插件私有库）幂等 + 双轨切换后的确定性错误。
+    ///
+    /// 链路：临时工作区（file-tree 数据源）→ legacy 主库播种（session_configs
+    /// 经 cm、quick_actions 经 seed 助手）→ 激活会话中心（配置迁移 + 快捷指令
+    /// 建表）→ handoff 推送 → `_http_endpoint` 五端点 → 与 golden 逐字段比对。
+    #[test]
+    fn test_business_endpoints_dual_track_closed_loop() {
+        let _serial = session_plugin_db_guard();
+        const SESSION_ID: &str = "com.bedcode.session";
+        let session_api_list = session_apis();
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        if !wasm_path.exists() {
+            eprintln!("[skip] session wasip3 artifact not built");
+            return;
+        }
+
+        // 临时工作区（working_dir = 配置真源指向它；node_modules 将被 exclude）
+        let ws = tempfile::tempdir().expect("tempdir");
+        let work = ws.path().join("work");
+        std::fs::create_dir_all(work.join("src")).expect("mkdir src");
+        std::fs::create_dir_all(work.join("node_modules")).expect("mkdir node_modules");
+        std::fs::write(work.join("src").join("main.rs"), "fn main() {}").expect("write main.rs");
+        std::fs::write(work.join("README.md"), "# readme").expect("write readme");
+        std::fs::write(work.join("node_modules").join("x.js"), "x").expect("write x.js");
+        let working_dir = work.to_string_lossy().to_string();
+
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        // 私有库清空（marker 干净）
+        let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
+        let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+        // legacy 主库：quick_actions 表播种（契约退役后仅存量旧库持有该表）
+        let legacy_db = crate::db::Database::new(&std::path::PathBuf::from(":memory:")).expect("legacy db");
+        legacy_db.init_schema().expect("legacy schema");
+        legacy_db
+            .seed_legacy_quick_action_row(&crate::db::LegacyQuickActionRow {
+                id: "qa-1".into(),
+                name: "部署".into(),
+                content: "pnpm run deploy".into(),
+                icon: Some("rocket".into()),
+                color: None,
+                category: Some("dev".into()),
+                sort_order: 2,
+                created_at: "2026-09-20T00:00:00Z".into(),
+            })
+            .expect("seed qa-1");
+        legacy_db
+            .seed_legacy_quick_action_row(&crate::db::LegacyQuickActionRow {
+                id: "qa-2".into(),
+                name: "构建".into(),
+                content: "pnpm run build".into(),
+                icon: None,
+                color: Some("#0f0".into()),
+                category: None,
+                sort_order: 1,
+                created_at: "2026-09-19T00:00:00Z".into(),
+            })
+            .expect("seed qa-2");
+
+        // 会话配置播种（legacy 主库；激活时经配置面迁入插件私有库）
+        let cm = host_ctx.config_manager.clone();
+        let seeded_config = rt.block_on(crate::utils::session_config_bridge::create_config(
+            &host_ctx,
+            &cm,
+            "工作台".to_string(),
+            "linux".to_string(),
+            None,
+            working_dir.clone(),
+            "bash".to_string(),
+        ))
+        .expect("seed config");
+
+        // 权限（manifest 全量）+ api 注册表（含 quick-actions-import 与桥接锚点）
+        host_ctx.permission.grant_permissions(
+            SESSION_ID,
+            &[
+                "auth".to_string(),
+                "peer".to_string(),
+                "session:read".to_string(),
+                "session:config".to_string(),
+                "session:write".to_string(),
+                "storage".to_string(),
+                "fs:read".to_string(),
+                "fs:write".to_string(),
+                "process:run".to_string(),
+                "broadcast".to_string(),
+                "terminal:input".to_string(),
+                "terminal:observe".to_string(),
+                "timer:schedule".to_string(),
+                "ui:input".to_string(),
+                "ui:settings".to_string(),
+                "ui:sidebar".to_string(),
+            ],
+        );
+        host_ctx.api_registry().register(
+            SESSION_ID,
+            &session_api_list.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+        );
+
+        rt.block_on(async move {
+        let component = wasm_runtime
+            .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+            .expect("compile session artifact");
+        let instances = Arc::new(RwLock::new(HashMap::new()));
+        let session = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, SESSION_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        instances
+            .write()
+            .await
+            .insert(SESSION_ID.to_string(), session.clone());
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::clone(&instances),
+            }))
+            .await;
+        session.lock().await.activate().expect("activate session");
+
+        // ==================== handoff：legacy 主库 → 插件私有库 ====================
+        let report = crate::plugin::quick_actions_migration::migrate(&host_ctx, &legacy_db)
+            .await
+            .expect("handoff migrate");
+        assert!(report.skipped.is_none(), "插件在位时必须执行迁移");
+        let plugin_report = report.plugin_report.expect("plugin report");
+        assert_eq!(plugin_report["imported"], 2, "两条 legacy 快捷指令必须全部迁入");
+
+        // ==================== _http_endpoint 双轨对照 ====================
+        async fn http(plugin: &Arc<Mutex<LoadedWasmPlugin>>, method: &str, path: &str, body: serde_json::Value) -> serde_json::Value {
+            let args = serde_json::json!({
+                "method": method,
+                "path": path,
+                "headers": {},
+                "body": body,
+                "query": {},
+            });
+            let result = plugin
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &args.to_string())
+                .expect("_http_endpoint");
+            serde_json::from_str(&result).expect("http envelope json")
+        }
+        fn data(envelope: serde_json::Value) -> serde_json::Value {
+            envelope["body"]["data"].clone()
+        }
+
+        // --- GET quick-actions：插件面 == 宿主旧 QuickActionItem 形状（逐字节） ---
+        let quick = http(&session, "GET", "quick-actions", serde_json::Value::Null).await;
+        let golden_quick = serde_json::to_value(crate::server::dtos::config_dto::QuickActionListResponseData {
+            actions: vec![
+                crate::server::dtos::config_dto::QuickActionItem {
+                    id: "qa-2".into(),
+                    name: "构建".into(),
+                    content: "pnpm run build".into(),
+                    icon: None,
+                    color: Some("#0f0".into()),
+                },
+                crate::server::dtos::config_dto::QuickActionItem {
+                    id: "qa-1".into(),
+                    name: "部署".into(),
+                    content: "pnpm run deploy".into(),
+                    icon: Some("rocket".into()),
+                    color: None,
+                },
+            ],
+        })
+        .expect("golden quick");
+        assert_eq!(
+            data(quick),
+            golden_quick,
+            "quick-actions 插件面必须与宿主旧 DTO 逐字节一致（sort_order 升序 + icon/color 显式 null）"
+        );
+
+        // --- GET configs：插件面 == 宿主旧 ConfigItem 形状 ---
+        let configs = http(&session, "GET", "configs", serde_json::Value::Null).await;
+        let golden_configs = serde_json::to_value(crate::server::dtos::config_dto::ConfigListResponseData {
+            configs: vec![crate::server::dtos::config_dto::ConfigItem {
+                id: seeded_config.id.clone(),
+                name: "工作台".into(),
+                environment: "linux".into(),
+                wsl_distro: None,
+                working_dir: working_dir.clone(),
+                command: "bash".into(),
+            }],
+        })
+        .expect("golden configs");
+        assert_eq!(
+            data(configs),
+            golden_configs,
+            "configs 插件面必须与宿主旧 DTO 逐字节一致（wslDistro 显式 null）"
+        );
+
+        // --- POST file-tree：插件面 == 宿主 scan_dir 语义（exclude + 排序 + 节点形状） ---
+        let tree_env = http(
+            &session,
+            "POST",
+            "file-tree",
+            serde_json::json!({ "sessionId": seeded_config.id, "excludeDirs": ["node_modules"] }),
+        )
+        .await;
+        assert_eq!(
+            data(tree_env),
+            serde_json::json!({
+                "tree": [{
+                    "name": "src", "nodeType": "folder", "path": "src",
+                    "children": [{ "name": "main.rs", "nodeType": "file", "path": "src/main.rs" }]
+                }, {
+                    "name": "README.md", "nodeType": "file", "path": "README.md"
+                }]
+            }),
+            "file-tree：node_modules 排除 + 文件夹在前 + 文件 children 省略"
+        );
+
+        // --- GET file-tree-children：单层 + Cache-Control 头（参数走 query，与宿主一致） ---
+        let children_args = serde_json::json!({
+            "method": "GET",
+            "path": "file-tree-children",
+            "headers": {},
+            "body": serde_json::Value::Null,
+            // query 键名 snake_case（宿主 FileTreeChildrenQuery 无 rename，移动端
+            // useHttpApi 同名构造）——camelCase 是假绿，真机请求会解析不到 session_id
+            "query": serde_json::json!({ "session_id": seeded_config.id, "dir_path": "src", "exclude_dirs": "" }),
+        });
+        let children_env: serde_json::Value = serde_json::from_str(
+            &session
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &children_args.to_string())
+                .expect("_http_endpoint children"),
+        )
+        .expect("children envelope json");
+        assert_eq!(
+            data(children_env.clone()),
+            serde_json::json!({
+                "children": [{ "name": "main.rs", "nodeType": "file", "path": "src/main.rs" }]
+            })
+        );
+        assert_eq!(
+            children_env["headers"]["Cache-Control"],
+            "private, max-age=30",
+            "file-tree-children 必须带与宿主一致的 Cache-Control（宿主 FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS）"
+        );
+
+        // --- POST file-content：成功路径 ---
+        let content_env = http(
+            &session,
+            "POST",
+            "file-content",
+            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "src/main.rs" }),
+        )
+        .await;
+        assert_eq!(
+            data(content_env),
+            serde_json::json!({ "content": "fn main() {}", "fileName": "main.rs" })
+        );
+
+        // --- 确定性错误（与宿主文案逐字一致） ---
+        let not_found = http(
+            &session,
+            "POST",
+            "file-content",
+            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "../outside.txt" }),
+        )
+        .await;
+        assert_eq!(not_found["body"]["code"], 404, "不存在的 ../ 路径先答 404（宿主 exists 前置）");
+        // 越界但存在 → 403
+        std::fs::write(ws.path().join("outside.txt"), "evil").expect("outside");
+        let escape = http(
+            &session,
+            "POST",
+            "file-content",
+            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "../outside.txt" }),
+        )
+        .await;
+        assert_eq!(escape["body"]["code"], 403, "穿越工作目录必须拒绝");
+        assert_eq!(
+            escape["body"]["message"],
+            "Access denied: file is outside working directory"
+        );
+
+        // --- 非 git 仓库：diff-tree / file-diff 答 400（宿主文案逐字一致） ---
+        let diff_tree = http(
+            &session,
+            "POST",
+            "diff-tree",
+            serde_json::json!({ "sessionId": seeded_config.id, "excludeDirs": [] }),
+        )
+        .await;
+        assert_eq!(diff_tree["body"]["code"], 400);
+        assert_eq!(diff_tree["body"]["message"], "Not a git repository");
+        let file_diff = http(
+            &session,
+            "POST",
+            "file-diff",
+            serde_json::json!({ "sessionId": seeded_config.id, "filePath": "src/main.rs" }),
+        )
+        .await;
+        assert_eq!(file_diff["body"]["code"], 400);
+        assert_eq!(file_diff["body"]["message"], "Not a git repository");
+
+        // ==================== 票 04：git 查询域闭环（真实 git 仓库 + 真实 run-sync） ====================
+        // 工作区此刻已被上方断言证明是「非 git 仓库」形态——现在把它变成真仓库，
+        // 验证插件经 host-process run-sync 执行 git 的完整链路
+        let run_git = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&work)
+                .output()
+                .expect("git run");
+            assert!(out.status.success(), "git {args:?} failed: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        run_git(&["init", "-q"]);
+        run_git(&["config", "user.email", "t@t"]);
+        run_git(&["config", "user.name", "t"]);
+        run_git(&["add", "."]);
+        run_git(&["commit", "-q", "-m", "init"]);
+        run_git(&["branch", "dev"]);
+
+        // GET git/branches：query 键名 snake_case（宿主 GitBranchesQuery 无 rename）
+        let branches_args = serde_json::json!({
+            "method": "GET",
+            "path": "git/branches",
+            "headers": {},
+            "body": serde_json::Value::Null,
+            "query": serde_json::json!({ "session_id": seeded_config.id }),
+        });
+        let branches_env: serde_json::Value = serde_json::from_str(
+            &session
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &branches_args.to_string())
+                .expect("_http_endpoint branches"),
+        )
+        .expect("branches envelope json");
+        assert_eq!(branches_env["body"]["code"], 0);
+        let branches = data(branches_env.clone());
+        assert_eq!(branches["isGitRepo"], true);
+        assert!(
+            branches["branches"].as_array().expect("branches").iter().any(|b| b == "dev"),
+            "branch --list 必须含 dev: {branches}"
+        );
+        let initial_branch = branches["currentBranch"].as_str().expect("current branch").to_string();
+
+        // GET git/status：新文件（未跟踪）→ hasChanges
+        std::fs::write(work.join("untracked.txt"), "x").expect("write untracked");
+        let status_args = serde_json::json!({
+            "method": "GET",
+            "path": "git/status",
+            "headers": {},
+            "body": serde_json::Value::Null,
+            "query": serde_json::json!({ "session_id": seeded_config.id }),
+        });
+        let status_env: serde_json::Value = serde_json::from_str(
+            &session
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &status_args.to_string())
+                .expect("_http_endpoint status"),
+        )
+        .expect("status envelope json");
+        assert_eq!(status_env["body"]["code"], 0);
+        assert_eq!(data(status_env.clone())["hasChanges"], true);
+        assert_eq!(data(status_env)["changedCount"], 1);
+
+        // POST git/checkout：切到 dev，回执分支名；再查 currentBranch 即 dev
+        let checkout = http(
+            &session,
+            "POST",
+            "git/checkout",
+            serde_json::json!({ "sessionId": seeded_config.id, "branch": "dev" }),
+        )
+        .await;
+        assert_eq!(checkout["body"]["code"], 0);
+        assert_eq!(data(checkout), serde_json::json!({ "branch": "dev" }));
+        let branches_after = serde_json::from_str::<serde_json::Value>(
+            &session
+                .lock()
+                .await
+                .invoke_command("_http_endpoint", &branches_args.to_string())
+                .expect("_http_endpoint branches after"),
+        )
+        .expect("branches envelope json");
+        assert_eq!(
+            data(branches_after)["currentBranch"], "dev",
+            "checkout 后当前分支必须是 dev（checkout 前为 {initial_branch}）"
+        );
+
+        // checkout 白名单前置：注入形态在插件侧 500 拒绝（不经 git，文案逐字一致）
+        let inject = http(
+            &session,
+            "POST",
+            "git/checkout",
+            serde_json::json!({ "sessionId": seeded_config.id, "branch": "main;rm -rf /" }),
+        )
+        .await;
+        assert_eq!(inject["body"]["code"], 500);
+        assert_eq!(
+            inject["body"]["message"],
+            "Invalid input: Invalid branch name: main;rm -rf /"
+        );
+
+        // ==================== handoff 幂等：重推不重复导入 ====================
+        let again = crate::plugin::quick_actions_migration::migrate(&host_ctx, &legacy_db)
+            .await
+            .expect("handoff again");
+        let again_report = again.plugin_report.expect("plugin report");
+        assert_eq!(again_report["alreadyMigrated"], true, "marker 已在 → 重推整体跳过");
+        assert_eq!(again_report["imported"], 0);
+
+        session.lock().await.deactivate().expect("final deactivate");
         });
     }
 

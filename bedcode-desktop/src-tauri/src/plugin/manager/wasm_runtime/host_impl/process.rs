@@ -180,6 +180,99 @@ pub(crate) fn process_run(host_ctx: &WasmHostContext, plugin_id: &str, request_j
     Ok(run_id)
 }
 
+/// run-sync 请求（v19 追加）：与 `ProcessRequest` 同构但**无 output_path**——
+/// stdout/stderr 由宿主捕获进内存返回给调用方。
+#[derive(Debug, serde::Deserialize)]
+struct SyncProcessRequest {
+    command: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    env: std::collections::HashMap<String, String>,
+    #[serde(default = "default_timeout_ms")]
+    timeout_ms: u64,
+}
+
+/// 同步执行并捕获输出（v19 追加，票 03/04 工作区 git 域）
+///
+/// 与 [`process_run`] 同一命令构造语义（进程组 / 超时 kill），差异：
+/// - stdout/stderr 走管道捕获（不进文件），同步阻塞等待进程结束；
+/// - 返回 `{exitCode, stdout, stderr, timedOut}`（JSON 字符串）。
+///
+/// 适用：插件同步路径（HTTP 端点命令面）一次性拿命令结果（如 git diff）；
+/// 长时任务仍用 [`process_run`]（异步事件模型）。
+///
+/// 阻塞说明：wasm 调用栈内同步等待子进程会阻塞 Store 的执行线程，对 git
+/// 这类百毫秒级命令可接受；若未来出现长时命令需求，应改用异步 `run`。
+pub(crate) fn process_run_sync(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    request_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run_sync") {
+        return Err("permission denied".to_string());
+    }
+    let request: SyncProcessRequest = serde_json::from_str(request_json)
+        .map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    if request.command.trim().is_empty() {
+        return Err("process error: empty command".to_string());
+    }
+
+    let mut cmd = tokio::process::Command::new(&request.command);
+    cmd.args(&request.args)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    if let Some(cwd) = &request.cwd {
+        cmd.current_dir(cwd);
+    }
+    cmd.envs(&request.env);
+    // 独立进程组：超时 kill 连带子进程树（与 process_run 同一语义）
+    #[cfg(unix)]
+    {
+        cmd.process_group(0);
+    }
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(0x0000_0200 | 0x0800_0000);
+    }
+
+    let timeout_ms = request.timeout_ms.max(1);
+    let command = request.command.clone();
+    let result = block_on_async(async move {
+        let mut child = cmd
+            .spawn()
+            .map_err(|e| format!("process error: spawn '{}' failed: {}", command, e))?;
+        // process_group(0) 后 pgid == pid；spawn 成功即应有 pid（极端情况兜底 0）
+        let pid = child.id().unwrap_or(0);
+        let timeout = std::time::Duration::from_millis(timeout_ms);
+        match tokio::time::timeout(timeout, child.wait_with_output()).await {
+            Ok(Ok(output)) => Ok(serde_json::json!({
+                "exitCode": output.status.code(),
+                "stdout": String::from_utf8_lossy(&output.stdout),
+                "stderr": String::from_utf8_lossy(&output.stderr),
+                "timedOut": false,
+            })),
+            Ok(Err(e)) => Err(format!("process error: wait failed: {}", e)),
+            Err(_) => {
+                // 超时：杀整个进程组（连带子进程）。child 句柄已被 wait_with_output
+                // 消费，tokio 内部 reaper 会在进程退出后回收（不会留永久僵尸）。
+                kill_process_group(pid).await;
+                Ok(serde_json::json!({
+                    "exitCode": null,
+                    "stdout": "",
+                    "stderr": "",
+                    "timedOut": true,
+                }))
+            }
+        }
+    });
+    let json = result?;
+    Ok(json.to_string())
+}
+
 /// 终止进程（权限 + 注册表查找 + 进程组 kill）
 ///
 /// 尽力而为：进程可能已结束/未被找到（SDK 契约约定此时返回 Ok）。

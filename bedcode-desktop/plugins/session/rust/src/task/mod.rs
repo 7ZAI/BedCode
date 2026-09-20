@@ -425,14 +425,28 @@ mod tests {
             .collect::<Vec<_>>();
 
         let mut expected = HTTP_ENDPOINTS.to_vec();
+        expected.extend(crate::BUSINESS_HTTP_ENDPOINTS.iter().copied());
+        expected.extend(crate::FILE_BROWSE_HTTP_ENDPOINTS.iter().copied());
+        expected.extend(crate::AUTH_HTTP_ENDPOINTS.iter().copied());
+        // GIT_HTTP_ENDPOINTS 是 FILE_BROWSE_HTTP_ENDPOINTS 的子集视图（同域模块承载），
+        // 不再重复 extend——这里只锁其三项确实都在清单里（票 04 分域计数）
         let mut actual = declared.clone();
         expected.sort();
         actual.sort();
         assert_eq!(
             actual, expected,
-            "contributes.httpEndpoints 必须与 task::HTTP_ENDPOINTS 逐项一致"
+            "contributes.httpEndpoints 必须与 task::HTTP_ENDPOINTS + BUSINESS_HTTP_ENDPOINTS + FILE_BROWSE_HTTP_ENDPOINTS + AUTH_HTTP_ENDPOINTS 逐项一致"
         );
         assert_eq!(HTTP_ENDPOINTS.len(), 17);
+        assert_eq!(crate::BUSINESS_HTTP_ENDPOINTS.len(), 2);
+        assert_eq!(crate::FILE_BROWSE_HTTP_ENDPOINTS.len(), 8, "票 03 五条 + 票 04 git 三条");
+        assert_eq!(crate::AUTH_HTTP_ENDPOINTS.len(), 7, "票 07 认证链七端点");
+        for endpoint in crate::GIT_HTTP_ENDPOINTS {
+            assert!(
+                declared.iter().any(|d| d == endpoint),
+                "manifest 缺 git 域端点 {endpoint}"
+            );
+        }
     }
 
     /// 票 16（对照）：path 段与旧 auto-task 的分派集合完全相同

@@ -213,6 +213,13 @@ interface host-timer {
 interface host-process {
     run: func(request-json: string) -> result<string, string>;
     kill: func(run-id: string) -> result<_, string>;
+    /// v19 函数级追加（票 03/04 工作区 git 域）：**同步**执行并捕获输出。
+    /// request-json 同 `run`（command / args / cwd / env / timeout_ms，无
+    /// output_path——输出由宿主捕获）；返回
+    /// `{exitCode, stdout, stderr, timedOut}`。同步阻塞等待进程结束，供插件
+    /// 同步路径（HTTP 端点命令面）使用；`run` 是异步事件模型（run-id +
+    /// on_process_done 回调），不适配「命令面里同步拿结果」。权限 `process:run`。
+    run-sync: func(request-json: string) -> result<string, string>;
 }
 
 /// 插件随包 CLI 生命周期（v8：host-app）——安装/卸载到用户 bin 目录并注册 PATH
@@ -313,6 +320,18 @@ interface host-fs {
     /// 批量请求目录授权：未授权路径合并为一次用户弹窗，阻塞等待答复
     /// （paths-json 为 JSON 字符串数组；返回是否全部同意）
     request-auth: func(paths-json: string) -> result<bool, string>;
+    /// v19 函数级追加（票 03 文件浏览域）：目录直读。
+    /// 返回 JSON 数组 `[{name, nodeType}]`——`nodeType` ∈ `"folder" | "file" |
+    /// "other"`（宿主 `DirEntry::file_type` 语义：symlink / 特殊条目为 "other"，
+    /// 与宿主 scan_dir 跳过「非目录非文件」条目一致）。权限 `fs:read` + fs_auth。
+    read-dir: func(path: string) -> result<string, string>;
+    /// v19：canonicalize 绝对路径（symlink 解析后的真实路径）；路径不存在返回
+    /// `ok(none)`（宿主 `Path::canonicalize` 失败即 None，不报错）。
+    /// 权限 `fs:read` + fs_auth。
+    canonicalize: func(path: string) -> result<option<string>, string>;
+    /// v19：文件元数据 JSON `{size, isFile, isDir}`；路径不存在返回 `ok(none)`。
+    /// 权限 `fs:read` + fs_auth。
+    stat: func(path: string) -> result<option<string>, string>;
 }
 
 /// 宿主日志与插件状态上报（原 log.rs + status.rs）
@@ -493,6 +512,50 @@ interface host-auth {
     /// 与 `trusted-device-revoke` 的连带删除同语义（那是撤销配对时的隐式清理，
     /// 本函数是设备页「清空历史」按钮的显式动作）；**不影响配对状态**。
     connection-history-clear: func(device-id: string) -> result<bool, string>;
+
+    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
+    // 定位：认证**执行编排**移插件（用户裁定，ADR 0022 修订口径），但密钥托管、
+    // `pairings` / `connection_history` 表与生物凭证公钥**留宿主**——本组原语是
+    // 插件编排回调宿主统一认证的引擎面。全部为无业务语义的记录/密码学存取。
+
+    /// 信任记录写入（内核 `add_pairing` 语义：同名设备按指纹归并更新
+    /// connect_count / last_seen，`uidHash` 命中时复用原记录 id 防历史分裂）。
+    /// record-json（camelCase）：`{ deviceName, fingerprint, publicKey?,
+    /// address?, uidHash? }`——`publicKey` **缺省 = 保留既有值**（传空串会清掉
+    /// 生物凭证，缺省语义专防此坑）。返回配对记录 id（幂等归并后命中的 id）。
+    trusted-device-upsert: func(record-json: string) -> result<string, string>;
+    /// 连接计数 / last_seen 刷新（内核 `update_pairing_last_seen` 语义：
+    /// 不改设备名——HTTP 重认证路径无客户端地址上下文，名称刷新由 WS 路径承担）。
+    trusted-device-touch: func(fingerprint: string) -> result<_, string>;
+    /// 连接历史追加（内核 `record_connection_event_by_fingerprint` 语义：
+    /// 指纹不存在时静默跳过——挑战签发失败路径依赖此语义）。
+    /// record-json：`{ fingerprint, method, result, address? }`
+    /// （method/result 为内核常量字符串：`PAIRING_CODE|QR|JWT|BIOMETRIC` ×
+    /// `SUCCESS|FAILED`）。
+    connection-history-record: func(record-json: string) -> result<_, string>;
+    /// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门；判定 = 记录存在、
+    /// `is-active` 且 `public_key` 非空）。公钥本身**不出口**（凭据红线）。
+    biometric-credential-bound: func(fingerprint: string) -> result<bool, string>;
+    /// 生物认证签名验证（P-256 ECDSA，SPKI DER base64 公钥 + r||s base64 签名）：
+    /// 用**宿主托管**的绑定公钥验 `message`，返回验签结果；未配对 / 未绑定
+    /// 公钥返回 `ok(false)`。密钥与公钥不出宿主（凭据红线），验签执行点在宿主。
+    biometric-verify-signature: func(fingerprint: string, message: string, signature: string) -> result<bool, string>;
+    /// 绑定/解绑生物凭证公钥（内核 `update_pairing_public_key` 语义：**只改凭证
+    /// 不动 connect_count / last_seen**——与认证登录路径的计数语义刻意不同）。
+    /// `public-key` 空串 = 解绑。未配对返回 `ok(false)`；成功 `ok(true)`。
+    biometric-credential-bind: func(fingerprint: string, public-key: string) -> result<bool, string>;
+    /// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）：
+    /// `ok(none)` = 身份未就绪。JSON：`{ publicB64, fingerprint }`。
+    /// 响应字段 `kdPublicB64` / `kdFingerprint` 的数据源；只含公开材料。
+    link-identity-parts: func() -> result<option<string>, string>;
+    /// 设备认证 JWT 签发（宿主 `JwtService` 同一代码路径：HS256 + secret-store
+    /// 托管密钥，**密钥不出宿主**——插件编排、宿主签发）。返回 token 字符串。
+    /// 过期窗口与宿主一致（7 天）。`device-name` / `fingerprint` 空串 = 缺省 None。
+    device-token-issue: func(sub: string, device-name: string, fingerprint: string) -> result<string, string>;
+    /// 设备认证 JWT 验签（宿主 `verify_token_with_expiry` 语义：签名 + 结构 + 时效）。
+    /// 有效 → `ok(claims-json)`（`{sub, iss, iat, exp, device_name?, fingerprint?}`）；
+    /// 无效 → `err("expired")`（过期）| `err("invalid")`（其余）——用户文案映射归插件。
+    device-token-verify: func(token: string) -> result<string, string>;
 }
 
 /// 插件私有伪终端（host-pty，v16）：裸 PTY 引擎原语，零业务语义（ADR 0022）

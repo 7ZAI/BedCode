@@ -359,6 +359,279 @@ pub(crate) fn auth_setting_set(
     Ok(())
 }
 
+// ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
+//
+// 认证执行编排移插件后的回调面：记录写入 / 查询与 P-256 验签，全部引擎级；
+// `pairings` / `connection_history` 表与生物凭证公钥仍留宿主（凭据红线）。
+
+/// 信任记录写入（内核 `add_pairing` 语义）→ 配对记录 id
+///
+/// `publicKey` 缺省 = 保留既有记录值（传空串会清掉生物凭证——缺省语义专防
+/// 此坑；显式空串 = 显式解绑）；`uidHash` 命中存量设备时由内核复用原记录 id。
+pub(crate) fn auth_trusted_device_upsert(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    record_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_trusted_device_upsert") {
+        return Err("permission denied".to_string());
+    }
+    let record: serde_json::Value = serde_json::from_str(record_json)
+        .map_err(|e| format!("auth error: invalid record json: {}", e))?;
+    let device_name = record
+        .get("deviceName")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "auth error: deviceName required".to_string())?
+        .to_string();
+    let fingerprint = record
+        .get("fingerprint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "auth error: fingerprint required".to_string())?
+        .to_string();
+    let address = record.get("address").and_then(|v| v.as_str()).map(str::to_string);
+    let uid_hash = record.get("uidHash").and_then(|v| v.as_str()).map(str::to_string);
+
+    let db = host_ctx.db.clone();
+    let id = block_on_async(async move {
+        let db = db.lock().await;
+        // publicKey 缺省 = 保留既有值（无既有记录则空串——新配对本就无凭证）
+        let public_key = match record.get("publicKey") {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            _ => db
+                .get_pairing_by_fingerprint(&fingerprint)
+                .map_err(|e| format!("database error: {}", e))?
+                .map(|p| p.public_key)
+                .unwrap_or_default(),
+        };
+        db.add_pairing(
+            &device_name,
+            &fingerprint,
+            &public_key,
+            address.as_deref(),
+            uid_hash.as_deref(),
+        )
+        .map_err(|e| format!("database error: {}", e))
+    })?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        pairing_id = %id,
+        "host_auth_trusted_device_upsert: pairing record written"
+    );
+    Ok(id)
+}
+
+/// 连接计数 / last_seen 刷新（内核 `update_pairing_last_seen` 语义，不改设备名）
+pub(crate) fn auth_trusted_device_touch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    fingerprint: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_trusted_device_touch") {
+        return Err("permission denied".to_string());
+    }
+    let db = host_ctx.db.clone();
+    let fp = fingerprint.to_string();
+    block_on_async(async move {
+        let db = db.lock().await;
+        db.update_pairing_last_seen(&fp, None)
+            .map_err(|e| format!("database error: {}", e))
+    })?;
+    Ok(())
+}
+
+/// 连接历史追加（内核 `record_connection_event_by_fingerprint` 语义：指纹不存在
+/// 时静默跳过——挑战签发失败等「未配对设备」路径依赖此语义，不报错不落库）
+pub(crate) fn auth_connection_history_record(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    record_json: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_connection_history_record") {
+        return Err("permission denied".to_string());
+    }
+    let record: serde_json::Value = serde_json::from_str(record_json)
+        .map_err(|e| format!("auth error: invalid record json: {}", e))?;
+    let fingerprint = record
+        .get("fingerprint")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "auth error: fingerprint required".to_string())?
+        .to_string();
+    let method = record
+        .get("method")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "auth error: method required".to_string())?
+        .to_string();
+    let result = record
+        .get("result")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "auth error: result required".to_string())?
+        .to_string();
+    let address = record.get("address").and_then(|v| v.as_str()).map(str::to_string);
+
+    let db = host_ctx.db.clone();
+    block_on_async(async move {
+        let db = db.lock().await;
+        db.record_connection_event_by_fingerprint(
+            &fingerprint,
+            &method,
+            &result,
+            address.as_deref(),
+        )
+        .map_err(|e| format!("database error: {}", e))
+    })?;
+    Ok(())
+}
+
+/// 「已配对且绑定生物凭证公钥」查询（挑战签发闸门）；公钥不出口（凭据红线）
+pub(crate) fn auth_biometric_credential_bound(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    fingerprint: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_credential_bound") {
+        return Err("permission denied".to_string());
+    }
+    let db = host_ctx.db.clone();
+    let fp = fingerprint.to_string();
+    let bound = block_on_async(async move {
+        let db = db.lock().await;
+        db.get_pairing_by_fingerprint(&fp)
+            .map_err(|e| format!("database error: {}", e))
+            .map(|p| p.map(|p| p.is_active && !p.public_key.is_empty()).unwrap_or(false))
+    })?;
+    Ok(bound)
+}
+
+/// 生物认证签名验证（P-256 ECDSA，SPKI DER base64 公钥 + r||s base64 签名）：
+/// 用宿主托管的绑定公钥验 `message`；未配对 / 未绑定 → `Ok(false)`。
+/// 验签执行点在宿主，密钥与公钥不出宿主（凭据红线）。
+pub(crate) fn auth_biometric_verify_signature(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    fingerprint: &str,
+    message: &str,
+    signature: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_verify_signature") {
+        return Err("permission denied".to_string());
+    }
+    let db = host_ctx.db.clone();
+    let fp = fingerprint.to_string();
+    let msg = message.to_string();
+    let sig = signature.to_string();
+    let valid: bool = block_on_async(async move {
+        let db = db.lock().await;
+        let pairing = db
+            .get_pairing_by_fingerprint(&fp)
+            .map_err(|e| format!("database error: {}", e))?;
+        match pairing {
+            Some(p) if p.is_active && !p.public_key.is_empty() => {
+                let verified: std::result::Result<(), crate::AppError> =
+                    crate::utils::auth::biometric::verify_biometric_signature(&p.public_key, &msg, &sig);
+                Ok::<bool, String>(verified.is_ok())
+            }
+            _ => Ok::<bool, String>(false),
+        }
+    })?;
+    Ok(valid)
+}
+
+/// 绑定/解绑生物凭证公钥（内核 `update_pairing_public_key` 语义：只改凭证
+/// 不动 connect_count / last_seen）；未配对 → `Ok(false)`
+pub(crate) fn auth_biometric_credential_bind(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    fingerprint: &str,
+    public_key: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_biometric_credential_bind") {
+        return Err("permission denied".to_string());
+    }
+    let db = host_ctx.db.clone();
+    let fp = fingerprint.to_string();
+    let key = public_key.to_string();
+    let updated = block_on_async(async move {
+        let db = db.lock().await;
+        let pairing = db
+            .get_pairing_by_fingerprint(&fp)
+            .map_err(|e| format!("database error: {}", e))?;
+        let Some(pairing) = pairing else {
+            return Ok(false);
+        };
+        db.update_pairing_public_key(&pairing.id, &key)
+            .map_err(|e| format!("database error: {}", e))?;
+        Ok::<bool, String>(true)
+    })?;
+    tracing::info!(plugin_id = %plugin_id, binding = %updated, "host_auth_biometric_credential_bind");
+    Ok(updated)
+}
+
+/// 设备认证 JWT 签发（宿主 `JwtService` 同一代码路径：密钥托管在 secret-store，
+/// 签发执行点留宿主——插件编排、宿主签发，密钥不出宿主）
+pub(crate) fn auth_device_token_issue(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    sub: &str,
+    device_name: &str,
+    fingerprint: &str,
+) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_device_token_issue") {
+        return Err("permission denied".to_string());
+    }
+    if sub.is_empty() {
+        return Err("auth error: empty subject".to_string());
+    }
+    let jwt = crate::utils::auth::jwt::JwtService::new();
+    jwt.generate_token(
+        sub.to_string(),
+        (!device_name.is_empty()).then(|| device_name.to_string()),
+        (!fingerprint.is_empty()).then(|| fingerprint.to_string()),
+    )
+    .map_err(|e| format!("auth error: jwt issue failed: {}", e))
+}
+
+/// 设备认证 JWT 验签（`verify_token_with_expiry` 语义）。错误归类：
+/// `JwtError::TokenExpired` → "expired"；其余 → "invalid"（用户文案映射归插件）。
+pub(crate) fn auth_device_token_verify(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    token: &str,
+) -> Result<String, String> {
+    use crate::utils::auth::jwt::JwtError;
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_device_token_verify") {
+        return Err("permission denied".to_string());
+    }
+    let jwt = crate::utils::auth::jwt::JwtService::new();
+    match jwt.verify_token_with_expiry(token) {
+        Ok(claims) => serde_json::to_string(&claims)
+            .map_err(|e| format!("auth error: claims serialize failed: {}", e)),
+        Err(e) => Err(match e {
+            JwtError::TokenExpired => "expired".to_string(),
+            _ => "invalid".to_string(),
+        }),
+    }
+}
+
+/// 链路身份 Kd 公钥材料读取（`link_crypto::identity_parts` 语义）；未就绪 → None
+pub(crate) fn auth_link_identity_parts(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_AUTH, "host_auth_link_identity_parts") {
+        return Err("permission denied".to_string());
+    }
+    match crate::server::link_crypto::identity_parts() {
+        Some((fingerprint, public_b64)) => {
+            let payload = serde_json::json!({
+                "publicB64": public_b64,
+                "fingerprint": fingerprint,
+            });
+            Ok(Some(payload.to_string()))
+        }
+        None => Ok(None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

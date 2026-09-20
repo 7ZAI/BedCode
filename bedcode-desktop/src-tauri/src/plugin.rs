@@ -20,6 +20,8 @@ pub mod permission;
 pub mod security;
 /// 旧 auto-task 私有库任务数据一次性搬运（票 17，宿主侧一次性迁移）
 pub mod task_data_migration;
+/// 快捷指令 legacy 主库 → session 插件私有库的一次性搬运（票 02，宿主侧 handoff）
+pub mod quick_actions_migration;
 /// 插件 zip 分发包解压安装（dev 合入）：按本分支结构应归位 `manager`
 /// （core-plugin-manager 的安装职责），当前保留 dev 路径以免改动引用方
 /// （`manager/host.rs` 以 `crate::plugin::downloader` 引用），后续一并归位。

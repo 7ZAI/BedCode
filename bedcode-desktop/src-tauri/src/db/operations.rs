@@ -1,7 +1,7 @@
 //! Database operations
 
 use super::CONNECTION_HISTORY_MAX_PER_DEVICE;
-use super::{ConnectionHistory, Database, Pairing, QuickAction, SessionConfig, Setting};
+use super::{ConnectionHistory, Database, LegacyQuickActionRow, Pairing, SessionConfig, Setting};
 use crate::Result;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -430,17 +430,27 @@ impl Database {
         Ok(())
     }
 
-    // ==================== Quick Actions ====================
-
-    pub fn get_quick_actions(&self) -> Result<Vec<QuickAction>> {
+    /// legacy 主库 `quick_actions` 行只读视图（票 02 迁移 handoff 用）
+    ///
+    /// 表不存在（契约退役后的全新安装 / 已清理）→ `Ok(None)`；存在 → 全行
+    /// （`sort_order` 升序，与旧业务读取同序）。`created_at` 保持 DB 原始字符串
+    /// 不重解析——逐字节搬运给插件。
+    pub fn list_legacy_quick_action_rows(&self) -> Result<Option<Vec<LegacyQuickActionRow>>> {
+        let table_exists: bool = self.conn().query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='quick_actions')",
+            [],
+            |row| row.get(0),
+        )?;
+        if !table_exists {
+            return Ok(None);
+        }
         let mut stmt = self.conn().prepare(
             "SELECT id, name, content, icon, color, category, sort_order, created_at
              FROM quick_actions ORDER BY sort_order",
         )?;
-
-        let actions = stmt
+        let rows = stmt
             .query_map([], |row| {
-                Ok(QuickAction {
+                Ok(LegacyQuickActionRow {
                     id: row.get(0)?,
                     name: row.get(1)?,
                     content: row.get(2)?,
@@ -448,52 +458,37 @@ impl Database {
                     color: row.get(4)?,
                     category: row.get(5)?,
                     sort_order: row.get(6)?,
-                    created_at: parse_datetime_sql(&row.get::<_, String>(7)?, "created_at")?,
+                    created_at: row.get(7)?,
                 })
             })?
             .collect::<std::result::Result<Vec<_>, _>>()?;
-
-        Ok(actions)
+        Ok(Some(rows))
     }
 
-    pub fn create_quick_action(&self, action: &QuickAction) -> Result<()> {
+    /// legacy 主库 `quick_actions` 行播种（票 02 闭环测试用；契约退役后
+    /// 仅测试/存量迁移场景需要写这条路径）——表不存在时先按旧 schema 建表
+    /// （模拟存量旧库；全新安装的表在 schema.sql 已不再创建）
+    #[cfg(test)]
+    pub fn seed_legacy_quick_action_row(&self, row: &LegacyQuickActionRow) -> Result<()> {
+        self.conn().execute(
+            "CREATE TABLE IF NOT EXISTS quick_actions (\
+             id TEXT PRIMARY KEY, \
+             name TEXT NOT NULL, \
+             content TEXT NOT NULL, \
+             icon TEXT, \
+             color TEXT, \
+             category TEXT, \
+             sort_order INTEGER DEFAULT 0, \
+             created_at TEXT NOT NULL)",
+            [],
+        )?;
         self.conn().execute(
             "INSERT INTO quick_actions (id, name, content, icon, color, category, sort_order, created_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             rusqlite::params![
-                action.id,
-                action.name,
-                action.content,
-                action.icon,
-                action.color,
-                action.category,
-                action.sort_order,
-                action.created_at.to_rfc3339(),
+                row.id, row.name, row.content, row.icon, row.color, row.category, row.sort_order, row.created_at
             ],
         )?;
-        Ok(())
-    }
-
-    pub fn update_quick_action(&self, action: &QuickAction) -> Result<()> {
-        self.conn().execute(
-            "UPDATE quick_actions SET name = ?1, content = ?2, icon = ?3, color = ?4, category = ?5, sort_order = ?6
-             WHERE id = ?7",
-            rusqlite::params![
-                action.name,
-                action.content,
-                action.icon,
-                action.color,
-                action.category,
-                action.sort_order,
-                action.id,
-            ],
-        )?;
-        Ok(())
-    }
-
-    pub fn delete_quick_action(&self, id: &str) -> Result<()> {
-        self.conn()
-            .execute("DELETE FROM quick_actions WHERE id = ?1", rusqlite::params![id])?;
         Ok(())
     }
 

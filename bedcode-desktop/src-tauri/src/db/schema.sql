@@ -29,17 +29,10 @@ CREATE TABLE IF NOT EXISTS session_configs (
     updated_at TEXT NOT NULL
 );
 
--- Quick actions table
-CREATE TABLE IF NOT EXISTS quick_actions (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    content TEXT NOT NULL,
-    icon TEXT,
-    color TEXT,
-    category TEXT,
-    sort_order INTEGER DEFAULT 0,
-    created_at TEXT NOT NULL
-);
+-- Quick actions table（票 02 contract 退役：真源已下沉 session 插件私有库）
+-- 旧库存量数据由宿主侧 handoff（plugin/quick_actions_migration.rs）迁入插件；
+-- 全新安装不再建表。已存在的旧表不主动 DROP（数据零丢失原则，退役后待
+-- 各安装点 handoff 跑过再清理）。
 
 -- App settings table
 CREATE TABLE IF NOT EXISTS settings (
@@ -65,8 +58,6 @@ CREATE TABLE IF NOT EXISTS connection_history (
 CREATE INDEX IF NOT EXISTS idx_pairings_fingerprint ON pairings(device_fingerprint);
 CREATE INDEX IF NOT EXISTS idx_pairings_active ON pairings(is_active);
 CREATE INDEX IF NOT EXISTS idx_session_configs_name ON session_configs(name);
-CREATE INDEX IF NOT EXISTS idx_quick_actions_order ON quick_actions(sort_order);
-CREATE INDEX IF NOT EXISTS idx_quick_actions_category ON quick_actions(category);
 CREATE INDEX IF NOT EXISTS idx_connection_history_device ON connection_history(device_id, connected_at DESC);
 
 -- Plugin key-value storage (per-plugin isolation)

@@ -95,47 +95,24 @@ impl SessionConfig {
     }
 }
 
-/// Quick action
+/// legacy 主库 `quick_actions` 行（票 02 迁移只读视图）
+///
+/// 与插件侧 `quick_actions::model::QuickActionRow` 同形（camelCase，`created_at`
+/// 保持 DB 原始字符串不重解析，保证逐字节搬运）；宿主侧 handoff
+/// （`plugin/quick_actions_migration.rs`）经互调 api 推给 session 插件。
+/// 宿主业务表契约退役（schema.sql 不再建表）后，仅存量旧库还持有该表，
+/// 本类型与 `operations::list_legacy_quick_action_rows` 一并移除。
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuickAction {
+#[serde(rename_all = "camelCase")]
+pub struct LegacyQuickActionRow {
     pub id: String,
     pub name: String,
     pub content: String,
     pub icon: Option<String>,
     pub color: Option<String>,
     pub category: Option<String>,
-    pub sort_order: i32,
-    pub created_at: DateTime<Utc>,
-}
-
-impl QuickAction {
-    pub fn new(name: String, content: String) -> Self {
-        Self {
-            id: Uuid::new_v4().to_string(),
-            name,
-            content,
-            icon: None,
-            color: None,
-            category: None,
-            sort_order: 0,
-            created_at: Utc::now(),
-        }
-    }
-
-    pub fn with_icon(mut self, icon: String) -> Self {
-        self.icon = Some(icon);
-        self
-    }
-
-    pub fn with_color(mut self, color: String) -> Self {
-        self.color = Some(color);
-        self
-    }
-
-    pub fn with_category(mut self, category: String) -> Self {
-        self.category = Some(category);
-        self
-    }
+    pub sort_order: i64,
+    pub created_at: String,
 }
 
 /// App setting

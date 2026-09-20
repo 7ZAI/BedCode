@@ -111,6 +111,49 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
     fn connection_history_clear(&mut self, device_id: String) -> Result<bool, String> {
         auth::auth_connection_history_clear(&self.host_ctx, &self.plugin_id, &device_id)
     }
+
+    // ==================== v19 函数级追加（票 07：认证链 HTTP 面下沉） ====================
+
+    fn trusted_device_upsert(&mut self, record_json: String) -> Result<String, String> {
+        auth::auth_trusted_device_upsert(&self.host_ctx, &self.plugin_id, &record_json)
+    }
+
+    fn trusted_device_touch(&mut self, fingerprint: String) -> Result<(), String> {
+        auth::auth_trusted_device_touch(&self.host_ctx, &self.plugin_id, &fingerprint)
+    }
+
+    fn connection_history_record(&mut self, record_json: String) -> Result<(), String> {
+        auth::auth_connection_history_record(&self.host_ctx, &self.plugin_id, &record_json)
+    }
+
+    fn biometric_credential_bound(&mut self, fingerprint: String) -> Result<bool, String> {
+        auth::auth_biometric_credential_bound(&self.host_ctx, &self.plugin_id, &fingerprint)
+    }
+
+    fn biometric_verify_signature(
+        &mut self,
+        fingerprint: String,
+        message: String,
+        signature: String,
+    ) -> Result<bool, String> {
+        auth::auth_biometric_verify_signature(&self.host_ctx, &self.plugin_id, &fingerprint, &message, &signature)
+    }
+
+    fn link_identity_parts(&mut self) -> Result<Option<String>, String> {
+        auth::auth_link_identity_parts(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn biometric_credential_bind(&mut self, fingerprint: String, public_key: String) -> Result<bool, String> {
+        auth::auth_biometric_credential_bind(&self.host_ctx, &self.plugin_id, &fingerprint, &public_key)
+    }
+
+    fn device_token_issue(&mut self, sub: String, device_name: String, fingerprint: String) -> Result<String, String> {
+        auth::auth_device_token_issue(&self.host_ctx, &self.plugin_id, &sub, &device_name, &fingerprint)
+    }
+
+    fn device_token_verify(&mut self, token: String) -> Result<String, String> {
+        auth::auth_device_token_verify(&self.host_ctx, &self.plugin_id, &token)
+    }
 }
 
 // ==================== host-pty（v16 插件私有伪终端） ====================
@@ -317,6 +360,11 @@ impl bedcode::plugin::host_process::Host for WasmPluginState {
     fn kill(&mut self, run_id: String) -> Result<(), String> {
         process::process_kill(&self.host_ctx, &self.plugin_id, &run_id)
     }
+
+    /// v19 追加（票 03/04 工作区 git 域）：同步执行并捕获输出
+    fn run_sync(&mut self, request_json: String) -> Result<String, String> {
+        process::process_run_sync(&self.host_ctx, &self.plugin_id, &request_json)
+    }
 }
 
 impl bedcode::plugin::host_app::Host for WasmPluginState {
@@ -383,6 +431,19 @@ impl bedcode::plugin::host_fs::Host for WasmPluginState {
 
     fn request_auth(&mut self, paths_json: String) -> Result<bool, String> {
         fs::fs_request_auth(&self.host_ctx, &self.plugin_id, &paths_json)
+    }
+
+    /// v19 追加（票 03 文件浏览域）
+    fn read_dir(&mut self, path: String) -> Result<String, String> {
+        fs::fs_read_dir(&self.host_ctx, &self.plugin_id, &path)
+    }
+
+    fn canonicalize(&mut self, path: String) -> Result<Option<String>, String> {
+        fs::fs_canonicalize(&self.host_ctx, &self.plugin_id, &path)
+    }
+
+    fn stat(&mut self, path: String) -> Result<Option<String>, String> {
+        fs::fs_stat(&self.host_ctx, &self.plugin_id, &path)
     }
 }
 
