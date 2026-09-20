@@ -1,0 +1,32 @@
+[package]
+name = "bedcode-plugin-session"
+version = "1.0.0-beta"
+description = "Terminal Session Center — pairing/trust, session orchestration and task queue semantics (wasip3)"
+authors = ["BedCode"]
+edition = "2021"
+
+[features]
+default = ["native"]
+native = []
+wasm = []
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../../../packages/plugin-sdk-desktop/rust", features = ["wasm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+# 票 04 pairing 域（与宿主 utils/auth 语义层行为等价，spec D3）：
+# - HS256 自实现（jsonwebtoken 因 ring 不可 wasm 编译）：hmac + sha2
+# - base64url（URL_SAFE_NO_PAD）：base64
+# - 随机熵（配对码 / QR token / 密钥生成）：getrandom 0.4（wasip3 → wasi:random）
+# - hex 编码（QR token 32 hex / 密钥落库表示）：hex
+# 版本锚定：取值与宿主 utils/auth 语义层对齐（对照测试逐字断言 token / 摘要），
+# 升级需连同宿主实现与 RFC 7515 向量测试一起评估
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.21"
+hex = "0.4"
+getrandom = "0.4"
