@@ -215,7 +215,17 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
 移动端与桌面端通信的唯一入口：
 
 - **controllers/ + dtos/**：HTTP REST 控制器与请求/响应 DTO（auth、config、file、git、plugin、session）
-- **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则）、HTTP 流量过滤器中间件
+- **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
+  （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
+  `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
+  判定是纯函数 `decide(verified, activated, declared)`：**宿主已验签 + 目标插件已激活 + 该端点在插件
+  manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现（双轨期）。
+  转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制）；
+  宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据。
+  载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
+- **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_auth::jwt_gateway`，
+  协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `app.rs` 里网关写在验签之前）、
+  HTTP 流量过滤器中间件
 - **filter.rs**：传输层流量过滤器责任链——TrafficFilter trait + 全局
   TrafficFilterChain 单例；HTTP（请求体/响应体）与 WS（收发帧）统一接入，
   过滤器可观察/改写收发数据

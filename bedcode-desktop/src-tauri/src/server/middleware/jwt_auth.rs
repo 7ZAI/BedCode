@@ -12,7 +12,11 @@
 //!
 //! 校验通过后将 JwtClaims 注入 request extensions，handler 通过 get_claims_from_request 提取。
 
-use actix_web::HttpMessage;
+use actix_web::body::MessageBody;
+use actix_web::dev::{ServiceRequest, ServiceResponse};
+use actix_web::middleware::Next;
+use actix_web::{Error, HttpMessage, HttpResponse};
+use serde_json::json;
 
 use crate::utils::auth::jwt::{JwtClaims, JwtService};
 
@@ -61,6 +65,43 @@ pub fn is_public_path(path: &str) -> bool {
 /// handler 仅校验插件激活状态。
 pub fn is_plugin_path(path: &str) -> bool {
     path.starts_with("/api/plugin/")
+}
+
+/// HTTP 网关中间件（`/api` scope）：验签通过注入 claims，否则按路径规则放行 / 401
+///
+/// 从 `server/app.rs` 的路由构造里提出来成为具名中间件，目的是让「协议网关挂在验签之后」
+/// 这一顺序约束可被真实 actix 栈测到（见 `server/gateway.rs` 的中间件用例），而不是靠注释
+/// 约定。业务 JWT 的验签执行点始终在这里，不下沉、不外移（AGENTS.md §8 认证红线）。
+pub(crate) async fn jwt_gateway<B>(req: ServiceRequest, next: Next<B>) -> Result<ServiceResponse, Error>
+where
+    B: MessageBody + 'static,
+{
+    let path = req.path().to_string();
+
+    // 公开路由（/api/auth/* 与 /api/health）直接放行
+    if is_public_path(&path) {
+        return next.call(req).await.map(|res| res.map_into_boxed_body());
+    }
+
+    // 有效 JWT → 注入 claims 并放行
+    if let Some(claims) = extract_and_verify_jwt(&req) {
+        req.extensions_mut().insert(claims);
+        return next.call(req).await.map(|res| res.map_into_boxed_body());
+    }
+
+    // 插件端点：无 JWT 时放行（handler 不校验任何凭证，仅检查插件激活状态；
+    // 信任边界：服务监听 0.0.0.0，插件端点对局域网内任意设备可达）
+    if is_plugin_path(&path) {
+        return next.call(req).await.map(|res| res.map_into_boxed_body());
+    }
+
+    // 其余受保护路由：无有效 JWT → 返回 401
+    let (req, _payload) = req.into_parts();
+    let response = HttpResponse::Unauthorized().json(json!({
+        "code": 1007,
+        "message": "Authentication required"
+    }));
+    Ok(ServiceResponse::new(req, response))
 }
 
 #[cfg(test)]

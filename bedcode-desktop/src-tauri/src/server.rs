@@ -8,6 +8,7 @@ pub mod connection_types;
 pub mod controllers;
 pub mod dtos;
 pub mod filter;
+pub mod gateway;
 pub mod link_crypto;
 pub mod message;
 pub mod metrics;

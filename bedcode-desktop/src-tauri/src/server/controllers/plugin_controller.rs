@@ -104,6 +104,86 @@ pub(crate) fn resolve_http_owner<'a>(
     }
 }
 
+// ==================== 转发内核（插件前缀路由与 HTTP 协议网关共用） ====================
+
+/// 一次业务 HTTP 请求转发到插件 `_http_endpoint` 所需的全部入参
+///
+/// `pub(crate)`：`server/gateway.rs` 的业务 URL 别名走的是同一个内核——「新增传输机制」
+/// 是票 01 明确禁止的形态，两条路径必须共用请求构造与响应映射（含 headers 白名单、
+/// status/contentType 解析口径），否则同一请求经网关与经 `/api/plugin/*` 会答出两版。
+pub(crate) struct PluginHttpRequest<'a> {
+    /// 去掉 `/api/plugin/{plugin_id}/` 前缀后的端点段（网关路径取别名目标的端点段）
+    pub endpoint_path: &'a str,
+    pub method: &'a str,
+    /// 已按 [`PLUGIN_HEADER_WHITELIST`] 过滤的请求头
+    pub headers: serde_json::Map<String, serde_json::Value>,
+    pub body: serde_json::Value,
+    pub query: serde_json::Value,
+    /// 宿主验签后的可信设备上下文（仅网关路径注入；`/api/plugin/*` 无 JWT 时为 None）
+    ///
+    /// 只给 claims 派生的标识字段，**JWT 本体与指纹一律不透传**（AGENTS.md §8 凭据红线）。
+    pub device: Option<serde_json::Value>,
+}
+
+/// 插件 `_http_endpoint` 入参构造（纯函数，供双轨契约测试逐字段锁定）
+///
+/// `headers` 字段为票据 04 增量追加、`device` 为票 01 网关追加——都是字段级追加，
+/// 老插件忽略未知字段（协议增量原则）。
+pub(crate) fn build_plugin_http_args(req: &PluginHttpRequest) -> serde_json::Value {
+    let mut args = serde_json::json!({
+        "method": req.method,
+        "path": req.endpoint_path,
+        "headers": serde_json::Value::Object(req.headers.clone()),
+        "body": req.body,
+        "query": req.query,
+    });
+    if let Some(device) = &req.device {
+        args["device"] = device.clone();
+    }
+    args
+}
+
+/// 转发内核：调插件 `_http_endpoint` 并把 `{ status, body, contentType }` 映射为 HTTP 响应
+///
+/// 调用方必须先完成属主解析与端点声明判定（`plugin_http_path_allowed`）——本函数
+/// 只做「送进去 + 把回包翻译成 HTTP」，不掺任何路由策略。
+pub(crate) async fn forward_to_plugin(owner: &str, req: &PluginHttpRequest<'_>) -> HttpResponse {
+    let request_args = build_plugin_http_args(req);
+    let plugin_host = AppContext::global().plugin_host();
+    let result = plugin_host
+        .invoke_rust_command(owner, "_http_endpoint", request_args)
+        .await;
+
+    match result {
+        Ok(response) => {
+            // 插件返回格式：{ status: number, body: any, contentType?: string }
+            let status = plugin_http_status(&response);
+            let response_body = response.get("body").cloned().unwrap_or(serde_json::Value::Null);
+
+            // contentType 可选：插件可指定（如 text/plain / image/png），默认 application/json
+            let mut builder = HttpResponse::build(
+                actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK),
+            );
+            if let Some(content_type) = plugin_http_content_type(&response) {
+                builder.insert_header((actix_web::http::header::CONTENT_TYPE, content_type));
+            }
+            builder.json(response_body)
+        }
+        Err(e) => {
+            tracing::error!(
+                "Plugin HTTP endpoint error: plugin_id={}, path={}, error={}",
+                owner,
+                req.endpoint_path,
+                e
+            );
+            HttpResponse::Ok().json(ApiResponse::<()>::error(
+                CODE_INVALID_REQUEST,
+                &format!("Plugin endpoint error: {}", e),
+            ))
+        }
+    }
+}
+
 /// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
@@ -176,47 +256,22 @@ pub async fn plugin_http_endpoint(
     // headers 字段为票据 04 增量追加——老插件忽略未知字段（字段演进增量原则）
     let method = req.method().as_str();
     let request_headers = filter_plugin_request_headers(req.headers());
-    let request_args = serde_json::json!({
-        "method": method,
-        "path": endpoint_path,
-        "headers": request_headers,
-        "body": body.map(|b| b.into_inner()).unwrap_or(serde_json::Value::Null),
-        "query": query.into_inner(),
-    });
-
-    // 通过 plugin_invoke 路由到插件的 _http_endpoint command
-    let result = plugin_host
-        .invoke_rust_command(owner, "_http_endpoint", request_args)
-        .await;
-
-    match result {
-        Ok(response) => {
-            // 插件返回格式：{ status: number, body: any, contentType?: string }
-            let status = plugin_http_status(&response);
-            let response_body = response.get("body").cloned().unwrap_or(serde_json::Value::Null);
-
-            // contentType 可选：插件可指定（如 text/plain / image/png），默认 application/json
-            let mut builder = HttpResponse::build(
-                actix_web::http::StatusCode::from_u16(status).unwrap_or(actix_web::http::StatusCode::OK),
-            );
-            if let Some(content_type) = plugin_http_content_type(&response) {
-                builder.insert_header((actix_web::http::header::CONTENT_TYPE, content_type));
-            }
-            builder.json(response_body)
-        }
-        Err(e) => {
-            tracing::error!(
-                "Plugin HTTP endpoint error: plugin_id={}, path={}, error={}",
-                plugin_id,
-                endpoint_path,
-                e
-            );
-            HttpResponse::Ok().json(ApiResponse::<()>::error(
-                CODE_INVALID_REQUEST,
-                &format!("Plugin endpoint error: {}", e),
-            ))
-        }
-    }
+    let request = PluginHttpRequest {
+        endpoint_path: &endpoint_path,
+        method,
+        headers: request_headers,
+        body: body.map(|b| b.into_inner()).unwrap_or(serde_json::Value::Null),
+        query: serde_json::Value::Object(
+            query
+                .into_inner()
+                .into_iter()
+                .map(|(k, v)| (k, serde_json::Value::String(v)))
+                .collect(),
+        ),
+        // 本路由不要求 JWT（hook 脚本无法持有 token），无验签结果可透传
+        device: None,
+    };
+    forward_to_plugin(owner, &request).await
 }
 
 // ==================== Tests ====================

@@ -22,6 +22,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Platform & Infrastructure
 
+#### HTTP protocol gateway — business URLs now alias to plugins (desktop, host business decarriage ticket 01)
+- New platform service `server/gateway.rs`: a static alias table maps the ten business endpoints
+  (`/api/configs`, `/api/quick-actions`, `/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`,
+  `/api/git/*`) onto their owning plugin's HTTP endpoint, so business implementations can move into plugin
+  projects without the mobile client changing a line
+- Cut-over requires all three of: host has verified the mobile JWT, the target plugin is `Activated`, and that exact
+  endpoint is declared in its manifest `contributes.httpEndpoints`. Anything else falls through to the host
+  implementation untouched — a plugin that is live but has not implemented the endpoint yet cannot steal a working
+  route (the reverse of `/api/plugin/*`, where an empty declaration list means "pass the whole prefix")
+- Forwarding reuses the existing plugin proxy kernel (`plugin_controller::forward_to_plugin`, header whitelist,
+  `status`/`contentType` mapping, declaration governance); the gateway adds no new transport. Plugin `_http_endpoint`
+  gains an optional `device` field carrying identity-only claim fields (`deviceId` / `deviceName`) — the JWT itself and
+  the device fingerprint never leave the host
+- Unverified requests can never be forwarded regardless of middleware registration order: `decide` takes
+  `verified` as its first argument, and the actix "last registered wrap runs first" assumption that the wiring
+  depends on is pinned by its own test
+- The `/api` JWT gate moved from an inline closure to a named middleware (`jwt_auth::jwt_gateway`) so the ordering
+  guarantee is testable on a real actix stack; the fallback branch never touches the payload, so host handlers keep
+  reading their own typed extractors and byte-identical responses
+- Response shapes for all ten endpoints are locked as golden JSON (including which optional fields serialise as
+  explicit `null` and which are omitted), and a source scan pins that business handlers may only be mounted on
+  aliased paths — the host route surface cannot silently grow back business endpoints
+
 #### Plugin ABI desktop 16 → 19 (function-level appends to existing interfaces; mobile stays at 11)
 - v18 `host-auth` record face: `trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set` return raw kernel records; ordering, filtering and derived views belong to the plugin
 - v19 `host-session` session face: config CRUD (`session:config`), `create-with-spec` (plugin computes the launch spec, host only does shell wrapping / WSL translation / size defaults / id pre-allocation), `restart` / `remove` / `rename` / `resize` (canonical-renderer decision rules in the plugin, registry fact in the kernel), `annotate`, `connections-list`; plus `host-platform.wsl-distros`

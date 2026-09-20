@@ -258,44 +258,18 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
     // 终端背景图片（公开，无需 JWT；CSS background-image 无法携带认证头）
     cfg.route("/static/terminal-bg", web::get().to(terminal_bg_image));
 
-    // /api scope — 挂载 JWT 网关中间件
-    // 中间件内部按路径区分：/api/auth/* 公开放行；/api/plugin/* 有 JWT 则校验、
-    // 无 JWT 直接放行（hook 脚本等调用方无法持有 JWT，handler 仅校验插件激活状态）；
-    // 其余要求 JWT
+    // /api scope — 中间件顺序即请求顺序：JWT 验签 → HTTP 协议网关 → 路由
+    // 顺序是硬约束（票 01）：网关只能在验签之后介入，业务 JWT 的验签执行点不下沉；
+    // 由 server/gateway.rs 的 unverified_requests_never_reach_gateway 在真实 actix 栈上钉死
     cfg.service(
         web::scope("/api")
-            .wrap_fn(|req, srv| {
-                use crate::server::middleware::jwt_auth::{extract_and_verify_jwt, is_plugin_path, is_public_path};
-                use actix_web::HttpMessage;
-
-                let path = req.path().to_string();
-
-                // 公开路由（/api/auth/*）直接放行
-                if is_public_path(&path) {
-                    return srv.call(req);
-                }
-
-                // 有效 JWT → 注入 claims 并放行
-                if let Some(claims) = extract_and_verify_jwt(&req) {
-                    req.extensions_mut().insert(claims);
-                    return srv.call(req);
-                }
-
-                // 插件端点：无 JWT 时放行（handler 不校验任何凭证，仅检查插件激活状态；
-                // 信任边界：服务监听 0.0.0.0，插件端点对局域网内任意设备可达）
-                if is_plugin_path(&path) {
-                    return srv.call(req);
-                }
-
-                // 其余受保护路由：无有效 JWT → 返回 401
-                let (req, _payload) = req.into_parts();
-                let response = actix_web::HttpResponse::Unauthorized().json(json!({
-                    "code": 1007,
-                    "message": "Authentication required"
-                }));
-                let srv_response = actix_web::dev::ServiceResponse::new(req, response);
-                Box::pin(std::future::ready(Ok(srv_response)))
-            })
+            // 注册顺序 = 由内到外（`Scope::wrap` 后注册者先执行），故网关在前、验签在后。
+            // 顺序语义由 server/gateway.rs 的中间件用例钉死；即便写反，网关的「已验签」
+            // 前置也会把未验签的业务请求挡在插件之外（降级宿主，由验签中间件 401）。
+            .wrap(actix_web::middleware::from_fn(crate::server::gateway::business_gateway))
+            .wrap(actix_web::middleware::from_fn(
+                crate::server::middleware::jwt_auth::jwt_gateway,
+            ))
             // 公开路由（配对/认证）— 中间件按路径放行
             .route("/auth/pairing", web::post().to(auth_controller::request_pairing))
             .route("/auth/verify", web::post().to(auth_controller::verify_pairing_code))
