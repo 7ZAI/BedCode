@@ -84,8 +84,31 @@ git push origin dev --tags
      打包范围由 `scripts/plugin-package-list.json` 控制，增删插件改该文件即可）
    - `dist/sdk-packages/{desktop,mobile}/*`（两端 SDK 发布包：npm `.tgz` + crates.io `.crate`
      + 聚合 zip + SHA256SUMS，见 `docs/commands.md`；构建/打包由 `scripts/package-sdks.mjs` 负责）
-2. 编辑 Release Body（可选）
+2. 编辑 Release Body（可选）：默认 body 由流水线自动生成（见下方「Release Body 格式」），如手改请保持其结构
 3. 点击 **Publish release** 发布
+
+### Release Body 格式（中英文切换）
+
+Release body 由 `prepare-release` 作业从 `CHANGELOG_zh.md`（中文版）与 `CHANGELOG.md`（英文版）自动提取当前版本内容合并生成，写法参照 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness/releases) 的双语 release：
+
+```markdown
+[中文](#cn-<version>) | [English](#en-<version>)
+
+（中文版内容：以首个章节标题挂锚点）
+<h3 id="cn-<version>">功能</h3>
+...
+
+---
+
+（英文版内容：以首个章节标题挂锚点）
+<h3 id="en-<version>">Features</h3>
+...
+```
+
+- 顶部一行是**中英文切换链接**（`[中文](#cn-V) | [English](#en-V)`）
+- 中文版在前、英文版在后，中间以 `---` 分隔
+- 切换锚点挂在各自语言块的**首个章节标题**上（`<h3 id="cn-V">` / `<h3 id="en-V">`，仅首个章节带锚点，其余保持普通 `###`）
+- 版本号来源：tag（`vX.Y.Z`）或 `tauri.conf.json`；切换链接与锚点中的版本号必须一致，手改 body 时不要破坏该对应关系
 
 ---
 

@@ -101,27 +101,27 @@ bedcode-desktop/src-tauri/target/release/bundle/deb/BedCode_2.1.0_amd64.deb
 
 ### 插件构建与打包
 
-插件位于 `plugins/`（ai-chatbox、auto-task、file-transfer）。构建时各插件先自行编译前端（Vite）与 Rust 后端（WASM），再由脚本把产物复制到 `src-tauri/resources/plugins/desktop/`，随桌面端安装包一起分发。
+插件位于 `plugins/`（ai-chatbox、file-transfer、session）。构建时各插件先自行编译前端（Vite）与 Rust 后端（WASM），再由脚本把产物复制到 `src-tauri/resources/plugins/desktop/`，随桌面端安装包一起分发。
 
 ```bash
 cd bedcode-desktop
 
-# 构建全部插件（3 个）
+# 构建全部插件（3 个：ai-chatbox / file-transfer / session）
 pnpm run plugins:build
 
 # 构建指定插件（--plugin 接插件 id）
 node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
-node scripts/plugin-build.js --plugin com.bedcode.auto-task
+node scripts/plugin-build.js --plugin com.bedcode.session
 node scripts/plugin-build.js --plugin com.bedcode.file-transfer
 
-# 仅构建默认插件（ai-chatbox）
+# 仅构建默认插件（com.bedcode.session）
 pnpm run plugins:build:release
 
-# 插件开发模式（watch，默认 ai-chatbox）
+# 插件开发模式（watch，默认 com.bedcode.session）
 pnpm run plugins:dev
 
 # 指定插件开发模式
-node scripts/plugin-dev.js --plugin com.bedcode.auto-task
+node scripts/plugin-dev.js --plugin com.bedcode.session
 ```
 
 **前置条件**（Rust WASM 编译目标）：
@@ -179,8 +179,8 @@ node scripts/package-plugins.mjs --no-zip
 ```
 
 - **插件列表**：默认 `scripts/plugin-package-list.json`
-  （desktop: `agent-hub`/`ai-chatbox`/`auto-task`/`file-transfer`，
-  mobile: `ai-chatbox`/`auto-task`/`file-transfer`），增删插件改该文件即可；
+  （desktop: `agent-hub`/`ai-chatbox`/`file-transfer`/`session`，
+  mobile: `ai-chatbox`/`auto-task`/`file-transfer`——移动端任务插件仍是独立实现），增删插件改该文件即可；
   也可用 `--config <file>` 换列表文件
 - **产物**：`dist/plugin-packages/<target>/<plugin-id>.zip`（一个插件一个 zip，zip 根 = 插件文件，
   与移动端 SDK `bedcode-plugin package` 分发格式一致）；`--out <dir>` 可改输出目录

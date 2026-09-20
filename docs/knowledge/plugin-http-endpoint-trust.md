@@ -32,10 +32,27 @@
 | 层 | 机制 | 状态 |
 | --- | --- | --- |
 | 激活门禁 | `is_activated(plugin_id)` 检查 | ✅ 既有 |
-| 端点注册治理 | 已声明端点（manifest `contributes.toolProviders`）精确匹配，未注册路径 **404**；未声明插件前缀内放行（auto-task 等旧插件零迁移过渡策略） | ✅ 票据 03 接线 |
+| 端点注册治理 | 已声明端点（manifest `contributes.httpEndpoints`，或既有的 `contributes.toolProviders`）精确匹配，未注册路径 **404**；未声明插件前缀内放行（未引入 `httpEndpoints` 声明面的既有插件零迁移过渡策略） | ✅ 票据 03 接线 / 票 16 补 `httpEndpoints` 声明面 |
 | 请求头白名单 | 仅透传 `content-type` / `accept` / `x-request-id`，凭据头不透传 | ✅ 票据 04 |
 | 响应 content-type | 插件可指定 `contentType`（默认 `application/json`） | ✅ 票据 04 |
 | 路径冲突 | 同一路径被两个插件占用 → 后注册者声明拒绝（warn），首注册者保留 | ✅ 票据 03 |
+| 旧前缀接管 | 请求前缀的插件**未激活**且其 id 在 `LEGACY_HTTP_PLUGIN_ALIASES` 里、接管方**已激活** → 转给接管方（`path` 段原样不变）。旧插件在位时绝不抢占（避免双写者与空库回包） | ✅ 票 16 落地 / 票 17 **判定为保留**（见下） |
+
+> **旧前缀接管的审计含义**：`/api/plugin/com.bedcode.auto-task/*` 在 auto-task
+> 未激活时由 `com.bedcode.session` 应答，两条日志字段（`plugin_id` = 属主、
+> `requested_plugin_id` = 请求前缀）据此区分。
+
+**票 17 判定：保留别名兜底，本票不切断**（auto-task 工程与产物已彻底退役，旧前缀
+仍在路由面可命中）。理由与代价：
+
+- 切断只省掉一张常量别名表 + 一个纯函数（约 30 行 + 4 条用例），换来的是移动端任务
+  面板 7 个调用面立刻 404（受影响清单 M1 从「延后」变成「当场」）。
+- 用户项目里已部署的 hook 集成副本靠 `@bedcode-template-version` bump（票 17 已做）
+  自动改指新前缀，但**重写发生在下一次会话启动注入时**——切断会让这段窗口内的状态
+  推送静默丢失（agent 任务不报错、只是不再同步），比 404 更难排查。
+- 长期维持不在本规格承诺内（spec Out of Scope：旧前缀是可牺牲的桌面侧兜底），
+  **切断时机随移动端适配专项一并定**：那时移动端 api 基址常量改一处即可，两侧同批
+  落地，兜底表与 M1 一起清零。
 
 ## 4. 明确不做（后置安全升级）
 
@@ -47,6 +64,7 @@
 
 1. 写端点先做自查认证（§2）。
 2. 优先用 `*_params` 参数绑定访问 DB，不要在端点里把用户输入拼进 SQL。
-3. 端点路径在 manifest 声明（toolProviders），声明后可获得宿主侧精确匹配
-   与冲突检测；未声明时按前缀放行（兼容期行为）。
+3. 端点路径在 manifest 声明（`contributes.httpEndpoints`；`toolProviders` 只用于
+   真正的「外部工具提供者」语义），声明后可获得宿主侧精确匹配与冲突检测；未声明时
+   按前缀放行（兼容期行为）。
 4. 响应如需非 JSON 类型（文本 / 图片），返回 `{ status, body, contentType }`。

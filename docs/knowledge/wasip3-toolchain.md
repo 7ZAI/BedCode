@@ -7,7 +7,7 @@ Date: 2026-09-19
 
 ## 1. 背景与决策
 
-认证中心插件（devices）与后续所有**桌面端**插件使用 **wasm32-wasip3（WASI 0.3）**
+认证中心插件（auth-center）与后续所有**桌面端**插件使用 **wasm32-wasip3（WASI 0.3）**
 编译路径；移动端不变（wasmtime 47 + p2 sync + wasm32-unknown-unknown，另行评估）。
 
 **为什么固定 nightly（决策）**：stable 1.98.1 无 wasm32-wasip3 预编译产物
