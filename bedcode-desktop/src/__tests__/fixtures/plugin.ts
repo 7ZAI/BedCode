@@ -42,6 +42,7 @@ export interface FixturePluginContributes {
   terminal: TerminalContribution | null
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  httpEndpoints: string[]
   configuration: PluginConfiguration | null
   lifecycle: LifecycleContribution | null
   provides: string[]
@@ -55,6 +56,7 @@ export const CONTRIBUTES_DTO_FIELDS = [
   'terminal',
   'toolProviders',
   'fileHandlers',
+  'httpEndpoints',
   'configuration',
   'lifecycle',
   'provides',
@@ -70,6 +72,7 @@ export function makePluginContributes(
     terminal: null,
     toolProviders: [],
     fileHandlers: [],
+    httpEndpoints: [],
     configuration: null,
     lifecycle: null,
     provides: [],
