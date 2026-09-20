@@ -66,11 +66,13 @@ impl FsAuthChecker {
         let path_whitelist = Vec::new();
 
         // 插件白名单：受信任的内置插件
-        // - auto-task: 自动化任务插件，操作预配置目录
+        // - session: 终端会话中心（票 17 起顶替旧 auto-task），任务域写用户项目里的
+        //   Agent 集成（.claude / .codex / .pi / .opencode 配置目录），路径段白名单
+        //   已覆盖其目标目录，插件自身第一方可信
         // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页显式配置，
         //   信任模型 = 配对 + 用户显式配置的目录白名单，插件自身第一方可信
         let mut plugin_whitelist = HashSet::new();
-        plugin_whitelist.insert("com.bedcode.auto-task".to_string());
+        plugin_whitelist.insert("com.bedcode.session".to_string());
         plugin_whitelist.insert("com.bedcode.file-transfer".to_string());
 
         Self {
@@ -583,7 +585,7 @@ mod tests {
         // 受信任插件白名单 → 任意路径放行
         assert!(
             checker
-                .is_granted("com.bedcode.auto-task", &std::env::temp_dir().to_string_lossy())
+                .is_granted("com.bedcode.session", &std::env::temp_dir().to_string_lossy())
                 .await
         );
     }

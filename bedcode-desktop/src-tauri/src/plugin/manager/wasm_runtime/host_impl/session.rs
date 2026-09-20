@@ -1,23 +1,61 @@
-//! 会话域宿主实现（会话查询、配置列表与会话创建）
+//! 会话域宿主实现（会话查询、配置 CRUD、配置列表与会话创建）
 
-use crate::plugin::permission::{PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE};
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::{PERMISSION_SESSION_CONFIG, PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use uuid::Uuid;
 
 /// 列出所有会话（权限 + SessionManager 查询），返回 JSON 数组字符串
+///
+/// 返回的 JSON 是宿主 `SessionInfo` 序列化的**超集**：每个会话对象额外带
+/// * `canonicalRenderer`（当前正统渲染端归属，无归属为 `null`）——理由同
+///   [`session_get`]（票 10 尺寸裁决读取通道，list 与 get 保持同形超集）
+/// * `annotations`（票 11 会话注解槽透传：`session-id → key → value` 不透明键值对，
+///   空槽为 `{}`）——**内核只搬运透传、绝不解释键名**（spec D5），插件据此读回
+///   自己写入的任务态注解（如 `taskStatus`），不另开读原语
+///
+/// 两字段均为增量追加，既有消费者（`parse_sessions` 等宽容解析）不受影响。
 pub(crate) fn session_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_READ, "host_session_list") {
         return Err("permission denied".to_string());
     }
     let sm = host_ctx.session_manager.clone();
     let sessions = block_on_async(sm.list_sessions());
-    serde_json::to_string(&sessions)
+    let mut values: Vec<serde_json::Value> = Vec::with_capacity(sessions.len());
+    for info in sessions {
+        let canonical = block_on_async(sm.canonical_renderer_of(&info.id));
+        let annotations = block_on_async(sm.session_annotations(&info.id));
+        let mut value =
+            serde_json::to_value(&info).map_err(|e| format!("session error: JSON serialization failed: {}", e))?;
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "canonicalRenderer".to_string(),
+                serde_json::to_value(canonical)
+                    .map_err(|e| format!("session error: JSON serialization failed: {}", e))?,
+            );
+            obj.insert(
+                "annotations".to_string(),
+                serde_json::to_value(annotations)
+                    .map_err(|e| format!("session error: JSON serialization failed: {}", e))?,
+            );
+        }
+        values.push(value);
+    }
+    serde_json::to_string(&values)
         .map(Some)
         .map_err(|e| format!("session error: JSON serialization failed: {}", e))
 }
 
 /// 获取单个会话（权限 + 查询），不存在返回 None
+///
+/// 返回的 JSON 是宿主 `SessionInfo` 的**超集**：额外带 `canonicalRenderer`
+/// （当前正统渲染端归属，无归属为 `null`，wire 形状同宿主 `RendererSource`）
+/// 与 `annotations`（票 11 会话注解槽透传，`session-id → key → value` 不透明
+/// 键值对，空槽 `{}`——内核只搬运透传、绝不解释键名）。
+/// 这是票 10「尺寸裁决规则归插件、登记事实留内核」的读取通道——插件据此判断
+/// 「无渲染端 / 单端 / 多端争用」，再自己决定是否调用 `resize` 原语执行；
+/// 不另开读原语（既有 interface 上追加函数已足够，spec D4）。字段为**增量追加**，
+/// 既有消费者（`parse_sessions` 等宽容解析）不受影响。
 pub(crate) fn session_get(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -27,12 +65,27 @@ pub(crate) fn session_get(
         return Err("permission denied".to_string());
     }
     let sm = host_ctx.session_manager.clone();
-    match block_on_async(sm.get_session(session_id)) {
-        Some(info) => serde_json::to_string(&info)
-            .map(Some)
-            .map_err(|e| format!("session error: JSON serialization failed: {}", e)),
-        None => Ok(None),
+    let Some(info) = block_on_async(sm.get_session(session_id)) else {
+        return Ok(None);
+    };
+    let canonical = block_on_async(sm.canonical_renderer_of(session_id));
+    let annotations = block_on_async(sm.session_annotations(session_id));
+    let mut value =
+        serde_json::to_value(&info).map_err(|e| format!("session error: JSON serialization failed: {}", e))?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert(
+            "canonicalRenderer".to_string(),
+            serde_json::to_value(canonical).map_err(|e| format!("session error: JSON serialization failed: {}", e))?,
+        );
+        obj.insert(
+            "annotations".to_string(),
+            serde_json::to_value(annotations)
+                .map_err(|e| format!("session error: JSON serialization failed: {}", e))?,
+        );
     }
+    serde_json::to_string(&value)
+        .map(Some)
+        .map_err(|e| format!("session error: JSON serialization failed: {}", e))
 }
 
 /// 列出会话配置精简列表（id/name/workingDir/command）
@@ -58,6 +111,308 @@ pub(crate) fn session_config_list(host_ctx: &WasmHostContext, plugin_id: &str) -
     serde_json::to_string(&simplified)
         .map(Some)
         .map_err(|e| format!("session error: JSON serialization failed: {}", e))
+}
+
+// ==================== 会话配置 CRUD（v19，权限 session:config） ====================
+
+/// 会话配置写入（v19，权限 `session:config`）：`id` 缺省/空 → 新建；命中 → 覆盖；
+/// 非空但未命中 → **显性报错**（不静默新建，见下方语义说明）
+///
+/// 入参/返回为配置 JSON（camelCase，与 `SessionConfig` 序列化形状一致）：
+/// `{id?, name, environment, wslDistro?, workingDir, command, autoStart?}`。
+///
+/// - `id` 缺省/空 → 新建（宿主生成 UUID，`create_config_full`，复用其同步事件）
+/// - `id` 命中 → 覆盖（`update_config`：先读既有值，缺省字段回落既有值，
+///   `updated_at` 刷新——与宿主配置命令面 `update_session_config` 同一语义）
+/// - `id` 非空但未命中 → 显性报错：静默新建会让「以为改的是既有配置」变成
+///   静默多出一份重复配置（拼错 id 是常见误用）
+///
+/// 校验沿用宿主配置命令面的规则（`SessionConfigManager::validate_config`：
+/// name / environment 非空）；环境取值、WSL 分支合法性与空命令兜底属业务规则，
+/// 随票 08 下沉插件，本原语只做输入仲裁。**权限门先于一切参数处理**（AGENTS §7：
+/// 插件/前端校验只作 UX，最终仲裁在 Rust 端）。
+pub(crate) fn session_config_upsert(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    config_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_SESSION_CONFIG,
+        "host_session_config_upsert",
+    ) {
+        return Err(format!("permission denied: {}", PERMISSION_SESSION_CONFIG));
+    }
+    let parsed: serde_json::Value =
+        serde_json::from_str(config_json).map_err(|e| format!("session error: invalid config JSON: {}", e))?;
+    let obj = parsed
+        .as_object()
+        .ok_or_else(|| "session error: config must be a JSON object".to_string())?;
+
+    let text = |key: &str| obj.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    let id = text("id").unwrap_or_default();
+    let auto_start = obj.get("autoStart").and_then(|v| v.as_bool());
+
+    let cm = host_ctx.config_manager.clone();
+    let written = if id.trim().is_empty() {
+        // 新建：必填字段缺失即报错（autoStart 缺省 false，与宿主命令面
+        // `create_session_config` 一致——自启由插件域驱动）
+        let name = text("name").unwrap_or_default();
+        let environment = text("environment").unwrap_or_default();
+        let working_dir = text("workingDir").unwrap_or_default();
+        let command = text("command").unwrap_or_default();
+        crate::session::SessionConfigManager::validate_config(&name, &environment, &working_dir, &command)
+            .map_err(|e| format!("session error: invalid config: {}", e))?;
+        block_on_async(cm.create_config_full(
+            name,
+            environment,
+            text("wslDistro"),
+            working_dir,
+            command,
+            auto_start.unwrap_or(false),
+        ))
+        .map_err(|e| format!("session error: create config failed: {}", e))?
+    } else {
+        // 覆盖：先读既有值（未命中即显性报错），缺省字段回落既有值——
+        // `update_config` 的 None 传参正是「保持原值」语义，故此处不做
+        // 「缺字段补空串」式的填充（那会把未声明的字段清空）
+        let existing = block_on_async(cm.get_config(&id))
+            .map_err(|e| format!("session error: {}", e))?
+            .ok_or_else(|| format!("session error: config not found: {}", id))?;
+        let name = text("name").unwrap_or_else(|| existing.name.clone());
+        let environment = text("environment").unwrap_or_else(|| existing.environment.clone());
+        let working_dir = text("workingDir").unwrap_or_else(|| existing.working_dir.clone());
+        let command = text("command").unwrap_or_else(|| existing.command.clone());
+        crate::session::SessionConfigManager::validate_config(&name, &environment, &working_dir, &command)
+            .map_err(|e| format!("session error: invalid config: {}", e))?;
+        block_on_async(cm.update_config(
+            &id,
+            text("name"),
+            text("environment"),
+            text("wslDistro"),
+            text("workingDir"),
+            text("command"),
+            auto_start,
+        ))
+        .map_err(|e| format!("session error: update config failed: {}", e))?
+    };
+
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        config_id = %written.id,
+        "host_session_config_upsert: config written"
+    );
+    serde_json::to_string(&written).map_err(|e| format!("session error: JSON serialization failed: {}", e))
+}
+
+/// 读取单条会话配置（v19，权限 `session:config`）；不存在返回 `Ok(None)`
+/// （与 `session_get` 同约定：缺记录不是错误，缺 id 才是）
+pub(crate) fn session_config_get(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    config_id: &str,
+) -> Result<Option<String>, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_SESSION_CONFIG,
+        "host_session_config_get",
+    ) {
+        return Err(format!("permission denied: {}", PERMISSION_SESSION_CONFIG));
+    }
+    if config_id.trim().is_empty() {
+        return Err("session error: empty config_id".to_string());
+    }
+    let cm = host_ctx.config_manager.clone();
+    match block_on_async(cm.get_config(config_id)).map_err(|e| format!("session error: {}", e))? {
+        Some(config) => serde_json::to_string(&config)
+            .map(Some)
+            .map_err(|e| format!("session error: JSON serialization failed: {}", e)),
+        None => Ok(None),
+    }
+}
+
+/// 删除会话配置（v19，权限 `session:config`），返回是否命中
+///
+/// 未知 id 幂等返回 `false`（不报错）——与 `trusted-device-revoke` 同口径：
+/// 「删了不存在的记录」不是错误，但要能区分「真的删掉了一条」。
+/// 命中判定先读后删；删除复用 `delete_config`（连带其 ConfigRemoved 同步事件）。
+pub(crate) fn session_config_delete(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    config_id: &str,
+) -> Result<bool, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_SESSION_CONFIG,
+        "host_session_config_delete",
+    ) {
+        return Err(format!("permission denied: {}", PERMISSION_SESSION_CONFIG));
+    }
+    if config_id.trim().is_empty() {
+        return Err("session error: empty config_id".to_string());
+    }
+    let cm = host_ctx.config_manager.clone();
+    let hit = block_on_async(cm.get_config(config_id))
+        .map_err(|e| format!("session error: {}", e))?
+        .is_some();
+    if !hit {
+        return Ok(false);
+    }
+    block_on_async(cm.delete_config(config_id)).map_err(|e| format!("session error: delete config failed: {}", e))?;
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        config_id = %config_id,
+        "host_session_config_delete: config deleted"
+    );
+    Ok(true)
+}
+
+// ==================== 会话启动规格创建（v19，权限 session:write） ====================
+
+/// `create-with-spec` 入参结构（插件算好的 launch spec，camelCase）
+///
+/// 字段语义（spec D4）：`environment` 与宿主 `ExecutionEnvironment` serde 同形
+/// （`{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
+/// `{"type":"Windows","shell":"PowerShell"}`）；`start=false` 走只创建不启动
+/// 的两阶段第一阶段。映射决策（命名唯一化 / config→launch / 何时启动）由插件完成，
+/// 宿主只做执行与输入仲裁。
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct LaunchSpec {
+    /// 会话名（插件已唯一化；宿主不二次改名）
+    pub name: String,
+    /// 命令串（原始命令语义，宿主嵌入 shell 包装）
+    pub command: String,
+    /// 追加参数（可选；非空时以空格拼接追加到 command 后，shell 再解释）
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// 工作目录
+    pub cwd: String,
+    /// 启动网格（可选；缺省或为 0 时用宿主默认网格——D4「尺寸缺省」）
+    #[serde(default)]
+    pub cols: Option<u16>,
+    #[serde(default)]
+    pub rows: Option<u16>,
+    /// 环境变量（可选）
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// 执行环境（发行版转换 / shell 分支的依据）
+    pub environment: crate::enums::ExecutionEnvironment,
+    /// 来源配置 id（可选；无配置直接启动时缺省为空串）——会话记录的 config_id 字段
+    #[serde(default)]
+    pub config_id: Option<String>,
+    /// 是否创建即启动（缺省 true；false = 两阶段第一阶段）
+    #[serde(default = "default_spec_start")]
+    pub start: bool,
+}
+
+fn default_spec_start() -> bool {
+    true
+}
+
+/// 解析 launch spec-json → `(LaunchSpec, SessionLaunchConfig)`：输入仲裁 + 映射
+/// 决策（不含任何业务语义，D4「宿主只做执行」）。
+///
+/// 分离为 pub(crate) 便于纯单测覆盖参数矩阵（非法环境取值 / 空字段 / args 追加 /
+/// 尺寸缺省），不用起 PTY、不用异步。
+pub(crate) fn resolve_launch_spec(
+    spec_json: &str,
+) -> std::result::Result<(LaunchSpec, crate::enums::SessionLaunchConfig), String> {
+    if spec_json.trim().is_empty() {
+        return Err("session error: empty launch spec".to_string());
+    }
+    let spec: LaunchSpec =
+        serde_json::from_str(spec_json).map_err(|e| format!("session error: invalid launch spec: {}", e))?;
+    // 输入仲裁（§8 红线：前端/插件校验只作 UX，最终仲裁在 Rust 端）
+    if spec.name.trim().is_empty() {
+        return Err("session error: launch spec name is empty".to_string());
+    }
+    if spec.command.trim().is_empty() {
+        return Err("session error: launch spec command is empty".to_string());
+    }
+    if spec.cwd.trim().is_empty() {
+        return Err("session error: launch spec cwd is empty".to_string());
+    }
+
+    // 构造启动配置：command + args 追加；尺寸缺省 = 默认网格（与既有
+    // DefaultConfigMapper::to_launch_config 的 120x40 基准一致，D4「尺寸缺省」）
+    let mut command = spec.command.clone();
+    if !spec.args.is_empty() {
+        command = format!("{} {}", command, spec.args.join(" "));
+    }
+    let launch_config = crate::enums::SessionLaunchConfig {
+        name: spec.name.clone(),
+        environment: spec.environment.clone(),
+        working_dir: spec.cwd.clone(),
+        command,
+        env_vars: spec.env.clone(),
+        cols: spec.cols.filter(|c| *c > 0).unwrap_or(120),
+        rows: spec.rows.filter(|r| *r > 0).unwrap_or(40),
+    };
+    Ok((spec, launch_config))
+}
+
+/// 按启动规格创建会话（v19，权限 `session:write`）→ 返回预生成的 session_id
+///
+/// 与 [`session_create`] 同一异步执行设计：wasm 调用栈内同步创建会死锁（生命周期
+/// 事件回灌同一插件实例需重新获取 wasm_plugins 写锁，该锁正被当前调用持有，tokio
+/// RwLock 不可重入；且 wasmtime Store 不可重入）。因此预生成 ID 立即返回，实际创建
+/// 在宿主上下文异步执行。创建失败无同步返回通道：插件侧以 created 超时看门狗置
+/// failed（与 session_create 同语义）。
+///
+/// 宿主只做执行：spec → `SessionLaunchConfig`（shell 包装 / 发行版转换由 PTY 层
+/// build_command 按 environment 完成；尺寸缺省用默认网格）；不做命名、不做映射决策。
+pub(crate) fn session_create_with_spec(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    spec_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_SESSION_WRITE,
+        "host_session_create_with_spec",
+    ) {
+        return Err(format!("permission denied: {}", PERMISSION_SESSION_WRITE));
+    }
+    let (spec, launch_config) = resolve_launch_spec(spec_json)?;
+
+    let sm = host_ctx.session_manager.clone();
+    let session_id = Uuid::new_v4().to_string();
+    let sid = session_id.clone();
+    let pid = plugin_id.to_string();
+    let cid = spec.config_id.unwrap_or_default();
+    let start = spec.start;
+    spawn_with_error_boundary("host_session_create_with_spec", async move {
+        match sm
+            .create_session_from_spec(launch_config, cid.clone(), None, start, Some(&sid))
+            .await
+        {
+            Ok(_) => {
+                tracing::info!(
+                    plugin_id = %pid,
+                    session_id = %sid,
+                    config_id = %cid,
+                    start,
+                    "host_session_create_with_spec: session created (async)"
+                );
+            }
+            Err(e) => {
+                // 创建失败无同步返回通道：插件侧由 creating 超时看门狗置 failed
+                tracing::error!(
+                    plugin_id = %pid,
+                    session_id = %sid,
+                    config_id = %cid,
+                    error = %e,
+                    "host_session_create_with_spec: create_session_from_spec failed (async)"
+                );
+            }
+        }
+    });
+    Ok(session_id)
 }
 
 /// 按配置创建新会话（v6，ADR 0003），返回预生成的 session_id
@@ -110,7 +465,7 @@ pub(crate) fn session_create(host_ctx: &WasmHostContext, plugin_id: &str, config
 /// 关闭（终止）会话（v7，需要 `session:write` 权限）
 ///
 /// 包一层核心已有的 `SessionManager::kill_session_with_source`，供插件
-/// （如 auto-task 定时自动任务）在执行完毕后关闭自己创建的会话。
+/// （如 com.bedcode.session 定时任务）在执行完毕后关闭自己创建的会话。
 /// 停止 PTY 并置 Stopped，会话记录保留（与用户手动关闭一致）。
 ///
 /// **异步执行**：`kill_session_with_source` 会同步分发 Stopping/Stopped
@@ -147,6 +502,255 @@ pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session
         }
     });
     Ok(())
+}
+
+// ==================== 会话动作（v19，权限 session:write，票 10） ====================
+//
+// 四项「今天插件做不到」的会话动作原语（spec D4）：重启 / 移除 / 改名 / 带请求端
+// 标识的尺寸调整。分工（spec D3）：
+//
+// - **编排与裁决在插件**：重启前存在性预检与失败可见、移除的调用顺序、尺寸的正统端
+//   判定与覆盖确认策略（`plugins/session` 的 `actions` 模块）
+// - **执行与登记在内核**：`SessionManager::restart_session` / `remove_session` /
+//   `resize_session` 执行器保留（移动端 HTTP/WS 路径与插件未激活时的降级轨仍直连
+//   它们），本层只做权限门 / 参数仲裁 / 原语形状适配
+//
+// 权限门一律先于参数处理（AGENTS §7/§8：最终仲裁在 Rust 端）。
+
+/// 重启会话（v19，权限 `session:write`）
+///
+/// 宿主执行器 = `SessionManager::restart_session`（移除旧会话 + 以同一 id 重建并
+/// 启动，正统端归属回到启动端；Creating/Created 事件顺序与迁移前逐字一致）。
+///
+/// **异步执行**：重启会同步分发 Creating/Created 生命周期事件，事件回灌同一插件
+/// 实例需重新获取 `wasm_plugins` 写锁（tokio RwLock 不可重入 + wasmtime Store
+/// 不可重入，理由同 [`session_create`]）——故立即返回「已受理」，实际重启在宿主
+/// 上下文执行；失败落 `error` 日志（插件侧以存在性预检给出同步可见的失败）。
+pub(crate) fn session_restart(host_ctx: &WasmHostContext, plugin_id: &str, session_id: &str) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_restart") {
+        return Err("permission denied".to_string());
+    }
+    if session_id.trim().is_empty() {
+        return Err("session error: empty session_id".to_string());
+    }
+    let sm = host_ctx.session_manager.clone();
+    let sid = session_id.to_string();
+    let pid = plugin_id.to_string();
+    spawn_with_error_boundary("host_session_restart", async move {
+        match sm.restart_session(&sid).await {
+            Ok(_) => {
+                tracing::info!(
+                    plugin_id = %pid,
+                    session_id = %sid,
+                    "host_session_restart: session restarted (async)"
+                );
+            }
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %pid,
+                    session_id = %sid,
+                    error = %e,
+                    "host_session_restart: restart_session failed (async)"
+                );
+            }
+        }
+    });
+    Ok(())
+}
+
+/// 移除会话（v19，权限 `session:write`）
+///
+/// 同步执行（`remove_session_with_source` 只做注册表清理 + 删除同步事件，不派发生命
+/// 周期事件 → 无插件回灌死锁），故失败对调用方**可见**：未知会话幂等成功
+/// （与宿主 `remove_session` 同语义——删了不存在的会话不是错误）。
+pub(crate) fn session_remove(host_ctx: &WasmHostContext, plugin_id: &str, session_id: &str) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_remove") {
+        return Err("permission denied".to_string());
+    }
+    if session_id.trim().is_empty() {
+        return Err("session error: empty session_id".to_string());
+    }
+    let sm = host_ctx.session_manager.clone();
+    block_on_async(sm.remove_session_with_source(session_id, None))
+        .map_err(|e| format!("session error: remove session failed: {}", e))?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        session_id = %session_id,
+        "host_session_remove: session removed"
+    );
+    Ok(())
+}
+
+/// 改名（v19，权限 `session:write`）→ 返回改名前的名字
+///
+/// 未知 `session_id` 显性 `session error: session not found: <id>`（不静默）；
+/// 空名显性报错。**不新增线协议事件**（spec D1 自守边界：线协议形状不变）——
+/// 改名结果经会话列表拉取（`list-sessions`）即可见。
+pub(crate) fn session_rename(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+    name: &str,
+) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_rename") {
+        return Err("permission denied".to_string());
+    }
+    if session_id.trim().is_empty() {
+        return Err("session error: empty session_id".to_string());
+    }
+    if name.trim().is_empty() {
+        return Err("session error: empty session name".to_string());
+    }
+    let sm = host_ctx.session_manager.clone();
+    let previous = block_on_async(sm.rename_session(session_id, name))
+        .map_err(|e| format!("session error: rename session failed: {}", e))?;
+    tracing::info!(
+        plugin_id = %plugin_id,
+        session_id = %session_id,
+        "host_session_rename: session renamed"
+    );
+    Ok(previous)
+}
+
+/// 带请求端标识的尺寸调整（v19，权限 `session:write`）
+///
+/// **只登记与执行，不做裁决**（spec D3：正统端判定与覆盖确认策略归插件）：
+/// 透传 PTY winsize + 把正统端归属置为请求方，返回
+/// `{previousCanonical, canonical}`（`canonical` 为 `RendererSource` wire 形状）。
+///
+/// 实现上复用内核执行器并**显式携带覆盖信号**（`force = true`）：内核的裁决分支
+/// 因此不参与本原语（那是插件侧职责），而执行 + 登记 + 失败语义（未知会话
+/// `NotFound`、PTY 不存在报错）与迁移前逐字一致。
+///
+/// `requester-json` = `{"kind":"desktop"}` | `{"kind":"mobile","deviceName":"..."}`
+/// （与宿主 `RendererSource` serde 同形）；非法取值 / 尺寸非正数显性报错。
+pub(crate) fn session_resize(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+    cols: u16,
+    rows: u16,
+    requester_json: &str,
+) -> Result<String, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_resize") {
+        return Err("permission denied".to_string());
+    }
+    if session_id.trim().is_empty() {
+        return Err("session error: empty session_id".to_string());
+    }
+    if cols == 0 || rows == 0 {
+        return Err("session error: invalid size (cols/rows must be > 0)".to_string());
+    }
+    let requester: crate::session::RendererSource =
+        serde_json::from_str(requester_json).map_err(|e| format!("session error: invalid requester: {}", e))?;
+
+    let sm = host_ctx.session_manager.clone();
+    let previous = block_on_async(sm.canonical_renderer_of(session_id));
+    let outcome = block_on_async(sm.resize_session(session_id, cols, rows, requester.clone(), true))
+        .map_err(|e| format!("session error: resize session failed: {}", e))?;
+    // force=true ⇒ 内核不裁决，恒为 Applied；非 Applied 只可能是内核契约变更
+    let crate::session::ResizeOutcome::Applied { canonical } = outcome else {
+        return Err("session error: resize executor returned non-applied outcome".to_string());
+    };
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        session_id = %session_id,
+        cols,
+        rows,
+        "host_session_resize: size applied and canonical renderer registered"
+    );
+    serde_json::to_string(&serde_json::json!({
+        "previousCanonical": previous,
+        "canonical": canonical,
+    }))
+    .map_err(|e| format!("session error: JSON serialization failed: {}", e))
+}
+
+// ==================== 会话注解槽与连接清单（v19，票 11） ====================
+//
+// 票 11 两原语（spec D4 / D5）：
+// - `annotate`：会话注解槽写入——内核只搬运透传、绝不解释键名（`session-id →
+//   key → value` 扁平不透明 map）。权限门（`session:write`，属主边界）+ 会话存在性
+//   （未知会话显性报错，不写孤儿键）+ 参数形状（session-id / key 非空）三件事之后
+//   原样落槽；写入按调用方插件记录归属（结构化日志，值不落日志）。expand 期与旧
+//   任务字段（`SessionInfo.task_*`）并存双写，互不干扰；contract 期（票 12）字段
+//   摘除后对外 DTO/事件构造点改从槽取值。读取面是 `list-sessions` / `get` 回执的
+//   `annotations` 字段（同槽透传）。
+// - `connections-list`：连接注册表**原始记录**清单（addr / 设备标识 / 指纹），
+//   无排序无解读（不过滤未认证、不合并配对、不加派生字段）——在线判定 / 会话数 /
+//   任务状态合并是插件侧派生视图（`plugins/session` 的 `devices` 模块）的职责。
+
+/// 会话注解槽写入（v19，权限 `session:write`，票 11）
+///
+/// 见本区块头注释；回调自 `SessionManager::annotate_session`（会话存在 → 落槽并
+/// 返回 true；不存在 → false → 宿主显性报错）。同步执行（无事件回灌，无死锁风险），
+/// 失败对调用方可见。
+pub(crate) fn session_annotate(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_SESSION_WRITE, "host_session_annotate") {
+        return Err("permission denied".to_string());
+    }
+    if session_id.trim().is_empty() {
+        return Err("session error: empty session_id".to_string());
+    }
+    if key.trim().is_empty() {
+        return Err("session error: empty annotation key".to_string());
+    }
+    let sm = host_ctx.session_manager.clone();
+    let written = block_on_async(sm.annotate_session(session_id, key, value));
+    if !written {
+        return Err(format!("session error: session not found: {}", session_id));
+    }
+    // 属主留痕：记录写入方插件与键名；值不落日志（AGENTS §8 凭据/明文红线，
+    // 值可能是任务文本等敏感内容，只记 key 与长度）
+    tracing::debug!(
+        plugin_id = %plugin_id,
+        session_id = %session_id,
+        key = %key,
+        value_len = value.len(),
+        "host_session_annotate: annotation written"
+    );
+    Ok(())
+}
+
+/// 连接注册表原始记录清单（v19，权限 `session:read`，票 11）
+///
+/// **无排序无解读**：直取内核 WS 连接注册表（`WebSocketManager::list_clients`）的
+/// 全部原始条目序列化返回，不排序（保留注册表存储序）、不过滤（含未认证连接）、
+/// 不合并（不关联配对记录）、不加派生字段。JSON 数组，元素字段名 = 注册表原始
+/// 字段（camelCase）：`{clientId, deviceName?, fingerprint?, addr, authenticated,
+/// connectedAt}`。排序 / 在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责
+/// （spec D3「派生视图（在线判定 + 会话数 + 任务状态合并）」）。
+pub(crate) fn session_connections_list(host_ctx: &WasmHostContext, plugin_id: &str) -> Result<String, String> {
+    if !super::check_permission(
+        host_ctx,
+        plugin_id,
+        PERMISSION_SESSION_READ,
+        "host_session_connections_list",
+    ) {
+        return Err("permission denied".to_string());
+    }
+    let manager = crate::server::ws::WebSocketManager::global();
+    let clients = block_on_async(manager.list_clients());
+    let values: Vec<serde_json::Value> = clients
+        .into_iter()
+        .map(|c| {
+            serde_json::json!({
+                "clientId": c.client_id,
+                "deviceName": c.device_name,
+                "fingerprint": c.fingerprint,
+                "addr": c.addr,
+                "authenticated": c.authenticated,
+                "connectedAt": c.connected_at,
+            })
+        })
+        .collect();
+    serde_json::to_string(&values).map_err(|e| format!("session error: JSON serialization failed: {}", e))
 }
 
 // ==================== Tests ====================
@@ -216,6 +820,156 @@ mod tests {
         assert_eq!(err, "session error: empty session_id");
     }
 
+    // ==================== create-with-spec（v19，票 09） ====================
+
+    /// 无 session:write 权限：launch spec 创建会话被拒绝（权限门先于一切参数处理）
+    #[test]
+    fn session_create_with_spec_permission_denied() {
+        let ctx = build_host_ctx();
+        let err = session_create_with_spec(
+            &ctx,
+            PLUGIN,
+            r#"{"name":"x","command":"bash","cwd":"/tmp","environment":{"type":"Linux"}}"#,
+        )
+        .unwrap_err();
+        assert!(err.starts_with("permission denied"), "unexpected: {err}");
+    }
+
+    /// 成功路径：合法 spec → 预生成 UUID v4 立即返回（实际创建异步执行）。
+    /// 用 `start=false` 避免真实 spawn 进程（不启动则无进程可残留），
+    /// 与 `session_create_returns_pre_generated_uuid` 同一回退语义。
+    #[tokio::test]
+    async fn session_create_with_spec_returns_pre_generated_uuid() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        let spec = r#"{
+            "name": "dev(2)",
+            "command": "bash",
+            "cwd": "/home/u",
+            "environment": {"type": "Wsl2", "distro": "Ubuntu"},
+            "configId": "cfg-1",
+            "start": false
+        }"#;
+        let sid = session_create_with_spec(&ctx, PLUGIN, spec).expect("pre-generated id");
+        assert_eq!(sid.len(), 36);
+        let uuid = Uuid::parse_str(&sid).expect("valid uuid");
+        assert_eq!(uuid.get_version_num(), 4);
+    }
+
+    /// 参数门矩阵（resolve_launch_spec 纯函数）：空 spec / 非对象 / 缺 name /
+    /// 缺 command / 缺 cwd / 非法 environment 一律显性报错（§8：最终仲裁在 Rust 端）
+    #[test]
+    fn resolve_launch_spec_param_gates_are_explicit() {
+        let valid = |name: &str, command: &str, env: &str| {
+            format!(r#"{{"name":"{name}","command":"{command}","cwd":"/tmp","environment":{env}}}"#)
+        };
+        // 空 spec
+        assert!(resolve_launch_spec("").unwrap_err().contains("empty launch spec"));
+        // 非法 JSON
+        assert!(resolve_launch_spec("not-json")
+            .unwrap_err()
+            .contains("invalid launch spec"));
+        // 缺 name（serde 必填字段缺失 → invalid launch spec）
+        assert!(
+            resolve_launch_spec(r#"{"command":"ls","cwd":"/tmp","environment":{"type":"Linux"}}"#)
+                .unwrap_err()
+                .contains("invalid launch spec")
+        );
+        // 缺 command（必填字段缺失）
+        assert!(
+            resolve_launch_spec(r#"{"name":"x","cwd":"/tmp","environment":{"type":"Linux"}}"#)
+                .unwrap_err()
+                .contains("invalid launch spec")
+        );
+        // 缺 cwd（必填字段缺失）
+        assert!(
+            resolve_launch_spec(r#"{"name":"x","command":"ls","environment":{"type":"Linux"}}"#)
+                .unwrap_err()
+                .contains("invalid launch spec")
+        );
+        // 空 name（字段存在但 trim 后为空 → 空串仲裁）
+        assert!(
+            resolve_launch_spec(r#"{"name":"  ","command":"ls","cwd":"/tmp","environment":{"type":"Linux"}}"#)
+                .unwrap_err()
+                .contains("name is empty")
+        );
+        // 非法 environment 取值（serde 拒绝未知变体）
+        assert!(resolve_launch_spec(&valid("x", "ls", r#"{"type":"MacOs"}"#))
+            .unwrap_err()
+            .contains("invalid launch spec"));
+        // 缺 environment（必填字段缺失）
+        assert!(resolve_launch_spec(r#"{"name":"x","command":"ls","cwd":"/tmp"}"#)
+            .unwrap_err()
+            .contains("invalid launch spec"));
+    }
+
+    /// 映射决策（resolve_launch_spec）：spec 字段逐一到 SessionLaunchConfig；
+    /// args 追加、尺寸缺省、env 透传、start 缺省 true、configId 透传
+    #[test]
+    fn resolve_launch_spec_maps_spec_to_launch_config() {
+        use crate::enums::{ExecutionEnvironment, WindowsShell};
+
+        // Wsl2 + distro + 尺寸合法 + env + args
+        let (spec, lc) = resolve_launch_spec(
+            r#"{
+                "name": "dev(1)",
+                "command": "powershell",
+                "args": ["-NoLogo"],
+                "cwd": "/home/u",
+                "cols": 100,
+                "rows": 30,
+                "env": {"FOO": "bar"},
+                "environment": {"type": "Wsl2", "distro": "Ubuntu-22.04"},
+                "configId": "cfg-2"
+            }"#,
+        )
+        .expect("resolve ok");
+        assert_eq!(spec.start, true, "start 缺省 true");
+        assert_eq!(spec.config_id.as_deref(), Some("cfg-2"));
+        assert_eq!(lc.name, "dev(1)");
+        assert_eq!(lc.command, "powershell -NoLogo", "args 以空格追加到 command");
+        assert_eq!(lc.working_dir, "/home/u");
+        assert_eq!(lc.cols, 100);
+        assert_eq!(lc.rows, 30);
+        assert_eq!(lc.env_vars.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(
+            lc.environment,
+            ExecutionEnvironment::Wsl2 {
+                distro: "Ubuntu-22.04".to_string()
+            }
+        );
+
+        // Linux + 尺寸缺省（0 / 缺省 → 默认网格 120x40，与 DefaultConfigMapper 基准一致）
+        let (_, lc) =
+            resolve_launch_spec(r#"{"name":"s","command":"bash","cwd":"/","environment":{"type":"Linux"},"cols":0}"#)
+                .expect("resolve ok");
+        assert_eq!(lc.environment, ExecutionEnvironment::Linux);
+        assert_eq!(lc.cols, 120, "cols=0 视为缺省");
+        assert_eq!(lc.rows, 40, "rows 缺省");
+
+        // Windows + PowerShell shell
+        let (_, lc) = resolve_launch_spec(
+            r#"{"name":"w","command":"echo hi","cwd":"D:\\work","environment":{"type":"Windows","shell":"PowerShell"}}"#,
+        )
+        .expect("resolve ok");
+        assert_eq!(
+            lc.environment,
+            ExecutionEnvironment::Windows {
+                shell: WindowsShell::PowerShell
+            }
+        );
+    }
+
+    /// start=false 透传：spec 显式不启动时映射结果携带 start=false（供两阶段编排）
+    #[test]
+    fn resolve_launch_spec_passes_through_start_false() {
+        let (spec, _) = resolve_launch_spec(
+            r#"{"name":"p","command":"bash","cwd":"/","environment":{"type":"Linux"},"start":false}"#,
+        )
+        .expect("resolve ok");
+        assert!(!spec.start, "start=false 透传");
+    }
+
     /// 空会话库：列表返回空 JSON 数组（内存 SessionManager）
     #[tokio::test]
     async fn session_list_empty_ok() {
@@ -263,5 +1017,485 @@ mod tests {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
         session_close(&ctx, PLUGIN, "no-such-session").expect("close ok");
+    }
+
+    // ==================== 会话配置 CRUD（v19，票 07 补口） ====================
+
+    /// **成功路径闭环**（票面补口：此前会话原语单测只有权限/参数门，无一条成功路径）：
+    /// 新建 → 读回 → 覆盖（只改一处，其余字段不清空）→ 删除命中 → 确认消失 → 再删幂等。
+    ///
+    /// 全程走 `build_host_ctx` 的内存库（`Database::new(":memory:")` + `init_schema`），
+    /// 不落真实数据目录、不污染真实配置表。
+    #[tokio::test]
+    async fn session_config_crud_success_closed_loop() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_CONFIG]);
+
+        // 1. 新建（无 id → 宿主生成 UUID）
+        let created: serde_json::Value = serde_json::from_str(
+            &session_config_upsert(
+                &ctx,
+                PLUGIN,
+                r#"{"name":"项目 A","environment":"linux","workingDir":"/srv/a","command":"bash"}"#,
+            )
+            .expect("upsert create"),
+        )
+        .expect("created json");
+        let id = created["id"].as_str().expect("generated id").to_string();
+        assert_eq!(id.len(), 36, "新建配置 id 必须是宿主生成的 UUID");
+        assert_eq!(created["name"], "项目 A");
+        assert_eq!(created["environment"], "linux");
+        assert_eq!(created["workingDir"], "/srv/a");
+        assert_eq!(created["command"], "bash");
+        assert_eq!(created["autoStart"], false, "autoStart 缺省 false（与宿主命令面一致）");
+        assert!(created["createdAt"].as_str().is_some(), "返回必须带 createdAt");
+
+        // 2. 读回：字段逐个相等（时间戳格式由宿主序列化决定，此处只断言存在性，
+        //    不与内存态逐字比较——DB 往返的精度表示不是本原语的契约）
+        let read_back: serde_json::Value =
+            serde_json::from_str(&session_config_get(&ctx, PLUGIN, &id).expect("get").expect("exists"))
+                .expect("get json");
+        for field in ["id", "name", "environment", "workingDir", "command", "autoStart"] {
+            assert_eq!(read_back[field], created[field], "读回字段 {field} 必须与写入一致");
+        }
+        assert!(read_back["createdAt"].as_str().is_some());
+        assert!(read_back["updatedAt"].as_str().is_some());
+
+        // 3. 覆盖（带 id）：只改 name，未声明字段回落既有值（不清空）
+        let updated: serde_json::Value = serde_json::from_str(
+            &session_config_upsert(&ctx, PLUGIN, &format!(r#"{{"id":"{id}","name":"项目 A2"}}"#))
+                .expect("upsert update"),
+        )
+        .expect("updated json");
+        assert_eq!(updated["id"], id, "覆盖不换 id");
+        assert_eq!(updated["name"], "项目 A2");
+        assert_eq!(updated["workingDir"], "/srv/a", "未声明字段必须保持原值");
+        assert_eq!(updated["command"], "bash", "未声明字段必须保持原值");
+        assert_eq!(
+            updated["createdAt"], read_back["createdAt"],
+            "createdAt 不随覆盖变化（两次都来自 DB 读取，可直接比较）"
+        );
+
+        // 4. 删除命中 → 读回消失
+        assert!(
+            session_config_delete(&ctx, PLUGIN, &id).expect("delete"),
+            "命中删除返回 true"
+        );
+        assert!(
+            session_config_get(&ctx, PLUGIN, &id)
+                .expect("get after delete")
+                .is_none(),
+            "删除后必须读不到"
+        );
+
+        // 5. 幂等：再删同一 id → false（不报错，与 trusted-device-revoke 同口径）
+        assert!(
+            !session_config_delete(&ctx, PLUGIN, &id).expect("delete twice"),
+            "未知 id 幂等 false"
+        );
+    }
+
+    /// 越权：只有 `session:read` + `session:write` 不足以读写配置（三域独立）
+    ///
+    /// 拒绝必须**零副作用**：用 `session:read` 反查配置列表仍为空。
+    #[tokio::test]
+    async fn session_config_requires_config_permission() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE]);
+
+        let err = session_config_upsert(&ctx, PLUGIN, r#"{"name":"n","environment":"linux"}"#).unwrap_err();
+        assert_eq!(err, "permission denied: session:config", "写被拒且报出权限名");
+        assert_eq!(
+            session_config_get(&ctx, PLUGIN, "any").unwrap_err(),
+            "permission denied: session:config"
+        );
+        assert_eq!(
+            session_config_delete(&ctx, PLUGIN, "any").unwrap_err(),
+            "permission denied: session:config"
+        );
+
+        let list = session_config_list(&ctx, PLUGIN).expect("list ok").expect("some value");
+        assert_eq!(list, "[]", "越权拒绝不得留下任何配置（零副作用）");
+    }
+
+    /// 参数门（权限通过之后）：非法 JSON / 非对象 / 必填为空 / 未知 id 一律显性报错
+    #[tokio::test]
+    async fn session_config_param_gates_are_explicit() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_CONFIG]);
+
+        let err = session_config_upsert(&ctx, PLUGIN, "not-json").unwrap_err();
+        assert!(err.starts_with("session error: invalid config JSON:"), "got: {err}");
+
+        let err = session_config_upsert(&ctx, PLUGIN, "[1,2,3]").unwrap_err();
+        assert_eq!(err, "session error: config must be a JSON object");
+
+        let err = session_config_upsert(&ctx, PLUGIN, r#"{"environment":"linux"}"#).unwrap_err();
+        assert!(err.contains("Name cannot be empty"), "空 name 必须显性报错, got: {err}");
+
+        let err = session_config_upsert(&ctx, PLUGIN, r#"{"name":"n"}"#).unwrap_err();
+        assert!(
+            err.contains("Environment cannot be empty"),
+            "空 environment 必须显性报错, got: {err}"
+        );
+
+        // 未知 id：不静默新建（拼错 id 会静默多出一份重复配置）
+        let err =
+            session_config_upsert(&ctx, PLUGIN, r#"{"id":"ghost","name":"n","environment":"linux"}"#).unwrap_err();
+        assert_eq!(err, "session error: config not found: ghost");
+
+        // 空 id（读/删）：显性报错而非全表操作
+        assert_eq!(
+            session_config_get(&ctx, PLUGIN, " ").unwrap_err(),
+            "session error: empty config_id"
+        );
+        assert_eq!(
+            session_config_delete(&ctx, PLUGIN, "").unwrap_err(),
+            "session error: empty config_id"
+        );
+        assert!(
+            !session_config_delete(&ctx, PLUGIN, "ghost").expect("idempotent delete"),
+            "未知 id 幂等 false"
+        );
+    }
+
+    /// 漂移锁（与 pty 域同范式）：权限五同步点必须同时认识 `session:config`
+    ///
+    /// 漏任一处（SDK 合法集合 / 打包 CLI / 前端合法集合 / 宿主能力清单 /
+    /// host_impl 权限门）都会造成「manifest 声明了却被静默丢弃」或
+    /// 「前端放行宿主拒绝」。SDK 与能力清单走行为断言，纯文本集合（TS/JS）走字面量断言。
+    #[test]
+    fn permission_sync_points_all_know_session_config() {
+        const DOMAIN: &str = PERMISSION_SESSION_CONFIG;
+
+        // ① SDK 合法集合：未列入 VALID_PERMISSIONS 的权限会在授权时被过滤掉
+        let pm = crate::plugin::permission::PermissionManager::new();
+        let granted = pm.grant_permissions("com.bedcode.sync", &[DOMAIN.to_string()]);
+        assert!(granted.contains(DOMAIN), "SDK VALID_PERMISSIONS 缺 {DOMAIN}");
+        assert!(pm.check("com.bedcode.sync", DOMAIN), "SDK 授权后 check 应为真");
+
+        // ② 打包 CLI + ③ 前端合法集合（CARGO_MANIFEST_DIR = bedcode-desktop/src-tauri）
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cli = std::fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/bin/cli.js"))
+            .expect("打包 CLI 可读");
+        let frontend =
+            std::fs::read_to_string(manifest_dir.join("../src/plugin/permission.ts")).expect("前端 permission.ts 可读");
+        let literal = format!("'{DOMAIN}'");
+        assert!(cli.contains(&literal), "打包 CLI 合法集合缺 {DOMAIN}");
+        assert!(frontend.contains(&literal), "前端合法集合缺 {DOMAIN}");
+
+        // ④ 宿主能力清单：本权限挂在既有 host-session 上（本批次无新 interface）
+        let registry = crate::plugin::manager::capability::CapabilityRegistry::new();
+        assert!(registry.is_available("host-session"), "能力清单缺 host-session");
+
+        // ⑤ host_impl 权限门：本模块三态用例即为该同步点的行为证据
+        //    （缺权限拒绝 / 越权拒绝 / 授权后成功闭环）
+    }
+
+    // ==================== 会话动作（v19，票 10） ====================
+
+    /// 播种一个「只创建不启动」会话（openpty 就绪、无进程），返回 session id
+    ///
+    /// 走 `create_session_from_spec`（票 09 执行端）：**不读配置表**——本模块的
+    /// `build_host_ctx` 里会话管理器与配置管理器各持一个内存库（会话库未建
+    /// schema），走配置表会撞 `no such table: session_configs`。会话记录形状与
+    /// 生产一致（configId 透传、Starting、无正统端归属）。
+    async fn seed_session(ctx: &WasmHostContext) -> String {
+        use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
+        let launch_config = SessionLaunchConfig {
+            name: "动作会话".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            env_vars: std::collections::HashMap::new(),
+            cols: 120,
+            rows: 40,
+        };
+        block_on_async(ctx.session_manager.create_session_from_spec(
+            launch_config,
+            "cfg-actions".to_string(),
+            None,
+            false,
+            None,
+        ))
+        .expect("seed session")
+    }
+
+    /// 播种一个**已启动**的会话（真实 bash；openpty master 就绪 → resize 才可用），
+    /// 且正统端归属仍为空——`start_existing_session` 不做归属登记，与生产
+    /// 「两阶段启动后首个 resize 才确立归属」一致（即裁决四态的起点）。
+    async fn seed_running_session(ctx: &WasmHostContext) -> String {
+        let sid = seed_session(ctx).await;
+        block_on_async(ctx.session_manager.start_existing_session(&sid, None)).expect("start seeded session");
+        sid
+    }
+
+    /// 四原语缺权限：一律**权限门先于参数处理**（非法 id 也报权限错，不泄漏参数面）
+    #[test]
+    fn session_actions_permission_denied() {
+        let ctx = build_host_ctx();
+        assert_eq!(session_restart(&ctx, PLUGIN, "s1").unwrap_err(), "permission denied");
+        assert_eq!(session_remove(&ctx, PLUGIN, "s1").unwrap_err(), "permission denied");
+        assert_eq!(
+            session_rename(&ctx, PLUGIN, "s1", "n").unwrap_err(),
+            "permission denied"
+        );
+        assert_eq!(
+            session_resize(&ctx, PLUGIN, "s1", 80, 24, r#"{"kind":"desktop"}"#).unwrap_err(),
+            "permission denied"
+        );
+    }
+
+    /// 参数门（权限通过后）：空 id / 空名 / 非正尺寸 / 非法 requester 一律显性报错，
+    /// 且**零副作用**（会话表仍为空）
+    #[tokio::test]
+    async fn session_actions_param_gates_are_explicit() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+
+        assert_eq!(
+            session_restart(&ctx, PLUGIN, "").unwrap_err(),
+            "session error: empty session_id"
+        );
+        assert_eq!(
+            session_remove(&ctx, PLUGIN, "  ").unwrap_err(),
+            "session error: empty session_id"
+        );
+        assert_eq!(
+            session_rename(&ctx, PLUGIN, "s1", " ").unwrap_err(),
+            "session error: empty session name"
+        );
+        assert_eq!(
+            session_resize(&ctx, PLUGIN, "s1", 0, 24, r#"{"kind":"desktop"}"#).unwrap_err(),
+            "session error: invalid size (cols/rows must be > 0)"
+        );
+        let err = session_resize(&ctx, PLUGIN, "s1", 80, 24, "not-json").unwrap_err();
+        assert!(err.contains("invalid requester"), "got: {err}");
+        let err = session_resize(&ctx, PLUGIN, "s1", 80, 24, r#"{"kind":"tablet"}"#).unwrap_err();
+        assert!(err.contains("invalid requester"), "got: {err}");
+
+        assert!(
+            block_on_async(ctx.session_manager.list_sessions()).is_empty(),
+            "参数门拒绝不得产生任何会话"
+        );
+    }
+
+    /// 移除：未知会话**幂等成功**（与宿主 `remove_session` 同语义——删不存在的会话
+    /// 不是错误）；真实会话移除后记录与归属一并消失
+    #[tokio::test]
+    async fn session_remove_is_idempotent_and_clears_state() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        assert!(session_remove(&ctx, PLUGIN, "ghost").is_ok(), "未知会话幂等成功");
+
+        let sid = seed_running_session(&ctx).await;
+        // 预置归属（模拟曾 resize）：移除必须连带清理正统端归属
+        let sm = ctx.session_manager.clone();
+        block_on_async(sm.resize_session(&sid, 100, 30, crate::session::RendererSource::Desktop, true))
+            .expect("claim canonical");
+        assert!(block_on_async(sm.canonical_renderer_of(&sid)).is_some());
+
+        session_remove(&ctx, PLUGIN, &sid).expect("remove ok");
+        assert!(block_on_async(sm.get_session(&sid)).is_none(), "会话记录必须消失");
+        assert!(
+            block_on_async(sm.canonical_renderer_of(&sid)).is_none(),
+            "正统端归属必须随会话清理"
+        );
+    }
+
+    /// 改名成功闭环（回执改名前的名字）+ 未知会话显性报错；改名后 `get` 可见新名
+    #[tokio::test]
+    async fn session_rename_roundtrip_and_missing_session() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE, PERMISSION_SESSION_READ]);
+        let sid = seed_session(&ctx).await;
+        let info: serde_json::Value =
+            serde_json::from_str(&session_get(&ctx, PLUGIN, &sid).expect("get").expect("exists")).expect("json");
+        let original = info["name"].as_str().expect("name").to_string();
+
+        let previous = session_rename(&ctx, PLUGIN, &sid, "改过的名字").expect("rename");
+        assert_eq!(previous, original, "回执改名前的名字");
+
+        let after: serde_json::Value =
+            serde_json::from_str(&session_get(&ctx, PLUGIN, &sid).expect("get").expect("exists")).expect("json");
+        assert_eq!(after["name"], "改过的名字");
+
+        let err = session_rename(&ctx, PLUGIN, "ghost", "x").unwrap_err();
+        assert!(err.contains("Session not found"), "未知会话显性报错, got: {err}");
+    }
+
+    /// 尺寸原语 = **登记 + 执行**（不裁决）：首次请求方即位正统、回执 previousCanonical
+    /// 为 null；他端请求也照旧执行并移交归属（裁决在插件侧，内核不拦）
+    #[tokio::test]
+    async fn session_resize_registers_and_executes_without_arbitration() {
+        use crate::session::RendererSource;
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        let sid = seed_running_session(&ctx).await;
+        let sm = ctx.session_manager.clone();
+
+        let first: serde_json::Value = serde_json::from_str(
+            &session_resize(&ctx, PLUGIN, &sid, 100, 30, r#"{"kind":"desktop"}"#).expect("resize"),
+        )
+        .expect("json");
+        assert!(first["previousCanonical"].is_null(), "首次无线索端归属");
+        assert_eq!(first["canonical"], serde_json::json!({"kind": "desktop"}));
+        assert_eq!(
+            block_on_async(sm.canonical_renderer_of(&sid)),
+            Some(RendererSource::Desktop)
+        );
+
+        // 他端（移动端）请求：原语不裁决（裁决归插件）→ 直接执行并移交归属
+        let second: serde_json::Value = serde_json::from_str(
+            &session_resize(&ctx, PLUGIN, &sid, 80, 24, r#"{"kind":"mobile","deviceName":"Pixel"}"#)
+                .expect("resize from other renderer"),
+        )
+        .expect("json");
+        assert_eq!(
+            second["previousCanonical"],
+            serde_json::json!({"kind": "desktop"}),
+            "回执前归属（供插件回执/审计）"
+        );
+        assert_eq!(
+            second["canonical"],
+            serde_json::json!({"kind": "mobile", "deviceName": "Pixel"})
+        );
+        assert_eq!(
+            block_on_async(sm.canonical_renderer_of(&sid)),
+            Some(RendererSource::Mobile {
+                device_name: "Pixel".to_string()
+            })
+        );
+
+        block_on_async(sm.remove_session(&sid)).expect("cleanup");
+    }
+
+    /// `get` 携带登记事实（票 10 新增字段）：无归属为 null，resize 后为该请求方——
+    /// 这是插件侧裁决规则的数据来源
+    #[tokio::test]
+    async fn session_get_exposes_canonical_renderer_fact() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE, PERMISSION_SESSION_READ]);
+        let sid = seed_running_session(&ctx).await;
+
+        let before: serde_json::Value =
+            serde_json::from_str(&session_get(&ctx, PLUGIN, &sid).expect("get").expect("exists")).expect("json");
+        assert!(before["canonicalRenderer"].is_null(), "无归属 → null");
+
+        session_resize(&ctx, PLUGIN, &sid, 100, 30, r#"{"kind":"desktop"}"#).expect("resize");
+        let after: serde_json::Value =
+            serde_json::from_str(&session_get(&ctx, PLUGIN, &sid).expect("get").expect("exists")).expect("json");
+        assert_eq!(after["canonicalRenderer"], serde_json::json!({"kind": "desktop"}));
+        assert_eq!(after["id"], sid, "既有字段（宽解析）不受追加字段影响");
+
+        block_on_async(ctx.session_manager.remove_session(&sid)).expect("cleanup");
+    }
+
+    /// 重启：原语立即受理（宿主异步执行），未知会话在宿主侧只记日志——
+    /// 同步可见的失败由插件侧存在性预检提供（此处只钉「受理语义 + 权限门」）
+    #[tokio::test]
+    async fn session_restart_is_accepted_and_async() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        session_restart(&ctx, PLUGIN, "no-such-session").expect("受理即返回（失败落日志）");
+    }
+
+    // ==================== 注解槽与连接清单（v19，票 11） ====================
+
+    /// annotate 权限门：缺 `session:write` → 显性拒绝，且零副作用
+    #[tokio::test]
+    async fn session_annotate_permission_gate() {
+        let ctx = build_host_ctx();
+        let err = session_annotate(&ctx, PLUGIN, "s1", "taskStatus", "x").unwrap_err();
+        assert_eq!(err, "permission denied");
+        assert!(
+            block_on_async(ctx.session_manager.session_annotations("s1")).is_empty(),
+            "越权拒绝不得留下任何注解"
+        );
+    }
+
+    /// annotate 参数门（权限通过后）：空 session-id / 空 key 显性报错；
+    /// 未知会话 → `session not found`（不写孤儿键）
+    #[tokio::test]
+    async fn session_annotate_param_and_existence_gates() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+
+        assert_eq!(
+            session_annotate(&ctx, PLUGIN, " ", "k", "v").unwrap_err(),
+            "session error: empty session_id"
+        );
+        assert_eq!(
+            session_annotate(&ctx, PLUGIN, "s1", "", "v").unwrap_err(),
+            "session error: empty annotation key"
+        );
+        let err = session_annotate(&ctx, PLUGIN, "ghost", "taskStatus", "x").unwrap_err();
+        assert_eq!(err, "session error: session not found: ghost");
+        assert!(
+            block_on_async(ctx.session_manager.session_annotations("ghost")).is_empty(),
+            "未知会话不写孤儿键"
+        );
+    }
+
+    /// annotate 成功闭环：写入 → `session_list` / `session_get` 回执的 `annotations`
+    /// 字段原样透传（不透明键值对）；contract 期（票 12）回执只有引擎记录 + 注解槽，
+    /// 引擎记录里不再有任何任务字段（对外取值走 `session_view`）
+    #[tokio::test]
+    async fn session_annotate_passthrough_via_list_and_get() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE, PERMISSION_SESSION_READ]);
+        let sid = seed_session(&ctx).await;
+
+        session_annotate(&ctx, PLUGIN, &sid, "taskStatus", "asking").expect("annotate ok");
+        session_annotate(&ctx, PLUGIN, &sid, "taskReason", "等待用户答复").expect("annotate ok");
+
+        // get 回执透传
+        let got: serde_json::Value =
+            serde_json::from_str(&session_get(&ctx, PLUGIN, &sid).expect("get").expect("exists")).expect("json");
+        assert_eq!(got["annotations"]["taskStatus"], "asking");
+        assert_eq!(got["annotations"]["taskReason"], "等待用户答复");
+        // list 回执透传
+        let list: serde_json::Value =
+            serde_json::from_str(&session_list(&ctx, PLUGIN).expect("list").expect("some")).expect("json");
+        let row = list
+            .as_array()
+            .expect("array")
+            .iter()
+            .find(|s| s["id"] == sid)
+            .expect("row");
+        assert_eq!(row["annotations"]["taskStatus"], "asking");
+        // 与 get 同形超集：canonicalRenderer 也一并透传
+        assert!(row.get("canonicalRenderer").is_some(), "list 与 get 同形超集");
+
+        // contract 期（票 12）：宿主原语回执 = 引擎记录 + `annotations`，记录里不再有
+        // 任何任务字段（对外取值走 `session_view` / 前端命令，见 commands/session.rs）
+        assert!(
+            got.get("taskStatus").is_none() && got.get("taskReason").is_none(),
+            "引擎记录不得再序列化任务字段"
+        );
+        assert!(
+            row.get("taskStatus").is_none(),
+            "list 回执与 get 同口径（任务态只在 annotations 里）"
+        );
+        let ann = block_on_async(ctx.session_manager.session_annotations(&sid));
+        assert_eq!(ann.get("taskStatus").map(String::as_str), Some("asking"));
+
+        // 清理：不 spawn 进程，仅释放 openpty slave fd
+        block_on_async(ctx.session_manager.remove_session(&sid)).expect("remove");
+    }
+
+    /// connections-list 权限门：缺 `session:read` → 显性拒绝；授权后可读，
+    /// 无头上下文注册表为空 → 合法空数组（形状恒定）
+    #[tokio::test]
+    async fn session_connections_list_permission_and_empty_shape() {
+        let ctx = build_host_ctx();
+        let err = session_connections_list(&ctx, PLUGIN).unwrap_err();
+        assert_eq!(err, "permission denied");
+
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
+        let raw = session_connections_list(&ctx, PLUGIN).expect("connections list");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("json array");
+        assert!(parsed.is_array(), "必须为 JSON 数组（无头注册表为空）");
+        assert_eq!(parsed, serde_json::json!([]));
     }
 }

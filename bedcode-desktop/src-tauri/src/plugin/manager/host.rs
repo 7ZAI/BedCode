@@ -373,6 +373,9 @@ impl PluginHost {
                 .register_tool_providers(&m.id, &m.contributes.tool_providers)
                 .await;
             self.registry
+                .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
+                .await;
+            self.registry
                 .register_file_handlers(&m.id, &m.contributes.file_handlers)
                 .await;
         }
@@ -419,6 +422,46 @@ impl PluginHost {
     /// 获取 WASM 宿主上下文引用
     pub fn wasm_host_ctx(&self) -> &Arc<WasmHostContext> {
         &self.wasm_host_ctx
+    }
+
+    /// 调用指定插件实例的能力导出（票 12 C3：宿主 server 中间件取认证中心策略）
+    ///
+    /// 直接按插件 ID 直查实例并调用（不经能力注册表路由——`auth-policy` 仅探测
+    /// 不路由，消费方是宿主中间件而非插件 import）。前置校验：实例已加载（未
+    /// 加载/未激活 → 无实例）且实例化时探测到该能力导出；任一项缺失 → 外层
+    /// Err（调用方降级）。
+    ///
+    /// 外层 Err = 实例缺失/能力缺失/传输错误（trap 等）；内层 `Results` 元组
+    /// 含 WIT `result<T, string>` 本体（guest 自报错误），两层语义分离。
+    pub async fn call_plugin_capability_export<Params, Results>(
+        &self,
+        plugin_id: &str,
+        capability: &str,
+        export_name: &str,
+        params: Params,
+    ) -> crate::Result<Results>
+    where
+        Params: wasmtime::component::ComponentNamedList + wasmtime::component::Lower + Send,
+        Results: wasmtime::component::ComponentNamedList + wasmtime::component::Lift + Send + 'static,
+    {
+        let instance = {
+            let wasm_plugins = self.wasm_plugins.read().await;
+            wasm_plugins.get(plugin_id).cloned()
+        };
+        let Some(instance) = instance else {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin '{}' not loaded (no wasm instance)",
+                plugin_id
+            )));
+        };
+        let mut guard = instance.lock().await;
+        if !guard.exported_capabilities().iter().any(|c| c == capability) {
+            return Err(crate::AppError::Plugin(format!(
+                "plugin '{}' does not export capability '{}'",
+                plugin_id, capability
+            )));
+        }
+        guard.call_capability_export::<Params, Results>(export_name, params)
     }
 
     pub fn registry(&self) -> &Arc<PluginRegistry> {
@@ -1297,6 +1340,9 @@ impl PluginHost {
             .register_tool_providers(&m.id, &m.contributes.tool_providers)
             .await;
         self.registry
+            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
+            .await;
+        self.registry
             .register_file_handlers(&m.id, &m.contributes.file_handlers)
             .await;
     }
@@ -1503,6 +1549,9 @@ impl PluginHost {
         }
         self.registry
             .register_tool_providers(&m.id, &m.contributes.tool_providers)
+            .await;
+        self.registry
+            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
             .await;
         self.registry
             .register_file_handlers(&m.id, &m.contributes.file_handlers)
@@ -3224,6 +3273,151 @@ mod tests {
             .await
             .expect("invoke storage-get");
         assert_eq!(result["value"], json!({"sys": "routed"}), "got: {}", result);
+    }
+
+    /// 票 05 闭环：server 认证策略（验签 → 会话中心 `auth-policy` 导出 → 放行/拒绝）
+    ///
+    /// 真实会话中心 wasip3 产物经宿主 async 运行时加载：验签由宿主 `JwtService`
+    /// 执行（中间件路径，密码学引擎不移动），验签后经
+    /// `auth_center::enforce_connection_policy` 取会话中心 `auth-policy` capability
+    /// 导出做策略裁决（结构 / claims / 时效 + **信任撤销检查**）。覆盖：
+    /// - 未激活（api 注册表无标记）→ 宿主策略回退（Ok，无单点）
+    /// - 激活 + 内核 `pairings` 空 → 放行（无信任锚点只凭验签，搬迁前语义）
+    /// - 内核存在活跃配对记录 → 放行
+    /// - 经插件撤销（`session.trust.revoke` 软删内核真源）→ 拒绝（原因透出）
+    /// - 未撤销的其他设备 token → 放行
+    /// - 实例消失（停用）→ 能力调用失败 → 宿主策略回退（Ok）
+    ///
+    /// 票 05 落地：策略目标自旧认证中心插件改指会话中心；信任判据自插件私有镜像
+    /// 改为内核 `pairings` 表（host-auth 记录面），测试直查内核真源断言软删。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_server_auth_policy_closed_loop() {
+        use crate::utils::auth::auth_center as bridge;
+
+        const PAIRING_ID: &str = "p-policy";
+        let session_id = bridge::SESSION_PLUGIN_ID;
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        if !wasm_path.exists() {
+            eprintln!("[skip] session wasip3 artifact not built");
+            return;
+        }
+
+        let host = setup_host().await;
+        let component = host
+            .wasm_runtime()
+            .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+            .expect("compile session artifact");
+        let plugin = host
+            .wasm_runtime()
+            .instantiate_component(&component, session_id, host.wasm_host_ctx().clone(), &[], None)
+            .expect("instantiate session");
+        if !plugin.exported_capabilities().iter().any(|c| c == "auth-policy") {
+            eprintln!("[skip] session artifact lacks auth-policy export (rebuild with current SDK)");
+            return;
+        }
+        host.wasm_plugins
+            .write()
+            .await
+            .insert(session_id.to_string(), Arc::new(Mutex::new(plugin)));
+        let mut loaded = make_plugin(session_id, PluginSource::Wasm, PluginState::Loaded);
+        loaded.manifest.rust_library = "bedcode_plugin_session".to_string();
+        // 权限经 manifest 声明在 activate 时授予（生产装配路径；手工 grant 会被
+        // activate 的 manifest 重新授权覆盖）
+        loaded.manifest.permissions = vec!["auth".to_string(), "peer".to_string()];
+        host.plugins
+            .write()
+            .await
+            .insert(session_id.to_string(), loaded);
+
+        host.wasm_host_ctx().api_registry().register(session_id, &[]);
+        host.activate_plugin(session_id, false).await.expect("activate session");
+
+        // 验签在宿主执行（中间件路径）：无效 token 连策略都到不了
+        let bad = "not-a-jwt";
+        assert!(crate::utils::auth::JwtService::new()
+            .verify_token_with_expiry(bad)
+            .is_err());
+
+        // ============ 未激活 → 宿主策略回退（无单点） ============
+        assert!(
+            !bridge::session_active(host.wasm_host_ctx()),
+            "未注册标记 api → 视为未激活"
+        );
+        let valid_token = crate::utils::auth::JwtService::new()
+            .generate_token("device-1".to_string(), Some("Pixel 9".to_string()), Some("fp-abc".to_string()))
+            .expect("issue host token");
+        crate::utils::auth::JwtService::new()
+            .verify_token_with_expiry(&valid_token)
+            .expect("host verifies signature");
+        assert!(
+            bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
+            "会话中心未激活 → 宿主策略放行"
+        );
+
+        // ============ 激活 → 策略取会话中心（锚点 = trust-list） ============
+        host.wasm_host_ctx()
+            .api_registry()
+            .register(session_id, &[bridge::SESSION_MARKER_API.to_string()]);
+        assert!(bridge::session_active(host.wasm_host_ctx()));
+
+        // 内核无配对记录 → 放行（无信任锚点，仅凭验签；搬迁前语义）
+        assert!(
+            bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
+            "内核无记录 → 放行"
+        );
+
+        // 内核写入活跃配对记录（配对完成流的宿主写入路径）→ 放行
+        {
+            let db = host.wasm_host_ctx().database().lock().await;
+            db.conn()
+                .execute(
+                    "INSERT INTO pairings (id, device_name, device_fingerprint, public_key, address, \
+                     paired_at, connect_count, is_active) VALUES (?1, 'Pixel 9', 'fp-abc', 'pk', NULL, \
+                     '2026-09-19T00:00:00Z', 1, 1)",
+                    rusqlite::params![PAIRING_ID],
+                )
+                .expect("seed kernel pairing");
+        }
+        assert!(
+            bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
+            "已配对设备 → 放行"
+        );
+
+        // 经插件撤销（软删内核真源）→ 拒绝（拒绝原因必须可读）
+        let revoked = host
+            .invoke_rust_command(session_id, "session.trust.revoke", json!({"id": PAIRING_ID}))
+            .await
+            .expect("session.trust.revoke");
+        assert_eq!(revoked["removed"], true);
+        {
+            let db = host.wasm_host_ctx().database().lock().await;
+            let active: i32 = db
+                .conn()
+                .query_row("SELECT is_active FROM pairings WHERE id = ?1", rusqlite::params![PAIRING_ID], |row| {
+                    row.get(0)
+                })
+                .expect("软删保留记录");
+            assert_eq!(active, 0, "撤销由插件写内核真源（host-auth 记录面）");
+        }
+        let deny = bridge::enforce_connection_policy(&host, &valid_token).expect_err("撤销后必须拒绝");
+        assert!(deny.contains("revoked"), "拒绝原因可读: {}", deny);
+
+        // 未撤销记录的其他设备 token → 放行（内核未命中从宽，搬迁前语义）
+        let other_token = crate::utils::auth::JwtService::new()
+            .generate_token("device-2".to_string(), Some("Phone 2".to_string()), Some("fp-xyz".to_string()))
+            .expect("issue other token");
+        assert!(
+            bridge::enforce_connection_policy(&host, &other_token).is_ok(),
+            "未撤销设备 → 放行"
+        );
+
+        // ============ 实例消失 → 能力调用失败 → 宿主策略回退 ============
+        host.wasm_plugins.write().await.remove(session_id);
+        assert!(
+            bridge::enforce_connection_policy(&host, &valid_token).is_ok(),
+            "实例缺失 → 宿主策略回退（会话中心故障不误杀全部连接）"
+        );
     }
 
     /// 依赖缺失：应用插件声明未知能力名 → 激活失败，错误信息指明能力名

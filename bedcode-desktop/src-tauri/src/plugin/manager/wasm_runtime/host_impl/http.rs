@@ -361,10 +361,7 @@ async fn execute_streaming_http(
                     buffer.push_str(&String::from_utf8_lossy(&chunk));
                     for data in extract_sse_data_lines(&mut buffer) {
                         emitted_events += 1;
-                        let _ = app_handle.emit(
-                            stream_event,
-                            serde_json::json!({ "chunk": data, "done": false }),
-                        );
+                        let _ = app_handle.emit(stream_event, serde_json::json!({ "chunk": data, "done": false }));
                     }
                 }
                 Err(e) => {

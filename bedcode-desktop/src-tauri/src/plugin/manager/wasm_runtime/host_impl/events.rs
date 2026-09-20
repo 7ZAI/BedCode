@@ -1,7 +1,7 @@
 //! 事件域宿主实现（前端事件 / 移动端同步广播 / 通知）
 
-use crate::plugin::permission::PERMISSION_BROADCAST;
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
+use crate::plugin::permission::PERMISSION_BROADCAST;
 use tauri::Emitter;
 
 /// 发送 Tauri 事件到前端

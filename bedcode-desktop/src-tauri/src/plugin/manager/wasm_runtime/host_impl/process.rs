@@ -13,8 +13,8 @@
 //! - **权限门禁**：`process:run`（高危：执行任意命令），manifest 声明即信任，
 //!   每次执行由宿主全量审计日志（命令/参数/cwd/env/结果）。
 
-use crate::plugin::permission::PERMISSION_PROCESS;
 use crate::plugin::manager::wasm_runtime::{block_on_async, kill_process_group, WasmHostContext};
+use crate::plugin::permission::PERMISSION_PROCESS;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use uuid::Uuid;
 

@@ -8,9 +8,9 @@
 //! 宿主原语（本文件现状路径）。转发结果与宿主原语共用同一返回形状
 //!（WIT `result<option<string>, string>` 载荷为 JSON 文本）。
 
-use crate::plugin::permission::PERMISSION_STORAGE;
 use crate::plugin::manager::capability;
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::PERMISSION_STORAGE;
 
 /// 获取值（权限校验 + 服务调用）
 pub(crate) fn storage_get(

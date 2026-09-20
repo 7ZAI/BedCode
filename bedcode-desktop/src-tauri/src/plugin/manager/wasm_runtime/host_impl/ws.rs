@@ -238,7 +238,13 @@ pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_jso
     let writer = crate::system::error_boundary::spawn_with_error_boundary("ws_client_writer", run_writer(write, rx));
     let reader = crate::system::error_boundary::spawn_with_error_boundary(
         "ws_client_reader",
-        run_reader(read, handle.clone(), owner.clone(), Arc::clone(&state), Arc::clone(&bus)),
+        run_reader(
+            read,
+            handle.clone(),
+            owner.clone(),
+            Arc::clone(&state),
+            Arc::clone(&bus),
+        ),
     );
 
     {
@@ -364,10 +370,7 @@ fn enqueue(plugin_id: &str, handle: &str, frame: OutboundFrame) -> Result<(), St
 // 业务语义（消息格式 / 房间 / 协议 / 重连策略）完全归插件（D1）。
 
 /// 端点域属主仲裁：未注册 / 非属主 → `Err`（跨插件不可互操作）
-fn owned_endpoint(
-    endpoint_id: &str,
-    plugin_id: &str,
-) -> Result<crate::server::ws::endpoint::EndpointEntry, String> {
+fn owned_endpoint(endpoint_id: &str, plugin_id: &str) -> Result<crate::server::ws::endpoint::EndpointEntry, String> {
     match crate::server::ws::endpoint::get(endpoint_id) {
         Some(entry) if entry.owner == plugin_id => Ok(entry),
         Some(_) => Err(NOT_ENDPOINT_OWNER.to_string()),
@@ -792,7 +795,15 @@ async fn run_reader(mut read: WsRead, handle: String, owner: String, state: Arc<
                 // 1006（异常关闭）等不可发送码不会出现在对端 Close 帧里；
                 // 无 code 的对端 Close 视为异常断开
                 close_frame = Some((code, reason.clone(), close_was_clean(code)));
-                report_close(&bus, &owner, &handle, code, &reason, close_was_clean(code), &close_reported);
+                report_close(
+                    &bus,
+                    &owner,
+                    &handle,
+                    code,
+                    &reason,
+                    close_was_clean(code),
+                    &close_reported,
+                );
                 break;
             }
             // 心跳与原始帧由 tungstenite 协议层处理，业务层不外泄
@@ -1260,12 +1271,14 @@ mod tests {
         );
         // 非法 JSON / 未定义 auth 取值 → 报错（认证策略绝不静默降级为 none）
         assert!(ws_register_endpoint(&ctx, &plugin, "not json").is_err());
-        assert!(
-            ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat","auth":"token"}"#)
-                .unwrap_err()
-                .contains("unknown auth")
+        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat","auth":"token"}"#)
+            .unwrap_err()
+            .contains("unknown auth"));
+        assert_eq!(
+            crate::server::ws::endpoint::count_by_owner(&plugin),
+            0,
+            "校验失败零副作用"
         );
-        assert_eq!(crate::server::ws::endpoint::count_by_owner(&plugin), 0, "校验失败零副作用");
 
         // 两种合法策略都能注册（缺省 = none）
         let open = register_endpoint(&ctx, &plugin, "open");
@@ -1320,11 +1333,9 @@ mod tests {
 
         let mut ids = vec![register_endpoint(&ctx, &plugin, "chat")];
         // 同插件同后缀 → 冲突拒绝（端点表按完整挂载路径判定）
-        assert!(
-            ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat"}"#)
-                .unwrap_err()
-                .contains("already registered")
-        );
+        assert!(ws_register_endpoint(&ctx, &plugin, r#"{"path":"chat"}"#)
+            .unwrap_err()
+            .contains("already registered"));
         // 同插件不同后缀可用
         ids.push(register_endpoint(&ctx, &plugin, "lobby"));
 
@@ -1334,11 +1345,9 @@ mod tests {
             i += 1;
         }
         // 超限 → Err 且无副作用
-        assert!(
-            ws_register_endpoint(&ctx, &plugin, &format!(r#"{{"path":"p{i}"}}"#))
-                .unwrap_err()
-                .contains("endpoint limit reached")
-        );
+        assert!(ws_register_endpoint(&ctx, &plugin, &format!(r#"{{"path":"p{i}"}}"#))
+            .unwrap_err()
+            .contains("endpoint limit reached"));
         assert_eq!(
             crate::server::ws::endpoint::count_by_owner(&plugin),
             limit,

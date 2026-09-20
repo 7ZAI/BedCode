@@ -3,8 +3,8 @@
 //! `terminal_send`（权限校验 + 写入）供 Component Model 绑定
 //! （`wasm_runtime::component`）调用。
 
-use crate::plugin::permission::PERMISSION_TERMINAL_INPUT;
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::PERMISSION_TERMINAL_INPUT;
 
 /// 向指定会话注入终端输入（权限校验 + 写入）
 pub(crate) fn terminal_send(

@@ -205,7 +205,7 @@ impl PluginRegistry {
     ///
     /// 路由侧用于「声明 → 精确匹配；未声明 → 前缀内放行」的过渡策略（票据 03）：
     /// 已声明端点的插件收到未注册路径请求时返回 404；未声明插件保持旧前缀 ANY 行为
-    /// （auto-task 等既有插件零迁移）。
+    /// （未声明端点的既有插件零迁移）。
     pub async fn list_http_endpoint_paths(&self, plugin_id: &str) -> Vec<String> {
         self.http_endpoints
             .read()
@@ -222,19 +222,48 @@ impl PluginRegistry {
     /// 声明面，冲突时该声明不生效，插件本身仍可激活（票据 03）。
     pub async fn register_tool_providers(&self, plugin_id: &str, providers: &[ToolProviderContribution]) {
         for provider in providers {
-            let full_path = format!(
-                "/api/plugin/{}/{}",
-                plugin_id,
-                provider.endpoint.trim_start_matches('/')
+            self.register_declared_http_endpoint(plugin_id, &provider.endpoint, "tool provider")
+                .await;
+        }
+    }
+
+    /// 注册插件 HTTP 端点清单（从 manifest contributes.httpEndpoints，票 16）
+    ///
+    /// 与 toolProviders 同一登记面（都进 `http_endpoints` 表，因此跨插件路径冲突照样
+    /// 仲裁），区别只在语义：`httpEndpoints` 是 `_http_endpoint` 的**路径白名单声明**，
+    /// 不带工具提供者的产品含义，因此不会在插件管理页被读成「工具提供者」。
+    /// 声明了清单的插件在路由侧走「精确匹配、未注册路径 404」（见
+    /// `plugin_controller::plugin_http_path_allowed`）；空清单 = 未声明，保持前缀放行。
+    pub async fn register_http_endpoints(&self, plugin_id: &str, endpoints: &[String]) {
+        for endpoint in endpoints {
+            self.register_declared_http_endpoint(plugin_id, endpoint, "http endpoint")
+                .await;
+        }
+    }
+
+    /// manifest 声明面 → 注册表条目（toolProviders 与 httpEndpoints 共用）
+    ///
+    /// 空段（缺省/纯空白）不登记：登记出来即 `/api/plugin/<id>/` 本身，会把插件前缀
+    /// 当成端点匹配上。冲突记 warn! 不致命——声明面冲突时该条不生效，插件仍可激活。
+    async fn register_declared_http_endpoint(&self, plugin_id: &str, endpoint: &str, kind: &str) {
+        let endpoint = endpoint.trim().trim_start_matches('/');
+        if endpoint.is_empty() {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                "manifest declared {} path is empty, entry skipped",
+                kind
             );
-            if let Err(e) = self.register_http_endpoint(plugin_id, &full_path).await {
-                tracing::warn!(
-                    plugin_id = %plugin_id,
-                    path = %full_path,
-                    error = %e,
-                    "tool provider endpoint registration conflict"
-                );
-            }
+            return;
+        }
+        let full_path = format!("/api/plugin/{}/{}", plugin_id, endpoint);
+        if let Err(e) = self.register_http_endpoint(plugin_id, &full_path).await {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                path = %full_path,
+                error = %e,
+                "{} registration conflict",
+                kind
+            );
         }
     }
 
@@ -654,5 +683,88 @@ mod tests {
             .find_http_endpoint("/api/plugin/p2/tools/a")
             .await
             .is_none());
+    }
+
+    /// 票 16：`contributes.httpEndpoints` 批量登记——相对段补前缀、带前导斜杠归一、
+    /// 空段跳过（登记成 `/api/plugin/<id>/` 就是把前缀本身当端点）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoints_declared_list_registered_with_prefix() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_http_endpoints(
+                "p1",
+                &[
+                    "task-status".to_string(),
+                    "/task-queue/add".to_string(),
+                    "   ".to_string(),
+                ],
+            )
+            .await;
+
+        let paths = registry.list_http_endpoint_paths("p1").await;
+        assert_eq!(paths.len(), 2, "空段不得登记, got: {:?}", paths);
+        assert!(paths.contains(&"/api/plugin/p1/task-status".to_string()));
+        assert!(paths.contains(&"/api/plugin/p1/task-queue/add".to_string()));
+        assert!(
+            !paths.contains(&"/api/plugin/p1/".to_string()),
+            "前缀本身不得成为端点, got: {:?}",
+            paths
+        );
+    }
+
+    /// 票 16：声明面与既有 toolProviders 共用同一张表 —— 同插件两路声明都在清单里
+    /// （路由侧只看 `list_http_endpoint_paths` 是否为空，不看它来自哪个声明面）
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoints_and_tool_providers_share_registry() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_tool_providers("p1", &[tool_provider("tp", "/mcp")])
+            .await;
+        registry
+            .register_http_endpoints("p1", &["task-status".to_string()])
+            .await;
+
+        let paths = registry.list_http_endpoint_paths("p1").await;
+        assert_eq!(paths.len(), 2, "两路声明合并可见, got: {:?}", paths);
+        assert!(paths.contains(&"/api/plugin/p1/mcp".to_string()));
+    }
+
+    /// 票 16：`httpEndpoints` 的相对段按插件各自命名 —— 两个插件声明同名相对段
+    /// （如都做 `task-status`）互不占用，因此跨插件不会因端点重名而失去声明。
+    /// 真正的属主冲突只可能出现在同一插件的两路声明之间，那一路由
+    /// `register_http_endpoint` 仲裁（见 `test_http_endpoint_conflict_rejected`）。
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_http_endpoints_are_namespaced_per_plugin() {
+        let registry = PluginRegistry::new();
+        registry
+            .register_http_endpoints("p1", &["shared".to_string()])
+            .await;
+        registry
+            .register_http_endpoints("p2", &["shared".to_string()])
+            .await;
+
+        assert_eq!(
+            registry
+                .find_http_endpoint("/api/plugin/p1/shared")
+                .await
+                .expect("p1 声明生效")
+                .plugin_id,
+            "p1"
+        );
+        assert_eq!(
+            registry
+                .find_http_endpoint("/api/plugin/p2/shared")
+                .await
+                .expect("同名相对段各自进自家命名空间，不被判冲突")
+                .plugin_id,
+            "p2"
+        );
+
+        // 同插件重复声明幂等（reload / 重复 activate 不产生第二条，也不清空属主）
+        registry
+            .register_http_endpoints("p1", &["shared".to_string(), "shared".to_string()])
+            .await;
+        assert_eq!(registry.list_http_endpoint_paths("p1").await.len(), 1);
+        assert_eq!(registry.list_http_endpoint_paths("p2").await.len(), 1);
     }
 }

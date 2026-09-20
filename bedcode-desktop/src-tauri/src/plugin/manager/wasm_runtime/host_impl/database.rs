@@ -2,8 +2,8 @@
 //!
 //! 含 SQL 表名前缀校验与 rusqlite 列 → JSON 转换辅助
 
-use crate::plugin::permission::PERMISSION_STORAGE;
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
+use crate::plugin::permission::PERMISSION_STORAGE;
 use crate::system::constants::plugin::{
     PLUGIN_DB_EXECUTE_BATCH_MAX_STATEMENTS, PLUGIN_DB_QUERY_MAX_BYTES, PLUGIN_DB_QUERY_MAX_ROWS,
     PLUGIN_DB_STATEMENT_TIMEOUT_SECS,
@@ -291,26 +291,19 @@ fn reject_bare_transaction_control(sql: &str) -> Result<(), String> {
     // 剥离前导注释（-- 行注释 / /* 块注释），最多剥 8 层防病态输入
     for _ in 0..8 {
         if let Some(rest) = s.strip_prefix("--") {
-            s = rest
-                .split_once('\n')
-                .map(|(_, after)| after)
-                .unwrap_or("")
-                .trim_start();
+            s = rest.split_once('\n').map(|(_, after)| after).unwrap_or("").trim_start();
         } else if let Some(rest) = s.strip_prefix("/*") {
-            s = rest
-                .split_once("*/")
-                .map(|(_, after)| after)
-                .unwrap_or("")
-                .trim_start();
+            s = rest.split_once("*/").map(|(_, after)| after).unwrap_or("").trim_start();
         } else {
             break;
         }
     }
     let first = s.split_whitespace().next().map(normalize_sql_token);
     let last = s.split_whitespace().next_back().map(normalize_sql_token);
-    let is_bare_transaction =
-        matches!(first.as_deref(), Some("begin" | "commit" | "end" | "rollback" | "savepoint" | "release"))
-            || matches!(last.as_deref(), Some("commit" | "rollback" | "end" | "release"));
+    let is_bare_transaction = matches!(
+        first.as_deref(),
+        Some("begin" | "commit" | "end" | "rollback" | "savepoint" | "release")
+    ) || matches!(last.as_deref(), Some("commit" | "rollback" | "end" | "release"));
     if is_bare_transaction {
         return Err(
             "database error: bare transaction control statements are rejected at execute level \
@@ -351,11 +344,7 @@ fn execute_batch_on_conn(conn: &rusqlite::Connection, sqls: &[String]) -> Result
 }
 
 /// 主库事务批次执行（权限 + 表名前缀 + 语句数上限 + 超时护栏）
-pub(crate) fn db_execute_batch(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    sqls_json: &str,
-) -> Result<u32, String> {
+pub(crate) fn db_execute_batch(host_ctx: &WasmHostContext, plugin_id: &str, sqls_json: &str) -> Result<u32, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_STORAGE, "host_db_execute_batch") {
         return Err("permission denied".to_string());
     }
@@ -373,9 +362,7 @@ pub(crate) fn db_execute_batch(
     let timeout = Duration::from_secs(PLUGIN_DB_STATEMENT_TIMEOUT_SECS);
     block_on_async(async {
         let db = db.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
-            execute_batch_on_conn(conn, &sqls)
-        })
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| execute_batch_on_conn(conn, &sqls))
     })
     .map_err(|e| format!("database error: {}", e))
 }
@@ -403,9 +390,7 @@ pub(crate) fn plugin_db_execute_batch(
             .await
             .map_err(|e| e.to_string())?;
         let db = db_arc.lock().await;
-        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| {
-            execute_batch_on_conn(conn, &sqls)
-        })
+        with_statement_timeout(plugin_id, db.conn(), timeout, |conn| execute_batch_on_conn(conn, &sqls))
     })
     .map_err(|e| format!("database error: {}", e))
 }
@@ -509,7 +494,12 @@ fn query_with_params_to_json(
         for (i, col_name) in column_names.iter().enumerate() {
             map.insert(col_name.clone(), column_to_json(row, i));
         }
-        push_row_capped(plugin_id, &mut rows_out, &mut total_bytes, serde_json::Value::Object(map))?;
+        push_row_capped(
+            plugin_id,
+            &mut rows_out,
+            &mut total_bytes,
+            serde_json::Value::Object(map),
+        )?;
     }
 
     Ok(serde_json::Value::Array(rows_out))
@@ -546,7 +536,12 @@ fn query_to_json(plugin_id: &str, conn: &rusqlite::Connection, sql: &str) -> Res
         .map_err(|e| format!("query_map: {}", e))?;
     while let Some(row) = rows.next() {
         let map = row.map_err(|e| format!("row: {}", e))?;
-        push_row_capped(plugin_id, &mut rows_out, &mut total_bytes, serde_json::Value::Object(map))?;
+        push_row_capped(
+            plugin_id,
+            &mut rows_out,
+            &mut total_bytes,
+            serde_json::Value::Object(map),
+        )?;
     }
 
     Ok(serde_json::Value::Array(rows_out))
@@ -797,8 +792,7 @@ mod tests {
     #[test]
     fn query_exceeding_row_limit_rejected() {
         let conn = mem_conn_with_rows(PLUGIN_DB_QUERY_MAX_ROWS + 1);
-        let err = query_to_json("p1", &conn, "SELECT x FROM t")
-            .expect_err("result over row limit must be rejected");
+        let err = query_to_json("p1", &conn, "SELECT x FROM t").expect_err("result over row limit must be rejected");
         assert!(
             err.contains("rows limit") && err.contains("LIMIT"),
             "error should state row limit and guidance, got: {}",
@@ -814,8 +808,8 @@ mod tests {
         let big = "a".repeat(PLUGIN_DB_QUERY_MAX_BYTES + 1);
         conn.execute("INSERT INTO t (x) VALUES (?1)", rusqlite::params![big.as_str()])
             .unwrap();
-        let err = query_to_json("p1", &conn, "SELECT x FROM t")
-            .expect_err("oversized row must be rejected by byte guard");
+        let err =
+            query_to_json("p1", &conn, "SELECT x FROM t").expect_err("oversized row must be rejected by byte guard");
         assert!(
             err.contains("bytes limit"),
             "error should state byte limit, got: {}",
@@ -839,14 +833,9 @@ mod tests {
             .expect("query")
             .expect("query result json");
         assert_eq!(out, "[{\"x\":0},{\"x\":1},{\"x\":2}]");
-        let out_params = db_query_params(
-            &ctx,
-            "p1",
-            "SELECT x FROM plugin_p1_t WHERE x >= ?1 ORDER BY x",
-            "[1]",
-        )
-        .expect("query params")
-        .expect("query params json");
+        let out_params = db_query_params(&ctx, "p1", "SELECT x FROM plugin_p1_t WHERE x >= ?1 ORDER BY x", "[1]")
+            .expect("query params")
+            .expect("query params json");
         assert_eq!(out_params, "[{\"x\":1},{\"x\":2}]");
     }
 
@@ -858,8 +847,12 @@ mod tests {
         use crate::plugin::manager::wasm_runtime::host_impl::tests as host_tests;
         let ctx = host_tests::build_host_ctx();
         host_tests::grant_permissions(&ctx, "p1", &[PERMISSION_STORAGE]);
-        db_execute(&ctx, "p1", "CREATE TABLE plugin_p1_batch (id INTEGER PRIMARY KEY, v TEXT)")
-            .expect("create table");
+        db_execute(
+            &ctx,
+            "p1",
+            "CREATE TABLE plugin_p1_batch (id INTEGER PRIMARY KEY, v TEXT)",
+        )
+        .expect("create table");
 
         // 成功批次：全部提交
         let affected = db_execute_batch(

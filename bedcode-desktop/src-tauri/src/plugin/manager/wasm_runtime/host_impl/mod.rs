@@ -58,10 +58,10 @@ pub(super) fn check_permission(host_ctx: &WasmHostContext, plugin_id: &str, perm
 pub(super) mod tests {
     use super::*;
     use crate::db::Database;
-    use crate::plugin::security::fs_auth::FsAuthChecker;
     use crate::plugin::bus::MessageBus;
-    use crate::plugin::permission::PermissionManager;
     use crate::plugin::manager::storage::PluginStorage;
+    use crate::plugin::permission::PermissionManager;
+    use crate::plugin::security::fs_auth::FsAuthChecker;
     use crate::session::{SessionConfigManager, SessionManager};
     use std::collections::HashMap;
     use std::path::Path;

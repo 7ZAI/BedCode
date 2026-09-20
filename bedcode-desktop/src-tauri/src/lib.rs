@@ -436,8 +436,11 @@ pub fn run() {
             app.manage(mdns_advertiser.clone());
             app.manage(plugin_host.clone());
             app.manage(plugin_host.wasm_runtime().fs_auth().clone());
+            // 旧 auto-task 私有库 → 合并插件私有库的一次性搬运（票 17）：必须跑在
+            // PluginHost::new 之后——合并插件 activate 里的库内改名与建表已完成，
+            // 目标表此刻才存在；幂等（账本已落即整体跳过），失败不阻断启动
+            crate::plugin::task_data_migration::run(&app_handle_arc);
             app.manage(system_info.clone());
-
             // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
             // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
             // 实证：已激活插件的节点不随 boot 启动，需手动开关插件才广播）——

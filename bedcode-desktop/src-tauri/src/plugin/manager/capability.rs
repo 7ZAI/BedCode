@@ -34,12 +34,22 @@ use super::wasm_runtime::{block_on_async, LoadedWasmPlugin, WasmHostContext, Was
 /// host-storage 能力（WIT `bedcode:plugin/host-storage`，装配框架首条路由能力）
 pub(crate) const CAP_HOST_STORAGE: &str = "host-storage";
 
+/// auth-policy 能力（票 12 C3，desktop 独有——认证中心能力，双端偏离同 host-auth）：
+/// 认证中心导出 `verify-device-token` 策略，宿主 server 中间件验签后取策略。
+/// 与其他路由能力不同，本能力**不进注册表路由**（消费方是宿主中间件而非
+/// 插件 import）——中间件按插件 ID 直查认证中心实例，见
+/// `PluginHost::call_plugin_capability_export`。
+pub(crate) const CAP_AUTH_POLICY: &str = "auth-policy";
+
 /// 能力接口导出函数名（`ItemName` 路径语法 `pkg:ns/iface.func`——组件的接口
 /// 导出是「接口实例」嵌套形态，平名字符串 `iface#func` 无法被
 /// `Instance::get_func` 的 str 查找命中，wasmtime 47 实证）
 const EXPORT_STORAGE_GET: &str = "bedcode:plugin/host-storage.get";
 const EXPORT_STORAGE_SET: &str = "bedcode:plugin/host-storage.set";
 const EXPORT_STORAGE_DELETE: &str = "bedcode:plugin/host-storage.delete";
+
+/// 认证策略导出函数名（`auth-policy` 接口实例形态）
+pub(crate) const EXPORT_AUTH_VERIFY_DEVICE_TOKEN: &str = "bedcode:plugin/auth-policy.verify-device-token";
 
 /// 宿主原语能力清单（20 组 host-* WIT 接口，与 Linker 接线一一对应）
 ///
@@ -77,6 +87,21 @@ const ROUTABLE_CAPABILITIES: &[(&str, &[&str])] = &[(
     CAP_HOST_STORAGE,
     &[EXPORT_STORAGE_GET, EXPORT_STORAGE_SET, EXPORT_STORAGE_DELETE],
 )];
+
+/// 探测能力表：可路由能力 + **仅探测不路由**能力（票 12 `auth-policy`）
+///
+/// `probe_exported_capabilities` 以本表探测实例导出存在性——认证中心实例化时
+/// `exported_capabilities()` 含 `auth-policy`，宿主 server 中间件据此确认策略
+/// 导出就绪（`call_capability_export` 前探测）。仅探测不路由：SDK 默认实现使
+/// 所有新 SDK 插件都导出该接口（默认拒绝），且消费方是宿主中间件而非插件
+/// import——注册为路由提供者会让任意插件接管认证策略，语义错误。
+const PROBE_CAPABILITIES: &[(&str, &[&str])] = &[
+    (
+        CAP_HOST_STORAGE,
+        &[EXPORT_STORAGE_GET, EXPORT_STORAGE_SET, EXPORT_STORAGE_DELETE],
+    ),
+    (CAP_AUTH_POLICY, &[EXPORT_AUTH_VERIFY_DEVICE_TOKEN]),
+];
 
 // ==================== 能力注册表 ====================
 
@@ -232,11 +257,12 @@ pub(crate) fn is_routable(name: &str) -> bool {
     ROUTABLE_CAPABILITIES.iter().any(|(cap, _)| *cap == name)
 }
 
-// ==================== 组件导出探测 ====================
-
 /// 探测组件实例导出的可路由能力（实例化时调用，全函数命中才算提供）
+///
+/// 以 [`PROBE_CAPABILITIES`]（可路由 + 仅探测）为准——仅探测能力（如
+/// `auth-policy`）供宿主导航消费方直查，不进入注册表路由。
 pub(crate) fn probe_exported_capabilities(instance: &Instance, store: &mut Store<WasmPluginState>) -> Vec<String> {
-    ROUTABLE_CAPABILITIES
+    PROBE_CAPABILITIES
         .iter()
         .filter(|(_, exports)| {
             exports.iter().all(|name| {
@@ -365,6 +391,9 @@ mod tests {
         // 未知/未接入路由的能力注册即拒绝（注册了也无人转发，属部署错误）。
         // （实例构造需真实 Store，门禁判定独立于实例，由 is_routable 单测覆盖）
         assert!(is_routable(CAP_HOST_STORAGE));
+        // 票 12：auth-policy 仅探测不路由（消费方是宿主中间件，注册为路由提供者
+        // 会让任意插件接管认证策略）——register 必须拒绝
+        assert!(!is_routable(CAP_AUTH_POLICY));
         assert!(!is_routable("host-bus"));
         assert!(!is_routable("nonexistent-cap"));
     }

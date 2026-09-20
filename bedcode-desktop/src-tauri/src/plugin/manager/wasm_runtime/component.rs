@@ -69,9 +69,11 @@ impl bedcode::plugin::host_storage::Host for WasmPluginState {
     }
 }
 
-// ==================== host-auth（v15 secret-store） ====================
+// ==================== host-auth（v15 secret-store + v18 认证记录面） ====================
 // 属主 = 调用方插件实例的 plugin_id（本 impl 自 store state 派生，guest 无法
-// 伪造）；权限门 + 主库持久化 + 明文不落日志全部在 host_impl/auth.rs 内实现
+// 伪造）；权限门 + 主库持久化 + 明文不落日志 + 记录面白名单全部在
+// host_impl/auth.rs 内实现。记录为宿主全局数据（无句柄表），故记录面无属主段校验
+// ——权限门 `auth` 即授权边界。
 
 impl bedcode::plugin::host_auth::Host for WasmPluginState {
     fn secret_get(&mut self, key: String) -> Result<Option<String>, String> {
@@ -88,6 +90,26 @@ impl bedcode::plugin::host_auth::Host for WasmPluginState {
 
     fn secret_keys(&mut self) -> Result<Vec<String>, String> {
         auth::auth_secret_keys(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn trusted_devices_list(&mut self) -> Result<String, String> {
+        auth::auth_trusted_devices_list(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn trusted_device_revoke(&mut self, id: String) -> Result<bool, String> {
+        auth::auth_trusted_device_revoke(&self.host_ctx, &self.plugin_id, &id)
+    }
+
+    fn connection_history_list(&mut self, device_id: String) -> Result<String, String> {
+        auth::auth_connection_history_list(&self.host_ctx, &self.plugin_id, &device_id)
+    }
+
+    fn auth_setting_set(&mut self, key: String, value: String) -> Result<(), String> {
+        auth::auth_setting_set(&self.host_ctx, &self.plugin_id, &key, &value)
+    }
+
+    fn connection_history_clear(&mut self, device_id: String) -> Result<bool, String> {
+        auth::auth_connection_history_clear(&self.host_ctx, &self.plugin_id, &device_id)
     }
 }
 
@@ -156,7 +178,7 @@ impl bedcode::plugin::host_log::Host for WasmPluginState {
 
 impl bedcode::plugin::host_config::Host for WasmPluginState {
     fn get(&mut self, key: String) -> Result<Option<String>, String> {
-        config::config_get(&self.plugin_id, &key)
+        config::config_get(&self.host_ctx, &self.plugin_id, &key)
     }
 }
 
@@ -223,6 +245,18 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         session::session_config_list(&self.host_ctx, &self.plugin_id)
     }
 
+    fn config_upsert(&mut self, config_json: String) -> Result<String, String> {
+        session::session_config_upsert(&self.host_ctx, &self.plugin_id, &config_json)
+    }
+
+    fn config_get(&mut self, config_id: String) -> Result<Option<String>, String> {
+        session::session_config_get(&self.host_ctx, &self.plugin_id, &config_id)
+    }
+
+    fn config_delete(&mut self, config_id: String) -> Result<bool, String> {
+        session::session_config_delete(&self.host_ctx, &self.plugin_id, &config_id)
+    }
+
     fn lifecycle_register(&mut self) -> Result<(), String> {
         lifecycle::session_lifecycle_register(&self.host_ctx, &self.plugin_id)
     }
@@ -235,8 +269,43 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
         session::session_create(&self.host_ctx, &self.plugin_id, &config_id)
     }
 
+    fn create_with_spec(&mut self, spec_json: String) -> Result<String, String> {
+        session::session_create_with_spec(&self.host_ctx, &self.plugin_id, &spec_json)
+    }
+
     fn close(&mut self, session_id: String) -> Result<(), String> {
         session::session_close(&self.host_ctx, &self.plugin_id, &session_id)
+    }
+
+    fn restart(&mut self, session_id: String) -> Result<(), String> {
+        session::session_restart(&self.host_ctx, &self.plugin_id, &session_id)
+    }
+
+    fn remove(&mut self, session_id: String) -> Result<(), String> {
+        session::session_remove(&self.host_ctx, &self.plugin_id, &session_id)
+    }
+
+    fn rename(&mut self, session_id: String, name: String) -> Result<String, String> {
+        session::session_rename(&self.host_ctx, &self.plugin_id, &session_id, &name)
+    }
+
+    fn resize(&mut self, session_id: String, cols: u16, rows: u16, requester_json: String) -> Result<String, String> {
+        session::session_resize(
+            &self.host_ctx,
+            &self.plugin_id,
+            &session_id,
+            cols,
+            rows,
+            &requester_json,
+        )
+    }
+
+    fn annotate(&mut self, session_id: String, key: String, value: String) -> Result<(), String> {
+        session::session_annotate(&self.host_ctx, &self.plugin_id, &session_id, &key, &value)
+    }
+
+    fn connections_list(&mut self) -> Result<String, String> {
+        session::session_connections_list(&self.host_ctx, &self.plugin_id)
     }
 }
 
@@ -455,6 +524,14 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     fn pick_folders(&mut self) -> Result<String, String> {
         platform::platform_pick_folders(&self.host_ctx)
     }
+
+    fn wsl_distros(&mut self) -> Result<String, String> {
+        platform::platform_wsl_distros()
+    }
+
+    fn local_ipv4_addresses(&mut self) -> Result<String, String> {
+        platform::platform_local_ipv4_addresses()
+    }
 }
 
 // ==================== host-websocket（ABI v14，spec `.scratch/2026-09-18-ws-base-service/`） ====================
@@ -652,27 +729,26 @@ impl LoadedWasmPlugin {
         // wasi 0.3 函数，同步 instantiate 报 async-required）；同步组件在
         // instantiate_async 下行为等价。block_on_async 驱动 fiber（既有多线程/
         // current_thread/无 runtime 三路径重入安全，见 wasm_runtime.rs）。
-        let instance = block_on_async(async {
-            component_linker.instantiate_async(&mut store, component).await
-        })
-        .map_err(|e| {
-            AppError::Plugin(format!(
-                "Failed to instantiate WASM component for plugin '{}': {}",
-                plugin_id, e
-            ))
-        })?;
+        let instance = block_on_async(async { component_linker.instantiate_async(&mut store, component).await })
+            .map_err(|e| {
+                AppError::Plugin(format!(
+                    "Failed to instantiate WASM component for plugin '{}': {}",
+                    plugin_id, e
+                ))
+            })?;
 
         Self::verify_abi(&mut store, &instance)?;
 
-        // core-plugin-manager：探测可路由能力接口导出（系统组件据此注册为
-        // 能力提供者；纯应用插件探测结果为空）
+        // core-plugin-manager：探测能力接口导出（系统组件据此注册为
+        // 能力提供者；含票 12 auth-policy 仅探测能力——所有新 SDK 插件默认
+        // 导出（拒绝实现），宿主中间件只消费认证中心实例）
         let exported_capabilities =
             crate::plugin::manager::capability::probe_exported_capabilities(&instance, &mut store);
         if !exported_capabilities.is_empty() {
             tracing::info!(
                 plugin_id = %plugin_id,
                 capabilities = ?exported_capabilities,
-                "WASM component exports routable capabilities (system component)"
+                "WASM component exports capability interface(s)"
             );
         }
 
@@ -927,9 +1003,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        match block_on_async(async {
-            hooks.call_on_terminal_input(&mut self.store, session_id, text).await
-        }) {
+        match block_on_async(async { hooks.call_on_terminal_input(&mut self.store, session_id, text).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_input", &e);
@@ -944,9 +1018,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let hooks = exports.bedcode_plugin_terminal_hooks();
-        match block_on_async(async {
-            hooks.call_on_terminal_output(&mut self.store, session_id, data).await
-        }) {
+        match block_on_async(async { hooks.call_on_terminal_output(&mut self.store, session_id, data).await }) {
             Ok(v) => Ok(v),
             Err(e) => {
                 self.log_trap("on_terminal_output", &e);
@@ -1000,7 +1072,9 @@ impl LoadedWasmPlugin {
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
         match block_on_async(async {
-            events.call_on_message(&mut self.store, topic, sender, &payload_str).await
+            events
+                .call_on_message(&mut self.store, topic, sender, &payload_str)
+                .await
         }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
@@ -1056,11 +1130,8 @@ impl LoadedWasmPlugin {
                     return Ok(false);
                 };
                 block_on_async(async {
-                    func.call_async(
-                        &mut self.store,
-                        (handle.clone(), kind.clone(), payload.clone()),
-                    )
-                    .await
+                    func.call_async(&mut self.store, (handle.clone(), kind.clone(), payload.clone()))
+                        .await
                 })
                 .map_err(|e| {
                     self.log_trap("on_ws_message", &e);
@@ -1099,9 +1170,7 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match block_on_async(async {
-            events.call_on_session_lifecycle(&mut self.store, &payload_str).await
-        }) {
+        match block_on_async(async { events.call_on_session_lifecycle(&mut self.store, &payload_str).await }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_session_lifecycle() failed: {}", msg);
@@ -1123,9 +1192,7 @@ impl LoadedWasmPlugin {
         let payload_str = serde_json::to_string(payload).unwrap_or_default();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match block_on_async(async {
-            events.call_on_input_submitted(&mut self.store, &payload_str).await
-        }) {
+        match block_on_async(async { events.call_on_input_submitted(&mut self.store, &payload_str).await }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_input_submitted() failed: {}", msg);
@@ -1146,9 +1213,7 @@ impl LoadedWasmPlugin {
         let _timer = self.track_call();
         let exports = self.exports()?;
         let events = exports.bedcode_plugin_events();
-        match block_on_async(async {
-            events.call_on_process_done(&mut self.store, payload_json).await
-        }) {
+        match block_on_async(async { events.call_on_process_done(&mut self.store, payload_json).await }) {
             Ok(Ok(())) => Ok(()),
             Ok(Err(msg)) => {
                 tracing::warn!("WASM on_process_done() failed: {}", msg);
@@ -1341,7 +1406,6 @@ mod tests {
         config.wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Environment);
         wasmtime::Engine::new(&config).expect("create test engine")
     }
-
 
     /// 构建测试用组件插件并编码为组件
     ///
