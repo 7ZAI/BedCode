@@ -173,7 +173,13 @@ let usage: UsageSeed | null = null
 
 /** 深拷贝（种子 → 工作状态 / 返回值出站，避免外部改动写回种子） */
 function clone<T>(v: T): T {
-  return JSON.parse(JSON.stringify(v))
+  // 种子为受控 JSON 数据基；structuredClone 失败（函数/类实例等不可克隆值）时
+  // 回退引用拷贝（外部只读使用，不写回）
+  try {
+    return structuredClone(v)
+  } catch {
+    return v
+  }
 }
 
 /** FNV-1a 32bit hex（guest skills.rs 同款逐文件 hash 算法） */
