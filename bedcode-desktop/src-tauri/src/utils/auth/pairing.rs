@@ -263,6 +263,24 @@ mod tests {
         assert_eq!(json["expires_in"], Value::from(49));
     }
 
+    /// 双轨对照（终端会话中心票 04）：宿主 fallback 路径（`created_instant = None`，
+    /// 走 chrono 秒差）与插件 `pairing::code::PairingCode` 的 unix 秒公式共用同一
+    /// 决策表（`elapsed > ttl` 严格大于、剩余 `elapsed >= ttl → 0`）。同一张表逐行
+    /// 出现在 `plugins/session/rust/src/pairing/code.rs`，任一侧改动即红。
+    #[test]
+    fn test_fallback_ttl_decision_table_matches_plugin() {
+        let now = Utc::now();
+        // (elapsed 秒, 是否过期, 剩余秒)
+        let cases: [(i64, bool, u64); 4] = [(10, false, 50), (59, false, 1), (60, false, 0), (120, true, 0)];
+        for (elapsed, expired, remaining) in cases {
+            let code = fallback_code(now - chrono::Duration::seconds(elapsed));
+            assert_eq!(code.is_expired(), expired, "elapsed={elapsed}s 过期判定");
+            assert_eq!(code.remaining_seconds(), remaining, "elapsed={elapsed}s 剩余秒");
+            // 未过期 → 正确码可验证；过期 → 码对也拒（先判过期）
+            assert_eq!(code.verify("123456"), !expired, "elapsed={elapsed}s 验证决策");
+        }
+    }
+
     #[test]
     fn test_deserialize_roundtrip_clears_instant() {
         let code = PairingCode::generate();
