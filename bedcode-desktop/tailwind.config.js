@@ -10,7 +10,6 @@ export default {
     // 全量同步遍历，阻塞事件循环数秒——表现为 dev server HTTP 周期性无响应
     // （2026-08-23 转圈事故根因，CPU profile 实锤 tailwind→fast-glob sync readdir 占 95%+）
     './plugins/ai-chatbox/src/**/*.{vue,js,ts,jsx,tsx}',
-    './plugins/auto-task/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/scheduler/src/**/*.{vue,js,ts,jsx,tsx}',
     // session（终端会话中心）：票 13 起贡献会话页——配置卡片网格、弹窗、遮罩

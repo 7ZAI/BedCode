@@ -35,7 +35,7 @@
  * 本地示例：
  *   node scripts/package-plugins.mjs --list
  *   node scripts/package-plugins.mjs --target desktop --plugin agent-hub
- *   node scripts/package-plugins.mjs --target all --exclude auto-task --version 2.1.0
+ *   node scripts/package-plugins.mjs --target all --exclude file-transfer --version 2.1.0
  */
 
 import { execSync } from 'node:child_process'

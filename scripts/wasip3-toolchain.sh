@@ -17,7 +17,7 @@
 #   verify   校验工具链与 target 已就绪，打印版本
 #   fixture  构建 packages/plugin-wasip3-test 并以 \0asm+0d000100 magic 校验
 #            （cdylib 直出 Component，免 componentize 步骤）
-#   health   存量 4 个桌面插件（file-transfer/ai-chatbox/agent-hub/auto-task）
+#   health   存量桌面插件（file-transfer/ai-chatbox/agent-hub/session）
 #            wasip3 target 零代码改动编译基线（产物验证仅编译链；实例化需
 #            async 宿主，见票 02，不得替换 resources/plugins/ 现行产物）
 #
@@ -107,7 +107,7 @@ cmd_health() {
     file-transfer
     ai-chatbox
     agent-hub
-    auto-task
+    session
   )
   local pass=0 fail=0
   for p in "${plugins[@]}"; do
