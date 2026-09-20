@@ -20,6 +20,23 @@ pub trait HostSession {
     /// 供插件遍历项目目录（如批量清理 hooks）
     fn session_config_list(&self) -> Result<Option<serde_json::Value>, HostError>;
 
+    /// 新建或按 id 覆盖一条会话配置（v19，需要 `session:config` 权限）
+    ///
+    /// 入参形如 `{id?, name, environment, wslDistro?, workingDir, command, autoStart?}`：
+    /// `id` 缺省/空 → 新建（宿主生成 id）；`id` 命中 → 覆盖；`id` 非空但未命中 →
+    /// 显性报错（不静默新建）。返回写入后的完整配置（camelCase，含时间戳）。
+    fn session_config_upsert(
+        &self,
+        config: &serde_json::Value,
+    ) -> Result<serde_json::Value, HostError>;
+
+    /// 读取单条会话配置（v19，需要 `session:config` 权限）；不存在返回 `Ok(None)`
+    fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError>;
+
+    /// 删除会话配置（v19，需要 `session:config` 权限），返回是否命中
+    /// （未知 id 幂等 `false`，不报错）
+    fn session_config_delete(&self, config_id: &str) -> Result<bool, HostError>;
+
     /// 注册会话生命周期监听器
     ///
     /// 调用后宿主为该插件创建监听器并注册到 SessionManager，
@@ -42,10 +59,67 @@ pub trait HostSession {
     /// 插件可据此感知新会话就绪（定时自动任务的会话就绪信号，见 ADR 0003）
     fn session_create(&self, config_id: &str) -> Result<String, HostError>;
 
+    /// 按启动规格创建会话（v19，需要 `session:write` 权限）
+    ///
+    /// `spec` 为插件算好的 launch spec-json（camelCase）：
+    /// `{name, command, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`。
+    /// 宿主只做执行：shell 包装 / 发行版转换 / 尺寸缺省 / ID 预生成；映射决策
+    /// （命名唯一化 / config→launch / 是否立即启动）在插件侧完成。返回预生成的
+    /// session_id（实际创建异步执行，`Created` 生命周期事件携带同一 id）。
+    fn session_create_with_spec(&self, spec: &serde_json::Value) -> Result<String, HostError>;
+
     /// 关闭（终止）会话（v7，需要 `session:write` 权限）
     ///
     /// 停止会话 PTY 并置为 Stopped，会话记录保留（与用户手动关闭一致）；
     /// 宿主分发 `Stopping` / `Stopped` 生命周期事件。用于插件在任务
     /// 执行完毕后清理自己创建的会话（如定时自动任务会话）
     fn session_close(&self, session_id: &str) -> Result<(), HostError>;
+
+    /// 重启会话（v19，需要 `session:write` 权限）
+    ///
+    /// 宿主执行器保留：移除旧会话 + 以同一 `session_id` 重建并启动，正统端归属
+    /// 回到启动端。**异步执行**（Creating/Created 事件回灌需锁释放，理由同
+    /// `session_create`），故返回即代表「重启已受理」；失败在宿主侧落 `error` 日志。
+    fn session_restart(&self, session_id: &str) -> Result<(), HostError>;
+
+    /// 移除会话（v19，需要 `session:write` 权限）
+    ///
+    /// 输出管理器 / PTY 注册表 / 会话记录 / 正统端归属一并清理，进程随句柄释放
+    /// 终止；宿主广播会话删除同步事件。未知 id 幂等成功。
+    fn session_remove(&self, session_id: &str) -> Result<(), HostError>;
+
+    /// 改名（v19，需要 `session:write` 权限）→ 返回改名前的名字
+    ///
+    /// 未知 `session_id` / 空名显性报错。不新增线协议事件（会话列表拉取即可见）。
+    fn session_rename(&self, session_id: &str, name: &str) -> Result<String, HostError>;
+
+    /// 带请求端标识的尺寸调整（v19，需要 `session:write` 权限）
+    ///
+    /// **只登记与执行**（透传 PTY winsize + 把正统端归属置为请求方），不做裁决
+    /// ——正统端判定与覆盖确认策略归插件。`requester` 形如
+    /// `{"kind":"desktop"}` / `{"kind":"mobile","deviceName":"Pixel"}`。
+    /// 返回 `{previousCanonical, canonical}`。
+    fn session_resize(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        requester: &serde_json::Value,
+    ) -> Result<serde_json::Value, HostError>;
+
+    /// 会话注解槽写入（v19，需要 `session:write` 权限，票 11）
+    ///
+    /// 向会话的不透明注解槽写一条 `key → value`：内核只搬运透传、绝不解释键名
+    /// （spec D5——旧任务字段的 expand 期并行写入面）。宿主校验权限门 + 会话
+    /// 存在性（未知会话显性报错）+ 参数形状；写入按调用方插件记录归属。
+    /// 读取面是 [`HostSession::session_list`] / [`HostSession::session_get`]
+    /// 回执的 `annotations` 字段（同槽透传）。
+    fn session_annotate(&self, session_id: &str, key: &str, value: &str) -> Result<(), HostError>;
+
+    /// 连接注册表原始记录清单（v19，需要 `session:read` 权限，票 11）
+    ///
+    /// 无排序无解读：返回内核 WS 连接注册表全部原始条目（`{clientId, deviceName?,
+    /// fingerprint?, addr, authenticated, connectedAt}`），不过滤不合并不加派生字段
+    /// ——在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责（spec D3/D4）。
+    fn connections_list(&self) -> Result<serde_json::Value, HostError>;
 }

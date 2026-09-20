@@ -153,7 +153,37 @@ export async function activate(context: PluginContext): Promise<void> {
 // ==================== Rust 扫描 ====================
 
 describe('Rust 扫描', () => {
-  it('invoke_command 匹配臂 → commands（过滤 _ 前缀内置分支，保留旧 title）', () => {
+  /**
+   * 分派表夹具：`_http_endpoint` 是内置控制分支、`_ =>` 是未知命令兜底，
+   * 两者都不该进 commands 声明
+   */
+  const RUST_DISPATCH = `impl WasmPlugin for TestPlugin {
+  fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
+    match name {
+      "_http_endpoint" => Ok(serde_json::Value::Null),
+      "test.hello" => Ok(serde_json::Value::Null),
+      "test.world" => Ok(serde_json::Value::Null),
+      _ => Err(anyhow::anyhow!("unknown")),
+    }
+  }
+}`
+  it('manifest 未声明 commands → 从 invoke_command 匹配臂自动填充（过滤 _ 前缀内置分支）', () => {
+    scaffoldPlugin({
+      'plugin.json': BASE_MANIFEST,
+      'rust/src/lib.rs': RUST_DISPATCH,
+    })
+    generateManifest(cwd)
+    const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
+    const ids = manifest.contributes.commands.map((c: any) => c.id)
+    // 内置控制分支（_http_endpoint）不是插件命令；未知命令的 `_ =>` 臂也不在内
+    expect(ids).toEqual(['test.hello', 'test.world'])
+    expect(manifest.contributes.commands[0].title).toBe('test.hello')
+  })
+
+  // 票 17 口径（用户裁决 ①）：已声明的 commands 段是**人工裁剪过的用户可见命令面**，
+  // 生成器不再按匹配臂覆写。`com.bedcode.session` 实测 28 声明 / 50 臂——全量覆写会把
+  // 宿主桥接与闭环调试臂 advertise 成产品命令（`invoke_command` 的臂 ≠ 可调面）
+  it('manifest 已声明 commands → 人工裁剪优先，只报告差集不写回', () => {
     scaffoldPlugin({
       'plugin.json': JSON.stringify(
         {
@@ -165,25 +195,38 @@ describe('Rust 扫描', () => {
         null,
         2,
       ),
-      'rust/src/lib.rs': `impl WasmPlugin for TestPlugin {
-  fn invoke_command(name: &str, args: serde_json::Value) -> anyhow::Result<serde_json::Value> {
-    match name {
-      "_http_endpoint" => Ok(serde_json::Value::Null),
-      "test.hello" => Ok(serde_json::Value::Null),
-      "test.world" => Ok(serde_json::Value::Null),
-      _ => Err(anyhow::anyhow!("unknown")),
-    }
-  }
-}`,
+      'rust/src/lib.rs': RUST_DISPATCH,
     })
-    generateManifest(cwd)
+    const { report } = generateManifest(cwd)
     const manifest = JSON.parse(require('node:fs').readFileSync(join(cwd, 'plugin.json'), 'utf-8'))
-    const ids = manifest.contributes.commands.map((c: any) => c.id)
-    expect(ids).toEqual(['test.hello', 'test.world'])
-    // 旧 title 保留
-    expect(manifest.contributes.commands[0].title).toBe('Say Hello')
+    // 声明面原样保留：既不追加 test.world，也不覆写 title
+    expect(manifest.contributes.commands).toEqual([{ id: 'test.hello', title: 'Say Hello' }])
+    expect(
+      report.some((line) => line.includes('test.world') && line.includes('不自动写入')),
+      `差集未进报告: ${report.join(' | ')}`,
+    ).toBe(true)
   })
 
+  it('声明了但源码没有对应臂 → 报告为真漂移（必须人工修）', () => {
+    scaffoldPlugin({
+      'plugin.json': JSON.stringify(
+        {
+          ...JSON.parse(BASE_MANIFEST),
+          contributes: {
+            commands: [{ id: 'test.ghost', title: 'Ghost' }],
+          },
+        },
+        null,
+        2,
+      ),
+      'rust/src/lib.rs': RUST_DISPATCH,
+    })
+    const { report } = generateManifest(cwd)
+    expect(
+      report.some((line) => line.includes('声明但源码无对应臂') && line.includes('test.ghost')),
+      `漂移未进报告: ${report.join(' | ')}`,
+    ).toBe(true)
+  })
   it('on_terminal_input/output → terminal handlers + 权限', () => {
     scaffoldPlugin({
       'plugin.json': BASE_MANIFEST,

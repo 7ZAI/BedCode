@@ -7,8 +7,8 @@
  *
  * 与移动端 manifest-gen 的区别（桌面端扩展点/权限体系不同）：
  * - 扩展点：sidebar/toolbox/statusbar（views）+ fileHandlers（无 navTab/settings/toolbarItems）
- * - 权限：ui:sidebar / ui:toolbox / ui:statusbar / ui:pageToolbar / ui:input / ui:fileHandler
- *   / terminal:observe / session:write / broadcast 等桌面端权限
+ * - 权限：ui:sidebar / ui:toolbox / ui:statusbar / ui:pageToolbar / ui:settings / ui:input
+ *   / ui:fileHandler / terminal:observe / session:write / broadcast 等桌面端权限
  *
  * 合并策略（保守，避免误删导致运行时拒绝）：
  * - permissions：派生结果与手工声明取并集
@@ -31,6 +31,7 @@ const REGISTER_PERMISSIONS = {
   registerStatusBarItem: 'ui:statusbar',
   registerTitleBarItem: 'ui:statusbar',
   registerPageToolbarItem: 'ui:pageToolbar',
+  registerSettingsSection: 'ui:settings',
   registerInputExtension: 'ui:input',
   registerTerminalToolbarItem: 'ui:input',
   registerFileHandler: 'ui:fileHandler',
@@ -54,6 +55,8 @@ const RUST_PERMISSION_RULES = [
   { re: /\b(storage_get|storage_set|storage_delete|db_execute|db_query)\b/, perm: 'storage' },
   { re: /\bterminal_send\b/, perm: 'terminal:input' },
   { re: /\b(session_list|session_get)\b/, perm: 'session:read' },
+  // 会话配置读写（host-session v19）：new plugin 侧经 SDK HostSession 调用即推导该位
+  { re: /\bsession_config_(upsert|get|delete)\b/, perm: 'session:config' },
   { re: /\bhttp_fetch\b/, perm: 'network:http' },
   { re: /\b(fs_read|fs_copy)\b/, perm: 'fs:read' },
   { re: /\bfs_write\b/, perm: 'fs:write' },
@@ -239,7 +242,14 @@ export function generateManifest(cwd, { check = false } = {}) {
   if (!existsSync(manifestPath)) {
     throw new Error(`plugin.json 不存在: ${manifestPath}`)
   }
-  const manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  let manifest
+  try {
+    manifest = JSON.parse(readFileSync(manifestPath, 'utf-8'))
+  } catch (e) {
+    // JSON.parse 对非法 JSON 抛 SyntaxError：包一层带路径的可读错误，
+    // 便于定位是哪个插件的 manifest 损坏（坏 JSON 是配置错误，应显性失败）
+    throw new Error(`plugin.json 非法 JSON，请检查文件: ${manifestPath} (${e.message})`)
+  }
   const report = []
   const permissions = new Set(manifest.permissions || [])
   const contributes = { ...(manifest.contributes || {}) }
@@ -258,7 +268,16 @@ export function generateManifest(cwd, { check = false } = {}) {
     ...sidebarPanels.map((s) => mergeEntry(s, undefined, { type: 'sidebar' })),
     ...toolboxPages.map((s) => mergeEntry(s, undefined, { type: 'toolbox' })),
     ...statusBarItems.map((s) => mergeEntry(s, undefined, { type: 'statusbar' })),
-  ]
+  ].filter((v) => {
+    // id 解析不出来 = 注册描述符用了变量/表达式（如 `id: panel.id` 的循环注册），
+    // 扫描器无法静态求值。此时**保留 manifest 里的既有声明**：写回一条缺 id 的条目
+    // 会让宿主 `get_manifest()` 反序列化直接失败（插件加载不了），比漏一条声明严重得多
+    if (v && v.id) return true
+    console.warn(
+      `[manifest-gen] 跳过一个无法静态解析 id 的 ${v?.type ?? 'view'} 注册（保留 plugin.json 既有声明）`,
+    )
+    return false
+  })
 
   if (scannedViews.length > 0) {
     const old = indexById(contributes.views)
@@ -307,11 +326,29 @@ export function generateManifest(cwd, { check = false } = {}) {
 
     const commandIds = extractRustCommands(rustSource)
     if (commandIds.length > 0) {
-      const old = indexById(contributes.commands)
-      contributes.commands = commandIds.map((id) =>
-        mergeEntry({ id }, old.get(id), { id, title: id }),
-      )
-      report.push(`contributes.commands ← ${commandIds.length} 个`)
+      // 票 17 口径（用户裁决 ①）：manifest 已声明 commands 即视为**人工裁剪过的
+      // 用户可见命令面**，生成器不再按匹配臂覆写——`invoke_command` 的臂含宿主
+      // 桥接与闭环调试入口（com.bedcode.session 实测 28 声明 / 50 臂），全量覆写
+      // 等于把内部接缝 advertise 成产品命令。改为只报告差集：未声明的臂（提示，
+      // 由人判断是否属于用户可见面）、声明了但源码没有的（真漂移，必须修）。
+      // 未声明 commands 的插件沿用自动填充（prefactor 前形态）。
+      if (contributes.commands && contributes.commands.length > 0) {
+        const declared = new Set(contributes.commands.map((c) => c.id))
+        const missing = commandIds.filter((id) => !declared.has(id))
+        const stale = [...declared].filter((id) => !commandIds.includes(id))
+        if (missing.length > 0) {
+          report.push(
+            `contributes.commands 未声明的 invoke_command 臂 ${missing.length} 个（人工裁剪面，不自动写入）: ${missing.join(', ')}`,
+          )
+        }
+        if (stale.length > 0) {
+          report.push(`contributes.commands 声明但源码无对应臂 ${stale.join(', ')}`)
+        }
+      } else {
+        // 本分支下 manifest 未声明任何命令，无旧条目可继承
+        contributes.commands = commandIds.map((id) => ({ id, title: id }))
+        report.push(`contributes.commands ← ${commandIds.length} 个`)
+      }
     }
 
     const handlers = extractTerminalHandlers(rustSource)

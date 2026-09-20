@@ -144,6 +144,17 @@ pub trait WasmPlugin: Send + Sync + 'static {
     fn on_process_done(_event: &ProcessDoneEvent) -> anyhow::Result<()> {
         Ok(())
     }
+
+    /// 认证策略导出实现（v17，可选，默认**拒绝**）
+    ///
+    /// `auth-policy` 能力导出（`verify-device-token`，票 12 C3）：宿主 server
+    /// 中间件验签后取认证中心策略（claims 结构/时效 + 信任撤销检查）。默认拒绝
+    /// ——非认证中心插件不提供策略（宿主动态探测命中但不消费）；认证中心
+    /// （`com.bedcode.session`）覆盖为真实策略。入参 = 宿主已验签通过的 JWT
+    /// token；返回 claims JSON（放行）或错误（拒绝原因）。
+    fn verify_device_token_policy(_token: &str) -> Result<String, String> {
+        Err("auth-policy not provided by this plugin".to_string())
+    }
 }
 
 #[cfg(test)]
@@ -497,6 +508,16 @@ macro_rules! wasm_entry {
             }
         }
 
+        // ==================== auth-policy（v17，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_auth_policy::exports::bedcode::plugin::auth_policy::Guest for $plugin_type {
+            /// 认证策略裁决：宿主已验签 → 取插件策略（默认拒绝——非认证中心
+            /// 插件不提供策略；宿主动态探测命中但不消费）
+            fn verify_device_token(token: String) -> Result<String, String> {
+                <$plugin_type as $crate::wasm::WasmPlugin>::verify_device_token_policy(&token)
+            }
+        }
+
         // ==================== 组件导出 ====================
 
         // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 5 组接口的 cabi 导出）。
@@ -507,5 +528,7 @@ macro_rules! wasm_entry {
         $crate::wasm_binary::export!($plugin_type);
         // v14：events-ws 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
         $crate::wasm_ws::export!($plugin_type);
+        // v17：auth-policy 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_auth_policy::export!($plugin_type);
     };
 }

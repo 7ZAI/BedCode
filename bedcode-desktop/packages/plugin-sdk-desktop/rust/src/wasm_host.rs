@@ -20,9 +20,9 @@ use crate::host::{
     HostSession, HostStorage, HostTerminal, HostWebsocket, PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
-    host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs,
-    host_http, host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process,
-    host_pty, host_session, host_storage, host_terminal, host_timer, host_websocket,
+    host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
+    host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
+    host_session, host_storage, host_terminal, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -71,7 +71,7 @@ mod tests {
     }
 }
 
-// ==================== HostAuth（v15 secret-store） ====================
+// ==================== HostAuth（v15 secret-store + v18 认证记录面） ====================
 
 impl HostAuth for WasmHost {
     fn auth_secret_get(&self, key: &str) -> Result<Option<String>, HostError> {
@@ -88,6 +88,34 @@ impl HostAuth for WasmHost {
 
     fn auth_secret_keys(&self) -> Result<Vec<String>, HostError> {
         host_auth::secret_keys().map_err(|e| host_err("auth_secret_keys", e))
+    }
+
+    fn auth_trusted_devices_list(&self) -> Result<serde_json::Value, HostError> {
+        host_auth::trusted_devices_list()
+            .map_err(|e| host_err("auth_trusted_devices_list", e))
+            .and_then(|s| parse_json("auth_trusted_devices_list", s))
+    }
+
+    fn auth_trusted_device_revoke(&self, id: &str) -> Result<bool, HostError> {
+        host_auth::trusted_device_revoke(id).map_err(|e| host_err("auth_trusted_device_revoke", e))
+    }
+
+    fn auth_connection_history_list(
+        &self,
+        device_id: &str,
+    ) -> Result<serde_json::Value, HostError> {
+        host_auth::connection_history_list(device_id)
+            .map_err(|e| host_err("auth_connection_history_list", e))
+            .and_then(|s| parse_json("auth_connection_history_list", s))
+    }
+
+    fn auth_setting_set(&self, key: &str, value: &str) -> Result<(), HostError> {
+        host_auth::auth_setting_set(key, value).map_err(|e| host_err("auth_setting_set", e))
+    }
+
+    fn auth_connection_history_clear(&self, device_id: &str) -> Result<bool, HostError> {
+        host_auth::connection_history_clear(device_id)
+            .map_err(|e| host_err("auth_connection_history_clear", e))
     }
 }
 
@@ -150,7 +178,9 @@ impl HostDatabase for WasmHost {
     }
 
     fn db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
-        let sqls_str = serde_json::to_string(sqls).map_err(|e| HostError::custom(-1, format!("db_execute_batch: serialize failed: {}", e)))?;
+        let sqls_str = serde_json::to_string(sqls).map_err(|e| {
+            HostError::custom(-1, format!("db_execute_batch: serialize failed: {}", e))
+        })?;
         host_database::execute_batch(&sqls_str)
             .map(|n| n as i32)
             .map_err(|e| host_err("db_execute_batch", e))
@@ -198,7 +228,10 @@ impl HostPluginDatabase for WasmHost {
 
     fn plugin_db_execute_batch(&self, sqls: &[String]) -> Result<i32, HostError> {
         let sqls_str = serde_json::to_string(sqls).map_err(|e| {
-            HostError::custom(-1, format!("plugin_db_execute_batch: serialize failed: {}", e))
+            HostError::custom(
+                -1,
+                format!("plugin_db_execute_batch: serialize failed: {}", e),
+            )
         })?;
         host_plugin_database::execute_batch(&sqls_str)
             .map(|n| n as i32)
@@ -238,6 +271,26 @@ impl HostSession for WasmHost {
         }
     }
 
+    fn session_config_upsert(
+        &self,
+        config: &serde_json::Value,
+    ) -> Result<serde_json::Value, HostError> {
+        let written = host_session::config_upsert(&config.to_string())
+            .map_err(|e| host_err("session_config_upsert", e))?;
+        parse_json("session_config_upsert", written)
+    }
+
+    fn session_config_get(&self, config_id: &str) -> Result<Option<serde_json::Value>, HostError> {
+        match host_session::config_get(config_id).map_err(|e| host_err("session_config_get", e))? {
+            Some(s) => parse_json("session_config_get", s).map(Some),
+            None => Ok(None),
+        }
+    }
+
+    fn session_config_delete(&self, config_id: &str) -> Result<bool, HostError> {
+        host_session::config_delete(config_id).map_err(|e| host_err("session_config_delete", e))
+    }
+
     fn session_lifecycle_register(&self) -> Result<(), HostError> {
         host_session::lifecycle_register().map_err(|e| host_err("session_lifecycle_register", e))
     }
@@ -250,8 +303,46 @@ impl HostSession for WasmHost {
         host_session::create(config_id).map_err(|e| host_err("session_create", e))
     }
 
+    fn session_create_with_spec(&self, spec: &serde_json::Value) -> Result<String, HostError> {
+        host_session::create_with_spec(&spec.to_string())
+            .map_err(|e| host_err("session_create_with_spec", e))
+    }
+
     fn session_close(&self, session_id: &str) -> Result<(), HostError> {
         host_session::close(session_id).map_err(|e| host_err("session_close", e))
+    }
+
+    fn session_restart(&self, session_id: &str) -> Result<(), HostError> {
+        host_session::restart(session_id).map_err(|e| host_err("session_restart", e))
+    }
+
+    fn session_remove(&self, session_id: &str) -> Result<(), HostError> {
+        host_session::remove(session_id).map_err(|e| host_err("session_remove", e))
+    }
+
+    fn session_rename(&self, session_id: &str, name: &str) -> Result<String, HostError> {
+        host_session::rename(session_id, name).map_err(|e| host_err("session_rename", e))
+    }
+
+    fn session_resize(
+        &self,
+        session_id: &str,
+        cols: u16,
+        rows: u16,
+        requester: &serde_json::Value,
+    ) -> Result<serde_json::Value, HostError> {
+        let written = host_session::resize(session_id, cols, rows, &requester.to_string())
+            .map_err(|e| host_err("session_resize", e))?;
+        parse_json("session_resize", written)
+    }
+
+    fn session_annotate(&self, session_id: &str, key: &str, value: &str) -> Result<(), HostError> {
+        host_session::annotate(session_id, key, value).map_err(|e| host_err("session_annotate", e))
+    }
+
+    fn connections_list(&self) -> Result<serde_json::Value, HostError> {
+        let raw = host_session::connections_list().map_err(|e| host_err("connections_list", e))?;
+        parse_json("connections_list", raw)
     }
 }
 
@@ -439,11 +530,15 @@ impl HostPeer for WasmHost {
     }
 
     fn peer_respond_consent(&self, request_id: &str, accepted: bool) -> Result<bool, HostError> {
-        host_peer::respond_consent(request_id, accepted).map_err(|e| host_err("peer_respond_consent", e))
+        host_peer::respond_consent(request_id, accepted)
+            .map_err(|e| host_err("peer_respond_consent", e))
     }
 
     fn peer_list_trusted(&self) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_trusted", host_peer::list_trusted().map_err(|e| host_err("peer_list_trusted", e))?)
+        peer_json(
+            "peer_list_trusted",
+            host_peer::list_trusted().map_err(|e| host_err("peer_list_trusted", e))?,
+        )
     }
 
     fn peer_revoke_trusted(&self, node_id: &str) -> Result<bool, HostError> {
@@ -455,8 +550,10 @@ impl HostPeer for WasmHost {
         session: &str,
         paths: &[serde_json::Value],
     ) -> Result<String, HostError> {
-        let paths_json =
-            to_json_string("peer_send_files", &serde_json::to_value(paths).unwrap_or_default())?;
+        let paths_json = to_json_string(
+            "peer_send_files",
+            &serde_json::to_value(paths).unwrap_or_default(),
+        )?;
         // 返回值已收窄为传输句柄字符串（Phase 4），不再包一层 JSON
         host_peer::send_files(session, &paths_json).map_err(|e| host_err("peer_send_files", e))
     }
@@ -484,13 +581,19 @@ impl HostPeer for WasmHost {
     }
 
     fn peer_set_shared_roots(&self, dirs: &[serde_json::Value]) -> Result<(), HostError> {
-        let dirs_json =
-            to_json_string("peer_set_shared_roots", &serde_json::to_value(dirs).unwrap_or_default())?;
+        let dirs_json = to_json_string(
+            "peer_set_shared_roots",
+            &serde_json::to_value(dirs).unwrap_or_default(),
+        )?;
         host_peer::set_shared_roots(&dirs_json).map_err(|e| host_err("peer_set_shared_roots", e))
     }
 
     fn peer_list_shared_roots(&self, session: &str) -> Result<serde_json::Value, HostError> {
-        peer_json("peer_list_shared_roots", host_peer::list_shared_roots(session).map_err(|e| host_err("peer_list_shared_roots", e))?)
+        peer_json(
+            "peer_list_shared_roots",
+            host_peer::list_shared_roots(session)
+                .map_err(|e| host_err("peer_list_shared_roots", e))?,
+        )
     }
 
     fn peer_browse_directory(
@@ -512,9 +615,12 @@ impl HostPeer for WasmHost {
         dir_id: &str,
         files: &[serde_json::Value],
     ) -> Result<u32, HostError> {
-        let files_json =
-            to_json_string("peer_pull_files", &serde_json::to_value(files).unwrap_or_default())?;
-        host_peer::pull_files(session, dir_id, &files_json).map_err(|e| host_err("peer_pull_files", e))
+        let files_json = to_json_string(
+            "peer_pull_files",
+            &serde_json::to_value(files).unwrap_or_default(),
+        )?;
+        host_peer::pull_files(session, dir_id, &files_json)
+            .map_err(|e| host_err("peer_pull_files", e))
     }
 
     fn peer_set_download_dir(&self, path: &str) -> Result<(), HostError> {
@@ -570,10 +676,16 @@ impl HostWebsocket for WasmHost {
     }
 
     fn ws_register_endpoint(&self, config_json: &str) -> Result<String, HostError> {
-        host_websocket::register_endpoint(config_json).map_err(|e| host_err("ws_register_endpoint", e))
+        host_websocket::register_endpoint(config_json)
+            .map_err(|e| host_err("ws_register_endpoint", e))
     }
 
-    fn ws_send_text_to_client(&self, endpoint_id: &str, client_id: &str, text: &str) -> Result<(), HostError> {
+    fn ws_send_text_to_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        text: &str,
+    ) -> Result<(), HostError> {
         host_websocket::send_text_to_client(endpoint_id, client_id, text)
             .map_err(|e| host_err("ws_send_text_to_client", e))
     }
@@ -589,20 +701,28 @@ impl HostWebsocket for WasmHost {
     }
 
     fn ws_broadcast_text(&self, endpoint_id: &str, text: &str) -> Result<u32, HostError> {
-        host_websocket::broadcast_text(endpoint_id, text).map_err(|e| host_err("ws_broadcast_text", e))
+        host_websocket::broadcast_text(endpoint_id, text)
+            .map_err(|e| host_err("ws_broadcast_text", e))
     }
 
     fn ws_broadcast_binary(&self, endpoint_id: &str, payload: &[u8]) -> Result<u32, HostError> {
-        host_websocket::broadcast_binary(endpoint_id, payload).map_err(|e| host_err("ws_broadcast_binary", e))
+        host_websocket::broadcast_binary(endpoint_id, payload)
+            .map_err(|e| host_err("ws_broadcast_binary", e))
     }
 
-    fn ws_close_client(&self, endpoint_id: &str, client_id: &str, close_json: &str) -> Result<bool, HostError> {
+    fn ws_close_client(
+        &self,
+        endpoint_id: &str,
+        client_id: &str,
+        close_json: &str,
+    ) -> Result<bool, HostError> {
         host_websocket::close_client(endpoint_id, client_id, close_json)
             .map_err(|e| host_err("ws_close_client", e))
     }
 
     fn ws_unregister_endpoint(&self, endpoint_id: &str) -> Result<bool, HostError> {
-        host_websocket::unregister_endpoint(endpoint_id).map_err(|e| host_err("ws_unregister_endpoint", e))
+        host_websocket::unregister_endpoint(endpoint_id)
+            .map_err(|e| host_err("ws_unregister_endpoint", e))
     }
 
     fn ws_list_clients(&self, endpoint_id: &str) -> Result<String, HostError> {
@@ -633,7 +753,12 @@ impl HostPty for WasmHost {
         host_pty::kill(pty_id).map_err(|e| host_err("pty_kill", e))
     }
 
-    fn pty_ring_fetch(&self, pty_id: &str, from_offset: u64, max_bytes: u32) -> Result<Option<PtyRingFetch>, HostError> {
+    fn pty_ring_fetch(
+        &self,
+        pty_id: &str,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<PtyRingFetch>, HostError> {
         host_pty::ring_fetch(pty_id, from_offset, max_bytes)
             .map(|result| {
                 result.map(|r| PtyRingFetch {
@@ -658,8 +783,12 @@ impl HostPlatform for WasmHost {
             "platform_pick_files",
             host_platform::pick_files().map_err(|e| host_err("platform_pick_files", e))?,
         )?;
-        serde_json::from_value(v)
-            .map_err(|e| HostError::custom(-1, format!("platform_pick_files: invalid JSON from host: {e}")))
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_pick_files: invalid JSON from host: {e}"),
+            )
+        })
     }
 
     fn platform_pick_folder(&self) -> Result<String, HostError> {
@@ -672,7 +801,37 @@ impl HostPlatform for WasmHost {
             host_platform::pick_folders().map_err(|e| host_err("platform_pick_folders", e))?,
         )?;
         serde_json::from_value(v).map_err(|e| {
-            HostError::custom(-1, format!("platform_pick_folders: invalid JSON from host: {e}"))
+            HostError::custom(
+                -1,
+                format!("platform_pick_folders: invalid JSON from host: {e}"),
+            )
+        })
+    }
+
+    fn platform_wsl_distros(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_wsl_distros",
+            host_platform::wsl_distros().map_err(|e| host_err("platform_wsl_distros", e))?,
+        )?;
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_wsl_distros: invalid JSON from host: {e}"),
+            )
+        })
+    }
+
+    fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError> {
+        let v = peer_json(
+            "platform_local_ipv4_addresses",
+            host_platform::local_ipv4_addresses()
+                .map_err(|e| host_err("platform_local_ipv4_addresses", e))?,
+        )?;
+        serde_json::from_value(v).map_err(|e| {
+            HostError::custom(
+                -1,
+                format!("platform_local_ipv4_addresses: invalid JSON from host: {e}"),
+            )
         })
     }
 }

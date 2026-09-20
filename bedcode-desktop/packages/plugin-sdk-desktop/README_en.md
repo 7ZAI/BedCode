@@ -92,7 +92,7 @@ The `PluginContext` received by `activate(context)` is the **single channel** th
 | `context.commands` | Register / execute commands | granted by default |
 | `context.terminal` | Send input to sessions, subscribe to output | `terminal:input` / `terminal:output` / `terminal:observe` |
 | `context.session` | Session list, status change subscription | `session:read` / `session:write` |
-| `context.ui` | Sidebar / toolbox / statusbar / input extensions / terminal toolbar / titlebar / file viewer | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:input` / `ui:fileHandler` |
+| `context.ui` | Sidebar / toolbox / statusbar / settings section / input extensions / terminal toolbar / titlebar / file viewer | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
 | `context.events` | Host event subscription & publishing (`on` / `emit`) | subscribe: default; publish: `broadcast` |
 | `context.storage` | Key-value storage (`get` / `set` / `delete` / `flush`) | `storage` (default) |
 | `context.http` | Register HTTP endpoints (e.g. for Agent CLI hooks) | `network:http` |
@@ -106,7 +106,9 @@ All `register*` / `on*` calls return a `Disposable`; the host collects them auto
 
 ## Shared Modules (avoid bundling vue etc.)
 
-During plugin builds, `vue` / `vue-i18n` / `pinia` are externalized and read at runtime from the host global `window.__BEDCODE_SHARED__`. **Always access them via the SDK proxy functions — never touch the global directly**:
+During plugin builds, `vue` / `vue-i18n` / `pinia` / `vue-sonner` are externalized and read at runtime from the host global `window.__BEDCODE_SHARED__`. **Always access them via the SDK proxy functions — never touch the global directly**:
+
+> Inclusion rule: modules holding process-wide singleton state — a second instance desynchronizes state. `vue-sonner` is the host toast queue itself, so a plugin's `import { toast } from 'vue-sonner'` is rewritten to the host instance (identical queue and look; a bundled second copy would render nothing).
 
 ```ts
 import { getVue, getI18n, getPinia, getRouter, getPluginContext } from '@binblink/bedcode-plugin-sdk-desktop'

@@ -170,6 +170,19 @@ interface host-platform {
     pick-folder: func() -> result<string, string>;
     /// 系统多目录选择器 → string[] JSON（用户取消为空数组）
     pick-folders: func() -> result<string, string>;
+    /// WSL 发行版名枚举（v19 函数级追加，票 13）：`string[]` JSON，顺序即
+    /// `wsl --list --verbose` 输出顺序。宿主无 WSL（非 Windows / 未安装 /
+    /// 命令不可用）时**显性报错**而非空数组——空数组会被消费方读成「装了 0 个
+    /// 发行版」，与「本机没有 WSL」不可区分（会话配置表单据此决定渲染下拉还是
+    /// 「未检测到 WSL」提示）。平台事实、无业务语义（ADR 0022 裁剪线）。
+    wsl-distros: func() -> result<string, string>;
+    /// 本机可访问的 IPv4 地址枚举（v19 函数级追加，票 14）：`string[]` JSON，
+    /// 已排除回环与链路本地（与会话中心设备页原宿主命令 `get_local_ip_addresses`
+    /// 同口径），顺序即网卡枚举顺序。设备页据此渲染「移动端可访问的 IP」下拉。
+    /// 平台事实、无业务语义（ADR 0022 裁剪线）；地址为空（无可用网卡）时返回
+    /// **空数组**（与 `wsl-distros` 的显性报错口径不同：此处「没有可用地址」是
+    /// 合法状态，前端渲染「未找到可用的 IPv4 地址」提示）。
+    local-ipv4-addresses: func() -> result<string, string>;
 }
 
 /// 插件互调（ADR-0017）：发布 JSON-RPC 请求 + 同步等待回复
@@ -323,6 +336,32 @@ interface host-session {
     list-sessions: func() -> result<option<string>, string>;
     get: func(session-id: string) -> result<option<string>, string>;
     config-list: func() -> result<option<string>, string>;
+    /// 会话配置写入（v19，权限 `session:config`）：入参为配置 JSON
+    /// （`{id?, name, environment, wslDistro?, workingDir, command, autoStart?}`）
+    /// —— `id` 缺省/空 → 新建；`id` 命中 → 覆盖；`id` 非空但未命中 →
+    /// **显性报错**（不静默新建，避免拼错 id 写成第三份配置）。
+    /// 返回写入后的完整配置 JSON（含宿主生成/回填的 id 与时间戳）。
+    /// 校验沿用宿主配置命令面的规则（名字非空等）；业务规则（环境取值 /
+    /// WSL 分支 / 空命令兜底）随票 08 下沉插件，本原语只做输入仲裁。
+    config-upsert: func(config-json: string) -> result<string, string>;
+    /// 读取单个会话配置（v19，权限 `session:config`）；不存在返回 `ok(none)`
+    config-get: func(config-id: string) -> result<option<string>, string>;
+    /// 删除会话配置（v19，权限 `session:config`），返回是否命中
+    /// （未知 id 幂等 `false`，不报错）
+    config-delete: func(config-id: string) -> result<bool, string>;
+    /// 会话启动规格创建（v19，权限 `session:write`）：接收插件算好的 launch
+    /// spec-json——
+    /// `{name, command, args?, cwd, cols?, rows?, env?, environment?, configId?, start?}`
+    /// （`environment` = `{"type":"Wsl2","distro":...}` | `{"type":"Linux"}` |
+    /// `{"type":"Windows","shell":"PowerShell"}`，与宿主 `ExecutionEnvironment`
+    /// serde 同形）。宿主只做执行：shell 包装 / 发行版转换（按 environment）/ 尺寸
+    /// 缺省（spec 缺省或非法时用宿主默认网格）/ ID 预生成（返回预生成 session_id，
+    /// 实际创建**异步执行**，理由同 `create`——事件回灌同一插件实例需重新获取
+    /// wasm_plugins 写锁，wasmtime Store 不可重入）。
+    /// `start = false` 时只创建会话与 PTY（状态 `Starting`，不启动进程，也不注册
+    /// 输出管理器），供「两阶段启动」编排的第一阶段使用。映射决策（命名唯一化 /
+    /// config→launch / 是否启动）全部在插件侧完成，本原语不做任何业务解释。
+    create-with-spec: func(spec-json: string) -> result<string, string>;
     lifecycle-register: func() -> result<_, string>;
     input-register: func() -> result<_, string>;
     create: func(config-id: string) -> result<string, string>;
@@ -330,6 +369,46 @@ interface host-session {
     /// （与用户手动关闭一致）；宿主分发 Stopping/Stopped 生命周期事件。
     /// 供插件在定时自动任务执行完后清理自己创建的会话。
     close: func(session-id: string) -> result<_, string>;
+    /// 重启会话（v19，权限 `session:write`）：宿主执行器保留（`restart_session`
+    /// 语义 = 移除旧会话 + 以**同一 id** 重建并启动，正统端归属回到启动端），
+    /// 编排（存在性预检、失败可见、调用顺序）与决策由插件完成。
+    /// **异步执行**：重启会同步分发 Creating/Created 生命周期事件，事件回灌同一
+    /// 插件实例需重新获取 wasm_plugins 写锁（wasmtime Store 不可重入，与
+    /// `create` / `close` 同理），故原语立即返回、宿主异步执行；未知会话 /
+    /// 配置缺失在宿主侧只记日志（插件以存在性预检给出同步可见的失败）。
+    restart: func(session-id: string) -> result<_, string>;
+    /// 移除会话（v19，权限 `session:write`）：注册表清理（输出管理器 / PTY 注册表
+    /// / 会话记录 / 正统端归属）+ 会话删除同步事件，进程随句柄释放终止。
+    /// 未知 id 幂等成功（与宿主 `remove_session` 语义一致）。
+    remove: func(session-id: string) -> result<_, string>;
+    /// 改名（v19，权限 `session:write`）：返回改名前的名字（调用方据此回执）。
+    /// 未知 id / 空名显性报错（不静默）。
+    rename: func(session-id: string, name: string) -> result<string, string>;
+    /// 带请求端标识的尺寸调整（v19，权限 `session:write`）：**只登记与执行**，
+    /// 不做任何裁决（正统端判定与覆盖确认策略归插件，spec D3）。执行 = 透传
+    /// PTY winsize；登记 = 把该会话的正统端归属置为请求方。
+    /// `requester-json` 形如 `{"kind":"desktop"}` 或
+    /// `{"kind":"mobile","deviceName":"Pixel"}`（宿主 `RendererSource` serde 同形）。
+    /// 返回 `{previousCanonical, canonical}`（前一归属，无归属为 null）。
+    resize: func(session-id: string, cols: u16, rows: u16, requester-json: string) -> result<string, string>;
+    /// 会话注解槽写入（v19，权限 `session:write`，票 11）：`session-id → key → value`
+    /// 不透明键值对写入。**内核只搬运透传、绝不解释键名**（spec D5）：槽的形状是
+    /// 扁平 map，键名/取值语义归写入方插件（本插件的任务域键如 `taskStatus`）；
+    /// 宿主校验三件事后原样落槽——权限门（`session:write`，属主边界）→ 会话存在性
+    /// （未知会话显性报错，不写孤儿键）→ 参数形状（`session-id` / `key` 非空；
+    /// `value` 可为任意字符串含空串）。写入按调用方插件记录归属（属主 = 权限门 +
+    /// 调用方 plugin_id，guest 无法伪造/旁路）；重复写同键 = 覆盖（后写赢）。
+    /// 读取面是 `list-sessions` / `get` 回执的 `annotations` 字段（同槽透传）。
+    annotate: func(session-id: string, key: string, value: string) -> result<_, string>;
+    /// 连接注册表原始记录清单（v19，权限 `session:read`，票 11）：**无排序无解读**
+    /// ——返回内核 WS 连接注册表（`WsSessionRegistry`）的全部原始条目，按注册表
+    /// 存储序（HashMap 迭代序，不保证稳定），不做过滤（含未认证连接）、不做合并
+    /// （不关联配对记录）、不加派生字段（无会话数 / 在线判定——那些是插件侧的
+    /// 派生视图职责，spec D3/D4）。JSON 数组，元素（原始字段名，camelCase）：
+    /// `{ clientId, deviceName?, fingerprint?, addr, authenticated, connectedAt }`
+    /// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自
+    /// JWT claims，认证前为 null；`connectedAt` 为 epoch 毫秒）。
+    connections-list: func() -> result<string, string>;
 }
 
 /// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）
@@ -356,7 +435,7 @@ interface host-plugin-database {
     execute-batch: func(sqls-json: string) -> result<u32, string>;
 }
 
-/// 密钥托管（secret-store，v15）：宿主托管的凭据存储，按插件属主隔离
+/// 密钥托管（secret-store，v15）+ 认证记录面（v18）：凭据存取与认证原始记录
 ///
 /// 认证中心语义下沉的基础原语（ADR 0022 裁剪线内：离宿主无法实现、零业务
 /// 语义）。约定与红线：
@@ -366,6 +445,9 @@ interface host-plugin-database {
 /// - **明文不落日志**：宿主日志/告警只记密钥长度（`value.len()` 模式），
 ///   禁止打印值本身；存储于主库 plugin_secrets 表（schema.sql）
 /// - 持久化：重启后密钥稳定（DB 为真源）；set 覆盖写、delete 幂等
+/// - v18 记录面（`trusted-devices-*` / `connection-history-list` /
+///   `auth-setting-set`）：真源仍是内核表（`pairings` / `connection_history` /
+///   `settings`，spec D3「不动」表），插件只做读取、撤销与设置写入，不持有第二份账本
 interface host-auth {
     /// 读取属主密钥；键不存在返回 `ok(none)`
     secret-get: func(key: string) -> result<option<string>, string>;
@@ -375,6 +457,42 @@ interface host-auth {
     secret-delete: func(key: string) -> result<_, string>;
     /// 列举属主密钥名（供诊断/清理；不返回值本身）
     secret-keys: func() -> result<list<string>, string>;
+
+    // ==================== v18：认证记录面（只读 / 撤销 + 认证域设置写入） ====================
+    // 定位（ADR 0022 裁剪线）：无业务语义的凭据与记录存取——宿主返回**原始记录**，
+    // 排序、过滤（active / 过期）、展示组织与派生视图一律在插件侧；本接口不解释
+    // 「什么算已连接设备」，也不做任何产品判定。
+    //
+    // 属主说明：记录为宿主全局数据（无句柄表），故无「属主段」校验；权限门
+    // （`auth`）即授权边界，越权插件连不上这四个函数。
+    //
+    // 凭据红线（AGENTS.md §8）：`pairings.session_token` / `public_key` 等凭据列
+    // **不出口**；记录 JSON 只含公开视图字段。
+
+    /// 已配对设备原始记录（内核 `pairings` 全表，含 `is-active = false` 的软删行，
+    /// 不排序——撤销检测依赖「已撤销记录仍可见」，只回唯一活跃集合会让撤销决策
+    /// fail-open）。JSON 数组，元素：
+    /// `{ id, deviceName, deviceFingerprint, address?, pairedAt(RFC3339),
+    ///    lastSeen?(RFC3339), connectCount, isActive }`
+    trusted-devices-list: func() -> result<string, string>;
+    /// 撤销信任（内核 `remove_pairing` 语义：`is-active = false` 软删 + 连带删除
+    /// 该设备连接历史）。返回是否命中记录；未知 id 幂等返回 `ok(false)`。
+    /// **不做**断开在线连接（保持宿主现状语义，属新协议工作）。
+    trusted-device-revoke: func(id: string) -> result<bool, string>;
+    /// 设备连接历史原始记录（`device-id` = `pairings.id`，按时间倒序由宿主查询给出）。
+    /// JSON 数组，元素：
+    /// `{ id, deviceId, authMethod, result, address?, connectedAt(RFC3339),
+    ///    disconnectedAt?(RFC3339) }`
+    connection-history-list: func(device-id: string) -> result<string, string>;
+    /// 认证域设置项写入（内核 `settings` 表，键白名单：`pairing_code_ttl` /
+    /// `qr_token_ttl`，值为十进制秒数）。读取走宿主配置面（`host-config` / 宿主命令面）；
+    /// 白名单外键一律拒绝——设置表是宿主真源，不接受插件写入任意键。
+    auth-setting-set: func(key: string, value: string) -> result<_, string>;
+    /// 清空某设备的连接历史（v19 函数级追加，票 14）：删除 `connection_history`
+    /// 中该 `device-id` 的全部记录，返回是否命中了至少一条。
+    /// 与 `trusted-device-revoke` 的连带删除同语义（那是撤销配对时的隐式清理，
+    /// 本函数是设备页「清空历史」按钮的显式动作）；**不影响配对状态**。
+    connection-history-clear: func(device-id: string) -> result<bool, string>;
 }
 
 /// 插件私有伪终端（host-pty，v16）：裸 PTY 引擎原语，零业务语义（ADR 0022）
@@ -508,6 +626,17 @@ interface manifest {
 /// - v16：host-pty 插件私有伪终端原语（spawn/write/resize/kill/ring-fetch/
 ///   is-running 六函数 + `pty:exit.<owner>` 事件），纯增量新接口，
 ///   v15 及更早插件不受影响
+/// - v17：认证策略导出 auth-policy（verify-device-token，desktop 独有——认证中心
+///   能力，宿主 server 中间件验签后取策略），纯增量新接口，v16 及更早插件不受影响
+/// - v18：host-auth 认证记录面（trusted-devices-list / trusted-device-revoke /
+///   connection-history-list / auth-setting-set，desktop 独有——会话语义下沉的
+///   宿主侧追加批次），既有 interface 的函数级追加，v17 及更早插件不受影响
+/// - v19：host-session 配置面（config-upsert / config-get / config-delete，
+///   desktop 独有——会话语义下沉批次之二，权限 `session:config`），既有
+///   interface 的函数级追加，v18 及更早插件不受影响。票 11 同 v19 再加两函数：
+///   `annotate`（会话注解槽写入，权限 `session:write`——spec D5 内核去业务化：
+///   旧任务字段的 expand 期并行写入面）+ `connections-list`（连接注册表原始
+///   记录清单，无排序无解读，权限 `session:read`——设备派生视图真源）
 interface abi {
     version: func() -> u32;
     form: func() -> u32;
@@ -587,6 +716,37 @@ interface events-ws {
 /// 使 `wasm_entry!` 能无条件导出默认实现（空实现亦可被宿主动态探测命中）。
 world plugin-ws {
     export events-ws;
+}
+
+/// v17：认证策略导出（**desktop 独有，双端偏离**——认证中心能力，同
+/// host-auth/host-pty 先例，ADR 0022「双端偏离」节：桌面独有接口不要求移动端跟演）
+///
+/// 消费方 = 宿主 server 认证中间件（票 12 C3）：连接建立验签**执行留宿主**
+/// （密码学引擎不移动，spec §3「不动」表），验签通过后经本导出取权威插件策略
+/// 裁决（claims 结构/时效策略 + 信任撤销检查）；该插件未激活/调用失败时
+/// 宿主策略回退（验签通过即放行，无单点）。
+///
+/// 可选导出（**不进 `plugin` world 必选导出列表**——同 events-binary/events-ws）：
+/// 宿主实例化后动态探测 `bedcode:plugin/auth-policy#verify-device-token`；未导出
+/// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对权威插件
+/// （`com.bedcode.session`，终端会话中心票 05 起兼管认证策略）调用本导出——
+/// 独立认证中心插件已整体退役（票 06），不存在第二个候选。
+///
+/// 入参 = 宿主已验签通过的 JWT token（**验签不在此重复**：插件密钥域与宿主
+/// 不同，无法也不应验签——spec §3 红线「验签执行点留宿主」）；返回 claims JSON
+/// （放行）或错误（拒绝原因）。
+interface auth-policy {
+    /// 策略裁决：claims 结构/时效策略 + 信任撤销检查 → claims JSON | 拒绝原因
+    verify-device-token: func(token: string) -> result<string, string>;
+}
+
+/// v17：auth-policy 绑定专用 world（**仅 SDK 绑定用，宿主不实例化它**）——同 plugin-binary
+///
+/// 本 world 让 SDK 生成 auth-policy 的 guest 绑定（Guest trait + export!），
+/// 使 `wasm_entry!` 能无条件导出默认实现（默认拒绝——非认证中心插件不提供
+/// 策略；宿主动态探测命中但中间件只调用认证中心实例）。
+world plugin-auth-policy {
+    export auth-policy;
 }
 
 /// 系统组件 world（**仅供系统组件构建绑定，宿主仍以 `plugin` world 实例化**）

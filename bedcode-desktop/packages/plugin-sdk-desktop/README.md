@@ -92,7 +92,7 @@ export async function deactivate(): Promise<void> {
 | `context.commands` | 注册 / 执行命令 | 默认授予 |
 | `context.terminal` | 向会话发送输入、订阅输出 / 输入 | `terminal:input` / `terminal:output` / `terminal:observe` |
 | `context.session` | 会话列表、状态变更订阅 | `session:read` / `session:write` |
-| `context.ui` | 注册侧边栏 / 工具箱 / 状态栏 / 输入扩展 / 终端工具栏 / 标题栏 / 文件查看器 | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:input` / `ui:fileHandler` |
+| `context.ui` | 注册侧边栏 / 工具箱 / 状态栏 / 设置分组 / 输入扩展 / 终端工具栏 / 标题栏 / 文件查看器 | `ui:sidebar` / `ui:toolbox` / `ui:statusbar` / `ui:pageToolbar` / `ui:settings` / `ui:input` / `ui:fileHandler` |
 | `context.events` | 宿主事件订阅与发布（`on` / `emit`） | 订阅默认授予；发布需 `broadcast` |
 | `context.storage` | 键值存储（`get` / `set` / `delete` / `flush`） | `storage`（默认附带） |
 | `context.http` | 注册 HTTP 端点（供 Agent CLI hooks 等调用） | `network:http` |
@@ -106,7 +106,9 @@ export async function deactivate(): Promise<void> {
 
 ## 共享模块（避免重复打包 vue 等）
 
-插件构建时 `vue` / `vue-i18n` / `pinia` 会被外部化，运行时从宿主全局 `window.__BEDCODE_SHARED__` 读取。**请通过 SDK 代理函数访问，不要直接操作全局变量**：
+插件构建时 `vue` / `vue-i18n` / `pinia` / `vue-sonner` 会被外部化，运行时从宿主全局 `window.__BEDCODE_SHARED__` 读取。**请通过 SDK 代理函数访问，不要直接操作全局变量**：
+
+> 收录标准：模块内部持有进程级单例状态，自带第二份实例会导致状态错位。`vue-sonner` 是宿主 toast 队列本体——插件 `import { toast } from 'vue-sonner'` 会被改写成读宿主实例，因此 `toast.success(...)` 与宿主提示同队列、同外观（自带第二份则提示不显示）。
 
 ```ts
 import { getVue, getI18n, getPinia, getRouter, getPluginContext } from '@binblink/bedcode-plugin-sdk-desktop'

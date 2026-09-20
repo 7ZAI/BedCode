@@ -414,10 +414,12 @@ const VALID_PERMISSIONS = new Set([
   'terminal:observe',
   'session:read',
   'session:write',
+  'session:config',
   'ui:sidebar',
   'ui:toolbox',
   'ui:statusbar',
   'ui:pageToolbar',
+  'ui:settings',
   'ui:input',
   'ui:fileHandler',
   'network:http',
@@ -497,6 +499,32 @@ function cmdValidate(flags) {
   // contributes 结构
   if (manifest.contributes && typeof manifest.contributes !== 'object') {
     errors.push('contributes 必须是对象')
+  }
+
+  // contributes.httpEndpoints（票 16：_http_endpoint 的路径白名单声明）
+  // 空/缺省 = 未声明，宿主按前缀内 ANY 放行（既有插件零迁移）；一旦声明就必须是
+  // 可用的相对路径段——条目非法会让声明侧「看起来有清单」而实际永远匹配不上。
+  const httpEndpoints = manifest.contributes?.httpEndpoints
+  if (httpEndpoints !== undefined && httpEndpoints !== null) {
+    if (!Array.isArray(httpEndpoints)) {
+      errors.push('contributes.httpEndpoints 必须是字符串数组')
+    } else {
+      const bad = httpEndpoints.filter(
+        (p) => typeof p !== 'string' || p.trim() === '' || p.includes('..'),
+      )
+      if (bad.length) {
+        errors.push(
+          `contributes.httpEndpoints 条目非法（须为非空相对路径段、不含 ..）: ${bad.join(', ')}`,
+        )
+      }
+      const normalized = httpEndpoints
+        .filter((p) => typeof p === 'string')
+        .map((p) => p.trim().replace(/^\/+/, ''))
+      const dup = normalized.filter((p, i) => normalized.indexOf(p) !== i)
+      if (dup.length) {
+        errors.push(`contributes.httpEndpoints 重复声明: ${[...new Set(dup)].join(', ')}`)
+      }
+    }
   }
 
   for (const w of warnings) console.log(`  ⚠ ${w}`)

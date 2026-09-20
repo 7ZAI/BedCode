@@ -194,6 +194,14 @@ pub struct PluginContributes {
     pub tool_providers: Vec<ToolProviderContribution>,
     #[serde(default)]
     pub file_handlers: Vec<FileHandlerContribution>,
+    /// 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单，票 16）
+    ///
+    /// 条目是**相对路径段**（不含 `/api/plugin/<插件 id>/` 前缀，前缀由宿主补），
+    /// 与请求里 `path` 字段逐字一致。宿主 registry 据此生成完整路径登记；路由侧
+    /// 「已声明 → 精确匹配、未声明 → 前缀内 ANY 放行」是票据 03 的过渡策略，
+    /// 本字段让新插件第一次能走「声明命中」那一轨（审计面：清单即端点真源）。
+    #[serde(default)]
+    pub http_endpoints: Vec<String>,
     /// 配置声明
     #[serde(default)]
     pub configuration: Option<PluginConfiguration>,
@@ -551,7 +559,8 @@ mod tests {
 
     #[test]
     fn test_contributes_defaults_and_full_parse() {
-        // 全量贡献点解析：terminal/toolProviders/fileHandlers/configuration/lifecycle
+        // 全量贡献点解析：terminal/toolProviders/httpEndpoints/fileHandlers/
+        // configuration/lifecycle
         let json = serde_json::json!({
             "commands": [{ "id": "c1", "title": "C1" }],
             "views": [{ "id": "v1", "type": "toolbox", "title": "V1", "component": "C" }],
@@ -560,6 +569,7 @@ mod tests {
                 "outputParsers": ["out1"]
             },
             "toolProviders": [{ "id": "tp1", "name": "N", "endpoint": "http://x" }],
+            "httpEndpoints": ["task-status", "task-queue/add"],
             "fileHandlers": [{ "id": "fh1", "extensions": ["md"], "viewer": "V" }],
             "configuration": {
                 "title": "Config",
@@ -574,11 +584,23 @@ mod tests {
         let c: PluginContributes = serde_json::from_value(json).unwrap();
         assert_eq!(c.terminal.as_ref().unwrap().input_handlers, vec!["in1"]);
         assert_eq!(c.tool_providers[0].endpoint, "http://x");
+        assert_eq!(c.http_endpoints, vec!["task-status", "task-queue/add"]);
         assert_eq!(c.file_handlers[0].extensions, vec!["md"]);
         assert_eq!(c.configuration.as_ref().unwrap().properties.len(), 1);
         assert!(c.lifecycle.as_ref().unwrap().on_startup);
         assert!(!c.lifecycle.as_ref().unwrap().on_shutdown);
         assert_eq!(c.provides, vec!["topic:a"]);
+    }
+
+    /// `httpEndpoints` 缺省即空清单 = 未声明（宿主路由保持票据 03 的前缀 ANY 放行轨，
+    /// 既有插件零迁移）。缺省语义被固化在此，避免后续把它改成 Option 引发歧义。
+    #[test]
+    fn test_http_endpoints_default_is_undeclared() {
+        let c: PluginContributes = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(
+            c.http_endpoints.is_empty(),
+            "未声明 httpEndpoints 必须解析为空清单（未声明判据）"
+        );
     }
 
 }
