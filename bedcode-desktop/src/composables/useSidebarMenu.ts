@@ -6,7 +6,8 @@
  * 全部按 order 升序稳定排列 —— 插件/自定义项可通过 order 值插入到任意内置项之间。
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
-import { getPluginRegistry } from '@/plugin/registry'
+import { getPluginRegistry, isContributionActiveState } from '@/plugin/registry'
+import type { PluginState } from '@/plugin/types'
 
 /** 统一侧边栏菜单项 */
 export interface SidebarMenuItem {
@@ -24,6 +25,9 @@ export interface SidebarMenuItem {
   order: number
   /** true 时用 startsWith 匹配（插件页等多级路由） */
   prefix?: boolean
+  /** true 表示该内置入口可被同槽位的插件贡献目录顶替（让位），见 builtinSupersededBy。
+   * 业务域入口（设备配对 / 终端会话）声明之；插件管理与设置恒在最末，不让位 */
+  supersedable?: boolean
 }
 
 /** 自定义菜单项注册描述符（registerSidebarItem 扩展点入参） */
@@ -72,6 +76,7 @@ export const builtinMenuItems: SidebarMenuItem[] = [
     // 终端图标（与 /sessions 页面头部一致），替代原文档图标以符合"终端会话"含义
     icon: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
     order: BUILTIN_MENU_ORDERS.sessions,
+    supersedable: true,
   },
   // 服务器管理入口已移除：页面保留于 /server 供调试者直接访问 URL 预览。
   // 原菜单项：
@@ -90,6 +95,7 @@ export const builtinMenuItems: SidebarMenuItem[] = [
     isI18nKey: true,
     icon: 'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z',
     order: BUILTIN_MENU_ORDERS.devices,
+    supersedable: true,
   },
   {
     id: 'plugins',
@@ -167,19 +173,73 @@ function toMenuItem(view: {
   }
 }
 
+/** 贡献视图的最小形态（注册表条目与测试桩共用） */
+export interface ContributionViewRef {
+  pluginId: string
+  viewId: string
+  viewType: string
+  order: number
+}
+
+/**
+ * 内置入口让位判据 —— 某运行态插件贡献的侧边栏目录**占用该内置项的 order 槽位**
+ * （同 order 值）即视为该域已被插件接管，内置入口让位以避免同域出现两个入口。
+ *
+ * 按同槽位精确匹配而非「order 区间」判定：插在两个内置项之间（如 150）的新域目录
+ * 只是插入排序位置，不代表接管了「设备配对」域，否则会误摘宿主入口。
+ * 接管某域的插件必须把该域的目录项落在与内置入口相同的 order 上
+ * （见 D6：设备与配对 100 / 终端会话 200，同域的其余项如连接历史取 101+）。
+ *
+ * 让位与否与贡献目录摘除、深链兜底共用 `isContributionActiveState` 判据：
+ * 插件 error / 停用后贡献目录不再是「运行态插件的贡献」，内置入口随之恢复。
+ *
+ * @returns 顶替该内置入口的贡献目录（无则 null）
+ */
+export function builtinSupersededBy(
+  item: { order: number },
+  views: ContributionViewRef[],
+  states: Record<string, PluginState>,
+): ContributionViewRef | null {
+  for (const view of views) {
+    if (view.viewType !== 'sidebar') continue
+    if (view.order !== item.order) continue
+    if (!isContributionActiveState(states[view.pluginId])) continue
+    return view
+  }
+  return null
+}
+
 /**
  * 侧边栏菜单组合子 — 合并内置 + 自定义 + 插件视图，按 order 升序稳定排列
  *
- * sort 为稳定排序：同 order 时保持 内置 → 自定义 → 插件注册 的先后顺序
+ * sort 为稳定排序：同 order 时保持 内置 → 自定义 → 插件注册 的先后顺序。
+ * 声明了 `supersedable` 的内置入口在对应槽位出现运行态插件的贡献目录时让位（不重复入口）。
  */
 export function useSidebarMenu(): { menuItems: ComputedRef<SidebarMenuItem[]> } {
   const registry = getPluginRegistry()
 
   const menuItems = computed<SidebarMenuItem[]>(() => {
-    const pluginItems = [...registry.sidebarViews.value, ...registry.toolboxViews.value].map(
-      toMenuItem,
+    const states = registry.pluginStatesRef.value
+    // 贡献目录与设置分组、内置入口让位共用同一生效判据：插件 error / 停用后
+    // 其目录随之摘除，内置入口恢复，避免「同一域两个入口」与点开空目录（D7）
+    const pluginViews = [...registry.sidebarViews.value, ...registry.toolboxViews.value].filter(
+      (view) => isContributionActiveState(states[view.pluginId]),
     )
-    const all = [...builtinMenuItems, ...customItemsRef.value, ...pluginItems]
+    const pluginItems = pluginViews.map(toMenuItem)
+
+    const yielded = new Set<string>()
+    for (const item of builtinMenuItems) {
+      if (!item.supersedable) continue
+      if (builtinSupersededBy(item, pluginViews, states)) {
+        yielded.add(item.id)
+      }
+    }
+
+    const all = [
+      ...builtinMenuItems.filter((i) => !yielded.has(i.id)),
+      ...customItemsRef.value,
+      ...pluginItems,
+    ]
     all.sort((a, b) => a.order - b.order)
     return all
   })

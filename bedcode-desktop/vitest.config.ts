@@ -14,6 +14,9 @@ export default defineConfig({
       // hoisting 解析插件依赖）：scheduler 只读面板 + agent-hub diff 纯函数
       'plugins/scheduler/src/__tests__/**/*.test.ts',
       'plugins/agent-hub/src/__tests__/**/*.test.ts',
+      // 会话中心插件：工程契约测试从第一天起进门禁（票 03）；票 17 起旧 auto-task
+      // 的任务域视图与测试面一并迁入本插件（旧插件工程无测试面，缺口在迁移时补上）
+      'plugins/session/src/__tests__/**/*.test.ts',
     ],
     exclude: ['node_modules', 'dist'],
     coverage: {

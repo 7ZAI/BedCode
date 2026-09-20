@@ -1,15 +1,8 @@
 export default {
   settings: {
     title: '设置',
-    pairing: {
-      title: '配对设置',
-      defaultPort: '默认端口',
-      defaultPortDesc: '服务器启动时使用的端口，重启后生效',
-      qrValidity: '二维码有效期',
-      qrValidityDesc: '设置二维码的有效时间（60-3600秒）',
-      pairingCodeTtl: '配对码有效期',
-      pairingCodeTtlDesc: '设置配对码的有效时间（60-3600秒）',
-    },
+    // 票 14：`pairing` 分组整体退役——配对码 / QR 有效期改由 com.bedcode.session
+    // 插件贡献的设置分组承载（`pairing.settings.*`），宿主不再保留该分组文案。
     linkCrypto: {
       title: '链路加密',
       master: '启用链路加密',
@@ -35,6 +28,9 @@ export default {
       title: '系统设置',
       preventSleep: '防止系统休眠',
       preventSleepDesc: '服务器运行时阻止系统进入休眠状态（允许屏幕熄灭）',
+      // 票 14：默认端口随「配对设置」分组退役迁入本组（文案与迁移前逐字一致）
+      defaultPort: '默认端口',
+      defaultPortDesc: '服务器启动时使用的端口，重启后生效',
     },
     log: {
       title: '日志设置',

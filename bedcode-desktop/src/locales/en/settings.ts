@@ -1,15 +1,8 @@
 export default {
   settings: {
     title: 'Settings',
-    pairing: {
-      title: 'Pairing Settings',
-      defaultPort: 'Default Port',
-      defaultPortDesc: 'The port used when the server starts; takes effect after restart',
-      qrValidity: 'QR Code Validity',
-      qrValidityDesc: 'Set the validity period for QR codes (60-3600 seconds)',
-      pairingCodeTtl: 'Pairing Code Validity',
-      pairingCodeTtlDesc: 'Set the validity period for pairing codes (60-3600 seconds)',
-    },
+    // Ticket 14: the `pairing` section retired — pairing code / QR validity now live
+    // in the settings section contributed by com.bedcode.session (`pairing.settings.*`).
     linkCrypto: {
       title: 'Link Encryption',
       master: 'Enable Link Encryption',
@@ -39,6 +32,9 @@ export default {
       preventSleep: 'Prevent System Sleep',
       preventSleepDesc:
         'Prevent the system from sleeping while the server is running (display sleep allowed)',
+      // Ticket 14: default port moved here with the retired pairing section
+      defaultPort: 'Default Port',
+      defaultPortDesc: 'The port used when the server starts; takes effect after restart',
     },
     log: {
       title: 'Log Settings',

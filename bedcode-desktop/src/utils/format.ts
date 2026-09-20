@@ -2,7 +2,8 @@
  * 通用格式化工具（多文件重复实现的单源收敛）
  *
  * 从 src/plugin/contributionKinds.ts（formatBytes/formatTime）与
- * src/views/SessionsConfigView.vue（formatDateTime）抽取，宿主侧统一引用。
+ * 会话页（formatDateTime，票 13 随会话页迁入 plugins/session/src/utils/format.ts）
+ * 抽取，宿主侧统一引用。
  */
 
 /** 字节数格式化 */

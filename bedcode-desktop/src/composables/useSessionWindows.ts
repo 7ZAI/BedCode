@@ -71,15 +71,18 @@ export function useSessionWindows() {
    *
    * 返回 Promise：新窗口时在窗口 show 完成后 resolve（页面就绪事件或 4s 兜底），
    * 创建失败时 reject；已有窗口时直接聚焦立即返回（调用方据此决定是否显示 loading）
+   *
+   * @returns `true` = 新建窗口；`false` = 既有窗口已聚焦
+   *          （插件会话页经 `context.session.openTerminal` 消费同一语义）
    */
-  async function openTerminalWindow(session: SessionInfo): Promise<void> {
+  async function openTerminalWindow(session: Pick<SessionInfo, 'id' | 'name'>): Promise<boolean> {
     // 检查是否已有窗口
     const existingState = windows.value.get(session.id)
     if (existingState) {
       // 窗口已存在，聚焦它
       try {
         await existingState.window.setFocus()
-        return
+        return false
       } catch (e) {
         // 窗口可能已关闭，移除引用
         logger.log('[useSessionWindows] Window focus failed, removing reference:', e)
@@ -241,6 +244,7 @@ export function useSessionWindows() {
 
     // 等待窗口就绪（就绪事件或 4s 兜底超时）
     await ready
+    return true
   }
 
   /**

@@ -13,6 +13,9 @@ export default {
     './plugins/auto-task/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/file-transfer/src/**/*.{vue,js,ts,jsx,tsx}',
     './plugins/scheduler/src/**/*.{vue,js,ts,jsx,tsx}',
+    // session（终端会话中心）：票 13 起贡献会话页——配置卡片网格、弹窗、遮罩
+    // 使用宿主同源 Tailwind 工具类
+    './plugins/session/src/**/*.{vue,js,ts,jsx,tsx}',
     // agent-hub：会话日志查询条控件使用宿主 Input/Select 同源 Tailwind 类
     './plugins/agent-hub/src/**/*.{vue,js,ts,jsx,tsx}',
     // 共享 SDK 组件：宿主/插件共用（@binblink/bedcode-plugin-sdk-desktop/ui 的 Select 等），
