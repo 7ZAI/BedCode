@@ -1,6 +1,7 @@
 # host-task：宿主侧异步并发方案（WASM 插件调度 OS 线程）· 设计稿
 
 > 状态：设计稿（未实施，未定票）。日期 2026-09-21。
+> 更新：2026-09-21 补充 §14「WASIp3 协作式线程演进路径」（用户指示纳入设计考虑）。
 > 关联：ADR 0022（裁剪线 / 双端偏离）、ADR 0017（互调）、`.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`、票 03/04（文件浏览 / git 域已用 `host-process.run-sync` 同步阻塞先例）。
 
 ---
@@ -221,11 +222,12 @@ interface events-task {
 
 | 备选 | 结论 | 理由 |
 | --- | --- | --- |
-| **A. wasmtime async WIT（component async + call_async 全量改造）** | 否 | ABI 全量重铸 + SDK/双端/移动 47 分叉同步，成本极大；收益主要在 IO 等待（已有 block_on_async 覆盖）而非真并发；stable 工具链与全同步 ABI 现状冲突。留作 wasmtime 双端对齐后的长期演进选项 |
+| **A. wasmtime async WIT（component async + call_async 全量改造）** | 否（当前） | ABI 全量重铸 + SDK/双端/移动 47 分叉同步，成本极大；收益主要在 IO 等待（已有 block_on_async 覆盖）而非真并发；stable 工具链与全同步 ABI 现状冲突。**但其中间形态「WASIp3 协作式线程」是中期演进路径（§14）**——built-in 机制 + `std::thread` 透明，非全量 async 改造 |
 | **B. 回调走消息总线 owner topic（`task:event.<owner>`）** | 否 | activate 期订阅时序失败面（F7：宿主不缓冲）；与插件间消息 `on-message` 语义混杂。已在 §4.2 详述 |
 | **C. 扩展 host-process** | 否 | host-process 语义锚定「外部进程」；通用并发执行器是新关注域，混装会让两个域的权限/配额/审计都拧巴 |
 | **D. 同插件多 Store 实例并行跑插件代码** | 否 | 身份/存储/权限/互调全按 plugin_id 单实例建模（F1），多实例是宿主结构性改造；且插件代码并发的收益场景（CPU 密集业务）本就该留在宿主原语或独立进程 |
 | **E. 宿主内嵌脚本解释器执行「任意任务脚本」** | 否 | 编排引擎 = 业务语义进内核，直接违反 ADR 0022 裁剪线；本方案只做「无依赖单元的并发执行」，顺序编排留在插件 |
+| **F. WASIp3 协作式线程（component-model built-in）** | 中期演进（非本票） | 见 §14：Rust wasm32-wasip3 `std::thread` 未来默认获得协作式支持，插件代码可表达逻辑并发（交错 ≠ 真并行）；工具链未就绪（当前 `std::thread` 仍 error）+ 依赖宿主 async store（A0-3）与关键原语 async 化，故不纳入当前实施。与 host-task 互补：协作式解决「并发编排」，host-task 解决「真并行工作」 |
 
 ---
 
@@ -260,3 +262,42 @@ interface events-task {
 - 停用回收：deactivate 后任务全取消、注册表清空、无回调投递残留；
 - fs_auth：未授权路径在单元内 `Err` 且**无弹窗**（关键行为差异断言）；
 - 死锁回归：guest 栈内 submit + 立即等待自身事件的反模式由 SDK 文档约束（不阻止 API），池路径压测不出现锁自死锁。
+
+---
+
+## 14. WASIp3 协作式线程演进路径（中期方向；用户 2026-09-21 指示纳入设计）
+
+### 14.1 技术事实（2026-09 现状，外部证据）
+
+- **协作式多线程是 Component Model 的 built-in**（位于 WASI 层之下，spec 以 🧵 emoji 标注 gated feature）：为 core wasm 提供创建/切换协作式线程的 built-in imports，构建在 Preview 3 已有的 async machinery 之上，顺序交错（sequentially-interleaved）、只在显式程序点切换，**非真并行**（fiber 式栈切换）
+- **wasmtime 已合入实现**：PR #11751「Cooperative Multithreading」（2025-10-27 merged）。wasmtime 48 对该 built-in 的启用方式与 Config 开关**需实施前验证**（本稿未验证）
+- **Rust 侧透明**：Rust 组件 `std::thread::spawn` 在工具链就绪后**默认**获得协作式支持（“A Rust component using `std::thread::spawn` gets cooperative thread support when it lands, with nothing special needed in WIT”）；**但当前 wasm32-wasip3 的 `std::thread` 仍返回 error**，属未来兼容性变更（compiler-team #1001 / rustc book）；LLVM 侧 PR #175800 进行中
+- **时间线**：rustc book 明确「future release of Rust's wasm32-wasip3 target will support cooperative threading and `std::thread` APIs」——**工具链未就绪，这是本路径不纳入当前实施的决定性理由**
+
+### 14.2 能力模型与边界（对照 §2 F1-F3）
+
+| 能力 | 协作式线程给插件 | host-task（本稿）给插件 |
+| --- | --- | --- |
+| 插件代码并发表达 | ✅ 可 spawn 逻辑线程、并发 await 宿主调用 | ❌ 插件代码恒单线程，只能「提交计划」 |
+| 真并行（多核利用） | ❌ 单物理线程交错，CPU 密集无收益 | ✅ 专用 OS 线程池真并行 |
+| 切换点 | async 宿主调用（await 时 yield 让出 Store） | 不涉及（宿主侧执行） |
+| 前提 | 宿主 async store（A0-3）+ 宿主原语 async 化（await 点） | 宿主 sync ABI 即可（现在可做） |
+| 工具链 | 未就绪（wasip3 `std::thread` 当前 error） | 就绪 |
+
+**核心洞察**：协作式线程是对 §2「根本边界」的破界路径——它让「插件代码并发跑」无需多 Store / 全量 async 改造，而是由 built-in 机制在**单 Store 内交错**。**但切换点必须落在 async 宿主调用上**：当前 ABI 的同步原语（`block_on_async` 桥）调用期间 Store 被阻塞，逻辑线程无法交错——因此本路径依赖宿主 async 化（A0-3），且**关键 IO 原语从「同步桥」改为「async 原语 await」**（fs / process / http 等协作式线程会等的原语；不需要全部原语 async 化，顺序编排仍走同步桥）。
+
+### 14.3 与 host-task 的边界与演进（裁决）
+
+- **互补不互斥**：
+  - 协作式线程解决「并发编排」——并发 stat、多路 HTTP 并行等待、git 多命令并发跑（IO 等待密集），届时插件直接用 `std::thread` + 并发 await 原语写，比 execute-batch 计划 DSL 更自然；
+  - host-task 保留解决「真并行工作」——CPU/IO 密集长任务（批量哈希、日志解析、大文件展开）需要 OS 线程池真并行，协作式线程给不了；
+- **execute-batch 定位不变**：真并行扇出（CPU/IO 密集）是协作式线程不可替代的档；「几十个快操作并行」场景届时两条路并存（execute-batch 真并行 / std::thread 交错），由插件按资源语义选择；
+- **submit / on-task-event 定位不变**：「宿主托管生命周期 + 配额 + 取消」仍是有价值的选择；协作式线程可用后插件也可用 std::thread + 直接 await 自管，两者并存；
+- **对 host-task 契约的影响（现在就要留的余地）**：
+  1. 单元 `params` = 既有原语请求 JSON 原样内嵌——协作式线程到来后插件可直接并发调这些原语，单元投影语义不变、零契约漂移；
+  2. **不引入**「插件内并发执行模型」承诺：协作式线程是工具链 / built-in 能力，host-task 不为其改契约（避免把内核设计绑死在未定标准上）；
+  3. 时间线：host-task（现在，本稿）→ 宿主 async 化 A0-3 + 关键原语 async 化（中期）→ rust wasip3 `std::thread` 落地（外部等待）→ SDK 模板/文档支持 std::thread 并发模式（届时另立设计票，评估 host-task 缩窄与 execute-batch 存留）。
+
+### 14.4 不纳入本稿实施的理由（一句话）
+
+工具链未就绪（Rust `std::thread` on wasip3 当前 error）+ 宿主 async 化未落地（A0-3 未实施）+ wasmtime 48 启用方式未验证——三项外部依赖均未满足；host-task 不依赖任何一项，先行落地为「真并行工作」提供并发，协作式线程作为中期演进路径记录于此，届时宿主 async 化完成、工具链就绪后另立设计票评估。
