@@ -120,7 +120,7 @@ pub(crate) async fn clear_state(app: &AppHandle) {
     }
 }
 
-/// 取消进行中的拉取会话（返回是否命中）；由 [`super::peer_receive::cancel_peer_receiving`]
+/// 取消进行中的拉取会话（返回是否命中）；由 [`super::peer_engine_receive::cancel_peer_receiving`]
 /// 在服务端会话表未命中时兜底调用
 pub(crate) fn cancel_pull(app: &AppHandle, batch_id: &str) -> bool {
     let session = app
@@ -213,7 +213,6 @@ pub struct PeerSharedRootDto {
 }
 
 /// 列可信对端暴露中的共享根（浏览入口：先取根清单再逐根下钻）
-#[tauri::command]
 pub async fn list_peer_shared_roots(app: AppHandle, node_id: String) -> crate::Result<Vec<PeerSharedRootDto>> {
     let parsed = parse_node_id(&node_id)?;
     let conn = dial_peer(&app, &parsed, "roots").await?;
@@ -236,7 +235,6 @@ pub async fn list_peer_shared_roots(app: AppHandle, node_id: String) -> crate::R
 }
 
 /// 浏览可信对端的共享目录（单请求会话；每操作新拨号）
-#[tauri::command]
 pub async fn browse_peer_directory(
     app: AppHandle,
     node_id: String,
@@ -275,7 +273,6 @@ pub async fn browse_peer_directory(
 /// 免协商直取（用户主动获取即放行）；每个文件预登记一条接收任务行，
 /// 进度/终态/取消复用 issue 10 任务体系；中断后重试同一文件自动断点续传。
 /// 返回成功入队的文件数。
-#[tauri::command]
 pub async fn pull_peer_files(
     app: AppHandle,
     node_id: String,
@@ -310,7 +307,7 @@ pub async fn pull_peer_files(
 
     let parsed = parse_node_id(&node_id)?;
     // 会话参数在锁外解析快照：拨号可达秒级，不阻塞 start/stop
-    let (_, config) = super::peer_receive::handler_and_config(&app)
+    let (_, config) = super::peer_engine_receive::handler_and_config(&app)
         .await
         .ok_or_else(|| crate::AppError::Internal("peer-net pull failed: node not started".to_string()))?;
     let (events, cancel_root) = {
@@ -373,7 +370,7 @@ async fn run_pull_queue(
 ) {
     let state = app.state::<PeerRemoteState>();
     // 并发上限：拉取方向与发送方向共用设置（默认 3，1..=8）
-    let concurrency = super::peer_receive::ensure_settings_loaded(&app).await.concurrency as usize;
+    let concurrency = super::peer_engine_receive::ensure_settings_loaded(&app).await.concurrency as usize;
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
     let mut set = tokio::task::JoinSet::new();
     for (index, file) in files.into_iter().enumerate() {
@@ -402,7 +399,7 @@ async fn run_pull_queue(
 
         // 任务行先于会话登记：全部任务行同步呈现，首个 Progress 到达前
         // UI 即显示进行中（并发编排下不再随传输逐条出现）
-        super::peer_receive::register_remote_pull(
+        super::peer_engine_receive::register_remote_pull(
             &app,
             peer.clone(),
             batch_id.clone(),
@@ -444,7 +441,7 @@ async fn run_pull_queue(
                 }
                 Err(e) => {
                     tracing::warn!(batch_id = %batch_id, rel = %file.rel_path, "pull dial failed: {e}");
-                    super::peer_receive::fail_task(&app, &batch_id, format!("dial failed: {e}"));
+                    super::peer_engine_receive::fail_task(&app, &batch_id, format!("dial failed: {e}"));
                 }
             }
             app.state::<PeerRemoteState>()

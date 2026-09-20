@@ -89,7 +89,9 @@ fn ensure_loaded(h: &WasmHost) -> std::sync::MutexGuard<'static, Vec<TransferEnt
                 let marked = transfer_store::mark_interrupted_on_load(&mut entries);
                 if marked > 0 {
                     h.log_info(&format!("restored {} transfers, {} marked interrupted", entries.len(), marked));
-                    persist_entries(h, &entries);
+                    if let Err(e) = persist_entries(h, &entries) {
+                        h.log_error(&format!("restore transfer entries failed: {e}"));
+                    }
                 } else {
                     h.log_info(&format!("restored {} transfers", entries.len()));
                 }
@@ -129,33 +131,43 @@ fn load_entries(h: &WasmHost) -> Result<Vec<TransferEntry>> {
 /// EXCLUSIVE 锁（每秒数百次 write()），期间 `list-*` 全被阻塞 —— 表现即
 /// 「传输面板没有任务卡片」。事务化后每次 flush 只提交一次。
 ///
-/// 失败即 ROLLBACK：半写状态（DELETE 已生效、INSERT 缺失）等于整段历史丢失。
-fn persist_entries<H: bedcode_plugin_api::host::HostPluginDatabase>(h: &H, entries: &[TransferEntry]) {
-    if h.plugin_db_execute("BEGIN IMMEDIATE").is_err() {
-        return;
+/// execute-batch 失败即整体回滚：半写状态（DELETE 已生效、INSERT 缺失）等于整段历史丢失。
+fn persist_entries<H: bedcode_plugin_api::host::HostPluginDatabase>(
+    h: &H,
+    entries: &[TransferEntry],
+) -> anyhow::Result<()> {
+    // 宿主拒绝跨调用 BEGIN/COMMIT；execute-batch 在一次调用内持有独立库锁并保证
+    // 全部提交或全部回滚。批量 INSERT 合并成一条多值语句，避免超过宿主 64 条语句上限。
+    let mut sqls = vec!["DELETE FROM transfer_entries".to_string()];
+    if !entries.is_empty() {
+        let values = entries
+            .iter()
+            .map(|entry| {
+                let payload = serde_json::to_string(entry)
+                    .map_err(|e| anyhow::anyhow!("serialize transfer entry {} failed: {e}", entry.batch_id))?;
+                Ok(format!(
+                    "({}, {}, {}, {})",
+                    sql_string_literal(&entry.batch_id),
+                    sql_string_literal(&entry.direction),
+                    sql_string_literal(&entry.status),
+                    sql_string_literal(&payload),
+                ))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        sqls.push(format!(
+            "INSERT INTO transfer_entries (batch_id, direction, status, payload) VALUES {}",
+            values.join(", ")
+        ));
     }
-    let mut ok = h.plugin_db_execute("DELETE FROM transfer_entries").is_ok();
-    if ok {
-        for e in entries {
-            let payload = serde_json::to_string(e).unwrap_or_default();
-            let inserted = h
-                .plugin_db_execute_params(
-                    "INSERT INTO transfer_entries (batch_id, direction, status, payload) VALUES (?1, ?2, ?3, ?4)",
-                    &[
-                        serde_json::Value::String(e.batch_id.clone()),
-                        serde_json::Value::String(e.direction.clone()),
-                        serde_json::Value::String(e.status.clone()),
-                        serde_json::Value::String(payload),
-                    ],
-                )
-                .is_ok();
-            if !inserted {
-                ok = false;
-                break;
-            }
-        }
-    }
-    let _ = h.plugin_db_execute(if ok { "COMMIT" } else { "ROLLBACK" });
+    h.plugin_db_execute_batch(&sqls)
+        .map(|_| ())
+        .map_err(|e| anyhow::anyhow!("persist transfer entries failed: {e}"))
+}
+
+/// 将内部字符串安全编码为 SQLite 字符串字面量。
+/// 这里的值来自插件自身序列化结果，仍显式转义单引号以避免 SQL 语法破坏。
+fn sql_string_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
 }
 
 /// 变更后统一出口：持久化 + 四路视图派发（tasks/receiving 仅进行中，
@@ -163,7 +175,9 @@ fn persist_entries<H: bedcode_plugin_api::host::HostPluginDatabase>(h: &H, entri
 fn flush(h: &WasmHost, mut guard: std::sync::MutexGuard<'static, Vec<TransferEntry>>, changed: bool) {
     if changed {
         transfer_store::evict_overflow(&mut guard);
-        persist_entries(h, &guard);
+        if let Err(e) = persist_entries(h, &guard) {
+            h.log_error(&format!("persist transfer entries failed: {e}"));
+        }
     }
     let tasks: Vec<&TransferEntry> = transfer_store::active_send_entries(&guard);
     let batches: Vec<&TransferEntry> = guard
@@ -447,7 +461,7 @@ pub(crate) fn pause_task(h: &WasmHost, args: &serde_json::Value) -> Result<serde
     let mut guard = ensure_loaded(h);
     let changed = transfer_store::mark_paused(&mut guard, &batch_id);
     flush(h, guard, changed);
-    Ok(serde_json::json!({ "ok": true }))
+    Ok(serde_json::Value::Bool(true))
 }
 
 /// 恢复单个暂停任务：宿主入队并经并发闸门启动（接收端按已写偏移续传）。
@@ -456,7 +470,7 @@ pub(crate) fn resume_task(h: &WasmHost, args: &serde_json::Value) -> Result<serd
         args.get("taskId").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     h.peer_resume_transfer(&batch_id)?;
     // 状态推进由引擎快照事件（pending → running）接管，本地无需乐观改写
-    Ok(serde_json::json!({ "ok": true }))
+    Ok(serde_json::Value::Bool(true))
 }
 
 /// 恢复全部暂停任务，返回入队数。
@@ -870,8 +884,10 @@ mod tests {
         picked: RefCell<Vec<String>>,
         /// 全部 SQL 调用序列（persist_entries 事务形态断言用）
         sql_log: RefCell<Vec<String>>,
-        /// 参数化执行故障注入（回滚路径断言用）
+        /// 参数化执行故障注入（共享根回滚路径断言用）
         fail_params: Cell<bool>,
+        /// 事务批执行故障注入（传输历史持久化断言用）
+        fail_batch: Cell<bool>,
     }
 
     impl MockHost {
@@ -883,6 +899,7 @@ mod tests {
                 picked: RefCell::new(vec![]),
                 sql_log: RefCell::new(vec![]),
                 fail_params: Cell::new(false),
+                fail_batch: Cell::new(false),
             }
         }
 
@@ -954,6 +971,12 @@ mod tests {
             // 事务批：逐条记日志（与 plugin_db_execute 同口径），不触碰行数据
             for sql in sqls {
                 self.sql_log.borrow_mut().push(sql.clone());
+            }
+            if self.fail_batch.get() {
+                return Err(HostError {
+                    code: -1,
+                    message: "injected batch failure".to_string(),
+                });
             }
             Ok(0)
         }
@@ -1123,56 +1146,31 @@ mod tests {
         .unwrap()
     }
 
-    /// 持久化事务形态：`BEGIN IMMEDIATE` → `DELETE` → N×`INSERT` → `COMMIT`，
-    /// 提交恰一次（回归：逐条独立事务 ⇒ 每次 flush N+1 次提交并长持写锁，
-    /// 真机表现为插件库 EXCLUSIVE 锁导致传输面板拿不到任务卡片）
+    /// 持久化事务形态：execute-batch 内完成 DELETE + 单条多值 INSERT，
+    /// 不跨调用发送裸 BEGIN/COMMIT（宿主会拒绝后者）。
     #[test]
-    fn persist_entries_wraps_delete_and_inserts_in_single_transaction() {
+    fn persist_entries_uses_single_supported_transaction_batch() {
         let h = MockHost::new();
-        super::persist_entries(&h, &[entry_for("batch-a"), entry_for("batch-b")]);
+        super::persist_entries(&h, &[entry_for("batch-a"), entry_for("batch-b")]).unwrap();
         let log = h.sql_log.borrow().clone();
-        assert_eq!(
-            log.first().map(String::as_str),
-            Some("BEGIN IMMEDIATE"),
-            "首条语句必须显式开启事务"
-        );
-        assert_eq!(
-            log.last().map(String::as_str),
-            Some("COMMIT"),
-            "末条语句必须提交"
-        );
-        assert_eq!(
-            log.iter().filter(|s| s.as_str() == "DELETE FROM transfer_entries").count(),
-            1,
-            "DELETE 恰一次（全量回写不是逐条删除）"
-        );
-        assert_eq!(
-            log.iter().filter(|s| s.contains("INSERT INTO transfer_entries")).count(),
-            2,
-            "每个条目一条 INSERT，且全部在事务内"
-        );
-        assert!(
-            !log.iter().any(|s| s.as_str() == "ROLLBACK"),
-            "成功路径不得出现 ROLLBACK"
-        );
+        assert_eq!(log.first().map(String::as_str), Some("DELETE FROM transfer_entries"));
+        assert_eq!(log.len(), 2, "DELETE + one multi-value INSERT stay in one batch");
+        assert!(log[1].starts_with("INSERT INTO transfer_entries"));
+        assert!(log[1].contains("'batch-a'") && log[1].contains("'batch-b'"));
+        assert!(!log.iter().any(|s| s.starts_with("BEGIN") || s == "COMMIT" || s == "ROLLBACK"));
     }
 
-    /// 故障注入：任一 INSERT 失败必须 ROLLBACK 且绝不 COMMIT
-    /// （半写状态 = DELETE 已生效、INSERT 缺失，等于整段历史丢失）
+    /// 故障注入：execute-batch 失败必须向调用方返回错误，不得伪装成成功。
     #[test]
-    fn persist_entries_rolls_back_when_an_insert_fails() {
+    fn persist_entries_surfaces_batch_failure() {
         let h = MockHost::new();
-        h.fail_params.set(true);
-        super::persist_entries(&h, &[entry_for("batch-a")]);
-        let log = h.sql_log.borrow().clone();
-        assert_eq!(
-            log.last().map(String::as_str),
-            Some("ROLLBACK"),
-            "写入失败必须以回滚收尾"
-        );
-        assert!(
-            !log.iter().any(|s| s.as_str() == "COMMIT"),
-            "写入失败不得提交半成品"
-        );
+        h.fail_batch.set(true);
+        let err = super::persist_entries(&h, &[entry_for("batch-a")]).unwrap_err();
+        assert!(err.to_string().contains("persist transfer entries failed"));
+    }
+
+    #[test]
+    fn sql_string_literal_escapes_quotes() {
+        assert_eq!(super::sql_string_literal("a'b"), "'a''b'");
     }
 }

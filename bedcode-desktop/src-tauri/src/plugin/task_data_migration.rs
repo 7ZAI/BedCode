@@ -4,7 +4,8 @@
 //! 的私有库内**改名（`ALTER TABLE … RENAME`，零复制）。六张任务表历史上物理位于
 //! `app_data/plugins/com.bedcode.auto-task/plugin.db`，而插件私有库按插件 id 分文件，
 //! 合并插件读的是 `…/com.bedcode.session/plugin.db`——所以「升级后任务历史一条不丢」
-//! 到票 17 才真正成立。形状沿用 [`crate::peer_migration`] 的宿主侧一次性迁移：
+//! 到票 17 才真正成立。形状沿用已退役的宿主侧一次性迁移 `peer_migration`（业务
+//! 数据清零票 06 删除，见 git 历史）：
 //! 存在性即版本戳、best-effort 不阻断启动、可对旧库重跑。
 //!
 //! **顺序前提**：本迁移跑在 `PluginHost::new()` **之后**——合并插件 `activate` 里的

@@ -7,11 +7,10 @@ pub mod db;
 pub mod enums;
 pub mod events;
 pub mod mdns;
-pub mod peer_migration;
 pub mod peer_net;
-pub mod peer_receive;
-pub mod peer_remote;
-pub mod peer_transfer;
+mod peer_engine_receive;
+mod peer_engine_remote;
+mod peer_engine_transfer;
 pub mod plugin;
 pub mod process;
 pub mod pty;
@@ -348,9 +347,11 @@ pub fn run() {
             // 启停（插件管理器 activate/deactivate 外壳接线，
             // 见 peer_net::ensure_node_started；旧 setup 无条件自启已退役）
             app.manage(crate::peer_net::PeerNetState::default());
-            app.manage(crate::peer_transfer::PeerTransferState::default());
-            app.manage(crate::peer_receive::PeerReceiveState::default());
-            app.manage(crate::peer_remote::PeerRemoteState::default());
+            // peer-engine 状态仅保存当前引擎会话控制句柄与事件快照，不是业务持久化真源；
+            // 任务、历史、设置均由 file-transfer 插件私有库持有。
+            app.manage(crate::peer_engine_transfer::PeerTransferState::default());
+            app.manage(crate::peer_engine_receive::PeerReceiveState::default());
+            app.manage(crate::peer_engine_remote::PeerRemoteState::default());
 
             let db = Database::new(&db_path)?;
             db.init_schema()?;
@@ -365,9 +366,6 @@ pub fn run() {
                 crate::utils::auth::jwt::JWT_SECRET_KEY_ID,
                 crate::utils::auth::jwt::JWT_SECRET_KEY_LEN,
             )?;
-
-            // 旧版对等网络数据一次性迁移（issue 13 Phase 4 步骤 9；幂等，失败不阻断）
-            crate::peer_migration::migrate_legacy_peer_data(&app_handle, &db);
 
             // ==================== 创建所有全局单实例 ====================
 
@@ -440,6 +438,10 @@ pub fn run() {
             // PluginHost::new 之后——合并插件 activate 里的库内改名与建表已完成，
             // 目标表此刻才存在；幂等（账本已落即整体跳过），失败不阻断启动
             crate::plugin::task_data_migration::run(&app_handle_arc);
+            // 快捷指令 legacy 主库 → session 插件私有库的一次性搬运（票 02）：同位置
+            // 触发——PluginHost::new 之后插件已按持久化状态自动激活，互调面已登记；
+            // 插件未激活时跳过（数据留主库，双轨期继续服务）；插件侧 marker 幂等
+            crate::plugin::quick_actions_migration::run();
             app.manage(system_info.clone());
             // peer-net 节点与文件传输插件状态对账：boot 装配期 AppContext 全局
             // 尚未注册，activate 外壳内的节点启动会被静默跳过（2026-09-06 实机
@@ -450,7 +452,6 @@ pub fn run() {
             {
                 tracing::error!(error = %e, "peer-net node sync after boot assembly failed");
             }
-
             // ==================== 开发模式：启动插件文件监听 ====================
             // 仅 debug 构建启用，监听插件产物变化触发热重载
             // notify 回调在非 Tokio 线程中运行，必须通过 Handle::spawn 而非 tokio::spawn
@@ -731,9 +732,6 @@ pub fn run() {
             peer_net::respond_peer_consent,
             peer_net::list_trusted_peers,
             peer_net::revoke_trusted_peer,
-            peer_receive::set_peer_receive_policy,
-            peer_receive::set_peer_download_dir,
-            peer_receive::set_peer_transfer_encryption,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

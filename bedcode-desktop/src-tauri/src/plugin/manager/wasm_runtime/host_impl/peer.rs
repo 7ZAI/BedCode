@@ -1,7 +1,7 @@
 //! host-peer 逻辑层 —— 对等网络基础能力（ADR 0022 v3 终态 13 原语）
 //!
 //! 宿主 peer-net 引擎的 WASM 投影：每个函数做权限校验后直接复用
-//! `peer_net` / `peer_transfer` / `peer_receive` / `peer_remote`
+//! `peer_net` 引擎接入层
 //! 的既有异步实现（与 Tauri 命令同一真源），DTO 以 JSON 字符串过界。
 //! 无头上下文（app_handle = None）一律报错，不做静默降级——对等网络
 //! 能力依赖节点运行时，降级会产生「看似成功实则空列表」的假象。
@@ -142,7 +142,7 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
         return sync_result(block_on_async(crate::peer_net::disconnect_peer(app, entry.node_id)));
     }
     // ② 发送传输句柄（batch-id）→ 取消发送批
-    let cancelled = sync_result(block_on_async(crate::peer_transfer::cancel_peer_transfer(
+    let cancelled = sync_result(block_on_async(crate::peer_net::cancel_transfer_for_plugin(
         app.clone(),
         handle.to_string(),
     )));
@@ -150,7 +150,7 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
         return cancelled;
     }
     // ③ 接收侧句柄（batch-id）→ 取消/拒绝接收批（pending 即拒）
-    sync_result(block_on_async(crate::peer_receive::cancel_peer_receiving(
+    sync_result(block_on_async(crate::peer_net::cancel_receiving_for_plugin(
         app,
         handle.to_string(),
     )))
@@ -238,7 +238,7 @@ pub(crate) fn peer_send_files(
     let app = require_app(host_ctx)?;
     // 并发上限脉冲：插件设置真源，随发送载荷同步宿主并发闸门（若变化）
     if let Some(n) = concurrency {
-        let _ = sync_result(block_on_async(crate::peer_receive::set_peer_transfer_concurrency(
+        let _ = sync_result(block_on_async(crate::peer_net::set_transfer_concurrency_for_plugin(
             app.clone(),
             n,
         )));
@@ -247,7 +247,7 @@ pub(crate) fn peer_send_files(
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
     let dto = with_auto_redial(host_ctx, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_transfer::send_files_to_peer_with_policy(
+        sync_result(block_on_async(crate::peer_net::send_files_for_plugin(
             app,
             node_id.to_string(),
             paths.clone(),
@@ -268,7 +268,7 @@ pub(crate) fn peer_respond_transfer(
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let _hit = sync_result(block_on_async(crate::peer_receive::respond_peer_transfer(
+    let _hit = sync_result(block_on_async(crate::peer_net::respond_transfer_for_plugin(
         app, batch_id, accept,
     )))?;
     Ok(())
@@ -285,7 +285,7 @@ pub(crate) fn peer_set_receive_policy(
     }
     let app = require_app(host_ctx)?;
     let mode = mode.to_string();
-    sync_result(block_on_async(crate::peer_receive::set_peer_receive_policy(
+    sync_result(block_on_async(crate::peer_net::set_receive_policy_for_plugin(
         app,
         mode,
         timeout_secs,
@@ -300,7 +300,7 @@ pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, b
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::peer_transfer::pause_peer_transfer(app, batch_id)))?;
+    let hit = sync_result(block_on_async(crate::peer_net::pause_transfer_for_plugin(app, batch_id)))?;
     if !hit {
         return Err("pause transfer: no running send batch with that id".to_string());
     }
@@ -314,7 +314,7 @@ pub(crate) fn peer_resume_transfer(host_ctx: &WasmHostContext, plugin_id: &str, 
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::peer_transfer::resume_peer_transfer(
+    let hit = sync_result(block_on_async(crate::peer_net::resume_transfer_for_plugin(
         app, batch_id,
     )))?;
     if !hit {
@@ -329,7 +329,7 @@ pub(crate) fn peer_resume_all_transfers(host_ctx: &WasmHostContext, plugin_id: &
         return Err(denied());
     }
     let app = require_app(host_ctx)?;
-    let n = sync_result(block_on_async(crate::peer_transfer::resume_all_peer_transfers(app)))?;
+    let n = sync_result(block_on_async(crate::peer_net::resume_all_transfers_for_plugin(app)))?;
     Ok(n as u32)
 }
 
@@ -373,7 +373,7 @@ pub(crate) fn peer_list_shared_roots(
     }
     let roots = with_auto_redial(host_ctx, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_remote::list_peer_shared_roots(
+        sync_result(block_on_async(crate::peer_net::list_remote_roots_for_plugin(
             app,
             node_id.to_string(),
         )))
@@ -394,7 +394,7 @@ pub(crate) fn peer_browse_directory(
     let (dir_id, rel_path) = (dir_id.to_string(), rel_path.to_string());
     let dto = with_auto_redial(host_ctx, session, |node_id| {
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_remote::browse_peer_directory(
+        sync_result(block_on_async(crate::peer_net::browse_remote_for_plugin(
             app,
             node_id.to_string(),
             dir_id.clone(),
@@ -418,10 +418,10 @@ pub(crate) fn peer_pull_files(
     let dir_id = dir_id.to_string();
     let files_json_owned = files_json.to_string();
     with_auto_redial(host_ctx, session, |node_id| {
-        let files: Vec<crate::peer_remote::RemotePullFileDto> =
+        let files: Vec<crate::peer_net::RemotePullFileDto> =
             serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
         let app = require_app(host_ctx)?;
-        sync_result(block_on_async(crate::peer_remote::pull_peer_files(
+        sync_result(block_on_async(crate::peer_net::pull_files_for_plugin(
             app,
             node_id.to_string(),
             dir_id.clone(),
@@ -437,7 +437,7 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
     }
     let app = require_app(host_ctx)?;
     let path = if path.is_empty() { None } else { Some(path.to_string()) };
-    sync_result(block_on_async(crate::peer_receive::set_peer_download_dir(app, path)))
+    sync_result(block_on_async(crate::peer_net::set_download_dir_for_plugin(app, path)))
 }
 
 // ==================== Tests ====================

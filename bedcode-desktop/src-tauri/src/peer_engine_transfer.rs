@@ -1,21 +1,23 @@
-//! 对等网络发送侧（issue 09）：扇出发送编排 + 进度转发 + 终态历史。
+//! 对等网络发送侧引擎适配器（issue 09 编排下沉后的宿主残面，票 06 收敛）。
 //!
-//! 领域模型（spec 决策 2）：「群发」仅是前端编排概念——宿主为每个接收方
-//! 维护一条相互独立的传输批（独立 batch_id / 独立进度 / 独立策略闸门），
-//! 任一接收方拒绝不影响其余。本模块职责：
+//! 领域模型（spec 决策 2）：「群发」仅是插件前端编排概念——每个接收方一条
+//! 相互独立的传输批（独立 batch_id / 独立进度 / 独立策略闸门），任一接收方
+//! 拒绝不影响其余。产品编排（扇出、重试、任务列表、历史持久化）在
+//! file-transfer 插件（host-peer 原语 + `peer:transfer` 总线快照驱动）；
+//! 本模块只做 WIT `send-files` / `pause-transfer` / `resume-transfer` /
+//! `close` 原语的引擎接入：
 //!
-//! - 命令面：[`send_files_to_peer`]（收集源文件 → 拨号 → `send_batch` 后台
-//!   会话）、[`cancel_peer_transfer`]、[`retry_peer_transfer`]（同批 ID 重发 =
-//!   断点续传，断点真源在接收端落盘侧）、[`list_peer_transfers`] /
-//!   [`clear_peer_transfer_history`]；
-//! - 事件桥：任务列表变更全量推送 `peer-transfer-changed`（与 issue 08 的
-//!   `peer-devices-changed` 同款范式）；引擎 Progress 按 chunk 高频发射，
-//!   转发层做时间窗节流防 IPC 事件风暴；
-//! - 历史：终态记录持久化 `transfer_history.json`（封顶滚动淘汰、原子写），
-//!   升级/重启后仍可追溯（spec 用户故事 26/28）；活跃任务的源文件清单仅存
-//!   内存——重启后的历史条目如实保留终态但不可重试（重试需重新发起）。
+//! - 会话接入：收集源文件 → 拨号 → `send_batch` 后台会话；并发闸门
+//!   （插件设置真源经发送载荷脉冲同步）与暂停句柄登记；
+//! - 快照推送：引擎 Progress 按 chunk 高频发射，适配器做时间窗节流后把
+//!   活动批快照推 `peer:transfer` 总线 topic（仅总线：桌面 Tauri 前端
+//!   事件桥随宿主命令面退役，票 06）；
+//! - 供流记账：对端拉取本机文件时在引擎事件侧登记 direction=send 任务，
+//!   双端对同一次传输各自展示（pull 发起方的 receive 任务在接收侧模块）。
 //!
-//! 接收方向（direction=receive）的记录形态在此预留，接入属 issue 10。
+//! 历史只在内存存活于节点生命周期：真源在插件私有库，升级/重启后由插件
+//! 恢复；重试由插件回放 `send-files` 原语实现（新批 ID，断点真源在接收端
+//! 落盘侧），宿主不再持有重试编排。
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -31,8 +33,6 @@ use tokio::sync::mpsc;
 
 // ==================== 常量 ====================
 
-/// 历史文件名（数据目录内，与身份/可信表同源）
-const HISTORY_FILE: &str = "transfer_history.json";
 /// 历史封顶条数：超出后按最旧优先滚动淘汰（spec 用户故事 26）
 const HISTORY_CAP: usize = 200;
 /// 进度事件最小发射间隔：引擎按 ≤64KiB chunk 发射 Progress，
@@ -40,8 +40,6 @@ const HISTORY_CAP: usize = 200;
 const PROGRESS_EMIT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
 /// 单批文件数上限：目录递归收集的失控保护
 const MAX_FILES_PER_BATCH: usize = 512;
-/// 历史文件格式版本（未来字段演进时 fail-fast）
-const HISTORY_FORMAT_VERSION: u32 = 1;
 
 // ==================== 数据模型 ====================
 
@@ -117,17 +115,8 @@ pub struct PeerTransferState {
 
 #[derive(Default)]
 struct PeerTransferInner {
-    /// 历史是否已从磁盘加载（进程内一次）
-    loaded: bool,
     /// 全量任务列表（活跃 + 历史；最新在前）
     tasks: Vec<SendTask>,
-}
-
-/// 历史文件磁盘形态
-#[derive(Serialize, Deserialize)]
-struct HistoryFile {
-    version: u32,
-    entries: Vec<PeerTransferDto>,
 }
 
 fn now_ms() -> u64 {
@@ -141,11 +130,6 @@ fn now_ms() -> u64 {
 /// running 传输中均非终态——历史封顶淘汰只逐出真终态）
 fn is_terminal_status(status: &str) -> bool {
     matches!(status, "completed" | "failed" | "rejected" | "cancelled")
-}
-
-/// 重试资格：失败/取消/被拒可重试（completed 无意义，running 在途禁重复发起）
-fn retryable(status: &str) -> bool {
-    matches!(status, "failed" | "cancelled" | "rejected")
 }
 
 impl PeerTransferState {
@@ -208,43 +192,10 @@ impl PeerTransferState {
     }
 }
 
-// ==================== 命令面 ====================
-
-/// 当前全量任务列表（活跃 + 历史，最新在前；未加载时先惰性读盘）
-#[tauri::command]
-pub async fn list_peer_transfers(app: AppHandle) -> crate::Result<Vec<PeerTransferDto>> {
-    ensure_history_loaded(&app).await?;
-    Ok(snapshot(&app))
-}
-
-/// 清空传输历史（终态记录全部移除；进行中任务不受影响）。返回清除条数。
-#[tauri::command]
-pub async fn clear_peer_transfer_history(app: AppHandle) -> crate::Result<usize> {
-    ensure_history_loaded(&app).await?;
-    let removed = {
-        let state = app.state::<PeerTransferState>();
-        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-        let before = inner.tasks.len();
-        let removed_ids: HashSet<String> = inner
-            .tasks
-            .iter()
-            .filter(|t| is_terminal_status(&t.dto.status))
-            .map(|t| t.dto.batch_id.clone())
-            .collect();
-        inner.tasks.retain(|t| !removed_ids.contains(&t.dto.batch_id));
-        before - inner.tasks.len()
-    };
-    if removed > 0 {
-        persist_history(&app).await;
-        publish(&app);
-    }
-    tracing::info!(count = removed, "peer transfer history cleared");
-    Ok(removed)
-}
+// ==================== 原语适配面 ====================
 
 /// 取消进行中的发送任务（幂等：已终态返回 false）。排队中（pending）任务
 /// 无活动会话，直接标记终态；运行中任务触发 CancelToken 中断会话。
-#[tauri::command]
 pub async fn cancel_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     let state = app.state::<PeerTransferState>();
     match state.cancel_token_of(&batch_id) {
@@ -289,11 +240,10 @@ pub async fn cancel_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
 /// 对端任务经 Pause 帧同步为 paused，恢复续流无缝衔接。
 ///
 /// 服务侧拉取记账任务（sources 空）经宿主 handler 按 serve batch_id 门控。
-#[tauri::command]
 pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     // 非发送任务（拉取接收等）：回落接收方向暂停
     if !send_task_exists(&app, &batch_id) {
-        return super::peer_receive::pause_peer_receiving(app, batch_id).await;
+        return super::peer_engine_receive::pause_peer_receiving(app, batch_id).await;
     }
     let state = app.state::<PeerTransferState>();
     let route = {
@@ -323,7 +273,7 @@ pub async fn pause_peer_transfer(app: AppHandle, batch_id: String) -> crate::Res
     match route {
         // 服务侧拉取记账任务（sources 空）：门控入口在 SharedDirHandler 的
         // serve 暂停注册表（会话内写 Pause 帧 + 停供流）
-        PauseRoute::Serve => match super::peer_receive::handler_and_config(&app).await {
+        PauseRoute::Serve => match super::peer_engine_receive::handler_and_config(&app).await {
             Some((handler, _)) if handler.set_serve_paused(&batch_id, true).await => {
                 publish(&app);
                 tracing::info!(batch_id = %batch_id, "pull serve transfer paused");
@@ -383,11 +333,10 @@ fn pause_route(sources_empty: bool) -> PauseRoute {
 /// 恢复暂停的发送任务：连接未断则直接续流（wire Resume 帧 + 供方续推流），
 /// 无活动会话（重启/断线后残留 paused）回落旧路径：入队（pending）并经并发
 /// 闸门重新拨号，接收端按已写偏移续传（断点真源在落盘侧）；保留已传字节。
-#[tauri::command]
 pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<bool> {
     // 非发送任务（拉取接收等）：回落接收方向恢复
     if !send_task_exists(&app, &batch_id) {
-        return super::peer_receive::resume_peer_receiving(app, batch_id).await;
+        return super::peer_engine_receive::resume_peer_receiving(app, batch_id).await;
     }
     let resume_mode = {
         let state = app.state::<PeerTransferState>();
@@ -411,7 +360,7 @@ pub async fn resume_peer_transfer(app: AppHandle, batch_id: String) -> crate::Re
     };
     match resume_mode {
         ResumeMode::Serve => {
-            match super::peer_receive::handler_and_config(&app).await {
+            match super::peer_engine_receive::handler_and_config(&app).await {
                 Some((handler, _)) if handler.set_serve_paused(&batch_id, false).await => {
                     set_running_status(&app, &batch_id).await;
                     Ok(true)
@@ -469,7 +418,7 @@ async fn resume_via_redial(app: &AppHandle, batch_id: &str) -> bool {
 /// 经 handler 取消服务侧拉取会话（本端在对端拉取中供流）：会话按 serve
 /// batch_id（= 传输任务行 ID）寻址，命中即写 Cancel 帧并停供流。
 async fn cancel_serve_session(app: &AppHandle, batch_id: &str) -> bool {
-    match super::peer_receive::handler_and_config(app).await {
+    match super::peer_engine_receive::handler_and_config(app).await {
         Some((handler, _)) => handler.cancel_serve_transfer(batch_id),
         None => false,
     }
@@ -518,7 +467,6 @@ async fn set_running_status(app: &AppHandle, batch_id: &str) {
 
 /// 恢复全部暂停的传输任务：发送方向逐个入队（受并发闸门约束）+ 同端已暂停的
 /// 接收任务经 wire Resume 帧续流。返回恢复数。
-#[tauri::command]
 pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
     // 活跃会话（连接保持）直接续流；无会话的回落重新拨号入队；serve
     // 记账任务经 handler 门控恢复（本端暂停的供流批同样要能被「全部继续」拉起）
@@ -561,7 +509,7 @@ pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
     // serve 门控恢复：成功才置回 running（无活动会话保持 paused，等取消/重试）
     let mut resumed_serve = 0usize;
     for bid in &serve_ids {
-        let resumed = match super::peer_receive::handler_and_config(&app).await {
+        let resumed = match super::peer_engine_receive::handler_and_config(&app).await {
             Some((handler, _)) => handler.set_serve_paused(bid, false).await,
             None => false,
         };
@@ -577,23 +525,13 @@ pub async fn resume_all_peer_transfers(app: AppHandle) -> crate::Result<usize> {
     }
     // 接收方向（拉取 / push 接收）暂停任务：与单条恢复同路径（wire Resume 帧
     // 请求对端数据供方解除门控）；「全部继续」按钮对双方向一致生效
-    let resumed_receive = super::peer_receive::resume_all_peer_receiving(&app).await;
+    let resumed_receive = super::peer_engine_receive::resume_all_peer_receiving(&app).await;
     Ok(live_ids.len() + queued_ids.len() + resumed_serve + resumed_receive)
 }
 
-/// 向一个可信对端推送一批文件/文件夹（扇出 = 前端对本命令的多节点调用）
-///
-/// 目录递归展开为相对路径清单（保持目录形状，跨平台 `/` 分隔），同名目标
-/// 自动去重编号。命令立即返回 running 态记录；进度经 `peer-transfer-changed`
-/// 全量列表事件持续推送，终态落历史。
-#[tauri::command]
-pub async fn send_files_to_peer(app: AppHandle, node_id: String, paths: Vec<String>) -> crate::Result<PeerTransferDto> {
-    send_files_to_peer_with_policy(app, node_id, paths, None).await
-}
-
-/// 发送策略参数化入口（issue 13 Phase 3 步骤 5）：`encrypt_override` 为
+/// 发送入口（issue 13 Phase 3 步骤 5）：`encrypt_override` 为
 /// `Some(true)` 时本批强制加密（插件载荷元素级 flag 聚合），`None` 回落引擎
-/// 接收设置全局开关——Tauri 命令面恒传 `None`，WASM host_impl 按新载荷解析。
+/// 接收设置全局开关——插件经 host-peer `send-files` 原语调用并解析载荷。
 pub(crate) async fn send_files_to_peer_with_policy(
     app: AppHandle,
     node_id: String,
@@ -606,7 +544,6 @@ pub(crate) async fn send_files_to_peer_with_policy(
             "send_files_to_peer: paths must not be empty".to_string(),
         ));
     }
-    ensure_history_loaded(&app).await?;
     // `node` 仅用于确认节点已启动（runtime_snapshot 的可用性即启动判据）
     let Some((_node, cache)) = super::peer_net::runtime_snapshot(&app).await else {
         return Err(crate::AppError::Internal(
@@ -674,7 +611,7 @@ pub(crate) async fn send_files_to_peer_with_policy(
 
 /// 发送方向并发上限（插件设置真源，经发送载荷脉冲同步宿主；缺省 3）
 async fn current_concurrency(app: &AppHandle) -> usize {
-    super::peer_receive::ensure_settings_loaded(app).await.concurrency as usize
+    super::peer_engine_receive::ensure_settings_loaded(app).await.concurrency as usize
 }
 
 /// 锁内统计发送方向 running 数（并发槽占用；服务侧拉取记账任务 sources 为空，
@@ -781,73 +718,13 @@ async fn start_send_session(app: &AppHandle, batch_id: &str) {
     };
     let encrypt = match encrypt {
         Some(v) => v,
-        None => {
-            super::peer_receive::ensure_settings_loaded(app)
-                .await
-                .encryption_enabled
-        }
+        // 插件不显式下发加密时恒不加密（原 settings.encryption_enabled 已无写入
+        // 方、恒 false，④1 清理后显式化）：应用层 AES-256-GCM 由 send-files 载荷
+        // `encrypt` 字段逐次开关，不再有全局接受侧设置真源
+        None => false,
     };
     drive_send_session(app.clone(), node, record, batch_id.to_string(), sources, epoch, encrypt);
     tracing::debug!(batch_id = %batch_id, "peer transfer session started by queue");
-}
-
-/// 重试发送任务：复用同一批 ID 重新拨号发起——接收端按已写偏移续传
-/// （断点真源在落盘侧，issue 06），已完成文件自动跳过
-///
-/// 仅 failed / cancelled / rejected 可重试；重试经并发闸门排队（pending）
-/// 启动，受「同时传输数量」限制。源清单在重启后丢失的历史条目返回明确
-/// 错误（前端如实提示需重新发起）。
-#[tauri::command]
-pub async fn retry_peer_transfer(app: AppHandle, batch_id: String) -> crate::Result<PeerTransferDto> {
-    ensure_history_loaded(&app).await?;
-
-    // 锁内完成校验与重置（纯内存），锁外经并发闸门启动
-    let dto = {
-        let state = app.state::<PeerTransferState>();
-        let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-        let task = inner
-            .tasks
-            .iter_mut()
-            .find(|t| t.dto.batch_id == batch_id)
-            .ok_or_else(|| crate::AppError::NotFound(format!("peer transfer task not found: {batch_id}")))?;
-        if task.dto.direction != "send" {
-            return Err(crate::AppError::InvalidInput(format!(
-                "peer transfer retry only supports send tasks: {batch_id}"
-            )));
-        }
-        if !retryable(&task.dto.status) {
-            return Err(crate::AppError::InvalidInput(format!(
-                "peer transfer task not retryable in state '{}': {batch_id}",
-                task.dto.status
-            )));
-        }
-        if task.sources.is_empty() {
-            return Err(crate::AppError::Internal(format!(
-                "peer transfer retry sources unavailable (task created before restart): {batch_id}"
-            )));
-        }
-        // 置排队态，由并发闸门在槽位空出时启动；
-        // 保留 transferred_bytes——接收端 .part 断点是真源，引擎 Progress
-        // 首帧会重设为偏移；重置会在续传前造成 UI 0% 视觉断层
-        prepare_retry_task(task)
-    };
-
-    publish(&app);
-    pump_send_queue(app.clone()).await;
-    tracing::info!(batch_id = %batch_id, "peer transfer retry queued");
-    Ok(dto)
-}
-
-/// 重试前重置（纯函数）：置排队态、清速率/明细、回落加密开关；
-/// 保留已传字节（断点真源在接收端 .part，引擎 Progress 首帧会重设为偏移）
-fn prepare_retry_task(task: &mut SendTask) -> PeerTransferDto {
-    task.dto.status = "pending".to_string();
-    task.dto.rate_bps = 0.0;
-    task.dto.detail = None;
-    task.dto.reject_reason = None;
-    task.dto.updated_at_ms = now_ms();
-    task.encrypt = None; // 重试加密回落当前全局开关
-    task.dto.clone()
 }
 
 // ==================== 会话驱动 ====================
@@ -1066,7 +943,6 @@ async fn apply_terminal(app: &AppHandle, batch_id: &str, terminal: TerminalState
         evict_history_cap_locked(&mut inner.tasks);
     }
     tracing::info!(batch_id = %batch_id, state = ?terminal, "peer transfer session ended");
-    persist_history(app).await;
     publish(app);
     // 终态归还并发槽：推进队列中下一个 pending（批量上传排队自动衔接）
     pump_after_settle(app);
@@ -1247,7 +1123,7 @@ async fn settle_serve_terminal(app: &AppHandle, batch_id: &str, terminal: Termin
     publish(app);
 }
 
-// ==================== 发布与持久化 ====================
+// ==================== 发布 ====================
 
 /// 全量列表快照（锁内克隆，锁外使用）
 fn snapshot(app: &AppHandle) -> Vec<PeerTransferDto> {
@@ -1256,45 +1132,11 @@ fn snapshot(app: &AppHandle) -> Vec<PeerTransferDto> {
     inner.tasks.iter().map(|t| t.dto.clone()).collect()
 }
 
-/// 全量列表推送（锁外 emit；与 peer-devices-changed 同款范式）
+/// 全量列表推送（锁外发布；仅总线单路，票 06——桌面 Tauri 前端事件桥
+/// 随宿主命令面退役，产品状态由插件经 `peer:transfer` 快照驱动）
 fn publish(app: &AppHandle) {
     let payload = serde_json::to_value(snapshot(app)).unwrap_or_default();
-    super::peer_net::emit_json(app, "peer-transfer-changed", payload);
-}
-
-/// 首次访问时惰性加载历史（并发首载可能重复读盘，内容一致幂等无害）
-async fn ensure_history_loaded(app: &AppHandle) -> crate::Result<()> {
-    let state = app.state::<PeerTransferState>();
-    {
-        let inner = state.inner.lock().expect("peer transfer lock poisoned");
-        if inner.loaded {
-            return Ok(());
-        }
-    }
-    let dir = super::peer_net::app_data_dir(app)?;
-    let entries = tauri::async_runtime::spawn_blocking(move || read_history_file(&dir))
-        .await
-        .map_err(|e| crate::AppError::Internal(format!("join history load failed: {e}")))?
-        .unwrap_or_default();
-    let mut inner = state.inner.lock().expect("peer transfer lock poisoned");
-    if !inner.loaded {
-        // 加载的历史条目 sources 为空（重启后不可重试，如实语义）
-        inner.tasks.extend(entries.into_iter().map(|dto| SendTask {
-            dto,
-            sources: Vec::new(),
-            encrypt: None,
-        }));
-        sort_tasks_newest_first(&mut inner.tasks);
-        inner.loaded = true;
-    }
-    Ok(())
-}
-
-/// 终态快照落盘（tmp+rename 原子替换；写盘在 spawn_blocking，串行锁防竞态）
-async fn persist_history(_app: &AppHandle) {
-    // Phase 4 停写（issue 13 裁决 B）：插件自持历史成为唯一产品历史，引擎侧
-    // 持久化文件冻结在最后版本；ensure_history_loaded 保留一版只读兼容回滚，
-    // 下版本随读取一并删除。
+    super::peer_net::publish_bus_only("peer-transfer-changed", payload);
 }
 
 /// 历史封顶淘汰：列表为最新在前，保序保留前 CAP 条终态记录，
@@ -1308,37 +1150,6 @@ fn evict_history_cap_locked(tasks: &mut Vec<SendTask>) {
         kept += 1;
         kept <= HISTORY_CAP
     });
-}
-
-fn sort_tasks_newest_first(tasks: &mut [SendTask]) {
-    tasks.sort_by(|a, b| b.dto.created_at_ms.cmp(&a.dto.created_at_ms));
-}
-
-fn read_history_file(dir: &Path) -> std::io::Result<Vec<PeerTransferDto>> {
-    let raw = std::fs::read_to_string(dir.join(HISTORY_FILE))?;
-    let file: HistoryFile =
-        serde_json::from_str(&raw).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    if file.version != HISTORY_FORMAT_VERSION {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("unsupported transfer history version {}", file.version),
-        ));
-    }
-    Ok(file.entries)
-}
-
-#[allow(dead_code)] // 测试覆盖：history_file_roundtrips_entries,生产侧调度尚未接入
-fn write_history_file(dir: &Path, entries: &[PeerTransferDto]) -> std::io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    let target = dir.join(HISTORY_FILE);
-    let tmp = dir.join(format!("{HISTORY_FILE}.tmp"));
-    let body = HistoryFile {
-        version: HISTORY_FORMAT_VERSION,
-        entries: entries.to_vec(),
-    };
-    let bytes = serde_json::to_vec(&body).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, &target)
 }
 
 // ==================== 源文件收集 ====================
@@ -1491,7 +1302,6 @@ fn unique_remote_path(requested: String, used: &mut HashSet<String>) -> String {
 /// 选择待发送文件（桌面端多选；用户取消返回空数组）
 ///
 /// 宿主自有命令不经插件门控——发送表单是宿主内置 UI 而非插件面板。
-#[tauri::command]
 pub async fn peer_pick_files(app_handle: AppHandle) -> crate::Result<Vec<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1511,7 +1321,6 @@ pub async fn peer_pick_files(app_handle: AppHandle) -> crate::Result<Vec<String>
 }
 
 /// 选择待发送文件夹（桌面端单次单个，可多次累加；用户取消返回空数组）
-#[tauri::command]
 pub async fn peer_pick_folder(app_handle: AppHandle) -> crate::Result<Vec<String>> {
     use tauri_plugin_dialog::DialogExt;
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -1596,45 +1405,14 @@ mod tests {
     }
 
     #[test]
-    fn retryable_covers_failure_states_only() {
-        assert!(retryable("failed"));
-        assert!(retryable("cancelled"));
-        assert!(retryable("rejected"));
-        assert!(!retryable("running"));
-        assert!(!retryable("completed"));
-    }
-
-    /// Bug 5 回归：重试重置保留 transferred_bytes（断点真源在接收端 .part，
-    /// 引擎 Progress 首帧会重设为偏移；重置会导致续传前 UI 0% 视觉断层）
-    #[test]
-    fn prepare_retry_task_keeps_transferred_bytes() {
-        let mut task = SendTask {
-            dto: dto("failed", 42),
-            sources: Vec::new(),
-            encrypt: Some(true),
-        };
-        task.dto.transferred_bytes = 5000;
-        let prepared = prepare_retry_task(&mut task);
-        assert_eq!(prepared.status, "pending");
-        assert_eq!(
-            prepared.transferred_bytes, 5000,
-            "transferred must be kept for resumable retry"
-        );
-        assert_eq!(prepared.rate_bps, 0.0);
-        assert!(prepared.detail.is_none());
-        assert!(prepared.reject_reason.is_none());
-        assert!(task.encrypt.is_none(), "retry falls back to global encryption");
-    }
-
-    #[test]
     fn dto_wire_format_is_camel_case() {
-        // IPC/历史文件共用同一序列化形状，前端消费 camelCase 字段
+        // IPC/总线快照共用同一序列化形状，插件消费 camelCase 字段
         let json = serde_json::to_string(&dto("rejected", 1)).expect("serialize");
         assert!(json.contains("\"batchId\":\"b-1\""));
         assert!(json.contains("\"peerName\":\"Peer\""));
         assert!(json.contains("\"totalBytes\":3"));
         assert!(json.contains("\"createdAtMs\":1"));
-        // None 字段不落盘（历史文件紧凑）
+        // None 字段不进 wire（快照紧凑）
         assert!(!json.contains("detail"), "None detail must be skipped");
     }
 
@@ -1710,20 +1488,6 @@ mod tests {
     fn collect_rejects_empty_selection_and_missing_paths() {
         assert!(collect_outgoing_files(&[]).is_err());
         assert!(collect_outgoing_files(&["missing.bin".to_string()]).is_err());
-    }
-
-    #[test]
-    fn history_file_roundtrips_entries() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let entries = vec![dto("completed", 100), dto("failed", 200)];
-        write_history_file(dir.path(), &entries).expect("write");
-        let loaded = read_history_file(dir.path()).expect("read");
-        assert_eq!(loaded, entries);
-
-        // 未来版本 fail-fast：静默换格式会丢历史，禁止吞错降级
-        let future = r#"{"version":999,"entries":[]}"#;
-        std::fs::write(dir.path().join(HISTORY_FILE), future).expect("write future");
-        assert!(read_history_file(dir.path()).is_err());
     }
 
     #[test]
