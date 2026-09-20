@@ -24,7 +24,9 @@ import {
   registerEndpoint,
   registerFileHandler,
   registerInputExtension,
+  registerPage,
   registerPageToolbarItem,
+  registerSettingsSection,
   registerSidebarPanel,
   registerStatusBarItem,
   registerTerminalToolbarItem,
@@ -105,6 +107,21 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     onStatusChange(handler: (event: any) => void): Disposable {
       return track(onDevEvent('session:statusChange', handler))
     },
+    // ==================== 宿主 SessionAPI 扩展（终端窗口原语，mock 为浏览器 no-op） ====================
+    async predictTerminalSize(): Promise<{ cols: number; rows: number } | null> {
+      // 浏览器环境无桌面窗口/字体测量，返回 null（调用方按不可知处理）
+      return null
+    },
+    async openTerminal(_session: { id: string; name: string }): Promise<boolean> {
+      pushLog('info', pluginId, 'session.openTerminal (mock) 浏览器环境无终端窗口')
+      return false
+    },
+    async closeTerminal(_sessionId: string): Promise<void> {
+      // no-op：无窗口概念
+    },
+    isTerminalOpen(_sessionId: string): boolean {
+      return false
+    },
   }
 
   // ==================== UIRegistry ====================
@@ -114,6 +131,9 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
     registerToolboxPage(page) {
       return track(registerToolboxPage(pluginId, page))
+    },
+    registerPage(page) {
+      return track(registerPage(pluginId, page))
     },
     registerStatusBarItem(item) {
       return track(registerStatusBarItem(pluginId, item))
@@ -132,6 +152,9 @@ export function createMockContext(pluginId: string, extensionPath: string): Plug
     },
     registerFileHandler(handler) {
       return track(registerFileHandler(pluginId, handler))
+    },
+    registerSettingsSection(section) {
+      return track(registerSettingsSection(pluginId, section))
     },
     showDialog(options: PluginDialogOptions): PluginDialogHandle {
       // context 在本函数尾部组装；惰性引用（showDialog 调用时已初始化），供内容组件 provide

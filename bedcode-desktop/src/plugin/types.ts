@@ -396,6 +396,13 @@ export interface SessionAPI {
 export interface UIRegistry {
   registerSidebarPanel(panel: SidebarPanelDescriptor): Disposable
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
+  /**
+   * 注册一个可由插件页路由直达、但**不进入侧边栏菜单**的页面
+   * （viewType 'page'：不进 sidebarViews/toolboxViews 投影，仅存全量注册表）。
+   * 仍经 `/plugin/sidebar/:pluginId/:viewId` 路由渲染（如从设备列表进入连接历史深链），
+   * 适合「从某页内进入的二级页面」场景（票 14 收尾：连接历史不再占侧边栏）。
+   */
+  registerPage(page: SidebarPanelDescriptor): Disposable
   registerStatusBarItem(item: StatusBarItemDescriptor): Disposable
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable

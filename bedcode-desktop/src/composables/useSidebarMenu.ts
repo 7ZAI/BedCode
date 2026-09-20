@@ -7,7 +7,6 @@
  */
 import { computed, ref, type ComputedRef, type Ref } from 'vue'
 import { getPluginRegistry, isContributionActiveState } from '@/plugin/registry'
-import type { PluginState } from '@/plugin/types'
 
 /** 统一侧边栏菜单项 */
 export interface SidebarMenuItem {
@@ -25,9 +24,6 @@ export interface SidebarMenuItem {
   order: number
   /** true 时用 startsWith 匹配（插件页等多级路由） */
   prefix?: boolean
-  /** true 表示该内置入口可被同槽位的插件贡献目录顶替（让位），见 builtinSupersededBy。
-   * 业务域入口（设备配对 / 终端会话）声明之；插件管理与设置恒在最末，不让位 */
-  supersedable?: boolean
 }
 
 /** 自定义菜单项注册描述符（registerSidebarItem 扩展点入参） */
@@ -45,14 +41,11 @@ export interface SidebarMenuItemDescriptor {
   prefix?: boolean
 }
 
-/** 内置菜单项排序槽位 — 区间间隔 100，供插件/自定义项插入。
- * 设备配对(100) 置于首位；插件管理(9998) 与 设置(9999) 置于所有插件
- * 排序值之后，保证这两个入口永远排在菜单最末。说明：server 槽位(300)
- * 保留不复用，防止插件排序撞位 */
+/** 内置菜单项排序槽位 — 插件管理与设置恒在最末（9998/9999）。
+ * 业务域槽位（设备配对 100 / 终端会话 200）已随票 13/14 下沉 com.bedcode.session
+ * 插件，宿主不再占用；插件贡献目录按自身 order 排布（同域约定仍为 100/200，
+ * 见插件侧目录注册，宿主不感知） */
 export const BUILTIN_MENU_ORDERS = {
-  devices: 100,
-  sessions: 200,
-  server: 300,
   plugins: 9998,
   settings: 9999,
 } as const
@@ -63,40 +56,15 @@ const DEFAULT_MENU_ICON = 'M4 6h16M4 12h16M4 18h7'
 /**
  * 内置菜单项（与插件共用 Heroicons outline 图标体系）
  *
+ * 会话 / 设备配对入口已随票 13/14 下沉 com.bedcode.session 插件：宿主不再提供
+ * 兜底菜单与页面（路由 /sessions、/devices 及其兜底壳已删除），插件未激活时
+ * 侧边栏不显示这两个入口；插件激活后由其贡献目录接管菜单排序槽位。
+ *
  * 服务器管理页面（/server）已从导航中移除入口（产品决策：服务器常驻，
  * 用户不可开关，见 ServerSupervisor）。路由与页面代码保留，调试者可直接
  * 访问 /server URL 预览，未来 CLI 开发工具可复用此页面。
  */
 export const builtinMenuItems: SidebarMenuItem[] = [
-  {
-    id: 'sessions',
-    path: '/sessions',
-    labelKey: 'desktop.sidebar.terminalSession',
-    isI18nKey: true,
-    // 终端图标（与 /sessions 页面头部一致），替代原文档图标以符合"终端会话"含义
-    icon: 'M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
-    order: BUILTIN_MENU_ORDERS.sessions,
-    supersedable: true,
-  },
-  // 服务器管理入口已移除：页面保留于 /server 供调试者直接访问 URL 预览。
-  // 原菜单项：
-  // {
-  //   id: 'server',
-  //   path: '/server',
-  //   labelKey: 'desktop.sidebar.server',
-  //   isI18nKey: true,
-  //   icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01',
-  //   order: BUILTIN_MENU_ORDERS.server,
-  // },
-  {
-    id: 'devices',
-    path: '/devices',
-    labelKey: 'desktop.sidebar.devicePairing',
-    isI18nKey: true,
-    icon: 'M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z',
-    order: BUILTIN_MENU_ORDERS.devices,
-    supersedable: true,
-  },
   {
     id: 'plugins',
     path: '/plugins',
@@ -173,73 +141,25 @@ function toMenuItem(view: {
   }
 }
 
-/** 贡献视图的最小形态（注册表条目与测试桩共用） */
-export interface ContributionViewRef {
-  pluginId: string
-  viewId: string
-  viewType: string
-  order: number
-}
-
-/**
- * 内置入口让位判据 —— 某运行态插件贡献的侧边栏目录**占用该内置项的 order 槽位**
- * （同 order 值）即视为该域已被插件接管，内置入口让位以避免同域出现两个入口。
- *
- * 按同槽位精确匹配而非「order 区间」判定：插在两个内置项之间（如 150）的新域目录
- * 只是插入排序位置，不代表接管了「设备配对」域，否则会误摘宿主入口。
- * 接管某域的插件必须把该域的目录项落在与内置入口相同的 order 上
- * （见 D6：设备与配对 100 / 终端会话 200，同域的其余项如连接历史取 101+）。
- *
- * 让位与否与贡献目录摘除、深链兜底共用 `isContributionActiveState` 判据：
- * 插件 error / 停用后贡献目录不再是「运行态插件的贡献」，内置入口随之恢复。
- *
- * @returns 顶替该内置入口的贡献目录（无则 null）
- */
-export function builtinSupersededBy(
-  item: { order: number },
-  views: ContributionViewRef[],
-  states: Record<string, PluginState>,
-): ContributionViewRef | null {
-  for (const view of views) {
-    if (view.viewType !== 'sidebar') continue
-    if (view.order !== item.order) continue
-    if (!isContributionActiveState(states[view.pluginId])) continue
-    return view
-  }
-  return null
-}
-
 /**
  * 侧边栏菜单组合子 — 合并内置 + 自定义 + 插件视图，按 order 升序稳定排列
  *
  * sort 为稳定排序：同 order 时保持 内置 → 自定义 → 插件注册 的先后顺序。
- * 声明了 `supersedable` 的内置入口在对应槽位出现运行态插件的贡献目录时让位（不重复入口）。
+ * 插件贡献目录经 `isContributionActiveState` 过滤：插件 error / 停用后目录随之
+ * 摘除，避免点开空目录（D7）；宿主不再提供业务域兜底入口（票 13/14 已下沉插件），
+ * 故无让位逻辑。
  */
 export function useSidebarMenu(): { menuItems: ComputedRef<SidebarMenuItem[]> } {
   const registry = getPluginRegistry()
 
   const menuItems = computed<SidebarMenuItem[]>(() => {
     const states = registry.pluginStatesRef.value
-    // 贡献目录与设置分组、内置入口让位共用同一生效判据：插件 error / 停用后
-    // 其目录随之摘除，内置入口恢复，避免「同一域两个入口」与点开空目录（D7）
     const pluginViews = [...registry.sidebarViews.value, ...registry.toolboxViews.value].filter(
       (view) => isContributionActiveState(states[view.pluginId]),
     )
     const pluginItems = pluginViews.map(toMenuItem)
 
-    const yielded = new Set<string>()
-    for (const item of builtinMenuItems) {
-      if (!item.supersedable) continue
-      if (builtinSupersededBy(item, pluginViews, states)) {
-        yielded.add(item.id)
-      }
-    }
-
-    const all = [
-      ...builtinMenuItems.filter((i) => !yielded.has(i.id)),
-      ...customItemsRef.value,
-      ...pluginItems,
-    ]
+    const all = [...builtinMenuItems, ...customItemsRef.value, ...pluginItems]
     all.sort((a, b) => a.order - b.order)
     return all
   })

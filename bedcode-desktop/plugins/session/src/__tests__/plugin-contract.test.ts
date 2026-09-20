@@ -290,6 +290,12 @@ function makeEntryContext(runningSessions: unknown[] = []) {
         panels.push(panel)
         return track(`panel:${panel.id}`)
       },
+      registerPage: (page: { id: string; order: number; title: string }) => {
+        // 非菜单插件页（票 14 收尾：连接历史）：与侧边栏面板同入 panels 清单
+        // 以便断言 id/order/title 与 dispose 计数（宿主侧 viewType='page' 不进菜单）
+        panels.push(page)
+        return track(`panel:${page.id}`)
+      },
       registerSettingsSection: (section: { id: string; order?: number }) => {
         sections.push(section)
         return track(`section:${section.id}`)
@@ -434,16 +440,18 @@ describe('C3 前端入口契约', () => {
 })
 
 describe('C5 侧边栏贡献与宿主内置槽位对齐（票 13/14/17）', () => {
-  it('manifest 声明四个 sidebar 视图，且与运行期注册同 id', () => {
+  it('manifest 声明四个视图（三侧边栏 + 一二级页），且与运行期注册同 id', () => {
     const views = manifest.contributes.views as { id: string; type: string; component: string }[]
     expect(views).toHaveLength(4)
-    expect(views.every((v) => v.type === 'sidebar')).toBe(true)
+    // 票 14 收尾：连接历史改经设备列表入口深链直达，type='page' 不进侧边栏菜单；
+    // 其余三目录仍为侧边栏 menu
     expect(views.map((v) => v.id)).toEqual([
       'session.pairing',
       'session.history',
       'session.sidebar',
       'session.task-history',
     ])
+    expect(views.map((v) => v.type)).toEqual(['sidebar', 'page', 'sidebar', 'sidebar'])
 
     const index = readFileSync(resolve(PLUGIN_ROOT, 'src/index.ts'), 'utf-8')
     // 运行期注册的 id 与 manifest 一致（不一致 → 宿主视图注册表与清单漂移）
@@ -457,23 +465,26 @@ describe('C5 侧边栏贡献与宿主内置槽位对齐（票 13/14/17）', () =
     }
   })
 
-  it('槽位值等于宿主内置 order（让位判据是同 order 值，槽位写错即变成插队）', () => {
+  it('插件目录槽位常量自洽（宿主已无内置业务槽位，协议值为纯插件侧约定）', () => {
+    // 票 13/14 收尾：宿主删除内置「终端会话 / 设备配对」入口与让位机制后，
+    // BUILTIN_MENU_ORDERS 不再含业务槽位；插件目录 order 成为纯插件侧约定
+    // （设备配对 100 / 终端会话 200，同域其余项 +1/+10）。此处锁住协议值，
+    // 防止排序漂移导致目录错位。
     const hostMenu = readFileSync(
       resolve(process.cwd(), 'src/composables/useSidebarMenu.ts'),
       'utf-8',
     )
-    const sessions = /sessions:\s*(\d+)/.exec(hostMenu)
-    const devices = /devices:\s*(\d+)/.exec(hostMenu)
-    expect(sessions, '宿主内置「终端会话」槽位常量必须可读').toBeTruthy()
-    expect(devices, '宿主内置「设备配对」槽位常量必须可读').toBeTruthy()
+    // 宿主不应再出现业务槽位常量（防漂移检查：出现即说明机制未清干净）
+    expect(hostMenu).not.toContain('devices:')
+    expect(hostMenu).not.toContain('sessions:')
 
     const index = readFileSync(resolve(PLUGIN_ROOT, 'src/index.ts'), 'utf-8')
     const pluginSessions = /SESSIONS_SLOT_ORDER\s*=\s*(\d+)/.exec(index)
     const pluginDevices = /DEVICES_SLOT_ORDER\s*=\s*(\d+)/.exec(index)
     expect(pluginSessions, '插件会话槽位常量必须可读').toBeTruthy()
     expect(pluginDevices, '插件设备槽位常量必须可读').toBeTruthy()
-    expect(Number(pluginSessions![1])).toBe(Number(sessions![1]))
-    expect(Number(pluginDevices![1])).toBe(Number(devices![1]))
+    expect(Number(pluginSessions![1])).toBe(200)
+    expect(Number(pluginDevices![1])).toBe(100)
   })
 
   it('设置分组槽位与宿主内置「配对设置」分组同位（该内置分组已退役，由本插件接管）', () => {

@@ -10,7 +10,9 @@ import {
   fileHandlers,
   inputExtensions,
   pageToolbarItems,
+  pages,
   plugins,
+  settingsSections,
   sidebarPanels,
   statusBarItems,
   terminalToolbarItems,
@@ -135,6 +137,26 @@ async function toggle(pluginId: string) {
             class="px-2 py-1 rounded-tag bg-[var(--bg-hover)]"
           >
             {{ x.page.title }}
+          </p>
+        </div>
+        <div v-if="pages.filter((x) => x.pluginId === record.id).length">
+          <p class="text-[var(--text-tertiary)] mb-1">{{ t('devshell.plugins.pages') }}</p>
+          <p
+            v-for="x in pages.filter((y) => y.pluginId === record.id)"
+            :key="x.page.id"
+            class="px-2 py-1 rounded-tag bg-[var(--bg-hover)]"
+          >
+            {{ x.page.title }}
+          </p>
+        </div>
+        <div v-if="settingsSections.filter((x) => x.pluginId === record.id).length">
+          <p class="text-[var(--text-tertiary)] mb-1">{{ t('devshell.plugins.settings') }}</p>
+          <p
+            v-for="x in settingsSections.filter((y) => y.pluginId === record.id)"
+            :key="x.section.id"
+            class="px-2 py-1 rounded-tag bg-[var(--bg-hover)] font-mono"
+          >
+            {{ x.section.titleKey }}
           </p>
         </div>
         <div v-if="fileHandlers.filter((x) => x.pluginId === record.id).length">

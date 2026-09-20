@@ -166,11 +166,9 @@ export interface SidebarPanelDescriptor {
    * 与宿主内置菜单共用同一图标体系，可包含多个 M 子路径组合成完整图标 */
   icon?: string
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
-   * 与宿主内置菜单（设备配对 100 / 终端会话 200 / 服务器 300 保留不复用 / 插件管理 9998 / 设置 9999）
-   * 共用同一排序空间，可指定任意值插入到内置菜单项之间（如 150 位于"设备配对"与"终端会话"之间）；
-   * 同值按注册先后排列。
-   * 注意：与「设备配对 / 终端会话」内置项**同 order 值**即视为接管该域——宿主内置入口随之让位
-   * （本插件 error / 停用后自动恢复）；插在两者之间的新域目录不触发让位 */
+   * 宿主内置菜单只剩恒最末的插件管理(9998) / 设置(9999)（业务槽位已随票 13/14
+   * 下沉插件，宿主无内置业务入口）；插件目录按自身 order 排布，同域其余项取 +1/+10。
+   * 同值按注册先后排列。 */
   order?: number
   component: any
 }
@@ -389,6 +387,14 @@ export interface SessionAPI {
 export interface UIRegistry {
   registerSidebarPanel(panel: SidebarPanelDescriptor): Disposable
   registerToolboxPage(page: ToolboxPageDescriptor): Disposable
+  /**
+   * 注册一个可由插件页路由直达、但**不进入侧边栏菜单**的页面
+   * （viewType 'page'，宿主全量注册表可见、sidebar/toolbox 菜单投影不含）。
+   * 仍经 `/plugin/sidebar/:pluginId/:viewId` 路由渲染——适合「从某页内进入的
+   * 二级页面 / 深链直达」场景（票 14 收尾：连接历史不再占侧边栏，改经设备列表入口）。
+   * order 字段在非菜单页面无排序意义，可省略。
+   */
+  registerPage(page: SidebarPanelDescriptor): Disposable
   registerStatusBarItem(item: StatusBarItemDescriptor): Disposable
   registerInputExtension(ext: InputExtensionDescriptor): Disposable
   registerTerminalToolbarItem(item: TerminalToolbarItemDescriptor): Disposable

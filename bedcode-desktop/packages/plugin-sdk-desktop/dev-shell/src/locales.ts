@@ -18,6 +18,8 @@ export const zhCN = {
   'devshell.plugins.activate': '激活',
   'devshell.plugins.deactivate': '停用',
   'devshell.plugins.sidebar': '侧边栏面板',
+  'devshell.plugins.pages': '插件页（非菜单）',
+  'devshell.plugins.settings': '设置分组',
   'devshell.plugins.toolbar': '终端工具栏',
   'devshell.plugins.endpoints': 'HTTP 端点',
   'devshell.plugins.fileHandlers': '文件处理器',

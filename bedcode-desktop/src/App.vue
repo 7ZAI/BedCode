@@ -93,11 +93,9 @@ const toastOptions: ToasterProps['toastOptions'] = {
 const { startListening: startGlobalNotifications, stopListening: stopGlobalNotifications } =
   useGlobalNotifications()
 
-// 键盘快捷键
+// 键盘快捷键（会话 / 设备配对页已下沉插件，宿主无对应页面，快捷键随之删除）
 useKeyboardShortcuts([
   { key: ',', ctrl: true, handler: () => router.push('/settings') },
-  { key: '1', ctrl: true, handler: () => router.push('/sessions') },
-  { key: '2', ctrl: true, handler: () => router.push('/devices') },
 ])
 
 // 启动画面：保证最低展示时长避免闪烁，初始化完成后淡出

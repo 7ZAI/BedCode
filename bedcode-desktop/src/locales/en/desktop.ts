@@ -6,11 +6,9 @@ export default {
     },
     sidebar: {
       session: 'Session',
-      terminalSession: 'Terminal Session',
       sessionConfig: 'Session Config',
       sessionManager: 'Session Manager',
       server: 'Server',
-      devicePairing: 'Device Pairing',
       settings: 'Settings',
       navigation: 'Navigation',
       serviceRunning: 'Service Running',
@@ -20,36 +18,11 @@ export default {
       expand: 'Expand Sidebar',
     },
     // Session domain copy (ticket 13): rich-interaction strings moved into the
-    // com.bedcode.session plugin (`session.*` namespace); only host fallback shell
-    // and exit-confirmation entries remain here
+    // com.bedcode.session plugin (`session.*` namespace); only terminal-window
+    // and exit-confirmation entries remain here (fallback shell removed, 13/14)
     session: {
-      fallbackNotice: 'Session Center plugin is not enabled — showing the host fallback',
-      fallbackHint:
-        'Enable the "Terminal Session Center" plugin to manage session configs and terminal windows here',
-      noConfig: 'No session configs',
-      noConfigHint: 'Configs are provided by the Session Center plugin — enable it first',
-      noSessions: 'No sessions',
-      noSessionsHint: 'Click "Start" in the config list to create a session',
-      sessions: 'Terminal Configs ({count})',
-      runningSessions: 'Running Sessions ({count})',
-      confirmStop: 'Confirm Stop Session',
-      confirmStopMsg: 'Are you sure you want to stop session "{name}"?',
-      confirmDeleteSession: 'Confirm Delete Session',
-      confirmDeleteRunning:
-        'Session "{name}" is still running. It will be stopped before deletion. This action cannot be undone.',
-      stopAndDelete: 'Stop & Delete',
-      sessionStarted: 'Session started',
       sessionStopped: 'Session stopped',
-      sessionDeleted: 'Session deleted',
-      startFailed: 'Failed to start session: {error}',
       stopFailed: 'Failed to stop session: {error}',
-      deleteFailed: 'Failed to delete session: {error}',
-      loadFailed: 'Failed to load session data',
-      listRefreshed: 'Session list refreshed',
-      stopping: 'Stopping session...',
-      stoppingAndDeleting: 'Stopping and deleting session...',
-      starting: 'Starting session...',
-      processing: 'Processing...',
       confirmExitTitle: 'Confirm Exit',
       confirmExitMsg:
         '{count} session(s) are still running. All running processes will be terminated if you exit.',
@@ -61,18 +34,6 @@ export default {
       // plugin with ticket 13, its copies live under `session.form.*`)
       windowsNative: 'Windows Native',
       linuxNative: 'Linux Native',
-    },
-    device: {
-      // Ticket 14: device pairing / paired devices / connection history views moved
-      // into the com.bedcode.session plugin (copy lives under the plugin's `pairing.*`
-      // namespace). The host keeps only what its fallback shell needs.
-      title: 'Device Pairing',
-      fallbackNotice:
-        'The device pairing UI is provided by the "Terminal Session Center" plugin, which is currently disabled. Only basic device management (list and remove paired devices) is available here.',
-      pairedTitle: 'Paired Devices',
-      noPaired: 'No paired devices',
-      confirmRemove: 'Confirm Remove',
-      confirmRemoveMsg: 'Are you sure you want to remove this device? You will need to pair again.',
     },
     terminal: {
       title: 'Terminal',

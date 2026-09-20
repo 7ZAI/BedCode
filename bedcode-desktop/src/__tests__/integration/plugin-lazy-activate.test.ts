@@ -90,11 +90,12 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
     ])
   })
 
-  it('懒激活的插件接管设备域后，宿主内置设备入口让位（同域只剩一个入口）', async () => {
+  it('懒激活的插件激活后贡献目录可见（宿主无内置设备入口，无需让位）', async () => {
     await pluginLoader.activate(PLUGIN_ID)
 
     const ids = menuIds()
     expect(ids).toContain('plugin-com.bedcode.session-pairing')
+    // 票 13/14 收尾：宿主内置设备入口已删除，不再有同域双入口问题
     expect(ids).not.toContain('devices')
   })
 
@@ -105,13 +106,13 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
     expect(markErrorCalls).toEqual([])
   })
 
-  it('插件停用后贡献目录摘除、内置设备入口恢复', async () => {
+  it('插件停用后贡献目录摘除，宿主菜单回落到默认（插件管理与设置）', async () => {
     await pluginLoader.activate(PLUGIN_ID)
-    expect(menuIds()).not.toContain('devices')
+    expect(menuIds()).toContain('plugin-com.bedcode.session-pairing')
 
     await pluginLoader.deactivate(PLUGIN_ID)
 
-    expect(menuIds()).toContain('devices')
-    expect(menuIds()).not.toContain('plugin-com.bedcode.session-pairing')
+    // 宿主不再恢复设备入口（入口已删除），只保留恒最末两项
+    expect(menuIds()).toEqual(['plugins', 'settings'])
   })
 })

@@ -52,7 +52,7 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   // session:config 为 WASM 优先权限（配置 CRUD 经插件命令通道，不直调宿主域命令）；
   // 登记三个审计名，与 host_impl 权限门同域
   'session:config': ['session.configUpsert', 'session.configGet', 'session.configDelete'],
-  'ui:sidebar': ['ui.registerSidebarPanel'],
+  'ui:sidebar': ['ui.registerSidebarPanel', 'ui.registerPage'],
   'ui:toolbox': ['ui.registerToolboxPage'],
   'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
   'ui:dialog': ['ui.showDialog'],

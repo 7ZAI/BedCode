@@ -12,7 +12,8 @@ import type {
   InputExtensionDescriptor,
   PageToolbarItemDescriptor,
   PluginDevMock,
-  RequestHandler,
+  PluginManifest,
+  SettingsSectionDescriptor,
   SidebarPanelDescriptor,
   StatusBarItemDescriptor,
   TerminalToolbarItemDescriptor,
@@ -78,7 +79,7 @@ export type DevPluginState = 'loaded' | 'activated' | 'deactivated' | 'error'
 export interface DevPluginRecord {
   id: string
   name: string
-  manifest: Record<string, any>
+  manifest: Partial<PluginManifest>
   entry: any
   dir: string
   state: DevPluginState
@@ -105,6 +106,16 @@ export interface SidebarPanelEntry {
 export interface ToolboxPageEntry {
   pluginId: string
   page: ToolboxPageDescriptor
+}
+/** 非菜单插件页条目（viewType 'page'） */
+export interface PageEntry {
+  pluginId: string
+  page: SidebarPanelDescriptor
+}
+/** 设置分组条目 */
+export interface SettingsSectionEntry {
+  pluginId: string
+  section: SettingsSectionDescriptor
 }
 export interface StatusBarEntry {
   pluginId: string
@@ -136,6 +147,9 @@ export interface EndpointEntry {
 }
 const sidebarPanels = ref<SidebarPanelEntry[]>([])
 const toolboxPages = ref<ToolboxPageEntry[]>([])
+/** 非菜单插件页（viewType 'page'，不进侧边栏，仅清单展示；宿主内可经路由深链直达） */
+const pages = ref<PageEntry[]>([])
+const settingsSections = ref<SettingsSectionEntry[]>([])
 const statusBarItems = ref<StatusBarEntry[]>([])
 const inputExtensions = ref<InputExtensionEntry[]>([])
 const terminalToolbarItems = ref<TerminalToolbarEntry[]>([])
@@ -165,6 +179,13 @@ export function registerToolboxPage(pluginId: string, page: ToolboxPageDescripto
   toolboxPages.value.push(entry)
   pushLog('debug', pluginId, `注册工具箱页: ${page.title || page.id}`)
   return makeDisposable(toolboxPages, entry)
+}
+
+export function registerPage(pluginId: string, page: SidebarPanelDescriptor): Disposable {
+  const entry: PageEntry = { pluginId, page }
+  pages.value.push(entry)
+  pushLog('debug', pluginId, `注册非菜单插件页: ${page.title || page.id}`)
+  return makeDisposable(pages, entry)
 }
 
 export function registerStatusBarItem(pluginId: string, item: StatusBarItemDescriptor): Disposable {
@@ -218,6 +239,16 @@ export function registerFileHandler(pluginId: string, handler: FileHandlerDescri
   return makeDisposable(fileHandlers, entry)
 }
 
+export function registerSettingsSection(
+  pluginId: string,
+  section: SettingsSectionDescriptor,
+): Disposable {
+  const entry: SettingsSectionEntry = { pluginId, section }
+  settingsSections.value.push(entry)
+  pushLog('debug', pluginId, `注册设置分组: ${section.titleKey}`)
+  return makeDisposable(settingsSections, entry)
+}
+
 export function registerEndpoint(pluginId: string, path: string): Disposable {
   const entry: EndpointEntry = { pluginId, path }
   endpoints.value.push(entry)
@@ -248,6 +279,7 @@ export {
   logs,
   pageToolbarItems,
   plugins,
+  settingsSections,
   sidebarPanels,
   statusBarItems,
   terminalToolbarItems,

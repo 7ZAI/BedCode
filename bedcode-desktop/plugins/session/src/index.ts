@@ -69,13 +69,16 @@ const SESSIONS_ICON =
 const TASKS_ICON =
   'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'
 
-/** 贡献的侧边栏目录（id 与 manifest `contributes.views` 一一对应） */
+/** 贡献的侧边栏目录（id 与 manifest `contributes.views` 一一对应）
+ * `kind`：'sidebar' = 侧边栏菜单目录；'page' = 不进菜单、仅路由可达的二级页面
+ * （票 14 收尾：连接历史从侧边栏移除，改由设备列表的「历史」按钮经 query 深链直达） */
 interface PanelSpec {
   id: string
   titleKey: string
   order: number
   icon: string
   component: unknown
+  kind: 'sidebar' | 'page'
 }
 
 const PANELS: PanelSpec[] = [
@@ -85,6 +88,7 @@ const PANELS: PanelSpec[] = [
     order: DEVICES_SLOT_ORDER,
     icon: PAIRING_ICON,
     component: DeviceCenterView,
+    kind: 'sidebar',
   },
   {
     id: 'session.history',
@@ -92,6 +96,7 @@ const PANELS: PanelSpec[] = [
     order: DEVICES_HISTORY_ORDER,
     icon: HISTORY_ICON,
     component: ConnectionHistoryView,
+    kind: 'page',
   },
   {
     id: 'session.sidebar',
@@ -99,6 +104,7 @@ const PANELS: PanelSpec[] = [
     order: SESSIONS_SLOT_ORDER,
     icon: SESSIONS_ICON,
     component: SessionCenterView,
+    kind: 'sidebar',
   },
   {
     id: 'session.task-history',
@@ -106,6 +112,7 @@ const PANELS: PanelSpec[] = [
     order: TASKS_ORDER,
     icon: TASKS_ICON,
     component: TaskHistoryView,
+    kind: 'sidebar',
   },
 ]
 
@@ -178,7 +185,7 @@ let stopRouteWatch: (() => void) | null = null
 let toolbarDisposable: { dispose(): void } | null = null
 
 /**
- * 注册侧边栏目录与设置分组
+ * 注册侧边栏目录、插件页与设置分组
  *
  * 注册时标题被宿主静态捕获（labelKey 非 i18n key，不随 vue-i18n 自动更新），
  * 语言切换时先释放旧注册再重新注册，菜单与分组标题即时刷新。
@@ -188,13 +195,21 @@ function registerPluginUi(context: PluginContext): void {
     d.dispose()
   }
   disposables = PANELS.map((panel) =>
-    context.ui.registerSidebarPanel({
-      id: panel.id,
-      title: context.i18n.t(panel.titleKey),
-      order: panel.order,
-      icon: panel.icon,
-      component: panel.component as never,
-    }),
+    panel.kind === 'page'
+      ? context.ui.registerPage({
+          id: panel.id,
+          title: context.i18n.t(panel.titleKey),
+          order: panel.order,
+          icon: panel.icon,
+          component: panel.component as never,
+        })
+      : context.ui.registerSidebarPanel({
+          id: panel.id,
+          title: context.i18n.t(panel.titleKey),
+          order: panel.order,
+          icon: panel.icon,
+          component: panel.component as never,
+        }),
   )
   disposables.push(
     context.ui.registerSettingsSection({

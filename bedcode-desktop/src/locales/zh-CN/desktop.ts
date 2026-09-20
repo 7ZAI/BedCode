@@ -6,11 +6,9 @@ export default {
     },
     sidebar: {
       session: '会话',
-      terminalSession: '终端会话',
       sessionConfig: '会话配置',
       sessionManager: '会话管理',
       server: '服务器',
-      devicePairing: '设备配对',
       settings: '设置',
       navigation: '导航',
       serviceRunning: '服务运行中',
@@ -20,33 +18,11 @@ export default {
       expand: '展开侧边栏',
     },
     // 会话域文案（票 13）：富交互文案随会话页迁入 com.bedcode.session 插件
-    // （插件侧 `session.*` 命名空间）；此处只保留宿主兜底壳与退出确认所需项
+    // （插件侧 `session.*` 命名空间）；宿主仅保留终端窗口与退出确认所需项
+    // （会话兜底壳已删除，票 13/14 收尾）
     session: {
-      fallbackNotice: '会话中心插件未启用，当前为宿主兜底界面',
-      fallbackHint: '启用「终端会话中心」插件后可在此页面管理会话配置与终端窗口',
-      noConfig: '暂无会话配置',
-      noConfigHint: '配置由会话中心插件提供，请先启用插件',
-      noSessions: '暂无会话',
-      noSessionsHint: '在配置列表中点击"启动"创建会话',
-      sessions: '终端配置 ({count})',
-      runningSessions: '运行中的会话 ({count})',
-      confirmStop: '确认停止会话',
-      confirmStopMsg: '确定要停止会话 "{name}" 吗？',
-      confirmDeleteSession: '确认删除会话',
-      confirmDeleteRunning: '会话 "{name}" 仍在运行，将先停止再删除。此操作无法撤销。',
-      stopAndDelete: '停止并删除',
-      sessionStarted: '会话已启动',
       sessionStopped: '会话已停止',
-      sessionDeleted: '会话已删除',
-      startFailed: '启动会话失败: {error}',
       stopFailed: '停止会话失败: {error}',
-      deleteFailed: '删除会话失败: {error}',
-      loadFailed: '会话数据加载失败',
-      listRefreshed: '会话列表已刷新',
-      stopping: '正在停止会话...',
-      stoppingAndDeleting: '正在停止并删除会话...',
-      starting: '正在启动会话...',
-      processing: '处理中...',
       confirmExitTitle: '确认退出',
       confirmExitMsg: '以下 {count} 个会话仍在运行，退出后将终止所有运行中的进程。',
       confirmExitForce: '强制退出',
@@ -56,17 +32,6 @@ export default {
       // （会话表单本体随票 13 迁入插件，其副本在插件 `session.form.*`）
       windowsNative: 'Windows',
       linuxNative: 'Linux',
-    },
-    device: {
-      // 票 14：设备配对 / 已配对设备 / 连接历史三块视图已迁入 com.bedcode.session
-      // 插件（文案落在插件 `pairing.*` 命名空间），宿主仅保留兜底壳所需文案。
-      title: '设备配对',
-      fallbackNotice:
-        '设备与配对界面由「终端会话中心」插件提供；当前插件未启用，此处仅保留基本设备管理（查看与移除已配对设备）。',
-      pairedTitle: '已配对设备',
-      noPaired: '暂无已配对设备',
-      confirmRemove: '确认移除',
-      confirmRemoveMsg: '确定要移除此设备吗？移除后需要重新配对。',
     },
     terminal: {
       title: '终端',

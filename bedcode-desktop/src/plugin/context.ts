@@ -171,6 +171,15 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       disposables.push(disposable)
       return disposable
     },
+    registerPage(page: SidebarPanelDescriptor): Disposable {
+      requirePermission('ui.registerPage')
+      const registry = getPluginRegistry()
+      // viewType 'page'：全量注册表可见（路由可渲染），sidebar/toolbox 投影不含
+      // （不进侧边栏菜单）——供「页内二级页面 / 深链直达」场景（票 14 收尾）
+      const disposable = registry.registerView(info.id, 'page', page)
+      disposables.push(disposable)
+      return disposable
+    },
     registerStatusBarItem(item: StatusBarItemDescriptor): Disposable {
       requirePermission('ui.registerStatusBarItem')
       const registry = getPluginRegistry()
