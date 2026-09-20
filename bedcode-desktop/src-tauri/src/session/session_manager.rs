@@ -3,7 +3,7 @@
 //! 会话管理器 - 负责协调会话生命周期、状态管理和事件发布
 //! 重构后只负责流程编排，各职责已拆分到独立模块
 
-use crate::enums::{SessionStatus, SessionType};
+use crate::enums::{SessionLaunchConfig, SessionStatus, SessionType};
 use crate::events::DesktopSyncEvent;
 use crate::pty::{PtyHandler, PtySessionHandler};
 use crate::session::session_lifecycle::SessionLifecycleEvent;
@@ -20,7 +20,7 @@ use crate::session::{
     session_output::GlobalOutputManager,
     storage::{SessionStorage, SessionStore},
 };
-use crate::session::{SessionInfo, SessionRestartEvent, SessionStatusEvent};
+use crate::session::{SessionInfo, SessionInfoView, SessionRestartEvent, SessionStatusEvent};
 use crate::system::error_boundary::spawn_with_error_boundary;
 use crate::Result;
 use chrono::Utc;
@@ -67,6 +67,13 @@ pub struct SessionManager {
     submitted_line_tracker: SubmittedLineTracker,
     /// 高频输入写日志节流计数：抑制 TUI 高频输入（鼠标移动/焦点序列等）刷屏
     input_log_throttle: std::sync::atomic::AtomicU64,
+    /// 会话注解槽（票 11，spec D5）：`session-id → key → value` 不透明键值对。
+    /// **内核只搬运透传、绝不解释键名**——槽的键名/取值语义归写入方插件
+    /// （本域任务的 `taskStatus` 等键就是插件自己的语义）。contract 期（票 12）
+    /// 引擎记录的四个任务字段已摘除，对外形状经 [`SessionManager::session_view`]
+    /// 从本槽取值（键名 → 字段名的机械映射见 `task_fields_from_slot`）。
+    /// 会话移除时连带清理。
+    annotations: Arc<tokio::sync::RwLock<std::collections::HashMap<String, std::collections::HashMap<String, String>>>>,
 }
 
 impl SessionManager {
@@ -128,6 +135,7 @@ impl SessionManager {
             input_listeners,
             submitted_line_tracker: SubmittedLineTracker::new(),
             input_log_throttle: std::sync::atomic::AtomicU64::new(0),
+            annotations: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -355,10 +363,6 @@ impl SessionManager {
             started_at: Some(Utc::now()),
             stopped_at: None,
             session_type: SessionType::Pty,
-            task_status: None,
-            task_reason: None,
-            task_updated_at: None,
-            task_questions: None,
         };
 
         // 保存到各服务
@@ -446,10 +450,6 @@ impl SessionManager {
             started_at: None,
             stopped_at: None,
             session_type: SessionType::Pty,
-            task_status: None,
-            task_reason: None,
-            task_updated_at: None,
-            task_questions: None,
         };
 
         // 保存到各服务
@@ -465,6 +465,124 @@ impl SessionManager {
         .await;
 
         tracing::info!(session_id = %session_id, "Session created (not started): {}", session_name);
+        Ok(session_id)
+    }
+
+    /// 按启动规格创建会话（票 09 `create-with-spec` 的执行端）
+    ///
+    /// `launch_config` 由插件算好（命名唯一化 / config→launch 映射 / 尺寸决策在
+    /// 插件侧完成），本方法不再读配置表（`storage.get_config`）、不再走命名服务与
+    /// 配置映射服务——内核只按 `start` 分支执行：Creating 事件 → PTY 创建 →
+    /// 输出注册（早于启动）→ 启动 / 不启动 → 生命周期 → 会话记录 → 事件分发。
+    ///
+    /// 行为等价对标（票 09「两条创建路径经插件编排且行为等价」）：
+    /// - `start = true`：顺序与状态与 [`Self::create_session_with_source_and_id`]
+    ///   一致（Running + 正统渲染端归属启动端 + Created 生命周期事件）；
+    /// - `start = false`：顺序与状态与 [`Self::create_session_no_start`] 一致
+    ///   （Starting + 不启动进程 + 不注册输出管理器 + 无 Created 事件）。
+    ///
+    /// 顺序不变量（既有全链路测试守护，不得破坏）：
+    /// - 输出消费者（GlobalOutputManager）注册 **早于** PTY 启动（PtyReader 随
+    ///   start() 即刻读输出，注册晚了首帧会以 "session not found" 丢弃）；
+    /// - 启动失败时回滚输出注册（防孤儿会话残留）；
+    /// - `source_device` 决定正统渲染端初始归属（启动端固定，防移动端单独启动
+    ///   会话时首次 resize 误弹覆盖确认）。
+    pub async fn create_session_from_spec(
+        &self,
+        launch_config: SessionLaunchConfig,
+        config_id: String,
+        source_device: Option<String>,
+        start: bool,
+        session_id: Option<&str>,
+    ) -> Result<String> {
+        // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
+        self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
+            config_id: config_id.clone(),
+            command: launch_config.command.clone(),
+            working_dir: launch_config.working_dir.clone(),
+            source_device: source_device.clone(),
+        })
+        .await;
+
+        // 创建 PTY 会话（指定 ID 或由 PTY 层生成）
+        let pty_session = match session_id {
+            Some(sid) => self
+                .pty_handler
+                .create_session_with_id(sid.to_string(), launch_config.clone())?,
+            None => self.pty_handler.create_session(launch_config.clone())?,
+        };
+        let session_id = pty_session.id().to_string();
+
+        if start {
+            // 注册输出管理器须在 PTY 启动（PtyReader 随 start() 即刻读 PTY 输出）
+            // 之前：注册晚于启动时首帧输出被 GlobalOutputManager::on_output 以
+            // "session not found" 丢弃，永久丢失。start 失败时回滚注册，防孤儿
+            // 会话残留（无 PTY、无订阅者，后续无法注销）。
+            self.register_output_manager(&session_id).await;
+            if let Err(e) = pty_session.start().await {
+                GlobalOutputManager::global().unregister_session(&session_id).await;
+                return Err(e);
+            }
+        } else {
+            // 只创建不启动：不注册输出管理器（进程未启动无输出源，与既有
+            // create_session_no_start 分支一致）；PTY 已 openpty 就绪，由后续
+            // start_existing_session 接管启动与输出注册。
+        }
+
+        // 启动生命周期处理器
+        self.start_lifecycle_handler(&session_id).await;
+
+        // 创建会话信息（status 随 start 分支，与既有两条创建路径逐字段一致）
+        let info = SessionInfo {
+            id: session_id.clone(),
+            config_id: config_id.clone(),
+            name: launch_config.name.clone(),
+            status: if start {
+                SessionStatus::Running
+            } else {
+                SessionStatus::Starting
+            },
+            created_at: Utc::now(),
+            started_at: if start { Some(Utc::now()) } else { None },
+            stopped_at: None,
+            session_type: SessionType::Pty,
+        };
+
+        // 保存到各服务
+        self.pty_registry.insert(session_id.clone(), pty_session).await;
+        if start {
+            // 正统渲染端初始归属 = 启动端（与 create_session_with_source_and_id
+            // 同一规则）：桌面本地启动（source_device=None）为 Desktop；移动端
+            // 经 HTTP/WS 启动（source_device=claims 设备名）为 Mobile{device_name}。
+            let initial_canonical = match &source_device {
+                Some(name) => RendererSource::Mobile {
+                    device_name: name.clone(),
+                },
+                None => RendererSource::Desktop,
+            };
+            self.canonical_renderer.set(&session_id, initial_canonical).await;
+        }
+        self.session_info.insert(info).await;
+
+        if start {
+            // 分发 Created 事件（异步通知；与 create_session_with_source_and_id 一致）
+            self.dispatch_lifecycle_event(SessionLifecycleEvent::Created {
+                session_id: session_id.clone(),
+                config_id: config_id.clone(),
+                name: launch_config.name.clone(),
+                working_dir: launch_config.working_dir.clone(),
+            })
+            .await;
+        }
+
+        // 发布同步事件：会话创建（start=false 时与 create_session_no_start 同形状）
+        self.publish_sync_event(DesktopSyncEvent::SessionCreated {
+            session_id: session_id.clone(),
+            source_device,
+        })
+        .await;
+
+        tracing::info!(session_id = %session_id, config_id = %config_id, start, "Session created from spec: {}", launch_config.name);
         Ok(session_id)
     }
 
@@ -633,10 +751,6 @@ impl SessionManager {
             started_at: Some(chrono::Utc::now()),
             stopped_at: None,
             session_type: SessionType::Pty,
-            task_status: None,
-            task_reason: None,
-            task_updated_at: None,
-            task_questions: None,
         };
 
         // 保存到各服务
@@ -669,6 +783,58 @@ impl SessionManager {
     /// 获取会话
     pub async fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         self.session_info.get(session_id).await
+    }
+
+    /// 会话注解槽写入（票 11）：`session-id → key → value` 不透明键值对。
+    ///
+    /// **只搬运透传、绝不解释键名**（spec D5）：键名/取值语义归写入方插件，
+    /// 本内核不校验、不解读、不持久化（expland 期纯内存，contract 期再定存储）。
+    ///
+    /// - 会话存在 → 落槽并返回 `true`（重复写同键 = 覆盖，后写赢）
+    /// - 会话不存在 → 不写孤儿键，返回 `false`（调用方显性报错）
+    pub async fn annotate_session(&self, session_id: &str, key: &str, value: &str) -> bool {
+        let exists = self.session_info.get(session_id).await.is_some();
+        if !exists {
+            return false;
+        }
+        let mut slot = self.annotations.write().await;
+        slot.entry(session_id.to_string())
+            .or_default()
+            .insert(key.to_string(), value.to_string());
+        true
+    }
+
+    /// 读会话注解槽全量（票 11；不存在或空槽 → 空 map）。用于宿主原语透传回执
+    /// （`list-sessions` / `get` 的 `annotations` 字段）、票 12 的对外视图构造与测试断言。
+    pub async fn session_annotations(&self, session_id: &str) -> std::collections::HashMap<String, String> {
+        self.annotations
+            .read()
+            .await
+            .get(session_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// 会话对外视图（票 12 contract）：引擎记录 + 注解槽任务字段
+    ///
+    /// 这是**任务语义字段的唯一取值点**——内核记录里已无这四个字段（spec D5），
+    /// 对外形状（前端命令 / 控制帧 / 移动端 DTO）经 [`SessionInfoView`] 逐字段保持不变，
+    /// 值来自写入方插件落在槽里的键（键值语义归插件，内核机械转发）。
+    pub async fn session_view(&self, session_id: &str) -> Option<SessionInfoView> {
+        let info = self.session_info.get(session_id).await?;
+        let annotations = self.session_annotations(session_id).await;
+        Some(SessionInfoView::from_session(info, &annotations))
+    }
+
+    /// 全部会话的对外视图（与 [`Self::list_sessions`] 同序：注册表迭代序）
+    pub async fn session_views(&self) -> Vec<SessionInfoView> {
+        let infos = self.session_info.list().await;
+        let mut views = Vec::with_capacity(infos.len());
+        for info in infos {
+            let annotations = self.session_annotations(&info.id).await;
+            views.push(SessionInfoView::from_session(info, &annotations));
+        }
+        views
     }
 
     /// 获取会话信息，未找到时返回错误
@@ -800,6 +966,20 @@ impl SessionManager {
         self.canonical_renderer.get(session_id).await
     }
 
+    /// 改名（票 10 会话动作）：只改会话记录的展示名，不动 config_id / 状态 / 归属。
+    ///
+    /// 返回改名前的名字（调用方回执）；未知会话显性 `NotFound`（不静默新建记录）。
+    /// 名字合法性（非空）由调用侧原语先仲裁；此处不做唯一化——唯一化策略属插件侧
+    /// 会话创建编排（票 09 `generate_unique_name`），改名是用户显式意图，不替用户改写。
+    ///
+    /// 不派发同步事件（线协议形状保持不变）：改名结果经会话列表拉取可见。
+    pub async fn rename_session(&self, session_id: &str, name: &str) -> Result<String> {
+        self.session_info
+            .rename(session_id, name)
+            .await
+            .ok_or_else(|| crate::AppError::NotFound(format!("Session not found: {}", session_id)))
+    }
+
     /// 终止会话
     pub async fn kill_session(&self, session_id: &str) -> Result<()> {
         self.kill_session_with_source(session_id, None).await
@@ -896,6 +1076,9 @@ impl SessionManager {
         // 清理输入行缓冲区（restart 经此路径重建同 ID 会话，从干净状态开始）
         self.submitted_line_tracker.remove_session(session_id);
 
+        // 清理会话注解槽（票 11）：会话销毁即连带移除其注解，不残留孤儿键
+        self.annotations.write().await.remove(session_id);
+
         // 发布同步事件：会话删除
         self.publish_sync_event(DesktopSyncEvent::SessionRemoved {
             session_id: session_id.to_string(),
@@ -965,6 +1148,9 @@ impl SessionManager {
         if let Err(e) = self.pty_registry.kill_all().await {
             tracing::error!("Failed to kill all sessions: {}", e);
         }
+
+        // 清理会话注解槽（票 11：纯内存态，停机即清空）
+        self.annotations.write().await.clear();
 
         tracing::info!("SessionManager shutdown complete");
     }
@@ -1082,6 +1268,227 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, crate::AppError::NotFound(_)));
+    }
+
+    /// 票 09 行为等价对照 A：`create_session_from_spec(start=false)` 与既有
+    /// `create_session_no_start` 产出的会话形状逐项一致（Starting / 名称用
+    /// spec 传入 / config_id 透传 / started_at 空 / 正统渲染端初始为空）。
+    ///
+    /// 对照基准（旧路径）：同一条 linux 配置 → no_start 创建，唯一名首见 = 原名。
+    /// spec 路径取名由插件负责（此处直接注入同一「唯一化后」名），两条路径
+    /// 并列时名称一致，证明内核不加第二套命名。
+    #[tokio::test]
+    async fn test_create_session_from_spec_matches_no_start_legacy() {
+        use crate::enums::ExecutionEnvironment;
+        use std::collections::HashMap;
+
+        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
+        db.init_schema().expect("schema");
+        let config = crate::db::SessionConfig::new(
+            "cfg-equiv".to_string(),
+            "linux".to_string(),
+            "/tmp".to_string(),
+            "bash".to_string(),
+        );
+        let config_id = config.id.clone();
+        db.create_session_config(&config).expect("create config");
+        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
+
+        // 对照基准：旧路径 create_session_no_start（不 spawn 进程）
+        let legacy_sid = manager
+            .create_session_no_start(&config_id)
+            .await
+            .expect("legacy no-start");
+        let legacy_info = manager.session_info.get(&legacy_sid).await.expect("legacy info");
+        assert_eq!(legacy_info.status, SessionStatus::Starting);
+        assert_eq!(legacy_info.config_id, config_id.as_str());
+        assert_eq!(legacy_info.name, "cfg-equiv", "无竞争时唯一名 = 原名");
+        assert_eq!(legacy_info.started_at, None);
+        assert_eq!(
+            manager.canonical_renderer_of(&legacy_sid).await,
+            None,
+            "no_start 初始无正统端"
+        );
+
+        // spec 路径：同一配置语义 + 插件算好的唯一化名 + start=false
+        let launch_config = SessionLaunchConfig {
+            name: "cfg-equiv".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            env_vars: HashMap::new(),
+            cols: 120,
+            rows: 40,
+        };
+        let spec_sid = manager
+            .create_session_from_spec(launch_config, config_id.clone(), None, false, None)
+            .await
+            .expect("spec create");
+        let spec_info = manager.session_info.get(&spec_sid).await.expect("spec info");
+        assert_eq!(
+            spec_info.status,
+            SessionStatus::Starting,
+            "start=false → Starting，与 no_start 一致"
+        );
+        assert_eq!(spec_info.config_id, config_id.as_str(), "configId 透传");
+        assert_eq!(spec_info.name, "cfg-equiv", "内核不再二次命名");
+        assert_eq!(spec_info.started_at, None);
+        assert_eq!(manager.canonical_renderer_of(&spec_sid).await, None);
+
+        // 两会话并列：名称由插件决策，同一 spec 名两次创建不互撞（宿主不干预）
+        let mut names: Vec<String> = manager.list_sessions().await.into_iter().map(|s| s.name).collect();
+        names.sort();
+        assert_eq!(names, vec!["cfg-equiv".to_string(), "cfg-equiv".to_string()]);
+
+        // 清理：不 spawn 进程，仅释放 openpty 的 slave fd
+        manager.remove_session(&legacy_sid).await.expect("remove legacy");
+        manager.remove_session(&spec_sid).await.expect("remove spec");
+    }
+
+    /// 票 09 行为等价对照 B：`create_session_from_spec(start=true)` 与既有
+    /// `create_session_with_source_and_id` 的状态语义一致（Running / started_at /
+    /// 正统渲染端归属起点 Desktop）。真实 spawn bash，测试后 kill 清理。
+    #[tokio::test]
+    async fn test_create_session_from_spec_start_true_running_and_desktop_canonical() {
+        use crate::enums::ExecutionEnvironment;
+        use std::collections::HashMap;
+
+        let manager = SessionManager::default();
+        let launch_config = SessionLaunchConfig {
+            name: "spawned".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            env_vars: HashMap::new(),
+            cols: 100,
+            rows: 30,
+        };
+        let sid = manager
+            .create_session_from_spec(launch_config, "cfg-1".to_string(), None, true, None)
+            .await
+            .expect("spec create + start");
+        let info = manager.session_info.get(&sid).await.expect("info");
+        assert_eq!(info.status, SessionStatus::Running, "start=true → Running");
+        assert!(info.started_at.is_some(), "started_at 记录启动时刻");
+        assert_eq!(info.name, "spawned");
+        assert_eq!(
+            manager.canonical_renderer_of(&sid).await,
+            Some(RendererSource::Desktop),
+            "桌面本地启动（source=None）→ 正统端 Desktop"
+        );
+
+        // 清理：kill 真进程并移除会话
+        manager.kill_session(&sid).await.expect("kill spawned bash");
+        manager.remove_session(&sid).await.expect("remove spawned");
+    }
+
+    /// 票 11 注解槽：写入 → 原样读回（不透明透传，键名/取值含怪字符不解释）；
+    /// 同键覆盖后写赢、异键并存互不干扰；会话不存在不写孤儿键
+    #[tokio::test]
+    async fn test_annotate_roundtrip_opaque_and_overwrite() {
+        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
+        db.init_schema().expect("schema");
+        let config = crate::db::SessionConfig::new(
+            "cfg-ann".to_string(),
+            "linux".to_string(),
+            "/tmp".to_string(),
+            "bash".to_string(),
+        );
+        let config_id = config.id.clone();
+        db.create_session_config(&config).expect("create config");
+        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
+        let sid = manager
+            .create_session_no_start(&config_id)
+            .await
+            .expect("create session");
+
+        // 不透明透传：怪键名 / 怪取值原样落槽
+        assert!(manager.annotate_session(&sid, "taskStatus", "in_progress").await);
+        assert!(manager.annotate_session(&sid, "task-reason", "AI 会话 ").await);
+        let ann = manager.session_annotations(&sid).await;
+        assert_eq!(ann.get("taskStatus").map(String::as_str), Some("in_progress"));
+        assert_eq!(ann.get("task-reason").map(String::as_str), Some("AI 会话 "));
+
+        // 同键覆盖、异键并存
+        assert!(manager.annotate_session(&sid, "taskStatus", "completed").await);
+        let ann = manager.session_annotations(&sid).await;
+        assert_eq!(ann.len(), 2, "同键覆盖不新增条目，异键并存");
+        assert_eq!(ann.get("taskStatus").map(String::as_str), Some("completed"));
+        assert_eq!(ann.get("task-reason").map(String::as_str), Some("AI 会话 "));
+
+        // 未知会话：不写孤儿键
+        assert!(!manager.annotate_session("ghost", "taskStatus", "x").await);
+        assert!(manager.session_annotations("ghost").await.is_empty());
+
+        manager.remove_session(&sid).await.expect("remove");
+    }
+
+    /// 票 12 contract：引擎记录已无任务字段，对外视图的任务字段**只**来自注解槽
+    /// —— 写槽前后视图字段的出现/缺省是同一构造点的两个态（含 M2 降级口径）
+    #[tokio::test]
+    async fn test_annotate_feeds_public_view_task_fields() {
+        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
+        db.init_schema().expect("schema");
+        let config = crate::db::SessionConfig::new(
+            "cfg-ann2".to_string(),
+            "linux".to_string(),
+            "/tmp".to_string(),
+            "bash".to_string(),
+        );
+        let config_id = config.id.clone();
+        db.create_session_config(&config).expect("create config");
+        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
+        let sid = manager
+            .create_session_no_start(&config_id)
+            .await
+            .expect("create session");
+
+        // 写槽前：视图任务字段缺省（插件未激活 / 未写槽 → 字段为空，M2 降级口径）
+        let before = manager.session_view(&sid).await.expect("view");
+        assert!(before.task_status.is_none() && before.task_reason.is_none());
+        let json = serde_json::to_value(&before).expect("serialize");
+        assert!(json.get("taskStatus").is_none() && json.get("taskReason").is_none());
+
+        // 写槽：视图字段随槽取值（引擎记录里没有可被「双写」的第二份数据通道）
+        assert!(manager.annotate_session(&sid, "taskStatus", "asking").await);
+        assert!(manager.annotate_session(&sid, "taskReason", "等待答复").await);
+        let after = manager.session_view(&sid).await.expect("view after");
+        assert_eq!(after.task_status.as_deref(), Some("asking"));
+        assert_eq!(after.task_reason.as_deref(), Some("等待答复"));
+        assert_eq!(after.info.id, sid, "记录字段不受影响");
+
+        // 列表视图与单视图同源同值
+        let listed = manager.session_views().await;
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].task_status.as_deref(), Some("asking"));
+
+        manager.remove_session(&sid).await.expect("remove");
+    }
+
+    /// 票 11：会话移除连带清理注解槽（不残留孤儿键；restart = 移除 + 同 ID 重建
+    /// 经此路径，重建后槽为空态起始）
+    #[tokio::test]
+    async fn test_annotate_cleaned_on_session_remove() {
+        let db = crate::db::Database::new(std::path::Path::new(":memory:")).expect("mem db");
+        db.init_schema().expect("schema");
+        let config = crate::db::SessionConfig::new(
+            "cfg-ann3".to_string(),
+            "linux".to_string(),
+            "/tmp".to_string(),
+            "bash".to_string(),
+        );
+        let config_id = config.id.clone();
+        db.create_session_config(&config).expect("create config");
+        let manager = SessionManager::from_database(db, Arc::new(std::path::PathBuf::from(".")));
+        let sid = manager
+            .create_session_no_start(&config_id)
+            .await
+            .expect("create session");
+        assert!(manager.annotate_session(&sid, "k", "v").await);
+        assert!(!manager.session_annotations(&sid).await.is_empty());
+
+        manager.remove_session(&sid).await.expect("remove session");
+        assert!(manager.session_annotations(&sid).await.is_empty(), "会话移除即连带清槽");
     }
 
     fn renderer_desktop() -> RendererSource {

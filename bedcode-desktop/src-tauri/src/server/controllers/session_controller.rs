@@ -22,26 +22,22 @@ pub async fn list_sessions(_req: HttpRequest) -> HttpResponse {
     let ctx = AppContext::global();
     let session_manager = ctx.session_manager();
 
+    // 票 12：任务字段取自注解槽（内核记录已无任务语义字段），形状不变
     let sessions: Vec<SessionItem> = session_manager
-        .list_sessions()
+        .session_views()
         .await
         .into_iter()
         .map(|s| SessionItem {
-            id: s.id,
-            name: s.name,
-            status: serde_json::to_value(&s.status)
+            id: s.info.id,
+            name: s.info.name,
+            status: serde_json::to_value(&s.info.status)
                 .and_then(|v| serde_json::from_value::<String>(v))
-                .unwrap_or_else(|_| format!("{:?}", s.status)),
-            created_at: s.created_at.to_rfc3339(),
-            started_at: s.started_at.map(|t| t.to_rfc3339()),
+                .unwrap_or_else(|_| format!("{:?}", s.info.status)),
+            created_at: s.info.created_at.to_rfc3339(),
+            started_at: s.info.started_at.map(|t| t.to_rfc3339()),
             session_type: Some("pty".to_string()),
-            config_id: Some(s.config_id),
-            task_status: s.task_status.map(|ts| {
-                serde_json::to_string(&ts)
-                    .unwrap_or_default()
-                    .trim_matches('"')
-                    .to_string()
-            }),
+            config_id: Some(s.info.config_id),
+            task_status: s.task_status,
             task_reason: s.task_reason,
         })
         .collect();

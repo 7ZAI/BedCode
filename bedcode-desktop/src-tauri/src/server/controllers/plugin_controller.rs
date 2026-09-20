@@ -55,6 +55,55 @@ pub(crate) fn plugin_http_content_type(response: &serde_json::Value) -> Option<S
         .map(|s| s.to_string())
 }
 
+// ==================== 路由判定（纯函数，供测试固化） ====================
+
+/// 声明式路径匹配（票 16 固化票据 03 的两条判据）
+///
+/// - `declared` 为空 = 插件未声明 `contributes.httpEndpoints` → **前缀内放行**，
+///   未知道路返回 404 与否由插件自己判（过渡策略：既有插件零迁移）。
+/// - `declared` 非空 = 已声明 → 按完整路径**精确匹配**，未命中即 404（请求不会
+///   到达插件，避免未声明路径被枚举）。
+pub(crate) fn plugin_http_path_allowed(declared: &[String], full_path: &str) -> bool {
+    declared.is_empty() || declared.iter().any(|p| p == full_path)
+}
+
+/// 旧插件 id → 接管方 id（票 16 D1「桌面侧可选兜底」的落点）
+///
+/// 语义是「旧前缀的 HTTP 面改由新插件应答」，不是两个插件共享请求：只在旧插件
+/// **未激活**且接管方**已激活**时生效（见 [`resolve_http_owner`]）。合并插件退役
+/// 旧 auto-task 后端（票 17）后，移动端与已部署在项目里的旧 hook 脚本仍能按原
+/// 路径打到桌面端；切断判定与代价评估记在票 16 Comments。
+const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[("com.bedcode.auto-task", "com.bedcode.session")];
+
+/// 查旧前缀的接管方 id（无声明即 None）
+pub(crate) fn legacy_http_alias(requested: &str) -> Option<&'static str> {
+    LEGACY_HTTP_PLUGIN_ALIASES
+        .iter()
+        .find(|(from, _)| *from == requested)
+        .map(|(_, to)| *to)
+}
+
+/// 该由哪个插件应答本次请求（纯决策，供测试）
+///
+/// 顺序即优先级：**请求前缀自身已激活时绝不抢占**——双轨并存期旧 auto-task 仍在
+/// 写它自己的私有库，若把它的请求转给新插件，同一份数据会出现两个写者且回包来自
+/// 空库（读到的队列永远是空的）。只有旧插件确实不在位（停用/未激活/error）时，
+/// 兜底才把请求交给接管方；接管方也不在位则 None（保持原「未激活」错误响应）。
+pub(crate) fn resolve_http_owner<'a>(
+    requested: &'a str,
+    requested_activated: bool,
+    alias: Option<&'a str>,
+    alias_activated: bool,
+) -> Option<&'a str> {
+    if requested_activated {
+        return Some(requested);
+    }
+    match alias {
+        Some(target) if alias_activated => Some(target),
+        _ => None,
+    }
+}
+
 /// ANY /api/plugin/{plugin_id}/{path:.*}
 ///
 /// 插件动态 HTTP 端点 — 请求到达后通过 PluginHost.invoke_rust_command 路由到插件 handler。
@@ -76,34 +125,51 @@ pub async fn plugin_http_endpoint(
     //   本 handler 不校验任何凭证（历史 BEDCODE_TOKEN 凭证从未被宿主校验，已移除），
     //   仅校验插件激活状态。服务监听 0.0.0.0，插件端点对局域网可达
 
-    // 检查插件是否已激活
+    // 检查插件是否已激活；未激活时旧前缀可兜底转给接管方（票 16，见 resolve_http_owner）
     let ctx = AppContext::global();
     let plugin_host = ctx.plugin_host();
-    if !plugin_host.is_activated(&plugin_id).await {
-        return HttpResponse::Ok().json(ApiResponse::<()>::error(
-            CODE_PLUGIN_AUTH_FAILED,
-            &format!("Plugin {} is not activated", plugin_id),
+    let requested_activated = plugin_host.is_activated(&plugin_id).await;
+    let alias = legacy_http_alias(&plugin_id);
+    let alias_activated = match alias {
+        Some(target) if !requested_activated => plugin_host.is_activated(target).await,
+        _ => false,
+    };
+    let owner = match resolve_http_owner(&plugin_id, requested_activated, alias, alias_activated) {
+        Some(owner) => owner,
+        None => {
+            return HttpResponse::Ok().json(ApiResponse::<()>::error(
+                CODE_PLUGIN_AUTH_FAILED,
+                &format!("Plugin {} is not activated", plugin_id),
+            ))
+        }
+    };
+
+    // 端点注册治理（票据 03 判据，票 16 固化）：插件已声明（manifest
+    // contributes.httpEndpoints / toolProviders）时做精确路径匹配，未注册路径 404；
+    // 未声明插件保持旧前缀 ANY 行为（auto-task 等既有插件零迁移）。
+    // 声明清单按**属主插件**查（旧前缀兜底时按接管方的清单判定），full_path 同样
+    // 按属主拼——插件侧收到的 `path` 字段保持请求原样，双轨期两实现共用同一分派表。
+    let declared = plugin_host.registry().list_http_endpoint_paths(owner).await;
+    let full_path = format!("/api/plugin/{}/{}", owner, endpoint_path);
+    if !plugin_http_path_allowed(&declared, &full_path) {
+        tracing::warn!(
+            plugin_id = %owner,
+            requested_plugin_id = %plugin_id,
+            path = %full_path,
+            "plugin http endpoint not registered (exact match required)"
+        );
+        return HttpResponse::NotFound().json(ApiResponse::<()>::error(
+            CODE_INVALID_REQUEST,
+            &format!("Plugin endpoint '{}' is not registered", full_path),
         ));
     }
 
-    // 端点注册治理（票据 03）：插件已声明（manifest contributes.toolProviders）时
-    // 做精确路径匹配，未注册路径 404；未声明插件保持旧前缀 ANY 行为
-    // （auto-task 等既有插件零迁移的过渡策略）。
-    let declared = plugin_host.registry().list_http_endpoint_paths(&plugin_id).await;
-    if !declared.is_empty() {
-        let full_path = format!("/api/plugin/{}/{}", plugin_id, endpoint_path);
-        let matched = declared.iter().any(|p| *p == full_path);
-        if !matched {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                path = %full_path,
-                "plugin http endpoint not registered (exact match required)"
-            );
-            return HttpResponse::NotFound().json(ApiResponse::<()>::error(
-                CODE_INVALID_REQUEST,
-                &format!("Plugin endpoint '{}' is not registered", full_path),
-            ));
-        }
+    if owner != plugin_id {
+        tracing::debug!(
+            requested_plugin_id = %plugin_id,
+            plugin_id = %owner,
+            "legacy plugin http prefix served by successor plugin (D1 desktop-side fallback)"
+        );
     }
 
     // 构造请求参数：method、path、白名单 headers、body、query
@@ -120,7 +186,7 @@ pub async fn plugin_http_endpoint(
 
     // 通过 plugin_invoke 路由到插件的 _http_endpoint command
     let result = plugin_host
-        .invoke_rust_command(&plugin_id, "_http_endpoint", request_args)
+        .invoke_rust_command(owner, "_http_endpoint", request_args)
         .await;
 
     match result {
@@ -234,5 +300,74 @@ mod tests {
         );
         // 非字符串 contentType → None（保持默认）
         assert_eq!(plugin_http_content_type(&serde_json::json!({"contentType": 123})), None);
+    }
+
+    /// 票 16：声明式匹配的两条判据固化（此前逻辑内联在 handler 里，无测试覆盖）
+    ///
+    /// 「未声明 → 前缀内放行」是既有插件（auto-task 从未声明）零迁移的前提；
+    /// 「已声明 → 精确命中」是新插件的审计面。两者都必须在这一处判定，不允许
+    /// 出现第三种（如前缀匹配声明路径——那会让 `/task-status` 声明放行
+    /// `/task-status/../../admin`）。
+    #[test]
+    fn declared_paths_match_exactly_and_undeclared_pass_through() {
+        let declared: Vec<String> = vec![
+            "/api/plugin/com.bedcode.session/task-status".to_string(),
+            "/api/plugin/com.bedcode.session/task-queue/add".to_string(),
+        ];
+        // 已声明：精确命中放行
+        assert!(plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/task-status"));
+        assert!(plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/task-queue/add"));
+        // 已声明：未命中一律拒绝（含前缀相近、大小写不同、缺段、多段）
+        assert!(!plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/task-history"));
+        assert!(
+            !plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/task-status/extra"),
+            "声明路径不得前缀匹配"
+        );
+        assert!(!plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/TASK-STATUS"));
+        // 未声明（空清单）：前缀内 ANY 放行，404 由插件自判
+        assert!(plugin_http_path_allowed(&[], "/api/plugin/com.bedcode.auto-task/anything"));
+    }
+
+    /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件
+    #[test]
+    fn legacy_http_alias_maps_only_retired_plugin_prefix() {
+        assert_eq!(
+            legacy_http_alias("com.bedcode.auto-task"),
+            Some("com.bedcode.session")
+        );
+        // 新 id 自身、其它在位插件、未知 id 都没有接管方
+        assert_eq!(legacy_http_alias("com.bedcode.session"), None);
+        assert_eq!(legacy_http_alias("com.bedcode.file-transfer"), None);
+        assert_eq!(legacy_http_alias(""), None);
+    }
+
+    /// 票 16：属主解析的优先级——旧插件在位时绝不抢占（双写者/空库回包红线）
+    #[test]
+    fn http_owner_never_preempts_an_activated_plugin() {
+        let old = "com.bedcode.auto-task";
+        let new = "com.bedcode.session";
+        // 旧插件仍激活：请求留在旧插件（合并插件不得改写成另一份私有库的数据）
+        assert_eq!(
+            resolve_http_owner(old, true, Some(new), true),
+            Some(old),
+            "双轨并存期不得抢占"
+        );
+        // 旧插件不在位 + 接管方已激活 → 兜底转给接管方
+        assert_eq!(resolve_http_owner(old, false, Some(new), true), Some(new));
+        // 两者都不在位 → None（保持原「未激活」错误响应，不凭空造插件）
+        assert_eq!(resolve_http_owner(old, false, Some(new), false), None);
+        // 未在别名表里的插件（alias = None）没有兜底可走：未激活就是未激活
+        assert_eq!(
+            resolve_http_owner("com.bedcode.file-transfer", false, None, true),
+            None,
+            "接管方在位也不得把无别名插件的请求转出去"
+        );
+        // 新前缀自身没有别名条目 → 不被别名回环（别名表是唯一 gate）
+        assert_eq!(legacy_http_alias(new), None, "接管方自己不得有别名");
+        assert_eq!(
+            resolve_http_owner(new, false, legacy_http_alias(new), true),
+            None,
+            "新插件未激活时不得借旧插件兜底"
+        );
     }
 }

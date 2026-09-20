@@ -263,6 +263,49 @@ impl SessionConfigManager {
         Ok(())
     }
 
+    /// 按 id 覆盖写（票 08 的**主库投影**入口）
+    ///
+    /// 真源在插件私有库；宿主把插件写入结果投影回主库，供内核会话启动路径
+    /// （`session_manager` → `storage.get_config`）读取。与
+    /// `create_config_full` / `update_config` 的差别只有两点：
+    /// - **保留调用方给的 id**（插件生成的 id 必须与后续 `config_id` 一致，
+    ///   不能用 `SessionConfig::new` 另生成一个）
+    /// - 存在性判定决定 `INSERT` 还是 `UPDATE`，并据此发 `ConfigCreated` /
+    ///   `ConfigUpdated` 同步事件（移动端按事件类型增量刷新）
+    ///
+    /// 票 09（`create-with-spec`）落地后随旧表一起退役。
+    pub async fn upsert_config(&self, config: SessionConfig) -> Result<SessionConfig> {
+        let existed = self.get_config(&config.id).await?.is_some();
+
+        let db = self.db.clone();
+        let stored = config.clone();
+        tokio::task::spawn_blocking(move || {
+            let db = db.blocking_lock();
+            if existed {
+                db.update_session_config(&stored)
+            } else {
+                db.create_session_config(&stored)
+            }
+        })
+        .await
+        .map_err(|e| crate::AppError::Internal(format!("Task join error: {}", e)))??;
+
+        let event = if existed {
+            DesktopSyncEvent::ConfigUpdated {
+                config_id: config.id.clone(),
+                source_device: None,
+            }
+        } else {
+            DesktopSyncEvent::ConfigCreated {
+                config_id: config.id.clone(),
+                source_device: None,
+            }
+        };
+        self.publish_sync_event(event).await;
+        tracing::debug!(config_id = %config.id, existed, "session config projected to host store");
+        Ok(config)
+    }
+
     /// 根据 session_id 获取会话配置
     ///
     /// 先通过 SessionManager 查找 SessionInfo 获取 config_id，

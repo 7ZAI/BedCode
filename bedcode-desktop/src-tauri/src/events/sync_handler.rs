@@ -159,7 +159,9 @@ impl SyncEventHandler {
             return;
         };
 
-        // 构建 SessionSummary
+        // 构建 SessionSummary（票 12：任务字段取自注解槽，不再来自会话记录）
+        let annotations = self.session_manager.session_annotations(session_id).await;
+        let (task_status, task_reason, _, _) = crate::session::task_fields_from_slot(&annotations);
         let session = SessionSummary {
             id: session_info.id,
             name: session_info.name,
@@ -168,8 +170,8 @@ impl SyncEventHandler {
             started_at: session_info.started_at.map(|t| t.to_rfc3339()),
             session_type: Some(format!("{:?}", session_info.session_type).to_lowercase()),
             config_id: Some(session_info.config_id),
-            task_status: session_info.task_status.map(|ts| format!("{:?}", ts).to_lowercase()),
-            task_reason: session_info.task_reason,
+            task_status,
+            task_reason,
         };
 
         // 提取 source_device 值
@@ -664,5 +666,67 @@ mod tests {
             })
             .await;
         assert!(fake.take_calls().is_empty(), "会话不存在不应广播");
+    }
+
+    /// 票 12 降级口径（移动端受影响清单 M2）：注解槽无人写（插件未激活 / 未写槽）→
+    /// 会话摘要的任务字段缺失，**wire 上不出现该键**（与迁移前恒 `None` 的形状等价）
+    #[tokio::test]
+    async fn session_created_without_slot_omits_task_fields() {
+        let (handler, fake, shared_db) = test_handler().await;
+        let sid = seed_session(&shared_db, &handler.session_manager).await;
+
+        handler
+            .process_event(DesktopSyncEvent::SessionCreated {
+                session_id: sid.clone(),
+                source_device: None,
+            })
+            .await;
+
+        let calls = fake.take_calls();
+        let SyncPayload::SessionCreated { session, .. } = &calls[0].payload else {
+            panic!("期望 SessionCreated，实际: {:?}", calls[0].payload);
+        };
+        assert!(session.task_status.is_none(), "空槽 → taskStatus 缺失（M2 降级）");
+        assert!(session.task_reason.is_none());
+        let json = serde_json::to_value(&calls[0].payload).expect("serialize");
+        let summary = &json["data"]["session"];
+        assert!(
+            summary.get("taskStatus").is_none() && summary.get("taskReason").is_none(),
+            "wire 上不得出现任务字段键: {summary}"
+        );
+    }
+
+    /// 票 12 取值口径：槽有值 → 会话摘要逐字段透出（同步事件构造点改从槽取值，
+    /// 字段名与形状不变）
+    #[tokio::test]
+    async fn session_created_carries_task_fields_from_slot() {
+        let (handler, fake, shared_db) = test_handler().await;
+        let sid = seed_session(&shared_db, &handler.session_manager).await;
+        assert!(
+            handler
+                .session_manager
+                .annotate_session(&sid, "taskStatus", "in_progress")
+                .await
+        );
+        assert!(
+            handler
+                .session_manager
+                .annotate_session(&sid, "taskReason", "AI 会话")
+                .await
+        );
+
+        handler
+            .process_event(DesktopSyncEvent::SessionCreated {
+                session_id: sid.clone(),
+                source_device: None,
+            })
+            .await;
+
+        let calls = fake.take_calls();
+        let SyncPayload::SessionCreated { session, .. } = &calls[0].payload else {
+            panic!("期望 SessionCreated，实际: {:?}", calls[0].payload);
+        };
+        assert_eq!(session.task_status.as_deref(), Some("in_progress"));
+        assert_eq!(session.task_reason.as_deref(), Some("AI 会话"));
     }
 }

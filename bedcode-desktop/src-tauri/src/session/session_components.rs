@@ -131,6 +131,8 @@ pub trait SessionInfoRegistry: Send + Sync {
     async fn get_status(&self, id: &str) -> Option<SessionStatus>;
     async fn filter_by_config(&self, config_id: &str) -> Vec<SessionInfo>;
     async fn filter_active_by_config(&self, config_id: &str) -> Vec<SessionInfo>;
+    /// 改名（票 10）：返回改名前的名字；会话不存在返回 `None`（调用方显性报错）
+    async fn rename(&self, id: &str, name: &str) -> Option<String>;
 }
 
 pub struct DefaultSessionInfoRegistry {
@@ -215,6 +217,14 @@ impl SessionInfoRegistry for DefaultSessionInfoRegistry {
             .filter(|s| s.config_id == config_id && s.status != SessionStatus::Stopped)
             .cloned()
             .collect()
+    }
+
+    async fn rename(&self, id: &str, name: &str) -> Option<String> {
+        let mut map = self.info.write().await;
+        let info = map.get_mut(id)?;
+        let previous = info.name.clone();
+        info.name = name.to_string();
+        Some(previous)
     }
 }
 

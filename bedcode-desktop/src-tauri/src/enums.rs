@@ -20,7 +20,7 @@ pub use control::{
 };
 pub use plugin::{PluginQuestion, PluginQuestionOption};
 pub use pty_status::PtySessionStatus;
-pub use session::{SessionStatus, SessionType, TaskStatus};
+pub use session::{SessionStatus, SessionType};
 pub use shell::{ExecutionEnvironment, SessionLaunchConfig, WindowsShell};
 pub use special_key::{KeyCode, KeyCombo};
 pub use summary::{QuickActionSummary, SessionConfigSummary, SessionSummary};
