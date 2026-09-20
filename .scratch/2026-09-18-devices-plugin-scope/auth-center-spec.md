@@ -122,6 +122,16 @@ interface host-auth {
 
 > **2026-09-19 wasip3 编译 spike 验证（A0-1 预演，已通过）**：nightly 1.100.0（2026-09-18）+ `wasm32-wasip3` target 安装成功；最小 fixture（`/tmp/wasip3-spike`，依赖仓库 SDK `bedcode-plugin-api`）与**现有插件 file-transfer 均零代码改动编译通过**。关键发现：① **wasip3 target 的 cdylib 直接输出 Component 组件**（`\0asm` + `0d 00 01 00`，免 componentize/wit-component 步骤，构建链简化）；② wasmtime 48.0.2 成功解析产物：import = `bedcode:plugin/host-log` + 全套 `wasi:cli@0.3.0`/`wasi:clocks@0.3.0`，export 8 接口与 unknown-unknown 同构；③ 插件产物因 import wasi0.3 接口，实例化需宿主 p3 async linker（A0-3），**当前 p2 sync 宿主不可加载——产物仅编译链验证，不得替换 `resources/plugins/` 现行产物**。正式接入路径：等 stable 1.99（预编译产物自 2026-09-12 起 nightly present，预计 2026-10 中发布）→ `rustup update` + `target add wasm32-wasip3` → 构建链切 target。
 
+> **2026-09-21 A0-3 前置验证（P1-P6 全部通过，实施依据 `.scratch/2026-09-21-a0-3-host-async/`）**：探针（`wasm_runtime/tests/a03_probe.rs`，7 用例）+ 报告（`report.md`）。关键结论：
+>
+> **P1 兼容性（三场景全绿，实测输出见 report.md §1）**：① sync host fn 在 async store 下兼容（P1-a）：同步注册的 bedcode host 原语（`func_wrap` 的 20 组接口）可被 wasip3 组件调用，`block_on_async` 桥三路径（多线程 block_in_place + 重入检测 / current_thread spawn 新线程 / 无 handle 线程 ambient 直接驱动）均不 panic；② wasip3 组件完整闭环（P1-b）：session 产物 `activate → session.status → 终端 hooks → manifest → deactivate` 全链路 OK；③ 生产产物零回归（P1-c）：resources/plugins 四产物**已全部为 wasip3 组件**（magic `0d 00 01 00`），在 async store 下全部加载 + manifest 往返——**无 unknown-unknown 残留可回归**，原「旧插件零回归」门槛落点变为「既有 wasip3 产物在 async store 上行为不变」（已证）。另实证：bindgen `exports: { default: async }` 下同步 `call` 在 async-required store 报错（`requires that *_async functions are used`），统一 async 调用面是唯一路径。
+>
+> **P2 资源限制 async 语义（探针断言 + 结论写回）**：燃料——默认引擎（consume_fuel=true）下 guest 指令计数在 async 调用内**跨 suspend/resume 累计**（消耗量随 spin iters 缩放，实测 1M→10M 净消耗等比例）；调用前 `exports()` 续费到 `fuel_budget`，`set_fuel(0)` 后调用仍成功；`consume_fuel=false` 引擎下 `set_fuel` 显性报错。内存——`ResourceLimiter` 在 async store 下强制生效：上限低于组件最小内存（fixture 17 页）时**实例化阶段被拒**（`memory minimum size of 17 pages exceeds memory limits`）；上限高于最小内存、低于工作集时**调用期 `memory_growing` 拒绝 → guest allocator abort → trap**（实测 4MiB 分配被 17 页+1KiB 上限拒绝）。
+>
+> **P3 同实例串行红线（主体实施硬约束，随 A0-3-main 立项时机械落实）**：① A0-3 主体实施后，**每插件实例同一时刻仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；② `host.rs` 的 `Arc<Mutex<LoadedWasmPlugin>>`（std Mutex）async 化时改为 **tokio `Mutex`（await 持锁、不因等待释放）**，锁语义与现在等价（串行）；③ **禁止**改成「await 点释放锁」的细粒度锁（第二个调用会与第一个交错 → 插件静态状态竞态（配对码/QR/挑战注册表/config 缓存/私有库）+ wasmtime Store 重入 panic）。
+>
+> **P4/P5/P6**：13 个 sync 入口的 async 化影响面清单（调用方线程 / hot path / 成本）、测试适配计划 + 性能基线（端到端 guest 短调用 ~40µs/op，桥开销 ~0.14-0.22µs/op）、风险表复核无新增 blocker——全部见报告 §3/§4/§5。
+
 ### A —— wasip3 验证 + host-auth 原语
 
 | 内容 | 验收 |

@@ -1098,6 +1098,10 @@ impl WasmHostContext {
 mod tests {
     use super::*;
 
+    // A0-3 前置探针（P1/P2/P5）：async store 兼容性 + 资源限制 async 语义 + 性能基线。
+    // 文档：.scratch/2026-09-21-a0-3-host-async/spec.md + report.md（只读探针，不碰生产路径）
+    mod a03_probe;
+
     /// 测试用插件 ID
     const TEST_PLUGIN_ID: &str = "com.bedcode.test";
 
@@ -1115,6 +1119,11 @@ mod tests {
     /// emit/数据目录类能力在测试中不被调用路径覆盖；
     /// AOT 缓存目录注入到系统临时目录，保证 compile_component_from_file 走缓存路径。
     fn setup_wasm_runtime() -> (WasmRuntime, Arc<WasmHostContext>) {
+        setup_wasm_runtime_with_config(CoreConfig::default())
+    }
+
+    /// 以指定内核配置构建无头运行时（测试专用；`a03_probe` 的燃料禁用/紧内存探针用）
+    fn setup_wasm_runtime_with_config(core_config: CoreConfig) -> (WasmRuntime, Arc<WasmHostContext>) {
         use crate::db::Database;
         use crate::plugin::bus::MessageBus;
         use crate::plugin::manager::storage::PluginStorage;
@@ -1177,7 +1186,7 @@ mod tests {
             let message_bus = Arc::new(MessageBus::new());
 
             // 无头构建：不创建 AppHandle（tao 事件循环不允许在测试线程初始化）
-            let mut wasm_runtime = WasmRuntime::new(storage.clone(), None).unwrap();
+            let mut wasm_runtime = WasmRuntime::with_config(storage.clone(), None, core_config).unwrap();
             // 注入 AOT 缓存目录（生产由 app_handle 派生，测试无头上下文手动注入）
             wasm_runtime.aot_cache_dir = Some(std::env::temp_dir().join(format!("bedcode_aot_{}", std::process::id())));
 
