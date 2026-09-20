@@ -65,16 +65,111 @@ interface UsageSessionRow {
   [key: string]: unknown
 }
 
-let detection: (Record<string, any> & { clis: Record<string, DetectCliInfo> }) | null = null
-let install: (Record<string, any> & { runScripts?: Record<string, InstallRunScript> }) | null = null
-let skills: (Record<string, any> & { skillContents?: Record<string, string>; localImport?: { path: string; name: string } }) | null = null
-let providers: (Record<string, any> & {
-  importDiscoveries?: Array<{ name: string; baseUrl: string; apiStyle: string; models: string[]; notes: string | null }>
+// ==================== 领域种子状态（最小本地形状） ====================
+// 已知字段具名化（mock 内类型安全），未知种子字段经 `[key: string]: unknown`
+// 索引透传——形状真源在插件 `types.ts` / `devMockTypes.ts`，dev-shell 不收录插件包
+
+/** 宽松透传基底（替代 Record<string, any>：既有属性有契约，未知字段不逃逸） */
+interface Seed {
+  [key: string]: unknown
+}
+
+/** 探测域（AgentHubState 子集） */
+interface DetectionSeed extends Seed {
+  envStatus: string
+  env: unknown
+  authGranted?: boolean
+  clis: Record<string, DetectCliInfo>
+}
+
+/** npm 镜像域（InstallDomainState.mirror 子集） */
+interface MirrorSeed extends Seed {
+  speed: { status: string }
+  npmrc: {
+    backupExists?: boolean
+    fileRegistry?: string | null
+    appliedAt?: number
+    restoredAt?: number
+  }
+}
+
+/** 运行中安装（ActiveRun 子集） */
+interface ActiveRunSeed extends Seed {
+  runId: string
+  cli: string
+  action: 'install' | 'update'
+  command: string
+  startedAt: number
+  cancelRequested: boolean
+}
+
+/** 安装域（InstallDomainState 子集 + 剧本扩展） */
+interface InstallSeed extends Seed {
+  runScripts?: Partial<Record<string, InstallRunScript>>
+  mirror: MirrorSeed
+  active: ActiveRunSeed | null
+  last: Seed | null
+  updates: Record<string, { outdated: boolean | null; checkedAt?: number } | null>
+}
+
+/** Skills 域（SkillsDomainState 子集 + 编辑器扩展） */
+interface SkillsSeed extends Seed {
+  skillContents?: Record<string, string>
+  skills: SkillEntry[]
+  status?: string
+  scannedAt?: number | null
+  libraryRoot?: string
+  localImport?: { path: string; name: string }
+  import?: { last: Record<string, unknown> | null }
+  github?: { last: Record<string, unknown> | null }
+}
+
+/** Claude 桥接视图（ProvidersDomainState 子集） */
+interface ClaudeSeed extends Seed {
+  bridge: { providerConfigSh?: boolean }
+  env: { authTokenMask: string | null; baseUrl: string; model: string | null }
+}
+
+/** 供应商域（ProvidersDomainState 子集 + 导入/应用扩展） */
+interface ProvidersSeed extends Seed {
+  presets: ProviderPreset[]
+  claude: ClaudeSeed
+  importDiscoveries?: Array<{
+    name: string
+    baseUrl: string
+    apiStyle: string
+    models: string[]
+    notes: string | null
+  }>
   importKeys?: Record<string, string>
   applyFiles?: Record<string, string[]>
   applyBridges?: string[]
-}) | null = null
-let usage: { state: Record<string, any>; stats: Record<string, any>; sessions: UsageSessionRow[]; sessionDetails?: Record<string, Record<string, any>> } | null = null
+  import?: { last: Record<string, unknown> | null }
+  apply?: { last: Record<string, unknown> | null }
+}
+
+/** 使用统计域状态（UsageDomainState 子集：sources/adapters/home 为自由域） */
+interface UsageStateSeed extends Seed {
+  status?: string
+  syncedAt?: number
+  home?: string
+  sources?: Array<{ name: string; path: string; builtin?: boolean; [key: string]: unknown }>
+  adapters?: Record<string, unknown>
+}
+
+/** 使用统计容器（usage devMock 形状） */
+interface UsageSeed {
+  state: UsageStateSeed
+  stats: Record<string, unknown>
+  sessions: UsageSessionRow[]
+  sessionDetails?: Record<string, Record<string, unknown>>
+}
+
+let detection: DetectionSeed | null = null
+let install: InstallSeed | null = null
+let skills: SkillsSeed | null = null
+let providers: ProvidersSeed | null = null
+let usage: UsageSeed | null = null
 
 /** 深拷贝（种子 → 工作状态 / 返回值出站，避免外部改动写回种子） */
 function clone<T>(v: T): T {
@@ -123,10 +218,11 @@ function stopRunTimer(): void {
   }
 }
 
-/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送（返回待清理句柄） */
-function startRun(context: PluginContext, cli: string, useMirror: boolean): void {
+/** run 模拟：每 tick 回放一行剧本输出，播完置终态并推送（返回待清理句柄）
+ * @returns 新 run 的 runId（脚本缺失 = 启动失败时返回 null） */
+function startRun(context: PluginContext, cli: string, useMirror: boolean): string | null {
   const script = install?.runScripts?.[cli]
-  if (!script) return
+  if (!script) return null
   const updates = (install?.updates ?? {}) as Record<string, { outdated: boolean | null }>
   runState = {
     runId: `mock-run-${++runSeq}`,
@@ -176,6 +272,7 @@ function startRun(context: PluginContext, cli: string, useMirror: boolean): void
     }
     emitInstall(context)
   }, 700)
+  return runState.runId
 }
 
 function cancelRun(context: PluginContext): void {
@@ -239,6 +336,9 @@ function registerCommands(context: PluginContext): void {
     context.commands.register('agent-hub.get-state', () => ({ state: clone(detection) }))
     // 探测动画：env + 全 CLI 置 detecting → 每 500ms 逐 CLI 落终态 → env 终态
     context.commands.register('agent-hub.detect', () => {
+      // 早退守卫：模块级 detection 在闭包内 TS 收窄失效（setTimeout 里还有
+      // `if (!detection) return` 双保险）；种子缺失时返回错误而非崩溃
+      if (!detection) return { ok: false, error: 'detection seed unavailable' }
       const final = clone(detection)
       const detecting = clone(final)
       detecting.envStatus = 'detecting'
@@ -352,8 +452,10 @@ function registerCommands(context: PluginContext): void {
         return Promise.reject(new Error(`no install recipe for cli: ${cli}`))
       }
       if (runState) return Promise.reject(new Error('another run is active'))
-      startRun(context, cli, !!args?.mirror)
-      return { runId: runState?.runId ?? null }
+      // startRun 同步落 runState 并返回新 runId（无剧本时 null）——避免
+      // 早退收窄后 `runState?.runId` 落在 never 上（TS 不跟踪跨函数赋值）
+      const runId = startRun(context, cli, !!args?.mirror)
+      return { runId }
     })
     context.commands.register('agent-hub.cancel-run', () => {
       cancelRun(context)
@@ -676,8 +778,8 @@ function registerCommands(context: PluginContext): void {
     })
     // 来源清单：内置只读 + 自定义增删（state.sources 持久化，扫描计数合并）
     context.commands.register('agent-hub.list-usage-sources', () => {
-      const sources = (usage!.state.sources as Record<string, any>[]).map((s) => {
-        const scan = (usage!.state.adapters as Record<string, any>)[s.name]
+      const sources = (usage!.state.sources ?? []).map((s) => {
+        const scan = (usage!.state.adapters ?? {})[s.name]
         return scan ? { ...s, scan: clone(scan) } : s
       })
       return { sources: clone(sources) }
@@ -686,15 +788,15 @@ function registerCommands(context: PluginContext): void {
       const name = String(args?.name ?? '').trim()
       let path = String(args?.path ?? '').trim()
       if (!name || !path) return Promise.reject(new Error('add-source: name and path required'))
-      if (path.startsWith('~/')) path = `${usage!.state.home}/${path.slice(2)}`
-      const srcs = usage!.state.sources as Record<string, any>[]
+      if (path.startsWith('~/')) path = `${usage!.state.home ?? ''}/${path.slice(2)}`
+      const srcs = usage!.state.sources ?? []
       if (
         srcs.some((s) => s.name === name || s.path === path) ||
         !/^[a-z][a-z0-9-]{0,31}$/.test(name)
       )
         return Promise.reject(new Error('add-source: name or path already registered'))
       srcs.push({ name, path, builtin: false })
-      ;(usage!.state.adapters as Record<string, any>)[name] = {
+      ;(usage!.state.adapters ?? {})[name] = {
         files: 0,
         parsed: 0,
         skipped: 0,
@@ -707,12 +809,12 @@ function registerCommands(context: PluginContext): void {
     })
     context.commands.register('agent-hub.remove-usage-source', (args: any) => {
       const name = String(args?.name ?? '')
-      const srcs = usage!.state.sources as Record<string, any>[]
+      const srcs = usage!.state.sources ?? []
       const target = srcs.find((s) => s.name === name)
       if (!target) return Promise.reject(new Error(`remove-source: ${name} not found`))
       if (target.builtin) return Promise.reject(new Error('remove-source: builtin sources cannot be removed'))
       usage!.state.sources = srcs.filter((s) => s.name !== name)
-      delete (usage!.state.adapters as Record<string, any>)[name]
+      delete (usage!.state.adapters ?? {})[name]
       usage!.state = { ...usage!.state }
       emitUsage(context)
       return { state: clone(usage!.state) }
@@ -735,6 +837,15 @@ function registerCommands(context: PluginContext): void {
   }
 }
 
+/** devMock 种子容器（插件 AgentHubDevMock 的本地镜像，见 plugins/agent-hub/src/devMockTypes.ts） */
+interface AgentHubSeed {
+  detection?: DetectionSeed
+  install?: InstallSeed
+  skills?: SkillsSeed
+  providers?: ProvidersSeed
+  usage?: UsageSeed
+}
+
 // ==================== 注入入口 ====================
 
 /** 待清理定时器（探测动画/测速/扫描等模拟延时） */
@@ -748,7 +859,10 @@ let timers: number[] = []
 export function registerAgentHubMock(context: PluginContext, pluginId: string): {
   dispose(): void
 } {
-  const seed = getDevMock(pluginId) as Record<string, any> | undefined
+  // SAFETY: dev-shell 刻意不收录插件包类型（SDK 不依赖插件），种子形状按
+  // 插件 devMockTypes.ts 的领域接口本地镜像后 cast——运行期种子字段是这些
+  // 接口的超集（额外字段经索引签名透传），cast 只收窄不丢字段
+  const seed = getDevMock(pluginId) as unknown as AgentHubSeed | undefined
   if (!seed) return { dispose() {} }
 
   detection = seed.detection ? clone(seed.detection) : null

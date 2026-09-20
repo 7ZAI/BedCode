@@ -278,6 +278,7 @@ export {
   inputExtensions,
   logs,
   pageToolbarItems,
+  pages,
   plugins,
   settingsSections,
   sidebarPanels,
