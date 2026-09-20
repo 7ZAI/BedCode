@@ -25,6 +25,7 @@ import type {
   TitleBarItemDescriptor,
   PageToolbarItemDescriptor,
   FileHandlerDescriptor,
+  SettingsSectionDescriptor,
   PluginDialogOptions,
   PluginDialogHandle,
 } from './types'
@@ -36,6 +37,9 @@ import { getPluginRegistry } from './registry'
 // 不依赖已发布的 dist 构建（packages 在 vite fs.allow 与 TS include 之外，
 // 经相对路径显式拉入编译）
 import { openGlobalDialog } from '../../packages/plugin-sdk-desktop/src/global-dialog'
+// 终端窗口管理器（票 13）：`session.isTerminalOpen` 是同步查询，需静态导入；
+// 其余三个方法沿用同一单例（模块级 windows Map，与宿主会话页共享状态）
+import { useSessionWindows } from '@/composables/useSessionWindows'
 
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
@@ -71,7 +75,7 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       }
       // 尝试调用 Rust 插件的 command（通过 plugin_invoke 路由）
       // WASM 插件 invoke_command 的约定与 manifest contributes.commands 一致，
-      // 使用全名（如 "auto-task.list-task-history"）；插件侧 `_ =>` 兜底按全名匹配，
+      // 使用全名（如 "session.task.history-list"）；插件侧 `_ =>` 兜底按全名匹配，
       // 不能去前缀，否则落入 Unknown command（registry/命令面板/插件视图均传全名）
       try {
         return await pluginCmds.pluginInvoke(info.id, id, args.length === 1 ? args[0] : args)
@@ -123,6 +127,31 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       const disposable = pluginEvents.on(info.id, 'session:statusChange', handler)
       disposables.push(disposable)
       return disposable
+    },
+    async predictTerminalSize(): Promise<{ cols: number; rows: number } | null> {
+      requirePermission('session.predictTerminalSize')
+      // 窗口几何与字体测量都在宿主（终端窗口本体留宿主，spec D3）：字体大小取自
+      // 宿主设置，widthRatio 取窗口创建规则，插件无需感知宿主设置形状
+      const [{ computeDesktopInitialTerminalSize, TERMINAL_WINDOW_WIDTH_RATIO }, { useSettingsStore }] =
+        await Promise.all([import('@/utils/terminalInitialSize'), import('@/stores/settings')])
+      const fontSize = useSettingsStore().settings.ui.terminal_font_size
+      return computeDesktopInitialTerminalSize(fontSize, {
+        widthRatio: TERMINAL_WINDOW_WIDTH_RATIO,
+      })
+    },
+    async openTerminal(target: { id: string; name: string }): Promise<boolean> {
+      requirePermission('session.openTerminal')
+      return useSessionWindows().openTerminalWindow(target)
+    },
+    async closeTerminal(sessionId: string): Promise<void> {
+      requirePermission('session.closeTerminal')
+      await useSessionWindows().closeTerminalWindow(sessionId)
+    },
+    isTerminalOpen(sessionId: string): boolean {
+      requirePermission('session.isTerminalOpen')
+      // 同步查询：调用方（插件会话页）在打开窗口前决定是否显示就绪 loading，
+      // 与宿主会话页原行为同口径
+      return useSessionWindows().hasTerminalWindow(sessionId)
     },
   }
 
@@ -181,6 +210,13 @@ export function createPluginContext(info: PluginInfo): PluginContext {
       requirePermission('ui.registerFileHandler')
       const registry = getPluginRegistry()
       const disposable = registry.registerFileHandler(info.id, handler)
+      disposables.push(disposable)
+      return disposable
+    },
+    registerSettingsSection(section: SettingsSectionDescriptor): Disposable {
+      requirePermission('ui.registerSettingsSection')
+      const registry = getPluginRegistry()
+      const disposable = registry.registerSettingsSection(info.id, section)
       disposables.push(disposable)
       return disposable
     },

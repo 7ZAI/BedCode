@@ -4,13 +4,31 @@
  * 前端扩展点注册表 — 管理插件注册的 Vue 组件、命令处理器和文件处理器
  */
 
-import type { Disposable, PluginContext } from './types'
-import { ref, type Ref } from 'vue'
+import type { Disposable, PluginContext, PluginState } from './types'
+import { ref, shallowRef, type Ref } from 'vue'
 
 /** 插件视图默认排序值 — 插件未指定 order 时使用。
- * 600 位于全部内置菜单项（会话 100 / 服务器 200 / 设备 300 / 插件 400 / 设置 700）之后，
- * 插件菜单默认排在宿主内置菜单之后（设置之前）；显式指定 order 可插入任意内置项之间 */
+ * 600 位于全部内置菜单项（设备 100 / 会话 200 / 服务器 300 保留 / 插件 9998 / 设置 9999）之后，
+ * 插件菜单默认排在宿主内置菜单之后（设置之前）；显式指定 order 可插入任意内置项之间。
+ * 设置分组贡献面复用同一缺省值（缺省行为与既有贡献面一致） */
 const DEFAULT_VIEW_ORDER = 600
+
+/** 插件贡献「生效」的运行态：Activated 正常，Degraded 实例仍在运行（仅启动初始化未完成）。
+ * Activating / Loaded / NeedsApproval 尚未注册扩展点；Error / Deactivated 一律视为未生效 */
+const ACTIVE_CONTRIBUTION_STATES: ReadonlySet<PluginState['state']> = new Set([
+  'Activated',
+  'Degraded',
+])
+
+/**
+ * 判断插件运行态是否使其贡献面生效 —— 宿主「贡献项摘除 / 恢复」的单一判据。
+ *
+ * 纯函数形态供消费方在响应式依赖（registry.pluginStatesRef）下调用；
+ * 注册表方法 `isContributionActive()` 与之共用同一状态集合，杜绝同一事实各判一次。
+ */
+export function isContributionActiveState(state: PluginState | undefined): boolean {
+  return state ? ACTIVE_CONTRIBUTION_STATES.has(state.state) : false
+}
 
 /** 注册的视图组件 */
 interface RegisteredView {
@@ -79,6 +97,17 @@ interface RegisteredFileHandler {
   component: any
 }
 
+/** 注册的设置分组（插件贡献到宿主设置页） */
+interface RegisteredSettingsSection {
+  pluginId: string
+  id: string
+  titleKey: string
+  icon?: string
+  /** 排序值，升序排列（越小越靠前），同值保持注册顺序 */
+  order: number
+  component: any
+}
+
 /** 注册的 HTTP 端点 handler */
 interface RegisteredHttpEndpoint {
   pluginId: string
@@ -101,11 +130,19 @@ class PluginRegistryClass {
   private pageToolbarItemsMap = new Map<string, RegisteredPageToolbarItem>()
   private fileHandlers = new Map<string, RegisteredFileHandler>()
   private httpEndpoints = new Map<string, RegisteredHttpEndpoint>()
+  private settingsSections = new Map<string, RegisteredSettingsSection>()
   /** 插件上下文映射，供 PluginViewHost provide 给组件树 */
   private contexts = new Map<string, PluginContext>()
+  /** 插件运行态映射 — 贡献面「是否生效」的唯一事实源（宿主摘除/恢复判据，见 isContributionActive） */
+  private pluginStates = new Map<string, PluginState>()
 
   /** 响应式数据供 Vue 组件使用 */
   readonly sidebarViews: Ref<RegisteredView[]> = ref([])
+  // shallowRef：条目整体替换即触发更新，避免深响应把 component 包成响应式对象
+  // （Vue 会警告「Component that was made a reactive object」）
+  readonly settingsSectionsRef: Ref<RegisteredSettingsSection[]> = shallowRef([])
+  /** 插件运行态响应式副本（贡献面消费方据此重算） */
+  readonly pluginStatesRef: Ref<Record<string, PluginState>> = ref({})
   readonly toolboxViews: Ref<RegisteredView[]> = ref([])
   readonly statusbarItems: Ref<RegisteredStatusBarItem[]> = ref([])
   readonly inputExts: Ref<RegisteredInputExtension[]> = ref([])
@@ -290,6 +327,30 @@ class PluginRegistryClass {
     return undefined
   }
 
+  /** 注册设置分组（插件贡献到宿主设置页，需 ui:settings 权限） */
+  registerSettingsSection(
+    pluginId: string,
+    section: { id: string; titleKey: string; icon?: string; order?: number; component: any },
+  ): Disposable {
+    const key = `${pluginId}:${section.id}`
+    const entry: RegisteredSettingsSection = {
+      pluginId,
+      id: section.id,
+      titleKey: section.titleKey,
+      icon: section.icon,
+      order: section.order ?? DEFAULT_VIEW_ORDER,
+      component: section.component,
+    }
+    this.settingsSections.set(key, entry)
+    this.updateReactiveSettingsSections()
+    return {
+      dispose: () => {
+        this.settingsSections.delete(key)
+        this.updateReactiveSettingsSections()
+      },
+    }
+  }
+
   /** 注册 HTTP 端点 handler */
   registerHttpEndpoint(
     pluginId: string,
@@ -320,9 +381,33 @@ class PluginRegistryClass {
     return this.contexts.get(pluginId)
   }
 
+  /** 记录插件运行态（由 loader 在加载成功 / 标记错误时写入，停用时随 clearPlugin 摘除） */
+  setPluginState(pluginId: string, state: PluginState): void {
+    this.pluginStates.set(pluginId, state)
+    this.updateReactivePluginStates()
+  }
+
+  /** 读取插件运行态 */
+  getPluginState(pluginId: string): PluginState | undefined {
+    return this.pluginStates.get(pluginId)
+  }
+
+  /**
+   * 判断插件的贡献面是否生效 —— 宿主「贡献项摘除 / 恢复」的唯一判据。
+   *
+   * 所有消费方（侧边栏菜单让位、设置分组渲染、未来的页面兜底）必须走本函数，
+   * 避免同一事实被各判一次导致菜单与页面状态不一致（D7）。
+   * 未登记运行态（如测试直接注册、或插件尚未上报）视为未生效。
+   */
+  isContributionActive(pluginId: string): boolean {
+    return isContributionActiveState(this.pluginStates.get(pluginId))
+  }
+
   /** 清理插件的所有注册 */
   clearPlugin(pluginId: string): void {
     this.contexts.delete(pluginId)
+    this.pluginStates.delete(pluginId)
+    this.updateReactivePluginStates()
 
     for (const key of [...this.views.keys()]) {
       if (key.startsWith(`${pluginId}:`)) {
@@ -377,6 +462,13 @@ class PluginRegistryClass {
         this.httpEndpoints.delete(key)
       }
     }
+
+    for (const key of [...this.settingsSections.keys()]) {
+      if (key.startsWith(`${pluginId}:`)) {
+        this.settingsSections.delete(key)
+      }
+    }
+    this.updateReactiveSettingsSections()
   }
 
   private updateReactiveViews() {
@@ -405,6 +497,17 @@ class PluginRegistryClass {
 
   private updateReactivePageToolbar() {
     this.pageToolbarItems.value = [...this.pageToolbarItemsMap.values()]
+  }
+
+  private updateReactiveSettingsSections() {
+    const sections = [...this.settingsSections.values()]
+    // 按 order 升序排序（sort 为稳定排序，同 order 保持注册先后）
+    sections.sort((a, b) => a.order - b.order)
+    this.settingsSectionsRef.value = sections
+  }
+
+  private updateReactivePluginStates() {
+    this.pluginStatesRef.value = Object.fromEntries(this.pluginStates)
   }
 }
 

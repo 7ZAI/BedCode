@@ -113,9 +113,16 @@ class PluginLoaderClass {
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
       getPluginRegistry().setContext(manifest.id, context)
+      // 运行态登记：贡献面（侧边栏/设置分组）是否生效由 registry 仲裁，见 isContributionActive
+      getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Rust+TS plugin frontend loaded: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      // 加载失败即贡献面失效：先登记 Error 态摘除贡献，再上报后端
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'Error',
+        error: e.message || 'Frontend load failed',
+      })
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -152,9 +159,14 @@ class PluginLoaderClass {
 
       this.plugins.set(manifest.id, { manifest, module, context })
       getPluginRegistry().setContext(manifest.id, context)
+      getPluginRegistry().setPluginState(manifest.id, manifest.state)
       logger.log(`[PluginLoader] Plugin frontend loaded (already activated): ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to load frontend for ${manifest.id}:`, e)
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'Error',
+        error: e.message || 'Frontend load failed',
+      })
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,
@@ -319,9 +331,14 @@ class PluginLoaderClass {
 
       this.plugins.set(pluginId, { manifest: info, module, context })
       getPluginRegistry().setContext(pluginId, context)
+      getPluginRegistry().setPluginState(pluginId, info.state)
       logger.log(`[PluginLoader] Plugin hot-reloaded: ${pluginId}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to hot-reload ${pluginId}:`, e)
+      getPluginRegistry().setPluginState(pluginId, {
+        state: 'Error',
+        error: e.message || 'Hot reload failed',
+      })
       await this.reportLoadDiagnostic(
         pluginId,
         stage,
@@ -363,9 +380,16 @@ class PluginLoaderClass {
       this.plugins.set(manifest.id, { manifest, module, context })
       // 将 context 存入 registry，供 PluginViewHost provide 给组件树
       getPluginRegistry().setContext(manifest.id, context)
+      // manifest 是 activate() 前取的快照，其 state 仍是激活前的形态（Loaded / Inactive）；
+      // 贡献面生效判据读的是 registry 状态，此处必须记激活后的真实运行态
+      getPluginRegistry().setPluginState(manifest.id, { state: 'Activated' })
       logger.log(`[PluginLoader] Plugin activated: ${manifest.id}`)
     } catch (e: any) {
       logger.error(`[PluginLoader] Failed to activate ${manifest.id}:`, e)
+      getPluginRegistry().setPluginState(manifest.id, {
+        state: 'Error',
+        error: e.message || 'Activation failed',
+      })
       await this.reportLoadDiagnostic(
         manifest.id,
         stage,

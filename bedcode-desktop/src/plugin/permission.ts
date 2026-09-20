@@ -12,11 +12,13 @@ const VALID_PERMISSIONS = new Set([
   'terminal:observe',
   'session:read',
   'session:write',
+  'session:config',
   'ui:sidebar',
   'ui:toolbox',
   'ui:statusbar',
   'ui:dialog',
   'ui:pageToolbar',
+  'ui:settings',
   'ui:input',
   'ui:fileHandler',
   'network:http',
@@ -35,13 +37,28 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'terminal:input': ['terminal.sendInput', 'terminal.onInput'],
   'terminal:output': ['terminal.onOutput'],
   'terminal:observe': ['terminal.onInputSubmitted'],
-  'session:read': ['session.list', 'session.get', 'session.onStatusChange'],
+  // 终端窗口原语（票 13）同属观测面：预测初始网格 / 打开 / 关闭宿主终端窗口。
+  // 窗口本体与渲染管线留宿主，插件只经本上下文触发（D2 前端收口）
+  'session:read': [
+    'session.list',
+    'session.get',
+    'session.onStatusChange',
+    'session.predictTerminalSize',
+    'session.openTerminal',
+    'session.closeTerminal',
+    'session.isTerminalOpen',
+  ],
   'session:write': ['session.create', 'session.stop'],
+  // session:config 为 WASM 优先权限（配置 CRUD 经插件命令通道，不直调宿主域命令）；
+  // 登记三个审计名，与 host_impl 权限门同域
+  'session:config': ['session.configUpsert', 'session.configGet', 'session.configDelete'],
   'ui:sidebar': ['ui.registerSidebarPanel'],
   'ui:toolbox': ['ui.registerToolboxPage'],
   'ui:statusbar': ['ui.registerStatusBarItem', 'ui.registerTitleBarItem'],
   'ui:dialog': ['ui.showDialog'],
   'ui:pageToolbar': ['ui.registerPageToolbarItem'],
+  // ui:settings 为纯前端贡献面权限（无 WASM 宿主函数对应），只门住设置分组注册 API
+  'ui:settings': ['ui.registerSettingsSection'],
   'ui:input': ['ui.registerInputExtension', 'ui.registerTerminalToolbarItem'],
   'ui:fileHandler': ['ui.registerFileHandler'],
   'network:http': ['http.registerEndpoint'],

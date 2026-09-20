@@ -65,6 +65,12 @@ export interface PluginContributes {
   terminal?: TerminalContribution
   toolProviders: ToolProviderContribution[]
   fileHandlers: FileHandlerContribution[]
+  /**
+   * 插件 HTTP 端点清单（`_http_endpoint` 的路径白名单，票 16）：条目为不含
+   * `/api/plugin/<插件 id>/` 前缀的相对路径段。空/缺省 = 未声明，宿主路由按
+   * 票据 03 的过渡策略在前缀内 ANY 放行。
+   */
+  httpEndpoints?: string[]
   /** 配置声明 */
   configuration?: PluginConfiguration
   /** 生命周期钩子声明 */
@@ -167,9 +173,11 @@ export interface SidebarPanelDescriptor {
    * 与宿主内置菜单共用同一图标体系，可包含多个 M 子路径组合成完整图标 */
   icon?: string
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
-   * 与宿主内置菜单（终端会话 100 / 服务器 200 / 设备 300 / 插件 400 / 设置 700）共用同一排序空间，
-   * 可指定任意值插入到内置菜单项之间（如 150 位于"终端会话"与"服务器"之间）；
-   * 同值按注册先后排列 */
+   * 与宿主内置菜单（设备配对 100 / 终端会话 200 / 服务器 300 保留不复用 / 插件管理 9998 / 设置 9999）
+   * 共用同一排序空间，可指定任意值插入到内置菜单项之间（如 150 位于"设备配对"与"终端会话"之间）；
+   * 同值按注册先后排列。
+   * 注意：与「设备配对 / 终端会话」内置项**同 order 值**即视为接管该域——宿主内置入口随之让位
+   * （本插件 error / 停用后自动恢复）；插在两者之间的新域目录不触发让位 */
   order?: number
   component: any
 }
@@ -183,6 +191,22 @@ export interface ToolboxPageDescriptor {
   /** 菜单排序值，升序排列（越小越靠前），缺省 600。
    * 与宿主内置菜单共用同一排序空间，可插入任意内置项之间 */
   order?: number
+  component: any
+}
+
+/** 设置分组描述符（插件往宿主设置页贡献一个分组，需 `ui:settings` 权限） */
+export interface SettingsSectionDescriptor {
+  id: string
+  /** 分组标题的 i18n key，相对插件自身命名空间
+   * （宿主按 `${pluginId}.${titleKey}` 解析，与 `context.i18n.t` 同一前缀规则；
+   * 未注册该 key 时 vue-i18n 回退显示 key 本身） */
+  titleKey: string
+  /** SVG path d 属性字符串（Heroicons outline 风格，stroke-width=2，viewBox=0 0 24 24） */
+  icon?: string
+  /** 排序值，升序排列（越小越靠前），缺省与其余贡献面一致（600）。
+   * 与宿主内置分组共用同一排序空间，可指定任意值插入内置分组之间；同值按注册先后排列 */
+  order?: number
+  /** 分组内容组件：只渲染卡片正文，外层 `<section>` 与标题由宿主统一渲染（保证与内置分组像素一致） */
   component: any
 }
 
@@ -336,6 +360,36 @@ export interface SessionAPI {
   list(): Promise<any[]>
   get(sessionId: string): Promise<any>
   onStatusChange(handler: (event: any) => void): Disposable
+  /**
+   * 预测宿主终端窗口的初始网格（宿主窗口几何 + 字体测量 + 整体缩放）。
+   *
+   * 供插件在启动会话前把 `cols` / `rows` 交给 `create-with-spec`——终端窗口本体、
+   * 创建尺寸与渲染管线留宿主（spec D3），预测规则必须与窗口创建规则同源，故留在
+   * 宿主一处实现而不在插件复刻。任一环节不可用（非 Tauri 环境 / 字体未就绪）返回
+   * `null`，调用方不传尺寸、由宿主兜底默认网格。
+   */
+  predictTerminalSize(): Promise<{ cols: number; rows: number } | null>
+  /**
+   * 打开（或聚焦）宿主终端窗口——宿主既有路由深链 `/terminal-window/:sessionId`。
+   *
+   * 窗口几何、贴靠、就绪事件与关闭一律留宿主；插件只触发，不自建窗口、不自带渲染管线。
+   *
+   * @returns `true` = 新建窗口（尚在就绪中，调用方宜显示 loading）；`false` = 既有窗口已聚焦
+   */
+  openTerminal(session: { id: string; name: string }): Promise<boolean>
+  /**
+   * 关闭宿主终端窗口（幂等：窗口不存在时静默返回）。
+   *
+   * 会话停止 / 删除时由调用方触发——「何时该关窗」是插件侧的编排决策。
+   */
+  closeTerminal(sessionId: string): Promise<void>
+  /**
+   * 该会话是否已有打开的终端窗口（宿主窗口登记事实，同步）。
+   *
+   * 调用方据此决定「先聚焦（无需 loading）还是新建（显示就绪 loading）」——
+   * 与宿主会话页原行为同口径。
+   */
+  isTerminalOpen(sessionId: string): boolean
 }
 
 /** UI 注册表（需 ui:* 权限） */
@@ -348,6 +402,8 @@ export interface UIRegistry {
   registerTitleBarItem(item: TitleBarItemDescriptor): Disposable
   registerPageToolbarItem(item: PageToolbarItemDescriptor): Disposable
   registerFileHandler(handler: FileHandlerDescriptor): Disposable
+  /** 往宿主设置页贡献一个分组（见 SettingsSectionDescriptor；权限 ui:settings） */
+  registerSettingsSection(section: SettingsSectionDescriptor): Disposable
   /** 全局弹窗（宿主统一渲染遮罩/卡片/倒计时/按钮/路由跳转；见 PluginDialogOptions） */
   showDialog(options: PluginDialogOptions): PluginDialogHandle
 }

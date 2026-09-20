@@ -141,6 +141,11 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     titleKey: 'desktop.plugin.perm.ui:toolbox.title',
     descKey: 'desktop.plugin.perm.ui:toolbox.desc',
   },
+  'ui:settings': {
+    emoji: '⚙️',
+    titleKey: 'desktop.plugin.perm.ui:settings.title',
+    descKey: 'desktop.plugin.perm.ui:settings.desc',
+  },
   'network:http': {
     emoji: '🌐',
     titleKey: 'desktop.plugin.perm.network:http.title',
