@@ -85,13 +85,11 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
         ├── events/                   # 全局事件系统：AppEvent trait、事件匹配、SessionManager→前端转发、
         │                             #   同步事件定义与处理（→ WebSocket 广播）
         ├── mdns/                     # mDNS 服务广播：将桌面端服务注册到局域网供移动端发现
-        ├── peer_net.rs               # 对等网络接入（宿主薄封装）：节点身份初始化（与设备身份分离）、
-        │                             #   节点/发现守护装配、首连确认闸门事件桥接、可信对端管理
-        ├── peer_receive.rs           # 接收侧：询问应答回流、接收任务登记、接收策略与落点设置
-        ├── peer_remote.rs            # 远端浏览/拉取：共享目录列目录 + 多文件拉取编排（只读）
-        ├── peer_transfer.rs          # 发送侧：扇出发送编排、进度节流行转、终态历史持久化
-        ├── peer_migration.rs         # 旧对等网络数据 → file-transfer 插件存储键一次性幂等迁移
-        │                             #   （计划随引擎停写收尾删除）
+        ├── peer_net.rs               # 对等网络引擎接入：节点身份/发现/生命周期、host-peer bridge、事件适配
+        ├── peer_engine_receive.rs    # peer-net 入站连接适配；业务状态由 file-transfer 插件持有
+        ├── peer_engine_remote.rs     # peer-net 远端浏览/拉取适配
+        ├── peer_engine_transfer.rs   # peer-net 发送会话适配
+        │                             #   宿主不持有传输历史、设置或任务真源
         ├── plugin/                   # 插件系统（WASM 组件沙箱架构，核心模块，详见 Core Modules）
         ├── pty/                      # PTY 管理：进程生命周期、输出读取/缓存/监听、命令构建、WSL 支持
         ├── server/                   # Actix Web HTTP + WS 服务器（核心模块，详见 Core Modules）
@@ -214,14 +212,18 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
 
 移动端与桌面端通信的唯一入口：
 
-- **controllers/ + dtos/**：HTTP REST 控制器与请求/响应 DTO（auth、config、file、git、plugin、session）
+- **controllers/ + dtos/**：HTTP REST 控制器与请求/响应 DTO（auth、plugin、session）——
+  票 02/03/04 contract 后 config / file / git 控制器已全部退役（config_dto / file_dto /
+  git_dto 保留为形状契约锚点）
 - **gateway.rs**：**HTTP 协议网关**（平台基础服务，宿主业务清零票 01）——一张业务 URL 别名路由表
   （`/api/configs`、`/api/quick-actions`、`/api/file-tree|file-tree-children|file-content|diff-tree|file-diff`、
   `/api/git/*` → 目标插件端点，条目带归属插件 + 业务域 + 方法声明）+ 中间件 `business_gateway`。
   判定是纯函数 `decide(verified, activated, declared)`：**宿主已验签 + 目标插件已激活 + 该端点在插件
   manifest `contributes.httpEndpoints` 逐字声明**三者齐备才切插件，否则原样落宿主旧实现（双轨期）。
   转发复用 `controllers/plugin_controller.rs::forward_to_plugin` 同一内核与同一声明治理（不另发明传输机制）；
-  宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据。
+  宿主业务实现退役后条目 `FallbackPolicy` 翻 `PluginRequired` → 明确报「插件未激活」而不给假数据
+  （票 02：configs / quick-actions；票 03：五个文件浏览端点；票 04：git 三端点——十条业务别名已全部
+  PluginRequired，宿主业务路由清零）。
   载荷纪律：降级分支不 `into_parts`，payload 原样留给宿主 handler
 - **middleware/**：CORS、JWT 网关（公开路径/插件路径放行规则；具名中间件 `jwt_auth::jwt_gateway`，
   协议网关必须挂在它**之后**——`Scope::wrap` 后注册者先执行，故 `app.rs` 里网关写在验签之前）、
@@ -288,19 +290,20 @@ AppEvent trait + 事件匹配处理器；SessionManager 事件双路分发：转
   `revoke-trusted`、`send-files`、`respond-transfer`、`set-receive-policy`、`set-shared-roots`、
   `list-shared-roots`、`browse-directory`、`pull-files`、`set-download-dir`；
   插件侧经 `HostPeer` trait 调用（`plugins/file-transfer/rust/src/peer.rs`）
-- **命令面（注册于 `lib.rs`，主前端已退役）**：Phase 4（issue 13）产品面整体迁入 file-transfer
-  插件后，仅保留生命周期（`start/stop_peer_node`）、首连确认（`respond_peer_consent`）、
-  信任管理（`list_trusted_peers` / `revoke_trusted_peer`）与接收配置
-  （`set_peer_receive_policy` / `set_peer_download_dir` / `set_peer_transfer_encryption`）作为
-  宿主级兜底路径；其余查询/管理命令函数体暂留一版（部分仍为 `host_impl` 内部簿记调用），
-  下版本删除
-- **数据面**：`peer_remote.rs` 浏览/拉取（线协议「单连接单请求」，任务行预登记进接收表）；
-  `peer_transfer.rs` 发送扇出（「群发」仅是前端编排概念，每个接收方独立 batch_id）；
-  `peer_receive.rs` 接收策略（ask/always_accept/always_deny）+ 询问超时 + 落点目录
-- **事件范式**：`peer-transfer-changed` / `peer-receive-changed` 全量推送（与 `peer-devices-changed`
-  同款），前端按 batchId 合并双源列表分组（正在发送 / 正在接收 / 历史）
-- **业务归属**：传输 UI 与业务逻辑在 file-transfer 插件（经 `HostPeer` trait 调宿主原语），
-  宿主只提供无业务语义的引擎原语；`peer_migration.rs` 把引擎侧旧数据幂等迁入插件存储键
+- **命令面（注册于 `lib.rs`）**：票 06 后只剩节点生命周期（`start_peer_node` /
+  `stop_peer_node`）、首连确认（`respond_peer_consent`）与信任管理
+  （`list_trusted_peers` / `revoke_trusted_peer`）——后三者函数体同时是 host-peer 原语的
+  真源（`host_impl/peer.rs` 直接调用）。接收配置（策略/落点/加密/并发）、历史查询、
+  远端浏览、发送编排等宿主命令已全部注销：设置面由插件经 `set-receive-policy` /
+  `set-download-dir` 等原语推送引擎闸门（`peer_net::*_for_plugin`），任务与历史真源在
+  file-transfer 插件私有库
+- **数据面**：`peer_engine_remote.rs` 仅做 peer-net 浏览/拉取适配，
+  `peer_engine_transfer.rs` 仅做发送会话适配，`peer_engine_receive.rs` 仅做入站连接适配；
+  宿主不持有任务、设置或历史真源
+- **事件范式**：peer-net 引擎事件经 `peer_net.rs` 适配为 `peer:transfer` / `peer:receive` 全量快照，
+  file-transfer 插件按 batchId 合并并持久化业务视图
+- **业务归属**：传输 UI、任务状态、重试、策略、历史与共享根业务在 file-transfer 插件；
+  宿主只提供 peer-net 引擎和 host-peer 原语
 
 ### 插件开发 SDK — `packages/plugin-sdk-desktop/`
 
@@ -324,14 +327,14 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 全局事件系统 | `src-tauri/src/events/` |
 | mDNS 广播 | `src-tauri/src/mdns/` |
 | 对等网络（节点/信任/发现） | `src-tauri/src/peer_net.rs` |
-| 对等传输（发送/接收/远端浏览） | `src-tauri/src/peer_transfer.rs`、`peer_receive.rs`、`peer_remote.rs` |
+| 对等传输引擎适配（发送/接收/远端浏览） | `src-tauri/src/peer_net.rs`、`peer_engine_transfer.rs`、`peer_engine_receive.rs`、`peer_engine_remote.rs` |
 | 对等网络底座 crate | `../packages/peer-net`、`../packages/link-crypto` |
 | 链路加密（HTTP 信封 + WS 帧） | `src-tauri/src/server/link_crypto.rs`、`src/composables/`（useLinkCrypto） |
 | 插件系统 (Rust) | `src-tauri/src/plugin/` |
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域，票 17 起顶替旧 `com.bedcode.auto-task` 插件） |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |

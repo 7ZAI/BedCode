@@ -1,6 +1,6 @@
 # 宿主侧业务代码清零（Business Decarriage）—— 桌面端业务全下沉插件，宿主只留基础服务与插件核心
 
-Status: ready-for-agent
+Status: done（2026-09-21：六票实施完毕——01 网关、02/03/04 session 业务下沉、05/06 peer 下沉与退役；宿主 cargo test 1070/0、vitest 全绿、eslint 0 error；网络闭环边界见 05 票）
 Date: 2026-09-20
 范围: **仅桌面端**（`bedcode-desktop/` 及其 `plugins/`、`packages/plugin-sdk-desktop/`、`src-tauri/`）；`bedcode-mobile/` 零改动、零验证责任
 决策依据: `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`（阶段 4）；`docs/adr/0022`（裁剪线、无业务内核）；`docs/adr/0017`（互调门）；AGENTS.md §5（架构红线）、§7（插件检查清单）、§8（安全红线）
