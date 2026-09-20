@@ -6,7 +6,7 @@
  * 生产构建脚本，委托给各插件的构建系统
  *
  * 用法：node scripts/plugin-build.js [--plugin <plugin-id>]
- * 默认构建 auto-task 插件
+ * 默认构建 com.bedcode.session（终端会话中心）插件
  */
 
 import { execSync } from 'child_process'
@@ -25,17 +25,17 @@ const PLUGINS = {
   'com.bedcode.ai-chatbox': {
     pluginDir: 'plugins/ai-chatbox',
   },
-  'com.bedcode.auto-task': {
-    pluginDir: 'plugins/auto-task',
-  },
   'com.bedcode.file-transfer': {
     pluginDir: 'plugins/file-transfer',
+  },
+  'com.bedcode.session': {
+    pluginDir: 'plugins/session',
   },
 }
 
 // 解析参数
 const args = process.argv.slice(2)
-let targetPlugin = 'com.bedcode.auto-task'
+let targetPlugin = 'com.bedcode.session'
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--plugin' && args[i + 1]) {
     targetPlugin = args[i + 1]

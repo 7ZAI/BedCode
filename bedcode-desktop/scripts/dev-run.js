@@ -125,10 +125,11 @@ const PLUGIN_WATCH_CMDS = [
     wasmFile: 'rust/target/wasm32-wasip2/release/bedcode_plugin_ai_chatbox.wasm',
   },
   {
-    dir: 'plugins/auto-task',
-    id: 'com.bedcode.auto-task',
+    dir: 'plugins/session',
+    id: 'com.bedcode.session',
     args: ['scripts/build.js', '--watch'],
-    wasmFile: 'rust/target/wasm32-unknown-unknown/release/bedcode_plugin_auto_task.wasm',
+    // 票 03 起本插件走仓库共享 wasip3 构建链（cdylib 直出 Component）
+    wasmFile: 'rust/target/wasm32-wasip3/release/bedcode_plugin_session.wasm',
   },
   {
     dir: 'plugins/file-transfer',

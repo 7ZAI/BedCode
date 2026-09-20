@@ -27,7 +27,7 @@ Hook 脚本自动复制到 `~/.claude/auto_task_hook.py`，全局生效。
 
 4. **Logging**: 所有 hook 事件和 HTTP 请求记录到 `.claude/bedcode-plugin.log`，按天轮转保留 7 天
 
-5. **HTTP Push**: 任务状态变更推送到 `POST /api/plugin/com.bedcode.auto-task/task-status`。端点由网关中间件对 `/api/plugin/*` 路径本地放行（无凭证），hook 仅在 BedCode 注入 `BEDCODE_SESSION_ID` 的 PTY 中生效，信任边界为本地网络
+5. **HTTP Push**: 任务状态变更推送到 `POST /api/plugin/com.bedcode.session/task-status`（旧 `com.bedcode.auto-task` 前缀由宿主别名表继续应答，见 `docs/knowledge/plugin-http-endpoint-trust.md`）。端点由网关中间件对 `/api/plugin/*` 路径本地放行（无凭证），hook 仅在 BedCode 注入 `BEDCODE_SESSION_ID` 的 PTY 中生效，信任边界为本地网络
 
 ## Environment Variables
 

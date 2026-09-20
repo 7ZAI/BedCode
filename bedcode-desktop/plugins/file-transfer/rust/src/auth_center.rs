@@ -1,22 +1,20 @@
-//! 认证中心消费（票 10 C1）—— peer consent / 信任决策改经互调认证中心 API
+//! 会话中心消费（票 10 C1 → 终端会话中心票 05 改指）—— peer consent / 信任决策
+//! 改经互调**会话中心**（`com.bedcode.session`）API
 //!
-//! 语义迁移（auth-center-spec §3「动」表：peer consent / 设备信任列表归
-//! 认证中心单一权威）：
+//! 语义迁移（peer consent / 设备信任列表归单一权威插件）：
 //!
-//! - **consent**：首连确认决策经 `com.bedcode.devices.decide-consent`
-//!   （`auth.decide-consent`）两阶段流——
+//! - **consent**：首连确认决策经 `consent-decide` 两阶段流——
 //!   阶段 1（`peer:consent` 事件到达）：无用户意向预检信任，已信任免确认
 //!   自动放行（不弹窗）；未知 peer → ask，照旧弹窗询问；
 //!   阶段 2（`file-transfer.respond-consent` 回传用户意向）：最终 accept/deny，
 //!   消费方按决策应答宿主 peer 引擎（引擎原语留在宿主，本插件只做决策映射）。
-//! - **信任列表**：`file-transfer.list-trusted` 经
-//!   `com.bedcode.devices.list-trusted-devices`（`auth.list-trusted-devices`）
-//!   取统一视图，映射回旧的 peer-only 数组 wire（行为等价，前端零改动）。
-//! - **撤销**：无互调 api（认证中心 manifest api 未声明 revoke），维持宿主
-//!   `peer_revoke_trusted` 原语直通——与认证中心 peer 段共享同一宿主 trust
-//!   store，数据一致。
+//! - **信任列表**：`file-transfer.list-trusted` 经 `trust-list` 取统一视图，
+//!   映射回旧的 peer-only 数组 wire（行为等价，前端零改动）。
+//! - **撤销**：会话中心已声明 `trust-revoke`，但本插件维持宿主
+//!   `peer_revoke_trusted` 原语直通（与 trust 视图的 peer 段共享同一宿主 trust
+//!   store，数据一致；改走互调不带来行为变化，避免无用耦合）。
 //!
-//! 双轨兜底（无单点）：认证中心未激活 / 互调超时 / 门禁拒绝时降级为迁移前
+//! 双轨兜底（无单点）：会话中心未激活 / 互调超时 / 门禁拒绝时降级为迁移前
 //! 行为——consent 直接弹窗、respond 直答宿主、list 直查宿主。宿主实现
 //! （peer_net 引擎原语）保留作对照基线（票 10 验收：与迁移前行为等价）。
 //!
@@ -37,9 +35,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::{Mutex, OnceLock};
 
-/// 认证中心插件 ID（互调目标；仅 wasm 运行时使用）
+/// 会话中心插件 ID（互调目标；仅 wasm 运行时使用）
+///
+/// 票 05 改指：trust / consent 域自独立认证中心插件迁入**会话中心**
+/// （api 名同步改为 `consent-decide` / `trust-list`）；原插件票 06 已整体退役，
+/// 本常量是这两域在本插件视角下的唯一互调目标。
 #[cfg(target_arch = "wasm32")]
-pub(crate) const AUTH_CENTER_ID: &str = "com.bedcode.devices";
+pub(crate) const SESSION_CENTER_ID: &str = "com.bedcode.session";
 
 /// consent 决策互调超时（毫秒）：认证中心无响应时快速降级，避免阻塞总线回调
 #[cfg(target_arch = "wasm32")]
@@ -49,7 +51,7 @@ const DECIDE_TIMEOUT_MS: u64 = 3_000;
 const LIST_TIMEOUT_MS: u64 = 5_000;
 
 // ==================== wire 契约（镜像认证中心 consent/model.rs） ====================
-// 与 devices 插件 serde 形状逐字段对齐（camelCase / snake_case）；插件间不
+// 与会话中心 consent 模块 serde 形状逐字段对齐（camelCase / snake_case）；插件间不
 // 相互依赖 crate（ADR 0022 高内聚低耦合），契约共享唯一真源 = WIT/JSON wire。
 
 /// 用户显式意向（wire snake_case；与认证中心 `UserDecision` 同形状）
@@ -112,21 +114,25 @@ pub(crate) struct ConsentDecision {
 // 死代码告警；防漂移比对由 wasm 构建（CI 插件构建链）强制执行。
 
 #[cfg(target_arch = "wasm32")]
-#[plugin_api(manifest = "../../devices/plugin.json")]
+#[plugin_api(manifest = "../../session/plugin.json")]
 // 声明即契约（ADR 0017 防漂移）：trait 自身不被运行引用，仅承载构建期比对
-// （宏生成 Dispatcher/Client，Client 由 WasmAuthGateway 使用）
+// （宏生成 Dispatcher/Client，Client 由 WasmAuthGateway 使用）。
+// 方法集必须与 `com.bedcode.session` 的 manifest.api **精确一致**（票 10 后的清单
+// = pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项
+//   + 会话动作四项）。
 #[allow(dead_code)]
-pub(crate) trait AuthCenterApi {
-    /// 探活（manifest 契约全量对齐；本插件不消费）
-    fn hello() -> Result<String, String>;
-
+pub(crate) trait SessionCenterApi {
     /// 首连确认决策（两阶段流：阶段 1 无意向评估信任；阶段 2 回传 userDecision）
-    #[api("decide-consent")]
-    fn decide_consent(request: ConsentRequest) -> Result<ConsentDecision, String>;
+    #[api("consent-decide")]
+    fn consent_decide(request: ConsentRequest) -> Result<ConsentDecision, String>;
 
     /// 统一信任视图（pairing + peer 合并；本插件只取 peer 段）
-    #[api("list-trusted-devices")]
-    fn list_trusted_devices() -> Result<serde_json::Value, String>;
+    #[api("trust-list")]
+    fn trust_list() -> Result<serde_json::Value, String>;
+
+    /// 撤销统一条目（本插件不消费：撤销仍走 host-peer 原语直通）
+    #[api("trust-revoke")]
+    fn trust_revoke(id: String) -> Result<serde_json::Value, String>;
 
     // ============ 票 11 命令面桥接新增（宿主命令面消费；本插件不消费） ============
     // 构建期防漂移要求 trait 方法集与 manifest.api 精确一致，以下方法仅承载
@@ -147,11 +153,37 @@ pub(crate) trait AuthCenterApi {
     fn qr_code_verify(token: String) -> Result<serde_json::Value, String>;
     #[api("qr-code-clear")]
     fn qr_code_clear() -> Result<(), String>;
+
+    // ============ 票 08 配置面（宿主命令面消费；本插件不消费） ============
+    #[api("config-list")]
+    fn config_list() -> Result<serde_json::Value, String>;
+    #[api("config-upsert")]
+    fn config_upsert(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("config-delete")]
+    fn config_delete(id: String) -> Result<bool, String>;
+
+    // ============ 票 09 创建编排 + 票 10 会话动作（宿主命令面消费；本插件不消费） ============
+    // 补登票 09 漏项：`session-create` 落 manifest 后本 trait 未同步 → wasm 构建期
+    // 防漂移比对必红（票 09 未重建本插件产物，故直到票 10 重建时才暴露）。
+    #[api("session-create")]
+    fn session_create(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("session-restart")]
+    fn session_restart(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("session-remove")]
+    fn session_remove(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("session-rename")]
+    fn session_rename(draft: serde_json::Value) -> Result<serde_json::Value, String>;
+    #[api("session-resize")]
+    fn session_resize(draft: serde_json::Value) -> Result<serde_json::Value, String>;
 }
 
 // ==================== 可注入面（native 单测驱动编排） ====================
 
-/// 认证中心互调面（wasm 下经宏生成 client 直连；native 单测注入假实现）
+/// 会话中心互调面（wasm 下经宏生成 client 直连；native 单测注入假实现）
+///
+/// 方法名是本插件侧的语义词汇（`decide_consent` / `list_trusted_devices`），
+/// 与 wire 上的 api 短名（`consent-decide` / `trust-list`）解耦——改指 api 名
+/// 不动编排层与 native 单测。
 pub(crate) trait AuthCenterGateway {
     fn decide_consent(&self, request: ConsentRequest) -> Result<ConsentDecision, String>;
     fn list_trusted_devices(&self) -> Result<serde_json::Value, String>;
@@ -165,23 +197,23 @@ pub(crate) trait PeerRespondOps {
     fn list_trusted(&self) -> Result<serde_json::Value, String>;
 }
 
-/// wasm 真实现：宏生成 client 直连认证中心
+/// wasm 真实现：宏生成 client 直连会话中心
 #[cfg(target_arch = "wasm32")]
 pub(crate) struct WasmAuthGateway;
 
 #[cfg(target_arch = "wasm32")]
 impl AuthCenterGateway for WasmAuthGateway {
     fn decide_consent(&self, request: ConsentRequest) -> Result<ConsentDecision, String> {
-        AuthCenterApiClient::new(AUTH_CENTER_ID)
+        SessionCenterApiClient::new(SESSION_CENTER_ID)
             .with_timeout(DECIDE_TIMEOUT_MS)
-            .decide_consent(request)
+            .consent_decide(request)
             .map_err(|e| e.to_string())
     }
 
     fn list_trusted_devices(&self) -> Result<serde_json::Value, String> {
-        AuthCenterApiClient::new(AUTH_CENTER_ID)
+        SessionCenterApiClient::new(SESSION_CENTER_ID)
             .with_timeout(LIST_TIMEOUT_MS)
-            .list_trusted_devices()
+            .trust_list()
             .map_err(|e| e.to_string())
     }
 }

@@ -13,7 +13,8 @@
     "broadcast",
     "terminal:input",
     "terminal:output",
-    "session:read"
+    "session:read",
+    "auth"
   ],
   "api": [
     "com.bedcode.sdk-test.echo",

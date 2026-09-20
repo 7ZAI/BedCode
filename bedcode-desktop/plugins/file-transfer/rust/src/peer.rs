@@ -1022,6 +1022,14 @@ mod tests {
         fn platform_pick_folders(&self) -> Result<Vec<String>, HostError> {
             Ok(self.picked.borrow().clone())
         }
+        fn platform_wsl_distros(&self) -> Result<Vec<String>, HostError> {
+            // file-transfer 不消费 WSL 枚举（票 13 为会话配置表单引入）
+            unimplemented!()
+        }
+        fn platform_local_ipv4_addresses(&self) -> Result<Vec<String>, HostError> {
+            // file-transfer 不消费本机地址枚举（票 14 为设备页 QR 引入）
+            unimplemented!()
+        }
     }
 
     /// mount-local 追加预授权路径：新增目录落 preauth_paths（宿主启用门禁读取）；

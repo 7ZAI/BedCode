@@ -14,7 +14,7 @@
 //! （magic \0asm 0d，免 ComponentEncoder/componentize，见票 03）。
 
 use bedcode_plugin_api::host::{
-    ConfigKey, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
+    ConfigKey, HostAuth, HostBus, HostConfig, HostDatabase, HostEvents, HostLog, HostSession, HostStorage,
 };
 use bedcode_plugin_api::types::PluginManifest;
 use bedcode_plugin_api::wasm::WasmPlugin;
@@ -228,21 +228,22 @@ impl WasmPlugin for SdkTestPlugin {
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
             }
-            // ==================== 认证中心互调闭环（票 09） ====================
-            // caller 角色指向 com.bedcode.devices（宿主测试加载真实 devices 产物）：
-            // `decide-consent` 两阶段决策流 + `list-trusted-devices` 统一视图 + 未声明
-            // api 门禁拒绝（ADR 0017）。消费方参数经 args 传入（宿主测试断言 wire 形状）。
+            // ==================== 会话中心互调闭环（票 05 改指） ====================
+            // caller 角色指向 com.bedcode.session（宿主测试加载真实会话中心产物）：
+            // `consent-decide` 两阶段决策流 + `trust-list` / `trust-revoke` 统一视图与
+            // 撤销 + 未声明 api 门禁拒绝（ADR 0017）。消费方参数经 args 传入
+            // （宿主测试断言 wire 形状）。
 
             // 阶段 1：仅传 peer 信息（无用户意向）→ 已信任免确认 / 未知 → ask
-            "test_devices_decide_consent" => {
+            "test_session_consent_decide" => {
                 let peer = args.get("peerInfo").cloned().unwrap_or(serde_json::json!({
                     "requestId": "req-consent-1",
                     "nodeId": "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344",
                     "fingerprintShort": "aabbccdd",
                     "deviceName": "消费方模拟对端",
                 }));
-                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
-                match client.call_json("decide-consent", peer) {
+                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                match client.call_json("consent-decide", peer) {
                     Ok(v) => Ok(serde_json::json!({ "decision": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
@@ -250,7 +251,7 @@ impl WasmPlugin for SdkTestPlugin {
             // 阶段 2：回传用户意向（accept / deny / one_time）→ 最终决策。
             // peerInfo 经 args 传入（宿主测试断言 wire 形状），userDecision 单独
             // 传入并合并进请求（peerInfo 缺省时用内置默认对端）
-            "test_devices_decide_consent_explicit" => {
+            "test_session_consent_decide_explicit" => {
                 let mut peer = args.get("peerInfo").cloned().unwrap_or(serde_json::json!({
                     "requestId": "req-consent-2",
                     "nodeId": "aabbccdd11223344aabbccdd11223344aabbccdd11223344aabbccdd11223344",
@@ -260,27 +261,103 @@ impl WasmPlugin for SdkTestPlugin {
                         obj.insert("userDecision".to_string(), serde_json::json!(ud));
                     }
                 }
-                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
-                match client.call_json("decide-consent", peer) {
+                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                match client.call_json("consent-decide", peer) {
                     Ok(v) => Ok(serde_json::json!({ "decision": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
             }
             // 统一信任视图（零参 api）
-            "test_devices_list_trusted" => {
-                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(5000);
-                match client.call_json("list-trusted-devices", serde_json::Value::Null) {
+            "test_session_trust_list" => {
+                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                match client.call_json("trust-list", serde_json::Value::Null) {
                     Ok(v) => Ok(v),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
             }
-            // 未声明 api（com.bedcode.devices.ghost-api 不在 manifest）：宿主门禁拒绝
-            "test_devices_undeclared" => {
-                let client = SdkTestApiClient::new("com.bedcode.devices").with_timeout(2000);
+            // 撤销统一条目（id 经 args 传入；未经内核 `pairings` 真源不可逆）
+            "test_session_trust_revoke" => {
+                let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("ghost");
+                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                match client.call_json("trust-revoke", serde_json::json!(id)) {
+                    Ok(v) => Ok(v),
+                    Err(e) => Err(anyhow::anyhow!("{}", e)),
+                }
+            }
+            // 未声明 api（com.bedcode.session.ghost-api 不在 manifest）：宿主门禁拒绝
+            "test_session_undeclared" => {
+                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(2000);
                 match client.call_json("ghost-api", serde_json::Value::Null) {
                     Ok(v) => Ok(serde_json::json!({ "unexpected": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
+            }
+            // ==================== host-auth 记录面（v18）四原语闭环探针 ====================
+            // 产品侧消费方（设置分组 / 设备视图）归后续票；本探针让宿主 S1 闭环能贯穿
+            // WIT → SDK → host_impl 全链，覆盖「读原始记录 / 撤销 / 连接历史 / 设置写入」
+            // 四函数的真实 wasm 行为。权限由宿主测试显式授予（auth）。
+            //
+            // args：{ deviceId?, revokeId?, settingKey?, settingValue? }
+            "test_auth_record_face" => {
+                let device_id = args.get("deviceId").and_then(|v| v.as_str()).unwrap_or("p-1");
+                let setting_key = args
+                    .get("settingKey")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("pairing_code_ttl");
+                let setting_value = args.get("settingValue").and_then(|v| v.as_str()).unwrap_or("777");
+                let before = host.auth_trusted_devices_list()?;
+                let history = host.auth_connection_history_list(device_id)?;
+                host.auth_setting_set(setting_key, setting_value)?;
+                let revoked = match args.get("revokeId").and_then(|v| v.as_str()) {
+                    Some(id) => Some(host.auth_trusted_device_revoke(id)?),
+                    None => None,
+                };
+                let after = host.auth_trusted_devices_list()?;
+                Ok(serde_json::json!({
+                    "before": before,
+                    "after": after,
+                    "history": history,
+                    "revoked": revoked,
+                }))
+            }
+            // ==================== host-session 配置面（v19）闭环探针 ====================
+            // 票 07 的验收点是原语自身在真实运行时可用：新建 → 读回 → 覆盖 →
+            // 删除 → 读回确认消失，一条链贯穿 WIT → SDK → host_impl。
+            // 权限（session:config）由宿主 host_impl 权限门裁决，探针不做本地校验。
+            //
+            // args：{ name? }（缺省 probe-config；避免与真实配置重名）
+            "test_session_config_face" => {
+                let name = args
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("probe-config")
+                    .to_string();
+                let created = host.session_config_upsert(&serde_json::json!({
+                    "name": name,
+                    "environment": "linux",
+                    "workingDir": "/srv/probe",
+                    "command": "bash",
+                }))?;
+                let id = created
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let got = host.session_config_get(&id)?.unwrap_or(serde_json::Value::Null);
+                // 覆盖：只改 name，未声明字段必须回落既有值
+                let updated = host.session_config_upsert(&serde_json::json!({
+                    "id": id,
+                    "name": format!("{}-2", name),
+                }))?;
+                let deleted = host.session_config_delete(&id)?;
+                let after_delete = host.session_config_get(&id)?.unwrap_or(serde_json::Value::Null);
+                Ok(serde_json::json!({
+                    "created": created,
+                    "got": got,
+                    "updated": updated,
+                    "deleted": deleted,
+                    "afterDelete": after_delete,
+                }))
             }
             _ => Err(anyhow::anyhow!("Unknown command: {}", name)),
         }

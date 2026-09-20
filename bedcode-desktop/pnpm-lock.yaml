@@ -390,31 +390,6 @@ importers:
         specifier: ^9.0.0
         version: 9.14.5(vue@3.5.42(typescript@5.9.3))
 
-  plugins/auto-task:
-    dependencies:
-      '@binblink/bedcode-plugin-sdk-desktop':
-        specifier: file:../../packages/plugin-sdk-desktop
-        version: link:../../packages/plugin-sdk-desktop
-      '@vuepic/vue-datepicker':
-        specifier: ^9.0.3
-        version: 9.0.3(vue@3.5.42(typescript@5.9.3))
-      vue:
-        specifier: ^3.4.0
-        version: 3.5.42(typescript@5.9.3)
-    devDependencies:
-      '@vitejs/plugin-vue':
-        specifier: ^6.0.0
-        version: 6.0.8(vite@8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))(vue@3.5.42(typescript@5.9.3))
-      terser:
-        specifier: ^5.0.0
-        version: 5.51.2
-      typescript:
-        specifier: ^5.0.0
-        version: 5.9.3
-      vite:
-        specifier: ^8.0.0
-        version: 8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
-
   plugins/file-transfer:
     dependencies:
       '@binblink/bedcode-plugin-sdk-desktop':
@@ -442,6 +417,31 @@ importers:
       vue-i18n:
         specifier: ^9.0.0
         version: 9.14.5(vue@3.5.42(typescript@5.9.3))
+
+  plugins/session:
+    dependencies:
+      '@binblink/bedcode-plugin-sdk-desktop':
+        specifier: file:../../packages/plugin-sdk-desktop
+        version: link:../../packages/plugin-sdk-desktop
+      '@vuepic/vue-datepicker':
+        specifier: ^9.0.3
+        version: 9.0.3(vue@3.5.42(typescript@5.9.3))
+      vue:
+        specifier: ^3.4.0
+        version: 3.5.42(typescript@5.9.3)
+    devDependencies:
+      '@vitejs/plugin-vue':
+        specifier: ^6.0.0
+        version: 6.0.8(vite@8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0))(vue@3.5.42(typescript@5.9.3))
+      terser:
+        specifier: ^5.0.0
+        version: 5.51.2
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+      vite:
+        specifier: ^8.0.0
+        version: 8.2.2(@types/node@20.19.43)(esbuild@0.27.7)(jiti@1.21.7)(terser@5.51.2)(tsx@4.23.13)(yaml@2.9.0)
 
 packages:
 
