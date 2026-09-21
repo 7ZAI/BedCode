@@ -286,14 +286,18 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 
 ### 会话管理 — `src-tauri/src/session/`
 
-- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除）
+- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除）；
+  会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
+  `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
 - **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.session`
-  一次性 legacy 迁移通道读主库 `session_configs`（表退役见 scratch 票 02）；业务 CRUD 真源在插件私有库
+  一次性 legacy 迁移通道读主库 `session_configs`（表退役见 scratch 票 02）；业务 CRUD 真源在插件私有库，
+  主库投影写入口（`upsert_config`）与宿主侧配置桥接 `utils/session_config_bridge.rs` 已随票 05
+  命令面注销一并退役（宿主不再持有任何配置调用路径）
 - **session_output**：输出管理（缓存/队列/订阅/全局），支撑多端输出回放
 - **session_lifecycle**：生命周期事件（Creating/Created/Stopping/Stopped）与监听器机制，插件扩展点
 - **input_line**：会话输入扩展点（SessionInputListener + 提交行重构）
-- **event_bus / session_event**：统一事件广播与会话事件模型（v21 起重启广播通道已退役，
-  只保留状态事件；`session-restarted` 由插件经 `host-events.emit` 补发）
+- **session_event**：会话记录与状态事件模型（v21 起重启广播通道已退役，只保留状态事件；
+  `session-restarted` 由插件经 `host-events.emit` 补发；任务语义字段经注解槽透传）
 
 ### PTY 管理 — `src-tauri/src/pty/`
 
