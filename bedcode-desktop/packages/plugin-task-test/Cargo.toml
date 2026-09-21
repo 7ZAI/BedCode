@@ -1,0 +1,20 @@
+[package]
+name = "bedcode-plugin-task-test"
+version = "0.1.0"
+description = "BedCode host-task（ABI v20）fixture 插件 —— execute-batch / submit / status / cancel / list-jobs 闭环 + events-task 回调累积（仅供宿主测试套件使用）"
+authors = ["binblink"]
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+bedcode-plugin-api = { path = "../plugin-sdk-desktop/rust", features = ["wasm"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+# 与其它 fixture 对齐：wasm 产物尺寸优先（宿主测试加载）
+opt-level = "s"
+lto = true

@@ -22,7 +22,7 @@
 
 use super::host_impl::{
     api, app, auth, bus, config, database, events, fs, http, lifecycle, log, mdns, peer, platform, process, pty,
-    session, status, storage, terminal, timer, ws,
+    session, status, storage, task, terminal, timer, ws,
 };
 #[cfg(test)]
 use super::plugin_debug_mode;
@@ -194,6 +194,30 @@ impl bedcode::plugin::host_pty::Host for WasmPluginState {
 
     fn is_running(&mut self, pty_id: String) -> Result<bool, String> {
         pty::pty_is_running(&self.host_ctx, &self.plugin_id, &pty_id)
+    }
+}
+
+// v20：宿主并发任务域（host-task）—— 权限门 task:run + 配额仲裁 + 单元执行
+// 全部在 host_impl/task.rs 与 core-task（plugin/manager/task.rs）；此处仅转发
+impl bedcode::plugin::host_task::Host for WasmPluginState {
+    fn execute_batch(&mut self, plan_json: String) -> Result<String, String> {
+        task::execute_batch(&self.host_ctx, &self.plugin_id, &plan_json)
+    }
+
+    fn submit(&mut self, plan_json: String) -> Result<String, String> {
+        task::submit(&self.host_ctx, &self.plugin_id, &plan_json)
+    }
+
+    fn status(&mut self, job_id: String) -> Result<Option<String>, String> {
+        task::status(&self.host_ctx, &self.plugin_id, &job_id)
+    }
+
+    fn cancel(&mut self, job_id: String) -> Result<bool, String> {
+        task::cancel(&self.host_ctx, &self.plugin_id, &job_id)
+    }
+
+    fn list_jobs(&mut self) -> Result<String, String> {
+        task::list_jobs(&self.host_ctx, &self.plugin_id)
     }
 }
 
@@ -694,6 +718,7 @@ pub(crate) fn add_to_linker(linker: &mut Linker<WasmPluginState>) -> crate::Resu
         bedcode::plugin::host_mdns::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_platform::add_to_linker::<WasmPluginState, D>,
         bedcode::plugin::host_websocket::add_to_linker::<WasmPluginState, D>,
+        bedcode::plugin::host_task::add_to_linker::<WasmPluginState, D>,
     ] {
         iface(linker, |s| s)
             .map_err(|e| AppError::Plugin(format!("Failed to register component host interface: {}", e)))?;
@@ -908,6 +933,21 @@ impl LoadedWasmPlugin {
         let data = store.data_mut();
         data.on_ws_message = on_ws_message;
         data.on_ws_client_message = on_ws_client_message;
+
+        // v20：动态探测可选导出 events-task#on-task-event（宿主并发任务进度/终态
+        // 回调）。语义同 events-binary / events-ws：旧 SDK 产物未导出 → None，
+        // 消费任务内降级（事件丢弃 + 首次 warn + 计数，宿主不缓存）；新 SDK
+        // 产物由 wasm_entry! 无条件导出默认空实现 → 探测命中。
+        // 同样必须用 ItemName 路径语法（`iface.func` 点号），理由同 events-ws
+        let on_task_event = "bedcode:plugin/events-task.on-task-event"
+            .parse::<wasmtime::component::wit_parser::ItemName>()
+            .ok()
+            .and_then(|item| {
+                instance
+                    .get_typed_func::<(String,), ()>(&mut *store, &item)
+                    .ok()
+            });
+        store.data_mut().on_task_event = on_task_event;
         Ok(())
     }
 
@@ -1223,6 +1263,27 @@ impl LoadedWasmPlugin {
                 Ok(true)
             }
         }
+    }
+
+    /// 调用插件的宿主并发任务事件导出（v20，可选导出动态探测）
+    ///
+    /// 返回 `Ok(true)` = 已投递；`Ok(false)` = 该回调未导出——消费派发任务按
+    /// spec §5.3 降级（事件丢弃 + 首次 warn + 计数，宿主不缓存；`status`/
+    /// `list-jobs` 自愈）。无返回值（观察型回调，同 `on_ws_frame`）。
+    pub(crate) fn on_task_event(&mut self, event_json: &str) -> crate::Result<bool> {
+        let _timer = self.track_call();
+        // TypedFunc 先 clone 再调用，避免与 &mut self.store 的借用冲突
+        let Some(func) = self.store.data().on_task_event.clone() else {
+            return Ok(false);
+        };
+        block_on_async(async {
+            func.call_async(&mut self.store, (event_json.to_string(),)).await
+        })
+        .map_err(|e| {
+            self.log_trap("on_task_event", &e);
+            AppError::Plugin(format!("WASM on_task_event() call failed: {}", e))
+        })?;
+        Ok(true)
     }
 
     /// 调用插件的会话生命周期事件导出

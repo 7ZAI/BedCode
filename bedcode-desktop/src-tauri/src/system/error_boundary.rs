@@ -40,6 +40,37 @@ where
     handle.spawn(error_guarded(task_name, future))
 }
 
+/// 使用错误边界包装 std OS 线程启动（v20 host-task 线程池 / 其他纯 std 后台线）
+///
+/// 等价语义：线程体 panic 被捕获并记录（与 tokio 变体同款 error_guarded），
+/// 不静默崩溃；返回的 `std::thread::JoinHandle` 由调用方决定是否 join。
+pub fn spawn_os_thread(
+    task_name: &'static str,
+    body: impl FnOnce() + Send + 'static,
+) -> std::thread::JoinHandle<()> {
+    std::thread::Builder::new()
+        .name(task_name.to_string())
+        .spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+            if let Err(panic_err) = result {
+                let msg = if let Some(s) = panic_err.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_err.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown panic".to_string()
+                };
+                tracing::error!(
+                    target: "error_boundary",
+                    task = %task_name,
+                    error = %msg,
+                    "OS thread panicked and was caught by error boundary",
+                );
+            }
+        })
+        .expect("failed to spawn OS thread with error boundary")
+}
+
 /// 错误边界包装体：panic 被捕获并记录，任务不静默崩溃
 async fn error_guarded<F>(task_name: &'static str, future: F)
 where

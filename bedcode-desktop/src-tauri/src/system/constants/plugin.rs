@@ -149,3 +149,41 @@ pub const PLUGIN_PTY_MAX_WRITE_BYTES: usize = 64 * 1024;
 
 /// 环境变量：BedCode PTY 会话 ID
 pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";
+
+// ==================== host-task（ABI v20，spec `.scratch/2026-09-21-host-task-concurrency/`） ====================
+
+/// 全局池线程数：宿主专用 OS 线程池执行插件单元操作计划的并行度。
+///
+/// **不与 tokio blocking 池共用**：`spawn_blocking` 池与 PTY 读线程、WS 任务共享，
+/// 插件批量单元可饿死它们；专用池独立队列 + 利用率可观测（spec §5.2）。
+/// 取值 8：经 block_on_async ambient 桥的 IO/CPU 混合单元，8 线程已覆盖典型
+/// 并发扇出（50 stat / 3 git），且不与宿主主 runtime 抢调度。
+pub const PLUGIN_TASK_POOL_THREADS: usize = 8;
+
+/// 每插件并发在册任务上限（含 running + queued）：超限 `submit` / `execute-batch`
+/// 直接 `Err`（fail-visible，宿主仲裁、不排队、不静默降级，spec §7）
+pub const PLUGIN_TASK_MAX_JOBS_PER_PLUGIN: usize = 4;
+
+/// 单计划单元数上限：超限 plan 整体拒绝（防单批超大 plan 打爆池队列）
+pub const PLUGIN_TASK_MAX_UNITS_PER_PLAN: usize = 256;
+
+/// 单元结果上限（字节，JSON 文本长度）：超出**截断** + `truncated` 标记
+/// （保护回调载荷与插件线性内存，spec §7；大结果别靠 status 兜底）
+pub const PLUGIN_TASK_UNIT_RESULT_MAX_BYTES: usize = 1024 * 1024;
+
+/// 单元缺省超时（毫秒）：plan 未给 `timeoutMs` 时按此执行（与 process
+/// DEFAULT_TIMEOUT_MS 同档）；超时按该单元失败收集（fail-collect，不拖垮任务）
+pub const PLUGIN_TASK_UNIT_TIMEOUT_MS: u64 = 600_000;
+
+/// 任务墙钟缺省超时（毫秒）：plan 未给 `jobTimeoutMs` 时按此执行；超时 →
+/// cancelled + 已完成单元结果保留（运行中单元跑完或超时）
+pub const PLUGIN_TASK_JOB_TIMEOUT_MS: u64 = 3_600_000;
+
+/// 每插件回调队列深度：`events-task` 事件的有界队列。溢出策略：progress 事件可丢
+/// （丢弃 + warn + `droppedEvents` 计数，status 可见）；terminal 事件优先入队，
+/// 极端情况下 terminal 也丢则 error! 留痕——回调是尽力投递，`status` 是权威快照
+/// （spec §5.3）
+pub const PLUGIN_TASK_CALLBACK_QUEUE_DEPTH: usize = 64;
+
+/// status 终态结果保留条数上限：超出只留计数（大结果别靠 status 兜底，spec §7）
+pub const PLUGIN_TASK_STATUS_RESULTS_MAX: usize = 64;

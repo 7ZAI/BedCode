@@ -1397,6 +1397,10 @@ impl PluginHost {
         // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
         crate::plugin::manager::wasm_runtime::host_impl::pty::purge_for_plugin(plugin_id, &self.message_bus);
 
+        // 并发任务域（ABI v20）：插件停用即 cancel 其全部在册任务 + 清回调队列
+        // （只碰本人；运行中单元协作式跑完或超时，未开始单元 skipped）
+        crate::plugin::manager::task::purge_for_plugin(plugin_id);
+
         // WASM 插件：调用 on_shutdown + __bedcode_deactivate
         {
             let plugins = self.plugins.read().await;

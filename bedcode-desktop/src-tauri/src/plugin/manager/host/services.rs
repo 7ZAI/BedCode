@@ -207,6 +207,48 @@ impl PluginServices for PluginHost {
         });
     }
 
+    fn dispatch_task_event(&self, plugin_id: String, event: serde_json::Value) {
+        // 同 dispatch_process_done 模式：block_on_async + with_wasm_plugin_call
+        // （调用失败自动重载恢复；插件未激活/已卸载时仅记日志，尽力而为）。
+        // 未导出 events-task 的旧产物：on_task_event 返回 Ok(false) → 事件丢弃 +
+        // 首次 warn + 计数（宿主不缓存；status/log-jobs 自愈，spec §5.3）
+        let event_str = match serde_json::to_string(&event) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(
+                    plugin_id = %plugin_id,
+                    error = %e,
+                    "[PluginHost] dispatch_task_event: serialize event failed"
+                );
+                return;
+            }
+        };
+        let host = self.clone();
+        let pid = plugin_id.clone();
+        crate::plugin::manager::wasm_runtime::block_on_async(async move {
+            match host
+                .with_wasm_plugin_call(&pid, move |plugin| plugin.on_task_event(&event_str))
+                .await
+            {
+                Ok(true) => {}
+                Ok(false) => {
+                    // 旧 SDK 产物（未导出 events-task）：事件丢弃 + 计数
+                    tracing::warn!(
+                        plugin_id = %pid,
+                        "[PluginHost] task event dropped (plugin lacks events-task export)"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(
+                        plugin_id = %pid,
+                        error = %e,
+                        "[PluginHost] dispatch_task_event failed"
+                    );
+                }
+            }
+        });
+    }
+
     fn install_cli(
         &self,
         plugin_id: String,

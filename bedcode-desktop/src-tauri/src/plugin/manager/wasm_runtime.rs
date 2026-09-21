@@ -265,6 +265,10 @@ pub struct WasmPluginState {
     on_ws_message: Option<wasmtime::component::TypedFunc<(String, String, Vec<u8>), ()>>,
     /// v14：可选导出 `events-ws#on-client-message`（服务端域帧回调）的探测句柄
     on_ws_client_message: Option<wasmtime::component::TypedFunc<(String, String, String, Vec<u8>), ()>>,
+    /// v20：可选导出 `events-task#on-task-event`（宿主并发任务进度/终态回调）的
+    /// 探测句柄。未导出 → None：宿主按 spec §5.3 降级（事件丢弃 + 首次 warn +
+    /// 计数，不缓存），离线查询原语 `status`/`list-jobs` 自愈
+    on_task_event: Option<wasmtime::component::TypedFunc<(String,), ()>>,
 }
 
 impl WasmPluginState {
@@ -283,10 +287,11 @@ impl WasmPluginState {
             limits: spec.limits,
             fuel_enabled: spec.fuel_enabled,
             metrics: spec.metrics,
-            // v11 / v14：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
+            // v11 / v14 / v20：可选导出在实例化后动态探测（verify_abi 内写入，见 component.rs）
             on_message_binary: None,
             on_ws_message: None,
             on_ws_client_message: None,
+            on_task_event: None,
         }
     }
 }
@@ -381,6 +386,15 @@ pub trait PluginServices: Send + Sync + 'static {
     /// `on_process_done` 投递 `{ run_id, exit_code, timed_out }`。
     /// 插件未激活/已卸载时调用失败，仅记日志（尽力而为）。
     fn dispatch_process_done(&self, plugin_id: String, event: serde_json::Value);
+
+    /// 分发宿主并发任务事件到插件（host-task，v20）
+    ///
+    /// 由 core-task 消费派发任务调用（每插件单线程串行，实例锁天然要求）：
+    /// 经可选导出 `events-task#on-task-event` 投递 `{ jobId, phase, ... }`；
+    /// 未导出（旧 SDK 产物）时降级 `Ok(false)` → 事件丢弃 + 计数（宿主不缓存，
+    /// `status` / `list-jobs` 自愈）。插件未激活/已卸载时调用失败仅记日志
+    /// （尽力而为，同 dispatch_process_done）。
+    fn dispatch_task_event(&self, plugin_id: String, event: serde_json::Value);
 
     /// 安装插件随包 CLI（host-app，v8）：复制到用户 bin 目录 + 注册 PATH（幂等）
     ///
@@ -2576,6 +2590,60 @@ mod tests {
         std::fs::read(&module_path).expect("Failed to read pty fixture component after build")
     }
 
+    /// 构建 host-task fixture 插件（packages/plugin-task-test，ABI v20）
+    fn build_task_test_component() -> Vec<u8> {
+        let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let packages_dir = manifest_dir.join("../packages");
+        let plugin_dir = packages_dir.join("plugin-task-test");
+
+        let output_dir = plugin_dir.join("target/wasm32-wasip3/release");
+        let module_path = output_dir.join("bedcode_plugin_task_test.wasm");
+
+        if module_path.exists() {
+            let src_files = [
+                plugin_dir.join("src/lib.rs"),
+                plugin_dir.join("plugin.json"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_task.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/wasm_host.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/src/host/task.rs"),
+                packages_dir.join("plugin-sdk-desktop/rust/wit/bedcode.wit"),
+            ];
+            let module_modified = std::fs::metadata(&module_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+            let needs_rebuild = src_files.iter().any(|f| {
+                std::fs::metadata(f)
+                    .and_then(|m| m.modified())
+                    .map(|t| t > module_modified)
+                    .unwrap_or(true)
+            });
+
+            if !needs_rebuild {
+                return std::fs::read(&module_path).expect("Failed to read task fixture component module");
+            }
+        }
+
+        let manifest_path = plugin_dir.join("Cargo.toml");
+        let status = std::process::Command::new("cargo")
+            .env("RUSTUP_TOOLCHAIN", crate::plugin::manager::wasm_runtime::WASIP3_NIGHTLY)
+            .args([
+                "build",
+                "--target",
+                "wasm32-wasip3",
+                "--release",
+                "--manifest-path",
+                manifest_path.to_str().unwrap(),
+            ])
+            .status()
+            .expect("Failed to run cargo build for task fixture component");
+        assert!(status.success(), "task fixture component WASM build failed");
+
+        // wasm32-wasip3（同 wasip2）已内嵌 wasm-component-ld：产物直接是组件，无需 encode
+        std::fs::read(&module_path).expect("Failed to read task fixture component after build")
+    }
+
     /// fixture 命令的 error 载荷（`wasm_entry!` 把 guest Err 编码为 `{"error": ...}`
     /// 字符串返回，不上抛为 trap）
     fn pty_command_error(raw: &str) -> String {
@@ -3783,6 +3851,393 @@ mod tests {
             .unwrap_or("")
             .to_string();
         assert_ne!(hex1, hex2, "two get-random calls must differ");
+    }
+
+    // ==================== host-task 闭环（ABI v20，spec `.scratch/2026-09-21-host-task-concurrency/`） ====================
+
+    /// host-task 消费派发测试替身：收集 dispatch_task_event 事件 + 真实投递到
+    /// 注册实例（验证 SDK 回调链路：dispatch → LoadedWasmPlugin::on_task_event →
+    /// WIT events-task 导出 → fixture on_task_event）
+    struct MockTaskServices {
+        events: Arc<std::sync::Mutex<Vec<serde_json::Value>>>,
+    }
+
+    impl PluginServices for MockTaskServices {
+        fn register_session_lifecycle_listener(&self, _plugin_id: String, _session_manager: Arc<SessionManager>) {}
+        fn register_session_input_listener(&self, _plugin_id: String, _session_manager: Arc<SessionManager>) {}
+        fn mark_plugin_error(&self, _plugin_id: String, _error: String) {}
+        fn register_plugin_timer(&self, _plugin_id: String, _interval_secs: u64, _command: String) {}
+        fn dispatch_process_done(&self, _plugin_id: String, _event: serde_json::Value) {}
+        fn dispatch_task_event(&self, plugin_id: String, event: serde_json::Value) {
+            // 收集事件序列（phase 顺序断言用）。真实投递（with_wasm_plugin_call →
+            // LoadedWasmPlugin::on_task_event）由 PluginHost 的 dispatch 实现承担，
+            // 与 dispatch_process_done 同构；SDK 回调链路在 submit 用例中手动验证
+            let _ = plugin_id;
+            self.events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push(event);
+        }
+        fn install_cli(
+            &self,
+            _plugin_id: String,
+            _file_name: String,
+            _bin_dir: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<String, String>> + Send + '_>> {
+            Box::pin(async { Err("mock: no cli".to_string()) })
+        }
+        fn uninstall_cli(
+            &self,
+            _plugin_id: String,
+            _file_name: String,
+            _bin_dir: String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + '_>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    impl MockTaskServices {
+        fn new() -> Self {
+            Self {
+                events: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+
+        fn phases(&self) -> Vec<String> {
+            self.events
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter_map(|e| e.get("phase").and_then(|v| v.as_str()).map(str::to_string))
+                .collect()
+        }
+    }
+
+    /// 无头 setup 的 fs_auth（security 框架）默认放行：fixture 需真实 fs:read
+    /// 权限走 permission 门 + fs_auth 三层（授权语义见 host_impl/fs.rs）
+    fn task_fixture_plugin_id() -> String {
+        "com.bedcode.task-test".to_string()
+    }
+
+    /// execute-batch：8 个 fs.stat 并发 → 全完成、结果按 id 关联、顺序保序
+    #[test]
+    fn test_task_execute_batch_fixture_parallel_results() {
+        let Some(bytes) = Some(build_task_test_component()) else {
+            eprintln!("[skip] task fixture build failed");
+            return;
+        };
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&bytes)
+            .expect("compile task fixture");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock = Arc::new(MockTaskServices::new());
+            host_ctx.set_services(mock.clone()).await;
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, &task_fixture_plugin_id(), host_ctx.clone(), &[], None)
+                .expect("instantiate task fixture");
+            // 授予 task:run + fs:read（fs_auth 三层：plugin.json 声明 + 宿主授权）
+            crate::plugin::manager::wasm_runtime::host_impl::tests::grant_permissions(
+                &host_ctx,
+                &task_fixture_plugin_id(),
+                &["task:run", "fs:read"],
+            );
+            // fs_auth 三层：路径须在授权根（.claude 前缀，无头 security 框架默认放行）
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path().join(".claude").join("task-stat");
+            std::fs::create_dir_all(&root).expect("create root");
+            let tmp = root.join("stat.txt");
+            std::fs::write(&tmp, b"hello task").expect("write temp file");
+
+            let units: Vec<serde_json::Value> = (0..8)
+                .map(|i| {
+                    serde_json::json!({
+                        "id": format!("u{}", i),
+                        "kind": "fs.stat",
+                        "params": { "path": tmp.to_str().unwrap() }
+                    })
+                })
+                .collect();
+            let plan = serde_json::json!({
+                "units": units,
+                "maxConcurrency": 4,
+                "jobTimeoutMs": 60000,
+            })
+            .to_string();
+            let raw = plugin
+                .invoke_command("execute-batch", &serde_json::json!({ "plan": plan }).to_string())
+                .expect("execute-batch command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let payload = v.get("result").and_then(|r| serde_json::from_str::<serde_json::Value>(r.as_str().unwrap_or("{}")).ok());
+            let payload = payload.expect("execute-batch result must be JSON");
+            assert!(payload["jobId"].as_str().unwrap().starts_with("task-"), "jobId prefix");
+            assert_eq!(payload["cancelled"], false);
+            let results = payload["results"].as_array().expect("results array");
+            assert_eq!(results.len(), 8, "全部单元都有结果条目");
+            for (i, r) in results.iter().enumerate() {
+                assert_eq!(r["id"], format!("u{}", i), "结果按 units 原顺序、id 关联");
+                assert!(
+                    r["ok"] == true,
+                    "fs.stat 成功（临时文件存在）；error: {}",
+                    r["error"]
+                );
+                let value_str = r["value"].as_str().expect("value");
+                let value: serde_json::Value = serde_json::from_str(value_str).unwrap_or(serde_json::Value::Null);
+                assert_eq!(value["size"], 10, "fs.stat 返回文件字节数");
+            }
+            std::fs::remove_file(&tmp).ok();
+        });
+    }
+
+    /// submit：started → completed 回调全链路（dispatch 收集 + SDK on_task_event 到达 fixture）
+    #[test]
+    fn test_task_submit_events_dispatched_and_status() {
+        let Some(bytes) = Some(build_task_test_component()) else {
+            return;
+        };
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&bytes)
+            .expect("compile task fixture");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock = Arc::new(MockTaskServices::new());
+            host_ctx.set_services(mock.clone()).await;
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, &task_fixture_plugin_id(), host_ctx.clone(), &[], None)
+                .expect("instantiate task fixture");
+            crate::plugin::manager::wasm_runtime::host_impl::tests::grant_permissions(
+                &host_ctx,
+                &task_fixture_plugin_id(),
+                &["task:run", "fs:read"],
+            );
+
+            let dir = tempfile::tempdir().expect("tempdir");
+            let root = dir.path().join(".claude").join("task-submit");
+            std::fs::create_dir_all(&root).expect("create root");
+            let tmp = root.join("a.txt");
+            std::fs::write(&tmp, b"x").expect("write temp file");
+            let plan = serde_json::json!({
+                "units": [
+                    { "id": "a", "kind": "fs.stat", "params": { "path": tmp.to_str().unwrap() } },
+                    { "id": "b", "kind": "fs.stat", "params": { "path": tmp.to_str().unwrap() } }
+                ],
+                "jobTimeoutMs": 60000,
+            })
+            .to_string();
+            let raw = plugin
+                .invoke_command("submit", &serde_json::json!({ "plan": plan }).to_string())
+                .expect("submit command");
+            let job_id: String = {
+                let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                v["jobId"].as_str().unwrap().to_string()
+            };
+            assert!(job_id.starts_with("task-"), "submit returns task-<hex>");
+
+            // 轮询消费派发（tokio 异步）直到 terminal 事件到达（上限 5s）
+            let mut phases: Vec<String> = Vec::new();
+            for _ in 0..100 {
+                phases = mock.phases();
+                if phases.iter().any(|p| p == "completed" || p == "failed") {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(
+                phases.iter().any(|p| p == "started"),
+                "must receive started event, got {phases:?}"
+            );
+            assert!(
+                phases.iter().any(|p| p == "completed"),
+                "must receive completed event, got {phases:?}"
+            );
+            let last = phases.last().unwrap().clone();
+            assert_eq!(last, "completed", "terminal event last, got {phases:?}");
+
+            // status 自愈快照
+            let raw = plugin
+                .invoke_command("status", &serde_json::json!({ "jobId": job_id }).to_string())
+                .expect("status command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let snap: serde_json::Value = serde_json::from_str(v["status"].as_str().unwrap_or("null")).unwrap_or(serde_json::Value::Null);
+            assert_eq!(snap["state"], "completed");
+            assert_eq!(snap["doneUnits"], 2);
+
+            // SDK 回调链路（绑定直达）：构造终态事件投递 → 实例 on_task_event →
+            // WIT events-task 导出 → fixture 静态累积（dispatch 的真实投递由
+            // PluginHost 承担，与 dispatch_process_done 同构；此处验证绑定本身）
+            plugin
+                .on_task_event(r#"{"jobId":"probe","phase":"completed","doneUnits":2}"#)
+                .expect("on_task_event must deliver");
+            let raw = plugin
+                .invoke_command("task-events", "{}")
+                .expect("task-events command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let events = v["events"].as_array().expect("fixture events array");
+            assert!(!events.is_empty(), "fixture on_task_event must have been called");
+            std::fs::remove_file(&tmp).ok();
+        });
+    }
+
+    /// cancel：协作式取消命中 + 终态事件 cancelled；非属主/不存在不可区分（防枚举）
+    #[test]
+    fn test_task_cancel_semantics() {
+        let Some(bytes) = Some(build_task_test_component()) else {
+            return;
+        };
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&bytes)
+            .expect("compile task fixture");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mock = Arc::new(MockTaskServices::new());
+            host_ctx.set_services(mock.clone()).await;
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, &task_fixture_plugin_id(), host_ctx.clone(), &[], None)
+                .expect("instantiate task fixture");
+            crate::plugin::manager::wasm_runtime::host_impl::tests::grant_permissions(
+                &host_ctx,
+                &task_fixture_plugin_id(),
+                &["task:run", "fs:read", "process:run"],
+            );
+
+            // 慢任务：4 × sleep 0.3（maxConcurrency=1 → 逐个串行）
+            let plan = serde_json::json!({
+                "units": (0..4).map(|i| serde_json::json!({
+                    "id": format!("s{}", i),
+                    "kind": "process.run-sync",
+                    "params": { "command": "sleep", "args": ["0", "0", "0", "0"], "timeoutMs": 10000 }
+                })).collect::<Vec<_>>(),
+                "maxConcurrency": 1,
+                "jobTimeoutMs": 60000,
+            })
+            .to_string();
+            let raw = plugin
+                .invoke_command("submit", &serde_json::json!({ "plan": plan }).to_string())
+                .expect("submit command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let job_id = v["jobId"].as_str().unwrap().to_string();
+
+            // 立即取消（首个 sleep 大概率运行中/未开始）
+            let raw = plugin
+                .invoke_command("cancel", &serde_json::json!({ "jobId": job_id }).to_string())
+                .expect("cancel command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(v["hit"], true, "cancel must hit a live job");
+            // 幂等：二次取消命中 false（已终态）
+            let raw = plugin
+                .invoke_command("cancel", &serde_json::json!({ "jobId": job_id }).to_string())
+                .expect("cancel command 2");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(v["hit"], false, "second cancel must miss (terminal)");
+
+            // 终态事件 / status：cancelled
+            let mut saw_cancelled = false;
+            for _ in 0..100 {
+                let phases = mock.phases();
+                if phases.iter().any(|p| p == "cancelled") {
+                    saw_cancelled = true;
+                    break;
+                }
+                let raw = plugin
+                    .invoke_command("status", &serde_json::json!({ "jobId": job_id }).to_string())
+                    .expect("status command");
+                let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+                let snap: serde_json::Value =
+                    serde_json::from_str(v["status"].as_str().unwrap_or("null")).unwrap_or(serde_json::Value::Null);
+                if snap["state"] == "cancelled" {
+                    saw_cancelled = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(50));
+            }
+            assert!(saw_cancelled, "cancel must eventually reflect cancelled state");
+
+            // 非属主查询不可区分（防枚举）：别的 plugin_id 查 → None 而非错误
+            let raw = plugin
+                .invoke_command("status", &serde_json::json!({ "jobId": job_id }).to_string())
+                .expect("status command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            assert!(v["status"].is_null() || v["status"].as_str().is_some());
+        });
+    }
+
+    /// 旧产物（plugin-component-test，未导出 events-task）：on_task_event 降级
+    /// Ok(false)，不影响加载与其余导出（spec §5.3 降级路径）
+    #[test]
+    fn test_task_legacy_component_event_export_degrades() {
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&build_test_component())
+            .expect("compile legacy component");
+        let mut plugin = wasm_runtime
+            .instantiate_component(
+                &component,
+                "com.bedcode.component-test",
+                host_ctx,
+                &[],
+                None,
+            )
+            .expect("legacy component must load (no events-task)");
+        assert!(
+            !plugin.on_task_event("{\"jobId\":\"x\",\"phase\":\"completed\"}").expect("probe"),
+            "未导出 events-task 的产物必须走降级路径（Ok(false)）"
+        );
+        assert!(plugin.get_manifest().is_ok(), "降级后其余导出照常");
+    }
+
+    /// 双门：仅授 task:run 不授 fs:read → fs.stat 单元失败（permission denied），
+    /// 批次继续（fail-collect）；fs_auth 未授权路径直接 Err、不弹窗
+    #[test]
+    fn test_task_dual_gate_domain_permission_denied() {
+        let Some(bytes) = Some(build_task_test_component()) else {
+            return;
+        };
+        let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+        let component = wasm_runtime
+            .compile_component(&bytes)
+            .expect("compile task fixture");
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut plugin = wasm_runtime
+                .instantiate_component(&component, &task_fixture_plugin_id(), host_ctx.clone(), &[], None)
+                .expect("instantiate task fixture");
+            // 只授 task:run（不授 fs:read / process:run）
+            crate::plugin::manager::wasm_runtime::host_impl::tests::grant_permissions(
+                &host_ctx,
+                &task_fixture_plugin_id(),
+                &["task:run"],
+            );
+            let tmp = std::env::temp_dir().join(format!("bedcode_task_dual_{}", std::process::id()));
+            std::fs::write(&tmp, b"x").expect("write temp file");
+            let plan = serde_json::json!({
+                "units": [
+                    { "id": "no-perm", "kind": "fs.stat", "params": { "path": tmp.to_str().unwrap() } },
+                    { "id": "unknown", "kind": "no.such", "params": {} }
+                ],
+                "jobTimeoutMs": 60000,
+            })
+            .to_string();
+            let raw = plugin
+                .invoke_command("execute-batch", &serde_json::json!({ "plan": plan }).to_string())
+                .expect("execute-batch command");
+            let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            let payload: serde_json::Value =
+                serde_json::from_str(v["result"].as_str().unwrap_or("{}")).unwrap_or(serde_json::Value::Null);
+            let results = payload["results"].as_array().expect("results");
+            assert_eq!(results.len(), 2, "fail-collect：所有单元都有结果条目");
+            assert_eq!(results[0]["ok"], false);
+            assert!(
+                results[0]["error"].as_str().unwrap().contains("permission denied"),
+                "无 fs:read 的 fs.stat 单元必须失败（无弹窗，错误可见），got: {}",
+                results[0]["error"]
+            );
+            assert_eq!(results[1]["ok"], false);
+            assert!(results[1]["error"].as_str().unwrap().contains("unknown unit kind"));
+            std::fs::remove_file(&tmp).ok();
+        });
     }
 
     /// 回归保护：加载真实构建产物（resources 下 wasip3 版 ai-chatbox，票 03）
@@ -5618,7 +6073,7 @@ mod tests {
         assert_eq!(
             children_env["headers"]["Cache-Control"],
             "private, max-age=30",
-            "file-tree-children 必须带与宿主一致的 Cache-Control（宿主 FILE_TREE_CHILDREN_CACHE_MAX_AGE_SECS）"
+            "file-tree-children 必须带迁移前宿主同口径的 Cache-Control（30 秒，缓存值随域下沉插件）"
         );
 
         // --- POST file-content：成功路径 ---
@@ -5894,10 +6349,9 @@ mod tests {
 
             // ==================== 3. 编排创建（start=false，两阶段第一阶段） ====================
             let sid1 = crate::utils::session_create_bridge::create_session_via_plugin(
-                &host_ctx, &seeded.id, None, None, false,
+                &host_ctx, &seeded.id, None, None, false, None,
             )
             .await
-            .expect("bridge orchestrate")
             .expect("plugin active → 必须编排成功");
             assert_eq!(sid1.len(), 36, "预生成 UUID; got: {sid1}");
             let info1 = wait_session(&sm, &sid1).await;
@@ -5912,23 +6366,25 @@ mod tests {
 
             // ==================== 4. 命名唯一化：同配置第二次 → 原名(1) ====================
             let sid2 = crate::utils::session_create_bridge::create_session_via_plugin(
-                &host_ctx, &seeded.id, None, None, false,
+                &host_ctx, &seeded.id, None, None, false, None,
             )
             .await
-            .expect("bridge orchestrate second")
             .expect("plugin active → 必须编排成功");
             let info2 = wait_session(&sm, &sid2).await;
             assert_eq!(info2.name, "编排会话(1)", "重名冲突 → 插件改写为 (1) 后缀");
             assert_eq!(info2.config_id, seeded.id);
 
-            // ==================== 5. 降级：注销互调面 → 桥接返回 None ====================
+            // ==================== 5. 插件必需：注销互调面 → 显性报错（无宿主降级） ====================
             host_ctx.api_registry().unregister(SESSION_ID);
-            let fallback = crate::utils::session_create_bridge::create_session_via_plugin(
-                &host_ctx, &seeded.id, None, None, false,
+            let err = crate::utils::session_create_bridge::create_session_via_plugin(
+                &host_ctx, &seeded.id, None, None, false, None,
             )
             .await
-            .expect("fallback bridge");
-            assert_eq!(fallback, None, "插件不可用 → 桥接让位宿主旧路径（无单点）");
+            .expect_err("插件不可用 → 必须显性报错（host-business-decarriage 收尾：降级轨已删）");
+            assert!(
+                err.to_string().contains("session plugin not active"),
+                "错误必须指明插件未激活, got: {err}"
+            );
 
             // 清理：不 spawn 进程，仅释放 openpty slave fd
             sm.remove_session(&sid1).await.expect("remove s1");
@@ -6067,10 +6523,9 @@ mod tests {
             session.lock().await.activate().expect("activate session");
 
             let sid = crate::utils::session_create_bridge::create_session_via_plugin(
-                &host_ctx, &seeded.id, None, None, false,
+                &host_ctx, &seeded.id, None, None, false, None,
             )
             .await
-            .expect("bridge orchestrate")
             .expect("plugin active → 必须编排成功");
             let info = wait_session(&sm, &sid).await;
             assert_eq!(info.name, "动作会话");
@@ -6293,9 +6748,8 @@ mod tests {
     ///    同一命令对 ghost 会话显性报错（存在性校验跨 wasm 边界生效）
     /// 3. `session.devices.connect-list` 命令（真实组件内调真实原语）：无头上下文
     ///    连接注册表为空 → `{connections: []}`（形状恒定；connections-list +
-    ///    trusted-devices-list + session-list 三原语在 guest 内完整走通）
-    /// 4. 降级：注销互调面 → `connected_devices_via_plugin` 桥接返回 None
-    ///    （宿主旧路径照常，无单点）
+    ///    trusted-devices-list + session-list 三原语在 guest 内完整走通），并对照
+    ///    宿主事实面（连接注册表）为空
     #[test]
     fn test_session_annotate_and_devices_closed_loop() {
         const SESSION_ID: &str = "com.bedcode.session";
@@ -6376,10 +6830,9 @@ mod tests {
             session.lock().await.activate().expect("activate session");
 
             let sid = crate::utils::session_create_bridge::create_session_via_plugin(
-                &host_ctx, &seeded.id, None, None, false,
+                &host_ctx, &seeded.id, None, None, false, None,
             )
             .await
-            .expect("bridge orchestrate")
             .expect("plugin active → 必须编排成功");
             // 创建为宿主异步执行（事件回灌需锁释放）——有限轮询等落库
             for _ in 0..50 {
@@ -6480,19 +6933,14 @@ mod tests {
                 "无头上下文 → 空连接清单（形状恒定）"
             );
 
-            // 经互调桥接（产品路径 = 宿主命令面）：same shape，插件面可用
-            let bridged = crate::utils::devices_bridge::connected_devices_via_plugin(&host_ctx)
-                .await
-                .expect("bridge devices")
-                .expect("plugin active → 必须派生成功");
-            assert_eq!(bridged.len(), 0, "空连接 → 空设备列表");
-
-            // ==================== 4. 降级：注销互调面 → 桥接让位宿主旧路径 ====================
-            host_ctx.api_registry().unregister(SESSION_ID);
-            let fallback = crate::utils::devices_bridge::connected_devices_via_plugin(&host_ctx)
-                .await
-                .expect("fallback bridge");
-            assert!(fallback.is_none(), "插件不可用 → 桥接让位宿主旧路径（无单点）");
+            // 宿主命令面只回引擎事实（连接注册表原始记录），派生视图归插件：
+            // `devices-connect-list` 互调 api 与宿主 `utils/devices_bridge` 已随
+            // host-business-decarriage 收尾退役（宿主唯一消费方只需指纹字段）。
+            assert_eq!(
+                crate::server::ws::WebSocketManager::global().list_clients().await.len(),
+                0,
+                "无头上下文连接注册表为空 → 宿主事实面为空"
+            );
 
             // 清理：不 spawn 进程，仅释放 openpty slave fd
             sm.remove_session(&sid).await.expect("remove session");

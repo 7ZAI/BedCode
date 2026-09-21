@@ -1,0 +1,27 @@
+{
+  "id": "com.bedcode.task-test",
+  "name": "Task Test Plugin",
+  "version": "0.1.0",
+  "description": "host-task（ABI v20）fixture：execute-batch / submit / status / cancel / list-jobs 闭环 + events-task#on-task-event 回调累积",
+  "author": "BedCode",
+  "main": "index.js",
+  "sandbox": "inline",
+  "pluginType": "rust-ts",
+  "rustLibrary": "bedcode_plugin_task_test",
+  "permissions": [
+    "task:run",
+    "fs:read",
+    "fs:write",
+    "process:run"
+  ],
+  "api": [],
+  "contributes": {
+    "commands": [],
+    "views": [],
+    "lifecycle": {
+      "onStartup": false,
+      "onShutdown": false
+    },
+    "provides": []
+  }
+}
