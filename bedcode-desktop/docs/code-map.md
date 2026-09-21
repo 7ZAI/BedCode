@@ -208,6 +208,34 @@ spec D3 否决），ABI desktop 15 → 16（v15 归 `host-auth`；mobile 不跟�
   `pty handle not found`；fixture 闭环见 `packages/plugin-pty-test`（wasm32-wasip3）与
   `wasm_runtime.rs` 的 `test_pty_*` 矩阵。
 
+### 宿主能力实现域 · 并发任务 — `host-task`（ABI v20）
+
+WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / list-jobs，desktop 独有
+双端偏离——同 host-pty 先例）、可选导出 `events-task#on-task-event`（独立 world `plugin-task`
+仅供 SDK 绑定，宿主实例化后动态探测，未导出降级丢弃 + 计数）。WASM 插件无法创建 OS 线程，
+全部宿主调用同步阻塞——本接口让插件把「单元操作计划」交宿主专用 OS 线程池（
+`PLUGIN_TASK_POOL_THREADS`）真并行执行既有宿主原语（fs.* / process.run-sync / http.fetch，
+零新 DTO）。
+
+- **执行引擎（core-task）**：`plugin/manager/task.rs`（TaskRegistry + 专用线程池 + 每任务
+  并发窗口 + condvar 终态通知 + 每插件有界回调 channel/消费派发任务）；入口 `host_impl/task.rs`
+  （`task:run` 权限门 + plan 解析 + 配额仲裁；单元执行时另过 kind 对应域权限门——双门结构）；
+- **两档 API**：`execute-batch` 同步扇出→join（阻塞 Store，同 run-sync 语义，仅限快操作）；
+  `submit` 异步登记返句柄 `task-<hex>`，进度/终态经 `dispatch_task_event` → `events-task`
+  回调（started → progress* → completed/failed/cancelled；回调尽力投递，`status`/`list-jobs`
+  自愈快照是权威真源）；
+- **配额（`system/constants/plugin.rs` `PLUGIN_TASK_*`）**：池 8 线程 / 每插件在册任务 4 /
+  单 plan 256 单元 / 单元结果 1 MiB 截断 / 缺省单元 600s、任务 3600s 超时 / 回调队列 64 /
+  status 终态结果保留 64 条——超限 fail-visible；
+- **协作式取消/超时**：phase 翻转后未开始单元 skipped（快照补条目），运行中单元跑完结果照记；
+  墙钟超时 → cancelled；
+- **回收**：插件停用 → `task::purge_for_plugin`（`host.rs::deactivate_plugin_inner`，紧邻 pty
+  回收）cancel 全部在册任务 + 清回调队列；
+- **重入红线（spec §8）**：池线程永不回调进插件（回调只经消费派发任务 + 实例锁）；插件禁止
+  在 guest 调用栈内同步等待自己任务的事件（自死锁），等待一律走 execute-batch；
+- **fixture 闭环**：`packages/plugin-task-test`（wasm32-wasip3）+ `wasm_runtime.rs` 的
+  `test_task_*`（并行保序 / 事件管道 / status / cancel 幂等 / legacy 降级 / 双门权限）。
+
 ### 服务器 — `src-tauri/src/server/`（Actix Web HTTP + WS）
 
 移动端与桌面端通信的唯一入口：

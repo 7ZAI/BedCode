@@ -148,9 +148,17 @@ pnpm exec eslint .
 
 - [ ] manifest 声明 `permissions`（前端快速失败 + Rust 端最终仲裁；文件系统走 fs_auth 三层校验：路径白名单 → 插件白名单 → 弹窗授权）
 - [ ] 对外可调 API 在 manifest `api` 字段声明，经 `#[plugin_api]` 宏 + JSON-RPC 2.0；**未声明不可调**（ADR 0017）
-- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 / v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server 认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）只在 desktop WIT/ABI/SDK 演进；当前 desktop **v19**、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 / 注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与 `host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数
+- [ ] 契约边界单点维护在 WIT（`packages/plugin-sdk-*/rust/wit/bedcode.wit`）；改 WIT 必须双端同步 + ABI bump（wasmtime 桌面 48 / 移动 47 分叉中，见 `.scratch/2026-09-18-wasmtime-48-upgrade/spec.md`；双端对齐后恢复锁死表述）。**双端偏离（已文档化，ADR 0022「双端偏离」节）**：
+桌面独有接口不要求移动端跟演——`host-websocket`（v14）、`host-auth`（v15 密钥托管 /
+v18 认证记录面）、`host-pty`（v16）、`auth-policy` 导出（v17，认证中心能力，票 12 server
+认证中间件取策略）、`host-session` 会话语义批次与 `host-platform.wsl-distros`（v19）、
+`host-task`（v20 并发任务域 + `events-task` 可选导出）只在 desktop WIT/ABI/SDK 演进；
+当前 desktop **v20**、mobile 11。移动端要接同类能力时再补该端 interface 并对齐计数（恢复
+条件见同一节）。**同一批次内函数级追加不再 bump**（v19 已含配置面 / 创建与动作面 /
+注解槽 / 连接清单四组；票 02/03 又追加 `host-fs.read-dir / canonicalize / stat` 与
+`host-process.run-sync`——文件浏览域下沉所需的引擎级原语，仍保持 v19），别拿批次号当函数号数
 - [ ] **同实例串行红线（A0-3 宿主 async 化，P3；依据 `.scratch/2026-09-21-a0-3-host-async/spec.md`，探针已证兼容）**：每插件实例同一时刻**仍只允许一个 guest 调用在执行**——async 化只改变「宿主线程在等待时让出」，不引入同实例并发进入 guest；`host.rs` 实例锁（std `Arc<Mutex<LoadedWasmPlugin>>`）async 化时改为 tokio `Mutex`（await 持锁、不因等待释放），串行语义与现在等价；**禁止**改成细粒度「await 点释放锁」（会导致同实例交错：插件静态状态竞态——配对码/QR/挑战注册表/config 缓存/私有库 + wasmtime Store 重入 panic）
-- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 20 组（清点：进程 2 + 网络 4 + 存储 4 + 宿主面 8 + 互调 2）：进程 = `host-pty`（交互式）/ `host-process`（非交互），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`），拆分后五同步点必须同步落（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门，漏一处即漂移锁翻红）
+- [ ] 宿主能力经 `host-*` 原语访问（清单见 `plugin/manager/capability.rs::HOST_PRIMITIVE_CAPABILITIES`，现 21 组（清点：进程 3 + 网络 4 + 存储 4 + 宿主面 8 + 互调 2）：进程 = `host-pty`（交互式）/ `host-process`（非交互）/ `host-task`（并发任务域 v20，WASM 插件调度宿主 OS 线程池），网络 = `host-http` / `host-websocket` / `host-mdns` / `host-peer`，存储 = `host-database` / `host-plugin-database` / `host-storage` / `host-fs`，宿主面 = `host-terminal` / `host-session` / `host-events` / `host-config` / `host-log` / `host-timer` / `host-app` / `host-platform`，互调与总线 = `host-bus` / `host-api-call`），能力**不得携带业务语义**（ADR 0022）；权限按风险域拆分（如 `pty:spawn` / `pty:io`、`ws:client` / `ws:server`、`task:run` + 每单元 kind 既有域权限门双门），拆分后五同步点必须同步落（SDK 常量与 API 映射 / 打包 CLI / 前端合法集合 / 宿主能力清单 / host_impl 权限门，漏一处即漂移锁翻红）
 - [ ] 插件导出：`activate`/`deactivate`、`command`、`_http_endpoint`、terminal hooks、生命周期/输入扩展点
 - [ ] 存储：插件独立库（私有 SQLite）/ 主库前缀隔离（表名强制 `plugin_id_` 前缀）；**禁止在 dev-shell 写具体业务 mock**——mock 数据/演示种子归各自插件工程（插件入口导出 `devMock`）
 - [ ] 日志：target=`bedcode_lib::plugin::plugin_log`，`[plugin:xxx]` 前缀，WASM trap backtrace 不得关闭（详情见 `docs/knowledge/logging.md`）
