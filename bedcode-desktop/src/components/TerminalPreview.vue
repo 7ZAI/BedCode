@@ -158,7 +158,6 @@ import { Select } from '@/components'
 import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue'
 import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
 import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
-import { computeDesktopInitialTerminalSize } from '@/utils/terminalInitialSize'
 import {
   LINUX_FONT_STACK,
   DEFAULT_FONT_STACK,
@@ -502,17 +501,9 @@ watch(
         // 新会话：重置历史截断提示标记，允许再次提示
         pipeline.resetTruncatedNotified()
 
-        if (props.session?.status === 'starting') {
-          // 延迟启动第二阶段：终端已挂载传当前实际网格；否则按当前终端窗口
-          // 实际尺寸精确预测（widthRatio=1，本组件只存在于终端窗口内），
-          // spawn 前 resize PTY，子进程从正确行列起步
-          const t = kernel.terminalRef.value
-          const size =
-            t != null
-              ? { cols: t.cols, rows: t.rows }
-              : await computeDesktopInitialTerminalSize(settings.effectiveFontSize.value)
-          await sessionStore.startSession(newId, size ?? undefined)
-        }
+        // 两阶段启动（建而不启 + 窗口接管第二阶段 spawn）已随宿主命令面注销退役：
+        // v21 起会话一律由 com.bedcode.session 插件 `session.create` 创建即启动
+        // （start = true），窗口只接管 running / waitingInput 状态的会话。
 
         pipeline.terminalStream.start(newId)
         pipeline.armReplayRefresh()

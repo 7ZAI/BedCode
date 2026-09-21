@@ -66,7 +66,6 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   'ui:fileHandler': ['ui.registerFileHandler'],
   'network:http': ['http.registerEndpoint'],
   storage: ['storage.get', 'storage.set', 'storage.delete', 'storage.flush'],
-  'system:open': ['system.revealInDir'],
   // peer 为 WASM-only 权限，无前端 API 方法映射；宿主在 host fn 层仲裁
   peer: [],
   // ws:* 为 WASM-only 权限（host-websocket 原语），无前端 API 方法映射

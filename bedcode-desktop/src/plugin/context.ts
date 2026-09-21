@@ -16,7 +16,6 @@ import type {
   StorageAPI,
   HttpAPI,
   I18nAPI,
-  SystemAPI,
   SidebarPanelDescriptor,
   ToolboxPageDescriptor,
   StatusBarItemDescriptor,
@@ -277,25 +276,9 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
   }
 
-  // ==================== SystemAPI ====================
-
-  /** 检查 system:open 权限，失败时抛 i18n 文案错误 */
-  function requireSystemOpenPermission(apiMethod: string): void {
-    if (!hasPermissionForApi(permissions, apiMethod)) {
-      const hostI18n = (window as any).__BEDCODE_SHARED__?.i18n
-      const message = hostI18n
-        ? hostI18n.global.t('desktop.plugin.noSystemOpenPermission', { plugin: info.id })
-        : 'desktop.plugin.noSystemOpenPermission'
-      throw new Error(message)
-    }
-  }
-
-  const system: SystemAPI = {
-    async revealInDir(path: string): Promise<void> {
-      requireSystemOpenPermission('system.revealInDir')
-      return pluginCmds.pluginRevealInDir(info.id, path)
-    },
-  }
+  // 注：原 `system.revealInDir` 插件 API（+ `system:open` 权限）已退役——
+  // 定位能力改为内核原语 `host-platform.reveal-in-dir`（ABI v22），插件在
+  // WASM 侧经 SDK `platform_reveal_in_dir` 调用，不经前端 context。
 
   // ==================== I18nAPI ====================
   const i18n: I18nAPI = {
@@ -333,7 +316,6 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     storage,
     http,
     i18n,
-    system,
     _disposables: disposables,
   }
   return context

@@ -9,7 +9,6 @@ import i18n from './locales'
 import { initPlatform } from '@/composables/usePlatform'
 import { useSettingsStore } from '@/stores/settings'
 import { useI18nStore } from '@/stores/i18n'
-import { useWslStore } from '@/stores/wsl'
 import { useToast } from '@/composables/useToast'
 import { setupSharedRuntime } from '@/plugin/shared-runtime'
 import { setupPluginRuntimeListeners } from '@/plugin/runtime-listeners'
@@ -54,12 +53,10 @@ setupSharedRuntime(i18n, router)
 // 注册插件事件监听（notify / self-check error / runtime-error，实现见 plugin/runtime-listeners.ts）
 setupPluginRuntimeListeners()
 
-// 预初始化：并行执行平台检测、设置加载和 WSL 信息缓存
-// WSL 命令执行较慢（可能触发虚拟机启动），提前加载避免弹窗卡顿
+// 预初始化：并行执行平台检测与设置加载
 const settingsStore = useSettingsStore()
 const i18nStore = useI18nStore()
-const wslStore = useWslStore()
-Promise.all([initPlatform(), settingsStore.loadSettings(), wslStore.loadWslInfo()]).then(
+Promise.all([initPlatform(), settingsStore.loadSettings()]).then(
   ([platformInfo]) => {
     // 平台标记：<html> 上加平台专属 class，供 CSS 做平台条件样式。
     // - platform-desktop / platform-mobile：通用桌面/移动区分
@@ -76,7 +73,7 @@ Promise.all([initPlatform(), settingsStore.loadSettings(), wslStore.loadWslInfo(
 
     // 设置加载完成后初始化语言偏好
     i18nStore.initLanguage()
-    logger.log('[Init] Platform, settings and WSL info pre-loaded')
+    logger.log('[Init] Platform and settings pre-loaded')
   },
 )
 

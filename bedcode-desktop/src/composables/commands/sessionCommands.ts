@@ -1,61 +1,29 @@
 /**
  * 会话域命令封装（useDesktopCommands 拆分产物）
  *
- * WSL 探测 + 会话生命周期 + 会话配置 CRUD。统一收敛 Tauri 命令调用，
- * 超时敏感的启动路径走 invokeWithTimeout（含超时语义）。
+ * 只保留**宿主终端引擎直调**的封装（终端渲染管道红线）：会话记录读取、
+ * 尺寸裁决、输入写入、特殊键。这些命令即使业务域已下沉插件，宿主终端窗口
+ * 仍需直连通路（性能与背压门控都在内核 PTY 输出面）。
  *
- * 保留范围（2026-09-21 收敛）：只保留**宿主页面仍直接调用**的封装
- * （终端窗口 / 会话兜底壳 / 设置页会话分组 / 插件 API 面 `context.sessions`）。
- * 原 `startSession`（按 configId 创建即启动）无调用方已删；配对 / QR / 连接历史 /
- * 快捷指令一族封装（`commands/deviceCommands.ts`）随业务域下沉插件已整文件删除。
+ * 保留范围（2026-09-21 命令面收敛）：`list_sessions` / `get_session` /
+ * `resize_session` / `write_to_session` / `send_special_key`。
+ * 已注销（产品面归 `com.bedcode.session` 插件命令面）：
+ * - 会话编排：`start_session` / `create_session_no_start` / `start_existing_session`
+ *   / `kill_session` / `delete_session` / `restart_session`
+ *   → 插件 `session.create` / `session.close` / `session.action.*`
+ *   （宿主前端仅 `stores/session.ts` 的 `stopSession` 需要，经插件命令面转发）
+ * - 会话配置 CRUD：`create/list/get/delete/update_session_config`
+ *   → 插件 `session.config.list` / `.upsert` / `.delete`（插件私有库为配置真源）
+ * - WSL 探测（`listWslDistributions` / `isWslAvailable`）
+ *   → 插件 `session.environment.wsl-distros`
+ * - 配对 / QR / 连接历史一族封装随宿主命令面注销整族删除
  */
 import { invoke } from '@tauri-apps/api/core'
-import { logger } from '@/utils/frontendLogger'
-import { invokeWithTimeout } from '@/utils/invoke'
-import type { WslDistro, SessionInfo, SessionConfig } from '../model'
+import type { SessionInfo } from '../model'
 
-export type { WslDistro, SessionInfo, SessionConfig }
-
-// ==================== WSL Commands ====================
-
-/** 获取已安装的 WSL 发行版列表 */
-export async function listWslDistributions(): Promise<WslDistro[]> {
-  return invoke('list_wsl_distributions')
-}
-
-/** 检查 WSL 是否可用 */
-export async function isWslAvailable(): Promise<boolean> {
-  return invoke('is_wsl_available')
-}
+export type { SessionInfo }
 
 // ==================== Session Commands ====================
-
-/** 终端网格尺寸（启动时作为 PTY 初始 cols/rows） */
-export interface TerminalSize {
-  cols: number
-  rows: number
-}
-
-/**
- * 创建会话但不启动 PTY（含超时）
- * 返回 sessionId，前端准备好后可调用 startExistingSession 启动
- */
-export async function createSessionNoStart(configId: string): Promise<string> {
-  return invokeWithTimeout('create_session_no_start', { configId })
-}
-
-/**
- * 启动已存在的会话（含超时，用于延迟启动场景）
- *
- * size：spawn 前按该尺寸调整 PTY（两阶段启动的第二阶段传入）
- */
-export async function startExistingSession(sessionId: string, size?: TerminalSize): Promise<void> {
-  return invokeWithTimeout('start_existing_session', {
-    sessionId,
-    cols: size?.cols,
-    rows: size?.rows,
-  })
-}
 
 /** 获取会话列表 */
 export async function listSessions(): Promise<SessionInfo[]> {
@@ -65,21 +33,6 @@ export async function listSessions(): Promise<SessionInfo[]> {
 /** 获取单个会话信息 */
 export async function getSession(sessionId: string): Promise<SessionInfo | null> {
   return invoke('get_session', { sessionId })
-}
-
-/** 终止会话 */
-export async function killSession(sessionId: string): Promise<void> {
-  return invoke('kill_session', { sessionId })
-}
-
-/** 删除会话 */
-export async function deleteSession(sessionId: string): Promise<void> {
-  return invoke('delete_session', { sessionId })
-}
-
-/** 重启会话 */
-export async function restartSession(sessionId: string): Promise<void> {
-  return invoke('restart_session', { sessionId })
 }
 
 /** 渲染端来源：桌面端 / 移动端设备（resize 裁决展示用） */
@@ -113,71 +66,4 @@ export async function writeToSession(sessionId: string, data: string): Promise<v
 /** 发送特殊键 */
 export async function sendSpecialKey(sessionId: string, key: string): Promise<void> {
   return invoke('send_special_key', { sessionId, key })
-}
-
-// ==================== Config Commands ====================
-
-/** 创建会话配置 */
-export async function createSessionConfig(config: {
-  name: string
-  environment: string
-  working_dir?: string
-  command?: string
-  wsl_distro?: string
-}): Promise<SessionConfig> {
-  logger.log('[createSessionConfig] calling backend with:', {
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir || '',
-    command: config.command || '',
-    wsl_distro: config.wsl_distro,
-  })
-
-  const result = await invoke('create_session_config', {
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir || '',
-    command: config.command || '',
-    wsl_distro: config.wsl_distro,
-  })
-
-  logger.log('[createSessionConfig] backend returned:', result)
-  return result as SessionConfig
-}
-
-/** 获取会话配置列表 */
-export async function listSessionConfigs(): Promise<SessionConfig[]> {
-  return invoke('list_session_configs')
-}
-
-/** 获取单个会话配置 */
-export async function getSessionConfig(configId: string): Promise<SessionConfig | null> {
-  return invoke('get_session_config', { id: configId })
-}
-
-/** 删除会话配置 */
-export async function deleteSessionConfig(configId: string): Promise<void> {
-  return invoke('delete_session_config', { id: configId })
-}
-
-/** 更新会话配置 */
-export async function updateSessionConfig(config: {
-  id: string
-  name: string
-  environment: string
-  working_dir: string
-  command: string
-  wsl_distro?: string
-  auto_start?: boolean
-}): Promise<void> {
-  logger.log('[updateSessionConfig] calling with:', config)
-  return invoke('update_session_config', {
-    id: config.id,
-    name: config.name,
-    environment: config.environment,
-    working_dir: config.working_dir,
-    command: config.command,
-    wsl_distro: config.wsl_distro,
-    auto_start: config.auto_start,
-  })
 }

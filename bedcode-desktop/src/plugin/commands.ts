@@ -187,8 +187,3 @@ export async function pluginDevReload(pluginId: string): Promise<void> {
 export async function pluginGetActivatedState(): Promise<Record<string, boolean>> {
   return await invoke<Record<string, boolean>>('plugin_get_activated_state')
 }
-
-/** 在系统文件管理器中显示文件/目录（需 system:open 权限） */
-export async function pluginRevealInDir(pluginId: string, path: string): Promise<void> {
-  return await invoke<void>('plugin_reveal_in_dir', { pluginId, path })
-}

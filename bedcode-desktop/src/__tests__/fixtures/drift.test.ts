@@ -7,6 +7,9 @@
  *    未被消费时由本回归保证执行；Rust 新增字段后清单被同步而 fixture
  *    未更新 → 引用该 fixture 的任何测试立刻失败，显式告警）
  * 2. 断言 assertDtoFields 机制自身不退化（字段缺失/多余时必抛错）
+ *
+ * 2026-09-21：配对 / QR / 连接历史域随宿主命令面注销退役（产品面归
+ * `com.bedcode.session` 插件），对应 fixtures（pairing.ts）与登记项一并删除。
  */
 
 import { describe, it, expect } from 'vitest'
@@ -20,15 +23,6 @@ import {
   SERVER_METRICS_DTO_FIELDS,
 } from './server'
 import {
-  makePairingCodeInfo,
-  makePairing,
-  makeQrConnectionInfo,
-  makePendingDevice,
-  PAIRING_CODE_INFO_DTO_FIELDS,
-  PAIRING_DTO_FIELDS,
-  QR_CONNECTION_INFO_DTO_FIELDS,
-} from './pairing'
-import {
   makeSessionInfo,
   makeSessionConfig,
   makeWslDistro,
@@ -38,7 +32,6 @@ import {
   WSL_DISTRO_DTO_FIELDS,
   DEVICE_CONNECTION_INFO_DTO_FIELDS,
 } from './session'
-import { PENDING_DEVICE_DTO_FIELDS } from './pairing'
 import {
   makePluginInfo,
   makePluginContributes,
@@ -56,18 +49,6 @@ const DTO_REGISTRY = [
   },
   { label: 'NetworkConfig', fields: NETWORK_CONFIG_DTO_FIELDS, build: () => makeNetworkConfig() },
   { label: 'ServerMetrics', fields: SERVER_METRICS_DTO_FIELDS, build: () => makeServerMetrics() },
-  {
-    label: 'PairingCodeInfo',
-    fields: PAIRING_CODE_INFO_DTO_FIELDS,
-    build: () => makePairingCodeInfo(),
-  },
-  { label: 'Pairing', fields: PAIRING_DTO_FIELDS, build: () => makePairing() },
-  {
-    label: 'QrConnectionInfo',
-    fields: QR_CONNECTION_INFO_DTO_FIELDS,
-    build: () => makeQrConnectionInfo(),
-  },
-  { label: 'PendingDevice', fields: PENDING_DEVICE_DTO_FIELDS, build: () => makePendingDevice() },
   { label: 'SessionInfo', fields: SESSION_INFO_DTO_FIELDS, build: () => makeSessionInfo() },
   { label: 'SessionConfig', fields: SESSION_CONFIG_DTO_FIELDS, build: () => makeSessionConfig() },
   { label: 'WslDistro', fields: WSL_DISTRO_DTO_FIELDS, build: () => makeWslDistro() },
@@ -100,28 +81,33 @@ describe('fixtures DTO 对齐', () => {
   it('factory override 不破坏键集合完整性（漂移时工厂自身抛错）', () => {
     // 覆盖部分字段后键集合不变，工厂内 assertDtoFields 仍然通过
     expect(() => makeServerStatusInfo({ port: 8766, uptime_secs: 42 })).not.toThrow()
-    expect(() => makePairingCodeInfo({ code: '654321' })).not.toThrow()
+    expect(() => makeSessionInfo({ id: 'session-override' })).not.toThrow()
   })
 })
 
 describe('assertDtoFields 机制自检', () => {
+  /** 完整样本（工厂已断言键集）与其可删除字段 */
+  const complete = makeSessionInfo() as unknown as Record<string, unknown>
+
   it('字段缺失时抛错（模拟 Rust 新增字段后 fixture 未同步）', () => {
-    const stale = { code: '123456', expires_in: 60 } // 缺 created_at
-    expect(() => assertDtoFields(stale, PAIRING_CODE_INFO_DTO_FIELDS, 'PairingCodeInfo')).toThrow(
-      /漂移.*created_at/,
+    const missingKey = Object.keys(complete)[0]
+    const stale = { ...complete }
+    delete stale[missingKey]
+    expect(() => assertDtoFields(stale, SESSION_INFO_DTO_FIELDS, 'SessionInfo')).toThrow(
+      new RegExp(`漂移.*${missingKey}`),
     )
   })
 
   it('字段多余时抛错（模拟 fixture 含非线协议字段）', () => {
-    const extra = { code: '123456', created_at: '2025-01-01T00:00:00Z', expires_in: 60, phantom: 1 }
-    expect(() => assertDtoFields(extra, PAIRING_CODE_INFO_DTO_FIELDS, 'PairingCodeInfo')).toThrow(
+    const extra = { ...complete, phantom: 1 }
+    expect(() => assertDtoFields(extra, SESSION_INFO_DTO_FIELDS, 'SessionInfo')).toThrow(
       /漂移.*phantom/,
     )
   })
 
   it('键集合一致时通过', () => {
     expect(() =>
-      assertDtoFields(makePairingCodeInfo(), PAIRING_CODE_INFO_DTO_FIELDS, 'PairingCodeInfo'),
+      assertDtoFields(makeSessionInfo(), SESSION_INFO_DTO_FIELDS, 'SessionInfo'),
     ).not.toThrow()
   })
 })

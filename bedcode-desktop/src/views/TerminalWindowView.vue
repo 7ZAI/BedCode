@@ -340,7 +340,6 @@ import PluginTerminalToolbar from '@/plugin/components/PluginTerminalToolbar.vue
 import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useSessionStore } from '@/stores/session'
-import { getSessionConfig } from '@/composables/useDesktopCommands'
 import type { SessionInfo, SessionConfig } from '@/composables/model'
 
 const { t } = useI18n()
@@ -558,10 +557,10 @@ async function loadSessionInfo() {
     session.value = result
     sessionName.value = result.name
 
-    // 只读拉取会话配置，用于工具条展示 cwd / 命令
+    // 只读拉取会话配置（插件私有库真源，经 session.config.list），用于工具条展示 cwd / 命令
     if (result.config_id) {
       try {
-        config.value = await getSessionConfig(result.config_id)
+        config.value = await sessionStore.loadSessionConfig(result.config_id)
       } catch (e) {
         logger.error('[TerminalWindowView] Failed to load session config:', e)
       }
@@ -703,10 +702,10 @@ async function checkAndSnap(mainPos: { x: number; y: number; width: number; heig
   snapDirection.value = null
 }
 
-/** 停止当前会话并关闭窗口 */
+/** 停止当前会话并关闭窗口（停止编排归 com.bedcode.session 插件命令面） */
 async function stopSession() {
   try {
-    await sessionStore.killSession(sessionId.value)
+    await sessionStore.stopSession(sessionId.value)
     toast.info(t('desktop.session.sessionStopped'))
     await appWindow.close()
   } catch (e) {

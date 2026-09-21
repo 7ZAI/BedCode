@@ -434,12 +434,6 @@ export interface HttpAPI {
   registerEndpoint(path: string, handler: RequestHandler): Disposable
 }
 
-/** 系统 API — 宿主 OS 级文件操作（需 system:open 权限） */
-export interface SystemAPI {
-  /** 在系统文件管理器中显示文件/目录（Windows 资源管理器选中、macOS Finder Reveal） */
-  revealInDir(path: string): Promise<void>
-}
-
 /** 国际化 API — 插件访问宿主 i18n 能力 */
 export interface I18nAPI {
   /** 获取宿主 i18n 实例（vue-i18n I18n 对象） */
@@ -463,8 +457,6 @@ export interface PluginContext {
   readonly http: HttpAPI
   /** 国际化 API */
   readonly i18n: I18nAPI
-  /** 系统 API（需 system:open 权限） */
-  readonly system: SystemAPI
   /** 内部：所有 Disposable 收集器 */
   readonly _disposables: Disposable[]
 }
