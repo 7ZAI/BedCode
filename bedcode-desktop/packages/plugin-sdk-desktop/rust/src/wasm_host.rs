@@ -17,8 +17,8 @@
 use crate::host::{
     ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError,
     HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
-    HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket, ProcessSyncResult,
-    PtyRingFetch,
+    HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket,
+    ProcessSyncResult, PtyRingFetch, SessionRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
@@ -390,6 +390,23 @@ impl HostSession for WasmHost {
     fn connections_list(&self) -> Result<serde_json::Value, HostError> {
         let raw = host_session::connections_list().map_err(|e| host_err("connections_list", e))?;
         parse_json("connections_list", raw)
+    }
+
+    fn session_output_ring_fetch(
+        &self,
+        session_id: &str,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<SessionRingFetch>, HostError> {
+        host_session::output_ring_fetch(session_id, from_offset, max_bytes)
+            .map(|result| {
+                result.map(|r| SessionRingFetch {
+                    data: r.data,
+                    next_offset: r.next_offset,
+                    truncated: r.truncated,
+                })
+            })
+            .map_err(|e| host_err("session_output_ring_fetch", e))
     }
 }
 

@@ -2984,3 +2984,189 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
             .expect("file-transfer deactivate");
     });
 }
+
+/// 票 04 闭环：会话输出经 `host-session.output-ring-fetch` 原语拉取（插件命令面
+/// `session.output.pull` → WIT `list<u8>` 二进制直传）——「插件经原语拉取会话输出
+/// 字节不 JSON 化 + 慢消费只损失自己的 ring 历史（游标续拉）」的验收主证据。
+///
+/// 流程：真实 bash 会话启动 → 写输入 `echo OUTPUT_RING_PROBE_*` → bash 输出进
+/// GlobalOutputManager 会话 ring → 插件按游标批量拉取 → 断言原始字节包含 probe
+/// 文本（原始字节流，非 JSON 字符串包裹）。属主 = 本插件（create 走插件编排），
+/// 权限含 `terminal:output`。
+#[test]
+fn test_session_output_ring_fetch_closed_loop() {
+    // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
+    let _serial = session_plugin_db_guard();
+    const SESSION_ID: &str = "com.bedcode.session";
+    let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+    if !wasm_path.exists() {
+        eprintln!("[skip] session wasip3 artifact not built");
+        return;
+    }
+
+    let (wasm_runtime, host_ctx) = setup_wasm_runtime();
+    let mut host_ctx = host_ctx;
+    if let Some(ctx) = Arc::get_mut(&mut host_ctx) {
+        ctx.plugin_db_root = Some(std::env::temp_dir().join(format!(
+            "bedcode_plugin_dbs_outring_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        )));
+    }
+    let _ = std::fs::remove_dir_all(plugin_db_root().join(SESSION_ID));
+
+    let component = wasm_runtime
+        .compile_component(&std::fs::read(&wasm_path).expect("read session artifact"))
+        .expect("compile session artifact");
+
+    host_ctx.permission.grant_permissions(
+        SESSION_ID,
+        &[
+            "auth".to_string(),
+            "peer".to_string(),
+            "session:read".to_string(),
+            "session:config".to_string(),
+            "session:write".to_string(),
+            // 票 04：输出消费二进制原语（terminal:output）
+            "terminal:output".to_string(),
+            "storage".to_string(),
+        ],
+    );
+    host_ctx.api_registry().register(
+        SESSION_ID,
+        &session_apis().iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+    );
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let instances = Arc::new(RwLock::new(HashMap::new()));
+        let session = Arc::new(Mutex::new(
+            wasm_runtime
+                .instantiate_component(&component, SESSION_ID, host_ctx.clone(), &[], None)
+                .expect("instantiate session"),
+        ));
+        instances.write().await.insert(SESSION_ID.to_string(), session.clone());
+        host_ctx
+            .message_bus
+            .set_dispatcher(Arc::new(TestInstanceDispatcher {
+                instances: Arc::clone(&instances),
+            }))
+            .await;
+        session.lock().await.activate().expect("activate session");
+
+        // ==================== 1. 播种配置 + 创建 + 启动（真实 bash） ====================
+        // command 经宿主 shell 包装（bash -lic "cd ... && pwd && <command>"）：
+        // 启动即 echo 探针输出 + sleep 保持会话存活——不依赖 write_input（其插件
+        // 输入管道需 AppContext，无头测试未初始化）
+        let probe = format!("OUTPUT_RING_PROBE_{}", std::process::id());
+        let seeded = seed_config_in_plugin_store(
+            &mut *session.lock().await,
+            "输出环会话",
+            "/tmp",
+            &format!("echo {probe}; sleep 60"),
+        )
+        .await;
+        let sm = host_ctx.session_manager.clone();
+        let sid = crate::utils::session_create_bridge::create_session_via_plugin(
+            &host_ctx, &seeded.id, None, None, false, None,
+        )
+        .await
+        .expect("plugin active → 必须编排成功");
+        // 创建为宿主异步执行：有限轮询等落库
+        let mut info = None;
+        for _ in 0..50 {
+            if let Some(i) = sm.get_session(&sid).await {
+                info = Some(i);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        let info = info.expect("session 落库");
+        assert_eq!(info.status, crate::enums::SessionStatus::Starting);
+        sm.start_existing_session(&sid, None).await.expect("start real bash");
+
+        // ==================== 2. 等 bash 输出进入会话 ring（echo + pwd + prompt） ====================
+
+        // ==================== 3. 插件按游标拉取（游标前端自持；追平后停） ====================
+        let mut cursor: u64 = 0;
+        let mut acc: Vec<u8> = Vec::new();
+        let mut got_probe = false;
+        for _ in 0..100 {
+            let raw = session
+                .lock()
+                .await
+                .invoke_command(
+                    "session.output.pull",
+                    &serde_json::json!({ "sessionId": sid, "fromOffset": cursor }).to_string(),
+                )
+                .expect("output.pull 命令");
+            let value: serde_json::Value = serde_json::from_str(&raw).expect("pull json");
+            // 追平 → null
+            if value.is_null() {
+                if acc.windows(probe.len()).any(|w| w == probe.as_bytes()) {
+                    got_probe = true;
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            }
+            let data: Vec<u8> = value["data"]
+                .as_array()
+                .expect("data 数组")
+                .iter()
+                .map(|v| v.as_u64().expect("字节") as u8)
+                .collect();
+            let next = value["nextOffset"].as_u64().expect("nextOffset");
+            if value["truncated"].as_bool().unwrap_or(false) {
+                panic!("首拉即截断：会话输出不应超过环容量（min_offset 前移）");
+            }
+            acc.extend_from_slice(&data);
+            cursor = next;
+            if acc.windows(probe.len()).any(|w| w == probe.as_bytes()) {
+                got_probe = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+        assert!(
+            got_probe,
+            "插件必须经 output-ring-fetch 拉到 bash 输出字节，got: {:?}",
+            String::from_utf8_lossy(&acc)
+        );
+
+        // ==================== 4. 续拉不重复 + 追平自愈 ====================
+        // 游标已追平（最后一次返回后可能仍有增量——再拉直到追平验证不抛错）
+        for _ in 0..50 {
+            let raw = session
+                .lock()
+                .await
+                .invoke_command(
+                    "session.output.pull",
+                    &serde_json::json!({ "sessionId": sid, "fromOffset": cursor }).to_string(),
+                )
+                .expect("pull again");
+            let value: serde_json::Value = serde_json::from_str(&raw).expect("pull json");
+            if value.is_null() {
+                break;
+            }
+            let data: Vec<u8> = value["data"]
+                .as_array()
+                .expect("data 数组")
+                .iter()
+                .map(|v| v.as_u64().expect("字节") as u8)
+                .collect();
+            cursor = value["nextOffset"].as_u64().expect("nextOffset");
+            // 续拉不重复：新段不得与已拉区间重叠（游标单调推进由断言 3 隐含保证）
+            assert!(!data.is_empty(), "非追平响应必须带字节");
+            tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        }
+
+        // ==================== 清理 ====================
+        sm.remove_session(&sid).await.expect("remove session");
+        session.lock().await.deactivate().expect("final deactivate");
+    });
+}

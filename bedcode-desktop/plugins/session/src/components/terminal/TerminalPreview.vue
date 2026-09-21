@@ -156,8 +156,10 @@
  *
  * 与宿主版本差异（方案 1 迁入适配）：
  * - xterm 实例由插件创建（宿主不再提供 TerminalPreview）；
- * - 输出源经注入桥接（`caps.output.attachSink`）——宿主 Tauri Channel 订阅
- *   的 Raw 字节帧直接入写入管线（票 04 换 WIT 二进制原语后撤桥）；
+ * - 输出源（票 04 起）经插件 WASM 命令面 `session.output.pull` 轮询拉取——插件
+ *   Rust 后端调 `host-session.output-ring-fetch` 原语（WIT `list<u8>` 二进制直传，
+ *   不 JSON 化），前端定时拉取写入管线；宿主 Channel 桥（`caps.output.attachSink`）
+ *   已不再调用，契约字段保留至票 05 宿主摘除；
  * - 终端设置经注入 `TerminalSettingsAccessor`（宿主 settingsStore 桥；
  *   无注入环境用内存版 fallback，dev-shell/vitest 可独立渲染）；
  * - resize 请求经插件 WASM 命令面 `session.action.resize`（host-session
@@ -183,7 +185,7 @@ import { platform } from '@tauri-apps/plugin-os'
 import type { PluginContext } from '@binblink/bedcode-plugin-sdk-desktop'
 import type { SessionInfo } from '../../composables/terminal/model'
 import { createTerminalKernel } from '../../composables/terminal/terminalKernel'
-import { useTerminalWritePipeline } from '../../composables/terminal/useTerminalWritePipeline'
+import { useTerminalWritePipeline, type TerminalOutputSink } from '../../composables/terminal/useTerminalWritePipeline'
 import { useTerminalScroll } from '../../composables/terminal/useTerminalScroll'
 import { useTerminalRenderer } from '../../composables/terminal/useTerminalRenderer'
 import { useTerminalResize, type ResizeRequester, type ResizeOutcome } from '../../composables/terminal/useTerminalResize'
@@ -298,8 +300,101 @@ let resizeDebouncer: TerminalResizeDebouncer | null = null
 let windowVisibleHandler: (() => void) | null = null
 let hasSelection = false
 let wheelHandler: ((e: WheelEvent) => void) | null = null
-// 输出源订阅断开函数（宿主桥 attachSink 返回值）
-let detachOutput: (() => void) | null = null
+// ==================== 输出拉取（票 04：撤宿主 Channel 桥，改经插件 WASM 原语轮询） ====================
+//
+// 宿主 Channel 桥（caps.output.attachSink）已撤：输出改为前端定时经插件命令面
+// `session.output.pull` 拉取（插件 Rust 后端 → `host-session.output-ring-fetch` 原语，
+// WIT `list<u8>` 二进制直传不 JSON 化）。游标（nextOffset）前端自持——慢消费只损失
+// 自己的 ring 历史（`truncated` 时清屏重锚），宿主环绝不回传背压。
+
+/** 快档轮询间隔（ms）：活跃输出期经此节奏拉取 */
+const OUTPUT_PULL_INTERVAL_MS = 100
+/** 单 tick 最多连续拉批数（每批 ≤16 KiB）：输出风暴时一次拿净积压，避免每 tick 只挪
+ *  16 KiB 的拖尾；批数封顶防单 tick 长占主线程 */
+const OUTPUT_PULL_MAX_BATCHES = 8
+/** 连续空闲（追平）次数达到该值后降为慢档轮询 */
+const OUTPUT_IDLE_THRESHOLD = 5
+/** 慢档轮询间隔（ms）：空闲期省 invoke 往返；有数据立即回到快档 */
+const OUTPUT_IDLE_INTERVAL_MS = 500
+
+/** 写入管线 sink（attachSource 返回值；轮询回调写入目标） */
+let outputSink: TerminalOutputSink | null = null
+/** 拉取游标（= 下一批的 fromOffset；追平后停在产出端） */
+let outputCursor = 0
+let pullTimer: ReturnType<typeof setInterval> | null = null
+let pullInFlight = false
+/** 连续追平计数（空闲退避依据） */
+let idleStreak = 0
+
+/** 拉一轮：单 tick 内最多连续拉 OUTPUT_PULL_MAX_BATCHES 批，返回是否仍有余量 */
+async function pullOnce(): Promise<boolean> {
+  if (pullInFlight || !props.session?.id || !outputSink) return false
+  pullInFlight = true
+  try {
+    for (let i = 0; i < OUTPUT_PULL_MAX_BATCHES; i++) {
+      const res: unknown = await context.commands.execute('session.output.pull', {
+        sessionId: props.session.id,
+        fromOffset: outputCursor,
+      })
+      // null = 游标已追平产出端（宿主 output-ring-fetch Ok(None)）
+      if (res === null || res === undefined) return false
+      const r = res as { data?: number[]; nextOffset?: number; truncated?: boolean }
+      const next = typeof r.nextOffset === 'number' ? r.nextOffset : outputCursor
+      if (r.truncated) {
+        // resync：游标落后于环驻留起点（中间字节已被淘汰）→ 清屏重锚后从现存段起播
+        outputSink.onReset()
+        outputSink.onTruncated(outputCursor)
+      }
+      outputCursor = next
+      if (Array.isArray(r.data) && r.data.length > 0) {
+        outputSink.onData({ data: new Uint8Array(r.data) })
+      }
+      // 空段（含 truncated 但无驻留字节）= 追平；有数据但不满批 → 下批大概率追平，
+      // 提前让出（少一次 invoke 往返）
+      if (!r.data || r.data.length === 0) return false
+    }
+    return true
+  } finally {
+    pullInFlight = false
+  }
+}
+
+async function pullTick() {
+  const hadMore = await pullOnce()
+  idleStreak = hadMore ? 0 : idleStreak + 1
+  // 自适应间隔：连续空闲后降为慢档（省 invoke），任一 tick 有数据立即回快档
+  if (idleStreak === OUTPUT_IDLE_THRESHOLD && pullTimer) {
+    clearInterval(pullTimer)
+    pullTimer = setInterval(() => void pullTick(), OUTPUT_IDLE_INTERVAL_MS)
+  }
+}
+
+function stopOutputPull() {
+  if (pullTimer) {
+    clearInterval(pullTimer)
+    pullTimer = null
+  }
+  pullInFlight = false
+  idleStreak = 0
+}
+
+/** 接入输出源（票 04：插件 WASM 原语轮询拉取 → 写入管线）；会话停止/卸载时断开 */
+function attachOutputSource() {
+  if (!props.session?.id) return
+  stopOutputPull()
+  pipeline.resetTruncatedNotified()
+  outputCursor = 0
+  outputSink = pipeline.attachSource()
+  pipeline.armReplayRefresh()
+  // 先立即拉一轮（历史回放），再进入自适应轮询
+  void pullOnce()
+  pullTimer = setInterval(() => void pullTick(), OUTPUT_PULL_INTERVAL_MS)
+}
+
+function detachOutputSource() {
+  stopOutputPull()
+  outputSink = null
+}
 
 function initTerminal() {
   if (!terminalHostRef.value) return
@@ -501,30 +596,15 @@ function initTerminal() {
   })
 }
 
-/** 接入输出源（宿主 Channel 订阅 → 写入管线）；会话停止/卸载时断开 */
-function attachOutputSink() {
-  if (!props.session?.id) return
-  detachOutput?.()
-  pipeline.resetTruncatedNotified()
-  const sink = pipeline.attachSource()
-  pipeline.armReplayRefresh()
-  detachOutput = caps.output.attachSink(sink)
-}
-
-function detachOutputSink() {
-  detachOutput?.()
-  detachOutput = null
-}
-
 // 会话状态变化：停止/出错时断开输出流；重新运行时恢复订阅
 watch(
   () => props.session?.status,
   (status) => {
     if (!sessionId.value) return
     if (status === 'stopped' || status === 'error') {
-      detachOutputSink()
+      detachOutputSource()
     } else if (status === 'running' || status === 'starting') {
-      attachOutputSink()
+      attachOutputSource()
     }
   },
 )
@@ -576,15 +656,15 @@ onMounted(async () => {
 
   // 输出流：会话 running/starting 时接入（历史回放 + 实时推送同通道流式到达）
   if (props.session?.status === 'running' || props.session?.status === 'starting') {
-    attachOutputSink()
+    attachOutputSource()
   }
 
   kernel.terminalRef.value?.focus()
 })
 
 onUnmounted(() => {
-  // 断开输出源订阅（停止重连）
-  detachOutputSink()
+  // 断开输出源轮询（停止拉取与重连）
+  detachOutputSource()
 
   // 清理 xterm onScroll 监听与待处理的滚动 rAF
   scroll.disposeScroll()

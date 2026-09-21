@@ -193,6 +193,13 @@
 2. A4 权限位：新增 `terminal:output` vs 复用 `session:read`；
 3. xterm 打包体积：内置 vs 宿主 externals 清单扩展（推荐内置，见 A1 定案）。
 
+> **开放点定案（票 04 实施时，2026-09-22）**：① host-session 追加 `output-ring-fetch`
+> （不 bump ABI——函数级追加沿用 v19 同批次惯例；record `ring-fetch-result` 与
+> host-pty 同形）。② 复用既有 `terminal:output` 权限位（已在 SDK permission.rs /
+> 宿主导出词汇中，无需新增权限、无需跑 gen:permissions；权限门 → 属主校验 → 拉取）。
+> ③ xterm 内置（票 02 已定）。属主语义沿用票 04 P0-3：只有创建方插件可拉取自己
+> 会话的输出（`ensure_session_owner`，与 terminal_send 同形态）。
+
 ---
 
 ## 6. 风险与控制

@@ -48,6 +48,7 @@ pub use platform::HostPlatform;
 pub use process::{HostProcess, ProcessSyncResult};
 pub use pty::{pty_event_topic, HostPty, PtyRingFetch, PtySpawnConfig, PTY_EXIT};
 pub use session::HostSession;
+pub use session::SessionRingFetch;
 pub use storage::HostStorage;
 pub use task::{HostTask, TaskPlan, TaskProgress, TaskUnit};
 pub use terminal::HostTerminal;

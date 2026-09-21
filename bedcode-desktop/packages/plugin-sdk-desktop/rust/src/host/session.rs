@@ -2,6 +2,20 @@
 
 use super::HostError;
 
+/// 一次会话输出环拉取的返回（对应 WIT `ring-fetch-result`，票 04）
+///
+/// 与 [`crate::host::pty::PtyRingFetch`] 同形：会话输出环与插件私有 PTY 环共享
+/// 同一字节偏移语义（`[实际起点, next_offset)` 区间，游标续拉不重复）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionRingFetch {
+    /// `[实际起点, next_offset)` 区间的原始字节（未解码，可能是非 UTF-8）
+    pub data: Vec<u8>,
+    /// 下一次拉取应传的游标
+    pub next_offset: u64,
+    /// 传入游标落后于环驻留起点（有字节被淘汰）→ 需 resync 重建上下文
+    pub truncated: bool,
+}
+
 /// 会话信息与生命周期
 ///
 /// 查询类方法需要 `session:read` 权限（会话配置列表含 working_dir 等路径信息）。
@@ -108,4 +122,22 @@ pub trait HostSession {
     /// fingerprint?, addr, authenticated, connectedAt}`），不过滤不合并不加派生字段
     /// ——在线判定 / 会话数 / 任务状态合并是插件侧派生视图的职责（spec D3/D4）。
     fn connections_list(&self) -> Result<serde_json::Value, HostError>;
+
+    /// 会话输出环拉取（票 04，需要 `terminal:output` 权限 + 属主校验）：按游标拉取
+    /// 会话输出原始字节（WIT `list<u8>` 直传，不 JSON 化）。
+    ///
+    /// 数据面语义与 [`crate::host::pty::HostPty::pty_ring_fetch`] 完全一致：
+    /// - `Ok(None)`：游标已追平产出端，无新字节
+    /// - `Ok(Some)`：自游标起的字节 + `next-offset`（续拉不重复）；`truncated = true`
+    ///   表示游标落后于环驻留起点（中间字节已被淘汰），调用方需清屏重锚（resync）
+    /// - `Err`：会话不存在 / 非属主 / 权限缺失
+    ///
+    /// 宿主 GlobalOutputManager 保有环本体；游标由调用方自持——慢消费只损失
+    /// 自己的历史，背压绝不回传到产出端。
+    fn session_output_ring_fetch(
+        &self,
+        session_id: &str,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<SessionRingFetch>, HostError>;
 }

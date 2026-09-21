@@ -48,6 +48,8 @@ mod environment;
 mod launch;
 /// 文件浏览域（票 03）：文件树 / 内容 / diff（host-fs + host-process，见模块文档）
 pub mod file_browse;
+/// 终端输出拉取域（票 04）：经 host-session output-ring-fetch 原语拉取会话输出字节
+mod output;
 mod pairing;
 mod policy;
 /// 快捷指令域（票 02 第 4 域）：私有库持久化 + HTTP 查询面 + 迁移导入
@@ -819,6 +821,12 @@ impl WasmPlugin for SessionPlugin {
             // 尺寸裁决 {sessionId, cols, rows, requester, force?} → ResizeOutcome
             "session.action.resize" => actions::resize_via_host(&args).map_err(anyhow::Error::msg),
 
+            // ==================== 票 04 命令面（终端输出数据面） ====================
+            // 输出环拉取 {sessionId, fromOffset, maxBytes?} → null | {data, nextOffset,
+            // truncated}。经 host-session.output-ring-fetch 原语（WIT list<u8> 直传）
+            // 拉会话输出原始字节；游标由前端自持（slow consumer 只损失自己的历史）。
+            "session.output.pull" => output::pull_via_host(&args).map_err(anyhow::Error::msg),
+
             // ==================== 票 11 命令面（注解槽写面 + 设备派生视图） ====================
             // 与互调 api 面共享同一实现（`*_via_host`）；命令面保留供宿主闭环测试直调。
 
@@ -1042,7 +1050,6 @@ impl WasmPlugin for SessionPlugin {
             }
 
             // ==================== 预设任务 ====================
-
             "session.task.preset-list" => {
                 let presets = task::preset::list_presets(&WasmHost);
                 Ok(serde_json::json!({ "presets": presets }))
@@ -1099,10 +1106,9 @@ impl WasmPlugin for SessionPlugin {
                 if preset_id.is_empty() {
                     return Err(anyhow::anyhow!("add-preset-to-queue: missing preset_id"));
                 }
-                let (task_id, position) = task::preset::add_preset_to_queue(
-                    &WasmHost, &session_id, &preset_id,
-                )
-                .map_err(anyhow::Error::msg)?;
+                let (task_id, position) =
+                    task::preset::add_preset_to_queue(&WasmHost, &session_id, &preset_id)
+                        .map_err(anyhow::Error::msg)?;
                 dispatch_if_eligible_and_broadcast(&session_id, "add", None, None);
                 task::preset::broadcast_preset_changed(&WasmHost, &preset_id, "enqueue");
                 Ok(serde_json::json!({ "task_id": task_id, "position": position }))

@@ -431,6 +431,32 @@ interface host-session {
     /// （`clientId` = 注册表键 = 连接地址串；`deviceName` / `fingerprint` 来自
     /// JWT claims，认证前为 null；`connectedAt` 为 epoch 毫秒）。
     connections-list: func() -> result<string, string>;
+
+    /// 一次拉取的返回（游标语义见 `output-ring-fetch`；与 host-pty `ring-fetch-result`
+    /// 同形——会话输出环与插件私有 PTY 环共享同一字节偏移语义，spec D3）
+    record ring-fetch-result {
+        /// `[实际起点, next-offset)` 区间的原始字节（未解码，可能是非 UTF-8）
+        data: list<u8>,
+        /// 下一次拉取应传的游标
+        next-offset: u64,
+        /// `from-offset` 落后于环驻留起点（中间字节已被淘汰）→ 调用方按 resync 重建上下文
+        truncated: bool,
+    }
+
+    /// 会话输出环拉取（票 04，权限 `terminal:output` + 属主校验）：按游标拉取
+    /// 会话输出原始字节（`list<u8>` 直传，不 JSON 化）。
+    ///
+    /// 数据面语义与 host-pty `ring-fetch` 完全一致：
+    /// - `Ok(None)`：游标已追平产出端，无新字节
+    /// - `Ok(Some)`：自游标起的字节（单次不超 `max-bytes`，宿主钳位上限），
+    ///   `next-offset` 续拉不重复
+    /// - `truncated = true`：`from-offset` 落后于环驻留起点（中间字节已被淘汰），
+    ///   返回的是现存最早段——调用方按 resync 清屏重锚，慢消费只损失自己的历史
+    /// - `Err`：会话不存在 / 非属主 / 权限缺失
+    ///
+    /// 宿主 GlobalOutputManager 保有环本体；游标由调用方（插件）自持——插件注册
+    /// 游标 + 自有水位，宿主不做任何投递（背压语义沿用 2026-09-17 pull 模型）。
+    output-ring-fetch: func(session-id: string, from-offset: u64, max-bytes: u32) -> result<option<ring-fetch-result>, string>;
 }
 
 /// 主数据库（原 database.rs：db_execute/query/execute_params/query_params）

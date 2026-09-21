@@ -11,8 +11,9 @@
  * 原语同构——宿主留引擎原语，插件持编排）：
  * - 终端设置持久化（宿主 settingsStore，terminal_* 字段）——TerminalSettingsAccessor
  * - 背景图文件命令（宿主 set_terminal_bg_image 复制文件 + 设置持久化）
- * - 输出流（宿主 Tauri Channel 订阅，Raw 字节直推非 JSON；票 04 换 WIT 二进制
- *   原语后撤桥，插件 WASM 直接拉会话 ring）
+ * - 输出流（票 04 起插件已撤桥：输出改经插件 WASM 命令面轮询拉取
+ *   `host-session.output-ring-fetch` 原语，WIT list<u8> 二进制直传；本字段为票 05
+ *   宿主摘除前的兼容残留，插件不再调用 attachSink）
  * - 插件扩展点（宿主 registry 响应式数组；壳复刻渲染宿主 Plugin*Toolbar 组件
  *   的等效按钮）
  *
@@ -50,7 +51,10 @@ export interface TerminalHostCapabilities {
     /** 是否已启用背景图片 */
     hasImage: boolean
   }
-  /** 输出流桥（宿主 Tauri Channel 订阅 → 写入管线；票 04 撤桥换 WIT 原语） */
+  /**
+   * 输出流桥（票 04 起插件不再调用——输出改经插件 WASM 命令面轮询拉取
+   * `host-session.output-ring-fetch` 原语；字段保留至票 05 宿主摘除）
+   */
   output: {
     /** 接入输出源：订阅宿主 Channel，三回调映射到 sink；返回断开函数 */
     attachSink(sink: TerminalOutputSink): () => void

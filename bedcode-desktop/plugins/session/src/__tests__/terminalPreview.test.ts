@@ -1,22 +1,26 @@
 /**
- * 终端渲染组件（插件版）组装集成测试（票 03a / 03b）
+ * 终端渲染组件（插件版）组装集成测试（票 03a / 03b / 04）
  *
  * 被测对象：`TerminalPreview.vue`（自宿主拆分产物迁入后的组装层——xterm
  * 实例化 + kernel / writePipeline / renderer / resize / scroll / settingsSync
- * / IME 各域接线 + 输出桥 attachSink）。
+ * / IME 各域接线 + 输出拉取轮询）。
  *
  * 行为契约：方案 1 迁移后渲染链路逐字等价宿主（宿主 terminal-flow 集成测试
  * 接缝不变），本文件补**组件级组装**验证：
- * - 输出桥接线：caps.output.attachSink 在 running 会话挂载时被调，字节帧
- *   sink.onData → 写入管线 → 真实 xterm buffer 渲染（DOM 渲染器，.xterm-rows
- *   文本可读——happy-dom 无 WebGL 上下文，initWebGL 按设计回退 DOM，双赢）；
+ * - 输出拉取（票 04）：running 会话挂载时经插件命令面 `session.output.pull`
+ *   轮询拉取（插件 WASM → host-session.output-ring-fetch 原语，WIT list<u8>
+ *   二进制直传）；返回的数据帧 sink.onData → 写入管线 → 真实 xterm buffer
+ *   渲染（DOM 渲染器，.xterm-rows 文本可读——happy-dom 无 WebGL 上下文，
+ *   initWebGL 按设计回退 DOM，双赢）；
+ * - truncated resync：宿主环淘汰后游标落后 → 清屏重锚 + 截断提示（toast）；
  * - 设置同步 watch 行为（handoff 点名补验）：字号/主题变化 → 防抖持久化到
  *   accessor（save 调用），外部变化同步；
- * - 卸载清理：attachSink 返回的 detach 被调、防抖 timer 不再触发 save。
+ * - 卸载清理：轮询定时器停止（不再有新的 pull 调用）、防抖 timer 不再触发 save。
  *
  * 测试 seam（与宿主 terminal-flow 同策略）：
  * - 真实 xterm（happy-dom 中 open() 进带尺寸 DOM 元素可用，宿主已实测）；
- * - 真实 timers（xterm 解析/渲染依赖真实异步 tick，不用 fake timers）；
+ * - 真实 timers（xterm 解析/渲染依赖真实异步 tick；轮询 interval 亦为真实
+ *   setInterval——卸载清理断言依赖 interval 停止后调用数冻结）；
  * - mock 边界：vue-i18n（t 恒等）、vue-sonner（toast）、@tauri-apps/plugin-os
  *   （platform → windows，isLinux=false 走 WebGL→回退 DOM 路径）；
  * - 容器显式尺寸（happy-dom 无布局引擎，clientWidth/Height 取 style 值）。
@@ -78,10 +82,9 @@ function makeSettings(overrides?: Partial<TerminalSettingsAccessor>): TerminalSe
   return accessor
 }
 
-/** mock caps：attachSink 捕获 sink + 记录 detach 调用 */
+/** mock caps：output 桥字段保留（契约兼容至票 05），断言目标转为 pull 命令 */
 function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCapabilities {
   const settings = makeSettings()
-  const attachSink = vi.fn((_sink: unknown) => vi.fn())
   return {
     settings,
     bgImage: {
@@ -90,7 +93,7 @@ function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCa
       imageName: '',
       hasImage: false,
     },
-    output: { attachSink },
+    output: { attachSink: vi.fn(() => vi.fn()) },
     extensions: {
       terminalToolbarItems: { value: [] } as never,
       titleBarItems: { value: [] } as never,
@@ -100,15 +103,27 @@ function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCa
   }
 }
 
-function makeContext(): PluginContext {
+/**
+ * mock context：命令面按名路由——`session.output.pull` 默认返回 null（追平），
+ * 用例可注入数据帧队列（依次出队）；`session.action.resize` 默认 applied。
+ */
+interface TestContext extends PluginContext {
+  /** 注入输出拉取响应队列（依次出队；队空后返回 null 追平） */
+  __setPullResponses: (items: (unknown | null)[]) => void
+}
+
+function makeContext(): TestContext {
+  let pullResponses: (unknown | null)[] = []
+  const execute = vi.fn(async (cmd: string) => {
+    if (cmd === 'session.output.pull') {
+      const next = pullResponses.shift()
+      return next === undefined ? null : next
+    }
+    if (cmd === 'session.action.resize') return { status: 'applied', canonical: { kind: 'desktop' } }
+    return null
+  })
   return {
-    // resize 裁决默认返回 applied（服务端正统渲染端）；具体命令行为按用例覆盖
-    commands: {
-      execute: vi.fn(async (_cmd: string) => ({
-        status: 'applied',
-        canonical: { kind: 'desktop' },
-      })),
-    },
+    commands: { execute },
     terminal: { sendInput: vi.fn(), onOutput: vi.fn(() => () => {}), onInput: vi.fn(() => () => {}) },
     session: { list: vi.fn(), get: vi.fn(), onStatusChange: vi.fn(() => () => {}) },
     ui: {} as never,
@@ -119,7 +134,11 @@ function makeContext(): PluginContext {
     _disposables: [],
     id: 'com.bedcode.session',
     extensionPath: '',
-  } as unknown as PluginContext
+    // 返回对象带注入器：测试用例设置拉取响应队列
+    __setPullResponses: (items: (unknown | null)[]) => {
+      pullResponses = items
+    },
+  } as unknown as TestContext
 }
 
 function makeRunningSession(): SessionInfo {
@@ -163,6 +182,27 @@ function vm(wrapper: VueWrapper): ExposedTerminalPreview {
   return wrapper.vm as unknown as ExposedTerminalPreview
 }
 
+/** 挂载 running 会话（公共夹具）并等待输出拉取就绪 */
+async function mountRunning() {
+  const context = makeContext()
+  wrapper = mount(TerminalPreview, {
+    props: { session: makeRunningSession() },
+    global: {
+      provide: {
+        pluginContext: context,
+        [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
+      },
+    },
+    attachTo: document.body,
+  })
+  // 就绪信号：轮询已发起（pull 命令被调）+ xterm 挂载
+  await vi.waitFor(() => expect(context.commands.execute).toHaveBeenCalledWith('session.output.pull', expect.anything()), {
+    timeout: 2000,
+  })
+  await flushAsync()
+  return context
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true })
@@ -175,31 +215,33 @@ afterEach(() => {
 })
 
 describe('TerminalPreview（插件版组装）', () => {
-  it('挂载 running 会话：接入输出桥 + 实例化真实 xterm', async () => {
-    const context = makeContext()
-    wrapper = mount(TerminalPreview, {
-      props: { session: makeRunningSession() },
-      global: {
-        provide: {
-          pluginContext: context,
-          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
-        },
-      },
-      attachTo: document.body,
-    })
-
-    // onMounted 异步链完成后：输出桥被接入（running 状态 attach）
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
+  it('挂载 running 会话：发起输出拉取轮询 + 实例化真实 xterm', async () => {
+    const context = await mountRunning()
     // 真实 xterm 已挂载进容器（.xterm 元素存在）
-    expect(wrapper.element.querySelector('.xterm')).toBeTruthy()
+    expect(wrapper!.element.querySelector('.xterm')).toBeTruthy()
+    // 轮询经插件命令面拉取（票 04 撤宿主 Channel 桥：不再经 caps.output.attachSink）
+    expect(vi.mocked(caps.output.attachSink)).not.toHaveBeenCalled()
+    expect(context.commands.execute).toHaveBeenCalledWith(
+      'session.output.pull',
+      expect.objectContaining({ sessionId: 'sess-1', fromOffset: 0 }),
+    )
     // expose 的响应式状态初始值 = accessor 初始值（wrapper.vm 对 exposed ref 自动解包）
-    expect(vm(wrapper).fontSize).toBe(12)
-    expect(vm(wrapper).terminalTheme).toBe('dracula')
-    expect(vm(wrapper).themeNames).toHaveProperty('dracula')
+    expect(vm(wrapper!).fontSize).toBe(12)
+    expect(vm(wrapper!).terminalTheme).toBe('dracula')
+    expect(vm(wrapper!).themeNames).toHaveProperty('dracula')
   })
 
-  it('输出帧经写入管线渲染到 xterm buffer（DOM 渲染器文本可读）', async () => {
+  it('输出数据帧经写入管线渲染到 xterm buffer（DOM 渲染器文本可读）', async () => {
     const context = makeContext()
+    const text = 'hello terminal\r\nworld'
+    // 首批返回数据帧（字节数组 = WASM 原语拉取后插件命令面的 wire 形状），后续追平
+    context.__setPullResponses([
+      {
+        data: Array.from(new TextEncoder().encode(text)),
+        nextOffset: text.length,
+        truncated: false,
+      },
+    ])
     wrapper = mount(TerminalPreview, {
       props: { session: makeRunningSession() },
       global: {
@@ -210,26 +252,35 @@ describe('TerminalPreview（插件版组装）', () => {
       },
       attachTo: document.body,
     })
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
-
-    // 取出接入的 sink，注入一帧字节（宿主 Channel 帧已过游标校验，直接入队）
-    const sink = vi.mocked(caps.output.attachSink).mock.calls[0][0]
-    sink.onData({ data: new TextEncoder().encode('hello terminal') })
-    sink.onData({ data: new TextEncoder().encode('\r\nworld') })
 
     // 写入管线 rAF 合并 → terminal.write → xterm 解析 → DOM 渲染器文本
     await vi.waitFor(
       () => {
-        const text = renderedRowsText(wrapper!)
-        expect(text).toContain('hello terminal')
-        expect(text).toContain('world')
+        const rendered = renderedRowsText(wrapper!)
+        expect(rendered).toContain('hello terminal')
+        expect(rendered).toContain('world')
       },
       { timeout: 3000 },
     )
+
+    // 游标已推进：下一次拉取带上 nextOffset（续拉不重复）
+    const pullArgs = vi.mocked(context.commands.execute).mock.calls
+      .filter(([cmd]) => cmd === 'session.output.pull')
+      .map(([, args]) => args)
+    expect(pullArgs.some((args) => (args as { fromOffset?: number }).fromOffset === text.length)).toBe(true)
   })
 
-  it('字号变化 → options 生效 + 300ms 防抖持久化（accessor.save）', async () => {
+  it('truncated 重锚：环淘汰后游标落后 → 清屏 + 截断提示 + 从现存段起播', async () => {
     const context = makeContext()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    // 首帧 truncated：现存段 [8,12) = "tail"（min_offset=8）
+    context.__setPullResponses([
+      {
+        data: Array.from(new TextEncoder().encode('tail')),
+        nextOffset: 12,
+        truncated: true,
+      },
+    ])
     wrapper = mount(TerminalPreview, {
       props: { session: makeRunningSession() },
       global: {
@@ -240,10 +291,27 @@ describe('TerminalPreview（插件版组装）', () => {
       },
       attachTo: document.body,
     })
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
+
+    // 现存段渲染（清屏重锚后播放）
+    await vi.waitFor(() => expect(renderedRowsText(wrapper!)).toContain('tail'), { timeout: 3000 })
+    // 截断提示（historyTruncated 首次触发：logTruncated 经 console.warn 落日志）
+    await vi.waitFor(
+      () => expect(warnSpy.mock.calls.some((args) => String(args[0]).includes('截断'))).toBe(true),
+      { timeout: 2000 },
+    )
+    // 游标落回 nextOffset（后续拉取不带旧游标）
+    const pullArgs = vi.mocked(context.commands.execute).mock.calls
+      .filter(([cmd]) => cmd === 'session.output.pull')
+      .map(([, args]) => args)
+    expect(pullArgs.some((args) => (args as { fromOffset?: number }).fromOffset === 12)).toBe(true)
+    warnSpy.mockRestore()
+  })
+
+  it('字号变化 → options 生效 + 300ms 防抖持久化（accessor.save）', async () => {
+    await mountRunning()
 
     // 用户侧字号变化（非 Linux：不乘 1.15；wrapper.vm 对 exposed ref 自动解包，赋值写回）
-    vm(wrapper).fontSize = 16
+    vm(wrapper!).fontSize = 16
     await nextTick()
 
     // 防抖窗口内不持久化
@@ -255,38 +323,15 @@ describe('TerminalPreview（插件版组装）', () => {
   })
 
   it('主题变化 → 300ms 防抖持久化（accessor.save）', async () => {
-    const context = makeContext()
-    wrapper = mount(TerminalPreview, {
-      props: { session: makeRunningSession() },
-      global: {
-        provide: {
-          pluginContext: context,
-          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
-        },
-      },
-      attachTo: document.body,
-    })
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
-
-    vm(wrapper).terminalTheme = 'light'
+    await mountRunning()
+    vm(wrapper!).terminalTheme = 'light'
     await vi.waitFor(() => expect(caps.settings.save).toHaveBeenCalledWith({ theme: 'light' }), {
       timeout: 1500,
     })
   })
 
   it('外部设置变化同步（accessor save 写回 → 外部 watch 捕获）', async () => {
-    const context = makeContext()
-    wrapper = mount(TerminalPreview, {
-      props: { session: makeRunningSession() },
-      global: {
-        provide: {
-          pluginContext: context,
-          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
-        },
-      },
-      attachTo: document.body,
-    })
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
+    await mountRunning()
 
     // 模拟宿主设置面板外部修改：save 写回 accessor 内存值（mock accessor 的
     // save 已实现写回 getter）→ settingsSync 的外部变化 watch 应同步 fontSize
@@ -295,30 +340,27 @@ describe('TerminalPreview（插件版组装）', () => {
     await vi.waitFor(() => expect(vm(wrapper!).fontSize).toBe(18), { timeout: 1000 })
   })
 
-  it('卸载清理：断开输出桥 + 防抖 timer 不再触发 save', async () => {
-    const context = makeContext()
-    wrapper = mount(TerminalPreview, {
-      props: { session: makeRunningSession() },
-      global: {
-        provide: {
-          pluginContext: context,
-          [TERMINAL_HOST_CAPABILITIES_KEY]: caps,
-        },
-      },
-      attachTo: document.body,
-    })
-    await vi.waitFor(() => expect(caps.output.attachSink).toHaveBeenCalled(), { timeout: 2000 })
+  it('卸载清理：轮询停止（无新 pull 调用）+ 防抖 timer 不再触发 save', async () => {
+    const context = await mountRunning()
 
     // 触发一个防抖窗口内的字号变化（timer 挂起）
-    vm(wrapper).fontSize = 14
+    vm(wrapper!).fontSize = 14
     await nextTick()
 
-    // 卸载：输出桥 detach 被调；xterm dispose 清理
-    const detach = vi.mocked(caps.output.attachSink).mock.results[0].value
-    wrapper.unmount()
+    // 卸载：xterm dispose 清理；轮询定时器清掉
+    wrapper!.unmount()
     wrapper = null
-    expect(detach).toHaveBeenCalled()
     expect(document.querySelector('.xterm')).toBeNull()
+
+    const pullCalls = vi.mocked(context.commands.execute).mock.calls.filter(
+      ([cmd]) => cmd === 'session.output.pull',
+    ).length
+    // 等待超过轮询快档间隔（100ms）——卸载后不再有新的 pull 调用
+    await new Promise((r) => setTimeout(r, 350))
+    const pullCallsAfter = vi.mocked(context.commands.execute).mock.calls.filter(
+      ([cmd]) => cmd === 'session.output.pull',
+    ).length
+    expect(pullCallsAfter).toBe(pullCalls)
 
     // disposeSettingsSync 已取消防抖：等待超过防抖窗口后不再有新增 save 调用
     const saveCalls = vi.mocked(caps.settings.save).mock.calls.length

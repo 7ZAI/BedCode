@@ -92,6 +92,20 @@ impl RingSlice {
     }
 }
 
+/// 一次游标拉取的返回（票 04 `output-ring-fetch` 原语数据面）
+///
+/// 语义与 [`crate::pty::pty_ring::PtyRingFetch`] 同形：会话输出环与插件私有
+/// PTY 环共享同一字节偏移模型（`[实际起点, next_offset)` 区间，续拉不重复）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RingFetchOutput {
+    /// `[实际起点, next_offset)` 区间的原始字节（未解码，可能是非 UTF-8）
+    pub data: Vec<u8>,
+    /// 下一次拉取应传的游标
+    pub next_offset: u64,
+    /// 传入游标落后于环驻留起点（中间字节已被淘汰）→ 调用方按 resync 重建上下文
+    pub truncated: bool,
+}
+
 /// 统一输出队列（字节块环形队列，TB v3）
 ///
 /// 双重容量限制（均为字节/条目级软上限）：
@@ -219,6 +233,30 @@ impl UnifiedOutputQueue {
             }
         }
         out
+    }
+
+    /// 按游标拉取至多 `max_bytes` 字节（跨块合并，对消费者隐藏块边界；票 04
+    /// `output-ring-fetch` 原语的数据面，语义与 `pty_ring.rs::PtyRing::fetch` 一致）
+    ///
+    /// 游标钳位规则（全部路径都返回可用的 `next_offset`，调用方无需判错）：
+    /// - 落后于 `min_offset`（数据已淘汰）→ 从 `min_offset` 起返回，`truncated = true`
+    /// - 超前于 `max_offset`（非法/未来游标）→ 按「已追平」处理，回带 `max_offset` 自愈
+    pub fn fetch(&self, from_offset: u64, max_bytes: usize) -> RingFetchOutput {
+        let truncated = from_offset < self.min_offset;
+        let start = from_offset.max(self.min_offset).min(self.max_offset);
+        let end = self.max_offset.min(start.saturating_add(max_bytes as u64));
+        if end <= start {
+            return RingFetchOutput {
+                data: Vec::new(),
+                next_offset: start,
+                truncated,
+            };
+        }
+        RingFetchOutput {
+            data: self.range(start, end),
+            next_offset: end,
+            truncated,
+        }
     }
 
     // ==================== 拉取模型读取（订阅者游标推进） ====================
@@ -971,6 +1009,80 @@ mod tests {
         // 12B > 6B：while 淘汰至 6B 内（4B 块每次淘汰一块）→ 仅驻留 [8,12)
         assert_eq!(queue.min_offset(), 8);
         assert_eq!(queue.range(0, 12), b"test"); // 起点收敛到 min_offset
+    }
+
+    // ==================== 票 04：游标拉取（output-ring-fetch 数据面） ====================
+
+    /// 基本拉取：跨块合并 + next_offset 续拉不重复 + 追平返回空段
+    #[test]
+    fn fetch_basic_merge_and_catchup() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
+        for _ in 0..3 {
+            queue.push(make_event()); // 3×4B = [0,12)
+        }
+
+        let first = queue.fetch(0, 16);
+        assert_eq!(first.data, b"testtesttest");
+        assert_eq!(first.next_offset, 12);
+        assert!(!first.truncated);
+
+        // 追平：游标 = 产出端 → 空段（truncated = false，不是缺口）
+        let catchup = queue.fetch(12, 16);
+        assert!(catchup.data.is_empty());
+        assert_eq!(catchup.next_offset, 12);
+        assert!(!catchup.truncated);
+    }
+
+    /// max_bytes 截断：单次拉取不超过预算；半块裁头跨块合并（隐藏块边界）
+    #[test]
+    fn fetch_respects_budget_and_slices_chunks() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
+        for _ in 0..3 {
+            queue.push(make_event()); // [0,12)
+        }
+
+        let capped = queue.fetch(0, 7);
+        assert_eq!(capped.data, b"testtes");
+        assert_eq!(capped.next_offset, 7);
+        assert!(!capped.truncated);
+
+        // [5,11)：块尾 3B + 块头 3B 合并，对消费者无块边界
+        let mid = queue.fetch(5, 6);
+        assert_eq!(mid.data, b"esttes");
+        assert_eq!(mid.next_offset, 11);
+        assert!(!mid.truncated);
+    }
+
+    /// 环淘汰后游标落后 → truncated = true，返回现存最早段（从新 min_offset 起）
+    #[test]
+    fn fetch_truncated_after_eviction() {
+        let mut queue = UnifiedOutputQueue::with_limits(6, 100);
+        for _ in 0..3 {
+            queue.push(make_event()); // 12B > 6B → 淘汰至驻留 [8,12)
+        }
+        assert_eq!(queue.min_offset(), 8);
+
+        let fetched = queue.fetch(0, 16);
+        assert!(fetched.truncated, "游标落后于驻留起点必须报截断");
+        assert_eq!(fetched.data, b"test"); // 现存最早段 [8,12)
+        assert_eq!(fetched.next_offset, 12);
+
+        // 后续按 next_offset 续拉不再报截断
+        let follow = queue.fetch(fetched.next_offset, 16);
+        assert!(!follow.truncated);
+        assert!(follow.data.is_empty());
+    }
+
+    /// 未来游标自愈：from > max_offset 按追平处理（不报错、不回带非法游标）
+    #[test]
+    fn fetch_future_cursor_self_heals() {
+        let mut queue = UnifiedOutputQueue::with_limits(u64::MAX, 100);
+        queue.push(make_event()); // [0,4)
+
+        let fetched = queue.fetch(999, 16);
+        assert!(fetched.data.is_empty());
+        assert_eq!(fetched.next_offset, 4); // 收敛回产出端
+        assert!(!fetched.truncated);
     }
 
     // ==================== 会话级订阅者管理（拉取模型） ====================

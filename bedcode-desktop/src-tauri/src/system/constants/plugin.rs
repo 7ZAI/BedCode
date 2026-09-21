@@ -147,6 +147,14 @@ pub const PLUGIN_PTY_RING_FETCH_MAX_BYTES: u32 = 16 * 1024;
 /// 的准入上限，分块是上限之内的投递节奏。取值 64 KiB ≈ 16 个分块，够一次粘贴级输入。
 pub const PLUGIN_PTY_MAX_WRITE_BYTES: usize = 64 * 1024;
 
+// ==================== host-session 输出环（票 04，output-ring-fetch） ====================
+
+/// 单次 `output-ring-fetch` 返回字节上限：限制一次 wasm 边界拷贝的量
+/// （插件传入的 `max-bytes` 超过本值即**截断**——读侧是数据面，截断不是错误，
+/// 余下字节按 `next-offset` 续拉即可；与 [`PLUGIN_PTY_RING_FETCH_MAX_BYTES`]
+/// 同档——两条环共享同一 wasm 边界成本模型，spec 票 04）
+pub const PLUGIN_SESSION_RING_FETCH_MAX_BYTES: u32 = 16 * 1024;
+
 /// 环境变量：BedCode PTY 会话 ID
 pub const ENV_BEDCODE_SESSION_ID: &str = "BEDCODE_SESSION_ID";
 

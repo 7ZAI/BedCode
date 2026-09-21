@@ -29,8 +29,8 @@ pub use session_components::{
 
 // 从 session_output 重导出
 pub use session_output::{
-    GlobalOutputManager, OutputEvent, PullSubscriber, RingSlice, SessionOutputManager, SubscribeResponse,
-    SubscriberHandle, SubscriberStats, UnifiedOutputQueue, MODE_BATCH, MODE_REALTIME,
+    GlobalOutputManager, OutputEvent, PullSubscriber, RingFetchOutput, RingSlice, SessionOutputManager,
+    SubscribeResponse, SubscriberHandle, SubscriberStats, UnifiedOutputQueue, MODE_BATCH, MODE_REALTIME,
 };
 
 pub use session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};

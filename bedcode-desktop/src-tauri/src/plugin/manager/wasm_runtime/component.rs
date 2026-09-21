@@ -27,6 +27,7 @@ use super::host_impl::{
 #[cfg(test)]
 use super::plugin_debug_mode;
 use super::{block_on_async, StoreSpec, WasmHostContext, WasmPluginState};
+#[cfg(test)]
 use crate::plugin::config::StoreLimits;
 use crate::plugin::monitor::LifecycleEvent;
 use crate::AppError;
@@ -365,6 +366,22 @@ impl bedcode::plugin::host_session::Host for WasmPluginState {
 
     fn connections_list(&mut self) -> Result<String, String> {
         session::session_connections_list(&self.host_ctx, &self.plugin_id)
+    }
+
+    fn output_ring_fetch(
+        &mut self,
+        session_id: String,
+        from_offset: u64,
+        max_bytes: u32,
+    ) -> Result<Option<bedcode::plugin::host_session::RingFetchResult>, String> {
+        session::session_output_ring_fetch(&self.host_ctx, &self.plugin_id, &session_id, from_offset, max_bytes)
+            .map(|fetched| {
+                fetched.map(|ring| bedcode::plugin::host_session::RingFetchResult {
+                    data: ring.data,
+                    next_offset: ring.next_offset,
+                    truncated: ring.truncated,
+                })
+            })
     }
 }
 

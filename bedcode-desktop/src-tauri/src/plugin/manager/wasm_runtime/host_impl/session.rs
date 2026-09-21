@@ -1,7 +1,11 @@
 //! 会话域宿主实现（会话查询、配置 CRUD、配置列表与会话创建）
 
 use crate::plugin::manager::wasm_runtime::{block_on_async, WasmHostContext};
-use crate::plugin::permission::{PERMISSION_SESSION_CONFIG, PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE};
+use crate::plugin::permission::{
+    PERMISSION_SESSION_CONFIG, PERMISSION_SESSION_READ, PERMISSION_SESSION_WRITE, PERMISSION_TERMINAL_OUTPUT,
+};
+use crate::session::RingFetchOutput;
+use crate::system::constants::plugin::PLUGIN_SESSION_RING_FETCH_MAX_BYTES;
 use crate::system::error_boundary::spawn_with_error_boundary;
 use uuid::Uuid;
 
@@ -734,6 +738,49 @@ pub(crate) fn session_connections_list(host_ctx: &WasmHostContext, plugin_id: &s
     serde_json::to_string(&values).map_err(|e| format!("session error: JSON serialization failed: {}", e))
 }
 
+/// 会话输出环拉取（票 04，权限 `terminal:output` + 属主校验）：按游标拉取会话输出
+/// 原始字节（WIT `list<u8>` 直传，不 JSON 化）。
+///
+/// `Ok(None)` = 游标已追平产出端（无新字节）；`Ok(Some)` = 自游标起的字节 + 续拉
+/// 游标；游标落后于环驻留起点时 `truncated = true`（缺口如实上报，不静默补洞）。
+/// 单次返回不超过 [`PLUGIN_SESSION_RING_FETCH_MAX_BYTES`]（约束一次 wasm 边界拷贝量）。
+///
+/// 环本体归宿主 [`GlobalOutputManager`]（内核保有环、插件注册游标 + 自有水位），
+/// 背压语义沿用 2026-09-17 pull 模型：慢消费只损失自己的 ring 历史（`truncated`
+/// 重锚），绝不回传到产出端。
+pub(crate) fn session_output_ring_fetch(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+    from_offset: u64,
+    max_bytes: u32,
+) -> Result<Option<RingFetchOutput>, String> {
+    if !super::check_permission(host_ctx, plugin_id, PERMISSION_TERMINAL_OUTPUT, "host_session_output_ring_fetch") {
+        return Err("permission denied".to_string());
+    }
+    // 属主校验（与 terminal_send 同形态，票 04 P0-3）：会话输出是会话域的私密数据面
+    // ——只有创建方插件能拉取自己会话的输出，任意持 `terminal:output` 位的插件不得
+    // 读走别人会话的原始字节。
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
+
+    // 会话输出环：GlobalOutputManager 单例按 session_id 取会话管理器；注册表读锁内
+    // 只 clone 会话管理器句柄，应答在锁外完成（不交叉持锁）
+    let manager = crate::session::GlobalOutputManager::global();
+    let Some(session) = block_on_async(manager.session(session_id)) else {
+        return Err(format!("session output not found: {session_id}"));
+    };
+    let budget = max_bytes.min(PLUGIN_SESSION_RING_FETCH_MAX_BYTES) as usize;
+    let fetched = block_on_async(async {
+        let ring = session.ring();
+        let queue = ring.read().await;
+        queue.fetch(from_offset, budget)
+    });
+    if fetched.data.is_empty() && !fetched.truncated {
+        return Ok(None);
+    }
+    Ok(Some(fetched))
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -1269,20 +1316,14 @@ mod tests {
         let a = "com.bedcode.owner-a";
         let b = "com.bedcode.owner-b";
         let sid = seed_owned_session(&ctx, Some(a)).await;
-        assert_eq!(
-            ctx.session_manager.session_owner(&sid).await.as_deref(),
-            Some(a)
-        );
+        assert_eq!(ctx.session_manager.session_owner(&sid).await.as_deref(), Some(a));
         grant_permissions(&ctx, a, &[PERMISSION_SESSION_WRITE]);
         session_remove(&ctx, a, &sid).expect("属主移除应放行");
         assert_eq!(ctx.session_manager.session_owner(&sid).await, None);
 
         grant_permissions(&ctx, b, &[PERMISSION_SESSION_WRITE]);
         let sid2 = seed_owned_session(&ctx, Some(b)).await;
-        assert_eq!(
-            ctx.session_manager.session_owner(&sid2).await.as_deref(),
-            Some(b)
-        );
+        assert_eq!(ctx.session_manager.session_owner(&sid2).await.as_deref(), Some(b));
     }
 
     #[test]
@@ -1540,5 +1581,127 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("json array");
         assert!(parsed.is_array(), "必须为 JSON 数组（无头注册表为空）");
         assert_eq!(parsed, serde_json::json!([]));
+    }
+
+    // ==================== 票 04：output-ring-fetch（输出消费二进制原语） ====================
+
+    /// 播种会话（属主 = PLUGIN）并注册输出管理器 + 推入一段输出（模拟 PTY 读线程产出）；
+    /// 调用方负责 `unregister_session` / `remove_session` 清理
+    async fn seed_session_with_output(ctx: &WasmHostContext, bytes: &[u8]) -> String {
+        let sid = seed_session(ctx).await;
+        let manager = crate::session::GlobalOutputManager::global();
+        let _ = block_on_async(manager.register_session(&sid));
+        block_on_async(manager.on_output(crate::session::OutputEvent::new(
+            sid.clone(),
+            bytes.to_vec(),
+            0,
+            0,
+            false,
+        )));
+        sid
+    }
+
+    /// 权限门：缺 `terminal:output` → 显性拒绝（权限门先于属主/会话存在性——
+    /// 未授权插件连「会话输出是否存在」都不应可探知）
+    #[tokio::test]
+    async fn output_ring_fetch_permission_denied_without_terminal_output() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_READ]);
+        let err = session_output_ring_fetch(&ctx, PLUGIN, "any-session", 0, 1024).unwrap_err();
+        assert_eq!(err, "permission denied", "缺 terminal:output 必须报权限拒绝");
+    }
+
+    /// 属主闭环（票 04 红测同形态）：持 `terminal:output` 的**他插件**不得拉取
+    /// 别人会话的输出字节——输出是会话域的私密数据面，只凭权限位即可越权读走
+    #[tokio::test]
+    async fn output_ring_fetch_by_non_owner_is_denied() {
+        let ctx = build_host_ctx();
+        // seed_session 播种属主 = PLUGIN（见 seed_session 尾部 Some(PLUGIN)）
+        let intruder = "com.bedcode.intruder-b";
+        let sid = seed_session(&ctx).await;
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
+        // 越权方权限齐备——只有属主判定能拦住它
+        grant_permissions(&ctx, intruder, &[PERMISSION_TERMINAL_OUTPUT, PERMISSION_SESSION_READ]);
+
+        let err = session_output_ring_fetch(&ctx, intruder, &sid, 0, 1024).unwrap_err();
+        assert!(err.contains("not owner"), "非属主拉取输出必须被拒，got: {err}");
+        // 属主可拉（输出未注册 → 报输出不存在而非权限/属主错，分档可辨）
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_TERMINAL_OUTPUT]);
+        let err = session_output_ring_fetch(&ctx, PLUGIN, &sid, 0, 1024).unwrap_err();
+        assert!(
+            err.contains("session output not found"),
+            "属主 + 权限齐备时只报输出不存在，got: {err}"
+        );
+        block_on_async(ctx.session_manager.remove_session(&sid)).expect("remove");
+    }
+
+    /// 正路径 + 追平：推 20 字节 → 16+4 两批拉净 → 第三次 Ok(None)（游标已追平产出端）
+    #[tokio::test]
+    async fn output_ring_fetch_roundtrip_and_catchup() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_TERMINAL_OUTPUT]);
+        let payload: Vec<u8> = (0..20u8).collect();
+        let sid = seed_session_with_output(&ctx, &payload).await;
+        let manager = crate::session::GlobalOutputManager::global();
+
+        // 第一批：max-bytes=16 截断（宿主钳位后按 16 返回）
+        let first = session_output_ring_fetch(&ctx, PLUGIN, &sid, 0, 16)
+            .expect("first fetch")
+            .expect("first has data");
+        assert_eq!(first.data, payload[..16].to_vec());
+        assert_eq!(first.next_offset, 16);
+        assert!(!first.truncated);
+
+        // 第二批：续拉不重复
+        let second = session_output_ring_fetch(&ctx, PLUGIN, &sid, first.next_offset, 16)
+            .expect("second fetch")
+            .expect("second has data");
+        assert_eq!(second.data, payload[16..].to_vec());
+        assert_eq!(second.next_offset, 20);
+        assert!(!second.truncated);
+
+        // 第三批：游标已追平 → Ok(None)
+        let catchup = session_output_ring_fetch(&ctx, PLUGIN, &sid, second.next_offset, 16).expect("catchup");
+        assert!(catchup.is_none(), "追平后必须返回 None");
+
+        // 未来游标自愈：from > max_offset 按追平处理（不报错）
+        let future = session_output_ring_fetch(&ctx, PLUGIN, &sid, 999, 16).expect("future");
+        assert!(future.is_none(), "未来游标按追平自愈");
+
+        block_on_async(manager.unregister_session(&sid));
+    }
+
+    /// max-bytes 钳位：单次返回不超宿主上限（16 KiB）；超上限传值只截断不报错
+    #[tokio::test]
+    async fn output_ring_fetch_clamps_to_host_budget() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, PLUGIN, &[PERMISSION_TERMINAL_OUTPUT]);
+        let sid = seed_session(&ctx).await;
+        let manager = crate::session::GlobalOutputManager::global();
+        let _ = block_on_async(manager.register_session(&sid));
+        // 20 KiB 驻留（超出单批上限 16 KiB）
+        let payload: Vec<u8> = (0..=255u8).cycle().take(20 * 1024).collect();
+        block_on_async(manager.on_output(crate::session::OutputEvent::new(
+            sid.clone(),
+            payload.clone(),
+            0,
+            0,
+            false,
+        )));
+
+        let fetched = session_output_ring_fetch(&ctx, PLUGIN, &sid, 0, u32::MAX)
+            .expect("fetch")
+            .expect("has data");
+        assert!(
+            fetched.data.len() <= 16 * 1024,
+            "单批不得超过宿主钳位上限，got {}",
+            fetched.data.len()
+        );
+        assert_eq!(fetched.data, payload[..16 * 1024].to_vec(), "截断返回的是头段");
+        assert_eq!(fetched.next_offset, 16 * 1024 as u64);
+        assert!(!fetched.truncated);
+
+        block_on_async(manager.unregister_session(&sid));
+        block_on_async(ctx.session_manager.remove_session(&sid)).expect("remove");
     }
 }
