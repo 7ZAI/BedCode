@@ -31,6 +31,16 @@ file-transfer 插件 59/0、插件产物重建 + manifest 一致、无残留进�
 | 02 | `session_configs` 表与 legacy 配置通道退役 | 数据迁移 + ABI 追加（需守卫） | 需确认各安装点 migration marker 已跑过 |
 | 03 | `wsl` / `local_ip` 宿主命令去重 | 跨端前端同改（插件命令面已有落点） | 无（可与 01 并行） |
 | 04 | `plugin_reveal_in_dir` 原语化 | ABI 追加（`host-platform.reveal-in-dir`） | 可与 01/03 并行 |
+| 05 | `commands/` 面收敛（逐命令判定） | 判据 + Rust 注销 + 前端调用方迁移 | 与 02（配置 CRUD）、03（WSL/local-ip）、04（reveal）有交集，按票内说明合并实施 |
+
+### 命令面收敛判据（票 05，2026-09-21 追加口径）
+
+> **主判据 = 该命令承载的能力，其业务域的归属插件是否在用**（插件用 → 产品面归插件，宿主命令面注销或收敛为原语；
+> 插件不用 → 看宿主页面，都不用则删）。**辅判据 = 宿主页面是否直接调用**（终端渲染管道红线：输入/尺寸/输出订阅
+> 即使插件也用，宿主仍需直调通道）。**不以「宿主前端还剩谁 invoke」为主判据**——历史孤儿 plumbing 会把判定带偏。
+
+各插件命令面实读（作为判据证据）：`com.bedcode.session` 28 条、`com.bedcode.file-transfer` 33 条、
+`com.bedcode.agent-hub` 34 条、`com.bedcode.ai-chatbox` 8 条。逐域判定表与注销清单见票 05。
 
 ## Out of Scope
 

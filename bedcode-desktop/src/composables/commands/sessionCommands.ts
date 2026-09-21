@@ -3,6 +3,11 @@
  *
  * WSL 探测 + 会话生命周期 + 会话配置 CRUD。统一收敛 Tauri 命令调用，
  * 超时敏感的启动路径走 invokeWithTimeout（含超时语义）。
+ *
+ * 保留范围（2026-09-21 收敛）：只保留**宿主页面仍直接调用**的封装
+ * （终端窗口 / 会话兜底壳 / 设置页会话分组 / 插件 API 面 `context.sessions`）。
+ * 原 `startSession`（按 configId 创建即启动）无调用方已删；配对 / QR / 连接历史 /
+ * 快捷指令一族封装（`commands/deviceCommands.ts`）随业务域下沉插件已整文件删除。
  */
 import { invoke } from '@tauri-apps/api/core'
 import { logger } from '@/utils/frontendLogger'
@@ -29,19 +34,6 @@ export async function isWslAvailable(): Promise<boolean> {
 export interface TerminalSize {
   cols: number
   rows: number
-}
-
-/**
- * 启动会话（含超时）
- *
- * size：本端终端组件默认网格，PTY 以该尺寸创建（缺省用服务端配置默认值）
- */
-export async function startSession(configId: string, size?: TerminalSize): Promise<string> {
-  return invokeWithTimeout('start_session', {
-    configId,
-    cols: size?.cols,
-    rows: size?.rows,
-  })
 }
 
 /**

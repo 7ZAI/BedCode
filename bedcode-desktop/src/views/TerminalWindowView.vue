@@ -341,7 +341,7 @@ import PluginTitleBarItems from '@/plugin/components/PluginTitleBarItems.vue'
 import PluginPageToolbar from '@/plugin/components/PluginPageToolbar.vue'
 import { useSessionStore } from '@/stores/session'
 import { getSessionConfig } from '@/composables/useDesktopCommands'
-import type { SessionInfo, SessionConfig } from '@/composables/useTauri'
+import type { SessionInfo, SessionConfig } from '@/composables/model'
 
 const { t } = useI18n()
 const appWindow = getCurrentWindow()
