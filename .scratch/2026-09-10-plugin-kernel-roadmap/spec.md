@@ -1,10 +1,11 @@
 # 插件化内核渐进演进路线（Roadmap）
 
-Status: active（阶段 0/1/2 已落地，阶段 3 会话部分已落地；阶段 3 终端部分与阶段 4 未启动）
+Status: active（阶段 0/1/2 已落地，阶段 3 会话与终端部分均已落地；阶段 4 未启动）
 Date: 2026-09-10
 修订: 2026-09-18 —— 阶段 1 改判：mDNS 不再插件化，以「内核基础能力服务 MdnsService」形态落地（2026-09-15 双端验收），v1 服务插件方案作废
 修订: 2026-09-19 —— 内核「进程（PTY）」能力首次以 **host 原语形态**对插件开放：`host-pty`（ABI desktop v16）把裸伪终端做成插件私有资源（引擎仍留内核，输出走游标拉取，业务会话线零感知）。**这不改动下表的红线**——PTY 引擎与输出分发仍在内核，下沉的只是「产品语义归属」。规格与验收 `.scratch/2026-09-19-pty-base-service/spec.md`，边界裁决 ADR 0022「新增 host-pty」节
 修订: 2026-09-20 —— **阶段 2 与阶段 3 的一部分合并执行**（详见下面「合并执行」节）：`com.bedcode.devices` 与 `com.bedcode.auto-task` 两个桌面插件退役、设备连接编排 + 会话语义 + Agent 任务域合并为单一内置插件 `com.bedcode.session`（ABI desktop 16→**19**，新增权限位 `session:config` / `ui:settings` / `ui:input`）。阶段 2 标 ✅、阶段 3 标 ◐（会话已下沉，**终端本体按红线仍留内核**）。规格 `.scratch/2026-09-19-terminal-session-plugin/spec.md`，边界裁决 ADR 0022「会话语义下沉批次」节（v8）。移动端代码零改动，其受损清单见本文「移动端受影响清单」节
+修订: 2026-09-22 —— **阶段 3 终端部分落地**（延续规格 `.scratch/2026-09-21-terminal-into-session-plugin/`，票 01–08 全部完成）：终端窗口域（xterm 渲染 / 写入管线 / scroll/resize / IME 守卫 / 窗口壳 / 输出消费）整体下沉 `com.bedcode.terminal-session` 插件（票 06 起新 id，旧 id `com.bedcode.session` 留双投窗口），输出经 `host-session.output-ring-fetch` 二进制原语拉取（v22 内函数级追加不 bump，v23 性能红线正例落地）；宿主降级终端实现与 Channel 输出传输摘除，终端窗口 API 过激活门禁显性报错；插件私有库随 id 走一次性幂等迁移（票 07）。阶段 3 标 ✅；PTY 引擎、输出分发环、会话状态机仍在内核——红线不动。边界裁决 ADR 0022 v9 条目
 关联文档: 终态愿景 `.scratch/2026-09-10-platform-kernel/spec.md`（无业务内核）；阶段 1 实施规格 `.scratch/2026-09-10-mdns-service-plugin/spec-basic-capability-service.md`（mDNS 基础能力服务 v2，已落地）
 
 ---
@@ -71,7 +72,7 @@ Date: 2026-09-10
 
 **前置内核工程（2026-09-18 决策）**：**wasi2 → wasi3 全量升级**（宿主运行时 async 化 + SDK 切 wasm32-wasip3 + wasmtime 47 → 48 LTS 双端升级）作为阶段 2 的独立前置工程 A0，详见 `.scratch/2026-09-18-devices-plugin-scope/auth-center-spec.md` §4 A0；认证中心插件直接基于 wasi3 构建。
 
-### 阶段 3 —— 会话 / 终端下沉（◐ 会话已落地 2026-09-20；终端本体未动，前置验证已通过）
+### 阶段 3 —— 会话 / 终端下沉（✅ 会话 2026-09-20 落地、终端 2026-09-22 落地；延续规格 `.scratch/2026-09-21-terminal-into-session-plugin/`）
 
 **本愿景最高风险段**，最后执行。会话业务（配置语义、生命周期编排、列表/详情）与终端业务（UI 渲染、工具栏、输出解析）下沉为内置插件。**进程原语（PTY spawn、stdin/stdout 流、信号）与输出分发管道留在内核**（性能红线经 2026-09-21 修订，见 ADR 0022 v23：输出字节禁止经 JSON 命令通道搬运，**经 WIT 二进制原语可进 WASM**）。
 

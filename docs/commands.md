@@ -106,22 +106,22 @@ bedcode-desktop/src-tauri/target/release/bundle/deb/BedCode_2.1.0_amd64.deb
 ```bash
 cd bedcode-desktop
 
-# 构建全部插件（3 个：ai-chatbox / file-transfer / session）
+# 构建全部插件（3 个：ai-chatbox / file-transfer / terminal-session）
 pnpm run plugins:build
 
 # 构建指定插件（--plugin 接插件 id）
 node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox
-node scripts/plugin-build.js --plugin com.bedcode.session
+node scripts/plugin-build.js --plugin com.bedcode.terminal-session
 node scripts/plugin-build.js --plugin com.bedcode.file-transfer
 
-# 仅构建默认插件（com.bedcode.session）
+# 仅构建默认插件（com.bedcode.terminal-session）
 pnpm run plugins:build:release
 
-# 插件开发模式（watch，默认 com.bedcode.session）
+# 插件开发模式（watch，默认 com.bedcode.terminal-session）
 pnpm run plugins:dev
 
 # 指定插件开发模式
-node scripts/plugin-dev.js --plugin com.bedcode.session
+node scripts/plugin-dev.js --plugin com.bedcode.terminal-session
 ```
 
 **前置条件**（Rust WASM 编译目标）：

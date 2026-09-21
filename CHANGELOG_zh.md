@@ -15,11 +15,13 @@
 ### 功能
 
 #### 终端会话中心插件 — 设备 / 会话 / 任务合并为单一内置插件（桌面端）
-- 新内置插件 `com.bedcode.session`（Application 形态、`rust-ts`、wasip3 组件）承接原先散在 内核、`com.bedcode.devices`、`com.bedcode.auto-task` 三处的产品域：配对与信任与首连确认编排、会话配置 CRUD 与生命周期编排、Agent 任务域（队列状态机、定时任务、agent hook 安装）
+- 新内置插件 `com.bedcode.terminal-session`（Application 形态、`rust-ts`、wasip3 组件）承接原先散在 内核、`com.bedcode.devices`、`com.bedcode.auto-task` 三处的产品域：配对与信任与首连确认编排、会话配置 CRUD 与生命周期编排、Agent 任务域（队列状态机、定时任务、agent hook 安装）。插件 id 由 `com.bedcode.session` 改名（票 06）；旧 HTTP 前缀与旧互调 api 名在过渡期经双投窗口别名仍可达（票 07）
 - `com.bedcode.devices` 与 `com.bedcode.auto-task` 退役；其模块、侧边栏视图、终端工具栏按钮、任务弹窗、文案表与随包 hook 脚本并入合并插件，按域重组而非逐文件平移
 - 贡献式 UI「界面维持、贡献方换人」（spec D6）：四个侧边栏目录（设备配对 100 / 连接历史 101 / 终端会话 200 / Agent任务 210）、经新扩展点 `ui.registerSettingsSection` 贡献的设置分组、终端工具栏按钮；宿主内置入口在插件 `Activated` 时让位，未激活 / error / 停用时由宿主兜底壳接管
 - 内核去业务化落地：会话结构体的四个任务字段摘除，换为不透明注解槽（`session-id -> map<string,string>`，内核只搬运透传、绝不解释键名）；线协议形状（`taskStatus` 等）不变，老客户端零改动
 - 升级后任务历史一条不丢：宿主侧一次性、best-effort、幂等迁移，把六张任务表从退役插件的私有库搬进合并插件私有库，按列名交集拷贝并落账本戳，重启不重复插入
+- **终端窗口域整体下沉插件（票 01–05）**：xterm 渲染 / 写入管线 / scroll/resize / IME 守卫迁入 `plugins/terminal-session`；宿主只留引擎原语（窗口编排、设置/背景图桥、PTY 引擎）。宿主降级终端实现（`TerminalPreview.vue` / `composables/terminal` / `utils/terminal` / Tauri Channel 输出传输）摘除；插件输出经 WIT 二进制原语 `host-session.output-ring-fetch`（`session.output.pull` 命令，自适应轮询，无 Channel 桥）。停用插件后终端入口消失且宿主窗口 API 过激活门禁显性报错
+- **私有库随 id 迁移（票 07）**：宿主一次性幂等迁移（`plugin/session_db_migration.rs`）把插件私有库从 `plugins/com.bedcode.session/plugin.db` 搬到 `plugins/com.bedcode.terminal-session/plugin.db`——逐表按列名交集拷贝（task 域改名表经共享字典对齐），改名后插件从未激活过时走纯文件重命名；`plugin_meta` 账本戳保证只跑一次
 
 ### 基础建设
 
@@ -38,7 +40,7 @@
 ### 安全
 
 #### 桌面端
-- `fs_auth` 内置受信任插件白名单种子由 `com.bedcode.auto-task` 改指 `com.bedcode.session`（写用户项目 agent 集成的就是合并插件；不改指会把它静默降级成逐目录弹窗授权）
+- `fs_auth` 内置受信任插件白名单种子已改指 `com.bedcode.terminal-session`（随票 06 改名；写用户项目 agent 集成的就是合并插件；不改指会把它静默降级成逐目录弹窗授权）
 - 认证分层成文且单点仲裁：配对码 / QR 的编排在插件，签发、验签执行点、密钥托管（host-auth secret-store）与 `pairings` / `connection_history` 表留宿主；插件未激活时宿主桥接回退到宿主实现并 `warn` 留痕，这是设计内降级路径，不算旁路
 - 凭据仍只记长度不落明文；插件权限清单收口为 15 项且每位都能追到真实消费点（spec 表格里两位查无调用点的位刻意不声明）
 
@@ -52,9 +54,10 @@
 ### 文档
 
 - ADR 0022 v8：会话语义下沉批次（v18/v19 函数表、注解槽、设置分组扩展点、15 项权限清单、双端偏离表加本批次号）
-- 路线图更新：阶段 2 标已落地并记形态改判、阶段 3 标部分落地（会话已做、终端刻意未动）、补记「合并执行」决策与主动打破渐进原则的理由与代价表，移动端受影响清单 M1–M5 从单个 spec 目录挂进路线图
+- ADR 0022 补订（2026-09-22，v9）：插件 id 变更登记（`com.bedcode.session` → `com.bedcode.terminal-session`）、`output-ring-fetch` 二进制原语落地（v22 内函数级追加不 bump）、私有库路径迁移与双投窗口别名
+- 路线图更新：阶段 2 标已落地并记形态改判、阶段 3 标部分落地（会话已做、终端刻意未动）、补记「合并执行」决策与主动打破渐进原则的理由与代价表，移动端受影响清单 M1–M5 从单个 spec 目录挂进路线图、（2026-09-22）阶段 3 终端部分也标 ✅
 - AGENTS.md §7 修 ABI 计数与宿主能力清单条目、§8 认证语义措辞按插宿主分层改写；`docs/knowledge/plugin-http-endpoint-trust.md` 记旧前缀判定；桌面 code-map 与命令文档改指
-- 明确不在范围：移动端适配、`com.bedcode.terminal`、终端窗口与输出管线进插件
+- 明确不在范围：移动端适配、`com.bedcode.terminal`、终端窗口与输出管线进插件 —— **末项现已完成（票 01–05）**：终端窗口壳与输出消费归 `plugins/terminal-session`，宿主只剩引擎原语
 
 ## [2.1.1] - 2026-09-18
 

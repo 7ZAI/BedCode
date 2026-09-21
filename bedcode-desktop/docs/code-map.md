@@ -58,17 +58,18 @@ bedcode-desktop/                      # 桌面端项目 (Tauri 2.0 + Vue 3)
 │   ├── components/                   # UI 组件：桌面布局、侧边栏、终端预览、
 │   │                                 #   标题栏、通知卡片/徽章、退出确认、文件系统授权弹窗、通用基础组件；
 │   │                                 #   settings/ 下为设置页分组子组件（外观/链路加密/系统/日志/关于；
-│   │                                 #   配对「票 14」与会话分组已随域下沉 com.bedcode.session 插件）
+│   │                                 #   配对「票 14」与会话分组已随域下沉 com.bedcode.terminal-session 插件）
 │   ├── composables/                  # 业务逻辑 composable：桌面命令、网络（服务器）、插件管理、PTY 输出、
 │   │                                 #   全局终端、快捷键、主题、字体、更新检查等（配对 / WSL / 设备一族
-│   │                                 #   已随域下沉 com.bedcode.session 插件，设备连接通知亦在其内）；
-│   │                                 #   terminal/ 下为终端内核域（写入管线/渲染器/resize/设置同步/滚动，
-│   │                                 #   TerminalPreview 拆分产物，经 terminalKernel 交换实例与回调）；
+│   │                                 #   已随域下沉 com.bedcode.terminal-session 插件，设备连接通知亦在其内）；
+│   │                                 #   terminal/ 已无：终端渲染/写入/IME 随票 01-05 整体下沉
+│   │                                 #   plugins/terminal-session（宿主只剩窗口编排原语
+│   │                                 #   useSessionWindows 与 view 壳 TerminalWindowHostView）；
 │   │                                 #   commands/ 下为 Rust 命令封装按领域拆分（会话引擎事实/设置），
 │   │                                 #   useDesktopCommands 为聚合层 re-export
 │   ├── stores/                       # Pinia 全局状态：会话（引擎事实 + 插件动作）、设置、i18n
 │   ├── views/                        # 页面：插件、插件详情、插件配置、设置（编排层）、终端窗口、服务器
-│   │                                 #   （设备 / 会话 / 会话配置页已随票 13/14 下沉 com.bedcode.session
+│   │                                 #   （设备 / 会话 / 会话配置页已随票 13/14 下沉 com.bedcode.terminal-session
 │   │                                 #   插件；/server 为无侧边栏入口的诊断页，落地页为 /plugins）
 │   ├── plugin/                       # 前端插件系统：加载器、注册表、权限、上下文、事件、命令、
 │   │                                 #   共享模块运行时、运行时事件监听（runtime-listeners）；components/ 下为插件 UI 宿主组件
@@ -138,7 +139,10 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
   路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
 - **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
   **`bus` 不是桌面端权限位**（移动端 SDK 有 `PERMISSION_BUS`，属 ADR 0018 双端契约分叉）：桌面总线订阅/发布不经权限门，
-  访问控制归 topic 命名空间（缺口与改造见 `.scratch/2026-09-21-wasm-core-audit/issues/05-bus-topic-acl.md`）
+  访问控制归 **topic 命名空间**（票 05 已落地）——`<plugin-id>::<name>` 是某插件的收件箱，宿主按形态仲裁：
+  只有属主（与宿主）能订阅、只有属主（与宿主）能发布，判定不查激活表也不查安装表；公开 topic（不含 `::`）
+  仍是插件间广播道。`bedcode.api.reply.*` 回复道对 WASM 订阅面关闭、回复 `sender` 按 api 声明属主校验
+  （见 `host_impl/api.rs`）。形态原语在桌面 SDK `host::bus`（`owned_topic` / `topic_owner`），宿主与插件共用
 - **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面（配置文件 + 运行时覆盖）、
   运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
 - **permission**：权限词汇**只读再导出**（bedcode-plugin-api 再导出；真源在
@@ -165,8 +169,9 @@ ABI v14；宿实现 `plugin/manager/wasm_runtime/host_impl/ws.rs`。**零业务�
   踢出 `close-client`（缺省 4004）、注销 `unregister-endpoint`（含下线全部客户端 4005）、
   清单 `list-clients` / `list-endpoints`（丢失事件后的自愈快照）；
 - **端点注册表**：`server/ws/endpoint.rs`（端点句柄 → 属主 / 挂载路径 / 认证策略 / 上限 / 事件总线）；
-- **双通道投递**：状态事件走消息总线 **owner 作用域 topic**（`ws:open|error|close.<owner>`、
-  `ws:client-connect|client-disconnect.<owner>`，标识在 payload，非属主物理上订阅不到）；
+- **双通道投递**：状态事件走消息总线**属主私有 topic**（`<owner>::ws:open|error|close`、
+  `<owner>::ws:client-connect|client-disconnect`，标识在 payload；票 05 命名空间门禁——
+  跨属主订阅在 Rust 端显式拒绝，他人也伪投递不进）；
   消息帧走 `events-ws` 回调（未导出 → 丢弃 + 首次 `warn` + 计数，宿主不缓存）；
 - **回收**：插件停用 → `ws::purge_for_plugin` 关闭并摘除其全部出站连接与入站端点（只碰本人，4005）。
 
@@ -297,7 +302,7 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
   「先权限门后属主」的判定与文案在 `host_impl`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
   `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
-- **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.session`
+- **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.terminal-session`
   一次性 legacy 迁移通道读主库 `session_configs`（表退役见 scratch 票 02）；业务 CRUD 真源在插件私有库，
   主库投影写入口（`upsert_config`）与宿主侧配置桥接 `utils/session_config_bridge.rs` 已随票 05
   命令面注销一并退役（宿主不再持有任何配置调用路径）
@@ -380,7 +385,7 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 | 插件系统 (前端) | `src/plugin/`、`src/composables/`（usePluginManager） |
 | 插件开发 SDK | `packages/plugin-sdk-desktop/` |
 | 测试插件 | `packages/plugin-component-test/`、`plugin-sdk-test/`、`plugin-system-test/`、`plugin-wasi-test/` |
-| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
+| 插件源码 | `plugins/agent-hub/`、`plugins/ai-chatbox/`、`plugins/file-transfer/`、`plugins/terminal-session/`（终端会话中心：配对与信任 + 会话编排 + Agent 任务域 + 快捷指令域（票 02）+ 文件浏览域（票 03），票 17 起顶替旧 `com.bedcode.auto-task` 插件；HTTP 业务端点经网关别名表接管 /api/configs /api/quick-actions / 文件浏览五端点） |
 | 系统常量 / 错误类型 / 生命周期 | `src-tauri/src/system/`（constants/ 按领域分组） |
 | 应用上下文 (DI) | `src-tauri/src/system/`（app_context） |
 | 前端页面 / 组件 / 状态 | `src/views/`、`src/components/`、`src/stores/` |
@@ -391,12 +396,12 @@ Rust 侧以 `abi.rs` 为宿主/插件共同引用的单一事实来源（签名�
 
 ### 自动化任务执行机制（跨端链路概览）
 
-BedCode 通过 `com.bedcode.session` 插件的任务域（WASM）+ HTTP API + WebSocket 事件链路实现移动端远程自动执行多个任务：
+BedCode 通过 `com.bedcode.terminal-session` 插件的任务域（WASM）+ HTTP API + WebSocket 事件链路实现移动端远程自动执行多个任务：
 
 ```
-Claude Code Hook (Python/TS, plugins/session/scripts/ 随包)
-    ↓ HTTP POST /api/plugin/com.bedcode.session/...（旧 auto-task 前缀由宿主别名表应答）
-com.bedcode.session WASM 任务域（任务状态/队列/模式，经 plugin_controller.rs 声明式端点路由）
+Claude Code Hook (Python/TS, plugins/terminal-session/scripts/ 随包)
+    ↓ HTTP POST /api/plugin/com.bedcode.terminal-session/...（旧 auto-task 前缀由宿主别名表应答）
+com.bedcode.terminal-session WASM 任务域（任务状态/队列/模式，经 plugin_controller.rs 声明式端点路由）
     ↓ DesktopSyncEvent → sync_handler → WebSocket broadcast
 Mobile Tauri Event → useAutoExecutor 状态机（移动端）
     ↓ sendInput / HTTP API
@@ -410,7 +415,7 @@ Claude Code (PTY)
 - **生命周期扩展**：插件经 `SessionLifecycleListener` 在 Creating 阶段注入 hooks、Stopped 阶段清理
 - **输入扩展点**：插件经 `SessionInputListener` 观察提交的输入行
 
-涉及目录：`plugins/session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
+涉及目录：`plugins/terminal-session/`（`rust/src/task/` + `src/components/TaskHistoryView.vue` / `TaskQueueModal.vue`）、`src-tauri/src/plugin/`、`src-tauri/src/server/controllers/`（plugin_controller）、`src-tauri/src/events/`、`src-tauri/src/session/`（lifecycle/input_line）、`src-tauri/src/pty/`。
 
 ### 按类型查找
 

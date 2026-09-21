@@ -39,7 +39,8 @@
 | 旧前缀接管 | 请求前缀的插件**未激活**且其 id 在 `LEGACY_HTTP_PLUGIN_ALIASES` 里、接管方**已激活** → 转给接管方（`path` 段原样不变）。旧插件在位时绝不抢占（避免双写者与空库回包） | ✅ 票 16 落地 / 票 17 **判定为保留**（见下） |
 
 > **旧前缀接管的审计含义**：`/api/plugin/com.bedcode.auto-task/*` 在 auto-task
-> 未激活时由 `com.bedcode.session` 应答，两条日志字段（`plugin_id` = 属主、
+> 未激活时由 `com.bedcode.terminal-session` 应答；**票 06 改名后 `com.bedcode.session`
+> 前缀同理**（票 07 B2 双投窗口追加别名条目）；两条日志字段（`plugin_id` = 属主、
 > `requested_plugin_id` = 请求前缀）据此区分。
 
 **票 17 判定：保留别名兜底，本票不切断**（auto-task 工程与产物已彻底退役，旧前缀

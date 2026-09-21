@@ -157,3 +157,21 @@ CHANGELOG、ADR 0022（插件 id 变更登记 + v23 输出原语落地引用）�
 状态、`.scratch/2026-09-19-terminal-session-plugin/spec.md` 状态同步。
 **前置**：Blocked by 票 01-07。
 **验收**：文档与实际一致，无残留旧 id 文档引用（除迁移/兼容说明）。
+
+**状态：✅ done（2026-09-22，票 08 提交）**：
+- **AGENTS.md**：§8 认证分层口径改指 `com.bedcode.terminal-session` 并注旧 id 双投窗口；
+  §7 HOST_PRIMITIVE_CAPABILITIES 计数核验 21 组（进程 3/网络 4/存储 4/宿主面 8/互调 2）
+  与 `capability.rs` 实现一致，无需改；
+- **code-map**：id 与 `plugins/session` 路径全部改指；顺带修正已过时的「terminal/ 下为
+  终端内核域」条目（票 05 已摘除，只剩 useSessionWindows/窗口壳）；
+- **CHANGELOG / CHANGELOG_zh**：新增终端窗口域下沉（票 01-05）+ 插件改名（票 06）+
+  私有库迁移（票 07）条目；旧「明确不在范围：终端窗口与输出管线进插件」改注为已落地；
+- **ADR 0022**：v9（当前）条目——插件 id 变更登记 + output-ring-fetch 输出原语落地
+  （v23 性能红线正例，v22 内函数级追加不 bump）+ 私有库路径迁移 + 双投窗口；
+- **roadmap**：阶段 3 标 ✅（会话 09-20 + 终端 09-22），新增 09-22 修订行（保留既有修订
+  与关联文档行）；2026-09-19 spec 状态同步为 landed + 延续规格指针；
+- **命令/知识文档**：`docs/commands.md` 构建示例改指新 id；`docs/knowledge/
+  plugin-http-endpoint-trust.md` 补记 com.bedcode.session 前缀别名；
+  `bedcode-desktop/docs/knowledge/plugin-dev-guide.md` 路径改指；
+- 终扫：全仓代码/文档面旧 id 残留仅剩刻意保留的迁移/双投说明（迁移账本键、别名表、
+  ADR/CHANGELOG 变更登记）。

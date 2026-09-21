@@ -1,6 +1,6 @@
 # 终端会话中心插件（com.bedcode.session）实施规格 —— 配对 + 会话语义下沉并与 auto-task 合并
 
-Status: ready-for-agent
+Status: **landed（已完成，票 01-18 全绿；后续延续规格见 `.scratch/2026-09-21-terminal-into-session-plugin/spec.md`，其票线含终端窗口域下沉 / 插件改名 terminal-session / 私有库迁移，2026-09-22 全部完成）**
 Date: 2026-09-19（同日二次修订：UI 策略改判 + 基础服务/wasip3 硬约束；三次修订：范围收敛为桌面端，见「用户决策」）
 范围: **仅桌面端**（`bedcode-desktop/` 及其 `plugins/`、`packages/plugin-sdk-desktop/`、`src-tauri/`）；`bedcode-mobile/` 零改动、零验证责任，运行时互通破损按后置专项处理
 决策依据: `.scratch/2026-09-10-plugin-kernel-roadmap/spec.md`（阶段 2 / 阶段 3）；`docs/adr/0022`（裁剪线与「双端偏离」节）；`docs/adr/0017`（互调门）；`docs/adr/0019`（wasmtime 双端版本）；AGENTS.md §5（无业务内核红线）、§7（插件检查清单）、§8（认证链路红线）

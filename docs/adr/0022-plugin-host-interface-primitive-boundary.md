@@ -115,8 +115,9 @@ WS 传输是「离开宿主就无法实现」的能力（移动端链接、TLS/�
 ### 会话语义下沉批次（v18 + v19，2026-09-20 桌面端）
 
 阶段 2 与阶段 3 的一部分在本仓库**首次合并执行**（原计划各自成阶段、各开一次 ABI 窗），
-落地为单一内置插件 `com.bedcode.session`（终端会话中心：设备与配对 + 会话编排 + Agent
-任务域），宿主侧只追加**既有 interface 的函数**，未新开任何 interface。
+落地为单一内置插件 `com.bedcode.terminal-session`（终端会话中心：设备与配对 + 会话编排 + Agent
+任务域；2026-09-22 票 06 起新 id，旧 id `com.bedcode.session` 的 HTTP 前缀与互调 api 名留双投窗口，
+见下方 v9 条目），宿主侧只追加**既有 interface 的函数**，未新开任何 interface。
 spec：`.scratch/2026-09-19-terminal-session-plugin/spec.md`（D2–D7），实施票 01–18。
 
 | 面 | 追加 | 批次 | 权限位 |
@@ -281,3 +282,17 @@ host-business-decarriage 收尾批次（`.scratch/2026-09-20-host-business-decar
 - **2026-09-19 v6**：新增 host-pty（见「新增 host-pty」节）：6 函数（spawn / write / resize / kill / ring-fetch / is-running）+ 唯一生命周期事件 `pty:exit.<owner>`；输出面定为**纯拉取**（否决 push 回调），限额四项按「创建类失败可见 / 数据面读侧截断」分级，环容量改为 spawn 的插件声明参数（宿主上下限仲裁）。同时首次把**桌面独有接口的双端偏离**成文（「双端偏离」节：host-websocket v14 / host-auth v15 / host-pty v16，mobile 不跟演 + 恢复条件），并登记两条抽象提取候选（「抽象提取候选」节）。ABI desktop 15→**16**（v15 由认证中心线 `host-auth` 占用；mobile 不跟演）。实施与验收见 `.scratch/2026-09-19-pty-base-service/`（票 01-07）。
 - **2026-09-19 v7**：`host-auth` 追加**认证记录面**四函数（`trusted-devices-list` / `trusted-device-revoke` / `connection-history-list` / `auth-setting-set`）：读**内核原始记录**（`pairings` 全表含软删行、`connection_history`、`settings` 白名单键），排序 / `is-active` 过滤 / 展示组织与派生视图一律归插件（裁剪线：宿主不解释「什么算已连接设备」）；`pairings` 的凭据列（session token / public key）不出内核；属主说明——记录是宿主全局数据、无句柄表，故无属主段校验，权限门 `auth` 即授权边界。ABI desktop 17→**18**（mobile 不跟演，同「双端偏离」节）。实施与验收见 `.scratch/2026-09-19-terminal-session-plugin/`（票 05）。
 - **2026-09-20 v8（当前）**：会话语义下沉批次落成（见「会话语义下沉批次」节）：ABI desktop 18→**19**（`host-session` 配置面 + `create-with-spec` + 动作四项 + `annotate` / `connections-list` + `host-platform.wsl-distros`，同批次函数级追加不再 bump），新增两个权限位 `session:config` / `ui:settings`，设置分组扩展点与「内置入口按贡献插件运行态让位」两条内核 UI 改动落地，`com.bedcode.devices` 与 `com.bedcode.auto-task` 两个桌面插件退役并合并进 `com.bedcode.session`（旧 HTTP 前缀由宿主别名表兜底、切断时机并入移动端专项）。移动端零改动，其受损清单与 §9 同步豁免一并记入「双端偏离」节与路线图。实施与验收见 `.scratch/2026-09-19-terminal-session-plugin/`（票 01–18）。
+- **2026-09-22 v9（当前）**：**插件 id 变更登记 + 终端窗口域下沉收口 + 输出原语落地**。① **id 变更**：
+  `com.bedcode.session` → `com.bedcode.terminal-session`（票 06，全链改名；ABI/接口面零变化——plugin id
+  不入 WIT/线协议）；旧 HTTP 前缀 `/api/plugin/com.bedcode.session/*` 与旧互调 api 名在**双投窗口**内由
+  宿主别名兜底到新插件（HTTP 走 `LEGACY_HTTP_PLUGIN_ALIASES`、互调走 `activation::with_api_aliases`，
+  属主仍解析到新插件、回复道 sender 校验口径一致；票 07）。② **私有库路径迁移**（票 07）：插件私有库
+  按 id 分文件，改名后既有用户数据（会话配置/任务历史/迁移账本）在新路径缺失——宿主新增
+  `plugin/session_db_migration.rs`（沿用 task_data_migration 形状：账本即版本戳 / INSERT OR IGNORE 幂等 /
+  best-effort 不阻断启动 / 列名交集拷贝 + task 域改名表字典对齐；目标库缺失走纯文件重命名）。
+  ③ **输出原语落地（v23 性能红线的正例）**：`host-session.output-ring-fetch`（票 04）——v23 修订
+  「输出字节禁止经 JSON 命令通道搬运，经 WIT 二进制原语（`list<u8>` 直传）可进 WASM」的落地点：
+  v22 内**函数级追加不 bump**，插件经 `session.output.pull` 拉取会话 ring（权限 `terminal:output` + 属主
+  校验），宿主 Channel 输出传输（`terminal_stream` 命令面）随前端消费方一并摘除。④ **终端窗口域下沉收口**
+  （票 05）：宿主 `TerminalPreview` / `composables/terminal` / `utils/terminal` 与 attachSink 契约摘除，
+  宿主终端窗口 API 过激活门禁（session 插件停用 → 显性报错，不留降级代办）。移动端零改动，双端偏离表不变。
