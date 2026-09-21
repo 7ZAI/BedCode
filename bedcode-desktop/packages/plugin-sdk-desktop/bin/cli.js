@@ -430,6 +430,7 @@ const VALID_PERMISSIONS = new Set([
   'ws:server',
   'pty:spawn',
   'pty:io',
+  'task:run',
 ])
 
 const VALID_PLUGIN_TYPES = new Set(['ts-only', 'rust-ts', 'rust'])

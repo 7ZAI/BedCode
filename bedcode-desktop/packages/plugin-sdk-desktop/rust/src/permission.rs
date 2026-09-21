@@ -70,6 +70,14 @@ pub const PERMISSION_AUTH: &str = "auth";
 pub const PERMISSION_PTY_SPAWN: &str = "pty:spawn";
 /// 插件私有伪终端·数据域（host-pty，v16）：`write` / `resize` / `ring-fetch` / `is-running`
 pub const PERMISSION_PTY_IO: &str = "pty:io";
+/// 宿主并发任务域（host-task，v20，desktop 独有）：`execute-batch` / `submit` /
+/// `status` / `cancel` / `list-jobs`
+///
+/// 管「占用宿主线程池资源」这件事本身（宿主专用 OS 线程池真并行执行单元操作
+/// 计划）。**双门结构**：每个单元另过其 kind 对应的既有域权限门（`fs:read` /
+/// `fs:write` / `process:run` / `network:http`），仅授本权限不授域权限的插件所有
+/// 单元都会失败——并发能力与数据访问能力解耦授权、解耦审计。
+pub const PERMISSION_TASK_RUN: &str = "task:run";
 
 /// 合法权限集合
 static VALID_PERMISSIONS: &[&str] = &[
@@ -101,6 +109,7 @@ static VALID_PERMISSIONS: &[&str] = &[
     PERMISSION_AUTH,
     PERMISSION_PTY_SPAWN,
     PERMISSION_PTY_IO,
+    PERMISSION_TASK_RUN,
 ];
 
 /// 权限到 API 方法的映射

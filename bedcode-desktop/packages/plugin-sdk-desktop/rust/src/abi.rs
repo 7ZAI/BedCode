@@ -87,8 +87,9 @@
 //! 编号口径（AGENTS.md §7 教训）：本号以 `abi.rs` 与 WIT 版本表实读为准，
 //! 规格正文的「17 → 19」是并发线（host-notification v18）尚未落地时的预判；
 //! 本分支实测 v18 已被「host-auth 认证记录面」占用（票 05），故会话语义下沉的
-//! 第二批次取 v19。
-pub const ABI_VERSION: u32 = 19;
+//! 第二批次取 v19；v20 = host-task 宿主并发任务域（WASM 插件调度 OS 线程池真
+//! 并行执行单元操作计划，desktop 独有双端偏离）。
+pub const ABI_VERSION: u32 = 20;
 
 /// 组件形态标识：`abi.form() == FORM_COMPONENT`（WIT `abi` 接口的 form() 声明）
 ///
@@ -102,13 +103,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_abi_version_is_v19() {
-        // 版本号序列与历史 core ABI 共用：v19 = host-session 配置面（会话语义
-        // 下沉批次之二），叠加 v18 host-auth 认证记录面（同批次之一）、v17
-        // 认证策略导出（auth-policy）、v16 插件私有伪终端原语（host-pty）、v15
-        // 密钥托管（host-auth / secret-store）、v14 host-websocket、v13 host-mdns
-        // v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
-        assert_eq!(ABI_VERSION, 19);
+    fn test_abi_version_is_v20() {
+        // 版本号序列与历史 core ABI 共用：v20 = host-task 宿主并发任务域（WASM
+        // 插件调度 OS 线程池真并行执行单元操作计划，desktop 独有双端偏离），叠加
+        // v19 host-session 配置面（会话语义下沉批次之二）、v18 host-auth 认证记录面
+        // （同批次之一）、v17 认证策略导出（auth-policy）、v16 插件私有伪终端原语
+        // （host-pty）、v15 密钥托管（host-auth / secret-store）、v14 host-websocket、
+        // v13 host-mdns v2、v12 总线二进制载荷与 v11 host-peer 传输控制三原语
+        assert_eq!(ABI_VERSION, 20);
     }
 
     #[test]

@@ -54,6 +54,8 @@ pub mod wasm_host;
 pub mod wasm_ws;
 #[cfg(feature = "wasm")]
 pub mod wasm_auth_policy;
+#[cfg(feature = "wasm")]
+pub mod wasm_task;
 // 组件导出宏（wasm_entry! 内 export!）的绑定类型路径：generate! 的
 // default_bindings_module 指向 `$crate`，绑定模块树在 wasm.rs 下，
 // 此处 re-export 到 crate 根使 `$crate::bedcode::plugin::<iface>::Guest` 可解析

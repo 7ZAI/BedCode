@@ -145,6 +145,25 @@ pub trait WasmPlugin: Send + Sync + 'static {
         Ok(())
     }
 
+    /// 接收宿主并发任务事件（v20，可选，默认忽略）
+    ///
+    /// 由宿主 host-task 分发（`submit` 登记的任务经 `events-task` 可选导出回调，
+    /// 宿主动态探测；`event_json` 为 camelCase：
+    /// `{ jobId, phase: "started"|"progress"|"completed"|"failed"|"cancelled",
+    ///   doneUnits?, failedUnits?, result? }`——result 仅终态携带，同 execute-batch
+    ///   返回）。无返回值（观察型回调，同 `on_ws_message`）：处理失败经 host-log
+    ///   记录，不影响任务执行与其余投递。
+    ///
+    /// **重入纪律（红线）**：本回调由宿主单线程串行投递（与其他宿主→插件导出
+    /// 调用共用同一把实例锁）；**禁止在 guest 调用栈内同步等待自己任务的事件**
+    /// （回调投递需要该锁，等待即自死锁）——等待语义一律走 `execute-batch`（宿主
+    /// 侧 join，不经 Store）；异步任务的结果消费只能在事件回调 / 后续空闲调用里
+    /// 做。回调内再 `submit` 允许（新调用、新拿锁）但受宿主每插件在册任务配额
+    /// 约束，避免「回调风暴」模式。
+    fn on_task_event(_event_json: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
     /// 认证策略导出实现（v17，可选，默认**拒绝**）
     ///
     /// `auth-policy` 能力导出（`verify-device-token`，票 12 C3）：宿主 server
@@ -518,6 +537,20 @@ macro_rules! wasm_entry {
             }
         }
 
+        // ==================== events-task（v20，可选导出，宿主动态探测） ====================
+
+        impl $crate::wasm_task::exports::bedcode::plugin::events_task::Guest for $plugin_type {
+            /// 宿主并发任务进度/终态回调（event-json 为 camelCase，见
+            /// [`WasmPlugin::on_task_event`]）：无返回值（观察型回调）；处理失败经
+            /// host-log 记录，宿主仅 trap 时 error! 并计数，不影响任务执行与其余投递
+            fn on_task_event(event_json: String) {
+                if let Err(e) = <$plugin_type as $crate::wasm::WasmPlugin>::on_task_event(&event_json) {
+                    let host = $crate::wasm_host::WasmHost;
+                    $crate::host::HostLog::log_error(&host, &format!("on_task_event failed: {}", e));
+                }
+            }
+        }
+
         // ==================== 组件导出 ====================
 
         // 生成 #[no_mangle] 导出函数（command/lifecycle/... 全部 5 组接口的 cabi 导出）。
@@ -530,5 +563,7 @@ macro_rules! wasm_entry {
         $crate::wasm_ws::export!($plugin_type);
         // v17：auth-policy 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
         $crate::wasm_auth_policy::export!($plugin_type);
+        // v20：events-task 可选导出的 cabi 导出（宿主动态探测，非 world 必选）
+        $crate::wasm_task::export!($plugin_type);
     };
 }

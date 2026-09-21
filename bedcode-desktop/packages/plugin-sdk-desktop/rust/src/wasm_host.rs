@@ -17,13 +17,13 @@
 use crate::host::{
     ConfigKey, FsDirEntry, FsStat, HostApp, HostAuth, HostBus, HostConfig, HostDatabase, HostError,
     HostEvents, HostFs, HostHttp, HostLog, HostMdns, HostPeer, HostPlatform, HostPluginDatabase,
-    HostProcess, HostPty, HostSession, HostStorage, HostTerminal, HostWebsocket, ProcessSyncResult,
+    HostProcess, HostPty, HostSession, HostStorage, HostTask, HostTerminal, HostWebsocket, ProcessSyncResult,
     PtyRingFetch,
 };
 use crate::wasm::bedcode::plugin::{
     host_app, host_auth, host_bus, host_config, host_database, host_events, host_fs, host_http,
     host_log, host_mdns, host_peer, host_platform, host_plugin_database, host_process, host_pty,
-    host_session, host_storage, host_terminal, host_timer, host_websocket,
+    host_session, host_storage, host_task, host_terminal, host_timer, host_websocket,
 };
 
 /// 宿主 API 绑定（WASM 插件侧）
@@ -424,6 +424,30 @@ impl HostProcess for WasmHost {
         let json = host_process::run_sync(request_json).map_err(|e| host_err("process_run_sync", e))?;
         serde_json::from_str(&json)
             .map_err(|e| HostError::custom(-1, format!("process_run_sync: decode failed: {}", e)))
+    }
+}
+
+// ==================== HostTask ====================
+
+impl HostTask for WasmHost {
+    fn execute_batch(&self, plan_json: &str) -> Result<String, HostError> {
+        host_task::execute_batch(plan_json).map_err(|e| host_err("execute_batch", e))
+    }
+
+    fn submit(&self, plan_json: &str) -> Result<String, HostError> {
+        host_task::submit(plan_json).map_err(|e| host_err("submit", e))
+    }
+
+    fn task_status(&self, job_id: &str) -> Result<Option<String>, HostError> {
+        host_task::status(job_id).map_err(|e| host_err("task_status", e))
+    }
+
+    fn cancel(&self, job_id: &str) -> Result<bool, HostError> {
+        host_task::cancel(job_id).map_err(|e| host_err("cancel", e))
+    }
+
+    fn list_jobs(&self) -> Result<String, HostError> {
+        host_task::list_jobs().map_err(|e| host_err("list_jobs", e))
     }
 }
 

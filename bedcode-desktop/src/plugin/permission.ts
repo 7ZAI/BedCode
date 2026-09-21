@@ -30,6 +30,9 @@ const VALID_PERMISSIONS = new Set([
   'auth',
   'pty:spawn',
   'pty:io',
+  // task:run 为 WASM-only 权限（v20 host-task 并发任务域：execute-batch / submit /
+  // status / cancel / list-jobs），无前端 API 方法映射
+  'task:run',
 ])
 
 /** 权限到 API 方法的映射 */
@@ -74,6 +77,8 @@ const PERMISSION_API_MAP: Record<string, string[]> = {
   // pty:* 为 WASM-only 权限（v16 host-pty 原语：创建域 / 数据域），无前端 API 方法映射
   'pty:spawn': [],
   'pty:io': [],
+  // task:run 为 WASM-only 权限（v20 host-task 并发任务域），无前端 API 方法映射
+  'task:run': [],
 }
 
 /** 检查权限是否合法 */
