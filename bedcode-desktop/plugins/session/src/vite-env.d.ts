@@ -9,3 +9,6 @@ declare module '*.vue' {
   const component: DefineComponent<{}, {}, any>
   export default component
 }
+
+/** xterm 基础样式声明（与宿主 env.d.ts 同款；插件侧经 vite 提取 + inlinePluginCss 内联进 index.js） */
+declare module '@xterm/xterm/css/xterm.css' {}

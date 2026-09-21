@@ -30,6 +30,12 @@ import TaskQueueModal from './components/TaskQueueModal.vue'
 import taskModalCss from './components/task-queue-modal.css?inline'
 // 开源 Vue3 日期/时间选择组件（替代原生 datetime-local 控件，样式可随主题定制）
 import datepickerCss from '@vuepic/vue-datepicker/dist/main.css?inline'
+// 终端基础样式（票 02）：宿主 TerminalPreview 同款导入。宿主 vite 是 app 模式直接产出
+// CSS 文件，插件是 lib 模式——vite 会把 CSS 提取为独立 asset，由本插件 vite.config.ts 的
+// inlinePluginCss() 内联进 index.js 并在加载时自注入 document.head（task-modal 同机制，
+// 无 url()/@import 引用，内联安全）；终端窗口为独立 WebviewWindow，各自加载插件入口时
+// 自带样式，不依赖宿主 bundle 的 CSS。
+import '@xterm/xterm/css/xterm.css'
 // 宿主 OS 平台：任务域 hooks 按平台选择 Python 解释器命令（Windows=python，
 // Linux/macOS=python3），通过 @tauri-apps/plugin-os 读取（同步 API，宿主已注册该插件）
 import { platform } from '@tauri-apps/plugin-os'
