@@ -126,7 +126,7 @@ record ring-fetch-result {
 }
 ```
 
-- **事件面**：仅 `pty:exit.<owner>` 一条，走 host-bus 订阅（topic 内嵌 owner，非属主物理订阅不到；SDK 提供 `pty_event_topic(event, plugin_id)` 助手 + `PTY_EXIT` 常量 + 订阅时序硬提示：activate 期订阅、不重放、自愈靠快照）。无状态事件（spawn 成败在返回值里）、无错误事件（错误上抛即 Err）。
+- **事件面**：仅 `<owner>::pty:exit` 一条，走 host-bus 订阅（属主私有命名空间。**订正（2026-09-22，审计票 05）**：立项时写的「topic 内嵌 owner，非属主物理订阅不到」当时并不成立——总线订阅面零校验，任何插件都能订阅他人的 `pty:exit.<id>` 并向其伪发布；现由总线命名空间门禁兑现：`<plugin-id>::<name>` 只有属主与宿主可订阅/可发布，跨属主一律 Rust 端显式拒绝。SDK 提供 `pty_event_topic(event, plugin_id)` 助手 + `PTY_EXIT` 常量 + 订阅时序硬提示：activate 期订阅、不重放、自愈靠快照）。无状态事件（spawn 成败在返回值里）、无错误事件（错误上抛即 Err）。
 - **ABI**：desktop v14 → **v16**，纯增量 `world plugin` 加一个 import，不比改既有函数；既有插件零迁移（宿主侧 `version > 当前 → 拒绝` 兼容旧插件）。`abi.interface` 版本演进注释补 v16，并注明 **v15 已预留给认证中心线的 `host-auth`**（两条线不撞号；host-auth 先落 v15，host-pty 落 v16）。
 - 复用 `list<u8>` 直传（events-binary / publish-binary / ws send-binary 先例），不做 base64/JSON 包装。
 
