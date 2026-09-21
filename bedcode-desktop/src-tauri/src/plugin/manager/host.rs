@@ -6,14 +6,12 @@
 
 use crate::db::Database;
 use crate::plugin::manager::loader::PluginLoader;
-use crate::plugin::permission::PermissionManager;
 use crate::plugin::manager::registry::PluginRegistry;
 use crate::plugin::manager::storage::PluginStorage;
 use crate::plugin::manager::types::{DesktopPluginInfo, LoadedPlugin, PluginSource};
 use crate::plugin::manager::wasm_runtime::{LoadedWasmPlugin, WasmHostContext, WasmRuntime};
-use crate::session::{
-    SessionConfigManager, SessionManager,
-};
+use crate::plugin::permission::PermissionManager;
+use crate::session::{SessionConfigManager, SessionManager};
 use crate::system::constants::event;
 use crate::system::constants::plugin::{PLUGIN_CALLBACK_TIMEOUT_SECS, PLUGIN_MANIFEST_FILE};
 use bedcode_plugin_api::{PluginKind, PluginState};
@@ -25,43 +23,8 @@ use std::sync::{Arc, OnceLock};
 use tauri::Emitter;
 use tokio::sync::{Mutex, RwLock};
 
-/// 预授权路径提供者签名：返回插件「启用前需要授权的路径列表」。
-///
-/// 由 `PluginHost::register_preauth_provider` 注册；默认回退到
-/// `PluginStorage::get(plugin_id, "preauth_paths")` 读取。
-pub type PreauthProvider = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
-
 /// file-transfer 插件 ID(启用先行门禁测试用;移动端无独立镜像常量)。
 pub const FILE_TRANSFER_PLUGIN_ID: &str = "com.bedcode.file-transfer";
-
-/// 预授权 storage key(file-transfer mount-local 时追加写入;其他插件可由
-/// provider 动态提供;缺字段 = 视为「无预授权路径」,直接放行)。
-pub const PREAUTH_PATHS_STORAGE_KEY: &str = "preauth_paths";
-
-/// 预授权提供者注册表:静态注册 + host function 动态注册共用,跨 PluginHost
-/// 实例共享(测试可单例化)。PluginHost::activate_plugin 阶段1 入口调
-/// collect_preauth_paths 收集,再走 fs_auth::check_batch 单次合并弹窗。
-static PREAUTH_PROVIDERS: OnceLock<RwLock<HashMap<String, PreauthProvider>>> = OnceLock::new();
-
-fn preauth_providers() -> &'static RwLock<HashMap<String, PreauthProvider>> {
-    PREAUTH_PROVIDERS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-/// 注册预授权路径提供者(供 plugin 内部 host function 调用,优先级高于
-/// 默认 storage 读取)。同名 plugin_id 覆盖;运行期增量注册即时生效。
-pub async fn register_preauth_provider(plugin_id: &str, provider: PreauthProvider) {
-    let mut map = preauth_providers().write().await;
-    map.insert(plugin_id.to_string(), provider);
-}
-
-/// 收集插件的预授权路径:注册的 provider 优先,否则从 PluginStorage 读
-/// `preauth_paths` 数组。返回空 Vec 表示「无需预授权」。
-async fn collect_preauth_paths(plugin_id: &str) -> Vec<String> {
-    if let Some(provider) = preauth_providers().read().await.get(plugin_id).cloned() {
-        return provider(plugin_id);
-    }
-    Vec::new()
-}
 
 /// WASM 插件 trap 自动重载最小间隔（秒）
 ///
@@ -358,64 +321,10 @@ impl PluginHost {
     }
 
     /// 将所有已加载插件的 manifest contributes 注册到 registry
-    async fn register_manifest_contributions(&self) {
-        let plugins = self.plugins.read().await;
-        for loaded in plugins.values() {
-            let m = &loaded.manifest;
-            self.registry.register_commands(&m.id, &m.contributes.commands).await;
-            self.registry.register_views(&m.id, &m.contributes.views).await;
-            if let Some(ref term) = m.contributes.terminal {
-                self.registry
-                    .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
-                    .await;
-            }
-            self.registry
-                .register_tool_providers(&m.id, &m.contributes.tool_providers)
-                .await;
-            self.registry
-                .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
-                .await;
-            self.registry
-                .register_file_handlers(&m.id, &m.contributes.file_handlers)
-                .await;
-        }
-    }
 
     /// 注册 Rust 插件的 command handlers 到运行时注册表（inventory 静态注册）
-    async fn register_rust_command_handlers(&self) {
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
-            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
-                .into_iter()
-                .collect();
-
-        let mut handlers = self.rust_command_handlers.write().await;
-        for entry in static_plugins {
-            let commands = (entry.register_commands)();
-            let plugin_id = entry.id;
-            for cmd in commands {
-                let full_name = format!("{}::{}", plugin_id, cmd.name);
-                tracing::info!("Registered Rust command: {}", full_name);
-                handlers.insert(full_name, cmd);
-            }
-        }
-    }
 
     /// 注册 Rust 插件的 terminal handlers 到运行时注册表（inventory 静态注册）
-    async fn register_rust_terminal_handlers(&self) {
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
-            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
-                .into_iter()
-                .collect();
-
-        let mut handlers = self.rust_terminal_handlers.write().await;
-        for entry in static_plugins {
-            let plugin_handlers = (entry.terminal_handlers)();
-            for handler in plugin_handlers {
-                tracing::info!(plugin_id = %entry.id, "Registered Rust terminal handler");
-                handlers.push(handler);
-            }
-        }
-    }
 
     // ==================== Accessors ====================
 
@@ -519,1322 +428,27 @@ impl PluginHost {
         let plugins = self.plugins.read().await;
         plugins.get(plugin_id).map(DesktopPluginInfo::from)
     }
-
-    /// 检查插件是否处于激活状态（用于 API 调用的调用者身份校验）
-    pub async fn is_activated(&self, plugin_id: &str) -> bool {
-        let plugins = self.plugins.read().await;
-        let result = plugins
-            .get(plugin_id)
-            .map(|p| matches!(p.state, PluginState::Activated))
-            .unwrap_or(false);
-        // 高频校验路径（每插件 API 调用都会经过），仅 trace 级别可见，避免刷屏
-        tracing::trace!(plugin_id = %plugin_id, activated = result, "[PluginHost] is_activated");
-        result
-    }
-
-    /// 通知所有已激活的 Rust 插件应用启动完成
-    pub async fn notify_startup(&self) {
-        // 静态注册插件
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
-            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
-                .into_iter()
-                .collect();
-        for entry in &static_plugins {
-            if self.is_activated(entry.id).await {
-                tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_startup");
-                let result = tokio::time::timeout(
-                    std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
-                    (entry.on_startup)(),
-                )
-                .await;
-                match result {
-                    Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_startup timed out"),
-                    Ok(Ok(())) => {}
-                    // v8 契约：启动初始化失败如实记录（静态插件无 Degraded 态，
-                    // 仅日志可观测；builtin 常驻语义见 ticket 03）
-                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_startup failed"),
-                }
-            }
-        }
-
-        // WASM 插件的 on_startup 已在 activate_plugin() 中自动调用，此处不再重复
-
-        // TS-only 插件：通过 Tauri 事件通知
-        // 无头/测试上下文无 AppContext：降级为纯日志跳过（与统一异常通道同策略），
-        // 不影响上方静态插件的回调分发
-        if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-            if let Some(handle) = ctx.app_handle() {
-                let _ = handle.emit(event::LIFECYCLE_STARTUP, serde_json::json!({}));
-            }
-        }
-
-        tracing::info!("PluginHost notify_startup completed");
-    }
-
-    /// 通知所有已激活的插件应用即将关闭
-    pub async fn notify_shutdown(&self) {
-        // 静态注册插件
-        let static_plugins: Vec<&'static bedcode_plugin_api::BedcodePluginEntry> =
-            inventory::iter::<bedcode_plugin_api::BedcodePluginEntry>
-                .into_iter()
-                .collect();
-        for entry in &static_plugins {
-            if self.is_activated(entry.id).await {
-                tracing::debug!(plugin_id = %entry.id, "Notifying plugin on_shutdown");
-                let result = tokio::time::timeout(
-                    std::time::Duration::from_secs(PLUGIN_CALLBACK_TIMEOUT_SECS),
-                    (entry.on_shutdown)(),
-                )
-                .await;
-                match result {
-                    Err(_) => tracing::error!(plugin_id = %entry.id, "Plugin on_shutdown timed out"),
-                    Ok(Ok(())) => {}
-                    // 清理失败仅记录：停用流程继续，不影响状态机
-                    Ok(Err(e)) => tracing::error!(plugin_id = %entry.id, error = %e, "Plugin on_shutdown failed"),
-                }
-            }
-        }
-
-        // WASM 插件的 on_shutdown 已在 deactivate_plugin() 中自动调用，此处不再重复
-
-        // TS-only 插件：通过 Tauri 事件通知（无头/测试上下文降级跳过，同 notify_startup）
-        if let Some(ctx) = crate::system::app_context::AppContext::try_global() {
-            if let Some(handle) = ctx.app_handle() {
-                let _ = handle.emit(event::LIFECYCLE_SHUTDOWN, serde_json::json!({}));
-            }
-        }
-
-        tracing::info!("PluginHost notify_shutdown completed");
-    }
-
-    /// 停用所有已激活的插件（应用关闭流程）
-    pub async fn deactivate_all(&self) -> crate::Result<()> {
-        // 置关闭标志：deactivate 内的卸载动作（CLI 清理等）跳过，
-        // 保留随包产物供下次启动重新激活（幂等安装）
-        self.shutting_down.store(true, std::sync::atomic::Ordering::SeqCst);
-
-        let plugin_ids: Vec<String> = {
-            let plugins = self.plugins.read().await;
-            plugins
-                .values()
-                .filter(|p| matches!(p.state, PluginState::Activated))
-                .map(|p| p.manifest.id.clone())
-                .collect()
-        };
-
-        for id in plugin_ids {
-            if let Err(e) = self.deactivate_plugin(&id, false).await {
-                tracing::error!(plugin_id = %id, error = %e, "Failed to deactivate plugin during shutdown");
-            }
-        }
-
-        tracing::info!("PluginHost deactivate_all completed");
-        Ok(())
-    }
-
-    /// 激活插件
-    ///
-    /// 预授权(启用前置):收集插件需授权路径 → 调 `fs_auth::check_batch`
-    /// 单次合并弹窗。失败直接 `mark_error` + 返回 `AppError::Plugin`,
-    /// 不进入 `Activating` 中间态。**必须在 `activate_plugin` 阶段1 入口
-    /// (置 Activating 之前)调用,持有 plugins 锁时禁止调用**(check_batch
-    /// 会发事件、可能回调宿主,持锁会死锁)。
-    ///
-    /// 路径来源:已注册的 `PreauthProvider` 优先;否则从 `PluginStorage`
-    /// `preauth_paths` 数组读(file-transfer mount-local 同步写入);
-    /// 另并入 manifest `wasiPreopenDirs` 展开后的声明目录(如 ai-chatbox
-    /// 数据目录)——插件 activate 内 fs_request_auth 的弹窗晚于前端 loading
-    /// 遮罩,声明目录必须提前到本阶段统一弹窗。
-    /// 路径为空 → 直接放行(启用先行:file-transfer 首次启用/全部目录移除后
-    /// 均可空目录激活,共享目录配置由插件设置面板引导;硬拒绝会造成
-    /// 「配置需激活 → 激活需先配置」死锁)。
-    pub async fn preauthorize_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        // 1. 收集路径(注册 provider 优先,否则 storage 数组)
-        let mut paths = collect_preauth_paths(plugin_id).await;
-        if paths.is_empty() {
-            if let Ok(Some(value)) = self.storage.get(plugin_id, PREAUTH_PATHS_STORAGE_KEY).await {
-                if let Value::Array(arr) = value {
-                    paths = arr
-                        .into_iter()
-                        .filter_map(|v| v.as_str().map(String::from))
-                        .collect();
-                }
-            }
-        }
-
-        // 1.5 并入 manifest wasiPreopenDirs 声明目录(展开不过滤授权,未授权
-        // 项正需在此弹窗)。短读锁克隆后立即释放:check_batch 会发事件、可能
-        // 回调宿主,跨 await 持锁有死锁风险
-        let declared = {
-            let plugins = self.plugins.read().await;
-            plugins
-                .get(plugin_id)
-                .map(|p| p.manifest.wasi_preopen_dirs.clone())
-                .unwrap_or_default()
-        };
-        for dir in crate::plugin::manager::wasm_runtime::expand_preopen_declarations(plugin_id, &declared) {
-            if !paths.contains(&dir) {
-                paths.push(dir);
-            }
-        }
-
-        if paths.is_empty() {
-            return Ok(());
-        }
-
-        // 3. 合并未授权路径为单次弹窗(check_batch 内部已实现事件 emit + 30s 超时)
-        let allowed = self
-            .wasm_runtime
-            .fs_auth()
-            .check_batch(plugin_id, &paths, crate::plugin::security::fs_auth::FsOp::Read)
-            .await;
-        if !allowed {
-            return Err(crate::AppError::Plugin(
-                "Plugin enable denied: file access authorization rejected".to_string(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// - 静态注册插件：仅标记状态
-    /// - WASM 插件：调用 __bedcode_activate 导出函数
-    /// - TS-only 插件：前端模块加载在 PluginLoader 中完成
-    pub async fn activate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        // 外壳：激活成功后接线 peer-net 节点生命周期（file-transfer 是节点唯一
-        // 消费方，节点随插件启停——旧 setup 无条件自启已退役，停用即服务下线）
-        let result = self.activate_plugin_inner(plugin_id, persist).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
-            match crate::system::app_context::AppContext::try_global() {
-                Some(ctx) => {
-                    if let Some(app) = ctx.app_handle() {
-                        if let Err(e) = crate::peer_net::ensure_node_started(app).await {
-                            tracing::error!(
-                                plugin_id = %plugin_id,
-                                error = %e,
-                                "peer-net node start on plugin activation failed"
-                            );
-                        }
-                    }
-                }
-                // boot 装配期 AppContext 未注册：静默跳过，由 boot 末尾的状态
-                // 对账（sync_node_with_plugin_state）兜底
-                None => {
-                    tracing::debug!("peer-net node start skipped: AppContext not ready (boot assembly)");
-                }
-            }
-        }
-        result
-    }
-
-    async fn activate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] activate_plugin");
-
-        // 阶段 0(无锁):预授权 — 必须在持 plugins 锁之前完成,失败直接
-        // 返回 Err,前端 catch 后回退 toggle。loading 遮罩由前端 toggle
-        // 推迟到此调用之后才显示,确保授权弹窗与 loading 不会同时出现
-        self.preauthorize_plugin(plugin_id).await?;
-
-        // 阶段 1（短写锁）：读取状态与 manifest 字段、重新授权后立即释放锁。
-        // 禁止持 plugins 锁执行 WASM activate：activate 内可能回调宿主
-        // （如 scheduler 的 cli_install 经 services.install_cli 读 plugins map），
-        // 持写锁回调会死锁（锁约定见 PluginManager::activate，双侧一致）
-        struct ActivatePlan {
-            source: PluginSource,
-            api: Vec<String>,
-            subscribes: Vec<String>,
-            declared_preopen_dirs: Vec<String>,
-            kind: PluginKind,
-            dependencies: Vec<String>,
-        }
-        let plan = {
-            let mut plugins = self.plugins.write().await;
-            let loaded = plugins.get_mut(plugin_id).ok_or_else(|| {
-                tracing::error!(plugin_id = %plugin_id, "[PluginHost] activate_plugin: plugin not found in plugins map");
-                crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id))
-            })?;
-
-            match &loaded.state {
-                PluginState::Activated => {
-                    tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Plugin already activated, skipping");
-                    return Ok(());
-                }
-                PluginState::Error(e) => {
-                    tracing::warn!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Plugin in error state, attempting re-activation"
-                    );
-                }
-                // Degraded 重试激活：启动初始化上次失败，本次重新走完整流程
-                PluginState::Degraded(e) => {
-                    tracing::info!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Plugin in degraded state, attempting re-activation"
-                    );
-                }
-                _ => {
-                    tracing::debug!(
-                        plugin_id = %plugin_id,
-                        state = ?loaded.state,
-                        "[PluginHost] Plugin current state, proceeding with activation"
-                    );
-                }
-            }
-
-            // 重新授权：deactivate 会 revoke_all，再次激活时必须重新授予
-            let permissions = loaded.manifest.permissions.clone();
-            let granted = self.permission.grant_permissions(plugin_id, &permissions);
-            loaded.granted_permissions = granted;
-
-            // 置中间态后再释放锁执行 WASM activate：列表查询在激活期间
-            // 可见 Activating（瞬时态，终态由下方 phase 2/3 写入）
-            loaded.state = PluginState::Activating;
-
-            ActivatePlan {
-                source: loaded.source.clone(),
-                api: loaded.manifest.api.clone(),
-                subscribes: loaded.manifest.contributes.subscribes.clone(),
-                declared_preopen_dirs: loaded.manifest.wasi_preopen_dirs.clone(),
-                kind: loaded.manifest.kind,
-                dependencies: loaded.manifest.dependencies.clone(),
-            }
-        };
-
-        // 阶段 1.5（无锁）：能力依赖装配检查（core-plugin-manager）——manifest
-        // `dependencies` 声明的每个能力必须已有提供者（宿主原语或已激活的
-        // 系统组件实例）；缺失即激活失败并指明能力名。系统组件先于应用插件
-        // 激活（见 PluginHost::new 的 activate_system_components），故此处的
-        // 注册表快照对应用插件而言已含全部系统组件提供者。
-        if !plan.dependencies.is_empty() {
-            let missing = self.wasm_host_ctx.capabilities().missing(&plan.dependencies);
-            if !missing.is_empty() {
-                let msg = format!(
-                    "plugin dependencies not satisfied, missing capabilities: {}",
-                    missing.join(", ")
-                );
-                tracing::error!(
-                    plugin_id = %plugin_id,
-                    missing = ?missing,
-                    "[PluginHost] 能力依赖未装配，激活失败"
-                );
-                self.mark_error(plugin_id, msg.clone()).await;
-                return Err(crate::AppError::Plugin(format!("Plugin {} activation failed: {}", plugin_id, msg)));
-            }
-        }
-
-        // 阶段 2（无 map 锁）：执行 WASM activate + on_startup
-        // 仅持单插件实例锁（避免重入死锁），失败置 Error 状态
-        // on_startup 的 guest 自报失败记录于此，phase 3 据此写 Degraded 终态
-        let mut startup_failure: Option<String> = None;
-        if plan.source == PluginSource::Wasm {
-            // WASI 预打开目录漂移检测：声明了预打开目录的插件，激活前先核对当前
-            // 实例是否已覆盖「现在已授权」的目录。首次启用时授权经 activate() 内
-            // fs_request_auth 弹窗才落库（早于实例化），实例预打开为空；重试激活
-            // （停用再启用）时授权已持久化，若实例未覆盖则重建——否则 /data 永远
-            // 挂不上，激活自检必失败（Bug B 死循环）。无声明的插件跳过重建（零开销）。
-            if !plan.declared_preopen_dirs.is_empty() {
-                let resolved = crate::plugin::manager::wasm_runtime::resolve_preopen_dirs(
-                    &self.wasm_host_ctx,
-                    plugin_id,
-                    &plan.declared_preopen_dirs,
-                );
-                let missing = {
-                    let wasm_plugins = self.wasm_plugins.read().await;
-                    match wasm_plugins.get(plugin_id).cloned() {
-                        Some(inst) => {
-                            // 锁序纪律：先释放 map 读锁再锁实例（与 deactivate 一致），
-                            // 避免「持 map 锁 + 实例锁」的组合与未来热重载写锁交叉
-                            drop(wasm_plugins);
-                            let preopened = inst.lock().await.preopened_dirs().to_vec();
-                            !resolved.iter().all(|d| preopened.iter().any(|p| p == d))
-                        }
-                        // 实例缺失：走重建路径补建（与 reload 语义一致）
-                        None => true,
-                    }
-                };
-                if missing {
-                    tracing::info!(
-                        plugin_id = %plugin_id,
-                        declared = ?plan.declared_preopen_dirs,
-                        resolved = ?resolved,
-                        "Rebuilding WASM instance before activation: preopen dirs changed after instance creation"
-                    );
-                    self.rebuild_wasm_instance(plugin_id).await?;
-                }
-            }
-
-            let wasm_plugin = {
-                let wasm_plugins = self.wasm_plugins.read().await;
-                wasm_plugins.get(plugin_id).cloned()
-            };
-            let Some(wasm_plugin) = wasm_plugin else {
-                tracing::error!(plugin_id = %plugin_id, "WASM plugin not found in wasm_plugins map");
-                // phase 1 已置 Activating 中间态：失败路径必须落终态，不留悬挂
-                self.mark_error(plugin_id, "WASM module not loaded".to_string())
-                    .await;
-                return Err(crate::AppError::Plugin(format!(
-                    "Plugin {} WASM module not loaded",
-                    plugin_id
-                )));
-            };
-
-            // WASI 需要无 handle 线程执行 guest 导出（见 run_guest_call）
-            match self.run_guest_call(wasm_plugin.clone(), |p| p.activate()).await {
-                Ok(Ok(0)) => {
-                    tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin activated");
-                }
-                Ok(Ok(code)) => {
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        code = %code,
-                        "[PluginHost] Plugin activate() returned error code"
-                    );
-                    self.mark_error(plugin_id, format!("activate() returned error code {}", code))
-                        .await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} activate() returned error code {}",
-                        plugin_id, code
-                    )));
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin activate() failed");
-                    self.mark_error(plugin_id, format!("activate() failed: {}", e)).await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} activate() failed: {}",
-                        plugin_id, e
-                    )));
-                }
-                Err(panic) => {
-                    let msg = crate::plugin::manager::wasm_runtime::panic_payload_to_string(&panic);
-                    self.mark_error(plugin_id, format!("activate() panicked: {}", msg))
-                        .await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} activate() panicked: {}",
-                        plugin_id, msg
-                    )));
-                }
-            }
-
-            // 激活成功后自动调用 on_startup（启动初始化；结果决定 Activated / Degraded）
-            // v8 契约：guest 自报失败不再静默吞掉——Degraded 终态如实反映
-            // 「实例可用、扩展点已注册，但启动初始化未完成」
-            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_startup");
-            match self.run_guest_call(wasm_plugin, |p| p.on_startup()).await {
-                Ok(Ok(Ok(()))) => {
-                    tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_startup completed");
-                }
-                Ok(Ok(Err(e))) => {
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Plugin on_startup reported failure"
-                    );
-                    startup_failure = Some(e);
-                }
-                Ok(Err(e)) => {
-                    // 调用层错误（非 trap）：导出不可达 / 燃料异常等，启动初始化同样未完成
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Plugin on_startup call failed"
-                    );
-                    startup_failure = Some(e.to_string());
-                }
-                Err(panic) => {
-                    let msg = crate::plugin::manager::wasm_runtime::panic_payload_to_string(&panic);
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %msg,
-                        "[PluginHost] Plugin on_startup panicked"
-                    );
-                    // panic 已污染 Store，后续调用必然失败：按故障态处理（区别于可用的
-                    // 降级），恢复依赖既有 trap 自动重载机制
-                    self.mark_error(plugin_id, format!("on_startup panicked: {}", msg))
-                        .await;
-                    return Err(crate::AppError::Plugin(format!(
-                        "Plugin {} on_startup panicked: {}",
-                        plugin_id, msg
-                    )));
-                }
-            }
-        }
-
-        // 阶段 3（短写锁）：写入终态（Activated 或 Degraded），然后释放锁执行订阅登记。
-        // Degraded 同样完成订阅/api 登记：WASM 实例本身是活的，
-        // 与「启动初始化部分失败」正交
-        {
-            let mut plugins = self.plugins.write().await;
-            if let Some(loaded) = plugins.get_mut(plugin_id) {
-                loaded.state = match &startup_failure {
-                    Some(reason) => PluginState::Degraded(reason.clone()),
-                    None => PluginState::Activated,
-                };
-                loaded.activated_at = Some(Utc::now());
-            }
-        }
-        // core-monitor：启动初始化部分失败（Degraded 终态）埋点
-        if startup_failure.is_some() {
-            self.wasm_runtime
-                .monitor()
-                .plugin(plugin_id)
-                .record_lifecycle(crate::plugin::monitor::LifecycleEvent::Degraded);
-        }
-
-        // 登记互调 api 清单（ADR-0017）：激活后 `bedcode.api.*` 请求可路由到本插件。
-        // 未声明 api 的插件登记空清单，幂等无操作
-        self.wasm_host_ctx.api_registry().register(plugin_id, &plan.api);
-
-        // core-plugin-manager：系统组件激活后装配能力注册表——实例化时探测到的
-        // 可路由能力导出（host-* 同形接口）注册为系统组件提供者，应用插件的
-        // 对应 import 自此经 Linker 路由转发到本组件实例（host-side 转发）
-        if plan.kind == PluginKind::System {
-            self.register_system_capabilities(plugin_id).await;
-        }
-
-        // 注册 manifest 中声明的 topic 订阅
-        if !plan.subscribes.is_empty() {
-            let plugin_id_owned = plugin_id.to_string();
-            for topic in &plan.subscribes {
-                self.message_bus.subscribe_wasm(&plugin_id_owned, topic).await;
-            }
-            tracing::info!(
-                plugin_id = %plugin_id_owned,
-                topic_count = plan.subscribes.len(),
-                "[PluginHost] Plugin subscribed to topic(s): {:?}",
-                plan.subscribes
-            );
-        }
-
-        // 终态日志：成功与降级分别如实呈现（汇总日志在 PluginHost::new 尾部）
-        match &startup_failure {
-            Some(reason) => tracing::info!(
-                plugin_id = %plugin_id,
-                persist,
-                "[PluginHost] Plugin activated with degradation: {}",
-                reason
-            ),
-            None => {
-                tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] Plugin activated successfully");
-            }
-        }
-
-        if persist {
-            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Persisting activation state after activating");
-            self.persist_activation_state().await;
-        }
-
-        Ok(())
-    }
-
-    /// 注册系统组件的能力提供者（core-plugin-manager）
-    ///
-    /// 读取实例化时探测到的可路由能力导出，逐项注册进能力注册表；
-    /// 导出缺失/不可路由的能力跳过并告警（不阻断激活——组件仍可提供
-    /// 其余能力，缺失能力由依赖检查在消费方激活时报错）。
-    async fn register_system_capabilities(&self, plugin_id: &str) {
-        let instance = {
-            let wasm_plugins = self.wasm_plugins.read().await;
-            wasm_plugins.get(plugin_id).cloned()
-        };
-        let Some(instance) = instance else {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "[PluginHost] 系统组件无 WASM 实例，跳过能力注册（非 WASM 来源？）"
-            );
-            return;
-        };
-        let exported = instance.lock().await.exported_capabilities().to_vec();
-        if exported.is_empty() {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "[PluginHost] 系统组件未导出任何可路由能力接口（manifest type=system 但无能力导出）"
-            );
-        }
-        for capability in exported {
-            if let Err(e) = self
-                .wasm_host_ctx
-                .capabilities()
-                .register_system_component(&capability, plugin_id, instance.clone())
-            {
-                tracing::error!(
-                    plugin_id = %plugin_id,
-                    capability = %capability,
-                    error = %e,
-                    "[PluginHost] 系统组件能力注册失败"
-                );
-            }
-        }
-    }
-
-    /// 重建 WASM 插件实例（load_plugin_from_file + 替换 map 条目）
-    ///
-    /// 激活路径：声明 WASI 预打开目录的插件首次授权后实例未覆盖新授权目录时
-    /// 重建，使 /data 挂载与授权一致；热重载路径同样复用（停用 → 重建 → 重注册）。
-    /// 失败上抛（原实例保留，激活流程走既有错误分支置 Error 态）。
-    async fn rebuild_wasm_instance(&self, plugin_id: &str) -> crate::Result<()> {
-        let (rust_library, extension_path, declared_preopen_dirs, resource_overrides) = {
-            let plugins = self.plugins.read().await;
-            let loaded = plugins
-                .get(plugin_id)
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            (
-                loaded.manifest.rust_library.clone(),
-                loaded.extension_path.clone(),
-                loaded.manifest.wasi_preopen_dirs.clone(),
-                loaded.manifest.resource_overrides,
-            )
-        };
-
-        let plugin_dir = Path::new(&extension_path);
-        let wasm_filename = format!("{}.wasm", rust_library);
-        let wasm_path = plugin_dir.join(&wasm_filename);
-
-        let new_wasm_plugin = self
-            .wasm_runtime
-            .load_plugin_from_file(
-                &wasm_path,
-                plugin_id,
-                self.wasm_host_ctx.clone(),
-                &declared_preopen_dirs,
-                resource_overrides.as_ref(),
-            )?;
-        self.wasm_plugins
-            .write()
-            .await
-            .insert(plugin_id.to_string(), Arc::new(Mutex::new(new_wasm_plugin)));
-
-        // core-plugin-manager：系统组件实例重建后，能力注册表中的旧实例句柄
-        // 已失效，按新实例重新装配（trap 自愈回落宿主原语的场景亦在此恢复）
-        let is_system = {
-            let plugins = self.plugins.read().await;
-            plugins
-                .get(plugin_id)
-                .map(|p| p.manifest.kind == PluginKind::System)
-                .unwrap_or(false)
-        };
-        if is_system {
-            self.wasm_host_ctx.capabilities().revert_all_from(plugin_id);
-            self.register_system_capabilities(plugin_id).await;
-        }
-        Ok(())
-    }
-
-    /// 停用插件
-    /// 中止指定插件的定时器（停用时调用，v6 ADR 0003）
-    /// 从 zip 分发包安装插件（dev 合入）
-    ///
-    /// 解压校验（manifest/身份/路径安全）→ 重新扫描用户目录 → WASM 实例化 →
-    /// 注册 manifest 扩展点。同 id 已安装时回滚安装目录并报错（需先卸载）。
-    pub async fn install_from_zip(&self, zip_path: &str) -> crate::Result<String> {
-        let plugin_id =
-            crate::plugin::downloader::PluginDownloader::install_from_file(zip_path, &self.user_plugins_dir)?;
-
-        if self.plugins.read().await.contains_key(&plugin_id) {
-            let dir = self.user_plugins_dir.join(&plugin_id);
-            if dir.exists() {
-                std::fs::remove_dir_all(&dir)
-                    .map_err(|e| crate::AppError::Plugin(format!("Failed to rollback plugin dir: {}", e)))?;
-            }
-            return Err(crate::AppError::Plugin(format!(
-                "Plugin '{}' is already installed. Uninstall it first to install a new version.",
-                plugin_id
-            )));
-        }
-
-        // 重新扫描用户目录，加载新插件（含 WASM 实例化，与 new() 初始化路径一致）
-        let loaded_map =
-            PluginLoader::load_all(&self.user_plugins_dir, &self.permission, Some(PluginSource::UserInstalled));
-        let Some(loaded) = loaded_map.get(&plugin_id).cloned() else {
-            return Err(crate::AppError::Plugin(format!(
-                "Plugin installed but failed to load: {}",
-                plugin_id
-            )));
-        };
-
-        let wasm_plugin = if !loaded.manifest.rust_library.is_empty() {
-            let wasm_path = Path::new(&loaded.extension_path).join(format!(
-                "{}{}",
-                loaded.manifest.rust_library,
-                crate::system::constants::plugin::WASM_FILE_EXT
-            ));
-            match self.wasm_runtime.load_plugin_from_file(
-                &wasm_path,
-                &plugin_id,
-                self.wasm_host_ctx.clone(),
-                &loaded.manifest.wasi_preopen_dirs,
-                loaded.manifest.resource_overrides.as_ref(),
-            ) {
-                Ok(wasm_plugin) => Some(Arc::new(Mutex::new(wasm_plugin))),
-                Err(e) => {
-                    tracing::error!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        "[PluginHost] Failed to load WASM for newly installed plugin"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // 写入 plugins / wasm_plugins map（WASM 实例化失败时插件以 Error 态入表，
-        // 保证列表可见可诊断，与 new() 初始化语义一致）
-        {
-            let mut plugins = self.plugins.write().await;
-            plugins.insert(
-                plugin_id.clone(),
-                if wasm_plugin.is_some() || loaded.manifest.rust_library.is_empty() {
-                    loaded.clone()
-                } else {
-                    LoadedPlugin {
-                        state: PluginState::Error(format!("WASM load failed: {}", loaded.extension_path)),
-                        ..loaded.clone()
-                    }
-                },
-            );
-        }
-        if let Some(wp) = wasm_plugin {
-            self.wasm_plugins.write().await.insert(plugin_id.clone(), wp);
-        }
-        // 注册 manifest contributes 扩展点（commands/views/fileHandlers 等）
-        self.register_plugin_contributions(&plugin_id).await;
-
-        tracing::info!(
-            plugin_id = %plugin_id,
-            "[PluginHost] Plugin installed from zip and registered"
-        );
-        Ok(plugin_id)
-    }
-
-    /// 卸载插件：删除插件所有数据（存储 + 激活状态 + 安装目录 + 私有数据库，dev 合入）
-    ///
-    /// 适用范围：**所有来源的插件**（内置随包 / 用户 zip 安装 / 文件扫描 / 静态注册）。
-    /// 前置条件：插件存在且**未启用**（Activated/Activating/Degraded 拒绝卸载）。
-    /// 执行：停用（hooks 清理/总线退订/扩展点注销）→ 丢弃私有数据库连接 →
-    /// 删除安装目录 → 移除运行时实例与记录 → 清空插件存储 → 撤销持久化审批
-    /// 记录 → 清理持久化激活状态与限频簿记。
-    pub async fn uninstall_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        // 安装目录取自插件自身的 extension_path：内置插件在资源目录、用户插件在
-        // app_data_dir/plugins，二者都是「插件自有的安装目录」，删除语义一致
-        let plugin_dir = {
-            let plugins = self.plugins.read().await;
-            let loaded = plugins
-                .get(plugin_id)
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            // 规则：仅未启用插件可卸载（Activating 是激活进行中的瞬时态，同样拒绝）
-            if matches!(
-                loaded.state,
-                PluginState::Activated | PluginState::Activating | PluginState::Degraded(_)
-            ) {
-                return Err(crate::AppError::Plugin(format!(
-                    "Plugin is running, deactivate it before uninstalling: {}",
-                    plugin_id
-                )));
-            }
-            std::path::PathBuf::from(&loaded.extension_path)
-        };
-
-        // 停用（防御性：前置条件已保证未运行，此处只做残留资源清理，幂等）
-        self.deactivate_plugin(plugin_id, true).await?;
-
-        // 丢弃私有数据库缓存连接：删除目录前释放文件句柄
-        self.wasm_host_ctx.drop_plugin_db(plugin_id).await;
-
-        // 删除插件安装目录（插件文件与私有 plugin.db 同目录）。目录名须与插件 id
-        // 一致才删，防止 manifest 的异常 extension_path 指向非插件目录；静态注册
-        // 插件（随二进制分发，无独立目录）extension_path 为空 → 跳过
-        if plugin_dir.as_os_str().is_empty() {
-            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] No plugin dir to remove (static/builtin)");
-        } else if plugin_dir.file_name().and_then(|n| n.to_str()) != Some(plugin_id) {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                path = %plugin_dir.display(),
-                "[PluginHost] Skip plugin dir removal: extension path does not match plugin id"
-            );
-        } else if plugin_dir.exists() {
-            std::fs::remove_dir_all(&plugin_dir).map_err(|e| {
-                crate::AppError::Plugin(format!("Failed to remove plugin dir '{}': {}", plugin_dir.display(), e))
-            })?;
-        }
-
-        // 移除 WASM 实例与插件记录
-        self.wasm_plugins.write().await.remove(plugin_id);
-        self.plugins.write().await.remove(plugin_id);
-
-        // 顺带清理用户插件目录下同 id 的孤儿残留（无 plugin.json 的数据目录）：
-        // 这类目录不参与加载、UI 不可见，但会卡住同 id 重装（install 的磁盘查重
-        // 会误判为已安装）。含 plugin.json 时视为另一来源的有效安装，保留不删。
-        let orphan_dir = self.user_plugins_dir.join(plugin_id);
-        if orphan_dir != plugin_dir
-            && orphan_dir.exists()
-            && !orphan_dir.join(PLUGIN_MANIFEST_FILE).exists()
-        {
-            match std::fs::remove_dir_all(&orphan_dir) {
-                Ok(()) => {
-                    tracing::info!(
-                        plugin_id = %plugin_id,
-                        dir = %orphan_dir.display(),
-                        "[PluginHost] Removed orphan residue dir on uninstall"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        plugin_id = %plugin_id,
-                        error = %e,
-                        dir = %orphan_dir.display(),
-                        "[PluginHost] Failed to remove orphan residue dir on uninstall"
-                    );
-                }
-            }
-        }
-
-        // 清理插件存储（插件私有数据 + fs 授权 / 预授权记录）
-        if let Err(e) = self.storage.clear_all(plugin_id).await {
-            tracing::warn!(plugin_id = %plugin_id, error = %e, "Failed to clear plugin storage on uninstall");
-        }
-        // 撤销持久化审批记录：审批 map 位于 `__system__` 空间，clear_all 清不到
-        if let Err(e) =
-            crate::plugin::security::approval::PluginApprovalStore::new(self.storage.clone())
-                .revoke(plugin_id)
-                .await
-        {
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                error = %e,
-                "Failed to revoke plugin approval on uninstall"
-            );
-        }
-        self.persist_activation_state().await;
-
-        // 清理限频簿记：避免重装同 id 插件沿用旧记录
-        self.wasm_reload_throttle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(plugin_id);
-        self.runtime_error_notify_throttle
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(plugin_id);
-
-        tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin uninstalled");
-        Ok(())
-    }
-
-    /// 注册单个插件的 manifest contributes 扩展点（install_from_zip 用，dev 合入）
-    async fn register_plugin_contributions(&self, plugin_id: &str) {
-        let loaded = self.plugins.read().await.get(plugin_id).cloned();
-        let Some(loaded) = loaded else {
-            return;
-        };
-        let m = &loaded.manifest;
-        self.registry.register_commands(&m.id, &m.contributes.commands).await;
-        self.registry.register_views(&m.id, &m.contributes.views).await;
-        if let Some(ref term) = m.contributes.terminal {
-            self.registry
-                .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
-                .await;
-        }
-        self.registry
-            .register_tool_providers(&m.id, &m.contributes.tool_providers)
-            .await;
-        self.registry
-            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
-            .await;
-        self.registry
-            .register_file_handlers(&m.id, &m.contributes.file_handlers)
-            .await;
-    }
-
-    fn abort_plugin_timer(&self, plugin_id: &str) {
-        let mut timers = self.plugin_timers.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(handle) = timers.remove(plugin_id) {
-            handle.abort();
-            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Timer aborted");
-        }
-    }
-
-    pub async fn deactivate_plugin(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        // 外壳：停用成功后接线 peer-net 节点生命周期（file-transfer 停用即
-        // 服务下线，对端即时感知；幂等）
-        let result = self.deactivate_plugin_inner(plugin_id, persist).await;
-        if result.is_ok() && plugin_id == crate::peer_net::FILE_TRANSFER_PLUGIN_ID {
-            match crate::system::app_context::AppContext::try_global() {
-                Some(ctx) => {
-                    if let Some(app) = ctx.app_handle() {
-                        if let Err(e) = crate::peer_net::stop_node_for_plugin(app).await {
-                            tracing::error!(
-                                plugin_id = %plugin_id,
-                                error = %e,
-                                "peer-net node stop on plugin deactivation failed"
-                            );
-                        }
-                    }
-                }
-                // boot 装配期 AppContext 未注册：由 boot 末尾的状态对账兜底
-                None => {
-                    tracing::debug!("peer-net node stop skipped: AppContext not ready (boot assembly)");
-                }
-            }
-        }
-        result
-    }
-
-    async fn deactivate_plugin_inner(&self, plugin_id: &str, persist: bool) -> crate::Result<()> {
-        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] deactivate_plugin");
-
-        // mDNS 基础能力服务（spec v2 §5.1）：插件停用即回收其全部浏览 + 广播
-        // 句柄（host-mdns v2 生命周期随属主；只碰本人，宿主/它插件登记不受影响）
-        crate::plugin::manager::wasm_runtime::host_impl::mdns::purge_for_plugin(plugin_id);
-
-        // WS 基础能力服务（ABI v14，spec §2.3）：插件停用即回收其全部出站连接
-        // （只碰本人；服务端端点双表回收随票 05 一并接入）
-        crate::plugin::manager::wasm_runtime::host_impl::ws::purge_for_plugin(plugin_id);
-
-        // PTY 基础能力服务（ABI v16，spec D2）：插件停用即 kill 并摘除其全部私有
-        // PTY，逐条补发 `pty:exit.<owner>`（reason=killed）——孤儿进程不随插件消失
-        // 而悬挂。必须在下方 `remove_all_subscriptions` 之前，否则补发的事件无人可投。
-        crate::plugin::manager::wasm_runtime::host_impl::pty::purge_for_plugin(plugin_id, &self.message_bus);
-
-        // 并发任务域（ABI v20）：插件停用即 cancel 其全部在册任务 + 清回调队列
-        // （只碰本人；运行中单元协作式跑完或超时，未开始单元 skipped）
-        crate::plugin::manager::task::purge_for_plugin(plugin_id);
-
-        // WASM 插件：调用 on_shutdown + __bedcode_deactivate
-        {
-            let plugins = self.plugins.read().await;
-            if let Some(loaded) = plugins.get(plugin_id) {
-                if loaded.source == PluginSource::Wasm {
-                    let wasm_plugins = self.wasm_plugins.read().await;
-                    if let Some(wasm_plugin) = wasm_plugins.get(plugin_id).cloned() {
-                        drop(wasm_plugins);
-                        // 停用前先调用 on_shutdown（WASI 需无 handle 线程，见 run_guest_call）
-                        tracing::info!(plugin_id = %plugin_id, "[PluginHost] Calling on_shutdown");
-                        // v8 契约：guest 自报的清理失败单独记录，不与调用故障混淆；
-                        // 停用流程继续，不影响状态机
-                        match self.run_guest_call(wasm_plugin.clone(), |p| p.on_shutdown()).await {
-                            Ok(Ok(Ok(()))) => {
-                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin on_shutdown completed");
-                            }
-                            Ok(Ok(Err(e))) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %e,
-                                    "[PluginHost] Plugin on_shutdown reported failure"
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %e,
-                                    "[PluginHost] Plugin on_shutdown call failed"
-                                );
-                            }
-                            Err(panic) => {
-                                let msg = crate::plugin::manager::wasm_runtime::panic_payload_to_string(&panic);
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    error = %msg,
-                                    "[PluginHost] Plugin on_shutdown panicked"
-                                );
-                            }
-                        }
-
-                        match self.run_guest_call(wasm_plugin, |p| p.deactivate()).await {
-                            Ok(Ok(0)) => {
-                                tracing::info!(plugin_id = %plugin_id, "[PluginHost] Plugin deactivated");
-                            }
-                            Ok(Ok(code)) => {
-                                tracing::warn!(
-                                    plugin_id = %plugin_id,
-                                    code = %code,
-                                    "[PluginHost] Plugin deactivate() returned error code"
-                                );
-                            }
-                            Ok(Err(e)) => {
-                                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Plugin deactivate() failed");
-                            }
-                            Err(panic) => {
-                                let msg = crate::plugin::manager::wasm_runtime::panic_payload_to_string(&panic);
-                                tracing::error!(plugin_id = %plugin_id, error = %msg, "[PluginHost] Plugin deactivate() panicked");
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 统一清理：取消注册和撤销权限
-        self.registry.unregister_plugin(plugin_id).await;
-        self.permission.revoke_all(plugin_id);
-        // 注销互调 api 清单（ADR-0017）：停用后目标调用被门禁拒绝
-        self.wasm_host_ctx.api_registry().unregister(plugin_id);
-        // core-plugin-manager：系统组件停用即撤销其能力提供，能力回落宿主原语
-        // （二选一装配：注册表对消费方恒可用；条件回落防误撤重建后的新注册）
-        self.wasm_host_ctx.capabilities().revert_all_from(plugin_id);
-
-        // 中止插件定时器（若有）：停用后不再到点回调
-        self.abort_plugin_timer(plugin_id);
-
-        // 清理消息总线订阅
-        self.message_bus.remove_all_subscriptions(plugin_id).await;
-
-        // 移除该插件的会话生命周期监听器与输入监听器
-        {
-            let session_manager = self.wasm_host_ctx().session_manager_arc();
-            session_manager.remove_lifecycle_listener(plugin_id).await;
-            session_manager.remove_input_listener(plugin_id).await;
-        }
-
-        let mut plugins = self.plugins.write().await;
-        let loaded = plugins
-            .get_mut(plugin_id)
-            .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-
-        loaded.state = PluginState::Deactivated;
-        loaded.activated_at = None;
-        tracing::info!(plugin_id = %plugin_id, persist, "[PluginHost] Plugin deactivated successfully");
-
-        // 释放写锁后再持久化
-        drop(plugins);
-
-        if persist {
-            tracing::debug!(plugin_id = %plugin_id, "[PluginHost] Persisting activation state after deactivating");
-            self.persist_activation_state().await;
-        }
-
-        Ok(())
-    }
-
-
-    /// 热重载 WASM 插件（开发模式）
-    ///
-    /// 执行完整的卸载-重载-激活循环：
-    /// 1. 停用插件
-    /// 2. 重新编译并实例化 WASM 模块
-    /// 3. 重新激活插件
-    pub async fn reload_wasm_plugin(&self, plugin_id: &str) -> crate::Result<()> {
-        {
-            let plugins = self.plugins.read().await;
-            let loaded = plugins
-                .get(plugin_id)
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found: {}", plugin_id)))?;
-            if loaded.source != PluginSource::Wasm {
-                return Err(crate::AppError::Plugin(format!(
-                    "Plugin {} is not a WASM plugin, cannot hot-reload",
-                    plugin_id
-                )));
-            }
-        }
-
-        tracing::info!(plugin_id = %plugin_id, "Hot-reloading WASM plugin");
-
-        // 1. 停用插件（不持久化）
-        self.deactivate_plugin(plugin_id, false).await?;
-
-        // 2. 重新编译并实例化 WASM 模块（替换 wasm_plugins map 条目）
-        self.rebuild_wasm_instance(plugin_id).await?;
-
-        // 3. 重新注册 manifest contributes
-        let m = {
-            let plugins = self.plugins.read().await;
-            let loaded = plugins
-                .get(plugin_id)
-                .ok_or_else(|| crate::AppError::Plugin(format!("Plugin not found after reload: {}", plugin_id)))?;
-            loaded.manifest.clone()
-        };
-        self.registry.register_commands(&m.id, &m.contributes.commands).await;
-        self.registry.register_views(&m.id, &m.contributes.views).await;
-        if let Some(ref term) = m.contributes.terminal {
-            self.registry
-                .register_terminal_handlers(&m.id, &term.input_handlers, &term.output_parsers)
-                .await;
-        }
-        self.registry
-            .register_tool_providers(&m.id, &m.contributes.tool_providers)
-            .await;
-        self.registry
-            .register_http_endpoints(&m.id, &m.contributes.http_endpoints)
-            .await;
-        self.registry
-            .register_file_handlers(&m.id, &m.contributes.file_handlers)
-            .await;
-
-        // 4. 重新激活
-        self.activate_plugin(plugin_id, false).await?;
-
-        tracing::info!(plugin_id = %plugin_id, "WASM plugin hot-reloaded successfully");
-        Ok(())
-    }
-
-    /// 标记插件为错误状态
-    pub async fn mark_error(&self, plugin_id: &str, error: String) {
-        let mut plugins = self.plugins.write().await;
-        if let Some(loaded) = plugins.get_mut(plugin_id) {
-            loaded.state = PluginState::Error(error);
-        }
-    }
-
-    /// 插件运行时异常统一上报前端（全局异常通道，`PLUGIN_RUNTIME_ERROR`）
-    ///
-    /// 宿主检测到插件异常（非插件主动上报）时调用，覆盖三类场景：
-    /// - `panic`：宿主函数 panic 穿透 wasmtime（catch_unwind 兜底，Store 已污染）
-    /// - `trap`：wasm trap / 导出绑定失败 / store 中毒（已调度自动重载）
-    /// - `recovery_failed`：自动重载失败，插件进入 Error 态
-    ///
-    /// 语义：日志**始终**记录全量错误（重载循环期间不丢现场）；前端 toast
-    /// 按插件节流（见 [`PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS`]），连发
-    /// 异常只弹一次，避免 trap 重载风暴刷屏。无 AppContext（测试/无头）时
-    /// 降级为纯日志，不 panic。
-    pub async fn notify_plugin_runtime_error(&self, plugin_id: &str, kind: &str, error: &str) {
-        // 日志始终记录（调用方也各自记日志，此处为统一通道的兜底记录）
-        tracing::error!(
-            plugin_id = %plugin_id,
-            kind = %kind,
-            error = %error,
-            "Plugin runtime error (unified channel)"
-        );
-
-        // 节流：同一插件窗口内已提示过则跳过 toast（日志不受影响）；
-        // recovery_failed 不节流——它每次重载失败只发一次（重载循环 30s 间隔），
-        // 若落在 trap 通知的 15s 窗口内会被吞，用户看到「已恢复」实际进入 Error 态
-        if kind != "recovery_failed" {
-            let mut throttle = self
-                .runtime_error_notify_throttle
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            if let Some(last) = throttle.get(plugin_id) {
-                if last.elapsed() < std::time::Duration::from_secs(PLUGIN_RUNTIME_ERROR_NOTIFY_INTERVAL_SECS) {
-                    tracing::debug!(
-                        plugin_id = %plugin_id,
-                        kind = %kind,
-                        "plugin runtime error toast throttled (recent notification)"
-                    );
-                    return;
-                }
-            }
-            throttle.insert(plugin_id.to_string(), std::time::Instant::now());
-        }
-
-        // 插件展示名（manifest.name），查不到时退回插件 ID
-        let plugin_name = {
-            let plugins = self.plugins.read().await;
-            plugins
-                .get(plugin_id)
-                .map(|p| p.manifest.name.clone())
-                .unwrap_or_else(|| plugin_id.to_string())
-        };
-
-        // 无头/测试上下文无 AppHandle：降级为纯日志
-        let Some(ctx) = crate::system::app_context::AppContext::try_global() else {
-            return;
-        };
-        let Some(handle) = ctx.app_handle() else {
-            return;
-        };
-        if let Err(e) = handle.emit(
-            crate::system::constants::event::PLUGIN_RUNTIME_ERROR,
-            serde_json::json!({
-                "plugin_id": plugin_id,
-                "plugin_name": plugin_name,
-                "kind": kind,
-                "error": error,
-            }),
-        ) {
-            // 前端事件派发失败不致命：日志已全量记录，仅提示通道中断
-            tracing::warn!(
-                plugin_id = %plugin_id,
-                "Failed to emit PLUGIN_RUNTIME_ERROR to frontend: {}",
-                e
-            );
-        }
-    }
-
-    /// 获取当前所有非 StaticRegistry 插件的激活状态映射
-    ///
-    /// 持久化语义为用户意图：Activated 与 Degraded 均记 true——降级是健康
-    /// 快照而非启停意图，下次启动仍按 persisted=true 重试激活；
-    /// Error/Deactivated 等记 false（与既有行为一致）
-    pub async fn get_activated_state(&self) -> HashMap<String, bool> {
-        let plugins = self.plugins.read().await;
-        let mut map = HashMap::new();
-        for (id, loaded) in plugins.iter() {
-            if loaded.source == PluginSource::StaticRegistry {
-                continue;
-            }
-            // core-plugin-manager：系统组件默认启用、启动时无条件激活
-            // （activate_system_components），其启停不持久化——持久化真源是
-            // 「内置」而非用户状态，停用仅对当前会话生效
-            if loaded.manifest.kind == PluginKind::System {
-                continue;
-            }
-            let is_active = matches!(
-                loaded.state,
-                PluginState::Activated | PluginState::Degraded(_)
-            );
-            map.insert(id.clone(), is_active);
-        }
-        tracing::debug!(
-            "[PluginHost] get_activated_state() returning {} entry/entries",
-            map.len()
-        );
-        map
-    }
-
-    /// 持久化当前激活状态到 SQLite
-    async fn persist_activation_state(&self) {
-        let activated_map = self.get_activated_state().await;
-        tracing::debug!(
-            "[PluginHost] Persisting activation state: {} plugin(s)",
-            activated_map.len()
-        );
-        for (id, active) in &activated_map {
-            tracing::debug!(plugin_id = %id, persist = active, "[PluginHost]   Persist");
-        }
-        if let Err(e) = self.storage.save_activated_plugins(&activated_map).await {
-            tracing::error!("[PluginHost] Failed to persist plugin activation state: {}", e);
-        }
-    }
-
-    /// 系统组件优先激活（core-plugin-manager，内置、默认启用、只停不删）
-    ///
-    /// 在持久化状态自动激活之前执行：系统组件激活时将其能力导出注册进
-    /// 能力注册表，后续应用插件激活的依赖检查才能命中。激活顺序按插件 ID
-    /// 排序（确定性）；单个失败不阻断其余（失败组件落 Error 态，其能力
-    /// 缺失由消费方激活时的依赖检查如实报错）。
-    async fn activate_system_components(&self) {
-        let mut ids: Vec<String> = {
-            let plugins = self.plugins.read().await;
-            plugins
-                .values()
-                .filter(|p| p.manifest.kind == PluginKind::System && p.source != PluginSource::StaticRegistry)
-                .map(|p| p.manifest.id.clone())
-                .collect()
-        };
-        ids.sort();
-        if ids.is_empty() {
-            return;
-        }
-        tracing::info!(
-            "[PluginHost] Activating {} system component(s) before application plugins",
-            ids.len()
-        );
-        for id in ids {
-            if let Err(e) = self.activate_plugin(&id, false).await {
-                tracing::error!(
-                    plugin_id = %id,
-                    error = %e,
-                    "[PluginHost] 系统组件激活失败（能力缺失将由消费方依赖检查报错）"
-                );
-            }
-        }
-    }
-
-    /// 根据持久化状态自动激活之前已激活的插件
-    async fn auto_activate_from_persisted_state(&self) {
-        let activated_map = match self.storage.load_activated_plugins().await {
-            Ok(map) => {
-                tracing::info!(
-                    "[PluginHost] Loaded persisted activation state: {} entry/entries",
-                    map.len()
-                );
-                for (id, active) in &map {
-                    tracing::debug!(plugin_id = %id, persist = active, "[PluginHost]   Persisted");
-                }
-                map
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "[PluginHost] Failed to load persisted activation state, skipping auto-activation: {}",
-                    e
-                );
-                return;
-            }
-        };
-
-        if activated_map.is_empty() {
-            tracing::info!("[PluginHost] No persisted activation state, skipping auto-activation");
-            return;
-        }
-
-        let to_activate: Vec<String> = {
-            let plugins = self.plugins.read().await;
-            activated_map
-                .iter()
-                .filter(|(id, &is_active)| {
-                    if !is_active {
-                        return false;
-                    }
-                    plugins
-                        .get(*id)
-                        .map(|p| p.source != PluginSource::StaticRegistry)
-                        .unwrap_or(false)
-                })
-                .map(|(id, _)| id.clone())
-                .collect()
-        };
-
-        tracing::info!(
-            "[PluginHost] Auto-activating {} plugin(s) from persisted state",
-            to_activate.len()
-        );
-
-        for plugin_id in &to_activate {
-            tracing::info!(plugin_id = %plugin_id, "[PluginHost] Auto-activating plugin");
-            if let Err(e) = self.activate_plugin(plugin_id, false).await {
-                tracing::error!(plugin_id = %plugin_id, error = %e, "[PluginHost] Failed to auto-activate plugin");
-            }
-        }
-
-        // 清理已不存在的插件 ID
-        let current_ids: HashSet<String> = self.plugins.read().await.keys().cloned().collect();
-        let original_len = activated_map.len();
-        let mut cleaned_map = activated_map;
-        cleaned_map.retain(|id, _| current_ids.contains(id));
-        if cleaned_map.len() != original_len {
-            tracing::info!(
-                "[PluginHost] Cleaning {} stale plugin ID(s) from persisted state",
-                original_len - cleaned_map.len()
-            );
-            if let Err(e) = self.storage.save_activated_plugins(&cleaned_map).await {
-                tracing::warn!("[PluginHost] Failed to clean up stale activation entries: {}", e);
-            }
-        }
-
-        if !to_activate.is_empty() {
-            tracing::info!(
-                "[PluginHost] Auto-activated {} plugin(s) from persisted state",
-                to_activate.len()
-            );
-        }
-    }
-
-    /// 判断插件是否应该按需激活
-    pub async fn should_lazy_activate(&self, plugin_id: &str) -> bool {
-        let plugins = self.plugins.read().await;
-        if let Some(loaded) = plugins.get(plugin_id) {
-            if loaded.source == PluginSource::StaticRegistry {
-                return false;
-            }
-            if !matches!(loaded.state, PluginState::Loaded) {
-                return false;
-            }
-            let c = &loaded.manifest.contributes;
-            !c.commands.is_empty() || c.terminal.is_some() || !c.views.is_empty()
-        } else {
-            false
-        }
-    }
 }
 
 // ==================== 子模块（自本文件拆分） ====================
+// 职责面拆分（P2）：激活/停用、启动通知、注册、安装卸载、预授权、wasm 实例、错误上报
+mod activation;
 mod app_cli;
+mod boot;
 mod commands;
+mod errors;
+mod install;
 mod listeners;
+mod preauth;
+mod register;
 mod services;
+mod wasm;
 // 保持原导出路径（crate::plugin::manager::host::PluginLifecycleListener 等）
 pub use listeners::{PluginInputListener, PluginLifecycleListener};
+// preauth 域（P2 拆分后 re-export 保持 host:: 路径兼容）
+pub use preauth::register_preauth_provider;
+#[allow(unused_imports)] // 兼容 host:: 路径（测试经 super:: 引用；preauth.rs 内部自用）
+pub(crate) use preauth::{collect_preauth_paths, preauth_providers, PreauthProvider, PREAUTH_PATHS_STORAGE_KEY};
 
 #[cfg(test)]
 mod tests {
@@ -1843,7 +457,9 @@ mod tests {
     use crate::plugin::manager::wasm_runtime::PluginServices;
     use crate::session::{SessionInputListener, SessionLifecycleEvent, SessionLifecycleListener};
     use crate::system::config::AppConfig;
-    use bedcode_plugin_api::{PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler};
+    use bedcode_plugin_api::{
+        PluginCommand, PluginContributes, PluginManifest, PluginType, RustPluginContext, TerminalHandler,
+    };
     use serde_json::json;
     use std::future::Future;
     use std::path::PathBuf;
@@ -2002,14 +618,14 @@ mod tests {
         Box::pin(async { Ok(()) })
     }
 
-    fn synthetic_noop_lifecycle(
-        _ctx: RustPluginContext,
-    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
+    fn synthetic_noop_lifecycle(_ctx: RustPluginContext) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>> {
         Box::pin(async { Ok(()) })
     }
 
     fn synthetic_commands() -> Vec<PluginCommand> {
-        vec![PluginCommand::new("ping", |_args| async move { Ok(json!({ "pong": true })) })]
+        vec![PluginCommand::new("ping", |_args| async move {
+            Ok(json!({ "pong": true }))
+        })]
     }
 
     fn synthetic_terminal_handlers() -> Vec<Box<dyn TerminalHandler>> {
@@ -2088,9 +704,16 @@ mod tests {
         host.register_rust_command_handlers().await;
         host.plugins.write().await.insert(
             SYNTHETIC_STATIC_ID.to_string(),
-            make_plugin(SYNTHETIC_STATIC_ID, PluginSource::StaticRegistry, PluginState::Activated),
+            make_plugin(
+                SYNTHETIC_STATIC_ID,
+                PluginSource::StaticRegistry,
+                PluginState::Activated,
+            ),
         );
-        assert!(host.invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({})).await.is_ok());
+        assert!(host
+            .invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({}))
+            .await
+            .is_ok());
 
         // 停用：回落 Deactivated，命令门禁重新关闭
         host.deactivate_plugin(SYNTHETIC_STATIC_ID, false).await.unwrap();
@@ -2099,7 +722,10 @@ mod tests {
             host.get_plugin(SYNTHETIC_STATIC_ID).await.unwrap().state,
             PluginState::Deactivated
         );
-        assert!(host.invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({})).await.is_err());
+        assert!(host
+            .invoke_rust_command(SYNTHETIC_STATIC_ID, "ping", json!({}))
+            .await
+            .is_err());
 
         // 重启：activate_plugin 对 StaticRegistry 跳过 WASM phase 直接置回 Activated，命令恢复路由
         host.activate_plugin(SYNTHETIC_STATIC_ID, false).await.unwrap();
@@ -3005,11 +1631,7 @@ mod tests {
     async fn preauthorize_empty_paths_passes() {
         let host = setup_host().await;
         let result = host.preauthorize_plugin(TEST_PLUGIN_ID).await;
-        assert!(
-            result.is_ok(),
-            "empty preauth paths must pass, got: {:?}",
-            result.err()
-        );
+        assert!(result.is_ok(), "empty preauth paths must pass, got: {:?}", result.err());
     }
 
     /// file-transfer 共享目录未配置:放行(启用先行)。
@@ -3018,9 +1640,7 @@ mod tests {
     #[tokio::test]
     async fn preauthorize_file_transfer_empty_shared_roots_passes() {
         let host = setup_host().await;
-        let result = host
-            .preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID)
-            .await;
+        let result = host.preauthorize_plugin(super::FILE_TRANSFER_PLUGIN_ID).await;
         assert!(
             result.is_ok(),
             "file-transfer with empty shared_roots must pass (enable-first), got: {:?}",
@@ -3078,11 +1698,7 @@ mod tests {
             .manifest
             .wasi_preopen_dirs = vec!["${home}/.bedcode-preauth-probe".to_string()];
         host.storage
-            .set(
-                TEST_PLUGIN_ID,
-                "fs_granted_paths",
-                json!([expanded]),
-            )
+            .set(TEST_PLUGIN_ID, "fs_granted_paths", json!([expanded]))
             .await
             .unwrap();
 
@@ -3116,8 +1732,7 @@ mod tests {
         // 接受 Ok 或 Err(无头上下文拒绝)— 但不能是 storage 解析错误
         if let Err(e) = &result {
             assert!(
-                !e.to_string().contains("parse")
-                    && !e.to_string().contains("deserialize"),
+                !e.to_string().contains("parse") && !e.to_string().contains("deserialize"),
                 "storage parse error indicates collector bug: {}",
                 e
             );
@@ -3182,7 +1797,13 @@ mod tests {
             .expect("compile system test component");
         let plugin = host
             .wasm_runtime()
-            .instantiate_component(&component, TEST_SYSTEM_PLUGIN_ID, host.wasm_host_ctx().clone(), &[], None)
+            .instantiate_component(
+                &component,
+                TEST_SYSTEM_PLUGIN_ID,
+                host.wasm_host_ctx().clone(),
+                &[],
+                None,
+            )
             .expect("instantiate system test component");
         // 实例化探测：plugin-system world 的 host-storage 导出应被识别为可路由能力
         assert_eq!(
@@ -3233,7 +1854,9 @@ mod tests {
             .expect("preset host storage key");
 
         // 系统组件先激活 → 能力注册表切换为系统组件提供者
-        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        host.activate_plugin(&sys_id, false)
+            .await
+            .expect("activate system component");
         assert_eq!(
             host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
             format!("system:{}", sys_id),
@@ -3326,10 +1949,7 @@ mod tests {
         // 权限经 manifest 声明在 activate 时授予（生产装配路径；手工 grant 会被
         // activate 的 manifest 重新授权覆盖）
         loaded.manifest.permissions = vec!["auth".to_string(), "peer".to_string()];
-        host.plugins
-            .write()
-            .await
-            .insert(session_id.to_string(), loaded);
+        host.plugins.write().await.insert(session_id.to_string(), loaded);
 
         host.wasm_host_ctx().api_registry().register(session_id, &[]);
         host.activate_plugin(session_id, false).await.expect("activate session");
@@ -3346,7 +1966,11 @@ mod tests {
             "未注册标记 api → 视为未激活"
         );
         let valid_token = crate::utils::auth::JwtService::new()
-            .generate_token("device-1".to_string(), Some("Pixel 9".to_string()), Some("fp-abc".to_string()))
+            .generate_token(
+                "device-1".to_string(),
+                Some("Pixel 9".to_string()),
+                Some("fp-abc".to_string()),
+            )
             .expect("issue host token");
         crate::utils::auth::JwtService::new()
             .verify_token_with_expiry(&valid_token)
@@ -3395,9 +2019,11 @@ mod tests {
             let db = host.wasm_host_ctx().database().lock().await;
             let active: i32 = db
                 .conn()
-                .query_row("SELECT is_active FROM pairings WHERE id = ?1", rusqlite::params![PAIRING_ID], |row| {
-                    row.get(0)
-                })
+                .query_row(
+                    "SELECT is_active FROM pairings WHERE id = ?1",
+                    rusqlite::params![PAIRING_ID],
+                    |row| row.get(0),
+                )
                 .expect("软删保留记录");
             assert_eq!(active, 0, "撤销由插件写内核真源（host-auth 记录面）");
         }
@@ -3406,7 +2032,11 @@ mod tests {
 
         // 未撤销记录的其他设备 token → 放行（内核未命中从宽，搬迁前语义）
         let other_token = crate::utils::auth::JwtService::new()
-            .generate_token("device-2".to_string(), Some("Phone 2".to_string()), Some("fp-xyz".to_string()))
+            .generate_token(
+                "device-2".to_string(),
+                Some("Phone 2".to_string()),
+                Some("fp-xyz".to_string()),
+            )
             .expect("issue other token");
         assert!(
             bridge::enforce_connection_policy(&host, &other_token).is_ok(),
@@ -3480,7 +2110,9 @@ mod tests {
             .set(&app_id, "component-test-key", json!({"k": "v"}))
             .await
             .expect("preset host storage key");
-        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        host.activate_plugin(&sys_id, false)
+            .await
+            .expect("activate system component");
         host.activate_plugin(&app_id, false).await.expect("activate app plugin");
         assert_eq!(
             host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
@@ -3510,7 +2142,12 @@ mod tests {
             .invoke_rust_command(&app_id, "test.storage-get", json!({"key": "component-test-key"}))
             .await
             .expect("app plugin must keep working after revert");
-        assert_eq!(result["value"], json!({"k": "v"}), "host primitive fallback, got: {}", result);
+        assert_eq!(
+            result["value"],
+            json!({"k": "v"}),
+            "host primitive fallback, got: {}",
+            result
+        );
     }
 
     /// 系统组件停用（只停不删）：能力回落宿主原语；重新激活后再装配
@@ -3520,7 +2157,9 @@ mod tests {
         let host = setup_host().await;
         let sys_id = setup_system_component(&host, &tmp_dir).await;
 
-        host.activate_plugin(&sys_id, false).await.expect("activate system component");
+        host.activate_plugin(&sys_id, false)
+            .await
+            .expect("activate system component");
         assert_eq!(
             host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
             format!("system:{}", sys_id)
@@ -3543,7 +2182,9 @@ mod tests {
         );
 
         // 重新激活 → 能力再装配
-        host.activate_plugin(&sys_id, false).await.expect("re-activate system component");
+        host.activate_plugin(&sys_id, false)
+            .await
+            .expect("re-activate system component");
         assert_eq!(
             host.wasm_host_ctx().capabilities().provider_kind("host-storage"),
             format!("system:{}", sys_id)
@@ -3571,7 +2212,11 @@ mod tests {
         // 写两个插件包：系统组件（type=system）+ 应用插件（dependencies）
         for (id, rust_lib, manifest_extra) in [
             (sys_id, "bedcode_plugin_system_test", r#", "type": "system""#),
-            (app_id, "bedcode_plugin_component_test", r#", "dependencies": ["host-storage"]"#),
+            (
+                app_id,
+                "bedcode_plugin_component_test",
+                r#", "dependencies": ["host-storage"]"#,
+            ),
         ] {
             let dir = plugins_dir.join(id);
             std::fs::create_dir_all(&dir).unwrap();
@@ -3589,7 +2234,9 @@ mod tests {
         }
 
         // 预置持久化启用状态：仅应用插件（系统组件默认启用、无需持久化）
-        let db = Arc::new(Mutex::new(Database::new(&std::path::PathBuf::from(":memory:")).unwrap()));
+        let db = Arc::new(Mutex::new(
+            Database::new(&std::path::PathBuf::from(":memory:")).unwrap(),
+        ));
         db.lock().await.init_schema().unwrap();
         PluginStorage::new(db.clone())
             .save_activated_plugins(&HashMap::from([(app_id.to_string(), true)]))
@@ -3603,8 +2250,15 @@ mod tests {
 
         // 用户插件目录（dev 合入的第 3 参）：本用例无用户安装插件，指向空临时目录
         let user_plugins_dir = tmp_dir.path().join("user-plugins");
-        let host =
-            PluginHost::new(db, &plugins_dir, &user_plugins_dir, session_manager, config_manager, None).await;
+        let host = PluginHost::new(
+            db,
+            &plugins_dir,
+            &user_plugins_dir,
+            session_manager,
+            config_manager,
+            None,
+        )
+        .await;
 
         // 终态：两者均 Activated（应用插件的依赖检查在系统组件装配之后执行，
         // 激活成功即顺序成立的语义断言）
