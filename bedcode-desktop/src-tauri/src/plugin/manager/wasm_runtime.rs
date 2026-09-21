@@ -1115,6 +1115,8 @@ mod tests {
     // A0-3 前置探针（P1/P2/P5）：async store 兼容性 + 资源限制 async 语义 + 性能基线。
     // 文档：.scratch/2026-09-21-a0-3-host-async/spec.md + report.md（只读探针，不碰生产路径）
     mod a03_probe;
+    // 终端输出消费插件化性能前置验证（P1-P3，只读探针；文档 .scratch/2026-09-21-terminal-output-consumer-perf/）
+    mod terminal_output_perf;
     // 域拆分（P0）：测试函数自本文件拆至 wasm_runtime/tests/，共享脚手架留在下方；
     // 各域文件 `use super::*` 复用，fixture 互斥与产物构建语义不变
     mod component_e2e;
