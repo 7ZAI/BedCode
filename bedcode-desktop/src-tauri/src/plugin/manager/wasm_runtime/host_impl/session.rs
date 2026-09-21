@@ -1072,7 +1072,7 @@ mod tests {
     ///
     /// 漏任一处（SDK 合法集合 / 打包 CLI / 前端合法集合 / 宿主能力清单 /
     /// host_impl 权限门）都会造成「manifest 声明了却被静默丢弃」或
-    /// 「前端放行宿主拒绝」。SDK 与能力清单走行为断言，纯文本集合（TS/JS）走字面量断言。
+    /// 「前端放行宿主拒绝」。SDK 与能力清单走行为断言，CLI/前端读生成物字面量断言。
     #[test]
     fn permission_sync_points_all_know_session_config() {
         const DOMAIN: &str = PERMISSION_SESSION_CONFIG;
@@ -1083,15 +1083,8 @@ mod tests {
         assert!(granted.contains(DOMAIN), "SDK VALID_PERMISSIONS 缺 {DOMAIN}");
         assert!(pm.check("com.bedcode.sync", DOMAIN), "SDK 授权后 check 应为真");
 
-        // ② 打包 CLI + ③ 前端合法集合（CARGO_MANIFEST_DIR = bedcode-desktop/src-tauri）
-        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-        let cli = std::fs::read_to_string(manifest_dir.join("../packages/plugin-sdk-desktop/bin/cli.js"))
-            .expect("打包 CLI 可读");
-        let frontend =
-            std::fs::read_to_string(manifest_dir.join("../src/plugin/permission.ts")).expect("前端 permission.ts 可读");
-        let literal = format!("'{DOMAIN}'");
-        assert!(cli.contains(&literal), "打包 CLI 合法集合缺 {DOMAIN}");
-        assert!(frontend.contains(&literal), "前端合法集合缺 {DOMAIN}");
+        // ② 打包 CLI + ③ 前端合法集合（两份生成物）
+        super::super::tests::generated_vocabulary_know(DOMAIN);
 
         // ④ 宿主能力清单：本权限挂在既有 host-session 上（本批次无新 interface）
         let registry = crate::plugin::manager::capability::CapabilityRegistry::new();

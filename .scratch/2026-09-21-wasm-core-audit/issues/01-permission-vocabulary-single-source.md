@@ -80,12 +80,10 @@ SDK 词汇与前端合并后行为不变：23 个前端实际门禁名逐条比�
   均为「配对 / QR 宿主降级退役」与 host-session v21 收敛（删 `create`/`restart`）留下的断链，
   与本票零接触面（`git diff` 不含 `src-tauri/tests/`，且 `git grep pairing_service HEAD -- src` 为空）。
   **另立清理项，未在本票擅自修复。**
-- `pnpm exec vitest run --pool=forks --maxWorkers=2` → 75 files / 734 tests，
-  **2 files 3 tests 红，全部来自并发会话在途新增的未跟踪文件**：
-  `plugins/session/src/__tests__/{plugin-contract,terminalSettingsSync}.test.ts` 报
-  `composables/terminal/useTerminalSettingsSync.ts` 直调 Tauri invoke 等——该文件与这两个测试文件
-  都是 untracked（终端写入管线迁入 session 插件那条线正在写），本票按并发红线不碰对侧文件。
-  本票新增/涉及的 `src/**` 与 `src/__tests__/plugin/permissionVocabulary.test.ts` 全绿。
+- `pnpm exec vitest run --pool=forks --maxWorkers=2` → **75 files / 734 tests 全绿**。
+  本票实施过程中该跑法曾报 2 files 3 tests 红（`plugins/session/src/__tests__/{plugin-contract,terminalSettingsSync}.test.ts`
+  报 `composables/terminal/useTerminalSettingsSync.ts` 直调 Tauri invoke），当时这些文件是并发会话
+  未提交的在途产物；对侧票 01c 提交（1161ab6f8）后复跑即全绿。本票未碰对侧任何文件。
 - 根目录 `pnpm exec eslint .` → **0 error**（125 warning，按 AGENTS §10 不计入）。
 - SDK 侧 `cargo test --lib`（`plugin-sdk-desktop/rust`）→ **91 passed / 0 failed**，含本票新增三条
   （派生一致性、贡献面权限不被静默过滤、apiMap 键必须是已知权限）。

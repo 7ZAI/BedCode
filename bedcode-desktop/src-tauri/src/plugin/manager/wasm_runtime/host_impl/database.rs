@@ -661,6 +661,38 @@ fn column_to_json(row: &rusqlite::Row<'_>, col_index: usize) -> serde_json::Valu
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::manager::wasm_runtime::host_impl::tests::{build_host_ctx, grant_permissions};
+
+    /// 权限门（票 01 门禁用例）：未授予 `storage` 时主库/私有库四面对外拒绝，
+    /// 且拒绝发生在 SQL 校验与取库之前（错误只报权限名，不泄露语句是否合法）
+    #[test]
+    fn db_ops_denied_without_storage_permission() {
+        let ctx = build_host_ctx();
+        let sql = "SELECT value FROM plugin_secrets";
+        assert_eq!(db_execute(&ctx, "com.bedcode.no-db", sql).unwrap_err(), "permission denied");
+        assert_eq!(db_query(&ctx, "com.bedcode.no-db", sql).unwrap_err(), "permission denied");
+        assert_eq!(
+            plugin_db_execute(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
+            "permission denied"
+        );
+        assert_eq!(
+            plugin_db_query(&ctx, "com.bedcode.no-db", sql).unwrap_err(),
+            "permission denied"
+        );
+    }
+
+    /// 正例（与上条成对，防「恒拒绝」假绿）：授予后主库面进到 SQL 校验之后
+    #[test]
+    fn db_execute_granted_passes_permission_gate() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "com.bedcode.db-ok", &[PERMISSION_STORAGE]);
+        let err = db_execute(&ctx, "com.bedcode.db-ok", "SELECT value FROM plugin_secrets")
+            .expect_err("主库禁止非本插件前缀表");
+        assert!(
+            !err.contains("permission denied"),
+            "已授予 storage 仍被权限门拒绝: {err}"
+        );
+    }
 
     #[test]
     fn test_sanitize_plugin_id() {

@@ -136,10 +136,16 @@ Rust 侧按内核五模块组织（`plugin.rs` 为唯一组合点/facade，外�
 - **security/（core-security）**：资源授权——framework（统一授权框架：ResourceKind × 三段决策管线
   声明/审批/强制，fs / api-call 资源实现）、approval（授权审批）、fs_auth（文件系统访问三层校验：
   路径白名单 → 插件白名单 → 弹窗授权，弹窗 UI 为 `FsAuthDialog.vue`）、api_registry（互调门，ADR 0017）
-- **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用
+- **bus（core-bus）**：插件间 Topic 消息总线（发布/订阅，JSON + 二进制双载荷 + 背压），经 MessageDispatcher trait 解耦与 PluginHost 的循环引用。
+  **`bus` 不是桌面端权限位**（移动端 SDK 有 `PERMISSION_BUS`，属 ADR 0018 双端契约分叉）：桌面总线订阅/发布不经权限门，
+  访问控制归 topic 命名空间（缺口与改造见 `.scratch/2026-09-21-wasm-core-audit/issues/05-bus-topic-acl.md`）
 - **config（core-config）/ monitor（core-monitor）**：Engine/Store 运行参数配置面（配置文件 + 运行时覆盖）、
   运行时指标埋点（指标注册表 + 快照导出；见 `.scratch/wasm-core/`）
-- **permission**：共享词汇（bedcode-plugin-api 再导出）
+- **permission**：权限词汇**只读再导出**（bedcode-plugin-api 再导出；真源在
+  `packages/plugin-sdk-desktop/rust/src/permission.rs`）。打包 CLI 与前端合法集读的是生成物
+  （`plugin-sdk-desktop/bin/permission-vocabulary.json`、`src/plugin/permission.vocabulary.ts`），
+  加/拆权限位后跑 SDK 的 `pnpm run gen:permissions` 重出；三副本一致性与「每条词汇都有门禁落点」
+  由本文件 `plugin/permission.rs` 的词汇漂移锁断言（票 01）
 
 ### 宿主能力实现域 · WebSocket 基础能力服务 — `host-websocket`（ABI v14）
 

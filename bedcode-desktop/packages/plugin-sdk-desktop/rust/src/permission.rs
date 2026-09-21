@@ -2,6 +2,12 @@
 //!
 //! 插件权限校验 — 双重校验的后端最终仲裁层
 //! 从桌面端 permission.rs 迁移，作为 api crate 的一部分供插件和主应用共用
+//!
+//! **权限词汇单一真源**：本文件的 [`VALID_PERMISSIONS`] 与 [`PERMISSION_API_MAP`]
+//! 是桌面端唯一的权限清单。打包 CLI（`bin/cli.js`）与宿主前端（`src/plugin/permission.ts`）
+//! 的列表都是**生成物**，由 `cargo run --manifest-path rust/Cargo.toml --example
+//! gen_permission_vocabulary`（即 SDK 的 `pnpm run gen:permissions`）重出，
+//! 禁止手抄；三处一致性由宿主 `plugin/permission.rs` 的词汇漂移锁断言。
 
 use std::collections::{HashMap, HashSet};
 
@@ -23,9 +29,13 @@ pub const PERMISSION_UI_SIDEBAR: &str = "ui:sidebar";
 pub const PERMISSION_UI_TOOLBOX: &str = "ui:toolbox";
 pub const PERMISSION_UI_STATUSBAR: &str = "ui:statusbar";
 pub const PERMISSION_UI_DIALOG: &str = "ui:dialog";
+/// 页面工具栏项贡献（纯前端贡献面）：`ui.registerPageToolbarItem`
+pub const PERMISSION_UI_PAGE_TOOLBAR: &str = "ui:pageToolbar";
 /// 设置分组贡献（纯前端贡献面，无 WASM 宿主函数对应）：`ui.registerSettingsSection`
 pub const PERMISSION_UI_SETTINGS: &str = "ui:settings";
 pub const PERMISSION_UI_INPUT: &str = "ui:input";
+/// 文件处理器贡献（纯前端贡献面）：`ui.registerFileHandler`
+pub const PERMISSION_UI_FILE_HANDLER: &str = "ui:fileHandler";
 pub const PERMISSION_NETWORK_HTTP: &str = "network:http";
 pub const PERMISSION_STORAGE: &str = "storage";
 pub const PERMISSION_FS_READ: &str = "fs:read";
@@ -77,40 +87,76 @@ pub const PERMISSION_PTY_IO: &str = "pty:io";
 /// 单元都会失败——并发能力与数据访问能力解耦授权、解耦审计。
 pub const PERMISSION_TASK_RUN: &str = "task:run";
 
-/// 合法权限集合
-static VALID_PERMISSIONS: &[&str] = &[
-    PERMISSION_TERMINAL_INPUT,
-    PERMISSION_TERMINAL_OUTPUT,
-    PERMISSION_TERMINAL_OBSERVE,
-    PERMISSION_SESSION_READ,
-    PERMISSION_SESSION_WRITE,
-    PERMISSION_SESSION_CONFIG,
-    PERMISSION_UI_SIDEBAR,
-    PERMISSION_UI_TOOLBOX,
-    PERMISSION_UI_STATUSBAR,
-    PERMISSION_UI_DIALOG,
-    PERMISSION_UI_SETTINGS,
-    PERMISSION_UI_INPUT,
-    PERMISSION_NETWORK_HTTP,
-    PERMISSION_STORAGE,
-    PERMISSION_FS_READ,
-    PERMISSION_FS_WRITE,
-    PERMISSION_BROADCAST,
-    PERMISSION_TIMER,
-    PERMISSION_PROCESS,
-    PERMISSION_APP_CLI,
-    PERMISSION_PEER,
-    PERMISSION_MDNS,
-    PERMISSION_WS_CLIENT,
-    PERMISSION_WS_SERVER,
-    PERMISSION_AUTH,
-    PERMISSION_PTY_SPAWN,
-    PERMISSION_PTY_IO,
-    PERMISSION_TASK_RUN,
+/// 权限词汇反射表：`(常量标识符, 权限串)`
+///
+/// 标识符由 `stringify!` 取自常量本身，与值同源、不可能漂移。有了这一列，宿主测试
+/// 就能把「源码里出现的 `PERMISSION_*` 引用」机械还原成权限串，从而断言
+/// 「每一条词汇都有真实门禁落点」（见桌面 `src-tauri/src/plugin/permission.rs` 的词汇漂移锁），
+/// 而不需要再手抄一份清单。
+pub const PERMISSION_VOCABULARY: &[(&str, &str)] = &[
+    (stringify!(PERMISSION_TERMINAL_INPUT), PERMISSION_TERMINAL_INPUT),
+    (stringify!(PERMISSION_TERMINAL_OUTPUT), PERMISSION_TERMINAL_OUTPUT),
+    (stringify!(PERMISSION_TERMINAL_OBSERVE), PERMISSION_TERMINAL_OBSERVE),
+    (stringify!(PERMISSION_SESSION_READ), PERMISSION_SESSION_READ),
+    (stringify!(PERMISSION_SESSION_WRITE), PERMISSION_SESSION_WRITE),
+    (stringify!(PERMISSION_SESSION_CONFIG), PERMISSION_SESSION_CONFIG),
+    (stringify!(PERMISSION_UI_SIDEBAR), PERMISSION_UI_SIDEBAR),
+    (stringify!(PERMISSION_UI_TOOLBOX), PERMISSION_UI_TOOLBOX),
+    (stringify!(PERMISSION_UI_STATUSBAR), PERMISSION_UI_STATUSBAR),
+    (stringify!(PERMISSION_UI_DIALOG), PERMISSION_UI_DIALOG),
+    (stringify!(PERMISSION_UI_PAGE_TOOLBAR), PERMISSION_UI_PAGE_TOOLBAR),
+    (stringify!(PERMISSION_UI_SETTINGS), PERMISSION_UI_SETTINGS),
+    (stringify!(PERMISSION_UI_INPUT), PERMISSION_UI_INPUT),
+    (stringify!(PERMISSION_UI_FILE_HANDLER), PERMISSION_UI_FILE_HANDLER),
+    (stringify!(PERMISSION_NETWORK_HTTP), PERMISSION_NETWORK_HTTP),
+    (stringify!(PERMISSION_STORAGE), PERMISSION_STORAGE),
+    (stringify!(PERMISSION_FS_READ), PERMISSION_FS_READ),
+    (stringify!(PERMISSION_FS_WRITE), PERMISSION_FS_WRITE),
+    (stringify!(PERMISSION_BROADCAST), PERMISSION_BROADCAST),
+    (stringify!(PERMISSION_TIMER), PERMISSION_TIMER),
+    (stringify!(PERMISSION_PROCESS), PERMISSION_PROCESS),
+    (stringify!(PERMISSION_APP_CLI), PERMISSION_APP_CLI),
+    (stringify!(PERMISSION_PEER), PERMISSION_PEER),
+    (stringify!(PERMISSION_MDNS), PERMISSION_MDNS),
+    (stringify!(PERMISSION_WS_CLIENT), PERMISSION_WS_CLIENT),
+    (stringify!(PERMISSION_WS_SERVER), PERMISSION_WS_SERVER),
+    (stringify!(PERMISSION_AUTH), PERMISSION_AUTH),
+    (stringify!(PERMISSION_PTY_SPAWN), PERMISSION_PTY_SPAWN),
+    (stringify!(PERMISSION_PTY_IO), PERMISSION_PTY_IO),
+    (stringify!(PERMISSION_TASK_RUN), PERMISSION_TASK_RUN),
 ];
 
+/// 合法权限集合 — 桌面端权限词汇的**唯一真源**（由 [`PERMISSION_VOCABULARY`] 派生）
+///
+/// 未列入本表的权限在 [`PermissionManager::grant_permissions`] 授权时被静默过滤，
+/// 因此 manifest 声明了这里没有的字段等于没声明（票 01 的词汇清零即为此而设）。
+/// 新增/拆分权限位只需在反射表加一行，再重跑生成器（见模块头），
+/// 否则宿主词汇漂移锁转红。
+const fn valid_permissions() -> [&'static str; PERMISSION_VOCABULARY.len()] {
+    let mut out = [""; PERMISSION_VOCABULARY.len()];
+    let mut i = 0;
+    while i < out.len() {
+        out[i] = PERMISSION_VOCABULARY[i].1;
+        i += 1;
+    }
+    out
+}
+
+pub static VALID_PERMISSIONS: &[&str] = &valid_permissions();
+
 /// 权限到 API 方法的映射
-static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
+///
+/// 两种消费者共用本表（生成物由前端与打包 CLI 各自读取）：
+/// - **前端 context API 面**（活锁）：`ui.*` / `session.*` / `terminal.*` / `storage.*`
+///   / `http.*` 这些名字就是插件前端实际调用的方法名，宿主前端
+///   `src/plugin/context.ts` 的 `requirePermission` 按本表快速失败；
+/// - **`PermissionManager::check_api` 审计名**：`pty.*` / `ws.*` / `peer.*` / `mdns.*`
+///   等 WASM-only 方法无前端调用点，登记于此仅作审计与互调面口径，
+///   实际门禁在 host_impl 各函数入口的 `check_permission`。
+///
+/// 表内每个权限都必有一条门禁落点（前端 `requirePermission` 或 host_impl
+/// `check_permission`）——无落点的权限位由宿主词汇漂移锁拒绝。
+pub static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     (PERMISSION_TERMINAL_INPUT, &["terminal.sendInput", "terminal.onInput"]),
     (PERMISSION_TERMINAL_OUTPUT, &["terminal.onOutput"]),
     (PERMISSION_TERMINAL_OBSERVE, &["terminal.onInputSubmitted"]),
@@ -130,18 +176,20 @@ static PERMISSION_API_MAP: &[(&str, &[&str])] = &[
     ),
     (PERMISSION_SESSION_WRITE, &["session.create", "session.stop"]),
     // 配置面为 WASM 优先权限（前端经插件命令通道取数，不直调宿主域命令）；
-    // 登记三个方法的审计名，与 host_impl 的权限门同域
+    // 登记三个方法名，与 host_impl 的权限门同域
     (PERMISSION_SESSION_CONFIG, &[
         "session.configUpsert",
         "session.configGet",
         "session.configDelete",
     ]),
-    (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel"]),
+    (PERMISSION_UI_SIDEBAR, &["ui.registerSidebarPanel", "ui.registerPage"]),
     (PERMISSION_UI_TOOLBOX, &["ui.registerToolboxPage"]),
     (PERMISSION_UI_STATUSBAR, &["ui.registerStatusBarItem", "ui.registerTitleBarItem"]),
     (PERMISSION_UI_DIALOG, &["ui.showDialog"]),
+    (PERMISSION_UI_PAGE_TOOLBAR, &["ui.registerPageToolbarItem"]),
     (PERMISSION_UI_SETTINGS, &["ui.registerSettingsSection"]),
     (PERMISSION_UI_INPUT, &["ui.registerInputExtension", "ui.registerTerminalToolbarItem"]),
+    (PERMISSION_UI_FILE_HANDLER, &["ui.registerFileHandler"]),
     (PERMISSION_NETWORK_HTTP, &["http.registerEndpoint"]),
     (PERMISSION_STORAGE, &["storage.get", "storage.set", "storage.delete", "storage.flush"]),
     (PERMISSION_BROADCAST, &["broadcast.sync"]),
@@ -331,5 +379,54 @@ mod tests {
         let pm = PermissionManager::new();
         assert!(!pm.check("unknown", "storage"));
         assert!(!pm.check_api("unknown", "storage.get"));
+    }
+
+    /// 票 01：词汇表由反射表派生，两处必须逐项同序一致（加位只改一张表）
+    #[test]
+    fn valid_permissions_are_derived_from_vocabulary_table() {
+        assert_eq!(
+            VALID_PERMISSIONS.len(),
+            PERMISSION_VOCABULARY.len(),
+            "VALID_PERMISSIONS 与 PERMISSION_VOCABULARY 条数不符"
+        );
+        for ((ident, value), perm) in PERMISSION_VOCABULARY.iter().zip(VALID_PERMISSIONS.iter()) {
+            assert_eq!(value, perm, "反射表与派生词汇顺序不符");
+            assert!(
+                ident.starts_with("PERMISSION_"),
+                "反射表标识符 {ident} 不是 PERMISSION_* 常量"
+            );
+        }
+    }
+
+    /// 票 01：前端确有门禁落点的贡献面权限必须在词汇表内
+    ///
+    /// `ui:pageToolbar` / `ui:fileHandler` 曾只存在于前端手抄清单：插件声明了却在
+    /// 授权时被过滤，宿主侧等于零权限，正是「声明即静默丢弃」的形态。
+    #[test]
+    fn frontend_contribution_permissions_survive_grant() {
+        for perm in [
+            PERMISSION_UI_PAGE_TOOLBAR,
+            PERMISSION_UI_FILE_HANDLER,
+            PERMISSION_UI_SETTINGS,
+            PERMISSION_UI_INPUT,
+            PERMISSION_UI_SIDEBAR,
+            PERMISSION_UI_DIALOG,
+        ] {
+            let pm = PermissionManager::new();
+            let granted = pm.grant_permissions("com.bedcode.contrib", &[perm.to_string()]);
+            assert!(granted.contains(perm), "{perm} 声明后被过滤——SDK 词汇表缺位");
+        }
+    }
+
+    /// 票 01：每条有 API 映射的权限，其映射键必须与词汇表同名（不认陌生键）
+    #[test]
+    fn api_map_keys_must_be_known_permissions() {
+        for (perm, apis) in PERMISSION_API_MAP {
+            assert!(
+                VALID_PERMISSIONS.contains(perm),
+                "PERMISSION_API_MAP 含词汇表外的键 {perm}"
+            );
+            assert!(!apis.is_empty(), "{perm} 登记了空 API 清单（应直接省略该条目）");
+        }
     }
 }

@@ -84,7 +84,7 @@ export interface PermissionMeta {
   descKey: string
 }
 
-/** 14 项桌面端权限元数据注册表 */
+/** 13 项桌面端权限元数据注册表（未知权限回退原始串，见 getPermissionMeta） */
 const PERMISSION_META: Record<string, PermissionMeta> = {
   storage: {
     emoji: '💾',
@@ -150,11 +150,6 @@ const PERMISSION_META: Record<string, PermissionMeta> = {
     emoji: '📝',
     titleKey: 'desktop.plugin.perm.fs:write.title',
     descKey: 'desktop.plugin.perm.fs:write.desc',
-  },
-  fileservice: {
-    emoji: '🗂️',
-    titleKey: 'desktop.plugin.perm.fileservice.title',
-    descKey: 'desktop.plugin.perm.fileservice.desc',
   },
   broadcast: {
     emoji: '📩',

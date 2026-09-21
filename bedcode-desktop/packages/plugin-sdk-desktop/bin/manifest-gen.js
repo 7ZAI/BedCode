@@ -21,21 +21,25 @@
 
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { permissionVocabulary } from './manifest-validate.js'
 
 // ==================== 权限映射表 ====================
 
-/** 前端 UI 注册调用 → 权限（与宿主 permission.ts PERMISSION_API_MAP 一一对应） */
-const REGISTER_PERMISSIONS = {
-  registerSidebarPanel: 'ui:sidebar',
-  registerToolboxPage: 'ui:toolbox',
-  registerStatusBarItem: 'ui:statusbar',
-  registerTitleBarItem: 'ui:statusbar',
-  registerPageToolbarItem: 'ui:pageToolbar',
-  registerSettingsSection: 'ui:settings',
-  registerInputExtension: 'ui:input',
-  registerTerminalToolbarItem: 'ui:input',
-  registerFileHandler: 'ui:fileHandler',
-}
+/**
+ * 前端 UI 注册调用 → 权限（从 SDK 权限词汇生成物的 apiMap 派生）
+ *
+ * 生成物里 `ui.registerXxx` 方法名去掉 `ui.` 前缀就是这里的扫描键（源码里以
+ * `.registerXxx(` 出现）。派生而非手抄：手抄表已经落后过一次真源（新增注册 API
+ * 忘记登记 → manifest 缺权限位 → 运行时被门），现由
+ * `bin/permission-vocabulary.json` 单点决定。
+ */
+const REGISTER_PERMISSIONS = Object.fromEntries(
+  Object.entries(permissionVocabulary().apiMap).flatMap(([perm, methods]) =>
+    (methods || [])
+      .filter((m) => m.startsWith('ui.register'))
+      .map((m) => [m.slice('ui.'.length), perm]),
+  ),
+)
 
 /** 前端 context API 使用 → 权限（正则按合并后的前端源码匹配） */
 const FRONTEND_PERMISSION_RULES = [

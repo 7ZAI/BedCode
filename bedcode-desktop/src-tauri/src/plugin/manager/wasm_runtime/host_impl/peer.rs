@@ -446,7 +446,39 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::{PeerHandleTable, SessionEntry};
+    use super::{denied, PeerHandleTable, SessionEntry};
+    use crate::plugin::manager::wasm_runtime::host_impl::tests::{
+        build_host_ctx, grant_permissions,
+    };
+    use crate::plugin::permission::PERMISSION_PEER;
+
+    /// 权限门（票 01 门禁用例）：未授予 `peer` 即拒绝，且不触碰句柄表/引擎
+    #[test]
+    fn peer_denied_without_permission() {
+        let ctx = build_host_ctx();
+        assert_eq!(
+            super::peer_dial(&ctx, "com.bedcode.no-peer", "{}").unwrap_err(),
+            denied()
+        );
+        assert_eq!(
+            super::peer_close(&ctx, "com.bedcode.no-peer", "sess-nonexistent").unwrap_err(),
+            denied()
+        );
+    }
+
+    /// 正例（防「恒拒绝」假绿）：授予后越过权限门，报的是无头上下文不可用而非权限
+    #[test]
+    fn peer_granted_passes_permission_gate() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "com.bedcode.peer-ok", &[PERMISSION_PEER]);
+        let err = super::peer_close(&ctx, "com.bedcode.peer-ok", "sess-nonexistent")
+            .expect_err("无头上下文不应可断开");
+        assert!(
+            !err.contains("permission denied"),
+            "已授予 peer 仍被权限门拒绝: {err}"
+        );
+        assert!(err.contains("headless"), "预期无头上下文错误: {err}");
+    }
 
     fn entry(node: &str) -> SessionEntry {
         SessionEntry {

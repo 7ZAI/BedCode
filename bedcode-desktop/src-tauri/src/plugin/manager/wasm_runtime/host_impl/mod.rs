@@ -106,6 +106,29 @@ pub(crate) mod tests {
         ctx.permission.grant_permissions(plugin_id, &requested);
     }
 
+    /// 权限五同步点的②③：打包 CLI 与前端**生成物**必须认识该权限
+    ///
+    /// 票 01 起两份列表都是 SDK 真源的生成物（不再有手抄清单可比字面量）：
+    /// 生成物 ↔ 真源的集合相等由 `plugin/permission.rs` 的词汇漂移锁负责，
+    /// 本函数只确认「新增权限位确实进了两份生成物」——漏跑生成器即转红。
+    pub(crate) fn generated_vocabulary_know(permission: &str) {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let cli = std::fs::read_to_string(
+            manifest_dir.join("../packages/plugin-sdk-desktop/bin/permission-vocabulary.json"),
+        )
+        .expect("CLI 权限词汇生成物可读");
+        let frontend = std::fs::read_to_string(manifest_dir.join("../src/plugin/permission.vocabulary.ts"))
+            .expect("前端权限词汇生成物可读");
+        assert!(
+            cli.contains(&format!("\"{permission}\"")),
+            "CLI 权限词汇生成物缺 {permission}（重跑 SDK 的 pnpm run gen:permissions）"
+        );
+        assert!(
+            frontend.contains(&format!("'{permission}'")),
+            "前端权限词汇生成物缺 {permission}（重跑 SDK 的 pnpm run gen:permissions）"
+        );
+    }
+
     // ==================== check_permission ====================
 
     /// 已授权插件：校验通过

@@ -188,7 +188,6 @@ export default {
         'network:http': { title: 'HTTP 网络', desc: '发起 HTTP 请求' },
         'fs:read': { title: '文件读取', desc: '读取本地文件系统' },
         'fs:write': { title: '文件写入', desc: '写入本地文件系统' },
-        fileservice: { title: '文件服务', desc: '挂载文件服务端点' },
         broadcast: { title: '广播消息', desc: '向其他插件广播事件' },
       },
       // 统计条

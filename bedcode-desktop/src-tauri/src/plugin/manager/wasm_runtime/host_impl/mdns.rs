@@ -510,6 +510,38 @@ fn is_self_broadcast(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::plugin::manager::wasm_runtime::host_impl::tests::{
+        build_host_ctx, grant_permissions,
+    };
+
+    /// 权限门（票 01 门禁用例）：未授予 `mdns` 即拒绝浏览/广播，不触达引擎
+    #[test]
+    fn mdns_denied_without_permission() {
+        let ctx = build_host_ctx();
+        assert_eq!(
+            mdns_browse(&ctx, "com.bedcode.no-mdns", "_bedcode._tcp").unwrap_err(),
+            denied()
+        );
+        assert_eq!(
+            mdns_stop_browse(&ctx, "com.bedcode.no-mdns", "mdnsbr-nonexistent").unwrap_err(),
+            denied()
+        );
+    }
+
+    /// 正例（防「恒拒绝」假绿）：授予后越过权限门，报错来自参数校验而非权限
+    /// （用坏配置打门后的第一段代码，避免真起 mDNS 守护）
+    #[test]
+    fn mdns_granted_passes_permission_gate() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "com.bedcode.mdns-ok", &[PERMISSION_MDNS]);
+        let err = mdns_advertise(&ctx, "com.bedcode.mdns-ok", "not-a-json")
+            .expect_err("坏配置应报错");
+        assert!(
+            !err.contains("permission denied"),
+            "已授予 mdns 仍被权限门拒绝: {err}"
+        );
+        assert!(err.contains("invalid config"), "预期参数校验错误: {err}");
+    }
 
     /// 进程内静态表隔离（cargo test 多线程并行）：每个用例用唯一前缀 id，
     /// 只操作自己插的条目，绝不 clear 全表

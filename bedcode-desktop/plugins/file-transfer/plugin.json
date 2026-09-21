@@ -11,8 +11,6 @@
   "icon": "icon.svg",
   "permissions": [
     "broadcast",
-    "bus",
-    "fileservice",
     "fs:read",
     "fs:write",
     "mdns",
@@ -20,7 +18,6 @@
     "peer",
     "storage",
     "timer:schedule",
-    "transfer",
     "ui:dialog",
     "ui:sidebar",
     "ui:statusbar"

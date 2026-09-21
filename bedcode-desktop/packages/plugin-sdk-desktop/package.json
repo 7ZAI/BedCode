@@ -30,6 +30,7 @@
   ],
   "scripts": {
     "build": "tsup src/index.ts src/vite-plugin.ts src/types.ts --format esm --dts --clean",
+    "gen:permissions": "cargo run --quiet --manifest-path rust/Cargo.toml --example gen_permission_vocabulary",
     "test": "vitest",
     "test:run": "vitest run",
     "prepublishOnly": "pnpm run build && pnpm run test:run"

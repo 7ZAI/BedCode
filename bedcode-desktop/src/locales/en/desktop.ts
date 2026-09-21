@@ -198,7 +198,6 @@ export default {
         'network:http': { title: 'HTTP Network', desc: 'Make HTTP requests' },
         'fs:read': { title: 'File Read', desc: 'Read local file system' },
         'fs:write': { title: 'File Write', desc: 'Write to local file system' },
-        fileservice: { title: 'File Service', desc: 'Mount file service endpoints' },
         broadcast: { title: 'Broadcast', desc: 'Broadcast events to other plugins' },
       },
       // Stats bar

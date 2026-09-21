@@ -14,6 +14,7 @@ import { resolve, dirname } from 'path'
 import { fileURLToPath } from 'url'
 import { platform } from 'os'
 import { generateManifest } from '../packages/plugin-sdk-desktop/bin/manifest-gen.js'
+import { validateManifest } from '../packages/plugin-sdk-desktop/bin/manifest-validate.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
@@ -76,6 +77,26 @@ try {
   console.error(`[plugin-build] manifest 自动填充失败: ${e.message}`)
   process.exit(1)
 }
+
+// 构建前：校验 plugin.json（与 CLI `bedcode-plugin-desktop validate` 同一套规则）
+// 词汇/结构不合法的清单过去只在人工跑 CLI 时才被发现，声明了不存在的权限位会
+// 在宿主授权时被静默过滤（等于没声明），因此挂在构建链上强制拦一次。
+let validation
+try {
+  validation = validateManifest(pluginDir)
+} catch (e) {
+  console.error(`[plugin-build] manifest 校验不可用: ${e.message}`)
+  process.exit(1)
+}
+for (const w of validation.warnings) console.log(`[plugin-build] manifest ⚠ ${w}`)
+if (validation.errors.length) {
+  for (const e of validation.errors) console.error(`[plugin-build] manifest ✗ ${e}`)
+  console.error(
+    `[plugin-build] plugin.json 校验失败: ${validation.errors.length} 个错误（${pluginDir}）`,
+  )
+  process.exit(1)
+}
+console.log('[plugin-build] manifest 校验通过')
 
 try {
   const pkgMgrCmd = IS_WIN ? 'pnpm.cmd' : 'pnpm'
