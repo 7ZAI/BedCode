@@ -123,3 +123,18 @@ session_e2e / sync_handler）全部 `--check` 零 diff；CRLF 文件（lifecycle
 ② 移动端 SDK 的 host-session 面（v11）本就没有这些动作函数，属主改造不产生双端偏离，
 无需登记偏离条目；③ 二次删除的 UI 文案 i18n 归属插件侧，待实机确认后另计。
 
+## 补门项复核（2026-09-22，票 05 收尾时按交接 §4 追查）
+
+交接文档记的「对侧新增会话域原语（`host-session.output-ring-fetch`，`cc74d76d9`）尚未过本票属主门，
+下一条做会话域时补 `ensure_session_owner`」——**逐行核实后不成立，无需补门**：
+
+- 实现已在：`host_impl/session.rs::session_output_ring_fetch` 内 `ensure_session_owner(...)`，
+  且判定顺序与本票契约一致（权限门 `terminal:output` → 属主门），注释直接点名「票 04 P0-3」；
+- 用例已在（同文件 tests）：`output_ring_fetch_permission_denied_without_terminal_output`
+  （权限门先于属主/存在性——未授权插件连「会话输出是否存在」都不应可探知）、
+  `output_ring_fetch_by_non_owner_is_denied`（越权方权限齐备仍被 `not owner` 拦，
+  且属主侧报 `session output not found`，错误分档可辨）、
+  `output_ring_fetch_roundtrip_and_catchup`（正路径与游标追平）；
+- 结论：**本票无遗留尾项**。该条从「待补实现」降级为「已核实关闭」，
+  交接文档同批改正，避免下一个会话重复补做或误开空票。
+
