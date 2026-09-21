@@ -59,6 +59,18 @@ pub struct SessionManager {
     /// 从本槽取值（键名 → 字段名的机械映射见 `task_fields_from_slot`）。
     /// 会话移除时连带清理。
     annotations: Arc<tokio::sync::RwLock<std::collections::HashMap<String, std::collections::HashMap<String, String>>>>,
+    /// 会话属主登记表（审计票 04）：`session-id → 创建方 plugin_id`。
+    ///
+    /// **内核只存不解释**：属主是一个不透明的身份串，与 pty / ws / mdns / core-task
+    /// 各域的句柄 owner 列同形。「先过权限门、再查属主」这条不变量的判定发生在
+    /// host_impl（那里有 plugin_id 与错误文案口径），本表只提供事实：
+    /// - 写入：`create_session_from_spec`（创建即登记，与 `session_info.insert` 同批）
+    /// - 读出：[`Self::session_owner`]（`None` = 内核/宿主自建，无属主 → 插件一律不可操作）
+    /// - 清理：`remove_session_with_source`（会话销毁连带注销，不留孤儿键）
+    ///
+    /// 不进 `SessionInfo` / `SessionInfoView`：属主是宿主侧访问控制事实，
+    /// 不是给前端与移动端的展示字段，线协议形状因此零变化。
+    session_owners: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
 }
 
 impl SessionManager {
@@ -99,6 +111,7 @@ impl SessionManager {
             submitted_line_tracker: SubmittedLineTracker::new(),
             input_log_throttle: std::sync::atomic::AtomicU64::new(0),
             annotations: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            session_owners: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -240,6 +253,8 @@ impl SessionManager {
     /// - 启动失败时回滚输出注册（防孤儿会话残留）；
     /// - `source_device` 决定正统渲染端初始归属（启动端固定，防移动端单独启动
     ///   会话时首次 resize 误弹覆盖确认）。
+    /// - `owner`（票 04）= 创建方插件 id，登记进属主表供 host_impl 做「先权限后属主」
+    ///   判定；`None` = 内核/宿主自建（无属主，插件一律不可操作）。
     pub async fn create_session_from_spec(
         &self,
         launch_config: SessionLaunchConfig,
@@ -247,6 +262,7 @@ impl SessionManager {
         source_device: Option<String>,
         start: bool,
         session_id: Option<&str>,
+        owner: Option<&str>,
     ) -> Result<String> {
         // 分发 Creating 事件（同步阻塞，确保 hooks 在 PTY 启动前就位）
         self.dispatch_lifecycle_event(SessionLifecycleEvent::Creating {
@@ -316,6 +332,14 @@ impl SessionManager {
             self.canonical_renderer.set(&session_id, initial_canonical).await;
         }
         self.session_info.insert(info).await;
+        // 属主登记（票 04）：与会话记录同批写入，创建失败路径已在上方 return，
+        // 因此不会出现「有记录无属主」或「有属主无记录」的半态
+        if let Some(owner) = owner {
+            self.session_owners
+                .write()
+                .await
+                .insert(session_id.clone(), owner.to_string());
+        }
 
         if start {
             // 分发 Created 事件（异步通知；与 create_session_with_source_and_id 一致）
@@ -441,6 +465,14 @@ impl SessionManager {
     /// 获取会话
     pub async fn get_session(&self, session_id: &str) -> Option<SessionInfo> {
         self.session_info.get(session_id).await
+    }
+
+    /// 会话属主查询（票 04）：返回创建方插件 id；`None` = 无属主（内核/宿主自建）
+    ///
+    /// 只提供事实不做判断——「先权限门后属主」的判定与错误文案在 host_impl，
+    /// 与 pty / ws / mdns 的句柄属主判定同一分层。
+    pub async fn session_owner(&self, session_id: &str) -> Option<String> {
+        self.session_owners.read().await.get(session_id).cloned()
     }
 
     /// 会话注解槽写入（票 11）：`session-id → key → value` 不透明键值对。
@@ -736,6 +768,9 @@ impl SessionManager {
 
         // 清理会话注解槽（票 11）：会话销毁即连带移除其注解，不残留孤儿键
         self.annotations.write().await.remove(session_id);
+        // 属主注销（票 04）：同上不留孤儿键——重启编排会以同一 id 重建并由
+        // create-with-spec 重新登记属主
+        self.session_owners.write().await.remove(session_id);
 
         // 发布同步事件：会话删除
         self.publish_sync_event(DesktopSyncEvent::SessionRemoved {
@@ -911,7 +946,7 @@ mod tests {
             rows: 40,
         };
         let spec_sid = manager
-            .create_session_from_spec(launch_config, config_id.clone(), None, false, None)
+            .create_session_from_spec(launch_config, config_id.clone(), None, false, None, None)
             .await
             .expect("spec create");
         let spec_info = manager.session_info.get(&spec_sid).await.expect("spec info");
@@ -949,7 +984,7 @@ mod tests {
             rows: 30,
         };
         let sid = manager
-            .create_session_from_spec(launch_config, "cfg-1".to_string(), None, true, None)
+            .create_session_from_spec(launch_config, "cfg-1".to_string(), None, true, None, None)
             .await
             .expect("spec create + start");
         let info = manager.session_info.get(&sid).await.expect("info");
@@ -1061,6 +1096,7 @@ mod tests {
                 config_id.to_string(),
                 None,
                 false,
+                None,
                 None,
             )
             .await

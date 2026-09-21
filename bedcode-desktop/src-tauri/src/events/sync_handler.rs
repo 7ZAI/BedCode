@@ -528,6 +528,7 @@ mod tests {
             None,
             false,
             None,
+            None,
         )
         .await
         .expect("create session")

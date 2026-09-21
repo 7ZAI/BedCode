@@ -367,6 +367,8 @@ fn test_session_task_domain_closed_loop() {
                 None,
                 false,
                 None,
+                // 票 04：属主登记——本用例的会话由 com.bedcode.session 实例注解/操作
+                Some("com.bedcode.session"),
             )
             .await
             .expect("create session from spec");
@@ -2616,7 +2618,8 @@ fn test_session_annotate_and_devices_closed_loop() {
             "wire 字段名不变（前端 / 移动端契约）"
         );
 
-        // 存在性校验跨 wasm 边界：ghost 会话显性报错（`{"error": ...}` 形状）
+        // 未知会话跨 wasm 边界显性报错（`{"error": ...}` 形状）：票 04 起统一按
+        // 「非属主」拒绝——未知 id 判不出属主，与他人的 id 走同一口径
         let ghost = session
             .lock()
             .await
@@ -2629,7 +2632,7 @@ fn test_session_annotate_and_devices_closed_loop() {
         assert!(
             r["error"]
                 .as_str()
-                .map(|e| e.contains("session not found"))
+                .map(|e| e.contains("not owner"))
                 .unwrap_or(false),
             "未知会话必须显性报错, got: {ghost}"
         );

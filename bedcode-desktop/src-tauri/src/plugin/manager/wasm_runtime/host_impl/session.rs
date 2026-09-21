@@ -5,6 +5,37 @@ use crate::plugin::permission::{PERMISSION_SESSION_CONFIG, PERMISSION_SESSION_RE
 use crate::system::error_boundary::spawn_with_error_boundary;
 use uuid::Uuid;
 
+/// 属主拒绝统一文案（票 04，与 pty / ws / mdns 的 `not owner of ...` 同形）
+pub(crate) const NOT_OWNER: &str = "not owner of session";
+
+/// 先权限门（调用方已过）、后属主：只有创建方插件能操作自己的会话（票 04，P0-3）
+///
+/// 此前 `close` / `remove` / `rename` / `resize` / `annotate` 与 `terminal_send` 只看
+/// 权限位——任意声明了 `session:write` / `terminal:input` 的插件都能关掉用户正在用的
+/// 会话、向它的终端注入按键。pty / ws / mdns / core-task 早有同一判定，本函数把它
+/// 补齐到会话域，不发明新机制。
+///
+/// 无属主（内核/宿主自建）同样拒绝：fail-closed，宁可不给操作也不放行陌生人。
+/// 错误文案只报「不是属主」，不回带真实属主 id（避免把别的插件身份泄露给调用方）。
+pub(crate) fn ensure_session_owner(
+    host_ctx: &WasmHostContext,
+    plugin_id: &str,
+    session_id: &str,
+) -> Result<(), String> {
+    match block_on_async(host_ctx.session_manager.session_owner(session_id)) {
+        Some(owner) if owner == plugin_id => Ok(()),
+        other => {
+            tracing::warn!(
+                plugin_id = %plugin_id,
+                session_id = %session_id,
+                owned = other.is_some(),
+                "host-session 属主校验拒绝"
+            );
+            Err(format!("{NOT_OWNER}: {session_id}"))
+        }
+    }
+}
+
 /// 列出所有会话（权限 + SessionManager 查询），返回 JSON 数组字符串
 ///
 /// 返回的 JSON 是宿主 `SessionInfo` 序列化的**超集**：每个会话对象额外带
@@ -414,7 +445,7 @@ pub(crate) fn session_create_with_spec(
     let source_device = spec.source_device.clone();
     spawn_with_error_boundary("host_session_create_with_spec", async move {
         match sm
-            .create_session_from_spec(launch_config, cid.clone(), source_device, start, Some(&sid))
+            .create_session_from_spec(launch_config, cid.clone(), source_device, start, Some(&sid), Some(&pid))
             .await
         {
             Ok(_) => {
@@ -457,6 +488,8 @@ pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session
     if session_id.is_empty() {
         return Err("session error: empty session_id".to_string());
     }
+    // 参数合法后再查属主（票 04：先权限、再参数、后属主）
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
     let sm = host_ctx.session_manager.clone();
     let sid = session_id.to_string();
     let pid = plugin_id.to_string();
@@ -510,6 +543,8 @@ pub(crate) fn session_remove(host_ctx: &WasmHostContext, plugin_id: &str, sessio
     if session_id.trim().is_empty() {
         return Err("session error: empty session_id".to_string());
     }
+    // 参数合法后再查属主（票 04：先权限、再参数、后属主）
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
     let sm = host_ctx.session_manager.clone();
     block_on_async(sm.remove_session_with_source(session_id, None))
         .map_err(|e| format!("session error: remove session failed: {}", e))?;
@@ -541,6 +576,8 @@ pub(crate) fn session_rename(
     if name.trim().is_empty() {
         return Err("session error: empty session name".to_string());
     }
+    // 参数合法后再查属主（票 04：先权限、再参数、后属主）
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
     let sm = host_ctx.session_manager.clone();
     let previous = block_on_async(sm.rename_session(session_id, name))
         .map_err(|e| format!("session error: rename session failed: {}", e))?;
@@ -583,6 +620,8 @@ pub(crate) fn session_resize(
     }
     let requester: crate::session::RendererSource =
         serde_json::from_str(requester_json).map_err(|e| format!("session error: invalid requester: {}", e))?;
+    // 参数合法后再查属主（票 04：先权限、再参数、后属主）
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
 
     let sm = host_ctx.session_manager.clone();
     let previous = block_on_async(sm.canonical_renderer_of(session_id));
@@ -641,6 +680,8 @@ pub(crate) fn session_annotate(
     if key.trim().is_empty() {
         return Err("session error: empty annotation key".to_string());
     }
+    // 参数合法后再查属主（票 04：先权限、再参数、后属主）
+    ensure_session_owner(host_ctx, plugin_id, session_id)?;
     let sm = host_ctx.session_manager.clone();
     let written = block_on_async(sm.annotate_session(session_id, key, value));
     if !written {
@@ -920,12 +961,17 @@ mod tests {
         assert!(result.is_none());
     }
 
-    /// 关闭不存在的会话：同步返回 Ok（异步 kill 失败仅记录日志）
+    /// 关闭未知会话：票 04 起按「非属主」显性拒绝（旧契约的幂等成功会让
+    /// 陌生插件对任意 id 试探而不留痕；未知 id 与他人的 id 同样不可操作）
     #[tokio::test]
-    async fn session_close_missing_session_returns_ok() {
+    async fn session_close_of_unowned_session_is_denied() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
-        session_close(&ctx, PLUGIN, "no-such-session").expect("close ok");
+        let err = session_close(&ctx, PLUGIN, "no-such-session").unwrap_err();
+        assert!(err.contains("not owner"), "got: {err}");
+        // 属主关闭自己的会话仍同步返回 Ok（异步执行 kill）
+        let sid = seed_session(&ctx).await;
+        session_close(&ctx, PLUGIN, &sid).expect("属主关闭应放行");
     }
 
     // ==================== 会话配置 CRUD（v19，票 07 补口） ====================
@@ -1096,6 +1142,29 @@ mod tests {
 
     // ==================== 会话动作（v19，票 10） ====================
 
+    /// 播种会话并登记属主（票 04）：`owner = None` 模拟内核/宿主自建的无主会话
+    async fn seed_owned_session(ctx: &WasmHostContext, owner: Option<&str>) -> String {
+        use crate::enums::{ExecutionEnvironment, SessionLaunchConfig};
+        let launch_config = SessionLaunchConfig {
+            name: "属主用会话".to_string(),
+            environment: ExecutionEnvironment::Linux,
+            working_dir: "/tmp".to_string(),
+            command: "bash".to_string(),
+            env_vars: std::collections::HashMap::new(),
+            cols: 120,
+            rows: 40,
+        };
+        block_on_async(ctx.session_manager.create_session_from_spec(
+            launch_config,
+            "cfg-owner".to_string(),
+            None,
+            false,
+            None,
+            owner,
+        ))
+        .expect("seed owned session")
+    }
+
     /// 播种一个「只创建不启动」会话（openpty 就绪、无进程），返回 session id
     ///
     /// 走 `create_session_from_spec`（票 09 执行端）：**不读配置表**——本模块的
@@ -1119,6 +1188,8 @@ mod tests {
             None,
             false,
             None,
+            // 票 04：本模块既有用例都以 PLUGIN 身份操作会话，播种即登记其为属主
+            Some(PLUGIN),
         ))
         .expect("seed session")
     }
@@ -1133,6 +1204,87 @@ mod tests {
     }
 
     /// 三原语缺权限：一律**权限门先于参数处理**（非法 id 也报权限错，不泄漏参数面）
+    /// 属主闭环（票 04 红测）：持 `session:write` 的**他插件**不得关闭 / 移除 /
+    /// 改名 / 调整 / 注解**别人创建**的会话——此前这些函数只查权限位，
+    /// 任意插件拿到 `session:write` 就能杀掉用户正在用的会话。
+    #[tokio::test]
+    async fn session_actions_by_non_owner_are_denied() {
+        let ctx = build_host_ctx();
+        let owner = "com.bedcode.owner-a";
+        let intruder = "com.bedcode.intruder-b";
+        let sid = seed_owned_session(&ctx, Some(owner)).await;
+        grant_permissions(&ctx, owner, &[PERMISSION_SESSION_WRITE]);
+        grant_permissions(&ctx, intruder, &[PERMISSION_SESSION_WRITE]);
+
+        // 属主自己可用（正例对照，防「恒拒绝假绿」）
+        session_rename(&ctx, owner, &sid, "属主改名").expect("属主改名应放行");
+
+        for (label, outcome) in [
+            ("close", session_close(&ctx, intruder, &sid).map(|_|())),
+            ("remove", session_remove(&ctx, intruder, &sid)),
+            (
+                "rename",
+                session_rename(&ctx, intruder, &sid, "越权改名").map(|_| ()),
+            ),
+            (
+                "resize",
+                session_resize(&ctx, intruder, &sid, 80, 24, r#"{"kind":"desktop"}"#).map(|_| ()),
+            ),
+            (
+                "annotate",
+                session_annotate(&ctx, intruder, &sid, "taskStatus", "running"),
+            ),
+        ] {
+            let err = outcome.err().unwrap_or_else(|| panic!("非属主 {label} 必须被拒"));
+            assert!(
+                err.contains("not owner"),
+                "{label} 应按属主拒绝，got: {err}"
+            );
+        }
+
+        // 越权失败零副作用：会话仍在册、名字未变、注解未被写入
+        let info = ctx.session_manager.get_session(&sid).await.expect("会话应仍在册");
+        assert_eq!(info.name, "属主改名", "越权改名不得生效");
+        assert_eq!(
+            ctx.session_manager.session_annotations(&sid).await.get("taskStatus"),
+            None,
+            "越权注解不得生效"
+        );
+    }
+
+    /// 无属主会话（内核/宿主自建）一律不可操作（fail-closed，票 04）
+    #[tokio::test]
+    async fn session_actions_on_ownerless_session_are_denied() {
+        let ctx = build_host_ctx();
+        let sid = seed_owned_session(&ctx, None).await;
+        grant_permissions(&ctx, "com.bedcode.anyone", &[PERMISSION_SESSION_WRITE]);
+        let err = session_remove(&ctx, "com.bedcode.anyone", &sid).unwrap_err();
+        assert!(err.contains("not owner"), "无主会话不得被插件删: {err}");
+    }
+
+    /// 属主随会话销毁注销：同 id 重建后由新创建方重新持有
+    #[tokio::test]
+    async fn session_owner_is_released_on_remove() {
+        let ctx = build_host_ctx();
+        let a = "com.bedcode.owner-a";
+        let b = "com.bedcode.owner-b";
+        let sid = seed_owned_session(&ctx, Some(a)).await;
+        assert_eq!(
+            ctx.session_manager.session_owner(&sid).await.as_deref(),
+            Some(a)
+        );
+        grant_permissions(&ctx, a, &[PERMISSION_SESSION_WRITE]);
+        session_remove(&ctx, a, &sid).expect("属主移除应放行");
+        assert_eq!(ctx.session_manager.session_owner(&sid).await, None);
+
+        grant_permissions(&ctx, b, &[PERMISSION_SESSION_WRITE]);
+        let sid2 = seed_owned_session(&ctx, Some(b)).await;
+        assert_eq!(
+            ctx.session_manager.session_owner(&sid2).await.as_deref(),
+            Some(b)
+        );
+    }
+
     #[test]
     fn session_actions_permission_denied() {
         let ctx = build_host_ctx();
@@ -1177,13 +1329,14 @@ mod tests {
         );
     }
 
-    /// 移除：未知会话**幂等成功**（与宿主 `remove_session` 同语义——删不存在的会话
-    /// 不是错误）；真实会话移除后记录与归属一并消失
+    /// 移除：真实会话移除后记录与归属一并消失；**未知/无主会话不再幂等成功**
+    /// （票 04 起按非属主显性拒绝——幂等成功等于允许对任意 id 盲发删除）
     #[tokio::test]
     async fn session_remove_is_idempotent_and_clears_state() {
         let ctx = build_host_ctx();
         grant_permissions(&ctx, PLUGIN, &[PERMISSION_SESSION_WRITE]);
-        assert!(session_remove(&ctx, PLUGIN, "ghost").is_ok(), "未知会话幂等成功");
+        let err = session_remove(&ctx, PLUGIN, "ghost").unwrap_err();
+        assert!(err.contains("not owner"), "未知会话应按非属主拒绝: {err}");
 
         let sid = seed_running_session(&ctx).await;
         // 预置归属（模拟曾 resize）：移除必须连带清理正统端归属
@@ -1218,7 +1371,8 @@ mod tests {
         assert_eq!(after["name"], "改过的名字");
 
         let err = session_rename(&ctx, PLUGIN, "ghost", "x").unwrap_err();
-        assert!(err.contains("Session not found"), "未知会话显性报错, got: {err}");
+        // 票 04：未知 id 无从判定属主 → 与非属主同一拒绝口径（fail-closed）
+        assert!(err.contains("not owner"), "未知会话按非属主显性拒绝, got: {err}");
     }
 
     /// 尺寸原语 = **登记 + 执行**（不裁决）：首次请求方即位正统、回执 previousCanonical
@@ -1317,8 +1471,9 @@ mod tests {
             session_annotate(&ctx, PLUGIN, "s1", "", "v").unwrap_err(),
             "session error: empty annotation key"
         );
+        // 票 04：未知会话先撞上属主判定（不再暴露「存在与否」的差异）
         let err = session_annotate(&ctx, PLUGIN, "ghost", "taskStatus", "x").unwrap_err();
-        assert_eq!(err, "session error: session not found: ghost");
+        assert!(err.contains("not owner"), "got: {err}");
         assert!(
             block_on_async(ctx.session_manager.session_annotations("ghost")).is_empty(),
             "未知会话不写孤儿键"

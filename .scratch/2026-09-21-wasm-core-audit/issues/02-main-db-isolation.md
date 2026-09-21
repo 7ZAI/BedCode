@@ -102,8 +102,10 @@ SDK `cargo test --lib` → **93 passed / 0 failed**；
 `rustfmt --check`：改动的 LF 文件（`database.rs` / `activation.rs`）零 diff，且复核 38 行删除全是本票自身改写；
 CRLF 文件（SDK `permission.rs` / `context.rs`、`plugin-sdk-test/plugin.json`）行尾字节数逐文件核对无漂移。
 测试后检查无残留进程与监听端口。
-`cargo test` 全 target 仍被**本票之前既有**的 `src-tauri/tests/{ws_session_route,pty_session_chain}.rs`
-编译断链挡住（配对/QR 退役 + host-session v21 遗留，已登记为独立清理项）。
+`cargo test` 全 target 仍被**本票之前既有**的五个集成测试 target 编译断链挡住
+（`ws_session_route` / `pty_session_chain` / `ws_auth_rules` / `http_auth_biometric` /
+`broadcast_shutdown`，报的都是配对/QR 退役与 host-session v21 收敛掉的符号；
+`cargo check --tests` 的错误里无一处涉及本票符号），已登记为独立清理项。
 
 **过程中发现、未在本票修的既有缺陷（登记）**：
 1. `reject_bare_transaction_control` 的「末 token ∈ {commit, rollback, end, release}」启发式会把

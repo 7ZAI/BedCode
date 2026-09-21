@@ -38,6 +38,12 @@ pub(crate) struct SessionEntry {
     pub node_id: String,
     pub addr: String,
     pub port: u16,
+    /// 拨号方插件 id（票 04）：句柄只有属主可继续操作
+    ///
+    /// 此前句柄表没有 owner 列——`sess-<uuid>` 虽是随机不可猜，但一旦泄露给另一插件
+    /// （日志、事件、互调参数），持有者即可断开他人连接、以他人身份读写传输。
+    /// 与 pty / ws / mdns 的 owner 列同形，判定统一在宿主侧。
+    pub owner: String,
 }
 
 /// 进程级单例（与引擎连接生命周期对齐：宿主重启即清空，插件重拨即可）。
@@ -66,6 +72,11 @@ impl PeerHandleTable {
     fn take_session(&mut self, handle: &str) -> Option<SessionEntry> {
         self.sessions.remove(handle)
     }
+
+    /// 放回句柄（属主判定拒绝时回滚，非属主的探测不得改变注册表状态）
+    fn restore_session(&mut self, handle: &str, entry: SessionEntry) {
+        self.sessions.insert(handle.to_string(), entry);
+    }
 }
 
 static PEER_HANDLES: LazyLock<std::sync::Mutex<PeerHandleTable>> =
@@ -74,6 +85,17 @@ static PEER_HANDLES: LazyLock<std::sync::Mutex<PeerHandleTable>> =
 fn with_handles<T>(f: impl FnOnce(&mut PeerHandleTable) -> T) -> T {
     let mut guard = PEER_HANDLES.lock().expect("peer handle table lock poisoned");
     f(&mut guard)
+}
+
+/// 属主判定（票 04）：非属主统一拒绝，文案与 pty / mdns 同形
+const NOT_OWNER: &str = "not owner of peer handle";
+
+fn ensure_handle_owner(entry: &SessionEntry, plugin_id: &str, handle: &str) -> Result<(), String> {
+    if entry.owner == plugin_id {
+        return Ok(());
+    }
+    tracing::warn!(plugin_id = %plugin_id, handle = %handle, "host-peer 属主校验拒绝");
+    Err(format!("{NOT_OWNER}: {handle}"))
 }
 
 /// 宿主命令返回 crate::Result<T>（AppError）——WASM 边界统一转可读字符串
@@ -86,11 +108,13 @@ fn sync_result<T>(r: crate::Result<T>) -> Result<T, String> {
 /// 引擎握手后重试一次。denied/unreachable 等其他错误原样上抛。
 fn with_auto_redial<T>(
     host_ctx: &WasmHostContext,
+    plugin_id: &str,
     handle: &str,
     op: impl Fn(&str) -> Result<T, String>,
 ) -> Result<T, String> {
     let entry =
         with_handles(|t| t.resolve_session(handle)).ok_or_else(|| format!("invalid session handle: {handle}"))?;
+    ensure_handle_owner(&entry, plugin_id, handle)?;
     match op(&entry.node_id) {
         Ok(v) => Ok(v),
         Err(e) if e.contains("discovery cache") || e.contains("not in discovery cache") => {
@@ -127,7 +151,7 @@ pub(crate) fn peer_dial(host_ctx: &WasmHostContext, plugin_id: &str, endpoint_js
     let port = endpoint.port;
     let dto = sync_result(block_on_async(crate::peer_net::dial_peer_endpoint(app, endpoint)))?;
     match dto.status.as_str() {
-        "connected" => Ok(with_handles(|t| t.mint_session(SessionEntry { node_id, addr, port }))),
+        "connected" => Ok(with_handles(|t| t.mint_session(SessionEntry { node_id, addr, port, owner: plugin_id.to_string() }))),
         other => Err(format!("dial endpoint failed: peer {other}")),
     }
 }
@@ -136,11 +160,18 @@ pub(crate) fn peer_close(host_ctx: &WasmHostContext, plugin_id: &str, handle: &s
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_close") {
         return Err(denied());
     }
-    let app = require_app(host_ctx)?;
-    // ① session 句柄 → 断开连接
+    // ① session 句柄 → 先判属主再谈断开：属主判定刻意排在 require_app 之前，
+    //    越权探测在无头/引擎未就绪的环境下也得到同一个答案（不因先报 headless 而掩盖）
     if let Some(entry) = with_handles(|t| t.take_session(handle)) {
+        if let Err(e) = ensure_handle_owner(&entry, plugin_id, handle) {
+            // 拒绝即放回句柄：非属主的一次 close 试探不得把别人的连接摘走
+            with_handles(|t| t.restore_session(handle, entry));
+            return Err(e);
+        }
+        let app = require_app(host_ctx)?;
         return sync_result(block_on_async(crate::peer_net::disconnect_peer(app, entry.node_id)));
     }
+    let app = require_app(host_ctx)?;
     // ② 发送传输句柄（batch-id）→ 取消发送批
     let cancelled = sync_result(block_on_async(crate::peer_net::cancel_transfer_for_plugin(
         app.clone(),
@@ -245,7 +276,7 @@ pub(crate) fn peer_send_files(
     }
     // 返回值已收窄为传输句柄（batch-id）；Phase 3 起插件自持任务视图，宿主
     // 不再回传整份 DTO。断线场景由 with_auto_redial 以记忆 endpoint 重拨
-    let dto = with_auto_redial(host_ctx, session, |node_id| {
+    let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
         sync_result(block_on_async(crate::peer_net::send_files_for_plugin(
             app,
@@ -373,7 +404,7 @@ pub(crate) fn peer_list_shared_roots(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PEER, "host_peer_list_shared_roots") {
         return Err(denied());
     }
-    let roots = with_auto_redial(host_ctx, session, |node_id| {
+    let roots = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
         sync_result(block_on_async(crate::peer_net::list_remote_roots_for_plugin(
             app,
@@ -394,7 +425,7 @@ pub(crate) fn peer_browse_directory(
         return Err(denied());
     }
     let (dir_id, rel_path) = (dir_id.to_string(), rel_path.to_string());
-    let dto = with_auto_redial(host_ctx, session, |node_id| {
+    let dto = with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let app = require_app(host_ctx)?;
         sync_result(block_on_async(crate::peer_net::browse_remote_for_plugin(
             app,
@@ -419,7 +450,7 @@ pub(crate) fn peer_pull_files(
     // RemotePullFileDto 未实现 Clone：闭包内按 JSON 串重复解析（重拨场景才二次执行）
     let dir_id = dir_id.to_string();
     let files_json_owned = files_json.to_string();
-    with_auto_redial(host_ctx, session, |node_id| {
+    with_auto_redial(host_ctx, plugin_id, session, |node_id| {
         let files: Vec<crate::peer_net::RemotePullFileDto> =
             serde_json::from_str(&files_json_owned).map_err(|e| format!("pull files: invalid files json: {e}"))?;
         let app = require_app(host_ctx)?;
@@ -446,7 +477,7 @@ pub(crate) fn peer_set_download_dir(host_ctx: &WasmHostContext, plugin_id: &str,
 
 #[cfg(test)]
 mod tests {
-    use super::{denied, PeerHandleTable, SessionEntry};
+    use super::*;
     use crate::plugin::manager::wasm_runtime::host_impl::tests::{
         build_host_ctx, grant_permissions,
     };
@@ -485,7 +516,55 @@ mod tests {
             node_id: node.to_string(),
             addr: "192.168.1.5".to_string(),
             port: 47821,
+            owner: "com.bedcode.owner-a".to_string(),
         }
+    }
+
+    /// 属主登记与判定（票 04）：句柄只有拨号方可继续操作
+    #[test]
+    fn session_handle_is_owner_scoped() {
+        let mut t = PeerHandleTable::default();
+        let h = t.mint_session(entry("own"));
+        let got = t.resolve_session(&h).expect("resolved");
+        assert_eq!(got.owner, "com.bedcode.owner-a", "拨号方即属主");
+        assert!(ensure_handle_owner(&got, "com.bedcode.owner-a", &h).is_ok());
+        let err = ensure_handle_owner(&got, "com.bedcode.intruder-b", &h).unwrap_err();
+        assert_eq!(err, format!("not owner of peer handle: {h}"));
+        // 错误文案不回带真实属主身份
+        assert!(
+            !err.contains("owner-a"),
+            "拒绝文案不得泄露属主插件 id: {err}"
+        );
+    }
+
+    /// 非属主 close 的拒绝路径零副作用：句柄仍在册，别人仍可用
+    #[test]
+    fn rejected_close_restores_handle() {
+        let mut t = PeerHandleTable::default();
+        let h = t.mint_session(entry("keep"));
+        let taken = t.take_session(&h).expect("taken");
+        assert!(ensure_handle_owner(&taken, "intruder", &h).is_err());
+        t.restore_session(&h, taken);
+        assert_eq!(t.resolve_session(&h).expect("still registered").node_id, "keep");
+    }
+
+    /// 宿主函数面（票 04 红测）：非属主调 `peer_close` 拿到的就是属主拒绝，
+    /// 而不是先撞上「无头上下文不可用」——判定顺序本身也是被断言的行为
+    #[test]
+    fn peer_close_by_non_owner_is_denied_before_app_check() {
+        let ctx = build_host_ctx();
+        grant_permissions(&ctx, "com.bedcode.intruder-b", &[PERMISSION_PEER]);
+        let h = with_handles(|t| t.mint_session(entry("victim-session")));
+        let err = peer_close(&ctx, "com.bedcode.intruder-b", &h).unwrap_err();
+        assert_eq!(err, format!("{NOT_OWNER}: {h}"), "got: {err}");
+        // 句柄未被摘走，属主仍可解析
+        assert_eq!(
+            with_handles(|t| t.resolve_session(&h)).map(|e| e.node_id),
+            Some("victim-session".to_string())
+        );
+        with_handles(|t| {
+            t.take_session(&h);
+        });
     }
 
     #[test]

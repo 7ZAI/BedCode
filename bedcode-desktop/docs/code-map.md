@@ -292,7 +292,9 @@ WIT 契约 `host-task`（5 函数：execute-batch / submit / status / cancel / l
 
 ### 会话管理 — `src-tauri/src/session/`
 
-- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除）；
+- **session_manager**：会话编排与登记（创建执行端 / 启动 / 尺寸裁决登记 / 注解槽 / 移除 /
+  **属主登记**：`session-id → 创建方 plugin_id` 不透明表，票 04——内核只存事实，
+  「先权限门后属主」的判定与文案在 `host_impl`，与会话销毁一并注销）；
   会话状态变更直接持 `broadcast::Sender<SessionStatusEvent>`（原 `event_bus.rs` 的
   `SessionEvent`/`SessionEventBus` 只剩单一状态事件、无订阅者，已收缩删除）
 - **session_config**：`SessionConfigManager`——v21 后只剩一个用途：`com.bedcode.session`

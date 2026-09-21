@@ -74,12 +74,14 @@ SDK 词汇与前端合并后行为不变：23 个前端实际门禁名逐条比�
   `task_e2e::test_task_submit_events_dispatched_and_status`，单跑均绿）。两条都是 5s 轮询真等
   （wasm + 宿主线程池 + WS 帧），失败点与本票改动面无接触（本票未动任何授权/grant 运行时路径），
   记为并发负载下的既有时序抖动，不在本票处置。
-- `cargo test`（全 target）→ **两个集成测试 target 在本票之前就无法编译**：
-  `tests/ws_session_route.rs`（`server::services::pairing_service` / `AppContextBuilder::pairing_service` 已退役）、
-  `tests/pty_session_chain.rs`（`QrTokenManager` / `SessionManager::from_database` / `restart_session` 已退役）。
-  均为「配对 / QR 宿主降级退役」与 host-session v21 收敛（删 `create`/`restart`）留下的断链，
-  与本票零接触面（`git diff` 不含 `src-tauri/tests/`，且 `git grep pairing_service HEAD -- src` 为空）。
-  **另立清理项，未在本票擅自修复。**
+- `cargo test`（全 target）→ **五个集成测试 target 在本票之前就无法编译**：
+  `ws_session_route` / `pty_session_chain` / `ws_auth_rules` / `http_auth_biometric` / `broadcast_shutdown`，
+  报的都是已退役符号（`server::services::pairing_service`、`AppContextBuilder::pairing_service`、
+  `utils::auth::QrTokenManager`、`SessionManager::from_database`、`restart_session`）。
+  来源是「配对 / QR 宿主降级退役」与 host-session v21 收敛（删 `create`/`restart`）留下的断链
+  （`git grep <符号> HEAD -- src-tauri/src` 全空，错误里也无一处涉及本票改动的符号），
+  与本票零接触面。**另立清理项，未在本票擅自修复。**
+  后续票 02 / 04 的 `cargo check --lib --tests` 复核同一组断链，未再增加。
 - `pnpm exec vitest run --pool=forks --maxWorkers=2` → **75 files / 734 tests 全绿**。
   本票实施过程中该跑法曾报 2 files 3 tests 红（`plugins/session/src/__tests__/{plugin-contract,terminalSettingsSync}.test.ts`
   报 `composables/terminal/useTerminalSettingsSync.ts` 直调 Tauri invoke），当时这些文件是并发会话
