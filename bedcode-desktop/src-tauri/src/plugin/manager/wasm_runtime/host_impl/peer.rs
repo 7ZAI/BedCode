@@ -300,7 +300,9 @@ pub(crate) fn peer_pause_transfer(host_ctx: &WasmHostContext, plugin_id: &str, b
     }
     let app = require_app(host_ctx)?;
     let batch_id = batch_id.to_string();
-    let hit = sync_result(block_on_async(crate::peer_net::pause_transfer_for_plugin(app, batch_id)))?;
+    let hit = sync_result(block_on_async(crate::peer_net::pause_transfer_for_plugin(
+        app, batch_id,
+    )))?;
     if !hit {
         return Err("pause transfer: no running send batch with that id".to_string());
     }

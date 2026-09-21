@@ -151,11 +151,7 @@ impl PluginDownloader {
                 "[PluginDownloader] Removing orphan residue dir (no plugin.json) before install"
             );
             std::fs::remove_dir_all(&final_dir).map_err(|e| {
-                crate::AppError::Plugin(format!(
-                    "Failed to remove orphan dir '{}': {}",
-                    final_dir.display(),
-                    e
-                ))
+                crate::AppError::Plugin(format!("Failed to remove orphan dir '{}': {}", final_dir.display(), e))
             })?;
         }
         std::fs::rename(&temp_dir, &final_dir)

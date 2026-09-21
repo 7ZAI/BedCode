@@ -4,10 +4,10 @@
 //! 验证必填字段和权限合法性，返回已加载的插件列表
 //! 仅处理文件扫描加载，Rust+TS WASM 插件由 PluginHost 通过 WasmRuntime 加载
 
-use crate::plugin::permission::PermissionManager;
-use crate::system::constants::plugin::PLUGIN_DOWNLOAD_TEMP_DIR;
 use crate::plugin::manager::types::{LoadedPlugin, PluginSource};
 use crate::plugin::manager::validation::{validate_dir_binding, validate_plugin_id};
+use crate::plugin::permission::PermissionManager;
+use crate::system::constants::plugin::PLUGIN_DOWNLOAD_TEMP_DIR;
 use bedcode_plugin_api::{PluginManifest, PluginState, PluginType};
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -22,28 +22,19 @@ impl PluginLoader {
     /// 目录约定：`plugins/desktop/{plugin-id}/plugin.json`
     /// 解析失败的插件跳过并记录警告，不影响其他插件
     pub fn load_all(
-
         plugins_dir: &Path,
 
         permission_mgr: &PermissionManager,
 
         source: Option<PluginSource>,
-
     ) -> HashMap<String, LoadedPlugin> {
-
         tracing::info!("[PluginLoader] Scanning plugin directory: {:?}", plugins_dir);
 
-
-
         if !plugins_dir.exists() {
-
             tracing::warn!("[PluginLoader] Plugin directory does not exist: {:?}", plugins_dir);
 
             return HashMap::new();
-
         }
-
-
 
         let mut plugins = HashMap::new();
 
@@ -54,41 +45,29 @@ impl PluginLoader {
         let mut seen_ids: HashSet<String> = HashSet::new();
 
         let entries = match fs::read_dir(plugins_dir) {
-
             Ok(entries) => entries,
 
             Err(e) => {
-
                 tracing::error!("[PluginLoader] Failed to read plugin directory: {}", e);
 
                 return HashMap::new();
-
             }
-
         };
-
-
 
         let mut dir_count = 0;
 
         for entry in entries.flatten() {
-
             let path = entry.path();
 
             if !path.is_dir() {
-
                 continue;
-
             }
 
             dir_count += 1;
 
-
-
             let manifest_path = path.join("plugin.json");
 
             if !manifest_path.exists() {
-
                 // 下载临时区容器目录（user_plugins_dir/plugins/_download_tmp）不是插件
 
                 // 目录，静默跳过；其余无 plugin.json 的目录是孤儿残留（如历史安装遗留
@@ -100,11 +79,8 @@ impl PluginLoader {
                 let temp_container = PLUGIN_DOWNLOAD_TEMP_DIR.split('/').next().unwrap_or("");
 
                 if path.file_name().and_then(|n| n.to_str()) == Some(temp_container) {
-
                     tracing::debug!("[PluginLoader] Skipping download temp container: {:?}", path);
-
                 } else {
-
                     tracing::warn!(
 
                         dir = %path.display(),
@@ -112,43 +88,29 @@ impl PluginLoader {
                         "[PluginLoader] Skipping dir without plugin.json (orphan residue; may block reinstall of same plugin id)"
 
                     );
-
                 }
 
                 continue;
-
             }
 
-
-
             match Self::load_manifest(&manifest_path) {
-
                 Ok(manifest) => {
-
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
                     let plugin_id = manifest.id.clone();
-
-
 
                     // ==================== 身份校验（防冒名顶替） ====================
 
                     // 1. id 必须为反向域名格式（拒绝大写/下划线/单段等非约定格式）
 
                     if !validate_plugin_id(&plugin_id) {
-
                         tracing::error!(
-
                             "[PluginLoader] Rejecting plugin from {:?}: invalid id format {:?}",
-
                             dir_name,
-
                             plugin_id
-
                         );
 
                         continue;
-
                     }
 
                     // 2. 目录名必须与 manifest id 一致
@@ -158,7 +120,6 @@ impl PluginLoader {
                     //    不一致说明目录被复制改名或 manifest 被替换，直接拒绝）
 
                     if !validate_dir_binding(&dir_name, &plugin_id) {
-
                         tracing::error!(
 
                             "[PluginLoader] Rejecting plugin {:?} from {:?}: dir name does not match manifest id (possible impersonation)",
@@ -168,13 +129,11 @@ impl PluginLoader {
                         );
 
                         continue;
-
                     }
 
                     // 3. 重复 id：先到先得，后到目录拒绝（防静默覆盖已加载插件）
 
                     if !seen_ids.insert(plugin_id.clone()) {
-
                         tracing::error!(
 
                             "[PluginLoader] Rejecting duplicate plugin id {:?} from {:?}: already loaded from another directory",
@@ -184,7 +143,6 @@ impl PluginLoader {
                         );
 
                         continue;
-
                     }
 
                     // Windows read_dir 返回带 \\?\ verbatim 前缀的路径，该形式不允许
@@ -195,8 +153,6 @@ impl PluginLoader {
 
                     let extension_path = strip_verbatim_prefix(&path.to_string_lossy());
 
-
-
                     // TS-only 插件强制设置 plugin_type
 
                     let manifest = manifest;
@@ -204,16 +160,11 @@ impl PluginLoader {
                     if manifest.plugin_type == PluginType::TsOnly && !manifest.main.is_empty() {
 
                         // 保留 manifest 中的 plugin_type，若未指定则默认 TsOnly
-
                     }
-
-
 
                     // 授权并过滤非法权限
 
                     let granted = permission_mgr.grant_permissions(&plugin_id, &manifest.permissions);
-
-
 
                     // 根据 rust_library 字段判断来源：有 WASM 模块则为 Wasm，否则为 FileScan；
 
@@ -222,47 +173,27 @@ impl PluginLoader {
                     // clone：source 在循环内被逐插件消费，参数本身不可移动
 
                     let source = match source.clone() {
-
                         Some(s) => s,
 
                         None => {
-
                             if !manifest.rust_library.is_empty() {
-
                                 PluginSource::Wasm
-
                             } else {
-
                                 PluginSource::FileScan
-
                             }
-
                         }
-
                     };
 
-
-
                     tracing::info!(
-
                         "[PluginLoader] Plugin loaded: {} v{} (type={:?}, source={:?}, path={})",
-
                         manifest.id,
-
                         manifest.version,
-
                         manifest.plugin_type,
-
                         source,
-
                         extension_path
-
                     );
 
-
-
                     let loaded = LoadedPlugin {
-
                         manifest,
 
                         state: PluginState::Loaded,
@@ -274,117 +205,69 @@ impl PluginLoader {
                         activated_at: None,
 
                         source,
-
                     };
 
-
-
                     plugins.insert(plugin_id, loaded);
-
                 }
 
                 Err(e) => {
-
                     let dir_name = path.file_name().unwrap_or_default().to_string_lossy();
 
                     tracing::error!("[PluginLoader] Failed to load plugin from {}: {}", dir_name, e);
-
                 }
-
             }
-
         }
 
-
-
         tracing::info!(
-
             "[PluginLoader] Scanned {} dir(s), loaded {} plugin(s)",
-
             dir_count,
-
             plugins.len()
-
         );
 
         plugins
-
     }
-
-
 
     /// 解析单个 plugin.json
 
     fn load_manifest(path: &PathBuf) -> crate::Result<PluginManifest> {
-
         let content = fs::read_to_string(path)
-
             .map_err(|e| crate::AppError::Plugin(format!("Failed to read plugin.json: {}", e)))?;
 
-
-
         let manifest: PluginManifest = serde_json::from_str(&content)
-
             .map_err(|e| crate::AppError::Plugin(format!("Failed to parse plugin.json: {}", e)))?;
 
-
-
         if manifest.id.is_empty() {
-
             return Err(crate::AppError::Plugin("plugin.json missing id field".to_string()));
-
         }
 
         if manifest.name.is_empty() {
-
             return Err(crate::AppError::Plugin("plugin.json missing name field".to_string()));
-
         }
 
         if manifest.version.is_empty() {
-
             return Err(crate::AppError::Plugin("plugin.json missing version field".to_string()));
-
         }
-
-
 
         // TS-only 插件必须有 main 字段
 
         if manifest.plugin_type == PluginType::TsOnly && manifest.main.is_empty() {
-
             return Err(crate::AppError::Plugin(
-
                 "TS-only plugin.json missing main field".to_string(),
-
             ));
-
         }
-
-
 
         // MVP 只支持 inline 模式
 
         if manifest.sandbox != "inline" {
-
             return Err(crate::AppError::Plugin(format!(
-
                 "Unsupported sandbox mode: {}, MVP only supports inline",
-
                 manifest.sandbox
-
             )));
-
         }
 
-
-
         Ok(manifest)
-
     }
-
 }
-
 
 /// 剥离 Windows verbatim 路径前缀（`\\?\`）
 ///

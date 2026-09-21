@@ -214,8 +214,8 @@ pub(crate) fn process_run_sync(
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_PROCESS, "host_process_run_sync") {
         return Err("permission denied".to_string());
     }
-    let request: SyncProcessRequest = serde_json::from_str(request_json)
-        .map_err(|e| format!("process error: invalid request JSON: {}", e))?;
+    let request: SyncProcessRequest =
+        serde_json::from_str(request_json).map_err(|e| format!("process error: invalid request JSON: {}", e))?;
     if request.command.trim().is_empty() {
         return Err("process error: empty command".to_string());
     }

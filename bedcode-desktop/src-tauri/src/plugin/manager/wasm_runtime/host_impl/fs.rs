@@ -187,8 +187,7 @@ pub(crate) fn fs_exists(host_ctx: &WasmHostContext, plugin_id: &str, path: &str)
 /// 的 std::fs 语义一致，working_dir 是宿主路径）。
 pub(crate) fn fs_read_dir(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<String, String> {
     authorize_fs(host_ctx, plugin_id, path, "read")?;
-    let read_dir = std::fs::read_dir(path)
-        .map_err(|e| format!("fs error: read dir '{}' failed: {}", path, e))?;
+    let read_dir = std::fs::read_dir(path).map_err(|e| format!("fs error: read dir '{}' failed: {}", path, e))?;
     let mut entries = Vec::new();
     for entry in read_dir {
         let entry = entry.map_err(|e| format!("fs error: read dir entry failed: {}", e))?;
@@ -228,11 +227,7 @@ pub(crate) fn fs_canonicalize(
 /// 文件元数据（v19 追加）：`{size, isFile, isDir}`；路径不存在返回 `Ok(None)`
 ///
 /// 供文件大小上限判定（与宿主 file-content 的 `MAX_FILE_SIZE` 语义一致）。
-pub(crate) fn fs_stat(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    path: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn fs_stat(host_ctx: &WasmHostContext, plugin_id: &str, path: &str) -> Result<Option<String>, String> {
     authorize_fs(host_ctx, plugin_id, path, "read")?;
     match std::fs::metadata(path) {
         Ok(meta) => Ok(Some(

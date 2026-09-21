@@ -639,18 +639,9 @@ mod tests {
     async fn test_http_endpoint_list_and_owner_reclaim() {
         // 直接写 map（模拟 toolProviders 声明路径）
         let registry = PluginRegistry::new();
-        registry
-            .register_http_endpoint("p1", "/api/plugin/p1/a")
-            .await
-            .unwrap();
-        registry
-            .register_http_endpoint("p1", "/api/plugin/p1/b")
-            .await
-            .unwrap();
-        registry
-            .register_http_endpoint("p2", "/api/plugin/p2/c")
-            .await
-            .unwrap();
+        registry.register_http_endpoint("p1", "/api/plugin/p1/a").await.unwrap();
+        registry.register_http_endpoint("p1", "/api/plugin/p1/b").await.unwrap();
+        registry.register_http_endpoint("p2", "/api/plugin/p2/c").await.unwrap();
 
         let p1 = registry.list_http_endpoint_paths("p1").await;
         assert_eq!(p1.len(), 2);
@@ -679,10 +670,7 @@ mod tests {
             .expect("p1 endpoint registered");
         assert_eq!(found.plugin_id, "p1");
         // 其他插件不共享 p1 的路径（命名空间隔离）
-        assert!(registry
-            .find_http_endpoint("/api/plugin/p2/tools/a")
-            .await
-            .is_none());
+        assert!(registry.find_http_endpoint("/api/plugin/p2/tools/a").await.is_none());
     }
 
     /// 票 16：`contributes.httpEndpoints` 批量登记——相对段补前缀、带前导斜杠归一、
@@ -736,12 +724,8 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn test_http_endpoints_are_namespaced_per_plugin() {
         let registry = PluginRegistry::new();
-        registry
-            .register_http_endpoints("p1", &["shared".to_string()])
-            .await;
-        registry
-            .register_http_endpoints("p2", &["shared".to_string()])
-            .await;
+        registry.register_http_endpoints("p1", &["shared".to_string()]).await;
+        registry.register_http_endpoints("p2", &["shared".to_string()]).await;
 
         assert_eq!(
             registry

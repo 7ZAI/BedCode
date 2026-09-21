@@ -16,11 +16,7 @@ const DEFAULT_QR_TOKEN_TTL_SECS: u64 = 300;
 ///
 /// `from_str` 过滤非法 key，value match 穷尽所有变体 —— 新增配置项时
 /// 编译器强制补实现，结构性杜绝"白名单声明了但实现缺失"的漂移
-pub(crate) fn config_get(
-    host_ctx: &WasmHostContext,
-    plugin_id: &str,
-    key: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn config_get(host_ctx: &WasmHostContext, plugin_id: &str, key: &str) -> Result<Option<String>, String> {
     // 白名单校验：仅接受 ConfigKey 枚举覆盖的 key
     let Some(config_key) = ConfigKey::from_str(key) else {
         tracing::warn!(plugin_id = %plugin_id, key = %key, "host_config_get: key not in whitelist");
@@ -68,20 +64,14 @@ pub(crate) fn config_get(
         ConfigKey::PairingCodeTtl => {
             return auth_setting_seconds(host_ctx, "pairing_code_ttl", DEFAULT_PAIRING_CODE_TTL_SECS)
         }
-        ConfigKey::QrTokenTtl => {
-            return auth_setting_seconds(host_ctx, "qr_token_ttl", DEFAULT_QR_TOKEN_TTL_SECS)
-        }
+        ConfigKey::QrTokenTtl => return auth_setting_seconds(host_ctx, "qr_token_ttl", DEFAULT_QR_TOKEN_TTL_SECS),
     };
 
     Ok(Some(value))
 }
 
 /// 读认证域设置项（`settings` 表）→ 十进制秒数字符串；缺失 / 非法回退默认值
-fn auth_setting_seconds(
-    host_ctx: &WasmHostContext,
-    key: &str,
-    default: u64,
-) -> Result<Option<String>, String> {
+fn auth_setting_seconds(host_ctx: &WasmHostContext, key: &str, default: u64) -> Result<Option<String>, String> {
     let db = host_ctx.db.clone();
     let setting_key = key.to_string();
     let stored = block_on_async(async move {
@@ -89,9 +79,7 @@ fn auth_setting_seconds(
         db.get_setting(&setting_key)
             .map_err(|e| format!("database error: {}", e))
     })?;
-    let seconds = stored
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(default);
+    let seconds = stored.and_then(|v| v.parse::<u64>().ok()).unwrap_or(default);
     Ok(Some(seconds.to_string()))
 }
 

@@ -18,8 +18,8 @@
 
 use crate::plugin::manager::task as core_task;
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
-use std::sync::Arc;
 use crate::plugin::permission::PERMISSION_TASK_RUN;
+use std::sync::Arc;
 
 /// `execute-batch`：同步批（扇出 → join → 一次性返回全部单元结果）。
 /// 阻塞 Store 至全部单元终态（或超时）——同 `run-sync` 语义，仅限快操作。
@@ -36,11 +36,7 @@ pub(crate) fn execute_batch(
 
 /// `submit`：异步任务，登记后立即返回 `task-<hex>` 句柄；进度/终态经
 /// `events-task#on-task-event` 回调；`cancel` 协作式取消。
-pub(crate) fn submit(
-    host_ctx: &Arc<WasmHostContext>,
-    plugin_id: &str,
-    plan_json: &str,
-) -> Result<String, String> {
+pub(crate) fn submit(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, plan_json: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_submit") {
         return Err("permission denied".to_string());
     }
@@ -48,11 +44,7 @@ pub(crate) fn submit(
 }
 
 /// `status`：任务状态自愈快照（事件丢失后查询）。`Ok(None)` = 不存在 / 非属主。
-pub(crate) fn status(
-    host_ctx: &Arc<WasmHostContext>,
-    plugin_id: &str,
-    job_id: &str,
-) -> Result<Option<String>, String> {
+pub(crate) fn status(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<Option<String>, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_status") {
         return Err("permission denied".to_string());
     }
@@ -60,11 +52,7 @@ pub(crate) fn status(
 }
 
 /// `cancel`：协作式取消（正在执行的单元跑完或超时，未开始单元 skipped）；幂等。
-pub(crate) fn cancel(
-    host_ctx: &Arc<WasmHostContext>,
-    plugin_id: &str,
-    job_id: &str,
-) -> Result<bool, String> {
+pub(crate) fn cancel(host_ctx: &Arc<WasmHostContext>, plugin_id: &str, job_id: &str) -> Result<bool, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_TASK_RUN, "host_task_cancel") {
         return Err("permission denied".to_string());
     }
@@ -94,7 +82,10 @@ mod tests {
         // 无 task:run：全部入口拒绝（五同步点之一：host_impl 权限门）
         let ctx = ctx();
         let p = "com.bedcode.task-test";
-        assert_eq!(execute_batch(&ctx, p, r#"{"units":[]}"#), Err("permission denied".to_string()));
+        assert_eq!(
+            execute_batch(&ctx, p, r#"{"units":[]}"#),
+            Err("permission denied".to_string())
+        );
         assert_eq!(submit(&ctx, p, r#"{"units":[]}"#), Err("permission denied".to_string()));
         assert_eq!(status(&ctx, p, "task-x"), Err("permission denied".to_string()));
         assert_eq!(cancel(&ctx, p, "task-x"), Err("permission denied".to_string()));

@@ -89,13 +89,17 @@ impl PluginServices for PluginHost {
     fn register_session_lifecycle_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
         // host function 处于同步上下文，通过 block_on_async 完成异步注册
         let listener = PluginLifecycleListener::new(plugin_id, self.clone());
-        crate::plugin::manager::wasm_runtime::block_on_async(session_manager.register_lifecycle_listener(Arc::new(listener)));
+        crate::plugin::manager::wasm_runtime::block_on_async(
+            session_manager.register_lifecycle_listener(Arc::new(listener)),
+        );
     }
 
     fn register_session_input_listener(&self, plugin_id: String, session_manager: Arc<SessionManager>) {
         // host function 处于同步上下文，通过 block_on_async 完成异步注册
         let listener = PluginInputListener::new(plugin_id, self.clone());
-        crate::plugin::manager::wasm_runtime::block_on_async(session_manager.register_input_listener(Arc::new(listener)));
+        crate::plugin::manager::wasm_runtime::block_on_async(
+            session_manager.register_input_listener(Arc::new(listener)),
+        );
     }
 
     fn mark_plugin_error(&self, plugin_id: String, error: String) {
@@ -389,11 +393,7 @@ impl crate::plugin::bus::MessageDispatcher for PluginHost {
     ///
     /// 与 `dispatch_to_wasm` 同桥（block_on_async + with_wasm_plugin_call）：
     /// trap 走自动重载恢复。返回 `Ok(false)` = 插件未导出该接口（调用方降级）
-    fn dispatch_ws_frame(
-        &self,
-        plugin_id: &str,
-        frame: &crate::plugin::bus::WsFrameDispatch,
-    ) -> anyhow::Result<bool> {
+    fn dispatch_ws_frame(&self, plugin_id: &str, frame: &crate::plugin::bus::WsFrameDispatch) -> anyhow::Result<bool> {
         let host = self.clone();
         let plugin_id = plugin_id.to_string();
         let frame = frame.clone();

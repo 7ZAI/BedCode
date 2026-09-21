@@ -143,11 +143,7 @@ pub(crate) struct JobHandle {
 
 impl JobHandle {
     fn owner(&self) -> String {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .owner
-            .clone()
+        self.inner.lock().unwrap_or_else(|e| e.into_inner()).owner.clone()
     }
 
     fn phase(&self) -> JobPhase {
@@ -202,11 +198,7 @@ static TASK_METRICS: LazyLock<TaskMetrics> = LazyLock::new(|| TaskMetrics {
 /// JSON 惯例）：jobs submitted/active/rejected + units completed + 并发高水位
 /// + 回调丢弃 + 池线程数常量
 pub(crate) fn task_metrics_snapshot() -> serde_json::Value {
-    let active = REGISTRY
-        .jobs
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .len();
+    let active = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner()).len();
     serde_json::json!({
         "jobsSubmittedTotal": TASK_METRICS.jobs_submitted_total.load(Ordering::Relaxed),
         "jobsActive": active,
@@ -291,9 +283,7 @@ fn pool_loop(rx: &Arc<Mutex<mpsc::Receiver<QueuedUnit>>>) {
 /// 单元执行开始：并发计数 + 高水位（与完成时 fetch_sub 成对）
 fn unit_started() {
     let cur = TASK_METRICS.concurrent_units_current.fetch_add(1, Ordering::Relaxed) + 1;
-    TASK_METRICS
-        .concurrent_units_peak
-        .fetch_max(cur, Ordering::Relaxed);
+    TASK_METRICS.concurrent_units_peak.fetch_max(cur, Ordering::Relaxed);
 }
 
 // ==================== 单元执行 ====================
@@ -343,12 +333,10 @@ fn execute_unit(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -
             }
         }
         "process.run-sync" => process::process_run_sync(host_ctx, owner, &unit.params.to_string()).map(Some),
-        "http.fetch" => {
-            match http::http_fetch(host_ctx, owner, &unit.params.to_string()) {
-                Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
-                Err(e) => Err(e),
-            }
-        }
+        "http.fetch" => match http::http_fetch(host_ctx, owner, &unit.params.to_string()) {
+            Ok(opt) => Ok(opt.map(|v| serde_json::json!(v).to_string())),
+            Err(e) => Err(e),
+        },
         other => Err(format!("task: unknown unit kind '{}'", other)),
     };
 
@@ -374,10 +362,7 @@ fn execute_unit(host_ctx: &Arc<WasmHostContext>, owner: &str, unit: &PlanUnit) -
 /// 单元结果按字节上限截断（JSON 文本长度；保护回调载荷与插件线性内存）
 fn truncate_json(v: String) -> (String, bool) {
     if v.len() > C::PLUGIN_TASK_UNIT_RESULT_MAX_BYTES {
-        let cut: String = v
-            .chars()
-            .take(C::PLUGIN_TASK_UNIT_RESULT_MAX_BYTES / 4)
-            .collect();
+        let cut: String = v.chars().take(C::PLUGIN_TASK_UNIT_RESULT_MAX_BYTES / 4).collect();
         (format!("{}…[truncated]", cut), true)
     } else {
         (v, false)
@@ -387,24 +372,21 @@ fn truncate_json(v: String) -> (String, bool) {
 // ==================== 对外 API（host_impl/task.rs 入口） ====================
 
 /// 登记任务并立即返回 `task-<hex>`（`submit`）：started 事件 + 池执行 + 回调
-pub(crate) fn submit(
-    host_ctx: Arc<WasmHostContext>,
-    owner: &str,
-    plan_json: &str,
-) -> Result<String, String> {
+pub(crate) fn submit(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &str) -> Result<String, String> {
     let plan = parse_plan(plan_json)?;
     let job_id = register_job(host_ctx.clone(), owner, plan, true)?;
-    enqueue_event(&host_ctx, owner, serde_json::json!({ "jobId": job_id, "phase": "started" }), true);
+    enqueue_event(
+        &host_ctx,
+        owner,
+        serde_json::json!({ "jobId": job_id, "phase": "started" }),
+        true,
+    );
     Ok(job_id)
 }
 
 /// 同步批：登记 → 并发执行 → join 返回全量结果（`execute-batch`）。
 /// 阻塞调用线程至全部单元终态（或墙钟超时）——同 `run-sync` 语义，不投回调。
-pub(crate) fn execute_batch(
-    host_ctx: Arc<WasmHostContext>,
-    owner: &str,
-    plan_json: &str,
-) -> Result<String, String> {
+pub(crate) fn execute_batch(host_ctx: Arc<WasmHostContext>, owner: &str, plan_json: &str) -> Result<String, String> {
     let plan = parse_plan(plan_json)?;
     let job_id = register_job(host_ctx, owner, plan, false)?;
     let job = REGISTRY
@@ -437,11 +419,7 @@ pub(crate) fn execute_batch(
     drop(finished);
 
     // 同步批不留痕（避免占每插件 MAX_JOBS 配额）
-    REGISTRY
-        .jobs
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(&job_id);
+    REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner()).remove(&job_id);
 
     Ok(result_json(&job_id, &job).to_string())
 }
@@ -548,8 +526,7 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
 // ==================== 登记与调度 ====================
 
 fn parse_plan(plan_json: &str) -> Result<Plan, String> {
-    let plan: Plan =
-        serde_json::from_str(plan_json).map_err(|e| format!("task: invalid plan JSON: {}", e))?;
+    let plan: Plan = serde_json::from_str(plan_json).map_err(|e| format!("task: invalid plan JSON: {}", e))?;
     if plan.units.is_empty() {
         return Err("task: plan has no units".to_string());
     }
@@ -567,12 +544,7 @@ fn parse_plan(plan_json: &str) -> Result<Plan, String> {
 }
 
 /// 配额检查 + 登记 + 提交初始并发窗口
-fn register_job(
-    host_ctx: Arc<WasmHostContext>,
-    owner: &str,
-    plan: Plan,
-    emit_events: bool,
-) -> Result<String, String> {
+fn register_job(host_ctx: Arc<WasmHostContext>, owner: &str, plan: Plan, emit_events: bool) -> Result<String, String> {
     // 每插件在册任务上限（含 running + queued；execute-batch 瞬时登记同算）
     {
         let mut jobs = REGISTRY.jobs.lock().unwrap_or_else(|e| e.into_inner());
@@ -637,7 +609,10 @@ fn register_job(
     // 提交初始并发窗口（cursor 已停在 window 处，剩余由完成回调推进）
     let tx = pool_tx();
     for i in 0..window.min(units_len) {
-        let _ = tx.send(QueuedUnit { job_id: job_id.clone(), index: i });
+        let _ = tx.send(QueuedUnit {
+            job_id: job_id.clone(),
+            index: i,
+        });
     }
     Ok(job_id)
 }
@@ -720,7 +695,10 @@ fn run_unit(item: &QueuedUnit, job: &Arc<JobHandle>) {
 
     // 推进并发窗口（锁外）
     if let Some(n) = next_index {
-        let _ = pool_tx().send(QueuedUnit { job_id: jid.clone(), index: n });
+        let _ = pool_tx().send(QueuedUnit {
+            job_id: jid.clone(),
+            index: n,
+        });
     }
 
     // 事件与通知
@@ -990,10 +968,7 @@ mod tests {
 
     #[test]
     fn parse_plan_rejects_zero_max_concurrency() {
-        let e = parse_plan(
-            r#"{"units":[{"id":"u1","kind":"fs.stat","params":{}}],"maxConcurrency":0}"#,
-        )
-        .unwrap_err();
+        let e = parse_plan(r#"{"units":[{"id":"u1","kind":"fs.stat","params":{}}],"maxConcurrency":0}"#).unwrap_err();
         assert!(e.contains("maxConcurrency"));
     }
 
@@ -1012,11 +987,7 @@ mod tests {
         ] {
             assert!(snap.get(key).is_some(), "task 指标缺 {key}");
         }
-        assert_eq!(
-            snap["poolThreads"],
-            C::PLUGIN_TASK_POOL_THREADS,
-            "池线程数与常量一致"
-        );
+        assert_eq!(snap["poolThreads"], C::PLUGIN_TASK_POOL_THREADS, "池线程数与常量一致");
     }
 
     #[test]
@@ -1037,7 +1008,11 @@ mod tests {
             TASK_METRICS.concurrent_units_peak.load(Ordering::Relaxed) >= 1,
             "peak 高水位不为 0"
         );
-        assert_eq!(TASK_METRICS.units_completed_total.load(Ordering::Relaxed), 0, "累计由 run_unit 负责");
+        assert_eq!(
+            TASK_METRICS.units_completed_total.load(Ordering::Relaxed),
+            0,
+            "累计由 run_unit 负责"
+        );
     }
 
     #[test]
