@@ -142,8 +142,7 @@ pub(crate) fn platform_local_ipv4_addresses() -> Result<String, String> {
             .await
             .map_err(|e| format!("local ipv4 list task join failed: {e}"))
     })?;
-    serde_json::to_string(&addresses)
-        .map_err(|e| format!("serialize local ipv4 addresses failed: {e}"))
+    serde_json::to_string(&addresses).map_err(|e| format!("serialize local ipv4 addresses failed: {e}"))
 }
 
 /// 真实网卡枚举（含过滤）
@@ -165,6 +164,18 @@ pub(crate) fn filter_ipv4(interfaces: Vec<(String, std::net::IpAddr)>) -> Vec<St
         .collect()
 }
 
+// ==================== 系统文件管理器定位（v22 函数级追加） ====================
+
+/// 在系统文件管理器中定位并选中文件/目录（v22 函数级追加）：`()`
+///
+/// 与 `pick-*` 同口径——定位是平台交互动作、不读取任何数据（路径本就由调用方
+/// 提供），故**不叠加权限门**（ADR 0022 裁剪线）。实现本体在引擎模块
+/// [`crate::system::opener`]（同一份平台分发也被宿主 `open_log_dir` 使用）；
+/// 本函数只做「PathBuf 语义校验 + 错误转 String」的适配。
+pub(crate) fn platform_reveal_in_dir(path: &str) -> Result<(), String> {
+    crate::system::opener::reveal_existing_in_dir(path).map_err(|e| e.to_string())
+}
+
 // ==================== Tests ====================
 
 #[cfg(test)]
@@ -183,8 +194,7 @@ mod tests {
     /// 契约：只回发行版名（无 state / version / is_default 等派生信息），顺序保持
     #[test]
     fn wsl_distro_names_returns_names_in_order() {
-        let json = wsl_distro_names(vec![distro("Ubuntu", true), distro("Debian", false)])
-            .expect("serialize");
+        let json = wsl_distro_names(vec![distro("Ubuntu", true), distro("Debian", false)]).expect("serialize");
         assert_eq!(json, r#"["Ubuntu","Debian"]"#);
     }
 
@@ -211,10 +221,7 @@ mod tests {
         let interfaces = vec![
             ("lo".to_string(), IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1))),
             ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 10))),
-            (
-                "eth0".to_string(),
-                IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1)),
-            ),
+            ("eth0".to_string(), IpAddr::V4(Ipv4Addr::new(169, 254, 1, 1))),
             ("eth1".to_string(), IpAddr::V6(Ipv6Addr::LOCALHOST)),
             ("wlan0".to_string(), IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))),
         ];

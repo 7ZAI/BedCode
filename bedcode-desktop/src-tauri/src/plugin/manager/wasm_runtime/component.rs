@@ -609,6 +609,10 @@ impl bedcode::plugin::host_platform::Host for WasmPluginState {
     fn local_ipv4_addresses(&mut self) -> Result<String, String> {
         platform::platform_local_ipv4_addresses()
     }
+
+    fn reveal_in_dir(&mut self, path: String) -> Result<(), String> {
+        platform::platform_reveal_in_dir(&path)
+    }
 }
 
 // ==================== host-websocket（ABI v14，spec `.scratch/2026-09-18-ws-base-service/`） ====================
@@ -934,11 +938,7 @@ impl LoadedWasmPlugin {
         let on_task_event = "bedcode:plugin/events-task.on-task-event"
             .parse::<wasmtime::component::wit_parser::ItemName>()
             .ok()
-            .and_then(|item| {
-                instance
-                    .get_typed_func::<(String,), ()>(&mut *store, &item)
-                    .ok()
-            });
+            .and_then(|item| instance.get_typed_func::<(String,), ()>(&mut *store, &item).ok());
         store.data_mut().on_task_event = on_task_event;
         Ok(())
     }
@@ -1268,10 +1268,7 @@ impl LoadedWasmPlugin {
         let Some(func) = self.store.data().on_task_event.clone() else {
             return Ok(false);
         };
-        block_on_async(async {
-            func.call_async(&mut self.store, (event_json.to_string(),)).await
-        })
-        .map_err(|e| {
+        block_on_async(async { func.call_async(&mut self.store, (event_json.to_string(),)).await }).map_err(|e| {
             self.log_trap("on_task_event", &e);
             AppError::Plugin(format!("WASM on_task_event() call failed: {}", e))
         })?;
