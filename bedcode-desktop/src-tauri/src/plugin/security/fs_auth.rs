@@ -72,7 +72,7 @@ impl FsAuthChecker {
         // - file-transfer: 内网文件传输插件，共享目录由用户在插件设置页显式配置，
         //   信任模型 = 配对 + 用户显式配置的目录白名单，插件自身第一方可信
         let mut plugin_whitelist = HashSet::new();
-        plugin_whitelist.insert("com.bedcode.session".to_string());
+        plugin_whitelist.insert("com.bedcode.terminal-session".to_string());
         plugin_whitelist.insert("com.bedcode.file-transfer".to_string());
 
         Self {
@@ -585,7 +585,7 @@ mod tests {
         // 受信任插件白名单 → 任意路径放行
         assert!(
             checker
-                .is_granted("com.bedcode.session", &std::env::temp_dir().to_string_lossy())
+                .is_granted("com.bedcode.terminal-session", &std::env::temp_dir().to_string_lossy())
                 .await
         );
     }

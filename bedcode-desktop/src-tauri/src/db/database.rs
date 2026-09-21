@@ -109,7 +109,7 @@ impl Database {
 
     /// 统计 legacy `session_configs` 表行数（票 02 阶段 A 观测信号）
     ///
-    /// 该表是会话配置的**旧真源**，v21 之后只剩一个用途：`com.bedcode.session`
+    /// 该表是会话配置的**旧真源**，v21 之后只剩一个用途：`com.bedcode.terminal-session`
     /// 激活时经 `LegacyConfigSource` 一次性迁入插件私有库。退表（阶段 B）前需
     /// 由发布侧确认「还有多少安装点的遗留行尚未迁入插件私有库」——本计数即该
     /// 信号的数据源（宿主启动时以结构化字段 `legacy_rows` 落 info 日志）。

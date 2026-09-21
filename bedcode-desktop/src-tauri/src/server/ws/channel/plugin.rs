@@ -16,9 +16,9 @@
 //!
 //! - 入站文本 / 二进制帧经骨架过滤链后转投属主插件（`events-ws` 可选导出），
 //!   同连接内保序（单条投递任务串行消费）；
-//! - 接入事件 `ws:client-connect.<owner>` 在连接**可用**时发布一次（`auth:"none"`
+//! - 接入事件 `<owner>::ws:client-connect` 在连接**可用**时发布一次（`auth:"none"`
 //!   为连接建立、`auth:"jwt"` 为认证通过），先于该连接的首个业务帧；
-//!   断开事件 `ws:client-disconnect.<owner>` 在骨架停止前发布一次
+//!   断开事件 `<owner>::ws:client-disconnect` 在骨架停止前发布一次
 //!   （且仅当接入事件已发布——认证失败/超时不留「无接入的断开」噪音）。
 //!
 //! 连接生命周期（心跳 / 认证超时 / 帧级过滤链 / 注册表）全部由骨架
@@ -26,6 +26,8 @@
 
 use actix::prelude::*;
 use actix_web_actors::ws::{CloseCode, CloseReason};
+use bedcode_plugin_api::host::bus::owned_topic;
+use bedcode_plugin_api::host::ws::{WS_CLIENT_CONNECT, WS_CLIENT_DISCONNECT};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -187,7 +189,7 @@ impl PluginChannel {
         self.connected_announced = true;
         let addr = conn.session.addr.to_string();
         self.bus.publish(
-            &format!("ws:client-connect.{}", self.owner),
+            &owned_topic(&self.owner, WS_CLIENT_CONNECT),
             "host",
             serde_json::json!({
                 "endpointId": self.endpoint_id,
@@ -336,7 +338,7 @@ impl ChannelHandler for PluginChannel {
             payload["reason"] = serde_json::Value::String(reason);
         }
         self.bus
-            .publish(&format!("ws:client-disconnect.{}", self.owner), "host", payload);
+            .publish(&owned_topic(&self.owner, WS_CLIENT_DISCONNECT), "host", payload);
         tracing::info!(
             plugin_id = %self.owner,
             endpoint_id = %self.endpoint_id,

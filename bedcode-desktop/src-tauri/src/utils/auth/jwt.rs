@@ -329,7 +329,7 @@ mod tests {
     /// 对照测试（票 07 pairing，票 06 改指会话中心）：宿主 jsonwebtoken 9.3.1 与
     /// 会话中心插件 pairing 域 HS256 自实现「同一输入同输出」。固定 key（32B 0x00..=0x1f）+ 固定 claims
     /// （注入 iat/exp）→ 期望 token 与插件侧
-    /// `plugins/session/rust/src/pairing/jwt.rs::plugin_token_matches_host_jsonwebtoken_vector`
+    /// `plugins/terminal-session/rust/src/pairing/jwt.rs::plugin_token_matches_host_jsonwebtoken_vector`
     /// 断言的是**同一常量**（签名段为插件实现产出；算法锚点 = RFC 7515 §A.1 官方向量）。
     /// 任一侧实现漂移（header 字段顺序 / claims 序列化顺序 / HMAC）双端立即红。
     #[test]

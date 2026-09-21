@@ -229,7 +229,7 @@ impl WasmPlugin for SdkTestPlugin {
                 }
             }
             // ==================== 会话中心互调闭环（票 05 改指） ====================
-            // caller 角色指向 com.bedcode.session（宿主测试加载真实会话中心产物）：
+            // caller 角色指向 com.bedcode.terminal-session（宿主测试加载真实会话中心产物）：
             // `consent-decide` 两阶段决策流 + `trust-list` / `trust-revoke` 统一视图与
             // 撤销 + 未声明 api 门禁拒绝（ADR 0017）。消费方参数经 args 传入
             // （宿主测试断言 wire 形状）。
@@ -242,7 +242,7 @@ impl WasmPlugin for SdkTestPlugin {
                     "fingerprintShort": "aabbccdd",
                     "deviceName": "消费方模拟对端",
                 }));
-                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                let client = SdkTestApiClient::new("com.bedcode.terminal-session").with_timeout(5000);
                 match client.call_json("consent-decide", peer) {
                     Ok(v) => Ok(serde_json::json!({ "decision": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
@@ -261,7 +261,7 @@ impl WasmPlugin for SdkTestPlugin {
                         obj.insert("userDecision".to_string(), serde_json::json!(ud));
                     }
                 }
-                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                let client = SdkTestApiClient::new("com.bedcode.terminal-session").with_timeout(5000);
                 match client.call_json("consent-decide", peer) {
                     Ok(v) => Ok(serde_json::json!({ "decision": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
@@ -269,7 +269,7 @@ impl WasmPlugin for SdkTestPlugin {
             }
             // 统一信任视图（零参 api）
             "test_session_trust_list" => {
-                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                let client = SdkTestApiClient::new("com.bedcode.terminal-session").with_timeout(5000);
                 match client.call_json("trust-list", serde_json::Value::Null) {
                     Ok(v) => Ok(v),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
@@ -278,15 +278,15 @@ impl WasmPlugin for SdkTestPlugin {
             // 撤销统一条目（id 经 args 传入；未经内核 `pairings` 真源不可逆）
             "test_session_trust_revoke" => {
                 let id = args.get("id").and_then(|v| v.as_str()).unwrap_or("ghost");
-                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(5000);
+                let client = SdkTestApiClient::new("com.bedcode.terminal-session").with_timeout(5000);
                 match client.call_json("trust-revoke", serde_json::json!(id)) {
                     Ok(v) => Ok(v),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),
                 }
             }
-            // 未声明 api（com.bedcode.session.ghost-api 不在 manifest）：宿主门禁拒绝
+            // 未声明 api（com.bedcode.terminal-session.ghost-api 不在 manifest）：宿主门禁拒绝
             "test_session_undeclared" => {
-                let client = SdkTestApiClient::new("com.bedcode.session").with_timeout(2000);
+                let client = SdkTestApiClient::new("com.bedcode.terminal-session").with_timeout(2000);
                 match client.call_json("ghost-api", serde_json::Value::Null) {
                     Ok(v) => Ok(serde_json::json!({ "unexpected": v })),
                     Err(e) => Err(anyhow::anyhow!("{}", e)),

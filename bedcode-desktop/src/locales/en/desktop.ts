@@ -14,7 +14,7 @@ export default {
       expand: 'Expand Sidebar',
     },
     // Session domain copy (ticket 13): rich-interaction strings moved into the
-    // com.bedcode.session plugin (`session.*` namespace); only terminal-window
+    // com.bedcode.terminal-session plugin (`session.*` namespace); only terminal-window
     // and exit-confirmation entries remain here (fallback shell removed, 13/14)
     session: {
       sessionStopped: 'Session stopped',

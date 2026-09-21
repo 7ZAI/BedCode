@@ -10,7 +10,7 @@
 //! 快捷指令）与 `commands/eventListeners`（设备连接事件监听）——插件经宿主 api 面
 //! 与自身命令面承载这些能力，宿主前端不再持有封装；WSL 探测（`listWslDistributions`
 //! / `isWslAvailable`）与 `getLocalIpAddresses` 随宿主命令面注销一并删除（产品面归
-//! `com.bedcode.session` 的 `session.environment.wsl-distros` / `session.network.info`）。
+//! `com.bedcode.terminal-session` 的 `session.environment.wsl-distros` / `session.network.info`）。
 
 export * from './commands/sessionCommands'
 export * from './commands/settingsCommands'

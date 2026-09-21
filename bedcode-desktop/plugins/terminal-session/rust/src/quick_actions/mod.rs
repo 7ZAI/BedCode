@@ -13,7 +13,7 @@
 //! - [`ops`]：业务排序、一次性幂等导入、HTTP wire 装配
 //!
 //! 对外面：
-//! - 互调 api `com.bedcode.session.quick-actions-import`（宿主 handoff 推送通道，
+//! - 互调 api `com.bedcode.terminal-session.quick-actions-import`（宿主 handoff 推送通道，
 //!   见 `ops::import`；宿主侧模块 `src-tauri/src/plugin/quick_actions_migration.rs`）
 //! - HTTP `GET quick-actions`（网关别名 `/api/quick-actions` 的插件目标）
 

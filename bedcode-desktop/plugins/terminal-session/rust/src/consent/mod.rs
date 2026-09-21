@@ -2,7 +2,7 @@
 //!
 //! 收敛 peer-net 首连确认语义（宿主 `peer:consent` 事件桥 + `respond_peer_consent`
 //! 命令）的决策层：给定 peer 信息与当前信任状态，判定「放行 / 拒绝 / 需确认」。
-//! 决策经互调 api `com.bedcode.session.consent-decide` 暴露（ADR 0017：manifest
+//! 决策经互调 api `com.bedcode.terminal-session.consent-decide` 暴露（ADR 0017：manifest
 //! `api` 声明即契约），消费方 file-transfer（票 05 改指本命名空间）。
 //!
 //! ## 两阶段消费流（lib.rs 互调 api）

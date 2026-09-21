@@ -42,7 +42,7 @@ export interface SidebarMenuItemDescriptor {
 }
 
 /** 内置菜单项排序槽位 — 插件管理与设置恒在最末（9998/9999）。
- * 业务域槽位（设备配对 100 / 终端会话 200）已随票 13/14 下沉 com.bedcode.session
+ * 业务域槽位（设备配对 100 / 终端会话 200）已随票 13/14 下沉 com.bedcode.terminal-session
  * 插件，宿主不再占用；插件贡献目录按自身 order 排布（同域约定仍为 100/200，
  * 见插件侧目录注册，宿主不感知） */
 export const BUILTIN_MENU_ORDERS = {
@@ -56,7 +56,7 @@ const DEFAULT_MENU_ICON = 'M4 6h16M4 12h16M4 18h7'
 /**
  * 内置菜单项（与插件共用 Heroicons outline 图标体系）
  *
- * 会话 / 设备配对入口已随票 13/14 下沉 com.bedcode.session 插件：宿主不再提供
+ * 会话 / 设备配对入口已随票 13/14 下沉 com.bedcode.terminal-session 插件：宿主不再提供
  * 兜底菜单与页面（路由 /sessions、/devices 及其兜底壳已删除），插件未激活时
  * 侧边栏不显示这两个入口；插件激活后由其贡献目录接管菜单排序槽位。
  *

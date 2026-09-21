@@ -5,7 +5,7 @@
 //!
 //! v21 起「命名服务 / 配置映射」已退役（映射决策归插件）：本文件不再含
 //! NamingService / ConfigMapper——插件侧的对应实现见
-//! `plugins/session/rust/src/launch.rs`。
+//! `plugins/terminal-session/rust/src/launch.rs`。
 
 use crate::enums::SessionStatus;
 use crate::pty::PtySession;

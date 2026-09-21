@@ -251,20 +251,31 @@ fn every_api_without_any_permission_is_denied_before_any_lookup() {
 
 // ==================== 生命周期（票 04：kill / 退出事件 / 停用回收） ====================
 
-/// 漂移锁：宿主发布的事件名与 topic 形状必须与 SDK 常量/助手逐字一致
+/// 漂移锁：宿主发布的事件名必须与 SDK 常量一致，且两侧形状共用 `owned_topic`
 ///
-/// 插件按 SDK 的 `pty_event_topic(PTY_EXIT, id)` 订阅，宿主按
-/// `{EVENT_EXIT}.{owner}` 发布——两处各写一份就会「订阅成功但永远收不到」，
-/// 且这类错配在单侧测试里不可见。
+/// 票 05 前宿主按 `{EVENT_EXIT}.{owner}` 手拼、插件按 SDK `pty_event_topic` 订阅，
+/// 两处各写一份就会「订阅成功但永远收不到」，且这类错配在单侧测试里不可见。
+/// 现在两侧都走 `bedcode_plugin_api::host::bus::owned_topic`，形状不再有漂移面；
+/// 本用例锁「事件名常量」+「SDK 域助手确实由 owned_topic 组合」，而宿主发布侧
+/// 是否真的用了它，由下方按 SDK 助手订阅的投递用例（`exit_event_delivered_once`
+/// 等）行为性地兜住——宿主退回手拼即收不到投递。
 #[test]
 fn exit_event_name_matches_sdk_subscription_helper() {
     use bedcode_plugin_api::host as sdk;
     assert_eq!(EVENT_EXIT, sdk::PTY_EXIT, "宿主事件名与 SDK 常量漂移");
     assert_eq!(
-        format!("{EVENT_EXIT}.com.example.plugin"),
+        sdk::owned_topic("com.example.plugin", EVENT_EXIT),
         sdk::pty_event_topic(sdk::PTY_EXIT, "com.example.plugin"),
-        "宿主 topic 形状与 SDK 助手漂移"
+        "SDK 域助手与命名空间原语漂移"
     );
+}
+
+/// 按 SDK 订阅助手构造属主定向 topic（`<owner>::pty:exit`）
+///
+/// 测试订阅侧刻意走 SDK 助手而非宿主侧拼接：宿主发布形状若与插件订阅形状分叉，
+/// 下面的投递断言直接收不到事件（票 05 命名空间的行为性漂移锁）。
+fn exit_topic(owner: &str) -> String {
+    bedcode_plugin_api::host::pty_event_topic(bedcode_plugin_api::host::PTY_EXIT, owner)
 }
 
 /// 记录总线投递的 payload（含 topic 与 sender，供定向投递与恰好一次断言）
@@ -328,7 +339,7 @@ async fn kill_terminates_handle_and_publishes_killed_event() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     let pty_id = pty_spawn(&ctx, owner, ALIVE).expect("spawn");
-    let events = subscribe(&ctx.message_bus, "sub-kill", &format!("{EVENT_EXIT}.{owner}")).await;
+    let events = subscribe(&ctx.message_bus, "sub-kill", &exit_topic(owner)).await;
 
     pty_kill(&ctx, owner, &pty_id).expect("kill 应成功");
     let event = wait_event(&events).await.expect("属主必须收到 pty:exit");
@@ -338,7 +349,7 @@ async fn kill_terminates_handle_and_publishes_killed_event() {
         "事件必须寻址到被杀的那条 PTY: {event}"
     );
     assert_eq!(event["payload"]["reason"], "killed", "kill 路径 reason 固定: {event}");
-    assert_eq!(event["topic"], format!("{EVENT_EXIT}.{owner}"), "topic 内嵌属主");
+    assert_eq!(event["topic"], exit_topic(owner), "topic 为属主私有命名空间");
     assert_eq!(event["sender"], "host", "事件由宿主发布");
 
     // 摘除即不可寻址（句柄与环同时释放）
@@ -355,7 +366,7 @@ async fn natural_exit_publishes_stopped_event_with_exit_code() {
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     // 订阅先于 spawn：宿主不缓冲不重放，短命命令可能在订阅前就终态
-    let events = subscribe(&ctx.message_bus, "sub-exit", &format!("{EVENT_EXIT}.{owner}")).await;
+    let events = subscribe(&ctx.message_bus, "sub-exit", &exit_topic(owner)).await;
 
     pty_spawn(&ctx, owner, r#"{"command":"/bin/sh","args":["-c","exit 42"]}"#).expect("spawn");
     let event = wait_event(&events).await.expect("自然退出必须发出退出事件");
@@ -373,7 +384,7 @@ async fn zero_exit_code_is_reported_as_value_not_absent_field() {
     let owner = "com.bedcode.exit-zero";
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let events = subscribe(&ctx.message_bus, "sub-zero", &format!("{EVENT_EXIT}.{owner}")).await;
+    let events = subscribe(&ctx.message_bus, "sub-zero", &exit_topic(owner)).await;
 
     pty_spawn(&ctx, owner, r#"{"command":"/bin/true"}"#).expect("spawn");
     let event = wait_event(&events).await.expect("须有退出事件");
@@ -394,8 +405,8 @@ async fn exit_events_are_owner_scoped_and_exactly_once() {
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
     grant_permissions(&ctx, other, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
 
-    let owner_events = subscribe(&ctx.message_bus, "sub-owner", &format!("{EVENT_EXIT}.{owner}")).await;
-    let other_events = subscribe(&ctx.message_bus, "sub-other", &format!("{EVENT_EXIT}.{other}")).await;
+    let owner_events = subscribe(&ctx.message_bus, "sub-owner", &exit_topic(owner)).await;
+    let other_events = subscribe(&ctx.message_bus, "sub-other", &exit_topic(other)).await;
 
     let mine = pty_spawn(&ctx, owner, ALIVE).expect("spawn owner");
     let theirs = pty_spawn(&ctx, other, ALIVE).expect("spawn other");
@@ -434,8 +445,8 @@ async fn purge_for_plugin_retires_all_owned_handles_and_touches_nobody_else() {
     let first = pty_spawn(&ctx, owner, ALIVE).expect("spawn 1");
     let second = pty_spawn(&ctx, owner, r#"{"command":"/bin/cat"}"#).expect("spawn 2");
     let theirs = pty_spawn(&ctx, other, ALIVE).expect("spawn peer");
-    let owner_events = subscribe(&ctx.message_bus, "sub-purge", &format!("{EVENT_EXIT}.{owner}")).await;
-    let other_events = subscribe(&ctx.message_bus, "sub-purge-peer", &format!("{EVENT_EXIT}.{other}")).await;
+    let owner_events = subscribe(&ctx.message_bus, "sub-purge", &exit_topic(owner)).await;
+    let other_events = subscribe(&ctx.message_bus, "sub-purge-peer", &exit_topic(other)).await;
 
     assert_eq!(
         purge_for_plugin(owner, &ctx.message_bus),
@@ -481,7 +492,7 @@ async fn failed_spawn_publishes_no_event_and_registers_nothing() {
     let owner = "com.bedcode.spawn-fail";
     let ctx = build_host_ctx();
     grant_permissions(&ctx, owner, &[PERMISSION_PTY_SPAWN, PERMISSION_PTY_IO]);
-    let events = subscribe(&ctx.message_bus, "sub-fail", &format!("{EVENT_EXIT}.{owner}")).await;
+    let events = subscribe(&ctx.message_bus, "sub-fail", &exit_topic(owner)).await;
 
     let err = pty_spawn(&ctx, owner, r#"{"command":"/nonexistent/bedcode-pty-command"}"#).unwrap_err();
     assert!(

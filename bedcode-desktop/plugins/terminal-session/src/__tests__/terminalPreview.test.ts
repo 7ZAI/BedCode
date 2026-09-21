@@ -131,7 +131,7 @@ function makeContext(): TestContext {
     http: {} as never,
     i18n: {} as never,
     _disposables: [],
-    id: 'com.bedcode.session',
+    id: 'com.bedcode.terminal-session',
     extensionPath: '',
     // 返回对象带注入器：测试用例设置拉取响应队列
     __setPullResponses: (items: (unknown | null)[]) => {

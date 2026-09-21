@@ -9,7 +9,7 @@
  * 2. 断言 assertDtoFields 机制自身不退化（字段缺失/多余时必抛错）
  *
  * 2026-09-21：配对 / QR / 连接历史域随宿主命令面注销退役（产品面归
- * `com.bedcode.session` 插件），对应 fixtures（pairing.ts）与登记项一并删除。
+ * `com.bedcode.terminal-session` 插件），对应 fixtures（pairing.ts）与登记项一并删除。
  */
 
 import { describe, it, expect } from 'vitest'

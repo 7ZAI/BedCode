@@ -5,7 +5,7 @@
  * `.scratch/2026-09-21-host-rust-residue/issues/05`）：
  * - **引擎事实/渲染管道**：`list_sessions` / `resize_session` /
  *   `write_to_session` / `send_special_key`（宿主命令面直连，终端红线保留）
- * - **业务动作**：一律经 `com.bedcode.session` 插件命令面（`plugin_invoke` 转发）——
+ * - **业务动作**：一律经 `com.bedcode.terminal-session` 插件命令面（`plugin_invoke` 转发）——
  *   停止会话 `session.close`、读配置 `session.config.list`（插件私有库为配置真源）
  *
  * 已删除（宿主命令面注销 + 无生产调用方）：创建 / 两阶段启动 / 移除 / 重启 /
@@ -26,7 +26,7 @@ import type { SessionConfig, SessionInfo } from '@/composables/model'
 export { type SessionConfig, type SessionInfo }
 
 /** 会话中心插件 ID（会话业务域唯一权威；宿主 Rust 侧同值常量见 `utils/auth/auth_center.rs`） */
-const SESSION_PLUGIN_ID = 'com.bedcode.session'
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 export const useSessionStore = defineStore('session', () => {
   const sessions = ref<SessionInfo[]>([])

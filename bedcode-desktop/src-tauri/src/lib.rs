@@ -359,7 +359,7 @@ pub fn run() {
             // 票 02 阶段 A 观测信号（`session_configs` 表退役前置）：遗留行数
             // 落 info 结构化字段，发布侧据此判断还有多少安装点的配置真源
             // 尚未迁入插件私有库。本行只观测、不改行为（迁移仍由
-            // com.bedcode.session 激活时执行，见 config/ops.rs::migrate）
+            // com.bedcode.terminal-session 激活时执行，见 config/ops.rs::migrate）
             match db.count_legacy_session_configs() {
                 Ok(legacy_rows) => tracing::info!(
                     legacy_rows = legacy_rows,
@@ -639,7 +639,7 @@ pub fn run() {
             // terminal_channel_ack，commands/terminal_stream.rs）已随宿主前端
             // 消费方摘除——插件输出改经 host-session.output-ring-fetch 原语
             // （插件命令面 session.output.pull）拉取，宿主不留降级输出传输
-            // 配对 / QR / 连接历史命令面已注销：产品面归 com.bedcode.session 插件的
+            // 配对 / QR / 连接历史命令面已注销：产品面归 com.bedcode.terminal-session 插件的
             // session.pairing.* / session.qr.* / session.devices.* / session.history.*
             // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；
             // 见 .scratch/2026-09-21-host-rust-residue/issues/05）

@@ -51,7 +51,7 @@ const execute = vi.fn(defaultExecute)
 
 function makeContext(): PluginContext {
   return {
-    id: 'com.bedcode.session',
+    id: 'com.bedcode.terminal-session',
     i18n: {
       t: (key: string) => key,
       getI18n: () => ({ global: { locale: { value: 'zh-CN' }, t: (key: string) => key } }),

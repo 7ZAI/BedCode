@@ -7,7 +7,7 @@
  *  不影响序列化，故 fixture 取「全部小节都在」的最大线协议形态）。
  *
  * 消费方差异：前端 stores/settings.ts 的 Settings 类型是 AppConfig 的子集视图
- * （只取 network/ui 两个小节；session 段的默认值已归 `com.bedcode.session` 插件
+ * （只取 network/ui 两个小节；session 段的默认值已归 `com.bedcode.terminal-session` 插件
  *  存储，前端不再持有——本 fixture 仍按 Rust DTO 全量建模防漂移）。
  *  channels/terminal/log 前端不消费，fixture 一并建模防漂移。
  *

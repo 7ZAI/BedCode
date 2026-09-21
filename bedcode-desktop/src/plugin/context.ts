@@ -44,7 +44,7 @@ import { useSessionWindows } from '@/composables/useSessionWindows'
  * 会话中心插件 ID（终端窗口视图由该插件贡献；票 05 起宿主不留终端兜底）。
  * 改名票 06 将集中化宿主侧插件常量，此处与 TerminalWindowHostView 同值先行。
  */
-const SESSION_PLUGIN_ID = 'com.bedcode.session'
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 /** 终端窗口域激活门禁：session 插件停用 / Error 后终端视图不可渲染，宿主不再
  *  降级代办——`openTerminal` / `closeTerminal` / `isTerminalOpen` 显性报错

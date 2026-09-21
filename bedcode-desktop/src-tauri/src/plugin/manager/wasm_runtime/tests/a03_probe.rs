@@ -139,7 +139,7 @@ fn a03_p1a_sync_host_impl_under_async_store() {
 #[test]
 fn a03_p1b_wasip3_artifact_full_closed_loop() {
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] a03_p1b: session wasip3 产物未构建");
         return;
@@ -154,14 +154,14 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
         ctx.plugin_db_root = Some(isolate);
     }
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
         .expect("load wasip3 session: all imports must resolve");
 
     assert_eq!(plugin.activate().expect("activate"), 0, "activate 必须成功");
     // 命令面（session.status 回显 manifest 声明，宿主侧无业务依赖）
     let v = run_command(&mut plugin, "session.status", "{}");
     assert_eq!(
-        v["plugin"], "com.bedcode.session",
+        v["plugin"], "com.bedcode.terminal-session",
         "session.status 必须回显插件 ID: {v}"
     );
     assert!(
@@ -177,7 +177,7 @@ fn a03_p1b_wasip3_artifact_full_closed_loop() {
     assert_eq!(plugin.on_terminal_output("p1b", "y").expect("hook"), None);
     // manifest 往返
     let m: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-    assert_eq!(m["id"], "com.bedcode.session");
+    assert_eq!(m["id"], "com.bedcode.terminal-session");
     assert_eq!(plugin.deactivate().expect("deactivate"), 0, "deactivate 必须成功");
     println!("[a03][P1-b] session 产物全链路（activate → status → hooks → manifest → deactivate）OK");
 }

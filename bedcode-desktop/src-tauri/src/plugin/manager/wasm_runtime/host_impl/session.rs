@@ -479,7 +479,7 @@ pub(crate) fn session_create_with_spec(
 /// 关闭（终止）会话（v7，需要 `session:write` 权限）
 ///
 /// 包一层核心已有的 `SessionManager::kill_session_with_source`，供插件
-/// （如 com.bedcode.session 定时任务）在执行完毕后关闭自己创建的会话。
+/// （如 com.bedcode.terminal-session 定时任务）在执行完毕后关闭自己创建的会话。
 /// 停止 PTY 并置 Stopped，会话记录保留（与用户手动关闭一致）。
 ///
 /// **异步执行**：`kill_session_with_source` 会同步分发 Stopping/Stopped
@@ -525,7 +525,7 @@ pub(crate) fn session_close(host_ctx: &WasmHostContext, plugin_id: &str, session
 // 标识的尺寸调整。分工（spec D3）：
 //
 // - **编排与裁决在插件**：重启前存在性预检与失败可见、移除的调用顺序、尺寸的正统端
-//   判定与覆盖确认策略（`plugins/session` 的 `actions` 模块）
+//   判定与覆盖确认策略（`plugins/terminal-session` 的 `actions` 模块）
 // - **执行与登记在内核**：`SessionManager::remove_session` / `resize_session`
 //   执行器保留（移动端 HTTP/WS 路径与插件未激活时的降级轨仍直连它们），本层只做
 //   权限门 / 参数仲裁 / 原语形状适配
@@ -661,7 +661,7 @@ pub(crate) fn session_resize(
 //   `annotations` 字段（同槽透传）。
 // - `connections-list`：连接注册表**原始记录**清单（addr / 设备标识 / 指纹），
 //   无排序无解读（不过滤未认证、不合并配对、不加派生字段）——在线判定 / 会话数 /
-//   任务状态合并是插件侧派生视图（`plugins/session` 的 `devices` 模块）的职责。
+//   任务状态合并是插件侧派生视图（`plugins/terminal-session` 的 `devices` 模块）的职责。
 
 /// 会话注解槽写入（v19，权限 `session:write`，票 11）
 ///

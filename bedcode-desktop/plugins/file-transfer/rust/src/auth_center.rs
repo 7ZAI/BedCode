@@ -1,5 +1,5 @@
 //! 会话中心消费（票 10 C1 → 终端会话中心票 05 改指）—— peer consent / 信任决策
-//! 改经互调**会话中心**（`com.bedcode.session`）API
+//! 改经互调**会话中心**（`com.bedcode.terminal-session`）API
 //!
 //! 语义迁移（peer consent / 设备信任列表归单一权威插件）：
 //!
@@ -41,7 +41,7 @@ use std::sync::{Mutex, OnceLock};
 /// （api 名同步改为 `consent-decide` / `trust-list`）；原插件票 06 已整体退役，
 /// 本常量是这两域在本插件视角下的唯一互调目标。
 #[cfg(target_arch = "wasm32")]
-pub(crate) const SESSION_CENTER_ID: &str = "com.bedcode.session";
+pub(crate) const SESSION_CENTER_ID: &str = "com.bedcode.terminal-session";
 
 /// consent 决策互调超时（毫秒）：认证中心无响应时快速降级，避免阻塞总线回调
 #[cfg(target_arch = "wasm32")]
@@ -114,10 +114,10 @@ pub(crate) struct ConsentDecision {
 // 死代码告警；防漂移比对由 wasm 构建（CI 插件构建链）强制执行。
 
 #[cfg(target_arch = "wasm32")]
-#[plugin_api(manifest = "../../session/plugin.json")]
+#[plugin_api(manifest = "../../terminal-session/plugin.json")]
 // 声明即契约（ADR 0017 防漂移）：trait 自身不被运行引用，仅承载构建期比对
 // （宏生成 Dispatcher/Client，Client 由 WasmAuthGateway 使用）。
-// 方法集必须与 `com.bedcode.session` 的 manifest.api **精确一致**（票 10 后的清单
+// 方法集必须与 `com.bedcode.terminal-session` 的 manifest.api **精确一致**（票 10 后的清单
 // = pairing 八项 + trust 两项 + consent 一项 + config 三项 + session-create 一项
 //   + 会话动作四项）。
 #[allow(dead_code)]

@@ -22,7 +22,7 @@ import { useSettingsStore } from '@/stores/settings'
 import type { PluginInfo } from '@/plugin/types'
 
 // 会话中心插件 ID（与 context.ts 门禁同值；注册运行态使三方法过激活门禁）
-const SESSION_PLUGIN_ID = 'com.bedcode.session'
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 const openTerminalWindow = vi.fn(async () => true)
 const closeTerminalWindow = vi.fn(async () => {})
@@ -139,13 +139,13 @@ describe('PluginContext.session 终端窗口原语', () => {
     const ctx = makeContext(['session:read'])
 
     await expect(ctx.session.openTerminal({ id: 's-1', name: 'dev' })).rejects.toThrow(
-      'session plugin com.bedcode.session is not active',
+      'session plugin com.bedcode.terminal-session is not active',
     )
     await expect(ctx.session.closeTerminal('s-1')).rejects.toThrow(
-      'session plugin com.bedcode.session is not active',
+      'session plugin com.bedcode.terminal-session is not active',
     )
     expect(() => ctx.session.isTerminalOpen('s-1')).toThrow(
-      'session plugin com.bedcode.session is not active',
+      'session plugin com.bedcode.terminal-session is not active',
     )
 
     // 门禁先于宿主能力：窗口管理器不被触碰（无降级代办路径）

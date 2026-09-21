@@ -4,7 +4,7 @@
 //! 表）后，历史数据还在宿主主库旧表里。会话配置的迁移有 `host-session` 配置面可
 //! 供插件拉取（票 08），快捷指令没有对应 face——按 spec 决策 6「不新增 host 原语、
 //! 不触发 ABI bump」，迁移由**宿主侧**完成：本模块读取 legacy 主库 `quick_actions`
-//! 行，经互调 api `com.bedcode.session.quick-actions-import`（JSON-RPC 2.0 over
+//! 行，经互调 api `com.bedcode.terminal-session.quick-actions-import`（JSON-RPC 2.0 over
 //! host-bus，与 `auth_center::call_api` 同一通道）推给 session 插件；插件侧按
 //! marker 一次性语义幂等落库（重复推送整体跳过）。
 //!
@@ -29,7 +29,7 @@ use crate::utils::auth::auth_center::{call_api, session_active};
 use crate::{AppError, Result};
 
 /// 插件互调 api（短名由 `#[plugin_api]` 宏按 manifest.api 比对防漂移）
-pub const API_QUICK_ACTIONS_IMPORT: &str = "com.bedcode.session.quick-actions-import";
+pub const API_QUICK_ACTIONS_IMPORT: &str = "com.bedcode.terminal-session.quick-actions-import";
 
 /// 搬运结果（宿主日志与测试断言的外部可见面）
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -63,10 +63,10 @@ pub fn run() {
     }) {
         Ok(report) => {
             if let Some(reason) = &report.skipped {
-                tracing::info!(plugin_id = "com.bedcode.session", "快捷指令搬运跳过: {reason}");
+                tracing::info!(plugin_id = "com.bedcode.terminal-session", "快捷指令搬运跳过: {reason}");
             } else {
                 tracing::info!(
-                    plugin_id = "com.bedcode.session",
+                    plugin_id = "com.bedcode.terminal-session",
                     plugin_report = ?report.plugin_report,
                     "legacy 主库快捷指令已推入 session 插件私有库"
                 );
@@ -146,7 +146,7 @@ mod tests {
     /// api 常量与插件 manifest 声明一致（防漂移的第一道闸，闭环测试兜底真实调用）
     #[test]
     fn import_api_matches_plugin_manifest() {
-        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/session/plugin.json");
+        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/terminal-session/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path).expect("session plugin.json 可读");
         let manifest: serde_json::Value = serde_json::from_str(&raw).expect("manifest JSON");
         assert!(

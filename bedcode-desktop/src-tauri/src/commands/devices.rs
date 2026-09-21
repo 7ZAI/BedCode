@@ -7,7 +7,7 @@ use std::sync::Arc;
 ///
 /// host-business-decarriage 收尾：本命令只回连接注册表事实（addr / device_id /
 /// fingerprint），不再拼装「设备派生视图」（在线判定 + 真实会话数 + 任务状态合并）。
-/// 派生视图是业务，归属 `com.bedcode.session` 插件（api `devices-connect-list` /
+/// 派生视图是业务，归属 `com.bedcode.terminal-session` 插件（api `devices-connect-list` /
 /// 命令面 `session.devices.connect-list`，供插件设备中心消费）；宿主侧的消费方
 /// （`useGlobalNotifications` 启动期指纹种子化）只需要事实字段，`session_count`
 /// 是已退役设备页的产物。

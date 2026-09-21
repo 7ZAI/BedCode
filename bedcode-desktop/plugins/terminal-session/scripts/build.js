@@ -21,8 +21,8 @@ import { WASM_TARGET, wasip3CargoEnv } from '../../../../scripts/plugin-wasm-con
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 const ROOT = resolve(__dirname, '..')
-const PLUGIN_ID = 'com.bedcode.session'
-const RUST_LIB_NAME = 'bedcode_plugin_session'
+const PLUGIN_ID = 'com.bedcode.terminal-session'
+const RUST_LIB_NAME = 'bedcode_plugin_terminal_session'
 
 // 插件调试模式：BEDCODE_PLUGIN_DEBUG=1 → wasm 以 debug profile 构建（保留 DWARF，
 // 宿主开启 backtrace 行号栈用）；release 构建忽略（宿主侧以 cfg!(debug_assertions)

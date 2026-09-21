@@ -1921,7 +1921,7 @@ mod tests {
         const PAIRING_ID: &str = "p-policy";
         let session_id = bridge::SESSION_PLUGIN_ID;
         let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+            .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
         if !wasm_path.exists() {
             eprintln!("[skip] session wasip3 artifact not built");
             return;
@@ -1945,7 +1945,7 @@ mod tests {
             .await
             .insert(session_id.to_string(), Arc::new(Mutex::new(plugin)));
         let mut loaded = make_plugin(session_id, PluginSource::Wasm, PluginState::Loaded);
-        loaded.manifest.rust_library = "bedcode_plugin_session".to_string();
+        loaded.manifest.rust_library = "bedcode_plugin_terminal_session".to_string();
         // 权限经 manifest 声明在 activate 时授予（生产装配路径；手工 grant 会被
         // activate 的 manifest 重新授权覆盖）
         loaded.manifest.permissions = vec!["auth".to_string(), "peer".to_string()];

@@ -1,4 +1,4 @@
-//! 会话创建命令桥接（票 09）：创建编排下沉 `com.bedcode.session` 插件
+//! 会话创建命令桥接（票 09）：创建编排下沉 `com.bedcode.terminal-session` 插件
 //!
 //! 模式与 `utils/auth/auth_center.rs` / `utils/session_config_bridge.rs` 同构：
 //! 探活锚点（会话中心互调面已登记）→ JSON-RPC 互调 `session-create` → 插件完成
@@ -15,7 +15,7 @@
 //!
 //! 内核遗留通道已于 v21 退役：`host-session.create(config-id)` 与内核
 //! `create_session_with_id` / `create_session_with_source_and_id` 随最后一个
-//! 消费者（定时任务域，见 `plugins/session/rust/src/task/scheduled.rs`）改走
+//! 消费者（定时任务域，见 `plugins/terminal-session/rust/src/task/scheduled.rs`）改走
 //! `create-with-spec` 一并删除。会话创建自此只有一条编排入口：本桥接。
 //!
 //! ## 两阶段启动编排
@@ -30,11 +30,11 @@ use crate::utils::auth::auth_center::{call_api, session_active};
 use crate::{AppError, Result};
 
 /// 插件互调 api（短名由 `#[plugin_api]` 宏按 manifest.api 比对防漂移）
-const API_CREATE: &str = "com.bedcode.session.session-create";
+const API_CREATE: &str = "com.bedcode.terminal-session.session-create";
 
 /// 插件不可用时的显性错误（无降级；文案面向用户可见的错误通道）
 fn plugin_required_error() -> AppError {
-    AppError::Plugin("session plugin not active: session create requires com.bedcode.session".to_string())
+    AppError::Plugin("session plugin not active: session create requires com.bedcode.terminal-session".to_string())
 }
 
 /// 经会话中心插件编排创建会话（插件必需，无宿主降级）

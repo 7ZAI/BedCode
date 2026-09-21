@@ -5,12 +5,12 @@
 //! 插件未激活或互调失败时**降级宿主实现**（迁移前行为，无单点 —— D7）。
 //!
 //! **票 04 改指 pairing（expand 步）**：配对码 / QR token 语义搬入合并插件
-//! `com.bedcode.session`。
+//! `com.bedcode.terminal-session`。
 //!
 //! **票 05 收敛（本文件的目标常量收敛为一个）**：trust / consent / `auth-policy`
 //! 亦已搬入会话中心，故旧认证中心的 `AUTH_CENTER_PLUGIN_ID` / `AUTH_CENTER_MARKER_API`
 //! 与 `auth_center_active()` 一并删除——转发目标与探活锚点统一为
-//! [`SESSION_PLUGIN_ID`] / [`SESSION_MARKER_API`]（`com.bedcode.session.trust-list`）。
+//! [`SESSION_PLUGIN_ID`] / [`SESSION_MARKER_API`]（`com.bedcode.terminal-session.trust-list`）。
 //! 锚点取 trust 域只读 api：它是「插件已激活且互调面已登记」的稳定判据，且不与
 //! 任何即将演进/退役的域绑定（旧口径用 pairing-code-status 探 trust 面，属借来的判据）。
 //! **票 06 退役**：独立认证中心插件已整体删除（认证语义全部归会话中心），本文件是
@@ -47,13 +47,13 @@ use crate::plugin::manager::wasm_runtime::block_on_async;
 
 /// 终端会话中心插件 ID（票 04 起为配对 / QR 语义的权威实现方，票 05 起兼管
 /// trust / consent / 认证策略）
-pub const SESSION_PLUGIN_ID: &str = "com.bedcode.session";
+pub const SESSION_PLUGIN_ID: &str = "com.bedcode.terminal-session";
 /// 桥接探活锚点（票 05 收敛后的唯一锚点）：注册表含它 ⇔ 会话中心已激活且互调面
 /// 已声明（激活登记 / 停用注销，见 ApiRegistry）。
 ///
 /// 取 trust 域只读 api 而非 pairing-code-status：锚点是「插件可用」的判据，绑在
 /// 即将退役的域上会随该域消失而静默失效（旧口径正是拿配对码状态探 trust 面）。
-pub const SESSION_MARKER_API: &str = "com.bedcode.session.trust-list";
+pub const SESSION_MARKER_API: &str = "com.bedcode.terminal-session.trust-list";
 
 /// 宿主→插件互调超时（毫秒）：单次操作远快于此，超时视为故障走降级
 pub const AUTH_CENTER_TIMEOUT_MS: u64 = 5_000;

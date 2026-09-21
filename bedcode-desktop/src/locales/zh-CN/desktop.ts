@@ -13,7 +13,7 @@ export default {
       collapse: '收起侧边栏',
       expand: '展开侧边栏',
     },
-    // 会话域文案（票 13）：富交互文案随会话页迁入 com.bedcode.session 插件
+    // 会话域文案（票 13）：富交互文案随会话页迁入 com.bedcode.terminal-session 插件
     // （插件侧 `session.*` 命名空间）；宿主仅保留终端窗口与退出确认所需项
     // （会话兜底壳已删除，票 13/14 收尾）
     session: {

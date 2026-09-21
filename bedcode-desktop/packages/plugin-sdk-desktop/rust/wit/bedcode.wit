@@ -910,7 +910,7 @@ world plugin-task {
 /// 可选导出（**不进 `plugin` world 必选导出列表**——同 events-binary/events-ws）：
 /// 宿主实例化后动态探测 `bedcode:plugin/auth-policy#verify-device-token`；未导出
 /// 的插件（旧 SDK 产物 / 非权威插件）不提供策略，宿主中间件仅对权威插件
-/// （`com.bedcode.session`，终端会话中心票 05 起兼管认证策略）调用本导出——
+/// （`com.bedcode.terminal-session`，终端会话中心票 05 起兼管认证策略）调用本导出——
 /// 独立认证中心插件已整体退役（票 06），不存在第二个候选。
 ///
 /// 入参 = 宿主已验签通过的 JWT token（**验签不在此重复**：插件密钥域与宿主

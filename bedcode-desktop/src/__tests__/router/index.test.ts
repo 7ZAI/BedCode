@@ -4,7 +4,7 @@ import router from '@/router'
 // 懒激活守卫会调用后端命令，测试环境无 Tauri：桩掉加载器，只验路由定义本身
 vi.mock('@/plugin/loader', () => ({
   pluginLoader: {
-    getActivePlugin: vi.fn(() => ({ id: 'com.bedcode.session' })),
+    getActivePlugin: vi.fn(() => ({ id: 'com.bedcode.terminal-session' })),
     activate: vi.fn(async () => {}),
   },
 }))

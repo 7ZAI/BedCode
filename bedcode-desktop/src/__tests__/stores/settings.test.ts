@@ -13,7 +13,7 @@
  *
  * 注：原先断言的 `session.*`（默认执行环境/命令/超时）、`ui.show_preview`、
  * `network.qr_host`、`ui.max_cached_terminals`、`ui.notify_in_background` 已随
- * 归域迁移删除（会话默认值在 `com.bedcode.session` 插件存储），对应断言一并移除。
+ * 归域迁移删除（会话默认值在 `com.bedcode.terminal-session` 插件存储），对应断言一并移除。
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'

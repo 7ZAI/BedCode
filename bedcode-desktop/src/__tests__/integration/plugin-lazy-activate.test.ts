@@ -41,7 +41,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   convertFileSrc: () => `data:text/javascript,${encodeURIComponent(ENTRY_SOURCE)}`,
 }))
 
-const PLUGIN_ID = 'com.bedcode.session'
+const PLUGIN_ID = 'com.bedcode.terminal-session'
 
 function installInvokeMock(staleManifest: ReturnType<typeof makePluginInfo>) {
   mockInvoke.mockImplementation((cmd: string) => {
@@ -94,7 +94,7 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
     await pluginLoader.activate(PLUGIN_ID)
 
     const ids = menuIds()
-    expect(ids).toContain('plugin-com.bedcode.session-pairing')
+    expect(ids).toContain('plugin-com.bedcode.terminal-session-pairing')
     // 票 13/14 收尾：宿主内置设备入口已删除，不再有同域双入口问题
     expect(ids).not.toContain('devices')
   })
@@ -108,7 +108,7 @@ describe('pluginLoader.activate 懒激活成功后贡献面生效', () => {
 
   it('插件停用后贡献目录摘除，宿主菜单回落到默认（插件管理与设置）', async () => {
     await pluginLoader.activate(PLUGIN_ID)
-    expect(menuIds()).toContain('plugin-com.bedcode.session-pairing')
+    expect(menuIds()).toContain('plugin-com.bedcode.terminal-session-pairing')
 
     await pluginLoader.deactivate(PLUGIN_ID)
 

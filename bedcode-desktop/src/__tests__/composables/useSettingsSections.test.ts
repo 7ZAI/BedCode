@@ -80,25 +80,25 @@ describe('useSettingsSections', () => {
   })
 
   it('贡献分组缺省 order 时排在「日志」之后、「关于」之前', () => {
-    contribute('com.bedcode.session', 'session-settings')
+    contribute('com.bedcode.terminal-session', 'session-settings')
     expect(keys()).toEqual([
       'appearance',
       'linkCrypto',
       'system',
       'logging',
-      'plugin-com.bedcode.session-session-settings',
+      'plugin-com.bedcode.terminal-session-session-settings',
       'about',
     ])
   })
 
   it('贡献分组可通过 order 插入任意内置分组之间', () => {
-    contribute('com.bedcode.session', 'pairing', 150)
-    contribute('com.bedcode.session', 'task', 450)
+    contribute('com.bedcode.terminal-session', 'pairing', 150)
+    contribute('com.bedcode.terminal-session', 'task', 450)
     expect(keys()).toEqual([
       'appearance',
-      'plugin-com.bedcode.session-pairing',
+      'plugin-com.bedcode.terminal-session-pairing',
       'linkCrypto',
-      'plugin-com.bedcode.session-task',
+      'plugin-com.bedcode.terminal-session-task',
       'system',
       'logging',
       'about',
@@ -106,17 +106,17 @@ describe('useSettingsSections', () => {
   })
 
   it('同 order 时内置分组排在贡献分组之前（稳定排序）', () => {
-    contribute('com.bedcode.session', 'tie', BUILTIN_SECTION_ORDERS.logging)
+    contribute('com.bedcode.terminal-session', 'tie', BUILTIN_SECTION_ORDERS.logging)
     const list = keys()
-    expect(list.indexOf('logging')).toBeLessThan(list.indexOf('plugin-com.bedcode.session-tie'))
+    expect(list.indexOf('logging')).toBeLessThan(list.indexOf('plugin-com.bedcode.terminal-session-tie'))
   })
 
   it('共享状态由父级下传：内置外观分组与贡献分组拿到同一份语言/动画状态', () => {
     const shared = makeShared()
-    contribute('com.bedcode.session', 'session-settings')
+    contribute('com.bedcode.terminal-session', 'session-settings')
     const sections = useSettingsSections(() => shared).sections.value
     const appearance = sections.find((s) => s.key === 'appearance')!
-    const contributed = sections.find((s) => s.key === 'plugin-com.bedcode.session-session-settings')!
+    const contributed = sections.find((s) => s.key === 'plugin-com.bedcode.terminal-session-session-settings')!
 
     expect(appearance.props.languageOptions).toBe(shared.languageOptions)
     expect(appearance.props.onSwitchLanguage).toBe(shared.onSwitchLanguage)
@@ -125,30 +125,30 @@ describe('useSettingsSections', () => {
   })
 
   it('插件停用（clearPlugin）后贡献分组被摘除，列表回到纯内置形态', () => {
-    contribute('com.bedcode.session', 'session-settings')
-    expect(keys()).toContain('plugin-com.bedcode.session-session-settings')
+    contribute('com.bedcode.terminal-session', 'session-settings')
+    expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
 
-    registry.clearPlugin('com.bedcode.session')
-    expect(keys()).not.toContain('plugin-com.bedcode.session-session-settings')
+    registry.clearPlugin('com.bedcode.terminal-session')
+    expect(keys()).not.toContain('plugin-com.bedcode.terminal-session-session-settings')
     // 内置分组共 5 项（原 7 项中的 pairing「票 14」与 session「随域下沉」已退役）
     expect(keys()).toHaveLength(5)
   })
 
   it('插件进入 error 态后贡献分组被摘除，恢复激活后重新出现', () => {
-    contribute('com.bedcode.session', 'session-settings')
-    expect(keys()).toContain('plugin-com.bedcode.session-session-settings')
+    contribute('com.bedcode.terminal-session', 'session-settings')
+    expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
 
-    registry.setPluginState('com.bedcode.session', { state: 'Error', error: 'trap' })
-    expect(keys()).not.toContain('plugin-com.bedcode.session-session-settings')
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Error', error: 'trap' })
+    expect(keys()).not.toContain('plugin-com.bedcode.terminal-session-session-settings')
 
-    registry.setPluginState('com.bedcode.session', { state: 'Activated' })
-    expect(keys()).toContain('plugin-com.bedcode.session-session-settings')
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
   })
 
   it('Degraded 态（实例仍在运行）保留贡献分组', () => {
-    contribute('com.bedcode.session', 'session-settings')
-    registry.setPluginState('com.bedcode.session', { state: 'Degraded', error: 'startup failed' })
-    expect(keys()).toContain('plugin-com.bedcode.session-session-settings')
+    contribute('com.bedcode.terminal-session', 'session-settings')
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Degraded', error: 'startup failed' })
+    expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
   })
 
   it('未登记运行态的插件（尚未激活完成）贡献不生效', () => {
@@ -164,17 +164,17 @@ describe('useSettingsSections', () => {
   })
 
   it('dispose 后贡献分组从注册表摘除', () => {
-    const d = registry.registerSettingsSection('com.bedcode.session', {
+    const d = registry.registerSettingsSection('com.bedcode.terminal-session', {
       id: 'session-settings',
       titleKey: 'settings.session.title',
       component: {},
     })
-    registry.setPluginState('com.bedcode.session', { state: 'Activated' })
-    usedPluginIds.add('com.bedcode.session')
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    usedPluginIds.add('com.bedcode.terminal-session')
 
-    expect(keys()).toContain('plugin-com.bedcode.session-session-settings')
+    expect(keys()).toContain('plugin-com.bedcode.terminal-session-session-settings')
     d.dispose()
-    expect(keys()).not.toContain('plugin-com.bedcode.session-session-settings')
+    expect(keys()).not.toContain('plugin-com.bedcode.terminal-session-session-settings')
   })
 })
 

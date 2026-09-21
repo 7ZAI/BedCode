@@ -1233,7 +1233,7 @@ mod tests {
     }
 
     /// 无头测试的插件私有库根目录（`aot_cache_dir` 同模式：进程级固定路径，
-    /// 供需要用真实私有库的用例定位/清理 `com.bedcode.session/plugin.db`）
+    /// 供需要用真实私有库的用例定位/清理 `com.bedcode.terminal-session/plugin.db`）
     fn plugin_db_root() -> std::path::PathBuf {
         std::env::temp_dir().join(format!("bedcode_plugin_dbs_{}", std::process::id()))
     }
@@ -1998,7 +1998,7 @@ mod tests {
 
     /// 会话中心「插件私有库」用例串行锁：`plugin_db_root()` 是**进程级**路径
     /// （`aot_cache_dir` 同模式），所有 `activate()` 会话中心的用例共用同一份
-    /// `com.bedcode.session/plugin.db`，于是两类竞态都会把断言变成 flaky：
+    /// `com.bedcode.terminal-session/plugin.db`，于是两类竞态都会把断言变成 flaky：
     /// - 配置面用例先 `remove_dir_all` 清库再断言「legacy 两条全部迁入」，而任何一次
     ///   并发 `activate()` 都会写入 `config.migrated_at` marker → 本方读到 0 行；
     /// - tick 按时间条件批量改行（超宽限的 pending → missed），并发用例注入的
@@ -2036,7 +2036,7 @@ mod tests {
     /// 比对同一真源）。宿主测试按它登记注册表——在测试里再抄一份 api 字符串就是
     /// 第二真源，桥接锚点漂移会退化成「本来就该被测出来的静默降级」。
     fn session_apis() -> Vec<String> {
-        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/session/plugin.json");
+        let manifest_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../plugins/terminal-session/plugin.json");
         let raw = std::fs::read_to_string(&manifest_path).expect("session plugin.json 可读");
         let manifest: serde_json::Value = serde_json::from_str(&raw).expect("session manifest JSON");
         manifest["api"]

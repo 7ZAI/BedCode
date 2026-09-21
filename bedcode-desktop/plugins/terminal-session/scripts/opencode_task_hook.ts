@@ -52,7 +52,7 @@ const BEDCODE_PORT = 8765 // @bedcode-port
 // 模板版本标记：内容升级时递增，宿主据此对旧部署副本自动重部署（hooks.rs）
 // @bedcode-template-version 2
 
-const PLUGIN_ID = 'com.bedcode.session'
+const PLUGIN_ID = 'com.bedcode.terminal-session'
 const HOST = '127.0.0.1'
 const HTTP_TIMEOUT_MS = 3000
 // 终态推送（completed/interrupted）丢失会中断队列调度链，必须重试保证送达

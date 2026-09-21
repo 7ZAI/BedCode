@@ -75,7 +75,7 @@ pub enum DesktopSyncEvent {
     SessionModeChanged { session_id: String, auto_approve: bool },
 
     // === 任务队列相关 ===
-    /// 会话任务队列变更（由 com.bedcode.session 任务域发布）
+    /// 会话任务队列变更（由 com.bedcode.terminal-session 任务域发布）
     TaskQueueChanged {
         session_id: String,
         /// 变更后的待执行任务数量
@@ -89,7 +89,7 @@ pub enum DesktopSyncEvent {
     },
 
     // === 定时自动任务相关（v6，ADR 0003） ===
-    /// 定时任务变更（由 com.bedcode.session 任务域发布）
+    /// 定时任务变更（由 com.bedcode.terminal-session 任务域发布）
     TaskScheduledChanged {
         /// 定时任务 ID
         job_id: String,

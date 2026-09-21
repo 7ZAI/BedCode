@@ -2,7 +2,7 @@ export default {
   settings: {
     title: 'Settings',
     // Ticket 14: the `pairing` section retired — pairing code / QR validity now live
-    // in the settings section contributed by com.bedcode.session (`pairing.settings.*`).
+    // in the settings section contributed by com.bedcode.terminal-session (`pairing.settings.*`).
     linkCrypto: {
       title: 'Link Encryption',
       master: 'Enable Link Encryption',

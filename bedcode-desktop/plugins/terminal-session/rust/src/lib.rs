@@ -1,6 +1,6 @@
 //! Terminal Session Center Plugin (WASM)
 //!
-//! 终端会话中心（`com.bedcode.session`）：把「谁能连 → 连上有什么 → 会话里跑什么」
+//! 终端会话中心（`com.bedcode.terminal-session`）：把「谁能连 → 连上有什么 → 会话里跑什么」
 //! 三域的产品语义收敛为单一权威插件（spec `.scratch/2026-09-19-terminal-session-plugin`）。
 //!
 //! 已落地：
@@ -73,7 +73,7 @@ use pairing::qr::QrTokenManager;
 use std::sync::{Mutex, OnceLock};
 
 /// 插件互调 api 声明（ADR 0017）：trait 方法名 ↔ manifest.api 条目
-/// （`com.bedcode.session.<method>`，`#[api(...)]` 覆盖为连字符名），宏在编译期
+/// （`com.bedcode.terminal-session.<method>`，`#[api(...)]` 覆盖为连字符名），宏在编译期
 /// 比对防漂移。
 ///
 /// api 面按域分组命名（spec D2「配对 / 信任 / 同意 / 会话 / 任务」）——票 05 落
@@ -409,7 +409,7 @@ fn qr_verify(input: &str) -> Result<serde_json::Value, String> {
 }
 
 impl WasmPlugin for SessionPlugin {
-    const ID: &'static str = "com.bedcode.session";
+    const ID: &'static str = "com.bedcode.terminal-session";
 
     fn manifest() -> PluginManifest {
         // ADR-0005 单一真源：plugin.json（与 `#[plugin_api]` 防漂移比对同一份）
@@ -1328,7 +1328,7 @@ impl WasmPlugin for SessionPlugin {
             }
 
             // ==================== 票 16：HTTP 端点入口（path 段与旧插件逐字一致） ====
-            // 宿主 `ANY /api/plugin/com.bedcode.session/{path}` 命中后调本命令，
+            // 宿主 `ANY /api/plugin/com.bedcode.terminal-session/{path}` 命中后调本命令，
             // `path` 即去掉前缀的相对段。分派表与 manifest `contributes.httpEndpoints`
             // 声明清单同源（task::HTTP_ENDPOINTS + [BUSINESS_HTTP_ENDPOINTS]，契约
             // 用例锁死）。
@@ -1551,9 +1551,9 @@ mod tests {
     fn manifest_identity_matches_plugin_constants() {
         let manifest = SessionPlugin::manifest();
         assert_eq!(manifest.id, SessionPlugin::ID);
-        assert_eq!(manifest.id, "com.bedcode.session");
-        assert_eq!(manifest.rust_library, "bedcode_plugin_session");
-        assert_eq!(env!("CARGO_PKG_NAME"), "bedcode-plugin-session");
+        assert_eq!(manifest.id, "com.bedcode.terminal-session");
+        assert_eq!(manifest.rust_library, "bedcode_plugin_terminal_session");
+        assert_eq!(env!("CARGO_PKG_NAME"), "bedcode-plugin-terminal-session");
     }
 
     /// 能力面声明只随已落地语义增长：票 05 = pairing 八项 + trust 两项 + consent 一项；
@@ -1632,7 +1632,7 @@ mod tests {
     fn invoke_command_status_roundtrips_manifest_and_rejects_unknown() {
         let status = SessionPlugin::invoke_command("session.status", serde_json::json!({}))
             .expect("session.status 可调用");
-        assert_eq!(status["plugin"], "com.bedcode.session");
+        assert_eq!(status["plugin"], "com.bedcode.terminal-session");
         assert_eq!(
             status["domains"],
             serde_json::json!([

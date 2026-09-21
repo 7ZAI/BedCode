@@ -332,7 +332,7 @@ export function generateManifest(cwd, { check = false } = {}) {
     if (commandIds.length > 0) {
       // 票 17 口径（用户裁决 ①）：manifest 已声明 commands 即视为**人工裁剪过的
       // 用户可见命令面**，生成器不再按匹配臂覆写——`invoke_command` 的臂含宿主
-      // 桥接与闭环调试入口（com.bedcode.session 实测 28 声明 / 50 臂），全量覆写
+      // 桥接与闭环调试入口（com.bedcode.terminal-session 实测 28 声明 / 50 臂），全量覆写
       // 等于把内部接缝 advertise 成产品命令。改为只报告差集：未声明的臂（提示，
       // 由人判断是否属于用户可见面）、声明了但源码没有的（真漂移，必须修）。
       // 未声明 commands 的插件沿用自动填充（prefactor 前形态）。

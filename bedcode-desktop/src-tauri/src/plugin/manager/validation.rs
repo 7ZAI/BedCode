@@ -20,7 +20,7 @@ pub const PLUGIN_ID_MAX_LEN: usize = 100;
 ///
 /// 规则：小写字母/数字开头的小写段，以 `.` 分段（至少两段），
 /// 段内可含连字符（不允许首尾连字符、连续点、下划线、大写）。
-/// 如 `com.bedcode.session` ✓，`Com.BedCode.X` ✗，`my_plugin` ✗。
+/// 如 `com.bedcode.terminal-session` ✓，`Com.BedCode.X` ✗，`my_plugin` ✗。
 pub fn validate_plugin_id(id: &str) -> bool {
     if id.is_empty() || id.len() > PLUGIN_ID_MAX_LEN {
         return false;
@@ -68,7 +68,7 @@ mod tests {
     #[test]
     fn test_valid_ids() {
         for id in [
-            "com.bedcode.session",
+            "com.bedcode.terminal-session",
             "com.bedcode.file-transfer",
             "com.bedcode.ai-chatbox",
             "com.example.plugin",
@@ -103,9 +103,9 @@ mod tests {
 
     #[test]
     fn test_dir_binding() {
-        assert!(validate_dir_binding("com.bedcode.session", "com.bedcode.session"));
+        assert!(validate_dir_binding("com.bedcode.terminal-session", "com.bedcode.terminal-session"));
         // 目录名与 id 不一致：伪造/复制目录
-        assert!(!validate_dir_binding("com.bedcode.evil", "com.bedcode.session"));
-        assert!(!validate_dir_binding("session", "com.bedcode.session"));
+        assert!(!validate_dir_binding("com.bedcode.evil", "com.bedcode.terminal-session"));
+        assert!(!validate_dir_binding("session", "com.bedcode.terminal-session"));
     }
 }

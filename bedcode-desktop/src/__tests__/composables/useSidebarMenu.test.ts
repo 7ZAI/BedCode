@@ -9,7 +9,7 @@ import { getPluginRegistry } from '@/plugin/registry'
 /**
  * useSidebarMenu 测试 — 统一菜单合并与顺序扩展点
  *
- * 会话 / 设备配对内置入口已随票 13/14 下沉 com.bedcode.session 插件，宿主菜单
+ * 会话 / 设备配对内置入口已随票 13/14 下沉 com.bedcode.terminal-session 插件，宿主菜单
  * 仅剩插件管理与设置两个恒最末入口；插件贡献目录按自身 order 参与统一排序，
  * 且仅运行态插件（Activated / Degraded）的目录可见（error / 停用即摘除，D7）。
  */
@@ -149,7 +149,7 @@ describe('useSidebarMenu', () => {
   // ==================== 贡献目录按运行态过滤（票 18 / spec D7） ====================
 
   describe('贡献目录随插件运行态摘除与恢复', () => {
-    const MERGED = 'com.bedcode.session'
+    const MERGED = 'com.bedcode.terminal-session'
 
     it('运行态插件（Activated）的贡献目录可见，error 后整组摘除、恢复后整组回来', () => {
       const panelIds = [
@@ -193,7 +193,7 @@ describe('useSidebarMenu', () => {
     it('插件停用后贡献目录摘除', () => {
       registerPluginView(MERGED, 'pairing', 'sidebar', 100)
       const ids = () => useSidebarMenu().menuItems.value.map((m) => m.id)
-      expect(ids()).toContain('plugin-com.bedcode.session-pairing')
+      expect(ids()).toContain('plugin-com.bedcode.terminal-session-pairing')
 
       registry.clearPlugin(MERGED)
       expect(ids()).toEqual(['plugins', 'settings'])

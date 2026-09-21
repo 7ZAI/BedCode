@@ -22,7 +22,7 @@
     "target:size": "node scripts/check-target-size.js",
     "target:clean": "cd src-tauri && cargo clean",
     "prebuild": "node scripts/check-target-size.js",
-    "plugins:build": "node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox && node scripts/plugin-build.js --plugin com.bedcode.file-transfer && node scripts/plugin-build.js --plugin com.bedcode.session",
+    "plugins:build": "node scripts/plugin-build.js --plugin com.bedcode.ai-chatbox && node scripts/plugin-build.js --plugin com.bedcode.file-transfer && node scripts/plugin-build.js --plugin com.bedcode.terminal-session",
     "plugins:build:frontend": "pnpm -C plugins/ai-chatbox run build:frontend",
     "plugins:build:rust": "pnpm -C plugins/ai-chatbox run build:rust",
     "plugins:build:all": "pnpm run plugins:build",

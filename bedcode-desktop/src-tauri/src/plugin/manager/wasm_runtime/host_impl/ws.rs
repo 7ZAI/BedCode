@@ -8,18 +8,21 @@
 //!
 //! - **客户端域（出站）**：`LazyLock` 全局连接表（每条带 `owner`），复用
 //!   `tokio-tungstenite 0.24`。`connect` 同步阻塞至握手完成（ABI v14 D4），
-//!   成功返回句柄并发布 `ws:open.<owner>`，失败只回 Err 不发事件；
+//!   成功返回句柄并发布 `<owner>::ws:open`，失败只回 Err 不发事件；
 //!   **不自动重连**（编排归插件）；**不启用 TLS**（`wss://` 显式拒绝，D7）；
 //! - **服务端域（入站）**：插件在宿主 WS 服务器上挂载端点（`/ws/plugin/<owner>/<path>`，
 //!   spec D5）。端点表见 [`crate::server::ws::endpoint`]，连接侧通道见
 //!   [`crate::server::ws::channel::plugin`]——宿主只做引擎级动作（命名空间注入、
 //!   认证策略执行、帧转发、按属主回收），**业务语义完全归插件**；
-//! - **事件**：状态事件走消息总线 owner 作用域 topic
-//!   （`ws:open/error/close.<owner>`、`ws:client-connect/disconnect.<owner>`，
-//!   标识在 payload）；消息帧经可选导出 `events-ws` 回调，未导出则丢弃 +
+//! - **事件**：状态事件走消息总线属主私有 topic（票 05 命名空间）
+//!   （`<owner>::ws:open|error|close`、`<owner>::ws:client-connect|client-disconnect`，
+//!   标识在 payload；非属主订阅被总线门禁拒绝）；消息帧经可选导出 `events-ws` 回调，未导出则丢弃 +
 //!   首次 `warn!` + 计数（宿主不缓存，spec §2.2）；
 //! - **回收**：插件停用 → [`purge_for_plugin`] 关闭并摘除其全部出站连接与入站端点
 //!   （只碰本人）。
+
+use bedcode_plugin_api::host::bus::owned_topic;
+use bedcode_plugin_api::host::ws::{WS_CLOSE, WS_ERROR, WS_OPEN};
 
 use crate::plugin::bus::{MessageBus, WsFrameDispatch};
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
@@ -144,7 +147,7 @@ struct EndpointConfig {
 
 /// 建立出站 WS 连接（同步阻塞至握手完成，spec D4）
 ///
-/// 成功 → 返回句柄 `wsc-<uuid>` 并发布 `ws:open.<owner>`；
+/// 成功 → 返回句柄 `wsc-<uuid>` 并发布 `<owner>::ws:open`；
 /// 失败 → 错误上抛且**不发布任何事件**（无句柄可寻址）
 pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_json: &str) -> Result<String, String> {
     if !super::check_permission(host_ctx, plugin_id, PERMISSION_WS_CLIENT, "host_websocket_connect") {
@@ -268,7 +271,7 @@ pub(crate) fn ws_connect(host_ctx: &WasmHostContext, plugin_id: &str, config_jso
     if let Some(protocol) = protocol {
         payload["protocol"] = serde_json::Value::String(protocol);
     }
-    publish_ws(&bus, &format!("ws:open.{owner}"), payload);
+    publish_ws(&bus, &owned_topic(&owner, WS_OPEN), payload);
     tracing::info!(plugin_id = %owner, handle = %handle, "ws client connection opened");
     Ok(handle)
 }
@@ -302,7 +305,7 @@ pub(crate) fn ws_send_binary(
 /// 主动关闭连接：返回是否命中（幂等：未知句柄 false）
 ///
 /// 关闭命令入队后由写任务发出 Close 帧并结束；对端回 Close → 读任务上报
-/// `ws:close.<owner>`（`wasClean` 按对端回帧 code 判定，spec D11）
+/// `<owner>::ws:close`（`wasClean` 按对端回帧 code 判定，spec D11）
 pub(crate) fn ws_close(
     host_ctx: &WasmHostContext,
     plugin_id: &str,
@@ -775,7 +778,7 @@ async fn run_writer(mut write: WsWrite, mut rx: mpsc::Receiver<OutboundFrame>) {
 
 /// 读任务：帧回灌插件（可选导出）+ 关闭事件上报（恰好一次）
 ///
-/// `ws:close.<owner>` 的 `wasClean` 仅当**对端主动发送 Close 帧**且 code ∈
+/// `<owner>::ws:close` 的 `wasClean` 仅当**对端主动发送 Close 帧**且 code ∈
 /// {1000, 1001} 时为 true（spec D11）；异常断开 / 传输错误 → 省略 code + false。
 /// 同一连接内帧按到达序投递（保序，spec §2.2 D2）
 async fn run_reader(mut read: WsRead, handle: String, owner: String, state: Arc<AtomicU8>, bus: Arc<MessageBus>) {
@@ -811,7 +814,7 @@ async fn run_reader(mut read: WsRead, handle: String, owner: String, state: Arc<
             Err(e) => {
                 publish_ws(
                     &bus,
-                    &format!("ws:error.{owner}"),
+                    &owned_topic(&owner, WS_ERROR),
                     serde_json::json!({ "handle": handle, "message": e.to_string() }),
                 );
                 break;
@@ -836,7 +839,7 @@ fn close_was_clean(code: Option<u16>) -> bool {
     matches!(code, Some(1000) | Some(1001))
 }
 
-/// 上报 `ws:close.<owner>`（守卫保证每连接恰好一次）
+/// 上报 `<owner>::ws:close`（守卫保证每连接恰好一次）
 fn report_close(
     bus: &MessageBus,
     owner: &str,
@@ -856,7 +859,7 @@ fn report_close(
     if !reason.is_empty() {
         payload["reason"] = serde_json::Value::String(reason.to_string());
     }
-    publish_ws(bus, &format!("ws:close.{owner}"), payload);
+    publish_ws(bus, &owned_topic(owner, WS_CLOSE), payload);
     tracing::info!(plugin_id = %owner, handle = %handle, was_clean, "ws client connection closed");
 }
 
@@ -1482,14 +1485,17 @@ mod tests {
         }
     }
 
-    /// 状态事件 topic 内嵌属主：事件只达本人 topic，非属主 topic 零投递（spec §2.3）
+    /// 状态事件按属主私有 topic 投递：事件只达本人命名空间，他人命名空间零投递（spec §2.3）
+    ///
+    /// 本用例锁「宿主投递寻址正确」；「非属主订阅不到」由总线命名空间门禁负责
+    /// （见 host_impl/bus.rs 的跨命名空间订阅拒绝用例）。
     #[tokio::test]
     async fn status_events_are_owner_scoped() {
         let bus = Arc::new(MessageBus::new());
         let owner = test_plugin("topic-owner");
         let other = test_plugin("topic-other");
-        let owner_topic = format!("ws:close.{owner}");
-        let other_topic = format!("ws:close.{other}");
+        let owner_topic = owned_topic(&owner, WS_CLOSE);
+        let other_topic = owned_topic(&other, WS_CLOSE);
 
         let (owner_tx, owner_rx) = std::sync::mpsc::channel();
         let (other_tx, other_rx) = std::sync::mpsc::channel();
@@ -1507,7 +1513,7 @@ mod tests {
         );
         assert!(
             other_rx.try_recv().is_err(),
-            "非属主 topic 物理上收不到该事件（topic 内嵌属主）"
+            "他人命名空间收不到该事件（宿主只向属主投递）"
         );
         // 事件不重放：再等一轮不得出现第二条投递
         assert!(wait_topic(&owner_rx).await.is_none(), "事件不重放（恰好一次投递）");

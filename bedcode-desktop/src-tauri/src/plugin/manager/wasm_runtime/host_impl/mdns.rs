@@ -6,9 +6,9 @@
 //! `owner: plugin_id`）。与 peer-net 引擎共享同一守护——消灭「双 daemon 同绑
 //! 5353 互抢多播包」的结构性病灶（真机实证：只发现自己、发现不了对端）。
 //!
-//! - 事件定向投递：browse 事件按属主发布到 `mdns:found.<owner>` /
-//!   `mdns:lost.<owner>`（owner = 发起 browse 的插件 id），非属主插件物理上
-//!   订阅不到（消息总线按精确 topic 分发）——业务隔离（需求①）；
+//! - 事件定向投递：browse 事件按属主发布到私有 topic `<owner>::mdns:found` /
+//!   `<owner>::mdns:lost`（owner = 发起 browse 的插件 id），非属主插件的订阅被
+//!   总线命名空间门禁拒绝（票 05）——业务隔离（需求①）；
 //! - 广播原语（需求②扩展性核心）：`advertise(config-json)` 纯引擎参数透传，
 //!   宿主零业务拼装；句柄带属主，跨插件 stop / 查询一律拒绝；周期 re-announce
 //!   续期（mdns-sd 注册后不主动周期广播，须手动续期）；
@@ -17,6 +17,9 @@
 //!   [`shared_daemon`] 完成（TXT/ServiceInfo 引擎构造，零业务代码红线 D3），
 //!   本模块只做句柄登记，作为「host 与插件 advertise 共存于单守护、互不注销
 //!   对方」的可验证凭据。
+
+use bedcode_plugin_api::host::bus::owned_topic;
+use bedcode_plugin_api::host::mdns::{MDNS_FOUND, MDNS_LOST};
 
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
 use crate::plugin::permission::PERMISSION_MDNS;
@@ -473,11 +476,7 @@ pub(crate) fn purge_for_plugin(plugin_id: &str) -> usize {
 fn publish_dir_event(owner: &str, service_type: &str, browser_id: &str, found: bool, mut payload: serde_json::Value) {
     payload["serviceType"] = serde_json::Value::String(service_type.to_string());
     payload["browserId"] = serde_json::Value::String(browser_id.to_string());
-    let topic = if found {
-        format!("mdns:found.{owner}")
-    } else {
-        format!("mdns:lost.{owner}")
-    };
+    let topic = owned_topic(owner, if found { MDNS_FOUND } else { MDNS_LOST });
     publish_mdns(&topic, payload);
 }
 
@@ -719,19 +718,17 @@ mod tests {
         assert_eq!(enriched["txtRecords"]["id"], "abc");
         assert_eq!(enriched["serviceType"], "_t4._cp.local.");
         assert_eq!(enriched["browserId"], "mdnsbr-x");
-        // topic 形状
-        assert_eq!(format!("mdns:found.{}", "plugin-a"), "mdns:found.plugin-a");
-        assert_eq!(format!("mdns:lost.{}", "plugin-a"), "mdns:lost.plugin-a");
+        // topic 形状（属主私有命名空间，构造与 SDK 共用 owned_topic）
+        assert_eq!(owned_topic("plugin-a", MDNS_FOUND), "plugin-a::mdns:found");
+        assert_eq!(owned_topic("plugin-a", MDNS_LOST), "plugin-a::mdns:lost");
     }
 
     /// 集成：双插件同服务类型 browse 隔离（ticket 08，需求①物理隔离）
     ///
-    /// 物理隔离 = 句柄级（BROWSERS 按 owner 独立）+ topic 级（事件定向
-    /// `mdns:found.<owner>`）+ 总线精确 topic 分发（bus.rs dispatch_publish
-    /// 按 `subscribers.get(&topic)` 精确匹配，既有测试覆盖）三层组合：
-    /// A 的事件 topic 集合（`mdns:found.A`）不含 B 的实例消息——B 订阅
-    /// `mdns:found.B` 物理上收不到 A 的定向事件。此处断言句柄表与 topic
-    /// 构造两层（总线层为 bus.rs 既有测试契约）
+    /// 隔离 = 句柄级（BROWSERS 按 owner 独立）+ topic 级（事件定向投递到
+    /// `<owner>::mdns:found`）+ 门禁级（票 05：非属主订阅他人命名空间被宿主
+    /// 拒绝，见 host_impl/bus.rs 用例）三层组合：A 的事件只进 A 的收件箱，
+    /// B 既订不到也收不到。此处断言句柄表与 topic 构造两层
     #[test]
     fn browse_owner_isolation_across_plugins() {
         let owner_a = test_owner("iso-a");
@@ -747,10 +744,16 @@ mod tests {
             assert_eq!(table.get(&bid_b).map(|e| e.owner.as_str()), Some(owner_b.as_str()));
             assert_ne!(bid_a, bid_b, "distinct browser handles");
         }
-        // A 的定向 topic 集合与 B 的互斥（物理隔离的 topic 层）
-        assert_eq!(format!("mdns:found.{owner_a}"), "mdns:found.test-plugin-iso-a");
-        assert_ne!(format!("mdns:found.{owner_a}"), format!("mdns:found.{owner_b}"));
-        assert_ne!(format!("mdns:lost.{owner_a}"), format!("mdns:lost.{owner_b}"));
+        // A 的定向 topic 与 B 的互斥（宿主只向属主命名空间投递）
+        assert_eq!(
+            owned_topic(&owner_a, MDNS_FOUND),
+            "test-plugin-iso-a::mdns:found"
+        );
+        assert_ne!(
+            owned_topic(&owner_a, MDNS_FOUND),
+            owned_topic(&owner_b, MDNS_FOUND)
+        );
+        assert_ne!(owned_topic(&owner_a, MDNS_LOST), owned_topic(&owner_b, MDNS_LOST));
         // purge A 只回收 A 的句柄，B 的浏览不受影响
         assert_eq!(super::purge_for_plugin(&owner_a), 1);
         {

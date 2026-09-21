@@ -1,7 +1,7 @@
 export default {
   settings: {
     title: '设置',
-    // 票 14：`pairing` 分组整体退役——配对码 / QR 有效期改由 com.bedcode.session
+    // 票 14：`pairing` 分组整体退役——配对码 / QR 有效期改由 com.bedcode.terminal-session
     // 插件贡献的设置分组承载（`pairing.settings.*`），宿主不再保留该分组文案。
     linkCrypto: {
       title: '链路加密',

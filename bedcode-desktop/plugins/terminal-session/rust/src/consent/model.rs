@@ -4,7 +4,7 @@
 //! - 宿主事件桥 `peer:consent` 载荷 `{ requestId, nodeId, fingerprintShort, deviceName }`
 //!   → [`ConsentRequest`]（应答 `requestId` 透传寻址，宿主 `respond_peer_consent`
 //!   消费）
-//! - 决策经互调 api `com.bedcode.session.consent-decide` 暴露（ADR 0017：
+//! - 决策经互调 api `com.bedcode.terminal-session.consent-decide` 暴露（ADR 0017：
 //!   manifest `api` 声明即契约），消费方（file-transfer）按决策驱动 UI 与宿主应答
 
 use serde::{Deserialize, Serialize};

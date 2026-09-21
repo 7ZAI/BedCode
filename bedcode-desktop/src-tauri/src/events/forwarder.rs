@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 
 /// 事件转发器 - 将 SessionManager 的状态事件转发到 Tauri 前端
 ///
-/// 重启事件（`session-restarted`）自 v21 起由 `com.bedcode.session` 插件在 Created
+/// 重启事件（`session-restarted`）自 v21 起由 `com.bedcode.terminal-session` 插件在 Created
 /// 生命周期之后经 `host-events.emit` 补发，内核不再有该广播通道。
 pub struct EventForwarder {
     app_handle: AppHandle,

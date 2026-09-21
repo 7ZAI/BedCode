@@ -868,11 +868,11 @@ mod tests {
         let host_ctx = build_host_ctx();
         grant_permissions(
             &host_ctx,
-            "com.bedcode.session",
+            "com.bedcode.terminal-session",
             &[crate::plugin::permission::PERMISSION_AUTH],
         );
         assert_eq!(
-            auth_trusted_devices_list(&host_ctx, "com.bedcode.session").unwrap(),
+            auth_trusted_devices_list(&host_ctx, "com.bedcode.terminal-session").unwrap(),
             "[]",
             "空表 → 空数组"
         );
@@ -880,9 +880,9 @@ mod tests {
         seed_pairing(&host_ctx, "p-1", "Phone", "fp-1", "2026-09-19T00:00:00Z");
         seed_pairing(&host_ctx, "p-2", "Tablet", "fp-2", "2026-09-18T00:00:00Z");
         // 撤销一条：软删行必须仍可见（policy 的撤销检测依据）
-        assert!(auth_trusted_device_revoke(&host_ctx, "com.bedcode.session", "p-2").unwrap());
+        assert!(auth_trusted_device_revoke(&host_ctx, "com.bedcode.terminal-session", "p-2").unwrap());
 
-        let raw = auth_trusted_devices_list(&host_ctx, "com.bedcode.session").unwrap();
+        let raw = auth_trusted_devices_list(&host_ctx, "com.bedcode.terminal-session").unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("JSON 数组");
         assert_eq!(rows.len(), 2, "软删行仍在原始记录里（active 过滤归插件）: {raw}");
         let revoked = rows.iter().find(|r| r["id"] == "p-2").expect("p-2 仍在");
@@ -905,7 +905,7 @@ mod tests {
         let host_ctx = build_host_ctx();
         grant_permissions(
             &host_ctx,
-            "com.bedcode.session",
+            "com.bedcode.terminal-session",
             &[crate::plugin::permission::PERMISSION_AUTH],
         );
         seed_pairing(&host_ctx, "p-1", "Phone", "fp-1", "2026-09-19T00:00:00Z");
@@ -924,26 +924,26 @@ mod tests {
         }
 
         assert_eq!(
-            auth_trusted_device_revoke(&host_ctx, "com.bedcode.session", "ghost").unwrap(),
+            auth_trusted_device_revoke(&host_ctx, "com.bedcode.terminal-session", "ghost").unwrap(),
             false,
             "未知 id 幂等 false（宿主 remove_pairing 影响 0 行语义）"
         );
         assert_eq!(
-            auth_trusted_device_revoke(&host_ctx, "com.bedcode.session", "p-1").unwrap(),
+            auth_trusted_device_revoke(&host_ctx, "com.bedcode.terminal-session", "p-1").unwrap(),
             true
         );
         assert_eq!(
-            auth_trusted_device_revoke(&host_ctx, "com.bedcode.session", "p-1").unwrap(),
+            auth_trusted_device_revoke(&host_ctx, "com.bedcode.terminal-session", "p-1").unwrap(),
             true,
             "已软删记录再次撤销：命中即 true（不重复写）"
         );
         // 软删记录保留 + 连接历史连带删除（宿主 remove_pairing 同语义）
-        let raw = auth_trusted_devices_list(&host_ctx, "com.bedcode.session").unwrap();
+        let raw = auth_trusted_devices_list(&host_ctx, "com.bedcode.terminal-session").unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).unwrap();
         assert_eq!(rows.len(), 1, "软删保留记录: {raw}");
         assert_eq!(rows[0]["isActive"], false);
         assert_eq!(
-            auth_connection_history_list(&host_ctx, "com.bedcode.session", "p-1").unwrap(),
+            auth_connection_history_list(&host_ctx, "com.bedcode.terminal-session", "p-1").unwrap(),
             "[]",
             "撤销连带删除连接历史（宿主 remove_pairing 语义）"
         );
@@ -955,7 +955,7 @@ mod tests {
         let host_ctx = build_host_ctx();
         grant_permissions(
             &host_ctx,
-            "com.bedcode.session",
+            "com.bedcode.terminal-session",
             &[crate::plugin::permission::PERMISSION_AUTH],
         );
         seed_pairing(&host_ctx, "p-1", "Phone", "fp-1", "2026-09-19T00:00:00Z");
@@ -973,7 +973,7 @@ mod tests {
             });
         }
 
-        let raw = auth_connection_history_list(&host_ctx, "com.bedcode.session", "p-1").unwrap();
+        let raw = auth_connection_history_list(&host_ctx, "com.bedcode.terminal-session", "p-1").unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_str(&raw).expect("JSON 数组");
         assert_eq!(rows.len(), 1, "按 device_id 寻址: {raw}");
         assert_eq!(rows[0]["deviceId"], "p-1");
@@ -983,7 +983,7 @@ mod tests {
         assert!(rows[0]["disconnectedAt"].is_null(), "未断开 → null");
         // 未知设备：空数组（不报错——「这台设备没有历史」是合法查询结果）
         assert_eq!(
-            auth_connection_history_list(&host_ctx, "com.bedcode.session", "ghost").unwrap(),
+            auth_connection_history_list(&host_ctx, "com.bedcode.terminal-session", "ghost").unwrap(),
             "[]"
         );
     }
@@ -994,21 +994,21 @@ mod tests {
         let host_ctx = build_host_ctx();
         grant_permissions(
             &host_ctx,
-            "com.bedcode.session",
+            "com.bedcode.terminal-session",
             &[crate::plugin::permission::PERMISSION_AUTH],
         );
 
         // 白名单外键拒绝（settings 表是宿主真源，不接受任意键写入）
-        let err = auth_setting_set(&host_ctx, "com.bedcode.session", "network.port", "1").unwrap_err();
+        let err = auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "network.port", "1").unwrap_err();
         assert!(err.contains("not in auth domain whitelist"), "got: {err}");
         // 非正整数拒绝（0 / 负数 / 非数字均不写入）
         for bad in ["0", "-1", "abc", ""] {
-            let err = auth_setting_set(&host_ctx, "com.bedcode.session", "pairing_code_ttl", bad).unwrap_err();
+            let err = auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", bad).unwrap_err();
             assert!(err.contains("positive integer"), "值 {bad:?} 必须拒绝, got: {err}");
         }
 
-        auth_setting_set(&host_ctx, "com.bedcode.session", "pairing_code_ttl", "600").unwrap();
-        auth_setting_set(&host_ctx, "com.bedcode.session", "qr_token_ttl", "120").unwrap();
+        auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", "600").unwrap();
+        auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "qr_token_ttl", "120").unwrap();
         let db = host_ctx.db.blocking_lock();
         assert_eq!(db.get_setting("pairing_code_ttl").unwrap().as_deref(), Some("600"));
         assert_eq!(db.get_setting("qr_token_ttl").unwrap().as_deref(), Some("120"));
@@ -1023,10 +1023,10 @@ mod tests {
             let host_ctx = file_host_ctx(&db_path);
             grant_permissions(
                 &host_ctx,
-                "com.bedcode.session",
+                "com.bedcode.terminal-session",
                 &[crate::plugin::permission::PERMISSION_AUTH],
             );
-            auth_setting_set(&host_ctx, "com.bedcode.session", "pairing_code_ttl", "900").unwrap();
+            auth_setting_set(&host_ctx, "com.bedcode.terminal-session", "pairing_code_ttl", "900").unwrap();
         }
         {
             let host_ctx = file_host_ctx(&db_path);

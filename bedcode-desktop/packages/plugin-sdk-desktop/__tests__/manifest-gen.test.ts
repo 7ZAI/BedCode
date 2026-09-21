@@ -181,7 +181,7 @@ describe('Rust 扫描', () => {
   })
 
   // 票 17 口径（用户裁决 ①）：已声明的 commands 段是**人工裁剪过的用户可见命令面**，
-  // 生成器不再按匹配臂覆写。`com.bedcode.session` 实测 28 声明 / 50 臂——全量覆写会把
+  // 生成器不再按匹配臂覆写。`com.bedcode.terminal-session` 实测 28 声明 / 50 臂——全量覆写会把
   // 宿主桥接与闭环调试臂 advertise 成产品命令（`invoke_command` 的臂 ≠ 可调面）
   it('manifest 已声明 commands → 人工裁剪优先，只报告差集不写回', () => {
     scaffoldPlugin({

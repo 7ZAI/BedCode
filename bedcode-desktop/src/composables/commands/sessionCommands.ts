@@ -7,7 +7,7 @@
  *
  * 保留范围（2026-09-21 命令面收敛）：`list_sessions` / `get_session` /
  * `resize_session` / `write_to_session` / `send_special_key`。
- * 已注销（产品面归 `com.bedcode.session` 插件命令面）：
+ * 已注销（产品面归 `com.bedcode.terminal-session` 插件命令面）：
  * - 会话编排：`start_session` / `create_session_no_start` / `start_existing_session`
  *   / `kill_session` / `delete_session` / `restart_session`
  *   → 插件 `session.create` / `session.close` / `session.action.*`

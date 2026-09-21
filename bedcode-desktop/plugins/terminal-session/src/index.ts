@@ -357,7 +357,7 @@ export async function activate(context: PluginContext): Promise<void> {
     console.warn('[Session Center/task] failed to report host platform:', e)
   }
 
-  // 注册 i18n 消息（自动添加插件 ID 前缀 → com.bedcode.session.task.* 等），
+  // 注册 i18n 消息（自动添加插件 ID 前缀 → com.bedcode.terminal-session.task.* 等），
   // 必须在组件 setup 前完成，保证模板取文案可用
   for (const [locale, msgs] of Object.entries(messages)) {
     context.i18n.registerMessages(locale, msgs)

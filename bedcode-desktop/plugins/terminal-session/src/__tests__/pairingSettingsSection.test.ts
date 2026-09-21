@@ -23,7 +23,7 @@ vi.mock('vue-sonner', () => ({
 
 const seed = devMock.pairing
 
-async function defaultExecute(command: string) {
+async function defaultExecute(command: string, _args?: unknown) {
   switch (command) {
     case 'session.settings.ttl.get':
       return seed.ttls
@@ -38,7 +38,7 @@ const execute = vi.fn(defaultExecute)
 
 function makeContext(): PluginContext {
   return {
-    id: 'com.bedcode.session',
+    id: 'com.bedcode.terminal-session',
     i18n: {
       t: (key: string) => key,
       getI18n: () => ({ global: { locale: { value: 'zh-CN' }, t: (key: string) => key } }),

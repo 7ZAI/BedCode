@@ -169,7 +169,7 @@ pub trait WasmPlugin: Send + Sync + 'static {
     /// `auth-policy` 能力导出（`verify-device-token`，票 12 C3）：宿主 server
     /// 中间件验签后取认证中心策略（claims 结构/时效 + 信任撤销检查）。默认拒绝
     /// ——非认证中心插件不提供策略（宿主动态探测命中但不消费）；认证中心
-    /// （`com.bedcode.session`）覆盖为真实策略。入参 = 宿主已验签通过的 JWT
+    /// （`com.bedcode.terminal-session`）覆盖为真实策略。入参 = 宿主已验签通过的 JWT
     /// token；返回 claims JSON（放行）或错误（拒绝原因）。
     fn verify_device_token_policy(_token: &str) -> Result<String, String> {
         Err("auth-policy not provided by this plugin".to_string())

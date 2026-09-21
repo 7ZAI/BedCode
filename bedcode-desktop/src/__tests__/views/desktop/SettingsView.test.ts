@@ -40,7 +40,7 @@ describe('SettingsView 分组渲染', () => {
   const registry = getPluginRegistry()
 
   /** 内置分组标题 key（顺序与写死的分组组件一一对应）；
-   * 已退役内置分组：`settings.pairing.title`（票 14，配对分组改由 com.bedcode.session
+   * 已退役内置分组：`settings.pairing.title`（票 14，配对分组改由 com.bedcode.terminal-session
    * 贡献）与 `settings.session.title`（会话默认值分组随域下沉同一插件） */
   const BUILTIN_TITLE_KEYS = [
     'settings.ui.title',
@@ -77,7 +77,7 @@ describe('SettingsView 分组渲染', () => {
   })
 
   afterEach(() => {
-    registry.clearPlugin('com.bedcode.session')
+    registry.clearPlugin('com.bedcode.terminal-session')
   })
 
   it('未注册贡献时渲染 5 个内置分组，标题序列与内置分组定义一致', async () => {
@@ -86,15 +86,15 @@ describe('SettingsView 分组渲染', () => {
   })
 
   it('贡献分组按 order 落到内置分组之间，标题取插件命名空间文案', async () => {
-    registry.setPluginState('com.bedcode.session', { state: 'Activated' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
     // 插件文案按「插件 id + 扁平点号 key」合并（与 context.i18n.registerMessages 同一形态）；
     // 覆盖 zh-CN / zh / en 三种 locale 取值，避免受设置 store 的语言默认值影响
     for (const locale of ['zh-CN', 'zh', 'en']) {
       i18n.global.mergeLocaleMessage(locale, {
-        'com.bedcode.session.pairing.settings.title': '终端会话与设备',
+        'com.bedcode.terminal-session.pairing.settings.title': '终端会话与设备',
       })
     }
-    registry.registerSettingsSection('com.bedcode.session', {
+    registry.registerSettingsSection('com.bedcode.terminal-session', {
       id: 'session-settings',
       titleKey: 'pairing.settings.title',
       order: 150,
@@ -111,8 +111,8 @@ describe('SettingsView 分组渲染', () => {
   })
 
   it('插件进入 error 态后贡献分组被摘除，设置页回落到纯内置形态', async () => {
-    registry.setPluginState('com.bedcode.session', { state: 'Activated' })
-    registry.registerSettingsSection('com.bedcode.session', {
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Activated' })
+    registry.registerSettingsSection('com.bedcode.terminal-session', {
       id: 'session-settings',
       titleKey: 'pairing.settings.title',
       order: 150,
@@ -121,7 +121,7 @@ describe('SettingsView 分组渲染', () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(true)
 
-    registry.setPluginState('com.bedcode.session', { state: 'Error', error: 'wasm trap' })
+    registry.setPluginState('com.bedcode.terminal-session', { state: 'Error', error: 'wasm trap' })
     await flushPromises()
 
     expect(wrapper.find('[data-testid="plugin-body"]').exists()).toBe(false)

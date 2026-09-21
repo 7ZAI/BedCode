@@ -96,6 +96,29 @@ settings/i18n/fixture；SDK/打包 CLI fixture 常量。
 **前置**：Blocked by 票 01-05（终端域已并入后改名，一次 ABI 面收口）。
 **验收**：改名后全部构建/测试/运行路径引用新 id；移动端零改动。
 
+**状态：✅ done（2026-09-22，票 06 提交）**：
+- **目录/产物名**：`plugins/session/` → `plugins/terminal-session/`（git mv）；plugin.json
+  id/rustLibrary；Cargo 包名 `bedcode-plugin-terminal-session`（crate lib
+  `bedcode_plugin_terminal_session`，产物 `bedcode_plugin_terminal_session.wasm`）；
+  `WasmPlugin::ID = com.bedcode.terminal-session`；
+- **全链引用替换**：宿主 Rust（auth_center 常量 SESSION_PLUGIN_ID/SESSION_MARKER_API、
+  gateway/fs_auth/host_impl/server/events/wasm_runtime fixture、session_e2e/a03_probe）、
+  SDK（wasm.rs / wasm_auth_policy.rs / manifest-gen / sdk-test）、前端（context.ts 门禁
+  常量、stores/composables/locales/i18n 前缀/fixtures/tests）、scripts（dev-run /
+  plugin-build/plugin-dev/wasm-config）、交叉插件相对 manifest 路径
+  （file-transfer `../../terminal-session/plugin.json`）、`/api/plugin/…/` 注释面；
+  移动端零改动（无引用）。
+- **验证**：插件 wasip3 wasm 重建 ✓（新 crate 名）+ 产物复制到
+  `resources/plugins/desktop/com.bedcode.terminal-session/`；file-transfer 重建 ✓
+  （其 plugin_api 宏读 session manifest 需新路径）；session_e2e 13 全绿（含
+  `test_filetransfer_consumes_session_center_closed_loop` 跨插件闭环）；宿主 vitest
+  75 文件 735 全绿；eslint 0 error（120 warning 基线不变）；cargo check exit 0。
+- ⚠ 协调说明：api_registry.rs 的测试字面量已在工作区改名但**未随本票提交**——
+  该文件被并发在途的 wasm-core-audit 票线（05-bus-topic-acl，owner_of 回复道校验）
+  占用，其改落在他们自己的提交里；测试数据字面量不影响构建（见 scratchpad）。
+  全量 Rust 测试的剩余失败（16 项 pty/ws/perf/task 事件面）均属该在途票线，
+  与本票无交集（session_e2e 全绿为证）。
+
 ## 票 07 · B2 私有库真源迁移 + 双投窗口
 
 **范围**：`…/plugins/com.bedcode.session/plugin.db`（会话配置真源 + 任务历史 +

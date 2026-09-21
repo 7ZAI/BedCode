@@ -6,7 +6,7 @@
  * zh-CN / en 双文件同步」）。
  *
  * 所有 key 以 `session.` 域命名，注册时经插件 ID 前缀隔离为
- * `com.bedcode.session.session.*`（`context.i18n.t('session.x')` 自动补前缀）。
+ * `com.bedcode.terminal-session.session.*`（`context.i18n.t('session.x')` 自动补前缀）。
  * 用 type 别名而非 interface：TS 给类型别名隐式索引签名，使 MessageSchema
  * 可直接赋给 `Record<string, unknown>`（registerMessages 入参）。
  */

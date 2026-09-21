@@ -1,5 +1,5 @@
 [package]
-name = "bedcode-plugin-session"
+name = "bedcode-plugin-terminal-session"
 version = "1.0.0-beta"
 description = "Terminal Session Center — pairing/trust, session orchestration and task queue semantics (wasip3)"
 authors = ["BedCode"]

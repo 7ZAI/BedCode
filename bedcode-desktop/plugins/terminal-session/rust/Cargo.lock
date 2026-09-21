@@ -37,7 +37,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "bedcode-plugin-session"
+name = "bedcode-plugin-terminal-session"
 version = "1.0.0-beta"
 dependencies = [
  "anyhow",

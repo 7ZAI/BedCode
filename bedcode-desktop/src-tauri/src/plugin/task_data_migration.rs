@@ -3,7 +3,7 @@
 //! **为什么需要它**：票 16 把任务域表名统一到 `task_*` 前缀，但那只是**在合并插件自己
 //! 的私有库内**改名（`ALTER TABLE … RENAME`，零复制）。六张任务表历史上物理位于
 //! `app_data/plugins/com.bedcode.auto-task/plugin.db`，而插件私有库按插件 id 分文件，
-//! 合并插件读的是 `…/com.bedcode.session/plugin.db`——所以「升级后任务历史一条不丢」
+//! 合并插件读的是 `…/com.bedcode.terminal-session/plugin.db`——所以「升级后任务历史一条不丢」
 //! 到票 17 才真正成立。形状沿用已退役的宿主侧一次性迁移 `peer_migration`（业务
 //! 数据清零票 06 删除，见 git 历史）：
 //! 存在性即版本戳、best-effort 不阻断启动、可对旧库重跑。
@@ -30,14 +30,14 @@ use tauri::Manager;
 /// 被退役的旧插件（票 17）
 pub const LEGACY_PLUGIN_ID: &str = "com.bedcode.auto-task";
 /// 接管方（终端会话中心）
-pub const TARGET_PLUGIN_ID: &str = "com.bedcode.session";
+pub const TARGET_PLUGIN_ID: &str = "com.bedcode.terminal-session";
 
 /// 幂等版本戳键（落在目标库 `plugin_meta`，与票 16 的库内改名账本同表同形）
 pub const MIGRATION_LEDGER: &str = "task_data.migrated_from=com.bedcode.auto-task";
 
 /// `(旧库表名 → 新库表名)` 六张任务表
 ///
-/// 后四条与插件侧 `plugins/session/rust/src/schema.rs::TABLE_RENAMES` 逐字一致，
+/// 后四条与插件侧 `plugins/terminal-session/rust/src/schema.rs::TABLE_RENAMES` 逐字一致，
 /// 前两条本已合规只需原名拷贝。真源在插件（它决定自己库里的表名），宿主这份是
 /// 消费方副本——漂移由 [`task_table_copies_match_plugin_rename_list`] 撞红。
 pub const TASK_TABLE_COPIES: &[(&str, &str)] = &[
@@ -547,7 +547,7 @@ mod tests {
     #[test]
     fn task_table_copies_match_plugin_rename_list() {
         let source = std::fs::read_to_string(format!(
-            "{}/../plugins/session/rust/src/schema.rs",
+            "{}/../plugins/terminal-session/rust/src/schema.rs",
             env!("CARGO_MANIFEST_DIR")
         ))
         .expect("插件 schema.rs 必须可读（改名清单真源）");

@@ -8,7 +8,7 @@
 //! 本模块以 WIT 的 `plugin-auth-policy` world 生成 guest 侧绑定
 //! （`exports::...::Guest` + `export!`），使 `wasm_entry!` 能无条件导出默认
 //! 实现（默认**拒绝**——非认证中心插件不提供策略；宿主动态探测命中但中间件
-//! 只对认证中心 `com.bedcode.session` 实例调用本导出）——插件只需覆盖
+//! 只对认证中心 `com.bedcode.terminal-session` 实例调用本导出）——插件只需覆盖
 //! [`crate::wasm::WasmPlugin::verify_device_token_policy`]。
 //!
 //! 独立文件承载：与 `wasm.rs` 的第一个 `generate!` 分处不同模块，避免两个

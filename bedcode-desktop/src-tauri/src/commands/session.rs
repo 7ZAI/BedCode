@@ -8,7 +8,7 @@
 //! 会话**编排**命令（`start_session` / `create_session_no_start` /
 //! `start_existing_session` / `kill_session` / `delete_session` / `restart_session`）
 //! 已按 2026-09-21 命令面收敛注销（`.scratch/2026-09-21-host-rust-residue/issues/05`）：
-//! 创建/停止/移除/重启的业务面归 `com.bedcode.session` 插件命令面
+//! 创建/停止/移除/重启的业务面归 `com.bedcode.terminal-session` 插件命令面
 //! （`session.create` / `session.close` / `session.action.*`），宿主只经
 //! `host-session` 原语执行（见 `plugin/manager/wasm_runtime/host_impl/session.rs`）。
 //! 两阶段启动（建而不启 + 后续 `start_existing_session`）随之退役——v21 起唯一

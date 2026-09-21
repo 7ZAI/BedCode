@@ -22,7 +22,7 @@
  * `session.output.pull` 轮询拉取 `host-session.output-ring-fetch` 原语，
  * 插件前端不依赖宿主注入；`sessionId` 由插件视图经路由参数自取。
  *
- * 注入契约类型真源：`plugins/session/src/components/terminal/
+ * 注入契约类型真源：`plugins/terminal-session/src/components/terminal/
  * terminalHostCapabilities.ts`（宿主不 import 插件，就地定义同构结构）。
  */
 import { provide, reactive, computed } from 'vue'
@@ -35,8 +35,8 @@ import { logger } from '@/utils/frontendLogger'
 import { TERMINAL_HOST_CAPABILITIES_KEY } from '@/plugin/terminal-host-capabilities-contract'
 import type { TerminalSettingsAccessor } from '@/plugin/terminal-host-capabilities-contract'
 
-// 会话插件常量（与 plugins/session/plugin.json 一致；插件 id 改名票 06 集中化）
-const SESSION_PLUGIN_ID = 'com.bedcode.session'
+// 会话插件常量（与 plugins/terminal-session/plugin.json 一致；插件 id 改名票 06 集中化）
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 const SESSION_TERMINAL_WINDOW_VIEW_ID = 'session.terminal-window'
 
 const settingsStore = useSettingsStore()

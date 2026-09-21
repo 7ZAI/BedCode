@@ -87,7 +87,7 @@ const storageSet = vi.fn(async () => {})
 
 function makeContext(): PluginContext {
   return {
-    id: 'com.bedcode.session',
+    id: 'com.bedcode.terminal-session',
     i18n: {
       t: (key: string) => key,
       getI18n: () => ({ global: { locale: { value: 'zh-CN' }, t: (key: string) => key } }),
@@ -335,7 +335,7 @@ describe('DeviceCenterView（设备与配对页面）', () => {
 
     expect(routerPush).toHaveBeenCalledWith({
       name: 'plugin-sidebar-view',
-      params: { pluginId: 'com.bedcode.session', viewId: 'session.history' },
+      params: { pluginId: 'com.bedcode.terminal-session', viewId: 'session.history' },
       query: { deviceId: seed.pairedDevices[0].id },
     })
   })

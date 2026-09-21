@@ -86,7 +86,7 @@ pub(crate) fn plugin_http_path_allowed(declared: &[String], full_path: &str) -> 
 /// **未激活**且接管方**已激活**时生效（见 [`resolve_http_owner`]）。合并插件退役
 /// 旧 auto-task 后端（票 17）后，移动端与已部署在项目里的旧 hook 脚本仍能按原
 /// 路径打到桌面端；切断判定与代价评估记在票 16 Comments。
-const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[("com.bedcode.auto-task", "com.bedcode.session")];
+const LEGACY_HTTP_PLUGIN_ALIASES: &[(&str, &str)] = &[("com.bedcode.auto-task", "com.bedcode.terminal-session")];
 
 /// 查旧前缀的接管方 id（无声明即 None）
 pub(crate) fn legacy_http_alias(requested: &str) -> Option<&'static str> {
@@ -390,30 +390,30 @@ mod tests {
     #[test]
     fn declared_paths_match_exactly_and_undeclared_pass_through() {
         let declared: Vec<String> = vec![
-            "/api/plugin/com.bedcode.session/task-status".to_string(),
-            "/api/plugin/com.bedcode.session/task-queue/add".to_string(),
+            "/api/plugin/com.bedcode.terminal-session/task-status".to_string(),
+            "/api/plugin/com.bedcode.terminal-session/task-queue/add".to_string(),
         ];
         // 已声明：精确命中放行
         assert!(plugin_http_path_allowed(
             &declared,
-            "/api/plugin/com.bedcode.session/task-status"
+            "/api/plugin/com.bedcode.terminal-session/task-status"
         ));
         assert!(plugin_http_path_allowed(
             &declared,
-            "/api/plugin/com.bedcode.session/task-queue/add"
+            "/api/plugin/com.bedcode.terminal-session/task-queue/add"
         ));
         // 已声明：未命中一律拒绝（含前缀相近、大小写不同、缺段、多段）
         assert!(!plugin_http_path_allowed(
             &declared,
-            "/api/plugin/com.bedcode.session/task-history"
+            "/api/plugin/com.bedcode.terminal-session/task-history"
         ));
         assert!(
-            !plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.session/task-status/extra"),
+            !plugin_http_path_allowed(&declared, "/api/plugin/com.bedcode.terminal-session/task-status/extra"),
             "声明路径不得前缀匹配"
         );
         assert!(!plugin_http_path_allowed(
             &declared,
-            "/api/plugin/com.bedcode.session/TASK-STATUS"
+            "/api/plugin/com.bedcode.terminal-session/TASK-STATUS"
         ));
         // 未声明（空清单）：前缀内 ANY 放行，404 由插件自判
         assert!(plugin_http_path_allowed(
@@ -425,9 +425,9 @@ mod tests {
     /// 票 16：旧前缀别名表——只登记已退役/在退役的那一条，且必须指向合并插件
     #[test]
     fn legacy_http_alias_maps_only_retired_plugin_prefix() {
-        assert_eq!(legacy_http_alias("com.bedcode.auto-task"), Some("com.bedcode.session"));
+        assert_eq!(legacy_http_alias("com.bedcode.auto-task"), Some("com.bedcode.terminal-session"));
         // 新 id 自身、其它在位插件、未知 id 都没有接管方
-        assert_eq!(legacy_http_alias("com.bedcode.session"), None);
+        assert_eq!(legacy_http_alias("com.bedcode.terminal-session"), None);
         assert_eq!(legacy_http_alias("com.bedcode.file-transfer"), None);
         assert_eq!(legacy_http_alias(""), None);
     }
@@ -436,7 +436,7 @@ mod tests {
     #[test]
     fn http_owner_never_preempts_an_activated_plugin() {
         let old = "com.bedcode.auto-task";
-        let new = "com.bedcode.session";
+        let new = "com.bedcode.terminal-session";
         // 旧插件仍激活：请求留在旧插件（合并插件不得改写成另一份私有库的数据）
         assert_eq!(
             resolve_http_owner(old, true, Some(new), true),

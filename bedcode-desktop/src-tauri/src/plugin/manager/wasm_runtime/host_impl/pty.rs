@@ -20,7 +20,7 @@
 //! Store 不可重入，异步唤醒插件在语义上不成立）。
 //!
 //! 票 02 定稿契约并贯通 `spawn` / `ring-fetch`，票 03 补齐数据面 `write` /
-//! `resize` / `is-running`，票 04 补齐生命面：`kill` + `pty:exit.<owner>` 事件 +
+//! `resize` / `is-running`，票 04 补齐生命面：`kill` + `pty:exit` 事件（属主私有 topic）+
 //! 停用回收，票 05 落地限额与背压：每插件在册条数配额、插件声明的环容量
 //! （`spawn` config 的 `ringBytes`，宿主仲裁上下限）、单次写入准入与单次拉取截断。
 //!
@@ -29,6 +29,8 @@
 //! 任务在「读线程 EOF + 子进程回收」齐备（票 01 的 [`PtyTerminationGate`]）时完成，
 //! 且**只有从注册表 `remove` 成功的那一方**才发布事件——自然退出 / 主动 kill / 停用
 //! 回收三条路径交汇时，每条 PTY 恰好一条 `pty:exit`，不多发也不漏发。
+
+use bedcode_plugin_api::host::bus::owned_topic;
 
 use crate::enums::PtySessionStatus;
 use crate::plugin::bus::MessageBus;
@@ -51,7 +53,7 @@ const NOT_OWNER: &str = "not owner of pty handle";
 /// 句柄前缀（`pty-<uuid>`）
 const HANDLE_PREFIX: &str = "pty-";
 
-/// 生命周期事件名（topic = `pty:exit.<owner>`，与 SDK `PTY_EXIT` 常量逐字一致）
+/// 生命周期事件名（topic = `<owner>::pty:exit`，事件名段与 SDK `PTY_EXIT` 常量逐字一致）
 const EVENT_EXIT: &str = "pty:exit";
 
 fn denied_spawn() -> String {
@@ -272,7 +274,7 @@ fn running_verdict(running: bool, output_terminated: bool) -> bool {
 
 /// 终止并销毁（票 04）：优雅 Ctrl-C → 兜底强杀，复用引擎既有语义
 ///
-/// `Ok(())` 表示**终止已发起**；句柄摘除与 `pty:exit.<owner>`（reason=killed）由退出
+/// `Ok(())` 表示**终止已发起**；句柄摘除与 `<owner>::pty:exit`（reason=killed）由退出
 /// 监听在「EOF + 子进程回收」齐备时完成（见模块头的单一发布者不变量）。因此 kill 后
 /// 立刻 `ring-fetch` 仍可能取到尾帧，而后再取即 `pty handle not found`。
 pub(crate) fn pty_kill(host_ctx: &WasmHostContext, plugin_id: &str, pty_id: &str) -> Result<(), String> {
@@ -299,7 +301,7 @@ fn exit_reason_of(terminated: &PtyTerminated) -> &'static str {
     }
 }
 
-/// 组装 `pty:exit.<owner>` payload（camelCase，与 WIT/SDK 文档一致）
+/// 组装 `<owner>::pty:exit` payload（camelCase，与 WIT/SDK 文档一致）
 ///
 /// `exit_code` 为 `None`（回收失败/无句柄）时**省略字段**而非报 0——插件据字段有无
 /// 判断「拿不到退出码」，与「退出码就是 0」区分开。
@@ -311,11 +313,11 @@ fn pty_exit_payload(pty_id: &str, reason: &str, exit_code: Option<i32>) -> serde
     payload
 }
 
-/// 发布退出事件到属主作用域 topic（与 mdns / ws 同路：owner 内嵌在 topic 里，
-/// 非属主不知道也无法收到他人的事件流）
+/// 发布退出事件到属主私有 topic（与 mdns / ws 同路：`<owner>::pty:exit`，
+/// 非属主订阅被总线命名空间门禁拒绝，他人也伪投递不进）
 fn publish_pty_exit(bus: &MessageBus, owner: &str, pty_id: &str, reason: &str, exit_code: Option<i32>) {
     bus.publish(
-        &format!("{EVENT_EXIT}.{owner}"),
+        &owned_topic(owner, EVENT_EXIT),
         "host",
         pty_exit_payload(pty_id, reason, exit_code),
     );
@@ -384,7 +386,7 @@ async fn reap_and_publish(
     }
 }
 
-/// 插件停用回收：kill 并摘除其全部 PTY，逐条补发 `pty:exit.<owner>`（reason=killed）
+/// 插件停用回收：kill 并摘除其全部 PTY，逐条补发 `<owner>::pty:exit`（reason=killed）
 ///
 /// **只碰本人**（同 mdns / ws 的按属主回收）：其他插件在册句柄不受影响。事件由本函数
 /// 发布（先摘除后 kill，停用窗口内不再接受任何针对该句柄的调用）；对应的退出监听任务

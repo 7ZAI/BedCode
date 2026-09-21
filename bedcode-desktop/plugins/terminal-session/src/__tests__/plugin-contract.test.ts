@@ -1,5 +1,5 @@
 /**
- * com.bedcode.session 插件工程契约测试（票 03）
+ * com.bedcode.terminal-session 插件工程契约测试（票 03）
  *
  * 被测契约（全部是外部可见产物与边界，不测内部实现）：
  * - C1 身份一致：manifest.id / 构建脚本 PLUGIN_ID / manifest.rustLibrary /
@@ -24,7 +24,7 @@ vi.mock('@tauri-apps/plugin-os', () => ({ platform: () => 'linux' }))
 
 // happy-dom 下 import.meta.url 不是 file: 协议，无法 fileURLToPath；
 // vitest 以宿主工作区根为 cwd 启动（bedcode-desktop/），据此定位插件工程根
-const PLUGIN_ROOT = resolve(process.cwd(), 'plugins/session')
+const PLUGIN_ROOT = resolve(process.cwd(), 'plugins/terminal-session')
 const manifest = JSON.parse(readFileSync(resolve(PLUGIN_ROOT, 'plugin.json'), 'utf-8'))
 const buildScript = readFileSync(resolve(PLUGIN_ROOT, 'scripts/build.js'), 'utf-8')
 const cargoToml = readFileSync(resolve(PLUGIN_ROOT, 'rust/Cargo.toml'), 'utf-8')
@@ -40,16 +40,16 @@ function frontendSources(): { file: string; code: string }[] {
 
 describe('C1 插件身份五处一致', () => {
   it('manifest id 与构建脚本 PLUGIN_ID、内置资源目录条目一致', () => {
-    expect(manifest.id).toBe('com.bedcode.session')
-    expect(buildScript).toContain(`const PLUGIN_ID = 'com.bedcode.session'`)
+    expect(manifest.id).toBe('com.bedcode.terminal-session')
+    expect(buildScript).toContain(`const PLUGIN_ID = 'com.bedcode.terminal-session'`)
     // 内置资源产物目录约定：src-tauri/resources/plugins/desktop/<plugin-id>/
     expect(buildScript).toContain(`src-tauri/resources/plugins/desktop', PLUGIN_ID`)
   })
 
   it('rustLibrary 与构建脚本 RUST_LIB_NAME 与 Cargo 包名一致', () => {
-    expect(manifest.rustLibrary).toBe('bedcode_plugin_session')
-    expect(buildScript).toContain(`const RUST_LIB_NAME = 'bedcode_plugin_session'`)
-    expect(cargoToml).toContain('name = "bedcode-plugin-session"')
+    expect(manifest.rustLibrary).toBe('bedcode_plugin_terminal_session')
+    expect(buildScript).toContain(`const RUST_LIB_NAME = 'bedcode_plugin_terminal_session'`)
+    expect(cargoToml).toContain('name = "bedcode-plugin-terminal-session"')
   })
 
   it('产物形态：rust-ts + inline + cdylib（wasip3 直出 Component）', () => {
@@ -99,41 +99,41 @@ describe('C1 插件身份五处一致', () => {
       'ui:sidebar',
     ])
     expect(manifest.api).toEqual([
-      'com.bedcode.session.pairing-code-generate',
-      'com.bedcode.session.pairing-code-status',
-      'com.bedcode.session.pairing-code-verify',
-      'com.bedcode.session.pairing-code-clear',
-      'com.bedcode.session.qr-code-generate',
-      'com.bedcode.session.qr-code-status',
-      'com.bedcode.session.qr-code-verify',
-      'com.bedcode.session.qr-code-clear',
-      'com.bedcode.session.trust-list',
-      'com.bedcode.session.trust-revoke',
-      'com.bedcode.session.consent-decide',
-      'com.bedcode.session.config-list',
-      'com.bedcode.session.config-upsert',
-      'com.bedcode.session.config-delete',
+      'com.bedcode.terminal-session.pairing-code-generate',
+      'com.bedcode.terminal-session.pairing-code-status',
+      'com.bedcode.terminal-session.pairing-code-verify',
+      'com.bedcode.terminal-session.pairing-code-clear',
+      'com.bedcode.terminal-session.qr-code-generate',
+      'com.bedcode.terminal-session.qr-code-status',
+      'com.bedcode.terminal-session.qr-code-verify',
+      'com.bedcode.terminal-session.qr-code-clear',
+      'com.bedcode.terminal-session.trust-list',
+      'com.bedcode.terminal-session.trust-revoke',
+      'com.bedcode.terminal-session.consent-decide',
+      'com.bedcode.terminal-session.config-list',
+      'com.bedcode.terminal-session.config-upsert',
+      'com.bedcode.terminal-session.config-delete',
       // 票 02：快捷指令迁移导入（宿主 handoff 经互调推送 legacy 行）
-      'com.bedcode.session.quick-actions-import',
-      'com.bedcode.session.session-create',
-      'com.bedcode.session.session-restart',
-      'com.bedcode.session.session-remove',
-      'com.bedcode.session.session-rename',
-      'com.bedcode.session.session-resize',
+      'com.bedcode.terminal-session.quick-actions-import',
+      'com.bedcode.terminal-session.session-create',
+      'com.bedcode.terminal-session.session-restart',
+      'com.bedcode.terminal-session.session-remove',
+      'com.bedcode.terminal-session.session-rename',
+      'com.bedcode.terminal-session.session-resize',
       // 票 11：注解槽写面（expand 期双写） + 设备派生视图（真实会话数替换硬编码 0）
-      'com.bedcode.session.annotate',
-      'com.bedcode.session.devices-connect-list',
+      'com.bedcode.terminal-session.annotate',
+      'com.bedcode.terminal-session.devices-connect-list',
     ])
     // 桥接锚点：宿主 auth_center 以 trust-list 探活（配对 / trust / policy 同一桥接门），
     // 改名即两侧失联（永久静默降级）
-    expect(manifest.api).toContain('com.bedcode.session.trust-list')
+    expect(manifest.api).toContain('com.bedcode.terminal-session.trust-list')
     // 消费方契约：file-transfer 经互调消费这两条（未声明 api 不可调，缺一即整片被拒）
-    expect(manifest.api).toContain('com.bedcode.session.consent-decide')
+    expect(manifest.api).toContain('com.bedcode.terminal-session.consent-decide')
     // manifest.api 与 Rust trait 的 `#[api(...)]` 声明同源（宏在编译期比对，
     // 此处守「源码在但清单漏项」这一侧，避免宿主按旧清单调用）
     const apiDeclarations = readFileSync(resolve(PLUGIN_ROOT, 'rust/src/lib.rs'), 'utf-8')
     for (const api of manifest.api as string[]) {
-      const short = api.replace('com.bedcode.session.', '')
+      const short = api.replace('com.bedcode.terminal-session.', '')
       expect(apiDeclarations, `trait 缺 #[api("${short}")]`).toContain(`#[api("${short}")]`)
     }
     // 命令面声明与后端 dispatch 分支同源（缺 declaration 的命名）
@@ -279,7 +279,7 @@ function makeEntryContext(runningSessions: unknown[] = []) {
     },
   })
   const context = {
-    id: 'com.bedcode.session',
+    id: 'com.bedcode.terminal-session',
     commands: { execute },
     i18n: {
       t: (key: string) => key,

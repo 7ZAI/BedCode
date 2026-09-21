@@ -1,4 +1,4 @@
-//! 会话动作命令桥接（票 10）：重启 / 移除 / 改名 / 尺寸裁决下沉 `com.bedcode.session`
+//! 会话动作命令桥接（票 10）：重启 / 移除 / 改名 / 尺寸裁决下沉 `com.bedcode.terminal-session`
 //!
 //! 模式与 `session_create_bridge.rs` / `session_config_bridge.rs` 同构：探活锚点
 //! （会话中心互调面已登记）→ JSON-RPC 互调 → 插件完成编排（存在性预检、调用顺序、
@@ -17,7 +17,7 @@
 //! 移动端 HTTP / WS 路径（`server/services/session_control.rs`）与插件不可用时的
 //! 降级轨仍直连它——这是「宿主执行器保留」的口径，也是移动端零改动的前提。
 //! 桌面命令面在插件可用时经本桥接（裁决在插件侧），两条路径的对外行为等价
-//! （同一裁决规则、同一 `ResizeOutcome` 形状，见 `plugins/session/rust/src/actions.rs`
+//! （同一裁决规则、同一 `ResizeOutcome` 形状，见 `plugins/terminal-session/rust/src/actions.rs`
 //! 与 `session/session_manager.rs` 的四态对照测试）。
 
 use crate::plugin::manager::wasm_runtime::WasmHostContext;
@@ -26,10 +26,10 @@ use crate::utils::auth::auth_center::{call_api, session_active};
 use crate::{AppError, Result};
 
 /// 插件互调 api（短名由 `#[plugin_api]` 宏按 manifest.api 比对防漂移）
-const API_RESTART: &str = "com.bedcode.session.session-restart";
-const API_REMOVE: &str = "com.bedcode.session.session-remove";
-const API_RENAME: &str = "com.bedcode.session.session-rename";
-const API_RESIZE: &str = "com.bedcode.session.session-resize";
+const API_RESTART: &str = "com.bedcode.terminal-session.session-restart";
+const API_REMOVE: &str = "com.bedcode.terminal-session.session-remove";
+const API_RENAME: &str = "com.bedcode.terminal-session.session-rename";
+const API_RESIZE: &str = "com.bedcode.terminal-session.session-resize";
 
 /// 插件侧不可用时记录降级（结构化字段；双轨期未激活是常态）
 fn log_fallback(api: &str, err: &AppError) {
@@ -52,7 +52,7 @@ pub async fn restart_session_via_plugin(host_ctx: &WasmHostContext, session_id: 
             "session restart refused: session plugin not active (plugin required, kernel executor retired)"
         );
         return Err(AppError::Plugin(
-            "session plugin not active: session restart requires com.bedcode.session".to_string(),
+            "session plugin not active: session restart requires com.bedcode.terminal-session".to_string(),
         ));
     }
     let params = serde_json::json!({ "sessionId": session_id });

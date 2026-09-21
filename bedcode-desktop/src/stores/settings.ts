@@ -9,7 +9,7 @@ import { invoke } from '@tauri-apps/api/core'
  * 收敛记录（2026-09-21）：原先声明的 `session.*`（默认执行环境 / WSL 发行版 /
  * 工作目录 / 启动命令 / 会话超时）、`network.qr_host`、`ui.show_preview`、
  * `ui.max_cached_terminals`、`ui.notify_in_background` 实测**全无消费者**——
- * 会话默认值已迁入 `com.bedcode.session` 插件存储（`session.formDefaults`），
+ * 会话默认值已迁入 `com.bedcode.terminal-session` 插件存储（`session.formDefaults`），
  * QR host 归插件（`pairing.qrHost`），其余为移动端旧字段残留 → 一并删除。
  * 保存仍为整表回传（Rust 侧 AppConfig 反序列化时缺段用默认值补齐）。
  */
@@ -58,7 +58,9 @@ const defaultSettings: Settings = {
 }
 
 export const useSettingsStore = defineStore('settings', () => {
-  const settings = ref<Settings>(JSON.parse(JSON.stringify(defaultSettings)))
+  // 深拷贝默认值（structuredClone：默认值是纯数据常量，结构克隆即可；
+  // 原 JSON.parse(JSON.stringify) 等义，函数/符号字段不存在，不涉任何异常路径）
+  const settings = ref<Settings>(structuredClone(defaultSettings))
   // 最近一次成功保存内容的 JSON 快照：deep watch 触发时对比内容判断是否已持久化。
   // 不能用对象引用比对——Pinia ref 赋值会包一层 reactive proxy，settings.value
   // 永远不等于原始对象；且用户变更发生在同一对象上，引用比对也无法区分新旧状态

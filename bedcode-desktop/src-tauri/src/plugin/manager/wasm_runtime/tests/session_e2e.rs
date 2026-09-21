@@ -34,20 +34,20 @@ fn test_session_plugin_artifact_lifecycle() {
     use crate::utils::auth::auth_center as bridge;
 
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
         .expect("load wasip3 session: all imports must resolve");
 
     assert_eq!(plugin.activate().expect("activate"), 0);
 
     let manifest: serde_json::Value = serde_json::from_str(&plugin.get_manifest().expect("manifest")).unwrap();
-    assert_eq!(manifest["id"], "com.bedcode.session");
+    assert_eq!(manifest["id"], "com.bedcode.terminal-session");
     assert_eq!(
         manifest["pluginType"], "rust-ts",
         "骨架即 rust-ts 形态：P3 贡献式前端的落点"
@@ -104,9 +104,9 @@ fn test_session_plugin_artifact_lifecycle() {
     );
     // 票 08：宿主配置命令面转发依赖这三项（缺一即静默降级到只读投影）
     for consumed in [
-        "com.bedcode.session.config-list",
-        "com.bedcode.session.config-upsert",
-        "com.bedcode.session.config-delete",
+        "com.bedcode.terminal-session.config-list",
+        "com.bedcode.terminal-session.config-upsert",
+        "com.bedcode.terminal-session.config-delete",
     ] {
         assert!(
             declared_api.iter().any(|a| a == consumed),
@@ -116,11 +116,11 @@ fn test_session_plugin_artifact_lifecycle() {
     // 票 09/10：宿主命令面（创建 / 重启 / 删除 / 尺寸裁决）的桥接目标必须在声明面里，
     // 否则「未声明 api 不可调」门禁会把转发整片拒掉（静默降级回宿主旧路径）
     for consumed in [
-        "com.bedcode.session.session-create",
-        "com.bedcode.session.session-restart",
-        "com.bedcode.session.session-remove",
-        "com.bedcode.session.session-rename",
-        "com.bedcode.session.session-resize",
+        "com.bedcode.terminal-session.session-create",
+        "com.bedcode.terminal-session.session-restart",
+        "com.bedcode.terminal-session.session-remove",
+        "com.bedcode.terminal-session.session-rename",
+        "com.bedcode.terminal-session.session-resize",
     ] {
         assert!(
             declared_api.iter().any(|a| a == consumed),
@@ -135,7 +135,7 @@ fn test_session_plugin_artifact_lifecycle() {
     );
     // 文件传输插件经互调消费 consent / trust：两条 api 必须在声明面里，
     // 否则「未声明 api 不可调」门禁会把它的调用整片拒掉（静默降级）
-    for consumed in ["com.bedcode.session.consent-decide", "com.bedcode.session.trust-list"] {
+    for consumed in ["com.bedcode.terminal-session.consent-decide", "com.bedcode.terminal-session.trust-list"] {
         assert!(
             declared_api.iter().any(|a| a == consumed),
             "manifest 缺消费方 api {consumed}"
@@ -143,7 +143,7 @@ fn test_session_plugin_artifact_lifecycle() {
     }
     for api in &declared_api {
         assert!(
-            api.starts_with("com.bedcode.session."),
+            api.starts_with("com.bedcode.terminal-session."),
             "api 必须落在本插件命名空间, got: {api}"
         );
     }
@@ -151,7 +151,7 @@ fn test_session_plugin_artifact_lifecycle() {
     // 命令面可调用：状态命令回传 manifest 声明，宿主据此确认 api/permissions 生效
     let result = plugin.invoke_command("session.status", "{}").expect("session.status");
     let r: serde_json::Value = serde_json::from_str(&result).unwrap();
-    assert_eq!(r["plugin"], "com.bedcode.session");
+    assert_eq!(r["plugin"], "com.bedcode.terminal-session");
     assert_eq!(
         r["domains"],
         serde_json::json!([
@@ -211,7 +211,7 @@ fn test_session_task_domain_closed_loop() {
     const PROBE_SESSION: &str = "probe-task-session";
 
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -219,7 +219,7 @@ fn test_session_task_domain_closed_loop() {
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     // 本测试不经 PluginHost 激活，权限门所需的 grant 需显式下发（与 manifest 同表）
     host_ctx.permission.grant_permissions(
-        "com.bedcode.session",
+        "com.bedcode.terminal-session",
         &[
             "auth",
             "peer",
@@ -241,7 +241,7 @@ fn test_session_task_domain_closed_loop() {
         .collect::<Vec<_>>(),
     );
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
         .expect("load wasip3 session");
     assert_eq!(plugin.activate().expect("activate"), 0);
 
@@ -367,8 +367,8 @@ fn test_session_task_domain_closed_loop() {
                 None,
                 false,
                 None,
-                // 票 04：属主登记——本用例的会话由 com.bedcode.session 实例注解/操作
-                Some("com.bedcode.session"),
+                // 票 04：属主登记——本用例的会话由 com.bedcode.terminal-session 实例注解/操作
+                Some("com.bedcode.terminal-session"),
             )
             .await
             .expect("create session from spec");
@@ -471,14 +471,14 @@ fn test_session_task_http_and_scheduled_closed_loop() {
     const NOW_PAST_GRACE: &str = "2026-09-20 01:00:00";
 
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
     }
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     host_ctx.permission.grant_permissions(
-        "com.bedcode.session",
+        "com.bedcode.terminal-session",
         &[
             "auth",
             "peer",
@@ -500,7 +500,7 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         .collect::<Vec<_>>(),
     );
     let mut plugin = wasm_runtime
-        .load_plugin_from_file(&wasm_path, "com.bedcode.session", Arc::clone(&host_ctx), &[], None)
+        .load_plugin_from_file(&wasm_path, "com.bedcode.terminal-session", Arc::clone(&host_ctx), &[], None)
         .expect("load wasip3 session");
     assert_eq!(plugin.activate().expect("activate"), 0);
 
@@ -616,7 +616,7 @@ fn test_session_task_http_and_scheduled_closed_loop() {
         prompts_json: &str,
         session_id: Option<&str>,
     ) -> String {
-        let db_path = plugin_db_root().join("com.bedcode.session").join("plugin.db");
+        let db_path = plugin_db_root().join("com.bedcode.terminal-session").join("plugin.db");
         let job_id = if id.is_empty() {
             format!(
                 "probe-{}-{}-{}",
@@ -893,7 +893,7 @@ fn test_session_trust_and_consent_api_closed_loop() {
     let session_id = bridge::SESSION_PLUGIN_ID;
 
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -1266,8 +1266,8 @@ fn test_host_auth_record_face_closed_loop() {
 fn test_session_config_api_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    const PROBE_ID: &str = "com.bedcode.session-config-probe";
-    const DENIED_ID: &str = "com.bedcode.session-config-probe-denied";
+    const PROBE_ID: &str = "com.bedcode.terminal-session-config-probe";
+    const DENIED_ID: &str = "com.bedcode.terminal-session-config-probe-denied";
 
     let (wasm_runtime, host_ctx) = setup_wasm_runtime();
     let probe_component = wasm_runtime
@@ -1403,10 +1403,10 @@ fn test_session_config_api_closed_loop() {
 
 fn test_session_config_private_store_closed_loop() {
     let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let session_api_list = session_apis();
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -1584,10 +1584,10 @@ fn test_session_config_private_store_closed_loop() {
 
 fn test_business_endpoints_dual_track_closed_loop() {
     let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let session_api_list = session_apis();
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -2012,9 +2012,9 @@ fn test_business_endpoints_dual_track_closed_loop() {
 fn test_session_create_with_spec_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -2160,9 +2160,9 @@ fn test_session_actions_closed_loop() {
     use crate::session::session_lifecycle::{SessionLifecycleEvent, SessionLifecycleListener};
     use crate::session::RendererSource;
 
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -2484,9 +2484,9 @@ fn test_session_actions_closed_loop() {
 fn test_session_annotate_and_devices_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;
@@ -2697,7 +2697,7 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
     let ft_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../resources/plugins/desktop/com.bedcode.file-transfer/bedcode_plugin_file_transfer.wasm");
     let center_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !ft_path.exists() || !center_path.exists() {
         eprintln!("[skip] file-transfer / session wasip3 artifacts not built");
         return;
@@ -2997,9 +2997,9 @@ fn test_filetransfer_consumes_session_center_closed_loop() {
 fn test_session_output_ring_fetch_closed_loop() {
     // 会话插件私有库是进程级共享路径：与其它会话闭环用例串行（见锁文档）
     let _serial = session_plugin_db_guard();
-    const SESSION_ID: &str = "com.bedcode.session";
+    const SESSION_ID: &str = "com.bedcode.terminal-session";
     let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../resources/plugins/desktop/com.bedcode.session/bedcode_plugin_session.wasm");
+        .join("../resources/plugins/desktop/com.bedcode.terminal-session/bedcode_plugin_terminal_session.wasm");
     if !wasm_path.exists() {
         eprintln!("[skip] session wasip3 artifact not built");
         return;

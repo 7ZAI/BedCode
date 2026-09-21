@@ -6,7 +6,7 @@
  * 两条通道的契约：
  * 1. 引擎事实/渲染管道 —— 宿主命令面直连（`list_sessions` / `write_to_session` /
  *    `send_special_key` / `resize_session`）
- * 2. 业务动作 —— 经 `com.bedcode.session` 插件命令面（`plugin_invoke` 转发）：
+ * 2. 业务动作 —— 经 `com.bedcode.terminal-session` 插件命令面（`plugin_invoke` 转发）：
  *    `session.close`（停止）、`session.config.list`（读配置真源）
  *
  * | 契约ID | 来源 | 行为/规则 | 前置 | 输入 | 预期 | 副作用 | 错误 |
@@ -33,7 +33,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 }))
 
 /** 会话中心插件 ID（断言 plugin_invoke 转发的目标） */
-const SESSION_PLUGIN_ID = 'com.bedcode.session'
+const SESSION_PLUGIN_ID = 'com.bedcode.terminal-session'
 
 /** 某命令的全部调用参数（去掉命令名本身） */
 function argsOf(cmd: string): unknown[] {

@@ -45,7 +45,7 @@ use crate::server::middleware::jwt_auth::get_claims_from_request;
 use crate::system::app_context::AppContext;
 
 /// session 插件 id（配置 / 快捷指令 / 文件浏览 / git 四域的接管方）
-const SESSION_PLUGIN: &str = "com.bedcode.session";
+const SESSION_PLUGIN: &str = "com.bedcode.terminal-session";
 
 // ==================== 业务 URL 别名路由表 ====================
 
@@ -671,7 +671,7 @@ mod tests {
     /// 把业务路由指向不存在/不该存在的实现（用户故事 12：一条别名 = 一个归属声明）。
     #[test]
     fn every_alias_declares_a_business_plugin_owner() {
-        const BUSINESS_PLUGINS: &[&str] = &["com.bedcode.session", "com.bedcode.file-transfer"];
+        const BUSINESS_PLUGINS: &[&str] = &["com.bedcode.terminal-session", "com.bedcode.file-transfer"];
         for r in BUSINESS_ROUTES {
             assert!(
                 BUSINESS_PLUGINS.contains(&r.plugin_id),
@@ -828,7 +828,7 @@ mod tests {
                 r,
                 true,
                 true,
-                &["/api/plugin/com.bedcode.session/task-status".to_string()]
+                &["/api/plugin/com.bedcode.terminal-session/task-status".to_string()]
             ),
             GatewayDecision::HostFallback
         );
@@ -897,7 +897,7 @@ mod tests {
             json,
             serde_json::json!({
                 "code": CODE_PLUGIN_AUTH_FAILED,
-                "message": "Plugin com.bedcode.session is not activated",
+                "message": "Plugin com.bedcode.terminal-session is not activated",
             })
         );
     }
