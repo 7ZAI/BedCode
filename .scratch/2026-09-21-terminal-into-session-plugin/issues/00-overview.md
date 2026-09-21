@@ -58,6 +58,34 @@ inlinePluginCss/injectStyle 自带；产物体积核查。
 **前置**：Blocked by 票 01-04（插件侧完整接管后宿主才可摘除）。
 **验收**：禁用插件后终端不可用且不破宿主；启用后全功能一致。
 
+**状态：✅ done（2026-09-22，票 05 提交）**：
+- **宿主前端摘除**：`TerminalPreview.vue` / `TerminalWindowView.vue`（旧壳）/
+  `composables/terminal/*`（6）/ `utils/terminal*`（7，仅留 `terminalInitialSize`——
+  `context.session.predictTerminalSize` 依赖的窗口几何原语）/ `useTerminalOutputStreamChannel.ts` /
+  `PluginTerminalToolbar.vue`（宿主渲染件，插件已复刻）整体删除；
+- **attachSink 契约收口**：插件 `terminalHostCapabilities.ts` 与宿主
+  `terminal-host-capabilities-contract.ts` 同步移除 `output.attachSink` 字段与
+  `TerminalOutputSink` 类型；`TerminalWindowHostView.vue` 撤输出桥（provide 只剩
+  settings/bgImage/extensions 三面）；输出唯一路径 = 插件命令面 `session.output.pull`
+  （→ `host-session.output-ring-fetch` 原语）；
+- **禁用插件 → 显性报错**：`context.session` 的 `openTerminal / closeTerminal /
+  isTerminalOpen` 过激活门禁（`registry.isContributionActive('com.bedcode.session')`，
+  停用/Error 时 throw 显性错误），宿主不留降级终端代办；测试 C7 锁定；
+- **宿主 Rust 输出命令面摘除**：`commands/terminal_stream.rs`（subscribe_terminal_channel /
+  unsubscribe_terminal_channel / terminal_channel_ack）删除 + 注册点清理（lib.rs / commands.rs），
+  宿主不留降级输出传输；
+- **测试迁移**：7 个宿主纯逻辑测试（terminalDimensions / ImeStateMachine / LinuxImeGuard /
+  RendererPolicy / ResizeDebouncer / ResizePolicy / Scrollback）迁入插件
+  `plugins/session/src/__tests__/`；删宿主 terminal-flow 集成测试（被测 Channel 传输已摘除，
+  行为由插件 terminalPreview.test.ts 覆盖）——迁移暴露真实 bug：
+  `getXtermScaledDimensions` 未钳位 NaN/≤0 dpr（原宿主测试靠缺容器字段的退化入参误过），
+  已修复入 `terminalDimensions.ts` 守卫；
+- 验证：宿主 vitest 75 文件 735 全绿；插件 vitest 同批全绿；eslint 0 error
+  （120 warning，较 125 基线减 5）；`cargo check --lib` 干净。
+  ⚠ Rust 全量测试暂红（1103 过 / 10 败）：全部 10 个失败属并发在途的
+  wasm-core-audit 票线改动（bus topic ACL / pty topic 形状漂移，正在推进中），
+  与票 05 改动无交集（票 05 只删 terminal_stream 命令面，无残留引用）；等待该线落地后复验。
+
 ## 票 06 · B1 插件 id 改名全链
 
 **范围**：目录 `plugins/session/` → `plugins/terminal-session/`；plugin.json id/name/

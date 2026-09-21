@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { shouldApplyGridResize, RESIZE_GRID_TOLERANCE, ATLAS_PREHEAT_DELAY_MS } from '@/utils/terminalResizePolicy'
+import { shouldApplyGridResize, RESIZE_GRID_TOLERANCE, ATLAS_PREHEAT_DELAY_MS } from '../utils/terminal/terminalResizePolicy'
 
 describe('shouldApplyGridResize', () => {
   it('完全一致：不触发', () => {

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { TerminalResizeDebouncer } from '@/utils/terminalResizeDebouncer'
+import { TerminalResizeDebouncer } from '../utils/terminal/terminalResizeDebouncer'
 
 describe('TerminalResizeDebouncer', () => {
   beforeEach(() => {

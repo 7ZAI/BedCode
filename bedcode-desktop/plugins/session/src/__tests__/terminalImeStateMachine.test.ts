@@ -11,7 +11,7 @@ import {
   TerminalImeStateMachine,
   IME_COMMIT_GRACE_MS,
   IME_DEDUP_WINDOW_MS,
-} from '@/utils/terminalImeStateMachine'
+} from '../utils/terminal/terminalImeStateMachine'
 
 /** 假时钟：测试内手动推进时间 */
 function makeMachine() {

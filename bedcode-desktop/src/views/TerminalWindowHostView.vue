@@ -7,41 +7,38 @@
 
 <script setup lang="ts">
 /**
- * 终端窗口宿主壳（票 03a）— 宿主 /terminal-window/:id 路由组件
+ * 终端窗口宿主壳（票 03a；票 05 收口）— 宿主 /terminal-window/:id 路由组件
  *
  * 终端窗口内容已整体下沉 session 插件（方案 1）：本组件只做两件事——
  * 1. 把「终端宿主能力」注入插件视图（settings accessor / 背景图命令桥 /
- *    输出流桥 / 插件扩展点 registry），经 provide 传给 PluginViewHost 渲染的
+ *    插件扩展点 registry），经 provide 传给 PluginViewHost 渲染的
  *    插件 `session.terminal-window` 视图；
  * 2. 渲染 PluginViewHost（插件视图宿主，视图组件注册在插件 activate）。
  *
  * 能力桥设计（ADR 0022 裁剪线）：终端渲染/写入/IME 下沉插件，但宿主存储面
- * （settingsStore 持久化、set_terminal_bg_image 文件复制命令）与输出流
- * （Tauri Channel 订阅）属宿主引擎原语，经注入桥接——与 context.session
- * .openTerminal 原语同构（宿主留原语，插件持编排）。输出流桥在票 04（WIT
- * 二进制原语）落地后撤除，插件 WASM 直接拉会话 ring。
+ * （settingsStore 持久化、set_terminal_bg_image 文件复制命令）属宿主引擎
+ * 原语，经注入桥接——与 context.session.openTerminal 原语同构（宿主留原语，
+ * 插件持编排）。输出面不设桥（票 05 摘除）：输出改经插件 WASM 命令面
+ * `session.output.pull` 轮询拉取 `host-session.output-ring-fetch` 原语，
+ * 插件前端不依赖宿主注入；`sessionId` 由插件视图经路由参数自取。
  *
  * 注入契约类型真源：`plugins/session/src/components/terminal/
  * terminalHostCapabilities.ts`（宿主不 import 插件，就地定义同构结构）。
  */
 import { provide, reactive, computed } from 'vue'
-import { useRoute } from 'vue-router'
 import { open } from '@tauri-apps/plugin-dialog'
 import { invoke } from '@tauri-apps/api/core'
 import PluginViewHost from '@/plugin/components/PluginViewHost.vue'
 import { getPluginRegistry } from '@/plugin/registry'
 import { useSettingsStore } from '@/stores/settings'
-import { useTerminalOutputStreamChannel, type OutputStreamFrame } from '@/composables/useTerminalOutputStreamChannel'
 import { logger } from '@/utils/frontendLogger'
 import { TERMINAL_HOST_CAPABILITIES_KEY } from '@/plugin/terminal-host-capabilities-contract'
-import type { TerminalSettingsAccessor, TerminalOutputSink } from '@/plugin/terminal-host-capabilities-contract'
+import type { TerminalSettingsAccessor } from '@/plugin/terminal-host-capabilities-contract'
 
 // 会话插件常量（与 plugins/session/plugin.json 一致；插件 id 改名票 06 集中化）
 const SESSION_PLUGIN_ID = 'com.bedcode.session'
 const SESSION_TERMINAL_WINDOW_VIEW_ID = 'session.terminal-window'
 
-const route = useRoute()
-const sessionId = computed(() => (route.params.id as string) || '')
 const settingsStore = useSettingsStore()
 const registry = getPluginRegistry()
 
@@ -121,23 +118,6 @@ const bgImageBridge = reactive({
   hasImage: computed(() => !!settingsStore.settings.ui.terminal_bg_image),
 })
 
-// ==================== 输出流桥（Tauri Channel → 插件写入管线；票 04 撤桥） ====================
-
-/**
- * 接入插件写入管线的输出源 sink：订阅宿主 Channel（Raw 字节帧已过游标校验/去重），
- * 三回调直接映射到插件 sink；返回断开函数（stop 订阅）。
- */
-function attachOutputSink(sink: TerminalOutputSink): () => void {
-  const stream = useTerminalOutputStreamChannel({
-    onData: (frame: OutputStreamFrame) => sink.onData({ data: frame.data }),
-    onReset: () => sink.onReset(),
-    onTruncated: (minOffset: number) => sink.onTruncated(minOffset),
-  })
-  stream.start(sessionId.value)
-  stream.subscribe()
-  return () => stream.stop()
-}
-
 // ==================== 注入 ====================
 
 // 插件扩展点：宿主 registry 响应式数组直接注入（插件壳复刻渲染按钮；
@@ -145,9 +125,6 @@ function attachOutputSink(sink: TerminalOutputSink): () => void {
 provide(TERMINAL_HOST_CAPABILITIES_KEY, {
   settings,
   bgImage: bgImageBridge,
-  output: {
-    attachSink: attachOutputSink,
-  },
   extensions: {
     terminalToolbarItems: registry.terminalToolbarItems,
     titleBarItems: registry.titleBarItems,

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { TERMINAL_SCROLLBACK } from '@/utils/terminalScrollback'
+import { TERMINAL_SCROLLBACK } from '../utils/terminal/terminalScrollback'
 
 /**
  * 回归测试：终端可滚动历史行数

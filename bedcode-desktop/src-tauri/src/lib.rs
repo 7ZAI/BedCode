@@ -634,10 +634,11 @@ pub fn run() {
             // PTY Input
             commands::pty_input::write_to_session,
             commands::pty_input::send_special_key,
-            // 终端输出流 Channel 传输（与 WS 环回并行的替代方案，见 commands/terminal_stream.rs）
-            commands::terminal_stream::subscribe_terminal_channel,
-            commands::terminal_stream::unsubscribe_terminal_channel,
-            commands::terminal_stream::terminal_channel_ack,
+            // 终端输出面（票 05 摘除）：旧 Channel 传输命令
+            // （subscribe_terminal_channel / unsubscribe_terminal_channel /
+            // terminal_channel_ack，commands/terminal_stream.rs）已随宿主前端
+            // 消费方摘除——插件输出改经 host-session.output-ring-fetch 原语
+            // （插件命令面 session.output.pull）拉取，宿主不留降级输出传输
             // 配对 / QR / 连接历史命令面已注销：产品面归 com.bedcode.session 插件的
             // session.pairing.* / session.qr.* / session.devices.* / session.history.*
             // （凭据签发与 `pairings` 表仍在内核 auth 模块，宿主只留原语与记录面；

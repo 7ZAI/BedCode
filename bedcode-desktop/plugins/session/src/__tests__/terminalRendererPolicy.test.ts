@@ -14,7 +14,7 @@ import {
   decideRenderer,
   decideAtlasRefreshFrames,
   ATLAS_PREHEAT_FRAME_BUDGET,
-} from '@/utils/terminalRendererPolicy'
+} from '../utils/terminal/terminalRendererPolicy'
 
 /**
  * 期望表：每个元素为 [isLinux, hasBackgroundImage, linuxUseDomRenderer, useDom, useWebgl, allowTransparency]。

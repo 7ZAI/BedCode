@@ -7,22 +7,22 @@
  * 以本文件的导出为真源）。
  *
  * 设计边界（方案 1 + ADR 0022 裁剪线）：终端渲染/写入/IME 已整体下沉插件，
- * 但三块宿主存储/框架面不随之下沉，经注入桥接（与 context.session.openTerminal
+ * 但两块宿主存储/框架面不随之下沉，经注入桥接（与 context.session.openTerminal
  * 原语同构——宿主留引擎原语，插件持编排）：
  * - 终端设置持久化（宿主 settingsStore，terminal_* 字段）——TerminalSettingsAccessor
  * - 背景图文件命令（宿主 set_terminal_bg_image 复制文件 + 设置持久化）
- * - 输出流（票 04 起插件已撤桥：输出改经插件 WASM 命令面轮询拉取
- *   `host-session.output-ring-fetch` 原语，WIT list<u8> 二进制直传；本字段为票 05
- *   宿主摘除前的兼容残留，插件不再调用 attachSink）
  * - 插件扩展点（宿主 registry 响应式数组；壳复刻渲染宿主 Plugin*Toolbar 组件
  *   的等效按钮）
  *
+ * 输出面不在此列（票 05 契约收口）：输出改经插件 WASM 命令面轮询拉取
+ * `host-session.output-ring-fetch` 原语（WIT list<u8> 二进制直传，不 JSON 化），
+ * 宿主 Channel 桥（attachSink）已于票 05 整体摘除。
+ *
  * dev-shell / vitest 无宿主注入时由 createFallbackHostCapabilities() 提供内存版
- * （settings 存内存、output no-op、扩展点空数组），保证组件可独立渲染测试。
+ * （settings 存内存、扩展点空数组），保证组件可独立渲染测试。
  */
 import { inject, ref, type Ref } from 'vue'
 import type { TerminalSettingsAccessor } from '../../composables/terminal/useTerminalSettingsSync'
-import type { TerminalOutputSink } from '../../composables/terminal/useTerminalWritePipeline'
 
 /** 插件扩展点项（宿主 registry Registered*ToolbarItem 的结构镜像，真源在宿主） */
 export interface TerminalExtensionItem {
@@ -51,14 +51,6 @@ export interface TerminalHostCapabilities {
     /** 是否已启用背景图片 */
     hasImage: boolean
   }
-  /**
-   * 输出流桥（票 04 起插件不再调用——输出改经插件 WASM 命令面轮询拉取
-   * `host-session.output-ring-fetch` 原语；字段保留至票 05 宿主摘除）
-   */
-  output: {
-    /** 接入输出源：订阅宿主 Channel，三回调映射到 sink；返回断开函数 */
-    attachSink(sink: TerminalOutputSink): () => void
-  }
   /** 插件扩展点（宿主 registry 响应式数组，壳复刻渲染） */
   extensions: {
     terminalToolbarItems: Ref<TerminalExtensionItem[]>
@@ -75,7 +67,7 @@ export function useTerminalHostCapabilities(): TerminalHostCapabilities | null {
   return inject<TerminalHostCapabilities | null>(TERMINAL_HOST_CAPABILITIES_KEY, null)
 }
 
-/** dev-shell / vitest 回退：内存版 settings + no-op 输出桥 + 空扩展点 */
+/** dev-shell / vitest 回退：内存版 settings + 空扩展点 */
 export function createFallbackHostCapabilities(): TerminalHostCapabilities {
   let fontSize = 12
   let theme = 'dracula'
@@ -102,9 +94,6 @@ export function createFallbackHostCapabilities(): TerminalHostCapabilities {
       remove: async () => {},
       imageName: '',
       hasImage: false,
-    },
-    output: {
-      attachSink: () => () => {},
     },
     extensions: {
       terminalToolbarItems: ref([]),

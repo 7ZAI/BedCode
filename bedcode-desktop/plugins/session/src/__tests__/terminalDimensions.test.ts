@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { getXtermScaledDimensions } from '@/utils/terminalDimensions'
+import { getXtermScaledDimensions } from '../utils/terminal/terminalDimensions'
 
 const W = 800
 const H = 600
@@ -74,7 +74,9 @@ describe('getXtermScaledDimensions', () => {
   })
 
   it('退化入参（0/负/非有限）兜底返回 {1,1}', () => {
-    const base = { ...CELL, devicePixelRatio: 1 }
+    // base 含全部必填字段，逐字段覆写为退化值（宿主侧同款测试的类型修正：
+    // 缺 container 字段的 spread 不够类型，行为不变）
+    const base = { ...CELL, devicePixelRatio: 1, containerWidthCss: W, containerHeightCss: H }
     expect(getXtermScaledDimensions({ ...base, containerWidthCss: 0 })).toEqual({ cols: 1, rows: 1 })
     expect(getXtermScaledDimensions({ ...base, containerHeightCss: -10 })).toEqual({
       cols: 1,

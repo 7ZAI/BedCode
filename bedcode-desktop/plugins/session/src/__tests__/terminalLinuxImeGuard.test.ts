@@ -16,7 +16,7 @@
  */
 import { describe, it, expect, afterEach } from 'vitest'
 import { Terminal } from '@xterm/xterm'
-import { attachLinuxImeGuard, type LinuxImeGuard } from '@/utils/terminalLinuxImeGuard'
+import { attachLinuxImeGuard, type LinuxImeGuard } from '../utils/terminal/terminalLinuxImeGuard'
 
 // ==================== 测试基建 ====================
 

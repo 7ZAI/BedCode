@@ -43,10 +43,12 @@ export function getXtermScaledDimensions(
     !isFinite(containerHeightCss) ||
     !isFinite(cellWidthCss) ||
     !isFinite(cellHeightCss) ||
+    !isFinite(devicePixelRatio) ||
     containerWidthCss <= 0 ||
     containerHeightCss <= 0 ||
     cellWidthCss <= 0 ||
-    cellHeightCss <= 0
+    cellHeightCss <= 0 ||
+    devicePixelRatio <= 0
   ) {
     return { cols: 1, rows: 1 }
   }

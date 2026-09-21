@@ -82,7 +82,7 @@ function makeSettings(overrides?: Partial<TerminalSettingsAccessor>): TerminalSe
   return accessor
 }
 
-/** mock caps：output 桥字段保留（契约兼容至票 05），断言目标转为 pull 命令 */
+/** mock caps：设置/背景图/扩展点三桥 + 输出拉取走命令面（票 05 契约无 output 桥） */
 function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCapabilities {
   const settings = makeSettings()
   return {
@@ -93,7 +93,6 @@ function makeCaps(overrides?: Partial<TerminalHostCapabilities>): TerminalHostCa
       imageName: '',
       hasImage: false,
     },
-    output: { attachSink: vi.fn(() => vi.fn()) },
     extensions: {
       terminalToolbarItems: { value: [] } as never,
       titleBarItems: { value: [] } as never,
@@ -219,8 +218,7 @@ describe('TerminalPreview（插件版组装）', () => {
     const context = await mountRunning()
     // 真实 xterm 已挂载进容器（.xterm 元素存在）
     expect(wrapper!.element.querySelector('.xterm')).toBeTruthy()
-    // 轮询经插件命令面拉取（票 04 撤宿主 Channel 桥：不再经 caps.output.attachSink）
-    expect(vi.mocked(caps.output.attachSink)).not.toHaveBeenCalled()
+    // 轮询经插件命令面拉取（票 04 撤宿主 Channel 桥：无 caps.output，断言 pull 命令）
     expect(context.commands.execute).toHaveBeenCalledWith(
       'session.output.pull',
       expect.objectContaining({ sessionId: 'sess-1', fromOffset: 0 }),

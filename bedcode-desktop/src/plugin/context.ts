@@ -40,6 +40,21 @@ import { openGlobalDialog } from '../../packages/plugin-sdk-desktop/src/global-d
 // 其余三个方法沿用同一单例（模块级 windows Map，与宿主会话页共享状态）
 import { useSessionWindows } from '@/composables/useSessionWindows'
 
+/**
+ * 会话中心插件 ID（终端窗口视图由该插件贡献；票 05 起宿主不留终端兜底）。
+ * 改名票 06 将集中化宿主侧插件常量，此处与 TerminalWindowHostView 同值先行。
+ */
+const SESSION_PLUGIN_ID = 'com.bedcode.session'
+
+/** 终端窗口域激活门禁：session 插件停用 / Error 后终端视图不可渲染，宿主不再
+ *  降级代办——`openTerminal` / `closeTerminal` / `isTerminalOpen` 显性报错
+ *  （同配对 / QR 退役后模式：插件未激活时宿主命令面显性报错，不做静默兜底）。 */
+function requireSessionPluginActive(): void {
+  if (!getPluginRegistry().isContributionActive(SESSION_PLUGIN_ID)) {
+    throw new Error(`session plugin ${SESSION_PLUGIN_ID} is not active`)
+  }
+}
+
 /** 创建插件的 PluginContext */
 export function createPluginContext(info: PluginInfo): PluginContext {
   const disposables: Disposable[] = []
@@ -140,14 +155,17 @@ export function createPluginContext(info: PluginInfo): PluginContext {
     },
     async openTerminal(target: { id: string; name: string }): Promise<boolean> {
       requirePermission('session.openTerminal')
+      requireSessionPluginActive()
       return useSessionWindows().openTerminalWindow(target)
     },
     async closeTerminal(sessionId: string): Promise<void> {
       requirePermission('session.closeTerminal')
+      requireSessionPluginActive()
       await useSessionWindows().closeTerminalWindow(sessionId)
     },
     isTerminalOpen(sessionId: string): boolean {
       requirePermission('session.isTerminalOpen')
+      requireSessionPluginActive()
       // 同步查询：调用方（插件会话页）在打开窗口前决定是否显示就绪 loading，
       // 与宿主会话页原行为同口径
       return useSessionWindows().hasTerminalWindow(sessionId)
