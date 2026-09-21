@@ -296,7 +296,7 @@ impl ServerSupervisor {
     /// 获取服务器状态信息
     pub async fn get_status_info(&self) -> ServerStatusInfo {
         let inner = self.inner.read().await;
-        let local_ips = crate::commands::system::get_local_ip_addresses();
+        let local_ips = crate::system::info::local_ipv4_addresses();
         let uptime_secs = inner.start_time.map(|t| t.elapsed().as_secs());
         ServerStatusInfo {
             status: inner.status.clone(),

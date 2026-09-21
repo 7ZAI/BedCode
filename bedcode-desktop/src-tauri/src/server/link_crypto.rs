@@ -1435,7 +1435,10 @@ mod tests {
         sync_registration();
         let after = global.list_names().len();
         // 幂等：三次同步后节点数相对基线仅增加 1（首次注册），不重复累积
-        assert!(after <= before + 1, "重复 sync_registration 不得累积重复节点: {before} -> {after}");
+        assert!(
+            after <= before + 1,
+            "重复 sync_registration 不得累积重复节点: {before} -> {after}"
+        );
         sync_registration();
         update_config(original);
     }
@@ -1536,7 +1539,10 @@ mod tests {
             store_http_keys("cap-peer", &format!("EK{i:04}"), keys.clone());
         }
         let size = HTTP_KEY_CACHE.lock().unwrap().len();
-        assert!(size <= HTTP_KEY_CACHE_MAX, "容量护栏失效: {size} > {HTTP_KEY_CACHE_MAX}");
+        assert!(
+            size <= HTTP_KEY_CACHE_MAX,
+            "容量护栏失效: {size} > {HTTP_KEY_CACHE_MAX}"
+        );
         // 最早写入的条目应已被逐出，最新条目可命中
         assert_eq!(take_http_keys("cap-peer", "EK0000"), None, "最早项应被逐出");
         let last = format!("EK{:04}", HTTP_KEY_CACHE_MAX + 7);
@@ -1576,7 +1582,10 @@ mod tests {
         store_http_keys("sweep-peer", "FRESH==", keys);
         {
             let mut map = HTTP_KEY_CACHE.lock().unwrap();
-            assert!(!map.contains_key(&cache_key("sweep-peer", "STALE==")), "过期条目应在 store 时被清扫");
+            assert!(
+                !map.contains_key(&cache_key("sweep-peer", "STALE==")),
+                "过期条目应在 store 时被清扫"
+            );
             assert!(map.contains_key(&cache_key("sweep-peer", "FRESH==")), "新条目应保留");
             // 只清理本测试写入的 key（全表 clear 会污染并行测试，票据 14 同类问题）
             map.remove(&cache_key("sweep-peer", "STALE=="));

@@ -356,15 +356,7 @@ mod tests {
 
     fn test_endpoint(seed: &str, auth: EndpointAuth) -> EndpointEntry {
         let owner = format!("test-plugin-channel-{seed}");
-        register(
-            &owner,
-            "echo",
-            auth,
-            None,
-            None,
-            Arc::new(MessageBus::new()),
-        )
-        .expect("register endpoint")
+        register(&owner, "echo", auth, None, None, Arc::new(MessageBus::new())).expect("register endpoint")
     }
 
     fn addr(port: u16) -> SocketAddr {

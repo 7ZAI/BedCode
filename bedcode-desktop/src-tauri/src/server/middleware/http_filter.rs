@@ -439,11 +439,10 @@ mod tests {
         chain.clear();
         chain.register(std::sync::Arc::new(RejectAllFilter));
 
-        let app = test::init_service(
-            App::new().wrap(TrafficFilter).route("/ws/terminal", web::get().to(|| async {
-                HttpResponse::Ok().body("ws-upgrade-stub")
-            })),
-        )
+        let app = test::init_service(App::new().wrap(TrafficFilter).route(
+            "/ws/terminal",
+            web::get().to(|| async { HttpResponse::Ok().body("ws-upgrade-stub") }),
+        ))
         .await;
         let req = test::TestRequest::get().uri("/ws/terminal").to_request();
         let res = test::call_service(&app, req).await;

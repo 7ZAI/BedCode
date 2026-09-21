@@ -1455,15 +1455,24 @@ mod tests {
                 },
                 None,
             ),
-            Message::session_control(SessionControlAction::StartSession {
-                config_id: "cfg-1".to_string(),
-            }, None),
-            Message::session_control(SessionControlAction::StopSession {
-                session_id: "s".to_string(),
-            }, None),
-            Message::session_control(SessionControlAction::RemoveSession {
-                session_id: "s".to_string(),
-            }, None),
+            Message::session_control(
+                SessionControlAction::StartSession {
+                    config_id: "cfg-1".to_string(),
+                },
+                None,
+            ),
+            Message::session_control(
+                SessionControlAction::StopSession {
+                    session_id: "s".to_string(),
+                },
+                None,
+            ),
+            Message::session_control(
+                SessionControlAction::RemoveSession {
+                    session_id: "s".to_string(),
+                },
+                None,
+            ),
             Message::session_control(
                 SessionControlAction::SessionChanged {
                     change_type: "created".to_string(),

@@ -110,8 +110,7 @@ struct MetricsInner {
 impl MetricsCollector {
     /// 获取全局单例
     pub fn global() -> &'static Self {
-        static INSTANCE: std::sync::LazyLock<MetricsCollector> =
-            std::sync::LazyLock::new(MetricsCollector::new);
+        static INSTANCE: std::sync::LazyLock<MetricsCollector> = std::sync::LazyLock::new(MetricsCollector::new);
         &INSTANCE
     }
 

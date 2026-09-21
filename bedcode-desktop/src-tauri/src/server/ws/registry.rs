@@ -428,7 +428,9 @@ impl WsSessionRegistry {
     /// 返回被回收的 client_id 列表。属主隔离依据 `owner` 字段：终端 / 事件通道
     /// （`owner = None`）与他人条目一律不受影响
     pub async fn purge_for_plugin(&self, owner: &str, close_code: u16, reason: &str) -> Vec<String> {
-        let removed = self.take_matching(|_, entry| entry.owner.as_deref() == Some(owner)).await;
+        let removed = self
+            .take_matching(|_, entry| entry.owner.as_deref() == Some(owner))
+            .await;
         let client_ids: Vec<String> = removed.iter().map(|(client_id, _, _)| client_id.clone()).collect();
         self.close_removed(removed, close_code, reason);
         if !client_ids.is_empty() {
@@ -1102,7 +1104,9 @@ mod tests {
         );
         // 幂等：再次调用命中 0（条目已摘除）
         assert_eq!(
-            registry.disconnect_all_endpoint_clients(1001, "server shutting down").await,
+            registry
+                .disconnect_all_endpoint_clients(1001, "server shutting down")
+                .await,
             0
         );
     }

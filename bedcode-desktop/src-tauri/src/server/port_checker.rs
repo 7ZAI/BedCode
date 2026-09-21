@@ -119,10 +119,7 @@ mod tests {
     fn occupied_port_reported_unavailable() {
         // 真实占用端口后，is_port_available 必须返回 false（票据 13）
         let (listener, port) = bind_ephemeral();
-        assert!(
-            !is_port_available(port),
-            "被占用的端口 {port} 应报告不可用"
-        );
+        assert!(!is_port_available(port), "被占用的端口 {port} 应报告不可用");
         drop(listener);
     }
 

@@ -529,9 +529,10 @@ impl WsConnBase {
         // 更新配对设备的 last_seen 和 connect_count，并同步设备展示名
         // （重连携带真实设备名时刷新历史记录，避免旧名残留；空串视为未上报，保留原值）
         let fingerprint = claims.fingerprint.clone();
-        let display_name = claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
-            crate::utils::auth::auth_center::format_device_display_name(n, &self.session.addr.to_string())
-        });
+        let display_name =
+            claims.device_name.as_deref().filter(|n| !n.trim().is_empty()).map(|n| {
+                crate::utils::auth::auth_center::format_device_display_name(n, &self.session.addr.to_string())
+            });
         actix::spawn(async move {
             if let Some(fp) = fingerprint {
                 let app_ctx = AppContext::global();
@@ -787,10 +788,7 @@ impl StreamHandler<Result<WsMessage, ProtocolError>> for WsConnBase {
                 // 记录对端主动关闭（通道在 on_close 中据此判定 wasClean，spec D11）
                 self.close_outcome = Some(CloseOutcome {
                     code: reason.as_ref().map(|r| u16::from(r.code)),
-                    reason: reason
-                        .as_ref()
-                        .and_then(|r| r.description.clone())
-                        .unwrap_or_default(),
+                    reason: reason.as_ref().and_then(|r| r.description.clone()).unwrap_or_default(),
                     peer_initiated: true,
                 });
                 ctx.close(reason);

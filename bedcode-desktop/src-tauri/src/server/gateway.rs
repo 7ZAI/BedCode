@@ -597,13 +597,7 @@ mod tests {
                     &["POST"][..],
                     "auth"
                 ),
-                (
-                    "/api/auth/verify",
-                    SESSION_PLUGIN,
-                    "auth/verify",
-                    &["POST"][..],
-                    "auth"
-                ),
+                ("/api/auth/verify", SESSION_PLUGIN, "auth/verify", &["POST"][..], "auth"),
                 (
                     "/api/auth/qr-connect",
                     SESSION_PLUGIN,
@@ -611,13 +605,7 @@ mod tests {
                     &["POST"][..],
                     "auth"
                 ),
-                (
-                    "/api/auth/reauth",
-                    SESSION_PLUGIN,
-                    "auth/reauth",
-                    &["POST"][..],
-                    "auth"
-                ),
+                ("/api/auth/reauth", SESSION_PLUGIN, "auth/reauth", &["POST"][..], "auth"),
                 (
                     "/api/auth/biometric-challenge",
                     SESSION_PLUGIN,

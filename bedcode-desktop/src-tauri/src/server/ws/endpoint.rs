@@ -150,7 +150,9 @@ pub fn register(
         path: path.to_string(),
         mount_path: mount.clone(),
         auth,
-        max_clients: max_clients.unwrap_or(PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT).clamp(1, PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT),
+        max_clients: max_clients
+            .unwrap_or(PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT)
+            .clamp(1, PLUGIN_WS_MAX_CLIENTS_PER_ENDPOINT),
         max_message_bytes: max_message_bytes.map_or(host_limit, |v| v.clamp(1, host_limit)),
         bus,
     };
@@ -187,12 +189,7 @@ pub fn is_owner(endpoint_id: &str, owner: &str) -> bool {
 
 /// 本插件的端点清单（`list-endpoints` 数据源）
 pub fn list_by_owner(owner: &str) -> Vec<EndpointEntry> {
-    let mut entries: Vec<EndpointEntry> = lock()
-        .by_id
-        .values()
-        .filter(|e| e.owner == owner)
-        .cloned()
-        .collect();
+    let mut entries: Vec<EndpointEntry> = lock().by_id.values().filter(|e| e.owner == owner).cloned().collect();
     // 稳定顺序（按挂载路径升序）：清单输出可预测，便于插件与测试断言
     entries.sort_by(|a, b| a.mount_path.cmp(&b.mount_path));
     entries
@@ -245,14 +242,7 @@ mod tests {
     }
 
     fn register_path(owner: &str, path: &str) -> Result<EndpointEntry, String> {
-        register(
-            owner,
-            path,
-            EndpointAuth::None,
-            None,
-            None,
-            Arc::new(MessageBus::new()),
-        )
+        register(owner, path, EndpointAuth::None, None, None, Arc::new(MessageBus::new()))
     }
 
     #[test]
@@ -370,10 +360,7 @@ mod tests {
         assert_eq!(purged.len(), 1);
         assert_eq!(purged[0].endpoint_id, victim_entry.endpoint_id);
         assert!(find_by_mount(&victim_entry.mount_path).is_none(), "本人端点已摘除");
-        assert!(
-            find_by_mount(&bystander_entry.mount_path).is_some(),
-            "他人端点不受影响"
-        );
+        assert!(find_by_mount(&bystander_entry.mount_path).is_some(), "他人端点不受影响");
         // 幂等：再次回收命中 0
         assert!(purge_for_plugin(&victim).is_empty());
 

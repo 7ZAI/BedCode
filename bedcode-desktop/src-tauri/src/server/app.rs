@@ -245,10 +245,7 @@ pub fn configure_routes(cfg: &mut web::ServiceConfig) {
 
     // 插件端点通配路由（spec D5）：命名空间段 `{plugin_id}` 由宿主注入，
     // 插件只给后缀；未注册 / 属主未激活 → 404，连接数超限 → 503
-    cfg.route(
-        "/ws/plugin/{plugin_id}/{path:.*}",
-        web::get().to(plugin_endpoint_ws),
-    );
+    cfg.route("/ws/plugin/{plugin_id}/{path:.*}", web::get().to(plugin_endpoint_ws));
 
     // 健康检查（公开，无需 JWT，供移动端探测连通性）
     cfg.route(API_HEALTH_PATH, web::get().to(health_check));
